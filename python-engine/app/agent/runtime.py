@@ -937,6 +937,54 @@ class AgentRuntime:
                     tenant_id=task.tenant_id,  # SaaS 安全: 租户隔离
                 )
 
+                # ── max_tokens 截断保护（S 安全修复）─────────────────────────
+                # finish_reason=length 表示模型输出被 max_tokens 截断：tool_call 的
+                # arguments 是半截 JSON，解析出来是残缺参数。拿它去执行可能写坏文件，
+                # 所以一律不执行——把错误作为 tool_result 回灌，让模型重发完整调用。
+                if tool_calls and chunk.finish_reason == "length":
+                    logger.warning(
+                        "Dropping truncated tool_calls (finish_reason=length, task=%s): %s",
+                        task.id,
+                        [tc["name"] for tc in tool_calls],
+                    )
+                    messages.append(
+                        _normalize_msg(
+                            role="assistant",
+                            content=response_content or "",
+                            tool_calls=[
+                                {
+                                    "id": tc["id"],
+                                    "function": {
+                                        "name": tc["name"],
+                                        "arguments": tc["arguments"],
+                                    },
+                                }
+                                for tc in tool_calls
+                            ],
+                        )
+                    )
+                    for tc in tool_calls:
+                        notice = (
+                            f"error: output truncated by max_tokens before tool "
+                            f"'{tc['name']}' was complete; its arguments may be "
+                            f"incomplete. Re-issue the full tool call."
+                        )
+                        yield AgentEvent(
+                            type="tool_result",
+                            tool_call_id=tc["id"],
+                            tool_name=tc["name"],
+                            content=json.dumps({"error": notice}, ensure_ascii=False),
+                            trace_id=trace_id,
+                        )
+                        # 补齐 tool_result，保证 assistant(tool_calls) 配对完整
+                        messages.append(
+                            _normalize_msg(
+                                role="tool", content=notice, tool_call_id=tc["id"]
+                            )
+                        )
+                    _last_reasoning = reasoning_content
+                    continue
+
                 # 如果有工具调用，执行工具
                 if tool_calls:
                     _last_reasoning = reasoning_content  # 保存思考内容供后续兜底
@@ -1244,7 +1292,19 @@ class AgentRuntime:
                 else tool_call["arguments"]
             )
         except (json.JSONDecodeError, TypeError):
-            targs = {}
+            # 参数不是合法 JSON：可能是被 max_tokens 截断的半截 arguments。
+            # 不用空参数蒙混过关（空参数还会绕过按参数匹配的栅栏规则），直接拒绝，
+            # 把错误回灌给模型让它重发完整调用。
+            logger.warning(
+                "Tool %s has invalid JSON arguments (possibly truncated); refusing to execute",
+                tool_name,
+            )
+            return {
+                "error": (
+                    f"Tool '{tool_name}' arguments are not valid JSON (possibly "
+                    f"truncated by max_tokens); not executed — re-issue the tool call"
+                )
+            }, None
         verdict = self._tool_guard.evaluate(tool_name, targs or {}, self._current_mode)
         if verdict.action == "block":
             logger.warning("Tool guard blocked %s reason=%s", tool_name, verdict.reason)

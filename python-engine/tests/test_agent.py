@@ -128,6 +128,79 @@ class TestRunAgent:
 
         assert any(e["type"] == "error" for e in events)
 
+    @pytest.mark.asyncio
+    async def test_truncated_tool_call_is_not_dispatched(self):
+        """坑2：finish_reason=length 时 arguments 可能是半截 JSON，不得转发执行。"""
+        mock_gateway = MagicMock()
+
+        async def truncated_stream(*_a, **_kw):
+            yield MagicMock(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                finish_reason="length",
+                tool_calls=[
+                    MagicMock(
+                        id="call_1",
+                        name="write_file",
+                        arguments='{"path": "a.txt", "content": "hel',
+                    )
+                ],
+            )
+
+        mock_gateway.chat_stream = truncated_stream
+
+        events = []
+        async for event in run_agent(
+            gateway=mock_gateway,
+            system_prompt="test",
+            history=[],
+            content="write a file",
+            tools=[{"name": "write_file", "parameters": {"type": "object"}}],
+            llm_config={"model": "test"},
+            max_turns=1,
+        ):
+            events.append(event)
+
+        assert not any(
+            e["type"] == "tool_call" for e in events
+        ), "被 max_tokens 截断的 tool_call 不得转发给执行方"
+        assert any(e["type"] == "error" for e in events)
+
+    @pytest.mark.asyncio
+    async def test_complete_tool_call_is_dispatched(self):
+        """对照：finish_reason=stop 时 tool_call 正常转发（防回归）。"""
+        mock_gateway = MagicMock()
+
+        async def ok_stream(*_a, **_kw):
+            yield MagicMock(
+                content="",
+                input_tokens=0,
+                output_tokens=0,
+                finish_reason="stop",
+                tool_calls=[
+                    MagicMock(
+                        id="call_1", name="read_file", arguments='{"path": "a.txt"}'
+                    )
+                ],
+            )
+
+        mock_gateway.chat_stream = ok_stream
+
+        events = []
+        async for event in run_agent(
+            gateway=mock_gateway,
+            system_prompt="test",
+            history=[],
+            content="read a file",
+            tools=[{"name": "read_file", "parameters": {"type": "object"}}],
+            llm_config={"model": "test"},
+            max_turns=1,
+        ):
+            events.append(event)
+
+        assert any(e["type"] == "tool_call" for e in events)
+
 
 class TestSettings:
     """测试配置"""

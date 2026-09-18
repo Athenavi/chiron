@@ -424,3 +424,43 @@ class TestToolGuardConfirmPath:
         assert "tc2" not in runtime._pending_approvals, "拒绝后应清理 pending 状态"
 
 
+class TestTruncatedToolArguments:
+    """坑2 回归：max_tokens 截断会让 tool_call 的 arguments 变成半截 JSON。
+
+    拿着残缺参数执行工具可能写坏文件，因此必须拒绝执行、把错误回灌给模型，
+    而不是用空参数蒙混过关（空参数还会绕过按参数匹配的栅栏规则）。
+    """
+
+    @staticmethod
+    def _tc(cid: str, name: str, arguments: str):
+        return {"id": cid, "name": name, "arguments": arguments}
+
+    @pytest.mark.asyncio
+    async def test_truncated_arguments_are_refused(self):
+        runtime = AgentRuntime(gateway=None)
+        task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="",
+                         content="hi", max_turns=2)
+        # 被 max_tokens 截断的半截 JSON：缺闭合引号与花括号
+        truncated = '{"path": "a.txt", "content": "hel'
+        tool_result, evt = await runtime._guarded_execute_tool(
+            self._tc("tc1", "write_file", truncated), task
+        )
+        assert evt is None, "参数非法时不得进入 approval 流程"
+        assert tool_result is not None
+        assert "not valid JSON" in tool_result.get("error", "")
+        assert "tc1" not in runtime._pending_approvals
+
+    @pytest.mark.asyncio
+    async def test_valid_arguments_are_not_refused(self):
+        runtime = AgentRuntime(gateway=None)
+        task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="",
+                         content="hi", max_turns=2)
+        # run_code 属 DANGEROUS_TOOLS（confirm）：合法参数应在参数校验之后进入
+        # approval 流程（返回事件、不执行），既证明合法 JSON 未被误拒，也无副作用。
+        tool_result, evt = await runtime._guarded_execute_tool(
+            self._tc("tc2", "run_code", '{"code": "print(1)"}'), task
+        )
+        assert tool_result is None
+        assert evt is not None and evt.type == "approval"
+
+

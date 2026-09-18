@@ -139,6 +139,23 @@ async def run_agent(
 
                 # 工具调用
                 if chunk.tool_calls:
+                    if chunk.finish_reason == "length":
+                        # max_tokens 截断：arguments 可能是半截 JSON，解析出来是残缺参数。
+                        # 不转发给执行方（宁可不做，也不拿残缺参数碰真实文件系统），
+                        # 报错让模型重发完整调用。
+                        logger.warning(
+                            "Dropping truncated tool_calls (finish_reason=length): %s",
+                            [tc.name for tc in chunk.tool_calls],
+                        )
+                        yield {
+                            "type": "error",
+                            "message": (
+                                "output truncated by max_tokens before the tool call "
+                                "completed; arguments may be incomplete — please "
+                                "re-issue the tool call"
+                            ),
+                        }
+                        break
                     for tc in chunk.tool_calls:
                         yield {
                             "type": "tool_call",
