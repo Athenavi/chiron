@@ -1477,7 +1477,11 @@ function statusClass(nodeProps: any): string {
           v-for="wf in savedWorkflows"
           :key="wf.id"
           class="workflow-item"
+          role="button"
+          tabindex="0"
           @click="loadWorkflow(wf); showDrawer = false"
+          @keydown.enter.prevent="loadWorkflow(wf); showDrawer = false"
+          @keydown.space.prevent="loadWorkflow(wf); showDrawer = false"
         >
           <div class="wf-item-info">
             <div class="wf-item-name">

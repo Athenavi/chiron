@@ -33,7 +33,7 @@ import { findMatches } from '../components/chat/transcriptSearch'
 import { describeApiError } from '../utils/apiError'
 import { buildWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
-import type { ChatItem, ChatSession, ChatAttachment, TurnStatsItem } from '../components/chat/chat-types'
+import type { ChatItem, ChatSession, ChatAttachment, TurnStatsItem, TextItem } from '../components/chat/chat-types'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -46,10 +46,10 @@ const router = useRouter()
 // 菜单项在渲染时求值，故与 themeStore 的初始化顺序无关。
 const toolbarMenuItems = computed(() => [
   { key: 'export', label: t('导出为 Markdown'), icon: () => h(ExportOutlined), disabled: !items.value.length },
-  { key: 'save_kb', label: t('存入知识库'), icon: () => h(CloudUploadOutlined), disabled: !sessionMarkdown.value },
-  { key: 'save_memory', label: t('记住这条'), icon: () => h(DatabaseOutlined), disabled: !sessionMarkdown.value },
-  { key: 'save_workflow', label: t('另存为工作流'), icon: () => h(PartitionOutlined), disabled: !sessionMarkdown.value || savingWorkflow.value },
-  { key: 'save_agent', label: t('存为 Agent'), icon: () => h(RobotOutlined), disabled: !sessionMarkdown.value || savingAgent.value },
+  { key: 'save_kb', label: t('存入知识库'), icon: () => h(CloudUploadOutlined), disabled: !hasSessionContent.value },
+  { key: 'save_memory', label: t('记住这条'), icon: () => h(DatabaseOutlined), disabled: !hasSessionContent.value },
+  { key: 'save_workflow', label: t('另存为工作流'), icon: () => h(PartitionOutlined), disabled: !hasSessionContent.value || savingWorkflow.value },
+  { key: 'save_agent', label: t('存为 Agent'), icon: () => h(RobotOutlined), disabled: !hasSessionContent.value || savingAgent.value },
   { type: 'divider' as const },
   { key: 'display', label: t('显示设置'), icon: () => h(FontSizeOutlined) },
   { key: 'theme', label: themeStore.isDark ? t('切换到亮色模式') : t('切换到暗色模式'), icon: () => h(themeStore.isDark ? BulbFilled : BulbOutlined) },
@@ -60,8 +60,28 @@ const displaySettingsOpen = ref(false)
 const saveToKbOpen = ref(false)
 /** 记住这条：把会话正文沉淀成长期记忆条目（后续对话会自动注入） */
 const saveToMemoryOpen = ref(false)
-/** 会话正文（Markdown；只取 text 项，思考与工具调用不写入知识库） */
-const sessionMarkdown = computed(() => sessionToMarkdown(items.value, activeSession.value?.title || ''))
+/**
+ * 是否存在可沉淀的会话正文。
+ *
+ * 与 `sessionToMarkdown(...) !== ''` 完全等价（见 utils/sessionMarkdown.ts：只有标题为空
+ * 且没有任何非空 text 项时才返回空串），但**不构造字符串** —— 流式输出时 items 每收到一个
+ * chunk 就会变，若用 computed 往返序列化整个会话，长对话下每个 token 都要做一次全量拼接，
+ * 还会连锁重算 toolbarMenuItems。这里只做短路判定。
+ */
+const hasSessionContent = computed(
+  () =>
+    (activeSession.value?.title || '').trim() !== '' ||
+    items.value.some(i => i.kind === 'text' && ((i as TextItem).content || '').trim() !== ''),
+)
+/**
+ * 沉淀弹窗的正文：**按需生成** —— 只在对应弹窗打开时序列化。
+ * 弹窗打开后 items 基本不再变化，因此这等价于在原位算一次，而不是随流式输出反复算。
+ */
+const sessionMarkdownForDialog = computed(() =>
+  saveToKbOpen.value || saveToMemoryOpen.value
+    ? sessionToMarkdown(items.value, activeSession.value?.title || '')
+    : '',
+)
 /** 另存为工作流：把整段对话沉淀成一个可重复执行的工作流图（单 llm 节点） */
 const savingWorkflow = ref(false)
 
@@ -1930,12 +1950,12 @@ function continueGeneration() {
       <ChatDisplaySettings v-model:open="displaySettingsOpen" />
       <SaveToKnowledgeDialog
         v-model:open="saveToKbOpen"
-        :content="sessionMarkdown"
+        :content="sessionMarkdownForDialog"
         :default-title="activeSession?.title || '对话记录'"
       />
       <SaveToMemoryDialog
         v-model:open="saveToMemoryOpen"
-        :content="sessionMarkdown"
+        :content="sessionMarkdownForDialog"
         :default-key="activeSession?.title || ''"
       />
 
@@ -1975,6 +1995,7 @@ function continueGeneration() {
       <div
         v-if="panelOpen"
         class="panel-overlay"
+        aria-hidden="true"
         @click="panelOpen = false"
       />
     </Transition>

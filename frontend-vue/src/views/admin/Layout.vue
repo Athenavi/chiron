@@ -246,6 +246,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
     <div
       v-if="isMobile && drawerOpen"
       class="admin-drawer-mask"
+      aria-hidden="true"
       @click="drawerOpen = false"
     />
 
@@ -308,12 +309,15 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
       </LayoutHeader>
       <LayoutContent class="admin-content">
         <router-view v-slot="{ Component }">
-          <Transition
-            name="fade"
-            mode="out-in"
-          >
-            <component :is="Component" />
-          </Transition>
+          <!-- 内容区错误边界：某个页面组件抛错时只替换内容区，侧边导航保持可用 -->
+          <ErrorBoundary>
+            <Transition
+              name="fade"
+              mode="out-in"
+            >
+              <component :is="Component" />
+            </Transition>
+          </ErrorBoundary>
         </router-view>
       </LayoutContent>
     </Layout>

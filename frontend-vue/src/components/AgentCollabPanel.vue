@@ -33,8 +33,12 @@
           :key="agent.id"
           class="agent-card"
           :class="{ active: agent.isActive, completed: agent.status === 'completed' }"
+          role="button"
+          tabindex="0"
           :aria-expanded="showOutput[index]"
           @click="showOutput[index] = !showOutput[index]"
+          @keydown.enter.prevent="showOutput[index] = !showOutput[index]"
+          @keydown.space.prevent="showOutput[index] = !showOutput[index]"
         >
           <!-- Agent 头像 -->
           <div

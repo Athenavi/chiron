@@ -870,7 +870,10 @@ onUnmounted(() => {
           :key="cr.id || 'root'"
           class="crumb"
           :class="{ active: i === breadcrumbs.length - 1 }"
+          role="button"
+          tabindex="0"
           @click="goBreadcrumb(i)"
+          @keydown.enter.prevent="goBreadcrumb(i)"
         >{{ cr.name }}<span
           v-if="i < breadcrumbs.length - 1"
           class="crumb-sep"
@@ -1054,7 +1057,11 @@ onUnmounted(() => {
           :key="item.id"
           class="file-card"
           :class="{ selected: selectedIds.has(item.id) }"
+          role="button"
+          tabindex="0"
           @click="onCardClick(item)"
+          @keydown.enter.prevent="onCardClick(item)"
+          @keydown.space.prevent="onCardClick(item)"
         >
           <Checkbox
             class="card-check"
@@ -1065,6 +1072,7 @@ onUnmounted(() => {
             <img
               v-if="isImage(item) && !isFolder(item)"
               :src="itemUrl(item)"
+              :alt="item.name"
               loading="lazy"
               @error="onImgError($event, item)"
             >
@@ -1129,6 +1137,7 @@ onUnmounted(() => {
           <img
             v-if="isImage(detailItem) && !isFolder(detailItem)"
             :src="itemUrl(detailItem)"
+            :alt="detailItem.name"
             @error="onImgError($event, detailItem)"
           >
           <FolderOutlined

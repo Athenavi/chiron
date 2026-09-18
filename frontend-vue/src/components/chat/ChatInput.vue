@@ -485,12 +485,15 @@ defineExpose({ insertText })
       <div
         v-if="showSlashMenu"
         class="slash-menu"
+        role="listbox"
       >
         <div
           v-for="(c, i) in filteredCommands"
           :key="c.cmd"
           class="slash-item"
           :class="{ active: i === slashIndex }"
+          role="option"
+          :aria-selected="i === slashIndex"
           @mouseenter="slashIndex = i"
           @click="emit('command', c.cmd); input = ''; showSlashMenu = false"
         >

@@ -265,7 +265,11 @@ function formatDate(iso: string): string {
             v-for="kb in privateKbs"
             :key="kb.id"
             class="kb-card"
+            role="button"
+            tabindex="0"
             @click="openKnowledgeBase(kb)"
+            @keydown.enter.prevent="openKnowledgeBase(kb)"
+            @keydown.space.prevent="openKnowledgeBase(kb)"
           >
             <div class="card-top">
               <span class="card-icon"><BookOutlined /></span>
@@ -361,7 +365,11 @@ function formatDate(iso: string): string {
             v-for="kb in publicKbs"
             :key="kb.id"
             class="kb-card public"
+            role="button"
+            tabindex="0"
             @click="openKnowledgeBase(kb)"
+            @keydown.enter.prevent="openKnowledgeBase(kb)"
+            @keydown.space.prevent="openKnowledgeBase(kb)"
           >
             <div class="card-top">
               <span class="card-icon"><BookOutlined /></span>

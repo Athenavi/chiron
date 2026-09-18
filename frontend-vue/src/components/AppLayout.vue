@@ -362,12 +362,15 @@ async function runQuickCommand() {
       class="app-content"
     >
       <router-view v-slot="{ Component }">
-        <Transition
-          mode="out-in"
-          name="fade"
-        >
-          <component :is="Component" />
-        </Transition>
+        <!-- 内容区错误边界：某个页面组件抛错时只替换内容区，侧栏/顶栏保持可用 -->
+        <ErrorBoundary>
+          <Transition
+            mode="out-in"
+            name="fade"
+          >
+            <component :is="Component" />
+          </Transition>
+        </ErrorBoundary>
       </router-view>
     </main>
 

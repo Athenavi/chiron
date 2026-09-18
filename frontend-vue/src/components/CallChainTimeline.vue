@@ -7,7 +7,12 @@
     <CollapseTransition>
       <div
         class="timeline-header"
+        role="button"
+        tabindex="0"
+        :aria-expanded="isExpanded"
         @click="toggle"
+        @keydown.enter.prevent="toggle"
+        @keydown.space.prevent="toggle"
       >
         <span class="header-title">
           <svg

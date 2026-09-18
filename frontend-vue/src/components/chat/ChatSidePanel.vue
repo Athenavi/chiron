@@ -514,7 +514,12 @@ function pickSession(id: string) {
               width: `calc(${100 / Math.max(userIndexes.length, 1)}% - 8px)`,
             }"
             :title="summary(i)"
+            role="button"
+            tabindex="0"
+            :aria-label="summary(i)"
             @click.stop="emit('focus', i)"
+            @keydown.enter.prevent="emit('focus', i)"
+            @keydown.space.prevent="emit('focus', i)"
             @mouseenter="hoveredIndex = i"
             @mouseleave="hoveredIndex = null"
           />
@@ -533,7 +538,12 @@ function pickSession(id: string) {
           :key="i"
           class="anchor-row"
           :class="{ active: i === selectedIndex }"
+          role="button"
+          tabindex="0"
+          :aria-label="summary(i)"
           @click="emit('focus', i)"
+          @keydown.enter.prevent="emit('focus', i)"
+          @keydown.space.prevent="emit('focus', i)"
         >
           <span
             class="row-dot"
@@ -555,8 +565,13 @@ function pickSession(id: string) {
           <span class="act-title">{{ $t('最近活动') }}</span>
           <span
             class="act-refresh"
+            role="button"
+            tabindex="0"
             :title="$t('刷新')"
+            :aria-label="$t('刷新')"
             @click="loadActivities"
+            @keydown.enter.prevent="loadActivities"
+            @keydown.space.prevent="loadActivities"
           ><ReloadOutlined /></span>
         </div>
         <div
@@ -659,7 +674,11 @@ function pickSession(id: string) {
             :key="s.id"
             class="session-row"
             :class="{ active: s.id === activeSessionId, pinned: s.pinned, 'menu-open': menuSessionId === s.id }"
+            role="button"
+            tabindex="0"
             @click="pickSession(s.id)"
+            @keydown.enter.prevent="pickSession(s.id)"
+            @keydown.space.prevent="pickSession(s.id)"
           >
             <div class="session-info">
               <div class="session-title-line">
@@ -748,8 +767,13 @@ function pickSession(id: string) {
           <span class="act-title">{{ $t('最近活动') }}</span>
           <span
             class="act-refresh"
+            role="button"
+            tabindex="0"
             :title="$t('刷新')"
+            :aria-label="$t('刷新')"
             @click="loadActivities"
+            @keydown.enter.prevent="loadActivities"
+            @keydown.space.prevent="loadActivities"
           ><ReloadOutlined /></span>
         </div>
         <div

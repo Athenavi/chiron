@@ -427,6 +427,7 @@ onUnmounted(() => {
           <div
             ref="listEl"
             class="palette-body"
+            role="listbox"
           >
             <template v-if="rows.length > 0">
               <div
@@ -437,6 +438,7 @@ onUnmounted(() => {
                 <div
                   v-if="row.kind === 'header'"
                   class="palette-group"
+                  role="presentation"
                 >
                   {{ row.label }}
                 </div>
@@ -444,6 +446,8 @@ onUnmounted(() => {
                   v-else
                   class="palette-item"
                   :class="{ active: row.index === activeIndex }"
+                  role="option"
+                  :aria-selected="row.index === activeIndex"
                   @mouseenter="onRowEnter(row)"
                   @click="onRowClick(row)"
                 >

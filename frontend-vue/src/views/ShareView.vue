@@ -22,14 +22,16 @@ md.renderer.rules.fence = (tokens: any[], idx: number) => {
   const lang = md.utils.escapeHtml((token.info || '').trim().toLowerCase() || 'code')
   const code = md.utils.escapeHtml(token.content)
   const encoded = encodeURIComponent(token.content)
-  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><span class="code-copy" data-code="${encoded}">复制</span></div><pre><code>${code}</code></pre></div>`
+  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><button type="button" class="code-copy" data-code="${encoded}">复制</button></div><pre><code>${code}</code></pre></div>`
 }
 
 function renderMarkdown(src: string): string {
   try {
     return DOMPurify.sanitize(md.render(src), {
-      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'ul', 'ol', 'li', 'a', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'div', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'del', 'sup', 'sub'],
-      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'data-code'],
+      // button 必须放行：代码块的「复制」是真按钮才能键盘可达（<span> 无 tabindex 不可聚焦）；
+      // type 同理需在 ALLOWED_ATTR 里，否则被 DOMPurify 剥掉。
+      ALLOWED_TAGS: ['p', 'br', 'strong', 'em', 'code', 'pre', 'ul', 'ol', 'li', 'a', 'blockquote', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'span', 'div', 'table', 'thead', 'tbody', 'tr', 'th', 'td', 'hr', 'del', 'sup', 'sub', 'button'],
+      ALLOWED_ATTR: ['href', 'target', 'rel', 'class', 'data-code', 'type'],
       ALLOW_DATA_ATTR: true,
       FORBID_TAGS: ['style', 'script', 'iframe', 'object', 'embed', 'form', 'input', 'textarea', 'select', 'marquee', 'link', 'meta'],
       FORBID_ATTR: ['style', 'onerror', 'onload', 'onclick', 'onmouseover', 'onfocus', 'onblur', 'onchange', 'onsubmit', 'onreset', 'onkeydown', 'onkeyup', 'onkeypress'],
@@ -199,7 +201,7 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(.code-block) { margin: 16px 0; background: var(--bg-code); border-radius: 12px; overflow: hidden; max-width: 100%; }
 .share-msg-text :deep(.code-block-head) { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: var(--bg-secondary); }
 .share-msg-text :deep(.code-lang) { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
-.share-msg-text :deep(.code-copy) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 4px 10px; min-height: 32px; border-radius: 6px; transition: color 0.2s, background-color 0.2s; }
+.share-msg-text :deep(.code-copy) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-family: inherit; font-size: 12px; padding: 4px 10px; min-height: 32px; border-radius: 6px; transition: color 0.2s, background-color 0.2s; }
 .share-msg-text :deep(.code-copy:hover) { color: var(--primary); background: var(--bg-hover); }
 /* 代码块：横向滚动而非折行，长行不撑破页面 */
 .share-msg-text :deep(pre) { margin: 0 !important; padding: 16px; overflow-x: auto; white-space: pre; word-break: normal; -webkit-overflow-scrolling: touch; }

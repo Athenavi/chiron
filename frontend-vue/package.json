@@ -12,7 +12,7 @@
     "test:watch": "vitest",
     "lint": "eslint src",
     "lint:fix": "eslint src --fix",
-    "check:ui": "node scripts/check-z-index-tokens.mjs && node scripts/check-theme-token-contract.mjs && node scripts/check-motion-tokens.mjs && node scripts/check-i18n.mjs"
+    "check:ui": "node scripts/check-z-index-tokens.mjs && node scripts/check-theme-token-contract.mjs && node scripts/check-motion-tokens.mjs && node scripts/check-i18n.mjs && node scripts/check-a11y.mjs"
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",

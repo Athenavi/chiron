@@ -573,7 +573,11 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
               <template v-if="column.dataIndex === 'name'">
                 <a
                   class="doc-name-link"
+                  role="button"
+                  tabindex="0"
                   @click="openPreview(record.id)"
+                  @keydown.enter.prevent="openPreview(record.id)"
+                  @keydown.space.prevent="openPreview(record.id)"
                 >{{ text }}</a>
               </template>
               <template v-else-if="column.dataIndex === 'file_size_bytes'">
@@ -731,7 +735,11 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             v-for="item in filteredMediaFiles"
             :key="item.id"
             :class="['media-item', { selected: selectedMediaIds.includes(item.id) }]"
+            role="button"
+            tabindex="0"
             @click="toggleMediaSelection(item.id)"
+            @keydown.enter.prevent="toggleMediaSelection(item.id)"
+            @keydown.space.prevent="toggleMediaSelection(item.id)"
           >
             <Checkbox :checked="selectedMediaIds.includes(item.id)" />
             <div class="media-info">
