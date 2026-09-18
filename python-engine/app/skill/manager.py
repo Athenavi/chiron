@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shlex
 import time
 from dataclasses import dataclass, field
@@ -21,6 +22,9 @@ from typing import Any, Optional
 from app.trace import record_span
 
 logger = logging.getLogger(__name__)
+
+#: 参数值中禁止出现的 shell 元字符（防止注入到沙箱命令）
+_SHELL_META_CHARS = re.compile(r"[|&;`$()<>#\n]")
 
 
 class SkillType(str, Enum):
@@ -695,9 +699,7 @@ class SkillManager:
             raise ValueError("skill config missing 'command' field")
 
         # 安全地填充模板变量（仅 str.format，不执行任意代码）
-        # 对参数值中的 shell 元字符做转义，防止注入到沙箱前被利用
-        _SHELL_META_CHARS = re.compile(r'[|&;`$()<>#\n]')
-        import shlex
+        # 对参数值中的 shell 元字符做转义，防止注入到沙箱前被利用（见模块级 _SHELL_META_CHARS）
         safe_params = {}
         for k, v in params.items():
             if isinstance(v, str):

@@ -22,6 +22,10 @@ logger = logging.getLogger(__name__)
 #: 沙箱根环境变量名（多副本部署必须指向共享卷；启动校验见 app.main.verify_sandbox_root）
 SANDBOX_ROOT_ENV = "SANDBOX_ROOT"
 
+#: Windows 下用 cmd /c 包裹执行前，拦截参数中的 shell 元字符
+#: （这些字符经 shlex.split 保留后传给 cmd /c 会被解释为 shell 语法，绕过白名单）
+_SHELL_META = re.compile(r"[|&;`$()<>#\n]")
+
 
 def sandbox_root() -> Path:
     """沙箱根：默认置于进程 cwd 上两级（项目外），避免 workspace 路径
@@ -223,9 +227,7 @@ async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
 
     # Windows: echo/dir/type 等是 cmd.exe 内置命令，无独立可执行文件，
     # create_subprocess_exec 直执会 WinError 2；用 cmd /c 包裹执行。
-    # 安全措施：在包裹前检测 args 中是否包含 shell 元字符（| & ; ` $ ( ) < > # 等），
-    # 这些字符经 shlex.split 保留后传给 cmd /c 会被解释为 shell 语法，绕过白名单。
-    _SHELL_META = re.compile(r'[|&;`$()<>#\n]')
+    # 安全措施：在包裹前检测 args 中是否包含 shell 元字符（见模块级 _SHELL_META）。
     exe_name = _normalize_exe(prog)
     if sys.platform == "win32" and exe_name not in ("python", "python3"):
         for part in args:

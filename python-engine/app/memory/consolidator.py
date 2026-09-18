@@ -19,6 +19,7 @@ import hashlib
 import logging
 import re
 import uuid
+from collections import Counter
 from dataclasses import asdict, dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -243,11 +244,8 @@ def _extract_topics(text: str) -> list[str]:
 
     # 策略 2：简单关键词提取
     words = re.findall(r"[\u4e00-\u9fff]{2,4}|[a-zA-Z]{3,}", text)
-    freq: dict[str, int] = {}
-    for w in words:
-        freq[w] = freq.get(w, 0) + 1
-    sorted_topics = sorted(freq.items(), key=lambda x: -x[1])
-    return [t[0] for t in sorted_topics[:5] if t[1] >= 2]
+    freq = Counter(words)
+    return [word for word, count in freq.most_common() if count >= 2][:5]
 
 
 def new_summary_id() -> str:

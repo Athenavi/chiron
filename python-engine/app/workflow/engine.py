@@ -15,7 +15,7 @@ from __future__ import annotations
 import logging
 import time
 import uuid
-from collections import defaultdict, deque
+from collections import Counter, defaultdict, deque
 from dataclasses import dataclass, field
 from typing import Any, Awaitable, Callable
 
@@ -56,11 +56,11 @@ _instance_order: list[str] = []  # FIFO 顺序
 
 def _topological_sort(nodes: list[dict], edges: list[dict]) -> list[dict]:
     """按 DAG 拓扑顺序排序节点"""
-    in_degree: dict[str, int] = {n["id"]: 0 for n in nodes}
+    in_degree: Counter[str] = Counter({n["id"]: 0 for n in nodes})
     adj: dict[str, list[str]] = defaultdict(list)
     for e in edges:
         adj[e["source_id"]].append(e["target_id"])
-        in_degree[e["target_id"]] = in_degree.get(e["target_id"], 0) + 1
+        in_degree[e["target_id"]] += 1
 
     node_map = {n["id"]: n for n in nodes}
     queue = deque([n for n in nodes if in_degree.get(n["id"], 0) == 0])

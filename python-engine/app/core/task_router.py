@@ -34,6 +34,13 @@ class TaskPriority(str, Enum):
     CRITICAL = "critical"
 
 
+class TaskStatus(str, Enum):
+    """已执行任务的终态。"""
+
+    COMPLETED = "completed"
+    FAILED = "failed"
+
+
 @dataclass
 class SubTask:
     """子任务"""
@@ -59,7 +66,7 @@ class ExecutedTask:
     output: Any = None
     error: str = ""
     duration_ms: int = 0
-    status: str = "completed"  # completed/failed
+    status: TaskStatus = TaskStatus.COMPLETED
 
 
 class TaskRouter:
@@ -660,7 +667,7 @@ Return ONLY valid JSON without markdown formatting."""
                 capability_id=task.capability_id,
                 input_params=task.parameters,
                 error=f"Capability not found: {task.capability_id}",
-                status="failed",
+                status=TaskStatus.FAILED,
             )
 
         executor = cap._executor
@@ -671,7 +678,7 @@ Return ONLY valid JSON without markdown formatting."""
                 capability_id=task.capability_id,
                 input_params=task.parameters,
                 error=f"No executor registered for: {task.capability_id}",
-                status="failed",
+                status=TaskStatus.FAILED,
             )
 
         # 注入依赖任务的输出（依赖输出模板 ${dep.field} 解析）
@@ -748,7 +755,7 @@ Return ONLY valid JSON without markdown formatting."""
                 output=None if failed else output,
                 error=error_msg,
                 duration_ms=duration_ms,
-                status="failed" if failed else "completed",
+                status=TaskStatus.FAILED if failed else TaskStatus.COMPLETED,
             )
 
         except Exception as e:
@@ -763,7 +770,7 @@ Return ONLY valid JSON without markdown formatting."""
                 input_params=input_params,
                 error=str(e),
                 duration_ms=duration_ms,
-                status="failed",
+                status=TaskStatus.FAILED,
             )
 
     async def _aggregate_results(
@@ -781,8 +788,8 @@ Return ONLY valid JSON without markdown formatting."""
         - create_workflow / manage_knowledge: 结构化输出
         - general / default: 通用列表式聚合
         """
-        completed = [r for r in results if r.status == "completed"]
-        failed = [r for r in results if r.status == "failed"]
+        completed = [r for r in results if r.status == TaskStatus.COMPLETED]
+        failed = [r for r in results if r.status == TaskStatus.FAILED]
         action = intent.get("action", "general")
 
         base: dict[str, Any] = {
@@ -805,8 +812,8 @@ Return ONLY valid JSON without markdown formatting."""
             {
                 "subtask_id": r.subtask_id,
                 "capability_id": r.capability_id,
-                "output": r.output if r.status == "completed" else None,
-                "error": r.error if r.status == "failed" else None,
+                "output": r.output if r.status == TaskStatus.COMPLETED else None,
+                "error": r.error if r.status == TaskStatus.FAILED else None,
             }
             for r in results
         ]

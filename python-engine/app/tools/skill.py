@@ -22,6 +22,7 @@ import os
 import re
 from typing import Any
 
+from app.skill.manager import SkillType
 from app.skill.store import SkillDef, SkillStore
 from app.tools.registry import registry
 
@@ -238,13 +239,13 @@ async def skill_run(name: str, params: str | dict = "{}") -> dict[str, Any]:
         param_dict = {"input": param_dict}
 
     try:
-        if skill.exec_type == "prompt":
+        if skill.exec_type == SkillType.PROMPT:
             output = await _run_prompt_skill(skill, param_dict)
-        elif skill.exec_type == "python":
+        elif skill.exec_type == SkillType.PYTHON_SCRIPT:
             output = await _run_python_skill(skill, param_dict)
-        elif skill.exec_type == "shell":
+        elif skill.exec_type == SkillType.SHELL_COMMAND:
             output = await _run_shell_skill(skill, param_dict)
-        elif skill.exec_type == "http":
+        elif skill.exec_type == SkillType.HTTP_REQUEST:
             output = await _run_http_skill(skill, param_dict)
         else:
             return {"error": f"Unsupported skill type: {skill.exec_type}"}
