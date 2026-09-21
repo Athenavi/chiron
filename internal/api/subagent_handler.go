@@ -193,18 +193,17 @@ func (h *SubagentHandler) runFromRedis(ctx context.Context, tenant, runID string
 	if h.rdb == nil || tenant == "" {
 		return nil, nil
 	}
-	res := h.rdb.Do(ctx, "HGETALL", subagentKey(tenant, "run", runID))
-	if res.Err() != nil {
-		return nil, res.Err()
+	// go-redis v9 的 HGETALL 返回 map（非 v8 的扁平数组）：统一走 db.HashAll，
+	// 否则这里静默拿不到任何字段，运行期摘要会一直回落 DB。
+	fields, err := db.HashAll(ctx, h.rdb, subagentKey(tenant, "run", runID))
+	if err != nil {
+		return nil, err
 	}
-	pairs, _ := res.Val().([]interface{})
-	if len(pairs) == 0 {
+	if len(fields) == 0 {
 		return nil, nil
 	}
 	view := map[string]interface{}{"run_id": runID}
-	for i := 0; i+1 < len(pairs); i += 2 {
-		field, _ := pairs[i].(string)
-		value, _ := pairs[i+1].(string)
+	for field, value := range fields {
 		switch field {
 		case "depth":
 			if n, err := strconv.Atoi(value); err == nil {
@@ -252,20 +251,9 @@ func (h *SubagentHandler) eventsFromRedis(ctx context.Context, tenant, runID str
 
 // hashAll 读取 Hash 全部字段（用 Do 以兼容 Cluster/单机两种实现）。
 func (h *SubagentHandler) hashAll(ctx context.Context, key string) (map[string]string, error) {
-	res := h.rdb.Do(ctx, "HGETALL", key)
-	if res.Err() != nil {
-		return nil, res.Err()
-	}
-	pairs, _ := res.Val().([]interface{})
-	out := make(map[string]string, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		field, _ := pairs[i].(string)
-		value, _ := pairs[i+1].(string)
-		if field != "" {
-			out[field] = value
-		}
-	}
-	return out, nil
+	// go-redis v9 的 HGETALL 返回 map（非 v8 的扁平数组）：统一走 db.HashAll，
+	// 否则静默得到空 map（子 Agent 的运行期摘要会一直回落 DB）。
+	return db.HashAll(ctx, h.rdb, key)
 }
 
 // ── DB 回落 ──

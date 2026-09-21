@@ -1112,6 +1112,15 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/llm-providers", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.ListLLMProviders)))))
 	mux.Handle("PUT /v1/admin/llm-providers/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SetLLMProviderConfig)))))
 
+	// 模型配置：决定 /v1/models（进而决定 /chat 的模型下拉）里有哪些模型。
+	// adminMux 里**早已注册** GET/POST /models 与 PUT/DELETE /models/{id}（admin_ops.go:60-63），
+	// 但从未在此暴露到外部 mux → 前端无论怎么点都调不到，只能依赖模型发现自动写入；
+	// 一旦发现失败（provider 无 /models、UA 被拦、网络不可达），可用模型集永远是空的。
+	mux.Handle("GET /v1/admin/models", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/models", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+
 	// Settings admin routes
 	mux.Handle("PUT /v1/admin/settings", authMW(rlMW(adminWriteMW(adminStrip))))
 }

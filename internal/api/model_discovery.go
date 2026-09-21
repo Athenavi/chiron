@@ -69,19 +69,15 @@ func keysetActiveProviders(ctx context.Context) []llmKeysetProvider {
 		if provider == "" || provider == "ver" {
 			continue
 		}
-		res := db.Redis.Do(ctx, "HGETALL", k)
-		if res.Err() != nil {
+		// go-redis v9 的 HGETALL 返回 map 而非 v8 的扁平数组：统一走 db.HashAll，
+		// 否则这里会**静默**解析不出任何 provider —— 那正是"模型发现从未运行、
+		// /v1/models 永远返回空"的根因（连一条 warn 都不会打）。
+		pairs, err := db.HashAll(ctx, db.Redis, k)
+		if err != nil {
+			slog.Debug("llm keyset hash read failed", "provider", provider, "error", err)
 			continue
 		}
-		rawPairs, ok := res.Val().([]interface{})
-		if !ok {
-			continue
-		}
-		for i := 0; i+1 < len(rawPairs); i += 2 {
-			payload, ok := rawPairs[i+1].(string)
-			if !ok {
-				continue
-			}
+		for _, payload := range pairs {
 			var item struct {
 				K string `json:"k"`
 				S string `json:"s"`

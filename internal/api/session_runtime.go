@@ -481,20 +481,10 @@ func mergeRuntime(view *runtimeView, pairs map[string]string) {
 }
 
 func (h *SessionRuntimeHandler) hashAll(ctx context.Context, key string) (map[string]string, error) {
-	res := h.rdb.Do(ctx, "HGETALL", key)
-	if res.Err() != nil {
-		return nil, res.Err()
-	}
-	pairs, _ := res.Val().([]any)
-	out := make(map[string]string, len(pairs)/2)
-	for i := 0; i+1 < len(pairs); i += 2 {
-		field, _ := pairs[i].(string)
-		value, _ := pairs[i+1].(string)
-		if field != "" {
-			out[field] = value
-		}
-	}
-	return out, nil
+	// go-redis v9 的 HGETALL 返回 map[interface{}]interface{}（v8 是扁平数组）。
+	// 此前按 v8 断言会**静默**得到空 map —— runtime 的 Redis 热层形同虚设
+	// （功能靠 DB 回落仍可用，所以一直没被发现）。统一走 db.HashAll。
+	return db.HashAll(ctx, h.rdb, key)
 }
 
 // ── 遥测聚合 ──

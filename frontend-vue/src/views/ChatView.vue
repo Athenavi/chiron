@@ -751,7 +751,7 @@ watch(() => items.value.length, async () => {
 
 // 侧面板（主从时间线：轨迹 / 会话历史）；上下文面板：桌面端（>1025px）默认展开常驻，≤1024px 折叠为抽屉
 const panelOpen = ref(window.matchMedia('(min-width: 1025px)').matches)
-const panelView = ref<'trajectory' | 'sessions' | 'agents'>('trajectory')
+const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajectory')
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
@@ -765,7 +765,7 @@ function onTrajectoryFocus(index: number) {
 }
 
 // 打开面板并直达指定视图；点击已激活的入口则收起
-function openPanel(view: 'trajectory' | 'sessions' | 'agents') {
+function openPanel(view: 'trajectory' | 'sessions' | 'agents' | 'stats') {
   if (panelOpen.value && panelView.value === view) {
     panelOpen.value = false
     return
@@ -2090,7 +2090,7 @@ function continueGeneration() {
       :user-name="authStore.user?.name"
       :context-chips="contextChips"
       :live-events="subagentLiveEvents"
-      @update:view="(v: 'trajectory' | 'sessions' | 'agents') => (panelView = v)"
+      @update:view="(v: 'trajectory' | 'sessions' | 'agents' | 'stats') => (panelView = v)"
       @focus="onTrajectoryFocus"
       @close="panelOpen = false"
       @create="createSession"

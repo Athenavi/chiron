@@ -377,7 +377,9 @@ export interface MarketItem {
 
 export async function listMarket(type: MarketType): Promise<MarketItem[]> {
   const resp = await api.get('/v1/market', { params: { type } })
-  return resp.data?.items || []
+  // 兼容 OK() 包装与裸形态：层级取错会静默变成空列表（与 listModels 同一类坑）
+  const d = resp.data?.data ?? resp.data
+  return Array.isArray(d?.items) ? d.items : []
 }
 
 export async function installMarket(type: MarketType, itemID: string): Promise<any> {
@@ -436,7 +438,12 @@ export interface LlmModel {
 
 export async function listModels(): Promise<LlmModel[]> {
   const resp = await api.get('/v1/models')
-  return resp.data?.models || []
+  // 后端走 OK() 包装：{success, data:{models:[…]}}。此前这里取 `resp.data?.models`
+  // **少了一层 .data** → 拿到 undefined → 静默返回空数组 → 对话页的模型下拉永远显示
+  // "暂无数据"（而此前后端恰好也是空的，症状完全一致，所以这个 bug 一直被掩盖）。
+  // 这里同时兼容「已包装 / 未包装」两种形态，避免再出现"路径取错 = 静默空列表"。
+  const d = resp.data?.data ?? resp.data
+  return Array.isArray(d?.models) ? d.models : []
 }
 
 export async function triggerCronJob(id: string): Promise<any> {
@@ -461,7 +468,9 @@ export interface TemplateItem {
 
 export async function listTemplates(type?: 'workflow' | 'agent' | 'skill'): Promise<TemplateItem[]> {
   const resp = await api.get('/v1/templates', { params: type ? { type } : {} })
-  return resp.data?.templates || []
+  // 兼容 OK() 包装与裸形态（同上：取错层级 = 静默空列表）
+  const d = resp.data?.data ?? resp.data
+  return Array.isArray(d?.templates) ? d.templates : []
 }
 
 /** 工作台资源的统一形态（首页"带着工作台能力开对话"用） */

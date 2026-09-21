@@ -5,7 +5,7 @@ import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
   ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined, ThunderboltOutlined,
-  ApartmentOutlined,
+  ApartmentOutlined, BarChartOutlined,
 } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, listTools, quickExecute } from '../../api'
@@ -14,6 +14,7 @@ import type { ContextChip } from './contextChips'
 import { formatRelativeTime } from './chat-types'
 import type { ChatItem, ChatSession } from './chat-types'
 import SubAgentPanel from './SubAgentPanel.vue'
+import SessionStatsPanel from './SessionStatsPanel.vue'
 import type { SubagentEvent } from '../../api/subagent'
 
 import { useI18n } from 'vue-i18n'
@@ -22,8 +23,8 @@ const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
   open: boolean
-  /** 面板视图：trajectory（主，当前会话提问轨迹）/ sessions（从，会话历史列表）/ agents（子 Agent 层级） */
-  view: 'trajectory' | 'sessions' | 'agents'
+  /** 面板视图：trajectory（主，当前会话提问轨迹）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计） */
+  view: 'trajectory' | 'sessions' | 'agents' | 'stats'
   sessions: ChatSession[]
   activeSessionId: string
   userName?: string
@@ -39,7 +40,7 @@ const props = withDefaults(defineProps<{
 const emit = defineEmits<{
   (e: 'focus', index: number): void
   (e: 'close'): void
-  (e: 'update:view', view: 'trajectory' | 'sessions' | 'agents'): void
+  (e: 'update:view', view: 'trajectory' | 'sessions' | 'agents' | 'stats'): void
   (e: 'create'): void
   (e: 'switch', id: string): void
   (e: 'delete', id: string): void
@@ -376,6 +377,15 @@ function pickSession(id: string) {
       >
         <ApartmentOutlined />
       </button>
+      <button
+        type="button"
+        class="session-back"
+        :class="{ active: view === 'stats' }"
+        :title="view === 'stats' ? $t('返回提问轨迹') : $t('会话统计（tokens/费用/缓存命中/吞吐）')"
+        @click="emit('update:view', view === 'stats' ? 'trajectory' : 'stats')"
+      >
+        <BarChartOutlined />
+      </button>
       <CloseOutlined
         class="toolbar-close"
         :title="$t('收起面板')"
@@ -505,6 +515,12 @@ function pickSession(id: string) {
       v-if="view === 'agents'"
       :session-id="activeSessionId"
       :live-events="liveEvents"
+    />
+
+    <!-- 会话统计（问题 5）：tokens / 费用 / 缓存命中率 / 吞吐；数据来源在面板底部标注 -->
+    <SessionStatsPanel
+      v-if="view === 'stats'"
+      :session-id="activeSessionId"
     />
 
     <!-- 主视图：当前会话轨迹（搜索 + 时间线 + 提问锚点） -->

@@ -333,6 +333,23 @@ async def lifespan(app: FastAPI):
         if not _seed and provider_requires_key(_preset) and not await _keyset_has(_pid):
             continue
         _base_url = provider_base_url(_preset)
+        # 免 key 的**本地自托管** provider（Ollama / vLLM / LM Studio）默认 **不注册**：
+        # 它们带的是目录里的本地默认地址（vLLM 是 http://localhost:8000/v1），一旦无条件注册
+        # 就会参与路由并在候选里抢走请求，把正常对话打到本机空端口上 ——
+        # 表现就是 `provider vllm stream failed: 404 Not Found`（用户明明配的是别的 provider）。
+        # 只有用户**显式配置**过（写了 base_url 覆盖，或配了 key/keyset）才注册。
+        if not provider_requires_key(_preset):
+            _default_base = str(_preset.get("base_url") or "")
+            _configured = await _keyset_has(_pid) or (
+                _base_url != "" and _base_url != _default_base
+            )
+            if not _configured:
+                logger.info(
+                    "skip unconfigured local provider: %s (default base_url=%s)",
+                    _pid,
+                    _default_base or "<none>",
+                )
+                continue
         _provider_cls = (
             NamedAnthropicProvider if provider_kind(_preset) == "anthropic" else NamedOpenAIProvider
         )

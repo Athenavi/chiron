@@ -32,6 +32,7 @@ import {
   RobotOutlined,
   AppstoreOutlined,
   ConsoleSqlOutlined,
+  ApiOutlined,
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
@@ -86,7 +87,11 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
     { key: '/billing', label: '计费', icon: () => h(CreditCardOutlined) },
     ...(authStore.isAdmin
-      ? [{ key: '/admin', label: '管理', icon: () => h(SettingOutlined) }]
+      ? [
+          // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
+          { key: '/models', label: '模型', icon: () => h(ApiOutlined) },
+          { key: '/admin', label: '管理', icon: () => h(SettingOutlined) },
+        ]
       : []),
   ]
   return items

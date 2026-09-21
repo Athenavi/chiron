@@ -26,6 +26,14 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    // 模型配置：决定 /chat 模型下拉里能选到什么（写 llm_models 全局表，
+    // 与后端 /v1/admin/models 的权限口径一致）
+    path: '/models',
+    name: 'Models',
+    component: () => import('../views/ModelsView.vue'),
+    meta: { requiresAuth: true, requiresAdmin: true },
+  },
+  {
     path: '/share/:id',
     name: 'Share',
     component: () => import('../views/ShareView.vue'),
