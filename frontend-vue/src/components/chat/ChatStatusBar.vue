@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed } from 'vue'
-import { CloudServerOutlined, DisconnectOutlined } from '@ant-design/icons-vue'
+import { CloudServerOutlined, DisconnectOutlined, ApartmentOutlined, BarChartOutlined } from '@ant-design/icons-vue'
 import ContextRing from './ContextRing.vue'
 import type { TurnStatsItem } from './chat-types'
 
@@ -14,6 +14,16 @@ const props = defineProps<{
   /** 最近一次自动压缩（问题 4）：让"上下文被压缩了"可见，而不是悄悄变短 */
   compaction?: { beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null
   online: boolean
+  /**
+   * 运行中的子 Agent 数。>0 时「子 Agent」触发器显示角标 ——
+   * 解决"有子 Agent 在跑，界面上却看不出来"这类感知缺失（子 Agent 与统计已从侧栏移至悬浮窗）。
+   */
+  subagentActiveCount?: number
+}>()
+
+const emit = defineEmits<{
+  (e: 'toggle-subagents'): void
+  (e: 'toggle-stats'): void
 }>()
 
 const hasUsage = computed(() => Boolean(props.stats && (props.stats.inputTokens || props.stats.outputTokens)))
@@ -50,6 +60,30 @@ const compactionText = computed(() => {
       :used="contextUsed ?? null"
       :limit="contextLimit ?? null"
     />
+    <!-- 观测面板入口：子 Agent 与统计已从侧栏移出（侧栏只留"导航"：轨迹 / 会话历史）。
+         复用 .cs-item 的行内样式，不引入新的尺寸体系；角标只在真有运行时出现。 -->
+    <button
+      type="button"
+      class="cs-item cs-trigger"
+      :title="$t('子 Agent 运行（悬浮窗）')"
+      @click="emit('toggle-subagents')"
+    >
+      <ApartmentOutlined />
+      <span>{{ $t('子 Agent') }}</span>
+      <span
+        v-if="subagentActiveCount"
+        class="cs-badge"
+      >{{ subagentActiveCount }}</span>
+    </button>
+    <button
+      type="button"
+      class="cs-item cs-trigger"
+      :title="$t('会话统计：tokens / 费用 / 缓存命中 / 吞吐（悬浮窗）')"
+      @click="emit('toggle-stats')"
+    >
+      <BarChartOutlined />
+      <span>{{ $t('统计') }}</span>
+    </button>
     <span
       class="cs-item cs-conn"
       :class="{ offline: !online }"
@@ -61,7 +95,7 @@ const compactionText = computed(() => {
   </div>
 </template>
 
-<!-- 状态栏只读展示：字号与颜色都走 token，切主题自动跟随 -->
+<!-- 状态栏：除两个悬浮窗触发器外均为只读展示；字号与颜色都走 token，切主题自动跟随 -->
 <style scoped>
 .chat-status {
   flex: none;
@@ -77,5 +111,23 @@ const compactionText = computed(() => {
 .cs-sep { flex: none; width: 2px; height: 2px; border-radius: 1px; background: var(--text-muted); }
 .cs-spacer { flex: 1; }
 .cs-conn.offline { color: var(--warning); }
+/* 观测面板触发器：本行唯一的交互入口。button 需显式重置默认样式，
+   才能与旁边的只读项看起来完全一致（不引入新的尺寸/字色体系）。 */
+.cs-trigger {
+  padding: 2px 6px; margin: 0 -4px;
+  border: none; border-radius: var(--radius-sm);
+  background: transparent; color: inherit;
+  font: inherit; cursor: pointer;
+}
+.cs-trigger:hover { background: var(--bg-hover); color: var(--text-primary); }
+.cs-trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+/* 运行中的子 Agent 数量角标（仅 >0 时渲染 —— 无信息就不显示） */
+.cs-badge {
+  min-width: 14px; height: 14px; padding: 0 4px;
+  border-radius: var(--radius-full);
+  background: var(--primary); color: var(--on-solid);
+  font-size: 10px; line-height: 14px; text-align: center;
+  font-variant-numeric: tabular-nums;
+}
 @media (max-width: 576px) { .chat-status { padding: 0 12px; } .cs-model { max-width: 30%; } }
 </style>

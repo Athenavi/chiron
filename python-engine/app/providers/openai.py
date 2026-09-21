@@ -206,8 +206,8 @@ class OpenAIProvider(LLMProvider):
             except Exception:
                 logger.exception("key ring report_failure failed")
 
-    @staticmethod
     def _build_kwargs(
+        self,
         messages: list[ChatMessage],
         model: str,
         max_tokens: int,
@@ -220,6 +220,17 @@ class OpenAIProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # OpenCode（Zen / Go）要求请求带 `x-opencode-session`，否则直接
+        # 400 MissingSessionID: "Request is missing x-opencode-session and cannot be
+        # routed efficiently"。该头只影响对方的路由与 prompt 缓存，所以用**同一会话的
+        # 稳定 ID**：同对话请求走同一路由，prompt 缓存命中更好。
+        # 见 docs/service-providers.md 的 OpenCode 一节。
+        if self.name.startswith("opencode"):
+            from app.providers.session_context import get_llm_session_id  # 延迟导入：避免循环
+
+            session_id = get_llm_session_id()
+            if session_id:
+                kwargs["extra_headers"] = {"x-opencode-session": session_id}
         # ── 调试：检查消息序列中 tool 消息的配对 ──
         msgs = kwargs["messages"]
         for i, m in enumerate(msgs):

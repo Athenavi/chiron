@@ -236,7 +236,7 @@ function onKeydown(e: KeyboardEvent) {
 
 function submit() {
   const text = input.value.trim()
-  if ((!text && !pendingAttachments.value.length) || props.loading) return
+  if (!text && !pendingAttachments.value.length) return
   const atts = pendingAttachments.value.length ? [...pendingAttachments.value] : undefined
   if (text) pushHistory(text)
   historyCursor.value = null
@@ -244,6 +244,11 @@ function submit() {
   pendingAttachments.value = []
   // 发送后清空草稿
   saveDraft()
+  // 生成中提交 = **打断并发送**（ZCode 的 composer 状态机里，`running + 有草稿` 不是"只能等"）。
+  // 分工：点按钮仍是"停止"（语义明确、防误触），按 Enter 才是"打断并发送"。
+  // 已知限制：stop 目前只断开前端 SSE，引擎侧仍在跑（后端没有取消接口）——
+  // 这与"停止"按钮的既有行为一致，这里不引入新的不一致。
+  if (props.loading) emit('stop')
   emit('send', text, atts)
 }
 
@@ -631,9 +636,9 @@ defineExpose({ insertText })
           <Button
             class="send-btn"
             :type="loading ? 'default' : 'primary'"
-            shape="circle"
+            :class="{ 'send-btn--stop': loading }"
             :disabled="(!input.trim() && !pendingAttachments.length && !loading) || disabled"
-            :title="loading ? '停止' : '发送'"
+            :title="loading ? '停止生成（输入内容后按 Enter 可打断并发送）' : '发送'"
             @click="loading ? emit('stop') : submit()"
           >
             <template #icon>
@@ -693,6 +698,11 @@ defineExpose({ insertText })
 .send-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
 .send-btn:not(:disabled):hover { transform: scale(1.06); box-shadow: 0 4px 12px var(--primary-bg); filter: brightness(1.05); }
 .send-btn:disabled { opacity: 0.45; }
+/* 生成中：圆形 → 方形，让"现在能停"一眼可辨。
+   antd-vue 的 ButtonShape 只有 circle/round（不含 square），故用圆角覆盖实现；
+   同时取消"放大 + 加深"的 hover —— 那是"发送"的暗示，不该出现在"停止"上。 */
+.send-btn--stop { border-radius: var(--radius-lg) !important; }
+.send-btn--stop:not(:disabled):hover { transform: none; box-shadow: none; filter: none; }
 @media (max-width: 768px) { .input-area { padding: 0 12px 8px; } }
 /* ── 移动端：输入区贴底 + 安全区 + 触控目标放大 + 工具栏换行 ── */
 @media (max-width: 768px) {

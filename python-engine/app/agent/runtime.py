@@ -586,6 +586,13 @@ class AgentRuntime:
         # ── 0.5 生成 trace_id (跨实例链路追踪) ───────────────────────────
         trace_id = uuid_mod.uuid4().hex[:12]
 
+        # OpenCode（Zen / Go）强制要求请求带 `x-opencode-session`，缺失直接 400
+        # （MissingSessionID）。把会话标识放进 contextvar，由 provider 层
+        # （providers/openai.py、providers/anthropic.py）注入请求头。
+        from app.providers.session_context import set_llm_session_id
+
+        set_llm_session_id(task.session_id or task.id)
+
         # ── 0.4 会话授权模式（任务级缓存）────────────────────────────────
         # 模式由 Go 网关写入 Redis（/v1/mode），此处仅在任务开始时读取一次并缓存。
         # 读取失败 fail-safe 到 ask（最严格），避免"模式未知"时按 yolo 静默放开全部工具。

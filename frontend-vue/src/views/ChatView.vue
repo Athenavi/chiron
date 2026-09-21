@@ -10,6 +10,9 @@ import {
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
 import { getSessionRuntime, putSessionRuntime } from '../api/sessionRuntime'
+import FloatingPanel from '../components/common/FloatingPanel.vue'
+import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
+import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
@@ -222,6 +225,67 @@ const lastTurnStats = computed<TurnStatsItem | null>(() => {
 // 最近一次自动压缩（问题 4：压缩早已实现，但此前前端完全不可感知 —— 用户只会
 // 觉得"上下文好像丢了/回答变短了"）。引擎现在会发 compaction 事件，这里接住并展示。
 const lastCompaction = ref<{ beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null>(null)
+
+/**
+ * 运行时解析结果（`GET /v1/sessions/{id}/runtime` 的 `resolved`）。
+ *
+ * 后端已经把解析链算好：**请求显式 > 会话 runtime > 用户默认 > 全局默认 > 系统兜底**，
+ * 并给出每一项的 `source`。前端只负责显示 —— 用户由此才能回答
+ * "我现在到底在用哪个模式/模型？是谁定的？"（ZCode 的 `value / effectiveValue / overridden` 三件套）
+ */
+const runtimeResolved = ref<Record<string, { value?: string; source?: string }> | null>(null)
+
+/**
+ * 观测浮层开关。子 Agent 与统计已从侧栏移出（设计稿 docs/floating-panels-design.md）：
+ * 侧栏只留「导航」（轨迹 / 会话历史），观测类信息按需浮出、看完即关。
+ */
+const subagentsOpen = ref(false)
+const statsOpen = ref(false)
+
+/**
+ * 底部预留高度（输入区 + 状态栏）—— 传给浮层当限高基准，
+ * 使浮层"向上长高到输入区顶部即止"，从而**不遮挡正在写的草稿**。
+ * 取近似常量而非实时测量：多留一些比少留安全，且避免 ResizeObserver 的复杂度。
+ */
+const floatingBottomInset = 160
+
+/**
+ * 运行中的子 Agent 数（状态栏角标）。
+ *
+ * 直接数实时事件：遇到 `subagent.done` 就移除，否则记为运行中 ——
+ * 不依赖面板是否打开、也不等侧栏轮询结果，所以"有子 Agent 在跑"永远看得出来。
+ */
+const subagentActiveCount = computed(() => {
+  const active = new Set<string>()
+  for (const e of subagentLiveEvents.value) {
+    const id = (e as { run_id?: string }).run_id
+    if (!id) continue
+    if ((e as { type?: string }).type === 'subagent.done') active.delete(id)
+    else active.add(id)
+  }
+  return active.size
+})
+
+/** 解析来源 → 用户可读的词 */
+const SOURCE_LABELS: Record<string, string> = {
+  request: '本次请求',
+  session: '本会话',
+  default: '偏好默认',
+  system: '系统默认',
+  auto: '自动路由',
+}
+
+/** 当前模式的显示名 */
+const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || '常规')
+
+/**
+ * 当前模式的**来源**（空串表示后端没给解析结果 —— 此时不显示后缀，
+ * 避免界面出现"常规 · 未知"这种既占位又没信息的东西）。
+ */
+const modeSourceLabel = computed(() => {
+  const src = runtimeResolved.value?.mode?.source
+  return src ? (SOURCE_LABELS[src] || src) : ''
+})
 
 // 上下文占用环的分母：模型上限来自 /v1/models 的 context_window（拿不到就不显示比例）
 const availableModels = ref<LlmModel[]>([])
@@ -941,6 +1005,21 @@ function onSlashCommand(cmd: string) {
   }
 }
 
+/**
+ * 立即停止当前生成（`Esc` 与「停止」按钮共用）。
+ *
+ * 只断开流并收尾流式标记，**保留已产出的内容** —— 用户按 Esc 的意图是"别再往下说了"，
+ * 而不是"把已经说过的删掉"。参照 ZCode 的 `escapeStop`。
+ */
+function stopGenerating() {
+  if (!loading.value) return
+  activeSSE?.close()
+  activeSSE = null
+  flushStreamingFlags()
+  loading.value = false
+  stopTurnTimer()
+}
+
 // 全局键盘快捷键
 function onGlobalKeydown(e: KeyboardEvent) {
   // Ctrl/Cmd + K：打开侧边栏 + 切到会话历史视图
@@ -952,6 +1031,19 @@ function onGlobalKeydown(e: KeyboardEvent) {
       const searchInput = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
       searchInput?.focus()
     })
+  }
+  // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
+  if (e.key === 'Escape' && loading.value) {
+    e.preventDefault()
+    stopGenerating()
+    return
+  }
+  // Esc 关闭观测浮层 —— 全局优先级：**停止生成 > 关闭浮窗 > 关闭侧栏**。
+  // （"停止生成"在上一分支已 return，所以能走到这里说明不是在生成中。）
+  if (e.key === 'Escape' && (subagentsOpen.value || statsOpen.value)) {
+    subagentsOpen.value = false
+    statsOpen.value = false
+    return
   }
   // Esc 关闭侧边栏
   if (e.key === 'Escape' && panelOpen.value) {
@@ -1019,7 +1111,12 @@ async function switchSession(id: string) {
     let cfg: any = data?.llm_config
     if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg) } catch { cfg = undefined } }
     let rt: any = null
-    try { rt = (await getSessionRuntime(id)).runtime } catch { /* 不可用时静默回落 llm_config */ }
+    try {
+      const view = await getSessionRuntime(id)
+      rt = view.runtime
+      // 生效值 + 来源：后端已算好解析链，前端只显示（见 runtimeResolved 的注释）
+      runtimeResolved.value = view.resolved || null
+    } catch { /* 不可用时静默回落 llm_config */ }
     const savedMode = rt?.mode || cfg?.mode
     if (typeof savedMode === 'string' && modeOptions.some(o => o.value === savedMode)) {
       mode.value = savedMode
@@ -1700,7 +1797,13 @@ function continueGeneration() {
           />
           <div class="toolbar-center">
             <span class="toolbar-title">{{ unifiedMode ? '统一任务' : (activeSession?.title || 'Chiron') }}</span>
-            <span class="toolbar-mode">{{ unifiedMode ? (unifiedSubmitMode || 'auto') : (modeOptions.find(o => o.value === mode)?.label || '常规') }}</span>
+            <!-- 生效值 + 来源：后端已把解析链（本次请求 > 本会话 > 偏好默认 > 系统默认）算好，
+                 这里直接显示 —— 用户由此能回答"我现在用的是哪个模式、是谁定的"。
+                 来源为空时不显示后缀，避免出现"常规 · 未知"这种只占位没信息的字样。 -->
+            <span
+              class="toolbar-mode"
+              :title="modeSourceLabel ? `模式来源：${modeSourceLabel}` : '当前对话模式'"
+            >{{ modeLabel }}<template v-if="modeSourceLabel"> · {{ modeSourceLabel }}</template></span>
           </div>
           <div class="toolbar-side toolbar-actions">
             <Button
@@ -2025,8 +2128,37 @@ function continueGeneration() {
         :context-used="lastTurnStats?.inputTokens ?? null"
         :context-limit="contextWindow"
         :compaction="lastCompaction"
+        :subagent-active-count="subagentActiveCount"
         :online="isOnline && !connectionLost"
+        @toggle-subagents="subagentsOpen = !subagentsOpen"
+        @toggle-stats="statsOpen = !statsOpen"
       />
+
+      <!-- 观测浮层（设计稿 docs/floating-panels-design.md）：
+           向上弹出 + 右对齐；限高到输入区顶部，因此**不遮挡正在写的草稿**。
+           子 Agent 的内部 tab（运行·输出·用量·事件流）与移动端抽屉在后续批次接入。 -->
+      <FloatingPanel
+        :open="subagentsOpen"
+        :title="$t('子 Agent')"
+        :width="420"
+        :bottom-inset="floatingBottomInset"
+        @close="subagentsOpen = false"
+      >
+        <SubAgentPanel
+          :session-id="activeSessionId"
+          :live-events="subagentLiveEvents"
+        />
+      </FloatingPanel>
+
+      <FloatingPanel
+        :open="statsOpen"
+        :title="$t('会话统计')"
+        :width="320"
+        :bottom-inset="floatingBottomInset"
+        @close="statsOpen = false"
+      >
+        <SessionStatsPanel :session-id="activeSessionId" />
+      </FloatingPanel>
 
       <ChatDisplaySettings v-model:open="displaySettingsOpen" />
       <SaveToKnowledgeDialog

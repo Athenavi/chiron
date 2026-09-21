@@ -24,21 +24,31 @@
 
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
-    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier, monospace;
+    /* 中西文混排：Windows 的 Consolas / JetBrains Mono 等**西文等宽字体不含中文字形**，
+       不显式补 CJK 时，等宽场景里的中文（文件路径、模型 ID、哈希、命令输出）会回退到宋体。
+       因此保留各平台西文等宽字体，并在通用 monospace 前显式加入各平台 CJK 无衬线字体。 */
+    --font-mono: 'JetBrains Mono', 'SF Mono', 'Fira Code', Consolas, 'Liberation Mono', Menlo, Courier,
+        'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',
+        'Noto Sans CJK SC', monospace;
 
-    --fs-xs: 11px;
-    --fs-sm: 12px;
-    --fs-base: 14px;
-    --fs-md: 15px;
-    --fs-lg: 16px;
-    --fs-xl: 18px;
-    --fs-2xl: 20px;
-    --fs-3xl: 24px;
-    --fs-4xl: 28px;
-    --fs-5xl: 32px;
-    --fs-6xl: 36px;
-    --fs-7xl: 42px;
-    --fs-8xl: 48px;
+    /* 界面字号：全局唯一缩放入口。改这一个值即可让整套界面文字等比缩放。
+       注意：**图标、间距、圆角（--space-* / --radius-*）刻意不跟随**，
+       否则放大字号会把布局撑破（这也是不直接改 html/root font-size 的原因）。
+       以下每一档都是「基准 ± 偏移」，默认 14px 下与原先的固定像素值逐一对齐（零视觉变化）。 */
+    --ui-font-size: 14px;
+    --fs-xs: calc(var(--ui-font-size) - 3px);   /* 14 → 11px */
+    --fs-sm: calc(var(--ui-font-size) - 2px);   /* 14 → 12px */
+    --fs-base: var(--ui-font-size);             /* 14 → 14px */
+    --fs-md: calc(var(--ui-font-size) + 1px);   /* 14 → 15px */
+    --fs-lg: calc(var(--ui-font-size) + 2px);   /* 14 → 16px */
+    --fs-xl: calc(var(--ui-font-size) + 4px);   /* 14 → 18px */
+    --fs-2xl: calc(var(--ui-font-size) + 6px);  /* 14 → 20px */
+    --fs-3xl: calc(var(--ui-font-size) + 10px); /* 14 → 24px */
+    --fs-4xl: calc(var(--ui-font-size) + 14px); /* 14 → 28px */
+    --fs-5xl: calc(var(--ui-font-size) + 18px); /* 14 → 32px */
+    --fs-6xl: calc(var(--ui-font-size) + 22px); /* 14 → 36px */
+    --fs-7xl: calc(var(--ui-font-size) + 28px); /* 14 → 42px */
+    --fs-8xl: calc(var(--ui-font-size) + 34px); /* 14 → 48px */
 
     --fw-regular: 400;
     --fw-medium: 500;

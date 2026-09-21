@@ -298,6 +298,44 @@ class SubAgentRunner:
             if sink is not None:
                 sink.emit_done(run_id=run_id, status=ST_CANCELLED, parent_run_id=parent_run_id,
                                depth=child_depth, profile=profile_name)
+
+            # ★ 关键修复（实测故障）：父任务结束、SSE 断流、用户切会话都会取消子 Agent，
+            # 而**取消传播会打断此后所有 await** —— 于是原来的 finish_run 从不执行：
+            # DB/Redis 的 status 永远停在 "running"、summary 永远为空，
+            # 侧边栏因此永远"没有结果"（实测：一个已跑 140 步的 run 停在 running，
+            # finished_at / summary 均为 NULL）。
+            # 取消路径的终态写库必须放进**独立任务**（不 await），让它在后台写完。
+            # 原则取自 ZCode：**run 的真相在 journal，观察面出问题绝不该影响它**。
+            async def _write_terminal_state() -> None:
+                try:
+                    if self._store is not None:
+                        await self._store.finish_run(
+                            run_id,
+                            status="cancelled",
+                            summary="",
+                            input_tokens=in_tokens,
+                            output_tokens=out_tokens,
+                            steps=steps,
+                            error="cancelled",
+                        )
+                    if cache is not None:
+                        await cache.update_status(
+                            run_id=run_id,
+                            tenant=cache_tenant,
+                            status="cancelled",
+                            summary="",
+                            usage={"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps},
+                            result_ref=run_id,
+                        )
+                except Exception as exc:  # noqa: BLE001 - 收尾失败不得掩盖取消语义
+                    logger.warning("subagent %s cancel-finalize failed: %s", run_id, exc)
+
+            try:
+                asyncio.get_running_loop().create_task(_write_terminal_state())
+            except RuntimeError:  # 无运行中的 loop（理论不可达）：至少留下证据
+                logger.warning(
+                    "subagent %s: no running loop; terminal state not persisted", run_id
+                )
             raise
         except Exception as exc:  # noqa: BLE001 - 子 Agent 失败不应炸掉父任务
             status = "failed"
