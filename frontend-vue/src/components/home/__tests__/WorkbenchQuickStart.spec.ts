@@ -74,8 +74,8 @@ describe('WorkbenchQuickStart（首页协作入口）', () => {
     await flushPromises()
 
     const selects = wrapper.findAllComponents(Select)
-    // 知识库 / Agent / 技能 / 工作流 / 插件 —— 插件是第六台，同样要能带进对话
-    expect(selects).toHaveLength(5)
+    // 知识库 / Agent / 技能 / 工作流 / 插件 / 记忆 —— 记忆此前是唯一没有入口的类型（问题 3）
+    expect(selects).toHaveLength(6)
     await selects[0]!.vm.$emit('update:value', ['kb-1'])
     await selects[2]!.vm.$emit('update:value', ['pdf'])
     await selects[4]!.vm.$emit('update:value', ['fs-mcp'])

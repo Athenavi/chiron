@@ -9,7 +9,6 @@ import {
 import HomeScene3D from '../components/home/HomeScene3D.vue'
 import WorkstationNav from '../components/WorkstationNav.vue'
 import WorkbenchQuickStart from '../components/home/WorkbenchQuickStart.vue'
-import CapabilityDiscovery from '../components/home/CapabilityDiscovery.vue'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -183,9 +182,6 @@ function scrollToTop() {
 
     <!-- 六大工作台统一入口：快速命令 + 工作台网格 + 最近活动（互联互通） -->
     <WorkstationNav />
-
-    <!-- 能力发现：后端能力注册中心的前端入口（此前零调用） -->
-    <CapabilityDiscovery />
 
     <section
       id="features"

@@ -125,7 +125,16 @@ class TaskRouter:
 
         try:
             # ── 阶段 1: 意图理解 ─────────────────────────────────────
-            intent = await self._understand_intent(user_input, context or {})
+            # 会话运行时状态（P1-d）：统一链路的模型/provider 选择在此进入意图理解。
+            # 此前这里没有传，于是意图理解恒用写死的 gpt-4o-mini。
+            llm_config = (context or {}).get("llm_config") or {}
+            intent = await self._understand_intent(
+                user_input,
+                context or {},
+                model=str(llm_config.get("model") or ""),
+                provider_hint=str(llm_config.get("provider") or ""),
+                tenant_id=tenant_id,
+            )
 
             # ── 阶段 2: 任务拆解 ─────────────────────────────────────
             subtasks = await self._decompose_task(intent, tenant_id, user_input)
@@ -198,16 +207,29 @@ class TaskRouter:
         self,
         user_input: str,
         context: dict,
+        model: str = "",
+        provider_hint: str = "",
+        tenant_id: str = "",
     ) -> dict[str, Any]:
         """理解用户意图
 
         策略:
         1. 尝试调用 LLM (如果 gateway 可用)
         2. 降级到关键词提取 (LLM 不可用时)
+
+        model / provider_hint / tenant_id 来自**会话运行时状态**（P1-d，docs/session-runtime-spec.md）。
+        此前这条链路把模型写死为 gpt-4o-mini，导致用户在界面上切换模型/提供商
+        对统一链路（/v1/chat/submit）完全无效。
         """
         # 尝试使用 LLM 进行意图识别
         try:
-            return await self._llm_understand_intent(user_input, context)
+            return await self._llm_understand_intent(
+                user_input,
+                context,
+                model=model,
+                provider_hint=provider_hint,
+                tenant_id=tenant_id,
+            )
         except Exception as e:
             logger.warning(
                 f"LLM intent recognition failed, falling back to keywords: {e}"
@@ -224,8 +246,15 @@ class TaskRouter:
         self,
         user_input: str,
         context: dict,
+        model: str = "",
+        provider_hint: str = "",
+        tenant_id: str = "",
     ) -> dict[str, Any]:
-        """使用 LLM 理解用户意图 (生产级实现)"""
+        """使用 LLM 理解用户意图 (生产级实现)
+
+        model/provider_hint/tenant_id 由 route_task 从会话运行时状态注入（P1-d）；
+        为空时回落默认轻量模型，保持既有行为不变。
+        """
         from app.main import get_gateway
 
         gateway = await get_gateway()
@@ -258,9 +287,14 @@ Return ONLY valid JSON without markdown formatting."""
             ChatMessage(role="user", content=prompt),
         ]
 
-        # 调用 LLM
+        # 调用 LLM：模型/provider 来自会话运行时状态（P1-d）；tenant_id 传入使租户路由生效
         response_text = ""
-        async for chunk in gateway.chat_stream(messages=messages, model="gpt-4o-mini"):
+        async for chunk in gateway.chat_stream(
+            messages=messages,
+            model=model or "gpt-4o-mini",
+            provider_hint=provider_hint,
+            tenant_id=tenant_id,
+        ):
             if chunk.content:
                 response_text += chunk.content
 

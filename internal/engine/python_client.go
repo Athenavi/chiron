@@ -556,6 +556,17 @@ type PythonEvent struct {
 	InputTokens  int    `json:"input_tokens,omitempty"`
 	OutputTokens int    `json:"output_tokens,omitempty"`
 	Message      string `json:"message,omitempty"`
+
+	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 docs/subagent-design.md §4.2）──
+	// 这些字段让前端能按 run_id 建树、并按 depth/parent_run_id 还原层级；
+	// 主对话事件不带这些字段（omitempty 保证不污染既有帧）。
+	RunID       string         `json:"run_id,omitempty"`
+	ParentRunID string         `json:"parent_run_id,omitempty"`
+	Depth       int            `json:"depth,omitempty"`
+	Profile     string         `json:"profile,omitempty"`
+	Status      string         `json:"status,omitempty"`
+	Truncated   bool           `json:"truncated,omitempty"`
+	Usage       map[string]any `json:"usage,omitempty"`
 }
 
 // Run starts a streaming inference call to the Python engine.

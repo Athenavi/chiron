@@ -4,6 +4,20 @@
 模式 = ModeConfig（persona 策略 + 工具集 + 特殊能力 + 上下文/压缩开关），
 新增模式只需在 _MODE_CONFIGS 加一条条目。mode_overrides.json（可被创造
 模式的 mode_edit 工具写入）在加载时叠加覆盖。
+
+── 四种模式的明确差异（前端 ChatView 的模式选择器按此口径呈现）──
+
+| 模式 | 一句话定位 | 工具集 | 注入记忆/技能/RAG | 压缩 | 输出参数（前端预设） |
+| --- | --- | --- | --- | --- | --- |
+| normal 常规 | 通用助手：日常问答 + 轻任务 | 核心 12 个 | 是 | 开 | temp 0.6 / max_tokens 4096 |
+| minimal 极简 | 最短路径：只读、改、跑 | 3 个（read_file / edit_file / shell_exec） | 否 | 关 | temp 0.2 / 1024 |
+| ptc PTC | 程序化工具调用：多步操作写成一段程序一次执行 | 核心 12 个 + run_code（persona 引导"写代码而非逐步调用"） | 是 | 开 | temp 0.4 / 4096 |
+| creative 创造 | 自我改造：可读写平台自身的模式/技能定义 | 核心 12 个 + mode_list / mode_edit | 是 | 开 | temp 1.0 / 8192 |
+
+差异必须**可感知**：切换模式后，模型看到的工具清单、persona、注入的上下文与压缩策略
+都应随之改变（见 runtime.py 的 _filter_tools / persona 覆盖 / include_context /
+enable_compaction）。若某模式在这些维度上与 normal 完全相同，用户在界面上就会觉得
+"切了没变化"—— 这正是 2026-09 实测暴露的问题（PTC 与 CREATIVE 当时与 normal 无实质差异）。
 """
 
 from __future__ import annotations
@@ -52,6 +66,19 @@ CREATIVE_PERSONA = (
     "and keep changes reversible."
 )
 
+# PTC 模式 persona（Program-aided Tool Calling）：这是 PTC 与常规模式的**实质差异** ——
+# 差别不在"能用哪些工具"，而在**用工具的方式**：多步任务优先写成一段程序一次执行，
+# 而不是一轮一轮地调用工具（更少往返、更省 token、更容易验证）。
+# 此前 PTC 的工具集与常规模式完全相同且没有 persona，导致"切换 PTC 感觉没有任何变化"。
+PTC_PERSONA = (
+    "You are a program-aided agent on the Chiron platform. "
+    "When a task needs more than one step over files or data, prefer writing ONE short "
+    "program and running it with run_code instead of calling tools one by one: it is "
+    "faster, cheaper and easier to verify. Read before you write, keep the program "
+    "self-contained, and print the exact evidence your conclusion relies on. "
+    "Fall back to single tool calls only for genuinely interactive or one-off actions."
+)
+
 
 class AgentMode(str, Enum):
     NORMAL = "normal"
@@ -86,6 +113,7 @@ _BASE_MODES: dict[AgentMode, ModeConfig] = {
     ),
     AgentMode.PTC: ModeConfig(
         mode=AgentMode.PTC,
+        persona=PTC_PERSONA,  # 与常规模式的实质差异：用代码一次性完成多步操作
         include_tools=frozenset(CORE_TOOL_NAMES),
         extra_tools=frozenset(PTC_EXTRA_TOOLS),
     ),

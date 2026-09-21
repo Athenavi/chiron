@@ -61,6 +61,8 @@ _LAZY_IMPORTS = {
     'Payment': '.payment',
     'Session': '.session',
     'StripePayment': '.stripe_payment',
+    'SubagentRun': '.subagent_run',
+    'SubagentRunStep': '.subagent_run_step',
     'SupportTicket': '.support_ticket',
     'SystemSetting': '.system_setting',
     'Task': '.task',

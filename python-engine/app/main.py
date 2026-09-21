@@ -1132,6 +1132,7 @@ async def agent_submit(
     # ── 六大工作台互联互通：注册各工作台工具,使 CHAT 的 LLM 可通过 function-calling 调用 ──
     import app.tools.skill  # noqa: F401 — SKILLS 工作台 (skill_list/skill_run/skill_install)
     import app.tools.subagent  # noqa: F401 — 多 agent 委派工具
+    import app.tools.subagent_result  # noqa: F401 — 子 Agent 结果按需读取 (read_subagent_result)
     import app.tools.terminal  # noqa: F401 — 持久终端
     import app.tools.web  # noqa: F401 — 网页搜索/抓取
     import app.workflow.tools  # noqa: F401 — WORKFLOW 工作台 (workflow_run/workflow_list)
@@ -1273,15 +1274,76 @@ async def agent_submit(
         total_in = 0
         total_out = 0
         started = time.monotonic()
-        if run_lease is not None:
-            await run_lease.start()
+
+        # ── 子 Agent 事件旁路（docs/subagent-design.md §4.3）──
+        # 子 Agent 在工具调用内部运行，其进度需"穿透"到这条父 SSE 流：经 contextvar
+        # 暴露 EventSink，再把 runtime 事件与旁路事件合并输出。旁路有界+限流，绝不阻塞子 Agent。
+        from app.agent.event_sink import EventSink
+        from app.tools.context import set_tool_context
+
+        sink = EventSink()
+        set_tool_context(event_sink=sink)
+        merged: asyncio.Queue = asyncio.Queue(maxsize=1024)
+
+        async def _pump_runtime() -> None:
+            try:
+                async for ev in runtime.run(task):
+                    await merged.put(("runtime", ev))
+            finally:
+                await merged.put(("eof", None))
+
+        def _frame(payload: dict) -> str:
+            return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+        # 运行期缓存（Redis，TTL 1h）：写入的事件与发给前端的完全一致 —— 既保证
+        # "侧边栏回放 == 实时流"，也天然复用了旁路的限流（不产生写放大）。
+        runtime_cache = None
         try:
-            async for event in runtime.run(task):
+            from app.subagent.runtime_cache import get_runtime_cache
+
+            runtime_cache = await get_runtime_cache()
+        except Exception as cache_err:  # noqa: BLE001 - 缓存不可用不影响主流程
+            logger.debug("subagent runtime cache unavailable: %s", cache_err)
+        cache_tenant = getattr(task, "tenant_id", "") or "default"
+
+        async def _sink_frames():
+            """把旁路事件转成 SSE 帧，并同步落运行期缓存。"""
+            for sub_event in sink.drain():
+                payload = sub_event.to_payload()
+                if runtime_cache is not None:
+                    await runtime_cache.push_event(run_id=sub_event.run_id,
+                                                   tenant=cache_tenant, payload=payload)
+                yield _frame(payload)
+
+        pump = asyncio.create_task(_pump_runtime())
+        try:
+            if run_lease is not None:
+                await run_lease.start()
+            while True:
+                # 1) 先冲刷子 Agent 旁路（保证进度实时性）
+                async for frame in _sink_frames():
+                    yield frame
+                # 2) 取下一个来源事件；两处都空则短等，避免忙等
+                try:
+                    kind, event = merged.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.wait({pump}, timeout=0.1)
+                    async for frame in _sink_frames():
+                        yield frame
+                    try:
+                        kind, event = merged.get_nowait()
+                    except asyncio.QueueEmpty:
+                        continue
+                if kind == "eof":
+                    break
                 if event.input_tokens:
                     total_in += event.input_tokens
                 if event.output_tokens:
                     total_out += event.output_tokens
-                yield f"data: {json.dumps({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens}, ensure_ascii=False)}\n\n"
+                yield _frame({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens})
+            # 收尾：把旁路中剩余的预览与唯一终态送出
+            async for frame in _sink_frames():
+                yield frame
             # 正常收尾 → Webhook agent.complete（主对话收尾统一出口；失败不影响主流程）
             if session_id:
                 try:
@@ -1319,6 +1381,14 @@ async def agent_submit(
                 except Exception as wh_err:  # noqa: BLE001
                     logger.debug("agent webhook emit failed: %s", wh_err)
         finally:
+            # 停掉 runtime 泵：客户端断开时取消会经它传播到 agent 循环
+            pump.cancel()
+            try:
+                await pump
+            except asyncio.CancelledError:
+                pass
+            except Exception as pump_err:  # noqa: BLE001
+                logger.debug("runtime pump cleanup failed: %s", pump_err)
             # 先注销 Redis 归属映射（仅当仍属于本次 run_token），再清进程内注册表
             if run_lease is not None:
                 await run_lease.stop()

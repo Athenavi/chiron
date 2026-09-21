@@ -11,10 +11,20 @@ const props = defineProps<{
   /** 上下文占用：分子 = 最近一轮 input tokens，分母 = 模型 context_window */
   contextUsed?: number | null
   contextLimit?: number | null
+  /** 最近一次自动压缩（问题 4）：让"上下文被压缩了"可见，而不是悄悄变短 */
+  compaction?: { beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null
   online: boolean
 }>()
 
 const hasUsage = computed(() => Boolean(props.stats && (props.stats.inputTokens || props.stats.outputTokens)))
+
+/** 压缩提示文案：仅在有实际节省时显示 */
+const compactionText = computed(() => {
+  const c = props.compaction
+  if (!c || !c.savedTokens) return ''
+  const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
+  return `已压缩 ${k(c.beforeTokens)} → ${k(c.afterTokens)}`
+})
 </script>
 
 <template>
@@ -31,6 +41,10 @@ const hasUsage = computed(() => Boolean(props.stats && (props.stats.inputTokens 
         class="cs-item"
       >{{ stats.durationSec }}s</span>
     </template>
+    <span
+      v-if="compactionText"
+      class="cs-item cs-compaction"
+    >{{ compactionText }}</span>
     <span class="cs-spacer" />
     <ContextRing
       :used="contextUsed ?? null"

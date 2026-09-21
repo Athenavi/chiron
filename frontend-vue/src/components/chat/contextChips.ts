@@ -123,3 +123,41 @@ export function buildContextQuery(chips: readonly ContextChip[]): Record<string,
   }
   return query
 }
+
+/**
+ * `buildWorkbenchContext()` 的**逆运算**：把工作台上下文还原成 chips。
+ *
+ * 用途（P1，docs/session-runtime-spec.md）：会话运行时状态 `runtime.context` 是
+ * "已激活能力"的**单一事实源**。切换会话/刷新页面时据此还原侧栏展示，
+ * 而不是只依赖 URL query —— 否则用户"带进对话"的能力在刷新后就从界面上消失了。
+ */
+export function chipsFromWorkbenchContext(
+  ctx: Record<string, unknown> | null | undefined,
+): ContextChip[] {
+  if (!ctx) return []
+  const LABELS: Record<ContextChipType, (value: string) => string> = {
+    kb: value => `知识库 #${value.slice(0, 8)}`,
+    agent: value => `Agent #${value.slice(0, 8)}`,
+    skill: value => `技能 ${value}`,
+    workflow: value => `工作流 ${value}`,
+    plugin: value => `插件 ${value}`,
+    memory: value => `记忆 ${value}`,
+  }
+  const chips: ContextChip[] = []
+  const push = (type: ContextChipType, raw: unknown) => {
+    if (!Array.isArray(raw)) return
+    for (const item of raw) {
+      if (typeof item === 'string' && item.trim()) {
+        chips.push({ type, label: LABELS[type](item.trim()), value: item.trim() })
+      }
+    }
+  }
+  // 多值字段优先，缺省回退单值兼容字段（与 buildWorkbenchContext 的写法对应）
+  push('kb', ctx.kb_ids ?? (ctx.kb_id ? [ctx.kb_id] : []))
+  push('agent', ctx.agent_ids ?? (ctx.agent_id ? [ctx.agent_id] : []))
+  push('skill', ctx.skill_names)
+  push('workflow', ctx.workflow_ids ?? (ctx.workflow_id ? [ctx.workflow_id] : []))
+  push('plugin', ctx.plugin_names)
+  push('memory', ctx.memory_slots)
+  return chips
+}

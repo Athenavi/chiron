@@ -540,6 +540,36 @@ class AgentRuntime:
             return CompactionConfig(**mode_cfg.compaction)
         return None
 
+    def _compact_with_notice(
+        self, messages: list[dict], mode_cfg: ModeConfig, llm_config: dict
+    ) -> tuple[list[dict], Optional[AgentEvent]]:
+        """压缩上下文；**真的压缩了**才返回一个 compaction 事件（否则 None）。
+
+        背景（问题 4）：自动压缩早就实现了（`_compact_messages` 的分级 SNIP/PRUNE 策略），
+        但压缩发生的那一刻前端毫无感知 —— 用户只会觉得"上下文好像丢了/回答变短了"。
+        这里把 before/after 变成结构化事件，经 SSE 透传到状态栏，让压缩**可感知**。
+        """
+        comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
+        tokens_before = _estimate_tokens(messages)
+        count_before = len(messages)
+        compacted = _compact_messages(messages, comp_cfg)
+        tokens_after = _estimate_tokens(compacted)
+        if tokens_after >= tokens_before:
+            return compacted, None
+        report = {
+            "before_tokens": tokens_before,
+            "after_tokens": tokens_after,
+            "saved_tokens": tokens_before - tokens_after,
+            "messages_before": count_before,
+            "messages_after": len(compacted),
+            "strategy": getattr(comp_cfg, "strategy", "") or "auto",
+        }
+        return compacted, AgentEvent(
+            type="compaction",
+            content=json.dumps(report, ensure_ascii=False),
+            span_name="compaction",
+        )
+
     async def run(self, task: AgentTask) -> AsyncIterator[AgentEvent]:
         """
         执行 Agent 推理循环
@@ -755,9 +785,11 @@ class AgentRuntime:
             ]
             if mode_cfg.enable_compaction:
                 # SaaS：截断策略由模式/租户配置（mode_overrides.json 的 compaction 字段）；
-                # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖
-                comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
-                messages = _compact_messages(messages, comp_cfg)
+                # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖。
+                # 真压缩了会带回事件 → 立刻让前端"看得见"（问题 4）。
+                messages, compaction_notice = self._compact_with_notice(messages, mode_cfg, llm_config)
+                if compaction_notice is not None:
+                    yield compaction_notice
 
             # 推理循环
             _thinking_last_flushed = (
@@ -788,8 +820,9 @@ class AgentRuntime:
 
                 # ── 分级压缩：根据 token 使用量选择压缩策略（SaaS：策略可配）──
                 if mode_cfg.enable_compaction:
-                    comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
-                    messages = _compact_messages(messages, comp_cfg)
+                    messages, compaction_notice = self._compact_with_notice(messages, mode_cfg, llm_config)
+                    if compaction_notice is not None:
+                        yield compaction_notice
 
                 # ── 强制清理孤立的 tool 消息（确保 API 兼容性）──
                 clean = []
@@ -820,6 +853,9 @@ class AgentRuntime:
                     # 中立格式 → gateway ChatMessage（provider 边界适配）
                     messages=_to_chat_messages(messages),
                     model=model,
+                    # P1-d：显式 provider（会话运行时状态解析结果）。此前完全不传 →
+                    # 多网关下同名模型被"先注册的 provider"抢走（如 OpenCode 与 DeepSeek 直连）。
+                    provider_hint=(llm_config or {}).get("provider", ""),
                     tenant_id=task.tenant_id,
                     max_tokens=max_tokens,
                     temperature=temperature,

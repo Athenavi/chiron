@@ -76,6 +76,11 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
 
+    # 出站 LLM HTTP 请求的 User-Agent。必须是"具名客户端"标识：部分网关（如 opencode.ai）
+    # 前置 Cloudflare 反滥用规则，会直接拒绝 SDK/HTTP 库的默认 UA
+    # （实测 Python urllib / Go http 默认 UA 访问 opencode.ai 返回 CF Error 1010 → 403）。
+    llm_http_user_agent: str = "chiron/1.0"
+
     # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
     # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
     # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。

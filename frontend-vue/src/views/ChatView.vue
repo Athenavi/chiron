@@ -9,10 +9,12 @@ import {
   createAgent, createGraph,
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
+import { getSessionRuntime, putSessionRuntime } from '../api/sessionRuntime'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
 import ChatSidePanel from '../components/chat/ChatSidePanel.vue'
+import type { SubagentEvent } from '../api/subagent'
 import MessageList from '../components/chat/MessageList.vue'
 import MessageItem from '../components/chat/MessageItem.vue'
 import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
@@ -31,7 +33,7 @@ import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter } from '../components/chat/chat-types'
 import { findMatches } from '../components/chat/transcriptSearch'
 import { describeApiError } from '../utils/apiError'
-import { buildWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
+import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
 import type { ChatItem, ChatSession, ChatAttachment, TurnStatsItem, TextItem } from '../components/chat/chat-types'
 
@@ -217,6 +219,10 @@ const lastTurnStats = computed<TurnStatsItem | null>(() => {
   return null
 })
 
+// 最近一次自动压缩（问题 4：压缩早已实现，但此前前端完全不可感知 —— 用户只会
+// 觉得"上下文好像丢了/回答变短了"）。引擎现在会发 compaction 事件，这里接住并展示。
+const lastCompaction = ref<{ beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null>(null)
+
 // 上下文占用环的分母：模型上限来自 /v1/models 的 context_window（拿不到就不显示比例）
 const availableModels = ref<LlmModel[]>([])
 const contextWindow = computed(() => {
@@ -373,12 +379,14 @@ const mode = ref('normal')
 // ── 模型路由：会话 llm_config.model（空 = 后端默认路由） ──
 const llmModel = ref('')
 
-// ── 对话模式预设（mode 对应 temperature/max_tokens；用户显式覆盖优先） ──
-const MODE_PRESETS: Record<string, { temperature: number; max_tokens: number; note?: string }> = {
-  normal: { temperature: 0.6, max_tokens: 4096 },
-  minimal: { temperature: 0.2, max_tokens: 1024, note: '简短回复' },
-  ptc: { temperature: 0.4, max_tokens: 4096, note: '分步思考' },
-  creative: { temperature: 1.0, max_tokens: 8192 },
+// ── 对话模式预设：mode → temperature/max_tokens + 用户可见的**一句话定位** ──
+// desc 必须与后端 app/agent/modes.py 的四种模式定义表一一对应（工具集/上下文/压缩差异），
+// 否则又会回到"切了看不出区别"的老问题（2026-09 实测暴露）。
+const MODE_PRESETS: Record<string, { temperature: number; max_tokens: number; note?: string; desc: string }> = {
+  normal: { temperature: 0.6, max_tokens: 4096, desc: '通用助手：12 个核心工具，注入记忆/技能/知识库上下文' },
+  minimal: { temperature: 0.2, max_tokens: 1024, note: '简短回复', desc: '极简：只用 read_file/edit_file/shell_exec，不注入上下文、不压缩' },
+  ptc: { temperature: 0.4, max_tokens: 4096, note: '分步思考', desc: 'PTC：多步操作写成一段程序一次执行（run_code），少往返、省 token' },
+  creative: { temperature: 1.0, max_tokens: 8192, desc: '创意：可读写平台自身的模式/技能定义（mode_list/mode_edit）' },
 }
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model（base 已显式携带的字段优先保留） */
@@ -394,26 +402,35 @@ function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
   return cfg
 }
 
-/** 模型切换：更新 llmModel ref + 会话级持久化（SSE 模式已有会话时立即保存 llm_config） */
+/**
+ * 把运行时状态写进**单一事实源**（P1：Redis 热 + `unified_sessions.runtime` 持久）。
+ *
+ * 会话已建立时同时写 `/v1/sessions/{id}/runtime`（刷新/重开会话都不丢，且提交链路
+ * 按 spec §3 的解析链读取）与 `llm_config`（老客户端与其他页面仍按此口径读取）。
+ */
+function persistRuntime(patch: Record<string, unknown>) {
+  const sid = activeSessionId.value
+  if (!sid) return
+  void putSessionRuntime(sid, patch).catch(() => {})
+  void updateConversation(sid, { llm_config: buildLlmConfig() } as any).catch(() => {})
+}
+
+/** 模型切换：更新 llmModel ref + 写入运行时状态（会话级持久） */
 function onModelChange(m: string) {
   if (m === llmModel.value) return
   llmModel.value = m
   message.info(m ? `模型已切换：${m}（仅影响后续消息）` : t('模型已重置为默认（后端路由）'))
-  if (!unifiedMode.value && activeSessionId.value) {
-    void updateConversation(activeSessionId.value, { llm_config: buildLlmConfig() } as any).catch(() => {})
-  }
+  persistRuntime({ model: m || null })
 }
 
-/** 模式切换：更新 mode ref + 提示（仅影响后续消息），会话级持久化（SSE 模式已有会话时立即保存 llm_config） */
+/** 模式切换：更新 mode ref + 写入运行时状态（会话级持久） */
 function onModeChange(m: string) {
   if (m === mode.value) return
   mode.value = m
   const opt = modeOptions.find(o => o.value === m)
   const preset = MODE_PRESETS[m]
-  message.info(`已切换到「${opt?.label || m}」模式${preset?.note ? `（${preset.note}）` : ''}，仅影响后续消息`)
-  if (!unifiedMode.value && activeSessionId.value) {
-    void updateConversation(activeSessionId.value, { llm_config: buildLlmConfig() } as any).catch(() => {})
-  }
+  message.info(`已切换到「${opt?.label || m}」模式${preset?.desc ? `：${preset.desc}` : ''}，仅影响后续消息`)
+  persistRuntime({ mode: m })
 }
 
 /** 归一化后的 metadata（可能为 JSON 字符串或对象） */
@@ -436,7 +453,11 @@ const contextChips = ref<ContextChip[]>([])
 const errorBanner = ref('')          // query.error 提示
 const unifiedSessionId = ref('')     // 统一任务会话 id（query.task）
 const unifiedSubmitMode = ref('auto') // 会话创建时的 mode（shared_context.mode 优先）
-const unifiedMode = computed(() => !!unifiedSessionId.value)
+// P1-e：**统一任务模式（TaskRouter 自动编排）已并入常规对话链路**。
+// 常规链路（SSE /submit → AgentTask）才是模式/模型/工具集/上下文全部生效的那条；
+// 保留两条会让"切换模式/模型"看起来只对其中一条起作用（见 docs/session-runtime-spec.md）。
+// 恒为 false 即停用分流，unifiedSessionId 等相关代码保留以便回退。
+const unifiedMode = computed(() => false)
 // 纯展示 flag：任务提交成功时，徽标短暂过渡到"完成"态后复位
 const unifiedJustFinished = ref(false)
 let unifiedDoneTimer: ReturnType<typeof setTimeout> | null = null
@@ -730,9 +751,13 @@ watch(() => items.value.length, async () => {
 
 // 侧面板（主从时间线：轨迹 / 会话历史）；上下文面板：桌面端（>1025px）默认展开常驻，≤1024px 折叠为抽屉
 const panelOpen = ref(window.matchMedia('(min-width: 1025px)').matches)
-const panelView = ref<'trajectory' | 'sessions'>('trajectory')
+const panelView = ref<'trajectory' | 'sessions' | 'agents'>('trajectory')
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
+// 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
+// 只供侧边栏观测面板消费，绝不混入主对话流（docs/subagent-design.md §4.2）。
+const subagentLiveEvents = ref<SubagentEvent[]>([])
+const SUBAGENT_LIVE_MAX = 500
 
 function onTrajectoryFocus(index: number) {
   trajectoryFocus.value = index
@@ -740,7 +765,7 @@ function onTrajectoryFocus(index: number) {
 }
 
 // 打开面板并直达指定视图；点击已激活的入口则收起
-function openPanel(view: 'trajectory' | 'sessions') {
+function openPanel(view: 'trajectory' | 'sessions' | 'agents') {
   if (panelOpen.value && panelView.value === view) {
     panelOpen.value = false
     return
@@ -989,13 +1014,29 @@ async function switchSession(id: string) {
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
     }
+    // P1：运行时状态是**单一事实源**（Redis 热 + unified_sessions.runtime 持久）。
+    // 优先用它回填（刷新/重开会话/换设备都不丢），llm_config 作为老数据兜底。
     let cfg: any = data?.llm_config
     if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg) } catch { cfg = undefined } }
-    const savedMode = cfg?.mode
+    let rt: any = null
+    try { rt = (await getSessionRuntime(id)).runtime } catch { /* 不可用时静默回落 llm_config */ }
+    const savedMode = rt?.mode || cfg?.mode
     if (typeof savedMode === 'string' && modeOptions.some(o => o.value === savedMode)) {
       mode.value = savedMode
     }
-    llmModel.value = typeof cfg?.model === 'string' ? cfg.model : ''
+    llmModel.value = (typeof rt?.model === 'string' && rt.model)
+      || (typeof cfg?.model === 'string' ? cfg.model : '')
+    // 已激活能力（问题 3）：runtime.context 是单一事实源 —— 把 URL 未带入、
+    // 但会话上已保存的激活项（知识库/Agent/技能/插件/记忆分类）补进侧栏展示，
+    // 否则刷新后界面上就看不到"这次对话激活了什么"。
+    const fromRuntime = chipsFromWorkbenchContext(rt?.context)
+    if (fromRuntime.length) {
+      const merged = [...contextChips.value]
+      for (const chip of fromRuntime) {
+        if (!merged.some(c => c.type === chip.type && c.value === chip.value)) merged.push(chip)
+      }
+      contextChips.value = merged
+    }
   } catch { /* fallback */ } finally {
     if (mySeq === switchSeq.value) {
       loading.value = false
@@ -1385,6 +1426,35 @@ function onSSEMessage(raw: any) {
         isError: !!d?.error,
       })
     }
+  } else if (type === 'usage' || type === 'turn_stats') {
+    // 本轮用量：引擎在每个回合结束时发 usage（python-engine/app/agent/loop.py:199：
+    // {"type":"usage","input_tokens":N,"output_tokens":N}）。此前**没有这个分支**，
+    // 于是 lastTurnStats 恒为空、状态栏整段隐藏 —— 这就是"看不到 tokens/消耗"的直接原因。
+    // 会话级累计（tokens/费用/**缓存命中率**/吞吐）由 GET /v1/sessions/{id}/metrics 提供。
+    const inputTokens = Number(d?.input_tokens ?? raw?.input_tokens ?? 0) || 0
+    const outputTokens = Number(d?.output_tokens ?? raw?.output_tokens ?? 0) || 0
+    const durationMs = Number(d?.duration_ms ?? raw?.duration_ms ?? 0) || 0
+    if (inputTokens || outputTokens) {
+      items.value.push({
+        kind: 'turn_stats',
+        id: genItemId(),
+        inputTokens,
+        outputTokens,
+        ...(durationMs > 0 ? { durationSec: Math.round(durationMs / 100) / 10 } : {}),
+      } as TurnStatsItem)
+    }
+  } else if (type === 'compaction') {
+    // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
+    // 变成用户可见的状态栏提示（问题 4）。
+    let info: any = {}
+    try { info = JSON.parse(String(d?.content ?? raw?.content ?? '{}')) } catch { info = {} }
+    if (info?.saved_tokens) {
+      lastCompaction.value = {
+        beforeTokens: Number(info.before_tokens) || 0,
+        afterTokens: Number(info.after_tokens) || 0,
+        savedTokens: Number(info.saved_tokens) || 0,
+      }
+    }
   } else if (type === 'done') {
     flushStreamingFlags()
     loading.value = false
@@ -1436,6 +1506,16 @@ function onSSEMessage(raw: any) {
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
     message.error(d?.content || d?.error || t('请求失败'))
+  } else if (typeof type === 'string' && type.startsWith('subagent.')) {
+    // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
+    // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
+    const event = (d && Object.keys(d).length ? { ...d, type } : { ...raw }) as SubagentEvent
+    if (event?.run_id) {
+      subagentLiveEvents.value.push(event)
+      if (subagentLiveEvents.value.length > SUBAGENT_LIVE_MAX) {
+        subagentLiveEvents.value.splice(0, subagentLiveEvents.value.length - SUBAGENT_LIVE_MAX)
+      }
+    }
   }
 }
 
@@ -1944,6 +2024,7 @@ function continueGeneration() {
         :stats="lastTurnStats"
         :context-used="lastTurnStats?.inputTokens ?? null"
         :context-limit="contextWindow"
+        :compaction="lastCompaction"
         :online="isOnline && !connectionLost"
       />
 
@@ -2008,7 +2089,8 @@ function continueGeneration() {
       :active-session-id="activeSessionId"
       :user-name="authStore.user?.name"
       :context-chips="contextChips"
-      @update:view="(v: 'trajectory' | 'sessions') => (panelView = v)"
+      :live-events="subagentLiveEvents"
+      @update:view="(v: 'trajectory' | 'sessions' | 'agents') => (panelView = v)"
       @focus="onTrajectoryFocus"
       @close="panelOpen = false"
       @create="createSession"

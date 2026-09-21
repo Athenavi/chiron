@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - Agent
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-09-15 09:55:16
+生成时间：2026-09-21 18:33:14
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey, JSON
@@ -55,6 +55,8 @@ class Agent(Base):
 
     visibility = Column(String(16), default='private', doc='可见性')
 
+    kind = Column(String(16), default='chat', doc='类型（chat=可对话 Agent，subagent=子 Agent Profile）')
+
     kb_id = Column(String(255), nullable=True, doc='默认知识库 ID（派发时用于 RAG 检索）')
 
     skills = Column(JSON, default=[], doc='技能名数组（派发时只启用这些技能）')
@@ -88,6 +90,7 @@ class Agent(Base):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'user_id': self.user_id,
             'visibility': self.visibility,
+            'kind': self.kind,
             'kb_id': self.kb_id,
             'skills': self.skills,
             'plugins': self.plugins,

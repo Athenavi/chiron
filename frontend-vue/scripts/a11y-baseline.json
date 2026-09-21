@@ -1,0 +1,8 @@
+{
+  "src/components/chat/MessageItem.vue": {
+    "clickable-nonsemantic": 1
+  },
+  "src/views/ShareView.vue": {
+    "clickable-nonsemantic": 1
+  }
+}

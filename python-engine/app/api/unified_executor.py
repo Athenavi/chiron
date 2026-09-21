@@ -192,6 +192,7 @@ class UnifiedChatHandler:
         trace_id: str = "",
         context: Optional[dict] = None,
         user_id: str = "",
+        llm_config: Optional[dict] = None,  # P1-d：会话运行时状态（模型/provider/模式）
     ) -> dict[str, Any]:
         """提交任务 (自动编排)
 
@@ -247,6 +248,11 @@ class UnifiedChatHandler:
         # 工作流目标走共享解析函数：SSE 链路（/v1/agent/submit）读的是同一个，
         # 两条链路不会再各自解析出不同结果。
         ctx_workflow_ids = selected_workflow_ids(context)
+
+        # P1-d：会话运行时状态（模式/模型/provider）并入本链路 context ——
+        # 前端组装的 context 不含这些字段；并入后 session.shared_context（持久化，
+        # 刷新/重开会话不丢）与下游 route_task（意图理解、任务拆解）取同一个口径。
+        context = {**(context or {}), "llm_config": dict(llm_config or {})}
 
         # ── 创建/获取会话 (内存 L1 缓存 + PostgreSQL 写穿透持久化) ──
         if not session_id:
@@ -1134,6 +1140,12 @@ async def submit_chat(request: Request):
     query_uid = str(request.query_params.get("user_id") or "")
     body_uid = str(body.get("user_id") or "")
     user_id = query_uid or body_uid
+    # P1-d：此前完全忽略 body.llm_config → 界面上切换模型/模式对这条链路
+    # （ChatView 的 sendUnified 走的正是它）完全无效。这里读出来交给 ChatHandler
+    # 落进会话 shared_context 并透传给 TaskRouter（意图理解等步骤的模型/provider 由此决定）。
+    llm_config = body.get("llm_config")
+    if not isinstance(llm_config, dict):
+        llm_config = {}
     return await handler.submit_task(
         user_input=user_input,
         tenant_id=tenant_id,
@@ -1141,6 +1153,7 @@ async def submit_chat(request: Request):
         mode=str(body.get("mode", "auto")),
         context=context,
         user_id=user_id,
+        llm_config=llm_config,
     )
 
 

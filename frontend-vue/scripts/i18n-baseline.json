@@ -21,7 +21,6 @@
   "src/components/CommandPalette.vue": 29,
   "src/components/common/AttachToAgentDialog.vue": 7,
   "src/components/common/ImageViewer.vue": 2,
-  "src/components/home/CapabilityDiscovery.vue": 7,
   "src/components/home/WorkbenchQuickStart.vue": 3,
   "src/components/KBDocumentPreview.vue": 3,
   "src/components/KBSearchResults.vue": 7,

@@ -41,11 +41,27 @@ const sources: Source[] = [
   { type: 'skill', label: t('技能'), placeholder: t('装配技能'), load: listSkillResources },
   { type: 'workflow', label: t('工作流'), placeholder: t('按编排执行'), load: listWorkflows },
   { type: 'plugin', label: t('插件'), placeholder: t('限定工具集'), load: listPlugins },
+  // 长期记忆分类（问题 3）：此前记忆是唯一**没有 UI 构造入口**的上下文类型 ——
+  // 用户无法从首页"带记忆进对话"，只能手写 URL 的 ?memory=xxx。
+  { type: 'memory', label: t('记忆'), placeholder: t('注入长期记忆'), load: async () => MEMORY_SLOT_OPTIONS },
 ]
 
-const emptyOptions = (): Record<ContextChipType, WorkbenchResource[]> => ({ kb: [], agent: [], skill: [], workflow: [], plugin: [] })
+/**
+ * 长期记忆分类，与后端 python-engine/app/memory/layers.py 的 SLOT_LABELS 一一对应。
+ * 服务端语义（workbench_context.selected_memory_slots）：**不选 = 注入全部**；
+ * 选了则只注入这些分类；选「全部记忆」(all) 与不选等价。
+ */
+const MEMORY_SLOT_OPTIONS: WorkbenchResource[] = [
+  { id: 'all', name: t('全部记忆') },
+  { id: 'identity', name: t('身份') },
+  { id: 'preference', name: t('偏好') },
+  { id: 'decision', name: t('关键决策') },
+  { id: 'fact', name: t('长期事实') },
+]
+
+const emptyOptions = (): Record<ContextChipType, WorkbenchResource[]> => ({ kb: [], agent: [], skill: [], workflow: [], plugin: [], memory: [] })
 const options = ref<Record<ContextChipType, WorkbenchResource[]>>(emptyOptions())
-const picked = ref<Record<ContextChipType, string[]>>({ kb: [], agent: [], skill: [], workflow: [], plugin: [] })
+const picked = ref<Record<ContextChipType, string[]>>({ kb: [], agent: [], skill: [], workflow: [], plugin: [], memory: [] })
 const loading = ref(true)
 
 onMounted(async () => {
@@ -70,7 +86,10 @@ const selectOptions = computed(() => {
 })
 
 const pickedCount = computed(() => Object.values(picked.value).reduce((total, values) => total + values.length, 0))
-const hasAnyResource = computed(() => sources.some(s => options.value[s.type].length > 0))
+// 降级提示只看**后端资源类**（知识库/Agent/技能/工作流/插件）：记忆分类是固定枚举、
+// 不依赖后端接口，若把它算进来，"还没有可用资源"这个提示将永远不会出现。
+const RESOURCE_TYPES: ContextChipType[] = ['kb', 'agent', 'skill', 'workflow', 'plugin']
+const hasAnyResource = computed(() => RESOURCE_TYPES.some(t => options.value[t].length > 0))
 
 function startChat() {
   const chips: ContextChip[] = []

@@ -372,6 +372,12 @@ func NewGatewayRouter(
 	mux.Handle("POST /v1/agents/{id}/run", authMW(rlMW(http.HandlerFunc(agentHandler.Run))))
 	mux.Handle("GET /v1/agents/sessions", authMW(rlMW(http.HandlerFunc(agentHandler.ListSessions))))
 	mux.Handle("GET /v1/agents/sessions/{id}", authMW(rlMW(http.HandlerFunc(agentHandler.GetSession))))
+
+	// 会话运行时状态与遥测（P1 单一事实源；见 docs/session-runtime-spec.md）
+	sessionRuntimeHandler := NewSessionRuntimeHandler(db.Redis, sessionMgr)
+	mux.Handle("GET /v1/sessions/{session_id}/runtime", authMW(rlMW(http.HandlerFunc(sessionRuntimeHandler.GetRuntime))))
+	mux.Handle("PUT /v1/sessions/{session_id}/runtime", authMW(rlMW(http.HandlerFunc(sessionRuntimeHandler.PutRuntime))))
+	mux.Handle("GET /v1/sessions/{session_id}/metrics", authMW(rlMW(http.HandlerFunc(sessionRuntimeHandler.GetMetrics))))
 	// dispatch 保留 Python 代理（agent 工具链内部调用，非页面主链路）
 	// 安全：必须经过 authMW，否则未认证可触发工具执行
 	mux.Handle("POST /v1/agents/dispatch", authMW(rlMW(sanitizeMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -767,6 +773,13 @@ func registerSystemRoutes(
 		mux.Handle("GET /v1/traces", authMW(rlMW(http.HandlerFunc(traceHandler.ListTraces))))
 		mux.Handle("GET /v1/traces/{trace_id}", authMW(rlMW(http.HandlerFunc(traceHandler.GetTrace))))
 	}
+
+	// 子 Agent 运行观测（层级树 / 详情 / 过程）：Redis 优先、DB 回落，租户隔离。
+	// 见 docs/subagent-design.md §4.4；前端据此画递归树与侧边栏实时输出。
+	subagentHandler := NewSubagentHandler(db.Redis)
+	mux.Handle("GET /v1/subagent/runs", authMW(rlMW(http.HandlerFunc(subagentHandler.ListRuns))))
+	mux.Handle("GET /v1/subagent/runs/{run_id}", authMW(rlMW(http.HandlerFunc(subagentHandler.GetRun))))
+	mux.Handle("GET /v1/subagent/runs/{run_id}/events", authMW(rlMW(http.HandlerFunc(subagentHandler.GetRunEvents))))
 }
 
 // ── Conversations ──
@@ -869,6 +882,9 @@ func registerProxyRoutes(
 	type proxyOpt struct {
 		methods []string // allowed HTTP methods; empty = GET+POST+PUT+DELETE
 		logTag  string
+		// mutateBody 在把请求体转发给引擎前改写它（P1-c：统一链路注入会话运行时解析结果，
+		// 见 docs/session-runtime-spec.md §5）。返回 false 表示已自行写出响应、代理应中止。
+		mutateBody func(r *http.Request, body map[string]interface{}) bool
 	}
 	newProxy := func(prefix string, opt proxyOpt) func(func(*http.Request) string) http.HandlerFunc {
 		return func(buildPath func(*http.Request) string) http.HandlerFunc {
@@ -895,11 +911,17 @@ func registerProxyRoutes(
 						BadRequest(w, ErrInvalidReq)
 						return
 					}
+					if opt.mutateBody != nil && !opt.mutateBody(r, body) {
+						return
+					}
 					err = pythonClient.PostJSON(r.Context(), proxiedPath, body, &resp)
 				case "PUT":
 					var body map[string]interface{}
 					if err2 := DecodeJSON(w, r, &body); err2 != nil {
 						BadRequest(w, ErrInvalidReq)
+						return
+					}
+					if opt.mutateBody != nil && !opt.mutateBody(r, body) {
 						return
 					}
 					err = pythonClient.PutJSON(r.Context(), proxiedPath, body, &resp)
@@ -990,7 +1012,7 @@ func registerProxyRoutes(
 	}))))
 
 	// Unified chat / quick-execute (六大工作台统一入口, proxies to Python TaskRouter)
-	chatP := newProxy("", proxyOpt{logTag: "chat"})
+	chatP := newProxy("", proxyOpt{logTag: "chat", mutateBody: InjectSessionRuntime})
 	mux.Handle("POST /v1/chat/submit", authMW(rlMW(chatP(pathFn("/v1/chat/submit")))))
 	mux.Handle("GET /v1/chat/sessions/{id}/messages", authMW(rlMW(chatP(pathParamSuffix("/v1/chat/sessions", "/messages")))))
 	// quick-execute 为 chat/submit 的语义别名（前端快捷执行入口）

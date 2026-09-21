@@ -196,6 +196,11 @@ models:
         maxLength: 16
         description: 可见性
         default: 'private'
+      kind:
+        type: string
+        maxLength: 16
+        description: 类型（chat=可对话 Agent，subagent=子 Agent Profile）
+        default: chat
       # 以下 4 列由迁移添加（3b8e5f1a7c94 / 7d21b9c4e8f3 / c2d4e6f8a1b3），
       # 但一直漏在 models.yaml 之外 —— 真实表与生成的 ORM 模型因此长期不一致。
       # Go 网关直接写 SQL 不受影响，Python 侧经 ORM 读取则拿不到这些列。
@@ -218,6 +223,191 @@ models:
         db_type: jsonb
         description: 工作流 ID 数组（派发时按顺序执行）
         default: '[]'
+
+  SubagentRun:
+    table: subagent_runs
+    orm: true
+    description: 子 Agent 运行（run 级元数据 + L1 精简摘要）
+    properties:
+      id:
+        type: string
+        maxLength: 64
+        description: 运行 ID（rs_ 前缀）
+        primary_key: true
+      root_session_id:
+        type: string
+        maxLength: 128
+        description: 归属会话 ID（递归树根）
+      turn_id:
+        type: string
+        maxLength: 64
+        description: 归属回合 ID（计费归因）
+        nullable: true
+      parent_run_id:
+        type: string
+        maxLength: 64
+        description: 父运行 ID（顶层委派为空）
+        nullable: true
+      depth:
+        type: integer
+        description: 递归深度（顶层为 1）
+        default: 1
+      tenant_id:
+        type: string
+        maxLength: 36
+        description: 租户 ID
+        nullable: true
+      user_id:
+        type: string
+        maxLength: 36
+        description: 用户 ID
+        nullable: true
+      agent_id:
+        type: string
+        maxLength: 36
+        description: Profile 引用（agents.id）
+        foreign_key: true
+        fk_table: agents
+        fk_column: id
+        nullable: true
+      profile_name:
+        type: string
+        maxLength: 128
+        description: Profile 名（冗余，便于展示与审计）
+        nullable: true
+      task:
+        type: text
+        description: 委派任务原文
+      status:
+        type: string
+        maxLength: 16
+        description: 状态（queued/running/completed/failed/cancelled/timeout/budget_exceeded）
+      summary:
+        type: text
+        description: L1 有效消息（经 LLM 整理，唯一进入父上下文的内容）
+        nullable: true
+      summary_format:
+        type: string
+        maxLength: 16
+        description: 摘要格式
+        default: markdown
+      artifacts:
+        type: object
+        db_type: jsonb
+        description: 产物引用（[{path,bytes}]）
+        default: '[]'
+      write_paths:
+        type: object
+        db_type: jsonb
+        description: 写入路径声明（并发互斥用）
+        default: '[]'
+      read_only:
+        type: boolean
+        description: 是否只读运行（剥离写工具）
+        default: false
+      input_tokens:
+        type: integer
+        db_type: bigint
+        description: 输入 Tokens
+        default: 0
+      output_tokens:
+        type: integer
+        db_type: bigint
+        description: 输出 Tokens
+        default: 0
+      steps:
+        type: integer
+        description: 步数
+        default: 0
+      cost_cents:
+        type: integer
+        description: 费用（分）
+        default: 0
+      redacted_count:
+        type: integer
+        description: 入库前命中的敏感片段数
+        default: 0
+      error:
+        type: text
+        description: 失败原因（不静默）
+        nullable: true
+      started_at:
+        type: string
+        format: date-time
+        description: 开始时间
+        nullable: true
+      finished_at:
+        type: string
+        format: date-time
+        description: 结束时间
+        nullable: true
+      created_at:
+        type: string
+        format: date-time
+        description: 创建时间
+        default: now()
+
+  SubagentRunStep:
+    table: subagent_run_steps
+    orm: true
+    description: 子 Agent 完整调用过程（L0 逐 step）
+    properties:
+      id:
+        type: integer
+        description: 自增 ID
+        primary_key: true
+        autoincrement: true
+        db_type: bigserial
+      run_id:
+        type: string
+        maxLength: 64
+        description: 所属运行 ID
+        foreign_key: true
+        fk_table: subagent_runs
+        fk_column: id
+      seq:
+        type: integer
+        description: 步序（run 内唯一）
+      kind:
+        type: string
+        maxLength: 16
+        description: 步骤类型（message/reasoning/tool_call/tool_result/notice/error）
+      role:
+        type: string
+        maxLength: 16
+        description: 消息角色
+        nullable: true
+      tool_name:
+        type: string
+        maxLength: 64
+        description: 工具名
+        nullable: true
+      tool_call_id:
+        type: string
+        maxLength: 128
+        description: 工具调用 ID
+        nullable: true
+      content:
+        type: text
+        description: 单步内容（截断上限 32KB）
+        nullable: true
+      truncated:
+        type: boolean
+        description: 内容是否被截断
+        default: false
+      input_tokens:
+        type: integer
+        description: 输入 Tokens
+        default: 0
+      output_tokens:
+        type: integer
+        description: 输出 Tokens
+        default: 0
+      created_at:
+        type: string
+        format: date-time
+        description: 创建时间
+        default: now()
 
   EnterpriseTask:
     table: enterprise_tasks

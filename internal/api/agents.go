@@ -120,7 +120,7 @@ func (h *AgentHandler) seedPresetAgents() {
 	}
 
 	var n int
-	if err := db.GlobalDBManager.QueryRow(ctx, `SELECT COUNT(*) FROM agents WHERE tenant_id = $1`, ownerTenantID).Scan(&n); err != nil || n > 0 {
+	if err := db.GlobalDBManager.QueryRow(ctx, `SELECT COUNT(*) FROM agents WHERE tenant_id = $1 AND (kind IS NULL OR kind = 'chat')`, ownerTenantID).Scan(&n); err != nil || n > 0 {
 		return
 	}
 	var ownerUserID string
@@ -171,7 +171,9 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 		// 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
 		// "could not convert type json to jsonb"（或反向）。编译期和单测都看不出来。
 		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::jsonb), COALESCE(plugins,'[]'::jsonb), COALESCE(workflows,'[]'::jsonb), created_at, updated_at
-		 FROM agents WHERE tenant_id = $1 AND user_id = $2 ORDER BY created_at DESC`, claims.TenantID, claims.UserID)
+		 FROM agents WHERE tenant_id = $1 AND user_id = $2
+		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile（kind='subagent'）不进入对话 Agent 列表
+		 ORDER BY created_at DESC`, claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list agents failed")
 		return
@@ -598,7 +600,8 @@ func loadAgent(ctx context.Context, tenantID, userID, agentID string) (*Agent, e
 		// 写混了 COALESCE 会在运行时报 "could not convert type jsonb to json" ——
 		// 编译期、go vet 和单元测试都发现不了，只有真连库跑这条 SQL 才暴露。
 		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::jsonb), COALESCE(plugins,'[]'::jsonb), COALESCE(workflows,'[]'::jsonb), created_at, updated_at
-		 FROM agents WHERE tenant_id = $1 AND id = $2 AND (user_id = $3 OR (visibility = 'tenant' AND tenant_id = $1))`, tenantID, agentID, userID).
+		 FROM agents WHERE tenant_id = $1 AND id = $2 AND (user_id = $3 OR (visibility = 'tenant' AND tenant_id = $1))
+		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile 不可作为对话 Agent 运行`, tenantID, agentID, userID).
 		Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Tools, &a.LLMConfig,
 			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.Workflows, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {

@@ -83,6 +83,24 @@ FALLBACK_CATALOG: list[dict] = [
     {"id": "oneapi", "label": "One API / New API 自建网关", "kind": "openai", "base_url": "",
      "api_key_env": "ONEAPI_API_KEY", "model_prefixes": [],
      "cost": 5.0, "quality": 0.80, "requires_key": True, "model_discovery": True},
+    # OpenCode 官方网关（两条产品线：Zen 按量计费 / Go 订阅）。端点均支持 {base}/models
+    # 自动发现；model_prefixes 留空，避免抢走其它直连 provider 的模型路由。
+    {"id": "opencode", "label": "OpenCode Zen", "kind": "openai",
+     "base_url": "https://opencode.ai/zen/v1",
+     "api_key_env": "OPENCODE_API_KEY", "model_prefixes": [],
+     "cost": 2.0, "quality": 0.88, "requires_key": True, "model_discovery": True},
+    {"id": "opencode-anthropic", "label": "OpenCode Zen（Anthropic 协议）", "kind": "anthropic",
+     "base_url": "https://opencode.ai/zen",
+     "api_key_env": "OPENCODE_API_KEY", "model_prefixes": [],
+     "cost": 2.0, "quality": 0.88, "requires_key": True, "model_discovery": False},
+    {"id": "opencode-go", "label": "OpenCode Go（订阅）", "kind": "openai",
+     "base_url": "https://opencode.ai/zen/go/v1",
+     "api_key_env": "OPENCODE_GO_API_KEY", "model_prefixes": [],
+     "cost": 0.4, "quality": 0.85, "requires_key": True, "model_discovery": True},
+    {"id": "opencode-go-anthropic", "label": "OpenCode Go（Anthropic 协议）", "kind": "anthropic",
+     "base_url": "https://opencode.ai/zen/go",
+     "api_key_env": "OPENCODE_GO_API_KEY", "model_prefixes": [],
+     "cost": 0.4, "quality": 0.85, "requires_key": True, "model_discovery": False},
 
     # ── 自托管推理 ──
     {"id": "ollama", "label": "Ollama（本地）", "kind": "openai", "base_url": "http://localhost:11434/v1",

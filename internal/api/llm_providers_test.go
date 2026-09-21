@@ -34,7 +34,7 @@ func TestLLMProviderCatalogIntegrity(t *testing.T) {
 		}
 	}
 	// 关键 provider 必须在目录内：前两项是历史内建支持，其余覆盖国内/聚合/自托管
-	for _, id := range []string{"openai", "anthropic", "deepseek", "moonshot", "zhipu", "dashscope", "openrouter", "ollama", "custom"} {
+	for _, id := range []string{"openai", "anthropic", "deepseek", "moonshot", "zhipu", "dashscope", "openrouter", "opencode", "opencode-go", "ollama", "custom"} {
 		if _, ok := llmProviderPresetByID(id); !ok {
 			t.Errorf("目录缺少 provider %q", id)
 		}

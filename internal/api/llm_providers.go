@@ -216,6 +216,47 @@ var llmProviderCatalog = []llmProviderPreset{
 		DocsURL:       "https://github.com/songquanpeng/one-api",
 		Cost:          5.0, Quality: 0.80, RequiresKey: true, ModelDiscovery: true,
 	},
+	{
+		// OpenCode Zen：OpenCode 官方模型网关（按量计费）。key 从 https://opencode.ai/auth 获取，
+		// 认证为 `Authorization: Bearer`（OpenAI 兼容），模型可由 {base}/models 自动发现。
+		// model_prefixes 留空：该网关直通各家模型（gpt-5.4 / claude-sonnet-5 / deepseek-v4-pro …），
+		// 设前缀会抢走其它直连 provider 的模型路由；改由 provider_hint / 租户路由显式指定。
+		ID: "opencode", Label: "OpenCode Zen", Vendor: "OpenCode", Category: llmProviderCategoryAggregator,
+		Kind: llmProviderKindOpenAI, BaseURL: "https://opencode.ai/zen/v1",
+		APIKeyEnv: "OPENCODE_API_KEY", APIKeyPrefix: "",
+		ModelPrefixes: []string{},
+		DocsURL:       "https://opencode.ai/docs/zen/",
+		Cost:          2.0, Quality: 0.88, RequiresKey: true, ModelDiscovery: true,
+	},
+	{
+		// OpenCode Zen 的 Anthropic 协议端点（Messages API）；SDK 会拼 /v1/messages。
+		ID: "opencode-anthropic", Label: "OpenCode Zen（Anthropic 协议）", Vendor: "OpenCode", Category: llmProviderCategoryAggregator,
+		Kind: llmProviderKindAnthropic, BaseURL: "https://opencode.ai/zen",
+		APIKeyEnv: "OPENCODE_API_KEY", APIKeyPrefix: "",
+		ModelPrefixes: []string{},
+		DocsURL:       "https://opencode.ai/docs/zen/",
+		Cost:          2.0, Quality: 0.88, RequiresKey: true, ModelDiscovery: false,
+	},
+	{
+		// OpenCode Go：$10/月订阅（低成本的开放模型集）。官方要求客户端发稳定会话头
+		// `x-opencode-session`（用于路由与 prompt 缓存）—— Chiron 目前未发送该头，
+		// 不影响可用性，仅路由/缓存次优；如需补上见 docs/service-providers.md。
+		ID: "opencode-go", Label: "OpenCode Go（订阅）", Vendor: "OpenCode", Category: llmProviderCategoryAggregator,
+		Kind: llmProviderKindOpenAI, BaseURL: "https://opencode.ai/zen/go/v1",
+		APIKeyEnv: "OPENCODE_GO_API_KEY", APIKeyPrefix: "",
+		ModelPrefixes: []string{},
+		DocsURL:       "https://opencode.ai/docs/go/",
+		Cost:          0.4, Quality: 0.85, RequiresKey: true, ModelDiscovery: true,
+	},
+	{
+		// OpenCode Go 的 Anthropic 协议端点。
+		ID: "opencode-go-anthropic", Label: "OpenCode Go（Anthropic 协议）", Vendor: "OpenCode", Category: llmProviderCategoryAggregator,
+		Kind: llmProviderKindAnthropic, BaseURL: "https://opencode.ai/zen/go",
+		APIKeyEnv: "OPENCODE_GO_API_KEY", APIKeyPrefix: "",
+		ModelPrefixes: []string{},
+		DocsURL:       "https://opencode.ai/docs/go/",
+		Cost:          0.4, Quality: 0.85, RequiresKey: true, ModelDiscovery: false,
+	},
 
 	// ── 自托管推理 ──
 	{

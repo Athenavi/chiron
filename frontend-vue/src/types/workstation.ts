@@ -21,9 +21,8 @@ export const WORKSTATIONS = [
 export type WorkstationType = (typeof WORKSTATIONS)[number]
 
 /**
- * 展示名。停靠坞（AppLayout）、命令面板（CommandPalette）与能力发现
- * （CapabilityDiscovery）共用这一份 —— 此前三处各写一遍，`/workflow`
- * 在 AppLayout 里同时叫「工作台」和「工作流」。
+ * 展示名。停靠坞（AppLayout）与命令面板（CommandPalette）共用这一份 ——
+ * 此前两处各写一遍，`/workflow` 在 AppLayout 里同时叫「工作台」和「工作流」。
  */
 export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
   dialogue: '对话',
@@ -34,7 +33,7 @@ export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
   plugin: '插件',
 }
 
-/** 一句话描述（停靠坞浮层与能力发现共用） */
+/** 一句话描述（停靠坞浮层与命令面板共用） */
 export const WORKSTATION_DESCRIPTIONS: Record<WorkstationType, string> = {
   dialogue: '智能对话助手',
   agent: '多智能体协同',

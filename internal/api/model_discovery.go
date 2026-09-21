@@ -19,6 +19,8 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -29,6 +31,11 @@ import (
 const (
 	modelSyncFreshInterval = 5 * time.Minute // 内存节流：相同 provider 该窗口内不重复外呼
 	modelFetchTimeout      = 6 * time.Second
+
+	// llmHTTPUserAgent 是出站 LLM 请求的具名 UA。部分网关前置 Cloudflare 反滥用规则，
+	// 会直接拒绝 http 库的默认 UA（实测访问 opencode.ai 返回 CF Error 1010 → 403）。
+	// 与引擎侧 python-engine/app/config.py 的 llm_http_user_agent 保持一致。
+	llmHTTPUserAgent = "chiron/1.0"
 )
 
 var (
@@ -138,6 +145,9 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 	req.Header.Set("Authorization", "Bearer "+apiKey)
 	req.Header.Set("Accept", "application/json")
 
+	// 具名 UA：见 llmHTTPUserAgent 的说明（Cloudflare 反滥用会拒默认 UA）。
+	req.Header.Set("User-Agent", llmHTTPUserAgent)
+
 	client := &http.Client{}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -166,24 +176,87 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 }
 
 // replaceProviderModels 用外部发现的模型重建该 provider 在 llm_models 的缓存行。
+//
+// P1-f：此前重建时把 context_window 写死为 0，导致前端上下文环的**分母恒为 0**
+// （环永远不显示 → 用户完全无法感知上下文占用与自动压缩）。现在：
+//  1. 先留住该 provider 已探测/已配置（>0）的窗口值，重建时沿用 —— 否则每次刷新模型列表
+//     都会把之前的正确值清掉；
+//  2. 新模型按名字约定推断一个**保守**窗口；推断不出时仍返回 0（宁可不显示环，
+//     也不给一个可能严重高估的分母去误导用户）。
 func replaceProviderModels(ctx context.Context, provider string, ids []string) error {
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
 		return err
 	}
 	defer tx.Rollback(ctx)
+
+	known := make(map[string]int, len(ids))
+	if rows, err := tx.Query(ctx,
+		`SELECT name, context_window FROM llm_models WHERE provider = $1 AND context_window > 0`, provider); err == nil {
+		for rows.Next() {
+			var name string
+			var window int
+			if rows.Scan(&name, &window) == nil && window > 0 {
+				known[name] = window
+			}
+		}
+		rows.Close()
+	}
+
 	if _, err := tx.Exec(ctx, `DELETE FROM llm_models WHERE provider = $1`, provider); err != nil {
 		return err
 	}
 	for _, id := range ids {
+		window := known[id]
+		if window <= 0 {
+			window = inferContextWindow(id)
+		}
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO llm_models (id, provider, name, display_name, enabled, context_window, created_at, updated_at)
-			 VALUES (gen_random_uuid()::text, $1, $2, $3, true, 0, NOW(), NOW())`,
-			provider, id, id); err != nil {
+			 VALUES (gen_random_uuid()::text, $1, $2, $3, true, $4, NOW(), NOW())`,
+			provider, id, id, window); err != nil {
 			return err
 		}
 	}
 	return tx.Commit(ctx)
+}
+
+// reContextWindowSuffix 匹配模型名尾部的显式窗口声明（如 `-128k` / `-1m` / `_32k`）。
+var reContextWindowSuffix = regexp.MustCompile(`[-_](\d+)(k|m)$`)
+
+// inferContextWindow 从模型名推断上下文窗口（tokens）。名字里显式声明的优先，
+// 否则按已知家族给保守估计；无法判断时返回 0（调用方据此不展示上下文环）。
+func inferContextWindow(modelID string) int {
+	id := strings.ToLower(strings.TrimSpace(modelID))
+	if m := reContextWindowSuffix.FindStringSubmatch(id); m != nil {
+		if n, err := strconv.Atoi(m[1]); err == nil && n > 0 {
+			if m[2] == "m" {
+				return n * 1000000
+			}
+			return n * 1000
+		}
+	}
+	switch {
+	case strings.Contains(id, "claude"):
+		return 200000
+	case strings.Contains(id, "gemini"):
+		return 1000000
+	case strings.Contains(id, "gpt-5"), strings.Contains(id, "gpt-4.1"),
+		strings.Contains(id, "o3"), strings.Contains(id, "o4"):
+		return 1000000
+	case strings.Contains(id, "gpt-4"), strings.Contains(id, "o1"):
+		return 128000
+	case strings.Contains(id, "grok"):
+		return 131072
+	case strings.Contains(id, "qwen"), strings.Contains(id, "qwq"), strings.Contains(id, "llama"),
+		strings.Contains(id, "mistral"), strings.Contains(id, "mixtral"):
+		return 131072
+	case strings.Contains(id, "deepseek"), strings.Contains(id, "kimi"),
+		strings.Contains(id, "glm"), strings.Contains(id, "minimax"),
+		strings.Contains(id, "doubao"), strings.Contains(id, "ernie"):
+		return 128000
+	}
+	return 0
 }
 
 // ListModelsForUser 是 GET /v1/models 的实现：

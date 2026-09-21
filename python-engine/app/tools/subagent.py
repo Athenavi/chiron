@@ -1,26 +1,34 @@
-"""subagent 工具 — 真子 Agent 委派（对应 deepseek-harness dsh-tool-subagent）
+"""subagent 工具 — 真子 Agent 委派（Profile 化 + L0/L1/L2 分层）。
 
-父 agent 调用 subagent(task)，在**独立 session** 上运行一个完整的
-AgentRuntime 循环（独立消息历史、模式、轮次预算），收集其文本输出返回。
-子 agent 执行后父任务的工具上下文被还原。
+父 agent 调用 ``subagent(task, profile="reviewer")``，在**独立 session** 上运行一个完整的
+AgentRuntime 循环（独立消息历史、工具集、轮次与深度预算）。
 
-限制：max_turns 深度上限（默认 5，等效 maxDepth 预算）；模式复用
-get_mode_config（minimal 子 agent 天然精简工具集）。
+分层（docs/subagent-design.md §3.4）：
+* **L0 完整过程** → ``subagent_run_steps``（脱敏后落库，供审计/回放，**永不进父上下文**）
+* **L1 有效消息** → ``subagent_runs.summary``（LLM 整理；父会话后续 turn 只注入这一条）
+* **L2 当轮回传** → 限长 + ``<subagent-result>`` 不可信包装（仅当轮）
+
+Profile 缺失或解析失败时退回通用子 Agent；落库失败不影响子 Agent 执行。
+向后兼容：``mode`` / ``expert`` / ``max_turns`` 参数与旧版语义一致。
 """
 
 from __future__ import annotations
 
 import logging
-import uuid
 from typing import Any
 
-from app.tools.context import get_all, get_gateway, get_tenant_id, get_user_id, restore_context
+from app.tools.context import (get_all, get_gateway, get_session_id,
+                              get_tenant_id, get_tool_context, get_user_id,
+                              restore_context)
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
 
 MAX_TURNS_CAP = 10
-MAX_DEPTH = 3  # S3: 委派深度上限（deepseek 默认 maxDepth=3），防无限递归
+MAX_DEPTH = 3  # 全局硬上限（S3）；Profile 的 max_depth 只能更严格
+
+# 落库器单例（无 DB 时为 None → 子 Agent 照常运行，只是不留痕）
+_store = None
 
 
 def _expert_system_prompt(expert: str) -> str:
@@ -32,7 +40,6 @@ def _expert_system_prompt(expert: str) -> str:
     name = (expert or "").strip()
     if not name:
         return ""
-    from app.tools.context import get_tool_context
 
     for item in get_tool_context("experts", []) or []:
         if isinstance(item, dict) and str(item.get("name", "")).strip() == name:
@@ -40,19 +47,44 @@ def _expert_system_prompt(expert: str) -> str:
     return ""
 
 
+def _get_store():
+    """懒初始化子 Agent 落库器（失败则降级为不落库）。"""
+    global _store
+    if _store is not None:
+        return _store
+    try:
+        from app.db import get_pool
+        from app.subagent.store import SubagentRunStore
+
+        pool = get_pool()
+        if pool is None:
+            return None
+        _store = SubagentRunStore(pool)
+    except Exception as exc:  # noqa: BLE001 - 落库不可用不应阻断委派
+        logger.warning("subagent 落库器初始化失败（本次不落库）: %s", str(exc)[:200])
+        return None
+    return _store
+
+
 async def subagent(
-    task: str, mode: str = "normal", max_turns: int = 5, expert: str = ""
+    task: str,
+    mode: str = "normal",
+    max_turns: int = 5,
+    expert: str = "",
+    profile: str = "",
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
-    The child runs a full agent loop (own message history, mode config,
-    tool set) and its text output is returned. The parent's tool context is
-    restored afterwards. max_turns bounds the child's loop (depth budget).
-    subagent_depth recursion is capped at MAX_DEPTH (S3 security fix).
+    The child runs a full agent loop (own message history, mode config, tool set
+    narrowed by the Profile) and returns a structured payload:
 
-    expert: 可委派专家名 —— 取值必须来自本次对话的专家清单（用户多选的 Agent，
-    由网关查库放进 context.agent.experts 并经 tool context 传递）。名字不在清单里
-    就忽略该参数，退回通用 child。
+    ``{status, output, result_ref, usage{tokens,steps}, summary, truncated}``
+
+    ``output`` 已按 L2 契约限长并包上 ``<subagent-result>`` 不可信标记；完整过程用
+    ``result_ref``（= run_id）配合 ``read_subagent_result`` 取用。
+
+    profile: ``agents`` 表中 ``kind='subagent'`` 的 Profile id 或 name。省略时用
+    通用子 Agent（与旧版行为一致）。max_turns 上限受 MAX_TURNS_CAP 约束。
     """
     if not task.strip():
         return {"error": "task is required"}
@@ -60,65 +92,73 @@ async def subagent(
     if gw is None:
         return {"error": "subagent requires an active agent runtime"}
 
-    from app.agent.runtime import AgentRuntime, AgentTask
-    from app.tools.context import get_tool_context
-
     depth = int(get_tool_context("subagent_depth", 0) or 0)
     if depth >= MAX_DEPTH:
         return {"error": f"delegation depth exceeded (max {MAX_DEPTH})"}
 
-    persona = _expert_system_prompt(expert)
+    from app.agent.subagent_runner import SubAgentRunner
+
     parent_ctx = get_all()
-    child = AgentTask(
-        id=f"sub_{uuid.uuid4().hex[:8]}",
+    runner = SubAgentRunner(
+        gw,
+        store=_get_store(),
+        pool=_get_pool(),
+        depth=depth,
+        parent_session_id=get_session_id(),
+        turn_id=str(get_tool_context("turn_id", "") or ""),
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
-        session_id=f"sub_{uuid.uuid4().hex[:12]}",
-        content=task,
-        system_prompt=persona,
-        llm_config={"mode": mode} if mode else {},
-        max_turns=max(1, min(max_turns, MAX_TURNS_CAP)),
-        subagent_depth=depth + 1,
     )
-
-    runtime = AgentRuntime(gateway=gw)
-    texts: list[str] = []
-    errors: list[str] = []
-    turns_used = 0
     try:
-        async for evt in runtime.run(child):
-            if evt.type == "text" and evt.content:
-                texts.append(evt.content)
-            elif evt.type == "error" and evt.error:
-                errors.append(evt.error)
-        turns_used = child.max_turns
+        result = await runner.run(
+            task,
+            profile_ref=profile,
+            mode=mode or "normal",
+            max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+            expert_prompt=_expert_system_prompt(expert),
+        )
     finally:
         restore_context(parent_ctx)  # 子 agent 已改写 context，父任务必须还原
 
-    output = "\n".join(texts).strip()
-    if not output and errors:
-        return {"error": " | ".join(errors)}
-    return {
-        "output": output,
-        "mode": mode or "normal",
-        "max_turns": turns_used,
-    }
+    payload = result.to_tool_payload()
+    if result.status == "failed" and not result.output:
+        # 失败且无任何输出：保留错误信息，便于父模型决策
+        payload["error"] = result.error or "subagent failed"
+    return payload
+
+
+def _get_pool():
+    from app.db import get_pool
+
+    return get_pool()
 
 
 registry.register(
     name="subagent",
     description=(
         "Delegate a task to a child agent that runs in its own session with "
-        "its own message history and tool budget. Use it to parallelize "
+        "its own message history, tool set and budget. Use it to parallelize "
         "independent work (read & summarize several files, draft a report, "
-        "research a topic) while the main agent continues. The child's final "
-        "text output is returned. Choose mode for the child: normal | minimal "
-        "| ptc | creative. max_turns bounds the child loop."
+        "research a topic) or to run a specialized Profile (e.g. a read-only "
+        "reviewer). Returns a structured payload whose 'output' is a length-capped, "
+        "marked-as-untrusted summary; the full transcript stays out of this "
+        "conversation and is reachable via 'result_ref'. "
+        "Cost note: every subagent run consumes its own tokens (often several times "
+        "the parent turn), so delegate deliberately."
     ),
     parameters={
         "type": "object",
         "properties": {
             "task": {"type": "string", "description": "The task for the child agent"},
+            "profile": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional: id or name of a subagent Profile (agents.kind='subagent'). "
+                    "Profiles fix the system prompt, tool whitelist/blacklist, read-only "
+                    "flag, model/effort and depth limit. Omit to use a general child agent."
+                ),
+            },
             "mode": {
                 "type": "string",
                 "enum": ["normal", "minimal", "ptc", "creative"],

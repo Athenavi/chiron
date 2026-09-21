@@ -44,7 +44,6 @@ const BASELINE = {
   'src/components/chat/ToolCallCard.vue': 1,
   'src/components/common/ImageViewer.vue': 1,
   'src/components/common/RouteProgressBar.vue': 1,
-  'src/components/home/CapabilityDiscovery.vue': 1,
   'src/style.css': 5,
   'src/views/AgentsView.vue': 1,
   'src/views/ChatView.vue': 9,

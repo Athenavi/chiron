@@ -16,9 +16,13 @@ class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
     def __init__(self, api_key: str, base_url: str = "", *, key_ring=None):
+        from app.config import settings as _settings  # 延迟导入：避免 providers ← config 循环
+
         kwargs = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
+        # 具名 UA：部分网关前置 Cloudflare 反滥用（如 opencode.ai），SDK 默认 UA 会 403。
+        kwargs["default_headers"] = {"User-Agent": _settings.llm_http_user_agent}
         self._base_kwargs = dict(kwargs)
         self._client = anthropic.AsyncAnthropic(**kwargs)
         # 多 key(DR 集中派),与 OpenAIProvider 同型;key_ring 为 None 时单 key 直连。

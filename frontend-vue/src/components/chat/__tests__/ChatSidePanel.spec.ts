@@ -84,7 +84,8 @@ describe('ChatSidePanel · 可用工具（让 MCP 注入的工具可见）', () 
     const w = mountPanel()
     await expand(w)
 
-    expect(w.find('.tools-count').text()).toBe('3 个 · MCP 2')
+    // 摘要现在直接列出 MCP 工具名 —— 只报数字说不清"到底激活了哪些能力"
+    expect(w.find('.tools-count').text()).toBe('3 个 · MCP b, c')
   })
 
   it('只有内置工具时不提 MCP', async () => {
@@ -157,6 +158,6 @@ describe('ChatSidePanel · 可用工具（让 MCP 注入的工具可见）', () 
 
     expect(api.listTools).toHaveBeenCalledTimes(2)
     expect(w.text()).toContain('x')
-    expect(w.find('.tools-count').text()).toBe('1 个 · MCP 1')
+    expect(w.find('.tools-count').text()).toBe('1 个 · MCP x')
   })
 })

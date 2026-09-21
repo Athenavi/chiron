@@ -5,6 +5,7 @@ import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
   ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined, ThunderboltOutlined,
+  ApartmentOutlined,
 } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, listTools, quickExecute } from '../../api'
@@ -12,6 +13,8 @@ import type { ToolInfo } from '../../utils/toolList'
 import type { ContextChip } from './contextChips'
 import { formatRelativeTime } from './chat-types'
 import type { ChatItem, ChatSession } from './chat-types'
+import SubAgentPanel from './SubAgentPanel.vue'
+import type { SubagentEvent } from '../../api/subagent'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -19,21 +22,24 @@ const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
   open: boolean
-  /** 面板视图：trajectory（主，当前会话提问轨迹）/ sessions（从，会话历史列表） */
-  view: 'trajectory' | 'sessions'
+  /** 面板视图：trajectory（主，当前会话提问轨迹）/ sessions（从，会话历史列表）/ agents（子 Agent 层级） */
+  view: 'trajectory' | 'sessions' | 'agents'
   sessions: ChatSession[]
   activeSessionId: string
   userName?: string
   /** 当前会话上下文芯片（知识库/Agent/技能/工作流，可移除） */
   contextChips?: ContextChip[]
+  /** 本会话实时到达的 subagent.* 事件（由 ChatView 从 SSE 分流后传入） */
+  liveEvents?: SubagentEvent[]
 }>(), {
   contextChips: () => [],
+  liveEvents: () => [],
 })
 
 const emit = defineEmits<{
   (e: 'focus', index: number): void
   (e: 'close'): void
-  (e: 'update:view', view: 'trajectory' | 'sessions'): void
+  (e: 'update:view', view: 'trajectory' | 'sessions' | 'agents'): void
   (e: 'create'): void
   (e: 'switch', id: string): void
   (e: 'delete', id: string): void
@@ -147,13 +153,18 @@ let toolsLoaded = false
 
 const mcpToolCount = computed(() => availableTools.value.filter(t => t.source === 'mcp').length)
 
-/** 标题右侧摘要：先说清 MCP 有几个，这正是本节存在的理由 */
+/** 标题右侧摘要：直接列出 MCP 工具名 —— 只报数字等于没说清"到底激活了哪些能力" */
 const toolsSummary = computed(() => {
   if (toolsError.value) return '加载失败'
   if (toolsLoading.value) return '…'
   const total = availableTools.value.length
   if (!total) return '无'
-  return mcpToolCount.value ? `${total} 个 · MCP ${mcpToolCount.value}` : `${total} 个`
+  const mcpNames = availableTools.value.filter(isMcpTool).map(t => t.name).slice(0, 3)
+  if (mcpNames.length) {
+    const more = mcpToolCount.value > mcpNames.length ? ` +${mcpToolCount.value - mcpNames.length}` : ''
+    return `${total} 个 · MCP ${mcpNames.join(', ')}${more}`
+  }
+  return `${total} 个`
 })
 
 function isMcpTool(t: ToolInfo): boolean {
@@ -356,6 +367,15 @@ function pickSession(id: string) {
         <LeftOutlined />
         <span class="session-picker-name">{{ activeSession?.title || '新对话' }}</span>
       </button>
+      <button
+        type="button"
+        class="session-back"
+        :class="{ active: view === 'agents' }"
+        :title="view === 'agents' ? $t('返回提问轨迹') : $t('子 Agent 层级')"
+        @click="emit('update:view', view === 'agents' ? 'trajectory' : 'agents')"
+      >
+        <ApartmentOutlined />
+      </button>
       <CloseOutlined
         class="toolbar-close"
         :title="$t('收起面板')"
@@ -479,6 +499,13 @@ function pickSession(id: string) {
         </template>
       </div>
     </div>
+
+    <!-- 子 Agent 层级视图：递归树 + 选中运行的实时输出 -->
+    <SubAgentPanel
+      v-if="view === 'agents'"
+      :session-id="activeSessionId"
+      :live-events="liveEvents"
+    />
 
     <!-- 主视图：当前会话轨迹（搜索 + 时间线 + 提问锚点） -->
     <template v-if="view === 'trajectory'">

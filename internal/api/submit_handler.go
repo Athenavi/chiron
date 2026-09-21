@@ -13,6 +13,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
+	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/id"
 	"github.com/athenavi/chiron/internal/session"
@@ -160,9 +161,38 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		"history":    histMsgs,
 		"max_turns":  defaultMaxTurns,
 	}
+	// P1-c：用**会话运行时状态**解析最终生效的模式/模型/provider（唯一解析链，spec §3）。
+	// 前端 llm_config 视为"本次请求的显式意图"，优先级高于会话 runtime 与默认值；
+	// 若前端未传（P1-e 后的目标形态），则由 runtime / 用户默认 / 全局默认依次生效。
+	explicit := map[string]string{}
 	if llmConfig != nil {
-		pythonReq["llm_config"] = llmConfig
+		if v, ok := llmConfig["mode"].(string); ok && v != "" {
+			explicit["mode"] = v
+		}
+		if v, ok := llmConfig["model"].(string); ok && v != "" {
+			explicit["model"] = v
+		}
 	}
+	tenantID := ""
+	if claims := auth.GetClaims(ctx); claims != nil {
+		tenantID = claims.TenantID
+		if tenantID == "" {
+			tenantID = claims.UserID
+		}
+	}
+	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantID, userID, sessionID, explicit)
+	if llmConfig == nil {
+		llmConfig = map[string]interface{}{}
+	}
+	llmConfig["mode"] = agentCfg.mode.Value
+	llmConfig["model"] = agentCfg.model.Value
+	if agentCfg.provider.Value != "" {
+		// 显式 provider：引擎从 llm_config.provider 读（main.py:1007 → AgentRuntime 的
+		// provider_hint → gateway._select 优先命中），解决多网关同名模型抢路由
+		// （如 OpenCode 与 DeepSeek 直连都提供 deepseek-*）。
+		llmConfig["provider"] = agentCfg.provider.Value
+	}
+	pythonReq["llm_config"] = llmConfig
 	// 工作台上下文原样透传：引擎侧决定如何消费（RAG 注入、技能装配、Agent 覆盖）
 	if len(workbenchCtx) > 0 {
 		pythonReq["context"] = workbenchCtx
@@ -285,7 +315,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		// 增量落库：工具事件是关键节点，立即写；其余事件走 3s 节流
 		saveDraft(evt.Type == "tool_call" || evt.Type == "tool_result" || evt.Type == "guardrail_blocked")
 	}
-	flushText() // 流结束兜底冲刷
+	flushText()     // 流结束兜底冲刷
 	saveDraft(true) // 定型：覆盖正常结束、被取消、断线等所有路径
 
 	// 可观测性：区分正常结束与中断（前端断开 / 会话取消 / DefaultAgentTimeout 超时）。
