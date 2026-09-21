@@ -368,24 +368,6 @@ function pickSession(id: string) {
         <LeftOutlined />
         <span class="session-picker-name">{{ activeSession?.title || '新对话' }}</span>
       </button>
-      <button
-        type="button"
-        class="session-back"
-        :class="{ active: view === 'agents' }"
-        :title="view === 'agents' ? $t('返回提问轨迹') : $t('子 Agent 层级')"
-        @click="emit('update:view', view === 'agents' ? 'trajectory' : 'agents')"
-      >
-        <ApartmentOutlined />
-      </button>
-      <button
-        type="button"
-        class="session-back"
-        :class="{ active: view === 'stats' }"
-        :title="view === 'stats' ? $t('返回提问轨迹') : $t('会话统计（tokens/费用/缓存命中/吞吐）')"
-        @click="emit('update:view', view === 'stats' ? 'trajectory' : 'stats')"
-      >
-        <BarChartOutlined />
-      </button>
       <CloseOutlined
         class="toolbar-close"
         :title="$t('收起面板')"
@@ -509,19 +491,6 @@ function pickSession(id: string) {
         </template>
       </div>
     </div>
-
-    <!-- 子 Agent 层级视图：递归树 + 选中运行的实时输出 -->
-    <SubAgentPanel
-      v-if="view === 'agents'"
-      :session-id="activeSessionId"
-      :live-events="liveEvents"
-    />
-
-    <!-- 会话统计（问题 5）：tokens / 费用 / 缓存命中率 / 吞吐；数据来源在面板底部标注 -->
-    <SessionStatsPanel
-      v-if="view === 'stats'"
-      :session-id="activeSessionId"
-    />
 
     <!-- 主视图：当前会话轨迹（搜索 + 时间线 + 提问锚点） -->
     <template v-if="view === 'trajectory'">

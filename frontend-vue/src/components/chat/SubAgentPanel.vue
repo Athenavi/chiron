@@ -65,7 +65,44 @@ function hiddenByAncestor(run: SubagentRunView): boolean {
   return false
 }
 
-const visibleRuns = computed(() => runs.value.filter(r => !hiddenByAncestor(r)))
+/**
+ * 从**实时事件**合成的运行条目 —— 观测面的第二个数据源。
+ *
+ * 为什么必须有它：`GET /v1/subagent/runs` 依赖后端把运行写进 journal/Redis，那条链路
+ * 任何一环出问题（或该 run 尚未落库），面板就会显示"本次会话还没有子 Agent 运行" ——
+ * 而 SSE 里其实正在源源不断地送 `subagent.*` 事件。观测不该因为一个数据源失败而全瞎。
+ * （与 ZCode 的"run 的真相在 journal、观察面出问题不影响可用性"同一思路。）
+ */
+const liveRuns = computed(() => {
+  const known = new Set(runs.value.map(r => r.run_id))
+  const out: Record<string, any> = {}
+  for (const raw of props.liveEvents) {
+    const e = raw as any
+    const id: string = e?.run_id
+    if (!id || known.has(id)) continue // API 已有 → 以 API 为准（它带摘要与用量）
+    const prev = out[id]
+    const done = e.type === 'subagent.done'
+    out[id] = {
+      run_id: id,
+      parent_run_id: e.parent_run_id || prev?.parent_run_id || '',
+      depth: Number(e.depth ?? prev?.depth ?? 1) || 1,
+      profile: e.profile || prev?.profile || '',
+      status: done ? (e.status || 'done') : (prev?.status || 'running'),
+      summary: done ? (e.summary ?? prev?.summary) : prev?.summary,
+      usage: e.usage ?? prev?.usage,
+      created_at: prev?.created_at,
+    }
+  }
+  return Object.values(out)
+})
+
+/** 面板实际展示的运行：**API 结果优先，实时事件补齐**（按 run_id 去重） */
+const displayRuns = computed(() => {
+  const apiIds = new Set(runs.value.map(r => r.run_id))
+  return [...runs.value, ...liveRuns.value.filter(r => !apiIds.has(r.run_id))]
+})
+
+const visibleRuns = computed(() => displayRuns.value.filter(r => !hiddenByAncestor(r)))
 
 const selectedRun = computed(() => runs.value.find(r => r.run_id === selectedRunId.value) || null)
 
@@ -145,6 +182,15 @@ function dismissCostHint() {
 }
 
 // 实时流里出现了新 run（通常是刚委派的）→ 立刻刷新树，让卡片尽快出现
+/** 面板内部 tab（设计稿第四节：运行 · 输出 · 用量 · 事件流） */
+const SA_TABS = [
+  { id: 'runs', label: '运行' },
+  { id: 'output', label: '输出' },
+  { id: 'usage', label: '用量' },
+  { id: 'events', label: '事件流' },
+] as const
+const saTab = ref<(typeof SA_TABS)[number]['id']>('runs')
+
 watch(() => props.liveEvents?.length || 0, (len, prev) => {
   if (!len || len === prev) return
   const latest = props.liveEvents?.[len - 1]
@@ -198,9 +244,42 @@ onBeforeUnmount(() => {
       </span>
     </div>
 
-    <Spin :spinning="loading">
+    <!-- 面板内部 tab（设计稿第四节）：运行 / 输出 / 用量 / 事件流。
+         前两个是"看过程"，后两个是"算花销"与"排查原始事件"。
+         用 v-show 而非重排 DOM：保留既有树与输出的全部逻辑，只切换可见性。 -->
+    <nav
+      class="sa-tabs"
+      role="tablist"
+      :aria-label="$t('子 Agent 视图')"
+    >
+      <button
+        v-for="t in SA_TABS"
+        :key="t.id"
+        type="button"
+        role="tab"
+        class="sa-tab"
+        :class="{ active: saTab === t.id }"
+        :aria-selected="saTab === t.id"
+        @click="saTab = t.id"
+      >
+        {{ $t(t.label) }}
+        <span
+          v-if="t.id === 'runs' && runs.length"
+          class="sa-tab-count"
+        >{{ runs.length }}</span>
+        <span
+          v-if="t.id === 'events' && liveEvents.length"
+          class="sa-tab-count"
+        >{{ liveEvents.length }}</span>
+      </button>
+    </nav>
+
+    <Spin
+      v-show="saTab === 'runs'"
+      :spinning="loading"
+    >
       <Empty
-        v-if="!runs.length"
+        v-if="!displayRuns.length"
         :description="$t('本次会话还没有子 Agent 运行')"
         :image="Empty.PRESENTED_IMAGE_SIMPLE"
       />
@@ -242,8 +321,75 @@ onBeforeUnmount(() => {
       </div>
     </Spin>
 
+    <!-- 用量：按 run 列明细。会话语义在「统计」浮层，这里是**子 Agent 粒度**，两者不重复 -->
+    <div
+      v-show="saTab === 'usage'"
+      class="usage"
+    >
+      <div
+        v-if="runs.length"
+        class="usage-grid"
+      >
+        <div class="usage-row usage-head">
+          <span>{{ $t('运行') }}</span>
+          <span>{{ $t('状态') }}</span>
+          <span class="num">in</span>
+          <span class="num">out</span>
+          <span class="num">{{ $t('步数') }}</span>
+        </div>
+        <div
+          v-for="run in runs"
+          :key="run.run_id"
+          class="usage-row"
+        >
+          <span class="u-name">{{ run.profile || run.run_id }}</span>
+          <Tag :color="STATUS_COLOR[run.status] || 'default'">
+            {{ run.status }}
+          </Tag>
+          <span class="num">{{ run.usage?.input_tokens || 0 }}</span>
+          <span class="num">{{ run.usage?.output_tokens || 0 }}</span>
+          <span class="num">{{ run.usage?.steps || 0 }}</span>
+        </div>
+      </div>
+      <div
+        v-else
+        class="sa-empty"
+      >
+        {{ $t('还没有子 Agent 运行，所以没有用量可算') }}
+      </div>
+      <p class="usage-note">
+        {{ $t('子 Agent 会独立消耗 token，多个并行时花销成倍增加。') }}
+      </p>
+    </div>
+
+    <!-- 事件流：**原始** subagent.* 事件（未按语义分组），排查"到底发生了什么"时用；
+         「输出」tab 才是给人读的结构化过程。 -->
+    <div
+      v-show="saTab === 'events'"
+      class="events"
+    >
+      <div
+        v-for="(e, i) in liveEvents"
+        :key="(e.id as string) || i"
+        class="ev-row"
+      >
+        <span class="ev-type">{{ e.type }}</span>
+        <span class="ev-run">{{ e.run_id }}</span>
+        <span class="ev-text">{{ e.content || '' }}</span>
+      </div>
+      <div
+        v-if="!liveEvents.length"
+        class="sa-empty"
+      >
+        {{ $t('本会话还没有收到子 Agent 事件') }}
+      </div>
+    </div>
+
+    <!-- v-if 负责"无选中不渲染"（同时让 TS 把 selectedRun 收窄为非空），
+         v-show 负责 tab 切换 —— 两者可并用；只写 v-show 会丢掉类型收窄。 -->
     <div
       v-if="selectedRun"
+      v-show="saTab === 'output'"
       class="output"
     >
       <div class="output-head">
@@ -357,4 +503,50 @@ onBeforeUnmount(() => {
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 .stream-empty { color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
+
+/* ── 内部 tab（运行 · 输出 · 用量 · 事件流）── */
+.sa-tabs {
+  display: flex; gap: 2px; margin: 8px 0 10px;
+  padding: 2px; border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.06));
+}
+.sa-tab {
+  flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
+  padding: 4px 8px; border: none; border-radius: 6px; cursor: pointer;
+  background: transparent; color: var(--text-secondary, #595959); font-size: 12px;
+}
+.sa-tab:hover { color: var(--text-primary, #262626); }
+.sa-tab.active {
+  background: var(--bg-elevated, #fff); color: var(--text-primary, #262626);
+  font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.sa-tab-count {
+  min-width: 16px; padding: 0 4px; border-radius: 8px;
+  background: var(--surface-2, rgba(127, 127, 127, 0.16));
+  font-size: 10px; font-variant-numeric: tabular-nums;
+}
+.sa-empty { padding: 10px 2px; color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
+
+/* 用量表：数字列右对齐 + tabular-nums，便于竖排比对 */
+.usage-grid { display: flex; flex-direction: column; }
+.usage-row {
+  display: grid; grid-template-columns: 1fr auto 56px 56px 48px;
+  align-items: center; gap: 6px; padding: 4px 2px;
+  border-bottom: 1px solid var(--border-color, rgba(127, 127, 127, 0.12));
+  font-size: 12px;
+}
+.usage-head { color: var(--text-tertiary, #8c8c8c); font-size: 11px; }
+.usage-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.usage-note { margin: 10px 0 0; color: var(--text-tertiary, #8c8c8c); font-size: 11px; }
+
+/* 事件流：原始事件，等宽 + 紧凑行（--font-mono 已含 CJK 字体栈，中文不会掉宋体） */
+.events { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
+.ev-row { display: grid; grid-template-columns: 132px 96px 1fr; gap: 6px; font-size: 11px; }
+.ev-type { color: var(--primary, #1677ff); font-family: var(--font-mono); }
+.ev-run { color: var(--text-tertiary, #8c8c8c); font-family: var(--font-mono); }
+.ev-text {
+  color: var(--text-secondary, #595959);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
 </style>

@@ -479,6 +479,29 @@ function persistRuntime(patch: Record<string, unknown>) {
   void updateConversation(sid, { llm_config: buildLlmConfig() } as any).catch(() => {})
 }
 
+/**
+ * `@` 提及选中的资源 → 加进"激活引用"的 chips，并**同步到单一事实源**（`runtime.context`）。
+ *
+ * 与 URL chips 走同一条链路：chips 只是 UI 呈现，`runtime.context` 才是提交时真正生效的东西
+ * —— 只改 chips 不写 runtime，刷新后引用就会从界面上消失（这正是我们修过的那类问题）。
+ */
+const MENTION_CHIP_LABEL: Record<string, string> = {
+  kb: '知识库', agent: 'Agent', skill: '技能', workflow: '工作流', plugin: '插件',
+}
+
+function onMentionAdd(p: { type: string; id: string; name: string }) {
+  if (contextChips.value.some(c => c.type === p.type && c.value === p.id)) return
+  contextChips.value = [
+    ...contextChips.value,
+    {
+      type: p.type as ContextChip['type'],
+      label: `${MENTION_CHIP_LABEL[p.type] || p.type} ${p.name}`,
+      value: p.id,
+    },
+  ]
+  persistRuntime({ context: buildWorkbenchContext(contextChips.value) })
+}
+
 /** 模型切换：更新 llmModel ref + 写入运行时状态（会话级持久） */
 function onModelChange(m: string) {
   if (m === llmModel.value) return
@@ -1005,21 +1028,6 @@ function onSlashCommand(cmd: string) {
   }
 }
 
-/**
- * 立即停止当前生成（`Esc` 与「停止」按钮共用）。
- *
- * 只断开流并收尾流式标记，**保留已产出的内容** —— 用户按 Esc 的意图是"别再往下说了"，
- * 而不是"把已经说过的删掉"。参照 ZCode 的 `escapeStop`。
- */
-function stopGenerating() {
-  if (!loading.value) return
-  activeSSE?.close()
-  activeSSE = null
-  flushStreamingFlags()
-  loading.value = false
-  stopTurnTimer()
-}
-
 // 全局键盘快捷键
 function onGlobalKeydown(e: KeyboardEvent) {
   // Ctrl/Cmd + K：打开侧边栏 + 切到会话历史视图
@@ -1035,7 +1043,7 @@ function onGlobalKeydown(e: KeyboardEvent) {
   // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
   if (e.key === 'Escape' && loading.value) {
     e.preventDefault()
-    stopGenerating()
+    stopGeneration()
     return
   }
   // Esc 关闭观测浮层 —— 全局优先级：**停止生成 > 关闭浮窗 > 关闭侧栏**。
@@ -2120,6 +2128,7 @@ function continueGeneration() {
         @model-change="onModelChange"
         @command="onSlashCommand"
         @open-panel="openContextPanel"
+        @mention-add="onMentionAdd"
       />
 
       <ChatStatusBar

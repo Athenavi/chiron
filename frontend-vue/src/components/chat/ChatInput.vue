@@ -23,6 +23,8 @@ const props = defineProps<{
 const emit = defineEmits<{
   (e: 'send', text: string, attachments?: ChatAttachment[]): void
   (e: 'stop'): void
+  /** `@` 提及选中的资源：以「引用 chip」形式交给父组件（与 URL chips 同一条链路） */
+  (e: 'mention-add', payload: { type: string; id: string; name: string }): void
   (e: 'update:mode', mode: string): void
   /** 模型路由：用户选择了模型（空字符串 = 恢复后端默认） */
   (e: 'model-change', model: string): void
@@ -191,7 +193,125 @@ watch(input, value => {
   saveTimer = setTimeout(saveDraft, 300)
 })
 
+// ── `@` 提及：把工作台资源（知识库 / Agent / 技能 / 工作流 / 插件）直接带进对话 ──
+//
+// 与 `/` 命令共用同一套菜单交互（上下键 / Enter / Esc / hover）；选中的资源以
+// **引用 chip** 交给父组件，与 URL chips 走同一条链路（最终进 runtime.context）。
+// 此前这些资源只能在首页或手写 URL query 才能带进对话 —— 输入框里没法选。
+const mentionOpen = ref(false)
+const mentionQuery = ref('')
+const mentionIndex = ref(0)
+const mentionLoading = ref(false)
+const mentionItems = ref<{ type: string; id: string; name: string }[]>([])
+
+const MENTION_LABEL: Record<string, string> = {
+  kb: '知识库', agent: 'Agent', skill: '技能', workflow: '工作流', plugin: '插件',
+}
+
+const filteredMentions = computed(() => {
+  const q = mentionQuery.value.trim().toLowerCase()
+  const list = q
+    ? mentionItems.value.filter(m => `${m.name} ${m.id}`.toLowerCase().includes(q))
+    : mentionItems.value
+  return list.slice(0, 20)
+})
+
+/** 懒加载 + 逐类容错：任一资源类失败只让那一类为空，不拖垮整个面板 */
+async function loadMentionItems() {
+  if (mentionItems.value.length || mentionLoading.value) return
+  mentionLoading.value = true
+  try {
+    const api = await import('../../api')
+    const toItems = async (loading: Promise<unknown>, type: string) => {
+      try {
+        const list = (await loading) as Array<{ id?: string; name?: string }> | undefined
+        return (list || []).map(x => ({ type, id: String(x?.id ?? ''), name: String(x?.name ?? x?.id ?? '') }))
+          .filter(x => x.id)
+      } catch {
+        return []
+      }
+    }
+    const groups = await Promise.all([
+      toItems(api.listKnowledgeBases(), 'kb'),
+      toItems(api.listAgents(), 'agent'),
+      toItems(api.listSkillResources(), 'skill'),
+      toItems(api.listWorkflows(), 'workflow'),
+      toItems(api.listPlugins(), 'plugin'),
+    ])
+    mentionItems.value = groups.flat()
+  } finally {
+    mentionLoading.value = false
+  }
+}
+
+/** 在 input 事件里判定是否处于 `@` 查询中（词中 @ 不触发，避免邮箱之类误开面板） */
+function syncMention() {
+  const caret = textareaRef.value?.selectionStart ?? input.value.length
+  const before = input.value.slice(0, caret)
+  const at = before.lastIndexOf('@')
+  if (at < 0) {
+    mentionOpen.value = false
+    return
+  }
+  const prev = at > 0 ? before[at - 1] : ' '        // 行首可视作空白
+  const query = before.slice(at + 1)
+  if (!/\s/.test(prev) || /\s/.test(query)) {
+    mentionOpen.value = false
+    return
+  }
+  mentionQuery.value = query
+  mentionIndex.value = 0
+  mentionOpen.value = true
+  void loadMentionItems()
+}
+
+/** 选中一项：把 `@query` 从文本里摘掉，引用交给父组件（chips 体系） */
+function pickMention(item: { type: string; id: string; name: string }) {
+  const caret = textareaRef.value?.selectionStart ?? input.value.length
+  const before = input.value.slice(0, caret)
+  const at = before.lastIndexOf('@')
+  if (at >= 0) input.value = input.value.slice(0, at) + input.value.slice(caret)
+  mentionOpen.value = false
+  saveDraft()
+  emit('mention-add', { type: item.type, id: item.id, name: item.name })
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+/**
+ * 输入事件的**唯一入口**：`@` 提及与 `/` 命令都在这里同步。
+ * （一个元素上写两个 `@input` 会产生重复属性 —— TS1117，所以必须收口成一个 handler。）
+ */
+function onComposerInput() {
+  syncMention()
+  onSlashInput()
+}
+
 function onKeydown(e: KeyboardEvent) {
+  // `@` 提及面板导航（先判它：与斜杠菜单不会同时开，但先判更安全）
+  if (mentionOpen.value) {
+    if (e.key === 'ArrowDown') {
+      e.preventDefault()
+      mentionIndex.value = Math.min(mentionIndex.value + 1, filteredMentions.value.length - 1)
+      return
+    }
+    if (e.key === 'ArrowUp') {
+      e.preventDefault()
+      mentionIndex.value = Math.max(mentionIndex.value - 1, 0)
+      return
+    }
+    if (e.key === 'Escape') {
+      mentionOpen.value = false
+      return
+    }
+    if (e.key === 'Enter' && !e.shiftKey && !e.isComposing) {
+      const item = filteredMentions.value[mentionIndex.value]
+      if (item) {
+        e.preventDefault()
+        pickMention(item)
+        return
+      }
+    }
+  }
   // 斜杠命令面板导航
   if (showSlashMenu.value) {
     if (e.key === 'ArrowDown') {
@@ -486,6 +606,42 @@ defineExpose({ insertText })
           </button>
         </div>
       </div>
+      <!-- `@` 提及面板：与斜杠命令同一套交互与样式，数据源换成可引用资源 -->
+      <div
+        v-if="mentionOpen"
+        class="slash-menu mention-menu"
+        role="listbox"
+        :aria-label="$t('引用资源')"
+      >
+        <div
+          v-if="mentionLoading"
+          class="slash-item"
+        >
+          {{ $t('加载中…') }}
+        </div>
+        <div
+          v-else-if="!filteredMentions.length"
+          class="slash-item"
+        >
+          {{ $t('没有匹配的资源（知识库 / Agent / 技能 / 工作流 / 插件）') }}
+        </div>
+        <template v-else>
+          <div
+            v-for="(m, i) in filteredMentions"
+            :key="`${m.type}:${m.id}`"
+            class="slash-item"
+            :class="{ active: i === mentionIndex }"
+            role="option"
+            :aria-selected="i === mentionIndex"
+            @mouseenter="mentionIndex = i"
+            @click="pickMention(m)"
+          >
+            <span class="slash-cmd">{{ $t(MENTION_LABEL[m.type] || m.type) }}</span>
+            <span class="slash-desc">{{ m.name }}</span>
+          </div>
+        </template>
+      </div>
+
       <!-- 斜杠命令面板 -->
       <div
         v-if="showSlashMenu"
@@ -549,7 +705,7 @@ defineExpose({ insertText })
         :disabled="disabled"
         aria-label="消息输入框"
         @keydown="onKeydown"
-        @input="onSlashInput"
+        @input="onComposerInput"
         @paste="onPaste"
       />
       <input
