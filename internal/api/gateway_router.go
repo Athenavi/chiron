@@ -1086,6 +1086,10 @@ func registerAdminRoutes(
 	mux.Handle("PUT /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyStatus)))))
 	mux.Handle("DELETE /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.DeleteLLMKey)))))
 
+	// LLM provider catalog routes（服务提供商目录与端点覆盖）
+	mux.Handle("GET /v1/admin/llm-providers", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.ListLLMProviders)))))
+	mux.Handle("PUT /v1/admin/llm-providers/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SetLLMProviderConfig)))))
+
 	// Settings admin routes
 	mux.Handle("PUT /v1/admin/settings", authMW(rlMW(adminWriteMW(adminStrip))))
 }

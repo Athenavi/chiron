@@ -291,6 +291,14 @@ async def lifespan(app: FastAPI):
     from app.gateway.router import GatewayRouter
 
     providers: dict[str, LLMProvider] = {}
+    # 服务提供商目录（权威源在 Go 网关 internal/api/llm_providers.go，经
+    # /v1/internal/engine-config 下发）：provider 注册、端点解析、路由匹配全部目录驱动，
+    # 新增提供商无需改引擎代码（见 app/providers/catalog.py 的兜底目录）。
+    from app.providers.catalog import (provider_api_key, provider_base_url,
+                                       provider_catalog, provider_kind,
+                                       provider_requires_key)
+
+    _catalog = provider_catalog()
     # KeyRing(DR 集中派):管理端密钥的明文环(Redis keyset 镜像)+ env 种子兜底。
     # provider 在 key_ring 模式下按活跃 key 轮换调用并上报失败。
     from app.gateway.key_ring import KeyRing
@@ -298,15 +306,14 @@ async def lifespan(app: FastAPI):
     _key_ring = KeyRing(
         redis=_redis,
         env_seeds={
-            "anthropic": [settings.anthropic_api_key] if settings.anthropic_api_key else [],
-            "openai": [settings.openai_api_key or settings.llm_api_key]
-            if (settings.openai_api_key or settings.llm_api_key)
-            else [],
-            "deepseek": [settings.deepseek_api_key] if settings.deepseek_api_key else [],
+            str(preset["id"]): [seed]
+            for preset in _catalog
+            if (seed := provider_api_key(preset))
         },
     )
     # DR 集中派(管理端 /v1/admin/api-keys 添加的 key 经网关写入 Redis keyset
-    # llm:keys:{provider}):provider 注册条件 = env 种子非空 或 keyset 已存在该 provider 的 key。
+    # llm:keys:{provider}):provider 注册条件 = env 种子非空 或 keyset 已存在该 provider 的 key
+    # 或 目录标记免 key（Ollama/vLLM 等本地端点）。
     # 仅凭 keyset 时以占位 key 构造(调用时 _resolve_client 会用 keyset 活跃 key 建真实 client)。
     placeholder = "sk-chiron-keyset-managed"
 
@@ -316,35 +323,90 @@ async def lifespan(app: FastAPI):
         except Exception:
             return False
 
-    if settings.anthropic_api_key or await _keyset_has("anthropic"):
-        from app.providers.anthropic import AnthropicProvider
+    from app.providers.named import NamedAnthropicProvider, NamedOpenAIProvider
 
-        providers["anthropic"] = AnthropicProvider(
-            api_key=settings.anthropic_api_key or placeholder,
-            base_url=settings.anthropic_base_url,
+    for _preset in _catalog:
+        _pid = str(_preset.get("id") or "")
+        if not _pid or _pid in providers:
+            continue
+        _seed = provider_api_key(_preset)
+        if not _seed and provider_requires_key(_preset) and not await _keyset_has(_pid):
+            continue
+        _base_url = provider_base_url(_preset)
+        _provider_cls = (
+            NamedAnthropicProvider if provider_kind(_preset) == "anthropic" else NamedOpenAIProvider
+        )
+        providers[_pid] = _provider_cls(
+            _pid,
+            api_key=_seed or placeholder,
+            base_url=_base_url,
             key_ring=_key_ring,
         )
-    if (settings.openai_api_key or settings.llm_api_key) or await _keyset_has("openai"):
-        from app.providers.openai import OpenAIProvider
-
-        providers["openai"] = OpenAIProvider(
-            api_key=(settings.openai_api_key or settings.llm_api_key) or placeholder,
-            base_url=settings.openai_base_url or settings.llm_base_url,
-            key_ring=_key_ring,
-        )
-    if settings.deepseek_api_key or await _keyset_has("deepseek"):
-        from app.providers.deepseek import DeepSeekProvider
-
-        providers["deepseek"] = DeepSeekProvider(
-            api_key=settings.deepseek_api_key or placeholder,
-            base_url=settings.deepseek_base_url,
-            key_ring=_key_ring,
+        logger.info(
+            "LLM provider registered: %s (kind=%s, base_url=%s)",
+            _pid,
+            provider_kind(_preset),
+            _base_url or "<sdk-default>",
         )
 
     if not providers:
         logger.warning(
-            "No LLM providers configured! Set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY or LLM_API_KEY"
+            "No LLM providers configured! Set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY "
+            "/ LLM_API_KEY, add a key in admin (服务提供商), or use a no-key provider (Ollama/vLLM)"
         )
+
+    # 目录外的自定义 provider 也要能工作：管理端可为任意 provider 名（如 my-gateway）
+    # 添加 key，写入 keyset llm:keys:{provider}。这里扫描 keyset 补齐目录未收录的 provider，
+    # 按 OpenAI 兼容协议接入（端点取 DB/env 覆盖）。
+    async def _keyset_provider_ids() -> list[str]:
+        """扫描 Redis keyset 中已配置 key 的 provider 名。"""
+        if _redis is None:
+            return []
+        from app.redis_keys import rkey
+
+        prefix = rkey("llm:keys:")
+        ids: list[str] = []
+        try:
+            async for key in _redis.scan_iter(match=f"{prefix}*", count=100):
+                name = key.decode() if isinstance(key, bytes) else str(key)
+                provider = name[len(prefix):] if name.startswith(prefix) else ""
+                if provider and provider != "ver" and provider not in ids:
+                    ids.append(provider)
+        except Exception as exc:  # noqa: BLE001 - 扫描失败不阻断启动
+            logger.warning("keyset provider scan failed: %s", exc)
+        return ids
+
+    _known_ids = {str(preset.get("id") or "") for preset in _catalog}
+    for _pid in await _keyset_provider_ids():
+        if not _pid or _pid in providers or _pid in _known_ids:
+            continue
+        # 合成目录项：模型名带 provider 前缀时（provider/model）可被路由命中
+        _custom_preset = {
+            "id": _pid,
+            "label": _pid,
+            "kind": "openai",
+            "base_url": "",
+            "api_key_env": "",
+            "model_prefixes": [f"{_pid}/"],
+            "cost": 5.0,
+            "quality": 0.80,
+            "requires_key": True,
+            "model_discovery": True,
+        }
+        _base_url = provider_base_url(_custom_preset)
+        if not _base_url:
+            logger.warning(
+                "custom provider %s skipped: no base_url (set it in 管理端「服务提供商」或 %s_BASE_URL)",
+                _pid,
+                _pid.upper().replace("-", "_"),
+            )
+            continue
+        _catalog.append(_custom_preset)
+        _known_ids.add(_pid)
+        providers[_pid] = NamedOpenAIProvider(
+            _pid, api_key=placeholder, base_url=_base_url, key_ring=_key_ring
+        )
+        logger.info("custom LLM provider registered: %s (base_url=%s)", _pid, _base_url)
 
     # 创建 embedding 函数（用于语义缓存）
     async def _embed_for_cache(text: str) -> list[float]:
@@ -373,6 +435,7 @@ async def lifespan(app: FastAPI):
         budget=budget,
         gateway_url=settings.gateway_internal_url,
         internal_token=settings.internal_token,
+        provider_catalog=_catalog,
     )
     # 同步租户模型路由配置（不阻断启动）
     try:

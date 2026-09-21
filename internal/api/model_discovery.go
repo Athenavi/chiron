@@ -8,9 +8,9 @@ package api
 //
 // provider → API base URL（base 会拼 "/models"）来源（优先级降序）：
 //   1. DB「系统设置」python 分类的 {provider}_base_url / llm_base_url（敏感项加密列）;
-//   2. 内建默认：deepseek → https://api.deepseek.com、openai → https://api.openai.com/v1;
-//      anthropic 无默认（官方无 OpenAI 风格 /models；配置 anthropic_base_url 后才启用发现）。
-// 与引擎侧 provider 使用同一套 base_url 语义（后台 python 分类或 .env 的 *_BASE_URL）。
+//   2. 服务提供商目录（internal/api/llm_providers.go）的默认端点，支持任意已收录 provider
+//      （Anthropic 原生协议默认不做发现，需显式配置端点）。
+// 与引擎侧 provider 使用同一套 base_url 语义（服务提供商面板 / 后台 python 分类或 .env 的 *_BASE_URL）。
 
 import (
 	"context"
@@ -93,10 +93,15 @@ func keysetActiveProviders(ctx context.Context) []llmKeysetProvider {
 }
 
 // providerModelsBaseURL 解析 provider 的 OpenAI 兼容 base（不含 "/models"）。
+// 优先级（降序）：
+//  1. DB「系统设置」python 分类的 {provider}_base_url —— 任意 provider（不限于内建三项），
+//     由管理端「服务提供商」面板 / 系统设置写入；openai 兼容网关额外回退 llm_base_url；
+//  2. 服务提供商目录（llm_providers.go）的默认端点，且该 provider 支持模型发现
+//     （Anthropic 原生协议不做发现，除非上面的 DB 覆盖显式给出端点）。
 func providerModelsBaseURL(ctx context.Context, provider string) string {
-	// 1) DB「系统设置」python 分类：{provider}_base_url；openai 兼容自定义网关走 llm_base_url 回退
+	// 1) DB 覆盖
 	if db.Pool != nil {
-		keys := []string{provider + "_base_url"}
+		keys := []string{llmProviderBaseURLKey(provider)}
 		if provider == "openai" {
 			keys = append(keys, "llm_base_url")
 		}
@@ -106,27 +111,18 @@ func providerModelsBaseURL(ctx context.Context, provider string) string {
 				`SELECT value::text FROM system_settings WHERE category = 'python' AND key = $1`, key).
 				Scan(&valText)
 			if err == nil && valText != "" && valText != "null" {
-				// value 为 JSON 编码的字符串（含引号）时解包
-				var s string
-				if json.Unmarshal([]byte(valText), &s) == nil {
-					valText = s
-				}
-				if v := strings.TrimRight(strings.TrimSpace(valText), "/"); v != "" {
+				if v := strings.TrimRight(llmSettingsString(valText), "/"); v != "" {
 					return v
 				}
 			}
 		}
 	}
-	// 2) 内建默认（可被上一步覆盖）
-	switch provider {
-	case "deepseek":
-		return "https://api.deepseek.com"
-	case "openai":
-		return "https://api.openai.com/v1"
-	default:
+	// 2) 目录默认端点
+	if !llmProviderSupportsModelDiscovery(provider) {
 		// anthropic 等：无默认 base 时不做发现（避免写死第三方地址）
 		return ""
 	}
+	return llmProviderDefaultBaseURL(provider)
 }
 
 // fetchProviderModels 调用 {base}/models（OpenAI 兼容）返回模型 id 列表。

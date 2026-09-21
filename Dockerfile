@@ -6,9 +6,9 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     go mod download -x
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o /build/chiron ./cmd/chiron/
+    CGO_ENABLED=0 go build -mod=mod -o /build/chiron ./cmd/chiron/
 RUN --mount=type=cache,target=/root/.cache/go-build \
-    CGO_ENABLED=0 go build -o /build/chiron-cli ./cmd/chiron-cli/
+    CGO_ENABLED=0 go build -mod=mod -o /build/chiron-cli ./cmd/chiron-cli/
 
 FROM alpine:3.20
 # Security: runtime dependencies + upgrade base image packages

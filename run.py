@@ -226,6 +226,11 @@ class ServiceManager:
     def _build_env(self, service_key: str) -> dict:
         """构建服务环境变量"""
         env = os.environ.copy()
+        # 排除 vendor 目录判定（原因见 build()）：服务进程内若有 go 调用，
+        # 不指定 -mod 同样会被 vendor/ 参考源码目录拖垮。
+        goflags = env.get("GOFLAGS", "")
+        if "-mod=" not in goflags:
+            env["GOFLAGS"] = (goflags + " -mod=mod").strip()
         # 只注入非空默认值：空字符串注入会覆盖 .env / 系统环境中已生效的配置
         # （例如 DEFAULT_ENV 的 JWT_SECRET="" 会覆盖 .env 的 JWT_SECRET，
         # 导致 python-engine 的 pydantic 校验拒绝启动）
@@ -239,8 +244,12 @@ class ServiceManager:
         print(bold("编译 Go Gateway..."))
 
         try:
+            # -mod=mod：排除 vendor 目录判定。本仓库的 vendor/ 下放的是参考源码
+            # （vendor/DeepSeek-Reasonix），没有 Go 依赖清单 vendor/modules.txt，
+            # 而 Go 只要看到 vendor 目录就会按 vendor 模式做一致性检查并直接报错
+            # （inconsistent vendoring）。显式指定 -mod 后改走 module cache。
             result = subprocess.run(
-                ["go", "build", "-o",
+                ["go", "build", "-mod=mod", "-o",
                  "chiron.exe" if is_windows() else "chiron",
                  "./cmd/chiron/"],
                 cwd=str(BASE_DIR),

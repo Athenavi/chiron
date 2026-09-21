@@ -118,6 +118,38 @@ export interface ApiKey {
   remark: string
 }
 
+/** 服务提供商目录分组（与 Go 网关 internal/api/llm_providers.go 的 category 一致） */
+export type LlmProviderCategory = 'international' | 'china' | 'aggregator' | 'self_hosted'
+
+/** 接入协议：openai = OpenAI 兼容，anthropic = Anthropic Messages */
+export type LlmProviderKind = 'openai' | 'anthropic'
+
+/**
+ * 服务提供商目录项 + 运行时状态。
+ * 目录为权威源的只读投影：base_url 是目录默认端点，
+ * base_url_override 是管理端在 DB 里的覆盖值，effective_base_url 是最终生效值。
+ */
+export interface LlmProviderPreset {
+  id: string
+  label: string
+  vendor: string
+  category: LlmProviderCategory
+  kind: LlmProviderKind
+  base_url: string
+  api_key_env: string
+  api_key_prefix: string
+  model_prefixes: string[]
+  docs_url: string
+  cost: number
+  quality: number
+  requires_key: boolean
+  model_discovery: boolean
+  configured: boolean
+  key_count: number
+  base_url_override: string
+  effective_base_url: string
+}
+
 // ── Dashboard ──
 
 export async function getMetrics(): Promise<AdminMetrics> {
@@ -229,7 +261,7 @@ export async function listApiKeys(): Promise<ApiKey[]> {
   return data.data?.keys || []
 }
 
-export async function addApiKey(key: { provider: string; key: string; remark?: string }): Promise<void> {
+export async function addApiKey(key: { provider: string; key: string; remark?: string; base_url?: string }): Promise<void> {
   await api.post('/v1/admin/api-keys', key)
 }
 
@@ -239,6 +271,22 @@ export async function updateApiKey(id: string, updates: Partial<ApiKey>): Promis
 
 export async function deleteApiKey(id: string): Promise<void> {
   await api.delete(`/v1/admin/api-keys/${id}`)
+}
+
+// ── 服务提供商目录 ──
+
+/** 拉取服务提供商目录与各 provider 的配置状态（key 条数 / 生效端点）。 */
+export async function listLlmProviders(): Promise<LlmProviderPreset[]> {
+  const { data } = await api.get('/v1/admin/llm-providers')
+  return data.data?.providers || []
+}
+
+/**
+ * 保存 provider 的端点覆盖（写 system_settings python 分类的 {id}_base_url）。
+ * baseUrl 传空串即删除覆盖、回落目录默认端点。
+ */
+export async function saveLlmProviderBaseURL(id: string, baseUrl: string): Promise<void> {
+  await api.put(`/v1/admin/llm-providers/${encodeURIComponent(id)}`, { base_url: baseUrl })
 }
 
 // ── Settings ──

@@ -1,7 +1,7 @@
 ﻿<script setup lang="ts">
 import { ref, onMounted } from 'vue'
 import { Card, Row, Col, Form, FormItem, InputNumber, Input, InputPassword, Select, Button, Switch, Slider, message } from 'ant-design-vue'
-import { saveSettings, getSettings } from '@/api/admin'
+import { saveSettings, getSettings, listLlmProviders } from '@/api/admin'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -69,6 +69,28 @@ const pythonConfig = ref({
   queue_worker_concurrency: 10,
   cache_l1_capacity: 2048,
 })
+
+/**
+ * 默认 Provider 选项来自服务提供商目录（GET /v1/admin/llm-providers），
+ * 避免把提供商写死在此处；目录不可达时退回当前值，保证下拉不空。
+ */
+const llmProviderOptions = ref<{ label: string; value: string }[]>([])
+
+async function loadLlmProviderOptions() {
+  try {
+    const providers = await listLlmProviders()
+    llmProviderOptions.value = providers.map(p => ({
+      label: `${p.label}（${p.id}）`,
+      value: p.id,
+    }))
+  } catch {
+    llmProviderOptions.value = []
+  }
+  const current = pythonConfig.value.llm_provider
+  if (current && !llmProviderOptions.value.some(o => o.value === current)) {
+    llmProviderOptions.value = [{ label: current, value: current }, ...llmProviderOptions.value]
+  }
+}
 
 const degradationConfig = ref({
   enabled: true,
@@ -390,6 +412,8 @@ onMounted(async () => {
   } finally {
     loading.value = false
   }
+  // 目录驱动的默认 Provider 选项（在配置加载之后，便于回填当前值）
+  await loadLlmProviderOptions()
 })
 </script>
 
@@ -943,18 +967,11 @@ onMounted(async () => {
                 <FormItem label="LLM Provider">
                   <Select
                     v-model:value="pythonConfig.llm_provider"
+                    :options="llmProviderOptions"
+                    show-search
+                    option-filter-prop="label"
                     style="width: 100%"
-                  >
-                    <Select.Option value="openai">
-                      OpenAI
-                    </Select.Option>
-                    <Select.Option value="anthropic">
-                      Anthropic
-                    </Select.Option>
-                    <Select.Option value="deepseek">
-                      DeepSeek
-                    </Select.Option>
-                  </Select>
+                  />
                 </FormItem>
                 <FormItem :label="$t('默认模型')">
                   <Input

@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/athenavi/chiron/config"
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/settings"
 )
@@ -149,15 +150,27 @@ func (h *AdminHandler) AddLLMKey(w http.ResponseWriter, r *http.Request) {
 		Provider string `json:"provider"`
 		Key      string `json:"key"`
 		Remark   string `json:"remark"`
+		// BaseURL 可选：与 key 一并保存该 provider 的端点覆盖（system_settings python 分类）
+		BaseURL string `json:"base_url"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	body.Provider = strings.TrimSpace(body.Provider)
+	body.Provider = strings.ToLower(strings.TrimSpace(body.Provider))
 	body.Key = strings.TrimSpace(body.Key)
+	body.BaseURL = strings.TrimSpace(body.BaseURL)
 	if body.Provider == "" || body.Key == "" {
 		BadRequest(w, "provider and key are required")
+		return
+	}
+	// provider 名会作为 system_settings 键前缀与 Redis keyset 后缀，限定字符集避免注入。
+	if !validLLMProviderName(body.Provider) {
+		BadRequest(w, "invalid provider: only a-z 0-9 . _ - are allowed (max 64 chars)")
+		return
+	}
+	if body.BaseURL != "" && !validProviderBaseURL(body.BaseURL) {
+		BadRequest(w, "invalid base_url: must be an http(s) URL with a host")
 		return
 	}
 
@@ -187,6 +200,22 @@ func (h *AdminHandler) AddLLMKey(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := syncProviderKeyset(r.Context(), h.cfg, body.Provider); err != nil {
 		slog.Warn("sync keyset after add", "provider", body.Provider, "error", err)
+	}
+	// 端点覆盖随 key 一并保存（可选）：写入后引擎侧 base_url 优先取 DB 覆盖。
+	if body.BaseURL != "" {
+		if store := h.ensureSettingsStore(); store != nil {
+			userID := ""
+			if claims := auth.GetClaims(r.Context()); claims != nil {
+				userID = claims.ID
+			}
+			if err := store.SaveConfig(r.Context(), "python",
+				map[string]interface{}{llmProviderBaseURLKey(body.Provider): strings.TrimRight(body.BaseURL, "/")},
+				userID); err != nil {
+				slog.Warn("save provider base url failed", "provider", body.Provider, "error", err)
+			}
+		} else {
+			slog.Warn("settings store unavailable, provider base url not saved", "provider", body.Provider)
+		}
 	}
 	OK(w, map[string]string{"status": "added", "provider": body.Provider})
 }

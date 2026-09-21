@@ -135,7 +135,7 @@ MCP 连接规模 ≈ **引擎副本数 × 活跃用户数 × 每用户 server �
 ```bash
 docker compose config --quiet                 # 配置校验
 python -m alembic heads                       # 期望单一 head
-go build ./... && go vet ./...
+go build -mod=mod ./... && go vet -mod=mod ./...
 python -m pytest python-engine/tests -q
 ```
 

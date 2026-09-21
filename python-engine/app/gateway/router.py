@@ -73,6 +73,28 @@ class GatewayRouter:
         "deepseek": 0.80,
     }
 
+    # 探活模型兜底表（provider → 廉价模型名）。目录项的 probe_model 优先，
+    # 未列出的 provider 不做探活（避免用错模型名触发 404 误开熔断）。
+    PROBE_MODELS: dict[str, str] = {
+        "openai": "gpt-3.5-turbo",
+        "anthropic": "claude-3-haiku-20240307",
+        "deepseek": "deepseek-chat",
+        "google": "gemini-2.0-flash",
+        "xai": "grok-beta",
+        "groq": "llama-3.1-8b-instant",
+        "mistral": "mistral-small-latest",
+        "moonshot": "moonshot-v1-8k",
+        "zhipu": "glm-4-flash",
+        "dashscope": "qwen-turbo",
+        "minimax": "abab6.5s-chat",
+        "baichuan": "Baichuan4",
+        "hunyuan": "hunyuan-lite",
+        "stepfun": "step-1-8k",
+        "openrouter": "openai/gpt-4o-mini",
+        "siliconflow": "Qwen/Qwen2.5-7B-Instruct",
+        "ollama": "llama3.2",
+    }
+
     def __init__(
         self,
         providers: dict[str, LLMProvider],
@@ -81,8 +103,16 @@ class GatewayRouter:
         weights: dict[str, float] | None = None,
         gateway_url: str = "",
         internal_token: str = "",
+        provider_catalog: list[dict] | None = None,
     ):
         self._providers = providers
+        # 服务提供商目录（app/providers/catalog.py，权威源在 Go 网关）：驱动
+        # 「模型名 → provider」匹配与加权路由的成本/质量分；为空时回落内建默认。
+        self._catalog: dict[str, dict] = {
+            str(item.get("id")): item
+            for item in (provider_catalog or [])
+            if isinstance(item, dict) and item.get("id")
+        }
         self._breakers = {name: CircuitBreaker() for name in providers}
         self._latencies: dict[str, float] = {
             name: 500.0 for name in providers
@@ -326,16 +356,30 @@ class GatewayRouter:
             logger.error("Provider %s embed failed: %s", provider.name, e)
             return EmbeddingResponse()
 
+    def _probe_model(self, name: str) -> str:
+        """探活用的廉价模型：目录 probe_model 优先，其次内建兜底表；空 = 不探活。"""
+        preset = self._catalog.get(name) or {}
+        model = str(preset.get("probe_model") or "").strip()
+        if model:
+            return model
+        return self.PROBE_MODELS.get(name, "")
+
     async def health_check(self) -> dict:
         """返回各 Provider 健康状态"""
         result = {}
         for name, provider in self._providers.items():
             state = self._breakers[name].state.value
+            probe_model = self._probe_model(name)
+            if not probe_model:
+                # 目录未给探活模型（自定义端点等）：不探活，避免用错模型名
+                # 触发 404 → 误开熔断；状态交由真实调用反馈。
+                result[name] = {"status": "ok", "circuit": state, "probe": "skipped"}
+                continue
             try:
                 # 尝试廉价模型调用 probe
                 resp = await provider.chat(
                     [ChatMessage(role="user", content="ping")],
-                    model="gpt-3.5-turbo" if name == "openai" else "claude-3-haiku-20240307" if name == "anthropic" else "deepseek-chat",
+                    model=probe_model,
                     max_tokens=1,
                     temperature=0,
                 )
@@ -468,8 +512,26 @@ class GatewayRouter:
         return self._weighted_select(available)
 
     def _find_candidates(self, model: str) -> list[LLMProvider]:
-        """按 model 前缀匹配 provider"""
+        """按 model 匹配候选 provider。
+
+        优先用服务提供商目录的 ``model_prefixes``（新增 provider 只需补目录）；
+        目录未命中或无目录时保留内建前缀规则，行为与旧版一致。
+        """
         model_lower = model.lower()
+        matched: list[LLMProvider] = []
+        for name, preset in self._catalog.items():
+            if name not in self._providers:
+                continue
+            prefixes = preset.get("model_prefixes") or []
+            if any(
+                str(prefix).lower() in model_lower
+                for prefix in prefixes
+                if str(prefix).strip()
+            ):
+                matched.append(self._providers[name])
+        if matched:
+            return matched
+
         if "claude" in model_lower and "anthropic" in self._providers:
             return [self._providers["anthropic"]]
         if "deepseek" in model_lower and "deepseek" in self._providers:
@@ -487,6 +549,22 @@ class GatewayRouter:
             return [self._providers["openai"]]
         return list(self._providers.values())
 
+    def _provider_cost(self, name: str) -> float:
+        """provider 参考成本（$/1M tokens）：目录优先，其次内建默认。"""
+        preset = self._catalog.get(name) or {}
+        cost = preset.get("cost")
+        if isinstance(cost, (int, float)):
+            return float(cost)
+        return self.DEFAULT_COST.get(name, 5.0)
+
+    def _provider_quality(self, name: str) -> float:
+        """provider 参考质量分（0-1）：目录优先，其次内建默认。"""
+        preset = self._catalog.get(name) or {}
+        quality = preset.get("quality")
+        if isinstance(quality, (int, float)):
+            return float(quality)
+        return self.DEFAULT_QUALITY.get(name, 0.5)
+
     def _weighted_select(self, providers: list[LLMProvider]) -> LLMProvider:
         """加权随机选择"""
         if len(providers) == 1:
@@ -494,9 +572,10 @@ class GatewayRouter:
 
         scores = []
         for p in providers:
-            cost = self.DEFAULT_COST.get(p.name, 5.0)
+            # 免费/自托管 provider 成本为 0，取下限避免除零放大权重
+            cost = max(self._provider_cost(p.name), 0.01)
             latency = max(self._latencies.get(p.name, 500.0), 1.0)
-            quality = self.DEFAULT_QUALITY.get(p.name, 0.5)
+            quality = self._provider_quality(p.name)
 
             score = (
                 self._weights["cost"] * (1.0 / cost)

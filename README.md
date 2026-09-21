@@ -72,8 +72,8 @@ docker compose up -d --scale gateway=2 --scale python-engine=2
 ## 常用命令
 
 ```bash
-go build ./...                            # Go 编译
-go test ./...                             # Go 测试
+go build -mod=mod ./...                   # Go 编译（-mod=mod：排除 vendor/ 参考源码目录）
+go test -mod=mod ./...                    # Go 测试
 python -m pytest python-engine/tests -q   # 引擎测试
 python -m pip install -r requirements-migrate.txt   # 迁移依赖（仅迁移需要）
 python -m alembic upgrade head            # 迁移到最新（发布流程/DBA 执行）
@@ -81,6 +81,11 @@ python -m alembic heads                   # 迁移链检查（应只有一个 he
 docker compose config --quiet             # compose 配置校验
 make build                                # 见 Makefile（fmt/lint/test/build） 
 ```
+
+> **`go` 命令请保留 `-mod=mod`**：仓库的 `vendor/` 下放的是参考源码（`vendor/DeepSeek-Reasonix`，
+> 不含 Go 依赖清单 `vendor/modules.txt`），而 Go 只要看到 `vendor/` 目录就会按 vendor 模式做
+> 一致性检查并报 `inconsistent vendoring`。`run.py`、`Makefile`、`Dockerfile` 已在编译入口
+> 显式排除该目录，手动执行 `go build` / `go test` / `go vet` 时同样需要 `-mod=mod`。
 
 ## 目录结构
 

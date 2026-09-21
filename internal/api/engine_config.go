@@ -59,6 +59,9 @@ func EngineConfig(cfg *config.Config) http.HandlerFunc {
 			InternalError(w, "failed to load engine config")
 			return
 		}
+		// 服务提供商目录（权威源在网关侧）：引擎按目录注册 provider，
+		// 避免引擎内硬编码 provider 列表与服务端漂移。
+		m["llm_provider_catalog"] = llmProviderCatalogPayload()
 		OK(w, m)
 	}
 }

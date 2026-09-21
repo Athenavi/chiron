@@ -30,3 +30,6 @@ LICENSE
 # 前端（Go 后端不需要）
 frontend-vue/node_modules/
 frontend-vue/dist/
+
+# 参考源码目录（非 Go 依赖，但会被 Go 误判为 vendor 清单 → 构建失败）
+vendor/

@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     deepseek_api_key: str = ""
     deepseek_base_url: str = "https://api.deepseek.com"
 
+    # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
+    # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
+    # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。
+    llm_provider_catalog: list[dict] = []
+    # 网关「系统设置」python 分类里的 provider 级覆盖（{provider}_base_url /
+    # {provider}_api_key）。Settings 不为每个 provider 声明字段，故集中收集于此。
+    provider_overrides: dict[str, str] = {}
+
     # ── 统一 LLM 配置（与 Go Gateway 共用变量名）──
     llm_provider: str = "openai"
     llm_api_key: str = ""
@@ -337,6 +345,21 @@ def _load_gateway_config() -> dict:
 _db_overrides = _load_gateway_config()
 _allowed = set(Settings.model_fields.keys())
 _merged = {k: v for k, v in _db_overrides.items() if k in _allowed}
+
+# provider 级覆盖（{provider}_base_url / {provider}_api_key）：Settings 不为每个
+# provider 逐个声明字段，故按后缀白名单单独收集到 provider_overrides，
+# 由 app/providers/catalog.py 解析端点/key 时消费。
+_provider_overrides = {
+    k: v
+    for k, v in _db_overrides.items()
+    if k not in _allowed
+    and k.endswith(("_base_url", "_api_key"))
+    and isinstance(v, (str, int, float))
+}
+if _provider_overrides:
+    _merged["provider_overrides"] = {
+        k: str(v) for k, v in _provider_overrides.items() if str(v)
+    }
 
 if _merged:
     settings = settings.model_copy(update=_merged)
