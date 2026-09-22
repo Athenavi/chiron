@@ -68,6 +68,8 @@ class SubagentEvent:
 
     type: str
     run_id: str
+    #: 父会话 id —— 前端 SSE 按它过滤，**必须**带上（缺了会被投给所有订阅者，造成串扰）
+    session_id: str = ""
     parent_run_id: str = ""
     depth: int = 1
     profile: str = ""
@@ -85,6 +87,8 @@ class SubagentEvent:
             "run_id": self.run_id,
             "depth": self.depth,
         }
+        if self.session_id:
+            payload["session_id"] = self.session_id
         if self.parent_run_id:
             payload["parent_run_id"] = self.parent_run_id
         if self.profile:
@@ -108,11 +112,13 @@ class EventSink:
     def __init__(
         self,
         *,
+        session_id: str = "",
         maxsize: int = DEFAULT_QUEUE_MAXSIZE,
         merge_window: float = DEFAULT_MERGE_WINDOW,
         per_run_budget: int = DEFAULT_PER_RUN_BUDGET,
         buffer_bytes: int = DEFAULT_BUFFER_BYTES,
     ):
+        self._session_id = session_id
         self._queue: deque[SubagentEvent] = deque()
         self._maxsize = maxsize
         self._merge_window = merge_window
@@ -263,6 +269,9 @@ class EventSink:
     # ── 内部 ──
 
     def _push(self, event: SubagentEvent, *, terminal: bool = False) -> None:
+        # 会话归属：每条事件的每一份拷贝都要带父会话 id（前端 SSE 靠它路由）
+        if not event.session_id:
+            event.session_id = self._session_id
         # 每秒预算：非终态事件超限即丢弃（终态始终放行）—— 在入队时判定，
         # 比在 drain 时判定更早释放内存，也避免积压后集中丢弃造成的抖动。
         if not terminal and event.type not in TERMINAL_EVENTS:

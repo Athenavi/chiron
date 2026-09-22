@@ -1298,7 +1298,8 @@ async def agent_submit(
         from app.agent.event_sink import EventSink
         from app.tools.context import set_tool_context
 
-        sink = EventSink()
+        # session_id 注入到每条事件里：前端 SSE 按会话过滤，缺了会被投给所有订阅者（串扰）
+        sink = EventSink(session_id=getattr(task, "session_id", "") or "")
         set_tool_context(event_sink=sink)
         merged: asyncio.Queue = asyncio.Queue(maxsize=1024)
 
@@ -1330,8 +1331,12 @@ async def agent_submit(
             async def _persist_subagent_event(payload) -> None:
                 run_id = payload.get("run_id") or ""
                 if run_id:
+                    # ① Stream：供**历史回放**（Redis 过期后由 DB steps 兜底）
                     await runtime_cache.push_event(run_id=run_id,
                                                    tenant=cache_tenant, payload=payload)
+                # ② pub/sub：供**实时**推送 —— 网关订阅后转投 SSE hub。
+                #    缺了它，前端只剩"选中某个 run 时 3s 轮询"这一条路。
+                await runtime_cache.publish_live_event(payload=payload)
 
             sink.attach_persistent(_persist_subagent_event)
 

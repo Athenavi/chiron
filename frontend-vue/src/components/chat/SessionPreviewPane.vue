@@ -35,8 +35,13 @@ const props = withDefaults(
     sessions?: ChatSession[]
     /** 主区域的会话：从下拉里排除，避免两栏显示同一个会话 */
     excludeSessionId?: string
+    /**
+     * 分栏手柄贴在哪条边 —— 由父级布局决定（`ChatView` 的 `is-swapped` 会把参考栏
+     * 换到右侧，此时手柄必须贴左边缘才落在两栏之间）。
+     */
+    handleSide?: 'left' | 'right'
   }>(),
-  { sessions: () => [], excludeSessionId: '' },
+  { sessions: () => [], excludeSessionId: '', handleSide: 'right' },
 )
 
 const emit = defineEmits<{ (e: 'update:sessionId', id: string): void }>()
@@ -82,11 +87,129 @@ function onPick(e: Event) {
   if (id && id !== props.sessionId) emit('update:sessionId', id)
 }
 
+// ── 分栏宽度：可拖拽 + 本地记忆 ────────────────────────────────────────────
+//
+// 此前 `.preview-pane` 根本没设宽度，实际宽度由内容撑开 —— 两栏比例不可调。
+// 现在给一条分隔手柄：拖动改宽度、写入 localStorage、下次进来自动恢复。
+//
+// 刻意**不设默认宽度**：只有用户真的拖过之后才应用固定 px 宽度；没拖过就保持
+// 「内容决定宽度」的现状。这样对既有用户零观感变化，双击重置也有明确语义
+// （回到内容决定宽度，并清掉这条本地记忆）。
+const WIDTH_KEY = 'chiron:split-width:v1'
+const MIN_WIDTH = 260
+/** 上限 = 容器宽度的这个比例：保证主区域永远留得下可用宽度 */
+const MAX_RATIO = 0.6
+
+const paneRef = ref<HTMLElement | null>(null)
+const paneWidth = ref<number | null>(readWidth())
+const resizing = ref(false)
+
+function readWidth(): number | null {
+  try {
+    const raw = localStorage.getItem(WIDTH_KEY)
+    if (!raw) return null
+    const n = Number.parseInt(raw, 10)
+    return Number.isFinite(n) && n > 0 ? n : null
+  } catch {
+    return null // 隐私模式下 localStorage 不可用：退回「内容决定宽度」
+  }
+}
+
+function clampWidth(px: number): number {
+  const container = paneRef.value?.parentElement?.clientWidth || 0
+  const max = container > 0 ? Math.max(MIN_WIDTH, Math.round(container * MAX_RATIO)) : 900
+  return Math.min(Math.max(Math.round(px), MIN_WIDTH), max)
+}
+
+function persistWidth() {
+  if (paneWidth.value === null) return
+  try {
+    localStorage.setItem(WIDTH_KEY, String(paneWidth.value))
+  } catch {
+    /* 存不下就只在本次会话内生效，不影响使用 */
+  }
+}
+
+let startX = 0
+let startWidth = 0
+
+function onResizeStart(e: PointerEvent) {
+  const el = paneRef.value
+  if (!el) return
+  resizing.value = true
+  startX = e.clientX
+  // 以**当前实际宽度**为起点：否则第一次拖动会突然跳到某个默认值
+  startWidth = el.getBoundingClientRect().width
+  // 指针捕获：拖出窗口也不丢事件，且不必往 document 上挂/摘监听
+  ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  e.preventDefault()
+}
+
+function onResizeMove(e: PointerEvent) {
+  if (!resizing.value) return
+  // 手柄贴右边缘时向右拖 = 变宽；贴左边缘时向左拖 = 变宽
+  const delta = props.handleSide === 'left' ? startX - e.clientX : e.clientX - startX
+  paneWidth.value = clampWidth(startWidth + delta)
+}
+
+function onResizeEnd(e: PointerEvent) {
+  if (!resizing.value) return
+  resizing.value = false
+  ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+  persistWidth()
+}
+
+/** 键盘可达（role="separator"）：←/→ 微调 */
+function onResizeKey(e: KeyboardEvent) {
+  if (e.key !== 'ArrowLeft' && e.key !== 'ArrowRight') return
+  e.preventDefault()
+  const base = paneWidth.value ?? paneRef.value?.getBoundingClientRect().width ?? MIN_WIDTH
+  const step = props.handleSide === 'left' ? -16 : 16
+  const next = clampWidth(base + (e.key === 'ArrowLeft' ? -step : step))
+  paneWidth.value = next
+  persistWidth()
+}
+
+/** 双击手柄：回到「内容决定宽度」并清掉本地记忆 */
+function resetWidth() {
+  paneWidth.value = null
+  resizing.value = false
+  try {
+    localStorage.removeItem(WIDTH_KEY)
+  } catch {
+    /* 忽略 */
+  }
+}
+
+const paneStyle = computed(() =>
+  paneWidth.value ? { width: `${paneWidth.value}px`, flex: '0 0 auto' } : {},
+)
+
 defineExpose({ refresh })
 </script>
 
 <template>
-  <aside class="preview-pane">
+  <aside
+    ref="paneRef"
+    class="preview-pane"
+    :class="{ resizing }"
+    :style="paneStyle"
+  >
+    <!-- 分栏手柄：拖动调整参考栏宽度、双击重置（本地记忆见 WIDTH_KEY） -->
+    <div
+      class="pp-resize"
+      :class="`handle-${handleSide}`"
+      role="separator"
+      aria-orientation="vertical"
+      :aria-label="$t('拖动调整宽度，双击重置')"
+      tabindex="0"
+      @pointerdown="onResizeStart"
+      @pointermove="onResizeMove"
+      @pointerup="onResizeEnd"
+      @pointercancel="onResizeEnd"
+      @dblclick="resetWidth"
+      @keydown="onResizeKey"
+    />
     <header class="pp-head">
       <!-- 自主切换：列出其它会话；当前显示的会话固定为第一项，保证下拉始终有值 -->
       <select
@@ -152,6 +275,7 @@ defineExpose({ refresh })
 
 <style scoped>
 .preview-pane {
+  position: relative; /* 分栏手柄的定位锚点 */
   display: flex; flex-direction: column; min-width: 0; height: 100%;
   border-left: 1px solid var(--border-subtle);
   /* 参考栏自己滚动，避免把主会话的滚动位置带跑 */
@@ -182,4 +306,21 @@ defineExpose({ refresh })
 /* MessageList 自带滚动与窗口化，这里只给高度与最小内边距 */
 .pp-body { flex: 1; min-height: 0; display: flex; flex-direction: column; overflow: hidden; padding: 8px 4px; }
 .pp-empty { padding: 16px 12px; color: var(--text-tertiary); font-size: 12px; }
+
+/* 分栏手柄：平时不可见（避免多一条视觉噪声），悬停/拖动/聚焦时才显形。
+   z-index 用 token —— scripts/check-z-index-tokens.mjs 会拦裸数字。 */
+.pp-resize {
+  position: absolute; top: 0; bottom: 0; width: 6px;
+  z-index: var(--z-sticky);
+  cursor: col-resize;
+  background: transparent;
+  transition: background-color var(--dur-fast) var(--ease-out);
+  touch-action: none; /* 触屏上横拖交给手柄，不参与页面滚动 */
+}
+.pp-resize.handle-right { right: -3px; }
+.pp-resize.handle-left { left: -3px; }
+.pp-resize:hover,
+.preview-pane.resizing .pp-resize { background: var(--primary-bg); }
+.pp-resize:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
+.preview-pane.resizing { user-select: none; }
 </style>

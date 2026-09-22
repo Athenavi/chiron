@@ -117,6 +117,22 @@ class SubagentRuntimeCache:
         except Exception as exc:  # noqa: BLE001
             self._degrade("push_event", exc)
 
+    async def publish_live_event(self, *, payload: dict[str, Any]) -> None:
+        """把一条事件**实时**广播给网关（网关订阅后转投 SSE）。
+
+        Stream（:meth:`push_event`）负责「回放」，pub/sub 负责「实时」—— 两者都要：
+        前端只从网关的 `/events` 收推送；没有这条广播，后台子 Agent 的进度就只能靠
+        「选中某个 run 时 3s 轮询」，既不实时、还要求用户先点开那个 run。
+        """
+        if not self.available:
+            return
+        try:
+            await self._redis.publish(
+                rkey("subagent:events"), json.dumps(payload, ensure_ascii=False)
+            )
+        except Exception as exc:  # noqa: BLE001 - 广播失败绝不能影响子 Agent
+            self._degrade("publish_live_event", exc)
+
     async def update_status(
         self,
         *,

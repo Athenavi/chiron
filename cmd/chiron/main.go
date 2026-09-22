@@ -239,6 +239,9 @@ func main() {
 	api.StartBlacklistPubSub(lifecycleCtx)
 	// 跨实例 agent 取消广播订阅
 	api.StartAgentCancelSubscriber(lifecycleCtx)
+	// 子 Agent 事件中继：引擎把事件 pub 到 Redis，这里转投 SSE hub ——
+	// 前端 /events 才可能**实时**看到后台子 Agent 的进度（否则只剩选中 run 时的轮询）。
+	api.StartSubagentEventsRelay(lifecycleCtx, eventHub)
 
 	// P1-1: 启动数据库连接池自动调优（每5分钟检查一次）
 	if db.GlobalDBManager != nil {

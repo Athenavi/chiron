@@ -1984,6 +1984,7 @@ function continueGeneration() {
       :title="splitTitle"
       :sessions="sessions"
       :exclude-session-id="activeSessionId"
+      :handle-side="layoutSwapped ? 'left' : 'right'"
       @update:session-id="splitSessionId = $event"
     />
     <div class="chat-main">

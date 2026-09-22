@@ -102,6 +102,23 @@ const displayRuns = computed(() => {
   return [...runs.value, ...liveRuns.value.filter(r => !apiIds.has(r.run_id))]
 })
 
+/**
+ * 每个 run 的**最新一段实时输出**，用于列表行上的"它现在在做什么"。
+ *
+ * 为什么需要：事件流 tab 只渲染选中的 run —— 用户不点开就只看得到状态标签。
+ * 这里把每个 run 的最后一段内容（尾部 120 字符）挂到行上，未展开也能看到进度在流动。
+ */
+const liveTail = computed(() => {
+  const out: Record<string, string> = {}
+  for (const raw of props.liveEvents || []) {
+    const e = raw as { run_id?: string; content?: string }
+    const id = e?.run_id
+    if (!id || typeof e.content !== 'string' || !e.content) continue
+    out[id] = e.content.replace(/\s+/g, ' ').slice(-120)
+  }
+  return out
+})
+
 const visibleRuns = computed(() => displayRuns.value.filter(r => !hiddenByAncestor(r)))
 
 const selectedRun = computed(() => runs.value.find(r => r.run_id === selectedRunId.value) || null)
@@ -394,6 +411,12 @@ onBeforeUnmount(() => {
             {{ run.status }}
           </Tag>
           <span class="run-profile">{{ run.profile || run.run_id }}</span>
+          <!-- 运行中的实时预览：最后一段输出（点开该 run 可看完整事件流） -->
+          <span
+            v-if="liveTail[run.run_id] && !TERMINAL_STATUSES.has(run.status)"
+            class="run-tail"
+            :title="liveTail[run.run_id]"
+          >{{ liveTail[run.run_id] }}</span>
           <span class="run-usage">↑{{ run.usage?.input_tokens || 0 }}/↓{{ run.usage?.output_tokens || 0 }}</span>
           <span
             v-if="run.redacted_count"
@@ -609,6 +632,12 @@ onBeforeUnmount(() => {
 .twisty.placeholder { cursor: default; }
 .run-profile { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-usage, .run-redacted { font-size: 12px; color: var(--text-tertiary, #8c8c8c); }
+/* 运行中 run 的实时预览：尾巴对齐（看到的永远是最新输出），完整内容点开看 */
+.run-tail {
+  flex: 1 1 auto; min-width: 40px; max-width: 50%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-size: 11px; color: var(--text-tertiary, #8c8c8c);
+}
 
 .output { border-top: 1px solid var(--border-color, rgba(127, 127, 127, 0.24)); padding-top: 10px; }
 .output-head { display: flex; justify-content: space-between; font-weight: 600; }
