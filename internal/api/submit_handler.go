@@ -17,6 +17,7 @@ import (
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/id"
 	"github.com/athenavi/chiron/internal/session"
+	"github.com/redis/go-redis/v9"
 )
 
 // SubmitHandler proxies /submit requests to the Python AI engine.
@@ -104,6 +105,39 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	const storeWriteTimeout = 10 * time.Second
 	storeCtxFor := func() (context.Context, context.CancelFunc) {
 		return context.WithTimeout(context.WithoutCancel(ctx), storeWriteTimeout)
+	}
+
+	// ── 发送侧幂等（#4）──
+	//
+	// 读取侧已有 per-session 缓冲补发（events.go），解决"**断了怎么续**"；
+	// 这里解决另一件事："**重复了怎么不重跑**"。
+	//
+	// 没有它时：网络抖动导致的重试、或用户以为没发出去而重发，都会让引擎把同一条消息
+	// 执行两次 —— 表现是重复写文件、重复计费。有 `client_msg_id` 时用 Redis SETNX 做
+	// 5 分钟窗口去重，命中即**不再触发引擎**；没有该字段（老客户端 / 外部调用）时行为完全不变。
+	//
+	// ID 由前端放进 `llm_config` 一并传（避免为它改 HandleSubmit 的签名），
+	// 取出后立即删除，不让传输层字段污染引擎的任务配置。
+	clientMsgID := ""
+	if v, ok := llmConfig["client_msg_id"].(string); ok {
+		clientMsgID = strings.TrimSpace(v)
+		delete(llmConfig, "client_msg_id")
+	}
+	if clientMsgID != "" && db.Redis != nil && sessionID != "" {
+		dedupKey := db.RedisKey("submit:dedup:" + sessionID + ":" + clientMsgID)
+		// 用 `SET … NX EX`（RedisClient 接口没有类型化的 SetNX，`Do` 是本项目的既有用法）。
+		// 语义要点：**只有"键已存在"才判定重复**；Redis 故障等其它错误一律放行 ——
+		// 去重是优化，不该因为它自己不可用就把用户的正常提交卡住。
+		res := db.Redis.Do(ctx, "SET", dedupKey, "1", "NX", "EX", "300")
+		if err := res.Err(); err != nil {
+			if err == redis.Nil {
+				slog.Info("submit deduplicated (already processing)",
+					"session", sessionID, "client_msg_id", clientMsgID)
+				// 这条消息已在处理中（同一次提交的重试）：直接结束，不再触发引擎。
+				return
+			}
+			slog.Warn("submit dedup unavailable, proceeding", "error", err)
+		}
 	}
 
 	// turn 一致性（000.md 第 14 条）：本轮回合 ID，贯穿消息/工具调用/计费落库，

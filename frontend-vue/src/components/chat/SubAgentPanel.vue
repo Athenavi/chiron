@@ -182,14 +182,62 @@ function dismissCostHint() {
 }
 
 // 实时流里出现了新 run（通常是刚委派的）→ 立刻刷新树，让卡片尽快出现
-/** 面板内部 tab（设计稿第四节：运行 · 输出 · 用量 · 事件流） */
+/** 面板内部 tab（设计稿第四节 + 产物：运行 · 输出 · 用量 · 产物 · 事件流） */
 const SA_TABS = [
   { id: 'runs', label: '运行' },
   { id: 'output', label: '输出' },
   { id: 'usage', label: '用量' },
+  { id: 'artifacts', label: '产物' },
   { id: 'events', label: '事件流' },
 ] as const
 const saTab = ref<(typeof SA_TABS)[number]['id']>('runs')
+
+/**
+ * 选中运行的**写入路径**。
+ *
+ * 后端把 `write_paths`（jsonb）**原样透传为字符串**，形状由这里解析 ——
+ * 解析不了就当作空（观测面不该因为字段形状不合预期而报错）。
+ */
+const artifactPaths = computed<string[]>(() => {
+  const raw = (selectedRun.value as { write_paths?: string } | null)?.write_paths
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw)
+    return Array.isArray(parsed) ? parsed.filter((p): p is string => typeof p === 'string') : []
+  } catch {
+    return []
+  }
+})
+
+/** 按目录分组：一屏几十个路径平铺是读不出来的，按目录归拢后能一眼看出"动了哪几处" */
+const artifactGroups = computed(() => {
+  const groups = new Map<string, string[]>()
+  for (const path of artifactPaths.value) {
+    const idx = path.lastIndexOf('/')
+    const dir = idx > 0 ? path.slice(0, idx) : '.'
+    const list = groups.get(dir) ?? []
+    list.push(path)
+    groups.set(dir, list)
+  }
+  return [...groups.entries()]
+    .map(([dir, paths]) => ({ dir, paths }))
+    .sort((a, b) => a.dir.localeCompare(b.dir))
+})
+
+/** 最近一次已复制的路径（用于就地反馈，避免依赖全局 message 组件） */
+const copiedPath = ref('')
+
+async function copyPath(path: string) {
+  try {
+    await navigator.clipboard.writeText(path)
+    copiedPath.value = path
+    window.setTimeout(() => {
+      if (copiedPath.value === path) copiedPath.value = ''
+    }, 1200)
+  } catch {
+    /* 剪贴板不可用（非安全上下文）：静默，不做假成功提示 */
+  }
+}
 
 watch(() => props.liveEvents?.length || 0, (len, prev) => {
   if (!len || len === prev) return
@@ -385,6 +433,48 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
+    <!-- 产物：这次运行**写入了哪些文件**（`write_paths`）。
+         按目录分组 —— 一屏几十个路径平铺是读不出来的，归拢后能一眼看出"动了哪几处"。
+         刻意不做图表/指标：ZCode 的 ArtifactChart/Metrics 围绕其沙箱产物（带结构化元数据），
+         而我们目前只有路径，先把这个真实有用的最小版做好。 -->
+    <div
+      v-show="saTab === 'artifacts'"
+      class="artifacts"
+    >
+      <template v-if="selectedRun">
+        <div
+          v-if="!artifactPaths.length"
+          class="sa-empty"
+        >
+          {{ $t('这次运行没有写入任何文件') }}
+        </div>
+        <div
+          v-for="group in artifactGroups"
+          :key="group.dir"
+          class="art-group"
+        >
+          <div class="art-dir">{{ group.dir }}</div>
+          <button
+            v-for="path in group.paths"
+            :key="path"
+            type="button"
+            class="art-item"
+            :class="{ copied: copiedPath === path }"
+            :title="path"
+            @click="copyPath(path)"
+          >
+            {{ copiedPath === path ? $t('已复制') : path.split('/').pop() }}
+          </button>
+        </div>
+      </template>
+      <div
+        v-else
+        class="sa-empty"
+      >
+        {{ $t('先在「运行」里选一个子 Agent') }}
+      </div>
+    </div>
+
     <!-- v-if 负责"无选中不渲染"（同时让 TS 把 selectedRun 收窄为非空），
          v-show 负责 tab 切换 —— 两者可并用；只写 v-show 会丢掉类型收窄。 -->
     <div
@@ -549,4 +639,15 @@ onBeforeUnmount(() => {
   color: var(--text-secondary, #595959);
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }
+/* 产物 tab：按目录分组 + 点击复制（空态复用 .sa-empty） */
+.artifacts { display: flex; flex-direction: column; gap: 8px; }
+.art-group { display: flex; flex-direction: column; gap: 2px; }
+.art-dir { color: var(--text-tertiary, #8c8c8c); font-size: 11px; font-family: var(--font-mono); }
+.art-item {
+  padding: 3px 6px; border: none; border-radius: 4px; cursor: pointer;
+  background: transparent; color: var(--text-secondary, #595959);
+  font-size: 12px; font-family: var(--font-mono); text-align: left;
+}
+.art-item:hover { background: var(--surface-2, rgba(127, 127, 127, 0.08)); color: var(--text-primary, #262626); }
+.art-item.copied { color: var(--success, #16a34a); }
 </style>

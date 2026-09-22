@@ -13,6 +13,7 @@ import { getSessionRuntime, putSessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
+import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
@@ -243,6 +244,40 @@ const subagentsOpen = ref(false)
 const statsOpen = ref(false)
 
 /**
+ * 分屏 6a：参考栏绑定的会话 id（空 = 不显示）。
+ *
+ * 先做**只读参考栏** —— 真正"两栏都可写"要把 `activeSessionId` / `items` / 流式连接
+ * 从单值改成**按 pane 归属**（ZCode 为此有 `paneLayoutStore` + `SessionPane` 一整套），
+ * 那是一次状态归属重构。而"边跑子 Agent 边看另一个会话"这个高频需求只读就够，
+ * 且**完全不触碰现有状态模型**（零回归风险）。可写双栏属 6b 之后。
+ */
+const splitSessionId = ref('')
+
+/** 工具栏按钮：开/关参考栏 */
+function toggleSplit() {
+  if (splitSessionId.value) {
+    splitSessionId.value = ''
+    return
+  }
+  // 候选 = 会话列表里第一个**不是当前会话**的会话。
+  // 这里刻意**不用 watch / 不在模块级读 activeSessionId**：`activeSessionId` 与 `sessions`
+  // 在本文件里声明得比本函数更晚，而函数体只在**点击那一刻**求值 ——
+  // 于是既能拿到最新值，又不会触发 TDZ（"used before its declaration"）。
+  const prev = sessions.value.find(s => s.id !== activeSessionId.value)
+  if (!prev) {
+    message.info(t('还没有其它会话可以作为参考'))
+    return
+  }
+  splitSessionId.value = prev.id
+}
+
+/** 参考栏标题（computed 的 getter 同样惰性求值，渲染时 sessions 已就绪） */
+const splitTitle = computed(() => {
+  const s = sessions.value.find(x => x.id === splitSessionId.value)
+  return s?.title || splitSessionId.value.slice(0, 8)
+})
+
+/**
  * 底部预留高度（输入区 + 状态栏）—— 传给浮层当限高基准，
  * 使浮层"向上长高到输入区顶部即止"，从而**不遮挡正在写的草稿**。
  * 取近似常量而非实时测量：多留一些比少留安全，且避免 ResizeObserver 的复杂度。
@@ -302,8 +337,84 @@ listModels()
 const sessions = ref<ChatSession[]>([])
 const activeSessionId = ref('')
 const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value) || null)
-const loading = ref(false)
-const items = ref<ChatItem[]>([])
+/**
+ * ── 多会话运行：运行时状态**按会话**存 ──
+ *
+ * 背景（docs/multi-session-runtime-plan.md）：此前 `loading` / `items` 是**单值**，
+ * 于是切会话必须打断上一个会话（清空 items + 无条件置 loading），
+ * 而后台会话的 SSE 并没有被关闭 —— 它的事件会写进**当前**会话的列表（串台）。
+ *
+ * 手法：**存储按会话，对外仍是 `items` / `loading` 这两个名字** ——
+ * 用 Vue 的**可写 computed** 代理到当前会话的切片。于是既有读写点
+ * （`items.value` 50 处 + `loading.value` 19 处）**一行都不用改**：
+ *   - 读 `items.value`              → 当前会话的数组（同一引用）
+ *   - 写 `items.value = [...]`      → 走 setter，落到当前会话
+ *   - 改内容 `items.value.push(x)`   → 直接改那个数组（引用不变，天然正确）
+ *
+ * `gen`（代际号）：会话运行时被**重建**（重开同一 id、重新建流）时递增。
+ * 只比 `sessionId` 不够 —— 同一个 id 可能对应**前后两次生命周期**，
+ * 旧回调必须靠 gen 才知道"我已经不属于这个会话了"
+ * （参考 DeepSeek-Reasonix 的 `sessionGen` 与 `submissionBindingCurrent`）。
+ */
+interface SessionRunState {
+  /** 该会话的消息列表：切换会话时**不再清空**，后台继续追加 */
+  items: ChatItem[]
+  /** 该会话是否正在生成（切走不影响它继续跑） */
+  loading: boolean
+  /** 代际号：该会话运行时被重建时 +1（用于丢弃旧回调） */
+  gen: number
+}
+
+const runtimes = new Map<string, SessionRunState>()
+
+function runOf(sid: string): SessionRunState {
+  let run = runtimes.get(sid)
+  if (!run) {
+    run = { items: [], loading: false, gen: 1 }
+    runtimes.set(sid, run)
+  }
+  return run
+}
+
+/** 当前视图所属会话的运行时（`activeSessionId` 为空时用占位键，保持既有"无会话"行为） */
+const currentRun = computed(() => runOf(activeSessionId.value || '__none__'))
+
+/**
+ * 写入作用域：SSE 回调在**同步**执行期间，指向"这条事件所属的会话"。
+ *
+ * 为什么安全：JS 单线程 + Vue 的渲染是**异步**的 —— 同步块内设置、返回前复位，
+ * 于是模板渲染**永远看不到**它（绝不可能渲染错会话）。
+ * 换来的是：`onSSEMessage` 内部二十多处 `items.value…` 的写法**一行都不用改**，
+ * 却会写进**正确的**会话 —— 这才是真正修掉串台的那一步。
+ *
+ * （前提：`onSSEMessage` 全程同步，内部没有 `await`。）
+ */
+let writingRun: SessionRunState | null = null
+
+function withRun<T>(run: SessionRunState, fn: () => T): T {
+  const prev = writingRun
+  writingRun = run
+  try {
+    return fn()
+  } finally {
+    writingRun = prev
+  }
+}
+
+/** 读/写都优先走作用域：SSE 回写时指向事件所属会话，其余时刻就是当前视图的会话 */
+const loading = computed<boolean>({
+  get: () => (writingRun ?? currentRun.value).loading,
+  set: (v) => {
+    ;(writingRun ?? currentRun.value).loading = v
+  },
+})
+
+const items = computed<ChatItem[]>({
+  get: () => (writingRun ?? currentRun.value).items,
+  set: (v) => {
+    ;(writingRun ?? currentRun.value).items = v
+  },
+})
 let activeSSE: EventSource | null = null
 // 每个会话最后收到的 SSE 事件 id（服务端 id: 行 → event.lastEventId）。
 // 跨轮重建 SSE 时回传（last_event_id），服务端从缓冲流补发上一轮断线缺口（见 api/index.ts createSSEConnection）
@@ -1067,6 +1178,20 @@ function onGlobalKeydown(e: KeyboardEvent) {
       searchInput?.focus()
     })
   }
+  // Ctrl/Cmd + F：**会话内查找**。
+  // 有意覆盖浏览器的页面查找：应用内查找才回答得出"我在这次会话里什么时候问过什么"，
+  // 而浏览器查找只会匹配**当前已挂载的行** —— 我们用的是窗口化列表，
+  // 未渲染的历史段落它根本扫不到（这正是"找不到明明存在的内容"的来源）。
+  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
+    e.preventDefault()
+    panelOpen.value = true
+    panelView.value = 'trajectory'
+    nextTick(() => {
+      const input = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
+      input?.focus()
+    })
+    return
+  }
   // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
   if (e.key === 'Escape' && loading.value) {
     e.preventDefault()
@@ -1127,7 +1252,11 @@ async function switchSession(id: string) {
   }
   if (id === activeSessionId.value) return
   const mySeq = ++switchSeq.value
-  activeSessionId.value = id; items.value = []; loading.value = true
+  // 多会话运行：切换会话**只换视图** —— 不再清空 items、也不再无条件置 loading。
+  // 后台会话继续跑，它的 items/loading 留在自己的 run state 里；
+  // 切回来时读到的就是它自己的（可能正在增长的）列表。
+  // 顺序要紧：先设 activeSessionId，后面的 currentRun 才指向新会话。
+  activeSessionId.value = id
   // 工具授权模式是会话级状态（存后端 Redis）：切会话时同步拉取，避免沿用上一个会话的模式
   void loadToolsMode(id)
   hasMore.value = false; earliestCursor.value = ''; loadingEarlier.value = false
@@ -1137,7 +1266,12 @@ async function switchSession(id: string) {
     if (mySeq !== switchSeq.value) return
     const data = res.data?.data || res.data
     if (data?.messages) {
-      items.value = mergeHistory(data.messages, data.tool_calls || [])
+      // 该会话正在生成（或流里已累积过内容）时，**不要用拉回的历史覆盖它** ——
+      // 否则"切走再切回"的瞬间会把这段时间里增长的内容冲掉。
+      const run = currentRun.value
+      if (!run.loading && run.items.length === 0) {
+        items.value = mergeHistory(data.messages, data.tool_calls || [])
+      }
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
     }
@@ -1669,7 +1803,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     activeSSE = createSSEConnection(
       sessionId,
-      onSSEMessage,
+      (raw) => withRun(runOf(sessionId), () => onSSEMessage(raw)),
       () => {
         loading.value = false
         stopTurnTimer()
@@ -1685,7 +1819,14 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
         onLastEventId: (id) => { sseLastIdBySession.set(sessionId, id) },
       },
     )
-    const body: any = { content: text, session_id: sessionId, llm_config: buildLlmConfig() }
+    const body: any = {
+      content: text,
+      session_id: sessionId,
+      // 发送侧幂等：同一条消息最多被引擎执行一次（服务端用 Redis SETNX 做 5 分钟去重）。
+      // 必须由**客户端**生成 —— 只有客户端知道"这两次提交是同一条消息"：
+      // 网络重试或用户重发时这个 ID 不变，服务端据此判定"已在处理"而不再重复触发引擎。
+      llm_config: { ...buildLlmConfig(), client_msg_id: crypto.randomUUID() },
+    }
     const ctx = buildContext()
     if (ctx) body.context = ctx
     const resolvedAtts = await resolveAttachmentUrls(attachments)
@@ -1816,6 +1957,14 @@ function continueGeneration() {
 
 <template>
   <div class="chat-layout">
+    <!-- 分屏 6a：**只读参考栏**（左侧）。
+         布局本身是 flex，所以加一栏不需要改任何 CSS；它自己滚动，
+         不会把主会话的滚动位置带跑（与主列表的滚动锚定互不干扰）。 -->
+    <SessionPreviewPane
+      v-if="splitSessionId"
+      :session-id="splitSessionId"
+      :title="splitTitle"
+    />
     <div class="chat-main">
       <div
         v-if="connectionLost"
@@ -1844,6 +1993,17 @@ function continueGeneration() {
                  只有 4 档，比下拉省一次点击和一块浮层。
                  值最终要经后端 app/providers/effort.py **归一化**才可能发送
                  （各家词表不一致，直接透传会 400 —— 我们踩过 UNSUPPORTED_REASONING_EFFORT）。 -->
+            <!-- 分屏 6a：并排参考另一个会话（只读）。
+                 默认取"上一个访问过的会话"，所以不必先做选择器就能立即有用。 -->
+            <button
+              type="button"
+              class="toolbar-mode split-toggle"
+              :class="{ active: !!splitSessionId }"
+              :title="$t('并排参考另一个会话（只读）')"
+              @click="toggleSplit()"
+            >
+              {{ splitSessionId ? $t('收起参考') : $t('分屏') }}
+            </button>
             <button
               type="button"
               class="toolbar-mode toolbar-effort"
