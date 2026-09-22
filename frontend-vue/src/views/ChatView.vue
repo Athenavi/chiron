@@ -14,6 +14,7 @@ import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
+import SessionMap from '../components/chat/SessionMap.vue'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
@@ -1000,6 +1001,12 @@ watch(() => items.value.length, async () => {
 // 侧面板（主从时间线：轨迹 / 会话历史）；上下文面板：桌面端（>1025px）默认展开常驻，≤1024px 折叠为抽屉
 const panelOpen = ref(window.matchMedia('(min-width: 1025px)').matches)
 const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajectory')
+/**
+ * 会话地图：**独立的整屏大窗格**（不是侧栏里的一个小视图 —— 侧栏太窄，
+ * 放不下"空间化排布"这件事本身）。位置稳定性是它的立身之本，
+ * 见 docs/session-map-plan.md §〇。
+ */
+const mapOpen = ref(false)
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
@@ -2479,6 +2486,7 @@ function continueGeneration() {
       :context-chips="contextChips"
       :live-events="subagentLiveEvents"
       @update:view="(v: 'trajectory' | 'sessions' | 'agents' | 'stats') => (panelView = v)"
+      @open-map="mapOpen = true"
       @focus="onTrajectoryFocus"
       @close="panelOpen = false"
       @create="createSession"
@@ -2491,6 +2499,28 @@ function continueGeneration() {
       @remove-context="removeContextChip"
       @clear-context="clearContext"
     />
+
+    <!-- 会话地图：**独立的整屏大窗格**（不是侧栏内的小视图）。
+         位置稳定性是它的立身之本，见 docs/session-map-plan.md §〇 ——
+         这里只负责承载与开关，坐标逻辑都在 useSessionMap.ts 里。 -->
+    <div v-if="mapOpen" class="map-overlay" @click.self="mapOpen = false">
+      <div class="map-frame">
+        <div class="map-head">
+          <span class="map-title">{{ $t('会话地图') }}</span>
+          <span class="map-sub">{{ $t('拖动卡片排布位置 · 空白处平移 · 滚轮缩放') }}</span>
+          <button type="button" class="map-close" @click="mapOpen = false">
+            {{ $t('关闭') }}
+          </button>
+        </div>
+        <div class="map-body">
+          <SessionMap
+            :sessions="sessions"
+            :active-session-id="activeSessionId"
+            @select="mapOpen = false; switchSession($event)"
+          />
+        </div>
+      </div>
+    </div>
 
     <!-- 重命名对话框 -->
     <Modal
@@ -2850,4 +2880,88 @@ function continueGeneration() {
 .save-agent-form { display: flex; flex-direction: column; gap: 6px; }
 .save-agent-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .save-agent-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
+/* ── 会话地图：整屏大窗格 ──
+   侧栏太窄，装不下"空间化排布"；所以地图是独立的整屏视图。
+   z-index 用 --z-viewer（语义即"全屏查看器"），避免裸写数字绕过令牌检查。 */
+.map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-viewer);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--space-4);
+  background: var(--bg-overlay, rgb(0 0 0 / 45%));
+}
+
+.map-frame {
+  display: flex;
+  flex-direction: column;
+  width: min(1600px, 100%);
+  height: 100%;
+  overflow: hidden;
+  border: 1px solid var(--border-default, var(--border-subtle));
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary);
+}
+
+.map-head {
+  flex: none;
+  display: flex;
+  align-items: center;
+  gap: var(--space-3);
+  padding: var(--space-3) var(--space-4);
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.map-title {
+  font-size: var(--fs-md);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+.map-sub {
+  font-size: var(--fs-xs);
+  color: var(--text-tertiary);
+}
+
+.map-close {
+  margin-left: auto;
+  flex: none;
+  padding: 2px 12px;
+  font-size: var(--fs-sm);
+  color: var(--text-secondary);
+  background: var(--bg-secondary);
+  border: none;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+}
+
+.map-close:hover {
+  color: var(--text-primary);
+  background: var(--bg-tertiary, var(--bg-secondary));
+}
+
+/* 画布容器：SessionMap 自身是 flex:1，这里只要给出高度与内边距 */
+.map-body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  padding: var(--space-3);
+}
+
+@media (max-width: 768px) {
+  .map-overlay {
+    padding: 0;
+  }
+
+  .map-frame {
+    border: none;
+    border-radius: 0;
+  }
+
+  .map-sub {
+    display: none;
+  }
+}
 </style>

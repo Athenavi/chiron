@@ -1,14 +1,14 @@
 <script setup lang="ts">
 import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
-import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Input, message } from 'ant-design-vue'
+import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu } from 'ant-design-vue'
 import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
-  ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined, ThunderboltOutlined,
+  ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined,
   ApartmentOutlined, BarChartOutlined,
 } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
-import { api, listTools, quickExecute } from '../../api'
+import { api, listTools } from '../../api'
 import type { ToolInfo } from '../../utils/toolList'
 import type { ContextChip } from './contextChips'
 import { formatRelativeTime } from './chat-types'
@@ -23,8 +23,8 @@ const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
   open: boolean
-  /** 面板视图：trajectory（主，当前会话提问轨迹）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计） */
-  view: 'trajectory' | 'sessions' | 'agents' | 'stats'
+  /** 面板视图：trajectory（主）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计）/ map（会话地图，见 docs/session-map-plan.md） */
+  view: 'trajectory' | 'sessions' | 'agents' | 'stats' | 'map'
   sessions: ChatSession[]
   activeSessionId: string
   userName?: string
@@ -41,6 +41,8 @@ const emit = defineEmits<{
   (e: 'focus', index: number): void
   (e: 'close'): void
   (e: 'update:view', view: 'trajectory' | 'sessions' | 'agents' | 'stats'): void
+  /** 打开会话地图（整屏大窗格；由 ChatView 渲染，不在侧栏内嵌） */
+  (e: 'open-map'): void
   (e: 'create'): void
   (e: 'switch', id: string): void
   (e: 'delete', id: string): void
@@ -116,32 +118,6 @@ function chipOrder(chip: ContextChip): number {
   const sameType = props.contextChips.filter(c => c.type === chip.type)
   if (sameType.length < 2) return 0
   return sameType.findIndex(c => c.value === chip.value) + 1
-}
-
-// ── 快捷操作：发起统一任务（复用快速命令：创建 uni 会话 → 跳转 /chat?task=）──
-const unifiedTaskInput = ref('')
-const launchingUnified = ref(false)
-
-async function launchUnified() {
-  const text = unifiedTaskInput.value.trim()
-  if (!text || launchingUnified.value) return
-  launchingUnified.value = true
-  try {
-    // 与 WorkstationNav 一致：客户端生成 uni_ 会话 id → quick-execute 创建 → 跳转统一会话
-    const sessionId = `uni_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const res = await quickExecute({ message: text, session_id: sessionId, mode: 'auto' })
-    const q: Record<string, string> = { task: sessionId }
-    // 携带当前上下文（kb/agent/skill/workflow）到统一会话
-    for (const c of props.contextChips || []) q[c.type] = c.value
-    if (res?.success === false) q.error = res.error || 'execution failed'
-    unifiedTaskInput.value = ''
-    await router.push({ path: '/chat', query: q })
-    message.success(tr('任务已提交，正在对话页展示结果'))
-  } catch (e: any) {
-    message.error('发起统一任务失败: ' + (e?.message || tr('网络错误')))
-  } finally {
-    launchingUnified.value = false
-  }
 }
 
 // ── 可用工具（/v1/tools：含 MCP/插件注入的代理工具，source='mcp'）──
@@ -349,6 +325,17 @@ function pickSession(id: string) {
   >
     <!-- 顶部：会话选择器（主从钻取入口）+ 关闭 -->
     <div class="panel-toolbar">
+      <!-- 会话地图入口：地图是**独立的整屏大窗格**（侧栏太窄，装不下"空间记忆"），
+           所以这里只把请求抛给 ChatView，不在侧栏内渲染画布。 -->
+      <button
+        v-if="view === 'sessions'"
+        type="button"
+        class="session-back"
+        title="打开会话地图"
+        @click="emit('open-map')"
+      >
+        地图
+      </button>
       <button
         v-if="view === 'trajectory'"
         type="button"
@@ -398,43 +385,6 @@ function pickSession(id: string) {
           />
         </span>
       </div>
-    </div>
-
-    <!-- 中部：快捷操作（发起统一任务 / 清空上下文） -->
-    <div class="panel-quick">
-      <span class="quick-title">{{ $t('快捷操作') }}</span>
-      <div class="quick-task-row">
-        <Input
-          v-model:value="unifiedTaskInput"
-          size="small"
-          class="quick-task-input"
-          :placeholder="$t('输入任务，发起统一执行…')"
-          :disabled="launchingUnified"
-          @press-enter="launchUnified"
-        />
-        <Button
-          size="small"
-          type="primary"
-          class="quick-launch-btn"
-          :loading="launchingUnified"
-          :disabled="!unifiedTaskInput.trim()"
-          @click="launchUnified"
-        >
-          <template #icon>
-            <ThunderboltOutlined />
-          </template>
-          {{ $t('发起') }}
-        </Button>
-      </div>
-      <button
-        type="button"
-        class="quick-clear"
-        :disabled="!contextChips.length"
-        :title="$t('清空知识库/Agent/技能/工作流上下文')"
-        @click="emit('clear-context')"
-      >
-        {{ $t('清空上下文') }}
-      </button>
     </div>
 
     <!-- 中部：可用工具（/v1/tools）——把 MCP/插件注入的工具从"看不见"变成"看得见"。
@@ -916,21 +866,6 @@ function pickSession(id: string) {
 .ctx-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-chip-remove { font-size: 10px; color: var(--text-tertiary); cursor: pointer; }
 .ctx-chip-remove:hover { color: var(--danger, #ef4444); }
-
-/* ── 快捷操作：发起统一任务 + 清空上下文 ── */
-.panel-quick { flex: none; padding: 10px 12px; border-bottom: 1px solid var(--border); }
-.quick-title { display: block; font-size: 11px; color: var(--text-tertiary); margin-bottom: 6px; }
-.quick-task-row { display: flex; gap: 6px; }
-.quick-task-input { flex: 1; min-width: 0; }
-.quick-task-input :deep(input) { font-size: 12px; }
-.quick-launch-btn { flex: none; }
-.quick-clear {
-  margin-top: 6px; padding: 0; border: none; background: none;
-  font-size: 11px; color: var(--text-tertiary); cursor: pointer;
-  transition: color 0.15s ease;
-}
-.quick-clear:hover:not(:disabled) { color: var(--danger, #ef4444); }
-.quick-clear:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ── 可用工具：让 MCP/插件注入的工具在对话页可见（默认收起）── */
 .panel-tools { flex: none; border-bottom: 1px solid var(--border); }
