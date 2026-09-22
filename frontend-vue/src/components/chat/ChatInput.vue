@@ -83,6 +83,16 @@ onMounted(async () => {
   try {
     modelsLoading.value = true
     models.value = await listModels()
+    // 模型默认兜底：列表到达时若还没有选中任何模型，**自动选第一个可用模型**
+    // 并把选择上报给父组件。
+    // 否则新建 / 刷新会话时选择器会一直是"未选中"状态（`props.model` 初始为空，
+    // 而那个 watch 只在父组件回传时才同步），提交时也不带 model →
+    // 落到后端默认模型 → 一旦默认模型被上游下架，就报
+    // "Upstream request failed: Model is unavailable."（见 logs/python-engine.stderr.log）。
+    if (!modelValue.value && models.value.length) {
+      modelValue.value = models.value[0].name
+      emit('model-change', modelValue.value)
+    }
   } catch {
     models.value = []
   } finally {

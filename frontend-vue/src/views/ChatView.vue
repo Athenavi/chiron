@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
+import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { Button, Input, Modal, Checkbox, Alert, message, Dropdown } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
@@ -330,7 +330,16 @@ const contextWindow = computed(() => {
   return availableModels.value.find(m => m.name === name)?.context_window || null
 })
 listModels()
-  .then(models => { availableModels.value = models })
+  .then(models => {
+    availableModels.value = models
+    // 模型默认兜底：列表就绪时若还没有选中任何模型，**自动选第一个可用模型**。
+    // 否则 `llmModel` 会一直是空 —— 提交时不携带 model，落到**后端默认模型**，
+    // 而默认模型一旦被上游下架就会报 "Upstream request failed: Model is unavailable."。
+    // 注意顺序：这必须发生在列表到达之后（切换会话时的第三级回落依赖它）。
+    if (!llmModel.value && models.length) {
+      llmModel.value = models[0].name
+    }
+  })
   .catch(() => { availableModels.value = [] })
 
 // ── 会话状态 ──
@@ -365,13 +374,20 @@ interface SessionRunState {
   gen: number
 }
 
-const runtimes = new Map<string, SessionRunState>()
+/**
+ * ⚠️ 必须是**响应式** Map：`items` / `loading` 是从这里派生的 computed，
+ * 而流式输出靠 `items.value.push(...)` 追加 —— 底层若不是响应式的，push 不会触发
+ * 任何重渲染，表现为"流式期间界面不动、消息结束后一次性跳出全部内容"。
+ */
+const runtimes = reactive(new Map<string, SessionRunState>())
 
 function runOf(sid: string): SessionRunState {
   let run = runtimes.get(sid)
   if (!run) {
-    run = { items: [], loading: false, gen: 1 }
-    runtimes.set(sid, run)
+    runtimes.set(sid, { items: [], loading: false, gen: 1 })
+    // 必须取回 `runtimes.get()` 的**代理**，而不是刚构造的原始对象 ——
+    // 原始对象不在响应式系统里，后续 push 不会触发更新。
+    run = runtimes.get(sid)!
   }
   return run
 }
@@ -389,30 +405,35 @@ const currentRun = computed(() => runOf(activeSessionId.value || '__none__'))
  *
  * （前提：`onSSEMessage` 全程同步，内部没有 `await`。）
  */
-let writingRun: SessionRunState | null = null
+// ⚠️ 必须是 `shallowRef`（而不是普通变量）：`items` / `loading` 是 computed，
+// 而 computed **只追踪求值过程中读到的响应式数据** —— 普通变量读不到、也不会令其失效，
+// 于是 SSE 写回时 computed 会命中缓存、拿回**当前会话**的数组（作用域形同失效）。
+// 用 shallowRef 后它参与依赖追踪；又因为 withRun 在同一同步块内设置并复位，
+// 而 Vue 的渲染是**异步**的，净变化为零 —— 不会引起多余渲染。
+const writingRun = shallowRef<SessionRunState | null>(null)
 
 function withRun<T>(run: SessionRunState, fn: () => T): T {
-  const prev = writingRun
-  writingRun = run
+  const prev = writingRun.value
+  writingRun.value = run
   try {
     return fn()
   } finally {
-    writingRun = prev
+    writingRun.value = prev
   }
 }
 
 /** 读/写都优先走作用域：SSE 回写时指向事件所属会话，其余时刻就是当前视图的会话 */
 const loading = computed<boolean>({
-  get: () => (writingRun ?? currentRun.value).loading,
+  get: () => (writingRun.value ?? currentRun.value).loading,
   set: (v) => {
-    ;(writingRun ?? currentRun.value).loading = v
+    ;(writingRun.value ?? currentRun.value).loading = v
   },
 })
 
 const items = computed<ChatItem[]>({
-  get: () => (writingRun ?? currentRun.value).items,
+  get: () => (writingRun.value ?? currentRun.value).items,
   set: (v) => {
-    ;(writingRun ?? currentRun.value).items = v
+    ;(writingRun.value ?? currentRun.value).items = v
   },
 })
 let activeSSE: EventSource | null = null
@@ -549,7 +570,9 @@ const modeOptions = [
   { label: 'PTC', value: 'ptc' },
   { label: t('创意'), value: 'creative' },
 ]
-const mode = ref('normal')
+/** 默认模式：会话没记（或记了个不认识的值）时回落到它 —— **绝不能沿用上一个会话的模式** */
+const DEFAULT_MODE = 'normal'
+const mode = ref(DEFAULT_MODE)
 
 // ── 模型路由：会话 llm_config.model（空 = 后端默认路由） ──
 const llmModel = ref('')
@@ -1257,6 +1280,16 @@ async function switchSession(id: string) {
   // 切回来时读到的就是它自己的（可能正在增长的）列表。
   // 顺序要紧：先设 activeSessionId，后面的 currentRun 才指向新会话。
   activeSessionId.value = id
+  // 切会话要**清掉上一个会话遗留的待审批 / 待答问题**（对齐 Reasonix 的
+  // "tab activation clears a stale approval already stored on the target tab"）：
+  // 它们是**那个**会话在等用户操作，显示在当前会话上会让人误以为"在等我处理"。
+  pendingApprovals.value = []
+  pendingQuestions.value = []
+  // `activeSSE` 只应指向"**本会话**正在跑的流"。本会话没在跑就置空 ——
+  // 否则在会话 B 里点"停止"会去停 A 仍在跑的流。
+  // （切回正在跑的会话时这里会置空、因而暂时停不了它：**宁可停不了，也不能停错**；
+  //   完整版是给每个会话各自持有连接，属下一批。）
+  if (!currentRun.value.loading) activeSSE = null
   // 工具授权模式是会话级状态（存后端 Redis）：切会话时同步拉取，避免沿用上一个会话的模式
   void loadToolsMode(id)
   hasMore.value = false; earliestCursor.value = ''; loadingEarlier.value = false
@@ -1286,12 +1319,25 @@ async function switchSession(id: string) {
       // 生效值 + 来源：后端已算好解析链，前端只显示（见 runtimeResolved 的注释）
       runtimeResolved.value = view.resolved || null
     } catch { /* 不可用时静默回落 llm_config */ }
+    // 模式兜底：会话没记、或记了个不认识的值时，**必须回落到默认模式**。
+    // 过去这里只在"合法"时才赋值 → 非法时**沿用上一个会话的 mode**，
+    // 表现为"切了会话，模式看着是选中的，其实是别的会话的设置"。
     const savedMode = rt?.mode || cfg?.mode
-    if (typeof savedMode === 'string' && modeOptions.some(o => o.value === savedMode)) {
-      mode.value = savedMode
-    }
-    llmModel.value = (typeof rt?.model === 'string' && rt.model)
-      || (typeof cfg?.model === 'string' ? cfg.model : '')
+    mode.value =
+      typeof savedMode === 'string' && modeOptions.some(o => o.value === savedMode)
+        ? savedMode
+        : DEFAULT_MODE
+    // 模型兜底（**这一条就是 "Model is unavailable" 的直接原因**）：
+    // 会话没记模型时，过去会留空 → 提交不带 model → 落到**后端默认模型**；
+    // 而一旦后端默认模型被上游下架（日志：opencode-go 的模型数 37→33），
+    // 就会直接报 "Upstream request failed: Model is unavailable."。
+    // 所以按「会话记录 → 会话 llm_config → 可用模型列表第一个 → 空」四级回落，
+    // 绝不把空值当成"可以用后端默认"来提交。见 docs/multi-session-runtime-plan.md。
+    llmModel.value =
+      (typeof rt?.model === 'string' && rt.model)
+      || (typeof cfg?.model === 'string' && cfg.model)
+      || availableModels.value[0]?.name
+      || ''
     // 已激活能力（问题 3）：runtime.context 是单一事实源 —— 把 URL 未带入、
     // 但会话上已保存的激活项（知识库/Agent/技能/插件/记忆分类）补进侧栏展示，
     // 否则刷新后界面上就看不到"这次对话激活了什么"。

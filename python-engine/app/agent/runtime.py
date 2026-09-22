@@ -702,8 +702,15 @@ class AgentRuntime:
                         user_id=task.user_id,
                         session_id=task.session_id or "",
                     )
+                    # 注意：`MemoryService.recall` 的签名是
+                    # `recall(tenant_id, user_id, query="", top_k=, exclude_turn_range=, slots=)`
+                    # —— **没有** `scope` 参数（`scope=` 是 `SummaryStore.recall` 的 API）。
+                    # 过去这里传 `scope=` 必然抛 TypeError，又被记忆的 fail-soft
+                    # `except` 吞成一行日志 "Memory recall failed (non-blocking)"，
+                    # 于是**记忆召回长期静默失效**、界面上完全看不出来。
                     recalled = await self._memory.recall(
-                        scope=scope,
+                        scope.tenant_id,
+                        scope.user_id,
                         query=task.content,
                     )
                     if recalled.has_content:
