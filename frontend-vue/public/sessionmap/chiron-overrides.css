@@ -1,0 +1,101 @@
+/* Chiron 对会话地图的覆盖样式
+ * ============================
+ * 上游的 app.js 与 styles.css **保持零改动**（那是可对拍、可跟进上游的资产），
+ * Chiron 侧的一切样式调整都集中在这个文件里，并在此说明用途。
+ */
+
+/* ── 1. 画布占满屏幕 ──
+   上游的 .synapse-shell 是两列 grid（第一列固定 var(--sidebar-width) = 280px 给侧栏）。
+   我们移除了侧栏 DOM，但那一列仍空占着 280px，所以要把栅格塌成一列，
+   并把原本定位在第 2 列的 .topbar / .main-stage 挪到唯一那一列。 */
+.synapse-shell {
+  grid-template-columns: minmax(0, 1fr);
+}
+.topbar,
+.main-stage {
+  grid-column: 1;
+}
+
+/* ── 2. 顶栏工具（「强制刷新」「导入会话」）──
+   这两个按钮原本在左侧边栏，侧栏移除后改为固定在左上角：
+   - 居中偏上的 .view-switch 与右上角的 .canvas-controls 都在用，左上角是空的；
+   - 位置也贴近它原来的所在（左侧），用户不用重新找。 */
+.map-tools {
+  position: fixed;
+  z-index: 81;
+  top: 12px;
+  left: 16px;
+  display: flex;
+  gap: 6px;
+}
+.map-tools .new-workspace {
+  width: auto;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+/* ── 3. 导入会话面板（多选）──
+   侧栏移除后，画布上"挑一个已有会话"的入口只剩这里，所以做成覆盖层，
+   列出所有"还没在画布上"的会话（准则 6：画布内不重复）。 */
+.import-picker {
+  position: fixed;
+  z-index: 200;
+  top: 50%;
+  left: 50%;
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 32px));
+  max-height: min(560px, calc(100vh - 80px));
+  transform: translate(-50%, -50%);
+  border: 1px solid #d8e0e8;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 12px 32px rgba(33, 48, 67, .18);
+}
+.import-picker-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  padding: 12px 14px;
+  border-bottom: 1px solid #eef0f2;
+  font-size: 13px;
+  font-weight: 650;
+  color: #111827;
+}
+.import-picker-list {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 6px 4px;
+}
+.import-picker-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border-radius: 6px;
+  font-size: 13px;
+  color: #374151;
+  cursor: pointer;
+}
+.import-picker-row:hover { background: #f3f5f7; }
+.import-picker-row span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.import-picker-empty { padding: 18px 14px; color: #6b7280; font-size: 13px; }
+.import-picker-foot {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex: none;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid #eef0f2;
+}
+.import-picker-foot .count { color: #6b7280; font-size: 12px; }
+.import-picker-foot .actions { display: flex; gap: 6px; }
+.import-picker-backdrop {
+  position: fixed;
+  z-index: 190;
+  inset: 0;
+  background: rgba(17, 24, 39, .28);
+}

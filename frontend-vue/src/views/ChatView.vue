@@ -1186,6 +1186,12 @@ window.addEventListener('message', (e: MessageEvent) => {
     void pushMapState()
     return
   }
+  // 地图顶部的「对话」按钮 → 回到对话页（关掉浮层）。
+  // 上游那个按钮是给它的宿主用的（data-action="close"），adapter 把它转成这条消息。
+  if (data.type === 'synapse:close-map') {
+    synapseMapOpen.value = false
+    return
+  }
   // 点卡片 → 切会话并关掉浮层
   if (data.type === 'synapse:activate-session' && data.sessionId) {
     synapseMapOpen.value = false
@@ -2664,13 +2670,6 @@ function continueGeneration() {
         src="/sessionmap/index.html"
         :title="$t('会话地图')"
       />
-      <button
-        type="button"
-        class="synapse-map-close"
-        @click="synapseMapOpen = false"
-      >
-        {{ $t('关闭') }}
-      </button>
     </div>
 
     <!-- 重命名对话框 -->
@@ -3072,17 +3071,4 @@ function continueGeneration() {
   height: 100%;
   border: 0;
 }
-.synapse-map-close {
-  position: absolute;
-  top: var(--space-3);
-  right: var(--space-4);
-  padding: 4px var(--space-3);
-  font-size: var(--fs-sm);
-  color: var(--text-primary);
-  background: var(--bg-elevated);
-  border: 1px solid var(--border-default);
-  border-radius: var(--radius-sm);
-  cursor: pointer;
-}
-.synapse-map-close:hover { border-color: var(--accent); color: var(--accent); }
 </style>

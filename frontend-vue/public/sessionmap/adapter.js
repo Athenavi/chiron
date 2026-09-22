@@ -180,7 +180,17 @@
   // 便签内容、坐标、隐藏状态、分组名都带过去；搬完打标记，避免每次打开都重放。
   var LEGACY_KEY = 'chiron.sessionMap.v2'
 
+  // 迁移**只做一次**。没有这个标记时，只要画布被清空（例：删掉所有会话、
+  // 或清掉热层），下一次打开就会把旧版 localStorage 里的节点重新灌回来 ——
+  // 表现为"删掉的会话反复出现"（本项目实际踩过）。
+  var MIGRATED_FLAG = 'chiron:sessionmap:migrated'
+
   function migrateLegacy(workspaceId) {
+    try {
+      if (localStorage.getItem(MIGRATED_FLAG)) return null
+    } catch (e) {
+      return null // 读不到 localStorage 就不迁移，避免行为不确定
+    }
     var raw = null
     try { raw = localStorage.getItem(LEGACY_KEY) } catch (e) { return null }
     if (!raw) return null
@@ -250,6 +260,14 @@
         body: JSON.stringify(payload),
       })
         .catch(function () { /* 保存失败也要让用户先看到内容 */ })
+        .then(function () {
+          // 落库成功才算迁移完成：失败不打标记，下次还能重试
+          try {
+            localStorage.setItem(MIGRATED_FLAG, '1')
+            // 旧键用完即删：留着它等于留一个永久污染源（清空画布就会被重新灌回）
+            localStorage.removeItem(LEGACY_KEY)
+          } catch (e) { /* 隐私模式忽略 */ }
+        })
         .then(function () { return hydrateNodes(ws.id, payload.nodes, payload.name, payload.viewport) })
     })
   }
@@ -302,6 +320,11 @@
       if (method === 'GET') {
         return jsonFetch(API + '/workspaces').then(unwrap).then(function (d) {
           var list = (d && d.workspaces) || []
+          // ── 唯一画布 ──
+          // 上游的"工作区/多画布"是它的宿主模型；Chiron 里地图是会话的**投影**，
+          // 不需要多份布局 —— 每个用户只认一张（后端 ListWorkspaces 已按 updated_at DESC
+          // 排序，取第一个即最近使用的那张）。后端仍保留多画布能力，将来要"多视图"不必改数据层。
+          if (list.length > 1) list = [list[0]]
           // 没有画布就建一个默认的：让"第一次打开就是可用状态"
           if (!list.length) {
             return jsonFetch(API + '/workspaces', { method: 'POST', body: JSON.stringify({ name: '我的地图' }) })
@@ -454,7 +477,7 @@
    * 取舍：用户手动删掉的节点会被重新摆回（因为我们只按"有没有"判断）。
    * "新会话看不见"比"删掉的又冒出来"更难受，所以先这样（要彻底解决需记录手动删除集合）。
    */
-  function placeSession(session) {
+  function placeSession(session, skipReload) {
     if (!session || !session.id || !currentWorkspaceId) return
     var snap = snapshots[currentWorkspaceId]
     if (!snap) return
@@ -472,7 +495,8 @@
     })
     snapshots[currentWorkspaceId] = snap
     scheduleSave(currentWorkspaceId)
-    if (typeof window.openWorkspace === 'function') {
+    // 批量导入时由调用方统一重拉一次，避免 N 次 openWorkspace
+    if (!skipReload && typeof window.openWorkspace === 'function') {
       window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
     }
   }
@@ -570,5 +594,76 @@
       window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
     }
   })
+  /**
+   * 把"会话列表里还不在地图上的会话"批量导入当前画布。
+   *
+   * 为什么是导入而不是创建：会话地图是会话的**投影/引用**（准则 2），不是创建源。
+   * 新建会话在对话页做，地图只负责把已存在的会话摆上来。
+   */
+  /**
+   * 列出"可以导入到当前画布"的会话（已在画布上的不算 —— 准则 6：画布内不重复）。
+   *
+   * 给导入面板用：面板只负责渲染与勾选，取数与去重都在这里，
+   * 免得 app.js 再实现一遍"哪些已经在地图上了"。
+   */
+  window.synapseListImportable = function () {
+    if (!currentWorkspaceId) return Promise.resolve([])
+    var snap = snapshots[currentWorkspaceId]
+    var existing = {}
+    ;((snap && snap.threads) || []).forEach(function (t) {
+      if (t.dshSessionId) existing[t.dshSessionId] = true
+    })
+    return jsonFetch(CONV + '?per_page=100')
+      .then(unwrap)
+      .then(function (list) {
+        if (!Array.isArray(list)) return []
+        return list
+          .filter(function (s) { return s && s.id && !existing[s.id] })
+          .map(function (s) { return { id: s.id, title: s.title || '(未命名会话)' } })
+      })
+  }
+  window.synapseImportSessions = function (ids) {
+    if (!currentWorkspaceId) return Promise.resolve(0)
+    return jsonFetch(CONV + '?per_page=100')
+      .then(unwrap)
+      .then(function (list) {
+        if (!Array.isArray(list)) return 0
+        var snap = snapshots[currentWorkspaceId]
+        var before = (snap && snap.threads ? snap.threads.length : 0)
+        // 指定了 ids 就只导入那些；否则导入全部未入图的（向后兼容）
+        var want = Array.isArray(ids) && ids.length ? new Set(ids) : null
+        list.forEach(function (s) {
+          if (!s || !s.id) return
+          if (want && !want.has(s.id)) return
+          placeSession(s, true)
+        })
+        var after = (snapshots[currentWorkspaceId] && snapshots[currentWorkspaceId].threads
+          ? snapshots[currentWorkspaceId].threads.length : 0)
+        // 有新增才重拉（保持相机），并触发一次整体保存
+        if (after !== before) {
+          scheduleSave(currentWorkspaceId)
+          if (typeof window.openWorkspace === 'function') {
+            window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
+          }
+        }
+        return after - before
+      })
+  }
+  // ── 顶部「对话」按钮 → 回到对话页 ──
+  //
+  // 上游顶栏中央有个「对话 / 会话地图」切换，其中「对话」原本是通知它的宿主切视图的
+  // （data-action="close"）。这里接成"告诉 Chiron 宿主关掉地图浮层、回到对话页"，
+  // 于是地图自己就能提供返回入口，不必再靠浮层右上角那个关闭按钮。
+  // 用捕获阶段监听：先于 app.js 的处理，不与它自己的逻辑打架。
+  document.addEventListener('click', function (event) {
+    var el = event.target instanceof Element ? event.target.closest('[data-action="close"]') : null
+    if (!el) return
+    if (window.parent !== window) {
+      window.parent.postMessage(
+        { source: 'chiron-sessionmap', type: 'synapse:close-map' },
+        window.location.origin
+      )
+    }
+  }, true)
   console.info('[sessionmap] Chiron 缝合层已就绪：REST → /v1/session-map, RPC → /v1/conversations')
 })()

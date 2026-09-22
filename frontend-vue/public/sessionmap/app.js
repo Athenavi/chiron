@@ -1226,8 +1226,11 @@ function render() {
   const canvasControls = state.mode === 'canvas' && (threads.length > 0 || state.draft?.kind === 'new') ? `<div class="canvas-controls"><button data-action="layout" title="整理节点" aria-label="整理节点"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><rect x="2.5" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="9" y="2.5" width="4.5" height="4.5" rx="1"/><rect x="2.5" y="9" width="4.5" height="4.5" rx="1"/><rect x="9" y="9" width="4.5" height="4.5" rx="1"/></svg>整理</button><button data-action="focus-active" title="定位到当前会话" aria-label="定位到当前会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><circle cx="8" cy="8" r="3.2"/><path d="M8 1.5v2.6M8 11.9v2.6M1.5 8h2.6M11.9 8h2.6"/></svg>定位</button><button data-action="zoom-out" aria-label="缩小" title="缩小"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M3.5 8h9"/></svg></button><span>${Math.round(state.zoom * 100)}%</span><button data-action="zoom-in" aria-label="放大" title="放大"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"><path d="M8 3.5v9M3.5 8h9"/></svg></button></div>` : ''
   const detailAvailable = currentThread() !== null
   const canvasTabs = `<nav class="canvas-tabs" aria-label="会话地图视图"><button class="${state.mode === 'canvas' ? 'active' : ''}" data-action="show-canvas">地图</button><button class="${state.mode === 'thread' ? 'active' : ''}" data-action="show-thread" data-thread="${state.activeId ?? ''}" ${detailAvailable ? '' : 'disabled'}>详情</button></nav>`
-  app.innerHTML = `<main class="synapse-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><aside class="sidebar"><div class="sidebar-brand-row"><div class="brand" aria-label="会话地图"><svg class="brand-mark" aria-hidden="true" viewBox="0 0 32 32" fill="none"><path d="M9 10.5 16 7l7 3.5M9 10.5v8L16 22m0-15v15m7-11.5v8L16 22"/><circle cx="9" cy="10" r="2.5"/><circle cx="23" cy="10" r="2.5"/><circle cx="16" cy="23" r="2.5"/></svg><strong>会话地图</strong></div><button class="sidebar-toggle" type="button" data-action="toggle-sidebar" aria-label="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}" title="${state.sidebarCollapsed ? '展开侧边栏' : '收起侧边栏'}"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.75" y="1.75" width="12.5" height="12.5" rx="2.25"/><path d="M6 2v12"/></svg></button></div><button class="new-workspace" type="button" data-action="create-canvas"><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/><path d="M8 8.5v3M6.5 10h3"/></svg><span>新建画布</span></button>
-<button class="new-workspace" type="button" data-action="refresh-canvas"><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13 3.5V8H8.5"/></svg><span>强制刷新</span></button><button class="new-workspace" type="button" data-action="create-session" ${state.draft !== null ? 'disabled' : ''}><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="6.25"/><path d="M8 4.75v6.5M4.75 8h6.5"/></svg><span>新会话</span></button><label class="workspace-label"><span>工作区</span><span class="workspace-select"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/></svg><select data-action="select-workspace" aria-label="选择工作区" ${state.draft !== null ? 'disabled' : ''}>${choices.map(item => `<option value="${item.id}" title="${escapeHtml(item.path ?? item.title)}" ${item.id === selectedWorkspaceId ? 'selected' : ''}>${escapeHtml(item.title)}</option>`).join('')}</select></span></label><div class="sidebar-heading"><span>会话</span></div><nav class="thread-tree">${threads.map(thread => `<button class="tree-row ${thread.id === state.activeId ? 'active' : ''}" data-action="select-thread" data-thread="${thread.id}" style="--thread-color:#374151"><span class="tree-dot"></span><span>${escapeHtml(threadListTitle(thread))}</span>${thread.parentId === null ? '' : '<i>分支</i>'}</button>`).join('') || '<p class="tree-empty">暂未同步会话</p>'}</nav></aside><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话地图</button></div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}</section></main>`
+  app.innerHTML = `<main class="synapse-shell ${state.sidebarCollapsed ? 'sidebar-collapsed' : ''}"><header class="topbar"><div class="view-switch" role="group" aria-label="视图切换"><button data-action="close" type="button" aria-pressed="false">对话</button><button class="active" type="button" aria-pressed="true">会话地图</button></div>
+        <div class="map-tools">
+          <button class="new-workspace" type="button" data-action="refresh-canvas"><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/><path d="M13 8a5 5 0 1 1-1.5-3.6"/><path d="M13 3.5V8H8.5"/></svg><span>强制刷新</span></button>
+          <button class="new-workspace" type="button" data-action="import-sessions"><svg class="new-session-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 4.75h3l1.2 1.5h6.8v5.5a1 1 0 0 1-1 1h-9a1 1 0 0 1-1-1v-6a1 1 0 0 1 1-1Z"/><path d="M8 3v7M4.8 7 8 10.2 11.2 7"/><path d="M3.5 12.5h9"/></svg><span>导入会话</span></button>
+        </div>${canvasControls}</header><section class="main-stage">${state.error ? `<div class="status-message" role="alert"><span>${escapeHtml(state.error)}</span><button data-action="dismiss-error" aria-label="关闭" title="关闭">×</button></div>` : ''}${canvasTabs}${view}${selectionFollowupButton()}</section></main>`
   installDragging()
   cacheCardConnectors()
   // The initial camera from renderCanvas is inset (viewport not laid out yet);
@@ -1700,6 +1703,83 @@ app.addEventListener('input', event => { const input = event.target; if (input i
 // 新建画布（P0-3）：POST 一个 workspace 后重拉列表，地图会自动切过去。
 // 上游的"工作区"下拉列的本来就是本地画布（workspaceChoices 在 dshWorkspaces 为空时
 // 回退到 state.summaries），所以缺的只是一个创建入口。
+// ── 导入会话面板（多选）──
+//
+// 为什么用独立容器（挂到 body，而不是塞进 #app 的模板）：#app 的模板是几万字符的
+// 单行字符串，往里插内容风险高（本项目在同类替换上出过几次错）。独立容器还有个好处：
+// render() 重绘画布时不会把它冲掉。
+let importPickerRoot = null
+state.importPickerOpen = false
+state.importSelection = new Set()
+state.importCandidates = []
+
+function importPickerHtml() {
+  if (state.importPickerOpen !== true) return ''
+  const head = `<div class="import-picker-head"><span>导入会话到画布</span><button type="button" data-action="close-import" aria-label="关闭">×</button></div>`
+  if (state.importCandidates.length === 0) {
+    return `<div class="import-picker-backdrop" data-action="close-import"></div><section class="import-picker" aria-label="导入会话">${head}<p class="import-picker-empty">没有可导入的会话 —— 会话列表里的都已在画布上。</p><div class="import-picker-foot"><span class="count"></span><div class="actions"><button type="button" data-action="close-import">关闭</button></div></div></section>`
+  }
+  const rows = state.importCandidates.map(s => `<label class="import-picker-row"><input type="checkbox" data-import-id="${escapeHtml(s.id)}" ${state.importSelection.has(s.id) ? 'checked' : ''}><span>${escapeHtml(s.title)}</span></label>`).join('')
+  const picked = state.importSelection.size
+  return `<div class="import-picker-backdrop" data-action="close-import"></div><section class="import-picker" aria-label="导入会话">${head}<div class="import-picker-list">${rows}</div><div class="import-picker-foot"><span class="count">已选 ${picked} / ${state.importCandidates.length}</span><div class="actions"><button type="button" data-action="close-import">取消</button><button type="button" class="primary" data-action="confirm-import" ${picked === 0 ? 'disabled' : ''}>导入选中</button></div></div></section>`
+}
+
+function renderImportPicker() {
+  if (importPickerRoot === null) {
+    importPickerRoot = document.createElement('div')
+    importPickerRoot.id = 'import-picker-root'
+    document.body.appendChild(importPickerRoot)
+  }
+  importPickerRoot.innerHTML = importPickerHtml()
+}
+
+function openImportPicker() {
+  state.importPickerOpen = true
+  state.importSelection = new Set()
+  state.importCandidates = []
+  renderImportPicker()
+  const lister = window.synapseListImportable
+  if (typeof lister !== 'function') return
+  void Promise.resolve(lister())
+    .then(items => {
+      if (state.importPickerOpen !== true) return
+      state.importCandidates = items || []
+      renderImportPicker()
+    })
+    .catch(setError)
+}
+
+function closeImportPicker() {
+  state.importPickerOpen = false
+  renderImportPicker()
+}
+
+function confirmImportPicker() {
+  const ids = [...state.importSelection]
+  if (ids.length === 0) return
+  const importer = window.synapseImportSessions
+  closeImportPicker()
+  if (typeof importer !== 'function') return
+  void Promise.resolve(importer(ids))
+    .then(() => render())
+    .catch(setError)
+}
+
+// 面板是独立容器，用事件委托在自己的根上处理（不干扰 #app 的既有监听）
+document.addEventListener('click', event => {
+  const target = event.target
+  if (!(target instanceof Element)) return
+  if (target.closest('[data-action="close-import"]')) { event.preventDefault(); closeImportPicker(); return }
+  if (target.closest('[data-action="confirm-import"]')) { event.preventDefault(); confirmImportPicker(); return }
+  const box = target.closest('input[data-import-id]')
+  if (box instanceof HTMLInputElement) {
+    const id = box.dataset.importId
+    if (typeof id !== 'string') return
+    if (box.checked) state.importSelection.add(id)
+    else state.importSelection.delete(id)
+    renderImportPicker()
+  }
+}, true)
 app.addEventListener('click', event => {
   // 强制刷新（手动触发）+ 防抖。
 //
@@ -1724,6 +1804,13 @@ app.addEventListener('click', event => {
   if (!btn) return
   event.preventDefault()
   forceRefreshCanvas()
+})
+app.addEventListener('click', event => {
+  const btn = event.target instanceof Element ? event.target.closest('[data-action="import-sessions"]') : null
+  if (!btn) return
+  event.preventDefault()
+  // 打开**多选面板**：地图是会话的投影（准则 2），这里只把会话列表里已有的摆进画布。
+  openImportPicker()
 })
 const el = event.target instanceof Element ? event.target.closest('[data-action="create-canvas"]') : null
   if (!el) return
