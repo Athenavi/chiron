@@ -474,6 +474,10 @@ class AgentEvent:
     options: list[str] = field(default_factory=list)
     input_tokens: int = 0
     output_tokens: int = 0
+    #: 命中提示词缓存的输入 token 数（会话统计里"缓存命中率"的分子）。
+    cached_tokens: int = 0
+    #: 本回合实际使用的模型名（供按轮记录模型；空 = 未取到）。
+    model: str = ""
     error: str = ""
     timestamp: float = field(default_factory=time.time)
     # ── Trace ID (新增: 支持分布式链路追踪) ──
@@ -582,6 +586,8 @@ class AgentRuntime:
         start_time = time.time()
         total_input_tokens = 0
         total_output_tokens = 0
+        # 命中提示词缓存的输入 token（会话统计的"缓存命中率"用它算）
+        total_cached_tokens = 0
 
         # ── 0.5 生成 trace_id (跨实例链路追踪) ───────────────────────────
         trace_id = uuid_mod.uuid4().hex[:12]
@@ -955,6 +961,7 @@ class AgentRuntime:
                     if chunk.input_tokens or chunk.output_tokens:
                         total_input_tokens += chunk.input_tokens
                         total_output_tokens += chunk.output_tokens
+                    total_cached_tokens += chunk.cached_tokens or 0
 
                     # 错误响应（透出真实原因；旧消息作兜底）
                     if (
@@ -1211,6 +1218,8 @@ class AgentRuntime:
                 type="done",
                 input_tokens=total_input_tokens,
                 output_tokens=total_output_tokens,
+                cached_tokens=total_cached_tokens,
+                model=model,
                 trace_id=trace_id,
             )
             logger.info(
@@ -1746,6 +1755,8 @@ async def run_agent(
             "options": event.options,
             "input_tokens": event.input_tokens,
             "output_tokens": event.output_tokens,
+            "cached_tokens": event.cached_tokens,
+            "model": event.model,
             "message": event.error,
         }
 

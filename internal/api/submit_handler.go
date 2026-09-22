@@ -261,6 +261,10 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	var finalContent string
 	var streamErr string // 引擎回传的 error 事件内容（用于 turns.status=failed）
 	var inputTokens, outputTokens int
+	// 每轮统计：命中提示词缓存的输入 token，以及本次实际使用的模型（引擎随 done 事件回传）。
+	// 会话地图详情页的「缓存命中率」与「每轮模型」都来自这两个值。
+	var cachedTokens int
+	var turnModel string
 	turnToolCallIDs := []string{} // S 修复：messages.tool_calls 列只存 tool_call id 集合（内容在 tool_calls 表）
 
 	// P 性能：text 事件 50ms 合帧转发（公网多租户下 SSE 帧数减半，减少网关/前端处理开销）
@@ -363,6 +367,13 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		if evt.OutputTokens > 0 {
 			outputTokens += evt.OutputTokens
 		}
+		if evt.CachedTokens > 0 {
+			cachedTokens += evt.CachedTokens
+		}
+		// 模型名只在 done 事件里带：取最后一个非空值（一次提交可能跨多轮 LLM 调用）
+		if evt.Model != "" {
+			turnModel = evt.Model
+		}
 		// 增量落库：工具事件是关键节点，立即写；其余事件走 3s 节流
 		saveDraft(evt.Type == "tool_call" || evt.Type == "tool_result" || evt.Type == "guardrail_blocked")
 	}
@@ -428,7 +439,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		turnStatus = "failed"
 	}
 	if turnID != "" {
-		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, inputTokens, outputTokens)
+		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, inputTokens, outputTokens, cachedTokens)
 	}
 
 	h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})

@@ -81,6 +81,9 @@ const state = {
   canvasCards: undefined, canvasCardsById: undefined, canvasGraph: undefined, mountedCardIds: new Set(), canvasNeedsCenter: false,
   detailScrollByThread: new Map(), detailThreadId: null, detailTargetCardId: null,
   inspectorCardId: null, inspectorOpening: false, inspectorScrollByCard: new Map(),
+  // 详情页（纯统计视图）的会话用量：sessionId → { status, metrics, runtime, session }
+  // status: 'loading' | 'ready' | 'error' | 'unavailable'
+  sessionStats: new Map(),
 }
 
 const escapeHtml = value => String(value ?? '').replace(/[&<>"']/g, character => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[character]))
@@ -1182,13 +1185,134 @@ const openDshAction = ''
   return `<aside class="card-inspector${state.inspectorOpening ? ' is-opening' : ''}" aria-label="卡片详情" data-inspector-card="${escapeHtml(card.id)}"><header class="card-inspector-head"><div><div class="card-inspector-meta"><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-inspector-error-status">失败</span>'}${process.length > 0 ? `<span>工具 ${process.length}</span>` : ''}</div><h2>${escapeHtml(card.question)}</h2></div><button class="card-inspector-close" type="button" data-action="close-card-inspector" aria-label="关闭卡片详情" title="关闭"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></header><div class="card-inspector-scroll">${error}${answer}${processRecordsHtml}</div><footer class="card-inspector-actions">${continueAction}${branch}${openDshAction}</footer></aside>`
 }
 
+/* ── 详情页统计（会话地图「详情」= 纯统计视图） ─────────────────────────
+ *
+ * 详情页只回答"这条会话花了多少、用了什么模型、缓存命中如何"：
+ *   - 用量   ← GET /v1/sessions/{id}/metrics（internal/api/session_runtime.go 的 GetMetrics）
+ *   - 模型   ← GET /v1/sessions/{id}/runtime 的 resolved（请求 > 会话 > 默认 > 系统）
+ *   - 元信息 ← GET /v1/conversations/{id}
+ *
+ * 此前这里渲染的是消息流 + 输入框 + 「创建分支」—— 那是"继续对话"的动作，不是"看用量"的
+ * 视角；同样的消息在画布卡片上已经能看到，详情页再抄一遍只会挤掉真正的统计信息。
+ */
+
+const statNumber = value => Number(value ?? 0).toLocaleString('zh-CN')
+const statCents = cents => `¥${(Number(cents ?? 0) / 100).toFixed(2)}`
+const statPercent = value => `${(Number(value ?? 0) * 100).toFixed(1)}%`
+
+function threadStats(thread) {
+  const sessionId = thread?.dshSessionId ?? ''
+  if (!sessionId) return { status: 'unavailable' }
+  const known = state.sessionStats.get(sessionId)
+  if (known !== undefined) return known
+  const entry = { status: 'loading' }
+  state.sessionStats.set(sessionId, entry)
+  void loadThreadStats(sessionId)
+  return entry
+}
+
+async function loadThreadStats(sessionId) {
+  const entry = state.sessionStats.get(sessionId) ?? { status: 'loading' }
+  state.sessionStats.set(sessionId, entry)
+  const id = encodeURIComponent(sessionId)
+  // 三个接口互不依赖：任一失败不影响其余展示，所以各自兜底为 null
+  const [metrics, runtime, session] = await Promise.all([
+    api(`/v1/sessions/${id}/metrics`).catch(() => null),
+    api(`/v1/sessions/${id}/runtime`).catch(() => null),
+    api(`/v1/conversations/${id}?limit=1`).catch(() => null),
+  ])
+  entry.metrics = metrics?.data ?? metrics ?? null
+  entry.runtime = runtime?.data ?? runtime ?? null
+  entry.session = session?.data ?? session ?? null
+  entry.status = entry.metrics === null ? 'error' : 'ready'
+  renderPreservingDetailScroll()
+}
+
+function statsPlaceholder(text) {
+  return `<section class="stats-view"><p class="stats-placeholder">${text}</p></section>`
+}
+
+function renderThreadStats(thread) {
+  const stats = threadStats(thread)
+  if (stats.status === 'unavailable') return statsPlaceholder('这张卡片是便签，没有关联会话，因此没有用量统计。')
+  if (stats.status === 'loading') return statsPlaceholder('正在读取会话统计…')
+  if (stats.status === 'error') return statsPlaceholder('会话统计暂不可用（遥测接口未返回数据）。')
+
+  const totals = stats.metrics?.totals ?? {}
+  const turns = Array.isArray(stats.metrics?.turns) ? stats.metrics.turns : []
+  const resolved = stats.runtime?.resolved ?? {}
+  const session = stats.session ?? {}
+  const inputTokens = Number(totals.input_tokens ?? 0)
+  const outputTokens = Number(totals.output_tokens ?? 0)
+  const cachedTokens = Number(totals.cached_tokens ?? 0)
+  const turnCount = Number(totals.turns ?? turns.length)
+  const failedTurns = turns.filter(turn => turn.status && turn.status !== 'completed').length
+  // 缓存命中率用 **token 口径**（命中 token ÷ 输入 token）—— 比"命中轮数占比"更贴近真实节省
+  const cacheRate = inputTokens > 0 ? cachedTokens / inputTokens : 0
+  const throughput = stats.metrics?.throughput ?? null
+
+  const modelCounts = new Map()
+  for (const turn of turns) {
+    const name = turn.model || '未记录'
+    modelCounts.set(name, (modelCounts.get(name) ?? 0) + 1)
+  }
+  const modelRows = [...modelCounts.entries()].sort((a, b) => b[1] - a[1])
+
+  const cells = [
+    ['占用轮数', statNumber(turnCount), failedTurns > 0 ? `含失败 ${failedTurns} 轮` : '全部正常结束'],
+    ['输入 token', statNumber(inputTokens), cachedTokens > 0 ? `其中缓存命中 ${statNumber(cachedTokens)}` : '暂无缓存命中'],
+    ['输出 token', statNumber(outputTokens), '本会话累计'],
+    ['缓存命中率', statPercent(cacheRate), '命中 token ÷ 输入 token'],
+    ['代币消耗', statCents(totals.cost_cents), `${statNumber(totals.cost_cents ?? 0)} 分`],
+    ['首字延迟', throughput && throughput.ttft_ms_p50 ? `${Math.round(throughput.ttft_ms_p50)} ms` : '—', throughput ? `输出 ${Number(throughput.output_tps_p50 ?? 0).toFixed(1)} tok/s（P50）` : '样本不足'],
+  ]
+  const cards = cells.map(([label, value, hint]) =>
+    `<article class="stats-card"><span class="stats-card-label">${label}</span><strong class="stats-card-value">${value}</strong><span class="stats-card-hint">${escapeHtml(hint)}</span></article>`,
+  ).join('')
+
+  const effectiveModel = resolved.model?.value || session.llm_config?.model || '—'
+  const modelSource = { request: '本次请求', session: '本会话', default: '偏好默认', system: '系统默认' }[resolved.model?.source] ?? ''
+  const provider = resolved.provider?.value || '自动路由'
+  const modelList = modelRows.length === 0
+    ? '<dd class="stats-kv-empty">暂无逐轮记录：这些回合发生在"按轮记录模型"之前</dd>'
+    : modelRows.map(([name, count]) => `<dd><code>${escapeHtml(name)}</code> × ${count} 轮</dd>`).join('')
+
+  const rows = turns.map(turn => {
+    const status = turn.status === 'completed' ? '正常'
+      : turn.status === 'failed' ? '失败'
+        : turn.status === 'cancelled' ? '已取消' : (turn.status || '—')
+    return `<tr><td class="stats-table-time">${turn.created_at ? formatTime(turn.created_at) : '—'}</td><td>${turn.model ? `<code>${escapeHtml(turn.model)}</code>` : '未记录'}</td><td class="stats-table-num">${statNumber(turn.input_tokens)}</td><td class="stats-table-num">${statNumber(turn.output_tokens)}</td><td class="stats-table-num">${statNumber(turn.cached_tokens)}</td><td>${turn.cache_hit ? '命中' : '—'}</td><td>${status}</td></tr>`
+  }).join('')
+
+  return `<section class="stats-view">
+      <div class="stats-cards">${cards}</div>
+      <section class="stats-section">
+        <h3>模型使用</h3>
+        <dl class="stats-kv">
+          <div><dt>当前生效模型</dt><dd><code>${escapeHtml(effectiveModel)}</code>${modelSource ? ` <span class="stats-tag">${escapeHtml(modelSource)}</span>` : ''}</dd></div>
+          <div><dt>Provider</dt><dd>${escapeHtml(provider)}</dd></div>
+          <div><dt>按轮统计</dt>${modelList}</div>
+        </dl>
+      </section>
+      <section class="stats-section">
+        <h3>会话信息</h3>
+        <dl class="stats-kv">
+          <div><dt>类型</dt><dd>${thread.parentId === null ? '会话' : '分支（自父会话派生）'}</dd></div>
+          <div><dt>会话 ID</dt><dd><code>${escapeHtml(thread.dshSessionId)}</code></dd></div>
+          <div><dt>创建时间</dt><dd>${session.created_at ? formatTime(session.created_at) : '—'}</dd></div>
+          <div><dt>最后活动</dt><dd>${session.updated_at ? formatTime(session.updated_at) : '—'}</dd></div>
+        </dl>
+      </section>
+      ${turns.length === 0 ? '' : `<section class="stats-section"><h3>逐轮明细 <span class="stats-section-hint">最近 ${turns.length} 轮</span></h3><table class="stats-table"><thead><tr><th>时间</th><th>模型</th><th>输入</th><th>输出</th><th>缓存</th><th>命中</th><th>状态</th></tr></thead><tbody>${rows}</tbody></table></section>`}
+    </section>`
+}
+
 function renderThread() {
   const thread = currentThread()
   if (thread === null) return renderCanvas()
-  const messages = messagesFor(thread)
-  const waiting = state.pendingReplies.has(thread.dshSessionId)
-  const latestAssistantSeq = [...messages].reverse().find(message => Number.isInteger(message.sourceSeq))?.sourceSeq
-  return `<section class="detail-view"><header class="detail-head"><div class="detail-head-title"><div class="detail-head-meta"><span class="detail-badge">${thread.parentId === null ? '会话' : '分支'}</span>${thread.dshSessionTitle ?? thread.title ? `<span class="detail-subtitle">${escapeHtml(thread.dshSessionTitle ?? thread.title)}</span>` : ''}</div><h1>${escapeHtml(questionFor(thread))}</h1></div><div class="detail-head-actions"><button data-action="open-branch" data-thread="${thread.id}" title="基于最新回答创建分支">创建分支</button><button class="primary" data-action="show-canvas">返回画布</button></div></header><div class="detail-scroll">${messages.map(message => threadMessage(thread, message)).join('') || '<div class="note-empty">等待这条会话的第一条消息。</div>'}</div><form class="message-composer" data-compose="${thread.id}"><textarea maxlength="4000" placeholder="继续当前会话…" ${waiting ? 'disabled' : ''}></textarea><button class="primary" type="submit" ${waiting ? 'disabled' : ''}>${waiting ? '等待回复' : '发送'}</button></form></section>`
+  // 详情页不再渲染消息流、输入框与「创建分支」：它是**只读的用量视图**
+  // （消息内容在画布卡片 / 对话页可见），见上面 renderThreadStats 的说明。
+  return `<section class="detail-view"><header class="detail-head"><div class="detail-head-title"><div class="detail-head-meta"><span class="detail-badge">${thread.parentId === null ? '会话' : '分支'}</span>${thread.dshSessionTitle ?? thread.title ? `<span class="detail-subtitle">${escapeHtml(thread.dshSessionTitle ?? thread.title)}</span>` : ''}</div><h1>${escapeHtml(questionFor(thread))}</h1></div><div class="detail-head-actions"><button class="primary" data-action="show-canvas">返回画布</button></div></header><div class="detail-scroll">${renderThreadStats(thread)}</div></section>`
 }
 
 function render() {

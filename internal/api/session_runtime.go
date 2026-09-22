@@ -537,7 +537,8 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 	}
 	// 最近若干轮的时序（供前端画趋势）
 	if rows, err := db.GlobalDBManager.FetchAll(ctx, `
-		SELECT id, input_tokens, output_tokens, cached_tokens, cache_hit, status, created_at
+		SELECT id, input_tokens, output_tokens, cached_tokens, cache_hit, status, created_at,
+		       COALESCE(model, '') AS model
 		  FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 50`, sessionID); err == nil {
 		list := make([]map[string]any, 0, len(rows))
 		for _, r := range rows {
@@ -547,8 +548,10 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 				"output_tokens": intOf(r["output_tokens"]),
 				"cached_tokens": intOf(r["cached_tokens"]),
 				"cache_hit":     r["cache_hit"] == true,
-				"status":        stringOf(r["status"]),
-				"created_at":    stringOf(r["created_at"]),
+				// 每轮实际使用的模型（引擎回传）：详情页按轮展示"这一轮用的哪个模型"
+				"model":      stringOf(r["model"]),
+				"status":     stringOf(r["status"]),
+				"created_at": stringOf(r["created_at"]),
 			})
 		}
 		out["turns"] = list

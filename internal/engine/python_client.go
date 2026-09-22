@@ -555,6 +555,11 @@ type PythonEvent struct {
 	Arguments    string `json:"arguments,omitempty"`
 	InputTokens  int    `json:"input_tokens,omitempty"`
 	OutputTokens int    `json:"output_tokens,omitempty"`
+	// CachedTokens：命中提示词缓存的输入 token（会话统计里「缓存命中率」的分子）。
+	// Model：本回合实际使用的模型名 —— 按轮记录模型（turns.model）用。
+	// 两者都由引擎随 done 事件回传；老引擎不传时是零值，统计少算但不会出错。
+	CachedTokens int    `json:"cached_tokens,omitempty"`
+	Model        string `json:"model,omitempty"`
 	Message      string `json:"message,omitempty"`
 
 	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 docs/subagent-design.md §4.2）──

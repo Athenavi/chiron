@@ -445,3 +445,41 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 [data-theme="dark"] button.primary { border-color: #3478f6; background: #3478f6; color: #fff; }
 [data-theme="dark"] button.primary:hover { border-color: #2563eb; background: #2563eb; color: #fff; }
 @media (max-width: 760px) { [data-theme="dark"] .card-inspector { border-top-color: #2a2d33; border-left: 0; } }
+
+/* ── 详情页统计（会话地图「详情」= 纯统计视图）───────────────────────────
+ * 详情页不再渲染消息流 / 输入框 / 创建分支，样式随之从"对话阅读"转向"数据阅读"：
+ * 卡片网格 + 等宽数字 + 逐轮表格。 */
+.stats-view { display: flex; flex-direction: column; gap: 20px; padding: 4px 2px 32px; }
+.stats-placeholder { margin: 24px 0; color: #8390a0; font-size: 13px; }
+.stats-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; }
+.stats-card { display: flex; flex-direction: column; gap: 4px; padding: 14px 16px; border: 1px solid #e6eaf0; border-radius: 12px; background: #fff; }
+.stats-card-label { color: #8390a0; font-size: 12px; }
+.stats-card-value { color: #1b2430; font-size: 22px; font-weight: 650; line-height: 1.2; font-variant-numeric: tabular-nums; }
+.stats-card-hint { color: #98a3b1; font-size: 11px; }
+.stats-section { display: flex; flex-direction: column; gap: 10px; }
+.stats-section h3 { margin: 0; color: #1b2430; font-size: 13px; font-weight: 650; }
+.stats-section-hint { margin-left: 6px; color: #98a3b1; font-size: 11px; font-weight: 400; }
+.stats-kv { display: flex; flex-direction: column; margin: 0; border: 1px solid #e6eaf0; border-radius: 12px; background: #fff; overflow: hidden; }
+.stats-kv > div { display: flex; gap: 12px; align-items: baseline; padding: 10px 16px; border-top: 1px solid #f1f4f8; }
+.stats-kv > div:first-child { border-top: 0; }
+.stats-kv dt { flex: 0 0 96px; color: #8390a0; font-size: 12px; }
+.stats-kv dd { margin: 0; color: #1b2430; font-size: 13px; }
+.stats-kv dd + dd { margin-top: 4px; }
+.stats-kv-empty { color: #98a3b1; font-size: 12px; }
+.stats-tag { display: inline-block; padding: 1px 6px; border-radius: 999px; background: #eef3fb; color: #3d69b8; font-size: 11px; }
+.stats-view code { padding: 1px 5px; border-radius: 5px; background: #f2f5f9; color: #33445c; font-size: 12px; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; }
+.stats-table { width: 100%; border-collapse: collapse; border: 1px solid #e6eaf0; border-radius: 12px; overflow: hidden; background: #fff; font-size: 12px; }
+.stats-table th { padding: 9px 12px; border-bottom: 1px solid #eef2f7; background: #f7f9fc; color: #6b7887; font-weight: 600; text-align: left; }
+.stats-table td { padding: 9px 12px; border-top: 1px solid #f1f4f8; color: #33445c; }
+.stats-table-num { text-align: right; font-variant-numeric: tabular-nums; }
+.stats-table-time { white-space: nowrap; color: #8390a0; }
+[data-theme="dark"] .stats-card { border-color: #2a2d33; background: #15171b; }
+[data-theme="dark"] .stats-card-value, [data-theme="dark"] .stats-section h3, [data-theme="dark"] .stats-kv dd { color: #e6e8eb; }
+[data-theme="dark"] .stats-card-label, [data-theme="dark"] .stats-kv dt, [data-theme="dark"] .stats-table-time { color: #737a83; }
+[data-theme="dark"] .stats-kv { border-color: #2a2d33; background: #15171b; }
+[data-theme="dark"] .stats-kv > div { border-top-color: #23262b; }
+[data-theme="dark"] .stats-table { border-color: #2a2d33; background: #15171b; }
+[data-theme="dark"] .stats-table th { border-bottom-color: #23262b; background: #1b1c1f; color: #8b93a0; }
+[data-theme="dark"] .stats-table td { border-top-color: #23262b; color: #c9d1da; }
+[data-theme="dark"] .stats-view code { background: #222428; color: #c9d1da; }
+[data-theme="dark"] .stats-tag { background: #22303f; color: #7fa8e0; }

@@ -7,7 +7,7 @@ from typing import AsyncIterator
 from openai import AsyncOpenAI
 
 from app.gateway.provider import (ChatMessage, ChatResponse, EmbeddingResponse,
-                                  LLMProvider, ToolCall)
+                                  LLMProvider, ToolCall, cached_tokens_from_usage)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +23,9 @@ class OpenAIProvider(LLMProvider):
             kwargs["base_url"] = base_url
         # 具名 UA：部分网关前置 Cloudflare 反滥用（如 opencode.ai），SDK 默认 UA 会 403。
         kwargs["default_headers"] = {"User-Agent": _settings.llm_http_user_agent}
+        # 单次请求超时：没有它时，上游"建连成功但一直不返回"会让 await 永不返回，
+        # 同步委派的子 Agent 会连带把父 turn 挂死（只能等 Go 侧回合超时兜底）。
+        kwargs["timeout"] = float(_settings.llm_http_timeout)
         self._base_kwargs = dict(kwargs)
         self._client = AsyncOpenAI(**kwargs)
         # 多 key(DR 集中派):key_ring 提供各 provider 的活跃 key 集;client 按 key 缓存。
@@ -53,6 +56,8 @@ class OpenAIProvider(LLMProvider):
         tool_calls: list[dict] = []
         input_tokens = 0
         output_tokens = 0
+        # 命中提示词缓存的输入 token（各家字段名不同，取不到即 0）：会话统计算命中率用
+        cached_tokens = 0
         reasoning_content = ""
         usage_reported = False  # usage 是否已随 finish chunk 发出（避免重复累加）
 
@@ -62,6 +67,7 @@ class OpenAIProvider(LLMProvider):
                 if chunk.usage:
                     input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
+                    cached_tokens = cached_tokens_from_usage(chunk.usage)
                 continue
 
             delta = chunk.choices[0].delta
@@ -94,6 +100,7 @@ class OpenAIProvider(LLMProvider):
                 if chunk.usage:
                     input_tokens = chunk.usage.prompt_tokens
                     output_tokens = chunk.usage.completion_tokens
+                    cached_tokens = cached_tokens_from_usage(chunk.usage)
                 parsed = [
                     ToolCall(id=tc["id"], name=tc["name"], arguments=tc["arguments"])
                     for tc in tool_calls
@@ -104,6 +111,7 @@ class OpenAIProvider(LLMProvider):
                     finish_reason="tool_calls" if parsed else (finish or "stop"),
                     input_tokens=input_tokens,
                     output_tokens=output_tokens,
+                    cached_tokens=cached_tokens,
                 )
                 usage_reported = input_tokens > 0 or output_tokens > 0
 
@@ -113,6 +121,7 @@ class OpenAIProvider(LLMProvider):
             yield ChatResponse(
                 input_tokens=input_tokens,
                 output_tokens=output_tokens,
+                cached_tokens=cached_tokens,
                 finish_reason="stop",
             )
 
@@ -153,6 +162,7 @@ class OpenAIProvider(LLMProvider):
             ),
             input_tokens=usage.prompt_tokens if usage else 0,
             output_tokens=usage.completion_tokens if usage else 0,
+            cached_tokens=cached_tokens_from_usage(usage),
         )
 
     async def embed(self, text: str, model: str) -> EmbeddingResponse:

@@ -473,9 +473,12 @@ func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID stri
 	}
 }
 
-// FinishTurn 收敛回合终态：completed / failed / cancelled，并记录 token 用量。
+// FinishTurn 收敛回合终态：completed / failed / cancelled，并记录 token 用量与所用模型。
+//
 // status 为非法值时回退 completed；失败原因写入 turns.error 便于排查。
-func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg string, inputTokens, outputTokens int) {
+// model / cachedTokens 由引擎随 done 事件回传 —— 会话地图详情页据此展示"每轮用了哪个
+// 模型"与"缓存命中率"。取不到时分别写空值与 0：统计少算，但不阻断回合收尾。
+func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg, model string, inputTokens, outputTokens, cachedTokens int) {
 	if m.pool == nil || turnID == "" {
 		return
 	}
@@ -487,9 +490,10 @@ func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg string,
 	_, err := m.pool.Exec(ctx,
 		`UPDATE turns
 		 SET status = $2, error = NULLIF($3, ''), input_tokens = $4, output_tokens = $5,
+		     model = NULLIF($6, ''), cached_tokens = $7, cache_hit = ($7 > 0),
 		     finished_at = NOW()
 		 WHERE id = $1`,
-		turnID, status, errMsg, inputTokens, outputTokens)
+		turnID, status, errMsg, inputTokens, outputTokens, model, cachedTokens)
 	if err != nil {
 		slog.Error("finish turn", "turn", turnID, "status", status, "error", err)
 	}

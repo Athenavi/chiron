@@ -50,9 +50,40 @@ class ChatResponse:
     message: str = ""  # finish_reason="error" 时的真实原因（可诊断）
     input_tokens: int = 0
     output_tokens: int = 0
+    #: 命中提示词缓存（prompt cache）的输入 token 数 —— 会话统计里「缓存命中率」的分子。
+    #: 各家字段名不同（OpenAI: prompt_tokens_details.cached_tokens、DeepSeek:
+    #: prompt_cache_hit_tokens、Anthropic: cache_read_input_tokens），
+    #: 由 provider 层用 cached_tokens_from_usage 归一化后填入。
+    cached_tokens: int = 0
     provider: str = ""
     model: str = ""
     latency_ms: float = 0.0
+
+
+def cached_tokens_from_usage(usage: object) -> int:
+    """从各家 LLM 的 usage 对象里取「缓存命中」的输入 token 数。
+
+    三家的字段名都不一样，直接属性访问在取不到时会抛 AttributeError，所以逐层
+    getattr 探测。取不到就返回 0：统计口径宁可少算，也不要因为某个 provider
+    换了字段名而让整条流式响应失败。
+    """
+    if usage is None:
+        return 0
+    # OpenAI 兼容（含 DeepSeek / OpenCode 等）：prompt_tokens_details.cached_tokens
+    details = getattr(usage, "prompt_tokens_details", None)
+    if details is not None:
+        value = getattr(details, "cached_tokens", None)
+        if isinstance(value, int) and value > 0:
+            return value
+    # DeepSeek 直连：顶层 prompt_cache_hit_tokens
+    value = getattr(usage, "prompt_cache_hit_tokens", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    # Anthropic：cache_read_input_tokens
+    value = getattr(usage, "cache_read_input_tokens", None)
+    if isinstance(value, int) and value > 0:
+        return value
+    return 0
 
 
 @dataclass

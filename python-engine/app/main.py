@@ -1393,7 +1393,7 @@ async def agent_submit(
                     total_in += event.input_tokens
                 if event.output_tokens:
                     total_out += event.output_tokens
-                yield _frame({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens})
+                yield _frame({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens, 'cached_tokens': event.cached_tokens, 'model': event.model})
             # 收尾：把旁路中剩余的预览与唯一终态送出
             async for frame in _sink_frames():
                 yield frame
