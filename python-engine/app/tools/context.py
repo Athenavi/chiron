@@ -44,6 +44,35 @@ def get_gateway():
     return get_tool_context("gateway", None)
 
 
+def get_activated_tools() -> set[str]:
+    """本会话**按需激活**的工具名集合（Token Economy 的实现点）。
+
+    为什么返回一个**可变的 set 引用**，而不是像其它 get_* 那样返回值：
+
+        contextvar 的值是**不可变传播**的 —— 工具内部再 `set_tool_context(...)`
+        只会改当前任务的副本，**runtime 那一侧看不到**。而"按需激活"要求
+        `tool_search` 工具内的一次 `add`，能被 runtime 的 `_get_core_tools` 观察到。
+
+    所以这里把同一个 set 放进 context，工具与 runtime 共享这一个引用：
+    工具 `add` → runtime 下一轮过滤时立刻可见。懒创建，缺失时自动补空集合。
+    """
+    ctx = _current_context.get()
+    acts = ctx.get("activated_tools")
+    if not isinstance(acts, set):
+        acts = set()
+        merged = dict(ctx)
+        merged["activated_tools"] = acts
+        _current_context.set(merged)
+    return acts
+
+
+def activate_tools(names: list[str]) -> set[str]:
+    """把工具加入本会话的已激活集合，返回激活后的完整集合（便于工具回报状态）。"""
+    acts = get_activated_tools()
+    acts.update(n for n in names if n)
+    return acts
+
+
 def get_all() -> dict[str, Any]:
     """完整快照当前上下文（子 agent 委派前保存、完成后恢复）。"""
     return dict(_current_context.get())

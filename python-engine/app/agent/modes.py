@@ -38,7 +38,7 @@ CORE_TOOL_NAMES = frozenset(
         "remember",  # 保存新事实
         "skill_list",  # 列出可用技能
         "skill_run",  # 执行技能
-        "web_fetch",  # 获取外部信息
+        "search_files",  # 获取外部信息（原为 "web_fetch"：该名字**从未注册**，等于白列）
         "shell_exec",  # 执行命令
         "execute_python",  # 执行 Python
         "git_status",  # 查看项目状态
@@ -53,8 +53,19 @@ CORE_TOOL_NAMES = frozenset(
 MINIMAL_TOOL_NAMES = frozenset({"read_file", "edit_file", "shell_exec"})
 
 # 模式额外工具
+#
+# ⚠️ 这里的名字必须**真实存在于** app/tools 的注册表里，否则等于白列。
+# 校验方式：
+#   python -c "import app.tools; from app.tools.registry import registry; print(sorted(registry.list_names()))"
+#
+# 历史缺陷（已修）：常规模式白列了 "web_fetch" 与 "subagent"，PTC 白列 "run_code"，
+# 而创造模式的两个额外工具（mode_list / mode_edit）**全部落空** —— 后者正是
+# "切到创造模式感觉毫无变化"的根因：persona 里写着要用它们，但工具根本不存在。
+#
+# PTC 的额外工具是 run_code：让"多步任务写成一段程序一次执行"成为**工具层面的能力**，
+# 而不只是 persona 里的建议。（run_code.py 此前漏 import，导致这个工具从未注册。）
 PTC_EXTRA_TOOLS = frozenset({"run_code"})
-CREATIVE_EXTRA_TOOLS = frozenset({"mode_list", "mode_edit"})
+CREATIVE_EXTRA_TOOLS = frozenset({"mode_list", "mode_edit"})  # 这两个工具已补齐（见 app/tools/mode_admin.py）
 
 # 创造模式 persona（deepseek cordis：可读取并定制运行平台的模式与技能定义）
 CREATIVE_PERSONA = (

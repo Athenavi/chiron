@@ -13,7 +13,21 @@ async def glob_files(pattern: str, root: str = ".") -> dict[str, Any]:
 
     Returns a list of matching file paths with their sizes.
     """
-    base = Path(root).resolve()
+    from app.tools.sandbox import workspace_dir
+
+    # 沙箱隔离（S 安全修复）：
+    # 此前这里是 `Path(root).resolve()` —— 没有任何沙箱，等于以**进程 CWD** 为根。
+    # 实测 `glob_files(pattern="README*", root=".")` 会返回仓库外的
+    # X:\project\Chiron\README.md，即 LLM 可以借它列出沙箱外的文件；
+    # 而同类工具 grep_files 一直是有沙箱的（见 core.py）。这里统一到 workspace_dir()。
+    base = workspace_dir()
+    if root and root not in (".", "./"):
+        candidate = (base / root).resolve()
+        try:
+            candidate.relative_to(base.resolve())
+        except ValueError:
+            return {"error": "path escapes sandbox", "count": 0, "files": []}
+        base = candidate
     # pathlib.Path.glob already supports **, *, ?, []
     matches: list[dict[str, Any]] = []
     try:

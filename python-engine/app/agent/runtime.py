@@ -646,6 +646,13 @@ class AgentRuntime:
                     if isinstance(e, dict) and e.get("name")
                 ]
 
+            # 按需激活的工具集合：**会话级**（挂在 self 上，而不是每轮新建），
+            # 否则 tool_search 这一轮激活、下一轮就丢了。传的是同一个 set 引用，
+            # 所以工具内 add 立刻能被 _get_core_tools 看到。
+            acts = getattr(self, "_activated_tools", None)
+            if acts is None:
+                acts = set()
+                self._activated_tools = acts
             set_tool_context(
                 session_id=task.session_id,
                 user_id=task.user_id,
@@ -653,6 +660,7 @@ class AgentRuntime:
                 gateway=self._gateway,
                 subagent_depth=task.subagent_depth,
                 experts=experts,
+                activated_tools=acts,
             )
 
             # ── 0.6 MemoryService.on_session_start（L1 建立 + L2/L3 预取） ──
@@ -1290,8 +1298,15 @@ class AgentRuntime:
 
         if mode_cfg is None:
             mode_cfg = get_mode_config(None)
+        from app.tools.context import get_activated_tools
+
         all_tools = local_tool_registry.to_openai_tools()
         allowed = mode_cfg.include_tools | mode_cfg.extra_tools
+        # 按需激活（Token Economy 的另一半）：模式工具集只给"常用集"，
+        # 其余 50+ 个工具由 LLM 通过 tool_search 发现并激活 —— 这正是 modes.py
+        # 里"只暴露这些给 LLM，其余按需激活"那句注释的落地。
+        # tool_search 自身必须**始终可见**，否则模型根本不知道还能搜索更多工具。
+        allowed = allowed | get_activated_tools() | {"tool_search"}
         core = [t for t in all_tools if t.get("function", {}).get("name") in allowed]
         if not core and mode_cfg.mode is AgentMode.MINIMAL:
             core = [

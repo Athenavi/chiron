@@ -215,14 +215,14 @@ _BROWSER_TOOLS = [
     (
         "browser_navigate",
         "Navigate to a URL",
-        {"url": {"type": "string"}, "tabId": {"type": "integer"}},
+        {"url": {"type": "string"}, "tab_id": {"type": "integer"}},
         ["url"],
         browser_navigate,
     ),
     (
         "browser_click",
         "Click an element by selector",
-        {"selector": {"type": "string"}, "tabId": {"type": "integer"}},
+        {"selector": {"type": "string"}, "tab_id": {"type": "integer"}},
         ["selector"],
         browser_click,
     ),
@@ -232,7 +232,7 @@ _BROWSER_TOOLS = [
         {
             "selector": {"type": "string"},
             "text": {"type": "string"},
-            "tabId": {"type": "integer"},
+            "tab_id": {"type": "integer"},
         },
         ["selector", "text"],
         browser_type,
@@ -240,7 +240,7 @@ _BROWSER_TOOLS = [
     (
         "browser_read",
         "Read element text/attributes",
-        {"selector": {"type": "string"}, "tabId": {"type": "integer"}},
+        {"selector": {"type": "string"}, "tab_id": {"type": "integer"}},
         ["selector"],
         browser_read,
     ),
@@ -248,8 +248,8 @@ _BROWSER_TOOLS = [
         "browser_screenshot",
         "Take a page screenshot",
         {
-            "tabId": {"type": "integer"},
-            "fullPage": {"type": "boolean", "default": False},
+            "tab_id": {"type": "integer"},
+            "full_page": {"type": "boolean", "default": False},
         },
         [],
         browser_screenshot,
@@ -260,7 +260,7 @@ _BROWSER_TOOLS = [
         {
             "direction": {"type": "string", "default": "down"},
             "amount": {"type": "integer", "default": 500},
-            "tabId": {"type": "integer"},
+            "tab_id": {"type": "integer"},
         },
         [],
         browser_scroll,
@@ -268,7 +268,7 @@ _BROWSER_TOOLS = [
     (
         "browser_get_state",
         "Get current page state",
-        {"tabId": {"type": "integer"}},
+        {"tab_id": {"type": "integer"}},
         [],
         browser_get_state,
     ),
@@ -283,15 +283,15 @@ _BROWSER_TOOLS = [
     (
         "browser_tab_switch",
         "Switch to a tab",
-        {"tabId": {"type": "integer"}},
-        ["tabId"],
+        {"tab_id": {"type": "integer"}},
+        ["tab_id"],
         browser_tab_switch,
     ),
     (
         "browser_tab_close",
         "Close a tab",
-        {"tabId": {"type": "integer"}},
-        ["tabId"],
+        {"tab_id": {"type": "integer"}},
+        ["tab_id"],
         browser_tab_close,
     ),
 ]
