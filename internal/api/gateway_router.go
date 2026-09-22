@@ -342,6 +342,10 @@ func NewGatewayRouter(
 	// 复用 /submit 的全套闸门（幂等/会话锁/并发/计费预检，见 agent_followup.go）。
 	mux.Handle("POST /v1/internal/agent-followup",
 		rlMW(internalTokenMW(cfg, AgentFollowupHandler(submitHandler, billingMgr, agentSem, tenantResMgr, cfg.AgentSubmitTimeout))))
+
+	// 会话分叉：地图"按真实分支连线"的前提（见 session_fork.go）。
+	// 放这里而不是 registerAgentRoutes：那个函数的作用域里没有 sessionMgr。
+	mux.Handle("POST /v1/conversations/{id}/fork", authMW(rlMW(ForkConversationHandler(sessionMgr))))
 	registerAuthRoutes(mux, authHandler, authMW, rlMW)
 
 	// ── SSO 三方登录（公开流程 rlMW；用户自助 authMW；管理 authMW + sso:manage）──
@@ -810,6 +814,15 @@ func registerConversationRoutes(
 	mux.Handle("POST /v1/conversations/{id}/share", authMW(rlMW(http.HandlerFunc(shareHandler.Create))))
 	mux.Handle("GET /v1/conversations/{id}/share", authMW(rlMW(http.HandlerFunc(shareHandler.GetActive))))
 	mux.Handle("DELETE /v1/conversations/{id}/share", authMW(rlMW(http.HandlerFunc(shareHandler.Revoke))))
+
+	// 会话地图布局：Redis 热层 + 异步落 PG（见 internal/api/sessionmap.go）
+	smHandler := NewSessionMapHandler()
+	mux.Handle("GET /v1/session-map/workspaces", authMW(rlMW(http.HandlerFunc(smHandler.ListWorkspaces))))
+	mux.Handle("POST /v1/session-map/workspaces", authMW(rlMW(http.HandlerFunc(smHandler.CreateWorkspace))))
+	mux.Handle("GET /v1/session-map/workspaces/{id}", authMW(rlMW(http.HandlerFunc(smHandler.GetWorkspace))))
+	mux.Handle("PUT /v1/session-map/workspaces/{id}", authMW(rlMW(http.HandlerFunc(smHandler.SaveWorkspace))))
+	mux.Handle("DELETE /v1/session-map/workspaces/{id}", authMW(rlMW(http.HandlerFunc(smHandler.DeleteWorkspace))))
+	mux.Handle("POST /v1/session-map/workspaces/{id}/fork-node", authMW(rlMW(http.HandlerFunc(smHandler.ForkNode))))
 	// 当前用户的分享列表（数据管理 → 分享管理）；与上面的按会话接口同组、同鉴权。
 	mux.Handle("GET /v1/shares", authMW(rlMW(http.HandlerFunc(shareHandler.List))))
 }

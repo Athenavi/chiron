@@ -54,9 +54,15 @@
       title: node.title || '',
       dshSessionId: node.session_id || '',
       parentId: node.parent_node_id || '',
+      // P1-6：分叉锚点的**真实**长度。app.js 的 conversationCards 用
+      // `sourceThread?.sourceSeedLength ?? firstChildQuestion?.sourceSeq` 判断这条分支
+      // 从父会话的第几条消息长出来（app.js:763）；不给它就只能按索引猜，连线起点会偏。
+      // branch_from_seq 正是 fork 时复制的消息条数。
+      sourceSeedLength: node.branch_from_seq || undefined,
       position: { x: node.x || 0, y: node.y || 0 },
       collapsed: !!node.collapsed,
       archived: !!node.hidden,
+      branchFromSeq: node.branch_from_seq || 0,
       color: node.color || '',
       messages: messages || [],
       pendingProcess: [],
@@ -80,9 +86,19 @@
   }
 
   /** 拉一个会话的消息，转成 app.js 期望的 {kind,text,at,sourceSeq} 形状 */
+  // ── 消息缓存（P0-4）──
+  //
+  // 每次 GET 工作区都会对**每个节点**拉一次消息；地图反复刷新时这会把 N+1 放大成
+  // N×刷新次数。这里缓存的是 **Promise** 而不是结果 —— 除了省请求，还能把并发
+  // 发起的同一个会话合并成一次（后到的直接复用前一个的 Promise）。
+  // 失效点：会话有新内容时（live-reply），只失效它自己。
+  var messagesCache = new Map()
+
   function loadMessages(sessionId) {
     if (!sessionId) return Promise.resolve([])
-    return jsonFetch(CONV + '/' + encodeURIComponent(sessionId) + '?limit=200')
+    var hit = messagesCache.get(sessionId)
+    if (hit) return hit
+    var pending = jsonFetch(CONV + '/' + encodeURIComponent(sessionId) + '?limit=200')
       .then(unwrap)
       .then(function (data) {
         var list = (data && (data.messages || data)) || []
@@ -99,7 +115,10 @@
             }
           })
       })
-      .catch(function () { return [] })
+      .catch(function () { messagesCache.delete(sessionId); return [] })
+    // 缓存 Promise：并发的同一会话只发一次请求
+    messagesCache.set(sessionId, pending)
+    return pending
   }
 
   /** 把节点数组组装成 app.js 期望的工作区形状（含 messages） */
@@ -332,6 +351,14 @@
           return respond({ thread: child }, 201)
         })
       }
+      if (hostSnap && !hostThread && method === 'PATCH') {
+        // 未知节点 = 新建（便签创建走这条路）：补进内存快照并触发整体保存
+        var created = Object.assign({ id: thId, title: '', dshSessionId: '', parentId: '', position: { x: 0, y: 0 }, messages: [], pendingProcess: [] }, body)
+        hostSnap.threads.push(created)
+        snapshots[hostWs] = hostSnap
+        scheduleSave(hostWs)
+        return respond({ thread: created })
+      }
       if (hostSnap && hostThread) {
         if (method === 'PATCH') {
           if (body.position) hostThread.position = body.position
@@ -358,6 +385,51 @@
   }
 
   // ── 2. dshRpc 覆盖：会话操作 → Chiron REST ──
+  // ── 地图侧自行订阅事件流（P0-1 修复）──
+  //
+  // 为什么必须自己订阅：`/v1/events` 的 `session_id` 是**必填**（后端 P0-S5 防止订到全站
+  // 事件流、泄露他人对话），一次只能订一个会话；而宿主 ChatView 订的是**它自己的**当前
+  // 会话 —— 地图里正在跑的那个会话它根本不知道，所以永远收不到增量。
+  //
+  // 收到增量后用 postMessage 发回**本窗口**：app.js 的监听只校验 origin + source，
+  // 自己发给自己同样满足，于是它按既有的 live-reply 协议就地 patch 卡片。
+  var streamSources = new Map()   // sessionId -> EventSource
+  var streamText = new Map()      // sessionId -> 累积文本
+
+  function selfPost(payload) {
+    window.postMessage({ source: 'chiron-sessionmap', ...payload }, window.location.origin)
+  }
+
+  function watchSessionStream(sessionId) {
+    if (!sessionId || streamSources.has(sessionId)) return
+    var es = new EventSource('/v1/events?session_id=' + encodeURIComponent(sessionId), { withCredentials: true })
+    streamSources.set(sessionId, es)
+    es.onmessage = function (event) {
+      var d = null
+      try { d = JSON.parse(event.data) } catch (_) { return }
+      if (!d || typeof d.type !== 'string') return
+      if (d.type === 'text') {
+        var chunk = (d.data && d.data.content) || ''
+        if (!chunk) return
+        var acc = (streamText.get(sessionId) || '') + chunk
+        streamText.set(sessionId, acc)
+        selfPost({ type: 'synapse:live-reply', sessionId: sessionId, running: true, text: acc })
+        return
+      }
+      if (d.type === 'turn_done' || d.type === 'error') {
+        streamText.delete(sessionId)
+        selfPost({ type: 'synapse:live-reply', sessionId: sessionId, running: false })
+        messagesCache.delete(sessionId)
+        // 回合结束：重拉当前画布，把已经落库的完整消息带出来
+        if (currentWorkspaceId && typeof window.openWorkspace === 'function') {
+          window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
+        }
+      }
+    }
+    // 断线交给浏览器原生自动重连（会带 Last-Event-ID，服务端从缓冲补发）
+    es.onerror = function () { /* noop */ }
+  }
+
   window.dshRpc = function (type, payload) {
     payload = payload || {}
     if (type === 'synapse:create-session') {
@@ -365,6 +437,7 @@
         .then(unwrap)
     }
     if (type === 'synapse:send-message') {
+      watchSessionStream(payload.sessionId)
       return jsonFetch('/v1/agent/submit', {
         method: 'POST',
         body: JSON.stringify({ session_id: payload.sessionId, content: payload.text || '', context: {} }),
@@ -388,8 +461,36 @@
     if (e.origin !== window.location.origin) return
     var d = e.data
     if (!d || d.source !== 'chiron-sessionmap') return
+    // 宿主切到某会话 → 若它还没在地图上，自动补一个节点（P1-5）。
+    // 否则"新建的会话"永远进不了地图，地图只会停在最初导入的那一批。
+    // 取舍：用户手动删掉的节点，下次打开地图会被重新加回 —— 但"新会话看不见"
+    // 比"删掉的节点又冒出来"更难受，先按前者处理（彻底解决需记录"手动删除"集合）。
+    if (d.type === 'synapse:current-session' && d.session && d.session.id && currentWorkspaceId) {
+      var snap = snapshots[currentWorkspaceId]
+      var mine = (snap && snap.threads) || []
+      var exists = mine.some(function (t) { return t.dshSessionId === d.session.id })
+      if (snap && !exists) {
+        var bottom = mine.reduce(function (max, t) { return Math.max(max, (t.position && t.position.y) || 0) }, 0)
+        mine.push({
+          id: 'n_' + d.session.id,
+          title: d.session.title || '',
+          dshSessionId: d.session.id,
+          parentId: '',
+          position: { x: 86, y: bottom + 320 },
+          messages: [],
+          pendingProcess: [],
+        })
+        snapshots[currentWorkspaceId] = snap
+        scheduleSave(currentWorkspaceId)
+        if (typeof window.openWorkspace === 'function') {
+          window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
+        }
+      }
+    }
     if (d.type === 'synapse:live-reply' && d.running === false && currentWorkspaceId &&
         typeof window.openWorkspace === 'function') {
+      // 该会话有新内容：**只**失效它自己的缓存（其余节点继续命中，避免整图重拉）
+      messagesCache.delete(d.sessionId)
       window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
     }
   })

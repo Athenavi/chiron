@@ -14,7 +14,6 @@ import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
-import SessionMap from '../components/chat/SessionMap.vue'
 import { useAuthStore } from '../stores/auth'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
@@ -639,6 +638,10 @@ const effort = ref('')
 /** 档位循环顺序（点击按钮依次切换 —— ZCode 的 `ThoughtLevelCycleControl` 同款交互，比下拉省空间） */
 const EFFORT_ORDER = ['', 'low', 'high', 'max'] as const
 const EFFORT_LABEL: Record<string, string> = { '': '关', low: '低', high: '高', max: '最高' }
+// 模板不直接做两层索引：EFFORT_LABEL 与 effort 各自都可能为空，一旦编译产物出现不一致
+// （排查过：HMR 增量重编译后 setup 绑定表与 render 不同步），EFFORT_LABEL[effort] 会炸成
+// undefined[undefined]，整个 ChatView 被 ErrorBoundary 接管。收进 computed 后取值路径只有一条。
+const effortLabel = computed(() => EFFORT_LABEL[effort.value] || '关')
 
 /** 思考档位切换：与模型/模式同一套持久化（走 buildLlmConfig → 会话 llm_config） */
 function onEffortChange(v: string) {
@@ -1044,7 +1047,17 @@ const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajector
  * 放不下"空间化排布"这件事本身）。位置稳定性是它的立身之本，
  * 见 docs/session-map-plan.md §〇。
  */
-const mapOpen = ref(false)
+
+/**
+ * 新版会话地图：直接嵌入照抄自 `vendor/dsh-synapse` 的前端（`public/sessionmap/`），
+ * 数据面由 `adapter.js` 缝合到 `/v1/session-map`（布局，Redis 热层 + 异步落 PG）与
+ * `/v1/conversations`（会话/消息/fork）。
+ *
+ * 它取代了原先纯 localStorage 的自由摆放地图：新版多了
+ * "按真实分支连线"（依赖 `sessions.parent_session_id`）与 SVG 连线层，
+ * 旧版先留着作为可回退路径。
+ */
+const synapseMapOpen = ref(false)
 
 /**
  * 地图上标「运行中」的会话。
@@ -1064,6 +1077,121 @@ const runningSessionIds = computed<string[]>(() => {
   }
   return [...open]
 })
+
+/**
+ * 新版地图（iframe）→ 宿主的回传通道。
+ *
+ * 移植的前端点节点时会 `post("synapse:activate-session", {sessionId})` 到父窗口 ——
+ * 原本是让 DSH 切会话，这里对应我们自己的 `switchSession`，并顺手关掉浮层
+ * （与旧版地图 `select` → `switchSession` 的行为一致）。
+ *
+ * 监听放在模块级：ChatView 是主视图，生命周期与应用一致，无需在挂载/卸载之间来回摘挂。
+ */
+/**
+ * 新版地图 iframe 的句柄 + 「宿主 → 地图」的单向状态推送。
+ *
+ * 协议来自上游 app.js 末尾的 window.addEventListener('message')，它认这些消息：
+ *   synapse:workspaces      → 画布下拉（我们映射 /v1/session-map/workspaces）
+ *   synapse:current-session → 高亮/居中到当前会话
+ *   synapse:theme           → 亮/暗主题
+ *   synapse:live-reply      → { sessionId, running, text } 卡片运行态与流式文本
+ * 地图侧打开时会先发 `synapse:request-current` 握手，我们再回推上面这些。
+ *
+ * 注意 source 标识必须与 app.js 一致（chiron-sessionmap）。
+ */
+const synapseFrame = ref<HTMLIFrameElement | null>(null)
+const MAP_SOURCE = 'chiron-sessionmap'
+/**
+ * 流式增量 → 会话地图（P0-1）。
+ *
+ * 后端 `submit_handler.go` 已把引擎增量按 50ms 合帧 publish 成
+ * `Event{Type:"text", SessionID, Data:{Content}}`，经 `/v1/events` 直接送到这里。
+ * 地图（iframe）认的协议是 `synapse:live-reply{sessionId, running, text}`（累积文本），
+ * app.js 会写进 state.liveReplies 并**就地 patch 卡片**（app.js:728）——
+ * 于是卡片逐字生长，而不是等回合结束才一次性出现。
+ *
+ * 累积器独立于 items（按 sessionId 存）：地图可能要展示**非当前**会话的进度，
+ * 而 items 只反映当前视图。
+ */
+const mapStreamText = new Map<string, string>()
+
+function forwardStreamToMap(fallbackSessionId: string, raw: unknown) {
+  const d = raw as { type?: string; session_id?: string; sessionId?: string; data?: { content?: string } } | null
+  if (!d || !d.type) return
+  const sid = d.session_id || d.sessionId || fallbackSessionId
+  if (!sid) return
+  if (d.type === 'text') {
+    const chunk = d.data?.content
+    if (typeof chunk !== 'string' || !chunk) return
+    const acc = (mapStreamText.get(sid) ?? '') + chunk
+    mapStreamText.set(sid, acc)
+    postToMap({ type: 'synapse:live-reply', sessionId: sid, running: true, text: acc })
+    return
+  }
+  if (d.type === 'turn_done' || d.type === 'error') {
+    mapStreamText.delete(sid)
+    postToMap({ type: 'synapse:live-reply', sessionId: sid, running: false })
+  }
+}
+
+
+/** 上一次推送过的运行中会话，用于算差集（声明必须早于使用它的 pushMapState） */
+let lastRunningIds: string[] = []
+
+function postToMap(payload: Record<string, unknown>) {
+  const target = synapseFrame.value?.contentWindow
+  if (!target) return
+  target.postMessage({ source: MAP_SOURCE, ...payload }, window.location.origin)
+}
+
+/** 把宿主状态推给地图 */
+async function pushMapState() {
+  // 画布列表：地图的"工作区"下拉（空 sessionIds 让它自己去拉画布内容）
+  try {
+    const r = await fetch('/v1/session-map/workspaces', { credentials: 'include' })
+    const body = (await r.json()) as { data?: { workspaces?: Array<{ id: string; name?: string }> } }
+    postToMap({
+      type: 'synapse:workspaces',
+      workspaces: (body.data?.workspaces ?? []).map((w) => ({
+        id: w.id,
+        title: w.name || '我的地图',
+        sessionIds: [] as string[],
+      })),
+    })
+  } catch {
+    // 拉不到就让它退回空下拉，不影响画布本身
+  }
+  postToMap({
+    type: 'synapse:current-session',
+    session: activeSessionId.value ? { id: activeSessionId.value } : null,
+  })
+  const root = document.documentElement
+  postToMap({
+    type: 'synapse:theme',
+    dark: root.classList.contains('dark') || root.dataset.theme === 'dark',
+  })
+  for (const id of runningSessionIds.value) {
+    postToMap({ type: 'synapse:live-reply', sessionId: id, running: true, text: '' })
+  }
+  lastRunningIds = [...runningSessionIds.value]
+}
+
+
+window.addEventListener('message', (e: MessageEvent) => {
+  if (e.origin !== window.location.origin) return // 只认自己域（iframe 同源）
+  const data = e.data as { source?: string; type?: string; sessionId?: string } | null
+  if (!data || data.source !== MAP_SOURCE) return
+  // 地图打开 / 请求当前状态：把宿主状态推过去
+  if (data.type === 'synapse:map-opened' || data.type === 'synapse:request-current') {
+    void pushMapState()
+    return
+  }
+  // 点卡片 → 切会话并关掉浮层
+  if (data.type === 'synapse:activate-session' && data.sessionId) {
+    synapseMapOpen.value = false
+    void switchSession(data.sessionId)
+  }
+})
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
@@ -1078,6 +1206,19 @@ const subagentLiveEvents = computed<SubagentEvent[]>({
   set: (v) => {
     ;(writingRun.value ?? currentRun.value).subagentEvents = v
   },
+})
+
+// ⚠️ 必须放在 `subagentLiveEvents` 定义**之后**：watch 在 setup 期间就会同步求值一次 source，
+// 而 runningSessionIds 读的正是 subagentLiveEvents —— 放在前面会 TDZ（Cannot access before initialization）。
+/** 运行态变化 → 推给地图；结束时地图会自行重拉画布，把新消息带出来 */
+watch(() => runningSessionIds.value, (ids) => {
+  for (const id of ids) {
+    if (!lastRunningIds.includes(id)) postToMap({ type: 'synapse:live-reply', sessionId: id, running: true, text: '' })
+  }
+  for (const id of lastRunningIds) {
+    if (!ids.includes(id)) postToMap({ type: 'synapse:live-reply', sessionId: id, running: false })
+  }
+  lastRunningIds = [...ids]
 })
 const SUBAGENT_LIVE_MAX = 500
 
@@ -1289,11 +1430,10 @@ function onGlobalKeydown(e: KeyboardEvent) {
     })
     return
   }
-  // Esc：地图是最高层浮层（--z-viewer），先关它 ——
-  // 否则按 Esc 会在**看不见的背后面板**上生效，而用户的直觉是"先关掉挡在最前面的东西"。
-  if (e.key === 'Escape' && mapOpen.value) {
+  // Esc：新版地图（iframe）在最上层，先关它 —— 与其他浮层同一套"逐层关闭"语义
+  if (e.key === 'Escape' && synapseMapOpen.value) {
     e.preventDefault()
-    mapOpen.value = false
+    synapseMapOpen.value = false
     return
   }
   // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
@@ -1847,7 +1987,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     activeSSE = createSSEConnection(
       sessionId,
-      (raw) => withRun(runOf(sessionId), () => onSSEMessage(raw)),
+      (raw) => withRun(runOf(sessionId), () => { forwardStreamToMap(sessionId, raw); onSSEMessage(raw) }),
       () => {
         loading.value = false
         stopTurnTimer()
@@ -2059,7 +2199,7 @@ function continueGeneration() {
               :title="$t('思考档位：点按循环切换（关 / 低 / 高 / 最高）')"
               @click="cycleEffort()"
             >
-              {{ $t('思考') }} {{ EFFORT_LABEL[effort] || '关' }}
+              {{ $t('思考') }} {{ effortLabel }}
             </button>
           </div>
           <div class="toolbar-side toolbar-actions">
@@ -2498,7 +2638,7 @@ function continueGeneration() {
       :context-chips="contextChips"
       :live-events="subagentLiveEvents"
       @update:view="(v: 'trajectory' | 'sessions' | 'agents' | 'stats') => (panelView = v)"
-      @open-map="mapOpen = true"
+      @open-map="synapseMapOpen = true"
       @focus="onTrajectoryFocus"
       @close="panelOpen = false"
       @create="createSession"
@@ -2512,28 +2652,25 @@ function continueGeneration() {
       @clear-context="clearContext"
     />
 
-    <!-- 会话地图：**独立的整屏大窗格**（不是侧栏内的小视图）。
-         位置稳定性是它的立身之本，见 docs/session-map-plan.md §〇 ——
-         这里只负责承载与开关，坐标逻辑都在 useSessionMap.ts 里。 -->
-    <div v-if="mapOpen" class="map-overlay" @click.self="mapOpen = false">
-      <div class="map-frame">
-        <div class="map-head">
-          <span class="map-title">{{ $t('会话地图') }}</span>
-          <span class="map-sub">{{ $t('拖动卡片排布位置 · 空白处平移 · 滚轮缩放') }}</span>
-          <button type="button" class="map-close" @click="mapOpen = false">
-            {{ $t('关闭') }}
-          </button>
-        </div>
-        <div class="map-body">
-          <SessionMap
-            :sessions="sessions"
-            :active-session-id="activeSessionId"
-            :running-ids="runningSessionIds"
-            @select="mapOpen = false; switchSession($event)"
-            @close="mapOpen = false"
-          />
-        </div>
-      </div>
+    <!-- 新版会话地图：嵌入 public/sessionmap/（照抄自 vendor/dsh-synapse 的前端），
+         数据面由 adapter.js 缝合到 Chiron 的 /v1/session-map 与 /v1/conversations。 -->
+    <div
+      v-if="synapseMapOpen"
+      class="synapse-map-overlay"
+    >
+      <iframe
+        ref="synapseFrame"
+        class="synapse-map-frame"
+        src="/sessionmap/index.html"
+        :title="$t('会话地图')"
+      />
+      <button
+        type="button"
+        class="synapse-map-close"
+        @click="synapseMapOpen = false"
+      >
+        {{ $t('关闭') }}
+      </button>
     </div>
 
     <!-- 重命名对话框 -->
@@ -2904,75 +3041,6 @@ function continueGeneration() {
 .save-agent-form { display: flex; flex-direction: column; gap: 6px; }
 .save-agent-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
 .save-agent-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
-/* ── 会话地图：整屏大窗格 ──
-   侧栏太窄，装不下"空间化排布"；所以地图是独立的整屏视图。
-   z-index 用 --z-viewer（语义即"全屏查看器"），避免裸写数字绕过令牌检查。 */
-.map-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: var(--z-viewer);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  padding: var(--space-4);
-  background: var(--bg-overlay, rgb(0 0 0 / 45%));
-}
-
-.map-frame {
-  display: flex;
-  flex-direction: column;
-  width: min(1600px, 100%);
-  height: 100%;
-  overflow: hidden;
-  border: 1px solid var(--border-default, var(--border-subtle));
-  border-radius: var(--radius-lg);
-  background: var(--bg-primary);
-}
-
-.map-head {
-  flex: none;
-  display: flex;
-  align-items: center;
-  gap: var(--space-3);
-  padding: var(--space-3) var(--space-4);
-  border-bottom: 1px solid var(--border-subtle);
-}
-
-.map-title {
-  font-size: var(--fs-md);
-  font-weight: 600;
-  color: var(--text-primary);
-}
-
-.map-sub {
-  font-size: var(--fs-xs);
-  color: var(--text-tertiary);
-}
-
-.map-close {
-  margin-left: auto;
-  flex: none;
-  padding: 2px 12px;
-  font-size: var(--fs-sm);
-  color: var(--text-secondary);
-  background: var(--bg-secondary);
-  border: none;
-  border-radius: var(--radius-full);
-  cursor: pointer;
-}
-
-.map-close:hover {
-  color: var(--text-primary);
-  background: var(--bg-tertiary, var(--bg-secondary));
-}
-
-/* 画布容器：SessionMap 自身是 flex:1，这里只要给出高度与内边距 */
-.map-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-  padding: var(--space-3);
-}
 
 @media (max-width: 768px) {
   .map-overlay {
@@ -2988,4 +3056,33 @@ function continueGeneration() {
     display: none;
   }
 }
+
+/* 新版会话地图（嵌入 vendor/dsh-synapse 前端）：整屏 iframe + 一个关闭按钮。
+   它自带完整样式（public/sessionmap/styles.css），这里只负责承载与层级 ——
+   所以全部走 Chiron 的 token，不引入硬编码值。 */
+.synapse-map-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: var(--z-viewer);
+  background: var(--bg-page);
+}
+.synapse-map-frame {
+  display: block;
+  width: 100%;
+  height: 100%;
+  border: 0;
+}
+.synapse-map-close {
+  position: absolute;
+  top: var(--space-3);
+  right: var(--space-4);
+  padding: 4px var(--space-3);
+  font-size: var(--fs-sm);
+  color: var(--text-primary);
+  background: var(--bg-elevated);
+  border: 1px solid var(--border-default);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.synapse-map-close:hover { border-color: var(--accent); color: var(--accent); }
 </style>

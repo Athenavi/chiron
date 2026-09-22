@@ -810,6 +810,80 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 	return msgs, nil
 }
 
+// ForkSession 从 srcSessionID 的第 fromIndex 条消息处分叉出一个新会话。
+//
+// 为什么需要它：会话地图要按**真实分支**连线。参照实现 `vendor/dsh-synapse`
+// （DSH 的可视化对话工作台）是按 DSH 原生 `session.header.parentSession` 画边的，
+// 而我们的 `sessions` 表此前**完全没有父子关系** —— 地图画出来只有孤立方块。
+//
+// 语义：
+//   - 复制**前 fromIndex 条**消息（含第 fromIndex 条）到新会话；
+//   - 新会话记 `parent_session_id` + `branch_from_seq = fromIndex`，这是"这条分支
+//     从对话的哪一步长出来"的唯一依据（地图连线与详情面板都读它）；
+//   - 复制出来的消息时间戳按 `now() - (n - 序号) ms` 重排：既保持与源会话一致的
+//     相对顺序，又保证新会话之后的真实消息时间必然更大（否则历史列表排序会乱）。
+//
+// 依赖 PG13+ 的 `gen_random_uuid()`（PG12 需要 pgcrypto 扩展）。
+func (m *Manager) ForkSession(ctx context.Context, srcSessionID, userID, title string, fromIndex int) (string, int, error) {
+	if m.pool == nil {
+		return "", 0, errors.New("database unavailable")
+	}
+	if fromIndex <= 0 {
+		return "", 0, errors.New("from_index must be greater than 0")
+	}
+	newID, err := genID()
+	if err != nil {
+		return "", 0, err
+	}
+	tx, err := m.pool.Begin(ctx)
+	if err != nil {
+		return "", 0, fmt.Errorf("begin fork tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 源会话：校验归属（同租户语义由 tenant 过滤保证），并继承 agent/tenant
+	var srcTitle string
+	if err := tx.QueryRow(ctx,
+		`SELECT COALESCE(title, '') FROM sessions
+		  WHERE id = $1 AND (user_id = NULLIF($2, '')::uuid OR user_id IS NULL)`,
+		srcSessionID, userID).Scan(&srcTitle); err != nil {
+		return "", 0, fmt.Errorf("source session not found: %w", err)
+	}
+	if strings.TrimSpace(title) == "" {
+		title = strings.TrimSpace(srcTitle) + " · 分支"
+	}
+	if _, err := tx.Exec(ctx,
+		`INSERT INTO sessions (id, tenant_id, user_id, agent_id, title, status, created_at, updated_at,
+		                       parent_session_id, branch_from_seq)
+		 SELECT $1, tenant_id, user_id, agent_id, $2, 'active', NOW(), NOW(), id, $3
+		   FROM sessions WHERE id = $4`,
+		newID, title, fromIndex, srcSessionID); err != nil {
+		return "", 0, fmt.Errorf("insert forked session: %w", err)
+	}
+
+	// 复制消息：source（用户输入 / 子 Agent 自动轮）一并复制，前端靠它区分渲染
+	tag, err := tx.Exec(ctx,
+		`INSERT INTO messages (id, session_id, role, content, tool_calls, turn_id, source, created_at)
+		 SELECT gen_random_uuid()::text, $1, g.role, g.content, g.tool_calls, g.turn_id, g.source,
+		        NOW() - ((g.n - g.rn) * INTERVAL '1 millisecond')
+		   FROM (SELECT role, content, tool_calls, turn_id, source,
+		                ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn,
+		                $2::int AS n
+		           FROM messages
+		          WHERE session_id = $3
+		          ORDER BY created_at, id
+		          LIMIT $2) g`,
+		newID, fromIndex, srcSessionID)
+	if err != nil {
+		return "", 0, fmt.Errorf("copy messages for fork: %w", err)
+	}
+	copied := int(tag.RowsAffected())
+	if err := tx.Commit(ctx); err != nil {
+		return "", 0, fmt.Errorf("commit fork tx: %w", err)
+	}
+	return newID, copied, nil
+}
+
 // ── Cache helpers ─────────────────────────────────────────────────────────
 
 // sessionCacheEntry 缓存条目：带版本（updated_at 纳秒）以便写入时比较。

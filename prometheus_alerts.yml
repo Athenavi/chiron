@@ -7,26 +7,34 @@ groups:
     interval: 30s
     rules:
       # PostgreSQL 连接失败
-      - alert: PostgresConnectionFailure
-        expr: up{job="postgres"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: database
-        annotations:
-          summary: "PostgreSQL 连接失败"
-          description: "PostgreSQL 实例 {{ $labels.instance }} 已断开连接超过1分钟"
-      
+      #
+      # ⚠️ 暂时停用：`up{job="postgres"}` 需要 postgres_exporter（compose 里没有），
+      # 因此这条规则**永远不会触发** —— 留着它比没有更危险（运维会以为有覆盖）。
+      # 启用条件：部署 postgres_exporter 并新增 job_name: postgres，随后恢复本规则。
+      # - alert: PostgresConnectionFailure
+      #   expr: up{job="postgres"} == 0
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #     component: database
+      #   annotations:
+      #     summary: "PostgreSQL 连接失败"
+      #     description: "PostgreSQL 实例 {{ $labels.instance }} 已断开连接超过1分钟"
+
       # Redis 连接失败
-      - alert: RedisConnectionFailure
-        expr: up{job="redis"} == 0
-        for: 1m
-        labels:
-          severity: critical
-          component: cache
-        annotations:
-          summary: "Redis 连接失败"
-          description: "Redis 实例 {{ $labels.instance }} 已断开连接超过1分钟"
+      #
+      # ⚠️ 同上：`up{job="redis"}` 需要 redis_exporter（compose 里没有）。
+      # 当前可用的替代信号：引擎 `GET /readyz` 在 Redis 不可用时返回 503，
+      # 因此「引擎被摘出就绪」比这条告警更早暴露问题。
+      # - alert: RedisConnectionFailure
+      #   expr: up{job="redis"} == 0
+      #   for: 1m
+      #   labels:
+      #     severity: critical
+      #     component: cache
+      #   annotations:
+      #     summary: "Redis 连接失败"
+      #     description: "Redis 实例 {{ $labels.instance }} 已断开连接超过1分钟"
       
       # Python Engine 不可用
       - alert: PythonEngineDown

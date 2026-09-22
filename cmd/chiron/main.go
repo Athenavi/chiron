@@ -243,6 +243,9 @@ func main() {
 	// 前端 /events 才可能**实时**看到后台子 Agent 的进度（否则只剩选中 run 时的轮询）。
 	api.StartSubagentEventsRelay(lifecycleCtx, eventHub)
 
+	// 会话地图布局：Redis 热层 → 异步落 PG（关机前做一次 flush，避免"拖过的位置"丢失）
+	api.StartSessionMapFlusher(lifecycleCtx)
+
 	// P1-1: 启动数据库连接池自动调优（每5分钟检查一次）
 	if db.GlobalDBManager != nil {
 		db.GlobalDBManager.SetTuneInterval(5 * time.Minute)

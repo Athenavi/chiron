@@ -975,7 +975,10 @@ create table sessions
     created_at timestamp,
     updated_at timestamp,
     pinned     boolean,
-    tag        varchar(64)
+    tag        varchar(64),
+    parent_session_id varchar(36)
+        references sessions,
+    branch_from_seq integer
 );
 
 create index ix_sessions_tag
@@ -1197,3 +1200,46 @@ create table user_memory_entries
 create index ix_user_memory_entries_lookup
     on user_memory_entries (tenant_id, user_id, status);
 
+create table session_map_workspaces
+(
+    id         varchar(64) not null
+        primary key,
+    tenant_id  varchar(36),
+    user_id    varchar(36),
+    name       varchar(255) default '' not null,
+    viewport   jsonb        default '{}'::jsonb not null,
+    created_at timestamp    default now() not null,
+    updated_at timestamp    default now() not null
+);
+
+create index session_map_workspaces_owner_idx
+    on session_map_workspaces (tenant_id, user_id);
+
+create table session_map_nodes
+(
+    id              varchar(64) not null
+        primary key,
+    workspace_id    varchar(64) not null
+        references session_map_workspaces,
+    session_id      varchar(36)
+        references sessions,
+    parent_node_id  varchar(64)
+        references session_map_nodes,
+    edge_kind       varchar(16) default 'manual' not null,
+    x               integer     default 0 not null,
+    y               integer     default 0 not null,
+    title           varchar(255),
+    color           varchar(16),
+    collapsed       boolean     default false not null,
+    hidden          boolean     default false not null,
+    pinned          boolean     default false not null,
+    branch_from_seq integer,
+    created_at      timestamp   default now() not null,
+    updated_at      timestamp   default now() not null
+);
+
+create index session_map_nodes_workspace_idx
+    on session_map_nodes (workspace_id);
+
+create index session_map_nodes_session_idx
+    on session_map_nodes (session_id);

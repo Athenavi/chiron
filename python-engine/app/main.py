@@ -885,6 +885,23 @@ def _setup_routes(app: FastAPI) -> None:
     async def healthz():
         return {"status": "ok"}
 
+    @app.get("/metrics")
+    async def metrics():
+        """Prometheus 抓取端点。
+
+        此前指标只在 `app/observability/metrics.py` 里**定义**，没有任何导出路由 ——
+        于是 `queue_depth` / `queue_dlq_total` / `token_budget_*` 等全部没有采集入口，
+        多实例压测时看不到队列积压与吞吐，等于盲测；而 `prometheus_alerts.yml` 里
+        已经引用了 `up{job="python-engine"}`，那条规则一直不可能成立。
+
+        鉴权：`/metrics` 已在 middleware 白名单里（`app/middleware/auth.py`），
+        因此这里不需要额外令牌 —— 生产环境请用网络策略/仅内网暴露来隔离。
+        """
+        from fastapi import Response
+        from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
+
+        return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
+
     @app.get("/readyz")
     async def readyz():
         """K8s readiness: Redis + 至少一个 Provider 可用"""

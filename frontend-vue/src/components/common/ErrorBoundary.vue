@@ -36,6 +36,12 @@ function reload() {
       <div class="error-message">
         {{ isProduction ? 'An unexpected error occurred. Please try again.' : error.message }}
       </div>
+      <!-- 开发环境把堆栈也摊开：只给 message（比如一个 TypeError）根本定位不到是哪一行，
+           排查时还得去 DevTools 翻，很多场景下拿不到。生产环境不渲染。 -->
+      <pre
+        v-if="!isProduction && error.stack"
+        class="error-stack"
+      >{{ error.stack }}</pre>
       <div class="error-actions">
         <Button
           type="primary"
@@ -85,6 +91,22 @@ function reload() {
   max-width: 420px;
   word-break: break-word;
   font-family: var(--font-mono, monospace);
+}
+.error-stack {
+  max-width: 760px;
+  max-height: 260px;
+  margin: 0;
+  overflow: auto;
+  padding: 10px 12px;
+  font-family: var(--font-mono, monospace);
+  font-size: 12px;
+  line-height: 1.55;
+  color: var(--text-secondary, #4b5563);
+  text-align: left;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: var(--bg-secondary, #f3f4f6);
+  border-radius: 8px;
 }
 .error-actions {
   display: flex;
