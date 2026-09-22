@@ -31,6 +31,7 @@ import app.tools.skill  # noqa: F401
 import app.tools.subagent  # noqa: F401
 import app.tools.subagent_result  # noqa: F401
 import app.tools.terminal  # noqa: F401
+import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy，见该模块文档）
 from app.tools.client import SystemToolClient
 from app.tools.discovery import ToolDiscovery
 from app.tools.registry import ToolRegistry, registry

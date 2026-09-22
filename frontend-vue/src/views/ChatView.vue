@@ -34,8 +34,9 @@ import ChatStatusBar from '../components/chat/ChatStatusBar.vue'
 import ChatDisplaySettings from '../components/chat/ChatDisplaySettings.vue'
 import AskCard from '../components/chat/AskCard.vue'
 import CallChainTimeline from '../components/CallChainTimeline.vue'
-import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined } from '@ant-design/icons-vue'
+import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter } from '../components/chat/chat-types'
+import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
 import { findMatches } from '../components/chat/transcriptSearch'
 import { describeApiError } from '../utils/apiError'
 import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
@@ -59,6 +60,9 @@ const toolbarMenuItems = computed(() => [
   { key: 'save_agent', label: t('存为 Agent'), icon: () => h(RobotOutlined), disabled: !hasSessionContent.value || savingAgent.value },
   { type: 'divider' as const },
   { key: 'display', label: t('显示设置'), icon: () => h(FontSizeOutlined) },
+  // 交换布局：侧边栏与分屏左右对调。注意这里引用的 layoutSwapped 定义在本文件靠后处，
+  // 但本数组是 computed（getter 惰性求值），执行时它已初始化 —— 与 splitTitle 同理。
+  { key: 'swap_layout', label: layoutSwapped.value ? t('布局：侧栏在右') : t('布局：侧栏在左'), icon: () => h(SwapOutlined) },
   { key: 'theme', label: themeStore.isDark ? t('切换到亮色模式') : t('切换到暗色模式'), icon: () => h(themeStore.isDark ? BulbFilled : BulbOutlined) },
 ])
 
@@ -171,6 +175,33 @@ async function saveAsAgent() {
   }
 }
 
+/**
+ * 布局方向：把右侧的侧边栏与左侧的分屏**左右对调**。
+ *
+ * 为什么是"本机记忆"而不是服务端偏好：它描述的是**这块屏幕上的阅读习惯**
+ * （宽屏上有人习惯把会话列表放在左手边），不随账号走。与字号、主题同一类，
+ * 所以落 localStorage，且**读取失败一律回退默认**（隐私模式不该因此崩）。
+ */
+const LAYOUT_SWAP_KEY = 'chiron.chat.swapLayout'
+const layoutSwapped = ref(readLayoutSwap())
+
+function readLayoutSwap(): boolean {
+  try {
+    return localStorage.getItem(LAYOUT_SWAP_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function toggleLayout() {
+  layoutSwapped.value = !layoutSwapped.value
+  try {
+    localStorage.setItem(LAYOUT_SWAP_KEY, layoutSwapped.value ? '1' : '0')
+  } catch {
+    /* 存不下也不影响本次会话内的切换 */
+  }
+}
+
 function onToolbarMenu(info: { key: string | number }) {
   if (info.key === 'export') exportMarkdown()
   else if (info.key === 'save_kb') saveToKbOpen.value = true
@@ -179,6 +210,7 @@ function onToolbarMenu(info: { key: string | number }) {
   else if (info.key === 'save_agent') openSaveAsAgent()
   else if (info.key === 'display') displaySettingsOpen.value = true
   else if (info.key === 'theme') themeStore.toggleTheme()
+  else if (info.key === 'swap_layout') toggleLayout()
 }
 
 // 消息区「引用到输入框」：把选中文本交给输入框（ChatInput 暴露 insertText）
@@ -683,13 +715,6 @@ function onModeChange(m: string) {
 }
 
 /** 归一化后的 metadata（可能为 JSON 字符串或对象） */
-function normalizeMeta(raw: any): Record<string, any> | undefined {
-  if (!raw) return undefined
-  if (typeof raw === 'string') {
-    try { raw = JSON.parse(raw) } catch { return undefined }
-  }
-  return raw && typeof raw === 'object' ? raw : undefined
-}
 
 // ── 互联互通：统一任务模式 + 上下文芯片（与 SSE 流式并列的新路径） ──
 // 路由 query 约定（由 WorkstationNav / 各工作台入口发起）：
@@ -1376,89 +1401,6 @@ const loadingEarlier = ref(false)
 const initialLoading = ref(false)
 const switchSeq = ref(0)
 
-function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
-  interface TimelineEntry { t: number; items: ChatItem[] }
-  const turnOf = (m: any): string | undefined => (m?.turn_id ? String(m.turn_id) : undefined)
-  const timeline: TimelineEntry[] = (messages || [])
-    .filter((m: any) => (m.role === 'user' || m.role === 'assistant') && m.content)
-    .map((m: any) => {
-      const clock = formatClock(m.created_at)
-      const turnId = turnOf(m)
-      const items: ChatItem[] = []
-      if (m.role === 'user') {
-        items.push({ kind: 'text', role: 'user', content: stripUserInputTag(m.content), time: clock, id: m.id, turnId })
-      } else {
-        const { reasoning, body } = splitThinking(m.content, { loose: true })
-        if (reasoning) items.push({ kind: 'reasoning', content: reasoning, time: clock, id: `${m.id}:r`, turnId })
-        if (body) items.push({
-          kind: 'text', role: 'assistant', content: body, time: clock, id: m.id, turnId,
-          metadata: normalizeMeta((m as any)?.metadata),
-        } as any)
-      }
-      return { t: new Date(m.created_at).getTime(), items }
-    })
-
-  const callsById = new Map<string, any>((toolCalls || []).map((tc: any) => [tc.id, tc]))
-  ;(messages || []).forEach((m: any) => {
-    if (m.role !== 'assistant' || !m.tool_calls || m.tool_calls === '[]') return
-    let inline: any[]
-    try { inline = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls } catch { return }
-    for (const tc of inline || []) {
-      if (!tc) continue
-      if (typeof tc === 'string') {
-        if (!callsById.has(tc)) {
-          callsById.set(tc, { id: tc, tool_name: 'tool', input: '', output: '', is_error: false, created_at: m.created_at, turn_id: m.turn_id })
-        }
-        continue
-      }
-      if (!tc.id) continue
-      const known = callsById.get(tc.id)
-      if (known) {
-        // 已有记录：只补回合身份，不覆盖落库的工具输出
-        if (!known.turn_id) known.turn_id = m.turn_id
-        continue
-      }
-      callsById.set(tc.id, {
-        id: tc.id,
-        tool_name: tc.function?.name ?? tc.name,
-        input: tc.function?.arguments ?? tc.arguments ?? '',
-        output: '',
-        is_error: false,
-        created_at: m.created_at,
-        turn_id: m.turn_id,
-      })
-    }
-  })
-
-  Array.from(callsById.values()).forEach((tc: any) => {
-    const turnId = turnOf(tc)
-    const callItems: ChatItem[] = [{
-      kind: 'tool_call', id: tc.id, name: tc.tool_name,
-      arguments: tc.input || '', status: 'done', turnId,
-    }]
-    if (tc.output) {
-      callItems.push({
-        kind: 'tool_result', toolCallId: tc.id, id: `${tc.id}:res`,
-        content: tc.output, isError: !!tc.is_error, turnId,
-      })
-    }
-    timeline.push({ t: new Date(tc.created_at).getTime(), items: callItems })
-  })
-  timeline.sort((a, b) => a.t - b.t)
-  const flat = timeline.flatMap(e => e.items)
-  const merged: ChatItem[] = []
-  let prevDay = ''
-  timeline.forEach((e, i) => {
-    const d = new Date(e.t)
-    const dayKey = `${d.getFullYear()}-${d.getMonth() + 1}-${d.getDate()}`
-    if (i > 0 && prevDay !== dayKey) {
-      merged.push({ kind: 'date_divider', content: `${d.getMonth() + 1}月${d.getDate()}日`, id: `date-${dayKey}-${i}` })
-    }
-    merged.push(...e.items)
-    prevDay = dayKey
-  })
-  return merged.length > flat.length ? merged : flat
-}
 
 async function loadEarlier() {
   if (loadingEarlier.value || !hasMore.value || !activeSessionId.value || !earliestCursor.value) return
@@ -2009,7 +1951,7 @@ function continueGeneration() {
 </script>
 
 <template>
-  <div class="chat-layout">
+  <div class="chat-layout" :class="{ 'is-swapped': layoutSwapped }">
     <!-- 分屏 6a：**只读参考栏**（左侧）。
          布局本身是 flex，所以加一栏不需要改任何 CSS；它自己滚动，
          不会把主会话的滚动位置带跑（与主列表的滚动锚定互不干扰）。 -->
@@ -2017,6 +1959,9 @@ function continueGeneration() {
       v-if="splitSessionId"
       :session-id="splitSessionId"
       :title="splitTitle"
+      :sessions="sessions"
+      :exclude-session-id="activeSessionId"
+      @update:session-id="splitSessionId = $event"
     />
     <div class="chat-main">
       <div
@@ -2640,6 +2585,13 @@ function continueGeneration() {
 <style scoped>
 .chat-layout { position: relative; display: flex; height: 100%; background: var(--bg-page); overflow: hidden; }
 .chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+/* 交换布局：侧边栏移到左侧、分屏移到右侧。
+   用 flex `order` 而不是改 DOM —— 组件的挂载位置不动，只是视觉顺序变化，
+   所以不影响任何依赖 DOM 顺序的逻辑（焦点流、SSR、既有测试）。
+   .side-panel 默认在 DOM 末尾（order 0 → 靠右），给它 -1 就排到最左；
+   .preview-pane 默认在 DOM 最前（order 0 → 靠左），给它 1 就排到最右。 */
+.chat-layout.is-swapped .side-panel { order: -1; }
+.chat-layout.is-swapped .preview-pane { order: 1; }
 .chat-body { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .chat-toolbar {
   flex: none;
