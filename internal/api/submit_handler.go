@@ -147,10 +147,16 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		slog.Warn("turn: generate id failed, turn tracking disabled", "error", turnIDErr)
 		turnID = ""
 	}
+	// 消息来源：子 Agent 自动轮（followup）注入的消息必须带标记 —— 前端据此渲染成
+	// 系统卡片，而不是伪装成一条用户提问（见 agent_followup.go 的 FollowupKey）。
+	msgSource := ""
+	if _, ok := workbenchCtx[FollowupKey]; ok {
+		msgSource = FollowupSource
+	}
 	// S 修复：上下文丢失 — 提交时立即持久化用户消息（SSE 中断/停止也不丢历史）
 	{
 		sctx, cancelStore := storeCtxFor()
-		h.sessionMgr.SaveUserMessage(sctx, sessionID, userID, content, turnID)
+		h.sessionMgr.SaveUserMessage(sctx, sessionID, userID, content, turnID, msgSource)
 		if turnID != "" {
 			h.sessionMgr.CreateTurn(sctx, turnID, sessionID, userID)
 		}

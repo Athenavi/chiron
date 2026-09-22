@@ -23,11 +23,12 @@
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import time
 from collections import deque
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +59,7 @@ DEFAULT_QUEUE_MAXSIZE = 256
 DEFAULT_MERGE_WINDOW = 0.25      # 同频道合并窗口（秒）
 DEFAULT_PER_RUN_BUDGET = 20      # 每 run 每秒非终态事件预算
 DEFAULT_BUFFER_BYTES = 8 * 1024  # 同频道未发送缓冲上限
+DEFAULT_DELIVER_QUEUE = 1024     # 常驻投递器的待发队列上限（满了计数丢弃，不阻塞 emit）
 
 
 @dataclass
@@ -73,6 +75,7 @@ class SubagentEvent:
     content: str = ""
     truncated: bool = False
     usage: dict[str, Any] = field(default_factory=dict)
+    summary: str = ""
     ts: float = field(default_factory=time.time)
 
     def to_payload(self) -> dict[str, Any]:
@@ -94,6 +97,8 @@ class SubagentEvent:
             payload["truncated"] = True
         if self.usage:
             payload["usage"] = self.usage
+        if self.summary:
+            payload["summary"] = self.summary
         return payload
 
 
@@ -118,6 +123,11 @@ class EventSink:
         # run_id -> (window_start, count)
         self._budget_state: dict[str, list] = {}
         self.dropped = 0
+        # 常驻投递器：**不依赖父 SSE 生成器存活**（见 attach_persistent 的说明）
+        self._deliverers: list[Callable[[dict[str, Any]], Awaitable[None]]] = []
+        self._deliver_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=DEFAULT_DELIVER_QUEUE)
+        self._deliver_task: asyncio.Task | None = None
+        self.delivery_dropped = 0
 
     # ── 写入端（由 SubAgentRunner 调用）──
 
@@ -185,12 +195,53 @@ class EventSink:
         depth: int = 1,
         profile: str = "",
         usage: dict[str, Any] | None = None,
+        summary: str = "",
     ) -> None:
-        """写入唯一终态：先排空该 run 的预览缓冲，再入队（不参与丢弃）。"""
+        """写入唯一终态：先排空该 run 的预览缓冲，再入队（不参与丢弃）。
+
+        带上 ``summary``（L1 摘要）后，前端收到终态的那一刻就能显示结论，
+        不必再等下一轮 ``GET /v1/subagent/runs`` 轮询。
+        """
         self._flush_pending(run_id, force=True)
         self._push(SubagentEvent(type=EV_DONE, run_id=run_id, parent_run_id=parent_run_id,
-                                 depth=depth, profile=profile, status=status, usage=usage or {}),
-                   terminal=True)
+                                 depth=depth, profile=profile, status=status,
+                                 usage=usage or {}, summary=summary), terminal=True)
+
+    # ── 常驻投递端（生命周期与 sink 绑定，**不依赖父 SSE 生成器**）──
+
+    def attach_persistent(self, deliver: Callable[[dict[str, Any]], Awaitable[None]]) -> None:
+        """注册一个常驻投递器，并启动后台冲刷任务。
+
+        为什么需要它：``drain()`` 的调用方是父 SSE 生成器（``main.py``），而父 turn 一结束
+        生成器就 return —— 此时 ``run_in_background=True`` 的子 Agent 往往才跑到一半，
+        它后续 emit 的事件既进不了 SSE、也写不进运行期缓存；前端面板与
+        ``GET /v1/subagent/runs/{id}/events`` 于是永远看不到后台 run 的进度。
+
+        投递器挂在 sink 自己身上：只要还有任务持有这个 sink（contextvar 会随
+        ``asyncio.create_task`` 复制给后台任务），事件就会被投递出去。
+        """
+        self._deliverers.append(deliver)
+        if self._deliver_task is None:
+            # 持引用，避免后台任务被 GC 静默回收
+            self._deliver_task = asyncio.create_task(self._flush_deliveries())
+
+    async def _flush_deliveries(self) -> None:
+        while True:
+            payload = await self._deliver_queue.get()
+            for deliver in list(self._deliverers):
+                try:
+                    await deliver(payload)
+                except Exception as exc:  # noqa: BLE001 - 投递失败不能影响子 Agent
+                    logger.warning("subagent event delivery failed: %s", str(exc)[:200])
+
+    def _fanout(self, event: SubagentEvent) -> None:
+        """把**已通过限流**的事件投递给常驻投递器（非阻塞；队列满则计数丢弃）。"""
+        if not self._deliverers:
+            return
+        try:
+            self._deliver_queue.put_nowait(event.to_payload())
+        except asyncio.QueueFull:
+            self.delivery_dropped += 1
 
     # ── 消费端（由父 SSE 生成器调用）──
 
@@ -227,6 +278,7 @@ class EventSink:
                 self.dropped += 1
                 return
         self._queue.append(event)
+        self._fanout(event)
 
     def _drop_oldest_preview(self) -> None:
         for i, event in enumerate(self._queue):

@@ -949,7 +949,12 @@ function buildUnifiedItems(list: any[]): ChatItem[] {
     if (!content) return
     const time = formatClock(m.timestamp || m.created_at)
     if (m.role === 'user') {
-      out.push({ kind: 'text', role: 'user', content: stripUserInputTag(content), time, id: `uni_u_${idx}` })
+      out.push({
+        kind: 'text', role: 'user', content: stripUserInputTag(content), time, id: `uni_u_${idx}`,
+        // 来源标记（'subagent_followup' = 子 Agent 自动轮）：带上它，刷新后仍渲染成
+        // 系统提示而不是用户气泡（见 internal/api/agent_followup.go）
+        ...(m.source ? { source: m.source } : {}),
+      })
     } else {
       const { reasoning, body } = splitThinking(content, { loose: true })
       if (reasoning) out.push({ kind: 'reasoning', content: reasoning, time, id: `uni_r_${idx}` })

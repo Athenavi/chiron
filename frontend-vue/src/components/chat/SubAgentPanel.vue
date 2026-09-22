@@ -174,6 +174,37 @@ async function selectRun(runId: string) {
   }
 }
 
+/** 已到终态的 run 状态（这些状态之后不再有增量，只补一次尾巴） */
+const TERMINAL_STATUSES = new Set(['completed', 'failed', 'cancelled', 'killed', 'stopped', 'lost', 'done'])
+/** 已经为某个 run 补过"终态尾巴"的标记（避免终态后继续空轮询） */
+const tailLoaded = new Set<string>()
+
+/**
+ * 轮询选中 run 的事件流。
+ *
+ * 为什么需要：选中 run 的事件只有两个来源 —— 父会话 SSE（`props.liveEvents`）与
+ * `GET /v1/subagent/runs/{id}/events`。`run_in_background=true` 的子 Agent 在父 turn 结束后
+ * 不再有 SSE（事件此时只落运行期缓存），所以必须靠这条轮询把增量拉回来。
+ */
+async function pollSelectedEvents() {
+  const runId = selectedRunId.value
+  if (!runId || historyLoading.value) return
+  const current = displayRuns.value.find(r => r.run_id === runId)
+  const status = String(current?.status || 'running')
+  const terminal = TERMINAL_STATUSES.has(status)
+  if (terminal && tailLoaded.has(runId)) return
+  try {
+    const res = await getSubagentRunEvents(runId)
+    if (selectedRunId.value !== runId) return // 期间切换了 run：丢弃这次结果
+    const seen = new Set(historyEvents.value.map(e => e.id).filter(Boolean) as string[])
+    const fresh = res.events.filter(e => !e.id || !seen.has(e.id))
+    if (fresh.length) historyEvents.value = [...historyEvents.value, ...fresh]
+    if (terminal) tailLoaded.add(runId)
+  } catch {
+    /* 轮询失败不打断对话；下一次 tick 会再试 */
+  }
+}
+
 function dismissCostHint() {
   showCostHint.value = false
   try {
@@ -252,7 +283,11 @@ onMounted(() => {
     showCostHint.value = globalThis.localStorage?.getItem(COST_HINT_KEY) !== '1'
   } catch { showCostHint.value = true }
   void loadRuns()
-  timer = globalThis.setInterval(() => { void loadRuns() }, 3000)
+  // 3s tick：刷新运行树 + 拉选中 run 的增量事件（后台 run 没有 SSE，只能靠这条）
+  timer = globalThis.setInterval(() => {
+    void loadRuns()
+    void pollSelectedEvents()
+  }, 3000)
 })
 
 onBeforeUnmount(() => {

@@ -338,9 +338,31 @@ func (h *SubagentHandler) stepsFromDB(ctx context.Context, runID string, limit i
 		}
 		row["content"] = content
 		row["truncated"] = truncated
+		// DB 的列叫 kind，前端契约却是 SSE 的事件名 type —— 不映射的话，历史回放
+		// （Redis Stream 过了 TTL 只剩 DB）一条都命中不到渲染分支，输出页恒空白。
+		kind := stringOf(row["kind"])
+		row["type"] = stepKindToEventType(kind)
+		row["run_id"] = runID
+		if kind == "tool_call" || kind == "tool_result" {
+			// 这两类的可读信息在 tool_name（content 常是参数 JSON），挂到 status 上供前端展示
+			row["status"] = stringOf(row["tool_name"])
+		}
 		out = append(out, row)
 	}
 	return out
+}
+
+// stepKindToEventType 把 subagent_run_steps.kind 映射成前端契约里的事件名（subagent.*）。
+// 未知 kind 一律当 notice —— 前端对 notice 会渲染 content，不会把内容丢掉。
+func stepKindToEventType(kind string) string {
+	switch kind {
+	case "message":
+		return "subagent.text"
+	case "tool_call", "tool_result":
+		return "subagent.status"
+	default:
+		return "subagent.notice"
+	}
 }
 
 // normalizeRunRow 统一 Redis/DB 两条来源的字段名与类型（前端只认这一份契约）。
@@ -348,7 +370,12 @@ func normalizeRunRow(row map[string]interface{}) map[string]interface{} {
 	view := map[string]interface{}{"source": "db"}
 	view["run_id"] = stringOf(row["id"])
 	view["status"] = stringOf(row["status"])
-	for _, field := range []string{"parent_run_id", "profile_name", "summary", "error"} {
+	// 字段名必须与 Redis 那条来源**逐字一致**（前端只认一份契约）：DB 列叫 profile_name，
+	// 输出的键必须是 profile —— 否则 DB 回落时前端拿不到 profile，树行退化成 run_id 显示。
+	if v := stringOf(row["profile_name"]); v != "" {
+		view["profile"] = v
+	}
+	for _, field := range []string{"parent_run_id", "summary", "error"} {
 		if v := stringOf(row[field]); v != "" {
 			view[field] = v
 		}

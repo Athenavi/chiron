@@ -395,7 +395,10 @@ class SubAgentRunner:
                 error=" | ".join(errors)[:1000],
             )
 
-        # 唯一终态：终态前排空预览缓冲（EventSink 内部保证）
+        usage = {"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps}
+
+        # 唯一终态：终态前排空预览缓冲（EventSink 内部保证）。
+        # 带上 L1 摘要 —— 前端收到终态即可显示结论，不必等下一轮 runs 轮询。
         if sink is not None:
             sink.emit_done(
                 run_id=run_id,
@@ -403,18 +406,18 @@ class SubAgentRunner:
                 parent_run_id=parent_run_id,
                 depth=child_depth,
                 profile=profile_name,
-                usage={"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps},
+                usage=usage,
+                summary=(summary or "")[:2000],
             )
 
         # 运行期缓存收尾：状态 + 摘要 + 用量（侧边栏与递归树直接读，不必回 PG）
         if cache is not None:
-            usage = {"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps}
             await cache.update_status(run_id=run_id, tenant=cache_tenant, status=status,
                                       summary=summary, usage=usage, result_ref=run_id)
             await cache.update_tree_summary(tenant=cache_tenant, root_session_id=cache_root,
                                             run_id=run_id, summary=summary, status=status,
                                             depth=child_depth, parent_run_id=parent_run_id,
-                                            profile=profile_name)
+                                            profile=profile_name, usage=usage)
 
         wrapped = _wrap_result(run_id, profile_name, status, l2_text, truncated)
         return SubagentRunResult(

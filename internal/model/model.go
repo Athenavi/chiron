@@ -50,7 +50,10 @@ type Message struct {
 	ToolCalls string    `json:"tool_calls,omitempty"` // OpenAI 格式 tool_calls JSONB（S 修复：落库）
 	// TurnID 标识消息所属回合。前端按回合分组渲染与锚定：同一回合的
 	// 思考/正文/工具卡片共享同一个稳定身份，历史补丁与分页插入不得改写它。
-	TurnID    string    `json:"turn_id,omitempty"`
+	TurnID string `json:"turn_id,omitempty"`
+	// Source 标记消息来源：空 = 用户正常输入；"subagent_followup" = 子 Agent 自动轮注入
+	// （见 internal/api/agent_followup.go）。前端据此渲染成系统卡片而非用户气泡。
+	Source    string    `json:"source,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

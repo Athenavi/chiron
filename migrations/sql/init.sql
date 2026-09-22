@@ -1068,7 +1068,8 @@ create table messages
     content    text        not null,
     tool_calls json,
     created_at timestamp,
-    turn_id    varchar(36)
+    turn_id    varchar(36),
+    source     varchar(32) default '' not null
 );
 
 create index ix_messages_turn_id

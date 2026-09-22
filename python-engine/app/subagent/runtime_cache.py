@@ -158,8 +158,13 @@ class SubagentRuntimeCache:
         depth: int,
         parent_run_id: str = "",
         profile: str = "",
+        usage: dict[str, Any] | None = None,
     ) -> None:
-        """把摘要回写进整树骨架（避免前端为 N 个子节点发 N 次查询）。"""
+        """把摘要回写进整树骨架（避免前端为 N 个子节点发 N 次查询）。
+
+        ``usage`` 必须一起回写：整树骨架正是 ``GET /v1/subagent/runs`` 的数据源，
+        少了用量会让面板的用量列与合计恒为 0（只有详情接口才读 run Hash）。
+        """
         if not self.available:
             return
         item = {
@@ -167,6 +172,8 @@ class SubagentRuntimeCache:
             "parent_run_id": parent_run_id, "profile": profile,
             "summary": (summary or "")[:1000],
         }
+        if usage:
+            item["usage"] = usage
         try:
             key = self.key_tree(tenant, root_session_id)
             await self._redis.hset(key, run_id, json.dumps(item, ensure_ascii=False))

@@ -337,6 +337,11 @@ func NewGatewayRouter(
 
 	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg)
 	registerAgentRoutes(mux, authMW, rlMW, publicMW, sanitizeMW, submitHandler, billingMgr, agentSem, tenantResMgr, eventHub, sessionMgr, authenticator, rpaHub, cfg.InternalToken, cfg.AgentSubmitTimeout)
+
+	// 子 Agent 完成 → 父会话新一轮：由引擎队列（agent_followup 任务）调用，
+	// 复用 /submit 的全套闸门（幂等/会话锁/并发/计费预检，见 agent_followup.go）。
+	mux.Handle("POST /v1/internal/agent-followup",
+		rlMW(internalTokenMW(cfg, AgentFollowupHandler(submitHandler, billingMgr, agentSem, tenantResMgr, cfg.AgentSubmitTimeout))))
 	registerAuthRoutes(mux, authHandler, authMW, rlMW)
 
 	// ── SSO 三方登录（公开流程 rlMW；用户自助 authMW；管理 authMW + sso:manage）──

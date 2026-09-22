@@ -26,6 +26,9 @@ DEFAULT_DEADLINE_SECONDS = {
     "memory_save": 900,
     "tool_job": 3600,
     "workflow_run": 7200,
+    # 子 Agent 完成后的「唤起父会话新一轮」信号：30 分钟内没送出去就没有意义了
+    # （会话锁可能被上一个 turn 占着，靠重试退避）
+    "agent_followup": 1800,
 }
 DEFAULT_DEADLINE_SECONDS_FALLBACK = 3600
 

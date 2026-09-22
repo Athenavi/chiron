@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -79,6 +80,16 @@ async def read_subagent_result(
         },
         "redacted_count": int(row["redacted_count"] or 0),
     }
+    # 产物路径：SQL 本来就查了 artifacts，之前却漏在 payload 之外 ——
+    # 父模型因此只看得到摘要，拿不到「改了哪些文件」。
+    if row["artifacts"]:
+        artifacts = row["artifacts"]
+        if isinstance(artifacts, str):
+            try:
+                artifacts = json.loads(artifacts)
+            except Exception:  # noqa: BLE001 - 形状不合预期就原样给出
+                pass
+        payload["artifacts"] = artifacts
     if row["error"]:
         payload["error"] = row["error"]
     if row["created_at"]:

@@ -1323,14 +1323,22 @@ async def agent_submit(
             logger.debug("subagent runtime cache unavailable: %s", cache_err)
         cache_tenant = getattr(task, "tenant_id", "") or "default"
 
-        async def _sink_frames():
-            """把旁路事件转成 SSE 帧，并同步落运行期缓存。"""
-            for sub_event in sink.drain():
-                payload = sub_event.to_payload()
-                if runtime_cache is not None:
-                    await runtime_cache.push_event(run_id=sub_event.run_id,
+        # 运行期缓存（Redis）的写入改由**常驻投递器**负责：它挂在 sink 身上，父 turn 结束后
+        # （后台委派的典型场景）仍在投递 —— 否则 `run_in_background=True` 的子 Agent 在父
+        # 生成器退出后的所有事件都无处可去，前端面板与 /events 端点永远空白。
+        if runtime_cache is not None:
+            async def _persist_subagent_event(payload) -> None:
+                run_id = payload.get("run_id") or ""
+                if run_id:
+                    await runtime_cache.push_event(run_id=run_id,
                                                    tenant=cache_tenant, payload=payload)
-                yield _frame(payload)
+
+            sink.attach_persistent(_persist_subagent_event)
+
+        async def _sink_frames():
+            """把旁路事件转成 SSE 帧（落缓存已交给上面的常驻投递器，避免双写）。"""
+            for sub_event in sink.drain():
+                yield _frame(sub_event.to_payload())
 
         pump = asyncio.create_task(_pump_runtime())
         try:

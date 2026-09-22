@@ -46,6 +46,11 @@ export interface TextItem extends ChatItemBase {
   attachments?: ChatAttachment[]
   /** P2-F: 生成被用户手动停止，显示"继续生成"提示 */
   stopped?: boolean
+  /**
+   * 消息来源（后端 messages.source）：'subagent_followup' = 子 Agent 自动轮注入的消息，
+   * 渲染成系统提示而不是用户气泡（见 internal/api/agent_followup.go）。
+   */
+  source?: string
 }
 
 export interface ChatAttachment {

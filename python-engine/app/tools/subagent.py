@@ -137,6 +137,12 @@ async def subagent(
                 runner,
                 bg_run_id,
                 task,
+                followup_ctx={
+                    "session_id": get_session_id(),
+                    "tenant_id": get_tenant_id(),
+                    "user_id": get_user_id(),
+                    "depth": depth,
+                },
                 profile_ref=profile,
                 mode=mode or "normal",
                 max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
@@ -181,13 +187,19 @@ async def subagent(
     return payload
 
 
-async def _drive_background(runner, run_id: str, task: str, **kwargs: Any) -> None:
+async def _drive_background(runner, run_id: str, task: str,
+                            followup_ctx: dict[str, Any] | None = None,
+                            **kwargs: Any) -> None:
     """后台驱动一次子 Agent 运行。
 
     异常一律吞掉并记日志：后台任务没有调用者在等它的异常，
     逃逸出去只会变成 "Task exception was never retrieved" 噪声。
-    状态与产物由 runner 落库（subagent_runs / subagent_run_steps），
-    父模型随后用 read_subagent_result(run_id) 取用。
+    状态与产物由 runner 落库（subagent_runs / subagent_run_steps）。
+
+    正常收尾时会投递一次「唤起父会话新一轮」的信号（``app.subagent.followup``）——
+    这是子 Agent 结论回到主对话的**唯一**通道：父 turn 通常在派发后就结束了，
+    不会有任何一轮主动调用 read_subagent_result。取消/异常路径不触发
+    （父 turn 被中断时不该自动再开一轮）。
     """
     try:
         result = await runner.run(task, run_id=run_id, **kwargs)
@@ -196,6 +208,19 @@ async def _drive_background(runner, run_id: str, task: str, **kwargs: Any) -> No
             run_id,
             getattr(result, "status", "?"),
         )
+        if followup_ctx and followup_ctx.get("session_id"):
+            from app.subagent.followup import fire_followup
+
+            fire_followup(
+                run_id=run_id,
+                session_id=followup_ctx.get("session_id", ""),
+                tenant_id=followup_ctx.get("tenant_id", ""),
+                user_id=followup_ctx.get("user_id", ""),
+                status=getattr(result, "status", "") or "",
+                summary=getattr(result, "summary", "") or "",
+                profile=getattr(result, "profile", "") or "",
+                depth=int(followup_ctx.get("depth", 0) or 0),
+            )
     except asyncio.CancelledError:
         logger.info("subagent 后台运行被取消 run_id=%s", run_id)
         raise

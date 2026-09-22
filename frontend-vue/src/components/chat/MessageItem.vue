@@ -503,6 +503,14 @@ onUpdated(enhanceContent)
             </a>
           </template>
         </div>
+        <!-- 子 Agent 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
+             （后端 messages.source === 'subagent_followup'） -->
+        <div
+          v-if="item.role === 'user' && (item as TextItem).source === 'subagent_followup'"
+          class="followup-badge"
+        >
+          {{ $t('子任务完成 · 主 Agent 自动汇总') }}
+        </div>
         <!-- 反向定位：来源工作台 chips（kb_id / workflow_id / agent_id，metadata 驱动） -->
         <div
           v-if="item.role === 'assistant' && sourceChips.length"
@@ -838,6 +846,13 @@ onUpdated(enhanceContent)
 
 /* ── 反向定位：来源工作台 chips（与 kb-hits 标签同设计语言：胶囊 + CSS 变量色）── */
 .source-chips { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+/* 子 Agent 自动轮注入的消息标记（见 internal/api/agent_followup.go） */
+.followup-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding: 2px 8px; font-size: 11px;
+  color: var(--text-tertiary); background: var(--bg-code);
+  border: 1px solid var(--border-subtle); border-radius: var(--sig-radius-button);
+}
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 10px; border-radius: 10px;

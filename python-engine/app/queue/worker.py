@@ -519,12 +519,53 @@ class QueueWorker:
             await self._handle_tool_job(payload)
         elif task_type == "workflow_run":
             await self._handle_workflow_run(payload)
+        elif task_type == "agent_followup":
+            await self._handle_agent_followup(payload)
         else:
             # 未知任务类型：显式失败（回队重投）而非 ACK 丢弃。
             # 滚动升级期间旧版 worker 收到新版 task_type（tool_job/workflow_run 等）时，
             # 抛错使消息 retry++ 回队尾，由新版 worker 重取；超 MAX_RETRIES 进 DLQ，
             # 避免新类型任务在升级窗口被静默确认丢弃。
             raise ValueError(f"unknown task type: {task_type}")
+
+    async def _handle_agent_followup(self, payload: dict) -> None:
+        """子 Agent 完成 → 请网关在父会话上开新一轮（真正的执行在 Go）。
+
+        payload: {run_id, session_id, tenant_id, user_id, status, profile, depth, summary}
+
+        为什么不在引擎侧开新一轮：``messages`` 落库、SSE 推送、turn 状态、计费与会话锁
+        全在 Go；引擎侧自己跑一遍，这一轮在对话里是"看不见"的（见
+        ``app/subagent/followup.py`` 与 ``internal/api/agent_followup.go``）。
+        """
+        run_id = str(payload.get("run_id") or "")
+        session_id = str(payload.get("session_id") or "")
+        if not run_id or not session_id:
+            logger.warning("agent_followup payload 不完整: %s", payload)
+            return
+
+        from app.config import settings
+
+        if not settings.internal_token:
+            raise RuntimeError("agent_followup 需要 internal_token 才能调用网关")
+
+        import httpx
+
+        url = f"{settings.gateway_internal_url.rstrip('/')}/v1/internal/agent-followup"
+        headers = {"X-Internal-Token": settings.internal_token}
+        try:
+            async with httpx.AsyncClient(timeout=20.0) as client:
+                resp = await client.post(url, json=payload, headers=headers)
+        except Exception as exc:  # noqa: BLE001 - 抛出让队列重投（信号不能丢）
+            raise RuntimeError(f"agent_followup transport error: {exc}") from exc
+
+        if resp.status_code == 409:
+            # 该会话正在跑别的 turn：不是错误，靠重试退避到锁释放之后
+            raise RuntimeError("agent_followup: session busy (409), will retry")
+        if not resp.is_success:
+            raise RuntimeError(
+                f"agent_followup rejected: {resp.status_code} {resp.text[:200]}"
+            )
+        logger.info("agent_followup accepted: run=%s session=%s", run_id, session_id)
 
     async def _handle_workflow_run(self, payload: dict) -> None:
         """执行（或续跑）workflow：读 DB checkpoint 跳过已完成节点，终态写回。

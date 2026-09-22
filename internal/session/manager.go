@@ -316,9 +316,27 @@ func (m *Manager) SaveMessage(ctx context.Context, sessionID, role, content stri
 	return nil
 }
 
+// isMissingColumn 判断 err 是否为"列不存在"（PG 42703 / undefined_column）。
+// 用途：新增可选列时，迁移尚未执行的库仍能走旧路径写入 —— 核心消息不能因为一个
+// 展示用字段而写不进去。
+func isMissingColumn(err error, column string) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		return pgErr.Code == "42703"
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "column") && strings.Contains(msg, strings.ToLower(column))
+}
+
 // SaveUserMessage persists the user message immediately at submit time
 // (S 修复：上下文丢失 — SSE 中断/停止时不再丢失用户消息，历史可续).
-func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userContent, turnID string) {
+//
+// source 标记消息来源：空串 = 用户正常输入；FollowupSource = 子 Agent 自动轮注入
+// （见 internal/api/agent_followup.go），前端据此区分渲染。
+func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userContent, turnID, source string) {
 	if m.pool == nil || userContent == "" {
 		return
 	}
@@ -337,9 +355,17 @@ func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userCo
 		return
 	}
 	_, err = m.pool.Exec(ctx,
-		`INSERT INTO messages (id, session_id, role, content, turn_id, created_at)
-		 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), NOW())`,
-		msgID, sessionID, userContent, turnID)
+		`INSERT INTO messages (id, session_id, role, content, turn_id, source, created_at)
+		 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), $5, NOW())`,
+		msgID, sessionID, userContent, turnID, source)
+	if isMissingColumn(err, "source") {
+		// 迁移尚未执行（messages.source 不存在）时退化为旧写入：用户消息绝不能因为
+		// 一个来源标记而丢失（丢一条就等于刷新后对话缺头）。
+		_, err = m.pool.Exec(ctx,
+			`INSERT INTO messages (id, session_id, role, content, turn_id, created_at)
+			 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), NOW())`,
+			msgID, sessionID, userContent, turnID)
+	}
 	if err != nil {
 		// 失败不再静默（000.md 第 14 条）：用户消息丢失会导致刷新后对话缺头
 		slog.Error("save user message", "session", sessionID, "turn", turnID, "error", err)
@@ -673,7 +699,10 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 		return page, nil
 	}
 	// 多取 1 条用于判断是否还有更早的数据
-	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''), created_at
+	// source 用 jsonb 取键读取：该列可能尚未迁移（见 migrations/versions/c1a7d3f92b04_*.py），
+	// 而"列不存在"会让整个历史查询失败 —— 一个展示用字段不值得拿对话历史去赌。
+	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
+		          COALESCE(to_jsonb(messages)->>'source', ''), created_at
 		   FROM messages
 		   WHERE session_id = $1`
 	args := []interface{}{sessionID}
@@ -702,7 +731,7 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	var msgs []model.Message
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt); err != nil {
 			slog.Warn("scan message row", "error", err)
 			continue
 		}
@@ -735,7 +764,8 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 		return nil, nil
 	}
 
-	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''), created_at
+	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
+		          COALESCE(to_jsonb(messages)->>'source', ''), created_at
 		   FROM messages
 		   WHERE session_id = $1
 		   ORDER BY created_at ASC`
@@ -743,8 +773,10 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 
 	if len(limit) > 0 && limit[0] > 0 {
 		// 子查询：先取最新的 N 条，再按正序排列，保持"最早优先"的返回契约
-		query = `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''), created_at FROM (
-			   SELECT id, session_id, role, content, tool_calls, turn_id, created_at
+		query = `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
+		          COALESCE(source, ''), created_at FROM (
+			   SELECT id, session_id, role, content, tool_calls, turn_id, created_at,
+			          to_jsonb(messages)->>'source' AS source
 			   FROM messages
 			   WHERE session_id = $1
 			   ORDER BY created_at DESC
@@ -762,7 +794,7 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 	var msgs []model.Message
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt); err != nil {
 			slog.Warn("scan message row", "error", err)
 			continue
 		}
