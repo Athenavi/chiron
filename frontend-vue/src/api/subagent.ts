@@ -78,3 +78,21 @@ export async function getSubagentRunEvents(runId: string, limit = 200): Promise<
   })
   return { events: data?.data?.events || [], source: data?.data?.source || 'db' }
 }
+
+/**
+ * 中止单个子 Agent run。
+ *
+ * 网关只做租户校验 + Redis 广播，真正取消由**持有该 run 的引擎实例**执行（后台任务跑在
+ * 父 turn 所在进程里）。所以返回的是「已受理」而不是「已停止」—— 终态靠事件/轮询收敛：
+ * status 变 canceled，`error` 里带 `cancelled_by_user`。
+ */
+export async function cancelSubagentRun(runId: string): Promise<{ status: string }> {
+  const { data } = await api.post(`/v1/subagent/runs/${encodeURIComponent(runId)}/cancel`)
+  return { status: data?.data?.status || 'accepted' }
+}
+
+/** 中止某会话下所有活跃子 Agent run（面板上的「全部停止」）。 */
+export async function cancelSessionSubagents(sessionId: string): Promise<{ status: string }> {
+  const { data } = await api.post(`/v1/subagent/sessions/${encodeURIComponent(sessionId)}/cancel`)
+  return { status: data?.data?.status || 'accepted' }
+}

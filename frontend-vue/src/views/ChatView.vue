@@ -1045,6 +1045,25 @@ const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajector
  * 见 docs/session-map-plan.md §〇。
  */
 const mapOpen = ref(false)
+
+/**
+ * 地图上标「运行中」的会话。
+ *
+ * 此前 ChatView 从不传 `runningIds`，于是地图里的 `.is-running` 与脉冲徽标是死代码。
+ * 数据来源是子 Agent 的实时事件流：某会话出现 run 即标记为运行中，收到 `subagent.done`
+ * 才清除 —— 多个 run 并发时会话始终保持标记（与"是否还有未终态的 run"同义）。
+ */
+const runningSessionIds = computed<string[]>(() => {
+  const open = new Set<string>()
+  for (const raw of subagentLiveEvents.value) {
+    const e = raw as { session_id?: string; run_id?: string; type?: string }
+    const sid = e?.session_id
+    if (!sid || !e?.run_id) continue
+    if (e.type === 'subagent.done') open.delete(sid)
+    else open.add(sid)
+  }
+  return [...open]
+})
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
@@ -1268,6 +1287,13 @@ function onGlobalKeydown(e: KeyboardEvent) {
       const input = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
       input?.focus()
     })
+    return
+  }
+  // Esc：地图是最高层浮层（--z-viewer），先关它 ——
+  // 否则按 Esc 会在**看不见的背后面板**上生效，而用户的直觉是"先关掉挡在最前面的东西"。
+  if (e.key === 'Escape' && mapOpen.value) {
+    e.preventDefault()
+    mapOpen.value = false
     return
   }
   // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
@@ -2502,7 +2528,9 @@ function continueGeneration() {
           <SessionMap
             :sessions="sessions"
             :active-session-id="activeSessionId"
+            :running-ids="runningSessionIds"
             @select="mapOpen = false; switchSession($event)"
+            @close="mapOpen = false"
           />
         </div>
       </div>

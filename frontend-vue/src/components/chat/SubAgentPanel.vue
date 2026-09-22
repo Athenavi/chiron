@@ -13,6 +13,8 @@
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Empty, Spin, Tag, Tooltip } from 'ant-design-vue'
 import {
+  cancelSessionSubagents,
+  cancelSubagentRun,
   getSubagentRunEvents,
   listSubagentRuns,
   type SubagentEvent,
@@ -117,6 +119,54 @@ const liveTail = computed(() => {
     out[id] = e.content.replace(/\s+/g, ' ').slice(-120)
   }
   return out
+})
+
+/** 是否还有运行中的 run（决定「全部停止」是否出现） */
+const hasRunning = computed(() => displayRuns.value.some(r => !TERMINAL_STATUSES.has(r.status)))
+
+/** 已请求取消的 run（本地即时反馈；终态到达后由事件/轮询清掉） */
+const cancelling = ref<Set<string>>(new Set())
+
+/**
+ * 停止单个 run。
+ *
+ * 只是「请求已受理」：网关做租户校验 + Redis 广播 → 持有该 run 的引擎实例 `task.cancel()`
+ * → 收尾后终态（status=cancelled, error=cancelled_by_user）经事件/轮询回来。
+ * 所以这里**不直接改 status** —— 状态的真相在引擎，前端只做按钮禁用这类即时反馈。
+ */
+async function stopRun(runId: string) {
+  if (cancelling.value.has(runId)) return
+  cancelling.value = new Set(cancelling.value).add(runId)
+  try {
+    await cancelSubagentRun(runId)
+  } catch {
+    // 失败就放开按钮让用户能重试（不做假成功提示）
+    const next = new Set(cancelling.value)
+    next.delete(runId)
+    cancelling.value = next
+  }
+}
+
+/** 停止该会话下所有活跃子 Agent（一次清场） */
+async function stopAll() {
+  if (!props.sessionId) return
+  try {
+    await cancelSessionSubagents(props.sessionId)
+    cancelling.value = new Set([
+      ...cancelling.value,
+      ...displayRuns.value.filter(r => !TERMINAL_STATUSES.has(r.status)).map(r => r.run_id),
+    ])
+  } catch {
+    /* 忽略：下一次 tick 会重新渲染，用户可再点一次 */
+  }
+}
+
+/** 终态到达后清掉本地 cancelling 标记，避免按钮永久禁用 */
+watch(displayRuns, (list) => {
+  if (!cancelling.value.size) return
+  const next = new Set([...cancelling.value].filter(id =>
+    !list.some(r => r.run_id === id && TERMINAL_STATUSES.has(r.status))))
+  if (next.size !== cancelling.value.size) cancelling.value = next
 })
 
 const visibleRuns = computed(() => displayRuns.value.filter(r => !hiddenByAncestor(r)))
@@ -387,6 +437,19 @@ onBeforeUnmount(() => {
         v-else
         class="tree"
       >
+        <!-- 一次清场：只在确实有运行中的 run 时才出现 -->
+        <div
+          v-if="hasRunning"
+          class="bulk-stop"
+        >
+          <button
+            type="button"
+            class="run-stop"
+            @click.stop="stopAll"
+          >
+            {{ $t('停止全部子 Agent') }}
+          </button>
+        </div>
         <div
           v-for="run in visibleRuns"
           :key="run.run_id"
@@ -418,6 +481,17 @@ onBeforeUnmount(() => {
             :title="liveTail[run.run_id]"
           >{{ liveTail[run.run_id] }}</span>
           <span class="run-usage">↑{{ run.usage?.input_tokens || 0 }}/↓{{ run.usage?.output_tokens || 0 }}</span>
+          <!-- 中止：只在运行中的 run 上出现（终态没什么可停的） -->
+          <button
+            v-if="!TERMINAL_STATUSES.has(run.status)"
+            type="button"
+            class="run-stop"
+            :disabled="cancelling.has(run.run_id)"
+            :title="$t('停止这个子 Agent')"
+            @click.stop="stopRun(run.run_id)"
+          >
+            {{ cancelling.has(run.run_id) ? '…' : '■' }}
+          </button>
           <span
             v-if="run.redacted_count"
             class="run-redacted"
@@ -632,6 +706,17 @@ onBeforeUnmount(() => {
 .twisty.placeholder { cursor: default; }
 .run-profile { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-usage, .run-redacted { font-size: 12px; color: var(--text-tertiary, #8c8c8c); }
+/* 中止按钮：紧凑型，别把行撑高；hover 用错误色（停止是破坏性动作） */
+.run-stop {
+  flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
+  font-size: 11px; color: var(--text-secondary, #595959);
+  background: transparent; border: 1px solid var(--border-color, rgba(127, 127, 127, 0.24));
+  border-radius: 4px;
+}
+.run-stop:hover:not(:disabled) { color: var(--error, #cf1322); border-color: var(--error, #cf1322); }
+.run-stop:disabled { opacity: 0.5; cursor: default; }
+.bulk-stop { display: flex; justify-content: flex-end; padding: 0 8px 6px; }
+
 /* 运行中 run 的实时预览：尾巴对齐（看到的永远是最新输出），完整内容点开看 */
 .run-tail {
   flex: 1 1 auto; min-width: 40px; max-width: 50%;

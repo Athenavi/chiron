@@ -40,6 +40,15 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, now(), no
 ON CONFLICT (id) DO NOTHING
 """
 
+#: 僵尸收口：只动超龄的 running 行（进程重启后它们的收尾代码再也不会执行）
+REAP_STALE_SQL = """
+UPDATE subagent_runs
+   SET status = 'lost', finished_at = now(),
+       error = 'unreaped: 进程未收尾（重启或超时）'
+ WHERE status = 'running'
+   AND COALESCE(started_at, created_at) < now() - ($1 || ' hours')::interval
+"""
+
 RUN_FINISH_SQL = """
 UPDATE subagent_runs
    SET status = $2, summary = $3, summary_format = $4, artifacts = $5::jsonb,
@@ -212,6 +221,29 @@ class SubagentRunStore:
             )
         except Exception as exc:  # noqa: BLE001
             self._degrade("finish_run", exc)
+
+    async def reap_stale_runs(self, *, max_age_hours: int) -> int:
+        """僵尸收口：把"还在 running 但早已超龄"的 run 标记为 ``lost``。
+
+        为什么需要：进程重启/崩溃后，那些 run 的收尾代码再也不会执行 —— 数据库里会永久
+        留一行 ``status='running'``，前端因此**永远显示"运行中"**（假活跃），也会污染
+        "这个会话有多少子 Agent 在跑"这类判断。
+
+        ``lost`` 与 ``cancelled`` 的语义差别很重要：前者是"没收到结果"，后者是"被停掉"。
+        只动 ``status='running'`` 的行，绝不触碰任何终态记录。
+        """
+        if not self.available or max_age_hours <= 0:
+            return 0
+        try:
+            result = await self._pool.execute(REAP_STALE_SQL, int(max_age_hours))
+        except Exception as exc:  # noqa: BLE001
+            self._degrade("reap_stale_runs", exc)
+            return 0
+        # asyncpg 的 execute 返回 "UPDATE n"；解析失败只影响日志，不影响结果
+        try:
+            return int(str(result).split()[-1])
+        except Exception:  # noqa: BLE001
+            return 0
 
     # ── helpers ──
 

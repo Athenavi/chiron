@@ -21,6 +21,8 @@ from typing import Any
 from app.tools.context import (get_all, get_gateway, get_session_id,
                               get_tenant_id, get_tool_context, get_user_id,
                               restore_context)
+from app.subagent import registry as subagent_registry
+from app.subagent.budget import from_env as budget_from_env
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -31,9 +33,11 @@ MAX_DEPTH = 3  # 全局硬上限（S3）；Profile 的 max_depth 只能更严格
 # 落库器单例（无 DB 时为 None → 子 Agent 照常运行，只是不留痕）
 _store = None
 
-#: 后台委派的任务表：**必须持有引用**，否则 asyncio 任务可能被 GC 回收而静默消失。
-#: 任务结束时自行移除（见 _drive_background 的 finally）。
-_BG_TASKS: dict[str, asyncio.Task] = {}
+# 后台委派的引用与生命周期统一交给 ``app.subagent.registry``：
+#   * 持引用（否则 asyncio 任务可能被 GC 静默回收）；
+#   * 按 run / 按会话取消（前端"停止"）；
+#   * 看门狗（空闲/超时）与跨实例取消广播。
+# 反注册见 _drive_background 的 finally。
 
 
 def _expert_system_prompt(expert: str) -> str:
@@ -78,6 +82,8 @@ async def subagent(
     expert: str = "",
     profile: str = "",
     run_in_background: bool = False,
+    max_tokens: int = 0,
+    max_seconds: int = 0,
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
@@ -119,6 +125,10 @@ async def subagent(
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
         sink=get_event_sink(),
+        # 后台委派 → 工具面默认只读（与父共享工作区，未实现写隔离前的兜底）
+        background=bool(run_in_background),
+        # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）
+        budget=budget_from_env(max_tokens=max_tokens, max_seconds=max_seconds),
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #
@@ -150,7 +160,13 @@ async def subagent(
             ),
             name=f"subagent-bg-{bg_run_id}",
         )
-        _BG_TASKS[bg_run_id] = bg_task  # 必须持引用，否则可能被 GC 静默回收
+        # 登记到注册表：既持引用（防 GC），也让"停止"与看门狗能拿到这个 task
+        subagent_registry.register(
+            bg_run_id, bg_task,
+            session_id=get_session_id(),
+            tenant_id=get_tenant_id(),
+            profile=profile or "",
+        )
         logger.info(
             "subagent 后台委派已启动 run_id=%s profile=%s depth=%s",
             bg_run_id,
@@ -227,7 +243,7 @@ async def _drive_background(runner, run_id: str, task: str,
     except Exception as exc:  # noqa: BLE001 — 后台任务不能把异常漏给事件循环
         logger.error("subagent 后台运行失败 run_id=%s: %s", run_id, exc, exc_info=True)
     finally:
-        _BG_TASKS.pop(run_id, None)
+        subagent_registry.unregister(run_id)
 
 
 def _get_pool():
@@ -291,6 +307,24 @@ registry.register(
                     "Optional: name of an expert to delegate to, taken from the "
                     "'可委派的专家' list in your system prompt. Names outside that "
                     "list are ignored and the child falls back to a generalist."
+                ),
+            },
+            "max_tokens": {
+                "type": "integer",
+                "default": 0,
+                "description": (
+                    "Optional per-run token ceiling (input+output). 0 = use the deployment "
+                    "default (SUBAGENT_MAX_TOKENS). Exceeding it ends the run with "
+                    "status=failed and error='budget_exceeded:tokens' instead of burning "
+                    "unbounded tokens — use it for exploratory fan-out."
+                ),
+            },
+            "max_seconds": {
+                "type": "integer",
+                "default": 0,
+                "description": (
+                    "Optional per-run wall-clock ceiling in seconds. 0 = unlimited "
+                    "(the engine watchdog still caps total runtime; see SUBAGENT_MAX_RUNTIME)."
                 ),
             },
         },

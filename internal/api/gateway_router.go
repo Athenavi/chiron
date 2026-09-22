@@ -785,6 +785,10 @@ func registerSystemRoutes(
 	mux.Handle("GET /v1/subagent/runs", authMW(rlMW(http.HandlerFunc(subagentHandler.ListRuns))))
 	mux.Handle("GET /v1/subagent/runs/{run_id}", authMW(rlMW(http.HandlerFunc(subagentHandler.GetRun))))
 	mux.Handle("GET /v1/subagent/runs/{run_id}/events", authMW(rlMW(http.HandlerFunc(subagentHandler.GetRunEvents))))
+	// 中止：网关只做租户校验 + Redis 广播，真正取消由持有该 run 的引擎实例执行
+	// （引擎侧订阅见 python-engine/app/subagent/registry.py）
+	mux.Handle("POST /v1/subagent/runs/{run_id}/cancel", authMW(rlMW(http.HandlerFunc(subagentHandler.CancelRun))))
+	mux.Handle("POST /v1/subagent/sessions/{session_id}/cancel", authMW(rlMW(http.HandlerFunc(subagentHandler.CancelSessionRuns))))
 }
 
 // ── Conversations ──

@@ -28,6 +28,7 @@ from app.agent.event_sink import (EV_DONE, EV_NOTICE, EV_REASONING, EV_STATUS,
                                   EV_TEXT, ST_CANCELLED, ST_COMPLETED, ST_FAILED,
                                   ST_TOOL)
 from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec
+from app.subagent.budget import BudgetExceeded, TaskBudget
 
 logger = logging.getLogger(__name__)
 
@@ -122,8 +123,14 @@ class SubAgentRunner:
         user_id: str = "",
         sink=None,
         cache=None,
+        background: bool = False,
+        budget: TaskBudget | None = None,
     ):
         self._gateway = gateway
+        #: 是否后台委派 —— 后台 run 与父共享同一工作区，默认只读（见 _resolve_tools）
+        self._background = bool(background)
+        #: per-run 预算（tokens/wall/cost）；None 表示不限（见 app/subagent/budget.py）
+        self._budget = budget
         self._store = store
         self._pool = pool
         self._depth = int(depth or 0)
@@ -261,6 +268,7 @@ class SubAgentRunner:
         errors: list[str] = []
         in_tokens = out_tokens = steps = 0
         status = "completed"
+        budget = self._budget
         ctx_snapshot = _snapshot_context()
         try:
             if ctx_snapshot is not None:
@@ -272,6 +280,24 @@ class SubAgentRunner:
                 steps += 1
                 in_tokens += evt.input_tokens or 0
                 out_tokens += evt.output_tokens or 0
+                # per-run 预算：越界即中止（走失败收尾 → status=failed, error=budget_exceeded:<轴>）。
+                # 检查放在累计之后、处理之前：越界那条事件不再进入落库与前端流 ——
+                # 它属于"已经被砍掉的那一轮"，写进去只会让产物显得比真实情况更完整。
+                if budget is not None and budget.enabled:
+                    axis = budget.exceeded(tokens=in_tokens + out_tokens)
+                    if axis:
+                        if sink is not None:
+                            sink.emit_progress(
+                                run_id=run_id, channel=EV_NOTICE,
+                                content=f"预算用尽（{axis}），已中止子 Agent",
+                                parent_run_id=parent_run_id, depth=child_depth,
+                                profile=profile_name,
+                            )
+                        logger.warning(
+                            "subagent %s budget exceeded: axis=%s used_tokens=%d budget=%s",
+                            run_id, axis, in_tokens + out_tokens, budget.describe(),
+                        )
+                        raise BudgetExceeded(axis)
                 step_kind = _step_kind(evt.type)
                 if evt.type == "text" and evt.content:
                     thinking, answer = _split_thinking(evt.content)
@@ -332,6 +358,15 @@ class SubAgentRunner:
             partial = "\n".join(t for t in texts if t).strip()
             cancel_summary = f"（被取消）已完成 {steps} 步"
             cancel_summary += f"；部分输出：{partial[:300]}" if partial else "，无有效输出"
+            # 取消原因码（用户停 / 父会话停 / 空闲超时 / 超时长）—— 前端据此把"被停掉"
+            # 与"失败"分开显示（看门狗与手动停止都走这条分支）
+            cancel_reason = "cancelled"
+            try:
+                from app.subagent import registry as subagent_registry
+
+                cancel_reason = subagent_registry.reason_of(run_id) or "cancelled"
+            except Exception:  # noqa: BLE001 - 取不到原因不影响收尾
+                pass
 
             async def _write_terminal_state() -> None:
                 try:
@@ -343,7 +378,7 @@ class SubAgentRunner:
                             input_tokens=in_tokens,
                             output_tokens=out_tokens,
                             steps=steps,
-                            error="cancelled",
+                            error=cancel_reason,
                         )
                     if cache is not None:
                         await cache.update_status(
@@ -449,7 +484,13 @@ class SubAgentRunner:
 
         allowed = set(spec.allowed_tools) if spec else set()
         disallowed = set(spec.disallowed_tools) if spec else set()
-        read_only = bool(spec.read_only) if spec else False
+        # 后台 run 默认只读：它与父共享同一工作区，多个后台子 Agent 并发写会互相踩。
+        # Reasonix 用 `write_paths` 声明 + 工作区租约解决隔离；我们尚未实现那套，
+        # 因此先把**无 profile 的后台 run** 收成只读；有 profile 时一律尊重 profile 声明。
+        if spec is not None:
+            read_only = bool(spec.read_only)
+        else:
+            read_only = self._background
         block_delegate = child_depth >= max_depth if max_depth else True
         needs_narrowing = bool(allowed or disallowed or read_only or block_delegate)
         if not needs_narrowing:

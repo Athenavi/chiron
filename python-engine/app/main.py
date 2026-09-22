@@ -1327,9 +1327,14 @@ async def agent_submit(
         # 运行期缓存（Redis）的写入改由**常驻投递器**负责：它挂在 sink 身上，父 turn 结束后
         # （后台委派的典型场景）仍在投递 —— 否则 `run_in_background=True` 的子 Agent 在父
         # 生成器退出后的所有事件都无处可去，前端面板与 /events 端点永远空白。
-        if runtime_cache is not None:
-            async def _persist_subagent_event(payload) -> None:
-                run_id = payload.get("run_id") or ""
+        from app.subagent import registry as subagent_registry
+
+        async def _persist_subagent_event(payload) -> None:
+            run_id = payload.get("run_id") or ""
+            if run_id:
+                # 事件即心跳：看门狗据此认定"仍在产出内容的 run"没有卡死
+                subagent_registry.touch(run_id)
+            if runtime_cache is not None:
                 if run_id:
                     # ① Stream：供**历史回放**（Redis 过期后由 DB steps 兜底）
                     await runtime_cache.push_event(run_id=run_id,
@@ -1338,7 +1343,8 @@ async def agent_submit(
                 #    缺了它，前端只剩"选中某个 run 时 3s 轮询"这一条路。
                 await runtime_cache.publish_live_event(payload=payload)
 
-            sink.attach_persistent(_persist_subagent_event)
+        # 无论 Redis 是否可用都注册投递器：心跳不能因为缓存不可用就停
+        sink.attach_persistent(_persist_subagent_event)
 
         async def _sink_frames():
             """把旁路事件转成 SSE 帧（落缓存已交给上面的常驻投递器，避免双写）。"""
@@ -1393,6 +1399,24 @@ async def agent_submit(
                 "Agent submit stream cancelled (client disconnected)",
                 extra={"session_id": session_id},
             )
+            # L2：父 turn 被取消 → 连带停掉本会话的后台子 Agent（否则它们成为孤儿：
+            # 父 turn 没了、也没人再收尾，只能等看门狗）。
+            # **必须挂在这里而不是 finally** —— 父 turn 正常结束时后台子 Agent 要继续跑完，
+            # 才能触发 followup 自动轮（见 app/subagent/followup.py）。
+            if session_id:
+                try:
+                    from app.subagent import registry as subagent_registry
+
+                    stopped = subagent_registry.cancel_session(
+                        session_id, subagent_registry.REASON_PARENT
+                    )
+                    if stopped:
+                        logger.info(
+                            "parent turn cancelled → stopped %d background subagent run(s)",
+                            stopped,
+                        )
+                except Exception as exc:  # noqa: BLE001 - 清理失败不影响取消语义
+                    logger.warning("cancel_session on parent cancel failed: %s", str(exc)[:160])
             raise
         except Exception as e:
             logger.error("Agent submit error: %s", e)
@@ -1638,9 +1662,15 @@ async def _run_retention_cleaner() -> None:
 
 
 async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
-    """后台队列消费者"""
+    """后台队列消费者（顺带托管子 Agent 的看门狗与取消订阅）。"""
     global _queue_worker_instance
     from app.queue.worker import QueueWorker
+    from app.subagent import registry as subagent_registry
+
+    # 子 Agent 的运行时治理：看门狗（空闲/超时自动中止）+ 跨实例取消订阅。
+    # 放在这里是因为它需要 Redis 与事件循环就绪，且生命周期与引擎一致。
+    subagent_registry.start_watchdog()
+    subagent_registry.start_cancel_subscriber()
 
     worker = QueueWorker(
         redis=redis,
@@ -1658,6 +1688,8 @@ async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
         if _queue_worker_instance is worker:
             _queue_worker_instance = None
             await worker.stop()
+        # 停掉看门狗与取消订阅（活跃 run 由各自的 finally 自行收尾）
+        await subagent_registry.stop()
 
 
 def main():
