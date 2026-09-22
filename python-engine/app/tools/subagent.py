@@ -14,8 +14,9 @@ Profile 缺失或解析失败时退回通用子 Agent；落库失败不影响子
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
+import os
 from typing import Any
 
 from app.tools.context import (get_all, get_gateway, get_session_id,
@@ -29,6 +30,11 @@ logger = logging.getLogger(__name__)
 
 MAX_TURNS_CAP = 10
 MAX_DEPTH = 3  # 全局硬上限（S3）；Profile 的 max_depth 只能更严格
+
+#: 同步委派的默认 wall 上限（秒）。后台委派由注册表看门狗按 idle / max_runtime 收口，
+#: 而同步委派是"父 turn 原地等"的路径 —— 没有上限时，上游一挂就无限期占住父回合
+#: （这正是"主 Agent 长期阻塞"的主因之一）。
+DEFAULT_SYNC_MAX_SECONDS = 300
 
 # 落库器单例（无 DB 时为 None → 子 Agent 照常运行，只是不留痕）
 _store = None
@@ -75,13 +81,31 @@ def _get_store():
     return _store
 
 
+def _sync_wall_seconds(run_in_background: bool, max_seconds: int) -> int:
+    """同步委派的默认 wall 上限（秒）。
+
+    取值顺序：显式 ``max_seconds`` > ``SUBAGENT_SYNC_MAX_SECONDS`` > :data:`DEFAULT_SYNC_MAX_SECONDS`。
+
+    后台委派不需要这一层（它的 run 登记在注册表里，由看门狗按 idle / max_runtime 收口），
+    所以直接返回调用方给的值（通常是 0 = 不限）。同步委派会原地阻塞父 turn，必须有个上限：
+    没有它时，上游"建连成功但不返回"就会把父回合一直占住，直到 Go 侧的回合超时兜底。
+    """
+    if run_in_background or max_seconds:
+        return max_seconds
+    raw = (os.getenv("SUBAGENT_SYNC_MAX_SECONDS") or "").strip()
+    try:
+        return max(0, int(raw)) if raw else DEFAULT_SYNC_MAX_SECONDS
+    except ValueError:
+        return DEFAULT_SYNC_MAX_SECONDS
+
+
 async def subagent(
     task: str,
     mode: str = "normal",
     max_turns: int = 5,
     expert: str = "",
     profile: str = "",
-    run_in_background: bool = False,
+    run_in_background: bool = True,
     max_tokens: int = 0,
     max_seconds: int = 0,
 ) -> dict[str, Any]:
@@ -127,8 +151,13 @@ async def subagent(
         sink=get_event_sink(),
         # 后台委派 → 工具面默认只读（与父共享工作区，未实现写隔离前的兜底）
         background=bool(run_in_background),
-        # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）
-        budget=budget_from_env(max_tokens=max_tokens, max_seconds=max_seconds),
+        # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）。
+        # 同步委派额外带一个 wall 默认值（见 _sync_wall_seconds）——它是"父 turn 原地等"
+        # 的路径，没有上限时上游一挂就无限期占住父回合；后台委派由看门狗收口，不需要。
+        budget=budget_from_env(
+            max_tokens=max_tokens,
+            max_seconds=_sync_wall_seconds(run_in_background, max_seconds),
+        ),
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #
@@ -185,15 +214,59 @@ async def subagent(
             ),
         }
 
-    try:
-        result = await runner.run(
+    # ── 同步委派：**同样要进注册表** ──
+    #
+    # 直接 `await runner.run(...)` 时，这个协程属于**父 turn 的调用栈**：
+    #   * 注册表里没有它 → 看门狗（空闲 / 总时长）与前端「停止」都管不到它；
+    #   * 上游挂起或子 Agent 跑飞时，父 turn 只能一路等到 Go 侧的回合超时兜底，
+    #     这正是"主 Agent 长期处于阻塞状态"的主因。
+    # 所以这里包成**独立 task** 再 await：父 turn 照旧等结果（语义不变），但这个 task
+    # 可以被单独取消 —— 看门狗或用户点「停止」都能让它以取消收尾。
+    from app.agent.subagent_runner import new_run_id
+
+    sync_run_id = new_run_id()
+    work = asyncio.create_task(
+        runner.run(
             task,
+            run_id=sync_run_id,
             profile_ref=profile,
             mode=mode or "normal",
             max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
             expert_prompt=_expert_system_prompt(expert),
-        )
+        ),
+        name=f"subagent-sync-{sync_run_id}",
+    )
+    subagent_registry.register(
+        sync_run_id, work,
+        session_id=get_session_id(),
+        tenant_id=get_tenant_id(),
+        profile=profile or "",
+    )
+    try:
+        result = await work
+    except asyncio.CancelledError:
+        # 两种取消必须分开处理（SubAgentRunner 收尾后会把 CancelledError 重新抛出）：
+        #   * **父 turn 自己也在被取消**（用户停回合 / 网关超时）→ 照常向上传播，
+        #     同时确保独立 task 停下 —— 否则父已死、子还在跑，又造一个孤儿；
+        #   * **只有子 Agent 被取消**（看门狗收口 / 用户点了「停止」）→ 父 turn 必须活下去，
+        #     给它一份可解释的产物，而不是把整条回合一起取消掉。
+        current = asyncio.current_task()
+        if current is not None and current.cancelling():
+            if not work.done():
+                work.cancel()
+            raise
+        return {
+            "status": "cancelled",
+            "output": "",
+            "result_ref": sync_run_id,
+            "error": "subagent cancelled (idle timeout / max runtime / stopped by user)",
+            "note": (
+                "子 Agent 已被中止，本轮没有拿到它的结论。需要的话请重新委派；"
+                f"已完成的部分可用 read_subagent_result(run_id='{sync_run_id}') 取。"
+            ),
+        }
     finally:
+        subagent_registry.unregister(sync_run_id)
         restore_context(parent_ctx)  # 子 agent 已改写 context，父任务必须还原
 
     payload = result.to_tool_payload()
@@ -247,9 +320,19 @@ async def _drive_background(runner, run_id: str, task: str,
 
 
 def _get_pool():
-    from app.db import get_pool
+    """取 DB 连接池；不可用时返回 None。
 
-    return get_pool()
+    与 :func:`_get_store` 同源语义：**落库能力缺失不该阻断委派**。此前这里直接
+    ``get_pool()``，池未初始化时抛 RuntimeError 一路冒到调用方 —— 于是"数据库暂时不可用"
+    变成"子 Agent 完全不能用"，而不是"照常运行、只是不留痕"。
+    """
+    try:
+        from app.db import get_pool
+
+        return get_pool()
+    except Exception as exc:  # noqa: BLE001 - None 的语义就是"不落库"
+        logger.warning("subagent 连接池不可用（本次子 Agent 不落库）: %s", str(exc)[:200])
+        return None
 
 
 registry.register(
@@ -290,14 +373,15 @@ registry.register(
             },
             "run_in_background": {
                 "type": "boolean",
-                "default": False,
+                "default": True,
                 "description": (
-                    "Set true to launch the child in the background and return immediately "
-                    "(status='async_launched' plus a run_id). The parent turn keeps working "
-                    "instead of waiting for the whole child loop. Collect the result later "
-                    "with read_subagent_result(run_id). Use it for long independent work "
-                    "(multi-file research, drafting a report) that would otherwise block "
-                    "this turn for minutes. Background runs still consume their own tokens."
+                    "Default **true**: the child is launched in the background and this call "
+                    "returns immediately (status='async_launched' plus a run_id) so the turn keeps "
+                    "working; collect the result later with read_subagent_result(run_id). "
+                    "Set false only when you need the child's output **within this turn** to "
+                    "continue — a synchronous child blocks this turn for as long as it runs "
+                    "(it is cancellable and wall-clock capped, but the turn still waits). "
+                    "Background runs still consume their own tokens."
                 ),
             },
             "expert": {
@@ -323,8 +407,10 @@ registry.register(
                 "type": "integer",
                 "default": 0,
                 "description": (
-                    "Optional per-run wall-clock ceiling in seconds. 0 = unlimited "
-                    "(the engine watchdog still caps total runtime; see SUBAGENT_MAX_RUNTIME)."
+                    "Optional per-run wall-clock ceiling in seconds. 0 = use the default: "
+                    "synchronous runs get SUBAGENT_SYNC_MAX_SECONDS (300s) so a stuck upstream "
+                    "cannot hold this turn forever; background runs stay unlimited and are "
+                    "reaped by the engine watchdog (SUBAGENT_MAX_RUNTIME)."
                 ),
             },
         },

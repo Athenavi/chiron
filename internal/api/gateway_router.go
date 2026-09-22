@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/hex"
+	"errors"
 	"log/slog"
 	"net"
 	"net/http"
@@ -559,6 +560,29 @@ func registerAgentRoutes(
 		}
 		userID := claims.UserID
 
+		// ── 会话归属校验（fail-closed）──
+		//
+		// session_id 来自请求体，此前这里**不校验归属**就直接落库并转发引擎：
+		// SaveUserMessage 的 ensure-session 用 `ON CONFLICT (id) DO UPDATE`（只更新时间戳、
+		// 不比对归属），紧接着 GetMessages 又按 session_id 直查 —— 于是知道别人的
+		// session_id 就能**往那个会话写消息，并把对方历史读进自己的 LLM 上下文**（IDOR）。
+		//
+		// 策略与 SSE 入口（events.go 的 SSEHandler）完全一致：**新会话放行**（前端先建会话
+		// 再提交、以及首条消息创建会话的路径），已存在的会话必须是本人的。
+		// user_id 全局唯一，因此它同时覆盖租户维度。
+		if sessionMgr != nil && body.SessionID != "" {
+			sess, sessErr := sessionMgr.GetSession(r.Context(), body.SessionID)
+			if sessErr != nil {
+				if !errors.Is(sessErr, session.ErrSessionNotFound) {
+					InternalError(w, "session check failed")
+					return
+				}
+			} else if sess == nil || sess.UserID != userID {
+				Forbidden(w, "session does not belong to the current user")
+				return
+			}
+		}
+
 		// Billing pre-check
 		if billingMgr != nil {
 			count, err := billingMgr.DailyFreeCount(r.Context(), userID)
@@ -610,6 +634,10 @@ func registerAgentRoutes(
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
 		runToken := userID + "-" + hex.EncodeToString(rnd[:])
+		// 同会话已有回合在跑时的拒绝提示。必须说清"在跑的是上一轮"——它很可能正卡在
+		// 等待子 Agent（委派），而用户只看到"发不出去"，不知道该等还是该停。
+		// 相关：python-engine/app/tools/subagent.py 的委派语义（默认后台、可被「停止」中止）。
+		const sessionBusyMsg = "this session already has a turn in progress (it may be waiting on a sub-agent) — stop it or wait for it to finish"
 		releaseRun, runLocked, lockErr := AcquireSessionRunLock(r.Context(), body.SessionID, runToken)
 		if lockErr != nil {
 			// Redis 不可用：兑底进程内防重（多实例下退化为近似限制）
@@ -617,12 +645,12 @@ func registerAgentRoutes(
 				"session_id", body.SessionID)
 			if _, loaded := sessionCancels.LoadOrStore(body.SessionID, sessionCancel{userID: userID, cancel: cancel}); loaded {
 				cancel()
-				BadRequest(w, "task already running for this session")
+				BadRequest(w, sessionBusyMsg)
 				return
 			}
 		} else if !runLocked {
 			cancel() // cancel the new one since there's already an active task
-			BadRequest(w, "task already running for this session")
+			BadRequest(w, sessionBusyMsg)
 			return
 		} else {
 			// 分布式锁持有成功：登记本地 registry（供取消）

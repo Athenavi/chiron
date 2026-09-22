@@ -81,6 +81,12 @@ class Settings(BaseSettings):
     # （实测 Python urllib / Go http 默认 UA 访问 opencode.ai 返回 CF Error 1010 → 403）。
     llm_http_user_agent: str = "chiron/1.0"
 
+    # 单次 LLM 请求的 HTTP 超时（秒）。**必须有**：上游"建连成功但一直不返回"时，
+    # 没有超时的 await 会永不返回 —— 同步委派的子 Agent 会把父 turn 一起拖住，
+    # 直到 Go 侧的回合超时才兜底（用户看到的就是"主 Agent 长期阻塞"）。
+    # 只限制单次尝试；重试次数由 SDK 的 max_retries 决定。
+    llm_http_timeout: float = 120.0
+
     # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
     # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
     # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。
