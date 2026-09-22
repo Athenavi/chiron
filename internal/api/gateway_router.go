@@ -126,7 +126,7 @@ func realIPHeader(trustedCIDRs []string) func(http.Handler) http.Handler {
 }
 
 // NewGatewayRouter creates a pure gateway router that proxies all business logic to Python.
-// lifecycleCtx 用于控制内部后台协程（tenantResMgr / modeStore cleanup）的优雅关闭。
+// lifecycleCtx 用于控制内部后台协程（tenantResMgr / sessionmap 等）的优雅关闭。
 func NewGatewayRouter(
 	lifecycleCtx context.Context,
 	cfg *config.Config,
@@ -307,11 +307,9 @@ func NewGatewayRouter(
 	// Skill handler (proxies to Python)
 	skillHandler := NewSkillHandler(pythonClient)
 
-	// Mode（会话授权模式 ask/auto/yolo）：状态存 Redis 以保持多副本一致；
-	// 审批本身在 Python 侧（guards + /v1/agent/approval），Go 侧不再保留第二套实现。
-	modeStore := NewModeStore(atomicRedis)
-	modeStore.StartCleanup(lifecycleCtx)
-	modeHandler := NewModeHandler(modeStore, sessionMgr, eventHub)
+	// 工具授权模式（ask/auto/yolo）不在这里持有状态：它是前端的实时状态，随每次提交经
+	// llm_config.tools_mode 携带，引擎侧校验后用于工具裁决（guards.py）。
+	// 曾有的 ModeStore（Redis）与 /v1/mode 接口已删除。
 
 	// Trace handler (Redis-backed, tenant-isolated)
 	var traceHandler *TraceHandler
@@ -453,9 +451,9 @@ func NewGatewayRouter(
 	// Enterprise chaos（authMW + RequireEntPerm("chaos:manage")）：混沌工程
 	NewEntChaosHandler().RegisterRoutes(mux, authMW)
 
-	// Mode (auth + rate limited)
-	mux.Handle("GET /v1/mode", authMW(rlMW(http.HandlerFunc(modeHandler.GetMode))))
-	mux.Handle("POST /v1/mode", authMW(rlMW(http.HandlerFunc(modeHandler.SetMode))))
+	// 工具授权模式（GET/POST /v1/mode）已移除：模式不再是服务端状态，而是前端随
+	// 每次提交携带的请求参数（llm_config.tools_mode）。见 mode.go 的说明。
+	//
 	// 旧 /v1/permission/approve|reject 已移除：审批统一由 Python 侧处理
 	// （前端经 /v1/agent/approval 提交决定），避免 Go/Python 双实现漂移。
 

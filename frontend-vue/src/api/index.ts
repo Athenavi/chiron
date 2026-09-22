@@ -45,19 +45,11 @@ export async function updateConversation(id: string, patch: { title?: string; pi
   return data?.data
 }
 
-// ── 会话工具授权模式（ask/auto/yolo）──
-// 状态由后端存 Redis（多副本一致），判定在 Python 侧 guards.py：
-//   ask  = 写类工具（执行/文件写/git 写/浏览器与网络访问）需用户确认
-//   auto = 仅危险工具需确认（默认）
-//   yolo = 全部自动执行
-export async function getSessionMode(sessionId: string): Promise<string> {
-  const { data } = await api.get('/v1/mode', { params: { session_id: sessionId } })
-  return (data?.data?.mode ?? data?.mode ?? 'auto') as string
-}
-
-export async function setSessionMode(sessionId: string, mode: string): Promise<void> {
-  await api.post('/v1/mode', { session_id: sessionId, mode })
-}
+// ── 工具授权模式（ask/auto/yolo）不再是服务端状态 ──
+// 它是前端的实时状态，随每次提交经 `llm_config.tools_mode` 携带（见 ChatView 的
+// buildLlmConfig），由引擎在任务开始时采用并用于工具裁决（python-engine/app/agent/guards.py）。
+// 曾有的 `GET/POST /v1/mode`（状态存 Redis）与 `session:mode:*` 键已删除 ——
+// 同一份状态散落三处时，任一处不一致就表现为"设置存了却不生效"。
 
 // ── Agents（DB 驱动：CRUD + 运行会话） ──
 export interface Agent {

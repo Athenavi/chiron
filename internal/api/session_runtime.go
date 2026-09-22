@@ -11,10 +11,15 @@ package api
 //   `unified_sessions.runtime` jsonb（权威持久；Redis 缺失时由它回填）
 //
 // 解析优先级（唯一实现，见 spec §3）：
-//   mode        : 请求显式 > runtime > 用户默认 > 全局默认 > normal
-//   tools_mode  : 请求显式 > runtime > 用户默认 > 全局默认 > auto
+//   mode        : 请求显式 > 用户默认 > 全局默认 > normal
+//   tools_mode  : 请求显式 > 用户默认 > 全局默认 > auto
 //   model       : 请求显式 > runtime > 用户默认 > 全局默认 > deepseek-chat
 //   provider    : 请求显式 > runtime > 空（自动路由）
+//
+// **mode / tools_mode 不再有 runtime 一层**：它们是前端实时状态，每次提交随请求携带，
+// 服务端只负责校验与兜底（见 mode.go）。曾把它们写进 runtime（Redis + unified_sessions.runtime）
+// 时，同一份状态散落三处，任一处不一致就表现为"切换了却不生效"。
+// model / provider 仍是会话语义（用户选定后希望下次继续用），保留 runtime 存储。
 //
 // 遥测：Redis `session:metrics:{tenant}:{sid}`（Hash，field=turn_id，value=JSON 明细），
 // **汇总在读取时计算**（幂等、无增量漂移）；缺失时回落 DB（turns + billing_records）。
@@ -62,9 +67,12 @@ type resolvedValue struct {
 	Source string `json:"source"`
 }
 
+// runtimeView 是**会话级**运行时状态。
+//
+// 工具授权模式（ask/auto/yolo）与对话模式（normal/minimal/ptc/creative）**不在其中**：
+// 它们是请求级参数 —— 前端实时状态，每次提交随请求携带，服务端只校验不存储。
+// 只有"用户选定后希望下次继续沿用"的项（model / provider）才落会话状态。
 type runtimeView struct {
-	Mode       string         `json:"mode,omitempty"`
-	ToolsMode  string         `json:"tools_mode,omitempty"`
 	Model      string         `json:"model,omitempty"`
 	Provider   string         `json:"provider,omitempty"`
 	Compaction map[string]any `json:"compaction,omitempty"`
@@ -99,10 +107,8 @@ func (h *SessionRuntimeHandler) GetRuntime(w http.ResponseWriter, r *http.Reques
 		"runtime":  state,
 		"defaults": defaults,
 		"resolved": map[string]resolvedValue{
-			"mode":       resolved.mode,
-			"tools_mode": resolved.toolsMode,
-			"model":      resolved.model,
-			"provider":   resolved.provider,
+			"model":    resolved.model,
+			"provider": resolved.provider,
 		},
 	})
 }
@@ -119,21 +125,9 @@ func (h *SessionRuntimeHandler) PutRuntime(w http.ResponseWriter, r *http.Reques
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	// 校验取值（避免把非法 mode 写进状态，导致引擎侧静默回退而"看起来没生效"）
-	if raw, ok := patch["mode"]; ok && len(raw) > 0 && string(raw) != "null" {
-		var mode string
-		if json.Unmarshal(raw, &mode) != nil || !validAgentModes[mode] {
-			BadRequest(w, "invalid mode: must be one of normal|minimal|ptc|creative")
-			return
-		}
-	}
-	if raw, ok := patch["tools_mode"]; ok && len(raw) > 0 && string(raw) != "null" {
-		var tm string
-		if json.Unmarshal(raw, &tm) != nil || !validModes[tm] {
-			BadRequest(w, "invalid tools_mode: must be one of ask|auto|yolo")
-			return
-		}
-	}
+	// 校验取值（避免把非法值写进状态，导致引擎侧静默回退而"看起来没生效"）
+	// mode / tools_mode 不再是 runtime 字段：它们是请求级参数，PATCH 里的同名键
+	// 会被忽略（applyRuntimePatch 不再处理），前端也已在提交时携带。
 	if raw, ok := patch["context"]; ok && len(raw) > 0 && string(raw) != "null" {
 		var payload map[string]any
 		if json.Unmarshal(raw, &payload) != nil {
@@ -155,7 +149,6 @@ func (h *SessionRuntimeHandler) PutRuntime(w http.ResponseWriter, r *http.Reques
 	OK(w, map[string]any{
 		"runtime": state,
 		"resolved": map[string]resolvedValue{
-			"mode": resolved.mode, "tools_mode": resolved.toolsMode,
 			"model": resolved.model, "provider": resolved.provider,
 		},
 	})
@@ -246,7 +239,6 @@ func (h *SessionRuntimeHandler) saveRuntime(ctx context.Context, tenant, session
 		key := sessionRuntimeKey(tenant, sessionID)
 		args := []any{"HSET", key}
 		for _, pair := range [][2]string{
-			{"mode", state.Mode}, {"tools_mode", state.ToolsMode},
 			{"model", state.Model}, {"provider", state.Provider},
 			{"updated_at", state.UpdatedAt}, {"updated_by", state.UpdatedBy},
 		} {
@@ -325,9 +317,12 @@ func (h *SessionRuntimeHandler) resolveAgentConfig(userID string, state *runtime
 		}
 		return resolvedValue{fallback, "system"}
 	}
+	// mode / tools_mode 只走 explicit → 用户/全局默认 → 系统兜底：
+	// 它们是前端的实时状态，没有 runtime（会话）一层，传空字符串即跳过该层。
+	// model / provider 保留 runtime：用户选定后希望下次继续沿用。
 	cfg := agentConfig{
-		mode:      pick("mode", state.Mode, "default_mode", fallbackMode),
-		toolsMode: pick("tools_mode", state.ToolsMode, "default_tools_mode", fallbackToolsMode),
+		mode:      pick("mode", "", "default_mode", fallbackMode),
+		toolsMode: pick("tools_mode", "", "default_tools_mode", fallbackToolsMode),
 		model:     pick("model", state.Model, "default_model", fallbackModel),
 		provider:  pick("provider", state.Provider, "", ""),
 	}
@@ -383,8 +378,13 @@ func InjectSessionRuntime(r *http.Request, body map[string]interface{}) bool {
 			explicit[key] = v
 		}
 	}
+	// 工具授权模式：与 SSE 链路同口径 —— 前端实时状态随请求携带，非法值归一化。
+	if v, ok := llmConfig["tools_mode"].(string); ok && v != "" {
+		explicit["tools_mode"] = normalizeToolsMode(v)
+	}
 	cfg := ResolveSessionAgentConfig(r.Context(), db.Redis, tenant, claims.UserID, sessionID, explicit)
 	llmConfig["mode"] = cfg.mode.Value
+	llmConfig["tools_mode"] = cfg.toolsMode.Value
 	llmConfig["model"] = cfg.model.Value
 	if cfg.provider.Value != "" {
 		// 引擎侧统一从 llm_config.provider 读取（与 SSE 链路同口径），
@@ -396,6 +396,8 @@ func InjectSessionRuntime(r *http.Request, body map[string]interface{}) bool {
 }
 
 // applyRuntimePatch 把 PATCH 合入状态；null 表示清除。
+// mode / tools_mode 不在这里处理：它们不是 runtime 字段（见 runtimeView 注释），
+// PATCH 里出现同名键会被忽略。
 func applyRuntimePatch(state *runtimeView, patch map[string]json.RawMessage, userID string) {
 	assign := func(raw json.RawMessage, dst *string) {
 		if len(raw) == 0 || string(raw) == "null" {
@@ -406,12 +408,6 @@ func applyRuntimePatch(state *runtimeView, patch map[string]json.RawMessage, use
 		if json.Unmarshal(raw, &v) == nil {
 			*dst = strings.TrimSpace(v)
 		}
-	}
-	if raw, ok := patch["mode"]; ok {
-		assign(raw, &state.Mode)
-	}
-	if raw, ok := patch["tools_mode"]; ok {
-		assign(raw, &state.ToolsMode)
 	}
 	if raw, ok := patch["model"]; ok {
 		assign(raw, &state.Model)
@@ -446,14 +442,8 @@ func applyRuntimePatch(state *runtimeView, patch map[string]json.RawMessage, use
 func mergeRuntime(view *runtimeView, pairs map[string]string) {
 	for field, value := range pairs {
 		switch field {
-		case "mode":
-			if value != "" {
-				view.Mode = value
-			}
-		case "tools_mode":
-			if value != "" {
-				view.ToolsMode = value
-			}
+		// 历史遗留：旧版本的 runtime 里存过 mode / tools_mode，这里刻意不识别 ——
+		// 它们已不是会话状态（见 runtimeView 注释），读到也应忽略而不是让陈旧值复活。
 		case "model":
 			if value != "" {
 				view.Model = value

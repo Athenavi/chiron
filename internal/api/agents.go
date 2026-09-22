@@ -166,11 +166,11 @@ func (h *AgentHandler) seedPresetAgents() {
 func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	rows, err := db.GlobalDBManager.Query(r.Context(),
-		// 列类型必须逐列对齐：tools / llm_config 是 **json** 列（配 '[]'::json），
-		// skills / plugins / workflows 是 **jsonb** 列（配 '[]'::jsonb）。json 与 jsonb
-		// 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
-		// "could not convert type json to jsonb"（或反向）。编译期和单测都看不出来。
-		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::jsonb), COALESCE(plugins,'[]'::jsonb), COALESCE(workflows,'[]'::jsonb), created_at, updated_at
+		// 列类型必须逐列对齐：tools / llm_config / skills / plugins / workflows **全部是
+		// json** 列（见 migrations/sql/init.sql 的 agents DDL），缺省值一律 '[]'::json /
+		// '{}'::json。json 与 jsonb 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
+		// "could not convert type jsonb to json"。编译期和单测都看不出来。
+		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json), created_at, updated_at
 		 FROM agents WHERE tenant_id = $1 AND user_id = $2
 		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile（kind='subagent'）不进入对话 Agent 列表
 		 ORDER BY created_at DESC`, claims.TenantID, claims.UserID)
@@ -595,11 +595,11 @@ func (h *AgentHandler) queryAgent(ctx context.Context, tenantID, userID, agentID
 func loadAgent(ctx context.Context, tenantID, userID, agentID string) (*Agent, error) {
 	var a Agent
 	err := db.GlobalDBManager.QueryRow(ctx,
-		// 列类型必须对齐：tools / llm_config 是 **json** 列，缺省值要用 '[]'::json /
-		// '{}'::json；skills / plugins / workflows 是 **jsonb** 列，用 '[]'::jsonb。
-		// 写混了 COALESCE 会在运行时报 "could not convert type jsonb to json" ——
+		// 列类型必须对齐：tools / llm_config / skills / plugins / workflows **全部是 json 列**，
+		// 缺省值要用 '[]'::json / '{}'::json；写成 ::jsonb 会在运行时报
+		// "could not convert type jsonb to json" ——
 		// 编译期、go vet 和单元测试都发现不了，只有真连库跑这条 SQL 才暴露。
-		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::jsonb), COALESCE(plugins,'[]'::jsonb), COALESCE(workflows,'[]'::jsonb), created_at, updated_at
+		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json), created_at, updated_at
 		 FROM agents WHERE tenant_id = $1 AND id = $2 AND (user_id = $3 OR (visibility = 'tenant' AND tenant_id = $1))
 		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile 不可作为对话 Agent 运行`, tenantID, agentID, userID).
 		Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Tools, &a.LLMConfig,
@@ -628,8 +628,8 @@ func trimSpace(s string) string { return strings.TrimSpace(s) }
 
 func itoa(n int) string { return strconv.Itoa(n) }
 
-// jsonOrEmptyArray 把可能为空的 JSON 写进 JSONB 列：空值写 '[]'，
-// 因为 JSONB 不接受空字符串（""::jsonb 会直接报错）。
+// jsonOrEmptyArray 把可能为空的 JSON 写进 json 列：空值写 '[]'，
+// 因为 json/jsonb 都不接受空字符串（""::json 会直接报错）。
 func jsonOrEmptyArray(raw json.RawMessage) string {
 	if len(raw) == 0 || string(raw) == "null" {
 		return "[]"
@@ -637,7 +637,7 @@ func jsonOrEmptyArray(raw json.RawMessage) string {
 	return string(raw)
 }
 
-// agentSkillNames 解析 Agent 绑定的技能名（JSONB 字符串数组）；
+// agentSkillNames 解析 Agent 绑定的技能名（json 字符串数组）；
 // 未绑定或格式不对时返回 nil，等价于"不筛选技能"（引擎侧沿用全部已安装技能）。
 func agentSkillNames(skills json.RawMessage) []string {
 	if len(skills) == 0 {
@@ -696,19 +696,19 @@ func agentContextPayload(a *Agent) map[string]any {
 	return payload
 }
 
-// agentPluginNames 解析 Agent 绑定的插件名（JSONB 字符串数组）；未绑定或格式不对时
+// agentPluginNames 解析 Agent 绑定的插件名（json 字符串数组）；未绑定或格式不对时
 // 返回 nil，等价于"不筛选插件"。与 agentSkillNames 同构 —— 两者都是字符串数组列。
 func agentPluginNames(plugins json.RawMessage) []string {
 	return agentSkillNames(plugins)
 }
 
-// agentWorkflowIDs 解析 Agent 绑定的工作流 id（JSONB 字符串数组）；未绑定或格式不对时
+// agentWorkflowIDs 解析 Agent 绑定的工作流 id（json 字符串数组）；未绑定或格式不对时
 // 返回 nil，等价于"不绑定工作流"。与前两者同构 —— 都是字符串数组列。
 func agentWorkflowIDs(workflows json.RawMessage) []string {
 	return agentSkillNames(workflows)
 }
 
-// decodeJSONArray 解析 JSONB 数组列；空值或格式不对时返回 nil（表示"不传该字段"）
+// decodeJSONArray 解析 json 数组列；空值或格式不对时返回 nil（表示"不传该字段"）
 func decodeJSONArray(raw json.RawMessage) []any {
 	if len(raw) == 0 {
 		return nil
@@ -720,7 +720,7 @@ func decodeJSONArray(raw json.RawMessage) []any {
 	return out
 }
 
-// agentModel 从 llm_config（JSONB）里取模型名
+// agentModel 从 llm_config（json）里取模型名
 func agentModel(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""

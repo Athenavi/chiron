@@ -253,40 +253,21 @@ class OutputGuard:
         self._blocked = False
 
 
-# ═══════════════════════ 会话授权模式读取（多副本共享） ═══════════════════════
+# ═══════════════════════ 工具授权模式归一化（请求级） ═══════════════════════
 
 
-async def load_session_mode(tenant_id: str, session_id: str) -> str:
-    """从 Redis 读取会话授权模式（由 Go 网关的 /v1/mode 写入）。
+def resolve_tools_mode(raw: object) -> str:
+    """归一化随请求携带的工具授权模式（``llm_config.tools_mode``）。
 
-    键与 Go 侧 ``db.RedisKey`` 同源：``{REDIS_KEY_PREFIX}session:mode:{tenant}:{session}``。
+    模式是**前端的实时状态**：前端选择后随每次提交上传，Go 网关经 llm_config 一路透传到
+    这里，服务端不再有任何存储可查。曾把它写进 Redis（``session:mode:*``，由 /v1/mode 写），
+    于是前端选择、Redis、runtime 三份状态并存 —— 任一处不一致就表现为"设置存了却不生效"。
 
-    **fail-safe（关键安全设计）**：Redis 不可用 / 键不存在 / 值非法时返回 ``ask``（最严格）——
-    宁可让用户多确认几次，也绝不在"模式状态未知"时按 yolo 静默放开全部工具。
-    唯一的例外是"键确实不存在"，此时返回 ``auto``（与 Go 侧 DefaultSessionMode 一致，
-    保持未设置模式的历史行为）。
+    缺失 / 类型不对 / 取值非法一律回落 ``auto``：既不按 yolo 静默放开全部工具，
+    也不会像 ask 那样把每个写操作都拦下来。真正的三态裁决仍由 ``ToolGuard.evaluate`` 完成。
     """
-    if not session_id:
-        return SESSION_MODE_ASK
-    try:
-        from app.redis_client import get_redis
-        from app.redis_keys import rkey
-
-        redis = await get_redis()
-        if redis is None:
-            logger.warning("session mode lookup skipped (redis unavailable) -> ask")
-            return SESSION_MODE_ASK
-
-        raw = await redis.get(
-            rkey(f"session:mode:{tenant_id or 'default'}:{session_id}")
-        )
-        if raw is None:
-            return SESSION_MODE_AUTO  # 未设置 = 默认 auto
-        mode = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
-        if mode in _VALID_SESSION_MODES:
-            return mode
-        logger.warning("session mode %r invalid -> ask", mode)
-        return SESSION_MODE_ASK
-    except Exception as e:  # noqa: BLE001 - 读取失败必须 fail-safe 到最严格模式
-        logger.warning("session mode lookup failed (%s) -> ask", e)
-        return SESSION_MODE_ASK
+    if isinstance(raw, str) and raw in _VALID_SESSION_MODES:
+        return raw
+    if raw is not None and raw != "":
+        logger.warning("tools_mode %r invalid -> auto", raw)
+    return SESSION_MODE_AUTO

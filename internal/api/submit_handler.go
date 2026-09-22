@@ -209,6 +209,11 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		if v, ok := llmConfig["mode"].(string); ok && v != "" {
 			explicit["mode"] = v
 		}
+		// 工具授权模式：**唯一来源就是这里** —— 前端实时状态经 llm_config.tools_mode 携带。
+		// 非法值当场归一化，不把不可信输入透传给引擎。
+		if v, ok := llmConfig["tools_mode"].(string); ok && v != "" {
+			explicit["tools_mode"] = normalizeToolsMode(v)
+		}
 		if v, ok := llmConfig["model"].(string); ok && v != "" {
 			explicit["model"] = v
 		}
@@ -220,17 +225,17 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			tenantID = claims.UserID
 		}
 	}
-	// 透传给引擎：`guards.load_session_mode` 用 tenant+session 拼 Redis 键
-	// （`{prefix}session:mode:{tenant}:{session}`，与 mode.go 的 sessionModeKey 同源）。
-	// 此前这里**没传** → 引擎侧 tenant 为空 → 兜底成 'default' → 去查一个不存在的键
-	// → 会话授权模式**永远回落 auto**：表现为"工具授权设置存了却不生效"。
-	// （写入端用的是 claims.TenantID，读取端必须拿到同一个值才对得上。）
+	// tenant_id 仍要透传：引擎侧按它隔离记忆/知识库/审计。
 	pythonReq["tenant_id"] = tenantID
 	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantID, userID, sessionID, explicit)
 	if llmConfig == nil {
 		llmConfig = map[string]interface{}{}
 	}
 	llmConfig["mode"] = agentCfg.mode.Value
+	// 工具授权模式随请求下发（**不再经 Redis 往返**）：引擎在任务开始时读取一次并用于
+	// 每次工具裁决（python-engine/app/agent/runtime.py）。此前它存在 Redis 里由引擎反查，
+	// 与前端选择、runtime 状态三处并存，任一处不一致就表现为"设置存了却不生效"。
+	llmConfig["tools_mode"] = agentCfg.toolsMode.Value
 	llmConfig["model"] = agentCfg.model.Value
 	if agentCfg.provider.Value != "" {
 		// 显式 provider：引擎从 llm_config.provider 读（main.py:1007 → AgentRuntime 的

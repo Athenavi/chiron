@@ -522,8 +522,8 @@ class AgentRuntime:
         self._pending_approvals: dict[str, asyncio.Future] = {}
         # 待回答的 ask_user 调用 future（外部经 submit_answer 回填答案，值为 str）
         self._pending_answers: dict[str, asyncio.Future] = {}
-        # 会话授权模式（ask/auto/yolo）：任务开始时从 Redis 读取一次并缓存，
-        # 供每次工具调用裁决使用（读取失败的 fail-safe 语义见 guards.load_session_mode）
+        # 工具授权模式（ask/auto/yolo）：随请求携带（llm_config.tools_mode），
+        # `run()` 开始时采用一次，供每次工具调用裁决使用（见 guards.resolve_tools_mode）
         self._current_mode: str = SESSION_MODE_AUTO
         # Trace writer 引用 (延迟初始化)
         self._trace_writer = None
@@ -597,15 +597,16 @@ class AgentRuntime:
         # （见 app/providers/effort.py：各家词表不一致，直接透传会 400）。
         set_llm_effort(str((task.llm_config or {}).get("effort") or ""))
 
-        # ── 0.4 会话授权模式（任务级缓存）────────────────────────────────
-        # 模式由 Go 网关写入 Redis（/v1/mode），此处仅在任务开始时读取一次并缓存。
-        # 读取失败 fail-safe 到 ask（最严格），避免"模式未知"时按 yolo 静默放开全部工具。
-        from app.agent.guards import load_session_mode
+        # ── 0.4 工具授权模式（随请求携带，运行时采用一次）──────────────────
+        # 模式是**前端的实时状态**：随每次提交经 llm_config.tools_mode 透传到这里，
+        # 服务端不再有任何存储可查（曾存 Redis，由 /v1/mode 写）。
+        # 缺失或取值非法时 fail-safe 到 auto —— 既不按 yolo 静默放开全部工具，
+        # 也不会像 ask 那样把每个写操作都拦下来（见 guards.resolve_tools_mode）。
+        from app.agent.guards import resolve_tools_mode
 
-        if task.session_id:
-            self._current_mode = await load_session_mode(
-                task.tenant_id, task.session_id
-            )
+        self._current_mode = resolve_tools_mode(
+            (task.llm_config or {}).get("tools_mode")
+        )
 
         # ── 0. 输入栅栏：注入检测（S 安全修复）────────────────────────────
         injection = self._input_guard.check(task.content)

@@ -105,7 +105,7 @@ func (h *MediaHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 
 	query := `SELECT id, type, name, COALESCE(file_url, ''), COALESCE(mime_type, ''),
-		COALESCE(thumbnail, ''), COALESCE(metadata_data, '{}'), COALESCE(tags, ''), COALESCE(category, ''), COALESCE(size, 0), created_at, updated_at
+		COALESCE(thumbnail, ''), COALESCE(metadata, '{}'), COALESCE(tags, ''), COALESCE(category, ''), COALESCE(size, 0), created_at, updated_at
 		FROM media_assets` + where +
 		" ORDER BY (type = 'folder') DESC, name ASC LIMIT $%d OFFSET $%d"
 	args = append(args, pageSize, (page-1)*pageSize)
@@ -189,7 +189,7 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		err := db.GlobalDBManager.QueryRow(r.Context(),
-			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata_data, size, created_at, updated_at)
+			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, created_at, updated_at)
 			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, NOW(), NOW())
 			 RETURNING id`,
 			claims.TenantID, claims.UserID, body.Type, body.Name, nullableStr(body.Category), tagsStr, string(metadataJSON), len(body.Content),
@@ -221,7 +221,7 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		err := db.GlobalDBManager.QueryRow(r.Context(),
-			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata_data, size, created_at, updated_at)
+			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, created_at, updated_at)
 			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, NOW(), NOW())
 			 RETURNING id`,
 			claims.TenantID, claims.UserID, body.Type, body.Name, nullableStr(body.Category), tagsStr, string(metadataJSON), 0,

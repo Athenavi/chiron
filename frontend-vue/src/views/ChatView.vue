@@ -5,7 +5,7 @@ import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-de
 import {
   api, createSSEConnection, submitApproval, submitAnswer,
   updateConversation, createShare, getActiveShare, revokeShare,
-  getChatSessionMessages, resolveMediaUrl, getSessionMode, setSessionMode, listModels,
+  getChatSessionMessages, resolveMediaUrl, listModels,
   createAgent, createGraph,
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
@@ -260,15 +260,6 @@ const lastTurnStats = computed<TurnStatsItem | null>(() => {
 const lastCompaction = ref<{ beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null>(null)
 
 /**
- * 运行时解析结果（`GET /v1/sessions/{id}/runtime` 的 `resolved`）。
- *
- * 后端已经把解析链算好：**请求显式 > 会话 runtime > 用户默认 > 全局默认 > 系统兜底**，
- * 并给出每一项的 `source`。前端只负责显示 —— 用户由此才能回答
- * "我现在到底在用哪个模式/模型？是谁定的？"（ZCode 的 `value / effectiveValue / overridden` 三件套）
- */
-const runtimeResolved = ref<Record<string, { value?: string; source?: string }> | null>(null)
-
-/**
  * 观测浮层开关。子 Agent 与统计已从侧栏移出（设计稿 docs/floating-panels-design.md）：
  * 侧栏只留「导航」（轨迹 / 会话历史），观测类信息按需浮出、看完即关。
  */
@@ -333,26 +324,11 @@ const subagentActiveCount = computed(() => {
   return active.size
 })
 
-/** 解析来源 → 用户可读的词 */
-const SOURCE_LABELS: Record<string, string> = {
-  request: '本次请求',
-  session: '本会话',
-  default: '偏好默认',
-  system: '系统默认',
-  auto: '自动路由',
-}
-
 /** 当前模式的显示名 */
 const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || '常规')
 
-/**
- * 当前模式的**来源**（空串表示后端没给解析结果 —— 此时不显示后缀，
- * 避免界面出现"常规 · 未知"这种既占位又没信息的东西）。
- */
-const modeSourceLabel = computed(() => {
-  const src = runtimeResolved.value?.mode?.source
-  return src ? (SOURCE_LABELS[src] || src) : ''
-})
+// 注意：模式不再有"来源"后缀。它不再是会话/服务端状态，也没有回落到谁的默认值一说 ——
+// 界面上的模式就是用户当前的选择（全局单一状态），随本次提交下发。
 
 // 上下文占用环的分母：模型上限来自 /v1/models 的 context_window（拿不到就不显示比例）
 const availableModels = ref<LlmModel[]>([])
@@ -562,8 +538,12 @@ async function answerQuestion(question: PendingQuestion, answer: string) {
 
 // ── 工具授权模式（ask/auto/yolo）──────────────────────────────────────────
 // 与下方「对话模式」(mode: normal/minimal/ptc/creative) 是两个不同维度：
-// 本项控制**工具执行是否需要用户确认**，状态存后端 Redis（多副本一致），
-// 实际判定在 Python 侧 guards.py（模式读取失败会 fail-safe 到最严格的 ask）。
+// 本项控制**工具执行是否需要用户确认**。
+//
+// 它是**前端的实时状态**（全局单一，切换会话不改变它）：既不写 localStorage，也不存
+// 服务端 —— 每次提交经 `llm_config.tools_mode` 随请求下发，引擎在任务开始时采用一次
+// （判定在 python-engine/app/agent/guards.py）。
+// 所以这里既没有"加载"也没有"保存"：改了就立刻是本次生效值，不存在保存失败。
 const toolsMode = ref<'ask' | 'auto' | 'yolo'>('auto')
 const toolsModeOptions = [
   { label: t('询问'), value: 'ask' },
@@ -571,37 +551,15 @@ const toolsModeOptions = [
   { label: t('全自动'), value: 'yolo' },
 ]
 
-async function loadToolsMode(sessionId: string) {
-  if (!sessionId) {
-    toolsMode.value = 'auto'
-    return
-  }
-  try {
-    const m = await getSessionMode(sessionId)
-    if (m === 'ask' || m === 'auto' || m === 'yolo') toolsMode.value = m
-  } catch {
-    // 读取失败：界面保持 auto；判定侧会按 fail-safe 取最严格模式
-  }
-}
-
-async function onToolsModeChange(v: any) {
+function onToolsModeChange(v: any) {
   const m = String(v) as 'ask' | 'auto' | 'yolo'
+  if (m === toolsMode.value) return
   toolsMode.value = m
-  const sid = activeSessionId.value
-  if (!sid) {
-    message.warning(t('请先创建或选择会话，再设置工具授权模式'))
-    return
-  }
-  try {
-    await setSessionMode(sid, m)
-    message.success(
-      m === 'yolo'
-        ? '已切换为全自动：跳过工具确认（该操作会留审计）'
-        : `工具授权模式已设为「${toolsModeOptions.find(o => o.value === m)?.label || m}」`,
-    )
-  } catch {
-    message.error(t('工具授权模式保存失败'))
-  }
+  message.success(
+    m === 'yolo'
+      ? '已切换为全自动：跳过工具确认（该操作会留审计）'
+      : `工具授权模式已设为「${toolsModeOptions.find(o => o.value === m)?.label || m}」`,
+  )
 }
 
 // 模式
@@ -659,11 +617,21 @@ function cycleEffort() {
 }
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model + 思考档位 */
+/**
+ * 请求用 llm_config：把**本次生效的请求级参数**（对话模式 / 工具授权模式 / 模型 / 思考档位）
+ * 一并带给后端。
+ *
+ * 两个模式项都是前端实时状态 —— 只有在这里随请求下发后端才拿得到（它们不再有服务端存储，
+ * 见 internal/api/mode.go 与 python-engine/app/agent/guards.py）。
+ * **落库请用 buildPersistLlmConfig**：模式不属于会话状态。
+ */
 function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
   const cfg: Record<string, any> = { mode: mode.value, ...(base || {}) }
   if (effort.value) cfg.effort = effort.value
   // 模型路由：会话选定模型写入 llm_config（空 = 不携带，走后端默认路由）
   if (llmModel.value) cfg.model = llmModel.value
+  // 工具授权模式（ask/auto/yolo）：随请求下发，引擎侧 ToolGuard 据此裁决
+  cfg.tools_mode = toolsMode.value
   const preset = MODE_PRESETS[mode.value]
   if (preset) {
     if (cfg.temperature === undefined) cfg.temperature = preset.temperature
@@ -673,16 +641,33 @@ function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
 }
 
 /**
- * 把运行时状态写进**单一事实源**（P1：Redis 热 + `unified_sessions.runtime` 持久）。
+ * 落库用 llm_config：剔除请求级参数（对话模式 / 工具授权模式）。
  *
- * 会话已建立时同时写 `/v1/sessions/{id}/runtime`（刷新/重开会话都不丢，且提交链路
- * 按 spec §3 的解析链读取）与 `llm_config`（老客户端与其他页面仍按此口径读取）。
+ * 这两项是"改了就生效、刷新即回默认"的实时状态；写进会话 llm_config 等于又造出一份
+ * 服务端状态 —— 刷新后旧值复活、与其他来源打架，正是本次要移除的问题。
+ * 模型等"用户希望下次继续沿用"的项照常落库。
+ */
+function buildPersistLlmConfig(base?: Record<string, any>): Record<string, any> {
+  const cfg = buildLlmConfig(base)
+  delete cfg.mode
+  delete cfg.tools_mode
+  return cfg
+}
+
+/**
+ * 把**会话级**运行时状态写进单一事实源（Redis 热 + `unified_sessions.runtime` 持久）。
+ *
+ * 会话已建立时同时写 `/v1/sessions/{id}/runtime` 与 `llm_config`（老客户端与其他页面
+ * 仍按此口径读取）。
+ *
+ * 注意用的是 buildPersistLlmConfig：对话模式与工具授权模式**不落库** —— 它们是前端
+ * 实时状态，只随请求下发（见 buildLlmConfig 的说明）。
  */
 function persistRuntime(patch: Record<string, unknown>) {
   const sid = activeSessionId.value
   if (!sid) return
   void putSessionRuntime(sid, patch).catch(() => {})
-  void updateConversation(sid, { llm_config: buildLlmConfig() } as any).catch(() => {})
+  void updateConversation(sid, { llm_config: buildPersistLlmConfig() } as any).catch(() => {})
 }
 
 /**
@@ -716,14 +701,18 @@ function onModelChange(m: string) {
   persistRuntime({ model: m || null })
 }
 
-/** 模式切换：更新 mode ref + 写入运行时状态（会话级持久） */
+/**
+ * 模式切换：只改前端状态（全局单一，不写会话、不写服务端）。
+ *
+ * 模式是请求级参数，随下一条消息经 llm_config.mode 下发，"仅影响后续消息"因此是天然
+ * 语义；刷新页面则回落默认 normal（不缓存）。
+ */
 function onModeChange(m: string) {
   if (m === mode.value) return
   mode.value = m
   const opt = modeOptions.find(o => o.value === m)
   const preset = MODE_PRESETS[m]
   message.info(`已切换到「${opt?.label || m}」模式${preset?.desc ? `：${preset.desc}` : ''}，仅影响后续消息`)
-  persistRuntime({ mode: m })
 }
 
 /** 归一化后的 metadata（可能为 JSON 字符串或对象） */
@@ -1188,7 +1177,7 @@ window.addEventListener('message', (e: MessageEvent) => {
   }
   // 地图顶部的「对话」按钮 → 回到对话页（关掉浮层）。
   // 上游那个按钮是给它的宿主用的（data-action="close"），adapter 把它转成这条消息。
-  if (data.type === 'synapse:close-map') {
+  if (data.type === 'synapse:close-map' || data.type === 'synapse:close') {
     synapseMapOpen.value = false
     return
   }
@@ -1477,7 +1466,7 @@ async function loadSessions() {
 async function createSession() {
   let session: ChatSession | null = null
   try {
-    const res = await api.post('/v1/conversations', { title: t('新对话'), llm_config: buildLlmConfig() })
+    const res = await api.post('/v1/conversations', { title: t('新对话'), llm_config: buildPersistLlmConfig() })
     const data = res.data?.data || res.data
     if (data?.id) session = { id: data.id, title: data.title || t('新对话'), created_at: data.created_at, updated_at: data.updated_at }
   } catch { /* fallback */ }
@@ -1517,8 +1506,8 @@ async function switchSession(id: string) {
   // （切回正在跑的会话时这里会置空、因而暂时停不了它：**宁可停不了，也不能停错**；
   //   完整版是给每个会话各自持有连接，属下一批。）
   if (!currentRun.value.loading) activeSSE = null
-  // 工具授权模式是会话级状态（存后端 Redis）：切会话时同步拉取，避免沿用上一个会话的模式
-  void loadToolsMode(id)
+  // 模式（对话模式 + 工具授权模式）不在此同步：它们是前端全局实时状态，
+  // 切换会话既不改变它们，也不从会话状态读回（见 buildLlmConfig 的说明）。
   hasMore.value = false; earliestCursor.value = ''; loadingEarlier.value = false
   initialLoading.value = true
   try {
@@ -1535,25 +1524,15 @@ async function switchSession(id: string) {
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
     }
-    // P1：运行时状态是**单一事实源**（Redis 热 + unified_sessions.runtime 持久）。
-    // 优先用它回填（刷新/重开会话/换设备都不丢），llm_config 作为老数据兜底。
+    // 会话级运行时状态（model / provider / 已激活上下文）：Redis 热 + unified_sessions.runtime
+    // 持久，切回会话时回填。**模式不在其中** —— 对话模式与工具授权模式是前端全局实时状态，
+    // 不随会话切换而改变（见 buildLlmConfig 的说明）。
     let cfg: any = data?.llm_config
     if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg) } catch { cfg = undefined } }
     let rt: any = null
     try {
-      const view = await getSessionRuntime(id)
-      rt = view.runtime
-      // 生效值 + 来源：后端已算好解析链，前端只显示（见 runtimeResolved 的注释）
-      runtimeResolved.value = view.resolved || null
+      rt = (await getSessionRuntime(id)).runtime
     } catch { /* 不可用时静默回落 llm_config */ }
-    // 模式兜底：会话没记、或记了个不认识的值时，**必须回落到默认模式**。
-    // 过去这里只在"合法"时才赋值 → 非法时**沿用上一个会话的 mode**，
-    // 表现为"切了会话，模式看着是选中的，其实是别的会话的设置"。
-    const savedMode = rt?.mode || cfg?.mode
-    mode.value =
-      typeof savedMode === 'string' && modeOptions.some(o => o.value === savedMode)
-        ? savedMode
-        : DEFAULT_MODE
     // 模型兜底（**这一条就是 "Model is unavailable" 的直接原因**）：
     // 会话没记模型时，过去会留空 → 提交不带 model → 落到**后端默认模型**；
     // 而一旦后端默认模型被上游下架（日志：opencode-go 的模型数 37→33），
@@ -1660,7 +1639,7 @@ async function confirmRename() {
   if (!title || !target) return
   renaming.value = true
   try {
-    await updateConversation(target.id, { title, llm_config: buildLlmConfig() } as any)
+    await updateConversation(target.id, { title, llm_config: buildPersistLlmConfig() } as any)
     const s = sessions.value.find(x => x.id === target.id)
     if (s) s.title = title
     persistSessions()
@@ -1688,7 +1667,7 @@ async function togglePin(id: string, pinned: boolean) {
   s.pinned = pinned
   sortSessions(); persistSessions()
   try {
-    await updateConversation(id, { pinned, llm_config: buildLlmConfig() } as any)
+    await updateConversation(id, { pinned, llm_config: buildPersistLlmConfig() } as any)
   } catch {
     s.pinned = prev
     sortSessions(); persistSessions()
@@ -2175,13 +2154,13 @@ function continueGeneration() {
           />
           <div class="toolbar-center">
             <span class="toolbar-title">{{ unifiedMode ? '统一任务' : (activeSession?.title || 'Chiron') }}</span>
-            <!-- 生效值 + 来源：后端已把解析链（本次请求 > 本会话 > 偏好默认 > 系统默认）算好，
-                 这里直接显示 —— 用户由此能回答"我现在用的是哪个模式、是谁定的"。
-                 来源为空时不显示后缀，避免出现"常规 · 未知"这种只占位没信息的字样。 -->
+            <!-- 当前对话模式：前端实时状态（全局单一），随每条消息经 llm_config.mode 下发。
+                 不再显示"来源"后缀 —— 模式没有服务端/会话一层可言，"是谁定的"答案永远是
+                 "你当前的选择"。 -->
             <span
               class="toolbar-mode"
-              :title="modeSourceLabel ? `模式来源：${modeSourceLabel}` : '当前对话模式'"
-            >{{ modeLabel }}<template v-if="modeSourceLabel"> · {{ modeSourceLabel }}</template></span>
+              title="当前对话模式"
+            >{{ modeLabel }}</span>
             <!-- 思考档位：点按循环（关 → 低 → 高 → 最高）。
                  与"模式"同类信息（都是"这次怎么回答"），所以并排放；用循环按钮而不是下拉 ——
                  只有 4 档，比下拉省一次点击和一块浮层。
