@@ -405,6 +405,15 @@ interface SessionRunState {
   loading: boolean
   /** 代际号：该会话运行时被重建时 +1（用于丢弃旧回调） */
   gen: number
+  /**
+   * 该会话的**子 Agent 实时事件**（有界缓冲）。
+   *
+   * 此前它是模块级单值 `ref`，于是会话 A 的子 Agent 进度会**串到会话 B** 的
+   * 观测面板与状态栏角标上（`items` / `loading` 早已按会话隔离，唯独漏了它）。
+   * 放进 run state 后，"事件属于哪个会话"由 `withRun` 作用域自动决定 ——
+   * `onSSEMessage` 本就在 `withRun(runOf(sessionId), …)` 内执行。
+   */
+  subagentEvents: SubagentEvent[]
 }
 
 /**
@@ -417,7 +426,7 @@ const runtimes = reactive(new Map<string, SessionRunState>())
 function runOf(sid: string): SessionRunState {
   let run = runtimes.get(sid)
   if (!run) {
-    runtimes.set(sid, { items: [], loading: false, gen: 1 })
+    runtimes.set(sid, { items: [], loading: false, gen: 1, subagentEvents: [] })
     // 必须取回 `runtimes.get()` 的**代理**，而不是刚构造的原始对象 ——
     // 原始对象不在响应式系统里，后续 push 不会触发更新。
     run = runtimes.get(sid)!
@@ -1036,7 +1045,17 @@ const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
 // 只供侧边栏观测面板消费，绝不混入主对话流（docs/subagent-design.md §4.2）。
-const subagentLiveEvents = ref<SubagentEvent[]>([])
+//
+// ⚠️ 按**会话**存（与 items / loading 同一套）：真实存储落在 SessionRunState 上，
+// 对外仍是 `subagentLiveEvents` 这个名字 —— 用可写 computed 代理到"当前会话"的切片，
+// 于是既有读写（push / length / 模板传参）一行都不用改。
+// 此前是模块级单值 ref，会让会话 A 的子 Agent 进度串到会话 B 的面板与角标。
+const subagentLiveEvents = computed<SubagentEvent[]>({
+  get: () => (writingRun.value ?? currentRun.value).subagentEvents,
+  set: (v) => {
+    ;(writingRun.value ?? currentRun.value).subagentEvents = v
+  },
+})
 const SUBAGENT_LIVE_MAX = 500
 
 function onTrajectoryFocus(index: number) {

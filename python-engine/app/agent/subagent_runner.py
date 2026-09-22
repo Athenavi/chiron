@@ -145,9 +145,12 @@ class SubAgentRunner:
         mode: str = "normal",
         max_turns: int = 0,
         expert_prompt: str = "",
+        run_id: str = "",
     ) -> SubagentRunResult:
         task = (task or "").strip()
-        run_id = new_run_id()
+        # 允许调用方**预先指定** run_id：后台委派必须先把 run_id 返回给父模型，
+        # 它才能用 read_subagent_result(run_id) 查进度（见 app/tools/subagent.py）。
+        run_id = run_id or new_run_id()
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
 

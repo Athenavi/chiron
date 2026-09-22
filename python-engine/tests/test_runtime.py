@@ -282,10 +282,12 @@ class TestRuntimeModes:
         assert events[-1].type == "done"
 
     @pytest.mark.asyncio
-    async def test_minimal_mode_exposes_only_three_tools(self):
+    async def test_minimal_mode_exposes_only_its_core_tools(self):
         calls, events = await self._run_and_capture("minimal", system_prompt="外部默认提示词")
         names = {t["function"]["name"] for t in calls[0]["tools"]}
-        assert names == {"read_file", "edit_file", "shell_exec"}
+        # 极简模式只给"读 / 改 / 跑"三个，**外加 tool_search** —— 它是按需激活的入口，
+        # 必须始终可见，否则模型根本不知道还能搜索更多工具（见 runtime._get_core_tools）。
+        assert names == {"read_file", "edit_file", "shell_exec", "tool_search"}
         # persona 覆盖：system 消息是固定 persona，而非外部传入的默认提示词
         system_msgs = [m for m in calls[0]["messages"] if m.role == "system"]
         assert len(system_msgs) == 1

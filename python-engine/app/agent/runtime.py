@@ -891,20 +891,24 @@ class AgentRuntime:
                     if chunk.reasoning_content:
                         reasoning_content += chunk.reasoning_content
                         has_reasoned = True
-                        # 累积 reasoning_content，在 content 开始前按 ~80 字为单位 yield
-                        if not response_content:
-                            new_len = len(reasoning_content)
-                            if new_len - _thinking_last_flushed >= 80 or any(
-                                c in chunk.reasoning_content for c in "。！？\n"
-                            ):
-                                safe_thinking = self._output_guard.sanitize(
-                                    reasoning_content[_thinking_last_flushed:]
-                                )
+                        # 思考要**即时**下发。此前是「累积到 80 字或标点才 flush，且
+                        # `if not response_content` 使正文一开始就不再推思考」——
+                        # 界面表现就是思考成段跳出来，且交错的思考完全看不到。
+                        # 现在阈值降到 24 字（近似逐字），并按「距上次下发」累计下发剩余部分，
+                        # 长段落不会因为中间没有标点而被吞掉。
+                        new_len = len(reasoning_content)
+                        if (new_len - _thinking_last_flushed) >= 24 or any(
+                            c in chunk.reasoning_content for c in "。！？；\n"
+                        ):
+                            safe_thinking = self._output_guard.sanitize(
+                                reasoning_content[_thinking_last_flushed:]
+                            )
+                            if safe_thinking:
                                 yield AgentEvent(
                                     type="text",
                                     content=f"[thinking]{safe_thinking}[/thinking]",
                                 )
-                                _thinking_last_flushed = new_len
+                            _thinking_last_flushed = new_len
 
                     # 文本片段
                     if chunk.content:

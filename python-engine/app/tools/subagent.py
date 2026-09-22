@@ -15,6 +15,7 @@ Profile 缺失或解析失败时退回通用子 Agent；落库失败不影响子
 from __future__ import annotations
 
 import logging
+import asyncio
 from typing import Any
 
 from app.tools.context import (get_all, get_gateway, get_session_id,
@@ -29,6 +30,10 @@ MAX_DEPTH = 3  # 全局硬上限（S3）；Profile 的 max_depth 只能更严格
 
 # 落库器单例（无 DB 时为 None → 子 Agent 照常运行，只是不留痕）
 _store = None
+
+#: 后台委派的任务表：**必须持有引用**，否则 asyncio 任务可能被 GC 回收而静默消失。
+#: 任务结束时自行移除（见 _drive_background 的 finally）。
+_BG_TASKS: dict[str, asyncio.Task] = {}
 
 
 def _expert_system_prompt(expert: str) -> str:
@@ -72,6 +77,7 @@ async def subagent(
     max_turns: int = 5,
     expert: str = "",
     profile: str = "",
+    run_in_background: bool = False,
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
@@ -109,6 +115,49 @@ async def subagent(
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
     )
+    # ── 后台委派：**不阻塞父 agent** ──
+    #
+    # 同步路径要 await 整轮子 Agent 循环（可能数分钟），父 turn 只能干等，
+    # 于是"委派"在大任务上几乎不可用。后台路径把它变成 launch-and-return：
+    #   * 立即返回 run_id，父模型可以继续别的工具调用；
+    #   * 之后用 read_subagent_result(run_id) / subagent_runs 收产物与进度；
+    #   * **这里不需要 restore_context** —— create_task 本就跑在 context 的副本里，
+    #     父任务的 context 不会被改写（只有同步路径才必须 finally 还原）。
+    if run_in_background:
+        from app.agent.subagent_runner import new_run_id
+
+        bg_run_id = new_run_id()
+        bg_task = asyncio.create_task(
+            _drive_background(
+                runner,
+                bg_run_id,
+                task,
+                profile_ref=profile,
+                mode=mode or "normal",
+                max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+                expert_prompt=_expert_system_prompt(expert),
+            ),
+            name=f"subagent-bg-{bg_run_id}",
+        )
+        _BG_TASKS[bg_run_id] = bg_task  # 必须持引用，否则可能被 GC 静默回收
+        logger.info(
+            "subagent 后台委派已启动 run_id=%s profile=%s depth=%s",
+            bg_run_id,
+            profile or "-",
+            depth,
+        )
+        return {
+            "status": "async_launched",
+            "isAsync": True,
+            "run_id": bg_run_id,
+            "result_ref": bg_run_id,
+            "note": (
+                "子 Agent 已在后台独立运行，**本轮父任务不必等它** —— 可以继续做别的事。"
+                "用 read_subagent_result(run_id) 取它的产物与进度；它的过程也会以 "
+                "subagent.* 事件汇入前端观测面板。注意：后台运行同样消耗 token。"
+            ),
+        }
+
     try:
         result = await runner.run(
             task,
@@ -125,6 +174,30 @@ async def subagent(
         # 失败且无任何输出：保留错误信息，便于父模型决策
         payload["error"] = result.error or "subagent failed"
     return payload
+
+
+async def _drive_background(runner, run_id: str, task: str, **kwargs: Any) -> None:
+    """后台驱动一次子 Agent 运行。
+
+    异常一律吞掉并记日志：后台任务没有调用者在等它的异常，
+    逃逸出去只会变成 "Task exception was never retrieved" 噪声。
+    状态与产物由 runner 落库（subagent_runs / subagent_run_steps），
+    父模型随后用 read_subagent_result(run_id) 取用。
+    """
+    try:
+        result = await runner.run(task, run_id=run_id, **kwargs)
+        logger.info(
+            "subagent 后台运行结束 run_id=%s status=%s",
+            run_id,
+            getattr(result, "status", "?"),
+        )
+    except asyncio.CancelledError:
+        logger.info("subagent 后台运行被取消 run_id=%s", run_id)
+        raise
+    except Exception as exc:  # noqa: BLE001 — 后台任务不能把异常漏给事件循环
+        logger.error("subagent 后台运行失败 run_id=%s: %s", run_id, exc, exc_info=True)
+    finally:
+        _BG_TASKS.pop(run_id, None)
 
 
 def _get_pool():
@@ -168,6 +241,18 @@ registry.register(
                 "type": "integer",
                 "default": 5,
                 "description": "Child loop turns cap (max 10)",
+            },
+            "run_in_background": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Set true to launch the child in the background and return immediately "
+                    "(status='async_launched' plus a run_id). The parent turn keeps working "
+                    "instead of waiting for the whole child loop. Collect the result later "
+                    "with read_subagent_result(run_id). Use it for long independent work "
+                    "(multi-file research, drafting a report) that would otherwise block "
+                    "this turn for minutes. Background runs still consume their own tokens."
+                ),
             },
             "expert": {
                 "type": "string",
