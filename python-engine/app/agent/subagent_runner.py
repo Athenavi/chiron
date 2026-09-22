@@ -212,11 +212,25 @@ class SubAgentRunner:
             )
 
         # 4) 事件旁路（让前端看到子 Agent 进度；未启用时为 None，不影响执行）
+        #
+        # P7：`sink` 缺失时，下游所有 `emit_*` 都会被 `if sink is not None` **静默跳过** ——
+        # 前端"什么都没有"，而日志里**一条错都没有**，故障完全不可见。
+        # 因此这里显式区分来源，并在两者都取不到时留下可诊断的记录。
         sink = self._sink
+        sink_source = "explicit" if sink is not None else ""
         if sink is None:
             from app.agent.event_sink import get_event_sink
 
             sink = get_event_sink()
+            sink_source = "context" if sink is not None else "none"
+        if sink is None:
+            logger.info(
+                "subagent %s: no event sink (source=%s); "
+                "progress events will NOT reach the parent SSE stream",
+                run_id, sink_source or "none",
+            )
+        else:
+            logger.debug("subagent %s: event sink resolved via %s", run_id, sink_source)
         parent_run_id = self._parent_run_id or _context_run_id()
         if sink is not None:
             sink.emit_started(run_id=run_id, parent_run_id=parent_run_id,
@@ -309,13 +323,23 @@ class SubAgentRunner:
             # finished_at / summary 均为 NULL）。
             # 取消路径的终态写库必须放进**独立任务**（不 await），让它在后台写完。
             # 原则取自 ZCode：**run 的真相在 journal，观察面出问题绝不该影响它**。
+            # P5：取消路径**也**要产出 L1 摘要 —— `subagent_runs.summary` 是跨轮把子 Agent
+            # 成果送回父上下文的**唯一载体**（设计：父会话后续 turn 只注入这一条）。
+            # 此前这里固定写 summary=""，于是父会话下一轮永远看不到任何结论，
+            # 表现为"主子 Agent 无法有效联动"：不是拿不到结果，而是**结果没有通道回到父上下文**。
+            # 这里**刻意不调 LLM**：取消路径不应再发起网络调用（既慢又费钱），
+            # 直接用已完成的部分输出拼一条可读摘要即可。
+            partial = "\n".join(t for t in texts if t).strip()
+            cancel_summary = f"（被取消）已完成 {steps} 步"
+            cancel_summary += f"；部分输出：{partial[:300]}" if partial else "，无有效输出"
+
             async def _write_terminal_state() -> None:
                 try:
                     if self._store is not None:
                         await self._store.finish_run(
                             run_id,
                             status="cancelled",
-                            summary="",
+                            summary=cancel_summary,
                             input_tokens=in_tokens,
                             output_tokens=out_tokens,
                             steps=steps,
@@ -326,7 +350,7 @@ class SubAgentRunner:
                             run_id=run_id,
                             tenant=cache_tenant,
                             status="cancelled",
-                            summary="",
+                            summary=cancel_summary,
                             usage={"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps},
                             result_ref=run_id,
                         )

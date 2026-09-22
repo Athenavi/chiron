@@ -45,7 +45,9 @@ def test_browser_tool_schemas_have_required_params():
 
     switch = registry.get("browser_tab_switch")
     assert switch is not None
-    assert "tabId" in switch.parameters.get("required", [])
+    # 参数名必须是 **snake_case**：handler 签名为 `browser_tab_switch(tab_id)`，
+    # schema 若写 camelCase（曾经的 "tabId"）会让模型传了却收不到 ⇒ 调用必 TypeError。
+    assert "tab_id" in switch.parameters.get("required", [])
 
 
 # ── StubHub 命令透传 ────────────────────────────────────────

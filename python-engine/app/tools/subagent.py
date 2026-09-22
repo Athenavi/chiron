@@ -105,6 +105,10 @@ async def subagent(
     from app.agent.subagent_runner import SubAgentRunner
 
     parent_ctx = get_all()
+    # P7：显式把父 run 的事件旁路交给子 Agent，而不是依赖它在运行时从 tool context 回落 ——
+    # 回落取不到时 sink 为 None，所有进度事件会被静默丢弃（前端空白且日志无任何记录）。
+    from app.agent.event_sink import get_event_sink
+
     runner = SubAgentRunner(
         gw,
         store=_get_store(),
@@ -114,6 +118,7 @@ async def subagent(
         turn_id=str(get_tool_context("turn_id", "") or ""),
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
+        sink=get_event_sink(),
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #

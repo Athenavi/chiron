@@ -895,8 +895,7 @@ function openKb(kbId: string) {
 }
 
 /** 组装发送时附带的 context（普通 SSE 模式与统一任务模式共用） */
-function buildContext(): Record<string, any> | undefined {
-  // 单值字段 + 多值数组的组装规则集中在 contextChips 模块（新旧后端都能工作）。
+function buildContext(): Record<string, any> | undefined {  // 单值字段 + 多值数组的组装规则集中在 contextChips 模块（新旧后端都能工作）。
   //
   // Agent 只发 agent_id，配置由网关按 id 补全（internal/api/agents.go 的
   // resolveAgentContext）。前端此前自己映射一份字段，且只映射了
@@ -2289,18 +2288,9 @@ function continueGeneration() {
         </template>
       </div>
 
-      <!-- 工具授权模式（ask/auto/yolo）：与「对话模式」(normal/minimal/ptc/creative) 是
-           两个不同维度 —— 本项控制工具执行是否需要用户确认，故独立成行不与之混放 -->
-      <div class="tools-mode-bar">
-        <span class="tools-mode-label">{{ $t('工具授权') }}</span>
-        <a-segmented
-          :value="toolsMode"
-          :options="toolsModeOptions"
-          size="small"
-          @change="onToolsModeChange"
-        />
-        <span class="tools-mode-hint">{{ $t('询问=写类工具需确认 · 自动=仅危险工具 · 全自动=跳过确认') }}</span>
-      </div>
+      <!-- 工具授权模式（ask/auto/yolo）：已移至对话框底部（见 ChatInput 之后的一行下拉）——
+           它控制的是"工具执行是否需要确认"，与「对话模式」是两个维度，
+           但占用工具栏一整行会让视觉权重过高、且离输入区太远。 -->
 
       <div
         v-if="pendingApprovals.length"
@@ -2369,6 +2359,10 @@ function continueGeneration() {
         @command="onSlashCommand"
         @open-panel="openContextPanel"
         @mention-add="onMentionAdd"
+        :tools-mode="toolsMode"
+        @tools-mode-change="onToolsModeChange"
+        :context-chips="contextChips"
+        @remove-context-chip="(c: ContextChip) => removeContextChip(c.type, c.value)"
       />
 
       <ChatStatusBar
@@ -2716,10 +2710,8 @@ function continueGeneration() {
 .ask-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
 .approval-card { background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 10px; padding: 10px 14px; }
 /* 工具授权模式栏（与「对话模式」并列但语义独立的第二个维度） */
-.tools-mode-bar { display: flex; align-items: center; gap: 10px; padding: 6px 20px 0; flex-wrap: wrap; }
-.tools-mode-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
-.tools-mode-hint { font-size: 11px; color: var(--text-muted); }
-@media (max-width: 576px) { .tools-mode-bar { padding: 6px 12px 0; } .tools-mode-hint { display: none; } }
+/* 工具授权已内联到输入区底栏（模型选择器右侧），样式见 ChatInput.vue 的
+   `.tools-mode-select` —— 这里不再需要独立的 `.tools-mode-bar`。 */
 .approval-countdown { margin-left: auto; font-size: 11px; color: var(--warning, #f59e0b); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag { font-size: 11px; color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }

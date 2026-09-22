@@ -214,6 +214,12 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			tenantID = claims.UserID
 		}
 	}
+	// 透传给引擎：`guards.load_session_mode` 用 tenant+session 拼 Redis 键
+	// （`{prefix}session:mode:{tenant}:{session}`，与 mode.go 的 sessionModeKey 同源）。
+	// 此前这里**没传** → 引擎侧 tenant 为空 → 兜底成 'default' → 去查一个不存在的键
+	// → 会话授权模式**永远回落 auto**：表现为"工具授权设置存了却不生效"。
+	// （写入端用的是 claims.TenantID，读取端必须拿到同一个值才对得上。）
+	pythonReq["tenant_id"] = tenantID
 	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantID, userID, sessionID, explicit)
 	if llmConfig == nil {
 		llmConfig = map[string]interface{}{}

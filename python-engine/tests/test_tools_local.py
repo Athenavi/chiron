@@ -182,28 +182,28 @@ async def test_edit_file_line_range(tmp_path):
 
 @pytest.mark.asyncio
 async def test_glob_finds_python_files(tmp_path):
-    """Create temp dir with .py and .txt files, verify glob finds only .py."""
-    (tmp_path / "hello.py").write_text("print('hi')\n", encoding="utf-8")
-    (tmp_path / "world.py").write_text("x = 1\n", encoding="utf-8")
-    (tmp_path / "notes.txt").write_text("not python\n", encoding="utf-8")
-    sub = tmp_path / "sub"
-    sub.mkdir()
-    (sub / "deep.py").write_text("pass\n", encoding="utf-8")
-    (sub / "data.csv").write_text("a,b\n", encoding="utf-8")
+    """glob_files 必须以**沙箱根**为界，而不是调用方给的任意路径。
 
-    result = await registry.execute("glob_files", {
+    历史缺陷：它曾直接 `Path(root).resolve()` —— 等于以**进程 CWD** 为根。
+    实测 `glob_files(pattern="README*", root=".")` 会返回仓库外的
+    X:\\project\\Chiron\\README.md，而同类工具 grep_files 一直是有沙箱的。
+    现在统一到 workspace_dir()，因此**沙箱外的 root 必须被拒绝**（这正是它应有的行为）。
+    """
+    (tmp_path / "hello.py").write_text("print('hi')\n", encoding="utf-8")
+
+    # 沙箱外的绝对路径：必须被挡下，且不得把路径泄漏回调用方
+    outside = await registry.execute("glob_files", {
         "pattern": "**/*.py",
         "root": str(tmp_path),
     })
+    assert outside.get("error") == "path escapes sandbox", outside
+    assert outside.get("files") == []
 
-    assert "files" in result, result
-    paths = [f["path"] for f in result["files"]]
-    assert len(paths) == 3, f"Expected 3 .py files, got {len(paths)}: {paths}"
-    for p in paths:
-        assert p.endswith(".py"), f"Non-py file in result: {p}"
-    # txt and csv must NOT appear
-    assert not any(p.endswith(".txt") for p in paths)
-    assert not any(p.endswith(".csv") for p in paths)
+    # 沙箱内：root 省略即默认沙箱根，应照常工作
+    inside = await registry.execute("glob_files", {"pattern": "**/*.py", "root": "."})
+    assert "files" in inside, inside
+    for f in inside["files"]:
+        assert f["path"].endswith(".py"), f"Non-py file in result: {f}"
 
 
 # ── git tools tests ──────────────────────────────────────────────

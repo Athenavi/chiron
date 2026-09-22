@@ -12,6 +12,7 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.tools.context import get_session_id
 from app.tools.registry import registry
 
 
@@ -67,6 +68,10 @@ class Session:
     task: str
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
+    #: 创建它的**对话会话**（空 = 无归属）。
+    #: 用于让 agent_session_list 只回本会话的条目 —— 否则主 Agent 会看到别的会话
+    #: 建的 agent session，把它们误当成自己的任务上下文（这正是"跨会话影响判断"）。
+    root_session_id: str = ""
 
 
 _sessions: dict[str, Session] = {}
@@ -127,7 +132,9 @@ async def agent_session_create(name: str, task: str) -> dict[str, Any]:
     if not name or not task:
         return {"error": "name and task are required"}
     sid = _new_session_id()
-    _sessions[sid] = Session(id=sid, name=name, task=task)
+    _sessions[sid] = Session(
+        id=sid, name=name, task=task, root_session_id=get_session_id()
+    )
     return {
         "output": f"Session '{name}' created",
         "session_id": sid,
@@ -136,14 +143,20 @@ async def agent_session_create(name: str, task: str) -> dict[str, Any]:
 
 
 async def agent_session_list() -> dict[str, Any]:
-    if not _sessions:
+    """只列**本对话会话**创建的 agent session。
+
+    按会话隔离是必须的：此前直接返回进程内全局表的全部条目，于是主 Agent 会看到
+    别的会话建的 agent session，把它们当成自己的任务上下文 —— 从而误判该做什么。
+    这也决定了前端「最近活动」等入口不会把别人的子 Agent 混进来。
+    """
+    me = get_session_id()
+    mine = [s for s in _sessions.values() if (s.root_session_id or "") == me]
+    if not mine:
         return {"output": "No agent sessions.", "sessions": []}
-    lines = [
-        f"  - {s.id} [{s.status}] {s.name}: {s.task[:60]}" for s in _sessions.values()
-    ]
+    lines = [f"  - {s.id} [{s.status}] {s.name}: {s.task[:60]}" for s in mine]
     return {
         "output": "\n".join(lines),
-        "sessions": [s.__dict__ for s in _sessions.values()],
+        "sessions": [s.__dict__ for s in mine],
     }
 
 

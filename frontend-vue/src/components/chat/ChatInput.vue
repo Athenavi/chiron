@@ -1,10 +1,11 @@
 ﻿<script setup lang="ts">
-import { ref, onMounted, watch, computed, nextTick } from 'vue'
-import { Input, Button, Select, message } from 'ant-design-vue'
-import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined } from '@ant-design/icons-vue'
+import { ref, onMounted, onUnmounted, watch, computed, nextTick, h } from 'vue'
+import { Input, Button, Select, Tooltip, Popover, message } from 'ant-design-vue'
+import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined } from '@ant-design/icons-vue'
 import { uploadFile, listModels } from '../../api'
 import type { LlmModel } from '../../api'
 import type { ChatAttachment } from './chat-types'
+import type { ContextChip } from './contextChips'
 import MediaPickerDialog from './MediaPickerDialog.vue'
 
 import { useI18n } from 'vue-i18n'
@@ -18,6 +19,11 @@ const props = defineProps<{
   sessionId?: string
   /** 模型路由：当前会话 llm_config.model（空 = 后端默认路由） */
   model?: string
+  /** 工具授权模式（ask/auto/yolo）：控制工具执行是否需要用户确认 */
+  toolsMode?: string
+  /** 已带入本次对话的上下文（知识库 / Agent / 技能 / 工作流 / 插件 / 记忆分类）。
+      对齐 reasonix 的 `composer-context`：绑定是"沉默生效"的，不显式呈现就是幽灵行为。 */
+  contextChips?: ContextChip[]
 }>()
 
 const emit = defineEmits<{
@@ -28,6 +34,10 @@ const emit = defineEmits<{
   (e: 'update:mode', mode: string): void
   /** 模型路由：用户选择了模型（空字符串 = 恢复后端默认） */
   (e: 'model-change', model: string): void
+  /** 工具授权模式：ask=写类需确认 / auto=仅危险 / yolo=全跳过 */
+  (e: 'tools-mode-change', mode: string): void
+  /** 移除一个上下文 chip（点输入区上方 chip 行的 × ） */
+  (e: 'remove-context-chip', chip: ContextChip): void
   /** 斜杠命令 */
   (e: 'command', cmd: string): void
   /** 上下文快捷按钮：展开侧栏（若为抽屉模式） */
@@ -73,6 +83,68 @@ function onModelChange(v: any) {
   modelValue.value = String(v || '')
   emit('model-change', modelValue.value)
 }
+
+// ── 工具授权（ask/auto/yolo） ──
+//
+// 与「对话模式」(normal/minimal/ptc/creative) 是两个维度：本项控制的是**工具执行是否需要
+// 用户确认**。参照 reasonix 的 ComposerChoice —— 说明文字**随选项走**（option.description），
+// 而不是在控件旁外挂一行提示；所以这里把每一档的语义做成该选项的**悬浮 pop 词**。
+const TOOLS_MODE_META = [
+  { value: 'ask', label: '询问', desc: '写类工具需确认：shell 执行、文件写入、git 写操作、浏览器/网络访问' },
+  { value: 'auto', label: '自动', desc: '仅危险工具需确认（默认）：shell/命令执行等对外部世界的动作' },
+  { value: 'yolo', label: '全自动', desc: '跳过全部确认：所有工具直接执行（该操作会留审计日志）' },
+] as const
+
+/** 选项 label 用 VNode 包一层 Tooltip —— 悬浮即见该档语义（对齐 reasonix 的 option.description） */
+const toolsModeOptions = computed(() =>
+  TOOLS_MODE_META.map(o => ({
+    value: o.value,
+    label: h(Tooltip, { title: o.desc, placement: 'left' }, () => o.label),
+  })),
+)
+
+function onToolsModeChange(v: any) {
+  emit('tools-mode-change', String(v))
+}
+
+// ── 输入框 placeholder 多态 ──
+//
+// 对齐 reasonix 的 `composerPlaceholder`：placeholder 不是一句固定文案，而是**随状态**
+// 告诉用户"此刻该做什么"。原先只有 dragOver 一种，于是生成中仍写着"发送消息…"，
+// 而实际上此时 Enter 是"打断并发送"——语义相反，容易误操作。
+const inputPlaceholder = computed(() => {
+  if (dragOver.value) return '松开以上传文件'
+  if (props.loading) return '正在生成…按 Enter 打断并发送'
+  if (props.disabled) return '当前会话不可输入'
+  return '发送消息…（/ 查看命令 · ↑ 召回历史）'
+})
+
+// ── 运行态内联 ──
+//
+// 对齐 reasonix 的 `composer-intent-menu__goal-runtime-line`：让"它确实在动"可见。
+// 长任务里"只有按钮变成停止"太弱 —— 用户会怀疑卡死，然后去点停止（正是子 Agent
+// 被级联取消的常见触发路径）。一个走秒的计时器是最低成本的"活性"证据。
+const elapsed = ref(0)
+let elapsedTimer: ReturnType<typeof setInterval> | undefined
+
+watch(
+  () => props.loading,
+  (v) => {
+    if (elapsedTimer !== undefined) {
+      clearInterval(elapsedTimer)
+      elapsedTimer = undefined
+    }
+    if (v) {
+      elapsed.value = 0
+      elapsedTimer = setInterval(() => { elapsed.value += 1 }, 1000)
+    }
+  },
+  { immediate: true },
+)
+
+onUnmounted(() => {
+  if (elapsedTimer !== undefined) clearInterval(elapsedTimer)
+})
 
 // 会话切换/恢复时同步（父组件回传 llm_config.model；空 = 后端默认）
 watch(() => props.model, (v) => { modelValue.value = v || '' }, { immediate: true })
@@ -500,62 +572,78 @@ function removeAttachment(id: string) {
   if (idx >= 0) pendingAttachments.value.splice(idx, 1)
 }
 
-// ── 录音 ──
+// ── 语音输入（Speech-to-Text，纯前端） ──
+//
+// 用浏览器原生 Web Speech API 在**浏览器侧**完成识别，文字直接落进输入框：
+// 不生成音频文件、不经后端、不调用 Whisper。原实现是 MediaRecorder 录成 webm →
+// 上传 → 后端 speech_to_text 调 Whisper API，既有 API 费用又占后端资源；
+// 而多数场景用户要的只是"把说的话变成字"。
+const SpeechRec =
+  (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).SpeechRecognition
+  || (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition
+const speechSupported = !!SpeechRec
+
 const recording = ref(false)
 const recordingTimer = ref(0)
 let recordingInterval: ReturnType<typeof setInterval> | null = null
-let mediaRecorder: MediaRecorder | null = null
-let audioChunks: Blob[] = []
+let recognizer: any = null
+/** 本次会话已定稿的文本（interim 结果每次重发整段，需与它拼接） */
+let speechFinal = ''
+/** 开始转写前的输入框内容：识别结果追加在它之后 */
+let speechPrefix = ''
 
-async function startRecording() {
-  if (!navigator.mediaDevices?.getUserMedia) {
-    message.error(tr('浏览器不支持录音'))
+function startRecording() {
+  if (!speechSupported) {
+    message.warning(tr('当前浏览器不支持语音转写，请使用 Chrome / Edge / Safari'))
     return
   }
   try {
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-    audioChunks = []
-    const mimeType = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
-      ? 'audio/webm;codecs=opus'
-      : 'audio/webm'
-    mediaRecorder = new MediaRecorder(stream, { mimeType })
-    mediaRecorder.ondataavailable = (e) => {
-      if (e.data.size > 0) audioChunks.push(e.data)
-    }
-    mediaRecorder.onstop = async () => {
-      stream.getTracks().forEach(t => t.stop())
-      const blob = new Blob(audioChunks, { type: mimeType })
-      if (blob.size < 100) return // 太短不处理
-      const file = new File([blob], `recording_${Date.now()}.webm`, { type: mimeType })
-      uploading.value = true
-      try {
-        const result = await uploadFile(file)
-        pendingAttachments.value.push({
-          id: result.id,
-          name: '🎤 ' + result.name,
-          size: result.size,
-          mimeType: result.mimeType,
-          url: result.url,
-          isImage: false,
-        })
-      } catch (e: any) {
-        message.error('录音上传失败: ' + (e.message || tr('网络错误')))
-      } finally {
-        uploading.value = false
+    recognizer = new SpeechRec()
+    recognizer.lang = 'zh-CN'
+    recognizer.continuous = true
+    recognizer.interimResults = true
+
+    speechFinal = ''
+    speechPrefix = input.value ? input.value.replace(/\s*$/, ' ') : ''
+
+    recognizer.onresult = (e: any) => {
+      let interim = ''
+      for (let i = e.resultIndex; i < e.results.length; i++) {
+        const r = e.results[i]
+        if (r.isFinal) speechFinal += r[0].transcript
+        else interim += r[0].transcript
       }
+      // 定稿 + 临时结果实时上屏：用户随时能看到识别到哪了
+      input.value = speechPrefix + speechFinal + interim
     }
-    mediaRecorder.start()
+    recognizer.onerror = (e: any) => {
+      // no-speech / aborted 属正常收尾（静音超时、用户停止），不当错误
+      if (e?.error === 'no-speech' || e?.error === 'aborted') return
+      message.error(
+        e?.error === 'not-allowed'
+          ? tr('麦克风权限被拒绝，请在浏览器设置中允许后重试')
+          : `${tr('语音转写失败')}: ${e?.error || ''}`,
+      )
+      stopRecording()
+    }
+    // 浏览器可能自行结束（静音超时）；统一收尾，避免状态卡在"录音中"
+    recognizer.onend = () => { if (recording.value) stopRecording() }
+
+    recognizer.start()
     recording.value = true
     recordingTimer.value = 0
     recordingInterval = setInterval(() => { recordingTimer.value++ }, 1000)
   } catch {
-    message.error(tr('无法访问麦克风，请检查权限设置'))
+    message.error(tr('无法启动语音转写，请检查麦克风权限'))
   }
 }
 
 function stopRecording() {
-  if (mediaRecorder && mediaRecorder.state !== 'inactive') {
-    mediaRecorder.stop()
+  if (recognizer) {
+    // 先置空再 stop：onend 会回调进来，置空可避免递归
+    const r = recognizer
+    recognizer = null
+    try { r.stop() } catch { /* 已停止 */ }
   }
   recording.value = false
   if (recordingInterval) {
@@ -706,6 +794,31 @@ defineExpose({ insertText })
           <span class="slash-desc">{{ c.desc }}</span>
         </div>
       </div>
+      <!-- 上下文 chip 行：已带入本次对话的知识库 / Agent / 技能 / 工作流 / 插件 / 记忆分类。
+           对齐 reasonix 的 `composer-context` —— 绑定是"沉默生效"的，不显式呈现就是幽灵行为：
+           用户选了 Agent 却发现"它没用自己的工具"，往往只是因为看不见到底带进去了什么。 -->
+      <div
+        v-if="contextChips?.length"
+        class="context-chips"
+        :aria-label="$t('本次对话的上下文')"
+      >
+        <span
+          v-for="chip in contextChips"
+          :key="`${chip.type}:${chip.value}`"
+          class="context-chip"
+        >
+          <span class="context-chip__label">{{ chip.label }}</span>
+          <button
+            type="button"
+            class="context-chip__x"
+            :title="$t('移除')"
+            :aria-label="`${$t('移除')} ${chip.label}`"
+            @click="emit('remove-context-chip', chip)"
+          >
+            <CloseOutlined />
+          </button>
+        </span>
+      </div>
       <!-- 附件预览区 -->
       <div
         v-if="pendingAttachments.length"
@@ -743,8 +856,8 @@ defineExpose({ insertText })
         ref="textareaRef"
         v-model:value="input"
         :rows="1"
-        :auto-size="{ minRows: 1, maxRows: 5 }"
-        :placeholder="dragOver ? '松开以上传文件' : '发送消息...（/ 查看命令 · ↑ 召回历史）'"
+        :auto-size="{ minRows: 1, maxRows: 8 }"
+        :placeholder="inputPlaceholder"
         class="input-field"
         :disabled="disabled"
         aria-label="消息输入框"
@@ -789,7 +902,9 @@ defineExpose({ insertText })
             size="small"
             class="record-btn"
             :class="{ recording: recording }"
-            :title="recording ? '点击停止录音' : '语音输入'"
+            :title="recording
+              ? $t('点击停止语音输入')
+              : (speechSupported ? $t('语音输入（浏览器本地转写，不上传音频）') : $t('当前浏览器不支持语音转写'))"
             @click="recording ? stopRecording() : startRecording()"
           >
             <template #icon>
@@ -797,15 +912,51 @@ defineExpose({ insertText })
             </template>
             <span v-if="recording" class="recording-timer">{{ formatRecordingTime(recordingTimer) }}</span>
           </Button>
-          <span class="mode-label">{{ $t('模式') }}</span>
-          <Select
-            :model-value="mode"
-            :options="modeOptions"
-            size="small"
-            style="width: 110px"
-            :title="`当前模式：${modeOptions.find(o => o.value === mode)?.label || mode}（仅影响后续消息）`"
-            @update:value="(v: any) => emit('update:mode', String(v))"
-          />
+          <!-- 模式 + 工具授权收进一个 popover：两者都是"偶发调整"的设置项，
+               常驻会让底栏拥挤且与模型抢注意力；模型是高频切换项，仍留在底栏。
+               （工具授权的档位语义仍是**选项悬浮 pop 词**，见 toolsModeOptions。） -->
+          <Popover
+            trigger="click"
+            placement="topLeft"
+            :title="$t('对话设置')"
+          >
+            <template #content>
+              <div class="settings-pop">
+                <label class="settings-pop__row">
+                  <span class="settings-pop__label">{{ $t('模式') }}</span>
+                  <Select
+                    :model-value="mode"
+                    :options="modeOptions"
+                    size="small"
+                    style="width: 150px"
+                    @update:value="(v: any) => emit('update:mode', String(v))"
+                  />
+                </label>
+                <label class="settings-pop__row">
+                  <span class="settings-pop__label">{{ $t('工具授权') }}</span>
+                  <Select
+                    :model-value="toolsMode || 'auto'"
+                    :options="toolsModeOptions"
+                    size="small"
+                    style="width: 150px"
+                    @update:value="onToolsModeChange"
+                  />
+                </label>
+              </div>
+            </template>
+            <Button
+              type="text"
+              size="small"
+              class="context-btn settings-btn"
+              :title="$t('对话设置：模式 / 工具授权')"
+            >
+              <template #icon>
+                <SettingOutlined />
+              </template>
+              <span class="context-label">{{ $t('设置') }}</span>
+            </Button>
+          </Popover>
+          <span class="input-divider" />
           <span class="mode-label">{{ $t('模型') }}</span>
           <Select
             class="model-select"
@@ -832,6 +983,10 @@ defineExpose({ insertText })
           </Button>
         </div>
         <div class="input-left">
+          <span v-if="loading" class="run-hint">
+            <span class="run-dot" />
+            {{ $t('生成中') }} · {{ elapsed }}s
+          </span>
           <span class="input-hint">{{ $t('Enter 发送 · Shift+Enter 换行') }}</span>
           <Button
             class="send-btn"
@@ -858,43 +1013,78 @@ defineExpose({ insertText })
 
 <style scoped>
 /* 浮动胶囊输入卡（deepseek InputBar floating capsule）12px 圆角 + 阴影 + 16/24 字号 */
-.input-area { padding: 0 16px 8px; }
+/* ══ 对话输入区 ══
+   设计要点（对齐 reasonix 的 composer）：
+   ① 卡片化：更大圆角 + 多层柔和阴影，聚焦时主色描边 + 3px 光晕；
+   ② 分区：输入区与操作区之间一条分隔线，视觉上不再"一堆控件挤一行"；
+   ③ 控件规格统一：32px 触控目标 + 8px 圆角，不再用 size=small 的"小气"感；
+   ④ 响应式：container query（卡片自身宽度）而非只靠视口断点。 */
+.input-area { padding: 0 16px 12px; }
 .input-card {
+  container-type: inline-size;
   position: relative;
-  display: flex; flex-direction: column; gap: 12px;
+  display: flex; flex-direction: column; gap: 2px;
   width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
-  padding: 10px 12px 12px;
-  border: var(--sig-border-width) solid var(--border); border-radius: var(--sig-radius-input);
-  background: var(--bg-input); box-shadow: var(--sig-input-shadow);
+  padding: 12px 14px 10px;
+  border: 1px solid var(--border); border-radius: 16px;
+  background: var(--bg-input);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
   font-size: 16px; line-height: 24px;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color 0.15s ease, box-shadow 0.15s ease;
 }
-/* 聚焦态：主色描边 + 主色光晕 */
+/* 聚焦态：主色描边 + 柔和光晕（用 color-mix 让深浅色主题都自然过渡） */
 .input-card:focus-within {
-  border-color: var(--primary);
-  box-shadow: var(--sig-input-shadow), 0 0 0 var(--sig-input-ring) var(--primary-bg);
+  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
+  box-shadow:
+    0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent),
+    0 8px 24px rgba(0, 0, 0, 0.06);
 }
 .input-field { background: transparent !important; }
 .input-field :deep(textarea) { color: var(--text-primary) !important; font-size: 16px !important; line-height: 24px !important; }
-.input-actions { display: flex; align-items: center; justify-content: space-between; }
-.input-left { display: flex; align-items: center; gap: 8px; }
+/* 操作区：与输入区之间一条分隔线（reasonix 的分区思路），不再与文字抢同一块空间 */
+.input-actions {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: 8px; flex-wrap: wrap;
+  padding-top: 8px; margin-top: 6px;
+  border-top: 1px solid var(--border-soft, var(--border));
+}
+.input-left { display: flex; align-items: center; gap: 2px; }
+/* 竖分隔线：把"工具按钮组"与"模型下拉"在视觉上分开，避免一堆控件糊成一片 */
+.input-divider {
+  flex: none; width: 1px; height: 18px; margin: 0 6px;
+  background: var(--border-soft, var(--border));
+}
+@container (max-width: 620px) { .input-divider { display: none; } }
 .input-hint { font-size: 12px; color: var(--text-tertiary); }
+/* 工具栏控件统一规格：32px 触控目标 + 8px 圆角（覆盖 antd 的 size=small 观感） */
+.input-actions .ant-btn:not(.send-btn) { height: 32px; min-width: 32px; border-radius: 8px; }
+.input-actions .ant-select-single .ant-select-selector { border-radius: 8px; }
+/* 运行态内联：生成中的活性证据（走秒），减少"以为卡死→点停止"的误操作 */
+.run-hint {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-size: 12px; color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.run-dot {
+  width: 6px; height: 6px; border-radius: 50%; background: var(--primary, #1677ff);
+  animation: run-pulse 1.2s ease-in-out infinite;
+}
+@keyframes run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 /* 模式选择器标签 */
 .mode-label { flex: none; font-size: 12px; color: var(--text-tertiary); }
 /* 模型路由下拉（与模式切换器同排；窄屏收缩防溢出） */
 .model-select { width: 170px; }
 .model-select :deep(.ant-select-selector) { font-size: 12px; }
-@media (max-width: 768px) { .model-select { width: 150px; } }
-@media (max-width: 576px) { .model-select { width: 126px; } }
 /* 上下文快捷按钮：展开侧栏（抽屉模式） */
-.context-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; gap: 4px; }
-.context-btn:hover { color: var(--primary) !important; }
+.context-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; }
+.context-btn:hover { color: var(--primary) !important; background: var(--primary-bg) !important; }
+/* 对话设置 popover（模式 / 工具授权）：垂直两行，label 右对齐，与底栏解耦 */
+.settings-pop { display: flex; flex-direction: column; gap: 10px; min-width: 230px; }
+.settings-pop__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.settings-pop__label { font-size: 12px; color: var(--text-secondary); flex: none; }
 .context-label { font-size: 12px; }
-@media (max-width: 576px) {
-  .context-label { display: none; }
-  .context-btn.ant-btn { min-width: 40px; height: 40px; }
-}
-/* 发送按钮：可发送时主色、hover 微放大 + 加深 */
+/* 发送按钮：36px 圆形，可发送时主色 + hover 微放大 */
+.send-btn.ant-btn { width: 36px; height: 36px; min-width: 36px; }
 .send-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
 .send-btn:not(:disabled):hover { transform: scale(1.06); box-shadow: 0 4px 12px var(--primary-bg); filter: brightness(1.05); }
 .send-btn:disabled { opacity: 0.45; }
@@ -903,27 +1093,49 @@ defineExpose({ insertText })
    同时取消"放大 + 加深"的 hover —— 那是"发送"的暗示，不该出现在"停止"上。 */
 .send-btn--stop { border-radius: var(--radius-lg) !important; }
 .send-btn--stop:not(:disabled):hover { transform: none; box-shadow: none; filter: none; }
-@media (max-width: 768px) { .input-area { padding: 0 12px 8px; } }
-/* ── 移动端：输入区贴底 + 安全区 + 触控目标放大 + 工具栏换行 ── */
-@media (max-width: 768px) {
-  .input-area { padding: 0 12px calc(8px + env(safe-area-inset-bottom)); }
-  .input-card { border-radius: var(--sig-radius-input); }
-  .input-actions { gap: 8px; flex-wrap: wrap; row-gap: 6px; }
-  .input-hint { display: none; } /* 窄屏隐藏提示文字，占位符承担语义 */
+
+/* ── 响应式：以**卡片自身宽度**为准（container query），比视口断点更准确 ── */
+@container (max-width: 560px) {
+  .input-hint { display: none; }              /* 窄屏隐藏提示文字，占位符承担语义 */
+  .model-select { width: 140px; }
 }
+@container (max-width: 420px) {
+  .mode-label { display: none; }              /* 极窄：标签去掉，只留下拉本体 */
+  .model-select { width: 118px; }
+}
+@media (max-width: 768px) {
+  .input-area { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
+  .input-card { border-radius: 14px; padding: 10px 12px 8px; }
+  .input-actions { gap: 6px; row-gap: 4px; }
+}
+/* ── 移动端：贴底 + 安全区 + 触控目标放大到 40px（拇指友好） ── */
 @media (max-width: 576px) {
-  .input-area { padding: 0 8px calc(8px + env(safe-area-inset-bottom)); }
-  .input-card { padding: 8px 10px 10px; gap: 10px; }
-  .input-actions { flex-wrap: wrap; row-gap: 6px; }
-  .input-left { gap: 4px; }
-  .input-left:last-child { margin-left: auto; } /* 发送组靠右，避免与左侧工具组抢行 */
-  .attach-btn.ant-btn { min-width: 40px; height: 40px; }
-  .send-btn.ant-btn { width: 40px; height: 40px; }
+  .input-area { padding: 0 8px calc(10px + env(safe-area-inset-bottom)); }
+  .input-card { border-radius: 12px; padding: 10px 10px 8px; }
+  .context-label { display: none; }
+  .input-actions .ant-btn:not(.send-btn) { height: 40px; min-width: 40px; border-radius: 10px; }
+  .send-btn.ant-btn { width: 40px; height: 40px; min-width: 40px; }
+  .input-left:last-child { margin-left: auto; }   /* 发送组靠右，避免与左侧工具组抢行 */
   .paste-btn { min-height: 36px; }
 }
 
 /* 附件预览区 */
 .attachment-preview { display: flex; flex-wrap: wrap; gap: 8px; padding: 4px 0 8px; }
+/* 上下文 chip 行：把"沉默生效"的绑定显式呈现（对齐 reasonix 的 composer-context） */
+.context-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
+.context-chip {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 220px;
+  padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+  background: var(--bg-hover, rgba(127, 127, 127, 0.08));
+  font-size: 12px; color: var(--text-secondary);
+}
+.context-chip__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.context-chip__x {
+  display: inline-flex; align-items: center; justify-content: center;
+  border: none; background: transparent; cursor: pointer; line-height: 1;
+  color: var(--text-tertiary); font-size: 10px; padding: 0 2px;
+}
+.context-chip__x:hover { color: var(--danger, #ff4d4f); }
 .att-thumb { position: relative; width: 64px; height: 64px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); overflow: hidden; }
 .att-thumb-img { width: 100%; height: 100%; object-fit: cover; }
 .att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: 10px; }

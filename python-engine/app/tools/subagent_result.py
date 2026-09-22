@@ -12,7 +12,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.tools.context import get_tenant_id, get_user_id
+from app.tools.context import get_session_id, get_tenant_id, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -23,6 +23,9 @@ SELECT id, status, profile_name, summary, artifacts, input_tokens, output_tokens
        steps, redacted_count, error, created_at
   FROM subagent_runs
  WHERE id = $1 AND tenant_id = $2 AND (user_id = $3 OR user_id IS NULL)
+   -- 按对话会话隔离：主 Agent 不该读到**别的会话**的子 Agent 结果，
+   -- 否则它会拿别人的 run 当作自己的上下文（跨会话影响判断）。
+   AND root_session_id = $4
 """
 STEPS_SQL = """
 SELECT seq, kind, role, tool_name, tool_call_id, content, truncated
@@ -55,8 +58,9 @@ async def read_subagent_result(
 
     tenant_id = get_tenant_id()
     user_id = get_user_id()
+    root_session_id = get_session_id()
     try:
-        row = await pool.fetchrow(RUN_SQL, run_id, tenant_id, user_id)
+        row = await pool.fetchrow(RUN_SQL, run_id, tenant_id, user_id, root_session_id)
     except Exception as exc:  # noqa: BLE001 - 表缺失等
         logger.warning("read_subagent_result 查询失败: %s", str(exc)[:200])
         return {"error": "subagent run store unavailable (check migration 5e244b718fd1)"}
