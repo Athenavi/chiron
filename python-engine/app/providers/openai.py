@@ -187,6 +187,15 @@ class OpenAIProvider(LLMProvider):
             return self._client, None
         item = await self._key_ring.get_key(self.name)
         if item is None:
+            # ⚠️ 显式警告（此前是静默回退）：这里会退回用 placeholder key 构造的 self._client，
+            # 于是拿**假 key** 打上游、得到 "401 Invalid API key" ——
+            # 而真正的 key 可能挂在同产品的另一个协议变体名下（如 opencode-go-anthropic ← opencode-go）。
+            # 静默回退曾让人误判为"key 无效"，而该 key 直连实测是 200。
+            logger.warning(
+                "KeyRing 无可用 key for %s：回退到 placeholder client，上游很可能返回 401。"
+                "请检查该 provider（或同产品基础 provider）的 keyset。",
+                self.name,
+            )
             return self._client, None
         key = item["key"]
         client = self._clients.get(key)

@@ -199,6 +199,14 @@ class AnthropicProvider(LLMProvider):
             return self._client, None
         item = await self._key_ring.get_key(self.name)
         if item is None:
+            # ⚠️ 显式警告（此前是静默回退）：见 openai.py 同名处的说明 ——
+            # 退到 placeholder client 会拿假 key 打上游并得到 401，
+            # 而真正的 key 可能挂在同产品的另一个协议变体名下。
+            logger.warning(
+                "KeyRing 无可用 key for %s：回退到 placeholder client，上游很可能返回 401。"
+                "请检查该 provider（或同产品基础 provider）的 keyset。",
+                self.name,
+            )
             return self._client, None
         key = item["key"]
         client = self._clients.get(key)

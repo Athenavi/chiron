@@ -60,25 +60,45 @@ class KeyRing:
         cached = provider in self._updated and now - self._updated[provider] < FRESHNESS
         if cached:
             return
-        ring: dict[str, dict] = self._env_digests(provider)
+        # 依次尝试「本 provider」与「同产品基础 provider」的 keyset。
+        #
+        # 为什么需要：同产品的多协议变体（如 opencode-go / opencode-go-anthropic）在 keyset 里
+        # 按 **preset id** 分开存，但共享同一个上游 key。只配了一处时，另一条协议线取不到 key，
+        # 而 _resolve_client 取不到会**静默回退到 placeholder key** ⇒ 拿假 key 打上游 ⇒
+        # 上游返回 "401 Invalid API key"（而那个 key 其实是好的，直连实测 200）。
+        # 这里按命名约定回退：`X-anthropic` 取不到就读 `X`。
+        sources = [provider]
+        for _suf in ("-anthropic",):
+            if provider.endswith(_suf):
+                sources.append(provider[: -len(_suf)])
+                break
+
+        ring: dict[str, dict] = {}
+        for _src in sources:
+            ring.update(self._env_digests(_src))
+            if ring:
+                break
         if self._redis is not None:
-            try:
-                raw = await self._redis.hgetall(f"{LLM_KEY_HASH_PREFIX}{provider}")
-                for digest, payload in (raw or {}).items():
-                    digest = digest.decode() if isinstance(digest, bytes) else digest
-                    try:
-                        item = json.loads(payload.decode() if isinstance(payload, bytes) else payload)
-                    except (ValueError, TypeError):
-                        continue
-                    key = str(item.get("k") or "")
-                    if not key:
-                        continue
-                    status = str(item.get("s") or "active")
-                    cooldown = float(item.get("c") or 0.0)
-                    ring[digest] = {"key": key, "status": status, "cooldown": cooldown, "manual": True}
-            except Exception as exc:
-                logger.warning("KeyRing refresh failed (redis unavailable?): %s", exc)
-                # 保留 env 兜底;镜像不刷新
+            for _src in sources:
+                if ring:
+                    break
+                try:
+                    raw = await self._redis.hgetall(f"{LLM_KEY_HASH_PREFIX}{_src}")
+                    for digest, payload in (raw or {}).items():
+                        digest = digest.decode() if isinstance(digest, bytes) else digest
+                        try:
+                            item = json.loads(payload.decode() if isinstance(payload, bytes) else payload)
+                        except (ValueError, TypeError):
+                            continue
+                        key = str(item.get("k") or "")
+                        if not key:
+                            continue
+                        status = str(item.get("s") or "active")
+                        cooldown = float(item.get("c") or 0.0)
+                        ring[digest] = {"key": key, "status": status, "cooldown": cooldown, "manual": True}
+                except Exception as exc:
+                    logger.warning("KeyRing refresh failed (redis unavailable?): %s", exc)
+                    # 保留 env 兜底;镜像不刷新
         self._cache[provider] = ring
         self._updated[provider] = time.time()
 
