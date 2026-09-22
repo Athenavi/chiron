@@ -11,6 +11,12 @@ vi.mock('../../../api', () => api)
 
 vi.mock('vue-router', () => ({ useRouter: () => ({ push: vi.fn() }) }))
 
+// 侧栏底部新增的用户入口引入 authStore；本测试不注入 pinia，
+// 故沿用既有 mock 风格把它 mock 掉。
+vi.mock('../../../stores/auth', () => ({
+  useAuthStore: () => ({ user: null, logout: vi.fn() }),
+}))
+
 enableAutoUnmount(afterEach)
 
 beforeAll(() => {
@@ -44,6 +50,12 @@ function mountPanel() {
       activeSessionId: '',
       userName: '测试员',
       contextChips: [],
+    },
+    // 底部主题 / 用户入口的两个子组件各自依赖 pinia（themeStore / authStore）。
+    // 本测试只关心「可用工具」区块，故 stub 掉它们 —— 保持测试不引入 pinia，
+    // 与上面 mock api / vue-router 的风格一致。
+    global: {
+      stubs: { ThemeSwitcher: true, SettingsPanel: true },
     },
   })
 }

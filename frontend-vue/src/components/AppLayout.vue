@@ -49,6 +49,16 @@ const route = useRoute()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
 
+/**
+ * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / z-index:30）会盖住
+ * ChatView 消息区工具栏右端的「更多操作」。
+ *
+ * 侧栏在右侧时 chat-main 变窄、两者不重叠，所以平时看不出来；一旦交换布局把
+ * 侧栏移到左侧，chat-main 变宽、工具栏右端顶到页面右边缘，就正好被它盖住。
+ * 该页的主题 / 用户入口改由侧栏底部（ChatSidePanel 的 .panel-foot）承载。
+ */
+const isChatPage = computed(() => route.path === '/chat')
+
 // 监听 API 错误
 function handleApiError(e: Event) {
   const detail = (e as CustomEvent).detail
@@ -330,8 +340,11 @@ async function runQuickCommand() {
       </div>
     </nav>
 
-    <!-- 右上角用户胶囊 -->
-    <div class="topbar-actions">
+    <!-- 右上角用户胶囊（聊天页隐藏，理由见 isChatPage 的注释） -->
+    <div
+      v-if="!isChatPage"
+      class="topbar-actions"
+    >
       <ThemeSwitcher />
       <div
         v-if="authStore.user"

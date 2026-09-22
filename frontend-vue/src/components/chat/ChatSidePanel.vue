@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
-import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu } from 'ant-design-vue'
+import { computed, h, ref, watch, onMounted, onUnmounted } from 'vue'
+import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Modal } from 'ant-design-vue'
 import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
   ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined,
   ApartmentOutlined, BarChartOutlined,
+  SettingOutlined, UserSwitchOutlined, LogoutOutlined,
 } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, listTools } from '../../api'
@@ -15,10 +16,44 @@ import { formatRelativeTime } from './chat-types'
 import type { ChatItem, ChatSession } from './chat-types'
 import SubAgentPanel from './SubAgentPanel.vue'
 import SessionStatsPanel from './SessionStatsPanel.vue'
+import ThemeSwitcher from '../ThemeSwitcher.vue'
+import SettingsPanel from '../settings/SettingsPanel.vue'
+import { useAuthStore } from '../../stores/auth'
 import type { SubagentEvent } from '../../api/subagent'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
+
+/**
+ * 侧栏底部的主题 / 用户入口。
+ *
+ * 为什么在这里而不是沿用页面右上角：那里是**固定定位**的胶囊
+ * （AppLayout 的 .topbar-actions，top:12 / right:12 / z-index:30）。
+ * 侧栏在右侧时消息区变窄、两者不重叠；一旦交换布局把侧栏移到左侧，
+ * 消息区变宽、工具栏右端顶到页面右边缘，就会被它盖住「更多操作」。
+ * 所以聊天页改由这里承载（AppLayout 在该页隐藏了那个胶囊）。
+ * 菜单项与 AppLayout 保持一致，避免两条入口行为漂移。
+ * 注：引用下方的 router / authStore 均在函数体或 computed getter 内，惰性求值，无 TDZ 问题。
+ */
+const authStore = useAuthStore()
+const settingsOpen = ref(false)
+
+const userMenuItems = computed<any[]>(() => [
+  { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
+  { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
+  { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
+])
+
+async function handleUserMenuClick(info: any) {
+  if (info.key === 'logout') {
+    await authStore.logout()
+    void router.push('/login')
+  } else if (info.key === 'settings') {
+    settingsOpen.value = true
+  } else if (info.key === 'profile') {
+    void router.push('/profile')
+  }
+}
 const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
@@ -772,15 +807,50 @@ function pickSession(id: string) {
         </div>
       </div>
 
+      <!-- 底部：主题切换 + 用户入口。
+           原先只是静态头像；现在承载 AppLayout 在聊天页隐藏掉的那两个入口，
+           否则交换布局后右上角的固定胶囊会盖住消息区工具栏的「更多操作」。 -->
       <div class="panel-foot">
         <Avatar
           :size="22"
           :style="{ backgroundColor: 'var(--primary)' }"
         >
-          {{ (userName || 'U').charAt(0).toUpperCase() }}
+          {{ (authStore.user?.name || userName || 'U').charAt(0).toUpperCase() }}
         </Avatar>
-        <span class="foot-name">{{ userName || '用户' }}</span>
+        <span class="foot-name">{{ authStore.user?.name || userName || '用户' }}</span>
+        <ThemeSwitcher class="foot-theme" />
+        <Dropdown
+          v-if="authStore.user"
+          trigger="click"
+          placement="topRight"
+        >
+          <button
+            type="button"
+            class="foot-user-btn"
+            :title="tr('用户菜单')"
+            @click.stop
+          >
+            <EllipsisOutlined />
+          </button>
+          <template #overlay>
+            <Menu
+              :items="userMenuItems"
+              @click="handleUserMenuClick"
+            />
+          </template>
+        </Dropdown>
       </div>
+
+      <!-- 设置弹窗：与 AppLayout / /profile 共用同一份实现 -->
+      <Modal
+        v-model:open="settingsOpen"
+        :title="tr('设置')"
+        :footer="null"
+        :width="720"
+        destroy-on-close
+      >
+        <SettingsPanel />
+      </Modal>
     </template>
   </div>
 </template>
@@ -1005,5 +1075,14 @@ function pickSession(id: string) {
   flex: none; display: flex; align-items: center; gap: 8px;
   padding: 10px 14px; border-top: 1px solid var(--border);
 }
-.foot-name { font-size: 13px; color: var(--text-secondary); }
+.foot-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 主题切换与用户菜单推到最右，与左侧头像/名字分开 */
+.foot-theme { margin-left: auto; flex: none; }
+.foot-user-btn {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  width: 22px; height: 22px; padding: 0;
+  border: none; border-radius: var(--radius-sm, 4px);
+  background: transparent; color: var(--text-tertiary); cursor: pointer;
+}
+.foot-user-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 </style>

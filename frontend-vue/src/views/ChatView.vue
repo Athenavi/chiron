@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
-import { Button, Input, Modal, Checkbox, Alert, message, Dropdown } from 'ant-design-vue'
+import { Button, Input, Modal, Checkbox, Alert, message, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
   api, createSSEConnection, submitApproval, submitAnswer,
@@ -2052,9 +2052,12 @@ function continueGeneration() {
               </template>
               <span class="toolbar-label">{{ $t('搜索') }}</span>
             </Button>
+            <!-- 用 #overlay + <Menu>，与 ChatSidePanel 里那个**确实可用**的会话菜单保持一致。
+                 此前这里用 :menu="{ items, onClick }"，表现是**点击完全不弹菜单**：
+                 Console 无报错、命中的确实是按钮本身 ⇒ 既不是遮挡也不是渲染异常。
+                 对齐到已验证可用的写法（trigger 用字符串、Button 加 @click.stop、菜单走 #overlay）。 -->
             <Dropdown
-              :menu="{ items: toolbarMenuItems, onClick: onToolbarMenu }"
-              :trigger="['click']"
+              trigger="click"
               placement="bottomRight"
             >
               <Button
@@ -2062,11 +2065,30 @@ function continueGeneration() {
                 size="small"
                 class="toolbar-btn"
                 :title="$t('更多操作')"
+                @click.stop
               >
                 <template #icon>
                   <MoreOutlined />
                 </template>
               </Button>
+              <template #overlay>
+                <Menu class="toolbar-menu">
+                  <template
+                    v-for="it in (toolbarMenuItems as any[])"
+                    :key="String(it.key)"
+                  >
+                    <MenuDivider v-if="it.type === 'divider'" />
+                    <MenuItem
+                      v-else
+                      :disabled="it.disabled"
+                      @click="onToolbarMenu({ key: String(it.key) })"
+                    >
+                      <component :is="it.icon" />
+                      <span class="menu-label">{{ it.label }}</span>
+                    </MenuItem>
+                  </template>
+                </Menu>
+              </template>
             </Dropdown>
           </div>
         </div>
@@ -2590,8 +2612,13 @@ function continueGeneration() {
    所以不影响任何依赖 DOM 顺序的逻辑（焦点流、SSR、既有测试）。
    .side-panel 默认在 DOM 末尾（order 0 → 靠右），给它 -1 就排到最左；
    .preview-pane 默认在 DOM 最前（order 0 → 靠左），给它 1 就排到最右。 */
-.chat-layout.is-swapped .side-panel { order: -1; }
-.chat-layout.is-swapped .preview-pane { order: 1; }
+/* ⚠️ 必须用 :deep() —— 这是这个按钮一开始"点了没反应"的原因。
+   .side-panel 与 .preview-pane 都是**子组件的根元素**，带的是它们自己的
+   data-v 作用域 id。父组件 scoped 里直写 `.chat-layout.is-swapped .side-panel`
+   会被编译成 `.chat-layout.is-swapped .side-panel[data-v-父]`，**永不匹配**。
+   :deep() 让作用域 id 落在 .chat-layout（父组件自己的元素）上，从而真正命中。 */
+.chat-layout.is-swapped :deep(.side-panel) { order: -1; }
+.chat-layout.is-swapped :deep(.preview-pane) { order: 1; }
 .chat-body { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
 .chat-toolbar {
   flex: none;

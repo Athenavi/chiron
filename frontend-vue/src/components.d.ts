@@ -90,7 +90,6 @@ declare module 'vue' {
     ToolCallCard: typeof import('./components/chat/ToolCallCard.vue')['default']
     ToolPicker: typeof import('./components/agent/ToolPicker.vue')['default']
     ToolResultBlock: typeof import('./components/chat/ToolResultBlock.vue')['default']
-    WorkbenchQuickStart: typeof import('./components/home/WorkbenchQuickStart.vue')['default']
     WorkflowDAGEditor: typeof import('./components/WorkflowDAGEditor.vue')['default']
     WorkstationNav: typeof import('./components/WorkstationNav.vue')['default']
   }
@@ -176,7 +175,6 @@ declare global {
   const ToolCallCard: typeof import('./components/chat/ToolCallCard.vue')['default']
   const ToolPicker: typeof import('./components/agent/ToolPicker.vue')['default']
   const ToolResultBlock: typeof import('./components/chat/ToolResultBlock.vue')['default']
-  const WorkbenchQuickStart: typeof import('./components/home/WorkbenchQuickStart.vue')['default']
   const WorkflowDAGEditor: typeof import('./components/WorkflowDAGEditor.vue')['default']
   const WorkstationNav: typeof import('./components/WorkstationNav.vue')['default']
 }

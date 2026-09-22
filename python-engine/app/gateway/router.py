@@ -114,6 +114,11 @@ class GatewayRouter:
             if isinstance(item, dict) and item.get("id")
         }
         self._breakers = {name: CircuitBreaker() for name in providers}
+        # embed 用**独立**的熔断表：embeddings 打不通不该让聊天也不可用。
+        # 真实故障：opencode-go 的 base_url 下没有 /embeddings（返回 HTML 404），
+        # 该失败连续累积把**共用**的熔断器打到 15 次，于是连 chat_stream 都进不去 ——
+        # 用户看到的却是 "no LLM provider available for model=…"，把方向引到了模型上。
+        self._embed_breakers = {name: CircuitBreaker() for name in providers}
         self._latencies: dict[str, float] = {
             name: 500.0 for name in providers
         }  # moving avg ms
@@ -342,17 +347,21 @@ class GatewayRouter:
     async def embed(
         self, text: str, model: str, provider_hint: str = ""
     ) -> EmbeddingResponse:
-        """文本嵌入 — 无缓存无预算"""
-        provider = await self._select(model, provider_hint)
+        """文本嵌入 — 无缓存无预算。
+
+        用**独立**的熔断表（embed=True）：某些网关（如 opencode-go）根本不提供
+        /embeddings，那里失败不该把聊天也一起熔断。
+        """
+        provider = await self._select(model, provider_hint, embed=True)
         if not provider:
             return EmbeddingResponse()
 
         try:
             resp = await provider.embed(text, model)
-            self._breakers[provider.name].record_success()
+            self._embed_breakers[provider.name].record_success()
             return resp
         except Exception as e:
-            self._breakers[provider.name].record_failure()
+            self._embed_breakers[provider.name].record_failure()
             logger.error("Provider %s embed failed: %s", provider.name, e)
             return EmbeddingResponse()
 
@@ -478,20 +487,27 @@ class GatewayRouter:
 
     # ── 内部路由 ──
 
-    async def _select(self, model: str, hint: str = "", tenant_id: str = "") -> Optional[LLMProvider]:
-        """选择 Provider — 支持租户路由覆盖"""
+    async def _select(
+        self, model: str, hint: str = "", tenant_id: str = "", embed: bool = False
+    ) -> Optional[LLMProvider]:
+        """选择 Provider — 支持租户路由覆盖。
+
+        embed=True 时使用**独立**的熔断表：embed 与 chat 的可用性互不牵连
+        （见 __init__ 里 _embed_breakers 的注释）。
+        """
+        breakers = self._embed_breakers if embed else self._breakers
         # 租户路由优先
         if tenant_id:
             tenant_provider = self._get_tenant_provider(model, tenant_id)
             if tenant_provider and tenant_provider in self._providers:
-                if self._breakers[tenant_provider].allow():
+                if breakers[tenant_provider].allow():
                     return self._providers[tenant_provider]
                 logger.warning(
                     "Tenant route provider %s circuit-open for tenant=%s model=%s, falling back",
                     tenant_provider, tenant_id, model,
                 )
         if hint and hint in self._providers:
-            if self._breakers[hint].allow():
+            if breakers[hint].allow():
                 return self._providers[hint]
             logger.warning("Hinted provider %s is circuit-open, falling back", hint)
 
@@ -502,10 +518,14 @@ class GatewayRouter:
             candidates = list(self._providers.values())
 
         # 过滤熔断
-        available = [p for p in candidates if self._breakers[p.name].allow()]
+        available = [p for p in candidates if breakers[p.name].allow()]
 
         if not available:
-            logger.error("All providers circuit-open for model=%s", model)
+            logger.error(
+                "All providers circuit-open for %s model=%s",
+                "embed" if embed else "chat",
+                model,
+            )
             return None
 
         # 加权选择
