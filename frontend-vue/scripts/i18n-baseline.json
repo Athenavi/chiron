@@ -31,7 +31,7 @@
   "src/components/ThemeSwitcher.vue": 1,
   "src/composables/useCrudResource.ts": 1,
   "src/i18n/languages.ts": 1,
-  "src/stores/theme.ts": 12,
+  "src/stores/theme.ts": 4,
   "src/stores/typography.ts": 3,
   "src/types/workstation.ts": 11,
   "src/utils/agentResultMarkdown.ts": 5,

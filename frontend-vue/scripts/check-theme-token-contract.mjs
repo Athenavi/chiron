@@ -2,10 +2,10 @@
 /**
  * 主题 token 契约检查。
  *
- * 背景：`src/style.css` 定义 8 套主题（linear / supabase / notion / futuristic × light/dark），
- * 切换时全靠 CSS 变量生效。但组件里散落着硬编码色值（`#fff`、`rgba(0,0,0,.04)` …）——
- * 它们在深色主题下不会跟着变，表现为"某些区域白底黑字、某些不是"这类**只有切主题才
- * 发现**的视觉不一致。
+ * 背景：`src/style.css` 定义 4 套主题（notion 极简功能 / paper 暖纸阅读 / terminal 终端硬核 /
+ * aurora 玻璃柔光 × light/dark），切换时全靠 CSS 变量生效。但组件里散落着硬编码色值
+ * （`#fff`、`rgba(0,0,0,.04)` …）—— 它们在深色主题下不会跟着变，表现为"某些区域白底
+ * 黑字、某些不是"这类**只有切主题才发现**的视觉不一致。
  *
  * ratchet 约束：存量记录在 BASELINE 里容忍，**新增硬编码即失败**。换成 `var(--*)` 后
  * 把对应数字下调来锁定成果（脚本不接受上调）。
@@ -38,7 +38,7 @@ const BASELINE = {
   'src/components/chat/MessageList.vue': 1,
   'src/components/common/ImageViewer.vue': 5,
   'src/components/home/HomeScene3D.vue': 5,
-  'src/style.css': 23,
+  'src/style.css': 1,
   'src/views/AgentsView.vue': 4,
   'src/views/BillingView.vue': 3,
   'src/views/ChatView.vue': 8,
