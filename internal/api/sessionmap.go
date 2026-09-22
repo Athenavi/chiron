@@ -181,10 +181,87 @@ func StartSessionMapFlusher(ctx context.Context) {
 	slog.Info("sessionmap flusher started", "period", smFlushPeriod)
 }
 
+// sessionMapReconcilePeriod 兜底对账周期。
+//
+// 为什么需要"周期"而不能只靠事件：删会话时主动失效热层（invalidateSessionMapWorkspaces）
+// 依赖**删除一定经过本进程**。若会话是在别的实例、别的工作台，或直接改库删的，
+// 热层收不到通知 —— 周期对账是唯一能兜住这种情况的手段。
+// 代价是延迟一个周期，可以接受（用户不会盯着秒级一致性）。
+const sessionMapReconcilePeriod = 10 * time.Minute
+
+// StartSessionMapReconciler 周期性地把画布与真实会话对账（删掉"会话已不存在"的节点）。
+func StartSessionMapReconciler(ctx context.Context) {
+	if db.Redis == nil || db.GlobalDBManager == nil {
+		slog.Info("sessionmap reconciler disabled: redis or db unavailable")
+		return
+	}
+	go func() {
+		ticker := time.NewTicker(sessionMapReconcilePeriod)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				smReconcileOnce(ctx)
+			}
+		}
+	}()
+	slog.Info("sessionmap reconciler started", "period", sessionMapReconcilePeriod)
+}
+
+// smReconcileOnce 一次全量对账：一条 SQL 删掉所有指向不存在会话的节点。
+//
+// 用 SQL 而不是"逐画布读出再比"：判定与 smPruneMissingSessions 完全一致，
+// 但一次扫全表，不受画布数量影响。便签（session_id 为空）天然不在删除范围内。
+func smReconcileOnce(ctx context.Context) {
+	tag, err := db.GlobalDBManager.Exec(ctx,
+		`DELETE FROM session_map_nodes n
+		  WHERE n.session_id IS NOT NULL AND n.session_id <> ''
+		    AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = n.session_id)`)
+	if err != nil {
+		slog.Warn("sessionmap reconcile: prune failed", "error", err)
+		return
+	}
+	// CommandTag 是值类型（不能与 nil 比较）；err 为 nil 时它一定有效
+	removed := int(tag.RowsAffected())
+	if removed == 0 {
+		return
+	}
+	slog.Info("sessionmap reconcile: removed stale nodes", "count", removed)
+	// PG 已干净，但热层仍持有旧快照 —— 全量失效，让下一次读回源 PG。
+	smInvalidateAllWorkspaceCaches(ctx)
+}
+
+// smInvalidateAllWorkspaceCaches 失效所有画布的热层。
+//
+// 画布是"用户 × 若干个"的量级（几十到几百），列 id 逐个 DEL 即可；
+// 不用 KEYS（在大 keyspace 上会阻塞 Redis）。
+func smInvalidateAllWorkspaceCaches(ctx context.Context) {
+	if db.Redis == nil {
+		return
+	}
+	rows, err := db.GlobalDBManager.FetchAll(ctx, `SELECT id FROM session_map_workspaces`)
+	if err != nil {
+		slog.Warn("sessionmap reconcile: list workspaces failed", "error", err)
+		return
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if id := stringOf(r["id"]); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	invalidateSessionMapWorkspaces(ctx, ids)
+}
 // ── PG 读写 ──
 
 func smPersist(ctx context.Context, ws *SessionMapWorkspace) error {
 	if db.GlobalDBManager == nil {
+	// 落库前先剪枝：引用已删会话的节点在 INSERT 时会触发外键违反（session_id → sessions），
+	// 导致**整个画布**的落库失败 —— 表现是热层一直有数据、PG 永远为空（本项目实际踩过）。
+	// 放在这里而不是只放在读路径：读路径的剪枝只在有人打开地图时触发，而 flusher 是后台跑的。
+	ws = smPruneMissingSessions(ctx, ws)
 		return nil
 	}
 	viewport, _ := json.Marshal(ws.Viewport)
