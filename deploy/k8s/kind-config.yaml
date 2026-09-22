@@ -1,0 +1,13 @@
+# 本地 K8s 验证用 kind 集群：单节点 + 把 8080 映射到宿主机，便于用 curl/浏览器直连。
+# 用法：kind create cluster --name chiron --config deploy/k8s/kind-config.yaml
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: chiron
+nodes:
+  - role: control-plane
+    # extraPortMappings 让宿主 18080 → 节点 30080（Ingress/NodePort 用），
+    # 这样不用 port-forward 也能直接打接口做压测。
+    extraPortMappings:
+      - containerPort: 30080
+        hostPort: 18080
+        protocol: TCP

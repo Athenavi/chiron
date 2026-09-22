@@ -1,0 +1,49 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>会话地图 · Chiron</title>
+  <!-- 样式与交互原样照抄 vendor/dsh-synapse/styles.css（SVG 连线、卡片密度、inspector、
+       streaming 脉冲、暗色覆盖全部保留） -->
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <!-- ⚠️ 错误必须被看见：iframe 里的异常默认只出现在**它自己的** console 里，
+       外层页面完全感知不到（用户看到的就是"白屏/没反应"）。这块 overlay 把
+       错误与堆栈直接打到页面上，方便定位移植层的形状不匹配。 -->
+  <pre
+    id="boot-error"
+    style="display:none;position:fixed;inset:0;z-index:99999;margin:0;padding:16px;
+           overflow:auto;font:12px/1.6 ui-monospace,Consolas,monospace;
+           color:#ffd7d7;background:#2a1216;white-space:pre-wrap;"
+  ></pre>
+
+  <!-- app.js:1 就是 `document.querySelector('#app')`，这个根元素必须存在 -->
+  <div id="app"></div>
+
+  <script>
+    (function () {
+      function show(title, detail) {
+        var box = document.getElementById('boot-error')
+        if (!box) return
+        box.style.display = 'block'
+        box.textContent = title + '\n\n' + detail
+      }
+      window.addEventListener('error', function (e) {
+        show('会话地图渲染出错：' + (e.message || ''), (e.error && e.error.stack) || '(无堆栈)')
+      })
+      window.addEventListener('unhandledrejection', function (e) {
+        var r = e.reason
+        show('会话地图 Promise 失败：' + ((r && r.message) || r), (r && r.stack) || '(无堆栈)')
+      })
+    })()
+  </script>
+
+  <!-- ⚠️ 加载顺序要紧：adapter.js 必须**先于** app.js。
+       它劫持 window.fetch（/synapse/api/* → /v1/session-map/*）并覆盖 window.dshRpc
+       （会话新建/发消息/分叉 → Chiron 的 REST），从而做到"app.js 一行不改"。 -->
+  <script src="./adapter.js"></script>
+  <script src="./app.js"></script>
+</body>
+</html>

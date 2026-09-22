@@ -1,0 +1,238 @@
+# Chiron 本地 K8s 验证清单（Deployment / 探针 / PDB / HPA / 滚动升级）
+#
+# 刻意**不在这里重建 PostgreSQL / Redis / MinIO**：本机 compose 里那套已经在跑，
+# Pod 通过 host.docker.internal 直连即可（Docker Desktop 会注入这个域名）。
+# 这样把变量收敛到"编排层"，才能干净地验证扩展性。
+#
+# 镜像：kind load 之后用 imagePullPolicy: Never，避免去拉不存在的远端镜像。
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: chiron
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: chiron-config
+  namespace: chiron
+data:
+  # ── 基础设施（指向宿主机上已在跑的那套）──
+  REDIS_ADDR: "host.docker.internal:6379"
+  REDIS_URL: "redis://host.docker.internal:6379/0"
+  # 三个副本必须同值：它决定键空间前缀，不一致会导致"同一个会话在两套键里"
+  REDIS_KEY_PREFIX: "chiron:"
+  # ── 引擎 ──
+  HTTP_HOST: "0.0.0.0"
+  HTTP_PORT: "8000"
+  GATEWAY_INTERNAL_URL: "http://gateway:8080"
+  SANDBOX_ROOT: "/srv/chiron/sandbox"
+  PLUGIN_DATA_DIR: "/srv/chiron/plugins"
+  # 每副本连接预算：docs/deployment-multi-instance.md 的公式
+  #   N_gateway × POSTGRES_MAX_CONN + M_engine × DB_POOL_MAX_SIZE ≤ PG max_connections
+  # 3+3 副本、PG 默认 100 连接 → 每侧 10 才安全。
+  DB_POOL_MAX_SIZE: "10"
+  POSTGRES_MAX_CONN: "10"
+  # ── 网关 ──
+  PORT: "8080"
+  STORAGE_BACKEND: "local"
+  STORAGE_ROOT: "/srv/chiron/workspace"
+---
+# 敏感项单独放 Secret。**不要提交真实值** —— 用下面的命令从 .env 注入：
+#   kubectl -n chiron create secret generic chiron-secrets \
+#     --from-literal=APP_SECRET="$(grep -E '^APP_SECRET=' .env | cut -d= -f2-)" \
+#     --from-literal=JWT_SECRET="$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)" \
+#     --from-literal=INTERNAL_TOKEN="$(grep -E '^INTERNAL_TOKEN=' .env | cut -d= -f2-)" \
+#     --from-literal=POSTGRES_DSN="$(grep -E '^POSTGRES_DSN=' .env | cut -d= -f2- | sed 's/@localhost/@host.docker.internal/')" \
+#     --from-literal=METRICS_TOKEN="$(grep -E '^METRICS_TOKEN=' .env | cut -d= -f2-)" \
+#     --dry-run=client -o yaml | kubectl apply -f -
+apiVersion: v1
+kind: Secret
+metadata:
+  name: chiron-secrets
+  namespace: chiron
+type: Opaque
+stringData:
+  APP_SECRET: "REPLACE_ME"
+  JWT_SECRET: "REPLACE_ME"
+  INTERNAL_TOKEN: "REPLACE_ME"
+  POSTGRES_DSN: "postgresql://postgres@host.docker.internal:5432/chiron0915"
+  METRICS_TOKEN: "REPLACE_ME"
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gateway
+  namespace: chiron
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    # maxUnavailable: 0 → 滚动升级期间始终有满额副本在服务（验证"无缝"）
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: gateway }
+  template:
+    metadata:
+      labels: { app: gateway }
+    spec:
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: gateway
+          image: chiron/gateway:dev
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8080 }]
+          envFrom:
+            - configMapRef: { name: chiron-config }
+            - secretRef: { name: chiron-secrets }
+          # 就绪看依赖（PG+Redis），存活只看进程 —— 这是两者语义的正确用法：
+          # 依赖抖动应该"摘流量"，而不是"重启容器"。
+          readinessProbe:
+            httpGet: { path: /ready, port: 8080 }
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            httpGet: { path: /health, port: 8080 }
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 100m, memory: 128Mi }
+            limits: { cpu: 1000m, memory: 512Mi }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gateway
+  namespace: chiron
+spec:
+  type: NodePort
+  selector: { app: gateway }
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      nodePort: 30080
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: gateway
+  namespace: chiron
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: gateway }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: python-engine
+  namespace: chiron
+spec:
+  replicas: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: python-engine }
+  template:
+    metadata:
+      labels: { app: python-engine }
+    spec:
+      terminationGracePeriodSeconds: 30   # 与 compose 的 stop_grace_period 对齐（worker 排空 in-flight）
+      containers:
+        - name: python-engine
+          image: chiron/python-engine:dev
+          imagePullPolicy: Never
+          ports: [{ containerPort: 8000 }]
+          envFrom:
+            - configMapRef: { name: chiron-config }
+            - secretRef: { name: chiron-secrets }
+          env:
+            # 实例身份 + 自注册地址：多副本下 run 归属路由（approval/cancel 的亲和）
+            # 依赖这两个值。用 POD_NAME + POD_IP 注入 —— 写死会退化成一致性哈希，
+            # 引擎启动日志会给出明确告警。
+            - name: POD_NAME
+              valueFrom: { fieldRef: { fieldPath: metadata.name } }
+            - name: POD_IP
+              valueFrom: { fieldRef: { fieldPath: status.podIP } }
+            - name: ENGINE_ADVERTISE_URL
+              value: "http://$(POD_IP):8000"
+          readinessProbe:
+            httpGet: { path: /readyz, port: 8000 }
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            initialDelaySeconds: 20
+            periodSeconds: 10
+          volumeMounts:
+            - { name: sandbox, mountPath: /srv/chiron/sandbox }
+            - { name: plugins, mountPath: /srv/chiron/plugins }
+          resources:
+            requests: { cpu: 200m, memory: 512Mi }
+            limits: { cpu: 2000m, memory: 2Gi }
+      volumes:
+        # ⚠️ emptyDir 只适用于"单副本验证编排属性"。
+        # 真多副本必须共享（docs/deployment-multi-instance.md）：换成 RWX PVC，
+        # 本地 kind 的 local-path 只支持 RWO，需要 nfs-server-provisioner 之类。
+        - name: sandbox
+          emptyDir: {}
+        - name: plugins
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: python-engine
+  namespace: chiron
+spec:
+  # 不加 NodePort：引擎只被网关调用；但 headless（clusterIP: None）更贴近真实拓扑，
+  # 便于按 Pod IP 直连做单副本调试。
+  clusterIP: None
+  selector: { app: python-engine }
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: python-engine
+  namespace: chiron
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels: { app: python-engine }
+---
+# HPA 需要 metrics-server（kind 默认没有）：
+#   kubectl apply -f https://github.com/kubernetes-sigs/metrics-server/releases/latest/download/components.yaml
+#   kubectl -n kube-system patch deployment metrics-server --type=json \
+#     -p '[{"op":"add","path":"/spec/template/spec/containers/0/args/-","value":"--kubelet-insecure-tls"}]'
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: gateway
+  namespace: chiron
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: gateway }
+  minReplicas: 3
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: python-engine
+  namespace: chiron
+spec:
+  scaleTargetRef: { apiVersion: apps/v1, kind: Deployment, name: python-engine }
+  minReplicas: 3
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
