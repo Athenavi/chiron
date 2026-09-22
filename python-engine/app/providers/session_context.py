@@ -27,3 +27,18 @@ def set_llm_session_id(value: str) -> None:
 
 def get_llm_session_id() -> str:
     return _llm_session_id.get() or ""
+
+
+#: 当前请求的思考档位（**归一化前的原始值**）。
+#: 归一化与"到底发不发"由 app/providers/effort.py 决定 —— 这里只负责把**请求级**的值
+#: 送到 provider 层，避免为它改 chat_stream 的三层签名。
+_llm_effort: ContextVar[str] = ContextVar("chiron_llm_effort", default="")
+
+
+def set_llm_effort(value: str) -> None:
+    """由 AgentRuntime 在开始一次运行前设置（取自 `llm_config.effort`）。"""
+    _llm_effort.set(str(value or ""))
+
+
+def get_llm_effort() -> str:
+    return _llm_effort.get() or ""

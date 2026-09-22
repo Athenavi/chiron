@@ -2,6 +2,8 @@
 import { ref, computed } from 'vue'
 import { CaretRightOutlined } from '@ant-design/icons-vue'
 import type { ToolCallItem } from './chat-types'
+import { toolSummary } from '../../utils/toolFamily'
+import { toolGroupKind } from './transcriptProjection'
 
 const props = defineProps<{ item: ToolCallItem; depth?: number }>()
 const expanded = ref(false)
@@ -14,25 +16,11 @@ function prettyArgs(): string {
   }
 }
 
-// 参数摘要：首行/关键字段（deepseek ToolRow summary 截断）
-const summary = computed(() => {
-  const a = props.item.arguments || ''
-  if (!a) return ''
-  try {
-    const parsed = JSON.parse(a)
-    const keys = Object.keys(parsed)
-    if (keys.length === 0) return ''
-    // 取前两个短字段值
-    const parts = keys.slice(0, 2).map(k => {
-      const v = parsed[k]
-      const s = typeof v === 'string' ? v : JSON.stringify(v)
-      return s.length > 40 ? s.slice(0, 40) + '…' : s
-    })
-    return parts.join(' · ')
-  } catch {
-    return a.length > 60 ? a.slice(0, 60) + '…' : a
-  }
-})
+/** 家族：**复用投影层**的 `toolGroupKind`（组头的划分口径），保证单条与组头同一套分类 */
+const family = computed(() => toolGroupKind(props.item.name))
+
+/** 摘要：家族字段优先（读文件看 path、执行看 command、搜索看 pattern…），未登记工具走通用兜底 */
+const summary = computed(() => toolSummary(props.item.name, props.item.arguments))
 
 const padLeft = computed(() => (props.depth || 0) * 22)
 </script>
@@ -42,6 +30,7 @@ const padLeft = computed(() => (props.depth || 0) * 22)
     class="tool-row-wrap chat-row-shell"
     :data-state="item.status"
     :data-tool="item.name"
+    :data-family="family"
   >
     <!-- 工具树缩进连接线 -->
     <div
@@ -99,6 +88,11 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 .tool-row { overflow: hidden; border-radius: var(--sig-radius-code); }
 .tool-row:hover { background: var(--bg-hover); }
 .tool-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); font-weight: 400; white-space: nowrap; }
+/* 家族着色：让一屏工具调用能被"扫"出来，而不是一片同色行。
+   只按家族调色相、不引入新的颜色体系；未知变量一律带 fallback，缺 token 时退化为原色。 */
+.tool-row-wrap[data-family='modify'] .tool-name { color: var(--warning, #d97706); }
+.tool-row-wrap[data-family='explore'] .tool-name { color: var(--primary, #2563eb); }
+.tool-row-wrap[data-family='delegate'] .tool-name { color: var(--trajectory-tool-call, var(--primary, #2563eb)); }
 .tool-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; }
 
 /* running sweep 流光（deepseek ToolRow sweep） */

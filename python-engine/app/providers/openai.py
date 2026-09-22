@@ -231,6 +231,20 @@ class OpenAIProvider(LLMProvider):
             session_id = get_llm_session_id()
             if session_id:
                 kwargs["extra_headers"] = {"x-opencode-session": session_id}
+
+        # 思考档位：**归一化之后**才发送。
+        # 各 provider 对档位的词表不一致（`disabled/false/no/none/nothink/off` 都说"关"，
+        # 而 SDK 只认 `minimal/low/medium/high`，没有 `max`、也没有统一的"关"）——
+        # 直接透传会得到 400：我们实际踩过 `UNSUPPORTED_REASONING_EFFORT`
+        # （`effort=medium` 发给 deepseek-flash）。
+        # `normalize_reasoning_effort` 返回空串即表示"不要发送该字段"（退化为 provider 默认）。
+        # 注：Anthropic 协议用的是 `thinking` 块，语义不同，故这条路径只覆盖 OpenAI 兼容族。
+        from app.providers.effort import normalize_reasoning_effort
+        from app.providers.session_context import get_llm_effort
+
+        effort = normalize_reasoning_effort(get_llm_effort())
+        if effort:
+            kwargs["reasoning_effort"] = effort
         # ── 调试：检查消息序列中 tool 消息的配对 ──
         msgs = kwargs["messages"]
         for i, m in enumerate(msgs):

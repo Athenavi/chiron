@@ -216,6 +216,33 @@ const filteredMentions = computed(() => {
   return list.slice(0, 20)
 })
 
+/** 分类的固定展示顺序（不按数量抖动 —— 用户对"知识库在最上"有稳定预期） */
+const MENTION_TYPE_ORDER = ['kb', 'agent', 'skill', 'workflow', 'plugin']
+
+/**
+ * 按资源类型分组。
+ *
+ * 平铺列表在资源一多就分辨不出"这条是知识库还是技能"；分组后每类一个标题。
+ * 每个条目**带着它在扁平列表里的下标**（`flatIndex`）—— 键盘导航与 hover 仍然用
+ * 同一个 `mentionIndex` 整数，不必改成二维坐标（改坐标会牵连输入法/键盘逻辑）。
+ */
+const groupedMentions = computed(() => {
+  const flat = filteredMentions.value
+  const byType = new Map<string, { item: (typeof flat)[number]; flatIndex: number }[]>()
+  flat.forEach((item, flatIndex) => {
+    const list = byType.get(item.type) ?? []
+    list.push({ item, flatIndex })
+    byType.set(item.type, list)
+  })
+  const ordered = [
+    ...MENTION_TYPE_ORDER,
+    ...[...byType.keys()].filter(t => !MENTION_TYPE_ORDER.includes(t)),
+  ]
+  return ordered
+    .filter(type => byType.has(type))
+    .map(type => ({ type, label: MENTION_LABEL[type] || type, entries: byType.get(type)! }))
+})
+
 /** 懒加载 + 逐类容错：任一资源类失败只让那一类为空，不拖垮整个面板 */
 async function loadMentionItems() {
   if (mentionItems.value.length || mentionLoading.value) return
@@ -626,19 +653,26 @@ defineExpose({ insertText })
           {{ $t('没有匹配的资源（知识库 / Agent / 技能 / 工作流 / 插件）') }}
         </div>
         <template v-else>
-          <div
-            v-for="(m, i) in filteredMentions"
-            :key="`${m.type}:${m.id}`"
-            class="slash-item"
-            :class="{ active: i === mentionIndex }"
-            role="option"
-            :aria-selected="i === mentionIndex"
-            @mouseenter="mentionIndex = i"
-            @click="pickMention(m)"
+          <!-- 按资源类型分组：每类一个标题；条目仍用**扁平下标**驱动键盘与 hover，
+               所以 input/keydown 那边的整数索引逻辑一行都不用改。 -->
+          <template
+            v-for="group in groupedMentions"
+            :key="group.type"
           >
-            <span class="slash-cmd">{{ $t(MENTION_LABEL[m.type] || m.type) }}</span>
-            <span class="slash-desc">{{ m.name }}</span>
-          </div>
+            <div class="slash-group">{{ $t(group.label) }}</div>
+            <div
+              v-for="entry in group.entries"
+              :key="`${entry.item.type}:${entry.item.id}`"
+              class="slash-item"
+              :class="{ active: entry.flatIndex === mentionIndex }"
+              role="option"
+              :aria-selected="entry.flatIndex === mentionIndex"
+              @mouseenter="mentionIndex = entry.flatIndex"
+              @click="pickMention(entry.item)"
+            >
+              <span class="slash-desc">{{ entry.item.name }}</span>
+            </div>
+          </template>
         </template>
       </div>
 
@@ -902,6 +936,15 @@ defineExpose({ insertText })
 
 /* 斜杠命令面板 */
 .slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: 10; }
+/* 分组标题：**粘在列表顶部**，滚动时始终看得出"当前在哪一类"
+   （比整块滚动遮罩更实用：遮罩只提示"还有内容"，粘性标题直接回答"我在哪"）。 */
+.slash-group {
+  position: sticky; top: 0; z-index: 1;
+  padding: 4px 12px;
+  background: var(--bg-card);
+  color: var(--text-tertiary); font-size: 11px; font-weight: 600;
+  border-bottom: 1px solid var(--border);
+}
 .slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background 0.1s ease; }
 .slash-item.active { background: var(--bg-hover); }
 .slash-cmd { font-weight: 600; color: var(--primary); font-size: 13px; }

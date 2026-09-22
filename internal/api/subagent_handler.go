@@ -267,7 +267,8 @@ func (h *SubagentHandler) runsFromDB(ctx context.Context, tenant, sessionID, par
 		SELECT id, COALESCE(parent_run_id, '') AS parent_run_id, depth,
 		       COALESCE(profile_name, '') AS profile_name, status,
 		       COALESCE(summary, '') AS summary, input_tokens, output_tokens, steps,
-		       redacted_count, COALESCE(error, '') AS error, created_at
+		       redacted_count, COALESCE(error, '') AS error,
+		       artifacts, write_paths, created_at
 		  FROM subagent_runs
 		 WHERE tenant_id = $1
 		   AND ($2 = '' OR root_session_id = $2)
@@ -292,7 +293,8 @@ func (h *SubagentHandler) runFromDB(ctx context.Context, tenant, runID string) m
 		SELECT id, COALESCE(parent_run_id, '') AS parent_run_id, depth,
 		       COALESCE(profile_name, '') AS profile_name, status,
 		       COALESCE(summary, '') AS summary, input_tokens, output_tokens, steps,
-		       redacted_count, COALESCE(error, '') AS error, created_at
+		       redacted_count, COALESCE(error, '') AS error,
+		       artifacts, write_paths, created_at
 		  FROM subagent_runs
 		 WHERE id = $1 AND tenant_id = $2`, runID, tenant)
 	if err != nil || row == nil {
@@ -363,6 +365,14 @@ func normalizeRunRow(row map[string]interface{}) map[string]interface{} {
 	if ts := stringOf(row["created_at"]); ts != "" {
 		view["created_at"] = ts
 	}
+	// 产物：`artifacts` / `write_paths` 都是 jsonb，**原样透传为字符串**交给前端解析 ——
+	// 后端不对形状做假设，避免与引擎侧的字段演进耦合（这里只保证数据能到前端）。
+	if v := stringOf(row["artifacts"]); v != "" && v != "[]" {
+		view["artifacts"] = v
+	}
+	if v := stringOf(row["write_paths"]); v != "" && v != "[]" {
+		view["write_paths"] = v
+	}
 	return view
 }
 
@@ -370,6 +380,10 @@ func stringOf(v interface{}) string {
 	switch value := v.(type) {
 	case string:
 		return value
+	case []byte:
+		// jsonb 列经驱动返回的可能是 []byte。若落进 default 分支，会被格式化成
+		// "[91 123 93]" 这种字节序列 —— 前端拿到就无从 parse 了。
+		return string(value)
 	case nil:
 		return ""
 	case time.Time:

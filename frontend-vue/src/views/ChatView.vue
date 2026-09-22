@@ -454,8 +454,35 @@ const MODE_PRESETS: Record<string, { temperature: number; max_tokens: number; no
 }
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model（base 已显式携带的字段优先保留） */
+/**
+ * 思考档位：`disabled / low / high / max`（与后端 `app/providers/effort.py` 的归一化表对齐）。
+ * 空串 = 不携带 —— 是否真正发送由后端归一化决定（各家词表不一致，见该文件注释）。
+ */
+const effort = ref('')
+
+/** 档位循环顺序（点击按钮依次切换 —— ZCode 的 `ThoughtLevelCycleControl` 同款交互，比下拉省空间） */
+const EFFORT_ORDER = ['', 'low', 'high', 'max'] as const
+const EFFORT_LABEL: Record<string, string> = { '': '关', low: '低', high: '高', max: '最高' }
+
+/** 思考档位切换：与模型/模式同一套持久化（走 buildLlmConfig → 会话 llm_config） */
+function onEffortChange(v: string) {
+  effort.value = (EFFORT_ORDER as readonly string[]).includes(v) ? v : ''
+  persistRuntime({})
+  message.info(
+    effort.value ? `思考档位：${EFFORT_LABEL[effort.value]}` : t('思考档位已重置为默认'),
+  )
+}
+
+/** 点按循环：关 → 低 → 高 → 最高 → 关 */
+function cycleEffort() {
+  const order = EFFORT_ORDER as readonly string[]
+  onEffortChange(order[(order.indexOf(effort.value) + 1) % order.length])
+}
+
+/** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model + 思考档位 */
 function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
   const cfg: Record<string, any> = { mode: mode.value, ...(base || {}) }
+  if (effort.value) cfg.effort = effort.value
   // 模型路由：会话选定模型写入 llm_config（空 = 不携带，走后端默认路由）
   if (llmModel.value) cfg.model = llmModel.value
   const preset = MODE_PRESETS[mode.value]
@@ -1812,6 +1839,20 @@ function continueGeneration() {
               class="toolbar-mode"
               :title="modeSourceLabel ? `模式来源：${modeSourceLabel}` : '当前对话模式'"
             >{{ modeLabel }}<template v-if="modeSourceLabel"> · {{ modeSourceLabel }}</template></span>
+            <!-- 思考档位：点按循环（关 → 低 → 高 → 最高）。
+                 与"模式"同类信息（都是"这次怎么回答"），所以并排放；用循环按钮而不是下拉 ——
+                 只有 4 档，比下拉省一次点击和一块浮层。
+                 值最终要经后端 app/providers/effort.py **归一化**才可能发送
+                 （各家词表不一致，直接透传会 400 —— 我们踩过 UNSUPPORTED_REASONING_EFFORT）。 -->
+            <button
+              type="button"
+              class="toolbar-mode toolbar-effort"
+              :class="{ active: !!effort }"
+              :title="$t('思考档位：点按循环切换（关 / 低 / 高 / 最高）')"
+              @click="cycleEffort()"
+            >
+              {{ $t('思考') }} {{ EFFORT_LABEL[effort] || '关' }}
+            </button>
           </div>
           <div class="toolbar-side toolbar-actions">
             <Button
@@ -2391,6 +2432,10 @@ function continueGeneration() {
   text-overflow: ellipsis;
 }
 .toolbar-mode { flex: none; font-size: 11px; color: var(--text-tertiary); background: var(--bg-secondary); padding: 2px 8px; border-radius: var(--radius-full); }
+/* 思考档位按钮：复用 .toolbar-mode 的胶囊外观，只重置 button 默认样式 */
+.toolbar-effort { border: none; cursor: pointer; font: inherit; font-size: 11px; }
+.toolbar-effort:hover { color: var(--text-primary); }
+.toolbar-effort.active { color: var(--primary); }
 .toolbar-actions { justify-content: flex-end; gap: 2px; }
 .toolbar-btn { color: var(--text-secondary); border-radius: var(--radius-md); }
 .toolbar-btn:hover { color: var(--text-primary) !important; background: var(--bg-hover) !important; }

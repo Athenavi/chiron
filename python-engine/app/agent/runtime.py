@@ -589,9 +589,13 @@ class AgentRuntime:
         # OpenCode（Zen / Go）强制要求请求带 `x-opencode-session`，缺失直接 400
         # （MissingSessionID）。把会话标识放进 contextvar，由 provider 层
         # （providers/openai.py、providers/anthropic.py）注入请求头。
-        from app.providers.session_context import set_llm_session_id
+        from app.providers.session_context import set_llm_effort, set_llm_session_id
 
         set_llm_session_id(task.session_id or task.id)
+        # 思考档位：同样是**请求级**属性，走同一条 contextvar 通道 ——
+        # 这样不必为它改 chat_stream 的三层签名。归一化与"是否发送"在 provider 层做
+        # （见 app/providers/effort.py：各家词表不一致，直接透传会 400）。
+        set_llm_effort(str((task.llm_config or {}).get("effort") or ""))
 
         # ── 0.4 会话授权模式（任务级缓存）────────────────────────────────
         # 模式由 Go 网关写入 Redis（/v1/mode），此处仅在任务开始时读取一次并缓存。
