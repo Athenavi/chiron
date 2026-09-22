@@ -248,11 +248,18 @@ func (h *ConversationHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		Forbidden(w, "access denied")
 		return
 	}
+	// 准则 3：从外部会话列表删除会话时，画布里的引用必须一起消失。
+	// 先记下它出现在哪些画布 —— 删完之后 session_map_nodes 会被 CASCADE 清掉，查不到了。
+	mapWorkspaceIDs := sessionMapWorkspaceIDsForSession(r.Context(), id)
 
 	if err := h.sessionMgr.DeleteSession(r.Context(), id); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "delete session failed")
 		return
 	}
+
+	// 准则 3：PG 的 CASCADE 不会让 Redis 热层失效 —— 而热层是**跨实例**缓存，
+	// 别的实例读到的仍是删除前的快照（表现为幽灵卡片）。必须显式清掉。
+	invalidateSessionMapWorkspaces(r.Context(), mapWorkspaceIDs)
 
 	OK(w, map[string]string{"status": "deleted"})
 }

@@ -282,8 +282,12 @@ function openNewSession() {
 }
 
 async function archiveThread(thread) {
-  if (!window.confirm(`归档画布中的「${thread.title}」及其分支？原会话会保留，可在会话列表继续查看。`)) return
-  await api(`/synapse/api/threads/${thread.id}`, { method: 'DELETE' })
+  if (!window.confirm(`从画布移除「${thread.title}」及其分支？`)) return
+  // 准则 4：提供"同时删除会话记录"选项，**默认不勾选**。
+  // 用第二次确认表达这个选项：直接取消 = 仅移出画布（会话记录保留，即默认行为）。
+  const alsoDeleteSession = window.confirm('同时删除会话记录？' + '\n\n' + '确定 = 连会话记录一起删除（不可恢复）' + '\n' + '取消 = 仅从画布移除，会话保留（默认）')
+  const deleteUrl = `/synapse/api/threads/${thread.id}` + (alsoDeleteSession && thread.dshSessionId ? '?with_session=1' : '')
+  await api(deleteUrl, { method: 'DELETE' })
   state.historyBySession.delete(thread.dshSessionId)
   state.detailScrollByThread.delete(thread.id)
   state.detailTargetCardId = state.detailThreadId === thread.id ? null : state.detailTargetCardId
@@ -345,14 +349,14 @@ function openBranch(parent, atSeq = undefined, anchorId = undefined) {
   window.setTimeout(() => document.querySelector('[data-draft] textarea')?.focus(), 0)
 }
 
-async function sendMessage(thread, text) {
+async function sendMessage(thread, text, mode = 'chat') {
   if (thread.dshSessionId === null) throw new Error('该节点没有关联的会话')
   if (state.pendingReplies.has(thread.dshSessionId)) throw new Error('该会话正在回复，请稍后再发送')
   state.pendingReplies.set(thread.dshSessionId, { text, at: Date.now() })
   state.error = ''
   render()
   try {
-    await dshRpc('synapse:send-message', { sessionId: thread.dshSessionId, text })
+    await dshRpc('synapse:send-message', { sessionId: thread.dshSessionId, text, mode })
     void loadThreadHistory(thread)
   } catch (error) {
     state.pendingReplies.delete(thread.dshSessionId)
@@ -384,7 +388,8 @@ async function submitDraft() {
     if (parent === undefined) throw new Error('来源会话不存在')
     if (draft.kind === 'continue') {
       state.draft = null
-      await sendMessage(parent, text)
+      // 追问（卡片右侧节点）：一次性简短回复，见 adapter 的提示词格式
+      await sendMessage(parent, text, 'followup')
       return
     }
     const session = await dshRpc('synapse:fork-session', { sessionId: parent.dshSessionId, atSeq: draft.atSeq })
@@ -912,7 +917,7 @@ function conversationCard(card, graph) {
     <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button></div>
     <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
-    <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="open-dsh" data-thread="${card.dshThreadId}" data-seq="${Number.isInteger(card.sourceSeq) ? card.sourceSeq : ''}" title="在 DSH 中打开" aria-label="在 DSH 中打开"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v6.5A1.5 1.5 0 0 0 4.5 13H11a1.5 1.5 0 0 0 1.5-1.5V9"/><path d="M9.5 3.5h3v3M12.4 3.6 7.5 8.5"/></svg>DSH</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
+    <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
   </article>`
 }
 

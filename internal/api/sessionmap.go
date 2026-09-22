@@ -26,6 +26,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -235,10 +236,11 @@ func smLoadFromPG(ctx context.Context, workspaceID, tenant, userID string) (*Ses
 		ws.Viewport = map[string]interface{}{}
 	}
 	rows, err := db.GlobalDBManager.FetchAll(ctx,
-		`SELECT id, COALESCE(session_id,''), COALESCE(parent_node_id,''), COALESCE(edge_kind,'manual'),
-		        x, y, COALESCE(title,''), COALESCE(color,''), collapsed, hidden, pinned,
-		        COALESCE(branch_from_seq, 0), created_at, updated_at
-		   FROM session_map_nodes WHERE workspace_id = $1 ORDER BY created_at`, workspaceID)
+		`SELECT n.id, COALESCE(n.session_id,''), COALESCE(n.parent_node_id,''), COALESCE(n.edge_kind,'manual'),
+		        n.x, n.y, COALESCE(NULLIF(n.title, ''), s.title, '') AS title, COALESCE(n.color, ''), n.collapsed, n.hidden, n.pinned,
+		        COALESCE(n.branch_from_seq, 0), n.created_at, n.updated_at
+		   FROM session_map_nodes n LEFT JOIN sessions s ON s.id = n.session_id
+		  WHERE n.workspace_id = $1 ORDER BY n.created_at`, workspaceID)
 	if err != nil {
 		return ws, nil
 	}
@@ -252,6 +254,103 @@ func smLoadFromPG(ctx context.Context, workspaceID, tenant, userID string) (*Ses
 		})
 	}
 	return ws, nil
+}
+
+// sessionMapWorkspaceIDsForSession 查出某会话出现在哪些画布上。
+//
+// 必须在**删除会话之前**调用：`session_map_nodes.session_id` 有 ON DELETE CASCADE，
+// 会话一删节点就没了，那时再查什么都查不到。
+func sessionMapWorkspaceIDsForSession(ctx context.Context, sessionID string) []string {
+	if db.GlobalDBManager == nil || sessionID == "" {
+		return nil
+	}
+	rows, err := db.GlobalDBManager.FetchAll(ctx,
+		`SELECT DISTINCT workspace_id FROM session_map_nodes WHERE session_id = $1`, sessionID)
+	if err != nil {
+		slog.Warn("sessionmap: lookup workspaces for session failed", "session", sessionID, "error", err)
+		return nil
+	}
+	ids := make([]string, 0, len(rows))
+	for _, r := range rows {
+		if id := stringOf(r["workspace_id"]); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return ids
+}
+
+// invalidateSessionMapWorkspaces 失效这些画布的热层快照。
+//
+// 准则 3（从外部会话列表删会话 → 画布里的引用必须一起消失）要求它：
+// PG 侧有 CASCADE 兜底，但 **Redis 热层是跨实例缓存**，不显式失效就会留下幽灵卡片
+// （本项目实际踩过：删了会话，地图上还在）。删掉 key 即可 —— 下次读回源 PG，
+// 那时 CASCADE 已经生效，画布自然是干净的。
+func invalidateSessionMapWorkspaces(ctx context.Context, workspaceIDs []string) {
+	if db.Redis == nil {
+		return
+	}
+	for _, id := range workspaceIDs {
+		db.Redis.Do(ctx, "DEL", smCacheKey(id))
+		db.Redis.Do(ctx, "SREM", smDirtyKey(), id)
+	}
+	if len(workspaceIDs) > 0 {
+		slog.Info("sessionmap: invalidated workspaces after session delete", "count", len(workspaceIDs))
+	}
+}
+// smPruneMissingSessions 丢掉"所引用的会话已经不存在"的节点。
+//
+// 为什么需要它：`session_map_nodes.session_id` 有 ON DELETE CASCADE，PG 侧删会话时节点会
+// 跟着消失；但 **Redis 热层是跨实例缓存** —— 会话在别的实例、或别的代码路径被删时，
+// 热层快照不会自动更新，表现就是"删了会话，地图上那张卡还在"。
+// 这里在读路径上做一次校验：宁可多一次轻量查询，也不要让用户看到幽灵卡片。
+//
+// 失败时原样返回（不是清空）—— 校验查不动不该把用户的地图清掉。
+func smPruneMissingSessions(ctx context.Context, ws *SessionMapWorkspace) *SessionMapWorkspace {
+	if ws == nil || len(ws.Nodes) == 0 || db.GlobalDBManager == nil {
+		return ws
+	}
+	ids := make([]string, 0, len(ws.Nodes))
+	for _, n := range ws.Nodes {
+		if n.SessionID != "" {
+			ids = append(ids, n.SessionID)
+		}
+	}
+	if len(ids) == 0 {
+		return ws
+	}
+	placeholders := make([]string, len(ids))
+	args := make([]interface{}, len(ids))
+	for i, id := range ids {
+		placeholders[i] = fmt.Sprintf("$%d", i+1)
+		args[i] = id
+	}
+	rows, err := db.GlobalDBManager.FetchAll(ctx,
+		"SELECT id FROM sessions WHERE id IN ("+strings.Join(placeholders, ",")+")", args...)
+	if err != nil {
+		slog.Warn("sessionmap prune: session lookup failed, keeping nodes as-is", "error", err)
+		return ws
+	}
+	alive := make(map[string]bool, len(rows))
+	for _, r := range rows {
+		alive[stringOf(r["id"])] = true
+	}
+	kept := make([]SessionMapNode, 0, len(ws.Nodes))
+	removed := 0
+	for _, n := range ws.Nodes {
+		// 便签（无 session_id）永远保留
+		if n.SessionID != "" && !alive[n.SessionID] {
+			removed++
+			continue
+		}
+		kept = append(kept, n)
+	}
+	if removed > 0 {
+		slog.Info("sessionmap prune: dropped nodes whose session is gone", "workspace", ws.ID, "removed", removed)
+		ws.Nodes = kept
+		// 热层已经脏了：回写清理后的快照（并把画布标脏，让 flusher 落到 PG）
+		smCachePut(ctx, ws)
+	}
+	return ws
 }
 
 // ── HTTP handlers ──
@@ -324,7 +423,7 @@ func (h *SessionMapHandler) GetWorkspace(w http.ResponseWriter, r *http.Request)
 	}
 	// 热层优先；miss 再回源 PG 并回填（布局是"看地图的姿势"，热层丢了不影响数据）
 	if ws, ok := smCacheGet(r.Context(), wsID); ok {
-		OK(w, ws)
+		OK(w, smPruneMissingSessions(r.Context(), ws))
 		return
 	}
 	ws, err := smLoadFromPG(r.Context(), wsID, smTenant(claims), claims.UserID)
@@ -337,7 +436,7 @@ func (h *SessionMapHandler) GetWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	smCachePut(r.Context(), ws)
-	OK(w, ws)
+	OK(w, smPruneMissingSessions(r.Context(), ws))
 }
 
 func (h *SessionMapHandler) SaveWorkspace(w http.ResponseWriter, r *http.Request) {

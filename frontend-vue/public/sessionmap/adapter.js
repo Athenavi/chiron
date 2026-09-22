@@ -52,6 +52,7 @@
     return {
       id: node.id,
       title: node.title || '',
+      dshSessionTitle: node.title || '',
       dshSessionId: node.session_id || '',
       parentId: node.parent_node_id || '',
       // P1-6：分叉锚点的**真实**长度。app.js 的 conversationCards 用
@@ -121,10 +122,43 @@
     return pending
   }
 
+  // ── 卡片 = 一个会话（准则 6：同一会话在画布内只出现一次）──
+  //
+  // 上游的卡片是"一轮对话"（question + answer），一个会话会摊成很多张。
+  // Chiron 的语义是**一会话一卡**，卡片显示会话的**标题 + 摘要**。
+  // 做法：这里只产出两条合成消息，conversationCards 便恰好生成 1 张卡 ——
+  // 于是不必改 app.js 的卡片模板（几万字符的超长行，改动风险高）。
+  //
+  // 代价：会话详情视图也只看到这两条。这符合准则 2 —— 地图是会话的**投影/引用**，
+  // 要看完整对话去对话页。
+  var SUMMARY_MAX = 140
+
+  /** 取最近一条助手回复压成单行摘要（折叠空白、超长截断） */
+  function summarizeSession(list) {
+    for (var i = list.length - 1; i >= 0; i--) {
+      var m = list[i]
+      if (m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
+        var t = m.content.trim().replace(/\s+/g, ' ')
+        return t.length > SUMMARY_MAX ? t.slice(0, SUMMARY_MAX) + '…' : t
+      }
+    }
+    return ''
+  }
+
+  /** 合成"标题 + 摘要"两条消息：让卡片恰好一张，且标题是会话标题 */
+  function cardMessages(node, list) {
+    var title = node.title || '(未命名会话)'
+    var summary = summarizeSession(list)
+    var at = list.length ? list[list.length - 1].created_at : undefined
+    var out = [{ kind: 'user', text: title, at: at, sourceSeq: 1 }]
+    if (summary) out.push({ kind: 'assistant', text: summary, at: at, sourceSeq: 2 })
+    return out
+  }
   /** 把节点数组组装成 app.js 期望的工作区形状（含 messages） */
   function hydrateNodes(workspaceId, nodes, name, viewport) {
     return Promise.all((nodes || []).map(function (n) {
-      return loadMessages(n.session_id).then(function (messages) { return nodeToThread(n, messages) })
+      // 卡片内容 = 标题 + 摘要（一会话一卡）；完整消息只用于生成摘要，不进卡片
+      return loadMessages(n.session_id).then(function (list) { return nodeToThread(n, cardMessages(n, list)) })
     })).then(function (threads) {
       return {
         id: workspaceId,
@@ -369,6 +403,15 @@
           return respond({ thread: hostThread })
         }
         if (method === 'DELETE') {
+          // 准则 4：画布内删除**默认只移出画布**（准则 2：节点是会话的引用，删引用不删数据）。
+          // 只有显式带 with_session=1 时才连真实会话记录一起删 —— 由 UI 的"同时删除会话记录"
+          // 选项决定，默认不勾选。
+          if (url.indexOf('with_session=1') !== -1 && hostThread.dshSessionId) {
+            var sessionToDelete = hostThread.dshSessionId
+            void jsonFetch(CONV + '/' + encodeURIComponent(sessionToDelete), { method: 'DELETE' })
+              .catch(function () { /* 会话删失败不回滚节点：至少画布已按用户意愿清干净 */ })
+            messagesCache.delete(sessionToDelete)
+          }
           hostSnap.threads = hostSnap.threads.filter(function (t) { return t.id !== thId })
           snapshots[hostWs] = hostSnap
           scheduleSave(hostWs)
@@ -396,6 +439,43 @@
   var streamSources = new Map()   // sessionId -> EventSource
   var streamText = new Map()      // sessionId -> 累积文本
 
+  function newUuid() {
+    return (window.crypto && window.crypto.randomUUID)
+      ? window.crypto.randomUUID()
+      : 'cmid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
+  }
+  /**
+   * 把一个会话摆进当前画布（若还没摆）。
+   *
+   * 地图是"对话页面的**另一种实现**"，不是宿主视图的附属：它可能自己新建会话
+   * （synapse:create-session）、也可能从宿主那边切过来（synapse:current-session）。
+   * 这两种情况都必须让卡片真的出现在图上，否则用户新建完会话却在地图里找不到它。
+   *
+   * 取舍：用户手动删掉的节点会被重新摆回（因为我们只按"有没有"判断）。
+   * "新会话看不见"比"删掉的又冒出来"更难受，所以先这样（要彻底解决需记录手动删除集合）。
+   */
+  function placeSession(session) {
+    if (!session || !session.id || !currentWorkspaceId) return
+    var snap = snapshots[currentWorkspaceId]
+    if (!snap) return
+    var mine = snap.threads || (snap.threads = [])
+    if (mine.some(function (t) { return t.dshSessionId === session.id })) return
+    var bottom = mine.reduce(function (max, t) { return Math.max(max, (t.position && t.position.y) || 0) }, 0)
+    mine.push({
+      id: 'n_' + session.id,
+      title: session.title || '',
+      dshSessionId: session.id,
+      parentId: '',
+      position: { x: 86, y: bottom + 320 },
+      messages: [],
+      pendingProcess: [],
+    })
+    snapshots[currentWorkspaceId] = snap
+    scheduleSave(currentWorkspaceId)
+    if (typeof window.openWorkspace === 'function') {
+      window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
+    }
+  }
   function selfPost(payload) {
     window.postMessage({ source: 'chiron-sessionmap', ...payload }, window.location.origin)
   }
@@ -435,12 +515,30 @@
     if (type === 'synapse:create-session') {
       return jsonFetch(CONV, { method: 'POST', body: JSON.stringify({ title: payload.title || '新对话' }) })
         .then(unwrap)
+        .then(function (session) {
+          // 地图是"对话页面的另一种实现"，不是宿主视图的附属：它自己建的会话必须自己摆进画布，
+          // 不能等宿主推 current-session —— 宿主根本不知道这次创建，结果就是"新建了会话但地图上没有"。
+          placeSession(session)
+          return session
+        })
     }
     if (type === 'synapse:send-message') {
       watchSessionStream(payload.sessionId)
       return jsonFetch('/v1/agent/submit', {
         method: 'POST',
-        body: JSON.stringify({ session_id: payload.sessionId, content: payload.text || '', context: {} }),
+        body: JSON.stringify({
+          session_id: payload.sessionId,
+          // 追问走**特定格式**的提示词：方括号标记 + 包裹原文，让模型明确"只要一句话"，
+          // 也方便将来在服务端按格式识别这类一次性问答（普通对话与追问得以区分）。
+          content: payload.mode === 'followup'
+            ? '（【请简短回答问题】:(' + (payload.text || '') + ')）'
+            : (payload.text || ''),
+          context: {},
+          // 幂等键：服务端用 Redis SETNX 做 5 分钟去重（见 internal/api/submit_handler.go）。
+          // **必须由客户端生成** —— 只有它知道"这两次提交是同一条消息"（网络重试/重发时这个 ID 不变）。
+          // 缺了它，请求会被当成重复提交而无效。
+          llm_config: { client_msg_id: newUuid() },
+        }),
       }).then(function () { return { ok: true } })
     }
     if (type === 'synapse:fork-session') {
@@ -461,31 +559,9 @@
     if (e.origin !== window.location.origin) return
     var d = e.data
     if (!d || d.source !== 'chiron-sessionmap') return
-    // 宿主切到某会话 → 若它还没在地图上，自动补一个节点（P1-5）。
-    // 否则"新建的会话"永远进不了地图，地图只会停在最初导入的那一批。
-    // 取舍：用户手动删掉的节点，下次打开地图会被重新加回 —— 但"新会话看不见"
-    // 比"删掉的节点又冒出来"更难受，先按前者处理（彻底解决需记录"手动删除"集合）。
-    if (d.type === 'synapse:current-session' && d.session && d.session.id && currentWorkspaceId) {
-      var snap = snapshots[currentWorkspaceId]
-      var mine = (snap && snap.threads) || []
-      var exists = mine.some(function (t) { return t.dshSessionId === d.session.id })
-      if (snap && !exists) {
-        var bottom = mine.reduce(function (max, t) { return Math.max(max, (t.position && t.position.y) || 0) }, 0)
-        mine.push({
-          id: 'n_' + d.session.id,
-          title: d.session.title || '',
-          dshSessionId: d.session.id,
-          parentId: '',
-          position: { x: 86, y: bottom + 320 },
-          messages: [],
-          pendingProcess: [],
-        })
-        snapshots[currentWorkspaceId] = snap
-        scheduleSave(currentWorkspaceId)
-        if (typeof window.openWorkspace === 'function') {
-          window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
-        }
-      }
+    // 宿主切到某会话 → 交给 placeSession 摆进画布（它自带"已存在就跳过"与防抖保存）（P1-5）。
+    if (d.type === 'synapse:current-session' && d.session && d.session.id) {
+      placeSession(d.session)
     }
     if (d.type === 'synapse:live-reply' && d.running === false && currentWorkspaceId &&
         typeof window.openWorkspace === 'function') {
