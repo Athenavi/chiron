@@ -308,7 +308,7 @@ async def subscribe_cancel_channel() -> None:
             run_id = str(data.get("run_id") or "")
             session_id = str(data.get("session_id") or "")
             reason = _EXTERNAL_REASONS.get(str(data.get("reason") or ""), REASON_USER)
-            if run_id and cancel(run_id, reason):
+            if run_id and await _cancel_and_ack(redis, run_id, reason):
                 continue
             if session_id and cancel_session(session_id, reason):
                 continue
@@ -331,8 +331,36 @@ def start_cancel_subscriber() -> None:
         _SUBSCRIBER = asyncio.create_task(subscribe_cancel_channel())
 
 
+async def _cancel_and_ack(redis, run_id: str, reason: str) -> bool:
+    """命中本地注册表 → 取消 + 写回执；返回是否真的发出了取消。
+
+    回执（``subagent:cancel:ack:{run_id}``）是网关区分"真有人认领"与"广播无人应答"的
+    **唯一依据**：没有它，实例已经重启/退出的场景下取消只能返回"已受理"——那正是
+    "点了停止却一直转圈、DB 永远停在 running"的成因（见 P4 设计）。
+    """
+    if not cancel(run_id, reason):
+        return False
+    from app.subagent import affinity
+
+    await affinity.ack_cancel(redis, run_id)
+    return True
+
+
 async def stop() -> None:
-    """关机时取消后台任务（看门狗/订阅）。活跃 run 由各自的 finally 自行收尾。"""
+    """关机时取消后台任务（看门狗/订阅），并**注销持有的作业归属**（P4-3）。
+
+    为什么要在关机时注销：进程退出后这些 run 的收尾代码不会再执行，留着归属会让网关
+    以为"还有人在跑"，把取消路由到一个正在退出的实例；注销后网关能明确判定
+    "无人认领"，把作业收敛为 ``lost``，而不是让用户对着 running 一直转圈。
+    """
     for task in (_WATCHDOG, _SUBSCRIBER):
         if task is not None and not task.done():
             task.cancel()
+    owned = list(_RUNS)
+    if owned:
+        from app.subagent import affinity
+
+        try:
+            await affinity.release_owners(owned)
+        except Exception as exc:  # noqa: BLE001 - 注销失败不该阻断关机
+            logger.warning("subagent affinity release on shutdown failed: %s", str(exc)[:160])

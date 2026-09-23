@@ -5,9 +5,7 @@ import asyncio
 import logging
 import os
 import re
-import socket
 import time
-import uuid
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -738,11 +736,15 @@ async def lifespan(app: FastAPI):
 
 
 def _get_instance_id() -> str:
-    if settings.instance_id:
-        return settings.instance_id
-    if settings.pod_name:
-        return settings.pod_name
-    return f"{socket.gethostname()}-{uuid.uuid4().hex[:8]}"
+    """本实例标识。
+
+    唯一实现是 ``app/subagent/affinity.py``（P4）：它必须**进程内稳定** —— 归属映射按它
+    区分实例，若每次调用都换名字（兜底分支带随机后缀），网关看到的映射会自相矛盾。
+    这里只做转发，避免"两处各算一次"漂移。
+    """
+    from app.subagent.affinity import cached_instance_id
+
+    return cached_instance_id()
 
 
 # ── 附件内容注入：自动下载文件并注入到 LLM 上下文中 ──
@@ -1735,7 +1737,12 @@ async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
         if _queue_worker_instance is worker:
             _queue_worker_instance = None
             await worker.stop()
-        # 停掉看门狗与取消订阅（活跃 run 由各自的 finally 自行收尾）
+        # 停掉看门狗与取消订阅，并注销本实例持有的作业归属（P4-3）。
+        # 注意这里必须**就地导入**：该函数（worker 常驻循环）在模块加载后才被调用，
+        # 而此前这里引用的是一个从未导入的名字 —— 一旦走到这条 finally 就会 NameError，
+        # 也就是说"关机时的收尾"其实一次都没成功执行过。
+        from app.subagent import registry as subagent_registry
+
         await subagent_registry.stop()
 
 

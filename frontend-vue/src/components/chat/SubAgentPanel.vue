@@ -11,7 +11,7 @@
  * 折叠即按 parent_run_id 隐藏整棵子树 —— 比递归组件更省，且不会因深层嵌套而抖。
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { Empty, Spin, Tag, Tooltip } from 'ant-design-vue'
+import { Empty, Spin, Tag, Tooltip, message } from 'ant-design-vue'
 import { submitApproval } from '../../api'
 import {
   cancelSessionSubagents,
@@ -140,7 +140,12 @@ async function stopRun(runId: string) {
   if (cancelling.value.has(runId)) return
   cancelling.value = new Set(cancelling.value).add(runId)
   try {
-    await cancelSubagentRun(runId)
+    const res = await cancelSubagentRun(runId)
+    if (res.status === 'lost') {
+      // 网关等不到持有实例的回执（实例已重启/被驱逐）→ 它把作业标成了 lost。
+      // 如实告诉用户，而不是让"正在停止"一直挂着、状态永远不变（假成功）。
+      void message.warning(t('该子 Agent 已失联（实例已重启或退出），已标记为丢失'))
+    }
   } catch {
     // 失败就放开按钮让用户能重试（不做假成功提示）
     const next = new Set(cancelling.value)

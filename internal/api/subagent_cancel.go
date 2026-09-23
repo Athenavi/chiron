@@ -6,9 +6,15 @@ package api
 //	POST /v1/subagent/sessions/{session_id}/cancel  中止该会话所有活跃 run
 //
 // **执行方不是网关**：后台 run 由「父 turn 所在的引擎实例」持有（asyncio 任务跑在那个进程里），
-// 而网关没有 "run → 实例" 的映射。所以这里只做两件事：鉴权/租户校验 + 一次 Redis 广播；
-// 各引擎实例的订阅者（`app/subagent/registry.py`）命中本地注册表才真正 `task.cancel()`。
-// 这既不引入新的映射表，也与既有 `agent:cancel`（session_coord.go）的跨实例做法一致。
+// 而网关**按 run 归属映射**判断该作业是否真的还有人在跑（`subagent:run:{run_id}`，
+// 引擎在 run 启动时登记、收尾/关机时注销，见 python-engine/app/subagent/affinity.py）。
+// 取消的判定链是：
+//
+//	广播 subagent:cancel  →  引擎侧命中本地注册表则取消并写回执 subagent:cancel:ack:{run_id}
+//	                      →  网关等回执：等到 = cancelled 已生效；等不到 = **无人认领**
+//
+// 等不到回执时不再返回 "accepted"（那是假成功：前端显示正在停止、DB 里却永远停在
+// running），而是把作业收敛为 `lost` 并如实返回。
 //
 // 取消是**协作式**的：`task.cancel()` 在下一个 await 点生效 —— 等 LLM 响应时立即中断，
 // 正在跑的同步工具要等它返回。引擎侧收尾会把原因写进 `subagent_runs.error`
@@ -20,13 +26,70 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/engine"
 )
 
 // subagentCancelChannel 与引擎侧订阅名逐字一致（`app/subagent/registry.py`）。
 func subagentCancelChannel() string { return db.RedisKey("subagent:cancel") }
+
+// cancelAckKey 与引擎侧 `app/subagent/affinity.py` 的 ack_key 逐字一致。
+//
+// 引擎在**真的发出取消**之后往这个键 LPUSH，网关 BLPOP 等它 —— 这是"取消是否发生"
+// 的唯一可信依据（广播成功 ≠ 有人认领）。
+func cancelAckKey(runID string) string { return db.RedisKey("subagent:cancel:ack:") + runID }
+
+// cancelAckWaitSeconds 等待回执的秒数。持有该 run 的实例命中注册表后立刻回执
+// （毫秒级），所以这个等待只会在"无人认领"时耗尽。
+const cancelAckWaitSeconds = 1
+
+// lostNoOwner 是"取消时没有任何实例认领该 run"时写入 subagent_runs.error 的原因码。
+const lostNoOwner = "no_instance_claims_run"
+
+// cancelStatusFor 决定取消请求该返回什么：有回执 → 取消确实生效；没有 → 作业无人认领，
+// 必须按 `lost` 如实回答。抽成纯函数是为了让它能直接被单测（这段判定是"假成功"的边界）。
+func cancelStatusFor(acked bool) string {
+	if acked {
+		return "accepted"
+	}
+	return "lost"
+}
+
+// waitCancelAck 等待持有该 run 的实例回执；false 表示**没有实例认领**。
+func (h *SubagentHandler) waitCancelAck(ctx context.Context, runID string) bool {
+	if h.rdb == nil || runID == "" {
+		return false
+	}
+	// 比 BLPOP 自身的超时多 1s：留出网络往返，避免把"回执在路上"误判成"无人认领"。
+	lctx, cancel := context.WithTimeout(ctx, (cancelAckWaitSeconds+1)*time.Second)
+	defer cancel()
+	res := h.rdb.Do(lctx, "BLPOP", cancelAckKey(runID), cancelAckWaitSeconds)
+	vals, err := res.Slice()
+	return err == nil && len(vals) > 0
+}
+
+// markRunLost 把无人认领的 run 收敛为 lost（只动仍处于活跃状态的行）。
+//
+// 为什么由网关来写：等待回执的结论（没有实例持有）只有网关知道，而这一行如果继续停在
+// running，前端会永远显示"运行中"—— 正是本次要消灭的形态。
+func (h *SubagentHandler) markRunLost(ctx context.Context, tenant, runID, reason string) bool {
+	if tenant == "" || runID == "" || db.GlobalDBManager == nil {
+		return false
+	}
+	n, err := db.GlobalDBManager.Execute(ctx, `
+UPDATE subagent_runs
+   SET status = 'lost', finished_at = now(), error = $3
+ WHERE id = $1 AND tenant_id = $2
+   AND status NOT IN ('completed', 'failed', 'cancelled', 'lost')`, runID, tenant, reason)
+	if err != nil {
+		slog.Warn("subagent mark lost failed", "run_id", runID, "error", err)
+		return false
+	}
+	return n > 0
+}
 
 type subagentCancelBroadcast struct {
 	RunID     string `json:"run_id,omitempty"`
@@ -81,11 +144,42 @@ func (h *SubagentHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		JSON(w, http.StatusServiceUnavailable, APIResponse{Success: false, Error: "cancel unavailable"})
 		return
 	}
-	slog.Info("subagent cancel requested", "run_id", runID, "user_id", claims.UserID)
-	OK(w, map[string]string{"status": "accepted", "run_id": runID})
+
+	// P4-1：登记在引擎启动 run 时写入（subagent:run:{run_id}）。映射的价值不只是"知道谁在跑"，
+	// 更在于**没有映射时可以下明确结论**：这个作业已经没人持有了。
+	owner, ownerMapped := engine.SubagentRunOwner(r.Context(), runID)
+
+	// P4-2：等回执 —— 只有持有该 run 的实例命中注册表并真的发出取消，才算取消生效。
+	// 此前这里无条件返回 accepted，于是"实例已重启/被驱逐"的场景下前端显示"正在停止"、
+	// DB 里的行却永远停在 running（假成功，比报错更难排查）。
+	acked := h.waitCancelAck(r.Context(), runID)
+	replyStatus := cancelStatusFor(acked)
+	if acked {
+		slog.Info("subagent cancel accepted", "run_id", runID, "user_id", claims.UserID,
+			"owner", owner.InstanceID)
+		OK(w, map[string]string{"status": replyStatus, "run_id": runID})
+		return
+	}
+
+	// 没有实例认领：实例已退出（映射随 TTL 过期或已在关机时注销）或 Redis 抖动。
+	// 如实收敛为 lost —— 否则这行会一直"运行中"，而用户已经点了停止。
+	marked := h.markRunLost(r.Context(), subagentTenant(claims), runID, lostNoOwner)
+	slog.Warn("subagent cancel had no owner", "run_id", runID, "user_id", claims.UserID,
+		"owner_mapped", ownerMapped, "marked_lost", marked)
+	OK(w, map[string]any{
+		"status":       replyStatus,
+		"run_id":       runID,
+		"reason":       lostNoOwner,
+		"owner_mapped": ownerMapped,
+		"marked_lost":  marked,
+	})
 }
 
 // CancelSessionRuns 中止某会话下所有活跃子 Agent run。
+//
+// 刻意**不等待回执**：一次回执无法代表 N 个 run（有多少个实例认领、认领了哪几个都不好
+// 在一条回复里表达）。会话级取消的语义是"尽力停止"：未被认领的 run 会由收口器
+// （按最后活跃时间判 lost）兜住。单 run 取消则不同 —— 那里能给出确定的结论（见 CancelRun）。
 func (h *SubagentHandler) CancelSessionRuns(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {

@@ -332,6 +332,25 @@ class SubAgentRunner:
                                   parent_run_id=parent_run_id, depth=child_depth,
                                   profile=profile_name, task=task)
 
+        # ── 作业归属（P4-1）：把"哪个实例持有这个 run"写进 Redis ──
+        #
+        # 为什么必须有它：后台 run 的任务活在**本进程**里，而网关没有 run → 实例的映射，
+        # 取消只能靠一条广播。实例重启/被驱逐后广播无人认领，网关却仍返回 accepted ——
+        # 用户看到"点了停止一直转圈"，而这行会一直停在 running（默认 2 小时后才被判 lost）。
+        # 登记之后网关才能判定"有没有人真的在跑"，并在没有时收敛为 lost 而不是假成功。
+        #
+        # 失败只告警：登记不上不该让子 Agent 起不来（网关会按"无映射 + 无回执"处理）。
+        owner_lease = None
+        try:
+            from app.subagent.affinity import OwnerLease
+
+            owner_lease = OwnerLease(run_id, session_id=self._parent_session_id,
+                                     tenant_id=self._tenant_id)
+            await owner_lease.start()
+        except Exception as exc:  # noqa: BLE001 - 归属登记失败不影响执行
+            logger.warning("subagent %s: owner lease unavailable: %s", run_id, str(exc)[:160])
+            owner_lease = None
+
         # 5) 运行并收集：L0 落库 + 旁路转发；reasoning 与正文分离（思考不进父上下文）
         runtime = AgentRuntime(gateway=self._gateway)
         texts: list[str] = []
@@ -532,6 +551,10 @@ class SubAgentRunner:
                         parent_run_id=parent_run_id,
                         profile=profile_name,
                     )
+                    # 注销作业归属：run 已收尾，再留着映射会让网关以为"还有人在跑"
+                    # （P4：取消会因此被路由到一个已经不再持有该 run 的实例）。
+                    if owner_lease is not None:
+                        await owner_lease.stop()
                 except Exception as exc:  # noqa: BLE001 - 收尾失败不得掩盖取消语义
                     logger.warning("subagent %s cancel-finalize failed: %s", run_id, exc)
 
@@ -610,6 +633,11 @@ class SubAgentRunner:
             parent_run_id=parent_run_id,
             profile=profile_name,
         )
+
+        # 注销作业归属：run 已收尾，网关不该再认为本实例持有它（P4-1）。
+        # 放在终态写入之后：先让"结论"可见，再撤掉"我还在跑"的声明。
+        if owner_lease is not None:
+            await owner_lease.stop()
 
         wrapped = _wrap_result(run_id, profile_name, status, l2_text, truncated)
         return SubagentRunResult(

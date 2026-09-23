@@ -30,6 +30,10 @@ import (
 const (
 	runRecordPrefix   = "engine:run:"
 	instanceKeyPrefix = "engine:instance:"
+	// subagentRunPrefix 是「子 Agent 作业 → 实例」的归属键前缀：后台 run 的任务活在持有它的
+	// 引擎进程里，网关据此判断"这个作业是否真的有人在跑"（写入端见
+	// python-engine/app/subagent/affinity.py）。
+	subagentRunPrefix = "subagent:run:"
 	// runLookupTimeout 归属查询超时：只在审批/取消等显式要求归属的请求上调用
 	// （WithRunAffinity），必须远小于请求预算——Redis 抖动时快速回退哈希（A1）。
 	runLookupTimeout = 250 * time.Millisecond
@@ -119,8 +123,61 @@ func instanceURL(ctx context.Context, instanceID string) string {
 	return rec.URL
 }
 
-// isKnownHealthy 判断 url 是否在当前地址表中且未处于熔断冷却期。
-// 归属实例不在地址表内（已下线/注册表回退静态）时返回 false，路由回退哈希。
+// SubagentOwner 是子 Agent run 的归属记录（字段名与引擎侧
+// python-engine/app/subagent/affinity.py 写入的 JSON 逐字一致）。
+type SubagentOwner struct {
+	InstanceID string `json:"instance_id"`
+	URL        string `json:"url,omitempty"`
+	Token      string `json:"token,omitempty"`
+	RunID      string `json:"run_id,omitempty"`
+	SessionID  string `json:"session_id,omitempty"`
+	TenantID   string `json:"tenant_id,omitempty"`
+}
+
+// SubagentRunOwner 读取某子 Agent run 的归属：谁（哪个实例）正在跑它。
+//
+// 无映射（run 已收尾注销/TTL 过期）、Redis 不可用或解析失败一律 ok=false ——
+// 调用方必须把"没有归属"当成一个**明确结论**（无人认领），而不是当成查询失败，
+// 否则又会退回"取消永远返回已受理"的老问题。
+func SubagentRunOwner(ctx context.Context, runID string) (SubagentOwner, bool) {
+	var rec SubagentOwner
+	if runID == "" {
+		return rec, false
+	}
+	rdb := affinityRedisClient()
+	if rdb == nil {
+		return rec, false
+	}
+	lctx, cancel := context.WithTimeout(ctx, runLookupTimeout)
+	defer cancel()
+	data, err := rdb.Get(lctx, db.RedisKey(subagentRunPrefix)+runID).Bytes()
+	if err != nil {
+		return rec, false
+	}
+	if err := json.Unmarshal(data, &rec); err != nil || rec.InstanceID == "" {
+		return rec, false
+	}
+	return rec, true
+}
+
+// SubagentRunOwnerURL 返回持有该 run 的实例地址（归属记录里的 url 优先，
+// 其次按 instance_id 查引擎注册表）。第二个返回值为是否找到归属。
+func SubagentRunOwnerURL(ctx context.Context, runID string) (string, SubagentOwner, bool) {
+	rec, ok := SubagentRunOwner(ctx, runID)
+	if !ok {
+		return "", rec, false
+	}
+	if rec.URL != "" {
+		return rec.URL, rec, true
+	}
+	url := instanceURL(ctx, rec.InstanceID)
+	if url == "" {
+		return "", rec, false
+	}
+	return url, rec, true
+}
+
+// isKnownHealthy 判断 url 是否在当前地址表中且未处于熔断冷却期。// 归属实例不在地址表内（已下线/注册表回退静态）时返回 false，路由回退哈希。
 func (c *PythonClient) isKnownHealthy(url string) bool {
 	if url == "" {
 		return false
