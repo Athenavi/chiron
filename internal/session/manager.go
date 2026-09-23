@@ -998,6 +998,10 @@ type BranchResult struct {
 	BranchState     string
 	Copied          int
 	Condensed       bool
+	// KeepTail 是**归一化后**的原文保留条数（用户没传时是默认值）。
+	// 调用方随后要把它交给引擎做压缩：传原始参数（0 表示"用默认"）会被引擎理解成
+	// "一条原文都不保留"，语义正好相反。
+	KeepTail int
 }
 
 // BranchSession 从 srcSessionID 裁出一段上下文，落到一个**带血缘标记**的新会话。
@@ -1089,6 +1093,7 @@ func (m *Manager) BranchSession(ctx context.Context, srcSessionID, userID string
 		BranchState:     plan.State,
 		Copied:          copied,
 		Condensed:       plan.Condensed,
+		KeepTail:        plan.Limit,
 	}, nil
 }
 

@@ -345,6 +345,9 @@ func NewGatewayRouter(
 	// 会话分叉：地图"按真实分支连线"的前提（见 session_fork.go）。
 	// 放这里而不是 registerAgentRoutes：那个函数的作用域里没有 sessionMgr。
 	mux.Handle("POST /v1/conversations/{id}/fork", authMW(rlMW(ForkConversationHandler(sessionMgr))))
+	// 会话分支（裁剪 + 压缩）：前端用它创建"带核心上下文的分支"（见 session_branch.go
+	// 与 docs/session-map-branch-design.md）。与 /fork 共用 BranchSession，只差 mode。
+	mux.Handle("POST /v1/conversations/{id}/branch", authMW(rlMW(BranchConversationHandler(sessionMgr, pythonClient))))
 	registerAuthRoutes(mux, authHandler, authMW, rlMW)
 
 	// ── SSO 三方登录（公开流程 rlMW；用户自助 authMW；管理 authMW + sso:manage）──
