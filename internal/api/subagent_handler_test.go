@@ -90,8 +90,9 @@ func TestStepKindToEventTypeCoversApproval(t *testing.T) {
 		"message":     "subagent.text",
 		"tool_call":   "subagent.status",
 		"tool_result": "subagent.status",
-		"approval":    "subagent.approval",
-		"unknown":     "subagent.notice",
+		"approval": "subagent.approval",
+		"ask":      "subagent.ask",
+		"unknown":  "subagent.notice",
 	}
 	for kind, want := range cases {
 		if got := stepKindToEventType(kind); got != want {

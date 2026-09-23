@@ -40,13 +40,14 @@ EV_REASONING = "subagent.reasoning"
 EV_TEXT = "subagent.text"
 EV_NOTICE = "subagent.notice"
 EV_APPROVAL = "subagent.approval"
+EV_ASK = "subagent.ask"
 EV_DONE = "subagent.done"
 
 PREVIEW_EVENTS = frozenset({EV_STATUS, EV_REASONING, EV_TEXT, EV_NOTICE})
 TERMINAL_EVENTS = frozenset({EV_STARTED, EV_DONE})
-#: 必须送达的事件：终态（结论）与审批（用户在等它，丢了就空转到超时）。
+#: 必须送达的事件：终态（结论）、审批与提问（用户在等它，丢了就空转到超时）。
 #: 它们**绕过每秒预算**，队列满时也不会被丢弃策略牺牲。
-IMPORTANT_EVENTS = frozenset({EV_STARTED, EV_DONE, EV_APPROVAL})
+IMPORTANT_EVENTS = frozenset({EV_STARTED, EV_DONE, EV_APPROVAL, EV_ASK})
 
 # 阶段取值（与前端徽标一致）
 ST_QUEUED = "queued"
@@ -87,6 +88,10 @@ class SubagentEvent:
     tool_call_id: str = ""
     tool_name: str = ""
     tool_arguments: str = ""
+    #: 提问事件（``subagent.ask``）的建议答案：前端渲染成可点击选项。
+    #: 与主 Agent 的 ask 事件同形，因此前端可以复用同一个 AskCard。
+    options: list[str] = field(default_factory=list)
+    allow_free_text: bool = True
     ts: float = field(default_factory=time.time)
 
     def to_payload(self) -> dict[str, Any]:
@@ -121,6 +126,12 @@ class SubagentEvent:
             payload["tool_name"] = self.tool_name
         if self.tool_arguments:
             payload["tool_arguments"] = self.tool_arguments
+        # 提问字段：与主 Agent 的 ask 帧同名（question/options/allow_free_text），
+        # 前端因此能直接复用 AskCard 组件与 /v1/agent/answer 回传通道。
+        if self.type == EV_ASK:
+            payload["question"] = self.content
+            payload["options"] = list(self.options)
+            payload["allow_free_text"] = self.allow_free_text
         return payload
 
 
@@ -253,14 +264,49 @@ class EventSink:
             tool_arguments=tool_arguments,
         ))
 
+    def emit_ask(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        question: str,
+        options: list[str] | None = None,
+        allow_free_text: bool = True,
+        parent_run_id: str = "",
+        depth: int = 1,
+        profile: str = "",
+    ) -> None:
+        """子 Agent 正在向用户提问 —— **必须送达**（与审批同构）。
+
+        子 Agent 调用 ``ask_user`` 时会阻塞等答案：事件丢了用户就不知道它问了什么，
+        只能空转到超时（默认 300s）。载荷刻意与主 Agent 的 ask 帧**同名**
+        （``question`` / ``options`` / ``allow_free_text``），前端因此能复用同一个
+        ``AskCard``，回传走同一条 ``POST /v1/agent/answer``（答案是文本，不是布尔）。
+        """
+        if not tool_call_id:
+            # 没有回传凭据的提问事件是**无用**的：前端没法把答案送回去。
+            logger.warning("subagent %s: ask event without tool_call_id dropped", run_id)
+            return
+        self._push(SubagentEvent(
+            type=EV_ASK,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            depth=depth,
+            profile=profile,
+            content=question or "",
+            status=ST_RUNNING,
+            tool_call_id=tool_call_id,
+            options=[str(o) for o in (options or []) if str(o).strip()],
+            allow_free_text=bool(allow_free_text),
+        ))
+
     def emit_done(
         self,
         *,
         run_id: str,
         status: str,
         parent_run_id: str = "",
-        depth: int = 1,
-        profile: str = "",
+        depth: int = 1,        profile: str = "",
         usage: dict[str, Any] | None = None,
         summary: str = "",
     ) -> None:

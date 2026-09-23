@@ -49,6 +49,10 @@ export interface SubagentEvent {
   tool_call_id?: string
   tool_name?: string
   tool_arguments?: string
+  /** 提问事件（`subagent.ask`）：与主 Agent 的 ask 帧同名，因此可直接复用 AskCard */
+  question?: string
+  options?: string[]
+  allow_free_text?: boolean
 }
 
 export interface SubagentRunsResponse {

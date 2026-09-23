@@ -364,6 +364,9 @@ func stepKindToEventType(kind string) string {
 		// 审批必须有独立事件名：回放时前端要能重建**可点击**的审批卡片，
 		// 归到 notice 就只剩一行文字，用户看得到却批不了（等于没修）。
 		return "subagent.approval"
+	case "ask":
+		// 提问同理：回放要能还原成**可回答**的卡片（前端复用 AskCard）
+		return "subagent.ask"
 	default:
 		return "subagent.notice"
 	}

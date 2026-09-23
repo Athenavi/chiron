@@ -12,7 +12,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Empty, Spin, Tag, Tooltip, message } from 'ant-design-vue'
-import { submitApproval } from '../../api'
+import { submitAnswer, submitApproval } from '../../api'
 import {
   cancelSessionSubagents,
   cancelSubagentRun,
@@ -22,6 +22,7 @@ import {
   type SubagentRunView,
 } from '../../api/subagent'
 import SubAgentApprovalCard from './SubAgentApprovalCard.vue'
+import AskCard from './AskCard.vue'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -222,12 +223,79 @@ const pendingApprovals = computed(() => {
   )
 })
 
-/** 每个 run 待确认数（列表行上的可见标记：不点开也知道有东西在等）。 */
+/** 每个 run 待处理数（列表行上的可见标记：不点开也知道有东西在等）。 */
 const pendingByRun = computed(() => {
   const out: Record<string, number> = {}
   for (const a of pendingApprovals.value) out[a.runId] = (out[a.runId] || 0) + 1
+  for (const q of pendingQuestions.value) out[q.runId] = (out[q.runId] || 0) + 1
   return out
 })
+
+// ── 子 Agent 提问（ask）──────────────────────────────────────────────
+//
+// 与审批同构，只是回传的是**答案文本**而不是布尔 —— 因此走 /v1/agent/answer，
+// 并复用主对话流已经在用的 AskCard 组件（同一套 UI，用户不必学两次）。
+//
+// 此前子 Agent 的 ask 只发一行 notice：用户看得见却答不了，子 Agent 只能空转到超时。
+
+/** 已提交答案的 tool_call_id → 答案（避免重复提交，也给用户即时反馈） */
+const askAnswers = ref<Record<string, string>>({})
+/** 正在提交的 tool_call_id */
+const askSubmitting = ref<Set<string>>(new Set())
+/** 提交失败原因（按 tool_call_id）；非空同时表示"该提问已失效"（引擎超时/已被取走） */
+const askErrors = ref<Record<string, string>>({})
+
+/** 尚未回答、也未被终态作废的提问（子 Agent 已结束 → 卡片自动失效）。 */
+const pendingQuestions = computed(() => {
+  const terminal = new Set(
+    displayRuns.value.filter(r => TERMINAL_STATUSES.has(r.status)).map(r => r.run_id),
+  )
+  const seen = new Set<string>()
+  const out: Array<{ toolCallId: string; runId: string }> = []
+  for (const e of props.liveEvents || []) {
+    const id = e?.tool_call_id
+    if (e?.type !== 'subagent.ask' || !id || seen.has(id)) continue
+    if (askAnswers.value[id] || terminal.has(e.run_id || '')) continue
+    seen.add(id)
+    out.push({ toolCallId: id, runId: e.run_id || '' })
+  }
+  return out
+})
+
+/**
+ * 提交子 Agent 提问的答案。
+ *
+ * 与审批一样只做一次乐观标记：**状态的真相在引擎** —— 答案送达后子 Agent 继续跑，
+ * 它的后续事件会出现在同一条时间线上。
+ */
+async function resolveAsk(toolCallId: string, answer: string) {
+  const id = (toolCallId || '').trim()
+  const value = (answer || '').trim()
+  if (!id || !value || askSubmitting.value.has(id) || askAnswers.value[id]) return
+  askSubmitting.value = new Set(askSubmitting.value).add(id)
+  const errs = { ...askErrors.value }
+  delete errs[id]
+  askErrors.value = errs
+  try {
+    const ok = await submitAnswer({
+      session_id: props.sessionId || '',
+      tool_call_id: id,
+      answer: value,
+    })
+    if (!ok) {
+      askErrors.value = { ...askErrors.value, [id]: t('答案未送达（可能已超时）') }
+      return
+    }
+    askAnswers.value = { ...askAnswers.value, [id]: value }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    askErrors.value = { ...askErrors.value, [id]: detail }
+  } finally {
+    const next = new Set(askSubmitting.value)
+    next.delete(id)
+    askSubmitting.value = next
+  }
+}
 
 /** 审批参数：美化后的 JSON 已由 SubAgentApprovalCard 负责 —— 面板只做数据与回传。 */
 
@@ -619,15 +687,15 @@ onBeforeUnmount(() => {
             class="run-tail"
             :title="liveTail[run.run_id]"
           >{{ liveTail[run.run_id] }}</span>
-          <!-- 待确认审批：不点开该 run 也要看得见（点它跳到事件流里的可操作卡片） -->
+          <!-- 待处理（审批/提问）：不点开该 run 也要看得见（点它跳到可操作卡片） -->
           <button
             v-if="pendingByRun[run.run_id]"
             type="button"
             class="run-approval"
-            :title="$t('子 Agent 正在等待你的确认')"
+            :title="$t('子 Agent 正在等待你的确认或回答')"
             @click.stop="focusApprovals(run.run_id)"
           >
-            ⚠ {{ $t('待确认') }}{{ pendingByRun[run.run_id] > 1 ? ` ×${pendingByRun[run.run_id]}` : '' }}
+            ⚠ {{ $t('待处理') }}{{ pendingByRun[run.run_id] > 1 ? ` ×${pendingByRun[run.run_id]}` : '' }}
           </button>
           <span class="run-usage">↑{{ run.usage?.input_tokens || 0 }}/↓{{ run.usage?.output_tokens || 0 }}</span>
           <!-- 中止：只在运行中的 run 上出现（终态没什么可停的） -->
@@ -811,6 +879,30 @@ onBeforeUnmount(() => {
               />
             </div>
             <div
+              v-else-if="event.type === 'subagent.ask'"
+              class="line ask"
+            >
+              <AskCard
+                :question="event.question || event.content || ''"
+                :options="event.options || []"
+                :allow-free-text="event.allow_free_text !== false"
+                :expired="!!askErrors[event.tool_call_id || '']"
+                @answer="(value: string) => resolveAsk(event.tool_call_id || '', value)"
+              />
+              <div
+                v-if="askAnswers[event.tool_call_id || '']"
+                class="ask-done"
+              >
+                {{ $t('已回复') }}：{{ askAnswers[event.tool_call_id || ''] }}
+              </div>
+              <div
+                v-if="askErrors[event.tool_call_id || '']"
+                class="approval-error"
+              >
+                {{ askErrors[event.tool_call_id || ''] }}
+              </div>
+            </div>
+            <div
               v-else-if="event.type === 'subagent.status'"
               class="line status"
             >
@@ -896,6 +988,9 @@ onBeforeUnmount(() => {
 
 /* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
 .line.approval { width: 100%; }
+/* 提问卡片复用主对话流的 AskCard —— 只要撑满宽度 */
+.line.ask { width: 100%; }
+.ask-done { margin-top: 6px; font-size: 12px; color: var(--success, #16a34a); }
 
 .output { border-top: 1px solid var(--border-color, rgba(127, 127, 127, 0.24)); padding-top: 10px; }
 .output-head { display: flex; justify-content: space-between; font-weight: 600; }

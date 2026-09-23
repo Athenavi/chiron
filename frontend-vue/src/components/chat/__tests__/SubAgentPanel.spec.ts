@@ -11,7 +11,7 @@ import SubAgentPanel from '../SubAgentPanel.vue'
  *   2. 点开后有可操作的允许/拒绝按钮；
  *   3. 决定经 `/v1/agent/approval` 回传（与主 Agent 审批同一通道）。
  */
-const api = vi.hoisted(() => ({ submitApproval: vi.fn() }))
+const api = vi.hoisted(() => ({ submitApproval: vi.fn(), submitAnswer: vi.fn() }))
 vi.mock('../../../api', () => api)
 
 const subagentApi = vi.hoisted(() => ({
@@ -45,6 +45,7 @@ beforeEach(() => {
   subagentApi.listSubagentRuns.mockResolvedValue({ runs: [], source: 'redis' })
   subagentApi.getSubagentRunEvents.mockResolvedValue({ events: [APPROVAL_EVENT], source: 'redis' })
   api.submitApproval.mockResolvedValue(true)
+  api.submitAnswer.mockResolvedValue(true)
 })
 
 describe('SubAgentPanel 的审批链路', () => {
@@ -57,7 +58,7 @@ describe('SubAgentPanel 的审批链路', () => {
 
     const badge = wrapper.find('.run-approval')
     expect(badge.exists()).toBe(true)
-    expect(badge.text()).toContain('待确认')
+    expect(badge.text()).toContain('待处理')
   })
 
   it('点待确认标记 → 打开事件流并渲染可操作的审批卡片', async () => {
@@ -114,6 +115,63 @@ describe('SubAgentPanel 的审批链路', () => {
     // 决定未生效 → 不标记为已允许，用户可重试
     expect(wrapper.find('.approval-done').exists()).toBe(false)
     expect(wrapper.find('.approval-btn.allow').attributes('disabled')).toBeUndefined()
+  })
+})
+
+describe('SubAgentPanel 的提问链路', () => {
+  const ASK_EVENT = {
+    type: 'subagent.ask',
+    run_id: 'rs_1',
+    depth: 1,
+    tool_call_id: 'tc_ask',
+    question: '要发布到哪个环境？',
+    options: ['staging', 'prod'],
+    allow_free_text: true,
+  }
+
+  it('子 Agent 的提问渲染成可回答的卡片，答案送到 /v1/agent/answer', async () => {
+    subagentApi.getSubagentRunEvents.mockResolvedValue({ events: [ASK_EVENT], source: 'redis' })
+    const wrapper = mountPanel([
+      { type: 'subagent.started', run_id: 'rs_1', depth: 1 },
+      ASK_EVENT,
+    ])
+    await flushPromises()
+
+    // 提问也算"待处理"：不点开也知道它在等人
+    expect(wrapper.find('.run-approval').text()).toContain('待处理')
+
+    await wrapper.find('.run-approval').trigger('click')
+    await flushPromises()
+
+    // 复用主对话流的 AskCard（同一套 UI）
+    expect(wrapper.find('.ask-question').text()).toContain('要发布到哪个环境？')
+    await wrapper.findAll('.ask-option')[0]!.trigger('click')
+    await flushPromises()
+
+    expect(api.submitAnswer).toHaveBeenCalledWith({
+      session_id: 's1',
+      tool_call_id: 'tc_ask',
+      answer: 'staging',
+    })
+    expect(wrapper.find('.ask-done').text()).toContain('staging')
+  })
+
+  it('答案没送达时明确报错，并把卡片标为失效（不做假成功）', async () => {
+    api.submitAnswer.mockResolvedValue(false)
+    subagentApi.getSubagentRunEvents.mockResolvedValue({ events: [ASK_EVENT], source: 'redis' })
+    const wrapper = mountPanel([
+      { type: 'subagent.started', run_id: 'rs_1', depth: 1 },
+      ASK_EVENT,
+    ])
+    await flushPromises()
+    await wrapper.find('.run-approval').trigger('click')
+    await flushPromises()
+
+    await wrapper.findAll('.ask-option')[0]!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.approval-error').text()).toContain('答案未送达')
+    expect(wrapper.find('.ask-done').exists()).toBe(false)
   })
 })
 

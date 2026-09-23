@@ -475,18 +475,37 @@ class SubAgentRunner:
                             parent_run_id=parent_run_id, depth=child_depth,
                             profile=profile_name,
                         )
-                elif evt.type == "ask" and sink is not None:
-                    # ask 的回传通道是 /v1/agent/answer（答案文本而非布尔），
-                    # 前端交互控件尚未接入 —— 本轮先保证"用户看得见它在等什么"。
-                    _detail = (evt.content or evt.tool_name or "")[:500]
-                    sink.emit_progress(
-                        run_id=run_id,
-                        channel=EV_NOTICE,
-                        content=f"[子 Agent 需要补充信息] {_detail}",
-                        parent_run_id=parent_run_id,
-                        depth=child_depth,
-                        profile=profile_name,
-                    )
+                elif evt.type == "ask":
+                    # 子 Agent 的提问：与审批同构 —— 结构化事件（带 tool_call_id + 选项）
+                    # 才能让用户**回答**；此前只发一行 notice，用户看得见却答不了，
+                    # 子 Agent 只能空转到超时。答案经 POST /v1/agent/answer 回传
+                    # （文本而非布尔，因此不复用 approval 通道）。
+                    _question = (evt.content or "")[:1000]
+                    _tool_call_id = evt.tool_call_id or ""
+                    if sink is not None and _tool_call_id:
+                        sink.emit_ask(
+                            run_id=run_id,
+                            tool_call_id=_tool_call_id,
+                            question=_question,
+                            options=list(evt.options or []),
+                            parent_run_id=parent_run_id,
+                            depth=child_depth,
+                            profile=profile_name,
+                        )
+                    elif sink is not None:
+                        logger.warning(
+                            "subagent %s: ask event lacks tool_call_id; "
+                            "前端只能看到提示、无法直接回答（回退为 notice）",
+                            run_id,
+                        )
+                        sink.emit_progress(
+                            run_id=run_id,
+                            channel=EV_NOTICE,
+                            content=f"[子 Agent 需要补充信息] {_question}",
+                            parent_run_id=parent_run_id,
+                            depth=child_depth,
+                            profile=profile_name,
+                        )
                 if self._store is not None:
                     await self._store.add_step(
                         run_id,
@@ -756,7 +775,8 @@ def _step_kind(event_type: str) -> str:
         # approval 有**独立 kind**：历史回放（DB steps）据此还原成 subagent.approval，
         # 前端才能把审批卡片渲染出来（落成 notice 就只能显示一行文字，无法再批准）。
         "approval": "approval",
-        "ask": "notice",
+        # ask 同理：回放要能还原成**可回答**的提问卡片（复用 AskCard）
+        "ask": "ask",
         "guardrail_blocked": "notice",
         "trace_span": "notice",
         "done": "notice",

@@ -22,7 +22,7 @@ import asyncio
 
 import pytest
 
-from app.agent.event_sink import EV_APPROVAL, EV_NOTICE, EV_STATUS, IMPORTANT_EVENTS, ST_TOOL, EventSink
+from app.agent.event_sink import EV_APPROVAL, EV_ASK, EV_NOTICE, EV_STATUS, IMPORTANT_EVENTS, ST_TOOL, EventSink
 from app.agent.subagent_runner import SubAgentRunner, _step_kind
 
 # ── 事件面（前端契约）──
@@ -104,10 +104,54 @@ def test_approval_is_not_merged_by_merge_window():
     assert [p["tool_call_id"] for p in payloads] == ["tc_1", "tc_2"]
 
 
-def test_step_kind_keeps_approval_distinct():
-    """落库的 kind 必须是 approval：历史回放（DB steps）据此还原可点击的卡片。"""
+def test_step_kind_keeps_interactive_events_distinct():
+    """落库的 kind 必须区分 approval / ask：历史回放据此还原成**可操作**的卡片。"""
     assert _step_kind("approval") == "approval"
-    assert _step_kind("ask") == "notice"   # ask 的可交互回传是另一条通道，尚未接入
+    assert _step_kind("ask") == "ask"
+
+
+# ── ask（提问）：与审批同构，但回传的是**答案文本** ──
+
+
+def test_ask_payload_carries_question_and_options():
+    sink = EventSink()
+    sink.emit_ask(
+        run_id="rs_1",
+        tool_call_id="tc_ask",
+        question="要发布到哪个环境？",
+        options=["staging", "prod"],
+        parent_run_id="rs_0",
+        depth=2,
+    )
+    payload = sink.drain()[0].to_payload()
+
+    assert payload["type"] == EV_ASK
+    # 与主 Agent 的 ask 帧同名 —— 前端因此能直接复用 AskCard
+    assert payload["question"] == "要发布到哪个环境？"
+    assert payload["options"] == ["staging", "prod"]
+    assert payload["allow_free_text"] is True
+    assert payload["tool_call_id"] == "tc_ask"
+
+
+def test_ask_is_an_important_event():
+    assert EV_ASK in IMPORTANT_EVENTS
+
+
+def test_ask_bypasses_per_run_budget():
+    """预算用尽时普通预览可丢，**提问不可丢** —— 子 Agent 正卡在等答案上。"""
+    sink = EventSink(merge_window=0.0, per_run_budget=1)
+    for _ in range(5):
+        sink.emit_progress(run_id="rs_1", channel=EV_STATUS, status=ST_TOOL)
+    sink.emit_ask(run_id="rs_1", tool_call_id="tc_ask", question="选哪个环境？")
+
+    assert EV_ASK in [e.type for e in sink.drain()]
+
+
+def test_ask_without_credentials_is_not_emitted():
+    """没有 tool_call_id 的提问事件是**无用**的：前端没法把答案送回去。"""
+    sink = EventSink()
+    sink.emit_ask(run_id="rs_1", tool_call_id="", question="选哪个环境？")
+    assert sink.drain() == []
 
 
 # ── runner 转发（端到端一半：引擎侧）──
@@ -191,15 +235,41 @@ async def test_runner_degrades_to_notice_without_tool_call_id(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_runner_forwards_ask_as_notice(monkeypatch):
-    """ask 暂时只保证"看得见"（其回传通道 /v1/agent/answer 尚未接入前端控件）。"""
+    """子 Agent 的提问必须**结构化**转发（带 question + options）—— 用户才能回答。
+
+    此前只发一行 notice：用户看得见却答不了，子 Agent 只能空转到超时。
+    """
     from app.agent import runtime as runtime_mod
 
-    ask = runtime_mod.AgentEvent(type="ask", tool_call_id="tc_2", content="选哪个环境？")
+    ask = runtime_mod.AgentEvent(
+        type="ask", tool_call_id="tc_2", content="选哪个环境？",
+        options=["staging", "prod"],
+    )
     runner, sink = _runner_with_events(monkeypatch, [ask])
 
     await runner.run("问一句", profile_ref="", mode="normal", max_turns=2)
 
-    notices = [e.to_payload() for e in sink.drain() if e.type == EV_NOTICE]
+    payloads = [e.to_payload() for e in sink.drain()]
+    asks = [p for p in payloads if p["type"] == EV_ASK]
+    assert asks, "提问必须结构化送出去（否则用户无法回答）"
+    assert asks[0]["question"] == "选哪个环境？"
+    assert asks[0]["options"] == ["staging", "prod"]
+    assert asks[0]["tool_call_id"] == "tc_2"
+
+
+@pytest.mark.asyncio
+async def test_runner_degrades_ask_to_notice_without_tool_call_id(monkeypatch):
+    """引擎没给 id 时仍要让用户看见它在等什么（可见地降级），而不是静默不发。"""
+    from app.agent import runtime as runtime_mod
+
+    ask = runtime_mod.AgentEvent(type="ask", tool_call_id="", content="选哪个环境？")
+    runner, sink = _runner_with_events(monkeypatch, [ask])
+
+    await runner.run("问一句", profile_ref="", mode="normal", max_turns=2)
+
+    payloads = [e.to_payload() for e in sink.drain()]
+    assert not [p for p in payloads if p["type"] == EV_ASK]
+    notices = [p for p in payloads if p["type"] == EV_NOTICE]
     assert notices and "需要补充信息" in notices[0]["content"]
 
 
