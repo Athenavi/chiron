@@ -21,6 +21,7 @@ import json
 import logging
 from typing import Any
 
+from app.observability.metrics import SUBAGENT_PERSIST_FAILED
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -202,6 +203,9 @@ class SubagentRuntimeCache:
     def _degrade(self, where: str, exc: Exception) -> None:
         """Redis 不可用/命令不支持：记一次 warning 后本进程不再重试。"""
         message = str(exc)
+        # Redis 是**非权威**面（权威状态在 PG），但它承载前端看到的进度与摘要 ——
+        # 它坏掉时表现为"前端什么都没有"，必须能被计数，否则只能靠读日志发现。
+        SUBAGENT_PERSIST_FAILED.labels(component="redis", op=where).inc()
         if not self._broken:
             logger.warning("subagent 运行期缓存不可用（%s）: %s —— 本次运行仅落 PG", where, message[:200])
         self._broken = True

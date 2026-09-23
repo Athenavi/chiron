@@ -83,8 +83,24 @@ func TestNormalizeRunRowContract(t *testing.T) {
 	}
 }
 
-func TestStringOfAndIntOfTolerateDriverTypes(t *testing.T) {
-	if stringOf(nil) != "" || stringOf("x") != "x" {
+// 回放契约：DB steps 的 kind → 前端事件名。审批必须是**独立**事件名 ——
+// 否则刷新页面后审批卡片退化成一行文字（看得到、批不了）。
+func TestStepKindToEventTypeCoversApproval(t *testing.T) {
+	cases := map[string]string{
+		"message":     "subagent.text",
+		"tool_call":   "subagent.status",
+		"tool_result": "subagent.status",
+		"approval":    "subagent.approval",
+		"unknown":     "subagent.notice",
+	}
+	for kind, want := range cases {
+		if got := stepKindToEventType(kind); got != want {
+			t.Errorf("stepKindToEventType(%q) = %q, want %q", kind, got, want)
+		}
+	}
+}
+
+func TestStringOfAndIntOfTolerateDriverTypes(t *testing.T) {	if stringOf(nil) != "" || stringOf("x") != "x" {
 		t.Error("stringOf basic cases failed")
 	}
 	if stringOf(int64(7)) != "7" || stringOf(3.5) != "3.5" {

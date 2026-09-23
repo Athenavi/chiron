@@ -12,11 +12,26 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
 
+from app.observability.metrics import (
+    SUBAGENT_PERSIST_FAILED,
+    SUBAGENT_RUN_STARTED,
+    SUBAGENT_RUN_TERMINAL,
+    SUBAGENT_RUN_UNFINALIZED,
+)
 from app.subagent.redact import redact_payload, redact_text
 
 logger = logging.getLogger(__name__)
+
+#: 终态白名单：指标标签只允许这几个值，未知状态归到 "other"。
+#: 标签必须有界 —— 否则一次笔误（例如 status="Completed"）就会在 Prometheus 里
+#: 分裂出新的时间序列，把"状态机是否收敛"的统计彻底打乱。
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "lost"})
+
+
+def _status_label(status: str) -> str:
+    value = (status or "").strip().lower()
+    return value if value in _TERMINAL_STATUSES else "other"
 
 # 单步内容入库上限（超出截断并置 truncated，与设计文档一致）
 STEP_MAX_CHARS = 32 * 1024
@@ -96,6 +111,10 @@ class SubagentRunStore:
         self._redacted_hits: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._broken = False  # 表缺失等不可恢复错误：本次进程内不再尝试
+        #: 本实例已入 running 但尚未写终态的 run（用于 unfinalized 指标）。
+        #: 用集合而不是裸计数器：终态可能被写两次（正常收尾 + 取消收尾竞争），
+        #: 集合能保证同一个 run 只减一次，指标不会变成负数。
+        self._unfinalized: set[str] = set()
 
     @property
     def available(self) -> bool:
@@ -149,6 +168,8 @@ class SubagentRunStore:
             )
         except Exception as exc:  # noqa: BLE001
             self._degrade("start_run", exc)
+            return
+        self._mark_started(run_id)
 
     async def add_step(
         self,
@@ -247,6 +268,8 @@ class SubagentRunStore:
             )
         except Exception as exc:  # noqa: BLE001
             self._degrade("finish_run", exc)
+            return
+        self._mark_finalized(run_id, status)
 
     async def reap_stale_runs(self, *, max_age_hours: int) -> int:
         """僵尸收口：把"还在 running 但早已超龄"的 run 标记为 ``lost``。
@@ -266,16 +289,40 @@ class SubagentRunStore:
             self._degrade("reap_stale_runs", exc)
             return 0
         # asyncpg 的 execute 返回 "UPDATE n"；解析失败只影响日志，不影响结果
+        count = 0
         try:
-            return int(str(result).split()[-1])
+            count = int(str(result).split()[-1])
         except Exception:  # noqa: BLE001
-            return 0
+            count = 0
+        if count > 0:
+            # 收口是**状态转移**（running → lost），必须计入指标 —— 否则
+            # "收口器是否在干活"仍然只能靠查 DB。这里不递减 unfinalized：
+            # 被收口的 run 由**上一个进程**启动，不在本实例的集合里。
+            SUBAGENT_RUN_TERMINAL.labels(status="lost").inc(count)
+        return count
+
+    # ── 指标记账（只在权威写入成功后调用）──
+
+    def _mark_started(self, run_id: str) -> None:
+        SUBAGENT_RUN_STARTED.inc()
+        self._unfinalized.add(run_id)
+        SUBAGENT_RUN_UNFINALIZED.set(len(self._unfinalized))
+
+    def _mark_finalized(self, run_id: str, status: str) -> None:
+        SUBAGENT_RUN_TERMINAL.labels(status=_status_label(status)).inc()
+        if run_id not in self._unfinalized:
+            # 未曾由本实例登记（例如表缺失期间启动、或进程刚重启）：不减，
+            # 否则 unfinalized 会变成负数，把一个可告警信号变成噪声。
+            return
+        self._unfinalized.discard(run_id)
+        SUBAGENT_RUN_UNFINALIZED.set(len(self._unfinalized))
 
     # ── helpers ──
 
     def _degrade(self, where: str, exc: Exception) -> None:
         """表缺失等错误：记一次 warning 后本进程不再重试（避免刷日志）。"""
         message = str(exc)
+        SUBAGENT_PERSIST_FAILED.labels(component="db", op=where).inc()
         if "does not exist" in message or "UndefinedTable" in message:
             if not self._broken:
                 logger.warning(

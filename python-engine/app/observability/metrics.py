@@ -111,6 +111,37 @@ QUEUE_RETRY_TOTAL = Counter(
     ["task_type"],
 )
 
+# ── 子 Agent 作业级（P1-3：状态转移的观测面）──
+#
+# 为什么需要：子 Agent 的终态写入点不止一处（正常收尾 / 取消收尾 / 超时定时器 /
+# 僵尸收口器），历史上多次出现"某条路径忘了写终态"——DB 里留下 status='running'，
+# 前端永久显示"运行中"，而**没有任何指标能反映它**（只能靠人去看 DB）。
+# 这几项把"状态机是否收敛"变成可告警信号：
+#
+#   started - terminal{所有 status} ≈ 仍在运行的 run 数（本实例视角）
+#
+# 这些数只在**权威写入点**（subagent_runs 真写成功）递增，因此指标不会说谎：
+# 指标涨了而 DB 没变，就说明持久化本身出了问题（见 SUBAGENT_PERSIST_FAILED）。
+SUBAGENT_RUN_STARTED = Counter(
+    "subagent_run_started_total",
+    "Subagent runs that entered 'running' (counted only when the DB row was written)",
+)
+SUBAGENT_RUN_TERMINAL = Counter(
+    "subagent_run_terminal_total",
+    "Subagent runs that reached a terminal state",
+    ["status"],  # completed / failed / cancelled / lost
+)
+SUBAGENT_RUN_UNFINALIZED = Gauge(
+    "subagent_runs_unfinalized",
+    "Runs this instance started but has not finalized (persistent growth means a "
+    "finalize path is missing; see docs/subagent-interaction-redesign.md P1-3)",
+)
+SUBAGENT_PERSIST_FAILED = Counter(
+    "subagent_persist_failed_total",
+    "Subagent state persistence failures (run state may be lost permanently)",
+    ["component", "op"],  # component: db / redis
+)
+
 # ── 实例级 ──
 INSTANCE_ACTIVE_REQUESTS = Gauge(
     "instance_active_requests",

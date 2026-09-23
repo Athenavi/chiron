@@ -126,6 +126,54 @@ def _wrap_result(run_id: str, profile: str, status: str, output: str, truncated:
     ])
 
 
+async def _persist_terminal_to_cache(
+    cache,
+    *,
+    run_id: str,
+    tenant: str,
+    root_session_id: str,
+    status: str,
+    summary: str,
+    usage: dict[str, Any] | None = None,
+    depth: int = 1,
+    parent_run_id: str = "",
+    profile: str = "",
+) -> None:
+    """把终态写进运行期缓存：run Hash **与整树骨架**。
+
+    为什么必须抽成一个函数（P1-3）：终态在缓存里有**两个**面 ——
+    ``subagent:{tenant}:run:{id}``（详情）与 ``subagent:{tenant}:tree:{session}``（整树骨架，
+    即 ``GET /v1/subagent/runs`` 的数据源）。此前正常收尾写了两者，而**取消收尾只写了前者**，
+    于是被取消的 run 在侧边栏/树里一直停在 ``running``：前端永久转圈的来源之一。
+    两条收尾路径各写各的，就是"某条路径忘了写"的典型形态。
+
+    统一入口后，任何新收尾路径只要调它一次，就不会出现"只更新了一个面"。
+    """
+    if cache is None:
+        return
+    await cache.update_status(
+        run_id=run_id,
+        tenant=tenant,
+        status=status,
+        summary=summary,
+        usage=usage,
+        result_ref=run_id,
+    )
+    if not root_session_id:
+        return
+    await cache.update_tree_summary(
+        tenant=tenant,
+        root_session_id=root_session_id,
+        run_id=run_id,
+        summary=summary,
+        status=status,
+        depth=depth,
+        parent_run_id=parent_run_id,
+        profile=profile,
+        usage=usage,
+    )
+
+
 class SubAgentRunner:
     """执行一次（或一组）子 Agent 委派。
 
@@ -364,8 +412,8 @@ class SubAgentRunner:
                     sink.emit_progress(run_id=run_id, channel=EV_STATUS, status=ST_TOOL,
                                        parent_run_id=parent_run_id, depth=child_depth,
                                        profile=profile_name)
-                elif evt.type in ("approval", "ask") and sink is not None:
-                    # 子 Agent 的**交互式**事件必须转发出去。
+                elif evt.type == "approval":
+                    # 子 Agent 的**交互式**事件必须转发出去，而且要能**回传决定**。
                     #
                     # 此前这里只转发 text / error / tool_call，approval / ask 仅被记成 step ——
                     # 后果是子 Agent 请求审批时前端**完全看不到**，它自己则空转到 runtime 的
@@ -374,15 +422,43 @@ class SubAgentRunner:
                     # （子 Agent 默认 tools_mode=auto，而 shell_exec 在 auto 下就需要确认，
                     #  所以这条路径几乎每次调用命令类工具都会走到。）
                     #
-                    # 这里用 EV_NOTICE 是为了兼容现有前端（它已渲染 notice 通道）。
-                    # 要做到"用户能直接批准/拒绝"，还需前端渲染交互控件并把决定回传 ——
-                    # 属于 P3 的后续工作（见 docs/subagent-interaction-redesign.md）。
-                    _what = "需要确认" if evt.type == "approval" else "需要补充信息"
+                    # 现在发**结构化**的 subagent.approval（带 tool_call_id）：前端渲染审批卡片，
+                    # 用户点"允许/拒绝"后调 POST /v1/agent/approval —— 与主 Agent 的审批
+                    # 走同一条通道（跨副本由 runtime 的 Redis 决策键兜住）。
+                    # 携带不了 tool_call_id 时退回 notice（可见地降级，而不是静默不发）。
+                    _tool_call_id = evt.tool_call_id or ""
+                    _detail = (evt.content or evt.tool_name or "")[:500]
+                    if sink is not None and _tool_call_id:
+                        sink.emit_approval(
+                            run_id=run_id,
+                            tool_call_id=_tool_call_id,
+                            tool_name=evt.tool_name or "",
+                            tool_arguments=evt.tool_arguments or "",
+                            content=_detail,
+                            parent_run_id=parent_run_id,
+                            depth=child_depth,
+                            profile=profile_name,
+                        )
+                    elif sink is not None:
+                        logger.warning(
+                            "subagent %s: approval event lacks tool_call_id; "
+                            "前端只能看到提示、无法直接批准（回退为 notice）",
+                            run_id,
+                        )
+                        sink.emit_progress(
+                            run_id=run_id, channel=EV_NOTICE,
+                            content=f"[子 Agent 需要确认] {_detail}",
+                            parent_run_id=parent_run_id, depth=child_depth,
+                            profile=profile_name,
+                        )
+                elif evt.type == "ask" and sink is not None:
+                    # ask 的回传通道是 /v1/agent/answer（答案文本而非布尔），
+                    # 前端交互控件尚未接入 —— 本轮先保证"用户看得见它在等什么"。
                     _detail = (evt.content or evt.tool_name or "")[:500]
                     sink.emit_progress(
                         run_id=run_id,
                         channel=EV_NOTICE,
-                        content=f"[子 Agent {_what}] {_detail}",
+                        content=f"[子 Agent 需要补充信息] {_detail}",
                         parent_run_id=parent_run_id,
                         depth=child_depth,
                         profile=profile_name,
@@ -441,15 +517,21 @@ class SubAgentRunner:
                             steps=steps,
                             error=cancel_reason,
                         )
-                    if cache is not None:
-                        await cache.update_status(
-                            run_id=run_id,
-                            tenant=cache_tenant,
-                            status="cancelled",
-                            summary=cancel_summary,
-                            usage={"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps},
-                            result_ref=run_id,
-                        )
+                    # 统一入口：run Hash + 整树骨架一起写（此前这里漏了整树骨架，
+                    # 被取消的 run 因此在侧边栏/树里停在 running）。
+                    await _persist_terminal_to_cache(
+                        cache,
+                        run_id=run_id,
+                        tenant=cache_tenant,
+                        root_session_id=cache_root,
+                        status="cancelled",
+                        summary=cancel_summary,
+                        usage={"input_tokens": in_tokens, "output_tokens": out_tokens,
+                               "steps": steps},
+                        depth=child_depth,
+                        parent_run_id=parent_run_id,
+                        profile=profile_name,
+                    )
                 except Exception as exc:  # noqa: BLE001 - 收尾失败不得掩盖取消语义
                     logger.warning("subagent %s cancel-finalize failed: %s", run_id, exc)
 
@@ -515,14 +597,19 @@ class SubAgentRunner:
                 summary=(summary or "")[:2000],
             )
 
-        # 运行期缓存收尾：状态 + 摘要 + 用量（侧边栏与递归树直接读，不必回 PG）
-        if cache is not None:
-            await cache.update_status(run_id=run_id, tenant=cache_tenant, status=status,
-                                      summary=summary, usage=usage, result_ref=run_id)
-            await cache.update_tree_summary(tenant=cache_tenant, root_session_id=cache_root,
-                                            run_id=run_id, summary=summary, status=status,
-                                            depth=child_depth, parent_run_id=parent_run_id,
-                                            profile=profile_name, usage=usage)
+        # 运行期缓存收尾：状态 + 摘要 + 用量 + 整树骨架（与取消路径同一个入口）
+        await _persist_terminal_to_cache(
+            cache,
+            run_id=run_id,
+            tenant=cache_tenant,
+            root_session_id=cache_root,
+            status=status,
+            summary=summary,
+            usage=usage,
+            depth=child_depth,
+            parent_run_id=parent_run_id,
+            profile=profile_name,
+        )
 
         wrapped = _wrap_result(run_id, profile_name, status, l2_text, truncated)
         return SubagentRunResult(
@@ -628,7 +715,9 @@ def _step_kind(event_type: str) -> str:
         "tool_call": "tool_call",
         "tool_result": "tool_result",
         "error": "error",
-        "approval": "notice",
+        # approval 有**独立 kind**：历史回放（DB steps）据此还原成 subagent.approval，
+        # 前端才能把审批卡片渲染出来（落成 notice 就只能显示一行文字，无法再批准）。
+        "approval": "approval",
         "ask": "notice",
         "guardrail_blocked": "notice",
         "trace_span": "notice",

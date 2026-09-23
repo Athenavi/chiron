@@ -40,6 +40,15 @@ export interface SubagentEvent {
   content?: string
   truncated?: boolean
   usage?: SubagentUsage
+  /**
+   * 审批事件（`subagent.approval`）的回传凭据。
+   *
+   * 只认这一组字段名（引擎 payload 与 DB 回放行都用这些名字）：回放路径会把 payload
+   * 的 `id` 覆盖成 Redis Stream 消息 id，按 `id` 回传审批决定必然失败。
+   */
+  tool_call_id?: string
+  tool_name?: string
+  tool_arguments?: string
 }
 
 export interface SubagentRunsResponse {

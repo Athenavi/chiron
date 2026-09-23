@@ -12,6 +12,7 @@
  */
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Empty, Spin, Tag, Tooltip } from 'ant-design-vue'
+import { submitApproval } from '../../api'
 import {
   cancelSessionSubagents,
   cancelSubagentRun,
@@ -20,6 +21,7 @@ import {
   type SubagentEvent,
   type SubagentRunView,
 } from '../../api/subagent'
+import SubAgentApprovalCard from './SubAgentApprovalCard.vue'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -169,9 +171,115 @@ watch(displayRuns, (list) => {
   if (next.size !== cancelling.value.size) cancelling.value = next
 })
 
+// ── 子 Agent 审批（P3-后续）──────────────────────────────────────────────
+//
+// 子 Agent 默认 tools_mode=auto，而 shell_exec 这类工具在 auto 下就需要确认 ——
+// 所以"子 Agent 请求审批"几乎每次调用命令类工具都会发生。此前它只以一行 notice
+// 出现，用户能看见却**没有任何办法批准**：子 Agent 空转到 300s 超时后以
+// "approval timed out" 被拒。这里把 approval 事件渲染成**可点击**的卡片，
+// 决定经与主 Agent 完全相同的通道回传（POST /v1/agent/approval）。
+//
+// 回传凭据只认 `tool_call_id`（见 api/subagent.ts 的说明）。
+
+/** 已提交决定的 tool_call_id → 本地结论（避免重复提交，也给用户一个即时反馈） */
+const approvalDecisions = ref<Record<string, 'approved' | 'denied'>>({})
+/** 正在提交的 tool_call_id */
+const approvalSubmitting = ref<Set<string>>(new Set())
+/** 提交失败的原因（按 tool_call_id），失败时保留按钮让用户重试 —— 不做假成功 */
+const approvalErrors = ref<Record<string, string>>({})
+
+/** 收集所有已到达的 approval 事件（历史回放 + 实时），按 tool_call_id 去重且保序。 */
+const approvalEvents = computed(() => {
+  const seen = new Set<string>()
+  const out: Array<{ toolCallId: string; runId: string; toolName: string; args: string; content: string }> = []
+  for (const e of props.liveEvents || []) {
+    const id = e?.tool_call_id
+    if (e?.type !== 'subagent.approval' || !id || seen.has(id)) continue
+    seen.add(id)
+    out.push({
+      toolCallId: id,
+      runId: e.run_id || '',
+      toolName: e.tool_name || '',
+      args: e.tool_arguments || '',
+      content: e.content || '',
+    })
+  }
+  return out
+})
+
+/** 尚未决定、也未被终态作废的审批（子 Agent 已结束 → 卡片自动消失）。 */
+const pendingApprovals = computed(() => {
+  const terminal = new Set(
+    displayRuns.value.filter(r => TERMINAL_STATUSES.has(r.status)).map(r => r.run_id),
+  )
+  return approvalEvents.value.filter(
+    a => !approvalDecisions.value[a.toolCallId] && !terminal.has(a.runId),
+  )
+})
+
+/** 每个 run 待确认数（列表行上的可见标记：不点开也知道有东西在等）。 */
+const pendingByRun = computed(() => {
+  const out: Record<string, number> = {}
+  for (const a of pendingApprovals.value) out[a.runId] = (out[a.runId] || 0) + 1
+  return out
+})
+
+/** 审批参数：美化后的 JSON 已由 SubAgentApprovalCard 负责 —— 面板只做数据与回传。 */
+
+/**
+ * 提交子 Agent 审批决定。
+ *
+ * 只做一次乐观标记：**状态真相在引擎**（批准后子 Agent 会继续产出事件；
+ * 拒绝则它收到 error 并在结果里体现），前端不伪造后续状态。
+ */
+async function resolveApproval(a: { toolCallId: string }, approved: boolean) {
+  const id = a.toolCallId
+  if (!id || approvalSubmitting.value.has(id) || approvalDecisions.value[id]) return
+  approvalSubmitting.value = new Set(approvalSubmitting.value).add(id)
+  const errors = { ...approvalErrors.value }
+  delete errors[id]
+  approvalErrors.value = errors
+  try {
+    const ok = await submitApproval({
+      session_id: props.sessionId || '',
+      tool_call_id: id,
+      approved,
+    })
+    if (!ok) {
+      // 引擎返回 ok=false：通常是超时（决定到得太晚）或该调用已不在等待。
+      // 明确说出来，而不是把卡片默默撤掉（用户会以为点生效了）。
+      approvalErrors.value = { ...approvalErrors.value, [id]: t('审批未生效（可能已超时）') }
+      return
+    }
+    approvalDecisions.value = { ...approvalDecisions.value, [id]: approved ? 'approved' : 'denied' }
+  } catch (err) {
+    const detail = err instanceof Error ? err.message : String(err)
+    approvalErrors.value = { ...approvalErrors.value, [id]: detail }
+  } finally {
+    const next = new Set(approvalSubmitting.value)
+    next.delete(id)
+    approvalSubmitting.value = next
+  }
+}
+
+/** 点列表行上的"待确认"标记：选中该 run 并切到「输出」（可操作卡片在那里）。 */
+function focusApprovals(runId: string) {
+  saTab.value = 'output'
+  void selectRun(runId)
+}
+
 const visibleRuns = computed(() => displayRuns.value.filter(r => !hiddenByAncestor(r)))
 
-const selectedRun = computed(() => runs.value.find(r => r.run_id === selectedRunId.value) || null)
+const selectedRun = computed<SubagentRunView | null>(() => {
+  const id = selectedRunId.value
+  if (!id) return null
+  const known = runs.value.find(r => r.run_id === id)
+  if (known) return known
+  // 回退到**实时事件合成的条目**：后台 run 往往还没落进 GET /v1/subagent/runs，
+  // 而「输出」区（审批卡片就在这里）由 selectedRun 决定是否渲染 ——
+  // 只认 API 会让"点得开待确认标记、却看不到卡片"，等于又回到批不了的状态。
+  return (liveRuns.value.find(r => r.run_id === id) as SubagentRunView | undefined) ?? null
+})
 
 /** 选中 run 的事件流 = 历史（回放）+ 实时（本会话累积中属于该 run 的部分）。 */
 const selectedEvents = computed<SubagentEvent[]>(() => {
@@ -480,6 +588,16 @@ onBeforeUnmount(() => {
             class="run-tail"
             :title="liveTail[run.run_id]"
           >{{ liveTail[run.run_id] }}</span>
+          <!-- 待确认审批：不点开该 run 也要看得见（点它跳到事件流里的可操作卡片） -->
+          <button
+            v-if="pendingByRun[run.run_id]"
+            type="button"
+            class="run-approval"
+            :title="$t('子 Agent 正在等待你的确认')"
+            @click.stop="focusApprovals(run.run_id)"
+          >
+            ⚠ {{ $t('待确认') }}{{ pendingByRun[run.run_id] > 1 ? ` ×${pendingByRun[run.run_id]}` : '' }}
+          </button>
           <span class="run-usage">↑{{ run.usage?.input_tokens || 0 }}/↓{{ run.usage?.output_tokens || 0 }}</span>
           <!-- 中止：只在运行中的 run 上出现（终态没什么可停的） -->
           <button
@@ -648,6 +766,20 @@ onBeforeUnmount(() => {
               {{ event.content }}
             </div>
             <div
+              v-else-if="event.type === 'subagent.approval'"
+              class="line approval"
+            >
+              <SubAgentApprovalCard
+                :tool-name="event.tool_name || ''"
+                :args="event.tool_arguments || ''"
+                :content="event.content || ''"
+                :submitting="approvalSubmitting.has(event.tool_call_id || '')"
+                :decision="approvalDecisions[event.tool_call_id || ''] || ''"
+                :error="approvalErrors[event.tool_call_id || ''] || ''"
+                @decide="(approved: boolean) => resolveApproval({ toolCallId: event.tool_call_id || '' }, approved)"
+              />
+            </div>
+            <div
               v-else-if="event.type === 'subagent.status'"
               class="line status"
             >
@@ -723,6 +855,16 @@ onBeforeUnmount(() => {
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
   font-size: 11px; color: var(--text-tertiary, #8c8c8c);
 }
+
+/* 待确认标记：让"有东西在等我"在不点开该 run 时也看得见 */
+.run-approval {
+  flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
+  font-size: 11px; color: var(--warning, #f59e0b);
+  background: transparent; border: 1px solid var(--warning, #f59e0b); border-radius: 4px;
+}
+
+/* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
+.line.approval { width: 100%; }
 
 .output { border-top: 1px solid var(--border-color, rgba(127, 127, 127, 0.24)); padding-top: 10px; }
 .output-head { display: flex; justify-content: space-between; font-weight: 600; }

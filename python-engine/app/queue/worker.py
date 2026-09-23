@@ -71,6 +71,69 @@ return 0
 """
 
 
+# ── 延迟重试（P2-3）─────────────────────────────────────────────────────────
+#
+# 为什么需要：`agent_followup` 最常见的失败不是"任务本身有问题"，而是**父会话此刻正忙**
+# （会话运行锁 409）。原来的重试是"立刻放回队尾"——3 次重试预算在毫秒级耗尽，随后进 DLQ，
+# 而需要等的条件通常要几十秒甚至几分钟才释放。结果就是：子 Agent 的结论明明已经落库，
+# 却因为一次锁竞争再也回不到主对话。
+# 这里给"等一会儿再试"一条独立通路：延迟集合（ZSET，score=可执行时间），
+# 到点由 `_promote_delayed` 搬回主队列，**不消耗重试预算**（它没有失败），
+# 由 deadline 与 delay 次数上限兜底，超限则进 DLQ（可见、可人工重投）。
+DELAYED_ZSET = rkey("engine:tasks:delayed")
+DELAY_LOOP_SECS = float(os.getenv("QUEUE_DELAY_LOOP_SECS", "15"))
+DELAY_BASE_SECONDS = float(os.getenv("QUEUE_DELAY_BASE_SECONDS", "20"))
+DELAY_MAX_SECONDS = float(os.getenv("QUEUE_DELAY_MAX_SECONDS", "300"))
+DELAY_MAX_ATTEMPTS = int(os.getenv("QUEUE_DELAY_MAX_ATTEMPTS", "12"))
+DELAY_BATCH = 50
+
+
+class RetryLaterError(RuntimeError):
+    """"现在不行，等一会儿再来"——**不是失败**。
+
+    抛出它的 handler 表示：条件（会话锁、并发配额、上游暂时不可达）会自行好转，
+    应当延迟重投而不是消耗重试预算、更不该进 DLQ。
+    """
+
+    def __init__(self, message: str, delay_seconds: float = 0.0) -> None:
+        super().__init__(message)
+        #: 退避基值（秒）。0 表示用全局默认基值；上游给了 Retry-After 时用它。
+        self.delay_seconds = float(delay_seconds or 0)
+
+
+def _as_int(value, default: int = 0) -> int:
+    """把消息字段（bytes / str / int / None）解析成 int，解析不了回落默认值。
+
+    队列消息来自 Redis，字段可能是 bytes、str 或干脆缺失；直接 ``int()`` 会抛异常，
+    而那等于把"一条字段脏掉的消息"变成"延迟重试逻辑本身崩溃"。
+    """
+    if isinstance(value, (bytes, bytearray)):
+        try:
+            value = value.decode()
+        except Exception:  # noqa: BLE001 - 解不出来就按缺失处理
+            return default
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return default
+
+
+def _retry_after(resp) -> float:
+    """读上游的 ``Retry-After``（秒）。解析不了就返回 0（用默认退避基值）。
+
+    网关目前不发这个头，但读它是为了让"上游明确告诉我们等多久"时不必猜。
+    """
+    raw = ""
+    try:
+        raw = str(resp.headers.get("retry-after") or "").strip()
+    except Exception:  # noqa: BLE001 - 头不可读时按默认退避处理
+        return 0.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        return 0.0
+
+
 class QueueWorker:
     """
     Redis Streams 消费者
@@ -103,6 +166,7 @@ class QueueWorker:
         self._in_flight: set[asyncio.Task] = set()
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
         self._reclaim_task: asyncio.Task | None = None
+        self._delay_task: asyncio.Task | None = None
 
     async def start(self) -> None:
         """启动消费者"""
@@ -132,6 +196,10 @@ class QueueWorker:
         self._reclaim_task = asyncio.create_task(self._reclaim_loop())
         logger.info("Queue worker reclaim loop started (idle=%ds)", CLAIM_MIN_IDLE_MS // 1000)
 
+        # 延迟重试：把到期的"等一会儿再来"任务搬回主队列
+        self._delay_task = asyncio.create_task(self._delay_loop())
+        logger.info("Queue worker delayed-retry loop started (every %.0fs)", DELAY_LOOP_SECS)
+
         while self._running:
             try:
                 await self._consume_batch()
@@ -147,6 +215,9 @@ class QueueWorker:
         if self._reclaim_task is not None:
             self._reclaim_task.cancel()
             self._reclaim_task = None
+        if self._delay_task is not None:
+            self._delay_task.cancel()
+            self._delay_task = None
         logger.info(
             "Queue worker stopping, waiting for %d in-flight tasks...",
             len(self._in_flight),
@@ -305,10 +376,15 @@ class QueueWorker:
             retry = 1
         fields[b"retry_count"] = str(retry).encode()
         if retry > MAX_RETRIES:
+            raw_type = fields.get(b"task_type", fields.get("task_type", ""))
+            task_type = raw_type.decode() if isinstance(raw_type, bytes) else str(raw_type or "")
             try:
                 await self._redis.xadd(DLQ_STREAM, fields, maxlen=DLQ_STREAM_MAXLEN)
                 await self._redis.xack(TASK_STREAM, GROUP_NAME, msg_id)
-                QUEUE_DLQ_TOTAL.inc()
+                # 必须带 task_type 标签：QUEUE_DLQ_TOTAL 定义了该标签，无标签调用会抛
+                # ValueError，被下面的 except 吞掉 —— 结果是"进 DLQ"这件事在指标里
+                # 完全不可见（这正是"要么可见地失败"要消灭的形态）。
+                QUEUE_DLQ_TOTAL.labels(task_type=task_type).inc()
                 logger.warning("reclaimed message exceeded retries, moved to DLQ: %s", msg_id)
             except Exception as e:  # noqa: BLE001
                 logger.warning("reclaimed DLQ move failed: %s", e)
@@ -465,6 +541,16 @@ class QueueWorker:
                 "Task completed: id=%s type=%s (%.2fs)", task_id, task_type, elapsed
             )
 
+        except RetryLaterError as e:
+            # "等一会儿再试"：条件（会话锁 / 并发配额 / 上游暂时不可达）会自行好转。
+            # 既不是失败，就不能走下面的"消耗重试预算"路径 —— 立即重投的预算会在
+            # 毫秒级耗尽并进 DLQ，而这里要等的条件通常要几十秒才释放。
+            logger.warning(
+                "Task deferred: id=%s type=%s reason=%s", task_id, task_type, str(e)[:200]
+            )
+            await idempotency.fail(idem_key)
+            await self._defer_message(stream_id, fields, task_id, task_type, payload_raw, e)
+
         except Exception as e:
             logger.error("Task failed: id=%s type=%s error=%s", task_id, task_type, e)
             # 标记失败：幂等键仍可重试（claim 只拒绝 completed）
@@ -472,18 +558,8 @@ class QueueWorker:
 
             if retry_count >= MAX_RETRIES:
                 # 移入死信队列
-                await self._redis.xadd(
-                    DLQ_STREAM,
-                    {
-                        "task_id": task_id,
-                        "task_type": task_type,
-                        "payload": payload_raw,
-                        "error": str(e),
-                        "retry_count": str(retry_count),
-                    },
-                )
+                await self._move_to_dlq(task_id, task_type, payload_raw, str(e), retry_count)
                 await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
-                QUEUE_DLQ_TOTAL.labels(task_type=task_type).inc()
                 logger.warning(
                     "Task moved to DLQ: id=%s (retries=%d)", task_id, retry_count
                 )
@@ -507,6 +583,153 @@ class QueueWorker:
                     retry_count,
                     MAX_RETRIES,
                 )
+
+    # ── 延迟重试与死信 ──
+
+    async def _move_to_dlq(
+        self, task_id: str, task_type: str, payload_raw: str, error: str, retry_count: int | str
+    ) -> None:
+        """把任务移进死信队列（可见、可人工重投；绝不静默丢弃）。"""
+        await self._redis.xadd(
+            DLQ_STREAM,
+            {
+                "task_id": task_id,
+                "task_type": task_type,
+                "payload": payload_raw,
+                "error": error,
+                "retry_count": str(retry_count),
+            },
+        )
+        QUEUE_DLQ_TOTAL.labels(task_type=task_type).inc()
+
+    @staticmethod
+    def _defer_delay(attempts: int, exc: RetryLaterError) -> float:
+        """退避时长：指数增长，上限 ``DELAY_MAX_SECONDS``。
+
+        上游给了明确等待时长（如 Retry-After）时以它作基值，否则用
+        ``DELAY_BASE_SECONDS``。会话锁的典型持有时长是"一个 turn"（数十秒到数分钟），
+        所以基值不能太小，否则会白跑很多轮。
+        """
+        base = exc.delay_seconds or DELAY_BASE_SECONDS
+        return float(min(base * (2 ** max(0, attempts - 1)), DELAY_MAX_SECONDS))
+
+    async def _defer_message(
+        self,
+        stream_id: str,
+        fields: dict,
+        task_id: str,
+        task_type: str,
+        payload_raw: str,
+        exc: RetryLaterError,
+    ) -> None:
+        """把"等一会儿再试"的任务放进延迟集合，稍后由 :meth:`_promote_delayed` 搬回主队列。
+
+        刻意**不递增** ``retry_count``：延迟重试不是失败，消耗失败预算会让一个
+        "本来只是要等"的任务在几次之后就进 DLQ（那正是修复前的行为）。
+        边界改由两处兜底：消息自带的 ``deadline``（到期进 DLQ）与 ``DELAY_MAX_ATTEMPTS``。
+        """
+        message = {
+            (k.decode() if isinstance(k, bytes) else k): (
+                v.decode() if isinstance(v, bytes) else v
+            )
+            for k, v in fields.items()
+        }
+        try:
+            attempts = _as_int(message.get("delay_count")) + 1
+        except (TypeError, ValueError):
+            attempts = 1
+
+        if attempts > DELAY_MAX_ATTEMPTS:
+            logger.error(
+                "Task deferred %d times, giving up: id=%s type=%s reason=%s — "
+                "任务不会自动重试了（deadline/上限已到），需要人工重投",
+                attempts - 1, task_id, task_type, str(exc)[:200],
+            )
+            await self._move_to_dlq(
+                task_id, task_type, payload_raw,
+                f"deferred retry limit ({DELAY_MAX_ATTEMPTS}) reached: {exc}",
+                message.get("retry_count", "0"),
+            )
+            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            return
+
+        message["delay_count"] = str(attempts)
+        delay = self._defer_delay(attempts, exc)
+        try:
+            await self._redis.zadd(
+                DELAYED_ZSET, {json.dumps(message, ensure_ascii=False): time.time() + delay}
+            )
+            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+        except Exception as e:  # noqa: BLE001 - 延迟集合不可用：退回立即重投（至少不丢）
+            logger.warning(
+                "Task defer failed (%s), falling back to immediate requeue: id=%s",
+                str(e)[:160], task_id,
+            )
+            retry_count = _as_int(message.get("retry_count"))
+            if retry_count >= MAX_RETRIES:
+                await self._move_to_dlq(task_id, task_type, payload_raw,
+                                        f"defer failed and retries exhausted: {exc}",
+                                        retry_count)
+            else:
+                requeue = dict(message)
+                requeue["retry_count"] = str(retry_count + 1)
+                requeue.pop("delay_count", None)
+                await self._redis.xadd(TASK_STREAM, requeue, maxlen=TASK_STREAM_MAXLEN)
+                QUEUE_RETRY_TOTAL.labels(task_type=task_type).inc()
+            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            return
+        logger.warning(
+            "Task deferred %.0fs (attempt %d/%d): id=%s type=%s reason=%s",
+            delay, attempts, DELAY_MAX_ATTEMPTS, task_id, task_type, str(exc)[:160],
+        )
+
+    async def _delay_loop(self) -> None:
+        """周期性把到期的延迟任务搬回主队列。"""
+        while self._running:
+            try:
+                await asyncio.sleep(DELAY_LOOP_SECS)
+                await self._promote_delayed()
+            except asyncio.CancelledError:
+                return
+            except Exception as e:  # noqa: BLE001
+                logger.warning("worker delayed-retry loop error: %s", e)
+
+    async def _promote_delayed(self, now: float | None = None) -> int:
+        """把到期的延迟任务搬回主队列，返回到期数量。
+
+        多实例并发是安全的：用 ``ZREM`` 的返回值做**原子抢占**，只有一个实例会重投。
+        抢到之后如果 ``XADD`` 失败，则把它放回延迟集合（下次再试）—— 绝不丢。
+        """
+        ts = time.time() if now is None else now
+        try:
+            members = await self._redis.zrangebyscore(
+                DELAYED_ZSET, "-inf", ts, start=0, num=DELAY_BATCH
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning("worker delayed scan failed: %s", e)
+            return 0
+        promoted = 0
+        for raw in members or []:
+            try:
+                claimed = await self._redis.zrem(DELAYED_ZSET, raw)
+            except Exception as e:  # noqa: BLE001
+                logger.warning("worker delayed claim failed: %s", e)
+                continue
+            if not claimed:
+                continue  # 其它实例已抢走
+            text = raw.decode() if isinstance(raw, bytes) else raw
+            try:
+                message = json.loads(text)
+                await self._redis.xadd(TASK_STREAM, message, maxlen=TASK_STREAM_MAXLEN)
+                promoted += 1
+            except Exception as e:  # noqa: BLE001 - 放回延迟集合，不丢
+                logger.warning("worker delayed requeue failed (%s), re-scheduling: %s",
+                               str(e)[:160], text[:160])
+                try:
+                    await self._redis.zadd(DELAYED_ZSET, {text: time.time() + DELAY_BASE_SECONDS})
+                except Exception as e2:  # noqa: BLE001
+                    logger.error("worker delayed re-schedule failed, message lost: %s", e2)
+        return promoted
 
     async def _dispatch(
         self, task_type: str, payload: dict, tenant_id: str = ""
@@ -562,12 +785,27 @@ class QueueWorker:
         try:
             async with httpx.AsyncClient(timeout=20.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)
-        except Exception as exc:  # noqa: BLE001 - 抛出让队列重投（信号不能丢）
-            raise RuntimeError(f"agent_followup transport error: {exc}") from exc
+        except Exception as exc:  # noqa: BLE001 - 网关暂时不可达（重启/滚动升级）
+            raise RetryLaterError(f"agent_followup transport error: {exc}") from exc
 
         if resp.status_code == 409:
-            # 该会话正在跑别的 turn：不是错误，靠重试退避到锁释放之后
-            raise RuntimeError("agent_followup: session busy (409), will retry")
+            # 该会话正在跑别的 turn：**要等**，不是失败。走延迟重试，不消耗重试预算。
+            raise RetryLaterError(
+                "agent_followup: session busy (409)", delay_seconds=_retry_after(resp)
+            )
+        if resp.status_code == 429:
+            # 实例/租户并发已满：同样只是要等
+            raise RetryLaterError(
+                "agent_followup: too many requests (429)", delay_seconds=_retry_after(resp)
+            )
+        if 400 <= resp.status_code < 500:
+            # 载荷问题：重试也没用（重试只会把同一条坏消息反复送到 DLQ）。
+            # 明确记录并 ACK —— 可见地失败，而不是排队空转。
+            logger.error(
+                "agent_followup rejected by gateway (no retry): status=%s run=%s session=%s body=%s",
+                resp.status_code, run_id, session_id, resp.text[:200],
+            )
+            return
         if not resp.is_success:
             raise RuntimeError(
                 f"agent_followup rejected: {resp.status_code} {resp.text[:200]}"

@@ -360,6 +360,10 @@ func stepKindToEventType(kind string) string {
 		return "subagent.text"
 	case "tool_call", "tool_result":
 		return "subagent.status"
+	case "approval":
+		// 审批必须有独立事件名：回放时前端要能重建**可点击**的审批卡片，
+		// 归到 notice 就只剩一行文字，用户看得到却批不了（等于没修）。
+		return "subagent.approval"
 	default:
 		return "subagent.notice"
 	}

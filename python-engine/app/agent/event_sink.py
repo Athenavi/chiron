@@ -12,6 +12,7 @@
 ``subagent.reasoning``   思考增量（受限）
 ``subagent.text``        回答增量（受限）
 ``subagent.notice``      提示/告警（含"预览被截断"）
+``subagent.approval``    子 Agent 请求批准工具调用（载荷含 tool_call_id/name/arguments，**必达**）
 ``subagent.done``        唯一终态（载荷：status/usage/result_ref）
 ======================  ==================================================
 
@@ -38,10 +39,14 @@ EV_STATUS = "subagent.status"
 EV_REASONING = "subagent.reasoning"
 EV_TEXT = "subagent.text"
 EV_NOTICE = "subagent.notice"
+EV_APPROVAL = "subagent.approval"
 EV_DONE = "subagent.done"
 
 PREVIEW_EVENTS = frozenset({EV_STATUS, EV_REASONING, EV_TEXT, EV_NOTICE})
 TERMINAL_EVENTS = frozenset({EV_STARTED, EV_DONE})
+#: 必须送达的事件：终态（结论）与审批（用户在等它，丢了就空转到超时）。
+#: 它们**绕过每秒预算**，队列满时也不会被丢弃策略牺牲。
+IMPORTANT_EVENTS = frozenset({EV_STARTED, EV_DONE, EV_APPROVAL})
 
 # 阶段取值（与前端徽标一致）
 ST_QUEUED = "queued"
@@ -78,6 +83,10 @@ class SubagentEvent:
     truncated: bool = False
     usage: dict[str, Any] = field(default_factory=dict)
     summary: str = ""
+    #: 审批事件的回传凭据（前端据此调用 /v1/agent/approval）
+    tool_call_id: str = ""
+    tool_name: str = ""
+    tool_arguments: str = ""
     ts: float = field(default_factory=time.time)
 
     def to_payload(self) -> dict[str, Any]:
@@ -103,6 +112,15 @@ class SubagentEvent:
             payload["usage"] = self.usage
         if self.summary:
             payload["summary"] = self.summary
+        # 审批字段：只发这一组**明确的**名字，不做别名 ——
+        # 回放路径（Go 的 eventsFromRedis）会把 payload 的 `id` 覆盖成 Redis Stream 消息 id，
+        # 若前端按 `id` 回传审批决定，就会拿一个 stream id 去当 tool_call_id（必然失败）。
+        if self.tool_call_id:
+            payload["tool_call_id"] = self.tool_call_id
+        if self.tool_name:
+            payload["tool_name"] = self.tool_name
+        if self.tool_arguments:
+            payload["tool_arguments"] = self.tool_arguments
         return payload
 
 
@@ -192,6 +210,49 @@ class EventSink:
         self._push(SubagentEvent(type=channel, run_id=run_id, parent_run_id=parent_run_id,
                                  depth=depth, profile=profile, status=status))
 
+    def emit_approval(
+        self,
+        *,
+        run_id: str,
+        tool_call_id: str,
+        tool_name: str = "",
+        tool_arguments: str = "",
+        content: str = "",
+        parent_run_id: str = "",
+        depth: int = 1,
+        profile: str = "",
+    ) -> None:
+        """子 Agent 正在等用户批准某个工具调用 —— **必须送达**。
+
+        为什么不能像其它进度事件那样"能丢就丢"：子 Agent 此刻**阻塞**在这个工具调用上
+        （runtime 在等 ``submit_approval``），事件丢了用户就永远不知道该批准什么，
+        表现为空转 300 秒后以 ``approval timed out`` 被拒 —— 一次必然发生的空转，
+        而且用户不知道为什么在等。
+
+        因此它走 ``IMPORTANT_EVENTS``：绕过每秒预算、队列满时不牺牲；同时**不做内容合并**
+        （合并会把两次不同的审批揉成一条）。回传凭据是 ``tool_call_id`` ——
+        前端用它调 ``POST /v1/agent/approval``，与主 Agent 的审批走完全同一条通道。
+        """
+        if not tool_call_id:
+            # 没有回传凭据的审批事件是**无用的**：前端没法把决定送回引擎。
+            # 宁可记一条告警（可见），也不发一张点了没反应的卡片。
+            logger.warning(
+                "subagent %s: approval event without tool_call_id dropped", run_id
+            )
+            return
+        self._push(SubagentEvent(
+            type=EV_APPROVAL,
+            run_id=run_id,
+            parent_run_id=parent_run_id,
+            depth=depth,
+            profile=profile,
+            content=content,
+            status=ST_RUNNING,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            tool_arguments=tool_arguments,
+        ))
+
     def emit_done(
         self,
         *,
@@ -272,29 +333,30 @@ class EventSink:
         # 会话归属：每条事件的每一份拷贝都要带父会话 id（前端 SSE 靠它路由）
         if not event.session_id:
             event.session_id = self._session_id
-        # 每秒预算：非终态事件超限即丢弃（终态始终放行）—— 在入队时判定，
+        # 终态与审批属于 IMPORTANT_EVENTS：不受每秒预算约束（预算超限时丢弃的预览事件
+        # 是"可再生的进度"，而审批/终态丢了就是**结论丢失**或**空转到超时**）。
+        important = terminal or event.type in IMPORTANT_EVENTS
+        # 每秒预算：非重要事件超限即丢弃 —— 在入队时判定，
         # 比在 drain 时判定更早释放内存，也避免积压后集中丢弃造成的抖动。
-        if not terminal and event.type not in TERMINAL_EVENTS:
+        if not important:
             if not self._consume_budget(event.run_id):
                 self.dropped += 1
                 return
         if len(self._queue) >= self._maxsize:
-            if terminal:
-                # 终态必须入队：丢一个最旧的预览腾位置
-                self._drop_oldest_preview()
-            else:
-                self._drop_oldest_preview()
+            self._drop_oldest_preview()
+            if not important:
                 self.dropped += 1
                 return
         self._queue.append(event)
         self._fanout(event)
 
     def _drop_oldest_preview(self) -> None:
+        """腾一个位置：牺牲最旧的非重要事件（终态/审批绝不牺牲）。"""
         for i, event in enumerate(self._queue):
-            if event.type not in TERMINAL_EVENTS:
+            if event.type not in IMPORTANT_EVENTS:
                 del self._queue[i]
                 return
-        # 全是终态：放弃最旧的一条
+        # 全是重要事件：放弃最旧的一条
         if self._queue:
             self._queue.popleft()
 
