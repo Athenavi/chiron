@@ -244,7 +244,12 @@ func NewGatewayRouter(
 
 	// Billing
 	billingStore := billing.NewPGStore()
-	billingStore.EnsureTables(context.Background())
+	if err := billingStore.EnsureTables(context.Background()); err != nil {
+		// 生产环境的 schema 由 DBA/发布流程维护，应用的 DB 用户往往没有 DDL 权限
+		// （ALTER/CREATE 会报 "must be owner of table"），失败属预期内情况。
+		// 但绝不能静默吞掉：否则表结构问题会推迟到首次下单，才以笼统的 500 暴露出来。
+		slog.Warn("ensure billing tables failed; assuming schema is managed externally", "error", err)
+	}
 	billingMgr := billing.NewManager(billingStore)
 	// P0-P1 修复：余额已由 Deduct/AddCredits 同步写库（PG 原子 UPDATE），
 	// 移除 BalanceSyncer 异步落库订阅，避免多副本 split-brain 与重复扣费。

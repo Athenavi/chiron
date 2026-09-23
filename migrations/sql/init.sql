@@ -194,7 +194,7 @@ create table agent_registry
 
 create table conversation_shares
 (
-    id          varchar(32) not null
+    id          varchar(36) not null
         primary key,
     session_id  varchar(128),
     user_id     varchar(36),
@@ -334,7 +334,7 @@ create table payments
 (
     id                varchar(64) not null
         primary key,
-    user_id           varchar(32),
+    user_id           varchar(36),
     channel           varchar(16),
     credits           integer,
     amount_cents      bigint,
@@ -348,12 +348,12 @@ create table payments
     expired_at        timestamp
 );
 
-create index idx_payments_user
-    on payments (user_id asc, created_at desc);
-
 create index idx_payments_provider
     on payments (provider_order_id)
     where ((provider_order_id)::text <> ''::text);
+
+create index idx_payments_user
+    on payments (user_id asc, created_at desc);
 
 create table schema_migrations
 (
@@ -417,7 +417,7 @@ create index ix_tool_calls_turn_id
 
 create table unified_sessions
 (
-    id             varchar(36) not null
+    id             varchar(36)               not null
         primary key,
     tenant_id      varchar(36),
     user_id        varchar(36),
@@ -425,7 +425,8 @@ create table unified_sessions
     mode           varchar(16),
     shared_context json,
     created_at     timestamp,
-    updated_at     timestamp
+    updated_at     timestamp,
+    runtime        jsonb default '{}'::jsonb not null
 );
 
 create table user_memory_profile
@@ -517,7 +518,7 @@ create table admin_tenant_usage
 
 create table agents
 (
-    id              varchar(36) not null
+    id              varchar(36)                                   not null
         primary key,
     tenant_id       varchar(36)
         references tenants,
@@ -536,8 +537,12 @@ create table agents
     kb_id           varchar(255),
     skills          json,
     plugins         json,
-    workflows       json
+    workflows       json,
+    kind            varchar(16) default 'chat'::character varying not null
 );
+
+create index agents_kind_idx
+    on agents (kind);
 
 create table domains
 (
@@ -639,7 +644,7 @@ create table enterprise_tasks
         primary key,
     tenant_id   varchar(36)
         references tenants,
-    user_id     varchar(32),
+    user_id     varchar(36),
     title       varchar(255),
     description text        not null,
     project     varchar(128),
@@ -656,7 +661,7 @@ create table kb_articles
         primary key,
     tenant_id  varchar(36)
         references tenants,
-    user_id    varchar(32),
+    user_id    varchar(36),
     title      varchar(255),
     content    text        not null,
     tags       varchar(255),
@@ -671,7 +676,7 @@ create table marketing_campaigns
         primary key,
     tenant_id     varchar(36)
         references tenants,
-    user_id       varchar(32),
+    user_id       varchar(36),
     name          varchar(255),
     description   text        not null,
     campaign_type varchar(32),
@@ -712,7 +717,7 @@ create table meeting_notes
         primary key,
     tenant_id    varchar(36)
         references tenants,
-    user_id      varchar(32),
+    user_id      varchar(36),
     title        varchar(255),
     notes        text        not null,
     summary      text,
@@ -727,7 +732,7 @@ create table okrs
         primary key,
     tenant_id   varchar(36)
         references tenants,
-    user_id     varchar(32),
+    user_id     varchar(36),
     objective   varchar(255),
     key_results json,
     quarter     varchar(16),
@@ -742,7 +747,7 @@ create table support_tickets
         primary key,
     tenant_id   varchar(36)
         references tenants,
-    user_id     varchar(32),
+    user_id     varchar(36),
     subject     varchar(255),
     description text        not null,
     priority    varchar(16),
@@ -818,7 +823,7 @@ create table wiki_pages
         primary key,
     tenant_id  varchar(36)
         references tenants,
-    user_id    varchar(32),
+    user_id    varchar(36),
     title      varchar(255),
     content    text        not null,
     tags       varchar(255),
@@ -962,27 +967,35 @@ create table knowledge_bases
 
 create table sessions
 (
-    id         varchar(36) not null
+    id                varchar(36) not null
         primary key,
-    tenant_id  varchar(36)
+    tenant_id         varchar(36)
         references tenants,
-    user_id    varchar(36)
+    user_id           varchar(36)
         references users,
-    agent_id   varchar(36)
+    agent_id          varchar(36)
         references agents,
-    title      varchar(255),
-    status     varchar(16),
-    created_at timestamp,
-    updated_at timestamp,
-    pinned     boolean,
-    tag        varchar(64),
+    title             varchar(255),
+    status            varchar(16),
+    created_at        timestamp,
+    updated_at        timestamp,
+    pinned            boolean,
+    tag               varchar(64),
     parent_session_id varchar(36)
-        references sessions,
-    branch_from_seq integer
+                                  references sessions
+                                      on delete set null,
+    branch_from_seq   integer,
+    alias             varchar(64),
+    branch_mode       varchar(16),
+    branch_state      varchar(16),
+    branch_keep_tail  integer
 );
 
 create index ix_sessions_tag
     on sessions (tag);
+
+create index ix_sessions_parent_session_id
+    on sessions (parent_session_id);
 
 create table tasks
 (
@@ -1004,7 +1017,7 @@ create table tasks
 
 create table workflow_graphs
 (
-    id         varchar(32) not null
+    id         varchar(36) not null
         primary key,
     name       varchar(255),
     user_id    varchar(36)
@@ -1063,24 +1076,29 @@ create index ix_kb_documents_kb_tenant
 
 create table messages
 (
-    id         varchar(36) not null
+    id         varchar(36)                               not null
         primary key,
     session_id varchar(36)
         references sessions,
     role       varchar(16),
-    content    text        not null,
+    content    text                                      not null,
     tool_calls json,
     created_at timestamp,
     turn_id    varchar(36),
-    source     varchar(32) default '' not null
+    source     varchar(32) default ''::character varying not null
 );
+
+comment on column messages.source is '消息来源：空=用户输入；subagent_followup=子 Agent 自动轮注入';
 
 create index ix_messages_turn_id
     on messages (turn_id);
 
+create index ix_messages_session_created
+    on messages (session_id asc, created_at desc, id desc);
+
 create table turns
 (
-    id            varchar(36) not null
+    id            varchar(36)           not null
         primary key,
     session_id    varchar(36)
         references sessions,
@@ -1091,7 +1109,10 @@ create table turns
     output_tokens bigint,
     started_at    timestamp,
     finished_at   timestamp,
-    created_at    timestamp
+    created_at    timestamp,
+    cached_tokens bigint  default 0     not null,
+    cache_hit     boolean default false not null,
+    model         varchar(128)
 );
 
 create index ix_turns_session_id
@@ -1102,6 +1123,9 @@ create index ix_turns_status
 
 create index ix_turns_status_created
     on turns (status, created_at);
+
+create index turns_session_created_idx
+    on turns (session_id, created_at);
 
 create table knowledge_chunks
 (
@@ -1200,16 +1224,90 @@ create table user_memory_entries
 create index ix_user_memory_entries_lookup
     on user_memory_entries (tenant_id, user_id, status);
 
+create table subagent_runs
+(
+    id              varchar(64)                                       not null
+        primary key,
+    root_session_id varchar(128)                                      not null,
+    turn_id         varchar(64),
+    parent_run_id   varchar(64),
+    depth           integer     default 1                             not null,
+    tenant_id       varchar(36),
+    user_id         varchar(36),
+    agent_id        varchar(36)
+                                                                      references agents
+                                                                          on delete set null,
+    profile_name    varchar(128),
+    task            text                                              not null,
+    status          varchar(16)                                       not null,
+    summary         text,
+    summary_format  varchar(16) default 'markdown'::character varying not null,
+    artifacts       jsonb       default '[]'::jsonb,
+    write_paths     jsonb       default '[]'::jsonb,
+    read_only       boolean     default false                         not null,
+    input_tokens    bigint      default 0                             not null,
+    output_tokens   bigint      default 0                             not null,
+    steps           integer     default 0                             not null,
+    cost_cents      integer     default 0                             not null,
+    redacted_count  integer     default 0                             not null,
+    error           text,
+    started_at      timestamp,
+    finished_at     timestamp,
+    created_at      timestamp   default now()                         not null,
+    rerun_of        varchar(64)
+);
+
+create index subagent_runs_tree_idx
+    on subagent_runs (root_session_id, created_at);
+
+create index subagent_runs_parent_idx
+    on subagent_runs (parent_run_id);
+
+create index subagent_runs_turn_idx
+    on subagent_runs (turn_id);
+
+create index subagent_runs_tenant_idx
+    on subagent_runs (tenant_id, created_at);
+
+create table subagent_run_steps
+(
+    id            bigserial
+        primary key,
+    run_id        varchar(64)             not null
+        references subagent_runs
+            on delete cascade,
+    seq           integer                 not null,
+    kind          varchar(16)             not null,
+    role          varchar(16),
+    tool_name     varchar(64),
+    tool_call_id  varchar(128),
+    content       text,
+    truncated     boolean   default false not null,
+    input_tokens  integer   default 0     not null,
+    output_tokens integer   default 0     not null,
+    created_at    timestamp default now() not null
+);
+
+create unique index subagent_run_steps_seq_idx
+    on subagent_run_steps (run_id, seq);
+
+create table alembic_version
+(
+    version_num varchar(32) not null
+        constraint alembic_version_pkc
+            primary key
+);
+
 create table session_map_workspaces
 (
-    id         varchar(64) not null
+    id         varchar(64)                                not null
         primary key,
     tenant_id  varchar(36),
     user_id    varchar(36),
-    name       varchar(255) default '' not null,
-    viewport   jsonb        default '{}'::jsonb not null,
-    created_at timestamp    default now() not null,
-    updated_at timestamp    default now() not null
+    name       varchar(255) default ''::character varying not null,
+    viewport   jsonb        default '{}'::jsonb           not null,
+    created_at timestamp    default now()                 not null,
+    updated_at timestamp    default now()                 not null
 );
 
 create index session_map_workspaces_owner_idx
@@ -1217,25 +1315,28 @@ create index session_map_workspaces_owner_idx
 
 create table session_map_nodes
 (
-    id              varchar(64) not null
+    id              varchar(64)                                     not null
         primary key,
-    workspace_id    varchar(64) not null
-        references session_map_workspaces,
+    workspace_id    varchar(64)                                     not null
+        references session_map_workspaces
+            on delete cascade,
     session_id      varchar(36)
-        references sessions,
+        references sessions
+            on delete cascade,
     parent_node_id  varchar(64)
-        references session_map_nodes,
-    edge_kind       varchar(16) default 'manual' not null,
-    x               integer     default 0 not null,
-    y               integer     default 0 not null,
+                                                                    references session_map_nodes
+                                                                        on delete set null,
+    edge_kind       varchar(16) default 'manual'::character varying not null,
+    x               integer     default 0                           not null,
+    y               integer     default 0                           not null,
     title           varchar(255),
     color           varchar(16),
-    collapsed       boolean     default false not null,
-    hidden          boolean     default false not null,
-    pinned          boolean     default false not null,
+    collapsed       boolean     default false                       not null,
+    hidden          boolean     default false                       not null,
+    pinned          boolean     default false                       not null,
     branch_from_seq integer,
-    created_at      timestamp   default now() not null,
-    updated_at      timestamp   default now() not null
+    created_at      timestamp   default now()                       not null,
+    updated_at      timestamp   default now()                       not null
 );
 
 create index session_map_nodes_workspace_idx
@@ -1243,3 +1344,4 @@ create index session_map_nodes_workspace_idx
 
 create index session_map_nodes_session_idx
     on session_map_nodes (session_id);
+

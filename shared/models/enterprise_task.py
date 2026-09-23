@@ -24,7 +24,7 @@ class EnterpriseTask(Base):
     tenant_id = Column(String(36), ForeignKey('tenants.id'), doc='租户 ID')
 
 
-    user_id = Column(String(32), default='', doc='用户 ID')
+    user_id = Column(String(36), default='', doc='用户 ID')
 
     title = Column(String(255), nullable=True, doc='标题')
 

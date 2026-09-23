@@ -27,6 +27,12 @@ func (s *PGStore) EnsureTables(ctx context.Context) error {
 		return nil // no database available, skip table initialization
 	}
 
+	// 只读自检放在 DDL 之前：schema 若由 DBA 管理（应用 DB 用户没有 DDL 权限），
+	// 下面的 CREATE/ALTER 会直接失败返回，自检就没机会跑了。
+	if issue := s.paymentUserIDIssue(ctx); issue != "" {
+		slog.Error(issue, "table", "payments", "column", "user_id")
+	}
+
 	// Add balance column to users table if not exists
 	_, err := db.GlobalDBManager.Exec(ctx,
 		`ALTER TABLE users ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 1000`)
@@ -35,10 +41,12 @@ func (s *PGStore) EnsureTables(ctx context.Context) error {
 	}
 
 	// Create credit_transactions table
+	// id / user_id 均按 36 字符 UUID 定长：历史 DDL 写成 32，与 init.sql（36）不一致，
+	// 靠这里建表的库会在插入时报 value too long。
 	_, err = db.GlobalDBManager.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS credit_transactions (
-			id VARCHAR(32) PRIMARY KEY,
-			user_id VARCHAR(32) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			id VARCHAR(36) PRIMARY KEY,
+			user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
 			amount INTEGER NOT NULL,
 			balance INTEGER NOT NULL,
 			reason VARCHAR(64) NOT NULL,
@@ -50,10 +58,16 @@ func (s *PGStore) EnsureTables(ctx context.Context) error {
 	}
 
 	// Create payments table（支付宝/微信/PayPal 通用充值订单）
+	// 注意 user_id 长度：用户 ID 是 36 字符 UUID，而这里（以及 init.sql / models.yaml）
+	// 历史上写成 32，导致 PgStore.CreatePayment 一律报
+	//   value too long for type character varying(32)
+	// 充值下单全线失败。已有库需由 DBA 执行一次
+	//   ALTER TABLE payments ALTER COLUMN user_id TYPE VARCHAR(36);
+	// （应用用户通常不是表所有者，EnsureTables 改不动既有表。）
 	_, err = db.GlobalDBManager.Exec(ctx,
 		`CREATE TABLE IF NOT EXISTS payments (
 			id VARCHAR(64) PRIMARY KEY,
-			user_id VARCHAR(32) NOT NULL,
+			user_id VARCHAR(36) NOT NULL,
 			channel VARCHAR(16) NOT NULL,
 			credits INTEGER NOT NULL,
 			amount_cents BIGINT NOT NULL DEFAULT 0,
@@ -328,6 +342,37 @@ func scanPayment(row interface{ Scan(...any) error }) (*Payment, error) {
 	p.PaidAt = paidAt
 	p.ExpiredAt = expiredAt
 	return &p, nil
+}
+
+// paymentUserIDIssue 检测 payments.user_id 是否短于 36 字符的用户 UUID，
+// 返回可直接执行的修复语句作为诊断；无需修复时返回空串。
+//
+// 历史 schema（init.sql / models.yaml / 本文件的建表 DDL）曾把它定为 VARCHAR(32)，
+// 而用户 ID 是 36 字符 UUID，于是 PgStore.CreatePayment 一律报
+//
+//	value too long for type character varying(32)
+//
+// 充值下单全线失败，且只在用户点「立即充值」时以笼统的 500 暴露。
+//
+// 这类历史漂移无法靠 CREATE TABLE IF NOT EXISTS 修正（表已存在时它是空操作），
+// 应用 DB 用户通常也不是表所有者（ALTER 会报 must be owner of table），
+// 因此只做只读检查，把修复语句交给 DBA。
+func (s *PGStore) paymentUserIDIssue(ctx context.Context) string {
+	const required = 36
+	var maxLen *int
+	err := db.GlobalDBManager.QueryRow(ctx,
+		`SELECT character_maximum_length FROM information_schema.columns
+		  WHERE table_schema = current_schema() AND table_name = 'payments' AND column_name = 'user_id'`).Scan(&maxLen)
+	if err != nil || maxLen == nil {
+		// 表尚未建立 / 列为 TEXT 无长度限制 / 查询失败：都无需告警
+		return ""
+	}
+	if *maxLen < required {
+		return fmt.Sprintf(
+			"payments.user_id 长度 %d 不足以容纳 %d 字符的用户 UUID，充值下单会失败；请由 DBA 执行："+
+				"ALTER TABLE payments ALTER COLUMN user_id TYPE VARCHAR(36)", *maxLen, required)
+	}
+	return ""
 }
 
 func (s *PGStore) CreatePayment(ctx context.Context, p *Payment) error {

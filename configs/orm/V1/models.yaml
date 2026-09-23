@@ -431,7 +431,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       title:
@@ -495,7 +495,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       title:
@@ -548,7 +548,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       name:
@@ -694,7 +694,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       title:
@@ -746,7 +746,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       objective:
@@ -800,7 +800,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       subject:
@@ -1731,7 +1731,7 @@ models:
         fk_column: id
       user_id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 用户 ID
         default: ''
       title:
@@ -1764,7 +1764,7 @@ models:
     properties:
       id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 工作流 ID
         primary_key: true
       name:
@@ -1802,7 +1802,7 @@ models:
     properties:
       id:
         type: string
-        maxLength: 32
+        maxLength: 36
         description: 分享 ID
         primary_key: true
       session_id:
@@ -3409,7 +3409,9 @@ models:
         primary_key: true
       user_id:
         type: string
-        maxLength: 32
+        # 用户 ID 是 UUID（36 字符）。历史值 32 会生成 VARCHAR(32) 列，插入时直接
+        # 报 "value too long for type character varying(32)"，充值下单全部失败。
+        maxLength: 36
         description: 用户 ID
       channel:
         type: string

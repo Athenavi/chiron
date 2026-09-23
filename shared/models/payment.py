@@ -21,7 +21,7 @@ class Payment(Base):
 
     id = Column(String(64), primary_key=True, default=lambda: str(uuid.uuid4()), doc='支付 ID')
 
-    user_id = Column(String(32), nullable=True, doc='用户 ID')
+    user_id = Column(String(36), nullable=True, doc='用户 ID')
 
     channel = Column(String(16), nullable=True, doc='支付渠道')
 

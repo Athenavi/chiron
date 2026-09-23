@@ -19,7 +19,7 @@ class ConversationShare(Base):
 
 
 
-    id = Column(String(32), primary_key=True, default=lambda: str(uuid.uuid4()), doc='分享 ID')
+    id = Column(String(36), primary_key=True, default=lambda: str(uuid.uuid4()), doc='分享 ID')
 
     session_id = Column(String(128), nullable=True, doc='会话 ID')
 
