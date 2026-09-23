@@ -596,6 +596,17 @@ func (h *MailHandler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Reques
 	}
 
 	ctx := r.Context()
+	// 复核开关：管理员关闭密码重置后，此前已发出的链接不应继续可用。
+	row, err := h.loadConfig(ctx)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
+		return
+	}
+	if row == nil || !row.Enabled || !row.ResetEnabled {
+		Forbidden(w, "密码重置未启用")
+		return
+	}
+
 	userID, err := h.resetTokens.Take(ctx, hashToken(token))
 	if err != nil {
 		logAndRespond(w, err, http.StatusServiceUnavailable, "验证码存储不可用")

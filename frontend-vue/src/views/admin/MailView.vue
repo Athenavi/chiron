@@ -157,7 +157,7 @@ onMounted(load)
         </div>
       </Form>
 
-      <Tabs v-model:activeKey="activeTab">
+      <Tabs v-model:active-key="activeTab">
         <!-- ── 发信通道 ── -->
         <TabPane
           key="channel"

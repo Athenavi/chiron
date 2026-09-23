@@ -773,12 +773,29 @@ func TestMailRequestPasswordResetSendsTokenizedLink(t *testing.T) {
 }
 
 func TestMailConfirmPasswordResetRejectsInvalidToken(t *testing.T) {
-	h, _, _, _, _ := newTestMailHandler(t, enabledMailRow())
+	row := enabledMailRow()
+	row.ResetEnabled = true
+	h, _, _, _, _ := newTestMailHandler(t, row)
 	rec := doJSON(t, h.ConfirmPasswordReset, map[string]any{
 		"token": "nope", "password": "Str0ng!Passw0rd",
 	})
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400", rec.Code)
+	}
+}
+
+// 管理员关闭密码重置后，此前发出的链接立即失效（不能只靠"申请时"的开关）。
+func TestMailConfirmPasswordResetRejectedWhenFeatureDisabled(t *testing.T) {
+	row := enabledMailRow() // reset_enabled=false
+	h, _, _, tokens, _ := newTestMailHandler(t, row)
+	if err := tokens.Put(context.Background(), hashToken("tok"), "user-1", time.Minute); err != nil {
+		t.Fatal(err)
+	}
+	rec := doJSON(t, h.ConfirmPasswordReset, map[string]any{
+		"token": "tok", "password": "Str0ng!Passw0rd",
+	})
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", rec.Code)
 	}
 }
 
@@ -794,7 +811,9 @@ func TestMailConfirmPasswordResetRejectsWeakPassword(t *testing.T) {
 }
 
 func TestMailConfirmPasswordResetUpdatesAndBurnsToken(t *testing.T) {
-	h, q, _, tokens, _ := newTestMailHandler(t, enabledMailRow())
+	row := enabledMailRow()
+	row.ResetEnabled = true
+	h, q, _, tokens, _ := newTestMailHandler(t, row)
 	if err := tokens.Put(context.Background(), hashToken("tok"), "user-1", time.Minute); err != nil {
 		t.Fatal(err)
 	}
