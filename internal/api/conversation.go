@@ -32,7 +32,12 @@ type Conversation struct {
 	Tag       string     `json:"tag,omitempty"` // 会话标签（前端分类筛选；DB 持久化）
 	// Alias 是用户给会话起的别名/备注（展示时优先于 title）；见 internal/model/model.go 的说明
 	Alias     string     `json:"alias,omitempty"`
-	CreatedAt time.Time  `json:"created_at"`
+	// ── 分支血缘（P0：把 DB 里早已存在的列暴露给前端，用于列表/地图"辨识分支"）──
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	// ParentTitle 是父会话的展示名（alias || title）；父会话已删则为空
+	ParentTitle   string     `json:"parent_title,omitempty"`
+	BranchFromSeq int        `json:"branch_from_seq,omitempty"`
+	CreatedAt     time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	Messages  []Message  `json:"messages,omitempty"`
 	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // S 修复：工具调用过程落库，刷新后还原
@@ -79,16 +84,48 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 	convs := make([]Conversation, 0, len(sessions))
 	for _, s := range sessions {
 		convs = append(convs, Conversation{
-			ID:        s.ID,
-			Title:     s.Title,
-			Pinned:    s.Pinned,
-			Tag:       s.Tag,
-		Alias:     s.Alias,
-			CreatedAt: s.CreatedAt,
-			UpdatedAt: s.UpdatedAt,
+			ID:              s.ID,
+			Title:           s.Title,
+			Pinned:          s.Pinned,
+			Tag:             s.Tag,
+			Alias:           s.Alias,
+			ParentSessionID: s.ParentSessionID,
+			BranchFromSeq:   s.BranchFromSeq,
+			CreatedAt:       s.CreatedAt,
+			UpdatedAt:       s.UpdatedAt,
 		})
 	}
+	// 分支会话补上父会话展示名（一次批量查询；失败也不影响列表本身）
+	if titles := parentTitlesFor(r.Context(), h.sessionMgr, convs); len(titles) > 0 {
+		for i := range convs {
+			if convs[i].ParentSessionID != "" {
+				convs[i].ParentTitle = titles[convs[i].ParentSessionID]
+			}
+		}
+	}
 	OK(w, convs)
+}
+
+// parentTitlesFor 查这批会话各自**父会话的展示名**（一次批量查询，避免 N+1）。
+//
+// 只返回查得到的那部分（父会话已删 → 该 id 缺失 → 调用方留空，前端显示"已删除的会话"）。
+// 展示名是锦上添花：查询失败只告警，不影响列表/详情本身。
+func parentTitlesFor(ctx context.Context, mgr *session.Manager, convs []Conversation) map[string]string {
+	ids := make([]string, 0, len(convs))
+	for _, c := range convs {
+		if c.ParentSessionID != "" {
+			ids = append(ids, c.ParentSessionID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	titles, err := mgr.ParentTitles(ctx, ids)
+	if err != nil {
+		slog.Warn("query parent titles", "error", err)
+		return nil
+	}
+	return titles
 }
 
 // Get returns a single session with its messages (with optional pagination).
@@ -156,16 +193,22 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conv := Conversation{
-		ID:        sess.ID,
-		Title:     sess.Title,
-		Pinned:    sess.Pinned,
-		Tag:       sess.Tag,
-		Alias:     sess.Alias,
-		CreatedAt: sess.CreatedAt,
-		UpdatedAt: sess.UpdatedAt,
-		Messages:  make([]Message, 0),
-		Cursor:    page.Cursor,
-		HasMore:   page.HasMore,
+		ID:              sess.ID,
+		Title:           sess.Title,
+		Pinned:          sess.Pinned,
+		Tag:             sess.Tag,
+		Alias:           sess.Alias,
+		ParentSessionID: sess.ParentSessionID,
+		BranchFromSeq:   sess.BranchFromSeq,
+		CreatedAt:       sess.CreatedAt,
+		UpdatedAt:       sess.UpdatedAt,
+		Messages:        make([]Message, 0),
+		Cursor:          page.Cursor,
+		HasMore:         page.HasMore,
+	}
+	// 分支会话带上父会话展示名（单条查询；父会话已删则留空）
+	if conv.ParentSessionID != "" {
+		conv.ParentTitle = parentTitlesFor(r.Context(), h.sessionMgr, []Conversation{conv})[conv.ParentSessionID]
 	}
 	for _, m := range page.Messages {
 		conv.Messages = append(conv.Messages, Message{
@@ -339,15 +382,22 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	OK(w, Conversation{
-		ID:        updated.ID,
-		Title:     updated.Title,
-		Pinned:    updated.Pinned,
-		Tag:       updated.Tag,
-		Alias:     updated.Alias,
-		CreatedAt: updated.CreatedAt,
-		UpdatedAt: updated.UpdatedAt,
-	})
+	// 分支会话一并回带血缘（前端就地更新列表项时不必重新拉取）
+	out := Conversation{
+		ID:              updated.ID,
+		Title:           updated.Title,
+		Pinned:          updated.Pinned,
+		Tag:             updated.Tag,
+		Alias:           updated.Alias,
+		ParentSessionID: updated.ParentSessionID,
+		BranchFromSeq:   updated.BranchFromSeq,
+		CreatedAt:       updated.CreatedAt,
+		UpdatedAt:       updated.UpdatedAt,
+	}
+	if out.ParentSessionID != "" {
+		out.ParentTitle = parentTitlesFor(r.Context(), h.sessionMgr, []Conversation{out})[out.ParentSessionID]
+	}
+	OK(w, out)
 }
 
 func userIDFromClaims(claims *auth.Claims) string {

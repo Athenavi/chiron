@@ -111,6 +111,21 @@
   color: #1677ff;
   background: rgba(22, 119, 255, .12);
 }
+/* 分支来源徽标：比"分类标签"更重要（说明这个会话是怎么来的），用主色实底区分 */
+.chiron-card-branch {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #7c3aed;
+  background: rgba(124, 58, 237, .12);
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .chiron-card-alias {
   display: block;
   margin-top: 2px;

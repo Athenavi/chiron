@@ -32,6 +32,12 @@ type Session struct {
 	Alias     string    `json:"alias,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// ── 分支血缘（P0：只暴露已存在的列，零迁移）──
+	// ParentSessionID 非空表示"这个会话是从另一个会话分支出来的"；
+	// BranchFromSeq 是分叉点（保留到源会话的第几条消息）。两者由 ForkSession 写入，
+	// 是会话列表/地图"辨识分支"的唯一依据（此前只存在于 DB，没有对外暴露）。
+	ParentSessionID string `json:"parent_session_id,omitempty"`
+	BranchFromSeq   int    `json:"branch_from_seq,omitempty"`
 }
 
 // ConversationShare is a public snapshot of selected conversation messages

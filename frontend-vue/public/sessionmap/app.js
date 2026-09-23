@@ -36,6 +36,11 @@ function chironCardBadges(card) {
   const tag = typeof card.tag === 'string' ? card.tag.trim() : ''
   const alias = typeof card.alias === 'string' ? card.alias.trim() : ''
   const parts = []
+  // 分支标记：来源（parent_title）+ 分叉点（branch_from_seq）—— 地图上一眼看出"这是裁出来的分支"
+  if (typeof card.parentTitle === 'string' && card.parentTitle.trim() !== '') {
+    const seq = Number.isInteger(card.branchFromSeq) && card.branchFromSeq > 0 ? `（第 ${card.branchFromSeq} 条起）` : ''
+    parts.push(`<span class="chiron-card-branch" title="分支自《${escapeHtml(card.parentTitle)}》">分支·自 ${escapeHtml(card.parentTitle)}${seq}</span>`)
+  }
   if (tag) parts.push(`<span class="chiron-card-tag" title="会话标签">${escapeHtml(tag)}</span>`)
   // 卡片标题已经优先取别名，这里只在两者不同时补一行说明（避免重复显示同一个词）
   if (alias && alias !== card.question) parts.push(`<span class="chiron-card-alias" title="别名">别名：${escapeHtml(alias)}</span>`)
@@ -450,7 +455,9 @@ async function submitDraft() {
     }
     const session = await dshRpc('synapse:fork-session', { sessionId: parent.dshSessionId, atSeq: draft.atSeq })
     if (draft.anchorId !== undefined) rememberBranchAnchor(session.id, draft.anchorId)
-    const result = await api(`/synapse/api/threads/${parent.id}/branch`, { method: 'POST', body: JSON.stringify({ title: text.slice(0, 42), dshSessionId: session.id, dshSessionTitle: session.title, position: branchPosition }) })
+    // [chiron] body 里补上 atSeq：适配层要用它写节点的 branch_from_seq（分叉点），
+    // 否则分支卡片的摘要与血缘提示都拿不到"从第几条开始分叉"。
+    const result = await api(`/synapse/api/threads/${parent.id}/branch`, { method: 'POST', body: JSON.stringify({ title: text.slice(0, 42), atSeq: draft.atSeq, dshSessionId: session.id, dshSessionTitle: session.title, position: branchPosition }) })
     if (state.workspace !== null && !state.workspace.threads.some(thread => thread.id === result.thread.id || thread.dshSessionId === result.thread.dshSessionId)) state.workspace.threads.push(result.thread)
     state.activeId = result.thread.id
     state.draft = null
@@ -782,6 +789,9 @@ function conversationCards(threads) {
         // [chiron] 会话标签与别名：卡片要显示它们（数据来自 adapter 投影的 thread）
         tag: thread.tag || '',
         alias: thread.alias || '',
+        // [chiron] 分支血缘：卡片要显示"分支·自 X（第 N 条起）"
+        parentTitle: thread.parentTitle || '',
+        branchFromSeq: thread.branchFromSeq || 0,
         answer,
         error,
         processCount,
@@ -811,6 +821,8 @@ function conversationCards(threads) {
       // [chiron] 同上（该会话还没有消息时的空卡）
       tag: thread.tag || '',
       alias: thread.alias || '',
+      parentTitle: thread.parentTitle || '',
+      branchFromSeq: thread.branchFromSeq || 0,
       answer: null,
       error: null,
       processCount: 0,

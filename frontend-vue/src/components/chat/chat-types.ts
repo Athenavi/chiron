@@ -9,6 +9,13 @@ export interface ChatSession {
   pinned?: boolean
   /** P3-D: 会话标签（前端 localStorage 存储，用于分类筛选） */
   tag?: string
+  // ── 分支血缘（后端 sessions 早已存在的列，P0 起对外暴露）──
+  /** 非空表示这个会话是从另一个会话分支出来的（"分支自谁"） */
+  parent_session_id?: string
+  /** 父会话展示名（alias || title）；父会话已删则为空 */
+  parent_title?: string
+  /** 分叉点：保留到源会话的第几条消息 */
+  branch_from_seq?: number
   created_at: string
   updated_at: string
 }

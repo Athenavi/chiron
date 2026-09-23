@@ -73,9 +73,9 @@ func (m *Manager) GetSession(ctx context.Context, id string) (*model.Session, er
 
 	var s model.Session
 	err := m.pool.QueryRow(ctx,
-		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), created_at, updated_at
+		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), COALESCE(parent_session_id::text, ''), COALESCE(branch_from_seq, 0), created_at, updated_at
 		 FROM sessions WHERE id = $1`, id).
-		Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.CreatedAt, &s.UpdatedAt)
+		Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.ParentSessionID, &s.BranchFromSeq, &s.CreatedAt, &s.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	} else if err != nil {
@@ -158,7 +158,7 @@ func (m *Manager) ListSessions(ctx context.Context, userID string, page, perPage
 	offset := (page - 1) * perPage
 
 	rows, err := m.pool.Query(ctx,
-		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), created_at, updated_at
+		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), COALESCE(parent_session_id::text, ''), COALESCE(branch_from_seq, 0), created_at, updated_at
 		 FROM sessions
 		 WHERE user_id = $1
 		 ORDER BY pinned DESC, updated_at DESC
@@ -171,7 +171,7 @@ func (m *Manager) ListSessions(ctx context.Context, userID string, page, perPage
 	var sessions []model.Session
 	for rows.Next() {
 		var s model.Session
-		if err := rows.Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.ParentSessionID, &s.BranchFromSeq, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			slog.Warn("scan session row", "error", err)
 			continue
 		}
@@ -858,6 +858,56 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 		msgs = []model.Message{}
 	}
 	return msgs, nil
+}
+
+// ParentTitles 批量取"父会话展示名"（displayName = alias || title），
+// 供分支会话在会话列表 / 会话地图上显示"分支自《谁》"。
+//
+// 为什么单独一个方法而不是 JOIN：会话列表与详情是两条独立查询路径，
+// JOIN 会改动既有 SQL 的行数/列序语义；而这里**一次查询覆盖整页**，
+// 既避免 N+1，又不碰主查询。
+//
+// 容错：
+//   - 用 `id::text = ANY(...)` 而不是 `id = ANY($1::uuid[])`：调用方传来的
+//     `parent_session_id` 理论上一定是 uuid，但**查询失败不该让列表 500**；
+//     文本比较对非法值只是"查不到"，语义更稳。
+//   - 父会话已被删除（或不在可见范围）时该 id 不出现在返回值里，调用方留空即可。
+func (m *Manager) ParentTitles(ctx context.Context, ids []string) (map[string]string, error) {
+	if m.pool == nil || len(ids) == 0 {
+		return nil, nil
+	}
+	uniq := make([]string, 0, len(ids))
+	seen := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		uniq = append(uniq, id)
+	}
+	if len(uniq) == 0 {
+		return nil, nil
+	}
+
+	rows, err := m.pool.Query(ctx,
+		`SELECT id::text, COALESCE(NULLIF(alias, ''), NULLIF(title, ''), '')
+		   FROM sessions
+		  WHERE id::text = ANY($1::text[])`, uniq)
+	if err != nil {
+		return nil, fmt.Errorf("query parent titles: %w", err)
+	}
+	defer rows.Close()
+
+	out := make(map[string]string, len(uniq))
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			slog.Warn("scan parent title row", "error", err)
+			continue
+		}
+		out[id] = name
+	}
+	return out, nil
 }
 
 // ForkSession 从 srcSessionID 的第 fromIndex 条消息处分叉出一个新会话。

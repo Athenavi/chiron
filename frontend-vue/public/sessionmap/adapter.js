@@ -69,6 +69,9 @@
       tag: (meta.tag || '').trim(),
       alias: alias,
       realTitle: meta.title || '',
+      // 分支血缘：父会话展示名 + 分叉点（app.js 补丁渲染"分支·自 X"）
+      parentTitle: meta.parentTitle || '',
+      branchFromSeq: meta.branchFromSeq || 0,
       dshSessionId: node.session_id || '',
       parentId: node.parent_node_id || '',
       // P1-6：分叉锚点的**真实**长度。app.js 的 conversationCards 用
@@ -133,6 +136,9 @@
             title: typeof data.title === 'string' ? data.title : '',
             tag: typeof data.tag === 'string' ? data.tag : '',
             alias: typeof data.alias === 'string' ? data.alias : '',
+            // 分支血缘：会话列表与地图卡片都要显示"这是分支、分支自谁、从第几条分叉"
+            parentTitle: typeof data.parent_title === 'string' ? data.parent_title : '',
+            branchFromSeq: Number.isInteger(data.branch_from_seq) ? data.branch_from_seq : 0,
           })
         }
         if (!Array.isArray(list)) return []

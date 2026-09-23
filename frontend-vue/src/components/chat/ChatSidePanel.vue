@@ -314,6 +314,18 @@ const usedTags = computed(() => {
  */
 const tagOptions = computed(() => mergeTagOptions(usedTags.value))
 
+/**
+ * 分支徽标的悬浮说明：说清"从哪里分出来的"。
+ *
+ * `parent_title` 缺失有两种可能：父会话已删（后端查不到）或后端未回带该字段 ——
+ * 两种情况都只显示分叉点，不编造来源名字。
+ */
+function branchTip(s: ChatSession): string {
+  const from = s.parent_title ? `分支自《${s.parent_title}》` : '分支自已删除的会话'
+  const seq = s.branch_from_seq ? `，第 ${s.branch_from_seq} 条起` : ''
+  return from + seq
+}
+
 // 自定义标签弹窗：只存"给哪个会话打标签"，输入值用受控 ref
 const customTagTarget = ref('')
 const customTagText = ref('')
@@ -708,6 +720,12 @@ function pickSession(id: string) {
                   class="pin-icon"
                 />
                 <span class="session-title">{{ s.title || '新对话' }}</span>
+                <!-- P0：分支标记 —— 让"分支出来的会话"在列表里一眼可辨（第 3 条诉求）-->
+                <span
+                  v-if="s.parent_session_id"
+                  class="session-branch"
+                  :title="branchTip(s)"
+                >分支</span>
                 <span
                   v-if="s.tag"
                   class="session-tag"
@@ -1063,6 +1081,8 @@ function pickSession(id: string) {
 .tag-chip:hover { border-color: var(--primary); color: var(--primary); }
 .tag-chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
 .session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
+/* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
+.session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
 .session-group-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .session-row {
   display: flex; align-items: center; gap: 4px;
