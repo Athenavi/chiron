@@ -3,6 +3,7 @@ package billing
 import (
 	"context"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/athenavi/chiron/internal/id"
@@ -51,6 +52,9 @@ type PaymentStore interface {
 	// 成功返回订单（含 credits/user_id，供入账）。
 	MarkPaymentPaid(ctx context.Context, id, tradeNo string) (*Payment, error)
 	MarkPaymentFailed(ctx context.Context, id string) error
+	// RevertPaymentToPending 把「已标记 paid 但入账失败」的订单退回 pending，
+	// 使后续查询/回调能重新入账（否则幂等分支会永远跳过它）。
+	RevertPaymentToPending(ctx context.Context, id string) error
 	// UpdatePaymentProvider 预下单成功后回填二维码与渠道订单号。
 	UpdatePaymentProvider(ctx context.Context, id, qrCode, providerOrderID string) error
 }
@@ -93,6 +97,18 @@ func (m *Manager) ConfirmPayment(ctx context.Context, id, tradeNo string) (*Paym
 
 	reason := p.Channel + "_topup"
 	if _, err := m.AddCredits(p.UserID, reason, p.Credits); err != nil {
+		// 入账失败必须把订单退回 pending。
+		//
+		// MarkPaymentPaid 与 AddCredits 不在同一事务里：若只让订单停在 paid，后续每次
+		// 查询/回调都会走 MarkPaymentPaid 的幂等分支（返回 nil → 直接返回），这笔支付
+		// 将**永远不入账且无法自愈**。线上表现就是"钱付了、订单显示已支付、余额不动"。
+		if rErr := m.store.RevertPaymentToPending(ctx, id); rErr != nil {
+			slog.Error("revert payment to pending failed; order is stuck as paid without credit",
+				"order", id, "user", p.UserID, "credits", p.Credits, "trade_no", tradeNo, "error", rErr)
+		} else {
+			slog.Warn("credit failed; payment reverted to pending for retry",
+				"order", id, "user", p.UserID, "credits", p.Credits, "error", err)
+		}
 		return p, false, fmt.Errorf("credit after payment: %w", err)
 	}
 	return p, true, nil

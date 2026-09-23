@@ -241,11 +241,17 @@ func (s *PGStore) applyCreditTx(ctx context.Context, userID string, delta int, g
 	err := db.GlobalDBManager.WithTransaction(ctx, func(tx pgx.Tx) error {
 		var q string
 		args := []interface{}{delta, userID}
+		// COALESCE 不可省：users.credits 列在部分环境里是 nullable 且无默认值
+		// （由 init.sql/历史建表创建；EnsureTables 那句 ADD COLUMN ... NOT NULL DEFAULT
+		// 在生产上会因"应用不是表所有者"而失败）。此时 `credits + $1` 结果是 NULL，
+		// RETURNING 回来扫描进 int 会直接报 "cannot scan NULL into *int"，
+		// 表现为"支付成功但余额不到账、订单却已标记 paid"。
 		if guardMin > 0 {
-			q = `UPDATE users SET credits = credits + $1 WHERE id = $2 AND credits >= $3 RETURNING credits`
+			q = `UPDATE users SET credits = COALESCE(credits, 0) + $1
+			      WHERE id = $2 AND COALESCE(credits, 0) >= $3 RETURNING credits`
 			args = append(args, guardMin)
 		} else {
-			q = `UPDATE users SET credits = credits + $1 WHERE id = $2 RETURNING credits`
+			q = `UPDATE users SET credits = COALESCE(credits, 0) + $1 WHERE id = $2 RETURNING credits`
 		}
 
 		// 幂等扣费（B4）：turnID 非空时先用流水的唯一索引占位，
@@ -261,7 +267,7 @@ func (s *PGStore) applyCreditTx(ctx context.Context, userID string, delta int, g
 				return fmt.Errorf("claim credit tx for turn: %w", err)
 			}
 			if tag.RowsAffected() == 0 {
-				return tx.QueryRow(ctx, `SELECT credits FROM users WHERE id = $1`, userID).Scan(&newBalance)
+				return tx.QueryRow(ctx, `SELECT COALESCE(credits, 0) FROM users WHERE id = $1`, userID).Scan(&newBalance)
 			}
 			if err := tx.QueryRow(ctx, q, args...).Scan(&newBalance); err != nil {
 				return fmt.Errorf("apply credit balance: %w", err)
@@ -418,6 +424,15 @@ func (s *PGStore) MarkPaymentPaid(ctx context.Context, id, tradeNo string) (*Pay
 func (s *PGStore) MarkPaymentFailed(ctx context.Context, id string) error {
 	_, err := db.GlobalDBManager.Exec(ctx,
 		`UPDATE payments SET status = 'failed' WHERE id = $1 AND status = 'pending'`, id)
+	return err
+}
+
+// RevertPaymentToPending 把订单从 paid 退回 pending。
+// 仅用于「已标记支付成功、但入账失败」的补偿：让下一次查询/回调重新走一遍入账，
+// 否则 MarkPaymentPaid 的幂等分支会永远跳过这笔订单（钱付了、余额却永远不动）。
+func (s *PGStore) RevertPaymentToPending(ctx context.Context, id string) error {
+	_, err := db.GlobalDBManager.Exec(ctx,
+		`UPDATE payments SET status = 'pending', paid_at = NULL WHERE id = $1 AND status = 'paid'`, id)
 	return err
 }
 
