@@ -29,6 +29,10 @@ beforeAll(() => {
       onchange: null,
       addEventListener: vi.fn(),
       removeEventListener: vi.fn(),
+      // ant-design-vue 的 responsiveObserve 仍走旧 API（会话视图会触发），
+      // 缺这两个方法会抛 `mql.addListener is not a function`
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
       dispatchEvent: vi.fn(),
     })),
   })
@@ -39,14 +43,17 @@ beforeEach(() => {
 })
 
 /** open: false —— 活动轮询会直接返回，测试只关心「可用工具」区块 */
-function mountPanel() {
+function mountPanel(
+  sessions: any[] = [],
+  view: 'trajectory' | 'sessions' | 'agents' | 'stats' = 'trajectory',
+) {
   return mount(ChatSidePanel, {
     props: {
       items: [],
       selectedIndex: null,
       open: false,
-      view: 'trajectory',
-      sessions: [],
+      view,
+      sessions,
       activeSessionId: '',
       userName: '测试员',
       contextChips: [],
@@ -64,6 +71,51 @@ async function expand(w: ReturnType<typeof mountPanel>) {
   await w.find('.tools-head').trigger('click')
   await flushPromises()
 }
+
+describe('ChatSidePanel · 分支会话标记（P0：让"分支"在会话列表里可辨）', () => {
+  const branchSession = {
+    id: 'b1',
+    title: '分支会话',
+    created_at: '2026-09-23T10:00:00Z',
+    updated_at: '2026-09-23T10:00:00Z',
+    parent_session_id: '11111111-1111-1111-1111-111111111111',
+    parent_title: '父会话',
+    branch_from_seq: 12,
+  }
+  const plainSession = {
+    id: 's1',
+    title: '普通会话',
+    created_at: '2026-09-23T11:00:00Z',
+    updated_at: '2026-09-23T11:00:00Z',
+  }
+
+  it('分支会话显示「分支」徽标，悬浮说明给出父会话与分叉点', async () => {
+    const w = mountPanel([branchSession, plainSession], 'sessions')
+    await flushPromises()
+
+    const badges = w.findAll('.session-branch')
+    expect(badges).toHaveLength(1)
+    expect(badges[0].text()).toBe('分支')
+    expect(badges[0].attributes('title')).toContain('分支自《父会话》')
+    expect(badges[0].attributes('title')).toContain('第 12 条起')
+  })
+
+  it('父会话已删（后端查不到展示名）时不编造来源，只说明分叉点', async () => {
+    const w = mountPanel([{ ...branchSession, parent_title: '' }], 'sessions')
+    await flushPromises()
+
+    const tip = w.find('.session-branch').attributes('title') || ''
+    expect(tip).toContain('已删除')
+    expect(tip).toContain('第 12 条起')
+  })
+
+  it('普通会话没有分支徽标（否则所有会话都被误判为分支）', async () => {
+    const w = mountPanel([plainSession], 'sessions')
+    await flushPromises()
+
+    expect(w.find('.session-branch').exists()).toBe(false)
+  })
+})
 
 describe('ChatSidePanel · 可用工具（让 MCP 注入的工具可见）', () => {
   it('默认收起，且不请求工具列表（面板常驻挂载，不能白打接口）', () => {
