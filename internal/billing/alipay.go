@@ -22,6 +22,18 @@ import (
 	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
+// alipayCharset 必须是**大写** "UTF-8"。
+//
+// 写成小写 "utf-8" 时支付宝不识别该 charset，会回退到它自身的默认字符集（GBK）去
+// 解码参数值 —— 于是含中文的 subject 在支付宝侧被按 GBK 解出，与我们按 UTF-8 计算的
+// 签名对不上，稳定返回：
+//
+//	code=40002 sub_msg=验签出错，请确认charset参数放在了URL查询字符串中且各参数值使用charset参数指示的字符集编码
+//
+// 而纯 ASCII 参数在 UTF-8/GBK 下字节完全相同，只有"参数里出现中文"时才暴露 ——
+// 极易被误判成密钥或签名规则问题（本次排障就绕了很久）。
+const alipayCharset = "UTF-8"
+
 // AlipayClient 对接支付宝开放平台（当面付 trade.precreate + 异步通知验签）。
 // 自研 RSA2 签名，不依赖第三方 SDK。
 type AlipayClient struct {
@@ -97,6 +109,40 @@ func parseRSAPublicKey(pemStr string) (*rsa.PublicKey, error) {
 	return nil, fmt.Errorf("unsupported public key format")
 }
 
+// escapeNonASCII 把 JSON 文本里的非 ASCII 字符转义为 \uXXXX，使其成为纯 ASCII。
+// 详见 Precreate 中关于支付宝验签按 GBK 处理参数的说明。
+//
+// 非 ASCII 只可能出现在 JSON 字符串值内部（键名与结构字符我们全是 ASCII），
+// 因此整体转义是安全的，不会破坏 JSON 语法。补充平面字符按 UTF-16 代理对输出。
+func escapeNonASCII(s string) string {
+	if isASCII(s) {
+		return s // 绝大多数请求无需重建
+	}
+	var b strings.Builder
+	b.Grow(len(s) + 8)
+	for _, r := range s {
+		switch {
+		case r < utf8.RuneSelf:
+			b.WriteByte(byte(r))
+		case r > 0xFFFF:
+			v := r - 0x10000
+			fmt.Fprintf(&b, `\u%04x\u%04x`, 0xD800+(v>>10), 0xDC00+(v&0x3FF))
+		default:
+			fmt.Fprintf(&b, `\u%04x`, r)
+		}
+	}
+	return b.String()
+}
+
+func isASCII(s string) bool {
+	for i := 0; i < len(s); i++ {
+		if s[i] >= utf8.RuneSelf {
+			return false
+		}
+	}
+	return true
+}
+
 // buildSignContent 拼接待签名串：除 sign 外的非空参数按 key 字典序，key=value 用 & 连接。
 //
 // **sign_type 必须参与签名**：支付宝的规则是"除 sign 以外的全部请求参数都要参与"，
@@ -155,12 +201,22 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 	if err != nil {
 		return "", err
 	}
+	// biz_content 必须是**纯 ASCII**。
+	//
+	// 支付宝在验签时会把"能被 GBK 表示的字符"按 GBK 处理（即使请求里 charset=UTF-8），
+	// 于是含 3 字节 UTF-8 字符（中文/日文/韩文/€ 等 —— 恰好都是"3 字节 UTF-8 ↔ 2 字节
+	// GBK"）的 biz_content 在支付宝侧被转成 GBK 字节，与我们按 UTF-8 计算的签名对不上，
+	// 稳定返回 sub_code=isv.invalid-signature（"验签出错，请确认charset参数…"）。
+	// 实测：2 字节字符(ÿ)、4 字节 emoji、以及 \uXXXX 转义形式都正常，只有"可被 GBK 表示
+	// 的 3 字节字符"会失败 —— 这也是为什么纯 ASCII 参数一直没问题，而 subject 一带中文
+	// 就必然失败。统一转义为非 ASCII 后两种编码下字节一致。
+	bizJSON = []byte(escapeNonASCII(string(bizJSON)))
 
 	params := map[string]string{
 		"app_id":      c.appID,
 		"method":      "alipay.trade.precreate",
 		"format":      "JSON",
-		"charset":     "utf-8",
+		"charset":     alipayCharset,
 		"sign_type":   "RSA2",
 		"timestamp":   time.Now().Format("2006-01-02 15:04:05"),
 		"version":     "1.0",
@@ -241,7 +297,7 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 		"app_id":      c.appID,
 		"method":      "alipay.trade.query",
 		"format":      "JSON",
-		"charset":     "utf-8",
+		"charset":     alipayCharset,
 		"sign_type":   "RSA2",
 		"timestamp":   time.Now().Format("2006-01-02 15:04:05"),
 		"version":     "1.0",
