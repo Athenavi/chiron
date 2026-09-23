@@ -45,20 +45,20 @@ const (
 
 // SessionMapNode 是地图上的一个节点：对会话的引用 + 布局。
 type SessionMapNode struct {
-	ID            string  `json:"id"`
-	SessionID     string  `json:"session_id,omitempty"`
-	ParentNodeID  string  `json:"parent_node_id,omitempty"`
-	EdgeKind      string  `json:"edge_kind,omitempty"`
-	X             int     `json:"x"`
-	Y             int     `json:"y"`
-	Title         string  `json:"title,omitempty"`
-	Color         string  `json:"color,omitempty"`
-	Collapsed     bool    `json:"collapsed,omitempty"`
-	Hidden        bool    `json:"hidden,omitempty"`
-	Pinned        bool    `json:"pinned,omitempty"`
-	BranchFromSeq int     `json:"branch_from_seq,omitempty"`
-	CreatedAt     string  `json:"created_at,omitempty"`
-	UpdatedAt     string  `json:"updated_at,omitempty"`
+	ID            string   `json:"id"`
+	SessionID     string   `json:"session_id,omitempty"`
+	ParentNodeID  string   `json:"parent_node_id,omitempty"`
+	EdgeKind      string   `json:"edge_kind,omitempty"`
+	X             int      `json:"x"`
+	Y             int      `json:"y"`
+	Title         string   `json:"title,omitempty"`
+	Color         string   `json:"color,omitempty"`
+	Collapsed     bool     `json:"collapsed,omitempty"`
+	Hidden        bool     `json:"hidden,omitempty"`
+	Pinned        bool     `json:"pinned,omitempty"`
+	BranchFromSeq int      `json:"branch_from_seq,omitempty"`
+	CreatedAt     string   `json:"created_at,omitempty"`
+	UpdatedAt     string   `json:"updated_at,omitempty"`
 	_             struct{} `json:"-"`
 }
 
@@ -254,14 +254,15 @@ func smInvalidateAllWorkspaceCaches(ctx context.Context) {
 	}
 	invalidateSessionMapWorkspaces(ctx, ids)
 }
+
 // ── PG 读写 ──
 
 func smPersist(ctx context.Context, ws *SessionMapWorkspace) error {
 	if db.GlobalDBManager == nil {
-	// 落库前先剪枝：引用已删会话的节点在 INSERT 时会触发外键违反（session_id → sessions），
-	// 导致**整个画布**的落库失败 —— 表现是热层一直有数据、PG 永远为空（本项目实际踩过）。
-	// 放在这里而不是只放在读路径：读路径的剪枝只在有人打开地图时触发，而 flusher 是后台跑的。
-	ws = smPruneMissingSessions(ctx, ws)
+		// 落库前先剪枝：引用已删会话的节点在 INSERT 时会触发外键违反（session_id → sessions），
+		// 导致**整个画布**的落库失败 —— 表现是热层一直有数据、PG 永远为空（本项目实际踩过）。
+		// 放在这里而不是只放在读路径：读路径的剪枝只在有人打开地图时触发，而 flusher 是后台跑的。
+		ws = smPruneMissingSessions(ctx, ws)
 		return nil
 	}
 	viewport, _ := json.Marshal(ws.Viewport)
@@ -374,6 +375,7 @@ func invalidateSessionMapWorkspaces(ctx context.Context, workspaceIDs []string) 
 		slog.Info("sessionmap: invalidated workspaces after session delete", "count", len(workspaceIDs))
 	}
 }
+
 // smPruneMissingSessions 丢掉"所引用的会话已经不存在"的节点。
 //
 // 为什么需要它：`session_map_nodes.session_id` 有 ON DELETE CASCADE，PG 侧删会话时节点会
@@ -615,10 +617,10 @@ func (h *SessionMapHandler) ForkNode(w http.ResponseWriter, r *http.Request) {
 	}
 	// 真正的复制交给既有端点，这里只负责接回地图（单一职责，避免两处各写一份复制逻辑）
 	OK(w, map[string]interface{}{
-		"fork_endpoint": "/v1/conversations/" + srcSession + "/fork",
-		"from_index":    body.FromIndex,
+		"fork_endpoint":  "/v1/conversations/" + srcSession + "/fork",
+		"from_index":     body.FromIndex,
 		"parent_node_id": body.NodeID,
-		"hint":          "调用 fork 端点后，用 PUT 工作区把新节点接到 parent_node_id 上",
+		"hint":           "调用 fork 端点后，用 PUT 工作区把新节点接到 parent_node_id 上",
 	})
 }
 

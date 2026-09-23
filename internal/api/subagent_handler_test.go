@@ -90,9 +90,9 @@ func TestStepKindToEventTypeCoversApproval(t *testing.T) {
 		"message":     "subagent.text",
 		"tool_call":   "subagent.status",
 		"tool_result": "subagent.status",
-		"approval": "subagent.approval",
-		"ask":      "subagent.ask",
-		"unknown":  "subagent.notice",
+		"approval":    "subagent.approval",
+		"ask":         "subagent.ask",
+		"unknown":     "subagent.notice",
 	}
 	for kind, want := range cases {
 		if got := stepKindToEventType(kind); got != want {
@@ -101,7 +101,8 @@ func TestStepKindToEventTypeCoversApproval(t *testing.T) {
 	}
 }
 
-func TestStringOfAndIntOfTolerateDriverTypes(t *testing.T) {	if stringOf(nil) != "" || stringOf("x") != "x" {
+func TestStringOfAndIntOfTolerateDriverTypes(t *testing.T) {
+	if stringOf(nil) != "" || stringOf("x") != "x" {
 		t.Error("stringOf basic cases failed")
 	}
 	if stringOf(int64(7)) != "7" || stringOf(3.5) != "3.5" {

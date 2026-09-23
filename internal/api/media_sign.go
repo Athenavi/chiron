@@ -32,20 +32,20 @@ func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string)
 		assetID, tenantID, userID).Scan(&filePath); err != nil {
 		return "", err
 	}
-	
+
 	// 从 file_path 提取文件扩展名
 	ext := filepath.Ext(filePath)
-	
+
 	exp := time.Now().Add(mediaSignTTL).Unix()
 	sig := mediaHMAC(secret, assetID, exp)
-	
+
 	// 如果有扩展名，附加到 URL 中（flyfish-viewer 需要）
 	url := "/media/s/" + assetID
 	if ext != "" {
 		url += ext
 	}
 	url += "?exp=" + strconv.FormatInt(exp, 10) + "&sig=" + sig
-	
+
 	return url, nil
 }
 
@@ -80,7 +80,7 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 	// 从路径中提取 assetID（去掉可能的文件扩展名）
 	rawAssetID := r.PathValue("assetID")
 	assetID := strings.TrimSuffix(rawAssetID, filepath.Ext(rawAssetID))
-	
+
 	expStr := r.URL.Query().Get("exp")
 	sig := r.URL.Query().Get("sig")
 	if assetID == "" || expStr == "" || sig == "" {
@@ -101,7 +101,7 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 	var filePath string
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
 		`SELECT COALESCE(file_path, '') FROM media_assets WHERE id = $1`, assetID).Scan(&filePath); err != nil || filePath == "" {
-		
+
 		// Fallback: 如果 file_path 为空，从 file_url 动态推导
 		var fileURL string
 		if err2 := db.GlobalDBManager.QueryRow(r.Context(),
@@ -110,11 +110,11 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "media not found", http.StatusNotFound)
 			return
 		}
-		
+
 		// 从 file_url 推导 file_path: /media/xxx -> xxx
 		if strings.HasPrefix(fileURL, "/media/") {
 			filePath = strings.TrimPrefix(fileURL, "/media/")
-			slog.Debug("ServeSignedMedia: derived file_path from file_url", 
+			slog.Debug("ServeSignedMedia: derived file_path from file_url",
 				"assetID", assetID, "fileURL", fileURL, "filePath", filePath)
 		} else {
 			slog.Error("ServeSignedMedia: invalid file_url format", "assetID", assetID, "fileURL", fileURL)
@@ -122,7 +122,7 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 	}
-	
+
 	// 归一化 file_path：历史数据里直传路径写入的是完整对象键（含 "media/" 前缀），
 	// 分片路径写入/推导的是相对媒体根的路径。统一为「相对媒体根」，否则与 mediaRoot
 	// 叠加会出现 StorageRoot/media/media/... 的错位路径。
@@ -150,11 +150,11 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid path", http.StatusForbidden)
 		return
 	}
-	
+
 	// 设置正确的响应头以支持音频/视频流式播放
 	w.Header().Set("Accept-Ranges", "bytes")
 	w.Header().Set("Cache-Control", "public, max-age=3600")
-	
+
 	// 根据文件扩展名设置 Content-Type（flyfish-viewer 需要）
 	ext := strings.ToLower(filepath.Ext(clean))
 	switch ext {
@@ -181,7 +181,7 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 	case ".gif":
 		w.Header().Set("Content-Type", "image/gif")
 	}
-	
+
 	http.ServeFile(w, r, clean)
 }
 

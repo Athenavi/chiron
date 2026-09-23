@@ -15,21 +15,22 @@
 // 二、Legacy 路由兼容
 //
 // 以下遗留路由（无版本前缀）已注册版本化别名，旧版前端继续可用：
-//   POST /submit          → POST /v1/agent/submit   （2026-Q3 后移除 legacy）
-//   POST /cancel          → POST /v1/agent/cancel   （2026-Q3 后移除 legacy）
-//   GET  /events          → GET  /v1/events         （2026-Q3 后移除 legacy）
-//   GET  /search          → GET  /v1/search
+//
+//	POST /submit          → POST /v1/agent/submit   （2026-Q3 后移除 legacy）
+//	POST /cancel          → POST /v1/agent/cancel   （2026-Q3 后移除 legacy）
+//	GET  /events          → GET  /v1/events         （2026-Q3 后移除 legacy）
+//	GET  /search          → GET  /v1/search
 //
 // 三、v2 演化策略
 //
 // 当需要向后不兼容的变更时，按以下步骤执行：
-//   1. 注册 /v2/ 路由时保留 /v1/ 旧路由继续服务
-//   2. 前端通过 Accept-Version header 或 URL 前缀选择版本
-//   3. 旧版本至少维护 1 个发布周期（6 个月）后标记 Deprecated
-//   4. 移除 legacy 路由前通过 /v1/system/deprecations 端点公告
+//  1. 注册 /v2/ 路由时保留 /v1/ 旧路由继续服务
+//  2. 前端通过 Accept-Version header 或 URL 前缀选择版本
+//  3. 旧版本至少维护 1 个发布周期（6 个月）后标记 Deprecated
+//  4. 移除 legacy 路由前通过 /v1/system/deprecations 端点公告
 //
 // 四、内部端点
 //
-//   /v1/internal/ 前缀仅限 Go↔Python 内部通信，不对外暴露，
-//   使用 X-Internal-Token header 鉴权，不参与版本化周期。
+//	/v1/internal/ 前缀仅限 Go↔Python 内部通信，不对外暴露，
+//	使用 X-Internal-Token header 鉴权，不参与版本化周期。
 package api

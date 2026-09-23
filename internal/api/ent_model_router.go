@@ -17,16 +17,16 @@ import (
 // EntModelRoute 对应 ent_model_routes 表（租户级模型路由规则）。
 // 支持按 model 配置首选 provider 与 备选 provider 列表。
 type EntModelRoute struct {
-	ID              string            `json:"id"`
-	TenantID        string            `json:"tenant_id"`
-	ModelID         string            `json:"model_id"`          // 模型标识（如 gpt-4, claude-3-opus）
-	PrimaryProvider string            `json:"primary_provider"`  // 首选提供商（openai / anthropic / deepseek）
-	FallbackOrder   []string          `json:"fallback_order"`    // 备选提供商优先级列表
-	ProviderConfig  map[string]any    `json:"provider_config"`   // 提供商级覆盖参数（如 base_url, rpm_limit）
-	Enabled         bool              `json:"enabled"`
-	Priority        int               `json:"priority"`          // 优先级（数字越大越优先）
-	CreatedAt       time.Time         `json:"created_at"`
-	UpdatedAt       time.Time         `json:"updated_at"`
+	ID              string         `json:"id"`
+	TenantID        string         `json:"tenant_id"`
+	ModelID         string         `json:"model_id"`         // 模型标识（如 gpt-4, claude-3-opus）
+	PrimaryProvider string         `json:"primary_provider"` // 首选提供商（openai / anthropic / deepseek）
+	FallbackOrder   []string       `json:"fallback_order"`   // 备选提供商优先级列表
+	ProviderConfig  map[string]any `json:"provider_config"`  // 提供商级覆盖参数（如 base_url, rpm_limit）
+	Enabled         bool           `json:"enabled"`
+	Priority        int            `json:"priority"` // 优先级（数字越大越优先）
+	CreatedAt       time.Time      `json:"created_at"`
+	UpdatedAt       time.Time      `json:"updated_at"`
 }
 
 // EntModelRouterHandler 提供租户模型路由配置 CRUD API，
@@ -193,21 +193,21 @@ func (h *EntModelRouterHandler) GetRoute(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if len(fallbackRaw) > 0 {
-			if err := json.Unmarshal(fallbackRaw, &route.FallbackOrder); err != nil {
-				slog.Warn("model route: unmarshal fallback_order failed", "error", err)
-			}
+		if err := json.Unmarshal(fallbackRaw, &route.FallbackOrder); err != nil {
+			slog.Warn("model route: unmarshal fallback_order failed", "error", err)
 		}
-		if len(configRaw) > 0 {
-			if err := json.Unmarshal(configRaw, &route.ProviderConfig); err != nil {
-				slog.Warn("model route: unmarshal provider_config failed", "error", err)
-			}
-		}
-		OK(w, route)
 	}
+	if len(configRaw) > 0 {
+		if err := json.Unmarshal(configRaw, &route.ProviderConfig); err != nil {
+			slog.Warn("model route: unmarshal provider_config failed", "error", err)
+		}
+	}
+	OK(w, route)
+}
 
-	// ── UpdateRoute ──
+// ── UpdateRoute ──
 
-	func (h *EntModelRouterHandler) UpdateRoute(w http.ResponseWriter, r *http.Request) {
+func (h *EntModelRouterHandler) UpdateRoute(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
@@ -217,11 +217,11 @@ func (h *EntModelRouterHandler) GetRoute(w http.ResponseWriter, r *http.Request)
 	id := r.PathValue("id")
 
 	var body struct {
-		PrimaryProvider *string         `json:"primary_provider"`
-		FallbackOrder   []string        `json:"fallback_order"`
-		ProviderConfig  map[string]any  `json:"provider_config"`
-		Enabled         *bool           `json:"enabled"`
-		Priority        *int            `json:"priority"`
+		PrimaryProvider *string        `json:"primary_provider"`
+		FallbackOrder   []string       `json:"fallback_order"`
+		ProviderConfig  map[string]any `json:"provider_config"`
+		Enabled         *bool          `json:"enabled"`
+		Priority        *int           `json:"priority"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)

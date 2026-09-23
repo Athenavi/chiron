@@ -2,8 +2,8 @@ package api
 
 import (
 	"context"
-	"errors"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -133,6 +133,7 @@ func (h *SubmitHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
 	}
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
+
 // HandleSubmit proxies the submit request to Python engine and streams SSE events.
 // HandleSubmit 执行一次聊天提交。workbenchCtx 是前端组装的工作台上下文
 // （kb_id / agent / skill_names / workflow_id），透传给引擎消费 —— 网关不再丢弃它。

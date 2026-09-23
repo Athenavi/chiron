@@ -17,11 +17,11 @@ var SensitiveFields = []string{
 // sanitizeSensitivePaths 需要脱敏的路径前缀白名单。
 // 只有匹配这些前缀的响应才会被全量缓冲和脱敏，其他路径零开销透传。
 var sanitizeSensitivePaths = []string{
-	"/v1/admin/", "/admin/",           // 管理后台（含租户/用户敏感配置）
-	"/v1/ent/", "/ent/",               // 企业 SSO/策略配置
-	"/v1/auth/register",               // 注册（密码传输）
-	"/v1/auth/login",                  // 登录（密码传输）
-	"/v1/auth/sso/",                   // SSO OIDC 配置
+	"/v1/admin/", "/admin/", // 管理后台（含租户/用户敏感配置）
+	"/v1/ent/", "/ent/", // 企业 SSO/策略配置
+	"/v1/auth/register", // 注册（密码传输）
+	"/v1/auth/login",    // 登录（密码传输）
+	"/v1/auth/sso/",     // SSO OIDC 配置
 }
 
 // sanitizePathAllowed 判断路径是否需要脱敏缓冲。

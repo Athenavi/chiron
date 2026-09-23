@@ -35,7 +35,19 @@ func (h *BillingHandler) ReloadPaymentConfig(ctx context.Context, store *setting
 		}
 		m = loaded
 	}
-	return h.applyConfigMap(m)
+	cfg := h.applyConfigMap(m)
+
+	// 加载结果必须可见：配置"重启后丢失"这类问题，全靠这行日志区分是
+	// 「没落库（db_keys=0）」还是「落了库但没读出来/读出来没生效」。
+	st := h.ChannelStatus()
+	slog.Info("payment config loaded",
+		"db_keys", len(m),
+		"store_available", store != nil,
+		"public_base_url_set", cfg.PublicBaseURL != "",
+		"alipay_ready", st[billing.ChannelAlipay].Enabled,
+		"wechat_ready", st[billing.ChannelWechat].Enabled,
+		"paypal_ready", st[billing.ChannelPayPal].Enabled)
+	return cfg
 }
 
 // applyConfigMap 以 env 为基准应用一组键值并热重建渠道客户端。

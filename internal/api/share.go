@@ -38,7 +38,7 @@ func shareToken() (string, error) {
 }
 
 // userInputTagRe 匹配 InputSanitizer.Sanitize 添加的 <user_input> 包装
-//（internal/api/security.go:67）。`(?s)` 让 `.` 跨行 —— 包装内容是整段用户输入。
+// （internal/api/security.go:67）。`(?s)` 让 `.` 跨行 —— 包装内容是整段用户输入。
 var userInputTagRe = regexp.MustCompile(`(?s)^\s*<user_input>\s*(.*?)\s*</user_input>\s*$`)
 
 // stripUserInputTag 剥掉上述包装；不符合该形态时只去首尾空白。

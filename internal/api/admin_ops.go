@@ -266,9 +266,9 @@ func (h *AdminHandler) ListDomains(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	OK(w, map[string]interface{}{
-		"domains": out,
-		"total":   total,
-		"page":    page,
+		"domains":  out,
+		"total":    total,
+		"page":     page,
 		"per_page": perPage,
 	})
 }

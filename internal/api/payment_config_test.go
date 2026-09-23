@@ -365,6 +365,38 @@ func TestApplyConfigMapEnablesChannelAfterSave(t *testing.T) {
 	}
 }
 
+// 复制粘贴常带不可见空白：URL 尾部多一个空格会让请求落到 /gateway.do%20，
+// 网关回 Apache 404，而日志里地址看上去完全正确 —— 极易被误判成"地址写错了"。
+func TestPaymentConfigNormalizesWhitespace(t *testing.T) {
+	got := paymentConfigFromEnv(nil).applyMap(map[string]interface{}{
+		"public_base_url":  "  https://api.example.com/  ",
+		"alipay_gateway":   "https://openapi-sandbox.dl.alipaydev.com/gateway.do ",
+		"alipay_app_id":    " app-x\n",
+		"paypal_client_id": "\tclient-y",
+	})
+
+	if got.PublicBaseURL != "https://api.example.com" {
+		t.Errorf("public_base_url 未规范化: %q", got.PublicBaseURL)
+	}
+	if got.AlipayGateway != "https://openapi-sandbox.dl.alipaydev.com/gateway.do" {
+		t.Errorf("alipay_gateway 未规范化: %q", got.AlipayGateway)
+	}
+	if got.AlipayAppID != "app-x" {
+		t.Errorf("alipay_app_id 未规范化: %q", got.AlipayAppID)
+	}
+	if got.PayPalClientID != "client-y" {
+		t.Errorf("paypal_client_id 未规范化: %q", got.PayPalClientID)
+	}
+
+	// 密钥类不动：PEM 内部的换行与缩进具有语义，trim 会破坏私钥
+	const pem = "-----BEGIN PRIVATE KEY-----\n  MIIEvQIBADANBg\n-----END PRIVATE KEY-----\n"
+	if got := paymentConfigFromEnv(nil).applyMap(map[string]interface{}{
+		"alipay_private_key": pem,
+	}); got.AlipayPrivateKey != pem {
+		t.Error("私钥不应被规范化，否则 PEM 解析会失败")
+	}
+}
+
 func containsStr(list []string, want string) bool {
 	for _, v := range list {
 		if v == want {

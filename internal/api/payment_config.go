@@ -90,12 +90,29 @@ type PaymentChannelStatus struct {
 	Missing  []string `json:"missing,omitempty"`
 }
 
+// normalize 清理标识类字段里复制粘贴带进来的首尾空白与结尾斜杠。
+//
+// 这些**不可见字符**的代价极高：URL 尾部多一个空格后，请求路径会变成
+// POST /gateway.do%20，网关直接回 Apache 404（"The requested URL was not found"），
+// 而日志里地址看上去完全正确，会被误判成"网关地址写错了"。
+// 密钥/私钥不在此列 —— PEM 内部的换行与空格具有语义，不能动。
+func (p PaymentConfig) normalize() PaymentConfig {
+	p.PublicBaseURL = strings.TrimRight(strings.TrimSpace(p.PublicBaseURL), "/")
+	p.AlipayGateway = strings.TrimSpace(p.AlipayGateway)
+	p.AlipayAppID = strings.TrimSpace(p.AlipayAppID)
+	p.WechatMchID = strings.TrimSpace(p.WechatMchID)
+	p.WechatAppID = strings.TrimSpace(p.WechatAppID)
+	p.WechatMchCertSerialNo = strings.TrimSpace(p.WechatMchCertSerialNo)
+	p.PayPalClientID = strings.TrimSpace(p.PayPalClientID)
+	return p
+}
+
 // paymentConfigFromEnv 以环境变量为兜底基准构造配置。
 // 渠道开关缺省为启用：保持"配置齐全即可用"的历史语义（env 无开关概念）。
 func paymentConfigFromEnv(cfg *config.Config) PaymentConfig {
 	p := PaymentConfig{AlipayEnabled: true, WechatEnabled: true, PayPalEnabled: true}
 	if cfg == nil {
-		return p
+		return p.normalize()
 	}
 	p.PublicBaseURL = cfg.PublicBaseURL
 	p.AlipayAppID = cfg.AlipayAppID
@@ -110,7 +127,7 @@ func paymentConfigFromEnv(cfg *config.Config) PaymentConfig {
 	p.PayPalClientID = cfg.PayPalClientID
 	p.PayPalSecret = cfg.PayPalSecret
 	p.PayPalSandbox = cfg.PayPalSandbox
-	return p
+	return p.normalize()
 }
 
 // applyMap 用 DB 中已持久化的键值覆盖配置；键不存在时沿用当前（兜底）值。
@@ -134,7 +151,7 @@ func (p PaymentConfig) applyMap(m map[string]interface{}) PaymentConfig {
 	applyStr(m, "paypal_client_id", &p.PayPalClientID)
 	applyStr(m, "paypal_secret", &p.PayPalSecret)
 	applyBool(m, "paypal_sandbox", &p.PayPalSandbox)
-	return p
+	return p.normalize()
 }
 
 // applyStr 仅当键存在且为字符串时覆盖目标，避免用非法类型清空已有值。

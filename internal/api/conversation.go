@@ -26,31 +26,31 @@ func NewConversationHandler(a *auth.Authenticator, sm *session.Manager) *Convers
 
 // Conversation is a chat session returned to the frontend.
 type Conversation struct {
-	ID        string     `json:"id"`
-	Title     string     `json:"title"`
-	Pinned    bool       `json:"pinned"`
-	Tag       string     `json:"tag,omitempty"` // 会话标签（前端分类筛选；DB 持久化）
+	ID     string `json:"id"`
+	Title  string `json:"title"`
+	Pinned bool   `json:"pinned"`
+	Tag    string `json:"tag,omitempty"` // 会话标签（前端分类筛选；DB 持久化）
 	// Alias 是用户给会话起的别名/备注（展示时优先于 title）；见 internal/model/model.go 的说明
-	Alias     string     `json:"alias,omitempty"`
+	Alias string `json:"alias,omitempty"`
 	// ── 分支血缘（P0：把 DB 里早已存在的列暴露给前端，用于列表/地图"辨识分支"）──
 	ParentSessionID string `json:"parent_session_id,omitempty"`
 	// ParentTitle 是父会话的展示名（alias || title）；父会话已删则为空
 	ParentTitle   string     `json:"parent_title,omitempty"`
 	BranchFromSeq int        `json:"branch_from_seq,omitempty"`
 	CreatedAt     time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	Messages  []Message  `json:"messages,omitempty"`
-	ToolCalls []ToolCall `json:"tool_calls,omitempty"` // S 修复：工具调用过程落库，刷新后还原
-	Cursor    string     `json:"cursor,omitempty"`     // P 性能修复：分页游标（加载更早消息）
-	HasMore   bool       `json:"has_more"`             // P 性能修复：是否还有更早的消息
+	UpdatedAt     time.Time  `json:"updated_at"`
+	Messages      []Message  `json:"messages,omitempty"`
+	ToolCalls     []ToolCall `json:"tool_calls,omitempty"` // S 修复：工具调用过程落库，刷新后还原
+	Cursor        string     `json:"cursor,omitempty"`     // P 性能修复：分页游标（加载更早消息）
+	HasMore       bool       `json:"has_more"`             // P 性能修复：是否还有更早的消息
 }
 
 // Message is a single chat message returned to the frontend.
 type Message struct {
-	ID        string    `json:"id"`
-	Role      string    `json:"role"`
-	Content   string    `json:"content"`
-	ToolCalls string    `json:"tool_calls,omitempty"` // assistant 消息的 OpenAI 格式 tool_calls（S 修复）
+	ID        string `json:"id"`
+	Role      string `json:"role"`
+	Content   string `json:"content"`
+	ToolCalls string `json:"tool_calls,omitempty"` // assistant 消息的 OpenAI 格式 tool_calls（S 修复）
 	// TurnID 该消息所属回合（前端按回合分组渲染/锚定，缺失时前端按时间兜底）
 	TurnID    string    `json:"turn_id,omitempty"`
 	CreatedAt time.Time `json:"created_at"`

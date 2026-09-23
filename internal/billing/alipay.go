@@ -195,8 +195,14 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 		return "", err
 	}
 	if resp.StatusCode >= 400 {
-		return "", fmt.Errorf("alipay precreate: 网关 %s 返回 HTTP %d：%s",
-			c.gateway, resp.StatusCode, responseSnippet(body))
+		// 用 %q 展示网关：尾部多一个不可见空格就会让请求落到 /gateway.do%20 并拿到
+		// 网关侧的 404，而日志里地址看上去完全正确。同时打印最终请求地址，
+		// 以便识别"被重定向到了别的地方"这种情况（代理/HTTP→HTTPS 跳转）。
+		return "", fmt.Errorf("alipay precreate: 网关 %q 返回 HTTP %d（最终请求地址 %q）：%s；"+
+			"请确认网关地址与该 AppID 所属环境一致（生产 https://openapi.alipay.com/gateway.do，"+
+			"沙箱 https://openapi-sandbox.dl.alipaydev.com/gateway.do），且不含首尾空白；"+
+			"若地址本身无误，请检查该服务进程是否设置了 HTTP_PROXY/HTTPS_PROXY、或 DNS/hosts 被改写",
+			c.gateway, resp.StatusCode, resp.Request.URL.String(), responseSnippet(body))
 	}
 
 	var r struct {
@@ -266,8 +272,8 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 		return "", false, err
 	}
 	if resp.StatusCode >= 400 {
-		return "", false, fmt.Errorf("alipay query: 网关 %s 返回 HTTP %d：%s",
-			c.gateway, resp.StatusCode, responseSnippet(body))
+		return "", false, fmt.Errorf("alipay query: 网关 %q 返回 HTTP %d（最终请求地址 %q）：%s",
+			c.gateway, resp.StatusCode, resp.Request.URL.String(), responseSnippet(body))
 	}
 	var r struct {
 		Response struct {
