@@ -2,11 +2,15 @@
 import { ref, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space } from 'ant-design-vue'
-import { MailOutlined, LockOutlined, UserOutlined } from '@ant-design/icons-vue'
+import { MailOutlined, LockOutlined, UserOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
-import { getCaptchaPublicConfig } from '../api/auth'
+import { getCaptchaPublicConfig, getEmailStatus, sendEmailCode, isValidEmail } from '../api/auth'
+import { useSmsCountdown } from '../composables/useSmsCountdown'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
 import type { Rule } from 'ant-design-vue/es/form'
+
+import { useI18n } from 'vue-i18n'
+const { t } = useI18n()
 
 const router = useRouter()
 const authStore = useAuthStore()
@@ -17,6 +21,7 @@ const form = ref({
   email: '',
   password: '',
   confirmPassword: '',
+  emailCode: '',
 })
 
 const rules: Record<string, Rule[]> = {
@@ -57,6 +62,66 @@ function markCaptchaDirty() {
   captchaRandstr.value = ''
 }
 
+// ── 邮箱验证码（后台开启「注册邮箱验证」时必填） ──
+const emailVerifyRequired = ref(false)
+const emailSending = ref(false)
+const emailCodeError = ref('')
+const { remaining: emailRemaining, start: startEmailCountdown } = useSmsCountdown(60)
+
+const emailCodeRules: Rule[] = [
+  { required: true, message: t('请输入邮箱验证码'), trigger: 'blur' },
+  { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
+]
+
+async function handleSendEmailCode() {
+  emailCodeError.value = ''
+  const email = form.value.email.trim()
+  if (!isValidEmail(email)) {
+    emailCodeError.value = t('请先填写正确的邮箱')
+    return
+  }
+  if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
+    emailCodeError.value = t('请先完成人机验证')
+    return
+  }
+  emailSending.value = true
+  try {
+    const res = await sendEmailCode({
+      email,
+      purpose: 'register',
+      captcha_token: captchaToken.value,
+      captcha_randstr: captchaRandstr.value,
+    })
+    startEmailCountdown(res.interval || 60)
+    emailCodeError.value = ''
+    markCaptchaDirty()
+    captchaRef.value?.reset()
+  } catch (e: any) {
+    const status = e.response?.status
+    const apiErr = e.response?.data?.error
+    if (status === 428 || apiErr === 'captcha_required') {
+      captchaRequired.value = true
+      emailCodeError.value = t('操作过于频繁，请完成人机验证后重试')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    if (status === 403 && String(apiErr).includes('captcha')) {
+      emailCodeError.value = t('人机验证未通过，请重新验证')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    if (status === 429) {
+      emailCodeError.value = t('发送过于频繁，请稍后再试')
+      return
+    }
+    emailCodeError.value = apiErr || t('验证码发送失败')
+  } finally {
+    emailSending.value = false
+  }
+}
+
 onMounted(async () => {
   try {
     const cfg = await getCaptchaPublicConfig()
@@ -70,6 +135,12 @@ onMounted(async () => {
     // 配置接口不可达时按无验证码处理（后端仍会兜底校验）
   }
   captchaRequired.value = captchaConfig.value.enabled
+  try {
+    const es = await getEmailStatus()
+    emailVerifyRequired.value = !!(es.enabled && es.register_verify)
+  } catch {
+    // 邮件服务状态不可达时隐藏验证码输入（后端仍会兜底要求）
+  }
 })
 
 async function handleRegister() {
@@ -83,11 +154,18 @@ async function handleRegister() {
     error.value = '请先完成人机验证'
     return
   }
+  if (emailVerifyRequired.value && !form.value.emailCode.trim()) {
+    error.value = t('请先获取并填写邮箱验证码')
+    return
+  }
   try {
-    await authStore.register(form.value.email, form.value.password, form.value.name, {
-      token: captchaToken.value,
-      randstr: captchaRandstr.value,
-    })
+    await authStore.register(
+      form.value.email,
+      form.value.password,
+      form.value.name,
+      { token: captchaToken.value, randstr: captchaRandstr.value },
+      form.value.emailCode.trim(),
+    )
     router.push('/chat')
   } catch (e: any) {
     const status = e.response?.status
@@ -180,6 +258,39 @@ async function handleRegister() {
             >
               <template #prefix>
                 <MailOutlined />
+              </template>
+            </Input>
+          </FormItem>
+
+          <FormItem
+            v-if="emailVerifyRequired"
+            :label="$t('邮箱验证码')"
+            name="emailCode"
+            :rules="emailCodeRules"
+            :help="emailCodeError"
+            :validate-status="emailCodeError ? 'error' : undefined"
+          >
+            <Input
+              v-model:value="form.emailCode"
+              :placeholder="$t('请输入邮箱收到的验证码')"
+              size="large"
+              :maxlength="6"
+              :aria-label="$t('邮箱验证码')"
+              autocomplete="one-time-code"
+            >
+              <template #prefix>
+                <SafetyOutlined />
+              </template>
+              <template #suffix>
+                <Button
+                  size="small"
+                  type="link"
+                  :disabled="emailRemaining > 0 || emailSending"
+                  :loading="emailSending"
+                  @click="handleSendEmailCode"
+                >
+                  {{ emailRemaining > 0 ? $t('{s}s 后重发', { s: emailRemaining }) : $t('获取验证码') }}
+                </Button>
               </template>
             </Input>
           </FormItem>

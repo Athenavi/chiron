@@ -239,3 +239,134 @@ export function isValidPhone(phone: string): boolean {
   const digits = p.startsWith('+') ? p.slice(1) : p
   return /^\d{5,20}$/.test(digits)
 }
+
+// ── 邮件：邮箱验证码登录 / 注册邮箱验证 / 密码重置 / 管理端配置 ──
+
+export interface EmailStatus {
+  enabled: boolean
+  login_enabled: boolean
+  register_verify: boolean
+  reset_enabled: boolean
+}
+
+/** 登录/注册页据此决定是否展示邮箱登录、注册验证码、找回密码入口 */
+export async function getEmailStatus(): Promise<EmailStatus> {
+  const { data } = await api.get('/v1/auth/email/status')
+  return data?.data ?? { enabled: false, login_enabled: false, register_verify: false, reset_enabled: false }
+}
+
+export interface SendEmailCodeResult {
+  status: string
+  expire_seconds: number
+  interval: number
+}
+
+/** 发送邮箱验证码（防滥用：人机验证 + 发送冷却 + 每日上限） */
+export async function sendEmailCode(body: {
+  email: string
+  purpose?: 'login' | 'register'
+  captcha_token?: string
+  captcha_randstr?: string
+}): Promise<SendEmailCodeResult> {
+  const { data } = await api.post('/v1/auth/email/code', body)
+  return data?.data
+}
+
+export async function emailLogin(body: {
+  email: string
+  code: string
+  captcha_token?: string
+  captcha_randstr?: string
+}): Promise<{ token: string; user: any }> {
+  const { data } = await api.post('/v1/auth/email/login', body)
+  return data?.data
+}
+
+/** 申请密码重置：后端恒返回 sent（不暴露邮箱是否存在） */
+export async function requestPasswordReset(body: {
+  email: string
+  captcha_token?: string
+  captcha_randstr?: string
+}): Promise<{ status: string; expire_seconds: number }> {
+  const { data } = await api.post('/v1/auth/password/reset/request', body)
+  return data?.data
+}
+
+/** 用邮件里的令牌重设密码 */
+export async function confirmPasswordReset(body: {
+  token: string
+  password: string
+  captcha_token?: string
+  captcha_randstr?: string
+}): Promise<void> {
+  await api.post('/v1/auth/password/reset/confirm', body)
+}
+
+export interface MailAdminConfig {
+  provider: 'smtp' | 'qingchen'
+  enabled: boolean
+  /** SMTP 通道 */
+  smtp_host: string
+  smtp_port: number
+  smtp_username: string
+  smtp_password: string
+  smtp_security: 'none' | 'starttls' | 'ssl'
+  smtp_skip_verify: boolean
+  /** 晴辰云邮（HTTP API）通道 */
+  api_base_url: string
+  api_key: string
+  api_channel_id: number
+  api_template_id: number
+  /** 发件身份 */
+  from_address: string
+  from_name: string
+  reply_to: string
+  /** 站点信息 */
+  site_name: string
+  app_base_url: string
+  /** 能力开关 */
+  login_enabled: boolean
+  register_verify: boolean
+  auto_register: boolean
+  reset_enabled: boolean
+  welcome_enabled: boolean
+  /** 邮件模板（留空用内置默认） */
+  code_subject: string
+  code_body: string
+  welcome_subject: string
+  welcome_body: string
+  reset_subject: string
+  reset_body: string
+  /** 限流与超时 */
+  code_ttl_seconds: number
+  send_interval_seconds: number
+  daily_limit: number
+  timeout_seconds: number
+  exists?: boolean
+}
+
+export async function getMailAdminConfig(): Promise<MailAdminConfig> {
+  const { data } = await api.get('/v1/ent/mail/config')
+  return data?.data
+}
+
+export async function updateMailConfig(body: Partial<MailAdminConfig>): Promise<MailAdminConfig> {
+  const { data } = await api.put('/v1/ent/mail/config', body)
+  return data?.data
+}
+
+/** 用当前配置真实发一封测试邮件（启用前先确认能不能通） */
+export async function sendMailTest(to: string): Promise<{ status: string; to: string }> {
+  const { data } = await api.post('/v1/ent/mail/test', { to })
+  return data?.data
+}
+
+/** 邮箱校验（与后端 ValidateMailAddress 一致：单段域名与换行注入都拒绝） */
+export function isValidEmail(email: string): boolean {
+  const e = (email || '').trim()
+  if (!e || e.length > 254 || /[\r\n]/.test(e)) return false
+  const at = e.lastIndexOf('@')
+  if (at <= 0 || at === e.length - 1) return false
+  const domain = e.slice(at + 1)
+  return domain.includes('.') && !domain.startsWith('.') && !domain.endsWith('.') && !/\s/.test(e)
+}

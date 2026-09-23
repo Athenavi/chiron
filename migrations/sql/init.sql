@@ -584,6 +584,52 @@ create table ent_groups
     created_at  timestamp
 );
 
+-- 邮件发信配置（后台「邮件配置」）。单租户单行：tenant_id 唯一，
+-- 保存路径靠 ON CONFLICT (tenant_id) 做 upsert，因此这里必须是唯一约束。
+-- 凭据列 (*_enc) 与 ent_sms_config.secret_enc 同口径：AES-256-GCM 密文。
+create table ent_mail_config
+(
+    id                    varchar(36) not null
+        primary key,
+    tenant_id             varchar(36) not null
+        unique
+        references tenants,
+    provider              varchar(32),
+    enabled               boolean default false not null,
+    smtp_host             varchar(255),
+    smtp_port             integer,
+    smtp_username         varchar(255),
+    smtp_password_enc     text,
+    smtp_security         varchar(16),
+    smtp_skip_verify      boolean default false not null,
+    api_base_url          varchar(512),
+    api_key_enc           text,
+    api_channel_id        integer,
+    api_template_id       integer,
+    from_address          varchar(255),
+    from_name             varchar(128),
+    reply_to              varchar(255),
+    site_name             varchar(128),
+    app_base_url          varchar(512),
+    login_enabled         boolean default false not null,
+    register_verify       boolean default false not null,
+    auto_register         boolean default false not null,
+    reset_enabled         boolean default false not null,
+    welcome_enabled       boolean default true not null,
+    code_subject          varchar(255),
+    code_body             text,
+    welcome_subject       varchar(255),
+    welcome_body          text,
+    reset_subject         varchar(255),
+    reset_body            text,
+    code_ttl_seconds      integer default 300 not null,
+    send_interval_seconds integer default 60 not null,
+    daily_limit           integer default 10 not null,
+    timeout_seconds       integer default 30 not null,
+    created_at            timestamp,
+    updated_at            timestamp
+);
+
 create table ent_oidc_providers
 (
     id                varchar(36) not null

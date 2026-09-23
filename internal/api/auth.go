@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -43,6 +44,8 @@ type AuthHandler struct {
 	auth    *auth.Authenticator
 	cfg     *config.Config
 	captcha *CaptchaHandler
+	// mail 可选：注入后注册流程支持"邮箱验证码校验 + 欢迎邮件"。
+	mail *MailHandler
 }
 
 func NewAuthHandler(cfg *config.Config) *AuthHandler {
@@ -55,6 +58,11 @@ func NewAuthHandler(cfg *config.Config) *AuthHandler {
 // SetCaptchaHandler injects the captcha handler.
 func (h *AuthHandler) SetCaptchaHandler(c *CaptchaHandler) {
 	h.captcha = c
+}
+
+// SetMailHandler injects the mail handler (邮箱验证码注册校验 / 欢迎邮件).
+func (h *AuthHandler) SetMailHandler(m *MailHandler) {
+	h.mail = m
 }
 
 type LoginRequest struct {
@@ -199,9 +207,11 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 }
 
 type RegisterRequest struct {
-	Email          string `json:"email"`
-	Password       string `json:"password"`
-	Name           string `json:"name"`
+	Email    string `json:"email"`
+	Password string `json:"password"`
+	Name     string `json:"name"`
+	// EmailCode 邮箱验证码：后台开启「注册邮箱验证」(register_verify) 时必填。
+	EmailCode      string `json:"email_code"`
 	CaptchaToken   string `json:"captcha_token"`
 	CaptchaRandstr string `json:"captcha_randstr"`
 }
@@ -273,6 +283,31 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 邮箱验证码校验（后台开启「注册邮箱验证」时必填）。
+	// 刻意放在"邮箱是否已被占用"之后：邮箱已注册是注册流程最常见的失败，
+	// 若先消费验证码，用户改个邮箱就要重新收信，体验很差。
+	if h.mail != nil {
+		required, verr := h.mail.RegisterVerifyEnabled(ctx)
+		if verr != nil {
+			logAndRespond(w, verr, http.StatusInternalServerError, ErrDBUnavailable)
+			return
+		}
+		if required {
+			if strings.TrimSpace(req.EmailCode) == "" {
+				BadRequest(w, "请先获取邮箱验证码")
+				return
+			}
+			if cerr := h.mail.ConsumeCode(ctx, mailPurposeRegister, req.Email, req.EmailCode); cerr != nil {
+				if errors.Is(cerr, errCodeStoreUnavailable) {
+					ServiceUnavailable(w, "验证码存储不可用")
+					return
+				}
+				BadRequest(w, cerr.Error())
+				return
+			}
+		}
+	}
+
 	// 首个注册用户成为系统管理员（owner）：以 users 表是否为空判定；
 	// 咨询锁保证并发注册时只有一个请求能成为 owner，其余按普通用户落库。
 	if _, err := tx.Exec(ctx, `SELECT pg_advisory_xact_lock(hashtext('chiron_first_user'))`); err != nil {
@@ -322,6 +357,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
+	}
+
+	// 欢迎邮件：异步发送（不阻塞、不因发信失败而回滚已创建的账号）。
+	if h.mail != nil {
+		h.mail.SendWelcomeAsync(req.Email, req.Name)
 	}
 
 	SetTokenCookie(w, token, int(h.cfg.JWTExpiration.Seconds()), h.cfg.CookieSecure)

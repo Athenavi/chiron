@@ -29,116 +29,9 @@ import (
 const (
 	smsMaxTries      = 5                // 验证码最大尝试次数，超过作废
 	smsCodeDigits    = 6                // 验证码位数
-	smsDailyWindow   = 24 * time.Hour   // 每日计数窗口
 	smsMaxDailyLimit = 100              // 每日上限配置上限
 	smsMaxCodeTTL    = 15 * time.Minute // 验证码有效期上限
 )
-
-// SMS 验证码/防滥用 Redis 键前缀（统一 RedisKey，多环境隔离；空前缀 = 存量兼容）。
-var (
-	smsCodeKeyPrefix  = db.RedisKey("sms:code:")  // 验证码
-	smsTriesKeyPrefix = db.RedisKey("sms:tries:") // 尝试计数
-	smsCoolKeyPrefix  = db.RedisKey("sms:cool:")  // 发送冷却标记
-	smsDailyKeyPrefix = db.RedisKey("sms:day:")   // 每日发送计数
-)
-
-// smsCodeStore 抽象验证码存取（生产 Redis，测试内存 fake）。
-type smsCodeStore interface {
-	SetCode(ctx context.Context, phone, code string, ttl time.Duration) error
-	GetCode(ctx context.Context, phone string) (string, error)
-	DelCode(ctx context.Context, phone string) error
-	IncrTries(ctx context.Context, phone string) (int, error)
-	ResetTries(ctx context.Context, phone string) error
-	MarkCooldown(ctx context.Context, phone string, ttl time.Duration) error
-	InCooldown(ctx context.Context, phone string) (bool, error)
-	IncrDaily(ctx context.Context, phone string) (int, error)
-}
-
-// redisSmsCodeStore 是 Redis 实现。
-type redisSmsCodeStore struct {
-	rdb db.RedisClient
-}
-
-func (s redisSmsCodeStore) SetCode(ctx context.Context, phone, code string, ttl time.Duration) error {
-	if s.rdb == nil {
-		return errors.New("sms: redis unavailable")
-	}
-	return s.rdb.Set(ctx, smsCodeKeyPrefix+phone, code, ttl).Err()
-}
-
-func (s redisSmsCodeStore) GetCode(ctx context.Context, phone string) (string, error) {
-	if s.rdb == nil {
-		return "", errors.New("sms: redis unavailable")
-	}
-	v, err := s.rdb.Get(ctx, smsCodeKeyPrefix+phone).Result()
-	if err != nil {
-		// 过期/不存在视为空码
-		return "", nil
-	}
-	return v, nil
-}
-
-func (s redisSmsCodeStore) DelCode(ctx context.Context, phone string) error {
-	if s.rdb == nil {
-		return errors.New("sms: redis unavailable")
-	}
-	return s.rdb.Del(ctx, smsCodeKeyPrefix+phone).Err()
-}
-
-func (s redisSmsCodeStore) IncrTries(ctx context.Context, phone string) (int, error) {
-	if s.rdb == nil {
-		return 0, errors.New("sms: redis unavailable")
-	}
-	key := smsTriesKeyPrefix + phone
-	n, err := s.rdb.Incr(ctx, key).Result()
-	if err != nil {
-		return 0, err
-	}
-	if n == 1 {
-		s.rdb.Expire(ctx, key, smsMaxCodeTTL)
-	}
-	return int(n), nil
-}
-
-func (s redisSmsCodeStore) ResetTries(ctx context.Context, phone string) error {
-	if s.rdb == nil {
-		return errors.New("sms: redis unavailable")
-	}
-	return s.rdb.Del(ctx, smsTriesKeyPrefix+phone).Err()
-}
-
-func (s redisSmsCodeStore) MarkCooldown(ctx context.Context, phone string, ttl time.Duration) error {
-	if s.rdb == nil {
-		return errors.New("sms: redis unavailable")
-	}
-	return s.rdb.Set(ctx, smsCoolKeyPrefix+phone, "1", ttl).Err()
-}
-
-func (s redisSmsCodeStore) InCooldown(ctx context.Context, phone string) (bool, error) {
-	if s.rdb == nil {
-		return false, errors.New("sms: redis unavailable")
-	}
-	n, err := s.rdb.Exists(ctx, smsCoolKeyPrefix+phone).Result()
-	if err != nil {
-		return false, err
-	}
-	return n > 0, nil
-}
-
-func (s redisSmsCodeStore) IncrDaily(ctx context.Context, phone string) (int, error) {
-	if s.rdb == nil {
-		return 0, errors.New("sms: redis unavailable")
-	}
-	key := smsDailyKeyPrefix + phone
-	n, err := s.rdb.Incr(ctx, key).Result()
-	if err != nil {
-		return 0, err
-	}
-	if n == 1 {
-		s.rdb.Expire(ctx, key, smsDailyWindow)
-	}
-	return int(n), nil
-}
 
 // smsConfigRow 是 ent_sms_config 的内存形态（secret 保留密文）。
 type smsConfigRow struct {
@@ -164,7 +57,7 @@ type SmsHandler struct {
 	encKey  []byte
 	sender  auth.SmsSender
 	captcha *CaptchaHandler // 可选：nil 跳过人机验证（单测用）
-	store   smsCodeStore
+	store   codeStore
 }
 
 // NewSmsHandler 构造短信 handler；加密密钥沿用 SSO 密钥，验证码存储依赖 Redis。
@@ -176,7 +69,7 @@ func NewSmsHandler(authenticator *auth.Authenticator, cfg *config.Config, captch
 		encKey:  auth.LoadOIDCEncryptionKey(),
 		sender:  auth.NewHTTPSmsSender(),
 		captcha: captcha,
-		store:   redisSmsCodeStore{rdb: db.Redis},
+		store:   newRedisCodeStore(db.Redis, "sms:"),
 	}
 }
 

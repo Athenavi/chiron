@@ -73,13 +73,21 @@ export const useAuthStore = defineStore('auth', () => {
     }
   }
 
-  async function register(email: string, password: string, name: string, captcha?: { token: string; randstr?: string }) {
+  async function register(
+    email: string,
+    password: string,
+    name: string,
+    captcha?: { token: string; randstr?: string },
+    emailCode?: string,
+  ) {
     loading.value = true
     try {
       const response = await api.post('/v1/auth/register', {
         email,
         password,
         name,
+        // 后台开启「注册邮箱验证」时必填，未开启时后端忽略
+        email_code: emailCode || '',
         captcha_token: captcha?.token || '',
         captcha_randstr: captcha?.randstr || '',
       })

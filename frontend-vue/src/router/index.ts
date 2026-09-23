@@ -20,6 +20,18 @@ const routes = [
     component: () => import('../views/RegisterView.vue'),
   },
   {
+    // 忘记密码：申请邮件重置链接（邮件服务未启用时后端 403，入口在登录页按状态隐藏）
+    path: '/forgot-password',
+    name: 'ForgotPassword',
+    component: () => import('../views/ForgotPasswordView.vue'),
+  },
+  {
+    // 重置密码：令牌由邮件里的 /reset-password?token=... 链接带入
+    path: '/reset-password',
+    name: 'ResetPassword',
+    component: () => import('../views/ResetPasswordView.vue'),
+  },
+  {
     path: '/chat',
     name: 'Chat',
     component: () => import('../views/ChatView.vue'),
@@ -153,6 +165,14 @@ const routes = [
         name: 'AdminSettings',
         component: () => import('../views/admin/SettingsView.vue'),
         meta: { title: t('系统设置') },
+      },
+      // ── 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置 / 欢迎邮件）──
+      // 发信服务器地址与凭据全部在此配置，代码中不含任何厂商默认地址。
+      {
+        path: 'mail',
+        name: 'AdminMail',
+        component: () => import('../views/admin/MailView.vue'),
+        meta: { title: t('邮件配置') },
       },
       // ── 支付渠道配置（支付宝 / 微信支付 / PayPal）──
       // 凭据加密入库 + 保存后热生效；原「系统设置」里的支付卡片已迁移到此处，

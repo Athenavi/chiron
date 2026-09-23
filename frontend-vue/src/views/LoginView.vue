@@ -4,7 +4,7 @@ import { useRouter, useRoute } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space, Tabs, TabPane, message } from 'ant-design-vue'
 import { MailOutlined, LockOutlined, MobileOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
-import { getCaptchaPublicConfig, getSmsStatus, sendSmsCode, smsLogin, isValidPhone } from '../api/auth'
+import { getCaptchaPublicConfig, getSmsStatus, sendSmsCode, smsLogin, isValidPhone, getEmailStatus, sendEmailCode, emailLogin, isValidEmail } from '../api/auth'
 import { useSmsCountdown } from '../composables/useSmsCountdown'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
 import SsoLoginButtons from '../components/SsoLoginButtons.vue'
@@ -173,6 +173,127 @@ async function handleSmsLogin() {
   }
 }
 
+// ── 邮箱验证码登录 ──
+
+const emailEnabled = ref(false)
+const resetEnabled = ref(false)
+
+const emailFormRef = ref()
+const emailForm = ref({ email: '', code: '' })
+
+const emailRules: Record<string, Rule[]> = {
+  email: [
+    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
+    {
+      validator: (_rule: Rule, value: string) =>
+        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('邮箱格式不正确')),
+      trigger: 'blur',
+    },
+  ],
+  code: [
+    { required: true, message: t('请输入验证码'), trigger: 'blur' },
+    { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
+  ],
+}
+
+// 倒计时逻辑与短信共用（纯计时，不区分通道）
+const { remaining: emailRemaining, start: startEmailCountdown } = useSmsCountdown(60)
+const emailSending = ref(false)
+const emailLoading = ref(false)
+const emailError = ref('')
+
+async function handleSendEmailCode() {
+  emailError.value = ''
+  const email = emailForm.value.email.trim()
+  if (!isValidEmail(email)) {
+    emailError.value = t('请输入正确的邮箱')
+    return
+  }
+  if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
+    emailError.value = t('请先完成人机验证')
+    return
+  }
+  emailSending.value = true
+  try {
+    const res = await sendEmailCode({
+      email,
+      purpose: 'login',
+      captcha_token: captchaToken.value,
+      captcha_randstr: captchaRandstr.value,
+    })
+    startEmailCountdown(res.interval || 60)
+    message.success(t('验证码已发送'))
+    markCaptchaDirty()
+    captchaRef.value?.reset()
+  } catch (e: any) {
+    const status = e.response?.status
+    const apiErr = e.response?.data?.error
+    if (status === 428 || apiErr === 'captcha_required') {
+      needCaptcha.value = true
+      emailError.value = t('操作过于频繁，请完成人机验证后重试')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    if (status === 403 && String(apiErr).includes('captcha')) {
+      emailError.value = t('人机验证未通过，请重新验证')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    if (status === 429) {
+      emailError.value = t('发送过于频繁，请稍后再试')
+      return
+    }
+    emailError.value = apiErr || t('验证码发送失败')
+  } finally {
+    emailSending.value = false
+  }
+}
+
+async function handleEmailLogin() {
+  emailError.value = ''
+  try {
+    await emailFormRef.value?.validate()
+  } catch {
+    return
+  }
+  if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
+    emailError.value = t('请先完成人机验证')
+    return
+  }
+  emailLoading.value = true
+  try {
+    const { token, user } = await emailLogin({
+      email: emailForm.value.email.trim(),
+      code: emailForm.value.code.trim(),
+      captcha_token: captchaToken.value,
+      captcha_randstr: captchaRandstr.value,
+    })
+    authStore.applySession(token, user)
+    router.push('/chat')
+  } catch (e: any) {
+    const status = e.response?.status
+    const apiErr = e.response?.data?.error
+    if (status === 428 || apiErr === 'captcha_required') {
+      needCaptcha.value = true
+      emailError.value = t('操作过于频繁，请完成人机验证后重试')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    if (status === 403 && String(apiErr).includes('captcha')) {
+      emailError.value = t('人机验证未通过，请重新验证')
+      captchaRef.value?.reset()
+      markCaptchaDirty()
+      return
+    }
+    emailError.value = apiErr || t('登录失败')
+  } finally {
+    emailLoading.value = false
+  }
+}
+
 onMounted(async () => {
   // SSO 登录回跳（successURL 带 ?sso=ok）：cookie 或 Bearer token 建立本地会话
   if (route.query.sso === 'ok' && !authStore.token) {
@@ -199,6 +320,13 @@ onMounted(async () => {
     smsEnabled.value = !!(st.enabled && st.login_enabled)
   } catch {
     // 短信服务状态不可达时隐藏短信登录入口（后端仍会兜底拒绝）
+  }
+  try {
+    const es = await getEmailStatus()
+    emailEnabled.value = !!(es.enabled && es.login_enabled)
+    resetEnabled.value = !!(es.enabled && es.reset_enabled)
+  } catch {
+    // 邮件服务状态不可达时隐藏邮箱登录/找回密码入口（后端仍会兜底拒绝）
   }
 })
 
@@ -308,6 +436,12 @@ async function handleLogin() {
             key="sms"
             tab="短信登录"
           />
+
+          <TabPane
+            v-if="emailEnabled"
+            key="email"
+            :tab="$t('邮箱登录')"
+          />
         </Tabs>
 
         <!-- 密码登录 -->
@@ -391,6 +525,14 @@ async function handleLogin() {
                   {{ $t('登录') }}
                 </Button>
                 <Button
+                  v-if="resetEnabled"
+                  type="link"
+                  block
+                  @click="router.push('/forgot-password')"
+                >
+                  {{ $t('忘记密码？') }}
+                </Button>
+                <Button
                   type="link"
                   block
                   @click="router.push('/register')"
@@ -403,7 +545,7 @@ async function handleLogin() {
         </template>
 
         <!-- 短信登录 -->
-        <template v-else>
+        <template v-else-if="activeTab === 'sms'">
           <Alert
             v-if="smsError"
             type="error"
@@ -482,6 +624,94 @@ async function handleLogin() {
                 size="large"
                 :loading="smsLoading"
                 @click="handleSmsLogin"
+              >
+                {{ $t('登录') }}
+              </Button>
+            </FormItem>
+          </Form>
+        </template>
+
+        <!-- 邮箱验证码登录 -->
+        <template v-else>
+          <Alert
+            v-if="emailError"
+            type="error"
+            :message="emailError"
+            show-icon
+            style="margin-bottom: 16px"
+          />
+
+          <Form
+            ref="emailFormRef"
+            :model="emailForm"
+            :rules="emailRules"
+            layout="vertical"
+          >
+            <FormItem
+              :label="$t('邮箱')"
+              name="email"
+            >
+              <Input
+                v-model:value="emailForm.email"
+                :placeholder="$t('请输入邮箱')"
+                size="large"
+                :maxlength="254"
+                autocomplete="email"
+              >
+                <template #prefix>
+                  <MailOutlined />
+                </template>
+              </Input>
+            </FormItem>
+
+            <FormItem
+              :label="$t('验证码')"
+              name="code"
+            >
+              <Input
+                v-model:value="emailForm.code"
+                :placeholder="$t('6 位数字验证码')"
+                size="large"
+                :maxlength="6"
+              >
+                <template #prefix>
+                  <SafetyOutlined />
+                </template>
+                <template #suffix>
+                  <Button
+                    size="small"
+                    type="link"
+                    :disabled="emailRemaining > 0 || emailSending"
+                    :loading="emailSending"
+                    @click="handleSendEmailCode"
+                  >
+                    {{ emailRemaining > 0 ? $t('{s}s 后重发', { s: emailRemaining }) : $t('获取验证码') }}
+                  </Button>
+                </template>
+              </Input>
+            </FormItem>
+
+            <FormItem
+              v-if="needCaptcha"
+              :label="$t('人机验证')"
+            >
+              <CaptchaWidget
+                ref="captchaRef"
+                :provider="captchaConfig.provider"
+                :site-key="captchaConfig.site_key"
+                :verify-url="captchaConfig.verify_url"
+                @verified="(p: any) => { captchaToken = p.token; captchaRandstr = p.randstr || '' }"
+                @expired="markCaptchaDirty"
+              />
+            </FormItem>
+
+            <FormItem>
+              <Button
+                type="primary"
+                block
+                size="large"
+                :loading="emailLoading"
+                @click="handleEmailLogin"
               >
                 {{ $t('登录') }}
               </Button>

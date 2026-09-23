@@ -42,6 +42,7 @@ import {
   MenuUnfoldOutlined,
   BulbOutlined,
   AuditOutlined,
+  MailOutlined,
 } from '@ant-design/icons-vue'
 
 import { useI18n } from 'vue-i18n'
@@ -95,6 +96,8 @@ const menuGroups = computed(() => [
       { key: '/admin/access', label: t('权限与组织'), icon: () => h(IdcardOutlined) },
       // 原「三方登录与人机验证 + 隐私模式管控」合并为认证与防护（Tabs）
       { key: '/admin/identity', label: t('认证与防护'), icon: () => h(SafetyOutlined) },
+      // 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置）的服务端配置
+      { key: '/admin/mail', label: t('邮件配置'), icon: () => h(MailOutlined) },
       // 原「模型策略管控 + 模型路由管控」合并为模型管控（Tabs）
       { key: '/admin/models', label: t('模型管控'), icon: () => h(ControlOutlined) },
     ],

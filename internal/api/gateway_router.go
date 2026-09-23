@@ -236,11 +236,14 @@ func NewGatewayRouter(
 	authHandler := NewAuthHandler(cfg)
 	authMW := AuthMiddleware(authenticator)
 
-	// SSO 三方登录 + 人机验证（防接口滥用）+ 短信验证码登录
+	// SSO 三方登录 + 人机验证（防接口滥用）+ 短信验证码登录 + 邮箱验证码/密码重置
 	ssoHandler := NewSSOHandler(authenticator, cfg)
 	captchaHandler := NewCaptchaHandler(cfg)
 	authHandler.SetCaptchaHandler(captchaHandler)
 	smsHandler := NewSmsHandler(authenticator, cfg, captchaHandler)
+	mailHandler := NewMailHandler(authenticator, cfg, captchaHandler)
+	// 注册流程复用邮件能力（邮箱验证码校验 + 欢迎邮件）
+	authHandler.SetMailHandler(mailHandler)
 
 	// Billing
 	billingStore := billing.NewPGStore()
@@ -383,6 +386,11 @@ func NewGatewayRouter(
 	smsHandler.RegisterPublicRoutes(mux, rlMW)
 	smsHandler.RegisterUserRoutes(mux, authMW)
 	smsHandler.RegisterAdminRoutes(mux, authMW)
+
+	// ── 邮件：邮箱验证码登录 / 注册邮箱验证 / 密码重置（公开流程 rlMW）──
+	// 后台「邮件配置」在管理端挂载（authMW + sso:manage），发信服务器地址与凭据全部可配置。
+	mailHandler.RegisterPublicRoutes(mux, rlMW)
+	mailHandler.RegisterAdminRoutes(mux, authMW)
 	registerSystemRoutes(mux, authMW, rlMW, sanitizeMW, editorHandler, toolHandler, systemHandler, traceHandler)
 	// 六大工作台互联：跨台最近活动聚合（租户+用户隔离）
 	mux.Handle("GET /v1/activities", authMW(rlMW(http.HandlerFunc(handleActivities))))
