@@ -989,6 +989,30 @@ create table ent_model_policies
     updated_at       timestamp
 );
 
+-- 企业 Webhook 订阅（ent_webhook_handler.go 的 CRUD + ent_webhook_dispatcher.go 的投递）。
+-- event_types / retry_policy 必须是 jsonb：分发侧用 `event_types::jsonb @> to_jsonb($2::text)`
+-- 做包含匹配；写入侧传的是 json.Marshal 出来的字节（pgx 的 JSON 编解码器直接接受）。
+-- 其余列 NOT NULL：scanWebhookRow 把除 enabled 外的列全部扫进非指针 Go 变量，
+-- NULL 会让 pgx 直接报错。url 用 text：Create 未做长度校验，避免列宽引入额外失败。
+create table ent_webhooks
+(
+    id           varchar(36) not null
+        primary key,
+    tenant_id    varchar(36) not null
+        references tenants,
+    name         varchar(255) default '' not null,
+    event_types  jsonb        default '[]'::jsonb not null,
+    url          text         default '' not null,
+    secret       text         default '' not null,
+    enabled      boolean      default true not null,
+    retry_policy jsonb        default '{}'::jsonb not null,
+    created_at   timestamp    default now() not null,
+    updated_at   timestamp    default now() not null
+);
+
+create index ix_ent_webhooks_tenant_enabled
+    on ent_webhooks (tenant_id, enabled);
+
 create table ent_quota_allocations
 (
     id          varchar(36) not null
