@@ -884,3 +884,48 @@ func TestMailSenderConfigDecryptsSecrets(t *testing.T) {
 		t.Fatalf("cfg = %+v", cfg)
 	}
 }
+
+// 管理端「测试发信」必须把服务商原始原因透出：只有「邮件发送失败」时，
+// 管理员无法区分"地址写错（404）/ 密钥无效（401）/ 模板不存在"。
+func TestMailSendTestSurfacesProviderError(t *testing.T) {
+	h, _, _, _, sender := newTestMailHandler(t, enabledMailRow())
+	sender.err = fmt.Errorf("%w: HTTP 404: 404 page not found", auth.ErrMailSendFailed)
+
+	rec := doJSON(t, h.SendTest, map[string]any{"to": "you@example.com"})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resp.Error, "404") {
+		t.Fatalf("error 未透出服务商原因: %q", resp.Error)
+	}
+}
+
+// 面向终端用户的发码路径不得回显服务商细节（内部拓扑/凭据状态不该外泄）。
+func TestMailSendCodeDoesNotLeakProviderDetail(t *testing.T) {
+	row := enabledMailRow()
+	row.LoginEnabled = true
+	h, _, _, _, sender := newTestMailHandler(t, row)
+	sender.err = fmt.Errorf("%w: HTTP 401: Unauthorized", auth.ErrMailSendFailed)
+
+	rec := doJSON(t, h.SendCode, map[string]any{"email": "u@example.com"})
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502", rec.Code)
+	}
+	var resp struct {
+		Error string `json:"error"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, leak := range []string{"401", "Unauthorized", "HTTP"} {
+		if strings.Contains(resp.Error, leak) {
+			t.Fatalf("终端用户路径泄露了服务商细节 %q: %q", leak, resp.Error)
+		}
+	}
+}

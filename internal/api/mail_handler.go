@@ -303,7 +303,7 @@ func (h *MailHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := h.sendMail(ctx, row, subject, body, []string{email}); err != nil {
 		h.auditSendFailure(ctx, r, "mail_code_send_failed", email, err)
-		respondMailSendError(w, err)
+		respondMailSendError(w, err, false) // 面向终端用户：不回显服务商细节
 		return
 	}
 
@@ -547,7 +547,7 @@ func (h *MailHandler) RequestPasswordReset(w http.ResponseWriter, r *http.Reques
 		// 发送失败时撤销令牌，避免留下一个"永远收不到"的有效凭据
 		_ = h.resetTokens.Del(ctx, hashToken(token))
 		h.auditSendFailure(ctx, r, "password_reset_send_failed", email, err)
-		respondMailSendError(w, err)
+		respondMailSendError(w, err, false) // 面向终端用户：不回显服务商细节
 		return
 	}
 	if err := h.store.MarkCooldown(ctx, email, time.Duration(row.SendIntervalSecs)*time.Second); err != nil {
@@ -923,7 +923,8 @@ func (h *MailHandler) SendTest(w http.ResponseWriter, r *http.Request) {
 		`<p style="color:#999;font-size:12px">发送时间：` + time.Now().Format(time.RFC3339) + `</p></div>`
 	if err := h.sendMail(ctx, row, subject, body, []string{to}); err != nil {
 		h.auditSendFailure(ctx, r, "mail_test_failed", to, err)
-		respondMailSendError(w, err)
+		// 管理端排障：把服务端原始原因带出来（如 HTTP 404 / 401 与服务商提示）
+		respondMailSendError(w, err, true)
 		return
 	}
 	db.AuditLog(ctx, "", db.DefaultTenantID, "mail_test_sent", r.URL.Path,
@@ -1177,15 +1178,34 @@ func (h *MailHandler) auditSendFailure(ctx context.Context, r *http.Request, act
 		"email="+maskEmail(email), r.RemoteAddr, nil)
 }
 
-// respondMailSendError 把发送器错误映射为 HTTP 状态：不可达 502，被拒 502。
-func respondMailSendError(w http.ResponseWriter, err error) {
+// respondMailSendError 把发送器错误映射为 HTTP 状态。
+//
+// verbose=true（管理端「测试发信」）时把服务端原始原因一并透出，例如
+// 「邮件发送失败：HTTP 404: 404 page not found」——否则管理员只看到「邮件发送失败」，
+// 无从判断是地址写错、密钥无效还是服务商模板不存在。
+// 面向终端用户的路径（验证码、重置邮件）保持通用文案，不泄露内部拓扑与服务商细节。
+func respondMailSendError(w http.ResponseWriter, err error, verbose bool) {
 	switch {
 	case errors.Is(err, auth.ErrMailUnreachable):
-		logAndRespond(w, err, http.StatusBadGateway, "邮件服务不可达")
+		msg := "邮件服务不可达"
+		if verbose {
+			msg += "：" + err.Error()
+		}
+		logAndRespond(w, err, http.StatusBadGateway, msg)
 	case errors.Is(err, auth.ErrMailConfigInvalid):
-		logAndRespond(w, err, http.StatusBadRequest, "邮件配置不完整: "+err.Error())
+		// 配置类错误本身就是给管理员看的（如「HTTP 通道未配置服务地址（base_url）」）
+		logAndRespond(w, err, http.StatusBadRequest, err.Error())
 	default:
-		logAndRespond(w, err, http.StatusBadGateway, "邮件发送失败")
+		msg := "邮件发送失败"
+		if verbose {
+			msg += "：" + err.Error()
+			// 404 几乎总是"服务地址少了路径前缀"（如 docs/mail.md 的 /api/v1），
+			// 直接给出可操作建议，省去一次来回排查。
+			if strings.Contains(err.Error(), "HTTP 404") {
+				msg += "（请确认服务地址与服务商文档完全一致，包含路径前缀，例如 /api/v1）"
+			}
+		}
+		logAndRespond(w, err, http.StatusBadGateway, msg)
 	}
 }
 

@@ -75,6 +75,19 @@ const isSMTP = computed(() => form.value.provider === 'smtp')
 const passwordConfigured = computed(() => form.value.smtp_password === SECRET_PLACEHOLDER)
 const apiKeyConfigured = computed(() => form.value.api_key === SECRET_PLACEHOLDER)
 
+/**
+ * 配置类接口的错误提示：**后端原文优先**。
+ *
+ * describeApiError 的设计是「code / 状态码的通用文案优先于 error 原文」（面向终端用户的
+ * 请求这样更友好），但保存失败往往是「哪个字段该怎么填」的具体原因（例如
+ * 「…请先启用邮件服务」），被 errors.invalid_request 盖成「请求失败，请稍后重试」后
+ * 管理员就无从下手。配置页是管理操作，这里优先展示后端原话。
+ */
+function configErrorMessage(error: any, fallback?: string): string {
+  const serverMessage = error?.response?.data?.error || error?.response?.data?.message
+  return serverMessage || describeApiError(error, fallback)
+}
+
 async function load() {
   loading.value = true
   try {
@@ -95,7 +108,7 @@ async function save() {
     if (res) Object.assign(form.value, res)
     message.success(t('邮件配置已保存'))
   } catch (error: any) {
-    message.error(describeApiError(error, t('保存邮件配置失败')))
+    message.error(configErrorMessage(error, t('保存邮件配置失败')))
   } finally {
     saving.value = false
   }
@@ -112,7 +125,7 @@ async function sendTest() {
     await sendMailTest(to)
     message.success(t('测试邮件已发送，请查收'))
   } catch (error: any) {
-    message.error(describeApiError(error, t('测试邮件发送失败')))
+    message.error(configErrorMessage(error, t('测试邮件发送失败')))
   } finally {
     testing.value = false
   }
@@ -250,6 +263,9 @@ onMounted(load)
                   placeholder="https://your-mail-host/api/v1"
                 />
               </FormItem>
+              <div class="config-note">
+                {{ $t('必须与服务商文档完全一致，包含路径前缀（例如 /api/v1）——发送时会拼成「服务地址 + /send」。') }}
+              </div>
               <FormItem :label="$t('API Key（加密入库）')">
                 <InputPassword
                   v-model:value="form.api_key"
@@ -329,6 +345,13 @@ onMounted(load)
           key="features"
           :tab="$t('登录与注册')"
         >
+          <Alert
+            v-if="!form.enabled"
+            type="warning"
+            show-icon
+            class="mail-hint"
+            :message="$t('下面的开关都依赖「启用邮件服务」（在“发信通道”页签上方）。请先打开总开关并保存，否则保存会被拒绝。')"
+          />
           <Form
             layout="vertical"
             class="mail-form"
