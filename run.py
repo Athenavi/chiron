@@ -47,7 +47,10 @@ SERVICES = {
     "python-engine": {
         "name": "Python AI 引擎",
         "port": 8000,
-        "cmd": [sys.executable, "-m", "app.main"],
+        # `-u`（无缓冲）**不是可选的**：日志被重定向到文件时 stdout 是块缓冲，
+        # 运行时日志会一直卡在进程内存里（实测 logs/python-engine.stdout.log 长期 0 字节），
+        # 排查线上问题时等于"引擎没有日志" —— 只能靠 DB/Redis 反推。
+        "cmd": [sys.executable, "-u", "-m", "app.main"],
         "cwd": str(BASE_DIR / "python-engine"),
         "env": {
             "HTTP_PORT": "8000",
@@ -60,7 +63,7 @@ SERVICES = {
         # 它执行前仍会向 Go 的 Tool Broker 要授权（判定权威在服务端）。
         "name": "MCP Broker",
         "port": 8001,
-        "cmd": [sys.executable, "mcp_broker.py"],
+        "cmd": [sys.executable, "-u", "mcp_broker.py"],
         "cwd": str(BASE_DIR / "python-engine"),
         "env": {
             "MCP_BROKER_PORT": "8001",

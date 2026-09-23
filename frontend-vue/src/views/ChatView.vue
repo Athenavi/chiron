@@ -1218,6 +1218,57 @@ watch(() => runningSessionIds.value, (ids) => {
 })
 const SUBAGENT_LIVE_MAX = 500
 
+/** 把一条子 Agent 事件并入当前会话的实时缓冲（两个来源共用，见 ensureSubagentStream）。 */
+function pushSubagentEvent(raw: unknown) {
+  const event = raw as SubagentEvent
+  const type = typeof event?.type === 'string' ? event.type : ''
+  if (!type.startsWith('subagent.') || !event?.run_id) return
+  subagentLiveEvents.value.push(event)
+  if (subagentLiveEvents.value.length > SUBAGENT_LIVE_MAX) {
+    subagentLiveEvents.value.splice(0, subagentLiveEvents.value.length - SUBAGENT_LIVE_MAX)
+  }
+}
+
+// ── 会话级常驻 SSE：后台子 Agent 的实时通道 ──
+//
+// 一轮对话的 SSE（`activeSSE`）在 turn_done 就关闭了，而默认就是**后台派发**的子 Agent
+// （`run_in_background=true`）通常还在跑：它后续的进度与 `subagent.approval`（等你批准）
+// 没有任何通道到达前端 —— 表现就是"必须刷新页面才能看到子 Agent 的后续请求"
+// （刷新后靠面板的 3 秒轮询把历史补回来）。
+//
+// 这里为当前会话保持一条常驻连接：会话切换时重建、组件卸载时关闭。本轮 SSE 仍在时**跳过处理**
+// （同一条事件会被两个连接各送一份，交给 `activeSSE` 处理即可，避免面板里出现重复项）。
+let subagentSSE: EventSource | null = null
+let subagentSSESession = ''
+
+function closeSubagentStream() {
+  if (subagentSSE) {
+    subagentSSE.close()
+    subagentSSE = null
+  }
+  subagentSSESession = ''
+}
+
+function ensureSubagentStream() {
+  const sid = activeSessionId.value || ''
+  if (!sid) {
+    closeSubagentStream()
+    return
+  }
+  if (subagentSSE && subagentSSESession === sid) return
+  closeSubagentStream()
+  subagentSSESession = sid
+  subagentSSE = createSSEConnection(
+    sid,
+    (raw) => { if (!activeSSE) pushSubagentEvent(raw) },
+    // 连续重连失败（网络长时间不可用/会话已失效）：放弃这条，等下次会话切换或刷新重建
+    () => { closeSubagentStream() },
+    { autoReconnect: true },
+  )
+}
+
+watch(activeSessionId, () => { ensureSubagentStream() }, { immediate: true })
+
 function onTrajectoryFocus(index: number) {
   trajectoryFocus.value = index
   trajectoryToken.value += 1
@@ -1281,6 +1332,7 @@ onMounted(async () => {
 onUnmounted(() => {
   stopTurnTimer()
   if (activeSSE) { activeSSE.close(); activeSSE = null }
+  closeSubagentStream()
   if (unifiedDoneTimer) { clearTimeout(unifiedDoneTimer); unifiedDoneTimer = null }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   window.removeEventListener('online', onOnline)
@@ -1954,12 +2006,7 @@ function onSSEMessage(raw: any) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
     const event = (d && Object.keys(d).length ? { ...d, type } : { ...raw }) as SubagentEvent
-    if (event?.run_id) {
-      subagentLiveEvents.value.push(event)
-      if (subagentLiveEvents.value.length > SUBAGENT_LIVE_MAX) {
-        subagentLiveEvents.value.splice(0, subagentLiveEvents.value.length - SUBAGENT_LIVE_MAX)
-      }
-    }
+    pushSubagentEvent(event)
   }
 }
 

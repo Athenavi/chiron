@@ -56,3 +56,22 @@ func TestSubagentRunOwnerWithoutRedis(t *testing.T) {
 		t.Error("empty run_id → ok 应为 false")
 	}
 }
+
+// 用户**显式停止**的广播必须落到 subagent:cancel（引擎侧据此取消子 Agent）。
+//
+// 契约意义：父回合被取消本身**不再**连带取消子 Agent（见 main.py 的取消分支），
+// 所以"显式停止"这一份广播是子 Agent 被停掉的唯一来源 —— 键名/频道一旦漂移，
+// 用户点停止就再也停不掉后台子 Agent。
+func TestBroadcastSubagentSessionCancelContract(t *testing.T) {
+	if got := subagentCancelChannel(); got != "subagent:cancel" {
+		t.Errorf("subagentCancelChannel = %q, want subagent:cancel", got)
+	}
+	// 空 session 不该发广播（否则会变成"停所有人的子 Agent"）
+	if err := BroadcastSubagentSessionCancel(t.Context(), "", "parent"); err != nil {
+		t.Errorf("empty session should be a no-op, got %v", err)
+	}
+	// 无 Redis：必须显式报错，不能静默成功（"假成功"是老问题）
+	if err := BroadcastSubagentSessionCancel(t.Context(), "s1", "parent"); err == nil {
+		t.Error("no redis → 应返回错误而不是假装发出去了")
+	}
+}

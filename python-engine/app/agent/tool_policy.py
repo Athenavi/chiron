@@ -48,7 +48,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
         "memory_search", "recall",
         "skill_list", "skill_discover", "skill_run",
         "mode_list", "graph_templates", "agent_list", "agent_session_list",
-        "read_subagent_result", "job_output", "stderr_drain",
+        "read_subagent_result", "list_subagent_runs", "job_output", "stderr_drain",
         "requirement_validate", "task_decompose", "tech_design", "prd_generate",
         "vision_analyze", "speech_to_text",
         "tool",
@@ -65,6 +65,8 @@ _WRITE_TOOLS: frozenset[str] = frozenset(
         "image_generate", "text_to_speech", "skill_generate",
         # 委派类：它们内部会执行任意工具（子 Agent 有自己的栅栏），因此在父层至少要确认一次
         "subagent", "agent_dispatch", "code_agent", "workflow_run", "graph_run",
+        # 重跑也是"再派一个作业"（会消耗 token 并复用原来的写权限），与 subagent 同级
+        "rerun_subagent",
     }
 )
 

@@ -71,6 +71,12 @@ func handleCancel(w http.ResponseWriter, r *http.Request) {
 			Forbidden(w, "not your session")
 			return
 		}
+		// 用户**显式**停止：先告知子 Agent（父回合的取消本身不再连带取消它们，
+		// 见 BroadcastSubagentSessionCancel 的说明），再取消本地 ctx 结束事件流。
+		if err := BroadcastSubagentSessionCancel(r.Context(), sessionID, "parent"); err != nil {
+			slog.Warn("subagent session cancel broadcast failed",
+				"session_id", sessionID, "error", err)
+		}
 		sc.cancel()
 		slog.Info("session cancelled", "session_id", sessionID)
 		OK(w, map[string]string{"status": "cancelled", "session_id": sessionID})

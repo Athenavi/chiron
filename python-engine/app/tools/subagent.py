@@ -106,8 +106,10 @@ async def subagent(
     expert: str = "",
     profile: str = "",
     run_in_background: bool = True,
+    allow_write: bool = False,
     max_tokens: int = 0,
     max_seconds: int = 0,
+    rerun_of: str = "",
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
@@ -121,6 +123,10 @@ async def subagent(
 
     profile: ``agents`` 表中 ``kind='subagent'`` 的 Profile id 或 name。省略时用
     通用子 Agent（与旧版行为一致）。max_turns 上限受 MAX_TURNS_CAP 约束。
+
+    allow_write: 子 Agent 的**默认工具面是只读**（只读工具 + 不剥离委派），因为它与父
+    共享同一工作区：写/执行既可能互相踩，又会在 ``tools_mode=auto`` 下**每步都要用户确认**
+    （一次委派点十几次批准、每步都可能空等到超时）。需要它改文件/跑命令时**显式**传 true。
     """
     if not task.strip():
         return {"error": "task is required"}
@@ -149,8 +155,11 @@ async def subagent(
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
         sink=get_event_sink(),
-        # 后台委派 → 工具面默认只读（与父共享工作区，未实现写隔离前的兜底）
+        # 后台委派（决定生命周期）；**只读与否由 allow_write 决定**（见下）
         background=bool(run_in_background),
+        # 工具面：默认只读 —— 子 Agent 与父共享工作区，写/执行既可能互相踩，
+        # 又会在 auto 模式下每一步都要用户确认。需要写/执行必须显式 allow_write=true。
+        allow_write=bool(allow_write),
         # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）。
         # 同步委派额外带一个 wall 默认值（见 _sync_wall_seconds）——它是"父 turn 原地等"
         # 的路径，没有上限时上游一挂就无限期占住父回合；后台委派由看门狗收口，不需要。
@@ -186,6 +195,9 @@ async def subagent(
                 mode=mode or "normal",
                 max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
                 expert_prompt=_expert_system_prompt(expert),
+                # 重跑血缘（仅 rerun_subagent 会传）：写进 subagent_runs.rerun_of，
+                # 让"这次是从哪一次重跑来的"在 DB 里可查（Redis 会丢，血缘不能丢）。
+                rerun_of=rerun_of,
             ),
             name=f"subagent-bg-{bg_run_id}",
         )
@@ -391,6 +403,18 @@ registry.register(
                     "Optional: name of an expert to delegate to, taken from the "
                     "'可委派的专家' list in your system prompt. Names outside that "
                     "list are ignored and the child falls back to a generalist."
+                ),
+            },
+            "allow_write": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Default **false**: the child gets a **read-only** tool set (no write_file / "
+                    "edit_file / shell_exec / execute_python …), because it shares your workspace — "
+                    "and every write/exec call would additionally require a separate user approval "
+                    "(tools_mode=auto), which stalls the run on each step. "
+                    "Set true only when the children must actually modify files or run commands; "
+                    "prefer a Profile that declares read_only=false for that."
                 ),
             },
             "max_tokens": {

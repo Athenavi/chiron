@@ -195,11 +195,14 @@ class SubAgentRunner:
         sink=None,
         cache=None,
         background: bool = False,
+        allow_write: bool = False,
         budget: TaskBudget | None = None,
     ):
         self._gateway = gateway
-        #: 是否后台委派 —— 后台 run 与父共享同一工作区，默认只读（见 _resolve_tools）
+        #: 是否后台委派（决定生命周期与预算，**不再决定只读**，见 _resolve_tools）
         self._background = bool(background)
+        #: 是否**显式**授权写/执行：默认 False ⇒ 子 Agent 工具面只读（见 _resolve_tools）
+        self._allow_write = bool(allow_write)
         #: per-run 预算（tokens/wall/cost）；None 表示不限（见 app/subagent/budget.py）
         self._budget = budget
         self._store = store
@@ -224,6 +227,7 @@ class SubAgentRunner:
         max_turns: int = 0,
         expert_prompt: str = "",
         run_id: str = "",
+        rerun_of: str = "",
     ) -> SubagentRunResult:
         task = (task or "").strip()
         # 允许调用方**预先指定** run_id：后台委派必须先把 run_id 返回给父模型，
@@ -280,6 +284,7 @@ class SubAgentRunner:
                 run_id=run_id,
                 root_session_id=self._parent_session_id,
                 turn_id=self._turn_id,
+                rerun_of=rerun_of,
                 depth=child_depth,
                 tenant_id=self._tenant_id,
                 user_id=self._user_id,
@@ -669,13 +674,18 @@ class SubAgentRunner:
 
         allowed = set(spec.allowed_tools) if spec else set()
         disallowed = set(spec.disallowed_tools) if spec else set()
-        # 后台 run 默认只读：它与父共享同一工作区，多个后台子 Agent 并发写会互相踩。
-        # Reasonix 用 `write_paths` 声明 + 工作区租约解决隔离；我们尚未实现那套，
-        # 因此先把**无 profile 的后台 run** 收成只读；有 profile 时一律尊重 profile 声明。
+        # 子 Agent 的默认工具面是**只读**（无 profile 时）：
+        # 它与父共享同一工作区，写入/执行既可能互相踩，又会在 `tools_mode=auto` 下
+        # **每一步都要用户确认**（实测一次委派点了 9 次批准、每步都可能空等到 300s 超时）。
+        # 需要写/执行必须**显式**声明：调用方传 `allow_write=true`，或用带
+        # `read_only=false` 的 Profile。
+        #
+        # 注意：此前只对"后台 run"收紧，前台（`run_in_background=false`）默认带写/执行 ——
+        # 那条路径同样与父共享工作区，没有理由更宽。
         if spec is not None:
             read_only = bool(spec.read_only)
         else:
-            read_only = self._background
+            read_only = not self._allow_write
         block_delegate = child_depth >= max_depth if max_depth else True
         needs_narrowing = bool(allowed or disallowed or read_only or block_delegate)
         if not needs_narrowing:

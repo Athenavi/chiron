@@ -77,8 +77,7 @@ describe('SubAgentPanel 的审批链路', () => {
     expect(wrapper.find('.approval-btn.allow').exists()).toBe(true)
   })
 
-  it('点"允许"把决定回传到 /v1/agent/approval 并显示结果', async () => {
-    const wrapper = mountPanel([
+  it('点"允许"把决定回传到 /v1/agent/approval 并显示结果', async () => {    const wrapper = mountPanel([
       { type: 'subagent.started', run_id: 'rs_1', depth: 1 },
       APPROVAL_EVENT,
     ])
@@ -115,5 +114,38 @@ describe('SubAgentPanel 的审批链路', () => {
     // 决定未生效 → 不标记为已允许，用户可重试
     expect(wrapper.find('.approval-done').exists()).toBe(false)
     expect(wrapper.find('.approval-btn.allow').attributes('disabled')).toBeUndefined()
+  })
+})
+
+describe('SubAgentPanel 的运行跟随', () => {
+  it('新派发的子 Agent 会被自动选中（不必刷新页面）', async () => {
+    // 一轮对话结束后仍在跑的后台 run：列表里第一个是**已完成的旧 run**。
+    // 旧实现只在"从未选中"时才选 runs[0] —— 于是新 run 永远不会被选中，
+    // 只有它的终态轮询在跑，用户看不到它的进度与审批，只能刷新页面。
+    subagentApi.listSubagentRuns.mockResolvedValue({
+      runs: [
+        { run_id: 'rs_done', status: 'completed', depth: 1 },
+        { run_id: 'rs_live', status: 'running', depth: 1 },
+      ],
+      source: 'redis',
+    })
+    mountPanel([])
+    await flushPromises()
+
+    expect(subagentApi.getSubagentRunEvents).toHaveBeenCalledWith('rs_live')
+  })
+
+  it('全部终态时选中最近完成的一个（有东西可看）', async () => {
+    subagentApi.listSubagentRuns.mockResolvedValue({
+      runs: [
+        { run_id: 'rs_1', status: 'completed', depth: 1 },
+        { run_id: 'rs_2', status: 'failed', depth: 1 },
+      ],
+      source: 'db',
+    })
+    mountPanel([])
+    await flushPromises()
+
+    expect(subagentApi.getSubagentRunEvents).toHaveBeenCalledWith('rs_2')
   })
 })

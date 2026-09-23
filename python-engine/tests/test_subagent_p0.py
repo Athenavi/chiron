@@ -176,9 +176,30 @@ def _runner(**kwargs):
     return SubAgentRunner(gateway=object(), depth=kwargs.pop("depth", 0), **kwargs)
 
 
-def test_resolve_tools_no_profile_no_narrowing_when_depth_allows():
-    """无 Profile 且深度未用尽时不收窄（沿用 runtime 默认工具集）。"""
-    assert _runner()._resolve_tools(None, "normal", 1, 3) is None
+def test_resolve_tools_no_profile_defaults_to_read_only():
+    """无 Profile 时**默认只读**（含前台派发）—— 写/执行必须显式 allow_write。
+
+    为什么收紧：子 Agent 与父共享工作区，写/执行既可能互相踩，又会在 `tools_mode=auto`
+    下每步都要用户确认（实测一次委派点了 9 次批准、每步都可能空等到 300s 超时）。
+    """
+    import app.tools.core  # noqa: F401
+    import app.tools.edit_file  # noqa: F401
+    import app.tools.subagent  # noqa: F401
+
+    tools = _runner()._resolve_tools(None, "normal", 1, 3)
+    assert tools is not None, "默认只读即意味着需要收窄工具集"
+    names = {t["name"] for t in tools}
+    assert "write_file" not in names and "shell_exec" not in names
+
+
+def test_resolve_tools_allow_write_keeps_write_tools():
+    """显式 allow_write=true 时才放开写/执行（否则委派无法完成"改代码"这类任务）。"""
+    import app.tools.core  # noqa: F401
+
+    tools = _runner(allow_write=True)._resolve_tools(None, "normal", 1, 3)
+    if tools is not None:
+        names = {t["name"] for t in tools}
+        assert "write_file" in names
 
 
 def test_resolve_tools_default_strips_delegation_tools():

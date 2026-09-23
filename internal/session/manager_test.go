@@ -3,6 +3,7 @@ package session
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 )
@@ -111,4 +112,25 @@ func TestUpsertAssistantMessageGuards(t *testing.T) {
 	m.UpsertAssistantMessage(context.Background(), "sess", "", "content", "[]", "turn")
 	m.UpsertAssistantMessage(context.Background(), "sess", "msg-id", "content", "[]", "turn")
 	m.UpsertAssistantMessage(context.Background(), "sess", "msg-id", "", "", "")
+}
+
+// 回归（实测事故：每一次回合收尾都失败 → turns 永远停在 running → 用户看到"主 Agent 一直阻塞"）：
+//
+// `turns.cached_tokens` 是 bigint，而 `cache_hit = ($7 > 0)` 里的字面量 0 会让 Postgres
+// 把**同一个参数**推断成 int4，prepare 阶段直接报
+// `inconsistent types deduced for parameter $7 (SQLSTATE 42P08)`。
+// 因此 $7 必须显式 cast，且两处必须指向同一个参数（语义一致）。
+func TestFinishTurnCastsCachedTokensParam(t *testing.T) {
+	if !strings.Contains(finishTurnSQL, "$7::bigint") {
+		t.Fatalf("finishTurnSQL 缺少 $7::bigint —— PG 会用 int4 推断同一参数并报 42P08，"+
+			"每一次回合收尾都会失败：\n%s", finishTurnSQL)
+	}
+	if got := strings.Count(finishTurnSQL, "$7"); got != 2 {
+		t.Errorf("$7 应恰好出现两次（cached_tokens 与 cache_hit 同源，各带一次 cast），实际 %d 次", got)
+	}
+	for _, want := range []string{"cache_hit = ($7::bigint > 0)", "finished_at = NOW()", "WHERE id = $1"} {
+		if !strings.Contains(finishTurnSQL, want) {
+			t.Errorf("finishTurnSQL 缺少 %q", want)
+		}
+	}
 }

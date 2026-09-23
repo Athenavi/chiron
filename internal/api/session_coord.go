@@ -119,6 +119,12 @@ func CancelSessionBroadcast(ctx context.Context, sessionID, userID string) error
 	if err := db.Redis.Publish(ctx, agentCancelChannel, payload).Err(); err != nil {
 		return err
 	}
+	// 同一意图也要传达给**子 Agent**：父回合被取消本身不再连带取消它们
+	// （见 BroadcastSubagentSessionCancel 的说明），所以"用户显式停止"必须显式发这一份。
+	if err := BroadcastSubagentSessionCancel(ctx, sessionID, "parent"); err != nil {
+		slog.Warn("subagent session cancel broadcast failed",
+			"session_id", sessionID, "error", err)
+	}
 	slog.Info("session cancel broadcast", "session_id", sessionID)
 	return nil
 }

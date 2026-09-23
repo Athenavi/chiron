@@ -55,6 +55,11 @@ VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13::jsonb, now(), no
 ON CONFLICT (id) DO NOTHING
 """
 
+#: 重跑血缘单独写（而不是塞进上面的 INSERT）：老库还没有 `rerun_of` 列时，
+#: **普通派发的落库不受影响** —— 只有"重跑"这一条新路径需要迁移
+#: （f3a91c2d5e08）。把它并进 INSERT 会让未迁移的部署**所有**子 Agent 落库失败。
+RERUN_OF_SQL = "UPDATE subagent_runs SET rerun_of = $2 WHERE id = $1"
+
 #: 僵尸收口：只动超龄的 running 行（进程重启后它们的收尾代码再也不会执行）
 #:
 #: 参数类型必须是 int。此前写成 `($1 || ' hours')::interval`（`||` 是文本拼接，asyncpg
@@ -131,6 +136,7 @@ class SubagentRunStore:
         root_session_id: str,
         turn_id: str = "",
         parent_run_id: str = "",
+        rerun_of: str = "",
         depth: int = 1,
         tenant_id: str = "",
         user_id: str = "",
@@ -140,7 +146,12 @@ class SubagentRunStore:
         read_only: bool = False,
         write_paths: list[str] | None = None,
     ) -> None:
-        """写入 run 起始记录（状态 running）。失败只告警，不阻断子 Agent。"""
+        """写入 run 起始记录（状态 running）。失败只告警，不阻断子 Agent。
+
+        ``rerun_of`` 记录**重跑血缘**（由哪个 run 重跑而来），见
+        app/tools/subagent_rerun.py；它单独写一条 UPDATE，因此未执行迁移的老库
+        只会丢血缘，不会影响普通派发的落库。
+        """
         if not self.available:
             return
         import json
@@ -169,6 +180,16 @@ class SubagentRunStore:
         except Exception as exc:  # noqa: BLE001
             self._degrade("start_run", exc)
             return
+        if rerun_of:
+            # 血缘写入失败**不能**影响这次运行本身：只告警（并给出迁移提示）
+            try:
+                await self._pool.execute(RERUN_OF_SQL, run_id, rerun_of)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "subagent rerun_of 写入失败（run=%s, rerun_of=%s）：请执行迁移 "
+                    "f3a91c2d5e08；本次运行的落库不受影响: %s",
+                    run_id, rerun_of, str(exc)[:160],
+                )
         self._mark_started(run_id)
 
     async def add_step(

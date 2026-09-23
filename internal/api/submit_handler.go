@@ -305,6 +305,15 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		map[string]string{"X-User-ID": userID})
 	if err != nil {
 		slog.Error("submit: python proxy failed", "error", err)
+		// 回合终态必须**在这里**收敛：此前这个分支直接 return，而 FinishTurn 只在
+		// "流正常结束"之后才调用 —— 于是"引擎不可达"的每一轮都会在 DB 里留下一条
+		// 永远 running 的记录（会话地图/侧边栏永久"运行中"，与 FinishTurn 写库失败
+		// 是同一个观感）。实测：网关 401 期间的两轮提交都留成了僵尸 turn。
+		if turnID != "" {
+			sctx, cancelStore := storeCtxFor()
+			h.sessionMgr.FinishTurn(sctx, turnID, "failed", "engine unavailable: "+err.Error(), "", 0, 0, 0)
+			cancelStore()
+		}
 		h.eventHub.Publish(broadcast.Event{Type: "text", SessionID: sessionID, Data: map[string]string{"content": "Service temporarily unavailable. Please try again."}})
 		h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})
 		return

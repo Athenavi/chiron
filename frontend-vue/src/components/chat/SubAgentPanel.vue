@@ -332,12 +332,38 @@ async function loadRuns() {
     const res = await listSubagentRuns({ sessionId: props.sessionId })
     runs.value = res.runs
     source.value = res.source
-    if (!selectedRunId.value && res.runs.length) selectedRunId.value = res.runs[0].run_id
+    followActiveRun(res.runs)
   } catch {
     // 面板失败不打断对话；下一轮轮询会再试
   } finally {
     loading.value = false
   }
+}
+
+/**
+ * 让"选中的 run"始终指向**还在产生内容**的那一个。
+ *
+ * 为什么必须跟随：选中 run 的增量只靠 3 秒轮询（后台 run 没有 SSE 连接），而轮询在
+ * run 到终态后就停了（`tailLoaded`）。此前只在"从未选中"时才自动选第一个 —— 于是一轮
+ * 对话结束后（选中的那个已 completed），**之后新派发的子 Agent 永远不会被选中**：
+ * 它的进度与审批请求都看不到，用户只能刷新页面（刷新后 selectedRunId 为空 → 重新自选）。
+ */
+function followActiveRun(list: SubagentRunView[]) {
+  if (!list.length) {
+    selectedRunId.value = ''
+    return
+  }
+  const active = list.filter(r => !TERMINAL_STATUSES.has(String(r.status)))
+  const current = selectedRunId.value
+    ? list.find(r => r.run_id === selectedRunId.value)
+    : undefined
+  if (current && active.some(r => r.run_id === current.run_id)) return // 当前就在跑：不动
+  const fallback = list[list.length - 1]?.run_id || ''
+  const target = active.length ? active[active.length - 1]?.run_id || '' : (current?.run_id || fallback)
+  if (!target || target === selectedRunId.value) return
+  selectedRunId.value = target
+  // 切换目标时立刻拉一次历史（之后的增量交给 3 秒轮询）
+  void selectRun(target)
 }
 
 async function selectRun(runId: string) {

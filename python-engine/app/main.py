@@ -1200,6 +1200,8 @@ async def agent_submit(
     # ── 六大工作台互联互通：注册各工作台工具,使 CHAT 的 LLM 可通过 function-calling 调用 ──
     import app.tools.skill  # noqa: F401 — SKILLS 工作台 (skill_list/skill_run/skill_install)
     import app.tools.subagent  # noqa: F401 — 多 agent 委派工具
+    import app.tools.subagent_list  # noqa: F401 — 主 Agent 主动感知 (list_subagent_runs)
+    import app.tools.subagent_rerun  # noqa: F401 — 重跑已结束的子 Agent (rerun_subagent)
     import app.tools.subagent_result  # noqa: F401 — 子 Agent 结果按需读取 (read_subagent_result)
     import app.tools.terminal  # noqa: F401 — 持久终端
     import app.tools.web  # noqa: F401 — 网页搜索/抓取
@@ -1302,6 +1304,34 @@ async def agent_submit(
                 "don't refuse because it isn't an image/video/audio."
             )
         task.llm_config = llm_config
+
+    # ── 子 Agent 主动汇报：把"自上次交互以来结束的后台子任务"注入本轮上下文 ──
+    #
+    # 为什么不能只靠 followup：那条链是"队列 → 网关 → 新一轮"，每一跳都能静默丢
+    # （速率上限 / 级联保护 / Redis 不可用 / deadline 进 DLQ）。这里改走**查询**：
+    # 终态在 DB（唯一权威），父会话下一轮开始时按游标增量取回 —— 即使 followup 全丢，
+    # 结论也不会消失。详见 app/subagent/reporting.py。
+    #
+    # 注入失败绝不影响本轮（报告是增强，不是前提）；但必须可见（记 warning）。
+    try:
+        from app.subagent.reporting import consume_pending_reports, format_reports
+
+        reports = await consume_pending_reports(
+            session_id=getattr(task, "session_id", "") or "",
+            tenant_id=getattr(task, "tenant_id", "") or "",
+            user_id=getattr(task, "user_id", "") or "",
+        )
+        if reports:
+            block = format_reports(reports)
+            task.system_prompt = (
+                f"{task.system_prompt}\n\n{block}" if task.system_prompt else block
+            )
+            logger.info(
+                "subagent reports injected: session=%s count=%d",
+                getattr(task, "session_id", ""), len(reports),
+            )
+    except Exception as exc:  # noqa: BLE001 - 注入失败不阻断对话
+        logger.warning("subagent reports injection failed: %s", str(exc)[:160])
 
     # ── 运行模式（常规/极简/PTC/创造）：前端下拉 → body.mode 或 llm_config.mode ──
     # runtime 内 get_mode_config 兜底未知值回退 NORMAL
@@ -1450,24 +1480,32 @@ async def agent_submit(
                 "Agent submit stream cancelled (client disconnected)",
                 extra={"session_id": session_id},
             )
-            # L2：父 turn 被取消 → 连带停掉本会话的后台子 Agent（否则它们成为孤儿：
-            # 父 turn 没了、也没人再收尾，只能等看门狗）。
-            # **必须挂在这里而不是 finally** —— 父 turn 正常结束时后台子 Agent 要继续跑完，
-            # 才能触发 followup 自动轮（见 app/subagent/followup.py）。
+            # ⚠️ 这里**不再**连带停掉后台子 Agent。
+            #
+            # 这条分支分不清两种完全不同的来源：
+            #   ① 用户显式点了"停止"（意图：这一轮连同它的子任务都停）；
+            #   ② 回合被 300s 硬超时截断 / 浏览器断流（意图**不是**"杀掉后台子任务"）。
+            # 此前两者一律连带取消，于是"父回合超时 → 后台子 Agent 被杀 → 它的结论永远
+            # 回不到对话"成了常态（`submit turn truncated by deadline; this session's
+            # sub-agents were cancelled, so their conclusions will NOT reach the conversation`）。
+            #
+            # 现在：①由**网关**在显式停止路径上直接广播 `subagent:cancel`（它知道用户意图，
+            # 见 internal/api 的 BroadcastSubagentSessionCancel）；②让子 Agent 继续跑完 ——
+            # 它们本就跑在独立任务里，终态会落库、结果可由 read_subagent_result 取回。
+            active = 0
             if session_id:
                 try:
                     from app.subagent import registry as subagent_registry
 
-                    stopped = subagent_registry.cancel_session(
-                        session_id, subagent_registry.REASON_PARENT
-                    )
-                    if stopped:
-                        logger.info(
-                            "parent turn cancelled → stopped %d background subagent run(s)",
-                            stopped,
-                        )
-                except Exception as exc:  # noqa: BLE001 - 清理失败不影响取消语义
-                    logger.warning("cancel_session on parent cancel failed: %s", str(exc)[:160])
+                    active = len(subagent_registry.list_active(session_id))
+                except Exception as exc:  # noqa: BLE001 - 诊断失败不影响取消语义
+                    logger.debug("list_active on parent cancel failed: %s", str(exc)[:160])
+            if active:
+                logger.info(
+                    "parent turn ended without explicit stop → %d background subagent run(s) keep "
+                    "running; the gateway stops them only on an explicit user stop",
+                    active,
+                )
             raise
         except Exception as e:
             logger.error("Agent submit error: %s", e)

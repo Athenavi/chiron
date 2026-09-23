@@ -506,6 +506,24 @@ func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID stri
 	}
 }
 
+// finishTurnSQL 收敛回合终态：completed / failed / cancelled。
+//
+// ⚠️ `$7::bigint` 这两个显式 cast **不是可选的**（实测事故）：
+// `turns.cached_tokens` 是 bigint，而 `cache_hit = ($7 > 0)` 里的字面量 `0` 让
+// Postgres 在 prepare 阶段把**同一个参数**推断成 int4 —— 两处类型不一致，直接报
+//
+//	ERROR: inconsistent types deduced for parameter $7 (SQLSTATE 42P08)
+//
+// 于是**每一次**回合收尾都写不进库，turns 永远停在 `running`：会话地图/侧边栏
+// 永久显示"运行中"，刷新也不会变，用户看到的就是"主 Agent 一直阻塞"。
+// 显式 cast 让两处推断到同一个类型。
+const finishTurnSQL = `
+UPDATE turns
+   SET status = $2, error = NULLIF($3, ''), input_tokens = $4, output_tokens = $5,
+       model = NULLIF($6, ''), cached_tokens = $7::bigint, cache_hit = ($7::bigint > 0),
+       finished_at = NOW()
+ WHERE id = $1`
+
 // FinishTurn 收敛回合终态：completed / failed / cancelled，并记录 token 用量与所用模型。
 //
 // status 为非法值时回退 completed；失败原因写入 turns.error 便于排查。
@@ -520,12 +538,7 @@ func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg, model 
 	default:
 		status = "completed"
 	}
-	_, err := m.pool.Exec(ctx,
-		`UPDATE turns
-		 SET status = $2, error = NULLIF($3, ''), input_tokens = $4, output_tokens = $5,
-		     model = NULLIF($6, ''), cached_tokens = $7, cache_hit = ($7 > 0),
-		     finished_at = NOW()
-		 WHERE id = $1`,
+	_, err := m.pool.Exec(ctx, finishTurnSQL,
 		turnID, status, errMsg, inputTokens, outputTokens, model, cachedTokens)
 	if err != nil {
 		slog.Error("finish turn", "turn", turnID, "status", status, "error", err)

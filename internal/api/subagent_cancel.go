@@ -91,6 +91,34 @@ UPDATE subagent_runs
 	return n > 0
 }
 
+// BroadcastSubagentSessionCancel 直接向 `subagent:cancel` 频道发一条「停止该会话所有子 Agent」。
+//
+// 为什么必须由网关来做这件事（用户显式停止 vs 回合被截断）：
+//
+//	① 用户点停止（/v1/agent/cancel、跨实例广播）→ **发**这条广播，持有该会话子 Agent
+//	   的实例会真的取消它们 —— 用户的意图是"这一轮连同子任务都停"；
+//	② 回合被 DefaultAgentTimeout 截断 / 浏览器断流 → **不发**，子 Agent 继续跑完：
+//	   它们本就跑在独立任务里，终态落库、结论仍能回到对话。
+//
+// 引擎侧因此不再在"父回合被取消"时一律连带取消子 Agent —— 那条分支分不清 ①/②，
+// 一律连带的结果是"父回合超时 → 子任务被杀 → 结论永远回不来"。
+func BroadcastSubagentSessionCancel(ctx context.Context, sessionID, reason string) error {
+	if sessionID == "" {
+		return nil
+	}
+	if db.Redis == nil {
+		return errRedisUnavailable
+	}
+	if reason == "" {
+		reason = "parent"
+	}
+	payload, err := json.Marshal(subagentCancelBroadcast{SessionID: sessionID, Reason: reason})
+	if err != nil {
+		return err
+	}
+	return db.Redis.Publish(ctx, subagentCancelChannel(), payload).Err()
+}
+
 type subagentCancelBroadcast struct {
 	RunID     string `json:"run_id,omitempty"`
 	SessionID string `json:"session_id,omitempty"`
