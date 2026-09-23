@@ -15,6 +15,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -165,14 +166,34 @@ func (s *Store) SaveConfig(ctx context.Context, category string, config map[stri
 			value = string(encJSON)
 			encrypted = true
 		}
+		// upsert（先 UPDATE，未命中再 INSERT）——**不依赖任何唯一约束**。
+		//
+		// 这里曾用 `INSERT ... ON CONFLICT (category, key) DO UPDATE`。但 system_settings
+		// 的实际表结构（见 migrations/sql/init.sql 与生产库导出）只有 id 主键，
+		// (category, key) 上并没有唯一约束，Postgres 于是直接报
+		//   42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification
+		// 导致**所有**保存路径（后台「系统设置」、后台「支付配置」、LLM Key 等）全军覆没。
+		// 条件插入不要求任何 DDL：应用启动不做 schema 变更（改为由发布流程/DBA 管理），
+		// 因此这里不能靠"补一个唯一索引"来修，只能不依赖它。
+		//
+		// 保留 `$3::jsonb`：value 列历史上是 json（不是 jsonb），裸参数会被推断成 text 而报
+		//   column "value" is of type json but expression is of type text
+		// 显式 cast 到 jsonb 后由 Postgres 做 jsonb→json 的赋值转换，json / jsonb 两种列都能写。
+		//
+		// 注意：极端并发（同一键首次写入被两个副本同时插入）仍可能产生两行，
+		// 因为不再有唯一约束兜底。若需要强保证，请由发布流程补唯一索引后改回 ON CONFLICT。
 		if _, err := tx.Exec(ctx,
-			`INSERT INTO system_settings (category, key, value, encrypted, updated_by, updated_at)
-			 VALUES ($1, $2, $3::jsonb, $4, $5, NOW())
-			 ON CONFLICT (category, key)
-			 DO UPDATE SET value=EXCLUDED.value, encrypted=EXCLUDED.encrypted,
-			               updated_by=EXCLUDED.updated_by, updated_at=NOW()`,
+			`WITH updated AS (
+			     UPDATE system_settings
+			        SET value=$3::jsonb, encrypted=$4, updated_by=$5, updated_at=NOW()
+			      WHERE category=$1 AND key=$2
+			     RETURNING 1
+			 )
+			 INSERT INTO system_settings (category, key, value, encrypted, updated_by, updated_at)
+			 SELECT $1, $2, $3::jsonb, $4, $5, NOW()
+			  WHERE NOT EXISTS (SELECT 1 FROM updated)`,
 			category, key, value, encrypted, nullableUser(userID)); err != nil {
-			return err
+			return fmt.Errorf("upsert setting %s/%s: %w", category, key, err)
 		}
 	}
 	return tx.Commit(ctx)
@@ -197,19 +218,24 @@ func (s *Store) LoadConfig(ctx context.Context, category string) (map[string]int
 		if err := rows.Scan(&key, &raw, &encrypted); err != nil {
 			continue
 		}
-		rawStr := strings.Trim(string(raw), `"`)
+		// 落库形态是 json.Marshal(val) 的结果（敏感键再整体加密一层），因此必须按
+		// JSON 反序列化还原。**不能**用"去掉外层引号"来替代反序列化：那会把值内的
+		// 转义序列变成字面字符 —— 典型受害者是 PEM 私钥/公钥，读回后变成
+		// "-----BEGIN PRIVATE KEY-----\nMIIE..."（反斜杠 + n，而非真实换行），
+		// 于是支付渠道客户端构造时 PEM 解析失败、渠道静默不可用。
+		encoded := raw
 		if encrypted {
-			plain, err := s.DecryptString(rawStr)
+			plain, err := s.DecryptString(strings.Trim(string(raw), `"`))
 			if err != nil {
 				slog.Warn("settings decrypt failed", "category", category, "key", key, "error", err)
 				continue // 无法解密则不返回该键（避免把密文当明文展示）
 			}
-			rawStr = strings.Trim(plain, `"`)
+			encoded = json.RawMessage(plain)
 		}
 		var val interface{}
-		// 先尝试按原始 jsonb 解析；失败则按纯字符串返回
-		if err := json.Unmarshal([]byte(rawStr), &val); err != nil {
-			val = rawStr
+		if err := json.Unmarshal(encoded, &val); err != nil {
+			// 兼容历史上以裸字符串落库的值
+			val = strings.Trim(string(encoded), `"`)
 		}
 		out[key] = val
 	}

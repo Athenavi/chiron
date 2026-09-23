@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 
@@ -177,18 +178,21 @@ func (h *AdminHandler) SavePaymentConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
+	// 审计字段：记用户 ID（claims.ID 是 JWT 的 jti，不是用户标识）
 	userID := ""
 	if claims := auth.GetClaims(r.Context()); claims != nil {
-		userID = claims.ID
+		userID = claims.UserID
 	}
 	ctx := r.Context()
 	if err := store.SaveConfig(ctx, settingsCategoryPayment, filtered, userID); err != nil {
 		slog.Error("save payment config failed", "error", err)
-		if err == settings.ErrEncryptedKeyNotFound {
-			InternalError(w, "APP_SECRET not configured; cannot encrypt payment credentials")
+		if errors.Is(err, settings.ErrEncryptedKeyNotFound) {
+			InternalError(w, "APP_SECRET 未配置，无法加密支付凭据；请注入 APP_SECRET 后重启")
 			return
 		}
-		InternalError(w, "failed to save payment config")
+		// 带上底层原因（admin-only 接口）：笼统的"保存失败"让运维无从下手 ——
+		// 本次故障本可以靠一句 42P10 直接定位，却只显示出 "failed to save payment config"。
+		InternalError(w, "保存支付配置失败："+err.Error())
 		return
 	}
 
