@@ -15,7 +15,60 @@
  *   2. 用户可见文案里的 DSH 字样改为中性表述；
  *   3. localStorage 键前缀 `dsh-synapse:` → `chiron-map:`；
  *   4. postMessage 标识 `dsh-synapse` → `chiron-sessionmap`。
+ *
+ * ── Chiron 补丁（在上面 4 处「去 DSH 化」之外，逐处以 [chiron] 标注）──
+ *   5. 卡片与详情面板显示**会话标签/别名**（用户在别处设置的标注）；
+ *   6. 详情面板底部提供「重命名 / 备注别名 / 标签」入口，写入经宿主 RPC
+ *      （`synapse:update-session` → `PUT /v1/conversations/{id}`）—— 会话的主人始终是宿主；
+ *   7. `settleRpc` 多认一条回执 `synapse:session-updated`（配合第 6 条）。
+ *
+ * 补丁只做「显示 + 编辑入口」：数据与投影都在 adapter.js，写入在宿主 ChatView。
+
  */
+/* [chiron] 补丁辅助函数（徽标渲染 + 编辑入口） */
+// ── [chiron] 会话标签 / 别名：徽标渲染与编辑入口 ─────────────────────────
+//
+// 数据来源：adapter.js 把 `GET /v1/conversations/{id}` 的 tag/alias/title 投影进 thread
+// （与消息同一个响应，零额外请求）。写入必须**经宿主**（`synapse:update-session`），
+// 否则地图改了、对话页与侧边栏还是旧值。
+function chironCardBadges(card) {
+  if (card === undefined || card === null) return ''
+  const tag = typeof card.tag === 'string' ? card.tag.trim() : ''
+  const alias = typeof card.alias === 'string' ? card.alias.trim() : ''
+  const parts = []
+  if (tag) parts.push(`<span class="chiron-card-tag" title="会话标签">${escapeHtml(tag)}</span>`)
+  // 卡片标题已经优先取别名，这里只在两者不同时补一行说明（避免重复显示同一个词）
+  if (alias && alias !== card.question) parts.push(`<span class="chiron-card-alias" title="别名">别名：${escapeHtml(alias)}</span>`)
+  return parts.join('')
+}
+
+function chironMetaActions(card, thread) {
+  if (thread === undefined || thread === null || !thread.dshSessionId) return ''
+  const t = escapeHtml(thread.id)
+  return `<button type="button" data-action="chiron-edit-meta" data-field="title" data-thread="${t}" title="重命名会话（改会话标题）">重命名</button>`
+    + `<button type="button" data-action="chiron-edit-meta" data-field="alias" data-thread="${t}" title="给会话起一个别名/备注（展示时优先于标题）">备注别名</button>`
+    + `<button type="button" data-action="chiron-edit-meta" data-field="tag" data-thread="${t}" title="设置会话标签（留空清除）">标签</button>`
+}
+
+async function chironEditSessionMeta(thread, field) {
+  if (thread === undefined || thread === null || !thread.dshSessionId) return setError('该节点没有关联的会话')
+  if (['title', 'alias', 'tag'].indexOf(field) === -1) return
+  const current = field === 'title' ? (thread.realTitle || thread.title || '') : field === 'alias' ? (thread.alias || '') : (thread.tag || '')
+  const label = field === 'title' ? '会话标题' : field === 'alias' ? '别名 / 备注（留空清除）' : '标签（留空清除）'
+  const next = window.prompt(label, current)
+  if (next === null) return
+  const value = next.trim()
+  if (field === 'title' && !value) return setError('标题不能为空')
+  try {
+    const adapter = window.__chironAdapter
+    if (adapter && typeof adapter.invalidateSession === 'function') adapter.invalidateSession(thread.dshSessionId)
+    await dshRpc('synapse:update-session', { sessionId: thread.dshSessionId, [field]: value })
+    if (typeof refreshProjection === 'function') void refreshProjection()
+  } catch (error) {
+    setError(error instanceof Error ? error.message : String(error))
+  }
+}
+
 const app = document.querySelector('#app')
 if ('scrollRestoration' in history) history.scrollRestoration = 'manual'
 const LEGACY_CARD_POSITIONS_KEY = 'chiron-map:card-positions'
@@ -726,6 +779,9 @@ function conversationCards(threads) {
         position,
         positionLocked,
         question: question.text,
+        // [chiron] 会话标签与别名：卡片要显示它们（数据来自 adapter 投影的 thread）
+        tag: thread.tag || '',
+        alias: thread.alias || '',
         answer,
         error,
         processCount,
@@ -752,6 +808,9 @@ function conversationCards(threads) {
       position: positionLocked ? savedPosition : naturalPosition,
       positionLocked,
       question: thread.dshSessionTitle ?? thread.title,
+      // [chiron] 同上（该会话还没有消息时的空卡）
+      tag: thread.tag || '',
+      alias: thread.alias || '',
       answer: null,
       error: null,
       processCount: 0,
@@ -918,7 +977,7 @@ function conversationCard(card, graph) {
     <button class="node-handle" data-drag-card="${card.id}" aria-label="拖动 ${escapeHtml(card.question)}" title="拖动卡片"></button>
     ${continueButton}${foldButton}${branchButton}
     <div class="thread-card-head"><span class="topic-dot"></span><button class="thread-title" data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话：${escapeHtml(card.question)}">${escapeHtml(card.question)}</button></div>
-    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}</div>
+    <div class="thread-meta"><span>${source}</span><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-error-status">失败</span>'}${card.processCount > 0 ? `<span class="card-process-count">工具 ${card.processCount}</span>` : ''}${chironCardBadges(card)}</div>
     <div class="thread-answer">${card.answer === null ? (card.error === null ? '<p class="thread-answer-empty">等待助手回复</p>' : '') : card.answer.pending && card.answer.text === '' ? '<p class="thread-answer-pending">正在回复</p>' : `${renderMarkdown(card.answer.text)}${card.answer.pending ? '<p class="thread-answer-pending">正在回复</p>' : ''}`}${card.error === null ? '' : `<p class="thread-answer-error" title="${escapeHtml(card.error.text)}">本轮失败：${escapeHtml(card.error.text)}</p>`}</div>
     <footer><button data-action="show-thread" data-thread="${card.dshThreadId}" data-card="${escapeHtml(card.id)}" title="查看完整会话" aria-label="查看完整会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linejoin="round"><path d="M2 8.5 8 2.5l6 6V13.5a.5.5 0 0 1-.5.5h-11a.5.5 0 0 1-.5-.5Z"/><path d="M6.2 14v-3.6a1.8 1.8 0 0 1 3.6 0V14" /></svg>详情</button><button data-action="archive-thread" data-thread="${card.dshThreadId}" title="归档此会话" aria-label="归档此会话"><svg aria-hidden="true" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round" stroke-linejoin="round"><path d="M2.5 5h11M5.5 7v5.5a1 1 0 0 0 1 1h3a1 1 0 0 0 1-1V7"/><path d="M4 5 5 2.8a.7.7 0 0 1 .6-.4h4.8a.7.7 0 0 1 .6.4L12 5M6 9.5h4"/></svg>归档</button></footer>
   </article>`
@@ -1182,7 +1241,7 @@ function renderCardInspector(card) {
   // 「在 DSH 中打开」按钮已移除：Chiron 没有独立的 DSH 宿主，切换会话由卡片点击完成
 // （postMessage → ChatView.vue）。留空串保持既有模板拼接不变。
 const openDshAction = ''
-  return `<aside class="card-inspector${state.inspectorOpening ? ' is-opening' : ''}" aria-label="卡片详情" data-inspector-card="${escapeHtml(card.id)}"><header class="card-inspector-head"><div><div class="card-inspector-meta"><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-inspector-error-status">失败</span>'}${process.length > 0 ? `<span>工具 ${process.length}</span>` : ''}</div><h2>${escapeHtml(card.question)}</h2></div><button class="card-inspector-close" type="button" data-action="close-card-inspector" aria-label="关闭卡片详情" title="关闭"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></header><div class="card-inspector-scroll">${error}${answer}${processRecordsHtml}</div><footer class="card-inspector-actions">${continueAction}${branch}${openDshAction}</footer></aside>`
+  return `<aside class="card-inspector${state.inspectorOpening ? ' is-opening' : ''}" aria-label="卡片详情" data-inspector-card="${escapeHtml(card.id)}"><header class="card-inspector-head"><div><div class="card-inspector-meta"><span>第 ${card.turnIndex + 1} 轮</span>${card.error === null ? '' : '<span class="card-inspector-error-status">失败</span>'}${process.length > 0 ? `<span>工具 ${process.length}</span>` : ''}</div><h2>${escapeHtml(card.question)}</h2></div><button class="card-inspector-close" type="button" data-action="close-card-inspector" aria-label="关闭卡片详情" title="关闭"><svg aria-hidden="true" viewBox="0 0 16 16"><path d="m4.5 4.5 7 7m0-7-7 7"/></svg></button></header><div class="card-inspector-scroll">${error}${answer}${processRecordsHtml}</div><footer class="card-inspector-actions">${continueAction}${branch}${chironMetaActions(card, thread)}${openDshAction}</footer></aside>`
 }
 
 /* ── 详情页统计（会话地图「详情」= 纯统计视图） ─────────────────────────
@@ -1738,6 +1797,11 @@ app.addEventListener('click', async event => {
     if (button.dataset.action === 'close-card-inspector') { closeCardInspector(); return }
     if (button.dataset.action === 'toggle-sidebar') { state.sidebarCollapsed = !state.sidebarCollapsed; render() }
     if (button.dataset.action === 'create-session') openNewSession()
+    // [chiron] 会话元数据编辑（重命名 / 备注别名 / 标签）
+    if (button.dataset.action === 'chiron-edit-meta') {
+      const target = state.workspace?.threads.find(x => x.id === (thread?.id ?? '')) ?? thread
+      if (target !== undefined) void chironEditSessionMeta(target, button.dataset.field || '')
+    }
     if (button.dataset.action === 'select-thread' && thread !== undefined) {
       state.mapCardSessionSwitches.clear()
       state.activeId = thread.id
@@ -2067,7 +2131,7 @@ window.addEventListener('message', event => {
       }
     }
   }
-  if (data.type === 'synapse:forked-session' || data.type === 'synapse:created-session' || data.type === 'synapse:message-sent') settleRpc(data.requestId, data.session ?? data)
+  if (data.type === 'synapse:forked-session' || data.type === 'synapse:created-session' || data.type === 'synapse:message-sent' || data.type === 'synapse:session-updated') settleRpc(data.requestId, data.session ?? data)
   if (data.type === 'synapse:bridge-error') { settleRpc(data.requestId, undefined, new Error(data.message)); if (data.requestId === undefined) setError(data.message) }
 })
 

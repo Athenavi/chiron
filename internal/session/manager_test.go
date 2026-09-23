@@ -49,6 +49,7 @@ func TestBuildSessionUpdate(t *testing.T) {
 	title := "新标题"
 	pinned := true
 	tag := "工作"
+	alias := "我的备注"
 	blank := ""
 
 	cases := []struct {
@@ -76,10 +77,22 @@ func TestBuildSessionUpdate(t *testing.T) {
 			wantArgs: []interface{}{"", id},
 		},
 		{
-			name:     "标题+置顶+标签：占位符与参数严格对应",
-			upd:      SessionUpdate{Title: &title, Pinned: &pinned, Tag: &tag},
-			wantSQL:  `UPDATE sessions SET title = $1, updated_at = $2, pinned = $3, tag = NULLIF($4, '') WHERE id = $5`,
-			wantArgs: []interface{}{"新标题", now, true, "工作", id},
+			name:     "仅别名（用户给会话起的备注，展示时优先于 title）",
+			upd:      SessionUpdate{Alias: &alias},
+			wantSQL:  `UPDATE sessions SET alias = NULLIF($1, '') WHERE id = $2`,
+			wantArgs: []interface{}{"我的备注", id},
+		},
+		{
+			name:     "空别名走 NULLIF（清除别名）",
+			upd:      SessionUpdate{Alias: &blank},
+			wantSQL:  `UPDATE sessions SET alias = NULLIF($1, '') WHERE id = $2`,
+			wantArgs: []interface{}{"", id},
+		},
+		{
+			name:     "标题+置顶+标签+别名：占位符与参数严格对应",
+			upd:      SessionUpdate{Title: &title, Pinned: &pinned, Tag: &tag, Alias: &alias},
+			wantSQL:  `UPDATE sessions SET title = $1, updated_at = $2, pinned = $3, tag = NULLIF($4, ''), alias = NULLIF($5, '') WHERE id = $6`,
+			wantArgs: []interface{}{"新标题", now, true, "工作", "我的备注", id},
 		},
 	}
 	for _, c := range cases {

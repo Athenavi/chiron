@@ -73,9 +73,9 @@ func (m *Manager) GetSession(ctx context.Context, id string) (*model.Session, er
 
 	var s model.Session
 	err := m.pool.QueryRow(ctx,
-		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), created_at, updated_at
+		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), created_at, updated_at
 		 FROM sessions WHERE id = $1`, id).
-		Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.CreatedAt, &s.UpdatedAt)
+		Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.CreatedAt, &s.UpdatedAt)
 	if err == pgx.ErrNoRows {
 		return nil, fmt.Errorf("%w: %s", ErrSessionNotFound, id)
 	} else if err != nil {
@@ -158,7 +158,7 @@ func (m *Manager) ListSessions(ctx context.Context, userID string, page, perPage
 	offset := (page - 1) * perPage
 
 	rows, err := m.pool.Query(ctx,
-		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), created_at, updated_at
+		`SELECT id, COALESCE(user_id::text, ''), COALESCE(title, ''), COALESCE(pinned, false), COALESCE(tag, ''), COALESCE(alias, ''), created_at, updated_at
 		 FROM sessions
 		 WHERE user_id = $1
 		 ORDER BY pinned DESC, updated_at DESC
@@ -171,7 +171,7 @@ func (m *Manager) ListSessions(ctx context.Context, userID string, page, perPage
 	var sessions []model.Session
 	for rows.Next() {
 		var s model.Session
-		if err := rows.Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.CreatedAt, &s.UpdatedAt); err != nil {
+		if err := rows.Scan(&s.ID, &s.UserID, &s.Title, &s.Pinned, &s.Tag, &s.Alias, &s.CreatedAt, &s.UpdatedAt); err != nil {
 			slog.Warn("scan session row", "error", err)
 			continue
 		}
@@ -239,16 +239,17 @@ type SessionUpdate struct {
 	Title  *string
 	Pinned *bool
 	Tag    *string
+	Alias  *string
 }
 
 // empty 表示没有任何字段需要更新。
 func (u SessionUpdate) empty() bool {
-	return u.Title == nil && u.Pinned == nil && u.Tag == nil
+	return u.Title == nil && u.Pinned == nil && u.Tag == nil && u.Alias == nil
 }
 
 // buildSessionUpdate 组装 UPDATE sessions 的语句与参数。
-// 只有 title 变更才推进 updated_at（置顶/标签是列表偏好，不算会话活动）；
-// tag 传空串表示清除标签（写 NULL，避免留下空串标签）。
+// 只有 title 变更才推进 updated_at（置顶/标签/别名是列表偏好，不算会话活动）；
+// tag / alias 传空串表示清除（写 NULL，避免留下空串）。
 func buildSessionUpdate(id string, u SessionUpdate, now time.Time) (string, []interface{}) {
 	var sets []string
 	var args []interface{}
@@ -266,11 +267,15 @@ func buildSessionUpdate(id string, u SessionUpdate, now time.Time) (string, []in
 		sets = append(sets, fmt.Sprintf("tag = NULLIF($%d, '')", len(args)+1))
 		args = append(args, *u.Tag)
 	}
+	if u.Alias != nil {
+		sets = append(sets, fmt.Sprintf("alias = NULLIF($%d, '')", len(args)+1))
+		args = append(args, *u.Alias)
+	}
 	args = append(args, id)
 	return `UPDATE sessions SET ` + strings.Join(sets, ", ") + ` WHERE id = $` + strconv.Itoa(len(args)), args
 }
 
-// UpdateSession updates a session's title / pinned flag / tag, then refreshes
+// UpdateSession updates a session's title / pinned flag / tag / alias, then refreshes
 // the Redis cache so a subsequent GetSession returns the fresh row.
 // At least one field must be non-nil.
 func (m *Manager) UpdateSession(ctx context.Context, id string, upd SessionUpdate) (*model.Session, error) {

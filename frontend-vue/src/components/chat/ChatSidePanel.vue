@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, h, ref, watch, onMounted, onUnmounted } from 'vue'
-import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Modal } from 'ant-design-vue'
+import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Modal, Input } from 'ant-design-vue'
 import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
@@ -15,6 +15,7 @@ import type { ContextChip } from './contextChips'
 import { formatRelativeTime } from './chat-types'
 import type { ChatItem, ChatSession } from './chat-types'
 import SubAgentPanel from './SubAgentPanel.vue'
+import { mergeTagOptions, normalizeTag, TAG_MAX_LEN } from './sessionTags'
 import SessionStatsPanel from './SessionStatsPanel.vue'
 import ThemeSwitcher from '../ThemeSwitcher.vue'
 import SettingsPanel from '../settings/SettingsPanel.vue'
@@ -294,8 +295,7 @@ const filteredSessions = computed(() => {
   return list.filter(s => (s.title || '').toLowerCase().includes(q))
 })
 
-// P3-D: 会话标签筛选
-const TAGS = ['工作', '学习', '项目', '其他']
+// P3-D: 会话标签筛选（候选 = 预设 + 已使用过的；用户可自定义，见 sessionTags.ts）
 const activeTag = ref('')
 // 从所有会话中提取已使用的标签
 const usedTags = computed(() => {
@@ -305,6 +305,30 @@ const usedTags = computed(() => {
   }
   return Array.from(set)
 })
+/**
+ * 标签候选：预设 ∪ 已使用过的。
+ *
+ * 此前菜单里只有四个写死的标签 —— 用户既看不到自己用过的标签，也没法新建
+ * （"标签是恒定的，缺少自定义标签的功能"）。现在自定义的标签会落库（会话的 tag），
+ * 下次自动出现在候选里，也能被筛选 chips 用上。
+ */
+const tagOptions = computed(() => mergeTagOptions(usedTags.value))
+
+// 自定义标签弹窗：只存"给哪个会话打标签"，输入值用受控 ref
+const customTagTarget = ref('')
+const customTagText = ref('')
+function openCustomTag(sessionId: string) {
+  customTagTarget.value = sessionId
+  customTagText.value = ''
+}
+async function applyCustomTag() {
+  const sessionId = customTagTarget.value
+  const tag = normalizeTag(customTagText.value)
+  customTagTarget.value = ''
+  if (!sessionId || !tag) return // 空输入 = 什么都不做（清除标签有专门的菜单项）
+  emit('tag', sessionId, tag)
+}
+
 function toggleTag(tag: string) {
   activeTag.value = activeTag.value === tag ? '' : tag
 }
@@ -724,11 +748,18 @@ function pickSession(id: string) {
                   <!-- P3-D: 标签设置（用 MenuDivider 分组，避免 SubMenu 在 Dropdown overlay 中丢失上下文） -->
                   <MenuDivider />
                   <MenuItem
-                    v-for="t in TAGS"
+                    v-for="t in tagOptions"
                     :key="'tag-'+t"
                     @click="emit('tag', s.id, t)"
                   >
                     <TagOutlined class="menu-icon" />标签：{{ t }}
+                  </MenuItem>
+                  <!-- 自定义标签：此前菜单只有四个写死的标签（用户报告"标签恒定"） -->
+                  <MenuItem
+                    key="tag-custom"
+                    @click="openCustomTag(s.id)"
+                  >
+                    <EditOutlined class="menu-icon" />{{ $t('自定义标签…') }}
                   </MenuItem>
                   <MenuItem
                     key="tag-clear"
@@ -850,6 +881,22 @@ function pickSession(id: string) {
         destroy-on-close
       >
         <SettingsPanel />
+      </Modal>
+      <!-- 自定义标签：此前设置菜单里只有四个写死的标签（用户报告"标签恒定、无法自定义"）-->
+      <Modal
+        :open="!!customTagTarget"
+        :title="tr('自定义标签')"
+        :ok-text="tr('确定')"
+        :cancel-text="tr('取消')"
+        @ok="applyCustomTag"
+        @cancel="customTagTarget = ''"
+      >
+        <Input
+          v-model:value="customTagText"
+          :maxlength="TAG_MAX_LEN"
+          :placeholder="tr('输入标签名（最多 64 字）')"
+          @press-enter="applyCustomTag"
+        />
       </Modal>
     </template>
   </div>

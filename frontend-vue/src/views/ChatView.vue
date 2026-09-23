@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
+import { FOLLOWUP_TEMPLATE, handleMapRpc, type MapRpcHost } from '../components/chat/sessionmapBridge'
 import { Button, Input, Modal, Checkbox, Alert, message, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
@@ -1167,10 +1168,108 @@ async function pushMapState() {
 }
 
 
+// ── 会话地图 RPC：宿主是会话的主人，地图只是它的另一个视图 ──
+//
+// 地图（app.js）用 `dshRpc(...)` 发起会话操作，然后**等一条带 requestId 的回执**
+// （20 秒超时）。此前宿主只实现了"切会话"，这三条操作全部空等超时 —— 于是地图里
+// 新建会话、发送追问、分叉全都用不了（adapter.js 里那份直连 REST 的实现被 app.js 的
+// 顶层函数声明覆盖，从未生效）。这里把它们接管过来，编排逻辑在 sessionmapBridge.ts。
+
+/** 地图发起的会话 → 它的事件订阅（地图可能在**非当前会话**上发消息） */
+const mapSessionStreams = new Map<string, EventSource>()
+
+/**
+ * 为地图发起的会话保持一条事件订阅。
+ *
+ * 为什么不能只靠 `activeSSE`：那条只服务当前会话；地图可以对画布上任意会话发消息，
+ * 没有订阅它就只能等回合结束后重拉画布才看到内容（失去流式感）。
+ * 回合结束即关闭并释放（下一次发消息会重新建）。
+ */
+function ensureMapSessionStream(sessionId: string) {
+  if (!sessionId || mapSessionStreams.has(sessionId)) return
+  const es = createSSEConnection(
+    sessionId,
+    (raw) => {
+      forwardStreamToMap(sessionId, raw)
+      const t = (raw as { type?: string } | null)?.type
+      if (t === 'turn_done' || t === 'error') {
+        es.close()
+        mapSessionStreams.delete(sessionId)
+      }
+    },
+    () => {
+      es.close()
+      mapSessionStreams.delete(sessionId)
+    },
+    { autoReconnect: true },
+  )
+  mapSessionStreams.set(sessionId, es)
+}
+
+const mapRpcHost: MapRpcHost = {
+  post: (payload) => postToMap(payload),
+
+  async createSession(title) {
+    // 走宿主自己的 REST（会话的主人始终是宿主）：地图只是"另一种视图"，
+    // 它建的会话必须真的出现在会话列表里，否则用户在地图新建完回到对话页找不到。
+    const res = await api.post('/v1/conversations', { title })
+    const session = (res.data?.data ?? res.data) as { id?: string; title?: string } | null
+    if (!session?.id) throw new Error('创建会话失败')
+    await loadSessions()
+    // 让地图把新会话摆上画布：地图自己不会知道宿主刚建了一个会话 ——
+    // app.js 只在收到 `synapse:current-session` 时才调 placeSession（adapter 的监听）。
+    postToMap({ type: 'synapse:current-session', session: { id: session.id, title: session.title } })
+    return { id: session.id, title: session.title }
+  },
+
+  async sendMessage(sessionId, text, mode) {
+    ensureMapSessionStream(sessionId)
+    await api.post('/submit', {
+      content: mode === 'followup' ? FOLLOWUP_TEMPLATE(text) : text,
+      session_id: sessionId,
+      // 发送侧幂等：与对话页同一条约定（服务端 5 分钟去重窗口）
+      llm_config: { ...buildLlmConfig(), client_msg_id: crypto.randomUUID() },
+    })
+  },
+
+  async forkSession(sessionId, atSeq, title) {
+    const res = await api.post(`/v1/conversations/${encodeURIComponent(sessionId)}/fork`, {
+      from_index: atSeq,
+      title,
+    })
+    const data = (res.data?.data ?? res.data) as { session_id?: string; id?: string } | null
+    const id = data?.session_id || data?.id
+    if (!id) throw new Error('分叉失败')
+    await loadSessions()
+    // 地图需要 `{id, title}`：id 用来记住分叉锚点、title 显示在卡片上
+    return { id, title }
+  },
+
+  async updateSession(sessionId, patch) {
+    // 会话元数据（重命名 / 别名 / 标签）统一走既有接口：它同时更新宿主缓存与列表，
+    // 于是对话页、侧边栏、地图三处的显示立刻一致（地图侧的卡片标题/徽标由地图自己重拉）。
+    await api.put(`/v1/conversations/${encodeURIComponent(sessionId)}`, patch)
+    await loadSessions()
+  },
+}
+
 window.addEventListener('message', (e: MessageEvent) => {
   if (e.origin !== window.location.origin) return // 只认自己域（iframe 同源）
-  const data = e.data as { source?: string; type?: string; sessionId?: string } | null
+  const data = e.data as {
+    source?: string
+    type?: string
+    sessionId?: string
+    requestId?: string
+    text?: string
+    mode?: string
+    atSeq?: number
+    title?: string
+  } | null
   if (!data || data.source !== MAP_SOURCE) return
+  // 地图发起的会话操作（新建 / 追问 / 分叉）：由宿主代理执行并回执。
+  // 不做这件事的后果是"地图里新建会话、发送追问、分叉全部失败"（地图空等 20 秒超时）——
+  // 详见 sessionmapBridge.ts 的说明。返回 true 表示这条消息已被接管。
+  if (handleMapRpc(data, mapRpcHost)) return
   // 地图打开 / 请求当前状态：把宿主状态推过去
   if (data.type === 'synapse:map-opened' || data.type === 'synapse:request-current') {
     void pushMapState()
@@ -1333,6 +1432,8 @@ onUnmounted(() => {
   stopTurnTimer()
   if (activeSSE) { activeSSE.close(); activeSSE = null }
   closeSubagentStream()
+  for (const es of mapSessionStreams.values()) es.close()
+  mapSessionStreams.clear()
   if (unifiedDoneTimer) { clearTimeout(unifiedDoneTimer); unifiedDoneTimer = null }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   window.removeEventListener('online', onOnline)

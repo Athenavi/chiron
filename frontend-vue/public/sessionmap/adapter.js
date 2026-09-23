@@ -11,9 +11,12 @@
  * 本文件在 `app.js` **之前**加载，用最小侵入的方式把这两类调用改接到 Chiron：
  *   - 包一层 `window.fetch`：`/synapse/api/*` → `/v1/session-map/*`，并把 Chiron 的
  *     `{success,data}` 响应反向转成它期望的 `{workspaces|workspace|thread}` 形状；
- *   - 覆盖 `dshRpc`：三个会话操作映射到 Chiron 的 REST（`fork-session` → 我们新加的
- *     `POST /v1/conversations/{id}/fork`，语义完全对应：`atSeq` → `from_index`）；
  *   - `post` 保持原样（`window.parent.postMessage`）—— 由 Vue 宿主监听并切会话。
+ *
+ * ⚠️ 第 2 类（会话操作）**不在本文件里**：`dshRpc` 是 app.js 的顶层函数声明，它会覆盖
+ * 本文件里的任何同名定义（这里曾写过一份 REST 实现，从未生效，已删除）。因此那三条操作
+ * 由**宿主 ChatView** 代理并回执 —— 见
+ * `frontend-vue/src/components/chat/sessionmapBridge.ts`。
  *
  * 为什么能这么接：
  *   - **同源 iframe + httpOnly cookie**：Chiron 的鉴权靠 cookie，fetch 自动携带，
@@ -21,8 +24,11 @@
  *   - **消息不用投影**：dsh-synapse 需要投影是因为 DSH 的会话是文件 log；我们的
  *     `messages` 本来就在 PG 里，`thread` 就等于 `session`，直接读既有接口即可。
  *
- * 已知取舍：读一个工作区时会对每个节点补拉一次会话消息（N+1）。节点量在几十级，
- * 可接受；要优化就在后端加 `?with_messages=1` 一次带回来。
+ * 已知取舍：
+ *   - 读一个工作区时会对每个节点补拉一次会话消息（N+1）。节点量在几十级，
+ *     可接受；要优化就在后端加 `?with_messages=1` 一次带回来。
+ *   - 卡片只投影「主卡（标题 + 最新回复）+ 追问对」两种内容，不是完整对话 ——
+ *     完整对话去对话页看（地图是会话的投影/引用）。
  */
 (function () {
   'use strict'
@@ -48,11 +54,21 @@
   // ── 形状映射：Chiron node ↔ dsh-synapse thread ──
   // Chiron：{id, session_id, parent_node_id, edge_kind, x, y, title, collapsed, hidden, branch_from_seq}
   // dsh-synapse：{id, title, dshSessionId, parentId, position:{x,y}, collapsed, archived, messages[]}
-  function nodeToThread(node, messages) {
+  function nodeToThread(node, messages, meta) {
+    meta = meta || {}
+    // 展示名：别名 → 地图节点标题 → 会话真实标题。
+    // 用户在地图上改过的节点标题优先；没改过时用**会话的别名/标题**（而不是空字符串），
+    // 这样"刚摆上画布"的会话也不会显示成占位标题。
+    var alias = (meta.alias || '').trim()
+    var displayName = alias || node.title || meta.title || ''
     return {
       id: node.id,
-      title: node.title || '',
-      dshSessionTitle: node.title || '',
+      title: displayName,
+      dshSessionTitle: displayName,
+      // 徽标数据：卡片要显示会话标签与别名（用户要求）。原样带给 app.js 的补丁区块。
+      tag: (meta.tag || '').trim(),
+      alias: alias,
+      realTitle: meta.title || '',
       dshSessionId: node.session_id || '',
       parentId: node.parent_node_id || '',
       // P1-6：分叉锚点的**真实**长度。app.js 的 conversationCards 用
@@ -95,6 +111,15 @@
   // 失效点：会话有新内容时（live-reply），只失效它自己。
   var messagesCache = new Map()
 
+  /**
+   * 会话级元数据（别名 / 标签 / 真实标题）—— 与消息**同一个响应**里拿到，零额外请求。
+   *
+   * 为什么要缓存：卡片要显示会话标签与别名（用户要求），而这两者只在会话对象上
+   * （`GET /v1/conversations/{id}` 返回 `{title, tag, alias, messages}`）。
+   * 单独再发一次请求会让本已存在的 N+1 翻倍。
+   */
+  var sessionMeta = new Map()
+
   function loadMessages(sessionId) {
     if (!sessionId) return Promise.resolve([])
     var hit = messagesCache.get(sessionId)
@@ -103,6 +128,13 @@
       .then(unwrap)
       .then(function (data) {
         var list = (data && (data.messages || data)) || []
+        if (data && typeof data === 'object') {
+          sessionMeta.set(sessionId, {
+            title: typeof data.title === 'string' ? data.title : '',
+            tag: typeof data.tag === 'string' ? data.tag : '',
+            alias: typeof data.alias === 'string' ? data.alias : '',
+          })
+        }
         if (!Array.isArray(list)) return []
         return list
           .filter(function (m) { return m && typeof m.content === 'string' && m.content })
@@ -110,6 +142,9 @@
             return {
               id: m.id || 'm' + i,
               kind: m.role === 'user' ? 'user' : 'assistant',
+              // 原始 role 也要留着：追问卡投影需要区分"真正的助手回答"与 tool 消息
+              // （app.js 只认 kind，多一个字段对它无害）
+              role: m.role,
               text: m.content,
               at: m.created_at,
               sourceSeq: i + 1,
@@ -125,40 +160,121 @@
   // ── 卡片 = 一个会话（准则 6：同一会话在画布内只出现一次）──
   //
   // 上游的卡片是"一轮对话"（question + answer），一个会话会摊成很多张。
-  // Chiron 的语义是**一会话一卡**，卡片显示会话的**标题 + 摘要**。
-  // 做法：这里只产出两条合成消息，conversationCards 便恰好生成 1 张卡 ——
-  // 于是不必改 app.js 的卡片模板（几万字符的超长行，改动风险高）。
+  // Chiron 的语义是**一会话一卡**：卡片显示会话的**标题 + 摘要**。
+  // 做法：合成两条消息，conversationCards 便恰好生成一张主卡。
   //
-  // 代价：会话详情视图也只看到这两条。这符合准则 2 —— 地图是会话的**投影/引用**，
-  // 要看完整对话去对话页。
+  // 例外（用户要求）：**追问**必须保留成卡片。追问是一次性问答，此前不落任何地图数据，
+  // 只在 `state.pendingReplies` 里有个临时态 —— 回合结束即消失，用户看不到自己问过什么、
+  // 答了什么（"追问卡片完成后永久丢失"）。现在把它投影成主卡之后的追加卡片，见
+  // followupMessages：数据源是**会话消息**，所以会话删除 ⇒ 卡片随之消失（要求的生命周期）。
+  //
+  // 详情视图仍只看到这几条（含追问对）—— 这一条留待"详情改用真实消息"那一步。
   var SUMMARY_MAX = 140
+  /** 追问卡在天花板上的截断长度：卡片只需"一眼可读"，完整内容去对话页看 */
+  var FOLLOWUP_MAX = 400
 
   /** 取最近一条助手回复压成单行摘要（折叠空白、超长截断） */
   function summarizeSession(list) {
     for (var i = list.length - 1; i >= 0; i--) {
       var m = list[i]
-      if (m && m.role === 'assistant' && typeof m.content === 'string' && m.content.trim()) {
-        var t = m.content.trim().replace(/\s+/g, ' ')
+      if (!m || m.role !== 'assistant') continue
+      var text = messageText(m)
+      if (text.trim()) {
+        var t = text.trim().replace(/\s+/g, ' ')
         return t.length > SUMMARY_MAX ? t.slice(0, SUMMARY_MAX) + '…' : t
       }
     }
     return ''
   }
 
-  /** 合成"标题 + 摘要"两条消息：让卡片恰好一张，且标题是会话标题 */
+  /**
+   * 取一条消息的正文。
+   *
+   * ⚠️ 必须同时认 `text` 与 `content`：本文件读会话消息时会把 `content` 映射成 `text`
+   * （见 loadMessages），而 cardMessages 的入参正是**映射后**的列表 —— 此前
+   * summarizeSession 只读 `content`，于是**主卡的摘要永远是空的**（卡片上只剩标题）。
+   * 统一走这个取值函数，形状变化不会再让摘要静默消失。
+   */
+  function messageText(m) {
+    if (!m) return ''
+    if (typeof m.text === 'string') return m.text
+    if (typeof m.content === 'string') return m.content
+    return ''
+  }
+
+  /**
+   * 追问的提示词格式 —— 与宿主（`sessionmapBridge.ts` 的 `FOLLOWUP_TEMPLATE`）成对演进。
+   *
+   * ⚠️ 外层全角括号是**可选**的：历史上 adapter 自己发消息时用的是带括号的写法
+   * （`（【请简短回答问题】:(…)）`），现在由宿主发送、不带括号。库里两种格式都可能有，
+   * 正则必须都认 —— 否则"追问卡"这种**历史数据**永远投影不出来（功能等于没做）。
+   */
+  var FOLLOWUP_RE = /^（?【请简短回答问题】:\(([\s\S]*)\)）?$/
+
+  function followupQuestion(text) {
+    if (typeof text !== 'string') return null
+    var matched = FOLLOWUP_RE.exec(text.trim())
+    return matched ? matched[1] : null
+  }
+
+  function clipText(text, max) {
+    var t = String(text === null || text === undefined ? '' : text).trim()
+    return t.length > max ? t.slice(0, max) + '…' : t
+  }
+
+  /**
+   * 把会话里的**追问对**（问题 + 回答）投影成追加卡片。
+   *
+   * 为什么不需要新表、也不需要改 app.js：
+   *   - 追问的问题与回答**本来就在会话消息里**（宿主走的是与对话页同一条 `/submit` 落库）；
+   *   - app.js 的切分规则是"**每条 user 消息一张卡**"（app.js:693），同一 thread 的多张卡
+   *     会自动串成链（追问卡挂在主卡之后，app.js:764）—— 正好是要的形态。
+   *
+   * 生命周期：数据源是会话消息 ⇒ 会话删除、消息消失 ⇒ 追问卡随之消失（正是要求的行为），
+   * 不需要额外的清理逻辑，也不会留下孤儿数据。
+   */
+  function followupMessages(list) {
+    var out = []
+    for (var i = 0; i < list.length; i++) {
+      var m = list[i]
+      if (!m || m.role !== 'user') continue
+      var question = followupQuestion(messageText(m))
+      if (question === null) continue
+      // 回答 = 该追问之后、下一条 user 消息之前的**最后一条真正的助手消息**
+      // （tool 消息不参与 —— 否则卡片上的"回答"可能是工具回显）
+      var answer = ''
+      for (var j = i + 1; j < list.length; j++) {
+        var reply = list[j]
+        if (!reply || reply.role === 'user') break
+        if (reply.role === 'assistant' && messageText(reply).trim()) {
+          answer = messageText(reply)
+        }
+      }
+      // sourceSeq 沿用原消息序号：app.js 用它做卡片 id（`thread:turn:<seq>`），
+      // 于是**同一轮追问的卡片 id 稳定** —— 拖动位置（cardPositions）能持久化。
+      out.push({ kind: 'user', text: clipText(question, FOLLOWUP_MAX), at: m.at, sourceSeq: m.sourceSeq })
+      if (answer) out.push({ kind: 'assistant', text: clipText(answer, FOLLOWUP_MAX), at: m.at, sourceSeq: m.sourceSeq })
+    }
+    return out
+  }
+
+  /** 合成"标题 + 摘要"主卡消息，再追加投影出来的追问卡 */
   function cardMessages(node, list) {
     var title = node.title || '(未命名会话)'
     var summary = summarizeSession(list)
     var at = list.length ? list[list.length - 1].created_at : undefined
     var out = [{ kind: 'user', text: title, at: at, sourceSeq: 1 }]
     if (summary) out.push({ kind: 'assistant', text: summary, at: at, sourceSeq: 2 })
-    return out
+    return out.concat(followupMessages(list))
   }
   /** 把节点数组组装成 app.js 期望的工作区形状（含 messages） */
   function hydrateNodes(workspaceId, nodes, name, viewport) {
     return Promise.all((nodes || []).map(function (n) {
-      // 卡片内容 = 标题 + 摘要（一会话一卡）；完整消息只用于生成摘要，不进卡片
-      return loadMessages(n.session_id).then(function (list) { return nodeToThread(n, cardMessages(n, list)) })
+      // 卡片内容 = 主卡（标题 + 最新回复）+ 追问卡（会话里的追问对）；
+      // 完整消息只用于生成这两者，其余不进卡片（要看完整对话去对话页）
+      return loadMessages(n.session_id).then(function (list) {
+        return nodeToThread(n, cardMessages(n, list), sessionMeta.get(n.session_id) || {})
+      })
     })).then(function (threads) {
       return {
         id: workspaceId,
@@ -385,7 +501,39 @@
       var hostSnap = hostWs ? snapshot(hostWs) : null
       var hostThread = hostSnap ? (hostSnap.threads || []).filter(function (x) { return x.id === thId })[0] : null
 
-      if (isBranch && hostThread && hostThread.dshSessionId) {
+      if (isBranch) {
+        // 分支是**两段式**的：会话 fork 由 app.js 经宿主 RPC 完成（`synapse:fork-session`），
+        // 这里只负责登记地图节点。
+        //
+        // 此前这里又 fork 了一次（还拿 `body.atSeq || 1` 当分叉点），于是"节点挂的会话"
+        // 和"随后真正发消息的会话"是两个不同的会话：卡片永远没有回复 ——
+        // 用户看到的现象就是"无法创建分支"。
+        var branchedSessionId = body.dshSessionId || ''
+        if (branchedSessionId) {
+          var childFromHost = {
+            id: 'n_' + branchedSessionId,
+            title: body.title || '分支',
+            dshSessionId: branchedSessionId,
+            parentId: thId,
+            // 位置由 app.js 算好（它知道草稿卡片的落点）；缺省时退回父节点右下角
+            position: body.position || {
+              x: (hostThread ? hostThread.position.x : 0) + 360,
+              y: (hostThread ? hostThread.position.y : 0) + 300,
+            },
+            // 分叉点：fork 复制的消息条数，卡片摘要与血缘提示都要它
+            branchFromSeq: body.atSeq || 0,
+            messages: [],
+            pendingProcess: [],
+          }
+          if (hostSnap) {
+            hostSnap.threads.push(childFromHost)
+            snapshots[hostWs] = hostSnap
+            scheduleSave(hostWs)
+          }
+          return respond({ thread: childFromHost }, 201)
+        }
+        // 兼容没带会话 id 的旧调用方：维持原来的"由适配层自己 fork"行为
+        if (hostThread && hostThread.dshSessionId) {
         // atSeq → from_index：我们的 fork 语义是"保留前 N 条（含第 N 条）"
         return jsonFetch(CONV + '/' + encodeURIComponent(hostThread.dshSessionId) + '/fork', {
           method: 'POST',
@@ -407,6 +555,7 @@
           }
           return respond({ thread: child }, 201)
         })
+        }
       }
       if (hostSnap && !hostThread && method === 'PATCH') {
         // 未知节点 = 新建（便签创建走这条路）：补进内存快照并触发整体保存
@@ -450,23 +599,18 @@
     return respond({ error: 'not mapped' }, 404)
   }
 
-  // ── 2. dshRpc 覆盖：会话操作 → Chiron REST ──
-  // ── 地图侧自行订阅事件流（P0-1 修复）──
+  // ── 2. 会话操作（新建 / 发消息 / 分叉）：由**宿主**代理，适配层不参与 ──
   //
-  // 为什么必须自己订阅：`/v1/events` 的 `session_id` 是**必填**（后端 P0-S5 防止订到全站
-  // 事件流、泄露他人对话），一次只能订一个会话；而宿主 ChatView 订的是**它自己的**当前
-  // 会话 —— 地图里正在跑的那个会话它根本不知道，所以永远收不到增量。
+  // app.js 用 `dshRpc(type, payload)` 发起这三类操作：它 postMessage 给父窗口并等一条
+  // 带 requestId 的回执（app.js:142 定义、app.js:2070 结算、20 秒超时）。
+  // **app.js 自己定义了顶层函数 `dshRpc`，会把这里曾经写过的一份 REST 实现覆盖掉** ——
+  // 那份代码从未生效过（已删除，避免后人以为它在工作）。
   //
-  // 收到增量后用 postMessage 发回**本窗口**：app.js 的监听只校验 origin + source，
-  // 自己发给自己同样满足，于是它按既有的 live-reply 协议就地 patch 卡片。
-  var streamSources = new Map()   // sessionId -> EventSource
-  var streamText = new Map()      // sessionId -> 累积文本
-
-  function newUuid() {
-    return (window.crypto && window.crypto.randomUUID)
-      ? window.crypto.randomUUID()
-      : 'cmid-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2)
-  }
+  // 现在由宿主 ChatView 接管并回执，编排逻辑见
+  // `frontend-vue/src/components/chat/sessionmapBridge.ts`。
+  //
+  // 附带好处：会话的主人始终是宿主 —— 地图新建的会话会出现在会话列表里，
+  // 地图发出的消息也走宿主同一条 /submit 链路（幂等键、SSE 转发、运行态都一致）。
   /**
    * 把一个会话摆进当前画布（若还没摆）。
    *
@@ -499,79 +643,6 @@
     if (!skipReload && typeof window.openWorkspace === 'function') {
       window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
     }
-  }
-  function selfPost(payload) {
-    window.postMessage({ source: 'chiron-sessionmap', ...payload }, window.location.origin)
-  }
-
-  function watchSessionStream(sessionId) {
-    if (!sessionId || streamSources.has(sessionId)) return
-    var es = new EventSource('/v1/events?session_id=' + encodeURIComponent(sessionId), { withCredentials: true })
-    streamSources.set(sessionId, es)
-    es.onmessage = function (event) {
-      var d = null
-      try { d = JSON.parse(event.data) } catch (_) { return }
-      if (!d || typeof d.type !== 'string') return
-      if (d.type === 'text') {
-        var chunk = (d.data && d.data.content) || ''
-        if (!chunk) return
-        var acc = (streamText.get(sessionId) || '') + chunk
-        streamText.set(sessionId, acc)
-        selfPost({ type: 'synapse:live-reply', sessionId: sessionId, running: true, text: acc })
-        return
-      }
-      if (d.type === 'turn_done' || d.type === 'error') {
-        streamText.delete(sessionId)
-        selfPost({ type: 'synapse:live-reply', sessionId: sessionId, running: false })
-        messagesCache.delete(sessionId)
-        // 回合结束：重拉当前画布，把已经落库的完整消息带出来
-        if (currentWorkspaceId && typeof window.openWorkspace === 'function') {
-          window.openWorkspace(currentWorkspaceId, { preserveCanvasCamera: true })
-        }
-      }
-    }
-    // 断线交给浏览器原生自动重连（会带 Last-Event-ID，服务端从缓冲补发）
-    es.onerror = function () { /* noop */ }
-  }
-
-  window.dshRpc = function (type, payload) {
-    payload = payload || {}
-    if (type === 'synapse:create-session') {
-      return jsonFetch(CONV, { method: 'POST', body: JSON.stringify({ title: payload.title || '新对话' }) })
-        .then(unwrap)
-        .then(function (session) {
-          // 地图是"对话页面的另一种实现"，不是宿主视图的附属：它自己建的会话必须自己摆进画布，
-          // 不能等宿主推 current-session —— 宿主根本不知道这次创建，结果就是"新建了会话但地图上没有"。
-          placeSession(session)
-          return session
-        })
-    }
-    if (type === 'synapse:send-message') {
-      watchSessionStream(payload.sessionId)
-      return jsonFetch('/v1/agent/submit', {
-        method: 'POST',
-        body: JSON.stringify({
-          session_id: payload.sessionId,
-          // 追问走**特定格式**的提示词：方括号标记 + 包裹原文，让模型明确"只要一句话"，
-          // 也方便将来在服务端按格式识别这类一次性问答（普通对话与追问得以区分）。
-          content: payload.mode === 'followup'
-            ? '（【请简短回答问题】:(' + (payload.text || '') + ')）'
-            : (payload.text || ''),
-          context: {},
-          // 幂等键：服务端用 Redis SETNX 做 5 分钟去重（见 internal/api/submit_handler.go）。
-          // **必须由客户端生成** —— 只有它知道"这两次提交是同一条消息"（网络重试/重发时这个 ID 不变）。
-          // 缺了它，请求会被当成重复提交而无效。
-          llm_config: { client_msg_id: newUuid() },
-        }),
-      }).then(function () { return { ok: true } })
-    }
-    if (type === 'synapse:fork-session') {
-      return jsonFetch(CONV + '/' + encodeURIComponent(payload.sessionId) + '/fork', {
-        method: 'POST',
-        body: JSON.stringify({ from_index: payload.atSeq || 1 }),
-      }).then(unwrap)
-    }
-    return Promise.reject(new Error('未支持的 RPC：' + type))
   }
 
   // ── 3. 宿主到地图：会话跑完后刷新画布 ──
@@ -665,5 +736,32 @@
       )
     }
   }, true)
-  console.info('[sessionmap] Chiron 缝合层已就绪：REST → /v1/session-map, RPC → /v1/conversations')
+
+  // ── 供回归测试使用的纯函数出口 ──
+  //
+  // 本文件是**浏览器脚本**（public/ 下的静态资产，不经打包），所以没有模块导出。
+  // 这几个函数是"追问卡投影"的数据正确性所在（判定哪些消息是追问、配对回答、截断），
+  // 必须有测试盯着 —— 于是显式挂一个只读出口，测试用 jsdom 载入本文件后直接调用。
+  window.__chironAdapter = {
+    followupQuestion: followupQuestion,
+    followupMessages: followupMessages,
+    cardMessages: cardMessages,
+    clampFollowupText: clipText,
+    FOLLOWUP_MAX: FOLLOWUP_MAX,
+    /**
+     * 失效某个会话的缓存（消息 + 元数据）。
+     *
+     * 供 app.js 的补丁区块在"重命名 / 备注别名 / 标签"成功后调用：
+     * 那三类改动都落在**会话对象**上（`/v1/conversations/{id}`），而地图的卡片标题与徽标
+     * 正是从会话对象投影出来的 —— 不清缓存，重拉画布还是旧名字。
+     */
+    invalidateSession: function (sessionId) {
+      if (!sessionId) return
+      messagesCache.delete(sessionId)
+      sessionMeta.delete(sessionId)
+    },
+    sessionMetaOf: function (sessionId) { return sessionMeta.get(sessionId) || null },
+  }
+
+  console.info('[sessionmap] Chiron 缝合层已就绪：REST → /v1/session-map, RPC → 宿主 ChatView')
 })()

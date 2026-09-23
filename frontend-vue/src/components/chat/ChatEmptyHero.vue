@@ -27,30 +27,30 @@ const suggestions = [
       <h1 class="hero-title">
         {{ $t('你好，有什么可以帮助你的？') }}
       </h1>
-      <div class="suggestion-grid">
-        <div
-          v-for="s in suggestions"
-          :key="s.title"
-          class="suggestion-card"
-          role="button"
-          tabindex="0"
-          :aria-label="s.prompt"
-          @click="emit('suggest', s.prompt)"
-          @keydown.enter.prevent="emit('suggest', s.prompt)"
-          @keydown.space.prevent="emit('suggest', s.prompt)"
-        >
-          <component
-            :is="s.icon"
-            class="card-icon"
-          />
-          <div class="card-title">
-            {{ s.title }}
-          </div>
-          <div class="card-desc">
-            {{ s.desc }}
-          </div>
-        </div>
-      </div>
+<!--      <div class="suggestion-grid">-->
+<!--        <div-->
+<!--          v-for="s in suggestions"-->
+<!--          :key="s.title"-->
+<!--          class="suggestion-card"-->
+<!--          role="button"-->
+<!--          tabindex="0"-->
+<!--          :aria-label="s.prompt"-->
+<!--          @click="emit('suggest', s.prompt)"-->
+<!--          @keydown.enter.prevent="emit('suggest', s.prompt)"-->
+<!--          @keydown.space.prevent="emit('suggest', s.prompt)"-->
+<!--        >-->
+<!--          <component-->
+<!--            :is="s.icon"-->
+<!--            class="card-icon"-->
+<!--          />-->
+<!--          <div class="card-title">-->
+<!--            {{ s.title }}-->
+<!--          </div>-->
+<!--          <div class="card-desc">-->
+<!--            {{ s.desc }}-->
+<!--          </div>-->
+<!--        </div>-->
+<!--      </div>-->
     </div>
   </div>
 </template>

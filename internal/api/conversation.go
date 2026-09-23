@@ -30,6 +30,8 @@ type Conversation struct {
 	Title     string     `json:"title"`
 	Pinned    bool       `json:"pinned"`
 	Tag       string     `json:"tag,omitempty"` // 会话标签（前端分类筛选；DB 持久化）
+	// Alias 是用户给会话起的别名/备注（展示时优先于 title）；见 internal/model/model.go 的说明
+	Alias     string     `json:"alias,omitempty"`
 	CreatedAt time.Time  `json:"created_at"`
 	UpdatedAt time.Time  `json:"updated_at"`
 	Messages  []Message  `json:"messages,omitempty"`
@@ -81,6 +83,7 @@ func (h *ConversationHandler) List(w http.ResponseWriter, r *http.Request) {
 			Title:     s.Title,
 			Pinned:    s.Pinned,
 			Tag:       s.Tag,
+		Alias:     s.Alias,
 			CreatedAt: s.CreatedAt,
 			UpdatedAt: s.UpdatedAt,
 		})
@@ -157,6 +160,7 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 		Title:     sess.Title,
 		Pinned:    sess.Pinned,
 		Tag:       sess.Tag,
+		Alias:     sess.Alias,
 		CreatedAt: sess.CreatedAt,
 		UpdatedAt: sess.UpdatedAt,
 		Messages:  make([]Message, 0),
@@ -276,13 +280,14 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Title  *string `json:"title"`
 		Pinned *bool   `json:"pinned"`
 		Tag    *string `json:"tag"`
+		Alias  *string `json:"alias"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, "invalid request")
 		return
 	}
-	if body.Title == nil && body.Pinned == nil && body.Tag == nil {
-		BadRequest(w, "title, pinned or tag is required")
+	if body.Title == nil && body.Pinned == nil && body.Tag == nil && body.Alias == nil {
+		BadRequest(w, "title, pinned, tag or alias is required")
 		return
 	}
 	if body.Title != nil && strings.TrimSpace(*body.Title) == "" {
@@ -297,6 +302,17 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		body.Tag = &trimmed
+	}
+	if body.Alias != nil {
+		// 与 sessions.alias（varchar(64)）一致；trim 后空串表示清除别名。
+		// 别名是"用户给会话起的名字/备注"：展示时优先于 title（displayName = alias || title），
+		// 但不动 title 本身 —— 系统仍可用 title 描述会话内容。
+		trimmed := strings.TrimSpace(*body.Alias)
+		if len([]rune(trimmed)) > 64 {
+			BadRequest(w, "alias is too long")
+			return
+		}
+		body.Alias = &trimmed
 	}
 
 	claims := auth.GetClaims(r.Context())
@@ -316,6 +332,7 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Title:  body.Title,
 		Pinned: body.Pinned,
 		Tag:    body.Tag,
+		Alias:  body.Alias,
 	})
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "update session failed")
@@ -327,6 +344,7 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 		Title:     updated.Title,
 		Pinned:    updated.Pinned,
 		Tag:       updated.Tag,
+		Alias:     updated.Alias,
 		CreatedAt: updated.CreatedAt,
 		UpdatedAt: updated.UpdatedAt,
 	})

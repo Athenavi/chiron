@@ -99,3 +99,35 @@
   inset: 0;
   background: rgba(17, 24, 39, .28);
 }
+
+/* ── 卡片上的会话标签 / 别名徽标，以及详情面板的元数据按钮（app.js 的 [chiron] 补丁）── */
+.chiron-card-tag {
+  display: inline-block;
+  margin-left: 6px;
+  padding: 0 6px;
+  border-radius: 8px;
+  font-size: 11px;
+  line-height: 16px;
+  color: #1677ff;
+  background: rgba(22, 119, 255, .12);
+}
+.chiron-card-alias {
+  display: block;
+  margin-top: 2px;
+  font-size: 11px;
+  color: #6b7280;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* 详情面板底部的会话元数据按钮（重命名 / 备注别名 / 标签） */
+.card-inspector-actions [data-action="chiron-edit-meta"] {
+  font: inherit;
+  color: #374151;
+  background: #f3f5f7;
+  border: 1px solid #e5e7eb;
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.card-inspector-actions [data-action="chiron-edit-meta"]:hover { background: #e8eaed; }

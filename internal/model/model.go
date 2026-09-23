@@ -21,11 +21,15 @@ type User struct {
 }
 
 type Session struct {
-	ID        string    `json:"id"`
-	UserID    string    `json:"user_id"`
-	Title     string    `json:"title"`
-	Pinned    bool      `json:"pinned"`
-	Tag       string    `json:"tag,omitempty"`
+	ID     string `json:"id"`
+	UserID string `json:"user_id"`
+	Title  string `json:"title"`
+	Pinned bool   `json:"pinned"`
+	Tag    string `json:"tag,omitempty"`
+	// Alias 是**用户给这个会话起的别名/备注**（自由文本，≤64 字符）。
+	// 与 Title 分开是有意的：Title 会被系统改写（首条消息摘要、fork 标题），
+	// 而 Alias 只由用户写，且展示时优先（displayName = alias || title）。
+	Alias     string    `json:"alias,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
