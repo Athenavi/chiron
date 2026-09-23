@@ -300,7 +300,9 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 			if mErr := h.mgr.MarkPaymentFailed(ctx, p.ID); mErr != nil {
 				slog.Error("payment status update failed", "error", mErr)
 			}
-			logAndRespond(w, err, http.StatusInternalServerError, "支付下单失败")
+			// 把渠道给出的具体原因一并返回（前端显示在括号里）。只回"支付下单失败"
+			// 会让用户与运维都无从下手 —— 例如网关配错时返回非 JSON 的情况。
+			logAndRespond(w, err, http.StatusInternalServerError, "支付下单失败："+err.Error())
 			return
 		}
 		if err := h.mgr.UpdatePaymentProvider(ctx, p.ID, qr, p.ID); err != nil {
@@ -324,7 +326,7 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 			if mErr := h.mgr.MarkPaymentFailed(ctx, p.ID); mErr != nil {
 				slog.Error("payment status update failed", "error", mErr)
 			}
-			logAndRespond(w, err, http.StatusInternalServerError, "支付下单失败")
+			logAndRespond(w, err, http.StatusInternalServerError, "微信下单失败："+err.Error())
 			return
 		}
 		if err := h.mgr.UpdatePaymentProvider(ctx, p.ID, codeURL, p.ID); err != nil {
@@ -516,7 +518,7 @@ func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Requ
 		if mErr := h.mgr.MarkPaymentFailed(r.Context(), p.ID); mErr != nil {
 			slog.Error("payment status update failed", "error", mErr)
 		}
-		InternalError(w, "PayPal order failed")
+		InternalError(w, "PayPal 下单失败："+err.Error())
 		return
 	}
 

@@ -183,6 +183,10 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 	if err != nil {
 		return "", err
 	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("alipay precreate: 网关 %s 返回 HTTP %d：%s",
+			c.gateway, resp.StatusCode, responseSnippet(body))
+	}
 
 	var r struct {
 		Response struct {
@@ -195,10 +199,17 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 		Sign string `json:"sign"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return "", fmt.Errorf("alipay precreate decode: %w", err)
+		// 支付宝 API 的响应恒为 JSON（失败时也带 code/msg/sub_msg）。拿到非 JSON 说明
+		// 请求根本没到达 API 端点：常见于 ALIPAY_GATEWAY 漏写 /gateway.do、指向门户页，
+		// 或中间代理拦截后返回了错误页。只报 "invalid character '<'" 会让人无从下手，
+		// 因此把**实际使用的网关**与响应片段一并带出。
+		return "", fmt.Errorf("alipay precreate: 网关 %s 返回了非 JSON 响应（HTTP %d）：%s；"+
+			"请确认网关形如 https://openapi.alipay.com/gateway.do（沙箱为 https://openapi-sandbox.dl.alipaydev.com/gateway.do）",
+			c.gateway, resp.StatusCode, responseSnippet(body))
 	}
 	if r.Response.Code != "10000" {
-		return "", fmt.Errorf("alipay precreate failed: %s %s", r.Response.Msg, r.Response.SubMsg)
+		return "", fmt.Errorf("alipay precreate failed: code=%s msg=%s sub_msg=%s",
+			r.Response.Code, r.Response.Msg, r.Response.SubMsg)
 	}
 	if r.Response.QRCode == "" {
 		return "", fmt.Errorf("alipay precreate returned empty qr_code")
@@ -243,6 +254,10 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 	if err != nil {
 		return "", false, err
 	}
+	if resp.StatusCode >= 400 {
+		return "", false, fmt.Errorf("alipay query: 网关 %s 返回 HTTP %d：%s",
+			c.gateway, resp.StatusCode, responseSnippet(body))
+	}
 	var r struct {
 		Response struct {
 			Code       string `json:"code"`
@@ -253,10 +268,25 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 		} `json:"alipay_trade_query_response"`
 	}
 	if err := json.Unmarshal(body, &r); err != nil {
-		return "", false, fmt.Errorf("alipay query decode: %w", err)
+		return "", false, fmt.Errorf("alipay query: 网关 %s 返回了非 JSON 响应（HTTP %d）：%s",
+			c.gateway, resp.StatusCode, responseSnippet(body))
 	}
 	paid := r.Response.TradeState == "TRADE_SUCCESS" || r.Response.TradeState == "TRADE_FINISHED"
 	return r.Response.TradeNo, paid, nil
+}
+
+// responseSnippet 截取响应体开头用于错误信息：足以判断返回的是 HTML 错误页还是 JSON，
+// 又不会把整页内容灌进日志/前端提示。
+func responseSnippet(body []byte) string {
+	const maxLen = 200
+	s := strings.Join(strings.Fields(string(body)), " ") // 折叠空白，避免多行 HTML 撑爆一行日志
+	if len(s) > maxLen {
+		s = s[:maxLen] + "..."
+	}
+	if s == "" {
+		return "(空响应)"
+	}
+	return s
 }
 
 // VerifyCallback 校验支付宝异步通知参数（验签 + 交易成功状态）。
