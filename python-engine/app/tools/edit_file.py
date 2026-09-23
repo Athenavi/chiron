@@ -83,6 +83,11 @@ async def edit_file(
         }
 
     # ── Write & diff ──────────────────────────────────────────────
+    # 写入前快照：`/undo` 据此真正恢复（此前 /undo 只回显字符串，文件没有任何变化）。
+    from app.agent import undo_stack
+    from app.tools.context import get_session_id
+
+    undo_note = await undo_stack.snapshot_before_write(get_session_id(), target, "edit_file")
     target.write_text(modified, encoding="utf-8")
 
     diff_lines = difflib.unified_diff(
@@ -93,11 +98,14 @@ async def edit_file(
     )
     diff_text = "".join(diff_lines)
 
-    return {
+    payload: dict[str, Any] = {
         "path": str(target),
         "success": True,
         "diff": diff_text,
     }
+    if undo_note:
+        payload["undo_warning"] = undo_note
+    return payload
 
 
 # ── Register ─────────────────────────────────────────────────────

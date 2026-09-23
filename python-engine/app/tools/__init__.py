@@ -30,6 +30,7 @@ import app.tools.run_code  # noqa: F401
 import app.tools.skill  # noqa: F401
 import app.tools.subagent  # noqa: F401
 import app.tools.subagent_result  # noqa: F401
+import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
 import app.tools.terminal  # noqa: F401
 import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy，见该模块文档）
 from app.tools.client import SystemToolClient

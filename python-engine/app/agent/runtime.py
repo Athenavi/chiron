@@ -194,21 +194,46 @@ def _truncate_text(
     return f"{head}...(truncated {middle_len} chars)...{tail}"
 
 
-def _truncate_tool_result(result: dict, cfg: CompactionConfig | None = None) -> str:
-    """截断过长的工具结果：保留 head + tail，中间用标记代替。
+def _sanitize_tool_result(result: dict) -> str:
+    """工具结果 → 清洗后的文本（脱敏宿主路径 / secret）。
 
-    S 安全修复：进上下文前先过输出清洗（宿主路径/secret 替换），
-    防止工具输出把宿主文件结构泄露给模型/用户。
+    压缩与截断都从这一步开始：**先进上下文的内容必须先过输出清洗**，
+    否则会把宿主文件结构泄露给模型/用户。
     """
     from app.agent.guards import OutputGuard
 
     text = json.dumps(result, ensure_ascii=False, default=str)
-    text = OutputGuard(max_hits=1000).sanitize(text)
+    return OutputGuard(max_hits=1000).sanitize(text)
+
+
+def _truncate_tool_result(result: dict, cfg: CompactionConfig | None = None) -> str:
+    """清洗 + head/tail 截断（既有行为，engine.py 等调用方仍复用）。"""
+    text = _sanitize_tool_result(result)
     if cfg is not None:
         return _truncate_text(
             text, cfg.tool_result_max_chars, cfg.tool_result_head, cfg.tool_result_tail
         )
     return _truncate_text(text)
+
+
+#: 循环护栏回灌提示的前缀（前端/日志据此识别"这不是工具的真实输出"）
+LOOP_GUARD_TAG = "[loop-guard]"
+
+
+def _loop_guard_result(verdict: Any, previous: dict | None = None) -> dict:
+    """把循环判定做成工具结果。
+
+    **保留原结果**（模型仍看得到已经拿到的内容），只在后面附一条可执行的要求 ——
+    只说"你被拦住了"没有价值，说清"重复了几次 / 结果是否相同"模型才有机会换策略。
+    """
+    from app.agent.loop_guard import loop_hint
+
+    hint = loop_hint(verdict)
+    out: dict[str, Any] = dict(previous) if isinstance(previous, dict) else {}
+    existing = out.get("error")
+    out["error"] = f"{existing}\n{LOOP_GUARD_TAG} {hint}" if existing else f"{LOOP_GUARD_TAG} {hint}"
+    out["loop_guard"] = getattr(verdict, "kind", "")
+    return out
 
 
 # ── 消息配对压缩 ──
@@ -486,6 +511,51 @@ class AgentEvent:
     duration_ms: int = 0  # span 耗时 (毫秒)
 
 
+@dataclass
+class ApprovalTicket:
+    """审批票据 —— **批准的必须是"这一次操作"**，而不是"这个 id"。
+
+    ``tool_call_id`` 由模型生成（常见 ``call_1`` / ``call_2`` 这类可预测 id），跨轮次可能重复。
+    只按 id 记决策就会出现这样的场景：第 1 轮请求批准 ``call_1``（用户未响应，决策键在 TTL 内
+    残留），第 2 轮模型又发来 ``call_1``（这次是危险调用）—— 残留决策被它吃掉并执行。
+
+    票据在**发起审批时**写入 Redis（``approval_req:{tool_call_id}``），在**执行前**读回复核
+    （见 ``_second_check_approval``）：turn_id 或参数哈希对不上就拒绝（fail-closed）。
+    """
+
+    tool_call_id: str
+    tool_name: str
+    args_hash: str
+    turn_id: str
+
+    def to_json(self) -> str:
+        return json.dumps(
+            {
+                "tool_call_id": self.tool_call_id,
+                "tool_name": self.tool_name,
+                "args_hash": self.args_hash,
+                "turn_id": self.turn_id,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+
+    @classmethod
+    def from_json(cls, raw: str) -> Optional["ApprovalTicket"]:
+        try:
+            data = json.loads(raw or "{}")
+        except Exception:  # noqa: BLE001 - 票据损坏按"无票据"处理（fail-closed）
+            return None
+        if not isinstance(data, dict) or not data.get("tool_call_id"):
+            return None
+        return cls(
+            tool_call_id=str(data.get("tool_call_id", "")),
+            tool_name=str(data.get("tool_name", "")),
+            args_hash=str(data.get("args_hash", "")),
+            turn_id=str(data.get("turn_id", "")),
+        )
+
+
 class AgentRuntime:
     """
     Agent 运行时 — 完整的推理循环
@@ -531,6 +601,14 @@ class AgentRuntime:
         self._current_mode: str = SESSION_MODE_AUTO
         # Trace writer 引用 (延迟初始化)
         self._trace_writer = None
+        # 循环护栏：同一提交内检测"重复调用 / 无进展 / 来回摆动"。
+        # 现有各轴预算都拦不住这种形态：轮次没超、时间没超、token 还在涨，只是原地打转。
+        from app.agent.loop_guard import LoopGuard
+
+        self._loop_guard = LoopGuard()
+        # 任务预算与步数计数：由 run() 开头按环境变量重建（见 0.4b）
+        self._budget = None
+        self._tool_steps = 0
 
     @staticmethod
     def _resolve_compaction(
@@ -613,6 +691,16 @@ class AgentRuntime:
         self._current_mode = resolve_tools_mode(
             (task.llm_config or {}).get("tools_mode")
         )
+
+        # ── 0.4b 任务预算（五轴）────────────────────────────────────────────
+        # 主 Agent 此前只有 max_turns 一个轮次上限：一轮里可以调任意多次工具、烧任意多的
+        # token，引擎侧没有任何闸门（唯一兜底是网关的回合超时）。这里建预算，在**每轮**
+        # 与**每次工具调用后**检查；越界走失败收尾（与子 Agent 同一语义）——
+        # 产出 `budget_exceeded:<轴>`，前端能看到原因，而不是静默中断。
+        from app.agent.task_budget import from_env as _budget_from_env
+
+        self._budget = _budget_from_env()
+        self._tool_steps = 0
 
         # ── 0. 输入栅栏：注入检测（S 安全修复）────────────────────────────
         injection = self._input_guard.check(task.content)
@@ -832,6 +920,29 @@ class AgentRuntime:
             _answered = False  # 是否已产生最终回答
             _cache_saved = False  # S 修复：缓存是否已保存（finally 兜底）
             for turn in range(task.max_turns):
+                # ── 预算检查（每轮开头）──
+                # turns / tokens / wall 在这里判，steps 在每次工具调用后判（见下）。
+                # 越界产出 `budget_exceeded:<轴>` 并收尾 —— 与子 Agent 同一语义：是**失败**，
+                # 不是静默取消，用户能看到"为什么停了"。
+                exceeded = self._budget.exceeded(
+                    steps=self._tool_steps,
+                    turns=turn,
+                    tokens=total_input_tokens + total_output_tokens,
+                )
+                if exceeded:
+                    logger.warning(
+                        "Agent budget exceeded (axis=%s, task=%s, budget=%s)",
+                        exceeded,
+                        task.id,
+                        self._budget.describe(),
+                    )
+                    yield AgentEvent(
+                        type="error",
+                        error=f"budget_exceeded:{exceeded}",
+                        trace_id=trace_id,
+                    )
+                    return
+
                 logger.info(
                     "Agent turn %d/%d (task=%s, msgs=%d)",
                     turn + 1,
@@ -1087,15 +1198,48 @@ class AgentRuntime:
                             yield self._ask_event(tc)
                             tool_result = await self._await_answer(tc, task)
                         else:
-                            # 工具栅栏：三态裁决（S 安全修复）——block/confirm/allow
-                            tool_result, approval_evt = await self._guarded_execute_tool(
-                                tc, task
+                            # 循环护栏（**执行前**）：重复调用与来回摆动必须在这里拦下 ——
+                            # 放到执行后就晚了，重复的写操作已经落盘。命中即跳过执行，
+                            # 把"你在重复"作为结果回灌，让模型换策略而不是继续烧钱。
+                            call_verdict = self._loop_guard.observe_call(
+                                tc["name"], tc.get("arguments")
                             )
-                            if approval_evt is not None:
-                                # 先转发用户确认事件（前端展示确认卡片，回调 /v1/agent/approval），
-                                # 再等待用户批准/拒绝——顺序不可颠倒，否则前端收不到事件、任务永久挂起
-                                yield approval_evt
-                                tool_result = await self._await_approval(tc, task)
+                            if call_verdict.hit:
+                                logger.warning(
+                                    "loop guard: %s (tool=%s)", call_verdict.detail, tc["name"]
+                                )
+                                tool_result = _loop_guard_result(call_verdict)
+                            else:
+                                # 工具栅栏：三态裁决（S 安全修复）——block/confirm/allow
+                                tool_result, approval_evt = await self._guarded_execute_tool(
+                                    tc, task
+                                )
+                                if approval_evt is not None:
+                                    # 先转发用户确认事件（前端展示确认卡片，回调 /v1/agent/approval），
+                                    # 再等待用户批准/拒绝——顺序不可颠倒，否则前端收不到事件、任务永久挂起
+                                    yield approval_evt
+                                    tool_result = await self._await_approval(tc, task)
+                                # 循环护栏（**执行后**）：换了工具/参数，结果却始终一样 → 无进展
+                                progress_verdict = self._loop_guard.observe_result(tool_result)
+                                if progress_verdict.hit:
+                                    logger.warning("loop guard: %s", progress_verdict.detail)
+                                    tool_result = _loop_guard_result(progress_verdict, tool_result)
+
+                        # ── 预算：步数轴 ──
+                        # `max_turns` 限的是"轮"，而一轮里可以调任意多次工具 —— 这是最直接的漏口。
+                        self._tool_steps += 1
+                        if self._budget.exceeded(steps=self._tool_steps) == "steps":
+                            logger.warning(
+                                "Agent budget exceeded (axis=steps, steps=%d, task=%s)",
+                                self._tool_steps,
+                                task.id,
+                            )
+                            yield AgentEvent(
+                                type="error",
+                                error="budget_exceeded:steps",
+                                trace_id=trace_id,
+                            )
+                            return
 
                         # 记录工具执行结果 (带 trace span)
                         tool_start = time.time()
@@ -1120,8 +1264,8 @@ class AgentRuntime:
                             tenant_id=task.tenant_id,  # SaaS 安全: 租户隔离
                         )
 
-                        # tool 结果消息
-                        truncated = _truncate_tool_result(tool_result)
+                        # tool 结果消息（清洗 → 分级 → 大结果结构摘要 + 落盘引用）
+                        truncated = await self._compact_tool_result(tool_result, task, tc)
                         messages.append(
                             _normalize_msg(
                                 role="tool",
@@ -1400,17 +1544,31 @@ class AgentRuntime:
             loop = asyncio.get_running_loop()
             future: asyncio.Future[bool] = loop.create_future()
             self._pending_approvals[tc_id] = future
+            # 票据：先把"我这次请求的是什么"写进 Redis，执行前再读回复核
+            # （见 _second_check_approval）。写失败不阻断审批——少一道校验，而不是卡住用户。
+            from app.agent.tool_policy import args_hash as _args_hash
+
+            await self._store_approval_ticket(
+                ApprovalTicket(
+                    tool_call_id=tc_id,
+                    tool_name=tool_name,
+                    args_hash=_args_hash(tool_name, targs),
+                    turn_id=str(getattr(task, "id", "") or ""),
+                )
+            )
             approval_evt = AgentEvent(
                 type="approval",
                 tool_call_id=tc_id,
                 tool_name=tool_name,
                 tool_arguments=json.dumps(targs, ensure_ascii=False),
-                content=f"请求执行 {tool_name}",
+                content=f"请求执行 {tool_name}（级别 {verdict.level}）",
             )
             logger.info(
-                "Tool %s requires approval (id=%s), awaiting user decision",
+                "Tool %s requires approval (id=%s level=%s second_check=%s), awaiting user decision",
                 tool_name,
                 tc_id,
+                verdict.level,
+                verdict.second_check,
             )
             return None, approval_evt
         # allow：正常执行
@@ -1450,8 +1608,141 @@ class AgentRuntime:
         if not approved:
             logger.info("Tool %s denied by user (id=%s)", tool_name, tc_id)
             return {"error": f"Tool '{tool_name}' denied by user"}
+
+        # ── 二次校验（人工确认之外的第二道关）──
+        # 确认解决"用户同不同意"；二次校验解决"将要执行的是不是**刚才批准的那一次**"。
+        # 票据缺失 / 损坏 / 轮次不符 / 参数不符 → 拒绝执行（fail-closed）。
+        # 场景举例：第 1 轮批准了 `call_1`、第 2 轮模型又发来同 id 的危险调用 —— 残留决策
+        # 会被 turn_id 校验挡住。
+        failure = await self._second_check_approval(tool_call, task)
+        if failure:
+            logger.warning(
+                "approval second check FAILED (tool=%s id=%s): %s", tool_name, tc_id, failure
+            )
+            return {
+                "error": (
+                    f"Tool '{tool_name}' was NOT executed: approval second check failed "
+                    f"({failure}); re-issue the tool call if it is still needed"
+                )
+            }
+
         logger.info("Tool %s approved by user (id=%s)", tool_name, tc_id)
         return await self._execute_tool(tool_call, task)
+
+    # ── 审批票据（二次校验的基础）──────────────────────────────────────────
+
+    # ── 工具结果压缩（截断 ≠ 摘要；大结果落盘 + 引用）──────────────────────
+
+    async def _compact_tool_result(self, result: dict, task: AgentTask, tool_call: dict) -> str:
+        """工具结果进上下文前的处理：清洗 → 分级 →（大结果）结构摘要 + 落盘引用。
+
+        为什么不直接截断：`head + tail` 会把日志里的错误行、长列表里的关键项、JSON 的中间
+        结构整段挖掉 —— 模型拿到被挖空的文本更容易误判，或干脆重复调用同一个工具。
+        摘要按**内容形态**生成（JSON 给结构、行文本单独挑出 error/warn 行、列表做目录聚合），
+        且**不调 LLM**（每个工具调用过一次 LLM = 延迟与成本翻倍）。
+        超阈值的结果把原文存进会话级存储，上下文只留 `result_ref` 供按需取回。
+        """
+        import uuid as _uuid
+
+        from app.agent import result_compactor as compactor
+        from app.agent import result_store
+
+        text = _sanitize_tool_result(result)
+        if len(text) <= compactor.INLINE_LIMIT:
+            return text
+
+        tier = compactor.classify(text)
+        summary = compactor.summarize(
+            text, budget_chars=1500 if tier == compactor.REF_ONLY else 3000
+        )
+        ref = f"tr_{_uuid.uuid4().hex[:12]}"
+        saved = await result_store.store(getattr(task, "session_id", ""), ref, text)
+        if saved:
+            trailer = (
+                f'\n[结果过大，已按结构摘要] 原文 {len(text)} 字符，已保存为 result_ref="{ref}"。'
+                f'需要细节时用 read_tool_result(result_ref="{ref}", offset=0, limit=8000) 分段取，'
+                f"**不要**重复调用原工具去拿同样的内容。"
+            )
+        else:
+            trailer = f"\n[结果过大，已按结构摘要] 原文 {len(text)} 字符（落盘失败，细节不可取回）。"
+        return summary + trailer
+
+    @staticmethod
+    def _approval_ticket_key(tc_id: str) -> str:
+        from app.redis_keys import rkey
+
+        return rkey(f"approval_req:{tc_id}")
+
+    async def _store_approval_ticket(self, ticket: ApprovalTicket) -> None:
+        """把审批请求的票据写入 Redis（TTL 与审批决策一致）。
+
+        写失败不阻断审批：这一层是"执行前复核"的依据，缺了它只是少一道校验 ——
+        "没有票据就拒绝执行"的 fail-closed 由 :meth:`_second_check_approval` 保证。
+        """
+        try:
+            from app.redis_client import get_redis
+
+            redis = await get_redis()
+            if redis is None:
+                return
+            await redis.set(
+                self._approval_ticket_key(ticket.tool_call_id),
+                ticket.to_json(),
+                ex=int(APPROVAL_TTL_SECONDS),
+            )
+        except Exception as e:  # noqa: BLE001 - 票据写失败不该阻断审批
+            logger.warning("approval ticket store failed (id=%s): %s", ticket.tool_call_id, e)
+
+    async def _second_check_approval(self, tool_call: dict, task: AgentTask) -> str:
+        """执行前二次校验；返回拒绝原因（空串 = 通过）。
+
+        校验三项：票据存在、`tool_name` 一致、`turn_id` 与**本次提交**一致、参数哈希一致。
+        票据按单次消费（读完即删），避免同一张票据被用第二次。
+        """
+        from app.agent.tool_policy import args_hash
+
+        tool_name = tool_call.get("name", "")
+        tc_id = tool_call.get("id") or tool_name
+        try:
+            from app.redis_client import get_redis
+
+            redis = await get_redis()
+        except Exception:  # noqa: BLE001
+            redis = None
+        if redis is None:
+            # 拿不到票据存储就无法证明"批准的是这一次" → 拒绝（fail-closed）
+            return "approval ticket store unavailable"
+
+        key = self._approval_ticket_key(tc_id)
+        try:
+            raw = await redis.get(key)
+            if isinstance(raw, (bytes, bytearray)):
+                raw = raw.decode()
+            await redis.delete(key)  # 单次消费
+        except Exception as e:  # noqa: BLE001
+            return f"approval ticket read failed: {e}"
+
+        ticket = ApprovalTicket.from_json(raw or "")
+        if ticket is None:
+            return "no approval ticket for this call (expired, or never requested)"
+        if ticket.tool_name != tool_name:
+            return f"ticket tool mismatch ({ticket.tool_name} != {tool_name})"
+
+        current_turn = str(getattr(task, "id", "") or "")
+        if ticket.turn_id != current_turn:
+            return f"ticket turn mismatch ({ticket.turn_id} != {current_turn})"
+
+        try:
+            targs = (
+                json.loads(tool_call["arguments"])
+                if isinstance(tool_call["arguments"], str)
+                else tool_call["arguments"]
+            )
+        except Exception:  # noqa: BLE001
+            targs = {}
+        if ticket.args_hash != args_hash(tool_name, targs or {}):
+            return "ticket args mismatch (the approved call is not the one being executed)"
+        return ""
 
     async def _wait_approval_decision(
         self, tc_id: str, future: asyncio.Future, timeout: float

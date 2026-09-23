@@ -7,6 +7,8 @@ import type { LlmModel } from '../../api'
 import type { ChatAttachment } from './chat-types'
 import type { ContextChip } from './contextChips'
 import MediaPickerDialog from './MediaPickerDialog.vue'
+import { useAuthStore } from '../../stores/auth'
+import { privateKey } from '../../utils/privateStorage'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -185,16 +187,22 @@ function writeLocal(key: string, value: string | null): void {
 
 // ── 输入历史召回（↑/↓，shell 语义；Esc 放弃召回并恢复草稿） ──
 // 与会话无关：它记的是「我刚问过什么」，跨会话沿用才是符合直觉的行为。
-const HISTORY_KEY = 'chiron:composer-history:v1'
+//
+// **但必须按账号隔离**：localStorage 是浏览器级的，不带账号维度时同一浏览器换账号后
+// `↑` 会召回**上一个账号**发过的内容（实测越权）。键经 privateKey 加账号命名空间，
+// 登出时由 clearPrivateStorage 清理（见 utils/privateStorage）。
+const HISTORY_KEY_BASE = 'chiron:composer-history:v1'
 const HISTORY_LIMIT = 50
-const history = ref<string[]>(loadHistory())
+const auth = useAuthStore()
+const historyKey = computed(() => privateKey(HISTORY_KEY_BASE, auth.user?.id))
+const history = ref<string[]>([])
 /** 召回游标：null = 未在召回（显示自己写的草稿） */
 const historyCursor = ref<number | null>(null)
 /** 首次召回前的草稿，用于「越过最近一条」时回到自己写的内容 */
 let draftBeforeRecall = ''
 
-function loadHistory(): string[] {
-  const raw = readLocal(HISTORY_KEY)
+function readHistory(): string[] {
+  const raw = readLocal(historyKey.value)
   if (!raw) return []
   try {
     const parsed: unknown = JSON.parse(raw)
@@ -204,12 +212,21 @@ function loadHistory(): string[] {
   }
 }
 
+/** 载入当前账号的历史；账号变化（登录 / 切换）时由 watch 重新载入 */
+function loadHistory() {
+  history.value = readHistory()
+  historyCursor.value = null
+}
+
+onMounted(loadHistory)
+watch(historyKey, loadHistory)
+
 function pushHistory(text: string) {
   // 重复提问移到最近，而不是堆第二份
   const next = history.value.filter(v => v !== text)
   next.push(text)
   history.value = next.slice(-HISTORY_LIMIT)
-  writeLocal(HISTORY_KEY, JSON.stringify(history.value))
+  writeLocal(historyKey.value, JSON.stringify(history.value))
 }
 
 function recalledText(): string | null {

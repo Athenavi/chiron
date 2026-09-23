@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import { api } from '../api'
+import { clearPrivateStorage } from '../utils/privateStorage'
 
 export interface User {
   id: string
@@ -147,6 +148,9 @@ export const useAuthStore = defineStore('auth', () => {
     token.value = ''
     user.value = null
     persistUserToStorage(null)
+    // 私有数据（输入历史、会话缓存…）必须随登出清掉：localStorage 是浏览器级的，
+    // 不清就会在下一次登录时被**另一个账号**读到（实测：输入历史 `↑` 召回了他人内容）。
+    clearPrivateStorage()
   }
 
   return {

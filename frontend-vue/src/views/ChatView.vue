@@ -15,6 +15,7 @@ import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
 import { useAuthStore } from '../stores/auth'
+import { privateKey } from '../utils/privateStorage'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
 import ChatSidePanel from '../components/chat/ChatSidePanel.vue'
@@ -1253,7 +1254,11 @@ function stopTurnTimer() {
   if (turnTimer) { clearInterval(turnTimer); turnTimer = null }
 }
 
-function persistSessions() { localStorage.setItem('chat_sessions', JSON.stringify(sessions.value)) }
+/** 会话缓存键：按账号隔离（localStorage 是浏览器级的，不带账号维度会跨账号残留） */
+const sessionsCacheKey = computed(() => privateKey('chat_sessions', authStore.user?.id))
+function persistSessions() {
+  try { localStorage.setItem(sessionsCacheKey.value, JSON.stringify(sessions.value)) } catch { /* 隐私模式 / 配额满：放弃持久化 */ }
+}
 
 // ── 会话 CRUD（保留原逻辑） ──
 onMounted(async () => {
@@ -1454,11 +1459,15 @@ async function loadSessions() {
   try {
     const res = await api.get('/v1/conversations')
     const apiSessions = res.data?.data || res.data || []
-    if (apiSessions.length > 0) { sessions.value = apiSessions; persistSessions() }
-    else { const raw = localStorage.getItem('chat_sessions'); sessions.value = raw ? JSON.parse(raw) : [] }
+    // 服务端成功响应即为**权威答案**（空列表 = 当前账号确实没有会话）：绝不能用本地缓存兜底。
+    // 那份缓存不区分账号，换账号后会把上一个账号的会话带进来，前端随即自动切到「别人的会话」，
+    // 于是会话详情 / 模式读写全部 403（表现为"加载失败"）。
+    sessions.value = Array.isArray(apiSessions) ? apiSessions : []
+    persistSessions()
   } catch {
-    const raw = localStorage.getItem('chat_sessions')
-    if (raw) sessions.value = JSON.parse(raw)
+    // 仅**请求失败**时回退本账号缓存，保证离线/后端异常时仍看得到列表
+    const raw = localStorage.getItem(sessionsCacheKey.value)
+    if (raw) { try { sessions.value = JSON.parse(raw) } catch { sessions.value = [] } }
   }
   sortSessions()
 }

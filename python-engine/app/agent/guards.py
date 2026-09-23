@@ -67,7 +67,8 @@ TOOL_ARG_ESCAPE_PATTERNS: list[str] = [
 ]
 _ARG_ESCAPE_RES: list[re.Pattern] = [re.compile(p) for p in TOOL_ARG_ESCAPE_PATTERNS]
 
-# 需要用户确认的危险工具
+# ⚠️ 历史名单：判定已不再使用它（见 ``app/agent/tool_policy`` 的 read/write/delete/external 分级）。
+# 保留仅为兼容既有引用；**新增工具请改 tool_policy**，不要再往这里加。
 DANGEROUS_TOOLS: frozenset[str] = frozenset(
     {
         "shell_exec",
@@ -94,7 +95,7 @@ SESSION_MODE_YOLO = "yolo"
 _VALID_SESSION_MODES = frozenset({SESSION_MODE_ASK, SESSION_MODE_AUTO, SESSION_MODE_YOLO})
 
 # ask 模式下需要用户确认的「写类工具」：执行类 + 文件写 + git 写 + 浏览器/网络访问类。
-# 口径比 DANGEROUS_TOOLS 更宽：凡对宿主或外部世界产生动作的都算。
+# ⚠️ 同为历史名单（口径比 DANGEROUS_TOOLS 更宽）。判定已改用 tool_policy 的动作分级。
 WRITE_TOOLS: frozenset[str] = frozenset(
     {
         # 执行类
@@ -134,15 +135,20 @@ class ToolVerdict:
     reason: str = ""
     sanitized_args: dict[str, Any] | None = None
     risk_level: str = "low"
+    #: 动作级别（read / write / delete / external），由 ``app/agent/tool_policy`` 判定 ——
+    #: 供二次校验、审计与前端展示使用（判定不再依赖固定工具名名单）。
+    level: str = ""
+    #: 是否需要**二次校验**（delete / external）：审批票据绑定 + 执行前复核
+    second_check: bool = False
 
 
 class ToolGuard:
     """工具栅栏：每次工具调用前按会话授权模式评估，返回三态裁决。
 
-    模式语义（与 Go 侧 ModeStore、前端模式选择器一致）：
-    - ``ask`` ：WRITE_TOOLS（执行/文件写/git 写/浏览器与网络访问类）→ confirm
-    - ``auto``：DANGEROUS_TOOLS → confirm（默认）
-    - ``yolo``：全部放行
+    模式语义（判定见 ``app/agent/tool_policy`` 的动作分级）：
+    - ``ask`` ：write / delete / external → confirm
+    - ``auto``：delete / external → confirm（默认）
+    - ``yolo``：全部放行（参数级硬拦截仍生效）
 
     **安全底线**：无论哪种模式，参数级硬拦截（secret 参数、绝对路径/父目录逃逸）始终生效 ——
     yolo 只放开"是否需要用户确认"，不放行泄露密钥或逃逸沙箱的调用。
@@ -179,19 +185,25 @@ class ToolGuard:
                     risk_level="high",
                 )
 
-        # 3. 按模式决定是否需要用户确认
-        if mode == SESSION_MODE_YOLO:
-            return ToolVerdict("allow", risk_level="low")
+        # 3. 按**动作级别**决定是否需要用户确认
+        #
+        # 判定统一交给 tool_policy（read/write/delete/external），不再用固定工具名名单：
+        # `shell_exec` 既能 `ls` 也能 `rm -rf`，用名字表达策略必然漏；名字本身也随插件变化。
+        # 未声明的工具在那边按 write 处理（fail-closed）；yolo 的"全放行"语义由
+        # requires_confirmation 内部保持。
+        from app.agent.tool_policy import requires_confirmation, requires_second_check, tool_level
 
-        confirm_set = WRITE_TOOLS if mode == SESSION_MODE_ASK else DANGEROUS_TOOLS
-        if tool_name in confirm_set:
-            return ToolVerdict(
-                "confirm",
-                reason=f"tool '{tool_name}' requires user approval (mode={mode})",
-                risk_level="high",
-            )
+        level = tool_level(tool_name, args)
+        if not requires_confirmation(level, mode):
+            return ToolVerdict("allow", risk_level="low", level=level)
 
-        return ToolVerdict("allow", risk_level="low")
+        return ToolVerdict(
+            "confirm",
+            reason=f"tool '{tool_name}' requires user approval (mode={mode}, level={level})",
+            risk_level="high",
+            level=level,
+            second_check=requires_second_check(level),
+        )
 
 
 # ═══════════════════════════════ 输出栅栏 ═══════════════════════════════

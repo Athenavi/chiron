@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 
 vi.mock('../../api', () => ({
   uploadFile: vi.fn(),
@@ -7,8 +8,12 @@ vi.mock('../../api', () => ({
 }))
 
 import ChatInput from '../ChatInput.vue'
+import { useAuthStore } from '../../../stores/auth'
+import { privateKey } from '../../../utils/privateStorage'
 
-const HISTORY_KEY = 'chiron:composer-history:v1'
+/** 输入历史按账号隔离（见 utils/privateStorage），测试里也要用带账号的键 */
+const TEST_USER_ID = 'u1'
+const HISTORY_KEY = privateKey('chiron:composer-history:v1', TEST_USER_ID)
 
 function mountInput(props: Record<string, unknown> = {}) {
   return mount(ChatInput, {
@@ -21,6 +26,9 @@ const valueOf = (wrapper: ReturnType<typeof mountInput>) =>
 
 beforeEach(() => {
   localStorage.clear()
+  setActivePinia(createPinia())
+  // 组件用 auth.user.id 拼历史键；不注入 user 会退化成 :anonymous，就测不到真实路径
+  useAuthStore().user = { id: TEST_USER_ID, email: '', name: '', role: 'user', tenant_id: 't1' }
 })
 
 describe('ChatInput（输入区交互）', () => {

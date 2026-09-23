@@ -30,6 +30,10 @@ const (
 // ErrSessionNotFound 表示会话不存在（SSE 端点据此放行尚未创建的新会话连接）。
 var ErrSessionNotFound = errors.New("session not found")
 
+// ErrSessionForbidden 表示目标会话存在但**不属于当前用户**（写入被拒绝）。
+// 与 ErrSessionNotFound 区分：后者是"新会话"（允许顺带创建），前者是越权尝试。
+var ErrSessionForbidden = errors.New("session belongs to another user")
+
 // Manager provides session CRUD with Redis hot cache + PostgreSQL persistence.
 // All methods degrade gracefully when Redis or PG is unavailable.
 type Manager struct {
@@ -119,13 +123,19 @@ func (m *Manager) CreateSession(ctx context.Context, id, userID, title string) (
 	}
 
 	if m.pool != nil {
-		_, err := m.pool.Exec(ctx,
+		// 新会话：id 由调用方生成（UUID），撞车几乎不可能。仍带归属条件并检查影响行数 ——
+		// 否则"撞上别人的 id"会静默覆盖对方标题（NULL 归属用 IS NOT DISTINCT FROM 匹配）。
+		tag, err := m.pool.Exec(ctx,
 			`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
 			 VALUES ($1, $2, $3::uuid, $4, $5, $6)
-			 ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, updated_at = EXCLUDED.updated_at`,
+			 ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, updated_at = EXCLUDED.updated_at
+			  WHERE sessions.user_id IS NOT DISTINCT FROM EXCLUDED.user_id`,
 			id, DefaultTenantID, uid, title, now, now)
 		if err != nil {
 			return nil, fmt.Errorf("create session: %w", err)
+		}
+		if tag.RowsAffected() == 0 {
+			return nil, fmt.Errorf("create session: %w: %s", ErrSessionForbidden, id)
 		}
 	}
 
@@ -336,17 +346,45 @@ func isMissingColumn(err error, column string) bool {
 //
 // source 标记消息来源：空串 = 用户正常输入；FollowupSource = 子 Agent 自动轮注入
 // （见 internal/api/agent_followup.go），前端据此区分渲染。
+// ensureSessionOwned 确保会话存在、且**属于 userID** —— fail-closed。
+//
+// 所有"按 session_id 写入"的路径都必须经此，三种结果：
+//   * 会话不存在 → 顺带创建（首条消息创建会话的正常路径）；
+//   * 已存在且属于该用户 → 只刷新 updated_at；
+//   * 已存在但归属不符 → `ON CONFLICT ... DO UPDATE ... WHERE` 既不更新也不返回行，
+//     函数返回 ErrSessionForbidden，调用方**必须放弃写入**。
+//
+// 背景：此前 4 处写入（SaveUserMessage / SaveMessages / CreateTurn / CreateSession）各自
+// `INSERT ... ON CONFLICT (id) DO UPDATE`，**不比对归属** —— 任何登录用户只要知道别人的
+// session_id，就能往那个会话里塞消息（CreateSession 那处还会把对方的标题一起覆盖）。
+func (m *Manager) ensureSessionOwned(ctx context.Context, sessionID, userID string) error {
+	if m.pool == nil {
+		return nil
+	}
+	if sessionID == "" {
+		return errors.New("session id is required")
+	}
+	var ensured string
+	err := m.pool.QueryRow(ctx,
+		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
+		 VALUES ($1, $2, NULLIF($3, '')::uuid, '', NOW(), NOW())
+		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()
+		  WHERE sessions.user_id = EXCLUDED.user_id
+		 RETURNING id`,
+		sessionID, DefaultTenantID, userID).Scan(&ensured)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("%w: %s", ErrSessionForbidden, sessionID)
+	}
+	return err
+}
+
 func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userContent, turnID, source string) {
 	if m.pool == nil || userContent == "" {
 		return
 	}
-	_, err := m.pool.Exec(ctx,
-		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, NULLIF($3, '')::uuid, '', NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()`,
-		sessionID, DefaultTenantID, userID)
-	if err != nil {
-		slog.Warn("ensure session", "error", err)
+	// 归属校验内聚在 ensureSessionOwned（fail-closed）：归属不符时不写任何消息
+	if err := m.ensureSessionOwned(ctx, sessionID, userID); err != nil {
+		slog.Warn("save user message refused", "session", sessionID, "error", err)
 		return
 	}
 	msgID, err := genID()
@@ -454,15 +492,10 @@ func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID stri
 	if m.pool == nil || turnID == "" || sessionID == "" {
 		return
 	}
-	_, err := m.pool.Exec(ctx,
-		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, NULLIF($3, '')::uuid, '', NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()`,
-		sessionID, DefaultTenantID, userID)
-	if err != nil {
-		slog.Error("ensure session for turn", "session", sessionID, "error", err)
+	if ensureErr := m.ensureSessionOwned(ctx, sessionID, userID); ensureErr != nil {
+		slog.Error("ensure session for turn", "session", sessionID, "error", ensureErr)
 	}
-	_, err = m.pool.Exec(ctx,
+	_, err := m.pool.Exec(ctx,
 		`INSERT INTO turns (id, session_id, user_id, status, started_at, created_at)
 		 VALUES ($1, $2, $3, 'running', NOW(), NOW())
 		 ON CONFLICT (id) DO UPDATE SET status = 'running', started_at = NOW()`,
@@ -634,13 +667,8 @@ func (m *Manager) SaveMessages(ctx context.Context, sessionID, userID, userConte
 		return
 	}
 
-	_, err := m.pool.Exec(ctx,
-		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, NULLIF($3, '')::uuid, '', NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()`,
-		sessionID, DefaultTenantID, userID)
-	if err != nil {
-		slog.Warn("ensure session", "error", err)
+	if err := m.ensureSessionOwned(ctx, sessionID, userID); err != nil {
+		slog.Warn("save messages refused", "session", sessionID, "error", err)
 		return
 	}
 

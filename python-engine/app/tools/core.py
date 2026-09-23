@@ -92,6 +92,8 @@ async def read_image(
 
 
 async def write_file(path: str, content: str, root: str = ".") -> dict[str, Any]:
+    from app.agent import undo_stack
+    from app.tools.context import get_session_id
     from app.tools.fs_guard import check_before_write
     from app.tools.sandbox import safe_join
 
@@ -99,9 +101,15 @@ async def write_file(path: str, content: str, root: str = ".") -> dict[str, Any]
     conflict = check_before_write(target)
     if conflict:
         return {"error": conflict}
+    # 写入前快照：`/undo` 据此**真正恢复**文件（此前 /undo 只是回显一个字符串）。
+    # 快照存不下（文件过大 / 存储不可用）时**当场告知"本次不可撤销"**，而不是事后才发现。
+    undo_note = await undo_stack.snapshot_before_write(get_session_id(), target, "write_file")
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(content, encoding="utf-8")
-    return {"path": str(target), "bytes": len(content.encode("utf-8"))}
+    result: dict[str, Any] = {"path": str(target), "bytes": len(content.encode("utf-8"))}
+    if undo_note:
+        result["undo_warning"] = undo_note
+    return result
 
 
 async def execute_command(
