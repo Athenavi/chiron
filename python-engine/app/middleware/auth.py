@@ -111,11 +111,33 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
             return JSONResponse({"error": "Invalid or expired token"}, status_code=401)
 
-        # 网关代理路径：仅在 X-Internal-Token 校验通过时才信任 query 透传身份
+        # 网关代理路径（主路径）：信任凭据是 X-Internal-Token（Go 网关注入，
+        # 客户端伪造的同名头由网关剥离）。三种形态：
+        #
+        #   ① 不带任何 query 身份（/v1/agent/submit、/v1/agent/approval、followup 等
+        #      **body-身份端点**）：token 合法即放行 —— 身份由端点自己从 body /
+        #      X-User-ID 取（见 main.py 的 agent_submit）。这类端点**从不带 query**。
+        #   ② 带完整 query 身份（ForwardRequest 形态，如 /v1/memory/*）：token 必须合法
+        #      —— 否则任何人都能自报 user_id/tenant_id（P0-3）。
+        #   ③ 带了**半个** query 身份：拒绝。缺租户就等于"没有归属也能进业务逻辑"，
+        #      不能靠端点碰巧做了校验来兜。
+        #
+        # ①曾是缺口：这里原先只认 ②，于是 body-身份端点一律 401 "Authentication required"，
+        # 表现是整条对话链路不可用（网关 submit 代理失败，前端只看到
+        # "Service temporarily unavailable. Please try again."）。
+        internal = self._is_internal_request(request)
         query_tid = request.query_params.get("tenant_id", "")
         query_uid = request.query_params.get("user_id", "")
-        if query_tid and query_uid:
-            if not self._is_internal_request(request):
+        has_query_identity = bool(query_tid or query_uid)
+
+        if internal and not has_query_identity:
+            return await call_next(request)
+
+        if internal and query_tid and query_uid:
+            return await self._set_tenant_and_continue(request, call_next, query_tid)
+
+        if has_query_identity:
+            if not internal:
                 logger.warning(
                     "Rejected gateway-impersonation attempt: query tenant_id=%s without X-Internal-Token",
                     query_tid,
@@ -124,7 +146,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     {"error": "Gateway identity requires valid X-Internal-Token"},
                     status_code=401,
                 )
-            return await self._set_tenant_and_continue(request, call_next, query_tid)
+            logger.warning(
+                "Incomplete gateway identity rejected: tenant=%r user=%r", query_tid, query_uid
+            )
+            return JSONResponse(
+                {"error": "Incomplete gateway identity: tenant_id and user_id are both required"},
+                status_code=401,
+            )
 
         return JSONResponse({"error": "Authentication required"}, status_code=401)
 

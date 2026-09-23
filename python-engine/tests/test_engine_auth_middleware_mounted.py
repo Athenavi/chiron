@@ -72,3 +72,32 @@ def test_gateway_identity_requires_internal_token():
     # 未配置 internal_token 时必须 fail-close，不能放行任何 query 透传身份
     mw._internal_token = ""
     assert mw._is_internal_request(_Req("s" * 40)) is False
+
+
+@pytest.mark.asyncio
+async def test_gateway_proxy_without_query_identity_is_allowed():
+    """带合法 token、**不带 query 身份**的网关代理请求必须放行。
+
+    回归背景（业务不可用）：中间件曾只认 query 身份，而 `/v1/agent/submit`、
+    `/v1/agent/approval`、followup 这些端点**从不带 query**（它们从 body / X-User-ID
+    取身份）。于是网关的每一次 submit 代理都拿到 401，前端只看到
+    "Service temporarily unavailable. Please try again." —— 整条对话链路不可用。
+
+    这里用不存在的路径探测：放行 → 404（仅路由缺失），未放行 → 401。
+    """
+    from httpx import ASGITransport, AsyncClient
+
+    from app.config import settings
+    from app.main import create_app
+
+    app = create_app()
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
+        allowed = await ac.get(
+            "/v1/__probe__", headers={"X-Internal-Token": settings.internal_token}
+        )
+        rejected = await ac.get("/v1/__probe__", headers={"X-Internal-Token": "wrong-token"})
+
+    assert allowed.status_code == 404, (
+        "带合法 token 的网关代理请求被认证中间件拒了 —— body-身份端点会全链路 401"
+    )
+    assert rejected.status_code == 401

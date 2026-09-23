@@ -48,8 +48,6 @@ collect_ignore = [
 # 没被发现的原因之一。
 #
 # 需要覆盖该头的测试（例如断言 401）在请求上显式传 `headers=` 即可。
-import os as _os
-
 import pytest as _pytest
 
 
@@ -64,10 +62,18 @@ def _inject_gateway_internal_token(monkeypatch):
     注意这里**只注入 header、不注入 query 身份**：带 `?user_id=&tenant_id=` 的
     请求应由测试自己显式构造（那才是"代表某个用户"的语义），统一注入会把身份
     变成写死的 test-user，反而让依赖真实身份的测试失真。
+
+    取值的来源必须是**引擎自己实际使用的那个 token**（`settings.internal_token`），
+    而不是 `os.getenv("INTERNAL_TOKEN")`：pytest 进程的环境里通常没有这个变量
+    （`.env` 由 pydantic 读进 settings，不改 `os.environ`），拿 env 只会注入一个
+    空头 —— 中间件 fail-close，于是所有走 ASGITransport 的请求都 401。
+    这批"测试自己带错 token"造成的红，正是认证中间件长期没被发现的原因之一。
     """
     import httpx
 
-    token = _os.getenv("INTERNAL_TOKEN", "")
+    from app.config import settings
+
+    token = settings.internal_token
     original_init = httpx.AsyncClient.__init__
 
     def patched(self, *args, **kwargs):

@@ -42,10 +42,14 @@ async def test_list_tools_returns_tools_key():
 
 @pytest.mark.asyncio
 async def test_identity_is_required_without_gateway_headers():
-    """不带网关身份必须 401 —— 这是引擎认证的底线，必须有测试盯着。"""
+    """不带网关身份必须 401 —— 这是引擎认证的底线，必须有测试盯着。
+
+    本仓库的 conftest 会**自动**给 ASGITransport 请求注入网关的 `X-Internal-Token`
+    （模拟真实链路），所以这里显式传空值把它关掉 —— 本用例验证的正是"没有它"。
+    """
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/v1/tools")
+        resp = await ac.get("/v1/tools", headers={"X-Internal-Token": ""})
     assert resp.status_code == 401
 
 
