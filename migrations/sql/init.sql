@@ -684,6 +684,31 @@ create table ent_roles
     updated_at   timestamp
 );
 
+-- 短信发信配置（后台「短信配置」/ 短信验证码登录）。单租户单行：tenant_id 作主键，
+-- 同时满足 ON CONFLICT (tenant_id) 的 upsert。列的可空性以 internal/api/sms_handler.go
+-- 的读取方式为准：除 endpoint 外都扫进非指针 Go 变量，故必须 NOT NULL + 默认值；
+-- 该表的 INSERT 不写 id，因此这里不设 id 列。
+create table ent_sms_config
+(
+    tenant_id             varchar(36) not null
+        primary key
+        references tenants,
+    provider              varchar(32)  default 'aliyun' not null,
+    sign_name             varchar(64)  default '' not null,
+    template_id           varchar(64)  default '' not null,
+    access_key_id         varchar(256) default '' not null,
+    secret_enc            text         default '' not null,
+    endpoint              varchar(512),
+    code_ttl_seconds      integer      default 300 not null,
+    send_interval_seconds integer      default 60 not null,
+    daily_limit           integer      default 10 not null,
+    login_enabled         boolean      default false not null,
+    auto_register         boolean      default false not null,
+    enabled               boolean      default false not null,
+    created_at            timestamp    default now(),
+    updated_at            timestamp    default now()
+);
+
 create table enterprise_tasks
 (
     id          varchar(36) not null
