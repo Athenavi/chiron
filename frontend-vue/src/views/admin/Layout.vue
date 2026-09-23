@@ -34,6 +34,7 @@ import {
   FileSearchOutlined,
   IdcardOutlined,
   WalletOutlined,
+  PayCircleOutlined,
   ControlOutlined,
   ShopOutlined,
   FileTextOutlined,
@@ -115,6 +116,8 @@ const menuGroups = computed(() => [
     key: 'g-platform', label: t('平台'),
     children: [
       { key: '/admin/costcenter', label: t('成本中心'), icon: () => h(WalletOutlined) },
+      // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
+      { key: '/admin/payment', label: t('支付配置'), icon: () => h(PayCircleOutlined) },
       { key: '/admin/api-docs', label: t('API 文档'), icon: () => h(FileTextOutlined) },
     ],
   },

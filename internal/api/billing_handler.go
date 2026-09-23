@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/athenavi/chiron/config"
@@ -22,8 +23,13 @@ type BillingHandler struct {
 	authenticator *auth.Authenticator
 	cfg           *config.Config
 	payPalClient  *http.Client
-	alipay        *billing.AlipayClient // nil = 未配置，充值入口返回 501
-	wechat        *billing.WechatClient // nil = 未配置
+
+	// payMu 保护下列支付凭据与渠道客户端：后台「支付配置」保存后会热替换
+	// （见 ApplyPaymentConfig），而请求处理路径是并发的，必须加锁读取。
+	payMu  sync.RWMutex
+	payCfg PaymentConfig
+	alipay *billing.AlipayClient // nil = 未配置/未启用，充值入口返回 501
+	wechat *billing.WechatClient // nil = 未配置/未启用
 }
 
 func NewBillingHandler(mgr *billing.Manager, authenticator *auth.Authenticator, cfg *config.Config) *BillingHandler {
@@ -31,44 +37,46 @@ func NewBillingHandler(mgr *billing.Manager, authenticator *auth.Authenticator, 
 		mgr: mgr, authenticator: authenticator, cfg: cfg,
 		payPalClient: &http.Client{Timeout: 30 * time.Second},
 	}
-
-	// 支付宝（当面付）——配置齐全才启用
-	if cfg.AlipayAppID != "" && cfg.AlipayPrivateKey != "" && cfg.AlipayPublicKey != "" {
-		client, err := billing.NewAlipayClient(cfg.AlipayAppID, cfg.AlipayPrivateKey, cfg.AlipayPublicKey, cfg.AlipayGateway, h.alipayNotifyURL())
-		if err != nil {
-			slog.Error("alipay client init failed", "error", err)
-		} else {
-			h.alipay = client
-		}
-	}
-
-	// 微信支付（APIv3 Native）
-	if cfg.WechatMchID != "" && cfg.WechatAppID != "" && cfg.WechatAPIv3Key != "" &&
-		cfg.WechatMchCertSerialNo != "" && cfg.WechatMchPrivateKey != "" {
-		client, err := billing.NewWechatClient(cfg.WechatMchID, cfg.WechatAppID, cfg.WechatAPIv3Key, cfg.WechatMchCertSerialNo, cfg.WechatMchPrivateKey)
-		if err != nil {
-			slog.Error("wechat client init failed", "error", err)
-		} else {
-			h.wechat = client
-		}
-	}
+	// 初始凭据来自环境变量；后台配置（system_settings.payment）在启动时由
+	// ReloadPaymentConfig 叠加，两者合并结果才是生效配置。
+	h.ApplyPaymentConfig(paymentConfigFromEnv(cfg))
 	return h
 }
 
-// ── 回调 notify_url 构造 ──
-
-func (h *BillingHandler) alipayNotifyURL() string {
-	if h.cfg.PublicBaseURL == "" {
-		return ""
+// ApplyPaymentConfig 热替换支付凭据并重建渠道客户端。
+// 单个渠道构造失败（如私钥 PEM 非法）只令该渠道不可用并记日志，不影响其它渠道，
+// 也不回滚已保存的配置 —— 避免把「配错了」放大成「全都不能用」。
+func (h *BillingHandler) ApplyPaymentConfig(p PaymentConfig) {
+	alipay, wechat, errs := buildPaymentClients(p)
+	if len(errs) > 0 {
+		slog.Error("payment client init failed", "error", joinErrs(errs))
 	}
-	return strings.TrimRight(h.cfg.PublicBaseURL, "/") + "/v1/billing/callback/alipay"
+	h.payMu.Lock()
+	defer h.payMu.Unlock()
+	h.payCfg = p
+	h.alipay = alipay
+	h.wechat = wechat
 }
 
-func (h *BillingHandler) wechatNotifyURL() string {
-	if h.cfg.PublicBaseURL == "" {
-		return ""
-	}
-	return strings.TrimRight(h.cfg.PublicBaseURL, "/") + "/v1/billing/callback/wechat"
+// paymentConfig 返回当前生效的支付配置快照（值拷贝，调用方可安全读取）。
+func (h *BillingHandler) paymentConfig() PaymentConfig {
+	h.payMu.RLock()
+	defer h.payMu.RUnlock()
+	return h.payCfg
+}
+
+// alipayClient 返回当前支付宝客户端（nil 表示未配置或未启用）。
+func (h *BillingHandler) alipayClient() *billing.AlipayClient {
+	h.payMu.RLock()
+	defer h.payMu.RUnlock()
+	return h.alipay
+}
+
+// wechatClient 返回当前微信支付客户端（nil 表示未配置或未启用）。
+func (h *BillingHandler) wechatClient() *billing.WechatClient {
+	h.payMu.RLock()
+	defer h.payMu.RUnlock()
+	return h.wechat
 }
 
 func (h *BillingHandler) firstOrigin() string {
@@ -258,6 +266,11 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "channel must be alipay / wechat / paypal")
 		return
 	}
+	// 后台可将某个渠道停用（不改动其凭据），此时直接拒绝下单，避免落一笔永远付不掉的订单。
+	if !h.paymentConfig().ChannelEnabled(body.Channel) {
+		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "该支付渠道已停用"})
+		return
+	}
 
 	// 1 credit = 1 分；支付宝/微信为人民币，PayPal 为美元
 	amountCents := int64(body.Credits)
@@ -277,11 +290,12 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	subject := fmt.Sprintf("chiron 充值 %d credits", body.Credits)
 	switch body.Channel {
 	case billing.ChannelAlipay:
-		if h.alipay == nil {
-			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "支付宝支付未配置（ALIPAY_APP_ID 等）"})
+		alipay := h.alipayClient()
+		if alipay == nil {
+			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "支付宝支付未配置（后台「支付配置」或 ALIPAY_* 环境变量）"})
 			return
 		}
-		qr, err := h.alipay.Precreate(ctx, p.ID, amountCents, subject)
+		qr, err := alipay.Precreate(ctx, p.ID, amountCents, subject)
 		if err != nil {
 			if mErr := h.mgr.MarkPaymentFailed(ctx, p.ID); mErr != nil {
 				slog.Error("payment status update failed", "error", mErr)
@@ -295,16 +309,17 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		p.QRCode = qr
 
 	case billing.ChannelWechat:
-		if h.wechat == nil {
-			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "微信支付未配置（WXPAY_* 等）"})
+		wechat := h.wechatClient()
+		if wechat == nil {
+			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "微信支付未配置（后台「支付配置」或 WXPAY_* 环境变量）"})
 			return
 		}
-		notifyURL := h.wechatNotifyURL()
+		notifyURL := h.paymentConfig().WechatNotifyURL()
 		if notifyURL == "" {
-			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "PUBLIC_BASE_URL 未配置，无法接收微信回调"})
+			JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "公网基础 URL 未配置，无法接收微信回调"})
 			return
 		}
-		codeURL, err := h.wechat.Precreate(ctx, p.ID, amountCents, subject, notifyURL)
+		codeURL, err := wechat.Precreate(ctx, p.ID, amountCents, subject, notifyURL)
 		if err != nil {
 			if mErr := h.mgr.MarkPaymentFailed(ctx, p.ID); mErr != nil {
 				slog.Error("payment status update failed", "error", mErr)
@@ -350,16 +365,16 @@ func (h *BillingHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 		// 渠道查询兜底（失败不阻塞响应）
 		switch p.Channel {
 		case billing.ChannelAlipay:
-			if h.alipay != nil {
-				if tradeNo, paid, qErr := h.alipay.Query(ctx, p.ID); qErr == nil && paid {
+			if client := h.alipayClient(); client != nil {
+				if tradeNo, paid, qErr := client.Query(ctx, p.ID); qErr == nil && paid {
 					if _, _, cErr := h.mgr.ConfirmPayment(ctx, p.ID, tradeNo); cErr != nil {
 						slog.Warn("alipay query confirm failed", "error", cErr)
 					}
 				}
 			}
 		case billing.ChannelWechat:
-			if h.wechat != nil {
-				if tradeNo, paid, qErr := h.wechat.Query(ctx, p.ID); qErr == nil && paid {
+			if client := h.wechatClient(); client != nil {
+				if tradeNo, paid, qErr := client.Query(ctx, p.ID); qErr == nil && paid {
 					if _, _, cErr := h.mgr.ConfirmPayment(ctx, p.ID, tradeNo); cErr != nil {
 						slog.Warn("wechat query confirm failed", "error", cErr)
 					}
@@ -377,7 +392,8 @@ func (h *BillingHandler) GetOrder(w http.ResponseWriter, r *http.Request) {
 // AlipayCallback 支付宝异步通知（无认证，靠签名验签）。
 // 验签通过且金额一致则幂等入账；返回 "success"（支付宝协议要求）。
 func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) {
-	if h.alipay == nil {
+	alipay := h.alipayClient()
+	if alipay == nil {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "alipay not configured"})
 		return
 	}
@@ -392,7 +408,7 @@ func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) 
 		}
 	}
 
-	outTradeNo, tradeNo, ok := h.alipay.VerifyCallback(params)
+	outTradeNo, tradeNo, ok := alipay.VerifyCallback(params)
 	if !ok {
 		slog.Warn("alipay callback verify failed")
 		BadRequest(w, "signature verification failed")
@@ -430,11 +446,12 @@ func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) 
 // WechatCallback 微信支付回调（无认证，靠平台证书验签 + AES-GCM 解密）。
 // 验签/金额校验通过则幂等入账；返回微信要求的 {"code":"SUCCESS"}。
 func (h *BillingHandler) WechatCallback(w http.ResponseWriter, r *http.Request) {
-	if h.wechat == nil {
+	wechat := h.wechatClient()
+	if wechat == nil {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "wechat not configured"})
 		return
 	}
-	outTradeNo, tradeNo, paid, amountCents, err := h.wechat.ParseCallback(r)
+	outTradeNo, tradeNo, paid, amountCents, err := wechat.ParseCallback(r)
 	if err != nil {
 		slog.Warn("wechat callback parse failed", "error", err)
 		BadRequest(w, "invalid wechat callback")
@@ -487,7 +504,7 @@ func (h *BillingHandler) paymentResponse(p *billing.Payment) map[string]interfac
 
 // createPayPalPayment 创建 PayPal 订单并落库 payments，返回 checkout_url。
 func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Request, userID string, credits int, p *billing.Payment) {
-	if h.cfg.PayPalClientID == "" || h.cfg.PayPalSecret == "" {
+	if pcfg := h.paymentConfig(); pcfg.PayPalClientID == "" || pcfg.PayPalSecret == "" {
 		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "PayPal not configured"})
 		return
 	}
@@ -568,19 +585,20 @@ func (h *BillingHandler) PayPalCapture(w http.ResponseWriter, r *http.Request) {
 // ── PayPal REST API helpers ───────────────────────────────────────────────
 
 func (h *BillingHandler) payPalBaseURL() string {
-	if h.cfg.PayPalSandbox {
+	if h.paymentConfig().PayPalSandbox {
 		return "https://api-m.sandbox.paypal.com"
 	}
 	return "https://api-m.paypal.com"
 }
 
 func (h *BillingHandler) payPalAccessToken(ctx context.Context) (string, error) {
+	pcfg := h.paymentConfig()
 	p := strings.NewReader("grant_type=client_credentials")
 	req, err := http.NewRequestWithContext(ctx, "POST", h.payPalBaseURL()+"/v1/oauth2/token", p)
 	if err != nil {
 		return "", fmt.Errorf("paypal token request: %w", err)
 	}
-	req.SetBasicAuth(h.cfg.PayPalClientID, h.cfg.PayPalSecret)
+	req.SetBasicAuth(pcfg.PayPalClientID, pcfg.PayPalSecret)
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	resp, err := h.payPalClient.Do(req)
 	if err != nil {

@@ -22,6 +22,7 @@ import (
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/monitor"
 	"github.com/athenavi/chiron/internal/session"
+	"github.com/athenavi/chiron/internal/settings"
 	"github.com/athenavi/chiron/internal/storage"
 )
 
@@ -192,8 +193,6 @@ func NewGatewayRouter(
 		rlMW = DistributedRateLimitMiddleware(distLimiter)
 		slog.Info("distributed token-bucket rate limiter enabled",
 			"global", globalLimit, "tenant", tenantLimit, "user", rateLimitRPM)
-		// 系统设置变更订阅（批 B-2′）：rate_limit / cors 跨副本即时热更
-		StartSettingsSubscriber(lifecycleCtx, atomicRedis, distLimiter)
 	} else if cfg.RateLimitFailClose {
 		// 生产 fail-close：只读放行，写操作拒绝
 		rlMW = func(next http.Handler) http.Handler {
@@ -305,6 +304,18 @@ func NewGatewayRouter(
 	// Billing handler (uses the same billingMgr as /submit to avoid split-brain cache)
 	billingHandler := NewBillingHandler(billingMgr, authenticator, cfg)
 
+	// 后台「支付配置」保存在 system_settings.payment 的凭据叠加到 env 之上，
+	// 使页面里配置的渠道在重启后依然生效（DB 值优先、env 兜底）。
+	var settingsStore *settings.Store
+	if db.Pool != nil {
+		settingsStore = settings.New(db.Pool, cfg.AppSecret)
+	}
+	billingHandler.ReloadPaymentConfig(context.Background(), settingsStore)
+
+	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment 跨副本即时热更。
+	// 必须晚于 billingHandler 构造：订阅者需要它来重载 payment 分类的支付凭据。
+	StartSettingsSubscriber(lifecycleCtx, atomicRedis, distLimiter, billingHandler, settingsStore)
+
 	// Skill handler (proxies to Python)
 	skillHandler := NewSkillHandler(pythonClient)
 
@@ -331,6 +342,10 @@ func NewGatewayRouter(
 	adminHandler := NewAdminHandler(cfg, authenticator, fileStore, atomicRedis, pythonClient)
 	adminHandler.rateLimiter = distLimiter
 	adminHandler.appSecret = cfg.AppSecret
+	// 复用同一 settings.Store：后台「支付配置」的保存路径要用它加密落库
+	adminHandler.settingsStore = settingsStore
+	// 后台「支付配置」需要读取生效快照并触发热重载
+	adminHandler.billingHandler = billingHandler
 
 	// ── Route registration by functional domain ──
 
@@ -938,6 +953,8 @@ func registerBillingRoutes(mux *http.ServeMux, billingHandler *BillingHandler, a
 	mux.Handle("POST /v1/billing/callback/wechat", rlMW(http.HandlerFunc(billingHandler.WechatCallback)))
 	mux.Handle("POST /v1/billing/paypal-capture", authMW(rlMW(http.HandlerFunc(billingHandler.PayPalCapture))))
 	mux.Handle("GET /v1/billing/usage", authMW(rlMW(http.HandlerFunc(billingHandler.GetUsage))))
+	// 可用支付渠道：充值页据此只展示后台已配置启用的渠道，避免选中后下单才报 501
+	mux.Handle("GET /v1/billing/channels", authMW(rlMW(http.HandlerFunc(billingHandler.ListPaymentChannels))))
 }
 
 // ── Python engine proxy routes (graphs / workflows / knowledge base) ──
@@ -1193,5 +1210,12 @@ func registerAdminRoutes(
 	mux.Handle("DELETE /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
 
 	// Settings admin routes
+	// 读取分组配置此前只在 adminMux 内注册、从未暴露到外部 mux，前端 getSettings 恒 404
+	// （页面回填静默失效）。此处补齐 GET，与 PUT 同鉴权口径。
+	mux.Handle("GET /v1/admin/settings", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/settings", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// 支付渠道配置（后台「支付配置」页面）
+	mux.Handle("GET /v1/admin/payments", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(adminWriteMW(adminStrip))))
 }

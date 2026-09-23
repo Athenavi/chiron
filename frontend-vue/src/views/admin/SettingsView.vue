@@ -30,11 +30,6 @@ const storageConfig = ref({
   root: './workspace',
 })
 
-const paymentConfig = ref({
-  public_base_url: '',
-  alipay_gateway: '',
-})
-
 // 连接与密钥配置（敏感值由 APP_SECRET 派生密钥加密入库）
 const redisConfig = ref({
   addr: 'localhost:6379',
@@ -301,18 +296,6 @@ async function saveStorage() {
   }
 }
 
-async function savePayment() {
-  saving.value = true
-  try {
-    await saveSettings('payment', paymentConfig.value)
-    message.success(t('支付配置已保存'))
-  } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
-  } finally {
-    saving.value = false
-  }
-}
-
 async function saveRedis() {
   saving.value = true
   try {
@@ -401,7 +384,6 @@ onMounted(async () => {
     mergeConfig(agentConfig, await getSettings('agent'))
     mergeConfig(llmConfig, await getSettings('llm'))
     mergeConfig(storageConfig, await getSettings('storage'))
-    mergeConfig(paymentConfig, await getSettings('payment'))
     mergeConfig(redisConfig, await getSettings('redis'))
     mergeConfig(postgresConfig, await getSettings('postgres'))
     mergeConfig(corsConfig, await getSettings('cors'))
@@ -754,42 +736,6 @@ onMounted(async () => {
           </Button>
           <div class="config-note">
             {{ $t('保存到 DB，运行时消费项重启后生效。') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- 支付配置（非敏感项） -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('支付配置')">
-          <Form
-            :model="paymentConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('公网基础 URL')">
-              <Input
-                v-model:value="paymentConfig.public_base_url"
-                placeholder="https://api.example.com"
-              />
-            </FormItem>
-            <FormItem :label="$t('支付宝网关')">
-              <Input
-                v-model:value="paymentConfig.alipay_gateway"
-                placeholder="https://openapi.alipay.com/gateway.do"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="savePayment"
-          >
-            {{ $t('保存') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('密钥类凭据不入库，由环境变量注入。') }}
           </div>
         </Card>
       </Col>

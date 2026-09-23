@@ -14,7 +14,7 @@ import {
   CreditCardOutlined, WalletOutlined, ThunderboltOutlined, BarChartOutlined,
   ShoppingOutlined, QrcodeOutlined, PayCircleOutlined,
 } from '@ant-design/icons-vue'
-import { api } from '../api'
+import { api, listPaymentChannels } from '../api'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -67,7 +67,7 @@ const activeTab = ref('balance')
 
 const credits = ref(1000)
 const customCredits = ref('')
-const provider = ref('alipay')
+const provider = ref('')
 
 // 支付结果提示（从 URL 参数读取一次后清除）
 const payResult = ref<{ type: 'success' | 'info'; text: string } | null>(null)
@@ -86,11 +86,39 @@ const PAY_POLL_INTERVAL = 3000
 
 const PRESET_CREDITS = [500, 1000, 2000, 5000, 10000]
 
-const providerOptions = [
-  { label: t('支付宝'), value: 'alipay' },
-  { label: t('微信支付'), value: 'wechat' },
-  { label: 'PayPal', value: 'paypal' },
-]
+/** 渠道展示名（后端只返回渠道 id 与币种，文案在前端维护） */
+const CHANNEL_LABELS: Record<string, string> = {
+  alipay: t('支付宝'),
+  wechat: t('微信支付'),
+  paypal: 'PayPal',
+}
+
+/** 渠道查询失败时的兜底：仍展示全部渠道，可用性由下单接口把关（不让一次查询失败锁死充值页） */
+const FALLBACK_CHANNELS = ['alipay', 'wechat', 'paypal']
+
+/** 后台已配置启用的渠道；为空表示当前没有可用渠道 */
+const availableChannels = ref<string[]>([])
+
+/**
+ * 支付方式选项：只展示后台「支付配置」里已生效的渠道。
+ * 此前无条件展示三种渠道，用户选中未配置的渠道要等下单才拿到 501。
+ */
+const providerOptions = computed(() =>
+  availableChannels.value.map(id => ({ label: CHANNEL_LABELS[id] ?? id, value: id })),
+)
+
+async function loadChannels() {
+  try {
+    const channels = await listPaymentChannels()
+    availableChannels.value = channels.map(c => c.id)
+  } catch (error) {
+    availableChannels.value = [...FALLBACK_CHANNELS]
+  }
+  // 默认选中第一个可用渠道（原默认 alipay 在未启用时会变成非法选项）
+  if (!availableChannels.value.includes(provider.value)) {
+    provider.value = availableChannels.value[0] ?? ''
+  }
+}
 
 const REASON_MAP: Record<string, { label: string; color: string }> = {
   llm_token: { label: t('LLM 调用'), color: 'blue' },
@@ -147,7 +175,7 @@ const historyColumns = [
 
 onMounted(async () => {
   readPayResultParam()
-  await loadBalanceAndUsage()
+  await Promise.all([loadBalanceAndUsage(), loadChannels()])
   if (activeTab.value === 'history') await loadHistory()
 })
 
@@ -219,6 +247,10 @@ async function handlePurchase() {
   const amount = effectiveCredits.value
   if (amount <= 0) {
     message.warning(t('请输入有效的充值数量'))
+    return
+  }
+  if (!provider.value) {
+    message.warning(t('请先选择支付方式'))
     return
   }
   checkoutLoading.value = true
@@ -478,10 +510,17 @@ function amountText(amount: number): string {
             <div class="form-item">
               <label>{{ $t('支付方式') }}</label>
               <Radio.Group
+                v-if="providerOptions.length"
                 v-model:value="provider"
                 :options="providerOptions"
                 option-type="button"
                 button-style="solid"
+              />
+              <Alert
+                v-else
+                type="warning"
+                show-icon
+                :message="$t('管理员尚未配置可用的支付渠道，暂时无法在线充值。')"
               />
             </div>
 

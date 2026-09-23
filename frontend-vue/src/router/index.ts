@@ -154,6 +154,15 @@ const routes = [
         component: () => import('../views/admin/SettingsView.vue'),
         meta: { title: t('系统设置') },
       },
+      // ── 支付渠道配置（支付宝 / 微信支付 / PayPal）──
+      // 凭据加密入库 + 保存后热生效；原「系统设置」里的支付卡片已迁移到此处，
+      // 避免同一份配置在两处维护。
+      {
+        path: 'payment',
+        name: 'AdminPayment',
+        component: () => import('../views/admin/PaymentView.vue'),
+        meta: { title: t('支付配置') },
+      },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {
         path: 'datastores',

@@ -1,4 +1,4 @@
-﻿package api
+package api
 
 import (
 	"context"
@@ -37,6 +37,9 @@ type AdminHandler struct {
 	rateLimiter   *DistributedRateLimiter
 	appSecret     string
 	settingsStore *settings.Store
+	// billingHandler 供后台「支付配置」读取生效快照并触发热重载。
+	// 与 rateLimiter 同样采用构造后赋值（见 gateway_router.go）。
+	billingHandler *BillingHandler
 }
 
 func NewAdminHandler(cfg *config.Config, a *auth.Authenticator, store *storage.AtomicStore, redis *db.AtomicRedis, pythonClient *engine.PythonClient) *AdminHandler {
@@ -85,6 +88,11 @@ func (h *AdminHandler) RegisterRoutes(r *http.ServeMux) {
 	// 新增端点：系统设置
 	r.HandleFunc("PUT /settings", h.SaveSettings)
 	r.HandleFunc("GET /settings", h.GetSettings)
+
+	// 支付渠道配置（后台「支付配置」页面）：
+	// 读为生效快照（DB 覆盖 env）、写为校验后落库 + 热重载渠道客户端。
+	r.HandleFunc("GET /payments", h.GetPaymentConfig)
+	r.HandleFunc("PUT /payments", h.SavePaymentConfig)
 }
 
 func (h *AdminHandler) Metrics(w http.ResponseWriter, r *http.Request) {
@@ -321,7 +329,6 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 
 	OK(w, map[string]string{"status": "deleted"})
 }
-
 
 func (h *AdminHandler) SystemInfo(w http.ResponseWriter, r *http.Request) {
 	info := map[string]interface{}{

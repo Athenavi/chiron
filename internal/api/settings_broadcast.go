@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/settings"
 )
 
 // ── 系统设置变更跨副本广播（批 B-2′）──
@@ -17,6 +18,7 @@ import (
 // 方案：保存成功 → Publish {prefix}chiron:settings:changed；每网关副本的订阅者：
 //   - rate_limit → 令牌桶限流器 Configure（即时生效）
 //   - cors       → 运行时 CORS 白名单更新（即时生效）
+//   - payment    → 支付凭据热重载 + 重建渠道客户端（即时生效）
 //   - 其余分类   → slog.Warn 提示需滚动重启（如 redis 集群切换/存储后端等高风险项）
 
 type settingsChangedEvent struct {
@@ -46,7 +48,9 @@ func PublishSettingsChanged(ctx context.Context, category string, config map[str
 }
 
 // StartSettingsSubscriber 每网关副本启动一次，消费系统设置变更广播。
-func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *DistributedRateLimiter) {
+// billingHandler 用于 payment 分类的热重载，store 为其回源句柄；任一为 nil 时
+// 该分类退化为仅告警。
+func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *DistributedRateLimiter, billingHandler *BillingHandler, store *settings.Store) {
 	if rdb == nil {
 		return
 	}
@@ -82,8 +86,15 @@ func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *D
 					SetCORSAllowOrigin(v)
 					slog.Info("cors allowlist hot-reloaded via settings broadcast", "origins", v)
 				}
+			case "payment":
+				if billingHandler == nil {
+					continue
+				}
+				// 从 DB 重载（与保存方同一事实源），副本间不会漂移
+				billingHandler.ReloadPaymentConfig(ctx, store)
+				slog.Info("payment config hot-reloaded via settings broadcast")
 			default:
-				// redis/storage/s3/payment/agent 等：涉及进程级组件（连接池/存储后端），
+				// redis/storage/s3/agent 等：涉及进程级组件（连接池/存储后端），
 				// 热切高风险，提示滚动重启以消除副本间不一致
 				slog.Warn("system settings changed on category; rolling restart required to apply",
 					"category", ev.Category)

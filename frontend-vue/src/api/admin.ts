@@ -300,3 +300,36 @@ export async function getSettings(category: string): Promise<Record<string, any>
   const { data } = await api.get(`/v1/admin/settings?category=${encodeURIComponent(category)}`)
   return data?.data?.config ?? {}
 }
+
+// ── 支付渠道配置（支付宝 / 微信支付 / PayPal）──
+
+/** 单个渠道的可用性：字段齐全、客户端构造成功且未被管理员停用时 enabled=true */
+export interface PaymentChannelStatus {
+  enabled: boolean
+  currency: string
+  /** 尚未生效的缺失项（管理员可读；已停用的渠道不列） */
+  missing?: string[]
+}
+
+export interface PaymentConfigResponse {
+  /** 当前生效配置（DB 覆盖 env 的结果），键与后台表单字段一一对应 */
+  config: Record<string, any>
+  channels: Record<string, PaymentChannelStatus>
+  /** 需在渠道后台登记的异步通知地址 */
+  callback_urls: Record<string, string>
+}
+
+/** 读取生效的支付渠道配置与各渠道可用性 */
+export async function getPaymentConfig(): Promise<PaymentConfigResponse> {
+  const { data } = await api.get('/v1/admin/payments')
+  return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
+}
+
+/**
+ * 保存支付渠道配置：服务端先校验（非法私钥等直接 400 且不落库），
+ * 通过后加密入库并热重建渠道客户端（无需重启），返回生效后的配置。
+ */
+export async function savePaymentConfig(config: Record<string, any>): Promise<PaymentConfigResponse> {
+  const { data } = await api.put('/v1/admin/payments', { config })
+  return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
+}

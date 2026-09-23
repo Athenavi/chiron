@@ -465,8 +465,14 @@ func (h *AdminHandler) SaveSettings(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 跨副本广播（批 B-2′）：rate_limit / cors 由各副本订阅者即时热更；
-	// 其余分类（redis/storage/s3/payment/agent）在副本侧告警提示滚动重启。
+	// payment：保存支付凭据后从 DB 重载并热重建渠道客户端（与专用接口 PUT /v1/admin/payments 同一路径）。
+	// 通用接口不做保存前校验，非法凭据只会让对应渠道不可用并记日志 —— 见 buildPaymentClients 说明。
+	if body.Category == settingsCategoryPayment && h.billingHandler != nil {
+		h.billingHandler.ReloadPaymentConfig(ctx, s)
+	}
+
+	// 跨副本广播（批 B-2′）：rate_limit / cors / payment 由各副本订阅者即时热更；
+	// 其余分类（redis/storage/s3/agent）在副本侧告警提示滚动重启。
 	if err := PublishSettingsChanged(ctx, body.Category, body.Config); err != nil {
 		slog.Warn("publish settings changed failed", "category", body.Category, "error", err)
 	}

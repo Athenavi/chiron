@@ -581,3 +581,23 @@ export async function setKBVisibility(id: string, visibility: 'private' | 'tenan
   return resp.data
 }
 
+// ── 支付渠道（可用渠道由后台「支付配置」决定）──
+
+export interface PaymentChannel {
+  id: string
+  /** 结算币种：支付宝/微信为 CNY，PayPal 为 USD */
+  currency: string
+}
+
+/**
+ * 查询后台已配置启用的支付渠道。
+ * 充值页据此只展示真正可用的渠道 —— 否则用户选中未配置的渠道，
+ * 要等下单后才拿到 501。
+ */
+export async function listPaymentChannels(): Promise<PaymentChannel[]> {
+  const resp = await api.get('/v1/billing/channels')
+  // 兼容 OK() 包装与裸形态（层级取错会静默变成空列表）
+  const d = resp.data?.data ?? resp.data
+  return Array.isArray(d?.channels) ? d.channels : []
+}
+
