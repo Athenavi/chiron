@@ -54,6 +54,28 @@ class ServerDef:
     env: dict[str, str] = field(default_factory=dict)
     transport: str = "stdio"  # "stdio" | "http_sse"
     url: str = ""  # HTTP SSE endpoint URL (used when transport="http_sse")
+    #: 该 server 是否**只提供只读操作**。引擎只直连 read_only 的 server（见 _connect_server 的
+    #: 连接守卫）：连接凭据（env / url）会留在引擎进程里，而那正是 agent 能读到的地方。
+    #: 未声明默认 False —— fail-closed：宁可工具不可用，也不给引擎高权限凭据。
+    read_only: bool = False
+
+
+def assert_server_connectable(server: ServerDef, *, role: str = "engine") -> None:
+    """直连守卫：**引擎**只允许直连 **read_only** 的 MCP server（见 ``_connect_server``）。
+
+    ``role="broker"``（独立 MCP broker 进程）是唯一被允许连危险 server 的角色 —— 它的凭据与
+    执行面都与引擎隔离，且执行前仍要向服务端（Go 的 Tool Broker）要授权：判定权威在服务端，
+    broker 只负责"用凭据执行"，两者不在同一个信任域。
+
+    抽成模块级函数是为了能被直接单测 —— 这条边界值得有独立断言。
+    """
+    if role == "broker" or server.read_only:
+        return
+    raise PermissionError(
+        f"MCP server '{server.name}' is not declared read-only — refusing to connect from "
+        "the engine. Credentials for write/external tools must not live in agent reach; "
+        'declare "read_only": true in the plugin config if this server only reads.'
+    )
 
 
 @dataclass
@@ -188,7 +210,10 @@ class ServerConnection:
 class MCPClient:
     """Manages connections to multiple MCP servers and their tools."""
 
-    def __init__(self, servers: list[ServerDef]):
+    def __init__(self, servers: list[ServerDef], *, role: str = "engine"):
+        #: "engine"（默认）= 只能连 read_only 的 server；"broker" = 独立 MCP broker 进程，
+        #: 唯一被允许持凭据连危险 server 的角色（见 assert_server_connectable）。
+        self._role = role
         self._servers = servers
         self._conns: dict[str, ServerConnection] = {}
         self._tools: list[MCPTool] = []
@@ -203,7 +228,19 @@ class MCPClient:
                 raise
 
     async def _connect_server(self, server: ServerDef):
-        """Connect to a single MCP server and discover its tools."""
+        """Connect to a single MCP server and discover its tools.
+
+        **直连守卫（安全边界）**：引擎只允许直连**声明为只读**的 MCP server。
+
+        理由：连接凭据来自 ``ServerDef.env`` / ``url``（插件配置），而引擎进程正在处理
+        不可信内容 —— 被 prompt injection 影响的 agent 可以直接拿这些凭据触达外部系统，
+        绕过网关的全部授权、审计与限流（docs/agent-safety-and-reliability.md §1.4）。
+
+        未声明 ``read_only`` 的 server 一律**不连**（fail-closed）。要放行请在插件配置里显式
+        写 ``"read_only": true``（表示它只提供读操作）；含写 / 删 / 外部操作的 server 应由服务端
+        分发，不能把凭据留在 agent 可触达的地方。
+        """
+        assert_server_connectable(server, role=self._role)
         if server.transport == "http_sse":
             await self._connect_http_sse(server)
         elif server.transport == "stdio":

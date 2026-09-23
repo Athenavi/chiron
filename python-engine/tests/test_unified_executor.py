@@ -97,7 +97,9 @@ async def test_submit_reuses_existing_session():
 async def test_get_session_messages_not_found():
     """查询不存在的会话必须明确报错,而非返回空列表冒充成功。"""
     handler = UnifiedChatHandler()
-    res = await handler.get_session_messages(session_id="missing-session", tenant_id=TENANT)
+    res = await handler.get_session_messages(
+        session_id="missing-session", tenant_id=TENANT, user_id=TENANT
+    )
     assert res["success"] is False
     assert "error" in res
 
@@ -113,19 +115,65 @@ async def test_get_session_messages_requires_tenant():
 async def test_get_session_messages_returns_history():
     handler = UnifiedChatHandler()
     res = await handler.submit_task(user_input="你好", tenant_id=TENANT)
-    history = await handler.get_session_messages(session_id=res["session_id"], tenant_id=TENANT)
+    history = await handler.get_session_messages(
+        session_id=res["session_id"], tenant_id=TENANT, user_id=TENANT
+    )
     assert history["success"] is True
     assert history["messages"][0]["role"] == "user"
     assert "shared_context" in history
+
+
+async def test_get_session_messages_requires_user():
+    """不提供 user_id 必须被拒绝：只校验租户时,同租户内可跨用户读消息。"""
+    handler = UnifiedChatHandler()
+    res = await handler.get_session_messages(session_id="s", tenant_id=TENANT)
+    assert res["success"] is False
+    assert res["error"] == "user_id is required"
 
 
 async def test_get_session_messages_cross_tenant_blocked():
     """S 安全修复:其他租户不得读取本租户会话消息(跨租户隔离)。"""
     handler = UnifiedChatHandler()
     res = await handler.submit_task(user_input="机密消息", tenant_id=TENANT)
-    blocked = await handler.get_session_messages(session_id=res["session_id"], tenant_id="other-tenant")
+    blocked = await handler.get_session_messages(
+        session_id=res["session_id"], tenant_id="other-tenant", user_id=TENANT
+    )
     assert blocked["success"] is False
     assert blocked["error"] == "Session not found"
+
+
+async def test_get_session_messages_cross_user_in_same_tenant_blocked():
+    """S 安全修复:同租户的**其他用户**也不得读取本会话消息。
+
+    会话归属是用户级的,租户只是它的外边界 —— 只校验 tenant 时,
+    同租户用户只要拿到 session_id(或枚举它)就能读走别人的完整会话。
+    """
+    handler = UnifiedChatHandler()
+    res = await handler.submit_task(user_input="同一租户的机密消息", tenant_id=TENANT)
+    blocked = await handler.get_session_messages(
+        session_id=res["session_id"], tenant_id=TENANT, user_id="another-user"
+    )
+    assert blocked["success"] is False
+    assert blocked["error"] == "Session not found"
+
+
+async def test_get_session_messages_cross_user_db_path_blocked():
+    """DB 路径的归属查询必须同时带 tenant_id 与 user_id(不能只带 tenant)。"""
+    from unittest.mock import AsyncMock, patch
+
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=None)
+
+    handler = UnifiedChatHandler()
+    with patch("app.api.unified_executor.get_pool", return_value=pool):
+        res = await handler.get_session_messages(
+            session_id="s-1", tenant_id="t-1", user_id="u-1"
+        )
+
+    assert res["success"] is False
+    query = pool.fetchrow.call_args[0][0]
+    assert "tenant_id = $2" in query
+    assert "user_id = $3" in query, "DB 路径缺少 user 归属条件"
 
 
 # ── auto 模式 (TaskRouter,已实现) ───────────────────────────────────

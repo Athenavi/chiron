@@ -204,12 +204,26 @@ async def _cost(args: str, ctx: CommandContext | None) -> str:
 
 
 async def _undo(args: str, ctx: CommandContext | None) -> str:
-    """Undo last file edit."""
-    if ctx is not None:
-        last_edit = ctx.metadata.pop("last_edit", None)
-        if last_edit:
-            return f"Undone: {last_edit}"
-    return "Nothing to undo."
+    """Undo the last file write — **真正恢复文件**。
+
+    后端是会话级快照栈（``app/agent/undo_stack.py``）：`write_file` / `edit_file` 在写入前
+    保存原内容，这里弹出最近一条并恢复。此前这个命令只做
+    ``ctx.metadata.pop("last_edit")`` 再回显一个字符串 —— **文件没有任何变化**，
+    用户以为撤销了其实没有（比"没有 /undo"更危险）。
+    """
+    from app.agent import undo_stack
+    from app.tools.context import get_session_id
+
+    session_id = get_session_id()
+    if not session_id:
+        return "没有活动会话，无法撤销。"
+
+    snapshot = await undo_stack.pop(session_id)
+    if snapshot is None:
+        return "没有可撤销的文件写入（快照保留 24 小时，最多 20 步）。"
+
+    detail = undo_stack.restore(snapshot)
+    return f"已撤销 {snapshot.tool}：{detail}"
 
 
 # ── /retry ──────────────────────────────────────────────────────

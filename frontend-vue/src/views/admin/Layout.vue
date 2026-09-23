@@ -115,8 +115,6 @@ const menuGroups = computed(() => [
     key: 'g-platform', label: t('平台'),
     children: [
       { key: '/admin/costcenter', label: t('成本中心'), icon: () => h(WalletOutlined) },
-      { key: '/admin/market', label: t('企业能力市场'), icon: () => h(ShopOutlined) },
-      { key: '/admin/eval', label: t('Agent 评估'), icon: () => h(AuditOutlined) },
       { key: '/admin/api-docs', label: t('API 文档'), icon: () => h(FileTextOutlined) },
     ],
   },

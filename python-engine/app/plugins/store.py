@@ -44,6 +44,9 @@ class ServerConfig:
     description: str = ""
     version: str = ""
     status: str = "active"
+    #: 只读声明：引擎只直连 read_only 的 MCP server（见 app/mcp/client.py 的连接守卫）。
+    #: 未声明 = False = **不直连** —— 宁可工具不可用，也不把高权限凭据留在 agent 可触达处。
+    read_only: bool = False
 
 
 class PluginStore:
@@ -81,6 +84,7 @@ class PluginStore:
                         description=s.get("description", ""),
                         version=s.get("version", ""),
                         status=s.get("status", "active"),
+                        read_only=bool(s.get("read_only", False)),
                     )
                 )
             except (KeyError, TypeError):

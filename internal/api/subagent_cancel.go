@@ -61,8 +61,17 @@ func (h *SubagentHandler) CancelRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// 租户校验：别人的 run 一律按"不存在"处理（与只读端点同一套判定，不泄露存在性）
-	if !h.runOwnedByTenant(r.Context(), subagentTenant(claims), runID) {
+	status, visible := h.runStatusForTenant(r.Context(), subagentTenant(claims), runID)
+	if !visible {
 		JSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "subagent run not found"})
+		return
+	}
+	// 幂等：已终态的 run 不需要（也无法）再取消。此前无条件返回 "accepted"，前端会显示
+	// "已请求停止"而状态永不变 —— 典型的假成功，比报错更难排查（报错会让人重试）。
+	if terminalRunStatuses[status] {
+		OK(w, map[string]any{
+			"status": "not_running", "run_id": runID, "run_status": status,
+		})
 		return
 	}
 	if err := h.publishCancel(subagentCancelBroadcast{
@@ -112,4 +121,33 @@ func (h *SubagentHandler) sessionOwnedByUser(ctx context.Context, sessionID, use
 	row, err := db.GlobalDBManager.FetchOne(ctx,
 		`SELECT 1 AS ok FROM sessions WHERE id = $1 AND user_id = $2::uuid`, sessionID, userID)
 	return err == nil && row != nil
+}
+
+// terminalRunStatuses 是不可逆的终态：处于这些状态的 run 无法也不需要再取消。
+//
+// 与引擎侧状态机保持一致（见 app/subagent/store.py 与 docs/subagent-interaction-redesign.md）。
+// 其中 "lost" 尤其重要：它表示"失联"（进程重启/心跳超时后被回收器标记），
+// 与 "cancelled"（被主动停掉）语义不同，但两者都属于终态。
+var terminalRunStatuses = map[string]bool{
+	"completed": true,
+	"failed":    true,
+	"cancelled": true,
+	"lost":      true,
+}
+
+// runStatusForTenant 取 run 状态；第二个返回值表示"该 run 对本租户可见"。
+//
+// 可见性判定与 runOwnedByTenant 完全一致：别人的 run 一律按"不存在"处理，
+// 因此调用方对 !visible 统一回 404，不泄露存在性。
+func (h *SubagentHandler) runStatusForTenant(ctx context.Context, tenant, runID string) (string, bool) {
+	if tenant == "" || db.GlobalDBManager == nil {
+		return "", false
+	}
+	row, err := db.GlobalDBManager.FetchOne(ctx,
+		`SELECT status FROM subagent_runs WHERE id = $1 AND tenant_id = $2`, runID, tenant)
+	if err != nil || row == nil {
+		return "", false
+	}
+	status, _ := row["status"].(string)
+	return status, true
 }

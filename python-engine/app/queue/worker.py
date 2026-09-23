@@ -19,8 +19,15 @@ from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
 
-TASK_STREAM = rkey("engine:tasks")
-DLQ_STREAM = rkey("engine:tasks:dlq")
+# 流名与保留上限从 producer 统一取得。此前本文件自己又定义了一份流名，
+# 且重投/放回用了比生产者更小的 maxlen（10000 vs 100000）—— 积压超过 1 万条时，
+# 一次重投就会静默修剪掉最老的待处理任务。
+from app.queue.producer import (  # noqa: E402
+    DLQ_STREAM,
+    DLQ_STREAM_MAXLEN,
+    TASK_STREAM,
+    TASK_STREAM_MAXLEN,
+)
 GROUP_NAME = "engine-workers"
 CONSUMER_PREFIX = "worker"
 MAX_RETRIES = 3
@@ -299,7 +306,7 @@ class QueueWorker:
         fields[b"retry_count"] = str(retry).encode()
         if retry > MAX_RETRIES:
             try:
-                await self._redis.xadd(DLQ_STREAM, fields, maxlen=10000)
+                await self._redis.xadd(DLQ_STREAM, fields, maxlen=DLQ_STREAM_MAXLEN)
                 await self._redis.xack(TASK_STREAM, GROUP_NAME, msg_id)
                 QUEUE_DLQ_TOTAL.inc()
                 logger.warning("reclaimed message exceeded retries, moved to DLQ: %s", msg_id)
@@ -333,7 +340,7 @@ class QueueWorker:
                     for k, v in fields.items()
                 }
                 try:
-                    await self._redis.xadd(TASK_STREAM, requeue, maxlen=10000)
+                    await self._redis.xadd(TASK_STREAM, requeue, maxlen=TASK_STREAM_MAXLEN)
                     await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
                 except Exception as exc:
                     logger.warning("worker gate requeue failed: %s", exc)
@@ -431,7 +438,7 @@ class QueueWorker:
                             "error": f"deadline exceeded: {deadline_raw}",
                             "retry_count": str(retry_count),
                         },
-                        maxlen=10000,
+                        maxlen=DLQ_STREAM_MAXLEN,
                     )
                     QUEUE_DLQ_TOTAL.labels(task_type=task_type).inc()
                 except Exception as exc:  # noqa: BLE001 - DLQ 写入失败也必须 ACK，避免无限重投
@@ -491,7 +498,7 @@ class QueueWorker:
                 }
                 if tenant_id:
                     retry_msg["tenant_id"] = tenant_id
-                await self._redis.xadd(TASK_STREAM, retry_msg, maxlen=10000)
+                await self._redis.xadd(TASK_STREAM, retry_msg, maxlen=TASK_STREAM_MAXLEN)
                 await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
                 QUEUE_RETRY_TOTAL.labels(task_type=task_type).inc()
                 logger.info(

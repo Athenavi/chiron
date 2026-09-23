@@ -35,6 +35,9 @@ class ChatSession:
 
     session_id: str
     tenant_id: str
+    # 会话归属是用户级的：内存兜底路径也要能校验 user，否则 DB 不可用时会
+    # 退化成"同租户内任意用户可读别人会话"。
+    user_id: str = ""
     title: str = ""
     mode: str = "auto"
     messages: list[dict] = field(default_factory=list)
@@ -266,6 +269,7 @@ class UnifiedChatHandler:
                 session = ChatSession(
                     session_id=session_id,
                     tenant_id=db_row["tenant_id"],
+                    user_id=db_row["user_id"] or "",
                     title=db_row["title"] or "",
                     mode=db_row["mode"] or mode,
                     created_at=_dt_to_ts(db_row.get("created_at")),
@@ -276,6 +280,8 @@ class UnifiedChatHandler:
                 session = ChatSession(
                     session_id=session_id,
                     tenant_id=tenant_id,
+                    # 与写库时的兜底一致（见 _db_ensure_session 的 user_id or tenant_id）
+                    user_id=user_id or tenant_id,
                     title=user_input[:50],
                     mode=mode,
                     # 初始 shared_context = 请求注入的跨工作台上下文
@@ -780,6 +786,7 @@ class UnifiedChatHandler:
         self,
         session_id: str,
         tenant_id: str | None = None,
+        user_id: str | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
         """获取会话消息历史 (DB 优先,内存兜底)
@@ -792,6 +799,10 @@ class UnifiedChatHandler:
         """
         if not tenant_id:
             return {"success": False, "error": "tenant_id is required"}
+        # 只校验 tenant 不够：同租户的其他用户拿到 session_id 就能读别人的消息。
+        # 会话归属是用户级的，租户只是它的外边界。
+        if not user_id:
+            return {"success": False, "error": "user_id is required"}
 
         # 1) DB 优先: 读库为准,保证多实例一致
         try:
@@ -803,9 +814,11 @@ class UnifiedChatHandler:
             try:
                 row = await pool.fetchrow(
                     "SELECT tenant_id, title, mode, shared_context "
-                    "FROM unified_sessions WHERE id = $1 AND tenant_id = $2",
+                    "FROM unified_sessions "
+                    "WHERE id = $1 AND tenant_id = $2 AND user_id = $3",
                     session_id,
                     tenant_id,
+                    user_id,
                 )
                 if row is None:
                     return {"success": False, "error": "Session not found"}
@@ -845,7 +858,12 @@ class UnifiedChatHandler:
 
         # 2) 内存兜底 (DB 不可用,维持旧版行为)
         session = self.sessions.get(session_id)
-        if not session or getattr(session, "tenant_id", None) != tenant_id:
+        # 与 DB 路径保持同一套归属规则：tenant 与 user 都要匹配。
+        if (
+            not session
+            or getattr(session, "tenant_id", None) != tenant_id
+            or getattr(session, "user_id", None) != user_id
+        ):
             return {"success": False, "error": "Session not found"}
 
         return {
@@ -1167,7 +1185,12 @@ async def get_messages(request: Request, session_id: str, limit: int = 50):
     tenant_id = str(request.query_params.get("tenant_id") or "") or str(
         getattr(request.state, "tenant_id", "") or ""
     )
+    # 会话归属是用户级的：网关注入的 ?user_id= 与 tenant 一样必须透传下来，
+    # 否则同租户内可跨用户读取他人会话消息。
+    user_id = str(request.query_params.get("user_id") or "") or str(
+        getattr(request.state, "user_id", "") or ""
+    )
     handler = get_chat_handler()
     return await handler.get_session_messages(
-        session_id, tenant_id=tenant_id, limit=limit
+        session_id, tenant_id=tenant_id, user_id=user_id, limit=limit
     )

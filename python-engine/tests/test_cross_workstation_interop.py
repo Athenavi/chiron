@@ -207,7 +207,7 @@ async def test_recommended_workstations_pipeline(monkeypatch):
 async def test_chat_submit_rejects_missing_message():
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/v1/chat/submit?user_id=u1", json={})
+        resp = await ac.post("/v1/chat/submit?user_id=u1&tenant_id=t1", json={})
     assert resp.status_code == 200
     assert resp.json()["success"] is False
 
@@ -215,9 +215,15 @@ async def test_chat_submit_rejects_missing_message():
 async def test_chat_submit_rejects_missing_tenant():
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/v1/chat/submit", json={"message": "hi"})
-    assert resp.status_code == 200
-    assert "tenant_id" in resp.json()["error"]
+        # 身份由网关经 query 注入。缺 tenant_id 时应被认证层直接拒绝，
+        # 而不是放行到 handler 再靠 body 里的字段兜底 —— 后者意味着
+        # "没有租户身份也能到达业务逻辑"。
+        resp = await ac.post(
+            "/v1/chat/submit",
+            json={"message": "hi"},
+            params={"user_id": "u-test"},
+        )
+    assert resp.status_code == 401
 
 
 async def test_chat_submit_cross_workstation_pipeline(monkeypatch):
@@ -246,6 +252,7 @@ async def test_chat_submit_cross_workstation_pipeline(monkeypatch):
         resp = await ac.post(
             "/v1/chat/submit",
             json={"message": "分析一下数据", "tenant_id": TENANT, "mode": "auto"},
+            params={"user_id": "u-test", "tenant_id": TENANT},
         )
 
     assert resp.status_code == 200
@@ -269,7 +276,10 @@ async def test_capabilities_routes():
 
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/v1/capabilities", params={"tenant_id": TENANT})
+        resp = await ac.get(
+            "/v1/capabilities",
+            params={"user_id": "u-test", "tenant_id": TENANT},
+        )
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
@@ -280,6 +290,7 @@ async def test_capabilities_routes():
         resp2 = await ac.post(
             "/v1/capabilities/search",
             json={"query": "python sandbox execute", "tenant_id": TENANT},
+            params={"user_id": "u-test", "tenant_id": TENANT},
         )
         assert resp2.status_code == 200
         body2 = resp2.json()
@@ -289,5 +300,8 @@ async def test_capabilities_routes():
     # 会话消息历史路由
     handler = get_chat_handler()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp3 = await ac.get("/v1/chat/sessions/not-exist/messages")
+        resp3 = await ac.get(
+            "/v1/chat/sessions/not-exist/messages",
+            params={"user_id": "u-test", "tenant_id": TENANT},
+        )
     assert resp3.json()["success"] is False

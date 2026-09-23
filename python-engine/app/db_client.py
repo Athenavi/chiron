@@ -130,7 +130,15 @@ class UnifiedDBClient(_BaseGatewayClient):
 
 
 class UnifiedRedisClient(_BaseGatewayClient):
-    """Unified Redis client that calls Go gateway API."""
+    """Unified Redis client that calls Go gateway API.
+
+    **不要再把它接回 ``app/redis_client.get_redis()``。** 它只实现了 get / set / delete
+    三个方法，而调用方需要的是 xadd（工作流入队）、eval / zadd（限流 Lua）、exists / incr /
+    expire 等。曾经那层 ``_UnifiedRedisWrapper`` 就是这么接的，结果是
+    ``USE_UNIFIED_REDIS_CLIENT=true`` 时工作流入队恒失败，还会被上层误当成"队列暂不可达"
+    （见 docs/production-readiness-fixes.md 的 X9）。需要更多命令就在 aioredis 上直接用 ——
+    不要再造一个"实现了一半"的适配层：类型注解看不出来，只有运行时才炸。
+    """
 
     _error_cls = RedisClientError
     _health_path = "/v1/internal/redis/health"

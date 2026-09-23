@@ -1241,6 +1241,9 @@ class AgentRuntime:
                             )
                             return
 
+                        # 副作用账本：记下这次动用了什么能力、能不能撤销
+                        await self._record_side_effect(task, tc, tool_result)
+
                         # 记录工具执行结果 (带 trace span)
                         tool_start = time.time()
                         yield AgentEvent(
@@ -1533,6 +1536,59 @@ class AgentRuntime:
                 )
             }, None
         verdict = self._tool_guard.evaluate(tool_name, targs or {}, self._current_mode)
+
+        # ── 服务端授权（Tool Broker）：危险工具的判定权威在服务端 ──
+        #
+        # 引擎侧的 ToolGuard 与执行在**同一进程**（而该进程正在处理不可信内容）——判定与执行
+        # 同处一个信任域。所以 delete / external 在执行前必须向 Broker 要一次授权，并按
+        # **服务端**的判定执行：服务端可以收紧引擎/用户的模式选择（典型：yolo 下仍要求
+        # 不可逆操作必须确认）。
+        # **fail-closed**：拿不到服务端判定就拒绝执行这类工具 —— 按引擎自己的判定放行，
+        # 等于把这一层抹掉。
+        if verdict.second_check:
+            from app.agent.guards import ToolVerdict
+            from app.tools import broker
+
+            try:
+                decision = await broker.authorize(
+                    tool_name,
+                    targs or {},
+                    tenant_id=getattr(task, "tenant_id", ""),
+                    user_id=getattr(task, "user_id", ""),
+                    session_id=getattr(task, "session_id", ""),
+                    tool_call_id=tool_call.get("id") or tool_name,
+                    tools_mode=self._current_mode,
+                )
+            except Exception as exc:  # noqa: BLE001 - 拿不到授权就不执行
+                logger.error("tool broker unavailable, refusing %s: %s", tool_name, exc)
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' was NOT executed: authorization service "
+                        f"unavailable ({exc})"
+                    )
+                }, None
+
+            if not decision.get("allowed", False):
+                reason = decision.get("reason") or "not allowed by server policy"
+                logger.warning("tool broker denied %s: %s", tool_name, reason)
+                return {"error": f"Tool '{tool_name}' denied by server policy: {reason}"}, None
+
+            if decision.get("requires_user_approval") and verdict.action == "allow":
+                # 服务端把"放行"收紧成"要确认"（典型：yolo 下的不可逆操作）
+                logger.info(
+                    "tool broker tightened %s to confirm (mode=%s enforced=%s)",
+                    tool_name,
+                    self._current_mode,
+                    decision.get("enforced"),
+                )
+                verdict = ToolVerdict(
+                    "confirm",
+                    reason=f"server requires approval (level={decision.get('level')})",
+                    risk_level="high",
+                    level=verdict.level,
+                    second_check=True,
+                )
+
         if verdict.action == "block":
             logger.warning("Tool guard blocked %s reason=%s", tool_name, verdict.reason)
             return {
@@ -1556,12 +1612,18 @@ class AgentRuntime:
                     turn_id=str(getattr(task, "id", "") or ""),
                 )
             )
+            # 事前风险提示：**撤不回的操作必须在批准之前说清**（诚实优先，
+            # 见 app/agent/side_effect_ledger.py）。只对"不可撤销"的加提示 ——
+            # 满屏警告等于没有警告。
+            from app.agent.side_effect_ledger import confirmation_warning
+
+            risk = confirmation_warning(verdict.level, tool_name)
             approval_evt = AgentEvent(
                 type="approval",
                 tool_call_id=tc_id,
                 tool_name=tool_name,
                 tool_arguments=json.dumps(targs, ensure_ascii=False),
-                content=f"请求执行 {tool_name}（级别 {verdict.level}）",
+                content=f"请求执行 {tool_name}（级别 {verdict.level}{risk}）",
             )
             logger.info(
                 "Tool %s requires approval (id=%s level=%s second_check=%s), awaiting user decision",
@@ -1630,6 +1692,39 @@ class AgentRuntime:
         return await self._execute_tool(tool_call, task)
 
     # ── 审批票据（二次校验的基础）──────────────────────────────────────────
+
+    # ── 副作用账本（可观察性 + 事前明示）────────────────────────────────
+
+    async def _record_side_effect(self, task: AgentTask, tool_call: dict, result: object) -> None:
+        """把这次工具调用的副作用记进账本（只记 write/delete/external）。
+
+        只读操作**不留痕** —— 账本是"副作用清单"，把 read 也记进去只会让真正要紧的
+        "改了什么、能不能撤"淹没在噪声里。
+        """
+        from app.agent import side_effect_ledger as ledger
+        from app.agent.tool_policy import READ, tool_level
+
+        name = tool_call.get("name", "")
+        raw_args = tool_call.get("arguments")
+        try:
+            args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
+        except Exception:  # noqa: BLE001 - 参数解析失败按空参数（分级会保守处理）
+            args = {}
+        args = args if isinstance(args, dict) else {}
+        level = tool_level(name, args)
+        if level == READ:
+            return
+        await ledger.record(
+            getattr(task, "session_id", ""),
+            ledger.SideEffect(
+                kind=ledger.kind_for(level, name),
+                tool=name,
+                target=ledger.target_of(args, name),
+                rollback=ledger.rollback_capability(level, name),
+                at=time.time(),
+                detail="error" if isinstance(result, dict) and result.get("error") else "ok",
+            ),
+        )
 
     # ── 工具结果压缩（截断 ≠ 摘要；大结果落盘 + 引用）──────────────────────
 

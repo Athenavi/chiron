@@ -8,6 +8,28 @@ from __future__ import annotations
 
 import json
 
+import pytest
+
+
+@pytest.fixture(autouse=True)
+def _stub_tool_broker(monkeypatch):
+    """模块级桩掉 Tool Broker 授权（见 app/tools/broker.py）。
+
+    真实实现会 HTTP 到网关拿授权，而这里测的是栅栏 / 审批路径本身。不桩掉的话，
+    **fail-closed** 语义 —— "拿不到服务端授权就拒绝执行危险工具" —— 会让所有涉及
+    run_code / shell_exec 的用例失败。那是刻意的生产行为，不是缺陷。
+    """
+
+    async def _allow(*_args, **_kwargs):
+        return {
+            "allowed": True,
+            "level": "delete",
+            "requires_user_approval": True,
+            "requires_second_check": True,
+        }
+
+    monkeypatch.setattr("app.tools.broker.authorize", _allow)
+
 from app.agent.runtime import (
     MAX_MESSAGES,
     TOOL_RESULT_MAX_CHARS,

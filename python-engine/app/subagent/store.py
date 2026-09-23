@@ -41,12 +41,38 @@ ON CONFLICT (id) DO NOTHING
 """
 
 #: 僵尸收口：只动超龄的 running 行（进程重启后它们的收尾代码再也不会执行）
+#:
+#: 参数类型必须是 int。此前写成 `($1 || ' hours')::interval`（`||` 是文本拼接，asyncpg
+#: 因此期望 str）却传了 `int(max_age_hours)`，于是每次执行都抛
+#: `invalid input for query argument $1: 2 (expected str, got int)`；
+#: 而 `_reap_once` 会吞掉异常 —— 结果是**这个收口器从未成功执行过一次**，
+#: DB 里 `status='running'` 的行永久残留、前端永远显示"运行中"。
+#: `make_interval` 让参数类型显式且与调用方一致。
+#:
+#: "超龄"判定用**最后活跃时间**而不是 started_at：一个跑了很久但一直在产出步骤的 run
+#: 不该被判为僵尸。`subagent_run_steps` 每步一行且带 created_at，它天然就是心跳 ——
+#: 因此这里无需为心跳新增列（零迁移）。没有任何步骤时才退化为 started_at/created_at。
+#:
+#: 已知局限：子 Agent 若卡在**单个**长工具调用内，步骤时间也会停滞，可能被误判为 lost。
+#: 那个场景由 wall 定时器（app/agent/subagent_runner.py 的 _watch_wall_budget）负责终止，
+#: 不依赖本收口器。
 REAP_STALE_SQL = """
-UPDATE subagent_runs
+WITH last_seen AS (
+    SELECT r.id,
+           COALESCE(
+               (SELECT max(s.created_at) FROM subagent_run_steps s WHERE s.run_id = r.id),
+               r.started_at,
+               r.created_at
+           ) AS seen_at
+      FROM subagent_runs r
+     WHERE r.status = 'running'
+)
+UPDATE subagent_runs r
    SET status = 'lost', finished_at = now(),
        error = 'unreaped: 进程未收尾（重启或超时）'
- WHERE status = 'running'
-   AND COALESCE(started_at, created_at) < now() - ($1 || ' hours')::interval
+  FROM last_seen
+ WHERE r.id = last_seen.id
+   AND last_seen.seen_at < now() - make_interval(hours => $1::int)
 """
 
 RUN_FINISH_SQL = """

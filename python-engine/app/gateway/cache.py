@@ -54,13 +54,20 @@ class SemanticCache:
 
     @staticmethod
     def _exact_key(
+        tenant_id: str,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict] | None,
         temperature: float,
     ) -> str:
-        """精确缓存 key: hash(model + messages + tools + temperature)"""
+        """精确缓存 key: hash(tenant + model + messages + tools + temperature)
+
+        tenant 必须参与哈希。少了它，两个不同租户只要 prompt 相同就会互相命中 ——
+        后提问的那个会拿到对方回复的**完整内容**（含对方上下文里的私有事实），
+        并被写进自己的对话历史。L2/L3 走共享 Redis，多副本下影响等同全站。
+        """
         payload = {
+            "tenant": tenant_id,
             "model": model,
             "messages": [m.to_dict() for m in messages],
             "tools": tools,
@@ -70,9 +77,13 @@ class SemanticCache:
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     async def _semantic_key(
-        self, messages: list[ChatMessage], model: str
+        self, tenant_id: str, messages: list[ChatMessage], model: str
     ) -> str | None:
-        """语义缓存 key: embedding 前 64 维量化 → hash"""
+        """语义缓存 key: embedding 前 64 维量化 → hash（含租户维度）
+
+        语义缓存的跨租户命中概率**远高于**精确缓存 —— 它命中的是"意思相近"
+        而非"完全相同"。所以租户维度必须进哈希，不能只在存储层做过滤。
+        """
         try:
             # 取最后 3 轮对话作为语义摘要
             recent = messages[-6:] if len(messages) > 6 else messages
@@ -87,7 +98,7 @@ class SemanticCache:
             # 取前 N 维，量化为 int8
             prefix = embedding[: self._semantic_prefix_dims]
             quantized = bytes(max(0, min(255, int((v + 1) * 127.5))) for v in prefix)
-            h = hashlib.sha256(quantized + model.encode()).hexdigest()[:16]
+            h = hashlib.sha256(quantized + tenant_id.encode() + model.encode()).hexdigest()[:16]
             return h
         except Exception as e:
             logger.debug("Semantic key computation failed: %s", e)
@@ -97,17 +108,18 @@ class SemanticCache:
 
     async def lookup(
         self,
+        tenant_id: str,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict] | None,
         temperature: float,
     ) -> Optional[ChatResponse]:
-        """按 L1 → L2 → L3 顺序查找缓存"""
+        """按 L1 → L2 → L3 顺序查找缓存（tenant_id 必填，理由见 _exact_key）"""
         # 不缓存带工具调用的请求
         if tools:
             return None
 
-        exact = self._exact_key(model, messages, tools, temperature)
+        exact = self._exact_key(tenant_id, model, messages, tools, temperature)
 
         # L1
         if exact in self._l1:
@@ -125,7 +137,7 @@ class SemanticCache:
             return self._decode(data, model)
 
         # L3
-        sem_key = await self._semantic_key(messages, model)
+        sem_key = await self._semantic_key(tenant_id, messages, model)
         if sem_key:
             bucket_key = rkey(f"llm:semantic:{sem_key[:8]}")
             cached = await self._redis.hget(bucket_key, sem_key)
@@ -142,17 +154,18 @@ class SemanticCache:
 
     async def store(
         self,
+        tenant_id: str,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict] | None,
         temperature: float,
         response: ChatResponse,
     ) -> None:
-        """存储到 L1 + L2 + L3"""
+        """存储到 L1 + L2 + L3（tenant_id 必填，理由见 _exact_key）"""
         if tools:
             return
 
-        exact = self._exact_key(model, messages, tools, temperature)
+        exact = self._exact_key(tenant_id, model, messages, tools, temperature)
         data = self._encode(response)
 
         # L1
@@ -166,7 +179,7 @@ class SemanticCache:
         )
 
         # L3 (语义)
-        sem_key = await self._semantic_key(messages, model)
+        sem_key = await self._semantic_key(tenant_id, messages, model)
         if sem_key:
             bucket_key = rkey(f"llm:semantic:{sem_key[:8]}")
             await self._redis.hset(

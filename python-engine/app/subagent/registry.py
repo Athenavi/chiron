@@ -190,19 +190,58 @@ async def watchdog_tick(*, idle_timeout: int, max_runtime: int, now: float | Non
     return fired
 
 
-async def _reap_once(max_age_hours: int) -> None:
-    """僵尸收口一次：进程内注册表管不到"重启前遗留"的 run，只能靠 DB 判定。"""
+#: reaper 的连续失败状态，用于熔断与降频。
+#:
+#: 为什么需要：REAP_STALE_SQL 曾因参数类型错误（SQL 期望 text、调用方传 int）**每次执行
+#: 都失败**，而这里原本只记一条 warning 且每 60s 重试 —— 于是这个"僵尸收口器"在长期
+#: 不可用时没有任何人察觉，DB 里 status='running' 的行永久残留（实测有一行停了 37 小时）。
+#: 收口器必须"会升级、会退避、会被看见"。
+_reap_failures = 0
+_reap_next_attempt = 0.0
+_REAP_BACKOFF_CAP = 3600.0  # 失败退避上限 1 小时
+
+
+async def _reap_once(max_age_hours: int) -> bool:
+    """僵尸收口一次：进程内注册表管不到"重启前遗留"的 run，只能靠 DB 判定。
+
+    返回是否成功。连续失败会指数退避，并在第 3 次起升级为 error 且写明后果。
+    """
+    global _reap_failures, _reap_next_attempt
+
+    now = time.time()
+    if _reap_failures and now < _reap_next_attempt:
+        return False  # 熔断中：跳过本次，避免刷日志
+
     try:
         from app.tools.subagent import _get_store
 
         store = _get_store()
         if store is None:
-            return
+            return False
         count = await store.reap_stale_runs(max_age_hours=max_age_hours)
+        if _reap_failures:
+            logger.info("subagent reaper recovered after %d failure(s)", _reap_failures)
+        _reap_failures = 0
         if count:
             logger.warning("subagent reaper: marked %d stale run(s) as lost", count)
+        return True
     except Exception as exc:  # noqa: BLE001 - 收口失败不影响引擎
-        logger.warning("subagent reaper failed: %s", str(exc)[:200])
+        _reap_failures += 1
+        backoff = min(2 ** (_reap_failures - 1) * WATCHDOG_INTERVAL, _REAP_BACKOFF_CAP)
+        _reap_next_attempt = now + backoff
+        if _reap_failures >= 3:
+            logger.error(
+                "subagent reaper failing repeatedly (%d in a row, backing off %.0fs): %s"
+                " — 失联的 run 不会被标为 lost，前端会永久显示'运行中'",
+                _reap_failures,
+                backoff,
+                str(exc)[:200],
+            )
+        else:
+            logger.warning(
+                "subagent reaper failed (%d): %s", _reap_failures, str(exc)[:200]
+            )
+        return False
 
 
 async def watchdog_loop() -> None:

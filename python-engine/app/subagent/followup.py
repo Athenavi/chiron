@@ -109,8 +109,17 @@ async def enqueue_followup(
         if count == 1:
             await redis.expire(rate_key, _RATE_WINDOW)
         if count > limit:
+            # 释放幂等位再退出：否则这个 run 的结果**永久**无法投递
+            # （幂等位已占 → 下次进来会直接 return False）。
+            # 队列侧本来就有 idempotency_key=agent_followup:{run_id}，重复投递是安全的，
+            # 所以这里宁可让它以后还能再试，也不要"静默永久丢弃"。
+            try:
+                await redis.delete(rkey(f"agent_followup:run:{run_id}"))
+            except Exception:  # noqa: BLE001 - 释放失败不影响本次返回
+                pass
             logger.warning(
-                "subagent followup 超速率上限（%s/h）: session=%s run=%s",
+                "subagent followup 超速率上限（%s/h）: session=%s run=%s "
+                "— 已保留重试机会（结果仍可通过 read_subagent_result 取回）",
                 limit, session_id, run_id,
             )
             return False
@@ -144,7 +153,23 @@ async def enqueue_followup(
         logger.info("subagent followup 已投递: run=%s task=%s", run_id, task_id)
         return True
     except Exception as exc:  # noqa: BLE001 - 投递失败只记日志（run 本身已经收尾）
-        logger.error("subagent followup 投递失败: run=%s err=%s", run_id, str(exc)[:200])
+        # 同样释放幂等位：投递失败若留下幂等位，这个 run 的结果就再也没机会送达了。
+        # run 本身已收尾并落库，因此这里失败只表现为"父会话少了一轮自动追加"，
+        # 结果仍可通过 read_subagent_result 取回。
+        try:
+            from app.redis_client import get_redis
+            from app.redis_keys import rkey as _rkey
+
+            _r = await get_redis()
+            if _r is not None:
+                await _r.delete(_rkey(f"agent_followup:run:{run_id}"))
+        except Exception:  # noqa: BLE001
+            pass
+        logger.error(
+            "subagent followup 投递失败（已释放幂等位，可重试）: run=%s err=%s",
+            run_id,
+            str(exc)[:200],
+        )
         return False
 
 

@@ -18,6 +18,13 @@ from app.redis_keys import rkey
 TASK_STREAM = rkey("engine:tasks")
 DLQ_STREAM = rkey("engine:tasks:dlq")
 
+# 流的保留上限。**生产者与重投/放回路径必须引用同一个常量。**
+# Redis 的 `XADD ... MAXLEN` 是流级修剪、删掉的是最旧的条目，它不区分
+# "刚写进去的"和"已经积压的"。重投路径若用了更小的值，一旦积压超过那个值，
+# 一次重投就会连带删掉最老的待处理任务 —— 任务静默消失，且没有任何日志。
+TASK_STREAM_MAXLEN = 100000
+DLQ_STREAM_MAXLEN = 10000
+
 # 按任务类型的默认截止时间(秒):既避免"堆积后执行早已无意义的旧任务",
 # 也不能误杀长任务(知识库建索引可能数小时)。
 DEFAULT_DEADLINE_SECONDS = {
@@ -100,7 +107,7 @@ class QueueProducer:
             ),
         }
 
-        stream_id = await self._redis.xadd(TASK_STREAM, message, maxlen=100000)
+        stream_id = await self._redis.xadd(TASK_STREAM, message, maxlen=TASK_STREAM_MAXLEN)
         logger.info(
             "Task enqueued: id=%s type=%s stream_id=%s", task_id, task_type, stream_id
         )

@@ -77,7 +77,59 @@ class TestKnowledgeList:
         query = call_args[0][0]
         assert "user_id = $1" in query
         assert "visibility = 'public'" in query
+        # 租户共享（visibility='tenant'）必须带租户条件：少了它，"租户内共享"
+        # 就退化成"全站共享" —— 任何租户的用户都能列出并读取别人的知识库。
+        assert "tenant_id = $2" in query, "tenant 可见性缺少租户条件"
         assert call_args[0][1] == "user-abc"
+        # 未显式传租户时回落到默认租户（保守），而不是"不过滤"。
+        from app.api.knowledge import DEFAULT_TENANT_ID
+
+        assert call_args[0][2] == DEFAULT_TENANT_ID
+
+
+class TestKnowledgeTenantScope:
+    """SEC-11 回归：租户共享的可见范围必须限定在同租户内。"""
+
+    async def test_list_uses_caller_tenant(self):
+        mock_pool = AsyncMock()
+        mock_pool.fetch = AsyncMock(return_value=[])
+
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            from app.api.knowledge import list_knowledge_bases
+
+            await list_knowledge_bases(user_id="user-abc", tenant_id="tenant-xyz")
+
+        assert mock_pool.fetch.call_args[0][2] == "tenant-xyz"
+
+    async def test_get_requires_tenant_match(self):
+        mock_pool = AsyncMock()
+        mock_pool.fetchrow = AsyncMock(return_value=None)
+
+        from fastapi import HTTPException
+
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            from app.api.knowledge import get_knowledge_base
+
+            with pytest.raises(HTTPException) as exc:
+                await get_knowledge_base("kb-1", "user-abc", tenant_id="tenant-xyz")
+
+        assert exc.value.status_code == 404
+        query = mock_pool.fetchrow.call_args[0][0]
+        assert "tenant_id = $3" in query, "按 id 直读也必须校验租户"
+
+    async def test_create_records_caller_tenant(self):
+        mock_pool = AsyncMock()
+        mock_pool.execute = AsyncMock(return_value=None)
+
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            from app.api.knowledge import create_knowledge_base
+
+            await create_knowledge_base(
+                user_id="user-abc", name="KB", tenant_id="tenant-xyz"
+            )
+
+        # INSERT 的 tenant_id 必须是真实租户，否则查询端永远匹配不上
+        assert "tenant-xyz" in mock_pool.execute.call_args[0]
 
 
 # ═══════════════════════════════════════════════════

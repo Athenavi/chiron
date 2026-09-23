@@ -289,6 +289,21 @@ class MemoryManager:
         if not resp.embedding:
             return []
 
+        # 过滤必须同时含 tenant 与 user：写入侧明明存了 user_id，只按 tenant 过滤
+        # 会让同租户的其他用户检索到本用户的长期记忆原文并注入自己的上下文 ——
+        # 字段有、查询没用，是漏写而不是设计取舍。
+        if not user_id:
+            # 宁可查不到，也不要退化成"整个租户可见"
+            logger.warning(
+                "long-term memory query without user_id — refusing unscoped search (tenant=%s)",
+                tenant_id,
+            )
+            return []
+        # 转义引号，避免 tenant/user 中的引号破坏 Milvus 表达式
+        safe_tenant = str(tenant_id).replace('"', '\\"')
+        safe_user = str(user_id).replace('"', '\\"')
+        scope_expr = f'tenant_id == "{safe_tenant}" and user_id == "{safe_user}"'
+
         if self._vector_store:
             # 使用 VectorStore 接口
             collection = "memory_store"
@@ -297,7 +312,7 @@ class MemoryManager:
                 query_vector=resp.embedding,
                 top_k=top_k,
                 threshold=0.5,
-                filter_expr=f'tenant_id == "{tenant_id}"',
+                filter_expr=scope_expr,
             )
             memories = []
             for r in results:
@@ -321,7 +336,7 @@ class MemoryManager:
                     anns_field="embedding",
                     param={"metric_type": "COSINE", "params": {"nprobe": 10}},
                     limit=top_k,
-                    expr=f'tenant_id == "{tenant_id}"',
+                    expr=scope_expr,
                     output_fields=["content", "created_at", "metadata_json"],
                 )
                 memories = []

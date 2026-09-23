@@ -195,7 +195,11 @@ class ToolGuard:
 
         level = tool_level(tool_name, args)
         if not requires_confirmation(level, mode):
-            return ToolVerdict("allow", risk_level="low", level=level)
+            # second_check 在 allow 路径上**也要带上**：Broker 授权对所有 delete / external
+            # 生效（与模式无关）—— yolo 恰恰是最需要"服务端仍要求确认不可逆操作"的场景。
+            return ToolVerdict(
+                "allow", risk_level="low", level=level, second_check=requires_second_check(level)
+            )
 
         return ToolVerdict(
             "confirm",

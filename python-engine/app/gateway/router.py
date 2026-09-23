@@ -148,7 +148,7 @@ class GatewayRouter:
         messages = normalize_messages(messages)
         # ── 缓存查找（仅无工具时） ──
         if self._cache and not tools:
-            cached = await self._cache.lookup(model, messages, tools, temperature)
+            cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
             if cached:
                 logger.info("Stream cache HIT for model=%s", model)
                 yield cached
@@ -224,7 +224,7 @@ class GatewayRouter:
                     input_tokens=total_input,
                     output_tokens=total_output,
                 )
-                await self._cache.store(model, messages, tools, temperature, resp)
+                await self._cache.store(tenant_id, model, messages, tools, temperature, resp)
 
             # 缓存正常路径仅存结果；预算扣减统一在 finally 处理（见下）
 
@@ -275,7 +275,7 @@ class GatewayRouter:
         messages = normalize_messages(messages)
         # 缓存查找
         if self._cache and not tools:
-            cached = await self._cache.lookup(model, messages, tools, temperature)
+            cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
             if cached:
                 logger.info("Cache hit for model=%s", model)
                 return cached
@@ -316,7 +316,7 @@ class GatewayRouter:
 
             # 存缓存
             if self._cache and not tools and resp.finish_reason != "error":
-                await self._cache.store(model, messages, tools, temperature, resp)
+                await self._cache.store(tenant_id, model, messages, tools, temperature, resp)
 
             # 预算扣减
             if (

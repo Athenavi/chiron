@@ -104,7 +104,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                 logger.info(
                     "Direct JWT auth accepted (bypassing gateway): tenant=%s", tenant_id
                 )
-                return self._set_tenant_and_continue(request, call_next, tenant_id)
+                return await self._set_tenant_and_continue(request, call_next, tenant_id)
             logger.warning(
                 "JWT auth failed: invalid/expired token from %s",
                 request.client.host if request.client else "unknown",
@@ -124,7 +124,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
                     {"error": "Gateway identity requires valid X-Internal-Token"},
                     status_code=401,
                 )
-            return self._set_tenant_and_continue(request, call_next, query_tid)
+            return await self._set_tenant_and_continue(request, call_next, query_tid)
 
         return JSONResponse({"error": "Authentication required"}, status_code=401)
 
@@ -170,7 +170,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return None
 
     async def _set_tenant_and_continue(
-        request: Request, call_next: RequestResponseEndpoint, tenant_id: str
+        self, request: Request, call_next: RequestResponseEndpoint, tenant_id: str
     ) -> Response:
         """设置 tenant_id 并继续"""
         token = tenant_id_var.set(tenant_id)

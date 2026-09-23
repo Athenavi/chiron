@@ -8,6 +8,13 @@
 go.work
 build/
 
+# ── Python ──
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+
 # ── Node / Vue ──
 node_modules/
 .next/
@@ -22,6 +29,11 @@ out/
 
 # ── Environments ──
 .env
+# .env 的备份/变体同样含密钥。APP_SECRET 是唯一根密钥（派生 JWT_SECRET /
+# INTERNAL_TOKEN 与配置加密密钥），一个 `git add -A` 提交进去 = 全盘失守。
+.env.*
+!.env.example
+*.bak
 .envrc
 .venv
 env/
@@ -6661,3 +6673,6 @@ sandbox/
 /third/DeepSeek-Reasonix-main-v2.zip
 /third/DeepSeek-Reasonix-main-v2/desktop/frontend/dist/.gitkeep
 /third/DeepSeek-Reasonix-main-v2/site/src/pages/changelog/[version].astro
+
+# 数据库凭据（本地明文，仅用于交接记录，禁止入库）
+.pg-credentials.txt

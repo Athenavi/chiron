@@ -1,12 +1,20 @@
-"""Unified Redis client compatibility layer.
+"""Redis 连接（进程内单例，线程安全初始化）。
 
-This module provides a drop-in replacement for redis.asyncio that routes
-all operations through the Go gateway's unified Redis manager.
+**只有一条路径**：直接用 ``redis.asyncio`` 从 ``settings.redis_url`` 建连。
+
+历史上这里还有一条 "unified" 分支，把操作转发到经 Go 网关的 ``UnifiedRedisClient``。
+那个适配层（``_UnifiedRedisWrapper``）只实现了 get / set / delete / ping，而
+``xadd`` / ``exists`` / ``expire`` / ``incr`` 要么缺失、要么直接 raise NotImplementedError ——
+于是 ``USE_UNIFIED_REDIS_CLIENT=true`` 时，工作流入队（用 ``xadd``）会**永远失败**；
+而失败又被上层当成"队列暂不可达"，故障因此被伪装成了环境问题。
+
+删掉这条分支的理由很简单：**一个"实现了一半的接口"比没有这个接口更危险** ——
+调用方看到的是 ``redis.asyncio.Redis`` 的类型，实际拿到的是会抛异常的子集，
+而类型注解和代码阅读都不会暴露这件事。统一走 aioredis 后，返回值和它的类型声明一致。
 
 Usage:
     from app.redis_client import get_redis
 
-    # Works like redis.asyncio.Redis
     r = await get_redis()
     await r.set("key", "value")
     val = await r.get("key")
@@ -16,8 +24,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
-from typing import Any, Optional
+from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -25,33 +32,13 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Configuration: use unified client or direct connection
-USE_UNIFIED = os.getenv("USE_UNIFIED_REDIS_CLIENT", "false").lower() == "true"
-
 _redis_instance: Optional[aioredis.Redis] = None
-_unified_client = None
 _redis_lock = asyncio.Lock()  # P0-2: Thread-safe initialization
 
 
-def _get_unified_client():
-    """Lazy load unified Redis client."""
-    global _unified_client
-    if _unified_client is None and USE_UNIFIED:
-        from app.db_client import get_redis_client
-
-        _unified_client = get_redis_client()
-    return _unified_client
-
-
 async def get_redis() -> aioredis.Redis:
-    """Get Redis connection (direct or unified) with thread-safe initialization."""
+    """Get the Redis connection with thread-safe lazy initialization."""
     global _redis_instance
-
-    if USE_UNIFIED:
-        client = _get_unified_client()
-        if client is None:
-            raise RuntimeError("Unified Redis client not initialized")
-        return _UnifiedRedisWrapper(client)
 
     # Double-checked locking pattern for thread safety
     if _redis_instance is None:
@@ -85,63 +72,3 @@ async def get_redis() -> aioredis.Redis:
                 )
 
     return _redis_instance
-
-
-class _UnifiedRedisWrapper:
-    """Wrapper to make UnifiedRedisClient compatible with redis.asyncio.Redis interface."""
-
-    def __init__(self, client):
-        self._client = client
-        self._closed = False
-
-    async def get(self, key: str) -> Optional[str]:
-        """Get value by key."""
-        try:
-            return await self._client.get(key)
-        except Exception:
-            return None
-
-    async def set(self, key: str, value: Any, ex: int | None = None, **kwargs) -> bool:
-        """Set value with optional expiration."""
-        ttl = ex if ex else kwargs.get("ex")
-        return await self._client.set(key, value, ttl=ttl)
-
-    async def delete(self, *keys: str) -> int:
-        """Delete keys."""
-        success = await self._client.delete(*keys)
-        return len(keys) if success else 0
-
-    async def exists(self, *keys: str) -> int:
-        """Check if keys exist."""
-        raise NotImplementedError(
-            "exists() is not available in unified mode. "
-            "Use fallback direct Redis connection or set USE_UNIFIED_REDIS_CLIENT=false"
-        )
-
-    async def expire(self, key: str, seconds: int) -> bool:
-        """Set expiration on key."""
-        raise NotImplementedError(
-            "expire() is not available in unified mode. "
-            "Use fallback direct Redis connection or set USE_UNIFIED_REDIS_CLIENT=false"
-        )
-
-    async def incr(self, key: str) -> int:
-        """Increment key value."""
-        raise NotImplementedError(
-            "incr() is not available in unified mode. "
-            "Use fallback direct Redis connection or set USE_UNIFIED_REDIS_CLIENT=false"
-        )
-
-    async def ping(self) -> bool:
-        """Check connectivity."""
-        return await self._client.ping()
-
-    async def close(self):
-        """Close connection."""
-        self._closed = True
-
-    async def __aenter__(self):
-        return self
-
-    async def __aexit__(self, exc_type, exc_val, exc_tb):
-        await self.close()

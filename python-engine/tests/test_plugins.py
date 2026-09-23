@@ -101,7 +101,14 @@ async def test_pool_shares_connection_by_fingerprint(tmp_path, monkeypatch):
     monkeypatch.setattr("app.plugins.pool.MCPClient", _FakeMCPClient)
 
     store = PluginStore(tmp_path)
-    cfg = [ServerConfig(name="git", command="npx", args=["-y", "git-server"], status="active")]
+    # 声明 read_only：这个用例测的是"连接共享按指纹复用"，属于**引擎直连**路径的逻辑。
+    # 未声明的 server 会改走 MCP broker（凭据不出引擎进程），不建本地连接 —— 见
+    # app/plugins/pool.py 的分支与 app/mcp/client.py 的连接守卫。
+    cfg = [
+        ServerConfig(
+            name="git", command="npx", args=["-y", "git-server"], status="active", read_only=True
+        )
+    ]
     store.save("u1", cfg)
     store.save("u2", cfg)  # 相同配置
 

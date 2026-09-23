@@ -179,7 +179,18 @@ async def job_kill(job_id: str) -> dict[str, Any]:
     except Exception:  # noqa: BLE001
         redis = None
     if redis is not None:
-        from app.tools.job_runner import JOB_KILL_TTL, kill_key
+        from app.tools.job_runner import JOB_KILL_TTL, kill_key, meta_key
+
+        # 先确认这个 job 真的存在。少了这一步，任意 job_id 都会走到下面、写一个 kill 标志
+        # 然后返回 "cancelled" —— 调用方（和模型）会以为取消成功了，实际只是往一个没人读的
+        # key 写了 1。job 是否存在以 job:meta:{id} 为准（worker 起任务时写入，
+        # 见 job_runner._write_meta）。
+        try:
+            if not await redis.exists(meta_key(job_id)):
+                return {"error": f"unknown job: {job_id}"}
+        except Exception as exc:  # noqa: BLE001 - 查不通存在性时不敢假装成功
+            logger.warning("job_kill existence check failed: %s", exc)
+            return {"error": f"kill failed: {exc}"}
 
         try:
             await redis.set(kill_key(job_id), "1", ex=JOB_KILL_TTL)

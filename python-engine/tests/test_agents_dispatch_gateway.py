@@ -40,6 +40,7 @@ async def test_dispatch_passes_real_gateway_not_coroutine():
                 resp = await ac.post(
                     "/v1/agents/dispatch",
                     json={"task": "do something", "system_prompt": "You are a helper."},
+                    params={"user_id": "u-test", "tenant_id": "t-test"},
                 )
 
     assert resp.status_code == 200
@@ -64,6 +65,7 @@ async def test_dispatch_gateway_not_initialized_returns_error():
             resp = await ac.post(
                 "/v1/agents/dispatch",
                 json={"task": "do something", "system_prompt": "You are a helper."},
+                params={"user_id": "u-test", "tenant_id": "t-test"},
             )
     assert resp.status_code == 200
     body = resp.json()

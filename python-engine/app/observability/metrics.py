@@ -73,6 +73,22 @@ MCP_POOL_REJECTED = Counter(
     "MCP users/servers skipped because the instance connection budget was reached",
 )
 
+#: 限流降级计数（X1）：Redis 不可用时租户限流退回**进程内**实现 → 多副本下额度会放大 N 倍。
+#: 这个数必须能被告警 —— 降级悄悄发生，就等于限流悄悄失效（"看起来有、实际没有"）。
+#: 正常部署下它应恒为 0；一旦增长，说明 Redis 通路有问题，限流的全局保护已经名存实亡。
+RATE_LIMIT_DEGRADED = Counter(
+    "rate_limit_degraded_total",
+    "Times tenant rate limiting fell back to the in-process limiter (Redis unavailable)",
+)
+
+#: 工作流入队失败转为"待执行"（X3）：入队失败不再静默本地跑（那种任务会随进程一起消失），
+#: 而是标记 `queued_pending`、等启动时拉起。这个数应恒为 0 —— 一旦增长，说明 Redis/队列
+#: 有过不可达，且有任务的完成时间被推迟到了下一次进程重启。
+WORKFLOW_ENQUEUE_PENDING = Counter(
+    "workflow_enqueue_pending_total",
+    "Workflow instances that could not be enqueued and were marked queued_pending",
+)
+
 QUEUE_DEPTH = Gauge(
     "queue_depth",
     "Task queue depth",

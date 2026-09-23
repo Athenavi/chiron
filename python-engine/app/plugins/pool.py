@@ -284,7 +284,14 @@ class MCPClientPool:
                         uid,
                     )
                     continue
-                client = MCPClient([_server_to_def(server)])
+                server_def = _server_to_def(server)
+                if not server_def.read_only:
+                    # 危险 server：引擎**不连**（assert_server_connectable 会拒）——连接与凭据
+                    # 由独立 MCP broker 持有。这里只注册"经 broker 调用"的工具：功能与
+                    # read_only server 等价，但凭据不落在 agent 能读到的进程里。
+                    await _register_broker_tools(uid, server_def.name, self._user_tools[uid])
+                    continue
+                client = MCPClient([server_def])
                 try:
                     await client.start()
                 except Exception as e:  # 单个服务器失败不阻塞其余
@@ -362,11 +369,73 @@ class MCPClientPool:
         }
 
 
+def _make_broker_handler(uid: str, tool_name: str):
+    """构造"经 MCP broker 调用"的 handler（broker 执行前会向服务端要授权）。"""
+
+    async def handler(**kwargs: Any) -> dict[str, Any]:
+        from app.plugins import broker_proxy
+        from app.tools.context import get_session_id, get_tool_context
+
+        try:
+            return await broker_proxy.call_tool(
+                uid,
+                tool_name,
+                kwargs,
+                tenant_id=str(get_tool_context("tenant_id", "") or ""),
+                session_id=get_session_id() or "",
+                tool_call_id=str(get_tool_context("tool_call_id", "") or ""),
+                tools_mode=str(get_tool_context("tools_mode", "auto") or "auto"),
+            )
+        except Exception as e:  # noqa: BLE001 - broker 不可用要如实回传给模型
+            logger.warning("mcp broker call %s failed: %s", tool_name, e)
+            return {"error": f"mcp broker call failed: {e}"}
+
+    return handler
+
+
+async def _register_broker_tools(uid: str, server_name: str, user_tools: set[str]) -> None:
+    """把危险 server 的工具注册为"经 MCP broker 调用"的 handler。
+
+    broker 不可用时只记日志、**不影响其余 server** —— 这些工具会不可用（fail-closed），
+    但不会把整个用户的 MCP 一起拖垮。
+    """
+    from app.plugins import broker_proxy
+
+    try:
+        tools = await broker_proxy.list_tools(uid, server_name)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("mcp broker discovery failed for %s/%s: %s", uid, server_name, e)
+        return
+    registered = 0
+    for tool in tools:
+        name = str(tool.get("name") or "").strip()
+        if not name:
+            continue
+        registry.register(
+            name=name,
+            description=str(tool.get("description") or ""),
+            parameters=tool.get("input_schema") or {},
+            handler=_make_broker_handler(uid, name),
+            owner=uid,
+            source=SOURCE_MCP,
+        )
+        user_tools.add(name)
+        registered += 1
+    if registered:
+        logger.info("mcp broker proxy tools for %s/%s: %d", uid, server_name, registered)
+
+
 def _server_to_def(server: ServerConfig):
     from app.mcp.client import ServerDef
 
     return ServerDef(
-        name=server.name, command=server.command, args=server.args, env=server.env
+        name=server.name,
+        command=server.command,
+        args=server.args,
+        env=server.env,
+        # 只读声明**必须透传**：漏传会让已声明的 read-only server 也被连接守卫挡住
+        # （表现为"MCP 插件明明标了只读却连不上"）。
+        read_only=getattr(server, "read_only", False),
     )
 
 

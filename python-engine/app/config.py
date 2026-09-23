@@ -87,6 +87,16 @@ class Settings(BaseSettings):
     # 只限制单次尝试；重试次数由 SDK 的 max_retries 决定。
     llm_http_timeout: float = 120.0
 
+    # 独立 MCP broker 的地址：引擎对危险 MCP server **不直连**（连接守卫会拒），改由它持凭据
+    # 执行 —— 凭据只存在于 broker 进程，引擎即使被注入也读不到（见 python-engine/mcp_broker.py）。
+    mcp_broker_url: str = "http://127.0.0.1:8001"
+
+    # 工作流入队失败时是否退回本进程执行（默认**否**）。
+    # 本地执行不持久化：副本重启任务就没了，而接口已经返回 running —— 属于"看起来成功、
+    # 实际丢失"。默认标记 queued_pending 等拉起；只有确实需要这份可用性兜底时才打开，
+    # 且打开时会打点告警（降级必须可见）。
+    workflow_local_fallback: bool = False
+
     # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
     # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
     # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。

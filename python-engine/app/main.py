@@ -552,9 +552,14 @@ async def lifespan(app: FastAPI):
             requests_per_second=settings.rate_limit_rps,
         )
     else:
+        # 降级**必须可见**：多副本下进程内限流的额度会放大 N 倍，即全局限流已失效。
+        # 日志给人看，指标给告警用 —— 两者都要，否则这次降级只会静静躺在某行日志里。
+        from app.observability.metrics import RATE_LIMIT_DEGRADED
+
+        RATE_LIMIT_DEGRADED.inc()
         logger.warning(
             "Redis unavailable: falling back to in-process tenant rate limiter "
-            "(single-instance semantics)"
+            "(single-instance semantics) — global limit is NOT enforced across replicas"
         )
         limiter = LocalTenantRateLimiter(
             requests_per_minute=settings.rate_limit_rpm,
@@ -580,9 +585,36 @@ async def lifespan(app: FastAPI):
         _plugin_pool = None
         logger.info("MCP plugin pool disabled on this instance (mcp_pool_enabled=false)")
 
-    # ── 6. 启动 Queue Worker ──
+    # ── 6. 子 Agent 运行期治理：必须独立于 Redis 可用性启动 ──
+    #
+    # 看门狗（空闲/超时自动中止）治理的是**进程内注册表**，不需要 Redis；
+    # 此前它挂在 _run_queue_worker 里，于是 Redis 不可用时连"本进程的子 Agent 卡住了"
+    # 都没人管 —— 而卡住恰恰是 Redis 抖动时最容易发生的事。
+    # 取消订阅需要 Redis（跨实例广播），单独在可用时启动。
+    from app.subagent import registry as _subagent_registry
+
+    _subagent_registry.start_watchdog()
+    if _redis is not None:
+        _subagent_registry.start_cancel_subscriber()
+    else:
+        logger.warning(
+            "subagent cancel subscriber NOT started (no Redis): 跨实例取消不可用，"
+            "本实例的子 Agent 只能靠看门狗按空闲/超时收口"
+        )
+
+    # ── 7. 启动 Queue Worker ──
     if _redis is not None:
         _queue_worker = asyncio.create_task(_run_queue_worker(_redis, _gateway))
+
+    # 拉起上次入队失败的工作流（X3）：它们在 DB 里是 queued_pending，不拉起就永远不会跑。
+    # 放在队列 worker **之后** —— 先有消费者，再补投递。
+    try:
+        from app.api.workflows import requeue_pending_workflows
+
+        if await requeue_pending_workflows():
+            logger.info("workflow requeue at startup completed")
+    except Exception as exc:  # noqa: BLE001 - 拉起失败不该阻断启动
+        logger.warning("workflow requeue at startup failed: %s", exc)
         logger.info(
             "Queue worker started (concurrency=%d)", settings.queue_worker_concurrency
         )
@@ -1679,15 +1711,13 @@ async def _run_retention_cleaner() -> None:
 
 
 async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
-    """后台队列消费者（顺带托管子 Agent 的看门狗与取消订阅）。"""
+    """后台队列消费者。"""
     global _queue_worker_instance
     from app.queue.worker import QueueWorker
-    from app.subagent import registry as subagent_registry
 
-    # 子 Agent 的运行时治理：看门狗（空闲/超时自动中止）+ 跨实例取消订阅。
-    # 放在这里是因为它需要 Redis 与事件循环就绪，且生命周期与引擎一致。
-    subagent_registry.start_watchdog()
-    subagent_registry.start_cancel_subscriber()
+    # 注意：子 Agent 的看门狗与取消订阅**不在这里**启动。它们由 lifespan 直接启动，
+    # 否则"Redis 不可用"会连带导致子 Agent 完全无治理（看门狗本不需要 Redis）。
+    # 见 app/main.py 启动序列第 6 步。
 
     worker = QueueWorker(
         redis=redis,
@@ -1767,9 +1797,26 @@ def _setup_middleware_early(app: FastAPI) -> None:
         finally:
             span.end()
 
-    # 执行顺序: PrivacyMode → RequestContext → Auth → RateLimit → Metrics → ErrorHandler → handler
+    # 执行顺序(FastAPI 后注册先执行): PrivacyMode → RequestContext → Auth → Metrics → ErrorHandler → handler
     app.add_middleware(ErrorHandlerMiddleware)
     app.add_middleware(MetricsMiddleware)
+
+    # ⚠️ 认证中间件必须挂上。此前它只存在于 _setup_middleware()——那是一条**从未被调用**
+    # 的旧路径，create_app() 走的是本函数。后果是引擎 HTTP 面**完全没有认证**：
+    # 任何能访问 8000 端口的人都能自报 ?user_id=&tenant_id= 冒充任意用户/租户，
+    # 而 config.allow_direct_jwt 那层"唯一防线"也因此从未生效。
+    #
+    # 挂上不会中断正常链路：Go 网关对所有出站请求注入 X-Internal-Token
+    # (internal/engine/python_client.go:289)，并剥离客户端伪造的同名头(:786)；
+    # 容器探针走 /healthz、/readyz，均在 PUBLIC_PATHS 内。
+    from app.config import settings as _settings
+    from app.middleware.auth import AuthMiddleware
+
+    app.add_middleware(
+        AuthMiddleware,
+        internal_token=_settings.internal_token,
+        jwt_secret=_settings.jwt_secret,
+    )
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(PrivacyModeMiddleware)
 

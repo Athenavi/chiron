@@ -12,6 +12,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 
+from app.config import settings
 from app.db import get_pool
 from app.main import get_gateway
 from app.redis_keys import rkey
@@ -38,6 +39,92 @@ class GraphExecuteRequest(BaseModel):
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     initial_state: dict[str, Any] = {}
+
+
+async def _enqueue_with_retry(
+    instance_id: str, user_id: str, graph_json: dict, initial_state: dict, *, attempts: int = 3
+) -> bool:
+    """投递到 engine:tasks，失败重试（指数退避，总等待 <3s）。
+
+    重试值得做：入队失败的主因是 Redis/队列**瞬时**不可达，一次失败不代表这个任务注定跑不了。
+    """
+    for attempt in range(1, attempts + 1):
+        if await _enqueue_workflow_run(instance_id, user_id, graph_json, initial_state):
+            if attempt > 1:
+                logger.info("workflow enqueue succeeded on attempt %d: %s", attempt, instance_id)
+            return True
+        if attempt < attempts:
+            await asyncio.sleep(min(0.2 * (2 ** (attempt - 1)), 1.0))
+    return False
+
+
+async def _mark_enqueue_pending(instance_id: str, graph_json: dict) -> None:
+    """标记为待执行，并把重建入队所需的 graph 一并落库。
+
+    **存 graph 不是可选项**：``graph_json`` 只存在于这次请求里；不存的话 requeue 时无法重建
+    入队参数，那"标记待执行"就只是把"任务丢了"从不可见变成可见而已。
+    """
+    try:
+        pool = get_pool()
+        await pool.execute(
+            """UPDATE workflow_instances
+                  SET status = 'queued_pending', results = $2::json, error = $3, updated_at = NOW()
+                WHERE id = $1""",
+            instance_id,
+            json.dumps({"_pending_graph": graph_json}),
+            "enqueue failed after retries (Redis/queue unavailable); awaiting requeue",
+        )
+    except Exception as e:  # noqa: BLE001 - 标记失败只记日志；实例仍是 running，可人工介入
+        logger.error("mark workflow queued_pending failed (%s): %s", instance_id, e)
+
+
+async def requeue_pending_workflows(limit: int = 20) -> int:
+    """把 ``queued_pending`` 的实例重新入队；返回成功条数。
+
+    调用时机：**服务启动时一次**。入队失败的主因是 Redis/队列暂不可达，进程重启是最自然的
+    重试点。真正的周期 reconciler 属队列管理面（文档 X6）；这里先补最小闭环 —— 否则
+    "标记待执行"等于这个任务永远不跑。
+    """
+    try:
+        pool = get_pool()
+        rows = await pool.fetch(
+            """SELECT id, COALESCE(user_id, '') AS user_id, results
+                 FROM workflow_instances
+                WHERE status = 'queued_pending'
+                ORDER BY created_at
+                LIMIT $1""",
+            limit,
+        )
+    except Exception as e:  # noqa: BLE001 - 扫描失败不影响启动
+        logger.warning("workflow requeue scan failed: %s", e)
+        return 0
+
+    requeued = 0
+    for row in rows:
+        raw = row["results"]
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except Exception:  # noqa: BLE001
+                raw = {}
+        graph = raw.get("_pending_graph") if isinstance(raw, dict) else None
+        if not isinstance(graph, dict) or not graph:
+            continue  # 无法重建入队（老数据）：保持 pending，继续可见
+        if not await _enqueue_with_retry(row["id"], row["user_id"] or "", graph, {}):
+            continue
+        try:
+            await pool.execute(
+                """UPDATE workflow_instances
+                      SET status = 'running', error = NULL, updated_at = NOW()
+                    WHERE id = $1 AND status = 'queued_pending'""",
+                row["id"],
+            )
+            requeued += 1
+        except Exception as e:  # noqa: BLE001
+            logger.warning("workflow requeue status update failed (%s): %s", row["id"], e)
+    if requeued:
+        logger.info("requeued %d pending workflow instance(s)", requeued)
+    return requeued
 
 
 async def _enqueue_workflow_run(
@@ -266,17 +353,36 @@ async def execute_graph(
     except Exception as e:
         logger.warning("workflow instance insert failed: %s", e)
 
-    # 断点续跑：投递 engine:tasks 由队列 worker 消费执行（executor 幂等 + checkpoint 续跑）；
-    # Redis/队列不可达回退本进程执行，保证可用性。
-    if not await _enqueue_workflow_run(instance_id, user_id, graph_json, body.initial_state):
-        logger.warning("workflow enqueue failed, running in-process: %s", instance_id)
-        task = asyncio.create_task(
-            execute_with_checkpoint(
-                instance_id, graph_json, body.initial_state, user_id, gateway
-            )
+    # 断点续跑：投递 engine:tasks 由队列 worker 消费执行（executor 幂等 + checkpoint 续跑）。
+    #
+    # 入队失败**不能静默降级为本地执行**：本地跑不持久化，副本重启即丢，而接口已经返回
+    # "running" —— 用户以为任务在跑，其实它随进程一起消失了（"看起来成功、实际丢失"）。
+    # 改为：重试入队；仍失败则把实例标记为**待执行**（连同重建入队所需的 graph 一起落库），
+    # 由 requeue 机制拉起，并打点告警 —— 降级必须可见。
+    if not await _enqueue_with_retry(instance_id, user_id, graph_json, body.initial_state):
+        await _mark_enqueue_pending(instance_id, graph_json)
+        try:
+            from app.observability.metrics import WORKFLOW_ENQUEUE_PENDING
+
+            WORKFLOW_ENQUEUE_PENDING.inc()
+        except Exception:  # noqa: BLE001 - 指标不可用不该影响主流程
+            pass
+        logger.error(
+            "workflow enqueue failed after retries; marked queued_pending: %s", instance_id
         )
-        _background_tasks.add(task)
-        task.add_done_callback(_background_tasks.discard)
+        # 兜底开关（默认关）：确实需要时退回本进程执行，但**明确告警它不是持久化的**。
+        if settings.workflow_local_fallback:
+            logger.warning(
+                "workflow_local_fallback enabled — running in-process (NOT persisted): %s",
+                instance_id,
+            )
+            task = asyncio.create_task(
+                execute_with_checkpoint(
+                    instance_id, graph_json, body.initial_state, user_id, gateway
+                )
+            )
+            _background_tasks.add(task)
+            task.add_done_callback(_background_tasks.discard)
 
     return {"instance_id": instance_id, "status": "running", "workflow": graph_name}
 

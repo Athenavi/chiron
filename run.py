@@ -53,6 +53,19 @@ SERVICES = {
             "HTTP_PORT": "8000",
         },
     },
+    "mcp-broker": {
+        # 独立进程：**唯一**持有危险 MCP server 连接与凭据的地方。
+        # 引擎对未声明 read_only 的 server 不直连（app/mcp/client.py 的连接守卫），
+        # 改由它执行 —— 凭据不出这个进程，引擎即使被注入也读不到。
+        # 它执行前仍会向 Go 的 Tool Broker 要授权（判定权威在服务端）。
+        "name": "MCP Broker",
+        "port": 8001,
+        "cmd": [sys.executable, "mcp_broker.py"],
+        "cwd": str(BASE_DIR / "python-engine"),
+        "env": {
+            "MCP_BROKER_PORT": "8001",
+        },
+    },
 }
 
 DEFAULT_ENV = {}

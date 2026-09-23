@@ -288,56 +288,6 @@ async function runQuickCommand() {
           </span>
         </button>
       </div>
-
-      <div class="dock-command">
-        <button
-          ref="quickBtnEl"
-          :aria-expanded="quickOpen"
-          :aria-label="quickOpen ? '关闭快速命令' : '打开快速命令'"
-          :class="{ open: quickOpen }"
-          class="dock-command-btn"
-          type="button"
-          @click="toggleQuickCommand"
-        >
-          <ConsoleSqlOutlined />
-        </button>
-        <Transition name="dock-pop">
-          <div
-            v-if="quickOpen"
-            ref="quickPanelEl"
-            aria-label="快速命令"
-            class="dock-popover"
-            role="dialog"
-          >
-            <div class="dock-popover-head">
-              <span class="dock-popover-title">{{ $t('快速命令') }}</span>
-              <span class="dock-popover-hint">{{ $t('自然语言任务 · 自动编排六大工作台，结果进入统一会话') }}</span>
-            </div>
-            <div class="dock-command-row">
-              <input
-                v-model="quickInput"
-                class="dock-command-input"
-                :placeholder="$t('例如：帮我分析 sales.csv 并生成报告')"
-                type="text"
-                @keydown.enter="runQuickCommand"
-                @keydown.esc="closeQuickCommand"
-              >
-              <button
-                :disabled="quickLoading"
-                class="dock-command-go"
-                type="button"
-                @click="runQuickCommand"
-              >
-                <span
-                  v-if="quickLoading"
-                  class="dock-spinner"
-                />
-                <span v-else>{{ $t('执行') }}</span>
-              </button>
-            </div>
-          </div>
-        </Transition>
-      </div>
     </nav>
 
     <!-- 右上角用户胶囊（聊天页隐藏，理由见 isChatPage 的注释） -->

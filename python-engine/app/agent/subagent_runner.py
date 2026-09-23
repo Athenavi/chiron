@@ -30,6 +30,29 @@ from app.agent.event_sink import (EV_DONE, EV_NOTICE, EV_REASONING, EV_STATUS,
 from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec
 from app.subagent.budget import BudgetExceeded, TaskBudget
 
+
+async def _watch_wall_budget(run_id: str, seconds: int) -> None:
+    """到点即把该 run 交给统一取消路径中止（``reason="wall_timeout"``）。
+
+    独立成模块级函数是为了**能被直接单测** —— 这个定时器是"卡住的子 Agent 也必须
+    有结果"的最后保障，不能只靠端到端测试间接覆盖（它失效过一次，而且没被发现）。
+
+    为什么走 ``registry.cancel`` 而不是直接 ``task.cancel()``：这样终态写库、L1 摘要、
+    前端通知与"用户点停止"走完全相同的路径，不会出现"超时中止的 run 状态写不全"。
+    """
+    try:
+        await asyncio.sleep(seconds)
+    except asyncio.CancelledError:
+        return  # 正常结束时 runner 会取消它
+    from app.subagent import registry as _reg
+
+    if _reg.cancel(run_id, "wall_timeout"):
+        logger.warning(
+            "subagent %s exceeded wall budget (%ss) — aborted",
+            run_id,
+            seconds,
+        )
+
 logger = logging.getLogger(__name__)
 
 RUN_ID_PREFIX = "rs_"
@@ -270,6 +293,21 @@ class SubAgentRunner:
         status = "completed"
         budget = self._budget
         ctx_snapshot = _snapshot_context()
+        # ── 独立 wall 定时器：与"是否产出事件"无关 ──
+        #
+        # 原先把 wall 预算检查写在下面的事件循环体内，子 Agent 一旦卡在某个 await 上
+        # （上游 LLM 挂起 / 工具阻塞 / 审批等待），事件流就不再前进，检查永远不执行 ——
+        # 于是 wall<=300s 形同不存在，父 turn 跟着一起无限等。
+        # **这就是 DEFAULT_SYNC_MAX_SECONDS 失效的机械原因。**
+        #
+        # 这里用独立任务计时，到点走**统一的取消路径**（registry.cancel），
+        # 因此终态写库、L1 摘要、前端通知与"用户点停止"完全一致 ——
+        # 不额外造一条只属于超时的收尾分支。
+        _wall = budget.wall if (budget is not None and budget.enabled and budget.wall) else 0
+        _wall_task: asyncio.Task | None = None
+        if _wall:
+            _wall_task = asyncio.create_task(_watch_wall_budget(run_id, _wall))
+
         try:
             if ctx_snapshot is not None:
                 # 让孙 Agent 能报告 parent_run_id（runtime 内部的 set_tool_context 是合并语义）
@@ -326,6 +364,29 @@ class SubAgentRunner:
                     sink.emit_progress(run_id=run_id, channel=EV_STATUS, status=ST_TOOL,
                                        parent_run_id=parent_run_id, depth=child_depth,
                                        profile=profile_name)
+                elif evt.type in ("approval", "ask") and sink is not None:
+                    # 子 Agent 的**交互式**事件必须转发出去。
+                    #
+                    # 此前这里只转发 text / error / tool_call，approval / ask 仅被记成 step ——
+                    # 后果是子 Agent 请求审批时前端**完全看不到**，它自己则空转到 runtime 的
+                    # approval 超时（默认 300s）才以 "approval timed out" 被拒。
+                    # 即：一次**必然发生**的 300s 空转，且用户不知道为什么在等。
+                    # （子 Agent 默认 tools_mode=auto，而 shell_exec 在 auto 下就需要确认，
+                    #  所以这条路径几乎每次调用命令类工具都会走到。）
+                    #
+                    # 这里用 EV_NOTICE 是为了兼容现有前端（它已渲染 notice 通道）。
+                    # 要做到"用户能直接批准/拒绝"，还需前端渲染交互控件并把决定回传 ——
+                    # 属于 P3 的后续工作（见 docs/subagent-interaction-redesign.md）。
+                    _what = "需要确认" if evt.type == "approval" else "需要补充信息"
+                    _detail = (evt.content or evt.tool_name or "")[:500]
+                    sink.emit_progress(
+                        run_id=run_id,
+                        channel=EV_NOTICE,
+                        content=f"[子 Agent {_what}] {_detail}",
+                        parent_run_id=parent_run_id,
+                        depth=child_depth,
+                        profile=profile_name,
+                    )
                 if self._store is not None:
                     await self._store.add_step(
                         run_id,
@@ -393,7 +454,12 @@ class SubAgentRunner:
                     logger.warning("subagent %s cancel-finalize failed: %s", run_id, exc)
 
             try:
-                asyncio.get_running_loop().create_task(_write_terminal_state())
+                # 纳入全局后台任务追踪：关机时会 await 它们（context.manager.wait_background_tasks）。
+                # 否则重启瞬间的取消会丢掉终态写入，DB 里留下 status='running' 的行 ——
+                # 那正是"前端永久显示运行中"的成因之一。
+                from app.context.manager import _track_bg_task
+
+                _track_bg_task(asyncio.get_running_loop().create_task(_write_terminal_state()))
             except RuntimeError:  # 无运行中的 loop（理论不可达）：至少留下证据
                 logger.warning(
                     "subagent %s: no running loop; terminal state not persisted", run_id
@@ -404,6 +470,10 @@ class SubAgentRunner:
             errors.append(f"{type(exc).__name__}: {exc}")
             logger.warning("subagent run %s failed: %s", run_id, exc)
         finally:
+            # 停止 wall 监控：正常情况下它还在 sleep。必须取消，否则每个已完成的 run 都会
+            # 残留一个定时器，到点后对已结束的 run 调 cancel（幂等但会刷无意义的告警日志）。
+            if _wall_task is not None:
+                _wall_task.cancel()
             if ctx_snapshot is not None:
                 from app.tools.context import restore_context
 

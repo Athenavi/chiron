@@ -483,17 +483,28 @@ func registerPublicEndpoints(
 	// 避免审计 XAdd 双写、请求 ID 被内层重新生成。
 	mux.Handle("GET /v1/share/{id}", rlMW(http.HandlerFunc(shareHandler.PublicGet)))
 
-	mux.Handle("GET /health", rlMW(http.HandlerFunc(handleHealth)))
+	// 存活探针刻意不挂限流中间件：限流在 Redis 不可用时是 fail-close 的，
+	// 挂在 /health 上会让 kubelet 的 liveness 判定跟着 Redis 一起失败 →
+	// 触发全副本重启风暴。重启救不了 Redis，却会丢掉全部会话热缓存、
+	// 把一次依赖抖动放大成一次全站抖动。
+	mux.Handle("GET /health", http.HandlerFunc(handleHealth))
 	// Prometheus 指标端点：生产收敛为需要 PermAdminRead 权限，避免泄漏业务指标
 	mux.Handle("GET /metrics", rlMW(metricsAuthMW(cfg, authMW, systemHandler.PrometheusMetrics)))
 	// API 文档（OpenAPI spec，公开，供 Swagger/Redoc 展示）
 	mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("docs"))))
-	mux.Handle("GET /ready", rlMW(http.HandlerFunc(handleReadiness)))
+	// 就绪探针同样不挂限流：它自己会检查 Redis/PG 并如实返回 503，
+	// 而"限流组件不可用"并不等于"本实例未就绪"，不该借限流中间件的 503 表达。
+	mux.Handle("GET /ready", http.HandlerFunc(handleReadiness))
 	// 引擎配置下发（X-Internal-Token 保护，Python 引擎启动拉取）
 	mux.Handle("GET /v1/internal/engine-config", rlMW(internalTokenMW(cfg, EngineConfig(cfg))))
 
 	// 模型路由配置同步（X-Internal-Token 保护，Python 引擎启动时拉取）
 	mux.Handle("GET /v1/internal/model-routes", rlMW(internalTokenMW(cfg, http.HandlerFunc(NewEntModelRouterHandler().SyncRoutes))))
+
+	// Tool Broker：危险工具（delete / external）的服务端授权判定与审计。
+	// 引擎在执行这类工具前必须来这里拿"允不允许 + 该走哪些关"，服务端判定是权威的
+	// （见 internal/api/tool_broker.go 与 tool_policy.go）。
+	mux.Handle("POST /v1/internal/tool-authorize", rlMW(internalTokenMW(cfg, http.HandlerFunc(ToolAuthorizeHandler))))
 
 	// Python 引擎数据库/Redis 统一访问端点（X-Internal-Token 保护）
 	mux.Handle("POST /v1/internal/db/query", rlMW(internalTokenMW(cfg, http.HandlerFunc(systemHandler.DBQuery))))
@@ -533,6 +544,8 @@ func registerAgentRoutes(
 	submitTimeout time.Duration,
 ) {
 	mux.Handle("POST /v1/agent/approval", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitApproval))))
+	// 结构化提问的回答：与审批同源（引擎 ask_user 阻塞等待用户输入），此前漏注册导致 404
+	mux.Handle("POST /v1/agent/answer", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitAnswer))))
 
 	// submitHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册
 	submitHandlerFunc := func(w http.ResponseWriter, r *http.Request) {
@@ -768,7 +781,11 @@ func registerAuthRoutes(mux *http.ServeMux, authHandler *AuthHandler, authMW, rl
 	mux.Handle("POST /v1/auth/login", rlMW(http.HandlerFunc(authHandler.Login)))
 	mux.Handle("POST /v1/auth/register", rlMW(http.HandlerFunc(authHandler.Register)))
 	mux.Handle("POST /v1/auth/refresh", rlMW(http.HandlerFunc(authHandler.Refresh)))
-	mux.Handle("POST /v1/auth/logout", rlMW(http.HandlerFunc(authHandler.Logout)))
+	// 登出必须经过 authMW：Logout 要用 claims 里的 jti 写吊销黑名单，
+	// 而 claims 只有 authMW 会注入。此前漏挂导致 GetClaims 恒为 nil，
+	// Logout 的函数体从不执行 —— "退出登录"实际是空操作，
+	// token 一路有效到自然过期（默认 24h），被盗凭证无法止损。
+	mux.Handle("POST /v1/auth/logout", authMW(rlMW(http.HandlerFunc(authHandler.Logout))))
 	// SSO cookie → Bearer token 会话引导（公开：httpOnly cookie 自带凭据）
 	mux.Handle("GET /v1/auth/session", rlMW(http.HandlerFunc(authHandler.Session)))
 	mux.Handle("GET /v1/auth/profile", authMW(rlMW(http.HandlerFunc(authHandler.Profile))))
@@ -793,11 +810,14 @@ func registerSystemRoutes(
 	mux.Handle("POST /api/editor/write", authMW(rlMW(RequirePermission(auth.PermAdminWrite)(http.HandlerFunc(editorHandler.WriteFile)))))
 
 	// Tools (rate limited, proxies to Python)
-	mux.Handle("GET /v1/tools", rlMW(http.HandlerFunc(toolHandler.ListTools)))
+	// 工具面属于内部信息（含 MCP 注入工具名/描述/完整入参 schema），
+	// 未认证即可枚举等于免费交付攻击面清单。同组 /v1/tools/execute 早有 authMW。
+	mux.Handle("GET /v1/tools", authMW(rlMW(http.HandlerFunc(toolHandler.ListTools))))
 	mux.Handle("POST /v1/tools/execute", authMW(rlMW(sanitizeMW(http.HandlerFunc(toolHandler.ExecuteTool)))))
 
 	// System (rate limited; spans/traces 仅管理员可见，S 安全修复：原为公开信息泄露)
-	mux.Handle("GET /v1/system/health", rlMW(http.HandlerFunc(systemHandler.HealthScores)))
+	// 健康评分属内部运行信息；同组的 spans/traces 都要求 PermAdminRead，此处漏了鉴权。
+	mux.Handle("GET /v1/system/health", authMW(rlMW(http.HandlerFunc(systemHandler.HealthScores))))
 	mux.Handle("GET /v1/system/spans", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.Spans)))))
 	mux.Handle("GET /v1/system/traces", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.Traces)))))
 	mux.Handle("GET /v1/metrics", authMW(rlMW(http.HandlerFunc(systemHandler.Metrics))))

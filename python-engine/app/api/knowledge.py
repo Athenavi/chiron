@@ -116,8 +116,17 @@ def _serialize_doc(row: dict) -> dict:
 # ── Core Functions (testable without FastAPI) ──
 
 
-async def list_knowledge_bases(user_id: str) -> dict:
-    """List knowledge bases for a user (private + public)."""
+async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict:
+    """List knowledge bases visible to this user.
+
+    可见范围：
+      - 自己的（user_id 匹配）
+      - 公开的（visibility='public'，有意跨租户）
+      - **同租户共享的**（visibility='tenant'）← 必须同时匹配 tenant_id
+
+    最后一条原先只写了 `visibility = 'tenant'`、没有租户条件 —— 这等于把
+    "租户内共享"实现成了"全站共享"：任何租户的用户都能列出并读取别人的知识库。
+    """
     try:
         pool = get_pool()
     except RuntimeError:
@@ -127,9 +136,12 @@ async def list_knowledge_bases(user_id: str) -> dict:
         """SELECT id, name, COALESCE(description, '') as description, type, visibility, status,
                   document_count, total_size_bytes, credits_consumed, config, created_at, updated_at
            FROM knowledge_bases
-           WHERE user_id = $1 OR visibility = 'tenant'
+           WHERE user_id = $1
+              OR visibility = 'public'
+              OR (visibility = 'tenant' AND tenant_id = $2)
            ORDER BY created_at DESC""",
         user_id,
+        tenant_id or DEFAULT_TENANT_ID,
     )
     kbs = [_serialize_kb(dict(row)) for row in rows]
     return {"knowledge_bases": kbs, "count": len(kbs)}
@@ -141,8 +153,14 @@ async def create_knowledge_base(
     description: str = "",
     kb_type: str = "wiki",
     visibility: str = "private",
+    tenant_id: str = "",
 ) -> dict:
-    """Create a new knowledge base."""
+    """Create a new knowledge base.
+
+    tenant_id 必须由调用方（网关注入的租户）提供。原先恒写 DEFAULT_TENANT_ID 常量，
+    导致所有租户的知识库都落在同一个"默认租户"上 —— 既然 visibility='tenant'
+    是按 tenant_id 判断可见性的，写入端的租户就必须是真实的，否则两边永远对不上。
+    """
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="name must not be empty")
     if kb_type not in ("wiki", "rag"):
@@ -160,7 +178,7 @@ async def create_knowledge_base(
         """INSERT INTO knowledge_bases (id, tenant_id, user_id, name, description, type, visibility, status, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)""",
         kb_id,
-        DEFAULT_TENANT_ID,
+        tenant_id or DEFAULT_TENANT_ID,
         user_id,
         name.strip(),
         description,
@@ -176,16 +194,24 @@ async def create_knowledge_base(
     }
 
 
-async def get_knowledge_base(kb_id: str, user_id: str) -> dict:
-    """Get a single knowledge base by id (own or public)."""
+async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict:
+    """Get a single knowledge base by id（自己的 / 公开的 / 同租户共享的）。
+
+    与 ``list_knowledge_bases`` 用**同一套**可见性规则。两处一旦不一致，
+    就会出现"列表里看不到、但猜到 id 就能直接读"的绕过。
+    """
     pool = get_pool()
     row = await pool.fetchrow(
         """SELECT id, name, COALESCE(description, '') as description, type, visibility, status,
                   document_count, total_size_bytes, credits_consumed, config, created_at, updated_at
            FROM knowledge_bases
-           WHERE id = $1 AND (user_id = $2 OR visibility = 'tenant')""",
+           WHERE id = $1
+             AND (user_id = $2
+                  OR visibility = 'public'
+                  OR (visibility = 'tenant' AND tenant_id = $3))""",
         kb_id,
         user_id,
+        tenant_id or DEFAULT_TENANT_ID,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
@@ -440,7 +466,9 @@ async def delete_doc(
 # ── Core Functions — Build & Query ──
 
 
-async def _enqueue_rag_build(kb_id: str, user_id: str, estimated_cost: float) -> str:
+async def _enqueue_rag_build(
+    kb_id: str, user_id: str, estimated_cost: float, tenant_id: str = ""
+) -> str:
     """投递 rag_index 异步任务（RAG 知识库构建）"""
 
     from app.queue.producer import QueueProducer
@@ -456,7 +484,10 @@ async def _enqueue_rag_build(kb_id: str, user_id: str, estimated_cost: float) ->
         producer = QueueProducer(redis)
         task_id = await producer.enqueue(
             "rag_index",
-            tenant_id=user_id,
+            # 这里曾经写成 tenant_id=user_id —— 把用户 ID 当租户用。后果是同一租户的
+            # 多个用户各自形成一个"伪租户"，与 knowledge_bases 里的真实 tenant_id 对不上：
+            # 要么检索不到（功能故障），要么形成按用户切分的假隔离。
+            tenant_id=tenant_id or DEFAULT_TENANT_ID,
             payload={
                 "kb_id": kb_id,
                 "user_id": user_id,
@@ -476,7 +507,7 @@ async def _enqueue_rag_build(kb_id: str, user_id: str, estimated_cost: float) ->
         await redis.aclose()
 
 
-async def build_knowledge_base(kb_id: str, user_id: str) -> dict:
+async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict:
     """Build a knowledge base — mark documents as completed and deduct credits."""
     pool = get_pool()
 
@@ -534,7 +565,7 @@ async def build_knowledge_base(kb_id: str, user_id: str) -> dict:
         # 异步 RAG 构建：投递 rag_index 任务，由 queue worker 执行向量构建，
         # 完成后由 worker 更新文档状态、激活知识库并扣费
         try:
-            task_id = await _enqueue_rag_build(kb_id, user_id, estimated_cost)
+            task_id = await _enqueue_rag_build(kb_id, user_id, estimated_cost, tenant_id=tenant_id)
         except Exception:
             # 回滚 building 状态，避免 Redis 不可用时 KB 永久卡死（上传被 409 拒绝）
             await pool.execute(
@@ -698,11 +729,12 @@ async def admin_list_knowledge_bases() -> dict:
 async def list_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ):
     """List knowledge bases."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await list_knowledge_bases(user_id)
+    return await list_knowledge_bases(user_id, tenant_id=tenant_id)
 
 
 @router.post("")
@@ -710,6 +742,7 @@ async def create_kb(
     request: Request,
     body: KnowledgeBaseCreate,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ):
     """Create a knowledge base."""
     if not user_id:
@@ -720,6 +753,7 @@ async def create_kb(
         description=body.description,
         kb_type=body.type,
         visibility=body.visibility,
+        tenant_id=tenant_id,
     )
 
 
@@ -737,11 +771,12 @@ async def get_kb(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ):
     """Get a knowledge base by id."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await get_knowledge_base(kb_id=kb_id, user_id=user_id)
+    return await get_knowledge_base(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
 
 
 @router.put("/{kb_id}")
@@ -769,12 +804,19 @@ async def delete_kb(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-    is_admin: bool = Query(False, alias="is_admin"),
 ):
-    """Delete a knowledge base."""
+    """Delete a knowledge base（仅限拥有者）。
+
+    这里曾经接受 `?is_admin=true` 作为"管理员可删任意知识库"的判据 ——
+    但那是**调用方自报**的查询参数，等于把授权决定权交给了请求者。
+    网关虽然会重写查询串、使它在网关路径下暂不可利用，但那是"靠上游兜住"，
+    不是这里的正确性：任何直连路径（引擎端口可达 / 内部 token 泄露）都能立刻利用。
+
+    真正的管理员删除应当走独立的 admin 端点，并基于服务端可信身份判断。
+    """
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await delete_knowledge_base(kb_id=kb_id, user_id=user_id, is_admin=is_admin)
+    return await delete_knowledge_base(kb_id=kb_id, user_id=user_id)
 
 
 @router.post("/{kb_id}/documents")
@@ -824,11 +866,12 @@ async def build_kb(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ):
     """Build a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await build_knowledge_base(kb_id=kb_id, user_id=user_id)
+    return await build_knowledge_base(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
 
 
 @router.post("/{kb_id}/query")

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -81,6 +82,57 @@ func (h *SubmitHandler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
 
+// SubmitAnswer proxies the user's structured answer to a pending `ask_user` call.
+//
+// 为什么需要它：引擎侧 ask_user 会阻塞在 runtime.submit_answer 上等待用户输入，
+// 前端也早已调用 POST /v1/agent/answer —— 但网关一直没注册这条路由，于是请求 404、
+// 引擎只能等到超时（表现是"Agent 问了问题，用户答了却没反应"）。
+//
+// 校验与转发必须与 SubmitApproval **完全一致**（引擎的注释也这么要求）：二者都是
+// "把外部输入注入正在运行的 agent 循环"的通道，会话归属、调用者身份、run token
+// 缺一不可，否则就成了绕过审批栅栏的后门。
+func (h *SubmitHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID  string `json:"session_id"`
+		ToolCallID string `json:"tool_call_id"`
+		Answer     string `json:"answer"`
+		UserID     string `json:"user_id,omitempty"`
+		// RunToken 同审批端点：由网关从 Redis 归属映射读出后注入，供引擎拒绝陈旧 run。
+		RunToken string `json:"run_token,omitempty"`
+	}
+	if err := DecodeJSON(w, r, &req); err != nil {
+		BadRequest(w, "invalid request")
+		return
+	}
+	if req.SessionID == "" {
+		BadRequest(w, "session_id is required")
+		return
+	}
+	if req.ToolCallID == "" {
+		BadRequest(w, "tool_call_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Answer) == "" {
+		BadRequest(w, "answer is required")
+		return
+	}
+	var out map[string]any
+	// 透传已验证 JWT 的 user_id：Python 端据此校验来电者是否为会话 owner
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		req.UserID = claims.UserID
+	}
+	// 必须路由到承载该 session 运行的引擎实例，否则会打到没有该 run 的副本并报 no active agent
+	routeCtx := engine.WithRunAffinity(r.Context(), req.SessionID)
+	if rec, ok := engine.RunOwner(routeCtx, req.SessionID); ok {
+		req.RunToken = rec.RunToken
+	}
+	if err := h.python.PostJSON(routeCtx, "/v1/agent/answer", req, &out); err != nil {
+		slog.Error("answer: python proxy failed", "session", req.SessionID, "error", err)
+		InternalError(w, "answer proxy failed")
+		return
+	}
+	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
+}
 // HandleSubmit proxies the submit request to Python engine and streams SSE events.
 // HandleSubmit 执行一次聊天提交。workbenchCtx 是前端组装的工作台上下文
 // （kb_id / agent / skill_names / workflow_id），透传给引擎消费 —— 网关不再丢弃它。
@@ -380,11 +432,23 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	flushText()     // 流结束兜底冲刷
 	saveDraft(true) // 定型：覆盖正常结束、被取消、断线等所有路径
 
-	// 可观测性：区分正常结束与中断（前端断开 / 会话取消 / DefaultAgentTimeout 超时）。
-	// 取消时已产生的事件仍会落库与计费（落库用 storeCtxFor 的独立上下文），此处仅记录原因。
+	// 可观测性：区分"正常结束"与三种中断（前端断开 / 会话取消 / DefaultAgentTimeout 超时）。
+	//
+	// 关键是**超时必须被当成异常**：在此之前它只记一条 slog.Info，于是 300s 的静默截断
+	// 在日志里和"正常结束"长得一模一样，前端也只看到流关闭、拿不到任何原因 ——
+	// 用户侧的表现就是"这轮莫名结束了"。而它还会**连带取消该会话的后台子 Agent**
+	// （引擎收到 CancelledError → cancel_session），那些子 Agent 的结论因此永远回不到主对话。
 	if err := ctx.Err(); err != nil {
-		slog.Info("submit stream ended with cancellation",
-			"session_id", sessionID, "error", err)
+		if errors.Is(err, context.DeadlineExceeded) {
+			slog.Warn(
+				"submit turn truncated by deadline; this session's sub-agents were cancelled, "+
+					"so their conclusions will NOT reach the conversation",
+				"session_id", sessionID,
+			)
+		} else {
+			slog.Info("submit stream ended with cancellation",
+				"session_id", sessionID, "error", err)
+		}
 	}
 
 	// 收尾落库/计费：用「从现在起算」的独立短超时上下文。
