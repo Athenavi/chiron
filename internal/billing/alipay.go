@@ -17,6 +17,9 @@ import (
 	"sort"
 	"strings"
 	"time"
+	"unicode/utf8"
+
+	"golang.org/x/text/encoding/simplifiedchinese"
 )
 
 // AlipayClient 对接支付宝开放平台（当面付 trade.precreate + 异步通知验签）。
@@ -94,11 +97,19 @@ func parseRSAPublicKey(pemStr string) (*rsa.PublicKey, error) {
 	return nil, fmt.Errorf("unsupported public key format")
 }
 
-// buildSignContent 拼接待签名串：非空参数按 key 字典序，key=value 用 & 连接。
+// buildSignContent 拼接待签名串：除 sign 外的非空参数按 key 字典序，key=value 用 & 连接。
+//
+// **sign_type 必须参与签名**：支付宝的规则是"除 sign 以外的全部请求参数都要参与"，
+// 官方 SDK（AlipaySignature.getSignContent）也只排除 sign。此前这里把 sign_type 一并
+// 排除，待签名串就与支付宝算出来的不一致 —— 网关直接返回
+//
+//	code=40002 Invalid Arguments（sub_msg 提示签名 / charset 参数不正确），
+//
+// 而且不论私钥配得多正确都不可能通过。
 func buildSignContent(params map[string]string) string {
 	keys := make([]string, 0, len(params))
 	for k, v := range params {
-		if k == "sign" || k == "sign_type" || v == "" {
+		if k == "sign" || v == "" {
 			continue
 		}
 		keys = append(keys, k)
@@ -198,7 +209,7 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 		} `json:"alipay_trade_precreate_response"`
 		Sign string `json:"sign"`
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
+	if err := json.Unmarshal([]byte(decodeBody(body)), &r); err != nil {
 		// 支付宝 API 的响应恒为 JSON（失败时也带 code/msg/sub_msg）。拿到非 JSON 说明
 		// 请求根本没到达 API 端点：常见于 ALIPAY_GATEWAY 漏写 /gateway.do、指向门户页，
 		// 或中间代理拦截后返回了错误页。只报 "invalid character '<'" 会让人无从下手，
@@ -267,7 +278,7 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 			TradeState string `json:"trade_status"`
 		} `json:"alipay_trade_query_response"`
 	}
-	if err := json.Unmarshal(body, &r); err != nil {
+	if err := json.Unmarshal([]byte(decodeBody(body)), &r); err != nil {
 		return "", false, fmt.Errorf("alipay query: 网关 %s 返回了非 JSON 响应（HTTP %d）：%s",
 			c.gateway, resp.StatusCode, responseSnippet(body))
 	}
@@ -276,10 +287,10 @@ func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bo
 }
 
 // responseSnippet 截取响应体开头用于错误信息：足以判断返回的是 HTML 错误页还是 JSON，
-// 又不会把整页内容灌进日志/前端提示。
+// 又不会把整页内容灌进日志/前端提示。响应体先做字符集归一（见 decodeBody）。
 func responseSnippet(body []byte) string {
 	const maxLen = 200
-	s := strings.Join(strings.Fields(string(body)), " ") // 折叠空白，避免多行 HTML 撑爆一行日志
+	s := strings.Join(strings.Fields(decodeBody(body)), " ") // 折叠空白，避免多行 HTML 撑爆一行日志
 	if len(s) > maxLen {
 		s = s[:maxLen] + "..."
 	}
@@ -287,6 +298,21 @@ func responseSnippet(body []byte) string {
 		return "(空响应)"
 	}
 	return s
+}
+
+// decodeBody 把响应体归一为 UTF-8 文本。
+//
+// 支付宝在参数/charset 校验失败时会用它自身的默认字符集（GBK）返回错误文案，
+// 此时按 UTF-8 读取会得到成片的 "��ǩ..." 乱码，sub_msg 完全不可读 ——
+// 排查时只能靠猜（本次故障就是如此）。这里发现非法 UTF-8 时按 GBK 兜底解码。
+func decodeBody(body []byte) string {
+	if utf8.Valid(body) {
+		return string(body)
+	}
+	if decoded, err := simplifiedchinese.GBK.NewDecoder().Bytes(body); err == nil {
+		return string(decoded)
+	}
+	return string(body)
 }
 
 // VerifyCallback 校验支付宝异步通知参数（验签 + 交易成功状态）。
