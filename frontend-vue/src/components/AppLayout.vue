@@ -402,7 +402,7 @@ async function runQuickCommand() {
   border-radius: var(--sig-radius-button);
   background: transparent;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .brand-btn:hover {
@@ -414,7 +414,7 @@ async function runQuickCommand() {
   height: 24px;
   border-radius: var(--sig-radius-button);
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: #fff;
+  color: var(--on-solid);
   font-weight: 700;
   font-size: 11px;
   display: inline-flex;
@@ -553,7 +553,7 @@ async function runQuickCommand() {
   background: transparent;
   color: var(--text-secondary);
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease, transform 0.08s ease;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 
 .dock-item:hover {
@@ -575,7 +575,7 @@ async function runQuickCommand() {
 .dock-item.active {
   background: var(--primary);
   color: var(--text-inverse);
-  box-shadow: 0 4px 14px var(--primary-bg), inset 0 1px 1px hsla(0, 0%, 100%, 0.25);
+  box-shadow: 0 4px 14px var(--primary-bg), inset 0 1px 1px var(--on-viewer-faint);
 }
 
 .dock-item.active::before {
@@ -589,7 +589,7 @@ async function runQuickCommand() {
   background: var(--primary);
   transform: translateY(-50%) scaleY(0);
   transform-origin: center;
-  animation: dockBarIn 0.22s ease-out forwards;
+  animation: dockBarIn var(--dur-normal) ease-out forwards;
 }
 
 @keyframes dockBarIn {
@@ -623,7 +623,7 @@ async function runQuickCommand() {
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
-  transition: opacity 0.15s ease, transform 0.15s ease;
+  transition: opacity var(--dur-fast) ease, transform var(--dur-fast) ease;
   z-index: var(--z-dock);
 }
 
@@ -667,7 +667,7 @@ async function runQuickCommand() {
   color: var(--text-secondary);
   font-size: 17px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease, background 0.15s ease;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 
 .dock-command-btn:hover,
@@ -727,7 +727,7 @@ async function runQuickCommand() {
   color: var(--text-primary);
   font-size: 13px;
   outline: none;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 
 .dock-command-input:focus {
@@ -751,7 +751,7 @@ async function runQuickCommand() {
   font-size: 13px;
   font-weight: 500;
   cursor: pointer;
-  transition: background 0.2s ease, opacity 0.2s ease;
+  transition: background var(--dur-normal) ease, opacity var(--dur-normal) ease;
 }
 
 .dock-command-go:hover:not(:disabled) {
@@ -767,10 +767,10 @@ async function runQuickCommand() {
   display: inline-block;
   width: 14px;
   height: 14px;
-  border: 2px solid rgba(255, 255, 255, 0.35);
-  border-top-color: #fff;
+  border: 2px solid var(--on-viewer-soft);
+  border-top-color: var(--on-solid);
   border-radius: 50%;
-  animation: dockSpin 0.6s linear infinite;
+  animation: dockSpin var(--dur-spin) linear infinite;
 }
 
 @keyframes dockSpin {
@@ -781,7 +781,7 @@ async function runQuickCommand() {
 
 .dock-pop-enter-active,
 .dock-pop-leave-active {
-  transition: opacity 0.16s ease, transform 0.16s ease;
+  transition: opacity var(--dur-normal) ease, transform var(--dur-normal) ease;
 }
 
 .dock-pop-enter-from,
@@ -888,7 +888,7 @@ async function runQuickCommand() {
 
 .fade-enter-active,
 .fade-leave-active {
-  transition: opacity 0.2s ease;
+  transition: opacity var(--dur-normal) ease;
 }
 
 .fade-enter-from,

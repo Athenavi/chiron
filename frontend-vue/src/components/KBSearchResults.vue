@@ -235,7 +235,7 @@ function formatTime(timestamp: string | number): string {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--dur-normal);
 }
 
 .btn-toggle:hover {
@@ -253,7 +253,7 @@ function formatTime(timestamp: string | number): string {
 .result-card {
   padding: 16px;
   border-bottom: 1px solid var(--border-card);
-  transition: background 0.2s;
+  transition: background var(--dur-normal);
 }
 
 .result-card:last-child {
@@ -276,7 +276,7 @@ function formatTime(timestamp: string | number): string {
   padding: 2px 8px;
   font-size: 11px;
   font-weight: 700;
-  color: #ffffff;
+  color: var(--on-solid);
   background: var(--text-tertiary);
   border-radius: 3px;
 }
@@ -285,7 +285,7 @@ function formatTime(timestamp: string | number): string {
   padding: 2px 8px;
   font-size: 11px;
   font-weight: 600;
-  color: #ffffff;
+  color: var(--on-solid);
   border-radius: 3px;
 }
 
@@ -323,7 +323,7 @@ function formatTime(timestamp: string | number): string {
   word-break: break-word;
   max-height: 80px;
   overflow: hidden;
-  transition: max-height 0.3s ease;
+  transition: max-height var(--dur-normal) ease;
 }
 
 .result-card.expanded .content-text {
@@ -345,7 +345,7 @@ function formatTime(timestamp: string | number): string {
 .highlight-tag {
   padding: 2px 8px;
   font-size: 11px;
-  color: #ffffff;
+  color: var(--on-solid);
   background: var(--primary);
   border-radius: 3px;
 }
@@ -373,12 +373,12 @@ function formatTime(timestamp: string | number): string {
   border: 1px solid var(--primary);
   border-radius: var(--radius-md);
   cursor: pointer;
-  transition: all 0.2s;
+  transition: all var(--dur-normal);
 }
 
 .expand-btn:hover {
   background: var(--primary);
-  color: #ffffff;
+  color: var(--on-solid);
 }
 
 .expand-btn.collapsed {

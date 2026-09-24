@@ -693,7 +693,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
 .back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
 .back-to-bottom:hover { color: var(--primary); border-color: var(--primary); }
-.back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
+.back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: var(--on-solid); font-size: 11px; line-height: 18px; text-align: center; }
 .back-fade-enter-active, .back-fade-leave-active { transition: opacity var(--dur-normal), transform var(--dur-normal); }
 .back-fade-enter-from, .back-fade-leave-to { opacity: 0; transform: translateY(8px); }
 

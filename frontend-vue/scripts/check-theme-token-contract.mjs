@@ -21,42 +21,7 @@ import { fileURLToPath } from 'node:url'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** 存量基线：文件 → 允许的硬编码色值数量。只允许下调。 */
-const BASELINE = {
-  'src/components/AgentCollabPanel.vue': 1,
-  'src/components/AppLayout.vue': 4,
-  'src/components/CallChainTimeline.vue': 5,
-  'src/components/CaptchaWidget.vue': 1,
-  'src/components/CommandPalette.vue': 2,
-  'src/components/KBSearchResults.vue': 8,
-  'src/components/SsoLoginButtons.vue': 9,
-  'src/components/WorkflowDAGEditor.vue': 19,
-  'src/components/chat/AskCard.vue': 1,
-  'src/components/chat/ChatEmptyHero.vue': 1,
-  'src/components/chat/ChatSidePanel.vue': 1,
-  'src/components/chat/MessageItem.vue': 5,
-  'src/components/chat/MessageList.vue': 1,
-  'src/components/common/ImageViewer.vue': 5,
-  'src/components/home/HomeScene3D.vue': 5,
-  'src/style.css': 1,
-  'src/views/AgentsView.vue': 4,
-  'src/views/BillingView.vue': 3,
-  'src/views/ChatView.vue': 8,
-  'src/views/HomeView.vue': 4,
-  'src/views/KnowledgeDetailView.vue': 2,
-  'src/views/LoginView.vue': 1,
-  'src/views/MediaView.vue': 13,
-  'src/views/MemoryView.vue': 1,
-  'src/views/PluginsView.vue': 3,
-  'src/views/ProfileView.vue': 6,
-  'src/views/RegisterView.vue': 1,
-  'src/views/ShareView.vue': 1,
-  'src/views/WorkflowView.vue': 30,
-  'src/views/admin/CacheView.vue': 3,
-  'src/views/admin/DashboardView.vue': 13,
-  'src/views/admin/EvalView.vue': 2,
-  'src/views/admin/Layout.vue': 3,
-  'src/views/admin/OAuthProvidersView.vue': 1,
-}
+const BASELINE = {}
 
 /** 颜色字面量：十六进制、rgb(a)、hsl(a) */
 const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g
@@ -64,6 +29,23 @@ const COLOR_LITERAL = /#[0-9a-fA-F]{3,8}\b|\brgba?\(|\bhsla?\(/g
 const TOKEN_DEFINITION = /^\s*--[a-z0-9-]+\s*:/
 /** `var(--x, <fallback>)` 的兜底值合法 —— 整段摘掉再匹配，否则会误报（实测 63 处） */
 const VAR_WITH_FALLBACK = /var\(--[^)]*\)/g
+
+/**
+ * `<script>` 块整体剥离后再扫描。
+ *
+ * 理由：CSS 变量只在**样式声明**里生效，`<script>` 内的颜色字面量（ECharts 主题配置、
+ * canvas 的 `THREE.Color` / `addColorStop`、组件的 `color` prop 传值）**无法**写成
+ * `var(--x)` —— 那不是"没上 token"，而是这套机制在那里不适用。把处死记在基线里只会让
+ * 这条棘轮失去意义（它应当只统计"改得动却没改"的地方）。
+ *
+ * 这类色值若要跟随主题，需要**另一套机制**（用 `getComputedStyle` 读回变量再传给
+ * ECharts / canvas），属独立议题，不在本契约范围内。
+ */
+const SCRIPT_BLOCK = /<script[\s\S]*?<\/script>/g
+function stripScriptBlocks(source) {
+  // 用等量换行替换，保持行号与原文件一致（失败信息要能定位）
+  return source.replace(SCRIPT_BLOCK, m => m.replace(/[^\n]/g, ' '))
+}
 
 function walk(dir) {
   const out = []
@@ -78,7 +60,7 @@ function walk(dir) {
 const counts = new Map()
 for (const file of walk(join(ROOT, 'src'))) {
   let n = 0
-  for (const line of readFileSync(file, 'utf8').split('\n')) {
+  for (const line of stripScriptBlocks(readFileSync(file, 'utf8')).split('\n')) {
     if (TOKEN_DEFINITION.test(line)) continue
     n += (line.replace(VAR_WITH_FALLBACK, 'VAR').match(COLOR_LITERAL) || []).length
   }

@@ -73,7 +73,7 @@
 
         <!-- 完成事件 -->
         <div class="timeline-node complete">
-          <CheckCircleOutlined style="color: #52c41a" />
+          <CheckCircleOutlined style="color: var(--success)" />
           <span>推理完成 (总耗时 {{ totalDurationMs }}ms)</span>
         </div>
       </div>
@@ -212,7 +212,7 @@ function capitalize(str: string): string {
   background: var(--bg-secondary);
   cursor: pointer;
   user-select: none;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 
 .timeline-header:hover {
@@ -259,7 +259,7 @@ function capitalize(str: string): string {
   border: 1px solid var(--border);
   border-left: 3px solid var(--border);
   border-radius: 8px;
-  transition: background 0.15s ease, border-color 0.15s ease;
+  transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .node-line:hover {
@@ -267,15 +267,15 @@ function capitalize(str: string): string {
 }
 
 .node-line.type-llm {
-  border-left-color: #8b5cf6;
+  border-left-color: var(--node-violet);
 }
 
 .node-line.type-tool {
-  border-left-color: #3b82f6;
+  border-left-color: var(--info);
 }
 
 .node-line.type-workflow {
-  border-left-color: #ec4899;
+  border-left-color: var(--node-pink);
 }
 
 .node-icon {
@@ -337,13 +337,13 @@ function capitalize(str: string): string {
   border: 1px solid var(--primary);
   border-radius: 6px;
   cursor: pointer;
-  transition: background 0.15s ease, color 0.15s ease;
+  transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
   flex-shrink: 0;
 }
 
 .details-toggle:hover {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-solid);
 }
 
 .details-toggle:focus-visible,

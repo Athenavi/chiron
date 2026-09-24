@@ -302,7 +302,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
             >
               <Avatar
                 :size="30"
-                :style="{ backgroundColor: 'var(--primary)', color: '#fff' }"
+                :style="{ backgroundColor: 'var(--primary)', color: 'var(--on-solid)' }"
               >
                 {{ userInitial }}
               </Avatar>
@@ -353,7 +353,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 .admin-drawer-mask {
   position: fixed;
   inset: 0;
-  background: rgba(0, 0, 0, 0.45);
+  background: var(--bg-overlay);
   z-index: var(--z-overlay);
 }
 
@@ -370,8 +370,11 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 .sider-logo {
   width: 28px; height: 28px;
   border-radius: 7px;
-  background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: #fff;
+  /* 原为 var(--primary-dark) —— 该变量**从未定义**，而含无效色标的
+     linear-gradient 会被整体丢弃，logo 实际没有背景。用同色系更深一档的
+     --primary-active 代替。 */
+  background: linear-gradient(135deg, var(--primary), var(--primary-active));
+  color: var(--on-solid);
   font-size: 11px;
   font-weight: 700;
   display: inline-flex;

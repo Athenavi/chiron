@@ -428,7 +428,7 @@ onUnmounted(() => {
   border-radius: 10px;
   background: var(--bg-card);
   cursor: pointer;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease, transform 0.15s ease;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, transform var(--dur-fast) ease;
 }
 .nav-card:hover {
   border-color: var(--primary);
@@ -463,7 +463,7 @@ onUnmounted(() => {
 .nav-card-arrow {
   font-size: 12px;
   color: var(--text-muted);
-  transition: transform 0.15s ease, color 0.15s ease;
+  transition: transform var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 .nav-card:hover .nav-card-arrow { color: var(--primary); transform: translateX(2px); }
 

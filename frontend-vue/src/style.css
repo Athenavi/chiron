@@ -68,6 +68,9 @@
     /* 循环动画的周期（脉冲/呼吸灯）。它是动画节奏而非过渡时长，
        与 --dur-fast/normal/slow 的"过渡阶梯"不同轴，故单列。 */
     --dur-pulse: 1200ms;
+    /* 旋转类循环动画（加载转圈）的周期。比 --dur-pulse 快一档：
+       原有散落取值为 0.6s/0.8s/0.9s/1s，此处收敛到 0.8s 作为统一节奏。 */
+    --dur-spin: 800ms;
 
     /* 层级（z-index）—— 只表达堆叠高低，与主题无关，故定义在 :root 而非各主题块。
        取值刻意保留既有数字：本次只做命名，不改变任何层叠关系。
@@ -92,6 +95,45 @@
        与主题无关：这些底色在明暗两种方向下都是饱和色，白字始终可读，
        因此不像 --text-inverse 那样随主题翻转。 */
     --on-solid: #fff;
+
+    /* ── 以下为 **与主题无关** 的固定色：集中定义以便统一调整，
+       但值刻意保持原样，不做主题翻转（它们要么是外部约定、要么是拟物装饰）。── */
+
+    /* 全屏查看器/叠加层：无论明暗主题都是压暗底 + 白系前景 */
+    --viewer-scrim: rgba(0, 0, 0, 0.82);
+    --on-viewer-faint: rgba(255, 255, 255, 0.2);
+    --on-viewer-soft: rgba(255, 255, 255, 0.4);
+    --on-viewer-strong: rgba(255, 255, 255, 0.8);
+
+    /* 边缘投影 / 品牌色投影 */
+    --shadow-edge: rgba(0, 0, 0, 0.12);
+    --shadow-brand: rgba(22, 119, 255, 0.12);
+
+    /* 工作流节点的类目色与类目填充（8 位 hex 的末两位是 alpha） */
+    --node-violet: #8b5cf6;
+    --node-pink: #ec4899;
+    --node-teal: #14b8a6;
+    --node-indigo: #6366f1;
+    --node-gray: #6b7280;
+    --node-blue: #4176e6;
+    --node-blue-light: #679efe;
+    --node-green-fill: #22c55e20;
+    --node-violet-fill: #8b5cf620;
+    --node-blue-fill: #3b82f620;
+    --node-pink-fill: #ec489920;
+    --node-teal-fill: #14b8a620;
+    --node-indigo-fill: #6366f120;
+    --node-amber-fill: #f59e0b20;
+    --node-gray-fill: #6b728020;
+
+    /* macOS 风格红黄绿灯：拟物装饰，不随主题变化 */
+    --traffic-red: #ff5f57;
+    --traffic-amber: #febc2e;
+    --traffic-green: #28c840;
+
+    /* 搜索命中高亮：黄底棕字，与主题无关 */
+    --highlight-bg: #fff3cd;
+    --highlight-fg: #856404;
 }
 
 /* ============================================================ */
@@ -1053,7 +1095,7 @@ body {
 
 ::selection {
     background: var(--accent);
-    color: #fff;
+    color: var(--on-solid);
 }
 
 ::-webkit-scrollbar {
@@ -1117,7 +1159,7 @@ body {
 
 .ant-btn:not(:disabled):active {
     transform: scale(0.97);
-    transition: transform 80ms var(--ease-out);
+    transition: transform var(--dur-fast) var(--ease-out);
 }
 
 .ant-input-affix-wrapper-focused,
@@ -1367,8 +1409,8 @@ html[data-theme="paper-dark"] .topbar {
 
 /* 4. GPU 加速：transform/opacity 替换 top/left 变化 */
 .transform-transition {
-  transition: transform 0.3s cubic-bezier(0.22, 1, 0.36, 1),
-              opacity 0.3s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--dur-normal) cubic-bezier(0.22, 1, 0.36, 1),
+              opacity var(--dur-normal) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 5. 文本渲染优化 */
@@ -1456,19 +1498,19 @@ body {
 .chat-state-dot::before { content: ''; position: absolute; inset: 0; border-radius: 50%; background: currentColor; opacity: 0.12; }
 .chat-state-dot::after { content: ''; position: absolute; inset: 20%; border-radius: 50%; background: currentColor; }
 .chat-state-dot[data-state='running'] { color: var(--primary); }
-.chat-state-dot[data-state='running']::after { animation: chatPulse 1.4s ease-in-out infinite; }
+.chat-state-dot[data-state='running']::after { animation: chatPulse var(--dur-pulse) ease-in-out infinite; }
 .chat-state-dot[data-state='done'] { color: var(--success); }
 .chat-state-dot[data-state='error'] { color: var(--error); }
 
 /* 统一脉冲：取代分散的 dotPulse / uehPulse / skeleton-pulse 三份实现 */
 @keyframes chatPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.chat-pulse { animation: chatPulse 1.4s ease-in-out infinite; }
+.chat-pulse { animation: chatPulse var(--dur-pulse) ease-in-out infinite; }
 .chat-pulse:nth-child(2) { animation-delay: 0.2s; }
 .chat-pulse:nth-child(3) { animation-delay: 0.4s; }
 
 /* 行级展开：≤200ms，统一缓动 */
 .chat-expand-enter-active,
-.chat-expand-leave-active { transition: opacity 0.15s var(--ease-out), transform 0.15s var(--ease-out); overflow: hidden; }
+.chat-expand-leave-active { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); overflow: hidden; }
 .chat-expand-enter-from,
 .chat-expand-leave-to { opacity: 0; transform: translateY(-4px); }
 

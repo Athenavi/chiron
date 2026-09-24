@@ -100,7 +100,7 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 .tool-row-wrap[data-state='running'] .tool-row::after {
   content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 300px;
   background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--bg-page) 60%, transparent) 55%, transparent 100%);
-  animation: toolRowSweep 2.6s ease-out infinite; pointer-events: none;
+  animation: toolRowSweep var(--dur-pulse) ease-out infinite; pointer-events: none;
 }
 @keyframes toolRowSweep { 0% { left: -300px; } 90%, 100% { left: 100%; } }
 @media (prefers-reduced-motion: reduce) {

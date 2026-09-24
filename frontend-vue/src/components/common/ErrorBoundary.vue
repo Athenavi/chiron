@@ -78,7 +78,7 @@ function reload() {
 }
 .error-icon {
   font-size: 40px;
-  color: var(--colorError, #ef4444);
+  color: var(--colorError, var(--error));
 }
 .error-title {
   font-size: 16px;

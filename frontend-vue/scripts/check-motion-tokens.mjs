@@ -22,45 +22,13 @@ import { fileURLToPath } from 'node:url'
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** 存量基线：文件 → 允许的硬编码动效行数。只允许下调。 */
-const BASELINE = {
-  'src/App.vue': 2,
-  'src/components/AgentCollabPanel.vue': 4,
-  'src/components/AppLayout.vue': 10,
-  'src/components/CallChainTimeline.vue': 3,
-  'src/components/CaptchaWidget.vue': 1,
-  'src/components/CollapseTransition.vue': 1,
-  'src/components/CommandPalette.vue': 5,
-  'src/components/KBSearchResults.vue': 4,
-  'src/components/SkillMarketCard.vue': 1,
-  'src/components/SsoLoginButtons.vue': 1,
-  'src/components/ThemeSwitcher.vue': 3,
-  'src/components/WorkflowDAGEditor.vue': 4,
-  'src/components/chat/AskCard.vue': 1,
-  'src/components/chat/ChatEmptyHero.vue': 2,
-  'src/components/chat/ChatSidePanel.vue': 14,
-  'src/components/chat/MessageItem.vue': 11,
-  'src/components/chat/MessageList.vue': 3,
-  'src/components/chat/ToolCallCard.vue': 1,
-  'src/components/common/ImageViewer.vue': 1,
-  'src/components/common/RouteProgressBar.vue': 1,
-  'src/style.css': 5,
-  'src/views/AgentsView.vue': 1,
-  'src/views/ChatView.vue': 9,
-  'src/views/HomeView.vue': 13,
-  'src/views/KnowledgeDetailView.vue': 1,
-  'src/views/KnowledgeView.vue': 1,
-  'src/views/LoginView.vue': 1,
-  'src/views/MediaView.vue': 1,
-  'src/views/PluginsView.vue': 1,
-  'src/views/ProfileView.vue': 1,
-  'src/views/RegisterView.vue': 1,
-  'src/views/ShareView.vue': 1,
-  'src/views/SkillsView.vue': 1,
-  'src/views/WorkflowView.vue': 4,
-  'src/views/admin/DashboardView.vue': 2,
-  'src/views/admin/GroupsView.vue': 1,
-  'src/views/admin/Layout.vue': 3,
-}
+/** 存量基线：文件 → 允许的硬编码动效行数。只允许下调。
+ *
+ * 已清零：全部 transition/animation 的时长字面量换成 src/style.css 的语义 token。
+ * 过渡按原时长归入 --dur-fast(≤150ms) / --dur-normal(≤300ms) / --dur-slow(>300ms)；
+ * 循环动画单列 --dur-pulse（脉冲/骨架）与 --dur-spin（加载转圈）。
+ * 注意 animation 简写的**第二个时长是 delay**，不属过渡阶梯，保持字面量。 */
+const BASELINE = {}
 
 /** transition / animation 声明里的时长字面量 */
 const DURATION = /(\d+(?:\.\d+)?)(m?s)/g

@@ -248,7 +248,7 @@ defineExpose({
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all 0.2s ease;
+  transition: all var(--dur-normal) ease;
 }
 
 .btn-collapse:hover {
@@ -278,7 +278,7 @@ defineExpose({
   border-radius: 10px;
   background: var(--bg-card);
   cursor: pointer;
-  transition: border-color 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  transition: border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease, background var(--dur-normal) ease;
 }
 
 .agent-card:hover {
@@ -302,7 +302,7 @@ defineExpose({
   display: flex;
   align-items: center;
   justify-content: center;
-  color: #fff;
+  color: var(--on-solid);
   flex-shrink: 0;
 }
 
@@ -316,7 +316,7 @@ defineExpose({
   border: 2px solid transparent;
   border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 1s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 
 @keyframes spin {
@@ -361,7 +361,7 @@ defineExpose({
   border: 2px solid var(--border);
   border-top-color: var(--primary);
   border-radius: 50%;
-  animation: spin 0.8s linear infinite;
+  animation: spin var(--dur-spin) linear infinite;
 }
 
 .check-icon {

@@ -909,11 +909,11 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#22c55e' }"
+              :style="{ borderColor: 'var(--success)' }"
             >
               <div
                 class="node-header"
-                style="background: #22c55e20;"
+                style="background: var(--node-green-fill);"
               >
                 <span>📥 {{ nodeProps.data?.label || '输入' }}</span>
               </div>
@@ -931,7 +931,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#8b5cf6' }"
+              :style="{ borderColor: 'var(--node-violet)' }"
             >
               <Handle
                 type="target"
@@ -939,7 +939,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #8b5cf620;"
+                style="background: var(--node-violet-fill);"
               >
                 <span>🧠 {{ nodeProps.data?.label || 'LLM' }}</span>
               </div>
@@ -961,7 +961,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#3b82f6' }"
+              :style="{ borderColor: 'var(--info)' }"
             >
               <Handle
                 type="target"
@@ -969,7 +969,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #3b82f620;"
+                style="background: var(--node-blue-fill);"
               >
                 <span>🔧 {{ nodeProps.data?.label || '工具' }}</span>
               </div>
@@ -991,7 +991,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#ec4899' }"
+              :style="{ borderColor: 'var(--node-pink)' }"
             >
               <Handle
                 type="target"
@@ -999,7 +999,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #ec489920;"
+                style="background: var(--node-pink-fill);"
               >
                 <span>🎯 {{ nodeProps.data?.label || '技能' }}</span>
               </div>
@@ -1021,7 +1021,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#14b8a6' }"
+              :style="{ borderColor: 'var(--node-teal)' }"
             >
               <Handle
                 type="target"
@@ -1029,7 +1029,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #14b8a620;"
+                style="background: var(--node-teal-fill);"
               >
                 <span>📚 {{ nodeProps.data?.label || '知识库' }}</span>
               </div>
@@ -1051,7 +1051,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#6366f1' }"
+              :style="{ borderColor: 'var(--node-indigo)' }"
             >
               <Handle
                 type="target"
@@ -1059,7 +1059,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #6366f120;"
+                style="background: var(--node-indigo-fill);"
               >
                 <span>🤖 {{ nodeProps.data?.label || 'Agent' }}</span>
               </div>
@@ -1081,7 +1081,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#f59e0b' }"
+              :style="{ borderColor: 'var(--warning)' }"
             >
               <Handle
                 type="target"
@@ -1089,7 +1089,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #f59e0b20;"
+                style="background: var(--node-amber-fill);"
               >
                 <span>🔀 {{ nodeProps.data?.label || '条件' }}</span>
               </div>
@@ -1115,7 +1115,7 @@ function statusClass(nodeProps: any): string {
             <div
               class="custom-node"
               :class="statusClass(nodeProps)"
-              :style="{ borderColor: '#6b7280' }"
+              :style="{ borderColor: 'var(--node-gray)' }"
             >
               <Handle
                 type="target"
@@ -1123,7 +1123,7 @@ function statusClass(nodeProps: any): string {
               />
               <div
                 class="node-header"
-                style="background: #6b728020;"
+                style="background: var(--node-gray-fill);"
               >
                 <span>📤 {{ nodeProps.data?.label || '输出' }}</span>
               </div>
@@ -1568,10 +1568,10 @@ function statusClass(nodeProps: any): string {
 .canvas-wrapper { flex: 1; position: relative; }
 /* 自定义节点：主题变量 + 执行状态 */
 .custom-node { background: var(--bg-card); border: 2px solid; border-radius: 8px; min-width: 150px; font-size: 12px; box-shadow: var(--shadow-md); color: var(--text-primary); transition: box-shadow var(--dur-normal); }
-.custom-node.status-completed { box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4), var(--shadow-lg); }
-.custom-node.status-error { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5), var(--shadow-lg); }
+.custom-node.status-completed { box-shadow: 0 0 0 2px var(--success), var(--shadow-lg); }
+.custom-node.status-error { box-shadow: 0 0 0 2px var(--error), var(--shadow-lg); }
 .custom-node.status-running { animation: nodePulse var(--dur-pulse) ease-in-out infinite; }
-@keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25); } 50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.45); } }
+@keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 2px var(--info-bg); } 50% { box-shadow: 0 0 0 4px var(--info); } }
 .node-header { padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--text-primary); }
 .node-body { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
 .node-type-tag { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-size: 10px; color: var(--text-tertiary); }

@@ -1145,7 +1145,7 @@ async function pushMapState() {
       type: 'synapse:workspaces',
       workspaces: (body.data?.workspaces ?? []).map((w) => ({
         id: w.id,
-        title: w.name || '我的地图',
+        title: w.name || t('我的地图'),
         sessionIds: [] as string[],
       })),
     })
@@ -3017,7 +3017,7 @@ function continueGeneration() {
 /* 工具授权模式栏（与「对话模式」并列但语义独立的第二个维度） */
 /* 工具授权已内联到输入区底栏（模型选择器右侧），样式见 ChatInput.vue 的
    `.tools-mode-select` —— 这里不再需要独立的 `.tools-mode-bar`。 */
-.approval-countdown { margin-left: auto; font-size: 11px; color: var(--warning, #f59e0b); }
+.approval-countdown { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag { font-size: 11px; color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
 .approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
@@ -3025,15 +3025,15 @@ function continueGeneration() {
 .approval-actions { display: flex; gap: 8px; }
 .approval-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform var(--dur-fast) ease, opacity var(--dur-fast) ease, background var(--dur-fast) ease; }
 .approval-btn:active { transform: scale(0.97); }
-.approval-btn.allow { background: var(--primary); color: #fff; }
+.approval-btn.allow { background: var(--primary); color: var(--on-solid); }
 .approval-btn.allow:hover { opacity: 0.9; }
 .approval-btn.danger { background: var(--bg-hover); color: var(--text-primary); }
-.approval-btn.danger:hover { background: var(--danger-bg, rgba(239,68,68,.12)); color: var(--danger, #ef4444); }
+.approval-btn.danger:hover { background: var(--danger-bg, rgba(239,68,68,.12)); color: var(--danger, var(--error)); }
 .connection-banner {
   position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-page-bar);
   padding: 4px 12px; text-align: center;
   font-size: 12px; line-height: 18px;
-  background: var(--error); color: #fff;
+  background: var(--error); color: var(--on-solid);
 }
 .share-risk { margin-bottom: 14px; }
 .share-guest-tip { padding: 20px 0; text-align: center; color: var(--text-secondary); font-size: 14px; }
@@ -3071,7 +3071,7 @@ function continueGeneration() {
 }
 .panel-overlay {
   position: fixed; inset: 0; z-index: var(--z-page-overlay);
-  background: rgba(10, 10, 12, 0.35);
+  background: var(--bg-overlay);
 }
 @media (min-width: 1025px) { .panel-overlay { display: none; } }
 .overlay-fade-enter-active, .overlay-fade-leave-active { transition: opacity var(--dur-normal) ease; }
@@ -3080,8 +3080,8 @@ function continueGeneration() {
 .unified-error-banner {
   flex: none; display: flex; align-items: center; gap: 8px;
   margin: 8px 20px 0; padding: 8px 12px;
-  background: rgba(239, 68, 68, 0.08); border: 1px solid rgba(239, 68, 68, 0.25);
-  border-radius: 10px; color: var(--danger, #ef4444); font-size: 13px;
+  background: var(--error-bg); border: 1px solid var(--error);
+  border-radius: 10px; color: var(--danger, var(--error)); font-size: 13px;
 }
 .ueb-text { flex: 1; min-width: 0; line-height: 1.5; }
 .ueb-close { flex: none; cursor: pointer; opacity: 0.7; font-size: 12px; }
@@ -3096,14 +3096,14 @@ function continueGeneration() {
 .ub-badge {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
   padding: 1px 10px; border-radius: 10px;
-  background: var(--primary); color: #fff;
+  background: var(--primary); color: var(--on-solid);
   font-size: 11px; font-weight: 600; line-height: 18px;
   transition: background var(--dur-normal) ease;
 }
-.ub-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); }
+.ub-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--on-viewer-strong); }
 .ub-badge.running::before {
   animation: uehPulse var(--dur-pulse) ease-in-out infinite;
-  box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5);
+  box-shadow: 0 0 0 0 var(--on-viewer-soft);
 }
 .ub-badge.running { animation: uehPulse var(--dur-pulse) ease-in-out infinite; }
 .ub-badge.done { background: var(--success); }
@@ -3127,7 +3127,7 @@ function continueGeneration() {
 }
 .ueb-close:focus-visible { border-radius: 4px; }
 .ub-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
-.ub-btn.exit:hover:not(:disabled) { border-color: var(--danger, #ef4444); color: var(--danger, #ef4444); }
+.ub-btn.exit:hover:not(:disabled) { border-color: var(--danger, var(--error)); color: var(--danger, var(--error)); }
 .ub-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .unified-exec-hint {

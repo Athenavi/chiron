@@ -283,7 +283,7 @@ onMounted(() => {
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
-  transition: background-color 0.2s ease;
+  transition: background-color var(--dur-normal) ease;
 }
 .role-item:hover { background: var(--bg-hover); }
 .role-name { font-weight: 500; }

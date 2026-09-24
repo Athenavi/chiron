@@ -433,7 +433,7 @@ function scrollToTop() {
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-primary);
-  animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-slow) 0.08s cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
 .hero-title-accent {
   background: linear-gradient(100deg, var(--primary), var(--accent));
@@ -448,9 +448,9 @@ function scrollToTop() {
   line-height: 26px;
   color: var(--text-secondary);
   max-width: 560px;
-  animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-slow) 0.16s cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
-.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both; }
+.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal var(--dur-slow) 0.24s cubic-bezier(0.22, 0.8, 0.36, 1) both; }
 @keyframes heroReveal {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
@@ -499,8 +499,8 @@ function scrollToTop() {
   box-shadow: var(--shadow-sm);
   cursor: pointer;
   transition: transform var(--dur-normal) var(--ease-out),
-              border-color 0.18s var(--ease-out),
-              box-shadow 0.18s var(--ease-out);
+              border-color var(--dur-normal) var(--ease-out),
+              box-shadow var(--dur-normal) var(--ease-out);
 }
 .feature-card.visible {
   animation: cardIn var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
@@ -565,9 +565,9 @@ function scrollToTop() {
   background: var(--bg-surface-hover);
 }
 .win-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
-.win-dot.red { background: #ff5f57; }
-.win-dot.yellow { background: #febc2e; }
-.win-dot.green { background: #28c840; }
+.win-dot.red { background: var(--traffic-red); }
+.win-dot.yellow { background: var(--traffic-amber); }
+.win-dot.green { background: var(--traffic-green); }
 .win-title { flex: 1; text-align: center; font-size: 11px; color: var(--text-tertiary); margin-right: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .window-body { padding: 16px; }
 
@@ -703,7 +703,7 @@ function scrollToTop() {
 .home-footer-logo {
   width: 20px; height: 20px; border-radius: 6px;
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: #fff; font-size: 9px; font-weight: 700;
+  color: var(--on-solid); font-size: 9px; font-weight: 700;
   display: inline-flex; align-items: center; justify-content: center;
 }
 

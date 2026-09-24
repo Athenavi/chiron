@@ -737,7 +737,7 @@ onMounted(() => {
     right: 0;
     background: var(--bg-card);
     z-index: var(--z-content);
-    box-shadow: -8px 0 12px -8px rgba(0, 0, 0, 0.12);
+    box-shadow: -8px 0 12px -8px var(--shadow-edge);
   }
   .oauth-providers-view :deep(.ant-table-thead > tr > th:last-child) { z-index: var(--z-local); }
 }

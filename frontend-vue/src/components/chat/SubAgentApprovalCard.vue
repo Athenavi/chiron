@@ -114,7 +114,7 @@ const prettyArgs = computed(() => {
   background: var(--primary-bg); padding: 2px 8px; border-radius: 10px;
 }
 .approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
-.approval-hint { margin-left: auto; font-size: 11px; color: var(--warning, #f59e0b); }
+.approval-hint { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
 .approval-desc { font-size: 12px; color: var(--text-secondary, #595959); margin-bottom: 6px; }
 .approval-args {
   font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
@@ -128,8 +128,8 @@ const prettyArgs = computed(() => {
 .approval-btn.allow:hover:not(:disabled) { opacity: 0.9; }
 .approval-btn.danger { background: var(--bg-hover); color: var(--text-primary); }
 .approval-btn.danger:hover:not(:disabled) {
-  background: var(--danger-bg, rgba(239, 68, 68, 0.12)); color: var(--danger, #ef4444);
+  background: var(--danger-bg, var(--error-bg)); color: var(--danger, var(--error));
 }
 .approval-done { font-size: 12px; color: var(--success, #16a34a); }
-.approval-error { margin-top: 6px; font-size: 12px; color: var(--danger, #ef4444); }
+.approval-error { margin-top: 6px; font-size: 12px; color: var(--danger, var(--error)); }
 </style>

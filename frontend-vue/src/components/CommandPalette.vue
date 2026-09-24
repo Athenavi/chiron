@@ -524,7 +524,7 @@ onUnmounted(() => {
   align-items: flex-start;
   justify-content: center;
   padding: min(14vh, 120px) 12px 24px;
-  background: rgba(15, 17, 21, 0.45);
+  background: var(--bg-overlay);
   backdrop-filter: blur(4px);
   -webkit-backdrop-filter: blur(4px);
 }
@@ -537,7 +537,10 @@ onUnmounted(() => {
   flex-direction: column;
   border-radius: 14px;
   overflow: hidden;
-  background: var(--menu-bg);
+  /* 原为 var(--menu-bg) —— 该变量**从未定义**且无 fallback，背景实际会失效。
+     语义是「毛玻璃面板底」，改用 --bg-surface（多个主题下本身就是半透明，
+     与下面的 backdrop-filter 配套）。 */
+  background: var(--bg-surface);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border: 1px solid var(--border);
@@ -605,7 +608,7 @@ onUnmounted(() => {
   padding: 9px 10px;
   border-radius: 8px;
   cursor: pointer;
-  transition: background 0.12s ease;
+  transition: background var(--dur-fast) ease;
 }
 .palette-item:hover { background: var(--bg-hover); }
 .palette-item.active {
@@ -626,7 +629,7 @@ onUnmounted(() => {
 }
 .palette-item.active .palette-item-icon {
   background: var(--primary);
-  color: #fff;
+  color: var(--on-solid);
 }
 .palette-item-main {
   flex: 1;
@@ -654,7 +657,7 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--text-muted);
   opacity: 0;
-  transition: opacity 0.12s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 .palette-item.active .palette-item-go { opacity: 1; color: var(--primary); }
 
@@ -674,7 +677,7 @@ onUnmounted(() => {
   border: 2px solid var(--border);
   border-top-color: var(--primary);
   border-radius: 50%;
-  animation: paletteSpin 0.6s linear infinite;
+  animation: paletteSpin var(--dur-spin) linear infinite;
 }
 @keyframes paletteSpin { to { transform: rotate(360deg); } }
 
@@ -707,11 +710,11 @@ onUnmounted(() => {
 /* ── 开合过渡 ── */
 .palette-enter-active,
 .palette-leave-active {
-  transition: opacity 0.16s ease;
+  transition: opacity var(--dur-normal) ease;
 }
 .palette-enter-active .palette-panel,
 .palette-leave-active .palette-panel {
-  transition: transform 0.16s ease, opacity 0.16s ease;
+  transition: transform var(--dur-normal) ease, opacity var(--dur-normal) ease;
 }
 .palette-enter-from,
 .palette-leave-to {

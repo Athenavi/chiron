@@ -1466,7 +1466,7 @@ onUnmounted(() => {
             <Progress 
               v-if="state.status === 'uploading'"
               :percent="state.progress" 
-              :stroke-color="state.progress < 30 ? '#ff4d4f' : state.progress < 70 ? '#faad14' : '#52c41a'"
+              :stroke-color="state.progress < 30 ? 'var(--error)' : state.progress < 70 ? 'var(--warning)' : 'var(--success)'"
               size="small"
             />
             <div
@@ -1670,11 +1670,11 @@ onUnmounted(() => {
 .lb-prev { left: 8px; }
 .lb-next { right: 8px; }
 .lb-btn:hover { color: var(--primary); border-color: var(--primary); }
-.lb-meta { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: 999px; background: rgba(0, 0, 0, 0.6); color: #fff; font-size: 12px; }
+.lb-meta { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: 999px; background: var(--bg-overlay); color: var(--on-solid); font-size: 12px; }
 .lb-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.lb-count { color: rgba(255, 255, 255, 0.7); }
-.lb-close { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: none; border-radius: 50%; background: rgba(0, 0, 0, 0.5); color: #fff; cursor: pointer; }
-.lb-close:hover { background: rgba(0, 0, 0, 0.7); }
+.lb-count { color: var(--on-viewer-strong); }
+.lb-close { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: none; border-radius: 50%; background: var(--bg-overlay); color: var(--on-solid); cursor: pointer; }
+.lb-close:hover { background: var(--bg-overlay); }
 @media (max-width: 768px) {
   .media-page { padding: 12px; height: auto; min-height: 100%; overflow: visible; }
   .file-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; overflow: visible; padding-bottom: 16px; }
@@ -1720,14 +1720,14 @@ onUnmounted(() => {
   font-weight: 500;
 }
 .upload-status.uploading { color: var(--primary); }
-.upload-status.success { color: #52c41a; }
-.upload-status.error { color: #ff4d4f; }
+.upload-status.success { color: var(--success); }
+.upload-status.error { color: var(--error); }
 .upload-error-detail { 
   margin-top: 6px; 
   font-size: 12px; 
-  color: #ff4d4f; 
+  color: var(--error); 
   padding: 4px 8px; 
-  background: rgba(255, 77, 79, 0.1); 
+  background: var(--error-bg); 
   border-radius: 4px;
 }
 .upload-actions { 

@@ -802,7 +802,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .result-source { font-size: 12px; color: var(--text-tertiary); }
 .result-header { margin-bottom: 8px; }
 .result-content { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-primary); }
-.search-highlight { background: #fff3cd; color: #856404; padding: 1px 2px; border-radius: 2px; }
+.search-highlight { background: var(--highlight-bg); color: var(--highlight-fg); padding: 1px 2px; border-radius: 2px; }
 .doc-name-link { color: var(--primary-color, #1890ff); cursor: pointer; font-weight: 500; }
 .doc-name-link:hover { text-decoration: underline; }
 
@@ -811,7 +811,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .selected-count { font-size: 13px; color: var(--text-secondary); }
 .media-empty { padding: 40px 0; }
 .media-list { border: 1px solid var(--border-card); border-radius: 8px; overflow: hidden; max-height: 400px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.media-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-card); cursor: pointer; transition: background 0.2s; }
+.media-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-card); cursor: pointer; transition: background var(--dur-normal); }
 .media-item:last-child { border-bottom: none; }
 .media-item:hover { background: var(--bg-hover, rgba(0,0,0,0.03)); }
 .media-item.selected { background: var(--primary-bg, #e6f7ff); }

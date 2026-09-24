@@ -137,7 +137,7 @@ function onTouchEnd() {
 
 const panelStyle = computed(() => {
   if (isDrawerMode.value && dragX.value !== 0) {
-    return { transform: `translateX(${dragX.value}px)`, transition: dragging.value ? 'none' : 'transform 0.25s ease' }
+    return { transform: `translateX(${dragX.value}px)`, transition: dragging.value ? 'none' : 'transform var(--dur-normal) ease' }
   }
   return undefined
 })
@@ -935,7 +935,7 @@ function pickSession(id: string) {
   box-shadow: var(--sig-shadow-hover);
   transform: translateX(100%);
   visibility: hidden;
-  transition: transform 0.25s ease, visibility 0.25s;
+  transition: transform var(--dur-normal) ease, visibility var(--dur-normal);
   touch-action: pan-y; /* 允许纵向滚动，横向交给手势 */
   will-change: transform;
 }
@@ -978,12 +978,12 @@ function pickSession(id: string) {
   height: 28px; padding: 0 8px; border: none; border-radius: var(--sig-radius-button);
   background: transparent; color: var(--text-primary);
   font-size: 13px; font-weight: 600; cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 .session-picker:hover, .session-back:hover { background: var(--bg-hover); }
 .session-picker-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .session-picker-arrow { flex: none; font-size: 10px; color: var(--text-tertiary); }
-.toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: 4px; transition: color 0.15s ease, background 0.15s ease; }
+.toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: 4px; transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
 .toolbar-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 
 /* ── 当前会话上下文 chips（与消息区/侧栏 tag-chip 同设计语言）── */
@@ -995,12 +995,12 @@ function pickSession(id: string) {
   padding: 2px 8px; border-radius: var(--sig-radius-button);
   border: 1px solid var(--border); background: var(--bg-card);
   color: var(--text-secondary); font-size: 12px;
-  transition: border-color 0.15s ease, color 0.15s ease;
+  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 .ctx-chip:hover { border-color: var(--primary); color: var(--primary); }
 .ctx-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-chip-remove { font-size: 10px; color: var(--text-tertiary); cursor: pointer; }
-.ctx-chip-remove:hover { color: var(--danger, #ef4444); }
+.ctx-chip-remove:hover { color: var(--danger, var(--error)); }
 
 /* ── 可用工具：让 MCP/插件注入的工具在对话页可见（默认收起）── */
 .panel-tools { flex: none; border-bottom: 1px solid var(--border); }
@@ -1008,12 +1008,12 @@ function pickSession(id: string) {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 8px 12px; border: none; background: none;
   color: var(--text-tertiary); font-size: 11px; text-align: left; cursor: pointer;
-  transition: color 0.15s ease;
+  transition: color var(--dur-fast) ease;
 }
 .tools-head:hover { color: var(--primary); }
 .tools-title { flex: none; }
 .tools-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tools-arrow { flex: none; font-size: 10px; transition: transform 0.15s ease; }
+.tools-arrow { flex: none; font-size: 10px; transition: transform var(--dur-fast) ease; }
 .tools-arrow.expanded { transform: rotate(180deg); }
 .tools-body { max-height: 200px; overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 .tools-empty { padding: 10px 8px; text-align: center; color: var(--text-muted); font-size: 12px; }
@@ -1051,7 +1051,7 @@ function pickSession(id: string) {
   border-radius: 1px;
   background: var(--primary);
   opacity: 0.78;
-  transition: opacity 0.15s ease;
+  transition: opacity var(--dur-fast) ease;
 }
 .timeline-span[data-hovered='true']:not([data-current='true']) {
   opacity: 1;
@@ -1063,7 +1063,7 @@ function pickSession(id: string) {
 
 /* ── 主视图：提问锚点列表 ── */
 .anchor-list { flex: 1; overflow-y: auto; padding: 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
-.anchor-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--sig-radius-button); cursor: pointer; transition: background 0.15s ease; }
+.anchor-row { display: flex; align-items: center; gap: 8px; padding: 7px 8px; border-radius: var(--sig-radius-button); cursor: pointer; transition: background var(--dur-fast) ease; }
 .anchor-row:hover { background: var(--bg-hover); }
 .anchor-row.active { background: var(--primary-bg); }
 .row-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
@@ -1077,9 +1077,9 @@ function pickSession(id: string) {
 
 /* P3-D: 标签筛选与展示 */
 .tag-filter { display: flex; gap: 6px; padding: 4px 12px 8px; flex-wrap: wrap; }
-.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: 11px; cursor: pointer; transition: all 0.15s ease; }
+.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: 11px; cursor: pointer; transition: all var(--dur-fast) ease; }
 .tag-chip:hover { border-color: var(--primary); color: var(--primary); }
-.tag-chip.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.tag-chip.active { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
 /* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
 .session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
@@ -1088,7 +1088,7 @@ function pickSession(id: string) {
   display: flex; align-items: center; gap: 4px;
   padding: 0 10px; height: 40px; border-radius: var(--sig-radius-card);
   cursor: pointer; margin-bottom: 1px;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
   position: relative;
 }
 .session-row:hover, .session-row.menu-open { background: var(--bg-hover); }
@@ -1118,7 +1118,7 @@ function pickSession(id: string) {
 }
 .act-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; }
 .act-title { font-size: 11px; color: var(--text-tertiary); }
-.act-refresh { font-size: 11px; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; transition: color 0.15s ease; }
+.act-refresh { font-size: 11px; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; transition: color var(--dur-fast) ease; }
 .act-refresh:hover { color: var(--primary); }
 .act-list { overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 .act-row {
@@ -1126,13 +1126,13 @@ function pickSession(id: string) {
   padding: 6px 8px; border: none; border-radius: var(--sig-radius-button);
   background: transparent; color: var(--text-secondary);
   font-size: 12px; text-align: left; cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 .act-row:hover { background: var(--bg-hover); }
 .act-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--text-disabled); }
 .act-dot.completed, .act-dot.success { background: var(--success); }
 .act-dot.running, .act-dot.pending { background: var(--primary); }
-.act-dot.failed, .act-dot.error { background: var(--danger, #ef4444); }
+.act-dot.failed, .act-dot.error { background: var(--danger, var(--error)); }
 .act-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .act-time { flex: none; font-size: 10px; color: var(--text-muted); }
 .act-empty { padding: 10px 12px; font-size: 11px; color: var(--text-muted); }

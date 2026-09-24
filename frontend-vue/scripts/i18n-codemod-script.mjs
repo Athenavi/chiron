@@ -37,6 +37,14 @@ const ONLY = onlyIdx >= 0 ? process.argv[onlyIdx + 1]?.split('\\').join('/') : n
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
 /** 只处理单引号字面量：反引号有插值、双引号在 HTML 属性里更常见，都放过 */
 const STRING_RE = /'((?:[^'\\\n]|\\.)*)'/g
+/**
+ * 已经 i18n 化的字面量（`t('…')` / `tr('…')` / `$t('…')` / `i18n.global.t('…')`）。
+ *
+ * 本脚本按行内**所有**单引号字面量替换，若不排除已有调用，原有的 `t('微信')` 会被
+ * 再包一层成为 `t(t('微信'))`（实测 790 处）—— 虽因内层先翻译而"巧合等价"，但语义
+ * 冗余、且一旦某语言有真实译文就会二次查找。这里先把这些区间算出来，替换时跳过。
+ */
+const I18N_WRAPPED = /(?:\$t|(?<![\w.$])(?:t|tr)|i18n\.global\.t)\(\s*'(?:[^'\\]|\\.)*'\s*\)/g
 
 const WHITE =
   /(?:\b(?:label|title|placeholder|description|hint|tooltip|okText|cancelText|errorText|emptyText|text|content)\s*:)|(?:message\.(?:success|error|warning|info|loading)\()/
@@ -113,7 +121,10 @@ for (const file of walk(join(ROOT, 'src')).sort()) {
     if (!CJK.test(line)) return line
     if (BLACK.test(line)) return line
     if (!WHITE.test(line)) return line
-    return line.replace(STRING_RE, (whole, body) => {
+    // 跳过已在 i18n 调用内的字面量（否则会包出 t(t('…'))）
+    const wrapped = [...line.matchAll(I18N_WRAPPED)].map(m => [m.index, m.index + m[0].length])
+    return line.replace(STRING_RE, (whole, body, offset) => {
+      if (wrapped.some(([a, b]) => offset >= a && offset < b)) return whole
       if (!isSafeText(body)) return whole
       hits++
       phrases.set(body.trim(), (phrases.get(body.trim()) ?? 0) + 1)

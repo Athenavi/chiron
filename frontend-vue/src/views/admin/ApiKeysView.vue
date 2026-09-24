@@ -559,9 +559,9 @@ onMounted(() => {
 
 <style scoped>
 .api-keys { padding: 0; }
-.status-ok { color: var(--success, #22c55e); }
-.status-warn { color: var(--warning, #f59e0b); }
-.status-error { color: var(--error, #ef4444); }
+.status-ok { color: var(--success, var(--success)); }
+.status-warn { color: var(--warning, var(--warning)); }
+.status-error { color: var(--error, var(--error)); }
 
 .provider-id {
   font-size: 12px;
@@ -629,7 +629,7 @@ onMounted(() => {
 .provider-card-line.endpoint { font-family: var(--font-mono, monospace); }
 .provider-card-state {
   font-size: 12px;
-  color: var(--success, #22c55e);
+  color: var(--success, var(--success));
 }
 .provider-empty {
   padding: 16px;

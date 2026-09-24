@@ -111,7 +111,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
   position: fixed; inset: 0; z-index: var(--z-viewer);
   display: flex; flex-direction: column; align-items: center;
   padding: 16px;
-  background: rgba(0, 0, 0, 0.82);
+  background: var(--viewer-scrim);
   overflow: auto;
 }
 .viewer-bar {
@@ -119,8 +119,8 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
   display: flex; align-items: center; gap: 6px;
   max-width: 100%; padding: 6px 10px; margin-bottom: 12px;
   border-radius: var(--radius-full);
-  background: rgba(24, 24, 27, 0.86);
-  color: #fafafa;
+  background: var(--viewer-scrim);
+  color: var(--on-solid);
 }
 .viewer-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .viewer-percent { min-width: 44px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.75; }
@@ -131,11 +131,11 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
   background: none; color: inherit; font-size: 12px; cursor: pointer;
   text-decoration: none;
 }
-.viewer-btn:hover { background: rgba(255, 255, 255, 0.14); }
-.viewer-btn:focus-visible { outline: 2px solid #fff; outline-offset: 1px; }
+.viewer-btn:hover { background: var(--on-viewer-faint); }
+.viewer-btn:focus-visible { outline: 2px solid var(--on-solid); outline-offset: 1px; }
 .viewer-img {
   max-width: min(96vw, 1600px); max-height: none;
-  transition: transform 120ms ease-out;
+  transition: transform var(--dur-fast) ease-out;
   transform-origin: center;
 }
 @media (prefers-reduced-motion: reduce) { .viewer-img { transition: none; } }

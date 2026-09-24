@@ -790,7 +790,7 @@ async function handleLogin() {
   margin: 0 auto 16px;
   border-radius: 14px;
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: #fff;
+  color: var(--on-solid);
   font-weight: 700;
   font-size: 18px;
   letter-spacing: 0.02em;

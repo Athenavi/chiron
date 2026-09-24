@@ -120,7 +120,7 @@ function submitDraft() {
   border: 1px solid var(--border); border-radius: var(--sig-radius-button);
   background: var(--bg-surface); color: var(--text-primary);
   font-size: 13px; line-height: 20px; padding: 5px 14px; cursor: pointer;
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .ask-option:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
 .ask-option:disabled { opacity: 0.5; cursor: not-allowed; }
@@ -137,7 +137,7 @@ function submitDraft() {
 .ask-submit {
   flex: none;
   border: none; border-radius: var(--sig-radius-button);
-  background: var(--accent); color: #fff;
+  background: var(--accent); color: var(--on-solid);
   font-size: 13px; line-height: 20px; padding: 5px 16px; cursor: pointer;
 }
 .ask-submit:disabled { opacity: 0.4; cursor: not-allowed; }

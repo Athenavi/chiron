@@ -1099,7 +1099,7 @@ function toolCount(a: Agent): number {
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--dur-normal) ease, border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 .agent-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .agent-card.disabled { opacity: 0.6; }
@@ -1136,8 +1136,8 @@ function toolCount(a: Agent): number {
 .session-status-icon { flex: none; width: 30px; height: 30px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-size: 14px; }
 .session-status-icon.pending { background: var(--bg-secondary); color: var(--text-tertiary); }
 .session-status-icon.running { background: var(--primary-bg); color: var(--primary); }
-.session-status-icon.completed { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
-.session-status-icon.failed { background: rgba(239, 68, 68, 0.12); color: #ef4444; }
+.session-status-icon.completed { background: var(--success-bg); color: var(--success); }
+.session-status-icon.failed { background: var(--error-bg); color: var(--error); }
 .session-main { flex: 1; min-width: 0; }
 .session-task { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .session-meta { display: flex; align-items: center; gap: 8px; margin-top: 4px; }

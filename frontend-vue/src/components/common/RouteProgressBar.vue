@@ -22,10 +22,10 @@ const barStyle = computed(() => ({
   top: 0; left: 0;
   height: 2px;
   width: 100%;
-  background: var(--primary, #4176e6);
+  background: var(--primary, var(--node-blue));
   z-index: var(--z-progress);
   pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.3s ease;
-  box-shadow: 0 0 8px var(--primary, #4176e6);
+  transition: opacity var(--dur-normal) ease, transform var(--dur-normal) ease;
+  box-shadow: 0 0 8px var(--primary, var(--node-blue));
 }
 </style>

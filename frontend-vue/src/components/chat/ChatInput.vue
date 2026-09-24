@@ -92,9 +92,9 @@ function onModelChange(v: any) {
 // 用户确认**。参照 reasonix 的 ComposerChoice —— 说明文字**随选项走**（option.description），
 // 而不是在控件旁外挂一行提示；所以这里把每一档的语义做成该选项的**悬浮 pop 词**。
 const TOOLS_MODE_META = [
-  { value: 'ask', label: '询问', desc: '写类工具需确认：shell 执行、文件写入、git 写操作、浏览器/网络访问' },
-  { value: 'auto', label: '自动', desc: '仅危险工具需确认（默认）：shell/命令执行等对外部世界的动作' },
-  { value: 'yolo', label: '全自动', desc: '跳过全部确认：所有工具直接执行（该操作会留审计日志）' },
+  { value: 'ask', label: tr('询问'), desc: tr('写类工具需确认：shell 执行、文件写入、git 写操作、浏览器/网络访问') },
+  { value: 'auto', label: tr('自动'), desc: tr('仅危险工具需确认（默认）：shell/命令执行等对外部世界的动作') },
+  { value: 'yolo', label: tr('全自动'), desc: tr('跳过全部确认：所有工具直接执行（该操作会留审计日志）') },
 ] as const
 
 /** 选项 label 用 VNode 包一层 Tooltip —— 悬浮即见该档语义（对齐 reasonix 的 option.description） */
@@ -1152,7 +1152,7 @@ defineExpose({ insertText })
   border: none; background: transparent; cursor: pointer; line-height: 1;
   color: var(--text-tertiary); font-size: 10px; padding: 0 2px;
 }
-.context-chip__x:hover { color: var(--danger, #ff4d4f); }
+.context-chip__x:hover { color: var(--danger, var(--error)); }
 .att-thumb { position: relative; width: 64px; height: 64px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); overflow: hidden; }
 .att-thumb-img { width: 100%; height: 100%; object-fit: cover; }
 .att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: 10px; }

@@ -361,7 +361,7 @@ function amountText(amount: number): string {
 <template>
   <div class="billing-container">
     <div class="billing-header">
-      <CreditCardOutlined style="font-size: 26px; color: #f59e0b" />
+      <CreditCardOutlined style="font-size: 26px; color: var(--warning)" />
       <h1>{{ $t('计费管理') }}</h1>
     </div>
 
@@ -394,7 +394,7 @@ function amountText(amount: number): string {
           </template>
           <div class="balance-display">
             <span class="balance-amount">{{ balance ?? 0 }}</span>
-            <Tag color="#f59e0b">
+            <Tag color="var(--warning)">
               credits
             </Tag>
           </div>
@@ -611,7 +611,7 @@ function amountText(amount: number): string {
       <div class="qr-body">
         <div class="qr-channel">
           {{ qrChannel === 'alipay' ? '支付宝' : '微信支付' }}
-          <Tag color="#f59e0b">
+          <Tag color="var(--warning)">
             {{ effectiveCredits }} credits
           </Tag>
         </div>
@@ -666,7 +666,7 @@ function amountText(amount: number): string {
 .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 
 .balance-display { display: flex; align-items: baseline; gap: 12px; }
-.balance-amount { font-size: 44px; font-weight: 700; color: var(--colorWarning, #f59e0b); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.balance-amount { font-size: 44px; font-weight: 700; color: var(--colorWarning, var(--warning)); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .free-quota { margin-top: 16px; }
 .free-quota-label { display: flex; justify-content: space-between; color: var(--text-tertiary); font-size: 13px; margin-bottom: 4px; }
 .free-quota-count { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
@@ -676,13 +676,13 @@ function amountText(amount: number): string {
 .stat-item { text-align: center; padding: 14px 8px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: 8px; }
 .stat-label { display: block; color: var(--text-tertiary); font-size: 12px; margin-bottom: 6px; }
 .stat-value { font-size: 22px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
-.stat-spent { color: var(--colorError, #ef4444); }
+.stat-spent { color: var(--colorError, var(--error)); }
 .stat-added { color: var(--colorSuccess, #10b981); }
 
 .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 170px; overflow-x: auto; padding-top: 8px; -webkit-overflow-scrolling: touch; }
 .bar-col { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
 .bar-value { font-size: 11px; color: var(--text-tertiary); margin-bottom: 2px; white-space: nowrap; }
-.bar { width: 70%; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--colorWarning, #f59e0b), var(--colorWarning-bg, #fbbf24)); }
+.bar { width: 70%; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--colorWarning, var(--warning)), var(--colorWarning-bg, #fbbf24)); }
 .bar-zero { background: var(--border-card, #e5e7eb); }
 .bar-label { font-size: 10px; color: var(--text-tertiary); margin-top: 4px; white-space: nowrap; transform: rotate(-30deg); transform-origin: top left; }
 
@@ -700,7 +700,7 @@ function amountText(amount: number): string {
 .purchase-note { font-size: 12px; color: var(--text-tertiary); }
 
 .amount-add { color: var(--colorSuccess, #10b981); font-weight: 600; font-variant-numeric: tabular-nums; }
-.amount-deduct { color: var(--colorError, #ef4444); font-weight: 600; font-variant-numeric: tabular-nums; }
+.amount-deduct { color: var(--colorError, var(--error)); font-weight: 600; font-variant-numeric: tabular-nums; }
 
 .qr-body { text-align: center; padding: 8px 0; }
 .qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }

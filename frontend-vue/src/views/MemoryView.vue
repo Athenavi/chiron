@@ -344,7 +344,7 @@ function pct(n: number): string {
         <Badge
           :count="total"
           :overflow-count="999"
-          color="#6366f1"
+          color="var(--node-indigo)"
         />
         <span class="subtitle">{{ $t('跨会话留存 · 语义检索 · 自动整理') }}</span>
       </div>

@@ -776,8 +776,8 @@ onUpdated(enhanceContent)
 .msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-fast) ease; }
 .msg-action:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-action.active { color: var(--primary); opacity: 1; }
-.msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: #fff; font-size: 12px; gap: 4px; opacity: 1; }
-.msg-action.continue-btn:hover { opacity: 0.9; background: var(--primary); color: #fff; }
+.msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: var(--on-solid); font-size: 12px; gap: 4px; opacity: 1; }
+.msg-action.continue-btn:hover { opacity: 0.9; background: var(--primary); color: var(--on-solid); }
 
 /* P3-A: 用 CSS 变量覆盖 hljs token 颜色，暗色模式自动跟随 .dark class */
 .hljs { color: var(--hljs-fg); background: var(--hljs-bg); }
@@ -828,7 +828,7 @@ onUpdated(enhanceContent)
 .edit-textarea :deep(textarea) { font-size: 16px !important; line-height: 24px !important; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .edit-btn { padding: 4px 12px; border-radius: var(--sig-radius-button); font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); transition: all var(--dur-fast) ease; }
-.edit-btn.save { background: var(--primary); color: #fff; border-color: var(--primary); }
+.edit-btn.save { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .edit-btn.save:hover { opacity: 0.9; }
 .edit-btn.cancel:hover { color: var(--text-primary); background: var(--bg-hover); }
 
@@ -864,7 +864,7 @@ onUpdated(enhanceContent)
 }
 .source-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
 .source-chip.kb { background: var(--primary-bg); color: var(--primary); border-color: transparent; }
-.source-chip.kb:hover { background: var(--primary); color: #fff; border-color: var(--primary); }
+.source-chip.kb:hover { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .source-chip.agent { background: var(--bg-hover); color: var(--text-primary); }
 .source-chip.trace { background: var(--bg-card); color: var(--text-secondary); border-color: var(--border); font-family: var(--font-mono); font-size: 11px; }
 .source-chip.trace:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
@@ -874,5 +874,5 @@ onUpdated(enhanceContent)
 .msg-error-banner { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); background: var(--error-bg); border: 1px solid var(--error); }
 .msg-error-banner .error-text { font-size: 13px; color: var(--error); flex: 1; }
 .retry-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--sig-radius-button); border: 1px solid var(--error); background: transparent; color: var(--error); font-size: 12px; cursor: pointer; transition: background var(--dur-fast) ease, color var(--dur-fast) ease; }
-.retry-btn:hover { background: var(--error); color: #fff; }
+.retry-btn:hover { background: var(--error); color: var(--on-solid); }
 </style>

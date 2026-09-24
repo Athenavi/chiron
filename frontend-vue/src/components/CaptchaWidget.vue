@@ -241,11 +241,11 @@ defineExpose({ reset })
   padding: 10px 12px;
   border: 1px solid var(--border-card, #d9d9d9);
   border-radius: 8px;
-  background: var(--bg-card, #fafafa);
+  background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));
   font-size: 14px;
   cursor: pointer;
-  transition: border-color 0.2s;
+  transition: border-color var(--dur-normal);
 }
 
 .tencent-trigger:hover:not(:disabled) {
@@ -262,7 +262,7 @@ defineExpose({ reset })
   border: 1px dashed var(--border-card, #d9d9d9);
   border-radius: 8px;
   font-size: 13px;
-  color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+  color: var(--text-tertiary, var(--bg-overlay));
   line-height: 1.6;
 }
 
@@ -270,10 +270,10 @@ defineExpose({ reset })
 .captcha-error {
   margin-top: 6px;
   font-size: 13px;
-  color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+  color: var(--text-tertiary, var(--bg-overlay));
 }
 
 .captcha-error {
-  color: #cf1322;
+  color: var(--error);
 }
 </style>

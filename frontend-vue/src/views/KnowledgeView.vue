@@ -551,7 +551,7 @@ function formatDate(iso: string): string {
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
   cursor: pointer;
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--dur-normal) ease, border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 .kb-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .kb-card.public { border-left: 3px solid var(--warning); }

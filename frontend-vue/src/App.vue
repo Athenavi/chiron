@@ -65,8 +65,8 @@ html, body, #app {
   min-height: 100dvh;
   background: var(--bg-page);
   color: var(--text-primary);
-  transition: background-color 0.4s cubic-bezier(0.22, 1, 0.36, 1),
-              color 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1),
+              color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 body {
@@ -75,8 +75,8 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-page);
-  transition: background-color 0.4s cubic-bezier(0.22, 1, 0.36, 1),
-              background-image 0.4s cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1),
+              background-image var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1);
 }
 
 /* 主题切换：全局平滑过渡 - 仅对特定属性生效，避免 * 选择器性能问题 */

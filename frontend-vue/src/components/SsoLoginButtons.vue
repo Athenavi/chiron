@@ -89,7 +89,7 @@ function startSso(p: SsoPublicProvider) {
   align-items: center;
   gap: 12px;
   margin: 16px 0;
-  color: var(--text-tertiary, rgba(0, 0, 0, 0.45));
+  color: var(--text-tertiary, var(--bg-overlay));
   font-size: 13px;
 }
 
@@ -118,16 +118,16 @@ function startSso(p: SsoPublicProvider) {
   padding: 9px 12px;
   border: 1px solid var(--border-card, #d9d9d9);
   border-radius: 8px;
-  background: var(--bg-card, #fff);
+  background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));
   font-size: 14px;
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color var(--dur-normal), box-shadow var(--dur-normal);
 }
 
 .sso-btn:hover {
   border-color: var(--primary, #1677ff);
-  box-shadow: 0 1px 4px rgba(22, 119, 255, 0.12);
+  box-shadow: 0 1px 4px var(--shadow-brand);
 }
 
 .sso-btn:focus-visible {
@@ -144,7 +144,7 @@ function startSso(p: SsoPublicProvider) {
   width: 20px;
   height: 20px;
   border-radius: 5px;
-  color: #fff;
+  color: var(--on-solid);
   font-size: 11px;
   font-weight: 600;
   display: inline-flex;

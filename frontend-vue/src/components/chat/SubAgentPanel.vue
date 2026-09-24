@@ -957,7 +957,7 @@ onBeforeUnmount(() => {
   padding: 4px 8px; border-radius: 6px; cursor: pointer;
 }
 .tree-row:hover { background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
-.tree-row.active { background: var(--primary-light, rgba(22, 119, 255, 0.12)); }
+.tree-row.active { background: var(--primary-light, var(--shadow-brand)); }
 .twisty {
   width: 14px; flex: none; border: none; background: none; cursor: pointer;
   color: var(--text-tertiary, #8c8c8c); font-size: 11px; padding: 0;
@@ -972,7 +972,7 @@ onBeforeUnmount(() => {
   background: transparent; border: 1px solid var(--border-color, rgba(127, 127, 127, 0.24));
   border-radius: 4px;
 }
-.run-stop:hover:not(:disabled) { color: var(--error, #cf1322); border-color: var(--error, #cf1322); }
+.run-stop:hover:not(:disabled) { color: var(--error, var(--error)); border-color: var(--error, var(--error)); }
 .run-stop:disabled { opacity: 0.5; cursor: default; }
 .bulk-stop { display: flex; justify-content: flex-end; padding: 0 8px 6px; }
 
@@ -986,8 +986,8 @@ onBeforeUnmount(() => {
 /* 待确认标记：让"有东西在等我"在不点开该 run 时也看得见 */
 .run-approval {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
-  font-size: 11px; color: var(--warning, #f59e0b);
-  background: transparent; border: 1px solid var(--warning, #f59e0b); border-radius: 4px;
+  font-size: 11px; color: var(--warning, var(--warning));
+  background: transparent; border: 1px solid var(--warning, var(--warning)); border-radius: 4px;
 }
 
 /* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
@@ -1007,7 +1007,7 @@ onBeforeUnmount(() => {
 .stream { max-height: 320px; overflow: auto; display: flex; flex-direction: column; gap: 4px; }
 .line { white-space: pre-wrap; line-height: 1.5; }
 .line.reasoning { color: var(--text-tertiary, #8c8c8c); font-style: italic; }
-.line.notice { color: var(--warning, #f59e0b); }
+.line.notice { color: var(--warning, var(--warning)); }
 .line.status, .line.done { color: var(--text-secondary, #595959); font-size: 12px; }
 .line-tag {
   display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: 11px;
@@ -1028,7 +1028,7 @@ onBeforeUnmount(() => {
 }
 .sa-tab:hover { color: var(--text-primary, #262626); }
 .sa-tab.active {
-  background: var(--bg-elevated, #fff); color: var(--text-primary, #262626);
+  background: var(--bg-elevated, var(--on-solid)); color: var(--text-primary, #262626);
   font-weight: 600; box-shadow: var(--shadow-xs);
 }
 .sa-tab-count {

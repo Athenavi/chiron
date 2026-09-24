@@ -171,7 +171,7 @@ function formatDate(iso: string): string {
 .share-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg-page); color: var(--text-primary); }
 .share-header { height: 52px; display: flex; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
 .share-brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: #fff; font-weight: 700; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
+.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: var(--on-solid); font-weight: 700; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
 .share-main { flex: 1; width: 100%; max-width: 748px; margin: 0 auto; padding: 32px 24px 60px; min-width: 0; }
 .share-head { margin-bottom: 24px; }
 .share-title { font-size: 22px; line-height: 30px; font-weight: 700; margin: 0 0 6px; word-break: break-word; }

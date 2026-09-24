@@ -14,7 +14,7 @@
    因此这里必须使用非 scoped 样式，动画类才能作用于实际过渡元素。 */
 .collapse-enter-active,
 .collapse-leave-active {
-  transition: all 0.2s ease;
+  transition: all var(--dur-normal) ease;
   overflow: hidden;
   transform-origin: top;
 }

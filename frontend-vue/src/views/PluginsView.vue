@@ -659,7 +659,7 @@ async function testPlugin(p: Plugin) {
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+  transition: transform var(--dur-normal) ease, border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 .plugin-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .plugin-card.inactive { opacity: 0.65; }
@@ -673,8 +673,8 @@ async function testPlugin(p: Plugin) {
 .card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mini-icon { font-size: 10px; }
 .action-right { margin-left: auto; display: flex; gap: 2px; }
-.test-result { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: rgba(239, 68, 68, 0.1); color: var(--error); }
-.test-result.ok { background: rgba(34, 197, 94, 0.12); color: #22c55e; }
+.test-result { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--error-bg); color: var(--error); }
+.test-result.ok { background: var(--success-bg); color: var(--success); }
 .plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-card); padding-top: 10px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
 .detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }

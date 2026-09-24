@@ -423,7 +423,7 @@ async function handleRegister() {
   margin: 0 auto 14px;
   border-radius: 12px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: #fff;
+  color: var(--on-solid);
   font-weight: 700;
   font-size: 16px;
   letter-spacing: 0.02em;
