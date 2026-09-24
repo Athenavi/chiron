@@ -1361,7 +1361,7 @@ onUnmounted(() => {
           type="button"
           class="lb-close"
           :title="$t('关闭')"
-          aria-label="关闭"
+          :aria-label="$t('关闭')"
           @click="lightboxOpen = false"
         >
           ✕

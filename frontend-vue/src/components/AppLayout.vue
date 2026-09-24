@@ -44,6 +44,8 @@ import {
   WORKSTATION_ROUTES,
 } from '../types/workstation'
 
+import { useI18n } from 'vue-i18n'
+const { t: tr } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
@@ -62,7 +64,7 @@ const isChatPage = computed(() => route.path === '/chat')
 // 监听 API 错误
 function handleApiError(e: Event) {
   const detail = (e as CustomEvent).detail
-  message.error(detail.message || '请求失败')
+  message.error(detail.message || tr('请求失败'))
 }
 
 onMounted(() => {
@@ -86,21 +88,21 @@ interface MenuItem {
 
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [
-    { key: '/', label: '首页', icon: () => h(HomeOutlined) },
+    { key: '/', label: tr('首页'), icon: () => h(HomeOutlined) },
     { key: WORKSTATION_ROUTES.dialogue, label: WORKSTATION_LABELS.dialogue, icon: () => h(MessageOutlined) },
     { key: WORKSTATION_ROUTES.agent, label: WORKSTATION_LABELS.agent, icon: () => h(UserOutlined) },
     { key: WORKSTATION_ROUTES.workflow, label: WORKSTATION_LABELS.workflow, icon: () => h(ApartmentOutlined) },
     { key: WORKSTATION_ROUTES.skill, label: WORKSTATION_LABELS.skill, icon: () => h(BlockOutlined) },
-    { key: '/media', label: '媒体', icon: () => h(PictureOutlined) },
+    { key: '/media', label: tr('媒体'), icon: () => h(PictureOutlined) },
     { key: WORKSTATION_ROUTES.knowledge, label: WORKSTATION_LABELS.knowledge, icon: () => h(BookOutlined) },
-    { key: '/memory', label: '记忆', icon: () => h(HistoryOutlined) },
+    { key: '/memory', label: tr('记忆'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
-    { key: '/billing', label: '计费', icon: () => h(CreditCardOutlined) },
+    { key: '/billing', label: tr('计费'), icon: () => h(CreditCardOutlined) },
     ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
-          { key: '/models', label: '模型', icon: () => h(ApiOutlined) },
-          { key: '/admin', label: '管理', icon: () => h(SettingOutlined) },
+          { key: '/models', label: tr('模型'), icon: () => h(ApiOutlined) },
+          { key: '/admin', label: tr('管理'), icon: () => h(SettingOutlined) },
         ]
       : []),
   ]
@@ -122,9 +124,9 @@ function handleMenuClick(info: any) {
 }
 
 const userMenuItems = computed<any[]>(() => [
-  { key: 'settings', label: '设置', icon: () => h(SettingOutlined) },
-  { key: 'profile', label: '个人资料', icon: () => h(UserSwitchOutlined) },
-  { key: 'logout', label: '退出登录', icon: () => h(LogoutOutlined) },
+  { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
+  { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
+  { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
 ])
 
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移
@@ -218,7 +220,7 @@ async function runQuickCommand() {
   quickLoading.value = true
   try {
     await executeQuickCommand(command)
-    message.success('任务已提交，正在对话页展示结果')
+    message.success(tr('任务已提交，正在对话页展示结果'))
     closeQuickCommand()
   } catch {
     // 错误已由统一处理器处理
@@ -262,7 +264,7 @@ async function runQuickCommand() {
     <!-- 工作台停靠坞 -->
     <nav
       v-if="showDock"
-      aria-label="工作台停靠坞"
+      :aria-label="$t('工作台停靠坞')"
       class="dock"
     >
       <div class="dock-items">

@@ -285,7 +285,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
               type="text"
               class="header-btn"
               :title="$t('通知')"
-              aria-label="通知"
+              :aria-label="$t('通知')"
             >
               <template #icon>
                 <BellOutlined />

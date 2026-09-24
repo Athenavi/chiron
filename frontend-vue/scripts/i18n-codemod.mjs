@@ -33,7 +33,16 @@ const ONLY = onlyIdx >= 0 ? process.argv[onlyIdx + 1]?.split('\\').join('/') : n
 
 const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
 /** 静态属性白名单：只翻译这些语义明确的属性，避免误伤 key/dataIndex/class 等 */
-const ATTRS = ['label', 'title', 'placeholder', 'description', 'hint', 'ok-text', 'cancel-text', 'empty-text', 'alt']
+/**
+ * 会被 i18n 化的**静态**属性名。
+ *
+ * `aria-label` 是无障碍读屏用的界面文案（"消息输入框"/"工作台停靠坞"），与 title /
+ * placeholder 同属必须翻译的文本 —— 原先漏掉它，导致模板里这类文案一处未迁（实测
+ * 它是模板侧剩余存量的主要来源之一）。
+ * 注意 `attrRe` 用 `\s(name)="`，因此 `aria-label="x"` 不会被 `label` 项误配
+ * （`label` 前是 `-` 而非空白），两项互不干扰。
+ */
+const ATTRS = ['aria-label', 'label', 'title', 'placeholder', 'description', 'hint', 'ok-text', 'cancel-text', 'empty-text', 'alt']
 
 function walk(dir) {
   const out = []

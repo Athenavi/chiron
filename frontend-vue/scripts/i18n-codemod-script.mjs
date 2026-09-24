@@ -84,7 +84,15 @@ function walk(dir) {
   return out
 }
 
-const SETUP_RE = /<script\s+setup[^>]*>([\s\S]*?)<\/script>/
+/**
+ * 提取 `<script setup>` 段。
+ *
+ * 用 `\bsetup\b` 而非 `\s+setup`：属性顺序是可变的，项目主流写法是
+ * `<script lang="ts" setup>`，而原来的 `/<script\s+setup[^>]*>/` 只认
+ * "setup 紧跟 script" 的写法 —— 于是这类文件的整段 setup 被**静默跳过**
+ * （实测 AppLayout.vue 等大批文件一处未改）。
+ */
+const SETUP_RE = /<script\b[^>]*\bsetup\b[^>]*>([\s\S]*?)<\/script>/
 const phrases = new Map()
 const report = []
 

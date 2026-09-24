@@ -39,7 +39,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
       class="viewer-mask"
       role="dialog"
       aria-modal="true"
-      aria-label="图片查看器"
+      :aria-label="$t('图片查看器')"
       @click.self="closeImageViewer"
     >
       <div class="viewer-bar">

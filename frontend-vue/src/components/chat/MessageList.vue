@@ -615,7 +615,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
     >
       <nav
         class="question-rail"
-        aria-label="提问导航"
+        :aria-label="$t('提问导航')"
       >
         <button
           v-for="q in questions"

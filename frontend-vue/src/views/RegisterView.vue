@@ -237,7 +237,7 @@ async function handleRegister() {
               v-model:value="form.name"
               :placeholder="$t('请输入姓名')"
               size="large"
-              aria-label="姓名"
+              :aria-label="$t('姓名')"
               autocomplete="name"
             >
               <template #prefix>
@@ -254,7 +254,7 @@ async function handleRegister() {
               v-model:value="form.email"
               :placeholder="$t('请输入邮箱')"
               size="large"
-              aria-label="邮箱"
+              :aria-label="$t('邮箱')"
               autocomplete="email"
             >
               <template #prefix>
@@ -305,7 +305,7 @@ async function handleRegister() {
               :placeholder="$t('请输入密码（至少8位）')"
               type="password"
               size="large"
-              aria-label="密码"
+              :aria-label="$t('密码')"
               autocomplete="new-password"
             >
               <template #prefix>
@@ -323,7 +323,7 @@ async function handleRegister() {
               :placeholder="$t('请再次输入密码')"
               type="password"
               size="large"
-              aria-label="确认密码"
+              :aria-label="$t('确认密码')"
               autocomplete="new-password"
             >
               <template #prefix>

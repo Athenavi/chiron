@@ -105,7 +105,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
       type="button"
       class="theme-switcher-btn"
       :title="$t('主题设置')"
-      aria-label="主题设置"
+      :aria-label="$t('主题设置')"
     >
       <BulbFilled v-if="themeStore.isDark" />
       <BulbOutlined v-else />

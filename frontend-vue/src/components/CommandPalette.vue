@@ -405,7 +405,7 @@ onUnmounted(() => {
           class="palette-panel"
           role="dialog"
           aria-modal="true"
-          aria-label="全局命令面板"
+          :aria-label="$t('全局命令面板')"
           @keydown="onPaletteKeydown"
         >
           <!-- 输入行 -->

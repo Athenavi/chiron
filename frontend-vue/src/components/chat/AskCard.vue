@@ -88,7 +88,7 @@ function submitDraft() {
         type="text"
         :placeholder="hasOptions ? '也可以直接输入回答' : '输入回答后回车'"
         :disabled="expired"
-        aria-label="回答"
+        :aria-label="$t('回答')"
         @keydown.enter.prevent="submitDraft"
       >
       <button

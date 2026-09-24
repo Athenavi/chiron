@@ -472,7 +472,7 @@ async function handleLogin() {
                 v-model:value="form.email"
                 :placeholder="$t('请输入邮箱')"
                 size="large"
-                aria-label="邮箱"
+                :aria-label="$t('邮箱')"
                 autocomplete="email"
               >
                 <template #prefix>
@@ -490,7 +490,7 @@ async function handleLogin() {
                 :placeholder="$t('请输入密码')"
                 type="password"
                 size="large"
-                aria-label="密码"
+                :aria-label="$t('密码')"
                 autocomplete="current-password"
               >
                 <template #prefix>

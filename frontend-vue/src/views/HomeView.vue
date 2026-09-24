@@ -357,7 +357,7 @@ function scrollToTop() {
         type="button"
         class="scroll-top"
         :title="$t('回到顶部')"
-        aria-label="回到顶部"
+        :aria-label="$t('回到顶部')"
         @click="scrollToTop"
       >
         <ArrowUpOutlined />

@@ -877,7 +877,7 @@ defineExpose({ insertText })
         :placeholder="inputPlaceholder"
         class="input-field"
         :disabled="disabled"
-        aria-label="消息输入框"
+        :aria-label="$t('消息输入框')"
         @keydown="onKeydown"
         @input="onComposerInput"
         @paste="onPaste"
