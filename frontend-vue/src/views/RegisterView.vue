@@ -401,8 +401,8 @@ async function handleRegister() {
   width: 420px;
   max-width: calc(100vw - 32px);
   position: relative;
-  z-index: 1;
-  animation: registerFadeIn 0.5s ease;
+  z-index: var(--z-content);
+  animation: registerFadeIn var(--dur-slow) ease;
 }
 
 .register-form-card {

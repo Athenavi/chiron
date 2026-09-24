@@ -2,26 +2,24 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
-
-	"github.com/athenavi/chiron/config"
 )
 
-// versionLock represents the data/version.lock file
-type versionLock struct {
-	DB string `json:"db"`
-}
-
-// versionLockPath returns the path to version.lock under the data directory.
-func versionLockPath() string {
-	return filepath.Join(config.GetDefaultDataDir(), "version.lock")
-}
+// ── Alembic 迁移入口（唯一迁移路径）─────────────────────────────────────────
+//
+// 本文件只做两件事：定位 alembic.ini / .env，然后 shell 出 `alembic upgrade head`。
+// 数据库 revision 以 **alembic_version 表**为唯一事实源（见 schema_version.go）。
+//
+// 历史上这里还有一整套 autogenerate 时代的遗留：本地 version.lock 文件
+// （versionLock / versionLockPath / getExpectedRevision / updateVersionLockDB）、
+// `alembic current` 探测（getCurrentRevision），以及迁移文件比对与“空迁移”判定
+// （listMigrationFiles / findNewFile / isEmptyMigration）。它们**没有任何生产调用点**
+// —— RunMigrations 的注释早已写明“不再 autogenerate、不再依赖本地 version.lock”，
+// 只是代码没删干净。此处一并移除，避免“看起来还在用 version.lock”的误导。
 
 // alembicConfigPath returns the path to alembic.ini.
 // Can be overridden via ALEMBIC_CONFIG env var; defaults to project root.
@@ -39,96 +37,6 @@ func dotEnvPath() string {
 		return v
 	}
 	return ".env"
-}
-
-// getExpectedRevision reads the expected db revision from version.lock
-func getExpectedRevision() (string, error) {
-	data, err := os.ReadFile(versionLockPath())
-	if err != nil {
-		return "", err
-	}
-	var lock versionLock
-	if err := json.Unmarshal(data, &lock); err != nil {
-		return "", err
-	}
-	return lock.DB, nil
-}
-
-// getCurrentRevision runs "alembic current" to get the database's actual revision
-func getCurrentRevision(python string) (string, error) {
-	cmd := exec.Command(python, "-m", "alembic", "--config", alembicConfigPath(), "current")
-	cmd.Dir = "."
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return "", fmt.Errorf("alembic current failed: %w: %s", err, string(output))
-	}
-	// Output format: "xxx (head)" - extract revision ID
-	trimmed := strings.TrimSpace(string(output))
-	parts := strings.Fields(trimmed)
-	if len(parts) == 0 {
-		return "", fmt.Errorf("alembic current returned empty output")
-	}
-	return parts[0], nil
-}
-
-// updateVersionLockDB updates version.lock with the given revision
-func updateVersionLockDB(revision string) error {
-	lock := versionLock{DB: revision}
-	data, err := json.MarshalIndent(lock, "", "  ")
-	if err != nil {
-		return err
-	}
-	return os.WriteFile(versionLockPath(), data, 0o644)
-}
-
-// listMigrationFiles returns a list of migration file names in the given directory
-func listMigrationFiles(dir string) ([]string, error) {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return nil, err
-	}
-	var files []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasSuffix(e.Name(), ".py") {
-			files = append(files, e.Name())
-		}
-	}
-	return files, nil
-}
-
-// findNewFile returns the first file in after that is not in before
-func findNewFile(before, after []string) string {
-	beforeSet := make(map[string]bool)
-	for _, f := range before {
-		beforeSet[f] = true
-	}
-	for _, f := range after {
-		if !beforeSet[f] {
-			return f
-		}
-	}
-	return ""
-}
-
-// isEmptyMigration checks if a migration file contains only empty upgrade/downgrade
-func isEmptyMigration(filePath string) (bool, error) {
-	data, err := os.ReadFile(filePath)
-	if err != nil {
-		return false, err
-	}
-	// Simple heuristic: if the file does not contain "op." it's probably empty
-	// Better: check for "pass" in upgrade/downgrade functions
-	content := string(data)
-	// Look for typical empty migration patterns
-	if strings.Contains(content, "def upgrade():\n    pass") &&
-		strings.Contains(content, "def downgrade():\n    pass") {
-		return true, nil
-	}
-	// Also check if there are no operations
-	if !strings.Contains(content, "op.") {
-		return true, nil
-	}
-	return false, nil
 }
 
 // resolvePythonBinary 返回可用的 Python 解释器：

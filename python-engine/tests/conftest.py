@@ -1,39 +1,29 @@
 """pytest 收集配置。
 
-这里**只**处理"无法被收集"的文件，不裁剪任何可运行的测试逻辑。
+历史上这里用 ``collect_ignore`` 隔离过 5 个"无法被收集"的文件；它们现已**全部修复**，
+隔离清单因此清空（保留本说明以免后人重复踩坑）：
 
-被隔离的 6 个文件分两类，原因不同：
+**一、编码损坏（4 个，已修复）** —— 中文注释在历史上某次 UTF-8/GBK 混转中损坏
+（部分字符变成私用区码位、行尾换行与个别引号被吞）。经确认这类乱码**可逆向还原**
+（``line.encode('gbk').decode('utf-8')``），据此按原文修复，未改动断言逻辑：
 
-**一、编码损坏（4 个）** —— 中文注释在历史上某次 UTF-8 / GBK 转换中损坏：部分字符变成
-私有区码位（U+E0xx / U+E7xx），行尾换行也被吞掉，python 无法解析：
-
-- test_guards.py                      三引号未闭合（SyntaxError）
+- test_guards.py                      三引号未闭合
 - test_sandbox_isolation.py           非法不可打印字符（U+E195）
 - test_security_tenant_isolation.py   缩进损坏（注释与代码挤在同一行）
 - test_trace_writer.py                同上
 
-**二、引用已不存在的符号（1 个）** —— 代码重构后测试没跟上：
+**二、引用已移除的符号（1 个，已清理）** —— test_engine.py 曾 import ``AgentSession`` /
+``ToolApprovalRequest`` / ``ToolApprovalResponse``；这些符号随旧版引擎重构一并移除
+（全仓无定义）。测这些已删除 API 的类整体移除，其余保留。原覆盖能力见
+tests/test_runtime.py、tests/test_context.py、tests/test_prompt_engine.py。
 
-- test_engine.py           from app.agent.engine import AgentSession   （该模块没有这个名字）
+> 教训：这 5 个文件合计约 52KB 的测试代码**从未执行**，其中包含 sandbox 逃逸、租户隔离
+> 等安全用例。``collect_ignore`` 让其余测试能跑起来，但也掩盖了它们长期失效 ——
+> 今后新增隔离项时，请同时写清"何时、按什么条件解除"。
 
-需要**按当前代码行为重写断言**：原文不可逆（损坏的中文无法还原），或在确认那些能力
-是被移除还是被改名之后再决定。在此之前明确隔离，而不是让它们静默失败 ——
-让其余测试文件能跑起来，比整个套件在收集阶段就瘫痪要好。
-
-> `test_memory_profile.py` 原先也在此列（它 import 的 `recency_decay` 当时不存在）。
-> 该函数与 `rerank_score` 已在 `app/memory/layers.py` 补齐，记忆四层架构的对外接口
-> 也已按该文件的断言对齐，因此它已回到常规收集范围。
+> 附记：``test_memory_profile.py`` 原先也在此列（它 import 的 ``recency_decay`` 当时不存在）。
+> 该函数与 ``rerank_score`` 已在 ``app/memory/layers.py`` 补齐，因此它已回到常规收集范围。
 """
-
-collect_ignore = [
-    # 一、编码损坏
-    "test_guards.py",
-    "test_sandbox_isolation.py",
-    "test_security_tenant_isolation.py",
-    "test_trace_writer.py",
-    # 二、过时测试（引用已移除 / 改名的符号）
-    "test_engine.py",
-]
 
 
 # ── 测试客户端默认携带"网关注入的身份头" ──

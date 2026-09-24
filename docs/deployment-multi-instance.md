@@ -89,6 +89,13 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 - **校验规则**：比对 `migrations/versions` 解析出的 head 与数据库 `alembic_version.version_num`；
   不一致 → `FATAL: refusing to start on mismatched schema`（`ALLOW_SCHEMA_DRIFT=true` 放行，用于迁移超前/回滚）；
   迁移链分叉（多个 head）会直接报错，必须在合并后发布；
+- **必需表校验**：revision 一致**不等于**表都在（手工删表后 revision 仍匹配，缺失会推迟到运行时才以
+  `relation does not exist` 暴露）。网关在版本校验通过后还会只读检查自己依赖的表
+  （`internal/db/required_tables.go` 的 `RequiredTables`）；缺失 → `FATAL: refusing to start on missing tables`。
+  引擎侧有对应的一份清单（`python-engine/app/db.py` 的 `REQUIRED_TABLES`，覆盖向量 / RAG / 记忆等引擎专属表）；
+- **遗留表**：数据库里可能还留有 `schema_migrations`（Go 侧旧迁移系统的空表，已废弃且不在权威迁移里）。
+  它的 ORM 模型已删除、`chiron-cli db status` 已改读 `alembic_version`；确认无人依赖后可手工执行
+  `DROP TABLE IF EXISTS public.schema_migrations;`（**不**放进迁移自动执行，避免误删他处数据）；
 - **滚动发布顺序**：先迁移（向后兼容的变更）→ 再滚动应用副本。破坏性变更（删列/改名）需用"扩展-迁移-收缩"两步发布。
 
 ## 8. 连接预算（扩容必读）
@@ -163,12 +170,83 @@ python -m pytest python-engine/tests -q
 |---|---|---|
 | SSE 事件 ID 与业务 sequence 分离 | **不需要** | `id` 已是 Redis Stream ID（跨实例单调、可比较、支持 `Last-Event-ID` 精确续传）；业务序号仅在需要「业务语义重放/缺号聚类」时才必要，属协议设计而非缺陷 |
 | text 事件合帧下沉到 hub | **不建议** | 网关已有 50ms 合帧；下沉会让 `tool_call`、`[thinking]` 等**必须即时**的事件进窗口，复杂度与首字延迟风险大于省下的几次 Redis 写入 |
-| 全库时间列统一为 `TIMESTAMPTZ` | **待独立立项** | 涉及 ORM 生成器 + 数十张表 + 存量数据 `USING` 转换，需在可验证环境（有 PG）中整体推进；当前 VARCHAR（PG `NOW()` 文本）在 `::timestamptz` 强转下可用 |
+| 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务**（原判「待独立立项」基于**错误前提**） | 原文称「当前 VARCHAR（PG `NOW()` 文本）」——**与实际不符**：实测该库 145 个时间列中 **136 个已是 `timestamp without time zone`**、9 个已是 `timestamp with time zone`，唯一的 VARCHAR 时间列是 `schema_migrations.applied_at`（该表本身已废弃，见第 7 节）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
 
 ### 结构性后续
 
 - **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；剩余价值是「实例故障后从 checkpoint 续跑而非重跑」，需跨 Go/Python 状态模型设计；
-- **`chiron-cli db` 的迁移入口**：`chiron-cli db` 仍调用应用内迁移（现已有 Python/alembic 前置检测，缺失即明确报错）；若也要移除，需调整其交互流程；
+- **`chiron-cli db` 的迁移入口**：`chiron-cli db migrate` 走 `internal/db/migrate.go` 的 `RunMigrations` —— 它只 shell 出
+  `alembic upgrade head`（**不是**应用内 DDL，需目标机有 python + alembic，缺失时会明确报错）；`db status` 已改读
+  `alembic_version`。若要让 CLI 完全不接触迁移流程，需调整其交互设计；
 - ~~`credit_transactions` / `payments` 两处 DDL 需同步~~ **已解决**：DDL 全部收敛到唯一权威迁移
   `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables`（含 `ALTER TABLE users ADD COLUMN credits`）
   已改为只读 `VerifySchema`，`ent_model_routes` 的 `InitTable` → `VerifyTable`。
+
+## 11. 混沌工程（可选，默认关闭）
+
+用故障注入验证系统韧性。**默认整体关闭**：`CHAOS_ENABLED` 未设为 `true` 时，两侧中间件都直接放行。
+
+### 开关
+
+| 变量 | 作用 |
+|---|---|
+| `CHAOS_ENABLED` | 两侧注入中间件的总开关（Go 与 Python 读**同一个变量**） |
+| `REDIS_KEY_PREFIX` | 活跃实验缓存键前缀；Go 与 Python **必须同值**，否则两侧各读各的 |
+
+### 数据流
+
+```
+POST /v1/ent/chaos/experiments            （网关，需 chaos:manage 权限）
+        │  写
+        ▼
+ent_chaos_experiments  ─── 权威存储（迁移 0002_ent_chaos_experiments，审计轨迹）
+        │  回源
+        ▼
+Redis  chaos:active:<tenant>              （TTL 5s；任何写操作后立即失效）
+        │  读（热路径，不查库）
+        ├──► Go   ChaosMiddleware      →  target=gateway 的请求
+        └──► Python ChaosInjectionMiddleware → target=engine 的请求
+```
+
+两侧中间件**同构**：命中活跃故障就施加 `latency` / `error`，否则原样放行；注入生效时响应带
+`X-Chaos-Injected: <experiment_id>`，便于把「注入的故障」与真故障区分开。
+
+### 能力边界（有意为之）
+
+| 作用面 / 类型 | 状态 |
+|---|---|
+| `target=gateway` / `engine` × `latency` / `error` / `timeout` | **已支持** |
+| `target=llm` / `db` / `redis` | **拒绝创建** —— 需在各自调用链（LLM 网关、连接池）插桩 |
+| `fault_type=resource` | **拒绝创建** —— CPU/内存耗尽会影响整个进程，属专门工具，不在请求路径上做 |
+
+不支持的组合在 `POST` 时就被 400 拒绝并说明理由，**不会**"接受后什么都不做"。
+
+### 演练步骤
+
+```bash
+# 1) 预发环境开启（两侧都要）
+export CHAOS_ENABLED=true
+
+# 2) 创建一个 200ms 延迟实验（需 chaos:manage 权限）
+curl -X POST $GATEWAY/v1/ent/chaos/experiments -H "Authorization: Bearer $TOKEN" \
+  -d '{"fault_type":"latency","target":"engine","duration_ms":200,"intensity":1.0}'
+
+# 3) 观察：响应变慢且带 X-Chaos-Injected 头
+
+# 4) 回滚（也会立即失效缓存）
+curl -X POST $GATEWAY/v1/ent/chaos/experiments/$ID/rollback -H "Authorization: Bearer $TOKEN"
+
+# 5) 演练结束务必关掉
+unset CHAOS_ENABLED
+```
+
+⚠️ **安全**：这是**故意制造故障**的开关。只在预发/演练环境开启；开启期间任何持有
+`chaos:manage` 权限的调用方都能让网关与引擎按要求失败或变慢。失败安全已内建 —— 注入器
+自身故障（Redis/DB 不可用、缓存 payload 损坏）时一律放行，不会反过来打挂正常流量。
+
+### 历史
+
+该功能此前两端都是假实现：Go 侧六个端点长期返回 501（其注释自述「没有故障注入执行」且
+「连数据表都不存在」），Python 侧 `ChaosEngine` 的 `_inject_latency` 只是自己
+`asyncio.sleep`、`_inject_error` 只打日志后写 `{"injected": True}`。现已删除假实现，
+改为上述真实通道（表已建、注入已通、不支持的组合明确拒绝）。

@@ -392,6 +392,7 @@ onUpdated(enhanceContent)
     :class="[item.role, { streaming: item.streaming, highlighted: highlighted, 'msg-error': (item as TextItem).error }]"
     :data-chat-anchor-key="anchorKey"
     data-time-hover-root
+    data-click-delegate
     @click="handleMsgClick"
   >
     <div
@@ -664,7 +665,7 @@ onUpdated(enhanceContent)
 .msg-row { padding: var(--chat-msg-gap, 6px) 0; max-width: min(var(--chat-content-width), 92%); margin: 0 auto; }
 .msg-row.user { display: flex; justify-content: flex-end; }
 /* 轨迹跳转高亮闪烁（deepseek data-current 聚焦反馈） */
-.msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash 2s ease-out; }
+.msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash var(--dur-slow) ease-out; }
 @keyframes trajectoryFlash { 0% { background: var(--primary-bg); } 100% { background: transparent; } }
 .msg-content { min-width: 0; }
 .msg-text { font-size: var(--chat-text-size, 16px); line-height: var(--chat-text-leading, 1.75); color: var(--text-primary); }
@@ -675,7 +676,7 @@ onUpdated(enhanceContent)
   display: inline-block;
   margin-left: 2px;
   color: var(--primary);
-  animation: streamCursor 0.9s ease-in-out infinite;
+  animation: streamCursor var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes streamCursor { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 /* UI/UX：日期分隔线（deepseek DateDivider） */
@@ -687,7 +688,7 @@ onUpdated(enhanceContent)
   content: ''; display: inline-block; width: 2px; height: 1em;
   margin-left: 2px; vertical-align: -0.15em;
   background: var(--primary);
-  animation: streamCursor 1s step-end infinite;
+  animation: streamCursor var(--dur-pulse) step-end infinite;
 }
 @keyframes streamCursor { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
 @media (prefers-reduced-motion: reduce) { .msg-row.streaming.assistant .msg-text::after { animation: none; } }
@@ -699,7 +700,7 @@ onUpdated(enhanceContent)
   border-radius: var(--sig-radius-bubble); border-bottom-right-radius: var(--sig-radius-bubble-assistant); max-width: min(525px, 88%);
   /* 气泡行高比正文紧一档，但随字号缩放（16px 字号下仍是 24px） */
   line-height: calc(var(--chat-text-size, 16px) * 1.5);
-  transition: box-shadow 0.2s ease;
+  transition: box-shadow var(--dur-normal) ease;
 }
 .msg-row.user .msg-text:hover { box-shadow: var(--sig-shadow-hover); }
 .turn-stats { max-width: min(var(--chat-content-width), 92%); margin: 0 auto; padding: 4px 0 10px; font-size: 11px; color: var(--text-muted); text-align: right; }
@@ -770,9 +771,9 @@ onUpdated(enhanceContent)
 /* 消息操作行（deepseek MessageIconActions：28px 高、hover 淡入、80ms） */
 .msg-actions { display: flex; align-items: center; gap: 10px; height: 28px; margin-top: 4px; }
 .msg-actions.user { justify-content: flex-end; }
-.msg-time { padding-right: 6px; font-size: 12px; color: var(--text-tertiary); opacity: 0; transition: opacity 80ms ease; }
+.msg-time { padding-right: 6px; font-size: 12px; color: var(--text-tertiary); opacity: 0; transition: opacity var(--dur-fast) ease; }
 [data-time-hover-root]:hover .msg-time, [data-time-hover-root]:focus-within .msg-time { opacity: 1; }
-.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity 80ms ease, background 0.15s ease, transform 0.1s ease; }
+.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-fast) ease; }
 .msg-action:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-action.active { color: var(--primary); opacity: 1; }
 .msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: #fff; font-size: 12px; gap: 4px; opacity: 1; }
@@ -789,7 +790,7 @@ onUpdated(enhanceContent)
 .hljs-meta, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--hljs-meta); }
 
 /* P3-B: 长消息折叠 */
-.collapse-toggle { margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color 0.15s ease, color 0.15s ease; }
+.collapse-toggle { margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
 .collapse-toggle:hover { border-color: var(--primary); color: var(--primary); }
 .collapse-toggle:active { transform: scale(0.97); }
 .msg-action:active { transform: scale(0.9); }
@@ -826,7 +827,7 @@ onUpdated(enhanceContent)
 .edit-textarea { border-radius: var(--sig-radius-card) !important; border-color: var(--primary) !important; }
 .edit-textarea :deep(textarea) { font-size: 16px !important; line-height: 24px !important; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.edit-btn { padding: 4px 12px; border-radius: var(--sig-radius-button); font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); transition: all 0.15s ease; }
+.edit-btn { padding: 4px 12px; border-radius: var(--sig-radius-button); font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); transition: all var(--dur-fast) ease; }
 .edit-btn.save { background: var(--primary); color: #fff; border-color: var(--primary); }
 .edit-btn.save:hover { opacity: 0.9; }
 .edit-btn.cancel:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -834,7 +835,7 @@ onUpdated(enhanceContent)
 /* ── P1-2 附件展示 ── */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); object-fit: cover; }
-.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: border-color 0.15s ease, color 0.15s ease; }
+.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
 .msg-attachment-file:hover { border-color: var(--primary); color: var(--primary); }
 .msg-attachment-file .att-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-attachment-file .att-size { color: var(--text-tertiary); font-size: 12px; }
@@ -859,7 +860,7 @@ onUpdated(enhanceContent)
   font-size: 12px; line-height: 18px; text-decoration: none; cursor: pointer;
   background: var(--bg-secondary); color: var(--text-secondary);
   border: 1px solid var(--border);
-  transition: border-color 0.15s ease, color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .source-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
 .source-chip.kb { background: var(--primary-bg); color: var(--primary); border-color: transparent; }
@@ -872,6 +873,6 @@ onUpdated(enhanceContent)
 .msg-row.msg-error .msg-text { opacity: 0.6; }
 .msg-error-banner { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); background: var(--error-bg); border: 1px solid var(--error); }
 .msg-error-banner .error-text { font-size: 13px; color: var(--error); flex: 1; }
-.retry-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--sig-radius-button); border: 1px solid var(--error); background: transparent; color: var(--error); font-size: 12px; cursor: pointer; transition: background 0.15s ease, color 0.15s ease; }
+.retry-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--sig-radius-button); border: 1px solid var(--error); background: transparent; color: var(--error); font-size: 12px; cursor: pointer; transition: background var(--dur-fast) ease, color var(--dur-fast) ease; }
 .retry-btn:hover { background: var(--error); color: #fff; }
 </style>

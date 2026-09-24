@@ -3023,14 +3023,14 @@ function continueGeneration() {
 .approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
 .approval-args { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 8px; }
 .approval-actions { display: flex; gap: 8px; }
-.approval-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform 0.1s ease, opacity 0.15s ease, background 0.15s ease; }
+.approval-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform var(--dur-fast) ease, opacity var(--dur-fast) ease, background var(--dur-fast) ease; }
 .approval-btn:active { transform: scale(0.97); }
 .approval-btn.allow { background: var(--primary); color: #fff; }
 .approval-btn.allow:hover { opacity: 0.9; }
 .approval-btn.danger { background: var(--bg-hover); color: var(--text-primary); }
 .approval-btn.danger:hover { background: var(--danger-bg, rgba(239,68,68,.12)); color: var(--danger, #ef4444); }
 .connection-banner {
-  position: fixed; top: 0; left: 0; right: 0; z-index: 100;
+  position: fixed; top: 0; left: 0; right: 0; z-index: var(--z-page-bar);
   padding: 4px 12px; text-align: center;
   font-size: 12px; line-height: 18px;
   background: var(--error); color: #fff;
@@ -3046,7 +3046,7 @@ function continueGeneration() {
 .share-select-item {
   display: flex; align-items: center; gap: 8px;
   padding: 7px 8px; border-radius: 8px; cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 .share-select-item:hover { background: var(--bg-hover); }
 .share-select-role { flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
@@ -3062,7 +3062,7 @@ function continueGeneration() {
   background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 50%, var(--primary) 60%, var(--primary) 100%);
   background-position: 100% 0; background-size: 250% 100%; background-clip: text; -webkit-background-clip: text;
   color: transparent; -webkit-text-fill-color: transparent;
-  animation: turnStatusShimmer 1.8s linear infinite;
+  animation: turnStatusShimmer var(--dur-pulse) linear infinite;
   font-variant-numeric: tabular-nums;
 }
 @keyframes turnStatusShimmer { to { background-position: 0 0; } }
@@ -3070,11 +3070,11 @@ function continueGeneration() {
   .turn-status { background-position: 0 0; background-size: 100% 100%; animation: none; }
 }
 .panel-overlay {
-  position: fixed; inset: 0; z-index: 110;
+  position: fixed; inset: 0; z-index: var(--z-page-overlay);
   background: rgba(10, 10, 12, 0.35);
 }
 @media (min-width: 1025px) { .panel-overlay { display: none; } }
-.overlay-fade-enter-active, .overlay-fade-leave-active { transition: opacity 0.2s ease; }
+.overlay-fade-enter-active, .overlay-fade-leave-active { transition: opacity var(--dur-normal) ease; }
 .overlay-fade-enter-from, .overlay-fade-leave-to { opacity: 0; }
 
 .unified-error-banner {
@@ -3098,14 +3098,14 @@ function continueGeneration() {
   padding: 1px 10px; border-radius: 10px;
   background: var(--primary); color: #fff;
   font-size: 11px; font-weight: 600; line-height: 18px;
-  transition: background 0.3s ease;
+  transition: background var(--dur-normal) ease;
 }
 .ub-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: rgba(255, 255, 255, 0.85); }
 .ub-badge.running::before {
-  animation: uehPulse 1.1s ease-in-out infinite;
+  animation: uehPulse var(--dur-pulse) ease-in-out infinite;
   box-shadow: 0 0 0 0 rgba(255, 255, 255, 0.5);
 }
-.ub-badge.running { animation: uehPulse 1.1s ease-in-out infinite; }
+.ub-badge.running { animation: uehPulse var(--dur-pulse) ease-in-out infinite; }
 .ub-badge.done { background: var(--success); }
 .ub-badge.done::before { animation: none; }
 .ub-mode {
@@ -3117,7 +3117,7 @@ function continueGeneration() {
   flex: none; border: 1px solid var(--border); border-radius: 8px;
   background: var(--bg-card); color: var(--text-secondary);
   font-size: 11px; line-height: 18px; padding: 1px 10px; cursor: pointer;
-  transition: all 0.15s ease;
+  transition: all var(--dur-fast) ease;
 }
 .ub-btn:focus-visible,
 .ueb-close:focus-visible,
@@ -3139,7 +3139,7 @@ function continueGeneration() {
 .ueh-dot {
   width: 6px; height: 6px; border-radius: 50%;
   background: var(--primary);
-  animation: uehPulse 1.2s ease-in-out infinite;
+  animation: uehPulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes uehPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .ueh-dot { animation: none; } }

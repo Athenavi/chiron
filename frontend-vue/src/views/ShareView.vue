@@ -124,6 +124,7 @@ function formatDate(iso: string): string {
 
         <div
           class="share-thread"
+          data-click-delegate
           @click="handleClick"
         >
           <div
@@ -201,7 +202,7 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(.code-block) { margin: 16px 0; background: var(--bg-code); border-radius: 12px; overflow: hidden; max-width: 100%; }
 .share-msg-text :deep(.code-block-head) { display: flex; justify-content: space-between; align-items: center; padding: 8px 14px; background: var(--bg-secondary); }
 .share-msg-text :deep(.code-lang) { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); }
-.share-msg-text :deep(.code-copy) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-family: inherit; font-size: 12px; padding: 4px 10px; min-height: 32px; border-radius: 6px; transition: color 0.2s, background-color 0.2s; }
+.share-msg-text :deep(.code-copy) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-family: inherit; font-size: 12px; padding: 4px 10px; min-height: 32px; border-radius: 6px; transition: color var(--dur-normal), background-color var(--dur-normal); }
 .share-msg-text :deep(.code-copy:hover) { color: var(--primary); background: var(--bg-hover); }
 /* 代码块：横向滚动而非折行，长行不撑破页面 */
 .share-msg-text :deep(pre) { margin: 0 !important; padding: 16px; overflow-x: auto; white-space: pre; word-break: normal; -webkit-overflow-scrolling: touch; }

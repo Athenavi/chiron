@@ -23,11 +23,16 @@
  *      违规（40 处假阳性）—— 基线一旦掺假就会被上调，护栏随之失效。
  * 测试文件与 locales 不计入。
  *
- * 已知例外（留在基线里、**不应**修的两处）：事件委托容器。
+ * 已知例外：事件委托容器。
  * src/components/chat/MessageItem.vue 的 .msg-row 与 src/views/ShareView.vue 的 .share-thread
  * 上的 @click 只是委托入口 —— handler 内部用 `e.target.closest(...)` 定位真正的交互元素
  * （那些元素本身是 <button>，键盘可达）。容器不是交互元素，给它加 role="button" 会让屏幕
- * 阅读器把整块消息内容朗读成一个按钮，反而更糟。规则暂无法机械区分委托容器，故显式记录。
+ * 阅读器把整块消息内容朗读成一个按钮，反而更糟。
+ *
+ * 这类容器由**显式属性 `data-click-delegate`** 标记（而不是记在基线里）：规则本身无法从
+ * 属性机械推断「这个 handler 是不是委托」（那需要跟随 JS 调用），所以要求作者**当场声明**。
+ * 相比留在 a11y-baseline.json，标记贴着代码、评审时可见，也让基线能真正清零 —— 基线是一条
+ * 单调下降的棘轮，掺杂"不该修的例外"会让它失去意义。
  *
  * 用法：
  *   node scripts/check-a11y.mjs                  # 校验（CI / check:ui）
@@ -61,10 +66,13 @@ const ALT_RE = /\balt\s*=/
  * 等价路径（Esc 或关闭按钮），不应要求遮罩本身可聚焦。
  * 豁免二：显式 `aria-hidden` 表示该元素对辅助技术不可见（纯装饰遮罩），即已声明语义 ——
  * 强行给它加 role="button" 反而更糟。
+ * 豁免三：显式 `data-click-delegate` 声明「这里的 @click 只是事件委托入口」—— 容器自身
+ * 不可交互，真正可聚焦的是内部的 <button>（handler 用 e.target.closest 定位它们）。
+ * 需要作者当场声明：从属性无法机械推断 handler 是否委托（那要跟随 JS 调用）。
  */
 const CLICK_SELF_RE = /@click\.self\s*=/
 const DECORATIVE_RE = /\baria-hidden\s*=/
-
+const CLICK_DELEGATE_RE = /\bdata-click-delegate\b/
 /**
  * 剥离注释：HTML/Vue 模板注释、块注释、行注释（行注释避开 http:// 这类字符串）。
  * 注释内容用空格替换但**保留其中的换行** —— 行号必须与原文件一致，否则失败信息里的
@@ -116,6 +124,7 @@ function scanVue(source) {
     if (!CLICK_RE.test(attrs)) continue
     if (CLICK_SELF_RE.test(attrs)) continue
     if (ROLE_RE.test(attrs) || DECORATIVE_RE.test(attrs)) continue
+    if (CLICK_DELEGATE_RE.test(attrs)) continue
     if (tag === 'a') {
       // <a> 有 href 才可聚焦；无 href 的 <a @click> 是常见误用
       if (!HREF_RE.test(attrs)) add('clickable-nonsemantic', m.index)

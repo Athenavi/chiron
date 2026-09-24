@@ -666,10 +666,10 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .skeleton-list { padding: 16px 24px; }
 .skeleton-msg { display: flex; gap: 12px; margin-bottom: 24px; }
 .skeleton-msg.user { flex-direction: row-reverse; }
-.skeleton-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-hover); flex-shrink: 0; animation: skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-hover); flex-shrink: 0; animation: skeleton-pulse var(--dur-pulse) ease-in-out infinite; }
 .skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; max-width: 70%; }
 .skeleton-msg.user .skeleton-lines { align-items: flex-end; }
-.skeleton-line { height: 14px; border-radius: 4px; background: var(--bg-hover); animation: skeleton-pulse 1.4s ease-in-out infinite; }
+.skeleton-line { height: 14px; border-radius: 4px; background: var(--bg-hover); animation: skeleton-pulse var(--dur-pulse) ease-in-out infinite; }
 .skeleton-line:nth-child(2) { animation-delay: 0.2s; }
 @keyframes skeleton-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
 @media (prefers-reduced-motion: reduce) { .skeleton-avatar, .skeleton-line { animation: none; } }
@@ -691,14 +691,14 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .loading-indicator { display: flex; justify-content: center; gap: 6px; padding: 14px 0; }
 /* 尺寸/底色保留，脉冲与错峰延迟由全局 .chat-pulse 提供（src/style.css） */
 .loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
-.back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: 10; }
+.back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
 .back-to-bottom:hover { color: var(--primary); border-color: var(--primary); }
 .back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: #fff; font-size: 11px; line-height: 18px; text-align: center; }
-.back-fade-enter-active, .back-fade-leave-active { transition: opacity 0.2s, transform 0.2s; }
+.back-fade-enter-active, .back-fade-leave-active { transition: opacity var(--dur-normal), transform var(--dur-normal); }
 .back-fade-enter-from, .back-fade-leave-to { opacity: 0; transform: translateY(8px); }
 
 /* 提问导航条：零高度宿主 + sticky，浮在滚动容器中部而不占内容流空间 */
-.question-rail-host { position: sticky; bottom: 50%; height: 0; display: flex; justify-content: flex-end; pointer-events: none; z-index: 10; }
+.question-rail-host { position: sticky; bottom: 50%; height: 0; display: flex; justify-content: flex-end; pointer-events: none; z-index: var(--z-sticky); }
 .question-rail {
   pointer-events: auto;
   display: flex; flex-direction: column; align-items: center; gap: 7px;
@@ -724,7 +724,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 
 /* 选中文本操作菜单：贴在选区上方（放不下则翻到下方） */
 .selection-menu {
-  position: absolute; z-index: 20;
+  position: absolute; z-index: var(--z-dropdown);
   display: flex; gap: 2px; padding: 3px;
   border: 1px solid var(--border-card); border-radius: var(--sig-radius-button);
   background: var(--bg-card); box-shadow: var(--sig-shadow-hover);

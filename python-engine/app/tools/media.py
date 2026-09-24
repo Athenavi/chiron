@@ -13,13 +13,13 @@ import base64
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
 
 from app.media.store import create_store
-from app.tools.context import get_tenant_id, get_user_id
+from app.tools.context import get_gateway, get_tenant_id, get_user_id
 from app.tools.registry import registry
 from app.tools.ssrf import assert_safe_url, fetch_url_safe
 
@@ -234,7 +234,7 @@ async def vision_analyze(
     """
     from app.media.analyzer import analyze_image
 
-    result = await analyze_image(image_url, prompt=prompt)
+    result = await analyze_image(image_url, prompt=prompt, gateway=get_gateway())
     if result.get("success"):
         return result
     # analyze_image 失败时降级：用 llm 客户端直接调用
@@ -251,9 +251,11 @@ async def vision_analyze(
             if not content_type.startswith("image/"):
                 return {"error": f"URL does not point to an image: {content_type}"}
 
-        from app.llm.client import get_llm_client
-
-        llm = get_llm_client()
+        # 降级路径复用同一个网关 —— 历史写法 `get_llm_client()` 在仓库里不存在，
+        # 且 app/llm/client.py 的 LLMClient 只有 embed()，永远拿不到 chat()。
+        gateway = get_gateway()
+        if gateway is None:
+            return {"success": False, "error": "no LLM gateway bound in tool context"}
         model = os.getenv("VISION_MODEL", "gpt-4o")
         messages = [
             {
@@ -267,14 +269,14 @@ async def vision_analyze(
                 ],
             }
         ]
-        response = await llm.chat(messages, model=model)
+        response = await gateway.chat(messages, model=model)
         return {
             "success": True,
             "analysis": (
                 response.content if hasattr(response, "content") else str(response)
             ),
             "model": model,
-            "analyzed_at": datetime.utcnow().isoformat(),
+            "analyzed_at": datetime.now(UTC).isoformat(),
         }
     except Exception as e:
         logger.error(f"Vision analysis failed: {e}")
@@ -511,9 +513,10 @@ async def file_analyzer(
             return {"error": "无法提取文件内容，不支持的格式或空文件"}
 
         # 用 LLM 分析
-        from app.llm.client import get_llm_client
-
-        llm = get_llm_client()
+        gateway = get_gateway()
+        if gateway is None:
+            return {"error": "no LLM gateway bound in tool context"}
+        model = os.getenv("VISION_MODEL", "gpt-4o")
         prompt_text = custom_prompt or f"""请分析以下文件内容：
 
 {text[:30000]}
@@ -523,13 +526,13 @@ async def file_analyzer(
 2. 主要内容摘要
 3. 关键数据/发现
 4. 可能的用途或建议"""
-        response = await llm.chat([{"role": "user", "content": prompt_text}])
+        response = await gateway.chat([{"role": "user", "content": prompt_text}], model=model)
         return {
             "success": True,
             "analysis": response.content if hasattr(response, "content") else str(response),
             "file_type": content_type,
             "text_length": len(text),
-            "analyzed_at": datetime.utcnow().isoformat(),
+            "analyzed_at": datetime.now(UTC).isoformat(),
         }
     except Exception as e:
         logger.error(f"File analysis failed: {e}")

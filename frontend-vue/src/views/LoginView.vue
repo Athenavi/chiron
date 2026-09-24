@@ -770,13 +770,13 @@ async function handleLogin() {
   max-width: calc(100vw - 32px);
   margin: auto;
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content);
   padding: 32px 36px;
   border-radius: var(--radius-2xl);
   background: var(--bg-surface);
   border: 1px solid var(--border-default);
   box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-subtle) inset;
-  animation: loginFadeIn 0.5s ease;
+  animation: loginFadeIn var(--dur-slow) ease;
 }
 
 .login-header {
@@ -866,7 +866,7 @@ async function handleLogin() {
     justify-content: center;
     padding: 64px 56px;
     position: relative;
-    z-index: 1;
+    z-index: var(--z-content);
   }
   .login-brand-badge {
     display: inline-flex;

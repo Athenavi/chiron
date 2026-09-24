@@ -17,19 +17,12 @@ import { fileURLToPath } from 'node:url'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
-/** 存量基线：文件 → 允许的裸 z-index 数量。只允许下调。 */
-const BASELINE = {
-  'src/components/chat/ChatEmptyHero.vue': 1,
-  'src/components/chat/MessageList.vue': 3,
-  'src/views/ChatView.vue': 2,
-  'src/views/HomeView.vue': 3,
-  'src/views/LoginView.vue': 2,
-  'src/views/MediaView.vue': 1,
-  'src/views/RegisterView.vue': 1,
-  'src/views/WorkflowView.vue': 2,
-  'src/views/admin/Layout.vue': 3,
-  'src/views/admin/OAuthProvidersView.vue': 2,
-}
+/** 存量基线：文件 → 允许的裸 z-index 数量。只允许下调。
+ *
+ * 已清零：全部裸 z-index 换成 src/style.css 的语义 token（含保持 HomeView 的
+ * hero>grid、OAuthProviders 固定列表头>表体、admin/Layout 的 drawer>mask>sider
+ * 这些原有相对关系）。此后任何新增裸数字都会直接失败。 */
+const BASELINE = {}
 
 /** 裸数字 z-index（`z-index: 10`）；`z-index: var(--z-*)` 不算命中 */
 const BARE_Z_INDEX = /z-index:\s*-?\d+/g

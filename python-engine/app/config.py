@@ -194,6 +194,15 @@ class Settings(BaseSettings):
     #       会跳过网关的限流与审计，仅限本地调试/直连工具使用。
     allow_direct_jwt: bool = False
 
+    # ── 混沌工程（默认关闭）──
+    # false（默认）：注入中间件完全旁路，连 Redis 都不读。
+    # true：按 ent_chaos_experiments 里的活跃实验，对引擎请求路径施加 latency / error。
+    #
+    # ⚠️ 这是**故意制造故障**的开关：只应在预发/演练环境开启。开启后任何持有
+    # chaos:manage 权限的调用方都能让引擎按要求失败或变慢（网关侧的同名中间件另有
+    # CHAOS_ENABLED 开关）。详见 docs/deployment-multi-instance.md 的混沌工程一节。
+    chaos_enabled: bool = False
+
     # ── Go 网关内部配置下发端点（引擎启动时拉取后台「系统设置」中的 python 分类配置）──
     gateway_internal_url: str = "http://127.0.0.1:8080"
 

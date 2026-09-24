@@ -407,6 +407,9 @@ func verifySchemaVersion(ctx context.Context, cfg *config.Config) {
 	}
 	if match {
 		slog.Info("schema version verified", "migration", expected)
+		// revision 一致 ≠ 表都在：手工删表后 revision 仍匹配，缺失会推迟到运行时
+		// 才以 relation does not exist 暴露。补一道只读的存在性校验。
+		verifyRequiredTables(ctx, cfg)
 		return
 	}
 	slog.Error("database schema does not match this build",
@@ -417,6 +420,30 @@ func verifySchemaVersion(ctx context.Context, cfg *config.Config) {
 		return
 	}
 	slog.Error("FATAL: refusing to start on mismatched schema; set ALLOW_SCHEMA_DRIFT=true to bypass")
+	os.Exit(1)
+}
+
+// verifyRequiredTables 只读校验网关必需的表是否存在（清单见 db.RequiredTables）。
+//
+// 与 revision 校验互补：版本对上但表缺了（手工删表、迁移在别处被回滚过），这里能提前发现。
+func verifyRequiredTables(ctx context.Context, cfg *config.Config) {
+	missing, err := db.CheckMissingTables(ctx)
+	if err != nil {
+		slog.Warn("required-table check unavailable", "error", err)
+		return
+	}
+	if len(missing) == 0 {
+		slog.Info("required tables verified", "count", len(db.RequiredTables))
+		return
+	}
+	slog.Error("database is missing required tables",
+		"missing", strings.Join(missing, ", "),
+		"hint", "run `alembic upgrade head` (see requirements-migrate.txt) before starting")
+	if cfg.AllowSchemaDrift {
+		slog.Warn("ALLOW_SCHEMA_DRIFT=true — continuing despite missing tables")
+		return
+	}
+	slog.Error("FATAL: refusing to start on missing tables; set ALLOW_SCHEMA_DRIFT=true to bypass")
 	os.Exit(1)
 }
 

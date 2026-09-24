@@ -1875,6 +1875,15 @@ def _setup_middleware_early(app: FastAPI) -> None:
     app.add_middleware(RequestContextMiddleware)
     app.add_middleware(PrivacyModeMiddleware)
 
+    # 混沌工程注入（默认关闭，见 settings.chaos_enabled）。
+    #
+    # 挂在**最后** = FastAPI 里**最先执行**：它要在认证之前就能生效 —— 注入模拟的是
+    # 基础设施/整站故障，而不是某个用户的问题；实验的**创建**才需要 chaos:manage 权限
+    # （网关把关）。关闭时中间件第一个判断就放行，几乎零开销。
+    from app.chaos.injector import ChaosInjectionMiddleware
+
+    app.add_middleware(ChaosInjectionMiddleware)
+
 
 if __name__ == "__main__":
     main()

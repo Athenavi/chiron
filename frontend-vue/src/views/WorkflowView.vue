@@ -1559,7 +1559,7 @@ function statusClass(nodeProps: any): string {
 .main-area { display: flex; flex: 1; overflow: hidden; position: relative; }
 .node-palette { width: 168px; padding: 12px; border-right: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
 .palette-title { font-weight: 600; font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-.palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 8px; cursor: grab; font-size: 13px; transition: box-shadow 0.15s, border-color 0.15s; user-select: none; }
+.palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 8px; cursor: grab; font-size: 13px; transition: box-shadow var(--dur-fast), border-color var(--dur-fast); user-select: none; }
 .palette-item:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
 .palette-item:active { cursor: grabbing; }
 .palette-icon { font-size: 16px; }
@@ -1567,10 +1567,10 @@ function statusClass(nodeProps: any): string {
 .palette-hint { margin-top: 14px; font-size: 11px; line-height: 1.7; color: var(--text-tertiary); }
 .canvas-wrapper { flex: 1; position: relative; }
 /* 自定义节点：主题变量 + 执行状态 */
-.custom-node { background: var(--bg-card); border: 2px solid; border-radius: 8px; min-width: 150px; font-size: 12px; box-shadow: var(--shadow-md); color: var(--text-primary); transition: box-shadow 0.2s; }
+.custom-node { background: var(--bg-card); border: 2px solid; border-radius: 8px; min-width: 150px; font-size: 12px; box-shadow: var(--shadow-md); color: var(--text-primary); transition: box-shadow var(--dur-normal); }
 .custom-node.status-completed { box-shadow: 0 0 0 2px rgba(34, 197, 94, 0.4), var(--shadow-lg); }
 .custom-node.status-error { box-shadow: 0 0 0 2px rgba(239, 68, 68, 0.5), var(--shadow-lg); }
-.custom-node.status-running { animation: nodePulse 1.2s ease-in-out infinite; }
+.custom-node.status-running { animation: nodePulse var(--dur-pulse) ease-in-out infinite; }
 @keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 2px rgba(59, 130, 246, 0.25); } 50% { box-shadow: 0 0 0 4px rgba(59, 130, 246, 0.45); } }
 .node-header { padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--text-primary); }
 .node-body { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
@@ -1595,7 +1595,7 @@ function statusClass(nodeProps: any): string {
 .result-output { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); max-height: 140px; overflow-y: auto; }
 /* 列表 */
 .workflow-list { display: flex; flex-direction: column; gap: 8px; }
-.workflow-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-card); border-radius: 8px; background: var(--bg-card); cursor: pointer; transition: border-color 0.15s, box-shadow 0.15s; }
+.workflow-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-card); border-radius: 8px; background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
 .workflow-item:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
 .wf-item-info { flex: 1; min-width: 0; }
 .wf-item-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
@@ -1629,7 +1629,7 @@ function statusClass(nodeProps: any): string {
     left: 50%;
     bottom: 10px;
     transform: translateX(-50%);
-    z-index: 5;
+    z-index: var(--z-local);
     pointer-events: none;
     padding: 4px 12px;
     border-radius: var(--radius-full);
@@ -1647,7 +1647,7 @@ function statusClass(nodeProps: any): string {
     right: 0;
     top: 0;
     bottom: 0;
-    z-index: 20;
+    z-index: var(--z-dropdown);
     width: min(300px, 82%);
     box-shadow: var(--shadow-lg);
   }

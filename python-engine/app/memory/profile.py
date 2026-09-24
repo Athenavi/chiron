@@ -10,7 +10,6 @@ from __future__ import annotations
 import json
 import logging
 import uuid
-from datetime import datetime
 from typing import Any
 
 from app.memory.layers import MemoryEntry
@@ -252,6 +251,3 @@ class ProfileStore:
 def new_entry_id() -> str:
     return "mem_" + uuid.uuid4().hex[:24]
 
-
-def now_utc() -> datetime:
-    return datetime.utcnow()

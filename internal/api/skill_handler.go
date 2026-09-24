@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -79,6 +80,40 @@ func (h *SkillHandler) register(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxy forwards the request to the Python engine.
+// identityParams 构造网关注入的身份参数（`user_id` / `tenant_id`）。
+//
+// 引擎无鉴权，网关是**唯一可信边界**：POST/PUT 把身份写进 body（见 proxy），
+// 而 GET/DELETE 没有 body，必须走 query —— 引擎侧 handler 正是从 query 读这两个字段
+// （如 app/api/skills.py 的 `list_skills(user_id, tenant_id)`）。
+//
+// 历史缺陷：GET / DELETE 此前**不传任何身份**，引擎收到空 user_id/tenant_id 后
+// 一律回退全局共享层 —— 用户看不到自己的私有技能与租户共享技能（删除也打不准目标层）。
+func identityParams(r *http.Request) url.Values {
+	q := url.Values{}
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		return q
+	}
+	if claims.UserID != "" {
+		q.Set("user_id", claims.UserID)
+	}
+	if tid := ResolveTenantID(r); tid != "" {
+		q.Set("tenant_id", tid)
+	}
+	return q
+}
+
+// withQuery 把 query 追加到 path（path 可能已自带 query）。
+func withQuery(path, query string) string {
+	if query == "" {
+		return path
+	}
+	if strings.Contains(path, "?") {
+		return path + "&" + query
+	}
+	return path + "?" + query
+}
+
 func (h *SkillHandler) proxy(w http.ResponseWriter, r *http.Request) {
 	if h.python == nil {
 		InternalError(w, "python engine not available")
@@ -91,9 +126,11 @@ func (h *SkillHandler) proxy(w http.ResponseWriter, r *http.Request) {
 	switch r.Method {
 	case "GET":
 		// 规范化转发路径：Python 端注册的是 /v1/skills（无尾斜杠）
-		path := strings.TrimSuffix(r.URL.Path, "/")
+		basePath := strings.TrimSuffix(r.URL.Path, "/")
+		// 身份注入：GET 无 body，只能走 query（见 identityParams 的说明）。
+		path := withQuery(basePath, identityParams(r).Encode())
 		err = h.python.GetJSON(r.Context(), path, &result)
-		if err == nil && strings.HasSuffix(path, "/discover") {
+		if err == nil && strings.HasSuffix(basePath, "/discover") {
 			filterDiscoverByMarket(r.Context(), result, ResolveTenantID(r))
 		}
 	case "POST", "PUT":
@@ -127,6 +164,9 @@ func (h *SkillHandler) proxy(w http.ResponseWriter, r *http.Request) {
 }
 
 // proxyDelete forwards DELETE requests to the Python engine.
+//
+// `?scope=tenant` 删的是**租户共享层**（团队资产），因此需要技能管理权限；
+// 缺省 / `scope=private` 仍是调用者私有目录，保持既有行为（任何登录用户可删自己的）。
 func (h *SkillHandler) proxyDelete(w http.ResponseWriter, r *http.Request) {
 	if h.python == nil {
 		InternalError(w, "python engine not available")
@@ -143,8 +183,25 @@ func (h *SkillHandler) proxyDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scope := r.URL.Query().Get("scope")
+	if scope == "tenant" {
+		claims := auth.GetClaims(r.Context())
+		if !AllowedByEntOrLegacy(r.Context(), claims, auth.PermMarketManage) {
+			Forbidden(w, "insufficient permissions to delete tenant-shared skills")
+			return
+		}
+	}
+
+	// DELETE 无 body：身份与 scope 都经 query 下发（见 identityParams）。
+	params := identityParams(r)
+	if scope != "" {
+		params.Set("scope", scope)
+	}
+
 	var result map[string]interface{}
-	if err := h.python.DeleteJSON(r.Context(), "/v1/skills/"+name, &result); err != nil {
+	if err := h.python.DeleteJSON(
+		r.Context(), withQuery("/v1/skills/"+name, params.Encode()), &result,
+	); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "python engine error")
 		return
 	}

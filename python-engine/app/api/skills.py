@@ -14,8 +14,9 @@
 - 身份段非法（如 `../` 路径穿越）→ 400，拒绝构造 store。
 - `run` handler 会把请求身份写入 tool context（app.tools.context），保证
   tools/skill.py 的 `skill_run` 执行链（含沙箱工具）落在同一身份目录下。
-- 删除：DELETE /v1/skills/{name} 仅删除 user 私有目录中的技能（保持现状）；
-  租户共享层技能的删除由租户 owner 后续通过 scope=tenant 单独处理（本期未实现）。
+- 删除：`DELETE /v1/skills/{name}` 默认删 user 私有目录中的技能；带 `?scope=tenant` 时
+  删**租户共享层**（团队资产，网关侧要求技能管理权限 `PermMarketManage`）。目标层里没有
+  该技能时返回 404（不会"删了个空"却回 200）。
 """
 
 from __future__ import annotations
@@ -210,22 +211,41 @@ async def generate_skill(
 
 @router.delete("/v1/skills/{name}")
 async def delete_skill(
-    name: str, user_id: str = "", tenant_id: str = ""
+    name: str, user_id: str = "", tenant_id: str = "", scope: str = ""
 ) -> dict[str, str]:
-    """删除技能：仅删除 user 私有目录中的技能（保持现状）。
+    """删除技能。
 
-    租户共享层技能的删除由租户 owner 后续通过 scope=tenant 参数单独处理
-    （本期未实现——store.delete 只会作用于写目标目录，此处 store 无 scope，
-    写目标即 user 私有目录，租户/全局共享技能不会被误删）。
+    `scope` 决定删**哪一层**（即 store 的写目标，见 `_store_for` 与 `store.write_scope`）：
+
+    * 缺省 / `private`：调用者**私有**目录 —— 任何登录用户都能删自己的技能（既有行为不变）；
+    * `tenant`：**租户共享层**（团队资产）。网关已在 `scope=tenant` 时校验技能管理权限
+      （`internal/api/skill_handler.go` 的 proxyDelete → `PermMarketManage`）；
+      引擎无鉴权能力，网关是唯一可信边界，故此处不重复判权。
     """
-    store = _store_for(user_id, tenant_id)
-
+    if scope not in ("", "private", "tenant"):
+        raise HTTPException(status_code=400, detail=f"invalid scope: {scope}")
     if not re.match(r"^[a-zA-Z0-9_.-]+$", name):
         raise HTTPException(status_code=400, detail="invalid skill name")
-    if not store.get(name):
+
+    store = _store_for(user_id, tenant_id, scope)
+
+    found = store.get(name)
+    if not found:
         raise HTTPException(status_code=404, detail=f"Skill '{name}' not found")
+    # 关键：store.delete 只作用于**写目标目录**。若该技能是从别的层解析出来的
+    # （如请求 scope=tenant 但它其实只在全局共享层），删除会是空操作 ——
+    # 必须明确 404，而不是回 200 让调用方以为删掉了团队资产。
+    if found.scope != store.write_scope:
+        raise HTTPException(
+            status_code=404,
+            detail=(
+                f"Skill '{name}' is not in scope '{store.write_scope}' "
+                f"(it resolves from '{found.scope}')"
+            ),
+        )
+
     store.delete(name)
-    return {"message": f"Skill '{name}' deleted"}
+    return {"message": f"Skill '{name}' deleted", "scope": store.write_scope}
 
 
 class SkillToggleRequest(BaseModel):

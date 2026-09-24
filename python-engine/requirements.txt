@@ -16,6 +16,8 @@ asyncpg==0.30.0
 python-multipart==0.0.31
 pymupdf==1.25.5
 python-docx==1.1.2
+# 图片元数据（EXIF）—— app/media/analyzer.py 的 extract_metadata 用
+Pillow==12.1.1
 pydantic==2.11.5
 pydantic-settings==2.10.1
 python-dotenv==1.1.0

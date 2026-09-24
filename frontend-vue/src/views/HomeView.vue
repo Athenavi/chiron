@@ -402,7 +402,7 @@ function scrollToTop() {
   pointer-events: none;
   opacity: 0.5;
 }
-.hero-content { position: relative; z-index: 2; max-width: 760px; }
+.hero-content { position: relative; z-index: var(--z-local); max-width: 760px; }
 .hero-badge {
   display: inline-flex;
   align-items: center;
@@ -415,12 +415,12 @@ function scrollToTop() {
   font-weight: 500;
   color: var(--text-secondary);
   box-shadow: var(--shadow-sm);
-  animation: heroReveal 0.55s ease-out both;
+  animation: heroReveal var(--dur-slow) ease-out both;
 }
 .hero-badge-dot {
   width: 7px; height: 7px; border-radius: 50%;
   background: var(--primary);
-  animation: dotPulse 2.4s ease-in-out infinite;
+  animation: dotPulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes dotPulse {
   0%, 100% { box-shadow: 0 0 4px var(--primary); }
@@ -433,7 +433,7 @@ function scrollToTop() {
   font-weight: 700;
   letter-spacing: -0.02em;
   color: var(--text-primary);
-  animation: heroReveal 0.8s 0.08s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
 .hero-title-accent {
   background: linear-gradient(100deg, var(--primary), var(--accent));
@@ -448,9 +448,9 @@ function scrollToTop() {
   line-height: 26px;
   color: var(--text-secondary);
   max-width: 560px;
-  animation: heroReveal 0.8s 0.16s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
-.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal 0.8s 0.24s cubic-bezier(0.22, 0.8, 0.36, 1) both; }
+.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal var(--dur-slow) var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both; }
 @keyframes heroReveal {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
@@ -463,7 +463,7 @@ function scrollToTop() {
   height: 44px;
   font-size: 14px;
   font-weight: 600;
-  transition: transform 0.15s ease-out, box-shadow 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition: transform var(--dur-normal) ease-out, box-shadow var(--dur-normal) ease, border-color var(--dur-normal) ease, background var(--dur-normal) ease;
 }
 .hero-cta.glow {
   box-shadow: var(--shadow-md), 0 4px 14px var(--primary-bg);
@@ -482,7 +482,7 @@ function scrollToTop() {
 .section-sub { margin-top: 8px; text-align: center; font-size: 14px; color: var(--text-tertiary); }
 .feature-grid {
   position: relative;
-  z-index: 1;
+  z-index: var(--z-content);
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
   gap: 14px;
@@ -498,12 +498,12 @@ function scrollToTop() {
   background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
   cursor: pointer;
-  transition: transform 0.18s var(--ease-out),
+  transition: transform var(--dur-normal) var(--ease-out),
               border-color 0.18s var(--ease-out),
               box-shadow 0.18s var(--ease-out);
 }
 .feature-card.visible {
-  animation: cardIn 0.45s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: cardIn var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
   animation-delay: var(--card-delay, 0ms);
 }
 @keyframes cardIn {
@@ -535,7 +535,7 @@ function scrollToTop() {
 }
 .feature-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
 .feature-desc { margin-top: 6px; font-size: 13px; line-height: 20px; color: var(--text-secondary); flex: 1; }
-.feature-go { margin-top: 12px; font-size: 12px; color: var(--primary); opacity: 0; transform: translateX(-4px); transition: opacity 0.18s ease, transform 0.18s ease; }
+.feature-go { margin-top: 12px; font-size: 12px; color: var(--primary); opacity: 0; transform: translateX(-4px); transition: opacity var(--dur-normal) ease, transform var(--dur-normal) ease; }
 .feature-card:hover .feature-go { opacity: 1; transform: translateX(0); }
 
 /* ── 产品展示：工作台窗口预览 ── */
@@ -552,7 +552,7 @@ function scrollToTop() {
   border: 1px solid var(--border-default);
   background: var(--bg-surface);
   box-shadow: var(--shadow-md);
-  transition: transform 0.25s ease, box-shadow 0.25s ease;
+  transition: transform var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 .window-card:hover { transform: translateY(-3px); box-shadow: var(--shadow-lg); }
 .window-chrome {
@@ -679,7 +679,7 @@ function scrollToTop() {
   font-size: 11px;
   padding: 4px 12px;
   cursor: pointer;
-  transition: color 0.15s ease, border-color 0.15s ease;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .term-copy:hover { color: var(--primary); border-color: var(--primary); }
 .terminal-body { padding: 16px 18px; font-family: var(--font-mono); font-size: 12.5px; line-height: 24px; background: var(--bg-code); }
@@ -752,9 +752,9 @@ function scrollToTop() {
   align-items: center;
   justify-content: center;
   cursor: pointer;
-  z-index: 50;
+  z-index: var(--z-sticky);
   box-shadow: var(--shadow-md);
-  transition: transform 0.2s ease, border-color 0.2s ease, background 0.2s ease;
+  transition: transform var(--dur-normal) ease, border-color var(--dur-normal) ease, background var(--dur-normal) ease;
 }
 .scroll-top:hover {
   transform: translateY(-2px);
@@ -762,6 +762,6 @@ function scrollToTop() {
   color: var(--primary);
 }
 .scroll-top:active { transform: translateY(0) scale(0.94); }
-.top-fade-enter-active, .top-fade-leave-active { transition: opacity 0.2s ease, transform 0.2s ease; }
+.top-fade-enter-active, .top-fade-leave-active { transition: opacity var(--dur-normal) ease, transform var(--dur-normal) ease; }
 .top-fade-enter-from, .top-fade-leave-to { opacity: 0; transform: translateY(8px); }
 </style>

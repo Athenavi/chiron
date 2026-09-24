@@ -1626,7 +1626,7 @@ onUnmounted(() => {
 .crumb-sep { margin-left: 4px; color: var(--text-muted); }
 .toolbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 24px; }
-.file-card { border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all 0.15s; display: flex; flex-direction: column; gap: 6px; }
+.file-card { border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
 .file-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .file-card:focus-visible,
 .lb-btn:focus-visible,
@@ -1643,7 +1643,7 @@ onUnmounted(() => {
 .card-meta { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .pagination-bar { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
 :deep(.row-selected) { background: var(--primary-bg) !important; }
-.batch-bar { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
+.batch-bar { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
 .batch-count { font-size: 13px; color: var(--text-primary); }
 .card-check { position: absolute; top: 6px; left: 6px; }
 .file-card { position: relative; }

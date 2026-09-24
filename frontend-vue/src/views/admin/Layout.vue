@@ -336,7 +336,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   background: var(--bg-card) !important;
   border-right: 1px solid var(--border);
   position: relative;
-  z-index: 20;
+  z-index: var(--z-dropdown);
 }
 .admin-sider :deep(.ant-layout-sider-children) { display: flex; flex-direction: column; }
 
@@ -345,8 +345,8 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   position: fixed !important;
   top: 0; left: 0; bottom: 0;
   transform: translateX(-100%);
-  transition: transform 0.25s ease;
-  z-index: 50;
+  transition: transform var(--dur-normal) ease;
+  z-index: var(--z-modal);
   box-shadow: var(--shadow-lg);
 }
 .admin-sider--drawer-open { transform: translateX(0); }
@@ -354,7 +354,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   position: fixed;
   inset: 0;
   background: rgba(0, 0, 0, 0.45);
-  z-index: 40;
+  z-index: var(--z-overlay);
 }
 
 /* 品牌区 */
@@ -480,7 +480,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   padding: 4px 10px 4px 4px;
   border-radius: 999px;
   cursor: pointer;
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) ease;
 }
 .header-user:hover { background: var(--bg-hover); }
 .header-user-name {
@@ -500,7 +500,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 }
 
 /* 过渡 */
-.fade-enter-active, .fade-leave-active { transition: opacity 0.18s ease; }
+.fade-enter-active, .fade-leave-active { transition: opacity var(--dur-normal) ease; }
 .fade-enter-from, .fade-leave-to { opacity: 0; }
 
 /* 移动端抽屉菜单：菜单项提高至 40px 触控高度 */

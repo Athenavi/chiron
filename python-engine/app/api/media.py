@@ -413,11 +413,51 @@ async def analyze_media(media_id: str, request: Request):
     raise HTTPException(status_code=501, detail="AI media analysis not yet implemented")
 
 
+def _media_type_from(mime: str) -> str:
+    """MIME → analyzer 的 media_type（image / video / audio / document）。"""
+    if mime.startswith("image/"):
+        return "image"
+    if mime.startswith("video/"):
+        return "video"
+    if mime.startswith("audio/"):
+        return "audio"
+    return "document"
+
+
 @router.post("/v1/media/{media_id}/extract-metadata")
 async def extract_metadata(media_id: str, request: Request):
-    """提取媒体文件元数据 - v2.3功能"""
-    await get_auth_token(request)
+    """提取媒体文件元数据。
 
-    raise HTTPException(
-        status_code=501, detail="Metadata extraction not yet implemented"
-    )
+    数据流：经网关 `GET /v1/media/{id}/download` 取文件内容（响应头给出 MIME），
+    再交给 `app.media.analyzer.extract_metadata` 真实解析。
+
+    能力边界：图片 EXIF（Pillow）与文档（pymupdf / python-docx）返回真实元数据；
+    音视频需要 ffprobe，未安装时返回 `available: false` + 原因，**不假装成功**。
+    """
+    from app.media.analyzer import extract_metadata as extract
+
+    token = await get_auth_token(request)
+
+    async with await create_http_client(token) as client:
+        try:
+            resp = await client.get(f"/v1/media/{media_id}/download")
+            resp.raise_for_status()
+        except httpx.HTTPStatusError as e:
+            logger.error(
+                f"Download media {media_id} failed: {e.response.status_code} - {e.response.text}"
+            )
+            raise HTTPException(
+                status_code=e.response.status_code, detail="Failed to download media"
+            ) from e
+        except Exception as e:
+            logger.error(f"Download media {media_id} error: {e}")
+            raise HTTPException(
+                status_code=500, detail="Internal server error"
+            ) from e
+
+        mime = resp.headers.get("content-type", "").split(";")[0].strip()
+        content = resp.content
+
+    media_type = _media_type_from(mime)
+    result = await extract(f"media://{media_id}", media_type, data=content)
+    return result

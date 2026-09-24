@@ -480,8 +480,9 @@ func NewGatewayRouter(
 	// rpaHub 由 NewGatewayRouter 的调用方（main.go）以 db.Redis 构造；Redis 不可用时为 localOnly 空操作。
 	rpaHub.Start(lifecycleCtx)
 
-	// Enterprise chaos（authMW + RequireEntPerm("chaos:manage")）：混沌工程
-	NewEntChaosHandler().RegisterRoutes(mux, authMW)
+	// Enterprise chaos（authMW + RequireEntPerm("chaos:manage")）：混沌工程。
+	// handler 需要 Redis 来失效 chaos:active:<tenant> 缓存，保证多副本一致。
+	NewEntChaosHandler(atomicRedis).RegisterRoutes(mux, authMW)
 
 	// 工具授权模式（GET/POST /v1/mode）已移除：模式不再是服务端状态，而是前端随
 	// 每次提交携带的请求参数（llm_config.tools_mode）。见 mode.go 的说明。
@@ -491,8 +492,11 @@ func NewGatewayRouter(
 
 	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient)
 
-	// Wrap main mux with public middleware
-	return publicMW(mux)
+	// Wrap main mux with public middleware.
+	//
+	// 混沌注入在**最外层**（默认关闭，见 CHAOS_ENABLED）：整站故障应当也影响未认证
+	// 请求与静态资源；关闭时它第一个判断就放行。
+	return ChaosMiddleware(atomicRedis)(publicMW(mux))
 }
 
 // ── Public endpoints ──

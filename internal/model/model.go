@@ -1,14 +1,11 @@
 package model
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"strings"
 	"sync"
 	"time"
-
-	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 type User struct {
@@ -188,144 +185,4 @@ func (wm *WorkingMemory) Summarize() string {
 		parts = append(parts, fmt.Sprintf("State: %s", string(stateJSON)))
 	}
 	return strings.Join(parts, "\n")
-}
-
-// ── Episodic Memory (cross-session) ───────────────────────────────────────
-
-type Episode struct {
-	ID        string        `json:"id"`
-	Task      string        `json:"task"`
-	Summary   string        `json:"summary"`
-	ToolsUsed []string      `json:"tools_used"`
-	Success   bool          `json:"success"`
-	Duration  time.Duration `json:"duration"`
-	CreatedAt time.Time     `json:"created_at"`
-}
-
-type EpisodicMemory struct {
-	mu       sync.RWMutex
-	episodes []Episode
-	maxSize  int
-}
-
-func NewEpisodicMemory(maxSize int) *EpisodicMemory {
-	if maxSize <= 0 {
-		maxSize = 100
-	}
-	return &EpisodicMemory{
-		episodes: make([]Episode, 0, maxSize),
-		maxSize:  maxSize,
-	}
-}
-
-func (em *EpisodicMemory) Record(ep Episode) {
-	em.mu.Lock()
-	defer em.mu.Unlock()
-	if len(em.episodes) >= em.maxSize {
-		em.episodes = em.episodes[1:]
-	}
-	em.episodes = append(em.episodes, ep)
-}
-
-func (em *EpisodicMemory) Recent(n int) []Episode {
-	em.mu.RLock()
-	defer em.mu.RUnlock()
-	if n <= 0 || n >= len(em.episodes) {
-		result := make([]Episode, len(em.episodes))
-		copy(result, em.episodes)
-		return result
-	}
-	result := make([]Episode, n)
-	copy(result, em.episodes[len(em.episodes)-n:])
-	return result
-}
-
-func (em *EpisodicMemory) FindByTool(toolName string) []Episode {
-	em.mu.RLock()
-	defer em.mu.RUnlock()
-	if toolName == "" {
-		result := make([]Episode, len(em.episodes))
-		copy(result, em.episodes)
-		return result
-	}
-	var result []Episode
-	for _, ep := range em.episodes {
-		for _, t := range ep.ToolsUsed {
-			if t == toolName {
-				result = append(result, ep)
-				break
-			}
-		}
-	}
-	return result
-}
-
-// ── PostgreSQL-backed Episode Store ──
-
-type PGEpisodeStore struct {
-	pool *pgxpool.Pool
-}
-
-func NewPGEpisodeStore(pool *pgxpool.Pool) *PGEpisodeStore {
-	return &PGEpisodeStore{pool: pool}
-}
-
-// Init 只读校验 episodes 表存在。
-//
-// 该表不属于权威迁移（数据库中也不存在），且本类型的调用方已全部移除，因此这里**不再建表**：
-// schema 只由 Alembic 管理。将来若重新启用该能力，请先把它写进 migrations/versions/ 的权威迁移。
-func (s *PGEpisodeStore) Init(ctx context.Context) error {
-	if s.pool == nil {
-		return nil
-	}
-	var exists bool
-	if err := s.pool.QueryRow(ctx,
-		`SELECT to_regclass('public.episodes') IS NOT NULL`).Scan(&exists); err != nil {
-		return fmt.Errorf("check episodes table: %w", err)
-	}
-	if !exists {
-		return fmt.Errorf("episodes table is missing; add it to the authoritative migration then run: alembic upgrade head")
-	}
-	return nil
-}
-
-func (s *PGEpisodeStore) Save(ctx context.Context, ep Episode) error {
-	if s.pool == nil {
-		return nil
-	}
-	_, err := s.pool.Exec(ctx,
-		`INSERT INTO episodes (id, task, summary, tools_used, success, duration_ms, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7)
-		 ON CONFLICT (id) DO UPDATE SET summary = $3, tools_used = $4, success = $5`,
-		ep.ID, ep.Task, ep.Summary, ep.ToolsUsed, ep.Success, ep.Duration.Milliseconds(), ep.CreatedAt,
-	)
-	return err
-}
-
-func (s *PGEpisodeStore) Recent(ctx context.Context, n int) ([]Episode, error) {
-	if s.pool == nil {
-		return nil, nil
-	}
-	rows, err := s.pool.Query(ctx,
-		`SELECT id, task, summary, tools_used, success, duration_ms, created_at
-		 FROM episodes ORDER BY created_at DESC LIMIT $1`, n)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var episodes []Episode
-	for rows.Next() {
-		var ep Episode
-		var durMs int64
-		if err := rows.Scan(&ep.ID, &ep.Task, &ep.Summary, &ep.ToolsUsed, &ep.Success, &durMs, &ep.CreatedAt); err != nil {
-			continue
-		}
-		ep.Duration = time.Duration(durMs) * time.Millisecond
-		episodes = append(episodes, ep)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate episodes: %w", err)
-	}
-	return episodes, nil
 }
