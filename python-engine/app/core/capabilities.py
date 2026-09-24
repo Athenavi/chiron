@@ -16,14 +16,15 @@
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Callable, Optional
+from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class WorkstationType(str, Enum):
+class WorkstationType(StrEnum):
     """工作台类型"""
 
     DIALOGUE = "dialogue"  # 对话工作台 (入口)
@@ -34,7 +35,7 @@ class WorkstationType(str, Enum):
     PLUGIN = "plugin"  # 插件工作台 (扩展)
 
 
-class CapabilityType(str, Enum):
+class CapabilityType(StrEnum):
     """能力类型"""
 
     TOOL = "tool"  # 工具型 (如 execute_python)
@@ -78,7 +79,7 @@ class Capability:
 
     # 输入输出契约
     input_schema: list[CapabilityParam] = field(default_factory=list)
-    output_schema: Optional[CapabilityResult] = None
+    output_schema: CapabilityResult | None = None
 
     # 元数据
     version: str = "1.0.0"
@@ -95,7 +96,7 @@ class Capability:
     #     （字段与 property 同名会导致 dataclass __init__ 报 no setter）
 
     # 实际执行函数 (Python 侧)
-    _executor: Optional[Callable] = field(default=None, repr=False)
+    _executor: Callable | None = field(default=None, repr=False)
 
     # 组合能力的子能力列表
     sub_capabilities: list[str] = field(default_factory=list)
@@ -227,7 +228,7 @@ class CapabilitiesRegistry:
 
     async def get_by_id(
         self, capability_id: str, tenant_id: str = ""
-    ) -> Optional[Capability]:
+    ) -> Capability | None:
         """根据 ID 获取能力
 
         查找顺序：租户专属能力 → 全局能力（tenant_id 为空）。
@@ -243,7 +244,7 @@ class CapabilitiesRegistry:
         self,
         workstation_type: WorkstationType,
         tenant_id: str = "",
-        status: Optional[str] = None,
+        status: str | None = None,
     ) -> list[Capability]:
         """列出某工作台的所有能力"""
         results = []
@@ -262,8 +263,8 @@ class CapabilitiesRegistry:
         self,
         query: str,
         tenant_id: str = "",
-        workstation_type: Optional[WorkstationType] = None,
-        capability_type: Optional[CapabilityType] = None,
+        workstation_type: WorkstationType | None = None,
+        capability_type: CapabilityType | None = None,
         limit: int = 10,
     ) -> list[Capability]:
         """搜索能力 (基于关键词 + 标签 + 描述)
@@ -323,7 +324,7 @@ class CapabilitiesRegistry:
         intent: str,
         tenant_id: str,
         available_workstations: list[WorkstationType] = None,
-    ) -> Optional[Capability]:
+    ) -> Capability | None:
         """找到最匹配意图的能力
 
         用于 TaskRouter 自动编排
@@ -386,7 +387,7 @@ class CapabilitiesRegistry:
 
 
 # ── 全局单例 ───────────────────────────────────────────────────────
-_global_registry: Optional[CapabilitiesRegistry] = None
+_global_registry: CapabilitiesRegistry | None = None
 
 
 def get_registry() -> CapabilitiesRegistry:

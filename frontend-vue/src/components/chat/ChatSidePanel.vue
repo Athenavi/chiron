@@ -29,7 +29,7 @@ const { t: tr } = useI18n()
  * 侧栏底部的主题 / 用户入口。
  *
  * 为什么在这里而不是沿用页面右上角：那里是**固定定位**的胶囊
- * （AppLayout 的 .topbar-actions，top:12 / right:12 / z-index:30）。
+ * （AppLayout 的 .topbar-actions，top:12 / right:12 / 落在 --z-drawer 层）。
  * 侧栏在右侧时消息区变窄、两者不重叠；一旦交换布局把侧栏移到左侧，
  * 消息区变宽、工具栏右端顶到页面右边缘，就会被它盖住「更多操作」。
  * 所以聊天页改由这里承载（AppLayout 在该页隐藏了那个胶囊）。
@@ -402,10 +402,10 @@ function pickSession(id: string) {
         v-if="view === 'sessions'"
         type="button"
         class="session-back"
-        title="打开会话地图"
+        :title="$t('打开会话地图')"
         @click="emit('open-map')"
       >
-        地图
+        {{ $t('地图') }}
       </button>
       <button
         v-if="view === 'trajectory'"
@@ -725,7 +725,7 @@ function pickSession(id: string) {
                   v-if="s.parent_session_id"
                   class="session-branch"
                   :title="branchTip(s)"
-                >分支</span>
+                >{{ $t('分支') }}</span>
                 <span
                   v-if="s.tag"
                   class="session-tag"
@@ -928,7 +928,7 @@ function pickSession(id: string) {
   position: absolute;
   top: 0; right: 0; bottom: 0;
   width: 320px;
-  z-index: 120;
+  z-index: var(--z-page-panel);
   display: flex; flex-direction: column;
   background: var(--bg-card);
   border-left: 1px solid var(--border);

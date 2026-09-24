@@ -12,8 +12,8 @@ import json
 import logging
 import time
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from app.memory.layers import SummaryEntry
 
@@ -95,7 +95,7 @@ class SummaryStore:
         return self._milvus_collection
 
     async def insert(
-        self, entry: SummaryEntry, embedding: Optional[list[float]] = None
+        self, entry: SummaryEntry, embedding: list[float] | None = None
     ) -> SummaryEntry:
         """插入摘要（PG + Milvus 双写）。content_hash 冲突时返回既有条目。"""
         pool = self._pool
@@ -104,7 +104,7 @@ class SummaryStore:
         )
         topics_json = json.dumps(entry.topics, ensure_ascii=False)
         entities_json = json.dumps(entry.entities, ensure_ascii=False)
-        now = datetime.now(timezone.utc)
+        datetime.now(UTC)
 
         try:
             row = await pool.fetchrow(
@@ -185,7 +185,7 @@ class SummaryStore:
 
     async def get_by_id(
         self, tenant_id: str, user_id: str, summary_id: str
-    ) -> Optional[SummaryEntry]:
+    ) -> SummaryEntry | None:
         row = await self._pool.fetchrow(
             f"SELECT {_COLUMNS} FROM memory_summaries WHERE id=$1 AND tenant_id=$2 AND user_id=$3",
             summary_id,
@@ -196,7 +196,7 @@ class SummaryStore:
 
     async def get_by_hash(
         self, tenant_id: str, user_id: str, content_hash: str
-    ) -> Optional[SummaryEntry]:
+    ) -> SummaryEntry | None:
         row = await self._pool.fetchrow(
             f"SELECT {_COLUMNS} FROM memory_summaries WHERE content_hash=$1 AND tenant_id=$2 AND user_id=$3",
             content_hash,

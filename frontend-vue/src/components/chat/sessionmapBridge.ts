@@ -24,6 +24,8 @@
  * 单测里被完整验证（不需要浏览器、不需要 Vue 组件）。
  */
 
+import { t } from '../../i18n'
+
 /** 地图发起的 RPC 类型（与 app.js 的 `dshRpc(...)` 调用一一对应）。 */
 export const MAP_RPC_TYPES = [
   'synapse:create-session',
@@ -84,7 +86,8 @@ export interface MapRpcHost {
  * 历史数据里还可能有**带外层全角括号**的写法（早先 adapter 自己发消息时用的格式），
  * 所以 adapter 的正则两种都认 —— 改这里的格式前先确认那边仍然匹配。
  */
-export const FOLLOWUP_TEMPLATE = (text: string) => `【请简短回答问题】:(${text})`
+export const FOLLOWUP_TEMPLATE = (text: string) =>
+  t('chat.sessionmap.followup', { text })
 
 export function isMapRpc(type: unknown): type is MapRpcType {
   return typeof type === 'string' && (MAP_RPC_TYPES as readonly string[]).includes(type)
@@ -92,7 +95,7 @@ export function isMapRpc(type: unknown): type is MapRpcType {
 
 function messageOf(err: unknown): string {
   if (err instanceof Error) return err.message
-  return String(err ?? '会话服务调用失败')
+  return String(err ?? t('chat.sessionmap.serviceFailed'))
 }
 
 /**
@@ -114,13 +117,13 @@ export function handleMapRpc(data: MapRpcRequest | null | undefined, host: MapRp
       //   synapse:send-message   → synapse:message-sent
       //   synapse:fork-session   → synapse:forked-session
       if (type === 'synapse:create-session') {
-        const session = await host.createSession(String(data.title || '新对话'))
+        const session = await host.createSession(String(data.title || t('chat.sessionmap.newSession')))
         host.post({ type: 'synapse:created-session', requestId, session })
         return
       }
       if (type === 'synapse:fork-session') {
         const sessionId = String(data.sessionId || '')
-        if (!sessionId) throw new Error('缺少来源会话')
+        if (!sessionId) throw new Error(t('chat.sessionmap.missingSource'))
         const session = await host.forkSession(
           sessionId,
           Number(data.atSeq) || 1,
@@ -131,12 +134,12 @@ export function handleMapRpc(data: MapRpcRequest | null | undefined, host: MapRp
       }
       if (type === 'synapse:update-session') {
         const sessionId = String(data.sessionId || '')
-        if (!sessionId) throw new Error('缺少目标会话')
+        if (!sessionId) throw new Error(t('chat.sessionmap.missingTarget'))
         const patch: SessionMetaPatch = {}
         if (typeof data.title === 'string') patch.title = data.title.trim()
         if (typeof data.alias === 'string') patch.alias = data.alias.trim()
         if (typeof data.tag === 'string') patch.tag = data.tag.trim()
-        if (Object.keys(patch).length === 0) throw new Error('没有要更新的字段')
+        if (Object.keys(patch).length === 0) throw new Error(t('chat.sessionmap.emptyPatch'))
         await host.updateSession(sessionId, patch)
         // 回执类型由 app.js 的 settleRpc 认（补丁区块里加了这一条）
         host.post({ type: 'synapse:session-updated', requestId, session: { id: sessionId, ...patch } })
@@ -145,8 +148,8 @@ export function handleMapRpc(data: MapRpcRequest | null | undefined, host: MapRp
       // synapse:send-message
       const sessionId = String(data.sessionId || '')
       const text = String(data.text || '').trim()
-      if (!sessionId) throw new Error('缺少目标会话')
-      if (!text) throw new Error('消息内容为空')
+      if (!sessionId) throw new Error(t('chat.sessionmap.missingTarget'))
+      if (!text) throw new Error(t('chat.sessionmap.emptyMessage'))
       await host.sendMessage(sessionId, text, String(data.mode || ''))
       host.post({ type: 'synapse:message-sent', requestId, session: { id: sessionId } })
     } catch (err) {

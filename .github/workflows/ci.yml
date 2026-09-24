@@ -1,0 +1,112 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  # 同一分支的新推送取消旧的进行中运行，避免排队堆积
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Go 网关 ──────────────────────────────────────────────────────────────
+  go:
+    name: Go gateway
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      # `-mod=mod` 是必需的：仓库里的 vendor/ 放的是参考源码（vendor/DeepSeek-Reasonix，
+      # 不含 vendor/modules.txt），Go 只要看到 vendor/ 就会按 vendor 模式做一致性检查
+      # 并报 "inconsistent vendoring"。run.py / Makefile / Dockerfile 同样显式排除了它。
+      - run: go build -mod=mod ./...
+      - run: go vet -mod=mod ./...
+      - run: go test -mod=mod ./... -count=1
+
+  # ── Python 引擎 ─────────────────────────────────────────────────────────
+  python:
+    name: Python engine
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          # 刻意用**声明下限**而不是最新版：pyproject 写的是 requires-python >= 3.11，
+          # 用 3.11 才能挡住 3.12+ 才有的语法（历史缺陷：milvus_store.py 用了 PEP 701
+          # 的嵌套引号 f-string，在 3.11 上 import 即 SyntaxError）。
+          python-version: '3.11'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install 'pytest>=8.4.0' 'pytest-asyncio>=1.0.0' 'ruff>=0.11.0'
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Pytest
+        # integration 用例需要完整栈（网关 HTTP / 真实 PG），见 pyproject 的 markers。
+        # 它们由需要时单独执行：`pytest -m integration`
+        run: python -m pytest -q -m "not integration"
+
+  # ── 前端 ────────────────────────────────────────────────────────────────
+  frontend:
+    name: Frontend
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend-vue
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          cache-dependency-path: frontend-vue/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - name: ESLint
+        run: pnpm run lint
+      # 契约棘轮（z-index / 主题 token / 动效 token / i18n / a11y）+ vue-tsc + vite build
+      - name: UI contracts + typecheck + build
+        run: pnpm run build
+      - name: Unit tests
+        run: pnpm run test
+
+  # ── 迁移链整体性 ─────────────────────────────────────────────────────────
+  schema:
+    name: Migration chain
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+      - run: python -m pip install -r requirements-migrate.txt
+      # migrations/versions 必须只有**一个** head：分叉会让启动校验
+      # （internal/db/schema_version.go 的 ParseMigrationHead）直接拒绝启动。
+      - name: Single alembic head
+        run: |
+          out="$(python -m alembic -c alembic.ini heads)"
+          echo "$out"
+          count="$(printf '%s\n' "$out" | grep -c '(head)')"
+          if [ "$count" -ne 1 ]; then
+            echo "::error::expected exactly 1 alembic head, found $count"
+            exit 1
+          fi
+      # 迁移文件本身必须可被 Alembic 解析（离线模式不连库）
+      - name: Migration renders offline
+        run: python -m alembic -c alembic.ini upgrade head --sql > /dev/null

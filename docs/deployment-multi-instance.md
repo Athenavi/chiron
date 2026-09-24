@@ -79,8 +79,13 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 ## 7. 数据库迁移与 schema 校验
 
 - **应用不迁移**：网关启动只做只读校验（`internal/db/schema_version.go`），不执行 DDL、不需要 DDL 权限；
+  历史上 Go 侧还留有启动兜底建表（`EnsureTables` / `InitTable` / `episodes`），已全部改为**只读校验**（`VerifySchema` / `VerifyTable`），DDL 只存在于迁移里；
 - **谁执行**：CI 流水线或 DBA，用 `requirements-migrate.txt` 的环境在受控窗口执行
   `python -m alembic -c alembic.ini upgrade head`（离线场景可 `--sql` 生成 DDL 审阅后执行）；
+- **迁移链**：`migrations/versions/` 只有**一个**权威基线 `0001_authoritative_baseline`（DDL 取自稳定后的数据库）。
+  此后所有 schema 变更都必须在此基础上追加新的 revision；**单一 head** 是硬要求（分叉会直接报错）。
+  全新库 `alembic upgrade head`；**已存在的库**（表已齐全、`alembic_version` 仍是旧 revision）执行
+  `alembic stamp 0001_authoritative_baseline` —— 只改版本号、不重放 DDL；
 - **校验规则**：比对 `migrations/versions` 解析出的 head 与数据库 `alembic_version.version_num`；
   不一致 → `FATAL: refusing to start on mismatched schema`（`ALLOW_SCHEMA_DRIFT=true` 放行，用于迁移超前/回滚）；
   迁移链分叉（多个 head）会直接报错，必须在合并后发布；
@@ -164,4 +169,6 @@ python -m pytest python-engine/tests -q
 
 - **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；剩余价值是「实例故障后从 checkpoint 续跑而非重跑」，需跨 Go/Python 状态模型设计；
 - **`chiron-cli db` 的迁移入口**：`chiron-cli db` 仍调用应用内迁移（现已有 Python/alembic 前置检测，缺失即明确报错）；若也要移除，需调整其交互流程；
-- **`credit_transactions` / `payments`**：已纳入 Alembic（迁移 `f7c2d05a1b8e`），但 Go 侧 `EnsureTables` 仍保留兜底建表——两处 DDL 必须同步修改。
+- ~~`credit_transactions` / `payments` 两处 DDL 需同步~~ **已解决**：DDL 全部收敛到唯一权威迁移
+  `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables`（含 `ALTER TABLE users ADD COLUMN credits`）
+  已改为只读 `VerifySchema`，`ent_model_routes` 的 `InitTable` → `VerifyTable`。

@@ -489,11 +489,11 @@ function dismissCostHint() {
 // 实时流里出现了新 run（通常是刚委派的）→ 立刻刷新树，让卡片尽快出现
 /** 面板内部 tab（设计稿第四节 + 产物：运行 · 输出 · 用量 · 产物 · 事件流） */
 const SA_TABS = [
-  { id: 'runs', label: '运行' },
-  { id: 'output', label: '输出' },
-  { id: 'usage', label: '用量' },
-  { id: 'artifacts', label: '产物' },
-  { id: 'events', label: '事件流' },
+  { id: 'runs', labelKey: 'chat.tabs.runs' },
+  { id: 'output', labelKey: 'chat.tabs.output' },
+  { id: 'usage', labelKey: 'chat.tabs.usage' },
+  { id: 'artifacts', labelKey: 'chat.tabs.artifacts' },
+  { id: 'events', labelKey: 'chat.tabs.events' },
 ] as const
 const saTab = ref<(typeof SA_TABS)[number]['id']>('runs')
 
@@ -619,7 +619,7 @@ onBeforeUnmount(() => {
         :aria-selected="saTab === t.id"
         @click="saTab = t.id"
       >
-        {{ $t(t.label) }}
+        {{ $t(t.labelKey) }}
         <span
           v-if="t.id === 'runs' && runs.length"
           class="sa-tab-count"
@@ -663,7 +663,11 @@ onBeforeUnmount(() => {
           class="tree-row"
           :class="{ active: run.run_id === selectedRunId }"
           :style="{ paddingLeft: `${8 + (run.depth - 1) * 14}px` }"
+          role="button"
+          tabindex="0"
           @click="selectRun(run.run_id)"
+          @keydown.enter.prevent="selectRun(run.run_id)"
+          @keydown.space.prevent="selectRun(run.run_id)"
         >
           <button
             v-if="childCount.get(run.run_id)"
@@ -1025,7 +1029,7 @@ onBeforeUnmount(() => {
 .sa-tab:hover { color: var(--text-primary, #262626); }
 .sa-tab.active {
   background: var(--bg-elevated, #fff); color: var(--text-primary, #262626);
-  font-weight: 600; box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+  font-weight: 600; box-shadow: var(--shadow-xs);
 }
 .sa-tab-count {
   min-width: 16px; padding: 0 4px; border-radius: 8px;

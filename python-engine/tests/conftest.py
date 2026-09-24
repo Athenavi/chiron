@@ -48,7 +48,7 @@ collect_ignore = [
 # 没被发现的原因之一。
 #
 # 需要覆盖该头的测试（例如断言 401）在请求上显式传 `headers=` 即可。
-import pytest as _pytest
+import pytest as _pytest  # noqa: E402 — 紧接上方的 fixture 说明
 
 
 @_pytest.fixture(autouse=True)

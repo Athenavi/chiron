@@ -11,7 +11,7 @@ import json
 import logging
 import uuid
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from app.memory.layers import MemoryEntry
 
@@ -26,7 +26,7 @@ _COLUMNS = (
 def _row_to_entry(row: Any) -> MemoryEntry:
     """asyncpg Record → MemoryEntry（embedding 兼容 str/list 两种形态）。"""
     emb_raw = row["embedding"]
-    embedding: Optional[list[float]] = None
+    embedding: list[float] | None = None
     if emb_raw is not None:
         if isinstance(emb_raw, str):
             try:
@@ -66,7 +66,7 @@ class ProfileStore:
         tenant_id: str,
         user_id: str,
         include_archived: bool = False,
-        slot: Optional[str] = None,
+        slot: str | None = None,
     ) -> list[MemoryEntry]:
         sql = f"SELECT {_COLUMNS} FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2"
         params: list[Any] = [tenant_id, user_id]
@@ -81,14 +81,14 @@ class ProfileStore:
 
     async def get_by_id(
         self, tenant_id: str, user_id: str, entry_id: str
-    ) -> Optional[MemoryEntry]:
+    ) -> MemoryEntry | None:
         sql = f"SELECT {_COLUMNS} FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2 AND id=$3"
         row = await self._pool.fetchrow(sql, tenant_id, user_id, entry_id)
         return _row_to_entry(row) if row else None
 
     async def get_by_key(
         self, tenant_id: str, user_id: str, slot: str, item_key: str
-    ) -> Optional[MemoryEntry]:
+    ) -> MemoryEntry | None:
         sql = (
             f"SELECT {_COLUMNS} FROM user_memory_entries "
             "WHERE tenant_id=$1 AND user_id=$2 AND slot=$3 AND item_key=$4"
@@ -141,13 +141,13 @@ class ProfileStore:
         user_id: str,
         entry_id: str,
         *,
-        item_key: Optional[str] = None,
-        item_value: Optional[str] = None,
-        confidence: Optional[int] = None,
-        source: Optional[str] = None,
-        embedding: Optional[list[float]] = None,
+        item_key: str | None = None,
+        item_value: str | None = None,
+        confidence: int | None = None,
+        source: str | None = None,
+        embedding: list[float] | None = None,
         embedding_set: bool = False,
-    ) -> Optional[MemoryEntry]:
+    ) -> MemoryEntry | None:
         """按 id 局部更新（仅更新显式传入的字段；embedding_set 区分「清空向量」与「不改动」）。"""
         sets: list[str] = ["updated_at=NOW()"]
         params: list[Any] = [tenant_id, user_id, entry_id]
@@ -198,7 +198,7 @@ class ProfileStore:
         return row is not None
 
     async def delete_by_key(
-        self, tenant_id: str, user_id: str, item_key: str, slot: Optional[str] = None
+        self, tenant_id: str, user_id: str, item_key: str, slot: str | None = None
     ) -> int:
         """按 key 删除（可限定槽位）；返回删除条数。"""
         if slot:

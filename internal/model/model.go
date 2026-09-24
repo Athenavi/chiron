@@ -53,11 +53,11 @@ type ConversationShare struct {
 }
 
 type Message struct {
-	ID        string    `json:"id"`
-	SessionID string    `json:"session_id"`
-	Role      string    `json:"role"` // user / assistant / system / tool
-	Content   string    `json:"content"`
-	ToolCalls string    `json:"tool_calls,omitempty"` // OpenAI 格式 tool_calls JSONB（S 修复：落库）
+	ID        string `json:"id"`
+	SessionID string `json:"session_id"`
+	Role      string `json:"role"` // user / assistant / system / tool
+	Content   string `json:"content"`
+	ToolCalls string `json:"tool_calls,omitempty"` // OpenAI 格式 tool_calls JSONB（S 修复：落库）
 	// TurnID 标识消息所属回合。前端按回合分组渲染与锚定：同一回合的
 	// 思考/正文/工具卡片共享同一个稳定身份，历史补丁与分页插入不得改写它。
 	TurnID string `json:"turn_id,omitempty"`
@@ -270,20 +270,23 @@ func NewPGEpisodeStore(pool *pgxpool.Pool) *PGEpisodeStore {
 	return &PGEpisodeStore{pool: pool}
 }
 
+// Init 只读校验 episodes 表存在。
+//
+// 该表不属于权威迁移（数据库中也不存在），且本类型的调用方已全部移除，因此这里**不再建表**：
+// schema 只由 Alembic 管理。将来若重新启用该能力，请先把它写进 migrations/versions/ 的权威迁移。
 func (s *PGEpisodeStore) Init(ctx context.Context) error {
 	if s.pool == nil {
 		return nil
 	}
-	_, err := s.pool.Exec(ctx, `CREATE TABLE IF NOT EXISTS episodes (
-		id VARCHAR(32) PRIMARY KEY,
-		task TEXT NOT NULL DEFAULT '',
-		summary TEXT NOT NULL DEFAULT '',
-		tools_used TEXT[] NOT NULL DEFAULT '{}',
-		success BOOLEAN NOT NULL DEFAULT TRUE,
-		duration_ms BIGINT NOT NULL DEFAULT 0,
-		created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW()
-	)`)
-	return err
+	var exists bool
+	if err := s.pool.QueryRow(ctx,
+		`SELECT to_regclass('public.episodes') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("check episodes table: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("episodes table is missing; add it to the authoritative migration then run: alembic upgrade head")
+	}
+	return nil
 }
 
 func (s *PGEpisodeStore) Save(ctx context.Context, ep Episode) error {

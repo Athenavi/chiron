@@ -5,7 +5,7 @@ Redis Cache Client — 连接池化实现，对接 CacheClient Protocol
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 import redis.asyncio as aioredis
 
@@ -24,7 +24,7 @@ class RedisCacheClient:
         self._url = url
         self._max_connections = max_connections
         self._decode_responses = decode_responses
-        self._pool: Optional[aioredis.Redis] = None
+        self._pool: aioredis.Redis | None = None
 
     async def _get_pool(self) -> aioredis.Redis:
         """获取或创建连接池 - 使用统一 Redis 客户端"""
@@ -39,7 +39,7 @@ class RedisCacheClient:
             )
         return self._pool
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         """获取缓存值"""
         pool = await self._get_pool()
         return await pool.get(key)

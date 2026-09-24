@@ -16,8 +16,9 @@ import logging
 import time
 import uuid
 from collections import Counter, defaultdict, deque
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable
+from typing import Any
 
 from app.gateway.router import GatewayRouter
 from app.tools.registry import registry as tool_registry
@@ -141,8 +142,11 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
                 if chunk.content:
                     text += chunk.content
         except Exception as e:
-            text = f"llm error: {e}"
+            # 不能把错误文本当成"正常输出"返回 —— 那会让工作流以 status=completed 收尾，
+            # 调用方看到的是"成功 + 一段 'llm error: ...' 文本"。节点失败必须上抛，
+            # 由 run_workflow 落到 instance.status="error" / instance.error。
             logger.warning("LLM node %s failed: %s", node_id, e)
+            raise
         return {f"__out_{node_id}__": text}
 
     async def _tool_node(state: dict, node_id: str) -> dict:

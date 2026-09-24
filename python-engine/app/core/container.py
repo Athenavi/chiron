@@ -4,7 +4,8 @@ DI 容器 — FastAPI Depends + 全局容器（非 HTTP 场景）
 
 from __future__ import annotations
 
-from typing import Any, Callable, Optional, TypeVar
+from collections.abc import Callable
+from typing import Any, TypeVar
 
 T = TypeVar("T")
 
@@ -26,7 +27,7 @@ class GlobalContainer:
     def register(
         self,
         interface: type[T],
-        factory: Callable[["GlobalContainer"], T],
+        factory: Callable[[GlobalContainer], T],
         singleton: bool = True,
     ) -> None:
         """注册工厂函数"""
@@ -53,7 +54,7 @@ class GlobalContainer:
 
 
 # 全局容器实例
-_container: Optional[GlobalContainer] = None
+_container: GlobalContainer | None = None
 
 
 def get_container() -> GlobalContainer:

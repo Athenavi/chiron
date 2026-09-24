@@ -19,11 +19,7 @@ const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
 /** 存量基线：文件 → 允许的裸 z-index 数量。只允许下调。 */
 const BASELINE = {
-  'src/components/AppLayout.vue': 5,
-  'src/components/WorkflowDAGEditor.vue': 2,
   'src/components/chat/ChatEmptyHero.vue': 1,
-  'src/components/chat/ChatInput.vue': 1,
-  'src/components/chat/ChatSidePanel.vue': 1,
   'src/components/chat/MessageList.vue': 3,
   'src/views/ChatView.vue': 2,
   'src/views/HomeView.vue': 3,

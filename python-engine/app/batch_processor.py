@@ -11,9 +11,7 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
-import time
 import uuid
 from typing import Any
 
@@ -125,7 +123,7 @@ class BatchProcessor:
                         )
                         if attempt < 2:
                             await asyncio.sleep(1 * (attempt + 1))
-                return f"error: max retries exceeded"
+                return "error: max retries exceeded"
 
         tasks = [_call(p) for p in prompts]
         return await asyncio.gather(*tasks)

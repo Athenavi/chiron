@@ -90,7 +90,7 @@ const compactionText = computed(() => {
     >
       <CloudServerOutlined v-if="online" />
       <DisconnectOutlined v-else />
-      <span>{{ online ? '已连接' : '离线' }}</span>
+      <span>{{ online ? $t('chat.status.online') : $t('chat.status.offline') }}</span>
     </span>
   </div>
 </template>

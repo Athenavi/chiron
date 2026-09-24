@@ -21,6 +21,7 @@ import {
   stripUserInputTag,
   type ChatItem,
 } from './chat-types'
+import { t } from '../../i18n'
 
 /** 元数据容错解析：字符串则尝试 JSON，失败或非对象返回 undefined。 */
 export function normalizeMeta(raw: any): Record<string, any> | undefined {
@@ -159,7 +160,7 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
     if (i > 0 && prevDay !== dayKey) {
       merged.push({
         kind: 'date_divider',
-        content: `${d.getMonth() + 1}月${d.getDate()}日`,
+        content: t('chat.time.monthDay', { month: d.getMonth() + 1, day: d.getDate() }),
         id: `date-${dayKey}-${i}`,
       })
     }

@@ -131,8 +131,7 @@ class MilvusVectorStore:
     ) -> None:
         """确保集合存在"""
         self._ensure_connected()
-        from pymilvus import (Collection, CollectionSchema, DataType,
-                              FieldSchema)
+        from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 
         col_name = self._get_collection_name(name)
 

@@ -1,12 +1,11 @@
 # Context management and CLAUDE.md loader tests
-import os
 import tempfile
-import pytest
 from pathlib import Path
 
-from app.context.manager import ContextManager
-from app.context.claude_md import ClaudeMdLoader
+import pytest
 
+from app.context.claude_md import ClaudeMdLoader
+from app.context.manager import ContextManager
 
 # ======================================================================
 # ContextManager tests
@@ -85,7 +84,9 @@ class TestCompressMessages:
 
     @pytest.mark.asyncio
     async def test_compression_reduces_tokens(self):
-        cm = ContextManager(max_tokens=500, compression_threshold=0.8)
+        # 预算要够放下「system + 摘要 + 尾部」：给得过小会走到 trim_to_fit，
+        # 硬截断连摘要一起裁掉（那是降级路径，不是本用例要验的行为）。
+        cm = ContextManager(max_tokens=4000, compression_threshold=0.8)
 
         # Build a message list with substantial content that exceeds threshold
         messages = [{"role": "system", "content": "System prompt here."}]

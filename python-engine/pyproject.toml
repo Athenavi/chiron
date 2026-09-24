@@ -71,10 +71,43 @@ include = ["app*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+# 与 tests/conftest.py 的 collect_ignore 对齐：pytest 不收集的文件，lint 也不应检查，
+# 否则 `ruff check .` 会永远因为一批**从未运行**的测试而变红。
+# 前 4 个文件的中文注释在历史上某次 UTF-8/GBK 转换中损坏（私有区码位 U+E0xx/U+E195、
+# 三引号未闭合、换行被吞），原始内容不可逆；test_engine.py 引用了重构后已不存在的
+# AgentSession。按 conftest.py 的结论，它们需要按当前代码行为重写断言 ——
+# 重写完成后请同步移除这里的条目与 conftest.collect_ignore 中的对应项。
+extend-exclude = [
+    "tests/test_guards.py",
+    "tests/test_sandbox_isolation.py",
+    "tests/test_security_tenant_isolation.py",
+    "tests/test_trace_writer.py",
+    "tests/test_engine.py",
+]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B"]
 ignore = ["E501"]
+
+[tool.ruff.lint.per-file-ignores]
+# 测试函数名用中文描述断言意图（如 `test_越界异常的消息即_error_字段`）。中文没有
+# 大小写概念，N802 的 lowercase 判定在这里没有意义，改写成拼音只会降低可读性。
+# 仅对 tests/ 放开这一条规则，app/ 下的生产代码仍受 N802 约束。
+"tests/**" = ["N802"]
+
+[tool.ruff.lint.flake8-bugbear]
+# FastAPI 的依赖注入**要求**把 Depends()/File() 等调用写在参数默认值里，
+# B008 对这种框架惯用法是误报。ruff 官方推荐用 extend-immutable-calls
+# 声明「调用结果不可变」的工厂函数。
+extend-immutable-calls = [
+    "fastapi.Body",
+    "fastapi.Depends",
+    "fastapi.File",
+    "fastapi.Form",
+    "fastapi.Header",
+    "fastapi.Path",
+    "fastapi.Query",
+]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

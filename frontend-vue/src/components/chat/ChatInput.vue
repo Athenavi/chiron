@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick, h } from 'vue'
 import { Input, Button, Select, Tooltip, Popover, message } from 'ant-design-vue'
 import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined } from '@ant-design/icons-vue'
@@ -983,7 +983,7 @@ defineExpose({ insertText })
             size="small"
             allow-clear
             :placeholder="$t('默认模型')"
-            :title="`当前模型：${modelValue || '默认（后端路由）'}（仅影响后续消息）`"
+            :title="$t('chat.input.modelTitle', { model: modelValue || $t('chat.input.modelDefault') })"
             @update:value="onModelChange"
           />
           <Button
@@ -1010,7 +1010,7 @@ defineExpose({ insertText })
             :type="loading ? 'default' : 'primary'"
             :class="{ 'send-btn--stop': loading }"
             :disabled="(!input.trim() && !pendingAttachments.length && !loading) || disabled"
-            :title="loading ? '停止生成（输入内容后按 Enter 可打断并发送）' : '发送'"
+            :title="loading ? $t('chat.input.stopSend') : $t('chat.input.send')"
             @click="loading ? emit('stop') : submit()"
           >
             <template #icon>
@@ -1045,16 +1045,16 @@ defineExpose({ insertText })
   padding: 12px 14px 10px;
   border: 1px solid var(--border); border-radius: 16px;
   background: var(--bg-input);
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.04), 0 8px 24px rgba(0, 0, 0, 0.06);
+  box-shadow: var(--shadow-md);
   font-size: 16px; line-height: 24px;
-  transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 /* 聚焦态：主色描边 + 柔和光晕（用 color-mix 让深浅色主题都自然过渡） */
 .input-card:focus-within {
   border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
   box-shadow:
     0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent),
-    0 8px 24px rgba(0, 0, 0, 0.06);
+    var(--shadow-md);
 }
 .input-field { background: transparent !important; }
 .input-field :deep(textarea) { color: var(--text-primary) !important; font-size: 16px !important; line-height: 24px !important; }
@@ -1084,7 +1084,7 @@ defineExpose({ insertText })
 }
 .run-dot {
   width: 6px; height: 6px; border-radius: 50%; background: var(--primary, #1677ff);
-  animation: run-pulse 1.2s ease-in-out infinite;
+  animation: run-pulse var(--dur-pulse) ease-in-out infinite;
 }
 @keyframes run-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 /* 模式选择器标签 */
@@ -1102,7 +1102,7 @@ defineExpose({ insertText })
 .context-label { font-size: 12px; }
 /* 发送按钮：36px 圆形，可发送时主色 + hover 微放大 */
 .send-btn.ant-btn { width: 36px; height: 36px; min-width: 36px; }
-.send-btn { transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease; }
+.send-btn { transition: transform var(--dur-fast) ease, box-shadow var(--dur-fast) ease, opacity var(--dur-fast) ease; }
 .send-btn:not(:disabled):hover { transform: scale(1.06); box-shadow: 0 4px 12px var(--primary-bg); filter: brightness(1.05); }
 .send-btn:disabled { opacity: 0.45; }
 /* 生成中：圆形 → 方形，让"现在能停"一眼可辨。
@@ -1157,14 +1157,14 @@ defineExpose({ insertText })
 .att-thumb-img { width: 100%; height: 100%; object-fit: cover; }
 .att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: 10px; }
 .att-thumb-name { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-overlay); color: #fff; display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 10px; }
+.att-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 10px; }
 .att-remove:hover { background: var(--error); }
 .attach-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; justify-content: center; }
 .attach-btn:hover { color: var(--primary); }
 /* 录音按钮 */
 .record-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; justify-content: center; gap: 4px; }
 .record-btn:hover { color: var(--primary); }
-.record-btn.recording { color: var(--error); animation: pulse-rec 1.2s ease-in-out infinite; }
+.record-btn.recording { color: var(--error); animation: pulse-rec var(--dur-pulse) ease-in-out infinite; }
 @keyframes pulse-rec {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
@@ -1174,17 +1174,17 @@ defineExpose({ insertText })
 .input-card.drag-active { border-color: var(--primary); background: var(--primary-bg); box-shadow: var(--shadow-md), 0 0 0 3px var(--primary-bg); }
 
 /* 斜杠命令面板 */
-.slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: 10; }
+.slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: var(--z-sticky); }
 /* 分组标题：**粘在列表顶部**，滚动时始终看得出"当前在哪一类"
    （比整块滚动遮罩更实用：遮罩只提示"还有内容"，粘性标题直接回答"我在哪"）。 */
 .slash-group {
-  position: sticky; top: 0; z-index: 1;
+  position: sticky; top: 0; z-index: var(--z-content);
   padding: 4px 12px;
   background: var(--bg-card);
   color: var(--text-tertiary); font-size: 11px; font-weight: 600;
   border-bottom: 1px solid var(--border);
 }
-.slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background 0.1s ease; }
+.slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background var(--dur-fast) ease; }
 .slash-item.active { background: var(--bg-hover); }
 .slash-cmd { font-weight: 600; color: var(--primary); font-size: 13px; }
 .slash-desc { color: var(--text-tertiary); font-size: 12px; }
@@ -1195,7 +1195,7 @@ defineExpose({ insertText })
 .paste-preview-meta { font-size: 11px; color: var(--text-tertiary); margin: 4px 0; }
 .paste-preview-actions { display: flex; justify-content: flex-end; gap: 8px; }
 .paste-btn { padding: 2px 10px; border-radius: var(--sig-radius-button); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
-.paste-btn.accept { background: var(--primary); color: #fff; border-color: var(--primary); }
+.paste-btn.accept { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .paste-btn.accept:hover { opacity: 0.9; }
 .paste-btn.discard:hover { color: var(--error); border-color: var(--error); }
 </style>

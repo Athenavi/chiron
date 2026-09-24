@@ -11,8 +11,6 @@
 import asyncio
 import json
 
-import pytest
-
 from app.queue.producer import TASK_STREAM
 from app.subagent import followup
 

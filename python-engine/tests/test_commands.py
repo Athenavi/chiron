@@ -1,9 +1,7 @@
 """Tests for the slash commands system."""
-import asyncio
 import pytest
 
-from app.commands import registry, CommandContext, CommandRegistry
-
+from app.commands import CommandContext, CommandRegistry, registry
 
 # ── helpers ─────────────────────────────────────────────────────
 

@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"time"
 
+	"fmt"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/google/uuid"
@@ -39,27 +40,24 @@ func NewEntModelRouterHandler() *EntModelRouterHandler {
 	return &EntModelRouterHandler{}
 }
 
-// InitTable 确保 ent_model_routes 表存在，在服务启动时由初始化流程调用。
-func (h *EntModelRouterHandler) InitTable() {
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
-	_, err := db.GlobalDBManager.Exec(ctx,
-		`CREATE TABLE IF NOT EXISTS ent_model_routes (
-			id VARCHAR(36) PRIMARY KEY,
-			tenant_id VARCHAR(36) NOT NULL,
-			model_id VARCHAR(128) NOT NULL,
-			primary_provider VARCHAR(64) NOT NULL,
-			fallback_order JSONB DEFAULT '[]',
-			provider_config JSONB DEFAULT '{}',
-			enabled BOOLEAN DEFAULT true,
-			priority INTEGER DEFAULT 1,
-			created_at TIMESTAMPTZ DEFAULT NOW(),
-			updated_at TIMESTAMPTZ DEFAULT NOW(),
-			UNIQUE (tenant_id, model_id)
-		);`)
-	if err != nil {
-		slog.Warn("ent_model_routes table creation failed (table may already exist)", "error", err)
+// VerifyTable 只读校验 ent_model_routes 表存在。
+//
+// 建表已收敛到 Alembic（migrations/versions/0001_authoritative_baseline.py），应用不再执行 DDL。
+// 历史上"启动时建表"的写法让这张表同时被迁移与代码定义，两侧一旦漂移就会出现
+// "启动看着正常、引擎拉取 /v1/internal/model-routes 时 500"这种延迟故障。
+func (h *EntModelRouterHandler) VerifyTable(ctx context.Context) error {
+	if db.Pool == nil {
+		return nil
 	}
+	var exists bool
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT to_regclass('public.ent_model_routes') IS NOT NULL`).Scan(&exists); err != nil {
+		return fmt.Errorf("check ent_model_routes: %w", err)
+	}
+	if !exists {
+		return fmt.Errorf("ent_model_routes table is missing — run: alembic upgrade head")
+	}
+	return nil
 }
 
 // RegisterRoutes 挂载模型路由管理路由（authMW + RequireEntPerm("model:route")）。

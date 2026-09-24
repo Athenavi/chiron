@@ -263,7 +263,7 @@ onMounted(async () => {
           v-model:value="draft.provider"
           class="mv-full"
           :placeholder="$t('选择已配置 Key 的提供商')"
-          :options="providers.map(p => ({ value: p.id, label: p.hasKey ? `${p.name}（已配置 Key）` : p.name }))"
+          :options="providers.map(p => ({ value: p.id, label: p.hasKey ? $t('admin.providers.configuredName', { name: p.name }) : p.name }))"
         />
         <label>{{ $t('模型名（给提供商调用的 ID）') }}</label>
         <Input

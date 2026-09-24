@@ -14,7 +14,7 @@ Milvus 实现而不改被测代码：``MemoryService`` 只依赖 ``ProfileStore`
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 
 class InMemorySummaryStore:
@@ -44,7 +44,7 @@ class InMemorySummaryStore:
                 and existing.content_hash == ch
             ):
                 return existing
-        entry.created_at = datetime.now(timezone.utc)
+        entry.created_at = datetime.now(UTC)
         if embedding:
             entry.embedding = embedding
         self.by_id[entry.id] = entry
@@ -67,7 +67,7 @@ class InMemorySummaryStore:
     async def list_active(self, tenant_id, user_id, limit=50):
         items = self._active(tenant_id, user_id)
         items.sort(
-            key=lambda e: e.created_at or datetime.min.replace(tzinfo=timezone.utc),
+            key=lambda e: e.created_at or datetime.min.replace(tzinfo=UTC),
             reverse=True,
         )
         return items[:limit]
@@ -76,7 +76,7 @@ class InMemorySummaryStore:
         e = self.by_id.get(summary_id)
         if e:
             e.access_count += 1
-            e.last_accessed_at = datetime.now(timezone.utc)
+            e.last_accessed_at = datetime.now(UTC)
 
     async def archive(self, summary_id):
         e = self.by_id.get(summary_id)
@@ -89,7 +89,7 @@ class InMemorySummaryStore:
         count = 0
         for e in self._active(tenant_id, user_id):
             ref = e.last_accessed_at or e.created_at
-            if ref and (datetime.now(timezone.utc) - ref).days > days:
+            if ref and (datetime.now(UTC) - ref).days > days:
                 e.status = "archived"
                 count += 1
         return count
@@ -128,7 +128,7 @@ class InMemoryProfileStore:
         out.sort(
             key=lambda e: (
                 e.slot,
-                e.updated_at or datetime.min.replace(tzinfo=timezone.utc),
+                e.updated_at or datetime.min.replace(tzinfo=UTC),
             )
         )
         return out
@@ -158,7 +158,7 @@ class InMemoryProfileStore:
             entry.access_count = existing.access_count
             entry.created_at = existing.created_at
             del self.by_id[existing.id]
-        entry.updated_at = datetime.now(timezone.utc)
+        entry.updated_at = datetime.now(UTC)
         if entry.created_at is None:
             entry.created_at = entry.updated_at
         self.by_key[
@@ -195,7 +195,7 @@ class InMemoryProfileStore:
             e.source = source
         if embedding_set:
             e.embedding = embedding
-        e.updated_at = datetime.now(timezone.utc)
+        e.updated_at = datetime.now(UTC)
         return e
 
     async def set_embedding(self, entry_id, embedding):
@@ -248,7 +248,7 @@ class InMemoryProfileStore:
             e = self.by_id.get(eid)
             if e:
                 e.access_count += 1
-                e.last_accessed_at = datetime.now(timezone.utc)
+                e.last_accessed_at = datetime.now(UTC)
 
 
 class InMemoryConflictManager:

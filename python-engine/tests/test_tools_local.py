@@ -1,23 +1,22 @@
 """Python 本地工具注册表与核心工具的最小回归测试。"""
-import asyncio
 import pytest
 
-from app.tools.registry import registry
-from app.tools.context import set_tool_context
-from app.tools.sandbox import workspace_dir
-import app.tools.web  # noqa: F401 — web_fetch 注册
+import app.tools.agent  # noqa: F401
+import app.tools.browser  # noqa: F401
 import app.tools.core  # noqa: F401
+import app.tools.edit_file  # noqa: F401
+import app.tools.git_tools  # noqa: F401
+import app.tools.glob_tools  # noqa: F401
+import app.tools.graph  # noqa: F401
+import app.tools.media  # noqa: F401
 import app.tools.memory  # noqa: F401
 import app.tools.pm  # noqa: F401
 import app.tools.skill  # noqa: F401
-import app.tools.graph  # noqa: F401
-import app.tools.agent  # noqa: F401
-import app.tools.browser  # noqa: F401
-import app.tools.media  # noqa: F401
-import app.tools.edit_file  # noqa: F401
-import app.tools.glob_tools  # noqa: F401
-import app.tools.git_tools  # noqa: F401
+import app.tools.web  # noqa: F401 — web_fetch 注册
 import app.workflow  # noqa: F401
+from app.tools.context import set_tool_context
+from app.tools.registry import registry
+from app.tools.sandbox import workspace_dir
 
 
 def test_registry_lists_core_tools():
@@ -213,6 +212,7 @@ async def test_glob_finds_python_files(tmp_path):
 async def test_git_status_in_repo(tmp_path):
     """Create temp git repo in sandbox workspace, verify git_status returns changes."""
     import subprocess
+
     # git 工具强制 workspace 根执行 → 用独立临时 user 获得全新 workspace（S 安全修复：防宿主 repo 穿透）
     import uuid as _uuid
     set_tool_context(session_id="s", user_id=f"u-git-{_uuid.uuid4().hex[:8]}", tenant_id="t", gateway=None)

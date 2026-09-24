@@ -15,21 +15,21 @@ import random
 import time
 import uuid
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import StrEnum
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class FaultType(str, Enum):
+class FaultType(StrEnum):
     LATENCY = "latency"
     ERROR = "error"
     TIMEOUT = "timeout"
     RESOURCE = "resource"
 
 
-class ExperimentStatus(str, Enum):
+class ExperimentStatus(StrEnum):
     PENDING = "pending"
     RUNNING = "running"
     COMPLETED = "completed"
@@ -88,7 +88,7 @@ class ChaosEngine:
             duration_ms=duration_ms,
             intensity=intensity,
             status=ExperimentStatus.RUNNING,
-            started_at=datetime.now(timezone.utc),
+            started_at=datetime.now(UTC),
             config=config,
         )
         self._experiments[exp.id] = exp
@@ -138,7 +138,7 @@ class ChaosEngine:
             del self._cancel_hooks[exp.id]
         self._active.discard(exp.id)
         exp.status = ExperimentStatus.ROLLED_BACK
-        exp.completed_at = datetime.now(timezone.utc)
+        exp.completed_at = datetime.now(UTC)
         exp.result["rolled_back"] = True
         return exp
 

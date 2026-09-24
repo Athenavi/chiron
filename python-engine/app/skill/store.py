@@ -39,7 +39,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Union
+from typing import Any
 
 # 共享目录名（无身份时的回退目录）
 SHARED_DIR = "_shared"
@@ -50,7 +50,7 @@ _IDENTITY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
 _migration_lock = threading.Lock()
 
-PathLike = Union[str, Path]
+PathLike = str | Path
 
 # 技能来源标记（scope）：user=用户私有目录 / tenant=租户共享层 / shared=全局共享层
 SCOPE_USER = "user"

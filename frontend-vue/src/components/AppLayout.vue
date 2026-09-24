@@ -50,7 +50,7 @@ const authStore = useAuthStore()
 const themeStore = useThemeStore()
 
 /**
- * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / z-index:30）会盖住
+ * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / 落在 --z-drawer 层）会盖住
  * ChatView 消息区工具栏右端的「更多操作」。
  *
  * 侧栏在右侧时 chat-main 变窄、两者不重叠，所以平时看不出来；一旦交换布局把
@@ -379,7 +379,7 @@ async function runQuickCommand() {
   position: fixed;
   top: 12px;
   left: 12px;
-  z-index: 30;
+  z-index: var(--z-drawer);
   height: 40px;
   display: flex;
   align-items: center;
@@ -448,7 +448,7 @@ async function runQuickCommand() {
   position: fixed;
   top: 12px;
   right: 12px;
-  z-index: 30;
+  z-index: var(--z-drawer);
   display: flex;
   align-items: center;
   gap: 8px;
@@ -513,7 +513,7 @@ async function runQuickCommand() {
   top: 64px;
   left: 10px;
   bottom: 10px;
-  z-index: 20;
+  z-index: var(--z-dropdown);
   width: var(--dock-w);
   display: flex;
   flex-direction: column;
@@ -624,7 +624,7 @@ async function runQuickCommand() {
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.15s ease, transform 0.15s ease;
-  z-index: 25;
+  z-index: var(--z-dock);
 }
 
 .dock-tip-name {
@@ -689,7 +689,7 @@ async function runQuickCommand() {
   -webkit-backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
   border: 1px solid var(--panel-border);
   box-shadow: var(--sig-shadow-hover);
-  z-index: 25;
+  z-index: var(--z-dock);
 }
 
 .dock-popover-head {

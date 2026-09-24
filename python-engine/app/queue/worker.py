@@ -12,9 +12,7 @@ import time
 
 import redis.asyncio as aioredis
 
-from app.observability.metrics import (QUEUE_DEPTH, QUEUE_DLQ_TOTAL,
-                                       QUEUE_PROCESSING_DURATION,
-                                       QUEUE_RETRY_TOTAL)
+from app.observability.metrics import QUEUE_DEPTH, QUEUE_DLQ_TOTAL, QUEUE_PROCESSING_DURATION, QUEUE_RETRY_TOTAL
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -28,6 +26,7 @@ from app.queue.producer import (  # noqa: E402
     TASK_STREAM,
     TASK_STREAM_MAXLEN,
 )
+
 GROUP_NAME = "engine-workers"
 CONSUMER_PREFIX = "worker"
 MAX_RETRIES = 3
@@ -229,7 +228,7 @@ class QueueWorker:
                     asyncio.gather(*self._in_flight, return_exceptions=True),
                     timeout=30.0,  # 最多等待 30 秒
                 )
-            except asyncio.TimeoutError:
+            except TimeoutError:
                 logger.error(
                     "Queue worker shutdown timed out, cancelling remaining tasks"
                 )
@@ -272,7 +271,7 @@ class QueueWorker:
         if not results:
             return
 
-        for stream, messages in results:
+        for _stream, messages in results:
             for stream_id, fields in messages:
                 await self._spawn_message(stream_id, fields)
 
@@ -493,10 +492,10 @@ class QueueWorker:
             try:
                 dl = datetime.datetime.strptime(
                     deadline_raw, "%Y-%m-%dT%H:%M:%SZ"
-                ).replace(tzinfo=datetime.timezone.utc)
+                ).replace(tzinfo=datetime.UTC)
             except ValueError:
                 dl = None
-            if dl is not None and dl < datetime.datetime.now(datetime.timezone.utc):
+            if dl is not None and dl < datetime.datetime.now(datetime.UTC):
                 # 过期任务不再执行,但也不能静默丢弃(A3):转 DLQ 保留可见性与人工重投能力。
                 logger.warning(
                     "Task expired (deadline=%s), moved to DLQ: id=%s type=%s",

@@ -4,13 +4,14 @@ CacheClient Protocol — 对标 Go 的 db.RedisClient 接口
 
 from __future__ import annotations
 
-from typing import AsyncIterator, Optional, Protocol
+from collections.abc import AsyncIterator
+from typing import Protocol
 
 
 class CacheClient(Protocol):
     """缓存客户端接口"""
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         """获取缓存值"""
         ...
 

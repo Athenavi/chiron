@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
-from app.agent.modes import _overrides_path
-from app.tools.mode_admin import mode_edit, mode_list, EDITABLE_FIELDS
+from app.tools.mode_admin import mode_edit, mode_list
 
 
 @pytest.mark.asyncio
@@ -33,7 +33,7 @@ async def test_mode_edit_merges_and_persists(tmp_path, monkeypatch):
     assert saved["minimal"]["include_tools"] == ["read_file", "edit_file", "shell_exec", "grep_files"]
 
     # 第二次编辑合并而非覆盖 persona
-    out2 = await mode_edit("minimal", {"persona": "custom persona"})
+    await mode_edit("minimal", {"persona": "custom persona"})
     saved2 = json.loads(target.read_text(encoding="utf-8"))
     assert saved2["minimal"]["persona"] == "custom persona"
     assert "grep_files" in saved2["minimal"]["include_tools"]

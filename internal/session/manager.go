@@ -749,7 +749,7 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 		return page, nil
 	}
 	// 多取 1 条用于判断是否还有更早的数据
-	// source 用 jsonb 取键读取：该列可能尚未迁移（见 migrations/versions/c1a7d3f92b04_*.py），
+	// source 用 jsonb 取键读取：该列由权威迁移建立（migrations/versions/0001_authoritative_baseline.py），
 	// 而"列不存在"会让整个历史查询失败 —— 一个展示用字段不值得拿对话历史去赌。
 	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
 		          COALESCE(to_jsonb(messages)->>'source', ''), created_at

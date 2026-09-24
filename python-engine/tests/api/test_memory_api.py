@@ -11,31 +11,21 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
-from unittest.mock import MagicMock
 
 import httpx
 import pytest
-from fastapi import FastAPI
 from httpx import ASGITransport
 
 from app.memory.conflict_manager import ConflictManager
 from app.memory.layers import (
-    ConflictRef,
-    ProfileItem,
-    ProfileUpdateResult,
-    RecallResult,
-    RecalledItem,
-    SessionContext,
-    SessionMeta,
     SlotType,
     SourceType,
 )
 from app.memory.profile_card import ProfileCard
 from app.memory.service import MemoryService
 from app.memory.session_meta import SessionMetaStore
-
 
 # ── Mock 基础设施 ────────────────────────────────────────────────────
 
@@ -58,14 +48,14 @@ class MockDatabasePool:
             "confidence": item["confidence"],
             "source": item["source"],
             "version": item.get("version", 1),
-            "confirmed_at": datetime.fromtimestamp(item["confirmed_at"], tz=timezone.utc)
+            "confirmed_at": datetime.fromtimestamp(item["confirmed_at"], tz=UTC)
             if item.get("confirmed_at")
             else None,
-            "last_referenced_at": datetime.fromtimestamp(item["last_referenced_at"], tz=timezone.utc)
+            "last_referenced_at": datetime.fromtimestamp(item["last_referenced_at"], tz=UTC)
             if item.get("last_referenced_at")
             else None,
-            "created_at": datetime.fromtimestamp(ts, tz=timezone.utc),
-            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(ts, tz=UTC),
+            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=UTC),
             "embedding": item.get("embedding"),
             "access_count": item.get("access_count", 0),
             "status": item.get("status", "active"),
@@ -75,7 +65,7 @@ class MockDatabasePool:
         if "FROM user_memory_profile" in query:
             if "WHERE tenant_id = $1 AND user_id = $2" in query:
                 results = []
-                for (tid, uid, slot, key), item in self._items.items():
+                for (tid, uid, _slot, _key), item in self._items.items():
                     if tid == args[0] and uid == args[1]:
                         results.append(self._make_row(item))
                 results.sort(key=lambda r: (r["slot"], r["item_key"]))
@@ -213,7 +203,7 @@ class MockSummaryStore:
             "content": entry.content,
             "topics": entry.topics,
             "status": "active",
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
         })
         return entry
 
@@ -258,6 +248,7 @@ def _make_service():
 def _make_app(svc):
     """创建 FastAPI 测试应用。"""
     from fastapi import FastAPI
+
     from app.api.memory import router
     app = FastAPI()
     app.include_router(router)

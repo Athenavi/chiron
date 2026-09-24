@@ -124,7 +124,7 @@ const prettyArgs = computed(() => {
 .approval-actions { display: flex; align-items: center; gap: 8px; }
 .approval-btn { border: none; border-radius: 8px; padding: 4px 14px; font-size: 13px; cursor: pointer; }
 .approval-btn:disabled { opacity: 0.5; cursor: default; }
-.approval-btn.allow { background: var(--primary); color: #fff; }
+.approval-btn.allow { background: var(--primary); color: var(--on-solid); }
 .approval-btn.allow:hover:not(:disabled) { opacity: 0.9; }
 .approval-btn.danger { background: var(--bg-hover); color: var(--text-primary); }
 .approval-btn.danger:hover:not(:disabled) {

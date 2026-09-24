@@ -1,29 +1,21 @@
 # 记忆系统 L3 摘要 + 冲突裁决 + /memory 命令测试
-import asyncio
-from datetime import datetime, timezone
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
-from app.memory.layers import (
-    MemoryConflict,
-    RecallResult,
-    SummaryEntry,
-    cosine_similarity,
-)
 from app.memory.consolidator import (
     Consolidator,
-    ConsolidateResult,
     _extract_entities,
     _extract_summary,
     _extract_topics,
 )
-from app.memory.summaries import SummaryStore, compute_hash, new_summary_id
-from tests.fakes import InMemoryProfileStore, InMemorySummaryStore
+from app.memory.layers import (
+    RecallResult,
+    SummaryEntry,
+)
 from app.memory.service import MemoryService
-from app.tools import context as tool_context
-
+from tests.fakes import InMemoryProfileStore, InMemorySummaryStore
 
 # ── 测试基建 ──────────────────────────────────────────────
 
@@ -193,7 +185,7 @@ class TestConsolidatorPipeline:
         con = Consolidator(store=ss, embedder=emb)
         msgs1 = [{"role": "user", "content": "Python 异步编程讨论"}, {"role": "assistant", "content": "asyncio"}]
         msgs2 = [{"role": "user", "content": "Python asyncio 异步讨论"}, {"role": "assistant", "content": "asyncio"}]
-        r1 = await con.consolidate("t1", "u1", "s1", msgs1, 0, 2)
+        await con.consolidate("t1", "u1", "s1", msgs1, 0, 2)
         r2 = await con.consolidate("t1", "u1", "s1", msgs2, 0, 2)
         assert r2.near_duplicate_of is not None
 
@@ -387,6 +379,7 @@ class TestConflictDetection:
 
 def _api_app(svc):
     from fastapi import FastAPI
+
     from app.api.memory import router
     app = FastAPI()
     app.include_router(router)

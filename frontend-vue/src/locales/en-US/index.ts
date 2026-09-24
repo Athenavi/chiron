@@ -1,6 +1,8 @@
 import chat from './chat'
 import errors from './errors'
 import legacy from './legacy'
+import auth from './auth'
+import admin from './admin'
 
 /**
  * en-US。键与 zh-CN 一一对应（zh-CN 为源语言）；缺失的键会自动回退到 zh-CN。
@@ -26,5 +28,7 @@ export default {
   },
   chat,
   errors,
+  auth,
+  admin,
   legacy,
 }

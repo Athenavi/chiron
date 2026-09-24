@@ -92,6 +92,7 @@ async def skill_install(
 
             assert_safe_url(url)  # S4: SSRF 防护
             import httpx
+
             from app.config import settings
 
             async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
@@ -171,6 +172,7 @@ async def skill_discover(url: str = "") -> dict[str, Any]:
     if url:
         try:
             import httpx
+
             from app.config import settings
 
             async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:

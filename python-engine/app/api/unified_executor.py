@@ -15,7 +15,7 @@ import logging
 import time
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Optional
+from typing import Any
 
 from app.agent.workbench_context import (
     context_ids,
@@ -190,12 +190,12 @@ class UnifiedChatHandler:
         self,
         user_input: str,
         tenant_id: str,
-        session_id: Optional[str] = None,
+        session_id: str | None = None,
         mode: str = "auto",  # "auto" / "agent" / "workflow"
         trace_id: str = "",
-        context: Optional[dict] = None,
+        context: dict | None = None,
         user_id: str = "",
-        llm_config: Optional[dict] = None,  # P1-d：会话运行时状态（模型/provider/模式）
+        llm_config: dict | None = None,  # P1-d：会话运行时状态（模型/provider/模式）
     ) -> dict[str, Any]:
         """提交任务 (自动编排)
 
@@ -499,7 +499,7 @@ class UnifiedChatHandler:
         user_input: str,
         tenant_id: str,
         trace_id: str,
-        agent_config: Optional[dict] = None,
+        agent_config: dict | None = None,
     ) -> dict:
         """通过 Agent 工作台执行
 
@@ -875,7 +875,7 @@ class UnifiedChatHandler:
 
 
 # ── 全局单例 ───────────────────────────────────────────────────────
-_global_chat_handler: Optional[UnifiedChatHandler] = None
+_global_chat_handler: UnifiedChatHandler | None = None
 
 
 def get_chat_handler() -> UnifiedChatHandler:
@@ -1097,7 +1097,7 @@ def apply_agent_bindings(context: dict[str, Any], payload: dict[str, Any]) -> No
 
 async def load_agent_payload(
     agent_id: str, tenant_id: str, user_id: str
-) -> Optional[dict[str, Any]]:
+) -> dict[str, Any] | None:
     """按 id 取 Agent 配置；不存在/非本人/DB 不可用时返回 None（不阻断对话）。"""
     if not agent_id.strip():
         return None

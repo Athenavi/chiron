@@ -14,10 +14,11 @@ import logging
 import os
 import re
 import shlex
+import string
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 from app.trace import record_span
 
@@ -27,7 +28,31 @@ logger = logging.getLogger(__name__)
 _SHELL_META_CHARS = re.compile(r"[|&;`$()<>#\n]")
 
 
-class SkillType(str, Enum):
+#: PROMPT 技能的占位符：只认简单标识符。
+#: 刻意**不用 str.format** —— 它允许 ``{obj.__class__.__mro__}`` 这类属性/下标访问，
+#: 等于把参数对象的内部结构暴露给模板作者。
+_PROMPT_VAR_RE = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
+
+
+def _render_prompt_template(prompt: str, params: dict[str, Any]) -> str:
+    """渲染 PROMPT 技能的模板变量；未提供的键原样保留（safe 语义，不抛异常）。
+
+    两种写法都接受，以消除同模块内的语法分裂：
+
+    * ``{name}`` —— 与 SHELL/HTTP 技能一致（它们用 ``str.format``），也是最常见的约定；
+    * ``$name``  —— 历史上 PROMPT 技能用 ``string.Template``，保留兼容。
+
+    注：SHELL/HTTP 目前直接 ``str.format(**params)``，存在同样的属性访问面；
+    要彻底收紧应把它们的渲染也切到本函数（属独立改动）。
+    """
+    text = string.Template(prompt).safe_substitute(params)
+    return _PROMPT_VAR_RE.sub(
+        lambda m: str(params[m.group(1)]) if m.group(1) in params else m.group(0),
+        text,
+    )
+
+
+class SkillType(StrEnum):
     """技能类型"""
 
     PROMPT = "prompt"  # 提示词模板
@@ -37,7 +62,7 @@ class SkillType(str, Enum):
     MCP_TOOL = "mcp"  # MCP 协议工具
 
 
-class SkillStatus(str, Enum):
+class SkillStatus(StrEnum):
     """技能状态"""
 
     ACTIVE = "active"
@@ -333,19 +358,19 @@ class MCPClient:
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError:
-            raise RuntimeError(f"STDIO transport: command not found: {cmd[0]}")
+            raise RuntimeError(f"STDIO transport: command not found: {cmd[0]}") from None
         except Exception as e:
-            raise RuntimeError(f"STDIO transport: failed to spawn process: {e}")
+            raise RuntimeError(f"STDIO transport: failed to spawn process: {e}") from e
 
         try:
             stdout, stderr = await asyncio.wait_for(
                 proc.communicate(payload),
                 timeout=timeout,
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             proc.kill()
             await proc.wait()
-            raise TimeoutError(f"MCP STDIO '{method}' timed out after {timeout}s")
+            raise TimeoutError(f"MCP STDIO '{method}' timed out after {timeout}s") from None
 
         # 从 stdout 解析 JSON-RPC 响应（取 id=1 的那条）
         lines = stdout.decode(errors="replace").strip().splitlines()
@@ -394,8 +419,8 @@ class SkillManager:
         description: str,
         type: SkillType,
         config: dict,
-        input_schema: dict = {},
-        output_schema: dict = {},
+        input_schema: dict = None,
+        output_schema: dict = None,
     ) -> SkillMetadata:
         """注册新技能 (带租户隔离)
 
@@ -404,6 +429,10 @@ class SkillManager:
         - metadata 携带 tenant_id 标记
         """
         # 构造完整 skill_id (带租户前缀)
+        if output_schema is None:
+            output_schema = {}
+        if input_schema is None:
+            input_schema = {}
         full_skill_id = f"{tenant_id}:{skill_id}"
 
         skill = SkillMetadata(
@@ -445,8 +474,8 @@ class SkillManager:
     async def list_skills(
         self,
         tenant_id: str,
-        skill_type: Optional[SkillType] = None,
-        status: Optional[SkillStatus] = None,
+        skill_type: SkillType | None = None,
+        status: SkillStatus | None = None,
     ) -> list[SkillMetadata]:
         """列出技能 (租户隔离)"""
         results = []
@@ -501,19 +530,8 @@ class SkillManager:
                 return result
 
             elif skill_meta.type == SkillType.PROMPT:
-                # 提示词模板渲染 (config 已在 register_skill 时存入元数据)
-                prompt = skill_meta.config.get("template", "")
-                # 填充变量（使用 string.Template 替代 str.format 防止属性访问注入）
-                import string
-                tmpl = string.Template(prompt)
-                # 只允许安全字符的参数值，防止模板注入
-                safe_params = {}
-                for k, v in params.items():
-                    if isinstance(v, str):
-                        safe_params[k] = v
-                    else:
-                        safe_params[k] = str(v)
-                rendered = tmpl.safe_substitute(**safe_params)
+                # 提示词模板渲染（config 已在 register_skill 时存入元数据）
+                rendered = _render_prompt_template(skill_meta.config.get("template", ""), params)
 
                 duration_ms = int((time.time() - start_time) * 1000)
 
@@ -592,8 +610,7 @@ class SkillManager:
             code:     Python 脚本源码（函数体，可引用 params 变量）
             timeout:  超时秒数（默认 60，上限 300）
         """
-        from app.tools.run_code import (_check_static, _render_result,
-                                        _safe_builtins)
+        from app.tools.run_code import _check_static, _render_result, _safe_builtins
 
         code = skill_meta.config.get("code", "")
         timeout = int(skill_meta.config.get("timeout", 60))
@@ -639,12 +656,12 @@ class SkillManager:
                 default=str,
             )
             success = True
-        except asyncio.TimeoutError:
+        except TimeoutError:
             output = ""
-            raise ValueError(f"python script timed out after {timeout}s")
+            raise ValueError(f"python script timed out after {timeout}s") from None
         except RuntimeError as e:
             if "blocked by runtime guard" in str(e):
-                raise ValueError(f"python script blocked by runtime guard: {e}")
+                raise ValueError(f"python script blocked by runtime guard: {e}") from e
             raise
         finally:
             log_buf.close()
@@ -711,9 +728,9 @@ class SkillManager:
         try:
             command = command_template.format(**safe_params)
         except KeyError as e:
-            raise ValueError(f"missing parameter in command template: {e}")
+            raise ValueError(f"missing parameter in command template: {e}") from e
         except Exception as e:
-            raise ValueError(f"command template render failed: {e}")
+            raise ValueError(f"command template render failed: {e}") from e
 
         result = await run_in_sandbox(command, timeout=timeout)
 
@@ -775,7 +792,7 @@ class SkillManager:
         try:
             import httpx
         except ImportError:
-            raise ValueError("httpx not installed — cannot execute HTTP request skill")
+            raise ValueError("httpx not installed — cannot execute HTTP request skill") from None
 
         url_template = skill_meta.config.get("url", "")
         method = skill_meta.config.get("method", "GET").upper()
@@ -791,18 +808,18 @@ class SkillManager:
         try:
             url = url_template.format(**params)
         except KeyError as e:
-            raise ValueError(f"missing parameter in url template: {e}")
+            raise ValueError(f"missing parameter in url template: {e}") from e
         except Exception as e:
-            raise ValueError(f"url template render failed: {e}")
+            raise ValueError(f"url template render failed: {e}") from e
 
         body = ""
         if body_template:
             try:
                 body = body_template.format(**params)
             except KeyError as e:
-                raise ValueError(f"missing parameter in body template: {e}")
+                raise ValueError(f"missing parameter in body template: {e}") from e
             except Exception as e:
-                raise ValueError(f"body template render failed: {e}")
+                raise ValueError(f"body template render failed: {e}") from e
 
         # SSRF 防护：拒绝内网/私有地址
         assert_safe_url(url)
@@ -857,7 +874,7 @@ class SkillManager:
 
 # ── 全局 SkillManager 实例 ────────────────────────────────────────
 # 生产环境应使用 per-tenant 实例 (Redis 隔离)
-_global_skill_manager: Optional[SkillManager] = None
+_global_skill_manager: SkillManager | None = None
 
 
 def get_skill_manager() -> SkillManager:

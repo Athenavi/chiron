@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import hashlib
 from pathlib import Path
-from typing import Optional
 
 _observed: dict[str, tuple[int, int, str]] = {}
 
@@ -43,7 +42,7 @@ def observe(path: Path) -> None:
         pass
 
 
-def check_before_write(path: Path) -> Optional[str]:
+def check_before_write(path: Path) -> str | None:
     """返回 None 表示可写；否则返回拒绝原因。
 
     仅拦截"被读过且版本已变"的文件；未读过的文件直接放行。
@@ -53,7 +52,7 @@ def check_before_write(path: Path) -> Optional[str]:
     if recorded is None:
         return None
     if not path.exists():
-        return f"file was read earlier but no longer exists — re-read before writing"
+        return "file was read earlier but no longer exists — re-read before writing"
     if _signature(path) != recorded:
-        return f"file changed since it was last read — call read_file first to refresh"
+        return "file changed since it was last read — call read_file first to refresh"
     return None

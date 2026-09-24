@@ -19,6 +19,8 @@
  * 未登记的工具走通用兜底（前两个短字段），**与既有行为完全一致 ⇒ 零退化**。
  */
 
+import { t } from '../i18n'
+
 /** 工具名 → 摘要优先取的参数字段（按顺序找第一个非空） */
 const SUMMARY_FIELDS: Record<string, string[]> = {
   // 文件
@@ -51,10 +53,10 @@ const SUMMARY_FIELDS: Record<string, string[]> = {
  * 否则摘要会变成一大段代码或正文 —— 那正是"信息密度低"的来源。
  */
 const BULK_FIELDS: Record<string, { field: string; unit: string }> = {
-  run_code: { field: 'code', unit: '行代码' },
-  execute_python: { field: 'code', unit: '行代码' },
-  write_file: { field: 'content', unit: '行' },
-  edit_file: { field: 'new_string', unit: '行' },
+  run_code: { field: 'code', unit: t('chat.toolUnit.codeLines') },
+  execute_python: { field: 'code', unit: t('chat.toolUnit.codeLines') },
+  write_file: { field: 'content', unit: t('chat.toolUnit.lines') },
+  edit_file: { field: 'new_string', unit: t('chat.toolUnit.lines') },
 }
 
 function clip(text: string, max: number): string {

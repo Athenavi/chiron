@@ -7,8 +7,6 @@
 """
 from __future__ import annotations
 
-import json
-
 import pytest
 
 import app.main  # noqa: F401 — 初始化 app 包，避免循环导入

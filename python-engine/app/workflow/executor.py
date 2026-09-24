@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, Optional
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _TERMINAL_STATUSES = ("completed", "error")
 
 
-async def load_checkpoint(pool, instance_id: str) -> tuple[Optional[str], dict, set[str]]:
+async def load_checkpoint(pool, instance_id: str) -> tuple[str | None, dict, set[str]]:
     """返回 (status, resume_state, resume_done)。行不存在时 status=None。"""
     row = await pool.fetchrow(
         "SELECT status, checkpoint FROM workflow_instances WHERE id = $1",

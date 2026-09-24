@@ -19,11 +19,17 @@ import logging
 import os
 from typing import Any
 
-from app.tools.context import (get_all, get_gateway, get_session_id,
-                              get_tenant_id, get_tool_context, get_user_id,
-                              restore_context)
 from app.subagent import registry as subagent_registry
 from app.subagent.budget import from_env as budget_from_env
+from app.tools.context import (
+    get_all,
+    get_gateway,
+    get_session_id,
+    get_tenant_id,
+    get_tool_context,
+    get_user_id,
+    restore_context,
+)
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)

@@ -94,7 +94,7 @@ async def test_record_then_read_back_most_recent_first(monkeypatch):
 
     monkeypatch.setattr("app.redis_client.get_redis", _get_redis)
 
-    from app.agent.side_effect_ledger import record, recent
+    from app.agent.side_effect_ledger import recent, record
 
     first = SideEffect(
         kind=KIND_FILE_WRITE, tool="write_file", target="a", rollback=ROLLBACK_AUTO, at=1.0

@@ -10,8 +10,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.profile import (DEFAULT_MAX_DEPTH, ProfileSpec, parse_profile_row)
-from app.agent.subagent_runner import (SubAgentRunner, _step_kind, _wrap_result)
+from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec, parse_profile_row
+from app.agent.subagent_runner import SubAgentRunner, _step_kind, _wrap_result
 from app.subagent.redact import redact_payload, redact_text
 from app.subagent.store import SubagentRunStore
 

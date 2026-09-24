@@ -17,15 +17,15 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 from app.core.capabilities import Capability, WorkstationType, get_registry
 
 logger = logging.getLogger(__name__)
 
 
-class AgentRole(str, Enum):
+class AgentRole(StrEnum):
     """Agent 角色定义"""
 
     RESEARCHER = "researcher"  # 信息收集与研究
@@ -84,7 +84,7 @@ class AgentContext:
     execution_log: list[dict] = field(default_factory=list)
 
     # 当前任务
-    current_task: Optional[str] = None
+    current_task: str | None = None
     status: str = "pending"  # pending/running/completed/error
 
     # 时间戳
@@ -116,7 +116,7 @@ class RoleSkillMatcher:
 
         logger.info(f"Registered role profile: {profile.role_id} ({profile.name})")
 
-    async def get_role_profile(self, role: AgentRole) -> Optional[RoleProfile]:
+    async def get_role_profile(self, role: AgentRole) -> RoleProfile | None:
         """获取角色档案"""
         return self._roles.get(role.value)
 
@@ -448,7 +448,7 @@ class RoleSkillMatcher:
 
 
 # ── 全局单例 ────────────────────────────────────────────────────────
-_global_matcher: Optional[RoleSkillMatcher] = None
+_global_matcher: RoleSkillMatcher | None = None
 
 
 def get_matcher() -> RoleSkillMatcher:

@@ -10,9 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.event_sink import (EV_DONE, EV_NOTICE, EV_REASONING, EV_STARTED,
-                                 EV_STATUS, EV_TEXT, ST_COMPLETED, ST_TOOL)
-from app.agent.event_sink import EventSink
+from app.agent.event_sink import EV_DONE, EV_REASONING, EV_STARTED, EV_STATUS, EV_TEXT, ST_COMPLETED, ST_TOOL, EventSink
 from app.agent.subagent_runner import _split_thinking
 
 # ── 事件面（前端契约）──
@@ -92,7 +90,7 @@ def test_per_run_budget_drops_preview_but_keeps_terminal():
 
 def test_queue_limit_drops_preview_never_blocks():
     sink = EventSink(maxsize=2, merge_window=0.0, per_run_budget=1000)
-    for i in range(10):
+    for _i in range(10):
         sink.emit_progress(run_id="rs_1", channel=EV_STATUS, status=ST_TOOL)
     sink.emit_done(run_id="rs_1", status=ST_COMPLETED)
     events = sink.drain()

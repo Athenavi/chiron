@@ -7,10 +7,9 @@
 """
 
 import pytest
-from httpx import AsyncClient, ASGITransport
+from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app
-from app.main import get_gateway
+from app.main import create_app, get_gateway
 
 # 网关注入的身份（AuthMiddleware 要求 query 身份 + X-Internal-Token 同时存在）
 IDENTITY = {"user_id": "test-user", "tenant_id": "test-tenant"}
@@ -18,6 +17,7 @@ IDENTITY = {"user_id": "test-user", "tenant_id": "test-tenant"}
 
 def _mock_gateway():
     from unittest.mock import MagicMock
+
     from app.gateway.provider import ChatResponse
 
     gw = MagicMock()
@@ -101,6 +101,7 @@ async def test_execute_workflow_returns_instance():
         app.dependency_overrides.pop(get_gateway, None)
 
 
+@pytest.mark.integration  # 需要真实 PostgreSQL：status 查询只走 workflow_instances，无内存 fallback
 @pytest.mark.asyncio
 async def test_workflow_status_returns_instance():
     app = create_app()

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import shlex
 from typing import Any
 
 from app.tools.registry import registry
@@ -27,7 +26,7 @@ async def _run_git(*args: str, cwd: str = ".", timeout: int = 30) -> dict[str, A
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         return {"error": "timeout", "timeout": timeout}
     return {
@@ -71,7 +70,7 @@ async def git_status(root: str = ".") -> dict[str, Any]:
         return result
     # NOTE: do NOT .strip() the whole stdout — that eats the leading space of the
     # first porcelain line (e.g. " M file" becomes "M file", breaking the offset).
-    lines = [l.rstrip("\r") for l in result["stdout"].splitlines() if l.strip()]
+    lines = [ln.rstrip("\r") for ln in result["stdout"].splitlines() if ln.strip()]
     files: list[dict[str, str]] = []
     for line in lines:
         # Porcelain format: XY PATH  (XY = 2-char status, separated by a space from the path)
@@ -105,10 +104,10 @@ async def git_diff(root: str = ".", staged: bool = False) -> dict[str, Any]:
 
 async def git_log(root: str = ".", limit: int = 10) -> dict[str, Any]:
     """Return recent commits."""
-    result = await _run_git("log", f"--oneline", f"-{limit}", cwd=root)
+    result = await _run_git("log", "--oneline", f"-{limit}", cwd=root)
     if "error" in result:
         return result
-    lines = [l for l in result["stdout"].strip().splitlines() if l]
+    lines = [ln for ln in result["stdout"].strip().splitlines() if ln]
     commits: list[dict[str, str]] = []
     for line in lines:
         parts = line.split(" ", 1)
@@ -143,7 +142,7 @@ async def git_branch(root: str = ".") -> dict[str, Any]:
     result = await _run_git("branch", cwd=root)
     if "error" in result:
         return result
-    lines = [l for l in result["stdout"].strip().splitlines() if l]
+    lines = [ln for ln in result["stdout"].strip().splitlines() if ln]
     current = ""
     branches: list[str] = []
     for line in lines:

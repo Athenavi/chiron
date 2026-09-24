@@ -6,8 +6,8 @@ responds to `initialize`, `tools/list`, and `tools/call`.
 Usage in tests:
     MCPClient(server_url="python tests/fixtures/mcp_stdio_echo.py", transport="stdio")
 """
-import sys
 import json
+import sys
 
 
 def handle(req: dict) -> dict:

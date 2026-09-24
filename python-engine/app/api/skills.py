@@ -48,7 +48,7 @@ def _store_for(user_id: str = "", tenant_id: str = "", scope: str = "") -> Skill
     try:
         return SkillStore(tenant_id=tenant_id, user_id=user_id, scope=scope)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=f"invalid identity: {e}")
+        raise HTTPException(status_code=400, detail=f"invalid identity: {e}") from e
 
 
 def _skill_payload(s: SkillDef) -> dict[str, Any]:
@@ -139,6 +139,7 @@ async def install_skill(
             data = json.loads(safe_file.read_text(encoding="utf-8"))
         else:
             import httpx
+
             from app.config import settings
 
             async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
@@ -148,7 +149,7 @@ async def install_skill(
     except Exception as e:
         raise HTTPException(
             status_code=500, detail=f"failed to load skill definition: {e}"
-        )
+        ) from e
 
     exec_cfg = data.get("exec", {})
     skill_name = data.get("name", "")
@@ -302,6 +303,7 @@ async def discover_skills(
     if url:
         try:
             import httpx
+
             from app.config import settings
 
             async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
@@ -322,7 +324,7 @@ async def discover_skills(
                         }
                     )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"discover remote failed: {e}")
+            raise HTTPException(status_code=500, detail=f"discover remote failed: {e}") from e
     else:
         for s in store.list():
             results.append(

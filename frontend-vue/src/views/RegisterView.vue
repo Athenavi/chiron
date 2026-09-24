@@ -92,7 +92,8 @@ async function handleSendEmailCode() {
       captcha_token: captchaToken.value,
       captcha_randstr: captchaRandstr.value,
     })
-    startEmailCountdown(res.interval || 60)
+    // 以服务端冷却为准（0 表示不冷却，不倒计时）
+    startEmailCountdown(res.interval ?? 0)
     emailCodeError.value = ''
     markCaptchaDirty()
     captchaRef.value?.reset()
@@ -289,7 +290,7 @@ async function handleRegister() {
                   :loading="emailSending"
                   @click="handleSendEmailCode"
                 >
-                  {{ emailRemaining > 0 ? $t('{s}s 后重发', { s: emailRemaining }) : $t('获取验证码') }}
+                  {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('获取验证码') }}
                 </Button>
               </template>
             </Input>

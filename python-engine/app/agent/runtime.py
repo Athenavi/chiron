@@ -9,14 +9,15 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import AsyncIterator, Optional
+from typing import Any
 
-from app.agent.modes import (CORE_TOOL_NAMES, AgentMode, ModeConfig,
-                             get_mode_config)
+from app.agent.modes import CORE_TOOL_NAMES, AgentMode, ModeConfig, get_mode_config
 from app.config import settings
 from app.gateway.router import GatewayRouter
-from app.tools.registry import SOURCE_BUILTIN, SOURCE_MCP, registry as local_tool_registry
+from app.tools.registry import SOURCE_BUILTIN, SOURCE_MCP
+from app.tools.registry import registry as local_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -470,7 +471,7 @@ class AgentTask:
     workbench_context: dict = field(default_factory=dict)
 
     @classmethod
-    def parse(cls, data: dict) -> "AgentTask":
+    def parse(cls, data: dict) -> AgentTask:
         """从字典解析任务"""
         return cls(
             id=data.get("task_id", ""),
@@ -541,7 +542,7 @@ class ApprovalTicket:
         )
 
     @classmethod
-    def from_json(cls, raw: str) -> Optional["ApprovalTicket"]:
+    def from_json(cls, raw: str) -> ApprovalTicket | None:
         try:
             data = json.loads(raw or "{}")
         except Exception:  # noqa: BLE001 - 票据损坏按"无票据"处理（fail-closed）
@@ -613,7 +614,7 @@ class AgentRuntime:
     @staticmethod
     def _resolve_compaction(
         mode_cfg: ModeConfig, llm_config: dict
-    ) -> Optional[CompactionConfig]:
+    ) -> CompactionConfig | None:
         """解析截断策略：llm_config["compaction"]（逐任务覆盖）> mode_cfg.compaction（模式/租户配置）> 默认。"""
         override = (llm_config or {}).get("compaction")
         if isinstance(override, dict) and override:
@@ -624,7 +625,7 @@ class AgentRuntime:
 
     def _compact_with_notice(
         self, messages: list[dict], mode_cfg: ModeConfig, llm_config: dict
-    ) -> tuple[list[dict], Optional[AgentEvent]]:
+    ) -> tuple[list[dict], AgentEvent | None]:
         """压缩上下文；**真的压缩了**才返回一个 compaction 事件（否则 None）。
 
         背景（问题 4）：自动压缩早就实现了（`_compact_messages` 的分级 SNIP/PRUNE 策略），
@@ -1841,7 +1842,7 @@ class AgentRuntime:
 
     async def _wait_approval_decision(
         self, tc_id: str, future: asyncio.Future, timeout: float
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """本地 Future 与 Redis 决策键竞争，返回 True/False；超时返回 None。"""
         poll = asyncio.create_task(self._poll_remote_decision(tc_id, timeout))
         waiters: list[asyncio.Future] = [poll, asyncio.ensure_future(future)]
@@ -1864,7 +1865,7 @@ class AgentRuntime:
 
     async def _poll_remote_decision(
         self, tc_id: str, timeout: float, interval: float = 0.15
-    ) -> Optional[bool]:
+    ) -> bool | None:
         """轮询 Redis 决策键（跨副本通道）；命中即取走（单次消费）。超时返回 None。"""
         deadline = asyncio.get_running_loop().time() + timeout
         try:
@@ -1979,7 +1980,7 @@ class AgentRuntime:
 
     async def _wait_answer_decision(
         self, tc_id: str, future: asyncio.Future, timeout: float
-    ) -> Optional[str]:
+    ) -> str | None:
         """本地 Future 与 Redis 答案键竞争，返回答案；超时返回 None。"""
         poll = asyncio.create_task(self._poll_remote_answer(tc_id, timeout))
         waiters: list[asyncio.Future] = [poll, asyncio.ensure_future(future)]
@@ -2002,7 +2003,7 @@ class AgentRuntime:
 
     async def _poll_remote_answer(
         self, tc_id: str, timeout: float, interval: float = 0.15
-    ) -> Optional[str]:
+    ) -> str | None:
         """轮询 Redis 答案键（跨副本通道）；命中即取走（单次消费）。超时返回 None。"""
         deadline = asyncio.get_running_loop().time() + timeout
         try:
@@ -2157,10 +2158,10 @@ async def run_agent(
 # 注册表把 "tool_call_id → 正在等待的 runtime 实例" 记在进程内，
 # 使 HTTP 端点（由任意请求线程触发）能定位到正确的实例。
 
-_PENDING_APPROVAL_OWNERS: dict[str, "AgentRuntime"] = {}
+_PENDING_APPROVAL_OWNERS: dict[str, AgentRuntime] = {}
 
 
-def register_pending_approval(tool_call_id: str, runtime: "AgentRuntime") -> None:
+def register_pending_approval(tool_call_id: str, runtime: AgentRuntime) -> None:
     """登记"正在等待该工具审批"的运行时实例。"""
     if tool_call_id:
         _PENDING_APPROVAL_OWNERS[tool_call_id] = runtime

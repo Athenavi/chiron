@@ -64,11 +64,15 @@ function walk(dir) {
 }
 
 /**
- * 已 i18n 化的调用（`$t('…')` / `t('…')` / `i18n.global.t('…')`）内的中文**不算硬编码**：
+ * 已 i18n 化的调用（`$t('…')` / `t('…')` / `tr('…')` / `i18n.global.t('…')`）内的中文**不算硬编码**：
  * 那正是迁移目标 —— 文案已集中到 locales。若不剥离，`$t('登录')` 会被误报为新增硬编码，
  * 护栏会把正确的做法判成违规（公信力一旦崩就会被人上调基线）。
+ *
+ * `tr` 是 `const { t: tr } = useI18n()` 的别名 —— 组件里已有 `v-for` 变量叫 `t` 时必须换名
+ * （见 src/i18n/README.md 的"模板变量遮蔽"）。此前正则漏了它，把 ChatSidePanel 里
+ * 6 处**已迁移**的文案误报成硬编码。`tr` 前的字符类排除了 `\w.$`，因此 `str(`/`other.tr(` 不会误配。
  */
-const I18N_CALL = /(?:\$t|(?<![\w.$])t|i18n\.global\.t)\(\s*'((?:[^'\\]|\\.)*)'(?:\s*,[^)]*)?\)/g
+const I18N_CALL = /(?:\$t|(?<![\w.$])(?:t|tr)|i18n\.global\.t)\(\s*'((?:[^'\\]|\\.)*)'(?:\s*,[^)]*)?\)/g
 
 function stripI18nCalls(source) {
   return source.replace(I18N_CALL, "$t('')")

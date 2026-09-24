@@ -7,8 +7,7 @@
 """
 import time
 
-from app.subagent.budget import (DEFAULT_MAX_TOKENS, BudgetExceeded, TaskBudget,
-                                 from_env)
+from app.subagent.budget import DEFAULT_MAX_TOKENS, BudgetExceeded, TaskBudget, from_env
 
 
 def test_全零表示不限():

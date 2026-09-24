@@ -1,7 +1,7 @@
 # 记忆管理测试
-import json
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
 
 from app.memory.manager import MemoryManager
 

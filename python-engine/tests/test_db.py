@@ -1,26 +1,42 @@
-# db.py ensure_tables 测试 — pgvector DDL 跟随配置
+# app/db.py::ensure_tables 测试 —— 只读校验。
+#
+# DDL 的唯一权威是 Alembic（migrations/versions/0001_authoritative_baseline.py）：
+# 应用侧只做存在性校验，不建表、不建扩展。本文件因此断言两件事：
+#   1. 缺表能被检出（返回 False）；
+#   2. 无论检出结果如何，都**没有执行任何 DDL**。
 from unittest.mock import AsyncMock, patch
 
-import pytest
-
-from app.config import settings
+from app.db import REQUIRED_TABLES
 
 
-async def test_ensure_tables_creates_pgvector_ddl_from_config():
-    """knowledge_chunk_vectors 的表名与维度必须跟随 settings，否则存取目标不一致"""
+async def test_ensure_tables_reports_missing_and_never_runs_ddl():
+    """缺表时返回 False，且不得执行 DDL（建表是迁移的职责）。"""
     from app.db import ensure_tables
 
     pool = AsyncMock()
+    pool.fetch.return_value = [{"table_name": "users"}]
     with patch("app.db.get_pool", return_value=pool):
-        await ensure_tables()
+        ok = await ensure_tables()
 
-    sqls = [c.args[0] for c in pool.execute.await_args_list]
+    assert ok is False
+    pool.fetch.assert_awaited_once()
+    pool.execute.assert_not_awaited()
 
-    # pgvector 扩展
-    assert any("CREATE EXTENSION IF NOT EXISTS vector" in s for s in sqls)
-    # 表名跟随 settings.pgvector_table
-    assert any(f"CREATE TABLE IF NOT EXISTS {settings.pgvector_table}" in s for s in sqls)
-    # 维度跟随 settings.embedding_dim（与 builder 存储侧校验一致）
-    assert any(f"embedding vector({settings.embedding_dim})" in s for s in sqls)
-    # HNSW 余弦索引
-    assert any("vector_cosine_ops" in s for s in sqls)
+
+async def test_ensure_tables_true_when_all_required_present():
+    """REQUIRED_TABLES 齐全时返回 True，同样保持只读。"""
+    from app.db import ensure_tables
+
+    pool = AsyncMock()
+    pool.fetch.return_value = [{"table_name": t} for t in REQUIRED_TABLES]
+    with patch("app.db.get_pool", return_value=pool):
+        ok = await ensure_tables()
+
+    assert ok is True
+    pool.execute.assert_not_awaited()
+
+
+async def test_required_tables_excludes_retired_names():
+    """历史表名不得留在校验清单里（否则该校验恒为 False、每次启动误报缺表）。"""
+    assert "conversations" not in REQUIRED_TABLES
+    assert "workflows" not in REQUIRED_TABLES

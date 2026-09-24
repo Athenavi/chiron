@@ -206,7 +206,7 @@ async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
     esc = _has_escape(command)
     if esc:
         return {
-            "error": f"command blocked: absolute-path / parent-directory access is not allowed in sandbox",
+            "error": "command blocked: absolute-path / parent-directory access is not allowed in sandbox",
             "reason": esc,
         }
 
@@ -245,7 +245,7 @@ async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
-    except asyncio.TimeoutError:
+    except TimeoutError:
         proc.kill()
         await proc.wait()
         return {"error": "timeout", "timeout": timeout}

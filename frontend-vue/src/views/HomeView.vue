@@ -1,4 +1,4 @@
-﻿<script setup lang="ts">
+<script setup lang="ts">
 import { markRaw, onMounted, onUnmounted, ref } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from 'ant-design-vue'

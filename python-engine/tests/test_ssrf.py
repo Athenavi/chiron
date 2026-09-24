@@ -2,12 +2,12 @@
 from __future__ import annotations
 
 import json
+
 import pytest
 
-from app.tools.ssrf import assert_safe_url
-from app.tools.skill import skill_install
-from app.tools.registry import registry
 from app.skill.store import SkillStore
+from app.tools.skill import skill_install
+from app.tools.ssrf import assert_safe_url
 
 
 class TestSSRF:

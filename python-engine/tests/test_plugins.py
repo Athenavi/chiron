@@ -3,10 +3,9 @@ from __future__ import annotations
 
 import pytest
 
+from app.plugins.pool import MCPClientPool
 from app.plugins.store import ActiveTracker, PluginStore, ServerConfig
-from app.plugins.pool import MCPClientPool, _fingerprint
 from app.tools.registry import registry
-
 
 # ── PluginStore per-user 隔离 ─────────────────────────────────────────────
 

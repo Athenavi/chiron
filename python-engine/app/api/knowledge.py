@@ -6,8 +6,8 @@ import json
 import logging
 import math
 import uuid
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
@@ -33,10 +33,10 @@ class KnowledgeBaseCreate(BaseModel):
 
 
 class KnowledgeBaseUpdate(BaseModel):
-    name: Optional[str] = None
-    description: Optional[str] = None
-    type: Optional[str] = None
-    visibility: Optional[str] = None
+    name: str | None = None
+    description: str | None = None
+    type: str | None = None
+    visibility: str | None = None
 
 
 class DocumentUpload(BaseModel):
@@ -173,7 +173,7 @@ async def create_knowledge_base(
 
     pool = get_pool()
     kb_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     await pool.execute(
         """INSERT INTO knowledge_bases (id, tenant_id, user_id, name, description, type, visibility, status, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)""",
@@ -221,10 +221,10 @@ async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> d
 async def update_knowledge_base(
     kb_id: str,
     user_id: str,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    kb_type: Optional[str] = None,
-    visibility: Optional[str] = None,
+    name: str | None = None,
+    description: str | None = None,
+    kb_type: str | None = None,
+    visibility: str | None = None,
 ) -> dict:
     """Update a knowledge base (owner only). Public KBs cannot change type."""
     pool = get_pool()
@@ -282,7 +282,7 @@ async def update_knowledge_base(
         raise HTTPException(status_code=400, detail="no fields to update")
 
     updates.append(f"updated_at = ${idx}")
-    params.append(datetime.now(timezone.utc))
+    params.append(datetime.now(UTC))
     idx += 1
 
     params.append(kb_id)
@@ -356,7 +356,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="document name must not be empty")
 
     doc_id = str(uuid.uuid4())
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
 
     # Insert the document
     await pool.execute(
@@ -550,7 +550,7 @@ async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") ->
         raise HTTPException(status_code=402, detail="insufficient credits")
 
     # Mark KB as building（条件更新：并发下仅一个请求能抢到，防 TOCTOU 双投递）
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     res = await pool.execute(
         "UPDATE knowledge_bases SET status = 'building', updated_at = $1 WHERE id = $2 AND status <> 'building'",
         now,
@@ -570,7 +570,7 @@ async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") ->
             # 回滚 building 状态，避免 Redis 不可用时 KB 永久卡死（上传被 409 拒绝）
             await pool.execute(
                 "UPDATE knowledge_bases SET status = 'draft', updated_at = $1 WHERE id = $2",
-                datetime.now(timezone.utc),
+                datetime.now(UTC),
                 kb_id,
             )
             raise

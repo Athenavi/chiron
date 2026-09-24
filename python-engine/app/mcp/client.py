@@ -11,7 +11,7 @@ import json
 import logging
 import socket
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -111,7 +111,7 @@ class HTTPSSEConnection:
             )
 
     async def send_jsonrpc(
-        self, method: str, params: Optional[dict] = None
+        self, method: str, params: dict | None = None
     ) -> dict[str, Any]:
         """Send a JSON-RPC request via HTTP POST and read the response."""
         self._req_id += 1
@@ -170,7 +170,7 @@ class ServerConnection:
             pass
 
     async def send_jsonrpc(
-        self, method: str, params: Optional[dict] = None
+        self, method: str, params: dict | None = None
     ) -> dict[str, Any]:
         """Send a JSON-RPC request and read the response."""
         self._req_id += 1
@@ -203,7 +203,7 @@ class ServerConnection:
             try:
                 self.proc.terminate()
                 await asyncio.wait_for(self.proc.wait(), timeout=5.0)
-            except (asyncio.TimeoutError, ProcessLookupError):
+            except (TimeoutError, ProcessLookupError):
                 self.proc.kill()
 
 
@@ -256,7 +256,7 @@ class MCPClient:
         self._conns[server.name] = conn
 
         # Initialize
-        result = await conn.send_jsonrpc(
+        await conn.send_jsonrpc(
             "initialize",
             {
                 "protocolVersion": MCP_PROTOCOL_VERSION,

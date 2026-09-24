@@ -68,7 +68,14 @@ export async function upsertMemory(body: {
   value: string
   confidence?: number
   source?: MemorySource
-}): Promise<{ entry: MemoryEntry; created: boolean; duplicate_of?: MemoryEntry; evicted?: number }> {
+}): Promise<{
+  entry: MemoryEntry
+  created: boolean
+  duplicate_of?: MemoryEntry
+  evicted?: number
+  /** 与已确认值冲突时后端登记待裁决（不覆盖），由记忆页处理 —— 见 SaveToMemoryDialog */
+  conflict?: { old_value?: unknown; new_value?: unknown }
+}> {
   const { data } = await api.post('/v1/memory/profile', body)
   return data
 }

@@ -8,7 +8,6 @@
 
 from __future__ import annotations
 
-from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
@@ -16,7 +15,6 @@ import pytest
 from app.agent.prompt_engine import PromptEngine
 from app.context.manager import ContextManager
 from app.memory.layers import RecallResult
-
 
 # ── PromptEngine 兼容性 ───────────────────────────────────────────────
 

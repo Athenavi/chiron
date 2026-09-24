@@ -71,9 +71,9 @@ class GatewayBrowserHub:
         )
 
     async def connected_client_ids(self) -> list[str]:
-        from app.config import settings
-
         import os
+
+        from app.config import settings
 
         url = f"{self._base_url}/v1/rpa/clients"
         resp = await self._client.get(

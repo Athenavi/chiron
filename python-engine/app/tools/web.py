@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import logging
 import re
-from typing import Any, Optional
+from typing import Any
 from urllib.parse import parse_qs, unquote, urlparse
 
 import httpx
@@ -98,7 +98,7 @@ class DuckDuckGoProvider(WebProvider):
 _provider: WebProvider = DuckDuckGoProvider()
 
 
-def set_web_provider(provider: Optional[WebProvider]) -> None:
+def set_web_provider(provider: WebProvider | None) -> None:
     """替换 WebProvider（测试/多 provider 配置用）。"""
     global _provider
     _provider = provider or DuckDuckGoProvider()

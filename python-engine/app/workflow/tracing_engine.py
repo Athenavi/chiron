@@ -11,13 +11,14 @@ from __future__ import annotations
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any, AsyncIterator, Optional
+from typing import Any
 
 from app.agent.runtime import AgentEvent
+from app.gateway.router import GatewayRouter
 from app.trace import record_span
-from app.workflow.engine import (NodeResult, WorkflowInstance, _build_node_fns,
-                                 _topological_sort)
+from app.workflow.engine import NodeResult, WorkflowInstance, _build_node_fns, _topological_sort
 
 logger = logging.getLogger(__name__)
 
@@ -58,7 +59,7 @@ _edit_sessions: dict[str, WorkflowEditSession] = {}
 _EDIT_SESSION_TTL = 3600  # 1 小时
 
 
-def get_edit_session(session_id: str) -> Optional[WorkflowEditSession]:
+def get_edit_session(session_id: str) -> WorkflowEditSession | None:
     """获取编辑会话"""
     session = _edit_sessions.get(session_id)
     if session and not session.is_expired():
@@ -105,7 +106,7 @@ class TracingWorkflowEngine:
         graph_json: dict,
         initial_state: dict,
         tenant_id: str,
-        instance_id: Optional[str] = None,
+        instance_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """运行工作流 (带完整 trace)
 
@@ -392,9 +393,9 @@ class TracingWorkflowEngine:
         self,
         workflow_id: str,
         tenant_id: str,
-    ) -> Optional[WorkflowEditSession]:
+    ) -> WorkflowEditSession | None:
         """检查是否有该工作流的编辑会话"""
-        for session_id, session in list(_edit_sessions.items()):
+        for _session_id, session in list(_edit_sessions.items()):
             if (
                 session.workflow_instance_id == workflow_id
                 and session.tenant_id == tenant_id

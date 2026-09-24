@@ -11,7 +11,6 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Optional
 
 import asyncpg
 
@@ -22,7 +21,7 @@ logger = logging.getLogger(__name__)
 # Configuration: use unified client or direct connection
 USE_UNIFIED = os.getenv("USE_UNIFIED_DB_CLIENT", "false").lower() == "true"
 
-_pool: Optional[asyncpg.Pool] = None
+_pool: asyncpg.Pool | None = None
 _unified_client = None
 _unified_pool_wrapper = None  # 缓存 _UnifiedPoolWrapper 实例，避免每次 get_pool() 新建
 
@@ -166,48 +165,56 @@ class _RowDict(dict):
         try:
             return self[key]
         except KeyError:
-            raise AttributeError(key)
+            raise AttributeError(key) from None
+
+
+# 引擎启动时必须存在的表（只读校验用）。DDL 的唯一权威是 Alembic：
+# migrations/versions/0001_authoritative_baseline.py。
+#
+# 注意：本清单**不得**再列入已不存在的历史表名。曾经的 `conversations` / `workflows`
+# 早已被 `conversation_shares` / `workflow_graphs` / `workflow_instances` 取代，但清单
+# 没跟着改，导致下面这个校验恒为 False、每次启动都误报"缺少 N 张表"。
+REQUIRED_TABLES = [
+    "users",
+    "sessions",
+    "agents",
+    "messages",
+    "knowledge_bases",
+    "knowledge_documents",
+    "knowledge_chunks",
+    "media_assets",
+    "uploads",
+    "workflow_instances",
+    "cron_jobs",
+    "audit_logs",
+    "billing_records",
+    "credit_transactions",
+    "payments",
+    "ent_oidc_providers",
+    "ent_user_identities",
+    "ent_captcha_config",
+    "ent_quota_pools",
+    "ent_quota_allocations",
+]
 
 
 async def ensure_tables():
-    """确保必要的表存在，不存在则提示需要运行迁移"""
-    pool = get_pool()
+    """只读校验必需表是否存在，缺失时提示运行迁移。
 
-    required_tables = [
-        "users",
-        "sessions",
-        "agents",
-        "conversations",
-        "messages",
-        "knowledge_bases",
-        "knowledge_documents",
-        "knowledge_chunks",
-        "media_assets",
-        "uploads",
-        "workflows",
-        "workflow_instances",
-        "cron_jobs",
-        "audit_logs",
-        "billing_records",
-        "credit_transactions",
-        "payments",
-        "ent_oidc_providers",
-        "ent_user_identities",
-        "ent_captcha_config",
-        "ent_quota_pools",
-        "ent_quota_allocations",
-    ]
+    本函数**不执行任何 DDL**：建表全部由 Alembic 权威迁移负责。
+    """
+    pool = get_pool()
 
     try:
         # 查询所有已存在的表
         existing = await pool.fetch("""
-            SELECT table_name 
-            FROM information_schema.tables 
+            SELECT table_name
+            FROM information_schema.tables
             WHERE table_schema = 'public'
         """)
         existing_names = {row["table_name"] for row in existing}
 
-        missing = [t for t in required_tables if t not in existing_names]
+        missing = [t for t in REQUIRED_TABLES if t not in existing_names]
 
         if missing:
             logger.warning(

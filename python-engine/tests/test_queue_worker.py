@@ -184,7 +184,7 @@ class TestHandleRagIndex:
             })
         mock_cls.assert_called_once()  # builder 在进入循环前构造
         mock_cls.return_value.build_document.assert_not_called()  # 无内容不构建
-        sqls = [c.args[0] for c in pool.execute.await_args_list]
+        [c.args[0] for c in pool.execute.await_args_list]
         assert any("status='error'" in s and "no content" in c.args[1] for s, c in
                    [(c.args[0], c) for c in pool.execute.await_args_list])
         # 全部文档失败 → 事务置 KB error，不扣费

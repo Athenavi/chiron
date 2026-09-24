@@ -1,23 +1,21 @@
 # 记忆系统 L2 档案卡测试 — 数据结构 / 服务 / API / 工具
 import asyncio
 import math
-from datetime import datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 
 import httpx
 import pytest
 from httpx import ASGITransport
 
 from app.memory.layers import (
-    MemoryEntry,
     SLOT_LABELS,
     cosine_similarity,
     recency_decay,
     rerank_score,
 )
-from tests.fakes import InMemoryProfileStore
 from app.memory.service import MemoryService
 from app.tools import context as tool_context
-
+from tests.fakes import InMemoryProfileStore
 
 # ── 测试基建 ──────────────────────────────────────────────
 
@@ -57,14 +55,14 @@ class TestLayers:
         assert cosine_similarity([0.0, 0.0], [1.0, 0.0]) == 0.0
 
     def test_recency_decay(self):
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         assert recency_decay(now) == pytest.approx(1.0)
         old = now - timedelta(days=60)
         assert recency_decay(old, half_life_days=60) == pytest.approx(math.exp(-1), rel=0.05)
         assert recency_decay(None) == 0.5
 
     def test_rerank_prefers_high_confidence(self):
-        recent = datetime.now(timezone.utc)
+        recent = datetime.now(UTC)
         low = rerank_score(0.9, 10, recent, False)
         high = rerank_score(0.9, 100, recent, False)
         assert high > low
@@ -192,7 +190,7 @@ class TestServiceOrganize:
         emb.set("lang: Python", [0.0, 1.0])
         # 构造衰退条目：低置信 + 200 天未引用
         stale = await svc._store.get_by_key("t1", "u1", "fact", "city2")
-        stale.last_accessed_at = datetime.now(timezone.utc) - timedelta(
+        stale.last_accessed_at = datetime.now(UTC) - timedelta(
             days=settings.memory_archive_days + 20)
 
         result = await svc.organize_now("t1", "u1")
@@ -260,6 +258,7 @@ class TestServiceDelete:
 
 def _api_app(svc):
     from fastapi import FastAPI
+
     from app.api.memory import router
     app = FastAPI()
     app.include_router(router)

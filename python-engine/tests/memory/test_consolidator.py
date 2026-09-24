@@ -5,9 +5,6 @@
 
 from __future__ import annotations
 
-import time
-from typing import Any, Optional
-
 import pytest
 
 from app.memory.consolidator import (
@@ -20,7 +17,6 @@ from app.memory.consolidator import (
     new_summary_id,
 )
 from app.memory.layers import SummaryEntry
-
 
 # ── Mock / Fake 基础设施 ─────────────────────────────────────────────────
 
@@ -45,7 +41,7 @@ class FakeSummaryStore:
         tenant_id: str,
         user_id: str,
         content_hash: str,
-    ) -> Optional[SummaryEntry]:
+    ) -> SummaryEntry | None:
         """根据 content_hash 查询摘要。"""
         self._get_by_hash_calls.append((tenant_id, user_id, content_hash))
         if self._should_fail_get_by_hash:
@@ -58,7 +54,7 @@ class FakeSummaryStore:
     async def insert(
         self,
         entry: SummaryEntry,
-        embedding: Optional[list[float]] = None,
+        embedding: list[float] | None = None,
     ) -> SummaryEntry:
         """插入摘要。"""
         self._insert_calls.append((entry, embedding))
@@ -76,7 +72,7 @@ class FakeSummaryStore:
         tenant_id: str,
         user_id: str,
         summary_id: str,
-    ) -> Optional[SummaryEntry]:
+    ) -> SummaryEntry | None:
         """根据 ID 查询摘要。"""
         self._get_by_id_calls.append((tenant_id, user_id, summary_id))
         return self._entries.get(summary_id)
@@ -667,7 +663,7 @@ class TestIdempotencyAndOrder:
             embedder=mock_embedder,
             summariser=mock_summariser,
         )
-        result = await consolidator.consolidate(
+        await consolidator.consolidate(
             tenant_id="tenant1",
             user_id="user1",
             session_id="session1",

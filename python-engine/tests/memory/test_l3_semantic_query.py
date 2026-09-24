@@ -6,13 +6,12 @@
 from __future__ import annotations
 
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
 from app.memory.layers import (
-    MemoryType,
     RecalledItem,
     RecallResult,
     Scope,
@@ -22,7 +21,6 @@ from app.memory.layers import (
 from app.memory.profile_card import ProfileCard
 from app.memory.service import MemoryService
 from app.memory.session_meta import SessionMetaStore
-
 
 # ── Mock / Fake 基础设施 ─────────────────────────────────────────────────
 
@@ -35,7 +33,7 @@ class MockRedis:
         self._expiry: dict[str, float] = {}
         self._sets: dict[str, set[str]] = {}
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         return self._store.get(key)
 
     async def set(self, key: str, value: str, ex=None) -> bool:
@@ -49,7 +47,6 @@ class MockRedis:
 
     async def delete(self, *keys) -> int:
         for key in keys:
-            deleted = 1 if key in self._store else 0
             self._store.pop(key, None)
             self._expiry.pop(key, None)
         return len(keys)
@@ -98,10 +95,10 @@ class MockDatabasePool:
             "confidence": item["confidence"],
             "source": item["source"],
             "version": item["version"],
-            "confirmed_at": datetime.fromtimestamp(confirmed_at, tz=timezone.utc) if confirmed_at else None,
-            "last_referenced_at": datetime.fromtimestamp(last_ref, tz=timezone.utc) if last_ref else None,
-            "created_at": datetime.fromtimestamp(item["created_at"], tz=timezone.utc),
-            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=timezone.utc),
+            "confirmed_at": datetime.fromtimestamp(confirmed_at, tz=UTC) if confirmed_at else None,
+            "last_referenced_at": datetime.fromtimestamp(last_ref, tz=UTC) if last_ref else None,
+            "created_at": datetime.fromtimestamp(item["created_at"], tz=UTC),
+            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=UTC),
         }
 
     async def fetch(self, query, *args):
@@ -109,7 +106,7 @@ class MockDatabasePool:
             if "WHERE tenant_id = $1 AND user_id = $2" in query:
                 tenant_id, user_id = args[0], args[1]
                 results = []
-                for (tid, uid, slot, key), item in self._items.items():
+                for (tid, uid, _slot, _key), item in self._items.items():
                     if tid == tenant_id and uid == user_id:
                         results.append(self._make_row(item))
                 results.sort(key=lambda r: (r["slot"], r["item_key"]))
@@ -178,7 +175,7 @@ class FakeSummaryStore:
 
     def __init__(
         self,
-        recall_result: Optional[list[RecalledItem]] = None,
+        recall_result: list[RecalledItem] | None = None,
         should_fail: bool = False,
     ):
         self._recall_result = recall_result or []
@@ -325,7 +322,7 @@ class TestL2L3Merge:
     async def test_returns_both_l2_and_l3(self, seeded_service):
         """recall 应同时返回 L2 档案卡和 L3 摘要。"""
         svc = seeded_service
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "历史对话摘要 1", (0, 10), score=0.95),
             _make_recalled("m2", "历史对话摘要 2", (20, 30), score=0.9),
@@ -396,7 +393,7 @@ class TestL2L3Merge:
     async def test_l2_profile_empty_but_l3_has_results(self, service_with_l3):
         """L2 为空但 L3 有结果时应正常返回。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "历史摘要", (0, 5)),
         ])
@@ -420,7 +417,7 @@ class TestTurnRangeDedup:
     async def test_exclude_overlapping_range(self, service_with_l3):
         """应排除与 exclude_turn_range 重叠的摘要。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("overlap", "重叠摘要", (10, 20), score=0.95),
             _make_recalled("no_overlap", "不重叠摘要", (50, 60), score=0.9),
@@ -439,7 +436,7 @@ class TestTurnRangeDedup:
     async def test_multiple_overlapping_ranges(self, service_with_l3):
         """多个重叠范围应全部排除。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "摘要1", (0, 10), score=0.95),
             _make_recalled("m2", "摘要2", (15, 25), score=0.9),
@@ -459,7 +456,7 @@ class TestTurnRangeDedup:
     async def test_no_exclude_returns_all(self, service_with_l3):
         """无 exclude_turn_range 时应返回所有结果。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "摘要1", (0, 10)),
             _make_recalled("m2", "摘要2", (20, 30)),
@@ -474,7 +471,7 @@ class TestTurnRangeDedup:
     async def test_boundary_overlap_excluded(self, service_with_l3):
         """边界相邻的范围应视为重叠并排除。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("boundary", "边界摘要", (10, 20)),
             _make_recalled("safe", "安全摘要", (30, 40)),  # 不与 (20,25) 重叠
@@ -554,7 +551,7 @@ class TestFailSoftDegradation:
     async def test_l2_exception_preserves_l3(self, service_with_l3):
         """L2 异常时 L3 仍应正常返回。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "摘要内容", (0, 5)),
         ])
@@ -709,7 +706,7 @@ class TestL3Performance:
     async def test_multiple_recalls_same_session(self, service_with_l3):
         """同一会话多次 recall 应独立工作。"""
         svc = service_with_l3
-        now = time.time()
+        time.time()
         fake_l3 = FakeSummaryStore(recall_result=[
             _make_recalled("m1", "第一次摘要", (0, 5)),
         ])

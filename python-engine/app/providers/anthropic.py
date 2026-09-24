@@ -2,12 +2,11 @@
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import anthropic
 
-from app.gateway.provider import (ChatMessage, ChatResponse, EmbeddingResponse,
-                                  LLMProvider, ToolCall)
+from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, LLMProvider, ToolCall
 
 logger = logging.getLogger(__name__)
 

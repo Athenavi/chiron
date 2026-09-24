@@ -2,13 +2,11 @@
 from __future__ import annotations
 
 import sys
-import tempfile
-from pathlib import Path
 
 import pytest
 
 from app.tools.context import set_tool_context
-from app.tools.terminal import persistent_shell, _terminal
+from app.tools.terminal import _terminal, persistent_shell
 
 
 @pytest.mark.asyncio

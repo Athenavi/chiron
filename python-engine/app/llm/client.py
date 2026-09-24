@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import List, Optional
 
 from app.config import settings
 
@@ -31,7 +30,7 @@ class LLMClient:
         """注入 GatewayRouter（main.py 启动时调用一次）"""
         self._gateway = gateway
 
-    async def embed(self, text: str) -> List[float]:
+    async def embed(self, text: str) -> list[float]:
         embedding = await self._get_local_embedding(text)
         if embedding is None:
             embedding = await self._get_api_embedding(text)
@@ -44,7 +43,7 @@ class LLMClient:
             )
         return embedding
 
-    async def _get_local_embedding(self, text: str) -> Optional[List[float]]:
+    async def _get_local_embedding(self, text: str) -> list[float] | None:
         """使用本地模型计算嵌入（可插拔，默认关闭）
 
         配置 settings.local_embedding_model（如 BGE/Jina 的本地路径/模型名）后启用；
@@ -66,7 +65,7 @@ class LLMClient:
             logger.warning("本地嵌入计算失败（回退到 API）: %s", e)
             return None
 
-    async def _get_api_embedding(self, text: str) -> Optional[List[float]]:
+    async def _get_api_embedding(self, text: str) -> list[float] | None:
         """使用 Gateway API 计算嵌入"""
         if self._gateway is None:
             return None

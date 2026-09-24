@@ -87,31 +87,14 @@ func runDBStatus(cmd *cobra.Command, args []string) error {
 	fmt.Printf("DSN:       %s\n", sanitizeDSN(dsn))
 	fmt.Printf("Connected: yes\n")
 
-	// 查询已应用的迁移（表可能尚未创建 → 视为无迁移）
-	rows, err := db.Pool.Query(ctx,
-		"SELECT version, name, checksum, applied_at FROM schema_migrations ORDER BY version DESC")
-	if err != nil {
-		fmt.Println("Migrations: (schema_migrations 表不存在或不可读，可能尚未执行过迁移)")
+	// 迁移版本以 alembic_version 为唯一事实源（Go 侧旧的 schema_migrations 已废弃）
+	var revision string
+	if err := db.Pool.QueryRow(ctx, `SELECT version_num FROM alembic_version`).Scan(&revision); err != nil {
+		fmt.Println("Migrations: (alembic_version 不存在或为空 —— 数据库尚未迁移)")
+		fmt.Println("            执行: alembic upgrade head（全新库）/ alembic stamp head（已有库）")
 		return nil
 	}
-	defer rows.Close()
-
-	fmt.Println("\nApplied migrations:")
-	count := 0
-	for rows.Next() {
-		var version int64
-		var name, checksum string
-		var appliedAt time.Time
-		if err := rows.Scan(&version, &name, &checksum, &appliedAt); err != nil {
-			continue
-		}
-		fmt.Printf("  %d  %s  %s  %s\n", version, name, appliedAt.Format(time.RFC3339), checksum)
-		count++
-	}
-	if count == 0 {
-		fmt.Println("  (none)")
-	}
-	fmt.Printf("\nTotal: %d migrations applied\n", count)
+	fmt.Printf("\nApplied migration: %s\n", revision)
 	return nil
 }
 

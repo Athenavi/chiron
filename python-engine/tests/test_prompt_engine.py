@@ -4,13 +4,12 @@ from __future__ import annotations
 import os
 import tempfile
 from pathlib import Path
-
-import pytest
 from unittest.mock import AsyncMock, MagicMock
 
-from app.agent.prompt_engine import PromptEngine, DEFAULT_SYSTEM_PROMPT_TEMPLATE
-from app.agent.runtime import AgentTask
+import pytest
 
+from app.agent.prompt_engine import PromptEngine
+from app.agent.runtime import AgentTask
 
 # ---------------------------------------------------------------------------
 # Helpers

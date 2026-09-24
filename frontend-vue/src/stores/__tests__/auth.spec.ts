@@ -13,6 +13,13 @@ import { api } from '../../api'
 
 const mockUser = { id: 'u1', email: 'a@b.c', name: 'A', role: 'admin', tenant_id: 't1' }
 
+/**
+ * localStorage 里**只允许**出现最小字段。
+ * email / tenant_id 属敏感信息，被 S 安全修复刻意排除（见 src/stores/auth.ts 的
+ * persistUserToStorage / loadUserFromStorage）：刷新后由 GET /v1/auth/profile 回填。
+ */
+const mockUserStored = { id: 'u1', name: 'A', role: 'admin' }
+
 describe('auth store', () => {
   beforeEach(() => {
     setActivePinia(createPinia())
@@ -34,7 +41,7 @@ describe('auth store', () => {
       expect(store.user).toEqual(mockUser)
       // S 安全：token 不写入 localStorage（凭 httpOnly cookie 鉴权）
       expect(localStorage.getItem('token')).toBeNull()
-      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(mockUser)
+      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(mockUserStored)
       // 请求体带 captcha 字段（空串兜底）
       expect(vi.mocked(api.post)).toHaveBeenCalledWith('/v1/auth/login', {
         email: 'a@b.c',
@@ -81,7 +88,9 @@ describe('auth store', () => {
       await store.register('a@b.c', 'password', 'Name')
       expect(store.token).toBe('rtok')
       expect(localStorage.getItem('token')).toBeNull()
-      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(user)
+      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(
+        { id: user.id, name: user.name, role: user.role },
+      )
     })
   })
 
@@ -109,7 +118,8 @@ describe('auth store', () => {
       localStorage.setItem('user', JSON.stringify(mockUser))
       const store = useAuthStore()
       expect(store.token).toBe('')
-      expect(store.user).toEqual(mockUser)
+      // 恢复时 email / tenant_id 为空 —— 它们不落 localStorage，靠 /v1/auth/profile 回填
+      expect(store.user).toEqual({ ...mockUserStored, email: '', tenant_id: '' })
       expect(store.isAuthenticated).toBe(true)
     })
 
@@ -129,7 +139,7 @@ describe('auth store', () => {
       const store = useAuthStore()
       await store.fetchProfile()
       expect(store.user).toEqual({ id: 'u2', email: 'x@y.z', name: 'X', role: 'user', tenant_id: 't2' })
-      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(store.user)
+      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual({ id: 'u2', name: 'X', role: 'user' })
     })
 
     it('失败（cookie 无效）时自动登出并清理本地态', async () => {
@@ -159,7 +169,7 @@ describe('auth store', () => {
       expect(ok).toBe(true)
       expect(store.token).toBe('sso-tok')
       expect(localStorage.getItem('token')).toBeNull()
-      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(mockUser)
+      expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual(mockUserStored)
       // withCredentials: true（跨端口携带 httpOnly cookie）
       expect(vi.mocked(api.get)).toHaveBeenCalledWith('/v1/auth/session', { withCredentials: true })
     })

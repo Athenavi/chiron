@@ -8,6 +8,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 import redis.asyncio as aioredis
 import uvicorn
@@ -16,6 +17,12 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 from app.config import settings
 from app.session_store import SessionStore
+
+if TYPE_CHECKING:
+    # 仅第 25 行的模块级注解引用；运行时不需要（from __future__ import annotations
+    # 已把注解字符串化），而 app.main 是被大量模块导入的入口，直接导入
+    # app.agent.runtime 会形成循环导入。
+    from app.agent.runtime import AgentRuntime
 
 # 全局会话消息缓存（lifespan 中接入 Redis 实现多实例共享）
 _session_cache = SessionStore(max_sessions=200)
@@ -292,9 +299,13 @@ async def lifespan(app: FastAPI):
     # 服务提供商目录（权威源在 Go 网关 internal/api/llm_providers.go，经
     # /v1/internal/engine-config 下发）：provider 注册、端点解析、路由匹配全部目录驱动，
     # 新增提供商无需改引擎代码（见 app/providers/catalog.py 的兜底目录）。
-    from app.providers.catalog import (provider_api_key, provider_base_url,
-                                       provider_catalog, provider_kind,
-                                       provider_requires_key)
+    from app.providers.catalog import (
+        provider_api_key,
+        provider_base_url,
+        provider_catalog,
+        provider_kind,
+        provider_requires_key,
+    )
 
     _catalog = provider_catalog()
     # KeyRing(DR 集中派):管理端密钥的明文环(Redis keyset 镜像)+ env 种子兜底。
@@ -478,8 +489,7 @@ async def lifespan(app: FastAPI):
     # ── 3.45 记忆服务（L2 档案卡：跨会话长期记忆 + 语义检索）──
     # 依赖 PostgreSQL 连接池与嵌入链路；任一不可用则记忆服务不启用（API 返回 503 fail-loud）
     try:
-        from app.agent.prompt_engine import \
-            bind_memory_service as bind_prompt_memory
+        from app.agent.prompt_engine import bind_memory_service as bind_prompt_memory
         from app.db import get_pool
         from app.memory.conflict_manager import ConflictManager
         from app.memory.consolidator import Consolidator
@@ -818,7 +828,7 @@ async def _resolve_attachments(content: str) -> str:
                     "log",
                 ):
                     text = resp.text
-                    MAX_CHARS = 8000
+                    MAX_CHARS = 8000  # noqa: N806 — 局部阈值常量，沿用大写惯例
                     snippet = text[:MAX_CHARS]
                     file_block = (
                         f"\n\n===== 附件「{name}」内容 ({(len(text))} 字符) ====\n"
@@ -839,7 +849,7 @@ async def _resolve_attachments(content: str) -> str:
                         doc = pymupdf.open(stream=resp.content, filetype="pdf")
                         pdf_text = "\n".join(page.get_text() for page in doc)
                         doc.close()
-                        MAX_PDF_CHARS = 8000
+                        MAX_PDF_CHARS = 8000  # noqa: N806 — 同上
                         snippet = pdf_text[:MAX_PDF_CHARS]
                         file_block = (
                             f"\n\n===== 附件「{name}」内容 (PDF, {len(pdf_text)} 字符) ====\n"
@@ -869,13 +879,13 @@ async def _resolve_attachments(content: str) -> str:
                     try:
                         text = resp.text
                         if text and len(text) > 20:
-                            MAX_CHARS = 4000
+                            MAX_CHARS = 4000  # noqa: N806 — 同上
                             snippet = text[:MAX_CHARS]
                             file_block = (
                                 f"\n\n===== 附件「{name}」内容 ====\n" f"{snippet}"
                             )
                             if len(text) > MAX_CHARS:
-                                file_block += f"\n... (已截断)"
+                                file_block += "\n... (已截断)"
                             file_block += "\n===== 附件结束 ====="
                             content = content.replace(f"[{name}]({url})", file_block)
                     except Exception:
@@ -954,8 +964,7 @@ def _setup_routes(app: FastAPI) -> None:
 
     @app.get("/info")
     async def info():
-        from app.observability.metrics import (get_active_requests,
-                                               get_process_resources)
+        from app.observability.metrics import get_active_requests, get_process_resources
 
         cpu_percent, memory_mb = get_process_resources()
         return {
@@ -1197,6 +1206,7 @@ async def agent_submit(
     import app.tools.memory  # noqa: F401 — 长期记忆 (跨工作台共享上下文)
     import app.tools.mode_admin  # noqa: F401 — 创造模式
     import app.tools.run_code  # noqa: F401 — PTC 模式
+
     # ── 六大工作台互联互通：注册各工作台工具,使 CHAT 的 LLM 可通过 function-calling 调用 ──
     import app.tools.skill  # noqa: F401 — SKILLS 工作台 (skill_list/skill_run/skill_install)
     import app.tools.subagent  # noqa: F401 — 多 agent 委派工具
@@ -1810,13 +1820,13 @@ def create_app() -> FastAPI:
 
 def _setup_middleware_early(app: FastAPI) -> None:
     """注册中间件（在 app 创建时调用，lifespan 中补充 redis 依赖）"""
+    from opentelemetry import trace
+    from opentelemetry.propagate import extract
+
     from app.middleware.error_handler import ErrorHandlerMiddleware
     from app.middleware.metrics import MetricsMiddleware
     from app.middleware.privacy_middleware import PrivacyModeMiddleware
     from app.middleware.request_context import RequestContextMiddleware
-    from opentelemetry import trace
-    from opentelemetry.propagate import extract
-    from opentelemetry.trace.propagation.tracecontext import TraceContextTextMapPropagator
 
     # Trace context propagation middleware
     @app.middleware("http")
@@ -1824,14 +1834,14 @@ def _setup_middleware_early(app: FastAPI) -> None:
         """从HTTP头提取trace context"""
         carrier = dict(request.headers)
         ctx = extract(carrier)
-        
+
         tracer = trace.get_tracer(__name__)
         span = tracer.start_span(
             request.url.path,
             context=ctx,
             kind=trace.SpanKind.SERVER,
         )
-        
+
         try:
             response = await call_next(request)
             span.set_status(trace.Status(trace.StatusCode.OK))

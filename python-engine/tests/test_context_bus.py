@@ -8,14 +8,10 @@
 """
 from __future__ import annotations
 
-import asyncio
-import json
-from typing import Any
-
 import pytest
 
 import app.main  # noqa: F401 — 初始化 app 包，避免循环导入
-from app.core.context_bus import RedisContextBus, InMemoryContextBus, MessageType
+from app.core.context_bus import InMemoryContextBus, RedisContextBus
 
 
 class FakeRedis:

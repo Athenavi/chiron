@@ -1,17 +1,16 @@
 """Multi-Agent System 测试"""
 import asyncio
+from unittest.mock import MagicMock
+
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch
 
 from app.agent.multi_agent import (
-    SubAgent,
-    SubAgentResult,
-    AgentDispatcher,
     BUILTIN_AGENTS,
+    AgentDispatcher,
+    SubAgent,
     create_dispatcher_with_builtins,
 )
 from app.gateway.provider import ChatResponse
-
 
 # ── Helpers ───────────────────────────────────────────────
 
@@ -297,7 +296,7 @@ class TestAgentDispatcher:
 
         assert dispatcher.active_count == 0
 
-        task_id = await dispatcher.dispatch_async("w", "task")
+        await dispatcher.dispatch_async("w", "task")
         # active count 可能已经变为 0（如果任务极快完成），所以只验证不会报错
         _ = dispatcher.active_count
 

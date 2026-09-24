@@ -181,7 +181,7 @@ def record_process_metrics():
         PROCESS_MEMORY_RSS.set(mem_info.rss)
         PROCESS_MEMORY_VMS.set(mem_info.vms)
         PROCESS_THREADS.set(process.num_threads())
-    except Exception as e:
+    except Exception:
         # 静默失败，避免影响主流程
         pass
 

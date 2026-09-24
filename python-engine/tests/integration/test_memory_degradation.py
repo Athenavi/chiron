@@ -17,7 +17,6 @@ import pytest
 
 from app.context.manager import ContextManager
 
-
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -165,14 +164,12 @@ class TestDegradationChain:
             m["tenant_id"] = "t1"
             m["user_id"] = "u1"
 
-        cm = ContextManager(max_tokens=500, compression_threshold=0.5)
+        ContextManager(max_tokens=500, compression_threshold=0.5)
         # 为了让同步断言 save_summary 被调用，直接调用 _submit_degraded_content
         # （compression 中走 asyncio.create_task，单元级验证直接调用更稳定）
-        from app.context.manager import ContextManager as CM
-
         # 取中间段（去掉 system + tail）模拟被压缩段
         middle = original[1:-8]
-        await CM._submit_degraded_content(middle, svc)
+        await ContextManager._submit_degraded_content(middle, svc)
 
         assert len(svc.saved) == 1
         saved = svc.saved[0]

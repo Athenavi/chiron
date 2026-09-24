@@ -1,7 +1,8 @@
 """Tests for knowledge base API endpoints."""
-import pytest
-from unittest.mock import AsyncMock, patch, MagicMock
 from datetime import datetime
+from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 
 @pytest.fixture
@@ -163,8 +164,9 @@ class TestKnowledgeCreate:
 
     async def test_create_rejects_empty_name(self, mock_pool):
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import create_knowledge_base
             from fastapi import HTTPException
+
+            from app.api.knowledge import create_knowledge_base
             with pytest.raises(HTTPException) as exc_info:
                 await create_knowledge_base(user_id="u1", name="")
             assert exc_info.value.status_code == 400
@@ -172,8 +174,9 @@ class TestKnowledgeCreate:
 
     async def test_create_rejects_invalid_type(self, mock_pool):
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import create_knowledge_base
             from fastapi import HTTPException
+
+            from app.api.knowledge import create_knowledge_base
             with pytest.raises(HTTPException) as exc_info:
                 await create_knowledge_base(user_id="u1", name="Valid", kb_type="invalid")
             assert exc_info.value.status_code == 400
@@ -202,8 +205,9 @@ class TestKnowledgeGet:
         mock_pool.fetchrow = AsyncMock(return_value=None)
 
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import get_knowledge_base
             from fastapi import HTTPException
+
+            from app.api.knowledge import get_knowledge_base
             with pytest.raises(HTTPException) as exc_info:
                 await get_knowledge_base(kb_id="nonexistent", user_id="u1")
             assert exc_info.value.status_code == 404
@@ -260,8 +264,9 @@ class TestKnowledgeDelete:
         mock_pool.fetchrow = AsyncMock(return_value=None)
 
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import delete_knowledge_base
             from fastapi import HTTPException
+
+            from app.api.knowledge import delete_knowledge_base
             with pytest.raises(HTTPException) as exc_info:
                 await delete_knowledge_base(kb_id="nonexistent", user_id="u1")
             assert exc_info.value.status_code == 404
@@ -317,8 +322,9 @@ class TestDocumentUpload:
         })
 
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import upload_document
             from fastapi import HTTPException
+
+            from app.api.knowledge import upload_document
             with pytest.raises(HTTPException) as exc_info:
                 await upload_document(
                     kb_id="kb-1",
@@ -447,8 +453,9 @@ class TestKnowledgeBuild:
         ))
 
         with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import build_knowledge_base
             from fastapi import HTTPException
+
+            from app.api.knowledge import build_knowledge_base
             with pytest.raises(HTTPException) as exc_info:
                 await build_knowledge_base(kb_id="kb-1", user_id="u1")
             assert exc_info.value.status_code == 400
@@ -592,9 +599,9 @@ class TestAdminList:
 
     async def test_admin_list_rejects_non_admin_role(self):
         """Route returns 403 when X-User-Role is not admin/owner."""
-        from starlette.requests import Request as StarletteRequest
-        from starlette.testclient import TestClient
         from fastapi import FastAPI
+        from starlette.testclient import TestClient
+
         from app.api.knowledge import router
 
         app = FastAPI()
@@ -615,6 +622,7 @@ class TestAdminList:
         mock_pool.fetch = AsyncMock(return_value=[])
 
         from fastapi import FastAPI
+
         from app.api.knowledge import router
 
         app = FastAPI()

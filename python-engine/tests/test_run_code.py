@@ -3,8 +3,8 @@ from __future__ import annotations
 
 import pytest
 
-from app.tools.run_code import run_code, sdk_usage_text, ToolCallError, _check_static
 from app.tools.context import set_tool_context
+from app.tools.run_code import _check_static, run_code, sdk_usage_text
 from app.tools.sandbox import workspace_dir
 
 
@@ -75,9 +75,9 @@ async def test_program_calls_sdk_tool(tmp_path):
     f = workspace_dir() / "hello.txt"
     f.write_text("hello", encoding="utf-8")
     code = (
-        "r = await tools.read_file(path='hello.txt', root=str(r'{}'))\n"
+        f"r = await tools.read_file(path='hello.txt', root=str(r'{tmp_path}'))\n"
         "return r['content']"
-    ).format(tmp_path)
+    )
     out = await run_code(code)
     assert out.get("isError") is not True
     assert out["result"] == "hello"
@@ -86,13 +86,13 @@ async def test_program_calls_sdk_tool(tmp_path):
 @pytest.mark.asyncio
 async def test_program_dict_args_and_logs(tmp_path):
     set_tool_context(session_id="s", user_id="u-rc", tenant_id="t", gateway=None)
-    f = workspace_dir() / "log.txt"
+    workspace_dir() / "log.txt"
     code = (
         "print('before')\n"
-        "await tools.write_file(path='log.txt', content='data', root=str(r'{}'))\n"
+        f"await tools.write_file(path='log.txt', content='data', root=str(r'{tmp_path}'))\n"
         "print('after')\n"
-        "return (await tools.read_file(path='log.txt', root=str(r'{}')))['content']"
-    ).format(tmp_path, tmp_path)
+        f"return (await tools.read_file(path='log.txt', root=str(r'{tmp_path}')))['content']"
+    )
     out = await run_code(code)
     assert out["result"] == "data"
     assert "before" in out["logs"] and "after" in out["logs"]

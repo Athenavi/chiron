@@ -25,9 +25,8 @@ from __future__ import annotations
 import json
 import logging
 from dataclasses import dataclass
-from enum import Enum
+from enum import StrEnum
 from pathlib import Path
-from typing import Optional
 
 logger = logging.getLogger(__name__)
 
@@ -91,7 +90,7 @@ PTC_PERSONA = (
 )
 
 
-class AgentMode(str, Enum):
+class AgentMode(StrEnum):
     NORMAL = "normal"
     MINIMAL = "minimal"
     PTC = "ptc"
@@ -101,12 +100,12 @@ class AgentMode(str, Enum):
 @dataclass(frozen=True)
 class ModeConfig:
     mode: AgentMode
-    persona: Optional[str] = None  # None = 用现有默认 persona；str = 固定完整 persona
+    persona: str | None = None  # None = 用现有默认 persona；str = 固定完整 persona
     include_context: bool = True  # 是否注入记忆/skills/RAG/git 上下文段
     include_tools: frozenset = frozenset(CORE_TOOL_NAMES)  # 模式可见工具
     extra_tools: frozenset = frozenset()  # 模式额外注册的工具
     enable_compaction: bool = True  # 是否启用上下文压缩
-    compaction: Optional[dict] = (
+    compaction: dict | None = (
         None  # SaaS：截断策略配置（strategy/max_messages/max_context_tokens/
     )
     #        threshold_ratio/snipe_ratio/tool_result_max_chars 等），
@@ -164,7 +163,7 @@ def _apply_overrides(cfg: ModeConfig, overrides: dict) -> ModeConfig:
     )
 
 
-def get_mode_config(mode: Optional[str]) -> ModeConfig:
+def get_mode_config(mode: str | None) -> ModeConfig:
     """未知/空模式回退 NORMAL；叠加 mode_overrides.json。"""
     try:
         base = _BASE_MODES[AgentMode(mode or "normal")]

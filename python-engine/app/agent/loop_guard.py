@@ -27,7 +27,7 @@ import hashlib
 import json
 from collections import deque
 from dataclasses import dataclass
-from typing import Any, Deque
+from typing import Any
 
 from app.agent.tool_policy import args_hash
 
@@ -84,8 +84,8 @@ class LoopGuard:
         self._repeat_threshold = max(0, repeat_threshold)
         self._no_progress_threshold = max(0, no_progress_threshold)
         self._oscillation_threshold = max(0, oscillation_threshold)
-        self._calls: Deque[str] = deque(maxlen=WINDOW)
-        self._results: Deque[str] = deque(maxlen=WINDOW)
+        self._calls: deque[str] = deque(maxlen=WINDOW)
+        self._results: deque[str] = deque(maxlen=WINDOW)
 
     # ── 观测 ──
 

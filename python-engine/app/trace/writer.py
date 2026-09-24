@@ -16,7 +16,7 @@ import asyncio
 import json
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 from app.middleware.privacy_middleware import is_no_retention
 from app.redis_keys import rkey
@@ -37,11 +37,11 @@ def get_tenant_stream(tenant_id: str) -> str:
 class TraceWriter:
     """异步 trace writer (单例模式,避免重复连接 Redis)."""
 
-    _instance: Optional["TraceWriter"] = None
-    _redis: Optional[Any] = None
+    _instance: TraceWriter | None = None
+    _redis: Any | None = None
 
     @classmethod
-    async def get_instance(cls, redis_url: Optional[str] = None) -> "TraceWriter":
+    async def get_instance(cls, redis_url: str | None = None) -> TraceWriter:
         """获取全局唯一 TraceWriter 实例."""
         if cls._instance is None:
             cls._instance = cls()
@@ -72,8 +72,8 @@ class TraceWriter:
         trace_id: str,
         span_name: str,
         duration_ms: int,
-        metadata: Optional[dict] = None,
-        tenant_id: Optional[str] = None,  # SaaS: 租户隔离
+        metadata: dict | None = None,
+        tenant_id: str | None = None,  # SaaS: 租户隔离
     ) -> None:
         """写入单个 span 事件到 Redis Stream (按租户隔离).
 
@@ -145,7 +145,7 @@ class TraceWriter:
                 entries.append(entry)
 
             pipeline = self._redis.pipeline(transaction=False)
-            for span, entry in zip(spans, entries):
+            for span, entry in zip(spans, entries, strict=False):
                 # SaaS 安全: 按 tenant_id 分 stream（与 write_span 一致）
                 stream = get_tenant_stream(span.get("tenant_id") or "anonymous")
                 pipeline.xadd(stream, entry, maxlen=10000, approximate=True)
@@ -158,7 +158,7 @@ class TraceWriter:
 
 # ── 便捷函数 (供 AgentRuntime 直接调用) ─────────────────────────────────────
 
-_trace_writer: Optional[TraceWriter] = None
+_trace_writer: TraceWriter | None = None
 _write_lock = asyncio.Lock()
 
 
@@ -166,9 +166,9 @@ async def record_span(
     trace_id: str,
     span_name: str,
     duration_ms: int,
-    metadata: Optional[dict] = None,
-    tenant_id: Optional[str] = None,  # SaaS: 租户隔离
-    redis_url: Optional[str] = None,
+    metadata: dict | None = None,
+    tenant_id: str | None = None,  # SaaS: 租户隔离
+    redis_url: str | None = None,
 ) -> None:
     """便捷函数: 记录单个 span 到 Redis Stream (带租户隔离).
 

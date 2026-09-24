@@ -247,11 +247,10 @@ func NewGatewayRouter(
 
 	// Billing
 	billingStore := billing.NewPGStore()
-	if err := billingStore.EnsureTables(context.Background()); err != nil {
-		// 生产环境的 schema 由 DBA/发布流程维护，应用的 DB 用户往往没有 DDL 权限
-		// （ALTER/CREATE 会报 "must be owner of table"），失败属预期内情况。
-		// 但绝不能静默吞掉：否则表结构问题会推迟到首次下单，才以笼统的 500 暴露出来。
-		slog.Warn("ensure billing tables failed; assuming schema is managed externally", "error", err)
+	if err := billingStore.VerifySchema(context.Background()); err != nil {
+		// schema 由 Alembic 迁移维护（应用不建表），这里只做只读校验：
+		// 宁可启动日志里明确报出缺表，也不要拖到首次下单才以笼统 500 暴露。
+		slog.Error("billing schema verification failed; run `alembic upgrade head`", "error", err)
 	}
 	billingMgr := billing.NewManager(billingStore)
 	// P0-P1 修复：余额已由 Deduct/AddCredits 同步写库（PG 原子 UPDATE），
@@ -464,10 +463,11 @@ func NewGatewayRouter(
 	NewMarketHandler().RegisterRoutes(mux, authMW)
 
 	// Enterprise model router（authMW + RequireEntPerm("model:route")）：租户模型路由配置
-	// 修复：InitTable 原设计"服务启动时调用"但缺失调用点，导致引擎启动拉取
-	// /v1/internal/model-routes 时 500（ent_model_routes 表不存在）。此处建表后再注册。
+	// 建表已收敛到 Alembic；这里只做只读校验，缺表时明确告警（而不是静默让引擎侧 500）。
 	modelRouter := NewEntModelRouterHandler()
-	modelRouter.InitTable()
+	if err := modelRouter.VerifyTable(context.Background()); err != nil {
+		slog.Error("ent_model_routes not ready; model routing will fail", "error", err)
+	}
 	modelRouter.RegisterRoutes(mux, authMW)
 
 	// Enterprise webhook（authMW + RequireEntPerm("webhook:manage")）：事件通知

@@ -7,8 +7,26 @@ back to the LLM (double-escaped). It must truncate the plain text directly.
 from __future__ import annotations
 
 import json
+from unittest.mock import MagicMock
 
 import pytest
+
+from app.agent.runtime import (
+    MAX_MESSAGES,
+    TOOL_RESULT_MAX_CHARS,
+    TOOL_RESULT_TAIL,
+    AgentRuntime,
+    AgentTask,
+    CompactionConfig,
+    _compact_messages,
+    _ensure_valid_tool_sequence,
+    _prune_messages,
+    _snip_tool_results,
+    _truncate_text,
+    _truncate_tool_result,
+)
+from app.gateway.provider import ChatResponse
+from app.session_store import SessionStore
 
 
 @pytest.fixture(autouse=True)
@@ -29,20 +47,6 @@ def _stub_tool_broker(monkeypatch):
         }
 
     monkeypatch.setattr("app.tools.broker.authorize", _allow)
-
-from app.agent.runtime import (
-    MAX_MESSAGES,
-    TOOL_RESULT_MAX_CHARS,
-    TOOL_RESULT_TAIL,
-    CompactionConfig,
-    _compact_messages,
-    _ensure_valid_tool_sequence,
-    _prune_messages,
-    _snip_tool_results,
-    _truncate_text,
-    _truncate_tool_result,
-)
-from app.session_store import SessionStore
 
 
 class TestTruncateText:
@@ -260,12 +264,6 @@ class TestSnipToolResults:
         out = _snip_tool_results(messages)
         assert json.loads(out[0]["content"])["result"] == "y" * (TOOL_RESULT_MAX_CHARS // 2 + 50)
 
-import pytest
-from unittest.mock import MagicMock
-
-from app.agent.runtime import AgentRuntime, AgentTask
-from app.gateway.provider import ChatResponse
-
 
 class TestRuntimeModes:
     """模式配置在 runtime 中的落地：工具集过滤 + persona 覆盖 + 压缩开关。"""
@@ -273,8 +271,8 @@ class TestRuntimeModes:
     @staticmethod
     def _registered_names() -> set[str]:
         import app.tools.core  # noqa: F401 — 注册真实核心工具
-        import app.tools.run_code  # noqa: F401 — 注册 run_code
         import app.tools.mode_admin  # noqa: F401 — 注册创作工具（创造模式）
+        import app.tools.run_code  # noqa: F401 — 注册 run_code
         from app.tools.registry import registry
         return set(registry.list_names())
 
@@ -401,7 +399,6 @@ class TestToolGuardConfirmPath:
 
     @pytest.mark.asyncio
     async def test_confirm_emits_event_before_waiting(self):
-        import asyncio as _asyncio
 
         runtime = AgentRuntime(gateway=None)
         task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="",

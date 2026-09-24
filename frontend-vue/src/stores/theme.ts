@@ -1,4 +1,4 @@
-﻿import { defineStore } from 'pinia'
+import { defineStore } from 'pinia'
 import { ref, watch, computed } from 'vue'
 
 import { t } from '../i18n'

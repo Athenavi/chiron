@@ -10,8 +10,8 @@ import type { Rule } from 'ant-design-vue/es/form'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 
-// Íü¼ÇÃÜÂë£ºÏòºó¶ËÉêÇëÖØÖÃÁ´½Ó¡£
-// ºó¶Ë¶Ô"ÓÊÏäÊÇ·ñ´æÔÚ"ºã·µ»ØÍ¬Ò»½á¹û£¨·ÀÕËºÅÃ¶¾Ù£©£¬Òò´Ë±¾Ò³Ò²Ö»Õ¹Ê¾Ò»ÖÖ³É¹¦Ì¬¡£
+// å¿˜è®°å¯†ç ï¼šå‘åç«¯ç”³è¯·é‡ç½®é“¾æ¥ã€‚
+// åç«¯å¯¹"é‚®ç®±æ˜¯å¦å­˜åœ¨"æ’è¿”å›åŒä¸€ç»“æœï¼ˆé˜²è´¦å·æšä¸¾ï¼‰ï¼Œå› æ­¤æœ¬é¡µä¹Ÿåªå±•ç¤ºä¸€ç§æˆåŠŸæ€ã€‚
 
 const router = useRouter()
 
@@ -20,10 +20,10 @@ const form = ref({ email: '' })
 
 const rules: Record<string, Rule[]> = {
   email: [
-    { required: true, message: t('ÇëÊäÈëÓÊÏä'), trigger: 'blur' },
+    { required: true, message: t('è¯·è¾“å…¥é‚®ç®±'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) =>
-        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('ÓÊÏä¸ñÊ½²»ÕıÈ·')),
+        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('é‚®ç®±æ ¼å¼ä¸æ­£ç¡®')),
       trigger: 'blur',
     },
   ],
@@ -33,7 +33,7 @@ const error = ref('')
 const sent = ref(false)
 const loading = ref(false)
 
-// ÈË»úÑéÖ¤£¨ÓëµÇÂ¼/×¢²á¹²ÓÃÍ¬Ò»Ì×Õ¤À¸£©
+// äººæœºéªŒè¯ï¼ˆä¸ç™»å½•/æ³¨å†Œå…±ç”¨åŒä¸€å¥—æ …æ ï¼‰
 const captchaConfig = ref({ enabled: false, provider: '', site_key: '', verify_url: '' })
 const captchaRequired = ref(false)
 const captchaToken = ref('')
@@ -55,7 +55,7 @@ onMounted(async () => {
       verify_url: cfg.verify_url || '',
     }
   } catch {
-    // ÅäÖÃ½Ó¿Ú²»¿É´ïÊ±°´ÎŞÑéÖ¤Âë´¦Àí£¨ºó¶ËÈÔ»á¶µµ×Ğ£Ñé£©
+    // é…ç½®æ¥å£ä¸å¯è¾¾æ—¶æŒ‰æ— éªŒè¯ç å¤„ç†ï¼ˆåç«¯ä»ä¼šå…œåº•æ ¡éªŒï¼‰
   }
   captchaRequired.value = captchaConfig.value.enabled
 })
@@ -68,7 +68,7 @@ async function handleSubmit() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('ÇëÏÈÍê³ÉÈË»úÑéÖ¤')
+    error.value = t('è¯·å…ˆå®ŒæˆäººæœºéªŒè¯')
     return
   }
   loading.value = true
@@ -84,22 +84,22 @@ async function handleSubmit() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = t('²Ù×÷¹ıÓÚÆµ·±£¬ÇëÍê³ÉÈË»úÑéÖ¤ºóÖØÊÔ')
+      error.value = t('æ“ä½œè¿‡äºé¢‘ç¹ï¼Œè¯·å®ŒæˆäººæœºéªŒè¯åé‡è¯•')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = t('ÈË»úÑéÖ¤Î´Í¨¹ı£¬ÇëÖØĞÂÑéÖ¤')
+      error.value = t('äººæœºéªŒè¯æœªé€šè¿‡ï¼Œè¯·é‡æ–°éªŒè¯')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403) {
-      error.value = apiErr || t('±¾ÊµÀıÎ´¿ª·ÅÃÜÂëÖØÖÃ')
+      error.value = apiErr || t('æœ¬å®ä¾‹æœªå¼€æ”¾å¯†ç é‡ç½®')
       return
     }
-    error.value = apiErr || t('ÇëÇóÊ§°Ü£¬ÇëÉÔºóÔÙÊÔ')
+    error.value = apiErr || t('è¯·æ±‚å¤±è´¥ï¼Œè¯·ç¨åå†è¯•')
   } finally {
     loading.value = false
   }
@@ -114,10 +114,10 @@ async function handleSubmit() {
           MC
         </div>
         <div class="auth-title">
-          {{ $t('ÖØÖÃÃÜÂë') }}
+          {{ $t('é‡ç½®å¯†ç ') }}
         </div>
         <div class="auth-subtitle">
-          {{ $t('ÎÒÃÇ»áÏòÄãµÄÓÊÏä·¢ËÍÒ»ÌõÖØÖÃÁ´½Ó') }}
+          {{ $t('æˆ‘ä»¬ä¼šå‘ä½ çš„é‚®ç®±å‘é€ä¸€æ¡é‡ç½®é“¾æ¥') }}
         </div>
       </div>
       <Card
@@ -127,7 +127,7 @@ async function handleSubmit() {
         <Alert
           v-if="sent"
           type="success"
-          :message="$t('Èô¸ÃÓÊÏäÒÑ×¢²á£¬ÖØÖÃÁ´½ÓÒÑ·¢ËÍ£¬Çë²éÊÕ£¨º¬À¬»øÓÊ¼şÏä£©')"
+          :message="$t('è‹¥è¯¥é‚®ç®±å·²æ³¨å†Œï¼Œé‡ç½®é“¾æ¥å·²å‘é€ï¼Œè¯·æŸ¥æ”¶ï¼ˆå«åƒåœ¾é‚®ä»¶ç®±ï¼‰')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -148,15 +148,15 @@ async function handleSubmit() {
           @finish="handleSubmit"
         >
           <FormItem
-            :label="$t('ÓÊÏä')"
+            :label="$t('é‚®ç®±')"
             name="email"
           >
             <Input
               v-model:value="form.email"
-              :placeholder="$t('ÇëÊäÈë×¢²áÊ±Ê¹ÓÃµÄÓÊÏä')"
+              :placeholder="$t('è¯·è¾“å…¥æ³¨å†Œæ—¶ä½¿ç”¨çš„é‚®ç®±')"
               size="large"
               :maxlength="254"
-              aria-label="ÓÊÏä"
+              :aria-label="$t('auth.email')"
               autocomplete="email"
             >
               <template #prefix>
@@ -167,7 +167,7 @@ async function handleSubmit() {
 
           <FormItem
             v-if="captchaRequired"
-            :label="$t('ÈË»úÑéÖ¤')"
+            :label="$t('äººæœºéªŒè¯')"
           >
             <CaptchaWidget
               ref="captchaRef"
@@ -191,14 +191,14 @@ async function handleSubmit() {
                 size="large"
                 :loading="loading"
               >
-                {{ $t('·¢ËÍÖØÖÃÁ´½Ó') }}
+                {{ $t('å‘é€é‡ç½®é“¾æ¥') }}
               </Button>
               <Button
                 type="link"
                 block
                 @click="router.push('/login')"
               >
-                {{ $t('·µ»ØµÇÂ¼') }}
+                {{ $t('è¿”å›ç™»å½•') }}
               </Button>
             </Space>
           </FormItem>
@@ -210,7 +210,7 @@ async function handleSubmit() {
           block
           @click="router.push('/login')"
         >
-          {{ $t('·µ»ØµÇÂ¼') }}
+          {{ $t('è¿”å›ç™»å½•') }}
         </Button>
       </Card>
     </div>
@@ -243,7 +243,7 @@ async function handleSubmit() {
   max-width: calc(100vw - 32px);
   position: relative;
   z-index: var(--z-content);
-  animation: authFadeIn 0.5s ease;
+  animation: authFadeIn var(--dur-slow) ease;
 }
 
 .auth-form-card {
@@ -261,7 +261,7 @@ async function handleSubmit() {
   margin: 0 auto 14px;
   border-radius: 12px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: #fff;
+  color: var(--on-solid);
   font-weight: 700;
   font-size: 16px;
   display: flex;

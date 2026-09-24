@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 import httpx
 
@@ -30,7 +29,7 @@ class SystemToolClient:
         self._token = internal_token
         self._timeout = timeout
         self._max_retries = max_retries
-        self._http: Optional[httpx.AsyncClient] = None
+        self._http: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """获取或创建 HTTP 客户端"""

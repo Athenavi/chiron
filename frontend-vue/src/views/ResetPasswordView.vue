@@ -10,8 +10,8 @@ import type { Rule } from 'ant-design-vue/es/form'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 
-// ÖØÖÃÃÜÂë£ºÁîÅÆÀ´×ÔÓÊ¼şÀïµÄÁ´½Ó£¨/reset-password?token=...£©¡£
-// Ğ£Ñé¹æÔòÓëºó¶Ë ValidatePasswordComplexity ±£³ÖÒ»ÖÂ£¬±ÜÃâ"Ç°¶Ë¹ıÁËºó¶Ë¾Ü¾ø"¡£
+// é‡ç½®å¯†ç ï¼šä»¤ç‰Œæ¥è‡ªé‚®ä»¶é‡Œçš„é“¾æ¥ï¼ˆ/reset-password?token=...ï¼‰ã€‚
+// æ ¡éªŒè§„åˆ™ä¸åç«¯ ValidatePasswordComplexity ä¿æŒä¸€è‡´ï¼Œé¿å…"å‰ç«¯è¿‡äº†åç«¯æ‹’ç»"ã€‚
 
 const router = useRouter()
 const route = useRoute()
@@ -21,20 +21,20 @@ const token = computed(() => String(route.query.token || ''))
 const formRef = ref()
 const form = ref({ password: '', confirmPassword: '' })
 
-/** Óëºó¶Ë auth.ValidatePasswordComplexity ¶ÔÆëµÄ¸´ÔÓ¶ÈĞ£Ñé */
+/** ä¸åç«¯ auth.ValidatePasswordComplexity å¯¹é½çš„å¤æ‚åº¦æ ¡éªŒ */
 function passwordComplexityError(pw: string): string {
-  if (pw.length < 8) return t('ÃÜÂë³¤¶È²»ÄÜÉÙÓÚ 8 ¸ö×Ö·û')
-  if (pw.length > 128) return t('ÃÜÂë³¤¶È²»ÄÜ³¬¹ı 128 ¸ö×Ö·û')
-  if (!/[A-Z]/.test(pw)) return t('ÃÜÂë±ØĞë°üº¬´óĞ´×ÖÄ¸')
-  if (!/[a-z]/.test(pw)) return t('ÃÜÂë±ØĞë°üº¬Ğ¡Ğ´×ÖÄ¸')
-  if (!/\d/.test(pw)) return t('ÃÜÂë±ØĞë°üº¬Êı×Ö')
-  if (!/[^A-Za-z0-9]/.test(pw)) return t('ÃÜÂë±ØĞë°üº¬ÌØÊâ×Ö·û£¨Èç !@#$%^&*£©')
+  if (pw.length < 8) return t('å¯†ç é•¿åº¦ä¸èƒ½å°‘äº 8 ä¸ªå­—ç¬¦')
+  if (pw.length > 128) return t('å¯†ç é•¿åº¦ä¸èƒ½è¶…è¿‡ 128 ä¸ªå­—ç¬¦')
+  if (!/[A-Z]/.test(pw)) return t('å¯†ç å¿…é¡»åŒ…å«å¤§å†™å­—æ¯')
+  if (!/[a-z]/.test(pw)) return t('å¯†ç å¿…é¡»åŒ…å«å°å†™å­—æ¯')
+  if (!/\d/.test(pw)) return t('å¯†ç å¿…é¡»åŒ…å«æ•°å­—')
+  if (!/[^A-Za-z0-9]/.test(pw)) return t('å¯†ç å¿…é¡»åŒ…å«ç‰¹æ®Šå­—ç¬¦ï¼ˆå¦‚ !@#$%^&*ï¼‰')
   return ''
 }
 
 const rules: Record<string, Rule[]> = {
   password: [
-    { required: true, message: t('ÇëÊäÈëĞÂÃÜÂë'), trigger: 'blur' },
+    { required: true, message: t('è¯·è¾“å…¥æ–°å¯†ç '), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         const msg = passwordComplexityError(value || '')
@@ -44,11 +44,11 @@ const rules: Record<string, Rule[]> = {
     },
   ],
   confirmPassword: [
-    { required: true, message: t('ÇëÔÙ´ÎÊäÈëĞÂÃÜÂë'), trigger: 'blur' },
+    { required: true, message: t('è¯·å†æ¬¡è¾“å…¥æ–°å¯†ç '), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         if (value !== form.value.password) {
-          return Promise.reject(t('Á½´ÎÃÜÂëÊäÈë²»Ò»ÖÂ'))
+          return Promise.reject(t('ä¸¤æ¬¡å¯†ç è¾“å…¥ä¸ä¸€è‡´'))
         }
         return Promise.resolve()
       },
@@ -74,7 +74,7 @@ function markCaptchaDirty() {
 
 onMounted(async () => {
   if (!token.value) {
-    error.value = t('ÖØÖÃÁ´½ÓÎŞĞ§£¬ÇëÖØĞÂÉêÇë')
+    error.value = t('é‡ç½®é“¾æ¥æ— æ•ˆï¼Œè¯·é‡æ–°ç”³è¯·')
   }
   try {
     const cfg = await getCaptchaPublicConfig()
@@ -85,7 +85,7 @@ onMounted(async () => {
       verify_url: cfg.verify_url || '',
     }
   } catch {
-    // ÅäÖÃ½Ó¿Ú²»¿É´ïÊ±°´ÎŞÑéÖ¤Âë´¦Àí£¨ºó¶ËÈÔ»á¶µµ×Ğ£Ñé£©
+    // é…ç½®æ¥å£ä¸å¯è¾¾æ—¶æŒ‰æ— éªŒè¯ç å¤„ç†ï¼ˆåç«¯ä»ä¼šå…œåº•æ ¡éªŒï¼‰
   }
   captchaRequired.value = captchaConfig.value.enabled
 })
@@ -93,7 +93,7 @@ onMounted(async () => {
 async function handleSubmit() {
   error.value = ''
   if (!token.value) {
-    error.value = t('ÖØÖÃÁ´½ÓÎŞĞ§£¬ÇëÖØĞÂÉêÇë')
+    error.value = t('é‡ç½®é“¾æ¥æ— æ•ˆï¼Œè¯·é‡æ–°ç”³è¯·')
     return
   }
   try {
@@ -102,7 +102,7 @@ async function handleSubmit() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('ÇëÏÈÍê³ÉÈË»úÑéÖ¤')
+    error.value = t('è¯·å…ˆå®ŒæˆäººæœºéªŒè¯')
     return
   }
   loading.value = true
@@ -120,17 +120,17 @@ async function handleSubmit() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = t('²Ù×÷¹ıÓÚÆµ·±£¬ÇëÍê³ÉÈË»úÑéÖ¤ºóÖØÊÔ')
+      error.value = t('æ“ä½œè¿‡äºé¢‘ç¹ï¼Œè¯·å®ŒæˆäººæœºéªŒè¯åé‡è¯•')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 400) {
-      // ÁîÅÆÊ§Ğ§£¨¹ıÆÚ / ÒÑÓÃ¹ı£©ÓëÃÜÂë²»ºÏ¹æ¶¼×ßÕâÀï
-      error.value = apiErr || t('ÖØÖÃÁ´½ÓÒÑÊ§Ğ§£¬ÇëÖØĞÂÉêÇë')
+      // ä»¤ç‰Œå¤±æ•ˆï¼ˆè¿‡æœŸ / å·²ç”¨è¿‡ï¼‰ä¸å¯†ç ä¸åˆè§„éƒ½èµ°è¿™é‡Œ
+      error.value = apiErr || t('é‡ç½®é“¾æ¥å·²å¤±æ•ˆï¼Œè¯·é‡æ–°ç”³è¯·')
       return
     }
-    error.value = apiErr || t('ÖØÖÃÊ§°Ü£¬ÇëÉÔºóÔÙÊÔ')
+    error.value = apiErr || t('é‡ç½®å¤±è´¥ï¼Œè¯·ç¨åå†è¯•')
   } finally {
     loading.value = false
   }
@@ -145,10 +145,10 @@ async function handleSubmit() {
           MC
         </div>
         <div class="auth-title">
-          {{ $t('ÉèÖÃĞÂÃÜÂë') }}
+          {{ $t('è®¾ç½®æ–°å¯†ç ') }}
         </div>
         <div class="auth-subtitle">
-          {{ $t('ÇëÉèÖÃÒ»¸öĞÂµÄµÇÂ¼ÃÜÂë') }}
+          {{ $t('è¯·è®¾ç½®ä¸€ä¸ªæ–°çš„ç™»å½•å¯†ç ') }}
         </div>
       </div>
       <Card
@@ -158,7 +158,7 @@ async function handleSubmit() {
         <Alert
           v-if="done"
           type="success"
-          :message="$t('ÃÜÂëÒÑÖØÖÃ£¬¼´½«Ìø×ªµ½µÇÂ¼Ò³')"
+          :message="$t('å¯†ç å·²é‡ç½®ï¼Œå³å°†è·³è½¬åˆ°ç™»å½•é¡µ')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -179,15 +179,15 @@ async function handleSubmit() {
           @finish="handleSubmit"
         >
           <FormItem
-            :label="$t('ĞÂÃÜÂë')"
+            :label="$t('æ–°å¯†ç ')"
             name="password"
           >
             <Input
               v-model:value="form.password"
-              :placeholder="$t('ÖÁÉÙ 8 Î»£¬º¬´óĞ¡Ğ´×ÖÄ¸¡¢Êı×ÖÓëÌØÊâ×Ö·û')"
+              :placeholder="$t('è‡³å°‘ 8 ä½ï¼Œå«å¤§å°å†™å­—æ¯ã€æ•°å­—ä¸ç‰¹æ®Šå­—ç¬¦')"
               type="password"
               size="large"
-              aria-label="ĞÂÃÜÂë"
+              :aria-label="$t('auth.newPassword')"
               autocomplete="new-password"
             >
               <template #prefix>
@@ -197,15 +197,15 @@ async function handleSubmit() {
           </FormItem>
 
           <FormItem
-            :label="$t('È·ÈÏĞÂÃÜÂë')"
+            :label="$t('ç¡®è®¤æ–°å¯†ç ')"
             name="confirmPassword"
           >
             <Input
               v-model:value="form.confirmPassword"
-              :placeholder="$t('ÇëÔÙ´ÎÊäÈëĞÂÃÜÂë')"
+              :placeholder="$t('è¯·å†æ¬¡è¾“å…¥æ–°å¯†ç ')"
               type="password"
               size="large"
-              aria-label="È·ÈÏĞÂÃÜÂë"
+              :aria-label="$t('auth.confirmNewPassword')"
               autocomplete="new-password"
             >
               <template #prefix>
@@ -216,7 +216,7 @@ async function handleSubmit() {
 
           <FormItem
             v-if="captchaRequired"
-            :label="$t('ÈË»úÑéÖ¤')"
+            :label="$t('äººæœºéªŒè¯')"
           >
             <CaptchaWidget
               ref="captchaRef"
@@ -240,14 +240,14 @@ async function handleSubmit() {
                 size="large"
                 :loading="loading"
               >
-                {{ $t('È·ÈÏÖØÖÃ') }}
+                {{ $t('ç¡®è®¤é‡ç½®') }}
               </Button>
               <Button
                 type="link"
                 block
                 @click="router.push('/login')"
               >
-                {{ $t('·µ»ØµÇÂ¼') }}
+                {{ $t('è¿”å›ç™»å½•') }}
               </Button>
             </Space>
           </FormItem>
@@ -283,7 +283,7 @@ async function handleSubmit() {
   max-width: calc(100vw - 32px);
   position: relative;
   z-index: var(--z-content);
-  animation: authFadeIn 0.5s ease;
+  animation: authFadeIn var(--dur-slow) ease;
 }
 
 .auth-form-card {
@@ -301,7 +301,7 @@ async function handleSubmit() {
   margin: 0 auto 14px;
   border-radius: 12px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
-  color: #fff;
+  color: var(--on-solid);
   font-weight: 700;
   font-size: 16px;
   display: flex;

@@ -100,7 +100,7 @@ class TaskBudget:
         return ",".join(parts) or "none"
 
 
-class BudgetExceeded(RuntimeError):
+class BudgetExceeded(RuntimeError):  # noqa: N818 — 名字由 subagent/budget.py 的 re-export 与 runner 的 error 文本固定，改名属 API 变更
     """预算越界。消息即 ``budget_exceeded:<轴>`` —— 会被 runner 写进 run 的 error。"""
 
     def __init__(self, axis: str):

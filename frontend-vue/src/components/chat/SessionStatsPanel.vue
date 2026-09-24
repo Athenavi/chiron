@@ -45,21 +45,21 @@ const totals = computed(() => metrics.value?.totals || {})
 const throughput = computed(() => metrics.value?.throughput)
 
 const rows = computed(() => [
-  { label: '回合数', value: fmtInt(totals.value.turns) },
-  { label: '输入 tokens', value: fmtInt(totals.value.input_tokens) },
-  { label: '输出 tokens', value: fmtInt(totals.value.output_tokens) },
-  { label: '缓存命中 tokens', value: fmtInt(totals.value.cached_tokens) },
-  { label: '缓存命中率', value: fmtRate(totals.value.cache_hit_rate) },
-  { label: '费用', value: fmtCost(totals.value.cost_cents) },
+  { label: 'chat.stats.turns', value: fmtInt(totals.value.turns) },
+  { label: 'chat.stats.inputTokens', value: fmtInt(totals.value.input_tokens) },
+  { label: 'chat.stats.outputTokens', value: fmtInt(totals.value.output_tokens) },
+  { label: 'chat.stats.cachedTokens', value: fmtInt(totals.value.cached_tokens) },
+  { label: 'chat.stats.cacheHitRate', value: fmtRate(totals.value.cache_hit_rate) },
+  { label: 'chat.stats.cost', value: fmtCost(totals.value.cost_cents) },
 ])
 
 const speedRows = computed(() => {
   const t = throughput.value
   if (!t) return []
   return [
-    { label: '首字延迟 p50', value: fmtMs(t.ttft_ms_p50) },
-    { label: '输出吞吐 p50', value: fmtTps(t.output_tps_p50) },
-    { label: '输出吞吐 p95', value: fmtTps(t.output_tps_p95) },
+    { label: 'chat.stats.ttftP50', value: fmtMs(t.ttft_ms_p50) },
+    { label: 'chat.stats.outputTpsP50', value: fmtTps(t.output_tps_p50) },
+    { label: 'chat.stats.outputTpsP95', value: fmtTps(t.output_tps_p95) },
   ]
 })
 </script>

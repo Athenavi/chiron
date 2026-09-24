@@ -13,8 +13,8 @@ from __future__ import annotations
 import math
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
-from enum import Enum
+from datetime import UTC, datetime
+from enum import Enum, StrEnum
 from typing import Any, Literal
 
 # ── L1: 会话元数据 ─────────────────────────────────────────────────────
@@ -76,7 +76,7 @@ class Scope:
     session_id: str
 
 
-class MemoryType(str, Enum):
+class MemoryType(StrEnum):
     """记忆类型引用（Milvus memory_type 取值）。"""
 
     PROFILE = "profile"
@@ -89,7 +89,7 @@ class MemoryType(str, Enum):
 # ── L2: 用户档案卡相关类型 ──────────────────────────────────────────────
 
 
-class SlotType(str, Enum):
+class SlotType(StrEnum):
     """L2 档案卡槽位类型。"""
 
     IDENTITY = "identity"  # 身份属性
@@ -98,7 +98,7 @@ class SlotType(str, Enum):
     FACT = "fact"  # 长期事实
 
 
-class SourceType(str, Enum):
+class SourceType(StrEnum):
     """记忆来源类型。"""
 
     USER_CONFIRMED = "user_confirmed"  # 用户显式确认
@@ -214,10 +214,10 @@ def to_iso(value: Any) -> str | None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+            value = value.replace(tzinfo=UTC)
         return value.isoformat()
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(value, tz=UTC).isoformat()
     return str(value)
 
 
@@ -405,7 +405,7 @@ def cosine_similarity(a: list[float], b: list[float]) -> float:
     if len(a) != len(b):
         return 0.0
 
-    dot_product = sum(x * y for x, y in zip(a, b))
+    dot_product = sum(x * y for x, y in zip(a, b, strict=False))
     norm_a = math.sqrt(sum(x * x for x in a))
     norm_b = math.sqrt(sum(x * x for x in b))
 
@@ -428,9 +428,9 @@ def recency_decay(when: datetime | None, half_life_days: float = 60.0) -> float:
         return 0.5
     if half_life_days <= 0:
         return 0.0
-    now = datetime.now(timezone.utc)
+    now = datetime.now(UTC)
     if when.tzinfo is None:  # asyncpg 的 timestamptz 在某些 codec 下回传 naive
-        when = when.replace(tzinfo=timezone.utc)
+        when = when.replace(tzinfo=UTC)
     age_days = max(0.0, (now - when).total_seconds() / 86400.0)
     return math.exp(-age_days / half_life_days)
 

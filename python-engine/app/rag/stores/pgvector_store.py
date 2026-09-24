@@ -75,7 +75,7 @@ class PgvectorStore(VectorStoreBase):
         await self._ensure_table()
 
         rows = []
-        for i, (vid, vec, payload) in enumerate(zip(ids, vectors, payloads)):
+        for _i, (vid, vec, payload) in enumerate(zip(ids, vectors, payloads, strict=False)):
             if len(vec) != self._dim:
                 logger.warning("向量维度 %d != %d, 跳过", len(vec), self._dim)
                 continue

@@ -89,7 +89,7 @@ class DocumentParser:
             else:
                 # 将每行转换为可读文本
                 if headers:
-                    pairs = [f"{h}: {v}" for h, v in zip(headers, row) if v]
+                    pairs = [f"{h}: {v}" for h, v in zip(headers, row, strict=False) if v]
                     rows.append("; ".join(pairs))
                 else:
                     rows.append(", ".join(row))

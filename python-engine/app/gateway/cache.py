@@ -6,7 +6,6 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -113,7 +112,7 @@ class SemanticCache:
         messages: list[ChatMessage],
         tools: list[dict] | None,
         temperature: float,
-    ) -> Optional[ChatResponse]:
+    ) -> ChatResponse | None:
         """按 L1 → L2 → L3 顺序查找缓存（tenant_id 必填，理由见 _exact_key）"""
         # 不缓存带工具调用的请求
         if tools:

@@ -9,8 +9,7 @@ Usage::
 """
 
 from app.commands.builtins import register_builtins
-from app.commands.registry import (CommandContext, CommandDef, CommandRegistry,
-                                   registry)
+from app.commands.registry import CommandContext, CommandDef, CommandRegistry, registry
 
 # Auto-register built-in commands when the package is imported.
 register_builtins()

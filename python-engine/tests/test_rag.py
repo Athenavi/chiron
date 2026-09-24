@@ -1,6 +1,7 @@
 # RAG 检索测试
-import pytest
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
 
 from app.knowledge.enhanced_kb import EnhancedKnowledgeBase
 from app.rag.retriever import RAGRetriever

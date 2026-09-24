@@ -12,7 +12,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from typing import Optional
 
 from app.memory.layers import SessionMeta
 
@@ -82,7 +81,7 @@ class SessionMetaStore:
         )
         return meta
 
-    def get(self, session_id: str) -> Optional[SessionMeta]:
+    def get(self, session_id: str) -> SessionMeta | None:
         """获取会话元数据。
 
         Args:
@@ -105,7 +104,7 @@ class SessionMetaStore:
 
         return meta
 
-    def update(self, session_id: str, **kwargs) -> Optional[SessionMeta]:
+    def update(self, session_id: str, **kwargs) -> SessionMeta | None:
         """更新会话元数据字段。
 
         Args:

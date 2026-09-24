@@ -20,9 +20,10 @@ import json
 import logging
 import time
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Awaitable, Callable
+from enum import StrEnum
+from typing import Any
 
 from app.config import settings
 from app.redis_keys import rkey
@@ -30,7 +31,7 @@ from app.redis_keys import rkey
 logger = logging.getLogger(__name__)
 
 
-class MessageType(str, Enum):
+class MessageType(StrEnum):
     """消息类型"""
 
     STATE_CHANGE = "state_change"  # 状态变更
@@ -447,7 +448,7 @@ async def subscribe_topic(topic: str, callback: Callable, tenant_id: str = ""):
 2. 工作流节点订阅结果:
    async def on_agent_result(message):
        print(f"收到结果: {message.data}")
-   
+
    await subscribe_topic("agent.tasks.analysis", on_agent_result)
 
 3. 查询历史状态:

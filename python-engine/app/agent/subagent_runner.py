@@ -24,9 +24,7 @@ import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
-from app.agent.event_sink import (EV_DONE, EV_NOTICE, EV_REASONING, EV_STATUS,
-                                  EV_TEXT, ST_CANCELLED, ST_COMPLETED, ST_FAILED,
-                                  ST_TOOL)
+from app.agent.event_sink import EV_NOTICE, EV_REASONING, EV_STATUS, EV_TEXT, ST_CANCELLED, ST_TOOL
 from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec
 from app.subagent.budget import BudgetExceeded, TaskBudget
 

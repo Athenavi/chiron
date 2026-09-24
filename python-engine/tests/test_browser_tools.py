@@ -15,7 +15,6 @@ import app.main  # noqa: F401 — 初始化 app 包，避免循环导入
 from app.tools import browser
 from app.tools.registry import registry
 
-
 # ── 注册完整性 ──────────────────────────────────────────────
 
 EXPECTED_TOOLS = {

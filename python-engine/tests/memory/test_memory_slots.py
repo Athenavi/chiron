@@ -4,7 +4,6 @@
 ``all`` 与未指定等价，服务端因此只有「全量」与「按分类」两态。
 """
 
-import pytest
 
 from app.agent.workbench_context import selected_memory_slots
 from app.memory.service import MemoryService

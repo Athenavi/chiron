@@ -3,8 +3,6 @@ from __future__ import annotations
 
 import asyncio
 
-import pytest
-
 from app.tools.context import (
     get_gateway,
     get_session_id,

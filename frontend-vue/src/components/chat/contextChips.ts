@@ -9,6 +9,8 @@
  *    供支持多值的新后端使用 —— 两边都能工作。
  */
 
+import { t } from '../../i18n'
+
 export type ContextChipType = 'kb' | 'agent' | 'skill' | 'workflow' | 'plugin' | 'memory'
 
 export interface ContextChip {
@@ -19,15 +21,15 @@ export interface ContextChip {
 
 /** 参数名 → chip 类型与展示名。展示名只是占位，真实名称由调用方按 id 补全。 */
 const PARAMS: { param: string; type: ContextChipType; label: (value: string) => string }[] = [
-  { param: 'kb', type: 'kb', label: value => `知识库 #${value.slice(0, 8)}` },
+  { param: 'kb', type: 'kb', label: value => t('chat.chip.kb', { id: value.slice(0, 8) }) },
   { param: 'agent', type: 'agent', label: value => `Agent #${value.slice(0, 8)}` },
-  { param: 'skill', type: 'skill', label: value => `技能 ${value}` },
-  { param: 'workflow', type: 'workflow', label: value => `工作流 ${value}` },
+  { param: 'skill', type: 'skill', label: value => t('chat.chip.skill', { name: value }) },
+  { param: 'workflow', type: 'workflow', label: value => t('chat.chip.workflow', { name: value }) },
   // 插件（MCP server）：带进对话后限定本次只放它提供的工具
-  { param: 'plugin', type: 'plugin', label: value => `插件 ${value}` },
+  { param: 'plugin', type: 'plugin', label: value => t('chat.chip.plugin', { name: value }) },
   // 长期记忆分类：带进对话后按这些分类注入（服务端口径见
   // python-engine/app/agent/workbench_context.py 的 selected_memory_slots）
-  { param: 'memory', type: 'memory', label: value => `记忆 ${value}` },
+  { param: 'memory', type: 'memory', label: value => t('chat.chip.memory', { name: value }) },
 ]
 
 /**
@@ -136,12 +138,12 @@ export function chipsFromWorkbenchContext(
 ): ContextChip[] {
   if (!ctx) return []
   const LABELS: Record<ContextChipType, (value: string) => string> = {
-    kb: value => `知识库 #${value.slice(0, 8)}`,
+    kb: value => t('chat.chip.kb', { id: value.slice(0, 8) }),
     agent: value => `Agent #${value.slice(0, 8)}`,
-    skill: value => `技能 ${value}`,
-    workflow: value => `工作流 ${value}`,
-    plugin: value => `插件 ${value}`,
-    memory: value => `记忆 ${value}`,
+    skill: value => t('chat.chip.skill', { name: value }),
+    workflow: value => t('chat.chip.workflow', { name: value }),
+    plugin: value => t('chat.chip.plugin', { name: value }),
+    memory: value => t('chat.chip.memory', { name: value }),
   }
   const chips: ContextChip[] = []
   const push = (type: ContextChipType, raw: unknown) => {

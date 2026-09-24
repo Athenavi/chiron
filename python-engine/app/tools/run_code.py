@@ -34,12 +34,23 @@ import types
 from typing import Any
 
 from app.tools.code_guard import (
-    DANGEROUS_CALLS,
-    DANGEROUS_MODULES,
     check_static as _check_static,
+)
+from app.tools.code_guard import (
     safe_builtins as _safe_builtins,
 )
 from app.tools.registry import registry
+
+# 这两个符号以 ``_`` 前缀从 code_guard 转出，供 app/skill/manager.py 与本模块共用
+# （见 manager.py 的 `from app.tools.run_code import _check_static, _safe_builtins`）。
+# 显式登记一次，避免 Ruff F401 把「转给他人用」误判成「未使用」而删除。
+__all__ = [
+    "run_code",
+    "sdk_usage_text",
+    "_check_static",
+    "_render_result",
+    "_safe_builtins",
+]
 
 logger = logging.getLogger(__name__)
 
@@ -353,7 +364,7 @@ async def _run_in_subprocess(
     )
 
 
-def _kill_proc_sync(proc: "subprocess.Popen[str]") -> None:
+def _kill_proc_sync(proc: subprocess.Popen[str]) -> None:
     """SIGKILL 子进程。"""
     try:
         proc.kill()
@@ -376,7 +387,7 @@ def _get_reader_pool() -> concurrent.futures.ThreadPoolExecutor:
 
 
 def _readline_with_deadline(
-    proc: "subprocess.Popen[str]", deadline: float
+    proc: subprocess.Popen[str], deadline: float
 ) -> str | None:
     """读一行 stdout，带 deadline 超时。
 
@@ -391,17 +402,20 @@ def _readline_with_deadline(
     try:
         return fut.result(timeout=max(0.001, remaining))
     except concurrent.futures.TimeoutError:
-        # 超时：杀子进程让 reader 因 EOF 返回
+        # 超时：杀掉子进程让 reader 收尾，然后**必须返回 None（超时）**。
+        # 若把 reader 因 EOF 得到的 ""透传出去，主循环会走「subprocess exited
+        # unexpectedly」分支，把「超时」误报成「异常退出」。
         _kill_proc_sync(proc)
         try:
-            return fut.result(timeout=2.0)
+            fut.result(timeout=2.0)
         except (concurrent.futures.TimeoutError, Exception):
-            return None
+            pass
+        return None
     except Exception:
         return ""
 
 
-def _wait_proc_sync(proc: "subprocess.Popen[str]", timeout: float = 2.0) -> None:
+def _wait_proc_sync(proc: subprocess.Popen[str], timeout: float = 2.0) -> None:
     """best-effort 等待子进程退出。"""
     try:
         proc.wait(timeout=timeout)

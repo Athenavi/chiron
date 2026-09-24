@@ -314,8 +314,9 @@ function useSlotInChat(slot: string) {
   void router.push({ path: '/chat', query: { memory: slot } })
 }
 
-async function onArchivedChange(value: boolean) {
-  includeArchived.value = value
+// antd Switch 的 change 回调首个参数是 CheckedType（boolean | string | number）
+async function onArchivedChange(value: boolean | string | number) {
+  includeArchived.value = Boolean(value)
   await loadProfile()
 }
 

@@ -1,6 +1,8 @@
 import chat from './chat'
 import errors from './errors'
 import legacy from './legacy'
+import auth from './auth'
+import admin from './admin'
 
 /**
  * zh-CN —— **源语言（source of truth）**。
@@ -34,5 +36,7 @@ export default {
   },
   chat,
   errors,
+  auth,
+  admin,
   legacy,
 }

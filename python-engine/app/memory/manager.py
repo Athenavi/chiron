@@ -51,8 +51,7 @@ class MemoryManager:
         if self._milvus_collection is not None:
             return self._milvus_collection
         self._ensure_milvus()
-        from pymilvus import (Collection, CollectionSchema, DataType,
-                              FieldSchema)
+        from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 
         fields = [
             FieldSchema(

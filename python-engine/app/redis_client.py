@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Optional
 
 import redis.asyncio as aioredis
 
@@ -32,7 +31,7 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-_redis_instance: Optional[aioredis.Redis] = None
+_redis_instance: aioredis.Redis | None = None
 _redis_lock = asyncio.Lock()  # P0-2: Thread-safe initialization
 
 

@@ -20,15 +20,16 @@ import logging
 import re
 import uuid
 from collections import Counter
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any
 
 from app.memory.layers import SummaryEntry, cosine_similarity
 from app.memory.summary_store import SummaryStore
 
 logger = logging.getLogger(__name__)
 
-Embedder = Callable[[str], Awaitable[Optional[list[float]]]]
+Embedder = Callable[[str], Awaitable[list[float] | None]]
 Summariser = Callable[[list[dict]], Awaitable[str]]
 
 
@@ -36,9 +37,9 @@ Summariser = Callable[[list[dict]], Awaitable[str]]
 class ConsolidateResult:
     """一次巩固的产出。"""
 
-    summary: Optional[SummaryEntry] = None
+    summary: SummaryEntry | None = None
     deduplicated: bool = False  # 精确 hash 命中既有条目
-    near_duplicate_of: Optional[str] = None  # 近重复既有 summary id
+    near_duplicate_of: str | None = None  # 近重复既有 summary id
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -56,8 +57,8 @@ class Consolidator:
     def __init__(
         self,
         store: SummaryStore,
-        embedder: Optional[Embedder] = None,
-        summariser: Optional[Summariser] = None,
+        embedder: Embedder | None = None,
+        summariser: Summariser | None = None,
     ) -> None:
         self._store = store
         self._embedder = embedder
@@ -151,7 +152,7 @@ class Consolidator:
 
     async def _find_near_duplicate(
         self, tenant_id: str, user_id: str, embedding: list[float]
-    ) -> Optional[str]:
+    ) -> str | None:
         """在既有摘要中查找近重复（cosine > 0.95）。"""
         try:
             existing = await self._store.list_active(tenant_id, user_id, limit=50)

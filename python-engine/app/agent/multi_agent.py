@@ -132,7 +132,7 @@ class SubAgent:
         messages.append(ChatMessage(role="user", content=task))
 
         try:
-            for turn in range(self.max_turns):
+            for _turn in range(self.max_turns):
                 response_content = ""
                 tool_calls: list[dict] = []
 

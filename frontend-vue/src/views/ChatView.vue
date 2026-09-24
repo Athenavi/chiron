@@ -2316,7 +2316,7 @@ function continueGeneration() {
                  "你当前的选择"。 -->
             <span
               class="toolbar-mode"
-              title="当前对话模式"
+              :title="$t('当前对话模式')"
             >{{ modeLabel }}</span>
             <!-- 思考档位：点按循环（关 → 低 → 高 → 最高）。
                  与"模式"同类信息（都是"这次怎么回答"），所以并排放；用循环按钮而不是下拉 ——
@@ -2721,7 +2721,7 @@ function continueGeneration() {
       <SaveToKnowledgeDialog
         v-model:open="saveToKbOpen"
         :content="sessionMarkdownForDialog"
-        :default-title="activeSession?.title || '对话记录'"
+        :default-title="activeSession?.title || $t('chat.share.defaultTitle')"
       />
       <SaveToMemoryDialog
         v-model:open="saveToMemoryOpen"
@@ -2753,8 +2753,7 @@ function continueGeneration() {
             :placeholder="$t('一句话说明职责（可留空）')"
           />
           <p class="save-agent-hint">
-            会话正文（{{ agentDraft.system_prompt.length }} 字符）会作为它的系统提示词；
-            创建后可在 Agents 页继续调整提示词、工具与工作台绑定。
+            {{ $t('chat.agent.createHint', { count: agentDraft.system_prompt.length }) }}
           </p>
         </div>
       </Modal>
@@ -2829,7 +2828,7 @@ function continueGeneration() {
     <!-- 分享对话框 -->
     <Modal
       :open="shareOpen"
-      :title="`分享「${shareTarget?.title || '新对话'}」`"
+      :title="$t('chat.share.title', { name: shareTarget?.title || $t('chat.share.newSession') })"
       :footer="null"
       width="560px"
       @cancel="shareOpen = false"
@@ -2838,7 +2837,7 @@ function continueGeneration() {
         type="warning"
         show-icon
         class="share-risk"
-        message="分享链接对任何获得链接的人可见"
+        :message="$t('chat.share.visibilityHint')"
         :description="$t('请勿分享包含敏感或隐私信息的内容。你可以随时取消分享，取消后链接立即失效。')"
       />
 
@@ -2883,7 +2882,7 @@ function continueGeneration() {
 
       <template v-else>
         <div class="share-select-title">
-          选择要分享的消息（{{ shareMessageIds.length }}/{{ shareCandidates.length }}）
+          {{ $t('chat.share.selectMessages', { selected: shareMessageIds.length, total: shareCandidates.length }) }}
         </div>
         <div class="share-select-list">
           <label
@@ -2899,8 +2898,8 @@ function continueGeneration() {
             <span
               class="share-select-role"
               :class="c.role"
-            >{{ c.role === 'user' ? '用户' : 'AI' }}</span>
-            <span class="share-select-preview">{{ c.preview || '（空消息）' }}</span>
+            >{{ c.role === 'user' ? $t('chat.share.roleUser') : 'AI' }}</span>
+            <span class="share-select-preview">{{ c.preview || $t('chat.share.emptyMessage') }}</span>
           </label>
         </div>
         <div

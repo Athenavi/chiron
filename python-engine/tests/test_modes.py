@@ -1,7 +1,9 @@
 """Tests for agent modes — ModeConfig 配置表与回退行为。"""
 from __future__ import annotations
 
+import dataclasses
 import json
+
 import pytest
 
 from app.agent.modes import (
@@ -9,7 +11,6 @@ from app.agent.modes import (
     AgentMode,
     ModeConfig,
     get_mode_config,
-    _overrides_path,
 )
 
 
@@ -80,5 +81,5 @@ class TestGetModeConfig:
     def test_configs_are_frozen(self):
         cfg = get_mode_config("normal")
         assert isinstance(cfg, ModeConfig)
-        with pytest.raises(Exception):
+        with pytest.raises(dataclasses.FrozenInstanceError):
             cfg.include_tools = frozenset()  # frozen dataclass 禁止赋值

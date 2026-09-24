@@ -1,10 +1,10 @@
 """Python AI 引擎测试"""
-import asyncio
-import pytest
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock
 
-from app.config import Settings
+import pytest
+
 from app.agent.loop import build_messages, convert_tools, run_agent
+from app.config import Settings
 
 
 class TestBuildMessages:
@@ -206,8 +206,10 @@ class TestSettings:
     """测试配置"""
 
     def test_default_values(self):
-        # _env_file=None：隔离项目根 .env（默认值测试只验证代码内默认）
-        settings = Settings(_env_file=None)
+        # _env_file=None：隔离项目根 .env（默认值测试只验证代码内默认）。
+        # APP_SECRET 必须显式给：安全校验已拒绝空/弱根密钥（旧的 dev 默认值被移除），
+        # JWT_SECRET / INTERNAL_TOKEN 会由它派生。
+        settings = Settings(_env_file=None, app_secret="t" * 40)
         assert settings.http_port == 8000
         assert settings.max_turns == 10
         assert settings.default_model == "claude-sonnet-4-20250514"

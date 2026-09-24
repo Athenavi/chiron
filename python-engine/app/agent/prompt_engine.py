@@ -17,11 +17,9 @@ import logging
 import os
 import subprocess
 from pathlib import Path
-from typing import Optional
 
 from app.agent.runtime import AgentTask
-from app.agent.workbench_context import context_ids, merge_by_quota
-from app.agent.workbench_context import selected_memory_slots
+from app.agent.workbench_context import context_ids, merge_by_quota, selected_memory_slots
 from app.memory.manager import MemoryManager
 from app.skill.store import SkillStore
 
@@ -78,8 +76,8 @@ class PromptEngine:
 
     def __init__(
         self,
-        memory_manager: Optional[MemoryManager] = None,
-        skill_store: Optional[SkillStore] = None,
+        memory_manager: MemoryManager | None = None,
+        skill_store: SkillStore | None = None,
         rag_builder=None,  # RAGBuilder is optional and loosely typed to avoid circular imports
     ):
         self._memory_manager = memory_manager
@@ -268,7 +266,7 @@ class PromptEngine:
                             )
                             t_str = f" [{', '.join(topics[:3])}]" if topics else ""
                             lines.append(f"- (score {score:.2f}){t_str} {content}")
-                        parts.append(f"── 记忆：相关历史 ──\n" + "\n".join(lines))
+                        parts.append("── 记忆：相关历史 ──\n" + "\n".join(lines))
                     return "\n\n".join(parts)
             except Exception as exc:
                 logger.warning("MemoryService recall failed: %s", exc)
@@ -297,7 +295,7 @@ class PromptEngine:
             relevance = mem.get("relevance", 0)
             mem_type = mem.get("memory_type", "unknown")
             lines.append(f"- [{mem_type}] {content} (relevance: {relevance:.2f})")
-        return f"── 记忆：相关历史 ──\n" + "\n".join(lines)
+        return "── 记忆：相关历史 ──\n" + "\n".join(lines)
 
     async def _get_skills_context(self, query: str, selected: list[str] | None = None) -> str:
         """Return a summary of installed skills that may be relevant to *query*.

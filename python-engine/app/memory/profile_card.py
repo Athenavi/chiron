@@ -21,8 +21,7 @@ import redis.asyncio as aioredis
 
 from app.db import get_pool
 from app.memory.conflict_manager import ConflictManager
-from app.memory.layers import (ConflictRef, ProfileItem, ProfileUpdateResult,
-                               SlotType, SourceType)
+from app.memory.layers import ConflictRef, ProfileItem, ProfileUpdateResult, SlotType, SourceType
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -362,8 +361,8 @@ class ProfileCard:
                     SELECT ctid FROM user_memory_profile
                     WHERE tenant_id = $1 AND user_id = $2
                       AND source != 'user_confirmed'
-                    ORDER BY confidence * 
-                      CASE 
+                    ORDER BY confidence *
+                      CASE
                         WHEN last_referenced_at IS NULL THEN 0
                         ELSE EXTRACT(EPOCH FROM last_referenced_at)
                       END ASC

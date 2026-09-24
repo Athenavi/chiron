@@ -14,7 +14,7 @@
 - PG 不可用/未初始化时 fail-open（放行执行）并告警——幂等是加固，不应因数据库
   抖动让任务无法执行。
 
-表由 migrations/versions/b7c4e91d2a68_task_idempotency.py 创建。
+表由权威迁移 migrations/versions/0001_authoritative_baseline.py 创建。
 """
 
 from __future__ import annotations

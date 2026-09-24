@@ -17,13 +17,13 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 
-class PromptCategory(str, Enum):
+class PromptCategory(StrEnum):
     """Prompt 分类"""
 
     ANALYSIS = "analysis"  # 分析类
@@ -35,7 +35,7 @@ class PromptCategory(str, Enum):
     GENERAL = "general"  # 通用类
 
 
-class TargetWorkstation(str, Enum):
+class TargetWorkstation(StrEnum):
     """目标工作台"""
 
     DIALOGUE = "dialogue"
@@ -78,7 +78,7 @@ class PromptTemplate:
     last_used_at: float = 0
 
     # 实际执行函数 (Python 侧)
-    _executor: Optional[callable] = field(default=None, repr=False)
+    _executor: callable | None = field(default=None, repr=False)
 
     def render(self, **kwargs) -> tuple[str, str]:
         """渲染 Prompt (替换 {{variable}})
@@ -146,15 +146,15 @@ class PromptLibrary:
         logger.info(f"Unregistered prompt template: {template_id}")
         return True
 
-    async def get(self, template_id: str) -> Optional[PromptTemplate]:
+    async def get(self, template_id: str) -> PromptTemplate | None:
         """获取模板"""
         return self._templates.get(template_id)
 
     async def search(
         self,
         query: str,
-        category: Optional[PromptCategory] = None,
-        workstation: Optional[TargetWorkstation] = None,
+        category: PromptCategory | None = None,
+        workstation: TargetWorkstation | None = None,
         limit: int = 10,
     ) -> list[PromptTemplate]:
         """搜索模板 (基于关键词 + 标签 + 分类)"""
@@ -357,7 +357,7 @@ class PromptLibrary:
                 tags=["代码审查", "质量", "优化", "Best Practice"],
                 variables=["code", "language"],
                 default_params={"language": "python"},
-                system_prompt=f"""你是一个代码审查专家。请按以下维度审查 {{language}} 代码:
+                system_prompt="""你是一个代码审查专家。请按以下维度审查 {language} 代码:
 
 ## 正确性
 - 逻辑是否正确?
@@ -425,7 +425,7 @@ class PromptLibrary:
 
 
 # ── 全局单例 ────────────────────────────────────────────────────────
-_global_library: Optional[PromptLibrary] = None
+_global_library: PromptLibrary | None = None
 
 
 def get_library() -> PromptLibrary:

@@ -37,7 +37,6 @@ const BASELINE = {
   'src/components/WorkflowDAGEditor.vue': 4,
   'src/components/chat/AskCard.vue': 1,
   'src/components/chat/ChatEmptyHero.vue': 2,
-  'src/components/chat/ChatInput.vue': 4,
   'src/components/chat/ChatSidePanel.vue': 14,
   'src/components/chat/MessageItem.vue': 11,
   'src/components/chat/MessageList.vue': 3,

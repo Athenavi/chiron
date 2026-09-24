@@ -18,9 +18,9 @@ import asyncio
 import json
 import logging
 import time
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import AsyncIterator, Optional
+from enum import StrEnum
 
 from app.agent.runtime import AgentEvent, AgentRuntime, CompactionConfig
 from app.gateway.router import GatewayRouter
@@ -30,7 +30,7 @@ from app.trace import record_span
 logger = logging.getLogger(__name__)
 
 
-class AgentRole(str, Enum):
+class AgentRole(StrEnum):
     """Agent 角色定义"""
 
     RESEARCHER = "researcher"  # 信息收集与研究
@@ -50,7 +50,7 @@ class AgentSpec:
     max_turns: int = 10
     model: str = "gpt-4o-mini"
     mode: str = "normal"  # 运行模式（normal/minimal/ptc/creative），见 app.agent.modes
-    compaction_config: Optional[CompactionConfig] = None  # 逐 agent 截断策略覆盖
+    compaction_config: CompactionConfig | None = None  # 逐 agent 截断策略覆盖
 
 
 @dataclass
@@ -102,7 +102,7 @@ class AgentContextStore:
                 )
             self._local_store[context_id] = data
 
-    async def get(self, context_id: str) -> Optional[dict]:
+    async def get(self, context_id: str) -> dict | None:
         """获取上下文"""
         if self._redis_client:
             data = await self._redis_client.get(

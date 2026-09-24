@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/athenavi/chiron/internal/db"
@@ -21,101 +22,63 @@ func NewPGStore() *PGStore {
 	return &PGStore{}
 }
 
-// EnsureTables creates the billing tables if they don't exist.
-func (s *PGStore) EnsureTables(ctx context.Context) error {
+// VerifySchema 只读校验计费相关的表与列是否齐全。
+//
+// P0-3 之后 schema 的唯一权威是 Alembic（migrations/versions/0001_authoritative_baseline.py）：
+// 应用**不再执行任何 DDL** —— 既不需要 DDL 权限，也不会产生与迁移并存的第二份真相。
+// 这里把「表缺失」从「首次下单时笼统 500」提前成启动即可见的明确告警。
+//
+// 历史上这里叫 EnsureTables，会 CREATE TABLE / ALTER TABLE 兜底建表。那些 DDL 与
+// Alembic 迁移长期并存并已漂移（payments.user_id 在一处是 32、另一处是 36，库由哪条
+// 路径建出来决定了充值能否成功）。收敛到单一权威后这类漂移不再可能发生。
+func (s *PGStore) VerifySchema(ctx context.Context) error {
 	if db.Pool == nil {
-		return nil // no database available, skip table initialization
+		return nil
 	}
 
-	// 只读自检放在 DDL 之前：schema 若由 DBA 管理（应用 DB 用户没有 DDL 权限），
-	// 下面的 CREATE/ALTER 会直接失败返回，自检就没机会跑了。
+	// 只读自检：payments.user_id 长度曾因历史 DDL 写成 32 而让充值全线失败
 	if issue := s.paymentUserIDIssue(ctx); issue != "" {
 		slog.Error(issue, "table", "payments", "column", "user_id")
 	}
 
-	// Add balance column to users table if not exists
-	_, err := db.GlobalDBManager.Exec(ctx,
-		`ALTER TABLE users ADD COLUMN IF NOT EXISTS credits INTEGER NOT NULL DEFAULT 1000`)
-	if err != nil {
-		return fmt.Errorf("add credits column: %w", err)
+	var missing []string
+	for _, table := range []string{"credit_transactions", "payments"} {
+		exists, err := s.tableExists(ctx, table)
+		if err != nil {
+			return err
+		}
+		if !exists {
+			missing = append(missing, table)
+		}
 	}
 
-	// Create credit_transactions table
-	// id / user_id 均按 36 字符 UUID 定长：历史 DDL 写成 32，与 init.sql（36）不一致，
-	// 靠这里建表的库会在插入时报 value too long。
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE TABLE IF NOT EXISTS credit_transactions (
-			id VARCHAR(36) PRIMARY KEY,
-			user_id VARCHAR(36) NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-			amount INTEGER NOT NULL,
-			balance INTEGER NOT NULL,
-			reason VARCHAR(64) NOT NULL,
-			turn_id VARCHAR(36),
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-		)`)
-	if err != nil {
-		return fmt.Errorf("create credit_transactions: %w", err)
+	var hasCredits bool
+	if err := db.Pool.QueryRow(ctx, `
+		SELECT EXISTS (
+			SELECT 1 FROM information_schema.columns
+			 WHERE table_schema = 'public' AND table_name = 'users' AND column_name = 'credits'
+		)`).Scan(&hasCredits); err != nil {
+		return fmt.Errorf("check users.credits: %w", err)
+	}
+	if !hasCredits {
+		missing = append(missing, "users.credits")
 	}
 
-	// Create payments table（支付宝/微信/PayPal 通用充值订单）
-	// 注意 user_id 长度：用户 ID 是 36 字符 UUID，而这里（以及 init.sql / models.yaml）
-	// 历史上写成 32，导致 PgStore.CreatePayment 一律报
-	//   value too long for type character varying(32)
-	// 充值下单全线失败。已有库需由 DBA 执行一次
-	//   ALTER TABLE payments ALTER COLUMN user_id TYPE VARCHAR(36);
-	// （应用用户通常不是表所有者，EnsureTables 改不动既有表。）
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE TABLE IF NOT EXISTS payments (
-			id VARCHAR(64) PRIMARY KEY,
-			user_id VARCHAR(36) NOT NULL,
-			channel VARCHAR(16) NOT NULL,
-			credits INTEGER NOT NULL,
-			amount_cents BIGINT NOT NULL DEFAULT 0,
-			currency VARCHAR(8) NOT NULL DEFAULT 'CNY',
-			status VARCHAR(16) NOT NULL DEFAULT 'pending',
-			qr_code TEXT,
-			provider_order_id VARCHAR(64) NOT NULL DEFAULT '',
-			trade_no VARCHAR(64) NOT NULL DEFAULT '',
-			created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-			paid_at TIMESTAMPTZ,
-			expired_at TIMESTAMPTZ
-		)`)
-	if err != nil {
-		return fmt.Errorf("create payments: %w", err)
+	if len(missing) > 0 {
+		return fmt.Errorf("billing schema incomplete (missing: %s) — run: alembic upgrade head",
+			strings.Join(missing, ", "))
 	}
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE INDEX IF NOT EXISTS idx_payments_user ON payments(user_id, created_at DESC)`)
-	if err != nil {
-		return fmt.Errorf("create payments user index: %w", err)
-	}
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE INDEX IF NOT EXISTS idx_payments_provider ON payments(provider_order_id) WHERE provider_order_id <> ''`)
-	if err != nil {
-		return fmt.Errorf("create payments provider index: %w", err)
-	}
-
-	// Index for fast history lookups
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE INDEX IF NOT EXISTS idx_credit_tx_user ON credit_transactions(user_id, created_at DESC)`)
-	if err != nil {
-		return fmt.Errorf("create index: %w", err)
-	}
-
-	// 回合维度幂等（B4）：credit_transactions.turn_id + 唯一索引。
-	// 唯一索引允许多个 NULL（非 turn 场景的流水不受影响），
-	// 扣费语句用 ON CONFLICT (turn_id) DO NOTHING 实现"同一回合只扣一次"。
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`ALTER TABLE credit_transactions ADD COLUMN IF NOT EXISTS turn_id VARCHAR(36)`)
-	if err != nil {
-		return fmt.Errorf("add credit_transactions.turn_id: %w", err)
-	}
-	_, err = db.GlobalDBManager.Exec(ctx,
-		`CREATE UNIQUE INDEX IF NOT EXISTS uniq_credit_tx_turn ON credit_transactions(turn_id)`)
-	if err != nil {
-		return fmt.Errorf("create uniq_credit_tx_turn: %w", err)
-	}
-
 	return nil
+}
+
+// tableExists 只读判断 public schema 下的表是否存在。
+func (s *PGStore) tableExists(ctx context.Context, table string) (bool, error) {
+	var exists bool
+	if err := db.Pool.QueryRow(ctx,
+		`SELECT to_regclass($1) IS NOT NULL`, "public."+table).Scan(&exists); err != nil {
+		return false, fmt.Errorf("check table %s: %w", table, err)
+	}
+	return exists, nil
 }
 
 func (s *PGStore) GetBalance(ctx context.Context, userID string) (int, error) {
@@ -242,7 +205,7 @@ func (s *PGStore) applyCreditTx(ctx context.Context, userID string, delta int, g
 		var q string
 		args := []interface{}{delta, userID}
 		// COALESCE 不可省：users.credits 列在部分环境里是 nullable 且无默认值
-		// （由 init.sql/历史建表创建；EnsureTables 那句 ADD COLUMN ... NOT NULL DEFAULT
+		// （由权威迁移创建；历史上的 ADD COLUMN ... NOT NULL DEFAULT
 		// 在生产上会因"应用不是表所有者"而失败）。此时 `credits + $1` 结果是 NULL，
 		// RETURNING 回来扫描进 int 会直接报 "cannot scan NULL into *int"，
 		// 表现为"支付成功但余额不到账、订单却已标记 paid"。

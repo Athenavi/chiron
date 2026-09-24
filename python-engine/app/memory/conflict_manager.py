@@ -16,7 +16,7 @@ from __future__ import annotations
 import json
 import logging
 import time
-from typing import Any, Optional
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -94,8 +94,8 @@ class ConflictManager:
         item_key: str,
         new_value: Any,
         new_source: SourceType,
-        existing_item: Optional[ProfileItem],
-    ) -> tuple[bool, Optional[MemoryConflict]]:
+        existing_item: ProfileItem | None,
+    ) -> tuple[bool, MemoryConflict | None]:
         """检测并处理冲突。
 
         Args:
@@ -178,7 +178,7 @@ class ConflictManager:
         new_value: Any,
         old_source: SourceType,
         new_source: SourceType,
-        old_confirmed_at: Optional[float],
+        old_confirmed_at: float | None,
     ) -> MemoryConflict:
         """创建冲突事件。"""
         now = time.time()
@@ -299,8 +299,8 @@ class ConflictManager:
         self,
         conflict_id: str,
         resolution: str,
-        manual_value: Optional[Any] = None,
-    ) -> tuple[bool, Optional[dict]]:
+        manual_value: Any | None = None,
+    ) -> tuple[bool, dict | None]:
         """裁决冲突。
 
         Args:
@@ -382,7 +382,7 @@ class ConflictManager:
         logger.info("Conflict %s deleted (user denied)", conflict_id)
         return True
 
-    async def get_conflict(self, conflict_id: str) -> Optional[MemoryConflict]:
+    async def get_conflict(self, conflict_id: str) -> MemoryConflict | None:
         """获取单个冲突详情。
 
         Args:

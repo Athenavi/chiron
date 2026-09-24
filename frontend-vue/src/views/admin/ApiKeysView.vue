@@ -42,11 +42,11 @@ const formData = ref({
 const apiKeys = ref<any[]>([])
 const providers = ref<LlmProviderPreset[]>([])
 
-const CATEGORY_META: { key: LlmProviderCategory; label: string; hint: string }[] = [
-  { key: 'international', label: '国际厂商', hint: 'OpenAI / Anthropic / Gemini / Grok / Groq / Mistral …' },
-  { key: 'china', label: '国内厂商', hint: 'DeepSeek / Kimi / 智谱 GLM / 通义千问 / 混元 …' },
-  { key: 'aggregator', label: '聚合网关', hint: 'OpenRouter / 硅基流动 / One API 自建网关' },
-  { key: 'self_hosted', label: '自托管与本地', hint: 'Ollama / vLLM / LM Studio / 自定义端点' },
+const CATEGORY_META: { key: LlmProviderCategory; labelKey: string; hintKey: string }[] = [
+  { key: 'international', labelKey: 'admin.keyCategories.international', hintKey: 'admin.keyCategories.internationalHint' },
+  { key: 'china', labelKey: 'admin.keyCategories.china', hintKey: 'admin.keyCategories.chinaHint' },
+  { key: 'aggregator', labelKey: 'admin.keyCategories.aggregator', hintKey: 'admin.keyCategories.aggregatorHint' },
+  { key: 'self_hosted', labelKey: 'admin.keyCategories.selfHosted', hintKey: 'admin.keyCategories.selfHostedHint' },
 ]
 
 const catalogGroups = computed(() =>
@@ -252,7 +252,7 @@ async function handleEdit(row: any) {
     message.success(t('状态已更新'))
     await fetchApiKeys()
   } catch (err: any) {
-    message.error('更新失败: ' + (err.message || t('未知错误')))
+    message.error(t('admin.updateFailed', { msg: err.message || t('common.unknownError') }))
   }
 }
 
@@ -262,7 +262,7 @@ async function handleDelete(row: any) {
     message.success(t('API Key 已删除'))
     await fetchApiKeys()
   } catch (err: any) {
-    message.error('删除失败: ' + (err.message || t('未知错误')))
+    message.error(t('admin.deleteFailed', { msg: err.message || t('common.unknownError') }))
   }
 }
 
@@ -350,7 +350,7 @@ onMounted(() => {
             </template>
             <template v-else-if="column.dataIndex === 'status'">
               <Tag :color="record.status === 'active' ? 'success' : record.status === 'rate_limited' ? 'warning' : 'error'">
-                {{ record.status === 'active' ? '正常' : record.status === 'rate_limited' ? '限流中' : '熔断' }}
+                {{ record.status === 'active' ? $t('admin.keyStatus.active') : record.status === 'rate_limited' ? $t('admin.keyStatus.rateLimited') : $t('admin.keyStatus.circuitOpen') }}
               </Tag>
             </template>
             <template v-else-if="column.dataIndex === 'actions'">
@@ -412,8 +412,8 @@ onMounted(() => {
             class="provider-group"
           >
             <div class="provider-group-head">
-              <strong>{{ group.label }}</strong>
-              <span class="provider-group-hint">{{ group.hint }}</span>
+              <strong>{{ $t(group.labelKey) }}</strong>
+              <span class="provider-group-hint">{{ $t(group.hintKey) }}</span>
             </div>
             <div class="provider-cards">
               <button
@@ -427,7 +427,7 @@ onMounted(() => {
                 <span class="provider-card-title">
                   {{ p.label }}
                   <Tag :color="p.kind === 'anthropic' ? 'purple' : 'blue'">
-                    {{ p.kind === 'anthropic' ? 'Anthropic' : 'OpenAI 兼容' }}
+                    {{ p.kind === 'anthropic' ? 'Anthropic' : $t('admin.keyKind.openaiCompatible') }}
                   </Tag>
                 </span>
                 <span class="provider-card-line">{{ p.vendor }}</span>
@@ -605,7 +605,7 @@ onMounted(() => {
   border: 1px solid var(--border-color, rgba(127, 127, 127, 0.24));
   border-radius: 8px;
   cursor: pointer;
-  transition: border-color 0.15s ease, background 0.15s ease;
+  transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .provider-card:hover { border-color: var(--primary-color, #1677ff); }
 .provider-card.active {

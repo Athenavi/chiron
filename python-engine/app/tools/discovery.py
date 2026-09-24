@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 import time
-from typing import Optional
 
 import httpx
 
@@ -31,7 +30,7 @@ class ToolDiscovery:
         self._refresh_interval = refresh_interval
         self._cache: dict[str, dict] = {}
         self._last_refresh: float = 0
-        self._http: Optional[httpx.AsyncClient] = None
+        self._http: httpx.AsyncClient | None = None
 
     async def _get_client(self) -> httpx.AsyncClient:
         """获取或创建 HTTP 客户端"""
@@ -53,7 +52,7 @@ class ToolDiscovery:
             await self._refresh()
         return list(self._cache.values())
 
-    async def get_tool(self, name: str) -> Optional[dict]:
+    async def get_tool(self, name: str) -> dict | None:
         """
         获取单个工具信息
 

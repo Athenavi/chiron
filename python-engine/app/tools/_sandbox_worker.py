@@ -121,17 +121,17 @@ class ToolProxy:
                 loop.run_in_executor(None, _read_msg),
                 timeout=30.0,  # 防止父进程崩溃后子进程无限阻塞
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             raise ToolCallError(
                 name, "parent process did not respond within 30s (timeout)"
-            )
+            ) from None
         if not line:
             raise ToolCallError(name, "parent closed stdin (worker killed?)")
 
         try:
             msg = json.loads(line)
         except json.JSONDecodeError as e:
-            raise ToolCallError(name, f"invalid IPC response: {e}")
+            raise ToolCallError(name, f"invalid IPC response: {e}") from e
 
         mtype = msg.get("type")
         if mtype == "tool_error":

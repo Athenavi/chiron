@@ -1,10 +1,7 @@
 """LLM Provider 流式解析测试"""
-import asyncio
 from unittest.mock import AsyncMock, MagicMock
 
-from app.gateway.provider import ChatResponse
 from app.providers.openai import OpenAIProvider
-
 
 # ── mock OpenAI chunk 结构 ───────────────────────────────
 

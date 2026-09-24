@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """上下文压缩 API（内网接口，由网关调用）。
 
     POST /v1/context/condense

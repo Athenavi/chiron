@@ -23,8 +23,7 @@ class RAGRetriever:
             return self._collection
 
         try:
-            from pymilvus import (Collection, CollectionSchema, DataType,
-                                  FieldSchema, connections)
+            from pymilvus import Collection, CollectionSchema, DataType, FieldSchema, connections
 
             # 单例连接：同一 alias 仅连接一次
             if not RAGRetriever._shared_milvus_connected:

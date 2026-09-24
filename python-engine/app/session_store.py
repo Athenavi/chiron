@@ -19,7 +19,6 @@ import json
 import logging
 import time
 from collections import OrderedDict
-from typing import Optional
 
 from app.middleware.privacy_middleware import is_no_retention
 from app.redis_keys import rkey
@@ -105,7 +104,7 @@ class SessionStore:
 
         self._local_set(session_id, messages)
 
-    async def get(self, session_id: str) -> Optional[list[dict]]:
+    async def get(self, session_id: str) -> list[dict] | None:
         if self._redis_usable():
             try:
                 return await self._redis_get(session_id)
@@ -163,7 +162,7 @@ class SessionStore:
         await self._redis_set(session_id, messages)
         return messages
 
-    async def _redis_get(self, session_id: str) -> Optional[list[dict]]:
+    async def _redis_get(self, session_id: str) -> list[dict] | None:
         data = await self._redis.get(REDIS_KEY_PREFIX + session_id)
         if data:
             return json.loads(data)

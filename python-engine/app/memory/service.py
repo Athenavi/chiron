@@ -20,14 +20,25 @@ import asyncio
 import logging
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 from app.config import settings
-from app.memory.layers import (MemoryConflict, ProfileItem, ProfileUpdateResult,
-                               RecalledItem, RecallResult, Scope, SessionContext,
-                               SLOT_LABELS, SlotType, SourceType,
-                               cosine_similarity, recency_decay, rerank_score)
+from app.memory.layers import (
+    SLOT_LABELS,
+    MemoryConflict,
+    ProfileItem,
+    ProfileUpdateResult,
+    RecalledItem,
+    RecallResult,
+    Scope,
+    SessionContext,
+    SlotType,
+    SourceType,
+    cosine_similarity,
+    recency_decay,
+    rerank_score,
+)
 from app.memory.profile import new_entry_id
 from app.memory.profile_card import ProfileCard
 from app.memory.session_meta import SessionMetaStore
@@ -59,10 +70,10 @@ def _iso(value: Any) -> str | None:
         return None
     if isinstance(value, datetime):
         if value.tzinfo is None:
-            value = value.replace(tzinfo=timezone.utc)
+            value = value.replace(tzinfo=UTC)
         return value.isoformat()
     if isinstance(value, (int, float)):
-        return datetime.fromtimestamp(value, tz=timezone.utc).isoformat()
+        return datetime.fromtimestamp(value, tz=UTC).isoformat()
     return str(value)
 
 
@@ -1076,7 +1087,7 @@ class MemoryService:
                 survivors.append(item)
 
         # ③ 归档陈旧低置信条目
-        now = datetime.now(timezone.utc)
+        now = datetime.now(UTC)
         for item in survivors:
             if item.confidence >= 60:
                 continue
@@ -1084,7 +1095,7 @@ class MemoryService:
             if not isinstance(ref, datetime):
                 continue
             if ref.tzinfo is None:
-                ref = ref.replace(tzinfo=timezone.utc)
+                ref = ref.replace(tzinfo=UTC)
             if (now - ref).days <= settings.memory_archive_days:
                 continue
             try:

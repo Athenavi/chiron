@@ -15,7 +15,7 @@ import json
 import logging
 import os
 import sys
-from typing import Any, Optional
+from typing import Any
 
 from app.redis_keys import rkey
 
@@ -123,7 +123,7 @@ async def execute_tool_job(
         cwd=str(workspace_dir()),
         env=sandboxed_env(),
     )
-    watcher: Optional[asyncio.Task] = None
+    watcher: asyncio.Task | None = None
     if redis is not None:
         watcher = asyncio.create_task(_kill_watcher(redis, job_id, proc))
 
@@ -145,7 +145,7 @@ async def execute_tool_job(
             status = "cancelled"
         elif exit_code != 0:
             status = "failed"
-    except asyncio.TimeoutError:
+    except TimeoutError:
         status = "failed"
         await _kill_proc(proc)
         output = f"[timed out after {timeout}s]"

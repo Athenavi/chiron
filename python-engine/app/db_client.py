@@ -13,7 +13,7 @@ Benefits:
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 import httpx
 
@@ -165,8 +165,8 @@ class UnifiedRedisClient(_BaseGatewayClient):
 
 
 # Global instances
-_db_client: Optional[UnifiedDBClient] = None
-_redis_client: Optional[UnifiedRedisClient] = None
+_db_client: UnifiedDBClient | None = None
+_redis_client: UnifiedRedisClient | None = None
 
 
 def get_db_client() -> UnifiedDBClient:

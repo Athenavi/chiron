@@ -8,11 +8,10 @@ from __future__ import annotations
 
 import logging
 import os
-from typing import Any, Optional
+from typing import Any
 
 import httpx
-from fastapi import (APIRouter, File, Form, HTTPException, Query, Request,
-                     UploadFile)
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from app.config import settings
@@ -46,9 +45,9 @@ class FolderCreateRequest(BaseModel):
 class MediaUpdateRequest(BaseModel):
     """更新媒体请求"""
 
-    name: Optional[str] = None
-    parent_id: Optional[str] = None
-    tags: Optional[list[str]] = None
+    name: str | None = None
+    parent_id: str | None = None
+    tags: list[str] | None = None
 
 
 class BatchDeleteRequest(BaseModel):
@@ -134,10 +133,10 @@ async def list_media(
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to list media"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"List media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media")
@@ -158,10 +157,10 @@ async def create_media(body: MediaCreateRequest, request: Request):
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to create media"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Create media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media/folders")
@@ -182,10 +181,10 @@ async def create_folder(body: FolderCreateRequest, request: Request):
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to create folder"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Create folder error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.get("/v1/media/folders")
@@ -204,10 +203,10 @@ async def list_folders(request: Request):
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to list folders"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"List folders error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.put("/v1/media/{media_id}")
@@ -228,10 +227,10 @@ async def update_media(media_id: str, body: MediaUpdateRequest, request: Request
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to update media"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Update media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.delete("/v1/media/{media_id}")
@@ -250,10 +249,10 @@ async def delete_media(media_id: str, request: Request):
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to delete media"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Delete media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media/batch-delete")
@@ -275,10 +274,10 @@ async def batch_delete_media(body: BatchDeleteRequest, request: Request):
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail="Failed to batch delete media",
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Batch delete error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media/{media_id}/share")
@@ -300,10 +299,10 @@ async def share_media(media_id: str, body: ShareRequest, request: Request):
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail="Failed to generate share link",
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Share media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media/{media_id}/sign")
@@ -323,10 +322,10 @@ async def sign_media(media_id: str, request: Request):
             raise HTTPException(
                 status_code=e.response.status_code,
                 detail="Failed to generate signed URL",
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Sign media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.post("/v1/media/upload")
@@ -368,10 +367,10 @@ async def upload_file(
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to upload file"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Upload file error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 @router.get("/v1/search/media")
@@ -395,10 +394,10 @@ async def search_media(
             )
             raise HTTPException(
                 status_code=e.response.status_code, detail="Failed to search media"
-            )
+            ) from e
         except Exception as e:
             logger.error(f"Search media error: {e}")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(status_code=500, detail="Internal server error") from e
 
 
 # ── AI Media Processing Interfaces (v2规划) ──
@@ -409,7 +408,7 @@ async def search_media(
 @router.post("/v1/media/{media_id}/analyze")
 async def analyze_media(media_id: str, request: Request):
     """AI 分析媒体文件（图像识别、文档解析等）- v2.1功能"""
-    token = await get_auth_token(request)
+    await get_auth_token(request)
 
     raise HTTPException(status_code=501, detail="AI media analysis not yet implemented")
 
@@ -417,7 +416,7 @@ async def analyze_media(media_id: str, request: Request):
 @router.post("/v1/media/{media_id}/extract-metadata")
 async def extract_metadata(media_id: str, request: Request):
     """提取媒体文件元数据 - v2.3功能"""
-    token = await get_auth_token(request)
+    await get_auth_token(request)
 
     raise HTTPException(
         status_code=501, detail="Metadata extraction not yet implemented"

@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """分支压缩的测试（纯逻辑 + 假 gateway，不碰真实模型/DB）。
 
 盯住三件事（都是"错了也看不出来、但用户会踩到"的地方）：
@@ -23,7 +22,7 @@ from app.context.branch_condense import (
 
 
 def _msgs(n: int) -> list[dict]:
-    return [{"role": "user" if i % 2 else "assistant", "content": "m%d" % i} for i in range(n)]
+    return [{"role": "user" if i % 2 else "assistant", "content": f"m{i}"} for i in range(n)]
 
 
 class _FakeGateway:

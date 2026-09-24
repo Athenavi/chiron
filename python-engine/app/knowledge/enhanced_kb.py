@@ -12,7 +12,6 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Optional
 
 from app.rag.retriever import RAGRetriever
 from app.trace import record_span
@@ -64,7 +63,7 @@ class EnhancedKnowledgeBase:
         document_id: str,
         content: str,
         file_type: str = "txt",
-        metadata: Optional[dict] = None,
+        metadata: dict | None = None,
         trace_id: str = "",
     ) -> dict:
         """索引文档 (带 trace)

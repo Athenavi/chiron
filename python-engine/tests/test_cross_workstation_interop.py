@@ -7,13 +7,11 @@
 from __future__ import annotations
 
 import json
-import sys
-from unittest.mock import MagicMock, patch
 
-import pytest
 from httpx import ASGITransport, AsyncClient
 
 import app.main
+from app.api.unified_executor import get_chat_handler
 from app.core.capabilities import (
     CapabilitiesRegistry,
     Capability,
@@ -24,7 +22,6 @@ from app.core.capabilities import (
 )
 from app.core.task_router import ExecutedTask, SubTask, TaskRouter
 from app.main import create_app
-from app.api.unified_executor import get_chat_handler
 
 TENANT = "u-interop"
 
@@ -298,7 +295,7 @@ async def test_capabilities_routes():
         assert body2["capabilities"][0]["capability_id"] == "skill:execute_python"
 
     # 会话消息历史路由
-    handler = get_chat_handler()
+    get_chat_handler()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp3 = await ac.get(
             "/v1/chat/sessions/not-exist/messages",

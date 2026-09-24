@@ -3,15 +3,13 @@ from __future__ import annotations
 
 import asyncio
 import base64
-import sys
 
 import pytest
 
 from app.tools.context import set_tool_context
 from app.tools.core import read_image
-from app.tools.context import set_tool_context
+from app.tools.jobs import job_kill, job_output, run_in_background
 from app.tools.sandbox import workspace_dir
-from app.tools.jobs import job_kill, job_output, run_in_background, _jobs
 from app.tools.terminal import _terminal
 
 

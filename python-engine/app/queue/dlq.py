@@ -5,10 +5,10 @@ import logging
 
 import redis.asyncio as aioredis
 
-logger = logging.getLogger(__name__)
-
 # 统一键前缀（与 Go 网关 RedisKey 语义一致，多环境隔离）
 from app.redis_keys import rkey
+
+logger = logging.getLogger(__name__)
 
 # 主任务流与死信流（消费组名 engine-workers 挂在流上，无需前缀）
 TASK_STREAM = rkey("engine:tasks")

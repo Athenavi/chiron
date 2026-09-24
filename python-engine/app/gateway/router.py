@@ -5,15 +5,14 @@ import logging
 import random
 import sys
 import time
-from typing import AsyncIterator, Optional
+from collections.abc import AsyncIterator
 
 import aiohttp
 
 from app.gateway.budget import TokenBudget
 from app.gateway.cache import SemanticCache
 from app.gateway.circuit_breaker import CircuitBreaker
-from app.gateway.provider import (ChatMessage, ChatResponse, EmbeddingResponse,
-                                  LLMProvider)
+from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, LLMProvider
 
 logger = logging.getLogger(__name__)
 
@@ -473,7 +472,7 @@ class GatewayRouter:
         logger.info("sync_routes loaded %d routes for %d tenants", len(routes), len(tenant_map))
         return len(routes)
 
-    def _get_tenant_provider(self, model: str, tenant_id: str) -> Optional[str]:
+    def _get_tenant_provider(self, model: str, tenant_id: str) -> str | None:
         """按租户路由配置获取首选 provider 名称。
 
         返回 None 表示无匹配路由（回退默认加权选择）。
@@ -489,7 +488,7 @@ class GatewayRouter:
 
     async def _select(
         self, model: str, hint: str = "", tenant_id: str = "", embed: bool = False
-    ) -> Optional[LLMProvider]:
+    ) -> LLMProvider | None:
         """选择 Provider — 支持租户路由覆盖。
 
         embed=True 时使用**独立**的熔断表：embed 与 chat 的可用性互不牵连
@@ -611,7 +610,7 @@ class GatewayRouter:
 
         r = random.uniform(0, total)
         cumulative = 0.0
-        for p, s in zip(providers, scores):
+        for p, s in zip(providers, scores, strict=False):
             cumulative += s
             if r <= cumulative:
                 return p

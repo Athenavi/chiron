@@ -111,6 +111,13 @@ DATABASE_DSN='postgresql://user:pwd@host:5432/db' \
 python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：生成 DDL 交 DBA 审阅执行
 ```
 
+- **单一权威迁移**：`migrations/versions/` 只有一个基线 `0001_authoritative_baseline`，其 DDL 取自稳定后的
+  数据库（`pg_dump --schema-only`）。此前迁移链只覆盖 12 张表、库里却有 80 张（其余由 `init.sql`、Go 侧
+  启动建表与一份已丢失的早期迁移共同建立），已整体收敛；
+- **应用侧不写 DDL**：Go 的 `EnsureTables` / `InitTable` / `episodes` 建表与 Python 的建表逻辑全部改为
+  **只读校验**（`VerifySchema` / `VerifyTable` / `ensure_tables`），缺失时明确报错并提示跑迁移；
+- **升级既有库**：表已齐全的环境执行 `alembic stamp 0001_authoritative_baseline`（只改版本号、不重放 DDL）；
+  全新库直接 `alembic upgrade head`；
 - 需要 `alembic.ini`、`migrations/`、`shared/models/` 三者在运行目录内（`migrations/env.py` 会加载 ORM 元数据）；
 - 启动校验：比对 `migrations/versions` 的 head 与数据库 `alembic_version`，不一致时拒绝启动（`ALLOW_SCHEMA_DRIFT=true` 可放行）；
 - 迁移链必须**单一 head**（分叉会导致启动校验失败）。

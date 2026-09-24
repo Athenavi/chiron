@@ -17,9 +17,9 @@ import json
 import logging
 import time
 
-logger = logging.getLogger(__name__)
-
 from app.redis_keys import rkey
+
+logger = logging.getLogger(__name__)
 
 LLM_KEY_HASH_PREFIX = rkey("llm:keys:")
 LLM_FAIL_PREFIX = rkey("llm:fail:")
@@ -151,7 +151,7 @@ class KeyRing:
                 # 共享停用:写回 keyset 字段 status=circuit_open + 冷却到期时间
                 cooldown_until = time.time() + FAIL_WINDOW
                 async with self._lock:
-                    cur = self._cache.get(provider, {}).get(digest, {})
+                    self._cache.get(provider, {}).get(digest, {})
                 payload = json.dumps({"k": key, "s": "circuit_open", "c": cooldown_until})
                 await self._redis.hset(f"{LLM_KEY_HASH_PREFIX}{provider}", digest, payload)
                 logger.warning(

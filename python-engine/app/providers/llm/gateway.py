@@ -5,7 +5,7 @@ LLM Gateway Provider — 适配 GatewayRouter 到 LLMProvider Protocol
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from app.gateway.provider import ChatMessage
 from app.gateway.router import GatewayRouter

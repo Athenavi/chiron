@@ -4,12 +4,10 @@ from __future__ import annotations
 import hmac
 import logging
 import os
-from typing import Optional
 
 import jwt
 from jwt import InvalidTokenError
-from starlette.middleware.base import (BaseHTTPMiddleware,
-                                       RequestResponseEndpoint)
+from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
@@ -168,7 +166,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return False
         return hmac.compare_digest(provided, self._internal_token)
 
-    async def _validate_jwt(self, token: str) -> Optional[str]:
+    async def _validate_jwt(self, token: str) -> str | None:
         """解析 JWT 获取 tenant_id，并校验弱密钥黑名单与 Redis 登出黑名单。
 
         与 Go 端 ValidateJWTSecret + jwt:blacklist:<jti> 保持一致。

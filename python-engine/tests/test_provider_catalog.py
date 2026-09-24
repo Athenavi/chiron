@@ -7,16 +7,20 @@
 """
 from __future__ import annotations
 
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 import pytest
 
 from app.config import settings
 from app.gateway.provider import ChatResponse, EmbeddingResponse, LLMProvider
 from app.gateway.router import GatewayRouter
-from app.providers.catalog import (provider_api_key, provider_base_url,
-                                   provider_catalog, provider_kind,
-                                   provider_requires_key)
+from app.providers.catalog import (
+    provider_api_key,
+    provider_base_url,
+    provider_catalog,
+    provider_kind,
+    provider_requires_key,
+)
 from app.providers.named import NamedAnthropicProvider, NamedOpenAIProvider
 
 

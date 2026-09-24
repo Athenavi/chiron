@@ -9,8 +9,8 @@ from __future__ import annotations
 import hashlib
 import json
 import time
-from datetime import datetime, timezone
-from typing import Any, Optional
+from datetime import UTC, datetime
+from typing import Any
 
 import pytest
 
@@ -18,7 +18,6 @@ from app.memory.layers import (
     MemoryType,
     RecalledItem,
     Scope,
-    SummaryEntry,
 )
 from app.memory.summary_store import (
     DEFAULT_TOP_K,
@@ -31,7 +30,6 @@ from app.memory.summary_store import (
     SummaryStore,
 )
 
-
 # ── Mock 基础设施 ────────────────────────────────────────────────────────
 
 
@@ -42,7 +40,7 @@ class MockRedis:
         self._store: dict[str, str] = {}
         self._expiry: dict[str, int] = {}
 
-    async def get(self, key: str) -> Optional[str]:
+    async def get(self, key: str) -> str | None:
         return self._store.get(key)
 
     async def setex(self, key: str, ttl: int, value: str) -> bool:
@@ -71,19 +69,19 @@ class MockDatabasePool:
         self._inserted_ids: list[str] = []
         self._touched_ids: list[str] = []
 
-    async def fetchrow(self, query: str, *args) -> Optional[dict]:
+    async def fetchrow(self, query: str, *args) -> dict | None:
         if "INSERT INTO memory_summaries" in query:
             content_hash = args[9]
             tenant_id, user_id = args[1], args[2]
             summary_id = args[0]
 
             # 检查冲突
-            for sid, s in self._summaries.items():
+            for _sid, s in self._summaries.items():
                 if s["content_hash"] == content_hash and s["tenant_id"] == tenant_id and s["user_id"] == user_id:
                     return None  # ON CONFLICT
 
             # 插入
-            now = datetime.now(timezone.utc)
+            now = datetime.now(UTC)
             self._summaries[summary_id] = {
                 "id": summary_id,
                 "tenant_id": tenant_id,
@@ -115,7 +113,7 @@ class MockDatabasePool:
             tenant_id, user_id = args[0], args[1]
             limit = args[2] if len(args) > 2 else DEFAULT_TOP_K
             results = []
-            for sid, s in sorted(self._summaries.items(), key=lambda x: x[1]["created_at"], reverse=True):
+            for _sid, s in sorted(self._summaries.items(), key=lambda x: x[1]["created_at"], reverse=True):
                 if s["tenant_id"] == tenant_id and s["user_id"] == user_id and s["status"] == "active":
                     row = dict(s)
                     row["last_accessed_at"] = s["last_accessed_at"]
@@ -127,7 +125,7 @@ class MockDatabasePool:
         elif "SELECT id, tenant_id, user_id" in query and "WHERE content_hash=$1" in query:
             # get_by_hash 查询
             content_hash, tenant_id, user_id = args
-            for sid, s in self._summaries.items():
+            for _sid, s in self._summaries.items():
                 if s["content_hash"] == content_hash and s["tenant_id"] == tenant_id and s["user_id"] == user_id:
                     return dict(s)
             return None
@@ -145,7 +143,7 @@ class MockDatabasePool:
             tenant_id, user_id = args[0], args[1]
             limit = args[2] if len(args) > 2 else 50
             results = []
-            for sid, s in sorted(self._summaries.items(), key=lambda x: x[1]["created_at"], reverse=True):
+            for _sid, s in sorted(self._summaries.items(), key=lambda x: x[1]["created_at"], reverse=True):
                 if s["tenant_id"] == tenant_id and s["user_id"] == user_id and s["status"] == "active":
                     results.append(dict(s))
                     if len(results) >= limit:
@@ -191,7 +189,7 @@ class MockDatabasePool:
             for sid in self._touched_ids:
                 if sid in self._summaries:
                     self._summaries[sid]["access_count"] += 1
-                    self._summaries[sid]["last_accessed_at"] = datetime.now(timezone.utc)
+                    self._summaries[sid]["last_accessed_at"] = datetime.now(UTC)
             return "UPDATE 1"
 
         elif "DELETE FROM memory_summaries" in query:
@@ -217,8 +215,8 @@ class MockMilvusCollection:
             "summary_id", "tenant_id", "user_id", "session_id",
             "content", "memory_type", "embedding", "created_at", "metadata",
         ]
-        for values in zip(*data):
-            record = dict(zip(fields, values))
+        for values in zip(*data, strict=False):
+            record = dict(zip(fields, values, strict=False))
             # 解包单值列表
             for k, v in record.items():
                 if isinstance(v, list) and len(v) == 1:
@@ -478,7 +476,7 @@ class TestRecallVectorSearch:
             "turn_start": 0, "turn_end": 10,
             "content_hash": "hash1", "access_count": 5,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now - 100000, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now - 100000, tz=UTC),
         }
         mock_pool._summaries["s2"] = {
             "id": "s2", "tenant_id": "t1", "user_id": "u1",
@@ -487,7 +485,7 @@ class TestRecallVectorSearch:
             "turn_start": 20, "turn_end": 30,
             "content_hash": "hash2", "access_count": 200,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         items = await store.recall(scope=scope, query="")
@@ -514,7 +512,7 @@ class TestRecallVectorSearch:
             "turn_start": 0, "turn_end": 5,
             "content_hash": "hash1", "access_count": 0,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         # 替换 search 方法使其抛异常
@@ -987,7 +985,7 @@ class TestHelperMethods:
             "turn_start": 0, "turn_end": 1,
             "content_hash": "hash1", "access_count": 0,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         items = [RecalledItem(
@@ -1012,7 +1010,7 @@ class TestHelperMethods:
             "turn_start": 0, "turn_end": 5,
             "content_hash": "hash1", "access_count": 3,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now - 100, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now - 100, tz=UTC),
         }
         mock_pool._summaries["s2"] = {
             "id": "s2", "tenant_id": "t1", "user_id": "u1",
@@ -1021,7 +1019,7 @@ class TestHelperMethods:
             "turn_start": 10, "turn_end": 15,
             "content_hash": "hash2", "access_count": 1,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now - 500, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now - 500, tz=UTC),
         }
 
         results = await store.list_recent("t1", "u1", limit=5)
@@ -1040,7 +1038,7 @@ class TestHelperMethods:
             "turn_start": 0, "turn_end": 1,
             "content_hash": "hash1", "access_count": 0,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         result = await store.delete_summary("t1", "u1", "s1")
@@ -1064,7 +1062,7 @@ class TestHelperMethods:
             "turn_start": 0, "turn_end": 1,
             "content_hash": "sha256:abc123", "access_count": 0,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         entry = await store.get_by_hash("t1", "u1", "sha256:abc123")
@@ -1083,7 +1081,7 @@ class TestHelperMethods:
             "turn_start": 0, "turn_end": 1,
             "content_hash": "hash1", "access_count": 0,
             "last_accessed_at": None, "status": "active",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
         mock_pool._summaries["s2"] = {
             "id": "s2", "tenant_id": "t1", "user_id": "u1",
@@ -1092,7 +1090,7 @@ class TestHelperMethods:
             "turn_start": 2, "turn_end": 3,
             "content_hash": "hash2", "access_count": 0,
             "last_accessed_at": None, "status": "archived",
-            "created_at": datetime.fromtimestamp(now, tz=timezone.utc),
+            "created_at": datetime.fromtimestamp(now, tz=UTC),
         }
 
         entries = await store.list_active("t1", "u1")

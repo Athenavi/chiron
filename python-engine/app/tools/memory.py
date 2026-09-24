@@ -16,10 +16,10 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from app.memory.layers import SlotType
-from app.tools.context import get_session_id, get_tenant_id, get_user_id
+from app.tools.context import get_tenant_id, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -35,7 +35,7 @@ def _get_memory_service():
         return None
 
 
-def _resolve_slot(slot: Optional[str]) -> SlotType:
+def _resolve_slot(slot: str | None) -> SlotType:
     """把工具入参转成槽位枚举，非法值退回 FACT（工具层不抛错，避免打断 Agent）。"""
     if not slot:
         return SlotType.FACT
@@ -118,7 +118,7 @@ async def remember(key: str, value: str, slot: str = "fact") -> dict[str, Any]:
         return {"error": f"Failed to remember: {str(e)}"}
 
 
-async def recall(query: str = "", slot: Optional[str] = None) -> dict[str, Any]:
+async def recall(query: str = "", slot: str | None = None) -> dict[str, Any]:
     """回忆工具：召回用户记忆。
 
     Args:
@@ -178,7 +178,7 @@ async def recall(query: str = "", slot: Optional[str] = None) -> dict[str, Any]:
         return {"error": f"Failed to recall: {str(e)}"}
 
 
-async def forget(key: str, slot: Optional[str] = None) -> dict[str, Any]:
+async def forget(key: str, slot: str | None = None) -> dict[str, Any]:
     """遗忘工具：删除用户记忆条目（与记忆页同一张表）。
 
     Args:

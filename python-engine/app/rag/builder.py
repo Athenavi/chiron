@@ -5,8 +5,8 @@ import asyncio
 import logging
 import re
 import uuid
-from enum import Enum
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
+from enum import StrEnum
 
 from app.config import settings
 from app.gateway.router import GatewayRouter
@@ -15,14 +15,14 @@ from app.interfaces.vectorstore import VectorStore
 logger = logging.getLogger(__name__)
 
 
-class VectorDBType(str, Enum):
+class VectorDBType(StrEnum):
     """向量数据库类型"""
 
     MILVUS = "milvus"
     PGVECTOR = "pgvector"
 
 
-class ParserType(str, Enum):
+class ParserType(StrEnum):
     """解析器类型"""
 
     UNSTRUCTURED = "unstructured"
@@ -175,6 +175,7 @@ class RAGBuilder:
         """使用 Unstructured 解析"""
         try:
             import os
+
             # 使用通用 partition 函数自动处理所有文件类型
             import tempfile
 
@@ -453,7 +454,7 @@ class RAGBuilder:
         ids = []
         vectors = []
         payloads = []
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for _i, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=False)):
             if embedding is None:
                 continue
             ids.append(str(uuid.uuid4()))
@@ -476,8 +477,7 @@ class RAGBuilder:
 
     async def _store_milvus_direct(self, kb_id, doc_id, tenant_id, chunks, embeddings):
         """直接存储到 Milvus"""
-        from pymilvus import (Collection, CollectionSchema, DataType,
-                              FieldSchema)
+        from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 
         self._ensure_milvus()
         dim = (
@@ -521,7 +521,7 @@ class RAGBuilder:
             [],
             [],
         )
-        for i, (chunk, embedding) in enumerate(zip(chunks, embeddings)):
+        for _i, (chunk, embedding) in enumerate(zip(chunks, embeddings, strict=False)):
             if embedding is None:
                 continue
             ids.append(str(uuid.uuid4()))
@@ -574,7 +574,7 @@ class RAGBuilder:
         table = self._validate_table_name(settings.pgvector_table)
         rows = []
         skipped = 0
-        for chunk, embedding in zip(chunks, embeddings):
+        for chunk, embedding in zip(chunks, embeddings, strict=False):
             if embedding is None:
                 continue
             if len(embedding) != settings.embedding_dim:

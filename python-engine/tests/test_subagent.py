@@ -1,8 +1,9 @@
 """Tests for subagent — 真子 Agent 委派。"""
 from __future__ import annotations
 
-import pytest
 from unittest.mock import MagicMock
+
+import pytest
 
 from app.gateway.provider import ChatResponse
 from app.tools.context import set_tool_context
@@ -104,7 +105,6 @@ class TestSubagent:
         注册表（看门狗与前端「停止」都够不到），也没有 wall 上限 —— 父回合被无限期占住，
         这就是"主 Agent 长期阻塞"的主因。
         """
-        import asyncio
 
         from app.subagent import registry as subagent_registry
 

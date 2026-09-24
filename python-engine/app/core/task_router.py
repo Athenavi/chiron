@@ -17,15 +17,15 @@ import json
 import logging
 import time
 from dataclasses import dataclass, field
-from enum import Enum
-from typing import Any, Optional
+from enum import StrEnum
+from typing import Any
 
 from app.core.capabilities import WorkstationType, get_registry
 
 logger = logging.getLogger(__name__)
 
 
-class TaskPriority(str, Enum):
+class TaskPriority(StrEnum):
     """任务优先级"""
 
     LOW = "low"
@@ -34,7 +34,7 @@ class TaskPriority(str, Enum):
     CRITICAL = "critical"
 
 
-class TaskStatus(str, Enum):
+class TaskStatus(StrEnum):
     """已执行任务的终态。"""
 
     COMPLETED = "completed"
@@ -51,7 +51,7 @@ class SubTask:
     parameters: dict[str, Any] = field(default_factory=dict)
     dependencies: list[str] = field(default_factory=list)  # 依赖的其他 subtask_id
     tags: list[str] = field(default_factory=list)  # 意图关键词 (能力语义匹配用)
-    workstation_type: Optional[WorkstationType] = None
+    workstation_type: WorkstationType | None = None
     status: str = "pending"  # pending/running/completed/failed
 
 
@@ -312,8 +312,8 @@ Return ONLY valid JSON without markdown formatting."""
             )
             return intent
         except json.JSONDecodeError:
-            logger.warning(f"Failed to parse LLM response as JSON, using fallback")
-            raise ValueError("Invalid LLM response format")
+            logger.warning("Failed to parse LLM response as JSON, using fallback")
+            raise ValueError("Invalid LLM response format") from None
 
     async def _decompose_task(
         self,
@@ -626,7 +626,7 @@ Return ONLY valid JSON without markdown formatting."""
 
     def _group_by_dependencies(self, tasks: list[SubTask]) -> list[list[SubTask]]:
         """按依赖关系分组 (同一组内可并行)"""
-        task_map = {t.subtask_id: t for t in tasks}
+        {t.subtask_id: t for t in tasks}
         grouped = []
         resolved = set()
 
@@ -651,7 +651,7 @@ Return ONLY valid JSON without markdown formatting."""
     def _resolve_params(
         self,
         params: dict[str, Any],
-        completed_tasks: dict[str, "ExecutedTask"],
+        completed_tasks: dict[str, ExecutedTask],
     ) -> dict[str, Any]:
         """解析依赖输出模板 "${dep_id.field.subfield...}"
 

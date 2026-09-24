@@ -6,22 +6,18 @@
 
 from __future__ import annotations
 
-import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
 from app.memory.layers import (
     ConflictRef,
-    ProfileItem,
-    ProfileUpdateResult,
     SlotType,
     SourceType,
 )
-from app.memory.profile_card import CACHE_TTL, MAX_ITEMS_LIMIT, ProfileCard
-
+from app.memory.profile_card import CACHE_TTL, ProfileCard
 
 # ── Mock 基础设施 ────────────────────────────────────────────────────────
 
@@ -47,10 +43,10 @@ class MockDatabasePool:
             "confidence": item["confidence"],
             "source": item["source"],
             "version": item["version"],
-            "confirmed_at": datetime.fromtimestamp(confirmed_at, tz=timezone.utc) if confirmed_at else None,
-            "last_referenced_at": datetime.fromtimestamp(last_ref, tz=timezone.utc) if last_ref else None,
-            "created_at": datetime.fromtimestamp(item["created_at"], tz=timezone.utc),
-            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=timezone.utc),
+            "confirmed_at": datetime.fromtimestamp(confirmed_at, tz=UTC) if confirmed_at else None,
+            "last_referenced_at": datetime.fromtimestamp(last_ref, tz=UTC) if last_ref else None,
+            "created_at": datetime.fromtimestamp(item["created_at"], tz=UTC),
+            "updated_at": datetime.fromtimestamp(item["updated_at"], tz=UTC),
         }
 
     async def fetch(self, query: str, *args) -> list[dict[str, Any]]:
@@ -59,7 +55,7 @@ class MockDatabasePool:
             if "WHERE tenant_id = $1 AND user_id = $2" in query:
                 tenant_id, user_id = args[0], args[1]
                 results = []
-                for (tid, uid, slot, key), item in self._items.items():
+                for (tid, uid, _slot, _key), item in self._items.items():
                     if tid == tenant_id and uid == user_id:
                         results.append(self._make_row(item))
                 results.sort(key=lambda r: (r["slot"], r["item_key"]))
@@ -68,7 +64,7 @@ class MockDatabasePool:
             tenant_id = args[0]
             limit = args[1]
             counts: dict[tuple, int] = {}
-            for (tid, uid, slot, key), item in self._items.items():
+            for (tid, uid, _slot, _key), item in self._items.items():
                 if item["source"] != "user_confirmed":
                     k = (tid, uid)
                     counts[k] = counts.get(k, 0) + 1
@@ -200,7 +196,6 @@ class MockRedis:
     async def delete(self, *keys) -> bool:
         """删除缓存。"""
         for key in keys:
-            deleted = key in self._store
             self._store.pop(key, None)
             self._expiry.pop(key, None)
         return True
@@ -736,7 +731,7 @@ class TestArchiveLowConfidence:
         if key in pool._items:
             pool._items[key]["last_referenced_at"] = now - 200 * 86400
 
-        archived = await profile_card.archive_low_confidence()
+        await profile_card.archive_low_confidence()
         profile = await profile_card.get_profile("t1", "u1")
         keys = [p.item_key for p in profile]
         assert "preserve_me" in keys

@@ -130,7 +130,7 @@ async def run_plugin_in_sandbox(
             proc.communicate(payload_bytes),
             timeout=SANDBOX_CONFIG.timeout_seconds,
         )
-    except asyncio.TimeoutError:
+    except TimeoutError:
         if proc is not None:
             proc.kill()
             with contextlib.suppress(ProcessLookupError):

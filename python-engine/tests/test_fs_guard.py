@@ -1,9 +1,7 @@
 """Tests for fs_guard — read-before-write 观测策略。"""
 from __future__ import annotations
 
-import pytest
-
-from app.tools.fs_guard import check_before_write, observe, _observed
+from app.tools.fs_guard import _observed, check_before_write, observe
 
 
 class TestFsGuard:

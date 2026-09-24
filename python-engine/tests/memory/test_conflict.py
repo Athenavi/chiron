@@ -16,12 +16,10 @@ import pytest
 
 from app.memory.conflict_manager import ConflictManager
 from app.memory.layers import (
-    MemoryConflict,
     ProfileItem,
     SlotType,
     SourceType,
 )
-
 
 # ── Mock Redis ───────────────────────────────────────────────────────
 

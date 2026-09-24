@@ -29,7 +29,8 @@ import asyncio
 import json
 import logging
 import uuid
-from typing import Any, Awaitable, Callable
+from collections.abc import Awaitable, Callable
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -234,7 +235,7 @@ class MCPBridge:
         try:
             await self._redis.publish(_invoke_channel(owner_instance_id), payload)
             return await asyncio.wait_for(fut, timeout=self._timeout)
-        except asyncio.TimeoutError as e:
+        except TimeoutError as e:
             raise RuntimeError(
                 f"MCP 跨实例调用超时（owner={owner_instance_id}, tool={tool_name}, "
                 f"timeout={self._timeout}s）——owner 可能已下线"

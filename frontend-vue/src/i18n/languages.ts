@@ -13,9 +13,11 @@ import zhCN from 'ant-design-vue/es/locale/zh_CN'
 import enUS from 'ant-design-vue/es/locale/en_US'
 import arEG from 'ant-design-vue/es/locale/ar_EG'
 
+export type LocaleCode = 'zh-CN' | 'en-US' | 'ar'
+
 export interface LanguageMeta {
   /** BCP-47 语言标签，同时用作 locales 目录名与 <html lang> */
-  code: string
+  code: LocaleCode
   /** 该语言的母语名称：切换器里始终用母语显示（用户看得懂自己的语言） */
   nativeName: string
   /** 书写方向；rtl 会让 <html dir="rtl"> 生效 */

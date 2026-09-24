@@ -7,7 +7,7 @@ import datetime
 import json
 import logging
 import uuid
-from typing import Any, Optional
+from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -28,10 +28,10 @@ _background_tasks: set[asyncio.Task] = set()
 
 
 class GraphCreateRequest(BaseModel):
-    id: Optional[str] = None
+    id: str | None = None
     name: str
     graph_json: Any = {}
-    user_id: Optional[str] = None
+    user_id: str | None = None
 
 
 class GraphExecuteRequest(BaseModel):
@@ -152,7 +152,7 @@ async def _enqueue_workflow_run(
             },
             ensure_ascii=False,
         ),
-        "created_at": datetime.datetime.now(datetime.timezone.utc).strftime(
+        "created_at": datetime.datetime.now(datetime.UTC).strftime(
             "%Y-%m-%dT%H:%M:%SZ"
         ),
         "retry_count": "0",
@@ -162,7 +162,7 @@ async def _enqueue_workflow_run(
         # 已完成实例重投不再执行。
         "idempotency_key": f"workflow_run:{instance_id}",
         "deadline": (
-            datetime.datetime.now(datetime.timezone.utc) + datetime.timedelta(hours=2)
+            datetime.datetime.now(datetime.UTC) + datetime.timedelta(hours=2)
         ).strftime("%Y-%m-%dT%H:%M:%SZ"),
     }
     try:
@@ -174,7 +174,7 @@ async def _enqueue_workflow_run(
 
 
 @router.get("/v1/graphs")
-async def list_graphs(user_id: Optional[str] = Query(None, alias="user_id")):
+async def list_graphs(user_id: str | None = Query(None, alias="user_id")):
     """List all graphs, optionally filtered by user_id."""
     try:
         pool = get_pool()
@@ -216,7 +216,7 @@ async def create_graph(
         raise HTTPException(status_code=400, detail="user_id is required")
 
     graph_id = body.id or f"g-{_uuid.uuid4().hex[:10]}"
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     graph_json = body.graph_json
     if isinstance(graph_json, str):
@@ -249,7 +249,7 @@ async def create_graph(
         )
     except Exception as e:
         logger.error("graph insert failed: %s", e)
-        raise HTTPException(status_code=500, detail="failed to save graph")
+        raise HTTPException(status_code=500, detail="failed to save graph") from e
 
     return {"success": True, "data": record}
 
@@ -297,7 +297,7 @@ async def delete_graph(graph_id: str):
         raise
     except Exception as e:
         logger.error("graph delete failed: %s", e)
-        raise HTTPException(status_code=500, detail="failed to delete graph")
+        raise HTTPException(status_code=500, detail="failed to delete graph") from e
 
     return {"success": True, "message": f"Graph {graph_id} deleted"}
 
@@ -336,7 +336,7 @@ async def execute_graph(
 
     graph_name = graph_json.get("name") or graph_id
     instance_id = f"wf_{uuid.uuid4().hex[:10]}"
-    now = datetime.datetime.now(datetime.timezone.utc)
+    now = datetime.datetime.now(datetime.UTC)
 
     # 落库 running（后台任务完成后更新）
     try:

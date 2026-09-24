@@ -17,6 +17,7 @@ import app.tools.jobs  # noqa: F401
 import app.tools.kb  # noqa: F401
 import app.tools.media  # noqa: F401
 import app.tools.memory  # noqa: F401
+
 # ⚠️ 以下几个模块都自带 registry.register，**漏 import 就等于工具从未注册**。
 # 此前的真实缺陷：下面 5 个模块没被导入，导致 run_code / subagent /
 # read_subagent_result / run_in_background / job_output / job_kill / persistent_shell
@@ -30,8 +31,8 @@ import app.tools.run_code  # noqa: F401
 import app.tools.skill  # noqa: F401
 import app.tools.subagent  # noqa: F401
 import app.tools.subagent_result  # noqa: F401
-import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
 import app.tools.terminal  # noqa: F401
+import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
 import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy，见该模块文档）
 from app.tools.client import SystemToolClient
 from app.tools.discovery import ToolDiscovery

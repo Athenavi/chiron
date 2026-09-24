@@ -2,12 +2,18 @@
 from __future__ import annotations
 
 import logging
-from typing import AsyncIterator
+from collections.abc import AsyncIterator
 
 from openai import AsyncOpenAI
 
-from app.gateway.provider import (ChatMessage, ChatResponse, EmbeddingResponse,
-                                  LLMProvider, ToolCall, cached_tokens_from_usage)
+from app.gateway.provider import (
+    ChatMessage,
+    ChatResponse,
+    EmbeddingResponse,
+    LLMProvider,
+    ToolCall,
+    cached_tokens_from_usage,
+)
 
 logger = logging.getLogger(__name__)
 

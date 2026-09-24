@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { mergeTagOptions, normalizeTag, PRESET_TAGS, TAG_MAX_LEN } from '../sessionTags'
+import { mergeTagOptions, normalizeTag, TAG_MAX_LEN } from '../sessionTags'
 
 /**
  * 会话标签：把"标签恒定"改成"预设 + 自定义"（用户报告的问题）。
@@ -32,7 +32,8 @@ describe('normalizeTag', () => {
 
 describe('mergeTagOptions', () => {
   it('预设始终在候选里（没有自定义标签时也有可选项）', () => {
-    expect(mergeTagOptions([])).toEqual([...PRESET_TAGS])
+    // 前端不内置预设：既无已用标签、也无调用方传入 preset 时，候选为空
+    expect(mergeTagOptions([])).toEqual([])
   })
 
   it('已使用过的标签自动进入候选（这是"自定义"能生效的关键）', () => {

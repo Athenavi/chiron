@@ -169,7 +169,10 @@ class MilvusStore(VectorStoreBase):
         except Exception:
             return 0
 
-        expr = f'id in [{",".join(f'"{i}"' for i in ids)}]'
+        # 内层 f-string 与外层共用单引号需要 PEP 701（Python 3.12+）；
+        # 本包声明 requires-python >= 3.11，故先拼好再插值。
+        joined = ",".join(f'"{i}"' for i in ids)
+        expr = f"id in [{joined}]"
         await asyncio.to_thread(col.delete, expr)
         await asyncio.to_thread(col.flush)
         return len(ids)

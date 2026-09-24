@@ -488,8 +488,9 @@ async def file_analyzer(
             if len(lines) > 50:
                 text = "\n".join(lines[:50]) + f"\n\n... (共 {len(lines)} 行，仅显示前 50 行)"
         elif is_excel:
-            import openpyxl
             import io
+
+            import openpyxl
 
             wb = openpyxl.load_workbook(io.BytesIO(file_data), read_only=True, data_only=True)
             parts = []

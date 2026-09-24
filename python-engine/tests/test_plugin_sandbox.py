@@ -9,8 +9,6 @@
 from __future__ import annotations
 
 import json
-import sys
-from pathlib import Path
 
 import pytest
 
@@ -75,8 +73,11 @@ def main(input):
 """
     result = await run_plugin_in_sandbox("p_obf", "u1", code, {})
     assert result["success"] is False
-    # open 被 stub，无论走 dict 还是属性路径都应被拦
-    assert "blocked by runtime guard" in result["error"] or "Error" in result["error"]
+    # 关键是被拦住，而不是被**哪一层**拦住：`__builtins__.__dict__` 这类对象内省
+    # 现在会被静态守卫更早识别（"attribute '__dict__' is not allowed"），
+    # 运行时守卫仍作为纵深防御存在（见 app/plugin_sandbox 与 app/tools/code_guard）。
+    err = result["error"]
+    assert "block" in err.lower() and ("static guard" in err or "runtime guard" in err)
 
 
 @pytest.mark.asyncio

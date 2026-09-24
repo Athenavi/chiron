@@ -72,9 +72,9 @@ class PersistentTerminal:
         # 首命令 cd 到沙箱 workspace，保证状态持久在隔离目录内（S 安全修复）
         try:
             if sys.platform == "win32":
-                proc.stdin.write(f'cd /d "{ws}"\n'.encode("utf-8"))
+                proc.stdin.write(f'cd /d "{ws}"\n'.encode())
             else:
-                proc.stdin.write(f'cd "{ws}"\n'.encode("utf-8"))
+                proc.stdin.write(f'cd "{ws}"\n'.encode())
             await proc.stdin.drain()
         except Exception:
             pass

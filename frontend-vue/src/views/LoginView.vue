@@ -99,7 +99,9 @@ async function handleSendCode() {
       captcha_token: captchaToken.value,
       captcha_randstr: captchaRandstr.value,
     })
-    start(res.interval || 60)
+    // 倒计时严格对齐后端的冷却秒数：interval=0 表示后端未设冷却（允许连发），
+    // 此时不应自作主张锁 60 秒（`|| 60` 会把 0 当成缺省值，造成"多出来"的倒计时）。
+    start(res.interval ?? 0)
     message.success(t('验证码已发送'))
     // 一次性凭据：发送后重置，登录时按需重新验证
     markCaptchaDirty()
@@ -221,7 +223,8 @@ async function handleSendEmailCode() {
       captcha_token: captchaToken.value,
       captcha_randstr: captchaRandstr.value,
     })
-    startEmailCountdown(res.interval || 60)
+    // 同上：以服务端冷却为准，0 表示不冷却
+    startEmailCountdown(res.interval ?? 0)
     message.success(t('验证码已发送'))
     markCaptchaDirty()
     captchaRef.value?.reset()
@@ -597,7 +600,7 @@ async function handleLogin() {
                     :loading="sending"
                     @click="handleSendCode"
                   >
-                    {{ remaining > 0 ? `${remaining}s 后重发` : '获取验证码' }}
+                    {{ remaining > 0 ? $t('auth.resendCountdown', { s: remaining }) : $t('获取验证码') }}
                   </Button>
                 </template>
               </Input>
@@ -685,7 +688,7 @@ async function handleLogin() {
                     :loading="emailSending"
                     @click="handleSendEmailCode"
                   >
-                    {{ emailRemaining > 0 ? $t('{s}s 后重发', { s: emailRemaining }) : $t('获取验证码') }}
+                    {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('获取验证码') }}
                   </Button>
                 </template>
               </Input>

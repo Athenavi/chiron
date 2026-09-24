@@ -7,7 +7,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
 from fastapi import APIRouter, Request
 
@@ -47,7 +46,7 @@ def _serialize(cap) -> dict:
 
 
 @router.get("/v1/capabilities")
-async def list_capabilities(workstation: Optional[str] = None, tenant_id: str = ""):
+async def list_capabilities(workstation: str | None = None, tenant_id: str = ""):
     """列出能力（可按工作台过滤）；全局能力对所有租户可见"""
     reg = get_registry()
     if workstation:

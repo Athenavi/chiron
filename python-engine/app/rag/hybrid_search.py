@@ -11,11 +11,9 @@
 from __future__ import annotations
 
 import logging
-import math
 from typing import Any
 
-from app.config import settings
-from app.rag.stores import MilvusStore, PgvectorStore, VectorStoreBase
+from app.rag.stores import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 

@@ -8,24 +8,19 @@
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
 from app.memory.layers import (
-    RecallResult,
-    RecalledItem,
     Scope,
-    SlotType,
-    SourceType,
 )
 from app.memory.profile_card import ProfileCard
 from app.memory.service import MemoryService
 from app.memory.session_meta import SessionMetaStore
 from app.memory.summary_store import SummaryStore
-
 
 # ── Mock 基础设施 ────────────────────────────────────────────────────
 
@@ -59,7 +54,7 @@ class _MemoryPool:
             "turn_end": turn_end,
             "access_count": 0,
             "last_accessed_at": None,
-            "created_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
         })
 
     async def fetch(self, query, *args):
@@ -109,8 +104,8 @@ class _MemoryPool:
             "version": row["version"],
             "confirmed_at": None,
             "last_referenced_at": None,
-            "created_at": datetime.now(timezone.utc),
-            "updated_at": datetime.now(timezone.utc),
+            "created_at": datetime.now(UTC),
+            "updated_at": datetime.now(UTC),
         }
 
     def _summary_row_to_db(self, row):
@@ -159,7 +154,7 @@ class _FakeVectorStore:
 
     def insert(self, data, *args, **kwargs):
         """模拟 Milvus insert（将数据存储到 _items 以便搜索）。
-        
+
         支持两种格式:
         1. 字典格式（测试直接调用）: {"id": ..., "tenant_id": ..., ...}
         2. Milvus 列表格式: [[summary_id], [tenant_id], ...]
@@ -229,7 +224,7 @@ class _FakeVectorStore:
 
 def _build_service(pool=None, redis=None, vector=None, with_embedding=True) -> MemoryService:
     """构造带隔离的 MemoryService（通过猴子补丁注入 pool 和 milvus）。
-    
+
     Args:
         pool: Mock 数据库池。
         redis: Mock Redis 实例。
@@ -252,7 +247,7 @@ def _build_service(pool=None, redis=None, vector=None, with_embedding=True) -> M
 
     try:
         profile = ProfileCard(redis=redis)
-        
+
         embedding_fn = None
         if with_embedding:
             async def _fake_embedding(query: str):

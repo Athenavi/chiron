@@ -1,4 +1,3 @@
-# -*- coding: utf-8 -*-
 """分支压缩：把会话"保留区"的历史压成一份能继续工作的核心上下文。
 
 为什么不复用 ``app.context.manager.ContextManager.compress``
@@ -102,7 +101,7 @@ def render_messages(messages: list, limit_chars: int = PROMPT_MAX_CHARS) -> str:
         content = msg.get("content")
         if not isinstance(content, str) or not content.strip():
             continue
-        lines.append("[%s] %s" % (msg.get("role", "user"), content.strip()))
+        lines.append("[{}] {}".format(msg.get("role", "user"), content.strip()))
     text = "\n".join(lines)
     if len(text) <= limit_chars:
         return text
@@ -122,7 +121,7 @@ def extractive_summary(messages: list, max_chars: int = SUMMARY_MAX_CHARS) -> st
         if not isinstance(content, str) or not content.strip():
             continue
         first_line = content.strip().splitlines()[0][:200]
-        parts.append("- [%s] %s" % (msg.get("role", "user"), first_line))
+        parts.append("- [{}] {}".format(msg.get("role", "user"), first_line))
     body = "\n".join(parts) if parts else "- （无可提取内容）"
     return ("## 已完成（提取式降级摘要：模型不可用，按原话首行保留）\n" + body)[:max_chars]
 

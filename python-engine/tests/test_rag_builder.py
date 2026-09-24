@@ -1,7 +1,6 @@
 # RAGBuilder 测试 — pgvector 存取 + 本地嵌入 fallback
 # 不依赖真实 Milvus/pgvector，mock 网关与数据库层
 import sys
-from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest

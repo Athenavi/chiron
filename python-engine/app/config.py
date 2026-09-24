@@ -266,7 +266,7 @@ class Settings(BaseSettings):
                 .rstrip("=")
             )
 
-        WEAK_SECRETS = {
+        WEAK_SECRETS = {  # noqa: N806 — 函数内阈值集合，沿用模块级大写常量惯例
             "",
             "dev-secret-change-in-production",
             "dev-secret-change-in-production-12345678",

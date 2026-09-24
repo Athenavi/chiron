@@ -10,13 +10,10 @@
 
 from __future__ import annotations
 
-from typing import Any
-
 import pytest
 
-from app.memory.layers import RecallResult, RecalledItem, Scope
+from app.memory.layers import RecalledItem, RecallResult
 from app.tools import context as tool_context
-
 
 # ── 测试基建 ────────────────────────────────────────────────────────
 
@@ -90,7 +87,7 @@ class TestInputValidation:
 
     @pytest.mark.asyncio
     async def test_query_exceeds_max_length_rejected(self, monkeypatch):
-        from app.tools.memory import memory_search, _MEMORY_SEARCH_MAX_QUERY
+        from app.tools.memory import _MEMORY_SEARCH_MAX_QUERY, memory_search
         svc = FakeMemoryService()
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
         tool_context.set_tool_context(user_id="u1", tenant_id="t1")
@@ -222,7 +219,7 @@ class TestCharacterBudget:
 
     @pytest.mark.asyncio
     async def test_total_budget_triggers_early_termination(self, monkeypatch):
-        from app.tools.memory import memory_search, _MEMORY_SEARCH_MAX_CHARS
+        from app.tools.memory import _MEMORY_SEARCH_MAX_CHARS, memory_search
         # 每条 400 字符（< 597 阈值，不触发单条截断），共 20 条
         # 预算 6000 字符 → 最多 15 条（400*15=6000）
         items = [_make_item(f"m{i}", "a" * 400, 0.9 - i * 0.01) for i in range(20)]

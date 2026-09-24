@@ -9,8 +9,7 @@ from __future__ import annotations
 
 import pytest
 
-from app.agent.event_sink import (EV_DONE, EV_REASONING, EV_STARTED, EV_STATUS,
-                                 EV_TEXT, EventSink)
+from app.agent.event_sink import EV_DONE, EV_REASONING, EV_STARTED, EV_STATUS, EV_TEXT, EventSink
 from app.agent.subagent_runner import SubAgentRunner
 
 

@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
-from typing import Any, Optional
+from typing import Any
 
 from app.core.capabilities import Capability, WorkstationType, get_registry
 
@@ -44,8 +44,8 @@ class WorkflowNodeWithSkill:
         node_id: str,
         node_type: str,
         label: str,
-        bound_skill_id: Optional[str] = None,
-        skill_config: Optional[dict] = None,
+        bound_skill_id: str | None = None,
+        skill_config: dict | None = None,
     ):
         self.node_id = node_id
         self.node_type = (
@@ -54,7 +54,7 @@ class WorkflowNodeWithSkill:
         self.label = label
 
         # 技能绑定
-        self.bound_skill: Optional[BoundSkill] = None
+        self.bound_skill: BoundSkill | None = None
         if bound_skill_id:
             self.bound_skill = BoundSkill(
                 capability_id=bound_skill_id,
@@ -105,7 +105,7 @@ class WorkflowNodeWithSkill:
         # 执行
         start_time = time.time()
         try:
-            if hasattr(cap._executor, "__call__"):
+            if callable(cap._executor):
                 import asyncio
 
                 if asyncio.iscoroutinefunction(cap._executor):
@@ -176,8 +176,8 @@ class DynamicWorkflowEngine:
         node_id: str,
         node_type: str,
         label: str,
-        bound_skill_id: Optional[str] = None,
-        skill_config: Optional[dict] = None,
+        bound_skill_id: str | None = None,
+        skill_config: dict | None = None,
     ) -> WorkflowNodeWithSkill:
         """添加节点 (可选绑定 Skill)"""
         node = WorkflowNodeWithSkill(
