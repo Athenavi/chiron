@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 23 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 25 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -67,7 +67,7 @@
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **8 批、清 404 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+  2. **分批接线**：✅ 已完成 **9 批、清 451 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
      各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
      | 批 | 提交 | 范围 |
@@ -257,6 +257,7 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 # mypy 只覆盖**已接线的模块**（分批扩大，清单见 L2-1）；
 # --follow-imports=silent 让门禁只报告列出的模块（依赖由它们各自的门禁覆盖）
 ruff check . && mypy --follow-imports=silent \
+  app/api/knowledge.py app/api/unified_executor.py \
   app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
   app/interfaces app/knowledge app/llm app/media app/memory app/middleware app/observability \
