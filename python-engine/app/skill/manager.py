@@ -81,9 +81,9 @@ class SkillMetadata:
     version: str = "1.0.0"
     author: str = ""
     tags: list[str] = field(default_factory=list)
-    input_schema: dict = field(default_factory=dict)  # JSON Schema
-    output_schema: dict = field(default_factory=dict)
-    config: dict = field(default_factory=dict)  # 技能配置 (如 prompt 模板)
+    input_schema: dict[str, Any] = field(default_factory=dict)  # JSON Schema
+    output_schema: dict[str, Any] = field(default_factory=dict)
+    config: dict[str, Any] = field(default_factory=dict)  # 技能配置 (如 prompt 模板)
     status: SkillStatus = SkillStatus.ACTIVE
     created_at: float = field(default_factory=time.time)
     updated_at: float = 0
@@ -100,7 +100,7 @@ class SkillExecutionResult:
     output: str = ""
     error: str = ""
     duration_ms: int = 0
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
     trace_id: str = ""
     tenant_id: str = ""
 
@@ -116,13 +116,13 @@ class MCPClient:
     参考: https://github.com/modelcontextprotocol/specification
     """
 
-    def __init__(self, server_url: str, transport: str = "http"):
+    def __init__(self, server_url: str, transport: str = "http") -> None:
         self.server_url = server_url
         self.transport = transport  # "stdio" / "http" / "websocket"
-        self._tools_cache: list[dict] = []
-        self._cache_time = 0
+        self._tools_cache: list[dict[str, Any]] = []
+        self._cache_time = 0.0
 
-    async def discover_tools(self) -> list[dict]:
+    async def discover_tools(self) -> list[dict[str, Any]]:
         """发现 MCP Server 提供的工具"""
         # 检查缓存 (5 分钟 TTL)
         if time.time() - self._cache_time < 300 and self._tools_cache:
@@ -131,7 +131,7 @@ class MCPClient:
         # Fail loud: 不支持的传输方式必须显式抛错。
         if self.transport == "stdio":
             response = await self._stdio_rpc("tools/list", {}, timeout=10.0)
-            tools = response.get("result", {}).get("tools", [])
+            tools: list[dict[str, Any]] = response.get("result", {}).get("tools", [])
             self._tools_cache = tools
             self._cache_time = time.time()
             logger.info(
@@ -146,7 +146,7 @@ class MCPClient:
             import httpx
 
             async with httpx.AsyncClient() as client:
-                response = await client.post(
+                http_resp = await client.post(
                     f"{self.server_url}/rpc",
                     json={
                         "jsonrpc": "2.0",
@@ -156,8 +156,8 @@ class MCPClient:
                     },
                     timeout=10.0,
                 )
-                response.raise_for_status()
-                result = response.json()
+                http_resp.raise_for_status()
+                result = http_resp.json()
 
             # 解析工具列表
             tools = result.get("result", {}).get("tools", [])
@@ -174,7 +174,7 @@ class MCPClient:
     async def call_tool(
         self,
         tool_name: str,
-        arguments: dict,
+        arguments: dict[str, Any],
         trace_id: str = "",
         tenant_id: str = "",
     ) -> SkillExecutionResult:
@@ -228,7 +228,7 @@ class MCPClient:
             import httpx
 
             async with httpx.AsyncClient() as client:
-                response = await client.post(
+                http_resp = await client.post(
                     f"{self.server_url}/rpc",
                     json={
                         "jsonrpc": "2.0",
@@ -241,8 +241,8 @@ class MCPClient:
                     },
                     timeout=30.0,
                 )
-                response.raise_for_status()
-                result = response.json()
+                http_resp.raise_for_status()
+                result = http_resp.json()
 
             output = result.get("result", {}).get("content", "")
             is_error = result.get("error") is not None
@@ -297,7 +297,7 @@ class MCPClient:
     async def _stdio_rpc(
         self,
         method: str,
-        params: dict,
+        params: dict[str, Any],
         timeout: float = 30.0,
     ) -> dict[str, Any]:
         """通过 STDIO 子进程发送 JSON-RPC 2.0 请求。
@@ -407,7 +407,7 @@ class SkillManager:
     4. MCP 工具集成
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._skills: dict[str, SkillMetadata] = {}  # skill_id -> metadata
         self._mcp_clients: dict[str, MCPClient] = {}  # server_url -> client
 
@@ -418,9 +418,9 @@ class SkillManager:
         name: str,
         description: str,
         type: SkillType,
-        config: dict,
-        input_schema: dict = None,
-        output_schema: dict = None,
+        config: dict[str, Any],
+        input_schema: dict[str, Any] | None = None,
+        output_schema: dict[str, Any] | None = None,
     ) -> SkillMetadata:
         """注册新技能 (带租户隔离)
 
@@ -494,7 +494,7 @@ class SkillManager:
         self,
         tenant_id: str,
         skill_id: str,
-        params: dict,
+        params: dict[str, Any],
         trace_id: str = "",
     ) -> SkillExecutionResult:
         """执行技能 (统一接口 + 租户隔离 + trace)"""
@@ -595,7 +595,7 @@ class SkillManager:
     async def _execute_python_script(
         self,
         skill_meta: SkillMetadata,
-        params: dict,
+        params: dict[str, Any],
         full_skill_id: str,
         tenant_id: str,
         trace_id: str,
@@ -644,7 +644,7 @@ class SkillManager:
             exec(compile(src, f"<skill:{skill_meta.name}>", "exec"), ns)
             main_fn = ns["_skill_main"]
 
-            async def _run():
+            async def _run() -> Any:
                 with contextlib.redirect_stdout(log_buf):
                     result = await main_fn()
                 return result
@@ -692,7 +692,7 @@ class SkillManager:
     async def _execute_shell_command(
         self,
         skill_meta: SkillMetadata,
-        params: dict,
+        params: dict[str, Any],
         full_skill_id: str,
         tenant_id: str,
         trace_id: str,
@@ -768,7 +768,7 @@ class SkillManager:
     async def _execute_http_request(
         self,
         skill_meta: SkillMetadata,
-        params: dict,
+        params: dict[str, Any],
         full_skill_id: str,
         tenant_id: str,
         trace_id: str,

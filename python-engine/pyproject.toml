@@ -136,7 +136,7 @@ warn_unused_configs = true
 # 只放宽这些**模块的 import 解析**（它们的内部不参与检查），本仓库代码仍照常按 strict 检查。
 # 若日后要更严的检查，可分别评估 types-psutil / asyncpg-stubs。
 [[tool.mypy.overrides]]
-module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "pdfplumber", "psutil", "pymilvus", "sentence_transformers"]
+module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "langchain.*", "markitdown", "openpyxl", "pdfplumber", "psutil", "pymilvus", "qdrant_client", "sentence_transformers", "unstructured.*"]
 ignore_missing_imports = true
 
 # pymupdf **自带** py.typed（与上面那些不同），但 pymupdf.open / Document 等仍缺注解 ——

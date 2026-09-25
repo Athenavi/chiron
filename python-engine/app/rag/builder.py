@@ -7,6 +7,7 @@ import re
 import uuid
 from collections.abc import AsyncIterator
 from enum import StrEnum
+from typing import Any
 
 from app.config import settings
 from app.gateway.router import GatewayRouter
@@ -44,7 +45,7 @@ class RAGBuilder:
         self._vector_store = vector_store
         self._parser_type = parser_type
         self._milvus_connected = False
-        self._local_encoder = None
+        self._local_encoder: Any = None
         self._local_encoder_lock = asyncio.Lock()
         self._pg_pool = None
         # 体内求值：非法配置回退默认值，避免模块 import 崩溃
@@ -392,8 +393,11 @@ class RAGBuilder:
                 if self._local_encoder is None:
                     from sentence_transformers import SentenceTransformer
 
+                    # 经 Any 变量转交：sentence_transformers 的 stub 不完整，直接传类会让
+                    # mypy 认为 to_thread 的返回是 None（它按 __init__ 的返回推断）。
+                    encoder_cls: Any = SentenceTransformer
                     self._local_encoder = await asyncio.to_thread(
-                        SentenceTransformer, settings.local_embedding_model
+                        encoder_cls, settings.local_embedding_model
                     )
             vector = await asyncio.to_thread(self._local_encoder.encode, text)
             return [float(x) for x in vector.tolist()]
