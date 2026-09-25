@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 70 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 93 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -63,11 +63,11 @@
   按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
   `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
   `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第十八批已清 815 条 → 356 / 32 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  **截至第十九批已清 896 条 → 275 / 9 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **18 批、清 815 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+  2. **分批接线**：✅ 已完成 **19 批、清 896 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
      各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
      | 批 | 提交 | 范围 |
@@ -90,6 +90,7 @@
      | 16 | `2718755` | `app/api/memory.py` + `app/subagent/affinity.py` + `app/plugins/pool.py`（34 条） |
      | 17 | `301d1f0` | `tools/_sandbox_worker.py` + `rag/stores/milvus_store.py` + `agent/subagent_runner.py` + `plugins/owner_lease.py` + `workflow/tracing_engine.py`（48 条） |
      | 18 | `bb23a49` | 小文件清扫 12 个：`agent/{guards,modes,prompt_engine}.py` + `gateway/key_ring.py` + `rag/{hybrid_search,stores/pgvector_store}.py` + `subagent/{redact,registry,store}.py` + `tools/{jobs,run_code,subagent}.py`（72 条） |
+     | 19 | `1682ba6` | 小文件清扫 23 个（`tools/{registry,client,discovery,graph,job_runner,kb,memory,terminal}.py`、`queue/{dlq,idempotency}.py`、`subagent/{followup,reporting,runtime_cache}.py`、`agent/{profile,side_effect_ledger}.py`、`rag/context_injector.py`、`skill/store.py`、`run_registry.py`、`plugins/broker_proxy.py`、`api/capabilities.py`、`workflow/{dynamic_nodes,executor,tools}.py`）（81 条；含 `AsyncClient.close()` 应为 `aclose()` 等三处真实缺陷） |
 
      第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
      `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
@@ -97,13 +98,21 @@
      恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
 
      - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **70 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 356 条 / 32 个文件）：
-       大文件只剩 5 个 —— `agent/runtime.py` 99、`main.py` 50、`rag/builder.py` 45、
-       `queue/worker.py` 35、`skill/manager.py` 31（共 260 条）；其余 27 个小文件共 96 条
-       （`tools/registry.py` 5、`tools/job_runner.py` 5、`queue/dlq.py` 5、
-       `subagent/reporting.py` 5、`queue/idempotency.py` 5、`tools/memory.py` 5、
-       `api/plugins.py` 5、`workflow/dynamic_nodes.py` 5 …）；
+       （现为 **93 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 275 条 / 9 个文件）：
+       大文件 5 个 —— `agent/runtime.py` 99、`main.py` 50、`rag/builder.py` 45、
+       `queue/worker.py` 35、`skill/manager.py` 31（共 260 条）；
+       另有 4 个文件**刻意留出**（缺陷修法需要设计决策，不属"零行为变更"范围）：
+       - `app/tools/browser.py`（4 条）：`BrowserHub` Protocol 声明**同步**的
+         `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**，
+         `_resolve_client` / `_exec` 却同步调用 —— `ids` 会是 coroutine，`return ids[0]` 必
+         `TypeError`。要么把 Protocol 与调用点改成 async，要么给实现加同步包装；
+       - `app/api/plugins.py`（5 条）：引用不存在的 `app.main.get_plugin_pool` 与
+         `Settings.log_dir`（`app/main.py` 里只有模块级 `_plugin_pool`）；
+       - `app/batch_processor.py`（2 条）：引用不存在的 `app.rag.builder.build_knowledge`
+         （`RAGBuilder` 只有 `build_document`，参数签名也不同）；
+       - `app/tools/media.py`（4 条）：对 `pymupdf.Document` 直接迭代（stub 无 `__iter__`），
+         且 `openpyxl` 缺 stub（后者照例走 `ignore_missing_imports` 即可）；
      - **两条仍生效的约束**（新增依赖或新批次时照办）：
        1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
           依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
