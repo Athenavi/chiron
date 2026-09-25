@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from app.config import settings
 from app.gateway.provider import ChatMessage
@@ -12,7 +13,7 @@ from app.interfaces.llm import LLMProvider
 logger = logging.getLogger(__name__)
 
 
-def _safe_json(s):
+def _safe_json(s: Any) -> Any:
     import json as _json
 
     try:
@@ -22,7 +23,7 @@ def _safe_json(s):
 
 
 def build_messages(
-    system_prompt: str, history: list[dict], content: str
+    system_prompt: str, history: list[dict[str, Any]], content: str
 ) -> list[ChatMessage]:
     """构建 LLM 消息列表"""
     messages = []
@@ -67,7 +68,7 @@ def build_messages(
     return messages
 
 
-def convert_tools(tools: list[dict]) -> list[dict]:
+def convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """将工具定义转换为 OpenAI function 格式"""
     converted = []
     for tool in tools:
@@ -91,14 +92,14 @@ def convert_tools(tools: list[dict]) -> list[dict]:
 async def run_agent(
     gateway: GatewayRouter,
     system_prompt: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     content: str,
-    tools: list[dict] = None,
-    llm_config: dict = None,
-    max_turns: int = None,
+    tools: list[dict[str, Any]] | None = None,
+    llm_config: dict[str, Any] | None = None,
+    max_turns: int | None = None,
     tenant_id: str = "",
     provider_hint: str = "",
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[str, Any]]:
     """
     Agent 推理循环，流式返回结果
 
@@ -205,13 +206,13 @@ async def run_agent(
 async def run_agent_with_llm_provider(
     llm_provider: LLMProvider,
     system_prompt: str,
-    history: list[dict],
+    history: list[dict[str, Any]],
     content: str,
-    tools: list[dict] = None,
-    llm_config: dict = None,
-    max_turns: int = None,
+    tools: list[dict[str, Any]] | None = None,
+    llm_config: dict[str, Any] | None = None,
+    max_turns: int | None = None,
     tenant_id: str = "",
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[str, Any]]:
     """
     Agent 推理循环（使用 LLMProvider 接口），流式返回结果
 

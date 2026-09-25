@@ -32,7 +32,7 @@ class LLMProvider(Protocol):
         """Provider 名称"""
         ...
 
-    async def chat(
+    def chat(
         self,
         messages: list[dict[str, Any]],
         model: str | None = None,
@@ -40,8 +40,13 @@ class LLMProvider(Protocol):
         max_tokens: int | None = None,
         temperature: float | None = None,
         stream: bool = True,
-    ) -> AsyncIterator[dict[str, Any]] | LLMResponse:
-        """发送聊天请求，返回流式响应或完整响应"""
+    ) -> AsyncIterator[dict[str, Any]]:
+        """发送聊天请求，返回流式响应。
+
+        返回的是**异步生成器协议**（调用方 ``async for``），因此这里声明为普通 ``def``：
+        写成 ``async def`` 会被当成协程，实现方的 ``yield`` 与调用处的 ``async for`` 都会报错。
+        ``stream=False`` 时实现方也只是 yield 一个聚合结果，不是另返回 ``LLMResponse``。
+        """
         ...
 
     async def embed(

@@ -10,7 +10,6 @@ from typing import Any
 
 from app.gateway.provider import ChatMessage
 from app.gateway.router import GatewayRouter
-from app.interfaces.llm import LLMResponse
 
 logger = logging.getLogger(__name__)
 
@@ -39,7 +38,7 @@ class GatewayLLMProvider:
         max_tokens: int | None = None,
         temperature: float | None = None,
         stream: bool = True,
-    ) -> AsyncIterator[dict[str, Any]] | LLMResponse:
+    ) -> AsyncIterator[dict[str, Any]]:
         """发送聊天请求"""
         # 转换消息格式
         chat_messages = [

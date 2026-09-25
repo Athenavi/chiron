@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
+from typing import Any
 
 
 class VectorStoreBase(ABC):
@@ -16,7 +17,7 @@ class VectorStoreBase(ABC):
         collection: str,
         ids: list[str],
         vectors: list[list[float]],
-        payloads: list[dict],
+        payloads: list[dict[str, Any]],
     ) -> int:
         """插入向量数据，返回插入数量"""
         ...
@@ -29,7 +30,7 @@ class VectorStoreBase(ABC):
         top_k: int = 5,
         threshold: float = 0.5,
         filter_expr: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """搜索相似向量，返回 [{id, content, doc_id, chunk_index, score, ...}]"""
         ...
 

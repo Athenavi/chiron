@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -49,7 +50,7 @@ class QueueProducer:
         self,
         task_type: str,
         tenant_id: str,
-        payload: dict,
+        payload: dict[str, Any],
         priority: int = 0,
         deadline_seconds: int | None = None,
         idempotency_key: str = "",
@@ -77,7 +78,10 @@ class QueueProducer:
         task_id = uuid.uuid4().hex[:16]
         trace_id = trace_id_var.get("")
 
-        message = {
+        # redis-py 的 xadd stub 把字段映射声明为 Dict[EncodableT, EncodableT]（EncodableT 是
+        # bytes/str/int/float 的联合别名）。dict[str, str] 会因参数不变性被判不兼容 ——
+        # 这里的值全是字符串，用 Any 标注即可（写入内容不变）。
+        message: dict[Any, Any] = {
             "task_id": task_id,
             "task_type": task_type,
             "tenant_id": tenant_id,
@@ -115,4 +119,5 @@ class QueueProducer:
     async def get_depth(self) -> int:
         """查询队列深度"""
         info = await self._redis.xinfo_stream(TASK_STREAM)
-        return info.get("length", 0)
+        depth: int = info.get("length", 0)
+        return depth
