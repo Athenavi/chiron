@@ -54,7 +54,7 @@ class DuckDuckGoProvider(WebProvider):
         for a in soup.select("a.result__a")[:max_results]:
             title = a.get_text(strip=True)
             href = a.get("href", "")
-            url = self._decode_redirect(href)
+            url = self._decode_redirect(href if isinstance(href, str) else "")
             snippet = ""
             parent = a.find_parent("div", class_="result")
             if parent:

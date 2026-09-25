@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from app.tools.registry import registry
 
@@ -43,7 +44,7 @@ async def build_skill_catalog() -> str:
     return "\n".join(lines)
 
 
-async def inject_skill_catalog(messages: list[dict]) -> list[dict]:
+async def inject_skill_catalog(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """若消息中尚无技能目录且存在技能，则注入一条 user 消息。"""
     for m in messages:
         if CATALOG_MARKER in (m.get("content", "") or ""):

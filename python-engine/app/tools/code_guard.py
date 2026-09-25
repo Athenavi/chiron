@@ -13,6 +13,8 @@ from __future__ import annotations
 
 import ast
 import builtins as _b
+from collections.abc import Callable
+from typing import Any, NoReturn
 
 # ── 静态安全检查：禁止沙箱代码直接访问宿主 ─────────────────────────────
 DANGEROUS_MODULES = {
@@ -167,21 +169,25 @@ BLOCKED_REFLECTIVE = frozenset(
 )
 
 
-def _make_blocked_builtin(name: str):
-    def _blocked(*_args, **_kwargs):  # noqa: ANN002, ANN003 — 桩函数
+def _make_blocked_builtin(name: str) -> Callable[..., Any]:
+    def _blocked(*_args: Any, **_kwargs: Any) -> NoReturn:  # noqa: ANN002, ANN003 — 桩函数
         raise RuntimeError(f"blocked by runtime guard: {name}()")
 
     return _blocked
 
 
-def safe_builtins() -> dict:
+def safe_builtins() -> dict[str, Any]:
     """构造受控 builtins：安全库白名单导入 + 危险 builtin 全部 stub。"""
     orig = vars(_b).copy()
     real_import = orig["__import__"]
 
     def _guarded_import(
-        name, globals=None, locals=None, fromlist=(), level=0
-    ):  # noqa: A002
+        name: str,
+        globals: Any = None,
+        locals: Any = None,
+        fromlist: Any = (),
+        level: int = 0,
+    ) -> Any:  # noqa: A002
         root = (name or "").split(".")[0]
         if root in SAFE_IMPORTS:
             return real_import(name, globals, locals, fromlist, level)

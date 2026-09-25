@@ -15,6 +15,7 @@ from __future__ import annotations
 import ipaddress
 import logging
 import socket
+from typing import Any
 from urllib.parse import urlparse
 
 import httpx
@@ -118,7 +119,7 @@ async def fetch_url_safe(
     client: httpx.AsyncClient,
     url: str,
     max_redirects: int = 5,
-    **kwargs,
+    **kwargs: Any,
 ) -> httpx.Response:
     """SSRF 安全的 HTTP GET：每次重定向跳转前重新执行 assert_safe_url，
     防止攻击者用公开 URL 302 到内网/云元数据地址（重定向绕过）。

@@ -28,7 +28,7 @@ class AgentDispatchRequest(BaseModel):
     name: str = ""
     description: str = ""
     system_prompt: str = ""
-    tools: list[dict] = []
+    tools: list[dict[str, Any]] = []
     model: str = ""
     max_turns: int = 5
     max_tokens: int = 4096

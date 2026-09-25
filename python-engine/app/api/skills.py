@@ -90,7 +90,7 @@ async def register_skill(
 
     store = _store_for(user_id, tenant_id, _valid_scope(scope))
 
-    cap = get_registry().get(name)
+    cap = await get_registry().get_by_id(name, tenant_id=tenant_id)
     if cap is None:
         raise HTTPException(status_code=404, detail=f"capability not found: {name}")
 

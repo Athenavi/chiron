@@ -41,7 +41,7 @@ def get_tenant_id() -> str:
     return str(get_tool_context("tenant_id", ""))
 
 
-def get_gateway():
+def get_gateway() -> Any:
     """当前运行的 GatewayRouter 引用（子 agent 委派需要）。"""
     return get_tool_context("gateway", None)
 

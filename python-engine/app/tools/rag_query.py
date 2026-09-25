@@ -19,7 +19,7 @@ from app.tools.registry import registry
 logger = logging.getLogger(__name__)
 
 
-async def _get_hybrid_retriever():
+async def _get_hybrid_retriever() -> Any:
     """延迟初始化 HybridRetriever（依赖 MilvusStore + PG 连接池）"""
     from app.config import settings
     from app.db import get_pool

@@ -218,7 +218,7 @@ async def skill_discover(url: str = "") -> dict[str, Any]:
     }
 
 
-async def skill_run(name: str, params: str | dict = "{}") -> dict[str, Any]:
+async def skill_run(name: str, params: str | dict[str, Any] = "{}") -> dict[str, Any]:
     """执行一个已安装的技能。
 
     支持四种 exec 类型：

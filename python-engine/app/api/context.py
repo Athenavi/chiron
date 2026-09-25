@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
@@ -50,7 +51,7 @@ class CondenseRequest(BaseModel):
 
 
 @router.post("/v1/context/condense")
-async def condense_context(body: CondenseRequest) -> dict:
+async def condense_context(body: CondenseRequest) -> dict[str, Any]:
     """把源会话保留区的历史压成核心上下文摘要，**只返回文本**（不写库）。"""
     try:
         pool = get_pool()

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
@@ -19,7 +20,7 @@ class LogLevelUpdate(BaseModel):
 
 
 @router.post("/log-level")
-async def update_log_level(update: LogLevelUpdate):
+async def update_log_level(update: LogLevelUpdate) -> dict[str, Any]:
     """运行时更新日志级别
 
     Args:
@@ -51,7 +52,7 @@ async def update_log_level(update: LogLevelUpdate):
 
 
 @router.get("/log-level")
-async def get_current_log_level():
+async def get_current_log_level() -> dict[str, Any]:
     """获取当前日志级别
 
     Returns:
