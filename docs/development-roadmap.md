@@ -59,106 +59,49 @@
 - **依据**：`python-engine/pyproject.toml` 已声明 `[tool.mypy] strict = true`，
   `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
   python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
-- **已量化**（mypy 2.3.1，`python -m mypy app/`）：接线前基线 **1171 errors / 130 个文件
-  （共 200 个源文件）**；截至第八批已清 404 条 → **767 errors / 80 个文件**。
-  - 按错误码：`type-arg` 488、`no-untyped-def` 266、`no-untyped-call` 116、`arg-type` 59、
-    `union-attr` 45、`no-any-return` 41、`assignment` 40、`attr-defined` 38，其余各 ≤18；
-    与环境相关的（缺 stub / 缺包）合计仅 20 条（`import-not-found` 12 + `import-untyped` 8）。
-  - 按域（前 10）：`agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、
-    `providers` 66、`main.py` 55、`queue` 48、`gateway` 47。
-  - ⚠ 以上在**本机环境**测得，依赖未必与 CI 一致（缺 stub 的 `boto3`/`psutil`/`fitz` 会多报
-    `import-untyped`，缺装的 `opentelemetry` 会报 `import-not-found`）；接线前应在 CI 环境复核基线。
-  - 结论：1171 条**不属于需要下调 `strict` 的量级**（备选阈值是「数万条」），按下面的顺序分批接线。
-- **实施顺序**（不可颠倒）：
+- **已量化**（mypy 2.3.1）：接线前基线 **1171 errors / 130 个文件（共 200 个源文件）**，
+  按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
+  `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
+  `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
+  **截至第八批已清 404 条 → 767 / 80 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  （备选阈值是「数万条」）。
+- **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **按域分批接线**：
-     - ✅ **第一批**：`app/sse` + `app/trace` + `app/config.py`，共 **11 条** —— `dict`/`list`
-       补类型参数、两个 `model_validator` 补 `-> Self`、返回注解补 `-> dict[str, Any]`、
-       `ConfigDict` → `SettingsConfigDict`；
-     - ✅ **第二批**：`app/interfaces`（`llm.py` 5 + `vectorstore.py` 2，全是 `type-arg`），
-       **闭包干净**（只检查 4 个文件）；
-     - ✅ **第三批**：`app/media` + `app/observability`，共 **10 条** —— `prompt: str = None`
-       → `str | None`、`record_process_metrics` 补 `-> None`、structlog processor 的签名
-       （`logging.Logger` / `dict` → `Any` / `MutableMapping[str, Any]`）。
-       另在 `pyproject.toml` 新增 `[[tool.mypy.overrides]]`：`boto3.*` / `botocore.*` / `fitz` /
-       `docx` / `psutil` 这五个库既无 `py.typed` 也无可用 stub，只对其**放宽 import 解析**
-       （这些库内部不参与检查，本仓库代码仍按 strict 检查）；
-     - ✅ **第四批**：`app/db.py` + `app/db_client.py`，共 **36 条** —— 补函数注解
-       （`fetch_one`/`fetch_all`/`execute`/`close`/`close_clients`/`ensure_tables` 等）、
-       `dict`/`list` 补类型参数、`_RowDict(dict[str, Any])`、以及给内部中间变量显式注解以
-       消除 `no-any-return`。两处**签名与实现不符**在此修正：`init_pool` 声明
-       `-> asyncpg.Pool` 却在 unified 模式 `return None`（改为 `| None`）；`get_pool` 的
-       unified 分支返回的是鸭子类型适配器而非真 `asyncpg.Pool`（用 `cast` 收敛，避免改动
-       全部调用点）。另因 asyncpg 也无 `py.typed`，把它并入 overrides；
-     - ✅ **第五批**：`app/llm` + `app/chaos` + `app/middleware` + `app/gateway/ratelimit.py`，
-       共 **17 条** —— `LLMClient.__init__`/`bind_gateway` 补注解（`_gateway`/`_local_encoder`
-       显式 `Any`：后者是动态加载的 SentenceTransformer）；`ChaosInjectionMiddleware` 的
-       ASGI 三元组 `scope`/`receive`/`send` 补 `Any`（刻意不依赖 starlette 类型）；
-       `AuthMiddleware`/`RateLimitMiddleware` 的 `app` 补 `Any`；两处 `get_remaining` 补
-       `dict[str, Any]`、`_prune` 的 bucket 补 `list[float]`。JSON / `jwt.decode` 的返回值
-       本质是 `Any`，一律用显式注解的中间变量消除 `no-any-return`。
-       另把 `sentence_transformers` 并入 overrides（本地嵌入的可选 extra，
-       `requirements.txt` 刻意不装它）；
-     - ✅ **第六批**（从「按目录」改为「按文件/子模块」）：`app/engine_registry.py`、
-       `app/session_store.py`、`app/knowledge`、`app/context`，加上它们的传递依赖
-       `app/rag/retriever.py` 与 `app/memory/layers.py`，共 **69 条** —— 补 `list`/`dict`
-       类型参数与函数注解、`asyncio.Task` 补类型参数、JSON 返回值用显式注解的中间变量消除
-       `no-any-return`；`retriever.py` 的两个属性补 `Any`（pymilvus 无类型标注）；
-       `branch_condense` 的 `render_messages(future_messages or [])` 收敛 Optional 实参。
-       另把 `pymilvus` 并入 overrides；
-     - ✅ **第七批**：`app/providers`（11 文件）+ `app/memory`（7 文件）+ `app/gateway/{provider,cache,router}.py`
-       + `app/interfaces/cache.py`，共 **142 条**。这一批首次包含**真实的类型语义问题**，不只是缺注解：
-       - `memory/profile.py`：`ProfileStore` 定义了名为 `list` 的方法，**遮蔽了内置 `list`**，
-         导致类内签名里的 `list[float]` 被解析成那个方法（`valid-type`）—— 类内改用 `builtins.list`；
-       - `gateway/provider.py` 与 `interfaces/cache.py`：`chat_stream` / `scan_iter` 是**异步生成器**
-         协议，基类却写成 `async def`（被当成协程）—— 于是实现方报 `override` 不兼容、调用处报
-         `"Coroutine" has no attribute "__aiter__"`。基类改为普通 `def`（抽象方法体仍是 `...`）；
-       - `memory/conflict_manager.py`：14 处 `Redis | None` 的 `union-attr`。公开入口本就检查了
-         `None` 并降级，内部方法没有 —— 新增 `_require_redis()` 收敛类型（真为 `None` 时明确
-         `RuntimeError`，好过 `AttributeError`）；
-       - `memory/service.py`：`SessionContext.meta` 实际可为 `None`（`_session_meta` 未配置时），
-         类型改为 `SessionMeta | None`；`on_turn_complete` 用局部 `store` 变量让收窄对 mypy 可见；
-       - `providers/cache/redis.py`：`get` / `lrange` 的 `bytes | str` 用 `cast` 收敛（`decode_responses=True`，
-         见 `app/redis_client.get_redis`）—— 注意 `aioredis.Redis` 在当前版本**不是泛型**，不能写成 `Redis[str]`；
-       - `gateway/router.py`、`providers/llm/gateway.py`：`Argument 2 to "embed" ... "str | None"` 改为
-         `model or self._default_model`（原本传 `None` 会到 SDK 报错）。
-       另把 `pymilvus`（无 `py.typed`）并入 overrides；
-     - ✅ **第八批**：`app/core`（6 个文件 / 80 条），另顺带修 `app/main.py` 的 `get_gateway`
-       返回注解（`capabilities.py` / `task_router.py` 调用它，缺注解会报 `no-untyped-call`）。
-       **本批改变了分批策略**：剩余部分的依赖闭包已不可控 —— `app/core` 的传递依赖达 **76 个文件**
-       （`app/tools` / `app/workflow` / `app/skill` 亦然，各 74–76），单文件粒度也常爆炸
-       （`app/tools/registry.py` → 72 个文件）。因此 CI 的门禁命令改为
-       **`mypy --follow-imports=silent`**：只报告命令行里列出的模块的错误，依赖模块由它们各自的
-       门禁覆盖（列出的模块仍全部按 strict 检查）。前七批的 22 个路径在该开关下结果不变。
-       另发现 venv 缺 `fastapi` 会让 `app/api/__init__.py` 报 import 失败、分析中断 —— 这正是此前
-       「errors prevented further checking」的根因，已补装 `fastapi==0.115.12`。
-       本批还修掉 3 个**真实缺陷**：
-       - `core/agent_skill_selector.py`：两处 `cap.usage_count` —— `Capability` 没有该字段
-         （它用 `call_count`），运行时必抛 `AttributeError`；
-       - `core/task_router.py`：`_group_by_dependencies` 里 `t not in resolved` —— `resolved`
-         存的是 `subtask_id`（str），拿 `SubTask` 去比较恒为真，循环依赖分支会把**全部**任务
-         重复加入（类型注解暴露了它，已改为比较 `subtask_id`）；
-       - `core/prompt_library.py`：`_executor: callable | None` —— 把内置函数 `callable` 当类型用。
-     - 八批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现覆盖
-       **23 个路径**，全量存量降至 **767 / 80 文件**；
-     - 后续每清零一块，就往那个列表里追加，全部通过后改成 `mypy app/`；
-     - **下一批的依赖闭包（实测，第六批之后；`providers` / `memory` 已在第七批清掉）**：
+  2. **分批接线**：✅ 已完成 **8 批、清 404 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+     各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
-       | 候选 | 自身存量 | 闭包情况 |
-       |---|---|---|
-       | `app/tools` | 15+ | 8 个文件，且 mypy 报 **errors prevented further checking** |
-       | `app/workflow` / `app/skill` / `app/subagent` | 各 29 | 各 21 个文件，且同样被阻断 |
+     | 批 | 提交 | 范围 |
+     |---|---|---|
+     | 1 | `21a96ae` | `app/sse` + `app/trace` + `app/config.py`（11 条） |
+     | 2 | `478047a` | `app/interfaces`（7 条） |
+     | 3 | `7b9204a` | `app/media` + `app/observability`（10 条；引入 `[[tool.mypy.overrides]]`） |
+     | 4 | `c0af3bb` | `app/db.py` + `app/db_client.py`（36 条；两处签名与实现不符） |
+     | 5 | `5200cdf` | `app/llm` + `app/chaos` + `app/middleware` + `gateway/ratelimit.py`（17 条） |
+     | 6 | `d613c54` | `engine_registry` + `session_store` + `knowledge` + `context`（69 条） |
+     | 7 | `07bf869` | `providers` + `memory` + `gateway/{provider,cache,router}`（142 条） |
+     | 8 | `7cefafc` | `app/core`（80 条；门禁改用 `--follow-imports=silent`） |
 
-       ⚠ 「errors prevented further checking」表示闭包里有 mypy 无法解析的 import，
-       真实错误数会**高于**上表 —— 接这三者前要先确认被阻断的原因（很可能是循环 import）。
-       ✅ 剩下的大域（`agent` 214、`api` 108、`tools` 88、`core` 80…）已没有「干净小目标」，
-       后续每批都要按**文件/子模块**切、并接受闭包带来的连带修复。
-     > **门禁集合是「目标目录 + 传递依赖」，不是单看目录自身条数**（第一批的 `app/config.py`
-     > 与上表就是这么来的）—— 每批都要先跑一遍确定闭包。
-     > ⚠ **闭包结果依赖第三方 stub 版本**：复核用的隔离 `venv` 只能建在**本机唯一的 Python 3.14**
-     > 上，且 `requirements.txt` 的固定版本在 3.14 装不了（`grpcio==1.71.1` 无 wheel、
-     > `pydantic==2.11.5` 需 Rust 编译），故用的是最新版 pydantic/pydantic-settings。
-     > CI 是 3.11 + 固定版本，若该 job 首次运行报出本地没有的错误，根因大概率在此。
+     第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
+     `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
+     `core/task_router.py` 的 `_group_by_dependencies`（拿 `SubTask` 对象与 `subtask_id` 比较，
+     恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
+     - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
+       （现为 **23 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量分布）：`agent/runtime.py` 99、
+       `main.py` 52、`rag/builder.py` 45、`queue/worker.py` 35、`skill/manager.py` 31、
+       `api/unified_executor.py` 27、`api/knowledge.py` 24 …；
+     - **两条仍生效的约束**（新增依赖或新批次时照办）：
+       1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
+          依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
+          `silent` 让门禁只报告**列出的**模块，依赖由它们各自的门禁覆盖 —— 列出的模块仍按 strict 检查；
+       2. **无 `py.typed` 的第三方库走 `[[tool.mypy.overrides]]`**（`pyproject.toml`），当前为
+          `asyncpg` / `boto3.*` / `botocore.*` / `docx` / `fitz` / `psutil` / `pymilvus` /
+          `sentence_transformers` —— 只放宽这些库的 import 解析，本仓库代码仍按 strict 检查；
+          **不要用 `# type: ignore` 绕**；
+     - ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定
+       版本装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI。
+       CI 是 3.11 + 固定版本 —— 若该 step 首次运行报出本地没有的错误，根因大概率在此；
+       先按 CI 结果复核，再决定是补 overrides 还是改代码。
   3. 全量通过后再把 CI 改成 `mypy app/`。
 - **验收**：CI 中 mypy 对已接线目录返回 0；`pyproject.toml` 的 `strict = true` 与实际门禁一致。
 - **备选**：若量化结果不可接受（如数万条），则**下调 `pyproject.toml` 的 strict 声明**并写明降级理由
