@@ -21,7 +21,10 @@ SaaS 架构决策：内部（runtime/session 缓存/压缩）统一使用**中�
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from app.gateway.provider import ChatMessage
 
 # ═════════════════════ 中立格式工具 ═════════════════════
 
@@ -32,9 +35,9 @@ def make_message(
     role: str,
     content: str = "",
     tool_call_id: str = "",
-    tool_calls: list[dict] | None = None,
+    tool_calls: list[dict[str, Any]] | None = None,
     **extra: Any,
-) -> dict:
+) -> dict[str, Any]:
     """构造中立格式消息（固定字段顺序：role → content → tool_call_id → tool_calls）。"""
     if role not in ROLES:
         raise ValueError(f"unknown role: {role}")
@@ -77,7 +80,7 @@ def make_message(
     return msg
 
 
-def is_neutral(messages: list[dict]) -> bool:
+def is_neutral(messages: list[dict[str, Any]]) -> bool:
     """检测消息列表是否已是中立格式（无 OpenAI 包装）。"""
     for m in messages:
         for tc in m.get("tool_calls") or []:
@@ -89,7 +92,7 @@ def is_neutral(messages: list[dict]) -> bool:
 # ═════════════════════ OpenAI 适配 ═════════════════════
 
 
-def to_openai(messages: list[dict]) -> list[dict]:
+def to_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """中立格式 → OpenAI Chat Completions 消息（dict 列表）。"""
     out = []
     for m in messages:
@@ -116,7 +119,7 @@ def to_openai(messages: list[dict]) -> list[dict]:
     return out
 
 
-def from_openai(messages: list[dict]) -> list[dict]:
+def from_openai(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """OpenAI 格式 → 中立格式（兼容历史 session 缓存）。"""
     return [
         make_message(
@@ -132,7 +135,7 @@ def from_openai(messages: list[dict]) -> list[dict]:
 # ═════════════════════ 自动格式推断 ═════════════════════
 
 
-def detect_format(messages: list[dict]) -> str:
+def detect_format(messages: list[dict[str, Any]]) -> str:
     """自动推断消息格式：openai | anthropic | gemini | neutral | unknown。
 
     市场格式特征（调研结论）：
@@ -166,7 +169,7 @@ def detect_format(messages: list[dict]) -> str:
     return "unknown"
 
 
-def auto_normalize(messages: list[dict]) -> list[dict]:
+def auto_normalize(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """自动推断输入格式并统一为中立格式（SaaS：任意提供商来源的历史/缓存均可消费）。"""
     if not messages:
         return []
@@ -194,13 +197,13 @@ def auto_normalize(messages: list[dict]) -> list[dict]:
 # ═════════════════════ Anthropic 适配 ═════════════════════
 
 
-def from_anthropic(messages: list[dict]) -> list[dict]:
+def from_anthropic(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Anthropic Messages API 格式 → 中立格式。
 
     - content 为 blocks 数组：text / tool_use（assistant）/ tool_result（user 消息内）
     - tool_result 拆为独立 role="tool" 消息（tool_call_id = tool_use_id）
     """
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for m in messages or []:
         role = m.get("role", "user")
         blocks = m.get("content")
@@ -212,8 +215,8 @@ def from_anthropic(messages: list[dict]) -> list[dict]:
             )
             continue
         text_parts: list[str] = []
-        tool_calls: list[dict] = []
-        tool_results: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
+        tool_results: list[dict[str, Any]] = []
         for b in blocks:
             if not isinstance(b, dict):
                 continue
@@ -264,9 +267,9 @@ def from_anthropic(messages: list[dict]) -> list[dict]:
 # ═════════════════════ Gemini 适配 ═════════════════════
 
 
-def from_gemini(messages: list[dict]) -> list[dict]:
+def from_gemini(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Gemini 格式（role: user/model，parts 数组）→ 中立格式（基础支持）。"""
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for m in messages or []:
         role = "assistant" if m.get("role") == "model" else m.get("role", "user")
         parts = (
@@ -275,7 +278,7 @@ def from_gemini(messages: list[dict]) -> list[dict]:
             else m.get("parts", [])
         )
         text_parts: list[str] = []
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
         for p in parts or []:
             if not isinstance(p, dict):
                 continue
@@ -319,7 +322,7 @@ def from_gemini(messages: list[dict]) -> list[dict]:
 # ═════════════════════ gateway 适配 ═════════════════════
 
 
-def to_chat_messages(messages: list[dict]):
+def to_chat_messages(messages: list[dict[str, Any]]) -> list[ChatMessage]:
     """中立格式 → gateway.ChatMessage 对象列表（provider 边界）。"""
     from app.gateway.provider import ChatMessage, ToolCall
 

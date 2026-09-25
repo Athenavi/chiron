@@ -155,14 +155,14 @@ class EventSink:
         self._budget = per_run_budget
         self._buffer_bytes = buffer_bytes
         # (run_id, channel) -> (pending_text, first_pending_ts, truncated)
-        self._pending: dict[tuple[str, str], list] = {}
+        self._pending: dict[tuple[str, str], dict[str, Any]] = {}
         # run_id -> (window_start, count)
-        self._budget_state: dict[str, list] = {}
+        self._budget_state: dict[str, list[float]] = {}
         self.dropped = 0
         # 常驻投递器：**不依赖父 SSE 生成器存活**（见 attach_persistent 的说明）
         self._deliverers: list[Callable[[dict[str, Any]], Awaitable[None]]] = []
         self._deliver_queue: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=DEFAULT_DELIVER_QUEUE)
-        self._deliver_task: asyncio.Task | None = None
+        self._deliver_task: asyncio.Task[Any] | None = None
         self.delivery_dropped = 0
 
     # ── 写入端（由 SubAgentRunner 调用）──
@@ -452,4 +452,5 @@ def get_event_sink() -> EventSink | None:
     """从工具上下文取当前 run 的事件旁路（未启用时为 None）。"""
     from app.tools.context import get_tool_context
 
-    return get_tool_context("event_sink")
+    sink: EventSink | None = get_tool_context("event_sink")
+    return sink

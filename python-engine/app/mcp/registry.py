@@ -33,7 +33,7 @@ async def init_mcp(config_path: str) -> MCPClient | None:
     return client
 
 
-def _register_mcp_tool(client: MCPClient, tool: MCPTool):
+def _register_mcp_tool(client: MCPClient, tool: MCPTool) -> None:
     """Register a single MCP tool as a callable tool in the local registry."""
 
     # Build JSON Schema for parameters

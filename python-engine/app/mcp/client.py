@@ -11,7 +11,7 @@ import json
 import logging
 import socket
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -111,7 +111,7 @@ class HTTPSSEConnection:
             )
 
     async def send_jsonrpc(
-        self, method: str, params: dict | None = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Send a JSON-RPC request via HTTP POST and read the response."""
         self._req_id += 1
@@ -141,9 +141,10 @@ class HTTPSSEConnection:
 
         if "error" in data and data["error"]:
             raise RuntimeError(f"MCP error: {data['error'].get('message', 'unknown')}")
-        return data.get("result", {})
+        result: dict[str, Any] = data.get("result", {})
+        return result
 
-    async def close(self):
+    async def close(self) -> None:
         await self._client.aclose()
 
 
@@ -155,13 +156,18 @@ class ServerConnection:
         self.name = name
         self._req_id = 0
         self._lock = asyncio.Lock()
+        # create_subprocess_exec 传了 PIPE，三个流运行时恒非 None；这里 cast 只为把
+        # `StreamReader | None` 收窄成具体类型（存成属性，避免每个使用点各自断言）。
+        self._stdin = cast("asyncio.StreamWriter", proc.stdin)
+        self._stdout = cast("asyncio.StreamReader", proc.stdout)
+        self._stderr = cast("asyncio.StreamReader", proc.stderr)
         # 异步读取 stderr 并记录到日志，避免 DEVNULL 丢弃错误信息
         self._stderr_task = asyncio.ensure_future(self._read_stderr())
 
-    async def _read_stderr(self):
+    async def _read_stderr(self) -> None:
         """异步读取 MCP 服务器 stderr 并记录到日志。"""
         try:
-            async for line in self.proc.stderr:
+            async for line in self._stderr:
                 if line.strip():
                     logger.warning(
                         "MCP stderr [%s]: %s", self.name, line.decode().rstrip()
@@ -170,7 +176,7 @@ class ServerConnection:
             pass
 
     async def send_jsonrpc(
-        self, method: str, params: dict | None = None
+        self, method: str, params: dict[str, Any] | None = None
     ) -> dict[str, Any]:
         """Send a JSON-RPC request and read the response."""
         self._req_id += 1
@@ -183,11 +189,11 @@ class ServerConnection:
         req_line = json.dumps(req) + "\n"
 
         async with self._lock:
-            self.proc.stdin.write(req_line.encode())
-            await self.proc.stdin.drain()
+            self._stdin.write(req_line.encode())
+            await self._stdin.drain()
 
             response_line = await asyncio.wait_for(
-                self.proc.stdout.readline(), timeout=30.0
+                self._stdout.readline(), timeout=30.0
             )
             if not response_line:
                 raise ConnectionError(f"No response from MCP server {self.name}")
@@ -195,9 +201,10 @@ class ServerConnection:
         resp = json.loads(response_line)
         if "error" in resp and resp["error"]:
             raise RuntimeError(f"MCP error: {resp['error'].get('message', 'unknown')}")
-        return resp.get("result", {})
+        result: dict[str, Any] = resp.get("result", {})
+        return result
 
-    async def close(self):
+    async def close(self) -> None:
         """Kill the server process."""
         if self.proc and self.proc.returncode is None:
             try:
@@ -215,10 +222,10 @@ class MCPClient:
         #: 唯一被允许持凭据连危险 server 的角色（见 assert_server_connectable）。
         self._role = role
         self._servers = servers
-        self._conns: dict[str, ServerConnection] = {}
+        self._conns: dict[str, ServerConnection | HTTPSSEConnection] = {}
         self._tools: list[MCPTool] = []
 
-    async def start(self):
+    async def start(self) -> None:
         """Connect to all configured MCP servers and discover their tools."""
         for server in self._servers:
             try:
@@ -227,7 +234,7 @@ class MCPClient:
                 logger.error("MCP connect %s failed: %s", server.name, e)
                 raise
 
-    async def _connect_server(self, server: ServerDef):
+    async def _connect_server(self, server: ServerDef) -> None:
         """Connect to a single MCP server and discover its tools.
 
         **直连守卫（安全边界）**：引擎只允许直连**声明为只读**的 MCP server。
@@ -248,7 +255,7 @@ class MCPClient:
         else:
             raise ValueError(f"Unsupported MCP transport: {server.transport}")
 
-    async def _connect_http_sse(self, server: ServerDef):
+    async def _connect_http_sse(self, server: ServerDef) -> None:
         """Connect to an MCP server via HTTP SSE."""
         if not server.url:
             raise ValueError("HTTP SSE transport requires 'url' in ServerDef")
@@ -271,7 +278,7 @@ class MCPClient:
         self._register_tools(server, raw_tools)
         logger.info("MCP server %s connected (HTTP SSE): %d tools", server.name, len(raw_tools))
 
-    async def _connect_stdio(self, server: ServerDef):
+    async def _connect_stdio(self, server: ServerDef) -> None:
         """Connect to an MCP server via stdio (subprocess)."""
         # 安全修复（P0-S7）：仅允许 PLUGIN_COMMAND_ALLOWLIST 白名单内的命令被拉起
         from app.tools.ssrf import command_allowed
@@ -315,7 +322,7 @@ class MCPClient:
         self._register_tools(server, raw_tools)
         logger.info("MCP server %s connected (stdio): %d tools", server.name, len(raw_tools))
 
-    def _register_tools(self, server: ServerDef, raw_tools: list[dict]):
+    def _register_tools(self, server: ServerDef, raw_tools: list[dict[str, Any]]) -> None:
         """Register tools from a server response."""
         for i, t in enumerate(raw_tools):
             tool = MCPTool(
@@ -353,7 +360,7 @@ class MCPClient:
                 return result
         return {"error": f"Tool {tool_name} not found on any MCP server"}
 
-    async def close(self):
+    async def close(self) -> None:
         """Shut down all MCP server connections."""
         for name, conn in self._conns.items():
             try:
