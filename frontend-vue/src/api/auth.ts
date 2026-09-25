@@ -56,6 +56,21 @@ export async function listPublicSsoProviders(): Promise<SsoPublicProvider[]> {
   return data?.data ?? []
 }
 
+/**
+ * 登录接口返回的用户信息。
+ *
+ * 与 `stores/auth.ts` 的 `User` 是**子集**关系：后者多一个可选的 `settings`
+ * （由 `GET /v1/auth/profile` 下发、`PUT` 局部合并）。因此这里的结构可以直接
+ * 交给 `authStore.applySession(token, user)`。
+ */
+export interface AuthUser {
+  id: string
+  email: string
+  name: string
+  role: string
+  tenant_id: string
+}
+
 export interface UserIdentity {
   id: string
   provider_name: string
@@ -162,7 +177,7 @@ export async function smsLogin(body: {
   code: string
   captcha_token?: string
   captcha_randstr?: string
-}): Promise<{ token: string; user: any }> {
+}): Promise<{ token: string; user: AuthUser }> {
   const { data } = await api.post('/v1/auth/sms/login', body)
   return data?.data
 }
@@ -277,7 +292,7 @@ export async function emailLogin(body: {
   code: string
   captcha_token?: string
   captcha_randstr?: string
-}): Promise<{ token: string; user: any }> {
+}): Promise<{ token: string; user: AuthUser }> {
   const { data } = await api.post('/v1/auth/email/login', body)
   return data?.data
 }

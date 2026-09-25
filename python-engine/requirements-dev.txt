@@ -1,6 +1,16 @@
-# 测试依赖
-pytest==8.4.1
-pytest-asyncio==1.0.0
+# 开发/测试依赖。
+#
+# **权威声明**是 pyproject.toml 的 [project.optional-dependencies].dev
+# （pytest / pytest-asyncio / pytest-cov / ruff / mypy —— mypy 的 strict 配置也在那里）。
+# 本文件供 CI 与本地 `pip install -r requirements-dev.txt` 使用，必须与它保持同一组包与下限。
+#
+# 此前两边各自漂移（这里缺 pytest-cov / ruff / mypy），而 CI 又绕过两者手写
+# `pip install pytest ruff` —— 三处各说各话，等于没有单一来源。
+pytest>=8.4.0
+pytest-asyncio>=1.0.0
+pytest-cov>=6.0.0
+ruff>=0.11.0
+mypy>=1.15.0
 
-# S3 存储（可选，用于 MediaStore S3 后端）
-boto3==1.40.76
+# S3 存储（可选，用于 MediaStore S3 后端）—— 对应 pyproject 的 [s3] extra
+boto3>=1.40.0

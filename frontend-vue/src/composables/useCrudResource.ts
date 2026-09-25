@@ -45,6 +45,6 @@ export function useCrudResource<T>(initialData: T, loader: () => Promise<T>) {
  * 无法提取时返回兜底文案。统一各视图 alert 的取值逻辑。
  */
 export function apiErrorMessage(error: unknown, fallback: string): string {
-  const message = (error as any)?.response?.data?.error
+  const message = (error as { response?: { data?: { error?: unknown } } })?.response?.data?.error
   return typeof message === 'string' && message ? message : fallback
 }

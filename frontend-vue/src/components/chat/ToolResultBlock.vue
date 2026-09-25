@@ -149,7 +149,9 @@ const diffTitle = computed(() => {
           :key="i"
           class="diff-line"
           :class="line.kind"
-        >{{ line.text || ' ' }}</div>
+        >
+          {{ line.text || ' ' }}
+        </div>
       </div>
       <button
         v-if="diffHidden > 0"

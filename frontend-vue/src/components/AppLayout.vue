@@ -7,7 +7,7 @@ import { useAuthStore } from '../stores/auth'
 // Ant Design Vue 组件
 import {
   Avatar,
-  Button,
+  
   Dropdown,
   Menu,
   Modal,
@@ -31,7 +31,7 @@ import {
   HistoryOutlined,
   RobotOutlined,
   AppstoreOutlined,
-  ConsoleSqlOutlined,
+  
   ApiOutlined,
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'

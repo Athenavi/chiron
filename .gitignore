@@ -70,6 +70,12 @@ sandbox/
 /plugins.json
 /frontend-vue/public/vendor/
 
+# 仓库根的 vendor/：放的是**本地参考**（第三方源码仓库 DeepSeek-Reasonix / ZCode / dsh-synapse，
+# 以及外部服务的 API 文档如「晴辰云邮」的 mail.md）。它们不参与构建、也不随仓库分发，
+# 因此整体忽略 —— 此前它们长期以未跟踪状态噪声化 `git status`，而 mail.md 又被单独特例暂存，
+# 定位含混。需要共享其中内容时，请把**提炼后的结论**写进 docs/，而不是把原文搬进仓库。
+/vendor/
+
 # ── 第三方参考源码 ──
 # 这里原先逐文件列出了 /third/DeepSeek-Reasonix-main-v2/ 的 6604 个路径
 # （该目录已不在工作区），使本文件膨胀到 6677 行 / 504KB。

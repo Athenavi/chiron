@@ -38,7 +38,7 @@ export function setupRoutePreload(router: Router) {
     try {
       const component = getRouteComponent(routeName)
       if (component && typeof component === 'function') {
-        const loadFn = component as () => Promise<any>
+        const loadFn = component as () => Promise<unknown>
         await loadFn()
         if (import.meta.env.DEV) {
           console.log(`[Preload] Route ${routeName} preloaded successfully`)

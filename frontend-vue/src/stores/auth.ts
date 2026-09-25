@@ -116,7 +116,7 @@ export const useAuthStore = defineStore('auth', () => {
         tenant_id: data.tenant_id || '',
       }
       persistUserToStorage(user.value)
-    } catch (error) {
+    } catch {
       // Cookie 无效，清除本地态
       await logout()
     }

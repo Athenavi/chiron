@@ -7,7 +7,7 @@ export interface AdminMetrics {
   queue_backlog: number
   cache_hit_rate: number
   api_latency_p99: number
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface AdminUser {
@@ -24,17 +24,17 @@ export interface SystemInfo {
   uptime_seconds: number
   database: string
   redis: string
-  [key: string]: any
+  [key: string]: unknown
 }
 
 export interface StorageConfig {
   backend: string
-  config: Record<string, any>
+  config: Record<string, unknown>
 }
 
 export interface RedisInfo {
   mode: string
-  stats: Record<string, any>
+  stats: Record<string, unknown>
 }
 
 export interface QueueStats {
@@ -200,7 +200,7 @@ export async function getStorage(): Promise<StorageConfig> {
   return data.data
 }
 
-export async function updateStorage(config: { backend: string; [key: string]: any }): Promise<void> {
+export async function updateStorage(config: { backend: string; [key: string]: unknown }): Promise<void> {
   await api.put('/v1/admin/storage', config)
 }
 
@@ -216,7 +216,7 @@ export async function getRedis(): Promise<RedisInfo> {
   return data.data
 }
 
-export async function updateRedis(config: { mode: string; [key: string]: any }): Promise<void> {
+export async function updateRedis(config: { mode: string; [key: string]: unknown }): Promise<void> {
   await api.put('/v1/admin/redis', config)
 }
 
@@ -291,12 +291,12 @@ export async function saveLlmProviderBaseURL(id: string, baseUrl: string): Promi
 
 // ── Settings ──
 
-export async function saveSettings(category: string, config: Record<string, any>): Promise<void> {
+export async function saveSettings(category: string, config: Record<string, unknown>): Promise<void> {
   await api.put('/v1/admin/settings', { category, config })
 }
 
 /** 读取已持久化的某类系统设置（rate_limit/degradation/cache/api_key） */
-export async function getSettings(category: string): Promise<Record<string, any>> {
+export async function getSettings(category: string): Promise<Record<string, unknown>> {
   const { data } = await api.get(`/v1/admin/settings?category=${encodeURIComponent(category)}`)
   return data?.data?.config ?? {}
 }
@@ -313,7 +313,7 @@ export interface PaymentChannelStatus {
 
 export interface PaymentConfigResponse {
   /** 当前生效配置（DB 覆盖 env 的结果），键与后台表单字段一一对应 */
-  config: Record<string, any>
+  config: Record<string, unknown>
   channels: Record<string, PaymentChannelStatus>
   /** 需在渠道后台登记的异步通知地址 */
   callback_urls: Record<string, string>
@@ -329,7 +329,7 @@ export async function getPaymentConfig(): Promise<PaymentConfigResponse> {
  * 保存支付渠道配置：服务端先校验（非法私钥等直接 400 且不落库），
  * 通过后加密入库并热重建渠道客户端（无需重启），返回生效后的配置。
  */
-export async function savePaymentConfig(config: Record<string, any>): Promise<PaymentConfigResponse> {
+export async function savePaymentConfig(config: Record<string, unknown>): Promise<PaymentConfigResponse> {
   const { data } = await api.put('/v1/admin/payments', { config })
   return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
 }

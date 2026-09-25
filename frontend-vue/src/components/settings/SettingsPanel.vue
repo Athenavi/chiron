@@ -459,7 +459,7 @@ onMounted(async () => {
 </script>
 
 <template>
-  <a-tabs v-model:activeKey="activeTab">
+  <a-tabs v-model:active-key="activeTab">
     <!-- ── 通用设置 ── -->
     <a-tab-pane
       key="general"

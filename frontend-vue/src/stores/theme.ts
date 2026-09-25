@@ -272,7 +272,7 @@ export const useThemeStore = defineStore('theme', () => {
     applyTheme()
   })
 
-  systemDarkMql.addEventListener('change', (e) => {
+  systemDarkMql.addEventListener('change', () => {
     if (preference.value === 'system') {
       applyTheme()
     }

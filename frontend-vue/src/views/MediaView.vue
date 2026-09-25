@@ -476,7 +476,7 @@ function pauseAllUploads() {
 // 重试失败的上传
 async function retryFailedUploads() {
   const failedEntries = Array.from(uploadingFiles.value.entries())
-    .filter(([_, state]) => state.status === 'error')
+    .filter(([, state]) => state.status === 'error')
   
   if (failedEntries.length === 0) {
     message.info(tr('没有失败的上传任务'))

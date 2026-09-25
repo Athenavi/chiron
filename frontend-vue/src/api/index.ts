@@ -57,8 +57,8 @@ export interface Agent {
   name: string
   description?: string
   system_prompt?: string
-  tools?: any[]
-  llm_config?: Record<string, any>
+  tools?: unknown[]
+  llm_config?: Record<string, unknown>
   max_turns: number
   timeout_seconds: number
   enabled: boolean
@@ -299,7 +299,7 @@ export interface SSEConnectionOptions {
 
 export function createSSEConnection(
   sessionId: string,
-  onMessage: (data: any) => void,
+  onMessage: (data: unknown) => void,
   onError?: () => void,
   opts: SSEConnectionOptions = {},
 ) {
@@ -324,7 +324,7 @@ export function createSSEConnection(
     try {
       const data = JSON.parse(event.data)
       onMessage(data)
-    } catch (e) {
+    } catch {
       // SSE 解析错误不阻断连接
     }
     // 服务端输出的 id: 行 → 浏览器解析为 event.lastEventId；记录最新值供跨轮重建续传
@@ -363,7 +363,7 @@ export interface MarketItem {
   name: string
   version: string
   status: string
-  manifest: Record<string, any>
+  manifest: Record<string, unknown>
   installed?: boolean
 }
 
@@ -374,7 +374,7 @@ export async function listMarket(type: MarketType): Promise<MarketItem[]> {
   return Array.isArray(d?.items) ? d.items : []
 }
 
-export async function installMarket(type: MarketType, itemID: string): Promise<any> {
+export async function installMarket(type: MarketType, itemID: string): Promise<unknown> {
   const resp = await api.post(`/v1/market/${type}/${itemID}/install`)
   return resp.data
 }
@@ -414,7 +414,7 @@ export async function resolveMediaUrl(asset: { id?: string; file_url?: string })
     const url = await signMediaUrl(asset.id)
     signedMediaCache.set(asset.id, { url, exp: Date.now() + 12 * 60 * 1000 })
     return url
-  } catch (e) {
+  } catch {
     return f
   }
 }
@@ -438,7 +438,7 @@ export async function listModels(): Promise<LlmModel[]> {
   return Array.isArray(d?.models) ? d.models : []
 }
 
-export async function triggerCronJob(id: string): Promise<any> {
+export async function triggerCronJob(id: string): Promise<unknown> {
   const resp = await api.post(`/v1/admin/cron-jobs/${id}/trigger`)
   return resp.data
 }
@@ -455,7 +455,8 @@ export interface TemplateItem {
   type: 'workflow' | 'agent' | 'skill'
   name: string
   description: string
-  payload: Record<string, any>
+  /** 模板内容（workflow 模板为 `{nodes, edges}`）—— 具体形状由各工作台自行窄化 */
+  payload: Record<string, unknown>
 }
 
 export async function listTemplates(type?: 'workflow' | 'agent' | 'skill'): Promise<TemplateItem[]> {
@@ -477,7 +478,7 @@ function toWorkbenchResources(raw: unknown): WorkbenchResource[] {
   if (!Array.isArray(raw)) return []
   const out: WorkbenchResource[] = []
   for (const item of raw) {
-    const record = item as Record<string, any> | null
+    const record = item as Record<string, unknown> | null
     const id = typeof record?.id === 'string' && record.id
       ? record.id
       : typeof record?.kb_id === 'string' ? record.kb_id : ''
@@ -560,7 +561,19 @@ export async function createGraph(body: {
   return resp.data?.data
 }
 
-export async function useTemplate(id: string): Promise<any> {
+/**
+ * 模板「使用」接口的返回。
+ *
+ * 后端可能直接返回 `{payload,…}`，也可能包一层 `{data:{payload,…}}` —— 调用侧
+ * （`WorkflowView.useWorkflowTemplate`）两种都兼容，这里把两种形状都声明出来。
+ */
+export interface TemplateUseResult {
+  name?: string
+  payload?: { nodes?: unknown[]; edges?: unknown[] }
+  data?: TemplateUseResult
+}
+
+export async function useTemplate(id: string): Promise<TemplateUseResult> {
   const resp = await api.post(`/v1/templates/${id}/use`)
   return resp.data
 }
@@ -571,12 +584,12 @@ export async function listTools(): Promise<ToolInfo[]> {
   return toToolList(resp.data)
 }
 
-export async function setAgentVisibility(id: string, visibility: 'private' | 'tenant' | 'public'): Promise<any> {
+export async function setAgentVisibility(id: string, visibility: 'private' | 'tenant' | 'public'): Promise<unknown> {
   const resp = await api.put(`/v1/agents/${id}/visibility`, { visibility })
   return resp.data
 }
 
-export async function setKBVisibility(id: string, visibility: 'private' | 'tenant' | 'public'): Promise<any> {
+export async function setKBVisibility(id: string, visibility: 'private' | 'tenant' | 'public'): Promise<unknown> {
   const resp = await api.put(`/v1/kb/${id}/visibility`, { visibility })
   return resp.data
 }

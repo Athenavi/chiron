@@ -28,20 +28,20 @@
 
 import { ref, computed, type Ref } from 'vue'
 
-interface VirtualListOptions<T = any> {
+interface VirtualListOptions<T = unknown> {
   items: Ref<T[]> | T[]
   itemHeight: number
   containerHeight?: number
   overscan?: number  // 预渲染缓冲区大小
 }
 
-interface VirtualListItem<T = any> {
+interface VirtualListItem<T = unknown> {
   item: T
   index: number
   key: string | number
 }
 
-export function useVirtualList<T = any>(options: VirtualListOptions<T>) {
+export function useVirtualList<T = unknown>(options: VirtualListOptions<T>) {
   const {
     items,
     itemHeight,
@@ -77,7 +77,7 @@ export function useVirtualList<T = any>(options: VirtualListOptions<T>) {
         result.push({
           item,
           index: i,
-          key: (item as any).id ?? i,
+          key: (item as { id?: string | number }).id ?? i,
         })
       }
     }

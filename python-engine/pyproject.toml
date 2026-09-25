@@ -59,6 +59,10 @@ dependencies = [
 rag-local = [
     "sentence-transformers>=3.0.0",
 ]
+# S3 兼容对象存储（MediaStore 的 S3 后端，MinIO 亦走此路径）—— requirements-dev.txt 引用此项
+s3 = [
+    "boto3>=1.40.0",
+]
 dev = [
     "pytest>=8.4.0",
     "pytest-asyncio>=1.0.0",

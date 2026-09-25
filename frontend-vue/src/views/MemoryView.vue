@@ -5,7 +5,7 @@ import {
   Card,
   Button,
   Input,
-  InputNumber,
+  
   Slider,
   Select,
   Tabs,
@@ -564,103 +564,103 @@ function pct(n: number): string {
 
       <!-- 条目浏览（全部 / 分类） -->
       <template v-if="isEntryTab">
-      <EmptyState
-        v-if="error && !loading"
-        size="page"
-        :icon="markRaw(DatabaseOutlined)"
-        :description="$t('加载失败')"
-        :hint="$t('无法获取记忆数据，请稍后重试')"
-      >
-        <Button
-          type="primary"
-          @click="loadProfile"
+        <EmptyState
+          v-if="error && !loading"
+          size="page"
+          :icon="markRaw(DatabaseOutlined)"
+          :description="$t('加载失败')"
+          :hint="$t('无法获取记忆数据，请稍后重试')"
         >
-          {{ $t('重试') }}
-        </Button>
-      </EmptyState>
+          <Button
+            type="primary"
+            @click="loadProfile"
+          >
+            {{ $t('重试') }}
+          </Button>
+        </EmptyState>
 
-      <EmptyState
-        v-else-if="filteredEntries.length === 0 && !loading"
-        size="page"
-        :icon="markRaw(DatabaseOutlined)"
-        :description="$t('暂无该分类记忆')"
-        :hint="$t('点击右上角「新建记忆」，记录用户偏好与长期上下文')"
-      />
+        <EmptyState
+          v-else-if="filteredEntries.length === 0 && !loading"
+          size="page"
+          :icon="markRaw(DatabaseOutlined)"
+          :description="$t('暂无该分类记忆')"
+          :hint="$t('点击右上角「新建记忆」，记录用户偏好与长期上下文')"
+        />
 
-      <List
-        v-else
-        :data-source="filteredEntries"
-      >
-        <template #renderItem="{ item }">
-          <List.Item>
-            <Card
-              class="entry-card"
-              size="small"
-              style="width: 100%"
-            >
-              <div class="entry-head">
-                <Tag color="purple">
-                  {{ item.slot_label }}
-                </Tag>
-                <span class="entry-key">{{ item.key }}</span>
-                <Tag :color="item.source === 'user_confirmed' ? 'green' : 'default'">
-                  {{ item.source_label }}
-                </Tag>
-                <Tooltip :title="$t('置信度（整理时高置信条目优先保留）')">
-                  <Tag color="blue">
-                    {{ $t('置信 {n}', { n: item.confidence }) }}
+        <List
+          v-else
+          :data-source="filteredEntries"
+        >
+          <template #renderItem="{ item }">
+            <List.Item>
+              <Card
+                class="entry-card"
+                size="small"
+                style="width: 100%"
+              >
+                <div class="entry-head">
+                  <Tag color="purple">
+                    {{ item.slot_label }}
                   </Tag>
-                </Tooltip>
-                <Space class="entry-actions">
-                  <Button
-                    size="small"
-                    type="text"
-                    :title="$t('在对话中使用这类记忆')"
-                    @click="useSlotInChat(item.slot)"
-                  >
-                    <template #icon>
-                      <CommentOutlined />
-                    </template>
-                  </Button>
-                  <Button
-                    size="small"
-                    type="text"
-                    :title="$t('编辑')"
-                    @click="openEdit(item)"
-                  >
-                    <template #icon>
-                      <EditOutlined />
-                    </template>
-                  </Button>
-                  <Popconfirm
-                    :title="$t('删除这条记忆？')"
-                    :ok-text="$t('删除')"
-                    :cancel-text="$t('取消')"
-                    @confirm="handleDelete(item.id)"
-                  >
+                  <span class="entry-key">{{ item.key }}</span>
+                  <Tag :color="item.source === 'user_confirmed' ? 'green' : 'default'">
+                    {{ item.source_label }}
+                  </Tag>
+                  <Tooltip :title="$t('置信度（整理时高置信条目优先保留）')">
+                    <Tag color="blue">
+                      {{ $t('置信 {n}', { n: item.confidence }) }}
+                    </Tag>
+                  </Tooltip>
+                  <Space class="entry-actions">
                     <Button
                       size="small"
                       type="text"
-                      danger
-                      :title="$t('删除')"
+                      :title="$t('在对话中使用这类记忆')"
+                      @click="useSlotInChat(item.slot)"
                     >
                       <template #icon>
-                        <DeleteOutlined />
+                        <CommentOutlined />
                       </template>
                     </Button>
-                  </Popconfirm>
-                </Space>
-              </div>
-              <div class="entry-value">
-                {{ item.value }}
-              </div>
-              <div class="entry-meta">
-                {{ $t('访问 {n} 次 · 更新于 {date}', { n: item.access_count, date: item.updated_at?.slice(0, 10) }) }}
-              </div>
-            </Card>
-          </List.Item>
-        </template>
-      </List>
+                    <Button
+                      size="small"
+                      type="text"
+                      :title="$t('编辑')"
+                      @click="openEdit(item)"
+                    >
+                      <template #icon>
+                        <EditOutlined />
+                      </template>
+                    </Button>
+                    <Popconfirm
+                      :title="$t('删除这条记忆？')"
+                      :ok-text="$t('删除')"
+                      :cancel-text="$t('取消')"
+                      @confirm="handleDelete(item.id)"
+                    >
+                      <Button
+                        size="small"
+                        type="text"
+                        danger
+                        :title="$t('删除')"
+                      >
+                        <template #icon>
+                          <DeleteOutlined />
+                        </template>
+                      </Button>
+                    </Popconfirm>
+                  </Space>
+                </div>
+                <div class="entry-value">
+                  {{ item.value }}
+                </div>
+                <div class="entry-meta">
+                  {{ $t('访问 {n} 次 · 更新于 {date}', { n: item.access_count, date: item.updated_at?.slice(0, 10) }) }}
+                </div>
+              </Card>
+            </List.Item>
+          </template>
+        </List>
       </template>
 
       <!-- 待裁决冲突 -->

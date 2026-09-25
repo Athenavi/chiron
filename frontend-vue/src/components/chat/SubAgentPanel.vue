@@ -806,7 +806,9 @@ onBeforeUnmount(() => {
           :key="group.dir"
           class="art-group"
         >
-          <div class="art-dir">{{ group.dir }}</div>
+          <div class="art-dir">
+            {{ group.dir }}
+          </div>
           <button
             v-for="path in group.paths"
             :key="path"

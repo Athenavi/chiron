@@ -79,7 +79,7 @@ export function useResponsive() {
   const isTouchDevice = computed(() => {
     return 'ontouchstart' in window || 
            navigator.maxTouchPoints > 0 || 
-           (navigator as any).msMaxTouchPoints > 0
+           (navigator as Navigator & { msMaxTouchPoints?: number }).msMaxTouchPoints! > 0
   })
 
   // 是否为 Safari (iOS 需要特殊处理)
@@ -91,7 +91,8 @@ export function useResponsive() {
   // 网络质量 (如果支持 Network Information API)
   const networkConnection = computed(() => {
     if (!('connection' in navigator)) return null
-    const conn = (navigator as any).connection
+    const conn = (navigator as Navigator & { connection?: { effectiveType?: string; saveData?: boolean } }).connection
+    if (!conn) return null
     return {
       effectiveType: conn.effectiveType ?? 'unknown',
       downlink: conn.downlink ?? 0,

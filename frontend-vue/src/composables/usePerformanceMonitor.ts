@@ -38,7 +38,7 @@ interface ExtendedPerformanceEntry {
   hadRecentInput?: boolean
   value?: number
   responseStart?: number
-  attribution?: any
+  attribution?: unknown
   name: string
   entryType: string
   duration?: number
@@ -60,13 +60,16 @@ export function usePerformanceMonitor() {
 
   const networkStatus = computed(() => {
     if (!navigator.onLine) return 'offline'
-    const conn = navigator.connection as any
+    const conn = (navigator as Navigator & { connection?: { effectiveType?: string } }).connection
     return conn?.effectiveType ?? 'unknown'
   })
 
   const memoryStatus = computed(() => {
     if (!('performance' in window) || !('memory' in performance)) return null
-    const mem = (performance as any).memory
+    const mem = (performance as Performance & {
+      memory?: { usedJSHeapSize: number; totalJSHeapSize: number; jsHeapSizeLimit: number }
+    }).memory
+    if (!mem) return null
     return {
       usedJSHeapSize: mem.usedJSHeapSize,
       totalJSHeapSize: mem.totalJSHeapSize,

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
-import { Popover, Switch } from 'ant-design-vue'
+import { Popover } from 'ant-design-vue'
 import { BulbOutlined, BulbFilled, CheckOutlined, GlobalOutlined, HighlightOutlined, HighlightFilled } from '@ant-design/icons-vue'
 import { useThemeStore } from '../stores/theme'
 import type { ThemeId } from '../stores/theme'

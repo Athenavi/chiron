@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick, markRaw } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
 import { useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Handle, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -7,13 +7,13 @@ import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
 import {
   Button, Input, Select, Drawer, Form, FormItem,
-  Empty, Popconfirm, Tag, InputNumber, message, Modal, Tabs, TabPane,
+  Empty, Popconfirm, Tag, InputNumber, message, Modal,
 } from 'ant-design-vue'
 import {
   SaveOutlined, PlayCircleOutlined, DeleteOutlined,
   CloseOutlined, UnorderedListOutlined, CopyOutlined,
   AlignCenterOutlined, HistoryOutlined, MessageOutlined,
-  DownloadOutlined, RocketOutlined,
+  RocketOutlined,
 } from '@ant-design/icons-vue'
 import { api, listAgents, listTemplates, useTemplate } from '../api'
 import type { Agent, TemplateItem } from '../api'
@@ -684,7 +684,9 @@ function runInChat() {
 }
 
 // ── 模板市场（一键使用：加载进画布，不落库）──
-const activeView = ref('canvas')
+// 此前这一整块是**未接线的实现**：数据加载在 onMounted 里每页跑一次、结果丢弃，
+// `useWorkflowTemplate` 从不被调用（见路线图 L3-6）。现在由工具栏的「模板」入口驱动。
+const templateOpen = ref(false)
 const templates = ref<TemplateItem[]>([])
 const templatesLoading = ref(false)
 const templatesError = ref(false)
@@ -711,7 +713,7 @@ function templateEdgeCount(t: TemplateItem): number {
   return Array.isArray(t.payload?.edges) ? t.payload.edges.length : 0
 }
 
-async function useWorkflowTemplate(tpl: TemplateItem) {
+async function useWorkflowTemplate(tpl: TemplateItem): Promise<boolean> {
   templateUsingId.value = tpl.id
   try {
     const resp = await useTemplate(tpl.id)
@@ -723,14 +725,21 @@ async function useWorkflowTemplate(tpl: TemplateItem) {
     resetCanvas()
     fromBackendFormat({ name: body?.name || tpl.name, nodes: payload.nodes, edges: payload.edges || [] })
     message.success(t('已加载模板「{name}」，可编辑后保存', { name: body?.name || tpl.name }))
-    activeView.value = 'canvas'
     await nextTick()
     try { fitView({ padding: 0.15 }) } catch { /* 忽略布局异常 */ }
-  } catch (e: any) {
-    message.error(t('加载模板失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
+    return true
+  } catch (e) {
+    const err = e as { response?: { data?: { error?: string } }; message?: string }
+    message.error(t('加载模板失败: {error}', { error: err?.response?.data?.error || err?.message || '' }))
+    return false
   } finally {
     templateUsingId.value = null
   }
+}
+
+/** 从弹窗里点「使用」：成功才关窗（失败时保留列表，用户可换一个模板） */
+async function onUseTemplate(tpl: TemplateItem) {
+  if (await useWorkflowTemplate(tpl)) templateOpen.value = false
 }
 
 // ── Mount ──
@@ -827,6 +836,15 @@ function statusClass(nodeProps: any): string {
         </Button>
       </div>
       <div class="toolbar-right">
+        <Button
+          size="small"
+          @click="templateOpen = true"
+        >
+          <template #icon>
+            <RocketOutlined />
+          </template>
+          {{ $t('模板') }}
+        </Button>
         <Button
           size="small"
           @click="showDrawer = true"
@@ -1516,6 +1534,46 @@ function statusClass(nodeProps: any): string {
       </div>
     </Drawer>
 
+    <!-- 模板市场：一键把模板加载进画布（只加载不落库，可编辑后手动保存） -->
+    <Modal
+      v-model:open="templateOpen"
+      :title="$t('工作流模板')"
+      :footer="null"
+      width="640px"
+    >
+      <PageSkeleton v-if="templatesLoading" />
+      <EmptyState
+        v-else-if="templatesError"
+        :description="$t('模板加载失败，请稍后重试')"
+      />
+      <EmptyState
+        v-else-if="!templates.length"
+        :description="$t('暂无可用模板')"
+      />
+      <ul v-else class="template-list">
+        <li
+          v-for="tpl in templates"
+          :key="tpl.id"
+          class="template-item"
+        >
+          <div class="template-meta">
+            <span class="template-name">{{ tpl.name }}</span>
+            <span class="template-count">
+              {{ $t('{nodes} 个节点 · {edges} 条连线', { nodes: templateNodeCount(tpl), edges: templateEdgeCount(tpl) }) }}
+            </span>
+          </div>
+          <Button
+            size="small"
+            type="primary"
+            :loading="templateUsingId === tpl.id"
+            @click="onUseTemplate(tpl)"
+          >
+            {{ $t('使用') }}
+          </Button>
+        </li>
+      </ul>
+    </Modal>
+
     <!-- 运行输入：图里有 input 节点时收集（见 needsRunInput 的说明） -->
     <Modal
       v-model:open="runInputOpen"
@@ -1663,4 +1721,11 @@ function statusClass(nodeProps: any): string {
   .custom-node.status-running { animation: none; }
   .palette-item, .workflow-item { transition: none; }
 }
+.template-list { margin: 0; padding: 0; list-style: none; }
+.template-item { display: flex; align-items: center; justify-content: space-between; gap: 12px;
+  padding: 10px 4px; border-bottom: 1px solid var(--border-color); }
+.template-item:last-child { border-bottom: none; }
+.template-meta { display: flex; flex-direction: column; gap: 2px; min-inline-size: 0; }
+.template-name { font-weight: 500; }
+.template-count { color: var(--text-secondary); font-size: 12px; }
 </style>

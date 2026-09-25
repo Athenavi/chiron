@@ -161,7 +161,9 @@ onMounted(async () => {
   <div class="models-view">
     <header class="mv-head">
       <div>
-        <h2 class="mv-title">{{ $t('模型配置') }}</h2>
+        <h2 class="mv-title">
+          {{ $t('模型配置') }}
+        </h2>
         <p class="mv-sub">
           {{ $t('只有启用（enabled）的模型才会出现在对话页的模型下拉里，共') }}
           <strong>{{ enabledCount }}</strong> {{ $t('个启用') }}
@@ -174,14 +176,26 @@ onMounted(async () => {
           :placeholder="$t('搜索模型名 / 提供商')"
           allow-clear
         >
-          <template #prefix><SearchOutlined /></template>
+          <template #prefix>
+            <SearchOutlined />
+          </template>
         </Input>
-        <Button :loading="loading" @click="rediscover">
-          <template #icon><ReloadOutlined /></template>
+        <Button
+          :loading="loading"
+          @click="rediscover"
+        >
+          <template #icon>
+            <ReloadOutlined />
+          </template>
           {{ $t('重新发现') }}
         </Button>
-        <Button type="primary" @click="addOpen = true">
-          <template #icon><PlusOutlined /></template>
+        <Button
+          type="primary"
+          @click="addOpen = true"
+        >
+          <template #icon>
+            <PlusOutlined />
+          </template>
           {{ $t('手动添加') }}
         </Button>
       </div>
@@ -198,22 +212,36 @@ onMounted(async () => {
       :title="$t('还没有任何模型')"
       :description="$t('可以点「重新发现」按已配置的 Key 自动拉取，或用「手动添加」直接写入一个模型')"
     />
-    <table v-else class="mv-table">
+    <table
+      v-else
+      class="mv-table"
+    >
       <thead>
         <tr>
           <th>{{ $t('提供商') }}</th>
           <th>{{ $t('模型名') }}</th>
           <th>{{ $t('显示名') }}</th>
-          <th class="col-ctx">{{ $t('上下文窗口') }}</th>
-          <th class="col-on">{{ $t('启用') }}</th>
+          <th class="col-ctx">
+            {{ $t('上下文窗口') }}
+          </th>
+          <th class="col-on">
+            {{ $t('启用') }}
+          </th>
           <th class="col-op" />
         </tr>
       </thead>
       <tbody>
-        <tr v-for="m in filtered" :key="m.id">
+        <tr
+          v-for="m in filtered"
+          :key="m.id"
+        >
           <td><Tag>{{ m.provider }}</Tag></td>
-          <td class="mv-name">{{ m.name }}</td>
-          <td class="mv-display">{{ m.display_name || '—' }}</td>
+          <td class="mv-name">
+            {{ m.name }}
+          </td>
+          <td class="mv-display">
+            {{ m.display_name || '—' }}
+          </td>
           <td class="col-ctx">
             <InputNumber
               :value="m.context_window"
@@ -243,7 +271,9 @@ onMounted(async () => {
                 danger
                 size="small"
               >
-                <template #icon><DeleteOutlined /></template>
+                <template #icon>
+                  <DeleteOutlined />
+                </template>
               </Button>
             </Popconfirm>
           </td>

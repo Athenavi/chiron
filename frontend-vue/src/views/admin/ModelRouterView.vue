@@ -152,8 +152,15 @@ onMounted(fetchRoutes)
 <template>
   <div class="model-router-view">
     <div class="page-header">
-      <h2 class="page-title">{{ $t('模型路由管控') }}</h2>
-      <a-button type="primary" @click="openCreate">{{ $t('新建路由') }}</a-button>
+      <h2 class="page-title">
+        {{ $t('模型路由管控') }}
+      </h2>
+      <a-button
+        type="primary"
+        @click="openCreate"
+      >
+        {{ $t('新建路由') }}
+      </a-button>
     </div>
 
     <a-alert
@@ -180,11 +187,28 @@ onMounted(fetchRoutes)
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">
-          <a-button type="link" size="small" @click="toggleEnabled(record as ModelRoute)">
+          <a-button
+            type="link"
+            size="small"
+            @click="toggleEnabled(record as ModelRoute)"
+          >
             {{ (record as ModelRoute).enabled ? $t('禁用') : $t('启用') }}
           </a-button>
-          <a-button type="link" size="small" @click="openEdit(record as ModelRoute)">{{ $t('编辑') }}</a-button>
-          <a-button type="link" size="small" danger @click="confirmDelete(record as ModelRoute)">{{ $t('删除') }}</a-button>
+          <a-button
+            type="link"
+            size="small"
+            @click="openEdit(record as ModelRoute)"
+          >
+            {{ $t('编辑') }}
+          </a-button>
+          <a-button
+            type="link"
+            size="small"
+            danger
+            @click="confirmDelete(record as ModelRoute)"
+          >
+            {{ $t('删除') }}
+          </a-button>
         </template>
       </template>
     </a-table>
@@ -223,11 +247,15 @@ onMounted(fetchRoutes)
             v-model:value="form.provider_config"
             :rows="4"
             class="code-editor"
-            placeholder='{"temperature": 0.7, "max_tokens": 4096}'
+            placeholder="{&quot;temperature&quot;: 0.7, &quot;max_tokens&quot;: 4096}"
           />
         </a-form-item>
         <a-form-item :label="$t('优先级')">
-          <a-input-number v-model:value="form.priority" :min="1" :max="999" />
+          <a-input-number
+            v-model:value="form.priority"
+            :min="1"
+            :max="999"
+          />
         </a-form-item>
         <a-form-item :label="$t('启用')">
           <a-switch v-model:checked="form.enabled" />

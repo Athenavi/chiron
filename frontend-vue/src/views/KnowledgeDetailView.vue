@@ -155,7 +155,7 @@ async function loadKnowledgeBase() {
   try {
     const res = await api.get(`/v1/kb/${kbId}`)
     kb.value = res.data?.data || res.data
-  } catch (error) {
+  } catch {
     message.error(t('加载知识库失败'))
     router.push('/knowledge')
   } finally {
@@ -204,7 +204,7 @@ async function openMediaModal() {
   try {
     const res = await api.get('/v1/media')
     mediaFiles.value = res.data?.data?.items || []
-  } catch (error) {
+  } catch {
     message.error(t('加载媒体库失败'))
   } finally {
     loadingMedia.value = false

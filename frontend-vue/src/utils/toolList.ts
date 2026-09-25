@@ -24,8 +24,8 @@ function normalizeTool(raw: unknown): ToolInfo | null {
     const name = raw.trim()
     return name ? { name, description: '' } : null
   }
-  const record = raw as Record<string, any> | null
-  const fn = record?.function as Record<string, any> | undefined
+  const record = raw as Record<string, unknown> | null
+  const fn = record?.function as Record<string, unknown> | undefined
   const rawName = typeof record?.name === 'string' ? record.name : typeof fn?.name === 'string' ? fn.name : ''
   const name = rawName.trim()
   if (!name) return null
@@ -47,13 +47,18 @@ function normalizeTool(raw: unknown): ToolInfo | null {
 
 /** 宽松解析工具列表：接受数组本身，或 {tools: []} / {data: []} / {data: {tools: []}} */
 export function toToolList(raw: unknown): ToolInfo[] {
-  const container = raw as Record<string, any> | null
-  const list = Array.isArray(raw)
-    ? raw
-    : Array.isArray(container?.tools) ? container.tools
-    : Array.isArray(container?.data?.tools) ? container.data.tools
-    : Array.isArray(container?.data) ? container.data
-    : []
+  // 四种形状用一组小助手收敛，避免在 `unknown` 上做链式访问（那正是原来用 `any` 的原因）。
+  const asArray = (v: unknown): unknown[] | null => (Array.isArray(v) ? v : null)
+  const asObject = (v: unknown): Record<string, unknown> | null =>
+    v !== null && typeof v === 'object' ? (v as Record<string, unknown>) : null
+
+  const container = asObject(raw)
+  const data = asObject(container?.data)
+  const list = asArray(raw)
+    ?? asArray(container?.tools)
+    ?? asArray(data?.tools)
+    ?? asArray(container?.data)
+    ?? []
 
   const out: ToolInfo[] = []
   for (const item of list) {

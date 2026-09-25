@@ -780,7 +780,9 @@ defineExpose({ insertText })
             v-for="group in groupedMentions"
             :key="group.type"
           >
-            <div class="slash-group">{{ $t(group.label) }}</div>
+            <div class="slash-group">
+              {{ $t(group.label) }}
+            </div>
             <div
               v-for="entry in group.entries"
               :key="`${entry.item.type}:${entry.item.id}`"
@@ -933,7 +935,10 @@ defineExpose({ insertText })
             <template #icon>
               <AudioOutlined />
             </template>
-            <span v-if="recording" class="recording-timer">{{ formatRecordingTime(recordingTimer) }}</span>
+            <span
+              v-if="recording"
+              class="recording-timer"
+            >{{ formatRecordingTime(recordingTimer) }}</span>
           </Button>
           <!-- 模式 + 工具授权收进一个 popover：两者都是"偶发调整"的设置项，
                常驻会让底栏拥挤且与模型抢注意力；模型是高频切换项，仍留在底栏。
@@ -1006,7 +1011,10 @@ defineExpose({ insertText })
           </Button>
         </div>
         <div class="input-left">
-          <span v-if="loading" class="run-hint">
+          <span
+            v-if="loading"
+            class="run-hint"
+          >
             <span class="run-dot" />
             {{ $t('生成中') }} · {{ elapsed }}s
           </span>

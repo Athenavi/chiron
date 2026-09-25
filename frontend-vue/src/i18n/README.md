@@ -1,7 +1,12 @@
 # 前端 i18n 约定
 
-源语言是 **zh-CN**；当前支持 `zh-CN` / `en-US` / `ar`（RTL）。完整规划见仓库
-`docs/i18n-plan.md`（后端错误码契约见 `internal/api/error_codes.go`）。
+源语言是 **zh-CN**；当前支持 `zh-CN` / `en-US` / `ar`（RTL）。后端错误码契约见
+`internal/api/error_codes.go`。
+
+> 这里**就是** i18n 的完整规划：语言清单与新增语言步骤、key 命名规范、迁移流程与棘轮口径、
+> codemod 的已知局限、RTL 约定，以及收尾阶段踩到的坑都收在本文件。
+> （曾引用过一份 `docs/i18n-plan.md`，但该文件从未入库 —— 与其补一份内容重叠的文档，
+> 不如让约定只有一个来源。）
 
 ## 目录与单一来源
 

@@ -292,7 +292,8 @@ if (import.meta.env.PROD && 'requestIdleCallback' in window) {
 
   const preloadIfNeeded = (): void => {
     if ('connection' in navigator) {
-      const conn = navigator.connection as any
+      const conn = (navigator as Navigator & { connection?: { saveData?: boolean; effectiveType?: string } }).connection
+      if (!conn) return
       // 弱网或省流模式不预加载
       if (conn.saveData || /2g|3g/i.test(conn.effectiveType)) return
     }

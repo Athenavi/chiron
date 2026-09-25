@@ -2289,7 +2289,10 @@ function continueGeneration() {
 </script>
 
 <template>
-  <div class="chat-layout" :class="{ 'is-swapped': layoutSwapped }">
+  <div
+    class="chat-layout"
+    :class="{ 'is-swapped': layoutSwapped }"
+  >
     <!-- 分屏 6a：**只读参考栏**（左侧）。
          布局本身是 flex，所以加一栏不需要改任何 CSS；它自己滚动，
          不会把主会话的滚动位置带跑（与主列表的滚动锚定互不干扰）。 -->
@@ -2673,6 +2676,8 @@ function continueGeneration() {
         :mode-options="modeOptions"
         :model="llmModel"
         :session-id="unifiedMode ? unifiedSessionId : activeSessionId"
+        :tools-mode="toolsMode"
+        :context-chips="contextChips"
         @send="sendMessage"
         @stop="stopGeneration"
         @update:mode="onModeChange"
@@ -2680,9 +2685,7 @@ function continueGeneration() {
         @command="onSlashCommand"
         @open-panel="openContextPanel"
         @mention-add="onMentionAdd"
-        :tools-mode="toolsMode"
         @tools-mode-change="onToolsModeChange"
-        :context-chips="contextChips"
         @remove-context-chip="(c: ContextChip) => removeContextChip(c.type, c.value)"
       />
 

@@ -111,7 +111,7 @@ async function loadChannels() {
   try {
     const channels = await listPaymentChannels()
     availableChannels.value = channels.map(c => c.id)
-  } catch (error) {
+  } catch {
     availableChannels.value = [...FALLBACK_CHANNELS]
   }
   // 默认选中第一个可用渠道（原默认 alipay 在未启用时会变成非法选项）
@@ -299,7 +299,7 @@ async function renderQRCode() {
     await QRCode.toCanvas(qrCanvas.value, qrCode.value, {
       width: 220, margin: 1, errorCorrectionLevel: 'M',
     })
-  } catch (e) {
+  } catch {
     message.error(t('二维码生成失败'))
   }
 }

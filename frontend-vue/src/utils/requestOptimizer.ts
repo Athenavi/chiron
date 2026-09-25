@@ -1,4 +1,4 @@
-import axios, { CanceledError } from 'axios'
+import axios, {  } from 'axios'
 import type { AxiosRequestConfig, Canceler, AxiosInstance } from 'axios'
 
 /**
@@ -12,7 +12,7 @@ import type { AxiosRequestConfig, Canceler, AxiosInstance } from 'axios'
 
 class RequestManager {
   public pendingRequests: Map<string, { cancel: Canceler; config: AxiosRequestConfig }> = new Map()
-  private requestCache: Map<string, { promise: Promise<any>; timestamp: number }> = new Map()
+  private requestCache: Map<string, { promise: Promise<unknown>; timestamp: number }> = new Map()
   private readonly CACHE_TTL = 3000 // 缓存 TTL 3秒
 
   /**
@@ -68,7 +68,7 @@ class RequestManager {
    * 请求去重：相同请求在 CACHE_TTL 时间内返回缓存结果
    * 只适用于 GET 请求
    */
-  async deduplicateRequest<T = any>(config: AxiosRequestConfig): Promise<any> {
+  async deduplicateRequest<T = unknown>(config: AxiosRequestConfig): Promise<unknown> {
     // 只对 GET 请求进行去重
     if (config.method?.toUpperCase() !== 'GET') {
       return axios.request<T>(config)
@@ -116,7 +116,7 @@ export const requestManager = new RequestManager()
  * 弱网检测
  */
 export function isSlowNetwork(): boolean {
-  const conn = (navigator as any).connection
+  const conn = (navigator as Navigator & { connection?: { effectiveType?: string; saveData?: boolean } }).connection
   if (!conn) return false
   
   const slowTypes = ['slow-2g', '2g', '3g']

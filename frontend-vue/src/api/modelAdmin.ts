@@ -21,8 +21,9 @@ export interface AdminModel {
   created_at?: string
 }
 
-function unwrap<T>(payload: any): T {
-  return (payload?.data !== undefined ? payload.data : payload) as T
+function unwrap<T>(payload: unknown): T {
+  const p = payload as { data?: unknown } | null | undefined
+  return (p?.data !== undefined ? p.data : payload) as T
 }
 
 export async function listAdminModels(): Promise<AdminModel[]> {
@@ -59,11 +60,26 @@ export interface ProviderOption {
   hasKey: boolean
 }
 
+interface RawProvider {
+  id?: unknown
+  name?: unknown
+  label?: unknown
+  key_count?: unknown
+  keyCount?: unknown
+}
+
 export async function listProviderOptions(): Promise<ProviderOption[]> {
   const res = await api.get('/v1/admin/llm-providers')
-  const data = unwrap<any>(res.data) || {}
-  const providers: any[] = data.providers || data.items || []
-  const counts: Record<string, number> = data.key_counts || data.keyCounts || {}
+  // 后端字段名在不同版本间漂移（providers/items、key_counts/keyCounts），故按**联合形状**声明，
+  // 再在下面用 String()/Number() 收敛成具体的 ProviderOption —— 不引入 any。
+  const data = unwrap<{
+    providers?: RawProvider[]
+    items?: RawProvider[]
+    key_counts?: Record<string, number>
+    keyCounts?: Record<string, number>
+  }>(res.data) ?? {}
+  const providers = data.providers ?? data.items ?? []
+  const counts: Record<string, number> = data.key_counts ?? data.keyCounts ?? {}
   return providers.map(p => ({
     id: String(p.id ?? p.name ?? ''),
     name: String(p.name ?? p.label ?? p.id ?? ''),

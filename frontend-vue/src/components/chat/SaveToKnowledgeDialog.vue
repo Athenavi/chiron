@@ -108,7 +108,10 @@ async function save() {
       <p class="save-kb-hint">
         {{ $t('将上传本次对话的正文（{n} 字符）为 Markdown 文档；思考过程与工具调用不会写入。', { n: content.length }) }}
       </p>
-      <p v-if="saving" class="save-kb-hint">
+      <p
+        v-if="saving"
+        class="save-kb-hint"
+      >
         {{ $t('上传中 {n}%', { n: percent }) }}
       </p>
     </div>

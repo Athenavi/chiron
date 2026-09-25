@@ -54,7 +54,9 @@ def _ts_labels() -> dict[str, str]:
     text = TS_SOURCE.read_text(encoding="utf-8")
     block = re.search(r"export const WORKSTATION_LABELS[^=]*=\s*\{(.*?)\n\}", text, re.S)
     assert block is not None, "frontend-vue/src/types/workstation.ts 的 WORKSTATION_LABELS 找不到"
-    return dict(re.findall(r"([a-z_]+):\s*'([^']*)'", block.group(1)))
+    # label 在 TS 侧走 i18n（`dialogue: t('对话')`），故正则需容忍可选的 t(…) 包裹；
+    # 取出的仍是**源语言（zh-CN）原文**，与 shared/workstations.json 比对的口径不变。
+    return dict(re.findall(r"([a-z_]+):\s*(?:t\()?'([^']*)'\)?", block.group(1)))
 
 
 class TestIdsMatchAcrossSources:

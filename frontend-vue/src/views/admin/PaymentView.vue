@@ -146,7 +146,7 @@ onMounted(load)
         {{ $t('用于拼接支付宝/微信的异步通知地址。必须公网可达，否则支付结果无法自动到账。') }}
       </div>
 
-      <Tabs v-model:activeKey="activeTab">
+      <Tabs v-model:active-key="activeTab">
         <TabPane
           v-for="channel in CHANNEL_TABS"
           :key="channel.key"
