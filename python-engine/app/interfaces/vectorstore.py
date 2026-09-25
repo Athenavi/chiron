@@ -4,7 +4,7 @@ VectorStore Protocol — 对标 Go 的 storage.FileStore 模式
 
 from __future__ import annotations
 
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class VectorStore(Protocol):
@@ -15,7 +15,7 @@ class VectorStore(Protocol):
         collection: str,
         ids: list[str],
         vectors: list[list[float]],
-        payloads: list[dict],
+        payloads: list[dict[str, Any]],
     ) -> int:
         """插入向量数据，返回插入数量"""
         ...
@@ -27,7 +27,7 @@ class VectorStore(Protocol):
         top_k: int = 5,
         threshold: float = 0.5,
         filter_expr: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """搜索相似向量，返回结果列表"""
         ...
 

@@ -116,7 +116,7 @@ markers = [
 [tool.mypy]
 python_version = "3.11"
 # strict 已接线但**按域分批**：CI 的 `Mypy (strict)` step 目前只检查已清零的模块
-# （app/sse、app/trace 及其传递依赖 app/config.py），清单与扩批进度见
+# （app/interfaces、app/sse、app/trace 及其传递依赖 app/config.py），清单与扩批进度见
 # docs/development-roadmap.md 的 L2-1。app/ 存量错误清零后改为 `mypy app/`。
 strict = true
 warn_return_any = true

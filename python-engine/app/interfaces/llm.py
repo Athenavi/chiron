@@ -5,7 +5,7 @@ LLM Provider Protocol — 对标 Go 的 llm.Provider 接口
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
-from typing import Protocol
+from typing import Any, Protocol
 
 
 class LLMResponse:
@@ -14,8 +14,8 @@ class LLMResponse:
     def __init__(
         self,
         content: str = "",
-        tool_calls: list[dict] | None = None,
-        usage: dict | None = None,
+        tool_calls: list[dict[str, Any]] | None = None,
+        usage: dict[str, Any] | None = None,
         finish_reason: str | None = None,
     ):
         self.content = content
@@ -34,13 +34,13 @@ class LLMProvider(Protocol):
 
     async def chat(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         model: str | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         stream: bool = True,
-    ) -> AsyncIterator[dict] | LLMResponse:
+    ) -> AsyncIterator[dict[str, Any]] | LLMResponse:
         """发送聊天请求，返回流式响应或完整响应"""
         ...
 
