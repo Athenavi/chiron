@@ -58,8 +58,8 @@ class ContextMessage:
 class InMemoryContextBus:
     """内存版 ContextBus (单机测试用)"""
 
-    def __init__(self):
-        self._subscriptions: dict[str, list[Callable]] = defaultdict(
+    def __init__(self) -> None:
+        self._subscriptions: dict[str, list[Callable[..., Any]]] = defaultdict(
             list
         )  # topic -> [callbacks]
         self._message_log: dict[str, list[ContextMessage]] = defaultdict(
@@ -70,7 +70,7 @@ class InMemoryContextBus:
     async def publish(
         self,
         topic: str,
-        data: dict,
+        data: dict[str, Any],
         tenant_id: str,
         message_type: MessageType = MessageType.RESULT_PUBLISH,
         ttl: int = 3600,
@@ -114,7 +114,7 @@ class InMemoryContextBus:
         self._subscriptions[topic].append(callback)
         logger.info(f"Subscribed to topic '{topic}'")
 
-    async def unsubscribe(self, topic: str, callback: Callable) -> bool:
+    async def unsubscribe(self, topic: str, callback: Callable[..., Any]) -> bool:
         """取消订阅"""
         if topic in self._subscriptions:
             try:
@@ -148,18 +148,18 @@ class RedisContextBus:
     - 使用 Redis Hash 存储最新状态 (Snapshot)
     """
 
-    def __init__(self, redis_client):
+    def __init__(self, redis_client: Any) -> None:
         self.redis = redis_client
-        self._local_subs: dict[str, list[Callable]] = defaultdict(list)
+        self._local_subs: dict[str, list[Callable[..., Any]]] = defaultdict(list)
         # Pub/Sub 监听：每对 (tenant_id, topic) 一个 channel
         self._pubsub_channels: set[str] = set()
-        self._listener_task: asyncio.Task | None = None
+        self._listener_task: asyncio.Task[None] | None = None
         self._listener_started = False
 
     async def publish(
         self,
         topic: str,
-        data: dict,
+        data: dict[str, Any],
         tenant_id: str,
         message_type: MessageType = MessageType.RESULT_PUBLISH,
         ttl: int = 3600,
@@ -215,7 +215,7 @@ class RedisContextBus:
         return message
 
     async def subscribe(
-        self, topic: str, callback: Callable, tenant_id: str = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: str = ""
     ) -> None:
         """订阅主题 (Redis Pub/Sub + 本地回调)
 
@@ -245,7 +245,7 @@ class RedisContextBus:
             )
             logger.info("ContextBus Pub/Sub listener started")
 
-    async def _pubsub_listener(self):
+    async def _pubsub_listener(self) -> None:
         """后台监听 Redis Pub/Sub 消息，分发到本地回调。
 
         使用独立的 Redis 连接（从连接池获取）避免阻塞主连接。
@@ -328,7 +328,7 @@ class RedisContextBus:
                 await asyncio.sleep(1.0)  # 退避后重连
 
     async def unsubscribe(
-        self, topic: str, callback: Callable, tenant_id: str = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: str = ""
     ) -> bool:
         """取消订阅"""
         removed = False
@@ -390,11 +390,11 @@ class RedisContextBus:
 
 
 # ── 工厂函数 ───────────────────────────────────────────────────────
-_context_bus_instance = None
+_context_bus_instance: Any = None
 _is_redis = False
 
 
-async def get_context_bus(redis_client=None) -> Any:
+async def get_context_bus(redis_client: Any = None) -> Any:
     """获取 ContextBus 实例 (单例模式)
 
     Args:
@@ -416,19 +416,25 @@ async def get_context_bus(redis_client=None) -> Any:
 
 
 # ── 便捷函数 ────────────────────────────────────────────────────────
-async def publish_result(topic: str, data: dict, tenant_id: str, trace_id: str = ""):
+async def publish_result(
+    topic: str, data: dict[str, Any], tenant_id: str, trace_id: str = ""
+) -> Any:
     """便捷函数: 发布结果到总线"""
     bus = await get_context_bus()
     return await bus.publish(topic, data, tenant_id, MessageType.RESULT_PUBLISH)
 
 
-async def publish_state_change(topic: str, data: dict, tenant_id: str):
+async def publish_state_change(
+    topic: str, data: dict[str, Any], tenant_id: str
+) -> Any:
     """便捷函数: 发布状态变更"""
     bus = await get_context_bus()
     return await bus.publish(topic, data, tenant_id, MessageType.STATE_CHANGE)
 
 
-async def subscribe_topic(topic: str, callback: Callable, tenant_id: str = ""):
+async def subscribe_topic(
+    topic: str, callback: Callable[..., Any], tenant_id: str = ""
+) -> Any:
     """便捷函数: 订阅主题"""
     bus = await get_context_bus()
     return await bus.subscribe(topic, callback, tenant_id)

@@ -35,8 +35,9 @@ go test -mod=mod ./... -count=1
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 对齐
 ruff check .
-mypy \
-  app/chaos app/config.py app/context app/db.py app/db_client.py app/engine_registry.py \
+# --follow-imports=silent：只报告这里列出的模块（依赖由它们各自的门禁覆盖）
+mypy --follow-imports=silent \
+  app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
   app/interfaces app/knowledge app/llm app/media app/memory app/middleware app/observability \
   app/providers app/rag/retriever.py app/session_store.py app/sse app/trace   # 分批接线，见开发路线图 L2-1

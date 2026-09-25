@@ -96,7 +96,7 @@ class Capability:
     #     （字段与 property 同名会导致 dataclass __init__ 报 no setter）
 
     # 实际执行函数 (Python 侧)
-    _executor: Callable | None = field(default=None, repr=False)
+    _executor: Callable[..., Any] | None = field(default=None, repr=False)
 
     # 组合能力的子能力列表
     sub_capabilities: list[str] = field(default_factory=list)
@@ -120,7 +120,7 @@ class Capability:
             return 1.0
         return self.successful_calls / max(self.call_count, 1)
 
-    def record_call(self, duration_ms: int, success: bool = True):
+    def record_call(self, duration_ms: int, success: bool = True) -> None:
         """记录一次调用,更新成功率和平均耗时"""
         self.call_count += 1
         self.total_duration_ms += duration_ms
@@ -167,7 +167,7 @@ class CapabilitiesRegistry:
         cap = await registry.get_by_id("skill:execute_python")
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._capabilities: dict[str, Capability] = {}  # capability_id -> Capability
         self._index_by_tags: dict[str, list[str]] = {}  # tag -> [capability_id]
         self._index_by_description: list[tuple[str, str]] = (
@@ -323,7 +323,7 @@ class CapabilitiesRegistry:
         self,
         intent: str,
         tenant_id: str,
-        available_workstations: list[WorkstationType] = None,
+        available_workstations: list[WorkstationType] | None = None,
     ) -> Capability | None:
         """找到最匹配意图的能力
 
@@ -401,10 +401,10 @@ def get_registry() -> CapabilitiesRegistry:
 # ── 预注册标准能力 ─────────────────────────────────────────────────
 
 
-def _tool_executor(tool_name: str):
+def _tool_executor(tool_name: str) -> Any:
     """工具型能力执行器工厂 — 委托 tools registry（自带 owner/可见性校验与沙箱）"""
 
-    async def _execute(**params):
+    async def _execute(**params: Any) -> Any:
         from app.tools.context import get_user_id
         from app.tools.registry import registry
 
@@ -413,10 +413,10 @@ def _tool_executor(tool_name: str):
     return _execute
 
 
-def _llm_executor(system_prompt: str):
+def _llm_executor(system_prompt: str) -> Any:
     """LLM 型能力执行器工厂 (Agent 工作台) — 懒取 gateway，未初始化时 fail loud"""
 
-    async def _execute(task: str, **kwargs):
+    async def _execute(task: str, **kwargs: Any) -> dict[str, Any]:
         from app.gateway.provider import ChatMessage
         from app.main import get_gateway
 
@@ -443,7 +443,9 @@ def _llm_executor(system_prompt: str):
     return _execute
 
 
-async def preload_default_capabilities(registry: CapabilitiesRegistry = None):
+async def preload_default_capabilities(
+    registry: CapabilitiesRegistry | None = None,
+) -> Any:
     """预加载默认能力 (系统启动时执行)
 
     注册六大工作台的核心能力，全部挂真实执行器：
@@ -590,8 +592,10 @@ async def preload_default_capabilities(registry: CapabilitiesRegistry = None):
 
     # 4. Workflow 工作台 — DAG 工作流执行
     async def _workflow_run(
-        graph_json: dict, initial_state: dict | None = None, name: str = ""
-    ):
+        graph_json: dict[str, Any],
+        initial_state: dict[str, Any] | None = None,
+        name: str = "",
+    ) -> Any:
         from app.workflow.tools import workflow_run
 
         return await workflow_run(graph_json, initial_state, name)
@@ -620,7 +624,7 @@ async def preload_default_capabilities(registry: CapabilitiesRegistry = None):
     )
 
     # 5. Plugin 工作台 — 工具发现（注册表全量查询，含 MCP 插件工具）
-    async def _list_tools(query: str = ""):
+    async def _list_tools(query: str = "") -> Any:
         from app.tools.context import get_user_id
         from app.tools.registry import registry as tool_registry
 

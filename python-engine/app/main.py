@@ -8,7 +8,7 @@ import re
 import time
 from contextlib import asynccontextmanager
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import redis.asyncio as aioredis
 import uvicorn
@@ -58,7 +58,7 @@ async def get_redis() -> aioredis.Redis:
     return _redis
 
 
-async def get_gateway():
+async def get_gateway() -> Any:
     """获取 Gateway Router（FastAPI Depends）"""
     if _gateway is None:
         raise RuntimeError("Gateway not initialized")

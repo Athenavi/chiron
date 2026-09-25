@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import logging
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
@@ -78,9 +79,9 @@ class PromptTemplate:
     last_used_at: float = 0
 
     # 实际执行函数 (Python 侧)
-    _executor: callable | None = field(default=None, repr=False)
+    _executor: Callable[..., Any] | None = field(default=None, repr=False)
 
-    def render(self, **kwargs) -> tuple[str, str]:
+    def render(self, **kwargs: Any) -> tuple[str, str]:
         """渲染 Prompt (替换 {{variable}})
 
         Returns:
@@ -115,7 +116,7 @@ class PromptLibrary:
     4. 使用统计和热排序
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._templates: dict[str, PromptTemplate] = {}
         self._index_by_tags: dict[str, list[str]] = {}  # tag -> template_ids
 
@@ -186,7 +187,7 @@ class PromptLibrary:
     async def render_prompt(
         self,
         template_id: str,
-        **kwargs,
+        **kwargs: Any,
     ) -> tuple[str, str]:
         """实例化并渲染 Prompt
 
@@ -398,11 +399,11 @@ class PromptLibrary:
 
         logger.info(f"Preloaded {len(self._templates)} default prompt templates")
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取模板库统计信息"""
         total = len(self._templates)
-        by_category = {}
-        by_workstation = {}
+        by_category: dict[str, int] = {}
+        by_workstation: dict[str, int] = {}
 
         for template in self._templates.values():
             by_category[template.category.value] = (
@@ -448,7 +449,7 @@ async def init_library() -> PromptLibrary:
 async def quick_execute_with_template(
     template_id: str,
     tenant_id: str,
-    **kwargs,
+    **kwargs: Any,
 ) -> tuple[str, str]:
     """使用模板快速执行
 

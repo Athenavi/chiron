@@ -81,7 +81,7 @@ class AgentContext:
     shared_data: dict[str, Any] = field(default_factory=dict)  # 与其他 Agent 共享的数据
 
     # 执行历史
-    execution_log: list[dict] = field(default_factory=list)
+    execution_log: list[dict[str, Any]] = field(default_factory=list)
 
     # 当前任务
     current_task: str | None = None
@@ -101,7 +101,7 @@ class RoleSkillMatcher:
     3. 动态评分与排序 (基于历史成功率、耗时等)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.registry = get_registry()
         self._roles: dict[str, RoleProfile] = {}
         self._index_by_tags: dict[str, list[str]] = {}
@@ -170,7 +170,9 @@ class RoleSkillMatcher:
                     matched_caps.append(cap)
 
         # ── 排序: 按使用次数 (热度) ──────────────────────────
-        matched_caps.sort(key=lambda c: c.usage_count, reverse=True)
+        # 注：Capability 用 call_count 记录调用次数，没有 usage_count 字段
+        # （此前写错属性名，运行时必抛 AttributeError）。
+        matched_caps.sort(key=lambda c: c.call_count, reverse=True)
 
         return matched_caps[:top_k]
 
@@ -178,7 +180,7 @@ class RoleSkillMatcher:
         self,
         task_description: str,
         tenant_id: str,
-        available_roles: list[AgentRole] = None,
+        available_roles: list[AgentRole] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
         """为复杂任务推荐多角色协同方案
@@ -197,7 +199,7 @@ class RoleSkillMatcher:
         if not available_roles:
             available_roles = await self._infer_roles(task_description)
 
-        result = {
+        result: dict[str, Any] = {
             "recommended_roles": available_roles,
             "role_skill_mapping": {},
             "coordination_plan": {},
@@ -210,7 +212,7 @@ class RoleSkillMatcher:
                 {
                     "capability_id": cap.capability_id,
                     "name": cap.name,
-                    "usage_count": cap.usage_count,
+                    "usage_count": cap.call_count,
                 }
                 for cap in skills
             ]
@@ -255,10 +257,10 @@ class RoleSkillMatcher:
     async def _generate_coordination_plan(
         self,
         roles: list[AgentRole],
-        skill_mapping: dict[str, list],
-    ) -> dict:
+        skill_mapping: dict[str, list[Any]],
+    ) -> dict[str, Any]:
         """生成协同计划 (DAG)"""
-        plan = {
+        plan: dict[str, Any] = {
             "execution_order": [],
             "dependencies": {},
         }

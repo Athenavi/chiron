@@ -60,11 +60,13 @@ jobs:
       - name: Mypy (strict)
         # pyproject 已声明 strict = true，但 app/ 仍有存量错误（接线前基线 1171 条 / 130 文件），
         # 所以按域分批落门禁：每批只检查已清零的模块（见 docs/development-roadmap.md L2-1）。
-        # mypy 会连带检查被 import 的模块并报它们的错误，故这里必须带上传递依赖
-        # app/config.py（否则它的错误会从这个入口漏出来）。
-        # 后续每清零一个域就往这个列表里追加，全部通过后改为 `mypy app/`。
+        # --follow-imports=silent：只报告**命令行里列出**的模块的错误。剩余部分的依赖闭包已不可控
+        # （app/core 的传递依赖达 76 个文件、app/tools / app/workflow 亦然），不加这个开关就无法
+        # 继续分批 —— 依赖模块由它们各自的门禁覆盖，列出的模块仍全部按 strict 检查。
+        # 后续每清零一块就往这个列表里追加，全部通过后改为 `mypy app/`。
         run: >-
-          mypy app/chaos app/config.py app/context app/db.py app/db_client.py
+          mypy --follow-imports=silent
+          app/chaos app/config.py app/context app/core app/db.py app/db_client.py
           app/engine_registry.py app/gateway/cache.py app/gateway/provider.py
           app/gateway/ratelimit.py app/gateway/router.py app/interfaces app/knowledge
           app/llm app/media app/memory app/middleware app/observability app/providers

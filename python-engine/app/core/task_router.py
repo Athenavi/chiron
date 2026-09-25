@@ -62,7 +62,7 @@ class ExecutedTask:
     task_id: str
     subtask_id: str
     capability_id: str
-    input_params: dict
+    input_params: dict[str, Any]
     output: Any = None
     error: str = ""
     duration_ms: int = 0
@@ -81,7 +81,7 @@ class TaskRouter:
     6. Result Aggregation → 聚合输出
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.registry = get_registry()
         self._execution_history: list[ExecutedTask] = []  # 最近 100 条
 
@@ -89,7 +89,7 @@ class TaskRouter:
         self,
         user_input: str,
         tenant_id: str,
-        context: dict[str, Any] = None,
+        context: dict[str, Any] | None = None,
         priority: TaskPriority = TaskPriority.NORMAL,
         trace_id: str = "",
     ) -> dict[str, Any]:
@@ -206,7 +206,7 @@ class TaskRouter:
     async def _understand_intent(
         self,
         user_input: str,
-        context: dict,
+        context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
         tenant_id: str = "",
@@ -245,7 +245,7 @@ class TaskRouter:
     async def _llm_understand_intent(
         self,
         user_input: str,
-        context: dict,
+        context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
         tenant_id: str = "",
@@ -305,7 +305,7 @@ Return ONLY valid JSON without markdown formatting."""
         response_text = re.sub(r"```json\s*|\s*```", "", response_text.strip())
 
         try:
-            intent = json.loads(response_text)
+            intent: dict[str, Any] = json.loads(response_text)
             intent["fallback"] = False
             logger.info(
                 f"LLM intent recognized: action={intent.get('action')}, complexity={intent.get('complexity')}"
@@ -317,7 +317,7 @@ Return ONLY valid JSON without markdown formatting."""
 
     async def _decompose_task(
         self,
-        intent: dict,
+        intent: dict[str, Any],
         tenant_id: str,
         user_input: str,
     ) -> list[SubTask]:
@@ -365,7 +365,7 @@ Return ONLY valid JSON without markdown formatting."""
 
     async def _decompose_by_recommendation(
         self,
-        recommended_workstations: list,
+        recommended_workstations: list[Any],
         tenant_id: str,
         user_input: str,
         keywords: list[str],
@@ -628,7 +628,7 @@ Return ONLY valid JSON without markdown formatting."""
         """按依赖关系分组 (同一组内可并行)"""
         {t.subtask_id: t for t in tasks}
         grouped = []
-        resolved = set()
+        resolved: set[str] = set()
 
         while len(resolved) < len(tasks):
             # 找出所有依赖都已 resolved 的任务
@@ -639,8 +639,8 @@ Return ONLY valid JSON without markdown formatting."""
                         layer.append(t)
 
             if not layer:
-                # 循环依赖,全部加入
-                layer = [t for t in tasks if t not in resolved]
+                # 循环依赖,全部加入（比较 subtask_id —— resolved 存的是 id，不是对象）
+                layer = [t for t in tasks if t.subtask_id not in resolved]
 
             grouped.append(layer)
             for t in layer:
@@ -810,7 +810,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _aggregate_results(
         self,
         results: list[ExecutedTask],
-        intent: dict,
+        intent: dict[str, Any],
         original_input: str,
     ) -> dict[str, Any]:
         """聚合子任务输出 — 按意图类型定制聚合策略
@@ -868,7 +868,8 @@ Return ONLY valid JSON without markdown formatting."""
             out = r.output
             if isinstance(out, dict):
                 # kb_search 返回 {results: [...]} 或 {knowledge_bases: [...]}
-                for item in out.get("results", out.get("knowledge_bases", [])):
+                items = out.get("results") or out.get("knowledge_bases") or []
+                for item in items:
                     if isinstance(item, dict):
                         title = item.get("title", item.get("name", ""))
                         url = item.get("url", item.get("id", ""))
@@ -969,7 +970,7 @@ Return ONLY valid JSON without markdown formatting."""
         words = re.findall(r"[a-zA-Z0-9]+", text.lower())
         return [w for w in words if len(w) > 2]
 
-    def _extract_entities(self, text: str) -> dict:
+    def _extract_entities(self, text: str) -> dict[str, Any]:
         """提取实体 — 规则式 NER（无需外部模型依赖）
 
         识别实体类型:

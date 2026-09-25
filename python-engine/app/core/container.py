@@ -20,8 +20,8 @@ class GlobalContainer:
         llm = container.resolve(LLMProvider)
     """
 
-    def __init__(self):
-        self._factories: dict[type, tuple[Callable, bool]] = {}
+    def __init__(self) -> None:
+        self._factories: dict[type, tuple[Callable[..., Any], bool]] = {}
         self._singletons: dict[type, Any] = {}
 
     def register(
@@ -43,9 +43,11 @@ class GlobalContainer:
         if singleton:
             if interface not in self._singletons:
                 self._singletons[interface] = factory(self)
-            return self._singletons[interface]
+            cached: T = self._singletons[interface]
+            return cached
 
-        return factory(self)
+        created: T = factory(self)
+        return created
 
     def reset(self) -> None:
         """重置容器（用于测试）"""
