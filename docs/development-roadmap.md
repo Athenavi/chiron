@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线目录，见 L2-1） | 0 —— `app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py` |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 12 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -60,7 +60,7 @@
   `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
   python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
 - **已量化**（mypy 2.3.1，`python -m mypy app/`）：接线前基线 **1171 errors / 130 个文件
-  （共 200 个源文件）**；截至第四批已清 66 条 → **1105 errors / 119 个文件**。
+  （共 200 个源文件）**；截至第五批已清 81 条 → **1090 errors / 114 个文件**。
   - 按错误码：`type-arg` 488、`no-untyped-def` 266、`no-untyped-call` 116、`arg-type` 59、
     `union-attr` 45、`no-any-return` 41、`assignment` 40、`attr-defined` 38，其余各 ≤18；
     与环境相关的（缺 stub / 缺包）合计仅 20 条（`import-not-found` 12 + `import-untyped` 8）。
@@ -90,20 +90,33 @@
        `-> asyncpg.Pool` 却在 unified 模式 `return None`（改为 `| None`）；`get_pool` 的
        unified 分支返回的是鸭子类型适配器而非真 `asyncpg.Pool`（用 `cast` 收敛，避免改动
        全部调用点）。另因 asyncpg 也无 `py.typed`，把它并入 overrides；
-     - 四批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现为
-       `mypy app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py`，
-       全量存量降至 **1105 / 119 文件**；
+     - ✅ **第五批**：`app/llm` + `app/chaos` + `app/middleware` + `app/gateway/ratelimit.py`，
+       共 **17 条** —— `LLMClient.__init__`/`bind_gateway` 补注解（`_gateway`/`_local_encoder`
+       显式 `Any`：后者是动态加载的 SentenceTransformer）；`ChaosInjectionMiddleware` 的
+       ASGI 三元组 `scope`/`receive`/`send` 补 `Any`（刻意不依赖 starlette 类型）；
+       `AuthMiddleware`/`RateLimitMiddleware` 的 `app` 补 `Any`；两处 `get_remaining` 补
+       `dict[str, Any]`、`_prune` 的 bucket 补 `list[float]`。JSON / `jwt.decode` 的返回值
+       本质是 `Any`，一律用显式注解的中间变量消除 `no-any-return`。
+       另把 `sentence_transformers` 并入 overrides（本地嵌入的可选 extra，
+       `requirements.txt` 刻意不装它）；
+     - 五批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现覆盖
+       12 个路径（见 `.github/workflows/ci.yml`），全量存量降至 **1090 / 114 文件**；
      - 后续每清零一个域，就往那个列表里追加，全部通过后改成 `mypy app/`；
-     - **下一批的依赖闭包（实测，第四批之后）**：
+     - **下一批的依赖闭包（实测，第五批之后）**：
 
        | 候选 | 自身存量 | 闭包额外带出的文件 |
        |---|---|---|
-       | `app/llm` | 6 | 无（但含 `sentence_transformers` 的 `import-not-found` —— 那是**未声明**的可选依赖） |
-       | `app/chaos` | 4 | 无 |
-       | `app/middleware` | 3 | `app/gateway/ratelimit.py`（3） |
+       | `app/engine_registry.py` | 2 | 无 |
+       | `app/session_store.py` | 13 | 无 |
+       | `app/knowledge` | 23 | 无 |
+       | `app/context` | 31 | 4 个文件（含自身） |
+       | `app/batch_processor.py` | 94 | 8 个文件 |
+       | `app/mcp` / `app/plugins` | 23 / 23 | ❌ **会拉进几乎整个 app**（1018 / 1016 条）—— 不可按目录接，除非先清掉它们 import 的大域 |
 
-       ✅ 先清掉 `app/db.py` / `app/db_client.py` 后，`llm` / `chaos` 的闭包已变干净 ——
-       这正是「先啃依赖瓶颈」的收益。
+       ✅ 结构上「按目录」这条路已经走到头：剩下的大域（`agent` 214、`api` 108、`rag` 101、
+       `tools` 88、`core` 80、`memory` 74、`providers` 66…）彼此高度耦合，单接一个目录会被
+       依赖闭包放大到接近全量。下一批若要继续，**应按文件/子模块切**（如上表前几行），
+       而不是按目录。
 
        ⚠ **`app/db.py` 与 `app/db_client.py` 是依赖瓶颈**（各 18 条）——`chaos` / `middleware` /
        `llm` 三个域都挂在它们后面，先清这两个能一次解锁三个域，比按目录存量排序更划算。
@@ -263,7 +276,7 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
 # mypy 只覆盖**已接线的目录**（分批扩大，清单见 L2-1）
-ruff check . && mypy app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
+ruff check . && mypy app/chaos app/config.py app/db.py app/db_client.py app/gateway/ratelimit.py app/interfaces app/llm app/media app/middleware app/observability app/sse app/trace && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test

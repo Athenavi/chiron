@@ -5,6 +5,7 @@ import asyncio
 import logging
 import time
 import uuid
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -96,7 +97,7 @@ class TenantRateLimiter:
             return False
         return True
 
-    async def get_remaining(self, tenant_id: str) -> dict:
+    async def get_remaining(self, tenant_id: str) -> dict[str, Any]:
         """返回剩余额度"""
         now = time.time()
         s_key = rkey(f"ratelimit:{tenant_id}:s")
@@ -131,7 +132,7 @@ class LocalTenantRateLimiter:
         self._minutes: dict[str, list[float]] = {}
 
     @staticmethod
-    def _prune(bucket: list, now: float, window: float) -> int:
+    def _prune(bucket: list[float], now: float, window: float) -> int:
         bucket[:] = [t for t in bucket if t > now - window]
         return len(bucket)
 
@@ -151,7 +152,7 @@ class LocalTenantRateLimiter:
             m.append(now)
             return True
 
-    async def get_remaining(self, tenant_id: str) -> dict:
+    async def get_remaining(self, tenant_id: str) -> dict[str, Any]:
         """返回剩余额度"""
         now = time.time()
         async with self._lock:

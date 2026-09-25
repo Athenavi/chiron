@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from starlette.middleware.base import BaseHTTPMiddleware, RequestResponseEndpoint
 from starlette.requests import Request
@@ -16,7 +17,7 @@ logger = logging.getLogger(__name__)
 class RateLimitMiddleware(BaseHTTPMiddleware):
     """基于 tenant_id 的请求限流"""
 
-    def __init__(self, app, limiter: TenantRateLimiter):
+    def __init__(self, app: Any, limiter: TenantRateLimiter) -> None:
         super().__init__(app)
         self._limiter = limiter
 

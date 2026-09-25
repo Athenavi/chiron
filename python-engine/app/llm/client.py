@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.config import settings
 
@@ -21,12 +22,12 @@ logger = logging.getLogger(__name__)
 class LLMClient:
     """嵌入客户端：本地模型优先、Gateway API 回退"""
 
-    def __init__(self):
-        self._gateway = None
-        self._local_encoder = None
+    def __init__(self) -> None:
+        self._gateway: Any = None
+        self._local_encoder: Any = None
         self._local_encoder_lock = asyncio.Lock()
 
-    def bind_gateway(self, gateway) -> None:
+    def bind_gateway(self, gateway: Any) -> None:
         """注入 GatewayRouter（main.py 启动时调用一次）"""
         self._gateway = gateway
 
@@ -71,7 +72,8 @@ class LLMClient:
             return None
         try:
             resp = await self._gateway.embed(text, settings.embedding_model)
-            return resp.embedding
+            embedding: list[float] = resp.embedding
+            return embedding
         except Exception as e:
             logger.warning("API 嵌入计算失败: %s", e)
             return None

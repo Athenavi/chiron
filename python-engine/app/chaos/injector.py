@@ -89,7 +89,8 @@ async def load_active_faults(tenant_id: str) -> list[dict[str, Any]]:
         redis = await get_redis()
         cached = await redis.get(key)
         if cached:
-            return json.loads(cached)
+            parsed: list[dict[str, Any]] = json.loads(cached)
+            return parsed
     except Exception as e:  # noqa: BLE001 — 缓存不可用不影响主流程
         logger.debug("chaos: redis read failed (%s), falling back to db", e)
 
@@ -177,10 +178,10 @@ class ChaosInjectionMiddleware:
     注入 error 时**直接回响应、不调下游**，也不做任何 body 缓冲。
     """
 
-    def __init__(self, app):
+    def __init__(self, app: Any) -> None:
         self.app = app
 
-    async def __call__(self, scope, receive, send) -> None:
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
         if scope.get("type") != "http" or not settings.chaos_enabled:
             await self.app(scope, receive, send)
             return
@@ -221,7 +222,7 @@ class ChaosInjectionMiddleware:
         await self.app(scope, receive, send)
 
     @staticmethod
-    async def _send_error(scope, send, fault: dict[str, Any]) -> None:
+    async def _send_error(scope: Any, send: Any, fault: dict[str, Any]) -> None:
         code = int(fault.get("config", {}).get("error_code", 503))
         # 与 Go 侧 chaosErrorCode 对齐：非 4xx/5xx 的取值一律回退 503。
         # 否则实验配置里一个笔误（如 999）就会让 ASGI 发出发不出去的状态码。

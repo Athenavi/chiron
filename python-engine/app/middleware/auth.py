@@ -4,6 +4,7 @@ from __future__ import annotations
 import hmac
 import logging
 import os
+from typing import Any
 
 import jwt
 from jwt import InvalidTokenError
@@ -51,8 +52,12 @@ class AuthMiddleware(BaseHTTPMiddleware):
     """
 
     def __init__(
-        self, app, redis_client=None, jwt_secret: str = "", internal_token: str = ""
-    ):
+        self,
+        app: Any,
+        redis_client: Any = None,
+        jwt_secret: str = "",
+        internal_token: str = "",
+    ) -> None:
         super().__init__(app)
         self._redis = redis_client
         self._internal_token = internal_token
@@ -176,7 +181,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return None
         try:
             payload = jwt.decode(token, self._jwt_secret, algorithms=["HS256"])
-            tid = payload.get("tenant_id")
+            tid: str | None = payload.get("tenant_id")
             if not tid:
                 logger.warning("JWT missing tenant_id claim, rejecting")
                 return None
