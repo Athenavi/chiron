@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import json
 import logging
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -29,7 +30,7 @@ class SSEProducer:
         self._redis = redis
         self._maxlen = maxlen
 
-    async def publish(self, task_id: str, event: dict) -> bool:
+    async def publish(self, task_id: str, event: dict[str, Any]) -> bool:
         """
         发布 SSE 事件到 Redis Stream
 
@@ -79,7 +80,7 @@ class SSEProducer:
             logger.warning("publish_tool_call failed for task %s", task_id)
 
     async def publish_tool_result(
-        self, task_id: str, tool_id: str, result: dict
+        self, task_id: str, tool_id: str, result: dict[str, Any]
     ) -> None:
         """发布工具结果事件"""
         ok = await self.publish(

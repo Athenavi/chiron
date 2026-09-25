@@ -57,6 +57,13 @@ jobs:
           python -m pip install -r requirements-dev.txt
       - name: Ruff (lint)
         run: ruff check .
+      - name: Mypy (strict)
+        # pyproject 已声明 strict = true，但 app/ 仍有存量错误（1171 条 / 130 文件），
+        # 所以先按域分批落门禁：每批只检查已清零的模块（见 docs/development-roadmap.md L2-1）。
+        # mypy 会连带检查被 import 的模块并报它们的错误，故这里必须带上传递依赖
+        # app/config.py（否则它的错误会从这个入口漏出来）。
+        # 后续每清零一个域就往这个列表里追加，全部通过后改为 `mypy app/`。
+        run: mypy app/sse app/trace app/config.py
       - name: Pytest
         # integration 用例需要完整栈（网关 HTTP / 真实 PG），见 pyproject 的 markers。
         # 它们由需要时单独执行：`pytest -m integration`

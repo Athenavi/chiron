@@ -35,8 +35,14 @@ go test -mod=mod ./... -count=1
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 对齐
 ruff check .
+mypy app/sse app/trace app/config.py            # 分批接线的第一批，见开发路线图 L2-1
 python -m pytest -q -m "not integration"
 ```
+
+`mypy` 目前只覆盖**已清零的模块**：`pyproject.toml` 已声明 `strict = true`，但 `app/` 仍有存量
+错误，所以门禁按域分批扩大。**`mypy` 会连带检查被 import 的模块并报它们的错误**，因此范围必须
+包含传递依赖（第一批里的 `app/config.py` 就是这么来的）—— 清单与扩批进度见
+[开发路线图](development-roadmap.md) 的 L2-1。
 
 标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL），**不在 CI 中执行**，
 需要时单独跑 `pytest -m integration`。
@@ -79,6 +85,7 @@ python scripts/check_source_encoding.py
 
 - [ ] 上面五个 job 对应的命令在本地全绿；
 - [ ] 改了 Go 网关 → 至少 `go build -mod=mod ./... && go vet -mod=mod ./...`；
+- [ ] 改了 Python 引擎 → `ruff check .` + `mypy <已接线目录>`（见 L2-1）+ `pytest -q -m "not integration"`；
 - [ ] 改了前端 → `pnpm run lint` **和** `pnpm run build`（只跑 `vue-tsc` 不够：i18n 批量替换
       里 `t` 未定义这类问题只有 ESLint 的 `no-undef` 报得出来）；
 - [ ] 新增/修改了错误码 → 三语言 `locales/{zh-CN,en-US,ar}/errors.ts` 同步，

@@ -1,8 +1,9 @@
 # Python AI 引擎配置
 from pathlib import Path
+from typing import Any, Self
 
-from pydantic import ConfigDict, model_validator
-from pydantic_settings import BaseSettings
+from pydantic import model_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 def _find_env_file() -> str:
@@ -100,7 +101,7 @@ class Settings(BaseSettings):
     # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
     # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
     # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。
-    llm_provider_catalog: list[dict] = []
+    llm_provider_catalog: list[dict[str, Any]] = []
     # 网关「系统设置」python 分类里的 provider 级覆盖（{provider}_base_url /
     # {provider}_api_key）。Settings 不为每个 provider 声明字段，故集中收集于此。
     provider_overrides: dict[str, str] = {}
@@ -219,12 +220,12 @@ class Settings(BaseSettings):
 
     # extra="ignore"：项目根 .env 混有 Go 网关变量（PORT/CORS_ORIGINS 等），
     # Python 引擎只取自己声明的字段，其余忽略
-    model_config = ConfigDict(
+    model_config = SettingsConfigDict(
         env_prefix="", case_sensitive=False, extra="ignore", env_file=_find_env_file()
     )
 
     @model_validator(mode="after")
-    def _validate_security_defaults(self):
+    def _validate_security_defaults(self) -> Self:
         """P0 安全 fail-fast：JWT secret 必须显式配置且非弱值。
 
         历史问题：默认 jwt_secret='dev-secret-change-in-production' 会导致
@@ -324,7 +325,7 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
-    def _resolve_llm_fallback(self):
+    def _resolve_llm_fallback(self) -> Self:
         """LLM_* 配置回退：当 OPENAI_* 为空时使用 LLM_*，且 LLM_MODEL 覆盖 default_model"""
         if self.llm_api_key and not self.openai_api_key:
             self.openai_api_key = self.llm_api_key
@@ -343,7 +344,7 @@ class Settings(BaseSettings):
 settings = Settings()
 
 
-def _load_gateway_config() -> dict:
+def _load_gateway_config() -> dict[str, Any]:
     """从 Go 网关内部端点拉取后台「系统设置」的 python 分类配置。
 
     返回与 Settings 字段名一致的扁平 dict（敏感键已由网关用 APP_SECRET 解密）。

@@ -72,7 +72,7 @@ class TraceWriter:
         trace_id: str,
         span_name: str,
         duration_ms: int,
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         tenant_id: str | None = None,  # SaaS: 租户隔离
     ) -> None:
         """写入单个 span 事件到 Redis Stream (按租户隔离).
@@ -113,7 +113,7 @@ class TraceWriter:
                 "TraceWriter failed to write span (tenant=%s): %s", tenant_id, e
             )
 
-    async def write_batch(self, spans: list[dict]) -> None:
+    async def write_batch(self, spans: list[dict[str, Any]]) -> None:
         """批量写入多个 span (减少 Redis 往返).
 
         Args:
@@ -166,7 +166,7 @@ async def record_span(
     trace_id: str,
     span_name: str,
     duration_ms: int,
-    metadata: dict | None = None,
+    metadata: dict[str, Any] | None = None,
     tenant_id: str | None = None,  # SaaS: 租户隔离
     redis_url: str | None = None,
 ) -> None:

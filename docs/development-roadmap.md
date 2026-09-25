@@ -23,6 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
+| `mypy`（已接线目录，见 L2-1） | 0 —— `app/sse app/trace app/config.py` |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -69,16 +70,22 @@
   - 结论：1171 条**不属于需要下调 `strict` 的量级**（备选阈值是「数万条」），按下面的顺序分批接线。
 - **实施顺序**（不可颠倒）：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. 按域分批接线（建议 `app/core`、`app/api` → `app/agent`、`app/queue` → 其余），
-     每批在 CI 里以 `mypy <已通过目录>` 落门禁，避免一次性红灯堵住所有人的 PR；
-     > 当前**没有哪个目录是 0 错误**，所以第一批要先把某个目录修到 0 再落门禁。最小的几个：
-     > `app/sse` 2、`app/trace` 3、`app/middleware` 3、`app/media` 4、`app/chaos` 4、`app/llm` 5、
-     > `app/observability` 5、`app/interfaces` 7 —— 且以 `type-arg`（补 `dict` 类型参数）为主，
-     > 属零行为变更的量级，适合作为第一道门禁；
-     > **实测：门禁集合是「目标目录 + 传递依赖」，不是单看目录自身条数。**
-     > `mypy app/sse app/trace` 会连带报它们 import 的 `app/config.py`（6 条），即这条最小集合
-     > 实际是 11 条而非 5 条。另外本机依赖与 CI 未必一致，正式接线前应在
-     > `requirements.txt` 的隔离环境里复核一遍闭包（可用 `venv`，勿复用全局环境）；
+  2. **按域分批接线**：
+     - ✅ **第一批已接线**：`.github/workflows/ci.yml` 的 python job 新增 `Mypy (strict)` step，
+       命令为 `mypy app/sse app/trace app/config.py`，共修 **11 条**（`app/sse` 2 + `app/trace` 3 +
+       `app/config.py` 6）——`dict`/`list` 补类型参数、两个 `model_validator` 补 `-> Self`、
+       返回注解补 `-> dict[str, Any]`、`ConfigDict` → `SettingsConfigDict`；
+       全部零行为变更，引擎套件 `1259 passed` 未变；
+     - 后续每清零一个域，就往那个 step 的列表里追加，全部通过后改成 `mypy app/`；
+     - 下一批候选（按存量从少到多）：`app/middleware` 3、`app/media` 4、`app/chaos` 4、
+       `app/llm` 5、`app/observability` 5、`app/interfaces` 7；
+     > **门禁集合是「目标目录 + 传递依赖」，不是单看目录自身条数。**
+     > `mypy app/sse app/trace` 会连带报它们 import 的 `app/config.py`，所以第一批实际是 11 条
+     > 而非 5 条 —— 每批都要先跑一遍确定闭包。
+     > ⚠ **闭包结果依赖第三方 stub 版本**：第一批是在隔离 `venv` 里复核的，但该 venv 用的是
+     > 本机唯一的 Python 3.14 + **最新版** pydantic/pydantic-settings（`requirements.txt` 的
+     > 固定版本在 3.14 上装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译）。
+     > CI 是 3.11 + 固定版本，若该 job 首次运行报出本地没有的错误，根因大概率在此。
   3. 全量通过后再把 CI 改成 `mypy app/`。
 - **验收**：CI 中 mypy 对已接线目录返回 0；`pyproject.toml` 的 `strict = true` 与实际门禁一致。
 - **备选**：若量化结果不可接受（如数万条），则**下调 `pyproject.toml` 的 strict 声明**并写明降级理由
@@ -228,7 +235,8 @@ python scripts/check_source_encoding.py
 python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
-ruff check . && python -m pytest -q -m "not integration"
+# mypy 只覆盖**已接线的目录**（分批扩大，清单见 L2-1）
+ruff check . && mypy app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test
