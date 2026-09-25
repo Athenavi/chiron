@@ -118,6 +118,10 @@ markers = [
 
 [tool.mypy]
 python_version = "3.11"
+# 生产与 CI 都是 Linux（见 .github/workflows/ci.yml 的 ubuntu-latest），本机 Windows 只是
+# 开发环境。显式声明 platform 才能让 Unix-only 的模块（如 app/tools/_sandbox_worker.py 里的
+# resource.setrlimit/RLIMIT_*）被正确解析 —— 否则在 Windows 上会误报 "Module has no attribute"。
+platform = "linux"
 # strict 已接线但**按域分批**：CI 的 `Mypy (strict)` step 目前只检查已清零的模块，
 # 完整清单与扩批进度见 docs/development-roadmap.md 的 L2-1。
 # app/ 存量错误清零后改为 `mypy app/`。

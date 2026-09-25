@@ -14,6 +14,10 @@ from app.agent.task_budget import (  # noqa: F401 - 供既有调用方复用
     TaskBudget,
 )
 
+# 显式声明再导出：strict 的 no_implicit_reexport 要求 re-export 必须写明，
+# 否则 subagent_runner 里 `from app.subagent.budget import ...` 会报 not explicitly export。
+__all__ = ["BudgetExceeded", "TaskBudget", "DEFAULT_MAX_TOKENS", "from_env"]
+
 #: 子 Agent 的 token 上界：只在"失控"时兜底（实测一个正常 run 约 2k–20k token，200k 很宽松）
 DEFAULT_MAX_TOKENS = 200_000
 #: wall 默认不限：该不该限时由调用方/看门狗决定（看门狗见 app/subagent/registry.py）

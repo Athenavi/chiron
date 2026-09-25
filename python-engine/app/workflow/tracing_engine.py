@@ -98,13 +98,13 @@ class TracingWorkflowEngine:
     3. 节点级别重试与降级
     """
 
-    def __init__(self, gateway_router):
+    def __init__(self, gateway_router: GatewayRouter) -> None:
         self.gateway = gateway_router
 
     async def run_workflow_with_trace(
         self,
-        graph_json: dict,
-        initial_state: dict,
+        graph_json: dict[str, Any],
+        initial_state: dict[str, Any],
         tenant_id: str,
         instance_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
@@ -329,11 +329,11 @@ class TracingWorkflowEngine:
 
     async def _execute_node_with_trace(
         self,
-        node: dict,
-        state: dict,
+        node: dict[str, Any],
+        state: dict[str, Any],
         trace_id: str,
         node_index: int,
-        node_fns: dict,
+        node_fns: dict[str, Any],
         tenant_id: str = "",
     ) -> NodeResult:
         """执行单个节点 (带 trace)
@@ -407,8 +407,8 @@ class TracingWorkflowEngine:
 
 # ── 便捷函数 ──────────────────────────────────────────────────────
 async def run_workflow_traced(
-    graph_json: dict,
-    initial_state: dict,
+    graph_json: dict[str, Any],
+    initial_state: dict[str, Any],
     tenant_id: str,
     gateway: GatewayRouter,
 ) -> AsyncIterator[AgentEvent]:

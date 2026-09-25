@@ -86,7 +86,7 @@ def _reply_channel(instance_id: str) -> str:
 class MCPOwnerLease:
     """活跃用户 → owner 实例 的租约与工具清单（Redis）。"""
 
-    def __init__(self, redis, instance_id: str, ttl: int) -> None:
+    def __init__(self, redis: Any, instance_id: str, ttl: int) -> None:
         self._redis = redis
         self._instance_id = instance_id
         self._ttl = max(30, int(ttl))
@@ -144,7 +144,7 @@ class MCPOwnerLease:
             return None
         return raw.decode() if isinstance(raw, bytes) else str(raw)
 
-    async def publish_tools(self, user_id: str, tools: list[dict]) -> None:
+    async def publish_tools(self, user_id: str, tools: list[dict[str, Any]]) -> None:
         """owner 公布该用户可见的工具清单（名称/描述/参数 schema），供非 owner 注册代理。"""
         if not self.enabled or not user_id:
             return
@@ -155,7 +155,7 @@ class MCPOwnerLease:
         except Exception as exc:  # noqa: BLE001
             logger.debug("mcp tools publish failed for %s: %s", user_id, exc)
 
-    async def read_tools(self, user_id: str) -> list[dict]:
+    async def read_tools(self, user_id: str) -> list[dict[str, Any]]:
         """读取 owner 公布的清单（无/失败返回空列表）。"""
         if not self.enabled or not user_id:
             return []
@@ -180,17 +180,17 @@ class MCPBridge:
 
     def __init__(
         self,
-        redis,
+        redis: Any,
         instance_id: str,
-        handler: Callable[[str, dict], Awaitable[Any]],
+        handler: Callable[[str, dict[str, Any]], Awaitable[Any]],
         timeout: float = 30.0,
     ) -> None:
         self._redis = redis
         self._instance_id = instance_id
         self._handler = handler
         self._timeout = max(1.0, float(timeout))
-        self._pending: dict[str, asyncio.Future] = {}
-        self._tasks: list[asyncio.Task] = []
+        self._pending: dict[str, asyncio.Future[Any]] = {}
+        self._tasks: list[asyncio.Task[Any]] = []
 
     async def start(self) -> None:
         if self._redis is None:
@@ -215,13 +215,13 @@ class MCPBridge:
                 fut.cancel()
         self._pending.clear()
 
-    async def invoke(self, owner_instance_id: str, tool_name: str, args: dict) -> Any:
+    async def invoke(self, owner_instance_id: str, tool_name: str, args: dict[str, Any]) -> Any:
         """在 owner 实例上执行工具并返回结果；超时/失败抛 RuntimeError（不静默）。"""
         if self._redis is None or not owner_instance_id:
             raise RuntimeError("MCP bridge unavailable (no Redis or missing owner)")
         req_id = uuid.uuid4().hex
         loop = asyncio.get_running_loop()
-        fut: asyncio.Future = loop.create_future()
+        fut: asyncio.Future[Any] = loop.create_future()
         self._pending[req_id] = fut
         payload = json.dumps(
             {

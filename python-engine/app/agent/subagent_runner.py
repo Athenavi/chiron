@@ -83,7 +83,7 @@ class SubagentRunResult:
     truncated: bool = False
     error: str = ""
     profile: str = ""
-    artifacts: list[dict] = field(default_factory=list)
+    artifacts: list[dict[str, Any]] = field(default_factory=list)
 
     def to_tool_payload(self) -> dict[str, Any]:
         """工具层返回体（结构化，便于父模型与前端消费）。"""
@@ -125,7 +125,7 @@ def _wrap_result(run_id: str, profile: str, status: str, output: str, truncated:
 
 
 async def _persist_terminal_to_cache(
-    cache,
+    cache: Any,
     *,
     run_id: str,
     tenant: str,
@@ -180,22 +180,22 @@ class SubAgentRunner:
 
     def __init__(
         self,
-        gateway,
+        gateway: Any,
         *,
-        store=None,
-        pool=None,
+        store: Any = None,
+        pool: Any = None,
         depth: int = 0,
         parent_session_id: str = "",
         parent_run_id: str = "",
         turn_id: str = "",
         tenant_id: str = "",
         user_id: str = "",
-        sink=None,
-        cache=None,
+        sink: Any = None,
+        cache: Any = None,
         background: bool = False,
         allow_write: bool = False,
         budget: TaskBudget | None = None,
-    ):
+    ) -> None:
         self._gateway = gateway
         #: 是否后台委派（决定生命周期与预算，**不再决定只读**，见 _resolve_tools）
         self._background = bool(background)
@@ -374,7 +374,7 @@ class SubAgentRunner:
         # 因此终态写库、L1 摘要、前端通知与"用户点停止"完全一致 ——
         # 不额外造一条只属于超时的收尾分支。
         _wall = budget.wall if (budget is not None and budget.enabled and budget.wall) else 0
-        _wall_task: asyncio.Task | None = None
+        _wall_task: asyncio.Task[Any] | None = None
         if _wall:
             _wall_task = asyncio.create_task(_watch_wall_budget(run_id, _wall))
 
@@ -679,7 +679,7 @@ class SubAgentRunner:
 
     def _resolve_tools(
         self, spec: ProfileSpec | None, mode: str, child_depth: int, max_depth: int
-    ) -> list[dict] | None:
+    ) -> list[dict[str, Any]] | None:
         """按 Profile 收窄子 Agent 的工具集；无需收窄时返回 ``None``（沿用 runtime 默认）。
 
         返回形态是 registry 的 ToolDef 字段（``name``/``description``/``parameters``），
@@ -721,7 +721,7 @@ class SubAgentRunner:
         if block_delegate:
             names -= DELEGATE_TOOL_NAMES
 
-        tools: list[dict] = []
+        tools: list[dict[str, Any]] = []
         for name in sorted(names):
             definition = registry.get(name)
             if definition is None:
@@ -758,7 +758,9 @@ class SubAgentRunner:
         try:
             from app.context.manager import ContextManager
 
-            return ContextManager._extractive_summary(output).strip()
+            return ContextManager._extractive_summary(
+                [{"role": "assistant", "content": output}]
+            ).strip()
         except Exception:  # noqa: BLE001
             return output[:500]
 
@@ -802,7 +804,7 @@ def _split_thinking(content: str) -> tuple[str, str]:
     return "", content
 
 
-def _snapshot_context() -> dict | None:
+def _snapshot_context() -> dict[str, Any] | None:
     """取当前工具上下文快照（context 模块不可用时返回 None）。"""
     try:
         from app.tools.context import get_all

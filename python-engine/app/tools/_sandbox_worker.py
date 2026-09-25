@@ -140,7 +140,7 @@ class ToolProxy:
             raise ToolCallError(name, f"unexpected IPC message type: {mtype}")
         return msg.get("result")
 
-    def __getattr__(self, name: str):
+    def __getattr__(self, name: str) -> Any:
         """动态生成每个注册工具的 async 调用方法。
 
         兼容两种调用形式：
@@ -150,7 +150,7 @@ class ToolProxy:
         if name.startswith("_"):
             raise AttributeError(name)
 
-        async def _wrapped(*args, **kwargs):
+        async def _wrapped(*args: Any, **kwargs: Any) -> Any:
             if len(args) == 1 and isinstance(args[0], dict) and not kwargs:
                 params: dict[str, Any] = args[0]
             else:
@@ -224,7 +224,7 @@ def _run_program(code: str, tool_names: list[str]) -> int:
         )  # noqa: S102 — 沙箱语义由部署策略约束
         main_fn = ns["_main"]
 
-        async def _run():
+        async def _run() -> Any:
             with contextlib.redirect_stdout(log_buf):
                 result = await main_fn()
             return result

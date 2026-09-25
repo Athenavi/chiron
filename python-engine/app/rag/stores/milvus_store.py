@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.rag.stores.base import VectorStoreBase
 
@@ -21,7 +22,7 @@ class MilvusStore(VectorStoreBase):
         self._connected = False
         self._collections: dict[str, object] = {}
 
-    def _ensure_connected(self):
+    def _ensure_connected(self) -> None:
         """确保 Milvus 已连接"""
         if not self._connected:
             from pymilvus import connections
@@ -32,7 +33,7 @@ class MilvusStore(VectorStoreBase):
 
     def _get_or_create_collection(
         self, name: str, dim: int, index_type: str = "IVF_FLAT"
-    ):
+    ) -> Any:
         """获取或创建 Milvus collection"""
         from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 
@@ -73,7 +74,7 @@ class MilvusStore(VectorStoreBase):
         collection: str,
         ids: list[str],
         vectors: list[list[float]],
-        payloads: list[dict],
+        payloads: list[dict[str, Any]],
     ) -> int:
         """插入向量数据"""
         self._ensure_connected()
@@ -101,7 +102,7 @@ class MilvusStore(VectorStoreBase):
         top_k: int = 5,
         threshold: float = 0.5,
         filter_expr: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """搜索相似向量"""
         from pymilvus import Collection
 
