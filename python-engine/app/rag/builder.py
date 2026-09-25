@@ -61,7 +61,7 @@ class RAGBuilder:
             logger.warning("未知 vector_db_type=%r，回退 milvus", vector_db_type)
             self._vector_db_type = VectorDBType.MILVUS
 
-    def _ensure_milvus(self):
+    def _ensure_milvus(self) -> None:
         """确保 Milvus 连接"""
         if not self._milvus_connected:
             from pymilvus import connections
@@ -86,7 +86,7 @@ class RAGBuilder:
         tenant_id: str,
         vector_db: str | None = None,
         parser_type: str | None = None,
-    ) -> AsyncIterator[dict]:
+    ) -> AsyncIterator[dict[str, Any]]:
         """
         构建单个文档的 RAG 索引（SSE 流式返回进度）
         """
@@ -156,7 +156,7 @@ class RAGBuilder:
         file_type: str,
         filename: str,
         parser_type: ParserType,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """解析文档"""
         if parser_type == ParserType.UNSTRUCTURED:
             return self._parse_with_unstructured(content, file_type, filename)
@@ -172,7 +172,7 @@ class RAGBuilder:
         content: bytes,
         file_type: str,
         filename: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """使用 Unstructured 解析"""
         try:
             import os
@@ -208,7 +208,7 @@ class RAGBuilder:
         content: bytes,
         file_type: str,
         filename: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """使用 markitdown 解析"""
         try:
             from markitdown import MarkItDown
@@ -229,7 +229,7 @@ class RAGBuilder:
         content: bytes,
         file_type: str,
         filename: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """轻量级解析"""
         try:
             if file_type == "pdf":
@@ -252,7 +252,7 @@ class RAGBuilder:
             logger.warning("轻量级解析失败: %s", e)
             return {"error": str(e)}
 
-    def _parse_pdf_lightweight(self, content: bytes) -> dict:
+    def _parse_pdf_lightweight(self, content: bytes) -> dict[str, Any]:
         """使用 PyMuPDF 解析 PDF"""
         import fitz
 
@@ -270,13 +270,13 @@ class RAGBuilder:
         finally:
             doc.close()
 
-    def _parse_docx_lightweight(self, content: bytes) -> dict:
+    def _parse_docx_lightweight(self, content: bytes) -> dict[str, Any]:
         """使用 python-docx 解析 Word"""
         import io
 
         from docx import Document
 
-        doc = Document(io.BytesIO(content))
+        doc: Any = Document(io.BytesIO(content))
         try:
             text = "\n\n".join(
                 [para.text for para in doc.paragraphs if para.text.strip()]
@@ -289,7 +289,7 @@ class RAGBuilder:
         finally:
             doc.close()
 
-    def _parse_xlsx_lightweight(self, content: bytes) -> dict:
+    def _parse_xlsx_lightweight(self, content: bytes) -> dict[str, Any]:
         """使用 openpyxl 解析 Excel"""
         import io
 
@@ -314,7 +314,7 @@ class RAGBuilder:
         finally:
             wb.close()
 
-    def _parse_html_lightweight(self, content: bytes) -> dict:
+    def _parse_html_lightweight(self, content: bytes) -> dict[str, Any]:
         """使用 BeautifulSoup 解析 HTML"""
         from bs4 import BeautifulSoup
 
@@ -326,7 +326,7 @@ class RAGBuilder:
             "page_count": 1,
         }
 
-    def _chunk_text(self, text: str) -> list[dict]:
+    def _chunk_text(self, text: str) -> list[dict[str, Any]]:
         """使用 LangChain Text Splitter 分块"""
         try:
             from langchain.text_splitter import RecursiveCharacterTextSplitter
@@ -344,7 +344,7 @@ class RAGBuilder:
             # fallback 到简单分块
             return self._chunk_text_simple(text)
 
-    def _chunk_text_simple(self, text: str) -> list[dict]:
+    def _chunk_text_simple(self, text: str) -> list[dict[str, Any]]:
         """简单分块（fallback）"""
         chunks = []
         chunk_size = settings.chunk_size
@@ -369,7 +369,7 @@ class RAGBuilder:
             embedding = await self._get_api_embedding(text)
         return embedding
 
-    async def _compute_embeddings(self, chunks: list[dict]) -> list[list[float] | None]:
+    async def _compute_embeddings(self, chunks: list[dict[str, Any]]) -> list[list[float] | None]:
         """计算嵌入向量（本地优先，API 回退）"""
         embeddings = []
         for i, chunk in enumerate(chunks):
@@ -419,10 +419,10 @@ class RAGBuilder:
         kb_id: str,
         doc_id: str,
         tenant_id: str,
-        chunks: list[dict],
+        chunks: list[dict[str, Any]],
         embeddings: list[list[float] | None],
         db_type: VectorDBType,
-    ):
+    ) -> None:
         """存储向量"""
         if db_type == VectorDBType.MILVUS:
             await self._store_milvus(kb_id, doc_id, tenant_id, chunks, embeddings)
@@ -431,7 +431,14 @@ class RAGBuilder:
         else:
             raise ValueError(f"不支持的向量数据库: {db_type}")
 
-    async def _store_milvus(self, kb_id, doc_id, tenant_id, chunks, embeddings):
+    async def _store_milvus(
+        self,
+        kb_id: str,
+        doc_id: str,
+        tenant_id: str,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float] | None],
+    ) -> None:
         """存储到 Milvus"""
         if self._vector_store:
             # 使用 VectorStore 接口
@@ -444,8 +451,18 @@ class RAGBuilder:
                 kb_id, doc_id, tenant_id, chunks, embeddings
             )
 
-    async def _store_with_interface(self, kb_id, doc_id, tenant_id, chunks, embeddings):
+    async def _store_with_interface(
+        self,
+        kb_id: str,
+        doc_id: str,
+        tenant_id: str,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float] | None],
+    ) -> None:
         """使用 VectorStore 接口存储"""
+        store = self._vector_store
+        if store is None:  # 调用方只在 _vector_store 非空时进来；这里收窄类型
+            raise ValueError("VectorStore 未初始化")
         collection = f"kb_{kb_id.replace('-', '_')}"
         dim = (
             len(embeddings[0])
@@ -453,7 +470,7 @@ class RAGBuilder:
             else settings.embedding_dim
         )
 
-        await self._vector_store.ensure_collection(collection, dim)
+        await store.ensure_collection(collection, dim)
 
         ids = []
         vectors = []
@@ -474,12 +491,19 @@ class RAGBuilder:
             )
 
         if ids:
-            await self._vector_store.insert(collection, ids, vectors, payloads)
+            await store.insert(collection, ids, vectors, payloads)
         else:
             raise ValueError("无有效向量可存储，VectorStore 存储失败")
         logger.info("VectorStore 存储完成: %d chunks", len(ids))
 
-    async def _store_milvus_direct(self, kb_id, doc_id, tenant_id, chunks, embeddings):
+    async def _store_milvus_direct(
+        self,
+        kb_id: str,
+        doc_id: str,
+        tenant_id: str,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float] | None],
+    ) -> None:
         """直接存储到 Milvus"""
         from pymilvus import Collection, CollectionSchema, DataType, FieldSchema
 
@@ -565,7 +589,7 @@ class RAGBuilder:
             raise ValueError(f"非法表名: {table!r}")
         return table
 
-    async def _pg_conn(self):
+    async def _pg_conn(self) -> tuple[Any, Any]:
         """获取 PostgreSQL 连接与释放函数：统一通过 DBManager"""
         from app.db import get_pool
 
@@ -573,7 +597,14 @@ class RAGBuilder:
         conn = await pool.acquire()
         return conn, pool.release
 
-    async def _store_pgvector(self, kb_id, doc_id, tenant_id, chunks, embeddings):
+    async def _store_pgvector(
+        self,
+        kb_id: str,
+        doc_id: str,
+        tenant_id: str,
+        chunks: list[dict[str, Any]],
+        embeddings: list[list[float] | None],
+    ) -> None:
         """存储到 PostgreSQL (pgvector)"""
         table = self._validate_table_name(settings.pgvector_table)
         rows = []
@@ -646,7 +677,7 @@ class RAGBuilder:
         top_k: int = 5,
         threshold: float = 0.5,
         vector_db: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """查询知识库"""
         if vector_db:
             try:
@@ -670,7 +701,7 @@ class RAGBuilder:
 
     async def query_milvus(
         self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """从 Milvus 查询"""
         if self._vector_store:
             return await self._query_with_interface(kb_id, query, top_k, threshold)
@@ -711,7 +742,9 @@ class RAGBuilder:
             if hit.score >= threshold
         ]
 
-    async def _query_with_interface(self, kb_id, query, top_k, threshold) -> list[dict]:
+    async def _query_with_interface(
+        self, kb_id: str, query: str, top_k: int, threshold: float
+    ) -> list[dict[str, Any]]:
         """使用 VectorStore 接口查询"""
         collection = f"kb_{kb_id.replace('-', '_')}"
 
@@ -719,7 +752,10 @@ class RAGBuilder:
         if not embedding:
             return []
 
-        results = await self._vector_store.search(
+        store = self._vector_store
+        if store is None:  # 调用方只在 _vector_store 非空时进来；这里收窄类型
+            raise ValueError("VectorStore 未初始化")
+        results = await store.search(
             collection=collection,
             query_vector=embedding,
             top_k=top_k,
@@ -739,7 +775,7 @@ class RAGBuilder:
 
     async def query_pgvector(
         self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """从 PostgreSQL (pgvector) 查询（余弦相似度，与 Milvus 语义对齐）"""
         query_vector = await self._embed_text(query)
         if not query_vector:
@@ -787,7 +823,7 @@ class RAGBuilder:
 
     async def query_qdrant(
         self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """从 Qdrant 查询（兼容旧代码）"""
         from qdrant_client import QdrantClient
 

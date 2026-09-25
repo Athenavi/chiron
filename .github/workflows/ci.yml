@@ -80,12 +80,13 @@ jobs:
           app/media app/memory app/middleware app/observability
           app/plugins/broker_proxy.py app/plugins/owner_lease.py app/plugins/pool.py
           app/providers app/queue/dlq.py app/queue/idempotency.py app/queue/producer.py
-          app/rag/context_injector.py app/rag/hybrid_search.py app/rag/parser.py
-          app/rag/retriever.py app/rag/stores/base.py app/rag/stores/milvus_store.py
-          app/rag/stores/pgvector_store.py app/run_registry.py app/session_store.py
-          app/skill/manager.py app/skill/store.py app/sse app/subagent/affinity.py
-          app/subagent/followup.py app/subagent/redact.py app/subagent/registry.py
-          app/subagent/reporting.py app/subagent/runtime_cache.py app/subagent/store.py
+          app/rag/builder.py app/rag/context_injector.py app/rag/hybrid_search.py
+          app/rag/parser.py app/rag/retriever.py app/rag/stores/base.py
+          app/rag/stores/milvus_store.py app/rag/stores/pgvector_store.py
+          app/run_registry.py app/session_store.py app/skill/manager.py
+          app/skill/store.py app/sse app/subagent/affinity.py app/subagent/followup.py
+          app/subagent/redact.py app/subagent/registry.py app/subagent/reporting.py
+          app/subagent/runtime_cache.py app/subagent/store.py
           app/tools/_sandbox_worker.py app/tools/client.py app/tools/code_guard.py
           app/tools/context.py app/tools/discovery.py app/tools/graph.py
           app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/memory.py
