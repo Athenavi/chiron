@@ -27,6 +27,7 @@ import logging
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +103,10 @@ class ModeConfig:
     mode: AgentMode
     persona: str | None = None  # None = 用现有默认 persona；str = 固定完整 persona
     include_context: bool = True  # 是否注入记忆/skills/RAG/git 上下文段
-    include_tools: frozenset = frozenset(CORE_TOOL_NAMES)  # 模式可见工具
-    extra_tools: frozenset = frozenset()  # 模式额外注册的工具
+    include_tools: frozenset[str] = frozenset(CORE_TOOL_NAMES)  # 模式可见工具
+    extra_tools: frozenset[str] = frozenset()  # 模式额外注册的工具
     enable_compaction: bool = True  # 是否启用上下文压缩
-    compaction: dict | None = (
+    compaction: dict[str, Any] | None = (
         None  # SaaS：截断策略配置（strategy/max_messages/max_context_tokens/
     )
     #        threshold_ratio/snipe_ratio/tool_result_max_chars 等），
@@ -140,14 +141,14 @@ def _overrides_path() -> Path:
     return Path(__file__).resolve().parent / "mode_overrides.json"
 
 
-def _load_overrides() -> dict:
+def _load_overrides() -> dict[str, Any]:
     try:
-        return json.loads(_overrides_path().read_text(encoding="utf-8"))
+        return cast("dict[str, Any]", json.loads(_overrides_path().read_text(encoding="utf-8")))
     except (FileNotFoundError, json.JSONDecodeError):
         return {}
 
 
-def _apply_overrides(cfg: ModeConfig, overrides: dict) -> ModeConfig:
+def _apply_overrides(cfg: ModeConfig, overrides: dict[str, Any]) -> ModeConfig:
     """按 overrides 字段合并（persona/include_context/include_tools/extra_tools/enable_compaction/compaction）。"""
     o = overrides.get(cfg.mode.value)
     if not isinstance(o, dict) or not o:

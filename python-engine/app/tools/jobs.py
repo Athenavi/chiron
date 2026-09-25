@@ -26,12 +26,12 @@ TASK_STREAM = rkey("engine:tasks")
 _JOB_TTL_HOURS = 24
 
 # 本地降级路径（Redis 不可用）用
-_jobs: dict[str, asyncio.Task] = {}
+_jobs: dict[str, asyncio.Task[Any]] = {}
 _job_created_at: dict[str, float] = {}
 _cleanup_started = False
 
 
-async def _get_redis():
+async def _get_redis() -> Any:
     from app.redis_client import get_redis
 
     return await get_redis()
@@ -82,7 +82,7 @@ async def _enqueue_tool_job(job_id: str, command: str, shell_key: str) -> bool:
         return False
 
 
-async def _local_run(job_id: str, command: str) -> asyncio.Task:
+async def _local_run(job_id: str, command: str) -> asyncio.Task[Any]:
     """Redis 不可用时的本地降级执行（单实例语义）。"""
     from app.tools.job_runner import execute_tool_job
 

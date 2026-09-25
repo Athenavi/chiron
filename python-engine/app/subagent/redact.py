@@ -13,6 +13,7 @@
 from __future__ import annotations
 
 import re
+from typing import Any
 
 # 命中替换模板
 REDACTED_TEMPLATE = "[REDACTED:{kind}]"
@@ -51,7 +52,7 @@ def redact_text(text: str | None) -> tuple[str, int]:
     return out, hits
 
 
-def redact_payload(value):
+def redact_payload(value: Any) -> Any:
     """递归脱敏 payload（dict/list/str），返回 ``(脱敏后对象, 命中数)``。
 
     用于 task / artifacts 等结构化字段（只处理字符串叶子，其它类型原样保留）。
@@ -60,17 +61,17 @@ def redact_payload(value):
         return redact_text(value)
     if isinstance(value, dict):
         total = 0
-        out = {}
+        out: dict[Any, Any] = {}
         for k, v in value.items():
             out[k], n = redact_payload(v)
             total += n
         return out, total
     if isinstance(value, list):
         total = 0
-        out = []
+        out_list: list[Any] = []
         for item in value:
             redacted, n = redact_payload(item)
-            out.append(redacted)
+            out_list.append(redacted)
             total += n
-        return out, total
+        return out_list, total
     return value, 0

@@ -17,6 +17,7 @@ import logging
 import os
 import subprocess
 from pathlib import Path
+from typing import Any
 
 from app.agent.runtime import AgentTask
 from app.agent.workbench_context import context_ids, merge_by_quota, selected_memory_slots
@@ -29,13 +30,13 @@ logger = logging.getLogger(__name__)
 _memory_service = None
 
 
-def bind_memory_service(svc) -> None:
+def bind_memory_service(svc: Any) -> None:
     """注入 MemoryService（L2 档案卡 + L3 摘要），由 main.py lifespan 调用。"""
     global _memory_service
     _memory_service = svc
 
 
-def get_memory_service():
+def get_memory_service() -> Any:
     return _memory_service
 
 
@@ -78,8 +79,8 @@ class PromptEngine:
         self,
         memory_manager: MemoryManager | None = None,
         skill_store: SkillStore | None = None,
-        rag_builder=None,  # RAGBuilder is optional and loosely typed to avoid circular imports
-    ):
+        rag_builder: Any = None,  # RAGBuilder is optional and loosely typed to avoid circular imports
+    ) -> None:
         self._memory_manager = memory_manager
         self._skill_store = skill_store
         self._rag_builder = rag_builder
@@ -88,7 +89,7 @@ class PromptEngine:
     # Public API
     # ------------------------------------------------------------------
 
-    async def assemble(self, task: AgentTask, tools: list) -> str:
+    async def assemble(self, task: AgentTask, tools: list[Any]) -> str:
         """Assemble the full system prompt for the given *task* and *tools*.
 
         记忆区块注入顺序（遵循架构文档）：
@@ -249,7 +250,7 @@ class PromptEngine:
                         parts.append(f"── 记忆：用户档案 ──\n{result.profile_block}")
                     # L3 相关历史区块
                     if result.summary_items:
-                        lines = []
+                        summary_lines: list[str] = []
                         for s in result.summary_items[:5]:
                             score = (
                                 s.score if hasattr(s, "score") else s.get("score", 0)
@@ -265,8 +266,10 @@ class PromptEngine:
                                 else s.get("topics", [])
                             )
                             t_str = f" [{', '.join(topics[:3])}]" if topics else ""
-                            lines.append(f"- (score {score:.2f}){t_str} {content}")
-                        parts.append("── 记忆：相关历史 ──\n" + "\n".join(lines))
+                            summary_lines.append(f"- (score {score:.2f}){t_str} {content}")
+                        parts.append(
+                            "── 记忆：相关历史 ──\n" + "\n".join(summary_lines)
+                        )
                     return "\n\n".join(parts)
             except Exception as exc:
                 logger.warning("MemoryService recall failed: %s", exc)
@@ -374,7 +377,7 @@ class PromptEngine:
     # Formatting helpers
     # ------------------------------------------------------------------
 
-    def _format_tools(self, tools: list) -> str:
+    def _format_tools(self, tools: list[Any]) -> str:
         """Format tool definitions into a readable prompt section.
 
         Each *tool* is expected to be a dict with at least ``name`` and

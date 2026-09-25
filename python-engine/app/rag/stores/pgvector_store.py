@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import re
+from typing import Any
 
 from app.rag.stores.base import VectorStoreBase
 
@@ -15,7 +16,9 @@ logger = logging.getLogger(__name__)
 class PgvectorStore(VectorStoreBase):
     """pgvector 向量存储"""
 
-    def __init__(self, pool, table_name: str = "knowledge_chunk_vectors", embedding_dim: int = 1536):
+    def __init__(
+        self, pool: Any, table_name: str = "knowledge_chunk_vectors", embedding_dim: int = 1536
+    ) -> None:
         """
         Args:
             pool: asyncpg 连接池或兼容对象
@@ -26,7 +29,7 @@ class PgvectorStore(VectorStoreBase):
         self._table = table_name
         self._dim = embedding_dim
 
-    async def _ensure_table(self):
+    async def _ensure_table(self) -> None:
         """确保表和扩展存在"""
         table = self._validate_table_name(self._table)
         async with self._pool.acquire() as conn:
@@ -68,7 +71,7 @@ class PgvectorStore(VectorStoreBase):
         collection: str,
         ids: list[str],
         vectors: list[list[float]],
-        payloads: list[dict],
+        payloads: list[dict[str, Any]],
     ) -> int:
         """插入向量数据"""
         table = self._validate_table_name(self._table)
@@ -123,7 +126,7 @@ class PgvectorStore(VectorStoreBase):
         top_k: int = 5,
         threshold: float = 0.5,
         filter_expr: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """搜索相似向量（余弦相似度）"""
         table = self._validate_table_name(self._table)
         qv = self._format_vector(query_vector)
@@ -131,7 +134,7 @@ class PgvectorStore(VectorStoreBase):
         # 构建 WHERE 子句
         # 安全：kb_id 通过参数化查询传入，避免注入
         conditions = [("knowledge_base_id = $1", [collection])]
-        params: list = [collection]
+        params: list[Any] = [collection]
 
         if filter_expr:
             # 安全：filter_expr 仅支持简单的 `field == "value"` 模式

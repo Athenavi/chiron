@@ -27,9 +27,9 @@ class HybridRetriever:
     def __init__(
         self,
         vector_store: VectorStoreBase | None = None,
-        pg_pool=None,
+        pg_pool: Any = None,
         rrf_k: int = 60,
-    ):
+    ) -> None:
         """
         Args:
             vector_store: 向量存储实例（MilvusStore / PgvectorStore）
@@ -45,7 +45,7 @@ class HybridRetriever:
         return self._vector_store
 
     @vector_store.setter
-    def vector_store(self, store: VectorStoreBase | None):
+    def vector_store(self, store: VectorStoreBase | None) -> None:
         self._vector_store = store
 
     async def hybrid_search(
@@ -189,10 +189,10 @@ class HybridRetriever:
 
     def _rrf_fuse(
         self,
-        vec_results: list[dict],
-        fts_results: list[dict],
+        vec_results: list[dict[str, Any]],
+        fts_results: list[dict[str, Any]],
         top_k: int,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """RRF (Reciprocal Rank Fusion) 融合
 
         每个元素在各自列表中的排名倒数即为分数：
@@ -220,10 +220,12 @@ class HybridRetriever:
             fused_scores[id_] = score
 
         # 按融合分数排序
-        sorted_ids = sorted(fused_scores, key=fused_scores.get, reverse=True)[:top_k]
+        sorted_ids = sorted(
+            fused_scores, key=lambda k: fused_scores[k], reverse=True
+        )[:top_k]
 
         # 合并结果（用向量结果中的内容，若没有则用全文结果）
-        id_to_item: dict[str, dict] = {}
+        id_to_item: dict[str, dict[str, Any]] = {}
         for r in vec_results:
             id_to_item[r["id"]] = r
         for r in fts_results:

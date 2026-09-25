@@ -68,7 +68,7 @@ def _expert_system_prompt(expert: str) -> str:
     return ""
 
 
-def _get_store():
+def _get_store() -> Any:
     """懒初始化子 Agent 落库器（失败则降级为不落库）。"""
     global _store
     if _store is not None:
@@ -294,7 +294,7 @@ async def subagent(
     return payload
 
 
-async def _drive_background(runner, run_id: str, task: str,
+async def _drive_background(runner: Any, run_id: str, task: str,
                             followup_ctx: dict[str, Any] | None = None,
                             **kwargs: Any) -> None:
     """后台驱动一次子 Agent 运行。
@@ -337,7 +337,7 @@ async def _drive_background(runner, run_id: str, task: str,
         subagent_registry.unregister(run_id)
 
 
-def _get_pool():
+def _get_pool() -> Any:
     """取 DB 连接池；不可用时返回 None。
 
     与 :func:`_get_store` 同源语义：**落库能力缺失不该阻断委派**。此前这里直接

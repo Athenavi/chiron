@@ -57,7 +57,7 @@ _EXTERNAL_REASONS = {
 class RunHandle:
     """一个活跃后台 run 的句柄（进程内）。"""
 
-    task: asyncio.Task
+    task: asyncio.Task[Any]
     session_id: str = ""
     tenant_id: str = ""
     profile: str = ""
@@ -68,8 +68,8 @@ class RunHandle:
 
 _RUNS: dict[str, RunHandle] = {}
 _BY_SESSION: dict[str, set[str]] = {}
-_WATCHDOG: asyncio.Task | None = None
-_SUBSCRIBER: asyncio.Task | None = None
+_WATCHDOG: asyncio.Task[Any] | None = None
+_SUBSCRIBER: asyncio.Task[Any] | None = None
 
 
 def _env_int(name: str, default: int) -> int:
@@ -86,7 +86,7 @@ def _env_int(name: str, default: int) -> int:
 
 def register(
     run_id: str,
-    task: asyncio.Task,
+    task: asyncio.Task[Any],
     *,
     session_id: str = "",
     tenant_id: str = "",
@@ -331,7 +331,7 @@ def start_cancel_subscriber() -> None:
         _SUBSCRIBER = asyncio.create_task(subscribe_cancel_channel())
 
 
-async def _cancel_and_ack(redis, run_id: str, reason: str) -> bool:
+async def _cancel_and_ack(redis: Any, run_id: str, reason: str) -> bool:
     """命中本地注册表 → 取消 + 写回执；返回是否真的发出了取消。
 
     回执（``subagent:cancel:ack:{run_id}``）是网关区分"真有人认领"与"广播无人应答"的

@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any
 
 from app.redis_keys import rkey
 
@@ -41,15 +42,17 @@ def _key_id(provider: str, key: str) -> str:
 class KeyRing:
     """LLM 密钥环(V1 本地环;同接口预留 V2 Redis 原子实现)。"""
 
-    def __init__(self, redis=None, env_seeds: dict[str, list[str]] | None = None):
+    def __init__(
+        self, redis: Any = None, env_seeds: dict[str, list[str]] | None = None
+    ) -> None:
         self._redis = redis
         self._env = env_seeds or {}
         # provider -> digest12 -> {"key": 明文, "status": s, "cooldown": epoch, "manual": bool}
-        self._cache: dict[str, dict[str, dict]] = {}
+        self._cache: dict[str, dict[str, dict[str, Any]]] = {}
         self._updated: dict[str, float] = {}
         self._lock = asyncio.Lock()
 
-    def _env_digests(self, provider: str):
+    def _env_digests(self, provider: str) -> dict[str, Any]:
         out = {}
         for key in self._env.get(provider, []):
             out[_key_id(provider, key)] = {"key": key, "status": "active", "cooldown": 0.0, "manual": False}
@@ -73,7 +76,7 @@ class KeyRing:
                 sources.append(provider[: -len(_suf)])
                 break
 
-        ring: dict[str, dict] = {}
+        ring: dict[str, dict[str, Any]] = {}
         for _src in sources:
             ring.update(self._env_digests(_src))
             if ring:
@@ -102,7 +105,7 @@ class KeyRing:
         self._cache[provider] = ring
         self._updated[provider] = time.time()
 
-    async def active_keys(self, provider: str) -> list[dict]:
+    async def active_keys(self, provider: str) -> list[dict[str, Any]]:
         """返回该 provider 当前可用(key 明文+digest)列表;过滤 manual 停用/熔断/本地冷却。"""
         async with self._lock:
             await self._refresh(provider)
@@ -117,7 +120,7 @@ class KeyRing:
             out.append({"key": item["key"], "id": digest})
         return out
 
-    async def get_key(self, provider: str) -> dict | None:
+    async def get_key(self, provider: str) -> dict[str, Any] | None:
         """取一个可用 key(V1 轮询第一个;V2 替换为 Redis 原子加权选择)。"""
         keys = await self.active_keys(provider)
         if not keys:

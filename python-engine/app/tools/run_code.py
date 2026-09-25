@@ -31,7 +31,7 @@ import sys
 import threading
 import time
 import types
-from typing import Any
+from typing import Any, cast
 
 from app.tools.code_guard import (
     check_static as _check_static,
@@ -164,6 +164,10 @@ def _run_subprocess_sync(
             bufsize=1,  # 行缓冲
             env=sandboxed_env(),
         )
+        # stdin/stdout 都显式用了 PIPE，这里只是把类型收窄（Popen 的返回类型是
+        # IO[str] | None）。真为 None 时下面的写入本来就会 AttributeError，
+        # 所以断言不改变任何可达路径的行为。
+        assert proc.stdin is not None and proc.stdout is not None
     except (OSError, FileNotFoundError) as e:
         logger.warning("subprocess start failed, will fallback to in-process: %s", e)
         return None
@@ -178,7 +182,7 @@ def _run_subprocess_sync(
     stderr_buffer: list[str] = []
     stderr_lock = threading.Lock()
 
-    def _drain_stderr():
+    def _drain_stderr() -> None:
         try:
             if proc.stderr:
                 for line in proc.stderr:
@@ -395,12 +399,17 @@ def _readline_with_deadline(
     使用线程池线程读，避免 readline 在子进程无输出时永久阻塞。
     """
     pool = _get_reader_pool()
-    fut = pool.submit(proc.stdout.readline)
+    # 调用方都用 Popen(stdout=PIPE)，这里收窄类型（也顺带把"没有 stdout"当作无输出，
+    # 与"超时"同样返回 None）。收窄后线程池的提交才有明确签名。
+    stdout = proc.stdout
+    if stdout is None:  # pragma: no cover - 调用方都传 PIPE
+        return None
+    fut = pool.submit(stdout.readline)
     remaining = deadline - time.time()
     if remaining <= 0:
         return None
     try:
-        return fut.result(timeout=max(0.001, remaining))
+        return cast("str | None", fut.result(timeout=max(0.001, remaining)))
     except concurrent.futures.TimeoutError:
         # 超时：杀掉子进程让 reader 收尾，然后**必须返回 None（超时）**。
         # 若把 reader 因 EOF 得到的 ""透传出去，主循环会走「subprocess exited

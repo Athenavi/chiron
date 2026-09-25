@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 from app.observability.metrics import (
     SUBAGENT_PERSIST_FAILED,
@@ -107,10 +108,10 @@ UPDATE subagent_runs
 class SubagentRunStore:
     """``subagent_runs`` / ``subagent_run_steps`` 的写入端（引擎侧直连 PG）。"""
 
-    def __init__(self, pool=None):
+    def __init__(self, pool: Any = None) -> None:
         self._pool = pool
         # run_id -> 待写入的 step 行（批量 flush）
-        self._buffers: dict[str, list[tuple]] = {}
+        self._buffers: dict[str, list[tuple[Any, ...]]] = {}
         self._seq: dict[str, int] = {}
         # run_id -> 脱敏命中数（finish 时汇总进 redacted_count）
         self._redacted_hits: dict[str, int] = {}
@@ -253,7 +254,7 @@ class SubagentRunStore:
         status: str,
         summary: str = "",
         summary_format: str = "markdown",
-        artifacts: list[dict] | None = None,
+        artifacts: list[dict[str, Any]] | None = None,
         input_tokens: int = 0,
         output_tokens: int = 0,
         steps: int = 0,

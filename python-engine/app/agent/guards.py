@@ -35,7 +35,7 @@ INJECTION_PATTERNS: list[str] = [
     r"(?i)pretend\s+you\s+are\s+(not|an?\s+unrestricted)",
     r"(?i)bypass\s+(all|safety|content)\s+(filters?|restrictions?|rules?)",
 ]
-_INJECTION_RES: list[re.Pattern] = [re.compile(p) for p in INJECTION_PATTERNS]
+_INJECTION_RES: list[re.Pattern[str]] = [re.compile(p) for p in INJECTION_PATTERNS]
 
 
 class InputGuard:
@@ -58,14 +58,16 @@ SECRET_PARAM_PATTERNS: list[str] = [
     r"(?i)(api[_-]?key|password|passwd|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}",
     r"(?i)(AKIA|ASIA)[A-Z0-9]{16}",
 ]
-_SECRET_RES: list[re.Pattern] = [re.compile(p) for p in SECRET_PARAM_PATTERNS]
+_SECRET_RES: list[re.Pattern[str]] = [re.compile(p) for p in SECRET_PARAM_PATTERNS]
 
 # 工具参数中禁止的宿主逃逸模式（绝对路径/盘符/父目录跳转）
 TOOL_ARG_ESCAPE_PATTERNS: list[str] = [
     r"[A-Za-z]:[\\/]",  # Windows 盘符绝对路径
     r"(^|[^A-Za-z0-9_.])(\.\.)[\\/]",  # 父目录跳转
 ]
-_ARG_ESCAPE_RES: list[re.Pattern] = [re.compile(p) for p in TOOL_ARG_ESCAPE_PATTERNS]
+_ARG_ESCAPE_RES: list[re.Pattern[str]] = [
+    re.compile(p) for p in TOOL_ARG_ESCAPE_PATTERNS
+]
 
 # ⚠️ 历史名单：判定已不再使用它（见 ``app/agent/tool_policy`` 的 read/write/delete/external 分级）。
 # 保留仅为兼容既有引用；**新增工具请改 tool_policy**，不要再往这里加。
@@ -217,13 +219,13 @@ HOST_PATH_PATTERNS: list[str] = [
     r"[A-Za-z]:[\\/](?:[^\\/\"'\s<>]+[\\/])*",  # Windows 绝对路径（C:\a\b\...）
     r"python-engine[\\/]",
 ]
-_HOST_PATH_RES: list[re.Pattern] = [re.compile(p) for p in HOST_PATH_PATTERNS]
+_HOST_PATH_RES: list[re.Pattern[str]] = [re.compile(p) for p in HOST_PATH_PATTERNS]
 
 OUT_SECRET_PATTERNS: list[str] = [
     r"sk-[a-zA-Z0-9]{16,}",
     r"(?i)(api[_-]?key|password|passwd|secret|token)\s*[:=]\s*['\"]?[A-Za-z0-9_\-\.]{12,}",
 ]
-_OUT_SECRET_RES: list[re.Pattern] = [re.compile(p) for p in OUT_SECRET_PATTERNS]
+_OUT_SECRET_RES: list[re.Pattern[str]] = [re.compile(p) for p in OUT_SECRET_PATTERNS]
 
 # 占位符
 HOST_PATH_PLACEHOLDER = "[host-path]"
