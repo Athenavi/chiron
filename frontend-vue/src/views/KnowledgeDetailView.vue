@@ -101,7 +101,7 @@ async function batchDeleteDocs() {
     for (const id of ids) {
       await api.delete(`/v1/kb/${kbId}/documents`, { params: { doc_id: id } })
     }
-    message.success(`已删除 ${ids.length} 个文档`)
+    message.success(t('已删除 {n} 个文档', { n: ids.length }))
     selectedDocIds.value = []
     await loadDocuments()
     await loadKnowledgeBase()
@@ -244,12 +244,12 @@ async function importFromMedia() {
   selectedMediaIds.value = []
 
   if (successCount > 0) {
-    message.success(`成功导入 ${successCount} 个文件`)
+    message.success(t('成功导入 {n} 个文件', { n: successCount }))
     await loadKnowledgeBase()
     await loadDocuments()
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个文件导入失败`)
+    message.error(t('{n} 个文件导入失败', { n: failCount }))
   }
 }
 
@@ -278,7 +278,7 @@ async function buildKnowledgeBase() {
     const res = await api.post(`/v1/kb/${kbId}/build`)
     const data = res.data?.data || res.data
 
-    message.success(`构建已启动，预计消耗 ${data.estimated_cost} credits`)
+    message.success(t('构建已启动，预计消耗 {n} credits', { n: data.estimated_cost }))
 
     // 等待构建完成（轮询状态）
     const checkStatus = async () => {
@@ -387,7 +387,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         </template>
         {{ $t('返回') }}
       </Button>
-      <h1>{{ kb?.name || '知识库' }}</h1>
+      <h1>{{ kb?.name || $t('知识库') }}</h1>
       <Space>
         <Button
           :title="$t('在对话中基于该知识库提问')"
@@ -444,7 +444,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             <div class="info-item">
               <span class="label">{{ $t('可见性') }}</span>
               <Tag :color="kb.visibility === 'public' ? 'warning' : 'default'">
-                {{ kb.visibility === 'public' ? '公共' : '私人' }}
+                {{ kb.visibility === 'public' ? $t('公共') : $t('私人') }}
               </Tag>
             </div>
             <div class="info-item">
@@ -514,7 +514,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                 <template #icon>
                   <DeleteOutlined />
                 </template>
-                批量删除（{{ selectedDocIds.length }}）
+                {{ $t('批量删除（{n}）', { n: selectedDocIds.length }) }}
               </Button>
               <Button
                 v-if="selectedDocIds.length > 0"
@@ -525,7 +525,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                 <template #icon>
                   <ReloadOutlined />
                 </template>
-                批量重新索引（{{ selectedDocIds.length }}）
+                {{ $t('批量重新索引（{n}）', { n: selectedDocIds.length }) }}
               </Button>
               <Button
                 size="small"
@@ -585,7 +585,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
               </template>
               <template v-else-if="column.dataIndex === 'status'">
                 <Tag :color="text === 'completed' ? 'success' : text === 'processing' ? 'processing' : text === 'error' ? 'error' : 'default'">
-                  {{ text === 'pending' ? '待处理' : text === 'processing' ? '处理中' : text === 'completed' ? '已完成' : '失败' }}
+                  {{ text === 'pending' ? $t('待处理') : text === 'processing' ? $t('处理中') : text === 'completed' ? $t('已完成') : $t('失败') }}
                 </Tag>
               </template>
               <template v-else-if="column.dataIndex === 'created_at'">
@@ -662,7 +662,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           class="query-result-item"
         >
           <div class="result-header">
-            <Tag>相关度: {{ (result.score * 100).toFixed(1) }}%</Tag>
+            <Tag>{{ $t('相关度: {n}%', { n: (result.score * 100).toFixed(1) }) }}</Tag>
             <span
               v-if="result.name || result.document_name"
               class="result-source"
@@ -704,7 +704,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           </template>
         </Input>
         <div class="media-actions">
-          <span class="selected-count">已选择 {{ selectedMediaIds.length }} / {{ filteredMediaFiles.length }}</span>
+          <span class="selected-count">{{ $t('已选择 {sel} / {total}', { sel: selectedMediaIds.length, total: filteredMediaFiles.length }) }}</span>
           <Button
             size="small"
             @click="selectAllMedia"
@@ -725,7 +725,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           v-if="filteredMediaFiles.length === 0 && !loadingMedia"
           class="media-empty"
         >
-          <Empty :description="mediaSearchQuery ? '没有匹配的文件' : '媒体库暂无文件'" />
+          <Empty :description="mediaSearchQuery ? $t('没有匹配的文件') : $t('媒体库暂无文件')" />
         </div>
         <div
           v-else
@@ -763,7 +763,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           :disabled="selectedMediaIds.length === 0"
           @click="importFromMedia"
         >
-          导入选中文件 ({{ selectedMediaIds.length }})
+          {{ $t('导入选中文件 ({n})', { n: selectedMediaIds.length }) }}
         </Button>
       </div>
     </Modal>
@@ -780,7 +780,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
       v-model:open="attachOpen"
       kind="kb"
       :value="kbId"
-      :label="kb?.name || '知识库'"
+      :label="kb?.name || $t('知识库')"
     />
   </div>
 </template>

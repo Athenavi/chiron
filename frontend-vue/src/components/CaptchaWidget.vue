@@ -11,6 +11,7 @@
  * 提交失败后由父组件调用 reset() 重置。
  */
 import { ref, onMounted, onBeforeUnmount, computed } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 const props = defineProps<{
   provider: string
@@ -23,6 +24,8 @@ const emit = defineEmits<{
   (e: 'expired'): void
 }>()
 
+const { t } = useI18n()
+
 const container = ref<HTMLElement>()
 const loading = ref(false)
 const loadError = ref('')
@@ -33,8 +36,8 @@ const providerLabel = computed(() => {
     turnstile: 'Cloudflare Turnstile',
     recaptcha: 'Google reCAPTCHA',
     hcaptcha: 'hCaptcha',
-    tencent: '腾讯防水墙',
-    custom: '自定义验证',
+    tencent: t('腾讯防水墙'),
+    custom: t('自定义验证'),
   }
   return map[props.provider] || props.provider
 })
@@ -100,7 +103,7 @@ async function renderWidget() {
           sitekey: props.siteKey,
           callback: (token: string) => emit('verified', { token }),
           'expired-callback': () => emit('expired'),
-          'error-callback': () => { loadError.value = '验证组件加载失败，请刷新重试' },
+          'error-callback': () => { loadError.value = t('验证组件加载失败，请刷新重试') },
         })
         break
       }
@@ -142,10 +145,10 @@ async function renderWidget() {
         // custom 由部署方按 verify_url 契约自行接入前端组件，此处仅提示
         break
       default:
-        loadError.value = `未知的验证码类型：${props.provider}`
+        loadError.value = t('未知的验证码类型：{provider}', { provider: props.provider })
     }
   } catch (e: any) {
-    loadError.value = '验证码组件加载失败，请检查网络后刷新重试'
+    loadError.value = t('验证码组件加载失败，请检查网络后刷新重试')
   } finally {
     loading.value = false
   }
@@ -191,13 +194,12 @@ defineExpose({ reset })
         :disabled="loading"
         @click="showTencent"
       >
-        {{ loading ? '加载中…' : '点击进行人机验证' }}
+        {{ loading ? $t('加载中…') : $t('点击进行人机验证') }}
       </button>
     </template>
     <template v-else-if="provider === 'custom'">
       <div class="custom-hint">
-        本站点启用了自定义人机验证（{{ verifyUrl || '自定义端点' }}），
-        请按部署方接入说明完成验证后提交。
+        {{ $t('本站点启用了自定义人机验证（{url}），请按部署方接入说明完成验证后提交。', { url: verifyUrl || $t('自定义端点') }) }}
       </div>
     </template>
     <template v-else>

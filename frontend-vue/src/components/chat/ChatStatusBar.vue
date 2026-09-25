@@ -3,6 +3,9 @@ import { computed } from 'vue'
 import { CloudServerOutlined, DisconnectOutlined, ApartmentOutlined, BarChartOutlined } from '@ant-design/icons-vue'
 import ContextRing from './ContextRing.vue'
 import type { TurnStatsItem } from './chat-types'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   model?: string
@@ -33,13 +36,13 @@ const compactionText = computed(() => {
   const c = props.compaction
   if (!c || !c.savedTokens) return ''
   const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
-  return `已压缩 ${k(c.beforeTokens)} → ${k(c.afterTokens)}`
+  return t('已压缩 {before} → {after}', { before: k(c.beforeTokens), after: k(c.afterTokens) })
 })
 </script>
 
 <template>
   <div class="chat-status">
-    <span class="cs-item cs-model">{{ model || '默认模型' }}</span>
+    <span class="cs-item cs-model">{{ model || $t('默认模型') }}</span>
     <template v-if="hasUsage">
       <span
         class="cs-sep"

@@ -83,7 +83,7 @@ async function save() {
 function confirmDelete(g: EntGroup) {
   Modal.confirm({
     title: t('删除群组'),
-    content: `确认删除「${g.name}」？成员关联将解除。`,
+    content: t('确认删除「{name}」？成员关联将解除。', { name: g.name }),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -203,7 +203,7 @@ onMounted(() => {
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? '新建群组' : '编辑群组'"
+      :title="modalMode === 'create' ? $t('新建群组') : $t('编辑群组')"
       :confirm-loading="saving"
       @ok="save"
     >
@@ -227,7 +227,7 @@ onMounted(() => {
 
     <a-drawer
       v-model:open="rolesDrawerVisible"
-      :title="`群组角色绑定${currentGroup ? ' - ' + currentGroup.name : ''}`"
+      :title="currentGroup ? $t('群组角色绑定 - {name}', { name: currentGroup.name }) : $t('群组角色绑定')"
       width="480"
       placement="right"
     >

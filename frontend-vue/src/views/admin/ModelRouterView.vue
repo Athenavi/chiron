@@ -110,7 +110,7 @@ async function save() {
 function confirmDelete(r: ModelRoute) {
   Modal.confirm({
     title: t('删除路由规则'),
-    content: `确认删除模型「${r.model_id}」的路由规则？`,
+    content: t('确认删除模型「{id}」的路由规则？', { id: r.model_id }),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -141,7 +141,7 @@ const columns: TableColumnsType = [
   { title: t('主 Provider'), dataIndex: 'primary_provider', key: 'primary_provider', width: 140 },
   { title: t('降级顺序'), key: 'fallback', width: 160, customRender: ({ record }) => (record.fallback_order ?? []).join(' → ') || '-' },
   { title: t('优先级'), dataIndex: 'priority', key: 'priority', width: 80 },
-  { title: t('启用'), key: 'enabled', width: 70, customRender: ({ record }) => record.enabled ? '是' : '否' },
+  { title: t('启用'), key: 'enabled', width: 70, customRender: ({ record }) => record.enabled ? t('是') : t('否') },
   { title: t('更新时间'), dataIndex: 'updated_at', key: 'updated_at', width: 170, customRender: ({ text }) => new Date(text).toLocaleString('zh-CN', { hour12: false }) },
   { title: t('操作'), key: 'action', width: 180, fixed: 'right' },
 ]
@@ -159,7 +159,7 @@ onMounted(fetchRoutes)
     <a-alert
       type="info"
       show-icon
-      message="按租户配置模型路由：primary_provider 指定首选提供商，fallback_order 定义熔断降级顺序，priority 决定匹配优先级。Python 引擎启动时自动同步。"
+      :message="$t('按租户配置模型路由：primary_provider 指定首选提供商，fallback_order 定义熔断降级顺序，priority 决定匹配优先级。Python 引擎启动时自动同步。')"
       style="margin-bottom: 16px"
     />
 
@@ -181,7 +181,7 @@ onMounted(fetchRoutes)
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">
           <a-button type="link" size="small" @click="toggleEnabled(record as ModelRoute)">
-            {{ (record as ModelRoute).enabled ? '禁用' : '启用' }}
+            {{ (record as ModelRoute).enabled ? $t('禁用') : $t('启用') }}
           </a-button>
           <a-button type="link" size="small" @click="openEdit(record as ModelRoute)">{{ $t('编辑') }}</a-button>
           <a-button type="link" size="small" danger @click="confirmDelete(record as ModelRoute)">{{ $t('删除') }}</a-button>
@@ -191,7 +191,7 @@ onMounted(fetchRoutes)
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? '新建模型路由' : '编辑模型路由'"
+      :title="modalMode === 'create' ? $t('新建模型路由') : $t('编辑模型路由')"
       :confirm-loading="saving"
       width="640"
       @ok="save"

@@ -103,7 +103,7 @@ async function savePool() {
 function confirmDeletePool(p: QuotaPoolWithAllocated) {
   Modal.confirm({
     title: t('删除配额池'),
-    content: `确认删除「${p.resource_type} / ${p.period}」？关联分配将级联删除。`,
+    content: t('确认删除「{type} / {period}」？关联分配将级联删除。', { type: p.resource_type, period: p.period }),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -173,7 +173,7 @@ async function removeAllocation(allocID: string) {
 
 function fmtAmount(n: number, type: string): string {
   if (!Number.isFinite(n)) return '—'
-  if (n === 0) return '无限制'
+  if (n === 0) return t('无限制')
   if (type === 'storage_mb') return `${n} MB`
   if (type === 'credits') return `${n} credits`
   return n.toLocaleString()
@@ -241,7 +241,7 @@ onMounted(fetchPools)
     <a-alert
       type="info"
       show-icon
-      message="total_amount = 0 表示无限制（不校验超额）；token 类型用量优先读 Redis 计数器，缺失时从 billing_records SQL 聚合。"
+      :message="$t('total_amount = 0 表示无限制（不校验超额）；token 类型用量优先读 Redis 计数器，缺失时从 billing_records SQL 聚合。')"
       style="margin-bottom: 16px"
     />
 
@@ -289,7 +289,7 @@ onMounted(fetchPools)
 
     <a-modal
       v-model:open="poolModalVisible"
-      :title="poolModalMode === 'create' ? '新建配额池' : '编辑配额池'"
+      :title="poolModalMode === 'create' ? $t('新建配额池') : $t('编辑配额池')"
       :confirm-loading="poolSaving"
       @ok="savePool"
     >
@@ -327,10 +327,10 @@ onMounted(fetchPools)
         <a-form-item :label="$t('周期')">
           <a-radio-group v-model:value="poolForm.period">
             <a-radio value="daily">
-              日
+              {{ $t('日') }}
             </a-radio>
             <a-radio value="monthly">
-              月
+              {{ $t('月') }}
             </a-radio>
           </a-radio-group>
         </a-form-item>
@@ -339,7 +339,7 @@ onMounted(fetchPools)
 
     <a-drawer
       v-model:open="allocDrawerVisible"
-      :title="`配额分配${currentPool ? ' - ' + currentPool.resource_type + '/' + currentPool.period : ''}`"
+      :title="currentPool ? $t('配额分配 - {type}/{period}', { type: currentPool.resource_type, period: currentPool.period }) : $t('配额分配')"
       width="640"
       placement="right"
     >

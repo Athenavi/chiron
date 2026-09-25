@@ -3,6 +3,9 @@ import { ref, computed, watch } from 'vue'
 import { CaretRightOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import type { ToolResultItem } from './chat-types'
 import { looksLikeDiff, parseUnifiedDiff, type ParsedDiff } from './diffParse'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = defineProps<{ item: ToolResultItem }>()
 // 失败结果默认展开：错误信息藏在折叠后面等于没报错
@@ -101,7 +104,7 @@ const visibleDiffLines = computed(() => {
 const diffHidden = computed(() => Math.max(0, (parsed.value.diff?.lines.length ?? 0) - DIFF_PREVIEW_LINES))
 const diffTitle = computed(() => {
   const files = parsed.value.diff?.files ?? []
-  if (files.length > 1) return `${files.length} 个文件`
+  if (files.length > 1) return t('{n} 个文件', { n: files.length })
   return files[0] || parsed.value.path || 'diff'
 })
 </script>
@@ -154,7 +157,7 @@ const diffTitle = computed(() => {
         type="button"
         @click="diffExpanded = true"
       >
-        展开全部（还有 {{ diffHidden }} 行）
+        {{ $t('展开全部（还有 {n} 行）', { n: diffHidden }) }}
       </button>
     </div>
 
@@ -165,7 +168,7 @@ const diffTitle = computed(() => {
     >
       <div class="read-banner">
         <span class="read-path">{{ parsed.read.path }}</span>
-        <span class="read-count">{{ parsed.read.total_lines }} 行</span>
+        <span class="read-count">{{ $t('{n} 行', { n: parsed.read.total_lines }) }}</span>
       </div>
       <div class="read-body">
         <div
@@ -189,7 +192,7 @@ const diffTitle = computed(() => {
         <span
           v-if="terminalLines"
           class="terminal-lines"
-        >{{ terminalLines }} 行</span>
+        >{{ $t('{n} 行', { n: terminalLines }) }}</span>
         <span
           class="terminal-exit"
           :class="{ nonzero: parsed.terminal.exit_code }"
@@ -204,7 +207,7 @@ const diffTitle = computed(() => {
       class="search-block"
     >
       <div class="search-header">
-        <span class="search-summary">{{ parsed.search.count ?? searchFiles.length }} 个匹配 · {{ searchFiles.length }} 个文件</span>
+        <span class="search-summary">{{ $t('{matched} 个匹配 · {files} 个文件', { matched: parsed.search.count ?? searchFiles.length, files: searchFiles.length }) }}</span>
       </div>
       <div class="search-body">
         <template
@@ -238,11 +241,11 @@ const diffTitle = computed(() => {
           class="chat-chevron"
           :class="{ open: expanded }"
         />
-        <span class="result-label">{{ item.isError ? '结果（失败）' : '结果' }}</span>
+        <span class="result-label">{{ item.isError ? $t('结果（失败）') : $t('结果') }}</span>
         <span
           v-if="textLines > 1"
           class="result-lines"
-        >{{ textLines }} 行</span>
+        >{{ $t('{n} 行', { n: textLines }) }}</span>
       </button>
       <template v-if="expanded">
         <pre

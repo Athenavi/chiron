@@ -70,7 +70,7 @@ async function save() {
       message.warning(t('与已确认的记忆冲突，已登记待裁决，请到记忆页处理'))
     } else if (res.duplicate_of) {
       message.warning(
-        `检测到相似记忆「${res.duplicate_of.key}」，可在记忆页智能整理时合并`,
+        t('检测到相似记忆「{key}」，可在记忆页智能整理时合并', { key: res.duplicate_of.key }),
       )
     } else {
       message.success(t('已记住；后续对话会自动带上这条记忆'))
@@ -136,7 +136,7 @@ async function save() {
       </div>
 
       <div class="save-memory-field">
-        <label class="save-memory-label">置信度 {{ confidence }}</label>
+        <label class="save-memory-label">{{ $t('置信度 {n}', { n: confidence }) }}</label>
         <Slider
           v-model:value="confidence"
           :min="0"

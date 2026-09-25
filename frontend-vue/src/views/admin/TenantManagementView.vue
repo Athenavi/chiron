@@ -85,10 +85,10 @@ async function toggleSuspend(record: any) {
   try {
     if (record.status === 'suspended') {
       await api.put(`/v1/admin/tenants/${record.id}`, { status: 'active' })
-      message.success(`租户「${record.name}」已恢复`)
+      message.success(t('租户「{name}」已恢复', { name: record.name }))
     } else {
       await api.post(`/v1/admin/tenants/${record.id}/suspend`)
-      message.success(`租户「${record.name}」已挂起`)
+      message.success(t('租户「{name}」已挂起', { name: record.name }))
     }
     await loadTenants()
   } catch (e: any) {
@@ -155,7 +155,7 @@ function statusColor(status: string): string {
 }
 
 function statusText(status: string): string {
-  return status === 'active' ? '活跃' : status === 'suspended' ? '已挂起' : (status || '-')
+  return status === 'active' ? t('活跃') : status === 'suspended' ? t('已挂起') : (status || '-')
 }
 
 function formatDate(d: any): string {
@@ -244,7 +244,7 @@ onMounted(loadTenants)
                   {{ $t('编辑') }}
                 </Button>
                 <Popconfirm
-                  :title="record.status === 'suspended' ? `确定恢复租户「${record.name}」吗？` : `确定挂起租户「${record.name}」吗？挂起后其资源将不可用。`"
+                  :title="record.status === 'suspended' ? $t('确定恢复租户「{name}」吗？', { name: record.name }) : $t('确定挂起租户「{name}」吗？挂起后其资源将不可用。', { name: record.name })"
                   :ok-text="$t('确定')"
                   :cancel-text="$t('取消')"
                   @confirm="toggleSuspend(record)"
@@ -258,7 +258,7 @@ onMounted(loadTenants)
                       <StopOutlined v-if="record.status !== 'suspended'" />
                       <PlayCircleOutlined v-else />
                     </template>
-                    {{ record.status === 'suspended' ? '恢复' : '挂起' }}
+                    {{ record.status === 'suspended' ? $t('恢复') : $t('挂起') }}
                   </Button>
                 </Popconfirm>
                 <Popconfirm
@@ -287,7 +287,7 @@ onMounted(loadTenants)
     <!-- 新建 / 编辑租户 -->
     <Modal
       v-model:open="modalVisible"
-      :title="editingId ? '编辑租户' : '新建租户'"
+      :title="editingId ? $t('编辑租户') : $t('新建租户')"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"
       :confirm-loading="submitting"
@@ -300,7 +300,7 @@ onMounted(loadTenants)
         >
           <Input
             v-model:value="form.name"
-            placeholder="例如: ACME Corporation"
+            :placeholder="$t('例如: ACME Corporation')"
             @press-enter="submitForm"
           />
         </Form.Item>
@@ -323,7 +323,7 @@ onMounted(loadTenants)
     <!-- 用量抽屉 -->
     <Drawer
       v-model:open="usageOpen"
-      :title="`📊 ${usageTenant?.name ?? ''} - 资源用量`"
+      :title="usageTenant ? $t('📊 {name} - 资源用量', { name: usageTenant.name }) : $t('📊 资源用量')"
       width="420"
       :footer="null"
     >

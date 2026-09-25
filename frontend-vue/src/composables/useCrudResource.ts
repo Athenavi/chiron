@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 import { ref, type Ref } from 'vue'
 
 /**
@@ -29,7 +31,7 @@ export function useCrudResource<T>(initialData: T, loader: () => Promise<T>) {
     try {
       data.value = await loader()
     } catch (e) {
-      error.value = apiErrorMessage(e, '加载失败')
+      error.value = apiErrorMessage(e, t('加载失败'))
     } finally {
       loading.value = false
     }

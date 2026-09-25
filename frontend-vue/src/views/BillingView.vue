@@ -260,24 +260,24 @@ async function handlePurchase() {
       channel: provider.value,
     })
     const data = response.data?.data
-    if (!data) throw new Error('创建订单失败')
+    if (!data) throw new Error(t('创建订单失败'))
 
     if (provider.value === 'paypal') {
       // PayPal：跳转授权页
       if (data.checkout_url) {
         // S 安全：校验协议为 http/https，防 javascript:/data: 等 XSS 向量
         if (!/^https?:\/\//i.test(data.checkout_url)) {
-          throw new Error('非法的支付链接')
+          throw new Error(t('非法的支付链接'))
         }
         window.location.href = data.checkout_url
       } else {
-        throw new Error('未获取到 PayPal 支付链接')
+        throw new Error(t('未获取到 PayPal 支付链接'))
       }
       return
     }
 
     // 支付宝/微信：展示二维码并轮询订单状态
-    if (!data.qr_code) throw new Error('未获取到支付二维码')
+    if (!data.qr_code) throw new Error(t('未获取到支付二维码'))
     qrCode.value = data.qr_code
     currentOrderId.value = data.id
     qrChannel.value = provider.value as 'alipay' | 'wechat'
@@ -416,7 +416,7 @@ function amountText(amount: number): string {
 
         <Card class="usage-card">
           <template #title>
-            <BarChartOutlined /> 近 {{ usage?.period_days ?? 30 }} 天使用
+            <BarChartOutlined />{{ $t('近 {n} 天使用', { n: usage?.period_days ?? 30 }) }}
           </template>
           <div class="usage-stats">
             <div class="stat-item">
@@ -474,7 +474,7 @@ function amountText(amount: number): string {
       <!-- 充值 -->
       <TabPane
         key="purchase"
-        tab="充值"
+        :tab="$t('充值')"
       >
         <Card>
           <template #title>
@@ -525,7 +525,7 @@ function amountText(amount: number): string {
             </div>
 
             <div class="price-hint">
-              {{ effectiveCredits ? `本次充值 ${effectiveCredits} credits ${priceHint}` : '请选择或输入充值数量' }}
+              {{ effectiveCredits ? $t('本次充值 {n} credits {hint}', { n: effectiveCredits, hint: priceHint }) : $t('请选择或输入充值数量') }}
             </div>
 
             <Button
@@ -544,9 +544,8 @@ function amountText(amount: number): string {
 
             <div class="purchase-note">
               {{ provider === 'paypal'
-                ? '跳转 PayPal 完成付款，1 credit = 1 美分（USD）。'
-                : '扫码完成付款，1 credit = 1 分（CNY）。支付成功后 Credits 自动到账。' }}
-              充值不可退款，请确认数量。
+                ? $t('跳转 PayPal 完成付款，1 credit = 1 美分（USD）。充值不可退款，请确认数量。')
+                : $t('扫码完成付款，1 credit = 1 分（CNY）。支付成功后 Credits 自动到账。充值不可退款，请确认数量。') }}
             </div>
           </div>
         </Card>
@@ -555,7 +554,7 @@ function amountText(amount: number): string {
       <!-- 交易历史 -->
       <TabPane
         key="history"
-        tab="交易记录"
+        :tab="$t('交易记录')"
       >
         <Card>
           <template #title>
@@ -568,7 +567,7 @@ function amountText(amount: number): string {
               :data-source="history"
               row-key="id"
               :scroll="{ x: 640 }"
-              :pagination="{ pageSize: 10, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条` }"
+              :pagination="{ pageSize: 10, showSizeChanger: false, showTotal: (n: number) => $t('共 {n} 条', { n }) }"
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'created_at'">
@@ -610,7 +609,7 @@ function amountText(amount: number): string {
     >
       <div class="qr-body">
         <div class="qr-channel">
-          {{ qrChannel === 'alipay' ? '支付宝' : '微信支付' }}
+          {{ qrChannel === 'alipay' ? $t('支付宝') : $t('微信支付') }}
           <Tag color="var(--warning)">
             {{ effectiveCredits }} credits
           </Tag>
@@ -618,7 +617,7 @@ function amountText(amount: number): string {
 
         <Spin
           :spinning="payStatus === 'pending' && !qrCode"
-          tip="生成二维码中..."
+          :tip="$t('生成二维码中...')"
         >
           <canvas
             v-show="qrCode"
@@ -631,7 +630,7 @@ function amountText(amount: number): string {
           v-if="payStatus === 'pending'"
           class="qr-tip"
         >
-          <QrcodeOutlined /> 请使用{{ qrChannel === 'alipay' ? '支付宝' : '微信' }}扫码完成支付
+          <QrcodeOutlined />{{ $t('请使用{channel}扫码完成支付', { channel: qrChannel === 'alipay' ? $t('支付宝') : $t('微信') }) }}
           <br>
           <span class="qr-sub">{{ $t('页面将自动检测支付结果，无需手动刷新') }}</span>
         </div>
@@ -647,7 +646,7 @@ function amountText(amount: number): string {
         >
           <Alert
             type="warning"
-            message="订单已{{ payStatus === 'expired' ? '超时' : '失败' }}"
+            :message="$t('订单已{status}', { status: payStatus === 'expired' ? $t('超时') : $t('失败') })"
             :description="$t('请关闭后重新发起充值')"
           />
         </div>

@@ -40,7 +40,7 @@ const searchQuery = ref('')
 const fetchSeq = ref(0)  // S 修复：列表请求序号，丢弃过期响应
 const typeFilter = ref('')
 const viewMode = ref<'grid' | 'list'>(localStorage.getItem('media-view') === 'list' ? 'list' : 'grid')
-const breadcrumbs = ref<{ id: string; name: string }[]>([{ id: '', name: '全部文件' }])
+const breadcrumbs = ref<{ id: string; name: string }[]>([{ id: '', name: tr('全部文件') }])
 const selectedIds = ref<Set<string>>(new Set())
 
 // 详情侧栏 / 上传（T9/T10 填充 UI，此处声明状态）
@@ -442,7 +442,7 @@ function handleUploadRequest(options: any) {
         .then(() => { 
           onSuccess?.(null)
           uploadingFiles.value.set(fileId, { progress: 100, status: 'success' })
-          message.success(`上传成功: ${file.name}`)
+          message.success(tr('上传成功: {name}', { name: file.name }))
           // 3秒后移除成功记录
           setTimeout(() => uploadingFiles.value.delete(fileId), 3000)
         })
@@ -451,9 +451,9 @@ function handleUploadRequest(options: any) {
           uploadingFiles.value.set(fileId, { 
             progress: 0, 
             status: 'error', 
-            error: err?.message || '未知错误' 
+            error: err?.message || tr('未知错误') 
           })
-          message.error(`上传失败: ${file.name} — ${err?.message || tr('未知错误')}`)
+          message.error(tr('上传失败: {name} — {reason}', { name: file.name, reason: err?.message || tr('未知错误') }))
         })
         .finally(() => { fetchItems() })
     })
@@ -461,9 +461,9 @@ function handleUploadRequest(options: any) {
       uploadingFiles.value.set(fileId, { 
         progress: 0, 
         status: 'error', 
-        error: err?.message || '初始化失败' 
+        error: err?.message || tr('初始化失败') 
       })
-      message.error(`上传失败: ${file.name} — 初始化失败`) 
+      message.error(tr('上传失败: {name} — 初始化失败', { name: file.name })) 
     })
 }
 
@@ -483,7 +483,7 @@ async function retryFailedUploads() {
     return
   }
   
-  message.info(`正在重试 ${failedEntries.length} 个失败的上传...`)
+  message.info(tr('正在重试 {n} 个失败的上传...', { n: failedEntries.length }))
   
   // 指数退避重试函数
   const uploadWithRetry = async (fileId: string, maxRetries: number = 3) => {
@@ -498,7 +498,7 @@ async function retryFailedUploads() {
         
         // 从 fileId 中提取文件信息（简化处理，实际应该存储文件引用）
         // 这里假设用户会重新选择文件进行重试
-        message.warning(`请重新选择文件进行重试: ${fileId}`)
+        message.warning(tr('请重新选择文件进行重试: {id}', { id: fileId }))
         return true
       } catch {
         // 静默失败，重试逻辑由调用方处理
@@ -515,7 +515,7 @@ async function retryFailedUploads() {
     uploadingFiles.value.set(fileId, { 
       progress: 0, 
       status: 'error', 
-      error: `重试${maxRetries}次后仍然失败` 
+      error: tr('重试{n}次后仍然失败', { n: maxRetries }) 
     })
     return false
   }
@@ -529,10 +529,10 @@ async function retryFailedUploads() {
   const failCount = results.length - successCount
   
   if (successCount > 0) {
-    message.success(`成功重试 ${successCount} 个上传`)
+    message.success(tr('成功重试 {n} 个上传', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个上传重试失败，请手动重新上传`)
+    message.error(tr('{n} 个上传重试失败，请手动重新上传', { n: failCount }))
   }
 }
 
@@ -582,7 +582,7 @@ async function batchDelete() {
   batchDeleting.value = true
   try {
     const res = await api.post('/v1/media/batch-delete', { ids })
-    message.success(`已删除 ${res.data?.data?.deleted || ids.length} 项`)
+    message.success(tr('已删除 {n} 项', { n: res.data?.data?.deleted || ids.length }))
     fetchItems()
   } catch (e: any) {
     message.error(e.response?.data?.error || tr('批量删除失败'))
@@ -597,7 +597,7 @@ const batchMoveParentId = ref('')
 const batchMoving = ref(false)
 
 async function openBatchMove() {
-  if (selectedIds.value.size === 0) { message.warning('请先选择文件'); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
   batchMoveParentId.value = currentParentId.value
   try {
     const res = await api.get('/v1/media/folders')
@@ -629,10 +629,10 @@ async function submitBatchMove() {
   showBatchMove.value = false
   
   if (successCount > 0) {
-    message.success(`成功移动 ${successCount} 个文件`)
+    message.success(tr('成功移动 {n} 个文件', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个文件移动失败`)
+    message.error(tr('{n} 个文件移动失败', { n: failCount }))
   }
   fetchItems()
 }
@@ -646,7 +646,7 @@ const renameReplaceText = ref('')
 const batchRenaming = ref(false)
 
 function openBatchRename() {
-  if (selectedIds.value.size === 0) { message.warning('请先选择文件'); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
   renamePrefix.value = ''
   renameSuffix.value = ''
   renameFindText.value = ''
@@ -685,10 +685,10 @@ async function submitBatchRename() {
   showBatchRename.value = false
   
   if (successCount > 0) {
-    message.success(`成功重命名 ${successCount} 个文件`)
+    message.success(tr('成功重命名 {n} 个文件', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个文件重命名失败`)
+    message.error(tr('{n} 个文件重命名失败', { n: failCount }))
   }
   fetchItems()
 }
@@ -699,7 +699,7 @@ const batchTagInput = ref('')
 const batchTagging = ref(false)
 
 function openBatchTags() {
-  if (selectedIds.value.size === 0) { message.warning('请先选择文件'); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
   batchTagInput.value = ''
   showBatchTags.value = true
 }
@@ -732,10 +732,10 @@ async function submitBatchTags() {
   showBatchTags.value = false
   
   if (successCount > 0) {
-    message.success(`成功为 ${successCount} 个文件添加标签`)
+    message.success(tr('成功为 {n} 个文件添加标签', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个文件添加标签失败`)
+    message.error(tr('{n} 个文件添加标签失败', { n: failCount }))
   }
   fetchItems()
 }
@@ -770,10 +770,10 @@ async function batchDownload() {
   }
   
   if (successCount > 0) {
-    message.success(`开始下载 ${successCount} 个文件`)
+    message.success(tr('开始下载 {n} 个文件', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(`${failCount} 个文件下载失败`)
+    message.error(tr('{n} 个文件下载失败', { n: failCount }))
   }
 }
 
@@ -804,7 +804,7 @@ const uploadingToKb = ref(false)
 const kbOptions = computed(() => knowledgeBases.value.map(kb => ({ label: `${kb.name} (${kb.type.toUpperCase()})`, value: kb.id })))
 
 async function openKbModal() {
-  if (selectedIds.value.size === 0) { message.warning('请先选择文件'); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
   try {
     const res = await api.get('/v1/kb')
     knowledgeBases.value = res.data?.data?.knowledge_bases || []
@@ -836,8 +836,8 @@ async function uploadToKnowledgeBase() {
   }
   uploadingToKb.value = false
   showKbModal.value = false
-  if (ok > 0) message.success(`成功上传 ${ok} 个文件到知识库`)
-  if (fail > 0) message.error(`${fail} 个文件上传失败`)
+  if (ok > 0) message.success(tr('成功上传 {n} 个文件到知识库', { n: ok }))
+  if (fail > 0) message.error(tr('{n} 个文件上传失败', { n: fail }))
 }
 
 // S 修复：搜索/筛选变化时重置到第 1 页并防抖(300ms)，避免逐击键请求；分页变化单独触发
@@ -909,7 +909,7 @@ onUnmounted(() => {
         />
         <Segmented
           :value="viewMode"
-          :options="[{ label: '网格', value: 'grid' }, { label: '列表', value: 'list' }]"
+          :options="[{ label: $t('网格'), value: 'grid' }, { label: $t('列表'), value: 'list' }]"
           size="small"
           @change="toggleView(($event as any) as 'grid' | 'list')"
         />
@@ -935,7 +935,7 @@ onUnmounted(() => {
         v-if="total > 0"
         class="media-total"
       >
-        共 {{ total }} 项
+        {{ $t('共 {n} 项', { n: total }) }}
       </div>
     </div>
 
@@ -943,7 +943,7 @@ onUnmounted(() => {
       v-if="selectedIds.size > 0"
       class="batch-bar"
     >
-      <span class="batch-count">已选择 {{ selectedIds.size }} / {{ items.length }} 项</span>
+      <span class="batch-count">{{ $t('已选择 {sel} / {total} 项', { sel: selectedIds.size, total: items.length }) }}</span>
       <Button
         size="small"
         @click="selectAll"
@@ -1129,7 +1129,7 @@ onUnmounted(() => {
     <Drawer
       :open="!!detailItem"
       :width="360"
-      :title="detailItem?.name || '文件详情'"
+      :title="detailItem?.name || $t('文件详情')"
       @close="detailItem = null"
     >
       <template v-if="detailItem">
@@ -1203,7 +1203,7 @@ onUnmounted(() => {
               v-if="shareExpires"
               class="share-expires"
             >
-              有效期至 {{ shareExpires }}
+              {{ $t('有效期至 {time}', { time: shareExpires }) }}
             </div>
           </div>
         </div>
@@ -1293,7 +1293,7 @@ onUnmounted(() => {
     >
       <div class="move-tree">
         <Tree
-          :tree-data="[{ key: '', title: '根目录', children: moveTreeData }]"
+          :tree-data="[{ key: '', title: $t('根目录'), children: moveTreeData }]"
           :default-expand-all="false"
           :selected-keys="moveParentId ? [moveParentId] : ['']"
           @select="(keys: any[]) => { if (keys.length) moveParentId = String(keys[0]) }"
@@ -1315,7 +1315,7 @@ onUnmounted(() => {
         @press-enter="createFolder"
       />
       <div class="folder-hint">
-        将创建在当前目录：{{ breadcrumbs[breadcrumbs.length - 1]?.name || '根目录' }}
+        {{ $t('将创建在当前目录：{dir}', { dir: breadcrumbs[breadcrumbs.length - 1]?.name || $t('根目录') }) }}
       </div>
     </Modal>
 
@@ -1389,7 +1389,7 @@ onUnmounted(() => {
         v-if="shareExpires"
         class="share-expires"
       >
-        有效期至 {{ shareExpires }}
+        {{ $t('有效期至 {time}', { time: shareExpires }) }}
       </div>
     </Modal>
 
@@ -1459,7 +1459,7 @@ onUnmounted(() => {
                 :class="state.status"
               >
                 {{ state.status === 'uploading' ? `${state.progress}%` : 
-                  state.status === 'success' ? '✓ 完成' : 
+                  state.status === 'success' ? $t('✓ 完成') : 
                   `✗ ${state.error}` }}
               </span>
             </div>
@@ -1541,7 +1541,7 @@ onUnmounted(() => {
       <p>{{ $t('将移动') }} <strong>{{ selectedIds.size }}</strong> {{ $t('个选中项') }}</p>
       <div class="move-tree">
         <Tree
-          :tree-data="[{ key: '', title: '根目录', children: moveTreeData }]"
+          :tree-data="[{ key: '', title: $t('根目录'), children: moveTreeData }]"
           :default-expand-all="false"
           :selected-keys="batchMoveParentId ? [batchMoveParentId] : ['']"
           @select="(keys: any[]) => { if (keys.length) batchMoveParentId = String(keys[0]) }"
@@ -1563,14 +1563,14 @@ onUnmounted(() => {
           <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('前缀') }}</label>
           <Input
             v-model:value="renamePrefix"
-            placeholder="例如: [项目A]_"
+            :placeholder="$t('例如: [项目A]_')"
           />
         </div>
         <div>
           <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('后缀') }}</label>
           <Input
             v-model:value="renameSuffix"
-            placeholder="例如: _v2"
+            :placeholder="$t('例如: _v2')"
           />
         </div>
         <div>
@@ -1589,7 +1589,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div style="margin-top: 12px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 12px; color: var(--text-tertiary);">
-        <strong>{{ $t('示例：') }}</strong>原文件名 "report.pdf" → 前缀 "[2024]_" + 后缀 "_final" = "[2024]_report_final.pdf"
+        <strong>{{ $t('示例：') }}</strong>{{ $t('原文件名 "report.pdf" → 前缀 "[2024]_" + 后缀 "_final" = "[2024]_report_final.pdf"') }}
       </div>
     </Modal>
 

@@ -11,7 +11,7 @@
       <div class="doc-preview">
         <!-- 文档元信息 -->
         <div class="doc-meta">
-          <span class="doc-name">{{ document?.name || '未知文档' }}</span>
+          <span class="doc-name">{{ document?.name || $t('未知文档') }}</span>
           <span class="doc-type">{{ document?.file_type?.toUpperCase() }}</span>
           <span
             v-if="document?.file_size_bytes"
@@ -32,7 +32,7 @@
         >
           <div class="content-header">
             <span class="content-label">{{ $t('文档内容预览') }}</span>
-            <span class="content-chunks">{{ chunkCount }} 个分块</span>
+            <span class="content-chunks">{{ $t('{n} 个分块', { n: chunkCount }) }}</span>
           </div>
           <pre class="content-body">{{ content }}</pre>
         </div>
@@ -62,6 +62,9 @@ import { ref, watch, computed } from 'vue'
 import { Modal, Spin, Tag, Alert } from 'ant-design-vue'
 import EmptyState from './common/EmptyState.vue'
 import { api } from '../api'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface Document {
   id: string
@@ -125,7 +128,7 @@ async function loadPreview() {
     content.value = data.content || ''
     chunkCount.value = data.chunk_count || 0
   } catch (e: any) {
-    error.value = e.response?.data?.detail || e.response?.data?.error || '加载预览失败'
+    error.value = e.response?.data?.detail || e.response?.data?.error || t('加载预览失败')
   } finally {
     loading.value = false
   }

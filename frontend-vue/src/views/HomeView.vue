@@ -323,7 +323,7 @@ function scrollToTop() {
             class="term-copy"
             @click="copyQuickstart"
           >
-            {{ copied ? '已复制' : '复制' }}
+            {{ copied ? $t('已复制') : $t('复制') }}
           </button>
         </div>
         <div class="terminal-body">
@@ -337,7 +337,7 @@ function scrollToTop() {
             <span class="term-prompt">$</span> python run.py start
           </div>
           <div class="term-line term-out">
-            → chiron 已启动：http://localhost:5173
+            {{ $t('→ chiron 已启动：http://localhost:5173') }}
           </div>
         </div>
       </div>

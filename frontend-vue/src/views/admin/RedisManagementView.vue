@@ -67,19 +67,19 @@ async function loadSlowLog() {
   }
 }
 
-const SLOW_LABELS: Record<string, string> = {
-  id: '序号',
-  timestamp: '时间',
-  time: '时间',
-  duration: '耗时 (μs)',
-  duration_us: '耗时 (μs)',
-  command: '命令',
-  args: '参数',
-  key: '键',
-  client: '客户端',
-  ip: '来源 IP',
-  name: '名称',
-}
+const SLOW_LABELS = computed<Record<string, string>>(() => ({
+  id: t('序号'),
+  timestamp: t('时间'),
+  time: t('时间'),
+  duration: t('耗时 (μs)'),
+  duration_us: t('耗时 (μs)'),
+  command: t('命令'),
+  args: t('参数'),
+  key: t('键'),
+  client: t('客户端'),
+  ip: t('来源 IP'),
+  name: t('名称'),
+}))
 
 const slowColumns = computed(() => {
   const first = slowLog.value[0]
@@ -87,7 +87,7 @@ const slowColumns = computed(() => {
   return [
     { title: '#', key: '__idx', width: 64 },
     ...Object.keys(first).map((k) => ({
-      title: SLOW_LABELS[k] || k,
+      title: SLOW_LABELS.value[k] || k,
       dataIndex: k,
       key: k,
       ellipsis: true,
@@ -136,8 +136,8 @@ function statusColor(status: string): string {
 
 function statusText(status: string): string {
   const s = String(status || '').toLowerCase()
-  if (['up', 'ok', 'running', 'connected', 'active'].includes(s)) return '运行中'
-  if (['down', 'error', 'disconnected', 'inactive'].includes(s)) return '异常'
+  if (['up', 'ok', 'running', 'connected', 'active'].includes(s)) return t('运行中')
+  if (['down', 'error', 'disconnected', 'inactive'].includes(s)) return t('异常')
   return status || '-'
 }
 
@@ -277,7 +277,7 @@ onMounted(() => {
       <Alert
         type="error"
         show-icon
-        message="此操作将删除 Redis 中的全部数据，不可恢复！"
+        :message="$t('此操作将删除 Redis 中的全部数据，不可恢复！')"
         style="margin-bottom: 16px"
       />
       <p>{{ $t('请在下方输入') }} <Tag>confirm</Tag> {{ $t('以确认执行：') }}</p>

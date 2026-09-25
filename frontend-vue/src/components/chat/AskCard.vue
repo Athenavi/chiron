@@ -86,7 +86,7 @@ function submitDraft() {
         v-model="draft"
         class="ask-input"
         type="text"
-        :placeholder="hasOptions ? '也可以直接输入回答' : '输入回答后回车'"
+        :placeholder="hasOptions ? $t('也可以直接输入回答') : $t('输入回答后回车')"
         :disabled="expired"
         :aria-label="$t('回答')"
         @keydown.enter.prevent="submitDraft"

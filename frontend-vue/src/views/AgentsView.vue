@@ -115,11 +115,11 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('agent', item.id)
-    message.success(`「${item.name}」已安装`)
+    message.success(t('「{name}」已安装', { name: item.name }))
     await Promise.all([loadMarket(), loadAgents()])
   } catch (e: any) {
     const raw = e?.response?.data
-    message.error('安装失败: ' + (raw?.message || raw?.detail || raw?.error || e?.message || ''))
+    message.error(t('安装失败: {error}', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
     marketInstallingId.value = null
   }
@@ -274,7 +274,7 @@ async function saveEditor() {
     editorOpen.value = false
     await loadAgents()
   } catch (e: any) {
-    message.error('保存失败: ' + (e?.response?.data?.error || e?.message || ''))
+    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     editorSaving.value = false
   }
@@ -295,7 +295,7 @@ async function toggleVisibility(a: AgentRow) {
   const next = a.visibility === 'tenant' ? 'private' : 'tenant'
   try {
     await setAgentVisibility(a.id, next)
-    message.success(next === 'tenant' ? '已共享给团队' : '已设为私有')
+    message.success(next === 'tenant' ? t('已共享给团队') : t('已设为私有'))
     await loadAgents()
   } catch (e: any) {
     const raw = e?.response?.data
@@ -311,7 +311,7 @@ async function toggleVisibility(a: AgentRow) {
 function requestDelete(a: Agent) {
   Modal.confirm({
     title: t('删除 Agent'),
-    content: `确定删除「${a.name}」？其运行记录也会一并删除。`,
+    content: t('确定删除「{name}」？其运行记录也会一并删除。', { name: a.name }),
     okText: t('删除'),
     okButtonProps: { danger: true },
     cancelText: t('取消'),
@@ -382,7 +382,7 @@ async function submitRun() {
     message.success(t('任务已派发，正在执行…'))
     startPolling(s.id)
   } catch (e: any) {
-    message.error('派发失败: ' + (e?.response?.data?.error || e?.message || ''))
+    message.error(t('派发失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     runSubmitting.value = false
   }
@@ -424,7 +424,7 @@ function continueInChat() {
     return
   }
   setChatPrefill({
-    title: `运行结果 · ${session.agent_name || 'Agent'}`,
+    title: t('运行结果 · {name}', { name: session.agent_name || 'Agent' }),
     text: String(text),
     source: 'agent',
   })
@@ -446,7 +446,7 @@ function openSaveToKb(session: AgentSession | null) {
     return
   }
   saveToKbContent.value = markdown
-  saveToKbTitle.value = `运行结果 · ${session.agent_name || 'Agent'}`
+  saveToKbTitle.value = t('运行结果 · {name}', { name: session.agent_name || 'Agent' })
   saveToKbOpen.value = true
 }
 
@@ -497,7 +497,7 @@ function toolCount(a: Agent): number {
       <!-- ── Tab 1：我的 Agent ── -->
       <TabPane
         key="agents"
-        tab="我的 Agent"
+        :tab="$t('我的 Agent')"
       >
         <PageSkeleton
           v-if="loadingAgents"
@@ -551,7 +551,7 @@ function toolCount(a: Agent): number {
               <span class="card-avatar"><RobotOutlined /></span>
               <div class="card-titles">
                 <span class="card-name">{{ a.name }}</span>
-                <span class="card-desc">{{ a.description || '暂无描述' }}</span>
+                <span class="card-desc">{{ a.description || $t('暂无描述') }}</span>
               </div>
               <Dropdown
                 trigger="click"
@@ -617,10 +617,10 @@ function toolCount(a: Agent): number {
                 {{ $t('团队共享') }}
               </Tag>
               <Tag :color="a.enabled ? 'green' : 'default'">
-                {{ a.enabled ? '启用' : '已停用' }}
+                {{ a.enabled ? $t('启用') : $t('已停用') }}
               </Tag>
-              <Tag>{{ toolCount(a) }} 工具</Tag>
-              <Tag>最多 {{ a.max_turns }} 轮</Tag>
+              <Tag>{{ $t('{n} 工具', { n: toolCount(a) }) }}</Tag>
+              <Tag>{{ $t('最多 {n} 轮', { n: a.max_turns }) }}</Tag>
             </div>
             <div class="card-actions">
               <Button
@@ -652,7 +652,7 @@ function toolCount(a: Agent): number {
       <!-- ── Agent 市场 ── -->
       <TabPane
         key="market"
-        tab="市场"
+        :tab="$t('市场')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -687,7 +687,7 @@ function toolCount(a: Agent): number {
       <!-- ── Tab 2：运行记录 ── -->
       <TabPane
         key="sessions"
-        tab="运行记录"
+        :tab="$t('运行记录')"
       >
         <PageSkeleton
           v-if="loadingSessions"
@@ -764,7 +764,7 @@ function toolCount(a: Agent): number {
     <!-- ── 新建/编辑 Modal ── -->
     <Modal
       :open="editorOpen"
-      :title="editingId ? '编辑 Agent' : '新建 Agent'"
+      :title="editingId ? $t('编辑 Agent') : $t('新建 Agent')"
       :confirm-loading="editorSaving"
       width="640px"
       :ok-text="$t('保存')"
@@ -853,7 +853,7 @@ function toolCount(a: Agent): number {
           <Input.TextArea
             v-model:value="form.tools_text"
             :rows="4"
-            placeholder="[{&quot;name&quot;:&quot;shell_exec&quot;,&quot;description&quot;:&quot;执行命令&quot;,&quot;parameters&quot;:{&quot;type&quot;:&quot;object&quot;,&quot;properties&quot;:{}}}]"
+            :placeholder="$t('{jsonExample}', { jsonExample: '[{&quot;name&quot;:&quot;shell_exec&quot;,&quot;description&quot;:&quot;执行命令&quot;,&quot;parameters&quot;:{&quot;type&quot;:&quot;object&quot;,&quot;properties&quot;:{}}}]' })"
             class="tools-input"
           />
           <ToolPicker v-model="form.tools_text" />
@@ -920,7 +920,7 @@ function toolCount(a: Agent): number {
     <!-- ── 运行 Modal ── -->
     <Modal
       :open="runOpen"
-      :title="`运行「${runTarget?.name || ''}」`"
+      :title="$t('运行「{name}」', { name: runTarget?.name || '' })"
       :footer="null"
       :closable="true"
       width="600px"
@@ -954,26 +954,26 @@ function toolCount(a: Agent): number {
           v-if="runSession.status === 'running' || runSession.status === 'pending'"
           type="info"
           show-icon
-          :message="runSession.status === 'pending' ? '任务排队中…' : 'Agent 正在执行…（LLM 推理 + 工具调用）'"
+          :message="runSession.status === 'pending' ? $t('任务排队中…') : $t('Agent 正在执行…（LLM 推理 + 工具调用）')"
         />
         <Alert
           v-else-if="runSession.status === 'failed'"
           type="error"
           show-icon
-          message="执行失败"
-          :description="parseResult(runSession).error || parseResult(runSession).output || '未知错误'"
+          :message="$t('执行失败')"
+          :description="parseResult(runSession).error || parseResult(runSession).output || $t('未知错误')"
         />
         <template v-else-if="runSession.status === 'completed'">
           <Alert
             type="success"
             show-icon
-            message="执行完成"
+            :message="$t('执行完成')"
           />
           <div class="result-block">
             <div class="result-label">
               {{ $t('输出') }}
             </div>
-            <pre class="result-output">{{ parseResult(runSession).output || '（无输出）' }}</pre>
+            <pre class="result-output">{{ parseResult(runSession).output || $t('（无输出）') }}</pre>
           </div>
           <div
             v-if="parseResult(runSession).token_usage || parseResult(runSession).duration || parseResult(runSession).tool_calls?.length"
@@ -983,10 +983,10 @@ function toolCount(a: Agent): number {
               tokens: {{ JSON.stringify(parseResult(runSession).token_usage) }}
             </Tag>
             <Tag v-if="parseResult(runSession).duration">
-              耗时 {{ parseResult(runSession).duration.toFixed(1) }}s
+              {{ $t('耗时 {n}s', { n: parseResult(runSession).duration.toFixed(1) }) }}
             </Tag>
             <Tag v-if="parseResult(runSession).tool_calls?.length">
-              工具调用 {{ parseResult(runSession).tool_calls.length }} 次
+              {{ $t('工具调用 {n} 次', { n: parseResult(runSession).tool_calls.length }) }}
             </Tag>
           </div>
           <div class="result-actions">
@@ -1004,7 +1004,7 @@ function toolCount(a: Agent): number {
     <!-- ── 历史结果详情 Modal ── -->
     <Modal
       :open="detailOpen"
-      :title="`运行结果 · ${detailSession?.agent_name || ''}`"
+      :title="$t('运行结果 · {name}', { name: detailSession?.agent_name || '' })"
       :footer="null"
       width="640px"
       @cancel="detailOpen = false"
@@ -1023,8 +1023,8 @@ function toolCount(a: Agent): number {
           v-if="detailSession.status === 'failed'"
           type="error"
           show-icon
-          message="执行失败"
-          :description="parseResult(detailSession).error || parseResult(detailSession).output || '未知错误'"
+          :message="$t('执行失败')"
+          :description="parseResult(detailSession).error || parseResult(detailSession).output || $t('未知错误')"
         />
         <div class="result-block">
           <div class="result-label">
@@ -1049,10 +1049,10 @@ function toolCount(a: Agent): number {
             tokens: {{ JSON.stringify(parseResult(detailSession).token_usage) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).duration">
-            耗时 {{ parseResult(detailSession).duration.toFixed(1) }}s
+            {{ $t('耗时 {n}s', { n: parseResult(detailSession).duration.toFixed(1) }) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).tool_calls?.length">
-            工具调用 {{ parseResult(detailSession).tool_calls.length }} 次
+            {{ $t('工具调用 {n} 次', { n: parseResult(detailSession).tool_calls.length }) }}
           </Tag>
         </div>
         <div class="result-actions">

@@ -1,3 +1,5 @@
+import { t } from '../../i18n'
+
 /**
  * 「在对话中继续」的跨页面投递。
  *
@@ -25,21 +27,24 @@ export interface ChatPrefill {
   kind?: 'result' | 'capability'
 }
 
-const TRUNCATED_NOTE = '…（内容过长，已截断）'
+/** 截断提示：用函数而非常量 —— 常量在模块加载时求值一次，语言切换后会停在旧语言。 */
+function truncatedNote(): string {
+  return t('…（内容过长，已截断）')
+}
 
 /** 组装要插入输入框的文本（纯函数：格式与截断都可测） */
 export function buildPrefillText(prefill: ChatPrefill, maxChars = PREFILL_MAX_CHARS): string {
   // 两种投递意图的开场白完全不同：把能力当「结果」投递会生成
   // 「以下是『Execute Python Code』的结果」这种自相矛盾的话。
   const header = prefill.kind === 'capability'
-    ? `我想用「${prefill.title}」来做：`
+    ? t('我想用「{title}」来做：', { title: prefill.title })
     : prefill.title
-      ? `以下是「${prefill.title}」的结果，请基于它继续：`
-      : '以下是上一轮的结果，请基于它继续：'
+      ? t('以下是「{title}」的结果，请基于它继续：', { title: prefill.title })
+      : t('以下是上一轮的结果，请基于它继续：')
   const body = (prefill.text || '').trim()
   if (!body) return header
   if (maxChars > 0 && body.length > maxChars) {
-    return `${header}\n\n${body.slice(0, maxChars)}\n\n${TRUNCATED_NOTE}`
+    return `${header}\n\n${body.slice(0, maxChars)}\n\n${truncatedNote()}`
   }
   return `${header}\n\n${body}`
 }

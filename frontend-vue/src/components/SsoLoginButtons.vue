@@ -17,17 +17,17 @@ const providers = ref<SsoPublicProvider[]>([])
 const loading = ref(false)
 
 // provider_type 品牌样式映射（颜色徽标 + 文案）
-const brandMap: Record<string, { color: string; label: string; badge: string }> = {
-  github: { color: '#24292F', label: 'GitHub', badge: 'G' },
-  wechat: { color: '#07C160', label: t('微信'), badge: '微' },
-  dingtalk: { color: '#0089FF', label: t('钉钉'), badge: '钉' },
-  feishu: { color: '#3370FF', label: t('飞书'), badge: '飞' },
-  qq: { color: '#12B7F5', label: 'QQ', badge: 'Q' },
-  google: { color: '#4285F4', label: 'Google', badge: 'G' },
-  custom: { color: '#722ed1', label: 'SSO', badge: 'S' },
-}
-
 function brandOf(p: SsoPublicProvider) {
+  // 表内联在函数里：常量表在模块加载时求值一次，语言切换后 label/badge 会停在旧语言。
+  const brandMap: Record<string, { color: string; label: string; badge: string }> = {
+    github: { color: '#24292F', label: 'GitHub', badge: 'G' },
+    wechat: { color: '#07C160', label: t('微信'), badge: t('微') },
+    dingtalk: { color: '#0089FF', label: t('钉钉'), badge: t('钉') },
+    feishu: { color: '#3370FF', label: t('飞书'), badge: t('飞') },
+    qq: { color: '#12B7F5', label: 'QQ', badge: 'Q' },
+    google: { color: '#4285F4', label: 'Google', badge: 'G' },
+    custom: { color: '#722ed1', label: 'SSO', badge: 'S' },
+  }
   return brandMap[p.provider_type] || brandMap.custom
 }
 
@@ -58,7 +58,7 @@ function startSso(p: SsoPublicProvider) {
     class="sso-group"
   >
     <div class="sso-divider">
-      <span>{{ mode === 'bind' ? '绑定三方账号' : '三方登录' }}</span>
+      <span>{{ mode === 'bind' ? $t('绑定三方账号') : $t('三方登录') }}</span>
     </div>
     <div class="sso-buttons">
       <button

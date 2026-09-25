@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 /**
  * 把 Agent 的一次运行结果导出成 Markdown —— 用于「运行结果 → 知识库」的沉淀。
  *
@@ -52,10 +54,10 @@ export function resultText(parsed: ParsedAgentResult): string {
 function metaLine(parsed: ParsedAgentResult): string {
   const parts: string[] = []
   if (typeof parsed.duration === 'number' && Number.isFinite(parsed.duration)) {
-    parts.push(`耗时 ${parsed.duration.toFixed(1)}s`)
+    parts.push(t('耗时 {n}s', { n: parsed.duration.toFixed(1) }))
   }
   if (Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0) {
-    parts.push(`工具调用 ${parsed.tool_calls.length} 次`)
+    parts.push(t('工具调用 {n} 次', { n: parsed.tool_calls.length }))
   }
   return parts.join(' · ')
 }
@@ -71,13 +73,13 @@ export function agentResultToMarkdown(session: AgentResultSource, title?: string
   const output = resultText(parsed)
   if (!task && !output) return ''
 
-  const heading = asText(title) || `运行结果 · ${asText(session.agent_name) || 'Agent'}`
+  const heading = asText(title) || t('运行结果 · {name}', { name: asText(session.agent_name) || 'Agent' })
   const blocks: string[] = [`# ${heading}`]
-  if (task) blocks.push('## 任务', task)
+  if (task) blocks.push(t('## 任务'), task)
   if (output) {
     // 只有错误、没有正常输出时单独标注：检索时「错误」比「输出」更有信息量
     const isErrorOnly = !!asText(parsed.error) && !asText(parsed.output)
-    blocks.push(isErrorOnly ? '## 错误' : '## 输出', output)
+    blocks.push(isErrorOnly ? t('## 错误') : t('## 输出'), output)
   }
   const meta = metaLine(parsed)
   if (meta) blocks.push('---', meta)

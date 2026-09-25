@@ -365,7 +365,7 @@ func responseSnippet(body []byte) string {
 // decodeBody 把响应体归一为 UTF-8 文本。
 //
 // 支付宝在参数/charset 校验失败时会用它自身的默认字符集（GBK）返回错误文案，
-// 此时按 UTF-8 读取会得到成片的 "��ǩ..." 乱码，sub_msg 完全不可读 ——
+// 此时按 UTF-8 读取会得到成片的 "\uFFFD\uFFFD\u01E9..." 乱码，sub_msg 完全不可读 ——
 // 排查时只能靠猜（本次故障就是如此）。这里发现非法 UTF-8 时按 GBK 兜底解码。
 func decodeBody(body []byte) string {
 	if utf8.Valid(body) {

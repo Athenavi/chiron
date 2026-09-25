@@ -261,7 +261,7 @@ async function saveSpeechPrefs() {
 }
 
 function previewSpeech() {
-  if (!speak('这是一段朗读试听。', speech.value)) {
+  if (!speak(t('这是一段朗读试听。'), speech.value)) {
     message.warning(t('请先选择音色，或当前浏览器不支持朗读'))
   }
 }
@@ -350,16 +350,16 @@ async function loadConversations() {
 /** 把一次会话渲染成 Markdown；reasoning 单独成节，避免与正文混淆 */
 function conversationToMarkdown(conv: ConversationItem, messages: any[]): string {
   const lines: string[] = [
-    `# ${conv.title || '未命名会话'}`,
+    t('# {title}', { title: conv.title || t('未命名会话') }),
     '',
-    `> 导出时间：${new Date().toLocaleString()}`,
+    t('> 导出时间：{time}', { time: new Date().toLocaleString() }),
     '',
   ]
   for (const m of messages) {
-    const role = m.role === 'user' ? '用户' : m.role === 'assistant' ? '助手' : (m.role || '未知')
+    const role = m.role === 'user' ? t('用户') : m.role === 'assistant' ? t('助手') : (m.role || t('未知'))
     lines.push(`## ${role}`, '')
     if (m.reasoning) {
-      lines.push('<details><summary>思考过程</summary>', '', String(m.reasoning), '', '</details>', '')
+      lines.push('<details><summary>' + t('思考过程') + '</summary>', '', String(m.reasoning), '', '</details>', '')
     }
     lines.push(String(m.content ?? ''), '')
   }
@@ -390,7 +390,7 @@ async function exportSelected() {
     a.download = `chiron-conversations-${new Date().toISOString().slice(0, 10)}.md`
     a.click()
     URL.revokeObjectURL(url)
-    message.success(`已导出 ${ids.length} 个会话`)
+    message.success(t('已导出 {n} 个会话', { n: ids.length }))
   } catch (e: any) {
     message.error(e.response?.data?.error || t('导出失败'))
   } finally {
@@ -418,9 +418,9 @@ async function deleteSelected() {
       }
     }
     if (failed.length) {
-      message.warning(`已删除 ${ok} 个，失败 ${failed.length} 个`)
+      message.warning(t('已删除 {ok} 个，失败 {failed} 个', { ok, failed: failed.length }))
     } else {
-      message.success(`已删除 ${ok} 个会话`)
+      message.success(t('已删除 {n} 个会话', { n: ok }))
     }
     selectedConvIds.value = failed
     await loadConversations()
@@ -463,7 +463,7 @@ onMounted(async () => {
     <!-- ── 通用设置 ── -->
     <a-tab-pane
       key="general"
-      tab="通用设置"
+      :tab="$t('通用设置')"
     >
       <div class="setting-block">
         <div class="setting-title">
@@ -546,7 +546,7 @@ onMounted(async () => {
                   v-for="v in list"
                   :key="v.voiceURI"
                   :value="v.voiceURI"
-                  :label="`${v.name}${v.localService ? '' : '（在线）'}`"
+                  :label="v.localService ? v.name : $t('{name}（在线）', { name: v.name })"
                 >
                   {{ v.name }}<span v-if="!v.localService">{{ $t('（在线）') }}</span>
                 </a-select-option>
@@ -616,7 +616,7 @@ onMounted(async () => {
     <!-- ── 账户设置 ── -->
     <a-tab-pane
       key="account"
-      tab="账户设置"
+      :tab="$t('账户设置')"
     >
       <div class="setting-block">
         <div class="setting-title">
@@ -701,7 +701,7 @@ onMounted(async () => {
                   :key="p.id"
                   @click="startBind(p.id)"
                 >
-                  绑定 {{ p.display_name || p.name }}
+                  {{ $t('绑定 {name}', { name: p.display_name || p.name }) }}
                 </Button>
               </div>
             </div>
@@ -770,7 +770,7 @@ onMounted(async () => {
                     :loading="sendingCode"
                     @click="handleSendBindCode"
                   >
-                    {{ phoneCountdown > 0 ? `${phoneCountdown}s 后重发` : '获取验证码' }}
+                    {{ phoneCountdown > 0 ? $t('{n}s 后重发', { n: phoneCountdown }) : $t('获取验证码') }}
                   </Button>
                 </template>
               </Input>
@@ -835,7 +835,7 @@ onMounted(async () => {
     <!-- ── 数据管理 ── -->
     <a-tab-pane
       key="data"
-      tab="数据管理"
+      :tab="$t('数据管理')"
     >
       <div class="setting-block">
         <div class="setting-title">
@@ -854,9 +854,9 @@ onMounted(async () => {
           >
             <div class="identity-info">
               <LinkOutlined class="row-icon" />
-              <span class="identity-name">{{ item.title || '未命名对话' }}</span>
+              <span class="identity-name">{{ item.title || $t('未命名对话') }}</span>
               <span class="identity-meta">
-                {{ item.message_count }} 条消息 · {{ new Date(item.created_at).toLocaleString() }}
+                {{ $t('{n} 条消息 · {time}', { n: item.message_count, time: new Date(item.created_at).toLocaleString() }) }}
               </span>
             </div>
             <div class="row-actions">
@@ -889,7 +889,7 @@ onMounted(async () => {
         <div class="setting-title">
           {{ $t('历史会话') }}
           <span class="setting-hint">
-            已选 {{ selectedCount }} / {{ conversations.length }}
+            {{ $t('已选 {sel} / {total}', { sel: selectedCount, total: conversations.length }) }}
           </span>
         </div>
         <div class="data-toolbar">
@@ -897,7 +897,7 @@ onMounted(async () => {
             size="small"
             @click="toggleSelectAll"
           >
-            {{ allSelected ? '取消全选' : '全选' }}
+            {{ allSelected ? $t('取消全选') : $t('全选') }}
           </Button>
           <Button
             size="small"
@@ -938,7 +938,7 @@ onMounted(async () => {
                     : selectedConvIds.filter(x => x !== c.id)
                 }"
               />
-              <span class="conv-title">{{ c.title || '未命名会话' }}</span>
+              <span class="conv-title">{{ c.title || $t('未命名会话') }}</span>
               <span class="conv-meta">{{ c.updated_at ? new Date(c.updated_at).toLocaleString() : '' }}</span>
             </label>
             <EmptyState
@@ -953,7 +953,7 @@ onMounted(async () => {
     <!-- ── 服务协议 ── -->
     <a-tab-pane
       key="legal"
-      tab="服务协议"
+      :tab="$t('服务协议')"
     >
       <div class="setting-block">
         <div class="setting-title">

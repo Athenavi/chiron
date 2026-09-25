@@ -12,14 +12,14 @@
           <path d="M2 2h12v12H2V2zm1 1v10h10V3H3z" />
           <path d="M5 5h6v1H5V5zm0 2h6v1H5V7zm0 2h4v1H5V9z" />
         </svg>
-        知识库检索结果 ({{ results.length }} 条)
+        {{ $t('知识库检索结果 ({n} 条)', { n: results.length }) }}
       </div>
       <div class="header-actions">
         <button
           class="btn-toggle"
           @click="toggleAll"
         >
-          {{ isExpanded ? '收起全部' : '展开全部' }}
+          {{ isExpanded ? $t('收起全部') : $t('展开全部') }}
         </button>
       </div>
     </div>
@@ -38,7 +38,7 @@
             class="score-badge"
             :style="{ backgroundColor: getScoreColor(result.score) }"
           >
-            相似度: {{ (result.score * 100).toFixed(1) }}%
+            {{ $t('相似度: {n}%', { n: (result.score * 100).toFixed(1) }) }}
           </span>
         </div>
         
@@ -53,7 +53,7 @@
           >
             <path d="M2 1h7l3 3v9H2V1zm5 0v3h3L7 1z" />
           </svg>
-          <span>{{ result.documentName || `文档 ${index + 1}` }}</span>
+          <span>{{ result.documentName || $t('文档 {n}', { n: index + 1 }) }}</span>
         </div>
         
         <!-- 内容预览 -->
@@ -65,7 +65,7 @@
             v-if="result.highlights && result.highlights.length"
             class="highlights"
           >
-            <span class="highlight-label">关键片段:</span>
+            <span class="highlight-label">{{ $t('关键片段:') }}</span>
             <span
               v-for="(highlight, hIdx) in result.highlights"
               :key="hIdx"
@@ -93,7 +93,7 @@
             v-if="result.tenantId"
             class="meta-item"
           >
-            租户: {{ result.tenantId.substring(0, 8) }}
+            {{ $t('租户: {id}', { id: result.tenantId.substring(0, 8) }) }}
           </span>
           <span
             v-if="result.timestamp"
@@ -109,7 +109,7 @@
           :class="{ collapsed: !isExpanded && !result.expanded }"
           @click.stop="toggleResult(result)"
         >
-          {{ isExpanded || result.expanded ? '收起' : '展开' }}
+          {{ isExpanded || result.expanded ? $t('收起') : $t('展开') }}
         </button>
       </div>
     </div>

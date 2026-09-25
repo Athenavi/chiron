@@ -115,10 +115,10 @@ function onToolsModeChange(v: any) {
 // 告诉用户"此刻该做什么"。原先只有 dragOver 一种，于是生成中仍写着"发送消息…"，
 // 而实际上此时 Enter 是"打断并发送"——语义相反，容易误操作。
 const inputPlaceholder = computed(() => {
-  if (dragOver.value) return '松开以上传文件'
-  if (props.loading) return '正在生成…按 Enter 打断并发送'
-  if (props.disabled) return '当前会话不可输入'
-  return '发送消息…（/ 查看命令 · ↑ 召回历史）'
+  if (dragOver.value) return tr('松开以上传文件')
+  if (props.loading) return tr('正在生成…按 Enter 打断并发送')
+  if (props.disabled) return tr('当前会话不可输入')
+  return tr('发送消息…（/ 查看命令 · ↑ 召回历史）')
 })
 
 // ── 运行态内联 ──
@@ -303,8 +303,12 @@ const mentionIndex = ref(0)
 const mentionLoading = ref(false)
 const mentionItems = ref<{ type: string; id: string; name: string }[]>([])
 
-const MENTION_LABEL: Record<string, string> = {
-  kb: '知识库', agent: 'Agent', skill: '技能', workflow: '工作流', plugin: '插件',
+/** `@` 提及的类型标签；写成函数以便每次渲染取当前语言（模块级 `tr` 不具响应式）。 */
+function mentionLabel(type: string): string {
+  const map: Record<string, string> = {
+    kb: tr('知识库'), agent: 'Agent', skill: tr('技能'), workflow: tr('工作流'), plugin: tr('插件'),
+  }
+  return map[type] || type
 }
 
 const filteredMentions = computed(() => {
@@ -339,7 +343,7 @@ const groupedMentions = computed(() => {
   ]
   return ordered
     .filter(type => byType.has(type))
-    .map(type => ({ type, label: MENTION_LABEL[type] || type, entries: byType.get(type)! }))
+    .map(type => ({ type, label: mentionLabel(type), entries: byType.get(type)! }))
 })
 
 /** 懒加载 + 逐类容错：任一资源类失败只让那一类为空，不拖垮整个面板 */
@@ -510,7 +514,7 @@ async function handleFiles(files: FileList | File[]) {
   try {
     for (const file of arr) {
       if (file.size > MAX_FILE_SIZE) {
-        message.error(`${file.name} 超过 50MB 限制`)
+        message.error(tr('{name} 超过 50MB 限制', { name: file.name }))
         continue
       }
       const result = await uploadFile(file)
@@ -525,7 +529,7 @@ async function handleFiles(files: FileList | File[]) {
       })
     }
   } catch (e: any) {
-    message.error('文件上传失败: ' + (e.message || tr('网络错误')))
+    message.error(tr('文件上传失败: {error}', { error: e.message || tr('网络错误') }))
   } finally {
     uploading.value = false
     if (fileInputRef.value) fileInputRef.value.value = ''
@@ -676,19 +680,21 @@ function formatRecordingTime(seconds: number): string {
 }
 
 // ── 斜杠命令 ──
-const SLASH_COMMANDS = [
-  { cmd: '/clear', desc: '清空当前对话' },
-  { cmd: '/export', desc: '导出当前会话为 Markdown' },
-  { cmd: '/new', desc: '新建会话' },
-  { cmd: '/theme', desc: '切换暗色/亮色模式' },
-  { cmd: '/stop', desc: '停止生成' },
-]
+// 用 computed 而非常量数组：desc 是用户可见文案，常量在模块加载时求值一次，
+// 语言切换后会一直停在旧语言。
+const SLASH_COMMANDS = computed(() => [
+  { cmd: '/clear', desc: tr('清空当前对话') },
+  { cmd: '/export', desc: tr('导出当前会话为 Markdown') },
+  { cmd: '/new', desc: tr('新建会话') },
+  { cmd: '/theme', desc: tr('切换暗色/亮色模式') },
+  { cmd: '/stop', desc: tr('停止生成') },
+])
 const showSlashMenu = ref(false)
 const slashIndex = ref(0)
 const filteredCommands = computed(() => {
   const q = input.value.trim().toLowerCase()
   if (!q.startsWith('/')) return []
-  return SLASH_COMMANDS.filter(c => c.cmd.startsWith(q))
+  return SLASH_COMMANDS.value.filter(c => c.cmd.startsWith(q))
 })
 function onSlashInput() {
   showSlashMenu.value = filteredCommands.value.length > 0
@@ -729,7 +735,7 @@ defineExpose({ insertText })
           {{ pastedLargeText.slice(0, PASTE_PREVIEW) }}<span v-if="pastedLargeText.length > PASTE_PREVIEW">…</span>
         </div>
         <div class="paste-preview-meta">
-          已粘贴 {{ pastedLargeText.length }} 字符
+          {{ $t('已粘贴 {n} 字符', { n: pastedLargeText.length }) }}
         </div>
         <div class="paste-preview-actions">
           <button

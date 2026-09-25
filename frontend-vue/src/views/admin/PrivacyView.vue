@@ -78,7 +78,7 @@ onMounted(fetchPrivacy)
         <a-form layout="vertical">
           <a-form-item :label="$t('隐私模式')">
             <a-switch v-model:checked="form.privacy_mode" />
-            <span class="hint">开启后转发 Python 引擎时注入 X-Privacy-Mode: no_retention，不落库历史</span>
+            <span class="hint">{{ $t('开启后转发 Python 引擎时注入 X-Privacy-Mode: no_retention，不落库历史') }}</span>
           </a-form-item>
           <a-form-item :label="$t('数据留存天数（0 = 永久）')">
             <a-input-number

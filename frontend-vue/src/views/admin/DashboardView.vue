@@ -86,7 +86,7 @@ const connectionChartOption = computed(() => ({
   },
   yAxis: {
     type: 'value',
-    name: '连接数',
+    name: t('连接数'),
     nameTextStyle: { color: chartColors.value.textSecondary, fontSize: 11 },
     axisLabel: { color: chartColors.value.textSecondary, fontSize: 11 },
     splitLine: { lineStyle: { color: chartColors.value.splitLine } },
@@ -94,7 +94,7 @@ const connectionChartOption = computed(() => ({
     axisTick: { show: false },
   },
   series: [{
-    name: '并发连接',
+    name: t('并发连接'),
     type: 'line',
     data: connectionHistory.value.map(h => h.value),
     smooth: true,
@@ -128,7 +128,7 @@ const apiKeyChartOption = computed(() => ({
     textStyle: { color: chartColors.value.textSecondary, fontSize: 12 },
   },
   series: [{
-    name: 'API Key 状态',
+    name: t('API Key 状态'),
     type: 'pie',
     radius: ['52%', '72%'],
     center: ['50%', '44%'],
@@ -136,9 +136,9 @@ const apiKeyChartOption = computed(() => ({
     itemStyle: { borderColor: chartColors.value.bg, borderWidth: 2 },
     label: { show: false },
     data: [
-      { value: apiKeyStatus.value.active || 1, name: '正常', itemStyle: { color: chartColors.value.success } },
-      { value: apiKeyStatus.value.rate_limited || 0, name: '限流中', itemStyle: { color: chartColors.value.warning } },
-      { value: apiKeyStatus.value.circuit_open || 0, name: '熔断', itemStyle: { color: chartColors.value.error } },
+      { value: apiKeyStatus.value.active || 1, name: t('正常'), itemStyle: { color: chartColors.value.success } },
+      { value: apiKeyStatus.value.rate_limited || 0, name: t('限流中'), itemStyle: { color: chartColors.value.warning } },
+      { value: apiKeyStatus.value.circuit_open || 0, name: t('熔断'), itemStyle: { color: chartColors.value.error } },
     ],
   }],
 }))
@@ -178,7 +178,7 @@ async function fetchDashboardData() {
       }
     }
   } catch {
-    error.value = '数据加载失败'
+    error.value = t('数据加载失败')
   } finally {
     loading.value = false
   }
@@ -296,7 +296,7 @@ onUnmounted(() => {
                 :color="stats.queueBacklog > 1000 ? 'error' : 'success'"
                 class="stat-trend"
               >
-                {{ stats.queueBacklog > 1000 ? '告警' : '正常' }}
+                {{ stats.queueBacklog > 1000 ? $t('告警') : $t('正常') }}
               </Tag>
             </template>
           </Statistic>

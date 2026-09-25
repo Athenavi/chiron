@@ -41,9 +41,9 @@ export const TEXT_SIZE_OPTIONS = [
   { label: t('宽大'), value: 18 },
 ]
 export const LEADING_OPTIONS = [
-  { label: '紧', value: 1.6 },
+  { label: t('紧'), value: 1.6 },
   { label: t('标准'), value: 1.75 },
-  { label: '松', value: 2 },
+  { label: t('松'), value: 2 },
 ]
 export const GAP_OPTIONS = [
   { label: t('紧凑'), value: 2 },
@@ -52,7 +52,7 @@ export const GAP_OPTIONS = [
 ]
 export const CONTENT_WIDTH_OPTIONS = [
   { label: t('舒适'), value: 720 },
-  { label: '宽', value: 960 },
+  { label: t('宽'), value: 960 },
   { label: t('超宽'), value: 1200 },
 ]
 

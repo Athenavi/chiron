@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 /**
  * 把会话导出成 Markdown —— 用于「对话 → 知识库」的沉淀。
  *
@@ -9,8 +11,8 @@ import type { ChatItem, TextItem } from '../components/chat/chat-types'
 
 /** 界面上的角色名，导出后是给人读的文档，不用 'user'/'assistant' */
 const ROLE_HEADING: Record<TextItem['role'], string> = {
-  user: '## 用户',
-  assistant: '## 助手',
+  user: t('## 用户'),
+  assistant: t('## 助手'),
 }
 
 export function sessionToMarkdown(items: readonly ChatItem[], title?: string): string {
@@ -22,7 +24,7 @@ export function sessionToMarkdown(items: readonly ChatItem[], title?: string): s
     if (item.kind !== 'text') continue
     const text = (item as TextItem).content?.trim()
     if (!text) continue
-    blocks.push(ROLE_HEADING[(item as TextItem).role] || '## 消息', text)
+    blocks.push(ROLE_HEADING[(item as TextItem).role] || t('## 消息'), text)
   }
 
   if (blocks.length === 0) return ''

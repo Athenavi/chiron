@@ -83,9 +83,11 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 - **谁执行**：CI 流水线或 DBA，用 `requirements-migrate.txt` 的环境在受控窗口执行
   `python -m alembic -c alembic.ini upgrade head`（离线场景可 `--sql` 生成 DDL 审阅后执行）；
 - **迁移链**：`migrations/versions/` 只有**一个**权威基线 `0001_authoritative_baseline`（DDL 取自稳定后的数据库）。
-  此后所有 schema 变更都必须在此基础上追加新的 revision；**单一 head** 是硬要求（分叉会直接报错）。
+  此后所有 schema 变更都必须在此基础上追加新的 revision；**单一 head** 是硬要求（分叉会直接报错），
+  当前 head 以 `python -m alembic -c alembic.ini heads` 为准。
   全新库 `alembic upgrade head`；**已存在的库**（表已齐全、`alembic_version` 仍是旧 revision）执行
-  `alembic stamp 0001_authoritative_baseline` —— 只改版本号、不重放 DDL；
+  `alembic stamp head` —— 只改版本号、不重放 DDL。**不要把此处写死成某个基线**：链上已有更新的迁移时，
+  stamp 到过期 revision 会让 `alembic_version` 与期望 head 不一致，触发下方「校验规则」拒绝启动；
 - **校验规则**：比对 `migrations/versions` 解析出的 head 与数据库 `alembic_version.version_num`；
   不一致 → `FATAL: refusing to start on mismatched schema`（`ALLOW_SCHEMA_DRIFT=true` 放行，用于迁移超前/回滚）；
   迁移链分叉（多个 head）会直接报错，必须在合并后发布；

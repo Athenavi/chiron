@@ -16,9 +16,11 @@ dependencies = [
     # Web 框架
     "fastapi>=0.115.0",
     "uvicorn>=0.34.0",
-    # LLM Provider SDK（自研多 Provider 适配�?    "anthropic>=0.52.0",
+    # LLM Provider SDK（自研多 Provider 适配）
+    "anthropic>=0.52.0",
     "openai>=1.93.0",
-    # 向量数据�?    "pymilvus>=2.5.0",
+    # 向量数据库
+    "pymilvus>=2.5.0",
     "qdrant-client>=1.12.0",
     # PostgreSQL (pgvector)
     "asyncpg>=0.30.0",
@@ -41,7 +43,9 @@ dependencies = [
     "PyJWT>=2.10.0",
     # 日志
     "structlog>=25.4.0",
-    # 可观测�?    "prometheus-client>=0.22.0",
+    # 可观测性（app/observability/metrics.py 顶层 import prometheus_client / psutil）
+    "prometheus-client>=0.22.0",
+    "psutil>=6.0.0",
     "opentelemetry-api>=1.33.0",
     "opentelemetry-sdk>=1.33.0",
     "opentelemetry-exporter-otlp-proto-grpc>=1.33.0",
@@ -51,7 +55,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-# 本地嵌入模型（RAG：配�?LOCAL_EMBEDDING_MODEL 后启用）
+# 本地嵌入模型（RAG：配置 LOCAL_EMBEDDING_MODEL 后启用）
 rag-local = [
     "sentence-transformers>=3.0.0",
 ]

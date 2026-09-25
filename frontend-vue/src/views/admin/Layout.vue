@@ -261,7 +261,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
             type="text"
             class="header-collapse-btn"
             :title="$t('展开或收起导航')"
-            :aria-label="collapsed ? '展开侧边栏' : '收起侧边栏'"
+            :aria-label="collapsed ? $t('展开侧边栏') : $t('收起侧边栏')"
             @click="isMobile ? (drawerOpen = !drawerOpen) : (collapsed = !collapsed)"
           >
             <component :is="isMobile ? (drawerOpen ? MenuUnfoldOutlined : MenuFoldOutlined) : (collapsed ? MenuUnfoldOutlined : MenuFoldOutlined)" />

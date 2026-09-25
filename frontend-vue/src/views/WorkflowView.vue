@@ -50,13 +50,13 @@ function continueInChat(inst: InstanceRecord) {
     const text = typeof out === 'string' ? out : out == null ? '' : JSON.stringify(out)
     if (text) parts.push(`【${nodeId}】\n${text}`)
   }
-  if (inst.error) parts.push(`【错误】\n${inst.error}`)
+  if (inst.error) parts.push(t('【错误】\n{error}', { error: inst.error }))
   if (parts.length === 0) {
     message.warning(t('这条执行记录没有可带入对话的内容'))
     return
   }
   setChatPrefill({
-    title: `工作流执行结果 · ${inst.workflow_name || t('未命名工作流')}`,
+    title: t('工作流执行结果 · {name}', { name: inst.workflow_name || t('未命名工作流') }),
     text: parts.join('\n\n'),
     source: 'workflow',
   })
@@ -143,7 +143,7 @@ const { findNode, addNodes, addEdges, removeNodes, getNodes, getEdges, getSelect
 // ── State ──
 const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
-const workflowName = ref('新建工作流')
+const workflowName = ref(t('新建工作流'))
 const workflowId = ref<string | null>(null)
 const savedWorkflows = ref<GraphRecord[]>([])
 const instances = ref<InstanceRecord[]>([])
@@ -490,7 +490,7 @@ function fromBackendFormat(data: any) {
     type: 'smoothstep',
     animated: true,
   }))
-  workflowName.value = graphDef.name || '未命名工作流'
+  workflowName.value = graphDef.name || t('未命名工作流')
   nodeCounter = nodes.value.length + 10
 }
 
@@ -509,7 +509,7 @@ async function saveWorkflow() {
     message.success(t('工作流已保存'))
     await loadWorkflows()
   } catch (err: any) {
-    message.error('保存失败: ' + (err.response?.data?.error || err.message))
+    message.error(t('保存失败: {error}', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -529,7 +529,7 @@ function loadWorkflow(record: GraphRecord) {
   fromBackendFormat(record.graph_json)
   executionResults.value = {}
   executionLogs.value = []
-  message.success(`已加载: ${record.name}`)
+  message.success(t('已加载: {name}', { name: record.name }))
 }
 
 // ── API: Delete ──
@@ -543,7 +543,7 @@ async function deleteWorkflow(id: string) {
       resetCanvas()
     }
   } catch (err: any) {
-    message.error('删除失败: ' + (err.response?.data?.error || err.message))
+    message.error(t('删除失败: {error}', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -593,7 +593,7 @@ function confirmRunInput() {
 
 async function submitWorkflowRun(input: string) {
   isExecuting.value = true
-  executionLogs.value = ['⏳ 正在提交...']
+  executionLogs.value = [t('⏳ 正在提交...')]
   executionResults.value = {}
   loggedNodes.clear()
   for (const n of getNodes.value) n.data = { ...n.data, execStatus: 'idle' }
@@ -602,12 +602,12 @@ async function submitWorkflowRun(input: string) {
     const initial_state = input.trim() ? { input } : {}
     const resp = await api.post(`/v1/graphs/${workflowId.value}/execute`, { initial_state })
     const instanceId = resp.data?.data?.instance_id || resp.data?.instance_id
-    if (!instanceId) throw new Error('无 instance_id')
+    if (!instanceId) throw new Error(t('无 instance_id'))
     message.info(t('工作流已提交，正在执行…'))
     startStatusPolling(instanceId)
   } catch (err: any) {
     isExecuting.value = false
-    executionLogs.value.push(`❌ 提交失败: ${err.response?.data?.error || err.message}`)
+    executionLogs.value.push(t('❌ 提交失败: {error}', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -619,12 +619,12 @@ function startStatusPolling(instanceId: string) {
       const data = resp.data?.data || resp.data
       applyExecutionStatus(data)
       if (data.status === 'completed') {
-        executionLogs.value.push('✅ 执行完成')
+        executionLogs.value.push(t('✅ 执行完成'))
         isExecuting.value = false
         stopStatusPolling()
         await loadInstances()
       } else if (data.status === 'error') {
-        executionLogs.value.push(`❌ 执行失败: ${data.error || ''}`)
+        executionLogs.value.push(t('❌ 执行失败: {error}', { error: data.error || '' }))
         isExecuting.value = false
         stopStatusPolling()
         await loadInstances()
@@ -632,7 +632,7 @@ function startStatusPolling(instanceId: string) {
     } catch {
       stopStatusPolling()
       isExecuting.value = false
-      executionLogs.value.push('⚠️ 状态查询失败')
+      executionLogs.value.push(t('⚠️ 状态查询失败'))
     }
   }, 2000)
 }
@@ -668,7 +668,7 @@ async function loadInstances() {
 function resetCanvas() {
   nodes.value = []
   edges.value = []
-  workflowName.value = '新建工作流'
+  workflowName.value = t('新建工作流')
   workflowId.value = null
   selectedNode.value = null
   showPanel.value = false
@@ -679,7 +679,7 @@ function resetCanvas() {
 
 // ── 互联互通：运行到对话（有 id 传 id，未保存则传画布名称，由后端兼容）──
 function runInChat() {
-  const value = workflowId.value || workflowName.value || '未命名工作流'
+  const value = workflowId.value || workflowName.value || t('未命名工作流')
   router.push({ path: '/chat', query: { workflow: value, mode: 'workflow' } })
 }
 
@@ -711,23 +711,23 @@ function templateEdgeCount(t: TemplateItem): number {
   return Array.isArray(t.payload?.edges) ? t.payload.edges.length : 0
 }
 
-async function useWorkflowTemplate(t: TemplateItem) {
-  templateUsingId.value = t.id
+async function useWorkflowTemplate(tpl: TemplateItem) {
+  templateUsingId.value = tpl.id
   try {
-    const resp = await useTemplate(t.id)
+    const resp = await useTemplate(tpl.id)
     // 兼容直接返回 {payload,...} 或 {data:{payload,...}} 包装
     const body = resp?.data && typeof resp.data === 'object' && resp.data.payload ? resp.data : resp
     const payload = body?.payload
-    if (!payload || !Array.isArray(payload.nodes)) throw new Error('模板数据不完整')
+    if (!payload || !Array.isArray(payload.nodes)) throw new Error(t('模板数据不完整'))
     // 替换当前画布：模板只加载不落库，可编辑后手动保存
     resetCanvas()
-    fromBackendFormat({ name: body?.name || t.name, nodes: payload.nodes, edges: payload.edges || [] })
-    message.success(`已加载模板「${body?.name || t.name}」，可编辑后保存`)
+    fromBackendFormat({ name: body?.name || tpl.name, nodes: payload.nodes, edges: payload.edges || [] })
+    message.success(t('已加载模板「{name}」，可编辑后保存', { name: body?.name || tpl.name }))
     activeView.value = 'canvas'
     await nextTick()
     try { fitView({ padding: 0.15 }) } catch { /* 忽略布局异常 */ }
   } catch (e: any) {
-    message.error('加载模板失败: ' + (e?.response?.data?.error || e?.message || ''))
+    message.error(t('加载模板失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     templateUsingId.value = null
   }
@@ -781,7 +781,7 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ isExecuting ? '执行中…' : '执行' }}
+          {{ isExecuting ? $t('执行中…') : $t('执行') }}
         </Button>
         <Button
           size="small"
@@ -802,7 +802,7 @@ function statusClass(nodeProps: any): string {
         </Button>
         <Button
           size="small"
-          title="自动布局 (按层排列)"
+          :title="$t('自动布局 (按层排列)')"
           @click="autoLayout"
         >
           <template #icon>
@@ -811,7 +811,7 @@ function statusClass(nodeProps: any): string {
         </Button>
         <Button
           size="small"
-          title="复制选中节点 (Ctrl+D)"
+          :title="$t('复制选中节点 (Ctrl+D)')"
           :disabled="!selectedNode"
           @click="duplicateSelectedNode"
         >
@@ -915,7 +915,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-green-fill);"
               >
-                <span>📥 {{ nodeProps.data?.label || '输入' }}</span>
+                <span>📥 {{ nodeProps.data?.label || $t('输入') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">input</span>
@@ -971,7 +971,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-blue-fill);"
               >
-                <span>🔧 {{ nodeProps.data?.label || '工具' }}</span>
+                <span>🔧 {{ nodeProps.data?.label || $t('工具') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">tool</span>
@@ -1001,7 +1001,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-pink-fill);"
               >
-                <span>🎯 {{ nodeProps.data?.label || '技能' }}</span>
+                <span>🎯 {{ nodeProps.data?.label || $t('技能') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">skill</span>
@@ -1031,7 +1031,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-teal-fill);"
               >
-                <span>📚 {{ nodeProps.data?.label || '知识库' }}</span>
+                <span>📚 {{ nodeProps.data?.label || $t('知识库') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">knowledge</span>
@@ -1091,7 +1091,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-amber-fill);"
               >
-                <span>🔀 {{ nodeProps.data?.label || '条件' }}</span>
+                <span>🔀 {{ nodeProps.data?.label || $t('条件') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">condition</span>
@@ -1125,7 +1125,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-gray-fill);"
               >
-                <span>📤 {{ nodeProps.data?.label || '输出' }}</span>
+                <span>📤 {{ nodeProps.data?.label || $t('输出') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">output</span>
@@ -1185,7 +1185,7 @@ function statusClass(nodeProps: any): string {
                 <Input.TextArea
                   v-model:value="editUserMessage"
                   :rows="3"
-                  placeholder="使用 {{变量名}} 引用上游输出或状态变量"
+                  :placeholder="$t('使用 {ph} 引用上游输出或状态变量', { ph: '{{变量名}}' })"
                 />
               </FormItem>
             </template>
@@ -1313,7 +1313,7 @@ function statusClass(nodeProps: any): string {
                 <Input.TextArea
                   v-model:value="editAgentTask"
                   :rows="3"
-                  placeholder="子任务描述；支持 $节点ID 引用前置节点输出（如 $llm_1），留空则使用前置输出"
+                  :placeholder="$t('子任务描述；支持 $节点ID 引用前置节点输出（如 $llm_1），留空则使用前置输出')"
                 />
               </FormItem>
             </template>
@@ -1324,13 +1324,13 @@ function statusClass(nodeProps: any): string {
                 <Input.TextArea
                   v-model:value="editCondition"
                   :rows="3"
-                  placeholder="如: state.status == 'ok'（对上游输出求值）"
+                  :placeholder="$t('如: state.status == \'ok\'（对上游输出求值）')"
                 />
               </FormItem>
               <FormItem :label="$t('输入变量引用')">
                 <Input
                   v-model:value="editVariable"
-                  placeholder="$变量名（空 = 上游输出）"
+                  :placeholder="$t('$变量名（空 = 上游输出）')"
                 />
               </FormItem>
             </template>
@@ -1485,7 +1485,7 @@ function statusClass(nodeProps: any): string {
         >
           <div class="wf-item-info">
             <div class="wf-item-name">
-              {{ wf.name || '未命名工作流' }}
+              {{ wf.name || $t('未命名工作流') }}
             </div>
             <div class="wf-item-time">
               {{ formatDate(wf.updated_at) || formatDate(wf.created_at) }}
@@ -1494,7 +1494,7 @@ function statusClass(nodeProps: any): string {
               v-if="agentsUsingWorkflow(wf.id).length"
               class="wf-item-time"
             >
-              被 {{ agentsUsingWorkflow(wf.id).length }} 个 Agent 装配
+              {{ $t('被 {n} 个 Agent 装配', { n: agentsUsingWorkflow(wf.id).length }) }}
             </div>
           </div>
           <Popconfirm
@@ -1525,8 +1525,7 @@ function statusClass(nodeProps: any): string {
       @ok="confirmRunInput"
     >
       <p class="run-input-hint">
-        这段文本会作为图中 input 节点的输出，供下游节点（如知识库检索的 query）使用；
-        留空则各节点按自身配置继续。
+        {{ $t('这段文本会作为图中 input 节点的输出，供下游节点（如知识库检索的 query）使用；留空则各节点按自身配置继续。') }}
       </p>
       <Input.TextArea
         v-model:value="runInputValue"
@@ -1540,7 +1539,7 @@ function statusClass(nodeProps: any): string {
       v-model:open="attachToAgentOpen"
       kind="workflow"
       :value="workflowId || ''"
-      :label="workflowName || '当前工作流'"
+      :label="workflowName || $t('当前工作流')"
     />
   </div>
 </template>

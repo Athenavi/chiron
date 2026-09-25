@@ -234,7 +234,7 @@ async function runQuickCommand() {
   <div class="app-shell">
     <!-- 左上角浮动品牌胶囊 -->
     <header
-      :title="currentLabel || '导航菜单'"
+      :title="currentLabel || $t('导航菜单')"
       class="topbar"
     >
       <Dropdown

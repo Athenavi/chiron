@@ -28,7 +28,7 @@ function passwordComplexityError(pw: string): string {
   if (!/[A-Z]/.test(pw)) return t('密码必须包含大写字母')
   if (!/[a-z]/.test(pw)) return t('密码必须包含小写字母')
   if (!/\d/.test(pw)) return t('密码必须包含数字')
-  if (!/[^A-Za-z0-9]/.test(pw)) return t('密码必须包含特殊字符（如 !@#$%^&*）')
+  if (!/[^A-Za-z0-9]/.test(pw)) return t('密码必须包含特殊字符（如 {chars}）', { chars: '!@#$%^&*' })
   return ''
 }
 

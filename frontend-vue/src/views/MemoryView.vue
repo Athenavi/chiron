@@ -165,7 +165,7 @@ async function handleSave() {
     } else {
       const res = await upsertMemory({ slot, key, value, confidence, source })
       if (res.duplicate_of) {
-        message.warning(`检测到相似记忆「${res.duplicate_of.key}」，可在整理时自动合并`)
+        message.warning(t('检测到相似记忆「{key}」，可在整理时自动合并', { key: res.duplicate_of.key }))
       } else {
         message.success(t('已保存记忆'))
       }
@@ -192,7 +192,7 @@ async function handleDelete(id: string) {
 async function handleClearAll() {
   try {
     const res = await clearMemory()
-    message.success(`已清空 ${res.deleted} 条记忆`)
+    message.success(t('已清空 {n} 条记忆', { n: res.deleted }))
     await loadProfile()
   } catch (e: any) {
     message.error(e.response?.data?.error || t('清空失败'))
@@ -227,10 +227,10 @@ async function pollOrganize() {
         if (st.result) {
           const r = st.result
           const parts: string[] = []
-          if (r.merged) parts.push(`合并 ${r.merged} 条重复`)
-          if (r.backfilled) parts.push(`补齐 ${r.backfilled} 条向量`)
-          if (r.archived) parts.push(`归档 ${r.archived} 条`)
-          if (r.evicted) parts.push(`淘汰 ${r.evicted} 条`)
+          if (r.merged) parts.push(t('合并 {n} 条重复', { n: r.merged }))
+          if (r.backfilled) parts.push(t('补齐 {n} 条向量', { n: r.backfilled }))
+          if (r.archived) parts.push(t('归档 {n} 条', { n: r.archived }))
+          if (r.evicted) parts.push(t('淘汰 {n} 条', { n: r.evicted }))
           if (parts.length) message.success(t('整理完成：') + parts.join('，'))
           else message.success(t('整理完成：无需调整'))
           await loadProfile()
@@ -351,8 +351,8 @@ function pct(n: number): string {
       <Space>
         <Switch
           :checked="includeArchived"
-          checked-children="含归档"
-          un-checked-children="仅活跃"
+          :checked-children="$t('含归档')"
+          :un-checked-children="$t('仅活跃')"
           @change="onArchivedChange"
         />
         <Button
@@ -391,7 +391,7 @@ function pct(n: number): string {
       v-if="organize.running"
       type="info"
       show-icon
-      message="正在后台整理记忆（去重 / 归档 / 补齐向量）…"
+      :message="$t('正在后台整理记忆（去重 / 归档 / 补齐向量）…')"
       style="margin-bottom: 16px"
     />
     <Alert
@@ -399,7 +399,7 @@ function pct(n: number): string {
       type="success"
       show-icon
       style="margin-bottom: 16px"
-      :message="`上次整理：合并 ${organize.result.merged} · 补齐 ${organize.result.backfilled} · 归档 ${organize.result.archived} · 淘汰 ${organize.result.evicted}`"
+      :message="$t('上次整理：合并 {merged} · 补齐 {backfilled} · 归档 {archived} · 淘汰 {evicted}', { merged: organize.result.merged, backfilled: organize.result.backfilled, archived: organize.result.archived, evicted: organize.result.evicted })"
     />
 
     <!-- 语义检索 -->
@@ -440,7 +440,7 @@ function pct(n: number): string {
           v-if="searchResults !== null"
           :color="searchingMode === 'semantic' ? 'blue' : 'orange'"
         >
-          {{ searchingMode === 'semantic' ? '语义模式' : '关键词模式' }}
+          {{ searchingMode === 'semantic' ? $t('语义模式') : $t('关键词模式') }}
         </Tag>
       </Space>
     </Card>
@@ -454,11 +454,11 @@ function pct(n: number): string {
         v-if="searchResults.length"
         class="result-section-title"
       >
-        记忆条目（{{ searchResults.length }}）
+        {{ $t('记忆条目（{n}）', { n: searchResults.length }) }}
       </h3>
       <List
         :data-source="searchResults"
-        :locale="{ emptyText: '未找到相似记忆' }"
+        :locale="{ emptyText: $t('未找到相似记忆') }"
       >
         <template #renderItem="{ item }">
           <List.Item>
@@ -472,7 +472,7 @@ function pct(n: number): string {
                   {{ slotLabel(item.slot) }}
                 </Tag>
                 <span class="entry-key">{{ item.key }}</span>
-                <Tooltip :title="`相关度 ${pct(item.similarity)} · 重排序分 ${item.score.toFixed(2)}`">
+                <Tooltip :title="$t('相关度 {rel} · 重排序分 {score}', { rel: pct(item.similarity), score: item.score.toFixed(2) })">
                   <Tag color="green">
                     {{ pct(item.score) }}
                   </Tag>
@@ -490,11 +490,11 @@ function pct(n: number): string {
         v-if="searchSummaries.length"
         class="result-section-title"
       >
-        历史对话（{{ searchSummaries.length }}）
+        {{ $t('历史对话（{n}）', { n: searchSummaries.length }) }}
       </h3>
       <List
         :data-source="searchSummaries"
-        :locale="{ emptyText: '未找到相关历史对话' }"
+        :locale="{ emptyText: $t('未找到相关历史对话') }"
       >
         <template #renderItem="{ item }">
           <List.Item>
@@ -539,7 +539,7 @@ function pct(n: number): string {
       <Tabs v-model:active-key="activeTab">
         <TabPane key="all">
           <template #tab>
-            全部 ({{ total }})
+            {{ $t('全部 ({n})', { n: total }) }}
           </template>
         </TabPane>
         <TabPane
@@ -552,12 +552,12 @@ function pct(n: number): string {
         </TabPane>
         <TabPane key="conflicts">
           <template #tab>
-            待裁决 ({{ conflicts.length }})
+            {{ $t('待裁决 ({n})', { n: conflicts.length }) }}
           </template>
         </TabPane>
         <TabPane key="summaries">
           <template #tab>
-            摘要 ({{ summaries.length }})
+            {{ $t('摘要 ({n})', { n: summaries.length }) }}
           </template>
         </TabPane>
       </Tabs>
@@ -608,7 +608,7 @@ function pct(n: number): string {
                 </Tag>
                 <Tooltip :title="$t('置信度（整理时高置信条目优先保留）')">
                   <Tag color="blue">
-                    置信 {{ item.confidence }}
+                    {{ $t('置信 {n}', { n: item.confidence }) }}
                   </Tag>
                 </Tooltip>
                 <Space class="entry-actions">
@@ -655,7 +655,7 @@ function pct(n: number): string {
                 {{ item.value }}
               </div>
               <div class="entry-meta">
-                访问 {{ item.access_count }} 次 · 更新于 {{ item.updated_at?.slice(0, 10) }}
+                {{ $t('访问 {n} 次 · 更新于 {date}', { n: item.access_count, date: item.updated_at?.slice(0, 10) }) }}
               </div>
             </Card>
           </List.Item>
@@ -725,7 +725,7 @@ function pct(n: number): string {
     <!-- 新建 / 编辑弹窗 -->
     <Modal
       v-model:open="formVisible"
-      :title="editing ? '编辑记忆' : '新建记忆'"
+      :title="editing ? $t('编辑记忆') : $t('新建记忆')"
       :confirm-loading="saving"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"
@@ -762,7 +762,7 @@ function pct(n: number): string {
         />
       </div>
       <div class="form-row">
-        <label>置信度 {{ form.confidence }}</label>
+        <label>{{ $t('置信度 {n}', { n: form.confidence }) }}</label>
         <Slider
           v-model:value="form.confidence"
           :min="0"

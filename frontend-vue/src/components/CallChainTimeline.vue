@@ -27,7 +27,7 @@
               stroke-width="2"
             />
           </svg>
-          工具调用链 ({{ spanCount }} 个工具, 总耗时 {{ totalDurationMs }}ms)
+          {{ $t('工具调用链 ({n} 个工具, 总耗时 {ms}ms)', { n: spanCount, ms: totalDurationMs }) }}
         </span>
         <span class="header-icon">{{ isExpanded ? '▼' : '▶' }}</span>
       </div>
@@ -66,7 +66,7 @@
               class="details-toggle"
               @click.stop="span.showDetails = !span.showDetails"
             >
-              {{ span.showDetails ? '收起' : '详情' }}
+              {{ span.showDetails ? $t('收起') : $t('详情') }}
             </button>
           </div>
         </div>
@@ -74,7 +74,7 @@
         <!-- 完成事件 -->
         <div class="timeline-node complete">
           <CheckCircleOutlined style="color: var(--success)" />
-          <span>推理完成 (总耗时 {{ totalDurationMs }}ms)</span>
+          <span>{{ $t('推理完成 (总耗时 {ms}ms)', { ms: totalDurationMs }) }}</span>
         </div>
       </div>
     </CollapseTransition>
@@ -86,6 +86,9 @@ import { ref, computed, watch } from 'vue'
 import { CheckCircleOutlined } from '@ant-design/icons-vue'
 import CollapseTransition from '@/components/CollapseTransition.vue'
 import { api } from '../api'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 interface TraceSpan {
   trace_id: string
@@ -176,7 +179,7 @@ function getSpanDisplayName(span: TraceSpan): string {
   if (span.span_name === 'llm_call') {
     const model = span.metadata?.model || 'unknown'
     const inputTokens = span.metadata?.input_tokens || 0
-    return `LLM 调用 (${model}, ${inputTokens} tokens)`
+    return t('LLM 调用 ({model}, {tokens} tokens)', { model, tokens: inputTokens })
   }
   if (span.span_name.startsWith('tool:')) {
     const toolName = span.span_name.replace('tool:', '')

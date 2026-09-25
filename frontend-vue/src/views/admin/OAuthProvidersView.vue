@@ -6,7 +6,7 @@
  * - 人机验证：v1/ent/captcha/config（turnstile/recaptcha/hcaptcha/tencent/custom）
  * - 短信服务：v1/ent/sms/config（aliyun/tencent/custom，验证码登录）
  */
-import { ref, reactive, onMounted } from 'vue'
+import { computed, onMounted, reactive, ref } from 'vue'
 import {
   Card, Table, Button, Modal, Form, FormItem, Input, Switch, Select, InputNumber,
   message, Popconfirm, Tag, Alert,
@@ -48,15 +48,15 @@ const columns = [
   { title: t('操作'), key: 'actions', width: 160 },
 ]
 
-const providerTypes = [
+const providerTypes = computed(() => [
   { value: 'google', label: 'Google (OIDC)' },
   { value: 'github', label: 'GitHub (OAuth2)' },
-  { value: 'wechat', label: '微信 (OAuth2)' },
-  { value: 'dingtalk', label: '钉钉 (OAuth2)' },
-  { value: 'feishu', label: '飞书 (OAuth2)' },
+  { value: 'wechat', label: t('微信 (OAuth2)') },
+  { value: 'dingtalk', label: t('钉钉 (OAuth2)') },
+  { value: 'feishu', label: t('飞书 (OAuth2)') },
   { value: 'qq', label: 'QQ (OAuth2)' },
   { value: 'custom', label: t('自定义') },
-]
+])
 
 // ── 新建 / 编辑表单 ──
 
@@ -357,7 +357,7 @@ onMounted(() => {
         type="info"
         show-icon
         style="margin-bottom: 16px"
-        message="选择内置类型（GitHub/微信/钉钉等）时授权端点自动套用模板；自定义端点留空即可。"
+        :message="$t('选择内置类型（GitHub/微信/钉钉等）时授权端点自动套用模板；自定义端点留空即可。')"
       />
 
       <Table
@@ -376,12 +376,12 @@ onMounted(() => {
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'enabled'">
             <Tag :color="record.enabled ? 'green' : 'default'">
-              {{ record.enabled ? '启用' : '停用' }}
+              {{ record.enabled ? $t('启用') : $t('停用') }}
             </Tag>
           </template>
           <template v-else-if="column.key === 'auto_provision'">
             <Tag :color="record.auto_provision ? 'blue' : 'default'">
-              {{ record.auto_provision ? '是' : '否' }}
+              {{ record.auto_provision ? $t('是') : $t('否') }}
             </Tag>
           </template>
           <template v-else-if="column.key === 'protocol'">
@@ -424,7 +424,7 @@ onMounted(() => {
         type="info"
         show-icon
         style="margin-bottom: 16px"
-        message="启用后登录/注册必须携带验证码 token；未启用时同 IP 连续失败 5 次也会自动升级为强制验证码，30 次直接拒绝。"
+        :message="$t('启用后登录/注册必须携带验证码 token；未启用时同 IP 连续失败 5 次也会自动升级为强制验证码，30 次直接拒绝。')"
       />
       <Form
         layout="vertical"
@@ -484,7 +484,7 @@ onMounted(() => {
         type="info"
         show-icon
         style="margin-bottom: 16px"
-        message="启用后登录页出现「短信登录」标签页，个人中心可绑定手机号；验证码发送有冷却与每日上限防滥用。AccessKeySecret 加密存储、回显脱敏。"
+        :message="$t('启用后登录页出现「短信登录」标签页，个人中心可绑定手机号；验证码发送有冷却与每日上限防滥用。AccessKeySecret 加密存储、回显脱敏。')"
       />
       <Form
         layout="vertical"
@@ -580,7 +580,7 @@ onMounted(() => {
 
     <Modal
       v-model:open="modalVisible"
-      :title="editingId ? '编辑 Provider' : '新建 Provider'"
+      :title="editingId ? $t('编辑 Provider') : $t('新建 Provider')"
       :confirm-loading="saving"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"
@@ -605,8 +605,8 @@ onMounted(() => {
             <Select
               v-model:value="providerForm.protocol"
               :options="[
-                { value: 'oidc', label: 'OIDC（标准发现）' },
-                { value: 'oauth2', label: 'OAuth2（显式端点）' },
+                { value: 'oidc', label: $t('OIDC（标准发现）') },
+                { value: 'oauth2', label: $t('OAuth2（显式端点）') },
               ]"
             />
           </FormItem>

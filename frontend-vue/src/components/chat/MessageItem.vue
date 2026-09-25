@@ -63,7 +63,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (kbId) {
     chips.push({
       key: 'kb', kind: 'kb', label: t('知识库'),
-      title: `来源知识库 #${kbId}，点击打开`,
+      title: t('来源知识库 #{id}，点击打开', { id: kbId }),
       go: () => router.push(`/knowledge/${encodeURIComponent(kbId)}`),
     })
   }
@@ -71,7 +71,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (wfId) {
     chips.push({
       key: 'workflow', kind: 'workflow', label: t('工作流'),
-      title: `来源工作流 ${wfId}，点击打开`,
+      title: t('来源工作流 {id}，点击打开', { id: wfId }),
       go: () => router.push({ path: '/workflow', query: { id: wfId } }),
     })
   }
@@ -79,7 +79,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (agentId) {
     chips.push({
       key: 'agent', kind: 'agent', label: 'Agent',
-      title: `来源 Agent #${agentId}，点击打开`,
+      title: t('来源 Agent #{id}，点击打开', { id: agentId }),
       go: () => router.push('/agents'),
     })
   }
@@ -89,7 +89,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (traceId) {
     chips.push({
       key: 'trace', kind: 'trace', label: t('追踪'),
-      title: `Trace ${traceId}，点击复制`,
+      title: t('Trace {id}，点击复制', { id: traceId }),
       go: () => {
         navigator.clipboard.writeText(traceId)
           .then(() => message.success(t('Trace ID 已复制')))
@@ -205,7 +205,7 @@ const isLongMessage = computed(() => {
 const displayContent = computed(() => {
   if (props.item.kind !== 'text') return ''
   if (isLongMessage.value && collapsed.value) {
-    return props.item.content.slice(0, COLLAPSE_PREVIEW) + '\n\n... (已折叠，点击展开全部)'
+    return props.item.content.slice(0, COLLAPSE_PREVIEW) + '\n\n' + t('... (已折叠，点击展开全部)')
   }
   return props.item.content
 })
@@ -216,7 +216,7 @@ const feedback = ref<'up' | 'down' | null>(null)
 function setFeedback(dir: 'up' | 'down') {
   feedback.value = feedback.value === dir ? null : dir
   // 设计说明：反馈上报留待模型评估链路接入后端 API
-  if (feedback.value) message.success(feedback.value === 'up' ? '感谢好评' : '已记录您的反馈')
+  if (feedback.value) message.success(feedback.value === 'up' ? t('感谢好评') : t('已记录您的反馈'))
 }
 
 // ── Markdown 引擎（迁移自原 ChatView） ──
@@ -249,10 +249,10 @@ md.renderer.rules.fence = (tokens: any[], idx: number) => {
   const encoded = encodeURIComponent(code)
   const lineCount = code.replace(/\n$/, '').split('\n').length
   const collapsible = lineCount > CODE_COLLAPSE_LINES
-  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${lineCount} 行</span><button class="code-copy-btn" data-code="${encoded}">复制</button></div>`
+  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('{n} 行', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('复制')}</button></div>`
   const body = `<pre><code class="language-${safeLang}" data-lang="${safeLang}">${md.utils.escapeHtml(code)}</code></pre>`
   const toggle = collapsible
-    ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">展开全部（共 ${lineCount} 行）</button>`
+    ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">${t('展开全部（共 {n} 行）', { n: lineCount })}</button>`
     : ''
   return `<div class="code-block-wrapper"${collapsible ? ' data-collapsed="1"' : ''}>${header}${body}${toggle}</div>`
 }
@@ -348,7 +348,7 @@ function handleMsgClick(e: MouseEvent) {
       const collapsed = box.dataset.collapsed === '1'
       box.dataset.collapsed = collapsed ? '0' : '1'
       const lines = toggle.dataset.lines || ''
-      toggle.textContent = collapsed ? `收起（共 ${lines} 行）` : `展开全部（共 ${lines} 行）`
+      toggle.textContent = collapsed ? t('收起（共 {n} 行）', { n: lines }) : t('展开全部（共 {n} 行）', { n: lines })
     }
     return
   }
@@ -357,8 +357,8 @@ function handleMsgClick(e: MouseEvent) {
     const code = decodeURIComponent(btn.dataset.code || '')
     if (!code) return
     navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = '已复制'
-      setTimeout(() => { btn.textContent = '复制' }, 2000)
+      btn.textContent = t('已复制')
+      setTimeout(() => { btn.textContent = t('复制') }, 2000)
     }).catch(() => { /* clipboard not available */ })
     return
   }
@@ -458,7 +458,7 @@ onUpdated(enhanceContent)
           type="button"
           @click.stop="collapsed = !collapsed"
         >
-          {{ collapsed ? '展开全部' : '收起' }}
+          {{ collapsed ? $t('展开全部') : $t('收起') }}
         </button>
         <!-- 附件展示：图片内联，文件显示卡片 -->
         <div
@@ -534,7 +534,7 @@ onUpdated(enhanceContent)
           v-if="(item as TextItem).error"
           class="msg-error-banner"
         >
-          <span class="error-text">发送失败：{{ (item as TextItem).errorMsg || '网络错误' }}</span>
+          <span class="error-text">{{ $t('发送失败：{msg}', { msg: (item as TextItem).errorMsg || $t('网络错误') }) }}</span>
           <button
             class="retry-btn"
             type="button"
@@ -602,7 +602,7 @@ onUpdated(enhanceContent)
               class="msg-action"
               type="button"
               :class="{ active: feedback === 'up' }"
-              :title="feedback === 'up' ? '取消好评' : '好评'"
+              :title="feedback === 'up' ? $t('取消好评') : $t('好评')"
               @click.stop="setFeedback('up')"
             >
               <LikeFilled v-if="feedback === 'up'" />
@@ -612,7 +612,7 @@ onUpdated(enhanceContent)
               class="msg-action"
               type="button"
               :class="{ active: feedback === 'down' }"
-              :title="feedback === 'down' ? '取消差评' : '差评'"
+              :title="feedback === 'down' ? $t('取消差评') : $t('差评')"
               @click.stop="setFeedback('down')"
             >
               <DislikeFilled v-if="feedback === 'down'" />
@@ -652,7 +652,7 @@ onUpdated(enhanceContent)
     class="turn-stats"
   >
     <span v-if="item.inputTokens || item.outputTokens || item.durationSec">
-      <template v-if="item.durationSec">耗时 {{ item.durationSec }}s · </template>
+      <template v-if="item.durationSec">{{ $t('耗时 {n}s', { n: item.durationSec }) }} · </template>
       tokens: {{ item.inputTokens }} in / {{ item.outputTokens }} out
     </span>
   </div>

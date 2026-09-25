@@ -131,11 +131,17 @@ const WRITE_TOOLS = new Set(`write_file git_commit`.split(/\s+/))
 const EDIT_TOOLS = new Set(`edit_file skill_install skill_generate mode_edit remember forget`.split(/\s+/))
 const JOB_TOOLS = new Set(`run_in_background job_output job_kill`.split(/\s+/))
 
-const GROUP_TITLES: Record<ToolGroupKind, string> = {
-  explore: '读取与检索',
-  modify: '修改',
-  delegate: '委派',
-  shell: '命令与浏览器',
+/**
+ * 分组标题：写成**函数**而不是常量表 —— 常量表在模块加载时求值一次，语言切换后
+ * 折叠标题会一直停在旧语言（本模块的 `t` 来自非组件入口，本身不具响应式）。
+ */
+function groupTitle(kind: ToolGroupKind): string {
+  switch (kind) {
+    case 'explore': return t('读取与检索')
+    case 'modify': return t('修改')
+    case 'delegate': return t('委派')
+    case 'shell': return t('命令与浏览器')
+  }
 }
 
 export function toolGroupKind(name: string): ToolGroupKind {
@@ -168,28 +174,28 @@ export function toolGroupSummary(kind: ToolGroupKind, names: readonly string[]):
   if (kind === 'explore') {
     const read = countIn(names, READ_TOOLS)
     const search = countIn(names, SEARCH_TOOLS)
-    if (read) parts.push(`读取 ${read}`)
-    if (search) parts.push(`搜索 ${search}`)
+    if (read) parts.push(t('读取 {n}', { n: read }))
+    if (search) parts.push(t('搜索 {n}', { n: search }))
     labelled = read + search
   } else if (kind === 'modify') {
     const write = countIn(names, WRITE_TOOLS)
     const edit = countIn(names, EDIT_TOOLS)
-    if (write) parts.push(`写入 ${write}`)
-    if (edit) parts.push(`编辑 ${edit}`)
+    if (write) parts.push(t('写入 {n}', { n: write }))
+    if (edit) parts.push(t('编辑 {n}', { n: edit }))
     labelled = write + edit
   } else if (kind === 'delegate') {
     const delegated = countIn(names, DELEGATE_TOOLS)
-    if (delegated) parts.push(`委派 ${delegated}`)
+    if (delegated) parts.push(t('委派 {n}', { n: delegated }))
     labelled = delegated
   } else {
     const jobs = countIn(names, JOB_TOOLS)
     const command = countIn(names, SHELL_TOOLS) - jobs
-    if (command) parts.push(`命令 ${command}`)
-    if (jobs) parts.push(`作业 ${jobs}`)
+    if (command) parts.push(t('命令 {n}', { n: command }))
+    if (jobs) parts.push(t('作业 {n}', { n: jobs }))
     labelled = command + jobs
   }
   const other = names.length - labelled
-  if (other > 0) parts.push(`其它 ${other}`)
+  if (other > 0) parts.push(t('其它 {n}', { n: other }))
   return parts.join(' · ')
 }
 
@@ -205,9 +211,9 @@ function turnSummary(items: readonly ChatItem[], from: number, to: number): stri
     else if (item.kind === 'text' && item.role === 'assistant') text++
   }
   const parts: string[] = []
-  if (thinking) parts.push(`思考 ×${thinking}`)
-  if (tools) parts.push(`工具 ×${tools}`)
-  if (text) parts.push('正文')
+  if (thinking) parts.push(t('思考 ×{n}', { n: thinking }))
+  if (tools) parts.push(t('工具 ×{n}', { n: tools }))
+  if (text) parts.push(t('正文'))
   return parts.join(' · ')
 }
 
@@ -383,7 +389,7 @@ export function projectTranscript(input: ProjectionInput): ProjectionResult {
               scope: 'tool_group',
               group: group.kind,
               fold: group.key,
-              title: GROUP_TITLES[group.kind],
+              title: groupTitle(group.kind),
               summary: toolGroupSummary(group.kind, group.names),
               open,
               status: active ? 'running' : 'done',

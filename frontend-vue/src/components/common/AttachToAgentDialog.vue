@@ -32,12 +32,12 @@ const emit = defineEmits<{
 }>()
 
 /** 类型 → 展示名（标题与提示共用，避免两处各写一份三元表达式） */
-const SUBJECT_LABEL: Record<AttachKind, string> = {
-  kb: '知识库',
-  skill: '技能',
-  plugin: '插件',
-  workflow: '工作流',
-}
+const SUBJECT_LABEL = computed<Record<AttachKind, string>>(() => ({
+  kb: t('知识库'),
+  skill: t('技能'),
+  plugin: t('插件'),
+  workflow: t('工作流'),
+}))
 
 interface AgentOption {
   id: string
@@ -105,7 +105,7 @@ async function attach() {
           : 'plugins'
       await updateAgent(target.id, { [field]: next })
     }
-    message.success(`已装配到「${target.name}」`)
+    message.success(t('已装配到「{name}」', { name: target.name }))
     emit('attached', target.id)
     emit('update:open', false)
   } catch (e: any) {
@@ -155,8 +155,8 @@ async function attach() {
         class="attach-hint"
       >
         {{ kind === 'kb'
-          ? '知识库是单值：会覆盖该 Agent 原有的默认知识库。'
-          : `${SUBJECT_LABEL[kind]}会追加到该 Agent 的已有绑定，不覆盖其它项。` }}
+          ? $t('知识库是单值：会覆盖该 Agent 原有的默认知识库。')
+          : $t('{subject}会追加到该 Agent 的已有绑定，不覆盖其它项。', { subject: SUBJECT_LABEL[kind] }) }}
       </p>
     </div>
   </Modal>

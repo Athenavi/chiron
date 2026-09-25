@@ -1,7 +1,7 @@
 {
-  "name": "Chiron �?AI Agent 工作平台",
+  "name": "Chiron — AI Agent 工作平台",
   "short_name": "Chiron",
-  "description": "多租�?AI Agent 工作平台：对话、Agent、工作流、技能、知识库、插件六大工作台互联互�?,
+  "description": "多租户 AI Agent 工作平台：对话、Agent、工作流、技能、知识库、插件六大工作台互联互通",
   "start_url": "/",
   "display": "standalone",
   "background_color": "#151517",

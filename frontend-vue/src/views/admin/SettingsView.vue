@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { Card, Row, Col, Form, FormItem, InputNumber, Input, InputPassword, Select, Button, Switch, Slider, message } from 'ant-design-vue'
 import { saveSettings, getSettings, listLlmProviders } from '@/api/admin'
 
@@ -181,13 +181,15 @@ http {
     }
 }`
 
-const kernelConfig = `# /etc/sysctl.conf
+// kernelConfig 是一段**供管理员复制**的 shell 片段，其中的 `#` 注释也要跟随界面语言，
+// 所以拆成 `${t(...)}` 插值并收进 computed（整段包 t() 不行：键含换行会撑破 legacy.ts 的字符串）。
+const kernelConfig = computed(() => `# /etc/sysctl.conf
 
-# 文件描述符
+${t('# 文件描述符')}
 fs.file-max = 2097152
 fs.nr_open = 2097152
 
-# TCP 连接
+${t('# TCP 连接')}
 net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
 net.ipv4.tcp_tw_reuse = 1
@@ -196,21 +198,21 @@ net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_intvl = 30
 net.ipv4.tcp_keepalive_probes = 3
 
-# 端口范围
+${t('# 端口范围')}
 net.ipv4.ip_local_port_range = 1024 65535
 
-# 内存
+${t('# 内存')}
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
 net.ipv4.tcp_wmem = 4096 65536 16777216
 
-# 应用配置
+${t('# 应用配置')}
 # /etc/security/limits.conf
 * soft nofile 2097152
 * hard nofile 2097152
 * soft nproc 65535
-* hard nproc 65535`
+* hard nproc 65535`)
 
 async function saveRateLimit() {
   saving.value = true
@@ -218,7 +220,7 @@ async function saveRateLimit() {
     await saveSettings('rate_limit', rateLimitConfig.value)
     message.success(t('限流配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -230,7 +232,7 @@ async function saveDegradation() {
     await saveSettings('degradation', degradationConfig.value)
     message.success(t('降级配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -242,7 +244,7 @@ async function saveCache() {
     await saveSettings('cache', cacheConfig.value)
     message.success(t('缓存配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -254,7 +256,7 @@ async function saveApiKey() {
     await saveSettings('api_key', apiKeyConfig.value)
     message.success(t('API Key 配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -266,7 +268,7 @@ async function saveAgent() {
     await saveSettings('agent', agentConfig.value)
     message.success(t('Agent 配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -278,7 +280,7 @@ async function saveLlm() {
     await saveSettings('llm', llmConfig.value)
     message.success(t('模型配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -290,7 +292,7 @@ async function saveStorage() {
     await saveSettings('storage', storageConfig.value)
     message.success(t('存储配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -302,7 +304,7 @@ async function saveRedis() {
     await saveSettings('redis', redisConfig.value)
     message.success(t('Redis 配置已保存并热更新连接'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -314,7 +316,7 @@ async function savePostgres() {
     await saveSettings('postgres', postgresConfig.value)
     message.success(t('数据库配置已保存（重启后生效）'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -326,7 +328,7 @@ async function saveCors() {
     await saveSettings('cors', corsConfig.value)
     message.success(t('CORS 配置已保存（重启后生效）'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -338,7 +340,7 @@ async function saveS3() {
     await saveSettings('s3', s3Config.value)
     message.success(t('对象存储配置已保存'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -350,7 +352,7 @@ async function savePython() {
     await saveSettings('python', pythonConfig.value)
     message.success(t('Python 引擎配置已保存，引擎重启后生效'))
   } catch (err: any) {
-    message.error('保存失败: ' + (err.message || t('未知错误')))
+    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
   } finally {
     saving.value = false
   }
@@ -362,7 +364,7 @@ const copyNginx = () => {
 }
 
 const copyKernel = () => {
-  navigator.clipboard.writeText(kernelConfig)
+  navigator.clipboard.writeText(kernelConfig.value)
   message.success(t('已复制到剪贴板'))
 }
 

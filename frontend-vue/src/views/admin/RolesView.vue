@@ -77,7 +77,7 @@ function confirmDelete(role: EntRole) {
   }
   Modal.confirm({
     title: t('删除角色'),
-    content: `确认删除「${role.name}」？关联用户将失去此角色权限。`,
+    content: t('确认删除「{name}」？关联用户将失去此角色权限。', { name: role.name }),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -101,7 +101,7 @@ function formatTime(iso: string): string {
 const columns: TableColumnsType = [
   { title: t('角色名'), dataIndex: 'name', key: 'name' },
   { title: t('显示名'), dataIndex: 'display_name', key: 'display_name' },
-  { title: t('内置'), dataIndex: 'is_builtin', key: 'is_builtin', width: 80, customRender: ({ text }) => (text ? '是' : '否') },
+  { title: t('内置'), dataIndex: 'is_builtin', key: 'is_builtin', width: 80, customRender: ({ text }) => (text ? t('是') : t('否')) },
   { title: t('用户数'), dataIndex: 'user_count', key: 'user_count', width: 80 },
   { title: t('权限点'), dataIndex: 'permissions', key: 'permissions', customRender: ({ text }) => (text as string[])?.length ?? 0 },
   { title: t('创建时间'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
@@ -162,7 +162,7 @@ onMounted(fetchRoles)
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? '新建角色' : '编辑角色'"
+      :title="modalMode === 'create' ? $t('新建角色') : $t('编辑角色')"
       :confirm-loading="saving"
       @ok="save"
     >
@@ -184,7 +184,7 @@ onMounted(fetchRoles)
           <a-textarea
             v-model:value="form.permissions"
             :rows="8"
-            placeholder="如 ent:manage&#10;audit:read&#10;billing:manage"
+            :placeholder="$t('如 ent:manage\naudit:read\nbilling:manage')"
           />
         </a-form-item>
       </a-form>

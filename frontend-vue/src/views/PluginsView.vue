@@ -54,7 +54,7 @@ async function loadPluginUsage() {
 /** 卡片上的用量摘要；没有被引用时返回空串（不显示空徽标） */
 function usageLabel(name: string): string {
   const { agents } = bindingUsageOf(pluginUsage.value, name)
-  return agents.length ? `${agents.length} 个 Agent` : ''
+  return agents.length ? t('{n} 个 Agent', { n: agents.length }) : ''
 }
 
 /** 悬浮提示：具体是谁在用 */
@@ -104,15 +104,15 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('mcp', item.id)
-    message.success(`「${item.name}」已安装`)
+    message.success(t('「{name}」已安装', { name: item.name }))
     await Promise.all([loadMarket(), loadPlugins()])
   } catch (e: any) {
     const raw = e?.response?.data
     const detail = raw?.message || raw?.detail || raw?.error || e?.message || ''
     if (e?.response?.status === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
-      message.error('安装被拒绝：该 MCP 命令不在安全白名单内，请先在「插件」中手动创建，或联系管理员加入白名单')
+      message.error(t('安装被拒绝：该 MCP 命令不在安全白名单内，请先在「插件」中手动创建，或联系管理员加入白名单'))
     } else {
-      message.error('安装失败: ' + detail)
+      message.error(t('安装失败: {detail}', { detail }))
     }
   } finally {
     marketInstallingId.value = null
@@ -239,7 +239,8 @@ async function toggleStatus(p: Plugin, v: boolean) {
   try {
     await api.put(`/v1/plugins/${encodeURIComponent(p.name)}`, { status: v ? 'active' : 'inactive' })
     p.status = v ? 'active' : 'inactive'
-    message.success(`已${v ? t('启用') : t('停用')} ${p.name}`)
+    if (v) message.success(t('已启用 {name}', { name: p.name }))
+    else message.success(t('已停用 {name}', { name: p.name }))
   } catch (e: any) {
     message.error(e.response?.data?.error || t('操作失败'))
   }
@@ -249,7 +250,7 @@ async function toggleStatus(p: Plugin, v: boolean) {
 function requestUninstall(p: Plugin) {
   Modal.confirm({
     title: t('卸载插件'),
-    content: `确定卸载「${p.name}」？其 MCP 配置将被删除。`,
+    content: t('确定卸载「{name}」？其 MCP 配置将被删除。', { name: p.name }),
     okText: t('卸载'),
     okButtonProps: { danger: true },
     cancelText: t('取消'),
@@ -268,15 +269,15 @@ function requestUninstall(p: Plugin) {
 // ── 连接测试 ──
 async function testPlugin(p: Plugin) {
   testingName.value = p.name
-  testResults.value = { ...testResults.value, [p.name]: { ok: false, message: '测试中…' } }
+  testResults.value = { ...testResults.value, [p.name]: { ok: false, message: t('测试中…') } }
   try {
     const res = await api.post(`/v1/plugins/${encodeURIComponent(p.name)}/test`)
     const data = res.data?.data || {}
     testResults.value = { ...testResults.value, [p.name]: { ok: !!data.ok, message: data.message || '' } }
-    if (data.ok) message.success(`${p.name} 连接正常`)
-    else message.error(`${p.name} 连接失败`)
+    if (data.ok) message.success(t('{name} 连接正常', { name: p.name }))
+    else message.error(t('{name} 连接失败', { name: p.name }))
   } catch (e: any) {
-    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || '测试失败' } }
+    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('测试失败') } }
   } finally {
     testingName.value = ''
   }
@@ -312,7 +313,7 @@ async function testPlugin(p: Plugin) {
       <!-- ── 插件列表 ── -->
       <TabPane
         key="plugins"
-        tab="插件"
+        :tab="$t('插件')"
       >
         <div class="list-toolbar">
           <Input
@@ -352,8 +353,8 @@ async function testPlugin(p: Plugin) {
           v-else-if="filtered.length === 0"
           size="page"
           :icon="markRaw(ThunderboltOutlined)"
-          :description="searchQuery ? '暂无匹配的插件' : '暂无插件'"
-          :hint="searchQuery ? '尝试调整搜索关键词' : '点击右上角「新建插件」，配置命令行工具集成'"
+          :description="searchQuery ? $t('暂无匹配的插件') : $t('暂无插件')"
+          :hint="searchQuery ? $t('尝试调整搜索关键词') : $t('点击右上角「新建插件」，配置命令行工具集成')"
         >
           <Button
             v-if="!searchQuery"
@@ -381,19 +382,19 @@ async function testPlugin(p: Plugin) {
               <span class="card-icon"><ThunderboltOutlined /></span>
               <div class="card-titles">
                 <span class="plugin-name">{{ p.name }}</span>
-                <span class="plugin-desc">{{ p.description || '暂无描述' }}</span>
+                <span class="plugin-desc">{{ p.description || $t('暂无描述') }}</span>
               </div>
               <Switch
                 :checked="p.status === 'active'"
                 size="small"
-                :checked-children="'开'"
-                :un-checked-children="'关'"
+                :checked-children="$t('开')"
+                :un-checked-children="$t('关')"
                 @change="(v: any) => toggleStatus(p, Boolean(v))"
               />
             </div>
             <div class="card-meta">
               <Tag :color="p.status === 'active' ? 'green' : 'default'">
-                {{ p.status === 'active' ? '启用' : '已停用' }}
+                {{ p.status === 'active' ? $t('启用') : $t('已停用') }}
               </Tag>
               <Tag>v{{ p.version || '1.0.0' }}</Tag>
               <span class="card-command">{{ p.command }}</span>
@@ -402,7 +403,7 @@ async function testPlugin(p: Plugin) {
                 color="blue"
                 :title="usageTitle(p.name)"
               >
-                被 {{ usageLabel(p.name) }} 使用
+                {{ $t('被 {label} 使用', { label: usageLabel(p.name) }) }}
               </Tag>
             </div>
             <div class="card-actions">
@@ -441,7 +442,7 @@ async function testPlugin(p: Plugin) {
                 type="text"
                 @click="toggleExpanded(p.name)"
               >
-                {{ expanded.has(p.name) ? '收起配置' : '查看配置' }}
+                {{ expanded.has(p.name) ? $t('收起配置') : $t('查看配置') }}
                 <UpOutlined
                   v-if="expanded.has(p.name)"
                   class="mini-icon"
@@ -536,7 +537,7 @@ async function testPlugin(p: Plugin) {
       <!-- ── MCP 市场 ── -->
       <TabPane
         key="market"
-        tab="MCP 市场"
+        :tab="$t('MCP 市场')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -572,7 +573,7 @@ async function testPlugin(p: Plugin) {
     <!-- 新建/编辑 Modal -->
     <Modal
       :open="editorOpen"
-      :title="editingName ? `编辑「${editingName}」` : '新建 MCP 插件'"
+      :title="editingName ? $t('编辑「{name}」', { name: editingName }) : $t('新建 MCP 插件')"
       :confirm-loading="saving"
       width="560px"
       :ok-text="$t('保存')"

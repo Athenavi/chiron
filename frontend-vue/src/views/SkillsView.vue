@@ -89,8 +89,8 @@ async function loadSkillUsage() {
 function usageLabel(name: string): string {
   const { agents, workflows } = usageOf(skillUsage.value, name)
   const parts: string[] = []
-  if (agents.length) parts.push(`${agents.length} 个 Agent`)
-  if (workflows.length) parts.push(`${workflows.length} 个工作流`)
+  if (agents.length) parts.push(tr('{n} 个 Agent', { n: agents.length }))
+  if (workflows.length) parts.push(tr('{n} 个工作流', { n: workflows.length }))
   return parts.join(' · ')
 }
 
@@ -99,7 +99,7 @@ function usageTitle(name: string): string {
   const { agents, workflows } = usageOf(skillUsage.value, name)
   const lines: string[] = []
   if (agents.length) lines.push(`Agent：${agents.join('、')}`)
-  if (workflows.length) lines.push(`工作流：${workflows.join('、')}`)
+  if (workflows.length) lines.push(tr('工作流：{list}', { list: workflows.join('、') }))
   return lines.join('\n')
 }
 
@@ -132,11 +132,11 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('skill', item.id)
-    message.success(`「${item.name}」已安装`)
+    message.success(tr('「{name}」已安装', { name: item.name }))
     await Promise.all([loadMarket(), loadSkills()])
   } catch (e: any) {
     const raw = e?.response?.data
-    message.error('安装失败: ' + (raw?.message || raw?.detail || raw?.error || e?.message || ''))
+    message.error(tr('安装失败: {error}', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
     marketInstallingId.value = null
   }
@@ -164,9 +164,10 @@ async function toggleEnabled(s: Skill, v: boolean) {
   try {
     await api.put(`/v1/skills/${encodeURIComponent(s.name)}`, { enabled: v })
     s.enabled = v
-    message.success(`「${s.name}」已${v ? tr('启用') : tr('停用')}`)
+    if (v) message.success(tr('「{name}」已启用', { name: s.name }))
+    else message.success(tr('「{name}」已停用', { name: s.name }))
   } catch (e: any) {
-    message.error('操作失败: ' + (e?.response?.data?.detail || e?.message || ''))
+    message.error(tr('操作失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
   }
 }
 
@@ -174,7 +175,7 @@ async function toggleEnabled(s: Skill, v: boolean) {
 function requestDelete(s: Skill) {
   Modal.confirm({
     title: tr('删除技能'),
-    content: `确定删除「${s.name}」？`,
+    content: tr('确定删除「{name}」？', { name: s.name }),
     okText: tr('删除'),
     okButtonProps: { danger: true },
     cancelText: tr('取消'),
@@ -238,7 +239,7 @@ async function submitRun() {
   for (const p of runTarget.value.parameters || []) {
     const v = runValues.value[p.name]
     if (v === undefined || v === null || v === '') {
-      if (p.required) { message.warning(`请填写参数「${p.name}」`); return }
+      if (p.required) { message.warning(tr('请填写参数「{name}」', { name: p.name })); return }
       continue
     }
     params[p.name] = v
@@ -250,7 +251,7 @@ async function submitRun() {
     runResult.value = resp.data?.data || resp.data
     message.success(tr('技能执行完成'))
   } catch (e: any) {
-    message.error('执行失败: ' + (e?.response?.data?.detail || e?.message || ''))
+    message.error(tr('执行失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     runSubmitting.value = false
   }
@@ -280,7 +281,7 @@ async function handleInstall() {
     await loadSkills()
     activeTab.value = 'list'
   } catch (e: any) {
-    message.error('安装失败: ' + (e?.response?.data?.detail || e?.message || ''))
+    message.error(tr('安装失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     installLoading.value = false
   }
@@ -304,7 +305,7 @@ async function handleGenerate() {
     message.success(tr('技能已生成并安装'))
     await loadSkills()
   } catch (e: any) {
-    message.error('生成失败: ' + (e?.response?.data?.detail || e?.message || ''))
+    message.error(tr('生成失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     genLoading.value = false
   }
@@ -340,7 +341,7 @@ async function handleGenerate() {
       <!-- ── 技能列表 ── -->
       <TabPane
         key="list"
-        tab="技能列表"
+        :tab="$t('技能列表')"
       >
         <div class="list-toolbar">
           <Input
@@ -356,7 +357,7 @@ async function handleGenerate() {
           <Select
             v-model:value="typeFilter"
             class="type-filter"
-            :options="[{ value: 'all', label: '全部类型' }, ...execTypes.map(t => ({ value: t, label: t }))]"
+            :options="[{ value: 'all', label: $t('全部类型') }, ...execTypes.map(t => ({ value: t, label: t }))]"
           />
         </div>
 
@@ -385,8 +386,8 @@ async function handleGenerate() {
           v-else-if="filteredSkills.length === 0"
           size="page"
           :icon="markRaw(CodeOutlined)"
-          :description="searchQuery || typeFilter !== 'all' ? '暂无匹配的技能' : '暂无技能'"
-          :hint="searchQuery || typeFilter !== 'all' ? '尝试调整搜索关键词或类型筛选' : '从市场安装技能或上传本地技能包'"
+          :description="searchQuery || typeFilter !== 'all' ? $t('暂无匹配的技能') : $t('暂无技能')"
+          :hint="searchQuery || typeFilter !== 'all' ? $t('尝试调整搜索关键词或类型筛选') : $t('从市场安装技能或上传本地技能包')"
         />
 
         <div
@@ -411,20 +412,20 @@ async function handleGenerate() {
                     {{ s.exec?.type || 'unknown' }}
                   </Tag>
                 </div>
-                <span class="card-desc">{{ s.description || '暂无描述' }}</span>
+                <span class="card-desc">{{ s.description || $t('暂无描述') }}</span>
               </div>
               <Switch
                 :checked="s.enabled !== false"
                 size="small"
-                :checked-children="'开'"
-                :un-checked-children="'关'"
+                :checked-children="$t('开')"
+                :un-checked-children="$t('关')"
                 @change="(v: any) => toggleEnabled(s, Boolean(v))"
               />
             </div>
             <div class="card-meta">
               <Tag>v{{ s.version }}</Tag>
               <Tag v-if="s.parameters?.length">
-                {{ s.parameters.length }} 参数
+                {{ $t('{n} 参数', { n: s.parameters.length }) }}
               </Tag>
               <Tag
                 v-for="t in (s.tags || []).slice(0, 3)"
@@ -437,7 +438,7 @@ async function handleGenerate() {
                 color="blue"
                 :title="usageTitle(s.name)"
               >
-                被 {{ usageLabel(s.name) }} 使用
+                {{ $t('被 {label} 使用', { label: usageLabel(s.name) }) }}
               </Tag>
             </div>
             <div class="card-actions">
@@ -446,7 +447,7 @@ async function handleGenerate() {
                 type="text"
                 @click="toggleDetail(s.name)"
               >
-                {{ expandedNames.has(s.name) ? '收起详情' : '查看详情' }}
+                {{ expandedNames.has(s.name) ? $t('收起详情') : $t('查看详情') }}
               </Button>
               <div class="action-right">
                 <Button
@@ -543,7 +544,7 @@ async function handleGenerate() {
       <!-- ── 技能市场 ── -->
       <TabPane
         key="market"
-        tab="市场"
+        :tab="$t('市场')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -578,7 +579,7 @@ async function handleGenerate() {
       <!-- ── 安装技能 ── -->
       <TabPane
         key="install"
-        tab="安装技能"
+        :tab="$t('安装技能')"
       >
         <div class="panel-card">
           <h3 class="panel-title">
@@ -589,7 +590,7 @@ async function handleGenerate() {
             placeholder="https://example.com/my-skill.skill.json"
           />
           <div class="or-divider">
-            或
+            {{ $t('或') }}
           </div>
           <h3 class="panel-title">
             <CodeOutlined /> {{ $t('内联 JSON') }}
@@ -617,7 +618,7 @@ async function handleGenerate() {
       <!-- ── AI 生成 ── -->
       <TabPane
         key="generate"
-        tab="AI 生成"
+        :tab="$t('AI 生成')"
       >
         <div class="panel-card">
           <h3 class="panel-title">
@@ -644,7 +645,7 @@ async function handleGenerate() {
             type="success"
             show-icon
             class="gen-alert"
-            :message="`已生成：${genResult.name}`"
+            :message="$t('已生成：{name}', { name: genResult.name })"
             :description="genResult.description"
           />
           <pre
@@ -658,7 +659,7 @@ async function handleGenerate() {
     <!-- ── 运行 Modal ── -->
     <Modal
       :open="runOpen"
-      :title="`运行「${runTarget?.name || ''}」`"
+      :title="$t('运行「{name}」', { name: runTarget?.name || '' })"
       :footer="null"
       width="560px"
       @cancel="runOpen = false"

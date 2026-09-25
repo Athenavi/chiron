@@ -34,7 +34,7 @@ const percent = ref(0)
 watch(() => props.open, async (open) => {
   if (!open) return
   percent.value = 0
-  title.value = props.defaultTitle?.trim() || `对话记录 ${new Date().toLocaleString()}`
+  title.value = props.defaultTitle?.trim() || t('对话记录 {time}', { time: new Date().toLocaleString() })
   if (bases.value.length > 0) return
   loadingBases.value = true
   try {
@@ -51,8 +51,8 @@ const canSave = computed(() => !!kbId.value && props.content.trim().length > 0 &
 
 /** 文件名里不能出现的字符统一替换掉（否则部分后端会拒收） */
 function safeFileName(): string {
-  const base = (title.value || '对话记录').replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80)
-  return `${base || '对话记录'}.md`
+  const base = (title.value || t('对话记录')).replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80)
+  return `${base || t('对话记录')}.md`
 }
 
 async function save() {
@@ -67,7 +67,7 @@ async function save() {
     emit('saved', kbId.value)
     emit('update:open', false)
   } catch (error) {
-    message.error(`存入失败：${error instanceof Error ? error.message : String(error)}`)
+    message.error(t('存入失败：{error}', { error: error instanceof Error ? error.message : String(error) }))
   } finally {
     saving.value = false
   }
@@ -106,10 +106,10 @@ async function save() {
         />
       </div>
       <p class="save-kb-hint">
-        将上传本次对话的正文（{{ content.length }} 字符）为 Markdown 文档；思考过程与工具调用不会写入。
+        {{ $t('将上传本次对话的正文（{n} 字符）为 Markdown 文档；思考过程与工具调用不会写入。', { n: content.length }) }}
       </p>
       <p v-if="saving" class="save-kb-hint">
-        上传中 {{ percent }}%
+        {{ $t('上传中 {n}%', { n: percent }) }}
       </p>
     </div>
   </Modal>

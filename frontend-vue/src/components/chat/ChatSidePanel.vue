@@ -168,16 +168,16 @@ const mcpToolCount = computed(() => availableTools.value.filter(t => t.source ==
 
 /** 标题右侧摘要：直接列出 MCP 工具名 —— 只报数字等于没说清"到底激活了哪些能力" */
 const toolsSummary = computed(() => {
-  if (toolsError.value) return '加载失败'
+  if (toolsError.value) return tr('加载失败')
   if (toolsLoading.value) return '…'
   const total = availableTools.value.length
-  if (!total) return '无'
+  if (!total) return tr('无')
   const mcpNames = availableTools.value.filter(isMcpTool).map(t => t.name).slice(0, 3)
   if (mcpNames.length) {
     const more = mcpToolCount.value > mcpNames.length ? ` +${mcpToolCount.value - mcpNames.length}` : ''
-    return `${total} 个 · MCP ${mcpNames.join(', ')}${more}`
+    return tr('{n} 个 · MCP {mcp}{more}', { n: total, mcp: mcpNames.join(', '), more })
   }
-  return `${total} 个`
+  return tr('{n} 个', { n: total })
 })
 
 function isMcpTool(t: ToolInfo): boolean {
@@ -321,8 +321,8 @@ const tagOptions = computed(() => mergeTagOptions(usedTags.value))
  * 两种情况都只显示分叉点，不编造来源名字。
  */
 function branchTip(s: ChatSession): string {
-  const from = s.parent_title ? `分支自《${s.parent_title}》` : '分支自已删除的会话'
-  const seq = s.branch_from_seq ? `，第 ${s.branch_from_seq} 条起` : ''
+  const from = s.parent_title ? tr('分支自《{title}》', { title: s.parent_title }) : tr('分支自已删除的会话')
+  const seq = s.branch_from_seq ? tr('，第 {n} 条起', { n: s.branch_from_seq }) : ''
   return from + seq
 }
 
@@ -345,6 +345,12 @@ function toggleTag(tag: string) {
   activeTag.value = activeTag.value === tag ? '' : tag
 }
 
+// 时间分桶的**键是稳定标识**（today/…，跨语言一致，分组不会因切换语言而错乱），
+// 显示用的标签才走 i18n —— 收进 computed 才能在语言切换后重新求值。
+const BUCKET_LABELS = computed<Record<string, string>>(() => ({
+  today: tr('今天'), yesterday: tr('昨天'), within7Days: tr('7 天内'), earlier: tr('更早'),
+}))
+
 // P2-B: 会话按时间分组（置顶单独一组，其余按 今日/昨天/7天/更早）
 interface SessionGroup { label: string; sessions: any[] }
 const groupedSessions = computed<SessionGroup[]>(() => {
@@ -358,16 +364,16 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   const startOf7Days = startOfToday - 7 * 86400000
   const groups: SessionGroup[] = []
   if (pinned.length) groups.push({ label: tr('置顶'), sessions: pinned })
-  const buckets: Record<string, any[]> = { '今天': [], '昨天': [], '7 天内': [], '更早': [] }
+  const buckets: Record<string, any[]> = { today: [], yesterday: [], within7Days: [], earlier: [] }
   for (const s of rest) {
     const ts = new Date(s.updated_at || s.created_at || 0).getTime()
-    if (ts >= startOfToday) buckets['今天'].push(s)
-    else if (ts >= startOfYesterday) buckets['昨天'].push(s)
-    else if (ts >= startOf7Days) buckets['7 天内'].push(s)
-    else buckets['更早'].push(s)
+    if (ts >= startOfToday) buckets.today.push(s)
+    else if (ts >= startOfYesterday) buckets.yesterday.push(s)
+    else if (ts >= startOf7Days) buckets.within7Days.push(s)
+    else buckets.earlier.push(s)
   }
-  for (const label of ['今天', '昨天', '7 天内', '更早']) {
-    if (buckets[label].length) groups.push({ label, sessions: buckets[label] })
+  for (const key of ['today', 'yesterday', 'within7Days', 'earlier']) {
+    if (buckets[key].length) groups.push({ label: BUCKET_LABELS.value[key], sessions: buckets[key] })
   }
   return groups
 })
@@ -411,10 +417,10 @@ function pickSession(id: string) {
         v-if="view === 'trajectory'"
         type="button"
         class="session-picker"
-        :title="'切换会话：' + (activeSession?.title || '新对话')"
+        :title="$t('切换会话：{name}', { name: activeSession?.title || $t('新对话') })"
         @click="emit('update:view', 'sessions')"
       >
-        <span class="session-picker-name">{{ activeSession?.title || '新对话' }}</span>
+        <span class="session-picker-name">{{ activeSession?.title || $t('新对话') }}</span>
         <DownOutlined class="session-picker-arrow" />
       </button>
       <button
@@ -424,7 +430,7 @@ function pickSession(id: string) {
         @click="emit('update:view', 'trajectory')"
       >
         <LeftOutlined />
-        <span class="session-picker-name">{{ activeSession?.title || '新对话' }}</span>
+        <span class="session-picker-name">{{ activeSession?.title || $t('新对话') }}</span>
       </button>
       <CloseOutlined
         class="toolbar-close"
@@ -444,14 +450,14 @@ function pickSession(id: string) {
           v-for="c in contextChips"
           :key="c.type"
           class="ctx-chip"
-          :title="`${c.label}（点击移除）`"
+          :title="$t('{label}（点击移除）', { label: c.label })"
         >
           <span class="ctx-chip-label">
             <template v-if="chipOrder(c)">{{ chipOrder(c) }}. </template>{{ c.label }}
           </span>
           <CloseOutlined
             class="ctx-chip-remove"
-            :title="`移除${c.label}`"
+            :title="$t('移除{label}', { label: c.label })"
             @click="emit('remove-context', c.type, c.value)"
           />
         </span>
@@ -464,7 +470,7 @@ function pickSession(id: string) {
       <button
         type="button"
         class="tools-head"
-        :title="toolsExpanded ? '收起工具列表' : '展开工具列表'"
+        :title="toolsExpanded ? $t('收起工具列表') : $t('展开工具列表')"
         @click="toggleTools"
       >
         <span class="tools-title">{{ $t('可用工具') }}</span>
@@ -719,7 +725,7 @@ function pickSession(id: string) {
                   v-if="s.pinned"
                   class="pin-icon"
                 />
-                <span class="session-title">{{ s.title || '新对话' }}</span>
+                <span class="session-title">{{ s.title || $t('新对话') }}</span>
                 <!-- P0：分支标记 —— 让"分支出来的会话"在列表里一眼可辨（第 3 条诉求）-->
                 <span
                   v-if="s.parent_session_id"
@@ -742,7 +748,7 @@ function pickSession(id: string) {
                 type="text"
                 size="small"
                 class="session-more-btn"
-                :aria-label="`会话操作：${s.title || '新对话'}`"
+                :aria-label="$t('会话操作：{name}', { name: s.title || $t('新对话') })"
                 @click.stop
               >
                 <template #icon>
@@ -761,7 +767,7 @@ function pickSession(id: string) {
                     key="pin"
                     @click="emit('pin', s.id, !s.pinned)"
                   >
-                    <PushpinOutlined class="menu-icon" />{{ s.pinned ? '取消置顶' : '置顶' }}
+                    <PushpinOutlined class="menu-icon" />{{ s.pinned ? $t('取消置顶') : $t('置顶') }}
                   </MenuItem>
                   <!-- P3-D: 标签设置（用 MenuDivider 分组，避免 SubMenu 在 Dropdown overlay 中丢失上下文） -->
                   <MenuDivider />
@@ -770,7 +776,7 @@ function pickSession(id: string) {
                     :key="'tag-'+t"
                     @click="emit('tag', s.id, t)"
                   >
-                    <TagOutlined class="menu-icon" />标签：{{ t }}
+                    <TagOutlined class="menu-icon" />{{ $t('标签：{label}', { label: t }) }}
                   </MenuItem>
                   <!-- 自定义标签：此前菜单只有四个写死的标签（用户报告"标签恒定"） -->
                   <MenuItem
@@ -866,7 +872,7 @@ function pickSession(id: string) {
         >
           {{ (authStore.user?.name || userName || 'U').charAt(0).toUpperCase() }}
         </Avatar>
-        <span class="foot-name">{{ authStore.user?.name || userName || '用户' }}</span>
+        <span class="foot-name">{{ authStore.user?.name || userName || $t('用户') }}</span>
         <ThemeSwitcher class="foot-theme" />
         <Dropdown
           v-if="authStore.user"

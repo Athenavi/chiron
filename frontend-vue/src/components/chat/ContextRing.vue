@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed } from 'vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 /**
  * 上下文占用环。
@@ -33,8 +36,8 @@ const tone = computed(() => {
 const label = computed(() => (percent.value === null ? '—' : `${Math.round(percent.value * 100)}%`))
 
 const title = computed(() => {
-  if (percent.value === null) return '上下文占用：暂无数据'
-  return `上下文占用 ${label.value}：最近一轮请求 ${props.used} tokens / 上限 ${props.limit}`
+  if (percent.value === null) return t('上下文占用：暂无数据')
+  return t('上下文占用 {label}：最近一轮请求 {used} tokens / 上限 {limit}', { label: label.value, used: props.used, limit: props.limit })
 })
 </script>
 

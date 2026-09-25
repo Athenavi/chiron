@@ -61,7 +61,7 @@ async function loadKbUsage() {
 /** 卡片上的用量摘要；没有被引用时返回空串（不显示空徽标） */
 function usageLabel(kbId: string): string {
   const { agents } = kbUsageOf(kbUsage.value, kbId)
-  return agents.length ? `${agents.length} 个 Agent` : ''
+  return agents.length ? t('{n} 个 Agent', { n: agents.length }) : ''
 }
 
 /** 悬浮提示：具体是谁在用 */
@@ -153,7 +153,7 @@ async function toggleVisibility(kb: KnowledgeBase) {
   visibilityTogglingId.value = kb.id
   try {
     await setKBVisibility(kb.id, next)
-    message.success(next === 'tenant' ? '已共享给团队' : '已设为私有')
+    message.success(next === 'tenant' ? t('已共享给团队') : t('已设为私有'))
     await loadKnowledgeBases()
   } catch (e: any) {
     const msg = e.response?.data?.detail || e.response?.data?.error || e.response?.data?.message || ''
@@ -275,7 +275,7 @@ function formatDate(iso: string): string {
               <span class="card-icon"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
-                <span class="kb-desc">{{ kb.description || '暂无描述' }}</span>
+                <span class="kb-desc">{{ kb.description || $t('暂无描述') }}</span>
               </div>
               <Tag
                 :color="kb.type === 'rag' ? 'success' : 'blue'"
@@ -292,7 +292,7 @@ function formatDate(iso: string): string {
               </Tag>
             </div>
             <div class="kb-stats">
-              <span class="stat"><FileTextOutlined /> {{ kb.document_count }} 文档</span>
+              <span class="stat"><FileTextOutlined /> {{ $t('{n} 文档', { n: kb.document_count }) }}</span>
               <span class="stat"><DatabaseOutlined /> {{ formatSize(kb.total_size_bytes) }}</span>
               <Tag :color="kb.status === 'active' ? 'green' : kb.status === 'building' ? 'processing' : 'default'">
                 {{ kb.status }}
@@ -302,17 +302,17 @@ function formatDate(iso: string): string {
                 color="blue"
                 :title="usageTitle(kb.id)"
               >
-                被 {{ usageLabel(kb.id) }} 使用
+                {{ $t('被 {label} 使用', { label: usageLabel(kb.id) }) }}
               </Tag>
             </div>
             <div class="kb-footer">
-              <span class="kb-time">更新于 {{ formatDate(kb.updated_at) }}</span>
+              <span class="kb-time">{{ $t('更新于 {date}', { date: formatDate(kb.updated_at) }) }}</span>
               <div class="footer-actions">
                 <Button
                   v-if="kb.visibility !== 'public'"
                   type="text"
                   size="small"
-                  :title="kb.visibility === 'tenant' ? '设为私有' : '共享给团队'"
+                  :title="kb.visibility === 'tenant' ? $t('设为私有') : $t('共享给团队')"
                   :loading="visibilityTogglingId === kb.id"
                   @click.stop="toggleVisibility(kb)"
                 >
@@ -375,25 +375,25 @@ function formatDate(iso: string): string {
               <span class="card-icon"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
-                <span class="kb-desc">{{ kb.description || '暂无描述' }}</span>
+                <span class="kb-desc">{{ kb.description || $t('暂无描述') }}</span>
               </div>
               <Tag color="warning">
                 {{ $t('公共') }}
               </Tag>
             </div>
             <div class="kb-stats">
-              <span class="stat"><FileTextOutlined /> {{ kb.document_count }} 文档</span>
+              <span class="stat"><FileTextOutlined /> {{ $t('{n} 文档', { n: kb.document_count }) }}</span>
               <span class="stat"><DatabaseOutlined /> {{ formatSize(kb.total_size_bytes) }}</span>
               <Tag
                 v-if="usageLabel(kb.id)"
                 color="blue"
                 :title="usageTitle(kb.id)"
               >
-                被 {{ usageLabel(kb.id) }} 使用
+                {{ $t('被 {label} 使用', { label: usageLabel(kb.id) }) }}
               </Tag>
             </div>
             <div class="kb-footer">
-              <span class="kb-time">更新于 {{ formatDate(kb.updated_at) }}</span>
+              <span class="kb-time">{{ $t('更新于 {date}', { date: formatDate(kb.updated_at) }) }}</span>
               <div class="footer-actions">
                 <Button
                   type="text"
@@ -483,7 +483,7 @@ function formatDate(iso: string): string {
     <!-- 编辑 Modal -->
     <Modal
       :open="showEditModal"
-      :title="`编辑「${editingKb?.name || ''}」`"
+      :title="$t('编辑「{name}」', { name: editingKb?.name || '' })"
       :confirm-loading="saving"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"

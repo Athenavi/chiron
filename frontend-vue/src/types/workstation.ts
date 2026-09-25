@@ -1,3 +1,5 @@
+import { t } from '../i18n'
+
 /**
  * 六大工作台的标识与展示文案。
  *
@@ -25,22 +27,22 @@ export type WorkstationType = (typeof WORKSTATIONS)[number]
  * 此前两处各写一遍，`/workflow` 在 AppLayout 里同时叫「工作台」和「工作流」。
  */
 export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
-  dialogue: '对话',
+  dialogue: t('对话'),
   agent: 'Agent',
-  workflow: '工作流',
-  skill: '技能',
-  knowledge: '知识',
-  plugin: '插件',
+  workflow: t('工作流'),
+  skill: t('技能'),
+  knowledge: t('知识'),
+  plugin: t('插件'),
 }
 
 /** 一句话描述（停靠坞浮层与命令面板共用） */
 export const WORKSTATION_DESCRIPTIONS: Record<WorkstationType, string> = {
-  dialogue: '智能对话助手',
-  agent: '多智能体协同',
-  workflow: 'DAG 流程编排',
-  skill: '工具 MCP',
-  knowledge: 'RAG 检索增强',
-  plugin: '扩展能力',
+  dialogue: t('智能对话助手'),
+  agent: t('多智能体协同'),
+  workflow: t('DAG 流程编排'),
+  skill: t('工具 MCP'),
+  knowledge: t('RAG 检索增强'),
+  plugin: t('扩展能力'),
 }
 
 /** 工作台 → 路由路径（六个入口的唯一定义） */

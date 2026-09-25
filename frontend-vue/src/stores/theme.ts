@@ -30,7 +30,7 @@ const FONT_SANS = "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Ping
 const THEME_REGISTRY: Record<ThemeId, ThemePreset> = {
   notion: {
     id: 'notion',
-    name: '极简功能',
+    name: t('极简功能'),
     description: t('Notion 风格，高信息密度，清晰排版'),
     lightTokens: {
       colorPrimary: '#0f172a',
@@ -65,7 +65,7 @@ const THEME_REGISTRY: Record<ThemeId, ThemePreset> = {
   },
   paper: {
     id: 'paper',
-    name: '暖纸阅读',
+    name: t('暖纸阅读'),
     description: t('暖纸底 + 琥珀强调，圆角柔和，长文护眼'),
     lightTokens: {
       colorPrimary: '#3d3630',
@@ -100,7 +100,7 @@ const THEME_REGISTRY: Record<ThemeId, ThemePreset> = {
   },
   terminal: {
     id: 'terminal',
-    name: '终端硬核',
+    name: t('终端硬核'),
     description: t('直角网格 + 荧光绿，终端观感'),
     lightTokens: {
       colorPrimary: '#0b1512',
@@ -135,7 +135,7 @@ const THEME_REGISTRY: Record<ThemeId, ThemePreset> = {
   },
   aurora: {
     id: 'aurora',
-    name: '玻璃柔光',
+    name: t('玻璃柔光'),
     description: t('半透明面板 + 低强度发光，轻盈通透'),
     lightTokens: {
       colorPrimary: '#6366f1',

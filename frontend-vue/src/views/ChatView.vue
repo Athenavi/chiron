@@ -110,9 +110,9 @@ async function saveAsWorkflow() {
   savingWorkflow.value = true
   try {
     const saved = await createGraph({ name: graph.name, graph_json: graph.graph_json })
-    message.success(`已保存为工作流「${saved?.name || graph.name}」，可在工作流页打开调整`)
+    message.success(t('已保存为工作流「{name}」，可在工作流页打开调整', { name: saved?.name || graph.name }))
   } catch (e) {
-    message.error('保存工作流失败: ' + describeApiError(e))
+    message.error(t('保存工作流失败: {error}', { error: describeApiError(e) }))
   } finally {
     savingWorkflow.value = false
   }
@@ -159,18 +159,21 @@ async function saveAsAgent() {
     })
     // 明确说出继承了哪些 —— 绑定是"沉默生效"的，不告诉用户就成幽灵行为
     const inherited = [
-      bindings.kb_id ? '知识库' : '',
-      bindings.skills?.length ? `${bindings.skills.length} 个技能` : '',
-      bindings.plugins?.length ? `${bindings.plugins.length} 个插件` : '',
+      bindings.kb_id ? t('知识库') : '',
+      bindings.skills?.length ? t('{n} 个技能', { n: bindings.skills.length }) : '',
+      bindings.plugins?.length ? t('{n} 个插件', { n: bindings.plugins.length }) : '',
     ].filter(Boolean)
     message.success(
-      `已创建 Agent「${name}」${
-        inherited.length ? `，并继承本对话的 ${inherited.join('、')}` : ''
-      }，可在 Agents 页继续调整`,
+      inherited.length
+        ? t('已创建 Agent「{name}」，并继承本对话的 {list}，可在 Agents 页继续调整', {
+            name,
+            list: inherited.join('、'),
+          })
+        : t('已创建 Agent「{name}」，可在 Agents 页继续调整', { name }),
     )
     saveAgentOpen.value = false
   } catch (e) {
-    message.error('创建 Agent 失败: ' + describeApiError(e))
+    message.error(t('创建 Agent 失败: {error}', { error: describeApiError(e) }))
   } finally {
     savingAgent.value = false
   }
@@ -327,7 +330,7 @@ const subagentActiveCount = computed(() => {
 })
 
 /** 当前模式的显示名 */
-const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || '常规')
+const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || t('常规'))
 
 // 注意：模式不再有"来源"后缀。它不再是会话/服务端状态，也没有回落到谁的默认值一说 ——
 // 界面上的模式就是用户当前的选择（全局单一状态），随本次提交下发。
@@ -559,8 +562,8 @@ function onToolsModeChange(v: any) {
   toolsMode.value = m
   message.success(
     m === 'yolo'
-      ? '已切换为全自动：跳过工具确认（该操作会留审计）'
-      : `工具授权模式已设为「${toolsModeOptions.find(o => o.value === m)?.label || m}」`,
+      ? t('已切换为全自动：跳过工具确认（该操作会留审计）')
+      : t('工具授权模式已设为「{mode}」', { mode: toolsModeOptions.find(o => o.value === m)?.label || m }),
   )
 }
 
@@ -581,12 +584,12 @@ const llmModel = ref('')
 // ── 对话模式预设：mode → temperature/max_tokens + 用户可见的**一句话定位** ──
 // desc 必须与后端 app/agent/modes.py 的四种模式定义表一一对应（工具集/上下文/压缩差异），
 // 否则又会回到"切了看不出区别"的老问题（2026-09 实测暴露）。
-const MODE_PRESETS: Record<string, { temperature: number; max_tokens: number; note?: string; desc: string }> = {
-  normal: { temperature: 0.6, max_tokens: 4096, desc: '通用助手：12 个核心工具，注入记忆/技能/知识库上下文' },
-  minimal: { temperature: 0.2, max_tokens: 1024, note: '简短回复', desc: '极简：只用 read_file/edit_file/shell_exec，不注入上下文、不压缩' },
-  ptc: { temperature: 0.4, max_tokens: 4096, note: '分步思考', desc: 'PTC：多步操作写成一段程序一次执行（run_code），少往返、省 token' },
-  creative: { temperature: 1.0, max_tokens: 8192, desc: '创意：可读写平台自身的模式/技能定义（mode_list/mode_edit）' },
-}
+const MODE_PRESETS = computed<Record<string, { temperature: number; max_tokens: number; note?: string; desc: string }>>(() => ({
+  normal: { temperature: 0.6, max_tokens: 4096, desc: t('通用助手：12 个核心工具，注入记忆/技能/知识库上下文') },
+  minimal: { temperature: 0.2, max_tokens: 1024, note: t('简短回复'), desc: t('极简：只用 read_file/edit_file/shell_exec，不注入上下文、不压缩') },
+  ptc: { temperature: 0.4, max_tokens: 4096, note: t('分步思考'), desc: t('PTC：多步操作写成一段程序一次执行（run_code），少往返、省 token') },
+  creative: { temperature: 1.0, max_tokens: 8192, desc: t('创意：可读写平台自身的模式/技能定义（mode_list/mode_edit）') },
+}))
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model（base 已显式携带的字段优先保留） */
 /**
@@ -597,18 +600,18 @@ const effort = ref('')
 
 /** 档位循环顺序（点击按钮依次切换 —— ZCode 的 `ThoughtLevelCycleControl` 同款交互，比下拉省空间） */
 const EFFORT_ORDER = ['', 'low', 'high', 'max'] as const
-const EFFORT_LABEL: Record<string, string> = { '': '关', low: '低', high: '高', max: '最高' }
+const EFFORT_LABEL = computed<Record<string, string>>(() => ({ '': t('关'), low: t('低'), high: t('高'), max: t('最高') }))
 // 模板不直接做两层索引：EFFORT_LABEL 与 effort 各自都可能为空，一旦编译产物出现不一致
 // （排查过：HMR 增量重编译后 setup 绑定表与 render 不同步），EFFORT_LABEL[effort] 会炸成
 // undefined[undefined]，整个 ChatView 被 ErrorBoundary 接管。收进 computed 后取值路径只有一条。
-const effortLabel = computed(() => EFFORT_LABEL[effort.value] || '关')
+const effortLabel = computed(() => EFFORT_LABEL.value[effort.value] || t('关'))
 
 /** 思考档位切换：与模型/模式同一套持久化（走 buildLlmConfig → 会话 llm_config） */
 function onEffortChange(v: string) {
   effort.value = (EFFORT_ORDER as readonly string[]).includes(v) ? v : ''
   persistRuntime({})
   message.info(
-    effort.value ? `思考档位：${EFFORT_LABEL[effort.value]}` : t('思考档位已重置为默认'),
+    effort.value ? t('思考档位：{level}', { level: EFFORT_LABEL.value[effort.value] }) : t('思考档位已重置为默认'),
   )
 }
 
@@ -634,7 +637,7 @@ function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
   if (llmModel.value) cfg.model = llmModel.value
   // 工具授权模式（ask/auto/yolo）：随请求下发，引擎侧 ToolGuard 据此裁决
   cfg.tools_mode = toolsMode.value
-  const preset = MODE_PRESETS[mode.value]
+  const preset = MODE_PRESETS.value[mode.value]
   if (preset) {
     if (cfg.temperature === undefined) cfg.temperature = preset.temperature
     if (cfg.max_tokens === undefined) cfg.max_tokens = preset.max_tokens
@@ -678,9 +681,9 @@ function persistRuntime(patch: Record<string, unknown>) {
  * 与 URL chips 走同一条链路：chips 只是 UI 呈现，`runtime.context` 才是提交时真正生效的东西
  * —— 只改 chips 不写 runtime，刷新后引用就会从界面上消失（这正是我们修过的那类问题）。
  */
-const MENTION_CHIP_LABEL: Record<string, string> = {
-  kb: '知识库', agent: 'Agent', skill: '技能', workflow: '工作流', plugin: '插件',
-}
+const MENTION_CHIP_LABEL = computed<Record<string, string>>(() => ({
+  kb: t('知识库'), agent: 'Agent', skill: t('技能'), workflow: t('工作流'), plugin: t('插件'),
+}))
 
 function onMentionAdd(p: { type: string; id: string; name: string }) {
   if (contextChips.value.some(c => c.type === p.type && c.value === p.id)) return
@@ -688,7 +691,7 @@ function onMentionAdd(p: { type: string; id: string; name: string }) {
     ...contextChips.value,
     {
       type: p.type as ContextChip['type'],
-      label: `${MENTION_CHIP_LABEL[p.type] || p.type} ${p.name}`,
+      label: `${MENTION_CHIP_LABEL.value[p.type] || p.type} ${p.name}`,
       value: p.id,
     },
   ]
@@ -699,7 +702,7 @@ function onMentionAdd(p: { type: string; id: string; name: string }) {
 function onModelChange(m: string) {
   if (m === llmModel.value) return
   llmModel.value = m
-  message.info(m ? `模型已切换：${m}（仅影响后续消息）` : t('模型已重置为默认（后端路由）'))
+  message.info(m ? t('模型已切换：{model}（仅影响后续消息）', { model: m }) : t('模型已重置为默认（后端路由）'))
   persistRuntime({ model: m || null })
 }
 
@@ -713,8 +716,12 @@ function onModeChange(m: string) {
   if (m === mode.value) return
   mode.value = m
   const opt = modeOptions.find(o => o.value === m)
-  const preset = MODE_PRESETS[m]
-  message.info(`已切换到「${opt?.label || m}」模式${preset?.desc ? `：${preset.desc}` : ''}，仅影响后续消息`)
+  const preset = MODE_PRESETS.value[m]
+  message.info(
+    preset?.desc
+      ? t('已切换到「{mode}」模式：{desc}，仅影响后续消息', { mode: opt?.label || m, desc: preset.desc })
+      : t('已切换到「{mode}」模式，仅影响后续消息', { mode: opt?.label || m }),
+  )
 }
 
 /** 归一化后的 metadata（可能为 JSON 字符串或对象） */
@@ -810,7 +817,7 @@ async function initContextChips(q: Record<string, any>) {
       const d = res.data?.data || res.data
       if (d?.name) {
         const c = contextChips.value.find(x => x.type === 'kb')
-        if (c) c.label = `知识库 ${d.name}`
+        if (c) c.label = t('知识库 {name}', { name: d.name })
       }
     } catch { /* 保留 id 占位 */ }
   }
@@ -832,7 +839,7 @@ async function initContextChips(q: Record<string, any>) {
       const rec = list.find((x: any) => x.id === workflow)
       if (rec?.name) {
         const c = contextChips.value.find(x => x.type === 'workflow')
-        if (c) c.label = `工作流 ${rec.name}`
+        if (c) c.label = t('工作流 {name}', { name: rec.name })
       }
     } catch { /* 无列表时保留原文 */ }
   }
@@ -924,7 +931,7 @@ async function loadUnifiedSession(sessionId: string) {
       'auto'
     items.value = buildUnifiedItems(list)
   } catch {
-    errorBanner.value = errorBanner.value || '统一会话加载失败，可直接发送消息继续'
+    errorBanner.value = errorBanner.value || t('统一会话加载失败，可直接发送消息继续')
   } finally {
     loading.value = false
     // 会话加载完成后自动滚到底部
@@ -991,7 +998,7 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
         : {}),
     })
     const d = res.data?.data !== undefined ? res.data.data : (res.data || {})
-    if (d.success === false) throw new Error(d.error || '请求失败')
+    if (d.success === false) throw new Error(d.error || t('请求失败'))
     currentTraceId.value = d.trace_id || ''
     appendAssistantWithKb(d.output || '', d.metadata || {})
     flashUnifiedDone()
@@ -1214,7 +1221,7 @@ const mapRpcHost: MapRpcHost = {
     // 它建的会话必须真的出现在会话列表里，否则用户在地图新建完回到对话页找不到。
     const res = await api.post('/v1/conversations', { title })
     const session = (res.data?.data ?? res.data) as { id?: string; title?: string } | null
-    if (!session?.id) throw new Error('创建会话失败')
+    if (!session?.id) throw new Error(t('创建会话失败'))
     await loadSessions()
     // 让地图把新会话摆上画布：地图自己不会知道宿主刚建了一个会话 ——
     // app.js 只在收到 `synapse:current-session` 时才调 placeSession（adapter 的监听）。
@@ -1239,7 +1246,7 @@ const mapRpcHost: MapRpcHost = {
     })
     const data = (res.data?.data ?? res.data) as { session_id?: string; id?: string } | null
     const id = data?.session_id || data?.id
-    if (!id) throw new Error('分叉失败')
+    if (!id) throw new Error(t('分叉失败'))
     await loadSessions()
     // 地图需要 `{id, title}`：id 用来记住分叉锚点、title 显示在卡片上
     return { id, title }
@@ -1491,13 +1498,13 @@ function exportMarkdown() {
     return
   }
   const session = sessions.value.find(s => s.id === activeSessionId.value)
-  const title = session?.title || '对话导出'
+  const title = session?.title || t('对话导出')
   const lines: string[] = [`# ${title}`, '']
   for (const it of items.value) {
     if (it.kind !== 'text') continue
-    const role = it.role === 'user' ? '🧑 用户' : '🤖 助手'
+    const role = it.role === 'user' ? t('🧑 用户') : t('🤖 助手')
     lines.push(`## ${role}`, '')
-    lines.push(it.content || '(空消息)')
+    lines.push(it.content || t('(空消息)'))
     if (it.attachments?.length) {
       lines.push('')
       for (const a of it.attachments) {
@@ -1509,7 +1516,7 @@ function exportMarkdown() {
   }
   const toolCalls = items.value.filter(i => i.kind === 'tool_call')
   if (toolCalls.length) {
-    lines.push('---', '', '## 工具调用记录', '')
+    lines.push('---', '', t('## 工具调用记录'), '')
     for (const tc of toolCalls) {
       if (tc.kind !== 'tool_call') continue
       lines.push(`### ${tc.name || 'tool'}`, '```json', tc.arguments || '{}', '```', '')
@@ -1553,7 +1560,7 @@ function onSlashCommand(cmd: string) {
       stopGeneration()
       break
     default:
-      message.warning(`未知命令: ${cmd}`)
+      message.warning(t('未知命令: {cmd}', { cmd }))
   }
 }
 
@@ -1775,7 +1782,7 @@ function requestDelete(id: string) {
   const s = sessions.value.find(x => x.id === id)
   Modal.confirm({
     title: t('删除对话'),
-    content: `确定删除「${s?.title || t('新对话')}」？此操作不可恢复。`,
+    content: t('确定删除「{title}」？此操作不可恢复。', { title: s?.title || t('新对话') }),
     okText: t('删除'),
     okButtonProps: { danger: true },
     cancelText: t('取消'),
@@ -1849,7 +1856,7 @@ async function setSessionTag(id: string, tag: string) {
   try {
     // 空串表示清除标签（后端 NULLIF 写 NULL）
     await updateConversation(id, { tag: tag || '' })
-    message.success(tag ? `已设置标签：${tag}` : t('已清除标签'))
+    message.success(tag ? t('已设置标签：{tag}', { tag }) : t('已清除标签'))
   } catch {
     s.tag = prev
     sortSessions(); persistSessions()
@@ -1902,13 +1909,13 @@ function toggleShareMessage(id: string) {
 
 async function generateShare() {
   if (!shareTarget.value) return
-  if (shareMessageIds.value.length === 0) { message.warning('请至少选择一条要分享的消息'); return }
+  if (shareMessageIds.value.length === 0) { message.warning(t('请至少选择一条要分享的消息')); return }
   shareLoading.value = true
   shareError.value = ''
   try {
     shareInfo.value = await createShare(shareTarget.value.id, shareMessageIds.value)
   } catch (e: any) {
-    shareError.value = e?.response?.data?.error || '生成分享链接失败'
+    shareError.value = e?.response?.data?.error || t('生成分享链接失败')
   } finally {
     shareLoading.value = false
   }
@@ -2087,7 +2094,7 @@ function onSSEMessage(raw: any) {
     // 后端 ask_user 工具在等答案：卡片按 tool_call_id 回填
     pendingQuestions.value.push({
       id: d?.id ?? d?.tool_call_id ?? String(Date.now()),
-      question: d?.question ?? d?.content ?? '需要你的确认',
+      question: d?.question ?? d?.content ?? t('需要你的确认'),
       options: Array.isArray(d?.options) ? d.options.map((option: unknown) => String(option)) : [],
       allowFreeText: d?.allow_free_text !== false,
     })
@@ -2135,7 +2142,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
         stopTurnTimer()
         connectionLost.value = true
         activeSSE?.close(); activeSSE = null
-        markMessageFailed(userItemId, '连接已断开')
+        markMessageFailed(userItemId, t('连接已断开'))
       },
       {
         // 携带上一连接的最后事件 id：服务端按 last_event_id 从缓冲流补发断线缺口
@@ -2211,8 +2218,8 @@ function confirmDestructive(removeCount: number, action: string, run: () => void
     return
   }
   Modal.confirm({
-    title: `这会删除后面的 ${removeCount} 条消息`,
-    content: `${action}需要截断到这条消息，其后 ${removeCount} 条消息（含助手回复）会被删除，且无法恢复。`,
+    title: t('这会删除后面的 {n} 条消息', { n: removeCount }),
+    content: t('{action}需要截断到这条消息，其后 {n} 条消息（含助手回复）会被删除，且无法恢复。', { action, n: removeCount }),
     okText: t('删除并继续'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -2222,7 +2229,7 @@ function confirmDestructive(removeCount: number, action: string, run: () => void
 
 /** 用户消息编辑后重发：删除该消息及之后所有，用新文本重发 */
 function retryFromUserMessage(itemId: string, newText: string) {
-  confirmDestructive(messagesAfter(itemId), '重发', () => {
+  confirmDestructive(messagesAfter(itemId), t('重发'), () => {
     truncateFrom(itemId)
     sendMessage(newText)
   })
@@ -2241,7 +2248,7 @@ function regenerateAssistant(itemId: string) {
     message.warning(t('未找到对应的用户消息，无法重新生成'))
     return
   }
-  confirmDestructive(messagesAfter(itemId), '重新生成', () => {
+  confirmDestructive(messagesAfter(itemId), t('重新生成'), () => {
     truncateFrom(itemId)
     sendMessage(userMsg.content, userMsg.attachments)
   })
@@ -2255,7 +2262,7 @@ function retryFailedMessage(itemId: string) {
   if (it.kind !== 'text') return
   const text = it.content
   const attachments = it.attachments
-  confirmDestructive(messagesAfter(itemId), '重试', () => {
+  confirmDestructive(messagesAfter(itemId), t('重试'), () => {
     truncateFrom(itemId)
     sendMessage(text, attachments)
   })
@@ -2300,7 +2307,7 @@ function continueGeneration() {
         v-if="connectionLost"
         class="connection-banner"
       >
-        {{ isOnline ? '与服务器的连接已断开，正在尝试重连...' : '网络已断开，请检查网络连接' }}
+        {{ isOnline ? $t('与服务器的连接已断开，正在尝试重连...') : $t('网络已断开，请检查网络连接') }}
       </div>
       <div class="chat-body">
         <!-- 内容区工具条 -->
@@ -2310,7 +2317,7 @@ function continueGeneration() {
             aria-hidden="true"
           />
           <div class="toolbar-center">
-            <span class="toolbar-title">{{ unifiedMode ? '统一任务' : (activeSession?.title || 'Chiron') }}</span>
+            <span class="toolbar-title">{{ unifiedMode ? $t('统一任务') : (activeSession?.title || 'Chiron') }}</span>
             <!-- 当前对话模式：前端实时状态（全局单一），随每条消息经 llm_config.mode 下发。
                  不再显示"来源"后缀 —— 模式没有服务端/会话一层可言，"是谁定的"答案永远是
                  "你当前的选择"。 -->
@@ -2350,7 +2357,7 @@ function continueGeneration() {
               size="small"
               class="toolbar-btn"
               :class="{ active: panelOpen && panelView === 'sessions' }"
-              :title="panelOpen && panelView === 'sessions' ? '收起会话列表' : '会话历史'"
+              :title="panelOpen && panelView === 'sessions' ? $t('收起会话列表') : $t('会话历史')"
               @click="openPanel('sessions')"
             >
               <template #icon>
@@ -2363,7 +2370,7 @@ function continueGeneration() {
               size="small"
               class="toolbar-btn"
               :class="{ active: panelOpen && panelView === 'trajectory' }"
-              :title="panelOpen && panelView === 'trajectory' ? '收起轨迹' : '查看历史提问'"
+              :title="panelOpen && panelView === 'trajectory' ? $t('收起轨迹') : $t('查看历史提问')"
               @click="openPanel('trajectory')"
             >
               <template #icon>
@@ -2376,7 +2383,7 @@ function continueGeneration() {
               size="small"
               class="toolbar-btn"
               :class="{ active: searchOpen }"
-              :title="searchOpen ? '关闭搜索' : '在本会话中搜索（正文与思考）'"
+              :title="searchOpen ? $t('关闭搜索') : $t('在本会话中搜索（正文与思考）')"
               @click="searchOpen ? closeSearch() : openSearch()"
             >
               <template #icon>
@@ -2442,7 +2449,7 @@ function continueGeneration() {
             @keydown.esc.prevent="closeSearch"
           >
           <span class="chat-search-count">
-            {{ searchQuery.trim() ? (searchMatches.length ? `${searchCursor + 1} / ${searchMatches.length}` : '无匹配') : '' }}
+            {{ searchQuery.trim() ? (searchMatches.length ? `${searchCursor + 1} / ${searchMatches.length}` : $t('无匹配')) : '' }}
           </span>
           <div class="chat-search-actions">
             <button
@@ -2494,7 +2501,7 @@ function continueGeneration() {
               class="ub-badge"
               :class="{ running: loading, done: unifiedJustFinished }"
             >
-              {{ loading ? '编排中' : unifiedJustFinished ? '完成' : '统一任务' }}
+              {{ loading ? $t('编排中') : unifiedJustFinished ? $t('完成') : $t('统一任务') }}
             </span>
             <span class="ub-mode">{{ unifiedSubmitMode || 'auto' }}</span>
             <span class="ub-spacer" />
@@ -2546,7 +2553,7 @@ function continueGeneration() {
                 v-else-if="(it as any).kind === 'kb_hits'"
                 class="kb-hits-tag"
               >
-                <span class="kb-hits-text">引用了知识库（×{{ (it as any).count || 1 }}）</span>
+                <span class="kb-hits-text">{{ $t('引用了知识库（×{n}）', { n: (it as any).count || 1 }) }}</span>
                 <a
                   v-if="(it as any).kb_id"
                   class="kb-hits-link"
@@ -2621,7 +2628,7 @@ function continueGeneration() {
             <span
               v-if="approvalRemain(a) > 0"
               class="approval-countdown"
-            >{{ approvalRemain(a) }}s 后自动拒绝</span>
+            >{{ $t('{n}s 后自动拒绝', { n: approvalRemain(a) }) }}</span>
           </div>
           <div class="approval-args">
             {{ a.arguments }}

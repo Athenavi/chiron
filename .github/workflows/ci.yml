@@ -110,3 +110,20 @@ jobs:
       # 迁移文件本身必须可被 Alembic 解析（离线模式不连库）
       - name: Migration renders offline
         run: python -m alembic -c alembic.ini upgrade head --sql > /dev/null
+
+  # ── 源码编码 ────────────────────────────────────────────────────────────
+  encoding:
+    name: Source encoding
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      # U+FFFD / 非法 UTF-8 是**字节已损坏**的信号，不是排版问题：
+      # python-engine/pyproject.toml 曾因此把 anthropic / pymilvus / prometheus-client
+      # 三个依赖吞进注释行；frontend-vue/nginx.conf 则被吞掉 5 条配置指令
+      # （client_max_body_size、location /assets/、location / 等），大括号失衡导致
+      # frontend 容器直接起不来 —— 而前端 CI 只跑 dist 相关的 lint/build/test，全无察觉。
+      - name: Encoding guard (U+FFFD / invalid UTF-8)
+        run: python scripts/check_source_encoding.py

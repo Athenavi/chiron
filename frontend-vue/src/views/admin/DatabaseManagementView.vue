@@ -49,7 +49,7 @@ const configRows = computed(() =>
 
 const configColumns = [
   { title: t('配置项'), dataIndex: 'key', key: 'key', ellipsis: true },
-  { title: '值', dataIndex: 'value', key: 'value', ellipsis: true },
+  { title: t('值'), dataIndex: 'value', key: 'value', ellipsis: true },
 ]
 
 async function loadConfigs() {
@@ -97,7 +97,7 @@ async function createBackup() {
   try {
     const resp = await api.post('/v1/admin/database/backups')
     const d = resp.data?.data || {}
-    message.success(`备份已创建（${d.name || '—'}，状态：${d.status || 'pending'}）`)
+    message.success(t('备份已创建（{name}，状态：{status}）', { name: d.name || '—', status: d.status || 'pending' }))
     await loadBackups()
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('创建备份失败')))
@@ -110,7 +110,7 @@ async function restoreBackup(record: any) {
   restoringName.value = record.name
   try {
     await api.post(`/v1/admin/database/backups/${encodeURIComponent(record.name)}/restore`)
-    message.success(`正在从备份「${record.name}」恢复，请稍后刷新查看结果`)
+    message.success(t('正在从备份「{name}」恢复，请稍后刷新查看结果', { name: record.name }))
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('恢复失败')))
   } finally {
@@ -127,7 +127,7 @@ const queryResult = ref<any>(null)
 const queryColumns = computed(() => {
   const cols = queryResult.value?.columns || []
   return cols.map((c: any, i: number) => ({
-    title: typeof c === 'string' ? c : (c?.name || `列 ${i + 1}`),
+    title: typeof c === 'string' ? c : (c?.name || t('列 {n}', { n: i + 1 })),
     dataIndex: typeof c === 'string' ? c : (c?.name || `col_${i}`),
     ellipsis: true,
   }))
@@ -182,7 +182,7 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
   try {
     const resp = await api.post(`/v1/admin/database/optimize/${action}`, { table })
     const d = resp.data?.data || {}
-    message.success(`优化完成：${d.action || action} ${d.table || table}（${d.status || 'ok'}）`)
+    message.success(t('优化完成：{action} {table}（{status}）', { action: d.action || action, table: d.table || table, status: d.status || 'ok' }))
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('优化失败')))
   } finally {
@@ -255,7 +255,7 @@ onMounted(async () => {
           </Descriptions.Item>
           <Descriptions.Item :label="$t('连接状态')">
             <Tag :color="statusData?.connected ? 'green' : 'red'">
-              {{ statusData?.connected ? '已连接' : '未连接' }}
+              {{ statusData?.connected ? $t('已连接') : $t('未连接') }}
             </Tag>
           </Descriptions.Item>
         </Descriptions>
@@ -348,7 +348,7 @@ onMounted(async () => {
         <Alert
           type="info"
           show-icon
-          message="仅允许只读查询（SELECT 等），不会执行任何写操作。"
+          :message="$t('仅允许只读查询（SELECT 等），不会执行任何写操作。')"
           style="margin-bottom: 16px"
         />
         <TextArea
@@ -418,7 +418,7 @@ onMounted(async () => {
         <Alert
           type="warning"
           show-icon
-          message="优化操作会占用数据库资源，建议在低峰期对指定表执行。"
+          :message="$t('优化操作会占用数据库资源，建议在低峰期对指定表执行。')"
           style="margin-bottom: 16px"
         />
         <Space wrap>

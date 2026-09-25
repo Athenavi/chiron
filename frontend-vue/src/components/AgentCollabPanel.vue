@@ -128,6 +128,7 @@
 
 <script setup lang="ts">
 import { ref, onMounted, nextTick } from 'vue'
+import { useI18n } from 'vue-i18n'
 
 export interface AgentInfo {
   id: string
@@ -156,6 +157,8 @@ const emit = defineEmits<{
   clearLogs: []
 }>()
 
+const { t } = useI18n()
+
 const isCollapsed = ref(false)
 const showOutput = ref<boolean[]>([])
 const logContainer = ref<HTMLDivElement>()
@@ -167,10 +170,10 @@ function collapsePanel() {
 
 function statusText(status: string): string {
   const map: Record<string, string> = {
-    pending: '等待中',
-    running: '执行中',
-    completed: '已完成',
-    error: '失败',
+    pending: t('等待中'),
+    running: t('执行中'),
+    completed: t('已完成'),
+    error: t('失败'),
   }
   return map[status] || status
 }

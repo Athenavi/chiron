@@ -89,7 +89,7 @@ async function publishItem(it: MarketItem) {
 async function retireItem(it: MarketItem) {
   Modal.confirm({
     title: t('退役条目'),
-    content: `退役「${it.name}」？退役为终态，不可回 published。`,
+    content: t('退役「{name}」？退役为终态，不可回 published。', { name: it.name }),
     okText: t('退役'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -108,7 +108,7 @@ async function retireItem(it: MarketItem) {
 function confirmDeleteItem(it: MarketItem) {
   Modal.confirm({
     title: t('删除条目'),
-    content: `确认删除「${it.name}」？`,
+    content: t('确认删除「{name}」？', { name: it.name }),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -194,7 +194,7 @@ const columns: TableColumnsType = [
 
 const grantColumns: TableColumnsType = [
   { title: t('租户'), dataIndex: 'tenant_id', key: 'tenant_id', ellipsis: true },
-  { title: t('启用'), dataIndex: 'enabled', key: 'enabled', width: 80, customRender: ({ text }) => (text ? '是' : '否') },
+  { title: t('启用'), dataIndex: 'enabled', key: 'enabled', width: 80, customRender: ({ text }) => (text ? t('是') : t('否')) },
   { title: t('安装时间'), dataIndex: 'installed_at', key: 'installed_at', width: 180, customRender: ({ text }) => formatDateCell(text) },
   { title: t('操作'), key: 'action', width: 80, fixed: 'right' },
 ]
@@ -255,7 +255,7 @@ onMounted(fetchItems)
     <a-alert
       type="info"
       show-icon
-      message="状态机：draft → published → retired（终态）。租户安装记录须条目为 published 才生效。"
+      :message="$t('状态机：draft → published → retired（终态）。租户安装记录须条目为 published 才生效。')"
       style="margin-bottom: 16px"
     />
 
@@ -359,7 +359,7 @@ onMounted(fetchItems)
 
     <a-drawer
       v-model:open="grantDrawerVisible"
-      :title="`租户授权${currentItem ? ' - ' + currentItem.name : ''}`"
+      :title="currentItem ? $t('租户授权 - {name}', { name: currentItem.name }) : $t('租户授权')"
       width="640"
       placement="right"
     >

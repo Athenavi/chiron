@@ -75,44 +75,46 @@ function openQuickCommand() {
   void router.push({ path: '/chat', query: { task: sessionId } })
 }
 
-const utilityActions: PaletteEntry[] = [
+// 用 computed 而非常量数组：group/desc/keywords 都是用户可见文案，常量在模块加载时
+// 求值一次，语言切换后会停在旧语言。
+const utilityActions = computed<PaletteEntry[]>(() => [
   {
     id: 'act_theme',
-    group: '操作',
+    group: tr('操作'),
     label: tr('切换主题'),
-    desc: '深色 / 浅色模式',
-    keywords: 'theme 主题 深色 浅色 暗色 明亮 外观 dark light',
+    desc: tr('深色 / 浅色模式'),
+    keywords: tr('theme 主题 深色 浅色 暗色 明亮 外观 dark light'),
     icon: markRaw(BulbOutlined),
     run: () => themeStore.toggleTheme(),
   },
   {
     id: 'act_quick',
-    group: '操作',
+    group: tr('操作'),
     label: tr('打开快速命令'),
-    desc: '自然语言任务 · 自动编排六大工作台',
-    keywords: 'quick command 快速命令 统一任务 自然语言 执行',
+    desc: tr('自然语言任务 · 自动编排六大工作台'),
+    keywords: tr('quick command 快速命令 统一任务 自然语言 执行'),
     icon: markRaw(ConsoleSqlOutlined),
     run: openQuickCommand,
   },
   {
     id: 'act_market',
-    group: '操作',
+    group: tr('操作'),
     label: tr('查看市场'),
-    desc: '技能 / Agent / MCP 市场',
-    keywords: 'market 市场 技能市场 安装 浏览',
+    desc: tr('技能 / Agent / MCP 市场'),
+    keywords: tr('market 市场 技能市场 安装 浏览'),
     icon: markRaw(AppstoreOutlined),
     run: () => void router.push('/skills?tab=market'),
   },
   {
     id: 'act_newchat',
-    group: '操作',
+    group: tr('操作'),
     label: tr('新建会话'),
-    desc: '开始一段新的对话',
-    keywords: 'new chat 新会话 新对话 新建 开始',
+    desc: tr('开始一段新的对话'),
+    keywords: tr('new chat 新会话 新对话 新建 开始'),
     icon: markRaw(PlusOutlined),
     run: () => void router.push('/chat'),
   },
-]
+])
 
 // ── 远程状态：搜索 + 最近活动 ──
 const open = ref(false)
@@ -158,13 +160,13 @@ async function runSearch(q: string) {
 }
 
 function toMessageEntry(m: any, i: number): PaletteEntry {
-  const title = m.title || m.content || '消息'
+  const title = m.title || m.content || tr('消息')
   const summary = m.summary || m.snippet || m.abstract || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
   const session = m.session_id || m.conversation_id || m.id || i
   return {
     id: `msg_${session}`,
-    group: '消息',
+    group: tr('消息'),
     label: truncate(title, 48),
     desc: truncate(summary, 80),
     keywords: '',
@@ -178,13 +180,13 @@ function toMessageEntry(m: any, i: number): PaletteEntry {
 }
 
 function toMediaEntry(m: any, i: number): PaletteEntry {
-  const title = m.title || m.name || '媒体'
+  const title = m.title || m.name || tr('媒体')
   const summary = m.summary || m.description || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
   const kind = String(m.type || m.kind || '').toLowerCase()
   return {
     id: `med_${m.id || i}`,
-    group: '媒体',
+    group: tr('媒体'),
     label: truncate(title, 48),
     desc: truncate(summary, 80),
     keywords: '',
@@ -210,7 +212,7 @@ async function loadRecent() {
     const list = res.data?.activities || []
     recentEntries.value = list.map((a: any) => ({
       id: `act_${a.id || a.workstation || ''}_${a.timestamp || 0}`,
-      group: '最近活动',
+      group: tr('最近活动'),
       label: a.title || tr('暂无标题'),
       desc: a.status_text || '',
       keywords: '',
@@ -227,8 +229,8 @@ async function loadRecent() {
 // ── 过滤：空输入 = 最近活动 + 快捷动作；有输入 = 本地静态过滤 + 远程结果 ──
 const filtered = computed<PaletteEntry[]>(() => {
   const q = query.value.trim().toLowerCase()
-  if (!q) return [...recentEntries.value, ...workstationActions, ...utilityActions]
-  const local = [...workstationActions, ...utilityActions].filter((e) =>
+  if (!q) return [...recentEntries.value, ...workstationActions, ...utilityActions.value]
+  const local = [...workstationActions, ...utilityActions.value].filter((e) =>
     `${e.label} ${e.desc || ''} ${e.keywords}`.toLowerCase().includes(q),
   )
   return [...local, ...remoteEntries.value]

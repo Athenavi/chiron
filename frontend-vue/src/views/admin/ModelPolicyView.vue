@@ -86,7 +86,7 @@ async function save() {
 function confirmDelete(p: ModelPolicy) {
   Modal.confirm({
     title: t('删除模型策略'),
-    content: `确认删除${p.role_id ? t('角色') + p.role_id : t('租户级兜底')}策略？`,
+    content: p.role_id ? t('确认删除角色 {id} 策略？', { id: p.role_id }) : t('确认删除租户级兜底策略？'),
     okText: t('删除'),
     okType: 'danger',
     cancelText: t('取消'),
@@ -103,13 +103,13 @@ function confirmDelete(p: ModelPolicy) {
 }
 
 function scopeLabel(p: ModelPolicy): string {
-  return p.role_id ? `角色 ${p.role_id.slice(0, 8)}…` : '租户级兜底'
+  return p.role_id ? t('角色 {id}…', { id: p.role_id.slice(0, 8) }) : t('租户级兜底')
 }
 
 const columns: TableColumnsType = [
   { title: t('作用域'), key: 'scope', width: 160, customRender: ({ record }) => scopeLabel(record) },
   { title: t('允许模型'), key: 'models', customRender: ({ record }) => (record.allowed_models ?? []).join(', ') || '-' },
-  { title: t('模型限速'), key: 'limits', width: 120, customRender: ({ record }) => Object.keys(record.per_model_limits ?? {}).length + ' 项' },
+  { title: t('模型限速'), key: 'limits', width: 120, customRender: ({ record }) => t('{n} 项', { n: Object.keys(record.per_model_limits ?? {}).length }) },
   { title: t('更新时间'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => new Date(text).toLocaleString('zh-CN', { hour12: false }) },
   { title: t('操作'), key: 'action', width: 140, fixed: 'right' },
 ]
@@ -134,7 +134,7 @@ onMounted(fetchPolicies)
     <a-alert
       type="info"
       show-icon
-      message="角色精确策略优先（用户直接角色 ∪ 群组成员角色任一命中），缺失回退租户级兜底；两者都无则放行。"
+      :message="$t('角色精确策略优先（用户直接角色 ∪ 群组成员角色任一命中），缺失回退租户级兜底；两者都无则放行。')"
       style="margin-bottom: 16px"
     />
 
@@ -175,7 +175,7 @@ onMounted(fetchPolicies)
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? '新建模型策略' : '编辑模型策略'"
+      :title="modalMode === 'create' ? $t('新建模型策略') : $t('编辑模型策略')"
       :confirm-loading="saving"
       width="640"
       @ok="save"

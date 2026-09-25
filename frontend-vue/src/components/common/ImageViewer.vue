@@ -43,7 +43,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
       @click.self="closeImageViewer"
     >
       <div class="viewer-bar">
-        <span class="viewer-name">{{ current.alt || '图片' }}</span>
+        <span class="viewer-name">{{ current.alt || $t('图片') }}</span>
         <span class="viewer-percent">{{ percent }}%</span>
         <button
           class="viewer-btn"

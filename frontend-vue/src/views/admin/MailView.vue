@@ -325,7 +325,7 @@ onMounted(load)
             <FormItem :label="$t('站点名称')">
               <Input
                 v-model:value="form.site_name"
-                :placeholder="$t('用于邮件模板中的 {{.SiteName}}')"
+                :placeholder="$t('用于邮件模板中的 {ph}', { ph: '{{.SiteName}}' })"
               />
             </FormItem>
             <FormItem :label="$t('站点地址')">
@@ -427,7 +427,7 @@ onMounted(load)
             type="info"
             show-icon
             class="mail-hint"
-            :message="$t('模板使用 Go 模板语法，可用变量：{{.SiteName}}、{{.Code}}、{{.TTLMinutes}}、{{.Action}}、{{.URL}}、{{.Email}}、{{.Name}}。留空即使用内置默认模板。')"
+            :message="$t('模板使用 Go 模板语法，可用变量：{vars}。留空即使用内置默认模板。', { vars: '{{.SiteName}}、{{.Code}}、{{.TTLMinutes}}、{{.Action}}、{{.URL}}、{{.Email}}、{{.Name}}' })"
           />
 
           <Tabs size="small">
@@ -442,7 +442,7 @@ onMounted(load)
                 <FormItem :label="$t('主题')">
                   <Input
                     v-model:value="form.code_subject"
-                    :placeholder="$t('留空使用默认：{{.SiteName}} 验证码')"
+                    :placeholder="$t('留空使用默认：{ph} 验证码', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('正文（HTML）')">
@@ -466,7 +466,7 @@ onMounted(load)
                 <FormItem :label="$t('主题')">
                   <Input
                     v-model:value="form.welcome_subject"
-                    :placeholder="$t('留空使用默认：欢迎加入 {{.SiteName}}')"
+                    :placeholder="$t('留空使用默认：欢迎加入 {ph}', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('正文（HTML）')">
@@ -490,14 +490,14 @@ onMounted(load)
                 <FormItem :label="$t('主题')">
                   <Input
                     v-model:value="form.reset_subject"
-                    :placeholder="$t('留空使用默认：{{.SiteName}} 密码重置')"
+                    :placeholder="$t('留空使用默认：{ph} 密码重置', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('正文（HTML）')">
                   <Input.TextArea
                     v-model:value="form.reset_body"
                     :rows="8"
-                    :placeholder="$t('留空使用内置默认模板（含 {{.URL}} 重置链接）')"
+                    :placeholder="$t('留空使用内置默认模板（含 {ph} 重置链接）', { ph: '{{.URL}}' })"
                   />
                 </FormItem>
               </Form>

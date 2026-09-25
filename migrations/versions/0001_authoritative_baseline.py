@@ -18,7 +18,9 @@ Create Date: 2026-09-24
 
 * **全新库**：`alembic upgrade head` 一次建齐全部表；
 * **已存在的库**（表已齐全，`alembic_version` 仍是旧 revision）：
-  `alembic stamp 0001_authoritative_baseline` —— 只改版本号、不重放 DDL；
+  `alembic stamp head` —— 只改版本号、不重放 DDL。**不要写死成本文件的 revision**：
+  链上已有更新的迁移后，stamp 到本基线会让 `alembic_version` 落在期望 head 之前，
+  应用启动校验（见下）会拒绝启动；
 * 应用启动只做只读校验（`internal/db/schema_version.go`）：head 与 `alembic_version`
   不一致即拒绝启动（`ALLOW_SCHEMA_DRIFT=true` 可临时放行）。
 

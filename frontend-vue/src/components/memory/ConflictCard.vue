@@ -5,7 +5,7 @@
   >
     <div class="conflict-header">
       <span class="conflict-icon">⚠️</span>
-      <span class="conflict-title">记忆冲突：{{ formatSlot(conflict.slot) }} · {{ conflict.item_key }}</span>
+      <span class="conflict-title">{{ $t('记忆冲突：{slot} · {key}', { slot: formatSlot(conflict.slot), key: conflict.item_key }) }}</span>
       <span class="conflict-time">{{ formatTime(conflict.created_at) }}</span>
     </div>
 
@@ -98,7 +98,10 @@
 
 <script setup lang="ts">
 import { ref } from 'vue'
+import { useI18n } from 'vue-i18n'
 import { resolveConflict, deleteConflict, type MemoryConflict } from '@/api/memory'
+
+const { t } = useI18n()
 
 const props = defineProps<{
   conflict: MemoryConflict
@@ -115,10 +118,10 @@ const manualValue = ref('')
 
 function formatSlot(slot: string): string {
   const map: Record<string, string> = {
-    identity: '身份',
-    preference: '偏好',
-    decision: '关键决策',
-    fact: '事实',
+    identity: t('身份'),
+    preference: t('偏好'),
+    decision: t('关键决策'),
+    fact: t('事实'),
   }
   return map[slot] || slot
 }
@@ -128,12 +131,12 @@ function formatTime(timestamp: number): string {
   const now = new Date()
   const diff = now.getTime() - date.getTime()
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return '刚刚'
-  if (minutes < 60) return `${minutes} 分钟前`
+  if (minutes < 1) return t('刚刚')
+  if (minutes < 60) return t('{n} 分钟前', { n: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return `${hours} 小时前`
+  if (hours < 24) return t('{n} 小时前', { n: hours })
   const days = Math.floor(hours / 24)
-  return `${days} 天前`
+  return t('{n} 天前', { n: days })
 }
 
 async function resolve(resolution: 'keep_old' | 'use_new' | 'manual', manualValue?: string) {

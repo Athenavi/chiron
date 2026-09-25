@@ -56,10 +56,10 @@ async function fetchCronJobs(silent = false) {
 async function triggerCronJobById(job: CronJob) {
   try {
     await triggerCronJob(job.id)
-    message.success(`已触发「${job.name}」，任务将异步执行`)
+    message.success(t('已触发「{name}」，任务将异步执行', { name: job.name }))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error('触发失败: ' + (e?.response?.data?.error || e?.message || t('网络错误')))
+    message.error(t('触发失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
   }
 }
 
@@ -100,9 +100,9 @@ function cronStatusColor(s: string): string {
   return 'default'
 }
 function cronStatusLabel(s: string): string {
-  if (!s) return '未运行'
-  if (s === 'success') return '成功'
-  if (s === 'failed' || s === 'error') return '失败'
+  if (!s) return t('未运行')
+  if (s === 'success') return t('成功')
+  if (s === 'failed' || s === 'error') return t('失败')
   return s
 }
 
@@ -161,7 +161,7 @@ async function saveCronJob() {
     cronModalOpen.value = false
     await fetchCronJobs()
   } catch (e: any) {
-    message.error('保存失败: ' + (e?.response?.data?.error || e?.message || t('网络错误')))
+    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
   } finally {
     cronSaving.value = false
   }
@@ -173,7 +173,7 @@ async function deleteCronJob(job: CronJob) {
     message.success(t('已删除定时任务'))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error('删除失败: ' + (e?.response?.data?.error || e?.message || t('网络错误')))
+    message.error(t('删除失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
   }
 }
 
@@ -240,7 +240,7 @@ onUnmounted(() => {
         :columns="cronColumns"
         :data-source="cronJobs"
         :loading="cronLoading"
-        :pagination="{ pageSize: 8, showSizeChanger: false, showTotal: (t: number) => `共 ${t} 条` }"
+        :pagination="{ pageSize: 8, showSizeChanger: false, showTotal: (n: number) => t('共 {n} 条', { n }) }"
         size="small"
         row-key="id"
       >
@@ -325,7 +325,7 @@ onUnmounted(() => {
     <!-- 新建 / 编辑定时任务对话框 -->
     <Modal
       :open="cronModalOpen"
-      :title="cronEditing ? '编辑定时任务' : '新建定时任务'"
+      :title="cronEditing ? $t('编辑定时任务') : $t('新建定时任务')"
       :confirm-loading="cronSaving"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"
@@ -345,7 +345,7 @@ onUnmounted(() => {
           <label class="cron-label">{{ $t('Cron 表达式') }}</label>
           <Input
             v-model:value="cronForm.schedule"
-            placeholder="例如：0 9 * * *（每天 09:00）"
+            :placeholder="$t('例如：0 9 * * *（每天 09:00）')"
           />
           <div class="cron-hint">
             {{ $t('标准 5 段 Cron：分 时 日 月 周') }}

@@ -55,7 +55,7 @@ const KNOWLEDGE_NODE_ID = 'n_kb'
 const LLM_NODE_ID = SOLE_NODE_ID
 
 /** 给 llm 节点的 system_prompt —— 交代这段正文的来历，而不是让它当普通提问回答 */
-const GRAPH_SYSTEM_PROMPT = '下面是此前的一段对话记录。请把它当作背景，在此基础上继续完成其中的工作。'
+const GRAPH_SYSTEM_PROMPT = () => t('下面是此前的一段对话记录。请把它当作背景，在此基础上继续完成其中的工作。')
 
 export interface SessionGraph {
   name: string
@@ -84,7 +84,7 @@ export function sessionToGraph(
   if (!hasBody) return null
 
   const markdown = sessionToMarkdown(items, title)
-  const name = (title || '').trim() || `对话工作流 ${new Date().toLocaleString()}`
+  const name = (title || '').trim() || t('对话工作流 {time}', { time: new Date().toLocaleString() })
   const kbId = (options.kbId || '').trim()
 
   // ── 没挂知识库：保持单 llm 节点，正文进 user_message ──
@@ -99,7 +99,7 @@ export function sessionToGraph(
             label: name,
             node_type: 'llm',
             config: {
-              system_prompt: GRAPH_SYSTEM_PROMPT,
+              system_prompt: GRAPH_SYSTEM_PROMPT(),
               user_message: markdown,
               model: '',
             },
@@ -147,7 +147,7 @@ export function sessionToGraph(
           label: name,
           node_type: 'llm',
           config: {
-            system_prompt: `${GRAPH_SYSTEM_PROMPT}\n\n${markdown}`,
+            system_prompt: `${GRAPH_SYSTEM_PROMPT()}\n\n${markdown}`,
             user_message: '',
             model: '',
           },

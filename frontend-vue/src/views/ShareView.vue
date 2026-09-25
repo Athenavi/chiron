@@ -8,6 +8,9 @@ import type { PublicShare } from '../api'
 import { splitThinking, stripUserInputTag } from '../components/chat/chat-types'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const route = useRoute()
 
@@ -22,7 +25,7 @@ md.renderer.rules.fence = (tokens: any[], idx: number) => {
   const lang = md.utils.escapeHtml((token.info || '').trim().toLowerCase() || 'code')
   const code = md.utils.escapeHtml(token.content)
   const encoded = encodeURIComponent(token.content)
-  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><button type="button" class="code-copy" data-code="${encoded}">复制</button></div><pre><code>${code}</code></pre></div>`
+  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><button type="button" class="code-copy" data-code="${encoded}">${t('复制')}</button></div><pre><code>${code}</code></pre></div>`
 }
 
 function renderMarkdown(src: string): string {
@@ -66,8 +69,8 @@ function handleClick(e: MouseEvent) {
   const code = decodeURIComponent(btn.dataset.code || '')
   if (!code) return
   navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = '已复制！'
-    setTimeout(() => { btn.textContent = '复制' }, 2000)
+    btn.textContent = t('已复制！')
+    setTimeout(() => { btn.textContent = t('复制') }, 2000)
   }).catch(() => { /* clipboard unavailable */ })
 }
 
@@ -77,9 +80,9 @@ onMounted(async () => {
     share.value = await getPublicShare(id)
   } catch (e: any) {
     const status = e?.response?.status
-    if (status === 410) error.value = '此分享已被创建者删除'
-    else if (status === 404) error.value = '分享不存在或已失效'
-    else error.value = '加载失败，请稍后重试'
+    if (status === 410) error.value = t('此分享已被创建者删除')
+    else if (status === 404) error.value = t('分享不存在或已失效')
+    else error.value = t('加载失败，请稍后重试')
   } finally {
     loading.value = false
   }
@@ -88,7 +91,10 @@ onMounted(async () => {
 function formatDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return `${d.getFullYear()}年${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+  return t('{year}年{month}月{day}日 {hh}:{mm}', {
+    year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),
+    hh: String(d.getHours()).padStart(2, '0'), mm: String(d.getMinutes()).padStart(2, '0'),
+  })
 }
 </script>
 
@@ -115,10 +121,10 @@ function formatDate(iso: string): string {
       <template v-else-if="share">
         <div class="share-head">
           <h1 class="share-title">
-            {{ share.title || '新对话' }}
+            {{ share.title || $t('新对话') }}
           </h1>
           <div class="share-meta">
-            {{ formatDate(share.created_at) }} · {{ share.messages.length }} 条消息
+            {{ $t('{date} · {n} 条消息', { date: formatDate(share.created_at), n: share.messages.length }) }}
           </div>
         </div>
 

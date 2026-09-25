@@ -18,8 +18,8 @@
       v-if="filteredItems.length === 0"
       size="page"
       :icon="markRaw(typeIcons[type])"
-      :description="searchQuery ? '暂无匹配的市场条目' : '市场暂无内容'"
-      :hint="searchQuery ? '尝试调整搜索关键词' : '管理员发布市场条目后，将展示在这里'"
+      :description="searchQuery ? $t('暂无匹配的市场条目') : $t('市场暂无内容')"
+      :hint="searchQuery ? $t('尝试调整搜索关键词') : $t('管理员发布市场条目后，将展示在这里')"
     />
 
     <div
@@ -86,7 +86,7 @@
             v-if="type === 'agent'"
             :color="toolCount(item) ? 'blue' : 'default'"
           >
-            {{ toolCount(item) }} 工具
+            {{ $t('{n} 工具', { n: toolCount(item) }) }}
           </Tag>
           <Tag>v{{ item.version || '1.0.0' }}</Tag>
         </div>
@@ -103,7 +103,7 @@
               <CheckOutlined v-if="item.installed" />
               <DownloadOutlined v-else />
             </template>
-            {{ item.installed ? '已安装' : '安装' }}
+            {{ item.installed ? $t('已安装') : $t('安装') }}
           </Button>
         </div>
       </div>
@@ -120,6 +120,10 @@ import {
 } from '@ant-design/icons-vue'
 import type { MarketItem, MarketType } from '../api'
 import EmptyState from './common/EmptyState.vue'
+
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
 
 const props = withDefaults(defineProps<{
   items: MarketItem[]
@@ -143,11 +147,11 @@ const typeIcons: Record<MarketType, any> = {
 
 const searchPlaceholder = computed(() => {
   const map: Record<MarketType, string> = {
-    skill: '搜索技能…',
-    agent: '搜索 Agent…',
-    mcp: '搜索 MCP…',
+    skill: t('搜索技能…'),
+    agent: t('搜索 Agent…'),
+    mcp: t('搜索 MCP…'),
   }
-  return map[props.type] || '搜索市场…'
+  return map[props.type] || t('搜索市场…')
 })
 
 /** manifest 尽力而为：可能是对象，也可能是 JSON 字符串 */
@@ -161,11 +165,11 @@ function getManifest(item: MarketItem): Record<string, any> {
 }
 
 function displayName(item: MarketItem): string {
-  return getManifest(item).name || item.name || '未命名'
+  return getManifest(item).name || item.name || t('未命名')
 }
 
 function displayDesc(item: MarketItem): string {
-  return getManifest(item).description || '暂无描述'
+  return getManifest(item).description || t('暂无描述')
 }
 
 function systemPrompt(item: MarketItem): string {

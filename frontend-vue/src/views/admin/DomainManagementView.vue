@@ -102,7 +102,7 @@ async function renewSSL(record: any) {
   try {
     const resp = await api.post(`/v1/admin/domains/${record.id}/renew-ssl`)
     const d = resp.data?.data || {}
-    message.success(d.note ? `SSL 续期完成（${d.ssl_status || 'ok'}）：${d.note}` : `SSL 续期完成（${d.ssl_status || 'ok'}）`)
+    message.success(d.note ? t('SSL 续期完成（{status}）：{note}', { status: d.ssl_status || 'ok', note: d.note }) : t('SSL 续期完成（{status}）', { status: d.ssl_status || 'ok' }))
     await loadDomains()
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('SSL 续期失败')))
@@ -135,10 +135,10 @@ const columns = [
 // ── 工具函数 ──
 function sslStatusText(status: string): string {
   switch (status) {
-    case 'active': return '有效'
-    case 'pending': return '签发中'
-    case 'expired': return '已过期'
-    case 'failed': return '失败'
+    case 'active': return t('有效')
+    case 'pending': return t('签发中')
+    case 'expired': return t('已过期')
+    case 'failed': return t('失败')
     default: return status || '-'
   }
 }
@@ -191,8 +191,8 @@ onMounted(loadDomains)
     </div>
 
     <Alert
-      message="域名接入说明"
-      description="添加域名后，先点击「验证」获取需要配置的解析地址；在 DNS 服务商处完成解析后再次点击「验证」即可确认接入。证书到期前可点击「续期」刷新 SSL 证书。"
+      :message="$t('域名接入说明')"
+      :description="$t('添加域名后，先点击「验证」获取需要配置的解析地址；在 DNS 服务商处完成解析后再次点击「验证」即可确认接入。证书到期前可点击「续期」刷新 SSL 证书。')"
       type="info"
       show-icon
       style="margin-bottom: 16px"
@@ -217,7 +217,7 @@ onMounted(loadDomains)
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'verified'">
               <Tag :color="record.verified ? 'green' : 'orange'">
-                {{ record.verified ? '已验证' : '未验证' }}
+                {{ record.verified ? $t('已验证') : $t('未验证') }}
               </Tag>
             </template>
 
@@ -299,7 +299,7 @@ onMounted(loadDomains)
       <template v-if="verifyResult">
         <Alert
           :type="verifyResult.verified ? 'success' : 'error'"
-          :message="verifyResult.verified ? '验证成功，域名已接入' : '验证失败'"
+          :message="verifyResult.verified ? $t('验证成功，域名已接入') : $t('验证失败')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -325,7 +325,7 @@ onMounted(loadDomains)
     <!-- 新建 / 编辑域名 -->
     <Modal
       v-model:open="modalVisible"
-      :title="editingId ? '编辑域名' : '添加域名'"
+      :title="editingId ? $t('编辑域名') : $t('添加域名')"
       :ok-text="$t('保存')"
       :cancel-text="$t('取消')"
       :confirm-loading="submitting"

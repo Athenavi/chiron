@@ -25,21 +25,21 @@ const form = ref({
 })
 
 const rules: Record<string, Rule[]> = {
-  name: [{ required: true, message: '请输入姓名', trigger: 'blur' }],
+  name: [{ required: true, message: t('请输入姓名'), trigger: 'blur' }],
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '邮箱格式不正确', trigger: 'blur' },
+    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
+    { type: 'email', message: t('邮箱格式不正确'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 8, message: '密码至少 8 位', trigger: 'blur' },
+    { required: true, message: t('请输入密码'), trigger: 'blur' },
+    { min: 8, message: t('密码至少 8 位'), trigger: 'blur' },
   ],
   confirmPassword: [
-    { required: true, message: '请确认密码', trigger: 'blur' },
+    { required: true, message: t('请确认密码'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         if (value !== form.value.password) {
-          return Promise.reject('两次密码输入不一致')
+          return Promise.reject(t('两次密码输入不一致'))
         }
         return Promise.resolve()
       },
@@ -152,7 +152,7 @@ async function handleRegister() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = '请先完成人机验证'
+    error.value = t('请先完成人机验证')
     return
   }
   if (emailVerifyRequired.value && !form.value.emailCode.trim()) {
@@ -173,18 +173,18 @@ async function handleRegister() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = '操作过于频繁，请完成人机验证后重试'
+      error.value = t('操作过于频繁，请完成人机验证后重试')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = '人机验证未通过，请重新验证'
+      error.value = t('人机验证未通过，请重新验证')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
-    error.value = apiErr || '注册失败'
+    error.value = apiErr || t('注册失败')
   }
 }
 </script>

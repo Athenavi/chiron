@@ -24,6 +24,10 @@ import {
 } from './transcriptProjection'
 import { readFolds, writeFold } from './transcriptFolds'
 
+import { useI18n } from 'vue-i18n'
+
+const { t } = useI18n()
+
 const props = defineProps<{
   items: ChatItem[]
   loading: boolean
@@ -107,7 +111,7 @@ function onUserInput() {
 onErrorCaptured((err) => {
   if (!safeMode.value) {
     safeMode.value = true
-    console.error('[MessageList] 渲染异常，降级为全量静态渲染', err)
+    console.error(t('[MessageList] 渲染异常，降级为全量静态渲染'), err)
   }
   return false   // 已处理，不再向上冒泡导致整页白屏
 })
@@ -242,7 +246,7 @@ function recomputeWindow() {
   if (!coversViewport(geo, range, scrollTop, viewportHeight)) {
     if (++coverFailures >= COVER_FAILURE_LIMIT) {
       safeMode.value = true
-      console.warn('[MessageList] 窗口覆盖连续失败，已降级为全量渲染')
+      console.warn(t('[MessageList] 窗口覆盖连续失败，已降级为全量渲染'))
     }
     fullRender.value = true
     setRange({ start: 0, end: n })
@@ -298,7 +302,7 @@ const questions = computed(() => {
     out.push({
       rowIndex,
       key: row.key,
-      preview: content.replace(/\s+/g, ' ').trim().slice(0, 60) || '（空消息）',
+      preview: content.replace(/\s+/g, ' ').trim().slice(0, 60) || t('（空消息）'),
     })
   })
   return out
@@ -571,7 +575,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
             v-else
             class="kb-hits-tag"
           >
-            <span class="kb-hits-text">引用了知识库（×{{ (node as any).row.item.count || 1 }}）</span>
+            <span class="kb-hits-text">{{ $t('引用了知识库（×{n}）', { n: (node as any).row.item.count || 1 }) }}</span>
             <a
               v-if="(node as any).row.item.kb_id"
               class="kb-hits-link"
@@ -597,7 +601,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         v-if="showBackToBottom"
         class="back-to-bottom"
         type="button"
-        :title="'回到底部' + (unseenCount ? `（${unseenCount} 条新消息）` : '')"
+        :title="unseenCount ? $t('回到底部（{n} 条新消息）', { n: unseenCount }) : $t('回到底部')"
         @click="scrollToBottom"
       >
         <ArrowDownOutlined />
@@ -624,7 +628,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
           :class="{ active: q.key === activeQuestionKey }"
           type="button"
           :title="q.preview"
-          :aria-label="`跳转到提问：${q.preview}`"
+          :aria-label="$t('跳转到提问：{preview}', { preview: q.preview })"
           @click="jumpToRow(q.rowIndex)"
         />
       </nav>

@@ -107,7 +107,7 @@ onMounted(() => {
         </Card>
         <Card>
           <Statistic
-            title="推理延迟(均值)"
+            :title="$t('推理延迟(均值)')"
             :value="metrics.avgLatencyMs"
             suffix="ms"
           />

@@ -27,12 +27,12 @@ const form = ref({
 
 const rules: Record<string, Rule[]> = {
   email: [
-    { required: true, message: '请输入邮箱', trigger: 'blur' },
-    { type: 'email', message: '邮箱格式不正确', trigger: 'blur' },
+    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
+    { type: 'email', message: t('邮箱格式不正确'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: '请输入密码', trigger: 'blur' },
-    { min: 6, message: '密码至少 6 位', trigger: 'blur' },
+    { required: true, message: t('请输入密码'), trigger: 'blur' },
+    { min: 6, message: t('密码至少 6 位'), trigger: 'blur' },
   ],
 }
 
@@ -62,16 +62,16 @@ const smsForm = ref({ phone: '', code: '' })
 
 const smsRules: Record<string, Rule[]> = {
   phone: [
-    { required: true, message: '请输入手机号', trigger: 'blur' },
+    { required: true, message: t('请输入手机号'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) =>
-        !value || isValidPhone(value) ? Promise.resolve() : Promise.reject('手机号格式不正确'),
+        !value || isValidPhone(value) ? Promise.resolve() : Promise.reject(t('手机号格式不正确')),
       trigger: 'blur',
     },
   ],
   code: [
-    { required: true, message: '请输入验证码', trigger: 'blur' },
-    { len: 6, message: '验证码为 6 位数字', trigger: 'blur' },
+    { required: true, message: t('请输入验证码'), trigger: 'blur' },
+    { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
   ],
 }
 
@@ -84,11 +84,11 @@ async function handleSendCode() {
   smsError.value = ''
   const phone = smsForm.value.phone.trim()
   if (!isValidPhone(phone)) {
-    smsError.value = '请输入正确的手机号'
+    smsError.value = t('请输入正确的手机号')
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    smsError.value = '请先完成人机验证'
+    smsError.value = t('请先完成人机验证')
     return
   }
   sending.value = true
@@ -111,22 +111,22 @@ async function handleSendCode() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      smsError.value = '操作过于频繁，请完成人机验证后重试'
+      smsError.value = t('操作过于频繁，请完成人机验证后重试')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      smsError.value = '人机验证未通过，请重新验证'
+      smsError.value = t('人机验证未通过，请重新验证')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 429) {
-      smsError.value = '发送过于频繁，请稍后再试'
+      smsError.value = t('发送过于频繁，请稍后再试')
       return
     }
-    smsError.value = apiErr || '验证码发送失败'
+    smsError.value = apiErr || t('验证码发送失败')
   } finally {
     sending.value = false
   }
@@ -140,7 +140,7 @@ async function handleSmsLogin() {
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    smsError.value = '请先完成人机验证'
+    smsError.value = t('请先完成人机验证')
     return
   }
   smsLoading.value = true
@@ -158,18 +158,18 @@ async function handleSmsLogin() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      smsError.value = '操作过于频繁，请完成人机验证后重试'
+      smsError.value = t('操作过于频繁，请完成人机验证后重试')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      smsError.value = '人机验证未通过，请重新验证'
+      smsError.value = t('人机验证未通过，请重新验证')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
-    smsError.value = apiErr || '登录失败'
+    smsError.value = apiErr || t('登录失败')
   } finally {
     smsLoading.value = false
   }
@@ -341,7 +341,7 @@ async function handleLogin() {
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = '请先完成人机验证'
+    error.value = t('请先完成人机验证')
     return
   }
   try {
@@ -358,18 +358,18 @@ async function handleLogin() {
     if (status === 428 || apiErr === 'captcha_required') {
       // 后端要求人机验证（同 IP 失败升级）→ 强制展示验证码组件
       needCaptcha.value = true
-      error.value = '操作过于频繁，请完成人机验证后重试'
+      error.value = t('操作过于频繁，请完成人机验证后重试')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = '人机验证未通过，请重新验证'
+      error.value = t('人机验证未通过，请重新验证')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
-    error.value = apiErr || '登录失败'
+    error.value = apiErr || t('登录失败')
   }
 }
 </script>
@@ -431,13 +431,13 @@ async function handleLogin() {
         >
           <TabPane
             key="password"
-            tab="密码登录"
+            :tab="$t('密码登录')"
           />
 
           <TabPane
             v-if="smsEnabled"
             key="sms"
-            tab="短信登录"
+            :tab="$t('短信登录')"
           />
 
           <TabPane

@@ -125,7 +125,7 @@ func TestBuildSignContentIncludesSignType(t *testing.T) {
 }
 
 // 支付宝在参数/charset 校验失败时用它自身的默认字符集（GBK）返回文案。
-// 必须解码为可读中文，否则线上只能看到 "��ǩ..." 这种无从下手的乱码。
+// 必须解码为可读中文，否则线上只能看到 "\uFFFD\uFFFD\u01E9..." 这种无从下手的乱码。
 func TestDecodeBodyConvertsGBK(t *testing.T) {
 	// 注意：不能用单个 0xC7 0xA9 来测 —— 它在 GBK 里是"签"，但这两个字节恰好也是
 	// 合法的 2 字节 UTF-8 序列（U+01E9 "ǩ"），utf8.Valid 会放行。整段 GBK 文本几乎
@@ -151,7 +151,7 @@ func TestDecodeBodyConvertsGBK(t *testing.T) {
 }
 
 // 端到端复刻线上故障：支付宝用 GBK 返回错误 JSON 时，错误信息里的 sub_msg 必须可读，
-// 而不是 "��ǩ..." 这种只能靠猜的乱码。
+// 而不是 "\uFFFD\uFFFD\u01E9..." 这种只能靠猜的乱码。
 func TestAlipayPrecreateDecodesGBKErrorResponse(t *testing.T) {
 	const wantSubMsg = "签名不正确，请检查charset参数和参数值"
 	payload := `{"alipay_trade_precreate_response":{"code":"40002","msg":"Invalid Arguments","sub_msg":"` + wantSubMsg + `"}}`

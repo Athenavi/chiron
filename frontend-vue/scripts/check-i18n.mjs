@@ -38,8 +38,14 @@ const CJK = /[\u3400-\u4dbf\u4e00-\u9fff\uf900-\ufaff]/
  * 统一替换为空格，保持行结构基本不变（计数口径确定即可）。
  */
 function stripComments(source) {
-  let out = source.replace(/<!--[\s\S]*?-->/g, ' ')
-  out = out.replace(/\/\*[\s\S]*?\*\//g, ' ')
+  // `<style>` 块整体剔除：CSS 的 `content: '…'` 确实面向用户，但**没有 t() 可用**，
+  // 走 i18n 需要把文案搬进模板并用 attr()/data 属性渲染。把它计入存量会得到一个
+  // 永远清不掉的数字，最终逼迫上调基线（基线一被上调，护栏就失去公信力）。
+  // 用"等量空格 + 保留换行"替换，保持行结构（inventory 依赖行号）。
+  const blank = (m) => m.replace(/[^\n]/g, ' ')
+  let out = source.replace(/<style[\s\S]*?<\/style>/g, blank)
+  out = out.replace(/<!--[\s\S]*?-->/g, blank)
+  out = out.replace(/\/\*[\s\S]*?\*\//g, blank)
   out = out
     .split(/\r?\n/)
     .map(line => line.replace(/(^|[^:'"`\\])\/\/.*$/, '$1'))
@@ -54,7 +60,9 @@ function walk(dir) {
     if (statSync(full).isDirectory()) {
       // __tests__：断言里的中文随批次一起迁移，但不属于"界面文案"统计口径
       // locales：译文存放地 —— 那里的中文就是目标产物，不能算硬编码
-      if (entry === '__tests__' || entry === 'locales') continue
+      // `i18n`：i18n 基础设施自身（languages.ts 的 nativeName 是**母语名**，切换器里必须
+      // 始终用母语显示 —— 翻译它反而会让中文用户看到「Simplified Chinese」）。
+      if (entry === '__tests__' || entry === 'locales' || entry === 'i18n') continue
       out.push(...walk(full))
     } else if (/\.(vue|ts)$/.test(entry) && !/\.spec\.ts$/.test(entry) && !/\.d\.ts$/.test(entry)) {
       out.push(full)
@@ -95,6 +103,54 @@ for (const file of walk(join(ROOT, 'src'))) {
 }
 
 const current = Object.fromEntries([...counts.entries()].sort(([a], [b]) => a.localeCompare(b)))
+
+// ── 消息编译检查 ─────────────────────────────────────────────────────────────
+// 键就是消息本身（gettext 风格），因此键里出现**字面** `{` 会被 vue-i18n 当作插值解析，
+// 运行时抛 `Message compilation error` —— 实测 `{{.SiteName}}`（Go 模板变量）与
+// `{"name":…}`（JSON 示例）都会直接把组件渲染打挂。静态正则只能猜"哪个 { 非法"，
+// 所以这里直接用 vue-i18n 的编译器过一遍：漏掉一处就是线上白屏。
+const { createI18n } = await import('vue-i18n')
+const legacySrc = readFileSync(join(ROOT, 'src/locales/zh-CN/legacy.ts'), 'utf8')
+const legacyKeys = [...legacySrc.matchAll(/^ {2}'((?:[^'\\]|\\.)*)': /gm)].map(m => m[1])
+const probe = createI18n({
+  legacy: false,
+  locale: 'zh-CN',
+  messages: { 'zh-CN': Object.fromEntries(legacyKeys.map(k => [k, k])) },
+  missingWarn: false,
+  fallbackWarn: false,
+})
+const brokenKeys = []
+const suspicious = []
+// 剔除插值 `{…}` 后仍出现 `|`（复数分隔）或 `@`（linked message）→ 消息会被**静默改写**：
+// t() 只返回其中一个分支，或把剩余文本当 key 再去查。这类比抛错更难发现。
+//
+// 注意不能用「t(k) !== k」来判断：实测 vue-i18n 对**未提供的命名参数**是替换成空串
+// （不是保留 `{n}`），合法插值会被全部误报。
+for (const k of legacyKeys) {
+  try {
+    probe.global.t(k)
+  } catch (e) {
+    brokenKeys.push(`${k} —— ${String(e).split('\n')[0]}`)
+    continue
+  }
+  if (/[|@]/.test(k.replace(/\{[^}]*\}/g, ''))) suspicious.push(k)
+}
+if (brokenKeys.length || suspicious.length) {
+  if (brokenKeys.length) {
+    console.error('i18n 消息编译失败 —— 键里含**字面** `{` / `}`（vue-i18n 会当插值解析，运行时直接抛错）：')
+    for (const line of brokenKeys) console.error(`  ${line}`)
+    console.error('')
+    console.error("修复：把字面花括号当**参数**传入 —— t('…{ph}…', { ph: '{{.SiteName}}' })，不要写进消息本身；")
+    console.error("      若正文本身就是含花括号的技术示例，用 t('{jsonExample}', { jsonExample: '…' })。")
+  }
+  if (suspicious.length) {
+    console.error('i18n 消息含**歧义符号**（插值之外出现 `|` 复数分隔 或 `@` linked message）：')
+    for (const line of suspicious) console.error(`  ${line}`)
+    console.error('')
+    console.error("修复：把这类符号当**参数**传入 —— t('启用 {sep} 停用', { sep: '|' })，或改用不含歧义符号的表达。")
+  }
+  process.exit(1)
+}
 
 if (WRITE) {
   writeFileSync(BASELINE_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8')

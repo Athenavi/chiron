@@ -1,3 +1,5 @@
+import { t } from '../../i18n'
+
 /**
  * mermaid 图表渲染（把 ```mermaid 代码块变成 SVG）。
  *
@@ -69,7 +71,7 @@ export async function renderMermaidBlocks(host: HTMLElement, options: RenderOpti
       slot.classList.add('mermaid-diagram')
     } catch {
       slot.classList.add('mermaid-error')
-      slot.dataset.error = '图表语法有误，已按源码展示'
+      slot.dataset.error = t('图表语法有误，已按源码展示')
     }
   }
 }
