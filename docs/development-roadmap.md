@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 50 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 53 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -63,11 +63,11 @@
   按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
   `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
   `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第十五批已清 661 条 → 510 / 52 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  **截至第十六批已清 695 条 → 476 / 49 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **15 批、清 661 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+  2. **分批接线**：✅ 已完成 **16 批、清 695 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
      各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
      | 批 | 提交 | 范围 |
@@ -87,6 +87,7 @@
      | 13 | `c093acd` | `app/agent/multi_agent.py` + `app/workflow/engine.py`（33 条；`chat_stream` 的 `messages` 按 `normalize_messages` 契约放宽为 `list[Any]`） |
      | 14 | `58741a9` | `app/gateway/coalescer.py` + `app/rag/parser.py`（27 条；overrides 补 `pdfplumber`，并对 `app.rag.parser` 精确豁免 `disallow_untyped_calls`） |
      | 15 | `ea982bf` | `app/api/media.py` + `app/api/workflows.py` + `app/agent/collaboration.py`（41 条） |
+     | 16 | `2718755` | `app/api/memory.py` + `app/subagent/affinity.py` + `app/plugins/pool.py`（34 条） |
 
      第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
      `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
@@ -94,10 +95,11 @@
      恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
 
      - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **50 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 510 条 / 52 个文件）：
+       （现为 **53 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 476 条 / 49 个文件）：
        `agent/runtime.py` 99、`main.py` 50、`rag/builder.py` 45、`queue/worker.py` 35、
-       `skill/manager.py` 31、`api/memory.py` 12、`subagent/affinity.py` 11、`plugins/pool.py` 11 …；
+       `skill/manager.py` 31、`tools/_sandbox_worker.py` 10、`rag/stores/milvus_store.py` 10、
+       `agent/subagent_runner.py` 10 …；
      - **两条仍生效的约束**（新增依赖或新批次时照办）：
        1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
           依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
@@ -112,6 +114,13 @@
             它的文件上；
           - 新增同类第三方缺口时照此办理：先判断是「缺 stub」（走 `ignore_missing_imports`）
             还是「有 stub 但标注不全」（走调用方的单项豁免），两者都不许用 `# type: ignore`；
+     - ⚠ **给 FastAPI 路由补返回注解时不要写含 Response 子类的联合类型** —— 路由函数的返回
+       注解会被 FastAPI 当作 `response_model` 生成校验，而 `JSONResponse | dict[str, Any]`
+       不是合法 Pydantic 字段类型，后果是**测试在 collection 阶段就报**
+       `FastAPIError: Invalid args for response field!`（第十六批 `api/memory.py` 实测踩到）。
+       这些 handler 的出口本来就分两类（错误时 `JSONResponse`、正常时 dict），要么统一写
+       `-> Any`（`Any` 是合法字段类型，`api/media.py` 即如此），要么在装饰器上显式
+       `response_model=None`。
      - ⚠ **本分支从未 push，CI 一次都没跑过** —— 迄今所有 mypy 结果都来自本机隔离 venv。
        首次真正跑 CI 时，除已接线的 mypy 之外还要留意「只装 `requirements.txt` +
        `requirements-dev.txt` 的环境」缺哪些**顶层** import：第十批就是这样查出
@@ -277,14 +286,15 @@ ruff check . && mypy --follow-imports=silent \
   app/agent/collaboration.py app/agent/event_sink.py app/agent/loop.py \
   app/agent/message_codec.py app/agent/multi_agent.py \
   app/api/agents.py app/api/context.py app/api/knowledge.py app/api/media.py \
-  app/api/skills.py app/api/system.py app/api/unified_executor.py app/api/workflows.py \
+  app/api/memory.py app/api/skills.py app/api/system.py app/api/unified_executor.py \
+  app/api/workflows.py \
   app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/coalescer.py app/gateway/provider.py \
   app/gateway/ratelimit.py app/gateway/router.py \
   app/interfaces app/knowledge app/llm app/mcp/client.py app/mcp/registry.py app/media \
-  app/memory app/middleware app/observability app/providers app/queue/producer.py \
-  app/rag/parser.py app/rag/retriever.py app/rag/stores/base.py \
-  app/session_store.py app/sse app/trace \
+  app/memory app/middleware app/observability app/plugins/pool.py app/providers \
+  app/queue/producer.py app/rag/parser.py app/rag/retriever.py app/rag/stores/base.py \
+  app/session_store.py app/sse app/subagent/affinity.py app/trace \
   app/tools/code_guard.py app/tools/context.py app/tools/rag_query.py app/tools/skill.py \
   app/tools/skill_catalog.py app/tools/ssrf.py app/tools/web.py \
   app/workflow/engine.py \
