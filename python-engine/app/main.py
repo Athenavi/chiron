@@ -6,6 +6,7 @@ import logging
 import os
 import re
 import time
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -13,7 +14,7 @@ from typing import TYPE_CHECKING, Any
 import redis.asyncio as aioredis
 import uvicorn
 from fastapi import Depends, FastAPI, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
 from app.session_store import SessionStore
@@ -188,7 +189,7 @@ def _is_inside_cwd(path: Path) -> bool:
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期：启动初始化 + 关闭清理"""
     global _redis, _gateway, _queue_worker
 
@@ -196,7 +197,7 @@ async def lifespan(app: FastAPI):
     import sys
     import traceback
 
-    def global_exception_handler(exc_type, exc_value, exc_tb):
+    def global_exception_handler(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
         if issubclass(exc_type, KeyboardInterrupt):
             return
         logger.critical(
@@ -553,6 +554,8 @@ async def lifespan(app: FastAPI):
     # Redis 可用：分布式租户限流；Redis 不可用：本地限流兑底（避免裸奔/None 崩溃）。
     from app.gateway.ratelimit import LocalTenantRateLimiter
 
+    # 两个实现（Redis 版 / 进程内降级版）接口一致但无共同基类，故按 Any 收。
+    limiter: Any
     if _redis is not None:
         limiter = TenantRateLimiter(
             redis=_redis,
@@ -637,7 +640,7 @@ async def lifespan(app: FastAPI):
     # ── 6.5. 启动进程指标收集器 ──
     from app.observability.metrics import record_process_metrics
 
-    async def metrics_collector():
+    async def metrics_collector() -> None:
         """定期收集进程资源指标"""
         while True:
             try:
@@ -846,7 +849,7 @@ async def _resolve_attachments(content: str) -> str:
                     try:
                         import pymupdf
 
-                        doc = pymupdf.open(stream=resp.content, filetype="pdf")
+                        doc: Any = pymupdf.open(stream=resp.content, filetype="pdf")
                         pdf_text = "\n".join(page.get_text() for page in doc)
                         doc.close()
                         MAX_PDF_CHARS = 8000  # noqa: N806 — 同上
@@ -898,7 +901,7 @@ async def _resolve_attachments(content: str) -> str:
     return content
 
 
-def _setup_middleware(app: FastAPI, redis: aioredis.Redis, limiter) -> None:
+def _setup_middleware(app: FastAPI, redis: aioredis.Redis, limiter: Any) -> None:
     """注册中间件链（注意：FastAPI 后注册的先执行）"""
     from app.middleware.auth import AuthMiddleware
     from app.middleware.error_handler import ErrorHandlerMiddleware
@@ -926,11 +929,11 @@ def _setup_routes(app: FastAPI) -> None:
     # ── 健康检查 ──
 
     @app.get("/healthz")
-    async def healthz():
+    async def healthz() -> dict[str, Any]:
         return {"status": "ok"}
 
     @app.get("/metrics")
-    async def metrics():
+    async def metrics() -> Response:
         """Prometheus 抓取端点。
 
         此前指标只在 `app/observability/metrics.py` 里**定义**，没有任何导出路由 ——
@@ -947,7 +950,7 @@ def _setup_routes(app: FastAPI) -> None:
         return Response(content=generate_latest(), media_type=CONTENT_TYPE_LATEST)
 
     @app.get("/readyz")
-    async def readyz():
+    async def readyz() -> Any:
         """K8s readiness: Redis + 至少一个 Provider 可用"""
         if _redis is None:
             return JSONResponse(
@@ -963,7 +966,7 @@ def _setup_routes(app: FastAPI) -> None:
             )
 
     @app.get("/info")
-    async def info():
+    async def info() -> dict[str, Any]:
         from app.observability.metrics import get_active_requests, get_process_resources
 
         cpu_percent, memory_mb = get_process_resources()
@@ -978,7 +981,7 @@ def _setup_routes(app: FastAPI) -> None:
         }
 
     @app.get("/healthz/providers")
-    async def healthz_providers():
+    async def healthz_providers() -> Any:
         """Provider 健康检查：逐个调用 probe 并返回状态"""
         if _gateway is None:
             return JSONResponse(
@@ -1007,7 +1010,7 @@ def _setup_routes(app: FastAPI) -> None:
 
     # ── 网关管理（模型热切换、熔断器重置） ──
     @app.post("/v1/gateway/sync-routes")
-    async def gateway_sync_routes():
+    async def gateway_sync_routes() -> Any:
         """运行时热同步租户模型路由配置（从 Go 网关拉取）。
 
         不阻断调用，失败时保留上次同步的配置。
@@ -1026,7 +1029,7 @@ def _setup_routes(app: FastAPI) -> None:
             )
 
     @app.post("/v1/gateway/reset-breaker")
-    async def gateway_reset_breaker(request: Request):
+    async def gateway_reset_breaker(request: Request) -> Any:
         """重置指定 Provider 的熔断器。
 
         Request body: {"provider": "openai"}
@@ -1072,8 +1075,8 @@ def _setup_routes(app: FastAPI) -> None:
 
 async def agent_run(
     request: Request,
-    gateway=Depends(get_gateway),
-):
+    gateway: Any = Depends(get_gateway),
+) -> Any:
     """流式 Agent 推理 — SSE 输出"""
     import json
 
@@ -1083,7 +1086,7 @@ async def agent_run(
     llm_config = body.get("llm_config") or {}
     provider_hint = llm_config.get("provider", "")
 
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[Any]:
         try:
             async for event in run_agent(
                 gateway=gateway,
@@ -1120,10 +1123,10 @@ async def agent_run(
 
 
 async def _workflow_context_stream(
-    graphs: list[tuple[str, dict]],
-    body: dict,
-    gateway,
-):
+    graphs: list[tuple[str, dict[str, Any]]],
+    body: dict[str, Any],
+    gateway: Any,
+) -> AsyncIterator[str]:
     """执行选中的工作流链，并以 SSE 事件下发结果。
 
     事件形态与 AgentRuntime 保持一致：结果走 ``text``（Go 网关只对 ``text`` 事件
@@ -1166,8 +1169,8 @@ async def _workflow_context_stream(
 
 async def agent_submit(
     request: Request,
-    gateway=Depends(get_gateway),
-):
+    gateway: Any = Depends(get_gateway),
+) -> Any:
     """Go 网关代理端点 — 完整 ReAct 循环，SSE 输出"""
     import json
 
@@ -1378,7 +1381,7 @@ async def agent_submit(
             url=settings.engine_advertise_url,
         )
 
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[Any]:
         total_in = 0
         total_out = 0
         started = time.monotonic()
@@ -1392,7 +1395,7 @@ async def agent_submit(
         # session_id 注入到每条事件里：前端 SSE 按会话过滤，缺了会被投给所有订阅者（串扰）
         sink = EventSink(session_id=getattr(task, "session_id", "") or "")
         set_tool_context(event_sink=sink)
-        merged: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        merged: asyncio.Queue[Any] = asyncio.Queue(maxsize=1024)
 
         async def _pump_runtime() -> None:
             try:
@@ -1401,7 +1404,7 @@ async def agent_submit(
             finally:
                 await merged.put(("eof", None))
 
-        def _frame(payload: dict) -> str:
+        def _frame(payload: dict[str, Any]) -> str:
             return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
         # 运行期缓存（Redis，TTL 1h）：写入的事件与发给前端的完全一致 —— 既保证
@@ -1420,7 +1423,7 @@ async def agent_submit(
         # 生成器退出后的所有事件都无处可去，前端面板与 /events 端点永远空白。
         from app.subagent import registry as subagent_registry
 
-        async def _persist_subagent_event(payload) -> None:
+        async def _persist_subagent_event(payload: Any) -> None:
             run_id = payload.get("run_id") or ""
             if run_id:
                 # 事件即心跳：看门狗据此认定"仍在产出内容的 run"没有卡死
@@ -1437,7 +1440,7 @@ async def agent_submit(
         # 无论 Redis 是否可用都注册投递器：心跳不能因为缓存不可用就停
         sink.attach_persistent(_persist_subagent_event)
 
-        async def _sink_frames():
+        async def _sink_frames() -> AsyncIterator[str]:
             """把旁路事件转成 SSE 帧（落缓存已交给上面的常驻投递器，避免双写）。"""
             for sub_event in sink.drain():
                 yield _frame(sub_event.to_payload())
@@ -1557,7 +1560,7 @@ async def agent_submit(
 
 async def agent_approval(
     request: Request,
-):
+) -> Any:
     """工具确认端点：解决 agent 循环中等待用户确认的工具调用（S 安全修复）。"""
     body = await request.json()
     session_id = body.get("session_id", "")
@@ -1616,7 +1619,7 @@ async def agent_approval(
 
 async def agent_answer(
     request: Request,
-):
+) -> Any:
     """结构化提问端点：把用户答案回填给等待中的 ask_user 调用。
 
     校验流程与审批端点完全一致 —— 二者都是「外部输入注入到正在运行的 agent 循环」
@@ -1672,8 +1675,8 @@ async def agent_answer(
 
 async def kb_build(
     request: Request,
-    gateway=Depends(get_gateway),
-):
+    gateway: Any = Depends(get_gateway),
+) -> Any:
     """文档 RAG 索引 — SSE 流式进度"""
     import base64
     import json
@@ -1689,7 +1692,7 @@ async def kb_build(
 
     builder = RAGBuilder(llm_gateway=gateway)
 
-    async def event_generator():
+    async def event_generator() -> AsyncIterator[Any]:
         try:
             async for event in builder.build_document(
                 kb_id=body.get("kb_id", ""),
@@ -1713,8 +1716,8 @@ async def kb_build(
 
 async def kb_query(
     request: Request,
-    gateway=Depends(get_gateway),
-):
+    gateway: Any = Depends(get_gateway),
+) -> Any:
     """查询知识库"""
     from app.rag.builder import RAGBuilder
 
@@ -1760,7 +1763,7 @@ async def _run_retention_cleaner() -> None:
             logger.warning("idempotency retention failed: %s", e)
 
 
-async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
+async def _run_queue_worker(redis: aioredis.Redis, gateway: Any = None) -> None:
     """后台队列消费者。"""
     global _queue_worker_instance
     from app.queue.worker import QueueWorker
@@ -1794,7 +1797,7 @@ async def _run_queue_worker(redis: aioredis.Redis, gateway=None) -> None:
         await subagent_registry.stop()
 
 
-def main():
+def main() -> None:
     """主函数"""
     uvicorn.run(
         "app.main:create_app",
@@ -1830,7 +1833,7 @@ def _setup_middleware_early(app: FastAPI) -> None:
 
     # Trace context propagation middleware
     @app.middleware("http")
-    async def trace_context_middleware(request: Request, call_next):
+    async def trace_context_middleware(request: Request, call_next: Any) -> Any:
         """从HTTP头提取trace context"""
         carrier = dict(request.headers)
         ctx = extract(carrier)

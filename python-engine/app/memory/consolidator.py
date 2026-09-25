@@ -25,7 +25,6 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from app.memory.layers import SummaryEntry, cosine_similarity
-from app.memory.summary_store import SummaryStore
 
 logger = logging.getLogger(__name__)
 
@@ -56,7 +55,10 @@ class Consolidator:
 
     def __init__(
         self,
-        store: SummaryStore,
+        # 只需 get_by_hash / insert / list_active 三个方法，而**两个** SummaryStore
+        # （app.memory.summaries 的写入侧与 app.memory.summary_store 的读取侧）都提供它们
+        # —— 调用方（app/main.py）按职责分别传其一，故这里不收窄到具体类。
+        store: Any,
         embedder: Embedder | None = None,
         summariser: Summariser | None = None,
     ) -> None:
@@ -162,7 +164,7 @@ class Consolidator:
             if not e.embedding:
                 continue
             if cosine_similarity(embedding, e.embedding) > 0.95:
-                return e.id
+                return str(e.id)
         return None
 
 

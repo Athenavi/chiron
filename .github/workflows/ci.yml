@@ -76,8 +76,8 @@ jobs:
           app/context app/core app/db.py app/db_client.py app/engine_registry.py
           app/gateway/cache.py app/gateway/coalescer.py app/gateway/key_ring.py
           app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py
-          app/interfaces app/knowledge app/llm app/mcp/client.py app/mcp/registry.py
-          app/media app/memory app/middleware app/observability
+          app/interfaces app/knowledge app/llm app/main.py app/mcp/client.py
+          app/mcp/registry.py app/media app/memory app/middleware app/observability
           app/plugins/broker_proxy.py app/plugins/owner_lease.py app/plugins/pool.py
           app/providers app/queue/dlq.py app/queue/idempotency.py app/queue/producer.py
           app/queue/worker.py app/rag/builder.py app/rag/context_injector.py
