@@ -40,10 +40,11 @@ class RequestCoalescer:
         """
         self._window_ms = window_ms
         self._max_pending = max_pending
-        self._pending: dict[int, asyncio.Future] = {}
+        self._pending: dict[str, asyncio.Future[Any]] = {}
         self._pending_count: int = 0
         self._lock = asyncio.Lock()
-        self._stats = {
+        # coalesced_rate 是浮点（saved_calls 等是整数），故显式标注为 Any 值
+        self._stats: dict[str, Any] = {
             "total_requests": 0,
             "coalesced_requests": 0,
             "saved_calls": 0,
@@ -53,7 +54,7 @@ class RequestCoalescer:
         self,
         prompt: str,
         callback: Any,
-        **kwargs,
+        **kwargs: Any,
     ) -> Any:
         """
         合并请求
@@ -72,7 +73,7 @@ class RequestCoalescer:
         key = self._compute_key(prompt, kwargs)
 
         # 检查是否有相同请求在处理（快速路径，锁内无 await）
-        future: asyncio.Future | None = None
+        future: asyncio.Future[Any] | None = None
         async with self._lock:
             if key in self._pending:
                 self._stats["coalesced_requests"] += 1
@@ -127,14 +128,14 @@ class RequestCoalescer:
                     del self._pending[key]
                 self._pending_count -= 1
 
-    def _compute_key(self, prompt: str, kwargs: dict) -> str:
+    def _compute_key(self, prompt: str, kwargs: dict[str, Any]) -> str:
         """计算请求哈希（内置 hash() 受 PYTHONHASHSEED 影响不可靠，
         改确定性 md5 + json.dumps 确保键值序列化唯一）。"""
         kwargs_str = json.dumps(kwargs, sort_keys=True, ensure_ascii=False)
         key_str = f"{prompt}|{kwargs_str}"
         return hashlib.md5(key_str.encode("utf-8")).hexdigest()
 
-    def get_stats(self) -> dict:
+    def get_stats(self) -> dict[str, Any]:
         """获取统计信息"""
         stats = self._stats.copy()
         stats["pending_count"] = self._pending_count
@@ -157,7 +158,7 @@ class PromptHasher:
     """
 
     @staticmethod
-    def hash(prompt: str, **kwargs) -> str:
+    def hash(prompt: str, **kwargs: Any) -> str:
         """
         计算 Prompt 哈希
 

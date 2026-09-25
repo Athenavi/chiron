@@ -1,6 +1,7 @@
 # 文档解析器 - 支持 PDF/MD/TXT/CSV/DOCX
 import io
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -8,7 +9,7 @@ logger = logging.getLogger(__name__)
 class DocumentParser:
     """文档解析器，将各种格式转换为纯文本"""
 
-    def parse(self, content: bytes, file_type: str, filename: str = "") -> dict:
+    def parse(self, content: bytes, file_type: str, filename: str = "") -> dict[str, Any]:
         """
         解析文档内容
 
@@ -49,7 +50,7 @@ class DocumentParser:
                 "error": str(e),
             }
 
-    def _parse_txt(self, content: bytes) -> dict:
+    def _parse_txt(self, content: bytes) -> dict[str, Any]:
         """解析纯文本"""
         text = content.decode("utf-8", errors="ignore")
         return {
@@ -60,7 +61,7 @@ class DocumentParser:
             "error": None,
         }
 
-    def _parse_markdown(self, content: bytes) -> dict:
+    def _parse_markdown(self, content: bytes) -> dict[str, Any]:
         """解析 Markdown（保留结构）"""
         text = content.decode("utf-8", errors="ignore")
         # 移除 Markdown 语法标记，保留文本
@@ -73,7 +74,7 @@ class DocumentParser:
             "error": None,
         }
 
-    def _parse_csv(self, content: bytes) -> dict:
+    def _parse_csv(self, content: bytes) -> dict[str, Any]:
         """解析 CSV"""
         import csv
         import io
@@ -103,12 +104,12 @@ class DocumentParser:
             "error": None,
         }
 
-    def _parse_pdf(self, content: bytes) -> dict:
+    def _parse_pdf(self, content: bytes) -> dict[str, Any]:
         """解析 PDF"""
         try:
             import pymupdf  # PyMuPDF (fitz)
 
-            doc = pymupdf.open(stream=content, filetype="pdf")
+            doc: Any = pymupdf.open(stream=content, filetype="pdf")
             try:
                 pages = []
                 for page_num in range(len(doc)):
@@ -132,7 +133,7 @@ class DocumentParser:
             logger.warning("pymupdf 未安装，尝试使用 pdfplumber")
             return self._parse_pdf_fallback(content)
 
-    def _parse_pdf_fallback(self, content: bytes) -> dict:
+    def _parse_pdf_fallback(self, content: bytes) -> dict[str, Any]:
         """PDF 解析 fallback"""
         try:
             import pdfplumber
@@ -161,7 +162,7 @@ class DocumentParser:
                 "error": "PDF 解析库未安装（需要 pymupdf 或 pdfplumber）",
             }
 
-    def _parse_docx(self, content: bytes) -> dict:
+    def _parse_docx(self, content: bytes) -> dict[str, Any]:
         """解析 DOCX"""
         try:
             import docx
@@ -196,7 +197,7 @@ class TextChunker:
 
     def chunk(
         self, text: str, chunk_size: int = 1000, chunk_overlap: int = 200
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """
         将文本分块
 
@@ -211,7 +212,7 @@ class TextChunker:
         if not text or not text.strip():
             return []
 
-        chunks = []
+        chunks: list[dict[str, Any]] = []
         start = 0
         text_len = len(text)
 
