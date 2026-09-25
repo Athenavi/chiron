@@ -104,12 +104,12 @@ async def list_media(
     tags: str = Query("", description="标签筛选（逗号分隔）"),
     page: int = Query(1, ge=1, description="页码"),
     page_size: int = Query(20, ge=1, le=100, description="每页数量"),
-):
+) -> Any:
     """列出媒体资源列表"""
     token = await get_auth_token(request)
 
     async with await create_http_client(token) as client:
-        params = {
+        params: dict[str, str | int] = {
             "parent_id": parent_id,
             "page": page,
             "page_size": page_size,
@@ -140,7 +140,7 @@ async def list_media(
 
 
 @router.post("/v1/media")
-async def create_media(body: MediaCreateRequest, request: Request):
+async def create_media(body: MediaCreateRequest, request: Request) -> Any:
     """创建文本或代码类型的媒体资源"""
     token = await get_auth_token(request)
 
@@ -164,7 +164,7 @@ async def create_media(body: MediaCreateRequest, request: Request):
 
 
 @router.post("/v1/media/folders")
-async def create_folder(body: FolderCreateRequest, request: Request):
+async def create_folder(body: FolderCreateRequest, request: Request) -> Any:
     """创建虚拟文件夹"""
     token = await get_auth_token(request)
 
@@ -188,7 +188,7 @@ async def create_folder(body: FolderCreateRequest, request: Request):
 
 
 @router.get("/v1/media/folders")
-async def list_folders(request: Request):
+async def list_folders(request: Request) -> Any:
     """获取当前用户的所有文件夹"""
     token = await get_auth_token(request)
 
@@ -210,7 +210,7 @@ async def list_folders(request: Request):
 
 
 @router.put("/v1/media/{media_id}")
-async def update_media(media_id: str, body: MediaUpdateRequest, request: Request):
+async def update_media(media_id: str, body: MediaUpdateRequest, request: Request) -> Any:
     """更新媒体资源（重命名/移动/修改标签）"""
     token = await get_auth_token(request)
 
@@ -234,7 +234,7 @@ async def update_media(media_id: str, body: MediaUpdateRequest, request: Request
 
 
 @router.delete("/v1/media/{media_id}")
-async def delete_media(media_id: str, request: Request):
+async def delete_media(media_id: str, request: Request) -> Any:
     """删除单个媒体资源"""
     token = await get_auth_token(request)
 
@@ -256,7 +256,7 @@ async def delete_media(media_id: str, request: Request):
 
 
 @router.post("/v1/media/batch-delete")
-async def batch_delete_media(body: BatchDeleteRequest, request: Request):
+async def batch_delete_media(body: BatchDeleteRequest, request: Request) -> Any:
     """批量删除媒体资源"""
     token = await get_auth_token(request)
 
@@ -281,7 +281,7 @@ async def batch_delete_media(body: BatchDeleteRequest, request: Request):
 
 
 @router.post("/v1/media/{media_id}/share")
-async def share_media(media_id: str, body: ShareRequest, request: Request):
+async def share_media(media_id: str, body: ShareRequest, request: Request) -> Any:
     """生成媒体文件的临时分享链接"""
     token = await get_auth_token(request)
 
@@ -306,7 +306,7 @@ async def share_media(media_id: str, body: ShareRequest, request: Request):
 
 
 @router.post("/v1/media/{media_id}/sign")
-async def sign_media(media_id: str, request: Request):
+async def sign_media(media_id: str, request: Request) -> Any:
     """生成带签名的媒体访问 URL"""
     token = await get_auth_token(request)
 
@@ -334,7 +334,7 @@ async def upload_file(
     file: UploadFile = File(...),
     category: str = Form("upload"),
     tags: str = Form(""),
-):
+) -> Any:
     """上传本地文件到媒体库"""
     token = await get_auth_token(request)
 
@@ -378,13 +378,13 @@ async def search_media(
     request: Request,
     q: str = Query(..., description="搜索关键词"),
     limit: int = Query(20, ge=1, le=100, description="返回结果数量限制"),
-):
+) -> Any:
     """全文搜索媒体文件"""
     token = await get_auth_token(request)
 
     async with await create_http_client(token) as client:
         try:
-            params = {"q": q, "limit": limit}
+            params: dict[str, str | int] = {"q": q, "limit": limit}
             response = await client.get("/v1/search/media", params=params)
             response.raise_for_status()
             return response.json()
@@ -406,7 +406,7 @@ async def search_media(
 
 
 @router.post("/v1/media/{media_id}/analyze")
-async def analyze_media(media_id: str, request: Request):
+async def analyze_media(media_id: str, request: Request) -> Any:
     """AI 分析媒体文件（图像识别、文档解析等）- v2.1功能"""
     await get_auth_token(request)
 
@@ -425,7 +425,7 @@ def _media_type_from(mime: str) -> str:
 
 
 @router.post("/v1/media/{media_id}/extract-metadata")
-async def extract_metadata(media_id: str, request: Request):
+async def extract_metadata(media_id: str, request: Request) -> Any:
     """提取媒体文件元数据。
 
     数据流：经网关 `GET /v1/media/{id}/download` 取文件内容（响应头给出 MIME），

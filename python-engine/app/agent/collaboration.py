@@ -21,8 +21,9 @@ import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
-from app.agent.runtime import AgentEvent, AgentRuntime, CompactionConfig
+from app.agent.runtime import AgentEvent, AgentRuntime, AgentTask, CompactionConfig
 from app.gateway.router import GatewayRouter
 from app.redis_keys import rkey
 from app.trace import record_span
@@ -61,8 +62,8 @@ class CollaborativeTask:
     original_query: str
     tenant_id: str  # SaaS 安全: 租户隔离
     trace_id: str  # 链路追踪
-    subtasks: list[dict]  # [{agent_role, description, dependencies}]
-    shared_context: dict = field(default_factory=dict)  # 共享上下文
+    subtasks: list[dict[str, Any]]  # [{agent_role, description, dependencies}]
+    shared_context: dict[str, Any] = field(default_factory=dict)  # 共享上下文
     status: str = "pending"  # pending/running/completed/failed
 
 
@@ -76,11 +77,11 @@ class AgentContextStore:
 
     def __init__(self, tenant_id: str):
         self.tenant_id = tenant_id
-        self._local_store: dict[str, dict] = {}
+        self._local_store: dict[str, dict[str, Any]] = {}
         self._redis_client = None  # Lazy load
         self._redis_available = False  # P7: 标记 Redis 可用性
 
-    async def set(self, context_id: str, data: dict, ttl: int = 3600) -> None:
+    async def set(self, context_id: str, data: dict[str, Any], ttl: int = 3600) -> None:
         """设置上下文 (带 TTL 自动过期)"""
         data["_ttl"] = time.time() + ttl
         data["_tenant_id"] = self.tenant_id  # SaaS 安全: 元数据标记
@@ -102,7 +103,7 @@ class AgentContextStore:
                 )
             self._local_store[context_id] = data
 
-    async def get(self, context_id: str) -> dict | None:
+    async def get(self, context_id: str) -> dict[str, Any] | None:
         """获取上下文"""
         if self._redis_client:
             data = await self._redis_client.get(
@@ -336,7 +337,7 @@ class AgentHub:
 
     # ── DAG 调度器 ──────────────────────────────────────────────────
 
-    def _topological_waves(self, subtasks: list[dict]) -> list[list[int]]:
+    def _topological_waves(self, subtasks: list[dict[str, Any]]) -> list[list[int]]:
         """将子任务按依赖关系拓扑排序为执行波次。
 
         每一波次内的子任务无互相依赖，可并发执行。
@@ -402,8 +403,8 @@ class AgentHub:
 
         for wave_idx, wave in enumerate(waves):
             # 并发执行当前波次
-            event_queue: asyncio.Queue = asyncio.Queue()
-            running_tasks: list[asyncio.Task] = []
+            event_queue: asyncio.Queue[Any] = asyncio.Queue[Any]()
+            running_tasks: list[asyncio.Task[Any]] = []
 
             for subtask_idx in wave:
                 t = asyncio.create_task(
@@ -447,7 +448,7 @@ class AgentHub:
         trace_id: str,
         tenant_id: str,
         sem: asyncio.Semaphore,
-        event_queue: asyncio.Queue,
+        event_queue: asyncio.Queue[Any],
     ) -> None:
         """执行单个子任务，将事件推入队列供调度器 yield。"""
         subtask = task.subtasks[subtask_idx]
@@ -530,7 +531,7 @@ class AgentHub:
         task_id: str,
         content: str,
         tenant_id: str,
-    ):
+    ) -> AgentTask:
         """按 spec 构造完整的 AgentTask（含 mode/model/compaction 配置注入）。
 
         历史缺陷修复：此前用 type('obj', ...) 伪造任务对象，缺
@@ -541,7 +542,7 @@ class AgentHub:
 
         from app.agent.runtime import AgentTask
 
-        llm_config: dict = {"mode": spec.mode, "model": spec.model}
+        llm_config: dict[str, Any] = {"mode": spec.mode, "model": spec.model}
         if spec.compaction_config is not None:
             # 逐 agent 截断策略覆盖（runtime 侧按 llm_config["compaction"] 读取）
             llm_config["compaction"] = asdict(spec.compaction_config)
@@ -557,7 +558,7 @@ class AgentHub:
             max_turns=spec.max_turns,
         )
 
-    def _parse_planner_output(self, output: str) -> list[dict]:
+    def _parse_planner_output(self, output: str) -> list[dict[str, Any]]:
         """解析 Planner 的 JSON 输出"""
         import re
 
@@ -565,8 +566,8 @@ class AgentHub:
         match = re.search(r"\[.*\]", output, re.DOTALL)
         if match:
             try:
-                subtasks = json.loads(match.group())
-                return subtasks
+                parsed: list[dict[str, Any]] = json.loads(match.group())
+                return parsed
             except json.JSONDecodeError:
                 logger.warning("Failed to parse planner output as JSON")
 

@@ -37,10 +37,10 @@ python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 
 ruff check .
 # --follow-imports=silent：只报告这里列出的模块（依赖由它们各自的门禁覆盖）
 mypy --follow-imports=silent \
-  app/agent/event_sink.py app/agent/loop.py app/agent/message_codec.py \
-  app/agent/multi_agent.py \
-  app/api/agents.py app/api/context.py app/api/knowledge.py app/api/skills.py \
-  app/api/system.py app/api/unified_executor.py \
+  app/agent/collaboration.py app/agent/event_sink.py app/agent/loop.py \
+  app/agent/message_codec.py app/agent/multi_agent.py \
+  app/api/agents.py app/api/context.py app/api/knowledge.py app/api/media.py \
+  app/api/skills.py app/api/system.py app/api/unified_executor.py app/api/workflows.py \
   app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/coalescer.py app/gateway/provider.py app/gateway/ratelimit.py \
   app/gateway/router.py \

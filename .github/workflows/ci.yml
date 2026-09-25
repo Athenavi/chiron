@@ -66,10 +66,11 @@ jobs:
         # 后续每清零一块就往这个列表里追加，全部通过后改为 `mypy app/`。
         run: >-
           mypy --follow-imports=silent
-          app/agent/event_sink.py app/agent/loop.py app/agent/message_codec.py
-          app/agent/multi_agent.py
-          app/api/agents.py app/api/context.py app/api/knowledge.py app/api/skills.py
-          app/api/system.py app/api/unified_executor.py
+          app/agent/collaboration.py app/agent/event_sink.py app/agent/loop.py
+          app/agent/message_codec.py app/agent/multi_agent.py
+          app/api/agents.py app/api/context.py app/api/knowledge.py app/api/media.py
+          app/api/skills.py app/api/system.py app/api/unified_executor.py
+          app/api/workflows.py
           app/chaos app/config.py app/context app/core app/db.py app/db_client.py
           app/engine_registry.py app/gateway/cache.py app/gateway/coalescer.py
           app/gateway/provider.py

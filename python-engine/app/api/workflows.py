@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["graphs"])
 
 # 保存后台任务引用，防止被 GC 回收导致工作流静默丢失（asyncio.create_task 必须持有引用）
-_background_tasks: set[asyncio.Task] = set()
+_background_tasks: set[asyncio.Task[Any]] = set()
 
 
 class GraphCreateRequest(BaseModel):
@@ -42,7 +42,7 @@ class GraphExecuteRequest(BaseModel):
 
 
 async def _enqueue_with_retry(
-    instance_id: str, user_id: str, graph_json: dict, initial_state: dict, *, attempts: int = 3
+    instance_id: str, user_id: str, graph_json: dict[str, Any], initial_state: dict[str, Any], *, attempts: int = 3
 ) -> bool:
     """投递到 engine:tasks，失败重试（指数退避，总等待 <3s）。
 
@@ -58,7 +58,7 @@ async def _enqueue_with_retry(
     return False
 
 
-async def _mark_enqueue_pending(instance_id: str, graph_json: dict) -> None:
+async def _mark_enqueue_pending(instance_id: str, graph_json: dict[str, Any]) -> None:
     """标记为待执行，并把重建入队所需的 graph 一并落库。
 
     **存 graph 不是可选项**：``graph_json`` 只存在于这次请求里；不存的话 requeue 时无法重建
@@ -128,7 +128,7 @@ async def requeue_pending_workflows(limit: int = 20) -> int:
 
 
 async def _enqueue_workflow_run(
-    instance_id: str, user_id: str, graph_json: dict, initial_state: dict
+    instance_id: str, user_id: str, graph_json: dict[str, Any], initial_state: dict[str, Any]
 ) -> bool:
     """投递 workflow_run 到 engine:tasks（跨实例消费组，断点续跑执行）。失败返回 False。"""
     from app.redis_client import get_redis
@@ -139,7 +139,7 @@ async def _enqueue_workflow_run(
         redis = None
     if redis is None:
         return False
-    msg = {
+    msg: dict[Any, Any] = {
         "task_id": instance_id,
         "task_type": "workflow_run",
         "tenant_id": "",
@@ -174,7 +174,7 @@ async def _enqueue_workflow_run(
 
 
 @router.get("/v1/graphs")
-async def list_graphs(user_id: str | None = Query(None, alias="user_id")):
+async def list_graphs(user_id: str | None = Query(None, alias="user_id")) -> dict[str, Any]:
     """List all graphs, optionally filtered by user_id."""
     try:
         pool = get_pool()
@@ -206,7 +206,7 @@ async def list_graphs(user_id: str | None = Query(None, alias="user_id")):
 @router.post("/v1/graphs")
 async def create_graph(
     body: GraphCreateRequest, user_id: str = Query("", alias="user_id")
-):
+) -> dict[str, Any]:
     """Create or update a graph definition."""
     import uuid as _uuid
 
@@ -255,7 +255,7 @@ async def create_graph(
 
 
 @router.get("/v1/graphs/{graph_id}")
-async def get_graph(graph_id: str):
+async def get_graph(graph_id: str) -> dict[str, Any]:
     """Get a graph by ID."""
     try:
         pool = get_pool()
@@ -282,7 +282,7 @@ async def get_graph(graph_id: str):
 
 
 @router.delete("/v1/graphs/{graph_id}")
-async def delete_graph(graph_id: str):
+async def delete_graph(graph_id: str) -> dict[str, Any]:
     """Delete a graph by ID."""
     if not graph_id or graph_id.strip() == "":
         raise HTTPException(status_code=400, detail="graph_id is required")
@@ -306,9 +306,9 @@ async def delete_graph(graph_id: str):
 async def execute_graph(
     graph_id: str,
     body: GraphExecuteRequest,
-    gateway=Depends(get_gateway),
+    gateway: Any = Depends(get_gateway),
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """提交图执行：落库 pending 后后台任务执行，立即返回 instance_id（前端轮询状态）。"""
     graph_json = None
 
@@ -388,7 +388,7 @@ async def execute_graph(
 
 
 @router.get("/v1/workflows/instances")
-async def list_instances(user_id: str = Query("", alias="user_id")):
+async def list_instances(user_id: str = Query("", alias="user_id")) -> dict[str, Any]:
     """持久化的工作流执行历史（按用户）。"""
     try:
         pool = get_pool()
@@ -422,7 +422,7 @@ async def list_instances(user_id: str = Query("", alias="user_id")):
 
 
 @router.get("/v1/workflows/{instance_id}/status")
-async def workflow_status(instance_id: str):
+async def workflow_status(instance_id: str) -> dict[str, Any]:
     """获取工作流执行状态（内存实例优先，落库记录回退）。"""
     inst = get_instance(instance_id)
     if inst:
