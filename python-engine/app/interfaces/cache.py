@@ -45,8 +45,13 @@ class CacheClient(Protocol):
         """设置过期时间"""
         ...
 
-    async def scan_iter(self, match: str) -> AsyncIterator[str]:
-        """迭代匹配的键"""
+    def scan_iter(self, match: str) -> AsyncIterator[str]:
+        """迭代匹配的键
+
+        与 ``LLMProvider.chat_stream`` 同理：这是**异步生成器**协议（实现方用
+        ``async def`` + ``yield``），基类若写成 ``async def`` 会被当作协程，
+        调用处的 ``async for`` 即被判为"不可异步迭代"。
+        """
         ...
 
     async def ping(self) -> bool:

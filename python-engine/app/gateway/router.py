@@ -6,6 +6,7 @@ import random
 import sys
 import time
 from collections.abc import AsyncIterator
+from typing import Any
 
 import aiohttp
 
@@ -17,7 +18,7 @@ from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, L
 logger = logging.getLogger(__name__)
 
 
-def normalize_messages(messages: list) -> list[ChatMessage]:
+def normalize_messages(messages: list[Any]) -> list[ChatMessage]:
     """将裸 dict 消息统一规范化为 ChatMessage。
 
     历史上多处调用方（task_router/skill 工具/workflow 引擎等）直接传
@@ -102,12 +103,12 @@ class GatewayRouter:
         weights: dict[str, float] | None = None,
         gateway_url: str = "",
         internal_token: str = "",
-        provider_catalog: list[dict] | None = None,
+        provider_catalog: list[dict[str, Any]] | None = None,
     ):
         self._providers = providers
         # 服务提供商目录（app/providers/catalog.py，权威源在 Go 网关）：驱动
         # 「模型名 → provider」匹配与加权路由的成本/质量分；为空时回落内建默认。
-        self._catalog: dict[str, dict] = {
+        self._catalog: dict[str, dict[str, Any]] = {
             str(item.get("id")): item
             for item in (provider_catalog or [])
             if isinstance(item, dict) and item.get("id")
@@ -126,7 +127,7 @@ class GatewayRouter:
         # 路由权重: cost / latency / quality
         self._weights = weights or {"cost": 0.3, "latency": 0.3, "quality": 0.4}
         # 租户路由配置（从 Go 网关同步）
-        self._tenant_routes: dict[str, list[dict]] = {}  # tenant_id -> [route, ...]
+        self._tenant_routes: dict[str, list[dict[str, Any]]] = {}  # tenant_id -> [route, ...]
         self._gateway_url = gateway_url
         self._internal_token = internal_token
 
@@ -141,7 +142,7 @@ class GatewayRouter:
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ChatResponse]:
         """流式推理 — 前置缓存检查 + 预算扣减"""
         messages = normalize_messages(messages)
@@ -268,7 +269,7 @@ class GatewayRouter:
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         """非流式推理 — 自动缓存 + 预算扣减"""
         messages = normalize_messages(messages)
@@ -372,7 +373,7 @@ class GatewayRouter:
             return model
         return self.PROBE_MODELS.get(name, "")
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         """返回各 Provider 健康状态"""
         result = {}
         for name, provider in self._providers.items():
@@ -417,7 +418,7 @@ class GatewayRouter:
         for p in self._providers.values():
             await p.close()
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, Any]:
         """返回路由器统计"""
         return {
             "providers": {
@@ -460,7 +461,7 @@ class GatewayRouter:
             return 0
 
         # 按 tenant_id 分组
-        tenant_map: dict[str, list[dict]] = {}
+        tenant_map: dict[str, list[dict[str, Any]]] = {}
         for r in routes:
             tid = r.get("tenant_id", "")
             if not tid:

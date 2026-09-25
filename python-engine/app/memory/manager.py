@@ -5,6 +5,7 @@ import json
 import logging
 import time
 import uuid
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -32,9 +33,9 @@ class MemoryManager:
         self._vector_store = vector_store
         self._cache_client = cache_client
         self._milvus_connected = False
-        self._milvus_collection = None
+        self._milvus_collection: Any = None
 
-    def _ensure_milvus(self):
+    def _ensure_milvus(self) -> None:
         if not self._milvus_connected:
             from pymilvus import connections
 
@@ -47,7 +48,7 @@ class MemoryManager:
             connections.connect(alias="memory", host=host, port=port)
             self._milvus_connected = True
 
-    def _get_milvus_collection(self):
+    def _get_milvus_collection(self) -> Any:
         if self._milvus_collection is not None:
             return self._milvus_collection
         self._ensure_milvus()
@@ -93,8 +94,8 @@ class MemoryManager:
         session_id: str,
         content: str,
         memory_type: str = "short_term",
-        metadata: dict | None = None,
-    ) -> dict:
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """保存记忆"""
         memory_id = str(uuid.uuid4())
         created_at = str(int(time.time()))
@@ -124,8 +125,15 @@ class MemoryManager:
             return {"memory_id": memory_id, "status": "failed", "error": str(e)}
 
     async def _save_short_term(
-        self, memory_id, tenant_id, user_id, session_id, content, created_at, metadata
-    ) -> dict:
+        self,
+        memory_id: str,
+        tenant_id: str,
+        user_id: str,
+        session_id: str,
+        content: str,
+        created_at: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         """保存短期记忆"""
         if self._cache_client:
             # 使用 CacheClient 接口
@@ -152,8 +160,15 @@ class MemoryManager:
         return {"memory_id": memory_id, "status": "saved"}
 
     async def _save_long_term(
-        self, memory_id, tenant_id, user_id, session_id, content, created_at, metadata
-    ) -> dict:
+        self,
+        memory_id: str,
+        tenant_id: str,
+        user_id: str,
+        session_id: str,
+        content: str,
+        created_at: str,
+        metadata: dict[str, Any] | None,
+    ) -> dict[str, Any]:
         """保存长期记忆"""
         # 计算嵌入向量
         resp = await self._gateway.embed(content, settings.embedding_model)
@@ -210,7 +225,7 @@ class MemoryManager:
         query: str,
         top_k: int = 5,
         memory_type: str = "all",
-    ) -> list:
+    ) -> list[Any]:
         """查询记忆"""
         results = []
         try:
@@ -226,7 +241,9 @@ class MemoryManager:
             logger.error("查询记忆失败: %s", e)
             return []
 
-    async def _query_short_term(self, tenant_id, user_id, top_k) -> list:
+    async def _query_short_term(
+        self, tenant_id: str, user_id: str, top_k: int
+    ) -> list[Any]:
         """查询短期记忆"""
         if self._cache_client:
             # 使用 CacheClient 接口
@@ -236,7 +253,7 @@ class MemoryManager:
                 keys.append(key)
             results = []
             for key in keys[:5]:
-                memories = await self._cache_client.lrange(key, -top_k, -1)
+                memories: list[Any] = await self._cache_client.lrange(key, -top_k, -1)
                 for mem_str in memories:
                     try:
                         mem = json.loads(mem_str)
@@ -281,7 +298,9 @@ class MemoryManager:
                         continue
             return results
 
-    async def _query_long_term(self, tenant_id, user_id, query, top_k) -> list:
+    async def _query_long_term(
+        self, tenant_id: str, user_id: str, query: str, top_k: int
+    ) -> list[Any]:
         """查询长期记忆"""
         # 计算查询向量
         resp = await self._gateway.embed(query, settings.embedding_model)

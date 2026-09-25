@@ -67,11 +67,11 @@ def _row_to_entry(row: Any) -> SummaryEntry:
 class SummaryStore:
     """memory_summaries 表 + Milvus memory_store 双写。"""
 
-    def __init__(self, pool, milvus_collection=None) -> None:
+    def __init__(self, pool: Any, milvus_collection: Any = None) -> None:
         self._pool = pool
         self._milvus_collection = milvus_collection
 
-    def _get_milvus(self):
+    def _get_milvus(self) -> Any:
         """延迟获取 Milvus collection（与 MemoryManager 同模式）。"""
         if self._milvus_collection is not None:
             return self._milvus_collection

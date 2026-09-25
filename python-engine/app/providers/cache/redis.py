@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import cast
 
 import redis.asyncio as aioredis
 
@@ -42,7 +43,9 @@ class RedisCacheClient:
     async def get(self, key: str) -> str | None:
         """获取缓存值"""
         pool = await self._get_pool()
-        return await pool.get(key)
+        # decode_responses=True（见 app/redis_client.get_redis）时响应必然是 str，
+        # 而 redis-py 的类型把两种模式合成 bytes | str，故在此收敛。
+        return cast("str | None", await pool.get(key))
 
     async def set(
         self,
@@ -75,7 +78,7 @@ class RedisCacheClient:
     ) -> list[str]:
         """获取列表范围内的值"""
         pool = await self._get_pool()
-        return await pool.lrange(key, start, stop)
+        return cast("list[str]", await pool.lrange(key, start, stop))
 
     async def expire(self, key: str, ttl: int) -> None:
         """设置过期时间"""

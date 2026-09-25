@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import builtins
 import json
 import logging
 import uuid
@@ -144,7 +145,7 @@ class ProfileStore:
         item_value: str | None = None,
         confidence: int | None = None,
         source: str | None = None,
-        embedding: list[float] | None = None,
+        embedding: builtins.list[float] | None = None,
         embedding_set: bool = False,
     ) -> MemoryEntry | None:
         """按 id 局部更新（仅更新显式传入的字段；embedding_set 区分「清空向量」与「不改动」）。"""
@@ -179,7 +180,11 @@ class ProfileStore:
         row = await self._pool.fetchrow(sql, *params)
         return _row_to_entry(row) if row else None
 
-    async def set_embedding(self, entry_id: str, embedding: list[float]) -> bool:
+    # 注意：本类定义了一个名为 ``list`` 的方法（见上），会遮蔽内置 ``list`` ——
+    # 因此类内签名里的列表注解必须写 ``builtins.list``。
+    async def set_embedding(
+        self, entry_id: str, embedding: builtins.list[float]
+    ) -> bool:
         row = await self._pool.fetchrow(
             "UPDATE user_memory_entries SET embedding=$2, updated_at=NOW() WHERE id=$1 RETURNING id",
             entry_id,
@@ -237,7 +242,7 @@ class ProfileStore:
 
     # ── 访问记账 ────────────────────────────────────────
 
-    async def touch(self, entry_ids: list[str]) -> None:
+    async def touch(self, entry_ids: builtins.list[str]) -> None:
         """命中即引用：access_count+1、last_accessed_at=now（搜索召回后调用）。"""
         if not entry_ids:
             return

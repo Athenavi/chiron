@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from app.gateway.provider import ChatMessage
 from app.gateway.router import GatewayRouter
@@ -32,13 +33,13 @@ class GatewayLLMProvider:
 
     async def chat(
         self,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         model: str | None = None,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float | None = None,
         stream: bool = True,
-    ) -> AsyncIterator[dict] | LLMResponse:
+    ) -> AsyncIterator[dict[str, Any]] | LLMResponse:
         """发送聊天请求"""
         # 转换消息格式
         chat_messages = [
@@ -130,7 +131,9 @@ class GatewayLLMProvider:
         """生成文本嵌入向量"""
         # 从 providers 中获取 openai provider 来做 embedding
         if "openai" in self._gateway._providers:
-            resp = await self._gateway._providers["openai"].embed(text, model)
+            resp = await self._gateway._providers["openai"].embed(
+                text, model or self._default_model
+            )
             return resp.embedding
         return []
 

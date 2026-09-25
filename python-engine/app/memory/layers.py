@@ -19,6 +19,9 @@ from typing import Any, Literal
 
 # ── L1: 会话元数据 ─────────────────────────────────────────────────────
 
+#: 会话入口渠道。L1 ``SessionMeta`` 与 L2 记忆写入共用同一取值集合。
+EntryChannel = Literal["web", "api", "quick_execute", "workflow"]
+
 
 @dataclass
 class SessionMeta:
@@ -31,7 +34,7 @@ class SessionMeta:
     session_id: str
     tenant_id: str
     user_id: str
-    entry_channel: Literal["web", "api", "quick_execute", "workflow"]
+    entry_channel: EntryChannel
     mode: str  # agent 模式
     started_at: float
     last_active_at: float
@@ -59,7 +62,7 @@ class SessionMeta:
 class SessionContext:
     """会话上下文（on_session_start 返回）。"""
 
-    meta: SessionMeta
+    meta: SessionMeta | None
     profile_cached: bool  # L2 档案卡是否已缓存
     summaries_prefetched: int  # 预取的 L3 摘要数量
 

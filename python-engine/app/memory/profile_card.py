@@ -517,7 +517,7 @@ class ProfileCard:
             await self._redis.delete(cache_key)
 
     @staticmethod
-    def _item_to_dict(item: ProfileItem) -> dict:
+    def _item_to_dict(item: ProfileItem) -> dict[str, Any]:
         """将 ProfileItem 转换为字典（用于缓存）。"""
         slot_val = item.slot.value if isinstance(item.slot, SlotType) else item.slot
         source_val = (

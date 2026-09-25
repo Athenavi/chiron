@@ -53,7 +53,7 @@ class SummaryStore:
     并通过 Redis 缓存优化查询性能。
     """
 
-    def __init__(self, redis: aioredis.Redis, embedding_fn=None):
+    def __init__(self, redis: aioredis.Redis, embedding_fn: Any = None) -> None:
         """初始化 SummaryStore。
 
         Args:
@@ -99,13 +99,14 @@ class SummaryStore:
         cached = await self._redis.get(cache_key)
         if cached:
             try:
-                return json.loads(cached)
+                parsed: list[float] = json.loads(cached)
+                return parsed
             except (json.JSONDecodeError, TypeError):
                 pass
 
         # 生成嵌入
         try:
-            embedding = await self._embedding_fn(query)
+            embedding: list[float] | None = await self._embedding_fn(query)
             if embedding:
                 # 写入缓存
                 await self._redis.setex(
@@ -118,7 +119,7 @@ class SummaryStore:
 
     # ── Milvus 连接管理 ────────────────────────────────────────────────
 
-    def _get_milvus_collection(self):
+    def _get_milvus_collection(self) -> Any:
         """延迟获取 Milvus collection。"""
         if self._milvus_collection is not None:
             return self._milvus_collection
@@ -157,7 +158,7 @@ class SummaryStore:
         import hashlib as hl
         import uuid
 
-        summary_id = f"sms_{uuid.uuid4().hex[:20]}"
+        summary_id: str = f"sms_{uuid.uuid4().hex[:20]}"
         tenant_id = scope.tenant_id
         user_id = scope.user_id
         session_id = scope.session_id or ""

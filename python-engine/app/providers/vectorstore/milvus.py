@@ -5,6 +5,7 @@ Milvus Vector Store — 连接池化实现，对接 VectorStore Protocol
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +46,7 @@ class MilvusVectorStore:
         collection: str,
         ids: list[str],
         vectors: list[list[float]],
-        payloads: list[dict],
+        payloads: list[dict[str, Any]],
     ) -> int:
         """插入向量数据"""
         self._ensure_connected()
@@ -75,7 +76,7 @@ class MilvusVectorStore:
         top_k: int = 5,
         threshold: float = 0.5,
         filter_expr: str | None = None,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """搜索相似向量"""
         self._ensure_connected()
         from pymilvus import Collection

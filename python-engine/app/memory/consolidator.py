@@ -30,7 +30,7 @@ from app.memory.summary_store import SummaryStore
 logger = logging.getLogger(__name__)
 
 Embedder = Callable[[str], Awaitable[list[float] | None]]
-Summariser = Callable[[list[dict]], Awaitable[str]]
+Summariser = Callable[[list[dict[str, Any]]], Awaitable[str]]
 
 
 @dataclass
@@ -69,7 +69,7 @@ class Consolidator:
         tenant_id: str,
         user_id: str,
         session_id: str,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         turn_start: int = 0,
         turn_end: int = 0,
     ) -> ConsolidateResult:
@@ -169,7 +169,7 @@ class Consolidator:
 # ── 纯函数（无外部依赖）──
 
 
-def _extract_summary(messages: list[dict]) -> str:
+def _extract_summary(messages: list[dict[str, Any]]) -> str:
     """降级摘要：每条消息取前 200 字符拼接。"""
     parts: list[str] = []
     for msg in messages:

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 from openai import AsyncOpenAI
 
@@ -21,10 +22,12 @@ logger = logging.getLogger(__name__)
 class OpenAIProvider(LLMProvider):
     name = "openai"
 
-    def __init__(self, api_key: str, base_url: str = "", *, key_ring=None):
+    def __init__(
+        self, api_key: str, base_url: str = "", *, key_ring: Any = None
+    ) -> None:
         from app.config import settings as _settings  # 延迟导入：避免 providers ← config 循环
 
-        kwargs: dict = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
         # 具名 UA：部分网关前置 Cloudflare 反滥用（如 opencode.ai），SDK 默认 UA 会 403。
@@ -47,7 +50,7 @@ class OpenAIProvider(LLMProvider):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ChatResponse]:
         kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
         kwargs["stream"] = True
@@ -59,7 +62,7 @@ class OpenAIProvider(LLMProvider):
             await self._report_failure(key_item)
             raise
 
-        tool_calls: list[dict] = []
+        tool_calls: list[dict[str, Any]] = []
         input_tokens = 0
         output_tokens = 0
         # 命中提示词缓存的输入 token（各家字段名不同，取不到即 0）：会话统计算命中率用
@@ -138,7 +141,7 @@ class OpenAIProvider(LLMProvider):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
         client, key_item = await self._resolve_client()
@@ -195,7 +198,7 @@ class OpenAIProvider(LLMProvider):
 
     # ── helpers ──
 
-    async def _resolve_client(self) -> tuple:
+    async def _resolve_client(self) -> tuple[Any, Any]:
         """返回本次请求使用的 client 与其 key 指纹(可选)。
         有 key_ring 时按 provider 取活跃 key(按 key 缓存 client);取不到(无 key/异常)
         回退到 env 首 key 的 self._client(单 key/降级兼容)。"""
@@ -224,7 +227,7 @@ class OpenAIProvider(LLMProvider):
             self._clients[key] = client
         return client, item
 
-    async def _report_failure(self, item) -> None:
+    async def _report_failure(self, item: Any) -> None:
         if self._key_ring is not None and item is not None:
             try:
                 await self._key_ring.report_failure(self.name, item["key"])
@@ -237,9 +240,9 @@ class OpenAIProvider(LLMProvider):
         model: str,
         max_tokens: int,
         temperature: float,
-        tools: list[dict] | None,
-    ) -> dict:
-        kwargs: dict = {
+        tools: list[dict[str, Any]] | None,
+    ) -> dict[str, Any]:
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": [m.to_dict() if hasattr(m, "to_dict") else m for m in messages],
             "max_tokens": max_tokens,

@@ -49,6 +49,19 @@ class ConflictManager:
         """
         self._redis = redis
 
+    def _require_redis(self) -> aioredis.Redis:
+        """返回**已确认可用**的 Redis 连接。
+
+        ``__init__`` 允许 ``redis=None``（此时冲突管理整体禁用），公开入口
+        （``detect_and_handle_conflict`` / ``handle_memory_entry_conflict``）会提前
+        降级，不会走到内部方法。这里收敛类型：真出现 None 说明调用方漏了入口检查，
+        明确报错好过一句 AttributeError。
+        """
+        redis = self._redis
+        if redis is None:
+            raise RuntimeError("ConflictManager: Redis unavailable")
+        return redis
+
     # ── Redis 键生成 ──────────────────────────────────────────────────────
 
     @staticmethod
@@ -216,15 +229,14 @@ class ConflictManager:
             "user_id": conflict.user_id,
             "created_at": conflict.created_at,
         }
+        redis = self._require_redis()
         key = self._pending_key(conflict.conflict_id)
-        await self._redis.setex(
-            key, PENDING_CONFIRMATION_TTL, json.dumps(conflict_data)
-        )
+        await redis.setex(key, PENDING_CONFIRMATION_TTL, json.dumps(conflict_data))
 
         # 添加到用户的 pending 列表
         list_key = self._pending_list_key(conflict.tenant_id, conflict.user_id)
-        await self._redis.sadd(list_key, conflict.conflict_id)
-        await self._redis.expire(list_key, PENDING_CONFIRMATION_TTL)
+        await redis.sadd(list_key, conflict.conflict_id)
+        await redis.expire(list_key, PENDING_CONFIRMATION_TTL)
 
     async def _increment_derived_count(
         self,
@@ -244,9 +256,10 @@ class ConflictManager:
         Returns:
             当前计数值。
         """
+        redis = self._require_redis()
         key = self._derived_count_key(tenant_id, user_id, slot, item_key)
-        count = await self._redis.incr(key)
-        await self._redis.expire(key, PENDING_CONFIRMATION_TTL)
+        count = await redis.incr(key)
+        await redis.expire(key, PENDING_CONFIRMATION_TTL)
         return count
 
     # ── 冲突裁决 ──────────────────────────────────────────────────────────
@@ -265,15 +278,16 @@ class ConflictManager:
         Returns:
             冲突事件列表。
         """
+        redis = self._require_redis()
         list_key = self._pending_list_key(tenant_id, user_id)
-        conflict_ids = await self._redis.smembers(list_key)
+        conflict_ids = await redis.smembers(list_key)
 
         conflicts = []
         for cid in conflict_ids:
             if isinstance(cid, bytes):
                 cid = cid.decode("utf-8")
             key = self._pending_key(cid)
-            data = await self._redis.get(key)
+            data = await redis.get(key)
             if data:
                 try:
                     item = json.loads(data)
@@ -300,7 +314,7 @@ class ConflictManager:
         conflict_id: str,
         resolution: str,
         manual_value: Any | None = None,
-    ) -> tuple[bool, dict | None]:
+    ) -> tuple[bool, dict[str, Any] | None]:
         """裁决冲突。
 
         Args:
@@ -311,8 +325,9 @@ class ConflictManager:
         Returns:
             (是否成功, 裁决详情)
         """
+        redis = self._require_redis()
         key = self._pending_key(conflict_id)
-        data = await self._redis.get(key)
+        data = await redis.get(key)
         if not data:
             logger.warning("Conflict %s not found", conflict_id)
             return False, None
@@ -337,9 +352,9 @@ class ConflictManager:
             return False, {"error": f"Unknown resolution: {resolution}"}
 
         # 删除 pending 记录
-        await self._redis.delete(key)
+        await redis.delete(key)
         list_key = self._pending_list_key(conflict["tenant_id"], conflict["user_id"])
-        await self._redis.srem(list_key, conflict_id)
+        await redis.srem(list_key, conflict_id)
 
         logger.info(
             "Conflict %s resolved: %s → %s",
@@ -365,8 +380,9 @@ class ConflictManager:
         Returns:
             是否成功删除。
         """
+        redis = self._require_redis()
         key = self._pending_key(conflict_id)
-        data = await self._redis.get(key)
+        data = await redis.get(key)
         if not data:
             return False
 
@@ -375,9 +391,9 @@ class ConflictManager:
         except json.JSONDecodeError:
             return False
 
-        await self._redis.delete(key)
+        await redis.delete(key)
         list_key = self._pending_list_key(conflict["tenant_id"], conflict["user_id"])
-        await self._redis.srem(list_key, conflict_id)
+        await redis.srem(list_key, conflict_id)
 
         logger.info("Conflict %s deleted (user denied)", conflict_id)
         return True
@@ -391,8 +407,9 @@ class ConflictManager:
         Returns:
             冲突事件或 None。
         """
+        redis = self._require_redis()
         key = self._pending_key(conflict_id)
-        data = await self._redis.get(key)
+        data = await redis.get(key)
         if not data:
             return None
 

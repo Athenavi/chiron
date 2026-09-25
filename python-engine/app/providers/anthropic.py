@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import logging
 from collections.abc import AsyncIterator
+from typing import Any
 
 import anthropic
 
@@ -14,10 +15,12 @@ logger = logging.getLogger(__name__)
 class AnthropicProvider(LLMProvider):
     name = "anthropic"
 
-    def __init__(self, api_key: str, base_url: str = "", *, key_ring=None):
+    def __init__(
+        self, api_key: str, base_url: str = "", *, key_ring: Any = None
+    ) -> None:
         from app.config import settings as _settings  # 延迟导入：避免 providers ← config 循环
 
-        kwargs = {"api_key": api_key}
+        kwargs: dict[str, Any] = {"api_key": api_key}
         if base_url:
             kwargs["base_url"] = base_url
         # 具名 UA：部分网关前置 Cloudflare 反滥用（如 opencode.ai），SDK 默认 UA 会 403。
@@ -35,10 +38,10 @@ class AnthropicProvider(LLMProvider):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ChatResponse]:
         system_prompt, msgs = self._convert_messages(messages)
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": msgs,
             "max_tokens": max_tokens,
@@ -117,12 +120,12 @@ class AnthropicProvider(LLMProvider):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         import json as _json
 
         system_prompt, msgs = self._convert_messages(messages)
-        kwargs: dict = {
+        kwargs: dict[str, Any] = {
             "model": model,
             "messages": msgs,
             "max_tokens": max_tokens,
@@ -193,7 +196,7 @@ class AnthropicProvider(LLMProvider):
 
     # ── 多 key helpers（与 OpenAIProvider 同型）──
 
-    async def _resolve_client(self) -> tuple:
+    async def _resolve_client(self) -> tuple[Any, Any]:
         if self._key_ring is None:
             return self._client, None
         item = await self._key_ring.get_key(self.name)
@@ -218,7 +221,7 @@ class AnthropicProvider(LLMProvider):
             self._clients[key] = client
         return client, item
 
-    async def _report_failure(self, item) -> None:
+    async def _report_failure(self, item: Any) -> None:
         if self._key_ring is not None and item is not None:
             try:
                 await self._key_ring.report_failure(self.name, item["key"])
@@ -228,7 +231,9 @@ class AnthropicProvider(LLMProvider):
     # ── 转换 ──
 
     @staticmethod
-    def _convert_messages(messages: list[ChatMessage]) -> tuple[str, list[dict]]:
+    def _convert_messages(
+        messages: list[ChatMessage],
+    ) -> tuple[str, list[dict[str, Any]]]:
         """分离 system prompt 并转换消息格式"""
         system = ""
         result = []
@@ -269,7 +274,7 @@ class AnthropicProvider(LLMProvider):
         return system, result
 
     @staticmethod
-    def _convert_tools(tools: list[dict]) -> list[dict]:
+    def _convert_tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """OpenAI tools 格式 → Anthropic tools 格式"""
         import json as _json
 

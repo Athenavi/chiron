@@ -6,6 +6,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -27,12 +28,12 @@ class SemanticCache:
     def __init__(
         self,
         redis: aioredis.Redis,
-        embed_fn,  # Callable[[str], Awaitable[list[float]]]
+        embed_fn: Any,  # Callable[[str], Awaitable[list[float]]]
         l1_capacity: int = 2048,
         l2_ttl: int = 3600,
         semantic_threshold: float = 0.95,
         semantic_prefix_dims: int = 64,
-    ):
+    ) -> None:
         self._redis = redis
         self._embed_fn = embed_fn
         self._l2_ttl = l2_ttl
@@ -40,7 +41,7 @@ class SemanticCache:
         self._semantic_prefix_dims = semantic_prefix_dims
 
         # L1: LRU dict
-        self._l1: OrderedDict[str, dict] = OrderedDict()
+        self._l1: OrderedDict[str, dict[str, Any]] = OrderedDict()
         self._l1_capacity = l1_capacity
 
         # 统计
@@ -56,7 +57,7 @@ class SemanticCache:
         tenant_id: str,
         model: str,
         messages: list[ChatMessage],
-        tools: list[dict] | None,
+        tools: list[dict[str, Any]] | None,
         temperature: float,
     ) -> str:
         """精确缓存 key: hash(tenant + model + messages + tools + temperature)
@@ -110,7 +111,7 @@ class SemanticCache:
         tenant_id: str,
         model: str,
         messages: list[ChatMessage],
-        tools: list[dict] | None,
+        tools: list[dict[str, Any]] | None,
         temperature: float,
     ) -> ChatResponse | None:
         """按 L1 → L2 → L3 顺序查找缓存（tenant_id 必填，理由见 _exact_key）"""
@@ -156,7 +157,7 @@ class SemanticCache:
         tenant_id: str,
         model: str,
         messages: list[ChatMessage],
-        tools: list[dict] | None,
+        tools: list[dict[str, Any]] | None,
         temperature: float,
         response: ChatResponse,
     ) -> None:
@@ -188,14 +189,14 @@ class SemanticCache:
 
     # ── 内部 ──
 
-    def _l1_set(self, key: str, data: dict) -> None:
+    def _l1_set(self, key: str, data: dict[str, Any]) -> None:
         self._l1[key] = data
         self._l1.move_to_end(key)
         while len(self._l1) > self._l1_capacity:
             self._l1.popitem(last=False)
 
     @staticmethod
-    def _encode(resp: ChatResponse) -> dict:
+    def _encode(resp: ChatResponse) -> dict[str, Any]:
         return {
             "content": resp.content,
             "tool_calls": [
@@ -209,7 +210,7 @@ class SemanticCache:
         }
 
     @staticmethod
-    def _decode(data: dict, model: str) -> ChatResponse:
+    def _decode(data: dict[str, Any], model: str) -> ChatResponse:
         from app.gateway.provider import ToolCall
 
         return ChatResponse(
@@ -225,7 +226,7 @@ class SemanticCache:
             provider="cache",
         )
 
-    def stats(self) -> dict:
+    def stats(self) -> dict[str, Any]:
         total = self._hits_l1 + self._hits_l2 + self._hits_l3 + self._misses
         return {
             "l1_hits": self._hits_l1,

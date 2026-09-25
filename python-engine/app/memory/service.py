@@ -26,6 +26,7 @@ from typing import Any
 from app.config import settings
 from app.memory.layers import (
     SLOT_LABELS,
+    EntryChannel,
     MemoryConflict,
     ProfileItem,
     ProfileUpdateResult,
@@ -71,7 +72,8 @@ def _iso(value: Any) -> str | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=UTC)
-        return value.isoformat()
+        iso: str = value.isoformat()
+        return iso
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=UTC).isoformat()
     return str(value)
@@ -132,7 +134,7 @@ class MemoryService:
         self._conflicts: dict[str, dict[str, Any]] = {}
         # 整理任务的单飞行状态：同一 (tenant, user) 不允许并发整理。
         self._organize_state: dict[tuple[str, str], dict[str, Any]] = {}
-        self._organize_tasks: dict[tuple[str, str], asyncio.Task] = {}
+        self._organize_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
 
     # ── 生命周期钩子 ──────────────────────────────────────────────────
 
@@ -141,7 +143,7 @@ class MemoryService:
         session_id: str,
         tenant_id: str,
         user_id: str,
-        entry_channel: str = "web",
+        entry_channel: EntryChannel = "web",
         mode: str = "agent",
     ) -> SessionContext:
         """会话开始时调用：建 L1 簿记 + 预取 L2 个性化档案卡。"""
@@ -185,10 +187,11 @@ class MemoryService:
         max_tokens: int = 8192,
     ) -> None:
         """回合完成时调用：L1 记账 + token 预算检测 + L3 异步入队。"""
-        meta = self._session_meta.get(session_id) if self._session_meta else None
-        if meta:
+        store = self._session_meta
+        meta = store.get(session_id) if store else None
+        if meta and store is not None:
             meta.mark_turn_complete(tokens_in, tokens_out)
-            self._session_meta.update(session_id)
+            store.update(session_id)
 
         if meta and total_tokens > 0 and max_tokens > 0:
             usage_ratio = total_tokens / max_tokens
@@ -199,7 +202,8 @@ class MemoryService:
                     session_id,
                 )
                 meta.mark_degraded("compaction_triggered")
-                self._session_meta.update(session_id)
+                if store is not None:
+                    store.update(session_id)
 
         if meta and self._producer:
             await self._enqueue_consolidate(
@@ -236,6 +240,11 @@ class MemoryService:
             raise RuntimeError("L2 memory store unavailable (PostgreSQL required)")
         return self._store
 
+    def _require_profile_card(self) -> Any:
+        if self._profile_card is None:
+            raise RuntimeError("L2 profile card unavailable (PostgreSQL required)")
+        return self._profile_card
+
     async def _embed(self, text: str) -> list[float] | None:
         """生成向量，失败返回 None（fail-soft）。
 
@@ -245,7 +254,8 @@ class MemoryService:
         if self._embedder is None or not text.strip():
             return None
         try:
-            return await self._embedder(text)
+            embedding: list[float] | None = await self._embedder(text)
+            return embedding
         except Exception as e:
             logger.warning("embed failed (entry saved without vector): %s", e)
             return None
@@ -432,7 +442,10 @@ class MemoryService:
 
     async def delete_entry(self, tenant_id: str, user_id: str, entry_id: str) -> bool:
         """按 id 删除单条记忆。"""
-        return await self._require_store().delete(tenant_id, user_id, entry_id)
+        removed: bool = await self._require_store().delete(
+            tenant_id, user_id, entry_id
+        )
+        return removed
 
     async def forget_by_key(
         self,
@@ -442,13 +455,15 @@ class MemoryService:
         slot: str | None = None,
     ) -> int:
         """按 key 删除（可限定槽位）；返回删除条数。"""
-        return await self._require_store().delete_by_key(
+        removed: int = await self._require_store().delete_by_key(
             tenant_id, user_id, item_key, slot
         )
+        return removed
 
     async def clear_all(self, tenant_id: str, user_id: str) -> int:
         """清空当前用户全部记忆（隐私出口）。"""
-        return await self._require_store().delete_all(tenant_id, user_id)
+        removed: int = await self._require_store().delete_all(tenant_id, user_id)
+        return removed
 
     async def search(
         self,
@@ -547,7 +562,8 @@ class MemoryService:
         source: SourceType = SourceType.DERIVED,
     ) -> ProfileUpdateResult:
         """更新用户个性化设置（档案卡）。"""
-        return await self._profile_card.upsert_item(
+        card = self._require_profile_card()
+        result: ProfileUpdateResult = await card.upsert_item(
             tenant_id=tenant_id,
             user_id=user_id,
             slot=slot,
@@ -556,6 +572,7 @@ class MemoryService:
             confidence=confidence,
             source=source,
         )
+        return result
 
     async def forget(
         self,
@@ -565,12 +582,14 @@ class MemoryService:
         item_key: str,
     ) -> bool:
         """删除个性化设置条目。"""
-        return await self._profile_card.delete_item(
+        card = self._require_profile_card()
+        removed: bool = await card.delete_item(
             tenant_id=tenant_id,
             user_id=user_id,
             slot=slot,
             item_key=item_key,
         )
+        return removed
 
     # ── L3 摘要 ─────────────────────────────────────────────────────
 
@@ -579,7 +598,7 @@ class MemoryService:
         tenant_id: str,
         user_id: str,
         session_id: str,
-        messages: list[dict],
+        messages: list[dict[str, Any]],
         turn_start: int = 0,
         turn_end: int = 0,
     ) -> dict[str, Any]:
@@ -1213,7 +1232,7 @@ class MemoryService:
         if overflow <= 0:
             return 0
 
-        def eviction_rank(item: Any) -> tuple:
+        def eviction_rank(item: Any) -> tuple[Any, ...]:
             confirmed = 1 if _source_value(item.source) == "user_confirmed" else 0
             return (
                 confirmed,                              # 确认过的排最后

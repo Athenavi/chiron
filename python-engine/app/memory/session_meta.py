@@ -12,8 +12,9 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from typing import Any
 
-from app.memory.layers import SessionMeta
+from app.memory.layers import EntryChannel, SessionMeta
 
 logger = logging.getLogger(__name__)
 
@@ -32,7 +33,7 @@ class SessionMetaStore:
     def __init__(self) -> None:
         """初始化 SessionMetaStore。"""
         self._store: dict[str, SessionMeta] = {}
-        self._cleanup_task: asyncio.Task | None = None
+        self._cleanup_task: asyncio.Task[None] | None = None
 
     # ── CRUD 操作 ──────────────────────────────────────────────────────
 
@@ -41,7 +42,7 @@ class SessionMetaStore:
         session_id: str,
         tenant_id: str,
         user_id: str,
-        entry_channel: str = "web",
+        entry_channel: EntryChannel = "web",
         mode: str = "agent",
     ) -> SessionMeta:
         """创建会话元数据。
@@ -104,7 +105,7 @@ class SessionMetaStore:
 
         return meta
 
-    def update(self, session_id: str, **kwargs) -> SessionMeta | None:
+    def update(self, session_id: str, **kwargs: Any) -> SessionMeta | None:
         """更新会话元数据字段。
 
         Args:
@@ -187,7 +188,7 @@ class SessionMetaStore:
             logger.warning("Periodic cleanup task already running")
             return
 
-        async def _cleanup_loop():
+        async def _cleanup_loop() -> None:
             logger.info("Starting periodic cleanup (every %d seconds)", interval)
             try:
                 while True:

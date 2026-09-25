@@ -13,12 +13,13 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
 # 兜底目录：与 internal/api/llm_providers.go 的 llmProviderCatalog 保持 id/kind/base_url 一致。
 # 网关下发成功时以网关目录为准，本表仅补齐网关未列出的 id（如引擎比网关新的场景）。
-FALLBACK_CATALOG: list[dict] = [
+FALLBACK_CATALOG: list[dict[str, Any]] = [
     # ── 国际厂商 ──
     {"id": "openai", "label": "OpenAI", "kind": "openai", "base_url": "https://api.openai.com/v1",
      "api_key_env": "OPENAI_API_KEY", "model_prefixes": ["gpt", "o1", "o3", "o4", "davinci", "text-embedding"],
@@ -123,16 +124,16 @@ FALLBACK_CATALOG: list[dict] = [
 ]
 
 
-def _settings():
+def _settings() -> Any:
     """延迟导入 Settings，避免 config ←→ providers 的循环导入。"""
     from app.config import settings
 
     return settings
 
 
-def provider_catalog() -> list[dict]:
+def provider_catalog() -> list[dict[str, Any]]:
     """返回生效的服务提供商目录（网关下发优先，兜底目录补齐缺失 id）。"""
-    by_id: dict[str, dict] = {}
+    by_id: dict[str, dict[str, Any]] = {}
     settings = _settings()
     remote = getattr(settings, "llm_provider_catalog", None) or []
     for item in remote:
@@ -157,7 +158,7 @@ def _provider_env_name(provider_id: str, suffix: str) -> str:
     return provider_id.upper().replace("-", "_").replace(".", "_") + suffix
 
 
-def provider_base_url(preset: dict) -> str:
+def provider_base_url(preset: dict[str, Any]) -> str:
     """解析 provider 端点。优先级（降序）：
     管理端 DB 覆盖 → ``{PROVIDER}_BASE_URL`` env → Settings 的 ``{provider}_base_url``
     字段 → openai 的 ``LLM_BASE_URL`` 历史回退 → 目录默认端点。
@@ -188,7 +189,7 @@ def provider_base_url(preset: dict) -> str:
     return str(preset.get("base_url") or "").rstrip("/")
 
 
-def provider_api_key(preset: dict) -> str:
+def provider_api_key(preset: dict[str, Any]) -> str:
     """解析 provider 的 env 种子 key。优先级：
     管理端 DB 覆盖 → 目录声明的 ``api_key_env`` → ``{PROVIDER}_API_KEY`` env
     → Settings 的 ``{provider}_api_key`` 字段 → openai 的 ``LLM_API_KEY`` 历史回退。
@@ -221,12 +222,12 @@ def provider_api_key(preset: dict) -> str:
     return ""
 
 
-def provider_requires_key(preset: dict) -> bool:
+def provider_requires_key(preset: dict[str, Any]) -> bool:
     """是否需要 key 才能注册（False = 本地/自托管端点可无 key）。"""
     return bool(preset.get("requires_key", True))
 
 
-def provider_kind(preset: dict) -> str:
+def provider_kind(preset: dict[str, Any]) -> str:
     """接入协议：``openai`` | ``anthropic``。"""
     kind = str(preset.get("kind") or "openai").strip().lower()
     return kind if kind in ("openai", "anthropic") else "openai"

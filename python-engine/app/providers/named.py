@@ -7,6 +7,8 @@
 """
 from __future__ import annotations
 
+from typing import Any
+
 from app.providers.anthropic import AnthropicProvider
 from app.providers.openai import OpenAIProvider
 
@@ -14,7 +16,14 @@ from app.providers.openai import OpenAIProvider
 class NamedOpenAIProvider(OpenAIProvider):
     """OpenAI 兼容协议的具名 provider（DeepSeek / Kimi / GLM / Ollama 等）。"""
 
-    def __init__(self, name: str, *, api_key: str, base_url: str = "", key_ring=None):
+    def __init__(
+        self,
+        name: str,
+        *,
+        api_key: str,
+        base_url: str = "",
+        key_ring: Any = None,
+    ) -> None:
         self.name = name
         super().__init__(api_key=api_key, base_url=base_url, key_ring=key_ring)
 
@@ -22,6 +31,13 @@ class NamedOpenAIProvider(OpenAIProvider):
 class NamedAnthropicProvider(AnthropicProvider):
     """Anthropic Messages 协议的具名 provider（官方端点或自定义兼容网关）。"""
 
-    def __init__(self, name: str, *, api_key: str, base_url: str = "", key_ring=None):
+    def __init__(
+        self,
+        name: str,
+        *,
+        api_key: str,
+        base_url: str = "",
+        key_ring: Any = None,
+    ) -> None:
         self.name = name
         super().__init__(api_key=api_key, base_url=base_url, key_ring=key_ring)

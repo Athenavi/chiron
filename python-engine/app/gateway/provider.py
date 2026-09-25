@@ -4,6 +4,7 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
+from typing import Any
 
 
 @dataclass
@@ -13,8 +14,8 @@ class ChatMessage:
     tool_call_id: str = ""
     tool_calls: list[ToolCall] | None = None
 
-    def to_dict(self) -> dict:
-        d: dict = {"role": self.role}
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {"role": self.role}
         # tool_calls 存在时 content 应为 None（OpenAI API 规范），但非空文本应保留
         if self.tool_calls:
             d["content"] = self.content or None
@@ -33,7 +34,7 @@ class ToolCall:
     name: str
     arguments: str  # JSON string
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
             "type": "function",
@@ -98,16 +99,22 @@ class LLMProvider(ABC):
     name: str = ""
 
     @abstractmethod
-    async def chat_stream(
+    def chat_stream(
         self,
         messages: list[ChatMessage],
         model: str,
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> AsyncIterator[ChatResponse]:
-        """流式推理，逐 chunk yield"""
+        """流式推理，逐 chunk yield
+
+        注意：这是**异步生成器**协议（实现方用 ``async def`` + ``yield``），
+        因此基类这里声明为普通 ``def`` —— 若写成 ``async def``，mypy 会把它当作
+        协程（``Coroutine[..., AsyncIterator[...]]``），与实现方不兼容，
+        调用处的 ``async for`` 也会被判定为"不可异步迭代"。
+        """
         ...
 
     @abstractmethod
@@ -118,7 +125,7 @@ class LLMProvider(ABC):
         *,
         max_tokens: int = 4096,
         temperature: float = 0.7,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         """非流式推理"""
         ...
