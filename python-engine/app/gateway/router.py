@@ -135,7 +135,7 @@ class GatewayRouter:
 
     async def chat_stream(
         self,
-        messages: list[ChatMessage],
+        messages: list[Any],
         model: str,
         *,
         tenant_id: str = "",
@@ -262,7 +262,7 @@ class GatewayRouter:
 
     async def chat(
         self,
-        messages: list[ChatMessage],
+        messages: list[Any],
         model: str,
         *,
         tenant_id: str = "",

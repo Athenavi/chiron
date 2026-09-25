@@ -38,6 +38,7 @@ ruff check .
 # --follow-imports=silent：只报告这里列出的模块（依赖由它们各自的门禁覆盖）
 mypy --follow-imports=silent \
   app/agent/event_sink.py app/agent/loop.py app/agent/message_codec.py \
+  app/agent/multi_agent.py \
   app/api/agents.py app/api/context.py app/api/knowledge.py app/api/skills.py \
   app/api/system.py app/api/unified_executor.py \
   app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
@@ -46,7 +47,8 @@ mypy --follow-imports=silent \
   app/memory app/middleware app/observability app/providers app/queue/producer.py \
   app/rag/retriever.py app/rag/stores/base.py app/session_store.py app/sse app/trace \
   app/tools/code_guard.py app/tools/context.py app/tools/rag_query.py app/tools/skill.py \
-  app/tools/skill_catalog.py app/tools/ssrf.py app/tools/web.py   # 分批接线，见开发路线图 L2-1
+  app/tools/skill_catalog.py app/tools/ssrf.py app/tools/web.py \
+  app/workflow/engine.py   # 分批接线，见开发路线图 L2-1
 python -m pytest -q -m "not integration"
 ```
 

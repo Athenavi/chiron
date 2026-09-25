@@ -55,7 +55,7 @@ _MAX_INSTANCES = 500  # 最大实例数，防止内存泄漏
 _instance_order: list[str] = []  # FIFO 顺序
 
 
-def _topological_sort(nodes: list[dict], edges: list[dict]) -> list[dict]:
+def _topological_sort(nodes: list[dict[str, Any]], edges: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """按 DAG 拓扑顺序排序节点"""
     in_degree: Counter[str] = Counter({n["id"]: 0 for n in nodes})
     adj: dict[str, list[str]] = defaultdict(list)
@@ -65,7 +65,7 @@ def _topological_sort(nodes: list[dict], edges: list[dict]) -> list[dict]:
 
     node_map = {n["id"]: n for n in nodes}
     queue = deque([n for n in nodes if in_degree.get(n["id"], 0) == 0])
-    result: list[dict] = []
+    result: list[dict[str, Any]] = []
     while queue:
         node = queue.popleft()
         result.append(node)
@@ -87,7 +87,7 @@ def _eval_condition(expression: str, text: str) -> bool:
     return expression.lower() in text.lower()
 
 
-def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeFn]:
+def _build_node_fns(graph_json: dict[str, Any], gateway: GatewayRouter) -> dict[str, NodeFn]:
     """构建 node_id → 节点执行函数 的映射（不依赖 LangGraph）。
 
     每个节点函数签名 (state, node_id) -> 增量 dict（只含自身输出 key
@@ -102,7 +102,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
     for e in edges:
         preds.setdefault(e["target_id"], []).append(e["source_id"])
 
-    def _prev_output(state: dict, node_id: str) -> str:
+    def _prev_output(state: dict[str, Any], node_id: str) -> str:
         """取入边前驱节点的输出（最后一个前驱优先），无前驱时返回空串。"""
         for pid in reversed(preds.get(node_id, [])):
             v = state.get(f"__out_{pid}__")
@@ -110,7 +110,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
                 return str(v)
         return ""
 
-    async def _input_node(state: dict, node_id: str) -> dict:
+    async def _input_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         node = node_map[node_id]
         if node_id in state:
             out = str(state[node_id])
@@ -121,7 +121,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         # 只返回自身增量 key，由 run_workflow 合并进共享 state
         return {f"__out_{node_id}__": out}
 
-    async def _llm_node(state: dict, node_id: str) -> dict:
+    async def _llm_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         node = node_map[node_id]
         config = node.get("config", {})
         # 字段对齐（前端表单）：system_prompt + user_message；兼容旧 prompt
@@ -130,7 +130,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         prompt = user_msg or config.get("prompt") or _prev_output(state, node_id)
         model = config.get("model", "")
 
-        messages: list[dict] = []
+        messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
@@ -149,7 +149,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
             raise
         return {f"__out_{node_id}__": text}
 
-    async def _tool_node(state: dict, node_id: str) -> dict:
+    async def _tool_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         node = node_map[node_id]
         config = node.get("config", {})
         name = config.get("tool_name", node.get("label", ""))
@@ -174,7 +174,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
             break
         return {f"__out_{node_id}__": last_output}
 
-    async def _condition_node(state: dict, node_id: str) -> dict:
+    async def _condition_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         node = node_map[node_id]
         config = node.get("config", {})
         # 字段对齐（前端表单）：condition + variable；兼容旧 expression/input
@@ -188,10 +188,10 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         matched = _eval_condition(expr, text)
         return {f"__out_{node_id}__": "true" if matched else "false"}
 
-    async def _output_node(state: dict, node_id: str) -> dict:
+    async def _output_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         return {f"__out_{node_id}__": _prev_output(state, node_id)}
 
-    async def _skill_node(state: dict, node_id: str) -> dict:
+    async def _skill_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         """技能节点：调用已安装技能（复用 skill_run，支持 prompt/python/shell/http）。"""
         from app.tools.skill import skill_run
 
@@ -214,7 +214,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         result = await skill_run(skill_name, params)
         return {f"__out_{node_id}__": result.get("output", result.get("error", ""))}
 
-    async def _knowledge_node(state: dict, node_id: str) -> dict:
+    async def _knowledge_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         """知识库节点：检索知识库并把片段注入上下文（复用 kb_search）。"""
         from app.tools.kb import kb_search
 
@@ -228,7 +228,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         result = await kb_search(kb_id, query, top_k=top_k)
         return {f"__out_{node_id}__": str(result)}
 
-    async def _agent_node(state: dict, node_id: str) -> dict:
+    async def _agent_node(state: dict[str, Any], node_id: str) -> dict[str, Any]:
         """Agent 节点：调用已安装 Agent（任务取 config.task 或前置输出，配置可覆盖
         system_prompt/model/max_turns；租户取自执行上下文）。"""
         node = node_map[node_id]
@@ -273,8 +273,11 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
         node_id = node["id"]
         base_fn = node_fn.get(node["node_type"], _input_node)
 
-        async def _wrapped(state: dict, _node_id: str, _base_fn=base_fn) -> dict:
-            return await _base_fn(state, _node_id)
+        async def _wrapped(
+            state: dict[str, Any], _node_id: str, _base_fn: NodeFn = base_fn
+        ) -> dict[str, Any]:
+            result: dict[str, Any] = await _base_fn(state, _node_id)
+            return result
 
         node_fns[node_id] = _wrapped
 
@@ -282,7 +285,7 @@ def _build_node_fns(graph_json: dict, gateway: GatewayRouter) -> dict[str, NodeF
 
 
 async def run_workflow(
-    graph_json: dict,
+    graph_json: dict[str, Any],
     gateway: GatewayRouter,
     initial_state: dict[str, Any] | None = None,
     instance_id: str | None = None,

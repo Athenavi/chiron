@@ -33,8 +33,8 @@ class SubAgentResult:
 
     success: bool
     output: str
-    tool_calls: list[dict] = field(default_factory=list)
-    token_usage: dict = field(default_factory=dict)
+    tool_calls: list[dict[str, Any]] = field(default_factory=list)
+    token_usage: dict[str, Any] = field(default_factory=dict)
     duration: float = 0.0
     error: str = ""
 
@@ -55,7 +55,7 @@ class SubAgent:
         name: str,
         description: str,
         system_prompt: str,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         gateway: GatewayRouter | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 5,
@@ -71,7 +71,7 @@ class SubAgent:
         self.max_turns = max_turns
         self.max_tokens = max_tokens
         self.temperature = temperature
-        self._openai_tools = None  # P8: 缓存工具转换结果
+        self._openai_tools: list[dict[str, Any]] | None = None  # P8: 缓存工具转换结果
 
     async def run(
         self,
@@ -98,7 +98,7 @@ class SubAgent:
             )
 
         start_time = time.monotonic()
-        all_tool_calls: list[dict] = []
+        all_tool_calls: list[dict[str, Any]] = []
         total_input_tokens = 0
         total_output_tokens = 0
         final_output = ""
@@ -134,7 +134,7 @@ class SubAgent:
         try:
             for _turn in range(self.max_turns):
                 response_content = ""
-                tool_calls: list[dict] = []
+                tool_calls: list[dict[str, Any]] = []
 
                 async for chunk in self._gateway.chat_stream(
                     messages=messages,
@@ -215,15 +215,15 @@ class SubAgent:
                         user_id=_ctx_user or tenant_id or "anonymous",
                         tenant_id=tenant_id or "default",
                     )
-                    for tc in tool_calls:
-                        tool_result = await self._execute_tool(tc)
+                    for call in tool_calls:
+                        tool_result = await self._execute_tool(call)
                         messages.append(
                             ChatMessage(
                                 role="tool",
                                 content=json.dumps(
                                     tool_result, ensure_ascii=False, default=str
                                 ),
-                                tool_call_id=tc["id"],
+                                tool_call_id=call["id"],
                             )
                         )
                     continue
@@ -292,7 +292,7 @@ class AgentDispatcher:
         self._gateway = gateway
         self._tool_registry = tool_registry
         self._agents: dict[str, SubAgent] = {}
-        self._active: dict[str, asyncio.Task] = {}
+        self._active: dict[str, asyncio.Task[Any]] = {}
         self._results: dict[str, SubAgentResult] = {}
 
     # ── 注册 ──
@@ -302,7 +302,7 @@ class AgentDispatcher:
         name: str,
         description: str,
         system_prompt: str,
-        tools: list[dict] | None = None,
+        tools: list[dict[str, Any]] | None = None,
         model: str = "claude-sonnet-4-20250514",
         max_turns: int = 5,
     ) -> SubAgent:
@@ -366,7 +366,7 @@ class AgentDispatcher:
 
         task_id = str(uuid.uuid4())
 
-        async def _run_and_store():
+        async def _run_and_store() -> None:
             result = await agent.run(task, context=context, tenant_id=tenant_id)
             self._results[task_id] = result
             self._bound_results()
@@ -400,7 +400,7 @@ class AgentDispatcher:
 
     # ── 查询 ──
 
-    def list_agents(self) -> list[dict]:
+    def list_agents(self) -> list[dict[str, Any]]:
         """列出所有已注册的子代理"""
         return [
             {
@@ -451,7 +451,7 @@ class AgentDispatcher:
 
 # ── 内置代理定义 ──────────────────────────────────────────
 
-BUILTIN_AGENTS: dict[str, dict] = {
+BUILTIN_AGENTS: dict[str, dict[str, Any]] = {
     "code": {
         "description": "Code writing and editing agent",
         "system_prompt": (
