@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 25 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 36 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -63,11 +63,11 @@
   按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
   `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
   `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第九批已清 451 条 → 720 / 77 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  **截至第十批已清 472 条 → 699 / 66 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **9 批、清 451 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+  2. **分批接线**：✅ 已完成 **10 批、清 472 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
      各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
      | 批 | 提交 | 范围 |
@@ -81,6 +81,7 @@
      | 7 | `07bf869` | `providers` + `memory` + `gateway/{provider,cache,router}`（142 条） |
      | 8 | `7cefafc` | `app/core`（80 条；门禁改用 `--follow-imports=silent`） |
      | 9 | `eb3e0f4` | `app/api/knowledge.py` + `app/api/unified_executor.py`（48 条） |
+     | 10 | `293929b` | `app/api/{agents,context,skills,system}.py` + `app/tools/{code_guard,context,rag_query,skill,skill_catalog,ssrf,web}.py`（21 条；另补 `beautifulsoup4` / `aiohttp` 两个缺失依赖） |
 
      第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
      `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
@@ -88,10 +89,10 @@
      恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
 
      - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **25 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 720 条 / 70 个文件）：
-       `agent/runtime.py` 99、`main.py` 52、`rag/builder.py` 46、`queue/worker.py` 35、
-       `skill/manager.py` 31、`mcp/client.py` 25、`api/media.py` 22、`agent/event_sink.py` 21 …；
+       （现为 **36 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 699 条 / 66 个文件）：
+       `agent/runtime.py` 99、`main.py` 52、`rag/builder.py` 45、`queue/worker.py` 35、
+       `skill/manager.py` 31、`agent/event_sink.py` 21、`mcp/client.py` 21、`agent/loop.py` 19 …；
      - **两条仍生效的约束**（新增依赖或新批次时照办）：
        1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
           依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
@@ -100,6 +101,11 @@
           `asyncpg` / `boto3.*` / `botocore.*` / `docx` / `fitz` / `psutil` / `pymilvus` /
           `sentence_transformers` —— 只放宽这些库的 import 解析，本仓库代码仍按 strict 检查；
           **不要用 `# type: ignore` 绕**；
+     - ⚠ **本分支从未 push，CI 一次都没跑过** —— 迄今所有 mypy 结果都来自本机隔离 venv。
+       首次真正跑 CI 时，除已接线的 mypy 之外还要留意「只装 `requirements.txt` +
+       `requirements-dev.txt` 的环境」缺哪些**顶层** import：第十批就是这样查出
+       `beautifulsoup4`（`app/tools/web.py`）与 `aiohttp`（`app/gateway/router.py`）从未被声明，
+       它们此前只由环境里的 markdownify / aiobotocore 偶然带入。
      - ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定
        版本装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI。
        CI 是 3.11 + 固定版本 —— 若该 step 首次运行报出本地没有的错误，根因大概率在此；
@@ -257,11 +263,14 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 # mypy 只覆盖**已接线的模块**（分批扩大，清单见 L2-1）；
 # --follow-imports=silent 让门禁只报告列出的模块（依赖由它们各自的门禁覆盖）
 ruff check . && mypy --follow-imports=silent \
-  app/api/knowledge.py app/api/unified_executor.py \
+  app/api/agents.py app/api/context.py app/api/knowledge.py app/api/skills.py \
+  app/api/system.py app/api/unified_executor.py \
   app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
   app/interfaces app/knowledge app/llm app/media app/memory app/middleware app/observability \
   app/providers app/rag/retriever.py app/session_store.py app/sse app/trace \
+  app/tools/code_guard.py app/tools/context.py app/tools/rag_query.py app/tools/skill.py \
+  app/tools/skill_catalog.py app/tools/ssrf.py app/tools/web.py \
   && python -m pytest -q -m "not integration"
 
 # frontend-vue/
