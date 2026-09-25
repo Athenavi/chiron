@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线目录，见 L2-1） | 0 —— `app/interfaces app/media app/observability app/sse app/trace app/config.py` |
+| `mypy`（已接线目录，见 L2-1） | 0 —— `app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py` |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -60,7 +60,7 @@
   `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
   python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
 - **已量化**（mypy 2.3.1，`python -m mypy app/`）：接线前基线 **1171 errors / 130 个文件
-  （共 200 个源文件）**；截至第三批已清 28 条 → **1143 errors / 121 个文件**。
+  （共 200 个源文件）**；截至第四批已清 66 条 → **1105 errors / 119 个文件**。
   - 按错误码：`type-arg` 488、`no-untyped-def` 266、`no-untyped-call` 116、`arg-type` 59、
     `union-attr` 45、`no-any-return` 41、`assignment` 40、`attr-defined` 38，其余各 ≤18；
     与环境相关的（缺 stub / 缺包）合计仅 20 条（`import-not-found` 12 + `import-untyped` 8）。
@@ -83,17 +83,27 @@
        另在 `pyproject.toml` 新增 `[[tool.mypy.overrides]]`：`boto3.*` / `botocore.*` / `fitz` /
        `docx` / `psutil` 这五个库既无 `py.typed` 也无可用 stub，只对其**放宽 import 解析**
        （这些库内部不参与检查，本仓库代码仍按 strict 检查）；
-     - 三批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现为
-       `mypy app/interfaces app/media app/observability app/sse app/trace app/config.py`，
-       全量存量降至 **1143 / 121 文件**；
+     - ✅ **第四批**：`app/db.py` + `app/db_client.py`，共 **36 条** —— 补函数注解
+       （`fetch_one`/`fetch_all`/`execute`/`close`/`close_clients`/`ensure_tables` 等）、
+       `dict`/`list` 补类型参数、`_RowDict(dict[str, Any])`、以及给内部中间变量显式注解以
+       消除 `no-any-return`。两处**签名与实现不符**在此修正：`init_pool` 声明
+       `-> asyncpg.Pool` 却在 unified 模式 `return None`（改为 `| None`）；`get_pool` 的
+       unified 分支返回的是鸭子类型适配器而非真 `asyncpg.Pool`（用 `cast` 收敛，避免改动
+       全部调用点）。另因 asyncpg 也无 `py.typed`，把它并入 overrides；
+     - 四批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现为
+       `mypy app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py`，
+       全量存量降至 **1105 / 119 文件**；
      - 后续每清零一个域，就往那个列表里追加，全部通过后改成 `mypy app/`；
-     - **下一批的依赖闭包（实测）**：
+     - **下一批的依赖闭包（实测，第四批之后）**：
 
        | 候选 | 自身存量 | 闭包额外带出的文件 |
        |---|---|---|
-       | `app/llm` | 5 | `app/db_client.py`（18） |
-       | `app/chaos` | 4 | `app/db.py`（18）+ `app/db_client.py`（18） |
-       | `app/middleware` | 3 | `app/db.py`、`app/db_client.py`、`app/gateway/ratelimit.py`、`app/observability/logging.py` |
+       | `app/llm` | 6 | 无（但含 `sentence_transformers` 的 `import-not-found` —— 那是**未声明**的可选依赖） |
+       | `app/chaos` | 4 | 无 |
+       | `app/middleware` | 3 | `app/gateway/ratelimit.py`（3） |
+
+       ✅ 先清掉 `app/db.py` / `app/db_client.py` 后，`llm` / `chaos` 的闭包已变干净 ——
+       这正是「先啃依赖瓶颈」的收益。
 
        ⚠ **`app/db.py` 与 `app/db_client.py` 是依赖瓶颈**（各 18 条）——`chaos` / `middleware` /
        `llm` 三个域都挂在它们后面，先清这两个能一次解锁三个域，比按目录存量排序更划算。
@@ -253,7 +263,7 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
 # mypy 只覆盖**已接线的目录**（分批扩大，清单见 L2-1）
-ruff check . && mypy app/interfaces app/media app/observability app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
+ruff check . && mypy app/db.py app/db_client.py app/interfaces app/media app/observability app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test

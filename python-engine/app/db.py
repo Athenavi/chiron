@@ -11,10 +11,15 @@ from __future__ import annotations
 
 import logging
 import os
+from typing import TYPE_CHECKING, Any, cast
 
 import asyncpg
 
 from app.config import settings
+
+if TYPE_CHECKING:
+    # 仅为类型注解：运行时仍走函数内的延迟 import，避免模块加载期就拉起 httpx。
+    from app.db_client import UnifiedDBClient
 
 logger = logging.getLogger(__name__)
 
@@ -22,11 +27,12 @@ logger = logging.getLogger(__name__)
 USE_UNIFIED = os.getenv("USE_UNIFIED_DB_CLIENT", "false").lower() == "true"
 
 _pool: asyncpg.Pool | None = None
-_unified_client = None
-_unified_pool_wrapper = None  # 缓存 _UnifiedPoolWrapper 实例，避免每次 get_pool() 新建
+_unified_client: UnifiedDBClient | None = None
+# 缓存 _UnifiedPoolWrapper 实例，避免每次 get_pool() 新建
+_unified_pool_wrapper: _UnifiedPoolWrapper | None = None
 
 
-def _get_unified_client():
+def _get_unified_client() -> UnifiedDBClient | None:
     """Lazy load unified client."""
     global _unified_client
     if _unified_client is None and USE_UNIFIED:
@@ -36,8 +42,12 @@ def _get_unified_client():
     return _unified_client
 
 
-async def init_pool(dsn: str) -> asyncpg.Pool:
-    """Initialize the global connection pool (legacy mode only)."""
+async def init_pool(dsn: str) -> asyncpg.Pool | None:
+    """Initialize the global connection pool (legacy mode only).
+
+    unified 模式下不建直连池，返回 None（此前注解写成 ``asyncpg.Pool`` 与这里的
+    ``return None`` 矛盾）。
+    """
     if USE_UNIFIED:
         logger.info("Using unified DB client through Go gateway")
         return None
@@ -91,7 +101,7 @@ async def _log_pool_capacity(pool: asyncpg.Pool) -> None:
         )
 
 
-async def close_pool():
+async def close_pool() -> None:
     """Close the global connection pool."""
     global _pool
     if _pool:
@@ -115,7 +125,10 @@ def get_pool() -> asyncpg.Pool:
         global _unified_pool_wrapper
         if _unified_pool_wrapper is None:
             _unified_pool_wrapper = _UnifiedPoolWrapper(client)
-        return _unified_pool_wrapper
+        # 刻意的类型断言：unified 模式返回的是鸭子类型的适配器（只实现 fetchrow /
+        # fetch / execute / executemany / transaction），不是真的 asyncpg.Pool。
+        # 改成联合类型会让两侧签名冲突、波及全部调用点，故在此收敛。
+        return cast("asyncpg.Pool", _unified_pool_wrapper)
 
     if _pool is None:
         raise RuntimeError("PostgreSQL pool not initialized")
@@ -128,40 +141,40 @@ def get_pool() -> asyncpg.Pool:
 class _UnifiedPoolWrapper:
     """Wrapper to make UnifiedDBClient compatible with asyncpg.Pool interface."""
 
-    def __init__(self, client):
+    def __init__(self, client: UnifiedDBClient):
         self._client = client
 
-    async def fetchrow(self, query: str, *args):
+    async def fetchrow(self, query: str, *args: Any) -> _RowDict | None:
         """Execute query and return single row."""
         result = await self._client.fetch_one(query, list(args))
         return _RowDict(result) if result else None
 
-    async def fetch(self, query: str, *args):
+    async def fetch(self, query: str, *args: Any) -> list[_RowDict]:
         """Execute query and return all rows."""
         results = await self._client.fetch_all(query, list(args))
         return [_RowDict(r) for r in results]
 
-    async def execute(self, query: str, *args) -> str:
+    async def execute(self, query: str, *args: Any) -> str:
         """Execute write SQL."""
         affected = await self._client.execute(query, list(args))
         return str(affected)
 
-    async def executemany(self, query: str, args_list: list):
+    async def executemany(self, query: str, args_list: list[Any]) -> bool:
         """Batch execute."""
         queries = [
             query % tuple(a) if isinstance(a, tuple) else query for a in args_list
         ]
         return await self._client.batch_execute(queries)
 
-    async def transaction(self, **kwargs):
+    async def transaction(self, **kwargs: Any) -> Any:
         """Return a transaction context manager (not fully implemented)."""
         raise NotImplementedError("Transactions not supported in unified mode yet")
 
 
-class _RowDict(dict):
+class _RowDict(dict[str, Any]):
     """Dictionary-like row object compatible with asyncpg.Record."""
 
-    def __getattr__(self, key):
+    def __getattr__(self, key: str) -> Any:
         try:
             return self[key]
         except KeyError:
@@ -198,7 +211,7 @@ REQUIRED_TABLES = [
 ]
 
 
-async def ensure_tables():
+async def ensure_tables() -> bool:
     """只读校验必需表是否存在，缺失时提示运行迁移。
 
     本函数**不执行任何 DDL**：建表全部由 Alembic 权威迁移负责。

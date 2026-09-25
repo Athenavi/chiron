@@ -115,17 +115,17 @@ markers = [
 
 [tool.mypy]
 python_version = "3.11"
-# strict 已接线但**按域分批**：CI 的 `Mypy (strict)` step 目前只检查已清零的模块
-# （app/interfaces、app/media、app/observability、app/sse、app/trace 及其传递依赖
-# app/config.py），清单与扩批进度见 docs/development-roadmap.md 的 L2-1。
+# strict 已接线但**按域分批**：CI 的 `Mypy (strict)` step 目前只检查已清零的模块，
+# 完整清单与扩批进度见 docs/development-roadmap.md 的 L2-1。
 # app/ 存量错误清零后改为 `mypy app/`。
 strict = true
 warn_return_any = true
 warn_unused_configs = true
 
 # 无类型标注的第三方依赖：这些库既没有 py.typed，也没有可直接使用的 stub 包 ——
-# boto3 / botocore / pymupdf(fitz) / python-docx / psutil。只放宽这些**模块的 import
-# 解析**（它们的内部不参与检查），本仓库代码仍照常按 strict 检查。
+# asyncpg / boto3 / botocore / pymupdf(fitz) / python-docx / psutil。
+# 只放宽这些**模块的 import 解析**（它们的内部不参与检查），本仓库代码仍照常按 strict 检查。
+# 若日后要更严的检查，可分别评估 types-psutil / asyncpg-stubs。
 [[tool.mypy.overrides]]
-module = ["boto3.*", "botocore.*", "fitz", "docx", "psutil"]
+module = ["asyncpg", "boto3.*", "botocore.*", "fitz", "docx", "psutil"]
 ignore_missing_imports = true

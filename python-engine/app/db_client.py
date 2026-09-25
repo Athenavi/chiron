@@ -54,12 +54,14 @@ class _BaseGatewayClient:
             self._client = httpx.AsyncClient(timeout=settings.http_timeout_default)
         return self._client
 
-    async def close(self):
+    async def close(self) -> None:
         if self._client:
             await self._client.aclose()
             self._client = None
 
-    async def _request(self, method: str, path: str, data: dict | None = None) -> dict:
+    async def _request(
+        self, method: str, path: str, data: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         client = await self._get_client()
         headers = {"X-Internal-Token": self.internal_token}
         url = f"{self.base_url}{path}"
@@ -74,7 +76,8 @@ class _BaseGatewayClient:
             result = resp.json()
             if not result.get("success"):
                 raise self._error_cls(result.get("error", "unknown error"))
-            return result.get("data", {})
+            payload: dict[str, Any] = result.get("data", {})
+            return payload
         except httpx.HTTPStatusError as e:
             logger.error(f"HTTP error {e.response.status_code}: {e.response.text}")
             raise self._error_cls(f"HTTP {e.response.status_code}") from e
@@ -84,7 +87,7 @@ class _BaseGatewayClient:
             logger.error(f"Request failed: {e}")
             raise self._error_cls(str(e)) from e
 
-    async def health_check(self) -> dict:
+    async def health_check(self) -> dict[str, Any]:
         """Check service health."""
         return await self._request("GET", self._health_path)
 
@@ -92,7 +95,9 @@ class _BaseGatewayClient:
         """Simple connectivity check."""
         try:
             result = await self.health_check()
-            return result.get("available", False) and result.get("ping_ok", False)
+            available: bool = result.get("available", False)
+            ping_ok: bool = result.get("ping_ok", False)
+            return available and ping_ok
         except Exception:
             return False
 
@@ -103,30 +108,33 @@ class UnifiedDBClient(_BaseGatewayClient):
     _error_cls = DBClientError
     _health_path = "/v1/internal/db/health"
 
-    async def fetch_one(self, sql: str, args: list | None = None) -> dict | None:
+    async def fetch_one(self, sql: str, args: list[Any] | None = None) -> dict[str, Any] | None:
         """Execute query and return first row."""
         data = {"sql": sql, "args": args or []}
         result = await self._request("POST", "/v1/internal/db/query", data)
-        rows = result.get("rows", [])
+        rows: list[dict[str, Any]] = result.get("rows", [])
         return rows[0] if rows else None
 
-    async def fetch_all(self, sql: str, args: list | None = None) -> list[dict]:
+    async def fetch_all(self, sql: str, args: list[Any] | None = None) -> list[dict[str, Any]]:
         """Execute query and return all rows."""
         data = {"sql": sql, "args": args or []}
         result = await self._request("POST", "/v1/internal/db/query", data)
-        return result.get("rows", [])
+        rows: list[dict[str, Any]] = result.get("rows", [])
+        return rows
 
-    async def execute(self, sql: str, args: list | None = None) -> int:
+    async def execute(self, sql: str, args: list[Any] | None = None) -> int:
         """Execute write SQL and return affected rows."""
         data = {"sql": sql, "args": args or []}
         result = await self._request("POST", "/v1/internal/db/execute", data)
-        return result.get("rows_affected", 0)
+        affected: int = result.get("rows_affected", 0)
+        return affected
 
     async def batch_execute(self, queries: list[str]) -> bool:
         """Batch execute multiple SQL statements."""
         data = {"queries": queries}
         result = await self._request("POST", "/v1/internal/db/batch-execute", data)
-        return result.get("success", False)
+        ok: bool = result.get("success", False)
+        return ok
 
 
 class UnifiedRedisClient(_BaseGatewayClient):
@@ -147,7 +155,8 @@ class UnifiedRedisClient(_BaseGatewayClient):
         """Get value by key."""
         data = {"key": key}
         result = await self._request("POST", "/v1/internal/redis/get", data)
-        return result.get("value")
+        value: str | None = result.get("value")
+        return value
 
     async def set(self, key: str, value: Any, ttl: int | None = None) -> bool:
         """Set value with optional TTL (seconds)."""
@@ -155,13 +164,15 @@ class UnifiedRedisClient(_BaseGatewayClient):
         if ttl is not None:
             data["ttl"] = ttl
         result = await self._request("POST", "/v1/internal/redis/set", data)
-        return result.get("success", False)
+        ok: bool = result.get("success", False)
+        return ok
 
     async def delete(self, *keys: str) -> bool:
         """Delete one or more keys."""
         data = {"keys": list(keys)}
         result = await self._request("POST", "/v1/internal/redis/del", data)
-        return result.get("success", False)
+        ok: bool = result.get("success", False)
+        return ok
 
 
 # Global instances
@@ -185,7 +196,7 @@ def get_redis_client() -> UnifiedRedisClient:
     return _redis_client
 
 
-async def close_clients():
+async def close_clients() -> None:
     """Close all client connections."""
     global _db_client, _redis_client
     if _db_client:
