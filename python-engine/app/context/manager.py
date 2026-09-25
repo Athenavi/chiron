@@ -4,6 +4,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import math
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -11,10 +12,10 @@ logger = logging.getLogger(__name__)
 _SYSTEM_OVERHEAD_TOKENS = 4  # role framing per message
 
 # Global background task tracking for graceful shutdown
-_bg_tasks: set[asyncio.Task] = set()
+_bg_tasks: set[asyncio.Task[None]] = set()
 
 
-def _track_bg_task(task: asyncio.Task) -> None:
+def _track_bg_task(task: asyncio.Task[None]) -> None:
     """Track a background task for graceful shutdown."""
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
@@ -99,7 +100,7 @@ class ContextManager:
         tokens = math.ceil(ascii_chars / 4) + math.ceil(non_ascii_chars / 2)
         return max(tokens, 1) if text.strip() else 0
 
-    def count_message_tokens(self, messages: list) -> int:
+    def count_message_tokens(self, messages: list[dict[str, Any]]) -> int:
         """Count total tokens across a list of message dicts.
 
         Each message is expected to be a dict with at least 'role' and 'content'.
@@ -136,7 +137,12 @@ class ContextManager:
     # Compression
     # ------------------------------------------------------------------
 
-    async def compress(self, messages: list, gateway=None, memory_service=None) -> list:
+    async def compress(
+        self,
+        messages: list[dict[str, Any]],
+        gateway: Any = None,
+        memory_service: Any = None,
+    ) -> list[dict[str, Any]]:
         """Compress messages if approaching the token limit.
 
         降级链实现：
@@ -166,8 +172,8 @@ class ContextManager:
         )
 
         # Split messages into: system | middle (to compress) | tail (to keep)
-        system_msgs: list[dict] = []
-        other_msgs: list[dict] = []
+        system_msgs: list[dict[str, Any]] = []
+        other_msgs: list[dict[str, Any]] = []
 
         for msg in messages:
             if msg.get("role") == "system" and not system_msgs:
@@ -268,7 +274,9 @@ class ContextManager:
 
         return compressed
 
-    async def _summarise(self, messages: list, gateway=None) -> str:
+    async def _summarise(
+        self, messages: list[dict[str, Any]], gateway: Any = None
+    ) -> str:
         """Produce a text summary of *messages*.
 
         If *gateway* is supplied and exposes ``chat``, ask the LLM to summarise.
@@ -292,7 +300,9 @@ class ContextManager:
         return "\n".join(parts) if parts else "(no content)"
 
     @staticmethod
-    async def _llm_summarise(messages: list, gateway) -> str:
+    async def _llm_summarise(
+        messages: list[dict[str, Any]], gateway: Any
+    ) -> str:
         """Use the gateway to produce a real summary."""
         summary_prompt = [
             {
@@ -326,7 +336,9 @@ class ContextManager:
     # Trimming
     # ------------------------------------------------------------------
 
-    def trim_to_fit(self, messages: list, max_tokens: int | None = None) -> list:
+    def trim_to_fit(
+        self, messages: list[dict[str, Any]], max_tokens: int | None = None
+    ) -> list[dict[str, Any]]:
         """Remove oldest non-system messages until the total fits within *max_tokens*.
 
         The system prompt (first system message) is always preserved.
@@ -344,8 +356,8 @@ class ContextManager:
             return messages
 
         # Separate the system message(s) from the rest
-        system_msgs: list[dict] = []
-        other_msgs: list[dict] = []
+        system_msgs: list[dict[str, Any]] = []
+        other_msgs: list[dict[str, Any]] = []
 
         for msg in messages:
             if msg.get("role") == "system" and not system_msgs:
@@ -357,7 +369,7 @@ class ContextManager:
         remaining_budget = budget - system_tokens
 
         # Walk from the end (most recent) backwards, accumulating until we hit the budget
-        kept: list[dict] = []
+        kept: list[dict[str, Any]] = []
         used = 0
 
         for msg in reversed(other_msgs):
@@ -383,7 +395,7 @@ class ContextManager:
     # ------------------------------------------------------------------
 
     @staticmethod
-    def _extractive_summary(messages: list) -> str:
+    def _extractive_summary(messages: list[dict[str, Any]]) -> str:
         """提取式摘要（LLM 不可用时的降级方案）。
 
         从每个消息中提取关键内容，拼接成简明摘要。
@@ -402,8 +414,8 @@ class ContextManager:
 
     @staticmethod
     async def _submit_degraded_content(
-        messages: list,
-        memory_service,
+        messages: list[dict[str, Any]],
+        memory_service: Any,
     ) -> None:
         """将降级模式下被压缩的内容提交到后台巩固队列。
 

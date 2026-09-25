@@ -16,6 +16,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -28,7 +29,7 @@ class EngineRegistry:
 
     def __init__(
         self,
-        redis,
+        redis: Any,
         instance_id: str,
         advertise_url: str,
         version: str = "3.0.0",
@@ -37,7 +38,7 @@ class EngineRegistry:
         self._instance_id = instance_id
         self._advertise_url = advertise_url.strip().rstrip("/")
         self._version = version
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[None] | None = None
 
     @property
     def enabled(self) -> bool:

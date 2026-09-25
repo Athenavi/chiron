@@ -19,6 +19,7 @@ import json
 import logging
 import time
 from collections import OrderedDict
+from typing import Any
 
 from app.middleware.privacy_middleware import is_no_retention
 from app.redis_keys import rkey
@@ -34,14 +35,14 @@ REDIS_RETRY_AFTER_SECS = 5.0
 class SessionStore:
     """会话消息缓存，优先使用 Redis，不可用时降级到内存 LRU"""
 
-    def __init__(self, redis_client=None, max_sessions: int = 200):
+    def __init__(self, redis_client: Any = None, max_sessions: int = 200) -> None:
         self._redis = redis_client
         self._redis_enabled = redis_client is not None
         # 降级后重探窗口：Redis 抖动恢复后自动回到共享后端，避免实例永久“假降级”
         self._redis_retry_at = 0.0
         self._max_sessions = max_sessions
         # 内存降级后端（仅 Redis 不可用时使用）
-        self._local: OrderedDict[str, list[dict]] = OrderedDict()
+        self._local: OrderedDict[str, list[dict[str, Any]]] = OrderedDict()
 
     def _redis_usable(self) -> bool:
         """是否尝试 Redis：正常启用，或降级后已到重探窗口（重开一次，失败会再次禁用）。"""
@@ -59,7 +60,9 @@ class SessionStore:
 
     # ── 公共接口 ──
 
-    async def get_or_init(self, session_id: str, history: list[dict]) -> list[dict]:
+    async def get_or_init(
+        self, session_id: str, history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         if not session_id:
             return list(history)
 
@@ -82,7 +85,7 @@ class SessionStore:
         # 内存降级
         return self._local_get_or_init(session_id, history)
 
-    async def append(self, session_id: str, messages: list[dict]) -> None:
+    async def append(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         if not session_id:
             return
 
@@ -104,7 +107,7 @@ class SessionStore:
 
         self._local_set(session_id, messages)
 
-    async def get(self, session_id: str) -> list[dict] | None:
+    async def get(self, session_id: str) -> list[dict[str, Any]] | None:
         if self._redis_usable():
             try:
                 return await self._redis_get(session_id)
@@ -143,13 +146,13 @@ class SessionStore:
     # ── Redis 后端 ──
 
     async def _redis_get_or_init(
-        self, session_id: str, history: list[dict]
-    ) -> list[dict]:
+        self, session_id: str, history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         data = await self._redis.get(REDIS_KEY_PREFIX + session_id)
         if data:
             # 延长 TTL
             await self._redis.expire(REDIS_KEY_PREFIX + session_id, REDIS_TTL_SECONDS)
-            result = json.loads(data)
+            result: list[dict[str, Any]] = json.loads(data)
             logger.debug("Redis cache HIT: %s (%d messages)", session_id, len(result))
             return result
 
@@ -162,13 +165,16 @@ class SessionStore:
         await self._redis_set(session_id, messages)
         return messages
 
-    async def _redis_get(self, session_id: str) -> list[dict] | None:
+    async def _redis_get(self, session_id: str) -> list[dict[str, Any]] | None:
         data = await self._redis.get(REDIS_KEY_PREFIX + session_id)
         if data:
-            return json.loads(data)
+            cached: list[dict[str, Any]] = json.loads(data)
+            return cached
         return None
 
-    async def _redis_set(self, session_id: str, messages: list[dict]) -> None:
+    async def _redis_set(
+        self, session_id: str, messages: list[dict[str, Any]]
+    ) -> None:
         await self._redis.setex(
             REDIS_KEY_PREFIX + session_id,
             REDIS_TTL_SECONDS,
@@ -177,7 +183,9 @@ class SessionStore:
 
     # ── 内存降级后端 ──
 
-    def _local_get_or_init(self, session_id: str, history: list[dict]) -> list[dict]:
+    def _local_get_or_init(
+        self, session_id: str, history: list[dict[str, Any]]
+    ) -> list[dict[str, Any]]:
         if session_id in self._local:
             self._local.move_to_end(session_id)
             cached = self._local[session_id]
@@ -197,7 +205,7 @@ class SessionStore:
         # S 修复：与 HIT 一致返回拷贝，避免调用方修改返回列表污染缓存
         return list(messages)
 
-    def _local_set(self, session_id: str, messages: list[dict]) -> None:
+    def _local_set(self, session_id: str, messages: list[dict[str, Any]]) -> None:
         self._local[session_id] = messages
         self._local.move_to_end(session_id)
         self._evict_if_needed()

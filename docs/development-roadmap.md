@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 12 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 18 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -60,7 +60,7 @@
   `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
   python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
 - **已量化**（mypy 2.3.1，`python -m mypy app/`）：接线前基线 **1171 errors / 130 个文件
-  （共 200 个源文件）**；截至第五批已清 81 条 → **1090 errors / 114 个文件**。
+  （共 200 个源文件）**；截至第六批已清 158 条 → **1013 errors / 106 个文件**。
   - 按错误码：`type-arg` 488、`no-untyped-def` 266、`no-untyped-call` 116、`arg-type` 59、
     `union-attr` 45、`no-any-return` 41、`assignment` 40、`attr-defined` 38，其余各 ≤18；
     与环境相关的（缺 stub / 缺包）合计仅 20 条（`import-not-found` 12 + `import-untyped` 8）。
@@ -99,24 +99,30 @@
        本质是 `Any`，一律用显式注解的中间变量消除 `no-any-return`。
        另把 `sentence_transformers` 并入 overrides（本地嵌入的可选 extra，
        `requirements.txt` 刻意不装它）；
-     - 五批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现覆盖
-       12 个路径（见 `.github/workflows/ci.yml`），全量存量降至 **1090 / 114 文件**；
-     - 后续每清零一个域，就往那个列表里追加，全部通过后改成 `mypy app/`；
-     - **下一批的依赖闭包（实测，第五批之后）**：
+     - ✅ **第六批**（从「按目录」改为「按文件/子模块」）：`app/engine_registry.py`、
+       `app/session_store.py`、`app/knowledge`、`app/context`，加上它们的传递依赖
+       `app/rag/retriever.py` 与 `app/memory/layers.py`，共 **69 条** —— 补 `list`/`dict`
+       类型参数与函数注解、`asyncio.Task` 补类型参数、JSON 返回值用显式注解的中间变量消除
+       `no-any-return`；`retriever.py` 的两个属性补 `Any`（pymilvus 无类型标注）；
+       `branch_condense` 的 `render_messages(future_messages or [])` 收敛 Optional 实参。
+       另把 `pymilvus` 并入 overrides；
+     - 六批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现覆盖
+       **18 个路径**（改用 YAML 折叠标量书写），全量存量降至 **1013 / 106 文件**；
+     - 后续每清零一块，就往那个列表里追加，全部通过后改成 `mypy app/`；
+     - **下一批的依赖闭包（实测，第六批之后）**：
 
-       | 候选 | 自身存量 | 闭包额外带出的文件 |
+       | 候选 | 自身存量 | 闭包情况 |
        |---|---|---|
-       | `app/engine_registry.py` | 2 | 无 |
-       | `app/session_store.py` | 13 | 无 |
-       | `app/knowledge` | 23 | 无 |
-       | `app/context` | 31 | 4 个文件（含自身） |
-       | `app/batch_processor.py` | 94 | 8 个文件 |
-       | `app/mcp` / `app/plugins` | 23 / 23 | ❌ **会拉进几乎整个 app**（1018 / 1016 条）—— 不可按目录接，除非先清掉它们 import 的大域 |
+       | `app/providers` | 72 | 11 个文件，内聚 |
+       | `app/memory` | 95 | 12 个文件，内聚 |
+       | `app/tools` | 15+ | 8 个文件，且 mypy 报 **errors prevented further checking** |
+       | `app/workflow` / `app/skill` / `app/subagent` | 各 29 | 各 21 个文件，且同样被阻断 |
 
-       ✅ 结构上「按目录」这条路已经走到头：剩下的大域（`agent` 214、`api` 108、`rag` 101、
-       `tools` 88、`core` 80、`memory` 74、`providers` 66…）彼此高度耦合，单接一个目录会被
-       依赖闭包放大到接近全量。下一批若要继续，**应按文件/子模块切**（如上表前几行），
-       而不是按目录。
+       ⚠ 「errors prevented further checking」表示闭包里有 mypy 无法解析的 import，
+       真实错误数会**高于**上表 —— 接这三者前要先确认被阻断的原因（很可能是循环 import）。
+       ✅ 剩下的大域（`agent` 214、`api` 108、`tools` 88、`core` 80、`memory` 74、
+       `providers` 66…）已没有「干净小目标」，后续每批都要按**文件/子模块**切、并接受
+       闭包带来的连带修复。
 
        ⚠ **`app/db.py` 与 `app/db_client.py` 是依赖瓶颈**（各 18 条）——`chaos` / `middleware` /
        `llm` 三个域都挂在它们后面，先清这两个能一次解锁三个域，比按目录存量排序更划算。
@@ -276,7 +282,12 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
 # mypy 只覆盖**已接线的目录**（分批扩大，清单见 L2-1）
-ruff check . && mypy app/chaos app/config.py app/db.py app/db_client.py app/gateway/ratelimit.py app/interfaces app/llm app/media app/middleware app/observability app/sse app/trace && python -m pytest -q -m "not integration"
+ruff check . && mypy \
+  app/chaos app/config.py app/context app/db.py app/db_client.py app/engine_registry.py \
+  app/gateway/ratelimit.py app/interfaces app/knowledge app/llm app/media \
+  app/memory/layers.py app/middleware app/observability app/rag/retriever.py \
+  app/session_store.py app/sse app/trace \
+  && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test

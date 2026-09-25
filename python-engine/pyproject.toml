@@ -123,10 +123,10 @@ warn_return_any = true
 warn_unused_configs = true
 
 # 无类型标注（或未声明的可选）第三方依赖：这些模块既没有 py.typed，也没有可直接使用的
-# stub 包 —— asyncpg / boto3 / botocore / pymupdf(fitz) / python-docx / psutil，
+# stub 包 —— asyncpg / boto3 / botocore / pymupdf(fitz) / python-docx / psutil / pymilvus，
 # 外加 sentence_transformers（本地嵌入的可选 extra，requirements.txt 刻意不装它）。
 # 只放宽这些**模块的 import 解析**（它们的内部不参与检查），本仓库代码仍照常按 strict 检查。
 # 若日后要更严的检查，可分别评估 types-psutil / asyncpg-stubs。
 [[tool.mypy.overrides]]
-module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "psutil", "sentence_transformers"]
+module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "psutil", "pymilvus", "sentence_transformers"]
 ignore_missing_imports = true

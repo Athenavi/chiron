@@ -35,7 +35,11 @@ go test -mod=mod ./... -count=1
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 对齐
 ruff check .
-mypy app/chaos app/config.py app/db.py app/db_client.py app/gateway/ratelimit.py app/interfaces app/llm app/media app/middleware app/observability app/sse app/trace   # 分批接线，见开发路线图 L2-1
+mypy \
+  app/chaos app/config.py app/context app/db.py app/db_client.py app/engine_registry.py \
+  app/gateway/ratelimit.py app/interfaces app/knowledge app/llm app/media \
+  app/memory/layers.py app/middleware app/observability app/rag/retriever.py \
+  app/session_store.py app/sse app/trace   # 分批接线，见开发路线图 L2-1
 python -m pytest -q -m "not integration"
 ```
 

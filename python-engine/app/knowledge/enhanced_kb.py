@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field
+from typing import Any
 
 from app.rag.retriever import RAGRetriever
 from app.trace import record_span
@@ -28,7 +29,7 @@ class DocumentChunk:
     tenant_id: str  # SaaS 安全: 租户隔离
     content: str
     embedding: list[float]
-    metadata: dict = field(default_factory=dict)
+    metadata: dict[str, Any] = field(default_factory=dict)
 
 
 @dataclass
@@ -53,7 +54,7 @@ class EnhancedKnowledgeBase:
     4. 链路追踪 (每次检索记录 span)
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.retriever = RAGRetriever()
         self._collections: dict[str, str] = {}  # tenant_id -> collection_name
 
@@ -63,9 +64,9 @@ class EnhancedKnowledgeBase:
         document_id: str,
         content: str,
         file_type: str = "txt",
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         trace_id: str = "",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """索引文档 (带 trace)
 
         流程:
@@ -210,7 +211,7 @@ class EnhancedKnowledgeBase:
     async def list_documents(
         self,
         tenant_id: str,
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """列出租户下的所有文档 (从 PG knowledge_documents 表)"""
         from app.db import get_pool
 
@@ -282,7 +283,7 @@ class EnhancedKnowledgeBase:
     async def get_tenant_stats(
         self,
         tenant_id: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """获取租户知识库统计信息 (从 PG knowledge_documents 聚合)"""
         from app.db import get_pool
 
@@ -324,7 +325,7 @@ class KnowledgeBaseHandler:
     - GET  /v1/kb/stats      租户统计
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.kb = EnhancedKnowledgeBase()
 
     async def handle_index(
@@ -334,7 +335,7 @@ class KnowledgeBaseHandler:
         document_id: str,
         content: str,
         file_type: str = "txt",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """处理文档索引请求"""
         return await self.kb.index_document(
             tenant_id=tenant_id,
@@ -351,7 +352,7 @@ class KnowledgeBaseHandler:
         query: str,
         top_k: int = 5,
         threshold: float = 0.7,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """处理检索请求"""
         results = await self.kb.retrieve(
             tenant_id=tenant_id,
@@ -379,7 +380,7 @@ class KnowledgeBaseHandler:
         self,
         tenant_id: str,
         document_id: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """处理删除请求"""
         success = await self.kb.delete_document(tenant_id, document_id)
         return {

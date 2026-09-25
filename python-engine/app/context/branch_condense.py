@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass, field
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -77,10 +78,12 @@ class CondenseResult:
     degraded: bool = False
     reason: str = ""
     source_messages: int = 0
-    usage: dict = field(default_factory=dict)
+    usage: dict[str, Any] = field(default_factory=dict)
 
 
-def split_head_tail(messages: list, keep_tail: int) -> tuple[list, list]:
+def split_head_tail(
+    messages: list[dict[str, Any]], keep_tail: int
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
     """按"最近 K 条留原文"切分，返回 ``(压缩区, 原文保留区)``。
 
     边界：``keep_tail <= 0`` 视为"全部压缩"（没有原文保留区）；
@@ -94,7 +97,9 @@ def split_head_tail(messages: list, keep_tail: int) -> tuple[list, list]:
     return items[:-keep_tail], items[-keep_tail:]
 
 
-def render_messages(messages: list, limit_chars: int = PROMPT_MAX_CHARS) -> str:
+def render_messages(
+    messages: list[dict[str, Any]], limit_chars: int = PROMPT_MAX_CHARS
+) -> str:
     """把消息渲染成提示词文本；超预算时保首尾（目标在最前、进展在最后）。"""
     lines: list[str] = []
     for msg in messages or []:
@@ -109,7 +114,9 @@ def render_messages(messages: list, limit_chars: int = PROMPT_MAX_CHARS) -> str:
     return text[:half] + "\n…（中段省略）…\n" + text[-half:]
 
 
-def extractive_summary(messages: list, max_chars: int = SUMMARY_MAX_CHARS) -> str:
+def extractive_summary(
+    messages: list[dict[str, Any]], max_chars: int = SUMMARY_MAX_CHARS
+) -> str:
     """LLM 不可用时的兜底：取每条消息首行拼成要点清单。
 
     为什么一定要有兜底：压缩失败不该让分支"什么都得不到" —— 提取式摘要至少保住
@@ -126,12 +133,12 @@ def extractive_summary(messages: list, max_chars: int = SUMMARY_MAX_CHARS) -> st
     return ("## 已完成（提取式降级摘要：模型不可用，按原话首行保留）\n" + body)[:max_chars]
 
 
-def _usage_of(resp) -> dict:
+def _usage_of(resp: Any) -> dict[str, Any]:
     """尽最大努力读出 usage（不同 provider 字段名不同，读不到就返回空）。"""
     usage = getattr(resp, "usage", None)
     if usage is None:
         return {}
-    out: dict = {}
+    out: dict[str, Any] = {}
     for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
         value = getattr(usage, key, None)
         if isinstance(value, int):
@@ -141,11 +148,11 @@ def _usage_of(resp) -> dict:
 
 async def condense_messages(
     *,
-    messages: list,
-    gateway=None,
+    messages: list[dict[str, Any]],
+    gateway: Any = None,
     keep_tail: int = DEFAULT_KEEP_TAIL,
     include_future: bool = False,
-    future_messages: list | None = None,
+    future_messages: list[dict[str, Any]] | None = None,
 ) -> CondenseResult:
     """把 ``messages`` 的**压缩区**压成核心上下文摘要。
 
@@ -173,7 +180,11 @@ async def condense_messages(
         system_prompt = BRANCH_SUMMARY_PROMPT + (FUTURE_PROMPT_SUFFIX if use_future else "")
         user_prompt = render_messages(head)
         if use_future:
-            user_prompt += "\n\n<后续>\n" + render_messages(future_messages) + "\n</后续>"
+            user_prompt += (
+                "\n\n<后续>\n"
+                + render_messages(future_messages or [])
+                + "\n</后续>"
+            )
         try:
             from app.config import settings
 

@@ -19,7 +19,7 @@ class ClaudeMdLoader:
     Results are cached so repeated calls are cheap.
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self._cache: dict[str, str] = {}
 
     # ------------------------------------------------------------------

@@ -215,7 +215,8 @@ def to_iso(value: Any) -> str | None:
     if isinstance(value, datetime):
         if value.tzinfo is None:
             value = value.replace(tzinfo=UTC)
-        return value.isoformat()
+        iso: str = value.isoformat()
+        return iso
     if isinstance(value, (int, float)):
         return datetime.fromtimestamp(value, tz=UTC).isoformat()
     return str(value)

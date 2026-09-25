@@ -1,6 +1,7 @@
 # RAG 检索实现
 import asyncio
 import logging
+from typing import Any
 
 from app.config import settings
 from app.llm.client import llm_client
@@ -13,11 +14,11 @@ class RAGRetriever:
 
     _shared_milvus_connected = False  # 类级别共享连接状态
 
-    def __init__(self):
-        self._milvus_client = None
-        self._collection = None
+    def __init__(self) -> None:
+        self._milvus_client: Any = None
+        self._collection: Any = None
 
-    async def _get_collection(self):
+    async def _get_collection(self) -> Any:
         """获取 Milvus collection（单例延迟初始化，避免每个请求重复连接）"""
         if self._collection is not None:
             return self._collection
@@ -84,8 +85,8 @@ class RAGRetriever:
         document_id: str,
         content: str,
         file_type: str = "txt",
-        metadata: dict = None,
-    ) -> dict:
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """索引文档：分块 + 嵌入 + 存入 Milvus"""
         try:
             # 1. 分块
@@ -143,7 +144,7 @@ class RAGRetriever:
         query: str,
         top_k: int = 5,
         threshold: float = 0.7,
-    ) -> list:
+    ) -> list[dict[str, Any]]:
         """向量检索：查询相关文档片段"""
         try:
             # 1. Milvus 可用性检查（不可用则直接返回，不做查询嵌入）
@@ -189,7 +190,9 @@ class RAGRetriever:
             logger.error(f"向量检索失败: {e}")
             return []
 
-    def _split_text(self, text: str, chunk_size: int, chunk_overlap: int) -> list:
+    def _split_text(
+        self, text: str, chunk_size: int, chunk_overlap: int
+    ) -> list[str]:
         """文本分块"""
         if chunk_size <= 0:
             return [text] if text.strip() else []
