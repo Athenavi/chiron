@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线目录，见 L2-1） | 0 —— `app/interfaces app/sse app/trace app/config.py` |
+| `mypy`（已接线目录，见 L2-1） | 0 —— `app/interfaces app/media app/observability app/sse app/trace app/config.py` |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -60,7 +60,7 @@
   `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
   python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
 - **已量化**（mypy 2.3.1，`python -m mypy app/`）：接线前基线 **1171 errors / 130 个文件
-  （共 200 个源文件）**；截至第二批已清 18 条 → **1153 errors / 125 个文件**。
+  （共 200 个源文件）**；截至第三批已清 28 条 → **1143 errors / 121 个文件**。
   - 按错误码：`type-arg` 488、`no-untyped-def` 266、`no-untyped-call` 116、`arg-type` 59、
     `union-attr` 45、`no-any-return` 41、`assignment` 40、`attr-defined` 38，其余各 ≤18；
     与环境相关的（缺 stub / 缺包）合计仅 20 条（`import-not-found` 12 + `import-untyped` 8）。
@@ -77,15 +77,20 @@
        `ConfigDict` → `SettingsConfigDict`；
      - ✅ **第二批**：`app/interfaces`（`llm.py` 5 + `vectorstore.py` 2，全是 `type-arg`），
        **闭包干净**（只检查 4 个文件）；
-     - 两批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现为
-       `mypy app/interfaces app/sse app/trace app/config.py`，全量存量降至 1153 / 125 文件；
+     - ✅ **第三批**：`app/media` + `app/observability`，共 **10 条** —— `prompt: str = None`
+       → `str | None`、`record_process_metrics` 补 `-> None`、structlog processor 的签名
+       （`logging.Logger` / `dict` → `Any` / `MutableMapping[str, Any]`）。
+       另在 `pyproject.toml` 新增 `[[tool.mypy.overrides]]`：`boto3.*` / `botocore.*` / `fitz` /
+       `docx` / `psutil` 这五个库既无 `py.typed` 也无可用 stub，只对其**放宽 import 解析**
+       （这些库内部不参与检查，本仓库代码仍按 strict 检查）；
+     - 三批均零行为变更，引擎套件 `1259 passed` 未变。CI 的 `Mypy (strict)` step 现为
+       `mypy app/interfaces app/media app/observability app/sse app/trace app/config.py`，
+       全量存量降至 **1143 / 121 文件**；
      - 后续每清零一个域，就往那个列表里追加，全部通过后改成 `mypy app/`；
      - **下一批的依赖闭包（实测）**：
 
        | 候选 | 自身存量 | 闭包额外带出的文件 |
        |---|---|---|
-       | `app/media` | 4 | 无（但含 `boto3`/`botocore` 的 `import-untyped`，需装 stub 或配 overrides） |
-       | `app/observability` | 5 | 无（含 `psutil` 的 stub 缺失） |
        | `app/llm` | 5 | `app/db_client.py`（18） |
        | `app/chaos` | 4 | `app/db.py`（18）+ `app/db_client.py`（18） |
        | `app/middleware` | 3 | `app/db.py`、`app/db_client.py`、`app/gateway/ratelimit.py`、`app/observability/logging.py` |
@@ -248,7 +253,7 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
 # mypy 只覆盖**已接线的目录**（分批扩大，清单见 L2-1）
-ruff check . && mypy app/interfaces app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
+ruff check . && mypy app/interfaces app/media app/observability app/sse app/trace app/config.py && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test

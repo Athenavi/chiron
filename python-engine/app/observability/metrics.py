@@ -172,7 +172,7 @@ PROCESS_THREADS = Gauge(
 )
 
 
-def record_process_metrics():
+def record_process_metrics() -> None:
     """记录进程资源使用指标"""
     try:
         process = psutil.Process(os.getpid())

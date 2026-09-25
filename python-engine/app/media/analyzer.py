@@ -9,7 +9,7 @@ logger = logging.getLogger(__name__)
 
 
 async def analyze_image(
-    image_url: str, prompt: str = None, gateway: Any = None
+    image_url: str, prompt: str | None = None, gateway: Any = None
 ) -> dict[str, Any]:
     """分析图片内容
 

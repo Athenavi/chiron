@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import contextvars
 import logging
+from collections.abc import MutableMapping
+from typing import Any
 
 import structlog
 
@@ -37,7 +39,9 @@ def configure_logging(level: str = "INFO") -> None:
     )
 
 
-def _add_request_context(logger: logging.Logger, method: str, event_dict: dict) -> dict:
+def _add_request_context(
+    logger: Any, method: str, event_dict: MutableMapping[str, Any]
+) -> MutableMapping[str, Any]:
     """注入 request_id / tenant_id / trace_id 到每条日志"""
     req_id = request_id_var.get("")
     if req_id:
