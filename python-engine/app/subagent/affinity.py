@@ -33,6 +33,7 @@ import os
 import socket
 import time
 import uuid
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -130,7 +131,7 @@ def _payload(*, run_id: str, token: str, session_id: str, tenant_id: str) -> str
     })
 
 
-async def get_owner_redis():
+async def get_owner_redis() -> Any:
     """取归属用的 Redis 客户端；不可用时返回 None（登记失败只降级，不阻断子 Agent）。"""
     try:
         from app.redis_client import get_redis
@@ -142,7 +143,7 @@ async def get_owner_redis():
 
 
 async def publish_owner(
-    redis,
+    redis: Any,
     run_id: str,
     *,
     token: str,
@@ -164,7 +165,7 @@ async def publish_owner(
         return False
 
 
-async def release_owner(redis, run_id: str, token: str = "") -> None:
+async def release_owner(redis: Any, run_id: str, token: str = "") -> None:
     """注销归属（带 token 校验：迟到的清理不会删掉同 run 的新登记）。"""
     if redis is None or not run_id:
         return
@@ -174,7 +175,7 @@ async def release_owner(redis, run_id: str, token: str = "") -> None:
         logger.debug("subagent affinity release failed: run=%s err=%s", run_id, str(exc)[:160])
 
 
-async def owner_of(redis, run_id: str) -> dict | None:
+async def owner_of(redis: Any, run_id: str) -> dict[str, Any] | None:
     """读取归属记录（诊断/测试用；网关侧读同一份键）。"""
     if redis is None or not run_id:
         return None
@@ -192,7 +193,7 @@ async def owner_of(redis, run_id: str) -> dict | None:
     return data if isinstance(data, dict) else None
 
 
-async def ack_cancel(redis, run_id: str) -> bool:
+async def ack_cancel(redis: Any, run_id: str) -> bool:
     """写下"本实例认领并已发出取消"的回执（网关 BLPOP 取走）。
 
     这是网关区分"真取消"与"广播无人应答"的**唯一**依据 —— 没有它，取消只能在
@@ -228,7 +229,7 @@ class OwnerLease:
         *,
         session_id: str = "",
         tenant_id: str = "",
-        redis=None,
+        redis: Any = None,
         ttl_seconds: int | None = None,
     ) -> None:
         self._run_id = run_id
@@ -237,7 +238,7 @@ class OwnerLease:
         self._redis = redis
         self._token = uuid.uuid4().hex
         self._ttl = ttl_seconds
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
     @property
     def enabled(self) -> bool:

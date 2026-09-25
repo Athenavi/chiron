@@ -14,6 +14,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request
 from fastapi.responses import JSONResponse
@@ -45,7 +46,7 @@ def _bad_request(msg: str) -> JSONResponse:
 
 
 @router.get("/v1/memory/profile")
-async def list_profile(request: Request):
+async def list_profile(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -63,7 +64,7 @@ async def list_profile(request: Request):
 
 
 @router.post("/v1/memory/profile")
-async def upsert_profile(request: Request):
+async def upsert_profile(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -89,7 +90,7 @@ async def upsert_profile(request: Request):
 
 
 @router.put("/v1/memory/profile")
-async def update_profile(request: Request):
+async def update_profile(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -123,7 +124,7 @@ async def update_profile(request: Request):
 
 
 @router.delete("/v1/memory/profile/{entry_id}")
-async def delete_profile(entry_id: str, request: Request):
+async def delete_profile(entry_id: str, request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -139,7 +140,7 @@ async def delete_profile(entry_id: str, request: Request):
 
 
 @router.post("/v1/memory/profile/clear")
-async def clear_profile(request: Request):
+async def clear_profile(request: Request) -> Any:
     """清空当前用户全部记忆（隐私出口）。要求 body {confirm: true} 防误触。"""
     svc = get_service()
     if svc is None:
@@ -155,7 +156,7 @@ async def clear_profile(request: Request):
 
 
 @router.post("/v1/memory/search")
-async def search_memory(request: Request):
+async def search_memory(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -177,7 +178,7 @@ async def search_memory(request: Request):
 
 
 @router.post("/v1/memory/organize")
-async def organize_memory(request: Request):
+async def organize_memory(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -193,7 +194,7 @@ async def organize_memory(request: Request):
 
 
 @router.get("/v1/memory/organize/status")
-async def organize_status(request: Request):
+async def organize_status(request: Request) -> Any:
     svc = get_service()
     if svc is None:
         return _unavailable()
@@ -207,7 +208,7 @@ async def organize_status(request: Request):
 
 
 @router.get("/v1/memory/summaries")
-async def list_summaries(request: Request):
+async def list_summaries(request: Request) -> Any:
     """列出摘要记忆（管理端审计）。"""
     svc = get_service()
     if svc is None:
@@ -226,7 +227,7 @@ async def list_summaries(request: Request):
 
 
 @router.get("/v1/memory/conflicts")
-async def list_conflicts(request: Request):
+async def list_conflicts(request: Request) -> Any:
     """列出待裁决的记忆冲突。"""
     svc = get_service()
     if svc is None:
@@ -239,7 +240,7 @@ async def list_conflicts(request: Request):
 
 
 @router.post("/v1/memory/conflicts/{conflict_id}/resolve")
-async def resolve_conflict(conflict_id: str, request: Request):
+async def resolve_conflict(conflict_id: str, request: Request) -> Any:
     """裁决冲突：keep_old / adopt_new（use_new 同义）/ manual。"""
     svc = get_service()
     if svc is None:
@@ -266,7 +267,7 @@ async def resolve_conflict(conflict_id: str, request: Request):
 
 
 @router.delete("/v1/memory/conflicts/{conflict_id}")
-async def delete_conflict(conflict_id: str, request: Request):
+async def delete_conflict(conflict_id: str, request: Request) -> Any:
     """删除冲突（用户否认时调用）。"""
     svc = get_service()
     if svc is None:

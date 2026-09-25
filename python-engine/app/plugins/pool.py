@@ -73,7 +73,7 @@ class MCPClientPool:
         self,
         store: PluginStore | None = None,
         tracker: ActiveTracker | None = None,
-        redis=None,
+        redis: Any = None,
     ) -> None:
         self._store = store or PluginStore()
         self._tracker = tracker or ActiveTracker()
@@ -87,7 +87,7 @@ class MCPClientPool:
         self._user_conns: dict[str, set[str]] = {}  # user_id -> 引用的指纹集合
         self._user_tools: dict[str, set[str]] = {}  # user_id -> 注册的工具名集合
         self._lock = asyncio.Lock()
-        self._poll_task: asyncio.Task | None = None
+        self._poll_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         from app.config import settings as _settings
@@ -112,35 +112,52 @@ class MCPClientPool:
         if self._poll_task is None:
             self._poll_task = asyncio.create_task(self._poll_loop())
 
-    async def _handle_remote_invocation(self, tool_name: str, args: dict) -> Any:
+    async def _handle_remote_invocation(self, tool_name: str, args: dict[str, Any]) -> Any:
         """owner 侧入口：执行被其它实例转发的 MCP 工具调用（本地 registry，不再二次转发）。"""
         tool = registry.get(tool_name)
         if tool is None:
             raise RuntimeError(f"MCP tool not available on this owner instance: {tool_name}")
         return await tool.handler(**(args or {}))
 
-    def _make_proxy_handler(self, uid: str, tool_name: str):
+    def _require_lease(self) -> MCPOwnerLease:
+        """取 owner 租约；未启用时明确报错。
+
+        下面两个方法只在 ``start()`` 已启用租约（``mcp_owner_lease_enabled`` 且 Redis 可用）
+        之后才会被调用 —— 收敛成显式检查，真被误调时得到清晰的 RuntimeError 而不是
+        AttributeError on None。
+        """
+        if self._lease is None:
+            raise RuntimeError("MCP owner lease is not enabled")
+        return self._lease
+
+    def _require_bridge(self) -> MCPBridge:
+        """取实例间调用桥；未启用时明确报错（与 _require_lease 同因）。"""
+        if self._bridge is None:
+            raise RuntimeError("MCP bridge is not enabled")
+        return self._bridge
+
+    def _make_proxy_handler(self, uid: str, tool_name: str) -> Any:
         """非 owner 侧的代理 handler：转发到 owner 实例执行。"""
 
         async def handler(**kwargs: Any) -> Any:
-            owner = await self._lease.owner_of(uid)
+            owner = await self._require_lease().owner_of(uid)
             if not owner:
                 raise RuntimeError(
                     f"MCP owner unavailable for user {uid} (lease expired); retry shortly"
                 )
-            return await self._bridge.invoke(owner, tool_name, kwargs)
+            return await self._require_bridge().invoke(owner, tool_name, kwargs)
 
         return handler
 
     async def _sync_proxy_tools_locked(self, uid: str) -> None:
         """非 owner 实例：按 owner 公布的清单注册代理工具（调用时经 Redis 转发）。"""
-        owner = await self._lease.owner_of(uid) or ""
+        owner = await self._require_lease().owner_of(uid) or ""
         sig = f"proxy:{owner}"
         if sig == self._user_sigs.get(uid):
             return
         await self._release_user_locked(uid)
         self._user_tools[uid] = set()
-        tools = await self._lease.read_tools(uid)
+        tools = await self._require_lease().read_tools(uid)
         for t in tools:
             name = t.get("name") or ""
             if not name:
@@ -369,7 +386,7 @@ class MCPClientPool:
         }
 
 
-def _make_broker_handler(uid: str, tool_name: str):
+def _make_broker_handler(uid: str, tool_name: str) -> Any:
     """构造"经 MCP broker 调用"的 handler（broker 执行前会向服务端要授权）。"""
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
@@ -425,7 +442,7 @@ async def _register_broker_tools(uid: str, server_name: str, user_tools: set[str
         logger.info("mcp broker proxy tools for %s/%s: %d", uid, server_name, registered)
 
 
-def _server_to_def(server: ServerConfig):
+def _server_to_def(server: ServerConfig) -> Any:
     from app.mcp.client import ServerDef
 
     return ServerDef(
@@ -439,7 +456,7 @@ def _server_to_def(server: ServerConfig):
     )
 
 
-def _make_tool_handler(client: MCPClient, tool_name: str):
+def _make_tool_handler(client: MCPClient, tool_name: str) -> Any:
     """构造 MCP 工具 handler（绑定共享连接，带超时保护，R7 修复）。"""
 
     async def handler(**kwargs: Any) -> dict[str, Any]:
