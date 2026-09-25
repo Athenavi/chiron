@@ -87,6 +87,9 @@ make build                                # 见 Makefile（fmt/lint/test/build�
 > 一致性检查并报 `inconsistent vendoring`。`run.py`、`Makefile`、`Dockerfile` 已在编译入口
 > 显式排除该目录，手动执行 `go build` / `go test` / `go vet` 时同样需要 `-mod=mod`。
 
+> 以上命令是本地速查；**提交前验收请以 CI 为准**，逐条对应关系见
+> [贡献与验收流程](docs/contributing.md)。
+
 ## 目录结构
 
 ```
@@ -125,6 +128,12 @@ python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：�
 - 需要 `alembic.ini`、`migrations/`、`shared/models/` 三者在运行目录内（`migrations/env.py` 会加载 ORM 元数据）；
 - 启动校验：比对 `migrations/versions` 的 head 与数据库 `alembic_version`，不一致时拒绝启动（`ALLOW_SCHEMA_DRIFT=true` 可放行）；
 - 迁移链必须**单一 head**（分叉会导致启动校验失败）。
+
+## 贡献
+
+本地验收命令与 CI 五个 job 的逐条对应、提交信息约定见
+[贡献与验收流程](docs/contributing.md)；失败响应的 `code` 契约与三语言同步要求见
+[错误码契约](docs/error-codes.md)。
 
 ## 许可
 
