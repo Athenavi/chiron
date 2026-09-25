@@ -23,7 +23,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 96 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 97 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -63,11 +63,11 @@
   按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
   `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
   `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第二十二批已清 1008 条 → 163 / 6 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  **截至第二十三批已清 1057 条 → 114 / 6 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **22 批、清 1008 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
+  2. **分批接线**：✅ 已完成 **23 批、清 1057 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
      各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
 
      | 批 | 提交 | 范围 |
@@ -94,6 +94,7 @@
      | 20 | `eda243a` | `app/skill/manager.py`（31 条）+ `[[tool.mypy.overrides]]` 增补可选后端（`langchain.*` / `markitdown` / `openpyxl` / `qdrant_client` / `unstructured.*`） |
      | 21 | `884a7a4` | `app/rag/builder.py`（40 条；`_vector_store` 收窄 + `docx.Document` 按 `Any` 处理） |
      | 22 | `4005ede` | `app/queue/worker.py`（35 条；`XREADGROUP` / `XCLAIM` 返回值按实际协议 `cast` 收窄 + Redis 字段字典改用 `dict[Any, Any]`） |
+     | 23 | `07f33ea` | `app/main.py`（49 条；`Consolidator` 的 `store` 参数放宽 + `pymupdf` 的 untyped-call 豁免扩到 `app.main`） |
 
      第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
      `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
@@ -101,9 +102,9 @@
      恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
 
      - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **96 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 163 条 / 6 个文件）：
-       大文件 2 个 —— `agent/runtime.py` 99、`main.py` 50（共 149 条）；
+       （现为 **97 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 114 条 / 6 个文件）：
+       只剩 1 个大文件 —— `agent/runtime.py` 100 条；
        另有 4 个文件**刻意留出**（缺陷修法需要设计决策，不属"零行为变更"范围）：
        - `app/tools/browser.py`（4 条）：`BrowserHub` Protocol 声明**同步**的
          `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**，
