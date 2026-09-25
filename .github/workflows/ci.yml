@@ -66,6 +66,7 @@ jobs:
         # 后续每清零一块就往这个列表里追加，全部通过后改为 `mypy app/`。
         run: >-
           mypy --follow-imports=silent
+          app/api/knowledge.py app/api/unified_executor.py
           app/chaos app/config.py app/context app/core app/db.py app/db_client.py
           app/engine_registry.py app/gateway/cache.py app/gateway/provider.py
           app/gateway/ratelimit.py app/gateway/router.py app/interfaces app/knowledge

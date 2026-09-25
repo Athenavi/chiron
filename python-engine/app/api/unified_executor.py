@@ -40,7 +40,7 @@ class ChatSession:
     user_id: str = ""
     title: str = ""
     mode: str = "auto"
-    messages: list[dict] = field(default_factory=list)
+    messages: list[dict[str, Any]] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     updated_at: float = 0
 
@@ -67,7 +67,7 @@ class UnifiedChatHandler:
     4. 维护会话历史和共享上下文
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.sessions: dict[str, ChatSession] = (
             {}
         )  # session_id -> Session (L1 缓存,有界)
@@ -98,7 +98,7 @@ class UnifiedChatHandler:
                 exc,
             )
 
-    async def _db_get_session(self, session_id: str) -> dict | None:
+    async def _db_get_session(self, session_id: str) -> dict[str, Any] | None:
         """按 id 读取会话行;DB 不可用或会话不存在返回 None。"""
         try:
             pool = get_pool()
@@ -119,7 +119,7 @@ class UnifiedChatHandler:
         user_id: str,
         title: str,
         mode: str,
-        shared_context: dict,
+        shared_context: dict[str, Any],
     ) -> bool:
         """确保会话行存在 (INSERT ... ON CONFLICT DO NOTHING,幂等)。
 
@@ -148,7 +148,7 @@ class UnifiedChatHandler:
         session_id: str,
         role: str,
         content: str,
-        metadata: dict,
+        metadata: dict[str, Any],
         error: str = "",
     ) -> None:
         """追加一条消息到 unified_messages (写库失败不阻断主流程)。"""
@@ -170,7 +170,7 @@ class UnifiedChatHandler:
         self,
         session_id: str,
         mode: str,
-        shared_context: dict,
+        shared_context: dict[str, Any],
     ) -> None:
         """更新会话 mode / shared_context (jsonb 顶层键合并) / updated_at。"""
         try:
@@ -193,9 +193,9 @@ class UnifiedChatHandler:
         session_id: str | None = None,
         mode: str = "auto",  # "auto" / "agent" / "workflow"
         trace_id: str = "",
-        context: dict | None = None,
+        context: dict[str, Any] | None = None,
         user_id: str = "",
-        llm_config: dict | None = None,  # P1-d：会话运行时状态（模型/provider/模式）
+        llm_config: dict[str, Any] | None = None,  # P1-d：会话运行时状态（模型/provider/模式）
     ) -> dict[str, Any]:
         """提交任务 (自动编排)
 
@@ -499,8 +499,8 @@ class UnifiedChatHandler:
         user_input: str,
         tenant_id: str,
         trace_id: str,
-        agent_config: dict | None = None,
-    ) -> dict:
+        agent_config: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """通过 Agent 工作台执行
 
         agent_config (来自 context.agent) 可覆盖 SubAgent 的
@@ -580,7 +580,7 @@ class UnifiedChatHandler:
         tenant_id: str,
         trace_id: str,
         workflow_ids: list[str] | None = None,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """通过工作流工作台执行
 
         用户在对话里选中了工作流时（workbench_context 的 workflow_id / workflow_ids），
@@ -627,17 +627,17 @@ class UnifiedChatHandler:
         return final_output_of(instance)
 
     @staticmethod
-    async def _load_workflows(workflow_ids: list[str]) -> list[tuple[str, dict]]:
+    async def _load_workflows(workflow_ids: list[str]) -> list[tuple[str, dict[str, Any]]]:
         """按 id 载入工作流（实现见模块级 load_selected_workflows）。"""
         return await load_selected_workflows(workflow_ids)
 
     @staticmethod
     async def _run_workflow_chain(
-        graphs: list[tuple[str, dict]],
+        graphs: list[tuple[str, dict[str, Any]]],
         user_input: str,
         trace_id: str,
         gateway: Any,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """顺序执行工作流链（实现见模块级 run_workflow_graphs）。"""
         return await run_workflow_graphs(graphs, user_input, trace_id, gateway)
 
@@ -647,7 +647,7 @@ class UnifiedChatHandler:
         trace_id: str,
         gateway: Any,
         workflow_id: str = "",
-    ) -> dict:
+    ) -> dict[str, Any]:
         """未选工作流时的默认路径：固定单节点 LLM 图（改动前的行为）。"""
         from app.workflow.engine import run_workflow
 
@@ -760,7 +760,7 @@ class UnifiedChatHandler:
             logger.warning("KB context retrieval failed (kb_ids=%s): %s", kb_ids, e)
             return "", 0
 
-    def _extract_output(self, result: dict) -> str:
+    def _extract_output(self, result: dict[str, Any]) -> str:
         """从执行结果中提取最终输出"""
         output_data = result.get("output", {})
 
@@ -829,7 +829,7 @@ class UnifiedChatHandler:
                     session_id,
                     limit,
                 )
-                messages: list[dict] = []
+                messages: list[dict[str, Any]] = []
                 for m in rows:
                     msg: dict[str, Any] = {
                         "role": m["role"],
@@ -914,9 +914,9 @@ def final_output_of(instance: Any) -> str:
     return ""
 
 
-async def load_selected_workflows(workflow_ids: list[str]) -> list[tuple[str, dict]]:
+async def load_selected_workflows(workflow_ids: list[str]) -> list[tuple[str, dict[str, Any]]]:
     """按 id 载入用户选中的工作流（保持选择顺序；载不到的跳过并记日志）。"""
-    loaded: list[tuple[str, dict]] = []
+    loaded: list[tuple[str, dict[str, Any]]] = []
     try:
         pool = get_pool()
     except Exception as exc:  # noqa: BLE001 — DB 不可用降级为默认图
@@ -954,11 +954,11 @@ async def load_selected_workflows(workflow_ids: list[str]) -> list[tuple[str, di
 
 
 async def run_workflow_graphs(
-    graphs: list[tuple[str, dict]],
+    graphs: list[tuple[str, dict[str, Any]]],
     user_input: str,
     trace_id: str,
     gateway: Any,
-) -> dict:
+) -> dict[str, Any]:
     """顺序执行多个工作流：前一个的输出作为后一个的输入。
 
     传递用 ``input`` 键 —— 引擎的 input 节点读 ``state["input"]``
@@ -1122,7 +1122,7 @@ async def load_agent_payload(
 
 
 @router.post("/v1/chat/submit")
-async def submit_chat(request: Request):
+async def submit_chat(request: Request) -> dict[str, Any]:
     """统一任务提交入口：TaskRouter 自动编排六大工作台能力
 
     Body: {message/user_input, tenant_id?, session_id?, mode?, context?}
@@ -1176,7 +1176,9 @@ async def submit_chat(request: Request):
 
 
 @router.get("/v1/chat/sessions/{session_id}/messages")
-async def get_messages(request: Request, session_id: str, limit: int = 50):
+async def get_messages(
+    request: Request, session_id: str, limit: int = 50
+) -> dict[str, Any]:
     """获取会话消息历史（含跨工作台共享上下文）
 
     S 安全修复:强制租户校验。tenant_id 优先取 Go 网关可信注入的

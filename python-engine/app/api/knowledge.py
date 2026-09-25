@@ -54,7 +54,7 @@ class KBQuery(BaseModel):
 # ── Helpers ──
 
 
-def _serialize_kb(row: dict) -> dict:
+def _serialize_kb(row: dict[str, Any]) -> dict[str, Any]:
     """Serialize a knowledge_bases row to JSON response."""
     config = row.get("config")
     if config and isinstance(config, str):
@@ -86,7 +86,7 @@ def _serialize_kb(row: dict) -> dict:
     }
 
 
-def _serialize_doc(row: dict) -> dict:
+def _serialize_doc(row: dict[str, Any]) -> dict[str, Any]:
     """Serialize a knowledge_documents row to JSON response."""
     metadata = row.get("metadata")
     if metadata and isinstance(metadata, str):
@@ -116,7 +116,7 @@ def _serialize_doc(row: dict) -> dict:
 # ── Core Functions (testable without FastAPI) ──
 
 
-async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict:
+async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict[str, Any]:
     """List knowledge bases visible to this user.
 
     可见范围：
@@ -154,7 +154,7 @@ async def create_knowledge_base(
     kb_type: str = "wiki",
     visibility: str = "private",
     tenant_id: str = "",
-) -> dict:
+) -> dict[str, Any]:
     """Create a new knowledge base.
 
     tenant_id 必须由调用方（网关注入的租户）提供。原先恒写 DEFAULT_TENANT_ID 常量，
@@ -194,7 +194,7 @@ async def create_knowledge_base(
     }
 
 
-async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict:
+async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
     """Get a single knowledge base by id（自己的 / 公开的 / 同租户共享的）。
 
     与 ``list_knowledge_bases`` 用**同一套**可见性规则。两处一旦不一致，
@@ -225,7 +225,7 @@ async def update_knowledge_base(
     description: str | None = None,
     kb_type: str | None = None,
     visibility: str | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Update a knowledge base (owner only). Public KBs cannot change type."""
     pool = get_pool()
 
@@ -294,7 +294,7 @@ async def update_knowledge_base(
 
 async def delete_knowledge_base(
     kb_id: str, user_id: str, is_admin: bool = False
-) -> dict:
+) -> dict[str, Any]:
     """Delete a knowledge base. Admin can delete any; users can only delete their own."""
     pool = get_pool()
 
@@ -324,7 +324,7 @@ async def upload_document(
     file_type: str,
     file_size_bytes: int = 0,
     content: bytes | None = None,
-) -> dict:
+) -> dict[str, Any]:
     """Upload a document into a knowledge base.
 
     Verifies the KB exists, is not currently building, inserts the document
@@ -397,7 +397,7 @@ async def upload_document(
     }
 
 
-async def list_documents(kb_id: str, user_id: str) -> dict:
+async def list_documents(kb_id: str, user_id: str) -> dict[str, Any]:
     """List all documents in a knowledge base."""
     pool = get_pool()
 
@@ -431,7 +431,7 @@ async def delete_doc(
     request: Request,
     user_id: str = Query("", alias="user_id"),
     doc_id: str = Query("", alias="doc_id"),
-) -> dict:
+) -> dict[str, Any]:
     """删除单个文档（前端批量删除循环调用；删除后重算 KB 统计）。"""
     if not doc_id:
         raise HTTPException(status_code=400, detail="doc_id is required")
@@ -507,7 +507,7 @@ async def _enqueue_rag_build(
         await redis.aclose()
 
 
-async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict:
+async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
     """Build a knowledge base — mark documents as completed and deduct credits."""
     pool = get_pool()
 
@@ -618,7 +618,7 @@ async def query_knowledge_base(
     user_id: str,
     query: str,
     top_k: int = 5,
-) -> dict:
+) -> dict[str, Any]:
     """Query a knowledge base using full-text search (wiki) or RAG."""
     pool = get_pool()
 
@@ -704,7 +704,7 @@ async def query_knowledge_base(
     return {"type": kb_type, "results": results}
 
 
-async def admin_list_knowledge_bases() -> dict:
+async def admin_list_knowledge_bases() -> dict[str, Any]:
     """List all public knowledge bases (admin/owner only)."""
     try:
         pool = get_pool()
@@ -730,7 +730,7 @@ async def list_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
-):
+) -> dict[str, Any]:
     """List knowledge bases."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -743,7 +743,7 @@ async def create_kb(
     body: KnowledgeBaseCreate,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
-):
+) -> dict[str, Any]:
     """Create a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -758,7 +758,7 @@ async def create_kb(
 
 
 @router.get("/admin/list")
-async def admin_list_kb(request: Request):
+async def admin_list_kb(request: Request) -> dict[str, Any]:
     """Admin endpoint: list all public knowledge bases."""
     role = request.headers.get("X-User-Role", "")
     if role not in ("admin", "owner"):
@@ -772,7 +772,7 @@ async def get_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
-):
+) -> dict[str, Any]:
     """Get a knowledge base by id."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -785,7 +785,7 @@ async def update_kb(
     request: Request,
     body: KnowledgeBaseUpdate,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """Update a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -804,7 +804,7 @@ async def delete_kb(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """Delete a knowledge base（仅限拥有者）。
 
     这里曾经接受 `?is_admin=true` 作为"管理员可删任意知识库"的判据 ——
@@ -825,7 +825,7 @@ async def upload_doc(
     request: Request,
     body: DocumentUpload,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """Upload a document to a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -854,7 +854,7 @@ async def list_docs(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """List documents in a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -867,7 +867,7 @@ async def build_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
-):
+) -> dict[str, Any]:
     """Build a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -880,7 +880,7 @@ async def query_kb(
     request: Request,
     body: KBQuery,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """Query a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -898,7 +898,7 @@ async def preview_document(
     doc_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-):
+) -> dict[str, Any]:
     """预览文档内容 — 返回文档元信息及前 N 个分块的内容拼接"""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
