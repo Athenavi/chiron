@@ -9,6 +9,7 @@ import logging
 import os
 import signal
 import time
+from typing import Any, cast
 
 import redis.asyncio as aioredis
 
@@ -100,7 +101,7 @@ class RetryLaterError(RuntimeError):
         self.delay_seconds = float(delay_seconds or 0)
 
 
-def _as_int(value, default: int = 0) -> int:
+def _as_int(value: Any, default: int = 0) -> int:
     """把消息字段（bytes / str / int / None）解析成 int，解析不了回落默认值。
 
     队列消息来自 Redis，字段可能是 bytes、str 或干脆缺失；直接 ``int()`` 会抛异常，
@@ -117,7 +118,7 @@ def _as_int(value, default: int = 0) -> int:
         return default
 
 
-def _retry_after(resp) -> float:
+def _retry_after(resp: Any) -> float:
     """读上游的 ``Retry-After``（秒）。解析不了就返回 0（用默认退避基值）。
 
     网关目前不发这个头，但读它是为了让"上游明确告诉我们等多久"时不必猜。
@@ -149,10 +150,10 @@ class QueueWorker:
         self,
         redis: aioredis.Redis,
         concurrency: int = 10,
-        gateway=None,
-        memory_service=None,
+        gateway: Any = None,
+        memory_service: Any = None,
         global_concurrency: int = 10,
-    ):
+    ) -> None:
         self._redis = redis
         self._concurrency = concurrency
         self._gate_limit = global_concurrency
@@ -162,10 +163,10 @@ class QueueWorker:
         )
         self._running = False
         self._semaphore = asyncio.Semaphore(concurrency)
-        self._in_flight: set[asyncio.Task] = set()
+        self._in_flight: set[asyncio.Task[Any]] = set()
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
-        self._reclaim_task: asyncio.Task | None = None
-        self._delay_task: asyncio.Task | None = None
+        self._reclaim_task: asyncio.Task[Any] | None = None
+        self._delay_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """启动消费者"""
@@ -240,7 +241,7 @@ class QueueWorker:
         """P1-2: 注册 UNIX 信号处理器（Kubernetes Docker Pod 兼容）"""
         loop = asyncio.get_event_loop()
 
-        def _signal_handler():
+        def _signal_handler() -> None:
             """信号回调：触发异步停止"""
             asyncio.create_task(self.stop())
 
@@ -271,11 +272,15 @@ class QueueWorker:
         if not results:
             return
 
-        for _stream, messages in results:
+        # Redis 的 XREADGROUP 返回 (stream, [(id, fields), ...])；stub 的返回类型比这更宽
+        # （含 str），这里按实际协议收窄，避免把 str 解包成两个字符。
+        for _stream, messages in cast(
+            "list[tuple[Any, list[tuple[str, dict[str, Any]]]]]", results
+        ):
             for stream_id, fields in messages:
                 await self._spawn_message(stream_id, fields)
 
-    async def _spawn_message(self, stream_id: str, fields: dict) -> None:
+    async def _spawn_message(self, stream_id: str, fields: dict[Any, Any]) -> None:
         """把一条消息投入本地处理：本地信号量 + 跨实例全局门控 + 超时保护。"""
         # 等待本地信号量（每实例）
         await self._semaphore.acquire()
@@ -293,7 +298,7 @@ class QueueWorker:
         lease_task = asyncio.create_task(self._heartbeat_lease(stream_id, timeout_task))
         timeout_task.add_done_callback(lambda _t: lease_task.cancel())
 
-    async def _heartbeat_lease(self, stream_id: str, owner: asyncio.Task) -> None:
+    async def _heartbeat_lease(self, stream_id: str, owner: asyncio.Task[Any]) -> None:
         """处理期间刷新 PEL idle（XCLAIM ... JUSTID），充当任务 lease 心跳。"""
         while not owner.done():
             try:
@@ -348,7 +353,7 @@ class QueueWorker:
             return
         if not pend:
             return
-        ids = []
+        ids: list[Any] = []
         for p in pend:
             mid = p.get("message_id") if isinstance(p, dict) else p.message_id
             if mid:
@@ -364,9 +369,11 @@ class QueueWorker:
             return
         for item in claimed:
             if isinstance(item, (tuple, list)) and len(item) >= 2:
-                await self._spawn_claimed(item[0], item[1])
+                await self._spawn_claimed(
+                    cast("str", item[0]), cast("dict[str, Any]", item[1])
+                )
 
-    async def _spawn_claimed(self, msg_id: str, fields: dict) -> None:
+    async def _spawn_claimed(self, msg_id: str, fields: dict[Any, Any]) -> None:
         """认领到的消息：retry_count 递增后重新进入处理；超限进 DLQ。"""
         raw = fields.get(b"retry_count", fields.get("retry_count", 0))
         try:
@@ -390,7 +397,7 @@ class QueueWorker:
             return
         await self._spawn_message(msg_id, fields)
 
-    async def _try_acquire_gate(self, stream_id: str, fields: dict) -> bool:
+    async def _try_acquire_gate(self, stream_id: str, fields: dict[Any, Any]) -> bool:
         """全局并发门控：抢到槽位返回 True；等待 GATE_WAIT_SECS 仍满则放回队尾返回 False。
         Redis 故障/未配置：fail-open（返回 True，交由后续调用报错/本地并发约束）。"""
         if not self._gate_limit or self._redis is None:
@@ -436,7 +443,7 @@ class QueueWorker:
         except Exception:
             pass  # 计数键由 TTL 兜底
 
-    def _task_done(self, task: asyncio.Task) -> None:
+    def _task_done(self, task: asyncio.Task[Any]) -> None:
         self._in_flight.discard(task)
         self._semaphore.release()
         if self._gate_limit and self._redis:
@@ -444,7 +451,7 @@ class QueueWorker:
         if task.exception():
             logger.error("Task exception: %s", task.exception())
 
-    async def _process_message(self, stream_id: str, fields: dict) -> None:
+    async def _process_message(self, stream_id: str, fields: dict[Any, Any]) -> None:
         """处理单条消息"""
         task_type = (
             fields.get(b"task_type", b"").decode()
@@ -565,7 +572,7 @@ class QueueWorker:
             else:
                 # 重试：重新投递消息并递增 retry_count（保留租户标识以保持观测链路）
                 retry_count += 1
-                retry_msg = {
+                retry_msg: dict[Any, Any] = {
                     "task_type": task_type,
                     "task_id": task_id,
                     "payload": payload_raw,
@@ -615,7 +622,7 @@ class QueueWorker:
     async def _defer_message(
         self,
         stream_id: str,
-        fields: dict,
+        fields: dict[Any, Any],
         task_id: str,
         task_type: str,
         payload_raw: str,
@@ -701,7 +708,7 @@ class QueueWorker:
         """
         ts = time.time() if now is None else now
         try:
-            members = await self._redis.zrangebyscore(
+            members: list[Any] = await self._redis.zrangebyscore(
                 DELAYED_ZSET, "-inf", ts, start=0, num=DELAY_BATCH
             )
         except Exception as e:  # noqa: BLE001
@@ -731,7 +738,7 @@ class QueueWorker:
         return promoted
 
     async def _dispatch(
-        self, task_type: str, payload: dict, tenant_id: str = ""
+        self, task_type: str, payload: dict[Any, Any], tenant_id: str = ""
     ) -> None:
         """分发任务到具体处理器"""
         if task_type == "rag_index":
@@ -757,7 +764,7 @@ class QueueWorker:
             # 避免新类型任务在升级窗口被静默确认丢弃。
             raise ValueError(f"unknown task type: {task_type}")
 
-    async def _handle_agent_followup(self, payload: dict) -> None:
+    async def _handle_agent_followup(self, payload: dict[Any, Any]) -> None:
         """子 Agent 完成 → 请网关在父会话上开新一轮（真正的执行在 Go）。
 
         payload: {run_id, session_id, tenant_id, user_id, status, profile, depth, summary}
@@ -811,7 +818,7 @@ class QueueWorker:
             )
         logger.info("agent_followup accepted: run=%s session=%s", run_id, session_id)
 
-    async def _handle_workflow_run(self, payload: dict) -> None:
+    async def _handle_workflow_run(self, payload: dict[Any, Any]) -> None:
         """执行（或续跑）workflow：读 DB checkpoint 跳过已完成节点，终态写回。
 
         payload: {instance_id, user_id, graph_json, initial_state}
@@ -831,7 +838,7 @@ class QueueWorker:
         )
         logger.info("workflow_run done: instance=%s", instance_id)
 
-    async def _handle_tool_job(self, payload: dict) -> None:
+    async def _handle_tool_job(self, payload: dict[Any, Any]) -> None:
         """处理后台命令任务（run_in_background 队列化）：独立子进程执行 + 结果写 Redis。
 
         payload: {job_id, command, shell_key}（shell_key 仅保留信息，执行与持久 shell 解耦）
@@ -849,7 +856,7 @@ class QueueWorker:
             job_id, res.get("status"), res.get("exit_code"),
         )
 
-    async def _handle_rag_index(self, payload: dict) -> None:
+    async def _handle_rag_index(self, payload: dict[Any, Any]) -> None:
         """处理 RAG 文档索引任务：读库取内容 → RAGBuilder 构建 → 更新文档/KB 状态与扣费
 
         payload: {kb_id, user_id, documents: [{doc_id, file_type, filename}], estimated_cost}
@@ -981,7 +988,7 @@ class QueueWorker:
         except Exception as exc:  # noqa: BLE001
             logger.warning("knowledge webhook emit failed: %s", exc)
 
-    async def _handle_memory_save(self, payload: dict, tenant_id: str = "") -> None:
+    async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: str = "") -> None:
         """处理记忆持久化任务
 
         payload: {key, value, source, user_id?, slot?, confidence?}
@@ -1010,7 +1017,7 @@ class QueueWorker:
         )
         logger.info("memory_save 完成: key=%s tenant=%s", key, tenant_id)
 
-    async def _handle_memory_consolidate(self, payload: dict, tenant_id: str) -> None:
+    async def _handle_memory_consolidate(self, payload: dict[Any, Any], tenant_id: str) -> None:
         """处理记忆巩固任务：将对话消息巩固为 L3 摘要。
 
         payload: {session_id, user_id, turn_count, trigger}
@@ -1058,7 +1065,7 @@ class QueueWorker:
                 result.summary.id if result.summary else None,
             )
 
-    async def _handle_memory_rollup(self, payload: dict, tenant_id: str) -> None:
+    async def _handle_memory_rollup(self, payload: dict[Any, Any], tenant_id: str) -> None:
         """处理记忆 rollup 任务：会话结束时的总结归档。
 
         payload: {session_id, user_id, trigger}
@@ -1106,7 +1113,7 @@ class QueueWorker:
 
     async def _get_session_messages(
         self, tenant_id: str, user_id: str, session_id: str
-    ) -> list[dict]:
+    ) -> list[dict[str, Any]]:
         """获取会话消息（从数据库）。"""
         from app.db import get_pool
 
@@ -1131,7 +1138,7 @@ class QueueWorker:
             logger.warning("Failed to get session messages: %s", e)
             return []
 
-    async def _handle_embed_batch(self, payload: dict) -> None:
+    async def _handle_embed_batch(self, payload: dict[Any, Any]) -> None:
         """处理批量嵌入任务：批量计算嵌入并存储向量
 
         payload: {texts, kb_id, doc_id, tenant_id}
