@@ -33,7 +33,9 @@ DEFAULT_MAX_EVENTS = 500    # 每 run 事件流上限
 class SubagentRuntimeCache:
     """运行期缓存写入端（引擎侧直连 Redis）。"""
 
-    def __init__(self, redis=None, *, ttl: int = DEFAULT_TTL, max_events: int = DEFAULT_MAX_EVENTS):
+    def __init__(
+        self, redis: Any = None, *, ttl: int = DEFAULT_TTL, max_events: int = DEFAULT_MAX_EVENTS
+    ) -> None:
         self._redis = redis
         self._ttl = ttl
         self._max_events = max_events

@@ -30,7 +30,7 @@ SOURCE_MCP = "mcp"
 class ToolDef:
     name: str
     description: str
-    parameters: dict
+    parameters: dict[str, Any]
     handler: Callable[..., Awaitable[Any]]
     owners: set[str] = field(default_factory=set)  # 空 = 全局工具
     source: str = SOURCE_BUILTIN
@@ -44,7 +44,7 @@ class ToolRegistry:
         self,
         name: str,
         description: str,
-        parameters: dict,
+        parameters: dict[str, Any],
         handler: Callable[..., Awaitable[Any]],
         owner: str = "",
         source: str = SOURCE_BUILTIN,
@@ -57,7 +57,7 @@ class ToolRegistry:
         """
         existing = self._tools.get(name)
         if existing is not None:
-            owners = set(existing.owners)
+            owners: set[str] = set(existing.owners)
             if owner:
                 owners.add(owner)
             existing.owners = owners
@@ -66,7 +66,7 @@ class ToolRegistry:
             existing.handler = handler
             existing.source = source
             return
-        owners: set[str] = set()
+        owners = set()
         if owner:
             owners.add(owner)
         self._tools[name] = ToolDef(
@@ -115,14 +115,14 @@ class ToolRegistry:
         except ImportError:  # pragma: no cover — 上下文模块不可用时视为未认证
             return ""
 
-    def to_openai_tools(self, user_id: str = "") -> list[dict]:
+    def to_openai_tools(self, user_id: str = "") -> list[dict[str, Any]]:
         """导出工具列表；按当前用户过滤掉其他用户的工具。
 
         source 放在 function 外层：它不属于 OpenAI 的 function schema，
         混进去会被上游 provider 拒绝。
         """
         user_id = self._resolve_user(user_id)
-        converted: list[dict] = []
+        converted: list[dict[str, Any]] = []
         for tool in self._tools.values():
             if not self._visible(tool, user_id):
                 continue

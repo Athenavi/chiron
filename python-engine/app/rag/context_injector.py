@@ -38,10 +38,10 @@ class RAGContextInjector:
         return self._hybrid_retriever
 
     @hybrid_retriever.setter
-    def hybrid_retriever(self, retriever: HybridRetriever | None):
+    def hybrid_retriever(self, retriever: HybridRetriever | None) -> None:
         self._hybrid_retriever = retriever
 
-    def extract_kb_config(self, llm_config: dict | None) -> list[dict[str, Any]]:
+    def extract_kb_config(self, llm_config: dict[str, Any] | None) -> list[dict[str, Any]]:
         """从 llm_config 中提取知识库配置
 
         llm_config 支持两种格式：
@@ -105,7 +105,7 @@ class RAGContextInjector:
         if not self._hybrid_retriever or not kb_configs:
             return []
 
-        all_results: list[dict] = []
+        all_results: list[dict[str, Any]] = []
         seen_ids: set[str] = set()
 
         for config in kb_configs:
@@ -210,7 +210,7 @@ class RAGContextInjector:
         system_prompt: str,
         query: str,
         tenant_id: str,
-        llm_config: dict | None = None,
+        llm_config: dict[str, Any] | None = None,
         use_hybrid: bool = True,
     ) -> str:
         """一键注入：提取配置 → 检索 → 格式化 → 追加到 system_prompt

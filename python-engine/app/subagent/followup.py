@@ -40,7 +40,7 @@ _IDEMPOTENCY_TTL = 24 * 3600
 _RATE_WINDOW = 3600
 
 #: 不阻塞的投递任务需持引用，否则可能被 GC 静默回收
-_PENDING: set[asyncio.Task] = set()
+_PENDING: set[asyncio.Task[Any]] = set()
 
 
 def max_per_hour() -> int:

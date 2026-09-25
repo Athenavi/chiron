@@ -20,6 +20,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -55,7 +56,7 @@ def key_for(task_type: str, task_id: str, explicit: str = "") -> str:
     return f"{task_type}:{task_id}"
 
 
-def _pool():
+def _pool() -> Any:
     """取 PG 池；不可用时抛异常（调用方 fail-open）。"""
     from app.db import get_pool
 
@@ -121,7 +122,7 @@ async def purge_older_than(days: int) -> int:
         return 0
 
 
-async def _update(sql: str, *args) -> None:
+async def _update(sql: str, *args: Any) -> None:
     try:
         pool = _pool()
     except Exception:  # noqa: BLE001 - 无池时无需记录状态

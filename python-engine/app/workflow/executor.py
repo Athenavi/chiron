@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _TERMINAL_STATUSES = ("completed", "error")
 
 
-async def load_checkpoint(pool, instance_id: str) -> tuple[str | None, dict, set[str]]:
+async def load_checkpoint(pool: Any, instance_id: str) -> tuple[str | None, dict[str, Any], set[str]]:
     """返回 (status, resume_state, resume_done)。行不存在时 status=None。"""
     row = await pool.fetchrow(
         "SELECT status, checkpoint FROM workflow_instances WHERE id = $1",
@@ -39,7 +39,7 @@ async def load_checkpoint(pool, instance_id: str) -> tuple[str | None, dict, set
 
 async def execute_with_checkpoint(
     instance_id: str,
-    graph_json: dict,
+    graph_json: dict[str, Any],
     initial_state: dict[str, Any],
     user_id: str = "",
     gateway: Any = None,
@@ -62,7 +62,7 @@ async def execute_with_checkpoint(
 
     set_tool_context(session_id=instance_id, user_id=user_id or "", tenant_id=user_id or "")
 
-    async def persist_checkpoint(state: dict, done: list[str]) -> None:
+    async def persist_checkpoint(state: dict[str, Any], done: list[str]) -> None:
         try:
             await pool.execute(
                 """UPDATE workflow_instances

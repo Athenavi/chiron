@@ -5,6 +5,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any, cast
 
 import httpx
 
@@ -43,10 +44,10 @@ class SystemToolClient:
     async def execute(
         self,
         tool_name: str,
-        params: dict,
+        params: dict[str, Any],
         tenant_id: str,
         user_id: str,
-    ) -> dict:
+    ) -> dict[str, Any]:
         """
         执行系统工具
 
@@ -85,7 +86,7 @@ class SystemToolClient:
                     }
 
                 resp.raise_for_status()
-                return resp.json()
+                return cast("dict[str, Any]", resp.json())
 
             except httpx.TimeoutException:
                 logger.warning(
@@ -118,5 +119,5 @@ class SystemToolClient:
     async def close(self) -> None:
         """关闭 HTTP 客户端"""
         if self._http:
-            await self._http.close()
+            await self._http.aclose()
             self._http = None

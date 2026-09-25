@@ -70,6 +70,8 @@ class PersistentTerminal:
             env=sandboxed_env(),
         )
         # 首命令 cd 到沙箱 workspace，保证状态持久在隔离目录内（S 安全修复）
+        # stdin 显式用了 PIPE，这里只是把类型收窄（Popen 的返回类型是 StreamWriter | None）。
+        assert proc.stdin is not None
         try:
             if sys.platform == "win32":
                 proc.stdin.write(f'cd /d "{ws}"\n'.encode())
@@ -117,6 +119,8 @@ class PersistentTerminal:
                 f'touch "{done_file}"',
             )
 
+        # stdin 显式用了 PIPE，这里只是把类型收窄。
+        assert proc.stdin is not None
         try:
             proc.stdin.write("\n".join(lines).encode("utf-8") + b"\n")
             await proc.stdin.drain()

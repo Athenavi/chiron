@@ -11,7 +11,7 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import Any, cast
 
 logger = logging.getLogger(__name__)
 
@@ -45,7 +45,7 @@ async def _post(path: str, payload: dict[str, Any], timeout: float) -> dict[str,
             if resp.status != 200:
                 detail = data.get("detail") if isinstance(data, dict) else data
                 raise RuntimeError(f"mcp broker HTTP {resp.status}: {detail}")
-            return data
+            return cast("dict[str, Any]", data)
 
 
 async def list_tools(user_id: str, server_name: str = "") -> list[dict[str, Any]]:

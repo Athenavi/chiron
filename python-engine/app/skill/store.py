@@ -37,6 +37,7 @@ import re
 import shutil
 import threading
 import time
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -253,7 +254,7 @@ class SkillStore:
     def _path(self, name: str) -> Path:
         return self._root / f"{name}.skill.json"
 
-    def _iter_search(self):
+    def _iter_search(self) -> Iterator[tuple[SkillDef, str]]:
         """按优先级遍历搜索路径，产出 (SkillDef, scope)；坏文件跳过。"""
         for d, scope in self._roots.search:
             if not d.is_dir():

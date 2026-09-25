@@ -18,7 +18,7 @@ from app.tools.registry import registry
 logger = logging.getLogger(__name__)
 
 
-async def _pool():
+async def _pool() -> Any:
     from app.db import get_pool
 
     try:

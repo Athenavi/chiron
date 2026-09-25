@@ -117,7 +117,7 @@ _TEMPLATES: list[dict[str, Any]] = [
 
 # ── 图编译（轻量校验）───────────────────────────────────────
 def _compile_graph(
-    nodes: list[dict], edges: list[dict], entry_point: str = ""
+    nodes: list[dict[str, Any]], edges: list[dict[str, Any]], entry_point: str = ""
 ) -> dict[str, Any]:
     if not nodes:
         raise ValueError("graph has no nodes")
@@ -166,7 +166,7 @@ def _compile_graph(
 
 # ── 工具实现 ─────────────────────────────────────────────────
 async def graph_create(
-    name: str, nodes: list[dict], edges: list[dict], entry_point: str = ""
+    name: str, nodes: list[dict[str, Any]], edges: list[dict[str, Any]], entry_point: str = ""
 ) -> dict[str, Any]:
     if not name:
         return {"error": "name is required"}
@@ -185,8 +185,8 @@ async def graph_create(
 
 async def graph_run(
     name: str,
-    nodes: list[dict],
-    edges: list[dict],
+    nodes: list[dict[str, Any]],
+    edges: list[dict[str, Any]],
     initial_state: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     if not name:

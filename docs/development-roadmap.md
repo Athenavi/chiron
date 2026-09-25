@@ -292,28 +292,35 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 # python-engine/
 # mypy 只覆盖**已接线的模块**（分批扩大，清单见 L2-1）；
 # --follow-imports=silent 让门禁只报告列出的模块（依赖由它们各自的门禁覆盖）
-ruff check . && mypy --follow-imports=silent \
+ruff check . && mypy --follow-imports=silent
   app/agent/collaboration.py app/agent/event_sink.py app/agent/guards.py \
   app/agent/loop.py app/agent/message_codec.py app/agent/modes.py \
-  app/agent/multi_agent.py app/agent/prompt_engine.py app/agent/subagent_runner.py \
-  app/api/agents.py app/api/context.py app/api/knowledge.py app/api/media.py \
-  app/api/memory.py app/api/skills.py app/api/system.py app/api/unified_executor.py \
-  app/api/workflows.py \
-  app/chaos app/config.py app/context app/core app/db.py app/db_client.py app/engine_registry.py \
+  app/agent/multi_agent.py app/agent/profile.py app/agent/prompt_engine.py \
+  app/agent/side_effect_ledger.py app/agent/subagent_runner.py app/api/agents.py \
+  app/api/capabilities.py app/api/context.py app/api/knowledge.py \
+  app/api/media.py app/api/memory.py app/api/skills.py app/api/system.py \
+  app/api/unified_executor.py app/api/workflows.py app/chaos app/config.py \
+  app/context app/core app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/coalescer.py app/gateway/key_ring.py \
-  app/gateway/provider.py app/gateway/ratelimit.py \
-  app/gateway/router.py \
-  app/interfaces app/knowledge app/llm app/mcp/client.py app/mcp/registry.py app/media \
-  app/memory app/middleware app/observability app/plugins/owner_lease.py \
-  app/plugins/pool.py app/providers app/queue/producer.py app/rag/hybrid_search.py \
-  app/rag/parser.py app/rag/retriever.py app/rag/stores/base.py \
-  app/rag/stores/milvus_store.py app/rag/stores/pgvector_store.py \
-  app/session_store.py app/sse app/subagent/affinity.py app/subagent/redact.py \
-  app/subagent/registry.py app/subagent/store.py app/trace \
-  app/tools/_sandbox_worker.py app/tools/code_guard.py app/tools/context.py \
-  app/tools/jobs.py app/tools/rag_query.py app/tools/run_code.py app/tools/skill.py \
-  app/tools/skill_catalog.py app/tools/ssrf.py app/tools/subagent.py app/tools/web.py \
-  app/workflow/engine.py app/workflow/tracing_engine.py \
+  app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
+  app/interfaces app/knowledge app/llm app/mcp/client.py app/mcp/registry.py \
+  app/media app/memory app/middleware app/observability \
+  app/plugins/broker_proxy.py app/plugins/owner_lease.py app/plugins/pool.py \
+  app/providers app/queue/dlq.py app/queue/idempotency.py app/queue/producer.py \
+  app/rag/context_injector.py app/rag/hybrid_search.py app/rag/parser.py \
+  app/rag/retriever.py app/rag/stores/base.py app/rag/stores/milvus_store.py \
+  app/rag/stores/pgvector_store.py app/run_registry.py app/session_store.py \
+  app/skill/store.py app/sse app/subagent/affinity.py app/subagent/followup.py \
+  app/subagent/redact.py app/subagent/registry.py app/subagent/reporting.py \
+  app/subagent/runtime_cache.py app/subagent/store.py \
+  app/tools/_sandbox_worker.py app/tools/client.py app/tools/code_guard.py \
+  app/tools/context.py app/tools/discovery.py app/tools/graph.py \
+  app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/memory.py \
+  app/tools/rag_query.py app/tools/registry.py app/tools/run_code.py \
+  app/tools/skill.py app/tools/skill_catalog.py app/tools/ssrf.py \
+  app/tools/subagent.py app/tools/terminal.py app/tools/web.py app/trace \
+  app/workflow/dynamic_nodes.py app/workflow/engine.py app/workflow/executor.py \
+  app/workflow/tools.py app/workflow/tracing_engine.py \
   && python -m pytest -q -m "not integration"
 
 # frontend-vue/

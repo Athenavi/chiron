@@ -57,7 +57,7 @@ def cursor_key(session_id: str) -> str:
     return rkey(CURSOR_KEY_PREFIX) + session_id
 
 
-async def _redis():
+async def _redis() -> Any:
     try:
         from app.redis_client import get_redis
 
@@ -67,7 +67,7 @@ async def _redis():
         return None
 
 
-async def _read_cursor(redis, session_id: str) -> str | None:
+async def _read_cursor(redis: Any, session_id: str) -> str | None:
     """读游标。返回 ``None`` 表示**读取失败** —— 与"从未汇报过"（``EPOCH``）严格区分：
     读不到游标就无法保证"不重复汇报"，此时宁可这次不注入。
     """
@@ -81,7 +81,7 @@ async def _read_cursor(redis, session_id: str) -> str | None:
     return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
 
 
-async def _write_cursor(redis, session_id: str, value: str) -> None:
+async def _write_cursor(redis: Any, session_id: str, value: str) -> None:
     try:
         await redis.set(cursor_key(session_id), value, ex=CURSOR_TTL_SECONDS)
     except Exception as exc:  # noqa: BLE001 - 写游标失败只意味着"可能重复汇报"
@@ -93,7 +93,7 @@ async def consume_pending_reports(
     session_id: str,
     tenant_id: str = "",
     user_id: str = "",
-    pool=None,
+    pool: Any = None,
 ) -> list[dict[str, Any]]:
     """取回"自上次汇报以来结束的子 Agent"，并推进游标。返回待注入的条目（可能为空）。
 

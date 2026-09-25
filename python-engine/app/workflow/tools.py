@@ -17,7 +17,7 @@ def bind_gateway(gateway: GatewayRouter) -> None:
 
 
 async def workflow_run(
-    graph_json: dict, initial_state: dict[str, Any] | None = None, name: str = ""
+    graph_json: dict[str, Any], initial_state: dict[str, Any] | None = None, name: str = ""
 ) -> dict[str, Any]:
     if _gateway is None:
         return {"error": "gateway not bound"}

@@ -25,7 +25,7 @@ from app.tools.registry import registry
 logger = logging.getLogger(__name__)
 
 
-def _get_memory_service():
+def _get_memory_service() -> Any:
     """获取 MemoryService 实例（从应用上下文中）。"""
     try:
         from app.memory.service import get_memory_service

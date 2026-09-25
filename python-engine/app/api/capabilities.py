@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, Request
 
@@ -17,7 +18,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["capabilities"])
 
 
-def _serialize(cap) -> dict:
+def _serialize(cap: Any) -> dict[str, Any]:
     return {
         "capability_id": cap.capability_id,
         "name": cap.name,
@@ -46,7 +47,9 @@ def _serialize(cap) -> dict:
 
 
 @router.get("/v1/capabilities")
-async def list_capabilities(workstation: str | None = None, tenant_id: str = ""):
+async def list_capabilities(
+    workstation: str | None = None, tenant_id: str = ""
+) -> dict[str, Any]:
     """列出能力（可按工作台过滤）；全局能力对所有租户可见"""
     reg = get_registry()
     if workstation:
@@ -69,7 +72,7 @@ async def list_capabilities(workstation: str | None = None, tenant_id: str = "")
 
 
 @router.post("/v1/capabilities/search")
-async def search_capabilities(request: Request):
+async def search_capabilities(request: Request) -> dict[str, Any]:
     """语义搜索能力（关键词/标签/描述匹配，按相关性排序）"""
     body = await request.json()
     query = str(body.get("query") or "")

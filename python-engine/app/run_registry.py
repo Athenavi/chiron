@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -53,7 +54,7 @@ def _payload(
     )
 
 
-async def owner_of(redis, session_id: str) -> dict | None:
+async def owner_of(redis: Any, session_id: str) -> dict[str, Any] | None:
     """读取 session 的 run 归属；无映射/解析失败/Redis 不可用均返回 None。"""
     if redis is None or not session_id:
         return None
@@ -76,7 +77,7 @@ class RunLease:
 
     def __init__(
         self,
-        redis,
+        redis: Any,
         session_id: str,
         instance_id: str,
         run_token: str,
@@ -90,7 +91,7 @@ class RunLease:
         self._owner_uid = owner_uid
         self._url = url
         self._started_at = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        self._task: asyncio.Task | None = None
+        self._task: asyncio.Task[Any] | None = None
 
     @property
     def enabled(self) -> bool:

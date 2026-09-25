@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import redis.asyncio as aioredis
 
@@ -21,13 +22,13 @@ class DeadLetterQueue:
     def __init__(self, redis: aioredis.Redis):
         self._redis = redis
 
-    async def list(self, count: int = 50) -> list[dict]:
+    async def list(self, count: int = 50) -> list[dict[str, Any]]:
         """列出死信消息"""
         results = await self._redis.xrevrange(DLQ_STREAM, count=count)
         messages = []
-        for stream_id, fields in results:
-            msg = {}
-            for k, v in fields.items():
+        for stream_id, fields in results or []:
+            msg: dict[Any, Any] = {}
+            for k, v in (fields or {}).items():
                 key = k.decode() if isinstance(k, bytes) else k
                 val = v.decode() if isinstance(v, bytes) else v
                 msg[key] = val
@@ -44,8 +45,8 @@ class DeadLetterQueue:
 
         _, fields = results[0]
         # 重建消息
-        message = {}
-        for k, v in fields.items():
+        message: dict[Any, Any] = {}
+        for k, v in (fields or {}).items():
             key = k.decode() if isinstance(k, bytes) else k
             val = v.decode() if isinstance(v, bytes) else v
             if key not in ("error", "stream_id"):
@@ -81,6 +82,6 @@ class DeadLetterQueue:
         """死信队列深度"""
         try:
             info = await self._redis.xinfo_stream(DLQ_STREAM)
-            return info.get("length", 0)
+            return int(info.get("length", 0) or 0)
         except Exception:
             return 0

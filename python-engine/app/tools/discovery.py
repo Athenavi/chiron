@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 import httpx
 
@@ -28,7 +29,7 @@ class ToolDiscovery:
         self._go_url = go_url.rstrip("/")
         self._token = internal_token
         self._refresh_interval = refresh_interval
-        self._cache: dict[str, dict] = {}
+        self._cache: dict[str, dict[str, Any]] = {}
         self._last_refresh: float = 0
         self._http: httpx.AsyncClient | None = None
 
@@ -41,7 +42,7 @@ class ToolDiscovery:
             )
         return self._http
 
-    async def get_tools(self) -> list[dict]:
+    async def get_tools(self) -> list[dict[str, Any]]:
         """
         获取工具清单（带缓存）
 
@@ -52,7 +53,7 @@ class ToolDiscovery:
             await self._refresh()
         return list(self._cache.values())
 
-    async def get_tool(self, name: str) -> dict | None:
+    async def get_tool(self, name: str) -> dict[str, Any] | None:
         """
         获取单个工具信息
 
@@ -89,5 +90,5 @@ class ToolDiscovery:
     async def close(self) -> None:
         """关闭 HTTP 客户端"""
         if self._http:
-            await self._http.close()
+            await self._http.aclose()
             self._http = None

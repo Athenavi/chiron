@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import asdict, dataclass
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def rollback_capability(level: str, tool: str) -> str:
     return ROLLBACK_AUTO if tool in _SNAPSHOT_TOOLS else ROLLBACK_NONE
 
 
-def target_of(args: dict | None, tool: str) -> str:
+def target_of(args: dict[str, Any] | None, tool: str) -> str:
     """从参数里取一个"人看得懂的目标摘要"。"""
     if not isinstance(args, dict):
         return tool

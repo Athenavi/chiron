@@ -54,7 +54,7 @@ async def _kill_proc(proc: asyncio.subprocess.Process) -> None:
             pass
 
 
-async def _kill_watcher(redis, job_id: str, proc: asyncio.subprocess.Process) -> None:
+async def _kill_watcher(redis: Any, job_id: str, proc: asyncio.subprocess.Process) -> None:
     """轮询取消标志；发现后 kill 子进程（Redis 故障则静默退出，命令继续自然执行）。"""
     while True:
         await asyncio.sleep(KILL_POLL_INTERVAL)
@@ -68,7 +68,7 @@ async def _kill_watcher(redis, job_id: str, proc: asyncio.subprocess.Process) ->
             return
 
 
-async def _write_meta(redis, job_id: str, status: str) -> None:
+async def _write_meta(redis: Any, job_id: str, status: str) -> None:
     if redis is None:
         return
     try:
@@ -78,7 +78,7 @@ async def _write_meta(redis, job_id: str, status: str) -> None:
         logger.warning("tool_job meta write failed: %s", exc)
 
 
-async def _write_result(redis, job_id: str, status: str, output: str = "", exit_code: int = 0) -> None:
+async def _write_result(redis: Any, job_id: str, status: str, output: str = "", exit_code: int = 0) -> None:
     if redis is None:
         return
     try:
@@ -93,7 +93,7 @@ async def _write_result(redis, job_id: str, status: str, output: str = "", exit_
 
 
 async def execute_tool_job(
-    redis,
+    redis: Any,
     job_id: str,
     command: str,
     timeout: float = JOB_TIMEOUT,
@@ -123,7 +123,7 @@ async def execute_tool_job(
         cwd=str(workspace_dir()),
         env=sandboxed_env(),
     )
-    watcher: asyncio.Task | None = None
+    watcher: asyncio.Task[Any] | None = None
     if redis is not None:
         watcher = asyncio.create_task(_kill_watcher(redis, job_id, proc))
 

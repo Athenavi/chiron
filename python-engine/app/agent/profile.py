@@ -116,7 +116,7 @@ def _as_bool(value: Any, default: bool = False) -> bool:
     return default
 
 
-def _as_mapping(value: Any) -> dict:
+def _as_mapping(value: Any) -> dict[str, Any]:
     """JSONB 列（可能是 dict / JSON 字符串 / None）→ dict。"""
     if isinstance(value, Mapping):
         return dict(value)
@@ -166,7 +166,7 @@ def parse_profile_row(row: Mapping[str, Any]) -> ProfileSpec:
 
 
 async def load_profile(
-    pool,
+    pool: Any,
     *,
     ref: str,
     tenant_id: str = "",

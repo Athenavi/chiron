@@ -45,8 +45,8 @@ class WorkflowNodeWithSkill:
         node_type: str,
         label: str,
         bound_skill_id: str | None = None,
-        skill_config: dict | None = None,
-    ):
+        skill_config: dict[str, Any] | None = None,
+    ) -> None:
         self.node_id = node_id
         self.node_type = (
             node_type  # "input" / "llm" / "tool" / "condition" / "output" / "skill"
@@ -63,7 +63,7 @@ class WorkflowNodeWithSkill:
             )
 
         self.execution_count = 0
-        self.last_execution_time = 0
+        self.last_execution_time = 0.0
         self.last_status: str = "pending"  # pending/running/completed/error
 
     async def execute_with_skill(
@@ -167,7 +167,7 @@ class DynamicWorkflowEngine:
     3. 执行时自动调用绑定的 Skill
     """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.nodes: dict[str, WorkflowNodeWithSkill] = {}
         self.registry = get_registry()
 
@@ -177,7 +177,7 @@ class DynamicWorkflowEngine:
         node_type: str,
         label: str,
         bound_skill_id: str | None = None,
-        skill_config: dict | None = None,
+        skill_config: dict[str, Any] | None = None,
     ) -> WorkflowNodeWithSkill:
         """添加节点 (可选绑定 Skill)"""
         node = WorkflowNodeWithSkill(
