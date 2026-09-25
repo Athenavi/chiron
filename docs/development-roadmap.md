@@ -63,7 +63,7 @@
   按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
   `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
   `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第八批已清 404 条 → 767 / 80 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
+  **截至第九批已清 451 条 → 720 / 77 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
   （备选阈值是「数万条」）。
 - **实施顺序**：
   1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
@@ -80,16 +80,18 @@
      | 6 | `d613c54` | `engine_registry` + `session_store` + `knowledge` + `context`（69 条） |
      | 7 | `07bf869` | `providers` + `memory` + `gateway/{provider,cache,router}`（142 条） |
      | 8 | `7cefafc` | `app/core`（80 条；门禁改用 `--follow-imports=silent`） |
+     | 9 | `eb3e0f4` | `app/api/knowledge.py` + `app/api/unified_executor.py`（48 条） |
 
      第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
      `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
      `core/task_router.py` 的 `_group_by_dependencies`（拿 `SubTask` 对象与 `subtask_id` 比较，
      恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
+
      - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **23 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量分布）：`agent/runtime.py` 99、
-       `main.py` 52、`rag/builder.py` 45、`queue/worker.py` 35、`skill/manager.py` 31、
-       `api/unified_executor.py` 27、`api/knowledge.py` 24 …；
+       （现为 **25 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
+     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 720 条 / 70 个文件）：
+       `agent/runtime.py` 99、`main.py` 52、`rag/builder.py` 46、`queue/worker.py` 35、
+       `skill/manager.py` 31、`mcp/client.py` 25、`api/media.py` 22、`agent/event_sink.py` 21 …；
      - **两条仍生效的约束**（新增依赖或新批次时照办）：
        1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
           依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
@@ -102,6 +104,7 @@
        版本装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI。
        CI 是 3.11 + 固定版本 —— 若该 step 首次运行报出本地没有的错误，根因大概率在此；
        先按 CI 结果复核，再决定是补 overrides 还是改代码。
+
   3. 全量通过后再把 CI 改成 `mypy app/`。
 - **验收**：CI 中 mypy 对已接线目录返回 0；`pyproject.toml` 的 `strict = true` 与实际门禁一致。
 - **备选**：若量化结果不可接受（如数万条），则**下调 `pyproject.toml` 的 strict 声明**并写明降级理由
