@@ -54,7 +54,7 @@ async function loadPluginUsage() {
 /** 卡片上的用量摘要；没有被引用时返回空串（不显示空徽标） */
 function usageLabel(name: string): string {
   const { agents } = bindingUsageOf(pluginUsage.value, name)
-  return agents.length ? t('{n} 个 Agent', { n: agents.length }) : ''
+  return agents.length ? t('agent.n_agents', { n: agents.length }) : ''
 }
 
 /** 悬浮提示：具体是谁在用 */
@@ -104,7 +104,7 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('mcp', item.id)
-    message.success(t('「{name}」已安装', { name: item.name }))
+    message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadPlugins()])
   } catch (e: any) {
     const raw = e?.response?.data
@@ -112,7 +112,7 @@ async function handleMarketInstall(item: MarketItem) {
     if (e?.response?.status === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
       message.error(t('errors.installation_rejected_this_mcp_command_is_not_on_the_safe_allowlist_please_create_it_manually_under_plugins_or_ask_an_admin_to_add_it_to_the_allowlist'))
     } else {
-      message.error(t('安装失败: {detail}', { detail }))
+      message.error(t('errors.install_failed_detail', { detail }))
     }
   } finally {
     marketInstallingId.value = null
@@ -239,8 +239,8 @@ async function toggleStatus(p: Plugin, v: boolean) {
   try {
     await api.put(`/v1/plugins/${encodeURIComponent(p.name)}`, { status: v ? 'active' : 'inactive' })
     p.status = v ? 'active' : 'inactive'
-    if (v) message.success(t('已启用 {name}', { name: p.name }))
-    else message.success(t('已停用 {name}', { name: p.name }))
+    if (v) message.success(t('common.enabled_name', { name: p.name }))
+    else message.success(t('common.name_disabled', { name: p.name }))
   } catch (e: any) {
     message.error(e.response?.data?.error || t('errors.operation_failed'))
   }
@@ -250,7 +250,7 @@ async function toggleStatus(p: Plugin, v: boolean) {
 function requestUninstall(p: Plugin) {
   Modal.confirm({
     title: t('common.uninstall_plugin'),
-    content: t('确定卸载「{name}」？其 MCP 配置将被删除。', { name: p.name }),
+    content: t('agent.uninstall_name_its_mcp_config_will_be_removed', { name: p.name }),
     okText: t('common.uninstall'),
     okButtonProps: { danger: true },
     cancelText: t('common.cancel'),
@@ -274,8 +274,8 @@ async function testPlugin(p: Plugin) {
     const res = await api.post(`/v1/plugins/${encodeURIComponent(p.name)}/test`)
     const data = res.data?.data || {}
     testResults.value = { ...testResults.value, [p.name]: { ok: !!data.ok, message: data.message || '' } }
-    if (data.ok) message.success(t('{name} 连接正常', { name: p.name }))
-    else message.error(t('{name} 连接失败', { name: p.name }))
+    if (data.ok) message.success(t('common.name_connection_ok', { name: p.name }))
+    else message.error(t('errors.name_connection_failed', { name: p.name }))
   } catch (e: any) {
     testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('errors.test_failed') } }
   } finally {
@@ -403,7 +403,7 @@ async function testPlugin(p: Plugin) {
                 color="blue"
                 :title="usageTitle(p.name)"
               >
-                {{ $t('被 {label} 使用', { label: usageLabel(p.name) }) }}
+                {{ $t('common.used_by_label', { label: usageLabel(p.name) }) }}
               </Tag>
             </div>
             <div class="card-actions">
@@ -573,7 +573,7 @@ async function testPlugin(p: Plugin) {
     <!-- 新建/编辑 Modal -->
     <Modal
       :open="editorOpen"
-      :title="editingName ? $t('编辑「{name}」', { name: editingName }) : $t('agent.new_mcp_plugin')"
+      :title="editingName ? $t('common.edit_name', { name: editingName }) : $t('agent.new_mcp_plugin')"
       :confirm-loading="saving"
       width="560px"
       :ok-text="$t('common.save')"

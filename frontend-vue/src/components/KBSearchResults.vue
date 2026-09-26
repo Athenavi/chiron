@@ -12,7 +12,7 @@
           <path d="M2 2h12v12H2V2zm1 1v10h10V3H3z" />
           <path d="M5 5h6v1H5V5zm0 2h6v1H5V7zm0 2h4v1H5V9z" />
         </svg>
-        {{ $t('知识库检索结果 ({n} 条)', { n: results.length }) }}
+        {{ $t('knowledge.knowledge_base_results_n', { n: results.length }) }}
       </div>
       <div class="header-actions">
         <button
@@ -38,7 +38,7 @@
             class="score-badge"
             :style="{ backgroundColor: getScoreColor(result.score) }"
           >
-            {{ $t('相似度: {n}%', { n: (result.score * 100).toFixed(1) }) }}
+            {{ $t('common.similarity_n', { n: (result.score * 100).toFixed(1) }) }}
           </span>
         </div>
         
@@ -53,7 +53,7 @@
           >
             <path d="M2 1h7l3 3v9H2V1zm5 0v3h3L7 1z" />
           </svg>
-          <span>{{ result.documentName || $t('文档 {n}', { n: index + 1 }) }}</span>
+          <span>{{ result.documentName || $t('knowledge.document_n', { n: index + 1 }) }}</span>
         </div>
         
         <!-- 内容预览 -->
@@ -93,7 +93,7 @@
             v-if="result.tenantId"
             class="meta-item"
           >
-            {{ $t('租户: {id}', { id: result.tenantId.substring(0, 8) }) }}
+            {{ $t('admin.tenant_id', { id: result.tenantId.substring(0, 8) }) }}
           </span>
           <span
             v-if="result.timestamp"

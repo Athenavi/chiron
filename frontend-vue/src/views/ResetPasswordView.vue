@@ -29,7 +29,7 @@ function passwordComplexityError(pw: string): string {
   if (!/[A-Z]/.test(pw)) return t('auth.password_must_contain_an_uppercase_letter')
   if (!/[a-z]/.test(pw)) return t('auth.password_must_contain_a_lowercase_letter')
   if (!/\d/.test(pw)) return t('auth.password_must_contain_a_digit')
-  if (!/[^A-Za-z0-9]/.test(pw)) return t('密码必须包含特殊字符（如 {chars}）', { chars: '!@#$%^&*' })
+  if (!/[^A-Za-z0-9]/.test(pw)) return t('auth.password_must_contain_a_special_character_e_g_chars', { chars: '!@#$%^&*' })
   return ''
 }
 
@@ -140,12 +140,12 @@ async function handleSubmit() {
 
 <template>
   <div class="auth-container">
-  <div class="auth-card">
-    <!-- 语言切换：重置密码前即可选择界面语言 -->
-    <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
-      <LanguageSwitcher />
-    </div>
-    <div class="auth-header">
+    <div class="auth-card">
+      <!-- 语言切换：重置密码前即可选择界面语言 -->
+      <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
+        <LanguageSwitcher />
+      </div>
+      <div class="auth-header">
         <div class="auth-logo">
           MC
         </div>

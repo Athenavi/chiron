@@ -101,7 +101,7 @@ async function batchDeleteDocs() {
     for (const id of ids) {
       await api.delete(`/v1/kb/${kbId}/documents`, { params: { doc_id: id } })
     }
-    message.success(t('已删除 {n} 个文档', { n: ids.length }))
+    message.success(t('knowledge.deleted_n_documents', { n: ids.length }))
     selectedDocIds.value = []
     await loadDocuments()
     await loadKnowledgeBase()
@@ -244,12 +244,12 @@ async function importFromMedia() {
   selectedMediaIds.value = []
 
   if (successCount > 0) {
-    message.success(t('成功导入 {n} 个文件', { n: successCount }))
+    message.success(t('media.imported_n_files', { n: successCount }))
     await loadKnowledgeBase()
     await loadDocuments()
   }
   if (failCount > 0) {
-    message.error(t('{n} 个文件导入失败', { n: failCount }))
+    message.error(t('errors.n_files_failed_to_import', { n: failCount }))
   }
 }
 
@@ -278,7 +278,7 @@ async function buildKnowledgeBase() {
     const res = await api.post(`/v1/kb/${kbId}/build`)
     const data = res.data?.data || res.data
 
-    message.success(t('构建已启动，预计消耗 {n} credits', { n: data.estimated_cost }))
+    message.success(t('billing.build_started_estimated_cost_n_credits', { n: data.estimated_cost }))
 
     // 等待构建完成（轮询状态）
     const checkStatus = async () => {
@@ -514,7 +514,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                 <template #icon>
                   <DeleteOutlined />
                 </template>
-                {{ $t('批量删除（{n}）', { n: selectedDocIds.length }) }}
+                {{ $t('common.batch_delete_n', { n: selectedDocIds.length }) }}
               </Button>
               <Button
                 v-if="selectedDocIds.length > 0"
@@ -525,7 +525,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                 <template #icon>
                   <ReloadOutlined />
                 </template>
-                {{ $t('批量重新索引（{n}）', { n: selectedDocIds.length }) }}
+                {{ $t('common.batch_reindex_n', { n: selectedDocIds.length }) }}
               </Button>
               <Button
                 size="small"
@@ -662,7 +662,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           class="query-result-item"
         >
           <div class="result-header">
-            <Tag>{{ $t('相关度: {n}%', { n: (result.score * 100).toFixed(1) }) }}</Tag>
+            <Tag>{{ $t('common.relevance_n', { n: (result.score * 100).toFixed(1) }) }}</Tag>
             <span
               v-if="result.name || result.document_name"
               class="result-source"
@@ -704,7 +704,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           </template>
         </Input>
         <div class="media-actions">
-          <span class="selected-count">{{ $t('已选择 {sel} / {total}', { sel: selectedMediaIds.length, total: filteredMediaFiles.length }) }}</span>
+          <span class="selected-count">{{ $t('common.selected_sel_total_items', { sel: selectedMediaIds.length, total: filteredMediaFiles.length }) }}</span>
           <Button
             size="small"
             @click="selectAllMedia"
@@ -763,7 +763,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           :disabled="selectedMediaIds.length === 0"
           @click="importFromMedia"
         >
-          {{ $t('导入选中文件 ({n})', { n: selectedMediaIds.length }) }}
+          {{ $t('media.import_selected_files_n', { n: selectedMediaIds.length }) }}
         </Button>
       </div>
     </Modal>

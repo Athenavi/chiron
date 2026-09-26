@@ -5,7 +5,7 @@
   >
     <div class="conflict-header">
       <span class="conflict-icon">⚠️</span>
-      <span class="conflict-title">{{ $t('记忆冲突：{slot} · {key}', { slot: formatSlot(conflict.slot), key: conflict.item_key }) }}</span>
+      <span class="conflict-title">{{ $t('errors.memory_conflict_slot_key', { slot: formatSlot(conflict.slot), key: conflict.item_key }) }}</span>
       <span class="conflict-time">{{ formatTime(conflict.created_at) }}</span>
     </div>
 
@@ -132,11 +132,11 @@ function formatTime(timestamp: number): string {
   const diff = now.getTime() - date.getTime()
   const minutes = Math.floor(diff / 60000)
   if (minutes < 1) return t('common.just_now')
-  if (minutes < 60) return t('{n} 分钟前', { n: minutes })
+  if (minutes < 60) return t('common.n_min_ago', { n: minutes })
   const hours = Math.floor(minutes / 60)
-  if (hours < 24) return t('{n} 小时前', { n: hours })
+  if (hours < 24) return t('common.n_h_ago', { n: hours })
   const days = Math.floor(hours / 24)
-  return t('{n} 天前', { n: days })
+  return t('common.n_days_ago', { n: days })
 }
 
 async function resolve(resolution: 'keep_old' | 'use_new' | 'manual', manualValue?: string) {

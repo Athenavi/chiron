@@ -37,7 +37,7 @@ const label = computed(() => (percent.value === null ? '—' : `${Math.round(per
 
 const title = computed(() => {
   if (percent.value === null) return t('common.context_usage_no_data')
-  return t('上下文占用 {label}：最近一轮请求 {used} tokens / 上限 {limit}', { label: label.value, used: props.used, limit: props.limit })
+  return t('common.context_usage_label_last_request_used_tokens_limit_limit', { label: label.value, used: props.used, limit: props.limit })
 })
 </script>
 

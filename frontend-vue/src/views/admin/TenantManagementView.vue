@@ -85,10 +85,10 @@ async function toggleSuspend(record: any) {
   try {
     if (record.status === 'suspended') {
       await api.put(`/v1/admin/tenants/${record.id}`, { status: 'active' })
-      message.success(t('租户「{name}」已恢复', { name: record.name }))
+      message.success(t('admin.tenant_name_restored', { name: record.name }))
     } else {
       await api.post(`/v1/admin/tenants/${record.id}/suspend`)
-      message.success(t('租户「{name}」已挂起', { name: record.name }))
+      message.success(t('admin.tenant_name_suspended', { name: record.name }))
     }
     await loadTenants()
   } catch (e: any) {
@@ -244,7 +244,7 @@ onMounted(loadTenants)
                   {{ $t('common.edit_2') }}
                 </Button>
                 <Popconfirm
-                  :title="record.status === 'suspended' ? $t('确定恢复租户「{name}」吗？', { name: record.name }) : $t('确定挂起租户「{name}」吗？挂起后其资源将不可用。', { name: record.name })"
+                  :title="record.status === 'suspended' ? $t('admin.restore_tenant_name', { name: record.name }) : $t('admin.suspend_tenant_name_its_resources_will_become_unavailable', { name: record.name })"
                   :ok-text="$t('common.confirm')"
                   :cancel-text="$t('common.cancel')"
                   @confirm="toggleSuspend(record)"
@@ -323,7 +323,7 @@ onMounted(loadTenants)
     <!-- 用量抽屉 -->
     <Drawer
       v-model:open="usageOpen"
-      :title="usageTenant ? $t('📊 {name} - 资源用量', { name: usageTenant.name }) : $t('common.resource_usage')"
+      :title="usageTenant ? $t('common.name_resource_usage', { name: usageTenant.name }) : $t('common.resource_usage')"
       width="420"
       :footer="null"
     >

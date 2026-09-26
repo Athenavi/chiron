@@ -109,12 +109,12 @@ async function handleSubmit() {
 
 <template>
   <div class="auth-container">
-  <div class="auth-card">
-    <!-- 语言切换：找回密码前即可选择界面语言 -->
-    <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
-      <LanguageSwitcher />
-    </div>
-    <div class="auth-header">
+    <div class="auth-card">
+      <!-- 语言切换：找回密码前即可选择界面语言 -->
+      <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
+        <LanguageSwitcher />
+      </div>
+      <div class="auth-header">
         <div class="auth-logo">
           MC
         </div>

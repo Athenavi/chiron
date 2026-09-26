@@ -27,7 +27,7 @@
               stroke-width="2"
             />
           </svg>
-          {{ $t('工具调用链 ({n} 个工具, 总耗时 {ms}ms)', { n: spanCount, ms: totalDurationMs }) }}
+          {{ $t('agent.tool_call_chain_n_tools_ms_ms_total', { n: spanCount, ms: totalDurationMs }) }}
         </span>
         <span class="header-icon">{{ isExpanded ? '▼' : '▶' }}</span>
       </div>
@@ -74,7 +74,7 @@
         <!-- 完成事件 -->
         <div class="timeline-node complete">
           <CheckCircleOutlined style="color: var(--success)" />
-          <span>{{ $t('推理完成 (总耗时 {ms}ms)', { ms: totalDurationMs }) }}</span>
+          <span>{{ $t('chat.inference_complete_total_ms_ms', { ms: totalDurationMs }) }}</span>
         </div>
       </div>
     </CollapseTransition>
@@ -179,7 +179,7 @@ function getSpanDisplayName(span: TraceSpan): string {
   if (span.span_name === 'llm_call') {
     const model = span.metadata?.model || 'unknown'
     const inputTokens = span.metadata?.input_tokens || 0
-    return t('LLM 调用 ({model}, {tokens} tokens)', { model, tokens: inputTokens })
+    return t('agent.llm_call_model_tokens_tokens', { model, tokens: inputTokens })
   }
   if (span.span_name.startsWith('tool:')) {
     const toolName = span.span_name.replace('tool:', '')

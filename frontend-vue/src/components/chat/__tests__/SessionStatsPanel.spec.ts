@@ -21,8 +21,12 @@ const METRICS = {
   throughput: { ttft_ms_p50: 812, output_tps_p50: 33.4, output_tps_p95: 51.2, sample_turns: 3 },
 }
 
-/** `$t` 直接回显 key —— 组件里的中文标签就是断言目标 */
-const global = { mocks: { $t: (key: string) => key } }
+/**
+ * 不 mock `$t`：走 test-setup 注册的真实 i18n（zh-CN）。
+ * 早先组件用中文原文当 key，spec 才用「回显 key」的桩直接断言中文；
+ * L1-4 语义化 key 后回显的是 `chat.stats.turns` 这类键名，断言只能改走真实译文。
+ */
+const global = {}
 
 describe('SessionStatsPanel（会话统计：问题 5）', () => {
   beforeEach(() => {

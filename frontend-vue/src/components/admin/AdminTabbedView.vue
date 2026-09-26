@@ -22,7 +22,7 @@ const { t: tr } = useI18n()
  *   <AdminTabbedView
  *     route-path="/admin/access"
  *     default-tab="roles"
- *     :tabs="[{ key: 'roles', label: tr('角色'), comp: RolesView }, ...]"
+ *     :tabs="[{ key: 'roles', label: tr('admin.role'), comp: RolesView }, ...]"
  *   />
  */
 export interface AdminTabDef {

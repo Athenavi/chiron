@@ -32,7 +32,7 @@
         >
           <div class="content-header">
             <span class="content-label">{{ $t('knowledge.document_content_preview') }}</span>
-            <span class="content-chunks">{{ $t('{n} 个分块', { n: chunkCount }) }}</span>
+            <span class="content-chunks">{{ $t('knowledge.n_chunks', { n: chunkCount }) }}</span>
           </div>
           <pre class="content-body">{{ content }}</pre>
         </div>

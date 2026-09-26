@@ -37,9 +37,9 @@ export function buildPrefillText(prefill: ChatPrefill, maxChars = PREFILL_MAX_CH
   // 两种投递意图的开场白完全不同：把能力当「结果」投递会生成
   // 「以下是『Execute Python Code』的结果」这种自相矛盾的话。
   const header = prefill.kind === 'capability'
-    ? t('我想用「{title}」来做：', { title: prefill.title })
+    ? t('common.i_want_to_use_title_to', { title: prefill.title })
     : prefill.title
-      ? t('以下是「{title}」的结果，请基于它继续：', { title: prefill.title })
+      ? t('common.below_are_the_results_of_title_continue_based_on_them', { title: prefill.title })
       : t('common.below_are_the_previous_round_s_results_continue_based_on_them')
   const body = (prefill.text || '').trim()
   if (!body) return header

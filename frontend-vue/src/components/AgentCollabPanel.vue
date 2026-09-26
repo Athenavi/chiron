@@ -103,7 +103,7 @@
             class="btn-clear"
             @click="clearLog"
           >
-            {{ $t('common.empty') }}
+            {{ $t('common.clear_2') }}
           </button>
         </div>
         <div

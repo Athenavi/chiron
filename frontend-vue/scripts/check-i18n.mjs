@@ -191,5 +191,37 @@ if (grown.length) {
   process.exit(1)
 }
 
+// ── 语义化 key 护栏（L1-4 完成后启用）────────────────────────────────────────
+// 上面的 I18N_CALL 把 `t('中文')` 当作"已走 i18n"剥掉，那是 gettext 阶段的口径 ——
+// legacy 清空后再这么写**必然是坏的**：vue-i18n 查不到键只会回显 key 本身
+// （无插值的文案看起来"正常"，带 {n} 的渲染出字面量，en-US/ar 永远命不中）。
+// 实测 L1-4 迁移漏掉 `tr` 别名与带参调用，一次性漏了 400+ 处，靠人眼守不住。
+// 故：翻译调用里出现**中文字面键**一律判违规 —— 文案必须先落进 src/locales/<lang>/。
+// 三种引号都要覆盖：早先的扫描只认 `'…'`，把**键内含双引号**的 3 处漏掉了。
+// 分组：1=调用名 2='…' 3="…" 4=`…`
+const CJK_KEY_CALL = /(\$t|\b(?:translate|hasMessage|tr|tt|tc|te|t))\(\s*(?:'((?:[^'\\]|\\.)*)'|"((?:[^"\\]|\\.)*)"|`((?:[^`\\]|\\.)*)`)\s*[,)]/g
+const offenders = []
+for (const file of walk(join(ROOT, 'src'))) {
+  if (/\.test\.ts$/.test(file)) continue
+  const rel = relative(ROOT, file).split('\\').join('/')
+  const src = stripComments(readFileSync(file, 'utf8'))
+  CJK_KEY_CALL.lastIndex = 0
+  let m
+  while ((m = CJK_KEY_CALL.exec(src))) {
+    const key = m[2] ?? m[3] ?? m[4]
+    if (key == null) continue
+    if (key.includes('${')) continue // 动态键，无法静态判定
+    if (CJK.test(key)) offenders.push(`${rel}: ${m[0].replace(/\s+/g, ' ').slice(0, 100)}`)
+  }
+}
+if (offenders.length) {
+  console.error(`i18n 契约失败 —— ${offenders.length} 处翻译调用用了中文字面键（legacy 已清空，这些键必然缺失）：`)
+  for (const line of offenders) console.error(`  ${line}`)
+  console.error('')
+  console.error('修复：把文案写进 src/locales/zh-CN/<域>.ts（新 key 用 <域>.<语义>），调用点改 t(\'域.key\')，')
+  console.error('      再补 en-US / ar 译文。')
+  process.exit(1)
+}
+
 const total = Object.values(current).reduce((a, b) => a + b, 0)
 console.log(`i18n 契约通过（存量待迁移 ${total} 行，分布在 ${Object.keys(current).length} 个文件）`)

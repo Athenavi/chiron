@@ -193,7 +193,7 @@ async function renderWidget() {
         // custom 由部署方按 verify_url 契约自行接入前端组件，此处仅提示
         break
       default:
-        loadError.value = t('未知的验证码类型：{provider}', { provider: props.provider })
+        loadError.value = t('auth.unknown_captcha_type_provider', { provider: props.provider })
     }
   } catch {
     loadError.value = t('auth.captcha_component_failed_to_load_check_your_network_and_refresh_to_retry')
@@ -247,7 +247,7 @@ defineExpose({ reset })
     </template>
     <template v-else-if="provider === 'custom'">
       <div class="custom-hint">
-        {{ $t('本站点启用了自定义人机验证（{url}），请按部署方接入说明完成验证后提交。', { url: verifyUrl || $t('common.custom_endpoint') }) }}
+        {{ $t('auth.this_site_uses_a_custom_human_verification_url_please_complete_it_per_the_deployer_s_setup_guide_before_submitting', { url: verifyUrl || $t('common.custom_endpoint') }) }}
       </div>
     </template>
     <template v-else>

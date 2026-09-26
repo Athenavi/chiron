@@ -115,11 +115,11 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('agent', item.id)
-    message.success(t('「{name}」已安装', { name: item.name }))
+    message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadAgents()])
   } catch (e: any) {
     const raw = e?.response?.data
-    message.error(t('安装失败: {error}', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
+    message.error(t('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
     marketInstallingId.value = null
   }
@@ -274,7 +274,7 @@ async function saveEditor() {
     editorOpen.value = false
     await loadAgents()
   } catch (e: any) {
-    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
+    message.error(t('errors.save_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     editorSaving.value = false
   }
@@ -311,7 +311,7 @@ async function toggleVisibility(a: AgentRow) {
 function requestDelete(a: Agent) {
   Modal.confirm({
     title: t('agent.delete_agent'),
-    content: t('确定删除「{name}」？其运行记录也会一并删除。', { name: a.name }),
+    content: t('common.delete_name_its_run_history_will_also_be_removed', { name: a.name }),
     okText: t('common.delete'),
     okButtonProps: { danger: true },
     cancelText: t('common.cancel'),
@@ -382,7 +382,7 @@ async function submitRun() {
     message.success(t('workflow.task_dispatched_executing'))
     startPolling(s.id)
   } catch (e: any) {
-    message.error(t('派发失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
+    message.error(t('errors.dispatch_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     runSubmitting.value = false
   }
@@ -424,7 +424,7 @@ function continueInChat() {
     return
   }
   setChatPrefill({
-    title: t('运行结果 · {name}', { name: session.agent_name || 'Agent' }),
+    title: t('common.run_result_name', { name: session.agent_name || 'Agent' }),
     text: String(text),
     source: 'agent',
   })
@@ -446,7 +446,7 @@ function openSaveToKb(session: AgentSession | null) {
     return
   }
   saveToKbContent.value = markdown
-  saveToKbTitle.value = t('运行结果 · {name}', { name: session.agent_name || 'Agent' })
+  saveToKbTitle.value = t('common.run_result_name', { name: session.agent_name || 'Agent' })
   saveToKbOpen.value = true
 }
 
@@ -619,8 +619,8 @@ function toolCount(a: Agent): number {
               <Tag :color="a.enabled ? 'green' : 'default'">
                 {{ a.enabled ? $t('common.enable') : $t('common.disabled') }}
               </Tag>
-              <Tag>{{ $t('{n} 工具', { n: toolCount(a) }) }}</Tag>
-              <Tag>{{ $t('最多 {n} 轮', { n: a.max_turns }) }}</Tag>
+              <Tag>{{ $t('agent.n_tools', { n: toolCount(a) }) }}</Tag>
+              <Tag>{{ $t('common.up_to_n_rounds', { n: a.max_turns }) }}</Tag>
             </div>
             <div class="card-actions">
               <Button
@@ -853,7 +853,7 @@ function toolCount(a: Agent): number {
           <Input.TextArea
             v-model:value="form.tools_text"
             :rows="4"
-            :placeholder="$t('{jsonExample}', { jsonExample: '[{&quot;name&quot;:&quot;shell_exec&quot;,&quot;description&quot;:&quot;执行命令&quot;,&quot;parameters&quot;:{&quot;type&quot;:&quot;object&quot;,&quot;properties&quot;:{}}}]' })"
+            :placeholder="$t('common.jsonexample', { jsonExample: '[{&quot;name&quot;:&quot;shell_exec&quot;,&quot;description&quot;:&quot;执行命令&quot;,&quot;parameters&quot;:{&quot;type&quot;:&quot;object&quot;,&quot;properties&quot;:{}}}]' })"
             class="tools-input"
           />
           <ToolPicker v-model="form.tools_text" />
@@ -920,7 +920,7 @@ function toolCount(a: Agent): number {
     <!-- ── 运行 Modal ── -->
     <Modal
       :open="runOpen"
-      :title="$t('运行「{name}」', { name: runTarget?.name || '' })"
+      :title="$t('common.run_name', { name: runTarget?.name || '' })"
       :footer="null"
       :closable="true"
       width="600px"
@@ -983,10 +983,10 @@ function toolCount(a: Agent): number {
               tokens: {{ JSON.stringify(parseResult(runSession).token_usage) }}
             </Tag>
             <Tag v-if="parseResult(runSession).duration">
-              {{ $t('耗时 {n}s', { n: parseResult(runSession).duration.toFixed(1) }) }}
+              {{ $t('common.elapsed_n_s', { n: parseResult(runSession).duration.toFixed(1) }) }}
             </Tag>
             <Tag v-if="parseResult(runSession).tool_calls?.length">
-              {{ $t('工具调用 {n} 次', { n: parseResult(runSession).tool_calls.length }) }}
+              {{ $t('agent.tool_calls_n', { n: parseResult(runSession).tool_calls.length }) }}
             </Tag>
           </div>
           <div class="result-actions">
@@ -1004,7 +1004,7 @@ function toolCount(a: Agent): number {
     <!-- ── 历史结果详情 Modal ── -->
     <Modal
       :open="detailOpen"
-      :title="$t('运行结果 · {name}', { name: detailSession?.agent_name || '' })"
+      :title="$t('common.run_result_name', { name: detailSession?.agent_name || '' })"
       :footer="null"
       width="640px"
       @cancel="detailOpen = false"
@@ -1049,10 +1049,10 @@ function toolCount(a: Agent): number {
             tokens: {{ JSON.stringify(parseResult(detailSession).token_usage) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).duration">
-            {{ $t('耗时 {n}s', { n: parseResult(detailSession).duration.toFixed(1) }) }}
+            {{ $t('common.elapsed_n_s', { n: parseResult(detailSession).duration.toFixed(1) }) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).tool_calls?.length">
-            {{ $t('工具调用 {n} 次', { n: parseResult(detailSession).tool_calls.length }) }}
+            {{ $t('agent.tool_calls_n', { n: parseResult(detailSession).tool_calls.length }) }}
           </Tag>
         </div>
         <div class="result-actions">

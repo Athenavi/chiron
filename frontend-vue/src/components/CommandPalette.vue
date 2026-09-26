@@ -86,12 +86,12 @@ interface SearchMediaRow {
 // 文案与路由都取自唯一源（src/types/workstation.ts）：此前这里把 /workflow 写成
 // 「工作台」，与 AppLayout 的「工作流」同名不同写 —— 同一个入口两个名字。
 const workstationActions: PaletteEntry[] = [
-  { id: 'ws_chat', group: tr('工作台'), label: WORKSTATION_LABELS.dialogue, desc: WORKSTATION_DESCRIPTIONS.dialogue, keywords: tr('chat 对话 消息 聊天'), icon: markRaw(MessageOutlined), run: () => void router.push(WORKSTATION_ROUTES.dialogue) },
-  { id: 'ws_agents', group: tr('工作台'), label: WORKSTATION_LABELS.agent, desc: WORKSTATION_DESCRIPTIONS.agent, keywords: tr('agent 智能体 协同 任务'), icon: markRaw(RobotOutlined), run: () => void router.push(WORKSTATION_ROUTES.agent) },
-  { id: 'ws_workflow', group: tr('工作台'), label: WORKSTATION_LABELS.workflow, desc: WORKSTATION_DESCRIPTIONS.workflow, keywords: tr('workflow 工作流 dag 流程 编排'), icon: markRaw(ApartmentOutlined), run: () => void router.push(WORKSTATION_ROUTES.workflow) },
-  { id: 'ws_skills', group: tr('工作台'), label: WORKSTATION_LABELS.skill, desc: WORKSTATION_DESCRIPTIONS.skill, keywords: tr('skill 技能 mcp 工具'), icon: markRaw(ThunderboltOutlined), run: () => void router.push(WORKSTATION_ROUTES.skill) },
-  { id: 'ws_knowledge', group: tr('工作台'), label: WORKSTATION_LABELS.knowledge, desc: WORKSTATION_DESCRIPTIONS.knowledge, keywords: tr('knowledge 知识 rag 检索 文档'), icon: markRaw(BookOutlined), run: () => void router.push(WORKSTATION_ROUTES.knowledge) },
-  { id: 'ws_plugins', group: tr('工作台'), label: WORKSTATION_LABELS.plugin, desc: WORKSTATION_DESCRIPTIONS.plugin, keywords: tr('plugin 插件 扩展'), icon: markRaw(AppstoreOutlined), run: () => void router.push(WORKSTATION_ROUTES.plugin) },
+  { id: 'ws_chat', group: tr('common.workstation'), label: WORKSTATION_LABELS.dialogue, desc: WORKSTATION_DESCRIPTIONS.dialogue, keywords: tr('chat.chat_conversation_message_chat'), icon: markRaw(MessageOutlined), run: () => void router.push(WORKSTATION_ROUTES.dialogue) },
+  { id: 'ws_agents', group: tr('common.workstation'), label: WORKSTATION_LABELS.agent, desc: WORKSTATION_DESCRIPTIONS.agent, keywords: tr('workflow.agent_agentic_collaboration_task'), icon: markRaw(RobotOutlined), run: () => void router.push(WORKSTATION_ROUTES.agent) },
+  { id: 'ws_workflow', group: tr('common.workstation'), label: WORKSTATION_LABELS.workflow, desc: WORKSTATION_DESCRIPTIONS.workflow, keywords: tr('workflow.workflow_dag_orchestration'), icon: markRaw(ApartmentOutlined), run: () => void router.push(WORKSTATION_ROUTES.workflow) },
+  { id: 'ws_skills', group: tr('common.workstation'), label: WORKSTATION_LABELS.skill, desc: WORKSTATION_DESCRIPTIONS.skill, keywords: tr('agent.skill_mcp_tool'), icon: markRaw(ThunderboltOutlined), run: () => void router.push(WORKSTATION_ROUTES.skill) },
+  { id: 'ws_knowledge', group: tr('common.workstation'), label: WORKSTATION_LABELS.knowledge, desc: WORKSTATION_DESCRIPTIONS.knowledge, keywords: tr('knowledge.knowledge_rag_retrieval_document'), icon: markRaw(BookOutlined), run: () => void router.push(WORKSTATION_ROUTES.knowledge) },
+  { id: 'ws_plugins', group: tr('common.workstation'), label: WORKSTATION_LABELS.plugin, desc: WORKSTATION_DESCRIPTIONS.plugin, keywords: tr('common.plugin_extension'), icon: markRaw(AppstoreOutlined), run: () => void router.push(WORKSTATION_ROUTES.plugin) },
 ]
 
 // ── 静态动作：通用操作 ──
@@ -106,37 +106,37 @@ function openQuickCommand() {
 const utilityActions = computed<PaletteEntry[]>(() => [
   {
     id: 'act_theme',
-    group: tr('操作'),
-    label: tr('切换主题'),
-    desc: tr('深色 / 浅色模式'),
-    keywords: tr('theme 主题 深色 浅色 暗色 明亮 外观 dark light'),
+    group: tr('common.action'),
+    label: tr('settings.switch_theme'),
+    desc: tr('common.dark_light_mode'),
+    keywords: tr('settings.theme_dark_light_appearance'),
     icon: markRaw(BulbOutlined),
     run: () => themeStore.toggleTheme(),
   },
   {
     id: 'act_quick',
-    group: tr('操作'),
-    label: tr('打开快速命令'),
-    desc: tr('自然语言任务 · 自动编排六大工作台'),
-    keywords: tr('quick command 快速命令 统一任务 自然语言 执行'),
+    group: tr('common.action'),
+    label: tr('common.open_quick_command'),
+    desc: tr('workflow.natural_language_tasks_auto_orchestrate_six_workstations'),
+    keywords: tr('workflow.quick_command_unified_task_natural_language_execute'),
     icon: markRaw(ConsoleSqlOutlined),
     run: openQuickCommand,
   },
   {
     id: 'act_market',
-    group: tr('操作'),
-    label: tr('查看市场'),
-    desc: tr('技能 / Agent / MCP 市场'),
-    keywords: tr('market 市场 技能市场 安装 浏览'),
+    group: tr('common.action'),
+    label: tr('common.view_market'),
+    desc: tr('agent.skill_agent_mcp_market'),
+    keywords: tr('agent.market_marketplace_skill_market_install_browse'),
     icon: markRaw(AppstoreOutlined),
     run: () => void router.push('/skills?tab=market'),
   },
   {
     id: 'act_newchat',
-    group: tr('操作'),
-    label: tr('新建会话'),
-    desc: tr('开始一段新的对话'),
-    keywords: tr('new chat 新会话 新对话 新建 开始'),
+    group: tr('common.action'),
+    label: tr('chat.new_session'),
+    desc: tr('chat.start_a_new_conversation'),
+    keywords: tr('chat.new_chat_session_conversation_new_start'),
     icon: markRaw(PlusOutlined),
     run: () => void router.push('/chat'),
   },
@@ -186,13 +186,13 @@ async function runSearch(q: string) {
 }
 
 function toMessageEntry(m: SearchMessageRow, i: number): PaletteEntry {
-  const title = m.title || m.content || tr('消息')
+  const title = m.title || m.content || tr('chat.message')
   const summary = m.summary || m.snippet || m.abstract || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
   const session = m.session_id || m.conversation_id || m.id || i
   return {
     id: `msg_${session}`,
-    group: tr('消息'),
+    group: tr('chat.message'),
     label: truncate(title, 48),
     desc: truncate(summary, 80),
     keywords: '',
@@ -206,13 +206,13 @@ function toMessageEntry(m: SearchMessageRow, i: number): PaletteEntry {
 }
 
 function toMediaEntry(m: SearchMediaRow, i: number): PaletteEntry {
-  const title = m.title || m.name || tr('媒体')
+  const title = m.title || m.name || tr('common.media')
   const summary = m.summary || m.description || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
   const kind = String(m.type || m.kind || '').toLowerCase()
   return {
     id: `med_${m.id || i}`,
-    group: tr('媒体'),
+    group: tr('common.media'),
     label: truncate(title, 48),
     desc: truncate(summary, 80),
     keywords: '',
@@ -249,8 +249,8 @@ async function loadRecent() {
     const list: ActivityRow[] = res.data?.activities || []
     recentEntries.value = list.map(a => ({
       id: `act_${a.id || a.workstation || ''}_${a.timestamp || 0}`,
-      group: tr('最近活动'),
-      label: a.title || tr('暂无标题'),
+      group: tr('common.recent_activity'),
+      label: a.title || tr('common.no_title_yet'),
       desc: a.status_text || '',
       keywords: '',
       icon: markRaw(HistoryOutlined),

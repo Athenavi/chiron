@@ -416,7 +416,7 @@ function amountText(amount: number): string {
 
         <Card class="usage-card">
           <template #title>
-            <BarChartOutlined />{{ $t('近 {n} 天使用', { n: usage?.period_days ?? 30 }) }}
+            <BarChartOutlined />{{ $t('common.used_in_the_last_n_days', { n: usage?.period_days ?? 30 }) }}
           </template>
           <div class="usage-stats">
             <div class="stat-item">
@@ -525,7 +525,7 @@ function amountText(amount: number): string {
             </div>
 
             <div class="price-hint">
-              {{ effectiveCredits ? $t('本次充值 {n} credits {hint}', { n: effectiveCredits, hint: priceHint }) : $t('common.please_choose_or_enter_a_top_up_amount') }}
+              {{ effectiveCredits ? $t('billing.this_top_up_n_credits_hint', { n: effectiveCredits, hint: priceHint }) : $t('common.please_choose_or_enter_a_top_up_amount') }}
             </div>
 
             <Button
@@ -567,7 +567,7 @@ function amountText(amount: number): string {
               :data-source="history"
               row-key="id"
               :scroll="{ x: 640 }"
-              :pagination="{ pageSize: 10, showSizeChanger: false, showTotal: (n: number) => $t('共 {n} 条', { n }) }"
+              :pagination="{ pageSize: 10, showSizeChanger: false, showTotal: (n: number) => $t('common.total_n', { n }) }"
             >
               <template #bodyCell="{ column, record }">
                 <template v-if="column.key === 'created_at'">
@@ -630,7 +630,7 @@ function amountText(amount: number): string {
           v-if="payStatus === 'pending'"
           class="qr-tip"
         >
-          <QrcodeOutlined />{{ $t('请使用{channel}扫码完成支付', { channel: qrChannel === 'alipay' ? $t('billing.alipay') : $t('chat.wechat') }) }}
+          <QrcodeOutlined />{{ $t('billing.please_scan_with_channel_to_complete_payment', { channel: qrChannel === 'alipay' ? $t('billing.alipay') : $t('chat.wechat') }) }}
           <br>
           <span class="qr-sub">{{ $t('billing.the_page_will_auto_detect_the_payment_result_no_manual_refresh_needed') }}</span>
         </div>
@@ -646,7 +646,7 @@ function amountText(amount: number): string {
         >
           <Alert
             type="warning"
-            :message="$t('订单已{status}', { status: payStatus === 'expired' ? $t('errors.timeout_2') : $t('errors.failed') })"
+            :message="$t('billing.order_status', { status: payStatus === 'expired' ? $t('errors.timeout_2') : $t('errors.failed') })"
             :description="$t('common.please_close_and_re_initiate_the_recharge')"
           />
         </div>

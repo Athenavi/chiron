@@ -102,7 +102,7 @@ async function renewSSL(record: any) {
   try {
     const resp = await api.post(`/v1/admin/domains/${record.id}/renew-ssl`)
     const d = resp.data?.data || {}
-    message.success(d.note ? t('SSL 续期完成（{status}）：{note}', { status: d.ssl_status || 'ok', note: d.note }) : t('SSL 续期完成（{status}）', { status: d.ssl_status || 'ok' }))
+    message.success(d.note ? t('memory.ssl_renewal_complete_status_note', { status: d.ssl_status || 'ok', note: d.note }) : t('common.ssl_renewal_complete_status', { status: d.ssl_status || 'ok' }))
     await loadDomains()
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('errors.ssl_renewal_failed')))

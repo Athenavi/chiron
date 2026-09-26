@@ -3,6 +3,14 @@ import errors from './errors'
 import legacy from './legacy'
 import auth from './auth'
 import admin from './admin'
+import workflow from './workflow'
+import agent from './agent'
+import knowledge from './knowledge'
+import mail from './mail'
+import memory from './memory'
+import media from './media'
+import billing from './billing'
+import settings from './settings'
 
 /**
  * ar（RTL）。键与 zh-CN 一一对应（zh-CN 为源语言）；缺失的键会自动回退到 zh-CN。
@@ -87,7 +95,7 @@ export default {
     e_g_project_a: "مثال: [Project A]_",
     e_g_v2: "مثال: _v2",
     e_g_0_9_every_day_at_09_00: "مثال: 0 9 * * * (كل يوم الساعة 09:00)",
-    edit: "تعديل",
+    editModify: "تعديل",
     value: "قيمة",
     stop_generating: "إيقاف التوليد",
     top_up: "شحن",
@@ -142,7 +150,7 @@ export default {
     loaded_template_name_edit_and_save: "تم تحميل القالب «{name}»؛ عدّله ثم احفظه",
     compressed_before_after: "تم الضغط {before} → {after}",
     enabled_name: "{name} مُفعّل",
-    copied: "تم النسخ!",
+    copiedExcl: "تم النسخ!",
     generated_name: "تم التوليد: {name}",
     pasted_n_characters: "تم اللصق {n} حرفًا",
     assembled_into_name: "تم تجميعه في «{name}»",
@@ -154,6 +162,7 @@ export default {
     verified: "تم التحقق",
     market: "السوق",
     market_is_empty: "السوق فارغ",
+    market_empty_hint: "ستظهر عناصر السوق هنا بعد نشرها",
     no_2: "رقم",
     on: "تشغيل",
     archived_n: "أُرشف {n}",
@@ -307,7 +316,6 @@ export default {
     translucent_panel_soft_glow_light_and_airy: "لوحة شبه شفافة + توهج خفيف، خفيفة ومنفذة",
     write_me_a_short_essay_about_ai: "اكتب لي مقالًا قصيرًا عن الذكاء الاصطناعي",
     bind_phone_number: "ربط رقم الهاتف",
-    save: "حفظ",
     save_and_send: "حفظ وإرسال",
     saved_to_db_runtime_consumer_items_take_effect_after_restart: "محفوظ في DB؛ تصبح عناصر المستهلك عند التشغيل سارية بعد إعادة التشغيل.",
     takes_effect_immediately_after_saving_hot_reload: "يصبح ساريًا فور الحفظ (تحديث ساخن).",
@@ -426,7 +434,6 @@ export default {
     service_address_base_url: "عنوان الخدمة (Base URL)",
     provider_catalog: "كتالوج المزوّدين",
     service_provider: "مزوّد الخدمة",
-    copy: "نسخ",
     copy_url: "نسخ URL",
     copy_webhook: "نسخ Webhook",
     copy_link: "نسخ الرابط",
@@ -450,7 +457,6 @@ export default {
     build_index: "بناء الفهرس",
     build_complete: "اكتمل البناء!",
     building: "جارٍ البناء...",
-    close: "إغلاق",
     close_esc: "إغلاق (Esc)",
     close_tab: "إغلاق علامة التبويب",
     key_decisions: "قرارات رئيسية",
@@ -485,7 +491,6 @@ export default {
     continue: "متابعة",
     continue_generating: "متابعة التوليد",
     encryption_method: "طريقة التشفير",
-    loading: "جارٍ التحميل…",
     key_2: "مفتاح (key)",
     key_and_content_cannot_be_empty: "لا يمكن أن يكون المفتاح أو المحتوى فارغًا",
     will_be: "سيكون",
@@ -594,7 +599,7 @@ export default {
     clear: "مسح",
     clear_tags: "مسح الوسوم",
     clear_completed: "مسح المكتمل",
-    empty: "إفراغ",
+    clear_2: "إفراغ",
     please_close_and_re_initiate_the_recharge: "يرجى الإغلاق ثم إعادة بدء الشحن",
     please_check_if_the_backend_service_is_normal_or_retry_later: "يرجى التحقق من سلامة خدمة الواجهة الخلفية، أو المحاولة لاحقًا",
     please_enter_api_key: "يرجى إدخال مفتاح API",
@@ -614,7 +619,6 @@ export default {
     please_select_a_voice_first_or_the_current_browser_does_not_support_read_aloud: "يرجى تحديد نبرة صوت أولًا، أو أن المتصفح الحالي لا يدعم القراءة الصوتية",
     please_use_python_to_generate_a_quarterly_trend_chart: "يرجى استخدام Python لتوليد مخطط اتجاه ربع سنوي",
     please_enter_below: "يرجى الإدخال أدناه",
-    cancel: "إلغاء",
     cancel_sharing: "إلغاء المشاركة",
     clear_selection: "إلغاء التحديد الكل",
     deselect: "إلغاء التحديد",
@@ -627,7 +631,6 @@ export default {
     weight: "الوزن",
     weight_decay: "اضمحلال الوزن",
     missing: "مفقود: ",
-    confirm: "تأكيد",
     confirm_restore: "تأكيد الاستعادة",
     confirm_unbinding_this_phone_number: "تأكيد فك ربط رقم الهاتف هذا؟",
     confirm_deleting_this_provider: "تأكيد حذف هذا المزوّد؟",
@@ -647,7 +650,6 @@ export default {
     sensitive_snippets_desensitized_before_storage: "مقاطع حساسة تم إخفاء هويتها قبل التخزين",
     sandbox_mode: "وضع الصندوق الرملية",
     sandbox_mode_uses_sandbox_paypal_com_and_is_for_integration_testing_only_blank_falls_back_to_the_paypal_environment_variables: "يستخدم وضع الصندوق الرملية sandbox.paypal.com ويُستخدم لاختبار التكامل فقط؛ والفارغ يرجع إلى متغيرات البيئة PAYPAL_*.",
-    delete: "حذف",
     delete_and_continue: "حذف والمتابعة",
     delete_selected: "حذف المحدد",
     delete_item: "حذف العنصر",
@@ -707,14 +709,12 @@ export default {
     data_analysis: "تحليل البيانات",
     data_source: "مصدر البيانات",
     data_retention_days_0_permanent: "أيام الاحتفاظ بالبيانات (0 = دائم)",
-    refresh: "تحديث",
     refresh_backup: "تحديث النسخة الاحتياطية",
     refresh_slow_log: "تحديث السجل البطيء",
     refresh_page: "تحديث الصفحة",
     refresh_usage: "تحديث الاستخدام",
     refresh_status: "تحديث الحالة",
     private_2: "خاص",
-    search: "بحث",
     search_plugins_name_description: "بحث الإضافات (الاسم / الوصف)",
     search_name_description_tags: "بحث الاسم / الوصف / الوسوم",
     search_question: "بحث عن سؤال",
@@ -856,7 +856,6 @@ export default {
     used_to_provide_the_service_ensure_security_and_improve_the_product_not_used_for_unrelated_purposes: "تُستخدم لتقديم الخدمة وضمان الأمان وتحسين المنتج؛ لا تُستخدم لأغراض غير ذات صلة.",
     priority: "الأولوية",
     speed: "سرعة الكلام",
-    language: "اللغة",
     preview: "معاينة",
     preview_truncated: "تم اقتطاع المعاينة",
     original_size_0: "الحجم الأصلي (0)",
@@ -922,7 +921,6 @@ export default {
     terminal_output: "مخرجات الطرفية",
     severe_overload_threshold: "عتبة الحمل الزائد الشديد",
     rename: "إعادة تسمية",
-    retry: "إعادة المحاولة",
     regenerate: "إعادة التوليد",
     period: "الفترة",
     primary_provider: "المزوّد الرئيسي",
@@ -1030,6 +1028,14 @@ export default {
   errors,
   auth,
   admin,
+  workflow,
+  agent,
+  knowledge,
+  mail,
+  memory,
+  media,
+  billing,
+  settings,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

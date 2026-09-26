@@ -61,7 +61,7 @@ async function loadKbUsage() {
 /** 卡片上的用量摘要；没有被引用时返回空串（不显示空徽标） */
 function usageLabel(kbId: string): string {
   const { agents } = kbUsageOf(kbUsage.value, kbId)
-  return agents.length ? t('{n} 个 Agent', { n: agents.length }) : ''
+  return agents.length ? t('agent.n_agents', { n: agents.length }) : ''
 }
 
 /** 悬浮提示：具体是谁在用 */
@@ -292,7 +292,7 @@ function formatDate(iso: string): string {
               </Tag>
             </div>
             <div class="kb-stats">
-              <span class="stat"><FileTextOutlined /> {{ $t('{n} 文档', { n: kb.document_count }) }}</span>
+              <span class="stat"><FileTextOutlined /> {{ $t('knowledge.n_docs', { n: kb.document_count }) }}</span>
               <span class="stat"><DatabaseOutlined /> {{ formatSize(kb.total_size_bytes) }}</span>
               <Tag :color="kb.status === 'active' ? 'green' : kb.status === 'building' ? 'processing' : 'default'">
                 {{ kb.status }}
@@ -302,11 +302,11 @@ function formatDate(iso: string): string {
                 color="blue"
                 :title="usageTitle(kb.id)"
               >
-                {{ $t('被 {label} 使用', { label: usageLabel(kb.id) }) }}
+                {{ $t('common.used_by_label', { label: usageLabel(kb.id) }) }}
               </Tag>
             </div>
             <div class="kb-footer">
-              <span class="kb-time">{{ $t('更新于 {date}', { date: formatDate(kb.updated_at) }) }}</span>
+              <span class="kb-time">{{ $t('common.updated_on_date', { date: formatDate(kb.updated_at) }) }}</span>
               <div class="footer-actions">
                 <Button
                   v-if="kb.visibility !== 'public'"
@@ -382,18 +382,18 @@ function formatDate(iso: string): string {
               </Tag>
             </div>
             <div class="kb-stats">
-              <span class="stat"><FileTextOutlined /> {{ $t('{n} 文档', { n: kb.document_count }) }}</span>
+              <span class="stat"><FileTextOutlined /> {{ $t('knowledge.n_docs', { n: kb.document_count }) }}</span>
               <span class="stat"><DatabaseOutlined /> {{ formatSize(kb.total_size_bytes) }}</span>
               <Tag
                 v-if="usageLabel(kb.id)"
                 color="blue"
                 :title="usageTitle(kb.id)"
               >
-                {{ $t('被 {label} 使用', { label: usageLabel(kb.id) }) }}
+                {{ $t('common.used_by_label', { label: usageLabel(kb.id) }) }}
               </Tag>
             </div>
             <div class="kb-footer">
-              <span class="kb-time">{{ $t('更新于 {date}', { date: formatDate(kb.updated_at) }) }}</span>
+              <span class="kb-time">{{ $t('common.updated_on_date', { date: formatDate(kb.updated_at) }) }}</span>
               <div class="footer-actions">
                 <Button
                   type="text"
@@ -483,7 +483,7 @@ function formatDate(iso: string): string {
     <!-- 编辑 Modal -->
     <Modal
       :open="showEditModal"
-      :title="$t('编辑「{name}」', { name: editingKb?.name || '' })"
+      :title="$t('common.edit_name', { name: editingKb?.name || '' })"
       :confirm-loading="saving"
       :ok-text="$t('common.save')"
       :cancel-text="$t('common.cancel')"

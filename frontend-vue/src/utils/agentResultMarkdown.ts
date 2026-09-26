@@ -54,10 +54,10 @@ export function resultText(parsed: ParsedAgentResult): string {
 function metaLine(parsed: ParsedAgentResult): string {
   const parts: string[] = []
   if (typeof parsed.duration === 'number' && Number.isFinite(parsed.duration)) {
-    parts.push(t('耗时 {n}s', { n: parsed.duration.toFixed(1) }))
+    parts.push(t('common.elapsed_n_s', { n: parsed.duration.toFixed(1) }))
   }
   if (Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0) {
-    parts.push(t('工具调用 {n} 次', { n: parsed.tool_calls.length }))
+    parts.push(t('agent.tool_calls_n', { n: parsed.tool_calls.length }))
   }
   return parts.join(' · ')
 }
@@ -73,7 +73,7 @@ export function agentResultToMarkdown(session: AgentResultSource, title?: string
   const output = resultText(parsed)
   if (!task && !output) return ''
 
-  const heading = asText(title) || t('运行结果 · {name}', { name: asText(session.agent_name) || 'Agent' })
+  const heading = asText(title) || t('common.run_result_name', { name: asText(session.agent_name) || 'Agent' })
   const blocks: string[] = [`# ${heading}`]
   if (task) blocks.push(t('workflow.task'), task)
   if (output) {

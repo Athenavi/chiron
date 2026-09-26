@@ -110,7 +110,7 @@ async function save() {
 function confirmDelete(r: ModelRoute) {
   Modal.confirm({
     title: t('admin.delete_routing_rule'),
-    content: t('确认删除模型「{id}」的路由规则？', { id: r.model_id }),
+    content: t('agent.confirm_delete_routing_rule_for_model_id', { id: r.model_id }),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),

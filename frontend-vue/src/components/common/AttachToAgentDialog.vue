@@ -105,7 +105,7 @@ async function attach() {
           : 'plugins'
       await updateAgent(target.id, { [field]: next })
     }
-    message.success(t('已装配到「{name}」', { name: target.name }))
+    message.success(t('common.assembled_into_name', { name: target.name }))
     emit('attached', target.id)
     emit('update:open', false)
   } catch (e) {
@@ -161,7 +161,7 @@ async function attach() {
       >
         {{ kind === 'kb'
           ? $t('agent.the_knowledge_base_is_single_valued_it_overwrites_the_agent_s_original_default_knowledge_base')
-          : $t('{subject}会追加到该 Agent 的已有绑定，不覆盖其它项。', { subject: SUBJECT_LABEL[kind] }) }}
+          : $t('agent.subject_will_be_appended_to_the_agent_s_existing_bindings_without_overwriting_others', { subject: SUBJECT_LABEL[kind] }) }}
       </p>
     </div>
   </Modal>

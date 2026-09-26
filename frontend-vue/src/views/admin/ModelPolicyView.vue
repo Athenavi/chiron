@@ -86,7 +86,7 @@ async function save() {
 function confirmDelete(p: ModelPolicy) {
   Modal.confirm({
     title: t('agent.delete_model_policy'),
-    content: p.role_id ? t('确认删除角色 {id} 策略？', { id: p.role_id }) : t('admin.confirm_delete_tenant_fallback_policy'),
+    content: p.role_id ? t('admin.confirm_delete_role_id_policy', { id: p.role_id }) : t('admin.confirm_delete_tenant_fallback_policy'),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -103,13 +103,13 @@ function confirmDelete(p: ModelPolicy) {
 }
 
 function scopeLabel(p: ModelPolicy): string {
-  return p.role_id ? t('角色 {id}…', { id: p.role_id.slice(0, 8) }) : t('admin.tenant_level_fallback')
+  return p.role_id ? t('admin.role_id', { id: p.role_id.slice(0, 8) }) : t('admin.tenant_level_fallback')
 }
 
 const columns: TableColumnsType = [
   { title: t('common.scope'), key: 'scope', width: 160, customRender: ({ record }) => scopeLabel(record) },
   { title: t('agent.allowed_models'), key: 'models', customRender: ({ record }) => (record.allowed_models ?? []).join(', ') || '-' },
-  { title: t('agent.model_rate_limit'), key: 'limits', width: 120, customRender: ({ record }) => t('{n} 项', { n: Object.keys(record.per_model_limits ?? {}).length }) },
+  { title: t('agent.model_rate_limit'), key: 'limits', width: 120, customRender: ({ record }) => t('common.n_items', { n: Object.keys(record.per_model_limits ?? {}).length }) },
   { title: t('common.updated_at'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => new Date(text).toLocaleString('zh-CN', { hour12: false }) },
   { title: t('common.action'), key: 'action', width: 140, fixed: 'right' },
 ]

@@ -48,9 +48,9 @@ interface UserMenuItem {
 }
 
 const userMenuItems = computed<UserMenuItem[]>(() => [
-  { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
-  { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
-  { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
+  { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
+  { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
+  { key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
 
 async function handleUserMenuClick(info: { key: string | number }) {
@@ -176,16 +176,16 @@ const mcpToolCount = computed(() => availableTools.value.filter(t => t.source ==
 
 /** 标题右侧摘要：直接列出 MCP 工具名 —— 只报数字等于没说清"到底激活了哪些能力" */
 const toolsSummary = computed(() => {
-  if (toolsError.value) return tr('加载失败')
+  if (toolsError.value) return tr('errors.failed_to_load')
   if (toolsLoading.value) return '…'
   const total = availableTools.value.length
-  if (!total) return tr('无')
+  if (!total) return tr('common.none')
   const mcpNames = availableTools.value.filter(isMcpTool).map(t => t.name).slice(0, 3)
   if (mcpNames.length) {
     const more = mcpToolCount.value > mcpNames.length ? ` +${mcpToolCount.value - mcpNames.length}` : ''
-    return tr('{n} 个 · MCP {mcp}{more}', { n: total, mcp: mcpNames.join(', '), more })
+    return tr('agent.n_mcp_mcp_more', { n: total, mcp: mcpNames.join(', '), more })
   }
-  return tr('{n} 个', { n: total })
+  return tr('common.n', { n: total })
 })
 
 function isMcpTool(t: ToolInfo): boolean {
@@ -241,7 +241,7 @@ async function loadActivities() {
     const list: ActivityRow[] = res.data?.activities || []
     recentActivities.value = list.map((a, i) => ({
       id: a.id || `${a.workstation || 'act'}_${a.timestamp || i}`,
-      title: a.title || tr('暂无标题'),
+      title: a.title || tr('common.no_title_yet'),
       route: a.route || '/chat',
       status: a.status || '',
       timestamp: a.timestamp || 0,
@@ -338,8 +338,8 @@ const tagOptions = computed(() => mergeTagOptions(usedTags.value))
  * 两种情况都只显示分叉点，不编造来源名字。
  */
 function branchTip(s: ChatSession): string {
-  const from = s.parent_title ? tr('分支自《{title}》', { title: s.parent_title }) : tr('分支自已删除的会话')
-  const seq = s.branch_from_seq ? tr('，第 {n} 条起', { n: s.branch_from_seq }) : ''
+  const from = s.parent_title ? tr('common.branched_from_title', { title: s.parent_title }) : tr('chat.branched_from_a_deleted_session')
+  const seq = s.branch_from_seq ? tr('common.starting_from_item_n', { n: s.branch_from_seq }) : ''
   return from + seq
 }
 
@@ -365,7 +365,7 @@ function toggleTag(tag: string) {
 // 时间分桶的**键是稳定标识**（today/…，跨语言一致，分组不会因切换语言而错乱），
 // 显示用的标签才走 i18n —— 收进 computed 才能在语言切换后重新求值。
 const BUCKET_LABELS = computed<Record<string, string>>(() => ({
-  today: tr('今天'), yesterday: tr('昨天'), within7Days: tr('7 天内'), earlier: tr('更早'),
+  today: tr('common.today'), yesterday: tr('common.yesterday'), within7Days: tr('common.within_7_days'), earlier: tr('common.earlier'),
 }))
 
 // P2-B: 会话按时间分组（置顶单独一组，其余按 今日/昨天/7天/更早）
@@ -380,7 +380,7 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   const startOfYesterday = startOfToday - 86400000
   const startOf7Days = startOfToday - 7 * 86400000
   const groups: SessionGroup[] = []
-  if (pinned.length) groups.push({ label: tr('置顶'), sessions: pinned })
+  if (pinned.length) groups.push({ label: tr('common.pin_to_top'), sessions: pinned })
   const buckets: Record<string, ChatSession[]> = { today: [], yesterday: [], within7Days: [], earlier: [] }
   for (const s of rest) {
     const ts = new Date(s.updated_at || s.created_at || 0).getTime()
@@ -434,7 +434,7 @@ function pickSession(id: string) {
         v-if="view === 'trajectory'"
         type="button"
         class="session-picker"
-        :title="$t('切换会话：{name}', { name: activeSession?.title || $t('chat.new_conversation') })"
+        :title="$t('chat.switch_session_name', { name: activeSession?.title || $t('chat.new_conversation') })"
         @click="emit('update:view', 'sessions')"
       >
         <span class="session-picker-name">{{ activeSession?.title || $t('chat.new_conversation') }}</span>
@@ -467,14 +467,14 @@ function pickSession(id: string) {
           v-for="c in contextChips"
           :key="c.type"
           class="ctx-chip"
-          :title="$t('{label}（点击移除）', { label: c.label })"
+          :title="$t('common.label_click_to_remove', { label: c.label })"
         >
           <span class="ctx-chip-label">
             <template v-if="chipOrder(c)">{{ chipOrder(c) }}. </template>{{ c.label }}
           </span>
           <CloseOutlined
             class="ctx-chip-remove"
-            :title="$t('移除{label}', { label: c.label })"
+            :title="$t('common.remove_label', { label: c.label })"
             @click="emit('remove-context', c.type, c.value)"
           />
         </span>
@@ -765,7 +765,7 @@ function pickSession(id: string) {
                 type="text"
                 size="small"
                 class="session-more-btn"
-                :aria-label="$t('会话操作：{name}', { name: s.title || $t('chat.new_conversation') })"
+                :aria-label="$t('chat.session_action_name', { name: s.title || $t('chat.new_conversation') })"
                 @click.stop
               >
                 <template #icon>
@@ -793,7 +793,7 @@ function pickSession(id: string) {
                     :key="'tag-'+t"
                     @click="emit('tag', s.id, t)"
                   >
-                    <TagOutlined class="menu-icon" />{{ $t('标签：{label}', { label: t }) }}
+                    <TagOutlined class="menu-icon" />{{ $t('common.tag_label', { label: t }) }}
                   </MenuItem>
                   <!-- 自定义标签：此前菜单只有四个写死的标签（用户报告"标签恒定"） -->
                   <MenuItem
@@ -900,7 +900,7 @@ function pickSession(id: string) {
           <button
             type="button"
             class="foot-user-btn"
-            :title="tr('用户菜单')"
+            :title="tr('admin.user_menu')"
             @click.stop
           >
             <EllipsisOutlined />
@@ -917,7 +917,7 @@ function pickSession(id: string) {
       <!-- 设置弹窗：与 AppLayout / /profile 共用同一份实现 -->
       <Modal
         v-model:open="settingsOpen"
-        :title="tr('设置')"
+        :title="tr('settings.settings')"
         :footer="null"
         :width="720"
         destroy-on-close
@@ -927,16 +927,16 @@ function pickSession(id: string) {
       <!-- 自定义标签：此前设置菜单里只有四个写死的标签（用户报告"标签恒定、无法自定义"）-->
       <Modal
         :open="!!customTagTarget"
-        :title="tr('自定义标签')"
-        :ok-text="tr('确定')"
-        :cancel-text="tr('取消')"
+        :title="tr('common.custom_tag')"
+        :ok-text="tr('common.confirm')"
+        :cancel-text="tr('common.cancel')"
         @ok="applyCustomTag"
         @cancel="customTagTarget = ''"
       >
         <Input
           v-model:value="customTagText"
           :maxlength="TAG_MAX_LEN"
-          :placeholder="tr('输入标签名（最多 64 字）')"
+          :placeholder="tr('common.enter_tag_name_max_64_chars')"
           @press-enter="applyCustomTag"
         />
       </Modal>

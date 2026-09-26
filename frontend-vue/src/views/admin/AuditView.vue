@@ -181,7 +181,7 @@ onMounted(() => {
         total,
         showSizeChanger: true,
         pageSizeOptions: ['20', '50', '100'],
-        showTotal: (n: number) => t('共 {n} 条', { n }),
+        showTotal: (n: number) => t('common.total_n', { n }),
       }"
       :scroll="{ x: 1100 }"
       size="small"

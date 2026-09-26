@@ -40,7 +40,7 @@ const searchQuery = ref('')
 const fetchSeq = ref(0)  // S 修复：列表请求序号，丢弃过期响应
 const typeFilter = ref('')
 const viewMode = ref<'grid' | 'list'>(localStorage.getItem('media-view') === 'list' ? 'list' : 'grid')
-const breadcrumbs = ref<{ id: string; name: string }[]>([{ id: '', name: tr('全部文件') }])
+const breadcrumbs = ref<{ id: string; name: string }[]>([{ id: '', name: tr('media.all_files') }])
 const selectedIds = ref<Set<string>>(new Set())
 
 // 详情侧栏 / 上传（T9/T10 填充 UI，此处声明状态）
@@ -50,21 +50,21 @@ const showUpload = ref(false)
 const currentParentId = computed(() => breadcrumbs.value[breadcrumbs.value.length - 1].id)
 
 const typeOptions = [
-  { label: tr('全部类型'), value: '' },
-  { label: tr('图片'), value: 'image' },
-  { label: tr('文档'), value: 'document' },
-  { label: tr('视频'), value: 'video' },
-  { label: tr('音频'), value: 'audio' },
-  { label: tr('文件'), value: 'file' },
-  { label: tr('文本'), value: 'text' },
-  { label: tr('代码'), value: 'code' },
+  { label: tr('common.all_types'), value: '' },
+  { label: tr('media.image'), value: 'image' },
+  { label: tr('knowledge.document'), value: 'document' },
+  { label: tr('media.video'), value: 'video' },
+  { label: tr('media.audio'), value: 'audio' },
+  { label: tr('media.file'), value: 'file' },
+  { label: tr('common.text'), value: 'text' },
+  { label: tr('common.code'), value: 'code' },
 ]
 
 const listColumns = [
-  { title: tr('名称'), dataIndex: 'name', ellipsis: true },
-  { title: tr('类型'), dataIndex: 'type', width: 100 },
-  { title: tr('大小'), dataIndex: 'size', width: 110, customRender: ({ text }: { text: number }) => formatSize(text) },
-  { title: tr('上传时间'), dataIndex: 'created_at', width: 180 },
+  { title: tr('common.name'), dataIndex: 'name', ellipsis: true },
+  { title: tr('common.type'), dataIndex: 'type', width: 100 },
+  { title: tr('common.size'), dataIndex: 'size', width: 110, customRender: ({ text }: { text: number }) => formatSize(text) },
+  { title: tr('common.upload_time'), dataIndex: 'created_at', width: 180 },
 ]
 
 function formatSize(bytes: number): string {
@@ -169,7 +169,7 @@ async function fetchItems() {
     items.value = []
     total.value = 0
     error.value = true
-    message.error(tr('加载媒体库失败'))
+    message.error(tr('errors.failed_to_load_media_library'))
   } finally {
     if (mySeq === fetchSeq.value) loading.value = false
   }
@@ -227,9 +227,9 @@ async function copyUrl(item: MediaItem) {
   const url = await resolveMediaUrl({ id: item.id, file_url: item.file_url })
   try {
     await navigator.clipboard.writeText(normalizeResolved(url, item))
-    message.success(tr('URL 已复制'))
+    message.success(tr('common.url_copied'))
   } catch {
-    message.error(tr('复制失败'))
+    message.error(tr('errors.copy_failed'))
   }
 }
 
@@ -242,9 +242,9 @@ async function shareItem() {
     shareUrl.value = data.url || ''
     shareExpires.value = data.expires_at || ''
     showShare.value = true
-    if (!shareUrl.value) message.error(tr('当前存储后端不支持分享'))
+    if (!shareUrl.value) message.error(tr('common.the_current_storage_backend_does_not_support_sharing'))
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('生成分享链接失败'))
+    message.error(e.response?.data?.error || tr('errors.failed_to_generate_share_link'))
   } finally {
     shareLoading.value = false
   }
@@ -260,12 +260,12 @@ async function submitRename() {
   if (!detailItem.value || !renameName.value.trim()) return
   try {
     await api.put(`/v1/media/${detailItem.value.id}`, { name: renameName.value.trim() })
-    message.success(tr('已重命名'))
+    message.success(tr('common.renamed'))
     showRename.value = false
     detailItem.value = null
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('重命名失败'))
+    message.error(e.response?.data?.error || tr('errors.rename_failed'))
   }
 }
 
@@ -303,16 +303,16 @@ const folderCreating = ref(false)
 
 async function createFolder() {
   const name = newFolderName.value.trim()
-  if (!name) { message.warning(tr('请输入文件夹名称')); return }
+  if (!name) { message.warning(tr('media.please_enter_a_folder_name')); return }
   folderCreating.value = true
   try {
     await api.post('/v1/media/folders', { name, parent_id: currentParentId.value })
-    message.success(tr('文件夹已创建'))
+    message.success(tr('media.folder_created'))
     newFolderOpen.value = false
     newFolderName.value = ''
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('创建失败'))
+    message.error(e.response?.data?.error || tr('errors.creation_failed'))
   } finally {
     folderCreating.value = false
   }
@@ -367,7 +367,7 @@ async function addTag() {
     tagInput.value = ''
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('添加标签失败'))
+    message.error(e.response?.data?.error || tr('errors.failed_to_add_tag'))
   }
 }
 
@@ -379,7 +379,7 @@ async function removeTag(t: string) {
     detailItem.value = { ...detailItem.value, tags: next }
     fetchItems()
   } catch {
-    message.error(tr('移除标签失败'))
+    message.error(tr('errors.failed_to_remove_tag'))
   }
 }
 
@@ -387,32 +387,32 @@ async function submitMove() {
   if (!detailItem.value) return
   try {
     await api.put(`/v1/media/${detailItem.value.id}`, { parent_id: moveParentId.value })
-    message.success(tr('已移动'))
+    message.success(tr('common.moved'))
     showMove.value = false
     detailItem.value = null
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('移动失败'))
+    message.error(e.response?.data?.error || tr('errors.move_failed'))
   }
 }
 
 async function deleteItem(id: string) {
   try {
     await api.delete(`/v1/media/${id}`)
-    message.success(tr('已删除'))
+    message.success(tr('common.deleted'))
     detailItem.value = null
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('删除失败'))
+    message.error(e.response?.data?.error || tr('errors.delete_failed'))
   }
 }
 
 async function copyShareUrl() {
   try {
     await navigator.clipboard.writeText(shareUrl.value)
-    message.success(tr('分享链接已复制'))
+    message.success(tr('common.share_link_copied'))
   } catch {
-    message.error(tr('复制失败'))
+    message.error(tr('errors.copy_failed'))
   }
 }
 
@@ -442,7 +442,7 @@ function handleUploadRequest(options: any) {
         .then(() => { 
           onSuccess?.(null)
           uploadingFiles.value.set(fileId, { progress: 100, status: 'success' })
-          message.success(tr('上传成功: {name}', { name: file.name }))
+          message.success(tr('common.uploaded_name', { name: file.name }))
           // 3秒后移除成功记录
           setTimeout(() => uploadingFiles.value.delete(fileId), 3000)
         })
@@ -451,9 +451,9 @@ function handleUploadRequest(options: any) {
           uploadingFiles.value.set(fileId, { 
             progress: 0, 
             status: 'error', 
-            error: err?.message || tr('未知错误') 
+            error: err?.message || tr('errors.unknown_error') 
           })
-          message.error(tr('上传失败: {name} — {reason}', { name: file.name, reason: err?.message || tr('未知错误') }))
+          message.error(tr('errors.upload_failed_name_reason', { name: file.name, reason: err?.message || tr('errors.unknown_error') }))
         })
         .finally(() => { fetchItems() })
     })
@@ -461,16 +461,16 @@ function handleUploadRequest(options: any) {
       uploadingFiles.value.set(fileId, { 
         progress: 0, 
         status: 'error', 
-        error: err?.message || tr('初始化失败') 
+        error: err?.message || tr('errors.initialization_failed') 
       })
-      message.error(tr('上传失败: {name} — 初始化失败', { name: file.name })) 
+      message.error(tr('errors.upload_failed_name_init_failed', { name: file.name })) 
     })
 }
 
 // 暂停所有上传
 function pauseAllUploads() {
   // 注意: 这里需要修改 uploader.ts 暴露暂停接口
-  message.info(tr('暂停功能开发中'))
+  message.info(tr('common.pause_feature_in_development'))
 }
 
 // 重试失败的上传
@@ -479,11 +479,11 @@ async function retryFailedUploads() {
     .filter(([, state]) => state.status === 'error')
   
   if (failedEntries.length === 0) {
-    message.info(tr('没有失败的上传任务'))
+    message.info(tr('errors.no_failed_upload_tasks'))
     return
   }
   
-  message.info(tr('正在重试 {n} 个失败的上传...', { n: failedEntries.length }))
+  message.info(tr('errors.retrying_n_failed_uploads', { n: failedEntries.length }))
   
   // 指数退避重试函数
   const uploadWithRetry = async (fileId: string, maxRetries: number = 3) => {
@@ -498,7 +498,7 @@ async function retryFailedUploads() {
         
         // 从 fileId 中提取文件信息（简化处理，实际应该存储文件引用）
         // 这里假设用户会重新选择文件进行重试
-        message.warning(tr('请重新选择文件进行重试: {id}', { id: fileId }))
+        message.warning(tr('media.please_re_select_the_file_to_retry_id', { id: fileId }))
         return true
       } catch {
         // 静默失败，重试逻辑由调用方处理
@@ -515,7 +515,7 @@ async function retryFailedUploads() {
     uploadingFiles.value.set(fileId, { 
       progress: 0, 
       status: 'error', 
-      error: tr('重试{n}次后仍然失败', { n: maxRetries }) 
+      error: tr('errors.still_failed_after_n_retries', { n: maxRetries }) 
     })
     return false
   }
@@ -529,10 +529,10 @@ async function retryFailedUploads() {
   const failCount = results.length - successCount
   
   if (successCount > 0) {
-    message.success(tr('成功重试 {n} 个上传', { n: successCount }))
+    message.success(tr('common.retried_n_uploads_successfully', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(tr('{n} 个上传重试失败，请手动重新上传', { n: failCount }))
+    message.error(tr('errors.n_uploads_failed_after_retry_please_re_upload_manually', { n: failCount }))
   }
 }
 
@@ -543,7 +543,7 @@ function clearCompletedUploads() {
       uploadingFiles.value.delete(key)
     }
   }
-  message.success(tr('已清除完成的上传记录'))
+  message.success(tr('common.completed_upload_records_cleared'))
 }
 
 // ── 批量选择 ──
@@ -582,10 +582,10 @@ async function batchDelete() {
   batchDeleting.value = true
   try {
     const res = await api.post('/v1/media/batch-delete', { ids })
-    message.success(tr('已删除 {n} 项', { n: res.data?.data?.deleted || ids.length }))
+    message.success(tr('common.deleted_n_items', { n: res.data?.data?.deleted || ids.length }))
     fetchItems()
   } catch (e: any) {
-    message.error(e.response?.data?.error || tr('批量删除失败'))
+    message.error(e.response?.data?.error || tr('errors.batch_delete_failed'))
   } finally {
     batchDeleting.value = false
   }
@@ -597,7 +597,7 @@ const batchMoveParentId = ref('')
 const batchMoving = ref(false)
 
 async function openBatchMove() {
-  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('media.please_select_a_file_first')); return }
   batchMoveParentId.value = currentParentId.value
   try {
     const res = await api.get('/v1/media/folders')
@@ -629,10 +629,10 @@ async function submitBatchMove() {
   showBatchMove.value = false
   
   if (successCount > 0) {
-    message.success(tr('成功移动 {n} 个文件', { n: successCount }))
+    message.success(tr('media.moved_n_files', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(tr('{n} 个文件移动失败', { n: failCount }))
+    message.error(tr('errors.n_files_failed_to_move', { n: failCount }))
   }
   fetchItems()
 }
@@ -646,7 +646,7 @@ const renameReplaceText = ref('')
 const batchRenaming = ref(false)
 
 function openBatchRename() {
-  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('media.please_select_a_file_first')); return }
   renamePrefix.value = ''
   renameSuffix.value = ''
   renameFindText.value = ''
@@ -685,10 +685,10 @@ async function submitBatchRename() {
   showBatchRename.value = false
   
   if (successCount > 0) {
-    message.success(tr('成功重命名 {n} 个文件', { n: successCount }))
+    message.success(tr('media.renamed_n_files', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(tr('{n} 个文件重命名失败', { n: failCount }))
+    message.error(tr('errors.n_files_failed_to_rename', { n: failCount }))
   }
   fetchItems()
 }
@@ -699,7 +699,7 @@ const batchTagInput = ref('')
 const batchTagging = ref(false)
 
 function openBatchTags() {
-  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('media.please_select_a_file_first')); return }
   batchTagInput.value = ''
   showBatchTags.value = true
 }
@@ -732,10 +732,10 @@ async function submitBatchTags() {
   showBatchTags.value = false
   
   if (successCount > 0) {
-    message.success(tr('成功为 {n} 个文件添加标签', { n: successCount }))
+    message.success(tr('media.tagged_n_files', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(tr('{n} 个文件添加标签失败', { n: failCount }))
+    message.error(tr('errors.n_files_failed_to_add_tags', { n: failCount }))
   }
   fetchItems()
 }
@@ -747,7 +747,7 @@ async function batchDownload() {
   
   const files = items.value.filter(i => selectedIds.value.has(i.id) && !isFolder(i))
   if (files.length === 0) {
-    message.warning(tr('选中的项目中没有可下载的文件'))
+    message.warning(tr('media.no_downloadable_files_in_the_selected_items'))
     return
   }
   
@@ -770,10 +770,10 @@ async function batchDownload() {
   }
   
   if (successCount > 0) {
-    message.success(tr('开始下载 {n} 个文件', { n: successCount }))
+    message.success(tr('media.start_downloading_n_files', { n: successCount }))
   }
   if (failCount > 0) {
-    message.error(tr('{n} 个文件下载失败', { n: failCount }))
+    message.error(tr('errors.n_files_failed_to_download', { n: failCount }))
   }
 }
 
@@ -804,7 +804,7 @@ const uploadingToKb = ref(false)
 const kbOptions = computed(() => knowledgeBases.value.map(kb => ({ label: `${kb.name} (${kb.type.toUpperCase()})`, value: kb.id })))
 
 async function openKbModal() {
-  if (selectedIds.value.size === 0) { message.warning(tr('请先选择文件')); return }
+  if (selectedIds.value.size === 0) { message.warning(tr('media.please_select_a_file_first')); return }
   try {
     const res = await api.get('/v1/kb')
     knowledgeBases.value = res.data?.data?.knowledge_bases || []
@@ -836,8 +836,8 @@ async function uploadToKnowledgeBase() {
   }
   uploadingToKb.value = false
   showKbModal.value = false
-  if (ok > 0) message.success(tr('成功上传 {n} 个文件到知识库', { n: ok }))
-  if (fail > 0) message.error(tr('{n} 个文件上传失败', { n: fail }))
+  if (ok > 0) message.success(tr('knowledge.uploaded_n_files_to_the_knowledge_base', { n: ok }))
+  if (fail > 0) message.error(tr('errors.n_files_failed_to_upload', { n: fail }))
 }
 
 // S 修复：搜索/筛选变化时重置到第 1 页并防抖(300ms)，避免逐击键请求；分页变化单独触发
@@ -935,7 +935,7 @@ onUnmounted(() => {
         v-if="total > 0"
         class="media-total"
       >
-        {{ $t('共 {n} 项', { n: total }) }}
+        {{ $t('common.n_total', { n: total }) }}
       </div>
     </div>
 
@@ -943,7 +943,7 @@ onUnmounted(() => {
       v-if="selectedIds.size > 0"
       class="batch-bar"
     >
-      <span class="batch-count">{{ $t('已选择 {sel} / {total} 项', { sel: selectedIds.size, total: items.length }) }}</span>
+      <span class="batch-count">{{ $t('common.selected_sel_total_items', { sel: selectedIds.size, total: items.length }) }}</span>
       <Button
         size="small"
         @click="selectAll"
@@ -1203,7 +1203,7 @@ onUnmounted(() => {
               v-if="shareExpires"
               class="share-expires"
             >
-              {{ $t('有效期至 {time}', { time: shareExpires }) }}
+              {{ $t('common.valid_until_time', { time: shareExpires }) }}
             </div>
           </div>
         </div>
@@ -1315,7 +1315,7 @@ onUnmounted(() => {
         @press-enter="createFolder"
       />
       <div class="folder-hint">
-        {{ $t('将创建在当前目录：{dir}', { dir: breadcrumbs[breadcrumbs.length - 1]?.name || $t('common.root_directory') }) }}
+        {{ $t('common.will_be_created_in_the_current_directory_dir', { dir: breadcrumbs[breadcrumbs.length - 1]?.name || $t('common.root_directory') }) }}
       </div>
     </Modal>
 
@@ -1389,7 +1389,7 @@ onUnmounted(() => {
         v-if="shareExpires"
         class="share-expires"
       >
-        {{ $t('有效期至 {time}', { time: shareExpires }) }}
+        {{ $t('common.valid_until_time', { time: shareExpires }) }}
       </div>
     </Modal>
 
@@ -1589,7 +1589,7 @@ onUnmounted(() => {
         </div>
       </div>
       <div style="margin-top: 12px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 12px; color: var(--text-tertiary);">
-        <strong>{{ $t('common.example') }}</strong>{{ $t('原文件名 "report.pdf" → 前缀 "[2024]_" + 后缀 "_final" = "[2024]_report_final.pdf"') }}
+        <strong>{{ $t('common.example') }}</strong>{{ $t('media.original_report_pdf_prefix_2024_suffix_final_2024_report_final_pdf') }}
       </div>
     </Modal>
 

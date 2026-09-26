@@ -69,7 +69,7 @@ function handleClick(e: MouseEvent) {
   const code = decodeURIComponent(btn.dataset.code || '')
   if (!code) return
   navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = t('common.copied')
+    btn.textContent = t('common.copiedExcl')
     setTimeout(() => { btn.textContent = t('common.copy') }, 2000)
   }).catch(() => { /* clipboard unavailable */ })
 }
@@ -91,7 +91,7 @@ onMounted(async () => {
 function formatDate(iso: string): string {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return ''
-  return t('{year}年{month}月{day}日 {hh}:{mm}', {
+  return t('common.year_month_day_hh_mm', {
     year: d.getFullYear(), month: d.getMonth() + 1, day: d.getDate(),
     hh: String(d.getHours()).padStart(2, '0'), mm: String(d.getMinutes()).padStart(2, '0'),
   })
@@ -124,7 +124,7 @@ function formatDate(iso: string): string {
             {{ share.title || $t('chat.new_conversation') }}
           </h1>
           <div class="share-meta">
-            {{ $t('{date} · {n} 条消息', { date: formatDate(share.created_at), n: share.messages.length }) }}
+            {{ $t('chat.date_n_messages', { date: formatDate(share.created_at), n: share.messages.length }) }}
           </div>
         </div>
 

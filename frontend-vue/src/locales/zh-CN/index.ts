@@ -3,6 +3,14 @@ import errors from './errors'
 import legacy from './legacy'
 import auth from './auth'
 import admin from './admin'
+import workflow from './workflow'
+import agent from './agent'
+import knowledge from './knowledge'
+import mail from './mail'
+import memory from './memory'
+import media from './media'
+import billing from './billing'
+import settings from './settings'
 
 /**
  * zh-CN —— **源语言（source of truth）**。
@@ -93,7 +101,7 @@ export default {
     e_g_project_a: "例如: [项目A]_",
     e_g_v2: "例如: _v2",
     e_g_0_9_every_day_at_09_00: "例如：0 9 * * *（每天 09:00）",
-    edit: "修改",
+    editModify: "修改",
     value: "值",
     stop_generating: "停止生成",
     top_up: "充值",
@@ -148,7 +156,7 @@ export default {
     loaded_template_name_edit_and_save: "已加载模板「{name}」，可编辑后保存",
     compressed_before_after: "已压缩 {before} → {after}",
     enabled_name: "已启用 {name}",
-    copied: "已复制！",
+    copiedExcl: "已复制！",
     generated_name: "已生成：{name}",
     pasted_n_characters: "已粘贴 {n} 字符",
     assembled_into_name: "已装配到「{name}」",
@@ -160,6 +168,7 @@ export default {
     verified: "已验证",
     market: "市场",
     market_is_empty: "市场暂无内容",
+    market_empty_hint: "管理员发布市场条目后，将展示在这里",
     no_2: "序号",
     on: "开",
     archived_n: "归档 {n} 条",
@@ -313,7 +322,6 @@ export default {
     translucent_panel_soft_glow_light_and_airy: "半透明面板 + 低强度发光，轻盈通透",
     write_me_a_short_essay_about_ai: "帮我写一篇关于 AI 的短文",
     bind_phone_number: "绑定手机号",
-    save: "保存",
     save_and_send: "保存并发送",
     saved_to_db_runtime_consumer_items_take_effect_after_restart: "保存到 DB，运行时消费项重启后生效。",
     takes_effect_immediately_after_saving_hot_reload: "保存后即刻生效（热更新）。",
@@ -432,7 +440,6 @@ export default {
     service_address_base_url: "服务地址（Base URL）",
     provider_catalog: "服务商目录",
     service_provider: "服务提供商",
-    copy: "复制",
     copy_url: "复制 URL",
     copy_webhook: "复制 Webhook",
     copy_link: "复制链接",
@@ -456,7 +463,6 @@ export default {
     build_index: "构建索引",
     build_complete: "构建完成！",
     building: "构建中...",
-    close: "关闭",
     close_esc: "关闭（Esc）",
     close_tab: "关闭标签页",
     key_decisions: "关键决策",
@@ -491,7 +497,6 @@ export default {
     continue: "继续",
     continue_generating: "继续生成",
     encryption_method: "加密方式",
-    loading: "加载中…",
     key_2: "键（key）",
     key_and_content_cannot_be_empty: "键与内容均不能为空",
     will_be: "将为",
@@ -600,7 +605,7 @@ export default {
     clear: "清除",
     clear_tags: "清除标签",
     clear_completed: "清除已完成",
-    empty: "清空",
+    clear_2: "清空",
     please_close_and_re_initiate_the_recharge: "请关闭后重新发起充值",
     please_check_if_the_backend_service_is_normal_or_retry_later: "请检查后端服务是否正常，或稍后重试",
     please_enter_api_key: "请输入 API Key",
@@ -620,7 +625,6 @@ export default {
     please_select_a_voice_first_or_the_current_browser_does_not_support_read_aloud: "请先选择音色，或当前浏览器不支持朗读",
     please_use_python_to_generate_a_quarterly_trend_chart: "请用 Python 生成季度趋势图",
     please_enter_below: "请在下方输入",
-    cancel: "取消",
     cancel_sharing: "取消分享",
     clear_selection: "取消全选",
     deselect: "取消选择",
@@ -633,7 +637,6 @@ export default {
     weight: "权重",
     weight_decay: "权重衰减",
     missing: "缺少：",
-    confirm: "确定",
     confirm_restore: "确定恢复",
     confirm_unbinding_this_phone_number: "确定解绑该手机号？",
     confirm_deleting_this_provider: "确定删除该 Provider？",
@@ -653,7 +656,6 @@ export default {
     sensitive_snippets_desensitized_before_storage: "入库前已脱敏的敏感片段数",
     sandbox_mode: "沙箱模式",
     sandbox_mode_uses_sandbox_paypal_com_and_is_for_integration_testing_only_blank_falls_back_to_the_paypal_environment_variables: "沙箱模式走 sandbox.paypal.com，仅用于联调；留空则回退到环境变量 PAYPAL_*。",
-    delete: "删除",
     delete_and_continue: "删除并继续",
     delete_selected: "删除所选",
     delete_item: "删除条目",
@@ -713,14 +715,12 @@ export default {
     data_analysis: "数据分析",
     data_source: "数据来源",
     data_retention_days_0_permanent: "数据留存天数（0 = 永久）",
-    refresh: "刷新",
     refresh_backup: "刷新备份",
     refresh_slow_log: "刷新慢日志",
     refresh_page: "刷新页面",
     refresh_usage: "刷新用量",
     refresh_status: "刷新状态",
     private_2: "私有",
-    search: "搜索",
     search_plugins_name_description: "搜索插件（名称 / 描述）",
     search_name_description_tags: "搜索名称 / 描述 / 标签",
     search_question: "搜索提问",
@@ -862,7 +862,6 @@ export default {
     used_to_provide_the_service_ensure_security_and_improve_the_product_not_used_for_unrelated_purposes: "用于提供服务、保障安全与改进产品，不用于与服务无关的用途。",
     priority: "优先级",
     speed: "语速",
-    language: "语言",
     preview: "预览",
     preview_truncated: "预览已截断",
     original_size_0: "原始大小（0）",
@@ -928,7 +927,6 @@ export default {
     terminal_output: "终端输出",
     severe_overload_threshold: "重度过载阈值",
     rename: "重命名",
-    retry: "重试",
     regenerate: "重新生成",
     period: "周期",
     primary_provider: "主 Provider",
@@ -1036,6 +1034,14 @@ export default {
   errors,
   auth,
   admin,
+  workflow,
+  agent,
+  knowledge,
+  mail,
+  memory,
+  media,
+  billing,
+  settings,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

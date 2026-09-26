@@ -83,7 +83,7 @@ async function save() {
 function confirmDelete(g: EntGroup) {
   Modal.confirm({
     title: t('admin.delete_group'),
-    content: t('确认删除「{name}」？成员关联将解除。', { name: g.name }),
+    content: t('common.confirm_delete_name_member_associations_will_be_removed', { name: g.name }),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -227,7 +227,7 @@ onMounted(() => {
 
     <a-drawer
       v-model:open="rolesDrawerVisible"
-      :title="currentGroup ? $t('群组角色绑定 - {name}', { name: currentGroup.name }) : $t('admin.group_role_binding')"
+      :title="currentGroup ? $t('admin.group_role_binding_name', { name: currentGroup.name }) : $t('admin.group_role_binding')"
       width="480"
       placement="right"
     >

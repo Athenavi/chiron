@@ -64,7 +64,7 @@ async function loadSkills() {
     skills.value = response.data?.data?.skills || []
   } catch {
     error.value = true
-    message.error(tr('获取技能列表失败，请检查网络连接'))
+    message.error(tr('errors.failed_to_fetch_skill_list_please_check_your_network_connection'))
   } finally {
     loading.value = false
   }
@@ -89,8 +89,8 @@ async function loadSkillUsage() {
 function usageLabel(name: string): string {
   const { agents, workflows } = usageOf(skillUsage.value, name)
   const parts: string[] = []
-  if (agents.length) parts.push(tr('{n} 个 Agent', { n: agents.length }))
-  if (workflows.length) parts.push(tr('{n} 个工作流', { n: workflows.length }))
+  if (agents.length) parts.push(tr('agent.n_agents', { n: agents.length }))
+  if (workflows.length) parts.push(tr('workflow.n_workflows', { n: workflows.length }))
   return parts.join(' · ')
 }
 
@@ -99,7 +99,7 @@ function usageTitle(name: string): string {
   const { agents, workflows } = usageOf(skillUsage.value, name)
   const lines: string[] = []
   if (agents.length) lines.push(`Agent：${agents.join('、')}`)
-  if (workflows.length) lines.push(tr('工作流：{list}', { list: workflows.join('、') }))
+  if (workflows.length) lines.push(tr('workflow.workflows_list', { list: workflows.join('、') }))
   return lines.join('\n')
 }
 
@@ -122,7 +122,7 @@ async function loadMarket() {
     marketItems.value = await listMarket('skill')
   } catch {
     marketError.value = true
-    message.error(tr('获取技能市场失败'))
+    message.error(tr('errors.failed_to_fetch_skill_marketplace'))
   } finally {
     marketLoading.value = false
   }
@@ -132,11 +132,11 @@ async function handleMarketInstall(item: MarketItem) {
   marketInstallingId.value = item.id
   try {
     await installMarket('skill', item.id)
-    message.success(tr('「{name}」已安装', { name: item.name }))
+    message.success(tr('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadSkills()])
   } catch (e: any) {
     const raw = e?.response?.data
-    message.error(tr('安装失败: {error}', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
+    message.error(tr('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
     marketInstallingId.value = null
   }
@@ -164,28 +164,28 @@ async function toggleEnabled(s: Skill, v: boolean) {
   try {
     await api.put(`/v1/skills/${encodeURIComponent(s.name)}`, { enabled: v })
     s.enabled = v
-    if (v) message.success(tr('「{name}」已启用', { name: s.name }))
-    else message.success(tr('「{name}」已停用', { name: s.name }))
+    if (v) message.success(tr('common.name_is_enabled', { name: s.name }))
+    else message.success(tr('common.name_is_disabled', { name: s.name }))
   } catch (e: any) {
-    message.error(tr('操作失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.operation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   }
 }
 
 // ── 删除 ──
 function requestDelete(s: Skill) {
   Modal.confirm({
-    title: tr('删除技能'),
-    content: tr('确定删除「{name}」？', { name: s.name }),
-    okText: tr('删除'),
+    title: tr('agent.delete_skill'),
+    content: tr('common.delete_name', { name: s.name }),
+    okText: tr('common.delete'),
     okButtonProps: { danger: true },
-    cancelText: tr('取消'),
+    cancelText: tr('common.cancel'),
     onOk: async () => {
       try {
         await api.delete(`/v1/skills/${encodeURIComponent(s.name)}`)
-        message.success(tr('已删除'))
+        message.success(tr('common.deleted'))
         await loadSkills()
       } catch {
-        message.error(tr('删除失败'))
+        message.error(tr('errors.delete_failed'))
       }
     },
   })
@@ -239,7 +239,7 @@ async function submitRun() {
   for (const p of runTarget.value.parameters || []) {
     const v = runValues.value[p.name]
     if (v === undefined || v === null || v === '') {
-      if (p.required) { message.warning(tr('请填写参数「{name}」', { name: p.name })); return }
+      if (p.required) { message.warning(tr('agent.please_fill_in_parameter_name', { name: p.name })); return }
       continue
     }
     params[p.name] = v
@@ -249,9 +249,9 @@ async function submitRun() {
   try {
     const resp = await api.post(`/v1/skills/${encodeURIComponent(runTarget.value.name)}/run`, { params })
     runResult.value = resp.data?.data || resp.data
-    message.success(tr('技能执行完成'))
+    message.success(tr('agent.skill_execution_complete'))
   } catch (e: any) {
-    message.error(tr('执行失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.execution_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     runSubmitting.value = false
   }
@@ -271,17 +271,17 @@ async function handleInstall() {
   const body: any = {}
   if (installURL.value) body.url = installURL.value
   else if (installInline.value) body.inline = installInline.value
-  else { message.error(tr('请输入 URL 或内联 JSON')); return }
+  else { message.error(tr('common.please_enter_a_url_or_inline_json')); return }
   installLoading.value = true
   try {
     await api.post('/v1/skills/install', body)
-    message.success(tr('技能已安装'))
+    message.success(tr('agent.skill_installed'))
     installURL.value = ''
     installInline.value = ''
     await loadSkills()
     activeTab.value = 'list'
   } catch (e: any) {
-    message.error(tr('安装失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.install_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     installLoading.value = false
   }
@@ -293,7 +293,7 @@ const genResult = ref<any>(null)
 const genLoading = ref(false)
 
 async function handleGenerate() {
-  if (!genDesc.value.trim()) { message.error(tr('请输入描述')); return }
+  if (!genDesc.value.trim()) { message.error(tr('common.please_enter_a_description')); return }
   genLoading.value = true
   genResult.value = null
   try {
@@ -302,10 +302,10 @@ async function handleGenerate() {
       auto_install: true,
     })
     genResult.value = response.data?.data?.skill || response.data?.data
-    message.success(tr('技能已生成并安装'))
+    message.success(tr('agent.skill_generated_and_installed'))
     await loadSkills()
   } catch (e: any) {
-    message.error(tr('生成失败: {error}', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.generation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     genLoading.value = false
   }
@@ -425,7 +425,7 @@ async function handleGenerate() {
             <div class="card-meta">
               <Tag>v{{ s.version }}</Tag>
               <Tag v-if="s.parameters?.length">
-                {{ $t('{n} 参数', { n: s.parameters.length }) }}
+                {{ $t('agent.n_params', { n: s.parameters.length }) }}
               </Tag>
               <Tag
                 v-for="t in (s.tags || []).slice(0, 3)"
@@ -438,7 +438,7 @@ async function handleGenerate() {
                 color="blue"
                 :title="usageTitle(s.name)"
               >
-                {{ $t('被 {label} 使用', { label: usageLabel(s.name) }) }}
+                {{ $t('common.used_by_label', { label: usageLabel(s.name) }) }}
               </Tag>
             </div>
             <div class="card-actions">
@@ -645,7 +645,7 @@ async function handleGenerate() {
             type="success"
             show-icon
             class="gen-alert"
-            :message="$t('已生成：{name}', { name: genResult.name })"
+            :message="$t('common.generated_name', { name: genResult.name })"
             :description="genResult.description"
           />
           <pre
@@ -659,7 +659,7 @@ async function handleGenerate() {
     <!-- ── 运行 Modal ── -->
     <Modal
       :open="runOpen"
-      :title="$t('运行「{name}」', { name: runTarget?.name || '' })"
+      :title="$t('common.run_name', { name: runTarget?.name || '' })"
       :footer="null"
       width="560px"
       @cancel="runOpen = false"

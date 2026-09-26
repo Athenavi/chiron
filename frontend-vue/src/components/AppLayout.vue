@@ -65,7 +65,7 @@ const isChatPage = computed(() => route.path === '/chat')
 // 监听 API 错误
 function handleApiError(e: Event) {
   const detail = (e as CustomEvent).detail
-  message.error(detail.message || tr('请求失败'))
+  message.error(detail.message || tr('errors.request_failed_2'))
 }
 
 onMounted(() => {
@@ -90,21 +90,21 @@ interface MenuItem {
 
 const menuItems = computed<MenuItem[]>(() => {
   const items: MenuItem[] = [
-    { key: '/', label: tr('首页'), icon: () => h(HomeOutlined) },
+    { key: '/', label: tr('common.home'), icon: () => h(HomeOutlined) },
     { key: WORKSTATION_ROUTES.dialogue, label: WORKSTATION_LABELS.dialogue, icon: () => h(MessageOutlined) },
     { key: WORKSTATION_ROUTES.agent, label: WORKSTATION_LABELS.agent, icon: () => h(UserOutlined) },
     { key: WORKSTATION_ROUTES.workflow, label: WORKSTATION_LABELS.workflow, icon: () => h(ApartmentOutlined) },
     { key: WORKSTATION_ROUTES.skill, label: WORKSTATION_LABELS.skill, icon: () => h(BlockOutlined) },
-    { key: '/media', label: tr('媒体'), icon: () => h(PictureOutlined) },
+    { key: '/media', label: tr('common.media'), icon: () => h(PictureOutlined) },
     { key: WORKSTATION_ROUTES.knowledge, label: WORKSTATION_LABELS.knowledge, icon: () => h(BookOutlined) },
-    { key: '/memory', label: tr('记忆'), icon: () => h(HistoryOutlined) },
+    { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
-    { key: '/billing', label: tr('计费'), icon: () => h(CreditCardOutlined) },
+    { key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) },
     ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
-          { key: '/models', label: tr('模型'), icon: () => h(ApiOutlined) },
-          { key: '/admin', label: tr('管理'), icon: () => h(SettingOutlined) },
+          { key: '/models', label: tr('agent.model'), icon: () => h(ApiOutlined) },
+          { key: '/admin', label: tr('common.manage'), icon: () => h(SettingOutlined) },
         ]
       : []),
   ]
@@ -132,9 +132,9 @@ interface UserMenuItem {
 }
 
 const userMenuItems = computed<UserMenuItem[]>(() => [
-  { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
-  { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
-  { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
+  { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
+  { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
+  { key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
 
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移
@@ -229,7 +229,7 @@ async function runQuickCommand() {
   quickLoading.value = true
   try {
     await executeQuickCommand(command)
-    message.success(tr('任务已提交，正在对话页展示结果'))
+    message.success(tr('workflow.task_submitted_results_shown_on_the_conversation_page'))
     closeQuickCommand()
   } catch {
     // 错误已由统一处理器处理

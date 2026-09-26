@@ -56,10 +56,10 @@ async function fetchCronJobs(silent = false) {
 async function triggerCronJobById(job: CronJob) {
   try {
     await triggerCronJob(job.id)
-    message.success(t('已触发「{name}」，任务将异步执行', { name: job.name }))
+    message.success(t('workflow.triggered_name_task_runs_asynchronously', { name: job.name }))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error(t('触发失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+    message.error(t('errors.trigger_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   }
 }
 
@@ -161,7 +161,7 @@ async function saveCronJob() {
     cronModalOpen.value = false
     await fetchCronJobs()
   } catch (e: any) {
-    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+    message.error(t('errors.save_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   } finally {
     cronSaving.value = false
   }
@@ -173,7 +173,7 @@ async function deleteCronJob(job: CronJob) {
     message.success(t('workflow.scheduled_task_deleted'))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error(t('删除失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+    message.error(t('errors.delete_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   }
 }
 
@@ -240,7 +240,7 @@ onUnmounted(() => {
         :columns="cronColumns"
         :data-source="cronJobs"
         :loading="cronLoading"
-        :pagination="{ pageSize: 8, showSizeChanger: false, showTotal: (n: number) => t('共 {n} 条', { n }) }"
+        :pagination="{ pageSize: 8, showSizeChanger: false, showTotal: (n: number) => t('common.total_n', { n }) }"
         size="small"
         row-key="id"
       >

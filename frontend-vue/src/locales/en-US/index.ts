@@ -3,6 +3,14 @@ import errors from './errors'
 import legacy from './legacy'
 import auth from './auth'
 import admin from './admin'
+import workflow from './workflow'
+import agent from './agent'
+import knowledge from './knowledge'
+import mail from './mail'
+import memory from './memory'
+import media from './media'
+import billing from './billing'
+import settings from './settings'
 
 /**
  * en-US。键与 zh-CN 一一对应（zh-CN 为源语言）；缺失的键会自动回退到 zh-CN。
@@ -85,7 +93,7 @@ export default {
     e_g_project_a: "e.g. [Project A]_",
     e_g_v2: "e.g. _v2",
     e_g_0_9_every_day_at_09_00: "e.g. 0 9 * * * (every day at 09:00)",
-    edit: "Edit",
+    editModify: "Edit",
     value: "Value",
     stop_generating: "Stop generating",
     top_up: "Top up",
@@ -140,7 +148,7 @@ export default {
     loaded_template_name_edit_and_save: "Loaded template \"{name}\"; edit and save",
     compressed_before_after: "Compressed {before} → {after}",
     enabled_name: "Enabled {name}",
-    copied: "Copied!",
+    copiedExcl: "Copied!",
     generated_name: "Generated: {name}",
     pasted_n_characters: "Pasted {n} characters",
     assembled_into_name: "Assembled into \"{name}\"",
@@ -152,6 +160,7 @@ export default {
     verified: "Verified",
     market: "Market",
     market_is_empty: "Market is empty",
+    market_empty_hint: "Marketplace items will appear here once published",
     no_2: "No.",
     on: "On",
     archived_n: "Archived {n}",
@@ -305,7 +314,6 @@ export default {
     translucent_panel_soft_glow_light_and_airy: "Translucent panel + soft glow, light and airy",
     write_me_a_short_essay_about_ai: "Write me a short essay about AI",
     bind_phone_number: "Bind phone number",
-    save: "Save",
     save_and_send: "Save and send",
     saved_to_db_runtime_consumer_items_take_effect_after_restart: "Saved to DB; runtime consumer items take effect after restart.",
     takes_effect_immediately_after_saving_hot_reload: "Takes effect immediately after saving (hot reload).",
@@ -424,7 +432,6 @@ export default {
     service_address_base_url: "Service address (Base URL)",
     provider_catalog: "Provider catalog",
     service_provider: "Service provider",
-    copy: "Copy",
     copy_url: "Copy URL",
     copy_webhook: "Copy Webhook",
     copy_link: "Copy link",
@@ -448,7 +455,6 @@ export default {
     build_index: "Build index",
     build_complete: "Build complete!",
     building: "Building...",
-    close: "Close",
     close_esc: "Close (Esc)",
     close_tab: "Close tab",
     key_decisions: "Key decisions",
@@ -483,7 +489,6 @@ export default {
     continue: "Continue",
     continue_generating: "Continue generating",
     encryption_method: "Encryption method",
-    loading: "Loading…",
     key_2: "Key",
     key_and_content_cannot_be_empty: "Key and content cannot be empty",
     will_be: "will be",
@@ -592,7 +597,7 @@ export default {
     clear: "Clear",
     clear_tags: "Clear tags",
     clear_completed: "Clear completed",
-    empty: "Empty",
+    clear_2: "Empty",
     please_close_and_re_initiate_the_recharge: "Please close and re-initiate the recharge",
     please_check_if_the_backend_service_is_normal_or_retry_later: "Please check if the backend service is normal, or retry later",
     please_enter_api_key: "Please enter API Key",
@@ -612,7 +617,6 @@ export default {
     please_select_a_voice_first_or_the_current_browser_does_not_support_read_aloud: "Please select a voice first, or the current browser does not support read-aloud",
     please_use_python_to_generate_a_quarterly_trend_chart: "Please use Python to generate a quarterly trend chart",
     please_enter_below: "Please enter below",
-    cancel: "Cancel",
     cancel_sharing: "Cancel sharing",
     clear_selection: "Clear selection",
     deselect: "Deselect",
@@ -625,7 +629,6 @@ export default {
     weight: "Weight",
     weight_decay: "Weight decay",
     missing: "Missing: ",
-    confirm: "Confirm",
     confirm_restore: "Confirm restore",
     confirm_unbinding_this_phone_number: "Confirm unbinding this phone number?",
     confirm_deleting_this_provider: "Confirm deleting this Provider?",
@@ -645,7 +648,6 @@ export default {
     sensitive_snippets_desensitized_before_storage: "Sensitive snippets desensitized before storage",
     sandbox_mode: "Sandbox mode",
     sandbox_mode_uses_sandbox_paypal_com_and_is_for_integration_testing_only_blank_falls_back_to_the_paypal_environment_variables: "Sandbox mode uses sandbox.paypal.com and is for integration testing only; blank falls back to the PAYPAL_* environment variables.",
-    delete: "Delete",
     delete_and_continue: "Delete and continue",
     delete_selected: "Delete selected",
     delete_item: "Delete item",
@@ -705,14 +707,12 @@ export default {
     data_analysis: "Data analysis",
     data_source: "Data source",
     data_retention_days_0_permanent: "Data retention days (0 = permanent)",
-    refresh: "Refresh",
     refresh_backup: "Refresh backup",
     refresh_slow_log: "Refresh slow log",
     refresh_page: "Refresh page",
     refresh_usage: "Refresh usage",
     refresh_status: "Refresh status",
     private_2: "Private",
-    search: "Search",
     search_plugins_name_description: "Search plugins (name / description)",
     search_name_description_tags: "Search name / description / tags",
     search_question: "Search question",
@@ -854,7 +854,6 @@ export default {
     used_to_provide_the_service_ensure_security_and_improve_the_product_not_used_for_unrelated_purposes: "Used to provide the service, ensure security, and improve the product; not used for unrelated purposes.",
     priority: "Priority",
     speed: "Speed",
-    language: "Language",
     preview: "Preview",
     preview_truncated: "Preview truncated",
     original_size_0: "Original size (0)",
@@ -920,7 +919,6 @@ export default {
     terminal_output: "Terminal output",
     severe_overload_threshold: "Severe overload threshold",
     rename: "Rename",
-    retry: "Retry",
     regenerate: "Regenerate",
     period: "Period",
     primary_provider: "Primary Provider",
@@ -1028,6 +1026,14 @@ export default {
   errors,
   auth,
   admin,
+  workflow,
+  agent,
+  knowledge,
+  mail,
+  memory,
+  media,
+  billing,
+  settings,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

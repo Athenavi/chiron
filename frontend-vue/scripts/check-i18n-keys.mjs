@@ -34,7 +34,12 @@ const BASELINE_PATH = join(ROOT, 'scripts', 'i18n-keys-baseline.json')
 const SOURCE = 'zh-CN'
 const TARGETS = ['en-US', 'ar']
 /** 语义域前缀：必须严格对齐（legacy 的键是中文原文，不会以这些前缀开头） */
-const DOMAIN_PREFIXES = ['common.', 'chat.', 'errors.', 'auth.', 'admin.']
+const DOMAIN_PREFIXES = [
+  // L1-4 试点 + 全量迁移后建立的域文件
+  'common.', 'chat.', 'errors.', 'auth.', 'admin.',
+  // 2136 键全量迁移时新建的域（workflow/agent/knowledge/mail/memory/media/billing/settings）
+  'workflow.', 'agent.', 'knowledge.', 'mail.', 'memory.', 'media.', 'billing.', 'settings.',
+]
 
 const WRITE = process.argv.includes('--write-baseline')
 const listIdx = process.argv.indexOf('--list-missing')

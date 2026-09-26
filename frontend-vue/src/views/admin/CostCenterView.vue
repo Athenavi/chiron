@@ -103,7 +103,7 @@ async function savePool() {
 function confirmDeletePool(p: QuotaPoolWithAllocated) {
   Modal.confirm({
     title: t('errors.delete_quota_pool'),
-    content: t('确认删除「{type} / {period}」？关联分配将级联删除。', { type: p.resource_type, period: p.period }),
+    content: t('common.confirm_delete_type_period_associated_assignments_will_be_cascade_deleted', { type: p.resource_type, period: p.period }),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -339,7 +339,7 @@ onMounted(fetchPools)
 
     <a-drawer
       v-model:open="allocDrawerVisible"
-      :title="currentPool ? $t('配额分配 - {type}/{period}', { type: currentPool.resource_type, period: currentPool.period }) : $t('errors.quota_allocation')"
+      :title="currentPool ? $t('errors.quota_allocation_type_period', { type: currentPool.resource_type, period: currentPool.period }) : $t('errors.quota_allocation')"
       width="640"
       placement="right"
     >

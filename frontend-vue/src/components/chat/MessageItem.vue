@@ -65,7 +65,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (kbId) {
     chips.push({
       key: 'kb', kind: 'kb', label: t('knowledge.knowledge_base'),
-      title: t('来源知识库 #{id}，点击打开', { id: kbId }),
+      title: t('knowledge.source_knowledge_base_id_click_to_open', { id: kbId }),
       go: () => router.push(`/knowledge/${encodeURIComponent(kbId)}`),
     })
   }
@@ -73,7 +73,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (wfId) {
     chips.push({
       key: 'workflow', kind: 'workflow', label: t('workflow.workflow'),
-      title: t('来源工作流 {id}，点击打开', { id: wfId }),
+      title: t('workflow.source_workflow_id_click_to_open', { id: wfId }),
       go: () => router.push({ path: '/workflow', query: { id: wfId } }),
     })
   }
@@ -81,7 +81,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (agentId) {
     chips.push({
       key: 'agent', kind: 'agent', label: 'Agent',
-      title: t('来源 Agent #{id}，点击打开', { id: agentId }),
+      title: t('agent.source_agent_id_click_to_open', { id: agentId }),
       go: () => router.push('/agents'),
     })
   }
@@ -91,7 +91,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   if (traceId) {
     chips.push({
       key: 'trace', kind: 'trace', label: t('common.trace_2'),
-      title: t('Trace {id}，点击复制', { id: traceId }),
+      title: t('common.trace_id_click_to_copy', { id: traceId }),
       go: () => {
         navigator.clipboard.writeText(traceId)
           .then(() => message.success(t('common.trace_id_copied')))
@@ -252,10 +252,10 @@ md.renderer.rules.fence = (tokens, idx) => {
   const encoded = encodeURIComponent(code)
   const lineCount = code.replace(/\n$/, '').split('\n').length
   const collapsible = lineCount > CODE_COLLAPSE_LINES
-  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('{n} 行', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('common.copy')}</button></div>`
+  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('common.n_lines', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('common.copy')}</button></div>`
   const body = `<pre><code class="language-${safeLang}" data-lang="${safeLang}">${md.utils.escapeHtml(code)}</code></pre>`
   const toggle = collapsible
-    ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">${t('展开全部（共 {n} 行）', { n: lineCount })}</button>`
+    ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">${t('common.expand_all_n_lines_total', { n: lineCount })}</button>`
     : ''
   return `<div class="code-block-wrapper"${collapsible ? ' data-collapsed="1"' : ''}>${header}${body}${toggle}</div>`
 }
@@ -351,7 +351,7 @@ function handleMsgClick(e: MouseEvent) {
       const collapsed = box.dataset.collapsed === '1'
       box.dataset.collapsed = collapsed ? '0' : '1'
       const lines = toggle.dataset.lines || ''
-      toggle.textContent = collapsed ? t('收起（共 {n} 行）', { n: lines }) : t('展开全部（共 {n} 行）', { n: lines })
+      toggle.textContent = collapsed ? t('common.collapse_n_lines_total', { n: lines }) : t('common.expand_all_n_lines_total', { n: lines })
     }
     return
   }
@@ -537,7 +537,7 @@ onUpdated(enhanceContent)
           v-if="(item as TextItem).error"
           class="msg-error-banner"
         >
-          <span class="error-text">{{ $t('发送失败：{msg}', { msg: (item as TextItem).errorMsg || $t('errors.network_error_2') }) }}</span>
+          <span class="error-text">{{ $t('errors.send_failed_msg', { msg: (item as TextItem).errorMsg || $t('errors.network_error_2') }) }}</span>
           <button
             class="retry-btn"
             type="button"
@@ -655,7 +655,7 @@ onUpdated(enhanceContent)
     class="turn-stats"
   >
     <span v-if="item.inputTokens || item.outputTokens || item.durationSec">
-      <template v-if="item.durationSec">{{ $t('耗时 {n}s', { n: item.durationSec }) }} · </template>
+      <template v-if="item.durationSec">{{ $t('common.elapsed_n_s', { n: item.durationSec }) }} · </template>
       tokens: {{ item.inputTokens }} in / {{ item.outputTokens }} out
     </span>
   </div>

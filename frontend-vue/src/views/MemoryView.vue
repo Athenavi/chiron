@@ -165,7 +165,7 @@ async function handleSave() {
     } else {
       const res = await upsertMemory({ slot, key, value, confidence, source })
       if (res.duplicate_of) {
-        message.warning(t('检测到相似记忆「{key}」，可在整理时自动合并', { key: res.duplicate_of.key }))
+        message.warning(t('memory.similar_memory_key_detected_auto_merged_during_cleanup', { key: res.duplicate_of.key }))
       } else {
         message.success(t('memory.memory_saved'))
       }
@@ -192,7 +192,7 @@ async function handleDelete(id: string) {
 async function handleClearAll() {
   try {
     const res = await clearMemory()
-    message.success(t('已清空 {n} 条记忆', { n: res.deleted }))
+    message.success(t('memory.cleared_n_memories', { n: res.deleted }))
     await loadProfile()
   } catch (e: any) {
     message.error(e.response?.data?.error || t('errors.failed_to_clear'))
@@ -227,10 +227,10 @@ async function pollOrganize() {
         if (st.result) {
           const r = st.result
           const parts: string[] = []
-          if (r.merged) parts.push(t('合并 {n} 条重复', { n: r.merged }))
-          if (r.backfilled) parts.push(t('补齐 {n} 条向量', { n: r.backfilled }))
-          if (r.archived) parts.push(t('归档 {n} 条', { n: r.archived }))
-          if (r.evicted) parts.push(t('淘汰 {n} 条', { n: r.evicted }))
+          if (r.merged) parts.push(t('common.merged_n_duplicates', { n: r.merged }))
+          if (r.backfilled) parts.push(t('knowledge.backfilled_n_vectors', { n: r.backfilled }))
+          if (r.archived) parts.push(t('common.archived_n', { n: r.archived }))
+          if (r.evicted) parts.push(t('common.evicted_n', { n: r.evicted }))
           if (parts.length) message.success(t('common.organization_complete') + parts.join('，'))
           else message.success(t('common.organization_complete_no_adjustment_needed'))
           await loadProfile()
@@ -366,7 +366,7 @@ function pct(n: number): string {
         </Button>
         <Popconfirm
           :title="$t('memory.confirm_clearing_all_long_term_memory_this_action_cannot_be_undone')"
-          :ok-text="$t('common.empty')"
+          :ok-text="$t('common.clear_2')"
           :cancel-text="$t('common.cancel')"
           @confirm="handleClearAll"
         >
@@ -399,7 +399,7 @@ function pct(n: number): string {
       type="success"
       show-icon
       style="margin-bottom: 16px"
-      :message="$t('上次整理：合并 {merged} · 补齐 {backfilled} · 归档 {archived} · 淘汰 {evicted}', { merged: organize.result.merged, backfilled: organize.result.backfilled, archived: organize.result.archived, evicted: organize.result.evicted })"
+      :message="$t('common.last_cleanup_merged_merged_backfilled_backfilled_archived_archived_evicted_evicted', { merged: organize.result.merged, backfilled: organize.result.backfilled, archived: organize.result.archived, evicted: organize.result.evicted })"
     />
 
     <!-- 语义检索 -->
@@ -454,7 +454,7 @@ function pct(n: number): string {
         v-if="searchResults.length"
         class="result-section-title"
       >
-        {{ $t('记忆条目（{n}）', { n: searchResults.length }) }}
+        {{ $t('memory.memory_entries_n', { n: searchResults.length }) }}
       </h3>
       <List
         :data-source="searchResults"
@@ -472,7 +472,7 @@ function pct(n: number): string {
                   {{ slotLabel(item.slot) }}
                 </Tag>
                 <span class="entry-key">{{ item.key }}</span>
-                <Tooltip :title="$t('相关度 {rel} · 重排序分 {score}', { rel: pct(item.similarity), score: item.score.toFixed(2) })">
+                <Tooltip :title="$t('common.relevance_rel_rerank_score_score', { rel: pct(item.similarity), score: item.score.toFixed(2) })">
                   <Tag color="green">
                     {{ pct(item.score) }}
                   </Tag>
@@ -490,7 +490,7 @@ function pct(n: number): string {
         v-if="searchSummaries.length"
         class="result-section-title"
       >
-        {{ $t('历史对话（{n}）', { n: searchSummaries.length }) }}
+        {{ $t('chat.history_n', { n: searchSummaries.length }) }}
       </h3>
       <List
         :data-source="searchSummaries"
@@ -539,7 +539,7 @@ function pct(n: number): string {
       <Tabs v-model:active-key="activeTab">
         <TabPane key="all">
           <template #tab>
-            {{ $t('全部 ({n})', { n: total }) }}
+            {{ $t('common.all_n', { n: total }) }}
           </template>
         </TabPane>
         <TabPane
@@ -552,12 +552,12 @@ function pct(n: number): string {
         </TabPane>
         <TabPane key="conflicts">
           <template #tab>
-            {{ $t('待裁决 ({n})', { n: conflicts.length }) }}
+            {{ $t('common.pending_decision_n', { n: conflicts.length }) }}
           </template>
         </TabPane>
         <TabPane key="summaries">
           <template #tab>
-            {{ $t('摘要 ({n})', { n: summaries.length }) }}
+            {{ $t('common.summary_n', { n: summaries.length }) }}
           </template>
         </TabPane>
       </Tabs>
@@ -608,7 +608,7 @@ function pct(n: number): string {
                   </Tag>
                   <Tooltip :title="$t('common.confidence_high_confidence_items_are_kept_first_during_organization')">
                     <Tag color="blue">
-                      {{ $t('置信 {n}', { n: item.confidence }) }}
+                      {{ $t('common.confidence_n', { n: item.confidence }) }}
                     </Tag>
                   </Tooltip>
                   <Space class="entry-actions">
@@ -655,7 +655,7 @@ function pct(n: number): string {
                   {{ item.value }}
                 </div>
                 <div class="entry-meta">
-                  {{ $t('访问 {n} 次 · 更新于 {date}', { n: item.access_count, date: item.updated_at?.slice(0, 10) }) }}
+                  {{ $t('common.accessed_n_times_updated_date', { n: item.access_count, date: item.updated_at?.slice(0, 10) }) }}
                 </div>
               </Card>
             </List.Item>
@@ -762,7 +762,7 @@ function pct(n: number): string {
         />
       </div>
       <div class="form-row">
-        <label>{{ $t('置信度 {n}', { n: form.confidence }) }}</label>
+        <label>{{ $t('common.confidence_n_2', { n: form.confidence }) }}</label>
         <Slider
           v-model:value="form.confidence"
           :min="0"

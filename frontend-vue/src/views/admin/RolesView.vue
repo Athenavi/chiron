@@ -77,7 +77,7 @@ function confirmDelete(role: EntRole) {
   }
   Modal.confirm({
     title: t('admin.delete_role'),
-    content: t('确认删除「{name}」？关联用户将失去此角色权限。', { name: role.name }),
+    content: t('errors.confirm_delete_name_associated_users_will_lose_this_role_permission', { name: role.name }),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),

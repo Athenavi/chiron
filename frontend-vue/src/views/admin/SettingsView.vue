@@ -220,7 +220,7 @@ async function saveRateLimit() {
     await saveSettings('rate_limit', rateLimitConfig.value)
     message.success(t('common.rate_limit_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -232,7 +232,7 @@ async function saveDegradation() {
     await saveSettings('degradation', degradationConfig.value)
     message.success(t('errors.failover_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -244,7 +244,7 @@ async function saveCache() {
     await saveSettings('cache', cacheConfig.value)
     message.success(t('admin.cache_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -256,7 +256,7 @@ async function saveApiKey() {
     await saveSettings('api_key', apiKeyConfig.value)
     message.success(t('common.api_key_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -268,7 +268,7 @@ async function saveAgent() {
     await saveSettings('agent', agentConfig.value)
     message.success(t('agent.agent_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -280,7 +280,7 @@ async function saveLlm() {
     await saveSettings('llm', llmConfig.value)
     message.success(t('agent.model_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -292,7 +292,7 @@ async function saveStorage() {
     await saveSettings('storage', storageConfig.value)
     message.success(t('common.storage_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -304,7 +304,7 @@ async function saveRedis() {
     await saveSettings('redis', redisConfig.value)
     message.success(t('admin.redis_config_saved_and_connection_hot_reloaded'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -316,7 +316,7 @@ async function savePostgres() {
     await saveSettings('postgres', postgresConfig.value)
     message.success(t('admin.database_config_saved_takes_effect_after_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -328,7 +328,7 @@ async function saveCors() {
     await saveSettings('cors', corsConfig.value)
     message.success(t('common.cors_config_saved_takes_effect_after_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -340,7 +340,7 @@ async function saveS3() {
     await saveSettings('s3', s3Config.value)
     message.success(t('common.object_storage_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -352,7 +352,7 @@ async function savePython() {
     await saveSettings('python', pythonConfig.value)
     message.success(t('common.python_engine_config_saved_takes_effect_after_engine_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
+    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }

@@ -50,13 +50,13 @@ function continueInChat(inst: InstanceRecord) {
     const text = typeof out === 'string' ? out : out == null ? '' : JSON.stringify(out)
     if (text) parts.push(`【${nodeId}】\n${text}`)
   }
-  if (inst.error) parts.push(t('【错误】\n{error}', { error: inst.error }))
+  if (inst.error) parts.push(t('errors.error_n_error', { error: inst.error }))
   if (parts.length === 0) {
     message.warning(t('chat.this_execution_record_has_no_content_to_bring_into_the_conversation'))
     return
   }
   setChatPrefill({
-    title: t('工作流执行结果 · {name}', { name: inst.workflow_name || t('workflow.untitled_workflow') }),
+    title: t('workflow.workflow_result_name', { name: inst.workflow_name || t('workflow.untitled_workflow') }),
     text: parts.join('\n\n'),
     source: 'workflow',
   })
@@ -509,7 +509,7 @@ async function saveWorkflow() {
     message.success(t('workflow.workflow_saved'))
     await loadWorkflows()
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.response?.data?.error || err.message }))
+    message.error(t('errors.save_failed_error', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -529,7 +529,7 @@ function loadWorkflow(record: GraphRecord) {
   fromBackendFormat(record.graph_json)
   executionResults.value = {}
   executionLogs.value = []
-  message.success(t('已加载: {name}', { name: record.name }))
+  message.success(t('common.loaded_name', { name: record.name }))
 }
 
 // ── API: Delete ──
@@ -543,7 +543,7 @@ async function deleteWorkflow(id: string) {
       resetCanvas()
     }
   } catch (err: any) {
-    message.error(t('删除失败: {error}', { error: err.response?.data?.error || err.message }))
+    message.error(t('errors.delete_failed_error', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -607,7 +607,7 @@ async function submitWorkflowRun(input: string) {
     startStatusPolling(instanceId)
   } catch (err: any) {
     isExecuting.value = false
-    executionLogs.value.push(t('❌ 提交失败: {error}', { error: err.response?.data?.error || err.message }))
+    executionLogs.value.push(t('errors.submit_failed_error', { error: err.response?.data?.error || err.message }))
   }
 }
 
@@ -624,7 +624,7 @@ function startStatusPolling(instanceId: string) {
         stopStatusPolling()
         await loadInstances()
       } else if (data.status === 'error') {
-        executionLogs.value.push(t('❌ 执行失败: {error}', { error: data.error || '' }))
+        executionLogs.value.push(t('errors.failed_error', { error: data.error || '' }))
         isExecuting.value = false
         stopStatusPolling()
         await loadInstances()
@@ -724,13 +724,13 @@ async function useWorkflowTemplate(tpl: TemplateItem): Promise<boolean> {
     // 替换当前画布：模板只加载不落库，可编辑后手动保存
     resetCanvas()
     fromBackendFormat({ name: body?.name || tpl.name, nodes: payload.nodes, edges: payload.edges || [] })
-    message.success(t('已加载模板「{name}」，可编辑后保存', { name: body?.name || tpl.name }))
+    message.success(t('common.loaded_template_name_edit_and_save', { name: body?.name || tpl.name }))
     await nextTick()
     try { fitView({ padding: 0.15 }) } catch { /* 忽略布局异常 */ }
     return true
   } catch (e) {
     const err = e as { response?: { data?: { error?: string } }; message?: string }
-    message.error(t('加载模板失败: {error}', { error: err?.response?.data?.error || err?.message || '' }))
+    message.error(t('errors.failed_to_load_template_error', { error: err?.response?.data?.error || err?.message || '' }))
     return false
   } finally {
     templateUsingId.value = null
@@ -1203,7 +1203,7 @@ function statusClass(nodeProps: any): string {
                 <Input.TextArea
                   v-model:value="editUserMessage"
                   :rows="3"
-                  :placeholder="$t('使用 {ph} 引用上游输出或状态变量', { ph: '{{变量名}}' })"
+                  :placeholder="$t('common.use_ph_to_reference_upstream_output_or_state_variables', { ph: '{{变量名}}' })"
                 />
               </FormItem>
             </template>
@@ -1512,7 +1512,7 @@ function statusClass(nodeProps: any): string {
               v-if="agentsUsingWorkflow(wf.id).length"
               class="wf-item-time"
             >
-              {{ $t('被 {n} 个 Agent 装配', { n: agentsUsingWorkflow(wf.id).length }) }}
+              {{ $t('agent.assembled_into_n_agents', { n: agentsUsingWorkflow(wf.id).length }) }}
             </div>
           </div>
           <Popconfirm
@@ -1550,7 +1550,10 @@ function statusClass(nodeProps: any): string {
         v-else-if="!templates.length"
         :description="$t('common.no_templates_available')"
       />
-      <ul v-else class="template-list">
+      <ul
+        v-else
+        class="template-list"
+      >
         <li
           v-for="tpl in templates"
           :key="tpl.id"
@@ -1559,7 +1562,7 @@ function statusClass(nodeProps: any): string {
           <div class="template-meta">
             <span class="template-name">{{ tpl.name }}</span>
             <span class="template-count">
-              {{ $t('{nodes} 个节点 · {edges} 条连线', { nodes: templateNodeCount(tpl), edges: templateEdgeCount(tpl) }) }}
+              {{ $t('workflow.nodes_nodes_edges_edges', { nodes: templateNodeCount(tpl), edges: templateEdgeCount(tpl) }) }}
             </span>
           </div>
           <Button

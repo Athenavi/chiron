@@ -251,7 +251,7 @@ onMounted(load)
                 <Switch v-model:checked="form.smtp_skip_verify" />
               </FormItem>
               <div class="config-note">
-                {{ $t('常见组合：587 + STARTTLS、465 + SSL/TLS；内网中继可用"不加密"（明文认证会记录告警日志）。') }}
+                {{ $t('common.common_combos_587_starttls_465_ssl_tls_internal_relays_may_use_no_encryption_plaintext_auth_is_logged_as_a_warning') }}
               </div>
             </template>
 
@@ -325,7 +325,7 @@ onMounted(load)
             <FormItem :label="$t('common.site_name')">
               <Input
                 v-model:value="form.site_name"
-                :placeholder="$t('用于邮件模板中的 {ph}', { ph: '{{.SiteName}}' })"
+                :placeholder="$t('mail.used_in_email_templates_as_ph', { ph: '{{.SiteName}}' })"
               />
             </FormItem>
             <FormItem :label="$t('common.site_url')">
@@ -413,7 +413,7 @@ onMounted(load)
               </FormItem>
             </div>
             <div class="config-note">
-              {{ $t('除上述限流外，发码与登录同样受"人机验证 + 验证码错误次数上限"约束（与短信通道共用栅栏）。') }}
+              {{ $t('auth.beyond_the_rate_limits_above_code_sending_and_login_are_also_subject_to_human_verification_max_captcha_error_count_sharing_the_same_fence_as_the_sms_channel') }}
             </div>
           </Form>
         </TabPane>
@@ -427,7 +427,7 @@ onMounted(load)
             type="info"
             show-icon
             class="mail-hint"
-            :message="$t('模板使用 Go 模板语法，可用变量：{vars}。留空即使用内置默认模板。', { vars: '{{.SiteName}}、{{.Code}}、{{.TTLMinutes}}、{{.Action}}、{{.URL}}、{{.Email}}、{{.Name}}' })"
+            :message="$t('common.templates_use_go_template_syntax_available_variables_vars_leave_empty_to_use_the_built_in_default', { vars: '{{.SiteName}}、{{.Code}}、{{.TTLMinutes}}、{{.Action}}、{{.URL}}、{{.Email}}、{{.Name}}' })"
           />
 
           <Tabs size="small">
@@ -442,7 +442,7 @@ onMounted(load)
                 <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.code_subject"
-                    :placeholder="$t('留空使用默认：{ph} 验证码', { ph: '{{.SiteName}}' })"
+                    :placeholder="$t('auth.leave_empty_for_default_ph_captcha', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('common.body_html')">
@@ -466,7 +466,7 @@ onMounted(load)
                 <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.welcome_subject"
-                    :placeholder="$t('留空使用默认：欢迎加入 {ph}', { ph: '{{.SiteName}}' })"
+                    :placeholder="$t('common.leave_empty_for_default_welcome_ph', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('common.body_html')">
@@ -490,14 +490,14 @@ onMounted(load)
                 <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.reset_subject"
-                    :placeholder="$t('留空使用默认：{ph} 密码重置', { ph: '{{.SiteName}}' })"
+                    :placeholder="$t('auth.leave_empty_for_default_ph_password_reset', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
                 <FormItem :label="$t('common.body_html')">
                   <Input.TextArea
                     v-model:value="form.reset_body"
                     :rows="8"
-                    :placeholder="$t('留空使用内置默认模板（含 {ph} 重置链接）', { ph: '{{.URL}}' })"
+                    :placeholder="$t('auth.leave_empty_to_use_the_built_in_default_template_includes_a_ph_reset_link', { ph: '{{.URL}}' })"
                   />
                 </FormItem>
               </Form>

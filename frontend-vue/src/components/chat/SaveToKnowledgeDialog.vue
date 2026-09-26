@@ -34,7 +34,7 @@ const percent = ref(0)
 watch(() => props.open, async (open) => {
   if (!open) return
   percent.value = 0
-  title.value = props.defaultTitle?.trim() || t('对话记录 {time}', { time: new Date().toLocaleString() })
+  title.value = props.defaultTitle?.trim() || t('chat.conversation_time', { time: new Date().toLocaleString() })
   if (bases.value.length > 0) return
   loadingBases.value = true
   try {
@@ -67,7 +67,7 @@ async function save() {
     emit('saved', kbId.value)
     emit('update:open', false)
   } catch (error) {
-    message.error(t('存入失败：{error}', { error: error instanceof Error ? error.message : String(error) }))
+    message.error(t('errors.save_failed_error_2', { error: error instanceof Error ? error.message : String(error) }))
   } finally {
     saving.value = false
   }
@@ -106,13 +106,13 @@ async function save() {
         />
       </div>
       <p class="save-kb-hint">
-        {{ $t('将上传本次对话的正文（{n} 字符）为 Markdown 文档；思考过程与工具调用不会写入。', { n: content.length }) }}
+        {{ $t('agent.upload_this_conversation_s_body_n_characters_as_a_markdown_document_reasoning_and_tool_calls_are_not_included', { n: content.length }) }}
       </p>
       <p
         v-if="saving"
         class="save-kb-hint"
       >
-        {{ $t('上传中 {n}%', { n: percent }) }}
+        {{ $t('common.uploading_n', { n: percent }) }}
       </p>
     </div>
   </Modal>

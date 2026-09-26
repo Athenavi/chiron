@@ -4,9 +4,9 @@
 
 ## 0. 当前状态
 
-主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed；`npm run test` 460 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 300 warnings（`no-explicit-any` 剩 272，全在 `views/`，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
+主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed；`npm run test` 464 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 299 warnings（`no-explicit-any` 剩 272，全在 `views/`，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
 
-i18n 基线已是空账本，护栏转为「阻止新增硬编码中文」。
+i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；护栏转为 `check-i18n.mjs` 的**「翻译调用禁用中文字面键」**——legacy 清空后再写 `t('中文')` 必然缺键（回显 key、不插值、en-US/ar 永不命中）。
 
 ## 1. L1 国际化
 
@@ -15,13 +15,18 @@ i18n 基线已是空账本，护栏转为「阻止新增硬编码中文」。
 - 提交 `b7fea4f`（en-US legacy 2150/2150）、`84c6991`（前后台语言切换器）、`2dc7d81`（ar legacy 2150/2150）。
 - 验收：`check-i18n-keys` 与 `check:ui` 通过，baseline 锁定 `en-US:0 / ar:0`；ar 语义域此前已对齐。
 
-### L1-4 语义化 key 改造
+### L1-4 语义化 key 改造 ✅
 
-- 依据：`src/i18n/README.md` 末段——生成的 key 是**原文**（gettext 风格），语义化 key 改造是独立任务（只改 key，不改文案）；key 规范 `<域>.<语义>`。
-- 依赖：L1-3 已完成，可启动。
-- 验收：`legacy.ts` 原文 key 收敛为语义化 key；只改 key 不改文案；测试与 `check:ui` 保持绿。
-- **状态（auth 域试点已完成）**：14 个键（`login`/`register`/`logout`/`username`/`password`/`confirmPassword`/`email`(合并既有)/`phone`/`verificationCode`(+sent/+sendFailed)/`loginFailed`/`registerFailed`/`resetPassword`）已从 `legacy.ts` 迁入 `auth.ts` 作嵌套键，调用点同步改写为 `t('auth.*')`；`check-i18n-keys`/`check:ui`/lint/`vue-tsc`/vitest(464) 全绿。
-- **方案（已验证）**：rename **不能**写成 `legacy.ts` 里的带点字符串键——vue-i18n 把 `t('auth.login')` 的 `.` 当路径分隔符，扁平点分键永远命不中。正确做法是把中文键**迁移进对应域文件（`auth.ts`/`common.ts`/`chat.ts`/`errors.ts`/`admin.ts`）作嵌套键**并从 `legacy.ts` 删除。剩余 ~2136 个键按同法按域推进即可。
+- 提交 `283c84b`（2136 个 legacy 键全量迁入 13 个域文件，附 `_analyze.mjs`/`_migrate.mjs`/`_migrate_report.json`）、本次提交（收尾）。`legacy.ts` 三语种清空为 0。
+- **方案（已验证）**：rename **不能**写成 `legacy.ts` 里的带点字符串键——vue-i18n 把 `t('auth.login')` 的 `.` 当路径分隔符；正确做法是把中文键**迁入对应域文件作嵌套键**并从 `legacy.ts` 删除。auth 域 14 键为试点（`78c5d70`）。
+- **收尾修掉四类迁移缺口**（脚本的正则/换行假设造成，验收时逐类核出）：
+  1. `index.ts` 的新域 import/export 因 CRLF 漏加（脚本按 `\n` 匹配 `\r\n` 行）→ `agent.*` 等 8 域键全部命不中，`t()` 只回显键名；
+  2. 带参调用未改写（正则要求 `t('key')` 紧跟右括号，`t('读取 {n}', { n })` 全漏）+ `tr` 别名整类漏掉（`const { t: tr } = useI18n()` 不匹配 `\bt`）+ 3 处键内含 `"` 的 → 共补改写 417 处；
+  3. 迁移键与既有 `common` 键撞名 14×3：同值删 11、异值改名 3（`editModify`/`clear_2`/`copiedExcl`，调用点按「迁移前整行内容」判定归属后同步改写）；
+  4. 2 个 legacy 里根本没有的中文键：`已选择 {sel} / {total}` 改挂既有 `common.selected_sel_total_items`，市场空态提示新增 `common.market_empty_hint`（三语种补齐）。
+- 护栏：`check-i18n.mjs` 新增**「翻译调用禁用中文字面键」**（三种引号 + `tr`/`translate`/`i18n.t` 别名，注释与 `.test.ts` 除外）。实测该缺口曾一次漏 400+ 处，靠人眼守不住；守护脚本自身用注入探针验证过能红。
+- 测试口径同步：`SessionStatsPanel.spec` 的「`$t` 回显 key」桩已改走 test-setup 注册的真实 i18n（语义化 key 后回显的是 `chat.stats.turns` 这类键名，桩断言中文的前提不再成立）。
+- 验收：`check-i18n-keys`/`check:ui` 0 缺键、中文字面键扫描 0 处、lint 0 errors / 299 warnings、`vue-tsc -b` 通过、vitest **464 passed**。
 
 ## 2. L2 质量门禁接线
 
@@ -41,7 +46,7 @@ i18n 基线已是空账本，护栏转为「阻止新增硬编码中文」。
 
 ### L3-2 收敛 ESLint warning（剩 272 条 `no-explicit-any`，全在 `views/`）
 
-- 依据：`npm run lint` 0 errors / 300 warnings；`components/` 已清零（提交 `de7cb61`…`4fb2e61`），契约层 47 条已类型化；剩 `views` 272 条（ChatView 38、DatabaseManagementView 19、MediaView 16、WorkflowView 15、KnowledgeDetailView 14 为前五大）。
+- 依据：`npm run lint` 0 errors / 299 warnings；`components/` 已清零（提交 `de7cb61`…`4fb2e61`），契约层 47 条已类型化；剩 `views` 272 条（ChatView 38、DatabaseManagementView 19、MediaView 16、WorkflowView 15、KnowledgeDetailView 14 为前五大，本次核验仍准确）。总 warning 数曾随 L1-4 迁移 300→318（18 条 `vue/html-indent`），已 `eslint --fix` 回落至 299。
 - 已知做法（已验证可沿用）：明确结构→定义契约接口；本质动态→`unknown` 并窄化调用侧；DOM 非标准成员→交叉类型 + 存在性判断；多形状解析→小助手（`asArray`/`asObject`）；axios 错误体→`utils/apiError.ts` 的 `serverErrorMessage`/`errorStatus`（与 `describeApiError` 分工不同：前者取后端原文，后者转 i18n 文案）。
 - 待决：全仓 136 处 `catch (e: any)` 是否统一改用 `describeApiError`（可见行为变更，需单独定）。
 - 硬约束：不为清零加 `eslint-disable`；每批单独跑 `vue-tsc -b` 与组件测试。
@@ -100,9 +105,10 @@ i18n 基线已是空账本，护栏转为「阻止新增硬编码中文」。
 | 批次 | 内容 | 理由 |
 |---|---|---|
 | A. 门禁与文档（性价比最高） | L2-2、L5-2 | L2-1 已清零，L2-2 可能暴露存量缺陷（即价值）；L5-2 提升后续改动可信度 |
-| B. i18n 收尾 | L1-4（语义化 key） | L1-3 已完成，可启动 |
 | C. 跨层设计 | L4-1、L4-2、L4-3 | 需设计评审或可达 PG；L4-3 是唯一库结构变更 |
 | D. 可维护性 | L3-2、L3-4、L3-7 | 无功能收益，放最后 |
+
+> 批次 B（i18n 收尾 L1-4）已完成，见 §1。
 
 ## 8. 通用验收口径
 

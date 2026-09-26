@@ -110,9 +110,9 @@ async function saveAsWorkflow() {
   savingWorkflow.value = true
   try {
     const saved = await createGraph({ name: graph.name, graph_json: graph.graph_json })
-    message.success(t('已保存为工作流「{name}」，可在工作流页打开调整', { name: saved?.name || graph.name }))
+    message.success(t('workflow.saved_as_workflow_name_open_it_on_the_workflows_page_to_adjust', { name: saved?.name || graph.name }))
   } catch (e) {
-    message.error(t('保存工作流失败: {error}', { error: describeApiError(e) }))
+    message.error(t('errors.failed_to_save_workflow_error', { error: describeApiError(e) }))
   } finally {
     savingWorkflow.value = false
   }
@@ -160,20 +160,20 @@ async function saveAsAgent() {
     // 明确说出继承了哪些 —— 绑定是"沉默生效"的，不告诉用户就成幽灵行为
     const inherited = [
       bindings.kb_id ? t('knowledge.knowledge_base') : '',
-      bindings.skills?.length ? t('{n} 个技能', { n: bindings.skills.length }) : '',
-      bindings.plugins?.length ? t('{n} 个插件', { n: bindings.plugins.length }) : '',
+      bindings.skills?.length ? t('agent.n_skills', { n: bindings.skills.length }) : '',
+      bindings.plugins?.length ? t('common.n_plugins', { n: bindings.plugins.length }) : '',
     ].filter(Boolean)
     message.success(
       inherited.length
-        ? t('已创建 Agent「{name}」，并继承本对话的 {list}，可在 Agents 页继续调整', {
+        ? t('agent.created_agent_name_inheriting_this_conversation_s_list_adjust_on_the_agents_page', {
             name,
             list: inherited.join('、'),
           })
-        : t('已创建 Agent「{name}」，可在 Agents 页继续调整', { name }),
+        : t('agent.created_agent_name_adjust_it_on_the_agents_page', { name }),
     )
     saveAgentOpen.value = false
   } catch (e) {
-    message.error(t('创建 Agent 失败: {error}', { error: describeApiError(e) }))
+    message.error(t('errors.failed_to_create_agent_error', { error: describeApiError(e) }))
   } finally {
     savingAgent.value = false
   }
@@ -563,7 +563,7 @@ function onToolsModeChange(v: any) {
   message.success(
     m === 'yolo'
       ? t('agent.switched_to_fully_automatic_tool_confirmation_skipped_this_leaves_an_audit_trail')
-      : t('工具授权模式已设为「{mode}」', { mode: toolsModeOptions.find(o => o.value === m)?.label || m }),
+      : t('agent.tool_auth_mode_set_to_mode', { mode: toolsModeOptions.find(o => o.value === m)?.label || m }),
   )
 }
 
@@ -611,7 +611,7 @@ function onEffortChange(v: string) {
   effort.value = (EFFORT_ORDER as readonly string[]).includes(v) ? v : ''
   persistRuntime({})
   message.info(
-    effort.value ? t('思考档位：{level}', { level: EFFORT_LABEL.value[effort.value] }) : t('auth.reasoning_level_reset_to_default'),
+    effort.value ? t('chat.reasoning_level_level', { level: EFFORT_LABEL.value[effort.value] }) : t('auth.reasoning_level_reset_to_default'),
   )
 }
 
@@ -702,7 +702,7 @@ function onMentionAdd(p: { type: string; id: string; name: string }) {
 function onModelChange(m: string) {
   if (m === llmModel.value) return
   llmModel.value = m
-  message.info(m ? t('模型已切换：{model}（仅影响后续消息）', { model: m }) : t('auth.model_reset_to_default_backend_routing'))
+  message.info(m ? t('agent.model_switched_model_affects_subsequent_messages_only', { model: m }) : t('auth.model_reset_to_default_backend_routing'))
   persistRuntime({ model: m || null })
 }
 
@@ -719,8 +719,8 @@ function onModeChange(m: string) {
   const preset = MODE_PRESETS.value[m]
   message.info(
     preset?.desc
-      ? t('已切换到「{mode}」模式：{desc}，仅影响后续消息', { mode: opt?.label || m, desc: preset.desc })
-      : t('已切换到「{mode}」模式，仅影响后续消息', { mode: opt?.label || m }),
+      ? t('chat.switched_to_mode_mode_desc_affects_subsequent_messages_only', { mode: opt?.label || m, desc: preset.desc })
+      : t('chat.switched_to_mode_mode_affects_subsequent_messages_only', { mode: opt?.label || m }),
   )
 }
 
@@ -817,7 +817,7 @@ async function initContextChips(q: Record<string, any>) {
       const d = res.data?.data || res.data
       if (d?.name) {
         const c = contextChips.value.find(x => x.type === 'kb')
-        if (c) c.label = t('知识库 {name}', { name: d.name })
+        if (c) c.label = t('knowledge.knowledge_base_name', { name: d.name })
       }
     } catch { /* 保留 id 占位 */ }
   }
@@ -839,7 +839,7 @@ async function initContextChips(q: Record<string, any>) {
       const rec = list.find((x: any) => x.id === workflow)
       if (rec?.name) {
         const c = contextChips.value.find(x => x.type === 'workflow')
-        if (c) c.label = t('工作流 {name}', { name: rec.name })
+        if (c) c.label = t('workflow.workflow_name', { name: rec.name })
       }
     } catch { /* 无列表时保留原文 */ }
   }
@@ -1560,7 +1560,7 @@ function onSlashCommand(cmd: string) {
       stopGeneration()
       break
     default:
-      message.warning(t('未知命令: {cmd}', { cmd }))
+      message.warning(t('common.unknown_command_cmd', { cmd }))
   }
 }
 
@@ -1782,7 +1782,7 @@ function requestDelete(id: string) {
   const s = sessions.value.find(x => x.id === id)
   Modal.confirm({
     title: t('chat.delete_conversation'),
-    content: t('确定删除「{title}」？此操作不可恢复。', { title: s?.title || t('chat.new_conversation') }),
+    content: t('common.delete_title_this_cannot_be_undone', { title: s?.title || t('chat.new_conversation') }),
     okText: t('common.delete'),
     okButtonProps: { danger: true },
     cancelText: t('common.cancel'),
@@ -1856,7 +1856,7 @@ async function setSessionTag(id: string, tag: string) {
   try {
     // 空串表示清除标签（后端 NULLIF 写 NULL）
     await updateConversation(id, { tag: tag || '' })
-    message.success(tag ? t('已设置标签：{tag}', { tag }) : t('common.tags_cleared'))
+    message.success(tag ? t('settings.tag_set_tag', { tag }) : t('common.tags_cleared'))
   } catch {
     s.tag = prev
     sortSessions(); persistSessions()
@@ -2218,8 +2218,8 @@ function confirmDestructive(removeCount: number, action: string, run: () => void
     return
   }
   Modal.confirm({
-    title: t('这会删除后面的 {n} 条消息', { n: removeCount }),
-    content: t('{action}需要截断到这条消息，其后 {n} 条消息（含助手回复）会被删除，且无法恢复。', { action, n: removeCount }),
+    title: t('chat.this_will_delete_the_following_n_messages', { n: removeCount }),
+    content: t('chat.action_will_truncate_at_this_message_the_following_n_messages_including_assistant_replies_will_be_deleted_and_cannot_be_recovered', { action, n: removeCount }),
     okText: t('common.delete_and_continue'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -2514,7 +2514,7 @@ function continueGeneration() {
               :disabled="!items.length"
               @click="clearUnifiedMessages"
             >
-              {{ $t('common.empty') }}
+              {{ $t('common.clear_2') }}
             </button>
             <button
               type="button"
@@ -2556,7 +2556,7 @@ function continueGeneration() {
                 v-else-if="(it as any).kind === 'kb_hits'"
                 class="kb-hits-tag"
               >
-                <span class="kb-hits-text">{{ $t('引用了知识库（×{n}）', { n: (it as any).count || 1 }) }}</span>
+                <span class="kb-hits-text">{{ $t('knowledge.referenced_knowledge_base_n', { n: (it as any).count || 1 }) }}</span>
                 <a
                   v-if="(it as any).kb_id"
                   class="kb-hits-link"
@@ -2631,7 +2631,7 @@ function continueGeneration() {
             <span
               v-if="approvalRemain(a) > 0"
               class="approval-countdown"
-            >{{ $t('{n}s 后自动拒绝', { n: approvalRemain(a) }) }}</span>
+            >{{ $t('errors.auto_reject_in_n_s', { n: approvalRemain(a) }) }}</span>
           </div>
           <div class="approval-args">
             {{ a.arguments }}

@@ -359,9 +359,9 @@ interface ExportMessage {
 /** 把一次会话渲染成 Markdown；reasoning 单独成节，避免与正文混淆 */
 function conversationToMarkdown(conv: ConversationItem, messages: ExportMessage[]): string {
   const lines: string[] = [
-    t('# {title}', { title: conv.title || t('chat.untitled_session') }),
+    t('common.title', { title: conv.title || t('chat.untitled_session') }),
     '',
-    t('> 导出时间：{time}', { time: new Date().toLocaleString() }),
+    t('common.exported_at_time', { time: new Date().toLocaleString() }),
     '',
   ]
   for (const m of messages) {
@@ -399,7 +399,7 @@ async function exportSelected() {
     a.download = `chiron-conversations-${new Date().toISOString().slice(0, 10)}.md`
     a.click()
     URL.revokeObjectURL(url)
-    message.success(t('已导出 {n} 个会话', { n: ids.length }))
+    message.success(t('chat.exported_n_sessions', { n: ids.length }))
   } catch (e) {
     message.error(serverErrorMessage(e, t('errors.export_failed')))
   } finally {
@@ -427,9 +427,9 @@ async function deleteSelected() {
       }
     }
     if (failed.length) {
-      message.warning(t('已删除 {ok} 个，失败 {failed} 个', { ok, failed: failed.length }))
+      message.warning(t('errors.deleted_ok_failed_failed', { ok, failed: failed.length }))
     } else {
-      message.success(t('已删除 {n} 个会话', { n: ok }))
+      message.success(t('chat.deleted_n_sessions', { n: ok }))
     }
     selectedConvIds.value = failed
     await loadConversations()
@@ -561,7 +561,7 @@ onMounted(async () => {
                   v-for="v in list"
                   :key="v.voiceURI"
                   :value="v.voiceURI"
-                  :label="v.localService ? v.name : $t('{name}（在线）', { name: v.name })"
+                  :label="v.localService ? v.name : $t('common.name_online', { name: v.name })"
                 >
                   {{ v.name }}<span v-if="!v.localService">{{ $t('common.online') }}</span>
                 </a-select-option>
@@ -716,7 +716,7 @@ onMounted(async () => {
                   :key="p.id"
                   @click="startBind(p.id)"
                 >
-                  {{ $t('绑定 {name}', { name: p.display_name || p.name }) }}
+                  {{ $t('common.bind_name', { name: p.display_name || p.name }) }}
                 </Button>
               </div>
             </div>
@@ -785,7 +785,7 @@ onMounted(async () => {
                     :loading="sendingCode"
                     @click="handleSendBindCode"
                   >
-                    {{ phoneCountdown > 0 ? $t('{n}s 后重发', { n: phoneCountdown }) : $t('auth.get_verification_code') }}
+                    {{ phoneCountdown > 0 ? $t('common.resend_in_n_s', { n: phoneCountdown }) : $t('auth.get_verification_code') }}
                   </Button>
                 </template>
               </Input>
@@ -871,7 +871,7 @@ onMounted(async () => {
               <LinkOutlined class="row-icon" />
               <span class="identity-name">{{ item.title || $t('chat.untitled_conversation') }}</span>
               <span class="identity-meta">
-                {{ $t('{n} 条消息 · {time}', { n: item.message_count, time: new Date(item.created_at).toLocaleString() }) }}
+                {{ $t('chat.n_messages_time', { n: item.message_count, time: new Date(item.created_at).toLocaleString() }) }}
               </span>
             </div>
             <div class="row-actions">
@@ -904,7 +904,7 @@ onMounted(async () => {
         <div class="setting-title">
           {{ $t('chat.history_sessions') }}
           <span class="setting-hint">
-            {{ $t('已选 {sel} / {total}', { sel: selectedCount, total: conversations.length }) }}
+            {{ $t('common.selected_sel_total', { sel: selectedCount, total: conversations.length }) }}
           </span>
         </div>
         <div class="data-toolbar">

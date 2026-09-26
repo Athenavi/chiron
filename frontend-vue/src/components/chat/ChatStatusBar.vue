@@ -36,7 +36,7 @@ const compactionText = computed(() => {
   const c = props.compaction
   if (!c || !c.savedTokens) return ''
   const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
-  return t('已压缩 {before} → {after}', { before: k(c.beforeTokens), after: k(c.afterTokens) })
+  return t('common.compressed_before_after', { before: k(c.beforeTokens), after: k(c.afterTokens) })
 })
 </script>
 

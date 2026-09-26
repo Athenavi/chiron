@@ -84,7 +84,7 @@ export function sessionToGraph(
   if (!hasBody) return null
 
   const markdown = sessionToMarkdown(items, title)
-  const name = (title || '').trim() || t('对话工作流 {time}', { time: new Date().toLocaleString() })
+  const name = (title || '').trim() || t('workflow.conversation_workflow_time', { time: new Date().toLocaleString() })
   const kbId = (options.kbId || '').trim()
 
   // ── 没挂知识库：保持单 llm 节点，正文进 user_message ──

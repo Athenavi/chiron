@@ -93,9 +93,9 @@ function onModelChange(v: unknown) {
 // 用户确认**。参照 reasonix 的 ComposerChoice —— 说明文字**随选项走**（option.description），
 // 而不是在控件旁外挂一行提示；所以这里把每一档的语义做成该选项的**悬浮 pop 词**。
 const TOOLS_MODE_META = [
-  { value: 'ask', label: tr('询问'), desc: tr('写类工具需确认：shell 执行、文件写入、git 写操作、浏览器/网络访问') },
-  { value: 'auto', label: tr('自动'), desc: tr('仅危险工具需确认（默认）：shell/命令执行等对外部世界的动作') },
-  { value: 'yolo', label: tr('全自动'), desc: tr('跳过全部确认：所有工具直接执行（该操作会留审计日志）') },
+  { value: 'ask', label: tr('common.ask'), desc: tr('agent.write_type_tools_require_confirmation_shell_execution_file_writing_git_writes_browser_network_access') },
+  { value: 'auto', label: tr('common.auto'), desc: tr('agent.only_dangerous_tools_require_confirmation_default_shell_command_execution_and_other_actions_on_the_external_world') },
+  { value: 'yolo', label: tr('common.fully_automatic'), desc: tr('agent.skip_all_confirmation_all_tools_execute_directly_this_action_is_logged_in_the_audit_trail') },
 ] as const
 
 /** 选项 label 用 VNode 包一层 Tooltip —— 悬浮即见该档语义（对齐 reasonix 的 option.description） */
@@ -116,10 +116,10 @@ function onToolsModeChange(v: unknown) {
 // 告诉用户"此刻该做什么"。原先只有 dragOver 一种，于是生成中仍写着"发送消息…"，
 // 而实际上此时 Enter 是"打断并发送"——语义相反，容易误操作。
 const inputPlaceholder = computed(() => {
-  if (dragOver.value) return tr('松开以上传文件')
-  if (props.loading) return tr('正在生成…按 Enter 打断并发送')
-  if (props.disabled) return tr('当前会话不可输入')
-  return tr('发送消息…（/ 查看命令 · ↑ 召回历史）')
+  if (dragOver.value) return tr('media.release_to_upload_file')
+  if (props.loading) return tr('common.generating_press_enter_to_interrupt_and_send')
+  if (props.disabled) return tr('chat.this_session_does_not_accept_input')
+  return tr('chat.send_message_for_commands_for_history')
 })
 
 // ── 运行态内联 ──
@@ -307,7 +307,7 @@ const mentionItems = ref<{ type: string; id: string; name: string }[]>([])
 /** `@` 提及的类型标签；写成函数以便每次渲染取当前语言（模块级 `tr` 不具响应式）。 */
 function mentionLabel(type: string): string {
   const map: Record<string, string> = {
-    kb: tr('知识库'), agent: 'Agent', skill: tr('技能'), workflow: tr('工作流'), plugin: tr('插件'),
+    kb: tr('knowledge.knowledge_base'), agent: 'Agent', skill: tr('agent.skill'), workflow: tr('workflow.workflow'), plugin: tr('common.plugin'),
   }
   return map[type] || type
 }
@@ -515,7 +515,7 @@ async function handleFiles(files: FileList | File[]) {
   try {
     for (const file of arr) {
       if (file.size > MAX_FILE_SIZE) {
-        message.error(tr('{name} 超过 50MB 限制', { name: file.name }))
+        message.error(tr('errors.name_exceeds_the_50mb_limit', { name: file.name }))
         continue
       }
       const result = await uploadFile(file)
@@ -531,7 +531,7 @@ async function handleFiles(files: FileList | File[]) {
     }
   } catch (e) {
     const detail = e instanceof Error ? e.message : ''
-    message.error(tr('文件上传失败: {error}', { error: detail || tr('网络错误') }))
+    message.error(tr('errors.file_upload_failed_error', { error: detail || tr('errors.network_error_2') }))
   } finally {
     uploading.value = false
     if (fileInputRef.value) fileInputRef.value.value = ''
@@ -659,7 +659,7 @@ let speechPrefix = ''
 
 function startRecording() {
   if (!speechSupported) {
-    message.warning(tr('当前浏览器不支持语音转写，请使用 Chrome / Edge / Safari'))
+    message.warning(tr('chat.current_browser_does_not_support_speech_to_text_please_use_chrome_edge_safari'))
     return
   }
   try {
@@ -686,8 +686,8 @@ function startRecording() {
       if (e?.error === 'no-speech' || e?.error === 'aborted') return
       message.error(
         e?.error === 'not-allowed'
-          ? tr('麦克风权限被拒绝，请在浏览器设置中允许后重试')
-          : `${tr('语音转写失败')}: ${e?.error || ''}`,
+          ? tr('errors.microphone_permission_denied_please_allow_it_in_your_browser_settings_and_retry')
+          : `${tr('errors.speech_transcription_failed')}: ${e?.error || ''}`,
       )
       stopRecording()
     }
@@ -699,7 +699,7 @@ function startRecording() {
     recordingTimer.value = 0
     recordingInterval = setInterval(() => { recordingTimer.value++ }, 1000)
   } catch {
-    message.error(tr('无法启动语音转写，请检查麦克风权限'))
+    message.error(tr('errors.unable_to_start_speech_transcription_please_check_microphone_permission'))
   }
 }
 
@@ -727,11 +727,11 @@ function formatRecordingTime(seconds: number): string {
 // 用 computed 而非常量数组：desc 是用户可见文案，常量在模块加载时求值一次，
 // 语言切换后会一直停在旧语言。
 const SLASH_COMMANDS = computed(() => [
-  { cmd: '/clear', desc: tr('清空当前对话') },
-  { cmd: '/export', desc: tr('导出当前会话为 Markdown') },
-  { cmd: '/new', desc: tr('新建会话') },
-  { cmd: '/theme', desc: tr('切换暗色/亮色模式') },
-  { cmd: '/stop', desc: tr('停止生成') },
+  { cmd: '/clear', desc: tr('chat.clear_current_conversation') },
+  { cmd: '/export', desc: tr('chat.export_current_session_as_markdown') },
+  { cmd: '/new', desc: tr('chat.new_session') },
+  { cmd: '/theme', desc: tr('common.toggle_dark_light_mode') },
+  { cmd: '/stop', desc: tr('common.stop_generating') },
 ])
 const showSlashMenu = ref(false)
 const slashIndex = ref(0)
@@ -779,7 +779,7 @@ defineExpose({ insertText })
           {{ pastedLargeText.slice(0, PASTE_PREVIEW) }}<span v-if="pastedLargeText.length > PASTE_PREVIEW">…</span>
         </div>
         <div class="paste-preview-meta">
-          {{ $t('已粘贴 {n} 字符', { n: pastedLargeText.length }) }}
+          {{ $t('common.pasted_n_characters', { n: pastedLargeText.length }) }}
         </div>
         <div class="paste-preview-actions">
           <button

@@ -89,7 +89,7 @@ async function publishItem(it: MarketItem) {
 async function retireItem(it: MarketItem) {
   Modal.confirm({
     title: t('common.retire_item'),
-    content: t('退役「{name}」？退役为终态，不可回 published。', { name: it.name }),
+    content: t('common.retire_name_retirement_is_terminal_and_cannot_return_to_published', { name: it.name }),
     okText: t('common.retire'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -108,7 +108,7 @@ async function retireItem(it: MarketItem) {
 function confirmDeleteItem(it: MarketItem) {
   Modal.confirm({
     title: t('common.delete_item'),
-    content: t('确认删除「{name}」？', { name: it.name }),
+    content: t('common.confirm_delete_name', { name: it.name }),
     okText: t('common.delete'),
     okType: 'danger',
     cancelText: t('common.cancel'),
@@ -359,7 +359,7 @@ onMounted(fetchItems)
 
     <a-drawer
       v-model:open="grantDrawerVisible"
-      :title="currentItem ? $t('租户授权 - {name}', { name: currentItem.name }) : $t('admin.tenant_authorization')"
+      :title="currentItem ? $t('admin.tenant_authorization_name', { name: currentItem.name }) : $t('admin.tenant_authorization')"
       width="640"
       placement="right"
     >

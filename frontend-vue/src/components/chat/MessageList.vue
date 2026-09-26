@@ -575,7 +575,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
             v-else
             class="kb-hits-tag"
           >
-            <span class="kb-hits-text">{{ $t('引用了知识库（×{n}）', { n: (node as any).row.item.count || 1 }) }}</span>
+            <span class="kb-hits-text">{{ $t('knowledge.referenced_knowledge_base_n', { n: (node as any).row.item.count || 1 }) }}</span>
             <a
               v-if="(node as any).row.item.kb_id"
               class="kb-hits-link"
@@ -601,7 +601,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         v-if="showBackToBottom"
         class="back-to-bottom"
         type="button"
-        :title="unseenCount ? $t('回到底部（{n} 条新消息）', { n: unseenCount }) : $t('common.back_to_bottom')"
+        :title="unseenCount ? $t('chat.back_to_bottom_n_new_messages', { n: unseenCount }) : $t('common.back_to_bottom')"
         @click="scrollToBottom"
       >
         <ArrowDownOutlined />
@@ -628,7 +628,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
           :class="{ active: q.key === activeQuestionKey }"
           type="button"
           :title="q.preview"
-          :aria-label="$t('跳转到提问：{preview}', { preview: q.preview })"
+          :aria-label="$t('common.jump_to_question_preview', { preview: q.preview })"
           @click="jumpToRow(q.rowIndex)"
         />
       </nav>

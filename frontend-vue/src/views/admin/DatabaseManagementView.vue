@@ -97,7 +97,7 @@ async function createBackup() {
   try {
     const resp = await api.post('/v1/admin/database/backups')
     const d = resp.data?.data || {}
-    message.success(t('备份已创建（{name}，状态：{status}）', { name: d.name || '—', status: d.status || 'pending' }))
+    message.success(t('common.backup_created_name_status_status', { name: d.name || '—', status: d.status || 'pending' }))
     await loadBackups()
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('errors.failed_to_create_backup')))
@@ -110,7 +110,7 @@ async function restoreBackup(record: any) {
   restoringName.value = record.name
   try {
     await api.post(`/v1/admin/database/backups/${encodeURIComponent(record.name)}/restore`)
-    message.success(t('正在从备份「{name}」恢复，请稍后刷新查看结果', { name: record.name }))
+    message.success(t('common.restoring_from_backup_name_refresh_shortly_to_see_the_result', { name: record.name }))
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('errors.restore_failed')))
   } finally {
@@ -127,7 +127,7 @@ const queryResult = ref<any>(null)
 const queryColumns = computed(() => {
   const cols = queryResult.value?.columns || []
   return cols.map((c: any, i: number) => ({
-    title: typeof c === 'string' ? c : (c?.name || t('列 {n}', { n: i + 1 })),
+    title: typeof c === 'string' ? c : (c?.name || t('common.column_n', { n: i + 1 })),
     dataIndex: typeof c === 'string' ? c : (c?.name || `col_${i}`),
     ellipsis: true,
   }))
@@ -182,7 +182,7 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
   try {
     const resp = await api.post(`/v1/admin/database/optimize/${action}`, { table })
     const d = resp.data?.data || {}
-    message.success(t('优化完成：{action} {table}（{status}）', { action: d.action || action, table: d.table || table, status: d.status || 'ok' }))
+    message.success(t('common.optimization_complete_action_table_status', { action: d.action || action, table: d.table || table, status: d.status || 'ok' }))
   } catch (e: any) {
     message.error(apiErrorMessage(e, t('errors.optimization_failed')))
   } finally {
@@ -369,7 +369,7 @@ onMounted(async () => {
             {{ $t('common.run_query') }}
           </Button>
           <Button @click="queryResult = null; queryText = ''">
-            {{ $t('common.empty') }}
+            {{ $t('common.clear_2') }}
           </Button>
         </Space>
 

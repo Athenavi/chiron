@@ -70,7 +70,7 @@ async function save() {
       message.warning(t('errors.conflicts_with_confirmed_memory_logged_for_review_please_handle_on_the_memory_page'))
     } else if (res.duplicate_of) {
       message.warning(
-        t('检测到相似记忆「{key}」，可在记忆页智能整理时合并', { key: res.duplicate_of.key }),
+        t('memory.similar_memory_key_detected_merges_during_memory_cleanup', { key: res.duplicate_of.key }),
       )
     } else {
       message.success(t('memory.remembered_this_memory_will_be_attached_automatically_in_future_conversations'))
@@ -138,7 +138,7 @@ async function save() {
       </div>
 
       <div class="save-memory-field">
-        <label class="save-memory-label">{{ $t('置信度 {n}', { n: confidence }) }}</label>
+        <label class="save-memory-label">{{ $t('common.confidence_n_2', { n: confidence }) }}</label>
         <Slider
           v-model:value="confidence"
           :min="0"

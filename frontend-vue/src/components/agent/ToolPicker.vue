@@ -73,7 +73,7 @@ function onChange(value: unknown) {
     parseFailed = !!props.modelValue.trim()
   }
   if (parseFailed) {
-    message.warning(tr('现有工具配置不是合法 JSON，已按本次选择重写'))
+    message.warning(tr('agent.existing_tool_config_was_not_valid_json_and_has_been_rewritten_per_this_selection'))
   }
 
   // 保留用户手写、且不在引擎列表里的条目（引擎里的按最新 schema 重写）

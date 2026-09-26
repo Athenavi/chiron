@@ -19,7 +19,7 @@
       size="page"
       :icon="markRaw(typeIcons[type])"
       :description="searchQuery ? $t('common.no_matching_market_items') : $t('common.market_is_empty')"
-      :hint="searchQuery ? $t('common.try_adjusting_your_search_keywords') : $t('管理员发布市场条目后，将展示在这里')"
+      :hint="searchQuery ? $t('common.try_adjusting_your_search_keywords') : $t('common.market_empty_hint')"
     />
 
     <div
@@ -86,7 +86,7 @@
             v-if="type === 'agent'"
             :color="toolCount(item) ? 'blue' : 'default'"
           >
-            {{ $t('{n} 工具', { n: toolCount(item) }) }}
+            {{ $t('agent.n_tools', { n: toolCount(item) }) }}
           </Tag>
           <Tag>v{{ item.version || '1.0.0' }}</Tag>
         </div>
