@@ -12,4 +12,18 @@ export default {
   email: '邮箱',
   newPassword: '新密码',
   confirmNewPassword: '确认新密码',
+  login: '登录',
+  register: '注册',
+  logout: '退出登录',
+  username: '用户名',
+  password: '密码',
+  confirmPassword: '确认密码',
+  phone: '手机号',
+  verificationCode: '验证码',
+  verificationCodeSent: '验证码已发送',
+  verificationCodeSendFailed: '验证码发送失败',
+  loginFailed: '登录失败',
+  registerFailed: '注册失败',
+  resetPassword: '重置密码',
+
 }

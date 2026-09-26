@@ -10,4 +10,18 @@ export default {
   email: 'البريد الإلكتروني',
   newPassword: 'كلمة المرور الجديدة',
   confirmNewPassword: 'تأكيد كلمة المرور الجديدة',
+  login: 'تسجيل الدخول',
+  register: 'تسجيل',
+  logout: 'تسجيل الخروج',
+  username: 'اسم المستخدم',
+  password: 'كلمة المرور',
+  confirmPassword: 'تأكيد كلمة المرور',
+  phone: 'رقم الهاتف',
+  verificationCode: 'رمز التحقق',
+  verificationCodeSent: 'تم إرسال رمز التحقق',
+  verificationCodeSendFailed: 'فشل إرسال رمز التحقق',
+  loginFailed: 'فشل تسجيل الدخول',
+  registerFailed: 'فشل التسجيل',
+  resetPassword: 'إعادة تعيين كلمة المرور',
+
 }

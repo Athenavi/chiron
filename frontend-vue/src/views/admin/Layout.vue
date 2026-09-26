@@ -138,7 +138,7 @@ const userMenuItems = computed<any[]>(() => [
   { key: 'profile', label: t('个人资料'), icon: () => h(UserOutlined) },
   { key: 'toggle-theme', label: themeStore.isDark ? t('浅色模式') : t('深色模式'), icon: () => h(BulbOutlined) },
   { type: 'divider' as const },
-  { key: 'logout', label: t('退出登录'), icon: () => h(LogoutOutlined) },
+  { key: 'logout', label: t('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
 
 function handleMenuClick(info: any) {

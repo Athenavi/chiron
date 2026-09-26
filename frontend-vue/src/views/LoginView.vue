@@ -102,7 +102,7 @@ async function handleSendCode() {
     // 倒计时严格对齐后端的冷却秒数：interval=0 表示后端未设冷却（允许连发），
     // 此时不应自作主张锁 60 秒（`|| 60` 会把 0 当成缺省值，造成"多出来"的倒计时）。
     start(res.interval ?? 0)
-    message.success(t('验证码已发送'))
+    message.success(t('auth.verificationCodeSent'))
     // 一次性凭据：发送后重置，登录时按需重新验证
     markCaptchaDirty()
     captchaRef.value?.reset()
@@ -126,7 +126,7 @@ async function handleSendCode() {
       smsError.value = t('发送过于频繁，请稍后再试')
       return
     }
-    smsError.value = apiErr || t('验证码发送失败')
+    smsError.value = apiErr || t('auth.verificationCodeSendFailed')
   } finally {
     sending.value = false
   }
@@ -169,7 +169,7 @@ async function handleSmsLogin() {
       markCaptchaDirty()
       return
     }
-    smsError.value = apiErr || t('登录失败')
+    smsError.value = apiErr || t('auth.loginFailed')
   } finally {
     smsLoading.value = false
   }
@@ -225,7 +225,7 @@ async function handleSendEmailCode() {
     })
     // 同上：以服务端冷却为准，0 表示不冷却
     startEmailCountdown(res.interval ?? 0)
-    message.success(t('验证码已发送'))
+    message.success(t('auth.verificationCodeSent'))
     markCaptchaDirty()
     captchaRef.value?.reset()
   } catch (e: any) {
@@ -248,7 +248,7 @@ async function handleSendEmailCode() {
       emailError.value = t('发送过于频繁，请稍后再试')
       return
     }
-    emailError.value = apiErr || t('验证码发送失败')
+    emailError.value = apiErr || t('auth.verificationCodeSendFailed')
   } finally {
     emailSending.value = false
   }
@@ -291,7 +291,7 @@ async function handleEmailLogin() {
       markCaptchaDirty()
       return
     }
-    emailError.value = apiErr || t('登录失败')
+    emailError.value = apiErr || t('auth.loginFailed')
   } finally {
     emailLoading.value = false
   }
@@ -369,7 +369,7 @@ async function handleLogin() {
       markCaptchaDirty()
       return
     }
-    error.value = apiErr || t('登录失败')
+    error.value = apiErr || t('auth.loginFailed')
   }
 }
 </script>
@@ -465,14 +465,14 @@ async function handleLogin() {
             @finish="handleLogin"
           >
             <FormItem
-              :label="$t('邮箱')"
+              :label="$t('auth.email')"
               name="email"
             >
               <Input
                 v-model:value="form.email"
                 :placeholder="$t('请输入邮箱')"
                 size="large"
-                :aria-label="$t('邮箱')"
+                :aria-label="$t('auth.email')"
                 autocomplete="email"
               >
                 <template #prefix>
@@ -482,7 +482,7 @@ async function handleLogin() {
             </FormItem>
 
             <FormItem
-              :label="$t('密码')"
+              :label="$t('auth.password')"
               name="password"
             >
               <Input
@@ -490,7 +490,7 @@ async function handleLogin() {
                 :placeholder="$t('请输入密码')"
                 type="password"
                 size="large"
-                :aria-label="$t('密码')"
+                :aria-label="$t('auth.password')"
                 autocomplete="current-password"
               >
                 <template #prefix>
@@ -525,7 +525,7 @@ async function handleLogin() {
                   :loading="authStore.loading"
                   size="large"
                 >
-                  {{ $t('登录') }}
+                  {{ $t('auth.login') }}
                 </Button>
                 <Button
                   v-if="resetEnabled"
@@ -564,7 +564,7 @@ async function handleLogin() {
             layout="vertical"
           >
             <FormItem
-              :label="$t('手机号')"
+              :label="$t('auth.phone')"
               name="phone"
             >
               <Input
@@ -580,7 +580,7 @@ async function handleLogin() {
             </FormItem>
 
             <FormItem
-              :label="$t('验证码')"
+              :label="$t('auth.verificationCode')"
               name="code"
             >
               <Input
@@ -628,7 +628,7 @@ async function handleLogin() {
                 :loading="smsLoading"
                 @click="handleSmsLogin"
               >
-                {{ $t('登录') }}
+                {{ $t('auth.login') }}
               </Button>
             </FormItem>
           </Form>
@@ -651,7 +651,7 @@ async function handleLogin() {
             layout="vertical"
           >
             <FormItem
-              :label="$t('邮箱')"
+              :label="$t('auth.email')"
               name="email"
             >
               <Input
@@ -668,7 +668,7 @@ async function handleLogin() {
             </FormItem>
 
             <FormItem
-              :label="$t('验证码')"
+              :label="$t('auth.verificationCode')"
               name="code"
             >
               <Input
@@ -716,7 +716,7 @@ async function handleLogin() {
                 :loading="emailLoading"
                 @click="handleEmailLogin"
               >
-                {{ $t('登录') }}
+                {{ $t('auth.login') }}
               </Button>
             </FormItem>
           </Form>

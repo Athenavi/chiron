@@ -20,6 +20,8 @@ i18n 基线已是空账本，护栏转为「阻止新增硬编码中文」。
 - 依据：`src/i18n/README.md` 末段——生成的 key 是**原文**（gettext 风格），语义化 key 改造是独立任务（只改 key，不改文案）；key 规范 `<域>.<语义>`。
 - 依赖：L1-3 已完成，可启动。
 - 验收：`legacy.ts` 原文 key 收敛为语义化 key；只改 key 不改文案；测试与 `check:ui` 保持绿。
+- **状态（auth 域试点已完成）**：14 个键（`login`/`register`/`logout`/`username`/`password`/`confirmPassword`/`email`(合并既有)/`phone`/`verificationCode`(+sent/+sendFailed)/`loginFailed`/`registerFailed`/`resetPassword`）已从 `legacy.ts` 迁入 `auth.ts` 作嵌套键，调用点同步改写为 `t('auth.*')`；`check-i18n-keys`/`check:ui`/lint/`vue-tsc`/vitest(464) 全绿。
+- **方案（已验证）**：rename **不能**写成 `legacy.ts` 里的带点字符串键——vue-i18n 把 `t('auth.login')` 的 `.` 当路径分隔符，扁平点分键永远命不中。正确做法是把中文键**迁移进对应域文件（`auth.ts`/`common.ts`/`chat.ts`/`errors.ts`/`admin.ts`）作嵌套键**并从 `legacy.ts` 删除。剩余 ~2136 个键按同法按域推进即可。
 
 ## 2. L2 质量门禁接线
 

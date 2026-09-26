@@ -10,4 +10,18 @@ export default {
   email: 'Email',
   newPassword: 'New password',
   confirmNewPassword: 'Confirm new password',
+  login: 'Sign in',
+  register: 'Register',
+  logout: 'Log out',
+  username: 'Username',
+  password: 'Password',
+  confirmPassword: 'Confirm password',
+  phone: 'Phone number',
+  verificationCode: 'Verification code',
+  verificationCodeSent: 'Verification code sent',
+  verificationCodeSendFailed: 'Failed to send verification code',
+  loginFailed: 'Sign-in failed',
+  registerFailed: 'Registration failed',
+  resetPassword: 'Reset password',
+
 }

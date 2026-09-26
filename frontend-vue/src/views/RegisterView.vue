@@ -118,7 +118,7 @@ async function handleSendEmailCode() {
       emailCodeError.value = t('发送过于频繁，请稍后再试')
       return
     }
-    emailCodeError.value = apiErr || t('验证码发送失败')
+    emailCodeError.value = apiErr || t('auth.verificationCodeSendFailed')
   } finally {
     emailSending.value = false
   }
@@ -185,7 +185,7 @@ async function handleRegister() {
       markCaptchaDirty()
       return
     }
-    error.value = apiErr || t('注册失败')
+    error.value = apiErr || t('auth.registerFailed')
   }
 }
 </script>
@@ -252,14 +252,14 @@ async function handleRegister() {
           </FormItem>
 
           <FormItem
-            :label="$t('邮箱')"
+            :label="$t('auth.email')"
             name="email"
           >
             <Input
               v-model:value="form.email"
               :placeholder="$t('请输入邮箱')"
               size="large"
-              :aria-label="$t('邮箱')"
+              :aria-label="$t('auth.email')"
               autocomplete="email"
             >
               <template #prefix>
@@ -302,7 +302,7 @@ async function handleRegister() {
           </FormItem>
 
           <FormItem
-            :label="$t('密码')"
+            :label="$t('auth.password')"
             name="password"
           >
             <Input
@@ -310,7 +310,7 @@ async function handleRegister() {
               :placeholder="$t('请输入密码（至少8位）')"
               type="password"
               size="large"
-              :aria-label="$t('密码')"
+              :aria-label="$t('auth.password')"
               autocomplete="new-password"
             >
               <template #prefix>
@@ -320,7 +320,7 @@ async function handleRegister() {
           </FormItem>
 
           <FormItem
-            :label="$t('确认密码')"
+            :label="$t('auth.confirmPassword')"
             name="confirmPassword"
           >
             <Input
@@ -328,7 +328,7 @@ async function handleRegister() {
               :placeholder="$t('请再次输入密码')"
               type="password"
               size="large"
-              :aria-label="$t('确认密码')"
+              :aria-label="$t('auth.confirmPassword')"
               autocomplete="new-password"
             >
               <template #prefix>
@@ -363,7 +363,7 @@ async function handleRegister() {
                 :loading="authStore.loading"
                 size="large"
               >
-                {{ $t('注册') }}
+                {{ $t('auth.register') }}
               </Button>
               <Button
                 type="link"

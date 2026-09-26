@@ -119,7 +119,7 @@ async function handleSubmit() {
           MC
         </div>
         <div class="auth-title">
-          {{ $t('重置密码') }}
+          {{ $t('auth.resetPassword') }}
         </div>
         <div class="auth-subtitle">
           {{ $t('我们会向你的邮箱发送一条重置链接') }}
@@ -153,7 +153,7 @@ async function handleSubmit() {
           @finish="handleSubmit"
         >
           <FormItem
-            :label="$t('邮箱')"
+            :label="$t('auth.email')"
             name="email"
           >
             <Input

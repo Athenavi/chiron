@@ -139,7 +139,7 @@ async function handleSendBindCode() {
   try {
     const res = await sendSmsCode({ phone: p, purpose: 'bind' })
     startPhoneCountdown(res.interval || 60)
-    message.success(t('验证码已发送'))
+    message.success(t('auth.verificationCodeSent'))
   } catch (e) {
     const status = errorStatus(e)
     const apiErr = serverErrorMessage(e, '')
@@ -148,7 +148,7 @@ async function handleSendBindCode() {
     } else if (status === 403) {
       message.error(apiErr || t('短信服务未启用'))
     } else {
-      message.error(apiErr || t('验证码发送失败'))
+      message.error(apiErr || t('auth.verificationCodeSendFailed'))
     }
   } finally {
     sendingCode.value = false
@@ -642,13 +642,13 @@ onMounted(async () => {
           layout="vertical"
           class="setting-form"
         >
-          <FormItem :label="$t('用户名')">
+          <FormItem :label="$t('auth.username')">
             <Input
               v-model:value="form.name"
               :placeholder="$t('请输入用户名')"
             />
           </FormItem>
-          <FormItem :label="$t('邮箱')">
+          <FormItem :label="$t('auth.email')">
             <Input
               v-model:value="form.email"
               :placeholder="$t('请输入邮箱')"
@@ -726,7 +726,7 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('手机号') }}
+          {{ $t('auth.phone') }}
         </div>
         <Spin :spinning="phoneLoading">
           <div
@@ -760,7 +760,7 @@ onMounted(async () => {
             layout="vertical"
             class="setting-form"
           >
-            <FormItem :label="$t('手机号')">
+            <FormItem :label="$t('auth.phone')">
               <Input
                 v-model:value="phoneForm.phone"
                 :placeholder="$t('请输入手机号')"
@@ -771,7 +771,7 @@ onMounted(async () => {
                 </template>
               </Input>
             </FormItem>
-            <FormItem :label="$t('验证码')">
+            <FormItem :label="$t('auth.verificationCode')">
               <Input
                 v-model:value="phoneForm.code"
                 :placeholder="$t('短信验证码')"
