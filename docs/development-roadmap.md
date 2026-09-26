@@ -33,12 +33,17 @@
 
 ### L1-3 译文补齐（`ar` / `en-US`）
 
-- **依据**：`frontend-vue/src/locales/ar/legacy.ts` 与 `en-US/legacy.ts` 均为空壳
-  （`export default {}`）；`ar/` 缺 `admin.ts`、`auth.ts`（`en-US/` 有）。阿拉伯语界面当前
+- **依据**：`frontend-vue/src/locales/ar/legacy.ts` 与 `en-US/legacy.ts` 在原路线图中描述为
+  空壳（`export default {}`）；`ar/` 缺 `admin.ts`、`auth.ts`（`en-US/` 有）。阿拉伯语界面此前
   **静默回退中文**。
 - **前置**：`legacy` 域已在 i18n 收尾中**展平到顶层**（裸键现在能命中），译文补上即生效 —— 在这之前补了也不生效。
-- **验收**：`ar` / `en-US` 的键集与 `zh-CN` 一一对应（写个比对 key 集合的脚本并挂进 `check:ui`，
-  防再次漂移）；译文由人工或翻译流程产出，不做机翻直出。
+- **验收**：`ar` / `en-US` 的键集与 `zh-CN` 一一对应（比对脚本 `scripts/check-i18n-keys.mjs` 已挂进
+  `check:ui`，棘轮基线 `scripts/i18n-keys-baseline.json` 已锁定）；译文由人工或翻译流程产出，不做机翻直出。
+- **状态**：
+  - ✅ **`en-US` legacy 全文翻译完成**（2150/2150，0 缺键）；`scripts/check-i18n-keys.mjs` 与
+    `check:ui` 均通过；baseline 锁定 `en-US: 0`。
+  - ⬜ **`ar` legacy 待翻译**（2150/2150 缺键，baseline 锁定 `ar: 2150`）。`ar` 语义域
+    （common/chat/errors/auth/admin）已对齐，仅 `legacy` 域待补；按决策在 en-US 收口后再启动。
 
 ### L1-4 语义化 key 改造
 
