@@ -42,8 +42,9 @@
 - **状态**：
   - ✅ **`en-US` legacy 全文翻译完成**（2150/2150，0 缺键）；`scripts/check-i18n-keys.mjs` 与
     `check:ui` 均通过；baseline 锁定 `en-US: 0`。
-  - ⬜ **`ar` legacy 待翻译**（2150/2150 缺键，baseline 锁定 `ar: 2150`）。`ar` 语义域
-    （common/chat/errors/auth/admin）已对齐，仅 `legacy` 域待补；按决策在 en-US 收口后再启动。
+  - ✅ **`ar` legacy 全文翻译完成**（2150/2150，0 缺键）；`scripts/check-i18n-keys.mjs` 与
+    `check:ui` 均通过；baseline 锁定 `ar: 0`。`ar` 语义域（common/chat/errors/auth/admin）
+    此前已对齐，本批补齐 `legacy` 域后阿拉伯语界面不再回退中文。
 
 ### L1-4 语义化 key 改造
 
