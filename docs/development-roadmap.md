@@ -22,7 +22,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 97 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy`（已接线范围，见 L2-1） | 0 —— 98 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -56,20 +56,22 @@
 
 - **依据**：`python-engine/pyproject.toml` 已声明 `[tool.mypy] strict = true`，CI 的
   `Mypy (strict)` step 只覆盖**已清零**的模块（`--follow-imports=silent` 让门禁只报告列出的模块）。
-- **进度**：接线前基线 **1171 条 / 130 文件（共 200 个源文件）**；已清 **23 批 1057 条**，
-  全部零行为变更、引擎套件 `1259 passed` 未变，门禁现列 **97 个路径**。各批范围与修复要点见
-  提交信息 `21a96ae` … `07f33ea`，本文不重复维护。
-- **剩余 115 条 / 7 个文件**（`mypy app/`，本机 mypy 2.3.1）：
+- **进度**：接线前基线 **1171 条 / 130 文件（共 200 个源文件）**；已清 **24 批 1162 条**，
+  全部零行为变更、引擎套件 `1259 passed` 未变，门禁现列 **98 个路径**。各批范围与修复要点见
+  提交信息 `21a96ae` … `3b78a7a`，本文不重复维护。
+- **剩余 16 条 / 6 个文件**（`mypy app/`，本机 mypy 2.3.1）：
 
   | 文件 | 条数 | 性质 |
   |---|---|---|
-  | `agent/runtime.py` | 105 | 纯标注补齐 —— **下一批** |
   | `api/plugins.py` | 5 | 真实缺陷：引用不存在的 `app.main.get_plugin_pool`（`main.py` 只有模块级 `_plugin_pool`）与 `Settings.log_dir` |
   | `tools/browser.py` | 4 | 真实缺陷：`BrowserHub` Protocol 声明**同步**的 `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**（`ids` 会是 coroutine，`return ids[0]` 必 `TypeError`）；另 `app.observability.logging` 无 `get_logger` |
   | `tools/media.py` | 3 | 对 `pymupdf.Document` 直接迭代（stub 无 `__iter__`）→ 照例在调用方豁免 `disallow_untyped_calls` |
   | `batch_processor.py` | 2 | 真实缺陷：引用不存在的 `app.rag.builder.build_knowledge`（`RAGBuilder` 只有 `build_document`，签名也不同）+ 缺注解 |
-  | `observability/tracing.py` | 2 | **环境相关**：本机缺 `opentelemetry-exporter-otlp-proto-grpc`（`requirements.txt` 已声明，CI 有） |
+  | `observability/tracing.py` | 1 | **环境相关**：本机缺 `opentelemetry-exporter-otlp-proto-grpc`（`requirements.txt` 已声明，CI 有） |
   | `rag/builder.py` | 1 | **环境相关**：本机 `markitdown` 版本高于 CI（可选后端，CI 不装） |
+
+  上表的「真实缺陷」三项（11 条）都不属「零行为变更」范围，需先定修法再动手；
+  两项「环境相关」在 CI 上不会出现（已列入 contributing.md 的已知本地-only 误报）。
 
 - **验收**：`mypy app/` 全绿后删掉 `--follow-imports=silent`，CI 改为 `mypy app/`。
 - **备选**（已排除）：1171 条不属于需要下调 `strict` 的量级 —— 备选阈值是「数万条」，
