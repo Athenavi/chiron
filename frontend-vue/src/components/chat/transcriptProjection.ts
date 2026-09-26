@@ -137,10 +137,10 @@ const JOB_TOOLS = new Set(`run_in_background job_output job_kill`.split(/\s+/))
  */
 function groupTitle(kind: ToolGroupKind): string {
   switch (kind) {
-    case 'explore': return t('读取与检索')
-    case 'modify': return t('修改')
-    case 'delegate': return t('委派')
-    case 'shell': return t('命令与浏览器')
+    case 'explore': return t('knowledge.read_retrieve')
+    case 'modify': return t('common.edit')
+    case 'delegate': return t('common.delegate')
+    case 'shell': return t('common.commands_browser')
   }
 }
 
@@ -213,7 +213,7 @@ function turnSummary(items: readonly ChatItem[], from: number, to: number): stri
   const parts: string[] = []
   if (thinking) parts.push(t('思考 ×{n}', { n: thinking }))
   if (tools) parts.push(t('工具 ×{n}', { n: tools }))
-  if (text) parts.push(t('正文'))
+  if (text) parts.push(t('common.body'))
   return parts.join(' · ')
 }
 
@@ -360,7 +360,7 @@ export function projectTranscript(input: ProjectionInput): ProjectionResult {
           header: {
             scope: 'turn',
             fold: turn.key,
-            title: t('回合'),
+            title: t('common.turn'),
             summary: turnSummary(items, turn.from, turn.to),
             open: turnOpen,
             status: active ? 'running' : 'done',

@@ -51,8 +51,8 @@ const canSave = computed(() => !!kbId.value && props.content.trim().length > 0 &
 
 /** 文件名里不能出现的字符统一替换掉（否则部分后端会拒收） */
 function safeFileName(): string {
-  const base = (title.value || t('对话记录')).replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80)
-  return `${base || t('对话记录')}.md`
+  const base = (title.value || t('chat.conversation')).replace(/[\\/:*?"<>|]/g, '_').trim().slice(0, 80)
+  return `${base || t('chat.conversation')}.md`
 }
 
 async function save() {
@@ -63,7 +63,7 @@ async function save() {
     const handle = await createChunkUpload(file, { purpose: 'kb_doc', parentId: kbId.value })
     handle.onProgress(pct => { percent.value = pct })
     await handle.done
-    message.success(t('已存入知识库；在知识库页构建索引后即可被检索'))
+    message.success(t('knowledge.stored_in_knowledge_base_becomes_searchable_after_indexing_on_the_knowledge_base_page'))
     emit('saved', kbId.value)
     emit('update:open', false)
   } catch (error) {
@@ -77,32 +77,32 @@ async function save() {
 <template>
   <Modal
     :open="open"
-    :title="$t('存入知识库')"
+    :title="$t('knowledge.save_to_knowledge_base')"
     :confirm-loading="saving"
     :ok-button-props="{ disabled: !canSave }"
-    :ok-text="$t('上传')"
-    :cancel-text="$t('取消')"
+    :ok-text="$t('common.upload')"
+    :cancel-text="$t('common.cancel')"
     @ok="save"
     @cancel="emit('update:open', false)"
   >
     <div class="save-kb">
       <div class="save-kb-field">
-        <label class="save-kb-label">{{ $t('目标知识库') }}</label>
+        <label class="save-kb-label">{{ $t('knowledge.target_knowledge_base') }}</label>
         <Select
           v-model:value="kbId"
           :options="options"
           :loading="loadingBases"
-          :placeholder="$t('选择一个知识库')"
+          :placeholder="$t('knowledge.select_a_knowledge_base')"
           show-search
           option-filter-prop="label"
           class="save-kb-control"
         />
       </div>
       <div class="save-kb-field">
-        <label class="save-kb-label">{{ $t('文档标题') }}</label>
+        <label class="save-kb-label">{{ $t('knowledge.document_title') }}</label>
         <Input
           v-model:value="title"
-          :placeholder="$t('作为文件名与检索来源')"
+          :placeholder="$t('knowledge.used_as_file_name_and_retrieval_source')"
         />
       </div>
       <p class="save-kb-hint">

@@ -25,7 +25,7 @@ async function loadDomains() {
     const resp = await api.get('/v1/admin/domains')
     domains.value = resp.data?.data?.domains || []
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('加载域名列表失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_load_domain_list')))
   } finally {
     loading.value = false
   }
@@ -52,22 +52,22 @@ function openEdit(record: any) {
 
 async function submitForm() {
   if (!form.value.domain.trim()) {
-    message.warning(t('请输入域名'))
+    message.warning(t('admin.please_enter_domain'))
     return
   }
   submitting.value = true
   try {
     if (editingId.value) {
       await api.put(`/v1/admin/domains/${editingId.value}`, { domain: form.value.domain.trim() })
-      message.success(t('域名已更新'))
+      message.success(t('admin.domain_updated'))
     } else {
       await api.post('/v1/admin/domains', { domain: form.value.domain.trim() })
-      message.success(t('域名已添加'))
+      message.success(t('admin.domain_added'))
     }
     modalVisible.value = false
     await loadDomains()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, editingId.value ? t('更新域名失败') : t('添加域名失败')))
+    message.error(apiErrorMessage(e, editingId.value ? t('errors.failed_to_update_domain') : t('errors.failed_to_add_domain')))
   } finally {
     submitting.value = false
   }
@@ -87,7 +87,7 @@ async function verifyDomain(record: any) {
     verifyVisible.value = true
     await loadDomains()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('域名验证失败')))
+    message.error(apiErrorMessage(e, t('auth.domain_verification_failed')))
   } finally {
     verifyingId.value = null
   }
@@ -105,7 +105,7 @@ async function renewSSL(record: any) {
     message.success(d.note ? t('SSL 续期完成（{status}）：{note}', { status: d.ssl_status || 'ok', note: d.note }) : t('SSL 续期完成（{status}）', { status: d.ssl_status || 'ok' }))
     await loadDomains()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('SSL 续期失败')))
+    message.error(apiErrorMessage(e, t('errors.ssl_renewal_failed')))
   } finally {
     renewingId.value = null
   }
@@ -116,29 +116,29 @@ async function renewSSL(record: any) {
 async function removeDomain(record: any) {
   try {
     await api.delete(`/v1/admin/domains/${record.id}`)
-    message.success(t('域名已删除'))
+    message.success(t('admin.domain_deleted'))
     await loadDomains()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('删除域名失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_delete_domain')))
   }
 }
 
 // ── 表格列 ──
 const columns = [
-  { title: t('域名'), dataIndex: 'domain', key: 'domain', ellipsis: true },
-  { title: t('验证状态'), key: 'verified', width: 110 },
-  { title: t('SSL 状态'), key: 'ssl_status', width: 120 },
-  { title: t('创建时间'), key: 'created_at', width: 180 },
-  { title: t('操作'), key: 'actions', width: 280, fixed: 'right' as const },
+  { title: t('admin.domain'), dataIndex: 'domain', key: 'domain', ellipsis: true },
+  { title: t('auth.verification_status'), key: 'verified', width: 110 },
+  { title: t('common.ssl_status'), key: 'ssl_status', width: 120 },
+  { title: t('common.created_at'), key: 'created_at', width: 180 },
+  { title: t('common.action'), key: 'actions', width: 280, fixed: 'right' as const },
 ]
 
 // ── 工具函数 ──
 function sslStatusText(status: string): string {
   switch (status) {
-    case 'active': return t('有效')
-    case 'pending': return t('签发中')
-    case 'expired': return t('已过期')
-    case 'failed': return t('失败')
+    case 'active': return t('common.valid')
+    case 'pending': return t('common.issuing')
+    case 'expired': return t('errors.expired')
+    case 'failed': return t('errors.failed')
     default: return status || '-'
   }
 }
@@ -170,13 +170,13 @@ onMounted(loadDomains)
 <template>
   <div class="domain-management">
     <div class="page-header">
-      <h1>{{ $t('🌐 域名管理') }}</h1>
+      <h1>{{ $t('admin.domain_management') }}</h1>
       <Space>
         <Button @click="loadDomains">
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新') }}
+          {{ $t('common.refresh') }}
         </Button>
         <Button
           type="primary"
@@ -185,14 +185,14 @@ onMounted(loadDomains)
           <template #icon>
             <PlusOutlined />
           </template>
-          {{ $t('添加域名') }}
+          {{ $t('admin.add_domain') }}
         </Button>
       </Space>
     </div>
 
     <Alert
-      :message="$t('域名接入说明')"
-      :description="$t('添加域名后，先点击「验证」获取需要配置的解析地址；在 DNS 服务商处完成解析后再次点击「验证」即可确认接入。证书到期前可点击「续期」刷新 SSL 证书。')"
+      :message="$t('admin.domain_setup_guide')"
+      :description="$t('admin.after_adding_a_domain_click_verify_to_get_the_dns_records_to_configure_after_configuring_them_at_your_dns_provider_click_verify_again_to_confirm_before_expiry_click_renew_to_refresh_the_ssl_certificate')"
       type="info"
       show-icon
       style="margin-bottom: 16px"
@@ -209,15 +209,15 @@ onMounted(loadDomains)
         >
           <template #emptyText>
             <EmptyState
-              :description="$t('暂无域名')"
-              :hint="$t('点击右上角「添加域名」接入第一个域名')"
+              :description="$t('admin.no_domains_yet')"
+              :hint="$t('admin.click_add_domain_at_the_top_right_to_connect_your_first_domain')"
             />
           </template>
 
           <template #bodyCell="{ column, record }">
             <template v-if="column.key === 'verified'">
               <Tag :color="record.verified ? 'green' : 'orange'">
-                {{ record.verified ? $t('已验证') : $t('未验证') }}
+                {{ record.verified ? $t('common.verified') : $t('common.unverified') }}
               </Tag>
             </template>
 
@@ -244,7 +244,7 @@ onMounted(loadDomains)
                   <template #icon>
                     <CheckCircleOutlined />
                   </template>
-                  {{ $t('验证') }}
+                  {{ $t('common.verify') }}
                 </Button>
                 <Button
                   size="small"
@@ -254,7 +254,7 @@ onMounted(loadDomains)
                   <template #icon>
                     <SyncOutlined />
                   </template>
-                  {{ $t('续期 SSL') }}
+                  {{ $t('common.renew_ssl') }}
                 </Button>
                 <Button
                   size="small"
@@ -263,12 +263,12 @@ onMounted(loadDomains)
                   <template #icon>
                     <EditOutlined />
                   </template>
-                  {{ $t('编辑') }}
+                  {{ $t('common.edit_2') }}
                 </Button>
                 <Popconfirm
-                  :title="$t('确定删除该域名吗？删除后其 SSL 证书与接入配置将一并移除。')"
-                  :ok-text="$t('删除')"
-                  :cancel-text="$t('取消')"
+                  :title="$t('admin.confirm_deleting_this_domain_its_ssl_certificate_and_access_config_will_be_removed_as_well')"
+                  :ok-text="$t('common.delete')"
+                  :cancel-text="$t('common.cancel')"
                   @confirm="removeDomain(record)"
                 >
                   <Button
@@ -278,7 +278,7 @@ onMounted(loadDomains)
                     <template #icon>
                       <DeleteOutlined />
                     </template>
-                    {{ $t('删除') }}
+                    {{ $t('common.delete') }}
                   </Button>
                 </Popconfirm>
               </Space>
@@ -291,7 +291,7 @@ onMounted(loadDomains)
     <!-- 验证结果 -->
     <Modal
       v-model:open="verifyVisible"
-      :title="$t('域名验证结果')"
+      :title="$t('auth.domain_verification_result')"
       :footer="null"
       :width="560"
       @cancel="verifyResult = null"
@@ -299,7 +299,7 @@ onMounted(loadDomains)
       <template v-if="verifyResult">
         <Alert
           :type="verifyResult.verified ? 'success' : 'error'"
-          :message="verifyResult.verified ? $t('验证成功，域名已接入') : $t('验证失败')"
+          :message="verifyResult.verified ? $t('admin.verified_domain_is_connected') : $t('auth.verification_failed')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -309,7 +309,7 @@ onMounted(loadDomains)
           bordered
           size="small"
         >
-          <Descriptions.Item :label="$t('解析地址')">
+          <Descriptions.Item :label="$t('common.resolve_address')">
             {{ formatAddresses(verifyResult.addresses) }}
           </Descriptions.Item>
         </Descriptions>
@@ -325,15 +325,15 @@ onMounted(loadDomains)
     <!-- 新建 / 编辑域名 -->
     <Modal
       v-model:open="modalVisible"
-      :title="editingId ? $t('编辑域名') : $t('添加域名')"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :title="editingId ? $t('admin.edit_domain') : $t('admin.add_domain')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       :confirm-loading="submitting"
       @ok="submitForm"
     >
       <Form layout="vertical">
         <Form.Item
-          :label="$t('域名')"
+          :label="$t('admin.domain')"
           required
         >
           <Input

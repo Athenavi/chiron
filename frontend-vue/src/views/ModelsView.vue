@@ -76,9 +76,9 @@ async function rediscover() {
   try {
     await listModels()
     await load()
-    message.success(t('已重新拉取模型列表'))
+    message.success(t('agent.model_list_re_pulled'))
   } catch {
-    message.error(t('拉取失败，请检查该 provider 的 Key 与网络（也可手动添加模型）'))
+    message.error(t('errors.pull_failed_please_check_the_provider_s_key_and_network_you_can_also_add_a_model_manually'))
     await load()
   } finally {
     loading.value = false
@@ -90,9 +90,9 @@ async function toggleEnabled(m: AdminModel, value: boolean) {
   try {
     await updateAdminModel(m.id, { enabled: value })
     m.enabled = value
-    message.success(value ? t('已启用：会出现在对话页的模型下拉里') : t('已停用：不再出现在下拉里'))
+    message.success(value ? t('agent.enabled_appears_in_the_model_dropdown_on_the_conversation_page') : t('common.disabled_no_longer_appears_in_the_dropdown'))
   } catch {
-    message.error(t('更新失败'))
+    message.error(t('errors.update_failed'))
   } finally {
     busyId.value = ''
   }
@@ -105,9 +105,9 @@ async function saveWindow(m: AdminModel, value: number | string | null) {
   try {
     await updateAdminModel(m.id, { context_window: ctx })
     m.context_window = ctx
-    message.success(t('上下文窗口已更新（对话页的上下文环按它计算）'))
+    message.success(t('chat.context_window_updated_the_context_ring_on_the_conversation_page_is_calculated_from_it'))
   } catch {
-    message.error(t('更新失败'))
+    message.error(t('errors.update_failed'))
   } finally {
     busyId.value = ''
   }
@@ -116,7 +116,7 @@ async function saveWindow(m: AdminModel, value: number | string | null) {
 async function add() {
   const { provider, name, display_name, context_window } = draft.value
   if (!provider || !name.trim()) {
-    message.warning(t('请选择服务提供商并填写模型名'))
+    message.warning(t('agent.please_select_a_provider_and_enter_the_model_name'))
     return
   }
   saving.value = true
@@ -131,9 +131,9 @@ async function add() {
     addOpen.value = false
     draft.value = { provider: '', name: '', display_name: '', context_window: 128000 }
     await load()
-    message.success(t('已添加并启用'))
+    message.success(t('common.added_and_enabled'))
   } catch {
-    message.error(t('添加失败'))
+    message.error(t('errors.failed_to_add'))
   } finally {
     saving.value = false
   }
@@ -144,9 +144,9 @@ async function remove(m: AdminModel) {
   try {
     await deleteAdminModel(m.id)
     models.value = models.value.filter(x => x.id !== m.id)
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
   } catch {
-    message.error(t('删除失败'))
+    message.error(t('errors.delete_failed'))
   } finally {
     busyId.value = ''
   }
@@ -162,18 +162,18 @@ onMounted(async () => {
     <header class="mv-head">
       <div>
         <h2 class="mv-title">
-          {{ $t('模型配置') }}
+          {{ $t('agent.model_config') }}
         </h2>
         <p class="mv-sub">
-          {{ $t('只有启用（enabled）的模型才会出现在对话页的模型下拉里，共') }}
-          <strong>{{ enabledCount }}</strong> {{ $t('个启用') }}
+          {{ $t('agent.only_enabled_models_appear_in_the_conversation_page_model_dropdown_total') }}
+          <strong>{{ enabledCount }}</strong> {{ $t('common.enabled') }}
         </p>
       </div>
       <div class="mv-actions">
         <Input
           v-model:value="keyword"
           class="mv-search"
-          :placeholder="$t('搜索模型名 / 提供商')"
+          :placeholder="$t('agent.search_model_name_provider')"
           allow-clear
         >
           <template #prefix>
@@ -187,7 +187,7 @@ onMounted(async () => {
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('重新发现') }}
+          {{ $t('admin.rediscover_2') }}
         </Button>
         <Button
           type="primary"
@@ -196,7 +196,7 @@ onMounted(async () => {
           <template #icon>
             <PlusOutlined />
           </template>
-          {{ $t('手动添加') }}
+          {{ $t('common.add_manually') }}
         </Button>
       </div>
     </header>
@@ -204,13 +204,13 @@ onMounted(async () => {
     <PageSkeleton v-if="loading && !models.length" />
     <EmptyState
       v-else-if="error"
-      :title="$t('模型列表加载失败')"
-      :description="$t('需要管理员权限；或后端未重启（新增的 /v1/admin/models 路由要重启才生效）')"
+      :title="$t('errors.failed_to_load_model_list')"
+      :description="$t('errors.admin_permission_required_or_the_backend_was_not_restarted_the_new_v1_admin_models_route_needs_a_restart_to_take_effect')"
     />
     <EmptyState
       v-else-if="!filtered.length"
-      :title="$t('还没有任何模型')"
-      :description="$t('可以点「重新发现」按已配置的 Key 自动拉取，或用「手动添加」直接写入一个模型')"
+      :title="$t('agent.no_models_yet')"
+      :description="$t('agent.you_can_click_rediscover_to_auto_pull_via_the_configured_key_or_use_add_manually_to_write_a_model_directly')"
     />
     <table
       v-else
@@ -218,14 +218,14 @@ onMounted(async () => {
     >
       <thead>
         <tr>
-          <th>{{ $t('提供商') }}</th>
-          <th>{{ $t('模型名') }}</th>
-          <th>{{ $t('显示名') }}</th>
+          <th>{{ $t('common.provider') }}</th>
+          <th>{{ $t('agent.model_name') }}</th>
+          <th>{{ $t('common.display_name') }}</th>
           <th class="col-ctx">
-            {{ $t('上下文窗口') }}
+            {{ $t('common.context_window') }}
           </th>
           <th class="col-on">
-            {{ $t('启用') }}
+            {{ $t('common.enable') }}
           </th>
           <th class="col-op" />
         </tr>
@@ -263,7 +263,7 @@ onMounted(async () => {
           </td>
           <td class="col-op">
             <Popconfirm
-              :title="$t('删除这个模型？')"
+              :title="$t('agent.delete_this_model')"
               @confirm="remove(m)"
             >
               <Button
@@ -283,31 +283,31 @@ onMounted(async () => {
 
     <Modal
       v-model:open="addOpen"
-      :title="$t('手动添加模型')"
+      :title="$t('agent.add_model_manually')"
       :confirm-loading="saving"
       @ok="add"
     >
       <div class="mv-form">
-        <label>{{ $t('服务提供商') }}</label>
+        <label>{{ $t('common.service_provider') }}</label>
         <Select
           v-model:value="draft.provider"
           class="mv-full"
-          :placeholder="$t('选择已配置 Key 的提供商')"
+          :placeholder="$t('common.select_a_provider_with_a_configured_key')"
           :options="providers.map(p => ({ value: p.id, label: p.hasKey ? $t('admin.providers.configuredName', { name: p.name }) : p.name }))"
         />
-        <label>{{ $t('模型名（给提供商调用的 ID）') }}</label>
+        <label>{{ $t('agent.model_name_id_used_to_call_the_provider') }}</label>
         <Input
           v-model:value="draft.name"
           class="mv-full"
           placeholder="deepseek-chat"
         />
-        <label>{{ $t('显示名（可留空）') }}</label>
+        <label>{{ $t('common.display_name_optional') }}</label>
         <Input
           v-model:value="draft.display_name"
           class="mv-full"
-          :placeholder="$t('下拉里显示的名字')"
+          :placeholder="$t('common.name_shown_in_the_dropdown')"
         />
-        <label>{{ $t('上下文窗口（tokens）') }}</label>
+        <label>{{ $t('common.context_window_tokens') }}</label>
         <InputNumber
           v-model:value="draft.context_window"
           class="mv-full"
@@ -315,7 +315,7 @@ onMounted(async () => {
           :step="1000"
         />
         <p class="mv-hint">
-          {{ $t('模型名必须是提供商真实支持的 ID，否则对话会报模型不存在。') }}
+          {{ $t('errors.the_model_name_must_be_an_id_actually_supported_by_the_provider_otherwise_the_conversation_will_report_the_model_as_not_found') }}
         </p>
       </div>
     </Modal>

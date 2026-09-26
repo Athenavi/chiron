@@ -31,7 +31,7 @@ export function useCrudResource<T>(initialData: T, loader: () => Promise<T>) {
     try {
       data.value = await loader()
     } catch (e) {
-      error.value = apiErrorMessage(e, t('加载失败'))
+      error.value = apiErrorMessage(e, t('errors.failed_to_load'))
     } finally {
       loading.value = false
     }

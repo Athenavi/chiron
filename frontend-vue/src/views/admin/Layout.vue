@@ -81,47 +81,47 @@ const breadcrumbs = computed(() => {
 // 菜单分组：总览监控 / 访问安全 / 系统 / 平台 四组
 const menuGroups = computed(() => [
   {
-    key: 'g-monitor', label: t('总览监控'),
+    key: 'g-monitor', label: t('admin.overview_monitoring'),
     children: [
-      { key: '/admin/dashboard', label: t('仪表盘'), icon: () => h(DashboardOutlined) },
+      { key: '/admin/dashboard', label: t('common.dashboard'), icon: () => h(DashboardOutlined) },
       // 原「性能监控 / 队列监控 / 缓存监控」三页已合并为运行时监控（Tabs）
-      { key: '/admin/monitor', label: t('运行时监控'), icon: () => h(ThunderboltOutlined) },
+      { key: '/admin/monitor', label: t('admin.runtime_monitoring'), icon: () => h(ThunderboltOutlined) },
     ],
   },
   {
-    key: 'g-access', label: t('访问安全'),
+    key: 'g-access', label: t('common.access_security'),
     children: [
-      { key: '/admin/api-keys', label: t('API Key 管理'), icon: () => h(KeyOutlined) },
+      { key: '/admin/api-keys', label: t('common.api_key_management'), icon: () => h(KeyOutlined) },
       // 原「角色管理 + 群组管理」合并为权限与组织（Tabs）
-      { key: '/admin/access', label: t('权限与组织'), icon: () => h(IdcardOutlined) },
+      { key: '/admin/access', label: t('errors.permissions_and_organization'), icon: () => h(IdcardOutlined) },
       // 原「三方登录与人机验证 + 隐私模式管控」合并为认证与防护（Tabs）
-      { key: '/admin/identity', label: t('认证与防护'), icon: () => h(SafetyOutlined) },
+      { key: '/admin/identity', label: t('common.authentication_and_protection'), icon: () => h(SafetyOutlined) },
       // 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置）的服务端配置
-      { key: '/admin/mail', label: t('邮件配置'), icon: () => h(MailOutlined) },
+      { key: '/admin/mail', label: t('mail.email_config'), icon: () => h(MailOutlined) },
       // 原「模型策略管控 + 模型路由管控」合并为模型管控（Tabs）
-      { key: '/admin/models', label: t('模型管控'), icon: () => h(ControlOutlined) },
+      { key: '/admin/models', label: t('agent.model_control'), icon: () => h(ControlOutlined) },
     ],
   },
   {
-    key: 'g-system', label: t('系统'),
+    key: 'g-system', label: t('common.system'),
     children: [
-      { key: '/admin/settings', label: t('系统设置'), icon: () => h(SettingOutlined) },
+      { key: '/admin/settings', label: t('settings.system_settings'), icon: () => h(SettingOutlined) },
       // 定时任务：原在仪表盘内，属配置类操作 → 归入系统组
-      { key: '/admin/cron', label: t('定时任务'), icon: () => h(ClockCircleOutlined) },
+      { key: '/admin/cron', label: t('workflow.scheduled_tasks'), icon: () => h(ClockCircleOutlined) },
       // 原「Redis 管理 + 数据库管理」合并为数据存储（Tabs）
-      { key: '/admin/datastores', label: t('数据存储'), icon: () => h(DatabaseOutlined) },
+      { key: '/admin/datastores', label: t('common.data_storage'), icon: () => h(DatabaseOutlined) },
       // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）
-      { key: '/admin/tenancy', label: t('租户与域名'), icon: () => h(TeamOutlined) },
-      { key: '/admin/audit', label: t('操作审计'), icon: () => h(FileSearchOutlined) },
+      { key: '/admin/tenancy', label: t('admin.tenants_and_domains'), icon: () => h(TeamOutlined) },
+      { key: '/admin/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
     ],
   },
   {
-    key: 'g-platform', label: t('平台'),
+    key: 'g-platform', label: t('common.platform'),
     children: [
-      { key: '/admin/costcenter', label: t('成本中心'), icon: () => h(WalletOutlined) },
+      { key: '/admin/costcenter', label: t('common.cost_center'), icon: () => h(WalletOutlined) },
       // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
-      { key: '/admin/payment', label: t('支付配置'), icon: () => h(PayCircleOutlined) },
-      { key: '/admin/api-docs', label: t('API 文档'), icon: () => h(FileTextOutlined) },
+      { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
+      { key: '/admin/api-docs', label: t('knowledge.api_documentation'), icon: () => h(FileTextOutlined) },
     ],
   },
 ])
@@ -135,8 +135,8 @@ const selectedKeys = computed(() => {
 })
 
 const userMenuItems = computed<any[]>(() => [
-  { key: 'profile', label: t('个人资料'), icon: () => h(UserOutlined) },
-  { key: 'toggle-theme', label: themeStore.isDark ? t('浅色模式') : t('深色模式'), icon: () => h(BulbOutlined) },
+  { key: 'profile', label: t('settings.profile'), icon: () => h(UserOutlined) },
+  { key: 'toggle-theme', label: themeStore.isDark ? t('common.light_mode') : t('common.dark_mode'), icon: () => h(BulbOutlined) },
   { type: 'divider' as const },
   { key: 'logout', label: t('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
@@ -260,8 +260,8 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
           <Button
             type="text"
             class="header-collapse-btn"
-            :title="$t('展开或收起导航')"
-            :aria-label="collapsed ? $t('展开侧边栏') : $t('收起侧边栏')"
+            :title="$t('common.expand_or_collapse_navigation')"
+            :aria-label="collapsed ? $t('common.expand_sidebar') : $t('common.collapse_sidebar')"
             @click="isMobile ? (drawerOpen = !drawerOpen) : (collapsed = !collapsed)"
           >
             <component :is="isMobile ? (drawerOpen ? MenuUnfoldOutlined : MenuFoldOutlined) : (collapsed ? MenuUnfoldOutlined : MenuFoldOutlined)" />
@@ -284,8 +284,8 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
             <Button
               type="text"
               class="header-btn"
-              :title="$t('通知')"
-              :aria-label="$t('通知')"
+              :title="$t('settings.notification')"
+              :aria-label="$t('settings.notification')"
             >
               <template #icon>
                 <BellOutlined />
@@ -298,7 +298,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
           >
             <div
               class="header-user"
-              :title="$t('用户菜单')"
+              :title="$t('admin.user_menu')"
             >
               <Avatar
                 :size="30"

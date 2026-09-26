@@ -17,13 +17,13 @@ const typography = useTypographyStore()
 <template>
   <Modal
     :open="open"
-    :title="$t('显示设置')"
+    :title="$t('settings.display_settings')"
     :footer="null"
     width="420px"
     @cancel="emit('update:open', false)"
   >
     <div class="display-row">
-      <span class="display-label">{{ $t('正文字号') }}</span>
+      <span class="display-label">{{ $t('common.body_font_size') }}</span>
       <Segmented
         :value="typography.state.textSize"
         :options="TEXT_SIZE_OPTIONS"
@@ -31,7 +31,7 @@ const typography = useTypographyStore()
       />
     </div>
     <div class="display-row">
-      <span class="display-label">{{ $t('行距') }}</span>
+      <span class="display-label">{{ $t('common.line_spacing') }}</span>
       <Segmented
         :value="typography.state.leading"
         :options="LEADING_OPTIONS"
@@ -39,7 +39,7 @@ const typography = useTypographyStore()
       />
     </div>
     <div class="display-row">
-      <span class="display-label">{{ $t('消息间距') }}</span>
+      <span class="display-label">{{ $t('chat.message_spacing') }}</span>
       <Segmented
         :value="typography.state.gap"
         :options="GAP_OPTIONS"
@@ -47,7 +47,7 @@ const typography = useTypographyStore()
       />
     </div>
     <div class="display-row">
-      <span class="display-label">{{ $t('内容宽度') }}</span>
+      <span class="display-label">{{ $t('common.content_width') }}</span>
       <Segmented
         :value="typography.state.contentWidth"
         :options="CONTENT_WIDTH_OPTIONS"
@@ -55,12 +55,12 @@ const typography = useTypographyStore()
       />
     </div>
     <div class="display-foot">
-      <span class="display-hint">{{ $t('只影响本机阅读呈现，保存在浏览器本地。') }}</span>
+      <span class="display-hint">{{ $t('common.only_affects_local_reading_presentation_saved_in_the_browser_locally') }}</span>
       <Button
         size="small"
         @click="typography.reset()"
       >
-        {{ $t('恢复默认') }}
+        {{ $t('common.restore_defaults') }}
       </Button>
     </div>
   </Modal>

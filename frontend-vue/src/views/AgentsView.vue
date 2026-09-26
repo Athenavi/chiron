@@ -48,7 +48,7 @@ async function loadAgents() {
     agents.value = await listAgents()
   } catch {
     errorAgents.value = true
-    message.error(t('获取 Agent 列表失败'))
+    message.error(t('errors.failed_to_fetch_agent_list'))
   } finally {
     loadingAgents.value = false
   }
@@ -61,7 +61,7 @@ async function loadSessions() {
     sessions.value = await listAgentSessions()
   } catch {
     errorSessions.value = true
-    message.error(t('获取运行记录失败'))
+    message.error(t('errors.failed_to_fetch_run_history'))
   } finally {
     loadingSessions.value = false
   }
@@ -105,7 +105,7 @@ async function loadMarket() {
     marketItems.value = await listMarket('agent')
   } catch {
     marketError.value = true
-    message.error(t('获取 Agent 市场失败'))
+    message.error(t('errors.failed_to_fetch_agent_marketplace'))
   } finally {
     marketLoading.value = false
   }
@@ -237,14 +237,14 @@ function parseToolsText(): any[] | null {
     const v = JSON.parse(form.value.tools_text)
     return Array.isArray(v) ? v : null
   } catch {
-    message.error(t('tools 不是合法的 JSON 数组'))
+    message.error(t('agent.tools_is_not_a_valid_json_array'))
     return null
   }
 }
 
 async function saveEditor() {
   const f = form.value
-  if (!f.name.trim()) { message.warning(t('请填写名称')); return }
+  if (!f.name.trim()) { message.warning(t('common.please_enter_a_name_2')); return }
   const tools = parseToolsText()
   if (tools === null) return
   const body: Partial<Agent> = {
@@ -266,10 +266,10 @@ async function saveEditor() {
   try {
     if (editingId.value) {
       await updateAgent(editingId.value, body)
-      message.success(t('已保存'))
+      message.success(t('common.saved'))
     } else {
       await createAgent(body)
-      message.success(t('已创建'))
+      message.success(t('common.created'))
     }
     editorOpen.value = false
     await loadAgents()
@@ -286,7 +286,7 @@ async function toggleEnabled(a: Agent) {
     await updateAgent(a.id, { enabled: !a.enabled })
     a.enabled = !a.enabled
   } catch {
-    message.error(t('操作失败'))
+    message.error(t('errors.operation_failed'))
   }
 }
 
@@ -295,34 +295,34 @@ async function toggleVisibility(a: AgentRow) {
   const next = a.visibility === 'tenant' ? 'private' : 'tenant'
   try {
     await setAgentVisibility(a.id, next)
-    message.success(next === 'tenant' ? t('已共享给团队') : t('已设为私有'))
+    message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadAgents()
   } catch (e: any) {
     const raw = e?.response?.data
     const msg = raw?.message || raw?.detail || raw?.error || ''
     if (e?.response?.status === 403) {
-      message.error(t('只能操作自己创建的 Agent') + (msg ? `：${msg}` : ''))
+      message.error(t('agent.can_only_operate_agents_you_created') + (msg ? `：${msg}` : ''))
     } else {
-      message.error(t('操作失败') + (msg ? `：${msg}` : ''))
+      message.error(t('errors.operation_failed') + (msg ? `：${msg}` : ''))
     }
   }
 }
 
 function requestDelete(a: Agent) {
   Modal.confirm({
-    title: t('删除 Agent'),
+    title: t('agent.delete_agent'),
     content: t('确定删除「{name}」？其运行记录也会一并删除。', { name: a.name }),
-    okText: t('删除'),
+    okText: t('common.delete'),
     okButtonProps: { danger: true },
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteAgent(a.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         await loadAgents()
         await loadSessions()
       } catch {
-        message.error(t('删除失败'))
+        message.error(t('errors.delete_failed'))
       }
     },
   })
@@ -373,13 +373,13 @@ function openRun(a: Agent) {
 async function submitRun() {
   if (!runTarget.value) return
   const task = runTask.value.trim()
-  if (!task) { message.warning(t('请输入任务')); return }
+  if (!task) { message.warning(t('workflow.please_enter_a_task')); return }
   runSubmitting.value = true
   try {
     const s = await runAgent(runTarget.value.id, task)
     runSession.value = s
     sessions.value.unshift(s)
-    message.success(t('任务已派发，正在执行…'))
+    message.success(t('workflow.task_dispatched_executing'))
     startPolling(s.id)
   } catch (e: any) {
     message.error(t('派发失败: {error}', { error: e?.response?.data?.error || e?.message || '' }))
@@ -420,7 +420,7 @@ function continueInChat() {
   const parsed = parseResult(session)
   const text = parsed.output || parsed.error || session.result || ''
   if (!text) {
-    message.warning(t('这次运行没有可带入对话的内容'))
+    message.warning(t('chat.this_run_has_no_content_to_bring_into_the_conversation'))
     return
   }
   setChatPrefill({
@@ -442,7 +442,7 @@ function openSaveToKb(session: AgentSession | null) {
   if (!session) return
   const markdown = agentResultToMarkdown(session)
   if (!markdown) {
-    message.warning(t('这次运行没有可沉淀的内容'))
+    message.warning(t('common.this_run_has_no_content_to_preserve'))
     return
   }
   saveToKbContent.value = markdown
@@ -451,10 +451,10 @@ function openSaveToKb(session: AgentSession | null) {
 }
 
 const statusMeta: Record<string, { label: string; color: string; icon: any }> = {
-  pending: { label: t('排队中'), color: 'default', icon: ClockCircleOutlined },
-  running: { label: t('执行中'), color: 'processing', icon: SyncOutlined },
-  completed: { label: t('已完成'), color: 'success', icon: CheckCircleOutlined },
-  failed: { label: t('失败'), color: 'error', icon: CloseCircleOutlined },
+  pending: { label: t('common.queuing'), color: 'default', icon: ClockCircleOutlined },
+  running: { label: t('common.executing'), color: 'processing', icon: SyncOutlined },
+  completed: { label: t('common.completed'), color: 'success', icon: CheckCircleOutlined },
+  failed: { label: t('errors.failed'), color: 'error', icon: CloseCircleOutlined },
 }
 
 function formatTime(iso: string): string {
@@ -476,7 +476,7 @@ function toolCount(a: Agent): number {
           Agents
         </h1>
         <p class="page-sub">
-          {{ $t('创建专属 Agent，定义提示词与工具，一键派发真实执行') }}
+          {{ $t('agent.create_a_dedicated_agent_define_its_prompt_and_tools_and_dispatch_it_to_actually_run_with_one_click') }}
         </p>
       </div>
       <Button
@@ -486,7 +486,7 @@ function toolCount(a: Agent): number {
         <template #icon>
           <PlusOutlined />
         </template>
-        {{ $t('新建 Agent') }}
+        {{ $t('agent.new_agent_2') }}
       </Button>
     </div>
 
@@ -497,7 +497,7 @@ function toolCount(a: Agent): number {
       <!-- ── Tab 1：我的 Agent ── -->
       <TabPane
         key="agents"
-        :tab="$t('我的 Agent')"
+        :tab="$t('agent.my_agents')"
       >
         <PageSkeleton
           v-if="loadingAgents"
@@ -510,22 +510,22 @@ function toolCount(a: Agent): number {
           v-else-if="errorAgents"
           size="page"
           :icon="markRaw(RobotOutlined)"
-          :description="$t('加载失败')"
-          :hint="$t('无法获取 Agent 列表，请稍后重试')"
+          :description="$t('errors.failed_to_load')"
+          :hint="$t('agent.unable_to_fetch_agent_list_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadAgents"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <EmptyState
           v-else-if="agents.length === 0"
           size="page"
           :icon="markRaw(RobotOutlined)"
-          :description="$t('还没有 Agent')"
-          :hint="$t('点击右上角「新建 Agent」，定义提示词与工具，开始派发任务')"
+          :description="$t('agent.no_agents_yet')"
+          :hint="$t('workflow.click_new_agent_at_the_top_right_to_define_its_prompt_and_tools_then_start_dispatching_tasks')"
         >
           <Button
             type="primary"
@@ -534,7 +534,7 @@ function toolCount(a: Agent): number {
             <template #icon>
               <PlusOutlined />
             </template>
-            {{ $t('新建 Agent') }}
+            {{ $t('agent.new_agent_2') }}
           </Button>
         </EmptyState>
         <div
@@ -551,7 +551,7 @@ function toolCount(a: Agent): number {
               <span class="card-avatar"><RobotOutlined /></span>
               <div class="card-titles">
                 <span class="card-name">{{ a.name }}</span>
-                <span class="card-desc">{{ a.description || $t('暂无描述') }}</span>
+                <span class="card-desc">{{ a.description || $t('common.no_description') }}</span>
               </div>
               <Dropdown
                 trigger="click"
@@ -561,7 +561,7 @@ function toolCount(a: Agent): number {
                   type="text"
                   size="small"
                   class="card-more"
-                  :title="$t('更多操作')"
+                  :title="$t('common.more_actions')"
                   @click.stop
                 >
                   <template #icon>
@@ -574,17 +574,17 @@ function toolCount(a: Agent): number {
                       key="edit"
                       @click="openEdit(a)"
                     >
-                      <EditOutlined class="menu-icon" />{{ $t('编辑') }}
+                      <EditOutlined class="menu-icon" />{{ $t('common.edit_2') }}
                     </MenuItem>
                     <MenuItem
                       key="toggle"
                       @click="toggleEnabled(a)"
                     >
                       <template v-if="a.enabled">
-                        <StopOutlined class="menu-icon" />{{ $t('停用') }}
+                        <StopOutlined class="menu-icon" />{{ $t('common.disable_2') }}
                       </template>
                       <template v-else>
-                        <PlayCircleOutlined class="menu-icon" />{{ $t('启用') }}
+                        <PlayCircleOutlined class="menu-icon" />{{ $t('common.enable') }}
                       </template>
                     </MenuItem>
                     <MenuItem
@@ -592,10 +592,10 @@ function toolCount(a: Agent): number {
                       @click="toggleVisibility(a)"
                     >
                       <template v-if="a.visibility === 'tenant'">
-                        <LockOutlined class="menu-icon" />{{ $t('设为私有') }}
+                        <LockOutlined class="menu-icon" />{{ $t('common.set_as_private') }}
                       </template>
                       <template v-else>
-                        <TeamOutlined class="menu-icon" />{{ $t('共享给团队') }}
+                        <TeamOutlined class="menu-icon" />{{ $t('common.shared_with_team_2') }}
                       </template>
                     </MenuItem>
                     <MenuItem
@@ -603,7 +603,7 @@ function toolCount(a: Agent): number {
                       danger
                       @click="requestDelete(a)"
                     >
-                      <DeleteOutlined class="menu-icon" />{{ $t('删除') }}
+                      <DeleteOutlined class="menu-icon" />{{ $t('common.delete') }}
                     </MenuItem>
                   </Menu>
                 </template>
@@ -614,10 +614,10 @@ function toolCount(a: Agent): number {
                 v-if="a.visibility === 'tenant'"
                 color="green"
               >
-                {{ $t('团队共享') }}
+                {{ $t('common.team_shared') }}
               </Tag>
               <Tag :color="a.enabled ? 'green' : 'default'">
-                {{ a.enabled ? $t('启用') : $t('已停用') }}
+                {{ a.enabled ? $t('common.enable') : $t('common.disabled') }}
               </Tag>
               <Tag>{{ $t('{n} 工具', { n: toolCount(a) }) }}</Tag>
               <Tag>{{ $t('最多 {n} 轮', { n: a.max_turns }) }}</Tag>
@@ -632,17 +632,17 @@ function toolCount(a: Agent): number {
                 <template #icon>
                   <PlayCircleOutlined />
                 </template>
-                {{ $t('运行') }}
+                {{ $t('common.run') }}
               </Button>
               <Button
                 size="small"
-                :title="$t('在对话中发起会话')"
+                :title="$t('chat.start_a_session_in_the_conversation')"
                 @click="chatWithAgent(a)"
               >
                 <template #icon>
                   <MessageOutlined />
                 </template>
-                {{ $t('发起对话') }}
+                {{ $t('chat.start_a_conversation') }}
               </Button>
             </div>
           </div>
@@ -652,7 +652,7 @@ function toolCount(a: Agent): number {
       <!-- ── Agent 市场 ── -->
       <TabPane
         key="market"
-        :tab="$t('市场')"
+        :tab="$t('common.market')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -665,14 +665,14 @@ function toolCount(a: Agent): number {
           v-else-if="marketError"
           size="page"
           :icon="markRaw(ShopOutlined)"
-          :description="$t('市场加载失败')"
-          :hint="$t('无法获取市场内容，请稍后重试')"
+          :description="$t('errors.failed_to_load_marketplace')"
+          :hint="$t('common.unable_to_fetch_marketplace_content_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadMarket"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <SkillMarketCard
@@ -687,7 +687,7 @@ function toolCount(a: Agent): number {
       <!-- ── Tab 2：运行记录 ── -->
       <TabPane
         key="sessions"
-        :tab="$t('运行记录')"
+        :tab="$t('common.run_history')"
       >
         <PageSkeleton
           v-if="loadingSessions"
@@ -699,22 +699,22 @@ function toolCount(a: Agent): number {
           v-else-if="errorSessions"
           size="page"
           :icon="markRaw(HistoryOutlined)"
-          :description="$t('加载失败')"
-          :hint="$t('无法获取运行记录，请稍后重试')"
+          :description="$t('errors.failed_to_load')"
+          :hint="$t('common.unable_to_fetch_run_history_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadSessions"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <EmptyState
           v-else-if="sessions.length === 0"
           size="page"
           :icon="markRaw(HistoryOutlined)"
-          :description="$t('暂无运行记录')"
-          :hint="$t('从「我的 Agent」派发任务后，运行结果将在此显示')"
+          :description="$t('common.no_run_history_yet')"
+          :hint="$t('workflow.after_dispatching_a_task_from_my_agents_run_results_appear_here')"
         />
         <div
           v-else
@@ -754,7 +754,7 @@ function toolCount(a: Agent): number {
               type="text"
               @click="openDetail(s)"
             >
-              {{ $t('查看结果') }}
+              {{ $t('common.view_result') }}
             </Button>
           </div>
         </div>
@@ -764,49 +764,49 @@ function toolCount(a: Agent): number {
     <!-- ── 新建/编辑 Modal ── -->
     <Modal
       :open="editorOpen"
-      :title="editingId ? $t('编辑 Agent') : $t('新建 Agent')"
+      :title="editingId ? $t('agent.edit_agent') : $t('agent.new_agent_2')"
       :confirm-loading="editorSaving"
       width="640px"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="saveEditor"
       @cancel="editorOpen = false"
     >
       <div class="editor-form">
         <div class="form-row">
-          <label class="form-label">{{ $t('名称 *') }}</label>
+          <label class="form-label">{{ $t('common.name_2') }}</label>
           <Input
             v-model:value="form.name"
-            :placeholder="$t('如：数据分析师')"
+            :placeholder="$t('common.e_g_data_analyst')"
             :maxlength="60"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('描述') }}</label>
+          <label class="form-label">{{ $t('common.description') }}</label>
           <Input
             v-model:value="form.description"
-            :placeholder="$t('一句话说明 Agent 的职责')"
+            :placeholder="$t('agent.describe_the_agent_s_responsibility_in_one_sentence')"
             :maxlength="200"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('系统提示词') }}</label>
+          <label class="form-label">{{ $t('agent.system_prompt') }}</label>
           <Input.TextArea
             v-model:value="form.system_prompt"
             :rows="5"
-            :placeholder="$t('定义 Agent 的角色、行为准则与目标…')"
+            :placeholder="$t('agent.define_the_agent_s_role_behavior_and_goals')"
           />
         </div>
         <div class="form-row form-grid">
           <div class="form-field">
-            <label class="form-label">{{ $t('模型') }}</label>
+            <label class="form-label">{{ $t('agent.model') }}</label>
             <Input
               v-model:value="form.model"
               placeholder="deepseek-chat"
             />
           </div>
           <div class="form-field">
-            <label class="form-label">{{ $t('最大轮次') }}</label>
+            <label class="form-label">{{ $t('common.max_rounds') }}</label>
             <InputNumber
               v-model:value="form.max_turns"
               :min="1"
@@ -815,7 +815,7 @@ function toolCount(a: Agent): number {
             />
           </div>
           <div class="form-field">
-            <label class="form-label">{{ $t('超时（秒）') }}</label>
+            <label class="form-label">{{ $t('errors.timeout_seconds') }}</label>
             <InputNumber
               v-model:value="form.timeout_seconds"
               :min="10"
@@ -844,12 +844,12 @@ function toolCount(a: Agent): number {
             />
           </div>
           <div class="form-field">
-            <label class="form-label">{{ $t('启用') }}</label>
+            <label class="form-label">{{ $t('common.enable') }}</label>
             <Switch v-model:checked="form.enabled" />
           </div>
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('工具（JSON）') }}</label>
+          <label class="form-label">{{ $t('agent.tools_json') }}</label>
           <Input.TextArea
             v-model:value="form.tools_text"
             :rows="4"
@@ -859,12 +859,12 @@ function toolCount(a: Agent): number {
           <ToolPicker v-model="form.tools_text" />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('默认知识库') }}</label>
+          <label class="form-label">{{ $t('knowledge.default_knowledge_base') }}</label>
           <Select
             v-model:value="formKbId"
             :options="kbOptions.map(b => ({ value: b.id, label: b.name }))"
             :loading="bindingLoading"
-            :placeholder="$t('派发时用它做检索（可留空）')"
+            :placeholder="$t('knowledge.use_it_for_retrieval_when_dispatching_optional')"
             allow-clear
             show-search
             option-filter-prop="label"
@@ -872,13 +872,13 @@ function toolCount(a: Agent): number {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('技能') }}</label>
+          <label class="form-label">{{ $t('agent.skill') }}</label>
           <Select
             v-model:value="formSkills"
             mode="multiple"
             :options="skillOptions.map(s => ({ value: s.name, label: s.name }))"
             :loading="bindingLoading"
-            :placeholder="$t('只启用选中的技能（留空 = 全部已安装）')"
+            :placeholder="$t('agent.only_enable_selected_skills_blank_all_installed')"
             allow-clear
             show-search
             option-filter-prop="label"
@@ -886,13 +886,13 @@ function toolCount(a: Agent): number {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('插件') }}</label>
+          <label class="form-label">{{ $t('common.plugin') }}</label>
           <Select
             v-model:value="formPlugins"
             mode="multiple"
             :options="pluginOptions.map(p => ({ value: p.name, label: p.name }))"
             :loading="bindingLoading"
-            :placeholder="$t('只放这些插件提供的工具（留空 = 不筛选）')"
+            :placeholder="$t('agent.only_tools_from_these_plugins_blank_no_filter')"
             allow-clear
             show-search
             option-filter-prop="label"
@@ -900,14 +900,14 @@ function toolCount(a: Agent): number {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('工作流') }}</label>
+          <label class="form-label">{{ $t('workflow.workflow') }}</label>
           <!-- value 用 id 而非 name：agents.workflows 存的是工作流 id（引擎按 id 载图） -->
           <Select
             v-model:value="formWorkflows"
             mode="multiple"
             :options="workflowOptions.map(w => ({ value: w.id, label: w.name }))"
             :loading="bindingLoading"
-            :placeholder="$t('派发时按顺序执行（留空 = 不绑定）')"
+            :placeholder="$t('billing.execute_in_order_when_dispatching_blank_no_binding')"
             allow-clear
             show-search
             option-filter-prop="label"
@@ -929,7 +929,7 @@ function toolCount(a: Agent): number {
       <Input.TextArea
         v-model:value="runTask"
         :rows="3"
-        :placeholder="$t('描述要完成的任务…')"
+        :placeholder="$t('workflow.describe_the_task_to_complete')"
         :disabled="!!runSession && runSession.status === 'running'"
       />
       <div class="run-actions">
@@ -942,7 +942,7 @@ function toolCount(a: Agent): number {
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ $t('派发任务') }}
+          {{ $t('workflow.dispatch_task') }}
         </Button>
       </div>
 
@@ -954,26 +954,26 @@ function toolCount(a: Agent): number {
           v-if="runSession.status === 'running' || runSession.status === 'pending'"
           type="info"
           show-icon
-          :message="runSession.status === 'pending' ? $t('任务排队中…') : $t('Agent 正在执行…（LLM 推理 + 工具调用）')"
+          :message="runSession.status === 'pending' ? $t('workflow.task_queued') : $t('agent.agent_is_running_llm_reasoning_tool_calls')"
         />
         <Alert
           v-else-if="runSession.status === 'failed'"
           type="error"
           show-icon
-          :message="$t('执行失败')"
-          :description="parseResult(runSession).error || parseResult(runSession).output || $t('未知错误')"
+          :message="$t('errors.execution_failed')"
+          :description="parseResult(runSession).error || parseResult(runSession).output || $t('errors.unknown_error')"
         />
         <template v-else-if="runSession.status === 'completed'">
           <Alert
             type="success"
             show-icon
-            :message="$t('执行完成')"
+            :message="$t('common.execution_complete')"
           />
           <div class="result-block">
             <div class="result-label">
-              {{ $t('输出') }}
+              {{ $t('common.output_2') }}
             </div>
-            <pre class="result-output">{{ parseResult(runSession).output || $t('（无输出）') }}</pre>
+            <pre class="result-output">{{ parseResult(runSession).output || $t('common.no_output') }}</pre>
           </div>
           <div
             v-if="parseResult(runSession).token_usage || parseResult(runSession).duration || parseResult(runSession).tool_calls?.length"
@@ -994,7 +994,7 @@ function toolCount(a: Agent): number {
               ghost
               @click="openSaveToKb(runSession)"
             >
-              {{ $t('存入知识库') }}
+              {{ $t('knowledge.save_to_knowledge_base') }}
             </Button>
           </div>
         </template>
@@ -1023,12 +1023,12 @@ function toolCount(a: Agent): number {
           v-if="detailSession.status === 'failed'"
           type="error"
           show-icon
-          :message="$t('执行失败')"
-          :description="parseResult(detailSession).error || parseResult(detailSession).output || $t('未知错误')"
+          :message="$t('errors.execution_failed')"
+          :description="parseResult(detailSession).error || parseResult(detailSession).output || $t('errors.unknown_error')"
         />
         <div class="result-block">
           <div class="result-label">
-            {{ $t('任务') }}
+            {{ $t('workflow.task_2') }}
           </div>
           <pre class="result-output">{{ detailSession.task }}</pre>
         </div>
@@ -1037,7 +1037,7 @@ function toolCount(a: Agent): number {
           class="result-block"
         >
           <div class="result-label">
-            {{ $t('输出') }}
+            {{ $t('common.output_2') }}
           </div>
           <pre class="result-output">{{ parseResult(detailSession).output }}</pre>
         </div>
@@ -1060,14 +1060,14 @@ function toolCount(a: Agent): number {
             ghost
             @click="openSaveToKb(detailSession)"
           >
-            {{ $t('存入知识库') }}
+            {{ $t('knowledge.save_to_knowledge_base') }}
           </Button>
           <Button
             type="primary"
             ghost
             @click="continueInChat"
           >
-            {{ $t('在对话中继续') }}
+            {{ $t('chat.continue_in_the_conversation') }}
           </Button>
         </div>
       </div>

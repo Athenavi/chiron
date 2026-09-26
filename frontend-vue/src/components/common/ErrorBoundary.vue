@@ -31,7 +31,7 @@ function reload() {
         <ExclamationCircleOutlined />
       </div>
       <div class="error-title">
-        {{ $t('页面渲染出错') }}
+        {{ $t('errors.page_render_error') }}
       </div>
       <div class="error-message">
         {{ isProduction ? 'An unexpected error occurred. Please try again.' : error.message }}
@@ -51,13 +51,13 @@ function reload() {
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('重试') }}
+          {{ $t('common.retry') }}
         </Button>
         <Button
           size="small"
           @click="reload"
         >
-          {{ $t('刷新页面') }}
+          {{ $t('common.refresh_page') }}
         </Button>
       </div>
     </div>

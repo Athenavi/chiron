@@ -52,10 +52,10 @@ const hitRateChartOption = computed(() => ({
       ? hitRateHistory.value.map((_, i) => `T-${hitRateHistory.value.length - i}`)
       : ['--'],
   },
-  yAxis: { type: 'value', name: t('命中率'), max: 100 },
+  yAxis: { type: 'value', name: t('common.hit_rate'), max: 100 },
   series: [
     {
-      name: t('缓存命中率'),
+      name: t('admin.cache_hit_rate'),
       type: 'line',
       data: hitRateHistory.value.length ? hitRateHistory.value : [0],
       smooth: true,
@@ -86,7 +86,7 @@ async function fetchData() {
       redisMemory: formatSize(d.redis_memory_mb || 0),
       redisMaxMemory: d.redis_max_memory_mb
         ? formatSize(d.redis_max_memory_mb)
-        : t('未限制'),
+        : t('common.unlimited_2'),
     }
 
     hitRateHistory.value.push(d.total_hit_rate || 0)
@@ -94,7 +94,7 @@ async function fetchData() {
       hitRateHistory.value.shift()
     }
   } catch {
-    message.error(t('获取缓存数据失败'))
+    message.error(t('errors.failed_to_fetch_cache_data'))
   } finally {
     loading.value = false
   }
@@ -109,7 +109,7 @@ onMounted(() => {
   <div class="cache-monitor">
     <Spin :spinning="loading">
       <div class="metric-grid">
-        <Card :title="$t('缓存命中率')">
+        <Card :title="$t('admin.cache_hit_rate')">
           <Progress
             type="dashboard"
             :percent="cacheStats.totalHitRate"
@@ -125,48 +125,48 @@ onMounted(() => {
             :column="1"
             style="margin-top: 16px"
           >
-            <DescriptionsItem :label="$t('L1 命中次数')">
+            <DescriptionsItem :label="$t('common.l1_hits')">
               {{ cacheStats.l1Hits }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('L2 命中次数')">
+            <DescriptionsItem :label="$t('common.l2_hits')">
               {{ cacheStats.l2Hits }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('L3 命中次数')">
+            <DescriptionsItem :label="$t('common.l3_hits')">
               {{ cacheStats.l3Hits }}
             </DescriptionsItem>
           </Descriptions>
         </Card>
-        <Card :title="$t('缓存统计')">
+        <Card :title="$t('admin.cache_stats')">
           <Descriptions
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('总请求数')">
+            <DescriptionsItem :label="$t('common.total_requests')">
               {{ cacheStats.totalRequests }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('缓存命中')">
+            <DescriptionsItem :label="$t('admin.cache_hit')">
               {{ cacheStats.hits }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('缓存未命中')">
+            <DescriptionsItem :label="$t('admin.cache_miss')">
               {{ cacheStats.misses }}
             </DescriptionsItem>
           </Descriptions>
         </Card>
-        <Card :title="$t('Redis 缓存')">
+        <Card :title="$t('admin.redis_cache')">
           <Descriptions
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('命中率')">
+            <DescriptionsItem :label="$t('common.hit_rate')">
               {{ cacheStats.redisHitRate }}%
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('命中次数')">
+            <DescriptionsItem :label="$t('common.hits')">
               {{ cacheStats.redisKeyspaceHits }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('未命中次数')">
+            <DescriptionsItem :label="$t('common.misses')">
               {{ cacheStats.redisKeyspaceMisses }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('已用内存')">
+            <DescriptionsItem :label="$t('memory.memory_used')">
               {{ cacheStats.redisMemory }}
               <template v-if="cacheStats.redisMaxMemory">
                 / {{ cacheStats.redisMaxMemory }}
@@ -177,7 +177,7 @@ onMounted(() => {
       </div>
 
       <Card
-        :title="$t('缓存命中率趋势')"
+        :title="$t('admin.cache_hit_rate_trend')"
         style="margin-top: 16px"
       >
         <VChart

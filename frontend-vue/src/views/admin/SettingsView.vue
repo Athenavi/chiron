@@ -185,11 +185,11 @@ http {
 // 所以拆成 `${t(...)}` 插值并收进 computed（整段包 t() 不行：键含换行会撑破 legacy.ts 的字符串）。
 const kernelConfig = computed(() => `# /etc/sysctl.conf
 
-${t('# 文件描述符')}
+${t('media.file_descriptors')}
 fs.file-max = 2097152
 fs.nr_open = 2097152
 
-${t('# TCP 连接')}
+${t('common.tcp_connection')}
 net.core.somaxconn = 65535
 net.ipv4.tcp_max_syn_backlog = 65535
 net.ipv4.tcp_tw_reuse = 1
@@ -198,16 +198,16 @@ net.ipv4.tcp_keepalive_time = 600
 net.ipv4.tcp_keepalive_intvl = 30
 net.ipv4.tcp_keepalive_probes = 3
 
-${t('# 端口范围')}
+${t('common.port_range')}
 net.ipv4.ip_local_port_range = 1024 65535
 
-${t('# 内存')}
+${t('memory.memory')}
 net.core.rmem_max = 16777216
 net.core.wmem_max = 16777216
 net.ipv4.tcp_rmem = 4096 87380 16777216
 net.ipv4.tcp_wmem = 4096 65536 16777216
 
-${t('# 应用配置')}
+${t('common.app_config')}
 # /etc/security/limits.conf
 * soft nofile 2097152
 * hard nofile 2097152
@@ -218,9 +218,9 @@ async function saveRateLimit() {
   saving.value = true
   try {
     await saveSettings('rate_limit', rateLimitConfig.value)
-    message.success(t('限流配置已保存'))
+    message.success(t('common.rate_limit_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -230,9 +230,9 @@ async function saveDegradation() {
   saving.value = true
   try {
     await saveSettings('degradation', degradationConfig.value)
-    message.success(t('降级配置已保存'))
+    message.success(t('errors.failover_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -242,9 +242,9 @@ async function saveCache() {
   saving.value = true
   try {
     await saveSettings('cache', cacheConfig.value)
-    message.success(t('缓存配置已保存'))
+    message.success(t('admin.cache_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -254,9 +254,9 @@ async function saveApiKey() {
   saving.value = true
   try {
     await saveSettings('api_key', apiKeyConfig.value)
-    message.success(t('API Key 配置已保存'))
+    message.success(t('common.api_key_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -266,9 +266,9 @@ async function saveAgent() {
   saving.value = true
   try {
     await saveSettings('agent', agentConfig.value)
-    message.success(t('Agent 配置已保存'))
+    message.success(t('agent.agent_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -278,9 +278,9 @@ async function saveLlm() {
   saving.value = true
   try {
     await saveSettings('llm', llmConfig.value)
-    message.success(t('模型配置已保存'))
+    message.success(t('agent.model_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -290,9 +290,9 @@ async function saveStorage() {
   saving.value = true
   try {
     await saveSettings('storage', storageConfig.value)
-    message.success(t('存储配置已保存'))
+    message.success(t('common.storage_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -302,9 +302,9 @@ async function saveRedis() {
   saving.value = true
   try {
     await saveSettings('redis', redisConfig.value)
-    message.success(t('Redis 配置已保存并热更新连接'))
+    message.success(t('admin.redis_config_saved_and_connection_hot_reloaded'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -314,9 +314,9 @@ async function savePostgres() {
   saving.value = true
   try {
     await saveSettings('postgres', postgresConfig.value)
-    message.success(t('数据库配置已保存（重启后生效）'))
+    message.success(t('admin.database_config_saved_takes_effect_after_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -326,9 +326,9 @@ async function saveCors() {
   saving.value = true
   try {
     await saveSettings('cors', corsConfig.value)
-    message.success(t('CORS 配置已保存（重启后生效）'))
+    message.success(t('common.cors_config_saved_takes_effect_after_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -338,9 +338,9 @@ async function saveS3() {
   saving.value = true
   try {
     await saveSettings('s3', s3Config.value)
-    message.success(t('对象存储配置已保存'))
+    message.success(t('common.object_storage_config_saved'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -350,9 +350,9 @@ async function savePython() {
   saving.value = true
   try {
     await saveSettings('python', pythonConfig.value)
-    message.success(t('Python 引擎配置已保存，引擎重启后生效'))
+    message.success(t('common.python_engine_config_saved_takes_effect_after_engine_restart'))
   } catch (err: any) {
-    message.error(t('保存失败: {error}', { error: err.message || t('未知错误') }))
+    message.error(t('保存失败: {error}', { error: err.message || t('errors.unknown_error') }))
   } finally {
     saving.value = false
   }
@@ -360,12 +360,12 @@ async function savePython() {
 
 const copyNginx = () => {
   navigator.clipboard.writeText(nginxConfig)
-  message.success(t('已复制到剪贴板'))
+  message.success(t('common.copied_to_clipboard'))
 }
 
 const copyKernel = () => {
   navigator.clipboard.writeText(kernelConfig.value)
-  message.success(t('已复制到剪贴板'))
+  message.success(t('common.copied_to_clipboard'))
 }
 
 // 修复：加载已持久化的真实配置（不再以写死的示例默认值覆盖线上配置）。
@@ -409,12 +409,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('限流配置')">
+        <Card :title="$t('common.rate_limit_config')">
           <Form
             :model="rateLimitConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('全局（每分钟）')">
+            <FormItem :label="$t('common.global_per_minute')">
               <InputNumber
                 v-model:value="rateLimitConfig.global"
                 :min="100"
@@ -422,7 +422,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('单租户（每分钟）')">
+            <FormItem :label="$t('admin.per_tenant_per_minute')">
               <InputNumber
                 v-model:value="rateLimitConfig.tenant"
                 :min="10"
@@ -430,7 +430,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('单用户（每分钟）')">
+            <FormItem :label="$t('admin.per_user_per_minute')">
               <InputNumber
                 v-model:value="rateLimitConfig.user"
                 :min="1"
@@ -444,10 +444,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveRateLimit"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存后即刻生效（热更新）。') }}
+            {{ $t('common.takes_effect_immediately_after_saving_hot_reload') }}
           </div>
         </Card>
       </Col>
@@ -457,15 +457,15 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('降级配置')">
+        <Card :title="$t('errors.failover_config')">
           <Form
             :model="degradationConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('启用降级')">
+            <FormItem :label="$t('errors.enable_failover')">
               <Switch v-model:checked="degradationConfig.enabled" />
             </FormItem>
-            <FormItem :label="$t('轻度过载阈值')">
+            <FormItem :label="$t('common.mild_overload_threshold')">
               <InputNumber
                 v-model:value="degradationConfig.lightThreshold"
                 :min="10000"
@@ -473,7 +473,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('中度过载阈值')">
+            <FormItem :label="$t('common.moderate_overload_threshold')">
               <InputNumber
                 v-model:value="degradationConfig.mediumThreshold"
                 :min="50000"
@@ -481,7 +481,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('重度过载阈值')">
+            <FormItem :label="$t('common.severe_overload_threshold')">
               <InputNumber
                 v-model:value="degradationConfig.heavyThreshold"
                 :min="100000"
@@ -489,7 +489,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('VIP 优先')">
+            <FormItem :label="$t('common.vip_priority')">
               <Switch v-model:checked="degradationConfig.vipPriority" />
             </FormItem>
           </Form>
@@ -498,7 +498,7 @@ onMounted(async () => {
             :loading="saving"
             @click="saveDegradation"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
         </Card>
       </Col>
@@ -508,12 +508,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('缓存配置')">
+        <Card :title="$t('admin.cache_config')">
           <Form
             :model="cacheConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('L1 容量')">
+            <FormItem :label="$t('common.l1_capacity')">
               <InputNumber
                 v-model:value="cacheConfig.l1Capacity"
                 :min="100"
@@ -529,7 +529,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('语义缓存阈值')">
+            <FormItem :label="$t('admin.semantic_cache_threshold')">
               <Slider
                 v-model:value="cacheConfig.semanticThreshold"
                 :min="0.5"
@@ -537,7 +537,7 @@ onMounted(async () => {
                 :step="0.01"
               />
             </FormItem>
-            <FormItem :label="$t('启用预取')">
+            <FormItem :label="$t('common.enable_prefetch')">
               <Switch v-model:checked="cacheConfig.prefetchEnabled" />
             </FormItem>
           </Form>
@@ -546,7 +546,7 @@ onMounted(async () => {
             :loading="saving"
             @click="saveCache"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
         </Card>
       </Col>
@@ -556,12 +556,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('API Key 配置')">
+        <Card :title="$t('common.api_key_config')">
           <Form
             :model="apiKeyConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('熔断阈值')">
+            <FormItem :label="$t('common.circuit_breaker_threshold')">
               <InputNumber
                 v-model:value="apiKeyConfig.circuitBreakerThreshold"
                 :min="1"
@@ -569,7 +569,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('恢复超时')">
+            <FormItem :label="$t('errors.restore_timeout')">
               <InputNumber
                 v-model:value="apiKeyConfig.recoveryTimeout"
                 :min="10"
@@ -577,7 +577,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('权重衰减')">
+            <FormItem :label="$t('common.weight_decay')">
               <Slider
                 v-model:value="apiKeyConfig.weightDecay"
                 :min="0.1"
@@ -585,7 +585,7 @@ onMounted(async () => {
                 :step="0.1"
               />
             </FormItem>
-            <FormItem :label="$t('自动恢复')">
+            <FormItem :label="$t('common.auto_recover')">
               <Switch v-model:checked="apiKeyConfig.autoRecovery" />
             </FormItem>
           </Form>
@@ -594,7 +594,7 @@ onMounted(async () => {
             :loading="saving"
             @click="saveApiKey"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
         </Card>
       </Col>
@@ -610,12 +610,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('Agent 配置')">
+        <Card :title="$t('agent.agent_config')">
           <Form
             :model="agentConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('最大推理轮数')">
+            <FormItem :label="$t('chat.max_reasoning_rounds')">
               <InputNumber
                 v-model:value="agentConfig.max_turns"
                 :min="1"
@@ -623,7 +623,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('每次调用最大 Token')">
+            <FormItem :label="$t('common.max_tokens_per_call')">
               <InputNumber
                 v-model:value="agentConfig.max_tokens"
                 :min="256"
@@ -631,7 +631,7 @@ onMounted(async () => {
                 style="width: 100%"
               />
             </FormItem>
-            <FormItem :label="$t('上下文消息数限制')">
+            <FormItem :label="$t('chat.context_message_limit')">
               <InputNumber
                 v-model:value="agentConfig.context_limit"
                 :min="1"
@@ -645,10 +645,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveAgent"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存到 DB，运行时消费项重启后生效。') }}
+            {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
           </div>
         </Card>
       </Col>
@@ -658,7 +658,7 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('模型配置')">
+        <Card :title="$t('agent.model_config')">
           <Form
             :model="llmConfig"
             layout="vertical"
@@ -679,7 +679,7 @@ onMounted(async () => {
                 </Select.Option>
               </Select>
             </FormItem>
-            <FormItem :label="$t('默认模型')">
+            <FormItem :label="$t('agent.default_model')">
               <Input
                 v-model:value="llmConfig.model"
                 placeholder="gpt-4o"
@@ -691,10 +691,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveLlm"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('Provider/Model 已持久化到 DB，重启生效；密钥类敏感值加密入库。') }}
+            {{ $t('agent.provider_model_persisted_to_db_takes_effect_after_restart_secret_values_encrypted_at_rest') }}
           </div>
         </Card>
       </Col>
@@ -704,25 +704,25 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('存储配置')">
+        <Card :title="$t('common.storage_config')">
           <Form
             :model="storageConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('后端类型')">
+            <FormItem :label="$t('common.backend_type')">
               <Select
                 v-model:value="storageConfig.backend"
                 style="width: 100%"
               >
                 <Select.Option value="local">
-                  {{ $t('本地磁盘') }}
+                  {{ $t('common.local_disk') }}
                 </Select.Option>
                 <Select.Option value="s3">
                   S3 / MinIO
                 </Select.Option>
               </Select>
             </FormItem>
-            <FormItem :label="$t('存储根目录')">
+            <FormItem :label="$t('common.storage_root')">
               <Input
                 v-model:value="storageConfig.root"
                 placeholder="./workspace"
@@ -734,10 +734,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveStorage"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存到 DB，运行时消费项重启后生效。') }}
+            {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
           </div>
         </Card>
       </Col>
@@ -753,21 +753,21 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('Redis 配置')">
+        <Card :title="$t('admin.redis_config')">
           <Form
             :model="redisConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('地址')">
+            <FormItem :label="$t('common.address')">
               <Input
                 v-model:value="redisConfig.addr"
                 placeholder="localhost:6379"
               />
             </FormItem>
-            <FormItem :label="$t('密码（加密入库）')">
+            <FormItem :label="$t('auth.password_encrypted_at_rest')">
               <InputPassword
                 v-model:value="redisConfig.password"
-                :placeholder="$t('空则无密码')"
+                :placeholder="$t('auth.empty_means_no_password')"
               />
             </FormItem>
             <FormItem label="DB">
@@ -784,10 +784,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveRedis"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存后热更新连接；可切换 Redis 集群。') }}
+            {{ $t('admin.hot_reloads_the_connection_after_saving_can_switch_redis_clusters') }}
           </div>
         </Card>
       </Col>
@@ -797,12 +797,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('数据库（PostgreSQL）配置')">
+        <Card :title="$t('admin.database_postgresql_config')">
           <Form
             :model="postgresConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('DSN（加密入库）')">
+            <FormItem :label="$t('common.dsn_encrypted_at_rest')">
               <InputPassword
                 v-model:value="postgresConfig.dsn"
                 placeholder="postgres://user:pass@host:5432/chiron"
@@ -814,10 +814,10 @@ onMounted(async () => {
             :loading="saving"
             @click="savePostgres"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存到 DB，切换数据库集群需重启生效。') }}
+            {{ $t('admin.saved_to_db_switching_the_database_cluster_requires_a_restart_to_take_effect') }}
           </div>
         </Card>
       </Col>
@@ -827,12 +827,12 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('CORS 配置')">
+        <Card :title="$t('common.cors_config')">
           <Form
             :model="corsConfig"
             layout="vertical"
           >
-            <FormItem :label="$t('允许来源（逗号分隔）')">
+            <FormItem :label="$t('common.allowed_origins_comma_separated')">
               <Input
                 v-model:value="corsConfig.origins"
                 placeholder="http://localhost:5173,https://app.example.com"
@@ -844,10 +844,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveCors"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存后重启生效。') }}
+            {{ $t('common.takes_effect_after_restart') }}
           </div>
         </Card>
       </Col>
@@ -857,7 +857,7 @@ onMounted(async () => {
         :xs="24"
         :sm="12"
       >
-        <Card :title="$t('对象存储（S3/MinIO）配置')">
+        <Card :title="$t('common.object_storage_s3_minio_config')">
           <Form
             :model="s3Config"
             layout="vertical"
@@ -877,10 +877,10 @@ onMounted(async () => {
             <FormItem label="Access Key">
               <Input v-model:value="s3Config.access_key" />
             </FormItem>
-            <FormItem :label="$t('Secret Key（加密入库）')">
+            <FormItem :label="$t('common.secret_key_encrypted_at_rest')">
               <InputPassword v-model:value="s3Config.secret_key" />
             </FormItem>
-            <FormItem :label="$t('启用 SSL')">
+            <FormItem :label="$t('common.enable_ssl')">
               <Switch v-model:checked="s3Config.use_ssl" />
             </FormItem>
           </Form>
@@ -889,10 +889,10 @@ onMounted(async () => {
             :loading="saving"
             @click="saveS3"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('保存后重启生效。') }}
+            {{ $t('common.takes_effect_after_restart') }}
           </div>
         </Card>
       </Col>
@@ -902,7 +902,7 @@ onMounted(async () => {
         :xs="24"
         :sm="24"
       >
-        <Card :title="$t('Python AI 引擎配置')">
+        <Card :title="$t('common.python_ai_engine_config')">
           <Row :gutter="16">
             <Col
               :xs="24"
@@ -921,13 +921,13 @@ onMounted(async () => {
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('默认模型')">
+                <FormItem :label="$t('agent.default_model')">
                   <Input
                     v-model:value="pythonConfig.llm_model"
                     placeholder="deepseek-v4-flash"
                   />
                 </FormItem>
-                <FormItem :label="$t('LLM API Key（加密入库）')">
+                <FormItem :label="$t('common.llm_api_key_encrypted_at_rest')">
                   <InputPassword v-model:value="pythonConfig.llm_api_key" />
                 </FormItem>
                 <FormItem label="LLM Base URL">
@@ -946,13 +946,13 @@ onMounted(async () => {
                 :model="pythonConfig"
                 layout="vertical"
               >
-                <FormItem :label="$t('Embedding 模型')">
+                <FormItem :label="$t('agent.embedding_model')">
                   <Input
                     v-model:value="pythonConfig.embedding_model"
                     placeholder="text-embedding-3-small"
                   />
                 </FormItem>
-                <FormItem :label="$t('Agent 最大轮数')">
+                <FormItem :label="$t('agent.agent_max_rounds')">
                   <InputNumber
                     v-model:value="pythonConfig.max_turns"
                     :min="1"
@@ -960,7 +960,7 @@ onMounted(async () => {
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('队列并发数')">
+                <FormItem :label="$t('admin.queue_concurrency')">
                   <InputNumber
                     v-model:value="pythonConfig.queue_worker_concurrency"
                     :min="1"
@@ -968,7 +968,7 @@ onMounted(async () => {
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('L1 缓存容量')">
+                <FormItem :label="$t('admin.l1_cache_capacity')">
                   <InputNumber
                     v-model:value="pythonConfig.cache_l1_capacity"
                     :min="128"
@@ -984,10 +984,10 @@ onMounted(async () => {
             :loading="saving"
             @click="savePython"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </Button>
           <div class="config-note">
-            {{ $t('引擎启动时经内部端点拉取，API Key 加密入库。') }}
+            {{ $t('common.pulled_via_an_internal_endpoint_when_the_engine_starts_api_key_encrypted_at_rest') }}
           </div>
         </Card>
       </Col>
@@ -995,7 +995,7 @@ onMounted(async () => {
 
     <!-- Nginx 配置 -->
     <Card
-      :title="$t('Nginx 调优配置')"
+      :title="$t('common.nginx_tuning_config')"
       class="config-card"
     >
       <template #extra>
@@ -1004,7 +1004,7 @@ onMounted(async () => {
           ghost
           @click="copyNginx"
         >
-          {{ $t('复制配置') }}
+          {{ $t('common.copy_config') }}
         </Button>
       </template>
       <pre class="code-block">{{ nginxConfig }}</pre>
@@ -1012,7 +1012,7 @@ onMounted(async () => {
 
     <!-- 内核调优 -->
     <Card
-      :title="$t('内核调优配置')"
+      :title="$t('common.kernel_tuning_config')"
       class="config-card"
     >
       <template #extra>
@@ -1021,7 +1021,7 @@ onMounted(async () => {
           ghost
           @click="copyKernel"
         >
-          {{ $t('复制配置') }}
+          {{ $t('common.copy_config') }}
         </Button>
       </template>
       <pre class="code-block">{{ kernelConfig }}</pre>

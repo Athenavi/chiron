@@ -52,11 +52,11 @@ function continueInChat(inst: InstanceRecord) {
   }
   if (inst.error) parts.push(t('【错误】\n{error}', { error: inst.error }))
   if (parts.length === 0) {
-    message.warning(t('这条执行记录没有可带入对话的内容'))
+    message.warning(t('chat.this_execution_record_has_no_content_to_bring_into_the_conversation'))
     return
   }
   setChatPrefill({
-    title: t('工作流执行结果 · {name}', { name: inst.workflow_name || t('未命名工作流') }),
+    title: t('工作流执行结果 · {name}', { name: inst.workflow_name || t('workflow.untitled_workflow') }),
     text: parts.join('\n\n'),
     source: 'workflow',
   })
@@ -100,30 +100,30 @@ interface InstanceRecord {
 
 // ── Node type definitions ──
 const nodeTypes = [
-  { type: 'input', label: t('输入'), color: '#22c55e', icon: '📥', description: t('接收用户输入') },
-  { type: 'llm', label: 'LLM', color: '#8b5cf6', icon: '🧠', description: t('调用大语言模型') },
-  { type: 'tool', label: t('工具'), color: '#3b82f6', icon: '🔧', description: t('执行注册工具') },
-  { type: 'skill', label: t('技能'), color: '#ec4899', icon: '🎯', description: t('调用已安装技能') },
-  { type: 'knowledge', label: t('知识库'), color: '#14b8a6', icon: '📚', description: t('检索知识库片段') },
-  { type: 'agent', label: 'Agent', color: '#6366f1', icon: '🤖', description: t('调用已安装 Agent 执行子任务') },
-  { type: 'condition', label: t('条件'), color: '#f59e0b', icon: '🔀', description: t('条件分支判断') },
-  { type: 'output', label: t('输出'), color: '#6b7280', icon: '📤', description: t('输出结果') },
+  { type: 'input', label: t('common.input'), color: '#22c55e', icon: '📥', description: t('admin.receive_user_input') },
+  { type: 'llm', label: 'LLM', color: '#8b5cf6', icon: '🧠', description: t('agent.call_the_llm') },
+  { type: 'tool', label: t('agent.tools'), color: '#3b82f6', icon: '🔧', description: t('auth.execute_registration_tool') },
+  { type: 'skill', label: t('agent.skill'), color: '#ec4899', icon: '🎯', description: t('agent.call_an_installed_skill') },
+  { type: 'knowledge', label: t('knowledge.knowledge_base'), color: '#14b8a6', icon: '📚', description: t('knowledge.retrieve_knowledge_base_snippets') },
+  { type: 'agent', label: 'Agent', color: '#6366f1', icon: '🤖', description: t('workflow.call_an_installed_agent_to_run_a_subtask') },
+  { type: 'condition', label: t('common.condition'), color: '#f59e0b', icon: '🔀', description: t('common.conditional_branch') },
+  { type: 'output', label: t('common.output_2'), color: '#6b7280', icon: '📤', description: t('common.output_result') },
 ]
 
 const toolOptions = [
-  { value: 'browser_navigate', label: t('浏览器导航') },
-  { value: 'browser_click', label: t('点击元素') },
-  { value: 'browser_type', label: t('输入文本') },
-  { value: 'browser_read', label: t('读取页面') },
-  { value: 'browser_screenshot', label: t('截图') },
-  { value: 'browser_scroll', label: t('滚动页面') },
-  { value: 'browser_get_state', label: t('获取页面状态') },
-  { value: 'browser_tab_list', label: t('列出标签页') },
-  { value: 'browser_tab_create', label: t('新建标签页') },
-  { value: 'browser_tab_switch', label: t('切换标签页') },
-  { value: 'browser_tab_close', label: t('关闭标签页') },
-  { value: 'web_search', label: t('网页搜索') },
-  { value: 'shell_exec', label: t('执行命令') },
+  { value: 'browser_navigate', label: t('common.browser_navigation') },
+  { value: 'browser_click', label: t('common.click_element') },
+  { value: 'browser_type', label: t('common.enter_text') },
+  { value: 'browser_read', label: t('common.read_page') },
+  { value: 'browser_screenshot', label: t('common.screenshot') },
+  { value: 'browser_scroll', label: t('common.scroll_page') },
+  { value: 'browser_get_state', label: t('common.get_page_status') },
+  { value: 'browser_tab_list', label: t('common.list_tabs') },
+  { value: 'browser_tab_create', label: t('common.new_tab') },
+  { value: 'browser_tab_switch', label: t('common.switch_tab') },
+  { value: 'browser_tab_close', label: t('common.close_tab') },
+  { value: 'web_search', label: t('common.web_search') },
+  { value: 'shell_exec', label: t('common.execute_command') },
 ]
 
 const modelOptions = [
@@ -143,7 +143,7 @@ const { findNode, addNodes, addEdges, removeNodes, getNodes, getEdges, getSelect
 // ── State ──
 const nodes = ref<Node[]>([])
 const edges = ref<Edge[]>([])
-const workflowName = ref(t('新建工作流'))
+const workflowName = ref(t('workflow.new_workflow'))
 const workflowId = ref<string | null>(null)
 const savedWorkflows = ref<GraphRecord[]>([])
 const instances = ref<InstanceRecord[]>([])
@@ -385,7 +385,7 @@ function duplicateSelectedNode() {
     data: JSON.parse(JSON.stringify(src.data || {})),
   }
   addNodes([copy])
-  message.success(t('已复制节点'))
+  message.success(t('workflow.node_copied'))
 }
 
 // 快捷键：Delete 删除选中；Ctrl+D 复制
@@ -430,7 +430,7 @@ function autoLayout() {
     colCount[l] = col + 1
     n.position = { x: 40 + l * 220, y: 40 + col * 110 }
   }
-  message.success(t('已自动布局'))
+  message.success(t('common.auto_layout_applied'))
 }
 
 // ── Edge connection（条件节点 handle → 边 label） ──
@@ -490,7 +490,7 @@ function fromBackendFormat(data: any) {
     type: 'smoothstep',
     animated: true,
   }))
-  workflowName.value = graphDef.name || t('未命名工作流')
+  workflowName.value = graphDef.name || t('workflow.untitled_workflow')
   nodeCounter = nodes.value.length + 10
 }
 
@@ -506,7 +506,7 @@ async function saveWorkflow() {
   try {
     const resp = await api.post('/v1/graphs', payload)
     workflowId.value = resp.data?.data?.id || resp.data?.id
-    message.success(t('工作流已保存'))
+    message.success(t('workflow.workflow_saved'))
     await loadWorkflows()
   } catch (err: any) {
     message.error(t('保存失败: {error}', { error: err.response?.data?.error || err.message }))
@@ -536,7 +536,7 @@ function loadWorkflow(record: GraphRecord) {
 async function deleteWorkflow(id: string) {
   try {
     await api.delete(`/v1/graphs/${id}`)
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
     await loadWorkflows()
     if (workflowId.value === id) {
       workflowId.value = null
@@ -576,7 +576,7 @@ const needsRunInput = computed(() =>
 )
 
 function executeWorkflow() {
-  if (!workflowId.value) { message.warning(t('请先保存工作流')); return }
+  if (!workflowId.value) { message.warning(t('workflow.please_save_the_workflow_first')); return }
   if (!needsRunInput.value) {
     void submitWorkflowRun('')
     return
@@ -593,7 +593,7 @@ function confirmRunInput() {
 
 async function submitWorkflowRun(input: string) {
   isExecuting.value = true
-  executionLogs.value = [t('⏳ 正在提交...')]
+  executionLogs.value = [t('common.submitting')]
   executionResults.value = {}
   loggedNodes.clear()
   for (const n of getNodes.value) n.data = { ...n.data, execStatus: 'idle' }
@@ -602,8 +602,8 @@ async function submitWorkflowRun(input: string) {
     const initial_state = input.trim() ? { input } : {}
     const resp = await api.post(`/v1/graphs/${workflowId.value}/execute`, { initial_state })
     const instanceId = resp.data?.data?.instance_id || resp.data?.instance_id
-    if (!instanceId) throw new Error(t('无 instance_id'))
-    message.info(t('工作流已提交，正在执行…'))
+    if (!instanceId) throw new Error(t('common.no_instance_id'))
+    message.info(t('workflow.workflow_submitted_running'))
     startStatusPolling(instanceId)
   } catch (err: any) {
     isExecuting.value = false
@@ -619,7 +619,7 @@ function startStatusPolling(instanceId: string) {
       const data = resp.data?.data || resp.data
       applyExecutionStatus(data)
       if (data.status === 'completed') {
-        executionLogs.value.push(t('✅ 执行完成'))
+        executionLogs.value.push(t('common.done'))
         isExecuting.value = false
         stopStatusPolling()
         await loadInstances()
@@ -632,7 +632,7 @@ function startStatusPolling(instanceId: string) {
     } catch {
       stopStatusPolling()
       isExecuting.value = false
-      executionLogs.value.push(t('⚠️ 状态查询失败'))
+      executionLogs.value.push(t('errors.status_query_failed'))
     }
   }, 2000)
 }
@@ -668,7 +668,7 @@ async function loadInstances() {
 function resetCanvas() {
   nodes.value = []
   edges.value = []
-  workflowName.value = t('新建工作流')
+  workflowName.value = t('workflow.new_workflow')
   workflowId.value = null
   selectedNode.value = null
   showPanel.value = false
@@ -679,7 +679,7 @@ function resetCanvas() {
 
 // ── 互联互通：运行到对话（有 id 传 id，未保存则传画布名称，由后端兼容）──
 function runInChat() {
-  const value = workflowId.value || workflowName.value || t('未命名工作流')
+  const value = workflowId.value || workflowName.value || t('workflow.untitled_workflow')
   router.push({ path: '/chat', query: { workflow: value, mode: 'workflow' } })
 }
 
@@ -699,7 +699,7 @@ async function loadTemplates() {
     templates.value = await listTemplates('workflow')
   } catch {
     templatesError.value = true
-    message.error(t('获取工作流模板失败'))
+    message.error(t('errors.failed_to_fetch_workflow_templates'))
   } finally {
     templatesLoading.value = false
   }
@@ -720,7 +720,7 @@ async function useWorkflowTemplate(tpl: TemplateItem): Promise<boolean> {
     // 兼容直接返回 {payload,...} 或 {data:{payload,...}} 包装
     const body = resp?.data && typeof resp.data === 'object' && resp.data.payload ? resp.data : resp
     const payload = body?.payload
-    if (!payload || !Array.isArray(payload.nodes)) throw new Error(t('模板数据不完整'))
+    if (!payload || !Array.isArray(payload.nodes)) throw new Error(t('common.incomplete_template_data'))
     // 替换当前画布：模板只加载不落库，可编辑后手动保存
     resetCanvas()
     fromBackendFormat({ name: body?.name || tpl.name, nodes: payload.nodes, edges: payload.edges || [] })
@@ -778,7 +778,7 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <SaveOutlined />
           </template>
-          {{ $t('保存') }}
+          {{ $t('common.save') }}
         </Button>
         <Button
           size="small"
@@ -790,28 +790,28 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ isExecuting ? $t('执行中…') : $t('执行') }}
+          {{ isExecuting ? $t('common.running') : $t('common.execute') }}
         </Button>
         <Button
           size="small"
-          :title="$t('在当前对话中运行该工作流')"
+          :title="$t('workflow.run_this_workflow_in_the_current_conversation')"
           @click="runInChat"
         >
           <template #icon>
             <MessageOutlined />
           </template>
-          {{ $t('运行到对话') }}
+          {{ $t('chat.run_to_conversation') }}
         </Button>
         <Button
           size="small"
-          :title="$t('把该工作流持久装配到某个 Agent（之后每次派发都带上）')"
+          :title="$t('workflow.persistently_assemble_this_workflow_into_an_agent_attached_on_every_dispatch')"
           @click="attachToAgentOpen = true"
         >
-          {{ $t('装配到 Agent') }}
+          {{ $t('agent.assemble_to_agent') }}
         </Button>
         <Button
           size="small"
-          :title="$t('自动布局 (按层排列)')"
+          :title="$t('common.auto_layout_by_layer')"
           @click="autoLayout"
         >
           <template #icon>
@@ -820,7 +820,7 @@ function statusClass(nodeProps: any): string {
         </Button>
         <Button
           size="small"
-          :title="$t('复制选中节点 (Ctrl+D)')"
+          :title="$t('workflow.copy_selected_node_ctrl_d')"
           :disabled="!selectedNode"
           @click="duplicateSelectedNode"
         >
@@ -832,7 +832,7 @@ function statusClass(nodeProps: any): string {
           size="small"
           @click="resetCanvas"
         >
-          {{ $t('新建') }}
+          {{ $t('common.create_2') }}
         </Button>
       </div>
       <div class="toolbar-right">
@@ -843,7 +843,7 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <RocketOutlined />
           </template>
-          {{ $t('模板') }}
+          {{ $t('common.template') }}
         </Button>
         <Button
           size="small"
@@ -852,7 +852,7 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <UnorderedListOutlined />
           </template>
-          {{ $t('工作流列表') }}
+          {{ $t('workflow.workflow_list') }}
         </Button>
         <Button
           size="small"
@@ -861,19 +861,19 @@ function statusClass(nodeProps: any): string {
           <template #icon>
             <HistoryOutlined />
           </template>
-          {{ $t('执行历史') }}
+          {{ $t('common.execution_history') }}
         </Button>
         <Tag
           v-if="workflowId"
           color="success"
         >
-          {{ $t('已保存') }}
+          {{ $t('common.saved') }}
         </Tag>
         <Tag
           v-else
           color="warning"
         >
-          {{ $t('未保存') }}
+          {{ $t('common.unsaved') }}
         </Tag>
       </div>
     </div>
@@ -882,7 +882,7 @@ function statusClass(nodeProps: any): string {
       <!-- Left: Node Palette -->
       <div class="node-palette">
         <div class="palette-title">
-          {{ $t('节点') }}
+          {{ $t('workflow.node') }}
         </div>
         <div
           v-for="nt in nodeTypes"
@@ -895,7 +895,7 @@ function statusClass(nodeProps: any): string {
           <span class="palette-label">{{ nt.label }}</span>
         </div>
         <div class="palette-hint">
-          {{ $t('拖拽到画布') }}<br>{{ $t('Shift/⌘ 多选') }}<br>{{ $t('Delete 删除') }}
+          {{ $t('common.drag_onto_canvas') }}<br>{{ $t('common.shift_multi_select') }}<br>{{ $t('common.delete_2') }}
         </div>
       </div>
 
@@ -933,7 +933,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-green-fill);"
               >
-                <span>📥 {{ nodeProps.data?.label || $t('输入') }}</span>
+                <span>📥 {{ nodeProps.data?.label || $t('common.input') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">input</span>
@@ -989,7 +989,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-blue-fill);"
               >
-                <span>🔧 {{ nodeProps.data?.label || $t('工具') }}</span>
+                <span>🔧 {{ nodeProps.data?.label || $t('agent.tools') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">tool</span>
@@ -1019,7 +1019,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-pink-fill);"
               >
-                <span>🎯 {{ nodeProps.data?.label || $t('技能') }}</span>
+                <span>🎯 {{ nodeProps.data?.label || $t('agent.skill') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">skill</span>
@@ -1049,7 +1049,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-teal-fill);"
               >
-                <span>📚 {{ nodeProps.data?.label || $t('知识库') }}</span>
+                <span>📚 {{ nodeProps.data?.label || $t('knowledge.knowledge_base') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">knowledge</span>
@@ -1109,7 +1109,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-amber-fill);"
               >
-                <span>🔀 {{ nodeProps.data?.label || $t('条件') }}</span>
+                <span>🔀 {{ nodeProps.data?.label || $t('common.condition') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">condition</span>
@@ -1143,7 +1143,7 @@ function statusClass(nodeProps: any): string {
                 class="node-header"
                 style="background: var(--node-gray-fill);"
               >
-                <span>📤 {{ nodeProps.data?.label || $t('输出') }}</span>
+                <span>📤 {{ nodeProps.data?.label || $t('common.output_2') }}</span>
               </div>
               <div class="node-body">
                 <span class="node-type-tag">output</span>
@@ -1159,7 +1159,7 @@ function statusClass(nodeProps: any): string {
         class="property-panel"
       >
         <div class="panel-header">
-          <span>{{ $t('节点属性') }}</span>
+          <span>{{ $t('workflow.node_properties') }}</span>
           <Button
             type="text"
             size="small"
@@ -1175,16 +1175,16 @@ function statusClass(nodeProps: any): string {
             layout="vertical"
             size="small"
           >
-            <FormItem :label="$t('标签')">
+            <FormItem :label="$t('common.tag')">
               <Input
                 v-model:value="editLabel"
-                :placeholder="$t('节点标签')"
+                :placeholder="$t('workflow.node_label')"
               />
             </FormItem>
 
             <template v-if="selectedNode.data?.nodeType === 'llm'">
               <div class="section-divider" />
-              <FormItem :label="$t('模型')">
+              <FormItem :label="$t('agent.model')">
                 <Select
                   v-model:value="editModel"
                   :options="modelOptions"
@@ -1196,10 +1196,10 @@ function statusClass(nodeProps: any): string {
                 <Input.TextArea
                   v-model:value="editSystemPrompt"
                   :rows="4"
-                  :placeholder="$t('系统提示词')"
+                  :placeholder="$t('agent.system_prompt')"
                 />
               </FormItem>
-              <FormItem :label="$t('用户消息模板')">
+              <FormItem :label="$t('chat.user_message_template')">
                 <Input.TextArea
                   v-model:value="editUserMessage"
                   :rows="3"
@@ -1210,15 +1210,15 @@ function statusClass(nodeProps: any): string {
 
             <template v-if="selectedNode.data?.nodeType === 'tool'">
               <div class="section-divider" />
-              <FormItem :label="$t('工具名称')">
+              <FormItem :label="$t('agent.tool_name')">
                 <Select
                   v-model:value="editToolName"
                   :options="toolOptions"
-                  :placeholder="$t('选择工具')"
+                  :placeholder="$t('agent.select_tools')"
                   style="width: 100%"
                 />
               </FormItem>
-              <FormItem :label="$t('失败重试次数')">
+              <FormItem :label="$t('errors.retry_count_on_failure')">
                 <InputNumber
                   v-model:value="editRetries"
                   :min="0"
@@ -1230,13 +1230,13 @@ function statusClass(nodeProps: any): string {
 
             <template v-if="selectedNode.data?.nodeType === 'skill'">
               <div class="section-divider" />
-              <FormItem :label="$t('技能名称')">
+              <FormItem :label="$t('agent.skill_name')">
                 <Input
                   v-model:value="editSkillName"
-                  :placeholder="$t('已安装技能名（如 greeting-summary）')"
+                  :placeholder="$t('agent.installed_skill_name_e_g_greeting_summary')"
                 />
               </FormItem>
-              <FormItem :label="$t('参数 JSON')">
+              <FormItem :label="$t('agent.parameter_json')">
                 <Input.TextArea
                   v-model:value="editSkillParams"
                   :rows="3"
@@ -1247,20 +1247,20 @@ function statusClass(nodeProps: any): string {
 
             <template v-if="selectedNode.data?.nodeType === 'knowledge'">
               <div class="section-divider" />
-              <FormItem :label="$t('知识库 ID')">
+              <FormItem :label="$t('knowledge.knowledge_base_id')">
                 <Input
                   v-model:value="editKbId"
-                  :placeholder="$t('kb_id（知识库页面查看）')"
+                  :placeholder="$t('knowledge.kb_id_view_on_knowledge_base_page')"
                 />
               </FormItem>
-              <FormItem :label="$t('检索问题')">
+              <FormItem :label="$t('knowledge.search_question')">
                 <Input.TextArea
                   v-model:value="editKbQuery"
                   :rows="2"
-                  :placeholder="$t('留空则用上游输出作为检索词')"
+                  :placeholder="$t('knowledge.blank_uses_the_upstream_output_as_the_search_term')"
                 />
               </FormItem>
-              <FormItem :label="$t('返回条数')">
+              <FormItem :label="$t('common.rows_returned')">
                 <InputNumber
                   v-model:value="editKbTopK"
                   :min="1"
@@ -1273,7 +1273,7 @@ function statusClass(nodeProps: any): string {
             <template v-if="selectedNode.data?.nodeType === 'agent'">
               <div class="section-divider" />
               <div class="section-title">
-                {{ $t('Agent 配置') }}
+                {{ $t('agent.agent_config') }}
               </div>
               <FormItem label="Agent">
                 <Select
@@ -1281,7 +1281,7 @@ function statusClass(nodeProps: any): string {
                   v-model:value="editAgentId"
                   :options="agentOptions"
                   :loading="agentLoading"
-                  :placeholder="$t('选择已安装 Agent')"
+                  :placeholder="$t('agent.select_an_installed_agent')"
                   style="width: 100%"
                   allow-clear
                   @change="onAgentSelect"
@@ -1289,29 +1289,29 @@ function statusClass(nodeProps: any): string {
                 <Input
                   v-else
                   v-model:value="editAgentName"
-                  :placeholder="$t('手动输入 Agent 名称')"
+                  :placeholder="$t('agent.manually_enter_agent_name')"
                 />
                 <div
                   v-if="agentManualMode && !agentLoading"
                   class="agent-hint"
                 >
-                  {{ $t('Agent 列表不可用，已切换为手动输入') }}
+                  {{ $t('agent.agent_list_unavailable_switched_to_manual_input') }}
                 </div>
               </FormItem>
-              <FormItem :label="$t('名称（自动填入，可覆盖）')">
+              <FormItem :label="$t('common.name_auto_filled_overridable')">
                 <Input
                   v-model:value="editAgentName"
-                  :placeholder="$t('Agent 名称')"
+                  :placeholder="$t('agent.agent_name')"
                 />
               </FormItem>
-              <FormItem :label="$t('System Prompt（自动填入，可覆盖）')">
+              <FormItem :label="$t('agent.system_prompt_auto_filled_overridable')">
                 <Input.TextArea
                   v-model:value="editSystemPrompt"
                   :rows="3"
-                  :placeholder="$t('留空则使用 Agent 默认提示词')"
+                  :placeholder="$t('agent.blank_uses_the_agent_default_prompt')"
                 />
               </FormItem>
-              <FormItem :label="$t('模型（自动填入，可覆盖）')">
+              <FormItem :label="$t('agent.model_auto_filled_overridable')">
                 <Select
                   v-model:value="editModel"
                   :options="agentModelOptions"
@@ -1319,7 +1319,7 @@ function statusClass(nodeProps: any): string {
                   allow-clear
                 />
               </FormItem>
-              <FormItem :label="$t('最大轮数（自动填入，可覆盖）')">
+              <FormItem :label="$t('common.max_rounds_auto_filled_overridable')">
                 <InputNumber
                   v-model:value="editMaxTurns"
                   :min="1"
@@ -1327,28 +1327,28 @@ function statusClass(nodeProps: any): string {
                   style="width: 100%"
                 />
               </FormItem>
-              <FormItem :label="$t('任务输入')">
+              <FormItem :label="$t('workflow.task_input')">
                 <Input.TextArea
                   v-model:value="editAgentTask"
                   :rows="3"
-                  :placeholder="$t('子任务描述；支持 $节点ID 引用前置节点输出（如 $llm_1），留空则使用前置输出')"
+                  :placeholder="$t('workflow.subtask_description_supports_nodeid_to_reference_upstream_node_output_e_g_llm_1_leave_empty_to_use_the_upstream_output')"
                 />
               </FormItem>
             </template>
 
             <template v-if="selectedNode.data?.nodeType === 'condition'">
               <div class="section-divider" />
-              <FormItem :label="$t('条件表达式')">
+              <FormItem :label="$t('common.condition_expression')">
                 <Input.TextArea
                   v-model:value="editCondition"
                   :rows="3"
-                  :placeholder="$t('如: state.status == \'ok\'（对上游输出求值）')"
+                  :placeholder="$t('common.e_g_state_status_ok_evaluated_against_upstream_output')"
                 />
               </FormItem>
-              <FormItem :label="$t('输入变量引用')">
+              <FormItem :label="$t('common.input_variable_reference')">
                 <Input
                   v-model:value="editVariable"
-                  :placeholder="$t('$变量名（空 = 上游输出）')"
+                  :placeholder="$t('common.variable_name_empty_upstream_output')"
                 />
               </FormItem>
             </template>
@@ -1362,7 +1362,7 @@ function statusClass(nodeProps: any): string {
               <template #icon>
                 <DeleteOutlined />
               </template>
-              {{ $t('删除节点') }}
+              {{ $t('workflow.delete_node') }}
             </Button>
           </Form>
         </div>
@@ -1375,14 +1375,14 @@ function statusClass(nodeProps: any): string {
       class="execution-bar"
     >
       <div class="execution-header">
-        <span>{{ $t('执行日志') }}</span>
+        <span>{{ $t('common.execution_log') }}</span>
         <Button
           type="text"
           size="small"
           class="exec-clear"
           @click="executionLogs = []; executionResults = {}"
         >
-          {{ $t('清除') }}
+          {{ $t('common.clear') }}
         </Button>
       </div>
       <div class="execution-logs">
@@ -1421,14 +1421,14 @@ function statusClass(nodeProps: any): string {
     <Drawer
       v-if="showHistory"
       :open="showHistory"
-      :title="$t('执行历史')"
+      :title="$t('common.execution_history')"
       placement="right"
       :width="420"
       @update:open="showHistory = $event"
     >
       <Empty
         v-if="instances.length === 0"
-        :description="$t('暂无执行记录')"
+        :description="$t('common.no_execution_records_yet')"
       />
       <div
         v-else
@@ -1467,7 +1467,7 @@ function statusClass(nodeProps: any): string {
               size="small"
               @click="continueInChat(inst)"
             >
-              {{ $t('在对话中继续') }}
+              {{ $t('chat.continue_in_the_conversation') }}
             </Button>
           </div>
         </div>
@@ -1478,14 +1478,14 @@ function statusClass(nodeProps: any): string {
     <Drawer
       v-if="showDrawer"
       :open="showDrawer"
-      :title="$t('已保存的工作流')"
+      :title="$t('workflow.saved_workflow')"
       placement="right"
       :width="380"
       @update:open="showDrawer = $event"
     >
       <Empty
         v-if="savedWorkflows.length === 0"
-        :description="$t('暂无工作流')"
+        :description="$t('workflow.no_workflows_yet')"
       />
       <div
         v-else
@@ -1503,7 +1503,7 @@ function statusClass(nodeProps: any): string {
         >
           <div class="wf-item-info">
             <div class="wf-item-name">
-              {{ wf.name || $t('未命名工作流') }}
+              {{ wf.name || $t('workflow.untitled_workflow') }}
             </div>
             <div class="wf-item-time">
               {{ formatDate(wf.updated_at) || formatDate(wf.created_at) }}
@@ -1516,7 +1516,7 @@ function statusClass(nodeProps: any): string {
             </div>
           </div>
           <Popconfirm
-            :title="$t('确认删除？')"
+            :title="$t('common.confirm_delete')"
             @confirm="deleteWorkflow(wf.id)"
           >
             <Button
@@ -1537,18 +1537,18 @@ function statusClass(nodeProps: any): string {
     <!-- 模板市场：一键把模板加载进画布（只加载不落库，可编辑后手动保存） -->
     <Modal
       v-model:open="templateOpen"
-      :title="$t('工作流模板')"
+      :title="$t('workflow.workflow_templates')"
       :footer="null"
       width="640px"
     >
       <PageSkeleton v-if="templatesLoading" />
       <EmptyState
         v-else-if="templatesError"
-        :description="$t('模板加载失败，请稍后重试')"
+        :description="$t('errors.template_load_failed_please_retry_later')"
       />
       <EmptyState
         v-else-if="!templates.length"
-        :description="$t('暂无可用模板')"
+        :description="$t('common.no_templates_available')"
       />
       <ul v-else class="template-list">
         <li
@@ -1568,7 +1568,7 @@ function statusClass(nodeProps: any): string {
             :loading="templateUsingId === tpl.id"
             @click="onUseTemplate(tpl)"
           >
-            {{ $t('使用') }}
+            {{ $t('common.use') }}
           </Button>
         </li>
       </ul>
@@ -1577,18 +1577,18 @@ function statusClass(nodeProps: any): string {
     <!-- 运行输入：图里有 input 节点时收集（见 needsRunInput 的说明） -->
     <Modal
       v-model:open="runInputOpen"
-      :title="$t('运行输入')"
-      :ok-text="$t('运行')"
-      :cancel-text="$t('取消')"
+      :title="$t('common.run_input')"
+      :ok-text="$t('common.run')"
+      :cancel-text="$t('common.cancel')"
       @ok="confirmRunInput"
     >
       <p class="run-input-hint">
-        {{ $t('这段文本会作为图中 input 节点的输出，供下游节点（如知识库检索的 query）使用；留空则各节点按自身配置继续。') }}
+        {{ $t('workflow.this_text_becomes_the_output_of_the_graph_s_input_node_consumed_by_downstream_nodes_e_g_the_knowledge_base_query_leave_empty_to_let_each_node_use_its_own_config') }}
       </p>
       <Input.TextArea
         v-model:value="runInputValue"
         :rows="4"
-        :placeholder="$t('输入本次运行要处理的内容…')"
+        :placeholder="$t('common.enter_the_content_to_process_in_this_run')"
       />
     </Modal>
 
@@ -1597,7 +1597,7 @@ function statusClass(nodeProps: any): string {
       v-model:open="attachToAgentOpen"
       kind="workflow"
       :value="workflowId || ''"
-      :label="workflowName || $t('当前工作流')"
+      :label="workflowName || $t('workflow.current_workflow')"
     />
   </div>
 </template>

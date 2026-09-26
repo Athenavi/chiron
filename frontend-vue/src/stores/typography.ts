@@ -36,24 +36,24 @@ export const TYPOGRAPHY_DEFAULTS: TypographyState = {
 }
 
 export const TEXT_SIZE_OPTIONS = [
-  { label: t('紧凑'), value: 14 },
-  { label: t('标准'), value: 16 },
-  { label: t('宽大'), value: 18 },
+  { label: t('common.compact'), value: 14 },
+  { label: t('common.standard'), value: 16 },
+  { label: t('common.spacious'), value: 18 },
 ]
 export const LEADING_OPTIONS = [
-  { label: t('紧'), value: 1.6 },
-  { label: t('标准'), value: 1.75 },
-  { label: t('松'), value: 2 },
+  { label: t('common.strict'), value: 1.6 },
+  { label: t('common.standard'), value: 1.75 },
+  { label: t('common.loose'), value: 2 },
 ]
 export const GAP_OPTIONS = [
-  { label: t('紧凑'), value: 2 },
-  { label: t('标准'), value: 6 },
-  { label: t('宽松'), value: 14 },
+  { label: t('common.compact'), value: 2 },
+  { label: t('common.standard'), value: 6 },
+  { label: t('common.roomy'), value: 14 },
 ]
 export const CONTENT_WIDTH_OPTIONS = [
-  { label: t('舒适'), value: 720 },
-  { label: t('宽'), value: 960 },
-  { label: t('超宽'), value: 1200 },
+  { label: t('common.comfortable'), value: 720 },
+  { label: t('common.wide'), value: 960 },
+  { label: t('common.ultra_wide'), value: 1200 },
 ]
 
 function clampNumber(value: unknown, min: number, max: number, fallback: number): number {

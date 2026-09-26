@@ -16,9 +16,9 @@ const redocUrl = computed(() =>
 <template>
   <div class="api-docs-page">
     <div class="api-docs-header">
-      <h2>{{ $t('API 文档') }}</h2>
+      <h2>{{ $t('knowledge.api_documentation') }}</h2>
       <p class="api-docs-desc">
-        {{ $t('Chiron API 完整文档（OpenAPI 3.0），含认证、聊天、企业功能、SSO、系统监控等。') }}
+        {{ $t('knowledge.complete_chiron_api_documentation_openapi_3_0_covering_auth_chat_enterprise_features_sso_system_monitoring_etc') }}
       </p>
     </div>
     <div class="redoc-wrapper">
@@ -26,7 +26,7 @@ const redocUrl = computed(() =>
         :src="redocUrl"
         frameborder="0"
         class="redoc-frame"
-        :title="$t('Chiron API 文档')"
+        :title="$t('knowledge.chiron_api_documentation')"
       />
     </div>
   </div>

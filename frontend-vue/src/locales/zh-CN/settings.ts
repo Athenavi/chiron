@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  theme_dark_light_appearance: "theme 主题 深色 浅色 暗色 明亮 外观 dark light",
+  tag_set_tag: "已设置标签：{tag}",
+  general_settings: "通用设置",
+  save_settings: "保存设置",
+  profile_updated: "个人信息已更新",
+  profile: "个人资料",
+  basic_profile: "基本资料",
+  read_aloud_settings_saved: "朗读设置已保存",
+  preferences: "偏好",
+  switch_theme: "切换主题",
+  settings: "设置",
+  notification: "通知",
+  appearance_mode: "外观模式",
+  appearance_and_theme: "外观与主题",
+  we_may_adjust_or_terminate_some_features_major_changes_will_be_announced_in_advance: "我们可能调整或终止部分功能，重大变更会提前通知。",
+  system_settings: "系统设置",
+  display_settings: "显示设置",
+  theme: "主题",
+  theme_style: "主题风格",
+  theme_settings: "主题设置",
+}

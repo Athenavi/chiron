@@ -37,18 +37,18 @@ const typeFilter = ref<string | undefined>(undefined)
 const selectedIds = ref<string[]>([])
 
 const typeOptions = computed(() => [
-  { value: 'image', label: t('图片') },
-  { value: 'video', label: t('视频') },
-  { value: 'audio', label: t('音频') },
-  { value: 'document', label: t('文档') },
-  { value: 'file', label: t('文件') },
+  { value: 'image', label: t('media.image') },
+  { value: 'video', label: t('media.video') },
+  { value: 'audio', label: t('media.audio') },
+  { value: 'document', label: t('knowledge.document') },
+  { value: 'file', label: t('media.file') },
 ])
 
 const columns = computed(() => [
-  { title: t('名称'), dataIndex: 'name', ellipsis: true },
-  { title: t('类型'), dataIndex: 'type', width: 90 },
+  { title: t('common.name'), dataIndex: 'name', ellipsis: true },
+  { title: t('common.type'), dataIndex: 'type', width: 90 },
   {
-    title: t('大小'),
+    title: t('common.size'),
     dataIndex: 'size',
     width: 110,
     customRender: ({ text }: { text: number }) => formatSize(text),
@@ -71,7 +71,7 @@ async function fetchRows() {
     const res = await api.get('/v1/media', { params })
     rows.value = (res.data?.data?.items || []) as MediaRow[]
   } catch {
-    message.error(t('加载媒体库失败'))
+    message.error(t('errors.failed_to_load_media_library'))
     rows.value = []
   } finally {
     loading.value = false
@@ -130,25 +130,25 @@ watch(
 <template>
   <Modal
     :open="props.open"
-    :title="$t('从媒体库选取')"
+    :title="$t('common.pick_from_media_library')"
     :width="720"
     :confirm-loading="submitting"
-    :ok-text="$t('确定')"
-    :cancel-text="$t('取消')"
+    :ok-text="$t('common.confirm')"
+    :cancel-text="$t('common.cancel')"
     @ok="handleOk"
     @cancel="emit('update:open', false)"
   >
     <div class="picker-toolbar">
       <Input.Search
         v-model:value="keyword"
-        :placeholder="$t('搜索文件名')"
+        :placeholder="$t('media.search_file_name')"
         allow-clear
         @search="fetchRows"
       />
       <Select
         v-model:value="typeFilter"
         :options="typeOptions"
-        :placeholder="$t('全部类型')"
+        :placeholder="$t('common.all_types')"
         allow-clear
         style="width: 140px"
         @change="fetchRows"
@@ -165,7 +165,7 @@ watch(
         :scroll="{ y: 320 }"
       >
         <template #emptyText>
-          <Empty :description="$t('暂无数据')" />
+          <Empty :description="$t('common.no_data_yet')" />
         </template>
       </Table>
     </Spin>

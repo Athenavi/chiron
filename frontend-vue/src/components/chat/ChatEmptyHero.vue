@@ -7,10 +7,10 @@ const emit = defineEmits<{ (e: 'suggest', text: string): void }>()
 
 // 图标沿用产品其余部分的 ant-design 图标集，避免 emoji 在深浅主题下渲染不一致
 const suggestions = [
-  { icon: CodeOutlined, title: t('代码生成'), desc: t('写一段 Python 代码实现排序算法'), prompt: t('写一段 Python 代码实现排序算法') },
-  { icon: EditOutlined, title: t('创意写作'), desc: t('帮我写一篇关于 AI 的短文'), prompt: t('帮我写一篇关于 AI 的短文') },
-  { icon: BarChartOutlined, title: t('数据分析'), desc: t('分析这份数据的趋势'), prompt: t('分析这份数据的趋势') },
-  { icon: BulbOutlined, title: t('方案策划'), desc: t('帮我做一个项目计划'), prompt: t('帮我做一个项目计划') },
+  { icon: CodeOutlined, title: t('common.code_generation'), desc: t('common.write_a_python_snippet_implementing_a_sorting_algorithm'), prompt: t('common.write_a_python_snippet_implementing_a_sorting_algorithm') },
+  { icon: EditOutlined, title: t('common.creative_writing'), desc: t('common.write_me_a_short_essay_about_ai'), prompt: t('common.write_me_a_short_essay_about_ai') },
+  { icon: BarChartOutlined, title: t('common.data_analysis'), desc: t('common.analyze_the_trend_in_this_data'), prompt: t('common.analyze_the_trend_in_this_data') },
+  { icon: BulbOutlined, title: t('billing.planning'), desc: t('billing.help_me_make_a_project_plan'), prompt: t('billing.help_me_make_a_project_plan') },
 ]
 </script>
 
@@ -25,7 +25,7 @@ const suggestions = [
         MC
       </div>
       <h1 class="hero-title">
-        {{ $t('你好，有什么可以帮助你的？') }}
+        {{ $t('common.hello_how_can_i_help_you') }}
       </h1>
       <!--      <div class="suggestion-grid">-->
       <!--        <div-->

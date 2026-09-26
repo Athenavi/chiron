@@ -131,7 +131,7 @@ async function stickToBottom() {
           class="think-bottom"
           @click="stickToBottom"
         >
-          {{ $t('回到底部') }}
+          {{ $t('common.back_to_bottom') }}
         </button>
       </div>
     </Transition>

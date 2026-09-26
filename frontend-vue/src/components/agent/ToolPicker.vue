@@ -100,7 +100,7 @@ function onChange(value: unknown) {
       :value="picked"
       :options="options"
       :loading="loading"
-      :placeholder="$t('从引擎可用工具中挑选（含插件提供的）')"
+      :placeholder="$t('agent.pick_from_the_engine_s_available_tools_including_plugin_provided_ones')"
       allow-clear
       show-search
       option-filter-prop="label"
@@ -108,7 +108,7 @@ function onChange(value: unknown) {
       @update:value="onChange"
     />
     <p class="tool-picker-hint">
-      {{ $t('勾选会写入上方配置（手写条目保留）；安装插件后，它提供的工具也会出现在这里。') }}
+      {{ $t('agent.checkboxes_write_to_the_config_above_hand_written_entries_are_kept_after_installing_a_plugin_its_tools_also_appear_here') }}
     </p>
   </div>
 </template>

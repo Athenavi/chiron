@@ -78,7 +78,7 @@ const NAME_MAX = 60
 /** 从会话标题推一个默认名字；没有标题时用中性兜底（而不是空字符串） */
 function defaultName(title?: string): string {
   const base = (title || '').trim().split('\n')[0]!.trim()
-  if (!base) return t('新 Agent')
+  if (!base) return t('agent.new_agent')
   return base.length > NAME_MAX ? base.slice(0, NAME_MAX) : base
 }
 

@@ -36,7 +36,7 @@ const tone = computed(() => {
 const label = computed(() => (percent.value === null ? '—' : `${Math.round(percent.value * 100)}%`))
 
 const title = computed(() => {
-  if (percent.value === null) return t('上下文占用：暂无数据')
+  if (percent.value === null) return t('common.context_usage_no_data')
   return t('上下文占用 {label}：最近一轮请求 {used} tokens / 上限 {limit}', { label: label.value, used: props.used, limit: props.limit })
 })
 </script>

@@ -20,7 +20,7 @@ async function fetchRoles() {
   try {
     roles.value = await listRoles()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -45,7 +45,7 @@ function openEdit(role: EntRole) {
 
 async function save() {
   if (!form.value.name.trim()) {
-    message.warning(t('角色名必填'))
+    message.warning(t('errors.role_name_is_required'))
     return
   }
   const perms = form.value.permissions
@@ -56,15 +56,15 @@ async function save() {
   try {
     if (modalMode.value === 'create') {
       await createRole({ name: form.value.name, display_name: form.value.display_name, permissions: perms })
-      message.success(t('已创建'))
+      message.success(t('common.created'))
     } else {
       await updateRole(form.value.id, { name: form.value.name, display_name: form.value.display_name, permissions: perms })
-      message.success(t('已更新'))
+      message.success(t('common.updated'))
     }
     modalVisible.value = false
     fetchRoles()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -72,22 +72,22 @@ async function save() {
 
 function confirmDelete(role: EntRole) {
   if (role.is_builtin) {
-    message.warning(t('内置角色不可删除'))
+    message.warning(t('admin.built_in_roles_cannot_be_deleted'))
     return
   }
   Modal.confirm({
-    title: t('删除角色'),
+    title: t('admin.delete_role'),
     content: t('确认删除「{name}」？关联用户将失去此角色权限。', { name: role.name }),
-    okText: t('删除'),
+    okText: t('common.delete'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteRole(role.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         fetchRoles()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('删除失败'))
+        message.error(e?.response?.data?.error || t('errors.delete_failed'))
       }
     },
   })
@@ -99,13 +99,13 @@ function formatTime(iso: string): string {
 }
 
 const columns: TableColumnsType = [
-  { title: t('角色名'), dataIndex: 'name', key: 'name' },
-  { title: t('显示名'), dataIndex: 'display_name', key: 'display_name' },
-  { title: t('内置'), dataIndex: 'is_builtin', key: 'is_builtin', width: 80, customRender: ({ text }) => (text ? t('是') : t('否')) },
-  { title: t('用户数'), dataIndex: 'user_count', key: 'user_count', width: 80 },
-  { title: t('权限点'), dataIndex: 'permissions', key: 'permissions', customRender: ({ text }) => (text as string[])?.length ?? 0 },
-  { title: t('创建时间'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
-  { title: t('操作'), key: 'action', width: 140, fixed: 'right' },
+  { title: t('admin.role_name'), dataIndex: 'name', key: 'name' },
+  { title: t('common.display_name'), dataIndex: 'display_name', key: 'display_name' },
+  { title: t('common.built_in'), dataIndex: 'is_builtin', key: 'is_builtin', width: 80, customRender: ({ text }) => (text ? t('common.yes') : t('common.no')) },
+  { title: t('admin.users'), dataIndex: 'user_count', key: 'user_count', width: 80 },
+  { title: t('errors.permission_point'), dataIndex: 'permissions', key: 'permissions', customRender: ({ text }) => (text as string[])?.length ?? 0 },
+  { title: t('common.created_at'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
+  { title: t('common.action'), key: 'action', width: 140, fixed: 'right' },
 ]
 
 onMounted(fetchRoles)
@@ -115,13 +115,13 @@ onMounted(fetchRoles)
   <div class="roles-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('角色管理') }}
+        {{ $t('admin.role_management') }}
       </h2>
       <a-button
         type="primary"
         @click="openCreate"
       >
-        {{ $t('新建角色') }}
+        {{ $t('admin.new_role') }}
       </a-button>
     </div>
 
@@ -136,7 +136,7 @@ onMounted(fetchRoles)
     >
       <template #emptyText>
         <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -146,7 +146,7 @@ onMounted(fetchRoles)
             size="small"
             @click="openEdit(record as EntRole)"
           >
-            {{ $t('编辑') }}
+            {{ $t('common.edit_2') }}
           </a-button>
           <a-button
             type="link"
@@ -154,7 +154,7 @@ onMounted(fetchRoles)
             danger
             @click="confirmDelete(record as EntRole)"
           >
-            {{ $t('删除') }}
+            {{ $t('common.delete') }}
           </a-button>
         </template>
       </template>
@@ -162,29 +162,29 @@ onMounted(fetchRoles)
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? $t('新建角色') : $t('编辑角色')"
+      :title="modalMode === 'create' ? $t('admin.new_role') : $t('admin.edit_role')"
       :confirm-loading="saving"
       @ok="save"
     >
       <a-form layout="vertical">
-        <a-form-item :label="$t('角色名（唯一，max 64）')">
+        <a-form-item :label="$t('admin.role_name_unique_max_64')">
           <a-input
             v-model:value="form.name"
             :disabled="modalMode === 'edit'"
-            :placeholder="$t('如 content-editor')"
+            :placeholder="$t('common.e_g_content_editor_2')"
           />
         </a-form-item>
-        <a-form-item :label="$t('显示名')">
+        <a-form-item :label="$t('common.display_name')">
           <a-input
             v-model:value="form.display_name"
-            :placeholder="$t('如 内容编辑者')"
+            :placeholder="$t('common.e_g_content_editor')"
           />
         </a-form-item>
-        <a-form-item :label="$t('权限点（每行一个）')">
+        <a-form-item :label="$t('errors.permission_points_one_per_line')">
           <a-textarea
             v-model:value="form.permissions"
             :rows="8"
-            :placeholder="$t('如 ent:manage\naudit:read\nbilling:manage')"
+            :placeholder="$t('billing.e_g_ent_manage_naudit_read_nbilling_manage')"
           />
         </a-form-item>
       </a-form>

@@ -33,10 +33,10 @@ const emit = defineEmits<{
 
 /** 类型 → 展示名（标题与提示共用，避免两处各写一份三元表达式） */
 const SUBJECT_LABEL = computed<Record<AttachKind, string>>(() => ({
-  kb: t('知识库'),
-  skill: t('技能'),
-  plugin: t('插件'),
-  workflow: t('工作流'),
+  kb: t('knowledge.knowledge_base'),
+  skill: t('agent.skill'),
+  plugin: t('common.plugin'),
+  workflow: t('workflow.workflow'),
 }))
 
 interface AgentOption {
@@ -78,7 +78,7 @@ watch(() => props.open, async (open) => {
     agents.value = await listAgents()
   } catch {
     agents.value = []
-    message.error(t('获取 Agent 列表失败'))
+    message.error(t('errors.failed_to_fetch_agent_list'))
   } finally {
     loading.value = false
   }
@@ -87,7 +87,7 @@ watch(() => props.open, async (open) => {
 async function attach() {
   const target = agents.value.find(a => a.id === agentId.value)
   if (!target) {
-    message.warning(t('请选择目标 Agent'))
+    message.warning(t('agent.please_select_the_target_agent'))
     return
   }
   saving.value = true
@@ -118,7 +118,7 @@ async function attach() {
     const raw = err.response?.data
     const text = (v: unknown): string => (typeof v === 'string' ? v : '')
     const detail = text(raw?.message) || text(raw?.detail) || text(raw?.error) || text(err.message) || ''
-    message.error(t('装配失败：') + (detail || t('只能操作自己创建的 Agent')))
+    message.error(t('errors.assembly_failed') + (detail || t('agent.can_only_operate_agents_you_created')))
   } finally {
     saving.value = false
   }
@@ -128,11 +128,11 @@ async function attach() {
 <template>
   <Modal
     :open="open"
-    :title="$t('装配到 Agent')"
+    :title="$t('agent.assemble_to_agent')"
     :confirm-loading="saving"
     :ok-button-props="{ disabled: !agentId }"
-    :ok-text="$t('装配')"
-    :cancel-text="$t('取消')"
+    :ok-text="$t('common.assemble')"
+    :cancel-text="$t('common.cancel')"
     @ok="attach"
     @cancel="emit('update:open', false)"
   >
@@ -144,7 +144,7 @@ async function attach() {
         v-model:value="agentId"
         :options="options"
         :loading="loading"
-        :placeholder="$t('选择目标 Agent')"
+        :placeholder="$t('agent.select_target_agent')"
         show-search
         option-filter-prop="label"
         class="attach-select"
@@ -153,14 +153,14 @@ async function attach() {
         v-if="alreadyBound"
         class="attach-hint"
       >
-        {{ $t('该 Agent 已装配此项，重复装配不会产生变化。') }}
+        {{ $t('agent.this_agent_already_has_this_item_assembled_re_assembling_has_no_effect') }}
       </p>
       <p
         v-else
         class="attach-hint"
       >
         {{ kind === 'kb'
-          ? $t('知识库是单值：会覆盖该 Agent 原有的默认知识库。')
+          ? $t('agent.the_knowledge_base_is_single_valued_it_overwrites_the_agent_s_original_default_knowledge_base')
           : $t('{subject}会追加到该 Agent 的已有绑定，不覆盖其它项。', { subject: SUBJECT_LABEL[kind] }) }}
       </p>
     </div>

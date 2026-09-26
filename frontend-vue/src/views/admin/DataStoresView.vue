@@ -8,7 +8,7 @@ const { t } = useI18n()
 // 数据存储：Redis（Keyspace/慢日志/flush）+ 数据库（状态/查询/备份恢复/优化）
 const tabs = [
   { key: 'redis', label: 'Redis', comp: RedisManagementView },
-  { key: 'database', label: t('数据库'), comp: DatabaseManagementView },
+  { key: 'database', label: t('admin.database'), comp: DatabaseManagementView },
 ]
 </script>
 

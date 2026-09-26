@@ -73,7 +73,7 @@ watch(
           <button
             type="button"
             class="fp-close"
-            :title="$t('关闭')"
+            :title="$t('common.close')"
             @click="emit('close')"
           >
             ✕

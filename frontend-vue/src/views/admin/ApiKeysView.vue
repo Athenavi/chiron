@@ -78,12 +78,12 @@ const columns = [
   { title: 'ID', dataIndex: 'id', width: 120 },
   { title: 'Provider', dataIndex: 'provider', width: 200 },
   { title: 'Key', dataIndex: 'key_preview', width: 180 },
-  { title: t('状态'), dataIndex: 'status', width: 100 },
-  { title: t('权重'), dataIndex: 'weight', width: 80 },
-  { title: t('失败次数'), dataIndex: 'failures', width: 100 },
-  { title: t('最后使用'), dataIndex: 'last_used', width: 180 },
-  { title: t('备注'), dataIndex: 'remark' },
-  { title: t('操作'), dataIndex: 'actions', width: 150, fixed: 'right' as const },
+  { title: t('common.status'), dataIndex: 'status', width: 100 },
+  { title: t('common.weight'), dataIndex: 'weight', width: 80 },
+  { title: t('errors.failure_count'), dataIndex: 'failures', width: 100 },
+  { title: t('common.last_used'), dataIndex: 'last_used', width: 180 },
+  { title: t('memory.note'), dataIndex: 'remark' },
+  { title: t('common.action'), dataIndex: 'actions', width: 150, fixed: 'right' as const },
 ]
 
 function providerLabel(id: string): string {
@@ -96,7 +96,7 @@ async function fetchApiKeys() {
     const keys = await listApiKeys()
     apiKeys.value = keys
   } catch {
-    message.error(t('获取 API Key 失败'))
+    message.error(t('errors.failed_to_get_api_key'))
   } finally {
     loading.value = false
   }
@@ -108,7 +108,7 @@ async function loadProviders() {
     providers.value = await listLlmProviders()
   } catch {
     // 目录拉取失败不阻断密钥管理：自定义模式仍可用
-    message.error(t('服务提供商目录加载失败'))
+    message.error(t('errors.failed_to_load_provider_catalog'))
   } finally {
     providersLoading.value = false
   }
@@ -148,7 +148,7 @@ const keyPlaceholder = computed(() => {
   const prefix = selectedProvider.value?.api_key_prefix
   if (prefix) return `${prefix}…`
   return selectedProvider.value && !selectedProvider.value.requires_key
-    ? t('本地端点无需 Key，可留空')
+    ? t('common.local_endpoints_need_no_key_can_be_left_empty')
     : 'sk-…'
 })
 
@@ -162,7 +162,7 @@ function isValidBaseURL(value: string): boolean {
 function buildBody(): { provider: string; key: string; remark: string; base_url?: string } | null {
   const provider = formData.value.provider.trim().toLowerCase()
   if (!PROVIDER_ID_RE.test(provider)) {
-    message.warning(t('Provider 名称仅允许小写字母、数字与 . _ -（最长 64 字符）'))
+    message.warning(t('common.provider_name_allows_only_lowercase_letters_digits_and_max_64_chars'))
     return null
   }
 
@@ -171,7 +171,7 @@ function buildBody(): { provider: string; key: string; remark: string; base_url?
   const requiresKey = addMode.value === 'catalog' ? (preset?.requires_key ?? true) : true
   if (!key) {
     if (requiresKey) {
-      message.warning(t('请输入 API Key'))
+      message.warning(t('common.please_enter_api_key'))
       return null
     }
     // 本地/自托管端点无需真实 key：用占位值满足网关的必填校验
@@ -180,12 +180,12 @@ function buildBody(): { provider: string; key: string; remark: string; base_url?
 
   const baseUrl = formData.value.base_url.trim()
   if (baseUrl && !isValidBaseURL(baseUrl)) {
-    message.warning(t('端点需为 http(s) 地址'))
+    message.warning(t('common.endpoint_must_be_an_http_s_address'))
     return null
   }
   // 目录里没有默认端点的提供商（自建网关、本地推理等）必须手填，否则引擎无法注册
   if (addMode.value === 'catalog' && preset && !preset.base_url && !baseUrl) {
-    message.warning(t('该提供商没有默认端点，请填写 Base URL'))
+    message.warning(t('common.this_provider_has_no_default_endpoint_please_fill_in_the_base_url'))
     return null
   }
 
@@ -209,15 +209,15 @@ async function handleAdd() {
   addLoading.value = true
   try {
     await addApiKey(body)
-    message.success(t('API Key 已添加'))
+    message.success(t('common.api_key_added'))
     closeAdd()
     await Promise.all([fetchApiKeys(), loadProviders()])
   } catch (err: any) {
     const apiErr = err?.response?.data?.error
     if (typeof apiErr === 'string' && apiErr.includes('already exists')) {
-      message.error(t('该 Key 已存在，可直接使用「仅保存端点」更新端点'))
+      message.error(t('common.this_key_already_exists_you_can_update_the_endpoint_with_save_endpoint_only'))
     } else {
-      message.error(apiErr || t('添加失败'))
+      message.error(apiErr || t('errors.failed_to_add'))
     }
   } finally {
     addLoading.value = false
@@ -230,16 +230,16 @@ async function handleSaveBaseURL() {
   if (!preset) return
   const baseUrl = formData.value.base_url.trim()
   if (baseUrl && !isValidBaseURL(baseUrl)) {
-    message.warning(t('端点需为 http(s) 地址'))
+    message.warning(t('common.endpoint_must_be_an_http_s_address'))
     return
   }
   baseSaving.value = true
   try {
     await saveLlmProviderBaseURL(preset.id, baseUrl)
-    message.success(baseUrl ? t('端点已保存') : t('已恢复默认端点'))
+    message.success(baseUrl ? t('common.endpoint_saved') : t('common.default_endpoint_restored'))
     await loadProviders()
   } catch (err: any) {
-    message.error(err?.response?.data?.error || t('端点保存失败'))
+    message.error(err?.response?.data?.error || t('errors.endpoint_save_failed'))
   } finally {
     baseSaving.value = false
   }
@@ -249,7 +249,7 @@ async function handleEdit(row: any) {
   const newStatus = row.status === 'active' ? 'rate_limited' : 'active'
   try {
     await updateApiKey(row.id, { status: newStatus })
-    message.success(t('状态已更新'))
+    message.success(t('common.status_updated'))
     await fetchApiKeys()
   } catch (err: any) {
     message.error(t('admin.updateFailed', { msg: err.message || t('common.unknownError') }))
@@ -259,7 +259,7 @@ async function handleEdit(row: any) {
 async function handleDelete(row: any) {
   try {
     await deleteApiKey(row.id)
-    message.success(t('API Key 已删除'))
+    message.success(t('common.api_key_deleted'))
     await fetchApiKeys()
   } catch (err: any) {
     message.error(t('admin.deleteFailed', { msg: err.message || t('common.unknownError') }))
@@ -275,7 +275,7 @@ onMounted(() => {
 <template>
   <div class="api-keys">
     <Spin :spinning="loading">
-      <Card :title="$t('API Key 管理')">
+      <Card :title="$t('common.api_key_management')">
         <template #extra>
           <Button
             type="primary"
@@ -285,7 +285,7 @@ onMounted(() => {
             <template #icon>
               <PlusOutlined />
             </template>
-            {{ $t('添加服务提供商') }}
+            {{ $t('common.add_provider') }}
           </Button>
         </template>
 
@@ -296,13 +296,13 @@ onMounted(() => {
         >
           <Col :span="6">
             <Statistic
-              :title="$t('总 Key 数')"
+              :title="$t('common.total_keys')"
               :value="stats.total"
             />
           </Col>
           <Col :span="6">
             <Statistic
-              :title="$t('正常')"
+              :title="$t('common.normal_2')"
               :value="stats.active"
             >
               <template #prefix>
@@ -312,7 +312,7 @@ onMounted(() => {
           </Col>
           <Col :span="6">
             <Statistic
-              :title="$t('限流中')"
+              :title="$t('common.rate_limiting')"
               :value="stats.rateLimited"
             >
               <template #prefix>
@@ -322,7 +322,7 @@ onMounted(() => {
           </Col>
           <Col :span="6">
             <Statistic
-              :title="$t('熔断')"
+              :title="$t('common.circuit_breaker')"
               :value="stats.circuitOpen"
             >
               <template #prefix>
@@ -359,7 +359,7 @@ onMounted(() => {
                 size="small"
                 @click="handleEdit(record)"
               >
-                {{ $t('编辑') }}
+                {{ $t('common.edit_2') }}
               </Button>
               <Button
                 type="link"
@@ -367,7 +367,7 @@ onMounted(() => {
                 size="small"
                 @click="handleDelete(record)"
               >
-                {{ $t('删除') }}
+                {{ $t('common.delete') }}
               </Button>
             </template>
           </template>
@@ -378,7 +378,7 @@ onMounted(() => {
     <!-- 添加服务提供商 -->
     <Modal
       v-model:visible="showAddModal"
-      :title="$t('添加服务提供商')"
+      :title="$t('common.add_provider')"
       :footer="null"
       width="760px"
       destroy-on-close
@@ -389,17 +389,17 @@ onMounted(() => {
           :type="addMode === 'catalog' ? 'primary' : 'default'"
           @click="setMode('catalog')"
         >
-          {{ $t('服务商目录') }}
+          {{ $t('common.provider_catalog') }}
         </Button>
         <Button
           size="small"
           :type="addMode === 'custom' ? 'primary' : 'default'"
           @click="setMode('custom')"
         >
-          {{ $t('自定义端点') }}
+          {{ $t('common.custom_endpoint') }}
         </Button>
         <span class="provider-mode-hint">
-          {{ addMode === 'catalog' ? $t('从内置目录选择提供商，端点可按需改写') : $t('手填 Provider 名称与 OpenAI 兼容 / Anthropic 端点') }}
+          {{ addMode === 'catalog' ? $t('common.select_a_provider_from_the_built_in_catalog_endpoints_can_be_overridden_as_needed') : $t('common.manually_enter_the_provider_name_and_openai_compatible_anthropic_endpoint') }}
         </span>
       </div>
 
@@ -431,12 +431,12 @@ onMounted(() => {
                   </Tag>
                 </span>
                 <span class="provider-card-line">{{ p.vendor }}</span>
-                <span class="provider-card-line endpoint">{{ p.effective_base_url || $t('需手动填写端点') }}</span>
+                <span class="provider-card-line endpoint">{{ p.effective_base_url || $t('common.endpoint_must_be_filled_manually') }}</span>
                 <span
                   v-if="p.configured"
                   class="provider-card-state"
                 >
-                  {{ $t('已配置') }} {{ p.key_count }} {{ $t('个 Key') }}
+                  {{ $t('common.configured') }} {{ p.key_count }} {{ $t('common.keys') }}
                 </span>
               </button>
             </div>
@@ -445,21 +445,21 @@ onMounted(() => {
             v-if="!providersLoading && !catalogGroups.length"
             class="provider-empty"
           >
-            {{ $t('目录不可用，请切换到「自定义端点」手动填写') }}
+            {{ $t('common.catalog_unavailable_please_switch_to_custom_endpoint_and_fill_in_manually') }}
           </div>
         </template>
 
         <!-- 自定义模式 -->
         <template v-else>
           <div class="provider-custom-note">
-            {{ $t('自定义 Provider 默认按 OpenAI 兼容协议接入；需要 Anthropic 协议请选择目录中的「自定义（Anthropic 协议）」。') }}
+            {{ $t('common.custom_provider_connects_via_openai_compatible_protocol_by_default_choose_custom_anthropic_protocol_from_the_catalog_if_you_need_the_anthropic_protocol') }}
           </div>
           <Form
             :model="formData"
             layout="vertical"
             class="provider-form"
           >
-            <FormItem :label="$t('Provider 名称（小写，作为密钥分区标识）')">
+            <FormItem :label="$t('common.provider_name_lowercase_used_as_the_key_partition_identifier')">
               <Input
                 v-model:value="formData.provider"
                 placeholder="my-gateway"
@@ -482,7 +482,7 @@ onMounted(() => {
               :href="selectedProvider.docs_url"
               target="_blank"
               rel="noopener noreferrer"
-            >{{ $t('获取 API Key') }}</a>
+            >{{ $t('common.get_api_key') }}</a>
           </div>
           <FormItem :label="$t('API Key')">
             <Input
@@ -496,10 +496,10 @@ onMounted(() => {
               :placeholder="selectedProvider.base_url || 'https://…'"
             />
           </FormItem>
-          <FormItem :label="$t('备注')">
+          <FormItem :label="$t('memory.note')">
             <Input
               v-model:value="formData.remark"
-              :placeholder="$t('可选')"
+              :placeholder="$t('common.optional')"
             />
           </FormItem>
         </Form>
@@ -522,27 +522,27 @@ onMounted(() => {
               placeholder="sk-…"
             />
           </FormItem>
-          <FormItem :label="$t('备注')">
+          <FormItem :label="$t('memory.note')">
             <Input
               v-model:value="formData.remark"
-              :placeholder="$t('可选')"
+              :placeholder="$t('common.optional')"
             />
           </FormItem>
         </Form>
       </Spin>
 
       <div class="provider-actions">
-        <span class="provider-actions-hint">{{ $t('Key 与端点加密入库，引擎重启后生效') }}</span>
+        <span class="provider-actions-hint">{{ $t('common.key_and_endpoint_encrypted_at_rest_take_effect_after_engine_restart') }}</span>
         <Button
           v-if="addMode === 'catalog' && selectedProvider"
           :loading="baseSaving"
           :disabled="addLoading"
           @click="handleSaveBaseURL"
         >
-          {{ $t('仅保存端点') }}
+          {{ $t('common.save_endpoint_only') }}
         </Button>
         <Button @click="closeAdd">
-          {{ $t('取消') }}
+          {{ $t('common.cancel') }}
         </Button>
         <Button
           type="primary"
@@ -550,7 +550,7 @@ onMounted(() => {
           :disabled="!formData.provider"
           @click="handleAdd"
         >
-          {{ $t('添加') }}
+          {{ $t('common.add') }}
         </Button>
       </div>
     </Modal>

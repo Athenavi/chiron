@@ -13,9 +13,9 @@ const { t } = useI18n()
  * 懒加载与 ?tab= 同步由 AdminTabbedView 统一处理。
  */
 const tabs = [
-  { key: 'performance', label: t('性能'), comp: PerformanceView },
-  { key: 'queue', label: t('队列'), comp: QueueView },
-  { key: 'cache', label: t('缓存'), comp: CacheView },
+  { key: 'performance', label: t('admin.performance'), comp: PerformanceView },
+  { key: 'queue', label: t('admin.queue'), comp: QueueView },
+  { key: 'cache', label: t('admin.cache'), comp: CacheView },
 ]
 </script>
 

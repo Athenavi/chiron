@@ -27,12 +27,12 @@ const form = ref({
 
 const rules: Record<string, Rule[]> = {
   email: [
-    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
-    { type: 'email', message: t('邮箱格式不正确'), trigger: 'blur' },
+    { required: true, message: t('mail.please_enter_email'), trigger: 'blur' },
+    { type: 'email', message: t('errors.invalid_email_format'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: t('请输入密码'), trigger: 'blur' },
-    { min: 6, message: t('密码至少 6 位'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_password'), trigger: 'blur' },
+    { min: 6, message: t('auth.password_must_be_at_least_6_characters'), trigger: 'blur' },
   ],
 }
 
@@ -62,16 +62,16 @@ const smsForm = ref({ phone: '', code: '' })
 
 const smsRules: Record<string, Rule[]> = {
   phone: [
-    { required: true, message: t('请输入手机号'), trigger: 'blur' },
+    { required: true, message: t('common.please_enter_phone_number'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) =>
-        !value || isValidPhone(value) ? Promise.resolve() : Promise.reject(t('手机号格式不正确')),
+        !value || isValidPhone(value) ? Promise.resolve() : Promise.reject(t('errors.invalid_phone_number_format')),
       trigger: 'blur',
     },
   ],
   code: [
-    { required: true, message: t('请输入验证码'), trigger: 'blur' },
-    { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_the_verification_code'), trigger: 'blur' },
+    { len: 6, message: t('auth.verification_code_is_a_6_digit_number'), trigger: 'blur' },
   ],
 }
 
@@ -84,11 +84,11 @@ async function handleSendCode() {
   smsError.value = ''
   const phone = smsForm.value.phone.trim()
   if (!isValidPhone(phone)) {
-    smsError.value = t('请输入正确的手机号')
+    smsError.value = t('common.please_enter_a_valid_phone_number')
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    smsError.value = t('请先完成人机验证')
+    smsError.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   sending.value = true
@@ -111,19 +111,19 @@ async function handleSendCode() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      smsError.value = t('操作过于频繁，请完成人机验证后重试')
+      smsError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      smsError.value = t('人机验证未通过，请重新验证')
+      smsError.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 429) {
-      smsError.value = t('发送过于频繁，请稍后再试')
+      smsError.value = t('common.sending_too_frequently_please_try_again_later')
       return
     }
     smsError.value = apiErr || t('auth.verificationCodeSendFailed')
@@ -140,7 +140,7 @@ async function handleSmsLogin() {
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    smsError.value = t('请先完成人机验证')
+    smsError.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   smsLoading.value = true
@@ -158,13 +158,13 @@ async function handleSmsLogin() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      smsError.value = t('操作过于频繁，请完成人机验证后重试')
+      smsError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      smsError.value = t('人机验证未通过，请重新验证')
+      smsError.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
@@ -185,16 +185,16 @@ const emailForm = ref({ email: '', code: '' })
 
 const emailRules: Record<string, Rule[]> = {
   email: [
-    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
+    { required: true, message: t('mail.please_enter_email'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) =>
-        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('邮箱格式不正确')),
+        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('errors.invalid_email_format')),
       trigger: 'blur',
     },
   ],
   code: [
-    { required: true, message: t('请输入验证码'), trigger: 'blur' },
-    { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_the_verification_code'), trigger: 'blur' },
+    { len: 6, message: t('auth.verification_code_is_a_6_digit_number'), trigger: 'blur' },
   ],
 }
 
@@ -208,11 +208,11 @@ async function handleSendEmailCode() {
   emailError.value = ''
   const email = emailForm.value.email.trim()
   if (!isValidEmail(email)) {
-    emailError.value = t('请输入正确的邮箱')
+    emailError.value = t('mail.please_enter_a_valid_email')
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    emailError.value = t('请先完成人机验证')
+    emailError.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   emailSending.value = true
@@ -233,19 +233,19 @@ async function handleSendEmailCode() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      emailError.value = t('操作过于频繁，请完成人机验证后重试')
+      emailError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      emailError.value = t('人机验证未通过，请重新验证')
+      emailError.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 429) {
-      emailError.value = t('发送过于频繁，请稍后再试')
+      emailError.value = t('common.sending_too_frequently_please_try_again_later')
       return
     }
     emailError.value = apiErr || t('auth.verificationCodeSendFailed')
@@ -262,7 +262,7 @@ async function handleEmailLogin() {
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    emailError.value = t('请先完成人机验证')
+    emailError.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   emailLoading.value = true
@@ -280,13 +280,13 @@ async function handleEmailLogin() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
-      emailError.value = t('操作过于频繁，请完成人机验证后重试')
+      emailError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      emailError.value = t('人机验证未通过，请重新验证')
+      emailError.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
@@ -341,7 +341,7 @@ async function handleLogin() {
     return
   }
   if (needCaptcha.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('请先完成人机验证')
+    error.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   try {
@@ -358,13 +358,13 @@ async function handleLogin() {
     if (status === 428 || apiErr === 'captcha_required') {
       // 后端要求人机验证（同 IP 失败升级）→ 强制展示验证码组件
       needCaptcha.value = true
-      error.value = t('操作过于频繁，请完成人机验证后重试')
+      error.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = t('人机验证未通过，请重新验证')
+      error.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
@@ -379,26 +379,26 @@ async function handleLogin() {
     <!-- 左侧品牌展示（≥960px 可见） -->
     <aside class="login-brand">
       <div class="login-brand-badge">
-        {{ $t('Chiron · 企业级 AI Agent 平台') }}
+        {{ $t('agent.chiron_enterprise_grade_ai_agent_platform') }}
       </div>
       <h1 class="login-brand-title">
-        {{ $t('让 AI Agent') }}<br><span>{{ $t('持续工作') }}</span>
+        {{ $t('agent.let_the_ai_agent') }}<br><span>{{ $t('common.continuous_work') }}</span>
       </h1>
       <p class="login-brand-desc">
-        {{ $t('自托管、多租户、全栈可控的 AI Agent 平台。对话、Agent、工作流、技能、知识库与插件一体化。') }}
+        {{ $t('workflow.self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one') }}
       </p>
       <div class="login-brand-features">
         <div class="login-brand-feature">
-          {{ $t('多租户数据隔离') }}
+          {{ $t('admin.multi_tenant_data_isolation') }}
         </div>
         <div class="login-brand-feature">
-          {{ $t('端到端轨迹追踪') }}
+          {{ $t('common.end_to_end_trace') }}
         </div>
         <div class="login-brand-feature">
-          {{ $t('MCP 插件生态') }}
+          {{ $t('agent.mcp_plugin_ecosystem') }}
         </div>
         <div class="login-brand-feature">
-          {{ $t('HTTPOnly 安全会话') }}
+          {{ $t('chat.httponly_secure_session') }}
         </div>
       </div>
     </aside>
@@ -415,10 +415,10 @@ async function handleLogin() {
           MC
         </div>
         <div class="login-title">
-          {{ $t('欢迎回来') }}
+          {{ $t('common.welcome_back') }}
         </div>
         <div class="login-subtitle">
-          {{ $t('登录进入你的 AI 工作台') }}
+          {{ $t('auth.sign_in_to_your_ai_workspace') }}
         </div>
       </div>
       <Card
@@ -431,19 +431,19 @@ async function handleLogin() {
         >
           <TabPane
             key="password"
-            :tab="$t('密码登录')"
+            :tab="$t('auth.password_login')"
           />
 
           <TabPane
             v-if="smsEnabled"
             key="sms"
-            :tab="$t('短信登录')"
+            :tab="$t('auth.sms_login')"
           />
 
           <TabPane
             v-if="emailEnabled"
             key="email"
-            :tab="$t('邮箱登录')"
+            :tab="$t('auth.email_login')"
           />
         </Tabs>
 
@@ -470,7 +470,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="form.email"
-                :placeholder="$t('请输入邮箱')"
+                :placeholder="$t('mail.please_enter_email')"
                 size="large"
                 :aria-label="$t('auth.email')"
                 autocomplete="email"
@@ -487,7 +487,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="form.password"
-                :placeholder="$t('请输入密码')"
+                :placeholder="$t('auth.please_enter_password')"
                 type="password"
                 size="large"
                 :aria-label="$t('auth.password')"
@@ -501,7 +501,7 @@ async function handleLogin() {
 
             <FormItem
               v-if="needCaptcha"
-              :label="$t('人机验证')"
+              :label="$t('auth.human_verification')"
             >
               <CaptchaWidget
                 ref="captchaRef"
@@ -533,14 +533,14 @@ async function handleLogin() {
                   block
                   @click="router.push('/forgot-password')"
                 >
-                  {{ $t('忘记密码？') }}
+                  {{ $t('auth.forgot_password') }}
                 </Button>
                 <Button
                   type="link"
                   block
                   @click="router.push('/register')"
                 >
-                  {{ $t('没有账号？注册') }}
+                  {{ $t('auth.no_account_register') }}
                 </Button>
               </Space>
             </FormItem>
@@ -569,7 +569,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="smsForm.phone"
-                :placeholder="$t('请输入手机号')"
+                :placeholder="$t('common.please_enter_phone_number')"
                 size="large"
                 :maxlength="21"
               >
@@ -585,7 +585,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="smsForm.code"
-                :placeholder="$t('6 位数字验证码')"
+                :placeholder="$t('auth.6_digit_verification_code')"
                 size="large"
                 :maxlength="6"
               >
@@ -600,7 +600,7 @@ async function handleLogin() {
                     :loading="sending"
                     @click="handleSendCode"
                   >
-                    {{ remaining > 0 ? $t('auth.resendCountdown', { s: remaining }) : $t('获取验证码') }}
+                    {{ remaining > 0 ? $t('auth.resendCountdown', { s: remaining }) : $t('auth.get_verification_code') }}
                   </Button>
                 </template>
               </Input>
@@ -608,7 +608,7 @@ async function handleLogin() {
 
             <FormItem
               v-if="needCaptcha"
-              :label="$t('人机验证')"
+              :label="$t('auth.human_verification')"
             >
               <CaptchaWidget
                 ref="captchaRef"
@@ -656,7 +656,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="emailForm.email"
-                :placeholder="$t('请输入邮箱')"
+                :placeholder="$t('mail.please_enter_email')"
                 size="large"
                 :maxlength="254"
                 autocomplete="email"
@@ -673,7 +673,7 @@ async function handleLogin() {
             >
               <Input
                 v-model:value="emailForm.code"
-                :placeholder="$t('6 位数字验证码')"
+                :placeholder="$t('auth.6_digit_verification_code')"
                 size="large"
                 :maxlength="6"
               >
@@ -688,7 +688,7 @@ async function handleLogin() {
                     :loading="emailSending"
                     @click="handleSendEmailCode"
                   >
-                    {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('获取验证码') }}
+                    {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('auth.get_verification_code') }}
                   </Button>
                 </template>
               </Input>
@@ -696,7 +696,7 @@ async function handleLogin() {
 
             <FormItem
               v-if="needCaptcha"
-              :label="$t('人机验证')"
+              :label="$t('auth.human_verification')"
             >
               <CaptchaWidget
                 ref="captchaRef"

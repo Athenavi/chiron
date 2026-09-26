@@ -7,8 +7,8 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 // 租户与域名：租户（配额/暂停/用量）+ 域名（SSL/校验）—— 同为 admin 权限域的资源管理
 const tabs = [
-  { key: 'tenants', label: t('租户'), comp: TenantManagementView },
-  { key: 'domains', label: t('域名'), comp: DomainManagementView },
+  { key: 'tenants', label: t('admin.tenant'), comp: TenantManagementView },
+  { key: 'domains', label: t('admin.domain'), comp: DomainManagementView },
 ]
 </script>
 

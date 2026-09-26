@@ -94,7 +94,7 @@ async function load() {
     const cfg = await getMailAdminConfig()
     if (cfg) Object.assign(form.value, cfg)
   } catch (error: any) {
-    message.error(describeApiError(error, t('加载邮件配置失败')))
+    message.error(describeApiError(error, t('errors.failed_to_load_email_config')))
   } finally {
     loading.value = false
   }
@@ -106,9 +106,9 @@ async function save() {
     // 全量提交：secret 为掩码占位符时后端保留原值
     const res = await updateMailConfig({ ...form.value })
     if (res) Object.assign(form.value, res)
-    message.success(t('邮件配置已保存'))
+    message.success(t('mail.email_config_saved'))
   } catch (error: any) {
-    message.error(configErrorMessage(error, t('保存邮件配置失败')))
+    message.error(configErrorMessage(error, t('errors.failed_to_save_email_config')))
   } finally {
     saving.value = false
   }
@@ -117,15 +117,15 @@ async function save() {
 async function sendTest() {
   const to = testTo.value.trim()
   if (!isValidEmail(to)) {
-    message.error(t('请输入有效的收件邮箱'))
+    message.error(t('mail.please_enter_a_valid_recipient_email'))
     return
   }
   testing.value = true
   try {
     await sendMailTest(to)
-    message.success(t('测试邮件已发送，请查收'))
+    message.success(t('mail.test_email_sent_please_check_your_inbox'))
   } catch (error: any) {
-    message.error(configErrorMessage(error, t('测试邮件发送失败')))
+    message.error(configErrorMessage(error, t('errors.test_email_failed_to_send')))
   } finally {
     testing.value = false
   }
@@ -136,7 +136,7 @@ onMounted(load)
 
 <template>
   <div class="mail-view">
-    <Card :title="$t('邮件配置')">
+    <Card :title="$t('mail.email_config')">
       <template #extra>
         <Button
           :loading="loading"
@@ -145,7 +145,7 @@ onMounted(load)
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新') }}
+          {{ $t('common.refresh') }}
         </Button>
       </template>
 
@@ -153,7 +153,7 @@ onMounted(load)
         type="info"
         show-icon
         class="mail-hint"
-        :message="$t('邮件用于邮箱验证码登录、注册邮箱验证、密码重置与欢迎邮件。发信服务器地址与凭据都在这里配置，保存后立即生效，无需重启服务。')"
+        :message="$t('auth.email_is_used_for_email_code_login_registration_email_verification_password_reset_and_welcome_emails_configure_the_mail_server_address_and_credentials_here_changes_take_effect_immediately_no_restart_needed')"
       />
 
       <Form
@@ -161,12 +161,12 @@ onMounted(load)
         class="mail-form"
       >
         <div class="switch-row">
-          <FormItem :label="$t('启用邮件服务')">
+          <FormItem :label="$t('mail.enable_email_service')">
             <Switch v-model:checked="form.enabled" />
           </FormItem>
         </div>
         <div class="config-note">
-          {{ $t('未启用时，邮箱验证码登录 / 注册邮箱验证 / 密码重置均不可用（首页入口自动隐藏）。') }}
+          {{ $t('auth.when_disabled_email_code_login_registration_email_verification_password_reset_are_all_unavailable_home_entry_auto_hidden') }}
         </div>
       </Form>
 
@@ -174,13 +174,13 @@ onMounted(load)
         <!-- ── 发信通道 ── -->
         <TabPane
           key="channel"
-          :tab="$t('发信通道')"
+          :tab="$t('mail.mail_channel')"
         >
           <Form
             layout="vertical"
             class="mail-form"
           >
-            <FormItem :label="$t('通道类型')">
+            <FormItem :label="$t('common.channel_type')">
               <Tabs
                 :active-key="form.provider"
                 size="small"
@@ -192,21 +192,21 @@ onMounted(load)
                 />
                 <TabPane
                   key="qingchen"
-                  :tab="$t('晴辰云邮 API')"
+                  :tab="$t('mail.qingchen_cloud_mail_api')"
                 />
               </Tabs>
             </FormItem>
 
             <!-- 通用 SMTP -->
             <template v-if="isSMTP">
-              <FormItem :label="$t('SMTP 服务器地址')">
+              <FormItem :label="$t('mail.smtp_server_address')">
                 <Input
                   v-model:value="form.smtp_host"
                   placeholder="smtp.example.com"
                 />
               </FormItem>
               <div class="field-grid">
-                <FormItem :label="$t('端口')">
+                <FormItem :label="$t('common.port')">
                   <InputNumber
                     v-model:value="form.smtp_port"
                     :min="0"
@@ -214,7 +214,7 @@ onMounted(load)
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('加密方式')">
+                <FormItem :label="$t('common.encryption_method')">
                   <Tabs
                     :active-key="form.smtp_security"
                     size="small"
@@ -230,24 +230,24 @@ onMounted(load)
                     />
                     <TabPane
                       key="none"
-                      :tab="$t('不加密')"
+                      :tab="$t('common.no_encryption')"
                     />
                   </Tabs>
                 </FormItem>
               </div>
-              <FormItem :label="$t('SMTP 用户名')">
+              <FormItem :label="$t('auth.smtp_username')">
                 <Input
                   v-model:value="form.smtp_username"
-                  :placeholder="$t('多数服务商要求填写完整邮箱地址')"
+                  :placeholder="$t('mail.most_providers_require_a_full_email_address')"
                 />
               </FormItem>
-              <FormItem :label="$t('SMTP 口令（加密入库）')">
+              <FormItem :label="$t('auth.smtp_password_encrypted_at_rest')">
                 <InputPassword
                   v-model:value="form.smtp_password"
-                  :placeholder="passwordConfigured ? $t('已配置，留空或保持原值表示不修改') : $t('请输入口令或客户端授权码')"
+                  :placeholder="passwordConfigured ? $t('common.configured_blank_or_unchanged_means_no_modification') : $t('auth.please_enter_a_password_or_client_authorization_code')"
                 />
               </FormItem>
-              <FormItem :label="$t('跳过证书校验（仅自签证书的内网服务）')">
+              <FormItem :label="$t('auth.skip_certificate_verification_internal_services_with_self_signed_certs_only')">
                 <Switch v-model:checked="form.smtp_skip_verify" />
               </FormItem>
               <div class="config-note">
@@ -257,30 +257,30 @@ onMounted(load)
 
             <!-- 晴辰云邮 HTTP API（契约见 docs/mail.md） -->
             <template v-else>
-              <FormItem :label="$t('服务地址（Base URL）')">
+              <FormItem :label="$t('common.service_address_base_url')">
                 <Input
                   v-model:value="form.api_base_url"
                   placeholder="https://your-mail-host/api/v1"
                 />
               </FormItem>
               <div class="config-note">
-                {{ $t('必须与服务商文档完全一致，包含路径前缀（例如 /api/v1）——发送时会拼成「服务地址 + /send」。') }}
+                {{ $t('knowledge.must_match_the_provider_s_docs_exactly_including_the_path_prefix_e_g_api_v1_at_send_time_it_is_joined_as_service_address_send') }}
               </div>
-              <FormItem :label="$t('API Key（加密入库）')">
+              <FormItem :label="$t('common.api_key_encrypted_at_rest')">
                 <InputPassword
                   v-model:value="form.api_key"
-                  :placeholder="apiKeyConfigured ? $t('已配置，留空或保持原值表示不修改') : 'sk_live_xxxxxxxx'"
+                  :placeholder="apiKeyConfigured ? $t('common.configured_blank_or_unchanged_means_no_modification') : 'sk_live_xxxxxxxx'"
                 />
               </FormItem>
               <div class="field-grid">
-                <FormItem :label="$t('发送通道 ID')">
+                <FormItem :label="$t('common.send_channel_id')">
                   <InputNumber
                     v-model:value="form.api_channel_id"
                     :min="0"
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('模板 ID')">
+                <FormItem :label="$t('common.template_id')">
                   <InputNumber
                     v-model:value="form.api_template_id"
                     :min="0"
@@ -289,7 +289,7 @@ onMounted(load)
                 </FormItem>
               </div>
               <div class="config-note">
-                {{ $t('发送通道 ID 为 0 时由服务端自动路由；模板 ID 为 0 时直接发送下方模板渲染出的主题与正文。') }}
+                {{ $t('admin.channel_id_0_routes_automatically_on_the_server_template_id_0_sends_the_subject_and_body_rendered_from_the_template_below') }}
               </div>
             </template>
           </Form>
@@ -298,44 +298,44 @@ onMounted(load)
         <!-- ── 发件身份与站点 ── -->
         <TabPane
           key="sender"
-          :tab="$t('发件身份')"
+          :tab="$t('admin.sender_identity')"
         >
           <Form
             layout="vertical"
             class="mail-form"
           >
-            <FormItem :label="$t('发件地址')">
+            <FormItem :label="$t('common.from_address')">
               <Input
                 v-model:value="form.from_address"
                 placeholder="noreply@example.com"
               />
             </FormItem>
-            <FormItem :label="$t('发件人显示名')">
+            <FormItem :label="$t('common.sender_display_name')">
               <Input
                 v-model:value="form.from_name"
-                :placeholder="$t('如：Chiron 团队')"
+                :placeholder="$t('common.e_g_chiron_team')"
               />
             </FormItem>
-            <FormItem :label="$t('回复地址（可选）')">
+            <FormItem :label="$t('chat.reply_to_address_optional')">
               <Input
                 v-model:value="form.reply_to"
                 placeholder="support@example.com"
               />
             </FormItem>
-            <FormItem :label="$t('站点名称')">
+            <FormItem :label="$t('common.site_name')">
               <Input
                 v-model:value="form.site_name"
                 :placeholder="$t('用于邮件模板中的 {ph}', { ph: '{{.SiteName}}' })"
               />
             </FormItem>
-            <FormItem :label="$t('站点地址')">
+            <FormItem :label="$t('common.site_url')">
               <Input
                 v-model:value="form.app_base_url"
                 placeholder="https://app.example.com"
               />
             </FormItem>
             <div class="config-note">
-              {{ $t('站点地址用于拼接密码重置链接与欢迎邮件按钮；留空时回退到部署期配置的 FRONTEND_URL。') }}
+              {{ $t('auth.site_url_is_used_to_build_password_reset_links_and_welcome_email_buttons_blank_falls_back_to_the_frontend_url_configured_at_deploy_time') }}
             </div>
           </Form>
         </TabPane>
@@ -343,43 +343,43 @@ onMounted(load)
         <!-- ── 登录与注册能力 ── -->
         <TabPane
           key="features"
-          :tab="$t('登录与注册')"
+          :tab="$t('auth.sign_in_sign_up')"
         >
           <Alert
             v-if="!form.enabled"
             type="warning"
             show-icon
             class="mail-hint"
-            :message="$t('下面的开关都依赖「启用邮件服务」（在“发信通道”页签上方）。请先打开总开关并保存，否则保存会被拒绝。')"
+            :message="$t('errors.the_switches_below_all_depend_on_enable_email_service_above_the_send_channel_tab_please_turn_on_the_master_switch_and_save_first_otherwise_the_save_will_be_rejected')"
           />
           <Form
             layout="vertical"
             class="mail-form"
           >
-            <FormItem :label="$t('邮箱验证码登录（免密登录）')">
+            <FormItem :label="$t('auth.email_code_login_passwordless')">
               <Switch v-model:checked="form.login_enabled" />
             </FormItem>
-            <FormItem :label="$t('注册必须通过邮箱验证码')">
+            <FormItem :label="$t('auth.registration_requires_email_verification_code')">
               <Switch v-model:checked="form.register_verify" />
             </FormItem>
             <div class="config-note">
-              {{ $t('开启后，注册页会出现邮箱验证码输入框，未通过校验的请求不会建号。') }}
+              {{ $t('auth.when_enabled_an_email_verification_code_field_appears_on_the_registration_page_requests_that_fail_validation_will_not_create_an_account') }}
             </div>
-            <FormItem :label="$t('邮箱验证码登录时自动建号')">
+            <FormItem :label="$t('auth.auto_create_account_on_email_code_login')">
               <Switch v-model:checked="form.auto_register" />
             </FormItem>
             <div class="config-note">
-              {{ $t('关闭时，未注册的邮箱即使验证码正确也会被拒绝。') }}
+              {{ $t('auth.when_off_even_a_registered_email_with_a_correct_code_is_rejected') }}
             </div>
-            <FormItem :label="$t('允许邮件找回密码')">
+            <FormItem :label="$t('auth.allow_email_password_recovery')">
               <Switch v-model:checked="form.reset_enabled" />
             </FormItem>
-            <FormItem :label="$t('注册成功后发送欢迎邮件')">
+            <FormItem :label="$t('auth.send_welcome_email_after_registration')">
               <Switch v-model:checked="form.welcome_enabled" />
             </FormItem>
 
             <div class="field-grid">
-              <FormItem :label="$t('验证码有效期（秒）')">
+              <FormItem :label="$t('auth.verification_code_validity_seconds')">
                 <InputNumber
                   v-model:value="form.code_ttl_seconds"
                   :min="60"
@@ -387,7 +387,7 @@ onMounted(load)
                   style="width: 100%"
                 />
               </FormItem>
-              <FormItem :label="$t('发送间隔（秒）')">
+              <FormItem :label="$t('common.send_interval_seconds')">
                 <InputNumber
                   v-model:value="form.send_interval_seconds"
                   :min="0"
@@ -395,7 +395,7 @@ onMounted(load)
                   style="width: 100%"
                 />
               </FormItem>
-              <FormItem :label="$t('每日发送上限（每邮箱）')">
+              <FormItem :label="$t('mail.daily_send_limit_per_email')">
                 <InputNumber
                   v-model:value="form.daily_limit"
                   :min="1"
@@ -403,7 +403,7 @@ onMounted(load)
                   style="width: 100%"
                 />
               </FormItem>
-              <FormItem :label="$t('发送超时（秒）')">
+              <FormItem :label="$t('errors.send_timeout_seconds')">
                 <InputNumber
                   v-model:value="form.timeout_seconds"
                   :min="5"
@@ -421,7 +421,7 @@ onMounted(load)
         <!-- ── 邮件模板 ── -->
         <TabPane
           key="templates"
-          :tab="$t('邮件模板')"
+          :tab="$t('mail.email_template')"
         >
           <Alert
             type="info"
@@ -433,23 +433,23 @@ onMounted(load)
           <Tabs size="small">
             <TabPane
               key="code"
-              :tab="$t('验证码邮件')"
+              :tab="$t('auth.verification_code_email')"
             >
               <Form
                 layout="vertical"
                 class="mail-form"
               >
-                <FormItem :label="$t('主题')">
+                <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.code_subject"
                     :placeholder="$t('留空使用默认：{ph} 验证码', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
-                <FormItem :label="$t('正文（HTML）')">
+                <FormItem :label="$t('common.body_html')">
                   <Input.TextArea
                     v-model:value="form.code_body"
                     :rows="8"
-                    :placeholder="$t('留空使用内置默认模板')"
+                    :placeholder="$t('common.blank_uses_the_built_in_default_template')"
                   />
                 </FormItem>
               </Form>
@@ -457,23 +457,23 @@ onMounted(load)
 
             <TabPane
               key="welcome"
-              :tab="$t('欢迎邮件')"
+              :tab="$t('mail.welcome_email')"
             >
               <Form
                 layout="vertical"
                 class="mail-form"
               >
-                <FormItem :label="$t('主题')">
+                <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.welcome_subject"
                     :placeholder="$t('留空使用默认：欢迎加入 {ph}', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
-                <FormItem :label="$t('正文（HTML）')">
+                <FormItem :label="$t('common.body_html')">
                   <Input.TextArea
                     v-model:value="form.welcome_body"
                     :rows="8"
-                    :placeholder="$t('留空使用内置默认模板')"
+                    :placeholder="$t('common.blank_uses_the_built_in_default_template')"
                   />
                 </FormItem>
               </Form>
@@ -481,19 +481,19 @@ onMounted(load)
 
             <TabPane
               key="reset"
-              :tab="$t('密码重置邮件')"
+              :tab="$t('auth.password_reset_email')"
             >
               <Form
                 layout="vertical"
                 class="mail-form"
               >
-                <FormItem :label="$t('主题')">
+                <FormItem :label="$t('settings.theme')">
                   <Input
                     v-model:value="form.reset_subject"
                     :placeholder="$t('留空使用默认：{ph} 密码重置', { ph: '{{.SiteName}}' })"
                   />
                 </FormItem>
-                <FormItem :label="$t('正文（HTML）')">
+                <FormItem :label="$t('common.body_html')">
                   <Input.TextArea
                     v-model:value="form.reset_body"
                     :rows="8"
@@ -508,7 +508,7 @@ onMounted(load)
         <!-- ── 测试发信 ── -->
         <TabPane
           key="test"
-          :tab="$t('测试发信')"
+          :tab="$t('mail.send_test_email')"
         >
           <Form
             layout="vertical"
@@ -518,9 +518,9 @@ onMounted(load)
               type="warning"
               show-icon
               class="mail-hint"
-              :message="$t('测试会使用上方已保存的配置真实投递一封邮件。修改配置后请先保存，再测试。')"
+              :message="$t('mail.the_test_will_send_a_real_email_using_the_saved_config_above_save_changes_before_testing')"
             />
-            <FormItem :label="$t('收件邮箱')">
+            <FormItem :label="$t('mail.recipient_email')">
               <Input
                 v-model:value="testTo"
                 placeholder="you@example.com"
@@ -534,7 +534,7 @@ onMounted(load)
               <template #icon>
                 <SendOutlined />
               </template>
-              {{ $t('发送测试邮件') }}
+              {{ $t('mail.send_test_email_2') }}
             </Button>
           </Form>
         </TabPane>
@@ -549,10 +549,10 @@ onMounted(load)
           <template #icon>
             <SaveOutlined />
           </template>
-          {{ $t('保存配置') }}
+          {{ $t('common.save_config') }}
         </Button>
         <span class="config-note">
-          {{ $t('保存后立即生效，多副本部署会同步到所有副本。') }}
+          {{ $t('common.takes_effect_immediately_and_syncs_to_all_replicas_in_a_multi_replica_deployment') }}
         </span>
       </div>
     </Card>

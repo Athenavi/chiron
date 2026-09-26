@@ -88,8 +88,8 @@ const PRESET_CREDITS = [500, 1000, 2000, 5000, 10000]
 
 /** 渠道展示名（后端只返回渠道 id 与币种，文案在前端维护） */
 const CHANNEL_LABELS: Record<string, string> = {
-  alipay: t('支付宝'),
-  wechat: t('微信支付'),
+  alipay: t('billing.alipay'),
+  wechat: t('billing.wechat_pay'),
   paypal: 'PayPal',
 }
 
@@ -121,13 +121,13 @@ async function loadChannels() {
 }
 
 const REASON_MAP: Record<string, { label: string; color: string }> = {
-  llm_token: { label: t('LLM 调用'), color: 'blue' },
-  llm_call: { label: t('LLM 调用'), color: 'blue' },
-  image_gen: { label: t('图片生成'), color: 'purple' },
-  stripe_topup: { label: t('Stripe 充值'), color: 'green' },
-  paypal_topup: { label: t('PayPal 充值'), color: 'green' },
-  recharge: { label: t('管理端充值'), color: 'green' },
-  admin: { label: t('管理员调整'), color: 'orange' },
+  llm_token: { label: t('common.llm_calls'), color: 'blue' },
+  llm_call: { label: t('common.llm_calls'), color: 'blue' },
+  image_gen: { label: t('media.image_generation'), color: 'purple' },
+  stripe_topup: { label: t('common.stripe_recharge'), color: 'green' },
+  paypal_topup: { label: t('common.paypal_recharge'), color: 'green' },
+  recharge: { label: t('common.admin_top_up'), color: 'green' },
+  admin: { label: t('common.admin_adjustment'), color: 'orange' },
 }
 
 // ── 计算属性 ──
@@ -165,10 +165,10 @@ const priceHint = computed(() => {
 })
 
 const historyColumns = [
-  { title: t('时间'), key: 'created_at', width: 180 },
-  { title: t('原因'), key: 'reason', width: 180 },
-  { title: t('金额'), key: 'amount', width: 120, align: 'right' as const },
-  { title: t('余额'), key: 'balance', width: 120, align: 'right' as const },
+  { title: t('common.time'), key: 'created_at', width: 180 },
+  { title: t('common.reason'), key: 'reason', width: 180 },
+  { title: t('common.amount'), key: 'amount', width: 120, align: 'right' as const },
+  { title: t('billing.balance'), key: 'balance', width: 120, align: 'right' as const },
 ]
 
 // ── 数据加载 ──
@@ -190,9 +190,9 @@ function readPayResultParam() {
   const success = route.query.success
   const canceled = route.query.canceled
   if (success === '1') {
-    payResult.value = { type: 'success', text: t('支付成功，Credits 已到账（可能需要几秒同步）') }
+    payResult.value = { type: 'success', text: t('billing.payment_successful_credits_credited_sync_may_take_a_few_seconds') }
   } else if (canceled === '1') {
-    payResult.value = { type: 'info', text: t('支付已取消，Credits 未变动') }
+    payResult.value = { type: 'info', text: t('billing.payment_canceled_credits_unchanged') }
   }
   if (success === '1' || canceled === '1') {
     // 清除 URL 参数，避免刷新后重复提示
@@ -218,7 +218,7 @@ async function loadBalanceAndUsage() {
     }
     usage.value = (usageRes.data?.data as UsageData | undefined) ?? null
   } catch (error: any) {
-    message.error(error.message || t('加载失败'))
+    message.error(error.message || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -230,7 +230,7 @@ async function loadHistory() {
     const resp = await api.get('/v1/billing/history')
     history.value = (resp.data?.data?.history as CreditTx[] | undefined) ?? []
   } catch (error: any) {
-    message.error(error.message || t('加载交易记录失败'))
+    message.error(error.message || t('errors.failed_to_load_transaction_history'))
   } finally {
     historyLoading.value = false
   }
@@ -246,11 +246,11 @@ function selectPreset(n: number) {
 async function handlePurchase() {
   const amount = effectiveCredits.value
   if (amount <= 0) {
-    message.warning(t('请输入有效的充值数量'))
+    message.warning(t('common.please_enter_a_valid_recharge_amount'))
     return
   }
   if (!provider.value) {
-    message.warning(t('请先选择支付方式'))
+    message.warning(t('billing.please_select_a_payment_method_first'))
     return
   }
   checkoutLoading.value = true
@@ -260,24 +260,24 @@ async function handlePurchase() {
       channel: provider.value,
     })
     const data = response.data?.data
-    if (!data) throw new Error(t('创建订单失败'))
+    if (!data) throw new Error(t('errors.failed_to_create_order'))
 
     if (provider.value === 'paypal') {
       // PayPal：跳转授权页
       if (data.checkout_url) {
         // S 安全：校验协议为 http/https，防 javascript:/data: 等 XSS 向量
         if (!/^https?:\/\//i.test(data.checkout_url)) {
-          throw new Error(t('非法的支付链接'))
+          throw new Error(t('billing.illegal_payment_link'))
         }
         window.location.href = data.checkout_url
       } else {
-        throw new Error(t('未获取到 PayPal 支付链接'))
+        throw new Error(t('billing.could_not_get_paypal_payment_link'))
       }
       return
     }
 
     // 支付宝/微信：展示二维码并轮询订单状态
-    if (!data.qr_code) throw new Error(t('未获取到支付二维码'))
+    if (!data.qr_code) throw new Error(t('billing.could_not_get_payment_qr_code'))
     qrCode.value = data.qr_code
     currentOrderId.value = data.id
     qrChannel.value = provider.value as 'alipay' | 'wechat'
@@ -287,7 +287,7 @@ async function handlePurchase() {
     renderQRCode()
     startPolling()
   } catch (error: any) {
-    message.error(describeApiError(error, t('创建支付订单失败')))
+    message.error(describeApiError(error, t('errors.failed_to_create_payment_order')))
   } finally {
     checkoutLoading.value = false
   }
@@ -300,7 +300,7 @@ async function renderQRCode() {
       width: 220, margin: 1, errorCorrectionLevel: 'M',
     })
   } catch {
-    message.error(t('二维码生成失败'))
+    message.error(t('errors.qr_code_generation_failed'))
   }
 }
 
@@ -316,7 +316,7 @@ function startPolling() {
         payStatus.value = 'paid'
         stopPolling()
         qrVisible.value = false
-        message.success(t('充值成功，Credits 已到账'))
+        message.success(t('billing.top_up_successful_credits_credited'))
         await loadBalanceAndUsage()
         if (activeTab.value === 'history') await loadHistory()
       } else if (order.status === 'expired' || order.status === 'failed') {
@@ -350,7 +350,7 @@ function formatTime(v: string): string {
 }
 
 function reasonInfo(reason: string) {
-  return REASON_MAP[reason] ?? { label: reason || t('未知'), color: 'default' }
+  return REASON_MAP[reason] ?? { label: reason || t('common.unknown'), color: 'default' }
 }
 
 function amountText(amount: number): string {
@@ -362,7 +362,7 @@ function amountText(amount: number): string {
   <div class="billing-container">
     <div class="billing-header">
       <CreditCardOutlined style="font-size: 26px; color: var(--warning)" />
-      <h1>{{ $t('计费管理') }}</h1>
+      <h1>{{ $t('billing.billing_management') }}</h1>
     </div>
 
     <Alert
@@ -390,7 +390,7 @@ function amountText(amount: number): string {
       <div class="overview-grid">
         <Card class="balance-card">
           <template #title>
-            <WalletOutlined /> {{ $t('当前余额') }}
+            <WalletOutlined /> {{ $t('billing.current_balance') }}
           </template>
           <div class="balance-display">
             <span class="balance-amount">{{ balance ?? 0 }}</span>
@@ -403,7 +403,7 @@ function amountText(amount: number): string {
             class="free-quota"
           >
             <div class="free-quota-label">
-              {{ $t('今日免费对话额度') }}
+              {{ $t('errors.today_s_free_conversation_quota') }}
               <span class="free-quota-count">{{ freeInfo.used }} / {{ freeInfo.limit }}</span>
             </div>
             <Progress
@@ -420,15 +420,15 @@ function amountText(amount: number): string {
           </template>
           <div class="usage-stats">
             <div class="stat-item">
-              <span class="stat-label">{{ $t('今日消耗') }}</span>
+              <span class="stat-label">{{ $t('common.consumed_today') }}</span>
               <span class="stat-value stat-spent">{{ todaySpent }}</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">{{ $t('累计消耗') }}</span>
+              <span class="stat-label">{{ $t('common.total_consumed') }}</span>
               <span class="stat-value stat-spent">{{ usage?.total_spent ?? 0 }}</span>
             </div>
             <div class="stat-item">
-              <span class="stat-label">{{ $t('累计充值') }}</span>
+              <span class="stat-label">{{ $t('common.total_recharged') }}</span>
               <span class="stat-value stat-added">{{ usage?.total_added ?? 0 }}</span>
             </div>
           </div>
@@ -442,7 +442,7 @@ function amountText(amount: number): string {
         style="margin-top: 16px"
       >
         <template #title>
-          <ThunderboltOutlined /> {{ $t('每日消耗趋势') }}
+          <ThunderboltOutlined /> {{ $t('common.daily_consumption_trend') }}
         </template>
         <div class="bar-chart">
           <div
@@ -474,16 +474,16 @@ function amountText(amount: number): string {
       <!-- 充值 -->
       <TabPane
         key="purchase"
-        :tab="$t('充值')"
+        :tab="$t('common.top_up')"
       >
         <Card>
           <template #title>
-            <ShoppingOutlined /> {{ $t('充值 Credits') }}
+            <ShoppingOutlined /> {{ $t('billing.top_up_credits') }}
           </template>
 
           <div class="purchase-form">
             <div class="form-item">
-              <label>{{ $t('快捷选择') }}</label>
+              <label>{{ $t('common.quick_select') }}</label>
               <div class="preset-row">
                 <Button
                   v-for="n in PRESET_CREDITS"
@@ -497,18 +497,18 @@ function amountText(amount: number): string {
             </div>
 
             <div class="form-item">
-              <label>{{ $t('自定义数量（credits）') }}</label>
+              <label>{{ $t('billing.custom_amount_credits') }}</label>
               <Input
                 v-model:value="customCredits"
                 type="number"
                 min="1"
-                :placeholder="$t('输入任意数量，如 3000')"
+                :placeholder="$t('common.enter_any_amount_e_g_3000')"
                 class="credits-input"
               />
             </div>
 
             <div class="form-item">
-              <label>{{ $t('支付方式') }}</label>
+              <label>{{ $t('billing.payment_method') }}</label>
               <Radio.Group
                 v-if="providerOptions.length"
                 v-model:value="provider"
@@ -520,12 +520,12 @@ function amountText(amount: number): string {
                 v-else
                 type="warning"
                 show-icon
-                :message="$t('管理员尚未配置可用的支付渠道，暂时无法在线充值。')"
+                :message="$t('billing.the_admin_has_not_configured_an_available_payment_channel_online_top_up_is_temporarily_unavailable')"
               />
             </div>
 
             <div class="price-hint">
-              {{ effectiveCredits ? $t('本次充值 {n} credits {hint}', { n: effectiveCredits, hint: priceHint }) : $t('请选择或输入充值数量') }}
+              {{ effectiveCredits ? $t('本次充值 {n} credits {hint}', { n: effectiveCredits, hint: priceHint }) : $t('common.please_choose_or_enter_a_top_up_amount') }}
             </div>
 
             <Button
@@ -539,13 +539,13 @@ function amountText(amount: number): string {
               <template #icon>
                 <WalletOutlined />
               </template>
-              {{ $t('立即充值') }}
+              {{ $t('common.recharge_now') }}
             </Button>
 
             <div class="purchase-note">
               {{ provider === 'paypal'
-                ? $t('跳转 PayPal 完成付款，1 credit = 1 美分（USD）。充值不可退款，请确认数量。')
-                : $t('扫码完成付款，1 credit = 1 分（CNY）。支付成功后 Credits 自动到账。充值不可退款，请确认数量。') }}
+                ? $t('billing.proceed_to_paypal_to_complete_payment_1_credit_1_cent_usd_top_ups_are_non_refundable_please_confirm_the_amount')
+                : $t('billing.complete_payment_by_scanning_the_qr_code_1_credit_1_fen_cny_credits_are_credited_automatically_after_payment_top_ups_are_non_refundable_please_confirm_the_amount') }}
             </div>
           </div>
         </Card>
@@ -554,11 +554,11 @@ function amountText(amount: number): string {
       <!-- 交易历史 -->
       <TabPane
         key="history"
-        :tab="$t('交易记录')"
+        :tab="$t('common.transactions')"
       >
         <Card>
           <template #title>
-            <BarChartOutlined /> {{ $t('交易历史') }}
+            <BarChartOutlined /> {{ $t('common.transaction_history') }}
           </template>
           <Spin :spinning="historyLoading">
             <Table
@@ -590,7 +590,7 @@ function amountText(amount: number): string {
             </Table>
             <EmptyState
               v-else-if="!historyLoading"
-              :description="$t('暂无交易记录')"
+              :description="$t('common.no_transactions_yet')"
             />
           </Spin>
         </Card>
@@ -604,12 +604,12 @@ function amountText(amount: number): string {
       :closable="true"
       :mask-closable="false"
       width="340px"
-      :title="$t('扫码支付')"
+      :title="$t('billing.scan_to_pay')"
       @cancel="closeQR"
     >
       <div class="qr-body">
         <div class="qr-channel">
-          {{ qrChannel === 'alipay' ? $t('支付宝') : $t('微信支付') }}
+          {{ qrChannel === 'alipay' ? $t('billing.alipay') : $t('billing.wechat_pay') }}
           <Tag color="var(--warning)">
             {{ effectiveCredits }} credits
           </Tag>
@@ -617,7 +617,7 @@ function amountText(amount: number): string {
 
         <Spin
           :spinning="payStatus === 'pending' && !qrCode"
-          :tip="$t('生成二维码中...')"
+          :tip="$t('common.generating_qr_code')"
         >
           <canvas
             v-show="qrCode"
@@ -630,15 +630,15 @@ function amountText(amount: number): string {
           v-if="payStatus === 'pending'"
           class="qr-tip"
         >
-          <QrcodeOutlined />{{ $t('请使用{channel}扫码完成支付', { channel: qrChannel === 'alipay' ? $t('支付宝') : $t('微信') }) }}
+          <QrcodeOutlined />{{ $t('请使用{channel}扫码完成支付', { channel: qrChannel === 'alipay' ? $t('billing.alipay') : $t('chat.wechat') }) }}
           <br>
-          <span class="qr-sub">{{ $t('页面将自动检测支付结果，无需手动刷新') }}</span>
+          <span class="qr-sub">{{ $t('billing.the_page_will_auto_detect_the_payment_result_no_manual_refresh_needed') }}</span>
         </div>
         <div
           v-else-if="payStatus === 'paid'"
           class="qr-success"
         >
-          <PayCircleOutlined /> {{ $t('支付成功，Credits 已到账') }}
+          <PayCircleOutlined /> {{ $t('billing.payment_successful_credits_credited') }}
         </div>
         <div
           v-else
@@ -646,8 +646,8 @@ function amountText(amount: number): string {
         >
           <Alert
             type="warning"
-            :message="$t('订单已{status}', { status: payStatus === 'expired' ? $t('超时') : $t('失败') })"
-            :description="$t('请关闭后重新发起充值')"
+            :message="$t('订单已{status}', { status: payStatus === 'expired' ? $t('errors.timeout_2') : $t('errors.failed') })"
+            :description="$t('common.please_close_and_re_initiate_the_recharge')"
           />
         </div>
       </div>

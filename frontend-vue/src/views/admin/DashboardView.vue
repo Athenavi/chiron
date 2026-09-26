@@ -28,10 +28,10 @@ const error = ref('')
 
 // 快捷导航：三个监控页已合并为「运行时监控」，定时任务已拆为独立页面
 const navItems = [
-  { label: t('运行时监控'), path: '/admin/monitor', icon: markRaw(ThunderboltOutlined), desc: t('性能 / 队列 / 缓存') },
-  { label: 'API Key', path: '/admin/api-keys', icon: markRaw(KeyOutlined), desc: t('密钥与限流') },
-  { label: t('定时任务'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('自动化调度') },
-  { label: t('系统设置'), path: '/admin/settings', icon: markRaw(SettingOutlined), desc: t('全局配置') },
+  { label: t('admin.runtime_monitoring'), path: '/admin/monitor', icon: markRaw(ThunderboltOutlined), desc: t('admin.performance_queue_cache') },
+  { label: 'API Key', path: '/admin/api-keys', icon: markRaw(KeyOutlined), desc: t('common.keys_and_rate_limiting') },
+  { label: t('workflow.scheduled_tasks'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('common.automated_scheduling') },
+  { label: t('settings.system_settings'), path: '/admin/settings', icon: markRaw(SettingOutlined), desc: t('common.global_config') },
 ]
 
 const stats = ref({
@@ -86,7 +86,7 @@ const connectionChartOption = computed(() => ({
   },
   yAxis: {
     type: 'value',
-    name: t('连接数'),
+    name: t('common.connections'),
     nameTextStyle: { color: chartColors.value.textSecondary, fontSize: 11 },
     axisLabel: { color: chartColors.value.textSecondary, fontSize: 11 },
     splitLine: { lineStyle: { color: chartColors.value.splitLine } },
@@ -94,7 +94,7 @@ const connectionChartOption = computed(() => ({
     axisTick: { show: false },
   },
   series: [{
-    name: t('并发连接'),
+    name: t('common.concurrent_connections'),
     type: 'line',
     data: connectionHistory.value.map(h => h.value),
     smooth: true,
@@ -128,7 +128,7 @@ const apiKeyChartOption = computed(() => ({
     textStyle: { color: chartColors.value.textSecondary, fontSize: 12 },
   },
   series: [{
-    name: t('API Key 状态'),
+    name: t('common.api_key_status'),
     type: 'pie',
     radius: ['52%', '72%'],
     center: ['50%', '44%'],
@@ -136,17 +136,17 @@ const apiKeyChartOption = computed(() => ({
     itemStyle: { borderColor: chartColors.value.bg, borderWidth: 2 },
     label: { show: false },
     data: [
-      { value: apiKeyStatus.value.active || 1, name: t('正常'), itemStyle: { color: chartColors.value.success } },
-      { value: apiKeyStatus.value.rate_limited || 0, name: t('限流中'), itemStyle: { color: chartColors.value.warning } },
-      { value: apiKeyStatus.value.circuit_open || 0, name: t('熔断'), itemStyle: { color: chartColors.value.error } },
+      { value: apiKeyStatus.value.active || 1, name: t('common.normal_2'), itemStyle: { color: chartColors.value.success } },
+      { value: apiKeyStatus.value.rate_limited || 0, name: t('common.rate_limiting'), itemStyle: { color: chartColors.value.warning } },
+      { value: apiKeyStatus.value.circuit_open || 0, name: t('common.circuit_breaker'), itemStyle: { color: chartColors.value.error } },
     ],
   }],
 }))
 
 const alertColumns = [
-  { title: t('时间'), dataIndex: 'time', width: 180 },
-  { title: t('级别'), dataIndex: 'level', width: 100 },
-  { title: t('消息'), dataIndex: 'message' },
+  { title: t('common.time'), dataIndex: 'time', width: 180 },
+  { title: t('common.level'), dataIndex: 'level', width: 100 },
+  { title: t('chat.message'), dataIndex: 'message' },
 ]
 
 const alerts = ref<{ time: string; level: string; message: string }[]>([])
@@ -178,7 +178,7 @@ async function fetchDashboardData() {
       }
     }
   } catch {
-    error.value = t('数据加载失败')
+    error.value = t('errors.data_load_failed')
   } finally {
     loading.value = false
   }
@@ -215,14 +215,14 @@ onUnmounted(() => {
       v-else-if="error"
       size="page"
       :description="error"
-      :hint="$t('请检查后端服务是否正常，或稍后重试')"
+      :hint="$t('common.please_check_if_the_backend_service_is_normal_or_retry_later')"
     >
       <a-button
         type="primary"
         size="large"
         @click="fetchDashboardData"
       >
-        {{ $t('重试') }}
+        {{ $t('common.retry') }}
       </a-button>
     </EmptyState>
 
@@ -260,7 +260,7 @@ onUnmounted(() => {
           :bordered="false"
         >
           <Statistic
-            :title="$t('并发连接')"
+            :title="$t('common.concurrent_connections')"
             :value="stats.connections"
             :value-style="{ color: 'var(--text-primary)', fontSize: '28px', fontFamily: 'var(--font-sans)', fontVariantNumeric: 'tabular-nums' }"
           >
@@ -284,7 +284,7 @@ onUnmounted(() => {
           :bordered="false"
         >
           <Statistic
-            :title="$t('队列积压')"
+            :title="$t('admin.queue_backlog')"
             :value="stats.queueBacklog"
             :value-style="{ color: 'var(--text-primary)', fontSize: '28px', fontVariantNumeric: 'tabular-nums' }"
           >
@@ -296,7 +296,7 @@ onUnmounted(() => {
                 :color="stats.queueBacklog > 1000 ? 'error' : 'success'"
                 class="stat-trend"
               >
-                {{ stats.queueBacklog > 1000 ? $t('告警') : $t('正常') }}
+                {{ stats.queueBacklog > 1000 ? $t('common.alert') : $t('common.normal_2') }}
               </Tag>
             </template>
           </Statistic>
@@ -306,7 +306,7 @@ onUnmounted(() => {
           :bordered="false"
         >
           <Statistic
-            :title="$t('缓存命中率')"
+            :title="$t('admin.cache_hit_rate')"
             :value="stats.cacheHitRate"
             suffix="%"
             :value-style="{ color: 'var(--text-primary)', fontSize: '28px', fontVariantNumeric: 'tabular-nums' }"
@@ -321,7 +321,7 @@ onUnmounted(() => {
           :bordered="false"
         >
           <Statistic
-            :title="$t('API 延迟 P99')"
+            :title="$t('common.api_latency_p99')"
             :value="stats.latencyP99"
             suffix="ms"
             :value-style="{ color: 'var(--text-primary)', fontSize: '28px', fontVariantNumeric: 'tabular-nums' }"
@@ -348,7 +348,7 @@ onUnmounted(() => {
           >
             <template #title>
               <span class="chart-title">
-                <ApartmentOutlined class="chart-title-icon" /> {{ $t('并发连接趋势') }}
+                <ApartmentOutlined class="chart-title-icon" /> {{ $t('common.concurrent_connection_trend') }}
               </span>
             </template>
             <VChart
@@ -368,7 +368,7 @@ onUnmounted(() => {
           >
             <template #title>
               <span class="chart-title">
-                <KeyOutlined class="chart-title-icon" /> {{ $t('API Key 状态') }}
+                <KeyOutlined class="chart-title-icon" /> {{ $t('common.api_key_status') }}
               </span>
             </template>
             <VChart
@@ -387,14 +387,14 @@ onUnmounted(() => {
       >
         <template #title>
           <span class="chart-title">
-            <ClockCircleOutlined class="chart-title-icon" /> {{ $t('最近告警') }}
+            <ClockCircleOutlined class="chart-title-icon" /> {{ $t('common.recent_alerts') }}
           </span>
         </template>
         <EmptyState
           v-if="alerts.length === 0"
           size="list"
-          :description="$t('暂无告警')"
-          :hint="$t('系统运行正常')"
+          :description="$t('common.no_alerts_yet')"
+          :hint="$t('common.system_running_normally')"
         />
         <Table
           v-else

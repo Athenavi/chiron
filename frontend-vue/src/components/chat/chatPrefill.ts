@@ -29,7 +29,7 @@ export interface ChatPrefill {
 
 /** 截断提示：用函数而非常量 —— 常量在模块加载时求值一次，语言切换后会停在旧语言。 */
 function truncatedNote(): string {
-  return t('…（内容过长，已截断）')
+  return t('common.content_too_long_truncated')
 }
 
 /** 组装要插入输入框的文本（纯函数：格式与截断都可测） */
@@ -40,7 +40,7 @@ export function buildPrefillText(prefill: ChatPrefill, maxChars = PREFILL_MAX_CH
     ? t('我想用「{title}」来做：', { title: prefill.title })
     : prefill.title
       ? t('以下是「{title}」的结果，请基于它继续：', { title: prefill.title })
-      : t('以下是上一轮的结果，请基于它继续：')
+      : t('common.below_are_the_previous_round_s_results_continue_based_on_them')
   const body = (prefill.text || '').trim()
   if (!body) return header
   if (maxChars > 0 && body.length > maxChars) {

@@ -54,17 +54,17 @@ const router = useRouter()
 // 工具条低频操作（导出/主题）收进溢出菜单：条上只留「会话/轨迹」两个高频入口。
 // 菜单项在渲染时求值，故与 themeStore 的初始化顺序无关。
 const toolbarMenuItems = computed(() => [
-  { key: 'export', label: t('导出为 Markdown'), icon: () => h(ExportOutlined), disabled: !items.value.length },
-  { key: 'save_kb', label: t('存入知识库'), icon: () => h(CloudUploadOutlined), disabled: !hasSessionContent.value },
-  { key: 'save_memory', label: t('记住这条'), icon: () => h(DatabaseOutlined), disabled: !hasSessionContent.value },
-  { key: 'save_workflow', label: t('另存为工作流'), icon: () => h(PartitionOutlined), disabled: !hasSessionContent.value || savingWorkflow.value },
-  { key: 'save_agent', label: t('存为 Agent'), icon: () => h(RobotOutlined), disabled: !hasSessionContent.value || savingAgent.value },
+  { key: 'export', label: t('common.export_as_markdown'), icon: () => h(ExportOutlined), disabled: !items.value.length },
+  { key: 'save_kb', label: t('knowledge.save_to_knowledge_base'), icon: () => h(CloudUploadOutlined), disabled: !hasSessionContent.value },
+  { key: 'save_memory', label: t('common.remember_this'), icon: () => h(DatabaseOutlined), disabled: !hasSessionContent.value },
+  { key: 'save_workflow', label: t('workflow.save_as_workflow'), icon: () => h(PartitionOutlined), disabled: !hasSessionContent.value || savingWorkflow.value },
+  { key: 'save_agent', label: t('agent.save_as_agent'), icon: () => h(RobotOutlined), disabled: !hasSessionContent.value || savingAgent.value },
   { type: 'divider' as const },
-  { key: 'display', label: t('显示设置'), icon: () => h(FontSizeOutlined) },
+  { key: 'display', label: t('settings.display_settings'), icon: () => h(FontSizeOutlined) },
   // 交换布局：侧边栏与分屏左右对调。注意这里引用的 layoutSwapped 定义在本文件靠后处，
   // 但本数组是 computed（getter 惰性求值），执行时它已初始化 —— 与 splitTitle 同理。
-  { key: 'swap_layout', label: layoutSwapped.value ? t('布局：侧栏在右') : t('布局：侧栏在左'), icon: () => h(SwapOutlined) },
-  { key: 'theme', label: themeStore.isDark ? t('切换到亮色模式') : t('切换到暗色模式'), icon: () => h(themeStore.isDark ? BulbFilled : BulbOutlined) },
+  { key: 'swap_layout', label: layoutSwapped.value ? t('common.layout_sidebar_on_right') : t('common.layout_sidebar_on_left'), icon: () => h(SwapOutlined) },
+  { key: 'theme', label: themeStore.isDark ? t('common.switch_to_light_mode') : t('common.switch_to_dark_mode'), icon: () => h(themeStore.isDark ? BulbFilled : BulbOutlined) },
 ])
 
 const displaySettingsOpen = ref(false)
@@ -104,7 +104,7 @@ async function saveAsWorkflow() {
     kbId: agentBindingsFromContext(buildContext()).kb_id,
   })
   if (!graph) {
-    message.warning(t('当前会话没有可沉淀的正文'))
+    message.warning(t('chat.this_session_has_no_text_worth_saving'))
     return
   }
   savingWorkflow.value = true
@@ -131,7 +131,7 @@ const agentDraft = ref({ name: '', description: '', system_prompt: '' })
 function openSaveAsAgent() {
   const draft = sessionToAgent(items.value, activeSession.value?.title || '')
   if (!draft) {
-    message.warning(t('当前会话没有可沉淀的正文'))
+    message.warning(t('chat.this_session_has_no_text_worth_saving'))
     return
   }
   agentDraft.value = draft
@@ -142,7 +142,7 @@ async function saveAsAgent() {
   const draft = agentDraft.value
   const name = draft.name.trim()
   if (!name) {
-    message.warning(t('请填写 Agent 名称'))
+    message.warning(t('agent.please_enter_agent_name'))
     return
   }
   savingAgent.value = true
@@ -159,7 +159,7 @@ async function saveAsAgent() {
     })
     // 明确说出继承了哪些 —— 绑定是"沉默生效"的，不告诉用户就成幽灵行为
     const inherited = [
-      bindings.kb_id ? t('知识库') : '',
+      bindings.kb_id ? t('knowledge.knowledge_base') : '',
       bindings.skills?.length ? t('{n} 个技能', { n: bindings.skills.length }) : '',
       bindings.plugins?.length ? t('{n} 个插件', { n: bindings.plugins.length }) : '',
     ].filter(Boolean)
@@ -293,7 +293,7 @@ function toggleSplit() {
   // 于是既能拿到最新值，又不会触发 TDZ（"used before its declaration"）。
   const prev = sessions.value.find(s => s.id !== activeSessionId.value)
   if (!prev) {
-    message.info(t('还没有其它会话可以作为参考'))
+    message.info(t('chat.no_other_session_available_as_reference'))
     return
   }
   splitSessionId.value = prev.id
@@ -330,7 +330,7 @@ const subagentActiveCount = computed(() => {
 })
 
 /** 当前模式的显示名 */
-const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || t('常规'))
+const modeLabel = computed(() => modeOptions.find(o => o.value === mode.value)?.label || t('common.normal'))
 
 // 注意：模式不再有"来源"后缀。它不再是会话/服务端状态，也没有回落到谁的默认值一说 ——
 // 界面上的模式就是用户当前的选择（全局单一状态），随本次提交下发。
@@ -537,7 +537,7 @@ async function answerQuestion(question: PendingQuestion, answer: string) {
       answer,
     })
   } catch {
-    message.error(t('回答提交失败，请重试'))
+    message.error(t('errors.answer_submission_failed_please_retry'))
   }
 }
 
@@ -551,9 +551,9 @@ async function answerQuestion(question: PendingQuestion, answer: string) {
 // 所以这里既没有"加载"也没有"保存"：改了就立刻是本次生效值，不存在保存失败。
 const toolsMode = ref<'ask' | 'auto' | 'yolo'>('auto')
 const toolsModeOptions = [
-  { label: t('询问'), value: 'ask' },
-  { label: t('自动'), value: 'auto' },
-  { label: t('全自动'), value: 'yolo' },
+  { label: t('common.ask'), value: 'ask' },
+  { label: t('common.auto'), value: 'auto' },
+  { label: t('common.fully_automatic'), value: 'yolo' },
 ]
 
 function onToolsModeChange(v: any) {
@@ -562,17 +562,17 @@ function onToolsModeChange(v: any) {
   toolsMode.value = m
   message.success(
     m === 'yolo'
-      ? t('已切换为全自动：跳过工具确认（该操作会留审计）')
+      ? t('agent.switched_to_fully_automatic_tool_confirmation_skipped_this_leaves_an_audit_trail')
       : t('工具授权模式已设为「{mode}」', { mode: toolsModeOptions.find(o => o.value === m)?.label || m }),
   )
 }
 
 // 模式
 const modeOptions = [
-  { label: t('常规'), value: 'normal' },
-  { label: t('极简'), value: 'minimal' },
+  { label: t('common.normal'), value: 'normal' },
+  { label: t('common.minimal_2'), value: 'minimal' },
   { label: 'PTC', value: 'ptc' },
-  { label: t('创意'), value: 'creative' },
+  { label: t('common.creative'), value: 'creative' },
 ]
 /** 默认模式：会话没记（或记了个不认识的值）时回落到它 —— **绝不能沿用上一个会话的模式** */
 const DEFAULT_MODE = 'normal'
@@ -585,10 +585,10 @@ const llmModel = ref('')
 // desc 必须与后端 app/agent/modes.py 的四种模式定义表一一对应（工具集/上下文/压缩差异），
 // 否则又会回到"切了看不出区别"的老问题（2026-09 实测暴露）。
 const MODE_PRESETS = computed<Record<string, { temperature: number; max_tokens: number; note?: string; desc: string }>>(() => ({
-  normal: { temperature: 0.6, max_tokens: 4096, desc: t('通用助手：12 个核心工具，注入记忆/技能/知识库上下文') },
-  minimal: { temperature: 0.2, max_tokens: 1024, note: t('简短回复'), desc: t('极简：只用 read_file/edit_file/shell_exec，不注入上下文、不压缩') },
-  ptc: { temperature: 0.4, max_tokens: 4096, note: t('分步思考'), desc: t('PTC：多步操作写成一段程序一次执行（run_code），少往返、省 token') },
-  creative: { temperature: 1.0, max_tokens: 8192, desc: t('创意：可读写平台自身的模式/技能定义（mode_list/mode_edit）') },
+  normal: { temperature: 0.6, max_tokens: 4096, desc: t('agent.general_assistant_12_core_tools_injects_memory_skill_knowledge_base_context') },
+  minimal: { temperature: 0.2, max_tokens: 1024, note: t('chat.brief_reply'), desc: t('common.minimal_only_read_file_edit_file_shell_exec_no_context_injection_no_compression') },
+  ptc: { temperature: 0.4, max_tokens: 4096, note: t('workflow.step_by_step_reasoning'), desc: t('workflow.ptc_multi_step_operations_written_as_one_script_run_at_once_run_code_fewer_round_trips_saves_tokens') },
+  creative: { temperature: 1.0, max_tokens: 8192, desc: t('agent.creative_can_read_write_the_platform_s_own_mode_skill_definitions_mode_list_mode_edit') },
 }))
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model（base 已显式携带的字段优先保留） */
@@ -600,18 +600,18 @@ const effort = ref('')
 
 /** 档位循环顺序（点击按钮依次切换 —— ZCode 的 `ThoughtLevelCycleControl` 同款交互，比下拉省空间） */
 const EFFORT_ORDER = ['', 'low', 'high', 'max'] as const
-const EFFORT_LABEL = computed<Record<string, string>>(() => ({ '': t('关'), low: t('低'), high: t('高'), max: t('最高') }))
+const EFFORT_LABEL = computed<Record<string, string>>(() => ({ '': t('common.off'), low: t('common.low'), high: t('common.high'), max: t('common.highest') }))
 // 模板不直接做两层索引：EFFORT_LABEL 与 effort 各自都可能为空，一旦编译产物出现不一致
 // （排查过：HMR 增量重编译后 setup 绑定表与 render 不同步），EFFORT_LABEL[effort] 会炸成
 // undefined[undefined]，整个 ChatView 被 ErrorBoundary 接管。收进 computed 后取值路径只有一条。
-const effortLabel = computed(() => EFFORT_LABEL.value[effort.value] || t('关'))
+const effortLabel = computed(() => EFFORT_LABEL.value[effort.value] || t('common.off'))
 
 /** 思考档位切换：与模型/模式同一套持久化（走 buildLlmConfig → 会话 llm_config） */
 function onEffortChange(v: string) {
   effort.value = (EFFORT_ORDER as readonly string[]).includes(v) ? v : ''
   persistRuntime({})
   message.info(
-    effort.value ? t('思考档位：{level}', { level: EFFORT_LABEL.value[effort.value] }) : t('思考档位已重置为默认'),
+    effort.value ? t('思考档位：{level}', { level: EFFORT_LABEL.value[effort.value] }) : t('auth.reasoning_level_reset_to_default'),
   )
 }
 
@@ -682,7 +682,7 @@ function persistRuntime(patch: Record<string, unknown>) {
  * —— 只改 chips 不写 runtime，刷新后引用就会从界面上消失（这正是我们修过的那类问题）。
  */
 const MENTION_CHIP_LABEL = computed<Record<string, string>>(() => ({
-  kb: t('知识库'), agent: 'Agent', skill: t('技能'), workflow: t('工作流'), plugin: t('插件'),
+  kb: t('knowledge.knowledge_base'), agent: 'Agent', skill: t('agent.skill'), workflow: t('workflow.workflow'), plugin: t('common.plugin'),
 }))
 
 function onMentionAdd(p: { type: string; id: string; name: string }) {
@@ -702,7 +702,7 @@ function onMentionAdd(p: { type: string; id: string; name: string }) {
 function onModelChange(m: string) {
   if (m === llmModel.value) return
   llmModel.value = m
-  message.info(m ? t('模型已切换：{model}（仅影响后续消息）', { model: m }) : t('模型已重置为默认（后端路由）'))
+  message.info(m ? t('模型已切换：{model}（仅影响后续消息）', { model: m }) : t('auth.model_reset_to_default_backend_routing'))
   persistRuntime({ model: m || null })
 }
 
@@ -879,7 +879,7 @@ function clearContext() {
 function clearUnifiedMessages() {
   items.value = []
   currentTraceId.value = ''
-  message.info(t('已清空统一任务消息'))
+  message.info(t('workflow.unified_task_messages_cleared'))
 }
 
 /** 统一任务模式：退出（移除 task/error query；路由 watcher 触发 applyRouteQuery 重置消息区） */
@@ -931,7 +931,7 @@ async function loadUnifiedSession(sessionId: string) {
       'auto'
     items.value = buildUnifiedItems(list)
   } catch {
-    errorBanner.value = errorBanner.value || t('统一会话加载失败，可直接发送消息继续')
+    errorBanner.value = errorBanner.value || t('errors.unified_session_failed_to_load_you_can_still_send_a_message_to_continue')
   } finally {
     loading.value = false
     // 会话加载完成后自动滚到底部
@@ -998,14 +998,14 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
         : {}),
     })
     const d = res.data?.data !== undefined ? res.data.data : (res.data || {})
-    if (d.success === false) throw new Error(d.error || t('请求失败'))
+    if (d.success === false) throw new Error(d.error || t('errors.request_failed_2'))
     currentTraceId.value = d.trace_id || ''
     appendAssistantWithKb(d.output || '', d.metadata || {})
     flashUnifiedDone()
   } catch (e: any) {
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason)
-    message.error(t('发送失败：') + reason)
+    message.error(t('errors.send_failed') + reason)
   } finally {
     loading.value = false
     stopTurnTimer()
@@ -1152,7 +1152,7 @@ async function pushMapState() {
       type: 'synapse:workspaces',
       workspaces: (body.data?.workspaces ?? []).map((w) => ({
         id: w.id,
-        title: w.name || t('我的地图'),
+        title: w.name || t('common.my_map'),
         sessionIds: [] as string[],
       })),
     })
@@ -1221,7 +1221,7 @@ const mapRpcHost: MapRpcHost = {
     // 它建的会话必须真的出现在会话列表里，否则用户在地图新建完回到对话页找不到。
     const res = await api.post('/v1/conversations', { title })
     const session = (res.data?.data ?? res.data) as { id?: string; title?: string } | null
-    if (!session?.id) throw new Error(t('创建会话失败'))
+    if (!session?.id) throw new Error(t('errors.failed_to_create_session'))
     await loadSessions()
     // 让地图把新会话摆上画布：地图自己不会知道宿主刚建了一个会话 ——
     // app.js 只在收到 `synapse:current-session` 时才调 placeSession（adapter 的监听）。
@@ -1246,7 +1246,7 @@ const mapRpcHost: MapRpcHost = {
     })
     const data = (res.data?.data ?? res.data) as { session_id?: string; id?: string } | null
     const id = data?.session_id || data?.id
-    if (!id) throw new Error(t('分叉失败'))
+    if (!id) throw new Error(t('errors.fork_failed'))
     await loadSessions()
     // 地图需要 `{id, title}`：id 用来记住分叉锚点、title 显示在卡片上
     return { id, title }
@@ -1494,17 +1494,17 @@ async function attemptReconnect() {
 // 导出当前会话为 Markdown 文件
 function exportMarkdown() {
   if (!items.value.length) {
-    message.warning(t('当前没有可导出的消息'))
+    message.warning(t('chat.no_messages_available_to_export'))
     return
   }
   const session = sessions.value.find(s => s.id === activeSessionId.value)
-  const title = session?.title || t('对话导出')
+  const title = session?.title || t('chat.export_conversation')
   const lines: string[] = [`# ${title}`, '']
   for (const it of items.value) {
     if (it.kind !== 'text') continue
-    const role = it.role === 'user' ? t('🧑 用户') : t('🤖 助手')
+    const role = it.role === 'user' ? t('admin.user_3') : t('common.assistant_3')
     lines.push(`## ${role}`, '')
-    lines.push(it.content || t('(空消息)'))
+    lines.push(it.content || t('chat.empty_message'))
     if (it.attachments?.length) {
       lines.push('')
       for (const a of it.attachments) {
@@ -1516,7 +1516,7 @@ function exportMarkdown() {
   }
   const toolCalls = items.value.filter(i => i.kind === 'tool_call')
   if (toolCalls.length) {
-    lines.push('---', '', t('## 工具调用记录'), '')
+    lines.push('---', '', t('agent.tool_calls'), '')
     for (const tc of toolCalls) {
       if (tc.kind !== 'tool_call') continue
       lines.push(`### ${tc.name || 'tool'}`, '```json', tc.arguments || '{}', '```', '')
@@ -1532,7 +1532,7 @@ function exportMarkdown() {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-  message.success(t('已导出 Markdown'))
+  message.success(t('common.markdown_exported'))
 }
 
 // 斜杠命令处理
@@ -1541,7 +1541,7 @@ function onSlashCommand(cmd: string) {
     case '/clear':
       items.value = []
       activeSessionId.value = ''
-      message.info(t('已清空当前对话'))
+      message.info(t('chat.current_conversation_cleared'))
       break
     case '/export':
       exportMarkdown()
@@ -1550,11 +1550,11 @@ function onSlashCommand(cmd: string) {
       items.value = []
       activeSessionId.value = ''
       panelOpen.value = false
-      message.info(t('已新建会话'))
+      message.info(t('chat.session_created'))
       break
     case '/theme':
       themeStore.toggleTheme()
-      message.success(themeStore.isDark ? t('已切换到暗色模式') : t('已切换到亮色模式'))
+      message.success(themeStore.isDark ? t('common.switched_to_dark_mode') : t('common.switched_to_light_mode'))
       break
     case '/stop':
       stopGeneration()
@@ -1635,13 +1635,13 @@ async function loadSessions() {
 async function createSession() {
   let session: ChatSession | null = null
   try {
-    const res = await api.post('/v1/conversations', { title: t('新对话'), llm_config: buildPersistLlmConfig() })
+    const res = await api.post('/v1/conversations', { title: t('chat.new_conversation'), llm_config: buildPersistLlmConfig() })
     const data = res.data?.data || res.data
-    if (data?.id) session = { id: data.id, title: data.title || t('新对话'), created_at: data.created_at, updated_at: data.updated_at }
+    if (data?.id) session = { id: data.id, title: data.title || t('chat.new_conversation'), created_at: data.created_at, updated_at: data.updated_at }
   } catch { /* fallback */ }
   if (!session) {
     const id = crypto.randomUUID()
-    session = { id, title: t('新对话'), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
+    session = { id, title: t('chat.new_conversation'), created_at: new Date().toISOString(), updated_at: new Date().toISOString() }
   }
   sessions.value.unshift(session); persistSessions()
   panelView.value = 'trajectory'
@@ -1781,11 +1781,11 @@ async function deleteSession(id: string) {
 function requestDelete(id: string) {
   const s = sessions.value.find(x => x.id === id)
   Modal.confirm({
-    title: t('删除对话'),
-    content: t('确定删除「{title}」？此操作不可恢复。', { title: s?.title || t('新对话') }),
-    okText: t('删除'),
+    title: t('chat.delete_conversation'),
+    content: t('确定删除「{title}」？此操作不可恢复。', { title: s?.title || t('chat.new_conversation') }),
+    okText: t('common.delete'),
     okButtonProps: { danger: true },
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: () => deleteSession(id),
   })
 }
@@ -1812,10 +1812,10 @@ async function confirmRename() {
     const s = sessions.value.find(x => x.id === target.id)
     if (s) s.title = title
     persistSessions()
-    message.success(t('已重命名'))
+    message.success(t('common.renamed'))
     renameTarget.value = null
   } catch (e: any) {
-    message.error(t('重命名失败') + (e?.response?.data?.error || e?.message || t('网络错误')))
+    message.error(t('errors.rename_failed') + (e?.response?.data?.error || e?.message || t('errors.network_error_2')))
   } finally {
     renaming.value = false
   }
@@ -1840,7 +1840,7 @@ async function togglePin(id: string, pinned: boolean) {
   } catch {
     s.pinned = prev
     sortSessions(); persistSessions()
-    message.error(t('置顶操作失败'))
+    message.error(t('errors.pin_failed'))
   }
 }
 
@@ -1856,11 +1856,11 @@ async function setSessionTag(id: string, tag: string) {
   try {
     // 空串表示清除标签（后端 NULLIF 写 NULL）
     await updateConversation(id, { tag: tag || '' })
-    message.success(tag ? t('已设置标签：{tag}', { tag }) : t('已清除标签'))
+    message.success(tag ? t('已设置标签：{tag}', { tag }) : t('common.tags_cleared'))
   } catch {
     s.tag = prev
     sortSessions(); persistSessions()
-    message.error(t('标签保存失败'))
+    message.error(t('errors.failed_to_save_tag'))
   }
 }
 
@@ -1909,13 +1909,13 @@ function toggleShareMessage(id: string) {
 
 async function generateShare() {
   if (!shareTarget.value) return
-  if (shareMessageIds.value.length === 0) { message.warning(t('请至少选择一条要分享的消息')); return }
+  if (shareMessageIds.value.length === 0) { message.warning(t('chat.please_select_at_least_one_message_to_share')); return }
   shareLoading.value = true
   shareError.value = ''
   try {
     shareInfo.value = await createShare(shareTarget.value.id, shareMessageIds.value)
   } catch (e: any) {
-    shareError.value = e?.response?.data?.error || t('生成分享链接失败')
+    shareError.value = e?.response?.data?.error || t('errors.failed_to_generate_share_link')
   } finally {
     shareLoading.value = false
   }
@@ -1927,9 +1927,9 @@ async function revokeCurrentShare() {
   try {
     await revokeShare(shareTarget.value.id)
     shareInfo.value = null
-    message.success(t('分享已取消，链接已失效'))
+    message.success(t('errors.share_cancelled_link_is_invalid'))
   } catch {
-    message.error(t('取消分享失败'))
+    message.error(t('errors.failed_to_cancel_sharing'))
   } finally {
     shareRevoking.value = false
   }
@@ -1942,9 +1942,9 @@ function shareUrl(): string {
 async function copyShareLink() {
   try {
     await navigator.clipboard.writeText(shareUrl())
-    message.success(t('链接已复制'))
+    message.success(t('common.link_copied'))
   } catch {
-    message.error(t('复制失败'))
+    message.error(t('errors.copy_failed'))
   }
 }
 
@@ -2094,7 +2094,7 @@ function onSSEMessage(raw: any) {
     // 后端 ask_user 工具在等答案：卡片按 tool_call_id 回填
     pendingQuestions.value.push({
       id: d?.id ?? d?.tool_call_id ?? String(Date.now()),
-      question: d?.question ?? d?.content ?? t('需要你的确认'),
+      question: d?.question ?? d?.content ?? t('common.needs_your_confirmation'),
       options: Array.isArray(d?.options) ? d.options.map((option: unknown) => String(option)) : [],
       allowFreeText: d?.allow_free_text !== false,
     })
@@ -2103,13 +2103,13 @@ function onSSEMessage(raw: any) {
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.warning(d?.content || t('请求被安全策略拦截'))
+    message.warning(d?.content || t('admin.request_blocked_by_security_policy'))
   } else if (type === 'error') {
     flushStreamingFlags()
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.error(d?.content || d?.error || t('请求失败'))
+    message.error(d?.content || d?.error || t('errors.request_failed_2'))
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
@@ -2142,7 +2142,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
         stopTurnTimer()
         connectionLost.value = true
         activeSSE?.close(); activeSSE = null
-        markMessageFailed(userItemId, t('连接已断开'))
+        markMessageFailed(userItemId, t('common.connection_lost'))
       },
       {
         // 携带上一连接的最后事件 id：服务端按 last_event_id 从缓冲流补发断线缺口
@@ -2175,7 +2175,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     flushStreamingFlags()
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason)
-    message.error(t('发送失败：') + reason)
+    message.error(t('errors.send_failed') + reason)
   }
 }
 
@@ -2220,16 +2220,16 @@ function confirmDestructive(removeCount: number, action: string, run: () => void
   Modal.confirm({
     title: t('这会删除后面的 {n} 条消息', { n: removeCount }),
     content: t('{action}需要截断到这条消息，其后 {n} 条消息（含助手回复）会被删除，且无法恢复。', { action, n: removeCount }),
-    okText: t('删除并继续'),
+    okText: t('common.delete_and_continue'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: () => { run() },
   })
 }
 
 /** 用户消息编辑后重发：删除该消息及之后所有，用新文本重发 */
 function retryFromUserMessage(itemId: string, newText: string) {
-  confirmDestructive(messagesAfter(itemId), t('重发'), () => {
+  confirmDestructive(messagesAfter(itemId), t('common.resend'), () => {
     truncateFrom(itemId)
     sendMessage(newText)
   })
@@ -2245,10 +2245,10 @@ function regenerateAssistant(itemId: string) {
     if (it.kind === 'text' && it.role === 'user') { userMsg = it; break }
   }
   if (!userMsg) {
-    message.warning(t('未找到对应的用户消息，无法重新生成'))
+    message.warning(t('errors.no_matching_user_message_found_cannot_regenerate'))
     return
   }
-  confirmDestructive(messagesAfter(itemId), t('重新生成'), () => {
+  confirmDestructive(messagesAfter(itemId), t('common.regenerate'), () => {
     truncateFrom(itemId)
     sendMessage(userMsg.content, userMsg.attachments)
   })
@@ -2262,7 +2262,7 @@ function retryFailedMessage(itemId: string) {
   if (it.kind !== 'text') return
   const text = it.content
   const attachments = it.attachments
-  confirmDestructive(messagesAfter(itemId), t('重试'), () => {
+  confirmDestructive(messagesAfter(itemId), t('common.retry'), () => {
     truncateFrom(itemId)
     sendMessage(text, attachments)
   })
@@ -2310,7 +2310,7 @@ function continueGeneration() {
         v-if="connectionLost"
         class="connection-banner"
       >
-        {{ isOnline ? $t('与服务器的连接已断开，正在尝试重连...') : $t('网络已断开，请检查网络连接') }}
+        {{ isOnline ? $t('common.disconnected_from_server_attempting_to_reconnect') : $t('common.network_disconnected_please_check_your_connection') }}
       </div>
       <div class="chat-body">
         <!-- 内容区工具条 -->
@@ -2320,13 +2320,13 @@ function continueGeneration() {
             aria-hidden="true"
           />
           <div class="toolbar-center">
-            <span class="toolbar-title">{{ unifiedMode ? $t('统一任务') : (activeSession?.title || 'Chiron') }}</span>
+            <span class="toolbar-title">{{ unifiedMode ? $t('workflow.unified_task') : (activeSession?.title || 'Chiron') }}</span>
             <!-- 当前对话模式：前端实时状态（全局单一），随每条消息经 llm_config.mode 下发。
                  不再显示"来源"后缀 —— 模式没有服务端/会话一层可言，"是谁定的"答案永远是
                  "你当前的选择"。 -->
             <span
               class="toolbar-mode"
-              :title="$t('当前对话模式')"
+              :title="$t('chat.current_conversation_mode')"
             >{{ modeLabel }}</span>
             <!-- 思考档位：点按循环（关 → 低 → 高 → 最高）。
                  与"模式"同类信息（都是"这次怎么回答"），所以并排放；用循环按钮而不是下拉 ——
@@ -2339,19 +2339,19 @@ function continueGeneration() {
               type="button"
               class="toolbar-mode split-toggle"
               :class="{ active: !!splitSessionId }"
-              :title="$t('并排参考另一个会话（只读）')"
+              :title="$t('chat.side_by_side_reference_to_another_session_read_only')"
               @click="toggleSplit()"
             >
-              {{ splitSessionId ? $t('收起参考') : $t('分屏') }}
+              {{ splitSessionId ? $t('common.collapse_reference') : $t('common.split_view') }}
             </button>
             <button
               type="button"
               class="toolbar-mode toolbar-effort"
               :class="{ active: !!effort }"
-              :title="$t('思考档位：点按循环切换（关 / 低 / 高 / 最高）')"
+              :title="$t('chat.reasoning_level_tap_to_cycle_off_low_high_max')"
               @click="cycleEffort()"
             >
-              {{ $t('思考') }} {{ effortLabel }}
+              {{ $t('chat.reasoning') }} {{ effortLabel }}
             </button>
           </div>
           <div class="toolbar-side toolbar-actions">
@@ -2360,39 +2360,39 @@ function continueGeneration() {
               size="small"
               class="toolbar-btn"
               :class="{ active: panelOpen && panelView === 'sessions' }"
-              :title="panelOpen && panelView === 'sessions' ? $t('收起会话列表') : $t('会话历史')"
+              :title="panelOpen && panelView === 'sessions' ? $t('chat.collapse_session_list') : $t('chat.conversation_history')"
               @click="openPanel('sessions')"
             >
               <template #icon>
                 <MenuOutlined />
               </template>
-              <span class="toolbar-label">{{ $t('会话') }}</span>
+              <span class="toolbar-label">{{ $t('chat.session') }}</span>
             </Button>
             <Button
               type="text"
               size="small"
               class="toolbar-btn"
               :class="{ active: panelOpen && panelView === 'trajectory' }"
-              :title="panelOpen && panelView === 'trajectory' ? $t('收起轨迹') : $t('查看历史提问')"
+              :title="panelOpen && panelView === 'trajectory' ? $t('common.collapse_trace') : $t('common.view_past_questions')"
               @click="openPanel('trajectory')"
             >
               <template #icon>
                 <HistoryOutlined />
               </template>
-              <span class="toolbar-label">{{ $t('轨迹') }}</span>
+              <span class="toolbar-label">{{ $t('common.trace') }}</span>
             </Button>
             <Button
               type="text"
               size="small"
               class="toolbar-btn"
               :class="{ active: searchOpen }"
-              :title="searchOpen ? $t('关闭搜索') : $t('在本会话中搜索（正文与思考）')"
+              :title="searchOpen ? $t('common.close_search') : $t('chat.search_in_this_session_text_and_reasoning')"
               @click="searchOpen ? closeSearch() : openSearch()"
             >
               <template #icon>
                 <SearchOutlined />
               </template>
-              <span class="toolbar-label">{{ $t('搜索') }}</span>
+              <span class="toolbar-label">{{ $t('common.search') }}</span>
             </Button>
             <!-- 用 #overlay + <Menu>，与 ChatSidePanel 里那个**确实可用**的会话菜单保持一致。
                  此前这里用 :menu="{ items, onClick }"，表现是**点击完全不弹菜单**：
@@ -2406,7 +2406,7 @@ function continueGeneration() {
                 type="text"
                 size="small"
                 class="toolbar-btn"
-                :title="$t('更多操作')"
+                :title="$t('common.more_actions')"
                 @click.stop
               >
                 <template #icon>
@@ -2446,19 +2446,19 @@ function continueGeneration() {
             v-model="searchQuery"
             class="chat-search-input"
             type="text"
-            :placeholder="$t('在本会话中搜索正文与思考（Enter 下一个，Esc 关闭）')"
+            :placeholder="$t('chat.search_body_and_reasoning_in_this_session_enter_for_next_esc_to_close')"
             @keydown.enter.exact.prevent="gotoMatch(1)"
             @keydown.enter.shift.prevent="gotoMatch(-1)"
             @keydown.esc.prevent="closeSearch"
           >
           <span class="chat-search-count">
-            {{ searchQuery.trim() ? (searchMatches.length ? `${searchCursor + 1} / ${searchMatches.length}` : $t('无匹配')) : '' }}
+            {{ searchQuery.trim() ? (searchMatches.length ? `${searchCursor + 1} / ${searchMatches.length}` : $t('common.no_match')) : '' }}
           </span>
           <div class="chat-search-actions">
             <button
               class="chat-search-btn"
               type="button"
-              :title="$t('上一个')"
+              :title="$t('common.previous')"
               :disabled="!searchMatches.length"
               @click="gotoMatch(-1)"
             >
@@ -2467,7 +2467,7 @@ function continueGeneration() {
             <button
               class="chat-search-btn"
               type="button"
-              :title="$t('下一个')"
+              :title="$t('common.next')"
               :disabled="!searchMatches.length"
               @click="gotoMatch(1)"
             >
@@ -2476,7 +2476,7 @@ function continueGeneration() {
             <button
               class="chat-search-btn"
               type="button"
-              :title="$t('关闭')"
+              :title="$t('common.close')"
               @click="closeSearch"
             >
               ✕
@@ -2492,7 +2492,7 @@ function continueGeneration() {
           <span class="ueb-text">{{ errorBanner }}</span>
           <CloseOutlined
             class="ueb-close"
-            :title="$t('关闭')"
+            :title="$t('common.close')"
             @click="errorBanner = ''"
           />
         </div>
@@ -2504,7 +2504,7 @@ function continueGeneration() {
               class="ub-badge"
               :class="{ running: loading, done: unifiedJustFinished }"
             >
-              {{ loading ? $t('编排中') : unifiedJustFinished ? $t('完成') : $t('统一任务') }}
+              {{ loading ? $t('workflow.orchestrating') : unifiedJustFinished ? $t('common.done_3') : $t('workflow.unified_task') }}
             </span>
             <span class="ub-mode">{{ unifiedSubmitMode || 'auto' }}</span>
             <span class="ub-spacer" />
@@ -2514,22 +2514,22 @@ function continueGeneration() {
               :disabled="!items.length"
               @click="clearUnifiedMessages"
             >
-              {{ $t('清空') }}
+              {{ $t('common.empty') }}
             </button>
             <button
               type="button"
               class="ub-btn exit"
-              :title="$t('退出统一任务模式')"
+              :title="$t('auth.exit_unified_task_mode')"
               @click="exitUnifiedMode"
             >
-              {{ $t('退出') }}
+              {{ $t('auth.exit') }}
             </button>
           </div>
           <div
             v-if="loading"
             class="unified-exec-hint"
           >
-            <span class="ueh-dot" />{{ $t('正在编排/执行子任务...') }}<template v-if="turnElapsed >= 2">
+            <span class="ueh-dot" />{{ $t('workflow.orchestrating_executing_subtasks') }}<template v-if="turnElapsed >= 2">
               &nbsp;·&nbsp;{{ turnElapsed }}s
             </template>
           </div>
@@ -2537,7 +2537,7 @@ function continueGeneration() {
             v-if="!items.length && !loading"
             class="unified-empty"
           >
-            {{ $t('统一任务会话已就绪，直接发送消息即可继续追问') }}
+            {{ $t('workflow.the_unified_task_session_is_ready_just_send_a_message_to_continue_asking') }}
           </div>
           <div class="unified-list">
             <template
@@ -2561,9 +2561,9 @@ function continueGeneration() {
                   v-if="(it as any).kb_id"
                   class="kb-hits-link"
                   href="#"
-                  :title="$t('查看引用的知识库')"
+                  :title="$t('knowledge.view_referenced_knowledge_base')"
                   @click.prevent="openKb((it as any).kb_id)"
-                >{{ $t('查看知识库') }}</a>
+                >{{ $t('knowledge.view_knowledge_base') }}</a>
               </div>
             </template>
           </div>
@@ -2584,7 +2584,7 @@ function continueGeneration() {
             v-if="loading"
             class="turn-status"
           >
-            {{ $t('思考中') }}<template v-if="turnElapsed >= 2">
+            {{ $t('chat.reasoning_2') }}<template v-if="turnElapsed >= 2">
               &nbsp;·&nbsp;{{ turnElapsed }}s
             </template>
           </div>
@@ -2626,7 +2626,7 @@ function continueGeneration() {
           class="approval-card"
         >
           <div class="approval-info">
-            <span class="approval-tag">{{ $t('工具确认') }}</span>
+            <span class="approval-tag">{{ $t('agent.tool_confirmation') }}</span>
             <span class="approval-name">{{ a.toolName }}</span>
             <span
               v-if="approvalRemain(a) > 0"
@@ -2642,14 +2642,14 @@ function continueGeneration() {
               type="button"
               @click="resolveApproval(a, false)"
             >
-              {{ $t('拒绝') }}
+              {{ $t('errors.reject') }}
             </button>
             <button
               class="approval-btn allow"
               type="button"
               @click="resolveApproval(a, true)"
             >
-              {{ $t('允许执行') }}
+              {{ $t('common.allow_execution') }}
             </button>
           </div>
         </div>
@@ -2706,7 +2706,7 @@ function continueGeneration() {
            子 Agent 的内部 tab（运行·输出·用量·事件流）与移动端抽屉在后续批次接入。 -->
       <FloatingPanel
         :open="subagentsOpen"
-        :title="$t('子 Agent')"
+        :title="$t('agent.sub_agent')"
         :width="420"
         :bottom-inset="floatingBottomInset"
         @close="subagentsOpen = false"
@@ -2719,7 +2719,7 @@ function continueGeneration() {
 
       <FloatingPanel
         :open="statsOpen"
-        :title="$t('会话统计')"
+        :title="$t('chat.session_stats')"
         :width="320"
         :bottom-inset="floatingBottomInset"
         @close="statsOpen = false"
@@ -2742,25 +2742,25 @@ function continueGeneration() {
       <!-- 存为 Agent：名字由用户确认（会话正文作为人格 system_prompt） -->
       <Modal
         :open="saveAgentOpen"
-        :title="$t('存为 Agent')"
+        :title="$t('agent.save_as_agent')"
         :confirm-loading="savingAgent"
-        :ok-text="$t('创建')"
-        :cancel-text="$t('取消')"
+        :ok-text="$t('common.create')"
+        :cancel-text="$t('common.cancel')"
         @ok="saveAsAgent"
         @cancel="saveAgentOpen = false"
       >
         <div class="save-agent-form">
-          <label class="save-agent-label">{{ $t('名称') }}</label>
+          <label class="save-agent-label">{{ $t('common.name') }}</label>
           <Input
             v-model:value="agentDraft.name"
             :maxlength="60"
-            :placeholder="$t('如：技术评审')"
+            :placeholder="$t('common.e_g_tech_review')"
           />
-          <label class="save-agent-label">{{ $t('描述') }}</label>
+          <label class="save-agent-label">{{ $t('common.description') }}</label>
           <Input
             v-model:value="agentDraft.description"
             :maxlength="200"
-            :placeholder="$t('一句话说明职责（可留空）')"
+            :placeholder="$t('common.describe_the_responsibility_in_one_sentence_optional')"
           />
           <p class="save-agent-hint">
             {{ $t('chat.agent.createHint', { count: agentDraft.system_prompt.length }) }}
@@ -2813,23 +2813,23 @@ function continueGeneration() {
         ref="synapseFrame"
         class="synapse-map-frame"
         src="/sessionmap/index.html"
-        :title="$t('会话地图')"
+        :title="$t('chat.session_map')"
       />
     </div>
 
     <!-- 重命名对话框 -->
     <Modal
       :open="!!renameTarget"
-      :title="$t('重命名对话')"
+      :title="$t('chat.rename_conversation')"
       :confirm-loading="renaming"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="confirmRename"
       @cancel="renameTarget = null"
     >
       <Input
         v-model:value="renameDraft"
-        :placeholder="$t('输入新的对话名称')"
+        :placeholder="$t('chat.enter_a_new_conversation_name')"
         :maxlength="120"
         @press-enter="confirmRename"
       />
@@ -2848,12 +2848,12 @@ function continueGeneration() {
         show-icon
         class="share-risk"
         :message="$t('chat.share.visibilityHint')"
-        :description="$t('请勿分享包含敏感或隐私信息的内容。你可以随时取消分享，取消后链接立即失效。')"
+        :description="$t('errors.do_not_share_content_containing_sensitive_or_private_information_you_can_cancel_sharing_at_any_time_the_link_becomes_invalid_immediately')"
       />
 
       <template v-if="isGuest">
         <div class="share-guest-tip">
-          {{ $t('登录后即可生成分享链接。') }}
+          {{ $t('auth.sign_in_to_generate_a_share_link') }}
         </div>
       </template>
 
@@ -2875,17 +2875,17 @@ function continueGeneration() {
             <template #icon>
               <CopyOutlined />
             </template>
-            {{ $t('复制链接') }}
+            {{ $t('common.copy_link') }}
           </Button>
         </div>
         <div class="share-manage">
-          <span class="share-manage-hint">{{ $t('链接已公开，任何获得链接的人均可查看。') }}</span>
+          <span class="share-manage-hint">{{ $t('common.link_is_public_anyone_with_the_link_can_view_it') }}</span>
           <Button
             danger
             :loading="shareRevoking"
             @click="revokeCurrentShare"
           >
-            {{ $t('取消分享') }}
+            {{ $t('common.cancel_sharing') }}
           </Button>
         </div>
       </template>
@@ -2924,7 +2924,7 @@ function continueGeneration() {
             :loading="shareLoading"
             @click="generateShare"
           >
-            {{ $t('生成分享链接') }}
+            {{ $t('common.generate_share_link') }}
           </Button>
         </div>
       </template>

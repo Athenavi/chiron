@@ -81,8 +81,8 @@ const providerLabel = computed(() => {
     turnstile: 'Cloudflare Turnstile',
     recaptcha: 'Google reCAPTCHA',
     hcaptcha: 'hCaptcha',
-    tencent: t('腾讯防水墙'),
-    custom: t('自定义验证'),
+    tencent: t('common.tencent_waterproof_wall'),
+    custom: t('auth.custom_verification'),
   }
   return map[props.provider] || props.provider
 })
@@ -148,7 +148,7 @@ async function renderWidget() {
           sitekey: props.siteKey,
           callback: (token: string) => emit('verified', { token }),
           'expired-callback': () => emit('expired'),
-          'error-callback': () => { loadError.value = t('验证组件加载失败，请刷新重试') },
+          'error-callback': () => { loadError.value = t('auth.verification_component_failed_to_load_refresh_to_retry') },
         })
         break
       }
@@ -196,7 +196,7 @@ async function renderWidget() {
         loadError.value = t('未知的验证码类型：{provider}', { provider: props.provider })
     }
   } catch {
-    loadError.value = t('验证码组件加载失败，请检查网络后刷新重试')
+    loadError.value = t('auth.captcha_component_failed_to_load_check_your_network_and_refresh_to_retry')
   } finally {
     loading.value = false
   }
@@ -238,16 +238,16 @@ defineExpose({ reset })
       <button
         type="button"
         class="tencent-trigger"
-        :title="$t('点击进行人机验证')"
+        :title="$t('auth.click_to_complete_human_verification')"
         :disabled="loading"
         @click="showTencent"
       >
-        {{ loading ? $t('加载中…') : $t('点击进行人机验证') }}
+        {{ loading ? $t('common.loading') : $t('auth.click_to_complete_human_verification') }}
       </button>
     </template>
     <template v-else-if="provider === 'custom'">
       <div class="custom-hint">
-        {{ $t('本站点启用了自定义人机验证（{url}），请按部署方接入说明完成验证后提交。', { url: verifyUrl || $t('自定义端点') }) }}
+        {{ $t('本站点启用了自定义人机验证（{url}），请按部署方接入说明完成验证后提交。', { url: verifyUrl || $t('common.custom_endpoint') }) }}
       </div>
     </template>
     <template v-else>
@@ -260,7 +260,7 @@ defineExpose({ reset })
       v-if="loading && provider !== 'tencent'"
       class="captcha-loading"
     >
-      {{ $t('验证组件加载中…') }}
+      {{ $t('auth.loading_verification_component') }}
     </div>
     <div
       v-if="loadError"

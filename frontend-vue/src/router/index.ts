@@ -125,27 +125,27 @@ const routes = [
         path: 'dashboard',
         name: 'AdminDashboard',
         component: () => import('../views/admin/DashboardView.vue'),
-        meta: { title: t('仪表盘') },
+        meta: { title: t('common.dashboard') },
       },
       {
         path: 'api-keys',
         name: 'AdminApiKeys',
         component: () => import('../views/admin/ApiKeysView.vue'),
-        meta: { title: t('API Key 管理') },
+        meta: { title: t('common.api_key_management') },
       },
       {
         // 运行时监控：原「性能监控 / 队列监控 / 缓存监控」三页合并为一个 Tabs 页面（懒加载）
         path: 'monitor',
         name: 'AdminMonitor',
         component: () => import('../views/admin/MonitorView.vue'),
-        meta: { title: t('运行时监控') },
+        meta: { title: t('admin.runtime_monitoring') },
       },
       {
         // 定时任务：从仪表盘拆出的配置类页面
         path: 'cron',
         name: 'AdminCron',
         component: () => import('../views/admin/CronView.vue'),
-        meta: { title: t('定时任务') },
+        meta: { title: t('workflow.scheduled_tasks') },
       },
       // 旧入口保留重定向，避免书签 / 文档 / 告警链接失效
       {
@@ -164,7 +164,7 @@ const routes = [
         path: 'settings',
         name: 'AdminSettings',
         component: () => import('../views/admin/SettingsView.vue'),
-        meta: { title: t('系统设置') },
+        meta: { title: t('settings.system_settings') },
       },
       // ── 邮件发信（邮箱验证码登录 / 注册邮箱验证 / 密码重置 / 欢迎邮件）──
       // 发信服务器地址与凭据全部在此配置，代码中不含任何厂商默认地址。
@@ -172,7 +172,7 @@ const routes = [
         path: 'mail',
         name: 'AdminMail',
         component: () => import('../views/admin/MailView.vue'),
-        meta: { title: t('邮件配置') },
+        meta: { title: t('mail.email_config') },
       },
       // ── 支付渠道配置（支付宝 / 微信支付 / PayPal）──
       // 凭据加密入库 + 保存后热生效；原「系统设置」里的支付卡片已迁移到此处，
@@ -181,27 +181,27 @@ const routes = [
         path: 'payment',
         name: 'AdminPayment',
         component: () => import('../views/admin/PaymentView.vue'),
-        meta: { title: t('支付配置') },
+        meta: { title: t('billing.payment_config') },
       },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {
         path: 'datastores',
         name: 'AdminDataStores',
         component: () => import('../views/admin/DataStoresView.vue'),
-        meta: { title: t('数据存储') },
+        meta: { title: t('common.data_storage') },
       },
       // ── 租户与域名（原「租户管理」+「域名管理」合并）──
       {
         path: 'tenancy',
         name: 'AdminTenancy',
         component: () => import('../views/admin/TenancyView.vue'),
-        meta: { title: t('租户与域名') },
+        meta: { title: t('admin.tenants_and_domains') },
       },
       {
         path: 'audit',
         name: 'AdminAudit',
         component: () => import('../views/admin/AuditView.vue'),
-        meta: { title: t('操作审计') },
+        meta: { title: t('admin.operation_audit') },
       },
       // ── 访问安全 ──
       {
@@ -209,40 +209,40 @@ const routes = [
         path: 'access',
         name: 'AdminAccess',
         component: () => import('../views/admin/AccessView.vue'),
-        meta: { title: t('权限与组织') },
+        meta: { title: t('errors.permissions_and_organization') },
       },
       {
         // 三方登录与人机验证 + 隐私模式管控合并
         path: 'identity',
         name: 'AdminIdentity',
         component: () => import('../views/admin/IdentityView.vue'),
-        meta: { title: t('认证与防护') },
+        meta: { title: t('common.authentication_and_protection') },
       },
       {
         // 模型策略 + 模型路由合并
         path: 'models',
         name: 'AdminModels',
         component: () => import('../views/admin/ModelGovernanceView.vue'),
-        meta: { title: t('模型管控') },
+        meta: { title: t('agent.model_control') },
       },
       // ── 平台 ──
       {
         path: 'costcenter',
         name: 'AdminCostCenter',
         component: () => import('../views/admin/CostCenterView.vue'),
-        meta: { title: t('成本中心') },
+        meta: { title: t('common.cost_center') },
       },
       {
         path: 'market',
         name: 'AdminMarket',
         component: () => import('../views/admin/MarketView.vue'),
-        meta: { title: t('企业能力市场') },
+        meta: { title: t('common.enterprise_capability_marketplace') },
       },
       {
         path: 'api-docs',
         name: 'AdminApiDocs',
         component: () => import('../views/admin/ApiDocsView.vue'),
-        meta: { title: t('API 文档') },
+        meta: { title: t('knowledge.api_documentation') },
       },
       // ── 旧入口重定向（书签 / 文档 / 告警链接兼容）──
       { path: 'roles', redirect: { path: '/admin/access', query: { tab: 'roles' } } },

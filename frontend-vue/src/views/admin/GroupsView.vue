@@ -31,7 +31,7 @@ async function fetchGroups() {
   try {
     groups.value = await listGroups()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -41,7 +41,7 @@ async function fetchRoles() {
   try {
     allRoles.value = await listRoles()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('角色列表加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load_role_list'))
   }
 }
 
@@ -59,22 +59,22 @@ function openEdit(g: EntGroup) {
 
 async function save() {
   if (!form.value.name.trim()) {
-    message.warning(t('群组名必填'))
+    message.warning(t('errors.group_name_is_required'))
     return
   }
   saving.value = true
   try {
     if (modalMode.value === 'create') {
       await createGroup({ name: form.value.name, description: form.value.description })
-      message.success(t('已创建'))
+      message.success(t('common.created'))
     } else {
       await updateGroup(form.value.id, { name: form.value.name, description: form.value.description })
-      message.success(t('已更新'))
+      message.success(t('common.updated'))
     }
     modalVisible.value = false
     fetchGroups()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -82,18 +82,18 @@ async function save() {
 
 function confirmDelete(g: EntGroup) {
   Modal.confirm({
-    title: t('删除群组'),
+    title: t('admin.delete_group'),
     content: t('确认删除「{name}」？成员关联将解除。', { name: g.name }),
-    okText: t('删除'),
+    okText: t('common.delete'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteGroup(g.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         fetchGroups()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('删除失败'))
+        message.error(e?.response?.data?.error || t('errors.delete_failed'))
       }
     },
   })
@@ -105,7 +105,7 @@ async function openRoleBinding(g: EntGroup) {
     const full = await getGroup(g.id)
     selectedRoleIDs.value = full.role_ids ?? []
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载群组角色失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load_group_roles'))
     return
   }
   rolesDrawerVisible.value = true
@@ -116,11 +116,11 @@ async function saveGroupRoles() {
   rolesSaving.value = true
   try {
     await setGroupRoles(currentGroup.value.id, selectedRoleIDs.value)
-    message.success(t('已更新群组角色'))
+    message.success(t('admin.group_role_updated'))
     rolesDrawerVisible.value = false
     fetchGroups()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     rolesSaving.value = false
   }
@@ -132,11 +132,11 @@ function formatTime(iso: string): string {
 }
 
 const columns: TableColumnsType = [
-  { title: t('群组名'), dataIndex: 'name', key: 'name' },
-  { title: t('描述'), dataIndex: 'description', key: 'description', ellipsis: true },
-  { title: t('成员数'), dataIndex: 'member_count', key: 'member_count', width: 100 },
-  { title: t('创建时间'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
-  { title: t('操作'), key: 'action', width: 220, fixed: 'right' },
+  { title: t('admin.group_name'), dataIndex: 'name', key: 'name' },
+  { title: t('common.description'), dataIndex: 'description', key: 'description', ellipsis: true },
+  { title: t('common.member_count'), dataIndex: 'member_count', key: 'member_count', width: 100 },
+  { title: t('common.created_at'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
+  { title: t('common.action'), key: 'action', width: 220, fixed: 'right' },
 ]
 
 onMounted(() => {
@@ -149,13 +149,13 @@ onMounted(() => {
   <div class="groups-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('群组管理') }}
+        {{ $t('admin.group_management') }}
       </h2>
       <a-button
         type="primary"
         @click="openCreate"
       >
-        {{ $t('新建群组') }}
+        {{ $t('admin.new_group') }}
       </a-button>
     </div>
 
@@ -170,7 +170,7 @@ onMounted(() => {
     >
       <template #emptyText>
         <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -180,14 +180,14 @@ onMounted(() => {
             size="small"
             @click="openRoleBinding(record as EntGroup)"
           >
-            {{ $t('绑定角色') }}
+            {{ $t('admin.bind_role') }}
           </a-button>
           <a-button
             type="link"
             size="small"
             @click="openEdit(record as EntGroup)"
           >
-            {{ $t('编辑') }}
+            {{ $t('common.edit_2') }}
           </a-button>
           <a-button
             type="link"
@@ -195,7 +195,7 @@ onMounted(() => {
             danger
             @click="confirmDelete(record as EntGroup)"
           >
-            {{ $t('删除') }}
+            {{ $t('common.delete') }}
           </a-button>
         </template>
       </template>
@@ -203,23 +203,23 @@ onMounted(() => {
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? $t('新建群组') : $t('编辑群组')"
+      :title="modalMode === 'create' ? $t('admin.new_group') : $t('admin.edit_group')"
       :confirm-loading="saving"
       @ok="save"
     >
       <a-form layout="vertical">
-        <a-form-item :label="$t('群组名（唯一，max 128）')">
+        <a-form-item :label="$t('admin.group_name_unique_max_128')">
           <a-input
             v-model:value="form.name"
             :disabled="modalMode === 'edit'"
-            :placeholder="$t('如 content-team')"
+            :placeholder="$t('common.e_g_content_team')"
           />
         </a-form-item>
-        <a-form-item :label="$t('描述')">
+        <a-form-item :label="$t('common.description')">
           <a-textarea
             v-model:value="form.description"
             :rows="3"
-            :placeholder="$t('群组用途说明')"
+            :placeholder="$t('admin.group_purpose_description')"
           />
         </a-form-item>
       </a-form>
@@ -227,12 +227,12 @@ onMounted(() => {
 
     <a-drawer
       v-model:open="rolesDrawerVisible"
-      :title="currentGroup ? $t('群组角色绑定 - {name}', { name: currentGroup.name }) : $t('群组角色绑定')"
+      :title="currentGroup ? $t('群组角色绑定 - {name}', { name: currentGroup.name }) : $t('admin.group_role_binding')"
       width="480"
       placement="right"
     >
       <p class="drawer-hint">
-        {{ $t('勾选要授予该群组的角色；群组成员将聚合这些角色的权限点。') }}
+        {{ $t('errors.check_the_roles_to_grant_this_group_members_aggregate_the_permission_points_of_these_roles') }}
       </p>
       <a-checkbox-group
         v-model:value="selectedRoleIDs"
@@ -257,14 +257,14 @@ onMounted(() => {
             style="margin-right: 8px"
             @click="rolesDrawerVisible = false"
           >
-            {{ $t('取消') }}
+            {{ $t('common.cancel') }}
           </a-button>
           <a-button
             type="primary"
             :loading="rolesSaving"
             @click="saveGroupRoles"
           >
-            {{ $t('保存') }}
+            {{ $t('common.save') }}
           </a-button>
         </div>
       </template>

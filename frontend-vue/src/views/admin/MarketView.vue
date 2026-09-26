@@ -35,7 +35,7 @@ async function fetchItems() {
       status: filterStatus.value || undefined,
     })
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -48,14 +48,14 @@ function openCreateItem() {
 
 async function saveItem() {
   if (!itemForm.value.name.trim()) {
-    message.warning(t('名称必填'))
+    message.warning(t('errors.name_is_required'))
     return
   }
   let manifest: unknown
   try {
     manifest = JSON.parse(itemForm.value.manifest || '{}')
   } catch {
-    message.error(t('manifest 必须是合法 JSON'))
+    message.error(t('common.manifest_must_be_valid_json'))
     return
   }
   itemSaving.value = true
@@ -66,11 +66,11 @@ async function saveItem() {
       version: itemForm.value.version,
       manifest,
     })
-    message.success(t('已创建（draft）'))
+    message.success(t('common.created_draft'))
     itemModalVisible.value = false
     fetchItems()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('创建失败'))
+    message.error(e?.response?.data?.error || t('errors.creation_failed'))
   } finally {
     itemSaving.value = false
   }
@@ -79,27 +79,27 @@ async function saveItem() {
 async function publishItem(it: MarketItem) {
   try {
     await publishMarketItem(it.id)
-    message.success(t('已发布'))
+    message.success(t('common.published'))
     fetchItems()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('发布失败'))
+    message.error(e?.response?.data?.error || t('errors.publish_failed'))
   }
 }
 
 async function retireItem(it: MarketItem) {
   Modal.confirm({
-    title: t('退役条目'),
+    title: t('common.retire_item'),
     content: t('退役「{name}」？退役为终态，不可回 published。', { name: it.name }),
-    okText: t('退役'),
+    okText: t('common.retire'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await retireMarketItem(it.id)
-        message.success(t('已退役'))
+        message.success(t('common.retired'))
         fetchItems()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('退役失败'))
+        message.error(e?.response?.data?.error || t('errors.failed_to_retire'))
       }
     },
   })
@@ -107,18 +107,18 @@ async function retireItem(it: MarketItem) {
 
 function confirmDeleteItem(it: MarketItem) {
   Modal.confirm({
-    title: t('删除条目'),
+    title: t('common.delete_item'),
     content: t('确认删除「{name}」？', { name: it.name }),
-    okText: t('删除'),
+    okText: t('common.delete'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteMarketItem(it.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         fetchItems()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('删除失败'))
+        message.error(e?.response?.data?.error || t('errors.delete_failed'))
       }
     },
   })
@@ -131,7 +131,7 @@ async function openGrantDrawer(it: MarketItem) {
   try {
     grants.value = await listMarketGrants({ item_id: it.id })
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载授权失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load_authorization'))
     return
   }
   grantDrawerVisible.value = true
@@ -140,7 +140,7 @@ async function openGrantDrawer(it: MarketItem) {
 async function addGrant() {
   if (!currentItem.value) return
   if (!grantForm.tenant_id.trim()) {
-    message.warning(t('租户 ID 必填'))
+    message.warning(t('errors.tenant_id_is_required'))
     return
   }
   grantSaving.value = true
@@ -150,11 +150,11 @@ async function addGrant() {
       tenant_id: grantForm.tenant_id,
       enabled: grantForm.enabled,
     })
-    message.success(t('已授权'))
+    message.success(t('common.authorized'))
     grants.value = await listMarketGrants({ item_id: currentItem.value.id })
     grantForm.tenant_id = ''
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('授权失败'))
+    message.error(e?.response?.data?.error || t('errors.authorization_failed'))
   } finally {
     grantSaving.value = false
   }
@@ -163,10 +163,10 @@ async function addGrant() {
 async function removeGrant(g: MarketGrant) {
   try {
     await deleteMarketGrant(g.item_id, g.tenant_id)
-    message.success(t('已撤销授权'))
+    message.success(t('common.authorization_revoked'))
     grants.value = grants.value.filter(x => !(x.item_id === g.item_id && x.tenant_id === g.tenant_id))
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('撤销失败'))
+    message.error(e?.response?.data?.error || t('errors.undo_failed'))
   }
 }
 
@@ -184,19 +184,19 @@ function formatDateCell(text: any): string {
 }
 
 const columns: TableColumnsType = [
-  { title: t('类型'), dataIndex: 'type', key: 'type', width: 80 },
-  { title: t('名称'), dataIndex: 'name', key: 'name' },
-  { title: t('版本'), dataIndex: 'version', key: 'version', width: 100 },
-  { title: t('状态'), dataIndex: 'status', key: 'status', width: 100 },
-  { title: t('更新时间'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => formatDateCell(text) },
-  { title: t('操作'), key: 'action', width: 280, fixed: 'right' },
+  { title: t('common.type'), dataIndex: 'type', key: 'type', width: 80 },
+  { title: t('common.name'), dataIndex: 'name', key: 'name' },
+  { title: t('common.version'), dataIndex: 'version', key: 'version', width: 100 },
+  { title: t('common.status'), dataIndex: 'status', key: 'status', width: 100 },
+  { title: t('common.updated_at'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => formatDateCell(text) },
+  { title: t('common.action'), key: 'action', width: 280, fixed: 'right' },
 ]
 
 const grantColumns: TableColumnsType = [
-  { title: t('租户'), dataIndex: 'tenant_id', key: 'tenant_id', ellipsis: true },
-  { title: t('启用'), dataIndex: 'enabled', key: 'enabled', width: 80, customRender: ({ text }) => (text ? t('是') : t('否')) },
-  { title: t('安装时间'), dataIndex: 'installed_at', key: 'installed_at', width: 180, customRender: ({ text }) => formatDateCell(text) },
-  { title: t('操作'), key: 'action', width: 80, fixed: 'right' },
+  { title: t('admin.tenant'), dataIndex: 'tenant_id', key: 'tenant_id', ellipsis: true },
+  { title: t('common.enable'), dataIndex: 'enabled', key: 'enabled', width: 80, customRender: ({ text }) => (text ? t('common.yes') : t('common.no')) },
+  { title: t('common.installed_at'), dataIndex: 'installed_at', key: 'installed_at', width: 180, customRender: ({ text }) => formatDateCell(text) },
+  { title: t('common.action'), key: 'action', width: 80, fixed: 'right' },
 ]
 
 onMounted(fetchItems)
@@ -206,12 +206,12 @@ onMounted(fetchItems)
   <div class="market-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('企业能力市场') }}
+        {{ $t('common.enterprise_capability_marketplace') }}
       </h2>
       <a-space class="filter-bar">
         <a-select
           v-model:value="filterType"
-          :placeholder="$t('类型')"
+          :placeholder="$t('common.type')"
           allow-clear
           style="width: 120px"
           @change="fetchItems"
@@ -225,7 +225,7 @@ onMounted(fetchItems)
         </a-select>
         <a-select
           v-model:value="filterStatus"
-          :placeholder="$t('状态')"
+          :placeholder="$t('common.status')"
           allow-clear
           style="width: 140px"
           @change="fetchItems"
@@ -241,13 +241,13 @@ onMounted(fetchItems)
           </a-select-option>
         </a-select>
         <a-button @click="fetchItems">
-          {{ $t('刷新') }}
+          {{ $t('common.refresh') }}
         </a-button>
         <a-button
           type="primary"
           @click="openCreateItem"
         >
-          {{ $t('新建条目') }}
+          {{ $t('common.new_item') }}
         </a-button>
       </a-space>
     </div>
@@ -255,7 +255,7 @@ onMounted(fetchItems)
     <a-alert
       type="info"
       show-icon
-      :message="$t('状态机：draft → published → retired（终态）。租户安装记录须条目为 published 才生效。')"
+      :message="$t('admin.state_machine_draft_published_retired_terminal_tenant_installation_records_only_take_effect_when_the_entry_is_published')"
       style="margin-bottom: 16px"
     />
 
@@ -270,7 +270,7 @@ onMounted(fetchItems)
     >
       <template #emptyText>
         <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -285,7 +285,7 @@ onMounted(fetchItems)
             size="small"
             @click="openGrantDrawer(record as MarketItem)"
           >
-            {{ $t('授权') }}
+            {{ $t('common.authorize') }}
           </a-button>
           <a-button
             v-if="record.status === 'draft'"
@@ -293,7 +293,7 @@ onMounted(fetchItems)
             size="small"
             @click="publishItem(record as MarketItem)"
           >
-            {{ $t('发布') }}
+            {{ $t('common.publish') }}
           </a-button>
           <a-button
             v-if="record.status === 'published'"
@@ -302,7 +302,7 @@ onMounted(fetchItems)
             danger
             @click="retireItem(record as MarketItem)"
           >
-            {{ $t('退役') }}
+            {{ $t('common.retire') }}
           </a-button>
           <a-button
             type="link"
@@ -310,7 +310,7 @@ onMounted(fetchItems)
             danger
             @click="confirmDeleteItem(record as MarketItem)"
           >
-            {{ $t('删除') }}
+            {{ $t('common.delete') }}
           </a-button>
         </template>
       </template>
@@ -318,13 +318,13 @@ onMounted(fetchItems)
 
     <a-modal
       v-model:open="itemModalVisible"
-      :title="$t('新建市场条目')"
+      :title="$t('common.new_marketplace_item')"
       :confirm-loading="itemSaving"
       width="640"
       @ok="saveItem"
     >
       <a-form layout="vertical">
-        <a-form-item :label="$t('类型')">
+        <a-form-item :label="$t('common.type')">
           <a-radio-group v-model:value="itemForm.type">
             <a-radio value="plugin">
               plugin
@@ -334,13 +334,13 @@ onMounted(fetchItems)
             </a-radio>
           </a-radio-group>
         </a-form-item>
-        <a-form-item :label="$t('名称（唯一，max 128）')">
+        <a-form-item :label="$t('common.name_unique_max_128')">
           <a-input
             v-model:value="itemForm.name"
-            :placeholder="$t('如 web-search-skill')"
+            :placeholder="$t('agent.e_g_web_search_skill')"
           />
         </a-form-item>
-        <a-form-item :label="$t('版本')">
+        <a-form-item :label="$t('common.version')">
           <a-input
             v-model:value="itemForm.version"
             placeholder="1.0.0"
@@ -359,24 +359,24 @@ onMounted(fetchItems)
 
     <a-drawer
       v-model:open="grantDrawerVisible"
-      :title="currentItem ? $t('租户授权 - {name}', { name: currentItem.name }) : $t('租户授权')"
+      :title="currentItem ? $t('租户授权 - {name}', { name: currentItem.name }) : $t('admin.tenant_authorization')"
       width="640"
       placement="right"
     >
       <div class="grant-form">
         <a-input
           v-model:value="grantForm.tenant_id"
-          :placeholder="$t('租户 ID（UUID）')"
+          :placeholder="$t('admin.tenant_id_uuid')"
           style="flex: 1"
         />
         <a-switch v-model:checked="grantForm.enabled" />
-        <span class="hint">{{ $t('启用') }}</span>
+        <span class="hint">{{ $t('common.enable') }}</span>
         <a-button
           type="primary"
           :loading="grantSaving"
           @click="addGrant"
         >
-          {{ $t('授权') }}
+          {{ $t('common.authorize') }}
         </a-button>
       </div>
       <a-table
@@ -390,7 +390,7 @@ onMounted(fetchItems)
       >
         <template #emptyText>
           <div class="empty-block">
-            <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+            <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
           </div>
         </template>
         <template #bodyCell="{ column, record }">
@@ -401,7 +401,7 @@ onMounted(fetchItems)
               danger
               @click="removeGrant(record as MarketGrant)"
             >
-              {{ $t('撤销') }}
+              {{ $t('common.undo') }}
             </a-button>
           </template>
         </template>

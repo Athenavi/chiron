@@ -40,18 +40,18 @@ const buildProgress = ref(0)
 
 // 文档列表列定义
 const docColumns = [
-  { title: t('文件名'), dataIndex: 'name', ellipsis: true },
-  { title: t('类型'), dataIndex: 'file_type', width: 80 },
+  { title: t('media.file_name'), dataIndex: 'name', ellipsis: true },
+  { title: t('common.type'), dataIndex: 'file_type', width: 80 },
   {
-    title: t('大小'), dataIndex: 'file_size_bytes', width: 100,
+    title: t('common.size'), dataIndex: 'file_size_bytes', width: 100,
     customRender: ({ text }: { text: number }) => formatSize(text),
   },
   {
-    title: t('状态'), dataIndex: 'status', width: 100,
+    title: t('common.status'), dataIndex: 'status', width: 100,
   },
-  { title: t('分块数'), dataIndex: 'chunk_count', width: 80 },
+  { title: t('knowledge.chunk_count'), dataIndex: 'chunk_count', width: 80 },
   {
-    title: t('上传时间'), dataIndex: 'created_at', width: 160,
+    title: t('common.upload_time'), dataIndex: 'created_at', width: 160,
     customRender: ({ text }: { text: string }) => {
       if (!text) return ''
       const d = new Date(text)
@@ -59,7 +59,7 @@ const docColumns = [
     },
   },
   {
-    title: t('操作'), key: 'action', width: 90,
+    title: t('common.action'), key: 'action', width: 90,
   },
 ]
 
@@ -85,17 +85,17 @@ const filteredDocs = computed(() => {
 async function deleteDoc(id: string) {
   try {
     await api.delete(`/v1/kb/${kbId}/documents`, { params: { doc_id: id } })
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
     await loadDocuments()
     await loadKnowledgeBase()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('删除失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
   }
 }
 
 async function batchDeleteDocs() {
   const ids = [...selectedDocIds.value]
-  if (!ids.length) { message.warning(t('请先选择文档')); return }
+  if (!ids.length) { message.warning(t('knowledge.please_select_a_document_first')); return }
   deletingDocs.value = true
   try {
     for (const id of ids) {
@@ -106,7 +106,7 @@ async function batchDeleteDocs() {
     await loadDocuments()
     await loadKnowledgeBase()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('删除失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
   } finally {
     deletingDocs.value = false
   }
@@ -121,16 +121,16 @@ function openPreview(docId: string) {
 /** 批量重新索引 */
 async function batchReindexDocs() {
   const ids = [...selectedDocIds.value]
-  if (!ids.length) { message.warning(t('请先选择文档')); return }
+  if (!ids.length) { message.warning(t('knowledge.please_select_a_document_first')); return }
   reindexingIds.value = ids
   try {
     // 调用知识库构建接口（会重新索引所有文档）
     // 如果只想重新索引选中的文档，需要后台支持部分重新索引
     // 当前实现：先触发构建（会重新索引知识库所有文档）
     await api.post(`/v1/kb/${kbId}/build`)
-    message.success(t('已触发重新索引，请稍后查看状态'))
+    message.success(t('workflow.re_indexing_triggered_please_check_status_later'))
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('重新索引失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.re_index_failed'))
   } finally {
     reindexingIds.value = []
   }
@@ -156,7 +156,7 @@ async function loadKnowledgeBase() {
     const res = await api.get(`/v1/kb/${kbId}`)
     kb.value = res.data?.data || res.data
   } catch {
-    message.error(t('加载知识库失败'))
+    message.error(t('errors.failed_to_load_knowledge_base'))
     router.push('/knowledge')
   } finally {
     loading.value = false
@@ -187,11 +187,11 @@ async function handleUpload(info: any) {
   try {
     const handle = await createChunkUpload(info.file, { purpose: 'kb_doc', parentId: kbId })
     await handle.done
-    message.success(t('文档上传成功'))
+    message.success(t('knowledge.document_uploaded_successfully'))
     await loadKnowledgeBase()
     await loadDocuments()
   } catch (error: any) {
-    message.error(error.response?.data?.detail || error.response?.data?.error || error.message || t('上传失败'))
+    message.error(error.response?.data?.detail || error.response?.data?.error || error.message || t('errors.upload_failed'))
   }
 }
 
@@ -205,7 +205,7 @@ async function openMediaModal() {
     const res = await api.get('/v1/media')
     mediaFiles.value = res.data?.data?.items || []
   } catch {
-    message.error(t('加载媒体库失败'))
+    message.error(t('errors.failed_to_load_media_library'))
   } finally {
     loadingMedia.value = false
   }
@@ -213,7 +213,7 @@ async function openMediaModal() {
 
 async function importFromMedia() {
   if (selectedMediaIds.value.length === 0) {
-    message.warning(t('请选择要导入的文件'))
+    message.warning(t('media.please_select_the_file_to_import'))
     return
   }
 
@@ -288,7 +288,7 @@ async function buildKnowledgeBase() {
         await loadKnowledgeBase()
         if (kb.value?.status === 'active') {
           buildProgress.value = 100
-          message.success(t('构建完成！'))
+          message.success(t('common.build_complete'))
           await loadDocuments()
           return
         }
@@ -299,7 +299,7 @@ async function buildKnowledgeBase() {
 
     await checkStatus()
   } catch (error: any) {
-    message.error(error.response?.data?.error || t('构建失败'))
+    message.error(error.response?.data?.error || t('errors.build_failed'))
   } finally {
     building.value = false
     buildProgress.value = 0
@@ -308,7 +308,7 @@ async function buildKnowledgeBase() {
 
 async function queryKnowledgeBase() {
   if (!queryText.value.trim()) {
-    message.warning(t('请输入查询内容'))
+    message.warning(t('common.please_enter_search_content'))
     return
   }
 
@@ -319,10 +319,10 @@ async function queryKnowledgeBase() {
     })
     queryResults.value = res.data?.data?.results || []
     if (queryResults.value.length === 0) {
-      message.info(t('未找到相关内容'))
+      message.info(t('errors.no_relevant_content_found'))
     }
   } catch (error: any) {
-    message.error(error.response?.data?.error || t('查询失败'))
+    message.error(error.response?.data?.error || t('errors.query_failed'))
   }
 }
 
@@ -385,27 +385,27 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         <template #icon>
           <ArrowLeftOutlined />
         </template>
-        {{ $t('返回') }}
+        {{ $t('common.back') }}
       </Button>
-      <h1>{{ kb?.name || $t('知识库') }}</h1>
+      <h1>{{ kb?.name || $t('knowledge.knowledge_base') }}</h1>
       <Space>
         <Button
-          :title="$t('在对话中基于该知识库提问')"
+          :title="$t('knowledge.ask_based_on_this_knowledge_base_in_the_conversation')"
           @click="askInChat"
         >
           <template #icon>
             <MessageOutlined />
           </template>
-          {{ $t('就此提问') }}
+          {{ $t('common.ask_about_this') }}
         </Button>
         <Button
-          :title="$t('把该知识库装配为某个 Agent 的默认知识库（持久绑定）')"
+          :title="$t('agent.assemble_this_knowledge_base_as_an_agent_s_default_knowledge_base_persistent_binding')"
           @click="openAttach"
         >
-          {{ $t('装配到 Agent') }}
+          {{ $t('agent.assemble_to_agent') }}
         </Button>
         <Button @click="showQueryModal = true">
-          {{ $t('查询知识库') }}
+          {{ $t('knowledge.query_knowledge_base') }}
         </Button>
         <Button
           v-if="kb?.status !== 'building'"
@@ -417,13 +417,13 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ $t('构建索引') }}
+          {{ $t('common.build_index') }}
         </Button>
         <Button
           v-else
           disabled
         >
-          {{ $t('构建中...') }}
+          {{ $t('common.building') }}
         </Button>
       </Space>
     </div>
@@ -436,33 +436,33 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         <Card>
           <div class="info-grid">
             <div class="info-item">
-              <span class="label">{{ $t('类型') }}</span>
+              <span class="label">{{ $t('common.type') }}</span>
               <Tag :color="kb.type === 'rag' ? 'success' : 'blue'">
                 {{ kb.type.toUpperCase() }}
               </Tag>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('可见性') }}</span>
+              <span class="label">{{ $t('common.visibility') }}</span>
               <Tag :color="kb.visibility === 'public' ? 'warning' : 'default'">
-                {{ kb.visibility === 'public' ? $t('公共') : $t('私人') }}
+                {{ kb.visibility === 'public' ? $t('common.public') : $t('common.private') }}
               </Tag>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('状态') }}</span>
+              <span class="label">{{ $t('common.status') }}</span>
               <Tag :color="kb.status === 'active' ? 'success' : kb.status === 'building' ? 'processing' : 'error'">
                 {{ kb.status }}
               </Tag>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('文档数') }}</span>
+              <span class="label">{{ $t('knowledge.documents') }}</span>
               <span>{{ kb.document_count }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('总大小') }}</span>
+              <span class="label">{{ $t('common.total_size') }}</span>
               <span>{{ formatSize(kb.total_size_bytes) }}</span>
             </div>
             <div class="info-item">
-              <span class="label">{{ $t('已消耗') }}</span>
+              <span class="label">{{ $t('common.consumed') }}</span>
               <span>{{ kb.credits_consumed }} credits</span>
             </div>
           </div>
@@ -477,7 +477,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         <!-- 构建进度 -->
         <Card
           v-if="building"
-          :title="$t('构建进度')"
+          :title="$t('common.build_progress')"
           style="margin-top: 16px"
         >
           <Progress
@@ -488,14 +488,14 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 
         <!-- 文档列表 -->
         <Card
-          :title="$t('文档管理')"
+          :title="$t('knowledge.document_management')"
           style="margin-top: 16px"
         >
           <template #extra>
             <Space>
               <Input
                 v-model:value="docSearch"
-                :placeholder="$t('搜索文档')"
+                :placeholder="$t('knowledge.search_documents')"
                 allow-clear
                 size="small"
                 style="width: 180px"
@@ -534,7 +534,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                 <template #icon>
                   <PictureOutlined />
                 </template>
-                {{ $t('从媒体库选取') }}
+                {{ $t('common.pick_from_media_library') }}
               </Button>
               <Upload
                 :show-upload-list="false"
@@ -548,7 +548,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                   <template #icon>
                     <CloudUploadOutlined />
                   </template>
-                  {{ $t('上传文档') }}
+                  {{ $t('knowledge.upload_document') }}
                 </Button>
               </Upload>
             </Space>
@@ -558,8 +558,8 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             v-if="filteredDocs.length === 0"
             size="list"
             :icon="markRaw(CloudUploadOutlined)"
-            :description="$t('暂无文档')"
-            :hint="$t('上传文档或从媒体库选取，构建索引后即可检索')"
+            :description="$t('knowledge.no_documents_yet')"
+            :hint="$t('knowledge.upload_documents_or_pick_from_the_media_library_they_become_searchable_after_indexing')"
           />
           <Table
             v-else
@@ -585,7 +585,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
               </template>
               <template v-else-if="column.dataIndex === 'status'">
                 <Tag :color="text === 'completed' ? 'success' : text === 'processing' ? 'processing' : text === 'error' ? 'error' : 'default'">
-                  {{ text === 'pending' ? $t('待处理') : text === 'processing' ? $t('处理中') : text === 'completed' ? $t('已完成') : $t('失败') }}
+                  {{ text === 'pending' ? $t('common.pending') : text === 'processing' ? $t('common.processing') : text === 'completed' ? $t('common.completed') : $t('errors.failed') }}
                 </Tag>
               </template>
               <template v-else-if="column.dataIndex === 'created_at'">
@@ -596,7 +596,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                   <Button
                     type="text"
                     size="small"
-                    :title="$t('预览文档')"
+                    :title="$t('knowledge.preview_document')"
                     @click="openPreview(record.id)"
                   >
                     <template #icon>
@@ -604,14 +604,14 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
                     </template>
                   </Button>
                   <Popconfirm
-                    :title="$t('确认删除此文档？')"
+                    :title="$t('knowledge.confirm_deleting_this_document')"
                     @confirm="deleteDoc(record.id)"
                   >
                     <Button
                       type="text"
                       danger
                       size="small"
-                      :title="$t('删除文档')"
+                      :title="$t('knowledge.delete_document')"
                     >
                       <template #icon>
                         <DeleteOutlined />
@@ -629,24 +629,24 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
     <!-- 查询弹窗 -->
     <Modal
       v-model:visible="showQueryModal"
-      :title="$t('查询知识库')"
+      :title="$t('knowledge.query_knowledge_base')"
       :footer="null"
       :style="{ maxWidth: '600px' }"
     >
       <Input.TextArea
         v-model:value="queryText"
-        :placeholder="$t('输入查询内容...')"
+        :placeholder="$t('common.enter_search_content')"
         :rows="3"
       />
       <div class="modal-footer">
         <Button @click="showQueryModal = false">
-          {{ $t('关闭') }}
+          {{ $t('common.close') }}
         </Button>
         <Button
           type="primary"
           @click="queryKnowledgeBase"
         >
-          {{ $t('查询') }}
+          {{ $t('common.query') }}
         </Button>
       </div>
 
@@ -655,7 +655,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         v-if="queryResults.length > 0"
         class="query-results"
       >
-        <h3>{{ $t('查询结果') }}</h3>
+        <h3>{{ $t('common.query_result') }}</h3>
         <div
           v-for="(result, index) in queryResults"
           :key="index"
@@ -688,7 +688,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
     <!-- 从媒体库选取弹窗 -->
     <Modal
       v-model:visible="showMediaModal"
-      :title="$t('从媒体库选取')"
+      :title="$t('common.pick_from_media_library')"
       :footer="null"
       :style="{ maxWidth: '700px' }"
     >
@@ -696,7 +696,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
       <div class="media-search-bar">
         <Input
           v-model:value="mediaSearchQuery"
-          :placeholder="$t('搜索文件...')"
+          :placeholder="$t('media.search_files_2')"
           allow-clear
         >
           <template #prefix>
@@ -709,13 +709,13 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             size="small"
             @click="selectAllMedia"
           >
-            {{ $t('全选') }}
+            {{ $t('common.select_all') }}
           </Button>
           <Button
             size="small"
             @click="deselectAllMedia"
           >
-            {{ $t('取消全选') }}
+            {{ $t('common.clear_selection') }}
           </Button>
         </div>
       </div>
@@ -725,7 +725,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           v-if="filteredMediaFiles.length === 0 && !loadingMedia"
           class="media-empty"
         >
-          <Empty :description="mediaSearchQuery ? $t('没有匹配的文件') : $t('媒体库暂无文件')" />
+          <Empty :description="mediaSearchQuery ? $t('media.no_matching_files') : $t('media.media_library_is_empty')" />
         </div>
         <div
           v-else
@@ -755,7 +755,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 
       <div class="modal-footer">
         <Button @click="showMediaModal = false">
-          {{ $t('取消') }}
+          {{ $t('common.cancel') }}
         </Button>
         <Button
           type="primary"
@@ -780,7 +780,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
       v-model:open="attachOpen"
       kind="kb"
       :value="kbId"
-      :label="kb?.name || $t('知识库')"
+      :label="kb?.name || $t('knowledge.knowledge_base')"
     />
   </div>
 </template>

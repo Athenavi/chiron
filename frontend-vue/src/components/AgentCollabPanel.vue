@@ -10,14 +10,14 @@
         >
           <path d="M10 2a3 3 0 00-3 3v3a3 3 0 006 0V5a3 3 0 00-3-3zM6 9a3 3 0 00-3 3v1a3 3 0 006 0v-1a3 3 0 00-3-3zM17 12a3 3 0 01-3 3v1a3 3 0 01-6 0v-1a3 3 0 01-3-3 4 4 0 018 0z" />
         </svg>
-        {{ $t('Agent 协同执行') }}
+        {{ $t('agent.agent_collaborative_execution') }}
       </div>
       <div class="header-actions">
         <button
           class="btn-collapse"
           @click="collapsePanel"
         >
-          {{ $t('收起') }}
+          {{ $t('common.collapse') }}
         </button>
       </div>
     </div>
@@ -98,12 +98,12 @@
       <!-- 执行日志 -->
       <div class="execution-log">
         <div class="log-header">
-          <span>{{ $t('执行日志') }}</span>
+          <span>{{ $t('common.execution_log') }}</span>
           <button
             class="btn-clear"
             @click="clearLog"
           >
-            {{ $t('清空') }}
+            {{ $t('common.empty') }}
           </button>
         </div>
         <div
@@ -170,10 +170,10 @@ function collapsePanel() {
 
 function statusText(status: string): string {
   const map: Record<string, string> = {
-    pending: t('等待中'),
-    running: t('执行中'),
-    completed: t('已完成'),
-    error: t('失败'),
+    pending: t('common.waiting'),
+    running: t('common.executing'),
+    completed: t('common.completed'),
+    error: t('errors.failed'),
   }
   return map[status] || status
 }

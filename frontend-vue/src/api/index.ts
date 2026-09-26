@@ -201,7 +201,7 @@ api.interceptors.response.use(
       // Cookie 过期/失效：清本地 user 态，跳转登录（后端 cookie 由 /v1/auth/logout 清除）
       localStorage.removeItem('user')
       window.dispatchEvent(new CustomEvent('api:error', {
-        detail: { message: t('登录已过期，请重新登录') }
+        detail: { message: t('auth.session_expired_please_sign_in_again') }
       }))
       // 短延迟让 toast 显示后再跳转
       setTimeout(() => { window.location.href = '/login' }, 500)
@@ -215,7 +215,7 @@ api.interceptors.response.use(
     } else if (error.code === 'ECONNABORTED' || !error.response) {
       // 网络超时或无法连接
       window.dispatchEvent(new CustomEvent('api:error', {
-        detail: { message: t('网络连接失败，请检查网络后重试') }
+        detail: { message: t('errors.network_connection_failed_please_check_your_network_and_retry') }
       }))
     }
     return Promise.reject(error)

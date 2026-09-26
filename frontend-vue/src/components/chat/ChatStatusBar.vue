@@ -42,7 +42,7 @@ const compactionText = computed(() => {
 
 <template>
   <div class="chat-status">
-    <span class="cs-item cs-model">{{ model || $t('默认模型') }}</span>
+    <span class="cs-item cs-model">{{ model || $t('agent.default_model') }}</span>
     <template v-if="hasUsage">
       <span
         class="cs-sep"
@@ -68,11 +68,11 @@ const compactionText = computed(() => {
     <button
       type="button"
       class="cs-item cs-trigger"
-      :title="$t('子 Agent 运行（悬浮窗）')"
+      :title="$t('agent.sub_agent_run_popover')"
       @click="emit('toggle-subagents')"
     >
       <ApartmentOutlined />
-      <span>{{ $t('子 Agent') }}</span>
+      <span>{{ $t('agent.sub_agent') }}</span>
       <span
         v-if="subagentActiveCount"
         class="cs-badge"
@@ -81,11 +81,11 @@ const compactionText = computed(() => {
     <button
       type="button"
       class="cs-item cs-trigger"
-      :title="$t('会话统计：tokens / 费用 / 缓存命中 / 吞吐（悬浮窗）')"
+      :title="$t('billing.session_stats_tokens_cost_cache_hits_throughput_popover')"
       @click="emit('toggle-stats')"
     >
       <BarChartOutlined />
-      <span>{{ $t('统计') }}</span>
+      <span>{{ $t('common.statistics') }}</span>
     </button>
     <span
       class="cs-item cs-conn"

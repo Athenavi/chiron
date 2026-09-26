@@ -39,16 +39,16 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
       class="viewer-mask"
       role="dialog"
       aria-modal="true"
-      :aria-label="$t('图片查看器')"
+      :aria-label="$t('media.image_viewer')"
       @click.self="closeImageViewer"
     >
       <div class="viewer-bar">
-        <span class="viewer-name">{{ current.alt || $t('图片') }}</span>
+        <span class="viewer-name">{{ current.alt || $t('media.image') }}</span>
         <span class="viewer-percent">{{ percent }}%</span>
         <button
           class="viewer-btn"
           type="button"
-          :title="$t('缩小（-）')"
+          :title="$t('common.zoom_out')"
           @click="zoom(-STEP)"
         >
           <ZoomOutOutlined />
@@ -56,7 +56,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
         <button
           class="viewer-btn"
           type="button"
-          :title="$t('放大（+）')"
+          :title="$t('common.zoom_in')"
           @click="zoom(STEP)"
         >
           <ZoomInOutlined />
@@ -64,7 +64,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
         <button
           class="viewer-btn"
           type="button"
-          :title="$t('原始大小（0）')"
+          :title="$t('common.original_size_0')"
           @click="scale = 1"
         >
           1:1
@@ -74,7 +74,7 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
           :href="current.src"
           target="_blank"
           rel="noopener noreferrer"
-          :title="$t('在新标签打开')"
+          :title="$t('common.open_in_new_tab')"
         >
           <ExportOutlined />
         </a>
@@ -82,14 +82,14 @@ onBeforeUnmount(() => { window.removeEventListener('keydown', onKeydown) })
           class="viewer-btn"
           :href="current.src"
           :download="current.alt || 'image'"
-          :title="$t('下载')"
+          :title="$t('common.download')"
         >
           <DownloadOutlined />
         </a>
         <button
           class="viewer-btn"
           type="button"
-          :title="$t('关闭（Esc）')"
+          :title="$t('common.close_esc')"
           @click="closeImageViewer"
         >
           <CloseOutlined />

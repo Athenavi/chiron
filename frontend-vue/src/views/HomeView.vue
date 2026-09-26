@@ -23,12 +23,12 @@ interface Feature {
 
 // 图标组件需 markRaw：避免被 Vue 响应式代理（图标是静态组件，代理会破坏渲染）
 const features: Feature[] = [
-  { title: t('对话'), en: 'CHAT', desc: t('常规 / 极简 / PTC / 创意四种模式，工具调用全程可视化'), path: '/chat', icon: markRaw(MessageOutlined) },
-  { title: 'Agent', en: 'AGENTS', desc: t('多智能体协同，任务分发与结果追踪'), path: '/agents', icon: markRaw(UserOutlined) },
-  { title: t('工作流'), en: 'WORKFLOW', desc: t('可视化编排多步任务，节点自由连线'), path: '/workflow', icon: markRaw(ApartmentOutlined) },
-  { title: t('技能'), en: 'SKILLS', desc: t('插件化技能市场，按需装载与卸载'), path: '/skills', icon: markRaw(BlockOutlined) },
-  { title: t('知识库'), en: 'KNOWLEDGE', desc: t('文档入库、向量检索，让 Agent 有据可依'), path: '/knowledge', icon: markRaw(BookOutlined) },
-  { title: t('插件'), en: 'PLUGINS', desc: t('MCP 服务配置，扩展 Agent 的能力边界'), path: '/plugins', icon: markRaw(ThunderboltOutlined) },
+  { title: t('chat.chat'), en: 'CHAT', desc: t('agent.normal_minimal_ptc_creative_modes_tool_calls_are_fully_visualized'), path: '/chat', icon: markRaw(MessageOutlined) },
+  { title: 'Agent', en: 'AGENTS', desc: t('workflow.multi_agent_collaboration_task_dispatch_and_result_tracking'), path: '/agents', icon: markRaw(UserOutlined) },
+  { title: t('workflow.workflow'), en: 'WORKFLOW', desc: t('workflow.visually_orchestrate_multi_step_tasks_with_freely_connected_nodes'), path: '/workflow', icon: markRaw(ApartmentOutlined) },
+  { title: t('agent.skill'), en: 'SKILLS', desc: t('agent.pluggable_skill_marketplace_load_and_unload_on_demand'), path: '/skills', icon: markRaw(BlockOutlined) },
+  { title: t('knowledge.knowledge_base'), en: 'KNOWLEDGE', desc: t('agent.document_ingestion_and_vector_retrieval_give_agents_a_solid_basis'), path: '/knowledge', icon: markRaw(BookOutlined) },
+  { title: t('common.plugin'), en: 'PLUGINS', desc: t('agent.mcp_service_config_extends_the_agent_s_capability_boundary'), path: '/plugins', icon: markRaw(ThunderboltOutlined) },
 ]
 
 const QUICKSTART_CMD = 'docker compose up -d postgres redis\ncp .env.example .env\npython run.py start'
@@ -143,16 +143,16 @@ function scrollToTop() {
       <HomeScene3D />
       <div class="hero-content">
         <span class="hero-badge">
-          <span class="hero-badge-dot" />{{ $t('chiron · 自托管 AI Agent 控制台') }}
+          <span class="hero-badge-dot" />{{ $t('agent.chiron_self_hosted_ai_agent_console') }}
         </span>
         <h1 class="hero-title">
-          {{ $t('让 Agent') }}
-          <span class="hero-title-accent">{{ $t('持续工作') }}</span>
-          <br>{{ $t('在真实场景中') }}
+          {{ $t('agent.let_the_agent') }}
+          <span class="hero-title-accent">{{ $t('common.continuous_work') }}</span>
+          <br>{{ $t('common.in_real_scenarios') }}
         </h1>
         <p class="hero-sub">
-          {{ $t('对话、Agent、工作流、技能、知识库与插件一体化，全栈能力自由组合；') }}
-          <br class="hero-br">{{ $t('轨迹可循、过程可见，你的本地智能工作台。') }}
+          {{ $t('workflow.chat_agent_workflow_skill_knowledge_base_and_plugins_unified_full_stack_capabilities_combine_freely') }}
+          <br class="hero-br">{{ $t('common.traceable_visible_process_your_local_intelligent_workspace') }}
         </p>
         <div class="hero-actions">
           <Button
@@ -163,7 +163,7 @@ function scrollToTop() {
             @mouseleave="onCtaLeave"
             @click="router.push('/chat')"
           >
-            {{ $t('开始对话') }}
+            {{ $t('chat.start_conversation') }}
             <ArrowRightOutlined />
           </Button>
           <Button
@@ -173,7 +173,7 @@ function scrollToTop() {
             @mouseleave="onCtaLeave"
             @click="scrollToFeatures"
           >
-            {{ $t('浏览功能') }}
+            {{ $t('common.browse_features') }}
           </Button>
         </div>
       </div>
@@ -187,10 +187,10 @@ function scrollToTop() {
       class="features"
     >
       <h2 class="section-title">
-        {{ $t('六大能力，一个控制台') }}
+        {{ $t('common.six_capabilities_one_console') }}
       </h2>
       <p class="section-sub">
-        {{ $t('每一块能力都可以独立使用，也可以自由组合') }}
+        {{ $t('common.each_capability_can_be_used_independently_or_freely_combined') }}
       </p>
       <div class="feature-grid">
         <div
@@ -219,7 +219,7 @@ function scrollToTop() {
           <div class="feature-desc">
             {{ f.desc }}
           </div>
-          <span class="feature-go">{{ $t('进入') }} <ArrowRightOutlined /></span>
+          <span class="feature-go">{{ $t('common.enter') }} <ArrowRightOutlined /></span>
         </div>
       </div>
     </section>
@@ -227,39 +227,39 @@ function scrollToTop() {
     <!-- 产品展示：真实工作台窗口预览（玻璃拟态） -->
     <section class="showcase">
       <h2 class="section-title">
-        {{ $t('真实工作台，一次看透') }}
+        {{ $t('common.a_real_workbench_seen_through_at_a_glance') }}
       </h2>
       <p class="section-sub">
-        {{ $t('对话、轨迹、工具调用，过程全程可见') }}
+        {{ $t('agent.chat_trace_and_tool_calls_the_whole_process_is_visible') }}
       </p>
       <div class="showcase-grid">
         <!-- 窗口 1：对话界面 -->
         <div class="window-card">
           <div class="window-chrome">
             <span class="win-dot red" /><span class="win-dot yellow" /><span class="win-dot green" />
-            <span class="win-title">{{ $t('chiron · 对话') }}</span>
+            <span class="win-title">{{ $t('chat.chiron_conversation') }}</span>
           </div>
           <div class="window-body chat-preview">
             <div class="pv-msg assistant">
               <div class="pv-bubble">
-                {{ $t('我来帮你分析这份数据，先把需求拆解成几步…') }}
+                {{ $t('workflow.i_will_help_you_analyze_this_data_first_let_me_break_the_requirements_into_a_few_steps') }}
               </div>
             </div>
             <div class="pv-msg user">
               <div class="pv-bubble user">
-                {{ $t('请用 Python 生成季度趋势图') }}
+                {{ $t('common.please_use_python_to_generate_a_quarterly_trend_chart') }}
               </div>
             </div>
             <div class="pv-msg assistant">
               <div class="pv-tool">
-                <span class="pv-tool-dot" />{{ $t('python_exec · 运行中') }}
+                <span class="pv-tool-dot" />{{ $t('common.python_exec_running') }}
               </div>
               <div class="pv-bubble">
-                {{ $t('已生成趋势图：Q2 环比 +23%。下面是代码与图表…') }}
+                {{ $t('common.trend_chart_generated_q2_up_23_qoq_code_and_chart_below') }}
               </div>
             </div>
             <div class="pv-input">
-              <span>{{ $t('发送消息…') }}</span>
+              <span>{{ $t('chat.send_message') }}</span>
             </div>
           </div>
         </div>
@@ -267,11 +267,11 @@ function scrollToTop() {
         <div class="window-card">
           <div class="window-chrome">
             <span class="win-dot red" /><span class="win-dot yellow" /><span class="win-dot green" />
-            <span class="win-title">{{ $t('chiron · 历史导航') }}</span>
+            <span class="win-title">{{ $t('common.chiron_history_navigation') }}</span>
           </div>
           <div class="window-body panel-preview">
             <div class="pv-panel-head">
-              <span class="pv-panel-title">{{ $t('会话：数据分析') }}</span><span class="pv-panel-caret">▶</span>
+              <span class="pv-panel-title">{{ $t('chat.session_data_analysis') }}</span><span class="pv-panel-caret">▶</span>
             </div>
             <div class="pv-timeline">
               <div class="pv-timeline-track">
@@ -290,16 +290,16 @@ function scrollToTop() {
               </div>
             </div>
             <div class="pv-row">
-              <span class="pv-dot" />{{ $t('分析这份数据的趋势') }}
+              <span class="pv-dot" />{{ $t('common.analyze_the_trend_in_this_data') }}
             </div>
             <div class="pv-row active">
-              <span class="pv-dot" />{{ $t('生成季度趋势图') }}
+              <span class="pv-dot" />{{ $t('common.generate_quarterly_trend_chart') }}
             </div>
             <div class="pv-row">
-              <span class="pv-dot" />{{ $t('对比去年同期表现') }}
+              <span class="pv-dot" />{{ $t('common.compare_with_same_period_last_year') }}
             </div>
             <div class="pv-row">
-              <span class="pv-dot" />{{ $t('汇总为周报') }}
+              <span class="pv-dot" />{{ $t('common.summarize_as_weekly_report') }}
             </div>
           </div>
         </div>
@@ -309,10 +309,10 @@ function scrollToTop() {
     <!-- 快速开始：终端代码块 -->
     <section class="quickstart">
       <h2 class="section-title">
-        {{ $t('快速开始') }}
+        {{ $t('common.quick_start') }}
       </h2>
       <p class="section-sub">
-        {{ $t('一条命令启动依赖，三行进入工作台') }}
+        {{ $t('common.one_command_to_start_dependencies_three_lines_to_enter_the_workspace') }}
       </p>
       <div class="terminal-card">
         <div class="window-chrome">
@@ -323,7 +323,7 @@ function scrollToTop() {
             class="term-copy"
             @click="copyQuickstart"
           >
-            {{ copied ? $t('已复制') : $t('复制') }}
+            {{ copied ? $t('common.copied_2') : $t('common.copy') }}
           </button>
         </div>
         <div class="terminal-body">
@@ -337,7 +337,7 @@ function scrollToTop() {
             <span class="term-prompt">$</span> python run.py start
           </div>
           <div class="term-line term-out">
-            {{ $t('→ chiron 已启动：http://localhost:5173') }}
+            {{ $t('common.chiron_started_http_localhost_5173') }}
           </div>
         </div>
       </div>
@@ -347,7 +347,7 @@ function scrollToTop() {
       <span class="home-footer-brand">
         <span class="home-footer-logo">MC</span>chiron
       </span>
-      <span class="home-footer-note">{{ $t('自托管 · 开源 · 你的数据留在你的机器中') }}</span>
+      <span class="home-footer-note">{{ $t('common.self_hosted_open_source_your_data_stays_on_your_machine') }}</span>
     </footer>
 
     <!-- 滚动到顶部按钮（长页面辅助导航） -->
@@ -356,8 +356,8 @@ function scrollToTop() {
         v-if="showTop"
         type="button"
         class="scroll-top"
-        :title="$t('回到顶部')"
-        :aria-label="$t('回到顶部')"
+        :title="$t('common.back_to_top')"
+        :aria-label="$t('common.back_to_top')"
         @click="scrollToTop"
       >
         <ArrowUpOutlined />

@@ -166,10 +166,10 @@ export async function getOrganizeStatus(): Promise<OrganizeStatus> {
 }
 
 export const MEMORY_SLOTS: { slot: MemorySlot; label: string }[] = [
-  { slot: 'identity', label: t('身份') },
-  { slot: 'preference', label: t('偏好') },
-  { slot: 'decision', label: t('关键决策') },
-  { slot: 'fact', label: t('长期事实') },
+  { slot: 'identity', label: t('admin.identity') },
+  { slot: 'preference', label: t('settings.preferences') },
+  { slot: 'decision', label: t('common.key_decisions') },
+  { slot: 'fact', label: t('common.long_term_facts') },
 ]
 
 // ── 冲突裁决 API ──

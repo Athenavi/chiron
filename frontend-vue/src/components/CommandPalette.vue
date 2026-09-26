@@ -444,7 +444,7 @@ onUnmounted(() => {
           class="palette-panel"
           role="dialog"
           aria-modal="true"
-          :aria-label="$t('全局命令面板')"
+          :aria-label="$t('common.global_command_palette')"
           @keydown="onPaletteKeydown"
         >
           <!-- 输入行 -->
@@ -455,7 +455,7 @@ onUnmounted(() => {
               v-model="query"
               type="text"
               class="palette-input"
-              :placeholder="$t('搜索消息、媒体，或输入命令...')"
+              :placeholder="$t('chat.search_messages_media_or_enter_a_command')"
               autocomplete="off"
               spellcheck="false"
             >
@@ -511,7 +511,7 @@ onUnmounted(() => {
               class="palette-status"
             >
               <span class="palette-status-spinner" />
-              <span>{{ $t('正在搜索...') }}</span>
+              <span>{{ $t('common.searching') }}</span>
             </div>
 
             <!-- 搜索失败 -->
@@ -519,7 +519,7 @@ onUnmounted(() => {
               v-else-if="searchError"
               class="palette-status"
             >
-              {{ $t('搜索失败，请稍后重试') }}
+              {{ $t('errors.search_failed_please_retry_later') }}
             </div>
 
             <!-- 最近活动加载中（空输入、活动未就绪） -->
@@ -528,24 +528,24 @@ onUnmounted(() => {
               class="palette-status"
             >
               <span class="palette-status-spinner" />
-              <span>{{ $t('正在加载最近活动...') }}</span>
+              <span>{{ $t('common.loading_recent_activity') }}</span>
             </div>
 
             <!-- 无结果 -->
             <EmptyState
               v-else-if="query.trim().length >= 2"
               size="list"
-              :description="$t('未找到匹配结果')"
-              :hint="$t('试试更短的关键词，或直接用 Enter 用本地命令执行')"
+              :description="$t('errors.no_matching_results_found')"
+              :hint="$t('common.try_a_shorter_keyword_or_press_enter_to_run_a_local_command')"
             />
           </div>
 
           <!-- 底部快捷键提示 -->
           <div class="palette-footer">
-            <span><kbd>↑</kbd><kbd>↓</kbd> {{ $t('选择') }}</span>
-            <span><kbd>Enter</kbd> {{ $t('执行') }}</span>
-            <span><kbd>Esc</kbd> {{ $t('关闭') }}</span>
-            <span class="palette-footer-tip">{{ $t('Ctrl/Cmd + K 随时唤起') }}</span>
+            <span><kbd>↑</kbd><kbd>↓</kbd> {{ $t('common.select') }}</span>
+            <span><kbd>Enter</kbd> {{ $t('common.execute') }}</span>
+            <span><kbd>Esc</kbd> {{ $t('common.close') }}</span>
+            <span class="palette-footer-tip">{{ $t('common.ctrl_cmd_k_to_summon_anytime') }}</span>
           </div>
         </div>
       </div>

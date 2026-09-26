@@ -35,7 +35,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
       <div class="theme-switcher">
         <div class="ts-section">
           <div class="ts-section-title">
-            {{ $t('主题风格') }}
+            {{ $t('settings.theme_style') }}
           </div>
           <div class="ts-grid">
             <button
@@ -69,7 +69,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 
         <div class="ts-section">
           <div class="ts-section-title">
-            {{ $t('外观模式') }}
+            {{ $t('settings.appearance_mode') }}
           </div>
           <div class="ts-modes">
             <button
@@ -78,7 +78,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
               :class="{ active: !isSystem && currentMode === 'light' }"
               @click="setMode('light')"
             >
-              <HighlightOutlined /> {{ $t('浅色') }}
+              <HighlightOutlined /> {{ $t('common.light') }}
             </button>
             <button
               type="button"
@@ -86,7 +86,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
               :class="{ active: !isSystem && currentMode === 'dark' }"
               @click="setMode('dark')"
             >
-              <HighlightFilled /> {{ $t('深色') }}
+              <HighlightFilled /> {{ $t('common.dark') }}
             </button>
             <button
               type="button"
@@ -94,7 +94,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
               :class="{ active: isSystem }"
               @click="setMode('system')"
             >
-              <GlobalOutlined /> {{ $t('跟随系统') }}
+              <GlobalOutlined /> {{ $t('common.follow_system') }}
             </button>
           </div>
         </div>
@@ -104,8 +104,8 @@ const isSystem = computed(() => themeStore.preference === 'system')
     <button
       type="button"
       class="theme-switcher-btn"
-      :title="$t('主题设置')"
-      :aria-label="$t('主题设置')"
+      :title="$t('settings.theme_settings')"
+      :aria-label="$t('settings.theme_settings')"
     >
       <BulbFilled v-if="themeStore.isDark" />
       <BulbOutlined v-else />

@@ -70,19 +70,19 @@ const speedRows = computed(() => {
       v-if="!sessionId"
       class="stats-empty"
     >
-      {{ $t('先选择一个会话，或发一条消息后查看统计') }}
+      {{ $t('chat.select_a_session_first_or_send_a_message_to_view_stats') }}
     </div>
     <div
       v-else-if="loading"
       class="stats-empty"
     >
-      {{ $t('加载中…') }}
+      {{ $t('common.loading') }}
     </div>
     <div
       v-else-if="failed"
       class="stats-empty"
     >
-      {{ $t('统计不可用（引擎或数据库暂时不可达）') }}
+      {{ $t('admin.statistics_unavailable_engine_or_database_temporarily_unreachable') }}
     </div>
     <template v-else>
       <dl class="stats-grid">
@@ -96,7 +96,7 @@ const speedRows = computed(() => {
       </dl>
       <template v-if="speedRows.length">
         <div class="stats-sub">
-          {{ $t('吞吐') }}
+          {{ $t('common.throughput') }}
         </div>
         <dl class="stats-grid">
           <template
@@ -112,7 +112,7 @@ const speedRows = computed(() => {
         v-if="metrics?.source"
         class="stats-source"
       >
-        {{ $t('数据来源') }}: {{ metrics.source === 'redis' ? $t('实时层（Redis）') : $t('权威层（数据库）') }}
+        {{ $t('common.data_source') }}: {{ metrics.source === 'redis' ? $t('admin.realtime_layer_redis') : $t('admin.authoritative_layer_database') }}
       </div>
     </template>
   </div>

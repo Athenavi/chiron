@@ -26,21 +26,21 @@ const form = ref({
 })
 
 const rules: Record<string, Rule[]> = {
-  name: [{ required: true, message: t('请输入姓名'), trigger: 'blur' }],
+  name: [{ required: true, message: t('common.please_enter_your_name'), trigger: 'blur' }],
   email: [
-    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
-    { type: 'email', message: t('邮箱格式不正确'), trigger: 'blur' },
+    { required: true, message: t('mail.please_enter_email'), trigger: 'blur' },
+    { type: 'email', message: t('errors.invalid_email_format'), trigger: 'blur' },
   ],
   password: [
-    { required: true, message: t('请输入密码'), trigger: 'blur' },
-    { min: 8, message: t('密码至少 8 位'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_password'), trigger: 'blur' },
+    { min: 8, message: t('auth.password_must_be_at_least_8_characters'), trigger: 'blur' },
   ],
   confirmPassword: [
-    { required: true, message: t('请确认密码'), trigger: 'blur' },
+    { required: true, message: t('auth.please_confirm_the_password'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         if (value !== form.value.password) {
-          return Promise.reject(t('两次密码输入不一致'))
+          return Promise.reject(t('auth.the_two_password_entries_do_not_match'))
         }
         return Promise.resolve()
       },
@@ -70,19 +70,19 @@ const emailCodeError = ref('')
 const { remaining: emailRemaining, start: startEmailCountdown } = useSmsCountdown(60)
 
 const emailCodeRules: Rule[] = [
-  { required: true, message: t('请输入邮箱验证码'), trigger: 'blur' },
-  { len: 6, message: t('验证码为 6 位数字'), trigger: 'blur' },
+  { required: true, message: t('auth.please_enter_email_verification_code'), trigger: 'blur' },
+  { len: 6, message: t('auth.verification_code_is_a_6_digit_number'), trigger: 'blur' },
 ]
 
 async function handleSendEmailCode() {
   emailCodeError.value = ''
   const email = form.value.email.trim()
   if (!isValidEmail(email)) {
-    emailCodeError.value = t('请先填写正确的邮箱')
+    emailCodeError.value = t('mail.please_enter_a_valid_email_first')
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    emailCodeError.value = t('请先完成人机验证')
+    emailCodeError.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   emailSending.value = true
@@ -103,19 +103,19 @@ async function handleSendEmailCode() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      emailCodeError.value = t('操作过于频繁，请完成人机验证后重试')
+      emailCodeError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      emailCodeError.value = t('人机验证未通过，请重新验证')
+      emailCodeError.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 429) {
-      emailCodeError.value = t('发送过于频繁，请稍后再试')
+      emailCodeError.value = t('common.sending_too_frequently_please_try_again_later')
       return
     }
     emailCodeError.value = apiErr || t('auth.verificationCodeSendFailed')
@@ -153,11 +153,11 @@ async function handleRegister() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('请先完成人机验证')
+    error.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   if (emailVerifyRequired.value && !form.value.emailCode.trim()) {
-    error.value = t('请先获取并填写邮箱验证码')
+    error.value = t('auth.please_get_and_fill_in_the_email_verification_code_first')
     return
   }
   try {
@@ -174,13 +174,13 @@ async function handleRegister() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = t('操作过于频繁，请完成人机验证后重试')
+      error.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = t('人机验证未通过，请重新验证')
+      error.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
@@ -202,10 +202,10 @@ async function handleRegister() {
           MC
         </div>
         <div class="register-title">
-          {{ $t('创建账号') }}
+          {{ $t('auth.create_account') }}
         </div>
         <div class="register-subtitle">
-          {{ $t('加入 Chiron AI Agent 平台') }}
+          {{ $t('agent.join_chiron_ai_agent_platform') }}
         </div>
       </div>
       <Card
@@ -222,7 +222,7 @@ async function handleRegister() {
 
         <Alert
           type="info"
-          :message="$t('若系统尚无任何账号，本次注册将成为系统管理员（owner）')"
+          :message="$t('auth.if_the_system_has_no_accounts_yet_this_registration_will_become_the_system_admin_owner')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -235,14 +235,14 @@ async function handleRegister() {
           @finish="handleRegister"
         >
           <FormItem
-            :label="$t('姓名')"
+            :label="$t('common.name_3')"
             name="name"
           >
             <Input
               v-model:value="form.name"
-              :placeholder="$t('请输入姓名')"
+              :placeholder="$t('common.please_enter_your_name')"
               size="large"
-              :aria-label="$t('姓名')"
+              :aria-label="$t('common.name_3')"
               autocomplete="name"
             >
               <template #prefix>
@@ -257,7 +257,7 @@ async function handleRegister() {
           >
             <Input
               v-model:value="form.email"
-              :placeholder="$t('请输入邮箱')"
+              :placeholder="$t('mail.please_enter_email')"
               size="large"
               :aria-label="$t('auth.email')"
               autocomplete="email"
@@ -270,7 +270,7 @@ async function handleRegister() {
 
           <FormItem
             v-if="emailVerifyRequired"
-            :label="$t('邮箱验证码')"
+            :label="$t('auth.email_verification_code')"
             name="emailCode"
             :rules="emailCodeRules"
             :help="emailCodeError"
@@ -278,10 +278,10 @@ async function handleRegister() {
           >
             <Input
               v-model:value="form.emailCode"
-              :placeholder="$t('请输入邮箱收到的验证码')"
+              :placeholder="$t('auth.please_enter_the_verification_code_received_by_email')"
               size="large"
               :maxlength="6"
-              :aria-label="$t('邮箱验证码')"
+              :aria-label="$t('auth.email_verification_code')"
               autocomplete="one-time-code"
             >
               <template #prefix>
@@ -295,7 +295,7 @@ async function handleRegister() {
                   :loading="emailSending"
                   @click="handleSendEmailCode"
                 >
-                  {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('获取验证码') }}
+                  {{ emailRemaining > 0 ? $t('auth.resendCountdown', { s: emailRemaining }) : $t('auth.get_verification_code') }}
                 </Button>
               </template>
             </Input>
@@ -307,7 +307,7 @@ async function handleRegister() {
           >
             <Input
               v-model:value="form.password"
-              :placeholder="$t('请输入密码（至少8位）')"
+              :placeholder="$t('auth.please_enter_password_at_least_8_characters')"
               type="password"
               size="large"
               :aria-label="$t('auth.password')"
@@ -325,7 +325,7 @@ async function handleRegister() {
           >
             <Input
               v-model:value="form.confirmPassword"
-              :placeholder="$t('请再次输入密码')"
+              :placeholder="$t('auth.please_enter_password_again')"
               type="password"
               size="large"
               :aria-label="$t('auth.confirmPassword')"
@@ -339,7 +339,7 @@ async function handleRegister() {
 
           <FormItem
             v-if="captchaRequired"
-            :label="$t('人机验证')"
+            :label="$t('auth.human_verification')"
           >
             <CaptchaWidget
               ref="captchaRef"
@@ -370,7 +370,7 @@ async function handleRegister() {
                 block
                 @click="router.push('/login')"
               >
-                {{ $t('已有账号？登录') }}
+                {{ $t('auth.have_an_account_log_in') }}
               </Button>
             </Space>
           </FormItem>

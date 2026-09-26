@@ -24,8 +24,8 @@ const { t } = useI18n()
 
 /** 渠道 Tab 顺序与后端 paymentChannels 一致 */
 const CHANNEL_TABS = [
-  { key: 'alipay', label: t('支付宝') },
-  { key: 'wechat', label: t('微信支付') },
+  { key: 'alipay', label: t('billing.alipay') },
+  { key: 'wechat', label: t('billing.wechat_pay') },
   { key: 'paypal', label: 'PayPal' },
 ]
 
@@ -84,7 +84,7 @@ async function load() {
     channels.value = res.channels ?? {}
     callbackUrls.value = res.callback_urls ?? {}
   } catch (error: any) {
-    message.error(describeApiError(error, t('加载支付配置失败')))
+    message.error(describeApiError(error, t('errors.failed_to_load_payment_config')))
   } finally {
     loading.value = false
   }
@@ -98,9 +98,9 @@ async function save() {
     mergeConfig(res.config ?? {})
     channels.value = res.channels ?? {}
     callbackUrls.value = res.callback_urls ?? {}
-    message.success(t('支付配置已保存并生效'))
+    message.success(t('billing.payment_config_saved_and_effective'))
   } catch (error: any) {
-    message.error(describeApiError(error, t('保存支付配置失败')))
+    message.error(describeApiError(error, t('errors.failed_to_save_payment_config')))
   } finally {
     saving.value = false
   }
@@ -111,7 +111,7 @@ onMounted(load)
 
 <template>
   <div class="payment-view">
-    <Card :title="$t('支付渠道配置')">
+    <Card :title="$t('billing.payment_channel_config')">
       <template #extra>
         <Button
           :loading="loading"
@@ -120,7 +120,7 @@ onMounted(load)
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新') }}
+          {{ $t('common.refresh') }}
         </Button>
       </template>
 
@@ -128,14 +128,14 @@ onMounted(load)
         type="info"
         show-icon
         class="payment-hint"
-        :message="$t('在此配置支付宝、微信支付与 PayPal 的商户凭据。凭据加密入库，保存后立即生效，无需重启服务。')"
+        :message="$t('billing.configure_alipay_wechat_pay_and_paypal_merchant_credentials_here_credentials_are_encrypted_at_rest_and_take_effect_immediately_no_restart_needed')"
       />
 
       <Form
         layout="vertical"
         class="base-form"
       >
-        <FormItem :label="$t('公网基础 URL')">
+        <FormItem :label="$t('common.public_base_url')">
           <Input
             v-model:value="config.public_base_url"
             placeholder="https://api.example.com"
@@ -143,7 +143,7 @@ onMounted(load)
         </FormItem>
       </Form>
       <div class="config-note">
-        {{ $t('用于拼接支付宝/微信的异步通知地址。必须公网可达，否则支付结果无法自动到账。') }}
+        {{ $t('billing.used_to_assemble_the_alipay_wechat_async_notification_url_must_be_publicly_reachable_otherwise_payment_results_cannot_be_posted_automatically') }}
       </div>
 
       <Tabs v-model:active-key="activeTab">
@@ -154,14 +154,14 @@ onMounted(load)
         >
           <div class="channel-head">
             <Tag :color="channels[channel.key]?.enabled ? 'success' : 'default'">
-              {{ channels[channel.key]?.enabled ? $t('已生效') : $t('未生效') }}
+              {{ channels[channel.key]?.enabled ? $t('common.effective') : $t('common.not_effective') }}
             </Tag>
             <span class="channel-currency">{{ channels[channel.key]?.currency || '' }}</span>
             <span
               v-if="missingText(channel.key)"
               class="channel-missing"
             >
-              {{ $t('缺少：') }}{{ missingText(channel.key) }}
+              {{ $t('common.missing') }}{{ missingText(channel.key) }}
             </span>
           </div>
 
@@ -171,7 +171,7 @@ onMounted(load)
             layout="vertical"
             class="channel-form"
           >
-            <FormItem :label="$t('启用支付宝')">
+            <FormItem :label="$t('billing.enable_alipay')">
               <Switch v-model:checked="config.alipay_enabled" />
             </FormItem>
             <FormItem label="AppID">
@@ -180,34 +180,34 @@ onMounted(load)
                 placeholder="2021000000000000"
               />
             </FormItem>
-            <FormItem :label="$t('应用私钥（加密入库）')">
+            <FormItem :label="$t('common.app_private_key_encrypted_at_rest')">
               <Input.TextArea
                 v-model:value="config.alipay_private_key"
                 :rows="4"
                 placeholder="-----BEGIN PRIVATE KEY-----"
               />
             </FormItem>
-            <FormItem :label="$t('支付宝公钥（加密入库）')">
+            <FormItem :label="$t('billing.alipay_public_key_encrypted_at_rest')">
               <Input.TextArea
                 v-model:value="config.alipay_public_key"
                 :rows="4"
                 placeholder="-----BEGIN PUBLIC KEY-----"
               />
             </FormItem>
-            <FormItem :label="$t('网关地址')">
+            <FormItem :label="$t('common.gateway_address')">
               <Input
                 v-model:value="config.alipay_gateway"
                 placeholder="https://openapi.alipay.com/gateway.do"
               />
             </FormItem>
-            <FormItem :label="$t('异步通知地址（在支付宝开放平台登记）')">
+            <FormItem :label="$t('auth.async_notification_url_registered_on_alipay_open_platform')">
               <Input
                 :value="callbackUrls.alipay"
                 readonly
               />
             </FormItem>
             <div class="config-note">
-              {{ $t('RSA2 密钥对：应用私钥与支付宝公钥均为 PEM 格式；留空则回退到环境变量 ALIPAY_*。') }}
+              {{ $t('errors.rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables') }}
             </div>
           </Form>
 
@@ -217,10 +217,10 @@ onMounted(load)
             layout="vertical"
             class="channel-form"
           >
-            <FormItem :label="$t('启用微信支付')">
+            <FormItem :label="$t('billing.enable_wechat_pay')">
               <Switch v-model:checked="config.wechat_enabled" />
             </FormItem>
-            <FormItem :label="$t('商户号')">
+            <FormItem :label="$t('common.merchant_id')">
               <Input
                 v-model:value="config.wechat_mch_id"
                 placeholder="1900000000"
@@ -232,33 +232,33 @@ onMounted(load)
                 placeholder="wx0000000000000000"
               />
             </FormItem>
-            <FormItem :label="$t('APIv3 密钥（加密入库）')">
+            <FormItem :label="$t('common.apiv3_key_encrypted_at_rest')">
               <InputPassword
                 v-model:value="config.wechat_api_v3_key"
-                :placeholder="$t('32 位商户密钥，用于回调解密')"
+                :placeholder="$t('common.32_bit_merchant_key_used_to_decrypt_callbacks')"
               />
             </FormItem>
-            <FormItem :label="$t('商户证书序列号')">
+            <FormItem :label="$t('common.merchant_certificate_serial_number')">
               <Input
                 v-model:value="config.wechat_mch_cert_serial_no"
                 placeholder="5F2A0B1C..."
               />
             </FormItem>
-            <FormItem :label="$t('商户私钥（加密入库）')">
+            <FormItem :label="$t('common.merchant_private_key_encrypted_at_rest')">
               <Input.TextArea
                 v-model:value="config.wechat_mch_private_key"
                 :rows="4"
                 placeholder="-----BEGIN PRIVATE KEY-----"
               />
             </FormItem>
-            <FormItem :label="$t('异步通知地址（在微信商户平台登记）')">
+            <FormItem :label="$t('auth.async_notification_url_registered_on_wechat_merchant_platform')">
               <Input
                 :value="callbackUrls.wechat"
                 readonly
               />
             </FormItem>
             <div class="config-note">
-              {{ $t('商户私钥为商户 API 证书私钥（PEM）；留空则回退到环境变量 WXPAY_*。') }}
+              {{ $t('common.the_merchant_private_key_is_the_merchant_api_certificate_private_key_pem_blank_falls_back_to_the_wxpay_environment_variables') }}
             </div>
           </Form>
 
@@ -268,7 +268,7 @@ onMounted(load)
             layout="vertical"
             class="channel-form"
           >
-            <FormItem :label="$t('启用 PayPal')">
+            <FormItem :label="$t('common.enable_paypal')">
               <Switch v-model:checked="config.paypal_enabled" />
             </FormItem>
             <FormItem label="Client ID">
@@ -277,17 +277,17 @@ onMounted(load)
                 placeholder="AXxxxxxxxxxxxxxxxx"
               />
             </FormItem>
-            <FormItem :label="$t('Secret（加密入库）')">
+            <FormItem :label="$t('common.secret_encrypted_at_rest')">
               <InputPassword
                 v-model:value="config.paypal_secret"
                 placeholder="ELxxxxxxxxxxxxxxxx"
               />
             </FormItem>
-            <FormItem :label="$t('沙箱模式')">
+            <FormItem :label="$t('common.sandbox_mode')">
               <Switch v-model:checked="config.paypal_sandbox" />
             </FormItem>
             <div class="config-note">
-              {{ $t('沙箱模式走 sandbox.paypal.com，仅用于联调；留空则回退到环境变量 PAYPAL_*。') }}
+              {{ $t('common.sandbox_mode_uses_sandbox_paypal_com_and_is_for_integration_testing_only_blank_falls_back_to_the_paypal_environment_variables') }}
             </div>
           </Form>
         </TabPane>
@@ -302,15 +302,15 @@ onMounted(load)
           <template #icon>
             <SaveOutlined />
           </template>
-          {{ $t('保存配置') }}
+          {{ $t('common.save_config') }}
         </Button>
         <span class="config-note">
-          {{ $t('保存后立即重建支付客户端，多副本部署会同步到所有副本。') }}
+          {{ $t('billing.rebuilds_the_payment_client_immediately_after_saving_syncs_to_all_replicas_in_a_multi_replica_deployment') }}
         </span>
       </div>
 
       <div class="config-note">
-        {{ $t('仅启用了且凭据齐全的渠道会出现在用户端充值页。') }}
+        {{ $t('admin.only_enabled_channels_with_complete_credentials_appear_on_the_user_recharge_page') }}
       </div>
     </Card>
   </div>

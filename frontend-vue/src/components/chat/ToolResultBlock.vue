@@ -155,7 +155,7 @@ const diffTitle = computed(() => {
       class="result-error-bar"
     >
       <ExclamationCircleOutlined />
-      <span>{{ $t('工具执行失败') }}</span>
+      <span>{{ $t('errors.tool_execution_failed') }}</span>
     </div>
 
     <img
@@ -226,7 +226,7 @@ const diffTitle = computed(() => {
       class="terminal-block"
     >
       <div class="terminal-banner">
-        <span class="terminal-label">{{ $t('终端输出') }}</span>
+        <span class="terminal-label">{{ $t('common.terminal_output') }}</span>
         <span
           v-if="terminalLines"
           class="terminal-lines"
@@ -279,7 +279,7 @@ const diffTitle = computed(() => {
           class="chat-chevron"
           :class="{ open: expanded }"
         />
-        <span class="result-label">{{ item.isError ? $t('结果（失败）') : $t('结果') }}</span>
+        <span class="result-label">{{ item.isError ? $t('errors.result_failed') : $t('common.result') }}</span>
         <span
           v-if="textLines > 1"
           class="result-lines"

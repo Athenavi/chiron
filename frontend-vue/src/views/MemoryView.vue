@@ -100,10 +100,10 @@ async function handleSearch() {
     // L3 区做兜底：后端尚未升级到双区契约时，不该让整个检索崩在 .length 上。
     searchSummaries.value = data.summaries ?? []
     if (searchResults.value.length === 0 && searchSummaries.value.length === 0) {
-      message.info(t('未找到相似记忆'))
+      message.info(t('errors.no_similar_memory_found'))
     }
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('检索失败'))
+    message.error(e.response?.data?.error || t('errors.search_failed'))
   } finally {
     searching.value = false
   }
@@ -154,26 +154,26 @@ function openEdit(entry: MemoryEntry) {
 async function handleSave() {
   const { slot, key, value, confidence, source } = form.value
   if (!key.trim() || !value.trim()) {
-    message.warning(t('键与内容均不能为空'))
+    message.warning(t('common.key_and_content_cannot_be_empty'))
     return
   }
   saving.value = true
   try {
     if (editing.value) {
       await updateMemory({ id: editing.value.id, key, value, confidence, source })
-      message.success(t('已更新记忆'))
+      message.success(t('memory.memory_updated'))
     } else {
       const res = await upsertMemory({ slot, key, value, confidence, source })
       if (res.duplicate_of) {
         message.warning(t('检测到相似记忆「{key}」，可在整理时自动合并', { key: res.duplicate_of.key }))
       } else {
-        message.success(t('已保存记忆'))
+        message.success(t('memory.memory_saved'))
       }
     }
     formVisible.value = false
     await loadProfile()
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('保存失败'))
+    message.error(e.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -182,10 +182,10 @@ async function handleSave() {
 async function handleDelete(id: string) {
   try {
     await deleteMemory(id)
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
     await loadProfile()
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('删除失败'))
+    message.error(e.response?.data?.error || t('errors.delete_failed'))
   }
 }
 
@@ -195,7 +195,7 @@ async function handleClearAll() {
     message.success(t('已清空 {n} 条记忆', { n: res.deleted }))
     await loadProfile()
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('清空失败'))
+    message.error(e.response?.data?.error || t('errors.failed_to_clear'))
   }
 }
 
@@ -231,11 +231,11 @@ async function pollOrganize() {
           if (r.backfilled) parts.push(t('补齐 {n} 条向量', { n: r.backfilled }))
           if (r.archived) parts.push(t('归档 {n} 条', { n: r.archived }))
           if (r.evicted) parts.push(t('淘汰 {n} 条', { n: r.evicted }))
-          if (parts.length) message.success(t('整理完成：') + parts.join('，'))
-          else message.success(t('整理完成：无需调整'))
+          if (parts.length) message.success(t('common.organization_complete') + parts.join('，'))
+          else message.success(t('common.organization_complete_no_adjustment_needed'))
           await loadProfile()
         } else if (st.error) {
-          message.error(t('整理失败：') + st.error)
+          message.error(t('errors.organization_failed') + st.error)
         }
       }
     } catch {
@@ -249,14 +249,14 @@ async function runOrganize() {
     const res = await startOrganize()
     organize.value = res.status
     if (res.started) {
-      message.info(t('智能整理已启动（后台运行）'))
+      message.info(t('common.smart_organization_started_runs_in_background'))
       pollOrganize()
     } else {
-      message.info(t('已有整理任务在运行中'))
+      message.info(t('workflow.an_organization_task_is_already_running'))
       pollOrganize()
     }
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('启动整理失败'))
+    message.error(e.response?.data?.error || t('errors.failed_to_start_organization'))
   }
 }
 
@@ -273,9 +273,9 @@ async function loadProfile() {
   } catch (e: any) {
     error.value = true
     if (e.response?.status === 503) {
-      message.error(t('记忆服务不可用（需要 PostgreSQL）'))
+      message.error(t('errors.memory_service_unavailable_postgresql_required'))
     } else {
-      message.error(e.response?.data?.error || t('加载记忆失败'))
+      message.error(e.response?.data?.error || t('errors.failed_to_load_memory'))
     }
   } finally {
     loading.value = false
@@ -340,19 +340,19 @@ function pct(n: number): string {
     <div class="page-header">
       <div class="title">
         <DatabaseOutlined />
-        <span>{{ $t('长期记忆') }}</span>
+        <span>{{ $t('memory.long_term_memory') }}</span>
         <Badge
           :count="total"
           :overflow-count="999"
           color="var(--node-indigo)"
         />
-        <span class="subtitle">{{ $t('跨会话留存 · 语义检索 · 自动整理') }}</span>
+        <span class="subtitle">{{ $t('knowledge.cross_session_retention_semantic_retrieval_auto_organization') }}</span>
       </div>
       <Space>
         <Switch
           :checked="includeArchived"
-          :checked-children="$t('含归档')"
-          :un-checked-children="$t('仅活跃')"
+          :checked-children="$t('common.include_archived')"
+          :un-checked-children="$t('common.active_only')"
           @change="onArchivedChange"
         />
         <Button
@@ -362,16 +362,16 @@ function pct(n: number): string {
           <template #icon>
             <ThunderboltOutlined />
           </template>
-          {{ $t('智能整理') }}
+          {{ $t('common.smart_organization') }}
         </Button>
         <Popconfirm
-          :title="$t('确定清空全部长期记忆？此操作不可恢复')"
-          :ok-text="$t('清空')"
-          :cancel-text="$t('取消')"
+          :title="$t('memory.confirm_clearing_all_long_term_memory_this_action_cannot_be_undone')"
+          :ok-text="$t('common.empty')"
+          :cancel-text="$t('common.cancel')"
           @confirm="handleClearAll"
         >
           <Button danger>
-            {{ $t('清空记忆') }}
+            {{ $t('memory.clear_memory') }}
           </Button>
         </Popconfirm>
         <Button
@@ -381,7 +381,7 @@ function pct(n: number): string {
           <template #icon>
             <PlusOutlined />
           </template>
-          {{ $t('新建记忆') }}
+          {{ $t('memory.new_memory') }}
         </Button>
       </Space>
     </div>
@@ -391,7 +391,7 @@ function pct(n: number): string {
       v-if="organize.running"
       type="info"
       show-icon
-      :message="$t('正在后台整理记忆（去重 / 归档 / 补齐向量）…')"
+      :message="$t('knowledge.cleaning_up_memory_in_the_background_dedupe_archive_backfill_vectors')"
       style="margin-bottom: 16px"
     />
     <Alert
@@ -413,7 +413,7 @@ function pct(n: number): string {
       >
         <Input
           v-model:value="searchInput"
-          :placeholder="$t('语义检索：如「用户偏好用什么编辑器」')"
+          :placeholder="$t('knowledge.semantic_retrieval_e_g_what_editor_does_the_user_prefer')"
           style="width: 360px"
           allow-clear
           @press-enter="handleSearch"
@@ -428,19 +428,19 @@ function pct(n: number): string {
           :loading="searching"
           @click="handleSearch"
         >
-          {{ $t('智能检索') }}
+          {{ $t('knowledge.smart_retrieval') }}
         </Button>
         <Button
           v-if="searchResults !== null"
           @click="clearSearch"
         >
-          {{ $t('返回列表') }}
+          {{ $t('common.back_to_list') }}
         </Button>
         <Tag
           v-if="searchResults !== null"
           :color="searchingMode === 'semantic' ? 'blue' : 'orange'"
         >
-          {{ searchingMode === 'semantic' ? $t('语义模式') : $t('关键词模式') }}
+          {{ searchingMode === 'semantic' ? $t('common.semantic_mode') : $t('common.keyword_mode') }}
         </Tag>
       </Space>
     </Card>
@@ -458,7 +458,7 @@ function pct(n: number): string {
       </h3>
       <List
         :data-source="searchResults"
-        :locale="{ emptyText: $t('未找到相似记忆') }"
+        :locale="{ emptyText: $t('errors.no_similar_memory_found') }"
       >
         <template #renderItem="{ item }">
           <List.Item>
@@ -494,7 +494,7 @@ function pct(n: number): string {
       </h3>
       <List
         :data-source="searchSummaries"
-        :locale="{ emptyText: $t('未找到相关历史对话') }"
+        :locale="{ emptyText: $t('errors.no_related_conversation_found') }"
       >
         <template #renderItem="{ item }">
           <List.Item>
@@ -505,7 +505,7 @@ function pct(n: number): string {
             >
               <div class="entry-head">
                 <Tag color="cyan">
-                  {{ $t('历史对话') }}
+                  {{ $t('chat.history_conversations') }}
                 </Tag>
                 <Tag
                   v-if="item.topics && item.topics.length"
@@ -526,8 +526,8 @@ function pct(n: number): string {
         v-if="!searchResults.length && !searchSummaries.length"
         size="page"
         :icon="markRaw(SearchOutlined)"
-        :description="$t('未找到相似记忆')"
-        :hint="$t('换一个说法再试，或先在上方新建记忆')"
+        :description="$t('errors.no_similar_memory_found')"
+        :hint="$t('memory.try_rephrasing_or_create_memory_above_first')"
       />
     </div>
 
@@ -568,14 +568,14 @@ function pct(n: number): string {
           v-if="error && !loading"
           size="page"
           :icon="markRaw(DatabaseOutlined)"
-          :description="$t('加载失败')"
-          :hint="$t('无法获取记忆数据，请稍后重试')"
+          :description="$t('errors.failed_to_load')"
+          :hint="$t('memory.unable_to_fetch_memory_data_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadProfile"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
 
@@ -583,8 +583,8 @@ function pct(n: number): string {
           v-else-if="filteredEntries.length === 0 && !loading"
           size="page"
           :icon="markRaw(DatabaseOutlined)"
-          :description="$t('暂无该分类记忆')"
-          :hint="$t('点击右上角「新建记忆」，记录用户偏好与长期上下文')"
+          :description="$t('memory.no_memory_in_this_category_yet')"
+          :hint="$t('memory.click_new_memory_at_the_top_right_to_record_user_preferences_and_long_term_context')"
         />
 
         <List
@@ -606,7 +606,7 @@ function pct(n: number): string {
                   <Tag :color="item.source === 'user_confirmed' ? 'green' : 'default'">
                     {{ item.source_label }}
                   </Tag>
-                  <Tooltip :title="$t('置信度（整理时高置信条目优先保留）')">
+                  <Tooltip :title="$t('common.confidence_high_confidence_items_are_kept_first_during_organization')">
                     <Tag color="blue">
                       {{ $t('置信 {n}', { n: item.confidence }) }}
                     </Tag>
@@ -615,7 +615,7 @@ function pct(n: number): string {
                     <Button
                       size="small"
                       type="text"
-                      :title="$t('在对话中使用这类记忆')"
+                      :title="$t('memory.use_this_type_of_memory_in_the_conversation')"
                       @click="useSlotInChat(item.slot)"
                     >
                       <template #icon>
@@ -625,7 +625,7 @@ function pct(n: number): string {
                     <Button
                       size="small"
                       type="text"
-                      :title="$t('编辑')"
+                      :title="$t('common.edit_2')"
                       @click="openEdit(item)"
                     >
                       <template #icon>
@@ -633,16 +633,16 @@ function pct(n: number): string {
                       </template>
                     </Button>
                     <Popconfirm
-                      :title="$t('删除这条记忆？')"
-                      :ok-text="$t('删除')"
-                      :cancel-text="$t('取消')"
+                      :title="$t('memory.delete_this_memory')"
+                      :ok-text="$t('common.delete')"
+                      :cancel-text="$t('common.cancel')"
                       @confirm="handleDelete(item.id)"
                     >
                       <Button
                         size="small"
                         type="text"
                         danger
-                        :title="$t('删除')"
+                        :title="$t('common.delete')"
                       >
                         <template #icon>
                           <DeleteOutlined />
@@ -669,8 +669,8 @@ function pct(n: number): string {
           v-if="conflicts.length === 0"
           size="page"
           :icon="markRaw(DatabaseOutlined)"
-          :description="$t('没有待裁决的记忆冲突')"
-          :hint="$t('当 AI 提炼出的内容与您确认过的信息冲突时，会出现在这里等您裁决')"
+          :description="$t('errors.no_pending_memory_conflicts_to_resolve')"
+          :hint="$t('errors.when_the_content_the_ai_distilled_conflicts_with_info_you_confirmed_it_shows_up_here_for_your_decision')"
         />
         <ConflictCard
           v-for="c in conflicts"
@@ -687,8 +687,8 @@ function pct(n: number): string {
           v-if="summaries.length === 0"
           size="page"
           :icon="markRaw(DatabaseOutlined)"
-          :description="$t('暂无对话摘要')"
-          :hint="$t('会话结束时会自动把对话提炼成摘要，用于跨会话召回')"
+          :description="$t('chat.no_conversation_summary_yet')"
+          :hint="$t('chat.when_a_conversation_ends_the_dialogue_is_automatically_distilled_into_a_summary_for_cross_session_recall')"
         />
         <List
           v-else
@@ -703,7 +703,7 @@ function pct(n: number): string {
               >
                 <div class="entry-head">
                   <Tag color="cyan">
-                    {{ $t('历史对话') }}
+                    {{ $t('chat.history_conversations') }}
                   </Tag>
                   <Tag
                     v-if="item.topics && item.topics.length"
@@ -725,14 +725,14 @@ function pct(n: number): string {
     <!-- 新建 / 编辑弹窗 -->
     <Modal
       v-model:open="formVisible"
-      :title="editing ? $t('编辑记忆') : $t('新建记忆')"
+      :title="editing ? $t('memory.edit_memory') : $t('memory.new_memory')"
       :confirm-loading="saving"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="handleSave"
     >
       <div class="form-row">
-        <label>{{ $t('分类') }}</label>
+        <label>{{ $t('common.category') }}</label>
         <Select
           v-model:value="form.slot"
           style="width: 100%"
@@ -747,18 +747,18 @@ function pct(n: number): string {
         </Select>
       </div>
       <div class="form-row">
-        <label>{{ $t('键（key）') }}</label>
+        <label>{{ $t('common.key_2') }}</label>
         <Input
           v-model:value="form.key"
-          :placeholder="$t('如 timezone / stack / 拒接需求')"
+          :placeholder="$t('common.e_g_timezone_stack_rejected_needs')"
         />
       </div>
       <div class="form-row">
-        <label>{{ $t('内容（value）') }}</label>
+        <label>{{ $t('common.content_value') }}</label>
         <Input.TextArea
           v-model:value="form.value"
           :rows="3"
-          :placeholder="$t('记忆的具体内容')"
+          :placeholder="$t('memory.memory_content')"
         />
       </div>
       <div class="form-row">
@@ -770,19 +770,19 @@ function pct(n: number): string {
         />
       </div>
       <div class="form-row">
-        <label>{{ $t('来源') }}</label>
+        <label>{{ $t('common.source') }}</label>
         <Select
           v-model:value="form.source"
           style="width: 100%"
         >
           <Select.Option value="user_confirmed">
-            {{ $t('用户确认') }}
+            {{ $t('admin.user_confirmation') }}
           </Select.Option>
           <Select.Option value="derived">
-            {{ $t('对话提炼') }}
+            {{ $t('chat.conversation_distillation') }}
           </Select.Option>
           <Select.Option value="tool_written">
-            {{ $t('工具写入') }}
+            {{ $t('agent.tool_write') }}
           </Select.Option>
         </Select>
       </div>

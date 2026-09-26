@@ -144,7 +144,7 @@ async function stopRun(runId: string) {
     if (res.status === 'lost') {
       // 网关等不到持有实例的回执（实例已重启/被驱逐）→ 它把作业标成了 lost。
       // 如实告诉用户，而不是让"正在停止"一直挂着、状态永远不变（假成功）。
-      void message.warning(t('该子 Agent 已失联（实例已重启或退出），已标记为丢失'))
+      void message.warning(t('auth.this_sub_agent_lost_contact_instance_restarted_or_exited_and_is_marked_as_lost'))
     }
   } catch {
     // 失败就放开按钮让用户能重试（不做假成功提示）
@@ -282,7 +282,7 @@ async function resolveAsk(toolCallId: string, answer: string) {
       answer: value,
     })
     if (!ok) {
-      askErrors.value = { ...askErrors.value, [id]: t('答案未送达（可能已超时）') }
+      askErrors.value = { ...askErrors.value, [id]: t('errors.answer_not_delivered_may_have_timed_out') }
       return
     }
     askAnswers.value = { ...askAnswers.value, [id]: value }
@@ -320,7 +320,7 @@ async function resolveApproval(a: { toolCallId: string }, approved: boolean) {
     if (!ok) {
       // 引擎返回 ok=false：通常是超时（决定到得太晚）或该调用已不在等待。
       // 明确说出来，而不是把卡片默默撤掉（用户会以为点生效了）。
-      approvalErrors.value = { ...approvalErrors.value, [id]: t('审批未生效（可能已超时）') }
+      approvalErrors.value = { ...approvalErrors.value, [id]: t('errors.approval_not_effective_may_have_timed_out') }
       return
     }
     approvalDecisions.value = { ...approvalDecisions.value, [id]: approved ? 'approved' : 'denied' }
@@ -574,21 +574,21 @@ onBeforeUnmount(() => {
       v-if="showCostHint"
       class="cost-hint"
     >
-      <span>{{ $t('子 Agent 会独立消耗 token，多个子任务并行时花销成倍增加。') }}</span>
+      <span>{{ $t('workflow.sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel') }}</span>
       <button
         type="button"
         class="cost-hint-close"
         @click="dismissCostHint"
       >
-        {{ $t('知道了') }}
+        {{ $t('common.got_it') }}
       </button>
     </div>
 
     <div class="panel-head">
-      <span class="panel-title">{{ $t('子 Agent') }}</span>
+      <span class="panel-title">{{ $t('agent.sub_agent') }}</span>
       <span class="panel-meta">
-        {{ runs.length }} {{ $t('个运行') }} · ↑{{ totals.input }} / ↓{{ totals.output }}
-        <Tooltip :title="$t('数据来源：redis=运行期缓存，db=历史记录')">
+        {{ runs.length }} {{ $t('common.running_3') }} · ↑{{ totals.input }} / ↓{{ totals.output }}
+        <Tooltip :title="$t('admin.data_source_redis_runtime_cache_db_history')">
           <Tag
             v-if="source"
             :color="source === 'redis' ? 'processing' : 'default'"
@@ -606,7 +606,7 @@ onBeforeUnmount(() => {
     <nav
       class="sa-tabs"
       role="tablist"
-      :aria-label="$t('子 Agent 视图')"
+      :aria-label="$t('agent.sub_agent_view')"
     >
       <button
         v-for="t in SA_TABS"
@@ -636,7 +636,7 @@ onBeforeUnmount(() => {
     >
       <Empty
         v-if="!displayRuns.length"
-        :description="$t('本次会话还没有子 Agent 运行')"
+        :description="$t('agent.no_sub_agent_has_run_in_this_session_yet')"
         :image="Empty.PRESENTED_IMAGE_SIMPLE"
       />
       <div
@@ -653,7 +653,7 @@ onBeforeUnmount(() => {
             class="run-stop"
             @click.stop="stopAll"
           >
-            {{ $t('停止全部子 Agent') }}
+            {{ $t('agent.stop_all_sub_agents') }}
           </button>
         </div>
         <div
@@ -695,10 +695,10 @@ onBeforeUnmount(() => {
             v-if="pendingByRun[run.run_id]"
             type="button"
             class="run-approval"
-            :title="$t('子 Agent 正在等待你的确认或回答')"
+            :title="$t('agent.sub_agent_is_waiting_for_your_confirmation_or_answer')"
             @click.stop="focusApprovals(run.run_id)"
           >
-            ⚠ {{ $t('待处理') }}{{ pendingByRun[run.run_id] > 1 ? ` ×${pendingByRun[run.run_id]}` : '' }}
+            ⚠ {{ $t('common.pending') }}{{ pendingByRun[run.run_id] > 1 ? ` ×${pendingByRun[run.run_id]}` : '' }}
           </button>
           <span class="run-usage">↑{{ run.usage?.input_tokens || 0 }}/↓{{ run.usage?.output_tokens || 0 }}</span>
           <!-- 中止：只在运行中的 run 上出现（终态没什么可停的） -->
@@ -707,7 +707,7 @@ onBeforeUnmount(() => {
             type="button"
             class="run-stop"
             :disabled="cancelling.has(run.run_id)"
-            :title="$t('停止这个子 Agent')"
+            :title="$t('agent.stop_this_sub_agent')"
             @click.stop="stopRun(run.run_id)"
           >
             {{ cancelling.has(run.run_id) ? '…' : '■' }}
@@ -715,7 +715,7 @@ onBeforeUnmount(() => {
           <span
             v-if="run.redacted_count"
             class="run-redacted"
-            :title="$t('入库前已脱敏的敏感片段数')"
+            :title="$t('common.sensitive_snippets_desensitized_before_storage')"
           >🔒{{ run.redacted_count }}</span>
         </div>
       </div>
@@ -731,11 +731,11 @@ onBeforeUnmount(() => {
         class="usage-grid"
       >
         <div class="usage-row usage-head">
-          <span>{{ $t('运行') }}</span>
-          <span>{{ $t('状态') }}</span>
+          <span>{{ $t('common.run') }}</span>
+          <span>{{ $t('common.status') }}</span>
           <span class="num">in</span>
           <span class="num">out</span>
-          <span class="num">{{ $t('步数') }}</span>
+          <span class="num">{{ $t('workflow.steps') }}</span>
         </div>
         <div
           v-for="run in runs"
@@ -755,10 +755,10 @@ onBeforeUnmount(() => {
         v-else
         class="sa-empty"
       >
-        {{ $t('还没有子 Agent 运行，所以没有用量可算') }}
+        {{ $t('agent.no_sub_agent_has_run_yet_so_there_is_no_usage_to_compute') }}
       </div>
       <p class="usage-note">
-        {{ $t('子 Agent 会独立消耗 token，多个并行时花销成倍增加。') }}
+        {{ $t('agent.sub_agents_consume_tokens_independently_cost_multiplies_when_several_run_in_parallel') }}
       </p>
     </div>
 
@@ -781,7 +781,7 @@ onBeforeUnmount(() => {
         v-if="!liveEvents.length"
         class="sa-empty"
       >
-        {{ $t('本会话还没有收到子 Agent 事件') }}
+        {{ $t('agent.no_sub_agent_events_received_in_this_session_yet') }}
       </div>
     </div>
 
@@ -798,7 +798,7 @@ onBeforeUnmount(() => {
           v-if="!artifactPaths.length"
           class="sa-empty"
         >
-          {{ $t('这次运行没有写入任何文件') }}
+          {{ $t('media.this_run_did_not_write_any_files') }}
         </div>
         <div
           v-for="group in artifactGroups"
@@ -817,7 +817,7 @@ onBeforeUnmount(() => {
             :title="path"
             @click="copyPath(path)"
           >
-            {{ copiedPath === path ? $t('已复制') : path.split('/').pop() }}
+            {{ copiedPath === path ? $t('common.copied_2') : path.split('/').pop() }}
           </button>
         </div>
       </template>
@@ -825,7 +825,7 @@ onBeforeUnmount(() => {
         v-else
         class="sa-empty"
       >
-        {{ $t('先在「运行」里选一个子 Agent') }}
+        {{ $t('agent.select_a_sub_agent_in_run_first') }}
       </div>
     </div>
 
@@ -839,11 +839,11 @@ onBeforeUnmount(() => {
       <div class="output-head">
         <span>{{ selectedRun.profile || selectedRun.run_id }}</span>
         <span class="output-meta">
-          {{ $t('步数') }} {{ selectedRun.usage?.steps || 0 }}
+          {{ $t('workflow.steps') }} {{ selectedRun.usage?.steps || 0 }}
         </span>
       </div>
       <div class="output-summary">
-        {{ selectedRun.summary || $t('（运行中，暂无摘要）') }}
+        {{ selectedRun.summary || $t('common.running_no_summary_yet') }}
       </div>
       <Spin :spinning="historyLoading">
         <div class="stream">
@@ -855,7 +855,7 @@ onBeforeUnmount(() => {
               v-if="event.type === 'subagent.reasoning' && event.content"
               class="line reasoning"
             >
-              <span class="line-tag">{{ $t('思考') }}</span>{{ event.content }}
+              <span class="line-tag">{{ $t('chat.reasoning') }}</span>{{ event.content }}
             </div>
             <div
               v-else-if="event.type === 'subagent.text' && event.content"
@@ -898,7 +898,7 @@ onBeforeUnmount(() => {
                 v-if="askAnswers[event.tool_call_id || '']"
                 class="ask-done"
               >
-                {{ $t('已回复') }}：{{ askAnswers[event.tool_call_id || ''] }}
+                {{ $t('chat.replied') }}：{{ askAnswers[event.tool_call_id || ''] }}
               </div>
               <div
                 v-if="askErrors[event.tool_call_id || '']"
@@ -911,13 +911,13 @@ onBeforeUnmount(() => {
               v-else-if="event.type === 'subagent.status'"
               class="line status"
             >
-              {{ event.status }}<span v-if="event.truncated"> · {{ $t('预览已截断') }}</span>
+              {{ event.status }}<span v-if="event.truncated"> · {{ $t('common.preview_truncated') }}</span>
             </div>
             <div
               v-else-if="event.type === 'subagent.done'"
               class="line done"
             >
-              {{ $t('结束') }}：{{ event.status }}
+              {{ $t('common.end') }}：{{ event.status }}
               <span v-if="event.usage"> · ↑{{ event.usage.input_tokens || 0 }}/↓{{ event.usage.output_tokens || 0 }}</span>
             </div>
           </template>
@@ -925,7 +925,7 @@ onBeforeUnmount(() => {
             v-if="!selectedEvents.length"
             class="stream-empty"
           >
-            {{ $t('暂无输出（运行中或过程已过期）') }}
+            {{ $t('errors.no_output_yet_running_or_process_expired') }}
           </div>
         </div>
       </Spin>

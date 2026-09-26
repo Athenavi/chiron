@@ -67,13 +67,13 @@ async function save() {
         oldValue: String(res.conflict.old_value ?? ''),
         newValue: String(res.conflict.new_value ?? ''),
       })
-      message.warning(t('与已确认的记忆冲突，已登记待裁决，请到记忆页处理'))
+      message.warning(t('errors.conflicts_with_confirmed_memory_logged_for_review_please_handle_on_the_memory_page'))
     } else if (res.duplicate_of) {
       message.warning(
         t('检测到相似记忆「{key}」，可在记忆页智能整理时合并', { key: res.duplicate_of.key }),
       )
     } else {
-      message.success(t('已记住；后续对话会自动带上这条记忆'))
+      message.success(t('memory.remembered_this_memory_will_be_attached_automatically_in_future_conversations'))
     }
 
     emit('saved', res.entry?.id ?? '')
@@ -81,7 +81,7 @@ async function save() {
   } catch (e) {
     // axios 错误：后端给的 message 在 response.data.error，取不到就用兜底文案
     const detail = (e as { response?: { data?: { error?: unknown } } }).response?.data?.error
-    message.error(typeof detail === 'string' && detail ? detail : t('保存记忆失败'))
+    message.error(typeof detail === 'string' && detail ? detail : t('errors.failed_to_save_memory'))
   } finally {
     saving.value = false
   }
@@ -91,21 +91,21 @@ async function save() {
 <template>
   <Modal
     :open="open"
-    :title="$t('记住这条')"
+    :title="$t('common.remember_this')"
     :confirm-loading="saving"
     :ok-button-props="{ disabled: !canSave }"
-    :ok-text="$t('记住')"
-    :cancel-text="$t('取消')"
+    :ok-text="$t('common.remember')"
+    :cancel-text="$t('common.cancel')"
     @ok="save"
     @cancel="emit('update:open', false)"
   >
     <div class="save-memory">
       <p class="save-memory-hint">
-        {{ $t('记下的内容会在**后续对话**中自动带上（区别于「存入知识库」：那条路是给检索用的文档）。') }}
+        {{ $t('knowledge.notes_you_save_are_automatically_attached_in_future_conversations_distinct_from_save_to_knowledge_base_which_stores_documents_for_retrieval') }}
       </p>
 
       <div class="save-memory-field">
-        <label class="save-memory-label">{{ $t('分类') }}</label>
+        <label class="save-memory-label">{{ $t('common.category') }}</label>
         <Select
           v-model:value="slot"
           style="width: 100%"
@@ -121,19 +121,19 @@ async function save() {
       </div>
 
       <div class="save-memory-field">
-        <label class="save-memory-label">{{ $t('键（key）') }}</label>
+        <label class="save-memory-label">{{ $t('common.key_2') }}</label>
         <Input
           v-model:value="key"
-          :placeholder="$t('这条记忆是关于什么的？如 stack / 技术选型偏好')"
+          :placeholder="$t('memory.what_is_this_memory_about_e_g_stack_tech_preference')"
         />
       </div>
 
       <div class="save-memory-field">
-        <label class="save-memory-label">{{ $t('内容（value）') }}</label>
+        <label class="save-memory-label">{{ $t('common.content_value') }}</label>
         <Input.TextArea
           v-model:value="value"
           :rows="5"
-          :placeholder="$t('要长期记住的内容')"
+          :placeholder="$t('common.content_to_remember_long_term')"
         />
       </div>
 

@@ -425,19 +425,19 @@ function pickSession(id: string) {
         v-if="view === 'sessions'"
         type="button"
         class="session-back"
-        :title="$t('打开会话地图')"
+        :title="$t('chat.open_session_map')"
         @click="emit('open-map')"
       >
-        {{ $t('地图') }}
+        {{ $t('common.map') }}
       </button>
       <button
         v-if="view === 'trajectory'"
         type="button"
         class="session-picker"
-        :title="$t('切换会话：{name}', { name: activeSession?.title || $t('新对话') })"
+        :title="$t('切换会话：{name}', { name: activeSession?.title || $t('chat.new_conversation') })"
         @click="emit('update:view', 'sessions')"
       >
-        <span class="session-picker-name">{{ activeSession?.title || $t('新对话') }}</span>
+        <span class="session-picker-name">{{ activeSession?.title || $t('chat.new_conversation') }}</span>
         <DownOutlined class="session-picker-arrow" />
       </button>
       <button
@@ -447,11 +447,11 @@ function pickSession(id: string) {
         @click="emit('update:view', 'trajectory')"
       >
         <LeftOutlined />
-        <span class="session-picker-name">{{ activeSession?.title || $t('新对话') }}</span>
+        <span class="session-picker-name">{{ activeSession?.title || $t('chat.new_conversation') }}</span>
       </button>
       <CloseOutlined
         class="toolbar-close"
-        :title="$t('收起面板')"
+        :title="$t('common.collapse_panel')"
         @click="emit('close')"
       />
     </div>
@@ -461,7 +461,7 @@ function pickSession(id: string) {
       v-if="contextChips.length"
       class="panel-context"
     >
-      <span class="ctx-title">{{ $t('当前上下文') }}</span>
+      <span class="ctx-title">{{ $t('common.current_context') }}</span>
       <div class="ctx-chips">
         <span
           v-for="c in contextChips"
@@ -487,10 +487,10 @@ function pickSession(id: string) {
       <button
         type="button"
         class="tools-head"
-        :title="toolsExpanded ? $t('收起工具列表') : $t('展开工具列表')"
+        :title="toolsExpanded ? $t('agent.collapse_tool_list') : $t('agent.show_tool_list')"
         @click="toggleTools"
       >
-        <span class="tools-title">{{ $t('可用工具') }}</span>
+        <span class="tools-title">{{ $t('agent.available_tools') }}</span>
         <span class="tools-count">{{ toolsSummary }}</span>
         <DownOutlined
           class="tools-arrow"
@@ -505,19 +505,19 @@ function pickSession(id: string) {
           v-if="toolsLoading"
           class="tools-empty"
         >
-          {{ $t('加载中…') }}
+          {{ $t('common.loading') }}
         </div>
         <div
           v-else-if="toolsError"
           class="tools-empty"
         >
-          {{ $t('工具列表加载失败') }}
+          {{ $t('errors.failed_to_load_tools') }}
         </div>
         <div
           v-else-if="!availableTools.length"
           class="tools-empty"
         >
-          {{ $t('没有可用工具') }}
+          {{ $t('agent.no_available_tools') }}
         </div>
         <template v-else>
           <div
@@ -543,7 +543,7 @@ function pickSession(id: string) {
         <input
           v-model="trajectoryQuery"
           class="search-input"
-          :placeholder="$t('搜索提问')"
+          :placeholder="$t('common.search_question')"
         >
         <CloseOutlined
           v-if="trajectoryQuery"
@@ -583,7 +583,7 @@ function pickSession(id: string) {
             v-if="filteredIndexes.length === 0"
             class="timeline-empty"
           >
-            {{ $t('无提问') }}
+            {{ $t('common.no_question') }}
           </div>
         </div>
       </div>
@@ -611,20 +611,20 @@ function pickSession(id: string) {
           v-if="filteredIndexes.length === 0"
           class="list-empty"
         >
-          {{ $t('当前会话暂无提问') }}
+          {{ $t('chat.no_questions_in_this_session_yet') }}
         </div>
       </div>
 
       <!-- 底部：最近活动（/v1/activities，30s 轮询，点击跳转） -->
       <div class="panel-activities">
         <div class="act-head">
-          <span class="act-title">{{ $t('最近活动') }}</span>
+          <span class="act-title">{{ $t('common.recent_activity') }}</span>
           <span
             class="act-refresh"
             role="button"
             tabindex="0"
-            :title="$t('刷新')"
-            :aria-label="$t('刷新')"
+            :title="$t('common.refresh')"
+            :aria-label="$t('common.refresh')"
             @click="loadActivities"
             @keydown.enter.prevent="loadActivities"
             @keydown.space.prevent="loadActivities"
@@ -634,13 +634,13 @@ function pickSession(id: string) {
           v-if="activitiesLoading && !recentActivities.length"
           class="act-empty"
         >
-          {{ $t('加载中…') }}
+          {{ $t('common.loading') }}
         </div>
         <div
           v-else-if="!recentActivities.length"
           class="act-empty"
         >
-          {{ $t('暂无活动') }}
+          {{ $t('common.no_activity_yet') }}
         </div>
         <div
           v-else
@@ -677,14 +677,14 @@ function pickSession(id: string) {
           <template #icon>
             <PlusOutlined />
           </template>
-          {{ $t('新对话') }}
+          {{ $t('chat.new_conversation') }}
         </Button>
         <div class="panel-search">
           <SearchOutlined class="search-icon" />
           <input
             v-model="sessionQuery"
             class="search-input"
-            :placeholder="$t('搜索会话')"
+            :placeholder="$t('chat.search_sessions')"
           >
           <CloseOutlined
             v-if="sessionQuery"
@@ -715,7 +715,7 @@ function pickSession(id: string) {
           v-if="filteredSessions.length === 0"
           class="list-empty"
         >
-          {{ $t('暂无对话') }}
+          {{ $t('chat.no_conversations_yet') }}
         </div>
         <!-- P2-B: 按时间分组渲染（置顶/今天/昨天/7天内/更早） -->
         <template
@@ -742,13 +742,13 @@ function pickSession(id: string) {
                   v-if="s.pinned"
                   class="pin-icon"
                 />
-                <span class="session-title">{{ s.title || $t('新对话') }}</span>
+                <span class="session-title">{{ s.title || $t('chat.new_conversation') }}</span>
                 <!-- P0：分支标记 —— 让"分支出来的会话"在列表里一眼可辨（第 3 条诉求）-->
                 <span
                   v-if="s.parent_session_id"
                   class="session-branch"
                   :title="branchTip(s)"
-                >{{ $t('分支') }}</span>
+                >{{ $t('common.branch') }}</span>
                 <span
                   v-if="s.tag"
                   class="session-tag"
@@ -765,7 +765,7 @@ function pickSession(id: string) {
                 type="text"
                 size="small"
                 class="session-more-btn"
-                :aria-label="$t('会话操作：{name}', { name: s.title || $t('新对话') })"
+                :aria-label="$t('会话操作：{name}', { name: s.title || $t('chat.new_conversation') })"
                 @click.stop
               >
                 <template #icon>
@@ -778,13 +778,13 @@ function pickSession(id: string) {
                     key="rename"
                     @click="emit('rename', s.id, s.title || '')"
                   >
-                    <EditOutlined class="menu-icon" />{{ $t('重命名') }}
+                    <EditOutlined class="menu-icon" />{{ $t('common.rename') }}
                   </MenuItem>
                   <MenuItem
                     key="pin"
                     @click="emit('pin', s.id, !s.pinned)"
                   >
-                    <PushpinOutlined class="menu-icon" />{{ s.pinned ? $t('取消置顶') : $t('置顶') }}
+                    <PushpinOutlined class="menu-icon" />{{ s.pinned ? $t('common.unpin') : $t('common.pin_to_top') }}
                   </MenuItem>
                   <!-- P3-D: 标签设置（用 MenuDivider 分组，避免 SubMenu 在 Dropdown overlay 中丢失上下文） -->
                   <MenuDivider />
@@ -800,20 +800,20 @@ function pickSession(id: string) {
                     key="tag-custom"
                     @click="openCustomTag(s.id)"
                   >
-                    <EditOutlined class="menu-icon" />{{ $t('自定义标签…') }}
+                    <EditOutlined class="menu-icon" />{{ $t('common.custom_tag_2') }}
                   </MenuItem>
                   <MenuItem
                     key="tag-clear"
                     @click="emit('tag', s.id, '')"
                   >
-                    <CloseOutlined class="menu-icon" />{{ $t('清除标签') }}
+                    <CloseOutlined class="menu-icon" />{{ $t('common.clear_tags') }}
                   </MenuItem>
                   <MenuDivider />
                   <MenuItem
                     key="share"
                     @click="emit('share', s.id)"
                   >
-                    <ShareAltOutlined class="menu-icon" />{{ $t('分享') }}
+                    <ShareAltOutlined class="menu-icon" />{{ $t('common.share') }}
                   </MenuItem>
                   <MenuDivider />
                   <MenuItem
@@ -821,7 +821,7 @@ function pickSession(id: string) {
                     danger
                     @click="emit('delete', s.id)"
                   >
-                    <DeleteOutlined class="menu-icon" />{{ $t('删除') }}
+                    <DeleteOutlined class="menu-icon" />{{ $t('common.delete') }}
                   </MenuItem>
                 </Menu>
               </template>
@@ -833,13 +833,13 @@ function pickSession(id: string) {
       <!-- 底部：最近活动（/v1/activities，30s 轮询，点击跳转） -->
       <div class="panel-activities">
         <div class="act-head">
-          <span class="act-title">{{ $t('最近活动') }}</span>
+          <span class="act-title">{{ $t('common.recent_activity') }}</span>
           <span
             class="act-refresh"
             role="button"
             tabindex="0"
-            :title="$t('刷新')"
-            :aria-label="$t('刷新')"
+            :title="$t('common.refresh')"
+            :aria-label="$t('common.refresh')"
             @click="loadActivities"
             @keydown.enter.prevent="loadActivities"
             @keydown.space.prevent="loadActivities"
@@ -849,13 +849,13 @@ function pickSession(id: string) {
           v-if="activitiesLoading && !recentActivities.length"
           class="act-empty"
         >
-          {{ $t('加载中…') }}
+          {{ $t('common.loading') }}
         </div>
         <div
           v-else-if="!recentActivities.length"
           class="act-empty"
         >
-          {{ $t('暂无活动') }}
+          {{ $t('common.no_activity_yet') }}
         </div>
         <div
           v-else
@@ -889,7 +889,7 @@ function pickSession(id: string) {
         >
           {{ (authStore.user?.name || userName || 'U').charAt(0).toUpperCase() }}
         </Avatar>
-        <span class="foot-name">{{ authStore.user?.name || userName || $t('用户') }}</span>
+        <span class="foot-name">{{ authStore.user?.name || userName || $t('admin.user_2') }}</span>
         <ThemeSwitcher class="foot-theme" />
         <LanguageSwitcher compact />
         <Dropdown

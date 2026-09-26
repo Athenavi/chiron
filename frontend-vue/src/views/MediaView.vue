@@ -882,7 +882,7 @@ onUnmounted(() => {
       <div class="toolbar-actions">
         <Input
           v-model:value="searchQuery"
-          :placeholder="$t('搜索文件')"
+          :placeholder="$t('media.search_files')"
           allow-clear
           style="width: 180px"
           size="small"
@@ -904,12 +904,12 @@ onUnmounted(() => {
           size="small"
           mode="multiple"
           allow-clear
-          :placeholder="$t('标签')"
+          :placeholder="$t('common.tag')"
           style="min-width: 120px"
         />
         <Segmented
           :value="viewMode"
-          :options="[{ label: $t('网格'), value: 'grid' }, { label: $t('列表'), value: 'list' }]"
+          :options="[{ label: $t('common.grid'), value: 'grid' }, { label: $t('common.list'), value: 'list' }]"
           size="small"
           @change="toggleView(($event as any) as 'grid' | 'list')"
         />
@@ -919,7 +919,7 @@ onUnmounted(() => {
         >
           <template #icon>
             <FolderAddOutlined />
-          </template>{{ $t('新建文件夹') }}
+          </template>{{ $t('media.new_folder') }}
         </Button>
         <Button
           type="primary"
@@ -928,7 +928,7 @@ onUnmounted(() => {
         >
           <template #icon>
             <CloudUploadOutlined />
-          </template>{{ $t('上传') }}
+          </template>{{ $t('common.upload') }}
         </Button>
       </div>
       <div
@@ -948,19 +948,19 @@ onUnmounted(() => {
         size="small"
         @click="selectAll"
       >
-        {{ $t('全选') }}
+        {{ $t('common.select_all') }}
       </Button>
       <Button
         size="small"
         @click="deselectAll"
       >
-        {{ $t('取消选择') }}
+        {{ $t('common.deselect') }}
       </Button>
       <Button
         size="small"
         @click="invertSelection"
       >
-        {{ $t('反选') }}
+        {{ $t('common.invert_selection') }}
       </Button>
       <Button
         size="small"
@@ -968,37 +968,37 @@ onUnmounted(() => {
         :loading="batchDeleting"
         @click="batchDelete"
       >
-        {{ $t('批量删除') }}
+        {{ $t('common.batch_delete') }}
       </Button>
       <Button
         size="small"
         @click="openBatchMove"
       >
-        {{ $t('批量移动') }}
+        {{ $t('common.batch_move') }}
       </Button>
       <Button
         size="small"
         @click="openBatchRename"
       >
-        {{ $t('批量重命名') }}
+        {{ $t('common.batch_rename') }}
       </Button>
       <Button
         size="small"
         @click="openBatchTags"
       >
-        {{ $t('批量标签') }}
+        {{ $t('common.batch_tags') }}
       </Button>
       <Button
         size="small"
         @click="batchDownload"
       >
-        {{ $t('批量下载') }}
+        {{ $t('common.batch_download') }}
       </Button>
       <Button
         size="small"
         @click="openKbModal"
       >
-        {{ $t('添加到知识库') }}
+        {{ $t('knowledge.add_to_knowledge_base') }}
       </Button>
     </div>
 
@@ -1016,14 +1016,14 @@ onUnmounted(() => {
       v-else-if="error"
       size="page"
       :icon="markRaw(CloudUploadOutlined)"
-      :description="$t('加载失败')"
-      :hint="$t('无法连接媒体服务，请检查网络后重试')"
+      :description="$t('errors.failed_to_load')"
+      :hint="$t('common.unable_to_connect_to_media_service_please_check_your_network_and_retry')"
     >
       <Button
         type="primary"
         @click="fetchItems"
       >
-        {{ $t('重试') }}
+        {{ $t('common.retry') }}
       </Button>
     </EmptyState>
 
@@ -1032,8 +1032,8 @@ onUnmounted(() => {
       v-else-if="items.length === 0"
       size="page"
       :icon="markRaw(PictureOutlined)"
-      :description="$t('暂无文件')"
-      :hint="$t('拖拽文件到此处或点击上传，开始管理你的媒体库')"
+      :description="$t('media.no_files_yet')"
+      :hint="$t('media.drag_files_here_or_click_to_upload_to_start_managing_your_media_library')"
     >
       <Button
         type="primary"
@@ -1042,7 +1042,7 @@ onUnmounted(() => {
         <template #icon>
           <CloudUploadOutlined />
         </template>
-        {{ $t('上传文件') }}
+        {{ $t('media.upload_file') }}
       </Button>
     </EmptyState>
 
@@ -1129,7 +1129,7 @@ onUnmounted(() => {
     <Drawer
       :open="!!detailItem"
       :width="360"
-      :title="detailItem?.name || $t('文件详情')"
+      :title="detailItem?.name || $t('media.file_details')"
       @close="detailItem = null"
     >
       <template v-if="detailItem">
@@ -1151,23 +1151,23 @@ onUnmounted(() => {
         </div>
         <div class="detail-info">
           <div class="detail-row">
-            <span class="label">{{ $t('类型') }}</span><span>{{ detailItem.type }}</span>
+            <span class="label">{{ $t('common.type') }}</span><span>{{ detailItem.type }}</span>
           </div>
           <div class="detail-row">
-            <span class="label">{{ $t('大小') }}</span><span>{{ formatSize(detailItem.size) }}</span>
+            <span class="label">{{ $t('common.size') }}</span><span>{{ formatSize(detailItem.size) }}</span>
           </div>
           <div class="detail-row">
             <span class="label">MIME</span><span>{{ detailItem.mime_type || '—' }}</span>
           </div>
           <div class="detail-row">
-            <span class="label">{{ $t('上传时间') }}</span><span>{{ detailItem.created_at }}</span>
+            <span class="label">{{ $t('common.upload_time') }}</span><span>{{ detailItem.created_at }}</span>
           </div>
           <div class="detail-row">
             <span class="label">URL</span><span class="url-text">{{ itemUrl(detailItem) }}</span>
           </div>
           <!-- 标签编辑 -->
           <div class="detail-row">
-            <span class="label"><TagOutlined /> {{ $t('标签') }}</span>
+            <span class="label"><TagOutlined /> {{ $t('common.tag') }}</span>
             <div class="tag-list">
               <Tag
                 v-for="t in detailItem.tags || []"
@@ -1180,13 +1180,13 @@ onUnmounted(() => {
               <span
                 v-if="!(detailItem.tags || []).length"
                 class="no-tags"
-              >{{ $t('暂无标签') }}</span>
+              >{{ $t('common.no_tags_yet') }}</span>
             </div>
             <div class="tag-add">
               <Input
                 v-model:value="tagInput"
                 size="small"
-                :placeholder="$t('添加标签，回车确认')"
+                :placeholder="$t('common.add_a_tag_and_press_enter_to_confirm')"
                 style="width: 100%"
                 @press-enter="addTag"
               />
@@ -1197,7 +1197,7 @@ onUnmounted(() => {
             v-if="shareUrl"
             class="detail-row"
           >
-            <span class="label">{{ $t('分享链接') }}</span>
+            <span class="label">{{ $t('common.share_link') }}</span>
             <span class="url-text">{{ shareUrl }}</span>
             <div
               v-if="shareExpires"
@@ -1213,28 +1213,28 @@ onUnmounted(() => {
             block
             @click="openLightbox(detailItem)"
           >
-            {{ $t('大图查看') }}
+            {{ $t('media.view_large_image') }}
           </Button>
           <Button
             v-if="!isFolder(detailItem)"
             block
             @click="openPreview(detailItem)"
           >
-            {{ $t('预览') }}
+            {{ $t('common.preview') }}
           </Button>
           <Button
             v-if="!isFolder(detailItem)"
             block
             @click="downloadItem(detailItem)"
           >
-            {{ $t('下载') }}
+            {{ $t('common.download') }}
           </Button>
           <Button
             v-if="!isFolder(detailItem)"
             block
             @click="copyUrl(detailItem)"
           >
-            {{ $t('复制 URL') }}
+            {{ $t('common.copy_url') }}
           </Button>
           <Button
             v-if="!isFolder(detailItem)"
@@ -1242,29 +1242,29 @@ onUnmounted(() => {
             :loading="shareLoading"
             @click="shareItem"
           >
-            {{ $t('生成分享链接') }}
+            {{ $t('common.generate_share_link') }}
           </Button>
           <Button
             block
             @click="openRename"
           >
-            {{ $t('重命名') }}
+            {{ $t('common.rename') }}
           </Button>
           <Button
             block
             @click="openMove"
           >
-            {{ $t('移动到') }}
+            {{ $t('common.move_to') }}
           </Button>
           <Popconfirm
-            :title="$t('确认删除？文件夹将连同子项一并删除')"
+            :title="$t('media.confirm_delete_the_folder_and_its_children_will_be_deleted_together')"
             @confirm="detailItem && deleteItem(detailItem.id)"
           >
             <Button
               block
               danger
             >
-              {{ $t('删除') }}
+              {{ $t('common.delete') }}
             </Button>
           </Popconfirm>
         </div>
@@ -1274,7 +1274,7 @@ onUnmounted(() => {
     <!-- 重命名 -->
     <Modal
       v-model:open="showRename"
-      :title="$t('重命名')"
+      :title="$t('common.rename')"
       :width="360"
       @ok="submitRename"
     >
@@ -1287,13 +1287,13 @@ onUnmounted(() => {
     <!-- 移动 -->
     <Modal
       v-model:open="showMove"
-      :title="$t('移动到')"
+      :title="$t('common.move_to')"
       :width="400"
       @ok="submitMove"
     >
       <div class="move-tree">
         <Tree
-          :tree-data="[{ key: '', title: $t('根目录'), children: moveTreeData }]"
+          :tree-data="[{ key: '', title: $t('common.root_directory'), children: moveTreeData }]"
           :default-expand-all="false"
           :selected-keys="moveParentId ? [moveParentId] : ['']"
           @select="(keys: any[]) => { if (keys.length) moveParentId = String(keys[0]) }"
@@ -1304,18 +1304,18 @@ onUnmounted(() => {
     <!-- 新建文件夹 -->
     <Modal
       v-model:open="newFolderOpen"
-      :title="$t('新建文件夹')"
+      :title="$t('media.new_folder')"
       :width="360"
       :confirm-loading="folderCreating"
       @ok="createFolder"
     >
       <Input
         v-model:value="newFolderName"
-        :placeholder="$t('文件夹名称')"
+        :placeholder="$t('media.folder_name')"
         @press-enter="createFolder"
       />
       <div class="folder-hint">
-        {{ $t('将创建在当前目录：{dir}', { dir: breadcrumbs[breadcrumbs.length - 1]?.name || $t('根目录') }) }}
+        {{ $t('将创建在当前目录：{dir}', { dir: breadcrumbs[breadcrumbs.length - 1]?.name || $t('common.root_directory') }) }}
       </div>
     </Modal>
 
@@ -1334,7 +1334,7 @@ onUnmounted(() => {
         <button
           type="button"
           class="lb-btn lb-prev"
-          :title="$t('上一张')"
+          :title="$t('media.previous_image')"
           @click="lbPrev"
         >
           <LeftOutlined />
@@ -1348,7 +1348,7 @@ onUnmounted(() => {
         <button
           type="button"
           class="lb-btn lb-next"
-          :title="$t('下一张')"
+          :title="$t('media.next_image')"
           @click="lbNext"
         >
           <RightOutlined />
@@ -1360,8 +1360,8 @@ onUnmounted(() => {
         <button
           type="button"
           class="lb-close"
-          :title="$t('关闭')"
-          :aria-label="$t('关闭')"
+          :title="$t('common.close')"
+          :aria-label="$t('common.close')"
           @click="lightboxOpen = false"
         >
           ✕
@@ -1372,7 +1372,7 @@ onUnmounted(() => {
     <!-- 分享 -->
     <Modal
       v-model:open="showShare"
-      :title="$t('分享链接')"
+      :title="$t('common.share_link')"
       :width="480"
       :footer="null"
     >
@@ -1382,7 +1382,7 @@ onUnmounted(() => {
           read-only
         />
         <Button @click="copyShareUrl">
-          {{ $t('复制') }}
+          {{ $t('common.copy') }}
         </Button>
       </div>
       <div
@@ -1415,7 +1415,7 @@ onUnmounted(() => {
     <!-- 上传（拖拽 + 多文件 + 进度） -->
     <Modal
       v-model:open="showUpload"
-      :title="$t('上传文件')"
+      :title="$t('media.upload_file')"
       :width="640"
       :footer="null"
       destroy-on-close
@@ -1432,10 +1432,10 @@ onUnmounted(() => {
             <CloudUploadOutlined />
           </p>
           <p class="ant-upload-text">
-            {{ $t('拖拽文件到此处，或点击选择') }}
+            {{ $t('media.drag_files_here_or_click_to_select') }}
           </p>
           <p class="ant-upload-hint">
-            {{ $t('支持多文件上传，单文件不超过 50MB') }}
+            {{ $t('media.multi_file_upload_supported_up_to_50mb_per_file') }}
           </p>
         </Upload>
         
@@ -1445,7 +1445,7 @@ onUnmounted(() => {
           class="upload-progress-list"
         >
           <h4 style="margin: 16px 0 8px; font-size: 14px;">
-            {{ $t('上传进度') }}
+            {{ $t('common.upload_progress') }}
           </h4>
           <div 
             v-for="[fileId, state] in uploadingFiles" 
@@ -1459,7 +1459,7 @@ onUnmounted(() => {
                 :class="state.status"
               >
                 {{ state.status === 'uploading' ? `${state.progress}%` : 
-                  state.status === 'success' ? $t('✓ 完成') : 
+                  state.status === 'success' ? $t('common.done_2') : 
                   `✗ ${state.error}` }}
               </span>
             </div>
@@ -1486,14 +1486,14 @@ onUnmounted(() => {
               size="small"
               @click="clearCompletedUploads"
             >
-              {{ $t('清除已完成') }}
+              {{ $t('common.clear_completed') }}
             </Button>
             <Button
               size="small"
               type="primary"
               @click="retryFailedUploads"
             >
-              {{ $t('重试失败') }}
+              {{ $t('errors.retry_failed') }}
             </Button>
           </div>
         </div>
@@ -1503,21 +1503,21 @@ onUnmounted(() => {
     <!-- 添加到知识库 -->
     <Modal
       v-model:open="showKbModal"
-      :title="$t('添加到知识库')"
+      :title="$t('knowledge.add_to_knowledge_base')"
       :width="420"
       :footer="null"
     >
-      <p>{{ $t('已选择') }} <strong>{{ selectedIds.size }}</strong> {{ $t('个文件') }}</p>
+      <p>{{ $t('common.selected') }} <strong>{{ selectedIds.size }}</strong> {{ $t('media.files') }}</p>
       <Select
         v-model:value="selectedKbId"
         :options="kbOptions"
-        :placeholder="$t('请选择知识库')"
+        :placeholder="$t('knowledge.please_select_a_knowledge_base')"
         show-search
         style="width: 100%; margin-top: 12px"
       />
       <div class="modal-footer">
         <Button @click="showKbModal = false">
-          {{ $t('取消') }}
+          {{ $t('common.cancel') }}
         </Button>
         <Button
           type="primary"
@@ -1525,7 +1525,7 @@ onUnmounted(() => {
           :disabled="!selectedKbId"
           @click="uploadToKnowledgeBase"
         >
-          {{ $t('开始上传') }}
+          {{ $t('common.start_upload') }}
         </Button>
       </div>
     </Modal>
@@ -1533,15 +1533,15 @@ onUnmounted(() => {
     <!-- 批量移动 -->
     <Modal
       v-model:open="showBatchMove"
-      :title="$t('批量移动到')"
+      :title="$t('common.batch_move_to')"
       :width="400"
       :confirm-loading="batchMoving"
       @ok="submitBatchMove"
     >
-      <p>{{ $t('将移动') }} <strong>{{ selectedIds.size }}</strong> {{ $t('个选中项') }}</p>
+      <p>{{ $t('common.will_move') }} <strong>{{ selectedIds.size }}</strong> {{ $t('common.selected_items') }}</p>
       <div class="move-tree">
         <Tree
-          :tree-data="[{ key: '', title: $t('根目录'), children: moveTreeData }]"
+          :tree-data="[{ key: '', title: $t('common.root_directory'), children: moveTreeData }]"
           :default-expand-all="false"
           :selected-keys="batchMoveParentId ? [batchMoveParentId] : ['']"
           @select="(keys: any[]) => { if (keys.length) batchMoveParentId = String(keys[0]) }"
@@ -1552,65 +1552,65 @@ onUnmounted(() => {
     <!-- 批量重命名 -->
     <Modal
       v-model:open="showBatchRename"
-      :title="$t('批量重命名')"
+      :title="$t('common.batch_rename')"
       :width="500"
       :confirm-loading="batchRenaming"
       @ok="submitBatchRename"
     >
-      <p>{{ $t('将为') }} <strong>{{ selectedIds.size }}</strong> {{ $t('个文件应用以下规则：') }}</p>
+      <p>{{ $t('common.will_be') }} <strong>{{ selectedIds.size }}</strong> {{ $t('media.files_with_the_following_rules') }}</p>
       <div style="margin-top: 16px; display: flex; flex-direction: column; gap: 12px;">
         <div>
-          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('前缀') }}</label>
+          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('common.prefix') }}</label>
           <Input
             v-model:value="renamePrefix"
-            :placeholder="$t('例如: [项目A]_')"
+            :placeholder="$t('common.e_g_project_a')"
           />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('后缀') }}</label>
+          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('common.suffix') }}</label>
           <Input
             v-model:value="renameSuffix"
-            :placeholder="$t('例如: _v2')"
+            :placeholder="$t('common.e_g_v2')"
           />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('查找文本') }}</label>
+          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('common.find_text') }}</label>
           <Input
             v-model:value="renameFindText"
-            :placeholder="$t('要替换的文本（支持正则）')"
+            :placeholder="$t('common.text_to_replace_regex_supported')"
           />
         </div>
         <div>
-          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('替换为') }}</label>
+          <label style="display: block; margin-bottom: 4px; font-size: 13px; color: var(--text-muted);">{{ $t('common.replace_with') }}</label>
           <Input
             v-model:value="renameReplaceText"
-            :placeholder="$t('替换后的文本')"
+            :placeholder="$t('common.replaced_text')"
           />
         </div>
       </div>
       <div style="margin-top: 12px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 12px; color: var(--text-tertiary);">
-        <strong>{{ $t('示例：') }}</strong>{{ $t('原文件名 "report.pdf" → 前缀 "[2024]_" + 后缀 "_final" = "[2024]_report_final.pdf"') }}
+        <strong>{{ $t('common.example') }}</strong>{{ $t('原文件名 "report.pdf" → 前缀 "[2024]_" + 后缀 "_final" = "[2024]_report_final.pdf"') }}
       </div>
     </Modal>
 
     <!-- 批量标签 -->
     <Modal
       v-model:open="showBatchTags"
-      :title="$t('批量添加标签')"
+      :title="$t('common.batch_add_tags')"
       :width="400"
       :confirm-loading="batchTagging"
       @ok="submitBatchTags"
     >
-      <p>{{ $t('将为') }} <strong>{{ selectedIds.size }}</strong> {{ $t('个文件添加标签：') }}</p>
+      <p>{{ $t('common.will_be') }} <strong>{{ selectedIds.size }}</strong> {{ $t('media.files_tagged') }}</p>
       <div style="margin-top: 16px;">
         <Input
           v-model:value="batchTagInput"
-          :placeholder="$t('输入标签名称，回车确认')"
+          :placeholder="$t('common.enter_tag_name_and_press_enter_to_confirm')"
           @press-enter="submitBatchTags"
         />
       </div>
       <div style="margin-top: 8px; font-size: 12px; color: var(--text-tertiary);">
-        {{ $t('提示：如果文件已有该标签，将自动跳过') }}
+        {{ $t('media.tip_if_the_file_already_has_this_tag_it_will_be_skipped_automatically') }}
       </div>
     </Modal>
   </div>

@@ -52,10 +52,10 @@ async function handleUpdateProfile() {
   loading.value = true
   try {
     await api.put('/v1/auth/profile', form.value)
-    message.success(t('个人信息已更新'))
+    message.success(t('settings.profile_updated'))
     await authStore.fetchProfile()
   } catch (error) {
-    message.error((error instanceof Error ? error.message : '') || t('更新失败'))
+    message.error((error instanceof Error ? error.message : '') || t('errors.update_failed'))
   } finally {
     loading.value = false
   }
@@ -80,7 +80,7 @@ async function loadBindings() {
     const boundNames = new Set(ids.map(i => i.provider_name))
     bindable.value = providers.filter(p => !boundNames.has(p.display_name) && !boundNames.has(p.name))
   } catch (e) {
-    message.error(serverErrorMessage(e, t('绑定信息加载失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_binding_info')))
   } finally {
     bindingsLoading.value = false
   }
@@ -95,10 +95,10 @@ async function handleUnbind(id: string) {
   unbinding.value = id
   try {
     await deleteIdentity(id)
-    message.success(t('已解绑'))
+    message.success(t('common.unbound'))
     await loadBindings()
   } catch (e) {
-    message.error(serverErrorMessage(e, t('解绑失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_unbind')))
   } finally {
     unbinding.value = ''
   }
@@ -132,7 +132,7 @@ async function loadPhone() {
 async function handleSendBindCode() {
   const p = phoneForm.value.phone.trim()
   if (!isValidPhone(p)) {
-    message.warning(t('请输入正确的手机号'))
+    message.warning(t('common.please_enter_a_valid_phone_number'))
     return
   }
   sendingCode.value = true
@@ -144,9 +144,9 @@ async function handleSendBindCode() {
     const status = errorStatus(e)
     const apiErr = serverErrorMessage(e, '')
     if (status === 429) {
-      message.error(t('发送过于频繁，请稍后再试'))
+      message.error(t('common.sending_too_frequently_please_try_again_later'))
     } else if (status === 403) {
-      message.error(apiErr || t('短信服务未启用'))
+      message.error(apiErr || t('common.sms_service_not_enabled'))
     } else {
       message.error(apiErr || t('auth.verificationCodeSendFailed'))
     }
@@ -158,22 +158,22 @@ async function handleSendBindCode() {
 async function handleBindPhone() {
   const { phone: p, code } = phoneForm.value
   if (!isValidPhone(p) || !code.trim()) {
-    message.warning(t('请填写手机号与验证码'))
+    message.warning(t('auth.please_enter_phone_number_and_verification_code'))
     return
   }
   phoneBinding.value = true
   try {
     await bindPhone({ phone: p.trim(), code: code.trim() })
-    message.success(t('手机号绑定成功'))
+    message.success(t('common.phone_number_bound_successfully'))
     phoneForm.value = { phone: '', code: '' }
     await loadPhone()
   } catch (e) {
     const status = errorStatus(e)
     const apiErr = serverErrorMessage(e, '')
     if (status === 409) {
-      message.error(t('该手机号已绑定其他账号'))
+      message.error(t('auth.this_phone_number_is_bound_to_another_account'))
     } else {
-      message.error(apiErr || t('绑定失败'))
+      message.error(apiErr || t('errors.binding_failed'))
     }
   } finally {
     phoneBinding.value = false
@@ -184,10 +184,10 @@ async function handleUnbindPhone() {
   unbindingPhone.value = true
   try {
     await unbindPhone()
-    message.success(t('已解绑手机号'))
+    message.success(t('common.phone_number_unbound'))
     await loadPhone()
   } catch (e) {
-    message.error(serverErrorMessage(e, t('解绑失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_unbind')))
   } finally {
     unbindingPhone.value = false
   }
@@ -201,26 +201,26 @@ const pwdLoading = ref(false)
 async function handleSetPassword() {
   const { current_password, new_password, confirm } = pwdForm.value
   if (new_password.length < 8 || new_password.length > 128) {
-    message.warning(t('新密码需 8-128 位'))
+    message.warning(t('auth.new_password_must_be_8_128_characters'))
     return
   }
   if (new_password !== confirm) {
-    message.warning(t('两次输入的新密码不一致'))
+    message.warning(t('auth.the_two_new_password_entries_do_not_match'))
     return
   }
   pwdLoading.value = true
   try {
     await setPassword({ current_password: current_password || undefined, new_password })
-    message.success(t('密码已设置'))
+    message.success(t('auth.password_set'))
     pwdForm.value = { current_password: '', new_password: '', confirm: '' }
   } catch (e) {
     const apiErr = serverErrorMessage(e, '')
     if (apiErr === 'current_password is required') {
-      message.error(t('该账号已设置密码，请先输入当前密码'))
+      message.error(t('auth.this_account_already_has_a_password_please_enter_the_current_password_first'))
     } else if (apiErr === 'invalid current password') {
-      message.error(t('当前密码不正确'))
+      message.error(t('auth.current_password_is_incorrect'))
     } else {
-      message.error(apiErr || t('设置失败'))
+      message.error(apiErr || t('errors.failed_to_set'))
     }
   } finally {
     pwdLoading.value = false
@@ -253,18 +253,18 @@ async function saveSpeechPrefs() {
   speechSaving.value = true
   try {
     await api.put('/v1/auth/profile', { settings: { tts: speech.value } })
-    message.success(t('朗读设置已保存'))
+    message.success(t('settings.read_aloud_settings_saved'))
     await authStore.fetchProfile()
   } catch (e) {
-    message.error(serverErrorMessage(e, t('保存失败')))
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     speechSaving.value = false
   }
 }
 
 function previewSpeech() {
-  if (!speak(t('这是一段朗读试听。'), speech.value)) {
-    message.warning(t('请先选择音色，或当前浏览器不支持朗读'))
+  if (!speak(t('common.this_is_a_text_to_speech_preview'), speech.value)) {
+    message.warning(t('common.please_select_a_voice_first_or_the_current_browser_does_not_support_read_aloud'))
   }
 }
 
@@ -288,7 +288,7 @@ async function loadShares() {
     const { data } = await api.get('/v1/shares')
     shares.value = data?.data?.items ?? []
   } catch (e) {
-    message.error(serverErrorMessage(e, t('分享列表加载失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_shares')))
   } finally {
     sharesLoading.value = false
   }
@@ -299,10 +299,10 @@ async function handleRevokeShare(item: ShareItem) {
   try {
     // 撤销是按会话维度的（后端会把该会话所有有效分享标记 revoked）
     await api.delete(`/v1/conversations/${item.session_id}/share`)
-    message.success(t('已取消分享'))
+    message.success(t('common.sharing_canceled'))
     await loadShares()
   } catch (e) {
-    message.error(serverErrorMessage(e, t('取消分享失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_cancel_sharing')))
   } finally {
     revoking.value = ''
   }
@@ -315,9 +315,9 @@ function shareURL(id: string) {
 async function copyShareURL(id: string) {
   try {
     await navigator.clipboard.writeText(shareURL(id))
-    message.success(t('分享链接已复制'))
+    message.success(t('common.share_link_copied'))
   } catch {
-    message.warning(t('复制失败，请手动复制'))
+    message.warning(t('errors.copy_failed_please_copy_manually'))
   }
 }
 
@@ -343,7 +343,7 @@ async function loadConversations() {
     // 兼容 {items:[...]} 与直接数组两种返回形态
     conversations.value = data?.data?.items ?? data?.data ?? []
   } catch (e) {
-    message.error(serverErrorMessage(e, t('会话列表加载失败')))
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_session_list')))
   } finally {
     convLoading.value = false
   }
@@ -359,16 +359,16 @@ interface ExportMessage {
 /** 把一次会话渲染成 Markdown；reasoning 单独成节，避免与正文混淆 */
 function conversationToMarkdown(conv: ConversationItem, messages: ExportMessage[]): string {
   const lines: string[] = [
-    t('# {title}', { title: conv.title || t('未命名会话') }),
+    t('# {title}', { title: conv.title || t('chat.untitled_session') }),
     '',
     t('> 导出时间：{time}', { time: new Date().toLocaleString() }),
     '',
   ]
   for (const m of messages) {
-    const role = m.role === 'user' ? t('用户') : m.role === 'assistant' ? t('助手') : (m.role || t('未知'))
+    const role = m.role === 'user' ? t('admin.user_2') : m.role === 'assistant' ? t('common.assistant_2') : (m.role || t('common.unknown'))
     lines.push(`## ${role}`, '')
     if (m.reasoning) {
-      lines.push('<details><summary>' + t('思考过程') + '</summary>', '', String(m.reasoning), '', '</details>', '')
+      lines.push('<details><summary>' + t('chat.reasoning_process') + '</summary>', '', String(m.reasoning), '', '</details>', '')
     }
     lines.push(String(m.content ?? ''), '')
   }
@@ -379,7 +379,7 @@ function conversationToMarkdown(conv: ConversationItem, messages: ExportMessage[
 async function exportSelected() {
   const ids = selectedConvIds.value
   if (!ids.length) {
-    message.warning(t('请先选择要导出的会话'))
+    message.warning(t('chat.please_select_the_session_to_export_first'))
     return
   }
   exporting.value = true
@@ -401,7 +401,7 @@ async function exportSelected() {
     URL.revokeObjectURL(url)
     message.success(t('已导出 {n} 个会话', { n: ids.length }))
   } catch (e) {
-    message.error(serverErrorMessage(e, t('导出失败')))
+    message.error(serverErrorMessage(e, t('errors.export_failed')))
   } finally {
     exporting.value = false
   }
@@ -410,7 +410,7 @@ async function exportSelected() {
 async function deleteSelected() {
   const ids = selectedConvIds.value
   if (!ids.length) {
-    message.warning(t('请先选择要删除的会话'))
+    message.warning(t('chat.please_select_the_session_to_delete_first'))
     return
   }
   deleting.value = true
@@ -457,7 +457,7 @@ onMounted(async () => {
   }
   // 绑定成功回跳（bindURL=/profile?bind=ok）；弹窗入口不会带该参数
   if (route.query.bind === 'ok') {
-    message.success(t('三方账号绑定成功'))
+    message.success(t('auth.third_party_account_bound_successfully'))
   }
   loadSpeechPrefs()
   loadBindings()
@@ -472,31 +472,31 @@ onMounted(async () => {
     <!-- ── 通用设置 ── -->
     <a-tab-pane
       key="general"
-      :tab="$t('通用设置')"
+      :tab="$t('settings.general_settings')"
     >
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('外观与主题') }}
+          {{ $t('settings.appearance_and_theme') }}
         </div>
         <div class="appearance-row">
           <div class="appearance-label">
-            {{ $t('深浅模式') }}
+            {{ $t('common.light_dark_mode') }}
           </div>
           <a-radio-group
             :value="themeStore.preference"
             @change="() => themeStore.toggleTheme()"
           >
             <a-radio-button :value="'dark'">
-              {{ $t('深色') }}
+              {{ $t('common.dark') }}
             </a-radio-button>
             <a-radio-button :value="'light'">
-              {{ $t('浅色') }}
+              {{ $t('common.light') }}
             </a-radio-button>
           </a-radio-group>
         </div>
         <div class="appearance-row">
           <div class="appearance-label">
-            {{ $t('强调色') }}
+            {{ $t('common.accent_color') }}
           </div>
           <div class="accent-picker">
             <button
@@ -512,7 +512,7 @@ onMounted(async () => {
             <label
               class="accent-custom"
               :style="{ backgroundColor: themeStore.accent || DEFAULT_ACCENT }"
-              :title="$t('自定义颜色')"
+              :title="$t('common.custom_color')"
             >
               <input
                 type="color"
@@ -532,24 +532,24 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('朗读') }}
-          <span class="setting-hint">{{ $t('使用系统语音，无需联网') }}</span>
+          {{ $t('common.read_aloud') }}
+          <span class="setting-hint">{{ $t('common.use_system_voice_no_network_needed') }}</span>
         </div>
         <EmptyState
           v-if="!ttsSupported"
-          :description="$t('当前浏览器不支持语音朗读')"
+          :description="$t('common.current_browser_does_not_support_speech_synthesis')"
         />
         <template v-else>
           <div class="appearance-row">
             <div class="appearance-label">
-              {{ $t('音色') }}
+              {{ $t('common.voice') }}
             </div>
             <a-select
               v-model:value="speech.voiceURI"
               style="min-width: 240px; flex: 1"
               show-search
               option-filter-prop="label"
-              :placeholder="$t('系统默认')"
+              :placeholder="$t('common.system_default')"
               allow-clear
             >
               <a-select-opt-group
@@ -563,14 +563,14 @@ onMounted(async () => {
                   :value="v.voiceURI"
                   :label="v.localService ? v.name : $t('{name}（在线）', { name: v.name })"
                 >
-                  {{ v.name }}<span v-if="!v.localService">{{ $t('（在线）') }}</span>
+                  {{ v.name }}<span v-if="!v.localService">{{ $t('common.online') }}</span>
                 </a-select-option>
               </a-select-opt-group>
             </a-select>
           </div>
           <div class="appearance-row">
             <div class="appearance-label">
-              {{ $t('语速') }}
+              {{ $t('common.speed') }}
             </div>
             <Slider
               v-model:value="speech.rate"
@@ -583,7 +583,7 @@ onMounted(async () => {
           </div>
           <div class="appearance-row">
             <div class="appearance-label">
-              {{ $t('音调') }}
+              {{ $t('common.pitch') }}
             </div>
             <Slider
               v-model:value="speech.pitch"
@@ -599,21 +599,21 @@ onMounted(async () => {
               :disabled="speaking"
               @click="previewSpeech"
             >
-              {{ $t('试听') }}
+              {{ $t('common.preview_voice') }}
             </Button>
             <Button
               v-if="speaking"
               danger
               @click="stop"
             >
-              {{ $t('停止') }}
+              {{ $t('common.stop') }}
             </Button>
             <Button
               type="primary"
               :loading="speechSaving"
               @click="saveSpeechPrefs"
             >
-              {{ $t('保存设置') }}
+              {{ $t('settings.save_settings') }}
             </Button>
           </div>
         </template>
@@ -621,21 +621,21 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('语言') }}
-          <span class="setting-hint">{{ $t('即将支持') }}</span>
+          {{ $t('common.language') }}
+          <span class="setting-hint">{{ $t('common.coming_soon') }}</span>
         </div>
-        <EmptyState :description="$t('多语言界面尚在开发中，目前为简体中文')" />
+        <EmptyState :description="$t('common.the_multilingual_ui_is_in_development_currently_simplified_chinese_only')" />
       </div>
     </a-tab-pane>
 
     <!-- ── 账户设置 ── -->
     <a-tab-pane
       key="account"
-      :tab="$t('账户设置')"
+      :tab="$t('auth.account_settings')"
     >
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('基本资料') }}
+          {{ $t('settings.basic_profile') }}
         </div>
         <Form
           :model="form"
@@ -645,13 +645,13 @@ onMounted(async () => {
           <FormItem :label="$t('auth.username')">
             <Input
               v-model:value="form.name"
-              :placeholder="$t('请输入用户名')"
+              :placeholder="$t('auth.please_enter_username')"
             />
           </FormItem>
           <FormItem :label="$t('auth.email')">
             <Input
               v-model:value="form.email"
-              :placeholder="$t('请输入邮箱')"
+              :placeholder="$t('mail.please_enter_email')"
               disabled
             />
           </FormItem>
@@ -661,7 +661,7 @@ onMounted(async () => {
               :loading="loading"
               @click="handleUpdateProfile"
             >
-              {{ $t('保存修改') }}
+              {{ $t('common.save_changes') }}
             </Button>
           </FormItem>
         </Form>
@@ -669,12 +669,12 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('三方账号绑定') }}
+          {{ $t('auth.third_party_account_binding') }}
         </div>
         <Spin :spinning="bindingsLoading">
           <EmptyState
             v-if="!identities.length && !bindable.length"
-            :description="$t('暂无可用的三方登录方式')"
+            :description="$t('auth.no_available_third_party_login_methods_yet')"
           />
           <template v-else>
             <div
@@ -690,16 +690,16 @@ onMounted(async () => {
                 <span class="identity-meta">{{ item.email || item.subject }}</span>
               </div>
               <Popconfirm
-                :title="$t('确定解绑该三方账号？')"
-                :ok-text="$t('解绑')"
-                :cancel-text="$t('取消')"
+                :title="$t('auth.confirm_unbinding_this_third_party_account')"
+                :ok-text="$t('common.unbind')"
+                :cancel-text="$t('common.cancel')"
                 @confirm="handleUnbind(item.id)"
               >
                 <Button
                   danger
                   :loading="unbinding === item.id"
                 >
-                  {{ $t('解绑') }}
+                  {{ $t('common.unbind') }}
                 </Button>
               </Popconfirm>
             </div>
@@ -708,7 +708,7 @@ onMounted(async () => {
               class="bind-section"
             >
               <div class="bind-title">
-                {{ $t('可绑定的三方账号') }}
+                {{ $t('auth.bindable_third_party_accounts') }}
               </div>
               <div class="bind-buttons">
                 <Button
@@ -738,19 +738,19 @@ onMounted(async () => {
                 <MobileOutlined />
               </Tag>
               <span class="identity-name">{{ phone }}</span>
-              <span class="identity-meta">{{ $t('可用于短信验证码登录') }}</span>
+              <span class="identity-meta">{{ $t('auth.can_be_used_for_sms_verification_login') }}</span>
             </div>
             <Popconfirm
-              :title="$t('确定解绑该手机号？')"
-              :ok-text="$t('解绑')"
-              :cancel-text="$t('取消')"
+              :title="$t('common.confirm_unbinding_this_phone_number')"
+              :ok-text="$t('common.unbind')"
+              :cancel-text="$t('common.cancel')"
               @confirm="handleUnbindPhone"
             >
               <Button
                 danger
                 :loading="unbindingPhone"
               >
-                {{ $t('解绑') }}
+                {{ $t('common.unbind') }}
               </Button>
             </Popconfirm>
           </div>
@@ -763,7 +763,7 @@ onMounted(async () => {
             <FormItem :label="$t('auth.phone')">
               <Input
                 v-model:value="phoneForm.phone"
-                :placeholder="$t('请输入手机号')"
+                :placeholder="$t('common.please_enter_phone_number')"
                 :maxlength="21"
               >
                 <template #prefix>
@@ -774,7 +774,7 @@ onMounted(async () => {
             <FormItem :label="$t('auth.verificationCode')">
               <Input
                 v-model:value="phoneForm.code"
-                :placeholder="$t('短信验证码')"
+                :placeholder="$t('auth.sms_verification_code')"
                 :maxlength="6"
               >
                 <template #suffix>
@@ -785,7 +785,7 @@ onMounted(async () => {
                     :loading="sendingCode"
                     @click="handleSendBindCode"
                   >
-                    {{ phoneCountdown > 0 ? $t('{n}s 后重发', { n: phoneCountdown }) : $t('获取验证码') }}
+                    {{ phoneCountdown > 0 ? $t('{n}s 后重发', { n: phoneCountdown }) : $t('auth.get_verification_code') }}
                   </Button>
                 </template>
               </Input>
@@ -796,7 +796,7 @@ onMounted(async () => {
                 :loading="phoneBinding"
                 @click="handleBindPhone"
               >
-                {{ $t('绑定手机号') }}
+                {{ $t('common.bind_phone_number') }}
               </Button>
             </FormItem>
           </Form>
@@ -805,33 +805,33 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('设置密码') }}
-          <span class="setting-hint"><SafetyOutlined /> {{ $t('三方登录账号首次设置密码无需当前密码') }}</span>
+          {{ $t('auth.set_password') }}
+          <span class="setting-hint"><SafetyOutlined /> {{ $t('auth.third_party_account_setting_a_password_for_the_first_time_does_not_require_the_current_password') }}</span>
         </div>
         <Form
           :model="pwdForm"
           layout="vertical"
           class="setting-form"
         >
-          <FormItem :label="$t('当前密码（首次设置可留空）')">
+          <FormItem :label="$t('auth.current_password_leave_empty_on_first_set')">
             <Input
               v-model:value="pwdForm.current_password"
               type="password"
-              :placeholder="$t('已设置过密码的账号必填')"
+              :placeholder="$t('auth.required_for_accounts_that_have_set_a_password')"
             />
           </FormItem>
-          <FormItem :label="$t('新密码')">
+          <FormItem :label="$t('auth.new_password')">
             <Input
               v-model:value="pwdForm.new_password"
               type="password"
-              :placeholder="$t('8-128 位')"
+              :placeholder="$t('common.8_128_characters')"
             />
           </FormItem>
-          <FormItem :label="$t('确认新密码')">
+          <FormItem :label="$t('auth.confirm_new_password')">
             <Input
               v-model:value="pwdForm.confirm"
               type="password"
-              :placeholder="$t('再次输入新密码')"
+              :placeholder="$t('auth.enter_the_new_password_again')"
             />
           </FormItem>
           <FormItem>
@@ -840,7 +840,7 @@ onMounted(async () => {
               :loading="pwdLoading"
               @click="handleSetPassword"
             >
-              {{ $t('保存密码') }}
+              {{ $t('auth.save_password') }}
             </Button>
           </FormItem>
         </Form>
@@ -850,17 +850,17 @@ onMounted(async () => {
     <!-- ── 数据管理 ── -->
     <a-tab-pane
       key="data"
-      :tab="$t('数据管理')"
+      :tab="$t('common.data_management')"
     >
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('分享管理') }}
-          <span class="setting-hint">{{ $t('已公开的对话；取消后链接立即失效') }}</span>
+          {{ $t('common.share_management') }}
+          <span class="setting-hint">{{ $t('errors.published_conversation_canceling_makes_the_link_invalid_immediately') }}</span>
         </div>
         <Spin :spinning="sharesLoading">
           <EmptyState
             v-if="!shares.length"
-            :description="$t('尚未分享任何对话')"
+            :description="$t('chat.no_conversations_shared_yet')"
           />
           <div
             v-for="item in shares"
@@ -869,7 +869,7 @@ onMounted(async () => {
           >
             <div class="identity-info">
               <LinkOutlined class="row-icon" />
-              <span class="identity-name">{{ item.title || $t('未命名对话') }}</span>
+              <span class="identity-name">{{ item.title || $t('chat.untitled_conversation') }}</span>
               <span class="identity-meta">
                 {{ $t('{n} 条消息 · {time}', { n: item.message_count, time: new Date(item.created_at).toLocaleString() }) }}
               </span>
@@ -879,12 +879,12 @@ onMounted(async () => {
                 size="small"
                 @click="copyShareURL(item.share_id)"
               >
-                {{ $t('复制链接') }}
+                {{ $t('common.copy_link') }}
               </Button>
               <Popconfirm
-                :title="$t('确定取消该分享？链接将立即失效。')"
-                :ok-text="$t('取消分享')"
-                :cancel-text="$t('返回')"
+                :title="$t('errors.confirm_canceling_this_share_the_link_will_become_invalid_immediately')"
+                :ok-text="$t('common.cancel_sharing')"
+                :cancel-text="$t('common.back')"
                 @confirm="handleRevokeShare(item)"
               >
                 <Button
@@ -892,7 +892,7 @@ onMounted(async () => {
                   danger
                   :loading="revoking === item.share_id"
                 >
-                  {{ $t('取消分享') }}
+                  {{ $t('common.cancel_sharing') }}
                 </Button>
               </Popconfirm>
             </div>
@@ -902,7 +902,7 @@ onMounted(async () => {
 
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('历史会话') }}
+          {{ $t('chat.history_sessions') }}
           <span class="setting-hint">
             {{ $t('已选 {sel} / {total}', { sel: selectedCount, total: conversations.length }) }}
           </span>
@@ -912,7 +912,7 @@ onMounted(async () => {
             size="small"
             @click="toggleSelectAll"
           >
-            {{ allSelected ? $t('取消全选') : $t('全选') }}
+            {{ allSelected ? $t('common.clear_selection') : $t('common.select_all') }}
           </Button>
           <Button
             size="small"
@@ -920,12 +920,12 @@ onMounted(async () => {
             :loading="exporting"
             @click="exportSelected"
           >
-            <ExportOutlined /> {{ $t('导出所选（Markdown）') }}
+            <ExportOutlined /> {{ $t('common.export_selected_markdown') }}
           </Button>
           <Popconfirm
-            :title="$t('确定删除所选会话？此操作不可恢复。')"
-            :ok-text="$t('删除')"
-            :cancel-text="$t('取消')"
+            :title="$t('chat.confirm_deleting_the_selected_sessions_this_action_cannot_be_undone')"
+            :ok-text="$t('common.delete')"
+            :cancel-text="$t('common.cancel')"
             @confirm="deleteSelected"
           >
             <Button
@@ -934,7 +934,7 @@ onMounted(async () => {
               :disabled="!selectedCount"
               :loading="deleting"
             >
-              <DeleteOutlined /> {{ $t('删除所选') }}
+              <DeleteOutlined /> {{ $t('common.delete_selected') }}
             </Button>
           </Popconfirm>
         </div>
@@ -953,12 +953,12 @@ onMounted(async () => {
                     : selectedConvIds.filter(x => x !== c.id)
                 }"
               />
-              <span class="conv-title">{{ c.title || $t('未命名会话') }}</span>
+              <span class="conv-title">{{ c.title || $t('chat.untitled_session') }}</span>
               <span class="conv-meta">{{ c.updated_at ? new Date(c.updated_at).toLocaleString() : '' }}</span>
             </label>
             <EmptyState
               v-if="!conversations.length"
-              :description="$t('暂无历史会话')"
+              :description="$t('chat.no_history_sessions_yet')"
             />
           </div>
         </Spin>
@@ -968,32 +968,32 @@ onMounted(async () => {
     <!-- ── 服务协议 ── -->
     <a-tab-pane
       key="legal"
-      :tab="$t('服务协议')"
+      :tab="$t('common.terms_of_service')"
     >
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('用户协议') }}
+          {{ $t('admin.user_agreement') }}
         </div>
         <div class="legal-body">
-          <p>{{ $t('欢迎使用 Chiron。使用本服务前，请阅读并同意以下条款。') }}</p>
-          <p><strong>{{ $t('1. 服务内容。') }}</strong>{{ $t('本服务提供基于大语言模型的对话、知识库与工作流编排能力。服务可能因维护、升级或不可抗力中断。') }}</p>
-          <p><strong>{{ $t('2. 账号责任。') }}</strong>{{ $t('你需妥善保管账号凭据，并对账号下的全部活动负责。发现未经授权的使用应立即通知我们。') }}</p>
-          <p><strong>{{ $t('3. 使用规范。') }}</strong>{{ $t('不得利用本服务生成、传播违法信息，不得实施攻击、爬取、逆向等危害服务与其他用户的行为。') }}</p>
-          <p><strong>{{ $t('4. 内容归属。') }}</strong>{{ $t('你输入的内容归你所有；生成内容的使用需遵守适用法律。你需对自己发布的内容负责。') }}</p>
-          <p><strong>{{ $t('5. 服务变更与终止。') }}</strong>{{ $t('我们可能调整或终止部分功能，重大变更会提前通知。') }}</p>
+          <p>{{ $t('common.welcome_to_chiron_before_using_this_service_please_read_and_agree_to_the_following_terms') }}</p>
+          <p><strong>{{ $t('common.1_service_scope') }}</strong>{{ $t('workflow.this_service_provides_llm_based_conversation_knowledge_base_and_workflow_orchestration_service_may_be_interrupted_for_maintenance_upgrades_or_force_majeure') }}</p>
+          <p><strong>{{ $t('auth.2_account_responsibility') }}</strong>{{ $t('auth.you_must_safeguard_your_account_credentials_and_are_responsible_for_all_activity_under_your_account_unauthorized_use_must_be_reported_to_us_immediately') }}</p>
+          <p><strong>{{ $t('common.3_usage_rules') }}</strong>{{ $t('admin.do_not_use_this_service_to_generate_or_spread_illegal_content_or_to_attack_scrape_or_reverse_engineer_in_ways_that_harm_the_service_or_other_users') }}</p>
+          <p><strong>{{ $t('common.4_content_ownership') }}</strong>{{ $t('common.your_input_belongs_to_you_using_generated_content_must_comply_with_applicable_law_you_are_responsible_for_content_you_publish') }}</p>
+          <p><strong>{{ $t('common.5_changes_termination') }}</strong>{{ $t('settings.we_may_adjust_or_terminate_some_features_major_changes_will_be_announced_in_advance') }}</p>
         </div>
       </div>
       <div class="setting-block">
         <div class="setting-title">
-          {{ $t('隐私政策') }}
+          {{ $t('admin.privacy_policy') }}
         </div>
         <div class="legal-body">
-          <p><strong>{{ $t('1. 收集范围。') }}</strong>{{ $t('我们收集账号信息（邮箱、用户名）、你主动提交的对话与知识库内容，以及必要的访问日志。') }}</p>
-          <p><strong>{{ $t('2. 使用目的。') }}</strong>{{ $t('用于提供服务、保障安全与改进产品，不用于与服务无关的用途。') }}</p>
-          <p><strong>{{ $t('3. 存储与保护。') }}</strong>{{ $t('数据存储于你部署的实例；我们采取访问控制与传输加密等措施。') }}</p>
-          <p><strong>{{ $t('4. 第三方共享。') }}</strong>{{ $t('除法律要求或你明确授权外，不向第三方提供你的个人数据。') }}</p>
-          <p><strong>{{ $t('5. 你的权利。') }}</strong>{{ $t('你可在「数据管理」中导出或删除历史会话，也可在「账户设置」中解绑三方账号、手机号。') }}</p>
-          <p><strong>{{ $t('6. 联系。') }}</strong>{{ $t('对本政策有疑问，请通过部署方提供的渠道联系我们。') }}</p>
+          <p><strong>{{ $t('common.1_data_collected') }}</strong>{{ $t('auth.we_collect_account_info_email_username_the_conversations_and_knowledge_base_content_you_submit_and_necessary_access_logs') }}</p>
+          <p><strong>{{ $t('common.2_purpose') }}</strong>{{ $t('common.used_to_provide_the_service_ensure_security_and_improve_the_product_not_used_for_unrelated_purposes') }}</p>
+          <p><strong>{{ $t('common.3_storage_protection') }}</strong>{{ $t('common.data_is_stored_on_your_deployed_instance_we_apply_access_control_and_transport_encryption_measures') }}</p>
+          <p><strong>{{ $t('common.4_third_party_sharing') }}</strong>{{ $t('errors.except_as_required_by_law_or_explicitly_authorized_by_you_we_do_not_share_your_personal_data_with_third_parties') }}</p>
+          <p><strong>{{ $t('common.5_your_rights') }}</strong>{{ $t('auth.you_can_export_or_delete_history_sessions_in_data_management_and_unbind_third_party_accounts_or_phone_numbers_in_account_settings') }}</p>
+          <p><strong>{{ $t('common.6_contact') }}</strong>{{ $t('admin.if_you_have_questions_about_this_policy_contact_us_via_the_channel_provided_by_the_deployer') }}</p>
         </div>
       </div>
     </a-tab-pane>

@@ -111,7 +111,7 @@ function onUserInput() {
 onErrorCaptured((err) => {
   if (!safeMode.value) {
     safeMode.value = true
-    console.error(t('[MessageList] 渲染异常，降级为全量静态渲染'), err)
+    console.error(t('errors.messagelist_render_error_fell_back_to_full_static_render'), err)
   }
   return false   // 已处理，不再向上冒泡导致整页白屏
 })
@@ -246,7 +246,7 @@ function recomputeWindow() {
   if (!coversViewport(geo, range, scrollTop, viewportHeight)) {
     if (++coverFailures >= COVER_FAILURE_LIMIT) {
       safeMode.value = true
-      console.warn(t('[MessageList] 窗口覆盖连续失败，已降级为全量渲染'))
+      console.warn(t('errors.messagelist_windowing_failed_repeatedly_fell_back_to_full_render'))
     }
     fullRender.value = true
     setRange({ start: 0, end: n })
@@ -302,7 +302,7 @@ const questions = computed(() => {
     out.push({
       rowIndex,
       key: row.key,
-      preview: content.replace(/\s+/g, ' ').trim().slice(0, 60) || t('（空消息）'),
+      preview: content.replace(/\s+/g, ' ').trim().slice(0, 60) || t('chat.empty_message_2'),
     })
   })
   return out
@@ -530,7 +530,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       <template v-if="props.loadingEarlier">
         <span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" />
       </template>
-      <span v-else>{{ $t('加载更早的消息') }}</span>
+      <span v-else>{{ $t('chat.load_earlier_messages') }}</span>
     </div>
 
     <!-- 消息列表：窗口化渲染（只挂载窗口内的行，其余用 spacer 占位）。
@@ -580,9 +580,9 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
               v-if="(node as any).row.item.kb_id"
               class="kb-hits-link"
               href="#"
-              :title="$t('查看引用的知识库')"
+              :title="$t('knowledge.view_referenced_knowledge_base')"
               @click.prevent
-            >{{ $t('查看知识库') }}</a>
+            >{{ $t('knowledge.view_knowledge_base') }}</a>
           </div>
         </div>
       </template>
@@ -601,7 +601,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         v-if="showBackToBottom"
         class="back-to-bottom"
         type="button"
-        :title="unseenCount ? $t('回到底部（{n} 条新消息）', { n: unseenCount }) : $t('回到底部')"
+        :title="unseenCount ? $t('回到底部（{n} 条新消息）', { n: unseenCount }) : $t('common.back_to_bottom')"
         @click="scrollToBottom"
       >
         <ArrowDownOutlined />
@@ -619,7 +619,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
     >
       <nav
         class="question-rail"
-        :aria-label="$t('提问导航')"
+        :aria-label="$t('common.question_navigation')"
       >
         <button
           v-for="q in questions"
@@ -648,7 +648,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         role="menuitem"
         @click="copySelection"
       >
-        {{ $t('复制') }}
+        {{ $t('common.copy') }}
       </button>
       <button
         class="sel-btn"
@@ -656,7 +656,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         role="menuitem"
         @click="quoteSelection"
       >
-        {{ $t('引用到输入框') }}
+        {{ $t('common.quote_to_input_box') }}
       </button>
     </div>
   </div>

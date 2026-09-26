@@ -27,22 +27,22 @@ export type WorkstationType = (typeof WORKSTATIONS)[number]
  * 此前两处各写一遍，`/workflow` 在 AppLayout 里同时叫「工作台」和「工作流」。
  */
 export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
-  dialogue: t('对话'),
+  dialogue: t('chat.chat'),
   agent: 'Agent',
-  workflow: t('工作流'),
-  skill: t('技能'),
-  knowledge: t('知识'),
-  plugin: t('插件'),
+  workflow: t('workflow.workflow'),
+  skill: t('agent.skill'),
+  knowledge: t('knowledge.knowledge'),
+  plugin: t('common.plugin'),
 }
 
 /** 一句话描述（停靠坞浮层与命令面板共用） */
 export const WORKSTATION_DESCRIPTIONS: Record<WorkstationType, string> = {
-  dialogue: t('智能对话助手'),
-  agent: t('多智能体协同'),
-  workflow: t('DAG 流程编排'),
-  skill: t('工具 MCP'),
-  knowledge: t('RAG 检索增强'),
-  plugin: t('扩展能力'),
+  dialogue: t('chat.ai_chat_assistant'),
+  agent: t('agent.multi_agent_collaboration'),
+  workflow: t('workflow.dag_orchestration'),
+  skill: t('agent.tool_mcp'),
+  knowledge: t('knowledge.rag_retrieval_augmentation'),
+  plugin: t('common.extensions'),
 }
 
 /** 工作台 → 路由路径（六个入口的唯一定义） */

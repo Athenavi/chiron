@@ -1,0 +1,75 @@
+{
+  "total": 2136,
+  "reused": 0,
+  "created": 2136,
+  "emptyEn": 0,
+  "filesTouched": 98,
+  "callsRewritten": 2609,
+  "perDomain": {
+    "common": {
+      "zh-CN": 997,
+      "en-US": 997,
+      "ar": 997
+    },
+    "memory": {
+      "zh-CN": 26,
+      "en-US": 26,
+      "ar": 26
+    },
+    "media": {
+      "zh-CN": 49,
+      "en-US": 49,
+      "ar": 49
+    },
+    "workflow": {
+      "zh-CN": 85,
+      "en-US": 85,
+      "ar": 85
+    },
+    "agent": {
+      "zh-CN": 177,
+      "en-US": 177,
+      "ar": 177
+    },
+    "chat": {
+      "zh-CN": 114,
+      "en-US": 114,
+      "ar": 114
+    },
+    "admin": {
+      "zh-CN": 148,
+      "en-US": 148,
+      "ar": 148
+    },
+    "errors": {
+      "zh-CN": 240,
+      "en-US": 240,
+      "ar": 240
+    },
+    "knowledge": {
+      "zh-CN": 76,
+      "en-US": 76,
+      "ar": 76
+    },
+    "settings": {
+      "zh-CN": 20,
+      "en-US": 20,
+      "ar": 20
+    },
+    "auth": {
+      "zh-CN": 141,
+      "en-US": 141,
+      "ar": 141
+    },
+    "billing": {
+      "zh-CN": 43,
+      "en-US": 43,
+      "ar": 43
+    },
+    "mail": {
+      "zh-CN": 20,
+      "en-US": 20,
+      "ar": 20
+    }
+  }
+}

@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  theme_dark_light_appearance: "theme مظهر داكن فاتح",
+  tag_set_tag: "تم تعيين الوسم: {tag}",
+  general_settings: "إعدادات عامة",
+  save_settings: "حفظ الإعدادات",
+  profile_updated: "تم تحديث الملف الشخصي",
+  profile: "الملف الشخصي",
+  basic_profile: "الملف الأساسي",
+  read_aloud_settings_saved: "تم حفظ إعدادات القراءة الصوتية",
+  preferences: "تفضيلات",
+  switch_theme: "تبديل السمة",
+  settings: "الإعدادات",
+  notification: "إشعار",
+  appearance_mode: "وضع المظهر",
+  appearance_and_theme: "المظهر والسمة",
+  we_may_adjust_or_terminate_some_features_major_changes_will_be_announced_in_advance: "قد نعدّل أو ننهي بعض الميزات؛ وتُعلَن التغييرات الكبرى مسبقًا.",
+  system_settings: "إعدادات النظام",
+  display_settings: "إعدادات العرض",
+  theme: "السمة",
+  theme_style: "نمط السمة",
+  theme_settings: "إعدادات السمة",
+}

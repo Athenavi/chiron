@@ -66,7 +66,7 @@
               class="details-toggle"
               @click.stop="span.showDetails = !span.showDetails"
             >
-              {{ span.showDetails ? $t('收起') : $t('详情') }}
+              {{ span.showDetails ? $t('common.collapse') : $t('common.details') }}
             </button>
           </div>
         </div>

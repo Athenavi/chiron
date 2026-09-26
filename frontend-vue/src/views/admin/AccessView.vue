@@ -7,8 +7,8 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 // 权限与组织：角色 + 群组（同为 admin 权限域、同为 CRUD 型页面）
 const tabs = [
-  { key: 'roles', label: t('角色'), comp: RolesView },
-  { key: 'groups', label: t('群组'), comp: GroupsView },
+  { key: 'roles', label: t('admin.role'), comp: RolesView },
+  { key: 'groups', label: t('admin.group'), comp: GroupsView },
 ]
 </script>
 

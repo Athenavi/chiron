@@ -1,7 +1,7 @@
 <template>
   <Modal
     v-model:visible="modalVisible"
-    :title="$t('文档预览')"
+    :title="$t('knowledge.document_preview')"
     :footer="null"
     :style="{ maxWidth: '800px' }"
     :destroy-on-close="true"
@@ -11,7 +11,7 @@
       <div class="doc-preview">
         <!-- 文档元信息 -->
         <div class="doc-meta">
-          <span class="doc-name">{{ document?.name || $t('未知文档') }}</span>
+          <span class="doc-name">{{ document?.name || $t('knowledge.unknown_document') }}</span>
           <span class="doc-type">{{ document?.file_type?.toUpperCase() }}</span>
           <span
             v-if="document?.file_size_bytes"
@@ -31,7 +31,7 @@
           class="doc-content"
         >
           <div class="content-header">
-            <span class="content-label">{{ $t('文档内容预览') }}</span>
+            <span class="content-label">{{ $t('knowledge.document_content_preview') }}</span>
             <span class="content-chunks">{{ $t('{n} 个分块', { n: chunkCount }) }}</span>
           </div>
           <pre class="content-body">{{ content }}</pre>
@@ -40,8 +40,8 @@
         <EmptyState
           v-else-if="!loading"
           size="list"
-          :description="$t('暂无内容预览')"
-          :hint="$t('文档可能正在处理中，或内容格式暂不支持预览')"
+          :description="$t('common.no_content_preview_yet')"
+          :hint="$t('errors.the_document_may_be_processing_or_its_format_is_not_previewable_yet')"
         />
 
         <!-- 失败信息 -->
@@ -131,7 +131,7 @@ async function loadPreview() {
     const data = (e as { response?: { data?: { detail?: unknown; error?: unknown } } }).response?.data
     const detail = typeof data?.detail === 'string' ? data.detail : ''
     const summary = typeof data?.error === 'string' ? data.error : ''
-    error.value = detail || summary || t('加载预览失败')
+    error.value = detail || summary || t('errors.failed_to_load_preview')
   } finally {
     loading.value = false
   }

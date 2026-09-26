@@ -13,7 +13,7 @@
       <div class="conflict-values">
         <div class="value-item old">
           <div class="value-label">
-            {{ $t('当前值') }}
+            {{ $t('common.current_value') }}
           </div>
           <div class="value-content">
             {{ conflict.old_value }}
@@ -24,7 +24,7 @@
         </div>
         <div class="value-item new">
           <div class="value-label">
-            {{ $t('新发现') }}
+            {{ $t('admin.rediscover') }}
           </div>
           <div class="value-content">
             {{ conflict.new_value }}
@@ -32,7 +32,7 @@
         </div>
       </div>
       <div class="conflict-desc">
-        {{ $t('AI 发现了与您已确认信息冲突的内容，需要您裁决。') }}
+        {{ $t('errors.ai_found_content_conflicting_with_your_confirmed_info_your_ruling_is_needed') }}
       </div>
     </div>
 
@@ -42,28 +42,28 @@
         :disabled="resolving"
         @click="resolve('keep_old')"
       >
-        {{ $t('保留当前值') }}
+        {{ $t('common.keep_current_value') }}
       </button>
       <button
         class="btn-use"
         :disabled="resolving"
         @click="resolve('use_new')"
       >
-        {{ $t('采用新值') }}
+        {{ $t('common.use_new_value') }}
       </button>
       <button
         class="btn-manual"
         :disabled="resolving"
         @click="showManual = true"
       >
-        {{ $t('手动修改') }}
+        {{ $t('common.manual_edit') }}
       </button>
       <button
         class="btn-dismiss"
         :disabled="resolving"
         @click="dismiss"
       >
-        {{ $t('忽略') }}
+        {{ $t('common.ignore') }}
       </button>
     </div>
 
@@ -75,7 +75,7 @@
       <input
         v-model="manualValue"
         type="text"
-        :placeholder="$t('输入新值')"
+        :placeholder="$t('common.enter_new_value')"
         class="manual-input"
       >
       <div class="manual-actions">
@@ -83,13 +83,13 @@
           :disabled="resolving"
           @click="showManual = false"
         >
-          {{ $t('取消') }}
+          {{ $t('common.cancel') }}
         </button>
         <button
           :disabled="resolving"
           @click="resolve('manual', manualValue)"
         >
-          {{ $t('确认') }}
+          {{ $t('common.confirm_2') }}
         </button>
       </div>
     </div>
@@ -118,10 +118,10 @@ const manualValue = ref('')
 
 function formatSlot(slot: string): string {
   const map: Record<string, string> = {
-    identity: t('身份'),
-    preference: t('偏好'),
-    decision: t('关键决策'),
-    fact: t('事实'),
+    identity: t('admin.identity'),
+    preference: t('settings.preferences'),
+    decision: t('common.key_decisions'),
+    fact: t('common.fact'),
   }
   return map[slot] || slot
 }
@@ -131,7 +131,7 @@ function formatTime(timestamp: number): string {
   const now = new Date()
   const diff = now.getTime() - date.getTime()
   const minutes = Math.floor(diff / 60000)
-  if (minutes < 1) return t('刚刚')
+  if (minutes < 1) return t('common.just_now')
   if (minutes < 60) return t('{n} 分钟前', { n: minutes })
   const hours = Math.floor(minutes / 60)
   if (hours < 24) return t('{n} 小时前', { n: hours })

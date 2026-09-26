@@ -787,14 +787,14 @@ defineExpose({ insertText })
             type="button"
             @click="discardPastedText"
           >
-            {{ $t('丢弃') }}
+            {{ $t('common.discard') }}
           </button>
           <button
             class="paste-btn accept"
             type="button"
             @click="acceptPastedText"
           >
-            {{ $t('插入') }}
+            {{ $t('common.insert') }}
           </button>
         </div>
       </div>
@@ -803,19 +803,19 @@ defineExpose({ insertText })
         v-if="mentionOpen"
         class="slash-menu mention-menu"
         role="listbox"
-        :aria-label="$t('引用资源')"
+        :aria-label="$t('common.reference_resource')"
       >
         <div
           v-if="mentionLoading"
           class="slash-item"
         >
-          {{ $t('加载中…') }}
+          {{ $t('common.loading') }}
         </div>
         <div
           v-else-if="!filteredMentions.length"
           class="slash-item"
         >
-          {{ $t('没有匹配的资源（知识库 / Agent / 技能 / 工作流 / 插件）') }}
+          {{ $t('workflow.no_matching_resources_knowledge_base_agent_skill_workflow_plugin') }}
         </div>
         <template v-else>
           <!-- 按资源类型分组：每类一个标题；条目仍用**扁平下标**驱动键盘与 hover，
@@ -869,7 +869,7 @@ defineExpose({ insertText })
       <div
         v-if="contextChips?.length"
         class="context-chips"
-        :aria-label="$t('本次对话的上下文')"
+        :aria-label="$t('chat.context_of_this_conversation')"
       >
         <span
           v-for="chip in contextChips"
@@ -880,8 +880,8 @@ defineExpose({ insertText })
           <button
             type="button"
             class="context-chip__x"
-            :title="$t('移除')"
-            :aria-label="`${$t('移除')} ${chip.label}`"
+            :title="$t('common.remove')"
+            :aria-label="`${$t('common.remove')} ${chip.label}`"
             @click="emit('remove-context-chip', chip)"
           >
             <CloseOutlined />
@@ -914,7 +914,7 @@ defineExpose({ insertText })
           <button
             class="att-remove"
             type="button"
-            :title="$t('移除')"
+            :title="$t('common.remove')"
             @click="removeAttachment(att.id)"
           >
             <CloseOutlined />
@@ -929,7 +929,7 @@ defineExpose({ insertText })
         :placeholder="inputPlaceholder"
         class="input-field"
         :disabled="disabled"
-        :aria-label="$t('消息输入框')"
+        :aria-label="$t('chat.message_input_box')"
         @keydown="onKeydown"
         @input="onComposerInput"
         @paste="onPaste"
@@ -948,7 +948,7 @@ defineExpose({ insertText })
             size="small"
             class="attach-btn"
             :loading="uploading"
-            :title="$t('上传文件')"
+            :title="$t('media.upload_file')"
             @click="triggerFilePick"
           >
             <template #icon>
@@ -959,7 +959,7 @@ defineExpose({ insertText })
             type="text"
             size="small"
             class="attach-btn"
-            :title="$t('从媒体库选取')"
+            :title="$t('common.pick_from_media_library')"
             @click="showMediaPicker = true"
           >
             <template #icon>
@@ -972,8 +972,8 @@ defineExpose({ insertText })
             class="record-btn"
             :class="{ recording: recording }"
             :title="recording
-              ? $t('点击停止语音输入')
-              : (speechSupported ? $t('语音输入（浏览器本地转写，不上传音频）') : $t('当前浏览器不支持语音转写'))"
+              ? $t('common.click_to_stop_voice_input')
+              : (speechSupported ? $t('media.voice_input_transcribed_locally_in_the_browser_audio_not_uploaded') : $t('chat.current_browser_does_not_support_speech_to_text'))"
             @click="recording ? stopRecording() : startRecording()"
           >
             <template #icon>
@@ -990,12 +990,12 @@ defineExpose({ insertText })
           <Popover
             trigger="click"
             placement="topLeft"
-            :title="$t('对话设置')"
+            :title="$t('chat.conversation_settings')"
           >
             <template #content>
               <div class="settings-pop">
                 <label class="settings-pop__row">
-                  <span class="settings-pop__label">{{ $t('模式') }}</span>
+                  <span class="settings-pop__label">{{ $t('common.mode') }}</span>
                   <Select
                     :model-value="mode"
                     :options="modeOptions"
@@ -1005,7 +1005,7 @@ defineExpose({ insertText })
                   />
                 </label>
                 <label class="settings-pop__row">
-                  <span class="settings-pop__label">{{ $t('工具授权') }}</span>
+                  <span class="settings-pop__label">{{ $t('agent.tool_authorization') }}</span>
                   <Select
                     :model-value="toolsMode || 'auto'"
                     :options="toolsModeOptions"
@@ -1020,16 +1020,16 @@ defineExpose({ insertText })
               type="text"
               size="small"
               class="context-btn settings-btn"
-              :title="$t('对话设置：模式 / 工具授权')"
+              :title="$t('agent.conversation_settings_mode_tool_authorization')"
             >
               <template #icon>
                 <SettingOutlined />
               </template>
-              <span class="context-label">{{ $t('设置') }}</span>
+              <span class="context-label">{{ $t('settings.settings') }}</span>
             </Button>
           </Popover>
           <span class="input-divider" />
-          <span class="mode-label">{{ $t('模型') }}</span>
+          <span class="mode-label">{{ $t('agent.model') }}</span>
           <Select
             class="model-select"
             :model-value="modelValue"
@@ -1037,7 +1037,7 @@ defineExpose({ insertText })
             :loading="modelsLoading"
             size="small"
             allow-clear
-            :placeholder="$t('默认模型')"
+            :placeholder="$t('agent.default_model')"
             :title="$t('chat.input.modelTitle', { model: modelValue || $t('chat.input.modelDefault') })"
             @update:value="onModelChange"
           />
@@ -1045,13 +1045,13 @@ defineExpose({ insertText })
             type="text"
             size="small"
             class="context-btn"
-            :title="$t('打开上下文面板（会话/轨迹/上下文）')"
+            :title="$t('chat.open_context_panel_session_trace_context')"
             @click="emit('open-panel')"
           >
             <template #icon>
               <BranchesOutlined />
             </template>
-            <span class="context-label">{{ $t('上下文') }}</span>
+            <span class="context-label">{{ $t('common.context') }}</span>
           </Button>
         </div>
         <div class="input-left">
@@ -1060,9 +1060,9 @@ defineExpose({ insertText })
             class="run-hint"
           >
             <span class="run-dot" />
-            {{ $t('生成中') }} · {{ elapsed }}s
+            {{ $t('common.generating') }} · {{ elapsed }}s
           </span>
-          <span class="input-hint">{{ $t('Enter 发送 · Shift+Enter 换行') }}</span>
+          <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
           <Button
             class="send-btn"
             :type="loading ? 'default' : 'primary'"

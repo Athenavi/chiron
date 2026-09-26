@@ -54,7 +54,7 @@ async function fetchLogs() {
     logs.value = res.data
     total.value = res.total
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('查询失败'))
+    message.error(e?.response?.data?.error || t('errors.query_failed'))
   } finally {
     loading.value = false
   }
@@ -98,13 +98,13 @@ function formatDetails(d: unknown): string {
 }
 
 const columns: TableColumnsType = [
-  { title: t('时间'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
-  { title: t('用户'), dataIndex: 'user_id', key: 'user_id', width: 140, ellipsis: true },
-  { title: t('动作'), dataIndex: 'action', key: 'action', width: 140 },
-  { title: t('资源类型'), dataIndex: 'resource_type', key: 'resource_type', width: 140 },
-  { title: t('资源 ID'), dataIndex: 'resource_id', key: 'resource_id', width: 180, ellipsis: true },
+  { title: t('common.time'), dataIndex: 'created_at', key: 'created_at', width: 180, customRender: ({ text }) => formatTime(text) },
+  { title: t('admin.user_2'), dataIndex: 'user_id', key: 'user_id', width: 140, ellipsis: true },
+  { title: t('common.action_2'), dataIndex: 'action', key: 'action', width: 140 },
+  { title: t('common.resource_type'), dataIndex: 'resource_type', key: 'resource_type', width: 140 },
+  { title: t('common.resource_id'), dataIndex: 'resource_id', key: 'resource_id', width: 180, ellipsis: true },
   { title: 'IP', dataIndex: 'ip_address', key: 'ip_address', width: 140 },
-  { title: t('操作'), key: 'action_btn', width: 80, fixed: 'right' },
+  { title: t('common.action'), key: 'action_btn', width: 80, fixed: 'right' },
 ]
 
 onMounted(() => {
@@ -117,10 +117,10 @@ onMounted(() => {
   <div class="audit-view">
     <div class="audit-header">
       <h2 class="audit-title">
-        {{ $t('操作审计') }}
+        {{ $t('admin.operation_audit') }}
       </h2>
       <p class="audit-desc">
-        {{ $t('查询范围限制为 7 天内，确保命中索引性能。') }}
+        {{ $t('admin.query_range_is_limited_to_the_last_7_days_to_ensure_index_performance') }}
       </p>
     </div>
 
@@ -133,7 +133,7 @@ onMounted(() => {
       />
       <a-input
         v-model:value="filters.user_id"
-        :placeholder="$t('用户 ID')"
+        :placeholder="$t('admin.user_id')"
         allow-clear
         class="u-full-sm"
         style="width: 180px"
@@ -141,7 +141,7 @@ onMounted(() => {
       />
       <a-input
         v-model:value="filters.action"
-        :placeholder="$t('动作（如 POST /v1/ent/privacy）')"
+        :placeholder="$t('admin.action_e_g_post_v1_ent_privacy')"
         allow-clear
         class="u-full-sm"
         style="width: 280px"
@@ -149,7 +149,7 @@ onMounted(() => {
       />
       <a-input
         v-model:value="filters.resource_type"
-        :placeholder="$t('资源类型')"
+        :placeholder="$t('common.resource_type')"
         allow-clear
         class="u-full-sm"
         style="width: 160px"
@@ -160,13 +160,13 @@ onMounted(() => {
         class="u-full-sm"
         @click="onSearch"
       >
-        {{ $t('查询') }}
+        {{ $t('common.query') }}
       </a-button>
       <a-button
         class="u-full-sm"
         @click="onReset"
       >
-        {{ $t('重置') }}
+        {{ $t('auth.reset') }}
       </a-button>
     </div>
 
@@ -194,7 +194,7 @@ onMounted(() => {
             size="small"
             @click="showDetail(record as AuditLog)"
           >
-            {{ $t('详情') }}
+            {{ $t('common.details') }}
           </a-button>
         </template>
       </template>
@@ -202,7 +202,7 @@ onMounted(() => {
 
     <a-drawer
       v-model:open="detailVisible"
-      :title="$t('审计日志详情')"
+      :title="$t('admin.audit_log_details')"
       width="560"
       placement="right"
     >
@@ -215,22 +215,22 @@ onMounted(() => {
           <a-descriptions-item label="ID">
             {{ currentLog.id }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('时间')">
+          <a-descriptions-item :label="$t('common.time')">
             {{ formatTime(currentLog.created_at) }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('租户')">
+          <a-descriptions-item :label="$t('admin.tenant')">
             {{ currentLog.tenant_id }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('用户')">
+          <a-descriptions-item :label="$t('admin.user_2')">
             {{ currentLog.user_id || '-' }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('动作')">
+          <a-descriptions-item :label="$t('common.action_2')">
             {{ currentLog.action }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('资源类型')">
+          <a-descriptions-item :label="$t('common.resource_type')">
             {{ currentLog.resource_type }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('资源 ID')">
+          <a-descriptions-item :label="$t('common.resource_id')">
             {{ currentLog.resource_id || '-' }}
           </a-descriptions-item>
           <a-descriptions-item label="IP">
@@ -239,7 +239,7 @@ onMounted(() => {
         </a-descriptions>
         <div class="audit-detail-block">
           <div class="audit-detail-label">
-            {{ $t('详情（details）') }}
+            {{ $t('common.details_details') }}
           </div>
           <pre class="audit-detail-json">{{ formatDetails(currentLog.details) || '-' }}</pre>
         </div>

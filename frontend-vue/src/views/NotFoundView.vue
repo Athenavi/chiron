@@ -10,20 +10,20 @@ const router = useRouter()
       404
     </div>
     <h1 class="nf-title">
-      {{ $t('页面不存在') }}
+      {{ $t('errors.page_not_found') }}
     </h1>
     <p class="nf-desc">
-      {{ $t('你访问的地址不存在或已被移动。') }}
+      {{ $t('errors.the_address_you_visited_does_not_exist_or_has_been_moved') }}
     </p>
     <div class="nf-actions">
       <a-button
         type="primary"
         @click="router.push('/')"
       >
-        {{ $t('返回首页') }}
+        {{ $t('common.back_to_home') }}
       </a-button>
       <a-button @click="router.back()">
-        {{ $t('返回上一页') }}
+        {{ $t('common.back_to_previous_page') }}
       </a-button>
     </div>
   </div>

@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  used_in_email_templates_as_ph: "用于邮件模板中的 {ph}",
+  send_test_email: "测试发信",
+  the_test_will_send_a_real_email_using_the_saved_config_above_save_changes_before_testing: "测试会使用上方已保存的配置真实投递一封邮件。修改配置后请先保存，再测试。",
+  test_email_sent_please_check_your_inbox: "测试邮件已发送，请查收",
+  most_providers_require_a_full_email_address: "多数服务商要求填写完整邮箱地址",
+  send_test_email_2: "发送测试邮件",
+  mail_channel: "发信通道",
+  welcome_email: "欢迎邮件",
+  daily_send_limit_per_email: "每日发送上限（每邮箱）",
+  enable_email_service: "启用邮件服务",
+  qingchen_cloud_mail_api: "晴辰云邮 API",
+  please_enter_email: "请输入邮箱",
+  please_enter_a_valid_recipient_email: "请输入有效的收件邮箱",
+  please_enter_a_valid_email: "请输入正确的邮箱",
+  please_enter_a_valid_email_first: "请先填写正确的邮箱",
+  recipient_email: "收件邮箱",
+  email_template: "邮件模板",
+  email_config: "邮件配置",
+  email_config_saved: "邮件配置已保存",
+  smtp_server_address: "SMTP 服务器地址",
+}

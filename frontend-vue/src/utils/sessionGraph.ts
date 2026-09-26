@@ -55,7 +55,7 @@ const KNOWLEDGE_NODE_ID = 'n_kb'
 const LLM_NODE_ID = SOLE_NODE_ID
 
 /** 给 llm 节点的 system_prompt —— 交代这段正文的来历，而不是让它当普通提问回答 */
-const GRAPH_SYSTEM_PROMPT = () => t('下面是此前的一段对话记录。请把它当作背景，在此基础上继续完成其中的工作。')
+const GRAPH_SYSTEM_PROMPT = () => t('chat.below_is_a_previous_conversation_treat_it_as_context_and_continue_the_work_based_on_it')
 
 export interface SessionGraph {
   name: string
@@ -128,13 +128,13 @@ export function sessionToGraph(
       nodes: [
         {
           id: INPUT_NODE_ID,
-          label: t('输入'),
+          label: t('common.input'),
           node_type: 'input',
           config: {},
         },
         {
           id: KNOWLEDGE_NODE_ID,
-          label: t('知识库检索'),
+          label: t('knowledge.knowledge_base_retrieval'),
           node_type: 'knowledge',
           config: {
             kb_id: kbId,

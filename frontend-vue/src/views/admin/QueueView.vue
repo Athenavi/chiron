@@ -41,16 +41,16 @@ const queueChartOption = computed(() => ({
       ? queueHistory.value.map((_, i) => `T-${queueHistory.value.length - i}`)
       : ['--'],
   },
-  yAxis: { type: 'value', name: t('队列积压') },
+  yAxis: { type: 'value', name: t('admin.queue_backlog') },
   series: [
     {
-      name: t('事件队列积压'),
+      name: t('admin.event_queue_backlog'),
       type: 'line',
       data: queueHistory.value.length ? queueHistory.value.map(h => h.taskLength) : [0],
       smooth: true,
     },
     {
-      name: t('待确认消息'),
+      name: t('chat.messages_pending_confirmation'),
       type: 'line',
       data: queueHistory.value.length ? queueHistory.value.map(h => h.pendingLength) : [0],
       smooth: true,
@@ -61,11 +61,11 @@ const queueChartOption = computed(() => ({
 const waitingTasks = ref<any[]>([])
 
 const columns = [
-  { title: t('消息 ID'), dataIndex: 'task_id', width: 180 },
-  { title: t('用户 ID'), dataIndex: 'user_id', width: 120 },
-  { title: t('事件类型'), dataIndex: 'content', ellipsis: true },
-  { title: t('入队时间'), dataIndex: 'queued_at', width: 200 },
-  { title: t('位置'), dataIndex: 'position', width: 80 },
+  { title: t('chat.message_id'), dataIndex: 'task_id', width: 180 },
+  { title: t('admin.user_id'), dataIndex: 'user_id', width: 120 },
+  { title: t('common.event_type'), dataIndex: 'content', ellipsis: true },
+  { title: t('admin.enqueue_time'), dataIndex: 'queued_at', width: 200 },
+  { title: t('common.location'), dataIndex: 'position', width: 80 },
 ]
 
 async function fetchData() {
@@ -91,7 +91,7 @@ async function fetchData() {
       queueHistory.value.shift()
     }
   } catch {
-    message.error(t('获取队列数据失败'))
+    message.error(t('errors.failed_to_fetch_queue_data'))
   } finally {
     loading.value = false
   }
@@ -101,10 +101,10 @@ async function handleFlushQueue() {
   flushLoading.value = true
   try {
     await flushQueue()
-    message.success(t('队列已清空'))
+    message.success(t('admin.queue_cleared'))
     await fetchData()
   } catch {
-    message.error(t('清空队列失败'))
+    message.error(t('errors.failed_to_clear_queue'))
   } finally {
     flushLoading.value = false
   }
@@ -115,9 +115,9 @@ async function handlePauseQueue() {
     const pause = !isPaused.value
     await pauseQueue(pause)
     isPaused.value = pause
-    message.success(pause ? t('已暂停消费') : t('已恢复消费'))
+    message.success(pause ? t('common.consumption_paused') : t('common.consumption_resumed'))
   } catch {
-    message.error(t('操作失败'))
+    message.error(t('errors.operation_failed'))
   }
 }
 
@@ -130,35 +130,35 @@ onMounted(() => {
   <div class="queue-monitor">
     <Spin :spinning="loading">
       <div class="metric-grid">
-        <Card :title="$t('队列状态')">
+        <Card :title="$t('admin.queue_status')">
           <Descriptions
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('事件队列积压')">
+            <DescriptionsItem :label="$t('admin.event_queue_backlog')">
               {{ queueStats.taskQueueLength }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('待确认消息')">
+            <DescriptionsItem :label="$t('chat.messages_pending_confirmation')">
               {{ queueStats.vipQueueLength }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('未投递积压')">
+            <DescriptionsItem :label="$t('common.undelivered_backlog')">
               {{ queueStats.lag }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('消费者组')">
+            <DescriptionsItem :label="$t('admin.consumer_group')">
               {{ queueStats.groups }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('消费者数量')">
+            <DescriptionsItem :label="$t('common.consumer_count')">
               {{ queueStats.consumers }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('活跃请求')">
+            <DescriptionsItem :label="$t('common.active_requests')">
               {{ queueStats.activeRequests }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('吞吐量')">
+            <DescriptionsItem :label="$t('common.throughput_2')">
               {{ queueStats.throughput }} QPS
             </DescriptionsItem>
           </Descriptions>
         </Card>
-        <Card :title="$t('队列积压趋势')">
+        <Card :title="$t('admin.queue_backlog_trend')">
           <VChart
             :option="queueChartOption"
             style="height: var(--chart-h, 300px)"
@@ -168,7 +168,7 @@ onMounted(() => {
       </div>
 
       <Card
-        :title="$t('等待队列')"
+        :title="$t('admin.waiting_queue')"
         style="margin-top: 16px"
       >
         <template #extra>
@@ -178,13 +178,13 @@ onMounted(() => {
             :loading="flushLoading"
             @click="handleFlushQueue"
           >
-            {{ $t('清空队列') }}
+            {{ $t('admin.clear_queue') }}
           </Button>
           <Button
             style="margin-left: 8px"
             @click="handlePauseQueue"
           >
-            {{ isPaused ? $t('恢复消费') : $t('暂停消费') }}
+            {{ isPaused ? $t('common.resume_consumption') : $t('common.pause_consumption') }}
           </Button>
         </template>
         <Table
@@ -195,7 +195,7 @@ onMounted(() => {
         >
           <template #emptyText>
             <div class="empty-block">
-              <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+              <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
             </div>
           </template>
         </Table>

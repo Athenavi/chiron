@@ -25,7 +25,7 @@ async function loadTenants() {
     const resp = await api.get('/v1/admin/tenants')
     tenants.value = resp.data?.data?.tenants || []
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('加载租户列表失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_load_tenant_list')))
   } finally {
     loading.value = false
   }
@@ -52,7 +52,7 @@ function openEdit(record: any) {
 
 async function submitForm() {
   if (!form.value.name.trim()) {
-    message.warning(t('请输入租户名称'))
+    message.warning(t('admin.please_enter_tenant_name'))
     return
   }
   submitting.value = true
@@ -62,15 +62,15 @@ async function submitForm() {
         name: form.value.name.trim(),
         status: form.value.status,
       })
-      message.success(t('租户已更新'))
+      message.success(t('admin.tenant_updated'))
     } else {
       await api.post('/v1/admin/tenants', { name: form.value.name.trim() })
-      message.success(t('租户已创建'))
+      message.success(t('admin.tenant_created'))
     }
     modalVisible.value = false
     await loadTenants()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, editingId.value ? t('更新租户失败') : t('创建租户失败')))
+    message.error(apiErrorMessage(e, editingId.value ? t('errors.failed_to_update_tenant') : t('errors.failed_to_create_tenant')))
   } finally {
     submitting.value = false
   }
@@ -92,7 +92,7 @@ async function toggleSuspend(record: any) {
     }
     await loadTenants()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('操作失败')))
+    message.error(apiErrorMessage(e, t('errors.operation_failed')))
   } finally {
     togglingId.value = null
   }
@@ -103,10 +103,10 @@ async function toggleSuspend(record: any) {
 async function removeTenant(record: any) {
   try {
     await api.delete(`/v1/admin/tenants/${record.id}`)
-    message.success(t('租户已删除'))
+    message.success(t('admin.tenant_deleted'))
     await loadTenants()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('删除租户失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_delete_tenant')))
   }
 }
 
@@ -118,12 +118,12 @@ const usage = ref<any>(null)
 const usageTenant = ref<any>(null)
 
 const usageItems = [
-  { key: 'users', label: t('用户数') },
-  { key: 'sessions', label: t('会话数') },
-  { key: 'agent_sessions', label: t('Agent 会话数') },
-  { key: 'knowledge_bases', label: t('知识库数') },
-  { key: 'agents', label: t('Agent 数') },
-  { key: 'media_assets', label: t('媒体资产数') },
+  { key: 'users', label: t('admin.users') },
+  { key: 'sessions', label: t('chat.sessions') },
+  { key: 'agent_sessions', label: t('agent.agent_sessions') },
+  { key: 'knowledge_bases', label: t('knowledge.knowledge_bases') },
+  { key: 'agents', label: t('agent.agents') },
+  { key: 'media_assets', label: t('common.media_assets') },
 ]
 
 async function openUsage(record: any) {
@@ -135,7 +135,7 @@ async function openUsage(record: any) {
     const resp = await api.get(`/v1/admin/tenants/${record.id}/usage`)
     usage.value = resp.data?.data || {}
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('加载用量失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_load_usage')))
   } finally {
     usageLoading.value = false
   }
@@ -143,10 +143,10 @@ async function openUsage(record: any) {
 
 // ── 表格列 ──
 const columns = [
-  { title: t('名称'), dataIndex: 'name', key: 'name', ellipsis: true },
-  { title: t('状态'), key: 'status', width: 110 },
-  { title: t('创建时间'), key: 'created_at', width: 180 },
-  { title: t('操作'), key: 'actions', width: 260, fixed: 'right' as const },
+  { title: t('common.name'), dataIndex: 'name', key: 'name', ellipsis: true },
+  { title: t('common.status'), key: 'status', width: 110 },
+  { title: t('common.created_at'), key: 'created_at', width: 180 },
+  { title: t('common.action'), key: 'actions', width: 260, fixed: 'right' as const },
 ]
 
 // ── 工具函数 ──
@@ -155,7 +155,7 @@ function statusColor(status: string): string {
 }
 
 function statusText(status: string): string {
-  return status === 'active' ? t('活跃') : status === 'suspended' ? t('已挂起') : (status || '-')
+  return status === 'active' ? t('common.active') : status === 'suspended' ? t('common.suspended_2') : (status || '-')
 }
 
 function formatDate(d: any): string {
@@ -173,13 +173,13 @@ onMounted(loadTenants)
 <template>
   <div class="tenant-management">
     <div class="page-header">
-      <h1>{{ $t('🏢 租户管理') }}</h1>
+      <h1>{{ $t('admin.tenant_management') }}</h1>
       <Space>
         <Button @click="loadTenants">
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新') }}
+          {{ $t('common.refresh') }}
         </Button>
         <Button
           type="primary"
@@ -188,7 +188,7 @@ onMounted(loadTenants)
           <template #icon>
             <PlusOutlined />
           </template>
-          {{ $t('新建租户') }}
+          {{ $t('admin.new_tenant') }}
         </Button>
       </Space>
     </div>
@@ -204,8 +204,8 @@ onMounted(loadTenants)
         >
           <template #emptyText>
             <EmptyState
-              :description="$t('暂无租户')"
-              :hint="$t('点击右上角「新建租户」创建第一个租户')"
+              :description="$t('admin.no_tenants_yet')"
+              :hint="$t('admin.click_new_tenant_at_the_top_right_to_create_the_first_tenant')"
             />
           </template>
 
@@ -232,7 +232,7 @@ onMounted(loadTenants)
                   <template #icon>
                     <BarChartOutlined />
                   </template>
-                  {{ $t('用量') }}
+                  {{ $t('common.usage') }}
                 </Button>
                 <Button
                   size="small"
@@ -241,12 +241,12 @@ onMounted(loadTenants)
                   <template #icon>
                     <EditOutlined />
                   </template>
-                  {{ $t('编辑') }}
+                  {{ $t('common.edit_2') }}
                 </Button>
                 <Popconfirm
                   :title="record.status === 'suspended' ? $t('确定恢复租户「{name}」吗？', { name: record.name }) : $t('确定挂起租户「{name}」吗？挂起后其资源将不可用。', { name: record.name })"
-                  :ok-text="$t('确定')"
-                  :cancel-text="$t('取消')"
+                  :ok-text="$t('common.confirm')"
+                  :cancel-text="$t('common.cancel')"
                   @confirm="toggleSuspend(record)"
                 >
                   <Button
@@ -258,13 +258,13 @@ onMounted(loadTenants)
                       <StopOutlined v-if="record.status !== 'suspended'" />
                       <PlayCircleOutlined v-else />
                     </template>
-                    {{ record.status === 'suspended' ? $t('恢复') : $t('挂起') }}
+                    {{ record.status === 'suspended' ? $t('common.restore') : $t('common.suspended') }}
                   </Button>
                 </Popconfirm>
                 <Popconfirm
-                  :title="$t('确定删除该租户吗？此操作不可恢复。')"
-                  :ok-text="$t('删除')"
-                  :cancel-text="$t('取消')"
+                  :title="$t('admin.confirm_deleting_this_tenant_this_action_cannot_be_undone')"
+                  :ok-text="$t('common.delete')"
+                  :cancel-text="$t('common.cancel')"
                   @confirm="removeTenant(record)"
                 >
                   <Button
@@ -274,7 +274,7 @@ onMounted(loadTenants)
                     <template #icon>
                       <DeleteOutlined />
                     </template>
-                    {{ $t('删除') }}
+                    {{ $t('common.delete') }}
                   </Button>
                 </Popconfirm>
               </Space>
@@ -287,33 +287,33 @@ onMounted(loadTenants)
     <!-- 新建 / 编辑租户 -->
     <Modal
       v-model:open="modalVisible"
-      :title="editingId ? $t('编辑租户') : $t('新建租户')"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :title="editingId ? $t('admin.edit_tenant') : $t('admin.new_tenant')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       :confirm-loading="submitting"
       @ok="submitForm"
     >
       <Form layout="vertical">
         <Form.Item
-          :label="$t('租户名称')"
+          :label="$t('admin.tenant_name')"
           required
         >
           <Input
             v-model:value="form.name"
-            :placeholder="$t('例如: ACME Corporation')"
+            :placeholder="$t('common.e_g_acme_corporation')"
             @press-enter="submitForm"
           />
         </Form.Item>
         <Form.Item
           v-if="editingId"
-          :label="$t('状态')"
+          :label="$t('common.status')"
         >
           <Select v-model:value="form.status">
             <Select.Option value="active">
-              {{ $t('活跃') }}
+              {{ $t('common.active') }}
             </Select.Option>
             <Select.Option value="suspended">
-              {{ $t('已挂起') }}
+              {{ $t('common.suspended_2') }}
             </Select.Option>
           </Select>
         </Form.Item>
@@ -323,7 +323,7 @@ onMounted(loadTenants)
     <!-- 用量抽屉 -->
     <Drawer
       v-model:open="usageOpen"
-      :title="usageTenant ? $t('📊 {name} - 资源用量', { name: usageTenant.name }) : $t('📊 资源用量')"
+      :title="usageTenant ? $t('📊 {name} - 资源用量', { name: usageTenant.name }) : $t('common.resource_usage')"
       width="420"
       :footer="null"
     >
@@ -345,7 +345,7 @@ onMounted(loadTenants)
           v-if="!usageLoading && !usage"
           class="usage-empty"
         >
-          <EmptyState :description="$t('暂无用量数据')" />
+          <EmptyState :description="$t('common.no_usage_data_yet')" />
         </div>
       </Spin>
     </Drawer>

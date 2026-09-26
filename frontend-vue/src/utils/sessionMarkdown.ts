@@ -11,8 +11,8 @@ import type { ChatItem, TextItem } from '../components/chat/chat-types'
 
 /** 界面上的角色名，导出后是给人读的文档，不用 'user'/'assistant' */
 const ROLE_HEADING: Record<TextItem['role'], string> = {
-  user: t('## 用户'),
-  assistant: t('## 助手'),
+  user: t('admin.user'),
+  assistant: t('common.assistant'),
 }
 
 export function sessionToMarkdown(items: readonly ChatItem[], title?: string): string {
@@ -24,7 +24,7 @@ export function sessionToMarkdown(items: readonly ChatItem[], title?: string): s
     if (item.kind !== 'text') continue
     const text = (item as TextItem).content?.trim()
     if (!text) continue
-    blocks.push(ROLE_HEADING[(item as TextItem).role] || t('## 消息'), text)
+    blocks.push(ROLE_HEADING[(item as TextItem).role] || t('chat.messages'), text)
   }
 
   if (blocks.length === 0) return ''

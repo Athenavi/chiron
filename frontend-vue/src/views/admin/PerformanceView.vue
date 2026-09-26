@@ -84,7 +84,7 @@ async function fetchData() {
       version: py.version || '--',
     }
   } catch {
-    message.error(t('获取性能数据失败'))
+    message.error(t('errors.failed_to_fetch_performance_data'))
   } finally {
     loading.value = false
   }
@@ -101,20 +101,20 @@ onMounted(() => {
       <div class="metric-grid">
         <Card>
           <Statistic
-            :title="$t('并发连接数')"
+            :title="$t('common.concurrent_connection_count')"
             :value="metrics.connections"
           />
         </Card>
         <Card>
           <Statistic
-            :title="$t('推理延迟(均值)')"
+            :title="$t('chat.inference_latency_avg')"
             :value="metrics.avgLatencyMs"
             suffix="ms"
           />
         </Card>
         <Card>
           <Statistic
-            :title="$t('网关 DB 延迟')"
+            :title="$t('common.gateway_db_latency')"
             :value="metrics.dbLatencyMs"
             suffix="ms"
           />
@@ -122,7 +122,7 @@ onMounted(() => {
       </div>
 
       <Card
-        :title="$t('Go 网关状态')"
+        :title="$t('common.go_gateway_status')"
         style="margin-top: 16px"
       >
         <div class="status-grid">
@@ -130,13 +130,13 @@ onMounted(() => {
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('实例数')">
+            <DescriptionsItem :label="$t('common.instances')">
               {{ gatewayStatus.instances }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('CPU 使用率')">
+            <DescriptionsItem :label="$t('common.cpu_usage')">
               {{ gatewayStatus.cpuUsage }}%
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('内存使用')">
+            <DescriptionsItem :label="$t('memory.memory_usage')">
               {{ gatewayStatus.memoryUsage }}
             </DescriptionsItem>
             <DescriptionsItem label="Goroutines">
@@ -147,16 +147,16 @@ onMounted(() => {
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('连接数')">
+            <DescriptionsItem :label="$t('common.connections')">
               {{ gatewayStatus.connections }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('Redis 延迟')">
+            <DescriptionsItem :label="$t('admin.redis_latency')">
               {{ gatewayStatus.redisLatency }}ms
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('DB 延迟')">
+            <DescriptionsItem :label="$t('common.db_latency')">
               {{ gatewayStatus.dbLatency }}ms
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('运行时间')">
+            <DescriptionsItem :label="$t('common.run_time')">
               {{ gatewayStatus.uptime }}
             </DescriptionsItem>
           </Descriptions>
@@ -164,7 +164,7 @@ onMounted(() => {
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('版本')">
+            <DescriptionsItem :label="$t('common.version')">
               {{ gatewayStatus.version }}
             </DescriptionsItem>
           </Descriptions>
@@ -172,7 +172,7 @@ onMounted(() => {
       </Card>
 
       <Card
-        :title="$t('Python 引擎状态')"
+        :title="$t('common.python_engine_status')"
         style="margin-top: 16px"
       >
         <div class="status-grid">
@@ -180,16 +180,16 @@ onMounted(() => {
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('Pod 数量')">
+            <DescriptionsItem :label="$t('common.pod_count')">
               {{ pythonStatus.pods }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('CPU 使用率')">
+            <DescriptionsItem :label="$t('common.cpu_usage')">
               {{ pythonStatus.cpuUsage }}%
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('内存使用')">
+            <DescriptionsItem :label="$t('memory.memory_usage')">
               {{ pythonStatus.memoryUsage }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('活跃任务')">
+            <DescriptionsItem :label="$t('workflow.active_tasks')">
               {{ pythonStatus.activeTasks }}
             </DescriptionsItem>
           </Descriptions>
@@ -197,16 +197,16 @@ onMounted(() => {
             bordered
             :column="1"
           >
-            <DescriptionsItem :label="$t('平均推理时间')">
+            <DescriptionsItem :label="$t('chat.avg_inference_time')">
               {{ pythonStatus.avgInferenceTime }}ms
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('Redis 延迟')">
+            <DescriptionsItem :label="$t('admin.redis_latency')">
               {{ pythonStatus.redisLatency }}ms
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('运行时间')">
+            <DescriptionsItem :label="$t('common.run_time')">
               {{ pythonStatus.uptime }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('版本')">
+            <DescriptionsItem :label="$t('common.version')">
               {{ pythonStatus.version }}
             </DescriptionsItem>
           </Descriptions>

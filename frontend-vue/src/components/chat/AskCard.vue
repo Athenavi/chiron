@@ -54,11 +54,11 @@ function submitDraft() {
     :class="{ expired }"
   >
     <div class="ask-head">
-      <span class="ask-tag">{{ $t('需要你回答') }}</span>
+      <span class="ask-tag">{{ $t('common.needs_your_answer') }}</span>
       <span
         v-if="expired"
         class="ask-expired"
-      >{{ $t('已超时，可继续对话') }}</span>
+      >{{ $t('errors.timed_out_you_can_continue_the_conversation') }}</span>
     </div>
     <p class="ask-question">
       {{ question }}
@@ -86,9 +86,9 @@ function submitDraft() {
         v-model="draft"
         class="ask-input"
         type="text"
-        :placeholder="hasOptions ? $t('也可以直接输入回答') : $t('输入回答后回车')"
+        :placeholder="hasOptions ? $t('common.you_can_also_type_your_answer_directly') : $t('common.type_your_answer_and_press_enter')"
         :disabled="expired"
-        :aria-label="$t('回答')"
+        :aria-label="$t('common.answer')"
         @keydown.enter.prevent="submitDraft"
       >
       <button
@@ -97,7 +97,7 @@ function submitDraft() {
         :disabled="expired || !draft.trim()"
         @click="submitDraft"
       >
-        {{ $t('回答') }}
+        {{ $t('common.answer') }}
       </button>
     </div>
   </div>

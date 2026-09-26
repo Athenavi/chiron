@@ -18,8 +18,8 @@
       v-if="filteredItems.length === 0"
       size="page"
       :icon="markRaw(typeIcons[type])"
-      :description="searchQuery ? $t('暂无匹配的市场条目') : $t('市场暂无内容')"
-      :hint="searchQuery ? $t('尝试调整搜索关键词') : $t('管理员发布市场条目后，将展示在这里')"
+      :description="searchQuery ? $t('common.no_matching_market_items') : $t('common.market_is_empty')"
+      :hint="searchQuery ? $t('common.try_adjusting_your_search_keywords') : $t('管理员发布市场条目后，将展示在这里')"
     />
 
     <div
@@ -43,7 +43,7 @@
             color="green"
             class="installed-tag"
           >
-            {{ $t('已安装') }}
+            {{ $t('common.installed') }}
           </Tag>
         </div>
 
@@ -53,7 +53,7 @@
           class="prompt-preview"
         >
           <div class="prompt-label">
-            {{ $t('系统提示词') }}
+            {{ $t('agent.system_prompt') }}
           </div>
           <div class="prompt-text">
             {{ systemPrompt(item) }}
@@ -103,7 +103,7 @@
               <CheckOutlined v-if="item.installed" />
               <DownloadOutlined v-else />
             </template>
-            {{ item.installed ? $t('已安装') : $t('安装') }}
+            {{ item.installed ? $t('common.installed') : $t('common.install') }}
           </Button>
         </div>
       </div>
@@ -147,11 +147,11 @@ const typeIcons: Record<MarketType, Component> = {
 
 const searchPlaceholder = computed(() => {
   const map: Record<MarketType, string> = {
-    skill: t('搜索技能…'),
-    agent: t('搜索 Agent…'),
-    mcp: t('搜索 MCP…'),
+    skill: t('agent.search_skills'),
+    agent: t('agent.search_agents'),
+    mcp: t('agent.search_mcp'),
   }
-  return map[props.type] || t('搜索市场…')
+  return map[props.type] || t('common.search_market')
 })
 
 /**
@@ -182,11 +182,11 @@ function getManifest(item: MarketItem): MarketManifest {
 }
 
 function displayName(item: MarketItem): string {
-  return getManifest(item).name || item.name || t('未命名')
+  return getManifest(item).name || item.name || t('common.untitled')
 }
 
 function displayDesc(item: MarketItem): string {
-  return getManifest(item).description || t('暂无描述')
+  return getManifest(item).description || t('common.no_description')
 }
 
 function systemPrompt(item: MarketItem): string {

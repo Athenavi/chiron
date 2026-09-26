@@ -22,7 +22,7 @@ async function loadRedis() {
     const resp = await api.get('/v1/admin/redis')
     redisData.value = resp.data?.data || null
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('获取 Redis 状态失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_redis_status')))
   } finally {
     loading.value = false
   }
@@ -38,13 +38,13 @@ const hitRate = computed(() => {
 })
 
 const poolStats = computed(() => [
-  { title: t('命中次数'), value: Number(pool.value.hits) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('未命中次数'), value: Number(pool.value.misses) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('超时次数'), value: Number(pool.value.timeouts) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('总连接数'), value: Number(pool.value.total_conns) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('空闲连接数'), value: Number(pool.value.idle_conns) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('陈旧连接数'), value: Number(pool.value.stale_conns) || 0, precision: 0, suffix: undefined as string | undefined },
-  { title: t('命中率'), value: hitRate.value, precision: 2, suffix: '%' },
+  { title: t('common.hits'), value: Number(pool.value.hits) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('common.misses'), value: Number(pool.value.misses) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('errors.timeout_count'), value: Number(pool.value.timeouts) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('common.total_connections'), value: Number(pool.value.total_conns) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('common.idle_connections'), value: Number(pool.value.idle_conns) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('common.stale_connection_count'), value: Number(pool.value.stale_conns) || 0, precision: 0, suffix: undefined as string | undefined },
+  { title: t('common.hit_rate'), value: hitRate.value, precision: 2, suffix: '%' },
 ])
 
 // ── 慢日志 ──
@@ -61,24 +61,24 @@ async function loadSlowLog() {
     slowLog.value = Array.isArray(d.slow_log) ? d.slow_log : []
     slowError.value = d.error || null
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('获取慢日志失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_slow_log')))
   } finally {
     slowLoading.value = false
   }
 }
 
 const SLOW_LABELS = computed<Record<string, string>>(() => ({
-  id: t('序号'),
-  timestamp: t('时间'),
-  time: t('时间'),
-  duration: t('耗时 (μs)'),
-  duration_us: t('耗时 (μs)'),
-  command: t('命令'),
-  args: t('参数'),
-  key: t('键'),
-  client: t('客户端'),
-  ip: t('来源 IP'),
-  name: t('名称'),
+  id: t('common.no_2'),
+  timestamp: t('common.time'),
+  time: t('common.time'),
+  duration: t('common.elapsed_s'),
+  duration_us: t('common.elapsed_s'),
+  command: t('common.command'),
+  args: t('agent.parameter'),
+  key: t('common.key'),
+  client: t('common.client'),
+  ip: t('common.source_ip'),
+  name: t('common.name'),
 }))
 
 const slowColumns = computed(() => {
@@ -109,18 +109,18 @@ const flushing = ref(false)
 
 async function flushAll() {
   if (flushConfirm.value !== 'confirm') {
-    message.warning(t('请输入 confirm 以确认执行'))
+    message.warning(t('common.please_enter_confirm_to_confirm_execution'))
     return
   }
   flushing.value = true
   try {
     await api.post('/v1/admin/redis/flush-all', { confirm: true })
-    message.success(t('FLUSHALL 已执行'))
+    message.success(t('common.flushall_executed'))
     flushVisible.value = false
     flushConfirm.value = ''
     await loadRedis()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('FLUSHALL 执行失败')))
+    message.error(apiErrorMessage(e, t('errors.flushall_failed')))
   } finally {
     flushing.value = false
   }
@@ -136,8 +136,8 @@ function statusColor(status: string): string {
 
 function statusText(status: string): string {
   const s = String(status || '').toLowerCase()
-  if (['up', 'ok', 'running', 'connected', 'active'].includes(s)) return t('运行中')
-  if (['down', 'error', 'disconnected', 'inactive'].includes(s)) return t('异常')
+  if (['up', 'ok', 'running', 'connected', 'active'].includes(s)) return t('common.running_2')
+  if (['down', 'error', 'disconnected', 'inactive'].includes(s)) return t('errors.exception')
   return status || '-'
 }
 
@@ -150,16 +150,16 @@ onMounted(() => {
 <template>
   <div class="redis-management">
     <div class="page-header">
-      <h1>{{ $t('🔴 Redis 管理') }}</h1>
+      <h1>{{ $t('admin.redis_management') }}</h1>
       <Space>
         <Button @click="loadRedis">
-          {{ $t('刷新状态') }}
+          {{ $t('common.refresh_status') }}
         </Button>
         <Button @click="loadSlowLog">
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新慢日志') }}
+          {{ $t('common.refresh_slow_log') }}
         </Button>
         <Button
           danger
@@ -177,7 +177,7 @@ onMounted(() => {
     <Spin :spinning="loading && !redisData">
       <!-- 状态卡 -->
       <Card
-        :title="$t('实例状态')"
+        :title="$t('common.instance_status')"
         style="margin-bottom: 16px"
       >
         <Descriptions
@@ -186,24 +186,24 @@ onMounted(() => {
           bordered
           size="small"
         >
-          <Descriptions.Item :label="$t('状态')">
+          <Descriptions.Item :label="$t('common.status')">
             <Tag :color="statusColor(redisData.status)">
               {{ statusText(redisData.status) }}
             </Tag>
           </Descriptions.Item>
-          <Descriptions.Item :label="$t('运行模式')">
+          <Descriptions.Item :label="$t('common.run_mode')">
             {{ redisData.mode || '-' }}
           </Descriptions.Item>
         </Descriptions>
         <EmptyState
           v-else
-          :description="$t('暂无 Redis 实例信息')"
+          :description="$t('admin.no_redis_instance_info_yet')"
         />
       </Card>
 
       <!-- 连接池统计 -->
       <Card
-        :title="$t('连接池统计')"
+        :title="$t('common.connection_pool_stats')"
         style="margin-bottom: 16px"
       >
         <Row :gutter="[16, 16]">
@@ -231,7 +231,7 @@ onMounted(() => {
       </Card>
 
       <!-- 慢日志 -->
-      <Card :title="$t('慢查询日志')">
+      <Card :title="$t('common.slow_query_log')">
         <Alert
           v-if="slowError"
           type="warning"
@@ -249,7 +249,7 @@ onMounted(() => {
           size="small"
         >
           <template #emptyText>
-            <EmptyState :description="$t('暂无慢查询记录')" />
+            <EmptyState :description="$t('common.no_slow_query_records_yet')" />
           </template>
           <template #bodyCell="{ column, record, index }">
             <template v-if="column.key === '__idx'">
@@ -266,9 +266,9 @@ onMounted(() => {
     <!-- FLUSH ALL 确认 -->
     <Modal
       v-model:open="flushVisible"
-      :title="$t('⚠️ FLUSH ALL 确认')"
-      :ok-text="$t('执行')"
-      :cancel-text="$t('取消')"
+      :title="$t('common.flush_all_confirmation')"
+      :ok-text="$t('common.execute')"
+      :cancel-text="$t('common.cancel')"
       :ok-button-props="{ danger: true }"
       :confirm-loading="flushing"
       @ok="flushAll"
@@ -277,13 +277,13 @@ onMounted(() => {
       <Alert
         type="error"
         show-icon
-        :message="$t('此操作将删除 Redis 中的全部数据，不可恢复！')"
+        :message="$t('admin.this_will_delete_all_data_in_redis_and_cannot_be_undone')"
         style="margin-bottom: 16px"
       />
-      <p>{{ $t('请在下方输入') }} <Tag>confirm</Tag> {{ $t('以确认执行：') }}</p>
+      <p>{{ $t('common.please_enter_below') }} <Tag>confirm</Tag> {{ $t('common.to_confirm_execution') }}</p>
       <Input
         v-model:value="flushConfirm"
-        :placeholder="$t('输入 confirm')"
+        :placeholder="$t('common.enter_confirm')"
         @press-enter="flushAll"
       />
     </Modal>

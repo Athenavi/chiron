@@ -93,23 +93,23 @@ async function loadKnowledgeBases() {
     // 降级：列表项缺失 visibility 时视为 private
     knowledgeBases.value = (res.data?.data?.knowledge_bases || []).map((kb: any) => ({ ...kb, visibility: kb.visibility || 'private' }))
   } catch {
-    message.error(t('加载知识库失败'))
+    message.error(t('errors.failed_to_load_knowledge_base'))
   } finally {
     loading.value = false
   }
 }
 
 async function createKnowledgeBase() {
-  if (!createForm.value.name.trim()) { message.warning(t('请输入知识库名称')); return }
+  if (!createForm.value.name.trim()) { message.warning(t('knowledge.please_enter_knowledge_base_name')); return }
   creating.value = true
   try {
     await api.post('/v1/kb', createForm.value)
-    message.success(t('知识库创建成功'))
+    message.success(t('knowledge.knowledge_base_created_successfully'))
     showCreateModal.value = false
     createForm.value = { name: '', description: '', type: 'wiki', visibility: 'private' }
     await loadKnowledgeBases()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('创建失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.creation_failed'))
   } finally {
     creating.value = false
   }
@@ -123,15 +123,15 @@ function openEdit(kb: KnowledgeBase) {
 }
 
 async function saveEdit() {
-  if (!editingKb.value || !editForm.value.name.trim()) { message.warning(t('请输入名称')); return }
+  if (!editingKb.value || !editForm.value.name.trim()) { message.warning(t('common.please_enter_a_name')); return }
   saving.value = true
   try {
     await api.put(`/v1/kb/${editingKb.value.id}`, editForm.value)
-    message.success(t('已保存'))
+    message.success(t('common.saved'))
     showEditModal.value = false
     await loadKnowledgeBases()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('保存失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -140,10 +140,10 @@ async function saveEdit() {
 async function deleteKnowledgeBase(id: string) {
   try {
     await api.delete(`/v1/kb/${id}`)
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
     await loadKnowledgeBases()
   } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('删除失败'))
+    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
   }
 }
 
@@ -153,14 +153,14 @@ async function toggleVisibility(kb: KnowledgeBase) {
   visibilityTogglingId.value = kb.id
   try {
     await setKBVisibility(kb.id, next)
-    message.success(next === 'tenant' ? t('已共享给团队') : t('已设为私有'))
+    message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadKnowledgeBases()
   } catch (e: any) {
     const msg = e.response?.data?.detail || e.response?.data?.error || e.response?.data?.message || ''
     if (e.response?.status === 403) {
-      message.error(t('只能操作自己创建的知识库') + (msg ? `：${msg}` : ''))
+      message.error(t('knowledge.can_only_operate_knowledge_bases_you_created') + (msg ? `：${msg}` : ''))
     } else {
-      message.error(t('操作失败') + (msg ? `：${msg}` : ''))
+      message.error(t('errors.operation_failed') + (msg ? `：${msg}` : ''))
     }
   } finally {
     visibilityTogglingId.value = ''
@@ -192,10 +192,10 @@ function formatDate(iso: string): string {
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">
-          {{ $t('知识库') }}
+          {{ $t('knowledge.knowledge_base') }}
         </h1>
         <p class="page-sub">
-          {{ $t('集中管理文档，支持全文检索与 RAG 问答') }}
+          {{ $t('knowledge.centralized_document_management_with_full_text_search_and_rag_q_a') }}
         </p>
       </div>
       <Button
@@ -205,14 +205,14 @@ function formatDate(iso: string): string {
         <template #icon>
           <PlusOutlined />
         </template>
-        {{ $t('创建知识库') }}
+        {{ $t('knowledge.create_knowledge_base') }}
       </Button>
     </div>
 
     <div class="list-toolbar">
       <Input
         v-model:value="searchQuery"
-        :placeholder="$t('搜索知识库（名称 / 描述）')"
+        :placeholder="$t('knowledge.search_knowledge_base_name_description')"
         allow-clear
         class="search-input"
       >
@@ -235,8 +235,8 @@ function formatDate(iso: string): string {
       v-else-if="knowledgeBases.length === 0"
       size="page"
       :icon="markRaw(BookOutlined)"
-      :description="$t('暂无知识库')"
-      :hint="$t('创建第一个知识库，开始文档检索与 RAG 问答')"
+      :description="$t('knowledge.no_knowledge_base_yet')"
+      :hint="$t('knowledge.create_your_first_knowledge_base_to_start_document_retrieval_and_rag_q_a')"
     >
       <Button
         type="primary"
@@ -245,7 +245,7 @@ function formatDate(iso: string): string {
         <template #icon>
           <PlusOutlined />
         </template>
-        {{ $t('创建知识库') }}
+        {{ $t('knowledge.create_knowledge_base') }}
       </Button>
     </EmptyState>
 
@@ -258,7 +258,7 @@ function formatDate(iso: string): string {
         class="kb-section"
       >
         <h2 class="section-title">
-          {{ $t('我的知识库') }}
+          {{ $t('knowledge.my_knowledge_base') }}
         </h2>
         <div class="kb-grid">
           <div
@@ -275,7 +275,7 @@ function formatDate(iso: string): string {
               <span class="card-icon"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
-                <span class="kb-desc">{{ kb.description || $t('暂无描述') }}</span>
+                <span class="kb-desc">{{ kb.description || $t('common.no_description') }}</span>
               </div>
               <Tag
                 :color="kb.type === 'rag' ? 'success' : 'blue'"
@@ -288,7 +288,7 @@ function formatDate(iso: string): string {
                 color="green"
                 class="type-tag"
               >
-                {{ $t('团队共享') }}
+                {{ $t('common.team_shared') }}
               </Tag>
             </div>
             <div class="kb-stats">
@@ -312,7 +312,7 @@ function formatDate(iso: string): string {
                   v-if="kb.visibility !== 'public'"
                   type="text"
                   size="small"
-                  :title="kb.visibility === 'tenant' ? $t('设为私有') : $t('共享给团队')"
+                  :title="kb.visibility === 'tenant' ? $t('common.set_as_private') : $t('common.shared_with_team_2')"
                   :loading="visibilityTogglingId === kb.id"
                   @click.stop="toggleVisibility(kb)"
                 >
@@ -324,7 +324,7 @@ function formatDate(iso: string): string {
                 <Button
                   type="text"
                   size="small"
-                  :title="$t('编辑')"
+                  :title="$t('common.edit_2')"
                   @click.stop="openEdit(kb)"
                 >
                   <template #icon>
@@ -332,14 +332,14 @@ function formatDate(iso: string): string {
                   </template>
                 </Button>
                 <Popconfirm
-                  :title="$t('确认删除此知识库？')"
+                  :title="$t('knowledge.confirm_deleting_this_knowledge_base')"
                   @confirm="deleteKnowledgeBase(kb.id)"
                 >
                   <Button
                     type="text"
                     danger
                     size="small"
-                    :title="$t('删除')"
+                    :title="$t('common.delete')"
                     @click.stop
                   >
                     <template #icon>
@@ -358,7 +358,7 @@ function formatDate(iso: string): string {
         class="kb-section"
       >
         <h2 class="section-title">
-          {{ $t('公共知识库') }}
+          {{ $t('knowledge.public_knowledge_base') }}
         </h2>
         <div class="kb-grid">
           <div
@@ -375,10 +375,10 @@ function formatDate(iso: string): string {
               <span class="card-icon"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
-                <span class="kb-desc">{{ kb.description || $t('暂无描述') }}</span>
+                <span class="kb-desc">{{ kb.description || $t('common.no_description') }}</span>
               </div>
               <Tag color="warning">
-                {{ $t('公共') }}
+                {{ $t('common.public') }}
               </Tag>
             </div>
             <div class="kb-stats">
@@ -398,7 +398,7 @@ function formatDate(iso: string): string {
                 <Button
                   type="text"
                   size="small"
-                  :title="$t('编辑')"
+                  :title="$t('common.edit_2')"
                   @click.stop="openEdit(kb)"
                 >
                   <template #icon>
@@ -406,14 +406,14 @@ function formatDate(iso: string): string {
                   </template>
                 </Button>
                 <Popconfirm
-                  :title="$t('确认删除此知识库？')"
+                  :title="$t('knowledge.confirm_deleting_this_knowledge_base')"
                   @confirm="deleteKnowledgeBase(kb.id)"
                 >
                   <Button
                     type="text"
                     danger
                     size="small"
-                    :title="$t('删除')"
+                    :title="$t('common.delete')"
                     @click.stop
                   >
                     <template #icon>
@@ -431,49 +431,49 @@ function formatDate(iso: string): string {
     <!-- 创建 Modal -->
     <Modal
       :open="showCreateModal"
-      :title="$t('创建知识库')"
+      :title="$t('knowledge.create_knowledge_base')"
       :confirm-loading="creating"
-      :ok-text="$t('创建')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.create')"
+      :cancel-text="$t('common.cancel')"
       @ok="createKnowledgeBase"
       @cancel="showCreateModal = false"
     >
       <div class="editor-form">
         <div class="form-row">
-          <label class="form-label">{{ $t('名称 *') }}</label>
+          <label class="form-label">{{ $t('common.name_2') }}</label>
           <Input
             v-model:value="createForm.name"
-            :placeholder="$t('知识库名称')"
+            :placeholder="$t('knowledge.knowledge_base_name_2')"
             :maxlength="60"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('描述') }}</label>
+          <label class="form-label">{{ $t('common.description') }}</label>
           <Input.TextArea
             v-model:value="createForm.description"
             :rows="2"
-            :placeholder="$t('一句话描述内容范围')"
+            :placeholder="$t('common.describe_the_content_scope_in_one_sentence')"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('类型') }}</label>
+          <label class="form-label">{{ $t('common.type') }}</label>
           <Radio.Group v-model:value="createForm.type">
             <Radio value="wiki">
-              {{ $t('Wiki（全文检索）') }}
+              {{ $t('knowledge.wiki_full_text_search') }}
             </Radio>
             <Radio value="rag">
-              {{ $t('RAG（向量问答）') }}
+              {{ $t('knowledge.rag_vector_q_a') }}
             </Radio>
           </Radio.Group>
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('可见性') }}</label>
+          <label class="form-label">{{ $t('common.visibility') }}</label>
           <Radio.Group v-model:value="createForm.visibility">
             <Radio value="private">
-              {{ $t('私有') }}
+              {{ $t('common.private_2') }}
             </Radio>
             <Radio value="public">
-              {{ $t('公开') }}
+              {{ $t('common.public_2') }}
             </Radio>
           </Radio.Group>
         </div>
@@ -485,28 +485,28 @@ function formatDate(iso: string): string {
       :open="showEditModal"
       :title="$t('编辑「{name}」', { name: editingKb?.name || '' })"
       :confirm-loading="saving"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="saveEdit"
       @cancel="showEditModal = false"
     >
       <div class="editor-form">
         <div class="form-row">
-          <label class="form-label">{{ $t('名称 *') }}</label>
+          <label class="form-label">{{ $t('common.name_2') }}</label>
           <Input
             v-model:value="editForm.name"
             :maxlength="60"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('描述') }}</label>
+          <label class="form-label">{{ $t('common.description') }}</label>
           <Input.TextArea
             v-model:value="editForm.description"
             :rows="2"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('类型') }}</label>
+          <label class="form-label">{{ $t('common.type') }}</label>
           <Radio.Group v-model:value="editForm.type">
             <Radio value="wiki">
               Wiki
@@ -517,13 +517,13 @@ function formatDate(iso: string): string {
           </Radio.Group>
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('可见性') }}</label>
+          <label class="form-label">{{ $t('common.visibility') }}</label>
           <Radio.Group v-model:value="editForm.visibility">
             <Radio value="private">
-              {{ $t('私有') }}
+              {{ $t('common.private_2') }}
             </Radio>
             <Radio value="public">
-              {{ $t('公开') }}
+              {{ $t('common.public_2') }}
             </Radio>
           </Radio.Group>
         </div>

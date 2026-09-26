@@ -54,9 +54,9 @@ const prettyArgs = computed(() => {
 <template>
   <div class="approval-card">
     <div class="approval-head">
-      <span class="approval-tag">{{ $t('子 Agent 待确认') }}</span>
-      <span class="approval-name">{{ toolName || $t('工具调用') }}</span>
-      <span class="approval-hint">{{ $t('请在 300 秒内决定，超时按拒绝处理') }}</span>
+      <span class="approval-tag">{{ $t('agent.sub_agent_awaiting_confirmation') }}</span>
+      <span class="approval-name">{{ toolName || $t('agent.tool_call') }}</span>
+      <span class="approval-hint">{{ $t('errors.please_decide_within_300_seconds_timeout_is_treated_as_rejection') }}</span>
     </div>
     <div
       v-if="content"
@@ -73,7 +73,7 @@ const prettyArgs = computed(() => {
         v-if="decision"
         class="approval-done"
       >
-        {{ decision === 'approved' ? $t('已允许') : $t('已拒绝') }}
+        {{ decision === 'approved' ? $t('common.allowed') : $t('errors.rejected') }}
       </span>
       <template v-else>
         <button
@@ -82,7 +82,7 @@ const prettyArgs = computed(() => {
           :disabled="submitting"
           @click="emit('decide', true)"
         >
-          {{ $t('允许') }}
+          {{ $t('common.allow') }}
         </button>
         <button
           type="button"
@@ -90,7 +90,7 @@ const prettyArgs = computed(() => {
           :disabled="submitting"
           @click="emit('decide', false)"
         >
-          {{ $t('拒绝') }}
+          {{ $t('errors.reject') }}
         </button>
       </template>
     </div>

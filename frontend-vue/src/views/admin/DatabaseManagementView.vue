@@ -29,7 +29,7 @@ async function loadStatus() {
     const resp = await api.get('/v1/admin/database/status')
     statusData.value = resp.data?.data || {}
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('获取数据库状态失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_database_status')))
   } finally {
     statusLoading.value = false
   }
@@ -48,8 +48,8 @@ const configRows = computed(() =>
 )
 
 const configColumns = [
-  { title: t('配置项'), dataIndex: 'key', key: 'key', ellipsis: true },
-  { title: t('值'), dataIndex: 'value', key: 'value', ellipsis: true },
+  { title: t('common.config_item'), dataIndex: 'key', key: 'key', ellipsis: true },
+  { title: t('common.value'), dataIndex: 'value', key: 'value', ellipsis: true },
 ]
 
 async function loadConfigs() {
@@ -58,7 +58,7 @@ async function loadConfigs() {
     const resp = await api.get('/v1/admin/database/configs')
     configs.value = resp.data?.data?.configs || {}
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('获取数据库配置失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_database_config')))
   } finally {
     configLoading.value = false
   }
@@ -74,10 +74,10 @@ const creatingBackup = ref(false)
 const restoringName = ref<string | null>(null)
 
 const backupColumns = [
-  { title: t('名称'), dataIndex: 'name', key: 'name', ellipsis: true },
-  { title: t('大小'), key: 'size', width: 120 },
-  { title: t('时间'), key: 'time', width: 190 },
-  { title: t('操作'), key: 'actions', width: 110, fixed: 'right' as const },
+  { title: t('common.name'), dataIndex: 'name', key: 'name', ellipsis: true },
+  { title: t('common.size'), key: 'size', width: 120 },
+  { title: t('common.time'), key: 'time', width: 190 },
+  { title: t('common.action'), key: 'actions', width: 110, fixed: 'right' as const },
 ]
 
 async function loadBackups() {
@@ -86,7 +86,7 @@ async function loadBackups() {
     const resp = await api.get('/v1/admin/database/backups')
     backups.value = resp.data?.data?.backups || []
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('获取备份列表失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_backup_list')))
   } finally {
     backupsLoading.value = false
   }
@@ -100,7 +100,7 @@ async function createBackup() {
     message.success(t('备份已创建（{name}，状态：{status}）', { name: d.name || '—', status: d.status || 'pending' }))
     await loadBackups()
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('创建备份失败')))
+    message.error(apiErrorMessage(e, t('errors.failed_to_create_backup')))
   } finally {
     creatingBackup.value = false
   }
@@ -112,7 +112,7 @@ async function restoreBackup(record: any) {
     await api.post(`/v1/admin/database/backups/${encodeURIComponent(record.name)}/restore`)
     message.success(t('正在从备份「{name}」恢复，请稍后刷新查看结果', { name: record.name }))
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('恢复失败')))
+    message.error(apiErrorMessage(e, t('errors.restore_failed')))
   } finally {
     restoringName.value = null
   }
@@ -153,7 +153,7 @@ const queryRows = computed(() => {
 async function executeQuery() {
   const sql = queryText.value.trim()
   if (!sql) {
-    message.warning(t('请输入 SQL 查询语句'))
+    message.warning(t('common.please_enter_a_sql_query'))
     return
   }
   querying.value = true
@@ -161,7 +161,7 @@ async function executeQuery() {
     const resp = await api.post('/v1/admin/database/query', { query: sql })
     queryResult.value = resp.data?.data || null
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('查询执行失败')))
+    message.error(apiErrorMessage(e, t('errors.query_execution_failed')))
   } finally {
     querying.value = false
   }
@@ -175,7 +175,7 @@ const optimizing = ref(false)
 async function runOptimize(action: 'analyze' | 'vacuum') {
   const table = optimizeTable.value.trim()
   if (!table) {
-    message.warning(t('请输入要优化的表名'))
+    message.warning(t('common.please_enter_the_table_name_to_optimize'))
     return
   }
   optimizing.value = true
@@ -184,7 +184,7 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
     const d = resp.data?.data || {}
     message.success(t('优化完成：{action} {table}（{status}）', { action: d.action || action, table: d.table || table, status: d.status || 'ok' }))
   } catch (e: any) {
-    message.error(apiErrorMessage(e, t('优化失败')))
+    message.error(apiErrorMessage(e, t('errors.optimization_failed')))
   } finally {
     optimizing.value = false
   }
@@ -221,16 +221,16 @@ onMounted(async () => {
 <template>
   <div class="database-management">
     <div class="page-header">
-      <h1>{{ $t('🗄️ 数据库管理') }}</h1>
+      <h1>{{ $t('admin.database_management') }}</h1>
       <Space>
         <Button @click="loadStatus">
-          {{ $t('刷新状态') }}
+          {{ $t('common.refresh_status') }}
         </Button>
         <Button @click="loadBackups">
           <template #icon>
             <ReloadOutlined />
           </template>
-          {{ $t('刷新备份') }}
+          {{ $t('common.refresh_backup') }}
         </Button>
       </Space>
     </div>
@@ -238,7 +238,7 @@ onMounted(async () => {
     <Spin :spinning="initialLoading">
       <!-- 状态卡 -->
       <Card
-        :title="$t('数据库状态')"
+        :title="$t('admin.database_status')"
         style="margin-bottom: 16px"
         :loading="statusLoading"
       >
@@ -247,15 +247,15 @@ onMounted(async () => {
           bordered
           size="small"
         >
-          <Descriptions.Item :label="$t('版本')">
+          <Descriptions.Item :label="$t('common.version')">
             <Space>
               <DatabaseOutlined />
               {{ statusData?.version || '-' }}
             </Space>
           </Descriptions.Item>
-          <Descriptions.Item :label="$t('连接状态')">
+          <Descriptions.Item :label="$t('common.connection_status')">
             <Tag :color="statusData?.connected ? 'green' : 'red'">
-              {{ statusData?.connected ? $t('已连接') : $t('未连接') }}
+              {{ statusData?.connected ? $t('common.connected') : $t('common.not_connected') }}
             </Tag>
           </Descriptions.Item>
         </Descriptions>
@@ -263,7 +263,7 @@ onMounted(async () => {
 
       <!-- 配置表 -->
       <Card
-        :title="$t('数据库配置')"
+        :title="$t('admin.database_config')"
         style="margin-bottom: 16px"
       >
         <Table
@@ -276,7 +276,7 @@ onMounted(async () => {
           size="small"
         >
           <template #emptyText>
-            <EmptyState :description="$t('暂无配置项')" />
+            <EmptyState :description="$t('common.no_config_items_yet')" />
           </template>
         </Table>
       </Card>
@@ -284,7 +284,7 @@ onMounted(async () => {
       <!-- 备份列表 -->
       <Card style="margin-bottom: 16px">
         <template #title>
-          <Space>{{ $t('💾 备份列表') }}</Space>
+          <Space>{{ $t('common.backup_list') }}</Space>
         </template>
         <template #extra>
           <Button
@@ -295,7 +295,7 @@ onMounted(async () => {
             <template #icon>
               <PlusOutlined />
             </template>
-            {{ $t('创建备份') }}
+            {{ $t('common.create_backup') }}
           </Button>
         </template>
         <Table
@@ -308,8 +308,8 @@ onMounted(async () => {
         >
           <template #emptyText>
             <EmptyState
-              :description="$t('暂无备份')"
-              :hint="$t('点击右上角「创建备份」生成一次备份')"
+              :description="$t('common.no_backups_yet')"
+              :hint="$t('common.click_create_backup_at_the_top_right_to_make_a_backup')"
             />
           </template>
 
@@ -322,9 +322,9 @@ onMounted(async () => {
             </template>
             <template v-else-if="column.key === 'actions'">
               <Popconfirm
-                :title="$t('⚠️ 警告：从备份恢复将覆盖当前数据库数据，此操作不可撤销！确定继续吗？')"
-                :ok-text="$t('确定恢复')"
-                :cancel-text="$t('取消')"
+                :title="$t('admin.warning_restoring_from_backup_will_overwrite_the_current_database_this_cannot_be_undone_continue')"
+                :ok-text="$t('common.confirm_restore')"
+                :cancel-text="$t('common.cancel')"
                 @confirm="restoreBackup(record)"
               >
                 <Button
@@ -332,7 +332,7 @@ onMounted(async () => {
                   danger
                   :loading="restoringName === record.name"
                 >
-                  {{ $t('恢复') }}
+                  {{ $t('common.restore') }}
                 </Button>
               </Popconfirm>
             </template>
@@ -342,13 +342,13 @@ onMounted(async () => {
 
       <!-- SQL 查询器 -->
       <Card
-        :title="$t('SQL 查询器（只读）')"
+        :title="$t('common.sql_query_read_only')"
         style="margin-bottom: 16px"
       >
         <Alert
           type="info"
           show-icon
-          :message="$t('仅允许只读查询（SELECT 等），不会执行任何写操作。')"
+          :message="$t('common.read_only_queries_only_select_etc_no_write_operations_will_be_executed')"
           style="margin-bottom: 16px"
         />
         <TextArea
@@ -366,10 +366,10 @@ onMounted(async () => {
             <template #icon>
               <SearchOutlined />
             </template>
-            {{ $t('执行查询') }}
+            {{ $t('common.run_query') }}
           </Button>
           <Button @click="queryResult = null; queryText = ''">
-            {{ $t('清空') }}
+            {{ $t('common.empty') }}
           </Button>
         </Space>
 
@@ -379,14 +379,14 @@ onMounted(async () => {
             wrap
           >
             <Statistic
-              :title="$t('返回行数')"
+              :title="$t('common.row_count')"
               :value="queryResult.count ?? (queryResult.rows || []).length"
             />
             <Tag
               v-if="queryResult.truncated"
               color="orange"
             >
-              {{ $t('结果已截断') }}
+              {{ $t('common.result_truncated') }}
             </Tag>
           </Space>
           <Table
@@ -398,7 +398,7 @@ onMounted(async () => {
             size="small"
           >
             <template #emptyText>
-              <EmptyState :description="$t('查询无返回结果')" />
+              <EmptyState :description="$t('common.query_returned_no_results')" />
             </template>
             <template #bodyCell="{ column, record }">
               <span class="cell">{{ cellText(record[(column as any).dataIndex as string]) }}</span>
@@ -406,25 +406,25 @@ onMounted(async () => {
           </Table>
         </template>
         <template v-else>
-          <EmptyState :description="$t('执行查询后结果将显示在这里')" />
+          <EmptyState :description="$t('common.query_results_will_appear_here')" />
         </template>
       </Card>
 
       <!-- 优化区 -->
       <Card
-        :title="$t('性能优化')"
+        :title="$t('admin.performance_optimization')"
         style="margin-bottom: 16px"
       >
         <Alert
           type="warning"
           show-icon
-          :message="$t('优化操作会占用数据库资源，建议在低峰期对指定表执行。')"
+          :message="$t('admin.optimization_consumes_database_resources_run_it_on_specific_tables_during_off_peak_hours')"
           style="margin-bottom: 16px"
         />
         <Space wrap>
           <Input
             v-model:value="optimizeTable"
-            :placeholder="$t('输入表名，例如 users')"
+            :placeholder="$t('admin.enter_table_name_e_g_users')"
             style="width: 240px"
             @press-enter="runOptimize('analyze')"
           />
@@ -435,7 +435,7 @@ onMounted(async () => {
             <template #icon>
               <ThunderboltOutlined />
             </template>
-            {{ $t('ANALYZE 更新统计信息') }}
+            {{ $t('common.analyze_updates_statistics') }}
           </Button>
           <Button
             :loading="optimizing"
@@ -444,7 +444,7 @@ onMounted(async () => {
             <template #icon>
               <ThunderboltOutlined />
             </template>
-            {{ $t('VACUUM 回收存储空间') }}
+            {{ $t('common.vacuum_reclaims_storage_space') }}
           </Button>
         </Space>
       </Card>

@@ -25,7 +25,7 @@ async function fetchPolicies() {
   try {
     policies.value = await listModelPolicies()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -54,7 +54,7 @@ async function save() {
   try {
     limits = JSON.parse(form.value.per_model_limits || '{}')
   } catch {
-    message.error(t('per_model_limits 必须是合法 JSON'))
+    message.error(t('agent.per_model_limits_must_be_valid_json'))
     return
   }
   saving.value = true
@@ -65,19 +65,19 @@ async function save() {
         allowed_models: models,
         per_model_limits: limits,
       })
-      message.success(t('已创建'))
+      message.success(t('common.created'))
     } else {
       await updateModelPolicy(form.value.id, {
         role_id: form.value.role_id || undefined,
         allowed_models: models,
         per_model_limits: limits,
       })
-      message.success(t('已更新'))
+      message.success(t('common.updated'))
     }
     modalVisible.value = false
     fetchPolicies()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -85,33 +85,33 @@ async function save() {
 
 function confirmDelete(p: ModelPolicy) {
   Modal.confirm({
-    title: t('删除模型策略'),
-    content: p.role_id ? t('确认删除角色 {id} 策略？', { id: p.role_id }) : t('确认删除租户级兜底策略？'),
-    okText: t('删除'),
+    title: t('agent.delete_model_policy'),
+    content: p.role_id ? t('确认删除角色 {id} 策略？', { id: p.role_id }) : t('admin.confirm_delete_tenant_fallback_policy'),
+    okText: t('common.delete'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteModelPolicy(p.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         fetchPolicies()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('删除失败'))
+        message.error(e?.response?.data?.error || t('errors.delete_failed'))
       }
     },
   })
 }
 
 function scopeLabel(p: ModelPolicy): string {
-  return p.role_id ? t('角色 {id}…', { id: p.role_id.slice(0, 8) }) : t('租户级兜底')
+  return p.role_id ? t('角色 {id}…', { id: p.role_id.slice(0, 8) }) : t('admin.tenant_level_fallback')
 }
 
 const columns: TableColumnsType = [
-  { title: t('作用域'), key: 'scope', width: 160, customRender: ({ record }) => scopeLabel(record) },
-  { title: t('允许模型'), key: 'models', customRender: ({ record }) => (record.allowed_models ?? []).join(', ') || '-' },
-  { title: t('模型限速'), key: 'limits', width: 120, customRender: ({ record }) => t('{n} 项', { n: Object.keys(record.per_model_limits ?? {}).length }) },
-  { title: t('更新时间'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => new Date(text).toLocaleString('zh-CN', { hour12: false }) },
-  { title: t('操作'), key: 'action', width: 140, fixed: 'right' },
+  { title: t('common.scope'), key: 'scope', width: 160, customRender: ({ record }) => scopeLabel(record) },
+  { title: t('agent.allowed_models'), key: 'models', customRender: ({ record }) => (record.allowed_models ?? []).join(', ') || '-' },
+  { title: t('agent.model_rate_limit'), key: 'limits', width: 120, customRender: ({ record }) => t('{n} 项', { n: Object.keys(record.per_model_limits ?? {}).length }) },
+  { title: t('common.updated_at'), dataIndex: 'updated_at', key: 'updated_at', width: 180, customRender: ({ text }) => new Date(text).toLocaleString('zh-CN', { hour12: false }) },
+  { title: t('common.action'), key: 'action', width: 140, fixed: 'right' },
 ]
 
 onMounted(fetchPolicies)
@@ -121,20 +121,20 @@ onMounted(fetchPolicies)
   <div class="policy-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('模型策略管控') }}
+        {{ $t('agent.model_policy_control') }}
       </h2>
       <a-button
         type="primary"
         @click="openCreate"
       >
-        {{ $t('新建策略') }}
+        {{ $t('admin.new_policy') }}
       </a-button>
     </div>
 
     <a-alert
       type="info"
       show-icon
-      :message="$t('角色精确策略优先（用户直接角色 ∪ 群组成员角色任一命中），缺失回退租户级兜底；两者都无则放行。')"
+      :message="$t('admin.role_specific_exact_policy_takes_precedence_any_hit_from_the_user_s_direct_roles_group_roles_falls_back_to_the_tenant_fallback_when_missing_if_neither_exists_allow')"
       style="margin-bottom: 16px"
     />
 
@@ -149,7 +149,7 @@ onMounted(fetchPolicies)
     >
       <template #emptyText>
         <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -159,7 +159,7 @@ onMounted(fetchPolicies)
             size="small"
             @click="openEdit(record as ModelPolicy)"
           >
-            {{ $t('编辑') }}
+            {{ $t('common.edit_2') }}
           </a-button>
           <a-button
             type="link"
@@ -167,7 +167,7 @@ onMounted(fetchPolicies)
             danger
             @click="confirmDelete(record as ModelPolicy)"
           >
-            {{ $t('删除') }}
+            {{ $t('common.delete') }}
           </a-button>
         </template>
       </template>
@@ -175,19 +175,19 @@ onMounted(fetchPolicies)
 
     <a-modal
       v-model:open="modalVisible"
-      :title="modalMode === 'create' ? $t('新建模型策略') : $t('编辑模型策略')"
+      :title="modalMode === 'create' ? $t('agent.new_model_policy') : $t('agent.edit_model_policy')"
       :confirm-loading="saving"
       width="640"
       @ok="save"
     >
       <a-form layout="vertical">
-        <a-form-item :label="$t('角色 ID（留空 = 租户级兜底）')">
+        <a-form-item :label="$t('admin.role_id_blank_tenant_level_fallback')">
           <a-input
             v-model:value="form.role_id"
-            :placeholder="$t('角色 UUID（留空为租户级）')"
+            :placeholder="$t('admin.role_uuid_blank_tenant_level')"
           />
         </a-form-item>
-        <a-form-item :label="$t('允许模型（每行一个 model_id）')">
+        <a-form-item :label="$t('agent.allowed_models_one_model_id_per_line')">
           <a-textarea
             v-model:value="form.allowed_models"
             :rows="6"
@@ -195,7 +195,7 @@ onMounted(fetchPolicies)
             placeholder="gpt-4&#10;claude-3-opus"
           />
         </a-form-item>
-        <a-form-item :label="$t('每模型限速（JSON）')">
+        <a-form-item :label="$t('agent.per_model_rate_limit_json')">
           <a-textarea
             v-model:value="form.per_model_limits"
             :rows="5"

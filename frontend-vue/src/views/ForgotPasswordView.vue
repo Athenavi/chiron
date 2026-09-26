@@ -21,10 +21,10 @@ const form = ref({ email: '' })
 
 const rules: Record<string, Rule[]> = {
   email: [
-    { required: true, message: t('请输入邮箱'), trigger: 'blur' },
+    { required: true, message: t('mail.please_enter_email'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) =>
-        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('邮箱格式不正确')),
+        !value || isValidEmail(value) ? Promise.resolve() : Promise.reject(t('errors.invalid_email_format')),
       trigger: 'blur',
     },
   ],
@@ -69,7 +69,7 @@ async function handleSubmit() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('请先完成人机验证')
+    error.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   loading.value = true
@@ -85,22 +85,22 @@ async function handleSubmit() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = t('操作过于频繁，请完成人机验证后重试')
+      error.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403 && String(apiErr).includes('captcha')) {
-      error.value = t('人机验证未通过，请重新验证')
+      error.value = t('auth.human_verification_failed_please_verify_again')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 403) {
-      error.value = apiErr || t('本实例未开放密码重置')
+      error.value = apiErr || t('auth.password_reset_is_not_enabled_on_this_instance')
       return
     }
-    error.value = apiErr || t('请求失败，请稍后再试')
+    error.value = apiErr || t('errors.request_failed_please_try_again_later')
   } finally {
     loading.value = false
   }
@@ -122,7 +122,7 @@ async function handleSubmit() {
           {{ $t('auth.resetPassword') }}
         </div>
         <div class="auth-subtitle">
-          {{ $t('我们会向你的邮箱发送一条重置链接') }}
+          {{ $t('auth.we_will_send_a_reset_link_to_your_email') }}
         </div>
       </div>
       <Card
@@ -132,7 +132,7 @@ async function handleSubmit() {
         <Alert
           v-if="sent"
           type="success"
-          :message="$t('若该邮箱已注册，重置链接已发送，请查收（含垃圾邮件箱）')"
+          :message="$t('auth.if_this_email_is_registered_a_reset_link_has_been_sent_please_check_including_spam')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -158,7 +158,7 @@ async function handleSubmit() {
           >
             <Input
               v-model:value="form.email"
-              :placeholder="$t('请输入注册时使用的邮箱')"
+              :placeholder="$t('auth.please_enter_the_email_used_at_registration')"
               size="large"
               :maxlength="254"
               :aria-label="$t('auth.email')"
@@ -172,7 +172,7 @@ async function handleSubmit() {
 
           <FormItem
             v-if="captchaRequired"
-            :label="$t('人机验证')"
+            :label="$t('auth.human_verification')"
           >
             <CaptchaWidget
               ref="captchaRef"
@@ -196,14 +196,14 @@ async function handleSubmit() {
                 size="large"
                 :loading="loading"
               >
-                {{ $t('发送重置链接') }}
+                {{ $t('auth.send_reset_link') }}
               </Button>
               <Button
                 type="link"
                 block
                 @click="router.push('/login')"
               >
-                {{ $t('返回登录') }}
+                {{ $t('auth.back_to_sign_in') }}
               </Button>
             </Space>
           </FormItem>
@@ -215,7 +215,7 @@ async function handleSubmit() {
           block
           @click="router.push('/login')"
         >
-          {{ $t('返回登录') }}
+          {{ $t('auth.back_to_sign_in') }}
         </Button>
       </Card>
     </div>

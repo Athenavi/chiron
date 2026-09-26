@@ -317,10 +317,10 @@ async function handleGenerate() {
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">
-          {{ $t('技能') }}
+          {{ $t('agent.skill') }}
         </h1>
         <p class="page-sub">
-          {{ $t('扩展 Agent 的自定义能力，可启用、运行与 AI 生成') }}
+          {{ $t('agent.extend_agent_custom_capabilities_enable_run_and_ai_generate_them') }}
         </p>
       </div>
       <Button
@@ -330,7 +330,7 @@ async function handleGenerate() {
         <template #icon>
           <DownloadOutlined />
         </template>
-        {{ $t('安装技能') }}
+        {{ $t('agent.install_skill') }}
       </Button>
     </div>
 
@@ -341,12 +341,12 @@ async function handleGenerate() {
       <!-- ── 技能列表 ── -->
       <TabPane
         key="list"
-        :tab="$t('技能列表')"
+        :tab="$t('agent.skill_list')"
       >
         <div class="list-toolbar">
           <Input
             v-model:value="searchQuery"
-            :placeholder="$t('搜索名称 / 描述 / 标签')"
+            :placeholder="$t('common.search_name_description_tags')"
             allow-clear
             class="search-input"
           >
@@ -357,7 +357,7 @@ async function handleGenerate() {
           <Select
             v-model:value="typeFilter"
             class="type-filter"
-            :options="[{ value: 'all', label: $t('全部类型') }, ...execTypes.map(t => ({ value: t, label: t }))]"
+            :options="[{ value: 'all', label: $t('common.all_types') }, ...execTypes.map(t => ({ value: t, label: t }))]"
           />
         </div>
 
@@ -372,22 +372,22 @@ async function handleGenerate() {
           v-else-if="error"
           size="page"
           :icon="markRaw(CodeOutlined)"
-          :description="$t('加载失败')"
-          :hint="$t('无法获取技能列表，请稍后重试')"
+          :description="$t('errors.failed_to_load')"
+          :hint="$t('agent.unable_to_fetch_skill_list_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadSkills"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <EmptyState
           v-else-if="filteredSkills.length === 0"
           size="page"
           :icon="markRaw(CodeOutlined)"
-          :description="searchQuery || typeFilter !== 'all' ? $t('暂无匹配的技能') : $t('暂无技能')"
-          :hint="searchQuery || typeFilter !== 'all' ? $t('尝试调整搜索关键词或类型筛选') : $t('从市场安装技能或上传本地技能包')"
+          :description="searchQuery || typeFilter !== 'all' ? $t('agent.no_matching_skills') : $t('agent.no_skills')"
+          :hint="searchQuery || typeFilter !== 'all' ? $t('common.try_adjusting_search_keywords_or_type_filters') : $t('agent.install_skills_from_the_market_or_upload_a_local_skill_package')"
         />
 
         <div
@@ -412,13 +412,13 @@ async function handleGenerate() {
                     {{ s.exec?.type || 'unknown' }}
                   </Tag>
                 </div>
-                <span class="card-desc">{{ s.description || $t('暂无描述') }}</span>
+                <span class="card-desc">{{ s.description || $t('common.no_description') }}</span>
               </div>
               <Switch
                 :checked="s.enabled !== false"
                 size="small"
-                :checked-children="$t('开')"
-                :un-checked-children="$t('关')"
+                :checked-children="$t('common.on')"
+                :un-checked-children="$t('common.off')"
                 @change="(v: any) => toggleEnabled(s, Boolean(v))"
               />
             </div>
@@ -447,28 +447,28 @@ async function handleGenerate() {
                 type="text"
                 @click="toggleDetail(s.name)"
               >
-                {{ expandedNames.has(s.name) ? $t('收起详情') : $t('查看详情') }}
+                {{ expandedNames.has(s.name) ? $t('common.collapse_details') : $t('common.view_details') }}
               </Button>
               <div class="action-right">
                 <Button
                   size="small"
-                  :title="$t('在对话中使用该技能')"
+                  :title="$t('agent.use_this_skill_in_the_conversation')"
                   @click="useInChat(s)"
                 >
                   <template #icon>
                     <MessageOutlined />
                   </template>
-                  {{ $t('在对话中使用') }}
+                  {{ $t('chat.use_in_the_conversation') }}
                 </Button>
                 <Button
                   size="small"
-                  :title="$t('把该技能装配到某个 Agent（持久绑定）')"
+                  :title="$t('agent.assemble_this_skill_into_an_agent_persistent_binding')"
                   @click="openAttach(s)"
                 >
                   <template #icon>
                     <RobotOutlined />
                   </template>
-                  {{ $t('装配到 Agent') }}
+                  {{ $t('agent.assemble_to_agent') }}
                 </Button>
                 <Button
                   size="small"
@@ -478,7 +478,7 @@ async function handleGenerate() {
                   <template #icon>
                     <PlayCircleOutlined />
                   </template>
-                  {{ $t('运行') }}
+                  {{ $t('common.run') }}
                 </Button>
                 <Dropdown
                   trigger="click"
@@ -487,7 +487,7 @@ async function handleGenerate() {
                   <Button
                     type="text"
                     size="small"
-                    :title="$t('更多操作')"
+                    :title="$t('common.more_actions')"
                   >
                     ⋯
                   </Button>
@@ -498,7 +498,7 @@ async function handleGenerate() {
                         danger
                         @click="requestDelete(s)"
                       >
-                        <DeleteOutlined class="menu-icon" />{{ $t('删除') }}
+                        <DeleteOutlined class="menu-icon" />{{ $t('common.delete') }}
                       </MenuItem>
                     </Menu>
                   </template>
@@ -512,28 +512,28 @@ async function handleGenerate() {
               class="skill-detail"
             >
               <div class="detail-row">
-                <span class="detail-label">{{ $t('执行类型') }}</span>
+                <span class="detail-label">{{ $t('common.execution_type') }}</span>
                 <span class="detail-value">{{ s.exec?.type }}</span>
               </div>
               <div
                 v-if="s.exec?.source"
                 class="detail-row"
               >
-                <span class="detail-label">{{ $t('执行内容') }}</span>
+                <span class="detail-label">{{ $t('common.execution_content') }}</span>
                 <pre class="detail-pre">{{ s.exec.source }}</pre>
               </div>
               <div
                 v-if="s.parameters?.length"
                 class="detail-row"
               >
-                <span class="detail-label">{{ $t('参数') }}</span>
+                <span class="detail-label">{{ $t('agent.parameter') }}</span>
                 <pre class="detail-pre">{{ JSON.stringify(s.parameters, null, 2) }}</pre>
               </div>
               <div
                 v-if="s.author"
                 class="detail-row"
               >
-                <span class="detail-label">{{ $t('作者') }}</span>
+                <span class="detail-label">{{ $t('common.author') }}</span>
                 <span class="detail-value">{{ s.author }}</span>
               </div>
             </div>
@@ -544,7 +544,7 @@ async function handleGenerate() {
       <!-- ── 技能市场 ── -->
       <TabPane
         key="market"
-        :tab="$t('市场')"
+        :tab="$t('common.market')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -557,14 +557,14 @@ async function handleGenerate() {
           v-else-if="marketError"
           size="page"
           :icon="markRaw(ShopOutlined)"
-          :description="$t('市场加载失败')"
-          :hint="$t('无法获取市场内容，请稍后重试')"
+          :description="$t('errors.failed_to_load_marketplace')"
+          :hint="$t('common.unable_to_fetch_marketplace_content_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadMarket"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <SkillMarketCard
@@ -579,21 +579,21 @@ async function handleGenerate() {
       <!-- ── 安装技能 ── -->
       <TabPane
         key="install"
-        :tab="$t('安装技能')"
+        :tab="$t('agent.install_skill')"
       >
         <div class="panel-card">
           <h3 class="panel-title">
-            <DownloadOutlined /> {{ $t('从 URL 安装') }}
+            <DownloadOutlined /> {{ $t('common.install_from_url') }}
           </h3>
           <Input
             v-model:value="installURL"
             placeholder="https://example.com/my-skill.skill.json"
           />
           <div class="or-divider">
-            {{ $t('或') }}
+            {{ $t('common.or') }}
           </div>
           <h3 class="panel-title">
-            <CodeOutlined /> {{ $t('内联 JSON') }}
+            <CodeOutlined /> {{ $t('common.inline_json') }}
           </h3>
           <Input.TextArea
             v-model:value="installInline"
@@ -610,7 +610,7 @@ async function handleGenerate() {
             <template #icon>
               <DownloadOutlined />
             </template>
-            {{ $t('安装') }}
+            {{ $t('common.install') }}
           </Button>
         </div>
       </TabPane>
@@ -618,16 +618,16 @@ async function handleGenerate() {
       <!-- ── AI 生成 ── -->
       <TabPane
         key="generate"
-        :tab="$t('AI 生成')"
+        :tab="$t('common.ai_generated')"
       >
         <div class="panel-card">
           <h3 class="panel-title">
-            <ThunderboltOutlined /> {{ $t('用一句话描述技能') }}
+            <ThunderboltOutlined /> {{ $t('agent.describe_the_skill_in_one_sentence') }}
           </h3>
           <Input.TextArea
             v-model:value="genDesc"
             :rows="4"
-            :placeholder="$t('例如：创建一个能分析 Jenkins 构建日志并汇总失败原因的技能')"
+            :placeholder="$t('errors.e_g_create_a_skill_that_analyzes_jenkins_build_logs_and_summarizes_failure_causes')"
           />
           <Button
             type="primary"
@@ -638,7 +638,7 @@ async function handleGenerate() {
             <template #icon>
               <ThunderboltOutlined />
             </template>
-            {{ $t('生成并安装') }}
+            {{ $t('common.generate_and_install') }}
           </Button>
           <Alert
             v-if="genResult"
@@ -721,7 +721,7 @@ async function handleGenerate() {
         v-else
         class="run-empty"
       >
-        {{ $t('该技能无需参数') }}
+        {{ $t('agent.this_skill_takes_no_parameters') }}
       </div>
       <div class="run-actions">
         <Button
@@ -732,7 +732,7 @@ async function handleGenerate() {
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ $t('执行') }}
+          {{ $t('common.execute') }}
         </Button>
       </div>
       <div
@@ -740,7 +740,7 @@ async function handleGenerate() {
         class="run-result"
       >
         <div class="result-label">
-          {{ $t('执行结果') }}
+          {{ $t('common.execution_result') }}
         </div>
         <pre class="result-pre">{{ renderResult(runResult) }}</pre>
       </div>

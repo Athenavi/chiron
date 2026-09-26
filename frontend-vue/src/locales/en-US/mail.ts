@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  used_in_email_templates_as_ph: "Used in email templates as {ph}",
+  send_test_email: "Send test email",
+  the_test_will_send_a_real_email_using_the_saved_config_above_save_changes_before_testing: "The test will send a real email using the saved config above. Save changes before testing.",
+  test_email_sent_please_check_your_inbox: "Test email sent, please check your inbox",
+  most_providers_require_a_full_email_address: "Most providers require a full email address",
+  send_test_email_2: "Send test email",
+  mail_channel: "Mail channel",
+  welcome_email: "Welcome email",
+  daily_send_limit_per_email: "Daily send limit (per email)",
+  enable_email_service: "Enable email service",
+  qingchen_cloud_mail_api: "Qingchen Cloud Mail API",
+  please_enter_email: "Please enter email",
+  please_enter_a_valid_recipient_email: "Please enter a valid recipient email",
+  please_enter_a_valid_email: "Please enter a valid email",
+  please_enter_a_valid_email_first: "Please enter a valid email first",
+  recipient_email: "Recipient email",
+  email_template: "Email template",
+  email_config: "Email config",
+  email_config_saved: "Email config saved",
+  smtp_server_address: "SMTP server address",
+}

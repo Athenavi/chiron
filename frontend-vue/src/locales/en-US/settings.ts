@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  theme_dark_light_appearance: "theme dark light appearance",
+  tag_set_tag: "Tag set: {tag}",
+  general_settings: "General settings",
+  save_settings: "Save settings",
+  profile_updated: "Profile updated",
+  profile: "Profile",
+  basic_profile: "Basic profile",
+  read_aloud_settings_saved: "Read-aloud settings saved",
+  preferences: "Preferences",
+  switch_theme: "Switch theme",
+  settings: "Settings",
+  notification: "Notification",
+  appearance_mode: "Appearance mode",
+  appearance_and_theme: "Appearance and theme",
+  we_may_adjust_or_terminate_some_features_major_changes_will_be_announced_in_advance: "We may adjust or terminate some features; major changes will be announced in advance.",
+  system_settings: "System settings",
+  display_settings: "Display settings",
+  theme: "Theme",
+  theme_style: "Theme style",
+  theme_settings: "Theme settings",
+}

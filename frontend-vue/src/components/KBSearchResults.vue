@@ -19,7 +19,7 @@
           class="btn-toggle"
           @click="toggleAll"
         >
-          {{ isExpanded ? $t('收起全部') : $t('展开全部') }}
+          {{ isExpanded ? $t('common.collapse_all') : $t('common.expand_all') }}
         </button>
       </div>
     </div>
@@ -65,7 +65,7 @@
             v-if="result.highlights && result.highlights.length"
             class="highlights"
           >
-            <span class="highlight-label">{{ $t('关键片段:') }}</span>
+            <span class="highlight-label">{{ $t('common.key_snippet') }}</span>
             <span
               v-for="(highlight, hIdx) in result.highlights"
               :key="hIdx"
@@ -109,7 +109,7 @@
           :class="{ collapsed: !isExpanded && !result.expanded }"
           @click.stop="toggleResult(result)"
         >
-          {{ isExpanded || result.expanded ? $t('收起') : $t('展开') }}
+          {{ isExpanded || result.expanded ? $t('common.collapse') : $t('common.expand') }}
         </button>
       </div>
     </div>
@@ -119,8 +119,8 @@
       v-if="results.length === 0"
       size="list"
       :icon="markRaw(SearchOutlined)"
-      :description="$t('暂无检索结果')"
-      :hint="$t('尝试其他搜索关键词')"
+      :description="$t('knowledge.no_search_results_yet')"
+      :hint="$t('common.try_other_search_keywords')"
     />
   </div>
 </template>

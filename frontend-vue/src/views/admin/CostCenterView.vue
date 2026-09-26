@@ -34,7 +34,7 @@ async function fetchPools() {
     const res = await listQuotas(currentTenantID.value || undefined)
     pools.value = res.pools
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -46,7 +46,7 @@ async function fetchUsage() {
     const res = await getQuotaUsage(currentTenantID.value)
     usage.value = res.pools ?? []
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('用量加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load_usage_2'))
   }
 }
 
@@ -70,7 +70,7 @@ function openEditPool(p: QuotaPoolWithAllocated) {
 
 async function savePool() {
   if (!poolForm.value.tenant_id.trim()) {
-    message.warning(t('租户 ID 必填'))
+    message.warning(t('errors.tenant_id_is_required'))
     return
   }
   poolSaving.value = true
@@ -82,19 +82,19 @@ async function savePool() {
         total_amount: poolForm.value.total_amount,
         period: poolForm.value.period,
       })
-      message.success(t('已创建'))
+      message.success(t('common.created'))
     } else {
       await updateQuota(poolForm.value.id, {
         resource_type: poolForm.value.resource_type,
         total_amount: poolForm.value.total_amount,
         period: poolForm.value.period,
       })
-      message.success(t('已更新'))
+      message.success(t('common.updated'))
     }
     poolModalVisible.value = false
     fetchPools()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     poolSaving.value = false
   }
@@ -102,18 +102,18 @@ async function savePool() {
 
 function confirmDeletePool(p: QuotaPoolWithAllocated) {
   Modal.confirm({
-    title: t('删除配额池'),
+    title: t('errors.delete_quota_pool'),
     content: t('确认删除「{type} / {period}」？关联分配将级联删除。', { type: p.resource_type, period: p.period }),
-    okText: t('删除'),
+    okText: t('common.delete'),
     okType: 'danger',
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await deleteQuota(p.id)
-        message.success(t('已删除'))
+        message.success(t('common.deleted'))
         fetchPools()
       } catch (e: any) {
-        message.error(e?.response?.data?.error || t('删除失败'))
+        message.error(e?.response?.data?.error || t('errors.delete_failed'))
       }
     },
   })
@@ -126,7 +126,7 @@ async function openAllocDrawer(p: QuotaPoolWithAllocated) {
     const res = await getQuota(p.id)
     allocations.value = res.allocations
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载分配失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load_allocation'))
     return
   }
   allocDrawerVisible.value = true
@@ -135,7 +135,7 @@ async function openAllocDrawer(p: QuotaPoolWithAllocated) {
 async function addAllocation() {
   if (!currentPool.value) return
   if (!allocForm.value.target_id.trim()) {
-    message.warning(t('目标 ID 必填'))
+    message.warning(t('errors.target_id_is_required'))
     return
   }
   allocSaving.value = true
@@ -145,7 +145,7 @@ async function addAllocation() {
       target_id: allocForm.value.target_id,
       amount: allocForm.value.amount,
     })
-    message.success(t('已分配'))
+    message.success(t('common.assigned'))
     // 刷新分配列表与池的 allocated
     const res = await getQuota(currentPool.value.id)
     allocations.value = res.allocations
@@ -153,7 +153,7 @@ async function addAllocation() {
     allocForm.value.target_id = ''
     allocForm.value.amount = 0
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('分配失败'))
+    message.error(e?.response?.data?.error || t('errors.assignment_failed'))
   } finally {
     allocSaving.value = false
   }
@@ -163,17 +163,17 @@ async function removeAllocation(allocID: string) {
   if (!currentPool.value) return
   try {
     await deleteAllocation(currentPool.value.id, allocID)
-    message.success(t('已删除'))
+    message.success(t('common.deleted'))
     allocations.value = allocations.value.filter(a => a.id !== allocID)
     fetchPools()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('删除失败'))
+    message.error(e?.response?.data?.error || t('errors.delete_failed'))
   }
 }
 
 function fmtAmount(n: number, type: string): string {
   if (!Number.isFinite(n)) return '—'
-  if (n === 0) return t('无限制')
+  if (n === 0) return t('common.unlimited')
   if (type === 'storage_mb') return `${n} MB`
   if (type === 'credits') return `${n} credits`
   return n.toLocaleString()
@@ -187,20 +187,20 @@ function usagePercent(p: QuotaPoolWithAllocated): string {
 }
 
 const poolColumns = computed<TableColumnsType>(() => [
-  { title: t('资源类型'), dataIndex: 'resource_type', key: 'resource_type', width: 120 },
-  { title: t('周期'), dataIndex: 'period', key: 'period', width: 100 },
-  { title: t('总量'), key: 'total', width: 140, customRender: ({ record }) => fmtAmount(record.total_amount, record.resource_type) },
-  { title: t('已分配'), key: 'allocated', width: 140, customRender: ({ record }) => fmtAmount(record.allocated, record.resource_type) },
-  { title: t('当前用量'), key: 'usage', width: 110, customRender: ({ record }) => usagePercent(record) },
-  { title: t('租户'), dataIndex: 'tenant_id', key: 'tenant_id', width: 120, ellipsis: true },
-  { title: t('操作'), key: 'action', width: 220, fixed: 'right' },
+  { title: t('common.resource_type'), dataIndex: 'resource_type', key: 'resource_type', width: 120 },
+  { title: t('common.period'), dataIndex: 'period', key: 'period', width: 100 },
+  { title: t('common.total'), key: 'total', width: 140, customRender: ({ record }) => fmtAmount(record.total_amount, record.resource_type) },
+  { title: t('common.assigned'), key: 'allocated', width: 140, customRender: ({ record }) => fmtAmount(record.allocated, record.resource_type) },
+  { title: t('common.current_usage'), key: 'usage', width: 110, customRender: ({ record }) => usagePercent(record) },
+  { title: t('admin.tenant'), dataIndex: 'tenant_id', key: 'tenant_id', width: 120, ellipsis: true },
+  { title: t('common.action'), key: 'action', width: 220, fixed: 'right' },
 ])
 
 const allocColumns: TableColumnsType = [
-  { title: t('目标类型'), dataIndex: 'target_type', key: 'target_type', width: 100 },
-  { title: t('目标 ID'), dataIndex: 'target_id', key: 'target_id', ellipsis: true },
-  { title: t('配额'), dataIndex: 'amount', key: 'amount', width: 120 },
-  { title: t('操作'), key: 'action', width: 80, fixed: 'right' },
+  { title: t('common.target_type'), dataIndex: 'target_type', key: 'target_type', width: 100 },
+  { title: t('common.target_id'), dataIndex: 'target_id', key: 'target_id', ellipsis: true },
+  { title: t('errors.quota'), dataIndex: 'amount', key: 'amount', width: 120 },
+  { title: t('common.action'), key: 'action', width: 80, fixed: 'right' },
 ]
 
 onMounted(fetchPools)
@@ -210,30 +210,30 @@ onMounted(fetchPools)
   <div class="cost-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('成本中心与资源池化') }}
+        {{ $t('common.cost_center_resource_pooling') }}
       </h2>
       <a-space class="filter-bar">
         <a-input
           v-model:value="currentTenantID"
-          :placeholder="$t('租户 ID（按租户过滤）')"
+          :placeholder="$t('admin.tenant_id_filter_by_tenant')"
           allow-clear
           style="width: 300px"
           @press-enter="() => { fetchPools(); fetchUsage() }"
         />
         <a-button @click="() => { fetchPools(); fetchUsage() }">
-          {{ $t('查询') }}
+          {{ $t('common.query') }}
         </a-button>
         <a-button
           :disabled="!currentTenantID"
           @click="fetchUsage"
         >
-          {{ $t('刷新用量') }}
+          {{ $t('common.refresh_usage') }}
         </a-button>
         <a-button
           type="primary"
           @click="openCreatePool"
         >
-          {{ $t('新建配额池') }}
+          {{ $t('errors.new_quota_pool') }}
         </a-button>
       </a-space>
     </div>
@@ -241,7 +241,7 @@ onMounted(fetchPools)
     <a-alert
       type="info"
       show-icon
-      :message="$t('total_amount = 0 表示无限制（不校验超额）；token 类型用量优先读 Redis 计数器，缺失时从 billing_records SQL 聚合。')"
+      :message="$t('errors.total_amount_0_means_unlimited_no_overage_check_token_usage_reads_the_redis_counter_first_falling_back_to_billing_records_sql_aggregation_when_missing')"
       style="margin-bottom: 16px"
     />
 
@@ -256,7 +256,7 @@ onMounted(fetchPools)
     >
       <template #emptyText>
         <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
         </div>
       </template>
       <template #bodyCell="{ column, record }">
@@ -266,14 +266,14 @@ onMounted(fetchPools)
             size="small"
             @click="openAllocDrawer(record as QuotaPoolWithAllocated)"
           >
-            {{ $t('分配') }}
+            {{ $t('common.assign') }}
           </a-button>
           <a-button
             type="link"
             size="small"
             @click="openEditPool(record as QuotaPoolWithAllocated)"
           >
-            {{ $t('编辑') }}
+            {{ $t('common.edit_2') }}
           </a-button>
           <a-button
             type="link"
@@ -281,7 +281,7 @@ onMounted(fetchPools)
             danger
             @click="confirmDeletePool(record as QuotaPoolWithAllocated)"
           >
-            {{ $t('删除') }}
+            {{ $t('common.delete') }}
           </a-button>
         </template>
       </template>
@@ -289,48 +289,48 @@ onMounted(fetchPools)
 
     <a-modal
       v-model:open="poolModalVisible"
-      :title="poolModalMode === 'create' ? $t('新建配额池') : $t('编辑配额池')"
+      :title="poolModalMode === 'create' ? $t('errors.new_quota_pool') : $t('errors.edit_quota_pool')"
       :confirm-loading="poolSaving"
       @ok="savePool"
     >
       <a-form layout="vertical">
-        <a-form-item :label="$t('租户 ID（UUID）')">
+        <a-form-item :label="$t('admin.tenant_id_uuid')">
           <a-input
             v-model:value="poolForm.tenant_id"
             :disabled="poolModalMode === 'edit'"
-            :placeholder="$t('租户 UUID')"
+            :placeholder="$t('admin.tenant_uuid')"
           />
         </a-form-item>
-        <a-form-item :label="$t('资源类型')">
+        <a-form-item :label="$t('common.resource_type')">
           <a-select v-model:value="poolForm.resource_type">
             <a-select-option value="token">
-              {{ $t('token（令牌数）') }}
+              {{ $t('common.token_token_count') }}
             </a-select-option>
             <a-select-option value="storage_mb">
-              {{ $t('storage_mb（存储 MB）') }}
+              {{ $t('common.storage_mb_storage_mb') }}
             </a-select-option>
             <a-select-option value="concurrency">
-              {{ $t('concurrency（并发数）') }}
+              {{ $t('common.concurrency_parallel_count') }}
             </a-select-option>
             <a-select-option value="credits">
-              {{ $t('credits（积分）') }}
+              {{ $t('billing.credits_points') }}
             </a-select-option>
           </a-select>
         </a-form-item>
-        <a-form-item :label="$t('总量（0 = 无限制）')">
+        <a-form-item :label="$t('common.total_0_unlimited')">
           <a-input-number
             v-model:value="poolForm.total_amount"
             :min="0"
             style="width: 100%"
           />
         </a-form-item>
-        <a-form-item :label="$t('周期')">
+        <a-form-item :label="$t('common.period')">
           <a-radio-group v-model:value="poolForm.period">
             <a-radio value="daily">
-              {{ $t('日') }}
+              {{ $t('common.day') }}
             </a-radio>
             <a-radio value="monthly">
-              {{ $t('月') }}
+              {{ $t('common.month') }}
             </a-radio>
           </a-radio-group>
         </a-form-item>
@@ -339,7 +339,7 @@ onMounted(fetchPools)
 
     <a-drawer
       v-model:open="allocDrawerVisible"
-      :title="currentPool ? $t('配额分配 - {type}/{period}', { type: currentPool.resource_type, period: currentPool.period }) : $t('配额分配')"
+      :title="currentPool ? $t('配额分配 - {type}/{period}', { type: currentPool.resource_type, period: currentPool.period }) : $t('errors.quota_allocation')"
       width="640"
       placement="right"
     >
@@ -350,10 +350,10 @@ onMounted(fetchPools)
           bordered
           style="margin-bottom: 16px"
         >
-          <a-descriptions-item :label="$t('总量')">
+          <a-descriptions-item :label="$t('common.total')">
             {{ fmtAmount(currentPool.total_amount, currentPool.resource_type) }}
           </a-descriptions-item>
-          <a-descriptions-item :label="$t('已分配')">
+          <a-descriptions-item :label="$t('common.assigned')">
             {{ fmtAmount(currentPool.allocated, currentPool.resource_type) }}
           </a-descriptions-item>
         </a-descriptions>
@@ -364,21 +364,21 @@ onMounted(fetchPools)
             style="width: 100px"
           >
             <a-select-option value="group">
-              {{ $t('群组') }}
+              {{ $t('admin.group') }}
             </a-select-option>
             <a-select-option value="user">
-              {{ $t('用户') }}
+              {{ $t('admin.user_2') }}
             </a-select-option>
           </a-select>
           <a-input
             v-model:value="allocForm.target_id"
-            :placeholder="$t('目标 ID（UUID）')"
+            :placeholder="$t('common.target_id_uuid')"
             style="flex: 1"
           />
           <a-input-number
             v-model:value="allocForm.amount"
             :min="0"
-            :placeholder="$t('配额')"
+            :placeholder="$t('errors.quota')"
             style="width: 140px"
           />
           <a-button
@@ -386,7 +386,7 @@ onMounted(fetchPools)
             :loading="allocSaving"
             @click="addAllocation"
           >
-            {{ $t('添加') }}
+            {{ $t('common.add') }}
           </a-button>
         </div>
 
@@ -401,7 +401,7 @@ onMounted(fetchPools)
         >
           <template #emptyText>
             <div class="empty-block">
-              <span class="empty-icon">📭</span><span class="empty-text">{{ $t('暂无数据') }}</span>
+              <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
             </div>
           </template>
           <template #bodyCell="{ column, record }">
@@ -412,7 +412,7 @@ onMounted(fetchPools)
                 danger
                 @click="removeAllocation(record.id)"
               >
-                {{ $t('删除') }}
+                {{ $t('common.delete') }}
               </a-button>
             </template>
           </template>

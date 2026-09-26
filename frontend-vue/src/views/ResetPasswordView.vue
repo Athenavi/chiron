@@ -24,18 +24,18 @@ const form = ref({ password: '', confirmPassword: '' })
 
 /** 与后端 auth.ValidatePasswordComplexity 对齐的复杂度校验 */
 function passwordComplexityError(pw: string): string {
-  if (pw.length < 8) return t('密码长度不能少于 8 个字符')
-  if (pw.length > 128) return t('密码长度不能超过 128 个字符')
-  if (!/[A-Z]/.test(pw)) return t('密码必须包含大写字母')
-  if (!/[a-z]/.test(pw)) return t('密码必须包含小写字母')
-  if (!/\d/.test(pw)) return t('密码必须包含数字')
+  if (pw.length < 8) return t('auth.password_must_be_at_least_8_characters_2')
+  if (pw.length > 128) return t('auth.password_cannot_exceed_128_characters')
+  if (!/[A-Z]/.test(pw)) return t('auth.password_must_contain_an_uppercase_letter')
+  if (!/[a-z]/.test(pw)) return t('auth.password_must_contain_a_lowercase_letter')
+  if (!/\d/.test(pw)) return t('auth.password_must_contain_a_digit')
   if (!/[^A-Za-z0-9]/.test(pw)) return t('密码必须包含特殊字符（如 {chars}）', { chars: '!@#$%^&*' })
   return ''
 }
 
 const rules: Record<string, Rule[]> = {
   password: [
-    { required: true, message: t('请输入新密码'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_a_new_password'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         const msg = passwordComplexityError(value || '')
@@ -45,11 +45,11 @@ const rules: Record<string, Rule[]> = {
     },
   ],
   confirmPassword: [
-    { required: true, message: t('请再次输入新密码'), trigger: 'blur' },
+    { required: true, message: t('auth.please_enter_the_new_password_again'), trigger: 'blur' },
     {
       validator: (_rule: Rule, value: string) => {
         if (value !== form.value.password) {
-          return Promise.reject(t('两次密码输入不一致'))
+          return Promise.reject(t('auth.the_two_password_entries_do_not_match'))
         }
         return Promise.resolve()
       },
@@ -75,7 +75,7 @@ function markCaptchaDirty() {
 
 onMounted(async () => {
   if (!token.value) {
-    error.value = t('重置链接无效，请重新申请')
+    error.value = t('auth.reset_link_invalid_please_reapply')
   }
   try {
     const cfg = await getCaptchaPublicConfig()
@@ -94,7 +94,7 @@ onMounted(async () => {
 async function handleSubmit() {
   error.value = ''
   if (!token.value) {
-    error.value = t('重置链接无效，请重新申请')
+    error.value = t('auth.reset_link_invalid_please_reapply')
     return
   }
   try {
@@ -103,7 +103,7 @@ async function handleSubmit() {
     return
   }
   if (captchaRequired.value && captchaConfig.value.provider !== 'custom' && !captchaToken.value) {
-    error.value = t('请先完成人机验证')
+    error.value = t('auth.please_complete_the_human_verification_first')
     return
   }
   loading.value = true
@@ -121,17 +121,17 @@ async function handleSubmit() {
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
-      error.value = t('操作过于频繁，请完成人机验证后重试')
+      error.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
       captchaRef.value?.reset()
       markCaptchaDirty()
       return
     }
     if (status === 400) {
       // 令牌失效（过期 / 已用过）与密码不合规都走这里
-      error.value = apiErr || t('重置链接已失效，请重新申请')
+      error.value = apiErr || t('auth.reset_link_expired_please_reapply')
       return
     }
-    error.value = apiErr || t('重置失败，请稍后再试')
+    error.value = apiErr || t('auth.reset_failed_please_try_again_later')
   } finally {
     loading.value = false
   }
@@ -150,10 +150,10 @@ async function handleSubmit() {
           MC
         </div>
         <div class="auth-title">
-          {{ $t('设置新密码') }}
+          {{ $t('auth.set_new_password') }}
         </div>
         <div class="auth-subtitle">
-          {{ $t('请设置一个新的登录密码') }}
+          {{ $t('auth.please_set_a_new_login_password') }}
         </div>
       </div>
       <Card
@@ -163,7 +163,7 @@ async function handleSubmit() {
         <Alert
           v-if="done"
           type="success"
-          :message="$t('密码已重置，即将跳转到登录页')"
+          :message="$t('auth.password_reset_redirecting_to_login')"
           show-icon
           style="margin-bottom: 16px"
         />
@@ -184,12 +184,12 @@ async function handleSubmit() {
           @finish="handleSubmit"
         >
           <FormItem
-            :label="$t('新密码')"
+            :label="$t('auth.new_password')"
             name="password"
           >
             <Input
               v-model:value="form.password"
-              :placeholder="$t('至少 8 位，含大小写字母、数字与特殊字符')"
+              :placeholder="$t('common.at_least_8_characters_with_upper_lowercase_letters_digits_and_special_characters')"
               type="password"
               size="large"
               :aria-label="$t('auth.newPassword')"
@@ -202,12 +202,12 @@ async function handleSubmit() {
           </FormItem>
 
           <FormItem
-            :label="$t('确认新密码')"
+            :label="$t('auth.confirm_new_password')"
             name="confirmPassword"
           >
             <Input
               v-model:value="form.confirmPassword"
-              :placeholder="$t('请再次输入新密码')"
+              :placeholder="$t('auth.please_enter_the_new_password_again')"
               type="password"
               size="large"
               :aria-label="$t('auth.confirmNewPassword')"
@@ -221,7 +221,7 @@ async function handleSubmit() {
 
           <FormItem
             v-if="captchaRequired"
-            :label="$t('人机验证')"
+            :label="$t('auth.human_verification')"
           >
             <CaptchaWidget
               ref="captchaRef"
@@ -245,14 +245,14 @@ async function handleSubmit() {
                 size="large"
                 :loading="loading"
               >
-                {{ $t('确认重置') }}
+                {{ $t('auth.confirm_reset') }}
               </Button>
               <Button
                 type="link"
                 block
                 @click="router.push('/login')"
               >
-                {{ $t('返回登录') }}
+                {{ $t('auth.back_to_sign_in') }}
               </Button>
             </Space>
           </FormItem>

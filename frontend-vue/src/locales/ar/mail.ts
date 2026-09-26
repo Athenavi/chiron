@@ -1,0 +1,23 @@
+// 从 legacy 迁移的语义化 key（L1-4）
+export default {
+  used_in_email_templates_as_ph: "يُستخدم في قوالب البريد كـ {ph}",
+  send_test_email: "إرسال بريد تجريبي",
+  the_test_will_send_a_real_email_using_the_saved_config_above_save_changes_before_testing: "سيُرسل الاختبار رسالة حقيقية باستخدام الإعدادات المحفوظة أعلاه. احفظ التغييرات قبل الاختبار.",
+  test_email_sent_please_check_your_inbox: "تم إرسال البريد التجريبي، يرجى التحقق من بريدك",
+  most_providers_require_a_full_email_address: "معظم المزوّدين يتطلبون عنوان بريد كامل",
+  send_test_email_2: "إرسال بريد تجريبي",
+  mail_channel: "قناة البريد",
+  welcome_email: "بريد ترحيبي",
+  daily_send_limit_per_email: "حد الإرسال اليومي (لكل بريد)",
+  enable_email_service: "تفعيل خدمة البريد",
+  qingchen_cloud_mail_api: "واجهة Qingchen Cloud Mail",
+  please_enter_email: "يرجى إدخال البريد",
+  please_enter_a_valid_recipient_email: "يرجى إدخال بريد مستلم صالح",
+  please_enter_a_valid_email: "يرجى إدخال بريد صحيح",
+  please_enter_a_valid_email_first: "يرجى إدخال بريد صحيح أولًا",
+  recipient_email: "بريد المستلم",
+  email_template: "قالب البريد الإلكتروني",
+  email_config: "إعداد البريد",
+  email_config_saved: "تم حفظ إعداد البريد",
+  smtp_server_address: "عنوان خادم SMTP",
+}

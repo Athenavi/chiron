@@ -64,7 +64,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   const kbId = typeof meta.kb_id === 'string' && meta.kb_id ? meta.kb_id : ''
   if (kbId) {
     chips.push({
-      key: 'kb', kind: 'kb', label: t('知识库'),
+      key: 'kb', kind: 'kb', label: t('knowledge.knowledge_base'),
       title: t('来源知识库 #{id}，点击打开', { id: kbId }),
       go: () => router.push(`/knowledge/${encodeURIComponent(kbId)}`),
     })
@@ -72,7 +72,7 @@ const sourceChips = computed<SourceChip[]>(() => {
   const wfId = typeof meta.workflow_id === 'string' && meta.workflow_id ? meta.workflow_id : ''
   if (wfId) {
     chips.push({
-      key: 'workflow', kind: 'workflow', label: t('工作流'),
+      key: 'workflow', kind: 'workflow', label: t('workflow.workflow'),
       title: t('来源工作流 {id}，点击打开', { id: wfId }),
       go: () => router.push({ path: '/workflow', query: { id: wfId } }),
     })
@@ -90,12 +90,12 @@ const sourceChips = computed<SourceChip[]>(() => {
   const traceId = typeof meta.trace_id === 'string' && meta.trace_id ? meta.trace_id : ''
   if (traceId) {
     chips.push({
-      key: 'trace', kind: 'trace', label: t('追踪'),
+      key: 'trace', kind: 'trace', label: t('common.trace_2'),
       title: t('Trace {id}，点击复制', { id: traceId }),
       go: () => {
         navigator.clipboard.writeText(traceId)
-          .then(() => message.success(t('Trace ID 已复制')))
-          .catch(() => message.error(t('复制失败')))
+          .then(() => message.success(t('common.trace_id_copied')))
+          .catch(() => message.error(t('errors.copy_failed')))
       },
     })
   }
@@ -150,9 +150,9 @@ async function copyMessage() {
   if (props.item.kind !== 'text') return
   try {
     await navigator.clipboard.writeText(props.item.content)
-    message.success(t('已复制'))
+    message.success(t('common.copied_2'))
   } catch {
-    message.error(t('复制失败'))
+    message.error(t('errors.copy_failed'))
   }
 }
 
@@ -207,7 +207,7 @@ const isLongMessage = computed(() => {
 const displayContent = computed(() => {
   if (props.item.kind !== 'text') return ''
   if (isLongMessage.value && collapsed.value) {
-    return props.item.content.slice(0, COLLAPSE_PREVIEW) + '\n\n' + t('... (已折叠，点击展开全部)')
+    return props.item.content.slice(0, COLLAPSE_PREVIEW) + '\n\n' + t('common.collapsed_click_to_expand')
   }
   return props.item.content
 })
@@ -218,7 +218,7 @@ const feedback = ref<'up' | 'down' | null>(null)
 function setFeedback(dir: 'up' | 'down') {
   feedback.value = feedback.value === dir ? null : dir
   // 设计说明：反馈上报留待模型评估链路接入后端 API
-  if (feedback.value) message.success(feedback.value === 'up' ? t('感谢好评') : t('已记录您的反馈'))
+  if (feedback.value) message.success(feedback.value === 'up' ? t('common.thanks_for_the_upvote') : t('common.your_feedback_has_been_recorded'))
 }
 
 // ── Markdown 引擎（迁移自原 ChatView） ──
@@ -252,7 +252,7 @@ md.renderer.rules.fence = (tokens, idx) => {
   const encoded = encodeURIComponent(code)
   const lineCount = code.replace(/\n$/, '').split('\n').length
   const collapsible = lineCount > CODE_COLLAPSE_LINES
-  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('{n} 行', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('复制')}</button></div>`
+  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('{n} 行', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('common.copy')}</button></div>`
   const body = `<pre><code class="language-${safeLang}" data-lang="${safeLang}">${md.utils.escapeHtml(code)}</code></pre>`
   const toggle = collapsible
     ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">${t('展开全部（共 {n} 行）', { n: lineCount })}</button>`
@@ -360,8 +360,8 @@ function handleMsgClick(e: MouseEvent) {
     const code = decodeURIComponent(btn.dataset.code || '')
     if (!code) return
     navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = t('已复制')
-      setTimeout(() => { btn.textContent = t('复制') }, 2000)
+      btn.textContent = t('common.copied_2')
+      setTimeout(() => { btn.textContent = t('common.copy') }, 2000)
     }).catch(() => { /* clipboard not available */ })
     return
   }
@@ -422,14 +422,14 @@ onUpdated(enhanceContent)
             type="button"
             @click="cancelEdit"
           >
-            {{ $t('取消') }}
+            {{ $t('common.cancel') }}
           </button>
           <button
             class="edit-btn save"
             type="button"
             @click="confirmEdit"
           >
-            {{ $t('保存并发送') }}
+            {{ $t('common.save_and_send') }}
           </button>
         </div>
       </div>
@@ -461,7 +461,7 @@ onUpdated(enhanceContent)
           type="button"
           @click.stop="collapsed = !collapsed"
         >
-          {{ collapsed ? $t('展开全部') : $t('收起') }}
+          {{ collapsed ? $t('common.expand_all') : $t('common.collapse') }}
         </button>
         <!-- 附件展示：图片内联，文件显示卡片 -->
         <div
@@ -491,7 +491,7 @@ onUpdated(enhanceContent)
                 preload="metadata"
                 class="msg-audio-player"
               >
-                {{ $t('您的浏览器不支持音频播放') }}
+                {{ $t('media.your_browser_does_not_support_audio_playback') }}
               </audio>
               <span class="att-audio-name">{{ att.name }}</span>
             </div>
@@ -513,7 +513,7 @@ onUpdated(enhanceContent)
           v-if="item.role === 'user' && (item as TextItem).source === 'subagent_followup'"
           class="followup-badge"
         >
-          {{ $t('子任务完成 · 主 Agent 自动汇总') }}
+          {{ $t('workflow.subtask_complete_main_agent_auto_summarizes') }}
         </div>
         <!-- 反向定位：来源工作台 chips（kb_id / workflow_id / agent_id，metadata 驱动） -->
         <div
@@ -537,13 +537,13 @@ onUpdated(enhanceContent)
           v-if="(item as TextItem).error"
           class="msg-error-banner"
         >
-          <span class="error-text">{{ $t('发送失败：{msg}', { msg: (item as TextItem).errorMsg || $t('网络错误') }) }}</span>
+          <span class="error-text">{{ $t('发送失败：{msg}', { msg: (item as TextItem).errorMsg || $t('errors.network_error_2') }) }}</span>
           <button
             class="retry-btn"
             type="button"
             @click.stop="retryFailed"
           >
-            <ReloadOutlined /> {{ $t('重试') }}
+            <ReloadOutlined /> {{ $t('common.retry') }}
           </button>
         </div>
         <div
@@ -554,7 +554,7 @@ onUpdated(enhanceContent)
           <button
             class="msg-action"
             type="button"
-            :title="$t('复制')"
+            :title="$t('common.copy')"
             @click.stop="copyMessage"
           >
             <CopyOutlined />
@@ -564,7 +564,7 @@ onUpdated(enhanceContent)
             v-if="!item.streaming"
             class="msg-action"
             type="button"
-            :title="$t('引用到输入框')"
+            :title="$t('common.quote_to_input_box')"
             @click.stop="emit('quote', (item as TextItem).content || '')"
           >
             <CommentOutlined />
@@ -574,7 +574,7 @@ onUpdated(enhanceContent)
             v-if="item.role === 'user' && !item.streaming && !(item as TextItem).error"
             class="msg-action"
             type="button"
-            :title="$t('编辑并重发')"
+            :title="$t('common.edit_and_resend')"
             @click.stop="startEdit"
           >
             <EditOutlined />
@@ -584,7 +584,7 @@ onUpdated(enhanceContent)
             v-if="item.role === 'assistant' && !item.streaming && !(item as TextItem).error && !(item as TextItem).stopped"
             class="msg-action"
             type="button"
-            :title="$t('重新生成')"
+            :title="$t('common.regenerate')"
             @click.stop="regenerate"
           >
             <ReloadOutlined />
@@ -594,10 +594,10 @@ onUpdated(enhanceContent)
             v-if="item.role === 'assistant' && (item as TextItem).stopped"
             class="msg-action continue-btn"
             type="button"
-            :title="$t('继续生成')"
+            :title="$t('common.continue_generating')"
             @click.stop="emit('continue', item.id!)"
           >
-            <ReloadOutlined /> {{ $t('继续') }}
+            <ReloadOutlined /> {{ $t('common.continue') }}
           </button>
           <!-- P2-D: 助手消息反馈 👍/👎 -->
           <template v-if="item.role === 'assistant' && !item.streaming && !(item as TextItem).error">
@@ -605,7 +605,7 @@ onUpdated(enhanceContent)
               class="msg-action"
               type="button"
               :class="{ active: feedback === 'up' }"
-              :title="feedback === 'up' ? $t('取消好评') : $t('好评')"
+              :title="feedback === 'up' ? $t('common.cancel_upvote') : $t('common.upvote')"
               @click.stop="setFeedback('up')"
             >
               <LikeFilled v-if="feedback === 'up'" />
@@ -615,7 +615,7 @@ onUpdated(enhanceContent)
               class="msg-action"
               type="button"
               :class="{ active: feedback === 'down' }"
-              :title="feedback === 'down' ? $t('取消差评') : $t('差评')"
+              :title="feedback === 'down' ? $t('common.cancel_downvote') : $t('common.downvote')"
               @click.stop="setFeedback('down')"
             >
               <DislikeFilled v-if="feedback === 'down'" />

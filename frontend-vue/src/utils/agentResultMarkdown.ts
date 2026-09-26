@@ -75,11 +75,11 @@ export function agentResultToMarkdown(session: AgentResultSource, title?: string
 
   const heading = asText(title) || t('运行结果 · {name}', { name: asText(session.agent_name) || 'Agent' })
   const blocks: string[] = [`# ${heading}`]
-  if (task) blocks.push(t('## 任务'), task)
+  if (task) blocks.push(t('workflow.task'), task)
   if (output) {
     // 只有错误、没有正常输出时单独标注：检索时「错误」比「输出」更有信息量
     const isErrorOnly = !!asText(parsed.error) && !asText(parsed.output)
-    blocks.push(isErrorOnly ? t('## 错误') : t('## 输出'), output)
+    blocks.push(isErrorOnly ? t('errors.error') : t('common.output'), output)
   }
   const meta = metaLine(parsed)
   if (meta) blocks.push('---', meta)

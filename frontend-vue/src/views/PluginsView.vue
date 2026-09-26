@@ -94,7 +94,7 @@ async function loadMarket() {
     marketItems.value = await listMarket('mcp')
   } catch {
     marketError.value = true
-    message.error(t('获取 MCP 市场失败'))
+    message.error(t('errors.failed_to_fetch_mcp_marketplace'))
   } finally {
     marketLoading.value = false
   }
@@ -110,7 +110,7 @@ async function handleMarketInstall(item: MarketItem) {
     const raw = e?.response?.data
     const detail = raw?.message || raw?.detail || raw?.error || e?.message || ''
     if (e?.response?.status === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
-      message.error(t('安装被拒绝：该 MCP 命令不在安全白名单内，请先在「插件」中手动创建，或联系管理员加入白名单'))
+      message.error(t('errors.installation_rejected_this_mcp_command_is_not_on_the_safe_allowlist_please_create_it_manually_under_plugins_or_ask_an_admin_to_add_it_to_the_allowlist'))
     } else {
       message.error(t('安装失败: {detail}', { detail }))
     }
@@ -134,7 +134,7 @@ async function loadPlugins() {
     plugins.value = res.data?.data || []
   } catch {
     error.value = true
-    message.error(t('获取插件列表失败'))
+    message.error(t('errors.failed_to_fetch_plugin_list'))
   } finally {
     loading.value = false
   }
@@ -201,8 +201,8 @@ function parseEnv(text: string): Record<string, string> {
 }
 
 async function savePlugin() {
-  if (!form.value.name.trim()) { message.warning(t('请输入名称')); return }
-  if (!form.value.command.trim()) { message.warning(t('请输入 command')); return }
+  if (!form.value.name.trim()) { message.warning(t('common.please_enter_a_name')); return }
+  if (!form.value.command.trim()) { message.warning(t('common.please_enter_command')); return }
   const body = {
     name: form.value.name.trim(),
     command: form.value.command.trim(),
@@ -219,16 +219,16 @@ async function savePlugin() {
         command: body.command, args: body.args, env: body.env,
         description: body.description, version: body.version,
       })
-      message.success(t('已保存'))
+      message.success(t('common.saved'))
     } else {
       // 新建：install（POST）
       await api.post(`/v1/plugins/${encodeURIComponent(body.name)}/install`, body)
-      message.success(t('插件已创建'))
+      message.success(t('common.plugin_created'))
     }
     editorOpen.value = false
     await loadPlugins()
   } catch (e: any) {
-    message.error(e.response?.data?.error || e.response?.data?.detail || e.message || t('保存失败'))
+    message.error(e.response?.data?.error || e.response?.data?.detail || e.message || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -242,25 +242,25 @@ async function toggleStatus(p: Plugin, v: boolean) {
     if (v) message.success(t('已启用 {name}', { name: p.name }))
     else message.success(t('已停用 {name}', { name: p.name }))
   } catch (e: any) {
-    message.error(e.response?.data?.error || t('操作失败'))
+    message.error(e.response?.data?.error || t('errors.operation_failed'))
   }
 }
 
 // ── 卸载 ──
 function requestUninstall(p: Plugin) {
   Modal.confirm({
-    title: t('卸载插件'),
+    title: t('common.uninstall_plugin'),
     content: t('确定卸载「{name}」？其 MCP 配置将被删除。', { name: p.name }),
-    okText: t('卸载'),
+    okText: t('common.uninstall'),
     okButtonProps: { danger: true },
-    cancelText: t('取消'),
+    cancelText: t('common.cancel'),
     onOk: async () => {
       try {
         await api.delete(`/v1/plugins/${encodeURIComponent(p.name)}`)
-        message.success(t('已卸载'))
+        message.success(t('common.uninstalled'))
         await loadPlugins()
       } catch {
-        message.error(t('卸载失败'))
+        message.error(t('errors.uninstall_failed'))
       }
     },
   })
@@ -269,7 +269,7 @@ function requestUninstall(p: Plugin) {
 // ── 连接测试 ──
 async function testPlugin(p: Plugin) {
   testingName.value = p.name
-  testResults.value = { ...testResults.value, [p.name]: { ok: false, message: t('测试中…') } }
+  testResults.value = { ...testResults.value, [p.name]: { ok: false, message: t('common.testing') } }
   try {
     const res = await api.post(`/v1/plugins/${encodeURIComponent(p.name)}/test`)
     const data = res.data?.data || {}
@@ -277,7 +277,7 @@ async function testPlugin(p: Plugin) {
     if (data.ok) message.success(t('{name} 连接正常', { name: p.name }))
     else message.error(t('{name} 连接失败', { name: p.name }))
   } catch (e: any) {
-    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('测试失败') } }
+    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('errors.test_failed') } }
   } finally {
     testingName.value = ''
   }
@@ -289,10 +289,10 @@ async function testPlugin(p: Plugin) {
     <div class="page-head">
       <div class="page-head-text">
         <h1 class="page-title">
-          {{ $t('插件') }}
+          {{ $t('common.plugin') }}
         </h1>
         <p class="page-sub">
-          {{ $t('管理 MCP 服务器配置，扩展 Agent 工具能力') }}
+          {{ $t('agent.manage_mcp_server_config_to_extend_agent_tool_capabilities') }}
         </p>
       </div>
       <Button
@@ -302,7 +302,7 @@ async function testPlugin(p: Plugin) {
         <template #icon>
           <PlusOutlined />
         </template>
-        {{ $t('新建插件') }}
+        {{ $t('common.new_plugin') }}
       </Button>
     </div>
 
@@ -313,12 +313,12 @@ async function testPlugin(p: Plugin) {
       <!-- ── 插件列表 ── -->
       <TabPane
         key="plugins"
-        :tab="$t('插件')"
+        :tab="$t('common.plugin')"
       >
         <div class="list-toolbar">
           <Input
             v-model:value="searchQuery"
-            :placeholder="$t('搜索插件（名称 / 描述）')"
+            :placeholder="$t('common.search_plugins_name_description')"
             allow-clear
             class="search-input"
           >
@@ -339,22 +339,22 @@ async function testPlugin(p: Plugin) {
           v-else-if="error"
           size="page"
           :icon="markRaw(ThunderboltOutlined)"
-          :description="$t('加载失败')"
-          :hint="$t('无法获取插件列表，请稍后重试')"
+          :description="$t('errors.failed_to_load')"
+          :hint="$t('common.unable_to_fetch_plugin_list_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadPlugins"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <EmptyState
           v-else-if="filtered.length === 0"
           size="page"
           :icon="markRaw(ThunderboltOutlined)"
-          :description="searchQuery ? $t('暂无匹配的插件') : $t('暂无插件')"
-          :hint="searchQuery ? $t('尝试调整搜索关键词') : $t('点击右上角「新建插件」，配置命令行工具集成')"
+          :description="searchQuery ? $t('common.no_matching_plugins') : $t('common.no_plugins')"
+          :hint="searchQuery ? $t('common.try_adjusting_your_search_keywords') : $t('agent.click_new_plugin_at_the_top_right_to_configure_cli_tool_integration')"
         >
           <Button
             v-if="!searchQuery"
@@ -364,7 +364,7 @@ async function testPlugin(p: Plugin) {
             <template #icon>
               <PlusOutlined />
             </template>
-            {{ $t('新建插件') }}
+            {{ $t('common.new_plugin') }}
           </Button>
         </EmptyState>
 
@@ -382,19 +382,19 @@ async function testPlugin(p: Plugin) {
               <span class="card-icon"><ThunderboltOutlined /></span>
               <div class="card-titles">
                 <span class="plugin-name">{{ p.name }}</span>
-                <span class="plugin-desc">{{ p.description || $t('暂无描述') }}</span>
+                <span class="plugin-desc">{{ p.description || $t('common.no_description') }}</span>
               </div>
               <Switch
                 :checked="p.status === 'active'"
                 size="small"
-                :checked-children="$t('开')"
-                :un-checked-children="$t('关')"
+                :checked-children="$t('common.on')"
+                :un-checked-children="$t('common.off')"
                 @change="(v: any) => toggleStatus(p, Boolean(v))"
               />
             </div>
             <div class="card-meta">
               <Tag :color="p.status === 'active' ? 'green' : 'default'">
-                {{ p.status === 'active' ? $t('启用') : $t('已停用') }}
+                {{ p.status === 'active' ? $t('common.enable') : $t('common.disabled') }}
               </Tag>
               <Tag>v{{ p.version || '1.0.0' }}</Tag>
               <span class="card-command">{{ p.command }}</span>
@@ -415,34 +415,34 @@ async function testPlugin(p: Plugin) {
                 <template #icon>
                   <ExperimentOutlined />
                 </template>
-                {{ $t('测试连接') }}
+                {{ $t('common.test_connection') }}
               </Button>
               <Button
                 size="small"
-                :title="$t('把该插件带进对话（本次对话只放它提供的工具）')"
+                :title="$t('agent.bring_this_plugin_into_the_conversation_only_its_tools_are_available_in_this_conversation')"
                 @click="useInChat(p)"
               >
                 <template #icon>
                   <MessageOutlined />
                 </template>
-                {{ $t('在对话中使用') }}
+                {{ $t('chat.use_in_the_conversation') }}
               </Button>
               <Button
                 size="small"
-                :title="$t('把该插件装配到某个 Agent（持久绑定）')"
+                :title="$t('agent.assemble_this_plugin_into_an_agent_persistent_binding')"
                 @click="openAttach(p)"
               >
                 <template #icon>
                   <RobotOutlined />
                 </template>
-                {{ $t('装配到 Agent') }}
+                {{ $t('agent.assemble_to_agent') }}
               </Button>
               <Button
                 size="small"
                 type="text"
                 @click="toggleExpanded(p.name)"
               >
-                {{ expanded.has(p.name) ? $t('收起配置') : $t('查看配置') }}
+                {{ expanded.has(p.name) ? $t('common.collapse_config') : $t('common.view_config') }}
                 <UpOutlined
                   v-if="expanded.has(p.name)"
                   class="mini-icon"
@@ -456,7 +456,7 @@ async function testPlugin(p: Plugin) {
                 <Button
                   type="text"
                   size="small"
-                  :title="$t('编辑')"
+                  :title="$t('common.edit_2')"
                   @click="openEdit(p)"
                 >
                   <template #icon>
@@ -464,14 +464,14 @@ async function testPlugin(p: Plugin) {
                   </template>
                 </Button>
                 <Popconfirm
-                  :title="$t('确认卸载？')"
+                  :title="$t('common.confirm_uninstall')"
                   @confirm="requestUninstall(p)"
                 >
                   <Button
                     type="text"
                     danger
                     size="small"
-                    :title="$t('卸载')"
+                    :title="$t('common.uninstall')"
                   >
                     <template #icon>
                       <DeleteOutlined />
@@ -537,7 +537,7 @@ async function testPlugin(p: Plugin) {
       <!-- ── MCP 市场 ── -->
       <TabPane
         key="market"
-        :tab="$t('MCP 市场')"
+        :tab="$t('agent.mcp_market')"
       >
         <PageSkeleton
           v-if="marketLoading"
@@ -550,14 +550,14 @@ async function testPlugin(p: Plugin) {
           v-else-if="marketError"
           size="page"
           :icon="markRaw(ShopOutlined)"
-          :description="$t('市场加载失败')"
-          :hint="$t('无法获取市场内容，请稍后重试')"
+          :description="$t('errors.failed_to_load_marketplace')"
+          :hint="$t('common.unable_to_fetch_marketplace_content_please_retry_later')"
         >
           <Button
             type="primary"
             @click="loadMarket"
           >
-            {{ $t('重试') }}
+            {{ $t('common.retry') }}
           </Button>
         </EmptyState>
         <SkillMarketCard
@@ -573,20 +573,20 @@ async function testPlugin(p: Plugin) {
     <!-- 新建/编辑 Modal -->
     <Modal
       :open="editorOpen"
-      :title="editingName ? $t('编辑「{name}」', { name: editingName }) : $t('新建 MCP 插件')"
+      :title="editingName ? $t('编辑「{name}」', { name: editingName }) : $t('agent.new_mcp_plugin')"
       :confirm-loading="saving"
       width="560px"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="savePlugin"
       @cancel="editorOpen = false"
     >
       <div class="editor-form">
         <div class="form-row">
-          <label class="form-label">{{ $t('名称 *') }}</label>
+          <label class="form-label">{{ $t('common.name_2') }}</label>
           <Input
             v-model:value="form.name"
-            :placeholder="$t('如：github-mcp')"
+            :placeholder="$t('agent.e_g_github_mcp')"
             :disabled="!!editingName"
             :maxlength="60"
           />
@@ -595,11 +595,11 @@ async function testPlugin(p: Plugin) {
           <label class="form-label">Command *</label>
           <Input
             v-model:value="form.command"
-            :placeholder="$t('MCP server 启动命令，如：npx、python、/path/to/server')"
+            :placeholder="$t('agent.mcp_server_start_command_e_g_npx_python_path_to_server')"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('Args（每行一个）') }}</label>
+          <label class="form-label">{{ $t('common.args_one_per_line') }}</label>
           <Input.TextArea
             v-model:value="form.argsText"
             :rows="3"
@@ -608,7 +608,7 @@ async function testPlugin(p: Plugin) {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('Env（每行 KEY=VALUE）') }}</label>
+          <label class="form-label">{{ $t('common.env_one_key_value_per_line') }}</label>
           <Input.TextArea
             v-model:value="form.envText"
             :rows="3"
@@ -617,14 +617,14 @@ async function testPlugin(p: Plugin) {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('描述') }}</label>
+          <label class="form-label">{{ $t('common.description') }}</label>
           <Input
             v-model:value="form.description"
             :maxlength="200"
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('版本') }}</label>
+          <label class="form-label">{{ $t('common.version') }}</label>
           <Input
             v-model:value="form.version"
             placeholder="1.0.0"

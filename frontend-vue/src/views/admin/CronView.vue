@@ -45,7 +45,7 @@ async function fetchCronJobs(silent = false) {
     const d = res.data?.data || res.data
     cronJobs.value = Array.isArray(d?.jobs) ? d.jobs : []
   } catch {
-    if (!silent) message.error(t('定时任务列表加载失败'))
+    if (!silent) message.error(t('errors.failed_to_load_scheduled_tasks'))
   } finally {
     cronLoading.value = false
     cronRefreshing.value = false
@@ -59,7 +59,7 @@ async function triggerCronJobById(job: CronJob) {
     message.success(t('已触发「{name}」，任务将异步执行', { name: job.name }))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error(t('触发失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
+    message.error(t('触发失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   }
 }
 
@@ -89,8 +89,8 @@ async function copyText(text: string): Promise<boolean> {
 async function copyCronWebhook(job: CronJob) {
   if (!job.webhook_token) return
   const ok = await copyText(cronWebhookUrl(job.id, job.webhook_token))
-  if (ok) message.success(t('Webhook 地址已复制'))
-  else message.error(t('复制失败，请手动复制'))
+  if (ok) message.success(t('common.webhook_url_copied'))
+  else message.error(t('errors.copy_failed_please_copy_manually'))
 }
 
 /** last_status → Tag 颜色：成功绿 / 失败红 / 其余灰（pending/未运行） */
@@ -100,9 +100,9 @@ function cronStatusColor(s: string): string {
   return 'default'
 }
 function cronStatusLabel(s: string): string {
-  if (!s) return t('未运行')
-  if (s === 'success') return t('成功')
-  if (s === 'failed' || s === 'error') return t('失败')
+  if (!s) return t('common.not_running')
+  if (s === 'success') return t('common.success')
+  if (s === 'failed' || s === 'error') return t('errors.failed')
   return s
 }
 
@@ -134,34 +134,34 @@ function openCronEdit(job: CronJob) {
 async function saveCronJob() {
   const f = cronForm.value
   if (!f.name.trim() || !f.schedule.trim() || !f.task.trim()) {
-    message.warning(t('名称、Cron 表达式与任务 JSON 均为必填'))
+    message.warning(t('errors.name_cron_expression_and_task_json_are_all_required'))
     return
   }
   try {
     JSON.parse(f.task)
   } catch {
-    message.error(t('任务 JSON 格式不正确，请检查后重试'))
+    message.error(t('errors.task_json_format_is_incorrect_please_check_and_retry'))
     return
   }
   cronSaving.value = true
   try {
     if (cronEditing.value) {
       await api.put(`/v1/admin/cron-jobs/${cronEditing.value.id}`, f)
-      message.success(t('已更新定时任务'))
+      message.success(t('workflow.scheduled_task_updated'))
     } else {
       const res = await api.post('/v1/admin/cron-jobs', f)
       const d = res.data?.data || res.data
-      message.success(t('已创建定时任务'))
+      message.success(t('workflow.scheduled_task_created'))
       // 创建响应含 webhook_token：顺手复制一次触发地址（列表刷新后行内仍可复制）
       if (d?.id && d?.webhook_token) {
         const ok = await copyText(cronWebhookUrl(d.id, d.webhook_token))
-        if (ok) message.success(t('Webhook 触发地址已复制到剪贴板'))
+        if (ok) message.success(t('workflow.webhook_trigger_url_copied_to_clipboard'))
       }
     }
     cronModalOpen.value = false
     await fetchCronJobs()
   } catch (e: any) {
-    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
+    message.error(t('保存失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   } finally {
     cronSaving.value = false
   }
@@ -170,21 +170,21 @@ async function saveCronJob() {
 async function deleteCronJob(job: CronJob) {
   try {
     await api.delete(`/v1/admin/cron-jobs/${job.id}`)
-    message.success(t('已删除定时任务'))
+    message.success(t('workflow.scheduled_task_deleted'))
     await fetchCronJobs(true)
   } catch (e: any) {
-    message.error(t('删除失败: {error}', { error: e?.response?.data?.error || e?.message || t('网络错误') }))
+    message.error(t('删除失败: {error}', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
   }
 }
 
 const cronColumns = [
-  { title: t('名称'), dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
-  { title: t('计划'), dataIndex: 'schedule', key: 'schedule', width: 120 },
-  { title: t('任务'), dataIndex: 'task', key: 'task', ellipsis: true },
-  { title: t('启用'), dataIndex: 'enabled', key: 'enabled', width: 64 },
-  { title: t('上次运行'), dataIndex: 'last_run_at', key: 'last_run_at', width: 130 },
-  { title: t('状态'), dataIndex: 'last_status', key: 'last_status', width: 84 },
-  { title: t('操作'), key: 'actions', width: 300 },
+  { title: t('common.name'), dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
+  { title: t('billing.plan'), dataIndex: 'schedule', key: 'schedule', width: 120 },
+  { title: t('workflow.task_2'), dataIndex: 'task', key: 'task', ellipsis: true },
+  { title: t('common.enable'), dataIndex: 'enabled', key: 'enabled', width: 64 },
+  { title: t('common.last_run'), dataIndex: 'last_run_at', key: 'last_run_at', width: 130 },
+  { title: t('common.status'), dataIndex: 'last_status', key: 'last_status', width: 84 },
+  { title: t('common.action'), key: 'actions', width: 300 },
 ]
 
 onMounted(() => {
@@ -206,7 +206,7 @@ onUnmounted(() => {
     >
       <template #title>
         <span class="chart-title">
-          <ClockCircleOutlined class="chart-title-icon" /> {{ $t('定时任务') }}
+          <ClockCircleOutlined class="chart-title-icon" /> {{ $t('workflow.scheduled_tasks') }}
         </span>
       </template>
       <template #extra>
@@ -217,7 +217,7 @@ onUnmounted(() => {
             :loading="cronRefreshing"
             @click="fetchCronJobs()"
           >
-            {{ $t('立即刷新') }}
+            {{ $t('common.refresh_now') }}
           </Button>
           <Button
             size="small"
@@ -225,15 +225,15 @@ onUnmounted(() => {
             :icon="h(PlusOutlined)"
             @click="openCronCreate"
           >
-            {{ $t('新建任务') }}
+            {{ $t('workflow.new_task') }}
           </Button>
         </Space>
       </template>
       <EmptyState
         v-if="!cronLoading && cronJobs.length === 0"
         size="list"
-        :description="$t('暂无定时任务')"
-        :hint="$t('点击「新建任务」创建定时自动化任务')"
+        :description="$t('workflow.no_scheduled_tasks_yet')"
+        :hint="$t('workflow.click_new_task_to_create_a_scheduled_automation')"
       />
       <Table
         v-else
@@ -282,7 +282,7 @@ onUnmounted(() => {
                 :icon="h(PlayCircleOutlined)"
                 @click="triggerCronJobById(record as CronJob)"
               >
-                {{ $t('手动触发') }}
+                {{ $t('workflow.manual_trigger') }}
               </Button>
               <Button
                 v-if="record.webhook_token"
@@ -291,7 +291,7 @@ onUnmounted(() => {
                 :icon="h(CopyOutlined)"
                 @click="copyCronWebhook(record as CronJob)"
               >
-                {{ $t('复制 Webhook') }}
+                {{ $t('common.copy_webhook') }}
               </Button>
               <Button
                 size="small"
@@ -299,12 +299,12 @@ onUnmounted(() => {
                 :icon="h(EditOutlined)"
                 @click="openCronEdit(record as CronJob)"
               >
-                {{ $t('编辑') }}
+                {{ $t('common.edit_2') }}
               </Button>
               <Popconfirm
-                :title="$t('确定删除该定时任务？')"
-                :ok-text="$t('删除')"
-                :cancel-text="$t('取消')"
+                :title="$t('workflow.confirm_deleting_this_scheduled_task')"
+                :ok-text="$t('common.delete')"
+                :cancel-text="$t('common.cancel')"
                 @confirm="deleteCronJob(record as CronJob)"
               >
                 <Button
@@ -313,7 +313,7 @@ onUnmounted(() => {
                   danger
                   :icon="h(DeleteOutlined)"
                 >
-                  {{ $t('删除') }}
+                  {{ $t('common.delete') }}
                 </Button>
               </Popconfirm>
             </Space>
@@ -325,34 +325,34 @@ onUnmounted(() => {
     <!-- 新建 / 编辑定时任务对话框 -->
     <Modal
       :open="cronModalOpen"
-      :title="cronEditing ? $t('编辑定时任务') : $t('新建定时任务')"
+      :title="cronEditing ? $t('workflow.edit_scheduled_task') : $t('workflow.new_scheduled_task')"
       :confirm-loading="cronSaving"
-      :ok-text="$t('保存')"
-      :cancel-text="$t('取消')"
+      :ok-text="$t('common.save')"
+      :cancel-text="$t('common.cancel')"
       @ok="saveCronJob"
       @cancel="cronModalOpen = false"
     >
       <div class="cron-form">
         <div class="cron-field">
-          <label class="cron-label">{{ $t('任务名称') }}</label>
+          <label class="cron-label">{{ $t('workflow.task_name') }}</label>
           <Input
             v-model:value="cronForm.name"
-            :placeholder="$t('例如：每日早报生成')"
+            :placeholder="$t('common.e_g_daily_morning_report_generation')"
             :maxlength="120"
           />
         </div>
         <div class="cron-field">
-          <label class="cron-label">{{ $t('Cron 表达式') }}</label>
+          <label class="cron-label">{{ $t('common.cron_expression') }}</label>
           <Input
             v-model:value="cronForm.schedule"
-            :placeholder="$t('例如：0 9 * * *（每天 09:00）')"
+            :placeholder="$t('common.e_g_0_9_every_day_at_09_00')"
           />
           <div class="cron-hint">
-            {{ $t('标准 5 段 Cron：分 时 日 月 周') }}
+            {{ $t('common.standard_5_field_cron_minute_hour_day_month_weekday') }}
           </div>
         </div>
         <div class="cron-field">
-          <label class="cron-label">{{ $t('任务 JSON') }}</label>
+          <label class="cron-label">{{ $t('workflow.task_json') }}</label>
           <Input.TextArea
             v-model:value="cronForm.task"
             :rows="4"
@@ -360,13 +360,13 @@ onUnmounted(() => {
             placeholder="{&quot;type&quot;:&quot;agent&quot;,&quot;agent_id&quot;:&quot;...&quot;,&quot;prompt&quot;:&quot;...&quot;}"
           />
           <div class="cron-hint">
-            {{ $t('任务类型示例：') }}<br>
-            <code>{"type":"agent","agent_id":"...","prompt":"..."}</code>{{ $t('（Agent 任务）') }}<br>
-            <code>{"type":"quick","user_input":"...","mode":"auto"}</code>{{ $t('（统一任务）') }}
+            {{ $t('workflow.task_type_examples') }}<br>
+            <code>{"type":"agent","agent_id":"...","prompt":"..."}</code>{{ $t('workflow.agent_task') }}<br>
+            <code>{"type":"quick","user_input":"...","mode":"auto"}</code>{{ $t('workflow.unified_task_2') }}
           </div>
         </div>
         <div class="cron-field cron-field-row">
-          <label class="cron-label">{{ $t('启用') }}</label>
+          <label class="cron-label">{{ $t('common.enable') }}</label>
           <Switch v-model:checked="cronForm.enabled" />
         </div>
       </div>

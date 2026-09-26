@@ -28,7 +28,7 @@ async function fetchPrivacy() {
         : JSON.stringify(p.redaction_rules ?? {}, null, 2),
     }
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('加载失败'))
+    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
   } finally {
     loading.value = false
   }
@@ -39,7 +39,7 @@ async function save() {
   try {
     rules = JSON.parse(form.value.redaction_rules || '{}')
   } catch {
-    message.error(t('脱敏规则必须是合法 JSON'))
+    message.error(t('common.desensitization_rules_must_be_valid_json'))
     return
   }
   saving.value = true
@@ -50,10 +50,10 @@ async function save() {
       training_allowed: form.value.training_allowed,
       redaction_rules: rules,
     })
-    message.success(t('已保存'))
+    message.success(t('common.saved'))
     fetchPrivacy()
   } catch (e: any) {
-    message.error(e?.response?.data?.error || t('保存失败'))
+    message.error(e?.response?.data?.error || t('errors.save_failed'))
   } finally {
     saving.value = false
   }
@@ -66,32 +66,32 @@ onMounted(fetchPrivacy)
   <div class="privacy-view">
     <div class="page-header">
       <h2 class="page-title">
-        {{ $t('隐私模式管控') }}
+        {{ $t('admin.privacy_mode_control') }}
       </h2>
     </div>
 
     <a-spin :spinning="loading">
       <a-card
-        :title="$t('租户隐私策略')"
+        :title="$t('admin.tenant_privacy_policy')"
         style="max-width: 720px"
       >
         <a-form layout="vertical">
-          <a-form-item :label="$t('隐私模式')">
+          <a-form-item :label="$t('admin.privacy_mode')">
             <a-switch v-model:checked="form.privacy_mode" />
-            <span class="hint">{{ $t('开启后转发 Python 引擎时注入 X-Privacy-Mode: no_retention，不落库历史') }}</span>
+            <span class="hint">{{ $t('admin.when_enabled_forwards_to_the_python_engine_with_x_privacy_mode_no_retention_so_history_is_not_stored') }}</span>
           </a-form-item>
-          <a-form-item :label="$t('数据留存天数（0 = 永久）')">
+          <a-form-item :label="$t('common.data_retention_days_0_permanent')">
             <a-input-number
               v-model:value="form.data_retention_days"
               :min="0"
               style="width: 200px"
             />
           </a-form-item>
-          <a-form-item :label="$t('允许训练')">
+          <a-form-item :label="$t('common.allow_training')">
             <a-switch v-model:checked="form.training_allowed" />
-            <span class="hint">{{ $t('关闭后该租户内容不得用于模型训练') }}</span>
+            <span class="hint">{{ $t('agent.after_disabling_this_tenant_s_content_must_not_be_used_for_model_training') }}</span>
           </a-form-item>
-          <a-form-item :label="$t('脱敏规则（JSON）')">
+          <a-form-item :label="$t('common.desensitization_rules_json')">
             <a-textarea
               v-model:value="form.redaction_rules"
               :rows="8"
@@ -105,7 +105,7 @@ onMounted(fetchPrivacy)
               :loading="saving"
               @click="save"
             >
-              {{ $t('保存') }}
+              {{ $t('common.save') }}
             </a-button>
           </a-form-item>
         </a-form>

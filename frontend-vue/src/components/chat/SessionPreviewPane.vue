@@ -201,7 +201,7 @@ defineExpose({ refresh })
       :class="`handle-${handleSide}`"
       role="separator"
       aria-orientation="vertical"
-      :aria-label="$t('拖动调整宽度，双击重置')"
+      :aria-label="$t('auth.drag_to_resize_double_click_to_reset')"
       tabindex="0"
       @pointerdown="onResizeStart"
       @pointermove="onResizeMove"
@@ -216,7 +216,7 @@ defineExpose({ refresh })
         v-if="switchable.length"
         class="pp-select"
         :value="sessionId"
-        :title="$t('切换分屏显示的会话')"
+        :title="$t('chat.switch_the_split_view_session')"
         @change="onPick"
       >
         <option :value="sessionId">
@@ -227,17 +227,17 @@ defineExpose({ refresh })
           :key="s.id"
           :value="s.id"
         >
-          {{ s.title || $t('新对话') }}
+          {{ s.title || $t('chat.new_conversation') }}
         </option>
       </select>
       <span
         v-else
         class="pp-title"
-      >{{ title || $t('参考会话') }}</span>
+      >{{ title || $t('chat.reference_session') }}</span>
       <button
         type="button"
         class="pp-btn"
-        :title="$t('刷新')"
+        :title="$t('common.refresh')"
         @click="refresh"
       >
         ⟳
@@ -248,19 +248,19 @@ defineExpose({ refresh })
         v-if="loading && !items.length"
         class="pp-empty"
       >
-        {{ $t('加载中…') }}
+        {{ $t('common.loading') }}
       </div>
       <div
         v-else-if="failed"
         class="pp-empty"
       >
-        {{ $t('加载失败（会话可能已删除或无权访问）') }}
+        {{ $t('errors.failed_to_load_the_session_may_be_deleted_or_inaccessible') }}
       </div>
       <div
         v-else-if="!items.length"
         class="pp-empty"
       >
-        {{ $t('这个会话还没有消息') }}
+        {{ $t('chat.this_session_has_no_messages_yet') }}
       </div>
       <!-- 与主区域同一个渲染组件：标签剥离 / 工具分组 / 窗口化都一致 -->
       <MessageList

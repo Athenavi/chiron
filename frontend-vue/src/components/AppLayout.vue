@@ -243,7 +243,7 @@ async function runQuickCommand() {
   <div class="app-shell">
     <!-- 左上角浮动品牌胶囊 -->
     <header
-      :title="currentLabel || $t('导航菜单')"
+      :title="currentLabel || $t('common.navigation_menu')"
       class="topbar"
     >
       <Dropdown
@@ -252,7 +252,7 @@ async function runQuickCommand() {
       >
         <button
           class="brand-btn"
-          :title="$t('导航菜单')"
+          :title="$t('common.navigation_menu')"
           type="button"
         >
           <span class="brand-logo">MC</span>
@@ -273,7 +273,7 @@ async function runQuickCommand() {
     <!-- 工作台停靠坞 -->
     <nav
       v-if="showDock"
-      :aria-label="$t('工作台停靠坞')"
+      :aria-label="$t('common.workstation_dock')"
       class="dock"
     >
       <div class="dock-items">
@@ -361,7 +361,7 @@ async function runQuickCommand() {
          destroy-on-close 保证每次打开都重新挂载并拉取最新数据。 -->
     <Modal
       v-model:open="settingsOpen"
-      :title="$t('设置')"
+      :title="$t('settings.settings')"
       :footer="null"
       :width="720"
       destroy-on-close

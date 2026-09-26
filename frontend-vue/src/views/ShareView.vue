@@ -25,7 +25,7 @@ md.renderer.rules.fence = (tokens: any[], idx: number) => {
   const lang = md.utils.escapeHtml((token.info || '').trim().toLowerCase() || 'code')
   const code = md.utils.escapeHtml(token.content)
   const encoded = encodeURIComponent(token.content)
-  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><button type="button" class="code-copy" data-code="${encoded}">${t('复制')}</button></div><pre><code>${code}</code></pre></div>`
+  return `<div class="code-block"><div class="code-block-head"><span class="code-lang">${lang}</span><button type="button" class="code-copy" data-code="${encoded}">${t('common.copy')}</button></div><pre><code>${code}</code></pre></div>`
 }
 
 function renderMarkdown(src: string): string {
@@ -69,8 +69,8 @@ function handleClick(e: MouseEvent) {
   const code = decodeURIComponent(btn.dataset.code || '')
   if (!code) return
   navigator.clipboard.writeText(code).then(() => {
-    btn.textContent = t('已复制！')
-    setTimeout(() => { btn.textContent = t('复制') }, 2000)
+    btn.textContent = t('common.copied')
+    setTimeout(() => { btn.textContent = t('common.copy') }, 2000)
   }).catch(() => { /* clipboard unavailable */ })
 }
 
@@ -80,9 +80,9 @@ onMounted(async () => {
     share.value = await getPublicShare(id)
   } catch (e: any) {
     const status = e?.response?.status
-    if (status === 410) error.value = t('此分享已被创建者删除')
-    else if (status === 404) error.value = t('分享不存在或已失效')
-    else error.value = t('加载失败，请稍后重试')
+    if (status === 410) error.value = t('common.this_share_was_deleted_by_its_creator')
+    else if (status === 404) error.value = t('errors.share_does_not_exist_or_has_expired')
+    else error.value = t('errors.load_failed_please_retry_later')
   } finally {
     loading.value = false
   }
@@ -103,7 +103,7 @@ function formatDate(iso: string): string {
     <header class="share-header">
       <div class="share-brand">
         <span class="share-brand-mark">MC</span>
-        <span>{{ $t('Chiron · 对话分享') }}</span>
+        <span>{{ $t('chat.chiron_conversation_share') }}</span>
       </div>
     </header>
 
@@ -121,7 +121,7 @@ function formatDate(iso: string): string {
       <template v-else-if="share">
         <div class="share-head">
           <h1 class="share-title">
-            {{ share.title || $t('新对话') }}
+            {{ share.title || $t('chat.new_conversation') }}
           </h1>
           <div class="share-meta">
             {{ $t('{date} · {n} 条消息', { date: formatDate(share.created_at), n: share.messages.length }) }}
@@ -145,7 +145,7 @@ function formatDate(iso: string): string {
                 v-if="m.reasoning"
                 class="share-msg-reasoning"
               >
-                <summary>{{ $t('思考过程') }}</summary>
+                <summary>{{ $t('chat.reasoning_process') }}</summary>
                 <div class="share-msg-reasoning-body">
                   {{ m.reasoning }}
                 </div>
@@ -168,7 +168,7 @@ function formatDate(iso: string): string {
     </main>
 
     <footer class="share-footer">
-      {{ $t('© Chiron 生成 · 本页可被任何获得链接的人查看') }}
+      {{ $t('common.chiron_generated_this_page_is_viewable_by_anyone_with_the_link') }}
     </footer>
   </div>
 </template>

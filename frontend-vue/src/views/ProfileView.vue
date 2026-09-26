@@ -13,7 +13,7 @@ import SettingsPanel from '../components/settings/SettingsPanel.vue'
   <div class="profile-container">
     <div class="profile-header">
       <UserOutlined style="font-size: 24px; color: var(--primary)" />
-      <h1>{{ $t('用户设置') }}</h1>
+      <h1>{{ $t('admin.user_settings') }}</h1>
     </div>
     <SettingsPanel />
   </div>
