@@ -35,45 +35,12 @@ go test -mod=mod ./... -count=1
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 对齐
 ruff check .
-# --follow-imports=silent：只报告这里列出的模块（依赖由它们各自的门禁覆盖）
-mypy --follow-imports=silent
-  app/agent/collaboration.py app/agent/event_sink.py app/agent/guards.py \
-  app/agent/loop.py app/agent/message_codec.py app/agent/modes.py \
-  app/agent/multi_agent.py app/agent/profile.py app/agent/prompt_engine.py \
-  app/agent/runtime.py app/agent/side_effect_ledger.py app/agent/subagent_runner.py \
-  app/api/agents.py app/api/capabilities.py app/api/context.py app/api/knowledge.py \
-  app/api/media.py app/api/memory.py app/api/plugins.py app/api/skills.py \
-  app/api/system.py app/api/unified_executor.py app/api/workflows.py \
-  app/batch_processor.py app/chaos app/config.py app/context app/core \
-  app/db.py app/db_client.py app/engine_registry.py \
-  app/gateway/cache.py app/gateway/coalescer.py app/gateway/key_ring.py \
-  app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
-  app/interfaces app/knowledge app/llm app/main.py app/mcp/client.py \
-  app/mcp/registry.py app/media app/memory app/middleware app/observability \
-  app/plugins/broker_proxy.py app/plugins/owner_lease.py app/plugins/pool.py \
-  app/providers app/queue/dlq.py app/queue/idempotency.py app/queue/producer.py \
-  app/queue/worker.py app/rag/builder.py app/rag/context_injector.py \
-  app/rag/hybrid_search.py app/rag/parser.py app/rag/retriever.py \
-  app/rag/stores/base.py app/rag/stores/milvus_store.py \
-  app/rag/stores/pgvector_store.py app/run_registry.py app/session_store.py \
-  app/skill/manager.py app/skill/store.py app/sse app/subagent/affinity.py \
-  app/subagent/followup.py app/subagent/redact.py app/subagent/registry.py \
-  app/subagent/reporting.py app/subagent/runtime_cache.py app/subagent/store.py \
-  app/tools/_sandbox_worker.py app/tools/browser.py app/tools/client.py app/tools/code_guard.py \
-  app/tools/context.py app/tools/discovery.py app/tools/graph.py \
-  app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/media.py app/tools/memory.py \
-  app/tools/rag_query.py app/tools/registry.py app/tools/run_code.py \
-  app/tools/skill.py app/tools/skill_catalog.py app/tools/ssrf.py \
-  app/tools/subagent.py app/tools/terminal.py app/tools/web.py app/trace \
-  app/workflow/dynamic_nodes.py app/workflow/engine.py app/workflow/executor.py \
-  app/workflow/tools.py app/workflow/tracing_engine.py \
-    # 分批接线，见开发路线图 L2-1
+mypy app/          # strict；全量，见下方「mypy strict 接线手册」
 python -m pytest -q -m "not integration"
 ```
 
-`mypy` 目前只覆盖**已清零的模块**：`pyproject.toml` 已声明 `strict = true`，但 `app/` 仍有存量
-错误，所以门禁按域分批扩大。**`mypy` 会连带检查被 import 的模块并报它们的错误**，因此范围必须
-包含传递依赖（第一批里的 `app/config.py` 就是这么来的）—— 清单与扩批进度见
+`mypy` 对 `app/` **全量**按 strict 检查（`pyproject.toml` 的 `strict = true` 与门禁已一致）。
+这是 25 批分批接线的结果：起点是 1171 条 / 130 文件，过程见
 [开发路线图](development-roadmap.md) 的 L2-1。
 
 标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL），**不在 CI 中执行**，
@@ -81,15 +48,15 @@ python -m pytest -q -m "not integration"
 
 #### mypy strict 接线手册
 
-`app/` 仍有存量错误，所以门禁按域分批扩大 —— **每清零一块就往上面那个列表里追加**。
-清单与扩批进度见 [开发路线图](development-roadmap.md) 的 L2-1，以下是动手前必读的约束与已踩过的坑。
+分批接线**已经收尾**（`mypy app/` 全量通过），下面这些约束与踩过的坑留作维护参考：
+新增第三方依赖、或要动 `pyproject.toml` 的 overrides 时照办。
 
 **两条始终生效的约束**
 
-1. **门禁必须带 `--follow-imports=silent`** —— 否则 mypy 会连带报告依赖模块的错误，而剩余模块的
-   依赖闭包不可控（`app/core` 的传递依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill`
-   各 74–76，单文件亦可拉到 72 个）。`silent` 让门禁只报告**列出的**模块，依赖由它们各自的门禁
-   覆盖 —— 列出的模块仍全部按 strict 检查。
+1. **历史：门禁曾带 `--follow-imports=silent`** —— 分批接线期间，未清零模块的依赖闭包不可控
+   （`app/core` 的传递依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，
+   单文件亦可拉到 72 个），只能让 mypy 只报告命令行里列出的模块。存量清零后该开关已移除。
+   **若将来要把某块从全量门禁里摘出去，就得把它加回来**，并接受"依赖由它们各自的门禁覆盖"这个前提。
 2. **第三方库缺口走 `pyproject.toml` 的 `[[tool.mypy.overrides]]`，不许用 `# type: ignore` 绕**：
    - 缺 stub / 缺包 → `ignore_missing_imports`（现为 `asyncpg` / `boto3.*` / `botocore.*` / `docx` /
      `fitz` / `langchain.*` / `markitdown` / `openpyxl` / `pdfplumber` / `psutil` / `pymilvus` /
@@ -117,8 +84,13 @@ python -m pytest -q -m "not integration"
 - ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定版本装不了：
   `grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI 的 3.11 + 固定版本。
   若某个 step 首次在 CI 上报出本地没有的错误，根因大概率在此；**先按 CI 结果复核**，再决定是补
-  overrides 还是改代码。已知的本地-only 误报：`opentelemetry.exporter.otlp.proto.grpc.*`
-  （CI 装了 `opentelemetry-exporter-otlp-proto-grpc`）与 `markitdown` 的参数签名（可选后端，CI 不装）。
+  overrides 还是改代码。
+  曾出现过两类本地-only 误报，均已消除，可作同类问题的判例：
+  - `opentelemetry.exporter.otlp.proto.grpc.*` 的 `import-not-found`（本机没装，
+    `requirements.txt` 里有）→ 归入 `ignore_missing_imports`，两种环境都不再报错；
+  - `markitdown` 的 `convert()` 参数签名（本机装了、CI 不装）→ 复查发现**代码本身也是错的**
+    （给只接受 `str | Path | Response | BinaryIO` 的 API 传了裸 `bytes`），改成 `io.BytesIO`
+    后两边都对。**看到"环境差异"先确认代码是否真的对，别急着加豁免。**
 
 ### `frontend` — 前端（工作目录 `frontend-vue/`）
 

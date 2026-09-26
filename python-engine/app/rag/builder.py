@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import asyncio
+import io
 import logging
 import re
 import uuid
@@ -213,8 +214,10 @@ class RAGBuilder:
         try:
             from markitdown import MarkItDown
 
+            # markitdown 的 convert() 接受 str / Path / Response / BinaryIO，
+            # **不接受裸 bytes** —— 直接传 bytes 会落到下面的 except，解析器静默失效。
             md = MarkItDown()
-            result = md.convert(content)
+            result = md.convert(io.BytesIO(content))
             return {
                 "text": result.text_content,
                 "char_count": len(result.text_content),

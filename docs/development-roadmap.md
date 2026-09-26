@@ -22,7 +22,7 @@
 | `npm run lint` | 0 errors / **397 warnings** |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
-| `mypy`（已接线范围，见 L2-1） | 0 —— 98 个路径，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
+| `mypy app/`（strict，全量） | 0 —— 200 个源文件，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
 | `alembic -c alembic.ini heads` | 单 head：`0002_ent_chaos_experiments` |
 
 **i18n 基线已是空账本** —— 该护栏的作用从此变为「阻止任何新增硬编码中文」。
@@ -52,30 +52,33 @@
 
 ## 2. L2 质量门禁接线
 
-### L2-1 `mypy --strict` 分批接线
+### L2-1 ✅ `mypy --strict` 接入 CI（已清零，待首次 CI 运行确认）
 
-- **依据**：`python-engine/pyproject.toml` 已声明 `[tool.mypy] strict = true`，CI 的
-  `Mypy (strict)` step 只覆盖**已清零**的模块（`--follow-imports=silent` 让门禁只报告列出的模块）。
-- **进度**：接线前基线 **1171 条 / 130 文件（共 200 个源文件）**；已清 **24 批 1162 条**，
-  全部零行为变更、引擎套件 `1259 passed` 未变，门禁现列 **98 个路径**。各批范围与修复要点见
-  提交信息 `21a96ae` … `3b78a7a`，本文不重复维护。
-- **剩余 16 条 / 6 个文件**（`mypy app/`，本机 mypy 2.3.1）：
-
-  | 文件 | 条数 | 性质 |
-  |---|---|---|
-  | `api/plugins.py` | 5 | 真实缺陷：引用不存在的 `app.main.get_plugin_pool`（`main.py` 只有模块级 `_plugin_pool`）与 `Settings.log_dir` |
-  | `tools/browser.py` | 4 | 真实缺陷：`BrowserHub` Protocol 声明**同步**的 `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**（`ids` 会是 coroutine，`return ids[0]` 必 `TypeError`）；另 `app.observability.logging` 无 `get_logger` |
-  | `tools/media.py` | 3 | 对 `pymupdf.Document` 直接迭代（stub 无 `__iter__`）→ 照例在调用方豁免 `disallow_untyped_calls` |
-  | `batch_processor.py` | 2 | 真实缺陷：引用不存在的 `app.rag.builder.build_knowledge`（`RAGBuilder` 只有 `build_document`，签名也不同）+ 缺注解 |
-  | `observability/tracing.py` | 1 | **环境相关**：本机缺 `opentelemetry-exporter-otlp-proto-grpc`（`requirements.txt` 已声明，CI 有） |
-  | `rag/builder.py` | 1 | **环境相关**：本机 `markitdown` 版本高于 CI（可选后端，CI 不装） |
-
-  上表的「真实缺陷」三项（11 条）都不属「零行为变更」范围，需先定修法再动手；
-  两项「环境相关」在 CI 上不会出现（已列入 contributing.md 的已知本地-only 误报）。
-
-- **验收**：`mypy app/` 全绿后删掉 `--follow-imports=silent`，CI 改为 `mypy app/`。
-- **备选**（已排除）：1171 条不属于需要下调 `strict` 的量级 —— 备选阈值是「数万条」，
-  故不允许「声明 strict 却不跑」继续存在。
+- **依据**：`python-engine/pyproject.toml` 声明 `strict = true`，但 CI 的 python job
+  **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
+- **结果**：25 批分批接线把 `mypy app/` 从 **1171 条 / 130 文件**清到 **0 条 / 200 文件**；
+  `pyproject.toml` 的 `strict = true` 与实际门禁已一致，声明与执行不再脱节，
+  门禁也得以去掉 `--follow-imports=silent` 与那份 102 行的模块清单。
+  各批范围、修复要点与踩坑细节见提交信息 `21a96ae` … `bf4860f`，本文不重复维护；
+  接线手册（第三方库缺口的处理、platform、FastAPI 返回注解等约束）见
+  [贡献与验收流程](contributing.md)。
+- **收尾改动**（第二十五批，与之前 24 批的「纯标注补齐」不同 —— **这批改的是真实缺陷**）：
+  - `api/plugins.py`：两个端点 `from app.main import get_plugin_pool` 引用了**从不存在的**
+    访问器（`main.py` 只有模块级 `_plugin_pool`），必然 ImportError —— 补上访问器，
+    并让「池未启用」返回 `enabled=false` 而非 500（多实例按节点启用，本实例无池是预期状态）；
+    `Settings.log_dir` 是同一类空引用。
+  - `tools/browser.py`：`BrowserHub` Protocol 声明**同步**方法，而唯一生产实现
+    `GatewayBrowserHub` 是 **async** —— `ids` 会是 coroutine，`ids[0]` 必 `TypeError`；
+    另 `_init_default_hub` 引用不存在的 `app.observability.logging.get_logger`
+    （配了 `RPA_GATEWAY_URL` 时模块 import 即崩）。Protocol 与调用点统一改 async。
+  - `batch_processor.py`：`knowledge_index_batch` 引用从未存在的 `build_knowledge`，
+    按 `RAGBuilder.build_document` 的真实契约重接 —— ⚠ **该方法与整个 `BatchProcessor`
+    无调用方、无测试，重接逻辑需人工复核**。
+  - `rag/builder.py`：`MarkItDown.convert()` 只接受 `str | Path | Response | BinaryIO`，
+    代码却传裸 `bytes`，被 `except` 吞掉后解析器静默失效 —— 改 `io.BytesIO(content)`。
+- **待确认**：本分支从未 push、CI 一次都没跑过，上述结果全部来自本机隔离环境。
+  首次真正跑 CI 时留意「只装 `requirements.txt` + `requirements-dev.txt`」缺哪些**顶层**
+  import（第十批就是这样查出 `beautifulsoup4` 与 `aiohttp` 从未被声明）。
 
 ### L2-2 真实栈集成测试门禁（两侧当前都被永久跳过）
 
@@ -202,7 +205,7 @@
 
 | 批次 | 内容 | 理由 |
 |---|---|---|
-| **A. 门禁与文档**（性价比最高） | L2-1（mypy 分批接线）、L2-2（真实栈集成门禁）、L5-2（架构与请求链路） | 提升后续所有改动的可信度；L2-2 可能暴露存量缺陷（这正是价值） |
+| **A. 门禁与文档**（性价比最高） | L2-2（真实栈集成门禁）、L5-2（架构与请求链路） | 提升后续所有改动的可信度；L2-1 已清零，L2-2 可能暴露存量缺陷（这正是价值） |
 | **B. i18n 收尾** | L1-3（译文）、L1-4（语义化 key） | 必须在 `legacy` 展平之后做，否则译文不生效；L1-4 依赖 L1-3 |
 | **C. 跨层设计** | L4-1（run checkpoint 设计）、L4-2（CLI 决策）、L4-3（timestamptz） | 需设计评审或可达 PG；L4-3 是唯一的库结构变更 |
 | **D. 可维护性** | L3-2（剩 368 条 `any`）、L3-4（巨型文件拆分，若评估通过）、L3-7（补 `WorkflowView` 测试） | 无功能收益，放最后 |
@@ -221,10 +224,7 @@ python scripts/check_source_encoding.py
 python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
-# mypy 只覆盖 ci.yml「Mypy (strict)」step 里列出的模块（分批扩大，进度见 L2-1）；
-# --follow-imports=silent 让门禁只报告列出的模块（依赖由它们各自的门禁覆盖）
-ruff check . && mypy --follow-imports=silent <ci.yml 里的清单> \
-  && python -m pytest -q -m "not integration"
+ruff check . && mypy app/ && python -m pytest -q -m "not integration"
 
 # frontend-vue/
 pnpm install --frozen-lockfile && pnpm run lint && pnpm run build && pnpm run test
