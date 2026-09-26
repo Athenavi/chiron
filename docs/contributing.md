@@ -42,9 +42,10 @@ mypy --follow-imports=silent
   app/agent/multi_agent.py app/agent/profile.py app/agent/prompt_engine.py \
   app/agent/runtime.py app/agent/side_effect_ledger.py app/agent/subagent_runner.py \
   app/api/agents.py app/api/capabilities.py app/api/context.py app/api/knowledge.py \
-  app/api/media.py app/api/memory.py app/api/skills.py app/api/system.py \
-  app/api/unified_executor.py app/api/workflows.py app/chaos app/config.py \
-  app/context app/core app/db.py app/db_client.py app/engine_registry.py \
+  app/api/media.py app/api/memory.py app/api/plugins.py app/api/skills.py \
+  app/api/system.py app/api/unified_executor.py app/api/workflows.py \
+  app/batch_processor.py app/chaos app/config.py app/context app/core \
+  app/db.py app/db_client.py app/engine_registry.py \
   app/gateway/cache.py app/gateway/coalescer.py app/gateway/key_ring.py \
   app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
   app/interfaces app/knowledge app/llm app/main.py app/mcp/client.py \
@@ -58,9 +59,9 @@ mypy --follow-imports=silent
   app/skill/manager.py app/skill/store.py app/sse app/subagent/affinity.py \
   app/subagent/followup.py app/subagent/redact.py app/subagent/registry.py \
   app/subagent/reporting.py app/subagent/runtime_cache.py app/subagent/store.py \
-  app/tools/_sandbox_worker.py app/tools/client.py app/tools/code_guard.py \
+  app/tools/_sandbox_worker.py app/tools/browser.py app/tools/client.py app/tools/code_guard.py \
   app/tools/context.py app/tools/discovery.py app/tools/graph.py \
-  app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/memory.py \
+  app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/media.py app/tools/memory.py \
   app/tools/rag_query.py app/tools/registry.py app/tools/run_code.py \
   app/tools/skill.py app/tools/skill_catalog.py app/tools/ssrf.py \
   app/tools/subagent.py app/tools/terminal.py app/tools/web.py app/trace \

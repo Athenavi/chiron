@@ -20,14 +20,16 @@ import contextlib
 import json
 import logging
 import time
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, cast
 
 try:
     import resource
 except ImportError:
-    resource = None  # Windows doesn't have the resource module
-from dataclasses import dataclass
-from typing import Any
+    # Windows 无此模块。mypy 按 platform=linux 判定 import 必然成功，故用 cast
+    # 让本分支的赋值不报 assignment（运行期 cast 是恒等，行为不变）。
+    resource = cast(Any, None)
 
 from fastapi import APIRouter, HTTPException, Request
 
@@ -37,6 +39,10 @@ from app.tools.sandbox import sandboxed_env
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["plugins"])
+
+
+#: 池未在本实例启用时的说明（多实例部署按节点启用，本实例无池是预期内的）。
+_POOL_DISABLED_REASON = "plugin pool not enabled on this instance (mcp_pool_enabled=false or not started)"
 
 
 def _verify_gateway_key(request: Request) -> None:
@@ -53,6 +59,10 @@ async def plugin_status(request: Request) -> dict[str, Any]:
     from app.main import get_plugin_pool
 
     pool = get_plugin_pool()
+    if pool is None:
+        # 池未启用（mcp_pool_enabled=false）或 lifespan 未跑完：这是**正常状态**，
+        # 不是错误 —— 多实例部署按节点启用，本实例没有池是预期内的。
+        return {"ok": False, "enabled": False, "reason": _POOL_DISABLED_REASON}
     return {"ok": True, **pool.status()}
 
 
@@ -62,6 +72,8 @@ async def plugin_reload(request: Request) -> dict[str, Any]:
     from app.main import get_plugin_pool
 
     pool = get_plugin_pool()
+    if pool is None:
+        return {"ok": False, "enabled": False, "reason": _POOL_DISABLED_REASON}
     await pool.reconcile()
     return {"ok": True, **pool.status()}
 
@@ -172,7 +184,7 @@ async def run_plugin_in_sandbox(
 
 
 def _audit(
-    plugin_name: str, user_id: str, input_data: dict, result: dict, started: float
+    plugin_name: str, user_id: str, input_data: dict[str, Any], result: dict[str, Any], started: float
 ) -> None:
     """审计日志：每次插件执行一条 JSONL（失败不阻断主流程）。"""
     if not SANDBOX_CONFIG.audit_log_enabled:
@@ -180,9 +192,9 @@ def _audit(
     try:
         from app.config import settings
 
-        log_dir = (
-            Path(settings.log_dir) if getattr(settings, "log_dir", "") else Path("logs")
-        )
+        # Settings 上没有 log_dir 字段（原代码用 getattr 取它，兜底恒为真），
+        # 所以路径固定为 CWD 下的 logs/ —— 与 engine 的 logs/ 保持一致。
+        log_dir = Path(getattr(settings, "log_dir", "") or "logs")
         log_dir.mkdir(parents=True, exist_ok=True)
         entry = {
             "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),

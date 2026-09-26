@@ -24,6 +24,7 @@ if TYPE_CHECKING:
     # 已把注解字符串化），而 app.main 是被大量模块导入的入口，直接导入
     # app.agent.runtime 会形成循环导入。
     from app.agent.runtime import AgentRuntime
+    from app.plugins.pool import MCPClientPool
 
 # 全局会话消息缓存（lifespan 中接入 Redis 实现多实例共享）
 _session_cache = SessionStore(max_sessions=200)
@@ -47,6 +48,16 @@ _mcp_client = None  # MCPClient
 # lifespan 内部（那里用 global）—— 缺这个声明时，任何**早于** lifespan 完成的调用
 # （测试、启动早期、初始化失败分支）都会在 touch_user 里 NameError。
 _plugin_pool = None
+
+
+def get_plugin_pool() -> MCPClientPool | None:
+    """插件池访问器（供 `/v1/plugins/*` 内部端点读状态 / 触发 reconcile）。
+
+    实例在 lifespan 里按 `mcp_pool_enabled` 建：未启用、或 lifespan 尚未跑完时为 None
+    —— 调用方必须自己判空。此前 `app/api/plugins.py` 直接
+    `from app.main import get_plugin_pool` 引用一个不存在的函数，两个端点必然 ImportError。
+    """
+    return _plugin_pool
 
 
 # ── FastAPI 依赖注入 ──

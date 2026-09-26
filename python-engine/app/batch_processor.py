@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 class BatchProcessor:
     """批量任务处理器"""
 
-    def __init__(self, gateway=None, redis=None):
+    def __init__(self, gateway: Any = None, redis: Any = None):
         self._gateway = gateway
         self._redis = redis
 
@@ -148,7 +148,10 @@ class BatchProcessor:
         Returns:
             每项处理结果 {doc_id, status, chunks, error}
         """
-        from app.rag.builder import build_knowledge
+        # 原本 import 的是 app.rag.builder.build_knowledge —— 该函数**从未存在**
+        # （RAGBuilder 上只有 build_document，且签名是字节流 + 文件类型），
+        # 所以本方法一进来就 ImportError。现按 RAGBuilder 的真实契约重接。
+        from app.rag.builder import RAGBuilder
         from app.rag.stores.milvus_store import MilvusStore
 
         vector_store = None
@@ -161,29 +164,35 @@ class BatchProcessor:
         except Exception as e:
             logger.warning("knowledge_index_batch: Milvus unavailable: %s", e)
 
-        # 从环境获取嵌入模型
-        embed_model = settings.llm_model or "text-embedding-3-small"
+        # 嵌入模型由 RAGBuilder 按 settings 自行决定（build_document 不接受该参数）
+        builder = RAGBuilder(llm_gateway=self._gateway, vector_store=vector_store)
 
         sem = asyncio.Semaphore(concurrency)
 
         async def _index(doc: dict[str, Any]) -> dict[str, Any]:
             async with sem:
                 doc_id = doc.get("id", uuid.uuid4().hex)
+                metadata = doc.get("metadata") or {}
                 try:
-                    result = await build_knowledge(
-                        doc_id=doc_id,
+                    # build_document 是异步生成器（SSE 进度流），批量场景只取终点事件
+                    chunk_count = 0
+                    async for event in builder.build_document(
                         kb_id=kb_id,
+                        doc_id=doc_id,
+                        content=str(doc.get("content", "")).encode("utf-8"),
+                        file_type=str(metadata.get("file_type") or "txt"),
+                        filename=str(metadata.get("filename") or doc_id),
                         tenant_id=tenant_id,
-                        content=doc.get("content", ""),
-                        metadata=doc.get("metadata", {}),
-                        embed_model=embed_model,
-                        vector_store=vector_store,
-                        gateway=self._gateway,
-                    )
+                    ):
+                        kind = event.get("type")
+                        if kind == "error":
+                            raise RuntimeError(str(event.get("message") or "build failed"))
+                        if kind == "complete":
+                            chunk_count = int(event.get("chunk_count") or 0)
                     return {
                         "doc_id": doc_id,
                         "status": "success",
-                        "chunks": result.get("chunks", 0),
+                        "chunks": chunk_count,
                     }
                 except Exception as e:
                     logger.error("knowledge index doc %s failed: %s", doc_id, e)

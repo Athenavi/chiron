@@ -143,5 +143,5 @@ ignore_missing_imports = true
 # strict 的 disallow_untyped_calls 由**调用方**判定，因此豁免要落在调用它的文件上。
 # 这是 pymupdf 自身的标注缺口，不是本仓库代码的问题；该文件其余检查项照常。
 [[tool.mypy.overrides]]
-module = ["app.rag.parser", "app.main"]
+module = ["app.rag.parser", "app.main", "app.tools.media"]
 disallow_untyped_calls = false

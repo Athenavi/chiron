@@ -14,7 +14,7 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
@@ -482,7 +482,11 @@ async def file_analyzer(
             import pymupdf
 
             doc = pymupdf.open(stream=file_data, filetype="pdf")
-            text = "\n".join(page.get_text() for page in doc)
+            # pymupdf 自带 py.typed，但 Document 的 stub 缺 __iter__（运行期按页可迭代），
+            # 且 open/close 无注解（后者由 pyproject 对该文件豁免 untyped-calls）。
+            text = "\n".join(
+                page.get_text() for page in cast("list[Any]", doc)
+            )
             doc.close()
         elif is_csv:
             text = file_data.decode("utf-8", errors="replace")
