@@ -69,7 +69,8 @@ jobs:
           app/agent/collaboration.py app/agent/event_sink.py app/agent/guards.py
           app/agent/loop.py app/agent/message_codec.py app/agent/modes.py
           app/agent/multi_agent.py app/agent/profile.py app/agent/prompt_engine.py
-          app/agent/side_effect_ledger.py app/agent/subagent_runner.py app/api/agents.py
+          app/agent/runtime.py app/agent/side_effect_ledger.py app/agent/subagent_runner.py
+          app/api/agents.py
           app/api/capabilities.py app/api/context.py app/api/knowledge.py
           app/api/media.py app/api/memory.py app/api/skills.py app/api/system.py
           app/api/unified_executor.py app/api/workflows.py app/chaos app/config.py

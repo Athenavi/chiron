@@ -11,13 +11,17 @@ import logging
 import time
 from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 from app.agent.modes import CORE_TOOL_NAMES, AgentMode, ModeConfig, get_mode_config
 from app.config import settings
 from app.gateway.router import GatewayRouter
 from app.tools.registry import SOURCE_BUILTIN, SOURCE_MCP
 from app.tools.registry import registry as local_tool_registry
+
+if TYPE_CHECKING:
+    from app.agent.task_budget import TaskBudget
+    from app.gateway.provider import ChatMessage
 
 logger = logging.getLogger(__name__)
 
@@ -44,8 +48,8 @@ ASK_ANSWER_TTL_SECONDS = 300.0
 
 
 def _restrict_tools_to_plugins(
-    tools: list[dict], workbench_context: dict | None
-) -> list[dict]:
+    tools: list[dict[Any, Any]] | None, workbench_context: dict[Any, Any] | None
+) -> list[dict[Any, Any]] | None:
     """按"带进对话的插件"限定工具集（workbench_context.plugin_names）。
 
     语义（用户在对话里选了插件 = MCP server）：
@@ -56,11 +60,13 @@ def _restrict_tools_to_plugins(
     名字：MCP 工具注册时带 ``{server}_{tool}`` 命名空间（app/mcp/client.py），但那
     只是命名约定，不足以作为"这是不是 MCP 工具"的依据。
     """
+    if not tools:
+        return tools
     plugin_names = _plugin_names_of(workbench_context)
     if not plugin_names:
         return tools
 
-    kept: list[dict] = []
+    kept: list[dict[Any, Any]] = []
     for tool in tools:
         name = _tool_name_of(tool)
         definition = local_tool_registry.get(name) if name else None
@@ -74,7 +80,7 @@ def _restrict_tools_to_plugins(
     return kept
 
 
-def _plugin_names_of(workbench_context: dict | None) -> list[str]:
+def _plugin_names_of(workbench_context: dict[Any, Any] | None) -> list[str]:
     """读本次对话选中的插件名（MCP server 名）；未选或形状不对时返回空。"""
     if not isinstance(workbench_context, dict):
         return []
@@ -90,15 +96,17 @@ def _plugin_names_of(workbench_context: dict | None) -> list[str]:
     return out
 
 
-def _tool_name_of(tool: dict) -> str:
+def _tool_name_of(tool: dict[Any, Any]) -> str:
     """取工具名：兼容 OpenAI 的 ``{function: {name}}`` 与本项目的扁平形态。"""
     if not isinstance(tool, dict):
         return ""
     function = tool.get("function")
-    if isinstance(function, dict) and isinstance(function.get("name"), str):
-        return function["name"].strip()
-    name = tool.get("name")
-    return name.strip() if isinstance(name, str) else ""
+    if isinstance(function, dict):
+        name = function.get("name")
+        if isinstance(name, str):
+            return name.strip()
+    raw = tool.get("name")
+    return raw.strip() if isinstance(raw, str) else ""
 
 
 @dataclass(frozen=True)
@@ -129,9 +137,9 @@ def _normalize_msg(
     role: str,
     content: str = "",
     tool_call_id: str = "",
-    tool_calls: list | None = None,
-    **extra,
-) -> dict:
+    tool_calls: list[dict[str, Any]] | None = None,
+    **extra: Any,
+) -> dict[str, Any]:
     """规范化消息：中立格式（provider-agnostic，SaaS 架构决策）。
 
     内部一律使用中立格式 {role, content, tool_call_id, tool_calls:[{id,name,arguments}]}，
@@ -148,21 +156,21 @@ def _normalize_msg(
     )
 
 
-def _to_chat_messages(messages: list[dict]):
+def _to_chat_messages(messages: list[dict[str, Any]]) -> list[ChatMessage]:
     """中立格式 → gateway.ChatMessage（provider 边界，新增提供商在此适配）。"""
     from app.agent.message_codec import to_chat_messages
 
     return to_chat_messages(messages)
 
 
-def _auto_normalize(messages: list[dict]) -> list[dict]:
+def _auto_normalize(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """自动推断消息格式并统一中立格式（OpenAI/Anthropic/Gemini/中立）。"""
     from app.agent.message_codec import auto_normalize
 
     return auto_normalize(messages)
 
 
-def _estimate_tokens(messages: list[dict]) -> int:
+def _estimate_tokens(messages: list[dict[str, Any]]) -> int:
     """Token 估算（4 chars ≈ 1 token）"""
     total = 0
     for m in messages:
@@ -195,7 +203,7 @@ def _truncate_text(
     return f"{head}...(truncated {middle_len} chars)...{tail}"
 
 
-def _sanitize_tool_result(result: dict) -> str:
+def _sanitize_tool_result(result: dict[Any, Any]) -> str:
     """工具结果 → 清洗后的文本（脱敏宿主路径 / secret）。
 
     压缩与截断都从这一步开始：**先进上下文的内容必须先过输出清洗**，
@@ -207,7 +215,9 @@ def _sanitize_tool_result(result: dict) -> str:
     return OutputGuard(max_hits=1000).sanitize(text)
 
 
-def _truncate_tool_result(result: dict, cfg: CompactionConfig | None = None) -> str:
+def _truncate_tool_result(
+    result: dict[Any, Any], cfg: CompactionConfig | None = None
+) -> str:
     """清洗 + head/tail 截断（既有行为，engine.py 等调用方仍复用）。"""
     text = _sanitize_tool_result(result)
     if cfg is not None:
@@ -221,7 +231,9 @@ def _truncate_tool_result(result: dict, cfg: CompactionConfig | None = None) -> 
 LOOP_GUARD_TAG = "[loop-guard]"
 
 
-def _loop_guard_result(verdict: Any, previous: dict | None = None) -> dict:
+def _loop_guard_result(
+    verdict: Any, previous: dict[Any, Any] | None = None
+) -> dict[str, Any]:
     """把循环判定做成工具结果。
 
     **保留原结果**（模型仍看得到已经拿到的内容），只在后面附一条可执行的要求 ——
@@ -241,11 +253,11 @@ def _loop_guard_result(verdict: Any, previous: dict | None = None) -> dict:
 
 
 def _snip_tool_results(
-    messages: list[dict], cfg: CompactionConfig | None = None
-) -> list[dict]:
+    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+) -> list[dict[str, Any]]:
     """Snip 阶段：压缩旧工具结果（保留 head + tail），user/assistant 消息不动"""
     cfg = cfg or CompactionConfig()
-    result = []
+    result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.get("role") == "tool" and msg.get("tool_call_id"):
             content = msg.get("content", "")
@@ -263,8 +275,8 @@ def _snip_tool_results(
 
 
 def _prune_messages(
-    messages: list[dict], cfg: CompactionConfig | None = None
-) -> list[dict]:
+    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+) -> list[dict[str, Any]]:
     """Prune 阶段：不区分消息类型，保留系统提示 + 最近非系统消息
 
     策略：
@@ -278,7 +290,7 @@ def _prune_messages(
     other_msgs = [m for m in messages if m.get("role") != "system"]
 
     # 处理工具消息：截断而非占位符（占位符会让 AI 丢失工具结果上下文）
-    processed = []
+    processed: list[dict[str, Any]] = []
     for m in other_msgs:
         if m.get("role") == "tool" and m.get("tool_call_id"):
             processed.append(
@@ -343,8 +355,8 @@ def _prune_messages(
 
 
 def _compact_messages(
-    messages: list[dict], cfg: CompactionConfig | None = None
-) -> list[dict]:
+    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+) -> list[dict[str, Any]]:
     """分级压缩：根据配置的策略、上下文压力和消息数量选择压缩方式
 
     策略（cfg.strategy）：
@@ -389,7 +401,9 @@ def _compact_messages(
     return messages  # 无需压缩
 
 
-def _ensure_valid_tool_sequence(messages: list[dict]) -> list[dict]:
+def _ensure_valid_tool_sequence(
+    messages: list[dict[str, Any]]
+) -> list[dict[str, Any]]:
     """修复消息序列中的工具调用配对，保证 OpenAI/DeepSeek API 兼容。
 
     双向修复：
@@ -399,11 +413,11 @@ def _ensure_valid_tool_sequence(messages: list[dict]) -> list[dict]:
        assistant.tool_calls 中移除（保留 content），否则 API 报
        "assistant message with tool_calls must be followed by tool messages"
     """
-    result = []
-    pending_tc: dict | None = None  # 暂存的 assistant(tool_calls)
-    pending_ids: set = set()  # 其声明的 tool_call_id
-    answered_ids: set = set()  # 已收到 tool 结果的 id
-    pending_tools: list[dict] = []  # 匹配的 tool 消息（flush 时排在 assistant 后）
+    result: list[dict[str, Any]] = []
+    pending_tc: dict[str, Any] | None = None  # 暂存的 assistant(tool_calls)
+    pending_ids: set[str] = set()  # 其声明的 tool_call_id
+    answered_ids: set[str] = set()  # 已收到 tool 结果的 id
+    pending_tools: list[dict[str, Any]] = []  # 匹配的 tool 消息（flush 时排在 assistant 后）
 
     def _flush_pending() -> None:
         nonlocal pending_tc
@@ -427,7 +441,7 @@ def _ensure_valid_tool_sequence(messages: list[dict]) -> list[dict]:
         if role == "assistant" and msg.get("tool_calls"):
             _flush_pending()
             pending_tc = dict(msg)
-            pending_ids = {tc.get("id") for tc in msg["tool_calls"]}
+            pending_ids = {cast(str, tc.get("id")) for tc in msg["tool_calls"]}
             answered_ids = set()
             pending_tools = []
             continue
@@ -436,7 +450,7 @@ def _ensure_valid_tool_sequence(messages: list[dict]) -> list[dict]:
             and pending_tc is not None
             and msg.get("tool_call_id") in pending_ids
         ):
-            answered_ids.add(msg.get("tool_call_id"))
+            answered_ids.add(cast(str, msg.get("tool_call_id")))
             pending_tools.append(msg)
             continue
         if role == "tool":
@@ -461,17 +475,17 @@ class AgentTask:
     session_id: str
     content: str
     system_prompt: str = ""
-    history: list[dict] = field(default_factory=list)
-    tools: list[dict] = field(default_factory=list)
-    llm_config: dict = field(default_factory=dict)
+    history: list[dict[str, Any]] = field(default_factory=list)
+    tools: list[dict[str, Any]] = field(default_factory=list)
+    llm_config: dict[str, Any] = field(default_factory=dict)
     max_turns: int = 5
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
     #: 工作台上下文（前端 ChatView.buildContext 组装并经 Go 透传）：
     #: kb_id / agent / agent_id / skill_names[] / workflow_id。引擎侧按需消费。
-    workbench_context: dict = field(default_factory=dict)
+    workbench_context: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
-    def parse(cls, data: dict) -> AgentTask:
+    def parse(cls, data: dict[str, Any]) -> AgentTask:
         """从字典解析任务"""
         return cls(
             id=data.get("task_id", ""),
@@ -572,10 +586,10 @@ class AgentRuntime:
     def __init__(
         self,
         gateway: GatewayRouter,
-        tool_executor=None,
-        sse_producer=None,
-        session_store=None,
-        memory=None,
+        tool_executor: Any = None,
+        sse_producer: Any = None,
+        session_store: Any = None,
+        memory: Any = None,
     ):
         self._gateway = gateway
         self._tool_executor = tool_executor
@@ -594,9 +608,9 @@ class AgentRuntime:
         self._tool_guard = ToolGuard()
         self._output_guard = OutputGuard(max_hits=3)
         # 待确认工具调用 future（外部经 submit_approval 解决）
-        self._pending_approvals: dict[str, asyncio.Future] = {}
+        self._pending_approvals: dict[str, asyncio.Future[Any]] = {}
         # 待回答的 ask_user 调用 future（外部经 submit_answer 回填答案，值为 str）
-        self._pending_answers: dict[str, asyncio.Future] = {}
+        self._pending_answers: dict[str, asyncio.Future[Any]] = {}
         # 工具授权模式（ask/auto/yolo）：随请求携带（llm_config.tools_mode），
         # `run()` 开始时采用一次，供每次工具调用裁决使用（见 guards.resolve_tools_mode）
         self._current_mode: str = SESSION_MODE_AUTO
@@ -608,12 +622,12 @@ class AgentRuntime:
 
         self._loop_guard = LoopGuard()
         # 任务预算与步数计数：由 run() 开头按环境变量重建（见 0.4b）
-        self._budget = None
+        self._budget: TaskBudget | None = None
         self._tool_steps = 0
 
     @staticmethod
     def _resolve_compaction(
-        mode_cfg: ModeConfig, llm_config: dict
+        mode_cfg: ModeConfig, llm_config: dict[str, Any]
     ) -> CompactionConfig | None:
         """解析截断策略：llm_config["compaction"]（逐任务覆盖）> mode_cfg.compaction（模式/租户配置）> 默认。"""
         override = (llm_config or {}).get("compaction")
@@ -624,8 +638,8 @@ class AgentRuntime:
         return None
 
     def _compact_with_notice(
-        self, messages: list[dict], mode_cfg: ModeConfig, llm_config: dict
-    ) -> tuple[list[dict], AgentEvent | None]:
+        self, messages: list[dict[str, Any]], mode_cfg: ModeConfig, llm_config: dict[str, Any]
+    ) -> tuple[list[dict[str, Any]], AgentEvent | None]:
         """压缩上下文；**真的压缩了**才返回一个 compaction 事件（否则 None）。
 
         背景（问题 4）：自动压缩早就实现了（`_compact_messages` 的分级 SNIP/PRUNE 策略），
@@ -700,7 +714,8 @@ class AgentRuntime:
         # 产出 `budget_exceeded:<轴>`，前端能看到原因，而不是静默中断。
         from app.agent.task_budget import from_env as _budget_from_env
 
-        self._budget = _budget_from_env()
+        budget = _budget_from_env()
+        self._budget = budget
         self._tool_steps = 0
 
         # ── 0. 输入栅栏：注入检测（S 安全修复）────────────────────────────
@@ -734,7 +749,7 @@ class AgentRuntime:
             # subagent 工具按名字取它，让 child 扮演该专家而不是通用助手 —— 这就是
             # "多选 Agent"的落地形态：一个人格 + 若干可请教的专家。
             agent_conf = (task.workbench_context or {}).get("agent")
-            experts: list[dict] = []
+            experts: list[dict[str, Any]] = []
             if isinstance(agent_conf, dict):
                 experts = [
                     e
@@ -925,7 +940,7 @@ class AgentRuntime:
                 # turns / tokens / wall 在这里判，steps 在每次工具调用后判（见下）。
                 # 越界产出 `budget_exceeded:<轴>` 并收尾 —— 与子 Agent 同一语义：是**失败**，
                 # 不是静默取消，用户能看到"为什么停了"。
-                exceeded = self._budget.exceeded(
+                exceeded = budget.exceeded(
                     steps=self._tool_steps,
                     turns=turn,
                     tokens=total_input_tokens + total_output_tokens,
@@ -935,7 +950,7 @@ class AgentRuntime:
                         "Agent budget exceeded (axis=%s, task=%s, budget=%s)",
                         exceeded,
                         task.id,
-                        self._budget.describe(),
+                        budget.describe(),
                     )
                     yield AgentEvent(
                         type="error",
@@ -988,7 +1003,7 @@ class AgentRuntime:
                 # 调用 LLM (带 trace span 记录)
                 response_content = ""
                 reasoning_content = ""
-                tool_calls = []
+                tool_calls: list[dict[str, Any]] = []
                 has_reasoned = (
                     False  # 是否已收到 native reasoning_content（DeepSeek 模式）
                 )
@@ -1054,19 +1069,19 @@ class AgentRuntime:
 
                     # 工具调用
                     if chunk.tool_calls:
-                        for tc in chunk.tool_calls:
+                        for chunk_tc in chunk.tool_calls:
                             tool_calls.append(
                                 {
-                                    "id": tc.id,
-                                    "name": tc.name,
-                                    "arguments": tc.arguments,
+                                    "id": chunk_tc.id,
+                                    "name": chunk_tc.name,
+                                    "arguments": chunk_tc.arguments,
                                 }
                             )
                             yield AgentEvent(
                                 type="tool_call",
-                                tool_call_id=tc.id,
-                                tool_name=tc.name,
-                                tool_arguments=tc.arguments,
+                                tool_call_id=chunk_tc.id,
+                                tool_name=chunk_tc.name,
+                                tool_arguments=chunk_tc.arguments,
                             )
 
                     # Token 用量
@@ -1131,7 +1146,7 @@ class AgentRuntime:
                     logger.warning(
                         "Dropping truncated tool_calls (finish_reason=length, task=%s): %s",
                         task.id,
-                        [tc["name"] for tc in tool_calls],
+                        [call["name"] for call in tool_calls],
                     )
                     messages.append(
                         _normalize_msg(
@@ -1139,33 +1154,33 @@ class AgentRuntime:
                             content=response_content or "",
                             tool_calls=[
                                 {
-                                    "id": tc["id"],
+                                    "id": call["id"],
                                     "function": {
-                                        "name": tc["name"],
-                                        "arguments": tc["arguments"],
+                                        "name": call["name"],
+                                        "arguments": call["arguments"],
                                     },
                                 }
-                                for tc in tool_calls
+                                for call in tool_calls
                             ],
                         )
                     )
-                    for tc in tool_calls:
+                    for call in tool_calls:
                         notice = (
                             f"error: output truncated by max_tokens before tool "
-                            f"'{tc['name']}' was complete; its arguments may be "
+                            f"'{call['name']}' was complete; its arguments may be "
                             f"incomplete. Re-issue the full tool call."
                         )
                         yield AgentEvent(
                             type="tool_result",
-                            tool_call_id=tc["id"],
-                            tool_name=tc["name"],
+                            tool_call_id=call["id"],
+                            tool_name=call["name"],
                             content=json.dumps({"error": notice}, ensure_ascii=False),
                             trace_id=trace_id,
                         )
                         # 补齐 tool_result，保证 assistant(tool_calls) 配对完整
                         messages.append(
                             _normalize_msg(
-                                role="tool", content=notice, tool_call_id=tc["id"]
+                                role="tool", content=notice, tool_call_id=call["id"]
                             )
                         )
                     _last_reasoning = reasoning_content
@@ -1177,49 +1192,52 @@ class AgentRuntime:
                     # 先追加一条 assistant 消息，包含所有 tool_calls（OpenAI API 格式要求）
                     all_tool_calls = [
                         {
-                            "id": tc["id"],
+                            "id": call["id"],
                             "function": {
-                                "name": tc["name"],
-                                "arguments": tc["arguments"],
+                                "name": call["name"],
+                                "arguments": call["arguments"],
                             },
                         }
-                        for tc in tool_calls
+                        for call in tool_calls
                     ]
-                    tc_msg_kwargs = {
+                    tc_msg_kwargs: dict[str, Any] = {
                         "role": "assistant",
                         "content": response_content or "",
                         "tool_calls": all_tool_calls,
                     }
                     messages.append(_normalize_msg(**tc_msg_kwargs))
 
-                    for tc in tool_calls:
-                        if tc.get("name") == ASK_USER_TOOL:
+                    for call in tool_calls:
+                        if call.get("name") == ASK_USER_TOOL:
                             # 提问不执行任何副作用：先发 ask 事件（前端弹卡片），再等答案回填。
                             # 顺序不可颠倒，否则前端收不到事件、任务永久挂起。
-                            yield self._ask_event(tc)
-                            tool_result = await self._await_answer(tc, task)
+                            yield self._ask_event(call)
+                            tool_result = await self._await_answer(call, task)
                         else:
                             # 循环护栏（**执行前**）：重复调用与来回摆动必须在这里拦下 ——
                             # 放到执行后就晚了，重复的写操作已经落盘。命中即跳过执行，
                             # 把"你在重复"作为结果回灌，让模型换策略而不是继续烧钱。
                             call_verdict = self._loop_guard.observe_call(
-                                tc["name"], tc.get("arguments")
+                                call["name"], call.get("arguments")
                             )
                             if call_verdict.hit:
                                 logger.warning(
-                                    "loop guard: %s (tool=%s)", call_verdict.detail, tc["name"]
+                                    "loop guard: %s (tool=%s)", call_verdict.detail, call["name"]
                                 )
                                 tool_result = _loop_guard_result(call_verdict)
                             else:
                                 # 工具栅栏：三态裁决（S 安全修复）——block/confirm/allow
-                                tool_result, approval_evt = await self._guarded_execute_tool(
-                                    tc, task
+                                exec_result, approval_evt = await self._guarded_execute_tool(
+                                    call, task
                                 )
                                 if approval_evt is not None:
                                     # 先转发用户确认事件（前端展示确认卡片，回调 /v1/agent/approval），
                                     # 再等待用户批准/拒绝——顺序不可颠倒，否则前端收不到事件、任务永久挂起
                                     yield approval_evt
-                                    tool_result = await self._await_approval(tc, task)
+                                    exec_result = await self._await_approval(call, task)
+                                # confirm 分支不执行工具（exec_result 为 None），决策回来后由
+                                # _await_approval 补上真实结果；两条路到此处都已是真实结果。
+                                tool_result = exec_result if exec_result is not None else {}
                                 # 循环护栏（**执行后**）：换了工具/参数，结果却始终一样 → 无进展
                                 progress_verdict = self._loop_guard.observe_result(tool_result)
                                 if progress_verdict.hit:
@@ -1229,7 +1247,7 @@ class AgentRuntime:
                         # ── 预算：步数轴 ──
                         # `max_turns` 限的是"轮"，而一轮里可以调任意多次工具 —— 这是最直接的漏口。
                         self._tool_steps += 1
-                        if self._budget.exceeded(steps=self._tool_steps) == "steps":
+                        if budget.exceeded(steps=self._tool_steps) == "steps":
                             logger.warning(
                                 "Agent budget exceeded (axis=steps, steps=%d, task=%s)",
                                 self._tool_steps,
@@ -1243,14 +1261,14 @@ class AgentRuntime:
                             return
 
                         # 副作用账本：记下这次动用了什么能力、能不能撤销
-                        await self._record_side_effect(task, tc, tool_result)
+                        await self._record_side_effect(task, call, tool_result)
 
                         # 记录工具执行结果 (带 trace span)
                         tool_start = time.time()
                         yield AgentEvent(
                             type="tool_result",
-                            tool_call_id=tc["id"],
-                            tool_name=tc["name"],
+                            tool_call_id=call["id"],
+                            tool_name=call["name"],
                             content=json.dumps(tool_result, ensure_ascii=False),
                             trace_id=trace_id,
                         )
@@ -1259,22 +1277,22 @@ class AgentRuntime:
                         tool_duration = int((time.time() - tool_start) * 1000)
                         await record_span(
                             trace_id=trace_id,
-                            span_name=f"tool:{tc['name']}",
+                            span_name=f"tool:{call['name']}",
                             duration_ms=tool_duration,
                             metadata={
-                                "tool_name": tc["name"],
+                                "tool_name": call["name"],
                                 "success": tool_result.get("error") is None,
                             },
                             tenant_id=task.tenant_id,  # SaaS 安全: 租户隔离
                         )
 
                         # tool 结果消息（清洗 → 分级 → 大结果结构摘要 + 落盘引用）
-                        truncated = await self._compact_tool_result(tool_result, task, tc)
+                        truncated = await self._compact_tool_result(tool_result, task, call)
                         messages.append(
                             _normalize_msg(
                                 role="tool",
                                 content=truncated,
-                                tool_call_id=tc["id"],
+                                tool_call_id=call["id"],
                             )
                         )
 
@@ -1290,7 +1308,10 @@ class AgentRuntime:
                 # 无工具调用，推理完成
                 if response_content:
                     _answered = True
-                    msg_kwargs = {"role": "assistant", "content": response_content}
+                    msg_kwargs: dict[str, Any] = {
+                        "role": "assistant",
+                        "content": response_content,
+                    }
                     if reasoning_content:
                         msg_kwargs["reasoning_content"] = reasoning_content
                     messages.append(_normalize_msg(**msg_kwargs))
@@ -1417,9 +1438,9 @@ class AgentRuntime:
                 except Exception:
                     logger.exception("Session cache save on exit failed")
 
-    def _build_messages(self, task: AgentTask) -> list[dict]:
+    def _build_messages(self, task: AgentTask) -> list[dict[str, Any]]:
         """构建 LLM 消息列表（完整路径：system + history + 当前用户消息）"""
-        messages = []
+        messages: list[dict[str, Any]] = []
         if task.system_prompt:
             messages.append(_normalize_msg(role="system", content=task.system_prompt))
         for msg in task.history:
@@ -1435,9 +1456,9 @@ class AgentRuntime:
             messages.append(_normalize_msg(role="user", content=task.content))
         return messages
 
-    def _build_history_msgs(self, task: AgentTask) -> list[dict]:
+    def _build_history_msgs(self, task: AgentTask) -> list[dict[str, Any]]:
         """构建仅含历史的消息列表（不含当前用户消息，供 session cache 使用）"""
-        messages = []
+        messages: list[dict[str, Any]] = []
         if task.system_prompt:
             messages.append(_normalize_msg(role="system", content=task.system_prompt))
         for msg in task.history:
@@ -1451,7 +1472,9 @@ class AgentRuntime:
             )
         return messages
 
-    def _get_core_tools(self, mode_cfg: ModeConfig | None = None) -> list[dict] | None:
+    def _get_core_tools(
+        self, mode_cfg: ModeConfig | None = None
+    ) -> list[dict[str, Any]] | None:
         """按模式过滤返回工具列表（Token Economy：只暴露模式允许的工具）。
 
         mode_cfg 省略时用 NORMAL；过滤后为空（如极简模式注册不全）回退全量核心工具。
@@ -1484,9 +1507,9 @@ class AgentRuntime:
         )
         return core if core else None
 
-    def _convert_tools(self, tools: list[dict]) -> list[dict]:
+    def _convert_tools(self, tools: list[dict[str, Any]]) -> list[dict[str, Any]]:
         """将工具定义转换为 OpenAI function 格式"""
-        converted = []
+        converted: list[dict[str, Any]] = []
         for tool in tools:
             converted.append(
                 {
@@ -1505,8 +1528,8 @@ class AgentRuntime:
         return converted
 
     async def _guarded_execute_tool(
-        self, tool_call: dict, task: AgentTask
-    ) -> tuple[dict | None, AgentEvent | None]:
+        self, tool_call: dict[Any, Any], task: AgentTask
+    ) -> tuple[dict[Any, Any] | None, AgentEvent | None]:
         """工具栅栏三态裁决：block（拒绝）/ confirm（需要用户确认）/ allow（直接执行）。
 
         返回 ``(tool_result, approval_event_or_None)``：
@@ -1639,8 +1662,8 @@ class AgentRuntime:
         return await self._execute_tool(tool_call, task), None
 
     async def _await_approval(
-        self, tool_call: dict, task: AgentTask, timeout: float = 300.0
-    ) -> dict:
+        self, tool_call: dict[Any, Any], task: AgentTask, timeout: float = 300.0
+    ) -> dict[Any, Any]:
         """等待用户对确认工具调用的决定（前端经 /v1/agent/approval → 本方法）。
 
         必须在 yield approval 事件**之后**调用；批准后执行工具，拒绝/超时返回错误。
@@ -1696,7 +1719,9 @@ class AgentRuntime:
 
     # ── 副作用账本（可观察性 + 事前明示）────────────────────────────────
 
-    async def _record_side_effect(self, task: AgentTask, tool_call: dict, result: object) -> None:
+    async def _record_side_effect(
+        self, task: AgentTask, tool_call: dict[Any, Any], result: object
+    ) -> None:
         """把这次工具调用的副作用记进账本（只记 write/delete/external）。
 
         只读操作**不留痕** —— 账本是"副作用清单"，把 read 也记进去只会让真正要紧的
@@ -1729,7 +1754,9 @@ class AgentRuntime:
 
     # ── 工具结果压缩（截断 ≠ 摘要；大结果落盘 + 引用）──────────────────────
 
-    async def _compact_tool_result(self, result: dict, task: AgentTask, tool_call: dict) -> str:
+    async def _compact_tool_result(
+        self, result: dict[Any, Any], task: AgentTask, tool_call: dict[Any, Any]
+    ) -> str:
         """工具结果进上下文前的处理：清洗 → 分级 →（大结果）结构摘要 + 落盘引用。
 
         为什么不直接截断：`head + tail` 会把日志里的错误行、长列表里的关键项、JSON 的中间
@@ -1789,7 +1816,9 @@ class AgentRuntime:
         except Exception as e:  # noqa: BLE001 - 票据写失败不该阻断审批
             logger.warning("approval ticket store failed (id=%s): %s", ticket.tool_call_id, e)
 
-    async def _second_check_approval(self, tool_call: dict, task: AgentTask) -> str:
+    async def _second_check_approval(
+        self, tool_call: dict[Any, Any], task: AgentTask
+    ) -> str:
         """执行前二次校验；返回拒绝原因（空串 = 通过）。
 
         校验三项：票据存在、`tool_name` 一致、`turn_id` 与**本次提交**一致、参数哈希一致。
@@ -1841,11 +1870,11 @@ class AgentRuntime:
         return ""
 
     async def _wait_approval_decision(
-        self, tc_id: str, future: asyncio.Future, timeout: float
+        self, tc_id: str, future: asyncio.Future[Any], timeout: float
     ) -> bool | None:
         """本地 Future 与 Redis 决策键竞争，返回 True/False；超时返回 None。"""
         poll = asyncio.create_task(self._poll_remote_decision(tc_id, timeout))
-        waiters: list[asyncio.Future] = [poll, asyncio.ensure_future(future)]
+        waiters: list[asyncio.Future[Any]] = [poll, asyncio.ensure_future(future)]
         try:
             done, _pending = await asyncio.wait(
                 waiters, return_when=asyncio.FIRST_COMPLETED
@@ -1926,7 +1955,7 @@ class AgentRuntime:
             return False
 
     # ── 结构化提问（ask_user）：与审批同构的答案回收通道 ──────────────
-    def _ask_event(self, tool_call: dict) -> AgentEvent:
+    def _ask_event(self, tool_call: dict[Any, Any]) -> AgentEvent:
         """登记待回答 future 并构造 ask 事件。
 
         **不在本方法内等待**：调用方必须先 yield 该事件（否则前端收不到提问卡片，
@@ -1943,7 +1972,7 @@ class AgentRuntime:
             targs = {}
         targs = targs or {}
         loop = asyncio.get_running_loop()
-        future: asyncio.Future = loop.create_future()
+        future: asyncio.Future[Any] = loop.create_future()
         self._pending_answers[tc_id] = future
         options = targs.get("options")
         logger.info("ask_user awaiting answer (id=%s)", tc_id)
@@ -1957,8 +1986,8 @@ class AgentRuntime:
         )
 
     async def _await_answer(
-        self, tool_call: dict, task: AgentTask, timeout: float = 300.0
-    ) -> dict:
+        self, tool_call: dict[Any, Any], task: AgentTask, timeout: float = 300.0
+    ) -> dict[Any, Any]:
         """等待用户回答（前端经 /v1/agent/answer → submit_answer）。
 
         多副本与审批同理：同时等待本地 Future 与 Redis 答案键，先到者胜；
@@ -1979,11 +2008,11 @@ class AgentRuntime:
         return {"answer": answer}
 
     async def _wait_answer_decision(
-        self, tc_id: str, future: asyncio.Future, timeout: float
+        self, tc_id: str, future: asyncio.Future[Any], timeout: float
     ) -> str | None:
         """本地 Future 与 Redis 答案键竞争，返回答案；超时返回 None。"""
         poll = asyncio.create_task(self._poll_remote_answer(tc_id, timeout))
-        waiters: list[asyncio.Future] = [poll, asyncio.ensure_future(future)]
+        waiters: list[asyncio.Future[Any]] = [poll, asyncio.ensure_future(future)]
         try:
             done, _pending = await asyncio.wait(
                 waiters, return_when=asyncio.FIRST_COMPLETED
@@ -2059,7 +2088,9 @@ class AgentRuntime:
             logger.warning("submit_answer: redis write failed (%s)", e)
             return False
 
-    async def _execute_tool(self, tool_call: dict, task: AgentTask) -> dict:
+    async def _execute_tool(
+        self, tool_call: dict[Any, Any], task: AgentTask
+    ) -> dict[Any, Any]:
         """执行工具"""
         tool_name = tool_call["name"]
         tool_arguments = tool_call["arguments"]
@@ -2085,7 +2116,7 @@ class AgentRuntime:
         # 如果有外部工具执行器，使用它（兼容旧 Go 调用链）
         if self._tool_executor:
             try:
-                result = await self._tool_executor.execute(
+                result: dict[Any, Any] = await self._tool_executor.execute(
                     tool_name=tool_name,
                     params=params,
                     tenant_id=task.tenant_id,
@@ -2103,14 +2134,14 @@ class AgentRuntime:
 async def run_agent(
     gateway: GatewayRouter,
     system_prompt: str,
-    history: list[dict],
+    history: list[dict[Any, Any]],
     content: str,
-    tools: list[dict] = None,
-    llm_config: dict = None,
-    max_turns: int = None,
+    tools: list[dict[Any, Any]] | None = None,
+    llm_config: dict[Any, Any] | None = None,
+    max_turns: int | None = None,
     tenant_id: str = "",
     provider_hint: str = "",
-) -> AsyncIterator[dict]:
+) -> AsyncIterator[dict[Any, Any]]:
     """
     兼容旧接口的 Agent 推理函数
     """
