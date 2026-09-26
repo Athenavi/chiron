@@ -19,7 +19,7 @@
 | `pytest -q -m "not integration"`（`python-engine/`） | 1259 passed |
 | `npm run test`（`frontend-vue/`） | 460 passed / 53 files |
 | `npm run check:ui`（5 道棘轮） | 通过（i18n 存量 **0**、a11y 0） |
-| `npm run lint` | 0 errors / **397 warnings** |
+| `npm run lint` | 0 errors / **300 warnings**（`no-explicit-any` 剩 272，全在 `views/`，见 L3-2） |
 | `npm run build`（vue-tsc -b + vite） | 通过 |
 | `python scripts/check_source_encoding.py` | 通过 |
 | `mypy app/`（strict，全量） | 0 —— 200 个源文件，见 `.github/workflows/ci.yml` 的 `Mypy (strict)` step |
