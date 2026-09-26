@@ -105,23 +105,39 @@
 
 ## 3. L3 技术债
 
-### L3-2 收敛 ESLint warning（剩 **368 条** `no-explicit-any`）
+### L3-2 收敛 ESLint warning（剩 **272 条** `no-explicit-any`，全在 `views/`）
 
-- **依据**：`npm run lint` 现报 `0 errors / 397 warnings`。已完成两批共 250 条：
+- **依据**：`npm run lint` 现报 `0 errors / 300 warnings`。已完成三批共 250 条：
   `--fix` 清格式类与未使用项 193 条；**契约层 47 条 `any` 全部类型化**
-  （`api` 26 / `composables` 10 / `utils` 7 / `types` 2 / `router` 2）。
-- **剩余**：`views` 272 + `components` 96 = **368 条**，散落在组件内部逻辑里，
-  每处都要读懂上下文才能给准类型。
-- **已知做法**（契约层验证过的四类，可直接沿用）：
+  （`api` 26 / `composables` 10 / `utils` 7 / `types` 2 / `router` 2）；
+  **第三批把 `components/` 全部清零（96 条）**，见提交 `de7cb61` … `4fb2e61`。
+- **剩余**：`views` **272 条**（其中 `ChatView` 38、`DatabaseManagementView` 19、
+  `MediaView` 16、`WorkflowView` 15、`KnowledgeDetailView` 14 为最大五处）。
+- **已知做法**（契约层与 components 域验证过的五类，可直接沿用）：
   - 有明确结构的 → 定义契约接口（如 `AuthUser`、`TemplateUseResult`、`RawProvider`）；
   - 本质动态的 → `unknown`，**并同时改调用侧窄化**，绝不把报错推给调用方；
   - DOM 非标准成员 → 用 `Navigator & { … }` / `Performance & { … }` 交叉类型，并补上存在性判断；
-  - 多形状的宽松解析 → 小助手收敛（`asArray` / `asObject`），替掉链式 `any` 访问。
+  - 多形状的宽松解析 → 小助手收敛（`asArray` / `asObject`），替掉链式 `any` 访问；
+  - axios 错误体 → `utils/apiError.ts` 的 `serverErrorMessage(error, 兜底)` / `errorStatus(error)`。
+    注意与既有的 `describeApiError` 分工不同：后者会替换成 **i18n 本地化**文案，
+    前者只取后端 `error` 原文 —— 调用点若还要按原文或状态码分支（如 429/409），
+    用前者，否则分支依据会被通用文案抹掉。**这是全仓 136 处 `catch (e: any)` 的主要形态。**
+- **待决**：那 136 处是否统一改用 `describeApiError`（文案会变成 i18n 通用提示，
+  丢失后端原文）。属于可见行为变更，不该顺手做，需单独定。
 - **硬约束**：**不为清零而加 `eslint-disable`**；每批单独跑 `vue-tsc -b` 与组件测试。
 - **⚠ 已踩过的坑**：批量删「未使用导入」的脚本一次弄坏 6 个文件 —— 默认导入名、catch 参数名、
   函数名与「具名导入成员」在**纯文本层面无法区分**，正则一宽就误删标识符
   （`import  from './X.vue'`、`const  = defineEmits(...)`）。
   **结构性删除只应在 AST 层面做，或逐个人工确认。**
+- **⚠ 本批新踩的三处**（类型收紧后才暴露，值得记住）：
+  - `eslint` 的 `no-undef` 走 `browser` globals 列表，与 tsc 的 `lib.dom` **覆盖不一致** ——
+    引用 `SpeechRecognitionEvent` 会被判未定义（tsc 侧却找得到）。第三方/较新的
+    DOM API 一律自声明形状，别赌两边一致；
+  - `vue/no-template-shadow`：`<router-view v-slot="{ Component }">` 的 slot prop
+    就叫 `Component`，从 vue 导入 `Component` 要起别名（如 `VueComponent`）；
+  - 宽泛的 `Record<string, any>` 会**吞掉字段访问错误** —— `SkillMarketCard` 改成
+    声明实际读到的 `MarketManifest` 后，5 处字段访问立刻显形。这类容器型 `any`
+    比参数上的 `any` 更危险。
 
 ### L3-4 巨型文件拆分（评估项，非缺陷）
 
