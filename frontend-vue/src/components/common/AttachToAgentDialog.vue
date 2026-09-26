@@ -108,11 +108,16 @@ async function attach() {
     message.success(t('已装配到「{name}」', { name: target.name }))
     emit('attached', target.id)
     emit('update:open', false)
-  } catch (e: any) {
-    const raw = e?.response?.data
+  } catch (e) {
     // 非属主会被后端拒绝（UPDATE ... AND user_id = 当前用户）：把原因带出来，
-    // 否则用户只会看到"失败"而不知道是权限问题
-    const detail = raw?.message || raw?.detail || raw?.error || e?.message || ''
+    // 否则用户只会看到“失败”而不知道是权限问题
+    const err = e as {
+      response?: { data?: { message?: unknown; detail?: unknown; error?: unknown } }
+      message?: unknown
+    }
+    const raw = err.response?.data
+    const text = (v: unknown): string => (typeof v === 'string' ? v : '')
+    const detail = text(raw?.message) || text(raw?.detail) || text(raw?.error) || text(err.message) || ''
     message.error(t('装配失败：') + (detail || t('只能操作自己创建的 Agent')))
   } finally {
     saving.value = false

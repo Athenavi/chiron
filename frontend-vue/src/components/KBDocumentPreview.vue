@@ -127,8 +127,11 @@ async function loadPreview() {
     document.value = data
     content.value = data.content || ''
     chunkCount.value = data.chunk_count || 0
-  } catch (e: any) {
-    error.value = e.response?.data?.detail || e.response?.data?.error || t('加载预览失败')
+  } catch (e) {
+    const data = (e as { response?: { data?: { detail?: unknown; error?: unknown } } }).response?.data
+    const detail = typeof data?.detail === 'string' ? data.detail : ''
+    const summary = typeof data?.error === 'string' ? data.error : ''
+    error.value = detail || summary || t('加载预览失败')
   } finally {
     loading.value = false
   }

@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { computed, h, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, h, nextTick, onMounted, onUnmounted, ref, watch, type Component as VueComponent, type VNode } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
@@ -83,7 +83,8 @@ onUnmounted(() => {
 interface MenuItem {
   key: string
   label: string
-  icon?: any
+  /** 渲染函数而非组件实例：菜单项要按当前主题/尺寸即时渲染图标 */
+  icon?: () => VNode
 }
 
 const menuItems = computed<MenuItem[]>(() => {
@@ -119,11 +120,17 @@ const selectedKeys = computed(() => {
   return [exact?.key ?? route.path]
 })
 
-function handleMenuClick(info: any) {
-  router.push(info.key)
+function handleMenuClick(info: { key: string | number }) {
+  router.push(String(info.key))
 }
 
-const userMenuItems = computed<any[]>(() => [
+interface UserMenuItem {
+  key: string
+  label: string
+  icon: () => VNode
+}
+
+const userMenuItems = computed<UserMenuItem[]>(() => [
   { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
   { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
   { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
@@ -132,7 +139,7 @@ const userMenuItems = computed<any[]>(() => [
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移
 const settingsOpen = ref(false)
 
-async function handleUserMenuClick(info: any) {
+async function handleUserMenuClick(info: { key: string | number }) {
   if (info.key === 'logout') {
     await authStore.logout()
     router.push('/login')
@@ -148,7 +155,8 @@ interface DockItem {
   key: string
   label: string
   desc: string
-  icon: any
+  /** 停靠坞直接 <component :is> 渲染，故存组件本身 */
+  icon: VueComponent
 }
 
 const dockItems: DockItem[] = [

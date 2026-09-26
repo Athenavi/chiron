@@ -8,7 +8,7 @@
  *  - 键盘导航：↑↓选择、Enter 执行、Esc 关闭；鼠标 hover 同步高亮
  *  - 打开期间锁定 body 滚动；组件卸载时移除全局监听并恢复
  */
-import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, markRaw, nextTick, onMounted, onUnmounted, ref, watch, type Component } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
@@ -51,8 +51,34 @@ interface PaletteEntry {
   desc?: string
   /** 本地过滤关键词（空格分隔；与 label/desc 一起参与匹配） */
   keywords: string
-  icon?: any
+  icon?: Component
   run: () => void | Promise<void>
+}
+
+/** `/v1/search` 的 messages[] 行（各字段都可能缺，转换时逐项兜底） */
+interface SearchMessageRow {
+  id?: string | number
+  title?: string
+  content?: string
+  summary?: string
+  snippet?: string
+  abstract?: string
+  route?: string
+  session_id?: string | number
+  conversation_id?: string | number
+  kind?: string
+}
+
+/** `/v1/search` 的 media[] 行 */
+interface SearchMediaRow {
+  id?: string | number
+  title?: string
+  name?: string
+  summary?: string
+  description?: string
+  route?: string
+  type?: string
+  kind?: string
 }
 
 // ── 静态动作：六大工作台 ──
@@ -138,15 +164,15 @@ async function runSearch(q: string) {
     if (seq !== searchSeq) return // 丢弃过期响应（新输入已发出）
     // 兼容 { data: {...} } / 直接返回两种包装
     const d = res.data?.data ?? res.data ?? {}
-    const messages = Array.isArray(d.messages)
+    const messages: SearchMessageRow[] = Array.isArray(d.messages)
       ? d.messages
       : Array.isArray(d.results?.messages) ? d.results.messages : []
-    const media = Array.isArray(d.media)
+    const media: SearchMediaRow[] = Array.isArray(d.media)
       ? d.media
       : Array.isArray(d.results?.media) ? d.results.media : []
     remoteEntries.value = [
-      ...messages.map((m: any, i: number) => toMessageEntry(m, i)),
-      ...media.map((m: any, i: number) => toMediaEntry(m, i)),
+      ...messages.map((m, i) => toMessageEntry(m, i)),
+      ...media.map((m, i) => toMediaEntry(m, i)),
     ]
     searchError.value = false
   } catch {
@@ -159,7 +185,7 @@ async function runSearch(q: string) {
   }
 }
 
-function toMessageEntry(m: any, i: number): PaletteEntry {
+function toMessageEntry(m: SearchMessageRow, i: number): PaletteEntry {
   const title = m.title || m.content || tr('消息')
   const summary = m.summary || m.snippet || m.abstract || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
@@ -179,7 +205,7 @@ function toMessageEntry(m: any, i: number): PaletteEntry {
   }
 }
 
-function toMediaEntry(m: any, i: number): PaletteEntry {
+function toMediaEntry(m: SearchMediaRow, i: number): PaletteEntry {
   const title = m.title || m.name || tr('媒体')
   const summary = m.summary || m.description || ''
   const routePath = typeof m.route === 'string' && m.route ? m.route : ''
@@ -205,12 +231,23 @@ function truncate(s: string, n: number): string {
 }
 
 // ── 最近活动（打开时加载一次） ──
+/** `/v1/activities` 的原始行（各字段都可能缺） */
+interface ActivityRow {
+  id?: string | number
+  workstation?: string
+  timestamp?: string | number
+  title?: string
+  status_text?: string
+  route?: string
+  status?: string
+}
+
 async function loadRecent() {
   recentLoading.value = true
   try {
     const res = await api.get('/v1/activities?limit=5')
-    const list = res.data?.activities || []
-    recentEntries.value = list.map((a: any) => ({
+    const list: ActivityRow[] = res.data?.activities || []
+    recentEntries.value = list.map(a => ({
       id: `act_${a.id || a.workstation || ''}_${a.timestamp || 0}`,
       group: tr('最近活动'),
       label: a.title || tr('暂无标题'),

@@ -20,14 +20,20 @@ const tools = ref<ToolInfo[]>([])
 const loading = ref(true)
 const picked = ref<string[]>([])
 
+/**
+ * 工具配置条目：纯名字字符串，或 `{ name, ... }` 对象。
+ * 两种都合法 —— 引擎按 schema 写对象，用户手写常常只写名字。
+ */
+type ToolEntry = string | { name?: unknown }
+
 /** 取现有配置里的工具名（容忍字符串条目与坏 JSON） */
 function configuredNames(): Set<string> {
   try {
-    const parsed = JSON.parse(props.modelValue || '[]')
+    const parsed: unknown = JSON.parse(props.modelValue || '[]')
     if (!Array.isArray(parsed)) return new Set()
-    const names = parsed
-      .map((item: any) => (typeof item === 'string' ? item : item?.name))
-      .filter((name: unknown): name is string => typeof name === 'string' && name.length > 0)
+    const names = (parsed as ToolEntry[])
+      .map(item => (typeof item === 'string' ? item : item?.name))
+      .filter((name): name is string => typeof name === 'string' && name.length > 0)
     return new Set(names)
   } catch {
     return new Set()
@@ -57,11 +63,11 @@ function onChange(value: unknown) {
   const names = (Array.isArray(value) ? value : value == null ? [] : [value]).map(item => String(item))
   picked.value = names
 
-  let handwritten: any[] = []
+  let handwritten: ToolEntry[] = []
   let parseFailed = false
   try {
     const parsed = JSON.parse(props.modelValue || '[]')
-    if (Array.isArray(parsed)) handwritten = parsed
+    if (Array.isArray(parsed)) handwritten = parsed as ToolEntry[]
     else if (props.modelValue.trim()) parseFailed = true
   } catch {
     parseFailed = !!props.modelValue.trim()
@@ -72,7 +78,7 @@ function onChange(value: unknown) {
 
   // 保留用户手写、且不在引擎列表里的条目（引擎里的按最新 schema 重写）
   const known = new Set(tools.value.map(t => t.name))
-  const keep = handwritten.filter((item: any) => {
+  const keep = handwritten.filter(item => {
     const name = typeof item === 'string' ? item : item?.name
     return typeof name === 'string' && name && !known.has(name)
   })

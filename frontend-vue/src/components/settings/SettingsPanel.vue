@@ -30,6 +30,7 @@ import {
 import { useSmsCountdown } from '../../composables/useSmsCountdown'
 import { useSpeech } from '../../composables/useSpeech'
 import { ACCENT_PRESETS, DEFAULT_ACCENT } from '../../utils/accentPresets'
+import { errorStatus, serverErrorMessage } from '../../utils/apiError'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -52,8 +53,8 @@ async function handleUpdateProfile() {
     await api.put('/v1/auth/profile', form.value)
     message.success(t('个人信息已更新'))
     await authStore.fetchProfile()
-  } catch (error: any) {
-    message.error(error.message || t('更新失败'))
+  } catch (error) {
+    message.error((error instanceof Error ? error.message : '') || t('更新失败'))
   } finally {
     loading.value = false
   }
@@ -77,8 +78,8 @@ async function loadBindings() {
     // 已绑定的 provider 不再出现在可绑定列表
     const boundNames = new Set(ids.map(i => i.provider_name))
     bindable.value = providers.filter(p => !boundNames.has(p.display_name) && !boundNames.has(p.name))
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('绑定信息加载失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('绑定信息加载失败')))
   } finally {
     bindingsLoading.value = false
   }
@@ -95,8 +96,8 @@ async function handleUnbind(id: string) {
     await deleteIdentity(id)
     message.success(t('已解绑'))
     await loadBindings()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('解绑失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('解绑失败')))
   } finally {
     unbinding.value = ''
   }
@@ -138,9 +139,9 @@ async function handleSendBindCode() {
     const res = await sendSmsCode({ phone: p, purpose: 'bind' })
     startPhoneCountdown(res.interval || 60)
     message.success(t('验证码已发送'))
-  } catch (e: any) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+  } catch (e) {
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 429) {
       message.error(t('发送过于频繁，请稍后再试'))
     } else if (status === 403) {
@@ -165,9 +166,9 @@ async function handleBindPhone() {
     message.success(t('手机号绑定成功'))
     phoneForm.value = { phone: '', code: '' }
     await loadPhone()
-  } catch (e: any) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+  } catch (e) {
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 409) {
       message.error(t('该手机号已绑定其他账号'))
     } else {
@@ -184,8 +185,8 @@ async function handleUnbindPhone() {
     await unbindPhone()
     message.success(t('已解绑手机号'))
     await loadPhone()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('解绑失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('解绑失败')))
   } finally {
     unbindingPhone.value = false
   }
@@ -211,8 +212,8 @@ async function handleSetPassword() {
     await setPassword({ current_password: current_password || undefined, new_password })
     message.success(t('密码已设置'))
     pwdForm.value = { current_password: '', new_password: '', confirm: '' }
-  } catch (e: any) {
-    const apiErr = e.response?.data?.error
+  } catch (e) {
+    const apiErr = serverErrorMessage(e, '')
     if (apiErr === 'current_password is required') {
       message.error(t('该账号已设置密码，请先输入当前密码'))
     } else if (apiErr === 'invalid current password') {
@@ -253,8 +254,8 @@ async function saveSpeechPrefs() {
     await api.put('/v1/auth/profile', { settings: { tts: speech.value } })
     message.success(t('朗读设置已保存'))
     await authStore.fetchProfile()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('保存失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('保存失败')))
   } finally {
     speechSaving.value = false
   }
@@ -285,8 +286,8 @@ async function loadShares() {
   try {
     const { data } = await api.get('/v1/shares')
     shares.value = data?.data?.items ?? []
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('分享列表加载失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('分享列表加载失败')))
   } finally {
     sharesLoading.value = false
   }
@@ -299,8 +300,8 @@ async function handleRevokeShare(item: ShareItem) {
     await api.delete(`/v1/conversations/${item.session_id}/share`)
     message.success(t('已取消分享'))
     await loadShares()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('取消分享失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('取消分享失败')))
   } finally {
     revoking.value = ''
   }
@@ -340,15 +341,22 @@ async function loadConversations() {
     const { data } = await api.get('/v1/conversations')
     // 兼容 {items:[...]} 与直接数组两种返回形态
     conversations.value = data?.data?.items ?? data?.data ?? []
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('会话列表加载失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('会话列表加载失败')))
   } finally {
     convLoading.value = false
   }
 }
 
+/** 导出用的消息行（`/v1/conversations/{id}` 的 messages[]）；字段都可能缺，渲染时逐项兜底 */
+interface ExportMessage {
+  role?: string
+  content?: unknown
+  reasoning?: unknown
+}
+
 /** 把一次会话渲染成 Markdown；reasoning 单独成节，避免与正文混淆 */
-function conversationToMarkdown(conv: ConversationItem, messages: any[]): string {
+function conversationToMarkdown(conv: ConversationItem, messages: ExportMessage[]): string {
   const lines: string[] = [
     t('# {title}', { title: conv.title || t('未命名会话') }),
     '',
@@ -391,8 +399,8 @@ async function exportSelected() {
     a.click()
     URL.revokeObjectURL(url)
     message.success(t('已导出 {n} 个会话', { n: ids.length }))
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('导出失败'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('导出失败')))
   } finally {
     exporting.value = false
   }

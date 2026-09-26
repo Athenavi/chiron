@@ -1,9 +1,9 @@
 <script setup lang="ts">
-import { computed } from 'vue'
+import { computed, type Component } from 'vue'
 
 interface Props {
   /** 图标：Ant Design 图标组件或任意组件，留空显示默认空盒 */
-  icon?: any
+  icon?: Component
   /** 主文案，如「暂无知识库」 */
   description?: string
   /** 辅助文案，如「点击右上角创建第一个知识库」 */

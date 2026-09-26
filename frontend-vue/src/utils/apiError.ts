@@ -49,6 +49,28 @@ export function statusMessage(status?: number): string | null {
 /** 5xx 是服务端问题：只给通用文案会让用户和运维都无从下手 */
 const SERVER_ERROR_MIN = 500
 
+interface ErrorResponseLike {
+  response?: { status?: number; data?: { error?: unknown } }
+}
+
+/**
+ * 取后端 `error` 原文；取不到（网络错误 / 非 axios 异常 / 后端没给）时用调用方兜底。
+ *
+ * 与 `describeApiError` 的分工：**这里只取原文，不做本地化替换**。
+ * 有些调用点要按原文或状态码分支（例如读 `current_password is required` 来判断
+ * 「该账号已设置密码」），换成通用文案会把分支依据弄丢。
+ * 文案是给用户看、且不需要分支时，用 `describeApiError` 才是本地化版本。
+ */
+export function serverErrorMessage(error: unknown, fallback: string): string {
+  const detail = (error as ErrorResponseLike).response?.data?.error
+  return typeof detail === 'string' && detail ? detail : fallback
+}
+
+/** 取 HTTP 状态码（用于 429/409 这类要单独提示的分支） */
+export function errorStatus(error: unknown): number | undefined {
+  return (error as ErrorResponseLike).response?.status
+}
+
 /** 后端错误码的本地化文案；无对应文案时返回 null（回退到 error 原文） */
 function localizedCodeMessage(code?: string): string | null {
   if (!code) return null

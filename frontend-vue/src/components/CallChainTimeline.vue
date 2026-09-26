@@ -96,7 +96,7 @@ interface TraceSpan {
   duration_ms: number
   timestamp: string
   tenant_id: string
-  metadata?: Record<string, any>
+  metadata?: Record<string, unknown>
   showDetails?: boolean
 }
 
@@ -126,7 +126,7 @@ watch(() => props.traceId, async (id) => {
   try {
     const response = await api.get(`/v1/traces/${encodeURIComponent(id)}`)
     const payload = response.data?.data ?? response.data
-    fetchedSpans.value = (payload?.spans || []).map((s: any) => ({ ...s, showDetails: false }))
+    fetchedSpans.value = (payload?.spans || []).map((s: TraceSpan) => ({ ...s, showDetails: false }))
   } catch {
     fetchedSpans.value = []
   } finally {
@@ -188,7 +188,7 @@ function getSpanDisplayName(span: TraceSpan): string {
   return span.span_name
 }
 
-function formatMetadata(metadata?: Record<string, any>): string {
+function formatMetadata(metadata?: Record<string, unknown>): string {
   if (!metadata) return '{}'
   return JSON.stringify(metadata, null, 2)
 }

@@ -112,7 +112,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, computed, markRaw } from 'vue'
+import { ref, computed, markRaw, type Component } from 'vue'
 import { Button, Input, Tag } from 'ant-design-vue'
 import {
   SearchOutlined, DownloadOutlined, CheckOutlined,
@@ -139,7 +139,7 @@ const emit = defineEmits<{
 
 const searchQuery = ref('')
 
-const typeIcons: Record<MarketType, any> = {
+const typeIcons: Record<MarketType, Component> = {
   skill: CodeOutlined,
   agent: RobotOutlined,
   mcp: ThunderboltOutlined,
@@ -154,14 +154,31 @@ const searchPlaceholder = computed(() => {
   return map[props.type] || t('搜索市场…')
 })
 
+/**
+ * manifest 里前端真正用到的字段。
+ *
+ * 后端给的是自由对象（且可能是 JSON 字符串），原先这里用 `Record<string, any>`，
+ * 于是 `manifest.exec?.type` 这类访问写错了也不会报错 —— 改成声明实际读到的形状，
+ * 缺失字段由各展示函数自行兜底。
+ */
+interface MarketManifest {
+  name?: string
+  description?: string
+  system_prompt?: string
+  command?: string
+  args?: unknown
+  exec?: { type?: string }
+  tools?: unknown
+}
+
 /** manifest 尽力而为：可能是对象，也可能是 JSON 字符串 */
-function getManifest(item: MarketItem): Record<string, any> {
+function getManifest(item: MarketItem): MarketManifest {
   const m = item?.manifest
   if (!m) return {}
   if (typeof m === 'string') {
-    try { return JSON.parse(m) } catch { return {} }
+    try { return JSON.parse(m) as MarketManifest } catch { return {} }
   }
-  return m
+  return m as MarketManifest
 }
 
 function displayName(item: MarketItem): string {
@@ -182,7 +199,7 @@ function mcpCommand(item: MarketItem): string {
 
 function mcpArgs(item: MarketItem): string[] {
   const args = getManifest(item).args
-  return Array.isArray(args) ? args : []
+  return Array.isArray(args) ? (args as string[]) : []
 }
 
 function execType(item: MarketItem): string {
