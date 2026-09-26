@@ -1,6 +1,8 @@
 import chat from './chat'
 import errors from './errors'
 import legacy from './legacy'
+import auth from './auth'
+import admin from './admin'
 
 /**
  * ar（RTL）。键与 zh-CN 一一对应（zh-CN 为源语言）；缺失的键会自动回退到 zh-CN。
@@ -28,6 +30,8 @@ export default {
   },
   chat,
   errors,
+  auth,
+  admin,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

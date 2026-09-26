@@ -36,6 +36,7 @@ import {
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
+import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
 import { executeQuickCommand } from "@/components/WorkstationNav.vue"
 import {
@@ -305,6 +306,7 @@ async function runQuickCommand() {
       v-if="!isChatPage"
       class="topbar-actions"
     >
+      <LanguageSwitcher />
       <ThemeSwitcher />
       <div
         v-if="authStore.user"

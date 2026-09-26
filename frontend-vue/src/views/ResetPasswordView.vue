@@ -5,6 +5,7 @@ import { Card, Form, FormItem, Input, Button, Alert, Space } from 'ant-design-vu
 import { LockOutlined } from '@ant-design/icons-vue'
 import { getCaptchaPublicConfig, confirmPasswordReset } from '../api/auth'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
+import LanguageSwitcher from '../components/common/LanguageSwitcher.vue'
 import type { Rule } from 'ant-design-vue/es/form'
 
 import { useI18n } from 'vue-i18n'
@@ -139,8 +140,12 @@ async function handleSubmit() {
 
 <template>
   <div class="auth-container">
-    <div class="auth-card">
-      <div class="auth-header">
+  <div class="auth-card">
+    <!-- 语言切换：重置密码前即可选择界面语言 -->
+    <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
+      <LanguageSwitcher />
+    </div>
+    <div class="auth-header">
         <div class="auth-logo">
           MC
         </div>

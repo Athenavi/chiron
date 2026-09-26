@@ -10,6 +10,7 @@ import { useRoute } from 'vue-router'
 import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider } from 'ant-design-vue'
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
 import EmptyState from '../common/EmptyState.vue'
+import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useThemeStore } from '../../stores/theme'
 import { api } from '../../api'
@@ -520,6 +521,12 @@ onMounted(async () => {
               >
             </label>
           </div>
+        </div>
+        <div class="appearance-row">
+          <div class="appearance-label">
+            {{ $t('common.language') }}
+          </div>
+          <LanguageSwitcher />
         </div>
       </div>
 

@@ -7,4 +7,7 @@
 export default {
   /** Verification-code resend countdown; {s} = seconds remaining */
   resendCountdown: 'Resend in {s}s',
+  email: 'Email',
+  newPassword: 'New password',
+  confirmNewPassword: 'Confirm new password',
 }

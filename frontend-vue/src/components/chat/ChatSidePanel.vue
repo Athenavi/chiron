@@ -18,6 +18,7 @@ import SubAgentPanel from './SubAgentPanel.vue'
 import { mergeTagOptions, normalizeTag, TAG_MAX_LEN } from './sessionTags'
 import SessionStatsPanel from './SessionStatsPanel.vue'
 import ThemeSwitcher from '../ThemeSwitcher.vue'
+import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import SettingsPanel from '../settings/SettingsPanel.vue'
 import { useAuthStore } from '../../stores/auth'
 import type { SubagentEvent } from '../../api/subagent'
@@ -890,6 +891,7 @@ function pickSession(id: string) {
         </Avatar>
         <span class="foot-name">{{ authStore.user?.name || userName || $t('用户') }}</span>
         <ThemeSwitcher class="foot-theme" />
+        <LanguageSwitcher compact />
         <Dropdown
           v-if="authStore.user"
           trigger="click"

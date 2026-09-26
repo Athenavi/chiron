@@ -7,6 +7,7 @@ import { useAuthStore } from '../stores/auth'
 import { getCaptchaPublicConfig, getEmailStatus, sendEmailCode, isValidEmail } from '../api/auth'
 import { useSmsCountdown } from '../composables/useSmsCountdown'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
+import LanguageSwitcher from '../components/common/LanguageSwitcher.vue'
 import type { Rule } from 'ant-design-vue/es/form'
 
 import { useI18n } from 'vue-i18n'
@@ -191,8 +192,12 @@ async function handleRegister() {
 
 <template>
   <div class="register-container">
-    <div class="register-card">
-      <div class="register-header">
+  <div class="register-card">
+    <!-- 语言切换：注册前即可选择界面语言（RTL 语言由 <html dir> 自动生效） -->
+    <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
+      <LanguageSwitcher />
+    </div>
+    <div class="register-header">
         <div class="register-logo">
           MC
         </div>
