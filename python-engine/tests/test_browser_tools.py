@@ -124,10 +124,10 @@ class RecordingHub:
     def __init__(self):
         self.commands: list[tuple[str, str, dict]] = []
 
-    def connected_client_ids(self) -> list[str]:
+    async def connected_client_ids(self) -> list[str]:
         return ["ext-client-1"]
 
-    def exec_command(self, client_id: str, method: str, params: dict) -> dict:
+    async def exec_command(self, client_id: str, method: str, params: dict) -> dict:
         self.commands.append((client_id, method, dict(params)))
         return {"status": "ok", "real": True}
 
@@ -153,10 +153,10 @@ async def test_no_connected_clients_fails_loud(monkeypatch):
     """Hub 无客户端连接必须抛错，不返回假结果。"""
 
     class EmptyHub:
-        def connected_client_ids(self) -> list[str]:
+        async def connected_client_ids(self) -> list[str]:
             return []
 
-        def exec_command(self, client_id, method, params):
+        async def exec_command(self, client_id, method, params):
             raise AssertionError("should not be called")
 
     monkeypatch.setattr(browser, "_hub", EmptyHub())
@@ -166,7 +166,7 @@ async def test_no_connected_clients_fails_loud(monkeypatch):
 
 async def test_stubhub_connected_client_ids():
     """默认 StubHub 提供 stub-client 占位。"""
-    ids = browser.StubHub().connected_client_ids()
+    ids = await browser.StubHub().connected_client_ids()
     assert "stub-client" in ids
 
 

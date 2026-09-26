@@ -6,16 +6,23 @@
 
 from __future__ import annotations
 
+import logging
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from app.tools.registry import registry
 
+logger = logging.getLogger(__name__)
+
 
 # ── Hub 协议 ──────────────────────────────────────────────────
+# 协议与实现都必须是 async：唯一的生产实现 GatewayBrowserHub 走 httpx 异步客户端，
+# 而调用点（下面的 browser_* 工具）本身也是 async def —— 协议若声明同步方法，
+# 调用点拿到的会是 coroutine，`ids[0]` 直接 TypeError（历史 bug，见提交信息）。
 class BrowserHub(Protocol):
-    def connected_client_ids(self) -> list[str]: ...
-    def exec_command(
+    async def connected_client_ids(self) -> list[str]: ...
+    async def exec_command(
         self, client_id: str, method: str, params: dict[str, Any]
     ) -> Any: ...
 
@@ -28,10 +35,12 @@ class StubHub:
         default_factory=lambda: {"stub-client": {"url": "about:blank"}}
     )
 
-    def connected_client_ids(self) -> list[str]:
+    async def connected_client_ids(self) -> list[str]:
         return list(self._clients.keys())
 
-    def exec_command(self, client_id: str, method: str, params: dict[str, Any]) -> Any:
+    async def exec_command(
+        self, client_id: str, method: str, params: dict[str, Any]
+    ) -> Any:
         return {
             "status": "ok",
             "method": method,
@@ -113,32 +122,36 @@ def _init_default_hub() -> None:
     addr = os.getenv("RPA_GATEWAY_URL", "").strip()
     if addr:
         _hub = GatewayBrowserHub(addr)
-        from app.observability.logging import get_logger
-
-        get_logger(__name__).info("Browser RPA hub bound to Go gateway: %s", addr)
+        logger.info("Browser RPA hub bound to Go gateway: %s", addr)
 
 
 _init_default_hub()
 
 
-def _resolve_client(tab_id: int | None = None) -> str:
+def _hub_or_raise() -> BrowserHub:
+    """取当前 Hub；未绑定即 fail-loud（生产不落 StubHub 假实现）。"""
     if _hub is None:
         raise RuntimeError(
             "browser RPA not available: no hub bound (set RPA_GATEWAY_URL to the Go gateway)"
         )
-    ids = _hub.connected_client_ids()
+    return _hub
+
+
+async def _resolve_client(tab_id: int | None = None) -> str:
+    ids = await _hub_or_raise().connected_client_ids()
     if not ids:
         raise RuntimeError("no connected browser clients")
     return ids[0]
 
 
-def _exec(
+async def _exec(
     method: str, params: dict[str, Any], tab_id: int | None = None
 ) -> dict[str, Any]:
-    client_id = _resolve_client(tab_id)
+    hub = _hub_or_raise()
+    client_id = await _resolve_client(tab_id)
     if tab_id and tab_id > 0:
         params = {**params, "tabId": tab_id}
-    result = _hub.exec_command(client_id, method, params)
+    result = await hub.exec_command(client_id, method, params)
     return result if isinstance(result, dict) else {"result": result}
 
 
@@ -146,13 +159,13 @@ def _exec(
 async def browser_navigate(url: str, tab_id: int | None = None) -> dict[str, Any]:
     if not url:
         return {"error": "url is required"}
-    return _exec("browser_navigate", {"url": url}, tab_id)
+    return await _exec("browser_navigate", {"url": url}, tab_id)
 
 
 async def browser_click(selector: str, tab_id: int | None = None) -> dict[str, Any]:
     if not selector:
         return {"error": "selector is required"}
-    return _exec("browser_click", {"selector": selector}, tab_id)
+    return await _exec("browser_click", {"selector": selector}, tab_id)
 
 
 async def browser_type(
@@ -160,33 +173,33 @@ async def browser_type(
 ) -> dict[str, Any]:
     if not selector or not text:
         return {"error": "selector and text are required"}
-    return _exec("browser_type", {"selector": selector, "text": text}, tab_id)
+    return await _exec("browser_type", {"selector": selector, "text": text}, tab_id)
 
 
 async def browser_read(selector: str, tab_id: int | None = None) -> dict[str, Any]:
     if not selector:
         return {"error": "selector is required"}
-    return _exec("browser_read", {"selector": selector}, tab_id)
+    return await _exec("browser_read", {"selector": selector}, tab_id)
 
 
 async def browser_screenshot(
     tab_id: int | None = None, full_page: bool = False
 ) -> dict[str, Any]:
-    return _exec("browser_screenshot", {"fullPage": full_page}, tab_id)
+    return await _exec("browser_screenshot", {"fullPage": full_page}, tab_id)
 
 
 async def browser_scroll(
     direction: str = "down", amount: int = 500, tab_id: int | None = None
 ) -> dict[str, Any]:
-    return _exec("browser_scroll", {"direction": direction, "amount": amount}, tab_id)
+    return await _exec("browser_scroll", {"direction": direction, "amount": amount}, tab_id)
 
 
 async def browser_get_state(tab_id: int | None = None) -> dict[str, Any]:
-    return _exec("browser_get_state", {}, tab_id)
+    return await _exec("browser_get_state", {}, tab_id)
 
 
 async def browser_tab_list() -> dict[str, Any]:
-    return _exec("browser_tab_list", {})
+    return await _exec("browser_tab_list", {})
 
 
 async def browser_tab_create(
@@ -195,23 +208,26 @@ async def browser_tab_create(
     params: dict[str, Any] = {}
     if url:
         params["url"] = url
-    return _exec("browser_tab_create", params)
+    return await _exec("browser_tab_create", params)
 
 
 async def browser_tab_switch(tab_id: int) -> dict[str, Any]:
     if not tab_id or tab_id <= 0:
         return {"error": "tabId is required"}
-    return _exec("browser_tab_switch", {"tabId": tab_id})
+    return await _exec("browser_tab_switch", {"tabId": tab_id})
 
 
 async def browser_tab_close(tab_id: int) -> dict[str, Any]:
     if not tab_id or tab_id <= 0:
         return {"error": "tabId is required"}
-    return _exec("browser_tab_close", {"tabId": tab_id})
+    return await _exec("browser_tab_close", {"tabId": tab_id})
 
 
 # ── 注册 ──────────────────────────────────────────────────────
-_BROWSER_TOOLS = [
+# 显式标注 handler 类型：11 个工具签名各不相同，不标注的话 mypy 会把它们 join 成
+# `function`，注册时匹配不上 registry 要求的 Callable[..., Awaitable[Any]]。
+_BrowserHandler = Callable[..., Awaitable[dict[str, Any]]]
+_BROWSER_TOOLS: list[tuple[str, str, dict[str, Any], list[str], _BrowserHandler]] = [
     (
         "browser_navigate",
         "Navigate to a URL",
