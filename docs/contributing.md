@@ -78,6 +78,47 @@ python -m pytest -q -m "not integration"
 标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL），**不在 CI 中执行**，
 需要时单独跑 `pytest -m integration`。
 
+#### mypy strict 接线手册
+
+`app/` 仍有存量错误，所以门禁按域分批扩大 —— **每清零一块就往上面那个列表里追加**。
+清单与扩批进度见 [开发路线图](development-roadmap.md) 的 L2-1，以下是动手前必读的约束与已踩过的坑。
+
+**两条始终生效的约束**
+
+1. **门禁必须带 `--follow-imports=silent`** —— 否则 mypy 会连带报告依赖模块的错误，而剩余模块的
+   依赖闭包不可控（`app/core` 的传递依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill`
+   各 74–76，单文件亦可拉到 72 个）。`silent` 让门禁只报告**列出的**模块，依赖由它们各自的门禁
+   覆盖 —— 列出的模块仍全部按 strict 检查。
+2. **第三方库缺口走 `pyproject.toml` 的 `[[tool.mypy.overrides]]`，不许用 `# type: ignore` 绕**：
+   - 缺 stub / 缺包 → `ignore_missing_imports`（现为 `asyncpg` / `boto3.*` / `botocore.*` / `docx` /
+     `fitz` / `langchain.*` / `markitdown` / `openpyxl` / `pdfplumber` / `psutil` / `pymilvus` /
+     `qdrant_client` / `sentence_transformers` / `unstructured.*` / `uvicorn`）；
+   - **有** stub 但标注不全 → 在**调用方**上单项豁免（现为 `module = ["app.rag.parser", "app.main"]`
+     的 `disallow_untyped_calls = false`，因 `pymupdf` 自带 `py.typed` 却缺 `open` / `Document` 注解）。
+     该判定由调用方作出，豁免只能落在调用它的文件上。
+
+**已踩过的坑**
+
+- ⚠ **给 FastAPI 路由补返回注解时，不要写含 `Response` 子类的联合类型** —— 路由函数的返回注解会
+  被 FastAPI 当作 `response_model` 生成校验，而 `JSONResponse | dict[str, Any]` 不是合法 Pydantic
+  字段类型，后果是**测试在 collection 阶段就报** `FastAPIError: Invalid args for response field!`。
+  这些 handler 的出口分两类（错误时 `JSONResponse`、正常时 dict），要么统一写 `-> Any`
+  （`Any` 是合法字段类型），要么在装饰器上显式 `response_model=None`。
+- ⚠ **`[tool.mypy]` 的 `platform = "linux"`** 不可删：生产与 CI 都在 Linux，而本机可能是 Windows。
+  不声明的话，Unix-only 模块的成员（`app/tools/_sandbox_worker.py` 的 `resource.setrlimit` /
+  `RLIMIT_*`）在 Windows 上会误报 `attr-defined`。
+- ⚠ **strict 的 `no_implicit_reexport`**：仅为「保留既有 import 路径」而做的 re-export
+  （如 `app/subagent/budget.py` 转发 `app.agent.task_budget` 的符号）必须写 `__all__`，
+  否则调用方会报 `does not explicitly export attribute`。
+- ⚠ **CI 环境只装 `requirements.txt` + `requirements-dev.txt`，与本机不同** —— 每批接线时留意
+  **顶层** import 是否被环境里的第三方包偶然带入：曾查出 `beautifulsoup4`（`app/tools/web.py`）
+  与 `aiohttp`（`app/gateway/router.py`）从未被声明，此前只由 markdownify / aiobotocore 偶然带入。
+- ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定版本装不了：
+  `grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI 的 3.11 + 固定版本。
+  若某个 step 首次在 CI 上报出本地没有的错误，根因大概率在此；**先按 CI 结果复核**，再决定是补
+  overrides 还是改代码。已知的本地-only 误报：`opentelemetry.exporter.otlp.proto.grpc.*`
+  （CI 装了 `opentelemetry-exporter-otlp-proto-grpc`）与 `markitdown` 的参数签名（可选后端，CI 不装）。
+
 ### `frontend` — 前端（工作目录 `frontend-vue/`）
 
 ```bash

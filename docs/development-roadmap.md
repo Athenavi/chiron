@@ -3,10 +3,9 @@
 本文是**待办账本**，只收录**尚未完成**的事项，每条标注「依据」（命令 / 文件 / 行）与「验收」；
 未经验证的推测显式标注「待确认」，不作为计划依据。
 
-已完成项已从本文移除 —— 它们的依据与验收口径见各自的提交信息（如 `806a45d` 的 i18n 收尾），
-不在两处重复维护。
-
-已明确不做（技术结论已论证）的项见 [多实例部署指南](deployment-multi-instance.md) 第 10 节。
+- 已完成项的依据与验收口径在各自的提交信息里，不在本文重复维护。
+- 已明确不做（技术结论已论证）的项见 [多实例部署指南](deployment-multi-instance.md) 第 10 节。
+- mypy 分批接线的操作约束与已踩过的坑见 [贡献与验收流程](contributing.md)「mypy strict 接线手册」。
 
 ---
 
@@ -36,9 +35,8 @@
 
 - **依据**：`frontend-vue/src/locales/ar/legacy.ts` 与 `en-US/legacy.ts` 均为空壳
   （`export default {}`）；`ar/` 缺 `admin.ts`、`auth.ts`（`en-US/` 有）。阿拉伯语界面当前
-  **静默回退中文**，`ar/legacy.ts` 的注释把这称为「显式的翻译待办状态」。
-- **前置**：`legacy` 域已在 i18n 收尾中**展平到顶层**（裸键现在能命中），译文补上即生效
-  —— 在这之前补了也不生效。
+  **静默回退中文**。
+- **前置**：`legacy` 域已在 i18n 收尾中**展平到顶层**（裸键现在能命中），译文补上即生效 —— 在这之前补了也不生效。
 - **验收**：`ar` / `en-US` 的键集与 `zh-CN` 一一对应（写个比对 key 集合的脚本并挂进 `check:ui`，
   防再次漂移）；译文由人工或翻译流程产出，不做机翻直出。
 
@@ -54,109 +52,28 @@
 
 ## 2. L2 质量门禁接线
 
-### L2-1 `mypy --strict` 接入 CI
+### L2-1 `mypy --strict` 分批接线
 
-- **依据**：`python-engine/pyproject.toml` 已声明 `[tool.mypy] strict = true`，
-  `[project.optional-dependencies].dev` 已列 `mypy>=1.15.0`，但 `.github/workflows/ci.yml` 的
-  python job **只跑 ruff + pytest，从不跑 mypy** —— 严格类型门禁完全未接线。
-- **已量化**（mypy 2.3.1）：接线前基线 **1171 errors / 130 个文件（共 200 个源文件）**，
-  按域 `agent` 214、`api` 108、`rag` 101、`tools` 88、`core` 80、`memory` 74、`providers` 66、
-  `main.py` 55、`queue` 48、`gateway` 47；按码以 `type-arg` 488、`no-untyped-def` 266、
-  `no-untyped-call` 116 为主，环境相关（缺 stub / 缺包）仅 20 条。
-  **截至第二十三批已清 1057 条 → 114 / 6 文件**。结论：1171 条**不属于需要下调 `strict` 的量级**
-  （备选阈值是「数万条」）。
-- **实施顺序**：
-  1. ~~装 mypy 跑 `mypy app/`，记录错误总数与按域分布~~ —— 已完成，数据见上；
-  2. **分批接线**：✅ 已完成 **23 批、清 1057 条**，全部零行为变更、引擎套件 `1259 passed` 未变。
-     各批的范围、修复要点与踩坑细节见提交信息，本文不重复维护：
+- **依据**：`python-engine/pyproject.toml` 已声明 `[tool.mypy] strict = true`，CI 的
+  `Mypy (strict)` step 只覆盖**已清零**的模块（`--follow-imports=silent` 让门禁只报告列出的模块）。
+- **进度**：接线前基线 **1171 条 / 130 文件（共 200 个源文件）**；已清 **23 批 1057 条**，
+  全部零行为变更、引擎套件 `1259 passed` 未变，门禁现列 **97 个路径**。各批范围与修复要点见
+  提交信息 `21a96ae` … `07f33ea`，本文不重复维护。
+- **剩余 115 条 / 7 个文件**（`mypy app/`，本机 mypy 2.3.1）：
 
-     | 批 | 提交 | 范围 |
-     |---|---|---|
-     | 1 | `21a96ae` | `app/sse` + `app/trace` + `app/config.py`（11 条） |
-     | 2 | `478047a` | `app/interfaces`（7 条） |
-     | 3 | `7b9204a` | `app/media` + `app/observability`（10 条；引入 `[[tool.mypy.overrides]]`） |
-     | 4 | `c0af3bb` | `app/db.py` + `app/db_client.py`（36 条；两处签名与实现不符） |
-     | 5 | `5200cdf` | `app/llm` + `app/chaos` + `app/middleware` + `gateway/ratelimit.py`（17 条） |
-     | 6 | `d613c54` | `engine_registry` + `session_store` + `knowledge` + `context`（69 条） |
-     | 7 | `07bf869` | `providers` + `memory` + `gateway/{provider,cache,router}`（142 条） |
-     | 8 | `7cefafc` | `app/core`（80 条；门禁改用 `--follow-imports=silent`） |
-     | 9 | `eb3e0f4` | `app/api/knowledge.py` + `app/api/unified_executor.py`（48 条） |
-     | 10 | `293929b` | `app/api/{agents,context,skills,system}.py` + `app/tools/{code_guard,context,rag_query,skill,skill_catalog,ssrf,web}.py`（21 条；另补 `beautifulsoup4` / `aiohttp` 两个缺失依赖） |
-     | 11 | `9618a62` | `app/agent/{event_sink,message_codec}.py` + `app/mcp/{client,registry}.py`（60 条） |
-     | 12 | `57def13` | `app/agent/loop.py` + `app/queue/producer.py` + `app/rag/stores/base.py`（26 条；含 `LLMProvider.chat` 的异步生成器协议修正） |
-     | 13 | `c093acd` | `app/agent/multi_agent.py` + `app/workflow/engine.py`（33 条；`chat_stream` 的 `messages` 按 `normalize_messages` 契约放宽为 `list[Any]`） |
-     | 14 | `58741a9` | `app/gateway/coalescer.py` + `app/rag/parser.py`（27 条；overrides 补 `pdfplumber`，并对 `app.rag.parser` 精确豁免 `disallow_untyped_calls`） |
-     | 15 | `ea982bf` | `app/api/media.py` + `app/api/workflows.py` + `app/agent/collaboration.py`（41 条） |
-     | 16 | `2718755` | `app/api/memory.py` + `app/subagent/affinity.py` + `app/plugins/pool.py`（34 条） |
-     | 17 | `301d1f0` | `tools/_sandbox_worker.py` + `rag/stores/milvus_store.py` + `agent/subagent_runner.py` + `plugins/owner_lease.py` + `workflow/tracing_engine.py`（48 条） |
-     | 18 | `bb23a49` | 小文件清扫 12 个：`agent/{guards,modes,prompt_engine}.py` + `gateway/key_ring.py` + `rag/{hybrid_search,stores/pgvector_store}.py` + `subagent/{redact,registry,store}.py` + `tools/{jobs,run_code,subagent}.py`（72 条） |
-     | 19 | `1682ba6` | 小文件清扫 23 个（`tools/{registry,client,discovery,graph,job_runner,kb,memory,terminal}.py`、`queue/{dlq,idempotency}.py`、`subagent/{followup,reporting,runtime_cache}.py`、`agent/{profile,side_effect_ledger}.py`、`rag/context_injector.py`、`skill/store.py`、`run_registry.py`、`plugins/broker_proxy.py`、`api/capabilities.py`、`workflow/{dynamic_nodes,executor,tools}.py`）（81 条；含 `AsyncClient.close()` 应为 `aclose()` 等三处真实缺陷） |
-     | 20 | `eda243a` | `app/skill/manager.py`（31 条）+ `[[tool.mypy.overrides]]` 增补可选后端（`langchain.*` / `markitdown` / `openpyxl` / `qdrant_client` / `unstructured.*`） |
-     | 21 | `884a7a4` | `app/rag/builder.py`（40 条；`_vector_store` 收窄 + `docx.Document` 按 `Any` 处理） |
-     | 22 | `4005ede` | `app/queue/worker.py`（35 条；`XREADGROUP` / `XCLAIM` 返回值按实际协议 `cast` 收窄 + Redis 字段字典改用 `dict[Any, Any]`） |
-     | 23 | `07f33ea` | `app/main.py`（49 条；`Consolidator` 的 `store` 参数放宽 + `pymupdf` 的 untyped-call 豁免扩到 `app.main`） |
+  | 文件 | 条数 | 性质 |
+  |---|---|---|
+  | `agent/runtime.py` | 105 | 纯标注补齐 —— **下一批** |
+  | `api/plugins.py` | 5 | 真实缺陷：引用不存在的 `app.main.get_plugin_pool`（`main.py` 只有模块级 `_plugin_pool`）与 `Settings.log_dir` |
+  | `tools/browser.py` | 4 | 真实缺陷：`BrowserHub` Protocol 声明**同步**的 `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**（`ids` 会是 coroutine，`return ids[0]` 必 `TypeError`）；另 `app.observability.logging` 无 `get_logger` |
+  | `tools/media.py` | 3 | 对 `pymupdf.Document` 直接迭代（stub 无 `__iter__`）→ 照例在调用方豁免 `disallow_untyped_calls` |
+  | `batch_processor.py` | 2 | 真实缺陷：引用不存在的 `app.rag.builder.build_knowledge`（`RAGBuilder` 只有 `build_document`，签名也不同）+ 缺注解 |
+  | `observability/tracing.py` | 2 | **环境相关**：本机缺 `opentelemetry-exporter-otlp-proto-grpc`（`requirements.txt` 已声明，CI 有） |
+  | `rag/builder.py` | 1 | **环境相关**：本机 `markitdown` 版本高于 CI（可选后端，CI 不装） |
 
-     第八批修的 3 个**真实缺陷**值得留个索引（都在其提交信息里）：
-     `core/agent_skill_selector.py` 的 `cap.usage_count`（`Capability` 无此字段）、
-     `core/task_router.py` 的 `_group_by_dependencies`（拿 `SubTask` 对象与 `subtask_id` 比较，
-     恒为真）、`core/prompt_library.py` 的 `_executor: callable | None`（内置函数当类型用）。
-
-     - 继续方式：每清零一块就往 `.github/workflows/ci.yml` 的 `Mypy (strict)` step 列表里追加
-       （现为 **97 个路径**）；`mypy app/` 全绿后删掉 `--follow-imports=silent`；
-     - 下一步候选（按文件切；`python -m mypy app/` 的存量，共 114 条 / 6 个文件）：
-       只剩 1 个大文件 —— `agent/runtime.py` 100 条；
-       另有 4 个文件**刻意留出**（缺陷修法需要设计决策，不属"零行为变更"范围）：
-       - `app/tools/browser.py`（4 条）：`BrowserHub` Protocol 声明**同步**的
-         `connected_client_ids` / `exec_command`，而 `GatewayBrowserHub` 实现是 **async**，
-         `_resolve_client` / `_exec` 却同步调用 —— `ids` 会是 coroutine，`return ids[0]` 必
-         `TypeError`。要么把 Protocol 与调用点改成 async，要么给实现加同步包装；
-       - `app/api/plugins.py`（5 条）：引用不存在的 `app.main.get_plugin_pool` 与
-         `Settings.log_dir`（`app/main.py` 里只有模块级 `_plugin_pool`）；
-       - `app/batch_processor.py`（2 条）：引用不存在的 `app.rag.builder.build_knowledge`
-         （`RAGBuilder` 只有 `build_document`，参数签名也不同）；
-       - `app/tools/media.py`（4 条）：对 `pymupdf.Document` 直接迭代（stub 无 `__iter__`），
-         且 `openpyxl` 缺 stub（后者照例走 `ignore_missing_imports` 即可）；
-     - **两条仍生效的约束**（新增依赖或新批次时照办）：
-       1. **门禁用 `mypy --follow-imports=silent`** —— 剩余模块的依赖闭包不可控（`app/core` 的传递
-          依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，单文件亦可拉到 72 个）。
-          `silent` 让门禁只报告**列出的**模块，依赖由它们各自的门禁覆盖 —— 列出的模块仍按 strict 检查；
-       2. **无 `py.typed` 的第三方库走 `[[tool.mypy.overrides]]`**（`pyproject.toml`），当前为
-          `asyncpg` / `boto3.*` / `botocore.*` / `docx` / `fitz` / `pdfplumber` / `psutil` /
-          `pymilvus` / `sentence_transformers` —— 只放宽这些库的 import 解析，本仓库代码仍按
-          strict 检查；**不要用 `# type: ignore` 绕**。
-          另有两条**非 import 类**的精确豁免，同样写在 `pyproject.toml`：
-          - `module = ["app.rag.parser"]` + `disallow_untyped_calls = false` —— `pymupdf` 自带
-            `py.typed` 但 `open` / `Document` 缺注解，该判定由**调用方**作出，豁免只能落在调用
-            它的文件上；
-          - 新增同类第三方缺口时照此办理：先判断是「缺 stub」（走 `ignore_missing_imports`）
-            还是「有 stub 但标注不全」（走调用方的单项豁免），两者都不许用 `# type: ignore`；
-     - ⚠ **给 FastAPI 路由补返回注解时不要写含 Response 子类的联合类型** —— 路由函数的返回
-       注解会被 FastAPI 当作 `response_model` 生成校验，而 `JSONResponse | dict[str, Any]`
-       不是合法 Pydantic 字段类型，后果是**测试在 collection 阶段就报**
-       `FastAPIError: Invalid args for response field!`（第十六批 `api/memory.py` 实测踩到）。
-       这些 handler 的出口本来就分两类（错误时 `JSONResponse`、正常时 dict），要么统一写
-       `-> Any`（`Any` 是合法字段类型，`api/media.py` 即如此），要么在装饰器上显式
-       `response_model=None`。
-     - ⚠ **`[tool.mypy]` 的 `platform = "linux"`**：生产与 CI 都在 Linux，而本机是 Windows。
-       不声明的话，Unix-only 模块的成员（`app/tools/_sandbox_worker.py` 里的
-       `resource.setrlimit` / `RLIMIT_*`）在 Windows 上会误报 `attr-defined`。
-     - ⚠ **strict 的 `no_implicit_reexport`**：仅为"保留既有 import 路径"而做的 re-export
-       （如 `app/subagent/budget.py` 转发 `app.agent.task_budget` 的符号）必须写 `__all__`，
-       否则调用方会报 `does not explicitly export attribute`。
-     - ⚠ **本分支从未 push，CI 一次都没跑过** —— 迄今所有 mypy 结果都来自本机隔离 venv。
-       首次真正跑 CI 时，除已接线的 mypy 之外还要留意「只装 `requirements.txt` +
-       `requirements-dev.txt` 的环境」缺哪些**顶层** import：第十批就是这样查出
-       `beautifulsoup4`（`app/tools/web.py`）与 `aiohttp`（`app/gateway/router.py`）从未被声明，
-       它们此前只由环境里的 markdownify / aiobotocore 偶然带入。
-     - ⚠ **本机复核环境有已知差异**：隔离 `venv` 只能建在 Python 3.14（`requirements.txt` 的固定
-       版本装不了：`grpcio==1.71.1` 无 wheel、`pydantic==2.11.5` 需 Rust 编译），依赖版本高于 CI。
-       CI 是 3.11 + 固定版本 —— 若该 step 首次运行报出本地没有的错误，根因大概率在此；
-       先按 CI 结果复核，再决定是补 overrides 还是改代码。
-
-  3. 全量通过后再把 CI 改成 `mypy app/`。
-- **验收**：CI 中 mypy 对已接线目录返回 0；`pyproject.toml` 的 `strict = true` 与实际门禁一致。
-- **备选**：若量化结果不可接受（如数万条），则**下调 `pyproject.toml` 的 strict 声明**并写明降级理由
-  —— 不允许「声明 strict 却不跑」继续存在。
+- **验收**：`mypy app/` 全绿后删掉 `--follow-imports=silent`，CI 改为 `mypy app/`。
+- **备选**（已排除）：1171 条不属于需要下调 `strict` 的量级 —— 备选阈值是「数万条」，
+  故不允许「声明 strict 却不跑」继续存在。
 
 ### L2-2 真实栈集成测试门禁（两侧当前都被永久跳过）
 
@@ -302,38 +219,9 @@ python scripts/check_source_encoding.py
 python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # python-engine/
-# mypy 只覆盖**已接线的模块**（分批扩大，清单见 L2-1）；
+# mypy 只覆盖 ci.yml「Mypy (strict)」step 里列出的模块（分批扩大，进度见 L2-1）；
 # --follow-imports=silent 让门禁只报告列出的模块（依赖由它们各自的门禁覆盖）
-ruff check . && mypy --follow-imports=silent
-  app/agent/collaboration.py app/agent/event_sink.py app/agent/guards.py \
-  app/agent/loop.py app/agent/message_codec.py app/agent/modes.py \
-  app/agent/multi_agent.py app/agent/profile.py app/agent/prompt_engine.py \
-  app/agent/side_effect_ledger.py app/agent/subagent_runner.py app/api/agents.py \
-  app/api/capabilities.py app/api/context.py app/api/knowledge.py \
-  app/api/media.py app/api/memory.py app/api/skills.py app/api/system.py \
-  app/api/unified_executor.py app/api/workflows.py app/chaos app/config.py \
-  app/context app/core app/db.py app/db_client.py app/engine_registry.py \
-  app/gateway/cache.py app/gateway/coalescer.py app/gateway/key_ring.py \
-  app/gateway/provider.py app/gateway/ratelimit.py app/gateway/router.py \
-  app/interfaces app/knowledge app/llm app/main.py app/mcp/client.py \
-  app/mcp/registry.py app/media app/memory app/middleware app/observability \
-  app/plugins/broker_proxy.py app/plugins/owner_lease.py app/plugins/pool.py \
-  app/providers app/queue/dlq.py app/queue/idempotency.py app/queue/producer.py \
-  app/queue/worker.py app/rag/builder.py app/rag/context_injector.py \
-  app/rag/hybrid_search.py app/rag/parser.py app/rag/retriever.py \
-  app/rag/stores/base.py app/rag/stores/milvus_store.py \
-  app/rag/stores/pgvector_store.py app/run_registry.py app/session_store.py \
-  app/skill/manager.py app/skill/store.py app/sse app/subagent/affinity.py \
-  app/subagent/followup.py app/subagent/redact.py app/subagent/registry.py \
-  app/subagent/reporting.py app/subagent/runtime_cache.py app/subagent/store.py \
-  app/tools/_sandbox_worker.py app/tools/client.py app/tools/code_guard.py \
-  app/tools/context.py app/tools/discovery.py app/tools/graph.py \
-  app/tools/job_runner.py app/tools/jobs.py app/tools/kb.py app/tools/memory.py \
-  app/tools/rag_query.py app/tools/registry.py app/tools/run_code.py \
-  app/tools/skill.py app/tools/skill_catalog.py app/tools/ssrf.py \
-  app/tools/subagent.py app/tools/terminal.py app/tools/web.py app/trace \
-  app/workflow/dynamic_nodes.py app/workflow/engine.py app/workflow/executor.py \
-  app/workflow/tools.py app/workflow/tracing_engine.py \
+ruff check . && mypy --follow-imports=silent <ci.yml 里的清单> \
   && python -m pytest -q -m "not integration"
 
 # frontend-vue/
