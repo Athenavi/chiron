@@ -40,6 +40,8 @@ export interface SubagentEvent {
   content?: string
   truncated?: boolean
   usage?: SubagentUsage
+  /** L1 摘要：终态事件（`subagent.done`）携带，见 python-engine/app/agent/event_sink.py:120 */
+  summary?: string
   /**
    * 审批事件（`subagent.approval`）的回传凭据。
    *

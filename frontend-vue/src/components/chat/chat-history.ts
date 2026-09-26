@@ -20,20 +20,30 @@ import {
   splitThinking,
   stripUserInputTag,
   type ChatItem,
+  type HistoryMessage,
+  type HistoryToolCall,
+  type InlineToolCall,
 } from './chat-types'
 import { t } from '../../i18n'
 
-/** 元数据容错解析：字符串则尝试 JSON，失败或非对象返回 undefined。 */
-export function normalizeMeta(raw: any): Record<string, any> | undefined {
+/**
+ * 元数据容错解析：字符串则尝试 JSON，失败或非对象返回 undefined。
+ *
+ * 入参是 `unknown` 而非 `any`：后端两条链路（Go 网关 / Python 引擎）给的形状不一致，
+ * 这里是边界，必须显式窄化而不是把 `any` 透给调用方。
+ */
+export function normalizeMeta(raw: unknown): Record<string, unknown> | undefined {
   if (!raw) return undefined
-  if (typeof raw === 'string') {
+  let value: unknown = raw
+  if (typeof value === 'string') {
     try {
-      raw = JSON.parse(raw)
+      value = JSON.parse(value)
     } catch {
       return undefined
     }
   }
-  return raw && typeof raw === 'object' ? raw : undefined
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+  return value as Record<string, unknown>
 }
 
 /**
@@ -41,15 +51,20 @@ export function normalizeMeta(raw: any): Record<string, any> | undefined {
  *
  * 行为与原先 `ChatView` 内部版本**逐字一致**（抽取时未改动逻辑，只补了导出与注释）。
  */
-export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
+export function mergeHistory(
+  messages: readonly HistoryMessage[] | null | undefined,
+  toolCalls: readonly HistoryToolCall[] | null | undefined,
+): ChatItem[] {
   interface TimelineEntry {
     t: number
     items: ChatItem[]
   }
-  const turnOf = (m: any): string | undefined => (m?.turn_id ? String(m.turn_id) : undefined)
+  const turnOf = (m: { turn_id?: string }): string | undefined =>
+    m?.turn_id ? String(m.turn_id) : undefined
   const timeline: TimelineEntry[] = (messages || [])
-    .filter((m: any) => (m.role === 'user' || m.role === 'assistant') && m.content)
-    .map((m: any) => {
+    .filter(m => (m.role === 'user' || m.role === 'assistant') && m.content)
+    .map(m => {
+      const content = m.content || ''
       const clock = formatClock(m.created_at)
       const turnId = turnOf(m)
       const items: ChatItem[] = []
@@ -57,13 +72,13 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
         items.push({
           kind: 'text',
           role: 'user',
-          content: stripUserInputTag(m.content),
+          content: stripUserInputTag(content),
           time: clock,
           id: m.id,
           turnId,
         })
       } else {
-        const { reasoning, body } = splitThinking(m.content, { loose: true })
+        const { reasoning, body } = splitThinking(content, { loose: true })
         if (reasoning) {
           items.push({ kind: 'reasoning', content: reasoning, time: clock, id: `${m.id}:r`, turnId })
         }
@@ -75,28 +90,37 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
             time: clock,
             id: m.id,
             turnId,
-            metadata: normalizeMeta((m as any)?.metadata),
-          } as any)
+            metadata: normalizeMeta(m.metadata),
+          })
         }
       }
-      return { t: new Date(m.created_at).getTime(), items }
+      // created_at 缺失时 new Date('') 与原 new Date(undefined) 同为 Invalid Date（NaN），
+      // 排序表现不变
+      return { t: new Date(m.created_at || '').getTime(), items }
     })
 
-  const callsById = new Map<string, any>((toolCalls || []).map((tc: any) => [tc.id, tc]))
-  ;(messages || []).forEach((m: any) => {
-    if (m.role !== 'assistant' || !m.tool_calls || m.tool_calls === '[]') return
-    let inline: any[]
-    try {
-      inline = typeof m.tool_calls === 'string' ? JSON.parse(m.tool_calls) : m.tool_calls
-    } catch {
-      return
+  const callsById = new Map<string, HistoryToolCall>(
+    (toolCalls || []).map(call => [call.id, call]),
+  )
+  for (const m of messages || []) {
+    if (m.role !== 'assistant' || !m.tool_calls || m.tool_calls === '[]') continue
+    let inline: unknown
+    if (typeof m.tool_calls === 'string') {
+      try {
+        inline = JSON.parse(m.tool_calls)
+      } catch {
+        continue
+      }
+    } else {
+      inline = m.tool_calls
     }
-    for (const tc of inline || []) {
-      if (!tc) continue
-      if (typeof tc === 'string') {
-        if (!callsById.has(tc)) {
-          callsById.set(tc, {
-            id: tc,
+    for (const raw of Array.isArray(inline) ? inline : []) {
+      if (!raw) continue
+      // 内联项可能是纯 id 字符串（只引用落库记录）
+      if (typeof raw === 'string') {
+        if (!callsById.has(raw)) {
+          callsById.set(raw, {
+            id: raw,
             tool_name: 'tool',
             input: '',
             output: '',
@@ -107,6 +131,7 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
         }
         continue
       }
+      const tc = raw as InlineToolCall
       if (!tc.id) continue
       const known = callsById.get(tc.id)
       if (known) {
@@ -124,15 +149,15 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
         turn_id: m.turn_id,
       })
     }
-  })
+  }
 
-  Array.from(callsById.values()).forEach((tc: any) => {
+  for (const tc of callsById.values()) {
     const turnId = turnOf(tc)
     const callItems: ChatItem[] = [
       {
         kind: 'tool_call',
         id: tc.id,
-        name: tc.tool_name,
+        name: tc.tool_name || '',
         arguments: tc.input || '',
         status: 'done',
         turnId,
@@ -148,8 +173,8 @@ export function mergeHistory(messages: any[], toolCalls: any[]): ChatItem[] {
         turnId,
       })
     }
-    timeline.push({ t: new Date(tc.created_at).getTime(), items: callItems })
-  })
+    timeline.push({ t: new Date(tc.created_at || '').getTime(), items: callItems })
+  }
   timeline.sort((a, b) => a.t - b.t)
   const flat = timeline.flatMap(e => e.items)
   const merged: ChatItem[] = []

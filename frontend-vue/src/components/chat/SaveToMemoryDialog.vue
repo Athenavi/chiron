@@ -78,8 +78,10 @@ async function save() {
 
     emit('saved', res.entry?.id ?? '')
     emit('update:open', false)
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('保存记忆失败'))
+  } catch (e) {
+    // axios 错误：后端给的 message 在 response.data.error，取不到就用兜底文案
+    const detail = (e as { response?: { data?: { error?: unknown } } }).response?.data?.error
+    message.error(typeof detail === 'string' && detail ? detail : t('保存记忆失败'))
   } finally {
     saving.value = false
   }

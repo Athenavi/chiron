@@ -26,10 +26,55 @@ const emit = defineEmits<{
 
 const { t } = useI18n()
 
+/**
+ * 三家「显式渲染」式验证码的公共形状。
+ *
+ * turnstile / grecaptcha / hcaptcha 的 `render` 参数与 `reset` 语义一致，只有返回值类型
+ * 不同（turnstile/hcaptcha 给字符串 id，reCAPTCHA 给数字），故 id 统一成 `CaptchaWidgetId`。
+ * 这些脚本只有 CDN 版、没有官方类型，形状按各家文档声明在此。
+ */
+type CaptchaWidgetId = string | number
+interface CaptchaRenderer {
+  render(
+    el: HTMLElement,
+    opts: {
+      sitekey: string
+      callback?: (token: string) => void
+      'expired-callback'?: () => void
+      'error-callback'?: () => void
+    },
+  ): CaptchaWidgetId
+  reset(id?: CaptchaWidgetId): void
+  remove?(id: CaptchaWidgetId): void
+}
+
+/** 腾讯防水墙：弹出式，构造后 show() 触发（与其它三家的「容器内渲染」模型不同） */
+interface TencentCaptchaInstance {
+  show(): void
+}
+interface TencentCaptchaResult {
+  ret?: number
+  ticket?: string
+  randstr?: string
+}
+type TencentCaptchaCtor = new (
+  siteKey: string,
+  callback: (res: TencentCaptchaResult) => void,
+) => TencentCaptchaInstance
+
+/** 第三方脚本挂在 window 上的全局；全部可选，取用前必须判存在 */
+interface CaptchaGlobals {
+  turnstile?: CaptchaRenderer
+  grecaptcha?: CaptchaRenderer
+  hcaptcha?: CaptchaRenderer
+  TencentCaptcha?: TencentCaptchaCtor
+}
+const captchaGlobal = (): CaptchaGlobals => window as unknown as CaptchaGlobals
+
 const container = ref<HTMLElement>()
 const loading = ref(false)
 const loadError = ref('')
-const tencentCaptcha = ref<any>(null)
+const tencentCaptcha = ref<TencentCaptchaInstance | null>(null)
 
 const providerLabel = computed(() => {
   const map: Record<string, string> = {
@@ -88,7 +133,7 @@ function waitFor<T>(getter: () => T | undefined, timeoutMs = 8000): Promise<T> {
 
 // ── 各 provider 渲染 ──
 
-let widgetId: any = null
+let widgetId: CaptchaWidgetId | null = null
 
 async function renderWidget() {
   if (!container.value) return
@@ -98,7 +143,7 @@ async function renderWidget() {
     switch (props.provider) {
       case 'turnstile': {
         await loadScript('https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit')
-        const ts = await waitFor<any>(() => (window as any).turnstile)
+        const ts = await waitFor<CaptchaRenderer>(() => captchaGlobal().turnstile)
         widgetId = ts.render(container.value, {
           sitekey: props.siteKey,
           callback: (token: string) => emit('verified', { token }),
@@ -109,7 +154,10 @@ async function renderWidget() {
       }
       case 'recaptcha': {
         await loadScript('https://www.google.com/recaptcha/api.js?render=explicit')
-        const g = await waitFor<any>(() => (window as any).grecaptcha?.render ? (window as any).grecaptcha : undefined)
+        const g = await waitFor<CaptchaRenderer>(() => {
+          const g = captchaGlobal().grecaptcha
+          return g?.render ? g : undefined
+        })
         widgetId = g.render(container.value, {
           sitekey: props.siteKey,
           callback: (token: string) => emit('verified', { token }),
@@ -119,7 +167,7 @@ async function renderWidget() {
       }
       case 'hcaptcha': {
         await loadScript('https://js.hcaptcha.com/1/api.js?render=explicit')
-        const h = await waitFor<any>(() => (window as any).hcaptcha)
+        const h = await waitFor<CaptchaRenderer>(() => captchaGlobal().hcaptcha)
         widgetId = h.render(container.value, {
           sitekey: props.siteKey,
           callback: (token: string) => emit('verified', { token }),
@@ -129,9 +177,9 @@ async function renderWidget() {
       }
       case 'tencent': {
         await loadScript('https://ssl.captcha.qq.com/TCaptcha.js')
-        const TC = await waitFor<any>(() => (window as any).TencentCaptcha)
+        const TC = await waitFor<TencentCaptchaCtor>(() => captchaGlobal().TencentCaptcha)
         // 弹出式：点击按钮时 show() 触发
-        tencentCaptcha.value = new TC(props.siteKey, (res: any) => {
+        tencentCaptcha.value = new TC(props.siteKey, (res: TencentCaptchaResult) => {
           if (res?.ret === 0 && res.ticket) {
             emit('verified', { token: res.ticket, randstr: res.randstr })
           } else {
@@ -147,7 +195,7 @@ async function renderWidget() {
       default:
         loadError.value = t('未知的验证码类型：{provider}', { provider: props.provider })
     }
-  } catch (e: any) {
+  } catch {
     loadError.value = t('验证码组件加载失败，请检查网络后刷新重试')
   } finally {
     loading.value = false
@@ -162,7 +210,7 @@ function showTencent() {
 function reset() {
   if (widgetId !== null) {
     try {
-      const w = window as any
+      const w = captchaGlobal()
       if (props.provider === 'turnstile' && w.turnstile) w.turnstile.reset(widgetId)
       else if (props.provider === 'recaptcha' && w.grecaptcha) w.grecaptcha.reset(widgetId)
       else if (props.provider === 'hcaptcha' && w.hcaptcha) w.hcaptcha.reset(widgetId)
@@ -173,7 +221,7 @@ function reset() {
 onMounted(renderWidget)
 onBeforeUnmount(() => {
   try {
-    const w = window as any
+    const w = captchaGlobal()
     if (widgetId !== null) {
       if (props.provider === 'turnstile' && w.turnstile?.remove) w.turnstile.remove(widgetId)
       else if (props.provider === 'hcaptcha' && w.hcaptcha?.reset) w.hcaptcha.reset(widgetId)

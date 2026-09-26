@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, h, ref, watch, onMounted, onUnmounted } from 'vue'
+import { computed, h, ref, watch, onMounted, onUnmounted, type VNode } from 'vue'
 import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Modal, Input } from 'ant-design-vue'
 import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
@@ -39,13 +39,20 @@ const { t: tr } = useI18n()
 const authStore = useAuthStore()
 const settingsOpen = ref(false)
 
-const userMenuItems = computed<any[]>(() => [
+/** 用户菜单项：icon 是渲染函数（ant-design-vue 的 Menu item 契约），不是组件实例 */
+interface UserMenuItem {
+  key: string
+  label: string
+  icon: () => VNode
+}
+
+const userMenuItems = computed<UserMenuItem[]>(() => [
   { key: 'settings', label: tr('设置'), icon: () => h(SettingOutlined) },
   { key: 'profile', label: tr('个人资料'), icon: () => h(UserSwitchOutlined) },
   { key: 'logout', label: tr('退出登录'), icon: () => h(LogoutOutlined) },
 ])
 
-async function handleUserMenuClick(info: any) {
+async function handleUserMenuClick(info: { key: string | number }) {
   if (info.key === 'logout') {
     await authStore.logout()
     void router.push('/login')
@@ -212,6 +219,15 @@ interface ActivityItem {
   status: string
   timestamp: string | number
 }
+/** `/v1/activities` 的原始行（各字段都可能缺，映射时逐项兜底） */
+interface ActivityRow {
+  id?: string
+  workstation?: string
+  timestamp?: string | number
+  title?: string
+  route?: string
+  status?: string
+}
 const recentActivities = ref<ActivityItem[]>([])
 const activitiesLoading = ref(false)
 let activityTimer: ReturnType<typeof setInterval> | null = null
@@ -221,8 +237,8 @@ async function loadActivities() {
   activitiesLoading.value = true
   try {
     const res = await api.get('/v1/activities?limit=8')
-    const list = res.data?.activities || []
-    recentActivities.value = list.map((a: any, i: number) => ({
+    const list: ActivityRow[] = res.data?.activities || []
+    recentActivities.value = list.map((a, i) => ({
       id: a.id || `${a.workstation || 'act'}_${a.timestamp || i}`,
       title: a.title || tr('暂无标题'),
       route: a.route || '/chat',
@@ -352,7 +368,7 @@ const BUCKET_LABELS = computed<Record<string, string>>(() => ({
 }))
 
 // P2-B: 会话按时间分组（置顶单独一组，其余按 今日/昨天/7天/更早）
-interface SessionGroup { label: string; sessions: any[] }
+interface SessionGroup { label: string; sessions: ChatSession[] }
 const groupedSessions = computed<SessionGroup[]>(() => {
   const list = filteredSessions.value
   // 置顶组始终在最前
@@ -364,7 +380,7 @@ const groupedSessions = computed<SessionGroup[]>(() => {
   const startOf7Days = startOfToday - 7 * 86400000
   const groups: SessionGroup[] = []
   if (pinned.length) groups.push({ label: tr('置顶'), sessions: pinned })
-  const buckets: Record<string, any[]> = { today: [], yesterday: [], within7Days: [], earlier: [] }
+  const buckets: Record<string, ChatSession[]> = { today: [], yesterday: [], within7Days: [], earlier: [] }
   for (const s of rest) {
     const ts = new Date(s.updated_at || s.created_at || 0).getTime()
     if (ts >= startOfToday) buckets.today.push(s)

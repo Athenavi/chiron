@@ -58,6 +58,12 @@ export interface TextItem extends ChatItemBase {
    * 渲染成系统提示而不是用户气泡（见 internal/api/agent_followup.go）。
    */
   source?: string
+  /**
+   * 引擎侧附加信息（知识库引用 / 工作流来源 / trace_id 等），驱动 `MessageItem` 的
+   * 反向定位 chips。仅部分链路有：python-engine 的 unified_executor 会带
+   * （app/api/unified_executor.py:416），Go 网关的 conversation.Message 没有该字段。
+   */
+  metadata?: Record<string, unknown>
 }
 
 export interface ChatAttachment {
@@ -102,6 +108,51 @@ export interface TurnStatsItem extends ChatItemBase {
 }
 
 export type ChatItem = TextItem | ReasoningItem | ToolCallItem | ToolResultItem | TurnStatsItem | DateDividerItem
+
+/**
+ * assistant 消息上内联的 tool_call（OpenAI 形状）。
+ * `id` 之外全部可选：字符串化 JSON 里缺字段是常态，解析失败由调用方跳过。
+ */
+export interface InlineToolCall {
+  id?: string
+  name?: string
+  /** OpenAI 的 arguments 是 JSON **字符串**，不是对象 */
+  arguments?: string
+  function?: { name?: string; arguments?: string }
+}
+
+/**
+ * `/v1/conversations/{id}` 的 `messages[]` 形状。
+ *
+ * 依据 `internal/api/conversation.go` 的 `Message`，并补上 python-engine 链路额外携带的
+ * `metadata` / `error`（`app/api/unified_executor.py:839`）。字段一律可选：历史来自两个
+ * 后端，形状并不完全一致，缺失时走各自字段的兜底。
+ */
+export interface HistoryMessage {
+  id?: string
+  role?: string
+  content?: string
+  /** OpenAI 格式 tool_calls —— 落库为 JSON 字符串，部分路径已是数组 */
+  tool_calls?: string | InlineToolCall[] | null
+  turn_id?: string
+  created_at?: string
+  metadata?: unknown
+  error?: unknown
+}
+
+/**
+ * `tool_calls[]` 的形状（`internal/api/conversation.go` 的 `ToolCall`）。
+ * `turn_id` 不在后端契约里 —— 由所属消息的内联 tool_calls 回填（见 `mergeHistory`）。
+ */
+export interface HistoryToolCall {
+  id: string
+  tool_name?: string
+  input?: string
+  output?: string
+  is_error?: boolean
+  created_at?: string
+  turn_id?: string
+}
 
 export const THINK_START = '[thinking]'
 export const THINK_END = '[/thinking]'
@@ -189,16 +240,24 @@ export function stripUserInputTag(content: string): string {
   return content.replace(/^\s*<user_input>\s*([\s\S]*?)\s*<\/user_input>\s*$/, '$1').trim()
 }
 
-/** rAF 节流（deepseek use-throttled-visual-update） */
-export function throttleRaf<T extends (...args: any[]) => void>(fn: T): T {
+/**
+ * rAF 节流（deepseek use-throttled-visual-update）。
+ *
+ * `never[]` 而不是 `any[]`：函数参数位置是逆变的，用 `unknown[]` 会让任何具体签名的
+ * 函数都赋不进来，`never[]` 才是「接受任意参数列表」的正确写法。
+ */
+export function throttleRaf<T extends (...args: never[]) => void>(fn: T): T {
+  const call = fn as (...args: Parameters<T>) => void
   let raf = 0
-  let lastArgs: any[]
-  const wrapped = ((...args: any[]) => {
+  let lastArgs: Parameters<T> | null = null
+  const wrapped = ((...args: Parameters<T>) => {
     lastArgs = args
     if (raf) return
     raf = requestAnimationFrame(() => {
       raf = 0
-      fn(...lastArgs)
+      const pending = lastArgs
+      lastArgs = null
+      if (pending) call(...pending)
     })
   }) as T
   return wrapped

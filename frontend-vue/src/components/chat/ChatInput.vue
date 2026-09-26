@@ -81,7 +81,8 @@ const modelOptions = computed(() =>
   })),
 )
 
-function onModelChange(v: any) {
+/** a-select 的 update:value 由组件派发，形状取决于 options；这里只做字符串归一 */
+function onModelChange(v: unknown) {
   modelValue.value = String(v || '')
   emit('model-change', modelValue.value)
 }
@@ -105,7 +106,7 @@ const toolsModeOptions = computed(() =>
   })),
 )
 
-function onToolsModeChange(v: any) {
+function onToolsModeChange(v: unknown) {
   emit('tools-mode-change', String(v))
 }
 
@@ -528,8 +529,9 @@ async function handleFiles(files: FileList | File[]) {
         isAudio: AUDIO_TYPES.includes(result.mimeType),
       })
     }
-  } catch (e: any) {
-    message.error(tr('文件上传失败: {error}', { error: e.message || tr('网络错误') }))
+  } catch (e) {
+    const detail = e instanceof Error ? e.message : ''
+    message.error(tr('文件上传失败: {error}', { error: detail || tr('网络错误') }))
   } finally {
     uploading.value = false
     if (fileInputRef.value) fileInputRef.value.value = ''
@@ -599,15 +601,57 @@ function removeAttachment(id: string) {
 // 不生成音频文件、不经后端、不调用 Whisper。原实现是 MediaRecorder 录成 webm →
 // 上传 → 后端 speech_to_text 调 Whisper API，既有 API 费用又占后端资源；
 // 而多数场景用户要的只是"把说的话变成字"。
+/**
+ * Web Speech API 的最小形状。
+ *
+ * 全部自声明、不引用 lib.dom 的 `SpeechRecognition*`：
+ * 1. lib.dom **没有**识别器主接口（规范未进 lib），只有事件/结果接口；
+ * 2. eslint 的 `no-undef` 走 `browser` globals 列表，里面没有 `SpeechRecognitionEvent`，
+ *    引用它会被判未定义（tsc 侧却在 lib.dom 里找得到，两边覆盖不一致）。
+ * 各浏览器还带 `webkit` 前缀，故构造器也在这里收口。
+ */
+interface SpeechAlternative {
+  transcript: string
+}
+interface SpeechResult {
+  isFinal: boolean
+  length: number
+  [index: number]: SpeechAlternative
+}
+interface SpeechResultEvent {
+  /** 本轮发生变化的最小下标（interim 结果每次重发整段） */
+  resultIndex: number
+  results: { length: number; [index: number]: SpeechResult }
+}
+interface SpeechErrorEvent {
+  error: string
+  message?: string
+}
+interface SpeechRecognizer {
+  lang: string
+  continuous: boolean
+  interimResults: boolean
+  onresult: ((e: SpeechResultEvent) => void) | null
+  onerror: ((e: SpeechErrorEvent) => void) | null
+  onend: (() => void) | null
+  start(): void
+  stop(): void
+}
+type SpeechRecognitionCtor = new () => SpeechRecognizer
+
 const SpeechRec =
-  (window as unknown as { SpeechRecognition?: any; webkitSpeechRecognition?: any }).SpeechRecognition
-  || (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition
+  (window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor
+    webkitSpeechRecognition?: SpeechRecognitionCtor
+  }).SpeechRecognition
+  || (window as unknown as { webkitSpeechRecognition?: SpeechRecognitionCtor })
+    .webkitSpeechRecognition
 const speechSupported = !!SpeechRec
 
 const recording = ref(false)
 const recordingTimer = ref(0)
 let recordingInterval: ReturnType<typeof setInterval> | null = null
-let recognizer: any = null
+let recognizer: SpeechRecognizer | null = null
 /** 本次会话已定稿的文本（interim 结果每次重发整段，需与它拼接） */
 let speechFinal = ''
 /** 开始转写前的输入框内容：识别结果追加在它之后 */
@@ -627,7 +671,7 @@ function startRecording() {
     speechFinal = ''
     speechPrefix = input.value ? input.value.replace(/\s*$/, ' ') : ''
 
-    recognizer.onresult = (e: any) => {
+    recognizer.onresult = (e: SpeechResultEvent) => {
       let interim = ''
       for (let i = e.resultIndex; i < e.results.length; i++) {
         const r = e.results[i]
@@ -637,7 +681,7 @@ function startRecording() {
       // 定稿 + 临时结果实时上屏：用户随时能看到识别到哪了
       input.value = speechPrefix + speechFinal + interim
     }
-    recognizer.onerror = (e: any) => {
+    recognizer.onerror = (e: SpeechErrorEvent) => {
       // no-speech / aborted 属正常收尾（静音超时、用户停止），不当错误
       if (e?.error === 'no-speech' || e?.error === 'aborted') return
       message.error(

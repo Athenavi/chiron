@@ -80,10 +80,9 @@ function hiddenByAncestor(run: SubagentRunView): boolean {
  */
 const liveRuns = computed(() => {
   const known = new Set(runs.value.map(r => r.run_id))
-  const out: Record<string, any> = {}
-  for (const raw of props.liveEvents) {
-    const e = raw as any
-    const id: string = e?.run_id
+  const out: Record<string, SubagentRunView> = {}
+  for (const e of props.liveEvents) {
+    const id = e.run_id
     if (!id || known.has(id)) continue // API 已有 → 以 API 为准（它带摘要与用量）
     const prev = out[id]
     const done = e.type === 'subagent.done'

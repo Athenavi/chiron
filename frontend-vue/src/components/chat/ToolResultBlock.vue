@@ -12,11 +12,45 @@ const props = defineProps<{ item: ToolResultItem }>()
 const expanded = ref(props.item.isError)
 watch(() => props.item.isError, isError => { if (isError) expanded.value = true })
 
+/** JSON.parse 的返回值是 any —— 这里是边界，先收成「字符串键对象」再判形状 */
+function asRecord(v: unknown): Record<string, unknown> | undefined {
+  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : undefined
+}
+
+/** read_file 返回（python-engine/app/tools/read_file.py）：{ path, content, offset? } */
+interface ReadResult {
+  path?: string
+  content?: unknown
+  offset?: number | string
+  /** 文件总行数（read_file 回传；缺失时模板渲染为空） */
+  total_lines?: number
+}
+
+/** 命令/终端返回：stdout / stderr / exit_code 之一（各工具字段名不统一，output 是别名） */
+interface TerminalResult {
+  stdout?: string
+  stderr?: string
+  output?: string
+  exit_code?: number | string
+}
+
+/** 搜索返回：按文件分组的命中项 */
+interface SearchMatch {
+  path?: string
+  line?: number | string
+  text?: unknown
+}
+interface SearchResult {
+  matches?: SearchMatch[]
+  /** 命中总数（工具回传；缺失时模板改用分组行数） */
+  count?: number
+}
+
 interface ParsedResult {
   kind: 'read' | 'terminal' | 'search' | 'diff' | 'json' | 'text'
-  read?: any
-  terminal?: any
-  search?: any
+  read?: ReadResult
+  terminal?: TerminalResult
+  search?: SearchResult
   diff?: ParsedDiff
   path?: string
   text: string
@@ -32,29 +66,31 @@ const isImageData = computed(() => {
 const parsed = computed<ParsedResult>(() => {
   const c = props.item.content
   if (isImageData.value) return { kind: 'text', text: '' }
-  let obj: any = null
+  let obj: unknown = null
   try { obj = JSON.parse(c) } catch { /* not json */ }
+  const rec = asRecord(obj)
 
   // edit_file 返回 { path, success, diff }（python-engine/app/tools/edit_file.py）
-  if (obj && typeof obj === 'object' && typeof obj.diff === 'string' && obj.diff) {
+  if (rec && typeof rec.diff === 'string' && rec.diff) {
     return {
       kind: 'diff',
-      diff: parseUnifiedDiff(obj.diff),
-      path: typeof obj.path === 'string' ? obj.path : '',
+      diff: parseUnifiedDiff(rec.diff),
+      path: typeof rec.path === 'string' ? rec.path : '',
       text: '',
     }
   }
-  if (obj && typeof obj === 'object' && 'path' in obj && 'content' in obj && obj.content !== undefined) {
-    return { kind: 'read', read: obj, text: '' }
+  if (rec && 'path' in rec && 'content' in rec && rec.content !== undefined) {
+    // 形状已在上面的 in 判断里确认（content 存在即可渲染，offset 缺失按 0）
+    return { kind: 'read', read: rec as ReadResult, text: '' }
   }
-  if (obj && typeof obj === 'object' && ('stdout' in obj || 'exit_code' in obj)) {
-    return { kind: 'terminal', terminal: obj, text: '' }
+  if (rec && ('stdout' in rec || 'exit_code' in rec)) {
+    return { kind: 'terminal', terminal: rec as TerminalResult, text: '' }
   }
-  if (obj && typeof obj === 'object' && Array.isArray(obj.matches)) {
-    return { kind: 'search', search: obj, text: '' }
+  if (rec && Array.isArray(rec.matches)) {
+    return { kind: 'search', search: { matches: rec.matches as SearchMatch[] }, text: '' }
   }
-  if (obj && typeof obj === 'object') {
-    return { kind: 'json', text: JSON.stringify(obj, null, 2) }
+  if (rec) {
+    return { kind: 'json', text: JSON.stringify(rec, null, 2) }
   }
   // 纯文本里携带的 patch（例如 run_code 直接打印 diff）同样按 diff 渲染
   if (looksLikeDiff(c)) return { kind: 'diff', diff: parseUnifiedDiff(c), text: '' }
@@ -169,8 +205,8 @@ const diffTitle = computed(() => {
       class="read-block"
     >
       <div class="read-banner">
-        <span class="read-path">{{ parsed.read.path }}</span>
-        <span class="read-count">{{ $t('{n} 行', { n: parsed.read.total_lines }) }}</span>
+        <span class="read-path">{{ parsed.read?.path }}</span>
+        <span class="read-count">{{ $t('{n} 行', { n: parsed.read?.total_lines }) }}</span>
       </div>
       <div class="read-body">
         <div
@@ -197,8 +233,8 @@ const diffTitle = computed(() => {
         >{{ $t('{n} 行', { n: terminalLines }) }}</span>
         <span
           class="terminal-exit"
-          :class="{ nonzero: parsed.terminal.exit_code }"
-        >exit {{ parsed.terminal.exit_code ?? '?' }}</span>
+          :class="{ nonzero: parsed.terminal?.exit_code }"
+        >exit {{ parsed.terminal?.exit_code ?? '?' }}</span>
       </div>
       <pre class="terminal-body">{{ terminalText }}</pre>
     </div>
@@ -209,7 +245,7 @@ const diffTitle = computed(() => {
       class="search-block"
     >
       <div class="search-header">
-        <span class="search-summary">{{ $t('{matched} 个匹配 · {files} 个文件', { matched: parsed.search.count ?? searchFiles.length, files: searchFiles.length }) }}</span>
+        <span class="search-summary">{{ $t('{matched} 个匹配 · {files} 个文件', { matched: parsed.search?.count ?? searchFiles.length, files: searchFiles.length }) }}</span>
       </div>
       <div class="search-body">
         <template

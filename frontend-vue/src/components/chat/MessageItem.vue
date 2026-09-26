@@ -57,7 +57,9 @@ interface SourceChip {
 
 const sourceChips = computed<SourceChip[]>(() => {
   if (props.item.kind !== 'text' || props.item.role !== 'assistant') return []
-  const meta: Record<string, any> = (props.item as any).metadata || {}
+  // metadata 已收进 TextItem（此前这里靠 `as any` 绕过，接口缺字段）—— 只有 python
+  // 引擎链路会带，Go 网关路径无此字段，故仍要兜底空对象
+  const meta: Record<string, unknown> = props.item.metadata || {}
   const chips: SourceChip[] = []
   const kbId = typeof meta.kb_id === 'string' && meta.kb_id ? meta.kb_id : ''
   if (kbId) {
@@ -226,7 +228,8 @@ md.use(texmath, { engine: katex, delimiters: 'dollars', katexOptions: { throwOnE
  * 外链一律新窗口打开：SPA 内直接跳走会丢掉当前对话（消息状态、滚动位置、
  * 正在流的回合）。站内相对链接保持原行为，交给应用自身处理。
  */
-md.renderer.rules.link_open = (tokens: any[], idx: number, options: any, _env: any, self: any) => {
+// 签名沿用 markdown-it 的 RenderRule（去掉注解即可由 rules.<name> 推导），不再写 any[]
+md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
   const token = tokens[idx]
   const href = (token?.attrGet?.('href') as string | null) || ''
   if (/^https?:\/\//i.test(href)) {
@@ -235,7 +238,7 @@ md.renderer.rules.link_open = (tokens: any[], idx: number, options: any, _env: a
   }
   return self.renderToken(tokens, idx, options)
 }
-md.renderer.rules.fence = (tokens: any[], idx: number) => {
+md.renderer.rules.fence = (tokens, idx) => {
   const token = tokens[idx]
   const lang = (token.info || '').trim().toLowerCase()
   const code = token.content
@@ -261,7 +264,7 @@ md.renderer.rules.fence = (tokens: any[], idx: number) => {
 const CODE_COLLAPSE_LINES = 28
 
 // P 性能：图片懒加载（长列表/历史中大量图片不阻塞首屏，滚动到才加载）
-md.renderer.rules.image = (tokens: any[], idx: number) => {
+md.renderer.rules.image = (tokens, idx) => {
   const token = tokens[idx]
   const src = md.utils.escapeHtml(token.attrGet('src') || '')
   const alt = md.utils.escapeHtml(token.content || '')
