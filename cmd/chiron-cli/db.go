@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"os"
-	"os/exec"
 	"strings"
 	"time"
 
@@ -15,24 +14,28 @@ import (
 
 var dbCmd = &cobra.Command{
 	Use:   "db",
-	Short: "Database management",
-	Long:  `Manage Chiron database.`,
+	Short: "Database diagnostics (read-only)",
+	Long: `Read-only database diagnostics.
+
+Chiron never runs migrations from this CLI: Alembic is the single migration
+entry point. Run it from the repository root (see requirements-migrate.txt):
+
+    alembic upgrade head     # fresh database
+    alembic stamp head       # existing database
+`,
 }
 
 var dbStatusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show database status",
-	RunE:  runDBStatus,
-}
-
-var dbMigrateCmd = &cobra.Command{
-	Use:  "migrate",
-	RunE: runDBMigrate,
+	Short: "Show database status and the applied Alembic revision",
+	Long: `Connect with POSTGRES_DSN and report reachability plus the applied migration
+revision, read from the alembic_version table (the single source of truth for
+schema state). This command never writes schema.`,
+	RunE: runDBStatus,
 }
 
 func init() {
 	dbCmd.AddCommand(dbStatusCmd)
-	dbCmd.AddCommand(dbMigrateCmd)
 }
 
 // getDSN 读取 POSTGRES_DSN，优先从环境变量获取
@@ -96,50 +99,4 @@ func runDBStatus(cmd *cobra.Command, args []string) error {
 	}
 	fmt.Printf("\nApplied migration: %s\n", revision)
 	return nil
-}
-
-func runDBMigrate(cmd *cobra.Command, args []string) error {
-	dsn := getDSN()
-	fmt.Printf("Migrating database: %s\n", sanitizeDSN(dsn))
-
-	// 如果指定了 --dry-run 参数，使用 --sql 输出 SQL 而不实际执行
-	for _, a := range args {
-		if a == "--dry-run" || a == "--sql" {
-			os.Setenv("DATABASE_DSN", dsn)
-			python := "python"
-			if v := os.Getenv("PYTHON"); v != "" {
-				python = v
-			} else if v := os.Getenv("CHIRON_PYTHON"); v != "" {
-				python = v
-			}
-			runCmd := exec.Command(python, "-m", "alembic", "--config", "alembic.ini", "upgrade", "head", "--sql")
-			runCmd.Dir = "."
-			runCmd.Stdout = os.Stdout
-			runCmd.Stderr = os.Stderr
-			return runCmd.Run()
-		}
-	}
-
-	fmt.Println("Running: alembic upgrade head")
-	if err := db.RunMigrations(dsn); err != nil {
-		return fmt.Errorf("database migration failed: %w", err)
-	}
-
-	fmt.Println("Database migrations completed successfully")
-	return nil
-}
-
-// hasInternalMigrationFiles 检测目录下是否存在内部迁移器格式（.up.sql/.down.sql）文件
-func hasInternalMigrationFiles(dir string) bool {
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		return false
-	}
-	for _, e := range entries {
-		name := e.Name()
-		if strings.HasSuffix(name, ".up.sql") || strings.HasSuffix(name, ".down.sql") {
-			return true
-		}
-	}
-	return false
 }
