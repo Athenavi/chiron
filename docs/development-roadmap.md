@@ -32,10 +32,11 @@
 - 依据：`internal/api/gateway_router.go` 62 KB；`python-engine/app/agent/runtime.py` 101 KB、`app/main.py` 85 KB、`app/memory/service.py` 54 KB、`app/queue/worker.py` 51 KB。
 - 验收（若启动）：先出拆分边界与契约清单，再按「纯移动 + 零行为变更」分步提交，每步测试绿。
 
-### L3-7 `WorkflowView` 缺组件测试
+### L3-7 `WorkflowView` 组件测试 ✅
 
-- 依据：「套用模板」UI 已补齐，但无组件测试（视图约 1700 行，密集依赖 VueFlow 画布）。
-- 验收：先做 `@vue-flow/*` 测试替身，再补最小 spec（模板按钮存在、点击弹窗打开、列表按 `templateNodeCount`/`templateEdgeCount` 渲染、点「使用」时 `templateUsingId` 进入 loading）。可与 L3-4 同做。
+- 本次提交：新增 `frontend-vue/src/views/__tests__/WorkflowView.spec.ts` —— `@vue-flow/*` 组件替身 + `useVueFlow` 最小桩（组件只渲染插槽、`getNodes/getEdges` 回吐 ref 形状的空图、`fitView` 用 spy），覆盖「工具栏入口 → 弹窗打开 → 列表按模板 payload 的 nodes/edges 数量渲染 → 点『使用』进入 loading → 成功后关窗并重新布局」。
+- 两个坑（已写进测试注释）：① antd Modal 的组件名是 `AModal`，而 VTU 的 `stubs` 按**组件名**匹配 —— 只写 `Modal` 不生效；② `vi.mock('../api')` 这类**不带 `from`** 的路径不会被 `from '...'` 的批量替换命中（调试时 mock 实际指向不存在的 `src/views/api`，表现为「vi.fn 不是函数」）。
+- 验收：vitest **466 passed**（464 + 2）、`eslint` 0、`vue-tsc -b` 通过。
 
 ### L3-8 引擎侧 `SSEProducer` 未接线（死代码）✅
 
@@ -82,7 +83,7 @@
 | 批次 | 内容 | 理由 |
 |---|---|---|
 | C. 跨层设计 | L4-1、L4-2、L4-3 | 需设计评审或可达 PG；L4-2 待用户决策 |
-| D. 可维护性 | L3-2 待决项、L3-4、L3-7、L3-8 | 无功能收益；L3-8 最小且可本地闭环 |
+| D. 可维护性 | L3-2 待决项、L3-4 | 无功能收益，放最后 |
 
 > 批次 A（L2-2/L5-2）与批次 B（L1-4）已完成，见 §2/§5 与 §1。
 
