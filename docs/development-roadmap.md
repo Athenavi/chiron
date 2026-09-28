@@ -28,10 +28,11 @@
 - 剩余 27 条警告均为风格项（`no-unused-vars` 21 + `vue/require-default-prop` 5 + `vue/no-template-shadow` 1），无功能收益，不再动。
 - 硬约束回顾：不为清零加 `eslint-disable`；每批单独跑 `vue-tsc -b` 与组件测试（本批 466 passed）。踩过的坑见提交信息（模板里 `as A | B` 会被判成 Vue2 filter、interface 不满足 `Record<string, unknown>` 形参等）。
 
-### L3-4 巨型文件拆分（评估项）
+### ✅ L3-4 巨型文件拆分（评估已产出 → `docs/split-assessment.md`）
 
-- 依据：`internal/api/gateway_router.go` 62 KB；`python-engine/app/agent/runtime.py` 101 KB、`app/main.py` 85 KB、`app/memory/service.py` 54 KB、`app/queue/worker.py` 51 KB。
-- 验收（若启动）：先出拆分边界与契约清单，再按「纯移动 + 零行为变更」分步提交，每步测试绿。
+- 实测现状（第一方代码，已排除 `vendor/`·`locales/`·迁移 baseline·ORM 生成物）：`ChatView.vue` 3047 行 / 173 符号、`runtime.py` 1841 行（`AgentRuntime` 单类 1557 行）、`MediaView.vue` 1672、`WorkflowView.vue` 1649、`main.py` 1509（`lifespan` 单函数 559 行）、`mail_handler.go` 1308、`memory/service.py` 1264（单类 1240 行）、`ChatInput.vue` 1193、`gateway_router.go` 970（`NewGatewayRouter` 372 行 + 10 个 `registerXxxRoutes`）。
+- 结论：**建议拆**，但只按「纯移动 + 零行为变更」分 5 批走。批次 1（`gateway_router.go` → `routes_*.go`：同包纯移动、零 import 变更）风险最低，建议先做；三个大类的**内部**拆解（`AgentRuntime` / `MemoryService` / `QueueWorker` 各自是状态机/领域服务整体）属行为变更，明确排除。边界、契约、批次与验收口径见该文档。
+- 未启动：本项无功能收益，仍排在功能项之后（§7 批次 D）。
 
 ### L3-7 `WorkflowView` 组件测试 ✅
 
@@ -81,7 +82,7 @@
 | 新功能方向 | 产品路线图输入 |
 | 前端 e2e（Playwright） | 当前无 e2e 配置，需确认是否引入浏览器依赖 |
 | `internal/enterprise`/`monitor`/`storage`/`id`/`model` 补测试 | 当前 0 测试文件但较小，需确认回归风险 |
-| `internal/api` 路由聚合方式 | `gateway_router.go` 单文件承载，是否拆分待 L3-4 评估 |
+| `internal/api` 路由聚合方式 | 已评估（L3-4）：建议按业务域拆 `routes_*.go`（同包纯移动、零 import 变更），见 [拆分评估](split-assessment.md) |
 
 ## 7. 建议顺序
 
