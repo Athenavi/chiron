@@ -53,11 +53,11 @@
 - 待评审拍板：设计文档 §8 的 5 个未决问题（对话 run 是否改走 `engine:tasks`、messages 快照形状、非幂等工具的中断判定、reconciler 接管风暴、checkpoint TTL 取值）。
 - 实现拆批见设计文档 §7（批 2 只增表与写入、无行为变更；批 3 才改执行路径）。
 
-### L4-2 `chiron-cli db` 迁移入口交互设计
+### ✅ L4-2 CLI 迁移入口：完全不接触迁移（决策记录 → `docs/db-migration-entry.md`）
 
-- 现状：`chiron-cli db migrate` 实际 shell 出 `alembic upgrade head`，要求目标机有 python+alembic；`db status` 已读 `alembic_version`。
-- 待决（用户决策）：CLI 完全不接触迁移（alembic 唯一入口）或保留「受控便捷封装」。
-- 验收：产出决策记录，并统一 `chiron-cli db` 帮助文本/退出码/错误提示。
+- 决策（用户）：**CLI 完全不接触迁移，Alembic 唯一入口**。理由：迁移是发布流程步骤而非运行时命令；两套入口必然版本漂移；应用镜像**刻意不装 Python**（`requirements-migrate.txt`），CLI 迁移在生产最需要时恰恰不可用，只会造成"代码已升级、迁移未跑"的假象。
+- 本次改动：删除 `chiron-cli db migrate` 与 `runDBMigrate`（含 `--dry-run/--sql`），删除随之失去全部调用者的 `internal/db/migrate.go`（`RunMigrations` + `alembicConfigPath`/`dotEnvPath`/`resolvePythonBinary`）与 `internal/db/migrate_test.go`，删除死代码 `hasInternalMigrationFiles`；**保留** `db status`（只读）与 `internal/db/schema_version.go`（网关启动的 schema 校验，不写 schema）；`db` 组帮助文本改为「只读诊断 + 明确指向 Alembic」。
+- 仍未处理（需单独决定，见决策文档 §4）：`scripts/cli/commands/migrate.py` 的 `revision`（**autogenerate**）/`upgrade`/`downgrade`，以及 `scripts/init.py` 第 6 步的自动迁移 —— 在这两处定下前，「唯一入口」只在 Go CLI 层面成立。
 
 ### L4-3 时间列 `timestamp` → `timestamptz`
 

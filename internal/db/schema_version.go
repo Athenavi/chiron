@@ -25,7 +25,8 @@ import (
 //  1. ParseMigrationHead：从 migrations/versions/*.py 解析出期望的 head revision；
 //  2. CheckSchemaVersion：与数据库 alembic_version.version_num 比对。
 //
-// 不写任何 schema、不修改任何文件（对比旧的 RunMigrations：它会 shell 出 python 并写 .env）。
+// 不写任何 schema、不修改任何文件（Go 侧旧的 RunMigrations 会 shell 出 python 并写 .env，
+// 已随 CLI 迁移入口一并删除，见 docs/db-migration-entry.md）。
 
 var (
 	migrationRevisionRe = regexp.MustCompile(`(?m)^revision:\s*str\s*=\s*['"]([^'"]+)['"]`)
