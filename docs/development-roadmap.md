@@ -76,6 +76,12 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 - 依据：`WorkflowView`「套用模板」UI 已补齐，但无组件测试（视图 1700 行，密集依赖 VueFlow 画布）。
 - 验收：先做 `@vue-flow/*` 测试替身，再补最小 spec（模板按钮存在、点击弹窗打开、列表按 `templateNodeCount`/`templateEdgeCount` 渲染、点「使用」时 `templateUsingId` 进入 loading）。可与 L3-4 同做。
 
+### L3-8 引擎侧 `SSEProducer` 未接线（死代码）
+
+- 依据：`python-engine/app/sse/producer.py` 定义 `SSEProducer` 并由 `app/sse/__init__.py` 导出，但**全仓没有任何构造点**（`grep -rn 'SSEProducer(' python-engine` 零命中 —— 只命中不到类定义、`__init__.py` 的导入与 `__all__`）；`app/agent/runtime.py` 只把它当可选参数（`sse_producer: Any = None`）。它 XADD 的 `sse:<task_id>` 流在 Go 侧与引擎侧都没有消费者 —— 网关 hub 用的是 `sse:events:<session_id>`。
+- 风险：与真实链路**相反**的暗示。真实链路是"引擎 HTTP SSE → 网关 hub → per-session Stream → 浏览器"；读到 producer.py 的注释（"Go 侧订阅 Redis Stream 并转发到前端"）会以为引擎直接写 Redis 给前端，排障时找错地方（写 L5-2 时正是差点这么写）。
+- 验收：先确认无下游 fork 依赖该模块路径，然后删除模块与 `__init__` 导出；若要保留该设计，则需接线并补一条覆盖它的集成测试。
+
 ## 4. L4 结构性后续（来源：多实例部署指南 §10）
 
 ### L4-1 run 现场 checkpoint 续跑
@@ -99,10 +105,11 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 
 ## 5. L5 文档
 
-### L5-2 架构与请求链路总览
+### L5-2 架构与请求链路总览 ✅
 
-- 缺口：缺**一次对话请求的完整链路**（前端 → nginx 反代 `/v1`、`/events`、`/ws` → 网关认证/限流/计费 → 引擎 → Redis Stream 事件回传）；`internal/api` 85 文件 / 26 133 行，python-engine 200 源文件。
-- 验收：补一篇「架构与请求链路」，每步由代码/命令支撑，放进 `docs/` 并从 `README.md` 链接。
+- 本次提交：新增 [架构与请求链路](architecture.md) —— 组件拓扑（含 nginx `location` 表与各组件端口）、一次对话请求的完整链路（每步给 `文件:符号` 指针）、事件回传与断线重放（per-session Stream + `Last-Event-ID`）、其它入口（统一任务 / 工作流 / RPA WebSocket / 公开分享）、凭证与信任边界、自查命令；README 已链接。
+- 该文档给出的命令**全部在本机实测过**：`/health`、`/ready`（`postgres/redis` 均 `up`）、`/events` 与 `/submit` 无凭证 401、内部端点带对/错 token 的 200/401、路由清单导出、`XRANGE sse:events:*`。
+- 取证时纠正了两处容易写错的表述：会话流**不是** WebSocket（`/ws` 只保留 RPA 桥，`gateway_router.go` 注册处有"批 B-3′"说明）；事件回传是"引擎 HTTP SSE → 网关 hub → per-session Redis Stream → 浏览器"，**不是**"引擎直接写 Redis 给前端"（后者是未接线的遗留，见 L3-8）。
 
 ## 6. 开放项（待确认，不作为计划依据）
 

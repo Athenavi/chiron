@@ -55,6 +55,9 @@ docker compose up -d --scale gateway=2 --scale python-engine=2
 多副本部署、依赖门禁、就绪探针与伸缩边界的完整说明见
 [多实例部署指南](docs/deployment-multi-instance.md)。
 
+一次对话请求从浏览器到引擎、再回到浏览器的完整链路（每步都给出代码位置与自查命令）见
+[架构与请求链路](docs/architecture.md)。
+
 ## 关键配置
 
 | 变量 | 说明 |
