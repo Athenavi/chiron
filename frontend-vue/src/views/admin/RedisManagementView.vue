@@ -13,7 +13,22 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 // ── 实例状态 ──
 // GET /v1/admin/redis → { status, mode, pool: { hits, misses, timeouts, total_conns, idle_conns, stale_conns } }
-const redisData = ref<any>(null)
+/** 连接池统计（GET /v1/admin/redis 的 pool） */
+interface RedisPoolStats {
+  hits?: number
+  misses?: number
+  timeouts?: number
+  total_conns?: number
+  idle_conns?: number
+  stale_conns?: number
+}
+/** GET /v1/admin/redis → { status, mode, pool } */
+interface RedisStatus {
+  status?: string
+  mode?: string
+  pool?: RedisPoolStats
+}
+const redisData = ref<RedisStatus | null>(null)
 const loading = ref(false)
 
 async function loadRedis() {
@@ -28,7 +43,7 @@ async function loadRedis() {
   }
 }
 
-const pool = computed<any>(() => redisData.value?.pool || {})
+const pool = computed<RedisPoolStats>(() => redisData.value?.pool || {})
 
 const hitRate = computed(() => {
   const hits = Number(pool.value.hits) || 0
@@ -49,7 +64,7 @@ const poolStats = computed(() => [
 
 // ── 慢日志 ──
 // GET /v1/admin/redis/slow-log → { slow_log: [...], error? }
-const slowLog = ref<any[]>([])
+const slowLog = ref<Array<Record<string, unknown>>>([])
 const slowError = ref<string | null>(null)
 const slowLoading = ref(false)
 
@@ -95,7 +110,7 @@ const slowColumns = computed(() => {
   ]
 })
 
-function slowCellText(v: any): string {
+function slowCellText(v: unknown): string {
   if (v == null) return ''
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
@@ -187,8 +202,8 @@ onMounted(() => {
           size="small"
         >
           <Descriptions.Item :label="$t('common.status')">
-            <Tag :color="statusColor(redisData.status)">
-              {{ statusText(redisData.status) }}
+            <Tag :color="statusColor(redisData.status || '')">
+              {{ statusText(redisData.status || '') }}
             </Tag>
           </Descriptions.Item>
           <Descriptions.Item :label="$t('common.run_mode')">

@@ -19,7 +19,7 @@ import {
 } from '../../api/auth'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 // ── Provider 列表 ──
 
@@ -126,7 +126,7 @@ async function handleSave() {
     message.warning(t('errors.client_secret_is_required_for_a_new_provider'))
     return
   }
-  const body: any = {
+  const body: Record<string, unknown> = {
     name: providerForm.name,
     issuer: providerForm.issuer,
     client_id: providerForm.client_id,
@@ -220,7 +220,7 @@ async function handleSaveCaptcha() {
       return
     }
   }
-  const body: any = {
+  const body: Record<string, unknown> = {
     provider: captcha.provider,
     site_key: captcha.site_key,
     enabled: captcha.enabled,
@@ -304,7 +304,7 @@ async function handleSaveSms() {
     message.warning(t('auth.sms_login_depends_on_sending_capability_please_also_enable_the_sms_service'))
     return
   }
-  const body: any = {
+  const body: Record<string, unknown> = {
     provider: sms.provider,
     sign_name: sms.sign_name,
     template_id: sms.template_id,

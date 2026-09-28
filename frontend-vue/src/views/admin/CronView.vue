@@ -9,7 +9,7 @@ import { api, triggerCronJob, cronWebhookUrl } from '@/api'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 import { useI18n } from 'vue-i18n'
-import { errorDetail } from '../utils/apiError'
+import { errorDetail } from '../../utils/apiError'
 const { t } = useI18n()
 /**
  * 定时任务管理（从 DashboardView 拆出）。

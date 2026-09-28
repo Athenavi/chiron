@@ -18,13 +18,14 @@ import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
 import { collectSkillUsage, usageOf, type SkillUsage } from '../utils/skillUsage'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorDetail, errorMessageText } from '../utils/apiError'
 const { t: tr } = useI18n()
 interface SkillParam {
   name: string
   type?: string
   description?: string
   required?: boolean
-  default?: any
+  default?: unknown
   enum?: string[]
 }
 
@@ -135,8 +136,7 @@ async function handleMarketInstall(item: MarketItem) {
     message.success(tr('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadSkills()])
   } catch (e) {
-    const raw = e?.response?.data
-    message.error(tr('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
+    message.error(tr('errors.install_failed_error', { error: serverErrorDetail(e, '') || errorMessageText(e, '') }))
   } finally {
     marketInstallingId.value = null
   }
@@ -167,7 +167,7 @@ async function toggleEnabled(s: Skill, v: boolean) {
     if (v) message.success(tr('common.name_is_enabled', { name: s.name }))
     else message.success(tr('common.name_is_disabled', { name: s.name }))
   } catch (e) {
-    message.error(tr('errors.operation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.operation_failed_error', { error: serverErrorDetail(e, '') }))
   }
 }
 
@@ -219,9 +219,18 @@ function openAttach(s: Skill) {
 // ── 运行 ──
 const runOpen = ref(false)
 const runTarget = ref<Skill | null>(null)
-const runValues = ref<Record<string, any>>({})
+const runValues = ref<Record<string, unknown>>({})
 const runSubmitting = ref(false)
-const runResult = ref<any>(null)
+const runResult = ref<unknown>(null)
+
+/**
+ * 运行表单取值：Select / InputNumber / Input 只接受 `string | number`
+ * （布尔型参数由 Switch 单独绑定 `=== true`），这里做一次窄化。
+ */
+function paramText(name: string): string | number {
+  const v = runValues.value[name]
+  return typeof v === 'string' || typeof v === 'number' ? v : ''
+}
 
 function openRun(s: Skill) {
   runTarget.value = s
@@ -235,7 +244,7 @@ function openRun(s: Skill) {
 
 async function submitRun() {
   if (!runTarget.value) return
-  const params: Record<string, any> = {}
+  const params: Record<string, unknown> = {}
   for (const p of runTarget.value.parameters || []) {
     const v = runValues.value[p.name]
     if (v === undefined || v === null || v === '') {
@@ -251,14 +260,15 @@ async function submitRun() {
     runResult.value = resp.data?.data || resp.data
     message.success(tr('agent.skill_execution_complete'))
   } catch (e) {
-    message.error(tr('errors.execution_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.execution_failed_error', { error: serverErrorDetail(e, '') }))
   } finally {
     runSubmitting.value = false
   }
 }
 
-function renderResult(res: any): string {
-  if (res?.output) return typeof res.output === 'string' ? res.output : JSON.stringify(res.output, null, 2)
+function renderResult(res: unknown): string {
+  const r = (res ?? {}) as { output?: unknown }
+  if (r.output) return typeof r.output === 'string' ? r.output : JSON.stringify(r.output, null, 2)
   return JSON.stringify(res, null, 2)
 }
 
@@ -268,7 +278,7 @@ const installInline = ref('')
 const installLoading = ref(false)
 
 async function handleInstall() {
-  const body: any = {}
+  const body: Record<string, unknown> = {}
   if (installURL.value) body.url = installURL.value
   else if (installInline.value) body.inline = installInline.value
   else { message.error(tr('common.please_enter_a_url_or_inline_json')); return }
@@ -281,7 +291,7 @@ async function handleInstall() {
     await loadSkills()
     activeTab.value = 'list'
   } catch (e) {
-    message.error(tr('errors.install_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.install_failed_error', { error: serverErrorDetail(e, '') }))
   } finally {
     installLoading.value = false
   }
@@ -289,7 +299,12 @@ async function handleInstall() {
 
 // ── 生成 ──
 const genDesc = ref('')
-const genResult = ref<any>(null)
+/** POST /v1/skills/generate 返回的 skill 摘要（模板直接读 name/description） */
+interface GeneratedSkill {
+  name?: string
+  description?: string
+}
+const genResult = ref<GeneratedSkill | null>(null)
 const genLoading = ref(false)
 
 async function handleGenerate() {
@@ -305,7 +320,7 @@ async function handleGenerate() {
     message.success(tr('agent.skill_generated_and_installed'))
     await loadSkills()
   } catch (e) {
-    message.error(tr('errors.generation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
+    message.error(tr('errors.generation_failed_error', { error: serverErrorDetail(e, '') }))
   } finally {
     genLoading.value = false
   }
@@ -689,31 +704,36 @@ async function handleGenerate() {
           </label>
           <Select
             v-if="p.enum?.length"
-            v-model:value="runValues[p.name]"
+            :value="paramText(p.name)"
             :options="p.enum.map(e => ({ value: e, label: e }))"
             :placeholder="p.description || p.name"
             style="width: 100%"
+            @update:value="(v: unknown) => { runValues[p.name] = v }"
           />
           <InputNumber
             v-else-if="p.type === 'number'"
-            v-model:value="runValues[p.name]"
+            :value="paramText(p.name)"
             :placeholder="p.description || p.name"
             style="width: 100%"
+            @update:value="(v: unknown) => { runValues[p.name] = v }"
           />
           <Switch
             v-else-if="p.type === 'boolean'"
-            v-model:checked="runValues[p.name]"
+            :checked="runValues[p.name] === true"
+            @update:checked="(v: unknown) => { runValues[p.name] = v === true }"
           />
           <Input.TextArea
             v-else-if="p.type === 'text'"
-            v-model:value="runValues[p.name]"
+            :value="paramText(p.name)"
             :rows="3"
             :placeholder="p.description || p.name"
+            @update:value="(v: unknown) => { runValues[p.name] = v }"
           />
           <Input
             v-else
-            v-model:value="runValues[p.name]"
+            :value="paramText(p.name)"
             :placeholder="p.description || p.name"
+            @update:value="(v: unknown) => { runValues[p.name] = v }"
           />
         </div>
       </div>

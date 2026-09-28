@@ -172,9 +172,9 @@ async function fetchDashboardData() {
     if (keysRes.status === 'fulfilled') {
       const keys = keysRes.value
       apiKeyStatus.value = {
-        active: keys.filter((k: any) => k.status === 'active').length,
-        rate_limited: keys.filter((k: any) => k.status === 'rate_limited').length,
-        circuit_open: keys.filter((k: any) => k.status === 'circuit_open').length,
+        active: keys.filter((k) => k.status === 'active').length,
+        rate_limited: keys.filter((k) => k.status === 'rate_limited').length,
+        circuit_open: keys.filter((k) => k.status === 'circuit_open').length,
       }
     }
   } catch {

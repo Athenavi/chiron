@@ -58,7 +58,15 @@ const queueChartOption = computed(() => ({
   ],
 }))
 
-const waitingTasks = ref<any[]>([])
+/** GET /v1/admin/queue 的 waiting_tasks[]（列由 dataIndex 渲染） */
+interface WaitingTask {
+  task_id?: string
+  user_id?: string
+  content?: string
+  queued_at?: string
+  position?: number
+}
+const waitingTasks = ref<WaitingTask[]>([])
 
 const columns = [
   { title: t('chat.message_id'), dataIndex: 'task_id', width: 180 },

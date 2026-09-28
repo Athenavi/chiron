@@ -37,8 +37,33 @@ const activeTab = ref('alipay')
  * 表单模型：键与后端 paymentConfigKeys 一一对应。
  * 保存时整体提交全量字段 —— 后端以环境变量为基准做覆盖，
  * 缺项会回退到 env，因此不能只提交变动字段。
+ *
+ * 用 type 而非 interface：`savePaymentConfig` 收 `Record<string, unknown>`，
+ * 只有对象字面量类型才带隐式索引签名，interface 不满足该形参。
  */
-const config = ref<Record<string, any>>({
+type PaymentConfigForm = {
+  public_base_url: string
+
+  alipay_enabled: boolean
+  alipay_app_id: string
+  alipay_private_key: string
+  alipay_public_key: string
+  alipay_gateway: string
+
+  wechat_enabled: boolean
+  wechat_mch_id: string
+  wechat_app_id: string
+  wechat_api_v3_key: string
+  wechat_mch_cert_serial_no: string
+  wechat_mch_private_key: string
+
+  paypal_enabled: boolean
+  paypal_client_id: string
+  paypal_secret: string
+  paypal_sandbox: boolean
+}
+
+const config = ref<PaymentConfigForm>({
   public_base_url: '',
 
   alipay_enabled: true,
@@ -66,9 +91,11 @@ const channels = ref<Record<string, PaymentChannelStatus>>({})
 const callbackUrls = ref<Record<string, string>>({})
 
 /** 用服务端返回的生效配置回填表单（只覆盖已知键，避免脏键进入表单模型） */
-function mergeConfig(src: Record<string, any>) {
-  for (const key of Object.keys(config.value)) {
-    if (src[key] !== undefined) config.value[key] = src[key]
+function mergeConfig(src: Record<string, unknown>) {
+  // 键集合来自表单模型自身，因此这里的动态写入是安全的（值形状由后端契约保证）
+  const form = config.value as unknown as Record<string, unknown>
+  for (const key of Object.keys(form)) {
+    if (src[key] !== undefined) form[key] = src[key]
   }
 }
 

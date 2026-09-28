@@ -5,7 +5,7 @@ import type { TableColumnsType } from 'ant-design-vue'
 import { api } from '../../api'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 interface ModelRoute {
   id: string
@@ -13,7 +13,7 @@ interface ModelRoute {
   model_id: string
   primary_provider: string
   fallback_order: string[]
-  provider_config: Record<string, any>
+  provider_config: Record<string, unknown>
   enabled: boolean
   priority: number
   created_at: string
@@ -70,7 +70,7 @@ function openEdit(r: ModelRoute) {
 
 async function save() {
   const fallback = form.value.fallback_order.split('\n').map(s => s.trim()).filter(Boolean)
-  let config: Record<string, any>
+  let config: Record<string, unknown>
   try {
     config = JSON.parse(form.value.provider_config || '{}')
   } catch {

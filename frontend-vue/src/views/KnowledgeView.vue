@@ -11,7 +11,8 @@ import EmptyState from '../components/common/EmptyState.vue'
 import { collectKbUsage, kbUsageOf, type KbUsage } from '../utils/kbUsage'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorDetail, errorStatus } from '../utils/apiError'
+
 const { t } = useI18n()
 interface KnowledgeBase {
   id: string
@@ -92,7 +93,7 @@ async function loadKnowledgeBases() {
   try {
     const res = await api.get('/v1/kb')
     // 降级：列表项缺失 visibility 时视为 private
-    knowledgeBases.value = (res.data?.data?.knowledge_bases || []).map((kb: any) => ({ ...kb, visibility: kb.visibility || 'private' }))
+    knowledgeBases.value = ((res.data?.data?.knowledge_bases || []) as KnowledgeBase[]).map(kb => ({ ...kb, visibility: kb.visibility || 'private' }))
   } catch {
     message.error(t('errors.failed_to_load_knowledge_base'))
   } finally {
@@ -110,7 +111,7 @@ async function createKnowledgeBase() {
     createForm.value = { name: '', description: '', type: 'wiki', visibility: 'private' }
     await loadKnowledgeBases()
   } catch (e) {
-    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.creation_failed')))
+    message.error(serverErrorDetail(e, t('errors.creation_failed')))
   } finally {
     creating.value = false
   }
@@ -132,7 +133,7 @@ async function saveEdit() {
     showEditModal.value = false
     await loadKnowledgeBases()
   } catch (e) {
-    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.save_failed')))
+    message.error(serverErrorDetail(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -144,7 +145,7 @@ async function deleteKnowledgeBase(id: string) {
     message.success(t('common.deleted'))
     await loadKnowledgeBases()
   } catch (e) {
-    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.delete_failed')))
+    message.error(serverErrorDetail(e, t('errors.delete_failed')))
   }
 }
 
@@ -157,8 +158,8 @@ async function toggleVisibility(kb: KnowledgeBase) {
     message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadKnowledgeBases()
   } catch (e) {
-    const msg = e.response?.data?.detail || e.response?.data?.error || e.response?.data?.message || ''
-    if (e.response?.status === 403) {
+    const msg = serverErrorDetail(e, '')
+    if (errorStatus(e) === 403) {
       message.error(t('knowledge.can_only_operate_knowledge_bases_you_created') + (msg ? `：${msg}` : ''))
     } else {
       message.error(t('errors.operation_failed') + (msg ? `：${msg}` : ''))

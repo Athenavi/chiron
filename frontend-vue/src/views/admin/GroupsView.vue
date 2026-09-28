@@ -10,7 +10,7 @@ import { listRoles } from '../../api/enterprise'
 import type { EntGroup, EntRole } from '../../api/enterprise'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const groups = ref<EntGroup[]>([])

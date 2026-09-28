@@ -18,7 +18,9 @@ import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
 import { bindingUsageOf, collectBindingUsage, type BindingUsage } from '../utils/kbUsage'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage, serverErrorDetail, errorDetail } from '../utils/apiError'
+
+import { errorMessageText, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 interface Plugin {
   name: string
@@ -108,9 +110,8 @@ async function handleMarketInstall(item: MarketItem) {
     message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadPlugins()])
   } catch (e) {
-    const raw = e?.response?.data
-    const detail = raw?.message || raw?.detail || raw?.error || e?.message || ''
-    if (e?.response?.status === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
+    const detail = serverErrorDetail(e, '') || errorMessageText(e, '')
+    if (errorStatus(e) === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
       message.error(t('errors.installation_rejected_this_mcp_command_is_not_on_the_safe_allowlist_please_create_it_manually_under_plugins_or_ask_an_admin_to_add_it_to_the_allowlist'))
     } else {
       message.error(t('errors.install_failed_detail', { detail }))
@@ -229,7 +230,7 @@ async function savePlugin() {
     editorOpen.value = false
     await loadPlugins()
   } catch (e) {
-    message.error(e.response?.data?.error || e.response?.data?.detail || e.message || t('errors.save_failed'))
+    message.error(serverErrorDetail(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -278,7 +279,7 @@ async function testPlugin(p: Plugin) {
     if (data.ok) message.success(t('common.name_connection_ok', { name: p.name }))
     else message.error(t('errors.name_connection_failed', { name: p.name }))
   } catch (e) {
-    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('errors.test_failed') } }
+    testResults.value = { ...testResults.value, [p.name]: { ok: false, message: errorDetail(e, t('errors.test_failed')) } }
   } finally {
     testingName.value = ''
   }

@@ -9,7 +9,7 @@ import {
 import type { MarketItem, MarketGrant } from '../../api/market'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const items = ref<MarketItem[]>([])
@@ -178,9 +178,9 @@ function statusColor(s: string): string {
 }
 
 // S 修复：空/非法时间返回 '-'，避免 new Date(null) 抛 RangeError 崩单元格
-function formatDateCell(text: any): string {
+function formatDateCell(text: unknown): string {
   if (!text) return '-'
-  const d = new Date(text)
+  const d = new Date(text as string | number)
   return isNaN(d.getTime()) ? '-' : d.toLocaleString('zh-CN', { hour12: false })
 }
 

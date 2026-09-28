@@ -2,6 +2,7 @@
 import { ref, computed, onMounted } from 'vue'
 import { useRoute } from 'vue-router'
 import MarkdownIt from 'markdown-it'
+import type { Token } from 'markdown-it'
 import DOMPurify from 'dompurify'
 import { getPublicShare } from '../api'
 import type { PublicShare } from '../api'
@@ -10,6 +11,7 @@ import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
 
+import { errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 
 const route = useRoute()
@@ -20,7 +22,7 @@ const error = ref('')
 
 // 轻量 markdown 渲染（公开页不引入 KaTeX/mermaid，代码块带复制按钮）
 const md = new MarkdownIt({ html: false, linkify: true, breaks: true })
-md.renderer.rules.fence = (tokens: any[], idx: number) => {
+md.renderer.rules.fence = (tokens: Token[], idx: number) => {
   const token = tokens[idx]
   const lang = md.utils.escapeHtml((token.info || '').trim().toLowerCase() || 'code')
   const code = md.utils.escapeHtml(token.content)
@@ -79,7 +81,7 @@ onMounted(async () => {
   try {
     share.value = await getPublicShare(id)
   } catch (e) {
-    const status = e?.response?.status
+    const status = errorStatus(e)
     if (status === 410) error.value = t('common.this_share_was_deleted_by_its_creator')
     else if (status === 404) error.value = t('errors.share_does_not_exist_or_has_expired')
     else error.value = t('errors.load_failed_please_retry_later')

@@ -52,36 +52,39 @@ async function fetchData() {
   loading.value = true
   try {
     const data = await getPerformance()
-    const gw = data.gateway || {} as any
-    const py = data.python_engine || {} as any
+    const gw = (data.gateway || {}) as Record<string, unknown>
+    const py = (data.python_engine || {}) as Record<string, unknown>
+    // 网关/引擎的指标字段来自 JSON（形状由后端保证）：数值化一次，避免把字符串塞进 number 槽位
+    const num = (v: unknown): number => Number(v) || 0
+    const strOf = (v: unknown): string => (typeof v === 'string' && v ? v : '--')
 
     metrics.value = {
-      connections: gw.connections || 0,
-      avgLatencyMs: py.avg_inference_ms || 0,
-      dbLatencyMs: gw.db_latency_ms || 0,
+      connections: num(gw.connections),
+      avgLatencyMs: num(py.avg_inference_ms),
+      dbLatencyMs: num(gw.db_latency_ms),
     }
 
     gatewayStatus.value = {
-      instances: gw.instances || 0,
-      cpuUsage: gw.cpu_percent || 0,
-      memoryUsage: formatMemory(gw.memory_mb || 0),
-      goroutines: gw.goroutines || 0,
-      connections: gw.connections || 0,
-      redisLatency: gw.redis_latency_ms || 0,
-      dbLatency: gw.db_latency_ms || 0,
-      uptime: gw.uptime_seconds ? formatUptime(gw.uptime_seconds) : '--',
-      version: gw.version || '--',
+      instances: num(gw.instances),
+      cpuUsage: num(gw.cpu_percent),
+      memoryUsage: formatMemory(num(gw.memory_mb)),
+      goroutines: num(gw.goroutines),
+      connections: num(gw.connections),
+      redisLatency: num(gw.redis_latency_ms),
+      dbLatency: num(gw.db_latency_ms),
+      uptime: num(gw.uptime_seconds) ? formatUptime(num(gw.uptime_seconds)) : '--',
+      version: strOf(gw.version),
     }
 
     pythonStatus.value = {
-      pods: py.pods || 0,
-      cpuUsage: py.cpu_percent || 0,
-      memoryUsage: formatMemory(py.memory_mb || 0),
-      activeTasks: py.active_tasks || 0,
-      avgInferenceTime: py.avg_inference_ms || 0,
-      redisLatency: py.redis_latency_ms || 0,
-      uptime: py.uptime_seconds ? formatUptime(py.uptime_seconds) : '--',
-      version: py.version || '--',
+      pods: num(py.pods),
+      cpuUsage: num(py.cpu_percent),
+      memoryUsage: formatMemory(num(py.memory_mb)),
+      activeTasks: num(py.active_tasks),
+      avgInferenceTime: num(py.avg_inference_ms),
+      redisLatency: num(py.redis_latency_ms),
+      uptime: num(py.uptime_seconds) ? formatUptime(num(py.uptime_seconds)) : '--',
+      version: strOf(py.version),
     }
   } catch {
     message.error(t('errors.failed_to_fetch_performance_data'))

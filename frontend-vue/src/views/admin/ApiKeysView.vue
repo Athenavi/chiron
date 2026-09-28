@@ -19,10 +19,11 @@ import {
   saveLlmProviderBaseURL,
   type LlmProviderPreset,
   type LlmProviderCategory,
+  type ApiKey,
 } from '@/api/admin'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage, errorMessageText } from '../utils/apiError'
+import { serverErrorMessage, errorMessageText } from '../../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const addLoading = ref(false)
@@ -40,7 +41,7 @@ const formData = ref({
   base_url: '',
 })
 
-const apiKeys = ref<any[]>([])
+const apiKeys = ref<ApiKey[]>([])
 const providers = ref<LlmProviderPreset[]>([])
 
 const CATEGORY_META: { key: LlmProviderCategory; labelKey: string; hintKey: string }[] = [
@@ -246,7 +247,7 @@ async function handleSaveBaseURL() {
   }
 }
 
-async function handleEdit(row: any) {
+async function handleEdit(row: ApiKey) {
   const newStatus = row.status === 'active' ? 'rate_limited' : 'active'
   try {
     await updateApiKey(row.id, { status: newStatus })
@@ -257,7 +258,7 @@ async function handleEdit(row: any) {
   }
 }
 
-async function handleDelete(row: any) {
+async function handleDelete(row: ApiKey) {
   try {
     await deleteApiKey(row.id)
     message.success(t('common.api_key_deleted'))
@@ -358,7 +359,7 @@ onMounted(() => {
               <Button
                 type="link"
                 size="small"
-                @click="handleEdit(record)"
+                @click="handleEdit(record as ApiKey)"
               >
                 {{ $t('common.edit_2') }}
               </Button>
@@ -366,7 +367,7 @@ onMounted(() => {
                 type="link"
                 danger
                 size="small"
-                @click="handleDelete(record)"
+                @click="handleDelete(record as ApiKey)"
               >
                 {{ $t('common.delete') }}
               </Button>

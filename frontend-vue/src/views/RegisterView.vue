@@ -11,6 +11,7 @@ import LanguageSwitcher from '../components/common/LanguageSwitcher.vue'
 import type { Rule } from 'ant-design-vue/es/form'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 
 const router = useRouter()
@@ -99,8 +100,8 @@ async function handleSendEmailCode() {
     markCaptchaDirty()
     captchaRef.value?.reset()
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
       emailCodeError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
@@ -170,8 +171,8 @@ async function handleRegister() {
     )
     router.push('/chat')
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       captchaRequired.value = true
       error.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')

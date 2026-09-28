@@ -46,6 +46,7 @@ import {
 } from '@ant-design/icons-vue'
 
 import { useI18n } from 'vue-i18n'
+import type { MenuProps } from 'ant-design-vue'
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
@@ -134,18 +135,23 @@ const selectedKeys = computed(() => {
   return [hit?.key ?? route.path]
 })
 
-const userMenuItems = computed<any[]>(() => [
+/** antd Menu / Dropdown 的点击载荷（本页只用 key） */
+interface MenuClickInfo {
+  key: string | number
+}
+
+const userMenuItems = computed<MenuProps['items']>(() => [
   { key: 'profile', label: t('settings.profile'), icon: () => h(UserOutlined) },
   { key: 'toggle-theme', label: themeStore.isDark ? t('common.light_mode') : t('common.dark_mode'), icon: () => h(BulbOutlined) },
   { type: 'divider' as const },
   { key: 'logout', label: t('auth.logout'), icon: () => h(LogoutOutlined) },
 ])
 
-function handleMenuClick(info: any) {
-  router.push(info.key)
+function handleMenuClick(info: MenuClickInfo) {
+  router.push(String(info.key))
 }
 
-async function handleUserAction(info: any) {
+async function handleUserAction(info: MenuClickInfo) {
   if (info.key === 'logout') {
     // 安全：调 authStore.logout 清后端 httpOnly cookie + 本地 user
     await authStore.logout()

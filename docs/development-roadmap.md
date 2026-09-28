@@ -4,7 +4,7 @@
 
 ## 0. 当前状态
 
-主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed；`npm run test` 464 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 299 warnings（`no-explicit-any` 剩 272，全在 `views/`，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
+主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed；`npm run test` 464 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 30 warnings（`no-explicit-any` 剩 3，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
 
 i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；护栏转为 `check-i18n.mjs` 的**「翻译调用禁用中文字面键」**——legacy 清空后再写 `t('中文')` 必然缺键（回显 key、不插值、en-US/ar 永不命中）。
 
@@ -44,13 +44,20 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 
 ## 3. L3 技术债
 
-### L3-2 收敛 ESLint warning（剩 272 条 `no-explicit-any`，全在 `views/`）
+### L3-2 收敛 ESLint warning（`no-explicit-any` 272 → 3，余下 3 条为待决项）
 
-- 依据：`npm run lint` 0 errors / 299 warnings；`components/` 已清零（提交 `de7cb61`…`4fb2e61`），契约层 47 条已类型化；剩 `views` 272 条（ChatView 38、DatabaseManagementView 19、MediaView 16、WorkflowView 15、KnowledgeDetailView 14 为前五大，本次核验仍准确）。总 warning 数曾随 L1-4 迁移 300→318（18 条 `vue/html-indent`），已 `eslint --fix` 回落至 299。
-- 已知做法（已验证可沿用）：明确结构→定义契约接口；本质动态→`unknown` 并窄化调用侧；DOM 非标准成员→交叉类型 + 存在性判断；多形状解析→小助手（`asArray`/`asObject`）；axios 错误体→`utils/apiError.ts` 的 `serverErrorMessage`/`errorStatus`（与 `describeApiError` 分工不同：前者取后端原文，后者转 i18n 文案）。
-- 待决：全仓 136 处 `catch (e: any)` 是否统一改用 `describeApiError`（可见行为变更，需单独定）。
+- 依据：`npm run lint` 0 errors / 30 warnings；`components/` 已清零（提交 `de7cb61`…`4fb2e61`），契约层 47 条已类型化；`views/` 272 条本批清零（提交 `f0c6327` … 本次提交）。总 warning 数曾随 L1-4 迁移 300→318（18 条 `vue/html-indent`），已 `eslint --fix` 回落。
+- 本批新增的收敛手段集中在 `utils/apiError.ts`（都**只取值、不改文案**，把散落的 `catch (e: any)` 取值动作收成一处）：
+  - `errorDetail(error, fallback)`：后端 `error` 原文 → JS `message` → 兜底（等价于 `e?.response?.data?.error || e?.message || fallback`）；
+  - `errorMessageText(error, fallback)`：只看 JS `message`（等价于 `err?.message || fallback`）；
+  - `serverErrorDetail(error, fallback)`：`detail`（Python 引擎）→ `error`（网关）→ `message` → 兜底（同一响应不会给出互相冲突的 detail/error，故统一顺序等价于各处手写的链）；
+  - 既有 `serverErrorMessage`/`errorStatus`/`apiErrorMessage` 继续沿用；`describeApiError` 保持不变（它会本地化文案，不可用于"要原文"的分支）。
+- 视图侧类型化的四类做法（已验证）：① `ref<any[]>` → 契约接口（`DomainEntry`/`TenantEntry`/`BackupEntry`/`ApiKey`/`WaitingTask`/`RedisStatus`/`KnowledgeDocument` 等）；② a-table `#bodyCell` 的 `record` 是 `Record<string, any>`，要具体类型时在模板侧断言（`restoreBackup(record as BackupEntry)`）；③ antd 组件参数从 props 推导（`Parameters<NonNullable<UploadProps['customRequest']>>[0]`），不手抄内部类型名；④ 模板里**不要写 `as A | B`**——`|` 会被 `vue/no-deprecated-filter` 判成 Vue 2 filter，改用 script 侧窄化小助手（如 `SkillsView.paramText`）。
+- 待决（需单独定，勿顺手改）：
+  - `ChatView` 的 3 处 `updateConversation(..., { llm_config } as any)`：`PUT /v1/conversations/{id}` 只接受 `title/pinned/tag/alias`（`internal/api/conversation.go` 的 `Update`；`DecodeJSON` 不拒绝未知字段），其中 `persistRuntime` 那处**只带 `llm_config`** → 必被 400 拒绝并被 `.catch(() => {})` 静默吞掉，rename/pin 两处的 `llm_config` 被后端忽略。删除这层无效负载（连同随之失去调用者的 `buildPersistLlmConfig`）是行为变更。
+  - 全仓 136 处 `catch (e: any)` 是否统一改用 `describeApiError`（会本地化文案，属可见行为变更）。
 - 硬约束：不为清零加 `eslint-disable`；每批单独跑 `vue-tsc -b` 与组件测试。
-- 坑：① 纯文本删「未使用导入」会误删标识符（默认导入名/catch 参数名与具名导入文本层不可分），结构性删除须 AST 或人工逐行确认；② `no-undef` 走 browser globals，与 tsc `lib.dom` 覆盖不一致（如 `SpeechRecognitionEvent`），第三方/较新 DOM API 一律自声明形状；③ `vue/no-template-shadow`：`<router-view v-slot="{ Component }">` 的 slot prop 名与 vue 导入 `Component` 冲突，需别名（如 `VueComponent`）；④ 宽泛 `Record<string, any>` 会吞掉字段访问错误（`SkillMarketCard` 改 `MarketManifest` 后 5 处显形）。
+- 坑：① 纯文本删「未使用导入」会误删标识符（默认导入名/catch 参数名与具名导入文本层不可分），结构性删除须 AST 或人工逐行确认；② `no-undef` 走 browser globals，与 tsc `lib.dom` 覆盖不一致（如 `SpeechRecognitionEvent`），第三方/较新 DOM API 一律自声明形状；③ `vue/no-template-shadow`：`<router-view v-slot="{ Component }">` 的 slot prop 名与 vue 导入 `Component` 冲突，需别名（如 `VueComponent`）；④ 宽泛 `Record<string, any>` 会吞掉字段访问错误（`SkillMarketCard` 改 `MarketManifest` 后 5 处显形）；⑤ 把 `any` 换成具体类型后，模板里"以前靠 any 蒙过"的调用会成片显形——`new Date(x)`、`x.length`、`formatSize(x)`、`kb.type.toUpperCase()` 都需在调用侧收口（`?? 0` / `as string | number` / `|| ''`）；⑥ interface 赋给 `Record<string, unknown>` 形参会报缺索引签名，改用 `type`（`PaymentView` 的 `PaymentConfigForm`）；⑦ `node -e` 里别写 `||`/`&&`：本机 shell 是 PowerShell 5.1，会先解析再执行（here-string 也救不了），脚本改用正则 `\|{2}` 或临时 `.js` 文件。
 
 ### L3-4 巨型文件拆分（评估项）
 

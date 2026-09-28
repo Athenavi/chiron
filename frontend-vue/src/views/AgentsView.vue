@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, markRaw } from 'vue'
+import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
   Button, Tabs, TabPane, Modal, Input, InputNumber, Switch, Tag,
@@ -27,6 +28,8 @@ import { setChatPrefill } from '../components/chat/chatPrefill'
 import { agentResultToMarkdown, parseAgentResult } from '../utils/agentResultMarkdown'
 
 import { useI18n } from 'vue-i18n'
+import { errorDetail } from '../utils/apiError'
+import { serverErrorDetail, errorMessageText, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 // ── 数据 ──
 // 后端列表项可能带 visibility（'private'|'tenant'）；缺失视为 private
@@ -118,8 +121,7 @@ async function handleMarketInstall(item: MarketItem) {
     message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadAgents()])
   } catch (e) {
-    const raw = e?.response?.data
-    message.error(t('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
+    message.error(t('errors.install_failed_error', { error: serverErrorDetail(e, '') || errorMessageText(e, '') }))
   } finally {
     marketInstallingId.value = null
   }
@@ -232,7 +234,7 @@ function openEdit(a: Agent) {
   editorOpen.value = true
 }
 
-function parseToolsText(): any[] | null {
+function parseToolsText(): unknown[] | null {
   try {
     const v = JSON.parse(form.value.tools_text)
     return Array.isArray(v) ? v : null
@@ -274,7 +276,7 @@ async function saveEditor() {
     editorOpen.value = false
     await loadAgents()
   } catch (e) {
-    message.error(t('errors.save_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
+    message.error(t('errors.save_failed_error', { error: errorDetail(e, '') }))
   } finally {
     editorSaving.value = false
   }
@@ -298,9 +300,8 @@ async function toggleVisibility(a: AgentRow) {
     message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadAgents()
   } catch (e) {
-    const raw = e?.response?.data
-    const msg = raw?.message || raw?.detail || raw?.error || ''
-    if (e?.response?.status === 403) {
+    const msg = serverErrorDetail(e, '')
+    if (errorStatus(e) === 403) {
       message.error(t('agent.can_only_operate_agents_you_created') + (msg ? `：${msg}` : ''))
     } else {
       message.error(t('errors.operation_failed') + (msg ? `：${msg}` : ''))
@@ -382,7 +383,7 @@ async function submitRun() {
     message.success(t('workflow.task_dispatched_executing'))
     startPolling(s.id)
   } catch (e) {
-    message.error(t('errors.dispatch_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
+    message.error(t('errors.dispatch_failed_error', { error: errorDetail(e, '') }))
   } finally {
     runSubmitting.value = false
   }
@@ -409,8 +410,20 @@ async function openDetail(s: AgentSession) {
 
 // ── 结果展示 ──
 // 解析逻辑移到 utils：同一份逻辑要供「存入知识库」复用，且能被单测覆盖
-function parseResult(s: AgentSession): any {
-  return parseAgentResult(s.result)
+/**
+ * 运行结果的**视图模型**：模板直接读这些字段（耗时、工具调用数、token 用量），
+ * 而 `ParsedAgentResult` 出于解析容错一律是 `unknown` —— 在边界处一次性收窄。
+ */
+interface AgentResultView {
+  output?: string
+  error?: string
+  duration?: number
+  tool_calls?: unknown[]
+  token_usage?: Record<string, unknown>
+}
+
+function parseResult(s: AgentSession): AgentResultView {
+  return parseAgentResult(s.result) as AgentResultView
 }
 
 /** 把这次运行的结果带进对话继续讨论（内容经 sessionStorage 投递，避免超长 URL） */
@@ -450,7 +463,7 @@ function openSaveToKb(session: AgentSession | null) {
   saveToKbOpen.value = true
 }
 
-const statusMeta: Record<string, { label: string; color: string; icon: any }> = {
+const statusMeta: Record<string, { label: string; color: string; icon: Component }> = {
   pending: { label: t('common.queuing'), color: 'default', icon: ClockCircleOutlined },
   running: { label: t('common.executing'), color: 'processing', icon: SyncOutlined },
   completed: { label: t('common.completed'), color: 'success', icon: CheckCircleOutlined },
@@ -983,10 +996,10 @@ function toolCount(a: Agent): number {
               tokens: {{ JSON.stringify(parseResult(runSession).token_usage) }}
             </Tag>
             <Tag v-if="parseResult(runSession).duration">
-              {{ $t('common.elapsed_n_s', { n: parseResult(runSession).duration.toFixed(1) }) }}
+              {{ $t('common.elapsed_n_s', { n: (parseResult(runSession).duration ?? 0).toFixed(1) }) }}
             </Tag>
             <Tag v-if="parseResult(runSession).tool_calls?.length">
-              {{ $t('agent.tool_calls_n', { n: parseResult(runSession).tool_calls.length }) }}
+              {{ $t('agent.tool_calls_n', { n: (parseResult(runSession).tool_calls ?? []).length }) }}
             </Tag>
           </div>
           <div class="result-actions">
@@ -1049,10 +1062,10 @@ function toolCount(a: Agent): number {
             tokens: {{ JSON.stringify(parseResult(detailSession).token_usage) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).duration">
-            {{ $t('common.elapsed_n_s', { n: parseResult(detailSession).duration.toFixed(1) }) }}
+            {{ $t('common.elapsed_n_s', { n: (parseResult(detailSession).duration ?? 0).toFixed(1) }) }}
           </Tag>
           <Tag v-if="parseResult(detailSession).tool_calls?.length">
-            {{ $t('agent.tool_calls_n', { n: parseResult(detailSession).tool_calls.length }) }}
+            {{ $t('agent.tool_calls_n', { n: (parseResult(detailSession).tool_calls ?? []).length }) }}
           </Tag>
         </div>
         <div class="result-actions">

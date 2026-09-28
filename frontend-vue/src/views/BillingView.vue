@@ -9,7 +9,7 @@ import {
 } from 'ant-design-vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
-import { describeApiError } from '../utils/apiError'
+import { describeApiError, errorMessageText } from '../utils/apiError'
 import {
   CreditCardOutlined, WalletOutlined, ThunderboltOutlined, BarChartOutlined,
   ShoppingOutlined, QrcodeOutlined, PayCircleOutlined,
@@ -17,6 +17,7 @@ import {
 import { api, listPaymentChannels } from '../api'
 
 import { useI18n } from 'vue-i18n'
+
 const { t } = useI18n()
 // ── 类型 ──
 
@@ -218,7 +219,7 @@ async function loadBalanceAndUsage() {
     }
     usage.value = (usageRes.data?.data as UsageData | undefined) ?? null
   } catch (error) {
-    message.error(error.message || t('errors.failed_to_load'))
+    message.error(errorMessageText(error, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -230,7 +231,7 @@ async function loadHistory() {
     const resp = await api.get('/v1/billing/history')
     history.value = (resp.data?.data?.history as CreditTx[] | undefined) ?? []
   } catch (error) {
-    message.error(error.message || t('errors.failed_to_load_transaction_history'))
+    message.error(errorMessageText(error, t('errors.failed_to_load_transaction_history')))
   } finally {
     historyLoading.value = false
   }

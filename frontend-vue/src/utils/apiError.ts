@@ -98,6 +98,22 @@ export function errorMessageText(error: unknown, fallback: string): string {
   return typeof msg === 'string' && msg ? msg : fallback
 }
 
+/**
+ * 取后端错误体里的可读说明，按两条链路的字段习惯依次尝试：
+ * `detail`（Python 引擎 / FastAPI）→ `error`（Go 网关）→ `message`；取不到返回兜底。
+ *
+ * 同一响应不会同时给出互相冲突的 `detail` 与 `error`，所以这个统一顺序等价于各处
+ * 手写的「detail || error || message」链。
+ */
+export function serverErrorDetail(error: unknown, fallback: string): string {
+  const data = (error as { response?: { data?: unknown } } | null | undefined)?.response?.data
+  const d = (data ?? {}) as { detail?: unknown; error?: unknown; message?: unknown }
+  for (const value of [d.detail, d.error, d.message]) {
+    if (typeof value === 'string' && value) return value
+  }
+  return fallback
+}
+
 /** 后端错误码的本地化文案；无对应文案时返回 null（回退到 error 原文） */
 function localizedCodeMessage(code?: string): string | null {
   if (!code) return null

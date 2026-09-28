@@ -12,6 +12,7 @@ import LanguageSwitcher from '../components/common/LanguageSwitcher.vue'
 import type { Rule } from 'ant-design-vue/es/form'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
@@ -107,8 +108,8 @@ async function handleSendCode() {
     markCaptchaDirty()
     captchaRef.value?.reset()
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
       smsError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
@@ -154,8 +155,8 @@ async function handleSmsLogin() {
     authStore.applySession(token, user)
     router.push('/chat')
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
       smsError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
@@ -229,8 +230,8 @@ async function handleSendEmailCode() {
     markCaptchaDirty()
     captchaRef.value?.reset()
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
       emailError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
@@ -276,8 +277,8 @@ async function handleEmailLogin() {
     authStore.applySession(token, user)
     router.push('/chat')
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       needCaptcha.value = true
       emailError.value = t('auth.too_many_requests_please_complete_human_verification_and_retry')
@@ -353,8 +354,8 @@ async function handleLogin() {
     const role = authStore.user?.role
     router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
   } catch (e) {
-    const status = e.response?.status
-    const apiErr = e.response?.data?.error
+    const status = errorStatus(e)
+    const apiErr = serverErrorMessage(e, '')
     if (status === 428 || apiErr === 'captcha_required') {
       // 后端要求人机验证（同 IP 失败升级）→ 强制展示验证码组件
       needCaptcha.value = true

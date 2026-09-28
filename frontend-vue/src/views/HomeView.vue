@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { markRaw, onMounted, onUnmounted, ref } from 'vue'
+import type { Component } from 'vue'
 import { useRouter } from 'vue-router'
 import { Button } from 'ant-design-vue'
 import {
@@ -18,7 +19,7 @@ interface Feature {
   en: string
   desc: string
   path: string
-  icon: any
+  icon: Component
 }
 
 // 图标组件需 markRaw：避免被 Vue 响应式代理（图标是静态组件，代理会破坏渲染）

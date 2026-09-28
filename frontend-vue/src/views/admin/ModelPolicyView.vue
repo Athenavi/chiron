@@ -6,7 +6,7 @@ import { listModelPolicies, createModelPolicy, updateModelPolicy, deleteModelPol
 import type { ModelPolicy } from '../../api/policy'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const policies = ref<ModelPolicy[]>([])

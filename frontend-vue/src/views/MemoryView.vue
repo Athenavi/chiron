@@ -56,7 +56,8 @@ import {
 } from '../api/memory'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage, errorStatus } from '../utils/apiError'
+
 const { t } = useI18n()
 const router = useRouter()
 
@@ -273,7 +274,7 @@ async function loadProfile() {
     organize.value = data.organize
   } catch (e) {
     error.value = true
-    if (e.response?.status === 503) {
+    if (errorStatus(e) === 503) {
       message.error(t('errors.memory_service_unavailable_postgresql_required'))
     } else {
       message.error(serverErrorMessage(e, t('errors.failed_to_load_memory')))

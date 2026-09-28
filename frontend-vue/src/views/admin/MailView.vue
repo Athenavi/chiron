@@ -19,6 +19,7 @@ import { getMailAdminConfig, updateMailConfig, sendMailTest, isValidEmail } from
 import { describeApiError } from '@/utils/apiError'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorDetail } from '../../utils/apiError'
 const { t } = useI18n()
 
 /** 后端 maskedSecret：与 internal/api 的常量一致，用于识别"未修改"的密文占位符 */
@@ -83,8 +84,8 @@ const apiKeyConfigured = computed(() => form.value.api_key === SECRET_PLACEHOLDE
  * 「…请先启用邮件服务」），被 errors.invalid_request 盖成「请求失败，请稍后重试」后
  * 管理员就无从下手。配置页是管理操作，这里优先展示后端原话。
  */
-function configErrorMessage(error: any, fallback?: string): string {
-  const serverMessage = error?.response?.data?.error || error?.response?.data?.message
+function configErrorMessage(error: unknown, fallback?: string): string {
+  const serverMessage = serverErrorDetail(error, '')
   return serverMessage || describeApiError(error, fallback)
 }
 

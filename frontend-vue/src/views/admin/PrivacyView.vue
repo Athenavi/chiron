@@ -5,7 +5,7 @@ import { getPrivacy, putPrivacy } from '../../api/policy'
 import type { TenantPrivacy } from '../../api/policy'
 
 import { useI18n } from 'vue-i18n'
-import { serverErrorMessage } from '../utils/apiError'
+import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const saving = ref(false)
