@@ -11,7 +11,9 @@ import {
   MessageOutlined, EyeOutlined, ReloadOutlined,
 } from '@ant-design/icons-vue'
 import { api, resolveMediaUrl } from '../api'
+import { errorDetail } from '../utils/apiError'
 import { createChunkUpload } from '../utils/uploader'
+import type { UploadProps } from 'ant-design-vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import KBDocumentPreview from '../components/KBDocumentPreview.vue'
 import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
@@ -27,15 +29,73 @@ function absUrl(url: string): string {
   return `${API_URL}${url.startsWith('/') ? '' : '/'}${url}`
 }
 
+/**
+ * 知识库链路的错误原文：`detail`（Python 引擎的 FastAPI 风格）→ `error`（网关）→ 兜底。
+ * 刻意不含 `message` 回退 —— 需要它时由调用方追加 `errorDetail`。
+ */
+function kbErrorText(err: unknown, fallback: string): string {
+  const e = (err ?? {}) as { response?: { data?: { detail?: unknown; error?: unknown } } }
+  const detail = e.response?.data?.detail
+  if (typeof detail === 'string' && detail) return detail
+  const error = e.response?.data?.error
+  if (typeof error === 'string' && error) return error
+  return fallback
+}
+
+/** GET /v1/kb/{id}（网关字段 + 引擎补充的统计字段） */
+interface KnowledgeBase {
+  id?: string
+  name?: string
+  description?: string
+  status?: string
+  type?: string
+  visibility?: string
+  document_count?: number
+  total_size_bytes?: number
+  credits_consumed?: number
+}
+
+/** GET /v1/kb/{id}/documents 的 documents[] */
+interface KnowledgeDocument {
+  id: string
+  name?: string
+  file_type?: string
+  file_size_bytes?: number
+  status?: string
+  chunk_count?: number
+  created_at?: string
+}
+
+/** POST /v1/kb/{id}/query 的 results[]（检索片段 + 相似度） */
+interface KbQueryHit {
+  content?: string
+  score?: number
+  name?: string
+  document_name?: string
+}
+
+/** GET /v1/media 的 items[]（媒体库选取弹窗用到的字段） */
+interface MediaFileItem {
+  id: string
+  name: string
+  type?: string
+  size: number
+  file_url: string
+  mime_type?: string
+}
+
+/** Upload 的 customRequest 参数：从 antd 的 props 推导，避免手抄内部类型名 */
+type UploadRequestOptions = Parameters<NonNullable<UploadProps['customRequest']>>[0]
+
 const route = useRoute()
 const router = useRouter()
 const loading = ref(true)
 const building = ref(false)
-const kb = ref<any>(null)
-const documents = ref<any[]>([])
+const kb = ref<KnowledgeBase | null>(null)
+const documents = ref<KnowledgeDocument[]>([])
 const showQueryModal = ref(false)
 const queryText = ref('')
-const queryResults = ref<any[]>([])
+const queryResults = ref<KbQueryHit[]>([])
 const buildProgress = ref(0)
 
 // 文档列表列定义
@@ -88,8 +148,8 @@ async function deleteDoc(id: string) {
     message.success(t('common.deleted'))
     await loadDocuments()
     await loadKnowledgeBase()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(kbErrorText(e, t('errors.delete_failed')))
   }
 }
 
@@ -105,8 +165,8 @@ async function batchDeleteDocs() {
     selectedDocIds.value = []
     await loadDocuments()
     await loadKnowledgeBase()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(kbErrorText(e, t('errors.delete_failed')))
   } finally {
     deletingDocs.value = false
   }
@@ -129,8 +189,8 @@ async function batchReindexDocs() {
     // 当前实现：先触发构建（会重新索引知识库所有文档）
     await api.post(`/v1/kb/${kbId}/build`)
     message.success(t('workflow.re_indexing_triggered_please_check_status_later'))
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.re_index_failed'))
+  } catch (e) {
+    message.error(kbErrorText(e, t('errors.re_index_failed')))
   } finally {
     reindexingIds.value = []
   }
@@ -138,7 +198,7 @@ async function batchReindexDocs() {
 
 // 媒体库相关
 const showMediaModal = ref(false)
-const mediaFiles = ref<any[]>([])
+const mediaFiles = ref<MediaFileItem[]>([])
 const selectedMediaIds = ref<string[]>([])
 const loadingMedia = ref(false)
 const importingMedia = ref(false)
@@ -176,22 +236,25 @@ async function loadDocuments() {
 const filteredMediaFiles = computed(() => {
   if (!mediaSearchQuery.value.trim()) return mediaFiles.value
   const query = mediaSearchQuery.value.toLowerCase()
-  return mediaFiles.value.filter((f: any) =>
+  return mediaFiles.value.filter((f) =>
     (f.name || '').toLowerCase().includes(query) ||
     (f.type || '').toLowerCase().includes(query)
   )
 })
 
 // 上传文档：全局分片（purpose kb_doc → complete 落 knowledge_documents）
-async function handleUpload(info: any) {
+async function handleUpload(info: UploadRequestOptions) {
+  // antd 的 file 允许多态（string/Blob，用于受控 fileList）；本视图只接真实上传文件
+  const { file } = info
+  if (!(file instanceof File)) return
   try {
-    const handle = await createChunkUpload(info.file, { purpose: 'kb_doc', parentId: kbId })
+    const handle = await createChunkUpload(file, { purpose: 'kb_doc', parentId: kbId })
     await handle.done
     message.success(t('knowledge.document_uploaded_successfully'))
     await loadKnowledgeBase()
     await loadDocuments()
-  } catch (error: any) {
-    message.error(error.response?.data?.detail || error.response?.data?.error || error.message || t('errors.upload_failed'))
+  } catch (error) {
+    message.error(kbErrorText(error, '') || errorDetail(error, t('errors.upload_failed')))
   }
 }
 
@@ -222,7 +285,7 @@ async function importFromMedia() {
   let failCount = 0
 
   for (const fileId of selectedMediaIds.value) {
-    const file = mediaFiles.value.find((f: any) => f.id === fileId)
+    const file = mediaFiles.value.find((f) => f.id === fileId)
     if (!file) continue
 
     try {
@@ -263,7 +326,7 @@ function toggleMediaSelection(id: string) {
 }
 
 function selectAllMedia() {
-  selectedMediaIds.value = filteredMediaFiles.value.map((f: any) => f.id)
+  selectedMediaIds.value = filteredMediaFiles.value.map(f => f.id)
 }
 
 function deselectAllMedia() {
@@ -298,8 +361,8 @@ async function buildKnowledgeBase() {
     }
 
     await checkStatus()
-  } catch (error: any) {
-    message.error(error.response?.data?.error || t('errors.build_failed'))
+  } catch (error) {
+    message.error(kbErrorText(error, t('errors.build_failed')))
   } finally {
     building.value = false
     buildProgress.value = 0
@@ -321,8 +384,8 @@ async function queryKnowledgeBase() {
     if (queryResults.value.length === 0) {
       message.info(t('errors.no_relevant_content_found'))
     }
-  } catch (error: any) {
-    message.error(error.response?.data?.error || t('errors.query_failed'))
+  } catch (error) {
+    message.error(kbErrorText(error, t('errors.query_failed')))
   }
 }
 
@@ -438,7 +501,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             <div class="info-item">
               <span class="label">{{ $t('common.type') }}</span>
               <Tag :color="kb.type === 'rag' ? 'success' : 'blue'">
-                {{ kb.type.toUpperCase() }}
+                {{ (kb.type || '').toUpperCase() }}
               </Tag>
             </div>
             <div class="info-item">
@@ -459,7 +522,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             </div>
             <div class="info-item">
               <span class="label">{{ $t('common.total_size') }}</span>
-              <span>{{ formatSize(kb.total_size_bytes) }}</span>
+              <span>{{ formatSize(kb.total_size_bytes ?? 0) }}</span>
             </div>
             <div class="info-item">
               <span class="label">{{ $t('common.consumed') }}</span>
@@ -662,7 +725,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
           class="query-result-item"
         >
           <div class="result-header">
-            <Tag>{{ $t('common.relevance_n', { n: (result.score * 100).toFixed(1) }) }}</Tag>
+            <Tag>{{ $t('common.relevance_n', { n: ((result.score ?? 0) * 100).toFixed(1) }) }}</Tag>
             <span
               v-if="result.name || result.document_name"
               class="result-source"

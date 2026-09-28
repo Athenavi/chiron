@@ -18,6 +18,7 @@ import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
 import { bindingUsageOf, collectBindingUsage, type BindingUsage } from '../utils/kbUsage'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 interface Plugin {
   name: string
@@ -106,7 +107,7 @@ async function handleMarketInstall(item: MarketItem) {
     await installMarket('mcp', item.id)
     message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadPlugins()])
-  } catch (e: any) {
+  } catch (e) {
     const raw = e?.response?.data
     const detail = raw?.message || raw?.detail || raw?.error || e?.message || ''
     if (e?.response?.status === 403 || String(detail).includes('PLUGIN_COMMAND_ALLOWLIST')) {
@@ -227,7 +228,7 @@ async function savePlugin() {
     }
     editorOpen.value = false
     await loadPlugins()
-  } catch (e: any) {
+  } catch (e) {
     message.error(e.response?.data?.error || e.response?.data?.detail || e.message || t('errors.save_failed'))
   } finally {
     saving.value = false
@@ -241,8 +242,8 @@ async function toggleStatus(p: Plugin, v: boolean) {
     p.status = v ? 'active' : 'inactive'
     if (v) message.success(t('common.enabled_name', { name: p.name }))
     else message.success(t('common.name_disabled', { name: p.name }))
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.operation_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.operation_failed')))
   }
 }
 
@@ -276,7 +277,7 @@ async function testPlugin(p: Plugin) {
     testResults.value = { ...testResults.value, [p.name]: { ok: !!data.ok, message: data.message || '' } }
     if (data.ok) message.success(t('common.name_connection_ok', { name: p.name }))
     else message.error(t('errors.name_connection_failed', { name: p.name }))
-  } catch (e: any) {
+  } catch (e) {
     testResults.value = { ...testResults.value, [p.name]: { ok: false, message: e.response?.data?.error || e.message || t('errors.test_failed') } }
   } finally {
     testingName.value = ''

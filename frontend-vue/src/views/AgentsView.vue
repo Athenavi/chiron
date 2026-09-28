@@ -117,7 +117,7 @@ async function handleMarketInstall(item: MarketItem) {
     await installMarket('agent', item.id)
     message.success(t('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadAgents()])
-  } catch (e: any) {
+  } catch (e) {
     const raw = e?.response?.data
     message.error(t('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
@@ -273,7 +273,7 @@ async function saveEditor() {
     }
     editorOpen.value = false
     await loadAgents()
-  } catch (e: any) {
+  } catch (e) {
     message.error(t('errors.save_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     editorSaving.value = false
@@ -297,7 +297,7 @@ async function toggleVisibility(a: AgentRow) {
     await setAgentVisibility(a.id, next)
     message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadAgents()
-  } catch (e: any) {
+  } catch (e) {
     const raw = e?.response?.data
     const msg = raw?.message || raw?.detail || raw?.error || ''
     if (e?.response?.status === 403) {
@@ -381,7 +381,7 @@ async function submitRun() {
     sessions.value.unshift(s)
     message.success(t('workflow.task_dispatched_executing'))
     startPolling(s.id)
-  } catch (e: any) {
+  } catch (e) {
     message.error(t('errors.dispatch_failed_error', { error: e?.response?.data?.error || e?.message || '' }))
   } finally {
     runSubmitting.value = false

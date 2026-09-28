@@ -80,7 +80,7 @@ async function handleSubmit() {
       captcha_randstr: captchaRandstr.value,
     })
     sent.value = true
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {

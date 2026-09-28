@@ -16,7 +16,13 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 // ── 租户列表 ──
 // GET /v1/admin/tenants → { tenants: [{ id, name, status, created_at }] }
-const tenants = ref<any[]>([])
+interface TenantEntry {
+  id: string
+  name: string
+  status?: string
+  created_at?: string
+}
+const tenants = ref<TenantEntry[]>([])
 const loading = ref(false)
 
 async function loadTenants() {
@@ -24,7 +30,7 @@ async function loadTenants() {
   try {
     const resp = await api.get('/v1/admin/tenants')
     tenants.value = resp.data?.data?.tenants || []
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_load_tenant_list')))
   } finally {
     loading.value = false
@@ -44,7 +50,7 @@ function openCreate() {
   modalVisible.value = true
 }
 
-function openEdit(record: any) {
+function openEdit(record: TenantEntry) {
   editingId.value = record.id
   form.value = { name: record.name || '', status: record.status || 'active' }
   modalVisible.value = true
@@ -69,7 +75,7 @@ async function submitForm() {
     }
     modalVisible.value = false
     await loadTenants()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, editingId.value ? t('errors.failed_to_update_tenant') : t('errors.failed_to_create_tenant')))
   } finally {
     submitting.value = false
@@ -80,7 +86,7 @@ async function submitForm() {
 // 挂起：POST /v1/admin/tenants/{id}/suspend；恢复：PUT { status: 'active' }
 const togglingId = ref<string | null>(null)
 
-async function toggleSuspend(record: any) {
+async function toggleSuspend(record: TenantEntry) {
   togglingId.value = record.id
   try {
     if (record.status === 'suspended') {
@@ -91,7 +97,7 @@ async function toggleSuspend(record: any) {
       message.success(t('admin.tenant_name_suspended', { name: record.name }))
     }
     await loadTenants()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.operation_failed')))
   } finally {
     togglingId.value = null
@@ -100,12 +106,12 @@ async function toggleSuspend(record: any) {
 
 // ── 删除 ──
 // DELETE /v1/admin/tenants/{id}
-async function removeTenant(record: any) {
+async function removeTenant(record: TenantEntry) {
   try {
     await api.delete(`/v1/admin/tenants/${record.id}`)
     message.success(t('admin.tenant_deleted'))
     await loadTenants()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_delete_tenant')))
   }
 }
@@ -114,8 +120,8 @@ async function removeTenant(record: any) {
 // GET /v1/admin/tenants/{id}/usage → { users, sessions, agent_sessions, knowledge_bases, agents, media_assets }
 const usageOpen = ref(false)
 const usageLoading = ref(false)
-const usage = ref<any>(null)
-const usageTenant = ref<any>(null)
+const usage = ref<Record<string, unknown> | null>(null)
+const usageTenant = ref<TenantEntry | null>(null)
 
 const usageItems = [
   { key: 'users', label: t('admin.users') },
@@ -126,7 +132,7 @@ const usageItems = [
   { key: 'media_assets', label: t('common.media_assets') },
 ]
 
-async function openUsage(record: any) {
+async function openUsage(record: TenantEntry) {
   usageTenant.value = record
   usage.value = null
   usageOpen.value = true
@@ -134,7 +140,7 @@ async function openUsage(record: any) {
   try {
     const resp = await api.get(`/v1/admin/tenants/${record.id}/usage`)
     usage.value = resp.data?.data || {}
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_load_usage')))
   } finally {
     usageLoading.value = false
@@ -158,8 +164,8 @@ function statusText(status: string): string {
   return status === 'active' ? t('common.active') : status === 'suspended' ? t('common.suspended_2') : (status || '-')
 }
 
-function formatDate(d: any): string {
-  return d ? new Date(d).toLocaleString('zh-CN') : '-'
+function formatDate(d: unknown): string {
+  return d ? new Date(d as string | number).toLocaleString('zh-CN') : '-'
 }
 
 function usageValue(key: string): number {
@@ -227,7 +233,7 @@ onMounted(loadTenants)
               >
                 <Button
                   size="small"
-                  @click="openUsage(record)"
+                  @click="openUsage(record as TenantEntry)"
                 >
                   <template #icon>
                     <BarChartOutlined />
@@ -236,7 +242,7 @@ onMounted(loadTenants)
                 </Button>
                 <Button
                   size="small"
-                  @click="openEdit(record)"
+                  @click="openEdit(record as TenantEntry)"
                 >
                   <template #icon>
                     <EditOutlined />
@@ -247,7 +253,7 @@ onMounted(loadTenants)
                   :title="record.status === 'suspended' ? $t('admin.restore_tenant_name', { name: record.name }) : $t('admin.suspend_tenant_name_its_resources_will_become_unavailable', { name: record.name })"
                   :ok-text="$t('common.confirm')"
                   :cancel-text="$t('common.cancel')"
-                  @confirm="toggleSuspend(record)"
+                  @confirm="toggleSuspend(record as TenantEntry)"
                 >
                   <Button
                     size="small"
@@ -265,7 +271,7 @@ onMounted(loadTenants)
                   :title="$t('admin.confirm_deleting_this_tenant_this_action_cannot_be_undone')"
                   :ok-text="$t('common.delete')"
                   :cancel-text="$t('common.cancel')"
-                  @confirm="removeTenant(record)"
+                  @confirm="removeTenant(record as TenantEntry)"
                 >
                   <Button
                     size="small"

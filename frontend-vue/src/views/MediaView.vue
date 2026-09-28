@@ -9,7 +9,9 @@ import {
   FolderAddOutlined, LeftOutlined, RightOutlined, TagOutlined, PictureOutlined,
 } from '@ant-design/icons-vue'
 import { api, resolveMediaUrl } from '../api'
+import { serverErrorMessage } from '../utils/apiError'
 import { createChunkUpload } from '../utils/uploader'
+import type { UploadFile, UploadProps } from 'ant-design-vue'
 import { FileViewer } from '@file-viewer/vue3'
 import allPreset from '@file-viewer/preset-all'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
@@ -243,8 +245,8 @@ async function shareItem() {
     shareExpires.value = data.expires_at || ''
     showShare.value = true
     if (!shareUrl.value) message.error(tr('common.the_current_storage_backend_does_not_support_sharing'))
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.failed_to_generate_share_link'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.failed_to_generate_share_link')))
   } finally {
     shareLoading.value = false
   }
@@ -264,8 +266,8 @@ async function submitRename() {
     showRename.value = false
     detailItem.value = null
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.rename_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.rename_failed')))
   }
 }
 
@@ -282,15 +284,24 @@ async function openMove() {
 }
 
 // 文件夹层级树（移动对话框）
-const moveTreeData = ref<any[]>([])
+/** Tree 节点（与 antd 的 fieldNames 默认 key/title/children 对齐） */
+interface MoveTreeNode {
+  key: string
+  title: string
+  children: MoveTreeNode[]
+}
 
-function buildMoveTree(folders: { id: string; name: string; parent_id: string }[]): any[] {
-  const map = new Map<string, any>()
-  for (const f of folders) map.set(f.id, { key: f.id, title: f.name, children: [] as any[] })
-  const roots: any[] = []
+const moveTreeData = ref<MoveTreeNode[]>([])
+
+function buildMoveTree(folders: { id: string; name: string; parent_id: string }[]): MoveTreeNode[] {
+  const map = new Map<string, MoveTreeNode>()
+  for (const f of folders) map.set(f.id, { key: f.id, title: f.name, children: [] })
+  const roots: MoveTreeNode[] = []
   for (const f of folders) {
     const node = map.get(f.id)
-    if (f.parent_id && map.has(f.parent_id)) map.get(f.parent_id).children.push(node)
+    if (!node) continue
+    const parent = f.parent_id ? map.get(f.parent_id) : undefined
+    if (parent) parent.children.push(node)
     else roots.push(node)
   }
   return roots
@@ -311,8 +322,8 @@ async function createFolder() {
     newFolderOpen.value = false
     newFolderName.value = ''
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.creation_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.creation_failed')))
   } finally {
     folderCreating.value = false
   }
@@ -366,8 +377,8 @@ async function addTag() {
     detailItem.value = { ...detailItem.value, tags: next }
     tagInput.value = ''
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.failed_to_add_tag'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.failed_to_add_tag')))
   }
 }
 
@@ -391,8 +402,8 @@ async function submitMove() {
     showMove.value = false
     detailItem.value = null
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.move_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.move_failed')))
   }
 }
 
@@ -402,8 +413,8 @@ async function deleteItem(id: string) {
     message.success(tr('common.deleted'))
     detailItem.value = null
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.delete_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.delete_failed')))
   }
 }
 
@@ -417,11 +428,30 @@ async function copyShareUrl() {
 }
 
 // ── 批量上传（拖拽 + 多文件） ──
-const uploadFileList = ref<any[]>([])
+/** Upload 的 customRequest 参数：从 antd 的 props 推导，避免手抄内部类型名 */
+type UploadRequestOptions = Parameters<NonNullable<UploadProps['customRequest']>>[0]
+
+const uploadFileList = ref<UploadFile[]>([])
 const uploadingFiles = ref<Map<string, { progress: number; status: 'uploading' | 'success' | 'error'; error?: string }>>(new Map())
 
-function handleUploadRequest(options: any) {
+/** 上传失败原因：上传器抛的是 Error（message 即后端说明），取不到时用调用方兜底 */
+function uploadErrorText(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+/** antd 的 onError 只接受 Error/UploadRequestError，而 catch 到的是 unknown */
+function toUploadError(err: unknown): Error {
+  if (err instanceof Error) return err
+  return new Error(typeof err === 'string' ? err : String(err))
+}
+
+function handleUploadRequest(options: UploadRequestOptions) {
   const { file, onProgress, onSuccess, onError } = options
+  // antd 的 file 允许多态（string/Blob，用于受控 fileList）；本视图只接真实上传文件
+  if (!(file instanceof File)) {
+    onError?.(new Error('unsupported upload payload'))
+    return
+  }
   const fileId = `${file.name}-${file.size}-${file.lastModified}`
   
   // 初始化上传状态
@@ -446,22 +476,22 @@ function handleUploadRequest(options: any) {
           // 3秒后移除成功记录
           setTimeout(() => uploadingFiles.value.delete(fileId), 3000)
         })
-        .catch((err: any) => {
-          onError?.(err)
+        .catch((err: unknown) => {
+          onError?.(toUploadError(err))
           uploadingFiles.value.set(fileId, { 
             progress: 0, 
             status: 'error', 
-            error: err?.message || tr('errors.unknown_error') 
+            error: uploadErrorText(err, tr('errors.unknown_error')) 
           })
-          message.error(tr('errors.upload_failed_name_reason', { name: file.name, reason: err?.message || tr('errors.unknown_error') }))
+          message.error(tr('errors.upload_failed_name_reason', { name: file.name, reason: uploadErrorText(err, tr('errors.unknown_error')) }))
         })
         .finally(() => { fetchItems() })
     })
-    .catch((err: any) => { 
+    .catch((err: unknown) => { 
       uploadingFiles.value.set(fileId, { 
         progress: 0, 
         status: 'error', 
-        error: err?.message || tr('errors.initialization_failed') 
+        error: uploadErrorText(err, tr('errors.initialization_failed')) 
       })
       message.error(tr('errors.upload_failed_name_init_failed', { name: file.name })) 
     })
@@ -584,8 +614,8 @@ async function batchDelete() {
     const res = await api.post('/v1/media/batch-delete', { ids })
     message.success(tr('common.deleted_n_items', { n: res.data?.data?.deleted || ids.length }))
     fetchItems()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || tr('errors.batch_delete_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, tr('errors.batch_delete_failed')))
   } finally {
     batchDeleting.value = false
   }

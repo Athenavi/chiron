@@ -106,7 +106,7 @@ async function handleSendCode() {
     // 一次性凭据：发送后重置，登录时按需重新验证
     markCaptchaDirty()
     captchaRef.value?.reset()
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
@@ -153,7 +153,7 @@ async function handleSmsLogin() {
     })
     authStore.applySession(token, user)
     router.push('/chat')
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
@@ -228,7 +228,7 @@ async function handleSendEmailCode() {
     message.success(t('auth.verificationCodeSent'))
     markCaptchaDirty()
     captchaRef.value?.reset()
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
@@ -275,7 +275,7 @@ async function handleEmailLogin() {
     })
     authStore.applySession(token, user)
     router.push('/chat')
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
@@ -352,7 +352,7 @@ async function handleLogin() {
     // owner/admin 登录后进入管理后台，普通 user 进入对话
     const role = authStore.user?.role
     router.push(role === 'admin' || role === 'owner' ? '/admin' : '/chat')
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {

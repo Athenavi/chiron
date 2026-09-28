@@ -10,7 +10,7 @@ import {
   createAgent, createGraph,
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
-import { getSessionRuntime, putSessionRuntime } from '../api/sessionRuntime'
+import { getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
@@ -19,6 +19,7 @@ import { useAuthStore } from '../stores/auth'
 import { privateKey } from '../utils/privateStorage'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
+import type { LocationQuery } from 'vue-router'
 import ChatSidePanel from '../components/chat/ChatSidePanel.vue'
 import type { SubagentEvent } from '../api/subagent'
 import MessageList from '../components/chat/MessageList.vue'
@@ -39,7 +40,7 @@ import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter } from '../components/chat/chat-types'
 import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
 import { findMatches } from '../components/chat/transcriptSearch'
-import { describeApiError } from '../utils/apiError'
+import { describeApiError, errorDetail, serverErrorMessage } from '../utils/apiError'
 import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
 import type { ChatItem, ChatSession, ChatAttachment, TurnStatsItem, TextItem } from '../components/chat/chat-types'
@@ -481,7 +482,7 @@ const approvalTick = ref(0)
 const APPROVAL_TIMEOUT_MS = 300_000
 let approvalTimer: ReturnType<typeof setInterval> | null = null
 
-function approvalRemain(a: any): number {
+function approvalRemain(a: PendingApproval): number {
   void approvalTick.value // 依赖 tick 触发重算
   if (!a?.expiresAt) return 0
   return Math.max(0, Math.ceil((a.expiresAt - Date.now()) / 1000))
@@ -493,7 +494,7 @@ function ensureApprovalTimer() {
     approvalTick.value++
     const now = Date.now()
     pendingApprovals.value = pendingApprovals.value.filter(
-      (p) => !(p as any).expiresAt || (p as any).expiresAt > now,
+      (p) => !p.expiresAt || p.expiresAt > now,
     )
     if (pendingApprovals.value.length === 0 && approvalTimer) {
       clearInterval(approvalTimer)
@@ -556,7 +557,7 @@ const toolsModeOptions = [
   { label: t('common.fully_automatic'), value: 'yolo' },
 ]
 
-function onToolsModeChange(v: any) {
+function onToolsModeChange(v: unknown) {
   const m = String(v) as 'ask' | 'auto' | 'yolo'
   if (m === toolsMode.value) return
   toolsMode.value = m
@@ -630,8 +631,8 @@ function cycleEffort() {
  * 见 internal/api/mode.go 与 python-engine/app/agent/guards.py）。
  * **落库请用 buildPersistLlmConfig**：模式不属于会话状态。
  */
-function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
-  const cfg: Record<string, any> = { mode: mode.value, ...(base || {}) }
+function buildLlmConfig(base?: Record<string, unknown>): Record<string, unknown> {
+  const cfg: Record<string, unknown> = { mode: mode.value, ...(base || {}) }
   if (effort.value) cfg.effort = effort.value
   // 模型路由：会话选定模型写入 llm_config（空 = 不携带，走后端默认路由）
   if (llmModel.value) cfg.model = llmModel.value
@@ -652,7 +653,7 @@ function buildLlmConfig(base?: Record<string, any>): Record<string, any> {
  * 服务端状态 —— 刷新后旧值复活、与其他来源打架，正是本次要移除的问题。
  * 模型等"用户希望下次继续沿用"的项照常落库。
  */
-function buildPersistLlmConfig(base?: Record<string, any>): Record<string, any> {
+function buildPersistLlmConfig(base?: Record<string, unknown>): Record<string, unknown> {
   const cfg = buildLlmConfig(base)
   delete cfg.mode
   delete cfg.tools_mode
@@ -802,7 +803,7 @@ async function applyChatPrefill() {
   }
 }
 
-async function initContextChips(q: Record<string, any>) {
+async function initContextChips(q: Record<string, unknown>) {
   // URL 约定与多值解析统一在 contextChips 模块里（同名参数可重复 => 可多选）
   const chips = parseContextQuery(q)
   const kb = chips.find(c => c.type === 'kb')?.value || ''
@@ -824,8 +825,8 @@ async function initContextChips(q: Record<string, any>) {
   if (agent) {
     try {
       const res = await api.get('/v1/agents')
-      const list = res.data?.data || []
-      const a = list.find((x: any) => x.id === agent)
+      const list = (Array.isArray(res.data?.data) ? res.data.data : []) as Array<{ id?: string; name?: string }>
+      const a = list.find((x) => x.id === agent)
       if (a?.name) {
         const c = contextChips.value.find(x => x.type === 'agent')
         if (c) c.label = `Agent ${a.name}`
@@ -835,8 +836,8 @@ async function initContextChips(q: Record<string, any>) {
   if (workflow) {
     try {
       const res = await api.get('/v1/graphs')
-      const list = res.data?.data || []
-      const rec = list.find((x: any) => x.id === workflow)
+      const list = (Array.isArray(res.data?.data) ? res.data.data : []) as Array<{ id?: string; name?: string }>
+      const rec = list.find((x) => x.id === workflow)
       if (rec?.name) {
         const c = contextChips.value.find(x => x.type === 'workflow')
         if (c) c.label = t('workflow.workflow_name', { name: rec.name })
@@ -849,7 +850,7 @@ async function initContextChips(q: Record<string, any>) {
 function removeContextChip(type: ContextChip['type'], value: string) {
   contextChips.value = contextChips.value.filter(c => !(c.type === type && c.value === value))
   const remaining = contextChips.value.filter(c => c.type === type).map(c => c.value)
-  const q: Record<string, any> = { ...route.query }
+  const q: LocationQuery = { ...route.query }
   // 同类还有剩余值时改写该项（多值即数组），否则整项删除
   if (remaining.length === 0) {
     if (q[type] === undefined) return
@@ -864,7 +865,7 @@ function removeContextChip(type: ContextChip['type'], value: string) {
 /** 清空全部上下文：本地 context 与路由 query 一并清除（键取 PARAMS 定义，避免新增类型时漏清） */
 function clearContext() {
   contextChips.value = []
-  const q: Record<string, any> = { ...route.query }
+  const q: LocationQuery = { ...route.query }
   let changed = false
   for (const key of CONTEXT_QUERY_KEYS) {
     if (q[key] !== undefined) { delete q[key]; changed = true }
@@ -884,7 +885,7 @@ function clearUnifiedMessages() {
 
 /** 统一任务模式：退出（移除 task/error query；路由 watcher 触发 applyRouteQuery 重置消息区） */
 async function exitUnifiedMode() {
-  const q: Record<string, any> = { ...route.query }
+  const q: LocationQuery = { ...route.query }
   delete q.task
   delete q.error
   await router.replace({ path: '/chat', query: q })
@@ -896,7 +897,7 @@ function openKb(kbId: string) {
 }
 
 /** 组装发送时附带的 context（普通 SSE 模式与统一任务模式共用） */
-function buildContext(): Record<string, any> | undefined {  // 单值字段 + 多值数组的组装规则集中在 contextChips 模块（新旧后端都能工作）。
+function buildContext(): Record<string, unknown> | undefined {  // 单值字段 + 多值数组的组装规则集中在 contextChips 模块（新旧后端都能工作）。
   //
   // Agent 只发 agent_id，配置由网关按 id 补全（internal/api/agents.go 的
   // resolveAgentContext）。前端此前自己映射一份字段，且只映射了
@@ -921,7 +922,10 @@ async function loadUnifiedSession(sessionId: string) {
   loading.value = true
   try {
     const res = await getChatSessionMessages(sessionId)
-    const d = (res?.messages ? res : (res?.data || {})) as any
+    const d = (res?.messages ? res : (res?.data || {})) as {
+      messages?: unknown[]
+      shared_context?: { mode?: unknown }
+    }
     const list = Array.isArray(d.messages) ? d.messages : []
     // 会话创建时的 mode（shared_context 优先，其次 query.mode，兜底 auto）
     const sharedMode = d.shared_context?.mode
@@ -942,19 +946,24 @@ async function loadUnifiedSession(sessionId: string) {
 }
 
 /** 统一会话消息 → 现有 ChatItem（user/assistant 映射现有消息组件；metadata 含 kb 时插知识库引用标签） */
-function buildUnifiedItems(list: any[]): ChatItem[] {
+function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
   const out: ChatItem[] = []
-  ;(list || []).forEach((m: any, idx: number) => {
-    if (!m || (m.role !== 'user' && m.role !== 'assistant')) return
+  ;(list || []).forEach((raw, idx) => {
+    const m = (raw ?? {}) as {
+      role?: unknown; content?: unknown; timestamp?: unknown
+      created_at?: unknown; source?: unknown; metadata?: unknown
+    }
+    if (m.role !== 'user' && m.role !== 'assistant') return
     const content = typeof m.content === 'string' ? m.content : ''
     if (!content) return
-    const time = formatClock(m.timestamp || m.created_at)
+    const stamp = m.timestamp ?? m.created_at
+    const time = formatClock(typeof stamp === 'string' ? stamp : undefined)
     if (m.role === 'user') {
       out.push({
         kind: 'text', role: 'user', content: stripUserInputTag(content), time, id: `uni_u_${idx}`,
         // 来源标记（'subagent_followup' = 子 Agent 自动轮）：带上它，刷新后仍渲染成
         // 系统提示而不是用户气泡（见 internal/api/agent_followup.go）
-        ...(m.source ? { source: m.source } : {}),
+        ...(typeof m.source === 'string' && m.source ? { source: m.source } : {}),
       })
     } else {
       const { reasoning, body } = splitThinking(content, { loose: true })
@@ -963,11 +972,12 @@ function buildUnifiedItems(list: any[]): ChatItem[] {
         out.push({
           kind: 'text', role: 'assistant', content: body, time, id: `uni_a_${idx}`,
           metadata: normalizeMeta(m.metadata),
-        } as any)
+        })
         const meta = normalizeMeta(m.metadata) || {}
-        const n = typeof meta.kb_hits === 'number' ? meta.kb_hits : meta.kb_id ? 1 : 0
-        if (meta.kb_id || n > 0) {
-          out.push({ kind: 'kb_hits', count: n, kb_id: meta.kb_id || '', id: `uni_k_${idx}` } as unknown as ChatItem)
+        const kbId = typeof meta.kb_id === 'string' ? meta.kb_id : ''
+        const n = typeof meta.kb_hits === 'number' ? meta.kb_hits : kbId ? 1 : 0
+        if (kbId || n > 0) {
+          out.push({ kind: 'kb_hits', count: n, kb_id: kbId, id: `uni_k_${idx}` } as unknown as ChatItem)
         }
       }
     }
@@ -1002,7 +1012,7 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
     currentTraceId.value = d.trace_id || ''
     appendAssistantWithKb(d.output || '', d.metadata || {})
     flashUnifiedDone()
-  } catch (e: any) {
+  } catch (e) {
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason)
     message.error(t('errors.send_failed') + reason)
@@ -1013,7 +1023,7 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
 }
 
 /** 追加 assistant 消息；metadata 含 kb_hits/kb_id 时在其下显示"引用了知识库(×N)"小标签 */
-function appendAssistantWithKb(content: string, meta: any) {
+function appendAssistantWithKb(content: string, meta: unknown) {
   // 统一任务模式的 output 同为引擎产出（可含多段 [thinking] 块）→ 用 loose 状态机解析
   const { reasoning, body } = splitThinking(String(content), { loose: true })
   if (reasoning) items.value.push({ kind: 'reasoning', content: reasoning, id: genItemId() })
@@ -1021,10 +1031,12 @@ function appendAssistantWithKb(content: string, meta: any) {
     items.value.push({
       kind: 'text', role: 'assistant', content: body, id: genItemId(),
       metadata: normalizeMeta(meta),
-    } as any)
-    const n = typeof meta.kb_hits === 'number' ? meta.kb_hits : meta.kb_id ? 1 : 0
-    if (meta.kb_id || n > 0) {
-      items.value.push({ kind: 'kb_hits', count: n, kb_id: meta.kb_id || '', id: genItemId() } as unknown as ChatItem)
+    })
+    const m = (meta ?? {}) as { kb_hits?: unknown; kb_id?: unknown }
+    const kbId = typeof m.kb_id === 'string' ? m.kb_id : ''
+    const n = typeof m.kb_hits === 'number' ? m.kb_hits : kbId ? 1 : 0
+    if (kbId || n > 0) {
+      items.value.push({ kind: 'kb_hits', count: n, kb_id: kbId, id: genItemId() } as unknown as ChatItem)
     }
   }
 }
@@ -1696,9 +1708,9 @@ async function switchSession(id: string) {
     // 会话级运行时状态（model / provider / 已激活上下文）：Redis 热 + unified_sessions.runtime
     // 持久，切回会话时回填。**模式不在其中** —— 对话模式与工具授权模式是前端全局实时状态，
     // 不随会话切换而改变（见 buildLlmConfig 的说明）。
-    let cfg: any = data?.llm_config
+    let cfg: unknown = (data as { llm_config?: unknown } | undefined)?.llm_config
     if (typeof cfg === 'string') { try { cfg = JSON.parse(cfg) } catch { cfg = undefined } }
-    let rt: any = null
+    let rt: SessionRuntime | null = null
     try {
       rt = (await getSessionRuntime(id)).runtime
     } catch { /* 不可用时静默回落 llm_config */ }
@@ -1708,9 +1720,12 @@ async function switchSession(id: string) {
     // 就会直接报 "Upstream request failed: Model is unavailable."。
     // 所以按「会话记录 → 会话 llm_config → 可用模型列表第一个 → 空」四级回落，
     // 绝不把空值当成"可以用后端默认"来提交。见 docs/multi-session-runtime-plan.md。
+    const cfgModel = (cfg && typeof cfg === 'object' && 'model' in cfg)
+      ? (cfg as { model?: unknown }).model
+      : undefined
     llmModel.value =
       (typeof rt?.model === 'string' && rt.model)
-      || (typeof cfg?.model === 'string' && cfg.model)
+      || (typeof cfgModel === 'string' && cfgModel)
       || availableModels.value[0]?.name
       || ''
     // 已激活能力（问题 3）：runtime.context 是单一事实源 —— 把 URL 未带入、
@@ -1814,8 +1829,8 @@ async function confirmRename() {
     persistSessions()
     message.success(t('common.renamed'))
     renameTarget.value = null
-  } catch (e: any) {
-    message.error(t('errors.rename_failed') + (e?.response?.data?.error || e?.message || t('errors.network_error_2')))
+  } catch (e) {
+    message.error(t('errors.rename_failed') + errorDetail(e, t('errors.network_error_2')))
   } finally {
     renaming.value = false
   }
@@ -1914,8 +1929,8 @@ async function generateShare() {
   shareError.value = ''
   try {
     shareInfo.value = await createShare(shareTarget.value.id, shareMessageIds.value)
-  } catch (e: any) {
-    shareError.value = e?.response?.data?.error || t('errors.failed_to_generate_share_link')
+  } catch (e) {
+    shareError.value = serverErrorMessage(e, t('errors.failed_to_generate_share_link'))
   } finally {
     shareLoading.value = false
   }
@@ -2006,28 +2021,31 @@ function flushStreamingFlags() {
   resetStreamState()
 }
 
-function onSSEMessage(raw: any) {
-  const type = raw?.type
-  const d = raw?.data || {}
+function onSSEMessage(raw: unknown) {
+  // SSE 载荷来自服务端 JSON（createSSEConnection 的 onMessage 契约即 unknown）：
+  // 在边界一次性窄化成 Record，后续各事件分支只做字段级取值，不把 unknown 透出去。
+  const evt = (raw ?? {}) as Record<string, unknown>
+  const type = evt.type
+  const d = (evt.data ?? {}) as Record<string, unknown>
   if (type === 'text') {
-    const text = d?.content ?? raw?.content ?? ''
+    const text = String(d.content ?? evt.content ?? '')
     if (!text) return
     onTextChunk(text)
   } else if (type === 'tool_call') {
     items.value.push({
-      kind: 'tool_call', id: d?.id ?? String(Date.now()), name: d?.name ?? 'tool',
-      arguments: d?.arguments ?? '', status: 'running',
+      kind: 'tool_call', id: String(d.id ?? Date.now()), name: String(d.name ?? 'tool'),
+      arguments: String(d.arguments ?? ''), status: 'running',
     })
   } else if (type === 'tool_result') {
-    const callId = d?.tool_call_id ?? d?.id ?? ''
+    const callId = String(d.tool_call_id ?? d.id ?? '')
     const call = items.value.find(it => it.kind === 'tool_call' && it.id === callId)
     if (call && call.kind === 'tool_call') call.status = 'done'
-    const content = d?.content ?? d?.result ?? ''
+    const content = d.content ?? d.result ?? ''
     if (content) {
       items.value.push({
         kind: 'tool_result', toolCallId: callId, id: `${callId}:res`,
         content: typeof content === 'string' ? content : JSON.stringify(content),
-        isError: !!d?.error,
+        isError: !!d.error,
       })
     }
   } else if (type === 'usage' || type === 'turn_stats') {
@@ -2035,9 +2053,9 @@ function onSSEMessage(raw: any) {
     // {"type":"usage","input_tokens":N,"output_tokens":N}）。此前**没有这个分支**，
     // 于是 lastTurnStats 恒为空、状态栏整段隐藏 —— 这就是"看不到 tokens/消耗"的直接原因。
     // 会话级累计（tokens/费用/**缓存命中率**/吞吐）由 GET /v1/sessions/{id}/metrics 提供。
-    const inputTokens = Number(d?.input_tokens ?? raw?.input_tokens ?? 0) || 0
-    const outputTokens = Number(d?.output_tokens ?? raw?.output_tokens ?? 0) || 0
-    const durationMs = Number(d?.duration_ms ?? raw?.duration_ms ?? 0) || 0
+    const inputTokens = Number(d.input_tokens ?? evt.input_tokens ?? 0) || 0
+    const outputTokens = Number(d.output_tokens ?? evt.output_tokens ?? 0) || 0
+    const durationMs = Number(d.duration_ms ?? evt.duration_ms ?? 0) || 0
     if (inputTokens || outputTokens) {
       items.value.push({
         kind: 'turn_stats',
@@ -2050,8 +2068,8 @@ function onSSEMessage(raw: any) {
   } else if (type === 'compaction') {
     // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
     // 变成用户可见的状态栏提示（问题 4）。
-    let info: any = {}
-    try { info = JSON.parse(String(d?.content ?? raw?.content ?? '{}')) } catch { info = {} }
+    let info: { saved_tokens?: unknown; before_tokens?: unknown; after_tokens?: unknown } = {}
+    try { info = JSON.parse(String(d.content ?? evt.content ?? '{}')) } catch { info = {} }
     if (info?.saved_tokens) {
       lastCompaction.value = {
         beforeTokens: Number(info.before_tokens) || 0,
@@ -2064,16 +2082,16 @@ function onSSEMessage(raw: any) {
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    currentTraceId.value = d?.trace_id || ''
-    const doneMeta = normalizeMeta(d?.metadata)
+    currentTraceId.value = String(d.trace_id || '')
+    const doneMeta = normalizeMeta(d.metadata)
     if (doneMeta && Object.keys(doneMeta).length && streamTextId) {
       const streamItem = items.value.find(x => x.id === streamTextId)
       if (streamItem?.kind === 'text' && streamItem.role === 'assistant') {
-        ;(streamItem as any).metadata = { ...((streamItem as any).metadata || {}), ...doneMeta }
+        streamItem.metadata = { ...(streamItem.metadata || {}), ...doneMeta }
       }
     }
-    const it = d?.input_tokens ?? 0
-    const ot = d?.output_tokens ?? 0
+    const it = Number(d.input_tokens ?? 0) || 0
+    const ot = Number(d.output_tokens ?? 0) || 0
     if (it || ot) {
       items.value.push({
         kind: 'turn_stats', inputTokens: it, outputTokens: ot,
@@ -2081,39 +2099,43 @@ function onSSEMessage(raw: any) {
       })
     }
   } else if (type === 'approval') {
-    const callId = d?.id ?? d?.tool_call_id ?? String(Date.now())
+    const callId = String(d.id ?? d.tool_call_id ?? Date.now())
     pendingApprovals.value.push({
       id: callId,
-      toolName: d?.name ?? 'tool',
-      arguments: d?.arguments ?? '',
+      toolName: String(d.name ?? 'tool'),
+      arguments: String(d.arguments ?? ''),
       // 倒计时：与后端 _await_approval 的 300s 超时对齐（超时按拒绝处理）
       expiresAt: Date.now() + APPROVAL_TIMEOUT_MS,
-    } as PendingApproval)
+    })
     ensureApprovalTimer()
   } else if (type === 'ask') {
     // 后端 ask_user 工具在等答案：卡片按 tool_call_id 回填
     pendingQuestions.value.push({
-      id: d?.id ?? d?.tool_call_id ?? String(Date.now()),
-      question: d?.question ?? d?.content ?? t('common.needs_your_confirmation'),
-      options: Array.isArray(d?.options) ? d.options.map((option: unknown) => String(option)) : [],
-      allowFreeText: d?.allow_free_text !== false,
+      id: String(d.id ?? d.tool_call_id ?? Date.now()),
+      question: String(d.question ?? d.content ?? t('common.needs_your_confirmation')),
+      options: Array.isArray(d.options) ? d.options.map((option: unknown) => String(option)) : [],
+      allowFreeText: d.allow_free_text !== false,
     })
   } else if (type === 'guardrail_blocked') {
     flushStreamingFlags()
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.warning(d?.content || t('admin.request_blocked_by_security_policy'))
+    message.warning(typeof d.content === 'string' && d.content ? d.content : t('admin.request_blocked_by_security_policy'))
   } else if (type === 'error') {
     flushStreamingFlags()
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.error(d?.content || d?.error || t('errors.request_failed_2'))
+    message.error(
+      typeof d.content === 'string' && d.content
+        ? d.content
+        : (typeof d.error === 'string' && d.error ? d.error : t('errors.request_failed_2')),
+    )
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
-    const event = (d && Object.keys(d).length ? { ...d, type } : { ...raw }) as SubagentEvent
+    const event = (Object.keys(d).length ? { ...d, type } : { ...evt }) as unknown as SubagentEvent
     pushSubagentEvent(event)
   }
 }
@@ -2152,7 +2174,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
         onLastEventId: (id) => { sseLastIdBySession.set(sessionId, id) },
       },
     )
-    const body: any = {
+    const body: Record<string, unknown> = {
       content: text,
       session_id: sessionId,
       // 发送侧幂等：同一条消息最多被引擎执行一次（服务端用 Redis SETNX 做 5 分钟去重）。
@@ -2168,7 +2190,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     }
     await api.post('/submit', body)
     activeSessionId.value = sessionId
-  } catch (e: any) {
+  } catch (e) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     loading.value = false
     stopTurnTimer()
@@ -2196,7 +2218,7 @@ function truncateFrom(itemId: string): { text?: string; attachments?: ChatAttach
   if (idx < 0) return {}
   const removed = items.value.slice(idx)
   items.value = items.value.slice(0, idx)
-  const userMsg = removed.find(i => i.kind === 'text' && i.role === 'user') as any
+  const userMsg = removed.find((i): i is TextItem => i.kind === 'text' && i.role === 'user')
   return userMsg ? { text: userMsg.content, attachments: userMsg.attachments } : {}
 }
 
@@ -2239,7 +2261,7 @@ function retryFromUserMessage(itemId: string, newText: string) {
 function regenerateAssistant(itemId: string) {
   const idx = items.value.findIndex(i => i.id === itemId)
   if (idx < 0) return
-  let userMsg: any = null
+  let userMsg: TextItem | null = null
   for (let i = idx - 1; i >= 0; i--) {
     const it = items.value[i]
     if (it.kind === 'text' && it.role === 'user') { userMsg = it; break }

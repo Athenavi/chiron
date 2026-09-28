@@ -217,7 +217,7 @@ async function loadBalanceAndUsage() {
       }
     }
     usage.value = (usageRes.data?.data as UsageData | undefined) ?? null
-  } catch (error: any) {
+  } catch (error) {
     message.error(error.message || t('errors.failed_to_load'))
   } finally {
     loading.value = false
@@ -229,7 +229,7 @@ async function loadHistory() {
   try {
     const resp = await api.get('/v1/billing/history')
     history.value = (resp.data?.data?.history as CreditTx[] | undefined) ?? []
-  } catch (error: any) {
+  } catch (error) {
     message.error(error.message || t('errors.failed_to_load_transaction_history'))
   } finally {
     historyLoading.value = false
@@ -286,7 +286,7 @@ async function handlePurchase() {
     await nextTick()
     renderQRCode()
     startPolling()
-  } catch (error: any) {
+  } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_create_payment_order')))
   } finally {
     checkoutLoading.value = false

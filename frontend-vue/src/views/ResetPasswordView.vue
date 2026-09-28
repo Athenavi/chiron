@@ -116,7 +116,7 @@ async function handleSubmit() {
     })
     done.value = true
     setTimeout(() => router.push('/login'), 1500)
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {

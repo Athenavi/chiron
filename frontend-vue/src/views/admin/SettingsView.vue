@@ -8,6 +8,11 @@ const { t } = useI18n()
 const saving = ref(false)
 const loading = ref(false)
 
+/** 保存失败提示：优先 Error.message（调用方/axios 抛出时已带说明），取不到用兜底文案 */
+function saveErrorText(err: unknown): string {
+  return err instanceof Error && err.message ? err.message : t('errors.unknown_error')
+}
+
 const rateLimitConfig = ref({
   global: 1000,
   tenant: 500,
@@ -219,8 +224,8 @@ async function saveRateLimit() {
   try {
     await saveSettings('rate_limit', rateLimitConfig.value)
     message.success(t('common.rate_limit_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -231,8 +236,8 @@ async function saveDegradation() {
   try {
     await saveSettings('degradation', degradationConfig.value)
     message.success(t('errors.failover_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -243,8 +248,8 @@ async function saveCache() {
   try {
     await saveSettings('cache', cacheConfig.value)
     message.success(t('admin.cache_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -255,8 +260,8 @@ async function saveApiKey() {
   try {
     await saveSettings('api_key', apiKeyConfig.value)
     message.success(t('common.api_key_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -267,8 +272,8 @@ async function saveAgent() {
   try {
     await saveSettings('agent', agentConfig.value)
     message.success(t('agent.agent_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -279,8 +284,8 @@ async function saveLlm() {
   try {
     await saveSettings('llm', llmConfig.value)
     message.success(t('agent.model_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -291,8 +296,8 @@ async function saveStorage() {
   try {
     await saveSettings('storage', storageConfig.value)
     message.success(t('common.storage_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -303,8 +308,8 @@ async function saveRedis() {
   try {
     await saveSettings('redis', redisConfig.value)
     message.success(t('admin.redis_config_saved_and_connection_hot_reloaded'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -315,8 +320,8 @@ async function savePostgres() {
   try {
     await saveSettings('postgres', postgresConfig.value)
     message.success(t('admin.database_config_saved_takes_effect_after_restart'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -327,8 +332,8 @@ async function saveCors() {
   try {
     await saveSettings('cors', corsConfig.value)
     message.success(t('common.cors_config_saved_takes_effect_after_restart'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -339,8 +344,8 @@ async function saveS3() {
   try {
     await saveSettings('s3', s3Config.value)
     message.success(t('common.object_storage_config_saved'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -351,8 +356,8 @@ async function savePython() {
   try {
     await saveSettings('python', pythonConfig.value)
     message.success(t('common.python_engine_config_saved_takes_effect_after_engine_restart'))
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.message || t('errors.unknown_error') }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
   } finally {
     saving.value = false
   }
@@ -370,7 +375,7 @@ const copyKernel = () => {
 
 // 修复：加载已持久化的真实配置（不再以写死的示例默认值覆盖线上配置）。
 // 按返回的 key 覆盖默认值；后端无记录时保留默认（本地为空态）。
-function mergeConfig(target: { value: Record<string, any> }, saved: Record<string, any>) {
+function mergeConfig(target: { value: Record<string, unknown> }, saved: Record<string, unknown>) {
   for (const k of Object.keys(target.value)) {
     if (saved[k] !== undefined) target.value[k] = saved[k]
   }

@@ -78,7 +78,7 @@ onMounted(async () => {
   const id = String(route.params.id || '')
   try {
     share.value = await getPublicShare(id)
-  } catch (e: any) {
+  } catch (e) {
     const status = e?.response?.status
     if (status === 410) error.value = t('common.this_share_was_deleted_by_its_creator')
     else if (status === 404) error.value = t('errors.share_does_not_exist_or_has_expired')

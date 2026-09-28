@@ -5,6 +5,7 @@ import type { TableColumnsType } from 'ant-design-vue'
 import { api } from '../../api'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 interface ModelRoute {
   id: string
@@ -40,8 +41,8 @@ async function fetchRoutes() {
   try {
     const res = await api.get('/v1/ent/model-routes')
     routes.value = res.data?.data?.routes || []
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -100,8 +101,8 @@ async function save() {
     }
     modalVisible.value = false
     fetchRoutes()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -119,8 +120,8 @@ function confirmDelete(r: ModelRoute) {
         await api.delete(`/v1/ent/model-routes/${r.id}`)
         message.success(t('common.deleted'))
         fetchRoutes()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })
@@ -131,8 +132,8 @@ async function toggleEnabled(r: ModelRoute) {
     await api.put(`/v1/ent/model-routes/${r.id}`, { enabled: !r.enabled })
     r.enabled = !r.enabled
     message.success(r.enabled ? t('common.enabled_2') : t('common.disabled_2'))
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.operation_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.operation_failed')))
   }
 }
 

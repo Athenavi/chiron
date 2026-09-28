@@ -22,7 +22,8 @@ import { collectBindingUsage } from '../utils/kbUsage'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
-import type { Node, Edge, Connection } from '@vue-flow/core'
+import type { Node, Edge, Connection, NodeMouseEvent } from '@vue-flow/core'
+import { errorDetail } from '../utils/apiError'
 import { setChatPrefill } from '../components/chat/chatPrefill'
 
 import { useI18n } from 'vue-i18n'
@@ -65,11 +66,18 @@ function continueInChat(inst: InstanceRecord) {
 }
 
 // ── Types ──
+/** 单个节点的执行产出（后端 /v1/workflows/{id}/status 的 results[node_id]） */
+interface NodeRunResult {
+  status: string
+  output: unknown
+  error?: string
+}
+
 interface GraphNodeBackend {
   id: string
   label: string
   node_type: string
-  config?: Record<string, any>
+  config?: Record<string, unknown>
 }
 
 interface GraphEdgeBackend {
@@ -92,7 +100,7 @@ interface InstanceRecord {
   workflow_id: string
   workflow_name: string
   status: string
-  results: Record<string, { status: string; output: any }>
+  results: Record<string, NodeRunResult>
   error?: string
   created_at: string
   updated_at: string
@@ -151,7 +159,7 @@ const showPanel = ref(false)
 const selectedNode = ref<Node | null>(null)
 const isExecuting = ref(false)
 const executionLogs = ref<string[]>([])
-const executionResults = ref<Record<string, { status: string; output: any }>>({})
+const executionResults = ref<Record<string, NodeRunResult>>({})
 const showDrawer = ref(false)
 const showHistory = ref(false)
 const dragNodeType = ref<string | null>(null)
@@ -260,8 +268,8 @@ function onDrop(event: DragEvent) {
 }
 
 // ── Node selection ──
-function onNodeClick(_event: any) {
-  const node = _event.node
+function onNodeClick(event: NodeMouseEvent) {
+  const node = event.node
   selectedNode.value = node
   showPanel.value = true
   editLabel.value = node.data?.label || ''
@@ -319,7 +327,7 @@ function applyNodeConfig() {
   }
 }
 
-function parseJSON(s: string): any {
+function parseJSON(s: string): unknown {
   if (!s) return undefined
   try { return JSON.parse(s) } catch { return { input: s } }
 }
@@ -454,7 +462,7 @@ function toBackendFormat(): { nodes: GraphNodeBackend[]; edges: GraphEdgeBackend
   const allNodes = getNodes.value
   const allEdges = getEdges.value
   const backendNodes: GraphNodeBackend[] = allNodes.map((n) => {
-    const config: Record<string, any> = { ...(n.data?.config || {}) }
+    const config: Record<string, unknown> = { ...(n.data?.config || {}) }
     config.position = { x: Math.round(n.position.x), y: Math.round(n.position.y) }
     return { id: n.id, label: n.data?.label || n.id, node_type: n.data?.nodeType || n.type || 'tool', config }
   })
@@ -468,12 +476,16 @@ function toBackendFormat(): { nodes: GraphNodeBackend[]; edges: GraphEdgeBackend
   return { nodes: backendNodes, edges: backendEdges, entry_point: inputNode?.id || allNodes[0]?.id || '' }
 }
 
-function fromBackendFormat(data: any) {
+function fromBackendFormat(data: unknown) {
   if (!data) return
-  const graphDef = typeof data === 'string' ? JSON.parse(data) : data
-  nodes.value = (graphDef.nodes || []).map((n: GraphNodeBackend) => {
+  const graphDef = (typeof data === 'string' ? JSON.parse(data) : data) as {
+    name?: string
+    nodes?: GraphNodeBackend[]
+    edges?: GraphEdgeBackend[]
+  }
+  nodes.value = (graphDef.nodes || []).map((n: GraphNodeBackend): Node => {
     const cfg = n.config || {}
-    const pos = cfg.position || { x: 0, y: 0 }
+    const pos = (cfg.position ?? {}) as { x?: number; y?: number }
     return {
       id: n.id,
       type: n.node_type,
@@ -481,7 +493,7 @@ function fromBackendFormat(data: any) {
       data: { label: n.label, nodeType: n.node_type, color: getNodeColor(n.node_type), icon: getNodeIcon(n.node_type), config: cfg },
     }
   })
-  edges.value = (graphDef.edges || []).map((e: GraphEdgeBackend, i: number) => ({
+  edges.value = (graphDef.edges || []).map((e: GraphEdgeBackend, i: number): Edge => ({
     id: `e-${e.source_id}-${e.target_id}-${i}`,
     source: e.source_id,
     target: e.target_id,
@@ -497,7 +509,7 @@ function fromBackendFormat(data: any) {
 // ── API: Save ──
 async function saveWorkflow() {
   const graphData = toBackendFormat()
-  const payload: Record<string, any> = {
+  const payload: Record<string, unknown> = {
     id: workflowId.value || undefined,
     name: workflowName.value,
     graph_json: JSON.stringify({ name: workflowName.value, ...graphData }),
@@ -508,8 +520,8 @@ async function saveWorkflow() {
     workflowId.value = resp.data?.data?.id || resp.data?.id
     message.success(t('workflow.workflow_saved'))
     await loadWorkflows()
-  } catch (err: any) {
-    message.error(t('errors.save_failed_error', { error: err.response?.data?.error || err.message }))
+  } catch (err) {
+    message.error(t('errors.save_failed_error', { error: errorDetail(err, '') }))
   }
 }
 
@@ -517,7 +529,7 @@ async function saveWorkflow() {
 async function loadWorkflows() {
   try {
     const resp = await api.get('/v1/graphs')
-    savedWorkflows.value = (resp.data?.data || []).filter((r: any) => r.id)
+    savedWorkflows.value = ((resp.data?.data || []) as GraphRecord[]).filter(r => r.id)
   } catch {
     savedWorkflows.value = []
   }
@@ -542,8 +554,8 @@ async function deleteWorkflow(id: string) {
       workflowId.value = null
       resetCanvas()
     }
-  } catch (err: any) {
-    message.error(t('errors.delete_failed_error', { error: err.response?.data?.error || err.message }))
+  } catch (err) {
+    message.error(t('errors.delete_failed_error', { error: errorDetail(err, '') }))
   }
 }
 
@@ -605,9 +617,9 @@ async function submitWorkflowRun(input: string) {
     if (!instanceId) throw new Error(t('common.no_instance_id'))
     message.info(t('workflow.workflow_submitted_running'))
     startStatusPolling(instanceId)
-  } catch (err: any) {
+  } catch (err) {
     isExecuting.value = false
-    executionLogs.value.push(t('errors.submit_failed_error', { error: err.response?.data?.error || err.message }))
+    executionLogs.value.push(t('errors.submit_failed_error', { error: errorDetail(err, '') }))
   }
 }
 
@@ -637,14 +649,15 @@ function startStatusPolling(instanceId: string) {
   }, 2000)
 }
 
-function applyExecutionStatus(data: any) {
-  const results = data.results || {}
+function applyExecutionStatus(data: unknown) {
+  const d = (data ?? {}) as { results?: Record<string, NodeRunResult> }
+  const results = d.results || {}
   executionResults.value = results
   for (const n of getNodes.value) {
     const r = results[n.id]
     n.data = { ...n.data, execStatus: r ? (r.status === 'completed' ? 'completed' : 'error') : 'idle' }
   }
-  for (const [nid, r] of Object.entries(results) as [string, any][]) {
+  for (const [nid, r] of Object.entries(results)) {
     if (loggedNodes.has(nid)) continue
     loggedNodes.add(nid)
     const n = getNodes.value.find(x => x.id === nid)
@@ -729,8 +742,7 @@ async function useWorkflowTemplate(tpl: TemplateItem): Promise<boolean> {
     try { fitView({ padding: 0.15 }) } catch { /* 忽略布局异常 */ }
     return true
   } catch (e) {
-    const err = e as { response?: { data?: { error?: string } }; message?: string }
-    message.error(t('errors.failed_to_load_template_error', { error: err?.response?.data?.error || err?.message || '' }))
+    message.error(t('errors.failed_to_load_template_error', { error: errorDetail(e, '') }))
     return false
   } finally {
     templateUsingId.value = null
@@ -755,7 +767,7 @@ onUnmounted(() => {
   window.removeEventListener('keydown', onKeydown)
 })
 
-function statusClass(nodeProps: any): string {
+function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
   return `status-${nodeProps.data?.execStatus || 'idle'}`
 }
 </script>

@@ -56,6 +56,7 @@ import {
 } from '../api/memory'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const router = useRouter()
 
@@ -102,8 +103,8 @@ async function handleSearch() {
     if (searchResults.value.length === 0 && searchSummaries.value.length === 0) {
       message.info(t('errors.no_similar_memory_found'))
     }
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.search_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.search_failed')))
   } finally {
     searching.value = false
   }
@@ -172,8 +173,8 @@ async function handleSave() {
     }
     formVisible.value = false
     await loadProfile()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -184,8 +185,8 @@ async function handleDelete(id: string) {
     await deleteMemory(id)
     message.success(t('common.deleted'))
     await loadProfile()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.delete_failed')))
   }
 }
 
@@ -194,8 +195,8 @@ async function handleClearAll() {
     const res = await clearMemory()
     message.success(t('memory.cleared_n_memories', { n: res.deleted }))
     await loadProfile()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.failed_to_clear'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_clear')))
   }
 }
 
@@ -255,8 +256,8 @@ async function runOrganize() {
       message.info(t('workflow.an_organization_task_is_already_running'))
       pollOrganize()
     }
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.failed_to_start_organization'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_start_organization')))
   }
 }
 
@@ -270,12 +271,12 @@ async function loadProfile() {
     counts.value = data.counts || {}
     total.value = data.total
     organize.value = data.organize
-  } catch (e: any) {
+  } catch (e) {
     error.value = true
     if (e.response?.status === 503) {
       message.error(t('errors.memory_service_unavailable_postgresql_required'))
     } else {
-      message.error(e.response?.data?.error || t('errors.failed_to_load_memory'))
+      message.error(serverErrorMessage(e, t('errors.failed_to_load_memory')))
     }
   } finally {
     loading.value = false

@@ -20,7 +20,30 @@ const initialLoading = ref(true)
 
 // ── 数据库状态 ──
 // GET /v1/admin/database/status → { version, connected }
-const statusData = ref<any>(null)
+interface DatabaseStatus {
+  version?: string
+  connected?: boolean
+}
+/** 备份列表项（GET /v1/admin/database/backups 的 backups[]） */
+interface BackupEntry {
+  name: string
+  size?: number | string
+  time?: string
+}
+/** SQL 查询结果（POST /v1/admin/database/query → { columns, rows, count, truncated }） */
+interface QueryResult {
+  columns?: unknown[]
+  rows?: unknown[]
+  count?: number
+  truncated?: boolean
+}
+/** 列描述可能是字符串，也可能是 `{ name }` 对象（后端两条链路形状不同） */
+function columnName(c: unknown, fallback: string): string {
+  const name = (c ?? {}) as { name?: unknown }
+  return typeof name.name === 'string' && name.name ? name.name : fallback
+}
+
+const statusData = ref<DatabaseStatus | null>(null)
 const statusLoading = ref(false)
 
 async function loadStatus() {
@@ -28,7 +51,7 @@ async function loadStatus() {
   try {
     const resp = await api.get('/v1/admin/database/status')
     statusData.value = resp.data?.data || {}
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_database_status')))
   } finally {
     statusLoading.value = false
@@ -37,7 +60,7 @@ async function loadStatus() {
 
 // ── 配置 ──
 // GET /v1/admin/database/configs → { configs: { k: v } }
-const configs = ref<Record<string, any>>({})
+const configs = ref<Record<string, unknown>>({})
 const configLoading = ref(false)
 
 const configRows = computed(() =>
@@ -57,7 +80,7 @@ async function loadConfigs() {
   try {
     const resp = await api.get('/v1/admin/database/configs')
     configs.value = resp.data?.data?.configs || {}
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_database_config')))
   } finally {
     configLoading.value = false
@@ -68,7 +91,7 @@ async function loadConfigs() {
 // GET /v1/admin/database/backups → { backups: [{ name, size, time }] }
 // POST /v1/admin/database/backups → { name, status }
 // POST /v1/admin/database/backups/{name}/restore
-const backups = ref<any[]>([])
+const backups = ref<BackupEntry[]>([])
 const backupsLoading = ref(false)
 const creatingBackup = ref(false)
 const restoringName = ref<string | null>(null)
@@ -85,7 +108,7 @@ async function loadBackups() {
   try {
     const resp = await api.get('/v1/admin/database/backups')
     backups.value = resp.data?.data?.backups || []
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_backup_list')))
   } finally {
     backupsLoading.value = false
@@ -99,19 +122,19 @@ async function createBackup() {
     const d = resp.data?.data || {}
     message.success(t('common.backup_created_name_status_status', { name: d.name || '—', status: d.status || 'pending' }))
     await loadBackups()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_create_backup')))
   } finally {
     creatingBackup.value = false
   }
 }
 
-async function restoreBackup(record: any) {
+async function restoreBackup(record: BackupEntry) {
   restoringName.value = record.name
   try {
     await api.post(`/v1/admin/database/backups/${encodeURIComponent(record.name)}/restore`)
     message.success(t('common.restoring_from_backup_name_refresh_shortly_to_see_the_result', { name: record.name }))
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.restore_failed')))
   } finally {
     restoringName.value = null
@@ -122,13 +145,13 @@ async function restoreBackup(record: any) {
 // POST /v1/admin/database/query { query } → { columns, rows, count, truncated }
 const queryText = ref('')
 const querying = ref(false)
-const queryResult = ref<any>(null)
+const queryResult = ref<QueryResult | null>(null)
 
 const queryColumns = computed(() => {
   const cols = queryResult.value?.columns || []
-  return cols.map((c: any, i: number) => ({
-    title: typeof c === 'string' ? c : (c?.name || t('common.column_n', { n: i + 1 })),
-    dataIndex: typeof c === 'string' ? c : (c?.name || `col_${i}`),
+  return cols.map((c, i) => ({
+    title: typeof c === 'string' ? c : columnName(c, t('common.column_n', { n: i + 1 })),
+    dataIndex: typeof c === 'string' ? c : columnName(c, `col_${i}`),
     ellipsis: true,
   }))
 })
@@ -136,17 +159,16 @@ const queryColumns = computed(() => {
 const queryRows = computed(() => {
   const cols = queryResult.value?.columns || []
   const rows = queryResult.value?.rows || []
-  return rows.map((r: any, i: number) => {
+  return rows.map((r, i) => {
     if (Array.isArray(r)) {
-      const obj: Record<string, any> = {}
-      cols.forEach((c: any, j: number) => {
-        const k = typeof c === 'string' ? c : (c?.name || `col_${j}`)
-        obj[k] = r[j]
+      const obj: Record<string, unknown> = {}
+      cols.forEach((c, j) => {
+        obj[columnName(c, `col_${j}`)] = r[j]
       })
       obj.__row = i
       return obj
     }
-    return { ...r, __row: i }
+    return { ...(r as Record<string, unknown>), __row: i }
   })
 })
 
@@ -160,7 +182,7 @@ async function executeQuery() {
   try {
     const resp = await api.post('/v1/admin/database/query', { query: sql })
     queryResult.value = resp.data?.data || null
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.query_execution_failed')))
   } finally {
     querying.value = false
@@ -183,7 +205,7 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
     const resp = await api.post(`/v1/admin/database/optimize/${action}`, { table })
     const d = resp.data?.data || {}
     message.success(t('common.optimization_complete_action_table_status', { action: d.action || action, table: d.table || table, status: d.status || 'ok' }))
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.optimization_failed')))
   } finally {
     optimizing.value = false
@@ -191,7 +213,7 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
 }
 
 // ── 工具函数 ──
-function formatSize(s: any): string {
+function formatSize(s: unknown): string {
   if (s == null || s === '') return '-'
   if (typeof s === 'number') {
     if (s >= 1024 * 1024 * 1024) return `${(s / (1024 * 1024 * 1024)).toFixed(2)} GB`
@@ -202,11 +224,11 @@ function formatSize(s: any): string {
   return String(s)
 }
 
-function formatTime(t: any): string {
-  return t ? new Date(t).toLocaleString('zh-CN') : '-'
+function formatTime(value: unknown): string {
+  return value ? new Date(value as string | number).toLocaleString('zh-CN') : '-'
 }
 
-function cellText(v: any): string {
+function cellText(v: unknown): string {
   if (v == null) return ''
   if (typeof v === 'object') return JSON.stringify(v)
   return String(v)
@@ -325,7 +347,7 @@ onMounted(async () => {
                 :title="$t('admin.warning_restoring_from_backup_will_overwrite_the_current_database_this_cannot_be_undone_continue')"
                 :ok-text="$t('common.confirm_restore')"
                 :cancel-text="$t('common.cancel')"
-                @confirm="restoreBackup(record)"
+                @confirm="restoreBackup(record as BackupEntry)"
               >
                 <Button
                   size="small"

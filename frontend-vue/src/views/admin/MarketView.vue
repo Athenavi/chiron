@@ -9,6 +9,7 @@ import {
 import type { MarketItem, MarketGrant } from '../../api/market'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const items = ref<MarketItem[]>([])
@@ -34,8 +35,8 @@ async function fetchItems() {
       type: filterType.value || undefined,
       status: filterStatus.value || undefined,
     })
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -69,8 +70,8 @@ async function saveItem() {
     message.success(t('common.created_draft'))
     itemModalVisible.value = false
     fetchItems()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.creation_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.creation_failed')))
   } finally {
     itemSaving.value = false
   }
@@ -81,8 +82,8 @@ async function publishItem(it: MarketItem) {
     await publishMarketItem(it.id)
     message.success(t('common.published'))
     fetchItems()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.publish_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.publish_failed')))
   }
 }
 
@@ -98,8 +99,8 @@ async function retireItem(it: MarketItem) {
         await retireMarketItem(it.id)
         message.success(t('common.retired'))
         fetchItems()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.failed_to_retire'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.failed_to_retire')))
       }
     },
   })
@@ -117,8 +118,8 @@ function confirmDeleteItem(it: MarketItem) {
         await deleteMarketItem(it.id)
         message.success(t('common.deleted'))
         fetchItems()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })
@@ -130,8 +131,8 @@ async function openGrantDrawer(it: MarketItem) {
   grantForm.enabled = true
   try {
     grants.value = await listMarketGrants({ item_id: it.id })
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load_authorization'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_authorization')))
     return
   }
   grantDrawerVisible.value = true
@@ -153,8 +154,8 @@ async function addGrant() {
     message.success(t('common.authorized'))
     grants.value = await listMarketGrants({ item_id: currentItem.value.id })
     grantForm.tenant_id = ''
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.authorization_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.authorization_failed')))
   } finally {
     grantSaving.value = false
   }
@@ -165,8 +166,8 @@ async function removeGrant(g: MarketGrant) {
     await deleteMarketGrant(g.item_id, g.tenant_id)
     message.success(t('common.authorization_revoked'))
     grants.value = grants.value.filter(x => !(x.item_id === g.item_id && x.tenant_id === g.tenant_id))
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.undo_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.undo_failed')))
   }
 }
 

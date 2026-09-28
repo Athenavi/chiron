@@ -9,6 +9,7 @@ import { api, triggerCronJob, cronWebhookUrl } from '@/api'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 import { useI18n } from 'vue-i18n'
+import { errorDetail } from '../utils/apiError'
 const { t } = useI18n()
 /**
  * 定时任务管理（从 DashboardView 拆出）。
@@ -58,8 +59,8 @@ async function triggerCronJobById(job: CronJob) {
     await triggerCronJob(job.id)
     message.success(t('workflow.triggered_name_task_runs_asynchronously', { name: job.name }))
     await fetchCronJobs(true)
-  } catch (e: any) {
-    message.error(t('errors.trigger_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+  } catch (e) {
+    message.error(t('errors.trigger_failed_error', { error: errorDetail(e, t('errors.network_error_2')) }))
   }
 }
 
@@ -160,8 +161,8 @@ async function saveCronJob() {
     }
     cronModalOpen.value = false
     await fetchCronJobs()
-  } catch (e: any) {
-    message.error(t('errors.save_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+  } catch (e) {
+    message.error(t('errors.save_failed_error', { error: errorDetail(e, t('errors.network_error_2')) }))
   } finally {
     cronSaving.value = false
   }
@@ -172,8 +173,8 @@ async function deleteCronJob(job: CronJob) {
     await api.delete(`/v1/admin/cron-jobs/${job.id}`)
     message.success(t('workflow.scheduled_task_deleted'))
     await fetchCronJobs(true)
-  } catch (e: any) {
-    message.error(t('errors.delete_failed_error', { error: e?.response?.data?.error || e?.message || t('errors.network_error_2') }))
+  } catch (e) {
+    message.error(t('errors.delete_failed_error', { error: errorDetail(e, t('errors.network_error_2')) }))
   }
 }
 

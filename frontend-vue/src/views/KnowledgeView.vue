@@ -11,6 +11,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 import { collectKbUsage, kbUsageOf, type KbUsage } from '../utils/kbUsage'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 interface KnowledgeBase {
   id: string
@@ -108,8 +109,8 @@ async function createKnowledgeBase() {
     showCreateModal.value = false
     createForm.value = { name: '', description: '', type: 'wiki', visibility: 'private' }
     await loadKnowledgeBases()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.creation_failed'))
+  } catch (e) {
+    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.creation_failed')))
   } finally {
     creating.value = false
   }
@@ -130,8 +131,8 @@ async function saveEdit() {
     message.success(t('common.saved'))
     showEditModal.value = false
     await loadKnowledgeBases()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -142,8 +143,8 @@ async function deleteKnowledgeBase(id: string) {
     await api.delete(`/v1/kb/${id}`)
     message.success(t('common.deleted'))
     await loadKnowledgeBases()
-  } catch (e: any) {
-    message.error(e.response?.data?.detail || e.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(e.response?.data?.detail || serverErrorMessage(e, t('errors.delete_failed')))
   }
 }
 
@@ -155,7 +156,7 @@ async function toggleVisibility(kb: KnowledgeBase) {
     await setKBVisibility(kb.id, next)
     message.success(next === 'tenant' ? t('common.shared_with_team') : t('common.set_to_private'))
     await loadKnowledgeBases()
-  } catch (e: any) {
+  } catch (e) {
     const msg = e.response?.data?.detail || e.response?.data?.error || e.response?.data?.message || ''
     if (e.response?.status === 403) {
       message.error(t('knowledge.can_only_operate_knowledge_bases_you_created') + (msg ? `：${msg}` : ''))

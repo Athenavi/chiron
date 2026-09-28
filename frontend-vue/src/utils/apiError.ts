@@ -71,6 +71,33 @@ export function errorStatus(error: unknown): number | undefined {
   return (error as ErrorResponseLike).response?.status
 }
 
+/**
+ * 取错误里的**可读原文**：后端 `error` 原文 → JS `message`（网络错误等）→ 调用方兜底。
+ *
+ * 与另两个的分工：`serverErrorMessage` 只看后端原文，取不到就直接用兜底（不看 `message`）；
+ * `describeApiError` 会把文案**本地化**（可见文案随语言变化，按原文分支的调用点会丢依据）。
+ * 本函数不替换任何字符 —— 专供「原文 + 兜底」这类既有提示拼接，用于收敛
+ * `catch (e: any)` 时不改变可见行为。
+ */
+export function errorDetail(error: unknown, fallback: string): string {
+  const err = (error ?? {}) as ErrorResponseLike & { message?: unknown }
+  const detail = err.response?.data?.error
+  if (typeof detail === 'string' && detail) return detail
+  if (typeof err.message === 'string' && err.message) return err.message
+  return fallback
+}
+
+/**
+ * 取 JS 错误的 `message`（axios 网络错误、调用方/上传器抛的 Error），取不到用兜底。
+ *
+ * 与 `errorDetail` 的差别只有一处：**不先看后端 `error` 原文** —— 严格等价于
+ * `err?.message || fallback`，用于收敛 `catch (e: any)` 时保持既有提示文案不变。
+ */
+export function errorMessageText(error: unknown, fallback: string): string {
+  const msg = (error as { message?: unknown } | null | undefined)?.message
+  return typeof msg === 'string' && msg ? msg : fallback
+}
+
 /** 后端错误码的本地化文案；无对应文案时返回 null（回退到 error 原文） */
 function localizedCodeMessage(code?: string): string | null {
   if (!code) return null

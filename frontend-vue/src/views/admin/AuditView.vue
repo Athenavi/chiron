@@ -7,6 +7,7 @@ import { queryAuditLogs } from '../../api/audit'
 import type { AuditLog } from '../../api/audit'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const logs = ref<AuditLog[]>([])
@@ -53,8 +54,8 @@ async function fetchLogs() {
     })
     logs.value = res.data
     total.value = res.total
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.query_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.query_failed')))
   } finally {
     loading.value = false
   }

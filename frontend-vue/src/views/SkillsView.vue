@@ -134,7 +134,7 @@ async function handleMarketInstall(item: MarketItem) {
     await installMarket('skill', item.id)
     message.success(tr('common.name_installed', { name: item.name }))
     await Promise.all([loadMarket(), loadSkills()])
-  } catch (e: any) {
+  } catch (e) {
     const raw = e?.response?.data
     message.error(tr('errors.install_failed_error', { error: raw?.message || raw?.detail || raw?.error || e?.message || '' }))
   } finally {
@@ -166,7 +166,7 @@ async function toggleEnabled(s: Skill, v: boolean) {
     s.enabled = v
     if (v) message.success(tr('common.name_is_enabled', { name: s.name }))
     else message.success(tr('common.name_is_disabled', { name: s.name }))
-  } catch (e: any) {
+  } catch (e) {
     message.error(tr('errors.operation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   }
 }
@@ -250,7 +250,7 @@ async function submitRun() {
     const resp = await api.post(`/v1/skills/${encodeURIComponent(runTarget.value.name)}/run`, { params })
     runResult.value = resp.data?.data || resp.data
     message.success(tr('agent.skill_execution_complete'))
-  } catch (e: any) {
+  } catch (e) {
     message.error(tr('errors.execution_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     runSubmitting.value = false
@@ -280,7 +280,7 @@ async function handleInstall() {
     installInline.value = ''
     await loadSkills()
     activeTab.value = 'list'
-  } catch (e: any) {
+  } catch (e) {
     message.error(tr('errors.install_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     installLoading.value = false
@@ -304,7 +304,7 @@ async function handleGenerate() {
     genResult.value = response.data?.data?.skill || response.data?.data
     message.success(tr('agent.skill_generated_and_installed'))
     await loadSkills()
-  } catch (e: any) {
+  } catch (e) {
     message.error(tr('errors.generation_failed_error', { error: e?.response?.data?.detail || e?.message || '' }))
   } finally {
     genLoading.value = false

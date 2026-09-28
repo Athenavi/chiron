@@ -83,7 +83,7 @@ async function load() {
     mergeConfig(res.config ?? {})
     channels.value = res.channels ?? {}
     callbackUrls.value = res.callback_urls ?? {}
-  } catch (error: any) {
+  } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_load_payment_config')))
   } finally {
     loading.value = false
@@ -99,7 +99,7 @@ async function save() {
     channels.value = res.channels ?? {}
     callbackUrls.value = res.callback_urls ?? {}
     message.success(t('billing.payment_config_saved_and_effective'))
-  } catch (error: any) {
+  } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_save_payment_config')))
   } finally {
     saving.value = false

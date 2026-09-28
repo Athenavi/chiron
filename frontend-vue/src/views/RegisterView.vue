@@ -98,7 +98,7 @@ async function handleSendEmailCode() {
     emailCodeError.value = ''
     markCaptchaDirty()
     captchaRef.value?.reset()
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {
@@ -169,7 +169,7 @@ async function handleRegister() {
       form.value.emailCode.trim(),
     )
     router.push('/chat')
-  } catch (e: any) {
+  } catch (e) {
     const status = e.response?.status
     const apiErr = e.response?.data?.error
     if (status === 428 || apiErr === 'captcha_required') {

@@ -16,7 +16,20 @@ import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 // ── 域名列表 ──
 // GET /v1/admin/domains → { domains: [{ id, domain, ssl_status, verified, created_at }] }
-const domains = ref<any[]>([])
+interface DomainEntry {
+  id: string
+  domain: string
+  ssl_status?: string
+  verified?: boolean
+  created_at?: string
+}
+/** POST /v1/admin/domains/{id}/verify → { verified, addresses?, reason? } */
+interface VerifyResult {
+  verified?: boolean
+  addresses?: unknown
+  reason?: string
+}
+const domains = ref<DomainEntry[]>([])
 const loading = ref(false)
 
 async function loadDomains() {
@@ -24,7 +37,7 @@ async function loadDomains() {
   try {
     const resp = await api.get('/v1/admin/domains')
     domains.value = resp.data?.data?.domains || []
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_load_domain_list')))
   } finally {
     loading.value = false
@@ -44,7 +57,7 @@ function openCreate() {
   modalVisible.value = true
 }
 
-function openEdit(record: any) {
+function openEdit(record: DomainEntry) {
   editingId.value = record.id
   form.value = { domain: record.domain || '' }
   modalVisible.value = true
@@ -66,7 +79,7 @@ async function submitForm() {
     }
     modalVisible.value = false
     await loadDomains()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, editingId.value ? t('errors.failed_to_update_domain') : t('errors.failed_to_add_domain')))
   } finally {
     submitting.value = false
@@ -76,17 +89,17 @@ async function submitForm() {
 // ── 验证 ──
 // POST /v1/admin/domains/{id}/verify → { verified, addresses?, reason? }
 const verifyVisible = ref(false)
-const verifyResult = ref<any>(null)
+const verifyResult = ref<VerifyResult | null>(null)
 const verifyingId = ref<string | null>(null)
 
-async function verifyDomain(record: any) {
+async function verifyDomain(record: DomainEntry) {
   verifyingId.value = record.id
   try {
     const resp = await api.post(`/v1/admin/domains/${record.id}/verify`)
     verifyResult.value = resp.data?.data || {}
     verifyVisible.value = true
     await loadDomains()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('auth.domain_verification_failed')))
   } finally {
     verifyingId.value = null
@@ -97,14 +110,14 @@ async function verifyDomain(record: any) {
 // POST /v1/admin/domains/{id}/renew-ssl → { ssl_status, note? }
 const renewingId = ref<string | null>(null)
 
-async function renewSSL(record: any) {
+async function renewSSL(record: DomainEntry) {
   renewingId.value = record.id
   try {
     const resp = await api.post(`/v1/admin/domains/${record.id}/renew-ssl`)
     const d = resp.data?.data || {}
     message.success(d.note ? t('memory.ssl_renewal_complete_status_note', { status: d.ssl_status || 'ok', note: d.note }) : t('common.ssl_renewal_complete_status', { status: d.ssl_status || 'ok' }))
     await loadDomains()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.ssl_renewal_failed')))
   } finally {
     renewingId.value = null
@@ -113,12 +126,12 @@ async function renewSSL(record: any) {
 
 // ── 删除 ──
 // DELETE /v1/admin/domains/{id}
-async function removeDomain(record: any) {
+async function removeDomain(record: DomainEntry) {
   try {
     await api.delete(`/v1/admin/domains/${record.id}`)
     message.success(t('admin.domain_deleted'))
     await loadDomains()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_delete_domain')))
   }
 }
@@ -153,11 +166,11 @@ function sslStatusColor(status: string): string {
   }
 }
 
-function formatDate(d: any): string {
-  return d ? new Date(d).toLocaleString('zh-CN') : '-'
+function formatDate(d: unknown): string {
+  return d ? new Date(d as string | number).toLocaleString('zh-CN') : '-'
 }
 
-function formatAddresses(a: any): string {
+function formatAddresses(a: unknown): string {
   if (a == null) return '-'
   if (Array.isArray(a)) return a.join('；')
   if (typeof a === 'object') return Object.entries(a).map(([k, v]) => `${k}: ${v}`).join('；')
@@ -239,7 +252,7 @@ onMounted(loadDomains)
                 <Button
                   size="small"
                   :loading="verifyingId === record.id"
-                  @click="verifyDomain(record)"
+                  @click="verifyDomain(record as DomainEntry)"
                 >
                   <template #icon>
                     <CheckCircleOutlined />
@@ -249,7 +262,7 @@ onMounted(loadDomains)
                 <Button
                   size="small"
                   :loading="renewingId === record.id"
-                  @click="renewSSL(record)"
+                  @click="renewSSL(record as DomainEntry)"
                 >
                   <template #icon>
                     <SyncOutlined />
@@ -258,7 +271,7 @@ onMounted(loadDomains)
                 </Button>
                 <Button
                   size="small"
-                  @click="openEdit(record)"
+                  @click="openEdit(record as DomainEntry)"
                 >
                   <template #icon>
                     <EditOutlined />
@@ -269,7 +282,7 @@ onMounted(loadDomains)
                   :title="$t('admin.confirm_deleting_this_domain_its_ssl_certificate_and_access_config_will_be_removed_as_well')"
                   :ok-text="$t('common.delete')"
                   :cancel-text="$t('common.cancel')"
-                  @confirm="removeDomain(record)"
+                  @confirm="removeDomain(record as DomainEntry)"
                 >
                   <Button
                     size="small"

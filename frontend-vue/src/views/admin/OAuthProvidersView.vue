@@ -19,6 +19,7 @@ import {
 } from '../../api/auth'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 // ── Provider 列表 ──
 
@@ -29,8 +30,8 @@ async function loadProviders() {
   loading.value = true
   try {
     providers.value = await listSsoProviders()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -155,8 +156,8 @@ async function handleSave() {
     }
     modalVisible.value = false
     await loadProviders()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -167,8 +168,8 @@ async function handleDelete(p: SsoProvider) {
     await deleteSsoProvider(p.id)
     message.success(t('common.deleted'))
     await loadProviders()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.delete_failed')))
   }
 }
 
@@ -201,8 +202,8 @@ async function loadCaptcha() {
     captcha.secret = '' // 安全：后端应主动脱敏 secret 字段，空 = 保留原值
     captcha.verify_url = cfg.verify_url || ''
     captcha.enabled = !!cfg.enabled
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('auth.failed_to_load_verification_code_config'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('auth.failed_to_load_verification_code_config')))
   } finally {
     captchaLoading.value = false
   }
@@ -233,8 +234,8 @@ async function handleSaveCaptcha() {
     message.success(t('auth.verification_code_config_saved'))
     captcha.secret = ''
     await loadCaptcha()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     captchaSaving.value = false
   }
@@ -281,8 +282,8 @@ async function loadSms() {
     sms.login_enabled = !!cfg.login_enabled
     sms.auto_register = !!cfg.auto_register
     sms.enabled = !!cfg.enabled
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.failed_to_load_sms_config'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_sms_config')))
   } finally {
     smsLoading.value = false
   }
@@ -324,8 +325,8 @@ async function handleSaveSms() {
     message.success(t('common.sms_config_saved'))
     sms.secret = ''
     await loadSms()
-  } catch (e: any) {
-    message.error(e.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     smsSaving.value = false
   }

@@ -6,6 +6,7 @@ import { listRoles, createRole, updateRole, deleteRole } from '../../api/enterpr
 import type { EntRole } from '../../api/enterprise'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const roles = ref<EntRole[]>([])
@@ -19,8 +20,8 @@ async function fetchRoles() {
   loading.value = true
   try {
     roles.value = await listRoles()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -63,8 +64,8 @@ async function save() {
     }
     modalVisible.value = false
     fetchRoles()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -86,8 +87,8 @@ function confirmDelete(role: EntRole) {
         await deleteRole(role.id)
         message.success(t('common.deleted'))
         fetchRoles()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })

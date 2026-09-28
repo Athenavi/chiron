@@ -5,6 +5,7 @@ import { getPrivacy, putPrivacy } from '../../api/policy'
 import type { TenantPrivacy } from '../../api/policy'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const saving = ref(false)
@@ -27,8 +28,8 @@ async function fetchPrivacy() {
         ? p.redaction_rules
         : JSON.stringify(p.redaction_rules ?? {}, null, 2),
     }
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -52,8 +53,8 @@ async function save() {
     })
     message.success(t('common.saved'))
     fetchPrivacy()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }

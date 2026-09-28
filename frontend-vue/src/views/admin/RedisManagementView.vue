@@ -21,7 +21,7 @@ async function loadRedis() {
   try {
     const resp = await api.get('/v1/admin/redis')
     redisData.value = resp.data?.data || null
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_redis_status')))
   } finally {
     loading.value = false
@@ -60,7 +60,7 @@ async function loadSlowLog() {
     const d = resp.data?.data || {}
     slowLog.value = Array.isArray(d.slow_log) ? d.slow_log : []
     slowError.value = d.error || null
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_slow_log')))
   } finally {
     slowLoading.value = false
@@ -119,7 +119,7 @@ async function flushAll() {
     flushVisible.value = false
     flushConfirm.value = ''
     await loadRedis()
-  } catch (e: any) {
+  } catch (e) {
     message.error(apiErrorMessage(e, t('errors.flushall_failed')))
   } finally {
     flushing.value = false

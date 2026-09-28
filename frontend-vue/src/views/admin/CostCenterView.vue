@@ -9,6 +9,7 @@ import {
 import type { QuotaPoolWithAllocated, QuotaAllocation, QuotaUsageRow } from '../../api/costcenter'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const pools = ref<QuotaPoolWithAllocated[]>([])
@@ -33,8 +34,8 @@ async function fetchPools() {
   try {
     const res = await listQuotas(currentTenantID.value || undefined)
     pools.value = res.pools
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -45,8 +46,8 @@ async function fetchUsage() {
   try {
     const res = await getQuotaUsage(currentTenantID.value)
     usage.value = res.pools ?? []
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load_usage_2'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_usage_2')))
   }
 }
 
@@ -93,8 +94,8 @@ async function savePool() {
     }
     poolModalVisible.value = false
     fetchPools()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     poolSaving.value = false
   }
@@ -112,8 +113,8 @@ function confirmDeletePool(p: QuotaPoolWithAllocated) {
         await deleteQuota(p.id)
         message.success(t('common.deleted'))
         fetchPools()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })
@@ -125,8 +126,8 @@ async function openAllocDrawer(p: QuotaPoolWithAllocated) {
   try {
     const res = await getQuota(p.id)
     allocations.value = res.allocations
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load_allocation'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_allocation')))
     return
   }
   allocDrawerVisible.value = true
@@ -152,8 +153,8 @@ async function addAllocation() {
     fetchPools()
     allocForm.value.target_id = ''
     allocForm.value.amount = 0
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.assignment_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.assignment_failed')))
   } finally {
     allocSaving.value = false
   }
@@ -166,8 +167,8 @@ async function removeAllocation(allocID: string) {
     message.success(t('common.deleted'))
     allocations.value = allocations.value.filter(a => a.id !== allocID)
     fetchPools()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.delete_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.delete_failed')))
   }
 }
 

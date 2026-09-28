@@ -93,7 +93,7 @@ async function load() {
   try {
     const cfg = await getMailAdminConfig()
     if (cfg) Object.assign(form.value, cfg)
-  } catch (error: any) {
+  } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_load_email_config')))
   } finally {
     loading.value = false
@@ -107,7 +107,7 @@ async function save() {
     const res = await updateMailConfig({ ...form.value })
     if (res) Object.assign(form.value, res)
     message.success(t('mail.email_config_saved'))
-  } catch (error: any) {
+  } catch (error) {
     message.error(configErrorMessage(error, t('errors.failed_to_save_email_config')))
   } finally {
     saving.value = false
@@ -124,7 +124,7 @@ async function sendTest() {
   try {
     await sendMailTest(to)
     message.success(t('mail.test_email_sent_please_check_your_inbox'))
-  } catch (error: any) {
+  } catch (error) {
     message.error(configErrorMessage(error, t('errors.test_email_failed_to_send')))
   } finally {
     testing.value = false

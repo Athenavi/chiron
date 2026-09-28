@@ -22,6 +22,7 @@ import {
 } from '@/api/admin'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage, errorMessageText } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const addLoading = ref(false)
@@ -212,8 +213,8 @@ async function handleAdd() {
     message.success(t('common.api_key_added'))
     closeAdd()
     await Promise.all([fetchApiKeys(), loadProviders()])
-  } catch (err: any) {
-    const apiErr = err?.response?.data?.error
+  } catch (err) {
+    const apiErr = serverErrorMessage(err, '')
     if (typeof apiErr === 'string' && apiErr.includes('already exists')) {
       message.error(t('common.this_key_already_exists_you_can_update_the_endpoint_with_save_endpoint_only'))
     } else {
@@ -238,8 +239,8 @@ async function handleSaveBaseURL() {
     await saveLlmProviderBaseURL(preset.id, baseUrl)
     message.success(baseUrl ? t('common.endpoint_saved') : t('common.default_endpoint_restored'))
     await loadProviders()
-  } catch (err: any) {
-    message.error(err?.response?.data?.error || t('errors.endpoint_save_failed'))
+  } catch (err) {
+    message.error(serverErrorMessage(err, '') || t('errors.endpoint_save_failed'))
   } finally {
     baseSaving.value = false
   }
@@ -251,8 +252,8 @@ async function handleEdit(row: any) {
     await updateApiKey(row.id, { status: newStatus })
     message.success(t('common.status_updated'))
     await fetchApiKeys()
-  } catch (err: any) {
-    message.error(t('admin.updateFailed', { msg: err.message || t('common.unknownError') }))
+  } catch (err) {
+    message.error(t('admin.updateFailed', { msg: errorMessageText(err, t('common.unknownError')) }))
   }
 }
 
@@ -261,8 +262,8 @@ async function handleDelete(row: any) {
     await deleteApiKey(row.id)
     message.success(t('common.api_key_deleted'))
     await fetchApiKeys()
-  } catch (err: any) {
-    message.error(t('admin.deleteFailed', { msg: err.message || t('common.unknownError') }))
+  } catch (err) {
+    message.error(t('admin.deleteFailed', { msg: errorMessageText(err, t('common.unknownError')) }))
   }
 }
 

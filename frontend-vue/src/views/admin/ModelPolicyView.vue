@@ -6,6 +6,7 @@ import { listModelPolicies, createModelPolicy, updateModelPolicy, deleteModelPol
 import type { ModelPolicy } from '../../api/policy'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const policies = ref<ModelPolicy[]>([])
@@ -24,8 +25,8 @@ async function fetchPolicies() {
   loading.value = true
   try {
     policies.value = await listModelPolicies()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -76,8 +77,8 @@ async function save() {
     }
     modalVisible.value = false
     fetchPolicies()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -95,8 +96,8 @@ function confirmDelete(p: ModelPolicy) {
         await deleteModelPolicy(p.id)
         message.success(t('common.deleted'))
         fetchPolicies()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })

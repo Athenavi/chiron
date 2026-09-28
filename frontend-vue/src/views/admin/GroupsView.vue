@@ -10,6 +10,7 @@ import { listRoles } from '../../api/enterprise'
 import type { EntGroup, EntRole } from '../../api/enterprise'
 
 import { useI18n } from 'vue-i18n'
+import { serverErrorMessage } from '../utils/apiError'
 const { t } = useI18n()
 const loading = ref(false)
 const groups = ref<EntGroup[]>([])
@@ -30,8 +31,8 @@ async function fetchGroups() {
   loading.value = true
   try {
     groups.value = await listGroups()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load')))
   } finally {
     loading.value = false
   }
@@ -40,8 +41,8 @@ async function fetchGroups() {
 async function fetchRoles() {
   try {
     allRoles.value = await listRoles()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load_role_list'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_role_list')))
   }
 }
 
@@ -73,8 +74,8 @@ async function save() {
     }
     modalVisible.value = false
     fetchGroups()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     saving.value = false
   }
@@ -92,8 +93,8 @@ function confirmDelete(g: EntGroup) {
         await deleteGroup(g.id)
         message.success(t('common.deleted'))
         fetchGroups()
-      } catch (e: any) {
-        message.error(e?.response?.data?.error || t('errors.delete_failed'))
+      } catch (e) {
+        message.error(serverErrorMessage(e, t('errors.delete_failed')))
       }
     },
   })
@@ -104,8 +105,8 @@ async function openRoleBinding(g: EntGroup) {
   try {
     const full = await getGroup(g.id)
     selectedRoleIDs.value = full.role_ids ?? []
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.failed_to_load_group_roles'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.failed_to_load_group_roles')))
     return
   }
   rolesDrawerVisible.value = true
@@ -119,8 +120,8 @@ async function saveGroupRoles() {
     message.success(t('admin.group_role_updated'))
     rolesDrawerVisible.value = false
     fetchGroups()
-  } catch (e: any) {
-    message.error(e?.response?.data?.error || t('errors.save_failed'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.save_failed')))
   } finally {
     rolesSaving.value = false
   }
