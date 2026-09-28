@@ -19,13 +19,14 @@
 
 ## 3. L3 技术债
 
-### L3-2 收敛 ESLint warning（`no-explicit-any` 272 → 3）
+### ✅ L3-2 收敛 ESLint warning（`no-explicit-any` 272 → 0，`de7cb61`…`4fb2e61`、`f0c6327`、`22ebf95`，本批收尾）
 
-- 现状：`components/`、契约层、`views/` 均已清零（`de7cb61`…`4fb2e61`、`f0c6327`、`22ebf95`）；`utils/apiError.ts` 提供 `errorDetail`/`errorMessageText`/`serverErrorDetail` 与既有 `serverErrorMessage`/`errorStatus`/`apiErrorMessage`，`catch (e: any)` 的取值动作统一收口到它们（只取原文、不改文案）。
-- 待决（行为变更，需单独定，勿顺手改）：
-  1. `ChatView` 3 处把 `llm_config` 塞给 `PUT /v1/conversations/{id}`，而后端只认 `title/pinned/tag/alias`（`internal/api/conversation.go` 的 `Update`；`DecodeJSON` 不拒绝未知字段）。其中 `persistRuntime` 那处**只带 `llm_config`** → 必被 400 拒绝并被 `.catch(() => {})` 静默吞掉；rename/pin 两处被后端忽略。删除这层无效负载（连同失去调用者的 `buildPersistLlmConfig`）是行为变更。
-  2. 全仓 136 处 `catch (e: any)` 是否统一改用 `describeApiError`（会把文案本地化）。
-- 硬约束：不为清零加 `eslint-disable`；每批单独跑 `vue-tsc -b` 与组件测试。踩过的坑见提交信息（模板里 `as A | B` 会被判成 Vue2 filter、interface 不满足 `Record<string, unknown>` 形参等）。
+- `components/`、契约层、`views/` 全量清零；`catch (e: any)` 的取值动作统一收口到 `utils/apiError.ts`（`errorDetail`/`errorMessageText`/`serverErrorDetail`/`serverErrorMessage`/`errorStatus`/`apiErrorMessage`）。
+- 收尾两条待决已落地（本批）：
+  1. 删除 `ChatView` 三处塞给 `PUT /v1/conversations/{id}` 的无效 `llm_config`（后端 `Update` 只认 `title/pinned/tag/alias`）。其中 `persistRuntime` 那处**只带** `llm_config`，必然 400 且被 `.catch(() => {})` 静默吞掉 → 整行删除；rename/pin 两处去掉该字段。`buildPersistLlmConfig` 保留（`createSession` 仍用）。
+  2. `catch` 取值口径定为**分层**并写入 `apiError.ts` 的文件头契约：终端用户即时反馈用 `describeApiError`（本地化）；管理/配置页与需按原文分支的场景保留原文类 helper。**不**全量改 `describeApiError` —— 它在 4xx 且状态码已知时会把后端原文换成通用文案（`400 invalid_request` → "请求失败，请稍后重试"），配置类操作恰恰需要那句原文。
+- 剩余 27 条警告均为风格项（`no-unused-vars` 21 + `vue/require-default-prop` 5 + `vue/no-template-shadow` 1），无功能收益，不再动。
+- 硬约束回顾：不为清零加 `eslint-disable`；每批单独跑 `vue-tsc -b` 与组件测试（本批 466 passed）。踩过的坑见提交信息（模板里 `as A | B` 会被判成 Vue2 filter、interface 不满足 `Record<string, unknown>` 形参等）。
 
 ### L3-4 巨型文件拆分（评估项）
 
@@ -87,7 +88,7 @@
 | 批次 | 内容 | 理由 |
 |---|---|---|
 | C. 跨层设计 | L4-1、L4-2、L4-3 | 需设计评审或可达 PG；L4-2 待用户决策 |
-| D. 可维护性 | L3-2 待决项、L3-4 | 无功能收益，放最后 |
+| D. 可维护性 | L3-4 | 无功能收益，放最后 |
 
 > 批次 A（L2-2/L5-2）与批次 B（L1-4）已完成，见 §2/§5 与 §1。
 

@@ -9,6 +9,21 @@
  * （src/locales/<lang>/errors.ts），因此切语言时错误提示同步切换。
  *
  * 服务端 5xx 例外：仍把后端原文附在括号里 —— 那是让用户与运维定位问题的唯一线索。
+ *
+ * ---
+ * **取值口径（L3-2 定；按"给谁看"分三条路径，别混用）**：
+ *
+ * 1. `describeApiError` —— 面向**终端用户的即时反馈**（发送 / 加载 / 删除失败…）：
+ *    走上面这套优先级，随界面语言切换。
+ * 2. `serverErrorMessage` / `serverErrorDetail` —— 需要**后端原文**的场景：
+ *    管理/配置页（要看到"哪个字段该怎么填"，如 MailView 的 `configErrorMessage`）、
+ *    要按原文分支（如 `captcha_required`、`PLUGIN_COMMAND_ALLOWLIST`）。
+ * 3. `errorDetail` / `errorMessageText` —— 拼接既有提示、或后端不给结构化错误时的
+ *    兜底（等价于原先手写的 `e?.response?.data?.error || e?.message || fallback`）。
+ *
+ * 为什么**不**把全部 `catch` 统一改成 `describeApiError`：4xx 且状态码在映射表里时它会
+ * **丢掉后端原文**（`400 invalid_request` → "请求失败，请稍后重试"），而配置类操作恰恰
+ * 需要那句原文；5xx 已自带原文，所以两类场景各用各的。
  */
 import { t, hasMessage } from '../i18n'
 

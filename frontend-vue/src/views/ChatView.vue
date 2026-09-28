@@ -663,17 +663,14 @@ function buildPersistLlmConfig(base?: Record<string, unknown>): Record<string, u
 /**
  * 把**会话级**运行时状态写进单一事实源（Redis 热 + `unified_sessions.runtime` 持久）。
  *
- * 会话已建立时同时写 `/v1/sessions/{id}/runtime` 与 `llm_config`（老客户端与其他页面
- * 仍按此口径读取）。
- *
- * 注意用的是 buildPersistLlmConfig：对话模式与工具授权模式**不落库** —— 它们是前端
- * 实时状态，只随请求下发（见 buildLlmConfig 的说明）。
+ * 只写 `/v1/sessions/{id}/runtime`：`PUT /v1/conversations/{id}` 只接受
+ * `title/pinned/tag/alias`（见 internal/api/conversation.go 的 `Update`），塞进去的
+ * `llm_config` 会被忽略 —— 原先那行**只带** `llm_config`，必然 400 且被 `.catch` 静默吞掉。
  */
 function persistRuntime(patch: Record<string, unknown>) {
   const sid = activeSessionId.value
   if (!sid) return
   void putSessionRuntime(sid, patch).catch(() => {})
-  void updateConversation(sid, { llm_config: buildPersistLlmConfig() } as any).catch(() => {})
 }
 
 /**
@@ -1823,7 +1820,7 @@ async function confirmRename() {
   if (!title || !target) return
   renaming.value = true
   try {
-    await updateConversation(target.id, { title, llm_config: buildPersistLlmConfig() } as any)
+    await updateConversation(target.id, { title })
     const s = sessions.value.find(x => x.id === target.id)
     if (s) s.title = title
     persistSessions()
@@ -1851,7 +1848,7 @@ async function togglePin(id: string, pinned: boolean) {
   s.pinned = pinned
   sortSessions(); persistSessions()
   try {
-    await updateConversation(id, { pinned, llm_config: buildPersistLlmConfig() } as any)
+    await updateConversation(id, { pinned })
   } catch {
     s.pinned = prev
     sortSessions(); persistSessions()
