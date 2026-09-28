@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/monitor"
+	"github.com/redis/go-redis/v9"
 )
 
 // SystemHandler provides health, metrics, and trace endpoints.
@@ -428,6 +430,15 @@ func (h *SystemHandler) RedisGet(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	val, err := db.GlobalRedisManager.Get(ctx, req.Key)
 	if err != nil {
+		// 键不存在不是错误：Redis 的 GET 语义就是「返回空值」。把它当 500 会让
+		// Python 侧 UnifiedRedisClient.get 的「不存在返回 None」契约永远拿不到结果
+		//（真实栈集成测试就是在这里暴露的），调用方还会把「没缓存」误判成「Redis 故障」。
+		if errors.Is(err, redis.Nil) {
+			OK(w, map[string]interface{}{
+				"value": nil,
+			})
+			return
+		}
 		InternalError(w, fmt.Sprintf("redis get failed: %v", err))
 		return
 	}

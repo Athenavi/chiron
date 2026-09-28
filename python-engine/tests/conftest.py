@@ -38,6 +38,8 @@ tests/test_runtime.py、tests/test_context.py、tests/test_prompt_engine.py。
 # 没被发现的原因之一。
 #
 # 需要覆盖该头的测试（例如断言 401）在请求上显式传 `headers=` 即可。
+import os as _os
+
 import pytest as _pytest  # noqa: E402 — 紧接上方的 fixture 说明
 
 
@@ -77,3 +79,45 @@ def _inject_gateway_internal_token(monkeypatch):
 # 网关路径 = `?user_id=&tenant_id=` 加上 `X-Internal-Token`，两者缺一不可。
 # 构造"以某个用户身份经由网关发起"的请求时用这个常量。
 GATEWAY_IDENTITY_PARAMS = {"user_id": "test-user", "tenant_id": "test-tenant"}
+
+
+@_pytest.fixture(autouse=True)
+async def _integration_pg_pool(request):
+    """``integration`` 用例直连 PostgreSQL：按应用启动流程把连接池建起来。
+
+    单元测试集合（``-m "not integration"``）完全不碰库：本 fixture 只对打了
+    ``integration`` 标记的用例生效。
+
+    为什么需要它：``app.db.get_pool()`` 拿到的是**显式初始化**的池（``init_pool``），
+    应用启动时由 ``main.py`` 的 lifespan 建；pytest 里没有人跑 lifespan，于是所有
+    "要真实库"的用例只会以 ``RuntimeError: PostgreSQL pool not initialized`` 变红 ——
+    那是"测试环境没接上"，不是"代码坏了"。两者必须能区分，所以这里要么把池接上，
+    要么显式 skip 并写清理由。
+    """
+    if request.node.get_closest_marker("integration") is None:
+        yield
+        return
+
+    dsn = _os.getenv("POSTGRES_DSN", "").strip()
+    if not dsn:
+        _pytest.skip("POSTGRES_DSN 未设置：integration 用例需要真实 PostgreSQL")
+
+    from app.db import close_pool, init_pool
+
+    await init_pool(dsn)
+    try:
+        yield
+    finally:
+        await close_pool()
+        # `app.redis_client.get_redis()` 的实例是**模块级单例**，绑定在创建它的事件
+        # 循环上；pytest-asyncio 每个用例一个新 loop，不复位就会在下一个用例里抛
+        # "Event loop is closed"。这里连同连接一起收掉，下个用例重新懒建。
+        from app import redis_client as _redis_client_mod
+
+        instance = _redis_client_mod._redis_instance
+        if instance is not None:
+            try:
+                await instance.aclose()
+            except Exception:  # noqa: BLE001 - 清理失败不该让用例变红
+                pass
+            _redis_client_mod._redis_instance = None

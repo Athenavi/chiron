@@ -1,35 +1,35 @@
 {
-  "$comment": "六大工作台的唯一事实源。运行时三端都不读本文件 —— 它是比对基准，不是配置源。三处声明各自手写，由 python-engine/tests/test_workstation_contract.py 读本文件与三端源码比对：Go 见 internal/model/workstation.go，TS 见 frontend-vue/src/types/workstation.ts，Python 见 python-engine/app/core/capabilities.py 的 WorkstationType。",
+  "$comment": "六大工作台的唯一事实源。运行时三端都不读本文件 —— 它是比对基准，不是配置源。三处声明各自手写，由 python-engine/tests/test_workstation_contract.py 读本文件与三端源码比对：Go 见 internal/model/workstation.go，TS 见 frontend-vue/src/types/workstation.ts，Python 见 python-engine/app/core/capabilities.py 的 WorkstationType。label/description 是 i18n 文案键（不是文案本身）：L1-4 把文案唯一事实源交给 frontend-vue/src/locales/<lang>（源语言 zh-CN），三端渲染时经 vue-i18n 解析；键是否存在由前端护栏 frontend-vue/scripts/check-i18n-keys.mjs 守住，agent 的 label 是品牌字面量、不翻译。",
   "workstations": [
     {
       "id": "dialogue",
-      "label": "对话",
-      "description": "智能对话助手"
+      "label": "chat.chat",
+      "description": "chat.ai_chat_assistant"
     },
     {
       "id": "agent",
       "label": "Agent",
-      "description": "多智能体协同"
+      "description": "agent.multi_agent_collaboration"
     },
     {
       "id": "workflow",
-      "label": "工作流",
-      "description": "DAG 流程编排"
+      "label": "workflow.workflow",
+      "description": "workflow.dag_orchestration"
     },
     {
       "id": "skill",
-      "label": "技能",
-      "description": "工具 MCP"
+      "label": "agent.skill",
+      "description": "agent.tool_mcp"
     },
     {
       "id": "knowledge",
-      "label": "知识",
-      "description": "RAG 检索增强"
+      "label": "knowledge.knowledge",
+      "description": "knowledge.rag_retrieval_augmentation"
     },
     {
       "id": "plugin",
-      "label": "插件",
-      "description": "扩展能力"
+      "label": "common.plugin",
+      "description": "common.extensions"
     }
   ]
 }

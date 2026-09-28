@@ -136,3 +136,95 @@ jobs:
       # frontend 容器直接起不来 —— 而前端 CI 只跑 dist 相关的 lint/build/test，全无察觉。
       - name: Encoding guard (U+FFFD / invalid UTF-8)
         run: python scripts/check_source_encoding.py
+
+  # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
+  # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧
+  # 只跑 -m "not integration" —— 覆盖支付入账/回退、设置持久化、工作流落库、统一
+  # DB/Redis 客户端这些高风险路径的断言因此从未真正执行过。本 job 把它们跑起来：
+  #   * PostgreSQL / Redis 用 services 起（compose 里没有 PG，故自建）；
+  #   * schema 用 alembic 建 —— 与发布流程同一个入口，顺带验证迁移在空库上能跑通；
+  #   * Python 的 UnifiedDBClient / UnifiedRedisClient 走的是 Go 网关的
+  #     /v1/internal/{db,redis}/*，所以网关也要拉起来（build 后后台跑，等 /health）；
+  #   * APP_SECRET 必须 ≥32 字符，否则网关拒绝启动（internal/config 的 fail fast）。
+  integration:
+    name: Real-stack integration
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: chiron
+          POSTGRES_PASSWORD: chiron
+          POSTGRES_DB: chiron
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U chiron -d chiron"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      # 同一份 DSN 喂三处：网关（POSTGRES_DSN）、alembic（DATABASE_DSN 优先）、Go live 测试
+      POSTGRES_DSN: postgresql://chiron:chiron@127.0.0.1:5432/chiron
+      DATABASE_DSN: postgresql://chiron:chiron@127.0.0.1:5432/chiron
+      CHIRON_TEST_POSTGRES_DSN: postgresql://chiron:chiron@127.0.0.1:5432/chiron
+      REDIS_URL: redis://127.0.0.1:6379/0
+      APP_SECRET: ci-integration-app-secret-0123456789abcdef
+      JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
+      INTERNAL_TOKEN: ci-integration-internal-token-0123456789
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+
+      - name: Apply schema (alembic upgrade head)
+        run: |
+          python -m pip install -r requirements-migrate.txt
+          python -m alembic -c alembic.ini upgrade head
+
+      - name: Go live tests (real PostgreSQL)
+        # -run 只挑真实库用例（Live/Diag）：其余用例与 go job 重复，不必再跑一遍
+        run: go test -mod=mod ./internal/api/... ./internal/billing/... ./internal/settings/... -count=1 -run 'Live|Diag' -v
+
+      - name: Build and start gateway
+        run: |
+          go build -mod=mod -o /tmp/chiron ./cmd/chiron
+          /tmp/chiron > /tmp/gateway.log 2>&1 &
+          for _ in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/health >/dev/null; then
+              echo "gateway is healthy"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::gateway did not become healthy in 30s"
+          tail -50 /tmp/gateway.log
+          exit 1
+
+      - name: Install engine deps
+        working-directory: python-engine
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install -r requirements-dev.txt
+
+      - name: Python integration tests (real stack)
+        working-directory: python-engine
+        run: python -m pytest -q -m integration

@@ -115,6 +115,7 @@ async def test_workflow_status_returns_instance():
         "edges": [{"source_id": "input_1", "target_id": "output_1"}],
         "initial_state": {"input": "hello"},
     }
+    instance_id = ""
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
             run_resp = await ac.post("/v1/graphs/demo/execute", json=payload, params=IDENTITY)
@@ -122,12 +123,27 @@ async def test_workflow_status_returns_instance():
             status_resp = await ac.get(
                 f"/v1/workflows/{instance_id}/status", params=IDENTITY
             )
+        # 落库是这条契约的**前提**：实例先写进 workflow_instances，status 才查得到。
+        # 此前 INSERT 传 aware datetime 撞 naive 列，异常被静默吞掉 → 这里恒 404。
         assert status_resp.status_code == 200
         body = status_resp.json()
         assert body["instance_id"] == instance_id
-        assert body["status"] in {"completed", "error"}
+        # execute 是**异步提交**契约（另一条用例断言了立即返回 running）：执行由队列
+        # worker 承担，本用例不启动 worker，故 running 就是合法结果 —— 这里只覆盖
+        # "status 能读到落库实例"这一段。
+        assert body["status"] in {"running", "completed", "error"}
     finally:
         app.dependency_overrides.pop(get_gateway, None)
+        if instance_id:
+            # 真实库不留测试数据；清理失败不该覆盖上面的断言结果
+            try:
+                from app.db import get_pool
+
+                await get_pool().execute(
+                    "DELETE FROM workflow_instances WHERE id = $1", instance_id
+                )
+            except Exception:  # noqa: BLE001
+                pass
 
 
 @pytest.mark.asyncio

@@ -336,7 +336,9 @@ async def execute_graph(
 
     graph_name = graph_json.get("name") or graph_id
     instance_id = f"wf_{uuid.uuid4().hex[:10]}"
-    now = datetime.datetime.now(datetime.UTC)
+    # 列是 `timestamp without time zone`：asyncpg 会拒绝 aware datetime
+    # （"can't subtract offset-naive and offset-aware datetimes"），统一按 UTC naive 落库。
+    now = datetime.datetime.now(datetime.UTC).replace(tzinfo=None)
 
     # 落库 running（后台任务完成后更新）
     try:

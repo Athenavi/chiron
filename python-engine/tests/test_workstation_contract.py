@@ -14,6 +14,11 @@
 
 比对范围说明：**id 四端比对**（JSON + Go + TS + Python）；**label 两端比对**
 （JSON + TS）—— Go 与 Python 不渲染 UI，没有也不需要展示文案。
+
+label 的口径在 L1-4 之后是**i18n 文案键**（`chat.chat`），不再是中文原文：
+文案的唯一事实源已交给 `frontend-vue/src/locales/<lang>`（源语言 zh-CN），
+三端渲染时各自经 vue-i18n 解析。因此本测试锁的是"两端指向同一组键"；
+"键在语言包里存在且三语齐全"由前端护栏 `frontend-vue/scripts/check-i18n-keys.mjs` 守住。
 """
 
 from __future__ import annotations
@@ -54,8 +59,8 @@ def _ts_labels() -> dict[str, str]:
     text = TS_SOURCE.read_text(encoding="utf-8")
     block = re.search(r"export const WORKSTATION_LABELS[^=]*=\s*\{(.*?)\n\}", text, re.S)
     assert block is not None, "frontend-vue/src/types/workstation.ts 的 WORKSTATION_LABELS 找不到"
-    # label 在 TS 侧走 i18n（`dialogue: t('对话')`），故正则需容忍可选的 t(…) 包裹；
-    # 取出的仍是**源语言（zh-CN）原文**，与 shared/workstations.json 比对的口径不变。
+    # label 在 TS 侧走 i18n（`dialogue: t('chat.chat')`），故正则需容忍可选的 t(…) 包裹；
+    # 取出的是**文案键**（与 shared/workstations.json 同口径，见文件头说明）。
     return dict(re.findall(r"([a-z_]+):\s*(?:t\()?'([^']*)'\)?", block.group(1)))
 
 

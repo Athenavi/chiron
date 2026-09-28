@@ -4,7 +4,7 @@
 
 ## 0. 当前状态
 
-主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed；`npm run test` 464 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 30 warnings（`no-explicit-any` 剩 3，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
+主干全绿（最近一次本机核验）：Go build/vet/test 通过；`pytest -m "not integration"` 1259 passed + `pytest -m integration` 4 passed（真实 PG 18 + Redis 7）；`npm run test` 464 passed；`npm run check:ui` 通过（i18n 存量 0、a11y 0）；`npm run lint` 0 errors / 30 warnings（`no-explicit-any` 剩 3，见 L3-2）；`vue-tsc -b` build 通过；`mypy app/` 0；alembic 单 head。
 
 i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；护栏转为 `check-i18n.mjs` 的**「翻译调用禁用中文字面键」**——legacy 清空后再写 `t('中文')` 必然缺键（回显 key、不插值、en-US/ar 永不命中）。
 
@@ -35,12 +35,19 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 - 提交 `21a96ae` … `bf4860f`（25 批，1171→0 条 / 130→200 文件）；接线手册见 [贡献与验收流程](contributing.md)。
 - ⚠ 待确认（见 §6）：本分支从未 push、CI 未实际运行。
 
-### L2-2 真实栈集成测试门禁（两侧当前都被永久跳过）
+### L2-2 真实栈集成测试门禁 ✅（CI 首跑待确认）
 
-- 依据：Go 侧 5 文件 6 处 `t.Skip("CHIRON_TEST_POSTGRES_DSN 未设置")`，覆盖支付入账/回退/支付宝验签/设置持久化等高风险路径（`internal/api/diag_alipay_key_test.go`、`payment_live_test.go`、`internal/billing/pgstore_live_test.go`、`revert_payment_test.go`、`internal/settings/settings_live_test.go`）；Python 侧 CI 仅 `pytest -m "not integration"`，`mark.integration` 仅 4 处，真实栈极薄。
-- 实施：新增 CI job，`services:` 起 pgvector PostgreSQL（compose 无 PG，须自建）→ `pip install -r requirements-migrate.txt` + `alembic upgrade head` → 导出 `CHIRON_TEST_POSTGRES_DSN` 跑 `go test ./internal/api/... ./internal/billing/... ./internal/settings/...` + `pytest -m integration`。
-- 验收：上述 Go live 测试在 CI 实际执行（非 skip）；Python integration 有明确最小集合并通过。
-- 风险：首次接入可能暴露真实缺陷，勿与其它批次混做。
+- 本次提交：新增 CI job `integration` —— `services:` 起 pgvector PostgreSQL + Redis（compose 无 PG，须自建）→ `alembic upgrade head` 建 schema → `go test … -run 'Live|Diag'` → `pytest -m integration`。Python 的 `UnifiedDBClient`/`UnifiedRedisClient` 走的是网关 `/v1/internal/{db,redis}/*`，故 job 里一并 build 网关并后台启动（轮询 `/health` 就绪）；`APP_SECRET` 必须 ≥32 字符，否则网关 fail fast 拒绝启动。
+- 本机以真实 PostgreSQL 18 + Redis 7 全量验证（DSN 指向开发库；本机 `chiron_app` 无建库权限，**空库路径只能靠 CI 覆盖**）：Go live 6 条全过，Python integration 从"全红"到 4 条全过。
+- 首次接入暴露并修复的真实缺陷（正是本项的价值所在）：
+  1. `internal/api/system_handler.go` 的 `RedisGet` 把 go-redis 的 `redis.Nil`（键不存在）当 500 —— Python 侧 `UnifiedRedisClient.get` 的"不存在返回 None"契约永远拿不到结果，调用方还会把"没缓存"误判成"Redis 故障"。现按 Redis 语义返回 200 + `value: null`。
+  2. `python-engine/app/api/workflows.py` 的实例 INSERT 传 aware datetime 撞 `timestamp without time zone` 列（asyncpg：can't subtract offset-naive and offset-aware datetimes），异常被 `except` 静默吞掉 → 实例永远写不进库、`/status` 恒 404（"看起来成功、实际丢失"）。改按 UTC naive 落库。
+  3. Python integration 用例此前**不可能在 pytest 里通过**：`app.db.get_pool()` 要求显式 `init_pool`（平时只有 app lifespan 调），`app.redis_client.get_redis()` 的模块级单例又绑定在创建它的事件循环上。新增 `tests/conftest.py` 的 integration fixture（建池 + 用例结束复位 Redis 单例），未配 `POSTGRES_DSN` 时显式 skip 并写清理由。
+  4. `test_workflow_status_returns_instance` 断言的仍是旧的**同步执行**契约（completed/error），而 execute 早已是异步提交（立即 `running` + `instance_id`）；改为按现契约断言，并在用例结束清理落库实例。
+  5. 跨端契约测试 `test_workstation_contract` 自 L1-4 起一直红：TS 的 `WORKSTATION_LABELS` 已改为 i18n 键，而 `shared/workstations.json` 还是中文原文。统一为「label/description 存文案键」，文案本体由 `frontend-vue/src/locales/zh-CN` 承担（键存在性由 `check-i18n-keys.mjs` 守）。
+- 待确认/待决：
+  - ⚠ 本分支从未 push，CI 未实际运行（与 L2-1 同一前提）；空库（alembic 刚建表）这条路本地无法复现，首跑需留意。
+  - workflow 实例 INSERT 失败仍只 `logger.warning`：是否升级为可观测的失败（指标 / 接口报错）需单独定。
 
 ## 3. L3 技术债
 
@@ -101,7 +108,7 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 
 | 项 | 需要什么才能立项 |
 |---|---|
-| mypy 接线结果未经真实 CI 验证（L2-1） | push 并跑一次 CI，留意未声明顶层依赖（beautifulsoup4/aiohttp 类） |
+| CI 首跑（L2-1 的 mypy / L2-2 的 integration） | push 并跑一次 CI：未声明顶层依赖（beautifulsoup4/aiohttp 类）、空库建表路径、pgvector 镜像、网关在 runner 内的启动，都只能在 CI 里验证 |
 | 新功能方向 | 产品路线图输入 |
 | 前端 e2e（Playwright） | 当前无 e2e 配置，需确认是否引入浏览器依赖 |
 | `internal/enterprise`/`monitor`/`storage`/`id`/`model` 补测试 | 当前 0 测试文件但较小，需确认回归风险 |
@@ -111,7 +118,7 @@ i18n 基线已是空账本（`legacy.ts` 三语种清空），L1-4 已完成；�
 
 | 批次 | 内容 | 理由 |
 |---|---|---|
-| A. 门禁与文档（性价比最高） | L2-2、L5-2 | L2-1 已清零，L2-2 可能暴露存量缺陷（即价值）；L5-2 提升后续改动可信度 |
+| A. 门禁与文档（性价比最高） | L2-2 ✅、L5-2 | L2-2 已完成，并当场暴露/修掉 2 个真实缺陷（见 §2）；L5-2 提升后续改动可信度 |
 | C. 跨层设计 | L4-1、L4-2、L4-3 | 需设计评审或可达 PG；L4-3 是唯一库结构变更 |
 | D. 可维护性 | L3-2、L3-4、L3-7 | 无功能收益，放最后 |
 
