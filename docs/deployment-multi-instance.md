@@ -176,7 +176,7 @@ python -m pytest python-engine/tests -q
 
 ### 结构性后续
 
-- **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；剩余价值是「实例故障后从 checkpoint 续跑而非重跑」，需跨 Go/Python 状态模型设计；
+- **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；剩余价值是「实例故障后从 checkpoint 续跑而非重跑」，需跨 Go/Python 状态模型设计 —— **设计已产出**（[run 现场 checkpoint 续跑设计](run-checkpoint-design.md)，待评审）；
 - **`chiron-cli db` 的迁移入口**：`chiron-cli db migrate` 走 `internal/db/migrate.go` 的 `RunMigrations` —— 它只 shell 出
   `alembic upgrade head`（**不是**应用内 DDL，需目标机有 python + alembic，缺失时会明确报错）；`db status` 已改读
   `alembic_version`。若要让 CLI 完全不接触迁移流程，需调整其交互设计；

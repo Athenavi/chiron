@@ -45,11 +45,11 @@
 
 ## 4. L4 结构性后续（来源：多实例部署指南 §10）
 
-### L4-1 run 现场 checkpoint 续跑
+### L4-1 run 现场 checkpoint 续跑 —— 设计已产出，待评审
 
-- 现状：实例故障该 run 中断；SSE 断连靠客户端 `Last-Event-ID` 从 Redis Stream 重放。
-- 依赖：需跨 Go 网关与 Python 引擎的统一 run 状态模型设计（先设计后编码）。
-- 验收：产出设计文档（状态机、checkpoint 落点、幂等边界、与 `TASK_IDEMPOTENCY_RETENTION_DAYS` 关系），评审通过再拆实现。
+- 本次提交：[run 现场 checkpoint 续跑设计](run-checkpoint-design.md) —— 状态机（running / checkpointed / resuming / 终态 / abandoned）、checkpoint 内容与**回合级**落点（依据 `app/agent/runtime.py` 的 `for turn in range(task.max_turns)`）、存储分层（PG `agent_runs` 为唯一事实源 + Redis 热镜像）、**幂等边界**（含 `checkpoint_ttl ≤ TASK_IDEMPOTENCY_RETENTION_DAYS` 的不等式）、恢复路径（用户重试 + reconciler）与 5 批分步落地；同时盘点了可复用的既有机制（workflow 节点级 checkpoint、run 租约、会话运行锁、SSE 重放）。
+- 待评审拍板：设计文档 §8 的 5 个未决问题（对话 run 是否改走 `engine:tasks`、messages 快照形状、非幂等工具的中断判定、reconciler 接管风暴、checkpoint TTL 取值）。
+- 实现拆批见设计文档 §7（批 2 只增表与写入、无行为变更；批 3 才改执行路径）。
 
 ### L4-2 `chiron-cli db` 迁移入口交互设计
 
