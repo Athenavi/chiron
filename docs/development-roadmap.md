@@ -59,10 +59,14 @@
 
 ### L4-3 时间列 `timestamp` → `timestamptz`
 
-- 依据：实测 145 个时间列中 136 个 `timestamp without time zone`、9 个 `with time zone`；唯一 VARCHAR 是已废弃 `schema_migrations.applied_at`，不涉及 `USING` 转换与存量风险。
-- 剩余：提升为 `timestamptz`（含 `scripts/generate_orm_models.py` 生成模型与数十张表）。
-- 前置：需可达 PostgreSQL（迁移是发布流程步骤）。
-- 验收：新迁移追加到 `migrations/versions/`（单 head，CI schema job 校验）；ORM 重新生成；`alembic upgrade head --sql` 离线渲染通过。
+- 依据：本次实测 **142 列** `timestamp without time zone`（72 张表）、9 列 `with time zone`；唯一 VARCHAR 是已废弃 `schema_migrations.applied_at`，不涉及 VARCHAR 转换。
+- ⚠ **新发现的前置（本次取证）**：原判「不涉及存量风险」只成立在「类型是 timestamp」这一层；**naive 值的时区语义未确认**，而它决定 `USING` 子句怎么写：
+  - Go 侧 `time.Now().UTC()` 仅 **7** 处、`time.Now()`（**本地时间**）**102** 处；Python 侧 `datetime.now(UTC)` 19 处；
+  - PG 侧 DDL 默认值 `now()` 写进 `timestamp without time zone` 列时按**会话时区**丢弃时区（本机实测 `now()` = `+08`，而 `now() at time zone 'UTC'` 差 8 小时）——即「写库时的本地时间」；
+  - 结论：若照抄常见写法 `USING col AT TIME ZONE 'UTC'`，存量时间会**整体偏移 8 小时**。必须先抽样确认（取近期写入行与 `timestamptz` 列/UTC 时刻比对），再决定 `AT TIME ZONE '<会话时区>'` 还是分级处理。
+- 剩余：提升为 `timestamptz`（含 `scripts/generate_orm_models.py` 生成模型与数十张表）——ORM 侧需让 datetime 列渲染 `DateTime(timezone=True)`（模板 `orm-template.jinja2` 目前无条件渲染 `DateTime`）。
+- 前置：① 存量时区语义抽样确认（上述）；② 需可达 PostgreSQL（迁移是发布流程步骤）。
+- 验收：新迁移追加到 `migrations/versions/`（单 head，CI schema job 校验）；ORM 重新生成；`alembic upgrade head --sql` 离线渲染通过；**并在迁移注释里写清 `USING` 的时区依据**。
 
 ## 5. L5 文档 ✅
 
