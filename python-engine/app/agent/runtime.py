@@ -587,13 +587,11 @@ class AgentRuntime:
         self,
         gateway: GatewayRouter,
         tool_executor: Any = None,
-        sse_producer: Any = None,
         session_store: Any = None,
         memory: Any = None,
     ):
         self._gateway = gateway
         self._tool_executor = tool_executor
-        self._sse = sse_producer
         self._session_store = session_store
         self._memory = memory  # MemoryService | None（None 时行为不变）
         # 三栅栏（S 安全修复：输入/工具/输出）

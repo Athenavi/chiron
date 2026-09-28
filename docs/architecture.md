@@ -153,7 +153,7 @@ grep -o 'mux\.HandleFunc("[A-Z]* [^"]*"' internal/api/gateway_router.go | sort -
 
 ## 6. 现状与坑
 
-- **`python-engine/app/sse/producer.py` 的 `SSEProducer` 是未接线的遗留**：全仓只有定义与 `app/sse/__init__.py` 的导出，没有构造点。它写的 `sse:<task_id>` stream 也无人消费。真实链路是"引擎 HTTP SSE 流 → 网关 hub → per-session stream"，别照它理解架构（本项待清理，见路线图）。
+- **别把"引擎直接写 Redis Stream 给前端"当成链路**：`python-engine/app/sse/producer.py` 曾有一个 `SSEProducer`（写 `sse:<task_id>` 流），它**从未接线**、也无人消费，已删除。真实链路是"引擎 HTTP SSE 流 → 网关 hub → per-session stream"（§2）；排障时以 §2 为准，别被旧注释带走。
 - **会话流是 SSE，不是 WebSocket**：`/ws/rpa` 是 RPA 插件桥专用（见 §3）。
 - **网关与引擎都会连 PG/Redis**：扩容时连接预算 = `POSTGRES_MAX_CONN × 网关副本数 + DB_POOL_MAX_SIZE × 引擎副本数 ≤ PG max_connections`；引擎启动时会把这个算式打出来（`app/db.py` 的 `_log_pool_capacity`）。
 - **长回合超时**：`AGENT_SUBMIT_TIMEOUT` 默认 5 分钟且不低于 `DefaultAgentTimeout`(300s)；比它短的硬编码曾导致"多轮 LLM + 工具调用做一半就断"。
