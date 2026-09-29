@@ -147,6 +147,23 @@ class Settings(BaseSettings):
     #: 必须落在该目录内，越界一律拒绝（方案 03 §4）。
     deploy_extensions_dir: str = ""
 
+    # ── run 恢复（C1 批 3）──
+    #: 僵尸 run 巡检（reconciler）。默认**开**：它只修正"旧主已死"的 run 状态
+    #: （`running` → `checkpointed`；快照超冷窗口 → `abandoned`），**不触发续跑**、
+    #: 不改对话行为。巡检本身只做 DB 扫描 + Redis 锁检查，周期 60s + 每实例抖动。
+    run_reconciler_enabled: bool = True
+    #: 自动续跑（C1 批 3+）：reconciler 在**热窗口（1h）内**发现僵尸 run 时，直接用它接管并跑完。
+    #: 默认**开**：热窗口内"用户无感"才成立（SSE 重放能补齐缺口）。冷窗口**不自动跑** ——
+    #: 用户早已离开，替他烧 token 跑完是花钱买一个他可能不想要的答案（那种情况只标记可续跑，
+    #: 等他自己重试）。成本由 run 自身的 `task_budget` 兜底。
+    run_auto_resume_enabled: bool = True
+
+    # ── S3：远端子 agent（跨实例委派）──
+    #: **默认关**：跨实例执行会扩大信任边界（另一台机器的引擎要接受本机的委派请求）——
+    #: 与 hooks / 部署级扩展同一约定：默认关 = 零行为变化，显式开启才生效。
+    #: 开启后 `target="remote:<instance_id|auto>"` 才可用；远端不可达时**回退本实例**。
+    remote_subagent_enabled: bool = False
+
     # ── RAG 配置 ──
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536  # 嵌入维度，可配置

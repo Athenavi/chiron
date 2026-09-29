@@ -250,10 +250,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.backends.filestore import build_filestore_backend_from_settings
 
     file_backend = build_filestore_backend_from_settings()
+    # D2：把**技能目录**挂到虚拟路径 `/skills/`（**只读**）—— 这样目录注入给出的路径才**真能**
+    # 被 `read_file` 读到（技能目录在 `data/skills/**`，本不在 agent 沙箱工作区内）。
+    # 复用批 B 的 `CompositeBackend`：非 `/skills/` 前缀一律透传默认后端，行为不变。
+    from app.backends.composite import CompositeBackend
+    from app.backends.local import LocalWorkspaceBackend
+    from app.backends.skill import MOUNT as SKILLS_MOUNT
+    from app.backends.skill import SkillBackend
+
+    base_backend = file_backend if file_backend is not None else LocalWorkspaceBackend()
     # 用 set_default_backend（进程级）而不是 set_backend（contextvar）：lifespan 里设置的
     # contextvar 不会被后续请求任务继承（请求任务由 ASGI server 派生）—— 那会变成
     # "配了 filestore 但请求里仍走 local"，而日志看起来一切正常。
-    set_default_backend(file_backend)
+    set_default_backend(CompositeBackend(base_backend, {SKILLS_MOUNT: SkillBackend()}))
     if file_backend is not None:
         logger.info(
             "file backend: filestore via %s", settings.gateway_internal_url
@@ -272,7 +281,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # `None`，连后端都不触碰 —— 零行为变化。开启时从**部署目录**读 `extensions.json`：
     # 工具登记进注册表，后端虚拟路由装配进默认后端（**重启生效**，不做热切换）。
     # 任何失败都 fail-soft：记日志、绝不拖垮引擎启动（方案 03 §4 验收③）。
-    from app.backends.local import LocalWorkspaceBackend
     from app.plugins.extensions import (
         DeploymentExtensions,
         load_deployment_extensions_from_settings,
@@ -299,9 +307,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             )
         routes = deploy_extensions.routes
         if routes:
-            # 默认后端与 `get_backend()` 的回落保持一致：未选 filestore 时就是本地工作区。
-            base_backend = file_backend if file_backend is not None else LocalWorkspaceBackend()
-            set_default_backend(deploy_extensions.build_backend(base_backend))
+            # 基于**当前**默认后端再包一层（它此刻已含 `/skills/` 挂载）——
+            # 不能让这次装配把上一次的挂载覆盖掉。
+            from app.backends.context import get_backend
+
+            set_default_backend(deploy_extensions.build_backend(get_backend()))
             logger.info("deployment backend routes mounted: %s", sorted(routes))
 
     # ── 2. Redis 连接池 ──
@@ -752,6 +762,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     warn_if_user_defined_enabled()
 
+    # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
+    # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
+    # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
+    # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
+    # runner：reconciler 自动续跑的**执行体**（C1 批 3+）。
+    # 与 `/v1/agent/submit` 那条路径**同源**（同样的 gateway / session_store / memory 依赖）；
+    # 区别是这里**没有 SSE 订阅者** —— 用户早已离开，所以他回来时看到的是**会话消息**
+    # （runtime 收尾会写 `session_store`），而不是实时流。
+    async def _auto_resume_runner(task: Any) -> None:
+        from app.agent.event_sink import EventSink
+        from app.agent.runtime import AgentRuntime
+        from app.memory.service import get_service as get_memory_service
+        from app.tools.context import set_tool_context
+
+        gateway = await get_gateway()
+        if gateway is None:
+            logger.warning("auto-resume skipped: gateway unavailable")
+            return
+        set_tool_context(
+            event_sink=EventSink(session_id=getattr(task, "session_id", "") or "")
+        )
+        resume_runtime = AgentRuntime(
+            gateway=gateway,
+            session_store=_session_cache,
+            memory=get_memory_service(),
+        )
+        async for _ev in resume_runtime.run(task):
+            pass  # 事件无人订阅；结论经 session_store / subagent_runs 落库
+
+    _reconciler_task: Any = None
+    try:
+        from app.agent.resume import start_reconciler
+
+        _reconciler_task = await start_reconciler(runner=_auto_resume_runner)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("run reconciler failed to start: %s", e)
+
     logger.info("=" * 60)
     logger.info("Ready. HTTP port: %d", settings.http_port)
     logger.info("=" * 60)
@@ -760,6 +807,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     # ── 关闭 ──
     logger.info("Shutting down...")
+
+    # C1 批 3：停 reconciler（它是周期任务，取消即可 —— 没有"进行中的批"需要排空）
+    if _reconciler_task is not None:
+        _reconciler_task.cancel()
+        try:
+            await _reconciler_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("run reconciler shutdown failed: %s", e)
 
     # 停止队列 worker：先优雅排空，再取消后台协程。
     # 不能只 cancel：QueueWorker.start() 内部捕获 CancelledError 后正常返回，
@@ -1447,6 +1504,9 @@ async def agent_submit(
 
         run_token = uuid.uuid4().hex
         _ACTIVE_RUNTIMES[session_id] = (runtime, task.user_id, run_token)
+        # C1 批 3+：token 交给 task —— 落盘进 checkpoint 后，接管 CAS 才能判定
+        # "要接管的正是这个 run"（而不是一个已经换了主的 run）。
+        task.run_token = run_token
         # run 归属映射（Redis）：网关据此把该 session 的请求路由到本实例，
         # 审批端点据此校验归属与 run_token。实例故障后映射随 TTL(300s) 过期，
         # 用户重试即在新实例重建 run（现场状态不迁移，明确中断而非静默错路由）。

@@ -202,6 +202,26 @@ def _normalize_msg(
     )
 
 
+def _resume_task_meta(task: AgentTask) -> dict[str, Any]:
+    """落进 checkpoint 的"重建 AgentTask 所需的最小元信息"（C1 批 3+）。
+
+    只放**重建必需、且只存在于提交请求里**的字段：`llm_config`（模型/模式/压缩/rubric）、
+    `workbench_context`（kb / agent / skill / workflow 选择）、`system_prompt`、`user_id`、
+    `max_turns`、`subagent_depth`。
+
+    **工具面不放**：它由 `mode` 决定（`task.tools` 为空时走 mode 的 core tools），把整份
+    schema 塞进快照只会让快照膨胀，收益为零。
+    """
+    return {
+        "user_id": task.user_id or "",
+        "system_prompt": task.system_prompt or "",
+        "llm_config": dict(task.llm_config or {}),
+        "workbench_context": dict(task.workbench_context or {}),
+        "max_turns": int(task.max_turns or 0),
+        "subagent_depth": int(task.subagent_depth or 0),
+    }
+
+
 def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
     """最后一条 assistant 消息的正文（S6b 的评审对象）。
 
@@ -628,6 +648,9 @@ class AgentTask:
     llm_config: dict[str, Any] = field(default_factory=dict)
     max_turns: int = 5
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
+    #: 本次 run 的唯一凭据（由入口生成，与 Go 侧运行锁 / Redis 归属租约同源）。
+    #: C1 批 3+ 的**接管 CAS** 靠它判定"要接管的那一行是不是我看到的那个 run"。
+    run_token: str = ""
     #: 工作台上下文（前端 ChatView.buildContext 组装并经 Go 透传）：
     #: kb_id / agent / agent_id / skill_names[] / workflow_id。引擎侧按需消费。
     workbench_context: dict[str, Any] = field(default_factory=dict)
@@ -924,6 +947,8 @@ class AgentRuntime:
         self._loop_guard = LoopGuard()
         # 任务预算与步数计数：由 run() 开头按环境变量重建（见 0.4b）
         self._budget: TaskBudget | None = None
+        #: C1 批 3：本次 run 是否从 checkpoint 续跑（供落盘与指标使用）
+        self._resumed_from_checkpoint: Any | None = None
         self._tool_steps = 0
 
     @staticmethod
@@ -1021,6 +1046,32 @@ class AgentRuntime:
                 messages, replace(forced, max_messages=max(2, forced.max_messages // 2))
             )
         return compacted
+
+    async def _load_resume_state(self, task: AgentTask) -> Any | None:
+        """C1 批 3：尝试取续跑现场 —— **任何失败都回落现状**（恢复是增强路径，不阻断对话）。"""
+        if not getattr(task, "session_id", ""):
+            return None
+        try:
+            from app.agent.resume import load_resume_state
+
+            return await load_resume_state(
+                tenant_id=task.tenant_id or "", session_id=task.session_id or ""
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("resume state lookup failed (session=%s): %s", task.session_id, exc)
+            return None
+
+    def _record_resume_metric(self, resume: Any) -> None:
+        """记"续跑次数"与"省下的回合数"（方案 §3.1 要求的两个指标之一）。"""
+        try:
+            from app.observability import metrics
+
+            metrics.RUN_RESUMED_TOTAL.labels(window=str(getattr(resume, "window", "") or "unknown")).inc()
+            turns = int(getattr(resume, "turn_index", 0) or 0)
+            if turns > 0:
+                metrics.RUN_RESUME_TURNS_SAVED.inc(turns)
+        except Exception:  # noqa: BLE001 — 指标失败不影响对话
+            pass
 
     async def _run_rubric_turn(
         self,
@@ -1338,8 +1389,30 @@ class AgentRuntime:
                 except Exception as e:
                     logger.warning("Memory recall failed (non-blocking): %s", e)
 
-            # ── 1. 从 session cache 加载或初始化消息列表 ──
-            if self._session_store and task.session_id:
+            # ── 1. 历史起点：优先**续跑现场**（C1 批 3），否则从 session cache 加载/初始化 ──
+            # 续跑的意义：已完成回合与工具调用**不重放**（快照里已含它们的结果），
+            # 用户重试因此不必从头再烧一遍上下文与工具副作用。
+            resume = await self._load_resume_state(task)
+            if resume is not None:
+                from app.agent.resume import merge_user_message, with_replay_pending
+
+                messages = _auto_normalize(list(resume.messages))
+                messages = _ensure_valid_tool_sequence(messages)
+                # 本次用户消息通常**已经在快照里**（快照是回合末落的）→ 同内容不重复追加
+                messages = merge_user_message(messages, task.content)
+                # "已开始未结束"的调用只告知、**不自动重放**（它们可能已产生副作用）
+                messages = with_replay_pending(messages, resume.replay_pending)
+                messages = _ensure_valid_tool_sequence(messages)
+                self._resumed_from_checkpoint = resume
+                self._record_resume_metric(resume)
+                logger.info(
+                    "C1 resumed session=%s from checkpoint (window=%s, turn=%d, pending=%d)",
+                    task.session_id,
+                    resume.window,
+                    resume.turn_index,
+                    len(resume.replay_pending),
+                )
+            elif self._session_store and task.session_id:
                 history_msgs = self._build_history_msgs(task)
                 messages = await self._session_store.get_or_init(
                     task.session_id, history_msgs
@@ -1354,11 +1427,19 @@ class AgentRuntime:
             else:
                 messages = self._build_messages(task)
 
-            # ── 1.5 技能持久目录注入（含技能的模式；会话内已注入则跳过） ──
+            # ── 1.5 技能目录注入（D2：进 **system prompt**；D7：按选中的技能过滤）──
+            # 位置从 messages[0] 的 user 消息改到 system 段：system 前缀在会话内稳定，而"可用
+            # 能力清单"本就是系统级信息；混进 user 消息会让模型更容易把它当成用户指令。
             if mode_cfg.include_context:
-                from app.tools.skill_catalog import inject_skill_catalog
+                from app.tools.skill_catalog import build_skill_catalog
 
-                messages = await inject_skill_catalog(messages)
+                catalog = await build_skill_catalog(
+                    selected=(task.workbench_context or {}).get("skill_names") or ()
+                )
+                if catalog:
+                    task.system_prompt = (
+                        f"{task.system_prompt}\n\n{catalog}" if task.system_prompt else catalog
+                    )
 
             tools = (
                 self._convert_tools(task.tools)
@@ -2639,11 +2720,15 @@ class AgentRuntime:
             replay_pending=[],
             usage=usage,
             instance_id=instance,
+            # C1 批 3+：把"重建 AgentTask 所需的最小元信息"一并落盘 —— 自动续跑的唯一来源
+            task_meta=_resume_task_meta(task),
         )
         await checkpoint_mod.save(
             tenant_id=task.tenant_id or "",
             session_id=task.session_id,
             checkpoint=snapshot,
+            # run_token 必须落库：接管 CAS 靠它判定"要接管的正是我看到的那个 run"
+            run_token=getattr(task, "run_token", "") or "",
             instance_id=instance,
         )
 
