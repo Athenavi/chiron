@@ -116,6 +116,7 @@ async def subagent(
     max_tokens: int = 0,
     max_seconds: int = 0,
     rerun_of: str = "",
+    response_schema: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
@@ -173,6 +174,8 @@ async def subagent(
             max_tokens=max_tokens,
             max_seconds=_sync_wall_seconds(run_in_background, max_seconds),
         ),
+        # S4：调用方声明的响应 schema（非空时会在收尾阶段抽取结构化结果）
+        response_schema=response_schema,
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #
@@ -377,6 +380,15 @@ registry.register(
                     "Optional: id or name of a subagent Profile (agents.kind='subagent'). "
                     "Profiles fix the system prompt, tool whitelist/blacklist, read-only "
                     "flag, model/effort and depth limit. Omit to use a general child agent."
+                ),
+            },
+            "response_schema": {
+                "type": "object",
+                "description": (
+                    "Optional JSON Schema. When provided, the child's output is additionally "
+                    "extracted into a JSON object conforming to it and returned as `structured` "
+                    "(`structured_error` is set instead when extraction fails). The plain-text "
+                    "`output` is always returned too — extraction never replaces it."
                 ),
             },
             "mode": {

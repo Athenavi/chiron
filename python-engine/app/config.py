@@ -130,6 +130,15 @@ class Settings(BaseSettings):
     default_max_tokens: int = 4096
     default_temperature: float = 0.1
 
+    # ── 生命周期 hooks（批 G）──
+    #: 机制总开关。**默认关** —— 开启前零行为变化（方案 03 §3.2）。
+    hooks_enabled: bool = False
+    #: 是否允许**用户自定义** hook（部署级 hook 不受此开关限制）。
+    #: SaaS 部署误开必须可见：启用时启动告警 + 审计（方案 03 §3.2）。
+    hooks_allow_user_defined: bool = False
+    #: 单个 hook 的硬超时（秒）。超时按"失败"处理但**不阻断主流程**（fire-and-forget）。
+    hooks_timeout_seconds: int = 5
+
     # ── RAG 配置 ──
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536  # 嵌入维度，可配置
