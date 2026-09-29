@@ -1484,6 +1484,27 @@ class AgentRuntime:
                     # 为什么"按调用粒度分组"而不是"批内含写就整批串行"：deep agent 的典型批是
                     # "1 写 + N 读"，整批降级会因一个写惩罚 9 个读（评审 01 §1.6）。
                     parallel_calls, serial_calls = _split_tool_batch(tool_calls)
+
+                    # S6a：同一条消息内只允许一次 `write_todos` —— 并发写计划只会互相覆盖
+                    # （对位 deepagents 的 `TodoListMiddleware` 约束）。只有这一层知道"批"的边界，
+                    # 所以检查放这里而不是工具内部。重复的调用**不执行**，直接用错误回灌。
+                    from app.tools.todo import WRITE_TODOS_TOOL
+
+                    seen_plan_write = False
+                    duplicate_plan_ids: set[str] = set()
+                    for call in tool_calls:
+                        if str(call.get("name", "")) == WRITE_TODOS_TOOL:
+                            if seen_plan_write:
+                                duplicate_plan_ids.add(call["id"])
+                            seen_plan_write = True
+                    if duplicate_plan_ids:
+                        parallel_calls = [
+                            c for c in parallel_calls if c["id"] not in duplicate_plan_ids
+                        ]
+                        serial_calls = [
+                            c for c in serial_calls if c["id"] not in duplicate_plan_ids
+                        ]
+
                     batch_results: dict[str, dict[str, Any]] = {}
                     #: 真正执行过工具的调用 id（供收尾阶段的"无进展"判定；被 ask/护栏拦下的不算）
                     executed_ids: set[str] = set()
@@ -1532,6 +1553,15 @@ class AgentRuntime:
 
                     for call in tool_calls:
                         tool_result = batch_results.get(call["id"], {})
+                        if call["id"] in duplicate_plan_ids:
+                            # 重复的计划写入**没有执行**，这里给它一个明确的错误结果
+                            tool_result = {
+                                "error": (
+                                    "write_todos 同一条消息内只允许调用一次"
+                                    "（并发写计划会互相覆盖）"
+                                )
+                            }
+                            batch_results[call["id"]] = tool_result
 
                         # 循环护栏（**执行后**）：换了工具/参数，结果却始终一样 → 无进展。
                         # 放在收尾而不是执行处：并发组没有"执行顺序"，统一在这里按原始顺序判定。
@@ -1570,6 +1600,17 @@ class AgentRuntime:
                             content=json.dumps(tool_result, ensure_ascii=False),
                             trace_id=trace_id,
                         )
+
+                        # S6a：计划更新单独发一个事件 —— 前端可直接渲染进度，
+                        # 不必去解析 tool_result 的 JSON（那是给模型看的）
+                        if str(call.get("name", "")) == WRITE_TODOS_TOOL and isinstance(
+                            tool_result.get("todos"), list
+                        ):
+                            yield AgentEvent(
+                                type="todo_updated",
+                                content=json.dumps(tool_result["todos"], ensure_ascii=False),
+                                trace_id=trace_id,
+                            )
 
                         # 记录工具 span (带租户隔离)
                         tool_duration = int((time.time() - tool_start) * 1000)

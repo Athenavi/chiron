@@ -25,6 +25,15 @@
     将根目录下的技能文件复制进租户 `_shared`（只复制顶层 `.skill.json`，
     不复制子目录，避免把 user 目录误并入共享层）。
 
+## 双载体读取（D1）与内置技能源（D3）
+
+- 每个搜索目录里两种技能载体都认：`{name}.skill.json`（Chiron 原生扁平定义）与
+  `{name}/SKILL.md`（deepagents 兼容的目录型技能，解析见 app/skill/skillmd.py）。
+  同一目录内 `.skill.json` 先产出，命名冲突时 json 胜出（first-wins）。任一载体非法
+  （坏 JSON / 坏 frontmatter）都跳过并 `logger.warning`，不静默。
+- 搜索路径**末尾**追加内置技能源 `market/skills`（scope=`builtin`，对位 deepagents 的
+  `built_in_skills`）。first-wins + 高优先在前 ⇒ 用户同名技能覆盖内置。
+
 API 层（app/api/skills.py）与运行时工具链（app/tools/skill.py）共用此解析规则：
 API 从 query 参数（网关注入）取身份，工具链从 app.tools.context（contextvars）取身份。
 """
@@ -32,6 +41,7 @@ API 从 query 参数（网关注入）取身份，工具链从 app.tools.context
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import shutil
@@ -49,15 +59,19 @@ DEFAULT_SKILL_ROOT = os.path.join(".", "data", "skills")
 # 身份段白名单：防路径穿越（不允许 / \ .. 空格等）
 _IDENTITY_SEGMENT_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,127}$")
 
+logger = logging.getLogger(__name__)
+
 _migration_lock = threading.Lock()
 
 PathLike = str | Path
 
-# 技能来源标记（scope）：user=用户私有目录 / tenant=租户共享层 / shared=全局共享层
+# 技能来源标记（scope）：user=用户私有目录 / tenant=租户共享层 / shared=全局共享层 /
+# root=显式 root（测试注入与旧调用方）/ builtin=内置技能源（market/skills）
 SCOPE_USER = "user"
 SCOPE_TENANT = "tenant"
 SCOPE_SHARED = "shared"
 SCOPE_ROOT = "root"
+SCOPE_BUILTIN = "builtin"
 
 
 def _safe_segment(value: str, label: str) -> str:
@@ -119,12 +133,33 @@ class SkillRoots:
     - `write`：当前 store 的写目录（save/delete 的目标）。
     - `search`：读查找路径，元素为 `(目录, scope)`，按优先级从高到低；
       `list()` 沿此顺序合并去重，`get()` 取第一个命中。
-    - `write_scope`：写目录对应的来源标记（user/tenant/shared/root）。
+    - `write_scope`：写目录对应的来源标记（user/tenant/shared/root；builtin 只出现在
+      `search` 中，不作为写目标）。
     """
 
     write: Path
     search: tuple[tuple[Path, str], ...]
     write_scope: str
+
+
+def _with_builtin_source(
+    search: list[tuple[Path, str]],
+) -> list[tuple[Path, str]]:
+    """在搜索路径**末尾**追加内置技能源（`market/skills`，最低优先级）。
+
+    对位 deepagents 的 `built_in_skills`（方案 02 D3）。`search` 高优先级在前，而
+    `_iter_search` 是 first-wins，因此**用户同名技能覆盖内置** —— 等价于 deepagents
+    的 last-wins（其加载顺序是 built_in 先、用户后），见评审 01 §2.5。
+
+    内置目录缺失时静默跳过：只是「没有内置技能」，不该让技能列表报错。
+    """
+    # 延迟导入：skillmd 顶层依赖 store.SkillDef，顶层互相 import 会成环
+    from app.skill.skillmd import builtin_skills_root
+
+    builtin = builtin_skills_root()
+    if builtin is not None:
+        search.append((builtin, SCOPE_BUILTIN))
+    return search
 
 
 def resolve_skill_roots(
@@ -151,10 +186,10 @@ def resolve_skill_roots(
     # 全局旧目录迁移（无身份路径也会触发，与历史行为一致）
     _migrate_legacy_to_shared(base, global_shared)
     if not tid and not uid:
-        # 身份缺失（未登录 / 系统任务）→ 全局共享目录
+        # 身份缺失（未登录 / 系统任务）→ 全局共享目录（末尾再挂内置源）
         return SkillRoots(
             write=global_shared,
-            search=((global_shared, SCOPE_SHARED),),
+            search=tuple(_with_builtin_source([(global_shared, SCOPE_SHARED)])),
             write_scope=SCOPE_SHARED,
         )
 
@@ -170,6 +205,8 @@ def resolve_skill_roots(
         search.append((base / tid / uid, SCOPE_USER))
     search.append((tenant_shared, SCOPE_TENANT))
     search.append((global_shared, SCOPE_SHARED))
+    # D3：内置技能源作为**最低优先级**源追加到末尾（用户同名技能覆盖内置）
+    _with_builtin_source(search)
 
     if scope == "tenant":
         write, write_scope = tenant_shared, SCOPE_TENANT
@@ -203,7 +240,19 @@ class SkillDef:
     parameters: list[dict[str, Any]] = field(default_factory=list)
     installed_at: float = field(default_factory=time.time)
     enabled: bool = True
-    # 运行时派生的来源标记（user/tenant/shared/root），不参与磁盘持久化语义；
+    # D6 元数据补齐：对齐 deepagents 的 SKILL.md frontmatter。
+    # license / compatibility / allowed_tools / metadata 由目录型技能（SKILL.md）填充，
+    # 扁平 `.skill.json` 也可带同名键（见 _load），两者最终经 to_dict 暴露给 skill_list。
+    license: str = ""
+    compatibility: str = ""
+    allowed_tools: list[str] = field(default_factory=list)
+    metadata: dict[str, Any] = field(default_factory=dict)
+    # D1 目录附件：目录型技能同目录下除 SKILL.md 外的文件（相对路径）与来源目录，
+    # 供渐进式披露（D2 的「可读路径」）与按需读正文；扁平技能为空。
+    # `source_dir` 是**服务器绝对路径**，刻意不写入 to_dict（避免经 /v1/skills 泄漏给前端）。
+    attachments: list[str] = field(default_factory=list)
+    source_dir: str = ""
+    # 运行时派生的来源标记（user/tenant/shared/root/builtin），不参与磁盘持久化语义；
     # list()/get() 按目录命中位置填充，供 API 层映射为返回结构里的 source 字段。
     scope: str = SCOPE_USER
 
@@ -218,6 +267,11 @@ class SkillDef:
             "parameters": self.parameters,
             "installed_at": self.installed_at,
             "enabled": self.enabled,
+            "license": self.license,
+            "compatibility": self.compatibility,
+            "allowed_tools": self.allowed_tools,
+            "metadata": self.metadata,
+            "attachments": self.attachments,
         }
 
 
@@ -255,15 +309,33 @@ class SkillStore:
         return self._root / f"{name}.skill.json"
 
     def _iter_search(self) -> Iterator[tuple[SkillDef, str]]:
-        """按优先级遍历搜索路径，产出 (SkillDef, scope)；坏文件跳过。"""
+        """按优先级遍历搜索路径，产出 (SkillDef, scope)。
+
+        每个搜索目录里两种载体都认：`{name}.skill.json`（Chiron 原生扁平定义）与
+        `{name}/SKILL.md`（deepagents 兼容的目录型技能，见 app/skill/skillmd.py）。
+        同一目录内 `.skill.json` 先于 SKILL.md 产出，故命名冲突时 json 胜出（first-wins）。
+
+        任一载体非法（坏 JSON / 坏 frontmatter）都**跳过并告警** —— 不让坏技能静默消失
+        （静默会让「我明明放了技能却不生效」无从排查）。
+        """
+        # 延迟导入：skillmd 顶层依赖本模块的 SkillDef，顶层互相 import 会成环
+        from app.skill.skillmd import iter_skill_dirs, load_skill_dir
+
         for d, scope in self._roots.search:
             if not d.is_dir():
                 continue
             for p in sorted(d.glob("*.skill.json")):
                 try:
                     yield self._load(p), scope
-                except Exception:
-                    continue
+                except Exception as e:  # noqa: BLE001 — 单个坏文件不该拖垮整个列表
+                    logger.warning("skill store: skip invalid skill json %s: %s", p, e)
+            for skill_dir in iter_skill_dirs(d):
+                try:
+                    yield load_skill_dir(skill_dir), scope
+                except Exception as e:  # noqa: BLE001 — 同上
+                    logger.warning(
+                        "skill store: skip invalid SKILL.md dir %s: %s", skill_dir, e
+                    )
 
     def list(self) -> list[SkillDef]:
         """合并 user 目录 + 租户 _shared + 全局 _shared（去重，user 优先）。
@@ -324,4 +396,10 @@ class SkillStore:
             parameters=data.get("parameters", []),
             installed_at=data.get("installed_at", 0),
             enabled=data.get("enabled", True),
+            license=data.get("license", ""),
+            compatibility=data.get("compatibility", ""),
+            allowed_tools=data.get("allowed_tools", []),
+            metadata=data.get("metadata", {}),
+            attachments=data.get("attachments", []),
+            source_dir=data.get("source_dir", ""),
         )

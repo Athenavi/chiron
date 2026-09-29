@@ -55,6 +55,8 @@ dependencies = [
     "opentelemetry-instrumentation-fastapi>=0.54b0",
     "opentelemetry-instrumentation-redis>=0.54b0",
     "opentelemetry-instrumentation-httpx>=0.54b0",
+    # S4：子 agent 结构化响应的 JSON Schema 校验（app/agent/subagent_runner.py）
+    "jsonschema>=4.23.0",
 ]
 
 [project.optional-dependencies]
@@ -135,8 +137,9 @@ warn_unused_configs = true
 # pdfplumber（PDF 解析的 fallback 后端，只在 pymupdf 缺失时才 import，requirements.txt 不装）。
 # 只放宽这些**模块的 import 解析**（它们的内部不参与检查），本仓库代码仍照常按 strict 检查。
 # 若日后要更严的检查，可分别评估 types-psutil / asyncpg-stubs。
+# jsonschema 同理（S4 用它做完整 JSON Schema 校验）：发行版不保证带 py.typed。
 [[tool.mypy.overrides]]
-module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "langchain.*", "markitdown", "openpyxl", "opentelemetry.*", "pdfplumber", "psutil", "pymilvus", "qdrant_client", "sentence_transformers", "unstructured.*", "uvicorn"]
+module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "jsonschema", "langchain.*", "markitdown", "openpyxl", "opentelemetry.*", "pdfplumber", "psutil", "pymilvus", "qdrant_client", "sentence_transformers", "unstructured.*", "uvicorn"]
 ignore_missing_imports = true
 
 # pymupdf **自带** py.typed（与上面那些不同），但 pymupdf.open / Document 等仍缺注解 ——

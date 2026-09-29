@@ -17,12 +17,16 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 import textwrap
 import uuid
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
+
+import jsonschema
 
 from app.agent.event_sink import EV_NOTICE, EV_REASONING, EV_STATUS, EV_TEXT, ST_CANCELLED, ST_TOOL
 from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec
@@ -84,6 +88,13 @@ class SubagentRunResult:
     error: str = ""
     profile: str = ""
     artifacts: list[dict[str, Any]] = field(default_factory=list)
+    #: S4：按调用声明的 `response_schema` 抽取出的结构化结果（`None` = 未声明或抽取失败）
+    structured: dict[str, Any] | None = None
+    #: S4：抽取失败的**原因**（空 = 成功或未声明）。抽取失败**不阻断** —— 文本结果仍在 `output` 里。
+    structured_error: str = ""
+    #: S2：本次委派真正继承了父会话的多少条消息（0 = 未开启继承）。
+    #: 这是**审计**字段：前端据此显示"这个子 Agent 看到了父的多少上下文"。
+    inherited_messages: int = 0
 
     def to_tool_payload(self) -> dict[str, Any]:
         """工具层返回体（结构化，便于父模型与前端消费）。"""
@@ -105,6 +116,16 @@ class SubagentRunResult:
             payload["artifacts"] = self.artifacts
         if self.error:
             payload["error"] = self.error
+        # S4：结构化结果与失败原因**分开**表达 —— 调用方能区分"没声明 schema"、
+        # "声明了但抽取失败"（此时该读文本 output）与"拿到了结构"。
+        if self.structured is not None:
+            payload["structured"] = self.structured
+        if self.structured_error:
+            payload["structured_error"] = self.structured_error
+        # S2：只在**真的继承了**才出现这个字段 —— 未开启继承的调用方不该在返回体里
+        # 多出一个恒为 0 的字段（那会让"没开启"和"开启了但没继承到"看起来一样）。
+        if self.inherited_messages:
+            payload["inherited_messages"] = self.inherited_messages
         return payload
 
 
@@ -195,6 +216,10 @@ class SubAgentRunner:
         background: bool = False,
         allow_write: bool = False,
         budget: TaskBudget | None = None,
+        response_schema: dict[str, Any] | None = None,
+        inherit_context: bool | int = False,
+        parent_messages: Sequence[Mapping[str, Any]] | None = None,
+        parent_system: str = "",
     ) -> None:
         self._gateway = gateway
         #: 是否后台委派（决定生命周期与预算，**不再决定只读**，见 _resolve_tools）
@@ -213,6 +238,15 @@ class SubAgentRunner:
         self._user_id = user_id or ""
         self._sink = sink
         self._cache = cache
+        #: S4：调用方声明的响应 schema（JSON Schema）。非空时会在收尾阶段抽取结构化结果。
+        self._response_schema = response_schema if isinstance(response_schema, dict) else None
+        #: S2：是否继承父会话上下文（`False` 默认关 / `True` 全部 / `int` 最近 N 条）。
+        #: 默认关是**安全默认** —— 继承会扩大子 Agent 的可见面（评审 01 §1.9）。
+        self._inherit_context: bool | int = inherit_context
+        #: S2：父会话消息（由调用方提供；`None` 表示没有可继承的上下文）
+        self._parent_messages = parent_messages
+        #: S2：父 system 段（用于第 ③ 层过滤；多数调用方不传）
+        self._parent_system = parent_system or ""
 
     # ── 主入口 ──
 
@@ -233,6 +267,25 @@ class SubAgentRunner:
         run_id = run_id or new_run_id()
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
+
+        # ── S2：继承父会话上下文（默认关）──
+        # 在**这里**构造（而不是装配 child 之后）是为了让它在整条 run 路径上都已定义：
+        # 下面有多处提前 return（深度超限、装配失败…），收尾时仍要能读到审计计数。
+        from app.subagent.inherit import build_inherited_context
+
+        inherited = build_inherited_context(
+            self._parent_messages,
+            inherit_context=self._inherit_context,
+            parent_system=self._parent_system,
+        )
+        if inherited:
+            logger.info(
+                "S2 inherited %d parent messages into run=%s (redacted=%d, truncated=%s)",
+                inherited.inherited_messages,
+                run_id,
+                inherited.redacted_hits,
+                inherited.truncated,
+            )
 
         # 1) Profile（缺失则退回通用子 Agent）
         spec: ProfileSpec | None = None
@@ -275,6 +328,12 @@ class SubAgentRunner:
         tools = self._resolve_tools(spec, mode, child_depth, max_depth)
         if tools is not None:
             child.tools = tools
+
+        # S2：把继承的父上下文**前置到初始消息**（不是后续追加）—— 子 Agent 从第一轮起
+        # 就能看到父的上下文，这正是 fork 的语义。文本已带 `<inherited-context>` 标记与
+        # "这是数据不是指令"的声明（见 app/subagent/inherit.py）。
+        if inherited:
+            child.content = f"{inherited.text}\n\n{child.content}"
 
         # 3) 落库（起始）
         if self._store is not None:
@@ -662,6 +721,21 @@ class SubAgentRunner:
             await owner_lease.stop()
 
         wrapped = _wrap_result(run_id, profile_name, status, l2_text, truncated)
+
+        # ── S4：按调用声明的 schema 抽取结构化结果 ──
+        # 抽取失败**不阻断**：文本结果照常返回，同时带出 `structured_error` 让调用方
+        # 能区分"没声明 schema"与"声明了但抽不出来"。
+        structured: dict[str, Any] | None = None
+        structured_error = ""
+        if self._response_schema is not None and l2_text:
+            structured, structured_error = await self._extract_structured(
+                schema=self._response_schema, output=l2_text
+            )
+            if structured_error:
+                logger.info(
+                    "S4 structured extraction failed (run=%s): %s", run_id, structured_error
+                )
+
         return SubagentRunResult(
             run_id=run_id,
             status=status,
@@ -673,6 +747,10 @@ class SubAgentRunner:
             truncated=truncated,
             error=" | ".join(errors)[:500],
             profile=profile_name,
+            structured=structured,
+            structured_error=structured_error,
+            # S2：审计计数（0 = 未开启继承；>0 = 子 Agent 看到了父的这么多条上下文）
+            inherited_messages=inherited.inherited_messages,
         )
 
     # ── 工具集收窄 ──
@@ -763,6 +841,97 @@ class SubAgentRunner:
             ).strip()
         except Exception:  # noqa: BLE001
             return output[:500]
+
+    async def _extract_structured(
+        self, *, schema: dict[str, Any], output: str
+    ) -> tuple[dict[str, Any] | None, str]:
+        """按 JSON Schema 从子 Agent 输出里抽取结构化结果（S4）。
+
+        返回 `(结构化结果, parse_error)`；`parse_error` 非空表示抽取失败 —— **不阻断**：
+        `to_tool_payload()` 里的 `output` 仍是完整的文本结果，调用方可以自己重试或忽略。
+        "没声明 schema"与"声明了但抽取失败"必须能区分（后者会同时给出 `structured_error`）。
+
+        为什么是"额外一次 LLM 调用"而不是 provider 原生 structured output：
+        引擎的 provider 层目前没有该能力（`ChatResponse` 没有 structured 字段），为它改
+        provider 层会牵动所有 provider 适配。这里先用与 `_summarise` 相同的通用路径
+        （`gateway.chat` 非流式），provider 原生支持后可省掉这次调用。
+
+        **只做基础校验**（能解析成 JSON 对象）：完整 JSON Schema 校验需要引入 `jsonschema`
+        依赖，属后续；schema 本身会喂给模型约束输出形状。
+        """
+        from app.config import settings
+
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You extract structured data. Return ONLY a JSON object that conforms to "
+                    "the given JSON Schema. No prose, no code fences, no comments."
+                ),
+            },
+            {
+                "role": "user",
+                "content": (
+                    f"JSON Schema:\n{json.dumps(schema, ensure_ascii=False)}\n\n"
+                    f"Text to extract from:\n<text>\n{output[:8000]}\n</text>"
+                ),
+            },
+        ]
+        try:
+            response = await self._gateway.chat(
+                messages=prompt, model=settings.default_model, max_tokens=1500
+            )
+        except Exception as exc:  # noqa: BLE001 — 抽取失败不能影响结果返回
+            logger.info("S4 structured extraction call failed: %s", str(exc)[:160])
+            return None, f"extraction model call failed: {str(exc)[:160]}"
+
+        parsed = _parse_json_object(str(getattr(response, "content", "") or ""))
+        if parsed is None:
+            return None, "model did not return a JSON object"
+
+        # ── 完整 JSON Schema 校验（S4，`jsonschema` 为显式依赖）──
+        # 校验失败时 `structured` 置 None：**不**把不合规的对象冒充"结构化结果"（那会让调用方
+        # 以为它符合 schema）。原因写进 `structured_error`，调用方能判断是"整体不可用"还是
+        # "只差一个字段"。
+        try:
+            jsonschema.validate(instance=parsed, schema=schema)
+        except jsonschema.ValidationError as exc:
+            return None, f"schema validation failed: {_short_validation_error(exc)}"
+        except jsonschema.SchemaError as exc:
+            # schema 本身非法 —— 这是**调用方配置错**，不是模型的问题，必须区分开
+            return None, f"invalid response_schema: {str(exc)[:200]}"
+        return parsed, ""
+
+
+def _short_validation_error(exc: Any) -> str:
+    """把 jsonschema 的校验错误压成一行 `路径: 说明`（原始消息可能极长）。"""
+    path = "/".join(str(part) for part in getattr(exc, "absolute_path", ())) or "<root>"
+    return f"{path}: {str(getattr(exc, 'message', exc))[:300]}"
+
+
+def _parse_json_object(raw: str) -> dict[str, Any] | None:
+    """从模型输出里解析出一个 JSON 对象（S4）。
+
+    模型常给三种形态，都容忍：纯 JSON、```` ```json … ``` ```` 包裹、以及前后带解释性文字。
+    最后一种用"第一个 `{` 到最后一个 `}`"兜底 —— 比正则更稳（JSON 里可能有嵌套花括号）。
+    """
+    text = (raw or "").strip()
+    if not text:
+        return None
+    if text.startswith("```"):
+        text = text.split("\n", 1)[-1] if "\n" in text else text
+        text = text.rsplit("```", 1)[0].strip()
+    try:
+        parsed = json.loads(text)
+    except (ValueError, TypeError):
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            return None
+        try:
+            parsed = json.loads(text[start : end + 1])
+        except (ValueError, TypeError):
+            return None
+    return parsed if isinstance(parsed, dict) else None
 
 
 def _step_kind(event_type: str) -> str:

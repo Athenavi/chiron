@@ -20,6 +20,13 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
+from app.memory.conflict_audit import (
+    EVENT_DETECTED,
+    EVENT_DISMISSED,
+    EVENT_RESOLVED,
+    ConflictAuditor,
+    NullConflictAuditor,
+)
 from app.memory.layers import MemoryConflict, ProfileItem, SlotType, SourceType
 from app.redis_keys import rkey
 
@@ -41,13 +48,20 @@ class ConflictManager:
     4. 提供冲突裁决接口
     """
 
-    def __init__(self, redis: aioredis.Redis | None = None):
+    def __init__(
+        self,
+        redis: aioredis.Redis | None = None,
+        auditor: ConflictAuditor | None = None,
+    ):
         """初始化冲突管理器。
 
         Args:
             redis: Redis 连接实例（可为 None，此时冲突管理功能禁用）。
+            auditor: 冲突审计器（可为 None）。缺省为 no-op —— 审计是旁路能力，
+                不该成为构造 ConflictManager 的前置条件。
         """
         self._redis = redis
+        self._auditor: ConflictAuditor = auditor or NullConflictAuditor()
 
     def _require_redis(self) -> aioredis.Redis:
         """返回**已确认可用**的 Redis 连接。
@@ -61,6 +75,18 @@ class ConflictManager:
         if redis is None:
             raise RuntimeError("ConflictManager: Redis unavailable")
         return redis
+
+    async def _audit(self, event: str, conflict: dict[str, Any]) -> None:
+        """把一条冲突事件交给审计器（**旁路**，绝不向调用方抛出）。
+
+        所有「登记 / 裁决 / 删除」都汇到这一个出口，保证两条冲突来源
+        （``register_conflict`` 的 L2 条目、``detect_and_handle_conflict`` 的档案卡）
+        留下同样的审计流水。审计失败只记 warning：用户动作不该因为账本写不了而失败。
+        """
+        try:
+            await self._auditor.record(event, conflict)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("Conflict auditor failed (%s): %s", event, e)
 
     # ── Redis 键生成 ──────────────────────────────────────────────────────
 
@@ -238,6 +264,10 @@ class ConflictManager:
         await redis.sadd(list_key, conflict.conflict_id)
         await redis.expire(list_key, PENDING_CONFIRMATION_TTL)
 
+        # 落审计（PG 历史账本）：Redis 写成功才记 —— 审计的意义是「这条冲突确实
+        # 进了待裁决列表」，而不是「有人试图登记过」。Redis 才是活数据，PG 只留痕。
+        await self._audit(EVENT_DETECTED, conflict_data)
+
     async def _increment_derived_count(
         self,
         tenant_id: str,
@@ -362,6 +392,11 @@ class ConflictManager:
             resolution,
             final_value,
         )
+        # 审计带上裁决方式与最终值，供事后对账「当时到底选了哪个」。
+        await self._audit(
+            EVENT_RESOLVED,
+            {**conflict, "resolution": resolution, "final_value": final_value},
+        )
 
         return True, {
             "conflict_id": conflict_id,
@@ -396,6 +431,7 @@ class ConflictManager:
         await redis.srem(list_key, conflict_id)
 
         logger.info("Conflict %s deleted (user denied)", conflict_id)
+        await self._audit(EVENT_DISMISSED, conflict)
         return True
 
     async def get_conflict(self, conflict_id: str) -> MemoryConflict | None:
