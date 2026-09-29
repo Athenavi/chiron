@@ -318,3 +318,224 @@ async def test_composite_with_local_default_executes(tmp_path: Path, monkeypatch
     # 用 python 而不是 echo：它在白名单内且跨平台行为一致
     result = await backend.execute('python -c "print(\'composite-exec\')"')
     assert "composite-exec" in result.output
+
+
+# ── 片 4：经网关 FileStore 的后端 ─────────────────────────────────────────
+
+
+class _FakeGateway:
+    """替身网关：在内存里实现 `/v1/internal/storage/*` 的语义。
+
+    这样能验证 `FileStoreBackend` 的**协议行为**（路径语义、404、分页、glob 转换），
+    而不必起真实网关；Go 侧 handler 的真实行为由 `internal/api` 的 Go 测试覆盖。
+    """
+
+    def __init__(self) -> None:
+        self.files: dict[str, str] = {}
+
+    async def __call__(
+        self,
+        method: str,
+        path: str,
+        *,
+        params: dict[str, str] | None = None,
+        body: dict[str, object] | None = None,
+    ) -> tuple[int, dict]:
+        params = params or {}
+        if path.endswith("/write"):
+            assert body is not None
+            self.files[str(body["path"])] = str(body["content"])
+            return 200, {"path": body["path"], "size": len(str(body["content"]))}
+        if path.endswith("/read"):
+            key = params.get("path", "")
+            if key not in self.files:
+                return 404, {"error": "not found"}
+            return 200, {
+                "path": key,
+                "content": self.files[key],
+                "encoding": "utf-8",
+                "size": len(self.files[key]),
+            }
+        if path.endswith("/list"):
+            prefix = params.get("prefix", "")
+            return 200, {
+                "files": [
+                    {"path": k, "size": len(v), "is_dir": False, "modified": ""}
+                    for k, v in sorted(self.files.items())
+                    if not prefix or k.startswith(prefix)
+                ]
+            }
+        return 500, {"error": "unsupported"}
+
+
+def _filestore_with_fake_gateway() -> tuple[object, _FakeGateway]:
+    from app.backends.filestore import FileStoreBackend
+
+    backend = FileStoreBackend("http://gateway.test", "internal-token")
+    gateway = _FakeGateway()
+    backend._call = gateway  # type: ignore[method-assign] — 测试替身，不起真实网关
+    return backend, gateway
+
+
+@pytest.mark.asyncio
+async def test_filestore_backend_write_read_round_trip():
+    backend, _ = _filestore_with_fake_gateway()
+
+    written = await backend.write("docs/a.md", "hello")
+    assert written.error is None and written.bytes_written == 5
+
+    read = await backend.read("docs/a.md", limit=0)
+    assert read.error is None and read.content == "hello"
+
+
+@pytest.mark.asyncio
+async def test_filestore_backend_missing_file_is_an_error_not_empty():
+    """方案 02 §3.4 的完成标准：必须区分"没有这个文件"与"文件是空的"。"""
+    backend, _ = _filestore_with_fake_gateway()
+
+    read = await backend.read("nope.md", limit=0)
+    assert read.error is not None and "file not found" in read.error
+    assert read.content == ""
+
+
+@pytest.mark.asyncio
+async def test_filestore_backend_unconfigured_reports_error():
+    """未配置网关地址时明确失败，而不是静默读到空。"""
+    from app.backends.filestore import FileStoreBackend
+
+    backend = FileStoreBackend("", "")
+    read = await backend.read("a.md", limit=0)
+    assert read.error is not None
+    assert "not configured" in read.error
+
+
+@pytest.mark.asyncio
+async def test_filestore_backend_glob_matches_nested_paths():
+    """`**/*.py` 必须匹配子目录 —— `fnmatch` 会把 `*` 当成跨 `/`，那就会错配。"""
+    backend, _ = _filestore_with_fake_gateway()
+    await backend.write("src/a.py", "x")
+    await backend.write("src/deep/b.py", "y")
+    await backend.write("src/c.txt", "z")
+
+    globbed = await backend.glob("**/*.py")
+    assert globbed.paths == ["src/a.py", "src/deep/b.py"]
+
+    # 单层 `*.py` 不该匹配子目录
+    shallow = await backend.glob("*.py")
+    assert shallow.paths == []
+
+
+@pytest.mark.asyncio
+async def test_filestore_backend_stat_uses_list_not_full_read():
+    backend, gateway = _filestore_with_fake_gateway()
+    await backend.write("a.md", "12345")
+
+    info = await backend.stat("a.md")
+    assert info is not None and info.size == 5 and info.is_file
+
+    assert await backend.stat("missing.md") is None
+
+
+def test_filestore_backend_does_not_support_execution():
+    """FileStore 只存文件 —— 调用方据此把执行类工具从工具面剔除。"""
+    backend, _ = _filestore_with_fake_gateway()
+    assert backend.supports_execution() is False
+    assert isinstance(backend, BackendProtocol)
+
+
+def test_set_default_backend_is_process_level():
+    """启动期配置必须落**进程级**。
+
+    `set_backend` 写的是 contextvar，而 lifespan 里设置的 contextvar 不会被后续请求任务
+    继承（请求任务由 ASGI server 派生，不是 lifespan 的子任务）—— 那会变成"配了 filestore
+    但请求里仍走 local"，而日志看起来一切正常。
+    """
+    from app.backends.context import set_default_backend
+
+    backend = _InMemoryBackend()
+    try:
+        set_default_backend(backend)
+        assert get_backend() is backend
+    finally:
+        set_default_backend(None)  # 复原：下次 get_backend() 会惰性重建本地后端
+
+
+# ── 片 5 / 片 6：输出治理与能力协商 ──────────────────────────────────────
+
+
+def test_execute_output_truncation_marks_omitted_bytes():
+    """片 5：截断必须**显式标注省略量** —— 静默截断会让模型误判"输出就这么短"。"""
+    from app.tools.sandbox import (
+        EXECUTE_HEAD_BYTES,
+        MAX_EXECUTE_OUTPUT_BYTES,
+        truncate_execute_output,
+    )
+
+    small, truncated = truncate_execute_output("hello")
+    assert small == "hello" and truncated is False
+
+    huge = "x" * (MAX_EXECUTE_OUTPUT_BYTES + 10_000)
+    cut, truncated = truncate_execute_output(huge)
+    assert truncated is True
+    assert "bytes truncated" in cut
+    assert len(cut.encode("utf-8")) < len(huge.encode("utf-8"))
+    # head 保留（前 EXECUTE_HEAD_BYTES 字节的内容可见）
+    assert cut.startswith("x" * EXECUTE_HEAD_BYTES)
+
+
+@pytest.mark.asyncio
+async def test_execute_result_reports_truncation(tmp_path: Path, monkeypatch):
+    """片 5：`ExecuteResult.truncated` 由产生截断的那一层给出（协议约束 2）。"""
+    from app.tools.sandbox import MAX_EXECUTE_OUTPUT_BYTES
+
+    monkeypatch.setenv("SANDBOX_ROOT", str(tmp_path))
+    backend = LocalWorkspaceBackend()
+
+    # 让命令输出超过上限（用 python 而不是 shell 内建：它在白名单内且跨平台一致）
+    code = f"print('y' * {MAX_EXECUTE_OUTPUT_BYTES + 5_000})"
+    result = await backend.execute(f'python -c "{code}"')
+
+    assert result.exit_code == 0, "截断不该影响退出码"
+    assert result.truncated is True
+    assert "bytes truncated" in result.output
+
+
+@pytest.mark.asyncio
+async def test_runtime_drops_execution_tools_when_backend_cannot_execute():
+    """片 6：后端不支持执行时，执行类工具不该出现在工具面里。
+
+    否则模型会反复调用一个必然失败的工具（每次一次往返 + 一条失败结果进上下文）。
+    """
+    from unittest.mock import MagicMock
+
+    from app.agent.runtime import AgentRuntime, AgentTask
+    from app.gateway.provider import ChatResponse
+
+    captured: list[dict] = []
+    gateway = MagicMock()
+
+    async def fake_stream(**kwargs):
+        captured.append(kwargs)
+        yield ChatResponse(content="ok", finish_reason="stop")
+
+    gateway.chat_stream = fake_stream
+    set_backend(_InMemoryBackend())  # supports_execution() == False
+
+    runtime = AgentRuntime(gateway=gateway)
+    task = AgentTask(
+        id="t",
+        tenant_id="t",
+        user_id="u",
+        session_id="",
+        content="hi",
+        system_prompt="sp",
+        llm_config={"mode": "normal"},
+        max_turns=1,
+    )
+    _ = [event async for event in runtime.run(task)]
+
+    names = {t["function"]["name"] for t in captured[0]["tools"]}
+    assert "read_file" in names, "读类工具不该被一起剔除"
+    assert not (names & {"shell_exec", "run_code", "persistent_shell"}), (
+        f"后端不支持执行，但工具面里仍有执行类工具：{names}"
+    )

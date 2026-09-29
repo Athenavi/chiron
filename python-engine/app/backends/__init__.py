@@ -1,7 +1,8 @@
 """文件 / 执行后端抽象（批 B）—— 设计说明见 `protocol.py` 的模块文档。"""
 
 from app.backends.composite import CompositeBackend
-from app.backends.context import get_backend, set_backend
+from app.backends.context import get_backend, set_backend, set_default_backend
+from app.backends.filestore import FileStoreBackend, build_filestore_backend_from_settings
 from app.backends.local import LocalWorkspaceBackend
 from app.backends.protocol import (
     BackendProtocol,
@@ -25,6 +26,7 @@ __all__ = [
     "ExecuteResult",
     "ExecutingBackendProtocol",
     "FileStat",
+    "FileStoreBackend",
     "GlobResult",
     "GrepMatch",
     "GrepResult",
@@ -33,6 +35,8 @@ __all__ = [
     "ReadBytesResult",
     "ReadResult",
     "WriteResult",
+    "build_filestore_backend_from_settings",
     "get_backend",
     "set_backend",
+    "set_default_backend",
 ]

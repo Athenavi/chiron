@@ -242,6 +242,31 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     verify_sandbox_root()
     verify_media_store()
 
+    # ── 1.6 文件后端选择（批 B 片 4）──
+    # 默认 `local`：agent 文件工具直接读写 per-user workspace（行为与历史完全一致）。
+    # `filestore`：改为经网关 `/v1/internal/storage/*` 读写部署级 FileStore（共享卷 / S3），
+    # 多副本下不再"写 A 副本、读 B 副本"失忆。**显式开关**，不猜部署形态（评审 02 §1）。
+    from app.backends.context import set_default_backend
+    from app.backends.filestore import build_filestore_backend_from_settings
+
+    file_backend = build_filestore_backend_from_settings()
+    # 用 set_default_backend（进程级）而不是 set_backend（contextvar）：lifespan 里设置的
+    # contextvar 不会被后续请求任务继承（请求任务由 ASGI server 派生）—— 那会变成
+    # "配了 filestore 但请求里仍走 local"，而日志看起来一切正常。
+    set_default_backend(file_backend)
+    if file_backend is not None:
+        logger.info(
+            "file backend: filestore via %s", settings.gateway_internal_url
+        )
+    elif (settings.backend_kind or "local") == "filestore":
+        # 声明了 filestore 却拿不到网关地址：回落而不是拒绝启动 —— 但必须告警，
+        # 否则"以为共享、实际本地"会在多副本下重新变成失忆。
+        logger.warning(
+            "BACKEND_KIND=filestore but GATEWAY_INTERNAL_URL is empty — "
+            "falling back to the local workspace backend; multi-replica deployments "
+            "will lose agent file writes across replicas"
+        )
+
     # ── 2. Redis 连接池 ──
     # 依赖门禁：Redis 是生产必需依赖。未显式开启 DEGRADED_MODE 时，
     # 未配置与连接失败都直接拒绝启动(fail fast)——进程内降级会让多副本看到不同的

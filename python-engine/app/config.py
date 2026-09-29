@@ -41,6 +41,14 @@ class Settings(BaseSettings):
     # 避免副本间会话/限流/队列不一致；仅单机开发显式 DEGRADED_MODE=true 才允许进程内降级。
     degraded_mode: bool = False
 
+    # ── 文件后端（批 B 片 4）──
+    # `local`（默认）：agent 文件工具直接读写 per-user workspace 本地目录 —— 单机行为不变。
+    # `filestore`：经网关 `/v1/internal/storage/*` 读写部署级 FileStore（local 共享卷 / S3），
+    #   多副本下"写 A 副本、读 B 副本"不再失忆。网关地址复用既有的 `gateway_internal_url`
+    #   （见下方"Go 网关内部配置下发端点"），不另设一份以免两处漂移。
+    # 用**显式开关**而不是"猜部署形态"：后者不可靠且不可审计（与评审 02 §1 的同一结论）。
+    backend_kind: str = "local"
+
     # ── MCP 插件池（按节点开关）──
     # 多实例部署时仅需要的实例启用（每实例对活跃用户各持有 MCP 连接，全开会 N×连接放大）；
     # 默认开 = 保持单实例现状。关闭的实例不建 MCP 连接，相关工具调用会报不可用。
@@ -114,6 +122,10 @@ class Settings(BaseSettings):
 
     # ── Agent 配置 ──
     max_turns: int = 10
+    #: 单批内**并发**执行的工具数上限（C3）。只对"读级且无交互语义"的调用生效
+    #: （见 `runtime._split_tool_batch`）；写/删/外部类与审批始终串行。
+    #: 设为 1 即等价于"完全串行"（回滚开关）。
+    tool_concurrency_limit: int = 4
     default_model: str = "claude-sonnet-4-20250514"
     default_max_tokens: int = 4096
     default_temperature: float = 0.1

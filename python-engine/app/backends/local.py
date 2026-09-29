@@ -155,6 +155,10 @@ class LocalWorkspaceBackend:
             return ExecuteResult(output=str(result["error"]), error=str(result["error"]))
         output = f"{result.get('stdout', '')}{result.get('stderr', '')}"
         exit_code = result.get("exit_code")
+        # 片 5：`run_in_sandbox` 已按上限截断，这里把"是否截断"如实带出来 ——
+        # 让上层不必扫文本猜测（协议约束 2）
         return ExecuteResult(
-            output=output, exit_code=exit_code if isinstance(exit_code, int) else None
+            output=output,
+            exit_code=exit_code if isinstance(exit_code, int) else None,
+            truncated=bool(result.get("truncated")),
         )
