@@ -17,8 +17,24 @@ _default: BackendProtocol | None = None
 
 
 def set_backend(backend: BackendProtocol | None) -> None:
-    """为当前上下文设置后端（`None` = 恢复默认的本地工作区后端）。"""
+    """为**当前上下文**设置后端（`None` = 恢复默认）。
+
+    注意作用域：contextvar 只在当前上下文及其**子任务**里可见。因此它适合"按 run / 按测试"
+    覆盖；**启动期配置请用 `set_default_backend`**。
+    """
     _current.set(backend)
+
+
+def set_default_backend(backend: BackendProtocol | None) -> None:
+    """设置**进程级**默认后端（引擎启动时用）。
+
+    为什么需要它而不是 `set_backend`：`set_backend` 写的是 contextvar，而 lifespan 里设置的
+    contextvar **不会被后续请求任务继承** —— 请求任务由 ASGI server 派生，不是 lifespan 的子任务。
+    启动期的配置必须落在进程级，否则"配了 filestore 但请求里仍走 local"，
+    而日志上看起来一切正常。
+    """
+    global _default  # noqa: PLW0603 — 进程级配置，故意可变
+    _default = backend
 
 
 def get_backend() -> BackendProtocol:
