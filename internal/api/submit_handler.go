@@ -45,8 +45,15 @@ func (h *SubmitHandler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 		SessionID  string `json:"session_id"`
 		ToolCallID string `json:"tool_call_id"`
 		Approved   bool   `json:"approved"`
-		Reason     string `json:"reason"`
-		UserID     string `json:"user_id,omitempty"`
+		// Decision（C5）是审批三态：`approve` / `reject` / **`edit`**。
+		// 留空 = 由 `Approved` 推导 ⇒ 旧前端（只发 approved）行为不变。
+		Decision string `json:"decision,omitempty"`
+		// Arguments（C5）仅在 Decision=edit 时出现：**编辑后的完整参数对象**（JSON 字符串）。
+		// 引擎会用它重跑 tool_policy 分级（级别升高则**不执行**）并落审计，
+		// 见 python-engine/app/agent/runtime.py 的 `_await_approval`。
+		Arguments string `json:"arguments,omitempty"`
+		Reason    string `json:"reason"`
+		UserID    string `json:"user_id,omitempty"`
 		// RunToken 由网关从 Redis 归属映射（engine:run:{session}）读出后注入，
 		// 供引擎拒绝「陈旧 run」的审批（批次 4）。
 		RunToken string `json:"run_token,omitempty"`
@@ -57,6 +64,20 @@ func (h *SubmitHandler) SubmitApproval(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.SessionID == "" || req.ToolCallID == "" {
 		BadRequest(w, "session_id and tool_call_id are required")
+		return
+	}
+	// C5 的**字段级**校验在网关侧先做一遍（与引擎同一契约）：决策值非法、编辑态缺参数
+	// 都能立刻拿到 400，而不是绕一圈才失败。语义校验（重跑分级、级别升高拦截、
+	// 审计双参数）仍归引擎 —— 那需要工具分级表，网关不该有第二份（避免双实现漂移）。
+	switch req.Decision {
+	case "", "approve", "reject":
+	case "edit":
+		if strings.TrimSpace(req.Arguments) == "" {
+			BadRequest(w, "decision=edit requires 'arguments'")
+			return
+		}
+	default:
+		BadRequest(w, "unknown decision: "+req.Decision)
 		return
 	}
 	var out map[string]any

@@ -36,6 +36,8 @@ export default {
   n_files_failed_to_move: "{n} files failed to move",
   n_files_failed_to_rename: "{n} files failed to rename",
   auto_reject_in_n_s: "Auto-reject in {n}s",
+  approval_edit_invalid_json: "Arguments are not valid JSON — cannot submit",
+  approval_edit_must_be_json_object: "Arguments must be a JSON object",
   status_query_failed: "⚠️ Status query failed",
   failed_error: "❌ Failed: {error}",
   submit_failed_error: "❌ Submit failed: {error}",

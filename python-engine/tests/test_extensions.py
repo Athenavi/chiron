@@ -26,6 +26,7 @@ from app.backends.protocol import (
     ReadResult,
     WriteResult,
 )
+from app.config import settings
 from app.plugins.extensions import (
     SOURCE_DEPLOYMENT,
     DeploymentExtensions,
@@ -33,6 +34,7 @@ from app.plugins.extensions import (
     TenantExtensions,
     interpret_tenant_config,
     load_deployment_extensions,
+    load_deployment_extensions_from_settings,
 )
 from app.tools.registry import ToolRegistry
 
@@ -302,3 +304,54 @@ def test_tenant_empty_config_is_empty_capabilities():
 def test_tenant_extensions_facade_interprets():
     caps = TenantExtensions().interpret({"enabled_tools": ["read_file"]})
     assert caps.enabled_tools == ("read_file",)
+
+
+# ── 启动路径：settings 开关（批 H 接线，`app/main.py` 走的正是这一条） ──
+
+
+def test_settings_disabled_loads_nothing(tmp_path, monkeypatch):
+    """默认关：即使目录里有可用清单也不加载（零行为变化）。"""
+    (tmp_path / "handlers.py").write_text(HANDLER_SRC, encoding="utf-8")
+    _write_manifest(
+        tmp_path, {"tools": [{"name": "deploy_echo", "handler": "handlers.py:echo"}]}
+    )
+    monkeypatch.setattr(settings, "deploy_extensions_enabled", False)
+    monkeypatch.setattr(settings, "deploy_extensions_dir", str(tmp_path))
+
+    registry = ToolRegistry()
+    assert load_deployment_extensions_from_settings(registry) is None
+    assert registry.get("deploy_echo") is None
+
+
+def test_settings_enabled_without_dir_is_fail_soft(monkeypatch):
+    """开了开关却没配目录：返回 None（记告警），不抛异常。"""
+    monkeypatch.setattr(settings, "deploy_extensions_enabled", True)
+    monkeypatch.setattr(settings, "deploy_extensions_dir", "")
+
+    assert load_deployment_extensions_from_settings(ToolRegistry()) is None
+
+
+def test_settings_enabled_loads_tool_and_backend_route(tmp_path, monkeypatch):
+    """开启 + 清单有效：工具进注册表，后端虚拟路由进 DeploymentExtensions。"""
+    (tmp_path / "handlers.py").write_text(HANDLER_SRC, encoding="utf-8")
+    (tmp_path / "backends.py").write_text(BACKEND_SRC, encoding="utf-8")
+    _write_manifest(
+        tmp_path,
+        {
+            "tools": [{"name": "deploy_echo", "handler": "handlers.py:echo"}],
+            "backends": [
+                {"mount": "/artifacts/", "factory": "backends.py:artifacts_backend"}
+            ],
+        },
+    )
+    monkeypatch.setattr(settings, "deploy_extensions_enabled", True)
+    monkeypatch.setattr(settings, "deploy_extensions_dir", str(tmp_path))
+
+    registry = ToolRegistry()
+    extensions = DeploymentExtensions()
+    report = load_deployment_extensions_from_settings(registry, extensions=extensions)
+
+    assert report is not None, "开关开启 + 清单有效时不应返回 None"
+    assert report.ok, report.errors
+    assert registry.get("deploy_echo") is not None
+    assert "/artifacts/" in extensions.routes

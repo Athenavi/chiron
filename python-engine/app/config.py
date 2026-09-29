@@ -139,6 +139,14 @@ class Settings(BaseSettings):
     #: 单个 hook 的硬超时（秒）。超时按"失败"处理但**不阻断主流程**（fire-and-forget）。
     hooks_timeout_seconds: int = 5
 
+    # ── 部署级扩展（批 H）──
+    #: 机制总开关。**默认关** —— 关闭时零行为变化（与批 G 的 hooks 同一约定）。
+    #: 开启后从**部署目录**读 `extensions.json`（只读、不进用户上传通道），重启生效。
+    deploy_extensions_enabled: bool = False
+    #: 部署目录（清单文件名固定为其中的 `extensions.json`）；清单引用的模块
+    #: 必须落在该目录内，越界一律拒绝（方案 03 §4）。
+    deploy_extensions_dir: str = ""
+
     # ── RAG 配置 ──
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536  # 嵌入维度，可配置

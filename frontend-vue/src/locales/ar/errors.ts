@@ -36,6 +36,8 @@ export default {
   n_files_failed_to_move: "{n} ملف فشل نقلها",
   n_files_failed_to_rename: "{n} ملف فشلت إعادة تسميتها",
   auto_reject_in_n_s: "رفض تلقائي خلال {n} ث",
+  approval_edit_invalid_json: "المعطيات ليست JSON صالحًا — تعذّر الإرسال",
+  approval_edit_must_be_json_object: "يجب أن تكون المعطيات كائن JSON",
   status_query_failed: "⚠️ فشل استعلام الحالة",
   failed_error: "❌ فشل: {error}",
   submit_failed_error: "❌ فشل الإرسال: {error}",

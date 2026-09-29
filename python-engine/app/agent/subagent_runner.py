@@ -349,6 +349,8 @@ class SubAgentRunner:
                 profile_name=profile_name,
                 task=task,
                 read_only=bool(spec.read_only) if spec else False,
+                # S2：本次真正继承到的条数（0 = 未开启继承 ⇒ store 侧不写，列保持 NULL）
+                inherited_messages=inherited.inherited_messages,
             )
 
         # 4) 事件旁路（让前端看到子 Agent 进度；未启用时为 None，不影响执行）

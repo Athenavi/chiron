@@ -75,6 +75,8 @@ export default {
   tool_call: "استدعاء أداة",
   tool_name: "اسم الأداة",
   tool_confirmation: "تأكيد الأداة",
+  edit_arguments: "تعديل المعطيات",
+  approve_with_edited_arguments: "التنفيذ بالمعطيات المعدَّلة",
   tool_authorization: "تفويض الأداة",
   tool_write: "كتابة الأداة",
   checkboxes_write_to_the_config_above_hand_written_entries_are_kept_after_installing_a_plugin_its_tools_also_appear_here: "ستُكتب المربعات المحددة في الإعدادات أعلاه (تُحفظ المدخلات اليدوية)؛ وبعد تثبيت الإضافة، ستظهر أدواتها هنا أيضًا.",

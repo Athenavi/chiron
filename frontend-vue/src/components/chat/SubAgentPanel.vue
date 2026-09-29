@@ -303,8 +303,16 @@ async function resolveAsk(toolCallId: string, answer: string) {
  *
  * 只做一次乐观标记：**状态真相在引擎**（批准后子 Agent 会继续产出事件；
  * 拒绝则它收到 error 并在结果里体现），前端不伪造后续状态。
+ *
+ * `editedArguments`（C5）非空 ⇒ "**编辑后批准**"：回传 `decision: 'edit'` 与编辑后的
+ * 完整参数；是否**真的执行**由引擎按编辑后参数重跑分级后决定（级别升高则不执行），
+ * 前端不做本地放行判断。乐观标记仍记 `approved` —— 若引擎拦下，后续事件会体现出来。
  */
-async function resolveApproval(a: { toolCallId: string }, approved: boolean) {
+async function resolveApproval(
+  a: { toolCallId: string },
+  approved: boolean,
+  editedArguments?: string,
+) {
   const id = a.toolCallId
   if (!id || approvalSubmitting.value.has(id) || approvalDecisions.value[id]) return
   approvalSubmitting.value = new Set(approvalSubmitting.value).add(id)
@@ -315,7 +323,9 @@ async function resolveApproval(a: { toolCallId: string }, approved: boolean) {
     const ok = await submitApproval({
       session_id: props.sessionId || '',
       tool_call_id: id,
-      approved,
+      approved: editedArguments ? true : approved,
+      decision: editedArguments ? 'edit' : approved ? 'approve' : 'reject',
+      ...(editedArguments ? { arguments: editedArguments } : {}),
     })
     if (!ok) {
       // 引擎返回 ok=false：通常是超时（决定到得太晚）或该调用已不在等待。
@@ -881,6 +891,7 @@ onBeforeUnmount(() => {
                 :decision="approvalDecisions[event.tool_call_id || ''] || ''"
                 :error="approvalErrors[event.tool_call_id || ''] || ''"
                 @decide="(approved: boolean) => resolveApproval({ toolCallId: event.tool_call_id || '' }, approved)"
+                @edit="(args: string) => resolveApproval({ toolCallId: event.tool_call_id || '' }, true, args)"
               />
             </div>
             <div

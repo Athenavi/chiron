@@ -235,10 +235,18 @@ func TestRun_OnApprovalApproveAutoApproves(t *testing.T) {
 		ToolCallID string `json:"tool_call_id"`
 	}
 	gotCh := make(chan approvalReq, 1)
+	// `gotCh` 里只有一份值，**读取方只能有一个** —— 两处抢读必然有一处拿到零值。
+	// （此前的写法正是如此：stub 与末尾的 select 抢读同一个通道，末尾必然走 default，
+	//  于是这条断言**永远**失败，而 CLI 的功能其实是好的。）
+	var mu sync.Mutex
+	called := false
 
 	approveHandler := func(w http.ResponseWriter, r *http.Request) {
 		var b approvalReq
 		_ = json.NewDecoder(r.Body).Decode(&b)
+		mu.Lock()
+		called = true
+		mu.Unlock()
 		gotCh <- b
 		w.WriteHeader(http.StatusOK)
 		io.WriteString(w, `{"success":true,"data":{}}`)
@@ -251,6 +259,10 @@ func TestRun_OnApprovalApproveAutoApproves(t *testing.T) {
 			"type": "approval", "id": "call_7", "name": "shell_exec",
 		})
 		got := <-gotCh
+		// payload 断言放在**唯一**的读取点（见 gotCh 的说明）
+		if !got.Approved || got.SessionID != "s1" || got.ToolCallID != "call_7" {
+			t.Errorf("approval payload wrong: %+v", got)
+		}
 		if got.Approved {
 			writeFrame(w, fl, "text", map[string]any{"type": "text", "content": "approved-and-done"})
 			writeFrame(w, fl, "done", map[string]any{"type": "done"})
@@ -270,12 +282,10 @@ func TestRun_OnApprovalApproveAutoApproves(t *testing.T) {
 	if !strings.Contains(out.String(), "approved-and-done") {
 		t.Fatalf("expected final text after approval, got: %q", out.String())
 	}
-	select {
-	case got := <-gotCh:
-		if !got.Approved || got.SessionID != "s1" || got.ToolCallID != "call_7" {
-			t.Fatalf("approval payload wrong: %+v", got)
-		}
-	default:
+	mu.Lock()
+	wasCalled := called
+	mu.Unlock()
+	if !wasCalled {
 		t.Fatal("approval endpoint was not called")
 	}
 	assertPathsSubset(t, s.recordedPaths(), "/events", "/submit", "/v1/agent/approval")

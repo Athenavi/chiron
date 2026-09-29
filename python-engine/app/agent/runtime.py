@@ -38,6 +38,9 @@ PRUNE_THRESHOLD = 0.85  # 85% 才裁剪旧消息 (原 80%)
 TOOL_RESULT_MAX_CHARS = 16000  # 增加到 16K chars (原 8K)
 TOOL_RESULT_HEAD = 2000  # head 保留长度
 TOOL_RESULT_TAIL = 1000  # tail 保留长度
+#: C2 段 c：历史 `tool_calls[].arguments` 的最大字符数（超则保留 JSON 骨架 + 标注截断）。
+#: 0 = 不截断。老消息里的大 args（如整段文件内容）是"每轮都重发"的纯浪费。
+ARG_MAX_CHARS = 2000
 
 #: 跨副本审批决策键的 TTL（秒）：与 _await_approval 的默认 timeout 对齐。
 #: 超时后键自动过期，避免残留决策被后续同 id 的调用误取（单次消费由 GET+DEL 保证）。
@@ -47,6 +50,11 @@ APPROVAL_TTL_SECONDS = 300.0
 #: 工具名必须与 app/tools/ask_user.py 的 ASK_USER_TOOL 一致 —— runtime 靠它识别提问调用。
 ASK_USER_TOOL = "ask_user"
 ASK_ANSWER_TTL_SECONDS = 300.0
+
+#: 子 agent 委派工具名 —— 必须与 app/tools/subagent.py 的工具定义一致。
+#: runtime 靠它把该工具的调用识别为"子 agent 执行"，从而分发
+#: `SubagentStart`/`SubagentStop` 生命周期 hook（方案 03 §3.1）。
+SUBAGENT_TOOL = "subagent"
 
 #: 记忆注入的**信任声明**（A2）。记忆是检索出来的数据，但它的来源包含历史对话与用户
 #: 档案 —— 属于**可被间接影响**的内容（用户在历史里写一句"忽略以上规则"，就可能被模型
@@ -166,6 +174,9 @@ class CompactionConfig:
     tool_result_max_chars: int = TOOL_RESULT_MAX_CHARS
     tool_result_head: int = TOOL_RESULT_HEAD
     tool_result_tail: int = TOOL_RESULT_TAIL
+    #: C2 段 c：历史工具调用参数的最大字符数（超长则保留 JSON 骨架 + 截断字符串值）。
+    #: 0 = 不截断。老消息的大 args 会**每轮重发**，这是纯浪费。
+    arg_max_chars: int = ARG_MAX_CHARS
 
 
 def _normalize_msg(
@@ -191,8 +202,21 @@ def _normalize_msg(
     )
 
 
-# ── C3：工具批的并发分组 ──────────────────────────────────────────────────
+def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
+    """最后一条 assistant 消息的正文（S6b 的评审对象）。
 
+    从**消息**取而不是从流式片段取：那正是会被写进历史的那一份，于是"评审的对象"
+    与"历史里的内容"不会分叉。
+    """
+    for msg in reversed(messages):
+        if msg.get("role") != "assistant":
+            continue
+        content = msg.get("content", "")
+        return content if isinstance(content, str) else str(content or "")
+    return ""
+
+
+# ── C3：工具批的并发分组 ──────────────────────────────────────────────────
 
 def _parse_tool_args(call: dict[str, Any]) -> dict[str, Any]:
     """解析工具调用参数（半截 JSON 归零，与 `_guarded_execute_tool` 的口径一致）。"""
@@ -486,6 +510,12 @@ def _compact_messages(
     cfg = cfg or CompactionConfig()
     if cfg.strategy == "none":
         return messages
+
+    from app.agent.media_offload import truncate_tool_call_arguments
+
+    # C2 段 c：先截断历史工具调用参数（保留 JSON 骨架 + 标注）。放在 `strategy` 判定之后，
+    # 是因为"显式声明不压缩"应当被尊重；而它本身不是压缩 —— 是"别把明知没用的字节反复发出去"。
+    messages = truncate_tool_call_arguments(messages, cfg)
     if cfg.strategy == "snipe":
         return _snip_tool_results(messages, cfg)
     if cfg.strategy == "prune":
@@ -689,6 +719,161 @@ class ApprovalTicket:
         )
 
 
+# ── 审批决策（C5：审批三态 approve / reject / **edit**）────────────────────
+
+#: 决策取值。`edit` = "编辑后批准"（对位 deepagents `interrupt_on` 的 approve/edit/reject）。
+DECISION_APPROVE = "approve"
+DECISION_REJECT = "reject"
+DECISION_EDIT = "edit"
+VALID_DECISIONS: frozenset[str] = frozenset({DECISION_APPROVE, DECISION_REJECT, DECISION_EDIT})
+
+#: 动作级别的危险度序（越大越危险）。用于 `edit` 后的**升级判定** ——
+#: 编辑把动作升级（如 shell 的 `ls` → `rm -rf`，WRITE → DELETE）时必须拒绝直接执行，
+#: 否则 `edit` 就成了绕过 `tool_policy` 分级的新通道（方案 01 §3.5）。
+_LEVEL_RANK: dict[str, int] = {"read": 0, "write": 1, "delete": 2, "external": 3}
+
+
+@dataclass
+class ApprovalDecision:
+    """一次审批决策（跨副本经 Redis 决策键传递，见 `_write_approval_decision`）。
+
+    `edit` 时 `arguments` 是**编辑后的完整参数对象**（整份替换，不是补丁）—— 用户改的是
+    "将要执行的那一次调用"，因此二次校验与执行都以它为准（"批准的就是执行的"）。
+    """
+
+    decision: str
+    arguments: dict[str, Any] | None = None
+    #: 用户备注 / 拒绝理由（随决策一起跨副本传递，供审计留痕）
+    reason: str = ""
+
+    @property
+    def approved(self) -> bool:
+        """`edit` 也是批准（只是参数变了）。"""
+        return self.decision in (DECISION_APPROVE, DECISION_EDIT)
+
+    def to_json(self) -> str:
+        payload: dict[str, Any] = {"decision": self.decision}
+        if self.arguments is not None:
+            payload["arguments"] = self.arguments
+        if self.reason:
+            payload["reason"] = self.reason
+        return json.dumps(payload, ensure_ascii=False)
+
+    @classmethod
+    def from_raw(cls, raw: Any) -> ApprovalDecision | None:
+        """解析决策载荷；**兼容旧格式**。
+
+        已发布的前端只发 `approved: bool`，跨副本通道上写的是 `"1"` / `"0"` —— 那些键在
+        TTL 内仍可能被读到，因此这里必须同时接受两种形态（否则升级期间的审批会被吞掉）。
+        """
+        if raw is None:
+            return None
+        text = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
+        text = text.strip()
+        if not text:
+            return None
+        if text[0] == "{":
+            try:
+                data = json.loads(text)
+            except (json.JSONDecodeError, TypeError):
+                return None
+            if not isinstance(data, dict):
+                return None
+            decision = str(data.get("decision", "") or "")
+            if decision not in VALID_DECISIONS:
+                return None
+            args = data.get("arguments")
+            return cls(
+                decision=decision,
+                arguments=args if isinstance(args, dict) else None,
+                reason=str(data.get("reason", "") or ""),
+            )
+        lowered = text.lower()
+        if lowered in ("1", "true"):
+            return cls(decision=DECISION_APPROVE)
+        if lowered in ("0", "false"):
+            return cls(decision=DECISION_REJECT)
+        return None
+
+
+def _record_approval_audit(
+    tool_call_id: str,
+    tool_name: str,
+    decision: str,
+    *,
+    original_arguments: dict[str, Any] | None = None,
+    edited_arguments: dict[str, Any] | None = None,
+    level_before: str = "",
+    level_after: str = "",
+    reason: str = "",
+) -> None:
+    """审批决策审计（fail-soft）—— 见 `app/agent/approval_audit.py`。
+
+    包一层 try：审计是旁路，写不进去也不该让审批流程失败（`edit` 的两份参数对照
+    只在这里留痕，所以调用点在"拒绝 / 执行 / 升级拦截"三条路径上都不可省）。
+    """
+    try:
+        from app.agent.approval_audit import record_approval_decision
+
+        record_approval_decision(
+            tool_call_id=tool_call_id,
+            tool=tool_name,
+            decision=decision,
+            reason=reason,
+            level_before=level_before,
+            level_after=level_after,
+            original_arguments=original_arguments,
+            edited_arguments=edited_arguments,
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不影响审批结果
+        logger.warning("approval audit skipped (id=%s)", tool_call_id)
+
+
+def parse_approval_payload(
+    *,
+    approved: Any = None,
+    decision: Any = None,
+    arguments: Any = None,
+    reason: Any = "",
+) -> ApprovalDecision | str:
+    """把审批请求体归一成 `ApprovalDecision`；返回 **str** 表示校验失败的原因。
+
+    **两个端点共用它**：`app/main.py::agent_approval`（实际生效 —— 它在 `_setup_routes` 内
+    先于 `include_router(api_router)` 注册）与 `app/api/agents.py::submit_agent_approval`
+    （同路径、后注册、因此目前不生效）。同路径的两份实现必须对语义有一致理解，
+    否则"哪份生效"会直接变成行为差异 —— 这正是网关侧"避免双实现漂移"的同一原则。
+
+    三种输入形态：
+    * 新：`decision=approve|reject|edit`（`edit` 必须带 `arguments`）；
+    * 旧（已发布前端）：只发 `approved: bool` ⇒ 由它推导；
+    * 非法：返回错误字符串（调用方按 400/ok=False 处理）。
+    """
+    raw = str(decision or "").strip().lower()
+    if raw and raw not in VALID_DECISIONS:
+        return f"unknown decision: {decision!r} (expected approve|reject|edit)"
+    if not raw:
+        # 两者都缺 → 报错，而**不是**默认批准（默认批准会让"漏发字段"变成放行）
+        if approved is None:
+            return "either 'decision' or 'approved' is required"
+        raw = DECISION_APPROVE if bool(approved) else DECISION_REJECT
+
+    text_reason = str(reason or "")
+    if raw != DECISION_EDIT:
+        return ApprovalDecision(decision=raw, reason=text_reason)
+
+    edited: Any
+    if isinstance(arguments, dict):
+        edited = arguments
+    else:
+        try:
+            edited = json.loads(str(arguments or ""))
+        except (json.JSONDecodeError, TypeError, ValueError):
+            return "decision=edit requires 'arguments' to be a JSON object string"
+    if not isinstance(edited, dict):
+        return "decision=edit requires 'arguments' to be a JSON object"
+    return ApprovalDecision(decision=DECISION_EDIT, arguments=edited, reason=text_reason)
+
+
 class AgentRuntime:
     """
     Agent 运行时 — 完整的推理循环
@@ -837,6 +1022,44 @@ class AgentRuntime:
             )
         return compacted
 
+    async def _run_rubric_turn(
+        self,
+        *,
+        task: AgentTask,
+        model: str,
+        messages: list[dict[str, Any]],
+        budget: TaskBudget,
+        tokens_used: int,
+    ) -> Any | None:
+        """S6b：可选的 rubric 自查回合（**默认关**）。返回 `RubricOutcome | None`。
+
+        关的条件就是配置缺省（`llm_config["rubric"]` 为空）—— 每轮多两次模型调用
+        不该是默认行为。
+
+        `tokens_used` 是**进入本回合时**的累计用量：预算在入口查一次，运行中的超支由
+        `max_iterations` 兜住（它本身就是成本上限）。
+        """
+        from app.agent.rubric import RubricConfig, run_rubric
+
+        cfg = RubricConfig.from_llm_config(getattr(task, "llm_config", None))
+        if not cfg.enabled:
+            return None
+        answer = _last_assistant_text(messages)
+        if not answer.strip():
+            return None
+
+        def _budget_left() -> bool:
+            return budget.exceeded(tokens=tokens_used) == ""
+
+        return await run_rubric(
+            gateway=self._gateway,
+            model=model,
+            messages=messages,
+            answer=answer,
+            cfg=cfg,
+            budget_left=_budget_left,
+        )
+
     async def _chat_stream_with_retry(
         self,
         messages: list[dict[str, Any]],
@@ -967,7 +1190,15 @@ class AgentRuntime:
         memory_started = False
         memory_scope = None
 
+        # 批 G：生命周期 hook 门面 —— 延迟导入以避开 `runtime ↔ app.tools` 的循环
+        # （`app.hooks.runner` 依赖 `app.tools.sandbox`，而 `app.tools` 又会回到 `app.agent`）。
+        from app.hooks import hooks
+
         try:
+            # ── 生命周期 hook：SessionStart（fire-and-forget，批 G）──
+            # 默认关时空操作；其内部所有异常都被吞掉，不改变主流程。
+            await hooks.session_start(task=task)
+
             # ── 0. 解析运行模式（persona/工具集/上下文/压缩策略） ──
             mode_cfg: ModeConfig = get_mode_config((task.llm_config or {}).get("mode"))
             if mode_cfg.persona:
@@ -1162,6 +1393,12 @@ class AgentRuntime:
                 for m in messages
             ]
             if mode_cfg.enable_compaction:
+                # C2 段 c：先把内联 `data:` 媒体搬到媒体库（回合前一次即可）。放这里是因为
+                # 落库要走 HTTP（async），而 `_compact_messages` 是同步函数 —— 它接不进来。
+                from app.agent.media_offload import offload_inline_media
+
+                messages = await offload_inline_media(messages)
+
                 # SaaS：截断策略由模式/租户配置（mode_overrides.json 的 compaction 字段）；
                 # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖。
                 # 真压缩了会带回事件 → 立刻让前端"看得见"（问题 4）。
@@ -1690,6 +1927,43 @@ class AgentRuntime:
                     )
                 break
 
+            # ── S6b：可选的 rubric 自查回合（默认关）──
+            # 评审 → 不合格则修订 → 再评审，最多 cfg.max_iterations 轮。
+            # 用量**计入** total_*_tokens：它同时进 done 事件与 tokens 轴的越界判定，
+            # 否则"自查花了多少"在预算上完全不可见。
+            rubric_outcome = await self._run_rubric_turn(
+                task=task,
+                model=model,
+                messages=messages,
+                budget=budget,
+                tokens_used=total_input_tokens + total_output_tokens,
+            )
+            if rubric_outcome is not None:
+                total_input_tokens += rubric_outcome.input_tokens
+                total_output_tokens += rubric_outcome.output_tokens
+                revised = rubric_outcome.answer.strip()
+                # 先判定再追加：追加之后 `_last_assistant_text` 就是修订稿了，晚算恒为 False
+                is_revised = bool(revised) and revised != _last_assistant_text(messages).strip()
+                if is_revised:
+                    # 修订稿既追加到历史（保持一致），也作为文本事件发出 —— 前端已经把
+                    # 初稿流式渲染过了，不重发一遍就等于"用户看到的不是最终的"
+                    messages.append(_normalize_msg(role="assistant", content=revised))
+                    yield AgentEvent(type="text", content=revised)
+                yield AgentEvent(
+                    type="rubric",
+                    content=json.dumps(
+                        {
+                            "iterations": rubric_outcome.iterations,
+                            "passed": rubric_outcome.passed,
+                            "score": rubric_outcome.score,
+                            "gaps": list(rubric_outcome.gaps),
+                            "revised": is_revised,
+                            "error": rubric_outcome.error,
+                        },
+                        ensure_ascii=False,
+                    ),
+                )
+
             # ── 兜底：循环用尽但未产生回答时，输出最后的思考内容 ──
             if not _answered and _last_reasoning:
                 logger.warning(
@@ -1770,6 +2044,13 @@ class AgentRuntime:
                 error=str(e),
             )
         finally:
+            # ── 生命周期 hook：Stop（fire-and-forget，批 G）──
+            # 放在 finally：异常/中断/生成器关闭等所有退出路径都要发。
+            try:
+                await hooks.stop(task=task)
+            except Exception as e:  # noqa: BLE001 — 收尾 hook 不能影响退出路径
+                logger.warning("Stop hook failed (non-blocking): %s", e)
+
             # ── MemoryService.on_session_end（**会话级** L3 rollup 入队 + 丢弃 L1 簿记） ──
             #
             # A3（已核实）：这里的条件是"缓存**未**保存"，即**异常/中断路径**才会走到 ——
@@ -2104,6 +2385,18 @@ class AgentRuntime:
         """
         tool_name = tool_call.get("name", "")
         tc_id = tool_call.get("id") or tool_name
+        # 模型**原始**请求的参数。C5 的 `edit` 需要它做两件事：① 核对票据（证明这张票正是
+        # 这次调用的）② 与编辑后的参数比对动作级别。
+        try:
+            parsed = (
+                json.loads(tool_call["arguments"])
+                if isinstance(tool_call["arguments"], str)
+                else tool_call["arguments"]
+            )
+        except (json.JSONDecodeError, TypeError, KeyError):
+            parsed = {}
+        orig_args: dict[str, Any] = parsed if isinstance(parsed, dict) else {}
+
         future = self._pending_approvals.get(tc_id)
         if future is None:
             return {"error": f"Tool '{tool_name}' approval state missing"}
@@ -2111,27 +2404,103 @@ class AgentRuntime:
         # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例
         register_pending_approval(tc_id, self)
         try:
-            approved = await self._wait_approval_decision(tc_id, future, timeout)
+            decision = await self._wait_approval_decision(tc_id, future, timeout)
         finally:
             self._pending_approvals.pop(tc_id, None)
             unregister_pending_approval(tc_id)
 
-        if approved is None:
+        if decision is None:
             logger.warning("Tool %s approval timed out (id=%s)", tool_name, tc_id)
             return {"error": f"Tool '{tool_name}' approval timed out"}
-        if not approved:
+
+        if decision.decision == DECISION_REJECT:
             logger.info("Tool %s denied by user (id=%s)", tool_name, tc_id)
+            _record_approval_audit(
+                tc_id, tool_name, DECISION_REJECT,
+                original_arguments=orig_args, reason=decision.reason or "user rejected",
+            )
             return {"error": f"Tool '{tool_name}' denied by user"}
+
+        # ── C5：`edit` = "编辑后批准" ──
+        # 用户改的是"将要执行的那一次调用"，因此此后一律以**编辑后的参数**为准
+        # （执行 / 二次校验 / 票据）。但编辑后的参数**必须**重跑分级 —— 否则 `edit`
+        # 就成了绕过 `tool_policy` 分级的新通道（方案 01 §3.5）。
+        edited_args: dict[str, Any] | None = None
+        level_before = ""
+        level_after = ""
+        if decision.decision == DECISION_EDIT:
+            raw_edited = decision.arguments
+            if not isinstance(raw_edited, dict):
+                _record_approval_audit(
+                    tc_id, tool_name, DECISION_EDIT,
+                    original_arguments=orig_args,
+                    reason="edit without a JSON object in 'arguments'",
+                )
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' was NOT executed: decision=edit requires "
+                        f"'arguments' as a JSON object"
+                    )
+                }
+            from app.agent.tool_policy import tool_level
+
+            level_before = tool_level(tool_name, orig_args)
+            level_after = tool_level(tool_name, raw_edited)
+            if _LEVEL_RANK.get(level_after, 99) > _LEVEL_RANK.get(level_before, 99):
+                # 编辑把动作**升级**了（典型：shell 的 `ls` → `rm -rf`，write → delete）
+                # ⇒ **不直接执行**（防"用 edit 绕过分级"）。
+                #
+                # 方案要求"转为再次确认"；此处落成 **fail-closed 拒绝 + 明确的重发起提示**：
+                # 不实现"重新发起审批"的重入循环，避免用户"编辑 → 再审批 → 再编辑"的活锁。
+                # 安全性（升级后的动作绝不直接执行）与方案一致；取舍记录见评审 03 §13.2。
+                logger.warning(
+                    "approval edit ESCALATED (tool=%s id=%s): %s → %s — refusing to execute",
+                    tool_name, tc_id, level_before, level_after,
+                )
+                _record_approval_audit(
+                    tc_id, tool_name, DECISION_EDIT,
+                    original_arguments=orig_args,
+                    edited_arguments=raw_edited,
+                    level_before=level_before,
+                    level_after=level_after,
+                    reason="edited arguments escalate the action level",
+                )
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' was NOT executed: the edited arguments escalate "
+                        f"the action level ({level_before} → {level_after}); approve it again "
+                        f"from scratch. Re-issue the tool call if it is still needed."
+                    )
+                }
+            edited_args = raw_edited
+            tool_call = dict(tool_call)
+            tool_call["arguments"] = json.dumps(edited_args, ensure_ascii=False)
 
         # ── 二次校验（人工确认之外的第二道关）──
         # 确认解决"用户同不同意"；二次校验解决"将要执行的是不是**刚才批准的那一次**"。
         # 票据缺失 / 损坏 / 轮次不符 / 参数不符 → 拒绝执行（fail-closed）。
         # 场景举例：第 1 轮批准了 `call_1`、第 2 轮模型又发来同 id 的危险调用 —— 残留决策
         # 会被 turn_id 校验挡住。
-        failure = await self._second_check_approval(tool_call, task)
+        #
+        # `edit` 场景传 `original_arguments`：核对票据仍以**模型原始请求**为据（证明这张票
+        # 正是这次调用），核对通过后 `_second_check_approval` 把票据重写为编辑后参数的哈希 ——
+        # 于是"票据 = 被批准且将被执行的那个调用"这一语义在 edit 后依然成立。
+        failure = await self._second_check_approval(
+            tool_call,
+            task,
+            original_arguments=orig_args if edited_args is not None else None,
+        )
         if failure:
             logger.warning(
                 "approval second check FAILED (tool=%s id=%s): %s", tool_name, tc_id, failure
+            )
+            _record_approval_audit(
+                tc_id,
+                tool_name,
+                DECISION_EDIT if edited_args is not None else DECISION_APPROVE,
+                original_arguments=orig_args,
+                edited_arguments=edited_args,
+                reason=f"second check failed: {failure}",
             )
             return {
                 "error": (
@@ -2140,7 +2509,22 @@ class AgentRuntime:
                 )
             }
 
-        logger.info("Tool %s approved by user (id=%s)", tool_name, tc_id)
+        _record_approval_audit(
+            tc_id,
+            tool_name,
+            DECISION_EDIT if edited_args is not None else DECISION_APPROVE,
+            original_arguments=orig_args,
+            edited_arguments=edited_args,
+            level_before=level_before,
+            level_after=level_after,
+            reason=decision.reason,
+        )
+        logger.info(
+            "Tool %s approved by user (id=%s%s)",
+            tool_name,
+            tc_id,
+            ", arguments edited" if edited_args is not None else "",
+        )
         return await self._execute_tool(tool_call, task)
 
     # ── 审批票据（二次校验的基础）──────────────────────────────────────────
@@ -2302,12 +2686,21 @@ class AgentRuntime:
             logger.warning("approval ticket store failed (id=%s): %s", ticket.tool_call_id, e)
 
     async def _second_check_approval(
-        self, tool_call: dict[Any, Any], task: AgentTask
+        self,
+        tool_call: dict[Any, Any],
+        task: AgentTask,
+        *,
+        original_arguments: dict[str, Any] | None = None,
     ) -> str:
         """执行前二次校验；返回拒绝原因（空串 = 通过）。
 
         校验三项：票据存在、`tool_name` 一致、`turn_id` 与**本次提交**一致、参数哈希一致。
         票据按单次消费（读完即删），避免同一张票据被用第二次。
+
+        `original_arguments`（C5 · `edit`）：非 None 表示本次批准的是**编辑后**的参数。
+        核对票据仍以**模型原始请求**为据 —— 那是"这张票属于这次调用"的凭据；核对通过后把
+        票据**重写**为编辑后参数的哈希，使"票据 = 被批准且将被执行的那个调用"这一语义在
+        edit 之后依然成立（方案 01 §3.5 的不变量"批准的就是执行的"）。
         """
         from app.agent.tool_policy import args_hash
 
@@ -2350,14 +2743,25 @@ class AgentRuntime:
             )
         except Exception:  # noqa: BLE001
             targs = {}
-        if ticket.args_hash != args_hash(tool_name, targs or {}):
+        # edit 场景：票据对着"模型原始请求"，执行对着"编辑后参数"（targs 已是编辑后的）
+        expected_args = original_arguments if original_arguments is not None else (targs or {})
+        if ticket.args_hash != args_hash(tool_name, expected_args):
             return "ticket args mismatch (the approved call is not the one being executed)"
+        if original_arguments is not None:
+            await self._store_approval_ticket(
+                ApprovalTicket(
+                    tool_call_id=str(tc_id),
+                    tool_name=str(tool_name),
+                    args_hash=args_hash(tool_name, targs or {}),
+                    turn_id=ticket.turn_id,
+                )
+            )
         return ""
 
     async def _wait_approval_decision(
         self, tc_id: str, future: asyncio.Future[Any], timeout: float
-    ) -> bool | None:
-        """本地 Future 与 Redis 决策键竞争，返回 True/False；超时返回 None。"""
+    ) -> ApprovalDecision | None:
+        """本地 Future 与 Redis 决策键竞争，返回决策；超时返回 None。"""
         poll = asyncio.create_task(self._poll_remote_decision(tc_id, timeout))
         waiters: list[asyncio.Future[Any]] = [poll, asyncio.ensure_future(future)]
         try:
@@ -2373,13 +2777,18 @@ class AgentRuntime:
                 res = w.result()
             except Exception:  # noqa: BLE001 - 单通道异常不应中断审批
                 continue
-            if isinstance(res, bool):
+            if isinstance(res, ApprovalDecision):
                 return res
+            # 容错：某条路径仍以裸 bool 提交（如旧测试替身）→ 按等价决策收下
+            if isinstance(res, bool):
+                return ApprovalDecision(
+                    decision=DECISION_APPROVE if res else DECISION_REJECT
+                )
         return None
 
     async def _poll_remote_decision(
         self, tc_id: str, timeout: float, interval: float = 0.15
-    ) -> bool | None:
+    ) -> ApprovalDecision | None:
         """轮询 Redis 决策键（跨副本通道）；命中即取走（单次消费）。超时返回 None。"""
         deadline = asyncio.get_running_loop().time() + timeout
         try:
@@ -2400,44 +2809,29 @@ class AgentRuntime:
                 raw = await redis.get(key)
                 if raw is not None:
                     await redis.delete(key)  # 单次消费：决策只被一个副本读取
-                    val = raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
-                    return val == "1"
+                    # `from_raw` 同时接受新的 JSON 形态与旧的 "1"/"0"（见其 docstring）
+                    return ApprovalDecision.from_raw(raw)
             except Exception as e:  # noqa: BLE001 - 轮询失败不致命，继续等待
                 logger.debug("approval poll error: %s", e)
             await asyncio.sleep(interval)
         return None
 
-    async def submit_approval(
-        self, tool_call_id: str, approved: bool, reason: str = ""
-    ) -> bool:
+    async def submit_approval(self, tool_call_id: str, decision: ApprovalDecision) -> bool:
         """外部（HTTP 端点，可能落在任一网关副本）解决待确认的工具调用。
 
         1) 本实例持有该 Future → 直接唤醒（同副本快路径，零延迟）；
         2) 否则写 Redis 决策键，由正在等待的副本（可能在其它实例）取走 —— 这样审批
            不再依赖会话亲和路由，副本扩缩容期间也能正确送达。
+
+        `decision` 携带三态（approve / reject / **edit**）与 `edit` 的编辑后参数；
+        两条通道都序列化同一个 `ApprovalDecision`（见 `_write_approval_decision`）。
         """
         future = self._pending_approvals.get(tool_call_id)
         if future is not None and not future.done():
-            future.set_result(approved)
+            future.set_result(decision)
             return True
 
-        try:
-            from app.redis_client import get_redis
-            from app.redis_keys import rkey
-
-            redis = await get_redis()
-            if redis is None:
-                logger.warning("submit_approval: redis unavailable, decision dropped")
-                return False
-            await redis.set(
-                rkey(f"approval:{tool_call_id}"),
-                "1" if approved else "0",
-                ex=int(APPROVAL_TTL_SECONDS),
-            )
-            return True
-        except Exception as e:  # noqa: BLE001
-            logger.warning("submit_approval: redis write failed (%s)", e)
-            return False
+        return await _write_approval_decision(tool_call_id, decision)
 
     # ── 结构化提问（ask_user）：与审批同构的答案回收通道 ──────────────
     def _ask_event(self, tool_call: dict[Any, Any]) -> AgentEvent:
@@ -2576,7 +2970,41 @@ class AgentRuntime:
     async def _execute_tool(
         self, tool_call: dict[Any, Any], task: AgentTask
     ) -> dict[Any, Any]:
-        """执行工具"""
+        """执行工具（含批 G 生命周期 hook）。
+
+        分层顺序是刻意的：本方法在 `_guarded_execute_tool`（工具策略 / 服务端授权 /
+        审批）**之后**才被调用，因此 `PreToolUse` hook 只能进一步**收紧** —— 它没有
+        "放行"语义，也就不会成为绕过 `tool_policy` 分级的新通道（方案 03 §3.2）。
+
+        - `PreToolUse`：唯一可阻断的事件，阻断以"工具错误"回灌给模型；
+        - `PostToolUse` / `PostToolUseFailure` / `SubagentStart` / `SubagentStop`：
+          fire-and-forget，失败、超时、崩溃都不改变这里的返回值。
+        默认 `hooks_enabled=False` 时以上调用全部是空操作（零行为变化）。
+        """
+        # 同样延迟导入（见 `run()` 中的说明）。
+        from app.hooks import hooks
+
+        tool_name = str(tool_call["name"])
+
+        blocked = await hooks.before_tool_use(task=task, tool_call=tool_call)
+        if blocked:
+            return {"error": blocked}
+
+        is_subagent = tool_name == SUBAGENT_TOOL
+        if is_subagent:
+            await hooks.subagent_start(task=task, tool_call=tool_call)
+
+        result = await self._dispatch_tool(tool_call, task)
+
+        if is_subagent:
+            await hooks.subagent_stop(task=task, tool_call=tool_call, result=result)
+        await hooks.after_tool_use(task=task, tool_call=tool_call, result=result)
+        return result
+
+    async def _dispatch_tool(
+        self, tool_call: dict[Any, Any], task: AgentTask
+    ) -> dict[Any, Any]:
+        """工具分发的实际实现（无 hook 包裹）—— 由 `_execute_tool` 调用。"""
         tool_name = tool_call["name"]
         tool_arguments = tool_call["arguments"]
 
@@ -2688,8 +3116,13 @@ def unregister_pending_approval(tool_call_id: str) -> None:
     _PENDING_APPROVAL_OWNERS.pop(tool_call_id, None)
 
 
-async def _write_approval_decision(tool_call_id: str, approved: bool) -> bool:
-    """把审批决策写入 Redis 决策键（跨副本通道，等待方 GET+DEL 单次消费）。"""
+async def _write_approval_decision(tool_call_id: str, decision: ApprovalDecision) -> bool:
+    """把审批决策写入 Redis 决策键（跨副本通道，等待方 GET+DEL 单次消费）。
+
+    值是一个 JSON 对象（`ApprovalDecision.to_json`）：`edit` 的编辑后参数必须跟着决策走，
+    否则"批准的是编辑后的参数"这件事跨副本就丢了。读取侧（`_poll_remote_decision`）
+    同时兼容旧的 `"1"` / `"0"` 形态。
+    """
     try:
         from app.redis_client import get_redis
         from app.redis_keys import rkey
@@ -2699,7 +3132,7 @@ async def _write_approval_decision(tool_call_id: str, approved: bool) -> bool:
             return False
         await redis.set(
             rkey(f"approval:{tool_call_id}"),
-            "1" if approved else "0",
+            decision.to_json(),
             ex=int(APPROVAL_TTL_SECONDS),
         )
         return True
@@ -2708,9 +3141,7 @@ async def _write_approval_decision(tool_call_id: str, approved: bool) -> bool:
         return False
 
 
-async def submit_approval_global(
-    tool_call_id: str, approved: bool, reason: str = ""
-) -> bool:
+async def submit_approval_global(tool_call_id: str, decision: ApprovalDecision) -> bool:
     """全局审批入口：唤醒本实例等待者，否则写 Redis 决策键（跨副本）。
 
     返回值表示"决策已投递"（不等于已被消费）：
@@ -2722,6 +3153,6 @@ async def submit_approval_global(
 
     runtime = _PENDING_APPROVAL_OWNERS.get(tool_call_id)
     if runtime is not None:
-        if await runtime.submit_approval(tool_call_id, approved, reason):
+        if await runtime.submit_approval(tool_call_id, decision):
             return True
-    return await _write_approval_decision(tool_call_id, approved)
+    return await _write_approval_decision(tool_call_id, decision)

@@ -503,18 +503,114 @@ function ensureApprovalTimer() {
   }, 1000)
 }
 
-async function resolveApproval(a: PendingApproval, approved: boolean) {
+/**
+ * 提交审批决定。`editedArguments`（C5）非空 ⇒ "**编辑后批准**"：
+ * 回传 `decision: 'edit'` 与编辑后的完整参数，由引擎重跑工具分级
+ * （级别升高则不执行）—— 前端**不做**本地放行判断，那会是第二份分级表。
+ */
+async function resolveApproval(
+  a: PendingApproval,
+  approved: boolean,
+  editedArguments?: string,
+) {
   try {
     await submitApproval({
       session_id: activeSessionId.value || '',
       tool_call_id: a.id,
-      approved,
+      approved: editedArguments ? true : approved,
+      decision: editedArguments ? 'edit' : approved ? 'approve' : 'reject',
+      ...(editedArguments ? { arguments: editedArguments } : {}),
     })
   } catch {
     // 静默失败
   } finally {
     pendingApprovals.value = pendingApprovals.value.filter(p => p.id !== a.id)
+    clearApprovalEdit(a.id)
   }
+}
+
+// ── C5：审批卡片的"编辑参数"折叠区 ────────────────────────────────────────
+// 形态是**内联编辑**（复用审批卡片本身，不新开弹窗）—— 避免焦点争夺与移动端布局问题
+// （方案 01 §3.5 采纳的形态）。非法 JSON **不允许提交**：否则"批准的就是执行的"
+// 这条不变量会被半个字符串破坏。
+interface ApprovalEditState {
+  open: boolean
+  text: string
+  error: string
+}
+const approvalEdits = ref<Record<string, ApprovalEditState>>({})
+
+function approvalEdit(a: PendingApproval): ApprovalEditState | undefined {
+  return approvalEdits.value[a.id]
+}
+
+/** 参数美化：解析失败就原样显示（与子 Agent 审批卡片同一取舍）。 */
+function prettyArguments(raw: string): string {
+  const text = (raw || '').trim()
+  if (!text) return ''
+  try {
+    return JSON.stringify(JSON.parse(text), null, 2)
+  } catch {
+    return text
+  }
+}
+
+/** 校验编辑框内容；返回错误文案（空串 = 合法）。**实时**反馈，非法时提交按钮禁用。 */
+function validateApprovalArgs(text: string): string {
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(text.trim())
+  } catch {
+    return t('errors.approval_edit_invalid_json')
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    return t('errors.approval_edit_must_be_json_object')
+  }
+  return ''
+}
+
+function toggleApprovalEdit(a: PendingApproval) {
+  const cur = approvalEdits.value[a.id]
+  if (cur?.open) {
+    approvalEdits.value = {
+      ...approvalEdits.value,
+      [a.id]: { open: false, text: cur.text, error: '' },
+    }
+    return
+  }
+  const text = cur?.text || prettyArguments(a.arguments)
+  approvalEdits.value = {
+    ...approvalEdits.value,
+    [a.id]: { open: true, text, error: validateApprovalArgs(text) },
+  }
+}
+
+function onApprovalEditInput(a: PendingApproval, text: string) {
+  approvalEdits.value = {
+    ...approvalEdits.value,
+    [a.id]: { open: true, text, error: validateApprovalArgs(text) },
+  }
+}
+
+function clearApprovalEdit(id: string) {
+  if (!approvalEdits.value[id]) return
+  const next = { ...approvalEdits.value }
+  delete next[id]
+  approvalEdits.value = next
+}
+
+/** 提交"编辑后批准"：非法 JSON / 非对象**一律不提交**（按钮也已禁用）。 */
+async function submitApprovalEdit(a: PendingApproval) {
+  const text = approvalEdits.value[a.id]?.text || ''
+  const error = validateApprovalArgs(text)
+  if (error) {
+    approvalEdits.value = {
+      ...approvalEdits.value,
+      [a.id]: { open: true, text, error },
+    }
+    return
+  }
+  await resolveApproval(a, true, JSON.stringify(JSON.parse(text.trim())))
 }
 
 // ── 结构化提问（ask_user 工具）────────────────────────────────────────────
@@ -2655,6 +2751,25 @@ function continueGeneration() {
           <div class="approval-args">
             {{ a.arguments }}
           </div>
+          <div
+            v-if="approvalEdit(a)?.open"
+            class="approval-edit"
+          >
+            <textarea
+              class="approval-edit-text"
+              :value="approvalEdit(a)?.text || ''"
+              rows="5"
+              spellcheck="false"
+              :aria-label="$t('agent.edit_arguments')"
+              @input="onApprovalEditInput(a, ($event.target as HTMLTextAreaElement).value)"
+            />
+            <div
+              v-if="approvalEdit(a)?.error"
+              class="approval-edit-error"
+            >
+              {{ approvalEdit(a)?.error }}
+            </div>
+          </div>
           <div class="approval-actions">
             <button
               class="approval-btn danger"
@@ -2664,6 +2779,23 @@ function continueGeneration() {
               {{ $t('errors.reject') }}
             </button>
             <button
+              class="approval-link"
+              type="button"
+              @click="toggleApprovalEdit(a)"
+            >
+              {{ approvalEdit(a)?.open ? $t('common.cancel') : $t('agent.edit_arguments') }}
+            </button>
+            <button
+              v-if="approvalEdit(a)?.open"
+              class="approval-btn allow"
+              type="button"
+              :disabled="!!approvalEdit(a)?.error"
+              @click="submitApprovalEdit(a)"
+            >
+              {{ $t('agent.approve_with_edited_arguments') }}
+            </button>
+            <button
+              v-else
               class="approval-btn allow"
               type="button"
               @click="resolveApproval(a, true)"
@@ -3051,6 +3183,31 @@ function continueGeneration() {
 .approval-tag { font-size: 11px; color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
 .approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
 .approval-args { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 8px; }
+.approval-edit { margin-bottom: 8px; }
+.approval-edit-text {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  color: var(--text-primary);
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 6px 8px;
+  resize: vertical;
+}
+.approval-edit-text:focus { outline: none; border-color: var(--primary); }
+.approval-edit-error { margin-top: 4px; font-size: 12px; color: var(--danger, var(--error)); }
+.approval-link {
+  border: none;
+  background: none;
+  color: var(--primary);
+  font-size: 13px;
+  cursor: pointer;
+  padding: 6px 4px;
+  border-radius: 6px;
+}
+.approval-link:hover { text-decoration: underline; }
 .approval-actions { display: flex; gap: 8px; }
 .approval-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform var(--dur-fast) ease, opacity var(--dur-fast) ease, background var(--dur-fast) ease; }
 .approval-btn:active { transform: scale(0.97); }

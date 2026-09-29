@@ -23,6 +23,16 @@ export async function submitApproval(params: {
   session_id: string
   tool_call_id: string
   approved: boolean
+  /**
+   * C5：审批三态。省略时由 `approved` 推导 —— 因此旧调用方行为不变。
+   * `edit` = “编辑后批准”，此时必须带 `arguments`。
+   */
+  decision?: 'approve' | 'reject' | 'edit'
+  /**
+   * C5：`decision=edit` 时必填 —— **编辑后的完整参数对象**（JSON 字符串，整份替换）。
+   * 引擎会用它重跑工具分级：若动作级别升高（如 write→delete），则**不执行**并给出原因。
+   */
+  arguments?: string
   reason?: string
 }): Promise<boolean> {
   const { data } = await api.post('/v1/agent/approval', params)

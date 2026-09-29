@@ -30,7 +30,7 @@ _store = create_store()
 MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024
 
 
-async def _persist_to_library(
+async def persist_to_library(
     name: str,
     data: bytes,
     *,
@@ -104,7 +104,7 @@ async def media_create(
     data = content.encode("utf-8")
 
     # 优先写入 Go 媒体库（与「媒体库」页面共享同一份数据）；不可用时回退本地 store。
-    stored = await _persist_to_library(
+    stored = await persist_to_library(
         name,
         data,
         asset_type=type,
@@ -174,7 +174,7 @@ async def image_generate(
     name = _sanitize_filename(prompt) + ".png"
 
     # 优先写入 Go 媒体库；不可用时回退本地 store。
-    stored = await _persist_to_library(
+    stored = await persist_to_library(
         name, data, asset_type="image", category=category, mime_type="image/png"
     )
     if stored is not None:
