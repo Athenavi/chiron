@@ -356,7 +356,7 @@ func NewGatewayRouter(
 
 	// ── Route registration by functional domain ──
 
-	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg)
+	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg, fileStore)
 	registerAgentRoutes(mux, authMW, rlMW, publicMW, sanitizeMW, submitHandler, billingMgr, agentSem, tenantResMgr, eventHub, sessionMgr, authenticator, rpaHub, cfg.InternalToken, cfg.AgentSubmitTimeout)
 
 	// 子 Agent 完成 → 父会话新一轮：由引擎队列（agent_followup 任务）调用，
@@ -509,6 +509,7 @@ func registerPublicEndpoints(
 	systemHandler *SystemHandler,
 	mediaHandler *MediaHandler,
 	cfg *config.Config,
+	fileStore *storage.AtomicStore,
 ) {
 	mux.Handle("GET /search", authMW(rlMW(http.HandlerFunc(searchHandler.Search))))
 	mux.Handle("GET /v1/search", authMW(rlMW(http.HandlerFunc(searchHandler.Search))))
@@ -558,6 +559,17 @@ func registerPublicEndpoints(
 	//（media_create / image_generate）据此把产物写入 media_assets + 对象存储，
 	// 与「媒体库」页面共享同一份数据。
 	mux.Handle("POST /v1/internal/media/assets", rlMW(internalTokenMW(cfg, http.HandlerFunc(mediaHandler.InternalCreateAsset))))
+
+	// Agent 文件存储（X-Internal-Token 保护）：引擎的文件工具据此把工作区文件落到
+	// 部署方配置的 FileStore（local 共享卷 / S3），解决多副本下"写 A 副本、读 B 副本"
+	// 的间歇性失忆（python-engine/app/tools/sandbox.py 的注释已自陈该风险）。
+	// 隔离由服务端强制：请求只带相对路径，存储键由 handler 拼成
+	// `agent-files/{tenant}/{user}/{相对路径}`（见 internal_storage_handler.go）。
+	internalStorage := NewInternalStorageHandler(fileStore)
+	mux.Handle("GET /v1/internal/storage/read", rlMW(internalTokenMW(cfg, internalStorage.StorageRead)))
+	mux.Handle("POST /v1/internal/storage/write", rlMW(internalTokenMW(cfg, internalStorage.StorageWrite)))
+	mux.Handle("GET /v1/internal/storage/list", rlMW(internalTokenMW(cfg, internalStorage.StorageList)))
+	mux.Handle("POST /v1/internal/storage/delete", rlMW(internalTokenMW(cfg, internalStorage.StorageDelete)))
 }
 
 // ── Agent submit/cancel/events ──

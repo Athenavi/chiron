@@ -15,12 +15,28 @@ from app.tools.terminal import _terminal
 
 class TestJobs:
     @pytest.mark.asyncio
-    async def test_background_job_completes(self):
+    async def test_background_job_completes(self, monkeypatch):
         set_tool_context(session_id="j-sess")
+
+        # 强制走**本地降级**路径：本机是否有 Redis 决定了 `run_in_background` 的分支 ——
+        # 有 Redis 时它会把 job 入队并写 `job:meta:{id}=running`，而 `job_output` 一旦看到
+        # meta=running 就**直接返回 running、不再回查本地任务**（app/tools/jobs.py:139-141），
+        # 于是在"有 Redis 但没有 worker 消费队列"的机器上（本机就是）该 job 永远 running。
+        #
+        # 这条用例测的是"后台命令能跑完并拿到输出"（进程内语义），与队列/worker 无关，
+        # 因此必须把环境依赖去掉 —— 否则它在本机红、在 CI 绿（CI 的 python job 无 Redis）。
+        import app.tools.jobs as jobs_mod
+
+        async def _no_enqueue(*_args: object, **_kwargs: object) -> bool:
+            return False
+
+        monkeypatch.setattr(jobs_mod, "_enqueue_tool_job", _no_enqueue)
+
         start = await run_in_background("echo bg-done")
         assert start["status"] == "started"
         job_id = start["job_id"]
         # 轮询直到完成
+        res: dict = {"status": "running"}
         for _ in range(50):
             res = await job_output(job_id)
             if res["status"] == "completed":
