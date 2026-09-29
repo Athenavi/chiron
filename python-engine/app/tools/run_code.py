@@ -460,7 +460,32 @@ async def run_code(
     # S 安全修复：必须走 subprocess 隔离执行,不再降级到主进程 exec 用户代码。
     # 同进程模式无 OS 级隔离,`__class__.__subclasses__()` 等逃逸可达主进程
     # 全部特权 → RCE。子进程不可用即 fail-closed,返回结构化错误而非提升特权执行。
+    import time
+
+    from app.tools.exec_audit import OUTCOME_ERROR, OUTCOME_OK, record_execution
+
+    started = time.monotonic()
     result = await _run_in_subprocess(code, tool_names, timeout)
+
+    # S5-3：审计。含 fail-closed 路径 —— "沙箱子进程不可用"同样是必须留痕的事件
+    # （否则"明明没执行"与"执行了但没记录"无法区分）。
+    if result is None:
+        outcome = OUTCOME_ERROR
+        reason = "sandbox subprocess unavailable"
+    elif result.get("isError"):
+        outcome = OUTCOME_ERROR
+        reason = str(result.get("message", ""))[:200] or None
+    else:
+        outcome = OUTCOME_OK
+        reason = None
+    record_execution(
+        tool="run_code",
+        command=code,
+        outcome=outcome,
+        reason=reason,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
+
     if result is not None:
         return result
     return {

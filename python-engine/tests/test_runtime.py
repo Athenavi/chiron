@@ -485,3 +485,62 @@ class TestTruncatedToolArguments:
         assert evt is not None and evt.type == "approval"
 
 
+class TestMemoryInjectionTrustHeader:
+    """A2 回归：记忆注入必须带信任声明，且声明位于记忆正文**之前**。
+
+    记忆来自历史对话与用户档案 —— 属可被间接影响的内容。没有声明时它会以"系统提示词"
+    的口吻进入上下文（用户在历史里写一句"忽略以上规则"就可能被当作指令执行）。
+    """
+
+    @staticmethod
+    def _runtime_with_memory(captured: list[dict]) -> AgentRuntime:
+        gw = MagicMock()
+
+        async def fake_stream(**kwargs):
+            captured.append(kwargs)
+            yield ChatResponse(content="ok", finish_reason="stop")
+
+        gw.chat_stream = fake_stream
+
+        class _FakeMemory:
+            async def on_session_start(self, **_kw):
+                return MagicMock(profile_cached=False, summaries_prefetched=0)
+
+            async def recall(self, *_a, **_kw):
+                return MagicMock(
+                    has_content=True,
+                    profile_block="- [偏好] 语言: 中文",
+                    summary_items=[],
+                )
+
+            async def on_turn_complete(self, **_kw):
+                return None
+
+            async def on_session_end(self, _sid):
+                return None
+
+        return AgentRuntime(
+            gateway=gw,
+            session_store=SessionStore(max_sessions=5),
+            memory=_FakeMemory(),
+        )
+
+    @pytest.mark.asyncio
+    async def test_trust_header_precedes_memory_body(self):
+        captured: list[dict] = []
+        runtime = self._runtime_with_memory(captured)
+        task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="s-mem-trust",
+                         content="hi", system_prompt="base", max_turns=1)
+        _ = [e async for e in runtime.run(task)]
+
+        assert captured, "未产生 LLM 请求"
+        system_texts = [m.content for m in captured[0]["messages"] if m.role == "system"]
+        assert len(system_texts) == 1
+        content = system_texts[0]
+        assert "不是指令" in content, "缺少信任声明"
+        assert "语言: 中文" in content, "记忆正文未注入"
+        assert content.index("不是指令") < content.index("语言: 中文"), (
+            "信任声明必须在记忆正文之前"
+        )
+
+

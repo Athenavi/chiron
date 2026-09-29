@@ -78,12 +78,21 @@ func (o *EnterpriseBillingObserver) record(evt CreditEvent) {
 
 	// 1 credit = 1 分（与 payments.amount_cents 口径一致）
 	costCents := -evt.Amount
-	// 注意：CreditEvent 不携带 token 明细（Manager 事件仅含金额），
-	// input/output_tokens 记 0，成本以 cost_cents 为准。
+	// A5 修复：token 两列写 **NULL** 而不是 0。
+	//
+	// `CreditEvent` 只携带金额（见该类型定义：UserID/Amount/Balance/Reason/Timestamp），
+	// 因此这条记录**不包含** token 明细。原先写 0 会让读的人无法区分两种完全不同的情况：
+	//   * `input_tokens = 0` → "这次调用真的用了 0 token"（可能）；
+	//   * `input_tokens = 0` → "这条记录不含 token 信息"（实际语义）。
+	// 两列在 baseline 里都是**可空**的（`input_tokens bigint`，无 NOT NULL），
+	// 所以用 NULL 表达"不适用"既精确又不需要迁移。
+	//
+	// 读取侧（ent_costcenter_handler.go 的明细查询）已用 COALESCE 兜底为 0，
+	// API 契约不变；聚合查询本就用 COALESCE(SUM(...),0)，NULL 天然安全。
 	if _, err := pool.Exec(ctx,
 		`INSERT INTO billing_records
 			(tenant_id, user_id, session_id, input_tokens, output_tokens, cost_cents, group_id)
-		 VALUES ($1, $2, NULL, 0, 0, $3, $4)`,
+		 VALUES ($1, $2, NULL, NULL, NULL, $3, $4)`,
 		tenantID, evt.UserID, costCents, groupID); err != nil {
 		slog.Warn("enterprise billing record insert failed",
 			"user_id", evt.UserID, "tenant_id", tenantID, "error", err)

@@ -660,7 +660,12 @@ class MemoryService:
                 return {"summaries": [], "count": 0, "mode": "empty"}
 
             def _as_dict(item: Any) -> dict[str, Any]:
-                """RecalledItem → 与 ``SummaryEntry.to_dict`` 同形的字典。"""
+                """RecalledItem → 与 ``SummaryEntry.to_dict`` 同形的字典。
+
+                A4 修复：必须带上 `score` —— 此前这里漏了它，而 `recall` 又硬编码
+                `score=0.0`，两处叠加导致注入 prompt 的 `(score 0.00)` **恒为 0**
+                （`SummaryStore.recall` 明明算出了 final_score）。
+                """
                 return {
                     "id": getattr(item, "id", ""),
                     "session_id": getattr(item, "session_id", ""),
@@ -671,6 +676,7 @@ class MemoryService:
                     "access_count": getattr(item, "access_count", 0),
                     "last_accessed_at": getattr(item, "last_accessed_at", None),
                     "created_at": getattr(item, "created_at", 0.0),
+                    "score": float(getattr(item, "score", 0.0) or 0.0),
                     "has_embedding": getattr(item, "embedding", None) is not None,
                     "status": getattr(item, "status", "active"),
                 }
@@ -785,7 +791,9 @@ class MemoryService:
                             access_count=raw.get("access_count", 0),
                             last_accessed_at=raw.get("last_accessed_at") or 0.0,
                             created_at=raw.get("created_at") or 0.0,
-                            score=0.0,
+                            # A4 修复：此前硬编码 0.0，把上游算好的 final_score 丢掉，
+                            # 于是注入 prompt 的 `(score 0.00)` 恒为 0。
+                            score=float(raw.get("score") or 0.0),
                         )
                     )
             except Exception as e:
@@ -1250,24 +1258,57 @@ class MemoryService:
                 logger.warning("evict failed for %s: %s", victim.id, e)
         return evicted
 
+    #: L2 记忆注入块的字节预算（超出即按优先级略过，并显式告知条数）
+    _PROFILE_BLOCK_MAX_BYTES = 1500
+
     @staticmethod
-    def _serialize_entries(items: list[Any]) -> str:
-        """把 L2 记忆条目序列化为紧凑文本（≤1.5KB），供提示词注入。"""
+    def _injection_rank(item: Any) -> tuple[int, int, float]:
+        """注入优先级（越小越先注入）。
+
+        与 `eviction_rank`（本类 `_evict_overflow` 内）**同源、方向相反**：淘汰时
+        "最后走"的条目，注入时"最先给"。三级依据：
+        1. `user_confirmed` 优先（用户显式确认过的最可信）；
+        2. 置信度降序；
+        3. 最近被引用（`last_accessed_at`）降序。
+        """
+        confirmed = (
+            0 if _source_value(getattr(item, "source", "")) == "user_confirmed" else 1
+        )
+        confidence = int(getattr(item, "confidence", 0) or 0)
+        last_used = float(getattr(item, "last_accessed_at", 0.0) or 0.0)
+        return (confirmed, -confidence, -last_used)
+
+    @classmethod
+    def _serialize_entries(cls, items: list[Any]) -> str:
+        """把 L2 记忆条目序列化为紧凑文本（≤ 字节预算），供提示词注入。
+
+        A4 修复：此前是"全量拼接 + 超限**整段截断**" —— 截断线之后的条目（包括刚刚
+        `remember` 写入的）会被无声丢掉。现在改为：**先按注入优先级排序，再按预算逐条
+        挑选**，被略过的条目显式告知条数，让模型知道"还有记忆没给，可以检索"。
+        """
         if not items:
             return "暂无用户档案信息"
-        parts = []
-        for item in items:
+        parts: list[str] = []
+        used = 0
+        omitted = 0
+        for item in sorted(items, key=cls._injection_rank):
             slot = _slot_value(item.slot)
             source = _source_value(item.source)
             tag = "✓" if source == "user_confirmed" else "◇"
-            parts.append(
+            line = (
                 f"- {tag} [{slot}] {item.item_key}: {item.item_value} "
                 f"(置信度:{item.confidence}%)"
             )
+            size = len(line.encode("utf-8")) + 1  # +1：换行符
+            if used + size > cls._PROFILE_BLOCK_MAX_BYTES:
+                omitted += 1
+                continue
+            parts.append(line)
+            used += size
         text = "\n".join(parts)
-        if len(text.encode("utf-8")) > 1500:
-            logger.warning("Profile block exceeds 1.5KB limit, truncating")
-            text = text[:1400] + "\n... (已截断)"
+        if omitted:
+            logger.info("Profile block budget reached, %d entries omitted", omitted)
+            text += f"\n... (另有 {omitted} 条记忆未注入，可用 memory_search 检索)"
         return text
 
     @staticmethod
