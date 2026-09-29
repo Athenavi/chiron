@@ -77,7 +77,7 @@ func TestProbesBypassRateLimitMiddleware(t *testing.T) {
 	mux := http.NewServeMux()
 	auth := &middlewareProbe{}
 	rl := &middlewareProbe{}
-	registerPublicEndpoints(mux, auth.passthrough, rl.reject(http.StatusServiceUnavailable), nil, nil, nil, nil, nil, nil)
+	registerPublicEndpoints(mux, auth.passthrough, rl.reject(http.StatusServiceUnavailable), nil, nil, nil, nil, nil, nil, nil)
 
 	for _, path := range []string{"/health", "/ready"} {
 		rec := httptest.NewRecorder()

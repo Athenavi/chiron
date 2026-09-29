@@ -28,6 +28,21 @@ def audit_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return tmp_path
 
 
+@pytest.fixture(autouse=True)
+def _clean_tool_context():
+    """每个用例结束后**清空**工具上下文。
+
+    必须清：`set_tool_context` 是**合并**语义（只 update 不替换），残留的
+    `tenant_id` / `user_id` 会让后续用例的技能与记忆查找走到
+    `data/skills/{tenant}/{user}/` 而不是共享目录 —— 实测踩过：本文件按字母序排在
+    `test_interop.py` 之前，残留身份让后者的 `wf-echo` 技能报"找不到"。
+    """
+    yield
+    from app.tools import context as tool_context
+
+    tool_context._current_context.set(None)
+
+
 def _entries(root: Path) -> list[dict]:
     path = root / "exec_audit.jsonl"
     if not path.exists():

@@ -1,0 +1,90 @@
+{
+  "_comment": "替身脚本：让 smoke 集在**零密钥、零费用**下跑通 runner/断言/报告链路（PR 门禁用）。它验证的是链路，不是 agent 能力 —— 后者必须用真实模型跑（--submit http）。每条脚本必须与 suites/smoke.json 的断言对应。",
+  "guardrail-block-abs-path-read": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "read_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "read_file", "content": "{\"error\": \"path escapes root\"}" },
+      { "type": "done", "input_tokens": 20, "output_tokens": 10 }
+    ]
+  },
+  "guardrail-block-rm-rf": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "shell_exec" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "shell_exec", "content": "{\"error\": \"command blocked: executable not allowed: rm\"}" },
+      { "type": "done", "input_tokens": 18, "output_tokens": 9 }
+    ]
+  },
+  "file-edit-single-value": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "write_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "write_file", "content": "{}" },
+      { "type": "done", "input_tokens": 40, "output_tokens": 20 }
+    ],
+    "write_files": { "config.ini": "[app]\ndebug=true\nport=8080\n" }
+  },
+  "file-edit-multi-reference": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "edit_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "edit_file", "content": "{}" },
+      { "type": "tool_call", "tool_call_id": "c2", "tool_name": "edit_file" },
+      { "type": "tool_result", "tool_call_id": "c2", "tool_name": "edit_file", "content": "{}" },
+      { "type": "done", "input_tokens": 60, "output_tokens": 30 }
+    ],
+    "write_files": {
+      "src/a.py": "NEW_NAME = 1\n",
+      "src/b.py": "print(NEW_NAME)\n"
+    }
+  },
+  "file-read-before-write": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "read_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "read_file", "content": "{\"content\": \"# Notes\"}" },
+      { "type": "tool_call", "tool_call_id": "c2", "tool_name": "write_file" },
+      { "type": "tool_result", "tool_call_id": "c2", "tool_name": "write_file", "content": "{}" },
+      { "type": "done", "input_tokens": 35, "output_tokens": 18 }
+    ],
+    "write_files": { "notes.md": "# Notes\n- done\n" }
+  },
+  "subagent-delegation": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "subagent" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "subagent", "content": "{\"status\": \"completed\"}" },
+      { "type": "done", "input_tokens": 50, "output_tokens": 25 }
+    ]
+  },
+  "memory-remember-preference": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "remember" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "remember", "content": "{}" },
+      { "type": "done", "input_tokens": 22, "output_tokens": 11 }
+    ]
+  },
+  "skill-load-on-demand": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "skill_list" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "skill_list", "content": "{\"count\": 1}" },
+      { "type": "done", "input_tokens": 30, "output_tokens": 15 }
+    ]
+  },
+  "rag-search-knowledge": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "kb_search" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "kb_search", "content": "{\"count\": 2}" },
+      { "type": "done", "input_tokens": 28, "output_tokens": 14 }
+    ]
+  },
+  "long-task-multi-file": {
+    "events": [
+      { "type": "trace_span", "span_name": "llm_call", "content": "{\"span_name\": \"llm_call\"}" },
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "write_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "write_file", "content": "{}" },
+      { "type": "trace_span", "span_name": "llm_call", "content": "{\"span_name\": \"llm_call\"}" },
+      { "type": "done", "input_tokens": 80, "output_tokens": 40 }
+    ],
+    "write_files": {
+      "docs/1.md": "# 标题\na\n",
+      "docs/2.md": "# 标题\nb\n",
+      "docs/3.md": "# 标题\nc\n"
+    }
+  }
+}

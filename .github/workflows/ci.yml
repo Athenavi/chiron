@@ -68,6 +68,38 @@ jobs:
         # 它们由需要时单独执行：`pytest -m integration`
         run: python -m pytest -q -m "not integration"
 
+  # ── 评测骨架（smoke 集）─────────────────────────────────────────────────
+  #
+  # PR 门禁：用**确定性替身 provider** 跑 smoke 集 —— 零密钥、零费用、可判定。
+  # 这一步是 deepagents 都没有的：它的真实模型 eval 只在 workflow_dispatch 下触发
+  # （libs/evals/.github/workflows/evals.yml:4）。
+  #
+  # 它验证的是「固件 → runner → 断言 → 报告」这条链路，因此**不需要任何第三方依赖**
+  # 就能跑（httpx 已在 evals/submit.py 里改为延迟导入，只有 --submit http 才需要）。
+  # **agent 能力必须用真实模型另跑**（`--submit http`，需网关 + 引擎；尚未接线）。
+  evals:
+    name: Evals (smoke)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: python-engine
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Smoke suite (scripted provider)
+        # 退出码 0 = 全部通过 / 1 = 有任务失败，CI 直接可用
+        run: python -m evals.cli run --suite smoke --submit scripted --report evals-report.json
+      - name: Upload report
+        # 失败时也要拿到报告（否则只能看日志里的摘要）
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evals-smoke-report
+          path: python-engine/evals-report.json
+          if-no-files-found: warn
+
   # ── 前端 ────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend

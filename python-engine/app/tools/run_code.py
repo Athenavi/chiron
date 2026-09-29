@@ -471,7 +471,7 @@ async def run_code(
     # （否则"明明没执行"与"执行了但没记录"无法区分）。
     if result is None:
         outcome = OUTCOME_ERROR
-        reason = "sandbox subprocess unavailable"
+        reason: str | None = "sandbox subprocess unavailable"
     elif result.get("isError"):
         outcome = OUTCOME_ERROR
         reason = str(result.get("message", ""))[:200] or None

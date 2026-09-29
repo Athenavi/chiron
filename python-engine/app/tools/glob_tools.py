@@ -12,38 +12,28 @@ async def glob_files(pattern: str, root: str = ".") -> dict[str, Any]:
 
     Returns a list of matching file paths with their sizes.
     """
-    from app.tools.sandbox import workspace_dir
+    from app.backends.context import get_backend
 
-    # 沙箱隔离（S 安全修复）：
-    # 此前这里是 `Path(root).resolve()` —— 没有任何沙箱，等于以**进程 CWD** 为根。
-    # 实测 `glob_files(pattern="README*", root=".")` 会返回仓库外的
-    # X:\project\Chiron\README.md，即 LLM 可以借它列出沙箱外的文件；
-    # 而同类工具 grep_files 一直是有沙箱的（见 core.py）。这里统一到 workspace_dir()。
-    base = workspace_dir()
-    if root and root not in (".", "./"):
-        candidate = (base / root).resolve()
-        try:
-            candidate.relative_to(base.resolve())
-        except ValueError:
-            return {"error": "path escapes sandbox", "count": 0, "files": []}
-        base = candidate
-    # pathlib.Path.glob already supports **, *, ?, []
-    matches: list[dict[str, Any]] = []
+    # 批 B：匹配经**后端**（默认 = 本地工作区）。
+    #
+    # 沙箱隔离（S 安全修复）：此前这里是 `Path(root).resolve()` —— 没有任何沙箱，
+    # 等于以**进程 CWD** 为根。实测 `glob_files(pattern="README*", root=".")` 会返回仓库外的
+    # X:\project\Chiron\README.md，即 LLM 可以借它列出沙箱外的文件。
+    # 现在由后端的 `safe_join` 统一拒绝越界路径。
+    backend = get_backend()
     try:
-        for p in sorted(base.glob(pattern)):
-            if p.is_file():
-                try:
-                    size = p.stat().st_size
-                except OSError:
-                    size = 0
-                matches.append(
-                    {
-                        "path": str(p),
-                        "size": size,
-                    }
-                )
-    except (ValueError, OSError) as exc:
-        return {"error": str(exc), "count": 0, "files": []}
+        globbed = await backend.glob(pattern, path=root or ".")
+    except ValueError:
+        return {"error": "path escapes sandbox", "count": 0, "files": []}
+    if globbed.error:
+        return {"error": globbed.error, "count": 0, "files": []}
+
+    matches: list[dict[str, Any]] = []
+    for candidate in globbed.paths:
+        info = await backend.stat(candidate)
+        if info is None or not info.is_file:
+            continue
+        matches.append({"path": info.path, "size": info.size})
 
     return {"count": len(matches), "files": matches}
 
