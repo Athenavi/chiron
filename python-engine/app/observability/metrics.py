@@ -142,6 +142,27 @@ SUBAGENT_PERSIST_FAILED = Counter(
     ["component", "op"],  # component: db / redis
 )
 
+# ── C1 批 3：run 恢复（resume / reconciler） ──
+#
+# `reconcile_total{outcome}`：巡检每处理一个僵尸 run 记一次 ——
+#   revived（旧主已死 → 标记可续跑）/ abandoned（快照超冷窗口）/ skipped_alive（旧主还活着）
+# `resumed_total{window}`：**用户重试**时真的从快照续跑的次数（热 / 冷窗口）
+# `resume_turns_saved_total`：这些续跑**省下的回合数**（= 快照的 turn_index，即不必重跑的回合）
+RUN_RECONCILE_TOTAL = Counter(
+    "run_reconcile_total",
+    "Zombie run reconciliation outcomes (per run handled)",
+    ["outcome"],  # revived / abandoned / skipped_alive
+)
+RUN_RESUMED_TOTAL = Counter(
+    "run_resumed_total",
+    "Turns resumed from a run checkpoint (user retry)",
+    ["window"],  # hot / cold
+)
+RUN_RESUME_TURNS_SAVED = Counter(
+    "run_resume_turns_saved_total",
+    "Turns skipped because the run resumed from a checkpoint instead of re-running",
+)
+
 # ── 实例级 ──
 INSTANCE_ACTIVE_REQUESTS = Gauge(
     "instance_active_requests",

@@ -74,6 +74,10 @@ class RunCheckpoint(TypedDict, total=False):
     last_event_id: str
     instance_id: str
     saved_at: str
+    #: C1 批 3+：**重建 AgentTask 所需的最小元信息**（`llm_config` / `workbench_context` /
+    #: `system_prompt` / `user_id` / `max_turns` …）。有了它，reconciler 才能自动续跑 ——
+    #: 这些配置只存在于**提交请求**里，不存进快照就没有第二个稳定来源。
+    task_meta: dict[str, Any]
 
 
 def _pool() -> Any:
@@ -93,6 +97,7 @@ def build_snapshot(
     usage: dict[str, int] | None = None,
     last_event_id: str = "",
     instance_id: str = "",
+    task_meta: dict[str, Any] | None = None,
     max_tail_messages: int = SNAPSHOT_MAX_TAIL_MESSAGES,
     min_tail_messages: int = SNAPSHOT_MIN_TAIL_MESSAGES,
 ) -> RunCheckpoint:
@@ -129,6 +134,7 @@ def build_snapshot(
         last_event_id=last_event_id,
         instance_id=instance_id,
         saved_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        task_meta=dict(task_meta or {}),
     )
 
 
@@ -259,6 +265,99 @@ async def mark(*, tenant_id: str, session_id: str, status: str) -> bool:
     except Exception as exc:  # noqa: BLE001
         logger.warning("checkpoint mark failed (session=%s): %s", session_id, exc)
         return False
+
+
+async def claim(
+    *,
+    tenant_id: str,
+    session_id: str,
+    expected_run_token: str,
+    new_run_token: str,
+) -> bool:
+    """**原子抢占**一个僵尸 run（C1 批 3+ 的接管 CAS）。返回是否抢到。
+
+    为什么必须 CAS 而不是"先查后改"：多个实例的巡检会**同时**看到同一行，"先查后改"下它们
+    各自的 UPDATE 都会成功 → 同一个 run 被跑两遍（重复副作用 + 双倍 token）。条件里带上
+    `expected_run_token` 之后，只有第一个 UPDATE 能命中，其余 rowcount = 0。
+
+    （方案原文写"抗接管风暴靠 `ux_agent_runs_session_active` 唯一索引"；那条索引防的是
+    "同一会话出现两行活跃"，而接管是**同一行改状态**，索引不参与 —— 所以这里用条件更新达到
+    同一目的，语义更直接。）
+    """
+    if not session_id or not new_run_token:
+        return False
+    try:
+        pool = _pool()
+        if pool is None:
+            return False
+        result = await pool.execute(
+            """
+            UPDATE agent_runs
+               SET status = $4, run_token = $5, updated_at = now()
+             WHERE session_id = $1
+               AND ($2 = '' OR tenant_id = $2)
+               AND status IN ('running', 'checkpointed')
+               AND ($3 = '' OR run_token = $3)
+            """,
+            session_id,
+            tenant_id or "",
+            expected_run_token or "",
+            STATUS_RESUMING,
+            new_run_token,
+        )
+        return _rowcount(result) > 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("checkpoint claim failed (session=%s): %s", session_id, exc)
+        return False
+
+
+async def pending_tool_calls(
+    *, session_id: str, limit: int = 50
+) -> list[dict[str, Any]]:
+    """"已开始未结束"的工具调用（C1 批 3 的 `replay_pending` 判定依据）。
+
+    判据来自 `tool_calls` 表的**两段式写入**（Go 侧 `SessionManager.SaveToolCall` 先 INSERT
+    空 `output`，`UpdateToolCall` 再写结果）：`output = ''` 就是"执行前落了库、执行后没回来"
+    —— 即中断在中间的那一次。因此不必保守地把整个回合当成未完成（那会重复执行已成功的调用）。
+
+    只按 `session_id` 过滤：`tool_calls` 表没有 `tenant_id` 列，而 session 本身已归属租户
+    （会话 id 全局唯一）。
+    """
+    if not session_id:
+        return []
+    try:
+        pool = _pool()
+        if pool is None:
+            return []
+        rows = await pool.fetch(
+            """
+            SELECT id, tool_name, turn_id
+              FROM tool_calls
+             WHERE session_id = $1
+               AND COALESCE(output, '') = ''
+             ORDER BY created_at DESC
+             LIMIT $2
+            """,
+            session_id,
+            max(1, int(limit)),
+        )
+    except Exception as exc:  # noqa: BLE001 — 判定失败按"没有待重放"处理（不阻断续跑）
+        logger.warning("pending tool calls lookup failed (session=%s): %s", session_id, exc)
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        try:
+            out.append(
+                {
+                    "id": str(row["id"]),
+                    "tool_name": str(row["tool_name"] or ""),
+                    "turn_id": str(row["turn_id"] or ""),
+                }
+            )
+        except (KeyError, TypeError):
+            continue
+    return out
 
 
 def resume_window(checkpoint: RunCheckpoint) -> str:

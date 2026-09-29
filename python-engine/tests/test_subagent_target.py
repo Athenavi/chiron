@@ -52,8 +52,8 @@ def test_builtin_registry_is_closed():
     想加新前缀只能改 `BUILTIN_TARGET_PREFIXES` 常量（= 改代码、过 review），
     这就是"不提供用户注册可调用对象通道"的落点。
     """
-    assert set(target_registry.prefixes) == {"profile", "skill", "workflow"}
-    assert set(BUILTIN_TARGET_PREFIXES) == {"profile", "skill", "workflow"}
+    assert set(target_registry.prefixes) == {"profile", "skill", "workflow", "remote"}
+    assert set(BUILTIN_TARGET_PREFIXES) == {"profile", "skill", "workflow", "remote"}
     assert target_registry.register("http_callback", SkillTarget, builtin=True) is False
 
 

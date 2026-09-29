@@ -25,7 +25,7 @@ from app.subagent.target import SubagentContext, SubagentTarget, parse_target_sp
 logger = logging.getLogger(__name__)
 
 #: 允许注册的目标前缀（白名单）。**新增前缀必须改这里** —— "只能内置"的落点。
-BUILTIN_TARGET_PREFIXES: frozenset[str] = frozenset({"profile", "skill", "workflow"})
+BUILTIN_TARGET_PREFIXES: frozenset[str] = frozenset({"profile", "skill", "workflow", "remote"})
 
 #: 目标工厂：`ref -> SubagentTarget`。
 TargetFactory = Callable[[str], SubagentTarget]
@@ -224,8 +224,49 @@ class TargetRegistry:
         return factory(ref)
 
 
-#: 进程内单例 —— 三个内置目标在**导入时**即完成登记（没有运行期注册入口）。
+#: 进程内单例 —— 内置目标在**导入时**即完成登记（没有运行期注册入口）。
 target_registry = TargetRegistry()
 target_registry.register("profile", ProfileTarget, builtin=True)
 target_registry.register("skill", SkillTarget, builtin=True)
 target_registry.register("workflow", WorkflowTarget, builtin=True)
+
+# S3：跨实例委派（`remote:<instance_id|auto>`）。**注册 ≠ 开放** —— 它自己还要查
+# `remote_subagent_enabled`（默认关），所以这里注册只是为了"可被解析"。
+from app.subagent.remote import RemoteSubagentTarget  # noqa: E402 — 置尾以避免 import 环
+
+target_registry.register("remote", RemoteSubagentTarget, builtin=True)
+
+
+# ── 给 Target 实现（含 S3 的 remote）复用的结果构造 ─────────────────────
+
+
+def failed_result(reason: str) -> Any:
+    """失败结果（公开别名：Target 实现不必去碰 `_failed`）。"""
+    return _failed(reason)
+
+
+def result_from_payload(payload: dict[str, Any]) -> Any:
+    """把"工具载荷形态"的结果还原成 `SubagentRunResult`（S3：远端回流的适配层）。
+
+    为什么需要它：远端引擎经内网 HTTP 返回的是 `to_tool_payload()` 的**载荷**（status /
+    output / usage / result_ref…），而本侧 Target 协议要求 `SubagentRunResult`。这层适配让
+    "远端结果"与"本地结果"对调用方完全一致（并保留 `result_ref`，便于沿
+    `read_subagent_result` 追到远端那次运行）。
+    """
+    from app.agent.subagent_runner import SubagentRunResult, new_run_id
+
+    raw_usage = payload.get("usage")
+    usage: dict[str, Any] = raw_usage if isinstance(raw_usage, dict) else {}
+    run_id = str(payload.get("result_ref") or payload.get("run_id") or "") or new_run_id()
+    return SubagentRunResult(
+        run_id=run_id,
+        status=str(payload.get("status") or "completed"),
+        output=str(payload.get("output") or ""),
+        summary=str(payload.get("summary") or ""),
+        input_tokens=int(usage.get("input_tokens") or 0),
+        output_tokens=int(usage.get("output_tokens") or 0),
+        steps=int(usage.get("steps") or 0),
+        truncated=bool(payload.get("truncated")),
+        error=str(payload.get("error") or ""),
+        profile=str(payload.get("profile") or ""),
+    )
