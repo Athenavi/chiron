@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from fastapi import APIRouter
 from pydantic import BaseModel
 
 from app.tools.agent import agent_list
+
+if TYPE_CHECKING:  # 仅注解用；运行期在函数内延迟导入（避免 runtime ↔ api 的导入环）
+    from app.agent.runtime import ApprovalDecision
 
 logger = logging.getLogger(__name__)
 
@@ -161,31 +164,65 @@ async def _workbench_binding(body: AgentDispatchRequest, gateway: Any) -> str:
 
 
 class AgentApprovalRequest(BaseModel):
-    """工具审批决策请求（Go 网关 /v1/agent/approval 转发而来）。"""
+    """工具审批决策请求（Go 网关 /v1/agent/approval 转发而来）。
+
+    **兼容两种形态**（C5）：
+    * 旧（已发布前端）：只发 `approved: bool`；
+    * 新：发 `decision: approve|reject|edit`，`edit` 时 `arguments` 必填。
+
+    `decision` 缺省视同现有语义（由 `approved` 推导）—— 不破坏已发布前端。
+    """
 
     tool_call_id: str
-    approved: bool
+    approved: bool | None = None
+    decision: str = ""
+    #: `decision=edit` 时必填：**编辑后的完整参数对象**（JSON 字符串，整份替换而非补丁）
+    arguments: str = ""
     reason: str = ""
     session_id: str = ""
     user_id: str = ""
 
 
+def _parse_approval_decision(body: AgentApprovalRequest) -> ApprovalDecision | str:
+    """归一成 `ApprovalDecision` —— **委托** `runtime.parse_approval_payload`。
+
+    不在这里重复实现解析：同路径的两个端点（见 `AgentApprovalRequest` 的说明）必须同源，
+    否则"哪份生效"就会变成行为差异。
+    """
+    from app.agent.runtime import parse_approval_payload
+
+    return parse_approval_payload(
+        approved=body.approved,
+        decision=body.decision,
+        arguments=body.arguments,
+        reason=body.reason,
+    )
+
+
 @router.post("/v1/agent/approval")
 async def submit_agent_approval(body: AgentApprovalRequest) -> dict[str, Any]:
-    """处理工具审批决策（三态栅栏"确认"态的回调）。
+    """处理工具审批决策（三态栅栏"确认"态的回调；C5 起支持 `edit`）。
 
     多副本语义：优先唤醒**本实例**正在等待的 runtime（零延迟）；若本实例无人等待
     （决策被路由到其它副本），则写 Redis 决策键，由正在等待的副本取走 ——
     这样审批不再依赖会话亲和路由，副本扩缩容期间也能正确送达。
+
+    `edit` 的**安全约束**（重跑 `tool_policy` 分级、级别升高则不执行、票据重写为编辑后
+    参数、双份参数落审计）全部由 runtime 侧实施 —— 本条路径只负责把决策**如实**投递。
     """
     from app.agent.runtime import submit_approval_global
 
     if not body.tool_call_id:
         return {"ok": False, "error": "tool_call_id is required"}
 
-    ok = await submit_approval_global(body.tool_call_id, body.approved, body.reason)
+    decision = _parse_approval_decision(body)
+    if isinstance(decision, str):
+        return {"ok": False, "error": decision}
+
+    ok = await submit_approval_global(body.tool_call_id, decision)
     return {
         "ok": ok,
         "tool_call_id": body.tool_call_id,
-        "approved": body.approved,
+        "decision": decision.decision,
+        "approved": decision.approved,
     }

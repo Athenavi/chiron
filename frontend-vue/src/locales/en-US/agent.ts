@@ -75,6 +75,8 @@ export default {
   tool_call: "Tool call",
   tool_name: "Tool name",
   tool_confirmation: "Tool confirmation",
+  edit_arguments: "Edit arguments",
+  approve_with_edited_arguments: "Run with edited arguments",
   tool_authorization: "Tool authorization",
   tool_write: "Tool write",
   checkboxes_write_to_the_config_above_hand_written_entries_are_kept_after_installing_a_plugin_its_tools_also_appear_here: "Checkboxes write to the config above (hand-written entries are kept); after installing a plugin, its tools also appear here.",

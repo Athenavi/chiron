@@ -183,14 +183,17 @@ def build_inherited_context(
 
     # 取**最近** limit 条；更旧的直接丢弃（近因优先）
     tail = candidates[-limit:]
-    if len(candidates) > len(tail):
+    # 条数上限同样会丢内容，因此也计入 `truncated` —— 该字段的语义是"因上限丢过东西"
+    # （docstring 一直这么写）。此前只有字符预算会置位，于是按 `truncated` 判断
+    # "继承是否完整"的调用方会**漏报**条数截断这一最常见的情形。
+    truncated = len(candidates) > len(tail)
+    if truncated:
         dropped["older_messages"] = len(candidates) - len(tail)
 
     # 从最新往旧攒，攒满字符预算就停 —— 这样超限时留下的是**近处**的内容
     picked: list[dict[str, Any]] = []
     hits = 0
     used_chars = 0
-    truncated = False
     for raw in reversed(tail):
         message = _normalize_inherited(raw)
         # 第 ① 层：复用入库路径的同一份脱敏清单

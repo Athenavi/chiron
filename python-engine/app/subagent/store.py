@@ -61,6 +61,12 @@ ON CONFLICT (id) DO NOTHING
 #: （f3a91c2d5e08）。把它并进 INSERT 会让未迁移的部署**所有**子 Agent 落库失败。
 RERUN_OF_SQL = "UPDATE subagent_runs SET rerun_of = $2 WHERE id = $1"
 
+#: S2：本次委派真正继承了父会话的多少条消息（审计计数，供前端显示
+#: "这个子 Agent 看到了父的多少上下文"）。与 `rerun_of` 同理**单独写** ——
+#: 未执行迁移（0004_subagent_inherited_messages）的库只会丢这个计数，
+#: 不会让普通派发的 INSERT 因未知列整条失败。
+INHERITED_MESSAGES_SQL = "UPDATE subagent_runs SET inherited_messages = $2 WHERE id = $1"
+
 #: 僵尸收口：只动超龄的 running 行（进程重启后它们的收尾代码再也不会执行）
 #:
 #: 参数类型必须是 int。此前写成 `($1 || ' hours')::interval`（`||` 是文本拼接，asyncpg
@@ -146,12 +152,17 @@ class SubagentRunStore:
         task: str = "",
         read_only: bool = False,
         write_paths: list[str] | None = None,
+        inherited_messages: int = 0,
     ) -> None:
         """写入 run 起始记录（状态 running）。失败只告警，不阻断子 Agent。
 
         ``rerun_of`` 记录**重跑血缘**（由哪个 run 重跑而来），见
         app/tools/subagent_rerun.py；它单独写一条 UPDATE，因此未执行迁移的老库
         只会丢血缘，不会影响普通派发的落库。
+
+        ``inherited_messages``（S2）是继承审计计数，**同样单独写一条 UPDATE**
+        （迁移 ``0004_subagent_inherited_messages``）。0 = 未开启继承 ⇒ 不写，
+        列保持 NULL —— 与"开启了但一条都没继承到"区分开。
         """
         if not self.available:
             return
@@ -190,6 +201,19 @@ class SubagentRunStore:
                     "subagent rerun_of 写入失败（run=%s, rerun_of=%s）：请执行迁移 "
                     "f3a91c2d5e08；本次运行的落库不受影响: %s",
                     run_id, rerun_of, str(exc)[:160],
+                )
+        if inherited_messages:
+            # S2：继承审计计数（0 = 未开启继承，不写 —— 保持 NULL 与"继承 0 条"可分）。
+            try:
+                await self._pool.execute(
+                    INHERITED_MESSAGES_SQL, run_id, int(inherited_messages)
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "subagent inherited_messages 写入失败（run=%s）：请执行迁移 "
+                    "0004_subagent_inherited_messages；本次运行的落库不受影响: %s",
+                    run_id,
+                    str(exc)[:160],
                 )
         self._mark_started(run_id)
 

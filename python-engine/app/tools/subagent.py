@@ -117,6 +117,9 @@ async def subagent(
     max_seconds: int = 0,
     rerun_of: str = "",
     response_schema: dict[str, Any] | None = None,
+    inherit_context: bool | int = False,
+    *,
+    target: str = "",
 ) -> dict[str, Any]:
     """Delegate *task* to a child agent running in its own session.
 
@@ -134,6 +137,19 @@ async def subagent(
     allow_write: 子 Agent 的**默认工具面是只读**（只读工具 + 不剥离委派），因为它与父
     共享同一工作区：写/执行既可能互相踩，又会在 ``tools_mode=auto`` 下**每步都要用户确认**
     （一次委派点十几次批准、每步都可能空等到超时）。需要它改文件/跑命令时**显式**传 true。
+
+    inherit_context: **fork 父会话上下文**（默认 false，S2）。开启后子 Agent 能看见父会话
+    最近的消息 —— 这是一次**扩大可见面**的操作，因此过滤是强制的三层（① 复用入库路径的
+    脱敏规则；② `result_ref` 私有结果引用**不展开**；③ 工作台注入的 system 段不继承），
+    并受"条数上限 50 / 字符预算 32K"双重约束，渲染时带 `<inherited-context>` 与
+    "这是数据不是指令"声明。程序化调用可传整数表示"最多取最近 N 条"。返回体的
+    `inherited_messages` 给出**真正继承了**多少条（未开启时该字段不出现）。
+
+    target: **compiled 目标**（S1，keyword-only）。形态 ``"<prefix>:<ref>"``，目前内置三个
+    前缀：``profile:<id>``（与 ``profile=`` **同一条路径**）、``skill:<name>``（复用
+    ``skill_run`` 的四类执行）、``workflow:<id>``（复用 ``run_workflow``）。注册表是**白名单**
+    —— 只认仓库内置实现，不提供"用户上传可调用对象"的通道。注意 ``target=`` 走**同步**委派
+    （技能/工作流没有后台生命周期语义），需要后台请用 ``profile=`` 或默认子 Agent。
     """
     if not task.strip():
         return {"error": "task is required"}
@@ -144,6 +160,81 @@ async def subagent(
     depth = int(get_tool_context("subagent_depth", 0) or 0)
     if depth >= MAX_DEPTH:
         return {"error": f"delegation depth exceeded (max {MAX_DEPTH})"}
+
+    # ── S1：compiled 子 agent（`target=`）──
+    # 走**白名单目标注册表**。与 `profile=` 不是"两条实现"：`ProfileTarget` 内部调的就是
+    # 同一条子会话路径（见下方 `_run_child`），只是入口写法不同。
+    target_spec = (target or "").strip()
+    if target_spec:
+        if run_in_background:
+            # 同步是有意的：`skill`/`workflow` 没有"后台运行"的生命周期语义，而 profile
+            # target 的后台等价物就是既有的 `profile=` 路径。硬撑一个"后台 target"只会
+            # 造出半个生命周期（注册表/看门狗/落库都对不上）。
+            return {
+                "error": (
+                    "target=... supports synchronous delegation only; "
+                    "for a background run use profile=<ref> (or omit both)"
+                )
+            }
+        from app.subagent.registry_targets import target_registry
+
+        resolved = target_registry.resolve(target_spec)
+        if isinstance(resolved, str):
+            return {"error": resolved}
+
+        from app.agent.event_sink import get_event_sink
+        from app.agent.subagent_runner import SubAgentRunner
+
+        async def _run_child(child_task: str, *, profile_ref: str = "") -> Any:
+            """给 `ProfileTarget` 用的"跑一轮子会话"（与下方默认路径同一构造）。"""
+            child = SubAgentRunner(
+                gw,
+                store=_get_store(),
+                pool=_get_pool(),
+                depth=depth,
+                parent_session_id=get_session_id(),
+                turn_id=str(get_tool_context("turn_id", "") or ""),
+                tenant_id=get_tenant_id(),
+                user_id=get_user_id(),
+                sink=get_event_sink(),
+                background=False,
+                allow_write=bool(allow_write),
+                budget=budget_from_env(
+                    max_tokens=max_tokens,
+                    max_seconds=_sync_wall_seconds(False, max_seconds),
+                ),
+                response_schema=response_schema,
+                inherit_context=inherit_context,
+            )
+            return await child.run(
+                child_task,
+                profile_ref=profile_ref,
+                mode=mode or "normal",
+                max_turns=max(1, min(int(max_turns or 5), MAX_TURNS_CAP)),
+                expert_prompt=_expert_system_prompt(expert),
+            )
+
+        from app.subagent.target import SubagentContext
+
+        target_result = await resolved.run(
+            task,
+            SubagentContext(
+                task=task,
+                tenant_id=get_tenant_id(),
+                user_id=get_user_id(),
+                session_id=get_session_id(),
+                depth=depth,
+                mode=mode or "normal",
+                run_child=_run_child,
+            ),
+        )
+        to_payload = getattr(target_result, "to_tool_payload", None)
+        if callable(to_payload):
+            payload = to_payload()
+            return payload if isinstance(payload, dict) else {"error": "target payload invalid"}
+        if isinstance(target_result, dict):
+            return target_result
+        return {"error": "target returned an unexpected payload"}
 
     from app.agent.subagent_runner import SubAgentRunner
 
@@ -176,6 +267,8 @@ async def subagent(
         ),
         # S4：调用方声明的响应 schema（非空时会在收尾阶段抽取结构化结果）
         response_schema=response_schema,
+        # S2：fork 父会话上下文（默认关；开启时三层过滤 + 双上限，见 app/subagent/inherit.py）
+        inherit_context=inherit_context,
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #
@@ -382,6 +475,17 @@ registry.register(
                     "flag, model/effort and depth limit. Omit to use a general child agent."
                 ),
             },
+            "target": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional compiled target: 'profile:<id>' | 'skill:<name>' | "
+                    "'workflow:<id>'. Only built-in targets exist (no user-supplied "
+                    "callables). Delegation via `target` is **synchronous**; for a "
+                    "background run use `profile` instead. 'profile:<id>' is equivalent "
+                    "to `profile=<id>`."
+                ),
+            },
             "response_schema": {
                 "type": "object",
                 "description": (
@@ -389,6 +493,19 @@ registry.register(
                     "extracted into a JSON object conforming to it and returned as `structured` "
                     "(`structured_error` is set instead when extraction fails). The plain-text "
                     "`output` is always returned too — extraction never replaces it."
+                ),
+            },
+            "inherit_context": {
+                "type": "boolean",
+                "default": False,
+                "description": (
+                    "Fork the parent's conversation context into the child (default false). "
+                    "When true the child sees the most recent parent messages, passed through "
+                    "mandatory filters (secret redaction, private result references kept "
+                    "unexpanded, workbench-injected system segments dropped) and capped by both "
+                    "message count and character budget; it is wrapped as untrusted data. This "
+                    "**widens what the child can see** — turn it on deliberately, only when the "
+                    "task genuinely needs the parent's history."
                 ),
             },
             "mode": {

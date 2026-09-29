@@ -267,6 +267,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "will lose agent file writes across replicas"
         )
 
+    # ── 1.7 部署级扩展（批 H）──
+    # **默认关**：`deploy_extensions_enabled=false` 时 `load_*_from_settings` 直接返回
+    # `None`，连后端都不触碰 —— 零行为变化。开启时从**部署目录**读 `extensions.json`：
+    # 工具登记进注册表，后端虚拟路由装配进默认后端（**重启生效**，不做热切换）。
+    # 任何失败都 fail-soft：记日志、绝不拖垮引擎启动（方案 03 §4 验收③）。
+    from app.backends.local import LocalWorkspaceBackend
+    from app.plugins.extensions import (
+        DeploymentExtensions,
+        load_deployment_extensions_from_settings,
+    )
+    from app.tools.registry import registry as tool_registry
+
+    deploy_extensions = DeploymentExtensions()
+    deploy_report = load_deployment_extensions_from_settings(
+        tool_registry, extensions=deploy_extensions
+    )
+    if deploy_report is not None:
+        if deploy_report.ok:
+            logger.info(
+                "deployment extensions loaded: tools=%s",
+                deploy_report.loaded_tools or "none",
+            )
+        else:
+            # 部分成功也要可见：`ok` 为假说明清单里有被拒条目（越界 / 非法引用），
+            # 静默会让"配了扩展却没生效"难以排查。
+            logger.warning(
+                "deployment extensions: %d entry(ies) rejected: %s",
+                len(deploy_report.errors),
+                "; ".join(deploy_report.errors),
+            )
+        routes = deploy_extensions.routes
+        if routes:
+            # 默认后端与 `get_backend()` 的回落保持一致：未选 filestore 时就是本地工作区。
+            base_backend = file_backend if file_backend is not None else LocalWorkspaceBackend()
+            set_default_backend(deploy_extensions.build_backend(base_backend))
+            logger.info("deployment backend routes mounted: %s", sorted(routes))
+
     # ── 2. Redis 连接池 ──
     # 依赖门禁：Redis 是生产必需依赖。未显式开启 DEGRADED_MODE 时，
     # 未配置与连接失败都直接拒绝启动(fail fast)——进程内降级会让多副本看到不同的
@@ -709,6 +746,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         version="3.0.0",
     )
     await _engine_registry.start()
+
+    # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
+    from app.hooks import warn_if_user_defined_enabled
+
+    warn_if_user_defined_enabled()
 
     logger.info("=" * 60)
     logger.info("Ready. HTTP port: %d", settings.http_port)
@@ -1597,12 +1639,31 @@ async def agent_submit(
 async def agent_approval(
     request: Request,
 ) -> Any:
-    """工具确认端点：解决 agent 循环中等待用户确认的工具调用（S 安全修复）。"""
+    """工具确认端点：解决 agent 循环中等待用户确认的工具调用（S 安全修复；C5 起支持 `edit`）。
+
+    三态：`decision` 为 `approve` / `reject` / `edit`（`edit` 必带 `arguments` —— 编辑后的
+    完整参数对象）。`decision` 缺省时由 `approved` 推导，**不破坏已发布前端**。
+    `edit` 的安全约束（重跑分级、级别升高不执行、票据重写、双份参数落审计）由
+    `runtime._await_approval` 实施；本端点只负责把决策如实投递。
+
+    注意：`app/api/agents.py::submit_agent_approval` 是同路径的另一份实现（后注册，
+    因此当前不生效），二者共用 `parse_approval_payload` 以保持语义一致。
+    """
     body = await request.json()
     session_id = body.get("session_id", "")
     tool_call_id = body.get("tool_call_id", "")
-    approved = bool(body.get("approved", False))
-    reason = body.get("reason", "")
+    # approved 传**原始值**（None = 未提供）：让 parse_approval_payload 能区分
+    # "显式 false" 与"没发这个字段"，后者才报错。
+    from app.agent.runtime import parse_approval_payload
+
+    decision = parse_approval_payload(
+        approved=body.get("approved"),
+        decision=body.get("decision", ""),
+        arguments=body.get("arguments", ""),
+        reason=body.get("reason", ""),
+    )
+    if isinstance(decision, str):
+        return {"ok": False, "error": decision}
     entry = _ACTIVE_RUNTIMES.get(session_id)
     if entry is None:
         # 本地没有该 run：查 Redis 归属，区分「run 在别的实例」与「没有活动 run」。
@@ -1649,8 +1710,8 @@ async def agent_approval(
             run_token,
         )
         return {"ok": False, "error": "stale run token"}
-    resolved = await runtime.submit_approval(tool_call_id, approved, reason)
-    return {"ok": resolved}
+    resolved = await runtime.submit_approval(tool_call_id, decision)
+    return {"ok": resolved, "decision": decision.decision}
 
 
 async def agent_answer(

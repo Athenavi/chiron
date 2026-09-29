@@ -41,6 +41,8 @@ export default {
   n_files_failed_to_move: "{n} 个文件移动失败",
   n_files_failed_to_rename: "{n} 个文件重命名失败",
   auto_reject_in_n_s: "{n}s 后自动拒绝",
+  approval_edit_invalid_json: "参数不是合法 JSON，无法提交",
+  approval_edit_must_be_json_object: "参数必须是 JSON 对象",
   status_query_failed: "⚠️ 状态查询失败",
   failed_error: "❌ 执行失败: {error}",
   submit_failed_error: "❌ 提交失败: {error}",

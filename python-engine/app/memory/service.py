@@ -19,6 +19,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from typing import Any
@@ -833,7 +834,11 @@ class MemoryService:
         进程内那份不是缓存，而是**降级路径** —— Redis 不可用或未配置时，
         当前实例至少仍能看见并裁决自己产生的冲突，而不是整块能力消失。
         """
-        cid = conflict_id or f"cfl_{int(time.time() * 1000)}_{len(self._conflicts)}"
+        # 冲突 ID 必须**跨副本**唯一：此前用 `f"cfl_{毫秒}_{len(self._conflicts)}"`，
+        # 而本副本计数与时钟在两个副本间都可能相同 —— 两个副本在同一毫秒各自产生第一条
+        # 冲突时会算出同一个 ID，落进 Redis 就是同一个 key（后写覆盖先写），
+        # 表现为「另一副本的冲突在列表里消失」。故后缀改用随机片段。
+        cid = conflict_id or f"cfl_{int(time.time() * 1000)}_{uuid.uuid4().hex[:8]}"
         record = {
             "conflict_id": cid,
             "slot": slot,

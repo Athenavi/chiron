@@ -94,8 +94,68 @@ describe('SubAgentPanel 的审批链路', () => {
       session_id: 's1',
       tool_call_id: 'tc_1',
       approved: true,
+      decision: 'approve',
     })
     expect(wrapper.find('.approval-done').text()).toContain('已允许')
+  })
+
+  it('C5：编辑参数后以 decision=edit 回传编辑后的参数', async () => {
+    const wrapper = mountPanel([
+      { type: 'subagent.started', run_id: 'rs_1', depth: 1 },
+      APPROVAL_EVENT,
+    ])
+    await flushPromises()
+    await wrapper.find('.run-approval').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.approval-link').trigger('click')
+    await flushPromises()
+    // 面板可能同时渲染多张卡片（历史回放 + 实时各一处），这里只看**第一张**
+    const card = wrapper.findAll('.approval-card')[0]
+    const textarea = card.find('.approval-edit-text')
+    expect(textarea.exists()).toBe(true)
+    await textarea.setValue('{"command":"ls -la"}')
+    await flushPromises()
+
+    // 编辑态下有两个 allow 按钮：前一个"允许"，后一个"按编辑后的参数执行"
+    const allows = card.findAll('.approval-btn.allow')
+    expect(allows.length).toBe(2)
+    await allows[1].trigger('click')
+    await flushPromises()
+
+    expect(api.submitApproval).toHaveBeenCalledTimes(1)
+    expect(api.submitApproval).toHaveBeenCalledWith({
+      session_id: 's1',
+      tool_call_id: 'tc_1',
+      approved: true,
+      decision: 'edit',
+      arguments: '{"command":"ls -la"}',
+    })
+  })
+
+  it('C5：非法 JSON 不提交，并给出原因', async () => {
+    const wrapper = mountPanel([
+      { type: 'subagent.started', run_id: 'rs_1', depth: 1 },
+      APPROVAL_EVENT,
+    ])
+    await flushPromises()
+    await wrapper.find('.run-approval').trigger('click')
+    await flushPromises()
+
+    await wrapper.find('.approval-link').trigger('click')
+    await flushPromises()
+    const card = wrapper.findAll('.approval-card')[0]
+    await card.find('.approval-edit-text').setValue('{ not json')
+    await flushPromises()
+
+    expect(card.find('.approval-edit-error').exists()).toBe(true)
+
+    const allows = card.findAll('.approval-btn.allow')
+    const submit = allows[allows.length - 1]
+    expect(submit.attributes('disabled')).toBeDefined()
+    await submit.trigger('click')
+    await flushPromises()
+    expect(api.submitApproval).not.toHaveBeenCalled()
   })
 
   it('引擎说"没生效"时明确报错，而不是把卡片默默撤掉', async () => {

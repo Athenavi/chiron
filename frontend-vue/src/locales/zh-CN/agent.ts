@@ -75,6 +75,8 @@ export default {
   tool_call: "工具调用",
   tool_name: "工具名称",
   tool_confirmation: "工具确认",
+  edit_arguments: "编辑参数",
+  approve_with_edited_arguments: "按编辑后的参数执行",
   tool_authorization: "工具授权",
   tool_write: "工具写入",
   checkboxes_write_to_the_config_above_hand_written_entries_are_kept_after_installing_a_plugin_its_tools_also_appear_here: "勾选会写入上方配置（手写条目保留）；安装插件后，它提供的工具也会出现在这里。",
