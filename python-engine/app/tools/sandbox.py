@@ -144,6 +144,34 @@ _ALLOWED_EXECUTABLES: set[str] = {
     "tee",
 }
 
+#: shell **内建**命令：没有独立可执行文件，因此不在 `_ALLOWED_EXECUTABLES` 里，
+#: 但持久 shell 的既有用法依赖它们（`cd` 切目录、`exit` 设置退出码、`export` 环境变量…）。
+#: S5-1 的教训：直接套用 shell_exec 的白名单会把这些能力一起砍掉（实测打挂 3 个既有测试）。
+_SHELL_BUILTINS: frozenset[str] = frozenset(
+    {
+        "cd",
+        "exit",
+        "export",
+        "unset",
+        "set",
+        "pwd",
+        "alias",
+        "unalias",
+        "source",
+        ".",
+        "true",
+        "false",
+        "test",
+        "read",
+        "shift",
+        "return",
+        "wait",
+    }
+)
+
+#: 命令**文本**准入用的白名单（`check_command_text` 专用）= 可执行白名单 ∪ shell 内建。
+_TEXT_ALLOWED: frozenset[str] = frozenset(_ALLOWED_EXECUTABLES) | _SHELL_BUILTINS
+
 
 def _normalize_exe(name: str) -> str:
     """规范化可执行文件名：取 basename，去平台后缀，小写。"""
@@ -193,7 +221,180 @@ def _has_escape(command: str) -> str | None:
     return None
 
 
+def _split_segments(command: str) -> list[str]:
+    """按**未加引号**的分隔符（`|` / `;` / `&&` / `||`）切分命令文本。
+
+    必须尊重引号：`python -c "import time; time.sleep(1)"` 里的 `;` 属于参数而不是
+    命令分隔符。朴素正则会误切，进而把 `time.sleep(1)"` 当成可执行名而拒绝 —— 这正是
+    S5-1 实现时踩到的坑（实测打挂 3 个既有 persistent_shell 测试）。
+    """
+    segments: list[str] = []
+    buf: list[str] = []
+    quote = ""
+    index = 0
+    while index < len(command):
+        char = command[index]
+        if quote:
+            buf.append(char)
+            if char == quote:
+                quote = ""
+            index += 1
+            continue
+        if char in ("'", '"'):
+            quote = char
+            buf.append(char)
+            index += 1
+            continue
+        if char in "|;":
+            segments.append("".join(buf))
+            buf = []
+            # `||` / `&&` 是双字符分隔符，一起跳过
+            index += 2 if (index + 1 < len(command) and command[index + 1] == char) else 1
+            continue
+        if char == "&" and index + 1 < len(command) and command[index + 1] == "&":
+            segments.append("".join(buf))
+            buf = []
+            index += 2
+            continue
+        buf.append(char)
+        index += 1
+    segments.append("".join(buf))
+    return segments
+
+
+def _iter_executables(command: str) -> list[str]:
+    """从命令文本中提取每个子命令的首个可执行名（按未加引号的分隔符分段）。
+
+    语法不完整的分段直接跳过 —— 语法错误由调用方的解析负责报错，这里只做准入判断。
+    """
+    names: list[str] = []
+    for segment in _split_segments(command):
+        segment = segment.strip()
+        if not segment:
+            continue
+        try:
+            parts = shlex.split(segment)
+        except ValueError:
+            continue
+        if parts:
+            names.append(_normalize_exe(parts[0]))
+    return names
+
+
+def check_command_text(command: str) -> str | None:
+    """命令**文本**准入检查，供"命令交给 shell 执行"的入口复用（persistent shell）。
+
+    与 :func:`run_in_sandbox` 的 `_parse_command` **同源**（逃逸拦截 + 可执行名白名单），
+    区别是**不把命令拆成 argv**：持久 shell 需要保留管道/重定向语义，因此按
+    `|` / `;` / `&&` / `||` 分段后逐段校验首个可执行名。
+
+    S5-1/S5-2：此前 persistent shell 只做逃逸拦截、**没有白名单校验**，于是
+    `persistent_shell("rm -rf ...")` 与 `shell_exec` 的判定不一致。
+
+    Returns:
+        拒绝原因；`None` 表示放行。
+    """
+    escape = _has_escape(command)
+    if escape:
+        return f"escape pattern blocked: {escape}"
+    executables = _iter_executables(command)
+    if not executables:
+        return "empty command"
+    for exe in executables:
+        if exe not in _TEXT_ALLOWED:
+            return f"executable not allowed: {exe}"
+    return None
+
+
+# ── 统一的资源限制（S5-2：三个执行入口共用，避免各写一套常量后漂移）──
+
+#: 子进程内存上限（RLIMIT_AS）
+MEM_LIMIT_BYTES = 512 * 1024 * 1024
+#: 子进程 CPU 时间上限（RLIMIT_CPU，秒）
+CPU_LIMIT_SECONDS = 30
+#: 子进程单文件写入上限（RLIMIT_FSIZE）
+FILE_LIMIT_BYTES = 10 * 1024 * 1024
+
+
+def apply_resource_limits() -> None:
+    """施加 POSIX 资源限制（fork 后立即调用）。
+
+    非 POSIX 平台（Windows 无 `resource` 模块）**静默跳过**，由父进程的 wall-clock
+    超时兜底 —— 与 `app/plugins/plugin_runner.py` 的既有降级语义一致。施加失败同样
+    只降级不阻断（记录到 stderr）。
+    """
+    try:
+        import resource  # POSIX only
+    except ImportError:
+        return
+    try:
+        resource.setrlimit(resource.RLIMIT_AS, (MEM_LIMIT_BYTES, MEM_LIMIT_BYTES))
+        resource.setrlimit(resource.RLIMIT_CPU, (CPU_LIMIT_SECONDS, CPU_LIMIT_SECONDS))
+        resource.setrlimit(resource.RLIMIT_FSIZE, (FILE_LIMIT_BYTES, FILE_LIMIT_BYTES))
+    except (ValueError, OSError) as exc:  # pragma: no cover - 平台相关
+        sys.stderr.write(f"[sandbox] setrlimit failed (relaxed): {exc}\n")
+
+
+def _rlimit_kwargs() -> dict[str, Any]:
+    """asyncio 子进程的 rlimit 参数（仅 POSIX 带 `preexec_fn`）。
+
+    说明：`preexec_fn` 在**多线程**进程中由官方标注为不安全（fork 后只应做
+    async-signal-safe 的事）。这里只调用 `setrlimit` 系统调用，且仓库既有做法一致
+    （`app/plugins/plugin_runner.py:41-54`）；Windows 无 resource 模块，返回空。
+    """
+    if sys.platform == "win32":
+        return {}
+    return {"preexec_fn": apply_resource_limits}
+
+
 async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
+    """在沙箱内执行命令，并**审计每一次出口**（S5-3）。
+
+    审计刻意放在这一层而不是实现内部：`_run_in_sandbox_impl` 有 5 个提前 return
+    （逃逸 / 白名单 / git 限制 / Windows 元字符 / 超时），逐个插桩必然漏；包一层则
+    **所有出口都被记一次**，且"被拦下"与"执行失败"能区分开。
+    """
+    import time
+
+    from app.tools.exec_audit import (
+        OUTCOME_BLOCKED,
+        OUTCOME_ERROR,
+        OUTCOME_OK,
+        OUTCOME_TIMEOUT,
+        record_execution,
+    )
+
+    started = time.monotonic()
+    result = await _run_in_sandbox_impl(command, timeout)
+
+    blocked = bool(result.get("reason")) or str(result.get("error", "")).startswith(
+        "command blocked"
+    )
+    if result.get("error") == "timeout":
+        outcome = OUTCOME_TIMEOUT
+    elif blocked:
+        outcome = OUTCOME_BLOCKED
+    elif "error" in result:
+        outcome = OUTCOME_ERROR
+    elif result.get("exit_code") == 0:
+        outcome = OUTCOME_OK
+    else:
+        outcome = OUTCOME_ERROR
+
+    raw_exit = result.get("exit_code")
+    raw_reason = result.get("reason") or result.get("error")
+    record_execution(
+        tool="shell_exec",
+        command=command,
+        outcome=outcome,
+        exit_code=raw_exit if isinstance(raw_exit, int) else None,
+        reason=str(raw_reason)[:200] if raw_reason else None,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
+    return result
+
+
+async def _run_in_sandbox_impl(command: str, timeout: int = 120) -> dict[str, Any]:
     """在沙箱 workspace 内执行命令（direct exec，不经过 shell），
     cwd 锁定 + 环境清理 + 逃逸拦截 + 命令白名单。
 
@@ -235,6 +436,7 @@ async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
                 return {"error": f"command blocked: shell meta-character in argument: {part!r}"}
         prog, rest = os.environ.get("COMSPEC", "cmd.exe"), ["/d", "/s", "/c", *args]
 
+    # S5-2：统一资源限制（POSIX 由 fork 后的子进程施加；Windows 无 resource，靠超时兜底）
     proc = await asyncio.create_subprocess_exec(
         prog,
         *rest,
@@ -242,6 +444,7 @@ async def run_in_sandbox(command: str, timeout: int = 120) -> dict[str, Any]:
         env=sandboxed_env(),
         stdout=asyncio.subprocess.PIPE,
         stderr=asyncio.subprocess.PIPE,
+        **_rlimit_kwargs(),
     )
     try:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)

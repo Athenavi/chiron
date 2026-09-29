@@ -21,7 +21,12 @@ from typing import Any
 
 from app.tools.context import get_session_id
 from app.tools.registry import registry
-from app.tools.sandbox import sandboxed_env, workspace_dir
+from app.tools.sandbox import (
+    _rlimit_kwargs,
+    check_command_text,
+    sandboxed_env,
+    workspace_dir,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +73,9 @@ class PersistentTerminal:
             # S 安全修复：清理宿主 env(API key/JWT_SECRET/internal token 等)，
             # 仅保留 PATH/HOME 等基础变量并重定向到沙箱，防止模型 `env` 外带密钥。
             env=sandboxed_env(),
+            # S5-1：长驻 shell 此前**没有资源限制**（一次性 shell_exec 走 run_in_sandbox
+            # 现在也有了）。POSIX 下施加 RLIMIT；Windows 无 resource，靠调用方超时兜底。
+            **_rlimit_kwargs(),
         )
         # 首命令 cd 到沙箱 workspace，保证状态持久在隔离目录内（S 安全修复）
         # stdin 显式用了 PIPE，这里只是把类型收窄（Popen 的返回类型是 StreamWriter | None）。
@@ -88,14 +96,13 @@ class PersistentTerminal:
     ) -> dict[str, Any]:
         proc = await self._get_proc(key)
 
-        # 逃逸拦截：与 shell_exec 同一套规则（绝对路径/父目录/云元数据），
-        # 否则持久 shell 可直接 cat /etc/passwd 等（S 安全修复）
-        from app.tools.sandbox import _has_escape
-
-        esc = _has_escape(command)
-        if esc:
+        # 准入检查：逃逸拦截 + **可执行名白名单**，与 shell_exec 同一套规则。
+        # S5-1：此前只做逃逸拦截（没有白名单），于是 `persistent_shell("rm -rf x")`
+        # 与 `shell_exec` 的判定不一致；且本进程**长驻**，缺口比一次性 shell 更危险。
+        reason = check_command_text(command)
+        if reason:
             return {
-                "output": f"[blocked: {esc}] command not allowed in sandbox",
+                "output": f"[blocked: {reason}] command not allowed in sandbox",
                 "exit_code": -1,
                 "persistent": True,
             }
@@ -214,7 +221,42 @@ async def persistent_shell(
     if not command.strip():
         return {"error": "command is required"}
     key = get_session_id() or "default"
-    return await _terminal.execute(key, command, timeout=timeout)
+
+    # S5-3：审计 —— 在**单一出口**记录，覆盖"被拦下 / 超时 / 成功 / 失败"四类结果
+    import time
+
+    from app.tools.exec_audit import (
+        OUTCOME_BLOCKED,
+        OUTCOME_ERROR,
+        OUTCOME_OK,
+        OUTCOME_TIMEOUT,
+        record_execution,
+    )
+
+    started = time.monotonic()
+    result = await _terminal.execute(key, command, timeout=timeout)
+    output = str(result.get("output", ""))
+    if output.startswith("[blocked"):
+        outcome = OUTCOME_BLOCKED
+    elif "timed out" in output:
+        outcome = OUTCOME_TIMEOUT
+    elif result.get("error"):
+        outcome = OUTCOME_ERROR
+    elif result.get("exit_code") == 0:
+        outcome = OUTCOME_OK
+    else:
+        outcome = OUTCOME_ERROR
+
+    raw_exit = result.get("exit_code")
+    record_execution(
+        tool="persistent_shell",
+        command=command,
+        outcome=outcome,
+        exit_code=raw_exit if isinstance(raw_exit, int) else None,
+        reason=output[:200] if outcome == OUTCOME_BLOCKED else None,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
+    return result
 
 
 registry.register(

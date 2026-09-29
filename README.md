@@ -102,7 +102,9 @@ python-engine/     引擎实现（app/agent、queue、api、tools、workflow、m
 frontend-vue/      Vue 3 前端（nginx 反代 /v1、/events、/ws、/submit、/cancel、/media 到网关）
 migrations/        Alembic 迁移；ORM 模型由 configs/orm/V1/models.yaml 经
                    scripts/generate_orm_models.py 生成到 shared/models/
-market/skills/     内置技能市场内容（SKILL.md 等，运行时读取）
+market/skills/     内置技能参考资产（SKILL.md 目录）。**当前未被运行时读取** —— 引擎的技能
+                   载体是 `{name}.skill.json`（app/skill/store.py），两者格式不兼容；
+                   激活这批资产（SKILL.md 兼容层）见 vendor/方案02.md 的批 D3
 ```
 
 ## 数据库迁移

@@ -69,6 +69,41 @@ async def skill_list() -> dict[str, Any]:
     return {"output": "\n".join(lines), "count": len(skills), "skills": payload}
 
 
+#: 远程技能定义的体积上限（1MB）。install 与 discover **共用**同一入口，避免策略漂移。
+_SKILL_FETCH_MAX_BYTES = 1_048_576
+
+
+async def _fetch_skill_json(url: str) -> Any:
+    """从 URL 取回技能 JSON —— **install 与 discover 的唯一取回入口**。
+
+    A1 修复：此前只有 `skill_install` 做了 SSRF 校验与体积上限，`skill_discover`
+    却直接 `httpx.get(url)` —— 同一个参数两种判定，等于留了一条无校验的出网通道
+    （`skill_discover("http://169.254.169.254/latest/meta-data/")` 可打云元数据）。
+    收敛到同一入口后，两处的策略不可能再漂移。
+
+    局限（已知）：体积上限在**完整读取之后**判断（与既有 install 实现一致）。要真正
+    限制下行流量需改流式读取，属后续优化，不在本批范围。
+
+    Raises:
+        ValueError: SSRF 校验不通过（由 `assert_safe_url` 抛出）。
+        RuntimeError: 响应超过体积上限。
+    """
+    from app.config import settings
+    from app.tools.ssrf import assert_safe_url
+
+    assert_safe_url(url)
+
+    import httpx
+
+    async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
+        resp = await client.get(url)
+        resp.raise_for_status()
+        if len(resp.content) > _SKILL_FETCH_MAX_BYTES:
+            msg = f"remote skill payload too large (max {_SKILL_FETCH_MAX_BYTES} bytes)"
+            raise RuntimeError(msg)
+        return resp.json()
+
+
 async def skill_install(
     url: str = "", file: str = "", inline: str = ""
 ) -> dict[str, Any]:
@@ -88,19 +123,11 @@ async def skill_install(
                 return {"error": "skill file too large (max 1MB)"}
             data = json.loads(safe_file.read_text(encoding="utf-8"))
         else:
-            from app.tools.ssrf import assert_safe_url
-
-            assert_safe_url(url)  # S4: SSRF 防护
-            import httpx
-
-            from app.config import settings
-
-            async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                if len(resp.content) > 1_048_576:
-                    return {"error": "skill definition too large (max 1MB)"}
-                data = resp.json()
+            # A1：SSRF 校验与体积上限收敛到 _fetch_skill_json（与 skill_discover 同源）
+            payload = await _fetch_skill_json(url)
+            if not isinstance(payload, dict):
+                return {"error": "remote skill definition must be a JSON object"}
+            data = payload
     except ValueError as e:
         return {"error": str(e)}
     except Exception as e:
@@ -171,24 +198,22 @@ async def skill_discover(url: str = "") -> dict[str, Any]:
 
     if url:
         try:
-            import httpx
-
-            from app.config import settings
-
-            async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
-                resp = await client.get(url)
-                resp.raise_for_status()
-                items = resp.json()
-                installed_names = {s.name for s in _get_store().list()}
-                for item in items:
-                    name = item.get("name", "")
-                    results.append(
-                        {
-                            "name": name,
-                            "description": item.get("description", ""),
-                            "version": item.get("version", ""),
-                            "author": item.get("author", ""),
-                            "source": item.get("source", url),
+            # A1：与 skill_install 共用同一取回入口（SSRF 校验 + 体积上限）。
+            # 此前这里是裸 httpx.get，是本项要修的缺陷。
+            payload = await _fetch_skill_json(url)
+            if not isinstance(payload, list):
+                return {"error": "remote skill catalog must be a JSON array"}
+            items = payload
+            installed_names = {s.name for s in _get_store().list()}
+            for item in items:
+                name = item.get("name", "")
+                results.append(
+                    {
+                        "name": name,
+                        "description": item.get("description", ""),
+                        "version": item.get("version", ""),
+                        "author": item.get("author", ""),
+                        "source": item.get("source", url),
                             "installed": name in installed_names,
                         }
                     )

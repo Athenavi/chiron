@@ -35,40 +35,16 @@ import os
 import sys
 from typing import Any
 
-try:
-    import resource as _resource  # POSIX only
-
-    _HAS_RESOURCE = True
-except ImportError:
-    _HAS_RESOURCE = False
-
 from app.tools.code_guard import check_static as _check_static
 from app.tools.code_guard import safe_builtins as _safe_builtins
 
+# S5-2：资源限制的常量与施加逻辑统一收敛到 app.tools.sandbox —— 此前 shell_exec /
+# run_code / persistent_shell 三处各写一套（值相同但会悄悄漂移）。这里直接复用。
+from app.tools.sandbox import apply_resource_limits as _apply_rlimit
+
 logger = logging.getLogger(__name__)
 
-# 资源限制（POSIX；Windows 下子进程不应用 rlimit，依赖主进程 wall-clock SIGKILL）
-_MEM_LIMIT_BYTES = 512 * 1024 * 1024  # 512MB
-_CPU_LIMIT_SECONDS = 30
-_FILE_LIMIT_BYTES = 10 * 1024 * 1024  # 10MB
 MAX_LOG_CHARS = 20_000
-
-
-def _apply_rlimit() -> None:
-    """在 fork 后立即应用 POSIX 资源限制。失败时降级（不阻断启动）。"""
-    if not _HAS_RESOURCE:
-        return
-    try:
-        _resource.setrlimit(_resource.RLIMIT_AS, (_MEM_LIMIT_BYTES, _MEM_LIMIT_BYTES))
-        _resource.setrlimit(
-            _resource.RLIMIT_CPU, (_CPU_LIMIT_SECONDS, _CPU_LIMIT_SECONDS)
-        )
-        _resource.setrlimit(
-            _resource.RLIMIT_FSIZE, (_FILE_LIMIT_BYTES, _FILE_LIMIT_BYTES)
-        )
-    except (ValueError, OSError) as e:
-        # 沙箱降级：仅记录到 stderr（不写 stdout，避免污染协议）
-        sys.stderr.write(f"[sandbox] setrlimit failed (relaxed): {e}\n")
 
 
 class ToolCallError(Exception):

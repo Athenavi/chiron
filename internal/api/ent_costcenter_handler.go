@@ -274,7 +274,11 @@ func (s *pgEntCostStore) GroupCost(ctx context.Context, groupID string, from, to
 	}
 
 	rows, err := db.GlobalDBManager.Query(ctx,
-		`SELECT id, user_id, session_id, input_tokens, output_tokens, cost_cents, created_at
+		// A5：`input_tokens` / `output_tokens` 现在可能为 NULL（企业归集记录只带金额，
+		// 不带 token 明细）。列可空是刻意的 —— NULL 表示"这条记录不含 token 信息"，
+		// 与"真的用了 0 token"区分开。读侧 COALESCE 成 0 以保持 API 契约不变。
+		`SELECT id, user_id, session_id, COALESCE(input_tokens,0), COALESCE(output_tokens,0),
+		        cost_cents, created_at
 		 FROM billing_records WHERE group_id = $1 AND created_at >= $2 AND created_at < $3
 		 ORDER BY created_at DESC LIMIT 500`, groupID, from, to)
 	if err != nil {
