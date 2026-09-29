@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"fmt"
 	"os"
 
@@ -23,10 +24,17 @@ func init() {
 	rootCmd.AddCommand(instanceCmd)
 	rootCmd.AddCommand(dbCmd)
 	rootCmd.AddCommand(logsCmd)
+	rootCmd.AddCommand(runCmd)
 }
 
 func main() {
 	if err := rootCmd.Execute(); err != nil {
+		// run 子命令用具体退出码表达"为何结束"（超时/被拦下/预算越界），
+		// 其它命令的错误按惯例退出 1。
+		var ec *exitCodeError
+		if errors.As(err, &ec) {
+			os.Exit(ec.code)
+		}
 		fmt.Println(err)
 		os.Exit(1)
 	}
