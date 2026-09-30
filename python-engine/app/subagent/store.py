@@ -83,7 +83,8 @@ UPDATE subagent_runs
        output_bytes = COALESCE($3, output_bytes),
        validator_mode = COALESCE($4, validator_mode),
        validator_outcome = COALESCE($5, validator_outcome),
-       validator_attempt = COALESCE($6, validator_attempt)
+       validator_attempt = COALESCE($6, validator_attempt),
+       error_code = COALESCE($7, error_code)
  WHERE id = $1
 """
 
@@ -346,11 +347,14 @@ class SubagentRunStore:
         validator_mode: str | None = None,
         validator_outcome: str | None = None,
         validator_attempt: int | None = None,
+        error_code: str | None = None,
     ) -> None:
-        """写生命周期遥测（A5）。传 ``None`` = 保持原值，可只更新其中几项。
+        """写生命周期遥测（A5）+ 结构化错误码（R3）。传 ``None`` = 保持原值。
 
         **全部是 content-free 的**：不含 prompt / 推理 / 工具输出 / 路径，因此可安全转发进诊断
         链路。失败只降级（与 `finish_run` 同语义 —— 遥测缺失不该影响对话行为）。
+
+        `error_code` 与 `retryable` **同源**（都来自 `app/subagent/outcome.py`），不在这里另行判断。
         """
         if not self.available:
             return
@@ -363,6 +367,7 @@ class SubagentRunStore:
                 validator_mode,
                 validator_outcome,
                 None if validator_attempt is None else int(validator_attempt),
+                error_code,
             )
         except Exception as exc:  # noqa: BLE001
             self._degrade("mark_lifecycle", exc)

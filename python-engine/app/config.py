@@ -263,6 +263,13 @@ class Settings(BaseSettings):
     #: 这不是"没配就全走服务"，后者是个危险的默认。
     sandbox_service_tenants: str = ""
 
+    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §4.5 的 R1）──
+    #
+    # 默认开：委派的价值就在**可信度** —— 父模型看到的 `summary` 是子 Agent 的自述，而收据是
+    # **宿主观测**（工作区差分 + 执行计数），追加在摘要之后。
+    # 关掉它会退回"只信自述"的旧行为（成本：执行前后各拍一次**有界**工作区快照）。
+    subagent_host_receipts: bool = True
+
     # ── 直连引擎的 Bearer JWT 旁路（安全开关）──
     # false（默认）：引擎拒绝 Bearer 直连，只接受带 X-Internal-Token 的网关代理请求。
     # true：允许持任意合法 JWT 的调用方绕过网关直连引擎并自报 tenant_id ——
