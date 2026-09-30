@@ -250,6 +250,19 @@ class Settings(BaseSettings):
     # 网关透传的 ?tenant_id= / ?user_id= query 身份（防直连绕过）
     internal_token: str = ""
 
+    # ── 独立 sandbox 服务（S5-(e)，见 vendor/设计-独立sandbox服务.md）──
+    #
+    # `local`（默认）：执行走引擎进程内的基线（`app/tools/sandbox.py`）—— 行为与引入这个机制
+    # 之前**逐字一致**。
+    # `service`：执行转发给独立服务（`app/backends/remote_exec.py`）。**服务不可用时失败而不是
+    # 回退本地** —— 静默回退会让"隔离已生效"这个判断失真（方案 04 §4）。
+    sandbox_backend: str = "local"
+    #: `service` 时的服务地址（仅内网可达）。空 = 即便 `backend=service` 也不分流。
+    sandbox_service_url: str = ""
+    #: **租户白名单**（逗号分隔）。只有名单内的租户走服务；**空名单 = 谁都不走** ——
+    #: 这不是"没配就全走服务"，后者是个危险的默认。
+    sandbox_service_tenants: str = ""
+
     # ── 直连引擎的 Bearer JWT 旁路（安全开关）──
     # false（默认）：引擎拒绝 Bearer 直连，只接受带 X-Internal-Token 的网关代理请求。
     # true：允许持任意合法 JWT 的调用方绕过网关直连引擎并自报 tenant_id ——
