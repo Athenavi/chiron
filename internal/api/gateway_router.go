@@ -593,6 +593,9 @@ func registerAgentRoutes(
 	mux.Handle("POST /v1/agent/approval", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitApproval))))
 	// 结构化提问的回答：与审批同源（引擎 ask_user 阻塞等待用户输入），此前漏注册导致 404
 	mux.Handle("POST /v1/agent/answer", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitAnswer))))
+	// 真取消（ACP `session/cancel` 的落点）：与 approval / answer 同一套校验 —— 三者都是
+	// "从外部作用于正在运行的 agent 循环"的通道，少了身份校验就成了骚扰与成本攻击的入口。
+	mux.Handle("POST /v1/agent/interrupt", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitInterrupt))))
 
 	// submitHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册
 	submitHandlerFunc := func(w http.ResponseWriter, r *http.Request) {

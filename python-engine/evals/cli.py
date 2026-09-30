@@ -32,27 +32,49 @@ SUITES_DIR = Path(__file__).resolve().parent / "suites"
 
 
 def _load_tasks(suite: str, tier: str | None) -> list[Task]:
-    path = SUITES_DIR / f"{suite}.json"
-    if not path.is_file():
-        msg = f"suite not found: {path}"
-        raise SystemExit(msg)
-    tasks = load_suite(path)
+    """加载套件任务（`--suite` 支持逗号分隔多个固件）。
+
+    `--suite full` 会**自动并入 smoke**：tier 的语义是"这条任务属于哪一级门禁"，而不是
+    "它写在哪个文件里"。`smoke.json` 里有大量任务标着 `["smoke","full"]`，跑 full 集时若漏掉
+    它们，nightly 门禁就比 PR 门禁还窄 —— 越靠后的门禁覆盖越少，这是危险的荒谬。
+    """
+    names = [s.strip() for s in str(suite).split(",") if s.strip()]
+    if "full" in names and "smoke" not in names:
+        names.insert(0, "smoke")
+
+    tasks: list[Task] = []
+    seen: set[str] = set()
+    for name in names:
+        path = SUITES_DIR / f"{name}.json"
+        if not path.is_file():
+            raise SystemExit(f"suite not found: {path}")
+        for task in load_suite(path):
+            # 跨文件查重：`load_suite` 只保证**单文件内**唯一
+            if task.id in seen:
+                raise SystemExit(f"duplicate task id across suites: {task.id!r}")
+            seen.add(task.id)
+            tasks.append(task)
     return select_tasks(tasks, tier) if tier else tasks
 
 
 def _load_scripted(suite: str) -> dict[str, dict[str, Any]]:
-    """加载替身脚本（`suites/<suite>.scripted.json`）。
+    """加载替身脚本（`suites/<suite>.scripted.json`；多个套件按顺序合并）。
 
     脚本声明"每条任务发什么事件、落什么文件" —— 它验证的是 **runner / 断言 / 报告链路**，
     而不是 agent 的能力（后者必须用真实模型跑）。README 里对此有明确说明。
     """
-    path = SUITES_DIR / f"{suite}.scripted.json"
-    if not path.is_file():
-        return {}
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    # 只取**值为对象**的键：脚本文件里允许放 `_comment` 之类的元数据（字符串），
-    # 它们不是任务脚本。用类型判断而不是键名前缀，避免元数据改个名就炸。
-    return {str(k): dict(v) for k, v in payload.items() if isinstance(v, dict)}
+    scripts: dict[str, dict[str, Any]] = {}
+    for name in [s.strip() for s in str(suite).split(",") if s.strip()]:
+        path = SUITES_DIR / f"{name}.scripted.json"
+        if not path.is_file():
+            continue
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        # 只取**值为对象**的键：脚本文件里允许放 `_comment` 之类的元数据（字符串），
+        # 它们不是任务脚本。用类型判断而不是键名前缀，避免元数据改个名就炸。
+        scripts.update(
+            {str(k): dict(v) for k, v in payload.items() if isinstance(v, dict)}
+        )
+    return scripts
 
 
 def _build_submit(args: argparse.Namespace) -> SubmitFn:

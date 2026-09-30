@@ -41,6 +41,15 @@ def get_tenant_id() -> str:
     return str(get_tool_context("tenant_id", ""))
 
 
+def get_project() -> str:
+    """当前工作台选中的**项目**（C3）。
+
+    记忆（L2 条目）按 `tenant + user + project` 隔离 —— **空串 = 未分组**（缺省）。
+    由 runtime 在 run 开始时从 `task.workbench_context["project"]` 写入，工具侧只读。
+    """
+    return str(get_tool_context("project", ""))
+
+
 def get_gateway() -> Any:
     """当前运行的 GatewayRouter 引用（子 agent 委派需要）。"""
     return get_tool_context("gateway", None)

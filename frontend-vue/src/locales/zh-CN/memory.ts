@@ -25,5 +25,8 @@ export default {
   use_this_type_of_memory_in_the_conversation: "在对话中使用这类记忆",
   no_memory_in_this_category_yet: "暂无该分类记忆",
   long_term_memory: "长期记忆",
+  project: "项目",
+  project_placeholder: "项目名（留空 = 未分组）",
+  project_hint: "记忆按项目隔离：不同项目的记忆互不可见",
   what_is_this_memory_about_e_g_stack_tech_preference: "这条记忆是关于什么的？如 stack / 技术选型偏好",
 }

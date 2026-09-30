@@ -33,6 +33,7 @@ import {
 } from '@ant-design/icons-vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import ConflictCard from '../components/memory/ConflictCard.vue'
+import { currentProject, setProject } from '../composables/useProject'
 import {
   listMemory,
   upsertMemory,
@@ -223,6 +224,12 @@ async function pollOrganize() {
   organizeTimer = setInterval(async () => {
     try {
       const st = await getOrganizeStatus()
+      if (!st) {
+        // 空响应（接口异常 / 降级）不能写进 `organize`：模板按 `organize.running` 渲染，
+        // undefined 会直接把整页炸掉。停在"未知"即可，下次操作还会再查。
+        stopPolling()
+        return
+      }
       organize.value = st
       if (!st.running) {
         stopPolling()
@@ -262,6 +269,18 @@ async function runOrganize() {
   }
 }
 
+// ── 项目（C3）──
+// 记忆按 `tenant + user + project` 隔离，**空 = 未分组**。切换项目必须**重新加载**：
+// 否则界面上留着上一个项目的条目，用户会以为它们还在（"隔离"看起来生效而其实串了）。
+const project = currentProject
+
+/** ant 的 `@change` 给的是原生 Event（这里用的是 `:value` + `@change` 的原生语义） */
+function onProjectChange(e: Event) {
+  setProject((e.target as HTMLInputElement).value)
+  void loadProfile()
+  void loadConflicts()
+}
+
 // ── 加载 ──
 async function loadProfile() {
   loading.value = true
@@ -271,7 +290,7 @@ async function loadProfile() {
     entries.value = data.entries || []
     counts.value = data.counts || {}
     total.value = data.total
-    organize.value = data.organize
+    organize.value = data.organize || organize.value
   } catch (e) {
     error.value = true
     if (errorStatus(e) === 503) {
@@ -351,6 +370,15 @@ function pct(n: number): string {
         <span class="subtitle">{{ $t('knowledge.cross_session_retention_semantic_retrieval_auto_organization') }}</span>
       </div>
       <Space>
+        <Input
+          :value="project"
+          :placeholder="$t('memory.project_placeholder')"
+          :title="$t('memory.project_hint')"
+          allow-clear
+          style="width: 200px"
+          data-test="project-input"
+          @change="onProjectChange"
+        />
         <Switch
           :checked="includeArchived"
           :checked-children="$t('common.include_archived')"

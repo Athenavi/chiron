@@ -622,6 +622,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
         set_memory_service(mem_svc)
         bind_prompt_memory(mem_svc)
+
+        # N1（评审 03 §1.2）：把"空闲会话结束"接到记忆的会话级收尾上。
+        #
+        # 此前 `start_periodic_cleanup` **从未被调用** —— 空闲会话既不清理也不通知，于是
+        # `on_session_end`（会话级 L3 rollup 入队 + 丢 L1）只在"异常/中断退出"那条路径上
+        # 被触发过，**会话级 rollup 永不入队**。
+        await session_meta_store.start_periodic_cleanup(on_expired=mem_svc.on_session_end)
         logger.info(
             "Memory service initialized (L2 entries + profile card + L3 summaries)"
         )
@@ -817,6 +824,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning("run reconciler shutdown failed: %s", e)
+
+    # N1：停 L1 的周期清理任务（它现在会回调记忆的会话级收尾 —— 停机时不该留悬着的 task）
+    try:
+        from app.memory.service import get_memory_service
+
+        _mem_svc = get_memory_service()
+        if _mem_svc is not None:
+            await _mem_svc.stop_periodic_session_cleanup()
+    except Exception as e:  # noqa: BLE001
+        logger.warning("L1 session cleanup shutdown failed: %s", e)
 
     # 停止队列 worker：先优雅排空，再取消后台协程。
     # 不能只 cancel：QueueWorker.start() 内部捕获 CancelledError 后正常返回，
@@ -1137,6 +1154,7 @@ def _setup_routes(app: FastAPI) -> None:
     app.post("/v1/agent/run")(agent_run)
     app.post("/v1/agent/submit")(agent_submit)
     app.post("/v1/agent/approval")(agent_approval)
+    app.post("/v1/agent/interrupt")(agent_interrupt)
     app.post("/v1/agent/answer")(agent_answer)
 
     # ── 知识库（模块级路由函数） ──
@@ -1772,6 +1790,68 @@ async def agent_approval(
         return {"ok": False, "error": "stale run token"}
     resolved = await runtime.submit_approval(tool_call_id, decision)
     return {"ok": resolved, "decision": decision.decision}
+
+
+async def agent_interrupt(
+    request: Request,
+) -> Any:
+    """中断正在跑的 run（**真取消**）—— ACP `session/cancel` 的引擎侧落点。
+
+    **与"客户端停止读 SSE"的区别**：那样引擎仍在跑、仍在烧 token、仍可能写文件。这里置的是一个
+    引擎自己会在**轮次边界**检查的信号（`app/agent/interrupt.py`），所以 run 是真的停下来。
+
+    校验与 approval / answer **同一套**：会话归属 + 调用者身份 + run token。三者都是"外部输入
+    注入到正在运行的 agent 循环"的通道 —— 少任何一条，别人就能反复打断你的 run（既是骚扰，
+    也是成本攻击：一直取消让你永远跑不完）。
+
+    与它们唯一的语义差别：**本副本没有该 run 时也要置信号**（run 可能在其他副本，信号落 Redis
+    由那边的循环读到），而 approval 没有本地 run 就只能报错 —— 它必须投递到具体对象。
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"ok": False, "error": "session_id is required"}
+
+    caller = request.headers.get("x-user-id", "") or body.get("user_id", "")
+    given_token = body.get("run_token") or request.headers.get("x-run-token", "")
+
+    entry = _ACTIVE_RUNTIMES.get(session_id)
+    if entry is not None:
+        _, owner_uid, run_token = entry
+        if owner_uid and caller and owner_uid != caller:
+            logger.warning(
+                "interrupt rejected: caller %s != owner %s (session=%s)",
+                caller,
+                owner_uid,
+                session_id,
+            )
+            return {"ok": False, "error": "not session owner"}
+        if given_token and given_token != run_token:
+            return {"ok": False, "error": "stale run token"}
+    else:
+        # 本地没有该 run ⇒ 它可能在别的副本。归属信息在 Redis（run_registry）。
+        from app.run_registry import owner_of
+
+        owner = await owner_of(_redis, session_id)
+        if owner is None:
+            return {"ok": False, "error": "no active agent for this session"}
+        owner_uid = str(owner.get("owner_uid") or "")
+        if owner_uid and caller and owner_uid != caller:
+            return {"ok": False, "error": "not session owner"}
+        expected = str(owner.get("run_token") or "")
+        if given_token and expected and given_token != expected:
+            return {"ok": False, "error": "stale run token"}
+
+    from app.agent.interrupt import request_interrupt
+
+    redis_ok = await request_interrupt(session_id, redis=_redis)
+    logger.info(
+        "Interrupt requested (session=%s caller=%s redis=%s)",
+        session_id,
+        caller,
+        redis_ok,
+    )
+    return {"ok": True, "session_id": session_id, "redis": redis_ok}
 
 
 async def agent_answer(

@@ -79,6 +79,12 @@ def _check(assertion: Assertion, obs: Observation) -> Check:
         ok = content is not None and assertion.value in content
         return Check(kind, ok, f"{assertion.path} 应含 {assertion.value!r}")
 
+    if kind == "file_not_contains":
+        # 与 `file_contains` 对称：用于"改完了、旧值不该还在"这类断言（E1 的 full 集需要）。
+        # 文件**不存在**也算不含 —— 这里问的是"有没有这个内容"，不是"文件在不在"。
+        content = obs.files.get(assertion.path) or ""
+        return Check(kind, assertion.value not in content, f"{assertion.path} 不应含 {assertion.value!r}")
+
     if kind == "file_equals":
         content = obs.files.get(assertion.path)
         return Check(kind, content == assertion.value, f"{assertion.path} 应等于期望内容")

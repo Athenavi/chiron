@@ -72,6 +72,43 @@ function mountView() {
   return mount(MemoryView, { global: { plugins: [router] } })
 }
 
+describe('项目选择器（C3）', () => {
+  beforeEach(() => {
+    vi.clearAllMocks()
+    localStorage.clear()
+    vi.mocked(memoryApi.listMemory).mockResolvedValue({
+      entries: [],
+      counts: { identity: 0, preference: 0, decision: 0, fact: 0 },
+      total: 0,
+      slots: [],
+      organize: { running: false, started_at: null, finished_at: null, result: null, error: null },
+    })
+    vi.mocked(memoryApi.listConflicts).mockResolvedValue({ conflicts: [], count: 0 })
+    vi.mocked(memoryApi.listSummaries).mockResolvedValue({ summaries: [], count: 0 })
+    vi.mocked(memoryApi.getOrganizeStatus).mockResolvedValue({
+      running: false,
+      started_at: null,
+      finished_at: null,
+      result: null,
+      error: null,
+    })
+  })
+
+  it('切换项目会重新加载记忆并把项目持久化', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+    const before = vi.mocked(memoryApi.listMemory).mock.calls.length
+
+    const input = wrapper.find('[data-test="project-input"]')
+    await input.setValue('proj-a')
+    await input.trigger('change')
+    await flushPromises()
+
+    expect(vi.mocked(memoryApi.listMemory).mock.calls.length).toBeGreaterThan(before)
+    expect(localStorage.getItem('chiron.memory.project')).toBe('proj-a')
+  })
+})
+
 describe('MemoryView', () => {
   beforeEach(() => {
     vi.clearAllMocks()
@@ -111,8 +148,9 @@ describe('MemoryView', () => {
     for (const label of ['智能整理', '清空记忆', '新建记忆']) {
       expect(text).toContain(label)
     }
-    // 语义检索输入框
-    const input = wrapper.find('input')
+    // 语义检索输入框（用 placeholder 定位：顶部还有一个「项目」输入框，
+    // `find('input')` 这种位置选择器不再可靠）
+    const input = wrapper.find('input[placeholder*="语义检索"]')
     expect(input.exists()).toBe(true)
     expect((input.element as HTMLInputElement).placeholder).toContain('语义检索')
   })
@@ -145,7 +183,7 @@ describe('MemoryView', () => {
     const wrapper = mountView()
     await flushPromises()
 
-    await wrapper.find('input').setValue('编辑器')
+    await wrapper.find('input[placeholder*="语义检索"]').setValue('编辑器')
     // 找到「智能检索」按钮并点击
     const buttons = wrapper.findAll('button')
     const searchBtn = buttons.find((b) => b.text().includes('智能检索'))

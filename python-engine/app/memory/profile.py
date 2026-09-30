@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 _COLUMNS = (
     "id, tenant_id, user_id, slot, item_key, item_value, confidence, source, "
-    "embedding, access_count, last_accessed_at, status, created_at, updated_at"
+    "embedding, access_count, last_accessed_at, status, created_at, updated_at, project"
 )
 
 
@@ -50,6 +50,7 @@ def _row_to_entry(row: Any) -> MemoryEntry:
         status=row["status"],
         created_at=row["created_at"],
         updated_at=row["updated_at"],
+        project=str(row["project"] or ""),
     )
 
 
@@ -67,42 +68,55 @@ class ProfileStore:
         user_id: str,
         include_archived: bool = False,
         slot: str | None = None,
+        project: str = "",
     ) -> list[MemoryEntry]:
-        sql = f"SELECT {_COLUMNS} FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2"
-        params: list[Any] = [tenant_id, user_id]
+        """按 (tenant, user, project) 列出条目。
+
+        C3：`project` 空串 = **未分组**；不同项目互不可见（过滤而非排序）。
+        """
+        sql = (
+            f"SELECT {_COLUMNS} FROM user_memory_entries "
+            "WHERE tenant_id=$1 AND user_id=$2 AND project=$3"
+        )
+        params: list[Any] = [tenant_id, user_id, project]
         if not include_archived:
             sql += " AND status='active'"
         if slot:
-            sql += " AND slot=$3"
+            sql += " AND slot=$4"
             params.append(slot)
         sql += " ORDER BY slot, updated_at DESC"
         rows = await self._pool.fetch(sql, *params)
         return [_row_to_entry(r) for r in rows]
 
     async def get_by_id(
-        self, tenant_id: str, user_id: str, entry_id: str
-    ) -> MemoryEntry | None:
-        sql = f"SELECT {_COLUMNS} FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2 AND id=$3"
-        row = await self._pool.fetchrow(sql, tenant_id, user_id, entry_id)
-        return _row_to_entry(row) if row else None
-
-    async def get_by_key(
-        self, tenant_id: str, user_id: str, slot: str, item_key: str
+        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
     ) -> MemoryEntry | None:
         sql = (
             f"SELECT {_COLUMNS} FROM user_memory_entries "
-            "WHERE tenant_id=$1 AND user_id=$2 AND slot=$3 AND item_key=$4"
+            "WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND project=$4"
         )
-        row = await self._pool.fetchrow(sql, tenant_id, user_id, slot, item_key)
+        row = await self._pool.fetchrow(sql, tenant_id, user_id, entry_id, project)
         return _row_to_entry(row) if row else None
 
-    async def count(self, tenant_id: str, user_id: str) -> int:
+    async def get_by_key(
+        self, tenant_id: str, user_id: str, slot: str, item_key: str, project: str = ""
+    ) -> MemoryEntry | None:
+        """按 (tenant, user, project, slot, key) 取一条 —— 与唯一约束同一组键（C3）。"""
+        sql = (
+            f"SELECT {_COLUMNS} FROM user_memory_entries "
+            "WHERE tenant_id=$1 AND user_id=$2 AND slot=$3 AND item_key=$4 AND project=$5"
+        )
+        row = await self._pool.fetchrow(sql, tenant_id, user_id, slot, item_key, project)
+        return _row_to_entry(row) if row else None
+
+    async def count(self, tenant_id: str, user_id: str, project: str = "") -> int:
         return int(
             await self._pool.fetchval(
                 "SELECT COUNT(*) FROM user_memory_entries "
-                "WHERE tenant_id=$1 AND user_id=$2 AND status='active'",
+                "WHERE tenant_id=$1 AND user_id=$2 AND project=$3 AND status='active'",
                 tenant_id,
                 user_id,
+                project,
             )
         )
 
@@ -111,9 +125,12 @@ class ProfileStore:
     async def insert(self, entry: MemoryEntry) -> MemoryEntry:
         sql = (
             "INSERT INTO user_memory_entries "
-            "(id, tenant_id, user_id, slot, item_key, item_value, confidence, source, embedding, status) "
-            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) "
-            "ON CONFLICT (tenant_id, user_id, slot, item_key) DO UPDATE SET "
+            "(id, tenant_id, user_id, slot, item_key, item_value, confidence, source, "
+            "embedding, status, project) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
+            # C3：冲突目标必须与唯一约束一致（tenant, user, **project**, slot, key）——
+            # 少了 project 会让"两个项目的同名键"互相覆盖，隔离就是假的。
+            "ON CONFLICT (tenant_id, user_id, project, slot, item_key) DO UPDATE SET "
             "item_value=EXCLUDED.item_value, confidence=EXCLUDED.confidence, "
             "source=EXCLUDED.source, embedding=EXCLUDED.embedding, "
             "status='active', updated_at=NOW() "
@@ -132,6 +149,7 @@ class ProfileStore:
             entry.source,
             emb,
             entry.status,
+            entry.project,
         )
         return _row_to_entry(row)
 
@@ -141,6 +159,7 @@ class ProfileStore:
         user_id: str,
         entry_id: str,
         *,
+        project: str = "",
         item_key: str | None = None,
         item_value: str | None = None,
         confidence: int | None = None,
@@ -148,10 +167,13 @@ class ProfileStore:
         embedding: builtins.list[float] | None = None,
         embedding_set: bool = False,
     ) -> MemoryEntry | None:
-        """按 id 局部更新（仅更新显式传入的字段；embedding_set 区分「清空向量」与「不改动」）。"""
+        """按 id 局部更新（仅更新显式传入的字段；embedding_set 区分「清空向量」与「不改动」）。
+
+        C3：`project` 参与 WHERE 过滤 —— 拿别的项目的 id 进来改不动任何行。
+        """
         sets: list[str] = ["updated_at=NOW()"]
-        params: list[Any] = [tenant_id, user_id, entry_id]
-        idx = 4
+        params: list[Any] = [tenant_id, user_id, entry_id, project]
+        idx = 5
 
         def _bind(sql_frag: str, value: Any) -> None:
             nonlocal idx
@@ -174,7 +196,7 @@ class ProfileStore:
         sql = (
             "UPDATE user_memory_entries SET "
             + ", ".join(sets)
-            + " WHERE tenant_id=$1 AND user_id=$2 AND id=$3 "
+            + " WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND project=$4 "
             f"RETURNING {_COLUMNS}"
         )
         row = await self._pool.fetchrow(sql, *params)
@@ -192,43 +214,58 @@ class ProfileStore:
         )
         return row is not None
 
-    async def delete(self, tenant_id: str, user_id: str, entry_id: str) -> bool:
+    async def delete(
+        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
+    ) -> bool:
         row = await self._pool.fetchrow(
-            "DELETE FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2 AND id=$3 RETURNING id",
+            "DELETE FROM user_memory_entries "
+            "WHERE tenant_id=$1 AND user_id=$2 AND id=$3 AND project=$4 RETURNING id",
             tenant_id,
             user_id,
             entry_id,
+            project,
         )
         return row is not None
 
     async def delete_by_key(
-        self, tenant_id: str, user_id: str, item_key: str, slot: str | None = None
+        self,
+        tenant_id: str,
+        user_id: str,
+        item_key: str,
+        slot: str | None = None,
+        project: str = "",
     ) -> int:
-        """按 key 删除（可限定槽位）；返回删除条数。"""
+        """按 key 删除（可限定槽位）；返回删除条数。C3：project 参与过滤。"""
         if slot:
             val = await self._pool.fetchval(
                 "DELETE FROM user_memory_entries "
-                "WHERE tenant_id=$1 AND user_id=$2 AND item_key=$3 AND slot=$4 RETURNING id",
+                "WHERE tenant_id=$1 AND user_id=$2 AND item_key=$3 AND slot=$4 "
+                "AND project=$5 RETURNING id",
                 tenant_id,
                 user_id,
                 item_key,
                 slot,
+                project,
             )
             return 1 if val else 0
         rows = await self._pool.fetch(
             "DELETE FROM user_memory_entries "
-            "WHERE tenant_id=$1 AND user_id=$2 AND item_key=$3 RETURNING id",
+            "WHERE tenant_id=$1 AND user_id=$2 AND item_key=$3 AND project=$4 RETURNING id",
             tenant_id,
             user_id,
             item_key,
+            project,
         )
         return len(rows)
 
-    async def delete_all(self, tenant_id: str, user_id: str) -> int:
+    async def delete_all(self, tenant_id: str, user_id: str, project: str = "") -> int:
+        """清空某用户**某个项目**的条目（C3：project 空了只清"未分组"）。"""
         rows = await self._pool.fetch(
-            "DELETE FROM user_memory_entries WHERE tenant_id=$1 AND user_id=$2 RETURNING id",
+            "DELETE FROM user_memory_entries "
+            "WHERE tenant_id=$1 AND user_id=$2 AND project=$3 RETURNING id",
             tenant_id,
             user_id,
+            project,
         )
         return len(rows)
 

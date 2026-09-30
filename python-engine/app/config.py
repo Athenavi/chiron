@@ -194,6 +194,21 @@ class Settings(BaseSettings):
     memory_recall_token_budget: int = 8000  # L2+L3 总注入预算（tokens）
     memory_consolidate_batch: int = 32  # 巩固攒批大小
 
+    # ── C5：整理调度（自动触发，三个条件**任一**满足即可）──
+    # 默认开：整理本身是既有能力（`organize_now` 幂等），自动化的价值是"不用等人点"。
+    # 阈值刻意保守 —— 每次整理会调 embedding（花钱），不该写成"每回合都整理"。
+    memory_organize_auto: bool = True
+    memory_organize_min_entries: int = 20  # 条目数阈值
+    memory_organize_min_turns: int = 10  # 自上次整理以来的累积回合数阈值
+    memory_organize_interval_seconds: int = 6 * 3600  # 距上次整理的时长阈值（秒）
+
+    # ── C6：回合级 L2 自动提炼（**默认关**）──
+    # 默认关的理由见 app/memory/distill.py：它是"每回合多一次 LLM 调用"，成本随对话量线性增长。
+    # 开启时用量计入 run 的 `task_budget` tokens 轴（与 S6b 的 grader 同一条规矩）。
+    memory_distill_enabled: bool = False
+    memory_distill_max_items: int = 3  # 一次提炼最多入库几条候选
+    memory_distill_confidence: int = 30  # 候选条目的置信度（低置信 ⇒ 先被整理淘汰）
+
     # ── LLM Gateway 缓存 ──
     cache_l1_capacity: int = 2048
     cache_l2_ttl: int = 3600

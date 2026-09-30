@@ -20,7 +20,10 @@ from evals.firmware import Task
 from evals.observe import observation_from_events
 
 #: 视为"本次运行结束"的事件类型
-TERMINAL_EVENTS = frozenset({"done", "error"})
+#:
+#: `cancelled` 也算终态：用户取消时引擎会先发 `cancelled` 再补一个 `done`（补 `done` 是为了让
+#: 前端/网关的 SSE 正常收尾），这里把两者都认下来，避免"用户取消"在评测里被当成卡住。
+TERMINAL_EVENTS = frozenset({"done", "error", "cancelled"})
 
 
 class HttpSubmit:

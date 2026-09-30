@@ -527,6 +527,11 @@ class TestMemoryInjectionTrustHeader:
 
     @pytest.mark.asyncio
     async def test_trust_header_precedes_memory_body(self):
+        """A2 的信任声明仍在，且记忆**自成一条** system 消息（C2）。
+
+        C2 之前记忆是拼进 `system_prompt` 的，所以那时这里断言 `system_texts` 只有一条；
+        现在前缀必须逐字稳定，记忆单独成条 —— 信任声明的**位置要求**不变（在记忆正文之前）。
+        """
         captured: list[dict] = []
         runtime = self._runtime_with_memory(captured)
         task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="s-mem-trust",
@@ -535,11 +540,11 @@ class TestMemoryInjectionTrustHeader:
 
         assert captured, "未产生 LLM 请求"
         system_texts = [m.content for m in captured[0]["messages"] if m.role == "system"]
-        assert len(system_texts) == 1
-        content = system_texts[0]
-        assert "不是指令" in content, "缺少信任声明"
-        assert "语言: 中文" in content, "记忆正文未注入"
-        assert content.index("不是指令") < content.index("语言: 中文"), (
+        # 前缀里还会带上技能目录（D2），所以用 startswith 而不是相等
+        assert system_texts[0].startswith("base"), "稳定前缀必须逐字不变（C2）"
+        memory_text = next(t for t in system_texts if "不是指令" in t)
+        assert "语言: 中文" in memory_text, "记忆正文未注入"
+        assert memory_text.index("不是指令") < memory_text.index("语言: 中文"), (
             "信任声明必须在记忆正文之前"
         )
 

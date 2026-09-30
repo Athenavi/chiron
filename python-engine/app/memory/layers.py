@@ -72,11 +72,17 @@ class SessionContext:
 
 @dataclass
 class Scope:
-    """记忆查询范围（tenant + user + session）。"""
+    """记忆查询范围（tenant + user + session + project）。
+
+    C3：`project` 是**可空字符串**（空 = 未分组）。同一用户的不同项目**互不可见** ——
+    它参与 L2 条目的检索过滤与去重键（见迁移 `0005_memory_project`）。L3 摘要仍按会话组织，
+    不受 project 影响。
+    """
 
     tenant_id: str
     user_id: str
     session_id: str
+    project: str = ""
 
 
 class MemoryType(StrEnum):
@@ -175,6 +181,9 @@ class MemoryEntry:
     status: str = "active"
     created_at: Any = None
     updated_at: Any = None
+    #: C3：项目维（用户显式命名；空串 = **未分组**）。同一用户的不同项目**互不可见** —— 它是
+    #: 检索与去重键的一部分（见迁移 `0005_memory_project` 的唯一约束）。
+    project: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         """基础字段的字典形态（存储行模型的自述）。
@@ -195,6 +204,7 @@ class MemoryEntry:
             "status": self.status,
             "created_at": to_iso(self.created_at),
             "updated_at": to_iso(self.updated_at),
+            "project": self.project,
         }
 
 
@@ -365,6 +375,9 @@ class MemoryConflict:
     tenant_id: str
     user_id: str
     created_at: float
+    #: C3：冲突所属项目（空 = 未分组）。裁决时要定位回**同一个项目**的那条记忆 ——
+    #: 少了它，跨副本取回的冲突会去改"未分组"里的同名条目。
+    project: str = ""
 
 
 # ── 其他类型 ─────────────────────────────────────────────────────────────

@@ -133,9 +133,14 @@ class MemoryService:
         # （要么被裁决要么被否认），进程内保存足够。多副本下各实例只看见自己产生的
         # 冲突 —— 裁决入口本就由产生它的那次请求所属实例服务。
         self._conflicts: dict[str, dict[str, Any]] = {}
-        # 整理任务的单飞行状态：同一 (tenant, user) 不允许并发整理。
-        self._organize_state: dict[tuple[str, str], dict[str, Any]] = {}
-        self._organize_tasks: dict[tuple[str, str], asyncio.Task[Any]] = {}
+        # 整理任务的单飞行状态：同一 (tenant, user, **project**) 不允许并发整理（C3：按项目分组）
+        self._organize_state: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._organize_tasks: dict[tuple[str, str, str], asyncio.Task[Any]] = {}
+        # C5：自动整理的记账（每 (tenant, user, project) 一条）——
+        # `turns` 累积自上次触发以来的回合数，`last_at` 是上次**触发**时间。
+        # 进程内保存足够：它只用来决定"要不要现在整理"，多副本各自判断的代价是
+        # 偶尔多整理一次，而 `organize_now` 是幂等的（补向量 / 合并重复 / 归档 / 淘汰都幂等）。
+        self._organize_meta: dict[tuple[str, str, str], dict[str, Any]] = {}
 
     # ── 生命周期钩子 ──────────────────────────────────────────────────
 
@@ -186,8 +191,9 @@ class MemoryService:
         tokens_out: int = 0,
         total_tokens: int = 0,
         max_tokens: int = 8192,
+        project: str = "",
     ) -> None:
-        """回合完成时调用：L1 记账 + token 预算检测 + L3 异步入队。"""
+        """回合完成时调用：L1 记账 + token 预算检测 + L3 异步入队 + C5 自动整理判定。"""
         store = self._session_meta
         meta = store.get(session_id) if store else None
         if meta and store is not None:
@@ -214,12 +220,31 @@ class MemoryService:
                 turn_count=meta.turn_count,
             )
 
+        # C5：自动整理（阈值判定 + 单飞行）。放在最后：它是"顺带做的事"，
+        # 既不该抢在记账与 L3 入队之前，也不该因为它失败而影响上面两件。
+        if meta:
+            try:
+                await self.maybe_schedule_organize(
+                    meta.tenant_id, meta.user_id, project
+                )
+            except Exception as e:
+                logger.warning("organize scheduler failed (non-blocking): %s", e)
+
         logger.debug(
             "Turn completed: session=%s, tokens_in=%d, tokens_out=%d",
             session_id,
             tokens_in,
             tokens_out,
         )
+
+    async def stop_periodic_session_cleanup(self) -> None:
+        """停止 L1 的周期清理任务（N1 的收尾）。
+
+        停机时不该留一个悬着的周期 task —— 它现在会回调本服务的 `on_session_end`
+        （见 `main.py` 的装配），把一个正在关闭的服务叫起来做入队是没有意义的。
+        """
+        if self._session_meta is not None:
+            await self._session_meta.stop_periodic_cleanup()
 
     async def on_session_end(self, session_id: str) -> None:
         """会话结束时调用：L3 会话级 rollup 入队 + 丢弃 L1 簿记。"""
@@ -289,11 +314,19 @@ class MemoryService:
         user_id: str,
         include_archived: bool = False,
         slot: str | None = None,
+        project: str = "",
     ) -> dict[str, Any]:
-        """列出记忆条目，并按槽位给出计数（前端 tab 计数依赖 counts）。"""
+        """列出记忆条目，并按槽位给出计数（前端 tab 计数依赖 counts）。
+
+        C3：`project` 空串 = **未分组**；不同项目互不可见。
+        """
         store = self._require_store()
         items = await store.list(
-            tenant_id, user_id, include_archived=include_archived, slot=slot
+            tenant_id,
+            user_id,
+            include_archived=include_archived,
+            slot=slot,
+            project=project,
         )
         counts: dict[str, int] = {s: 0 for s in SLOT_LABELS}
         for item in items:
@@ -314,8 +347,12 @@ class MemoryService:
         value: str,
         confidence: int = 50,
         source: str = "user_confirmed",
+        project: str = "",
     ) -> dict[str, Any]:
         """创建 / 更新一条 L2 记忆条目。
+
+        C3：`project` 空串 = **未分组**。它是去重键的一部分 —— 同一 key 在两个项目里是
+        **两条独立记忆**（不会互相覆盖），冲突登记与近重复检测也只在项目内进行。
 
         返回 ``{created, entry, conflict?, evicted?, duplicate_of?}``：
 
@@ -341,7 +378,9 @@ class MemoryService:
         confidence = max(0, min(100, int(confidence)))
 
         store = self._require_store()
-        existing = await store.get_by_key(tenant_id, user_id, slot_val, item_key)
+        existing = await store.get_by_key(
+            tenant_id, user_id, slot_val, item_key, project=project
+        )
 
         # 冲突：已确认的值被派生值覆盖。派生值再准也不该悄悄推翻用户确认过的东西，
         # 所以先登记，等人在记忆页裁决（keep_old / adopt_new / manual）。
@@ -359,6 +398,7 @@ class MemoryService:
                 old_value=existing.item_value,
                 new_value=item_value,
                 source=source_val,
+                project=project,
             )
 
         embedding = await self._embed(f"{item_key}: {item_value}")
@@ -367,7 +407,12 @@ class MemoryService:
         duplicate_of = None
         if embedding:
             duplicate_of = await self._find_near_duplicate(
-                tenant_id, user_id, embedding, exclude_key=item_key, slot=slot_val
+                tenant_id,
+                user_id,
+                embedding,
+                exclude_key=item_key,
+                slot=slot_val,
+                project=project,
             )
 
         entry = await store.insert(
@@ -380,6 +425,7 @@ class MemoryService:
                 confidence=confidence,
                 source=source_val,
                 embedding=embedding,
+                project=project,
             )
         )
 
@@ -392,11 +438,72 @@ class MemoryService:
         if duplicate_of is not None:
             resp["duplicate_of"] = self._entry_dict(duplicate_of)
 
-        evicted = await self._evict_over_limit(tenant_id, user_id)
+        evicted = await self._evict_over_limit(tenant_id, user_id, project=project)
         if evicted:
             resp["evicted"] = evicted
 
         return resp
+
+    async def ingest_candidates(
+        self,
+        tenant_id: str,
+        user_id: str,
+        candidates: list[Any],
+        project: str = "",
+    ) -> dict[str, int]:
+        """C6：把自动提炼的候选**低置信**入库（去重后）。返回计数。
+
+        与 `upsert` 的差别全在"更谨慎"这一边：
+
+        * 置信度封顶 `MAX_CANDIDATE_CONFIDENCE`（自动沉淀不该压倒用户确认过的值）；
+        * `source="derived"` —— 整理淘汰时这类条目**先走**（见 `_evict_over_limit` 的排序）；
+        * **已存在同名 key 就跳过**，不登记冲突：候选值比人工值更不值得讨论，真要覆盖得走
+          人写的路径（`upsert` 的冲突裁决）。
+        """
+        from app.memory.distill import MAX_CANDIDATE_CONFIDENCE
+
+        store = self._require_store()
+        stats = {"added": 0, "skipped_existing": 0, "skipped_invalid": 0}
+
+        for candidate in candidates or []:
+            try:
+                slot_val = SlotType(str(getattr(candidate, "slot", "") or "")).value
+            except ValueError:
+                stats["skipped_invalid"] += 1
+                continue
+            key = str(getattr(candidate, "key", "") or "").strip()
+            value = str(getattr(candidate, "value", "") or "").strip()
+            if not key or not value:
+                stats["skipped_invalid"] += 1
+                continue
+
+            if await store.get_by_key(tenant_id, user_id, slot_val, key, project=project):
+                stats["skipped_existing"] += 1
+                continue
+
+            embedding = await self._embed(f"{key}: {value}")
+            await store.insert(
+                _new_memory_entry(
+                    tenant_id=tenant_id,
+                    user_id=user_id,
+                    slot=slot_val,
+                    key=key,
+                    value=value,
+                    confidence=min(
+                        MAX_CANDIDATE_CONFIDENCE,
+                        int(getattr(candidate, "confidence", 0) or 0),
+                    ),
+                    source="derived",
+                    embedding=embedding,
+                    project=project,
+                )
+            )
+            stats["added"] += 1
+
+        if stats["added"]:
+            # 入库后立刻受上限约束：自动条目最该被淘汰
+            await self._evict_over_limit(tenant_id, user_id, project=project)
+        return stats
 
     async def update_entry(
         self,
@@ -407,8 +514,9 @@ class MemoryService:
         value: str | None = None,
         confidence: int | None = None,
         source: str | None = None,
+        project: str = "",
     ) -> Any | None:
-        """按 id 局部更新（仅更新显式传入的字段）。"""
+        """按 id 局部更新（仅更新显式传入的字段）。C3：project 参与过滤。"""
         store = self._require_store()
         source_val = None
         if source is not None:
@@ -423,7 +531,7 @@ class MemoryService:
         embedding_set = False
         embedding = None
         if value is not None:
-            target = await store.get_by_id(tenant_id, user_id, entry_id)
+            target = await store.get_by_id(tenant_id, user_id, entry_id, project=project)
             if target is None:
                 return None
             embedding = await self._embed(f"{key or target.item_key}: {value}")
@@ -433,6 +541,7 @@ class MemoryService:
             tenant_id,
             user_id,
             entry_id,
+            project=project,
             item_key=key,
             item_value=value,
             confidence=confidence,
@@ -441,10 +550,12 @@ class MemoryService:
             embedding_set=embedding_set,
         )
 
-    async def delete_entry(self, tenant_id: str, user_id: str, entry_id: str) -> bool:
-        """按 id 删除单条记忆。"""
+    async def delete_entry(
+        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
+    ) -> bool:
+        """按 id 删除单条记忆（C3：project 参与过滤 —— 拿别的项目的 id 删不动）。"""
         removed: bool = await self._require_store().delete(
-            tenant_id, user_id, entry_id
+            tenant_id, user_id, entry_id, project=project
         )
         return removed
 
@@ -454,16 +565,19 @@ class MemoryService:
         user_id: str,
         item_key: str,
         slot: str | None = None,
+        project: str = "",
     ) -> int:
-        """按 key 删除（可限定槽位）；返回删除条数。"""
+        """按 key 删除（可限定槽位）；返回删除条数。C3：project 参与过滤。"""
         removed: int = await self._require_store().delete_by_key(
-            tenant_id, user_id, item_key, slot
+            tenant_id, user_id, item_key, slot, project=project
         )
         return removed
 
-    async def clear_all(self, tenant_id: str, user_id: str) -> int:
-        """清空当前用户全部记忆（隐私出口）。"""
-        removed: int = await self._require_store().delete_all(tenant_id, user_id)
+    async def clear_all(self, tenant_id: str, user_id: str, project: str = "") -> int:
+        """清空**某项目**的全部记忆（隐私出口；project 空 = 只清"未分组"）。"""
+        removed: int = await self._require_store().delete_all(
+            tenant_id, user_id, project=project
+        )
         return removed
 
     async def search(
@@ -473,6 +587,7 @@ class MemoryService:
         query: str,
         top_k: int = 10,
         slot: str | None = None,
+        project: str = "",
     ) -> dict[str, Any]:
         """检索记忆：L2 条目 + L3 摘要两个独立结果区。
 
@@ -485,7 +600,7 @@ class MemoryService:
         if not q:
             raise ValueError("query is required")
         store = self._require_store()
-        items = await store.list(tenant_id, user_id, slot=slot)
+        items = await store.list(tenant_id, user_id, slot=slot, project=project)
 
         qvec = await self._embed(q)
         hits: list[tuple[Any, float, float]] = []
@@ -735,16 +850,21 @@ class MemoryService:
         top_k: int = 5,
         exclude_turn_range: tuple[int, int] | None = None,
         slots: list[str] | None = None,
+        project: str = "",
     ) -> RecallResult:
         """召回记忆（L2 条目 + L3 摘要），供提示词注入。
 
         L2 与 L3 都 fail-soft：记忆是增强项，不该因为它挂掉就阻断整轮对话。
+
+        C3：L2 按 `project` 隔离（空 = 未分组）；L3 是**会话级**摘要，不受 project 影响。
         """
         # ── L2 ──
         profile_items: list[Any] = []
         try:
             if self._store is not None:
-                profile_items = await self._store.list(tenant_id, user_id)
+                profile_items = await self._store.list(
+                    tenant_id, user_id, project=project
+                )
                 if slots:
                     # 按分类收窄：用户在对话里显式表达了「只带上偏好」这类意图
                     wanted = {str(s) for s in slots}
@@ -828,6 +948,7 @@ class MemoryService:
         new_value: Any,
         source: str,
         conflict_id: str | None = None,
+        project: str = "",
     ) -> dict[str, Any]:
         """登记待裁决冲突：先落 Redis（多副本共享），失败则只留进程内。
 
@@ -849,6 +970,8 @@ class MemoryService:
             "status": "pending",
             "tenant_id": tenant_id,
             "user_id": user_id,
+            # C3：冲突也带项目维 —— 裁决时要定位回**同一个项目**的那条记忆
+            "project": project,
             "created_at": time.time(),
         }
         self._conflicts[cid] = record
@@ -869,6 +992,7 @@ class MemoryService:
                         tenant_id=tenant_id,
                         user_id=user_id,
                         created_at=record["created_at"],
+                        project=project,
                     )
                 )
                 record["persisted"] = bool(persisted)
@@ -1000,7 +1124,11 @@ class MemoryService:
             resolved_value = manual_value
 
         target = await store.get_by_key(
-            record["tenant_id"], record["user_id"], record["slot"], record["key"]
+            record["tenant_id"],
+            record["user_id"],
+            record["slot"],
+            record["key"],
+            project=str(record.get("project") or ""),
         )
         if target is not None:
             embedding = await self._embed(f"{record['key']}: {resolved_value}")
@@ -1008,6 +1136,7 @@ class MemoryService:
                 record["tenant_id"],
                 record["user_id"],
                 target.id,
+                project=str(record.get("project") or ""),
                 item_value=resolved_value,
                 confidence=100,
                 source="user_confirmed",
@@ -1059,14 +1188,73 @@ class MemoryService:
 
     # ── 智能整理 ─────────────────────────────────────────────────────
 
-    async def organize_now(self, tenant_id: str, user_id: str) -> OrganizeResult:
+    async def maybe_schedule_organize(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> bool:
+        """C5：按阈值决定**是否现在**触发一次整理（三个条件任一满足）。
+
+        * 条目数 ≥ `memory_organize_min_entries`；
+        * 距上次触发 ≥ `memory_organize_interval_seconds`；
+        * 自上次触发以来的累积回合数 ≥ `memory_organize_min_turns`。
+
+        走 `start_organize` 的**单飞行**：并发调用只有一个真正起任务，其余拿到
+        `already_running` —— 此时**不重置记账**，否则阈值会被"看起来触发了"抹掉。
+
+        空 project（未分组）与具名项目同等对待：它也会累积条目与回合。
+        """
+        if not settings.memory_organize_auto or self._store is None:
+            return False
+
+        key = (tenant_id, user_id, project)
+        meta = self._organize_meta.setdefault(key, {"turns": 0, "last_at": 0.0})
+        meta["turns"] = int(meta.get("turns", 0)) + 1
+
+        try:
+            entries = await self._store.count(tenant_id, user_id, project=project)
+        except Exception as e:  # 计数失败不该打断回合收尾
+            logger.warning("organize scheduler: count failed: %s", e)
+            return False
+
+        interval = int(getattr(settings, "memory_organize_interval_seconds", 0) or 0)
+        last_at = float(meta.get("last_at") or 0.0)
+        due = (
+            entries >= int(settings.memory_organize_min_entries)
+            or meta["turns"] >= int(settings.memory_organize_min_turns)
+            or (interval > 0 and last_at > 0 and (time.time() - last_at) >= interval)
+        )
+        if not due:
+            return False
+
+        result = await self.start_organize(tenant_id, user_id, project)
+        if not result.get("started"):
+            return False
+
+        meta["turns"] = 0
+        meta["last_at"] = time.time()
+        logger.info(
+            "organize scheduled automatically: tenant=%s user=%s project=%r entries=%d",
+            tenant_id,
+            user_id,
+            project,
+            entries,
+        )
+        return True
+
+    async def organize_now(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> OrganizeResult:
         """同步执行一次整理：补向量 → 合并近重复 → 归档陈旧 → 淘汰超限。
 
         顺序有意如此：先补向量，近重复才可能被识别出来（无向量的条目无法比较）。
+
+        C3：整理**作用在单个项目内**（`project` 空 = 未分组）—— 不按项目分组会把 A 项目的
+        条目当成 B 项目的重复项合并掉。
         """
         store = self._require_store()
         result = OrganizeResult()
-        items = await store.list(tenant_id, user_id, include_archived=False)
+        items = await store.list(
+            tenant_id, user_id, include_archived=False, project=project
+        )
 
         # ① 补向量
         for item in items:
@@ -1078,6 +1266,7 @@ class MemoryService:
             try:
                 await store.update(
                     tenant_id, user_id, item.id,
+                    project=project,
                     embedding=vec, embedding_set=True,
                 )
                 item.embedding = vec
@@ -1109,7 +1298,7 @@ class MemoryService:
                 else (duplicate_of, item)
             )
             try:
-                await store.delete(tenant_id, user_id, victim.id)
+                await store.delete(tenant_id, user_id, victim.id, project=project)
                 result.merged += 1
             except Exception as e:
                 result.errors.append(f"merge {victim.id}: {e}")
@@ -1137,22 +1326,29 @@ class MemoryService:
                 result.errors.append(f"archive {item.id}: {e}")
 
         # ④ 淘汰超限
-        result.evicted = await self._evict_over_limit(tenant_id, user_id)
+        result.evicted = await self._evict_over_limit(
+            tenant_id, user_id, project=project
+        )
         return result
 
     async def start_organize(
         self,
         tenant_id: str,
         user_id: str,
+        project: str = "",
     ) -> dict[str, Any]:
-        """异步触发整理（单飞行：同一用户并发触发时返回 already_running）。"""
-        key = (tenant_id, user_id)
+        """异步触发整理（单飞行：**同一项目**并发触发时返回 already_running）。
+
+        C3：单飞行的键含 `project` —— 否则 A 项目在整理时，B 项目会被误判成"已在运行"
+        而永远排不上队。
+        """
+        key = (tenant_id, user_id, project)
         task = self._organize_tasks.get(key)
         if task is not None and not task.done():
             return {
                 "started": False,
                 "reason": "already_running",
-                "status": self.organize_status(tenant_id, user_id),
+                "status": self.organize_status(tenant_id, user_id, project),
             }
 
         self._organize_state[key] = {
@@ -1163,18 +1359,20 @@ class MemoryService:
             "error": None,
         }
         self._organize_tasks[key] = asyncio.create_task(
-            self._run_organize(tenant_id, user_id)
+            self._run_organize(tenant_id, user_id, project)
         )
         return {
             "started": True,
-            "status": self.organize_status(tenant_id, user_id),
+            "status": self.organize_status(tenant_id, user_id, project),
         }
 
-    async def _run_organize(self, tenant_id: str, user_id: str) -> None:
-        key = (tenant_id, user_id)
+    async def _run_organize(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> None:
+        key = (tenant_id, user_id, project)
         state = self._organize_state.setdefault(key, {})
         try:
-            result = await self.organize_now(tenant_id, user_id)
+            result = await self.organize_now(tenant_id, user_id, project=project)
             state.update(
                 {
                     "running": False,
@@ -1194,9 +1392,11 @@ class MemoryService:
                 {"running": False, "finished_at": time.time(), "error": str(e)}
             )
 
-    def organize_status(self, tenant_id: str, user_id: str) -> dict[str, Any]:
-        """整理任务状态（从未运行过时返回空态）。"""
-        state = self._organize_state.get((tenant_id, user_id), {})
+    def organize_status(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> dict[str, Any]:
+        """整理任务状态（从未运行过时返回空态）。C3：按项目分别记账。"""
+        state = self._organize_state.get((tenant_id, user_id, project), {})
         return {
             "running": bool(state.get("running", False)),
             "started_at": state.get("started_at"),
@@ -1214,11 +1414,15 @@ class MemoryService:
         embedding: list[float],
         exclude_key: str | None = None,
         slot: str | None = None,
+        project: str = "",
     ) -> Any | None:
-        """在既有条目中查找近重复（cosine > NEAR_DUPLICATE_THRESHOLD）。"""
+        """在**同一项目内**查找近重复（cosine > NEAR_DUPLICATE_THRESHOLD）。
+
+        C3：跨项目比较会把"另一个项目里的相似条目"误报成本项目的重复项。
+        """
         try:
             items = await self._require_store().list(
-                tenant_id, user_id, include_archived=False, slot=slot
+                tenant_id, user_id, include_archived=False, slot=slot, project=project
             )
         except Exception:
             return None
@@ -1231,16 +1435,21 @@ class MemoryService:
                 return item
         return None
 
-    async def _evict_over_limit(self, tenant_id: str, user_id: str) -> int:
+    async def _evict_over_limit(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> int:
         """超过条目上限时淘汰：优先淘汰「派生 + 低置信 + 久未引用」的条目。
 
         用户确认过的条目（source=user_confirmed）最后才动 —— 它们是人明确要求记住的。
+        C3：**上限按项目计**（否则一个项目的条目会把另一个项目的额度挤掉）。
         """
         store = self._require_store()
         limit = int(getattr(settings, "memory_profile_max_items", 0) or 0)
         if limit <= 0:
             return 0
-        items = await store.list(tenant_id, user_id, include_archived=False)
+        items = await store.list(
+            tenant_id, user_id, include_archived=False, project=project
+        )
         overflow = len(items) - limit
         if overflow <= 0:
             return 0
@@ -1257,7 +1466,7 @@ class MemoryService:
         evicted = 0
         for victim in victims:
             try:
-                await store.delete(tenant_id, user_id, victim.id)
+                await store.delete(tenant_id, user_id, victim.id, project=project)
                 evicted += 1
             except Exception as e:
                 logger.warning("evict failed for %s: %s", victim.id, e)
@@ -1394,8 +1603,9 @@ def _new_memory_entry(
     confidence: int,
     source: str,
     embedding: list[float] | None,
+    project: str = "",
 ) -> Any:
-    """构造 L2 条目（延迟导入，避免模块级循环依赖）。"""
+    """构造 L2 条目（延迟导入，避免模块级循环依赖）。project 空 = 未分组（C3）。"""
     from app.memory.layers import MemoryEntry
 
     return MemoryEntry(
@@ -1413,6 +1623,7 @@ def _new_memory_entry(
         status="active",
         created_at=None,
         updated_at=None,
+        project=project,
     )
 
 

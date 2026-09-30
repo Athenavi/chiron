@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+from collections.abc import Awaitable, Callable
 from typing import Any
 
 from app.memory.layers import EntryChannel, SessionMeta
@@ -158,18 +159,26 @@ class SessionMetaStore:
 
     # ── TTL 清理 ──────────────────────────────────────────────────────
 
-    def _cleanup_expired(self) -> int:
-        """清理所有过期的会话。
+    def _expired_sessions(self) -> list[str]:
+        """找出空闲超时的会话（**不移除**）。
 
-        Returns:
-            清理的会话数量。
+        单独抽出来是为了让调用方能"先通知、再清理" —— 通知（记忆服务的会话级收尾）必须在
+        簿记消失**之前**发生，否则就没人知道那些会话曾经存在过。
         """
         now = time.time()
-        expired = [
+        return [
             sid
             for sid, meta in self._store.items()
             if now - meta.last_active_at > IDLE_TTL
         ]
+
+    def _cleanup_expired(self) -> int:
+        """清理所有过期的会话（只丢 L1 簿记；"通知别人"见 `start_periodic_cleanup`）。
+
+        Returns:
+            清理的会话数量。
+        """
+        expired = self._expired_sessions()
         for sid in expired:
             logger.debug("Cleaning up expired session %s", sid)
             del self._store[sid]
@@ -178,11 +187,28 @@ class SessionMetaStore:
             logger.info("Cleaned up %d expired sessions", len(expired))
         return len(expired)
 
-    async def start_periodic_cleanup(self, interval: int = 60) -> None:
+    async def start_periodic_cleanup(
+        self,
+        interval: int = 60,
+        *,
+        on_expired: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         """启动定期清理任务。
+
+        **N1（评审 03 §1.2）**：这个任务此前**从未被启动过** —— 于是空闲会话既不清理，
+        也不通知任何人，后果有两个：L1 簿记在进程里一直涨；记忆的 `on_session_end`（会话级
+        L3 rollup 入队 + 丢 L1）只在"异常/中断退出"那条路径上被触发过，**会话级 rollup
+        因此永不入队**。
+
+        `on_expired` 就是补上的那个"会话结束"触发点：清理本就要找出空闲会话，顺手通知即可。
+        **先通知、再清理** —— 顺序反了就没得通知了。
+
+        语义说明：空闲 `IDLE_TTL`（15 分钟）即视为"会话结束"。用户外出回来继续说话时会另起
+        L1 簿记，而 rollup 只是把已有的对话摘成摘要 —— 早触发无害，漏触发才是问题。
 
         Args:
             interval: 清理间隔（秒）。
+            on_expired: 每个空闲会话的回调（异步，通常接 `MemoryService.on_session_end`）。
         """
         if self._cleanup_task is not None and not self._cleanup_task.done():
             logger.warning("Periodic cleanup task already running")
@@ -193,7 +219,18 @@ class SessionMetaStore:
             try:
                 while True:
                     await asyncio.sleep(interval)
-                    self._cleanup_expired()
+                    expired = self._expired_sessions()
+                    for sid in expired:
+                        if on_expired is None:
+                            continue
+                        try:
+                            await on_expired(sid)
+                        except Exception as e:  # noqa: BLE001 — 一个会话通知失败不该拖垮清理
+                            logger.warning("on_expired(%s) failed: %s", sid, e)
+                    for sid in expired:
+                        self._store.pop(sid, None)
+                    if expired:
+                        logger.info("Cleaned up %d expired sessions", len(expired))
             except asyncio.CancelledError:
                 logger.info("Periodic cleanup task cancelled")
             except Exception as e:
