@@ -6,14 +6,11 @@
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 import re
 from pathlib import Path
 from typing import Any
-
-import httpx
 
 from app.tools.registry import registry
 
@@ -30,9 +27,12 @@ def _safe_path(path: str, root: str) -> Path:
     return target
 
 
-async def read_file(
-    path: str, root: str = ".", offset: int = 0, limit: int = 200
-) -> dict[str, Any]:
+async def read_file(path: str, offset: int = 0, limit: int = 200) -> dict[str, Any]:
+    """读文件（分页）。
+
+    路径一律 clamp 到当前工作区 —— 此前签名里有个 `root` 参数，模型以为能改根目录，
+    实现根本不看它（已移除）。
+    """
     from app.backends.context import get_backend
     from app.tools.fs_guard import observe
     from app.tools.sandbox import safe_join
@@ -53,9 +53,12 @@ async def read_file(
 
 
 async def read_image(
-    path: str, root: str = ".", max_bytes: int = 5 * 1024 * 1024
+    path: str, max_bytes: int = 5 * 1024 * 1024
 ) -> dict[str, Any]:
-    """Read an image file as a base64 data-URL (for vision-capable models)."""
+    """Read an image file as a base64 data-URL (for vision-capable models).
+
+    路径同样 clamp 到工作区（`root` 参数已移除，理由与 `read_file` 相同）。
+    """
     import base64
 
     from app.backends.context import get_backend
@@ -96,14 +99,18 @@ async def read_image(
     }
 
 
-async def write_file(path: str, content: str, root: str = ".") -> dict[str, Any]:
+async def write_file(path: str, content: str) -> dict[str, Any]:
+    """写文件（会建父目录；写入前自动快照供 /undo 回滚）。
+
+    路径 clamp 到工作区（`root` 参数已移除，理由与 `read_file` 相同）。
+    """
     from app.agent import undo_stack
     from app.backends.context import get_backend
     from app.tools.context import get_session_id
     from app.tools.fs_guard import check_before_write
     from app.tools.sandbox import safe_join
 
-    target = safe_join(path)  # 沙箱隔离：root 参数废弃（S 安全修复）
+    target = safe_join(path)  # 沙箱隔离
     # 横切逻辑留在工具层，且**顺序不变**：冲突检查 → undo 快照 → 写入
     conflict = check_before_write(target)
     if conflict:
@@ -121,12 +128,14 @@ async def write_file(path: str, content: str, root: str = ".") -> dict[str, Any]
     return result
 
 
-async def execute_command(
-    command: str, cwd: str = ".", timeout: int = 30
-) -> dict[str, Any]:
+async def execute_command(command: str, timeout: int = 30) -> dict[str, Any]:
+    """在沙箱内执行一条 shell 命令。
+
+    工作目录固定为当前用户的工作区：此前签名里有 `cwd`，schema 说它能改目录，
+    实现却忽略它 —— 模型据此重试过多次（已移除）。
+    """
     from app.tools.sandbox import run_in_sandbox
 
-    # 沙箱隔离：cwd 参数废弃，命令在 per-user workspace 内以清理环境执行（S 安全修复）
     return await run_in_sandbox(command, timeout=timeout)
 
 
@@ -193,41 +202,46 @@ async def search_files(
 
 
 async def execute_python(code: str, timeout: int = 30) -> dict[str, Any]:
+    """执行一段 Python 代码（沙箱内）。
+
+    为什么不是 `python -c <代码>`：那要把源码**拼进 shell 命令行**，于是必须自己处理引号、
+    换行、反斜杠的转义 —— `json.dumps` 只解决了一部分（POSIX 下可行，Windows 的 cmd.exe
+    规则不同，含双引号/换行的代码会直接执行失败或截断）。
+
+    这里改成 **base64 传递**：`-c` 的参数整体用双引号包住，内部只有 base64 字母表
+    （`A-Za-z0-9+/=`，不含引号与空白），因此两种 shell 下的引号解析都无歧义。
+    代价是命令行长一点（约 4/3 倍），换来的是**跨平台确定性**。
+    """
     if not code:
         return {"error": "code is required"}
-    return await execute_command(
-        command=f"python -c {json.dumps(code)}", timeout=timeout
+    import base64
+
+    payload = base64.b64encode(code.encode("utf-8")).decode("ascii")
+    command = (
+        'python -c "import base64;'
+        f"exec(base64.b64decode('{payload}').decode('utf-8'))\""
     )
+    return await execute_command(command=command, timeout=timeout)
 
 
-async def web_fetch(
-    url: str, max_chars: int = 12000, follow_redirects: bool = True
-) -> dict[str, Any]:
-    from app.config import settings
-    from app.tools.ssrf import assert_safe_url, fetch_url_safe
-
-    assert_safe_url(url)
-    async with httpx.AsyncClient(timeout=settings.http_timeout_web) as client:
-        resp = await fetch_url_safe(client, url)
-        text = resp.text[:max_chars]
-        return {
-            "url": str(resp.url),
-            "status_code": resp.status_code,
-            "content_type": resp.headers.get("content-type", ""),
-            "content": text,
-        }
+# ── 已删除：core 里的 web_fetch ──
+#
+# 这里曾有一份 `web_fetch` 实现（httpx + assert_safe_url），但它**从未注册**，
+# 而 `app/tools/web.py` 里有一份更完整的同名实现（HTML→Markdown、字符上限、错误语义）。
+# 两份实现并存 = 必然漂移（规划 §5.3 的"两份白名单必然漂移"是同一类错）。
+# 只保留 web.py 的那一份；本模块不再有出网能力。
 
 
 # 注册工具（schema 与 Go 侧保持兼容）
 registry.register(
     name="read_file",
-    description="Read a file with pagination",
+    description="Read a text file from the workspace with pagination.",
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "offset": {"type": "integer", "default": 0},
-            "limit": {"type": "integer", "default": 2000},
+            "path": {"type": "string", "description": "File path relative to the workspace root"},
+            "offset": {"type": "integer", "default": 0, "description": "Line to start from (0-based)"},
+            "limit": {"type": "integer", "default": 200, "description": "Max lines to return"},
         },
         "required": ["path"],
     },
@@ -236,12 +250,16 @@ registry.register(
 
 registry.register(
     name="write_file",
-    description="Write content to a file",
+    description=(
+        "Write text to a file in the workspace (parent directories are created). "
+        "This is for work-in-progress files; to hand the user a file they can open or "
+        "download, use media_create instead."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "content": {"type": "string"},
+            "path": {"type": "string", "description": "File path relative to the workspace root"},
+            "content": {"type": "string", "description": "Full content to write"},
         },
         "required": ["path", "content"],
     },
@@ -250,13 +268,15 @@ registry.register(
 
 registry.register(
     name="shell_exec",
-    description="Execute a shell command with timeout",
+    description=(
+        "Run a shell command in the sandbox. The working directory is always the workspace "
+        "(it cannot be changed). Returns stdout/stderr/exit_code."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "command": {"type": "string"},
-            "cwd": {"type": "string", "default": "."},
-            "timeout": {"type": "integer", "default": 30},
+            "command": {"type": "string", "description": "Shell command to run"},
+            "timeout": {"type": "integer", "default": 30, "description": "Timeout in seconds"},
         },
         "required": ["command"],
     },
@@ -265,14 +285,14 @@ registry.register(
 
 registry.register(
     name="grep_files",
-    description="Regex search across files",
+    description="Regex-search the contents of files under a workspace directory.",
     parameters={
         "type": "object",
         "properties": {
-            "query": {"type": "string"},
-            "root": {"type": "string", "default": "."},
-            "glob": {"type": "string", "default": ""},
-            "max_results": {"type": "integer", "default": 200},
+            "query": {"type": "string", "description": "Regular expression to match against each line"},
+            "root": {"type": "string", "default": ".", "description": "Directory to search under (relative to the workspace)"},
+            "glob": {"type": "string", "default": "", "description": "Only scan files matching this glob (e.g. '*.py')"},
+            "max_results": {"type": "integer", "default": 200, "description": "Stop after this many matches"},
         },
         "required": ["query"],
     },
@@ -296,12 +316,16 @@ registry.register(
 
 registry.register(
     name="execute_python",
-    description="Execute a Python code snippet",
+    description=(
+        "Run a short Python snippet in the sandbox. The code is passed as base64 so quoting "
+        "works identically on every platform. For multi-step work that should call several "
+        "tools in one shot, prefer run_code."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "code": {"type": "string"},
-            "timeout": {"type": "integer", "default": 30},
+            "code": {"type": "string", "description": "Python source to execute"},
+            "timeout": {"type": "integer", "default": 30, "description": "Timeout in seconds"},
         },
         "required": ["code"],
     },
@@ -314,12 +338,11 @@ registry.register(
     parameters={
         "type": "object",
         "properties": {
-            "path": {"type": "string"},
-            "root": {"type": "string", "default": "."},
+            "path": {"type": "string", "description": "Image path relative to the workspace root"},
             "max_bytes": {
                 "type": "integer",
                 "default": 5242880,
-                "description": "Max image bytes",
+                "description": "Max image bytes (default 5 MB)",
             },
         },
         "required": ["path"],

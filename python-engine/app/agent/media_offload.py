@@ -85,7 +85,7 @@ async def _persist(name: str, data: bytes, mime: str) -> dict[str, Any] | None:
     try:
         from app.tools.media import persist_to_library
 
-        stored = await persist_to_library(
+        stored, reason = await persist_to_library(
             name,
             data,
             asset_type=asset_type,
@@ -95,6 +95,9 @@ async def _persist(name: str, data: bytes, mime: str) -> dict[str, Any] | None:
         )
         if stored:
             return stored
+        # 未进媒体库（网关不可达 / 拒绝）：回退本地并把原因记下来，
+        # 免得"卸载发生了但资产在媒体库里找不到"没有任何线索。
+        logger.info("media offload fell back to engine-local store: %s", reason)
     except Exception as exc:  # noqa: BLE001 — 落库失败不阻断压缩
         logger.warning("media offload via gateway failed: %s", exc)
 

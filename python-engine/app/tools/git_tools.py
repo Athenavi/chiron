@@ -8,11 +8,14 @@ from typing import Any
 from app.tools.registry import registry
 
 
-async def _run_git(*args: str, cwd: str = ".", timeout: int = 30) -> dict[str, Any]:
-    """Run a git command and return stdout/stderr/exit_code.
+async def _run_git(*args: str, timeout: int = 30) -> dict[str, Any]:
+    """Run a git command in the sandbox workspace and return stdout/stderr/exit_code.
 
     使用 sandboxed_env 清理环境变量，防止宿主密钥泄露给 git 子进程。
     超时控制防止 git 命令卡住。
+
+    **cwd 刻意不可传**：git 命令一律在工作区内执行（此前有个 `cwd` 参数被传进来又被忽略，
+    是"参数说谎"的一种）。逃逸检查见 :func:`_run_git_guarded`。
     """
     from app.tools.sandbox import sandboxed_env, workspace_dir
 
@@ -60,12 +63,23 @@ async def _ensure_sandbox_repo() -> dict[str, Any] | None:
     return None
 
 
-async def git_status(root: str = ".") -> dict[str, Any]:
-    """Return git status (modified, added, deleted files)."""
+async def _run_git_guarded(*args: str, timeout: int = 30) -> dict[str, Any]:
+    """**所有** git 工具的统一入口：先过逃逸检查，再执行。
+
+    为什么必须统一：此前只有 `git_status` 调了 `_ensure_sandbox_repo`，而
+    `git_diff` / `git_log` / `git_commit` / `git_branch` 直接执行 —— 工作区位于宿主
+    仓库内时，它们会**向上穿透**：`git_diff` 泄露宿主改动、`git_commit` 直接在宿主仓库
+    提交。检查放在入口而不是逐个工具里，是为了"新增 git 工具时不会再漏"。
+    """
     guard = await _ensure_sandbox_repo()
     if guard:
         return guard
-    result = await _run_git("status", "--porcelain", cwd=root)
+    return await _run_git(*args, timeout=timeout)
+
+
+async def git_status() -> dict[str, Any]:
+    """Return git status (modified, added, deleted files)."""
+    result = await _run_git_guarded("status", "--porcelain")
     if "error" in result:
         return result
     # NOTE: do NOT .strip() the whole stdout — that eats the leading space of the
@@ -87,12 +101,12 @@ async def git_status(root: str = ".") -> dict[str, Any]:
     }
 
 
-async def git_diff(root: str = ".", staged: bool = False) -> dict[str, Any]:
+async def git_diff(staged: bool = False) -> dict[str, Any]:
     """Return diff of changes. If staged=True, shows staged changes."""
     args = ["diff"]
     if staged:
         args.append("--cached")
-    result = await _run_git(*args, cwd=root)
+    result = await _run_git_guarded(*args)
     if "error" in result:
         return result
     return {
@@ -102,9 +116,9 @@ async def git_diff(root: str = ".", staged: bool = False) -> dict[str, Any]:
     }
 
 
-async def git_log(root: str = ".", limit: int = 10) -> dict[str, Any]:
+async def git_log(limit: int = 10) -> dict[str, Any]:
     """Return recent commits."""
-    result = await _run_git("log", "--oneline", f"-{limit}", cwd=root)
+    result = await _run_git_guarded("log", "--oneline", f"-{limit}")
     if "error" in result:
         return result
     lines = [ln for ln in result["stdout"].strip().splitlines() if ln]
@@ -117,17 +131,17 @@ async def git_log(root: str = ".", limit: int = 10) -> dict[str, Any]:
     return {"exit_code": result["exit_code"], "count": len(commits), "commits": commits}
 
 
-async def git_commit(message: str, root: str = ".") -> dict[str, Any]:
+async def git_commit(message: str) -> dict[str, Any]:
     """Stage all changes and commit with the given message."""
     # Stage all
-    stage = await _run_git("add", "-A", cwd=root)
+    stage = await _run_git_guarded("add", "-A")
     if "error" in stage:
         return stage
     if stage["exit_code"] != 0:
         return {"error": stage["stderr"].strip(), "exit_code": stage["exit_code"]}
 
     # Commit
-    result = await _run_git("commit", "-m", message, cwd=root)
+    result = await _run_git_guarded("commit", "-m", message)
     if "error" in result:
         return result
     return {
@@ -137,9 +151,9 @@ async def git_commit(message: str, root: str = ".") -> dict[str, Any]:
     }
 
 
-async def git_branch(root: str = ".") -> dict[str, Any]:
+async def git_branch() -> dict[str, Any]:
     """List branches and show current branch."""
-    result = await _run_git("branch", cwd=root)
+    result = await _run_git_guarded("branch")
     if "error" in result:
         return result
     lines = [ln for ln in result["stdout"].strip().splitlines() if ln]
@@ -159,35 +173,20 @@ async def git_branch(root: str = ".") -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 registry.register(
     name="git_status",
-    description="Return git status (modified, added, deleted files)",
-    parameters={
-        "type": "object",
-        "properties": {
-            "root": {
-                "type": "string",
-                "description": "Repository root",
-                "default": ".",
-            },
-        },
-        "required": [],
-    },
+    description="Show working-tree status inside the sandbox workspace (modified/added/deleted files).",
+    parameters={"type": "object", "properties": {}, "required": []},
     handler=git_status,
 )
 
 registry.register(
     name="git_diff",
-    description="Return diff of changes (optionally staged)",
+    description="Show the diff of uncommitted changes in the sandbox workspace.",
     parameters={
         "type": "object",
         "properties": {
-            "root": {
-                "type": "string",
-                "description": "Repository root",
-                "default": ".",
-            },
             "staged": {
                 "type": "boolean",
-                "description": "Show staged changes",
+                "description": "Show staged (--cached) changes instead of the working tree",
                 "default": False,
             },
         },
@@ -198,18 +197,13 @@ registry.register(
 
 registry.register(
     name="git_log",
-    description="Return recent commits",
+    description="List recent commits in the sandbox workspace.",
     parameters={
         "type": "object",
         "properties": {
-            "root": {
-                "type": "string",
-                "description": "Repository root",
-                "default": ".",
-            },
             "limit": {
                 "type": "integer",
-                "description": "Max commits to return",
+                "description": "Max commits to return (default 10)",
                 "default": 10,
             },
         },
@@ -220,16 +214,15 @@ registry.register(
 
 registry.register(
     name="git_commit",
-    description="Stage all changes and commit",
+    description=(
+        "Stage all changes in the sandbox workspace and commit them. "
+        "Only the sandbox repository is touched — a workspace nested inside a host repo "
+        "is refused rather than committing to the host."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "message": {"type": "string", "description": "Commit message"},
-            "root": {
-                "type": "string",
-                "description": "Repository root",
-                "default": ".",
-            },
         },
         "required": ["message"],
     },
@@ -238,17 +231,7 @@ registry.register(
 
 registry.register(
     name="git_branch",
-    description="List branches and show current branch",
-    parameters={
-        "type": "object",
-        "properties": {
-            "root": {
-                "type": "string",
-                "description": "Repository root",
-                "default": ".",
-            },
-        },
-        "required": [],
-    },
+    description="List branches and show the current branch in the sandbox workspace.",
+    parameters={"type": "object", "properties": {}, "required": []},
     handler=git_branch,
 )

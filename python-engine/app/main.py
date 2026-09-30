@@ -1392,25 +1392,13 @@ async def agent_submit(
             workflow_ids,
         )
 
-    import app.tools.agent  # noqa: F401 — AGENTS 工作台 (agent_dispatch 等)
-    import app.tools.browser  # noqa: F401 — 浏览器自动化 (PLUGINS/MCP 扩展)
-    import app.tools.core  # noqa: F401 — 确保核心工具已注册
-    import app.tools.edit_file  # noqa: F401 — 文件编辑 (创造模式常用)
-    import app.tools.jobs  # noqa: F401 — 后台任务
-    import app.tools.kb  # noqa: F401 — KNOWLEDGE 工作台 (kb_list/kb_search)
-    import app.tools.memory  # noqa: F401 — 长期记忆 (跨工作台共享上下文)
-    import app.tools.mode_admin  # noqa: F401 — 创造模式
-    import app.tools.run_code  # noqa: F401 — PTC 模式
-
-    # ── 六大工作台互联互通：注册各工作台工具,使 CHAT 的 LLM 可通过 function-calling 调用 ──
-    import app.tools.skill  # noqa: F401 — SKILLS 工作台 (skill_list/skill_run/skill_install)
-    import app.tools.subagent  # noqa: F401 — 多 agent 委派工具
-    import app.tools.subagent_list  # noqa: F401 — 主 Agent 主动感知 (list_subagent_runs)
-    import app.tools.subagent_rerun  # noqa: F401 — 重跑已结束的子 Agent (rerun_subagent)
-    import app.tools.subagent_result  # noqa: F401 — 子 Agent 结果按需读取 (read_subagent_result)
-    import app.tools.terminal  # noqa: F401 — 持久终端
-    import app.tools.web  # noqa: F401 — 网页搜索/抓取
-    import app.workflow.tools  # noqa: F401 — WORKFLOW 工作台 (workflow_run/workflow_list)
+    # ── 六大工作台互联互通：注册各工作台工具，使 CHAT 的 LLM 可通过 function-calling 调用 ──
+    #
+    # 注册清单**只有一处**：`app/tools/__init__.py`。这里原先另有一份（且与 __init__ 的
+    # 那份都不完整，两份并集才是全部）—— 结果是"哪些工具存在"取决于从哪个入口进来：
+    # web / subagent_list / subagent_rerun / workflow.tools 只在对话路径注册过。
+    # 保留这一句只为确保对话路径一定触达该模块（import 幂等）。
+    import app.tools  # noqa: F401
     from app.agent.runtime import AgentRuntime, AgentTask
 
     # PLUGINS 工作台: MCP 工具由 app.plugins.pool / app.mcp.registry 动态注册,启动时已加载
