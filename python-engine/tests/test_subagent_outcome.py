@@ -1,4 +1,4 @@
-"""R3（`vendor/规划.md` §4.5）：结构化结局与错误分类。
+"""R3（`vendor/规划.md` §3.5）：结构化结局与错误分类。
 
 改动的实质：把"能否重试"从**拼接字符串**里解出来，变成**机器可读**的结论。对齐参照是 Reasonix 的
 `subagent_outcome.go` + `subagentErrorDisposition`。

@@ -1,4 +1,4 @@
-"""宿主证据（host receipts，方案见 `vendor/规划.md` §4.5 的 R1）。
+"""宿主证据（host receipts，方案见 `vendor/规划.md` §3.5 的 R1）。
 
 ## 为什么需要它
 

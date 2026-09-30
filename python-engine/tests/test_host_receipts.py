@@ -1,4 +1,4 @@
-"""R1（`vendor/规划.md` §4.5）：宿主证据（host receipts）。
+"""R1（`vendor/规划.md` §3.5）：宿主证据（host receipts）。
 
 对齐参照是 Reasonix 的 `subagent_report.go`。三条语义是它的**测试口径**，也是本文件的重点：
 

@@ -1,4 +1,4 @@
-"""subagent_runs 增结构化的错误码（R3，方案见 vendor/规划.md §4.5）
+"""subagent_runs 增结构化的错误码（R3，方案见 vendor/规划.md §3.5）
 
 Revision ID: 0007_subagent_error_code
 Revises: 0006_subagent_lifecycle

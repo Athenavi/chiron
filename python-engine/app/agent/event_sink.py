@@ -21,6 +21,11 @@
 * **绝不阻塞子 Agent**：队列有界，满时丢弃最早的**预览**事件并置 ``truncated``；
 * **限流**：同 (run_id, 频道) 的增量按 ``merge_window`` 合并，每 run 每秒事件预算有限；
 * **终态不可丢**：``subagent.done`` 绕过节流与丢弃策略，且终态前排空缓冲。
+
+R4（vendor/规划.md §3.5）：窗口判定用的时钟可**注入**（``clock``），默认 ``time.monotonic``。
+这既让"每秒预算"能被**确定性**测试（不用 ``sleep``），也顺带修掉一处隐患：合并窗口与预算原本
+用 ``time.time()``（**墙钟**）做差值，NTP 回拨会让窗口瞬间失效或永久卡住；``monotonic`` 只前进。
+注意 ``SubagentEvent.ts`` **仍是墙钟** —— 它是线上面（前端按它排序/显示），不是差值判定。
 """
 from __future__ import annotations
 
@@ -147,6 +152,7 @@ class EventSink:
         merge_window: float = DEFAULT_MERGE_WINDOW,
         per_run_budget: int = DEFAULT_PER_RUN_BUDGET,
         buffer_bytes: int = DEFAULT_BUFFER_BYTES,
+        clock: Callable[[], float] = time.monotonic,
     ):
         self._session_id = session_id
         self._queue: deque[SubagentEvent] = deque()
@@ -154,6 +160,9 @@ class EventSink:
         self._merge_window = merge_window
         self._budget = per_run_budget
         self._buffer_bytes = buffer_bytes
+        #: R4：**只用于差值判定**的单调时钟（合并窗口 + 每秒预算）。测试注入假时钟即可
+        #: 确定性地推进窗口/预算，不必真的 sleep。默认 ``time.monotonic`` ⇒ 行为不变。
+        self._clock = clock
         # (run_id, channel) -> (pending_text, first_pending_ts, truncated)
         self._pending: dict[tuple[str, str], dict[str, Any]] = {}
         # run_id -> (window_start, count)
@@ -199,7 +208,7 @@ class EventSink:
                     truncated = True
                 self._pending[key] = {
                     "text": text,
-                    "ts": time.time(),
+                    "ts": self._clock(),
                     "truncated": truncated,
                     "parent_run_id": parent_run_id,
                     "depth": depth,
@@ -409,7 +418,7 @@ class EventSink:
 
     def _flush_pending(self, run_id: str | None = None, *, force: bool = False) -> None:
         """把到期的内容缓冲合并成事件入队（层级字段随事件一起带出）。"""
-        now = time.time()
+        now = self._clock()
         for (rid, channel), entry in list(self._pending.items()):
             if run_id is not None and rid != run_id:
                 continue
@@ -429,7 +438,7 @@ class EventSink:
 
     def _consume_budget(self, run_id: str) -> bool:
         """每 run 每秒非终态事件预算。"""
-        now = time.time()
+        now = self._clock()
         state = self._budget_state.get(run_id)
         if state is None or now - state[0] >= 1.0:
             self._budget_state[run_id] = [now, 1]

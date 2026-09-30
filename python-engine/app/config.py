@@ -263,12 +263,26 @@ class Settings(BaseSettings):
     #: 这不是"没配就全走服务"，后者是个危险的默认。
     sandbox_service_tenants: str = ""
 
-    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §4.5 的 R1）──
+    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──
     #
     # 默认开：委派的价值就在**可信度** —— 父模型看到的 `summary` 是子 Agent 的自述，而收据是
     # **宿主观测**（工作区差分 + 执行计数），追加在摘要之后。
     # 关掉它会退回"只信自述"的旧行为（成本：执行前后各拍一次**有界**工作区快照）。
     subagent_host_receipts: bool = True
+
+    # ── 子 Agent 写路径仲裁（R2，见 vendor/规划.md §3.5）──
+    #
+    # 默认**关**：开启它会让"可写的子 Agent"按写路径排队（同路径串行、不同路径并行），
+    # 这是行为变化，所以默认必须是"什么都不做"（§1.3）。
+    # 关闭时 `get_scheduler()` 返回 None，SubAgentRunner 不做 acquire/release。
+    #
+    # 为什么需要它：`background=True` 的子 Agent 与父 turn **真并发**且共享同一工作区，
+    # 两个可写的子 Agent 写同一文件会**静默**互相覆盖（后写者赢，先写者的产出消失）。
+    subagent_write_arbitration: bool = False
+    #: 会话级并发上限（0 = 内置默认 6；上限 32）。只读委派也占这个槽。
+    subagent_max_concurrency: int = 0
+    #: 会话内**可写**委派的上限（0 = 内置默认 3）。
+    subagent_max_writers: int = 0
 
     # ── 直连引擎的 Bearer JWT 旁路（安全开关）──
     # false（默认）：引擎拒绝 Bearer 直连，只接受带 X-Internal-Token 的网关代理请求。
