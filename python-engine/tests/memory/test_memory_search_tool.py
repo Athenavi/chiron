@@ -36,12 +36,13 @@ class FakeMemoryService:
         self.last_query = None
         self.last_top_k = None
 
-    async def recall(self, tenant_id, user_id, query="", top_k=5):
+    async def recall(self, tenant_id, user_id, query="", top_k=5, project=""):
         self.recall_called = True
         self.last_tenant_id = tenant_id
         self.last_user_id = user_id
         self.last_query = query
         self.last_top_k = top_k
+        self.last_project = project
         if self._should_fail:
             raise RuntimeError("recall failed")
         return self._recall_result

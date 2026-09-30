@@ -42,6 +42,7 @@ import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
 import { findMatches } from '../components/chat/transcriptSearch'
 import { describeApiError, errorDetail, serverErrorMessage } from '../utils/apiError'
 import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
+import { currentProject } from '../composables/useProject'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
 import type { ChatItem, ChatSession, ChatAttachment, TurnStatsItem, TextItem } from '../components/chat/chat-types'
 
@@ -997,7 +998,14 @@ function buildContext(): Record<string, unknown> | undefined {  // 单值字段 
   // name / system_prompt / model / max_turns —— Agent 自带的 tools / kb_id / skills
   // 全部丢失，用户选了 Agent 却发现"它不会用自己的工具"。把单一事实来源放回后端，
   // 两端就不会各自漂移。
-  return buildWorkbenchContext(contextChips.value)
+  //
+  // C3：带上**当前项目** —— 引擎把它写进 tool context，agent 的 remember / recall /
+  // forget 因此落在同一个项目里（与记忆页选中的项目一致）。未选项目时不带该字段，
+  // 请求与 C3 之前逐字相同。
+  const ctx = buildWorkbenchContext(contextChips.value) || {}
+  const project = currentProject.value
+  if (project) ctx.project = project
+  return Object.keys(ctx).length ? ctx : undefined
 }
 
 /** 安全改造：附件签名 URL 解析，/media/ 公开路径转短时效签名 URL；非 /media/ 前缀原样；失败回退原 url */

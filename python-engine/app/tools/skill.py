@@ -55,9 +55,15 @@ def _get_store() -> SkillStore:
 
 
 async def skill_list() -> dict[str, Any]:
-    skills = _get_store().list()
+    store = _get_store()
+    skills = store.list()
     if not skills:
-        return {"output": "No skills installed.", "count": 0, "skills": []}
+        return {
+            "output": "No skills installed.",
+            "count": 0,
+            "skills": [],
+            "load_warnings": store.last_warnings,
+        }
     lines = [
         f"  - {s.name}: {s.description} (v{s.version}, {s.exec_type})" for s in skills
     ]
@@ -66,7 +72,14 @@ async def skill_list() -> dict[str, Any]:
         item = s.to_dict()
         item["source"] = s.scope  # user/tenant/shared，标记团队共享技能
         payload.append(item)
-    return {"output": "\n".join(lines), "count": len(skills), "skills": payload}
+    return {
+        "output": "\n".join(lines),
+        "count": len(skills),
+        "skills": payload,
+        # D5：把"这次加载遇到的问题"一并回传 —— 技能目录注入会把它汇总成
+        # `<skill_load_warnings>` 给模型看（否则坏技能只留在日志里，模型与用户都看不到）。
+        "load_warnings": store.last_warnings,
+    }
 
 
 #: 远程技能定义的体积上限（1MB）。install 与 discover **共用**同一入口，避免策略漂移。
@@ -161,35 +174,39 @@ async def skill_install(
     }
 
 
-async def skill_generate(description: str, install: bool = False) -> dict[str, Any]:
-    if not description:
-        return {"error": "description is required"}
+async def skill_generate(
+    description: str, install: bool = False, name: str = ""
+) -> dict[str, Any]:
+    """用 LLM 生成一份技能（D4）；`install=True` 时落盘为**目录型**技能（`SKILL.md`）。
 
-    name = description.strip().lower().replace(" ", "_")[:32] or "generated_skill"
-    skill = SkillDef(
-        name=name,
+    校验不通过一律**拒绝**并给出原因（不执行、不静默落盘）；无 LLM 时明确报错。
+
+    实现委托给 `app/skill/generate.py` —— HTTP 端点 `/v1/skills/generate` 走的是同一条路径，
+    此前两份各自"拼 SkillDef"的假生成属于双实现漂移风险。
+    """
+    from app.skill.generate import generate_skill_md
+
+    outcome = await generate_skill_md(
         description=description,
-        version="0.1.0",
-        exec_type="prompt",
-        source=f"Generate a concise prompt-based skill for: {description}",
+        name=name,
+        install=bool(install),
+        store=_get_store() if install else None,
     )
+    if not outcome.ok:
+        return {"error": outcome.error}
+
     result: dict[str, Any] = {
-        "output": f"Generated skill definition:\n{json.dumps(skill.to_dict(), ensure_ascii=False, indent=2)}",
-        "skill": skill.to_dict(),
-        "name": skill.name,
-        "type": skill.exec_type,
+        "output": (
+            f"Generated skill: {outcome.name}\n"
+            f"{json.dumps(outcome.skill, ensure_ascii=False, indent=2)}"
+        ),
+        "skill": outcome.skill,
+        "name": outcome.name,
+        "type": "prompt",
     }
-
     if install:
-        try:
-            _get_store().save(skill)
-            result["installed"] = True
-            result["output"] = (
-                f"Generated and installed skill: {skill.name}\n{json.dumps(skill.to_dict(), ensure_ascii=False, indent=2)}"
-            )
-        except Exception as e:
-            result["install_error"] = str(e)
-
+        result["installed"] = True
+        result["path"] = outcome.path
     return result
 
 
@@ -389,12 +406,24 @@ registry.register(
 
 registry.register(
     name="skill_generate",
-    description="Generate a new skill from a natural language description and optionally install it.",
+    description=(
+        "Generate a new skill (SKILL.md) from a natural language description with the LLM, "
+        "validating the result before anything is written; optionally install it. "
+        "Rejects invalid output with the concrete reason."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "description": {"type": "string"},
             "install": {"type": "boolean", "default": False},
+            "name": {
+                "type": "string",
+                "default": "",
+                "description": (
+                    "Optional skill name (directory name). Omit to derive it from the "
+                    "description. Must match the generated frontmatter `name`."
+                ),
+            },
         },
         "required": ["description"],
     },

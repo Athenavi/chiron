@@ -107,21 +107,33 @@ class InMemorySummaryStore:
         return len(ids)
 
 
+def _project_of(entry: object) -> str:
+    """条目的项目维（C3）：旧测试数据可能没有该属性 → 视为"未分组"。"""
+    return str(getattr(entry, "project", "") or "")
+
+
 class InMemoryProfileStore:
-    """``app.memory.profile.ProfileStore`` 的内存实现（方法签名一致）。"""
+    """``app.memory.profile.ProfileStore`` 的内存实现（方法签名一致）。
+
+    C3：所有方法都接受 `project`（空 = 未分组），语义与真实 store 一致 —— 它是**去重键**
+    的一部分，且过滤发生在读取侧。
+    """
 
     def __init__(self) -> None:
         self.by_key: dict[tuple, object] = {}
         self.by_id: dict[str, object] = {}
 
-    def _key(self, tenant_id, user_id, slot, item_key):
-        return (tenant_id, user_id, slot, item_key)
+    def _key(self, tenant_id, user_id, slot, item_key, project=""):
+        return (tenant_id, user_id, project, slot, item_key)
 
-    async def list(self, tenant_id, user_id, include_archived=False, slot=None):
+    async def list(
+        self, tenant_id, user_id, include_archived=False, slot=None, project=""
+    ):
         out = [
             e for e in self.by_key.values()
             if e.tenant_id == tenant_id
             and e.user_id == user_id
+            and _project_of(e) == project
             and (include_archived or e.status == "active")
             and (slot is None or e.slot == slot)
         ]
@@ -133,24 +145,33 @@ class InMemoryProfileStore:
         )
         return out
 
-    async def get_by_id(self, tenant_id, user_id, entry_id):
+    async def get_by_id(self, tenant_id, user_id, entry_id, project=""):
         e = self.by_id.get(entry_id)
-        return e if e and e.tenant_id == tenant_id and e.user_id == user_id else None
+        if e and e.tenant_id == tenant_id and e.user_id == user_id:
+            return e if _project_of(e) == project else None
+        return None
 
-    async def get_by_key(self, tenant_id, user_id, slot, item_key):
-        return self.by_key.get(self._key(tenant_id, user_id, slot, item_key))
+    async def get_by_key(self, tenant_id, user_id, slot, item_key, project=""):
+        return self.by_key.get(self._key(tenant_id, user_id, slot, item_key, project))
 
-    async def count(self, tenant_id, user_id):
+    async def count(self, tenant_id, user_id, project=""):
         return len([
             e for e in self.by_key.values()
             if e.tenant_id == tenant_id
             and e.user_id == user_id
+            and _project_of(e) == project
             and e.status == "active"
         ])
 
     async def insert(self, entry):
         existing = self.by_key.get(
-            self._key(entry.tenant_id, entry.user_id, entry.slot, entry.item_key)
+            self._key(
+                entry.tenant_id,
+                entry.user_id,
+                entry.slot,
+                entry.item_key,
+                _project_of(entry),
+            )
         )
         if existing is not None:
             # upsert 语义：保留原 id / 创建时间 / 访问计数
@@ -162,7 +183,13 @@ class InMemoryProfileStore:
         if entry.created_at is None:
             entry.created_at = entry.updated_at
         self.by_key[
-            self._key(entry.tenant_id, entry.user_id, entry.slot, entry.item_key)
+            self._key(
+                entry.tenant_id,
+                entry.user_id,
+                entry.slot,
+                entry.item_key,
+                _project_of(entry),
+            )
         ] = entry
         self.by_id[entry.id] = entry
         return entry
@@ -173,6 +200,7 @@ class InMemoryProfileStore:
         user_id,
         entry_id,
         *,
+        project="",
         item_key=None,
         item_value=None,
         confidence=None,
@@ -183,10 +211,16 @@ class InMemoryProfileStore:
         e = self.by_id.get(entry_id)
         if e is None or e.tenant_id != tenant_id or e.user_id != user_id:
             return None
+        if _project_of(e) != project:
+            return None
         if item_key is not None:
-            del self.by_key[self._key(e.tenant_id, e.user_id, e.slot, e.item_key)]
+            del self.by_key[
+                self._key(e.tenant_id, e.user_id, e.slot, e.item_key, _project_of(e))
+            ]
             e.item_key = item_key
-            self.by_key[self._key(e.tenant_id, e.user_id, e.slot, e.item_key)] = e
+            self.by_key[
+                self._key(e.tenant_id, e.user_id, e.slot, e.item_key, _project_of(e))
+            ] = e
         if item_value is not None:
             e.item_value = item_value
         if confidence is not None:
@@ -205,35 +239,40 @@ class InMemoryProfileStore:
         e.embedding = embedding
         return True
 
-    async def delete(self, tenant_id, user_id, entry_id):
+    async def delete(self, tenant_id, user_id, entry_id, project=""):
         e = self.by_id.get(entry_id)
         if e is None or e.tenant_id != tenant_id or e.user_id != user_id:
             return False
+        if _project_of(e) != project:
+            return False
         del self.by_id[entry_id]
         self.by_key.pop(
-            self._key(e.tenant_id, e.user_id, e.slot, e.item_key), None
+            self._key(e.tenant_id, e.user_id, e.slot, e.item_key, _project_of(e)), None
         )
         return True
 
-    async def delete_by_key(self, tenant_id, user_id, item_key, slot=None):
+    async def delete_by_key(self, tenant_id, user_id, item_key, slot=None, project=""):
         targets = [
             e for e in self.by_key.values()
             if e.tenant_id == tenant_id
             and e.user_id == user_id
+            and _project_of(e) == project
             and e.item_key == item_key
             and (slot is None or e.slot == slot)
         ]
         for e in targets:
-            await self.delete(tenant_id, user_id, e.id)
+            await self.delete(tenant_id, user_id, e.id, project)
         return len(targets)
 
-    async def delete_all(self, tenant_id, user_id):
+    async def delete_all(self, tenant_id, user_id, project=""):
         targets = [
             e for e in self.by_key.values()
-            if e.tenant_id == tenant_id and e.user_id == user_id
+            if e.tenant_id == tenant_id
+            and e.user_id == user_id
+            and _project_of(e) == project
         ]
         for e in targets:
-            await self.delete(tenant_id, user_id, e.id)
+            await self.delete(tenant_id, user_id, e.id, project)
         return len(targets)
 
     async def archive(self, entry_id):

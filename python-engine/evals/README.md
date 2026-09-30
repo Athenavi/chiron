@@ -26,6 +26,10 @@ python -m evals.cli run --suite smoke --submit scripted --report out/smoke.json
 python -m evals.cli run --suite smoke --submit http \
     --base-url http://127.0.0.1:8080 --api-key "$CHIRON_API_KEY" --report out/chiron.json
 
+# full 集（nightly）：**必须**用真实模型。`--suite full` 会自动并入 smoke 里标了 full 的任务
+python -m evals.cli run --suite full --tier full --submit http \
+    --base-url http://127.0.0.1:8080 --api-key "$CHIRON_API_KEY" --report out/chiron-full.json
+
 # 与对标结果对照（E3）
 python -m evals.cli compare out/chiron.json out/deepagents.json
 ```
@@ -41,6 +45,21 @@ python -m evals.cli compare out/chiron.json out/deepagents.json
 
 后者用来发现"做对了但绕远路"的回归，而**不会**把有效解判成失败。
 
+## 门禁分级（E4）
+
+| 级别 | 触发 | provider | 阻塞？ | 在哪 |
+|---|---|---|---|---|
+| `smoke` | PR（push / pull_request） | 确定性替身（零密钥零费用） | **阻塞 PR** | `.github/workflows/ci.yml` 的 `evals` job |
+| `full` | nightly（每天 03:17 UTC）+ 手动触发 | **真实模型** | **不阻塞**（看报告与趋势） | `.github/workflows/evals-nightly.yml` |
+| `compare` | 本地手动 | 读两份已有报告 | — | `evals.cli compare`（不占 CI 分钟数） |
+
+**为什么真实模型的评测不作 PR 门禁**：① 需要密钥与费用，而 PR 常来自 fork（拿不到 secrets）；
+② 质量类断言天然有波动，PR 会被随机红 —— 门禁一旦噪声化就没人看了；③ `vendor/deepagents`
+自己的真实模型 eval 也只是 `workflow_dispatch`：**"smoke 作 PR 门禁"这一条本身就是超越**。
+
+**nightly 需要配置**：仓库 secret `CHIRON_EVAL_LLM_API_KEY`（对应引擎侧的 `LLM_API_KEY`）。
+**未配置时 nightly 明确跳过、不判失败** —— 把"部署者没配 secrets"报成"代码退化"是错误归因。
+
 ## 两个必须知道的口径
 
 1. **`steps` = `llm_call` span 的数量**（模型调用回合数），**不是**工具调用数 ——
@@ -55,15 +74,40 @@ python -m evals.cli compare out/chiron.json out/deepagents.json
 
 ## 与 deepagents 对标（E3）
 
-同一套固件格式、同一批任务、同一模型条件下分别跑 Chiron（经网关）与 `vendor/deepagents`
-（`create_deep_agent`，直接调库），用 `compare` 产出分类对照表与差异清单。
+同一套固件格式、同一批任务、同一模型条件下分别跑 Chiron（经网关）与 `vendor/deepagents`，
+用 `compare` 产出分类对照表与差异清单。
+
+**执行器已就位**：`evals/adapters/deepagents_agent.py` 实现了一个 `SubmitFn` ——
+其余环节（落固件 / 读产物 / 判定 / 聚合）**复用 Chiron 侧同一套 runner 与断言引擎**，
+所以对照出来的差异是能力差，而不是评分口径差。
+
+```bash
+# deepagents 侧（需先装依赖并配模型密钥）
+pip install -e vendor/deepagents/libs/deepagents langchain-openai
+python -m evals.adapters.deepagents_agent --suite full --tier full \
+    --model gpt-4o-mini --out out/deepagents-full.json
+
+# 对照
+python -m evals.cli compare out/chiron-full.json out/deepagents-full.json
+```
 
 **前置**：`vendor/deepagents` 需要额外的 langchain/langgraph 依赖与 API key，因此对标跑放在
-**独立可选环境**，不阻塞主 CI。
+**独立可选环境**，不阻塞主 CI（适配器里也做**延迟 import**：主依赖清单里没有它们）。
+
+**⚠️ 尚未产出过一份真实对照**：适配器与对照命令都已就位，但"跑一次真实模型、两侧各出一份报告、
+把结论写进 `docs/`"还需要一个装好依赖与密钥的环境。这条按未完成记，不按已完成记。
+
+**已知的不对等项**（结论里必须写明，而不是当成"对手太弱"）：Chiron 侧经网关还会带上系统记忆、
+技能目录、护栏等系统段，deepagents 侧只有一个静态提示词；反之 deepagents 的 `FilesystemBackend`
+没有 Chiron 的沙箱与护栏语义。
 
 ## 尚未完成
 
-- `smoke` 集 10 条已可跑；`full` 集（24–32 条，含质量类断言）待补；
-- `HttpSubmit` 的端到端跑需要真实栈（网关 + 引擎），尚未在 CI 接线；
-- PR 门禁（`.github/workflows/`）尚未挂 `smoke`；
-- `compare` 尚未接入 deepagents 侧的执行器。
+- ✅ **`full` 集已补齐（E1）**：`suites/full.json` 27 条新增任务 + `smoke.json` 里标 `full` 的，
+  `--suite full --tier full` 合计 **31 条**、覆盖全部 7 个分类（`tests/test_evals_full_suite.py`
+  做结构自检）；
+- ✅ **门禁分级已落地（E4）**：smoke 在 PR（替身）/ full 在 nightly（真实模型）/ compare 为本地命令；
+- 🔶 **`HttpSubmit` 的端到端 CI 接线（E2）**：`evals-nightly.yml` 已写好（栈、API key 引导、
+  引擎与网关启动、报告上传、缺 secret 跳过），**但尚未在真实 Actions 上跑过一次** —— 首次运行
+  可能还需要按实际部署调引擎启动参数；
+- 🔶 **对标执行器已就位、待跑一次真实对照（E3）**：见上文"与 deepagents 对标"一节。

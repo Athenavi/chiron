@@ -254,6 +254,8 @@ class ConflictManager:
             "tenant_id": conflict.tenant_id,
             "user_id": conflict.user_id,
             "created_at": conflict.created_at,
+            # C3：项目维必须一起落盘，否则跨副本取回的冲突会去改"未分组"里的同名条目
+            "project": conflict.project,
         }
         redis = self._require_redis()
         key = self._pending_key(conflict.conflict_id)
@@ -332,6 +334,8 @@ class ConflictManager:
                             tenant_id=item["tenant_id"],
                             user_id=item["user_id"],
                             created_at=item["created_at"],
+                            # 兼容本字段出现之前写入的旧记录（那时只有"未分组"）
+                            project=str(item.get("project") or ""),
                         )
                     )
                 except (json.JSONDecodeError, KeyError) as e:
@@ -461,6 +465,8 @@ class ConflictManager:
                 tenant_id=item["tenant_id"],
                 user_id=item["user_id"],
                 created_at=item["created_at"],
+                # 兼容本字段出现之前写入的旧记录（那时只有"未分组"）
+                project=str(item.get("project") or ""),
             )
         except (json.JSONDecodeError, KeyError) as e:
             logger.warning("Failed to parse conflict %s: %s", conflict_id, e)

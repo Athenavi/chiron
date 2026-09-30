@@ -25,5 +25,8 @@ export default {
   use_this_type_of_memory_in_the_conversation: "Use this type of memory in the conversation",
   no_memory_in_this_category_yet: "No memory in this category yet",
   long_term_memory: "Long-term memory",
+  project: "Project",
+  project_placeholder: "Project name (empty = ungrouped)",
+  project_hint: "Memory is isolated per project: entries in different projects are mutually invisible",
   what_is_this_memory_about_e_g_stack_tech_preference: "What is this memory about? e.g. stack / tech preference",
 }

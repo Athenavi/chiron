@@ -25,5 +25,8 @@ export default {
   use_this_type_of_memory_in_the_conversation: "استخدم هذا النوع من الذاكرة في المحادثة",
   no_memory_in_this_category_yet: "لا توجد ذاكرة في هذه الفئة بعد",
   long_term_memory: "ذاكرة طويلة الأمد",
+  project: "المشروع",
+  project_placeholder: "اسم المشروع (فارغ = غير مجمّع)",
+  project_hint: "الذاكرة معزولة حسب المشروع: لا تظهر ذكريات المشاريع المختلفة لبعضها",
   what_is_this_memory_about_e_g_stack_tech_preference: "عن ماذا تتحدث هذه الذاكرة؟ مثل stack / تفضيل الاختيار التقني",
 }

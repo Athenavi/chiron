@@ -40,6 +40,7 @@ SUCCESS_KINDS: frozenset[str] = frozenset(
         "final_text_not_contains",
         "file_equals",
         "file_contains",
+        "file_not_contains",
         "tool_called",
         "tool_denied",
         "event_emitted",

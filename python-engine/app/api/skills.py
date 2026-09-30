@@ -185,26 +185,28 @@ class SkillGenerateRequest(BaseModel):
 async def generate_skill(
     body: SkillGenerateRequest, user_id: str = "", tenant_id: str = "", scope: str = ""
 ) -> dict[str, Any]:
-    """生成技能；auto_install 时保存，scope=tenant 则保存进租户共享层。"""
+    """用 LLM 生成技能（D4）；`auto_install` 时落盘（`scope=tenant` 则落租户共享层）。
+
+    与工具 `skill_generate` 走**同一条**实现（`app/skill/generate.py`）：校验不通过时返回
+    400 + **具体原因**（前端据此提示 —— 笼统的"生成失败"没法排查）。
+    """
     store = _store_for(user_id, tenant_id, _valid_scope(scope))
 
-    if not body.description:
-        raise HTTPException(status_code=400, detail="description is required")
+    from app.skill.generate import generate_skill_md
 
-    name = body.description.strip().lower().replace(" ", "_")[:32] or "generated_skill"
-    skill = SkillDef(
-        name=name,
+    outcome = await generate_skill_md(
         description=body.description,
-        version="0.1.0",
-        exec_type="prompt",
-        source=f"Generate a concise prompt-based skill for: {body.description}",
+        install=bool(body.auto_install),
+        store=store if body.auto_install else None,
     )
-    result: dict[str, Any] = {"skill": skill.to_dict(), "message": "Skill generated"}
+    if not outcome.ok:
+        raise HTTPException(status_code=400, detail=outcome.error)
 
+    result: dict[str, Any] = {"skill": outcome.skill, "message": "Skill generated"}
     if body.auto_install:
-        store.save(skill)
-        result["message"] = f"Skill '{skill.name}' generated and installed"
+        result["message"] = f"Skill '{outcome.name}' generated and installed"
         result["scope"] = store.write_scope
+        result["path"] = outcome.path
 
     return result
 

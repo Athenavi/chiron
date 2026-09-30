@@ -13,6 +13,11 @@ class ChatMessage:
     content: str = ""
     tool_call_id: str = ""
     tool_calls: list[ToolCall] | None = None
+    #: C2：该消息是**提示词前缀的稳定末尾**，支持显式缓存断点的 provider（Anthropic 系）
+    #: 可在此打 `cache_control` —— 断点**之后**的内容（例如每轮重新召回的记忆）变化时，
+    #: 前缀缓存仍然命中。OpenAI / DeepSeek 是自动前缀缓存，忽略此标记。
+    #: **刻意不进 `to_dict()`**：它是引擎内部的元信息，发给不认识它的 API 会直接 400。
+    cache_breakpoint: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {"role": self.role}

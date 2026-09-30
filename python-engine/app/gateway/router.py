@@ -37,6 +37,8 @@ def normalize_messages(messages: list[Any]) -> list[ChatMessage]:
                     role=str(m.get("role", "user")),
                     content=m.get("content") or "",
                     tool_call_id=str(m.get("tool_call_id", "") or ""),
+                    # C2：缓存断点标记要透传到 provider 边界（否则"标了没用"）
+                    cache_breakpoint=bool(m.get("cache_breakpoint")),
                 )
             )
         else:

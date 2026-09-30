@@ -97,10 +97,13 @@ async def test_pm_fallback_without_gateway():
 
 
 @pytest.mark.asyncio
-async def test_skill_generate_without_install():
+async def test_skill_generate_without_llm_reports_error():
+    """D4：无模型配置时**明确报错**，不返回一个"假生成"的技能。
+
+    正面用例（真 LLM 生成 + 校验 + 落盘 + 回滚）在 `tests/test_skill_generate.py`。
+    """
     res = await registry.execute("skill_generate", {"description": "summarize text"})
-    assert res.get("name")
-    assert res.get("type") == "prompt"
+    assert res.get("error"), "无 LLM 时必须报错，而不是伪装成生成成功"
 
 
 # ── edit_file tests ──────────────────────────────────────────────

@@ -155,6 +155,47 @@ func (h *SubmitHandler) SubmitAnswer(w http.ResponseWriter, r *http.Request) {
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
 
+// SubmitInterrupt proxies an explicit "cancel this run" request to the engine.
+//
+// 与 SubmitApproval / SubmitAnswer 同一套校验（会话归属 + 调用者身份 + run token）——
+// 它同样是"从外部作用于正在运行的 agent 循环"的通道。少任何一条，别人就能反复打断你的 run：
+// 既是骚扰，也是成本攻击（一直取消让你永远跑不完）。
+//
+// 与它们的一处差别：中断**不依赖"本副本是否有该 run"** —— 引擎在本地没有该 run 时会走 Redis
+// 信号那条路（run 可能在别的副本）。所以归属映射不可用时这里照发，由引擎侧各自判断。
+func (h *SubmitHandler) SubmitInterrupt(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+		UserID    string `json:"user_id,omitempty"`
+		// RunToken 同审批端点：由网关从 Redis 归属映射读出后注入，供引擎拒绝陈旧 run。
+		RunToken string `json:"run_token,omitempty"`
+	}
+	if err := DecodeJSON(w, r, &req); err != nil {
+		BadRequest(w, "invalid request")
+		return
+	}
+	if req.SessionID == "" {
+		BadRequest(w, "session_id is required")
+		return
+	}
+	// 透传已验证 JWT 的 user_id：Python 端据此校验来电者是否为会话 owner
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		req.UserID = claims.UserID
+	}
+	// 按 run 归属路由（优先打到承载该 run 的实例）；映射不可用时仍照发 —— 见上面的说明。
+	routeCtx := engine.WithRunAffinity(r.Context(), req.SessionID)
+	if rec, ok := engine.RunOwner(routeCtx, req.SessionID); ok {
+		req.RunToken = rec.RunToken
+	}
+	var out map[string]any
+	if err := h.python.PostJSON(routeCtx, "/v1/agent/interrupt", req, &out); err != nil {
+		slog.Error("interrupt: python proxy failed", "session", req.SessionID, "error", err)
+		InternalError(w, "interrupt proxy failed")
+		return
+	}
+	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
+}
+
 // HandleSubmit proxies the submit request to Python engine and streams SSE events.
 // HandleSubmit 执行一次聊天提交。workbenchCtx 是前端组装的工作台上下文
 // （kb_id / agent / skill_names / workflow_id），透传给引擎消费 —— 网关不再丢弃它。

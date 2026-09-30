@@ -1,5 +1,6 @@
 import api from './index'
 
+import { projectParams } from '../composables/useProject'
 import { t } from '../i18n'
 // ── 长期记忆（记忆四层架构 L2 档案卡：跨会话留存） ──
 
@@ -52,10 +53,10 @@ export interface ProfileListResponse {
   organize: OrganizeStatus
 }
 
-/** 整卡列表（按槽位分组统计） */
+/** 整卡列表（按槽位分组统计）。C3：只列**当前项目**（空 = 未分组）的条目。 */
 export async function listMemory(includeArchived = false): Promise<ProfileListResponse> {
   const { data } = await api.get('/v1/memory/profile', {
-    params: includeArchived ? { archived: 'true' } : {},
+    params: { ...(includeArchived ? { archived: 'true' } : {}), ...projectParams() },
   })
   // 兼容两种响应格式：{ success: true, data: {...} } 或 {...}
   return data.data ?? data
@@ -76,7 +77,7 @@ export async function upsertMemory(body: {
   /** 与已确认值冲突时后端登记待裁决（不覆盖），由记忆页处理 —— 见 SaveToMemoryDialog */
   conflict?: { old_value?: unknown; new_value?: unknown }
 }> {
-  const { data } = await api.post('/v1/memory/profile', body)
+  const { data } = await api.post('/v1/memory/profile', body, { params: projectParams() })
   return data
 }
 
@@ -88,18 +89,24 @@ export async function updateMemory(body: {
   confidence?: number
   source?: MemorySource
 }): Promise<{ entry: MemoryEntry }> {
-  const { data } = await api.put('/v1/memory/profile', body)
+  const { data } = await api.put('/v1/memory/profile', body, { params: projectParams() })
   return data
 }
 
 /** 删除单条记忆 */
 export async function deleteMemory(id: string): Promise<void> {
-  await api.delete(`/v1/memory/profile/${encodeURIComponent(id)}`)
+  await api.delete(`/v1/memory/profile/${encodeURIComponent(id)}`, {
+    params: projectParams(),
+  })
 }
 
-/** 清空全部记忆（需 confirm=true） */
+/** 清空**当前项目**的记忆（需 confirm=true） */
 export async function clearMemory(): Promise<{ deleted: number }> {
-  const { data } = await api.post('/v1/memory/profile/clear', { confirm: true })
+  const { data } = await api.post(
+    '/v1/memory/profile/clear',
+    { confirm: true },
+    { params: projectParams() },
+  )
   return data
 }
 
@@ -136,17 +143,23 @@ export async function searchMemory(
   query: string,
   opts?: { top_k?: number; slot?: MemorySlot },
 ): Promise<MemorySearchResponse> {
-  const { data } = await api.post('/v1/memory/search', {
-    query,
-    top_k: opts?.top_k ?? 10,
-    slot: opts?.slot,
-  })
+  const { data } = await api.post(
+    '/v1/memory/search',
+    {
+      query,
+      top_k: opts?.top_k ?? 10,
+      slot: opts?.slot,
+    },
+    { params: projectParams() },
+  )
   return data
 }
 
-/** 触发异步智能整理（去重 / 归档 / 补嵌入） */
+/** 触发**当前项目**的异步智能整理（去重 / 归档 / 补嵌入） */
 export async function startOrganize(): Promise<{ started: boolean; status: OrganizeStatus }> {
-  const { data } = await api.post('/v1/memory/organize')
+  const { data } = await api.post('/v1/memory/organize', undefined, {
+    params: projectParams(),
+  })
   return data
 }
 
@@ -160,7 +173,9 @@ export async function listSummaries(
 
 /** 整理任务状态 */
 export async function getOrganizeStatus(): Promise<OrganizeStatus> {
-  const { data } = await api.get('/v1/memory/organize/status')
+  const { data } = await api.get('/v1/memory/organize/status', {
+    params: projectParams(),
+  })
   // 兼容两种响应格式：{ success: true, status: {...} } 或 { status: {...} }
   return data.status ?? data
 }

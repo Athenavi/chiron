@@ -202,6 +202,34 @@ def _normalize_msg(
     )
 
 
+def _apply_system_prefix(
+    messages: list[dict[str, Any]], task: AgentTask
+) -> list[dict[str, Any]]:
+    """把 messages 的 system 段**重新定形**为「稳定前缀 + 记忆」（C2/D2 的统一落点）。
+
+    为什么需要这一步（它同时修掉两个真实缺陷）：
+
+    * **技能目录（D2）** 过去是在 messages 组装**之后**才拼进 `task.system_prompt` 的 ——
+      那时 `messages[0]` 早已定形，目录**根本没进去**（表现为"配了技能却看不到"）。
+    * **记忆（C2）** 若只在 `_build_messages` 里插，走 session cache 分支（**生产路径**：
+      `session_store` 存在时）会被整段丢掉 —— 那条分支的消息来自 cache，不经过 `_build_messages`。
+
+    两者都属于"system 段"，就统一在这里定形：**先摘掉已有的 system 消息，再按序插入**
+    （前缀 → 记忆）。因此本函数是**幂等**的 —— 无论调用方之前有没有插过。
+    """
+    rest = [m for m in messages if m.get("role") != "system"]
+    prefix: list[dict[str, Any]] = []
+    if task.system_prompt:
+        prefix.append(
+            _normalize_msg(
+                role="system", content=task.system_prompt, cache_breakpoint=True
+            )
+        )
+    if task.memory_context:
+        prefix.append(_normalize_msg(role="system", content=task.memory_context))
+    return prefix + rest
+
+
 def _resume_task_meta(task: AgentTask) -> dict[str, Any]:
     """落进 checkpoint 的"重建 AgentTask 所需的最小元信息"（C1 批 3+）。
 
@@ -654,6 +682,11 @@ class AgentTask:
     #: 工作台上下文（前端 ChatView.buildContext 组装并经 Go 透传）：
     #: kb_id / agent / agent_id / skill_names[] / workflow_id。引擎侧按需消费。
     workbench_context: dict[str, Any] = field(default_factory=dict)
+    #: C2：本轮召回的**记忆块**。它**不拼进 `system_prompt`**，而是作为一条独立的 system
+    #: 消息插在稳定前缀之后 —— `system_prompt`（系统提示 + 技能目录）是逐字稳定的前缀，
+    #: 各家 provider 的前缀缓存（OpenAI/DeepSeek 自动、Anthropic 显式）都靠它命中；
+    #: 把每轮可能变化的记忆拼进去，会让**整段前缀**的缓存一起失效。
+    memory_context: str = ""
 
     @classmethod
     def parse(cls, data: dict[str, Any]) -> AgentTask:
@@ -1286,6 +1319,8 @@ class AgentRuntime:
                 subagent_depth=task.subagent_depth,
                 experts=experts,
                 activated_tools=acts,
+                # C3：工作台选中的项目 → 工具侧（记住 / 召回 / 遗忘）按它隔离记忆
+                project=(task.workbench_context or {}).get("project") or "",
             )
 
             # ── 0.6 MemoryService.on_session_start（L1 建立 + L2/L3 预取） ──
@@ -1297,6 +1332,7 @@ class AgentRuntime:
                         tenant_id=task.tenant_id or "default",
                         user_id=task.user_id,
                         session_id=task.session_id,
+                        project=(task.workbench_context or {}).get("project") or "",
                     )
                     session_ctx = await self._memory.on_session_start(
                         session_id=task.session_id,
@@ -1334,6 +1370,7 @@ class AgentRuntime:
                         tenant_id=task.tenant_id or "default",
                         user_id=task.user_id,
                         session_id=task.session_id or "",
+                        project=(task.workbench_context or {}).get("project") or "",
                     )
                     # 注意：`MemoryService.recall` 的签名是
                     # `recall(tenant_id, user_id, query="", top_k=, exclude_turn_range=, slots=)`
@@ -1345,6 +1382,7 @@ class AgentRuntime:
                         scope.tenant_id,
                         scope.user_id,
                         query=task.content,
+                        project=scope.project,
                     )
                     if recalled.has_content:
                         mem_parts: list[str] = []
@@ -1381,11 +1419,11 @@ class AgentRuntime:
                             mem_parts.append("\n".join(sum_lines))
                         # A2：记忆块前面必须带**信任声明** —— 记忆来自历史对话与用户档案，
                         # 属可被间接影响的内容，不能让它以"系统指令"的口吻进入提示词。
-                        mem_block = f"{_MEMORY_TRUST_HEADER}\n\n" + "\n\n".join(mem_parts)
-                        if task.system_prompt:
-                            task.system_prompt = f"{task.system_prompt}\n\n{mem_block}"
-                        else:
-                            task.system_prompt = mem_block
+                        # C2：写入 `memory_context`（**独立** message），不再拼进
+                        # `system_prompt` —— 见 `AgentTask.memory_context` 的说明。
+                        task.memory_context = f"{_MEMORY_TRUST_HEADER}\n\n" + "\n\n".join(
+                            mem_parts
+                        )
                 except Exception as e:
                     logger.warning("Memory recall failed (non-blocking): %s", e)
 
@@ -1427,9 +1465,10 @@ class AgentRuntime:
             else:
                 messages = self._build_messages(task)
 
-            # ── 1.5 技能目录注入（D2：进 **system prompt**；D7：按选中的技能过滤）──
-            # 位置从 messages[0] 的 user 消息改到 system 段：system 前缀在会话内稳定，而"可用
-            # 能力清单"本就是系统级信息；混进 user 消息会让模型更容易把它当成用户指令。
+            # ── 1.5 system 段最终定形：技能目录（D2）+ 记忆（C2）──
+            # 目录必须在这里拼进 `task.system_prompt`，**且**消息的 system 段要在这之后重新
+            # 定形（`_apply_system_prefix`）—— 过去目录是在消息组装之后才拼的，等于没拼；
+            # 而记忆若只由 `_build_messages` 插入，走 session cache 的分支会把它整段丢掉。
             if mode_cfg.include_context:
                 from app.tools.skill_catalog import build_skill_catalog
 
@@ -1440,6 +1479,7 @@ class AgentRuntime:
                     task.system_prompt = (
                         f"{task.system_prompt}\n\n{catalog}" if task.system_prompt else catalog
                     )
+            messages = _apply_system_prefix(messages, task)
 
             tools = (
                 self._convert_tools(task.tools)
@@ -1496,6 +1536,8 @@ class AgentRuntime:
             _last_reasoning = ""  # 保存最后轮次的思考内容，用于兜底输出
             _answered = False  # 是否已产生最终回答
             _cache_saved = False  # S 修复：缓存是否已保存（finally 兜底）
+            from app.agent.interrupt import clear_interrupt, is_interrupted
+
             for turn in range(task.max_turns):
                 # ── 预算检查（每轮开头）──
                 # turns / tokens / wall 在这里判，steps 在每次工具调用后判（见下）。
@@ -1516,6 +1558,23 @@ class AgentRuntime:
                     yield AgentEvent(
                         type="error",
                         error=f"budget_exceeded:{exceeded}",
+                        trace_id=trace_id,
+                    )
+                    return
+
+                # ── 真取消检查（每轮开头，紧跟预算检查）──
+                # 用户显式取消（ACP 的 `session/cancel`、或运维中断）：**不是失败**，所以给
+                # `cancelled` 而不是 `error`。但**只发 cancelled 会让下游的 SSE 挂住** ——
+                # 前端与网关都以 done/error 作为终态，所以补一个 `done` 收尾。
+                if await is_interrupted(task.session_id):
+                    logger.info("Agent run cancelled by user (task=%s)", task.id)
+                    yield AgentEvent(type="cancelled", trace_id=trace_id)
+                    yield AgentEvent(
+                        type="done",
+                        input_tokens=total_input_tokens,
+                        output_tokens=total_output_tokens,
+                        cached_tokens=total_cached_tokens,
+                        model=model,
                         trace_id=trace_id,
                     )
                     return
@@ -2069,6 +2128,33 @@ class AgentRuntime:
                     len(messages),
                 )
 
+            # ── C6：回合级 L2 提炼（默认关）──
+            # 放在 on_turn_complete **之前**：提炼消耗的 token 要并进 total_input/output_tokens，
+            # 这样 on_turn_complete 的记账与 task_budget 的 tokens 轴才把这次调用算进去。
+            if settings.memory_distill_enabled and self._memory is not None and task.user_id:
+                try:
+                    from app.memory.distill import distill_candidates, render_transcript
+
+                    candidates, in_tokens, out_tokens = await distill_candidates(
+                        gateway=self._gateway,
+                        model=model,
+                        transcript=render_transcript(messages),
+                        max_items=int(settings.memory_distill_max_items),
+                    )
+                    # 只对**真实发生**的调用记账（失败时 distill 返回 0/0）
+                    total_input_tokens += in_tokens
+                    total_output_tokens += out_tokens
+                    if candidates:
+                        stats = await self._memory.ingest_candidates(
+                            task.tenant_id or "default",
+                            task.user_id,
+                            candidates,
+                            project=(task.workbench_context or {}).get("project") or "",
+                        )
+                        logger.info("Memory distill ingested: %s", stats)
+                except Exception as e:
+                    logger.warning("Memory distill failed (non-blocking): %s", e)
+
             # ── MemoryService.on_turn_complete（记账 + 异步巩固入队 + compaction 检测） ──
             if self._memory is not None and memory_started and task.session_id:
                 try:
@@ -2083,6 +2169,8 @@ class AgentRuntime:
                         tokens_out=total_output_tokens,
                         total_tokens=current_total_tokens,
                         max_tokens=max_ctx_tokens,
+                        # C5：带上项目 —— 自动整理的阈值记账按 (tenant, user, project) 分
+                        project=(task.workbench_context or {}).get("project") or "",
                     )
                     logger.debug(
                         "Memory turn completed: %s (tokens_in=%d, tokens_out=%d, usage=%.0f%%)",
@@ -2125,6 +2213,13 @@ class AgentRuntime:
                 error=str(e),
             )
         finally:
+            # ── 真取消信号必须清掉（否则会误伤**下一次**会话）──
+            # 放在 finally 的最前面：正常结束、异常、被取消退出，三条路径都要清。
+            try:
+                await clear_interrupt(task.session_id)
+            except Exception as e:  # noqa: BLE001 — 清信号失败不该影响退出路径
+                logger.warning("clear interrupt failed (non-blocking): %s", e)
+
             # ── 生命周期 hook：Stop（fire-and-forget，批 G）──
             # 放在 finally：异常/中断/生成器关闭等所有退出路径都要发。
             try:
@@ -2175,10 +2270,18 @@ class AgentRuntime:
                     logger.exception("Session cache save on exit failed")
 
     def _build_messages(self, task: AgentTask) -> list[dict[str, Any]]:
-        """构建 LLM 消息列表（完整路径：system + history + 当前用户消息）"""
+        """构建 LLM 消息列表（system + history + 当前用户消息）。
+
+        **不含记忆**：记忆由 `_apply_system_prefix` 在消息定形之后统一插入 —— 那条路径对
+        session cache 分支同样生效，详见该函数的说明。
+        """
         messages: list[dict[str, Any]] = []
         if task.system_prompt:
-            messages.append(_normalize_msg(role="system", content=task.system_prompt))
+            messages.append(
+                _normalize_msg(
+                    role="system", content=task.system_prompt, cache_breakpoint=True
+                )
+            )
         for msg in task.history:
             messages.append(
                 _normalize_msg(
@@ -2193,7 +2296,11 @@ class AgentRuntime:
         return messages
 
     def _build_history_msgs(self, task: AgentTask) -> list[dict[str, Any]]:
-        """构建仅含历史的消息列表（不含当前用户消息，供 session cache 使用）"""
+        """构建仅含历史的消息列表（不含当前用户消息，供 session cache 使用）
+
+        C2：这里**刻意不含记忆**（`task.memory_context`）—— 记忆是每轮按 query 重新召回的
+        临时上下文，写进 session cache 会让它冒充"历史"，下一轮读到过期记忆。
+        """
         messages: list[dict[str, Any]] = []
         if task.system_prompt:
             messages.append(_normalize_msg(role="system", content=task.system_prompt))

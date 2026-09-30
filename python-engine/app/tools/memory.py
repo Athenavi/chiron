@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 from app.memory.layers import SlotType
-from app.tools.context import get_tenant_id, get_user_id
+from app.tools.context import get_project, get_tenant_id, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -82,6 +82,8 @@ async def remember(key: str, value: str, slot: str = "fact") -> dict[str, Any]:
             value=value,
             confidence=60,
             source="tool_written",
+            # C3：写入当前工作台选的**项目**（空 = 未分组）
+            project=get_project(),
         )
 
         conflict = result.get("conflict")
@@ -142,7 +144,7 @@ async def recall(query: str = "", slot: str | None = None) -> dict[str, Any]:
     tenant_id = get_tenant_id() or "default"
 
     try:
-        result = await svc.recall(tenant_id, user_id, query)
+        result = await svc.recall(tenant_id, user_id, query, project=get_project())
 
         parts = []
 
@@ -163,7 +165,7 @@ async def recall(query: str = "", slot: str | None = None) -> dict[str, Any]:
         # 无 query 时后者恒为 0，会让调用方以为用户没有任何记忆。
         count = 0
         try:
-            data = await svc.list_entries(tenant_id, user_id)
+            data = await svc.list_entries(tenant_id, user_id, project=get_project())
             count = int(data.get("total", 0))
         except Exception as e:
             logger.warning("Failed to count memory entries: %s", e)
@@ -210,6 +212,7 @@ async def forget(key: str, slot: str | None = None) -> dict[str, Any]:
             user_id,
             key,
             slot=slot,
+            project=get_project(),
         )
 
         if deleted:
@@ -268,7 +271,9 @@ async def memory_search(query: str, limit: int = 10) -> dict[str, Any]:
     tenant_id = get_tenant_id() or "default"
 
     try:
-        result = await svc.recall(tenant_id, user_id, query, top_k=limit)
+        result = await svc.recall(
+            tenant_id, user_id, query, top_k=limit, project=get_project()
+        )
 
         # 从 summary_items 中提取 L3 结果
         l3_results = (

@@ -294,6 +294,15 @@ class SkillStore:
         )
         self._root = self._roots.write
         self._root.mkdir(parents=True, exist_ok=True)
+        #: D5：最近一次遍历遇到的载入问题（坏 JSON / 坏 frontmatter）。
+        #: 收集它是为了让**模型**也能看到"某技能加载失败" —— 否则它只是日志里的一行，
+        #: 表现是"我明明放了技能却不生效"（`_iter_search` 的注释已自陈该风险）。
+        self._warnings: list[str] = []
+
+    @property
+    def last_warnings(self) -> list[str]:
+        """最近一次 `list()` / `get()` 期间的载入告警（供 `<skill_load_warnings>` 注入）。"""
+        return list(self._warnings)
 
     @property
     def root(self) -> Path:
@@ -329,6 +338,7 @@ class SkillStore:
                     yield self._load(p), scope
                 except Exception as e:  # noqa: BLE001 — 单个坏文件不该拖垮整个列表
                     logger.warning("skill store: skip invalid skill json %s: %s", p, e)
+                    self._warnings.append(f"{p.name}: {str(e)[:200]}")
             for skill_dir in iter_skill_dirs(d):
                 try:
                     yield load_skill_dir(skill_dir), scope
@@ -336,6 +346,7 @@ class SkillStore:
                     logger.warning(
                         "skill store: skip invalid SKILL.md dir %s: %s", skill_dir, e
                     )
+                    self._warnings.append(f"{skill_dir.name}/SKILL.md: {str(e)[:200]}")
 
     def list(self) -> list[SkillDef]:
         """合并 user 目录 + 租户 _shared + 全局 _shared（去重，user 优先）。
@@ -343,6 +354,8 @@ class SkillStore:
         每个返回的 SkillDef 带 `scope` 标记（user/tenant/shared），供上层标注
         “团队共享”徽标等展示用途。同名技能取搜索路径中优先级最高的那份。
         """
+        # 每次重新收集：告警属于"这一次加载"，不是历史累积
+        self._warnings = []
         seen: dict[str, SkillDef] = {}
         for skill, scope in self._iter_search():
             if skill.name not in seen:
@@ -368,6 +381,48 @@ class SkillStore:
         p.write_text(
             json.dumps(skill.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8"
         )
+
+    def save_skill_md(self, name: str, text: str) -> Path:
+        """写**目录型**技能（`{root}/{name}/SKILL.md`）—— `skill_generate`（D4）用。
+
+        与 `save()`（扁平 `.skill.json`）并列：D1 之后两种载体都**读**，写的时候按调用方
+        要的形态写。这里只做**路径安全**校验（名字不能含路径分隔符 / `..`）；**内容校验不在
+        这里** —— 调用方写完用 `load_skill_dir()` 复查，不通过就回滚（见 `app/skill/generate.py`）。
+        """
+        safe = (name or "").strip()
+        allowed = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_.-")
+        if (
+            not safe
+            or len(safe) > 64
+            or not set(safe) <= allowed
+            or safe.startswith(".")
+            or safe.startswith("-")
+        ):
+            raise ValueError(f"invalid skill name: {name!r}")
+        target = self._root / safe
+        target.mkdir(parents=True, exist_ok=True)
+        path = target / "SKILL.md"
+        path.write_text(text, encoding="utf-8")
+        return path
+
+    def delete_skill_dir(self, name: str) -> bool:
+        """删除**目录型**技能（D4 的失败回滚：宁可什么都不留，也不留半个坏技能）。"""
+        safe = (name or "").strip().strip("/")
+        if not safe or any(ch in safe for ch in "/\\") or safe in (".", ".."):
+            return False
+        target = self._root / safe
+        if not target.is_dir():
+            return False
+        for item in sorted(target.rglob("*"), reverse=True):
+            try:
+                item.unlink() if item.is_file() else item.rmdir()
+            except OSError:
+                return False
+        try:
+            target.rmdir()
+        except OSError:
+            return False
+        return True
 
     def delete(self, name: str) -> bool:
         """仅删除写目标目录（默认 user 私有目录）中的技能。

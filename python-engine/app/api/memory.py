@@ -34,6 +34,15 @@ def _scope(request: Request) -> tuple[str, str]:
     return tenant_id, user_id
 
 
+def _project(request: Request) -> str:
+    """项目维（C3）：从 query 读 `project`；**空 = 未分组**（缺省）。
+
+    放在 query 而不是 body，是为了让 GET / DELETE 这些没有 body 的端点也统一 ——
+    前端只需在请求 URL 上带 `?project=...`，各端点口径就完全一致。
+    """
+    return (request.query_params.get("project") or "").strip()
+
+
 def _unavailable() -> JSONResponse:
     return JSONResponse(
         {"success": False, "error": "memory service unavailable (PostgreSQL required)"},
@@ -54,12 +63,15 @@ async def list_profile(request: Request) -> Any:
     if not user_id:
         return _bad_request("user_id is required")
     include_archived = request.query_params.get("archived") == "true"
-    data = await svc.list_entries(tenant_id, user_id, include_archived=include_archived)
+    project = _project(request)
+    data = await svc.list_entries(
+        tenant_id, user_id, include_archived=include_archived, project=project
+    )
     return {
         "success": True,
         **data,
         "slots": [{"slot": s, "label": SLOT_LABELS[s]} for s in SLOTS],
-        "organize": svc.organize_status(tenant_id, user_id),
+        "organize": svc.organize_status(tenant_id, user_id, project),
     }
 
 
@@ -83,6 +95,7 @@ async def upsert_profile(request: Request) -> Any:
             value=str(body.get("value") or ""),
             confidence=confidence,
             source=str(body.get("source") or "user_confirmed"),
+            project=_project(request),
         )
     except ValueError as e:
         return _bad_request(str(e))
@@ -113,6 +126,7 @@ async def update_profile(request: Request) -> Any:
             value=str(body["value"]) if body.get("value") is not None else None,
             confidence=int(confidence) if confidence is not None else None,
             source=str(body["source"]) if body.get("source") else None,
+            project=_project(request),
         )
     except ValueError as e:
         return _bad_request(str(e))
@@ -131,7 +145,9 @@ async def delete_profile(entry_id: str, request: Request) -> Any:
     tenant_id, user_id = _scope(request)
     if not user_id:
         return _bad_request("user_id is required")
-    deleted = await svc.delete_entry(tenant_id, user_id, entry_id)
+    deleted = await svc.delete_entry(
+        tenant_id, user_id, entry_id, project=_project(request)
+    )
     if not deleted:
         return JSONResponse(
             {"success": False, "error": "entry not found"}, status_code=404
@@ -151,7 +167,7 @@ async def clear_profile(request: Request) -> Any:
     body = await request.json()
     if not body.get("confirm"):
         return _bad_request("confirm=true is required to clear all memories")
-    count = await svc.clear_all(tenant_id, user_id)
+    count = await svc.clear_all(tenant_id, user_id, project=_project(request))
     return {"success": True, "deleted": count}
 
 
@@ -171,6 +187,7 @@ async def search_memory(request: Request) -> Any:
             query=str(body.get("query") or ""),
             top_k=int(body.get("top_k", 10)),
             slot=str(body["slot"]) if body.get("slot") else None,
+            project=_project(request),
         )
     except ValueError as e:
         return _bad_request(str(e))
@@ -185,11 +202,12 @@ async def organize_memory(request: Request) -> Any:
     tenant_id, user_id = _scope(request)
     if not user_id:
         return _bad_request("user_id is required")
-    result = await svc.start_organize(tenant_id, user_id)
+    project = _project(request)
+    result = await svc.start_organize(tenant_id, user_id, project)
     return {
         "success": True,
         **result,
-        "status": svc.organize_status(tenant_id, user_id),
+        "status": svc.organize_status(tenant_id, user_id, project),
     }
 
 
@@ -201,7 +219,10 @@ async def organize_status(request: Request) -> Any:
     tenant_id, user_id = _scope(request)
     if not user_id:
         return _bad_request("user_id is required")
-    return {"success": True, "status": svc.organize_status(tenant_id, user_id)}
+    return {
+        "success": True,
+        "status": svc.organize_status(tenant_id, user_id, _project(request)),
+    }
 
 
 # ── L3 摘要管理 ──────────────────────────────────────
