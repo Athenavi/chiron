@@ -213,8 +213,14 @@ async def test_runner_marks_partial_when_failed_with_output(monkeypatch):
 
 
 @pytest.mark.asyncio
-async def test_runner_marks_failed_without_output_as_retryable(monkeypatch):
-    """没跑出任何东西的失败才值得重试。"""
+async def test_unknown_failure_is_not_retryable(monkeypatch):
+    """A5 曾断言"没跑出任何东西的失败**值得**重试"；R3 把它修正为**反过来的保守默认**。
+
+    为什么改：`error="boom"` 这类**未知**错误的处置无法判断 —— 它可能是"工具参数非法"（重试一万次
+    也一样），也可能是"上游偶发"（值得重来）。而重试要花 token 与钱、还可能重复副作用（写文件、
+    发请求），所以拿不准必须落在"不重试"这一侧。**可**重试的是能识别出来的那几类
+    （`timeout` / `context_overflow` / `provider_retry`，见 tests/test_subagent_outcome.py）。
+    """
     seen = _capture()
     try:
         runner = _runner(monkeypatch, [runtime_mod.AgentEvent(type="error", error="boom")])
@@ -223,7 +229,7 @@ async def test_runner_marks_failed_without_output_as_retryable(monkeypatch):
         reset_lifecycle_sink()
 
     assert result.status == "failed"
-    assert [i for i in seen if i.phase == "child_failed"][-1].retryable is True
+    assert [i for i in seen if i.phase == "child_failed"][-1].retryable is False
 
 
 @pytest.mark.asyncio

@@ -41,6 +41,11 @@ from app.subagent.lifecycle import (
     SubagentLifecycle,
     emit_lifecycle,
 )
+from app.subagent.outcome import outcome_of
+
+#: R1：算作"执行"的工具名。其余工具（读文件 / 搜索 / 记忆 / 技能）不算 —— 把读也算成执行
+#: 会让收据误导。与 `_ALLOWED_EXECUTABLES` 不同：那是**命令**白名单，这是**工具**名。
+_EXEC_TOOL_NAMES: frozenset[str] = frozenset({"shell_exec", "run_code", "persistent_shell"})
 
 
 async def _watch_wall_budget(run_id: str, seconds: int) -> None:
@@ -305,6 +310,20 @@ class SubAgentRunner:
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
 
+        # ── R1（vendor/规划.md §4.5）：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
+        # Agent 的产出，而不是只信它的自述。有界快照；可用 SUBAGENT_HOST_RECEIPTS=false 关掉。
+        from app.config import settings
+
+        _receipts_on = bool(getattr(settings, "subagent_host_receipts", True))
+        _snap_before: Any = None
+        _execs_total = 0
+        _execs_failed = 0
+        if _receipts_on:
+            from app.subagent.receipts import capture_workspace
+            from app.tools.sandbox import workspace_dir
+
+            _snap_before = capture_workspace(workspace_dir())
+
         # ── S2：继承父会话上下文（默认关）──
         # 在**这里**构造（而不是装配 child 之后）是为了让它在整条 run 路径上都已定义：
         # 下面有多处提前 return（深度超限、装配失败…），收尾时仍要能读到审计计数。
@@ -476,6 +495,8 @@ class SubAgentRunner:
         if _wall:
             _wall_task = asyncio.create_task(_watch_wall_budget(run_id, _wall))
 
+        # R3：留一个异常句柄给结算处 —— 它是"结构化结局"的唯一依据（不在结算处重新猜）
+        _last_error: BaseException | None = None
         try:
             if ctx_snapshot is not None:
                 # 让孙 Agent 能报告 parent_run_id（runtime 内部的 set_tool_context 是合并语义）
@@ -486,6 +507,12 @@ class SubAgentRunner:
                 steps += 1
                 in_tokens += evt.input_tokens or 0
                 out_tokens += evt.output_tokens or 0
+                # R1：执行观测（宿主观测）。只统计**执行类**工具 —— 把读文件也算成"执行"会让
+                # 收据误导。`tool_call` 带工具名（可靠）；`tool_result` 带 error（判失败）。
+                if _receipts_on and evt.type == "tool_call" and evt.tool_name in _EXEC_TOOL_NAMES:
+                    _execs_total += 1
+                elif _receipts_on and evt.type == "tool_result" and evt.error:
+                    _execs_failed += 1
                 # per-run 预算：越界即中止（走失败收尾 → status=failed, error=budget_exceeded:<轴>）。
                 # 检查放在累计之后、处理之前：越界那条事件不再进入落库与前端流 ——
                 # 它属于"已经被砍掉的那一轮"，写进去只会让产物显得比真实情况更完整。
@@ -622,7 +649,8 @@ class SubAgentRunner:
                         input_tokens=evt.input_tokens or 0,
                         output_tokens=evt.output_tokens or 0,
                     )
-        except asyncio.CancelledError:
+        except asyncio.CancelledError as exc:
+            _last_error = exc
             status = "cancelled"
             emit_lifecycle(
                 SubagentLifecycle(
@@ -712,6 +740,7 @@ class SubAgentRunner:
                 )
             raise
         except Exception as exc:  # noqa: BLE001 - 子 Agent 失败不应炸掉父任务
+            _last_error = exc
             status = "failed"
             errors.append(f"{type(exc).__name__}: {exc}")
             logger.warning("subagent run %s failed: %s", run_id, exc)
@@ -737,6 +766,33 @@ class SubAgentRunner:
 
         # 5) L1 摘要 + 落库收尾
         summary = await self._summarise(task, raw_output)
+        # R1：把**宿主**观测到的证据附在摘要之后。摘要会被送回父上下文 —— 父该看到可核实的事实，
+        # 而不只是子 Agent 的自述。只读承诺被打破时会显式标违规（见 receipts 模块）。
+        if _receipts_on:
+            from app.subagent.receipts import (
+                ExecObservation,
+                append_host_receipts,
+                build_receipts,
+                capture_workspace,
+            )
+            from app.tools.sandbox import workspace_dir
+
+            # 与 `_resolve_tools` 的只读判定**同一口径**（不是另算一套）
+            _read_only = bool(spec.read_only) if spec is not None else not self._allow_write
+            summary = append_host_receipts(
+                summary,
+                build_receipts(
+                    before=_snap_before,
+                    after=capture_workspace(workspace_dir()),
+                    execs=ExecObservation(
+                        executions=_execs_total,
+                        failures=_execs_failed,
+                        # 被拦与失败在事件流里同形，不单列 —— 与其猜，不如不给这个数字
+                        blocked=0,
+                    ),
+                    read_only=_read_only,
+                ),
+            )
         max_chars = spec.output_max_chars if spec else 2000
         truncated = len(raw_output) > max_chars
         l2_text = raw_output[:max_chars] if truncated else raw_output
@@ -811,10 +867,21 @@ class SubAgentRunner:
         _validator_outcome = (
             "" if not _has_schema else ("ok" if structured and not structured_error else "invalid")
         )
+        # R3：把"能否重试"与"错误码"交给**同一处**判定（`outcome_of`）—— 落库的值与调用方看到的
+        # 值必须同源。此前这里是 `status in ("failed", "lost")` 的粗判，它把"上下文溢出"（压缩后
+        # 可重试）与"空任务"（重试一万次也一样）归成了一类。
+        _outcome = outcome_of(
+            status=status,
+            run_id=run_id,
+            error=" | ".join(errors)[:1000],
+            partial_output=raw_output,
+            exc=_last_error,
+        )
         if self._store is not None:
             await self._store.mark_lifecycle(
                 run_id,
-                retryable=status in ("failed", "lost"),
+                retryable=_outcome.retryable,
+                error_code=_outcome.error_code,
                 output_bytes=len(raw_output.encode("utf-8")),
                 validator_mode="schema" if _has_schema else "",
                 validator_outcome=_validator_outcome,
@@ -832,8 +899,8 @@ class SubAgentRunner:
                 depth=self._depth + 1,
                 profile=profile_ref,
                 status=status,
-                error_code=(errors[0][:60] if errors else ""),
-                retryable=status in ("failed", "lost"),
+                error_code=_outcome.error_code,
+                retryable=_outcome.retryable,
                 output_bytes=len(raw_output.encode("utf-8")),
                 validator_mode="schema" if _has_schema else "",
                 validator_outcome=_validator_outcome,
