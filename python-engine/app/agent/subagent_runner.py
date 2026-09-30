@@ -31,6 +31,16 @@ import jsonschema
 from app.agent.event_sink import EV_NOTICE, EV_REASONING, EV_STATUS, EV_TEXT, ST_CANCELLED, ST_TOOL
 from app.agent.profile import DEFAULT_MAX_DEPTH, ProfileSpec
 from app.subagent.budget import BudgetExceeded, TaskBudget
+from app.subagent.lifecycle import (
+    PHASE_CANCELLED,
+    PHASE_COMPLETED,
+    PHASE_CREATED,
+    PHASE_FAILED,
+    PHASE_PARTIAL,
+    PHASE_RESUME,
+    SubagentLifecycle,
+    emit_lifecycle,
+)
 
 
 async def _watch_wall_budget(run_id: str, seconds: int) -> None:
@@ -215,6 +225,15 @@ class SubAgentRunner:
         cache: Any = None,
         background: bool = False,
         allow_write: bool = False,
+        #: A4（方案 04）：per-call 的**工具收窄**（`CapabilityGrant` 的最小形态）。
+        #:
+        #: 与 `ProfileSpec.allowed_tools` 的关系是「**天花板 ∩ 收窄**」：Profile 说"这个 worker
+        #: 最多能给哪些"，本参数说"**这一次**只要哪些"，两者取**交集**，且**只能收窄、永不放宽**
+        #: （列在 Profile 之外的名字不会因此生效）。
+        #:
+        #: `None` = 不按调用收窄；**空序列** = 这一次不允许任何工具（两者语义不同，故用 `is not None`
+        #: 而不是真值判断）。
+        call_tools: Sequence[str] | None = None,
         budget: TaskBudget | None = None,
         response_schema: dict[str, Any] | None = None,
         inherit_context: bool | int = False,
@@ -226,6 +245,10 @@ class SubAgentRunner:
         self._background = bool(background)
         #: 是否**显式**授权写/执行：默认 False ⇒ 子 Agent 工具面只读（见 _resolve_tools）
         self._allow_write = bool(allow_write)
+        #: A4：`None` = 不按调用收窄；`frozenset()` = **这次不允许任何工具**
+        self._call_tools: frozenset[str] | None = (
+            frozenset(call_tools) if call_tools is not None else None
+        )
         #: per-run 预算（tokens/wall/cost）；None 表示不限（见 app/subagent/budget.py）
         self._budget = budget
         self._store = store
@@ -265,6 +288,20 @@ class SubAgentRunner:
         # 允许调用方**预先指定** run_id：后台委派必须先把 run_id 返回给父模型，
         # 它才能用 read_subagent_result(run_id) 查进度（见 app/tools/subagent.py）。
         run_id = run_id or new_run_id()
+
+        # A5（方案 04 §3）：生命周期遥测的**起点**。`rerun_of` 非空 ⇒ 这次是"恢复/重跑"而不是
+        # 新派发 —— 两者在诊断上必须能分开（参照 Reasonix 的 `child_resume`）。
+        # 遥测是**旁路**：没有注册 sink 时零开销，sink 出错也不会影响这次委派。
+        emit_lifecycle(
+            SubagentLifecycle(
+                phase=PHASE_RESUME if rerun_of else PHASE_CREATED,
+                run_id=run_id,
+                parent_run_id=self._parent_run_id,
+                depth=self._depth + 1,  # 本 runner 启动的是 depth+1 层的子 Agent
+                profile=profile_ref,
+                retryable=bool(rerun_of),
+            )
+        )
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
 
@@ -484,6 +521,16 @@ class SubAgentRunner:
                             sink.emit_progress(run_id=run_id, channel=EV_TEXT, content=answer,
                                                parent_run_id=parent_run_id, depth=child_depth,
                                                profile=profile_name)
+                elif evt.type == "thinking" and evt.content:
+                    # A1（方案 04）：native reasoning 走独立事件 —— 直接的 reasoning，
+                    # 不再需要从 text 里拆。上面 `text` 分支的 `_split_thinking` **保留**：
+                    # 模型自产的 `[thinking]…[/thinking]` 标记仍在正文里。
+                    reasoning_parts.append(evt.content)
+                    step_kind = "reasoning"
+                    if sink is not None:
+                        sink.emit_progress(run_id=run_id, channel=EV_REASONING, content=evt.content,
+                                           parent_run_id=parent_run_id, depth=child_depth,
+                                           profile=profile_name)
                 elif evt.type == "error" and evt.error:
                     errors.append(evt.error)
                     status = "failed"
@@ -577,6 +624,17 @@ class SubAgentRunner:
                     )
         except asyncio.CancelledError:
             status = "cancelled"
+            emit_lifecycle(
+                SubagentLifecycle(
+                    phase=PHASE_CANCELLED,
+                    run_id=run_id,
+                    parent_run_id=self._parent_run_id,
+                    depth=self._depth + 1,
+                    profile=profile_ref,
+                    status=ST_CANCELLED,
+                    output_bytes=len("\n".join(t for t in texts if t).encode("utf-8")),
+                )
+            )
             if sink is not None:
                 sink.emit_done(run_id=run_id, status=ST_CANCELLED, parent_run_id=parent_run_id,
                                depth=child_depth, profile=profile_name)
@@ -671,6 +729,11 @@ class SubAgentRunner:
         if not raw_output and errors:
             raw_output = ""
             status = "failed" if status == "completed" else status
+        elif status == "failed" and raw_output:
+            # A5：**有产出的失败**记为 `partial`（部分完成）。它与"什么都没产出"的处置不同：
+            # 前者通常值得保留产物、**不值得盲目重试**；后者才值得重试。这也正是
+            # Reasonix 用独立阶段（`child_partial`）而不是笼统 failed 的原因。
+            status = "partial"
 
         # 5) L1 摘要 + 落库收尾
         summary = await self._summarise(task, raw_output)
@@ -738,6 +801,46 @@ class SubAgentRunner:
                     "S4 structured extraction failed (run=%s): %s", run_id, structured_error
                 )
 
+        # A5：生命周期遥测的**终态**部分（content-free）。放在这里是因为 `structured` /
+        # `structured_error` 到这一步才确定 —— 收尾校验的结论本身就是遥测的一部分。
+        #
+        # `retryable` 只对"什么都没跑出来"的失败为真：`partial` 有产物，盲目重试通常只是白烧
+        # token。这条判断现在有**类型化**的落点（`subagent_runs.retryable`），不必让调度器去
+        # 解析错误文本。
+        _has_schema = self._response_schema is not None
+        _validator_outcome = (
+            "" if not _has_schema else ("ok" if structured and not structured_error else "invalid")
+        )
+        if self._store is not None:
+            await self._store.mark_lifecycle(
+                run_id,
+                retryable=status in ("failed", "lost"),
+                output_bytes=len(raw_output.encode("utf-8")),
+                validator_mode="schema" if _has_schema else "",
+                validator_outcome=_validator_outcome,
+                validator_attempt=1 if _has_schema else 0,
+            )
+
+        emit_lifecycle(
+            SubagentLifecycle(
+                phase={
+                    "completed": PHASE_COMPLETED,
+                    "partial": PHASE_PARTIAL,
+                }.get(status, PHASE_FAILED),
+                run_id=run_id,
+                parent_run_id=self._parent_run_id,
+                depth=self._depth + 1,
+                profile=profile_ref,
+                status=status,
+                error_code=(errors[0][:60] if errors else ""),
+                retryable=status in ("failed", "lost"),
+                output_bytes=len(raw_output.encode("utf-8")),
+                validator_mode="schema" if _has_schema else "",
+                validator_outcome=_validator_outcome,
+                validator_attempt=1 if _has_schema else 0,
+            )
+        )
+
         return SubagentRunResult(
             run_id=run_id,
             status=status,
@@ -784,7 +887,9 @@ class SubAgentRunner:
         else:
             read_only = not self._allow_write
         block_delegate = child_depth >= max_depth if max_depth else True
-        needs_narrowing = bool(allowed or disallowed or read_only or block_delegate)
+        needs_narrowing = bool(allowed or disallowed or read_only or block_delegate) or (
+            self._call_tools is not None
+        )
         if not needs_narrowing:
             return None
 
@@ -796,6 +901,13 @@ class SubAgentRunner:
             core = MINIMAL_TOOL_NAMES if mode == "minimal" else CORE_TOOL_NAMES
             names = base & set(core)
         names -= disallowed
+        # A4（方案 04）：per-call **收窄** —— 取交集，**只减不增**。
+        #
+        # 天花板仍然优先：调用方即使列了 Profile 白名单之外的名字，也会被上面 `base & allowed`
+        # 挡掉，所以"越权放宽"在这个位置上不可能发生。`frozenset()`（空）是合法的强收窄
+        # —— 这次不给任何工具，子 Agent 只能凭已有上下文作答。
+        if self._call_tools is not None:
+            names &= self._call_tools
         if read_only:
             names -= WRITE_TOOL_NAMES
         if block_delegate:

@@ -47,6 +47,11 @@ class _RecordingStore:
         self.finished_status = kwargs.get("status")
         self.finished_summary = kwargs.get("summary")
 
+    async def mark_lifecycle(self, *args, **kwargs):  # noqa: ANN002, ANN003
+        """A5：记录遥测调用（真实写入由 store 自己的测试覆盖）。"""
+        self.lifecycles = getattr(self, "lifecycles", [])
+        self.lifecycles.append(kwargs)
+
 
 @pytest.mark.asyncio
 async def test_cancel_persists_terminal_state(monkeypatch):

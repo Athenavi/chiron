@@ -56,6 +56,15 @@ SNAPSHOT_MESSAGES_MAX_BYTES = 256 * 1024
 #: 整段 —— 那就失去了"尾部窗口"的意义（也会让 checkpoint 行随会话线性膨胀）。
 #: 待 C4（模型窗口表）落地后，这里改为按窗口比例计算。
 SNAPSHOT_MAX_TAIL_MESSAGES = 40
+
+#: A2（方案 04 批次 1）：快照的 schema 版本。
+#:
+#: **为什么需要它**：没有版本时，"旧引擎读到新格式快照"是**静默**的 —— 旧代码按老字段名取值，
+#: 取不到就落到默认值，现场被悄悄读歪。有了版本，读取侧可以**明确拒绝**：宁可不续跑，
+#: 也不带着被误读的现场续跑（对齐 Reasonix 的 turn ledger —— 未知版本 `leave it untouched`）。
+#:
+#: 本常量引入**之前**写下的快照没有该字段，按 **v1** 认 —— 这是显式承认既有形态，不是猜测。
+SNAPSHOT_SCHEMA_VERSION = 1
 #: 快照至少保留的条数（保证最近若干条完整，避免把 `assistant(tool_calls)` 与其
 #: `tool` 结果切到快照两侧）
 SNAPSHOT_MIN_TAIL_MESSAGES = 4
@@ -64,6 +73,8 @@ SNAPSHOT_MIN_TAIL_MESSAGES = 4
 class RunCheckpoint(TypedDict, total=False):
     """回合边界快照。字段语义见模块文档与方案 01 §3.1。"""
 
+    #: A2：写入时的 schema 版本（见 `SNAPSHOT_SCHEMA_VERSION`）。读取侧据此拒绝未知版本。
+    schema_version: int
     turn_index: int
     messages: list[dict[str, Any]]
     done_tools: list[str]
@@ -125,6 +136,7 @@ def build_snapshot(
         tail = messages[-min_tail_messages:]
 
     return RunCheckpoint(
+        schema_version=SNAPSHOT_SCHEMA_VERSION,
         turn_index=turn_index,
         messages=tail,
         done_tools=list(done_tools or []),

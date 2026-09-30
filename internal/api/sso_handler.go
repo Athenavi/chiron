@@ -1173,8 +1173,10 @@ func (h *SSOHandler) provisionAndBind(r *http.Request, provider *ssoProvider, id
 		provider.TenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
 	if errors.Is(err, pgx.ErrNoRows) {
 		err = h.db.QueryRow(ctx,
-			`INSERT INTO users (tenant_id, email, name, password_hash, role, password_set)
-			 VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING id`,
+			`INSERT INTO users (id, tenant_id, email, name, password_hash, role, password_set)
+			 -- id 必须**显式**给：users.id 是 varchar(36) NOT NULL 且没有默认值（见 baseline 迁移）。
+			 -- 与邮箱/短信自动注册同一个坑：漏这一列 ⇒ null value in column "id"。
+			 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, FALSE) RETURNING id`,
 			provider.TenantID, email, name, string(passwordHash), role).Scan(&user.ID)
 		if err != nil {
 			return nil, err

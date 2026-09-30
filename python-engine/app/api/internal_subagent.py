@@ -37,6 +37,10 @@ class InternalSubagentRequest(BaseModel):
     mode: str = "normal"
     max_turns: int = 5
     allow_write: bool = False
+    #: A4（方案 04）：per-call **收窄**（`None` = 不收窄；空列表 = 不允许任何工具）。
+    #: 注意方向：这是**收窄**而非授权，所以与本文档开头的"不信任请求体里的授权标记"不冲突
+    #: —— 远端**只能要得更少**，天花板仍由本实例按 Profile 决定。
+    call_tools: list[str] | None = None
     depth: int = 0
 
 
@@ -86,6 +90,7 @@ async def internal_subagent_run(body: InternalSubagentRequest) -> dict[str, Any]
         user_id=body.user_id,
         background=False,
         allow_write=bool(body.allow_write),
+        call_tools=body.call_tools,
     )
     try:
         result = await runner.run(

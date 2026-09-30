@@ -14,6 +14,7 @@ from dataclasses import dataclass, field, replace
 from functools import partial
 from typing import TYPE_CHECKING, Any, cast
 
+from app.agent.harness_profile import apply_harness_suffix
 from app.agent.modes import CORE_TOOL_NAMES, AgentMode, ModeConfig, get_mode_config
 from app.config import settings
 from app.gateway.errors import is_context_overflow
@@ -220,10 +221,18 @@ def _apply_system_prefix(
     rest = [m for m in messages if m.get("role") != "system"]
     prefix: list[dict[str, Any]] = []
     if task.system_prompt:
+        # B1（方案 04 §3）：按**模型家族**追加 harness suffix。位置在这里是因为
+        # `_apply_system_prefix` 是 system 段的**唯一定形点**，所以 suffix 天然"追加在最后"
+        # （盖在调用方内容与 mode persona 之上，且不会被打断）。
+        #
+        # 注册表默认为空 ⇒ 这一步当前是**恒等变换**，不改变任何现有模型的行为；
+        # 给哪个模型家族加什么 suffix 是产品决定（见 vendor/方案04.md §8 未决问题）。
+        base_prompt = apply_harness_suffix(
+            task.system_prompt,
+            model=str((task.llm_config or {}).get("model", "") or ""),
+        )
         prefix.append(
-            _normalize_msg(
-                role="system", content=task.system_prompt, cache_breakpoint=True
-            )
+            _normalize_msg(role="system", content=base_prompt, cache_breakpoint=True)
         )
     if task.memory_context:
         prefix.append(_normalize_msg(role="system", content=task.memory_context))
@@ -1674,9 +1683,19 @@ class AgentRuntime:
                                 reasoning_content[_thinking_last_flushed:]
                             )
                             if safe_thinking:
+                                # A1（方案 04 批次 1）：思考走**独立事件**，不再包装成
+                                # `[thinking]…[/thinking]` 混进 `text`。
+                                #
+                                # 为什么必须分开：`[thinking]` 这个形态有**两个来源**——
+                                # ① 模型自产（prompt 教的，见 main.py 的思考模式提示词）；
+                                # ② 引擎包装 native reasoning（本处）。
+                                # 两者共用同一形态，消费方只能猜"这次是谁包的"：评测要剥、
+                                # ACP 要切、前端要切、子 agent 也要切 —— 同一逻辑四处实现，
+                                # 且每处都可能在边界上判错。独立事件把两条通道分开：
+                                # native reasoning 走 `thinking`，模型自产的标记仍留在正文里。
                                 yield AgentEvent(
-                                    type="text",
-                                    content=f"[thinking]{safe_thinking}[/thinking]",
+                                    type="thinking",
+                                    content=safe_thinking,
                                 )
                             _thinking_last_flushed = new_len
 

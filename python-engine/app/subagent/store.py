@@ -27,7 +27,10 @@ logger = logging.getLogger(__name__)
 #: 终态白名单：指标标签只允许这几个值，未知状态归到 "other"。
 #: 标签必须有界 —— 否则一次笔误（例如 status="Completed"）就会在 Prometheus 里
 #: 分裂出新的时间序列，把"状态机是否收敛"的统计彻底打乱。
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "lost"})
+#: A5（方案 04 §3）：`partial` = **部分完成**（有产物但不完整，例如撞上 wall 预算时）。
+#: 它与 `failed` 的差别是"有没有可用产出"，与 `cancelled` 的差别是"谁停的"——三者都算终态。
+#: 参照 Reasonix 的 7 阶段里的 `child_partial`。
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled", "lost", "partial"})
 
 
 def _status_label(status: str) -> str:
@@ -66,6 +69,23 @@ RERUN_OF_SQL = "UPDATE subagent_runs SET rerun_of = $2 WHERE id = $1"
 #: 未执行迁移（0004_subagent_inherited_messages）的库只会丢这个计数，
 #: 不会让普通派发的 INSERT 因未知列整条失败。
 INHERITED_MESSAGES_SQL = "UPDATE subagent_runs SET inherited_messages = $2 WHERE id = $1"
+
+#: A5（方案 04 §3）：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
+#: （0006_subagent_lifecycle）的库只会丢这几列，不会让子 Agent 的收尾 UPDATE 整条失败。
+#:
+#: 五列都是 **content-free** 的：`retryable` 是"值不值得重试"的判断，`output_bytes` 是体量
+#: （不是全文），`validator_*` 是收尾校验的模式/结论/第几次尝试。刻意不含 prompt / 推理 /
+#: 工具输出 / 路径 —— 这样它才能被转发进诊断链路而不泄漏会话内容。
+#: `COALESCE` 让调用方可以只更新其中一部分（传 None = 保持原值）。
+LIFECYCLE_SQL = """
+UPDATE subagent_runs
+   SET retryable = COALESCE($2, retryable),
+       output_bytes = COALESCE($3, output_bytes),
+       validator_mode = COALESCE($4, validator_mode),
+       validator_outcome = COALESCE($5, validator_outcome),
+       validator_attempt = COALESCE($6, validator_attempt)
+ WHERE id = $1
+"""
 
 #: 僵尸收口：只动超龄的 running 行（进程重启后它们的收尾代码再也不会执行）
 #:
@@ -316,6 +336,36 @@ class SubagentRunStore:
             self._degrade("finish_run", exc)
             return
         self._mark_finalized(run_id, status)
+
+    async def mark_lifecycle(
+        self,
+        run_id: str,
+        *,
+        retryable: bool | None = None,
+        output_bytes: int | None = None,
+        validator_mode: str | None = None,
+        validator_outcome: str | None = None,
+        validator_attempt: int | None = None,
+    ) -> None:
+        """写生命周期遥测（A5）。传 ``None`` = 保持原值，可只更新其中几项。
+
+        **全部是 content-free 的**：不含 prompt / 推理 / 工具输出 / 路径，因此可安全转发进诊断
+        链路。失败只降级（与 `finish_run` 同语义 —— 遥测缺失不该影响对话行为）。
+        """
+        if not self.available:
+            return
+        try:
+            await self._pool.execute(
+                LIFECYCLE_SQL,
+                run_id,
+                retryable,
+                None if output_bytes is None else int(output_bytes),
+                validator_mode,
+                validator_outcome,
+                None if validator_attempt is None else int(validator_attempt),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._degrade("mark_lifecycle", exc)
 
     async def reap_stale_runs(self, *, max_age_hours: int) -> int:
         """僵尸收口：把"还在 running 但早已超龄"的 run 标记为 ``lost``。

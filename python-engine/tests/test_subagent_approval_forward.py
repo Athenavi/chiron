@@ -170,6 +170,10 @@ class _NullStore:
     async def finish_run(self, *args, **kwargs):
         return None
 
+    async def mark_lifecycle(self, *args, **kwargs):
+        """A5：生命周期遥测。替身只需"有这个能力" —— 真实写入由 store 自己的测试覆盖。"""
+        return None
+
 
 def _runner_with_events(monkeypatch, events):
     from app.agent import runtime as runtime_mod
