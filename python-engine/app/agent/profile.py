@@ -5,11 +5,12 @@
 * ``system_prompt`` / ``max_turns`` / ``timeout_seconds`` / ``skills`` / ``plugins`` /
   ``workflows`` / ``kb_id`` / ``visibility`` —— 直接复用既有列；
 * ``model`` / ``effort`` 与 Profile 专属项（``allowed_tools`` / ``disallowed_tools`` /
-  ``read_only`` / ``max_depth`` / ``output_max_chars`` / ``summary_max_chars`` /
-  ``isolation``）—— 放 ``llm_config`` JSON，形如::
+  ``read_only`` / ``write_paths`` / ``max_depth`` / ``output_max_chars`` /
+  ``summary_max_chars`` / ``isolation``）—— 放 ``llm_config`` JSON，形如::
 
       {"model": "deepseek-chat", "effort": "high",
-       "subagent": {"read_only": true, "allowed_tools": ["read_file", "grep"]}}
+       "subagent": {"read_only": true, "allowed_tools": ["read_file", "grep"],
+                    "write_paths": ["docs/"]}}
 
   也兼容 ``llm_config`` 顶层直接写这些键。**不放在 ``tools`` 列**：该列的既有语义是
   "工具定义数组"（Go 网关会把它作为 ``tools`` 透传给引擎），复用会与既有语义冲突。
@@ -57,6 +58,10 @@ class ProfileSpec:
     allowed_tools: tuple[str, ...] = ()
     disallowed_tools: tuple[str, ...] = ()
     read_only: bool = False
+    #: R2：这个 worker **声明**要写的路径（相对工作区或绝对路径，目录用尾部分隔符标记）。
+    #: 只在开启写路径仲裁（`settings.subagent_write_arbitration`）时生效：
+    #: 声明了 ⇒ 与其它可写委派按路径冲突排队；空 ⇒ 可写时按整工作区独占。
+    write_paths: tuple[str, ...] = ()
     model: str = ""
     effort: str = ""
     max_turns: int = DEFAULT_MAX_TURNS
@@ -150,6 +155,7 @@ def parse_profile_row(row: Mapping[str, Any]) -> ProfileSpec:
         allowed_tools=_as_tuple(pick("allowed_tools")),
         disallowed_tools=_as_tuple(pick("disallowed_tools")),
         read_only=_as_bool(pick("read_only"), False),
+        write_paths=_as_tuple(pick("write_paths")),
         model=str(pick("model") or ""),
         effort=str(pick("effort") or ""),
         max_turns=_as_int(row.get("max_turns"), DEFAULT_MAX_TURNS),

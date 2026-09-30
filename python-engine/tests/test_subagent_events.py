@@ -123,3 +123,46 @@ def test_thinking_never_reaches_l2_output():
     wrapped = _wrap_result("rs_1", "reviewer", ST_COMPLETED, "结论：改动没问题", False)
     assert "结论" in wrapped
     assert "[thinking]" not in wrapped
+
+
+# ── R4：可注入时钟（确定性验证窗口与预算，不靠 sleep）──
+
+
+class _FakeClock:
+    """手动推进的假时钟（对位 Reasonix 的 ``fakeProgressClock``）。"""
+
+    def __init__(self, start: float = 1000.0) -> None:
+        self.now = start
+
+    def __call__(self) -> float:
+        return self.now
+
+    def advance(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def test_default_clock_is_monotonic():
+    """默认时钟必须是**单调**的：墙钟回拨会让合并窗口与每秒预算同时失灵。"""
+    import time as _time
+
+    assert EventSink()._clock is _time.monotonic
+
+
+def test_merge_window_advances_with_injected_clock():
+    clock = _FakeClock()
+    sink = EventSink(merge_window=0.25, clock=clock)
+    sink.emit_progress(run_id="rs_1", channel=EV_TEXT, content="a")
+    assert sink.drain() == []                       # 窗口内：不下发
+    clock.advance(0.25)                             # 假时钟推进，不 sleep
+    assert [e.content for e in sink.drain()] == ["a"]
+
+
+def test_per_run_budget_resets_with_injected_clock():
+    clock = _FakeClock()
+    sink = EventSink(merge_window=0.0, per_run_budget=1, clock=clock)
+    sink.emit_progress(run_id="rs_1", channel=EV_STATUS, status=ST_TOOL)
+    sink.emit_progress(run_id="rs_1", channel=EV_STATUS, status=ST_TOOL)
+    assert len(sink.drain()) == 1                   # 同一秒内：第二条被预算丢弃
+    clock.advance(1.0)
+    sink.emit_progress(run_id="rs_1", channel=EV_STATUS, status=ST_TOOL)
+    assert len(sink.drain()) == 1                   # 下一秒：预算重置

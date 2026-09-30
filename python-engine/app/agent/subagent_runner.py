@@ -22,7 +22,7 @@ import logging
 import re
 import textwrap
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -46,6 +46,11 @@ from app.subagent.outcome import outcome_of
 #: R1：算作"执行"的工具名。其余工具（读文件 / 搜索 / 记忆 / 技能）不算 —— 把读也算成执行
 #: 会让收据误导。与 `_ALLOWED_EXECUTABLES` 不同：那是**命令**白名单，这是**工具**名。
 _EXEC_TOOL_NAMES: frozenset[str] = frozenset({"shell_exec", "run_code", "persistent_shell"})
+
+
+def _noop_release() -> None:
+    """R2：未开启写路径仲裁时的 release（no-op）—— 让收尾路径无需判空。"""
+    pass
 
 
 async def _watch_wall_budget(run_id: str, seconds: int) -> None:
@@ -239,6 +244,13 @@ class SubAgentRunner:
         #: `None` = 不按调用收窄；**空序列** = 这一次不允许任何工具（两者语义不同，故用 `is not None`
         #: 而不是真值判断）。
         call_tools: Sequence[str] | None = None,
+        #: R2（vendor/规划.md §3.5）：本次委派**声明**要写的路径（见 app/subagent/scheduler.py）。
+        #:
+        #: `None` = 不覆盖，用 Profile 的 `write_paths`；两边都没有 ⇒ 可写委派由仲裁器按
+        #: **整工作区**独占（保守方向）。非空 = 本次委派的声明。
+        #: 只在 `settings.subagent_write_arbitration` 开启时生效，否则这个参数完全不起作用
+        #: （"不写"这一层由 `read_only` / `allow_write` 表达，不由这里表达）。
+        write_paths: Sequence[str] | None = None,
         budget: TaskBudget | None = None,
         response_schema: dict[str, Any] | None = None,
         inherit_context: bool | int = False,
@@ -256,6 +268,10 @@ class SubAgentRunner:
         )
         #: per-run 预算（tokens/wall/cost）；None 表示不限（见 app/subagent/budget.py）
         self._budget = budget
+        #: R2：本次委派的写路径声明；`None` = 不覆盖（用 Profile 的 `write_paths`）。
+        self._write_paths: tuple[str, ...] | None = (
+            tuple(write_paths) if write_paths is not None else None
+        )
         self._store = store
         self._pool = pool
         self._depth = int(depth or 0)
@@ -310,7 +326,7 @@ class SubAgentRunner:
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
 
-        # ── R1（vendor/规划.md §4.5）：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
+        # ── R1（vendor/规划.md §3.5）：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
         # Agent 的产出，而不是只信它的自述。有界快照；可用 SUBAGENT_HOST_RECEIPTS=false 关掉。
         from app.config import settings
 
@@ -497,7 +513,15 @@ class SubAgentRunner:
 
         # R3：留一个异常句柄给结算处 —— 它是"结构化结局"的唯一依据（不在结算处重新猜）
         _last_error: BaseException | None = None
+        # R2：写路径仲裁的槽。**默认关**时 `_acquire_write_slot` 直接返回 no-op。
+        # 在 try **内部**取是有意的：取不到（嵌套无容量 / 声明非法）就落进既有的异常路径，
+        # 于是"失败"这件事与其它失败走同一条收尾（落库 + 终态事件 + R3 结构化结局），
+        # 而不是另开一条只属于仲裁的收尾分支；取到了则必然进 try ⇒ finally 一定能释放。
+        slot_release: Callable[[], None] = _noop_release
         try:
+            slot_release = await self._acquire_write_slot(
+                spec, run_id=run_id, child_depth=child_depth
+            )
             if ctx_snapshot is not None:
                 # 让孙 Agent 能报告 parent_run_id（runtime 内部的 set_tool_context 是合并语义）
                 from app.tools.context import set_tool_context
@@ -745,6 +769,9 @@ class SubAgentRunner:
             errors.append(f"{type(exc).__name__}: {exc}")
             logger.warning("subagent run %s failed: %s", run_id, exc)
         finally:
+            # R2：先释放写槽。放在 finally 的**第一句**是为了让"任何**退出路径**都释放"
+            # 成为结构上的必然（含取消、异常、正常收尾）。release 幂等。
+            slot_release()
             # 停止 wall 监控：正常情况下它还在 sleep。必须取消，否则每个已完成的 run 都会
             # 残留一个定时器，到点后对已结束的 run 调 cancel（幂等但会刷无意义的告警日志）。
             if _wall_task is not None:
@@ -777,8 +804,8 @@ class SubAgentRunner:
             )
             from app.tools.sandbox import workspace_dir
 
-            # 与 `_resolve_tools` 的只读判定**同一口径**（不是另算一套）
-            _read_only = bool(spec.read_only) if spec is not None else not self._allow_write
+            # 与 `_resolve_tools` 的只读判定**同一口径**（同问 `_child_read_only`，不另算一套）
+            _read_only = self._child_read_only(spec)
             summary = append_host_receipts(
                 summary,
                 build_receipts(
@@ -925,6 +952,63 @@ class SubAgentRunner:
             inherited_messages=inherited.inherited_messages,
         )
 
+    # ── 只读口径（**单一出处**，不许各算一套）──
+
+    def _child_read_only(self, spec: ProfileSpec | None) -> bool:
+        """这次委派的子 Agent 是否只读。
+
+        三个消费方都问这一个方法，是**刻意的**：工具面（`_resolve_tools` 决定剥不剥写工具）、
+        R1 的宿主收据（判不判"只读却改了工作区 ⇒ 违规"）、R2 的写路径仲裁（占不占 writer 槽）
+        必须同口径 —— 各算一套的必然结局是"工具面允许写、收据按只读判违规"这类自相矛盾。
+
+        口径本身沿用既有语义：有 Profile 就听 Profile 的 `read_only`；没有 Profile 时
+        "只读"是**默认**（子 Agent 与父共享工作区，需要写必须显式 `allow_write=true`）。
+        """
+        if spec is not None:
+            return bool(spec.read_only)
+        return not self._allow_write
+
+    # ── R2：写路径仲裁 ──
+
+    async def _acquire_write_slot(
+        self, spec: ProfileSpec | None, *, run_id: str, child_depth: int
+    ) -> Callable[[], None]:
+        """按写路径声明取一个会话级并发/写槽；**未开启仲裁时返回 no-op**。
+
+        返回的 release **必须**在 finally 里调用（幂等，重复调用安全）。
+
+        声明非法（空条目 / glob / 逃出工作区）时 `normalize_write_paths` 抛 `ValueError`，
+        嵌套无容量时 `acquire` 抛 `WriteConflictError` —— 两者都由 `run()` 的既有异常路径
+        记成这次委派的失败原因。**不静默降级**：悄悄"不仲裁、继续写"会退化成
+        "以为有保护其实没有"。
+        """
+        from app.subagent.scheduler import AcquireRequest, get_scheduler, normalize_write_paths
+        from app.tools.sandbox import workspace_dir
+
+        sched = get_scheduler(self._parent_session_id, workspace_root=str(workspace_dir()))
+        if sched is None:
+            return _noop_release
+        declared = (
+            self._write_paths
+            if self._write_paths is not None
+            else (tuple(spec.write_paths) if spec is not None else ())
+        )
+        paths = normalize_write_paths(sched.workspace_root, declared)
+        writer = not self._child_read_only(spec)
+        release, _claim_id = await sched.acquire(
+            AcquireRequest(
+                writer=writer,
+                write_paths=paths,
+                # 孙级委派（父本身就是子 Agent）：排队即自等死锁 ⇒ 立即失败。
+                nested=child_depth > 1,
+            )
+        )
+        logger.debug(
+            "subagent %s acquired write slot (writer=%s declared_paths=%d, nested=%s)",
+            run_id, writer, len(paths.paths), child_depth > 1,
+        )
+        return release
+
     # ── 工具集收窄 ──
 
     def _resolve_tools(
@@ -949,10 +1033,7 @@ class SubAgentRunner:
         #
         # 注意：此前只对"后台 run"收紧，前台（`run_in_background=false`）默认带写/执行 ——
         # 那条路径同样与父共享工作区，没有理由更宽。
-        if spec is not None:
-            read_only = bool(spec.read_only)
-        else:
-            read_only = not self._allow_write
+        read_only = self._child_read_only(spec)
         block_delegate = child_depth >= max_depth if max_depth else True
         needs_narrowing = bool(allowed or disallowed or read_only or block_delegate) or (
             self._call_tools is not None

@@ -41,6 +41,10 @@ class InternalSubagentRequest(BaseModel):
     #: 注意方向：这是**收窄**而非授权，所以与本文档开头的"不信任请求体里的授权标记"不冲突
     #: —— 远端**只能要得更少**，天花板仍由本实例按 Profile 决定。
     call_tools: list[str] | None = None
+    #: R2（vendor/规划.md §3.5）：本次委派的**写路径声明**。远端知道自己的目标文件，
+    #: 报上来才能与其它可写委派按路径并行（否则未声明 = 整工作区独占，只能串行）。
+    #: 注意它**只收窄粒度、不放宽权限** —— "能不能写"仍由本实例的 `allow_write` 决定。
+    write_paths: list[str] | None = None
     depth: int = 0
 
 
@@ -91,6 +95,7 @@ async def internal_subagent_run(body: InternalSubagentRequest) -> dict[str, Any]
         background=False,
         allow_write=bool(body.allow_write),
         call_tools=body.call_tools,
+        write_paths=body.write_paths,
     )
     try:
         result = await runner.run(

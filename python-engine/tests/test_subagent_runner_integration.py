@@ -97,3 +97,133 @@ async def test_runner_reports_failure_without_output(monkeypatch):
     types = [e.type for e in sink.drain()]
     assert types[-1] == EV_DONE
     assert "subagent.notice" in types
+
+
+# ── R2：写路径仲裁的**接线**（模块有测试 ≠ 接上了 —— 这两条钉的是接线本身）──
+
+
+def _blocking_run_factory(started, go):
+    """跑起来先停住（等 ``go``），好让测试观察"槽在 run 期间被占"。"""
+    from app.agent import runtime as runtime_mod
+
+    async def _fake_run(self, task):  # noqa: ANN001 - 模拟 AgentRuntime.run 的签名
+        started.set()
+        await go.wait()
+        yield runtime_mod.AgentEvent(type="text", content="写完了")
+
+    return _fake_run
+
+
+async def _wait_until(predicate, *, attempts: int = 300, interval: float = 0.01) -> None:
+    """把事件循环推进到 ``predicate`` 为真。
+
+    比"睡固定的几次"强：'第二个委派已经进入排队' 本身是**正面证据**，
+    而"睡了几次它还没开始"只是没观察到 —— 断言得更弱。
+
+    用**真实**的小睡眠而不是 `sleep(0)`：`run()` 在跑到 runtime 之前会走运行期缓存与归属
+    租约（Redis），只让出控制权推不动真实 I/O。
+    """
+    import asyncio
+
+    for _ in range(attempts):
+        if predicate():
+            return
+        await asyncio.sleep(interval)
+    raise AssertionError("condition not met within scheduling budget")
+
+
+@pytest.mark.asyncio
+async def test_write_slot_is_taken_and_released_around_run(monkeypatch):
+    """开启仲裁后：槽在 run 期间**确实被占**，run 结束后**必然释放**（finally）。"""
+    import asyncio
+
+    from app.agent import runtime as runtime_mod
+    from app.config import settings
+    from app.subagent import scheduler as scheduler_mod
+    from app.subagent.scheduler import get_scheduler
+    from app.tools.sandbox import workspace_dir
+
+    monkeypatch.setattr(settings, "subagent_write_arbitration", True)
+    monkeypatch.setattr(settings, "subagent_max_writers", 1)
+    scheduler_mod.reset_schedulers()
+
+    started, go = asyncio.Event(), asyncio.Event()
+    monkeypatch.setattr(runtime_mod.AgentRuntime, "run", _blocking_run_factory(started, go))
+
+    runner = SubAgentRunner(
+        gateway=object(),
+        parent_session_id="sess-slot",
+        tenant_id="t1",
+        user_id="u1",
+        # 可写且未声明路径 ⇒ 整工作区声明 ⇒ 占 writer 槽
+        allow_write=True,
+    )
+    task = asyncio.create_task(runner.run("写点东西", max_turns=1))
+    await asyncio.wait_for(started.wait(), timeout=2.0)
+
+    sched = get_scheduler("sess-slot", workspace_root=str(workspace_dir()))
+    assert sched is not None
+    assert sched.active_counts() == (1, 1)      # 拿到槽才开跑
+
+    go.set()
+    result = await asyncio.wait_for(task, timeout=2.0)
+    assert result.status == "completed"
+    assert sched.active_counts() == (0, 0)      # 释放是 finally 的必然结果
+    scheduler_mod.reset_schedulers()
+
+
+@pytest.mark.asyncio
+async def test_concurrent_writers_serialize_through_the_runner(monkeypatch):
+    """同一会话的两个**可写**委派：第二个必须排队，不能同时开跑（否则会静默互相覆盖）。"""
+    import asyncio
+
+    from app.agent import runtime as runtime_mod
+    from app.config import settings
+    from app.subagent import scheduler as scheduler_mod
+    from app.subagent.scheduler import get_scheduler
+    from app.tools.sandbox import workspace_dir
+
+    monkeypatch.setattr(settings, "subagent_write_arbitration", True)
+    scheduler_mod.reset_schedulers()
+
+    go = asyncio.Event()
+    started = asyncio.Event()
+    spawned: list[str] = []
+
+    async def _fake_run(self, task):  # noqa: ANN001 - 模拟 AgentRuntime.run 的签名
+        # runtime.run 收到的是 AgentTask（不是字符串）—— 取它的 content 做记号
+        spawned.append(getattr(task, "content", ""))
+        started.set()
+        await go.wait()
+        yield runtime_mod.AgentEvent(type="text", content="ok")
+
+    monkeypatch.setattr(runtime_mod.AgentRuntime, "run", _fake_run)
+
+    def _runner() -> SubAgentRunner:
+        return SubAgentRunner(
+            gateway=object(),
+            parent_session_id="sess-serial",
+            tenant_id="t1",
+            user_id="u1",
+            allow_write=True,
+        )
+
+    sched = get_scheduler("sess-serial", workspace_root=str(workspace_dir()))
+    assert sched is not None
+
+    first = asyncio.create_task(_runner().run("任务一", max_turns=1))
+    await asyncio.wait_for(started.wait(), timeout=5.0)
+    assert spawned == ["任务一"]
+    assert sched.active_counts() == (1, 1)
+
+    second = asyncio.create_task(_runner().run("任务二", max_turns=1))
+    # 正面证据：第二个**已经进入排队**（不是"还没轮到调度"）
+    await _wait_until(lambda: sched.pending_waiter_count() == 1)
+    assert spawned == ["任务一"]                # 还在等槽：**没有**同时开跑
+
+    go.set()
+    results = await asyncio.wait_for(asyncio.gather(first, second), timeout=5.0)
+    assert [r.status for r in results] == ["completed", "completed"]
+    assert spawned == ["任务一", "任务二"]
+    assert sched.active_counts() == (0, 0)
+    scheduler_mod.reset_schedulers()

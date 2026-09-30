@@ -95,7 +95,7 @@ DOM 实测尺寸**先进暂存区，再一次性发布为不可变快照**：
 | **模型自产**（prompt 教模型输出的标记） | 就在正文 `text` 里 | 由 `splitThinking` 解析；**绝不吞内容**（正文里提到 `[thinking]` 字样必须完整保留） |
 
 * 违反表现：把 `thinking` 增量塞进 `streamBuf` ⇒ `splitThinking` 把它当正文，刚分开的两条通道又合回去；
-* 这是追赶批次的 A1（见 `vendor/规划.md` §3.3）：此前引擎**把 native reasoning 包装成与模型标记相同的形态**混进 `text`，消费方
+* 这是追赶批次的 A1（见 `vendor/规划.md` §4 的"思考改独立事件"一条）：此前引擎**把 native reasoning 包装成与模型标记相同的形态**混进 `text`，消费方
   只能猜"谁包的"。
 
 ## 2. 依赖方向
