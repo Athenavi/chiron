@@ -21,7 +21,6 @@ async def edit_file(
     start_line: int | None = None,
     end_line: int | None = None,
     new_content: str | None = None,
-    root: str = ".",
 ) -> dict[str, Any]:
     """Edit a file and return a unified diff of the changes.
 
@@ -35,7 +34,9 @@ async def edit_file(
     from app.tools.sandbox import safe_join
 
     backend = get_backend()
-    target = safe_join(path)  # 沙箱隔离：root 参数废弃（S 安全修复）
+    # 沙箱隔离：路径一律 clamp 到工作区（此前有个 `root` 参数被传进来又被忽略 ——
+    # schema 说它能改"path safety 的根"，实现根本不看它。已移除，免得模型以为能改根）
+    target = safe_join(path)
 
     # 批 B：读**全文原文**经后端（`limit=0` 的语义见 `ReadResult` 的文档）——
     # 这里不能用默认分页：唯一性校验与 diff 都要求完整且逐字节精确的内容。
@@ -56,12 +57,6 @@ async def edit_file(
             return {"error": "old_string not found in file"}
         if count > 1:
             return {"error": f"old_string occurs {count} times; it must be unique"}
-        # read-before-write：文件被读过且已变化则拒绝
-        from app.tools.fs_guard import check_before_write
-
-        conflict = check_before_write(target)
-        if conflict:
-            return {"error": conflict}
         modified = original.replace(old_string, new_string, 1)
 
     # ── Mode 2: line-range replacement ────────────────────────────
@@ -87,6 +82,17 @@ async def edit_file(
         return {
             "error": "provide (old_string, new_string) or (start_line, end_line, new_content)"
         }
+
+    # ── read-before-write：**两种模式都要过** ──
+    #
+    # 此前只有精确替换模式做了这项检查，行范围模式能绕开 —— 同一个工具里两套口径，
+    # 等于给"基于过期视图编辑"留了个后门。检查点放在两个分支汇合之后，形态上也更稳
+    # （新增编辑模式时不会再漏）。
+    from app.tools.fs_guard import check_before_write
+
+    conflict = check_before_write(target)
+    if conflict:
+        return {"error": conflict}
 
     # ── Write & diff ──────────────────────────────────────────────
     # 写入前快照：`/undo` 据此真正恢复（此前 /undo 只回显字符串，文件没有任何变化）。
@@ -141,11 +147,6 @@ registry.register(
             "new_content": {
                 "type": "string",
                 "description": "Replacement content for line-range edit",
-            },
-            "root": {
-                "type": "string",
-                "default": ".",
-                "description": "Root directory for path safety",
             },
         },
         "required": ["path"],

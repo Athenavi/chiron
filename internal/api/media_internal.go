@@ -2,9 +2,13 @@ package api
 
 import (
 	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
 	"log/slog"
 	"net/http"
 	"strings"
+	"unicode"
 
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
@@ -36,10 +40,57 @@ type internalMediaCreateRequest struct {
 	ContentBase64 string `json:"content_base64"`
 }
 
+// 内部资产写入的量级口径（必须与**用户直传**同量级，见下面 maxInternalAssetBody 的说明）。
+const (
+	// maxInternalAssetBody 是请求体（JSON，含 base64）上限。
+	maxInternalAssetBody = 50 << 20 // 50MB
+	// maxInternalAssetBytes 是解码**之后**的真实文件上限 —— base64 会把字节放大 ~33%，
+	// 只卡请求体就等于"随内容类型不同而隐含不同的文件上限"，口径会含糊。
+	maxInternalAssetBytes = 32 << 20 // 32MB
+)
+
+// decodeBase64Field 解析内容字段里的 base64。
+//
+// 为什么不是一句 base64.StdEncoding.DecodeString：这个字段的值是**模型生成**的，
+// 而模型输出的 base64 常见三种形态 —— 带换行/空格的（分块粘贴）、URL-safe 字母表的、
+// 以及省略 padding 的。逐字严格校验会把它们全判成"非法 base64"，于是工具报错、
+// 而用户只看到"创建失败"。这里宽容输入、严格输出（解码后的字节仍然要过 MIME 与体积校验）。
+func decodeBase64Field(raw string) ([]byte, error) {
+	compact := strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, raw)
+	if compact == "" {
+		return nil, errors.New("content_base64 is empty")
+	}
+	if data, err := base64.StdEncoding.DecodeString(compact); err == nil {
+		return data, nil
+	}
+	// 再宽容一次：URL-safe 字母表且省略 padding。
+	return base64.RawURLEncoding.DecodeString(strings.TrimRight(compact, "="))
+}
+
 // InternalCreateAsset POST /v1/internal/media/assets
 func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Request) {
+	// ⚠️ 这里**不能**用 DecodeJSON：它给普通内部 JSON 端点 1MB 护栏（见 response.go），
+	// 而本端点承载的是**文件内容** —— 与用户直传 POST /v1/media/upload（50MB）是同一件事。
+	// 曾经复用 DecodeJSON 的后果：任何 >1MB 的产物（图片、docx、稍大的 CSV）在网关侧被
+	// 截断成 400，Python 侧的 persist_to_library 又回退到引擎本地 store ⇒ **工具报"创建成功"，
+	// 媒体库里却什么都没有**。这就是"agent 无法和媒体库联动"的机械原因。
+	// 量级口径必须与直传对齐：请求体 50MB、解码后文件 32MB。
+	r.Body = http.MaxBytesReader(w, r.Body, maxInternalAssetBody)
 	var body internalMediaCreateRequest
-	if err := DecodeJSON(w, r, &body); err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			// 超限要与"请求格式错"分开报：前者要告诉调用方**该怎么办**
+			BadRequest(w, fmt.Sprintf(
+				"asset too large: request body exceeds %d MB (use POST /v1/uploads for larger files)",
+				maxInternalAssetBody>>20))
+			return
+		}
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
@@ -56,7 +107,7 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 	var data []byte
 	switch {
 	case body.ContentBase64 != "":
-		decoded, err := base64.StdEncoding.DecodeString(body.ContentBase64)
+		decoded, err := decodeBase64Field(body.ContentBase64)
 		if err != nil {
 			BadRequest(w, "content_base64 is not valid base64")
 			return
@@ -66,6 +117,11 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 		data = []byte(body.Content)
 	default:
 		BadRequest(w, "content or content_base64 is required")
+		return
+	}
+	if len(data) > maxInternalAssetBytes {
+		BadRequest(w, fmt.Sprintf(
+			"asset too large: %d bytes (max %d MB)", len(data), maxInternalAssetBytes>>20))
 		return
 	}
 

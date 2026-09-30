@@ -1,10 +1,18 @@
 """Media tools 注册到本地工具注册表。
 
 实现对标 Go `internal/tools/media.go` 注册的两个工具：
-- media_create：创建媒体资产（文本/CSV/代码等）
-- image_generate：生成图片（AI 生成失败时降级为 SVG 占位图）
 
-默认使用本地 MediaStore；后续可接入 S3 + DB。
+- ``media_create``：创建**可下载的资产** —— 文本（Markdown/CSV/JSON/代码…），
+  或经 base64 的二进制（docx/xlsx/pdf/png…）。这是 agent 产出"用户能打开的文件"的正道。
+- ``image_generate``：生成图片（未配置 ``IMAGE_GEN_API_URL`` 时**明确报错**，不伪造成功）。
+
+落库路径与**用户直传**完全相同：``persist_to_library`` → 网关
+``POST /v1/internal/media/assets`` → 对象存储 + ``media_assets`` 表，因此产物会出现在
+「媒体库」页面（``GET /v1/media``）并可下载（``GET /v1/media/{id}/download``）。
+
+网关不可达或拒绝时回退引擎本地 store —— 这是刻意的（引擎要能独立运行），但
+**必须把原因带出去**：``media_create`` 的返回里带 ``stored_in`` 与 ``warning``，
+否则"工具说创建成功、用户在媒体库里找不到"就成了没有信号的黑洞。
 """
 
 from __future__ import annotations
@@ -26,8 +34,104 @@ from app.tools.ssrf import assert_safe_url, fetch_url_safe
 logger = logging.getLogger(__name__)
 _store = create_store()
 
+
+#: 单个资产的体积上限。**必须与网关内部端点的上限一致**（见
+#: `internal/api/media_internal.go` 的 `maxInternalAssetBytes`）。这里做前置校验，是为了
+#: 给出**可操作**的错误，而不是让请求跑到网关再被拒、再回退本地。
+MAX_ASSET_BYTES = 32 * 1024 * 1024
+
+#: 落库列的硬长度（`media_assets` 表）：超了 INSERT 会**直接失败**，而工具此前会静默回退
+#: 本地 store ⇒ 用户看到"创建成功"、媒体库里却没有。这里逐一按列上限前置校验。
+#: name varchar(255) / tags varchar(255) / type varchar(16) / category varchar(64)。
+MAX_NAME_CHARS = 200
+MAX_TAGS_TOTAL_CHARS = 200
+MAX_TAG_CHARS = 48
+MAX_CATEGORY_CHARS = 48
+
+#: 资产类型取值 —— 与前端媒体库的筛选 tab 一一对应
+#: （frontend-vue/src/views/MediaView.vue：image / document / video / audio / file / text）。
+ASSET_TYPES: tuple[str, ...] = ("image", "video", "audio", "document", "file", "text")
+
+#: 按扩展名推断资产类型。**注意 `.py` / `.sh` / `.html` 归到 text 是类型层面的事实**，
+#: 不代表它们能落进媒体库 —— 网关的 `isExecutableMIME` 对 text/plain 会按扩展名拒绝
+#: 脚本类文件（那是用户上传路径既有的安全策略，agent 走同一条落库路径，因此同样适用）。
+#: 这里刻意**不**复制那份拒绝名单：两份名单必然漂移，单一事实源留在 Go 侧。
+_EXT_TO_TYPE: dict[str, str] = {
+    ".png": "image", ".jpg": "image", ".jpeg": "image", ".gif": "image", ".webp": "image",
+    ".bmp": "image", ".svg": "image", ".ico": "image", ".tif": "image", ".tiff": "image",
+    ".mp4": "video", ".mov": "video", ".webm": "video", ".avi": "video", ".mkv": "video",
+    ".mp3": "audio", ".wav": "audio", ".m4a": "audio", ".flac": "audio", ".ogg": "audio",
+    ".aac": "audio",
+    ".pdf": "document", ".doc": "document", ".docx": "document", ".xls": "document",
+    ".xlsx": "document", ".ppt": "document", ".pptx": "document", ".odt": "document",
+    ".ods": "document", ".odp": "document", ".rtf": "document", ".epub": "document",
+    ".txt": "text", ".md": "text", ".markdown": "text", ".csv": "text", ".tsv": "text",
+    ".json": "text", ".yaml": "text", ".yml": "text", ".xml": "text", ".log": "text",
+    ".html": "text", ".htm": "text", ".css": "text", ".sql": "text", ".toml": "text",
+    ".ini": "text", ".conf": "text", ".env": "text",
+    ".py": "text", ".js": "text", ".ts": "text", ".jsx": "text", ".tsx": "text",
+    ".vue": "text", ".go": "text", ".java": "text", ".c": "text", ".h": "text",
+    ".cpp": "text", ".rs": "text", ".rb": "text", ".php": "text", ".sh": "text",
+}
+
+#: 按扩展名推断 MIME（用于让网关的 magic-bytes 校验有机会采用"声明的"值）。
+_EXT_TO_MIME: dict[str, str] = {
+    ".docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    ".xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+    ".pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+    ".pdf": "application/pdf",
+    ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".gif": "image/gif",
+    ".webp": "image/webp", ".svg": "image/svg+xml", ".bmp": "image/bmp",
+    ".mp3": "audio/mpeg", ".wav": "audio/wav", ".m4a": "audio/mp4", ".flac": "audio/flac",
+    ".mp4": "video/mp4", ".webm": "video/webm",
+    ".csv": "text/csv", ".json": "application/json", ".md": "text/markdown",
+    ".txt": "text/plain", ".html": "text/html", ".xml": "application/xml",
+}
+
+
+def _infer_mime(name: str, *, binary: bool) -> str:
+    """按扩展名猜 MIME；猜不到时按"是不是二进制"给一个保守值。"""
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext in _EXT_TO_MIME:
+        return _EXT_TO_MIME[ext]
+    return "application/octet-stream" if binary else "text/plain"
+
+
+def _infer_asset_type(mime: str, name: str) -> str:
+    """推断资产类型：先看 MIME，再看扩展名 —— 与网关 `detectType` 同一取向。
+
+    为什么必须推断而不是沿用旧的默认 `"text"`：前端媒体库按 type 分 tab，
+    一份 .docx 被标成 text 就等于"在『文档』里找不到"。
+    """
+    m = (mime or "").lower()
+    for prefix, kind in (("image/", "image"), ("video/", "video"), ("audio/", "audio")):
+        if m.startswith(prefix):
+            return kind
+    if "pdf" in m or "document" in m or "officedocument" in m or "oasis" in m:
+        return "document"
+    ext = os.path.splitext(name or "")[1].lower()
+    if ext in _EXT_TO_TYPE:
+        return _EXT_TO_TYPE[ext]
+    if m.startswith("text/") or "json" in m or "xml" in m:
+        return "text"
+    return "file" if m else "text"
+
 # 文件下载大小限制：100MB
 MAX_DOWNLOAD_SIZE = 100 * 1024 * 1024
+
+
+def _gateway_error_text(resp: Any) -> str:
+    """从网关的错误响应里取**可操作**的文本（网关的文案本来就写明了原因）。"""
+    try:
+        body = resp.json()
+        if isinstance(body, dict):
+            for key in ("error", "message", "detail"):
+                value = body.get(key)
+                if isinstance(value, str) and value.strip():
+                    return value.strip()[:200]
+    except Exception:  # noqa: BLE001 - 非 JSON 响应直接退回文本
+        pass
+    return str(getattr(resp, "text", "") or "").strip()[:200]
 
 
 async def persist_to_library(
@@ -38,22 +142,32 @@ async def persist_to_library(
     category: str = "generated",
     mime_type: str = "",
     tags: list[str] | None = None,
-) -> dict[str, Any] | None:
+) -> tuple[dict[str, Any] | None, str]:
     """把资产写入 Go 侧媒体库（media_assets + 对象存储）。
 
     这是 agent 产物进入「媒体库」页面的唯一通道：工具执行上下文携带
     tenant_id/user_id（见 app/tools/context.py），据此以内部 token 调用网关的
-    ``POST /v1/internal/media/assets``。
+    ``POST /v1/internal/media/assets``。**与用户直传（POST /v1/media/upload）落同一张表、
+    同一套对象键布局**，因此产物在媒体库里可列出、可下载。
 
-    未配置内部端点、缺少归属信息或调用失败时返回 None，由调用方回退到引擎本地
-    store —— 引擎仍可独立运行，但该资产不会出现在媒体库中。
+    返回 ``(asset, failure_reason)``：成功时 reason 为空串；失败时 asset 为 ``None``，
+    reason 说明**为什么**。
+
+    为什么把失败原因带出来：此前失败一律静默回退本地 store，于是"资产在媒体库里看不到"
+    这件事**没有任何可见信号** —— 工具照样报"创建成功"，日志里只有一行 warning。
+    调用方现在必须把 reason 转达给模型与用户（见 `media_create`）。
     """
     from app.config import settings
 
     tenant_id = get_tenant_id()
     user_id = get_user_id()
     if not (settings.internal_token and tenant_id and user_id):
-        return None
+        return None, (
+            "media library unreachable from this tool context "
+            f"(internal_token={'set' if settings.internal_token else 'missing'}, "
+            f"tenant_id={'set' if tenant_id else 'missing'}, "
+            f"user_id={'set' if user_id else 'missing'})"
+        )
 
     payload: dict[str, Any] = {
         "tenant_id": tenant_id,
@@ -77,12 +191,61 @@ async def persist_to_library(
                 json=payload,
                 headers={"X-Internal-Token": settings.internal_token},
             )
-            resp.raise_for_status()
-            body = resp.json()
-        return body.get("data", body) if isinstance(body, dict) else None
-    except Exception as exc:  # noqa: BLE001 — 落库失败不阻断工具返回，回退本地 store
+    except Exception as exc:  # noqa: BLE001 — 网络/超时：如实回退，但把原因带出去
         logger.warning("persist media asset to gateway failed: %s", exc)
-        return None
+        return None, f"media library call failed: {str(exc)[:200]}"
+
+    if resp.status_code >= 400:
+        # 不再 raise_for_status 后吞掉响应体：网关的文案是**可操作的**
+        # （"file type not allowed: …" / "asset too large: …"），必须原样带给模型。
+        reason = _gateway_error_text(resp)
+        logger.warning("media library rejected asset (HTTP %d): %s", resp.status_code, reason)
+        return None, f"media library rejected the asset (HTTP {resp.status_code}): {reason}"
+
+    try:
+        body = resp.json()
+    except Exception as exc:  # noqa: BLE001 - 落库成功但响应不可解析：仍算失败（无法确认归属）
+        return None, f"media library returned an unreadable response: {str(exc)[:120]}"
+    asset = body.get("data", body) if isinstance(body, dict) else None
+    if not isinstance(asset, dict):
+        return None, "media library returned an unexpected payload"
+    return asset, ""
+
+
+def _decode_base64(raw: str) -> bytes:
+    """宽容解析模型生成的 base64。
+
+    模型输出的 base64 常见三种形态：分块粘贴（带换行/空格）、URL-safe 字母表、
+    省略 padding。逐字严格校验会把它们全判成"非法 base64"。
+    """
+    compact = "".join(raw.split())
+    if not compact:
+        raise ValueError("content_base64 is empty")
+    try:
+        return base64.b64decode(compact, validate=True)
+    except Exception:
+        padded = compact.rstrip("=")
+        return base64.urlsafe_b64decode(padded + "=" * (-len(padded) % 4))
+
+
+def _normalize_tags(tags: list[str] | None) -> list[str]:
+    """按落库列的长度上限收紧 tags（`media_assets.tags varchar(255)`，逗号拼接）。
+
+    超长会让 INSERT 直接失败 —— 而失败会退化成"静默回退本地 store"，
+    看起来像成功。所以这里主动截断（截断比报错更合适：tags 只是元数据）。
+    """
+    out: list[str] = []
+    total = 0
+    for raw in tags or []:
+        tag = str(raw).strip()[:MAX_TAG_CHARS]
+        if not tag or tag in out:
+            continue
+        extra = len(tag) + (1 if out else 0)  # 分隔逗号
+        if total + extra > MAX_TAGS_TOTAL_CHARS:
+            break
+        out.append(tag)
+        total += extra
+    return out
 
 
 def _sanitize_filename(prompt: str) -> str:
@@ -94,47 +257,123 @@ def _sanitize_filename(prompt: str) -> str:
 # ── media_create ──────────────────────────────────────────────
 async def media_create(
     name: str,
-    content: str,
-    type: str = "text",
+    content: str = "",
+    type: str = "",
     category: str = "generated",
     tags: list[str] | None = None,
+    content_base64: str = "",
+    mime_type: str = "",
 ) -> dict[str, Any]:
-    if not name or not content:
-        return {"error": "name and content are required"}
-    data = content.encode("utf-8")
+    """创建一份**可下载的资产**并写入媒体库（文本或二进制）。
 
-    # 优先写入 Go 媒体库（与「媒体库」页面共享同一份数据）；不可用时回退本地 store。
-    stored = await persist_to_library(
-        name,
+    这是 agent 产出"用户能打开/下载的文件"的**正确通道**：不要在 shell / python 里往
+    宿主路径写文件 —— 沙箱会拒绝绝对路径，而且即便写进工作区，产物也不在媒体库里，
+    用户根本拿不到。
+
+    走的是与**用户直传**（POST /v1/media/upload）完全相同的落库路径：同一个对象存储键
+    布局（`media/<tenant>/<assetID>/<name>`）+ 同一张 `media_assets` 表，因此产物会出现在
+    「媒体库」页面并可下载。
+    """
+    display_name = (name or "").strip()
+    if not display_name:
+        return {"error": "name is required (include an extension, e.g. 'report.docx')"}
+    if len(display_name) > MAX_NAME_CHARS:
+        return {
+            "error": (
+                f"name is too long: {len(display_name)} chars (max {MAX_NAME_CHARS}; "
+                "the media library column holds 255)"
+            )
+        }
+    if "/" in display_name or "\\" in display_name:
+        return {"error": "name must be a plain file name (no path separators)"}
+
+    raw_content = content or ""
+    raw_b64 = (content_base64 or "").strip()
+    if raw_content and raw_b64:
+        return {"error": "provide either content or content_base64, not both"}
+    if raw_b64:
+        try:
+            data = _decode_base64(raw_b64)
+        except Exception:
+            return {"error": "content_base64 is not valid base64"}
+        binary = True
+    elif raw_content:
+        data = raw_content.encode("utf-8")
+        binary = False
+    else:
+        return {"error": "content or content_base64 is required"}
+
+    # 体积前置校验：与网关内部端点的上限一致（跑到网关再被拒等于白跑一趟）
+    if len(data) > MAX_ASSET_BYTES:
+        return {
+            "error": (
+                f"asset too large: {len(data)} bytes "
+                f"(max {MAX_ASSET_BYTES // (1024 * 1024)} MB)"
+            )
+        }
+
+    resolved_mime = (mime_type or "").strip() or _infer_mime(display_name, binary=binary)
+    requested_type = (type or "").strip().lower()
+    if requested_type and requested_type not in ASSET_TYPES:
+        return {
+            "error": f"unsupported type {type!r}; expected one of {', '.join(ASSET_TYPES)}"
+        }
+    # 留空 ⇒ 按扩展名/MIME 推断（旧行为把一切都标成 "text"，导致 .docx 在
+    # 「文档」筛选里找不到）。显式传值仍然以调用方为准。
+    resolved_type = requested_type or _infer_asset_type(resolved_mime, display_name)
+    resolved_category = (str(category or "generated").strip() or "generated")[:MAX_CATEGORY_CHARS]
+    safe_tags = _normalize_tags(tags)
+
+    stored, reason = await persist_to_library(
+        display_name,
         data,
-        asset_type=type,
-        category=category,
-        mime_type="text/plain",
-        tags=tags,
+        asset_type=resolved_type,
+        category=resolved_category,
+        mime_type=resolved_mime,
+        tags=safe_tags,
     )
     if stored is not None:
         size = int(stored.get("size") or len(data))
         return {
-            "output": f"Media asset '{name}' created ({size} bytes)",
+            "output": (
+                f"Created '{display_name}' in the media library "
+                f"({size} bytes, type={resolved_type}). The user can open it from 媒体库 (Media)."
+            ),
             "id": stored.get("id", ""),
-            "name": stored.get("name", name),
-            "type": stored.get("type", type),
-            "category": category,
+            "name": stored.get("name", display_name),
+            "type": stored.get("type", resolved_type),
+            "category": resolved_category,
+            "mime_type": resolved_mime,
             "file_url": stored.get("file_url", ""),
             "size": size,
+            "stored_in": "library",
         }
 
+    # 回退：引擎本地 store。**必须说出来** —— 否则"创建成功"是假的：用户按提示去媒体库
+    # 什么也找不到，而模型一无所知（§1.3「失败要显式」）。
     asset = _store.write(
-        name=name, content=data, asset_type=type, category=category, tags=tags or []
+        name=display_name,
+        content=data,
+        asset_type=resolved_type,
+        category=resolved_category,
+        tags=safe_tags,
+        fmt=resolved_mime,
     )
     return {
-        "output": f"Media asset '{name}' created ({asset.size} bytes)",
+        "output": (
+            f"Created '{display_name}' in the **engine-local store only** ({asset.size} bytes) — "
+            f"it is NOT in the media library, so the user will not find it under 媒体库. "
+            f"Reason: {reason}"
+        ),
         "id": asset.id,
         "name": asset.name,
         "type": asset.type,
         "category": asset.category,
+        "mime_type": resolved_mime,
         "file_url": asset.file_url,
         "size": asset.size,
+        "stored_in": "engine-local",
+        "warning": reason,
     }
 
 
@@ -173,8 +412,8 @@ async def image_generate(
 
     name = _sanitize_filename(prompt) + ".png"
 
-    # 优先写入 Go 媒体库；不可用时回退本地 store。
-    stored = await persist_to_library(
+    # 优先写入 Go 媒体库；不可用时回退本地 store，但**把原因带出去**。
+    stored, reason = await persist_to_library(
         name, data, asset_type="image", category=category, mime_type="image/png"
     )
     if stored is not None:
@@ -190,6 +429,7 @@ async def image_generate(
             "category": category,
             "file_url": stored.get("file_url", ""),
             "size": size,
+            "stored_in": "library",
         }
 
     asset = _store.write(
@@ -203,7 +443,10 @@ async def image_generate(
     )
 
     return {
-        "output": f"Image generated: {name} ({asset.size} bytes)",
+        "output": (
+            f"Image generated: {name} ({asset.size} bytes) — stored in the **engine-local store "
+            f"only**, NOT in the media library. Reason: {reason}"
+        ),
         "id": asset.id,
         "name": name,
         "type": "image",
@@ -213,6 +456,8 @@ async def image_generate(
         "category": category,
         "file_url": asset.file_url,
         "size": asset.size,
+        "stored_in": "engine-local",
+        "warning": reason,
     }
 
 
@@ -546,17 +791,44 @@ async def file_analyzer(
 # ── 注册 ──────────────────────────────────────────────────────
 registry.register(
     name="media_create",
-    description="Create a media asset (text, CSV, code, etc.).",
+    description=(
+        "Create a downloadable asset in the media library — this is THE way to produce a file "
+        "for the user: Markdown/CSV/JSON/code as plain text, and images / Office documents / any "
+        "other binary as base64. The asset shows up under 媒体库 (Media) and can be downloaded. "
+        "Do NOT write files to host paths via shell/python: that is sandboxed and the user cannot "
+        "reach the result."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "name": {"type": "string"},
-            "content": {"type": "string"},
-            "type": {"type": "string", "default": "text"},
+            "name": {
+                "type": "string",
+                "description": "File name WITH extension, e.g. 'report.docx', 'data.csv', 'summary.md'.",
+            },
+            "content": {
+                "type": "string",
+                "description": "Text content. Omit when passing content_base64.",
+            },
+            "content_base64": {
+                "type": "string",
+                "description": (
+                    "Base64 of the raw bytes, for binary files (docx/xlsx/pptx/pdf/png…). "
+                    "Line breaks and missing padding are tolerated."
+                ),
+            },
+            "mime_type": {
+                "type": "string",
+                "description": "Optional MIME type; inferred from the file name when omitted.",
+            },
+            "type": {
+                "type": "string",
+                "enum": list(ASSET_TYPES),
+                "description": "Asset kind; inferred from the file name / MIME when omitted.",
+            },
             "category": {"type": "string", "default": "generated"},
             "tags": {"type": "array", "items": {"type": "string"}, "default": []},
         },
-        "required": ["name", "content"],
+        "required": ["name"],
     },
     handler=media_create,
 )

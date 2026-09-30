@@ -32,6 +32,12 @@ from typing import Any, cast
 logger = logging.getLogger(__name__)
 
 # ── 核心工具列表（Token Economy：只暴露这些给 LLM，其余按需激活） ──
+#
+# `media_create` 的加入理由：它是 agent 产出**用户能打开/下载的文件**的唯一正道
+# （媒体库 = 对象存储 + media_assets，与用户直传同一条落库路径）。此前它不在核心集里，
+# 模型默认看不见它，于是遇到"帮我建个 word/CSV/报告文件"就去用 `execute_python` /
+# `write_file` 写宿主路径 —— 前者被沙箱拒绝，后者写出的文件用户根本拿不到。
+# "工具注册了但默认不可见"在这里的代价是**模型必然走错路**，不是偶发。
 CORE_TOOL_NAMES = frozenset(
     {
         "recall",  # 检索记忆（用户偏好/事实）
@@ -45,6 +51,7 @@ CORE_TOOL_NAMES = frozenset(
         "read_file",  # 读取文件
         "write_file",  # 写入/保存文件
         "grep_files",  # 搜索文件
+        "media_create",  # 产出可下载的资产（媒体库；含二进制——见 app/tools/media.py）
         "subagent",  # 子 agent 委派（多 agent 协作核心）
     }
 )

@@ -8,20 +8,12 @@ from typing import TYPE_CHECKING, Any
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app.tools.agent import agent_list
-
 if TYPE_CHECKING:  # 仅注解用；运行期在函数内延迟导入（避免 runtime ↔ api 的导入环）
     from app.agent.runtime import ApprovalDecision
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["agents"])
-
-
-@router.get("/v1/agents")
-async def list_agents() -> dict[str, Any]:
-    """Agent 列表（页面主链路已由 Go 的 DB agents 表提供；此端点保留给工具链）。"""
-    return await agent_list()
 
 
 class AgentDispatchRequest(BaseModel):
@@ -106,9 +98,19 @@ async def dispatch_agent(body: AgentDispatchRequest) -> dict[str, Any]:
             "session_id": body.session_id,
         }
 
-    from app.tools.agent import agent_dispatch
-
-    return await agent_dispatch(task=body.task, agent_type=body.agent_type)
+    # 没有 system_prompt ⇒ 拿不到 Agent 的真实配置（Go 从 DB agents 表读出后随请求传入）。
+    # 此前这里回退到一个"内存 registry 的假派发"：返回 status=dispatched，但**什么都没做** ——
+    # 调用方与模型都会以为任务已经派出去了。宁可显式失败，也不谎报成功
+    # （vendor/规划.md §1.3「失败要显式」）。
+    return {
+        "success": False,
+        "error": (
+            "agent dispatch needs a configured agent: system_prompt is empty. "
+            "Supply the agent configuration (the gateway reads it from the agents table), "
+            "or use the `subagent` tool for ad-hoc delegation."
+        ),
+        "output": "",
+    }
 
 
 async def _workbench_binding(body: AgentDispatchRequest, gateway: Any) -> str:
