@@ -2086,6 +2086,23 @@ function genItemId() {
   return `msg_${Date.now().toString(36)}_${itemIdSeq++}`
 }
 
+function onThinkingChunk(text: string) {
+  // A1（方案 04）：native reasoning 现在走**独立的 `thinking` 事件**，不再被引擎包装成
+  // `[thinking]…[/thinking]` 混进 `text`。
+  //
+  // 所以它有**自己的累积与条目**，并且**绝不进 `streamBuf`** —— 否则下面的
+  // `splitThinking(streamBuf, …)` 会把它当正文，刚分开的两条通道又被合回去了。
+  if (!text) return
+  const existing = items.value.find(it => it.id === streamReasonId)
+  if (existing?.kind === 'reasoning') {
+    existing.content += text // 事件是**增量**（text 那条是"从累积文本重算"，两者不同）
+  } else {
+    const id = genItemId()
+    streamReasonId = id
+    items.value.push({ kind: 'reasoning', content: text, streaming: true, id })
+  }
+}
+
 function onTextChunk(text: string) {
   streamBuf += text
   // 引擎按 ~80 字分段下发 "[thinking]片段[/thinking]"，用 loose 状态机解析：
@@ -2132,6 +2149,10 @@ function onSSEMessage(raw: unknown) {
     const text = String(d.content ?? evt.content ?? '')
     if (!text) return
     onTextChunk(text)
+  } else if (type === 'thinking') {
+    // A1：native reasoning 的独立通道（见 onThinkingChunk）。模型**自产**的
+    // `[thinking]…[/thinking]` 标记仍会出现在 text 里，由 onTextChunk 的 splitThinking 处理。
+    onThinkingChunk(String(d.content ?? evt.content ?? ''))
   } else if (type === 'tool_call') {
     items.value.push({
       kind: 'tool_call', id: String(d.id ?? Date.now()), name: String(d.name ?? 'tool'),

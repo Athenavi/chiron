@@ -325,8 +325,10 @@ func (h *SmsHandler) provisionSmsUser(ctx context.Context, phone string) (UserRe
 	name := "用户" + phone[max(0, len(phone)-4):]
 	var user UserResponse
 	err = h.db.QueryRow(ctx,
-		`INSERT INTO users (tenant_id, email, name, password_hash, role, phone, password_set)
-		 VALUES ($1, $2, $3, $4, 'user', $5, FALSE)
+		`INSERT INTO users (id, tenant_id, email, name, password_hash, role, phone, password_set)
+		 -- id 必须**显式**给：users.id 是 varchar(36) NOT NULL 且没有默认值（见 baseline 迁移）。
+		 -- 与邮箱自动注册同一个坑：漏这一列 ⇒ null value in column "id"。
+		 VALUES (gen_random_uuid(), $1, $2, $3, $4, 'user', $5, FALSE)
 		 ON CONFLICT DO NOTHING
 		 RETURNING id, email, name, role`,
 		db.DefaultTenantID, email, name, string(passwordHash), phone).Scan(&user.ID, &user.Email, &user.Name, &user.Role)

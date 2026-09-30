@@ -427,8 +427,11 @@ func (h *MailHandler) provisionMailUser(ctx context.Context, email string) (User
 	}
 	var user UserResponse
 	err = h.db.QueryRow(ctx,
-		`INSERT INTO users (tenant_id, email, name, password_hash, role, password_set)
-		 VALUES ($1, $2, $3, $4, 'user', FALSE)
+		`INSERT INTO users (id, tenant_id, email, name, password_hash, role, password_set)
+		 -- id 必须**显式**给：users.id 是 varchar(36) NOT NULL 且没有默认值（见 baseline 迁移）。
+		 -- 曾漏掉这一列，导致"邮箱验证码登录 + 自动注册"直接 500
+		 -- （null value in column "id" violates not-null constraint）。
+		 VALUES (gen_random_uuid(), $1, $2, $3, $4, 'user', FALSE)
 		 ON CONFLICT DO NOTHING
 		 RETURNING id, email, name, role`,
 		db.DefaultTenantID, email, name, string(passwordHash)).

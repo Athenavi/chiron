@@ -177,18 +177,41 @@ def _count(outcome: str) -> None:
 
 
 def _parse_snapshot(raw: Any) -> dict[str, Any] | None:
-    """把 `agent_runs.checkpoint` 列解析成 dict（JSONB 与字符串两种返回形态都接受）。"""
+    """把 `agent_runs.checkpoint` 列解析成 dict（JSONB 与字符串两种返回形态都接受）。
+
+    A2（方案 04 批次 1）：**拒绝未知 schema 版本**。没有该字段的快照按 v1 认（本字段引入前的
+    形态）。更高的版本说明它是**更新的引擎**写的 —— 当前代码按老字段名取值会**静默读歪**，
+    所以宁可放弃续跑：**不触碰**该快照，也不拿被误读的现场继续跑。
+    """
     if not raw:
         return None
     if isinstance(raw, dict):
-        return dict(raw)
-    try:
-        import json as _json
+        parsed: Any = dict(raw)
+    else:
+        try:
+            import json as _json
 
-        parsed = _json.loads(raw)
-    except (TypeError, ValueError):
+            parsed = _json.loads(raw)
+        except (TypeError, ValueError):
+            return None
+        if not isinstance(parsed, dict):
+            return None
+
+    from app.agent import checkpoint as ckpt  # 函数内导入：与本文件既有风格一致
+
+    supported = ckpt.SNAPSHOT_SCHEMA_VERSION
+    version = parsed.get("schema_version")
+    # 缺字段 = 本字段引入前的形态 ⇒ v1；非法值（非 int）同样按"未知"处理
+    version = supported if version is None else version
+    if not isinstance(version, int) or version > supported:
+        logger.warning(
+            "reconciler: 拒绝未知快照 schema 版本 %r（本引擎支持到 %d）—— 放弃续跑，不触碰该快照",
+            version,
+            supported,
+        )
         return None
-    return parsed if isinstance(parsed, dict) else None
+    # 到这里 `parsed` 必定是 dict（上面两条路径都检查过），cast 只是把这条事实告诉 mypy
+    return cast("dict[str, Any]", parsed)
 
 
 async def _lock_is_held(session_id: str) -> bool:

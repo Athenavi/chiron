@@ -152,6 +152,12 @@ def translate(event: dict[str, Any]) -> list[Update]:
     if etype == "text":
         return list(split_thinking(str(event.get("content", ""))))
 
+    if etype == "thinking":
+        # A1（方案 04）：native reasoning 走独立事件 —— **不再需要从 text 里猜**。
+        # 注意 `text` 分支的 `split_thinking` **保留**：模型自产的 `[thinking]…[/thinking]`
+        # 标记（prompt 教的）仍然出现在正文里，那是另一条通道。
+        return [ThoughtDelta(str(event.get("content", "")))]
+
     if etype == "tool_call":
         return [
             ToolStarted(
