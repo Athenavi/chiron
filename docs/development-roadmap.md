@@ -5,7 +5,7 @@
 
 ## 0. 当前状态
 
-**最近一次全量核验（2026-10-08 · round 42，全部本机实测）**：Go `build`/`vet` 通过 · `go test ./...`（**真实 Redis 8** 在场，Live 用例覆盖断线补发/跨实例补发/运行锁/取消归属/会话忙拒绝/跨实例重连/归属路由——**逐条取证见 [多副本语义的对外保证](deployment-multi-instance.md)**）全绿 · **Go live 子集**（`CHIRON_TEST_POSTGRES_DSN` + `CHIRON_TEST_REDIS_ADDR`）`internal/{api,billing,settings,broadcast,engine}` 全绿 · `ruff check .` 0 · `ruff check scripts/` 0 · `mypy app/ acp_adapter/` 0（**244** 文件）· `pytest -m "not integration"` **1922 passed** · `pytest -m integration` **12 passed（全绿，含新增的 L4-1 kill→重启 端到端演练 `tests/test_resume_kill_drill.py`；需 Redis + 网关，只起 Redis 时 10 passed + 2 failed）** —— 本次把**网关也起在本机**（配方见 §5「本机真实栈」），此前那 2 条 `test_unified_db` 不再依赖 CI · 前端 `npx vitest run` **477 passed**（56 文件）+ `vue-tsc -b` 通过 · `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
+**最近一次全量核验（2026-10-09 · round 68，全部本机实测）**：Go `build`/`vet` 通过 · `go test ./...`（**真实 Redis 8 + 真实 PG** 在场）全绿 · **Go live 子集**（`CHIRON_TEST_POSTGRES_DSN` + `CHIRON_TEST_REDIS_ADDR`）`internal/{api,billing,settings,broadcast,engine}` 全绿 · `ruff check .` **0** · `ruff check scripts/` 0 · `mypy app/ acp_adapter/` 0（**244** 文件）· `pytest -m "not integration"` **1936 passed** · `pytest -m integration` **13 passed（全绿）**（需 Redis + 网关；含 L4-1 kill→重启演练、**双进程跨实例演练**、**SDK 端到端**）· 前端 `npx vitest run` **480 passed**（56 文件）+ `vue-tsc -b` 通过 · 守卫：`check_source_encoding` / `check_tool_policy_parity` / `check_doc_links`（存量基线 8 条）通过 · alembic 单 head `0007_subagent_error_code`。
 
 **本机做不到的**：**容器相关**（无 `docker compose` 插件、Docker daemon 未运行）⇒ 镜像/容器内自查、以及**沙箱服务的容器化部署**须在能跑 Docker 的环境验证。**CI 尚未实跑**（分支未 push，见 §3）。
 
@@ -26,20 +26,10 @@
 | 文档断链守卫 | `scripts/check_doc_links.py` + **CI「Source encoding」job** | 被引用的 `docs/*.md` 必须存在；存量走基线（`scripts/doc_link_baseline.txt`，**只应缩小**：**已 19 → 8**），**新增断链即失败**（变异验证过）。口径已排除测试/评测 fixture、合成占位路径、**URL 里出现的 docs/ 路径**（如厂商文档链接），并接受 vendor 下对标项目的同名文档。`--show-known` 可按文档列出引用方，便于逐条还债 |
 | `scripts/` lint 门禁 | 仓库根 `ruff.toml` + CI「Source encoding」job | 历史问题 **8 → 0**（未用变量/未用导入/裸 `except`/该有的 `noqa` 说明），规则集与引擎一致；护栏：CI 跑 `ruff check scripts/` |
 | L5-2 架构与请求链路 | `65b0558` | 文中命令均本机实测 |
+| 对外 SDK（第一方示例客户端） | `clients/python/chiron_client.py` + 同目录 `README.md` | **决定（2026-10-09）：停在示例客户端** —— **不发布、不给兼容性承诺**（README 已写明）。零第三方依赖：登录/注册 · 提交 · SSE 订阅含 `Last-Event-ID` 重连 · 取消。护栏：`tests/test_chiron_client_sdk.py`（8 条契约单测，假 `HTTPConnection` 跑真代码）+ `tests/test_chiron_client_sdk_live.py`（**真实网关端到端**，已实测通过）。⚠ 若将来要发布或承诺兼容，**需重开产品决定**（并补 OpenAPI/JSON-RPC 面） |
+| L4-1 run 现场 checkpoint 续跑 | `migrations/versions/0003_agent_runs.py` · `app/agent/{runtime.py,checkpoint.py,resume.py}` · 设计见 [run 现场 checkpoint 续跑设计](run-checkpoint-design.md) | 表 `agent_runs`（含**防脑裂唯一索引**）· 回合末落盘（只写不读，失败只降级恢复粒度）· schema v1 + 热 1h/冷 24h · 续跑/接管 + 启动 reconciler + 指标。护栏：`tests/test_checkpoint.py` · `test_checkpoint_schema_version.py` · `test_run_resume.py`（38 条）**+ 跨进程"硬杀→接管不重放"** `tests/test_resume_kill_drill.py`（integration：真 `AgentRuntime`、真硬杀、断言历史里第 1 回合工具结果恰好一份）。设计里"新增表 `agent_runs`"是**原文过期**（该表在 `0003` 就存在）；原"待拍板 5 问"已在实现中定案。批 5（长逻辑 checkpoint / 跨实例现场迁移）**明确不做** |
 
 ## 2. 待办
-
-### L4-1 run 现场 checkpoint 续跑 —— **已落地（C1 批 2–4）**，只剩端到端故障注入验证
-
-- 实现 + 覆盖（2026-10-08 **核对代码**，勿再按旧描述当"待评审"）：表 `agent_runs` 见 `migrations/versions/0003_agent_runs.py`（含防脑裂唯一索引）；写路径 `app/agent/runtime.py::_save_checkpoint`（回合末、只写不读、失败只降级恢复粒度）；快照/状态机 `app/agent/checkpoint.py`（schema v1）；续跑/接管 `app/agent/resume.py` + `main.py` 启动 reconciler + 指标。覆盖 `tests/test_checkpoint.py` · `test_checkpoint_schema_version.py` · `test_run_resume.py` 共 **38 条**（实测 passed，**均为单元级**）。
-- **唯一剩余项 ✅ 已补上（2026-10-08）**：设计 §7 批 3 的验收此前是"手工判定"，现由 `tests/test_resume_kill_drill.py` 自动化 —— 子进程用**真 `AgentRuntime`** 跑（回合 1 落 checkpoint 后**卡在回合 2**）→ 测试**硬杀**它 → 断言磁盘现场（`status=running` / `turn_index=1` / `done_tools=[c1]` / 快照里 c1 的工具结果恰好一份）→ 新实例 `load_resume_state`（`turn_index=1`、`window=hot`）→ **真再跑一次 runtime**，断言**第一次 LLM 调用的历史里已带第 1 回合的 `assistant(tool_calls)` + 工具结果，且恰好一份**（⇒ 第 1 回合未重放）。标记 `integration`（需真 PG + Redis；无 DSN 自动 skip）。批 5（长逻辑 checkpoint / 跨实例现场迁移）按设计 §9 **明确不做**。
-- 设计文档：[run 现场 checkpoint 续跑设计](run-checkpoint-design.md)（已加状态头：其中"新增表 `agent_runs`"是**原文过期**——该表在 `0003` 就存在；**原"待拍板 5 问"已在实现中定案**：尾部窗口+摘要 / 热 1h·冷 24h / `replay_pending` / 60s+CAS / `rebuild_task`）。
-
-### 对外 SDK（**候选，需你拍板**）—— 属"追平"，不是超车
-
-- **现状（2026-10-08 核对）**：Chiron 只有 `cmd/chiron-cli`（**运维 CLI**：start/stop/logs/health/instance/state），**没有**对外 SDK、**没有** OpenAPI/swagger 生成、**没有** JSON-RPC/ACP 面；而 DSH 有 PyPI 上的 Python SDK + ACP/JSON-RPC（见 [差距分析](dsh-gap-analysis.md) 的 CLI/SDK 行）。
-- **为什么值得做 + 最小起步**："能被别人稳定调用"是平台与本地工具的分水岭（现在第三方只能读源码猜 HTTP/SSE 契约）。两选一：① **手写薄客户端**（登录 → `POST /v1/agent/submit` → SSE 订阅 + `Last-Event-ID` 重连 + 取消）+ `examples/` + 端到端用例；② **先产出机器可读契约**（OpenAPI/JSON-RPC 面）再由它生成客户端（更长久，但路由是标准 `net/http` mux，需注解或手工维护 spec）。
-- **前置判断（需要你定）**：目标用户是谁（自建部署的团队 / 内部服务 / 公开生态）？以及是否接受为此新增一个对外**兼容性承诺**（契约一旦发布就不能随便改）。
 
 ### L4-3 时间列 `timestamp` → `timestamptz`
 
@@ -52,7 +42,7 @@
 ### S5-(e) 执行沙箱服务 —— **服务应用已落地**，剩部署形态
 
 - 已落地：`sandbox-service/service.py`（`/v1/internal/exec/run` + health、令牌 fail-closed、**直接复用引擎的 `run_in_sandbox`** 基线与审计、身份随请求恢复）；引擎侧客户端 `app/backends/remote_exec.py` 已随请求带身份；**接线**（`SANDBOX_BACKEND=service` → 分流）抽成 `_apply_sandbox_service_branch()` 并有 4 条分支用例。测试：`tests/test_sandbox_service.py`、`tests/test_sandbox_service_wiring.py`、**`tests/test_sandbox_service_multiprocess.py`（独立进程端到端）**。
-- 剩余（**都在代码之外**）：**独立容器**部署（无 docker socket、仅内网、不与引擎共容器）· `SANDBOX_ROOT` **与引擎共享同一工作区卷**（否则命令产物与文件工具分叉）· 白名单租户**真的走服务**的服务侧断言 · 审计多副本收集 · 灰度/回滚手册。**真实部署验证不能靠单测替代**。
+- 剩余（**都在代码之外**）：**独立容器**部署（无 docker socket、仅内网、不与引擎共容器）· `SANDBOX_ROOT` **与引擎共享同一工作区卷**（否则命令产物与文件工具分叉）· 白名单租户**真的走服务**的服务侧断言 · 灰度/回滚手册。**真实部署验证不能靠单测替代**。（**审计多副本收集已落地**：引擎与沙箱服务成批送 `POST /v1/internal/audit/exec`。）
 
 ### L3-4 巨型文件拆分 —— 批次 1、3、2(类型) 与 4(校验) 已完成
 
@@ -64,10 +54,9 @@
 | 项 | 需要什么才能立项 |
 |---|---|
 | **超越 deepseek-harness 的切口** | 已产出 [与 DSH 的差距分析](dsh-gap-analysis.md)（逐层对照 + 6 个切口 + 未验证清单）与 [多副本语义的对外保证](deployment-multi-instance.md)；每个切口立项前须给出**可复现命令、期望输出与反例** |
-| **文档断链：13 份被引用的 `docs/*.md` 不存在（已基线化 + 门禁，持续还债）** | 守卫 `scripts/check_doc_links.py`（**已接 CI**）实测：**原 19 份**（`docs/subagent-design.md` 被 16 个文件引用 · `mail.md` 4 个 …），git 历史里**从未存在过**（不是被删）。**已还 10 条 + 剔除 1 条误报**：① 会话地图的引用**改指**到恢复出来的 [会话地图与分支设计](session-map-branch-design.md)；② 两处（只读副本一致性 / Redis 键前缀）**删引用**（规则本就在代码注释里）；③ 两处"我们引用过某份没入库的文档"的自述**去掉路径**；④ **按代码重建五份**：[会话运行时 spec](session-runtime-spec.md)（7 处引用）· [邮件通道](mail.md)（`mail.go` 里 8 处**带小节号**的引用，重建时**沿用原小节号**）· [模型服务提供商](service-providers.md)（含 OpenCode 的 `x-opencode-session` 一节）· [Agent 安全与可靠性](agent-safety-and-reliability.md)（**§1.4 MCP 收窄** 与 **§4.2 撤销栈诚实优先**两个锚点）· [LLM 密钥管理 DR](llm-provider-key-management-dr.md)（集中派：权威层/keyset/状态机/KeyRing 与 V1→V2 预留）；⑤ **剔除 1 条守卫误报**：有一条"缺失文档"其实是 **Ollama 文档 URL 的一部分**（守卫已加"URL 里的路径不算引用"，故这里不写出那个路径以免又造一条断链）。**剩 8 条仍待决策**：逐条改引用还是补写文档（`--show-known` 给出每条的引用方） |
+| **文档断链：8 份被引用的 `docs/*.md` 不存在（已基线化 + 门禁；**当前暂停还债**，优先功能）** | 守卫 `scripts/check_doc_links.py`（**已接 CI**）实测：**原 19 份**（`docs/subagent-design.md` 被 16 个文件引用 · `mail.md` 4 个 …），git 历史里**从未存在过**（不是被删）。**已还 10 条 + 剔除 1 条误报**：① 会话地图的引用**改指**到恢复出来的 [会话地图与分支设计](session-map-branch-design.md)；② 两处（只读副本一致性 / Redis 键前缀）**删引用**（规则本就在代码注释里）；③ 两处"我们引用过某份没入库的文档"的自述**去掉路径**；④ **按代码重建五份**：[会话运行时 spec](session-runtime-spec.md)（7 处引用）· [邮件通道](mail.md)（`mail.go` 里 8 处**带小节号**的引用，重建时**沿用原小节号**）· [模型服务提供商](service-providers.md)（含 OpenCode 的 `x-opencode-session` 一节）· [Agent 安全与可靠性](agent-safety-and-reliability.md)（**§1.4 MCP 收窄** 与 **§4.2 撤销栈诚实优先**两个锚点）· [LLM 密钥管理 DR](llm-provider-key-management-dr.md)（集中派：权威层/keyset/状态机/KeyRing 与 V1→V2 预留）；⑤ **剔除 1 条守卫误报**：有一条"缺失文档"其实是 **Ollama 文档 URL 的一部分**（守卫已加"URL 里的路径不算引用"，故这里不写出那个路径以免又造一条断链）。**剩 8 条仍待决策**：逐条改引用还是补写文档（`--show-known` 给出每条的引用方） |
 | CI 首跑（L2-1 的 mypy / L2-2 的 integration） | push 并跑一次 CI：未声明顶层依赖、空库建表路径、pgvector 镜像、网关在 runner 内的启动 |
-| 新功能方向 | 产品路线图输入 |
-| 前端 e2e（Playwright） | 当前无 e2e 配置，需确认是否引入浏览器依赖 |
+| 新功能方向 / 前端 e2e（Playwright） | 新功能方向需产品路线图输入；前端当前无 e2e 配置，需确认是否引入浏览器依赖 |
 | 多实例**重复投递**（双进程演练发现并已修复，2026-10-08） | `internal/broadcast/hub.go`（新增 `RelayEvent` + `logicalEventID`，`ReplayAfter` 去重）· `internal/api/subagent_events_relay.go` · 引擎侧发布带 `event_id` | 修复前：中继 `hub.Publish` 既追加共享重放流**又跨实例再广播** ⇒ 实时各收 **2 份**、补发 `[2,2,3,3]`（N 实例 = N 份）。修复：中继改走 `RelayEvent`（只追加本实例流 + 本地 fanout，**不再广播**），**写入端不做互斥**（否则 N-1 个实例的客户端拿不到 `id`），改为**读取端按逻辑身份去重**（`event_id`，退化 payload 哈希）。护栏：`hub_live_test.go::TestLiveReplayDedupesSameLogicalEventAcrossInstances` · `logical_id_test.go` · 双进程演练 `multi_instance_drill.py`（**已接 CI real-stack job**，4 条断言全绿） |
 | `internal/api` 路由聚合方式 | 已评估（L3-4）：按业务域拆 `routes_*.go`，见 [拆分评估](split-assessment.md) |
 | **遗留的第二套 agent 循环 `app/agent/loop.py`** | 实测：它有自己的 `run_agent`（316 行，也自发 `usage`），经引擎路由 `/v1/agent/run` 暴露；而**产品链路是 `/v1/agent/submit` → `AgentRuntime`（`runtime.py`）**，且 Go 侧 `PythonClient.Run`（唯一会打 `/v1/agent/run` 的调用方）**零调用者** ⇒ 该文件＋该端点是**遗留**。**已做**：① `loop.py` 标为遗留并写明"新能力一律加在 `runtime.py`"；② `/v1/agent/run` 加**一次性告警**，用来观测是否真有外部调用方（有证据再决定删，不靠猜）；③ 把该模块**独有覆盖**的安全性质用例搬到产品链路（`tests/test_runtime_tool_truncation.py`）—— 搬的过程中当场查出 **runtime 的截断 `tool_call` 在守卫之前就已下发**（前端多一张卡、网关把半截 JSON 落库），已修。**待做**：确认无调用方后，连同 `/v1/agent/run`、`PythonClient.Run`（Go 侧零调用者）与 `tests/test_agent.py` 一起删除。

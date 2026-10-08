@@ -117,15 +117,22 @@ python -m alembic -c alembic.ini upgrade head --sql > /dev/null   # 离线渲染
 **迁移链必须单一 head**：分叉会让启动校验（`internal/db/schema_version.go` 的
 `ParseMigrationHead`）直接拒绝启动。新增迁移后请复核 README「数据库迁移」一节。
 
-### `encoding` — 源码编码
+### `encoding` — 仓库根守卫（**四个**）
 
 ```bash
-python scripts/check_source_encoding.py
+python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8
+python scripts/check_tool_policy_parity.py   # Go ↔ Python 工具分级表必须同构（L3-9）
+ruff check scripts/                          # 仓库根脚本（配置见仓库根 ruff.toml）
+python scripts/check_doc_links.py            # 被引用的 docs/*.md 必须存在（存量走基线，新增即失败）
 ```
 
 `U+FFFD` / 非法 UTF-8 是**字节已损坏**的信号，不是排版问题：它曾把依赖清单吞进注释行、把
 `nginx.conf` 的 5 条配置指令吃掉（大括号失衡导致 frontend 容器起不来）。**看到该 job 红，
 先确认磁盘上的字节，别靠编辑器"看起来正常"判断。**
+
+后两个是**后加的**：`scripts/` 此前没有任何 lint 门禁（攒下 8 处历史问题）；文档断链此前无人管
+（一次扫出 19 份"被引用但从未提交过"的设计文档，现存 8 条在 `scripts/doc_link_baseline.txt` 里，
+**只应缩小**）。
 
 ### 本机真实栈 —— 把网关也起起来，`integration` 才会全绿
 

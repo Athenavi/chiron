@@ -178,7 +178,7 @@ python -m pytest python-engine/tests -q
 | 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份）+ 广播前的 `GetSession` 归属校验 | 归属校验分支需要真实 PG 的自动化用例**尚未补**；`subagent:cancel` 载荷本身不带身份，防线在网关侧 |
 | MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
 
-**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID，因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发；② **两个 OS 进程的部署演练**（真起两个网关进程 + 引擎，验证环境接线、服务发现与真实事件流）尚未自动化 —— 现有取证已覆盖**同进程内两个实例**的真实 HTTP + 真实 Redis（上表第一、二行），差的是**部署形态**那一段。
+**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID，因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
 
 ```bash
 # 复现上表前三行（需可达 Redis；CI 的 real-stack job 注入 REDIS_URL）
