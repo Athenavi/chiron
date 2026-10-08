@@ -33,6 +33,9 @@ var (
 
 const (
 	agentRunLockTTL = 5 * time.Minute // 崩溃后锁自动过期上限;持有者 60s 心跳续期
+	// sessionRunLockHeartbeat 续期间隔（TTL 的 1/5）。任何长于一分钟的 run 都必须续期，
+	// 否则锁会在运行中途过期、同一会话被另一个请求/实例重新抢占 ⇒ 两个 runtime 并发跑。
+	sessionRunLockHeartbeat = 60 * time.Second
 )
 
 const sessionRunLockAcquireLua = `
@@ -104,9 +107,51 @@ func RefreshSessionRunLock(ctx context.Context, sessionID, runToken string) bool
 }
 
 // releaseSessionRunLock compare-and-del 释放（仅当锁仍属于本次 runToken）。
+//
+// ⚠️ 必须做 nil 检查：它与另外两个入口（Acquire / Refresh）不同 —— 它在 **defer** 里被调用，
+// 而 defer 排在 run goroutine 的 `recover()` **之后**执行，一旦 `db.Redis` 已在收尾时被清空，
+// 这里就会 nil 解引用，panic 不会被 recover 接住，**直接带走整个网关进程**。
 func releaseSessionRunLock(ctx context.Context, key, runToken string) error {
+	if db.Redis == nil {
+		return errRedisUnavailable
+	}
 	res := db.Redis.Eval(ctx, sessionRunLockReleaseLua, []string{key}, runToken)
 	return res.Err()
+}
+
+// StartSessionRunLockHeartbeat 启动 run 锁续期心跳，返回**幂等**的停止函数。
+//
+// 与 AcquireSessionRunLock 配套：TTL 只有 5 分钟，长于它的 run 必须续期。停止条件有三个 ——
+// ctx 结束、显式 stop、续期失败（锁已易主/已过期）。**只在持有锁的分支调用**；返回的 stop
+// 必须在 **run 自己的 goroutine** 里 defer（在 HTTP handler 里 defer 会在响应返回时立刻停掉心跳）。
+//
+// 统一放在这里而不是各 handler 各写一份：`/submit` 与 `/v1/agent/followup` 都要这把锁，
+// 两份实现必然漂移（followup 此前就**完全没有**心跳，锁会在运行中途过期）。
+func StartSessionRunLockHeartbeat(ctx context.Context, sessionID, runToken string) func() {
+	if db.Redis == nil {
+		return func() {}
+	}
+	stop := make(chan struct{})
+	var once sync.Once
+	go func() {
+		ticker := time.NewTicker(sessionRunLockHeartbeat)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-stop:
+				return
+			case <-ticker.C:
+				if !RefreshSessionRunLock(ctx, sessionID, runToken) {
+					slog.Warn("session run lock heartbeat stopped: lock lost or expired",
+						"session_id", sessionID)
+					return
+				}
+			}
+		}
+	}()
+	return func() { once.Do(func() { close(stop) }) }
 }
 
 // CancelSessionBroadcast 把取消请求广播给所有网关实例（本实例未命中时调用）。
@@ -155,10 +200,13 @@ func StartAgentCancelSubscriber(ctx context.Context) {
 					continue
 				}
 				sessionID, userID := parts[0], parts[1]
-				if v, loaded := sessionCancels.LoadAndDelete(sessionID); loaded {
-					sc := v.(sessionCancel)
+				if v, loaded := sessionCancels.Load(sessionID); loaded {
+					sc := v.(*sessionCancel)
 					if sc.userID != userID {
-						sessionCancels.Store(sessionID, sc) // 非本人 session，放回
+						continue // 不是本用户的 session：不删、也不放回（避免误删新条目）
+					}
+					// 原子认领：并发下若条目已被替换/删除，就不要再取消（可能已是新 run）
+					if !sessionCancels.CompareAndDelete(sessionID, v) {
 						continue
 					}
 					sc.cancel()

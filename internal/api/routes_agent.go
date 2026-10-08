@@ -153,7 +153,7 @@ func registerAgentRoutes(
 			// Redis 不可用：兑底进程内防重（多实例下退化为近似限制）
 			slog.Warn("session run lock degraded to in-process (redis unavailable)",
 				"session_id", body.SessionID)
-			if _, loaded := sessionCancels.LoadOrStore(body.SessionID, sessionCancel{userID: userID, cancel: cancel}); loaded {
+			if _, loaded := sessionCancels.LoadOrStore(body.SessionID, &sessionCancel{userID: userID, cancel: cancel}); loaded {
 				cancel()
 				BadRequest(w, sessionBusyMsg)
 				return
@@ -164,11 +164,16 @@ func registerAgentRoutes(
 			return
 		} else {
 			// 分布式锁持有成功：登记本地 registry（供取消）
-			sessionCancels.Store(body.SessionID, sessionCancel{userID: userID, cancel: cancel})
+			sessionCancels.Store(body.SessionID, &sessionCancel{userID: userID, cancel: cancel})
 		}
 
 		releaseSem, ok := agentSem.TryAcquire(r.Context())
 		if !ok {
+			// ⚠️ 必须连 run 锁一起放掉：否则本会话被这把锁挡住 5 分钟（TTL），
+			// 而实际什么都没跑 —— 用户会反复看到 "already has a turn in progress"。
+			if releaseRun != nil {
+				releaseRun()
+			}
 			sessionCancels.Delete(body.SessionID)
 			cancel()
 			TooManyRequests(w)
@@ -184,6 +189,9 @@ func registerAgentRoutes(
 			monitor.IncRateLimitBlocked()
 			slog.Warn("tenant concurrency quota exhausted, submit rejected",
 				"tenant_id", claims.TenantID, "user_id", userID)
+			if releaseRun != nil {
+				releaseRun() // 同上：拒绝路径也必须放锁，否则会话被空锁 5 分钟
+			}
 			releaseSem()
 			sessionCancels.Delete(body.SessionID)
 			cancel()
@@ -198,27 +206,12 @@ func registerAgentRoutes(
 			}
 		}
 
-		// 批 E2：run 锁心跳续期（60s/次，TTL=5min）。随 submit ctx 结束/run 完成自动停止；
+		// 批 E2：run 锁心跳续期（60s/次，TTL=5min）。统一走 session_coord 的同一份实现
+		// （与 /v1/agent/followup 共用），避免两处各写一份又漂移。
 		// 持有实例崩溃后无续期，锁 ≤5min 自动过期，用户可重试（历史消息已持久化）。
-		var stopHeartbeat chan struct{}
+		var stopHeartbeat func()
 		if releaseRun != nil {
-			stopHeartbeat = make(chan struct{})
-			go func() {
-				ticker := time.NewTicker(60 * time.Second)
-				defer ticker.Stop()
-				for {
-					select {
-					case <-ctx.Done():
-						return
-					case <-stopHeartbeat:
-						return
-					case <-ticker.C:
-						if !RefreshSessionRunLock(ctx, body.SessionID, runToken) {
-							return // 锁已易主/过期：停止续期
-						}
-					}
-				}
-			}()
+			stopHeartbeat = StartSessionRunLockHeartbeat(ctx, body.SessionID, runToken)
 		}
 
 		// ── 工作台互通兜底：只带 agent_id 时由网关补全 Agent 配置 ──
@@ -233,7 +226,7 @@ func registerAgentRoutes(
 				defer releaseRun()
 			}
 			if stopHeartbeat != nil {
-				defer close(stopHeartbeat)
+				defer stopHeartbeat()
 			}
 			defer releaseSem()
 			defer func() {
@@ -254,7 +247,7 @@ func registerAgentRoutes(
 
 	// cancelHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册
 	cancelHandlerFunc := func(w http.ResponseWriter, r *http.Request) {
-		handleCancel(w, r)
+		handleCancel(w, r, sessionMgr)
 	}
 	cancelMW := authMW(rlMW(http.HandlerFunc(cancelHandlerFunc)))
 	mux.Handle("POST /cancel", cancelMW)

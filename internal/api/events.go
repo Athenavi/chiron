@@ -44,9 +44,19 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 	if lastEventID == "" {
 		lastEventID = r.URL.Query().Get("last_event_id")
 	}
-	lastSentID := lastEventID
-	if sessionID != "" && lastEventID != "" {
-		replayed, err := hub.ReplayAfter(r.Context(), sessionID, lastEventID)
+	// 只接受**可解析**的流 ID 作为去重基线：伪造/损坏的 ID 既不能用于补发，还会让后面的
+	// 去重把所有真实事件判成"旧的"而全部丢弃（连接还在、却再也收不到事件）。
+	lastSentID := ""
+	if lastEventID != "" {
+		if _, _, ok := broadcast.ParseStreamID(lastEventID); ok {
+			lastSentID = lastEventID
+		} else {
+			slog.Warn("ignoring malformed Last-Event-ID",
+				"session", sessionID, "last_event_id", lastEventID)
+		}
+	}
+	if sessionID != "" && lastSentID != "" {
+		replayed, err := hub.ReplayAfter(r.Context(), sessionID, lastSentID)
 		if err != nil {
 			// 缓冲不可读时降级为仅实时（不阻断连接；事件仍可由前端按 DB 状态自愈）
 			slog.Warn("sse replay failed, falling back to live-only", "session", sessionID, "error", err)
@@ -79,8 +89,9 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 			if sessionID != "" && event.SessionID != "" && event.SessionID != sessionID {
 				continue
 			}
-			// 去重：补发与实时在订阅切换窗口可能重叠，丢弃已发送过的旧事件（按流 ID 比较）
-			if event.ID != "" && event.ID <= lastSentID {
+			// 去重：补发与实时在订阅切换窗口可能重叠，丢弃已发送过的旧事件
+			// （按流 ID **数值**比较；字符串比较会在 seq 变宽时判错，见 broadcast.IsNewerStreamID）
+			if event.ID != "" && !broadcast.IsNewerStreamID(event.ID, lastSentID) {
 				continue
 			}
 			w.Write([]byte(broadcast.FormatSSE(event)))

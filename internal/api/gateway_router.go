@@ -38,6 +38,10 @@ func metricsAuthMW(cfg *config.Config, authMW routeMiddleware, h http.HandlerFun
 }
 
 // sessionCancels tracks running session contexts for cancellation support.
+//
+// ⚠️ 值必须是 ***sessionCancel**（指针）。`sessionCancel` 里有 `cancel` 函数字段，
+// 函数不可比较 —— 存值类型会让 `sync.Map.CompareAndDelete` 直接 panic
+// （`sync: comparing non-comparable value`），而取消路径正是靠它做原子认领的。
 var sessionCancels sync.Map
 
 // sessionCancel tracks the owner and cancel function of a running session task.

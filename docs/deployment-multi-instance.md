@@ -166,6 +166,28 @@ python -m pytest python-engine/tests -q
 - 同一 `task_id` 重复投递只执行一次（日志 `duplicate task skipped (already completed)`）；
 - 同一 `turn_id` 重复扣费时余额只减一次。
 
+### 多副本语义的对外保证（每条都附取证）
+
+这张表是"横向扩展后**外部能观察到什么**"的承诺，也是与本地单用户 harness（如 DeepSeek Harness）**结构上不可比**的那部分能力。**每条都写明边界** —— 把"有机制"当成"有保证"是这个仓库反复踩过的坑。
+
+| 保证 | 取证（可复现） | 边界（**不**保证什么） |
+|---|---|---|
+| 同一会话**不会并发两个 runtime** | **HTTP 级**：`internal/api/submit_lock_live_test.go`（另一实例持锁 ⇒ `POST /v1/agent/submit` 返回 400「会话忙」；无锁 ⇒ 202，正对照）；锁原语级：`internal/api/session_coord_live_test.go`（互斥 / 续期归属 / 释放-CAS） | Redis 不可用时退化为**进程内**防重（多副本下仅近似）；锁被误丢时当前 run **不会被打断**，靠恢复期内的重复提交被拒兜底 |
+| 断线重连**不丢事件、不重复** | `internal/broadcast/hub_live_test.go`（补发保序、`after` 排他、跨实例可见、缓冲上限、滑动 TTL）+ `internal/broadcast/streamid_test.go`（流 ID 按数值比较） | 每会话只保留**最近 200 条 + 1h**：超出窗口的断线无法补齐（需前端按 DB 状态自愈）；非法 `Last-Event-ID` 被忽略并转为实时（**宁可重复、不可丢弃**） |
+| 审批 / 取消**打到持有该 run 的实例** | `internal/engine/run_affinity_test.go`（归属记录契约、URL 优先、注册表回退、垃圾记录拒绝） | 映射缺失或 TTL 过期时**回退一致性哈希**（尽力而为）；实例故障该 run 仍中断，**不做现场迁移** |
+| 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份）+ 广播前的 `GetSession` 归属校验 | 归属校验分支需要真实 PG 的自动化用例**尚未补**；`subagent:cancel` 载荷本身不带身份，防线在网关侧 |
+| MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
+
+**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID，因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发；② **双进程/双副本拓扑的演练**（起两个网关 + 引擎，验证真实事件流下的"断线→重连→无缺口"）尚未自动化 —— 当前已有的是**同进程内真实路由 + 真实 Redis** 的 HTTP 级校验（见上表第一行）与组件级用例。
+
+```bash
+# 复现上表前三行（需可达 Redis；CI 的 real-stack job 注入 REDIS_URL）
+CHIRON_TEST_REDIS_ADDR=127.0.0.1:6379 \
+  go test -mod=mod ./internal/broadcast/... ./internal/api/... ./internal/engine/... -count=1 -run 'Live' -v
+# 复现 MCP owner 租约那行
+cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_lease.py
+```
+
 ## 10. 已知边界
 
 - run 现场状态不迁移：实例故障该 run 中断（只保证「路由到正确实例 + 陈旧审批被拒」）；

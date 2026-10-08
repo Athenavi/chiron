@@ -49,7 +49,15 @@
 
 ### 2.2 `runtime.py` — 压缩工具簇天然独立
 
+> **行数已过期**：本文写作时 `runtime.py` 1841 行，**当前 3370 行**（`AgentRuntime` 从 1557 → 2315 行）。
+> 下面 ② 的**类型部分已完成**（`runtime_types.py`）；① 的压缩簇必须先按现状**重新定界**再动 ——
+> 启动前务必重新实测行号，不要照搬旧数字。
+
 实测结构：上下文/消息处理函数簇 `50–468`（`_restrict_tools_to_plugins`…`_ensure_valid_tool_sequence`，约 420 行，彼此只依赖 `messages` 结构）；数据类型 `AgentTask` 469 / `AgentEvent` 505 / `ApprovalTicket` 530；**`AgentRuntime` 574–2131（1557 行）**；模块级入口 `run_agent` 2132 / `register_pending_approval` 2193。
+
+**✅ 已完成（批次 2 · 类型部分）**：`AgentTask` / `AgentEvent` / `ApprovalTicket` / `ApprovalDecision` 与审批决策取值（`DECISION_*` / `VALID_DECISIONS`）移到 `app/agent/runtime_types.py`（**3370 → 3198 行**，新模块 207 行）。验收：AST 取源码段逐字比对 —— **HEAD 34 个顶层定义 → 4 个移动、30 个留在原处，全部文本一致、常量完整**；`ruff` 0 · `mypy app/ acp_adapter/` 0（242 文件）· `pytest -m "not integration"` 全绿。
+
+> 坑：`runtime.py` 里的再导出必须是**逐条 `X as X`** —— mypy 的 `no-implicit-reexport` 只认 `as` 别名，而本仓库 ruff 的 isort（`combine-as-imports=false`）会把带别名的再导出拆成逐条；写成一行或多行合并都会被其中一方判红。另外拆分后 `dataclasses.field` 在 `runtime.py` 里已无人使用，需要随之删掉（ruff F401 会指出）。
 
 - 边界（分两步，先易后难）：① 拆出 `runtime_compaction.py`（`50–468` 那簇，纯函数、无状态）；② 拆出 `runtime_types.py`（三个 dataclass）。
 - 契约：`runtime.py` 保留同名再导出（`from .runtime_compaction import *` 或显式 `__all__` 转发），**避免改动任何既有 import 路径**；测试 `tests/` 中引用旧路径的地方不动。
@@ -69,6 +77,15 @@
 - `session/manager.go`：会话 CRUD（`GetSession` 51 / `CreateSession` 102 / `ListSessions` 148 / `DeleteSession` 198 / `UpdateSession` 281 与 `SessionUpdate` 238 / `buildSessionUpdate` 253）与消息持久化（`SaveMessage` 305 / `SaveUserMessage` 386 / `ensureSessionOwned` 365）分开。
 - 契约：同包私有符号（`isMissingColumn` 337、`defaultMailConfigRow` 660）仍可用；`Manager` 的公开方法集**不变**。
 
+**✅ 已完成（批次 3 全部）**：
+
+- `mail_handler.go` → `mail_reset_store.go` + `mail_handlers_{auth,reset,config}.go`（**1488 → 695 行**；4 个新文件 63/267/208/303 行）；
+- `session/manager.go` → `manager_{crud,messages,queries,branch}.go`（**1198 → 128 行**；4 个新文件 269/448/193/209 行）。
+
+两批同一验收口径：**逐函数/方法文本与拆分前逐字一致**（mail **45/45**、session **34/34**，无丢失 / 无内容变化 / 无新增）· `go build/vet/test -mod=mod ./...` 全绿 · 既有 `mail_handler_test.go` 与 `internal/session` 测试全部通过。
+
+> 坑：拆分脚本按"限定符 → import 路径"静态推导 import（`goimports` 在整包编译不过时**不会**补 import）时，**版本化路径的包名不是最后一段** —— `github.com/jackc/pgx/v5` 的包名是 `pgx` 而不是 `v5`；不特判就会漏 import、直接编译失败。
+
 ### 2.5 前端 `views/` 与 `components/chat/` — 抽 composable
 
 - `ChatView.vue`（173 符号）按实测簇抽：工作流/Agent 导出 `57–190`、布局切换 `191–221`（`readLayoutSwap`/`toggleLayout`/`onToolbarMenu`）、搜索 `229–255`、统计与压缩 `256–271`、子代理面板 `272+`。
@@ -87,8 +104,8 @@
 | 批次 | 内容 | 为什么这个顺序 |
 |---|---|---|
 | 1 | `gateway_router.go` → `routes_*.go`（✅ 已完成：1254 → 442 行，逐函数文本一致） | 同包纯移动、仅换文件（各文件 import 由脚本静态推导），风险最低 |
-| 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py` | 纯函数/数据类，旧路径再导出 |
-| 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切 | 同包，公开方法集不变 |
+| 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py`（类型部分 ✅ 已完成：3370 → 3198 行，AST 逐字一致；压缩簇待**重新定界**后做） | 纯函数/数据类，旧路径再导出 |
+| 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切（✅ 已完成：mail 1488 → 695、session 1198 → 128，逐函数文本一致） | 同包，公开方法集不变 |
 | 4 | `main.py` 依赖取用器 + `lifespan` 分步 | 启动顺序敏感，需逐行对照 |
 | 5 | 前端抽 composable（一次一簇，从有测试的 `WorkflowView` 起） | 隐式耦合最多，放最后 |
 
@@ -101,5 +118,5 @@
 
 ## 5. 与路线图的关系
 
-- 本项**无功能收益**，排在所有功能项之后（见路线图 §7 批次 D）。
+- 本项**无功能收益**，排在所有功能项之后（见路线图 §4 批次 D）。
 - 启动前建议先确认 §2.1 是否值得做：它是唯一"零风险 + 立刻降低装配复杂度"的一批；其余批次收益递减，可只做 1–2 批。

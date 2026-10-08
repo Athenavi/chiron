@@ -24,7 +24,7 @@
 | 维度 | DSH | Chiron | 方向 |
 |---|---|---|---|
 | Agent 循环 | `dsh-agent-loop` 插件 + Cordis seam | `app/agent/runtime.py`、`loop.py`、`loop_guard.py`、`task_budget.py` | 相当 |
-| 事件契约 | session 事件（`user/message` `assistant/message` `tool/call` `turn/end`…），**内部 TS 词汇表**，无对外稳定承诺 | SSE ~13 种；思考内联在 `text`（`[thinking]`），缺 `TurnStarted`/`Message`/`Phase`/`Usage` 独立通道 | DSH 的**边界更清晰**；Chiron 需补通道 |
+| 事件契约 | session 事件（`user/message` `assistant/message` `tool/call` `turn/end`…），**内部 TS 词汇表**，无对外稳定承诺 | SSE ~13 种；**思考已有独立 `thinking` 事件**（`app/agent/runtime.py` 的 A1 分支，契约见 [聊天记录契约](transcript-contract.md) §"两个来源各走各的"），但**用量只在 `done` 里给一次累计值**（无每回合 usage/计价），**无 `Phase`/`TurnStarted`/`Message` 通道** | DSH 的**边界更清晰**；Chiron **思考已对齐**，缺**阶段**与**用量**两条通道 |
 | Fork / 分支 | 原生 durable fork：`parentSession` + `seedLength`/`firstLiveSeq`，可 `atSeq` | `internal/session/branch_summary.go`、`manager.go`（分支语义待核实） | **DSH 更明确** |
 | 子 agent | `dsh-subagent*` + 实验性 `dsh-experimental-agent-team`（roster / durable mailbox / shared task DAG） | `app/subagent/`（R1 receipts / R2 写路径仲裁 / R3 结构化结局 / R4 可注入时钟已落地；R5 fork 待定） | 相当（Chiron 有**可核实行为**判据） |
 | 多租户 / 计费 | ⛔ 未发现任何租户/配额/账务机制 | JWT + RBAC + 402 计费预检 + 429 配额 + 租户并发池 | **Chiron** |
@@ -41,9 +41,9 @@
 
 | # | 切口 | 为什么 DSH 做不了/不这么做 | Chiron 已有基础 | 代价 |
 |---|---|---|---|---|
-| 1 | **多副本一致性语义的对外承诺** | 架构上是单进程本地；多写者冲突是写进文档的限制 | 每会话 Redis Stream + `Last-Event-ID` 补发 + 会话运行锁心跳；**本轮修掉重连去重的流 ID 数值比较缺陷**（`broadcast.IsNewerStreamID`，回归在 `internal/broadcast/streamid_test.go`） | **低**（缺对外口径与压测） |
+| 1 | **多副本一致性语义的对外承诺** | 架构上是单进程本地；多写者冲突是写进文档的限制 | 每会话 Redis Stream + `Last-Event-ID` 补发 + 会话运行锁心跳 + 跨实例取消（**广播前校验会话属主**）+ **session→实例归属路由**（`engine:run:*`）。**对外保证已成文**：[多实例部署指南 §9](deployment-multi-instance.md) 新增「多副本语义的对外保证」表（每条附取证与**边界**）；真实 Redis 覆盖见 `internal/broadcast/hub_live_test.go`、`internal/api/session_coord_live_test.go`、`internal/api/session_cancel_test.go`、`internal/engine/run_affinity_test.go` | **低**（缺"两实例端到端"HTTP 级演练） |
 | 2 | **MCP 多租户连接预算与 owner lease** | 单用户直连即可，无连接数经济学 | `MCP_POOL_ENABLED`/`MCP_MAX_*`/`MCP_OWNER_LEASE_ENABLED` + `mcp_pool_rejected_total`；**已有实测证据**（`tests/test_mcp_owner_lease.py`，真实 Redis：互斥/CAS/TTL/清单往返/桥往返·报错·超时），对外口径见 [多实例部署指南](deployment-multi-instance.md) §8 | **已闭环**（补测时连带修掉两处 pub/sub 连接生命周期缺陷） |
-| 3 | **思考 / 阶段 / 用量三条独立事件通道** | session 事件是内部词汇表，无对外契约承诺 | ~13 种 SSE 事件 + `docs/transcript-contract.md` 契约范式 | **低-中** |
+| 3 | **阶段（Phase）与用量（Usage）独立通道**（思考 ✅ 已落地，见 §1） | session 事件是内部词汇表，无对外契约承诺 | 思考通道已按 A1 落地并有契约（[聊天记录契约](transcript-contract.md)）；**用量只在 `done` 里给整轮累计**，**阶段完全缺失** | **低-中**（动手前先决定："新增事件类型"是否落入 `vendor/规划.md` §6「不改 SSE 协议」的边界） |
 | 4 | **租户级全链路审计与可回放证据链** | 只有本机 session log，且默认上传；无"操作者/租户"维度 | 三条 JSONL 流水带 tenant/user/session：`approval_audit.py`（本轮补测并修掉**密钥明文落盘**）、`exec_audit.py`、`hooks/audit.py`；`ts` 已统一为 UTC+毫秒 | **中低**（缺统一 schema 与租户级导出） |
 | 5 | **插件生态的可运行资产化**（技能侧已对齐，见 §1） | DSH 已领先且不会替 Chiron 做 | `plugin_runner.py`、前端 Plugins/Skills 视图；技能资产已接线（6 个 `SKILL.md`，容器侧本轮已修） | **中**（是其余切口的**前置**） |
 | 6 | **服务端沙箱：多租户不可信代码隔离** | 其沙箱目标是保护用户本机，不面对"租户 A 攻击平台" | `tools/sandbox.py`/`code_guard.py`/`fs_guard.py`/`ssrf.py`/`exec_audit.py` | **高**（但 DSH 结构上不可比 ⇒ 做到即"不同物种"） |
@@ -62,6 +62,11 @@
 7. **原文更正（2026-10-08）**：本文件早期版本照抄了 README 的"`market/skills/` 未被运行时读取"，
     实测为**错**（技能已接线，只是容器里缺席）。教训与 `vendor/规划.md` §4"配置里有 ≠ 运行期生效"
     同类：**文档里的话不是事实**，引用前必须跑一遍。
+8. **原文更正（2026-10-08，方向相反的那种）**：本文件早期把「思考通道内联在 `text`」列为差距 ——
+   实测 **A1 早已落地**：`app/agent/runtime.py` 直接 `yield AgentEvent(type="thinking")`，
+   前端有 `ReasoningBlock` 与 `onThinkingChunk`，契约写在 [聊天记录契约](transcript-contract.md)。
+   ⇒ 切口 #3 收窄为**阶段 + 用量**两条。**"差距分析写下的差距" ≠ "今天还存在的差距"** ——
+   分析文档不会自己更新，**引用差距前同样必须跑一遍现状**（否则会把已有能力再实现一遍）。
 
 ## 4. 复现取证的方法（只读）
 
