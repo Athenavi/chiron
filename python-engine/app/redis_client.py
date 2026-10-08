@@ -24,12 +24,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from typing import Any
 
 import redis.asyncio as aioredis
 
 from app.config import settings
 
 logger = logging.getLogger(__name__)
+
+
+async def aclose_pubsub(pubsub: Any) -> None:
+    """关闭一个 Redis Pub/Sub 对象（**唯一**收口处，供 ContextBus / MCP owner 桥 / 子 Agent 取消订阅共用）。
+
+    为什么需要这个包装：redis-py ≥ 5.0.1 把 ``PubSub.close()`` 标记为废弃，要求改用
+    ``aclose()``；但 5.3.0 的类型标注没跟上，直接调用会触发 mypy 的 ``no-untyped-call``，
+    而本仓库 ``app/`` 下**不使用** ``type: ignore``。这里用 ``Any`` 收口一次，
+    调用方不必各自处理。
+
+    真实缺陷（本轮补测时暴露）：三个 Pub/Sub 消费点此前用已废弃的 ``close()``；
+    其中 ``ContextBus._pubsub_listener`` 更是**只在 CancelledError 时 break，没有任何
+    finally** —— 重连/无订阅/取消三种路径都会丢掉未关闭的 pubsub，每轮泄漏一条连接。
+    """
+    await pubsub.aclose()
 
 _redis_instance: aioredis.Redis | None = None
 _redis_lock = asyncio.Lock()  # P0-2: Thread-safe initialization

@@ -144,6 +144,12 @@ MCP 连接规模 ≈ **引擎副本数 × 活跃用户数 × 每用户 server �
   **明确报错**且**不自动重试**（MCP 工具可能有副作用）；
 - **默认关闭**：未开启时行为与单实例完全一致，不做任何跨实例转发。
 
+> **实测证据**：`python-engine/tests/test_mcp_owner_lease.py`（`pytest -m integration`，需真实
+> Redis）覆盖：租约互斥（同一用户不得有两个 owner）· 非 owner 不能续期/释放（CAS）·
+> TTL 下限 30s · 工具清单往返（含中文）· 无 Redis 时保持单实例语义 · 跨实例桥往返 ·
+> 远端错误原样回传 · owner 不可达时**超时明确报错**而非返回空结果。
+> `python-engine/tests/test_context_bus_listener.py` 另外钉住 Pub/Sub 监听器退出时必须关闭连接。
+
 ## 9. 验证
 
 ```bash

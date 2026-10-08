@@ -57,7 +57,7 @@ _ALIASES: dict[str, str] = {
     "流程图": "graph",
     "子agent": "subagent",
     "子代理": "subagent",
-    "委派": "agent_dispatch",
+    "委派": "subagent",
     "后台": "run_in_background",
     "定时": "job",
     "任务状态": "job_output",

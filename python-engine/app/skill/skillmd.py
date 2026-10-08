@@ -22,11 +22,14 @@ Chiron 既有技能载体是**扁平**的 `{name}.skill.json`（`exec`/`paramete
 
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 from typing import Any
 
 from app.skill.store import SkillDef
+
+logger = logging.getLogger(__name__)
 
 # frontmatter 字段上限（对齐 deepagents 的校验）
 MAX_DESCRIPTION_CHARS = 1024
@@ -39,6 +42,9 @@ _FRONTMATTER_DELIM = "---"
 
 #: 内置技能目录的环境变量覆盖（部署时仓库根不可见 / 测试注入用）
 BUILTIN_SKILLS_ENV = "CHIRON_BUILTIN_SKILLS_PATH"
+
+#: 已告警过的缺失路径（同一路径只警一次，避免每次建 SkillStore 都刷屏）
+_MISSING_WARNED: set[str] = set()
 
 
 class SkillMdError(ValueError):
@@ -259,12 +265,40 @@ def builtin_skills_root() -> Path | None:
 
     默认从本文件反推仓库根的 `market/skills/`：本文件在 `python-engine/app/skill/` 下，
     故 `parents[3]` 即仓库根。可用 `CHIRON_BUILTIN_SKILLS_PATH` 覆盖（部署时只发布
-    `python-engine/`，或测试注入）。目录不存在时返回 `None` —— 内置源缺失不该让技能
-    列表报错，只是没有内置技能。
+    `python-engine/`，或测试注入）。
+
+    缺失时返回 `None`（**不抛异常** —— 内置源缺失不该让技能列表报错），但会**告警一次**：
+    静默返回 None 曾经掩盖了一个真实缺陷 —— 引擎镜像只 `COPY app/`（构建上下文是
+    `python-engine/`），`market/skills/` 进不了镜像，于是容器部署**一直没有内置技能**
+    且日志里什么都看不到（vendor/规划.md §1.3「失败要显式」）。
     """
     override = os.getenv(BUILTIN_SKILLS_ENV, "").strip()
     if override:
-        p = Path(override)
-        return p if p.is_dir() else None
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate
+        _warn_missing_source(candidate, explicit=True)
+        return None
     candidate = Path(__file__).resolve().parents[3] / "market" / "skills"
-    return candidate if candidate.is_dir() else None
+    if candidate.is_dir():
+        return candidate
+    _warn_missing_source(candidate, explicit=False)
+    return None
+
+
+def _warn_missing_source(path: Path, *, explicit: bool) -> None:
+    """内置技能源缺失：必须可见，不能静默变成"没有内置技能"。"""
+    key = str(path)
+    if key in _MISSING_WARNED:
+        return
+    _MISSING_WARNED.add(key)
+    reason = (
+        f"{BUILTIN_SKILLS_ENV} 指向的目录不存在"
+        if explicit
+        else "默认内置技能源（仓库根的 market/skills）不存在"
+    )
+    logger.warning(
+        "内置技能源缺失：%s（%s）—— 本次运行的技能列表**不含内置技能**。"
+        "容器部署请挂载 market/skills 并设置 %s 指向它。",
+        path, reason, BUILTIN_SKILLS_ENV,
+    )

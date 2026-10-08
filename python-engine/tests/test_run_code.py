@@ -74,8 +74,10 @@ async def test_program_calls_sdk_tool(tmp_path):
     set_tool_context(session_id="s", user_id="u-rc", tenant_id="t", gateway=None)
     f = workspace_dir() / "hello.txt"
     f.write_text("hello", encoding="utf-8")
+    # 路径已统一 clamp 到沙箱工作区，`read_file` 不再接受 `root` 参数（40dfc99）。
+    # 传 root 会直接 TypeError（本用例曾因此回归）。
     code = (
-        f"r = await tools.read_file(path='hello.txt', root=str(r'{tmp_path}'))\n"
+        "r = await tools.read_file(path='hello.txt')\n"
         "return r['content']"
     )
     out = await run_code(code)
@@ -87,11 +89,12 @@ async def test_program_calls_sdk_tool(tmp_path):
 async def test_program_dict_args_and_logs(tmp_path):
     set_tool_context(session_id="s", user_id="u-rc", tenant_id="t", gateway=None)
     workspace_dir() / "log.txt"
+    # 同上：`write_file` / `read_file` 均已移除 `root`（路径 clamp 到沙箱工作区）。
     code = (
         "print('before')\n"
-        f"await tools.write_file(path='log.txt', content='data', root=str(r'{tmp_path}'))\n"
+        "await tools.write_file(path='log.txt', content='data')\n"
         "print('after')\n"
-        f"return (await tools.read_file(path='log.txt', root=str(r'{tmp_path}')))['content']"
+        "return (await tools.read_file(path='log.txt'))['content']"
     )
     out = await run_code(code)
     assert out["result"] == "data"

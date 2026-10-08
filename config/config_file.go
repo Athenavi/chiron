@@ -1,6 +1,7 @@
 package config
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strconv"
@@ -63,7 +64,7 @@ func loadConfigFile() {
 	}
 
 	var cf ConfigFile
-	if err := json.Unmarshal(data, &cf); err != nil {
+	if err := json.Unmarshal(stripJSONComments(data), &cf); err != nil {
 		os.Stderr.WriteString("WARN: config file " + path + " parse error: " + err.Error() + "\n")
 		return
 	}
@@ -109,4 +110,62 @@ func setIfNotInt(key string, val *int) {
 	if os.Getenv(key) == "" {
 		os.Setenv(key, strconv.Itoa(*val))
 	}
+}
+
+// stripJSONComments 去掉 JSON 字符串之外的 `//` 行注释与 `/* */` 块注释，并丢弃
+// UTF-8 BOM，使 config/config.json 这类 **JSONC** 文件能被 encoding/json 解析。
+//
+// 背景：config/config.json 首行就是 `//` 注释，而 loadConfigFile 原先直接
+// json.Unmarshal ⇒ 解析失败 ⇒ 整个文件的 6 个键**静默失效**（只留一行 stderr
+// warning），即 vendor/规划.md §3.3-4 与 §4「配置里有 ≠ 运行期生效」。
+//
+// 只做"去注释"这一件事：不解析、不校验、不放宽 JSON 语法（不做尾逗号等宽容处理），
+// 语法错误仍由 json.Unmarshal 报出 —— 失败要显式（§1.3）。
+func stripJSONComments(data []byte) []byte {
+	// 允许带 BOM 的文件（Windows 编辑器的常见产物）；BOM 会让 json 直接报错。
+	data = bytes.TrimPrefix(data, []byte{0xEF, 0xBB, 0xBF})
+
+	out := make([]byte, 0, len(data))
+	inString, escaped := false, false
+	for i := 0; i < len(data); i++ {
+		c := data[i]
+
+		if inString {
+			out = append(out, c)
+			switch {
+			case escaped:
+				escaped = false
+			case c == '\\':
+				escaped = true
+			case c == '"':
+				inString = false
+			}
+			continue
+		}
+
+		switch {
+		case c == '"':
+			inString = true
+			out = append(out, c)
+		case c == '/' && i+1 < len(data) && data[i+1] == '/':
+			// 行注释：吃掉到行尾（不含换行），保留换行以免两侧 token 粘连。
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			if i < len(data) {
+				out = append(out, '\n')
+			}
+		case c == '/' && i+1 < len(data) && data[i+1] == '*':
+			// 块注释：吃掉 `/*` … `*/`，用一个空格占位。
+			i += 2
+			for i+1 < len(data) && !(data[i] == '*' && data[i+1] == '/') {
+				i++
+			}
+			i++ // 跳过结尾的 '/'
+			out = append(out, ' ')
+		default:
+			out = append(out, c)
+		}
+	}
+	return out
 }

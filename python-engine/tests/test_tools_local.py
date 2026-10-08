@@ -1,18 +1,11 @@
 """Python 本地工具注册表与核心工具的最小回归测试。"""
 import pytest
 
-import app.tools.agent  # noqa: F401
-import app.tools.browser  # noqa: F401
-import app.tools.core  # noqa: F401
-import app.tools.edit_file  # noqa: F401
-import app.tools.git_tools  # noqa: F401
-import app.tools.glob_tools  # noqa: F401
-import app.tools.graph  # noqa: F401
-import app.tools.media  # noqa: F401
-import app.tools.memory  # noqa: F401
-import app.tools.pm  # noqa: F401
-import app.tools.skill  # noqa: F401
-import app.tools.web  # noqa: F401 — web_fetch 注册
+# ⚠️ 只 import 注册入口 `app.tools` —— 它的模块 docstring 明确要求"这里是工具注册的
+# 唯一入口"。此前本文件手写了一份逐模块 import 清单（且含已删除的 `app.tools.agent`），
+# 与 `app/tools/__init__.py` 的清单必然漂移：40dfc99 删掉 agent.py 后本文件直接
+# collection error。新增工具只需改 `app/tools/__init__.py`，不要在这里加 import。
+import app.tools  # noqa: F401
 import app.workflow  # noqa: F401
 from app.tools.context import set_tool_context
 from app.tools.registry import registry
@@ -20,21 +13,39 @@ from app.tools.sandbox import workspace_dir
 
 
 def test_registry_lists_core_tools():
+    """核心工具必须都被注册（模型可见性的前提）。
+
+    这里断言的是**稳定的核心契约**，不是 69 个工具的完整清单：完整清单会随每次工具
+    增删而漂移，而"注册 ≠ 可见"（见 vendor/规划.md §4）才是要守的边界。工具名增删时
+    只更新本清单中**真的属于核心**的那些。
+    """
     names = set(registry.list_names())
     for expected in [
-        "read_file", "write_file", "shell_exec", "grep_files", "web_fetch",
-        "search_files", "execute_python",
+        # 文件系统 / 检索
+        "read_file", "write_file", "edit_file", "glob_files", "grep_files", "search_files",
+        # 执行
+        "shell_exec", "execute_python", "run_code", "persistent_shell",
+        # 网络
+        "web_fetch", "web_search",
+        # 工作流 / 图
         "workflow_run", "workflow_status",
-        "remember", "recall", "forget",
+        "graph_create", "graph_run", "graph_templates",
+        # 记忆
+        "remember", "recall", "forget", "memory_search",
+        # 需求 / 方案
         "prd_generate", "tech_design", "task_decompose", "requirement_validate",
+        # 技能
         "skill_list", "skill_install", "skill_generate", "skill_discover",
-        "graph_create", "graph_run", "graph_templates", "workflow_run",
-        "agent_dispatch", "agent_list", "code_agent", "agent_session_create", "agent_session_list",
-        "browser_navigate", "browser_click", "browser_type", "browser_read", "browser_screenshot",
-        "browser_scroll", "browser_get_state", "browser_tab_list", "browser_tab_create", "browser_tab_switch", "browser_tab_close",
+        # 委派（agent_list/agent_dispatch/code_agent/agent_session_* 已在 40dfc99 移除：
+        # 配置化派发走 /v1/agents/dispatch，临时委派走 `subagent`）
+        "subagent", "list_subagent_runs", "read_subagent_result",
+        # 浏览器
+        "browser_navigate", "browser_click", "browser_type", "browser_read",
+        "browser_screenshot", "browser_scroll", "browser_get_state",
+        "browser_tab_list", "browser_tab_create", "browser_tab_switch", "browser_tab_close",
+        # 媒体
         "media_create", "image_generate",
-        "edit_file",
-        "glob_files",
+        # git
         "git_status", "git_diff", "git_log", "git_commit", "git_branch",
     ]:
         assert expected in names, f"{expected} not registered"

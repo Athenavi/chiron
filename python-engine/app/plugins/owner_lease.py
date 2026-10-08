@@ -32,6 +32,8 @@ import uuid
 from collections.abc import Awaitable, Callable
 from typing import Any
 
+from app.redis_client import aclose_pubsub
+
 logger = logging.getLogger(__name__)
 
 # 抢租约：仅当键不存在时写入（原子）
@@ -274,7 +276,7 @@ class MCPBridge:
         finally:
             try:
                 await pubsub.unsubscribe(_invoke_channel(self._instance_id))
-                await pubsub.close()
+                await aclose_pubsub(pubsub)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -303,6 +305,6 @@ class MCPBridge:
         finally:
             try:
                 await pubsub.unsubscribe(_reply_channel(self._instance_id))
-                await pubsub.close()
+                await aclose_pubsub(pubsub)
             except Exception:  # noqa: BLE001
                 pass

@@ -172,6 +172,11 @@ jobs:
       # frontend 容器直接起不来 —— 而前端 CI 只跑 dist 相关的 lint/build/test，全无察觉。
       - name: Encoding guard (U+FFFD / invalid UTF-8)
         run: python scripts/check_source_encoding.py
+      # Go 侧（权威判定）与 Python 侧（保守镜像）的工具动作分级表**必须同构**。两者语言
+      # 不同、无法共享代码，此前只有一行注释约定 —— 并且已经漂移过
+      # （read_tool_result / list_subagent_runs / rerun_subagent）。见路线图 L3-9。
+      - name: Tool policy parity (Go ↔ Python)
+        run: python scripts/check_tool_policy_parity.py
 
   # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
   # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧
