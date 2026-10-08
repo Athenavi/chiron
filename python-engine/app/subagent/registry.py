@@ -30,6 +30,8 @@ import time
 from dataclasses import dataclass, field
 from typing import Any
 
+from app.redis_client import aclose_pubsub
+
 logger = logging.getLogger(__name__)
 
 DEFAULT_IDLE_TIMEOUT = 300
@@ -320,7 +322,7 @@ async def subscribe_cancel_channel() -> None:
         logger.warning("subagent cancel subscriber stopped: %s", str(exc)[:200])
     finally:
         try:
-            await pubsub.close()
+            await aclose_pubsub(pubsub)
         except Exception:  # noqa: BLE001
             pass
 

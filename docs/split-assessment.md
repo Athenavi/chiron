@@ -40,8 +40,12 @@
 实测结构：middleware 基础设施 `32–131`；`NewGatewayRouter` `132–503`（372 行，只做装配）；`registerXxxRoutes` 共 10 个 `504–1148`（`public` 504 / `agent` 565 / `auth` 814 / `system` 832 / `conversation` 881 / `media` 913 / `userMarket` 943 / `plugin` 950 / `billing` 961 / `proxy` 979 / `admin` 1149）。
 
 - 边界：**按业务域拆成 `routes_<domain>.go`**，`gateway_router.go` 只留 middleware + `NewGatewayRouter`。
-- 契约：各 `registerXxxRoutes` 签名与调用点**一字不改**，仅换文件；同包（`package api`）→ 无 import 变更。
+- 契约：各 `registerXxxRoutes` 签名与调用点**一字不改**，仅换文件；同包（`package api`）→ 无需改调用方。
 - 风险：极低（纯移动、同包私有符号仍可互访）；唯一注意点是别顺手改函数体。
+
+**✅ 已完成（批次 1）**：拆成 11 个 `routes_<domain>.go`（public / agent / auth / system / conversation / media / market / plugin / billing / proxy / admin），`gateway_router.go` 只留 imports + middleware + `NewGatewayRouter`（**1254 → 442 行**）。验收：**逐函数文本与拆分前逐字一致**（16/16 个顶层函数，无丢失 / 无内容变化 / 无新增）· `go build/vet/test -mod=mod ./...` 全绿 · `check_source_encoding.py` 通过。
+
+> 坑：`goimports` 在**整包编译不过时不会补 import**（它需要包可加载）—— 拆完就是编译不过的状态，于是它静默无输出。改用「按限定符静态推导 import + `go build` 兜底」。
 
 ### 2.2 `runtime.py` — 压缩工具簇天然独立
 
@@ -82,7 +86,7 @@
 
 | 批次 | 内容 | 为什么这个顺序 |
 |---|---|---|
-| 1 | `gateway_router.go` → `routes_*.go` | 同包纯移动，零 import 变更，风险最低 |
+| 1 | `gateway_router.go` → `routes_*.go`（✅ 已完成：1254 → 442 行，逐函数文本一致） | 同包纯移动、仅换文件（各文件 import 由脚本静态推导），风险最低 |
 | 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py` | 纯函数/数据类，旧路径再导出 |
 | 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切 | 同包，公开方法集不变 |
 | 4 | `main.py` 依赖取用器 + `lifespan` 分步 | 启动顺序敏感，需逐行对照 |

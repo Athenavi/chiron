@@ -86,6 +86,10 @@ include = ["app*"]
 [tool.ruff]
 line-length = 120
 target-version = "py311"
+# 运行期数据目录（媒体库 / workspace 产物）不是源码。CI 是干净检出、本地不是 ——
+# 不排除会让 `ruff check .` 的**本地**结果与 CI 不一致（实测扫到
+# data/media/media/generated/*.py 并报 UP009）。
+exclude = ["data"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "N", "UP", "B"]

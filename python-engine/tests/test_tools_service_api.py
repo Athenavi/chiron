@@ -155,19 +155,28 @@ async def test_workflow_status_missing_returns_404():
 
 
 @pytest.mark.asyncio
-async def test_list_agents_returns_agents():
+async def test_list_agents_endpoint_removed():
+    """`GET /v1/agents` 已在 40dfc99 **有意移除**，本用例把它钉成既定契约。
+
+    移除理由（提交信息与 agents.py 注释）：页面主链路由 Go 的 DB `agents` 表提供，
+    工具链改用 `list_subagent_runs`；保留一个"内存 registry 假派发"的列表端点只会
+    让调用方以为存在一套并不存在的 Agent 注册表。若将来要恢复该端点，请连同这条
+    用例一起改 —— 不要让它悄悄回来。
+    """
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.get("/v1/agents", params=IDENTITY)
-    assert resp.status_code == 200
-    body = resp.json()
-    assert "agents" in body
-    assert isinstance(body["agents"], list)
-    assert len(body["agents"]) >= 1
+    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio
-async def test_dispatch_agent_returns_dispatched():
+async def test_dispatch_agent_without_system_prompt_fails_explicitly():
+    """无 `system_prompt` ⇒ **显式失败**，不得谎报 `status=dispatched`。
+
+    40dfc99 之前这里回退到"内存 registry 的假派发"：返回 dispatched 但什么都没做，
+    调用方与模型都会以为任务已派出（vendor/规划.md §1.3「失败要显式」）。
+    真配置派发路径（带 system_prompt）由 tests/test_agents_dispatch_gateway.py 覆盖。
+    """
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
         resp = await ac.post(
@@ -177,5 +186,6 @@ async def test_dispatch_agent_returns_dispatched():
         )
     assert resp.status_code == 200
     body = resp.json()
-    assert body.get("agent_type") == "knowledge"
-    assert body.get("status") == "dispatched"
+    assert body["success"] is False
+    assert "system_prompt" in body["error"]
+    assert body.get("status") != "dispatched"

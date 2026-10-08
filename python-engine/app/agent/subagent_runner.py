@@ -84,8 +84,11 @@ WRITE_TOOL_NAMES = frozenset({
     "git_commit", "git_branch", "skill_install", "skill_generate", "mode_edit", "job_kill",
     "media_create", "image_generate", "browser", "graph_create", "workflow_run", "kb_build",
 })
-# 递归控制：默认从子 Agent 工具集中剥离的委派类工具
-DELEGATE_TOOL_NAMES = frozenset({"subagent", "fleet", "agent_dispatch", "code_agent", "agent_session_create"})
+# 递归控制：默认从子 Agent 工具集中剥离的委派类工具。
+# `fleet` 是文档里与 `subagent` 并列的历史名（见本文件开头注释），保留作兜底；
+# `agent_dispatch`/`code_agent`/`agent_session_create` 已随 app/tools/agent.py 删除（40dfc99），
+# 不再登记 —— 名单漂移的教训见 docs/development-roadmap.md 的 L3-9。
+DELEGATE_TOOL_NAMES = frozenset({"subagent", "fleet"})
 
 # L2 包装（防注入：显式标注"数据而非指令"，并缩进正文）
 RESULT_OPEN = '<subagent-result run_id="{run_id}" profile="{profile}" status="{status}" truncated="{truncated}">'

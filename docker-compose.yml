@@ -1,4 +1,4 @@
-﻿# Chiron — 企业多实例部署编排
+# Chiron — 企业多实例部署编排
 #
 # 本 compose 面向"多副本可横向扩展"组织配置:
 #   gateway / python-engine 均可 `docker compose up -d --scale gateway=2 --scale python-engine=2`;
@@ -146,12 +146,18 @@ services:
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
       LLM_API_KEY: ${LLM_API_KEY:-}
+      # 内置技能资产（market/skills）：引擎镜像只 COPY app/，market/ 进不去镜像 ⇒
+      # 靠下面 volumes 的**只读挂载** + 这个环境变量提供。缺失时 builtin_skills_root()
+      # 会告警、且技能列表不含内置技能（见 python-engine/app/skill/skillmd.py）。
+      CHIRON_BUILTIN_SKILLS_PATH: /srv/chiron/builtin-skills
     depends_on:
       redis:
         condition: service_healthy
     volumes:
       - sandboxdata:/srv/chiron/sandbox
       - plugindata:/srv/chiron/plugins
+      # 内置技能资产：只读挂载进引擎（配合上面的 CHIRON_BUILTIN_SKILLS_PATH）。
+      - ./market/skills:/srv/chiron/builtin-skills:ro
     stop_grace_period: 30s
     restart: unless-stopped
     healthcheck:

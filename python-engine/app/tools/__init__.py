@@ -43,7 +43,6 @@ import app.tools.web  # noqa: F401 — web_search / web_fetch
 # ⚠️ app.workflow.tools 注册的 workflow_run 会**覆盖** app.tools.graph 的同名工具
 # （后者已删除，见 graph.py 的说明）。新增工具前先在注册表里查重名。
 import app.workflow.tools  # noqa: F401 — workflow_run / workflow_status
-
 from app.tools.client import SystemToolClient
 from app.tools.discovery import ToolDiscovery
 from app.tools.registry import ToolRegistry, registry

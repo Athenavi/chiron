@@ -26,6 +26,7 @@ from enum import StrEnum
 from typing import Any
 
 from app.config import settings
+from app.redis_client import aclose_pubsub
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -253,6 +254,7 @@ class RedisContextBus:
         """
 
         while True:
+            pubsub = None
             try:
                 # 从已有 client 获取 Pub/Sub 对象
                 pubsub = self.redis.pubsub()
@@ -326,6 +328,15 @@ class RedisContextBus:
             except Exception as e:
                 logger.error(f"ContextBus Pub/Sub listener error: {e}", exc_info=True)
                 await asyncio.sleep(1.0)  # 退避后重连
+            finally:
+                # 每一轮都必须释放 Pub/Sub 连接：此前只在 CancelledError 时 break，
+                # 其它情况（重连、无订阅 continue）会把 pubsub 直接丢掉 —— 它的连接
+                # 仍留在连接池里被永久占用，长跑实例每重连一次就漏一个。
+                if pubsub is not None:
+                    try:
+                        await aclose_pubsub(pubsub)
+                    except Exception:  # noqa: BLE001
+                        pass
 
     async def unsubscribe(
         self, topic: str, callback: Callable[..., Any], tenant_id: str = ""

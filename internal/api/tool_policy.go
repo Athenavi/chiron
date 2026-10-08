@@ -15,8 +15,13 @@ import (
 //
 // 两侧不一致时只会出现"服务端拦得住"，不会出现"引擎放行了危险操作"。
 //
-// 与 python-engine/app/agent/tool_policy.py 同构（语言不同，无法共享代码），
-// 该文件的默认表是这边的对照物；改动其一必须同步另一个。
+// 与 python-engine/app/agent/tool_policy.py **必须同构**（语言不同、无法共享代码）。
+// 该不变量由 scripts/check_tool_policy_parity.py 逐级别比对，漂移即失败；改动其一必须同步另一个。
+//
+// 表里刻意保留几个**当前注册表里没有的历史名**：read 侧 `knowledge`/`stderr_drain`/`tool`，
+// delete 侧 `delete_file`/`kb_delete`，命令类 `execute_command`。它们不是"漏删的死代码"，
+// 而是**保守兜底** —— 一旦旧客户端或兼容层按这些名字发起调用，仍按原级别处置，
+// 而不是 fail-closed 到 write（delete 侧尤其不能降级）。
 //
 // fail-closed：未声明的工具一律按 write 处理 —— 漏登记的后果是"多一次确认"，不是"少一次"。
 type ToolLevel string
@@ -61,8 +66,8 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"kb_list", "kb_search", "rag_query", "knowledge",
 		"memory_search", "recall",
 		"skill_list", "skill_discover", "skill_run",
-		"mode_list", "graph_templates", "agent_list", "agent_session_list",
-		"read_subagent_result", "read_tool_result", "job_output", "stderr_drain",
+		"mode_list", "graph_templates",
+		"read_subagent_result", "read_tool_result", "list_subagent_runs", "job_output", "stderr_drain",
 		"requirement_validate", "task_decompose", "tech_design", "prd_generate",
 		"vision_analyze", "speech_to_text",
 		"tool",
@@ -70,11 +75,13 @@ var toolLevelTable = func() map[string]ToolLevel {
 	add(ToolLevelWrite,
 		"write_file", "edit_file",
 		"git_commit", "git_branch",
-		"graph_create", "agent_session_create",
+		"graph_create",
 		"remember", "mode_edit", "media_create",
 		"image_generate", "text_to_speech", "skill_generate",
 		// 委派类：内部会执行任意工具（子 Agent 有自己的栅栏），父层至少要确认一次
-		"subagent", "agent_dispatch", "code_agent", "workflow_run", "graph_run",
+		"subagent", "workflow_run", "graph_run",
+		// 重跑也是"再派一个作业"（会消耗 token 并复用原来的写权限），与 subagent 同级
+		"rerun_subagent",
 	)
 	add(ToolLevelDelete, "job_kill", "forget", "delete_file", "kb_delete")
 	add(ToolLevelExternal, "web_fetch", "web_search", "skill_install")
