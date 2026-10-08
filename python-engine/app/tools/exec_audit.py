@@ -16,9 +16,10 @@ from __future__ import annotations
 
 import json
 import logging
-import time
 from pathlib import Path
 from typing import Any
+
+from app.audit_log import utc_timestamp
 
 logger = logging.getLogger(__name__)
 
@@ -96,7 +97,7 @@ def record_execution(
         log_dir = _audit_dir()
         log_dir.mkdir(parents=True, exist_ok=True)
         entry: dict[str, Any] = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
+            "ts": utc_timestamp(),
             "tool": tool,
             "tenant": get_tenant_id() or "",
             "user": get_user_id() or "",

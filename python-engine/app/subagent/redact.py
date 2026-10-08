@@ -31,8 +31,16 @@ PATTERNS: list[tuple[str, re.Pattern[str]]] = [
     ("private_key_block", re.compile(
         r"-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?-----END [A-Z ]*PRIVATE KEY-----"
     )),
+    # JSON 形态的密钥字段。**为什么必须有这一条**：三条审计流水（exec / approval / hooks）
+    # 都是先把对象 `json.dumps` 再脱敏，此时键名带引号（`"password": "…"`），下面按
+    # `password=` 写的那条**匹配不到** —— 实测 `{"password": "hunter2secret"}` 会原样落盘。
+    # 形状足够明确（带引号的键 + 引号值 + 值 ≥8 字符），不属于"正则大扫除"。
+    ("json_secret_field", re.compile(
+        r"(?i)\"(?:api[_-]?key|access[_-]?token|refresh[_-]?token|auth[_-]?token|client[_-]?secret"
+        r"|secret|token|password|passwd|pwd)\"\s*:\s*\"[^\"]{8,}\""
+    )),
     ("password_assignment", re.compile(
-        r"(?i)\b(?:password|passwd|pwd)\s*[:=]\s*[\"']?([^\s\"',]{8,})"
+        r"(?i)\b(?:password|passwd|pwd)['\"]?\s*[:=]\s*[\"']?([^\s\"',]{8,})"
     )),
 ]
 
