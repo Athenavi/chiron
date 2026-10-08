@@ -21,7 +21,6 @@ dependencies = [
     "openai>=1.93.0",
     # 向量数据库
     "pymilvus>=2.5.0",
-    "qdrant-client>=1.12.0",
     # PostgreSQL (pgvector)
     "asyncpg>=0.30.0",
     # gRPC
@@ -145,7 +144,7 @@ warn_unused_configs = true
 # 若日后要更严的检查，可分别评估 types-psutil / asyncpg-stubs。
 # jsonschema 同理（S4 用它做完整 JSON Schema 校验）：发行版不保证带 py.typed。
 [[tool.mypy.overrides]]
-module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "jsonschema", "langchain.*", "markitdown", "openpyxl", "opentelemetry.*", "pdfplumber", "psutil", "pymilvus", "qdrant_client", "sentence_transformers", "unstructured.*", "uvicorn"]
+module = ["asyncpg", "boto3.*", "botocore.*", "docx", "fitz", "jsonschema", "langchain.*", "markitdown", "openpyxl", "opentelemetry.*", "pdfplumber", "psutil", "pymilvus", "sentence_transformers", "unstructured.*", "uvicorn"]
 ignore_missing_imports = true
 
 # pymupdf **自带** py.typed（与上面那些不同），但 pymupdf.open / Document 等仍缺注解 ——

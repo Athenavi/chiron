@@ -451,6 +451,14 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			if evt.Type == "text" && isThinking {
 				finalContent += evt.Content
 			}
+			// A1 的**独立 `thinking` 事件**同样必须落库 —— 否则刷新后思考丢失，
+			// 与上面那条 `[thinking]` 文本路径是同一个坑的第二种形态（2026-10-09 补）。
+			// 引擎自 A1 起不再把 native reasoning 包进 text，改为发独立 `thinking` 事件；
+			// 这里按**既有历史格式**包回 `[thinking]…[/thinking]` 再累加，前端
+			// `splitThinking(loose)` 才能从 content 还原思考块（回放格式不变）。
+			if evt.Type == "thinking" && evt.Content != "" {
+				finalContent += "[thinking]" + evt.Content + "[/thinking]"
+			}
 			h.eventHub.Publish(broadcast.Event{Type: evt.Type, SessionID: sessionID, Data: evt})
 		}
 		// S 修复：工具调用过程落库（tool_call 记录 + tool_result 回填），刷新后显示一致。

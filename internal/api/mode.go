@@ -24,6 +24,10 @@ const (
 // 也不会像 ask 那样把每个写操作都拦下来打断对话。
 const DefaultToolsMode = ModeAuto
 
+// validModes 是**唯一一条三语言约定**（本文件 ↔ 引擎 `app/agent/guards.py` 的
+// `_VALID_SESSION_MODES` ↔ 前端 `ChatView.vue` 的 `toolsMode` 联合类型）。
+// **一致性已机械化**：`scripts/check_tool_policy_parity.py` 的"工具授权模式"族做**集合比对**
+// （不是"字面量是否出现"）—— 因为"只在一侧新增一个模式"正是最需要拦的方向。
 var validModes = map[string]bool{ModeAsk: true, ModeAuto: true, ModeYOLO: true}
 
 // normalizeToolsMode 校验前端携带的工具授权模式，未知/空值一律回落默认。

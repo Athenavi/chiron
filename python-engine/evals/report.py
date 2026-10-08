@@ -12,10 +12,31 @@
 
 from __future__ import annotations
 
+import logging
 from collections import defaultdict
 from dataclasses import dataclass, field
 
 from evals.runner import TaskResult
+
+logger = logging.getLogger(__name__)
+
+
+def _redact(text: str) -> str:
+    """报告落盘前脱敏：复用**引擎那份**规则集（`app/subagent/redact.py`）。
+
+    **不新造第二份清单** —— 两份密钥形态清单必然漂移（见 `vendor/规划.md` §4）。
+
+    刻意**惰性 import**：评测套件本身不依赖引擎包（runner 走 HTTP 真实路径，见
+    `vendor/规划.md` §6），只有真正聚合报告时才需要它。引擎不在场时**跳过并留痕**
+    （fail-soft）—— 缺脱敏不该让评测失败，但**必须可见**，不能静默。
+    """
+    try:
+        from app.subagent.redact import redact_text
+    except ImportError:  # 引擎包不在场（独立跑评测套件）
+        logger.warning("redact 规则集不可用，报告未脱敏（%d chars）", len(text))
+        return text
+    safe, _hits = redact_text(text)
+    return safe
 
 
 @dataclass
@@ -113,9 +134,10 @@ def summarize(task_id: str, category: str, results: list[TaskResult]) -> TaskSum
     failures: list[str] = []
     for r in results:
         for check in r.evaluation.failures:
-            failures.append(f"attempt{r.attempt}: {check.kind} — {check.detail}")
+            # 断言 detail 里会带固件文本；异常文本可能含 URL/密钥 —— 两者都先脱敏。
+            failures.append(f"attempt{r.attempt}: {check.kind} — {_redact(check.detail)}")
         if r.error:
-            failures.append(f"attempt{r.attempt}: error — {r.error}")
+            failures.append(f"attempt{r.attempt}: error — {_redact(r.error)}")
 
     def _avg(selector) -> float:
         if not count:

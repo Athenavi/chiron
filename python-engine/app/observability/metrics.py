@@ -134,7 +134,7 @@ SUBAGENT_RUN_TERMINAL = Counter(
 SUBAGENT_RUN_UNFINALIZED = Gauge(
     "subagent_runs_unfinalized",
     "Runs this instance started but has not finalized (persistent growth means a "
-    "finalize path is missing; see docs/subagent-interaction-redesign.md P1-3)",
+    "finalize path is missing; 本项即 P1-3「状态转移的观测面」，定义见本文件上方同名小节)",
 )
 SUBAGENT_PERSIST_FAILED = Counter(
     "subagent_persist_failed_total",

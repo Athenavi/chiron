@@ -32,6 +32,9 @@ import (
 // 支持的作用面与故障类型 —— 与 python-engine/app/chaos/injector.py 的
 // SUPPORTED_TARGETS / MIDDLEWARE_FAULT_TYPES **必须一致**。不一致的后果是创建出的
 // 实验永远不会生效（那正是"假注入"复现的方式），所以这里显式校验、宁缺毋滥。
+// **该一致性已机械化（2026-10-09）**：`scripts/check_tool_policy_parity.py` 的第四族比对这两张表
+// （Go `chaosSupportedTargets`/`chaosSupportedFaults` ↔ Python 的两个 frozenset），
+// 已做变异验证（删掉 Go 侧一个 fault type ⇒ 门禁红）。
 var (
 	chaosSupportedTargets = map[string]bool{"gateway": true, "engine": true}
 	chaosSupportedFaults  = map[string]bool{"latency": true, "error": true, "timeout": true}

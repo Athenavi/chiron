@@ -25,8 +25,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # 压缩区少于这么多条就不值得调模型（与 Go 侧 minCondenseMessages 对齐）
+# **两侧一致性已机械化**：`scripts/check_tool_policy_parity.py` 的"共享常量"族
+# （各写一份 + 各自有测试 ⇒ 只改一侧并顺手改该侧测试时，两边都会绿而漂移上线）。
 MIN_COMPRESSIBLE_MESSAGES = 3
-# 默认保留最近 4 条原文（与 Go 侧 defaultBranchKeepTail 对齐）
+# 默认保留最近 4 条原文（与 Go 侧 defaultBranchKeepTail 对齐；同上）
 DEFAULT_KEEP_TAIL = 4
 # 摘要字符上限：防止模型"复述全文"
 SUMMARY_MAX_CHARS = 4000

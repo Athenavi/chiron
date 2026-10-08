@@ -27,6 +27,7 @@ import json
 import pytest
 
 from app.agent.workbench_context import selected_workflow_ids
+from tests.source_scan import without_comments
 
 
 class FakeRequest:
@@ -159,13 +160,19 @@ class TestSseLinkConsumesWorkflow:
 
 
 class TestNoForkedParsing:
-    """实现级守卫：两条链路都必须经由共享解析函数，不得各自再写一遍。"""
+    """实现级守卫：两条链路都必须经由共享解析函数，不得各自再写一遍。
+
+    **判据（2026-10-09 加固）**：`inspect.getsource` 拿到的函数源码里**既有 import 行也有调用**，
+    所以只断言"名字出现过"是不够的 —— ① 把调用**注释掉**时子串仍在（实测旧判据 exit=0）；
+    ② `agent_submit` 里的 `from … import selected_workflow_ids` 本身就含这个名字。
+    因此：**先剥注释**（`tests/source_scan`）**再要求"调用形态"** `selected_workflow_ids(`。
+    """
 
     def test_unified_link_uses_shared_parser(self):
         from app.api.unified_executor import UnifiedChatHandler
 
-        source = inspect.getsource(UnifiedChatHandler.submit_task)
-        assert "selected_workflow_ids" in source, (
+        source = without_comments(inspect.getsource(UnifiedChatHandler.submit_task))
+        assert "selected_workflow_ids(" in source, (
             "统一链路又自己解析 workflow 关联目标了 —— 请改用 "
             "app/agent/workbench_context.py 的 selected_workflow_ids"
         )
@@ -173,8 +180,8 @@ class TestNoForkedParsing:
     def test_sse_link_uses_shared_parser(self):
         from app.main import agent_submit
 
-        source = inspect.getsource(agent_submit)
-        assert "selected_workflow_ids" in source, (
+        source = without_comments(inspect.getsource(agent_submit))
+        assert "selected_workflow_ids(" in source, (
             "SSE 链路没有接入共享解析函数 —— 这正是 workflow_id 在 SSE 链路"
             "被静默丢弃的原因"
         )

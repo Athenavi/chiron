@@ -32,7 +32,8 @@ const (
 	instanceKeyPrefix = "engine:instance:"
 	// subagentRunPrefix 是「子 Agent 作业 → 实例」的归属键前缀：后台 run 的任务活在持有它的
 	// 引擎进程里，网关据此判断"这个作业是否真的有人在跑"（写入端见
-	// python-engine/app/subagent/affinity.py）。
+	// python-engine/app/subagent/affinity.py）。**与 Python 侧逐字一致已机械化**：
+	// `scripts/check_tool_policy_parity.py` 的"共享键前缀"族。
 	subagentRunPrefix = "subagent:run:"
 	// runLookupTimeout 归属查询超时：只在审批/取消等显式要求归属的请求上调用
 	// （WithRunAffinity），必须远小于请求预算——Redis 抖动时快速回退哈希（A1）。

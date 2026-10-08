@@ -267,7 +267,7 @@ const lastTurnStats = computed<TurnStatsItem | null>(() => {
 const lastCompaction = ref<{ beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null>(null)
 
 /**
- * 观测浮层开关。子 Agent 与统计已从侧栏移出（设计稿 docs/floating-panels-design.md）：
+ * 观测浮层开关。子 Agent 与统计已从侧栏移出：
  * 侧栏只留「导航」（轨迹 / 会话历史），观测类信息按需浮出、看完即关。
  */
 const subagentsOpen = ref(false)
@@ -364,7 +364,7 @@ const activeSession = computed(() => sessions.value.find(s => s.id === activeSes
 /**
  * ── 多会话运行：运行时状态**按会话**存 ──
  *
- * 背景（docs/multi-session-runtime-plan.md）：此前 `loading` / `items` 是**单值**，
+ * 背景：此前 `loading` / `items` 是**单值**，
  * 于是切会话必须打断上一个会话（清空 items + 无条件置 loading），
  * 而后台会话的 SSE 并没有被关闭 —— 它的事件会写进**当前**会话的列表（串台）。
  *
@@ -1018,6 +1018,13 @@ async function resolveAttachmentUrls(attachments?: ChatAttachment[]): Promise<Ch
   }))
 }
 
+/**
+ * 消息列表组件句柄。**只用来提交"意图"**（回底），不碰 DOM —— 直接写 `.message-list` 的
+ * `scrollTop` 会绕过 `transcriptViewport` 的输入租约与 writer provenance
+ * （契约见 docs/transcript-contract.md §1.1："别处直接写 scrollTop 一律视为缺陷"）。
+ */
+const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
+
 /** 拉取统一会话历史（GET /v1/chat/sessions/{id}/messages） */
 async function loadUnifiedSession(sessionId: string) {
   loading.value = true
@@ -1039,10 +1046,9 @@ async function loadUnifiedSession(sessionId: string) {
     errorBanner.value = errorBanner.value || t('errors.unified_session_failed_to_load_you_can_still_send_a_message_to_continue')
   } finally {
     loading.value = false
-    // 会话加载完成后自动滚到底部
+    // 会话加载完成后自动滚到底部：**走单写者**（它自己会先作废租约再跟随）
     await nextTick()
-    const listEl = document.querySelector<HTMLElement>('.message-list')
-    if (listEl) listEl.scrollTop = listEl.scrollHeight
+    messageListRef.value?.scrollToBottom()
   }
 }
 
@@ -1820,7 +1826,7 @@ async function switchSession(id: string) {
     // 而一旦后端默认模型被上游下架（日志：opencode-go 的模型数 37→33），
     // 就会直接报 "Upstream request failed: Model is unavailable."。
     // 所以按「会话记录 → 会话 llm_config → 可用模型列表第一个 → 空」四级回落，
-    // 绝不把空值当成"可以用后端默认"来提交。见 docs/multi-session-runtime-plan.md。
+    // 绝不把空值当成"可以用后端默认"来提交。
     const cfgModel = (cfg && typeof cfg === 'object' && 'model' in cfg)
       ? (cfg as { model?: unknown }).model
       : undefined
@@ -1844,10 +1850,9 @@ async function switchSession(id: string) {
     if (mySeq === switchSeq.value) {
       loading.value = false
       initialLoading.value = false
-      // 会话加载完成后自动滚到底部
+      // 会话加载完成后自动滚到底部：**走单写者**（契约 §1.1；此处原先直接写 DOM）
       await nextTick()
-      const listEl = document.querySelector<HTMLElement>('.message-list')
-      if (listEl) listEl.scrollTop = listEl.scrollHeight
+      messageListRef.value?.scrollToBottom()
     }
   }
 }
@@ -2738,6 +2743,7 @@ function continueGeneration() {
             </template>
           </div>
           <MessageList
+            ref="messageListRef"
             :items="items"
             :loading="loading"
             :initial-loading="initialLoading"
@@ -2886,7 +2892,7 @@ function continueGeneration() {
         @toggle-stats="statsOpen = !statsOpen"
       />
 
-      <!-- 观测浮层（设计稿 docs/floating-panels-design.md）：
+      <!-- 观测浮层：
            向上弹出 + 右对齐；限高到输入区顶部，因此**不遮挡正在写的草稿**。
            子 Agent 的内部 tab（运行·输出·用量·事件流）与移动端抽屉在后续批次接入。 -->
       <FloatingPanel

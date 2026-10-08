@@ -823,32 +823,3 @@ class RAGBuilder:
             }
             for row in rows
         ]
-
-    async def query_qdrant(
-        self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
-    ) -> list[dict[str, Any]]:
-        """从 Qdrant 查询（兼容旧代码）"""
-        from qdrant_client import QdrantClient
-
-        client = QdrantClient(host="localhost", port=6333)
-        collection_name = f"kb_{kb_id.replace('-', '_')}"
-        embedding = await self._embed_text(query)
-        if not embedding:
-            return []
-        results = await asyncio.to_thread(
-            client.search,
-            collection_name=collection_name,
-            query_vector=embedding,
-            limit=top_k,
-            score_threshold=threshold,
-        )
-        return [
-            {
-                "id": hit.id,
-                "content": hit.payload.get("content", ""),
-                "doc_id": hit.payload.get("doc_id", ""),
-                "chunk_index": hit.payload.get("chunk_index", 0),
-                "score": hit.score,
-            }
-            for hit in results
-        ]

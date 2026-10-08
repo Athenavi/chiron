@@ -1,4 +1,4 @@
-﻿.PHONY: all build run clean test lint fmt
+.PHONY: all build run clean test lint fmt
 
 APP=chiron
 BUILD_DIR=build

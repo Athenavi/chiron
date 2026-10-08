@@ -15,6 +15,9 @@ const (
 	defaultBranchKeepTail = 4
 	// minCondenseMessages：压缩区至少这么多条才值得调一次模型。
 	// 低于它 → 不压缩（整段复制），但仍按 condense 记账 + state=ready。
+	// **与引擎侧两个常量的对齐已机械化**：`scripts/check_tool_policy_parity.py` 的
+	// "共享常量"族（比对 `defaultBranchKeepTail`/`minCondenseMessages` ↔
+	// `branch_condense.py` 的 `DEFAULT_KEEP_TAIL`/`MIN_COMPRESSIBLE_MESSAGES`）。
 	minCondenseMessages = 3
 )
 

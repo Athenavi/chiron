@@ -54,12 +54,30 @@ async def test_shutdown_cancels_every_given_handle(monkeypatch) -> None:
     pool = _FakePool()
     monkeypatch.setattr(main_mod, "_plugin_pool", pool)
 
-    await _shutdown_lifespan(
-        reconciler_task=reconciler,
-        metrics_task=metrics,
-        retention_task=retention,
-        engine_registry=registry,
+    # **刻意用 `asyncio.wait`（带超时）而不是 `wait_for`**：后者超时会**取消被等待的协程**，
+    # 而取消会沿 `await <task>` **传播给那个句柄** —— 于是"漏取消"被掩盖成通过（2026-10-09
+    # 变异验证实测：把 `metrics_task.cancel()` 去掉后，`wait_for` 版本**仍然 PASS**，只是慢 5 秒）。
+    # `asyncio.wait` 超时**不取消**，句柄保持未取消 ⇒ 下面的断言能真正抓住它。
+    shutdown = asyncio.ensure_future(
+        _shutdown_lifespan(
+            reconciler_task=reconciler,
+            metrics_task=metrics,
+            retention_task=retention,
+            engine_registry=registry,
+        )
     )
+    try:
+        done, _pending = await asyncio.wait({shutdown}, timeout=5)
+        assert shutdown in done, (
+            "关闭清理没在 5s 内完成 —— 通常意味着某个句柄没被取消（卡在 `await <task>` 上）"
+        )
+    finally:
+        if not shutdown.done():
+            shutdown.cancel()
+            try:
+                await shutdown
+            except asyncio.CancelledError:
+                pass
 
     for name, task in (("reconciler", reconciler), ("metrics", metrics), ("retention", retention)):
         assert task.cancelled() or task.done(), f"{name} 任务没有被取消（清理被跳过）"

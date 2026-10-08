@@ -21,8 +21,8 @@
 
 | 机制 | 位置 | 现状 | 对本设计的价值 |
 |---|---|---|---|
-| 会话运行锁（网关） | `internal/api/gateway_router.go` 的 `submitHandlerFunc`：`AcquireSessionRunLock` + 60s 心跳 / TTL 5min | 防同会话并发提交；持有实例崩溃后 ≤5min 自动过期 | **防脑裂**：接管必须等锁过期，语义已存在 |
-| run 归属租约（引擎） | `app/run_registry.py`：`engine:run:{session_id}`，TTL 300s，心跳 100s，`run_token` + 释放用 Lua 比对 | 只回答"哪个实例持有该 run"；网关据此路由（`internal/engine/discovery.go` 的 `applyRunAffinity`） | **接管判定**：TTL 过期即"原主已死"，可安全换 `run_token` |
+| 会话运行锁（网关） | `internal/api/session_coord.go` 定义 `AcquireSessionRunLock`（`:70`）/ `RefreshSessionRunLock`（`:94`）：**TTL 5min、持有者每 60s 续期**；调用点在 `internal/api/routes_agent.go:151` 与 `agent_followup.go:94`（**2026-10-09 更正：此前写的 `gateway_router.go` 的 `submitHandlerFunc` 已迁走**） | 防同会话并发提交；持有实例崩溃后 ≤5min 自动过期 | **防脑裂**：接管必须等锁过期，语义已存在 |
+| run 归属租约（引擎） | `app/run_registry.py`：`engine:run:{session_id}`，TTL 300s，心跳 100s，`run_token` + 释放用 Lua 比对 | 只回答"哪个实例持有该 run"；网关据此路由（**2026-10-09 更正**：真实 API 是 `internal/engine/python_client.go:53` 的 `WithRunAffinity` + `internal/engine/run_affinity.go:71/93` 的 `RunOwner`/`RunOwnerURL`；此前写的 `discovery.go` 的 `applyRunAffinity` **不存在** —— `discovery.go` 管的是引擎发现，另一件事） | **接管判定**：TTL 过期即"原主已死"，可安全换 `run_token` |
 | SSE 事件缓冲 | `internal/broadcast/hub.go`：per-session Stream（key `sse:events:<sid>`）、**200 条 + 1h**、`XADD` 流 ID 即事件 ID、`ReplayAfter` | 断线重连按 `Last-Event-ID` 补发缺口 | **用户无感**：续跑重建连接后缺口自动补齐（前提：缺口 ≤ 200 条且在 1h 内） |
 | **workflow checkpoint（先例）** | `app/workflow/executor.py` 的 `load_checkpoint`（读 `workflow_instances.checkpoint = {state, done_nodes}`）、`app/workflow/engine.py` 的 `run_workflow(resume_state=…, resume_done=…, on_node_done=…)`（**节点级跳过**）、`app/queue/worker.py` 的 `_handle_workflow_run`（"读 DB checkpoint 跳过已完成节点，终态写回"） | **已上线**：同 instance 消息被重投/被另一实例接管时自动续跑 | **同构模板**：状态形状、落点、幂等键位置都可以照搬 |
 | 队列 `engine:tasks` + 幂等表 | `app/queue/idempotency.py`（`task_idempotency`：claim/complete/fail + attempt 递增 + 清理）、`worker.py` 消费组 + `retry_count` + DLQ | workflow run **走队列**，天然可重投 | 幂等键的存储与生命周期可复用（见 §5） |

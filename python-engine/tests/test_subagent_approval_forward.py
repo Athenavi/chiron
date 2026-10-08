@@ -1,6 +1,6 @@
 """P3-后续：子 Agent 的 approval 必须**送到前端且能回传**。
 
-背景（docs/subagent-interaction-redesign.md §八「尚未完成」）：
+背景（该设计文档**未入库**，结论如下）：
 
 子 Agent 默认 `tools_mode=auto`，而 `shell_exec` 这类工具在 auto 下就需要确认 ——
 所以"子 Agent 请求批准"几乎每次调用命令类工具都会发生。修复前它只被转成一行

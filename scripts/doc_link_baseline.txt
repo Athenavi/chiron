@@ -2,11 +2,3 @@
 # 由 `python scripts/check_doc_links.py --write-baseline` 生成；**只应缩小**。
 # 每清掉一条就删一行；新增引用不存在的文档会被守卫直接判失败（不要往这里加）。
 
-docs/ent-webhook-design.md
-docs/floating-panels-design.md
-docs/multi-session-runtime-plan.md
-docs/production-readiness-fixes.md
-docs/subagent-design.md
-docs/subagent-interaction-redesign.md
-docs/superpowers/plans/deployment-plan.md
-docs/turn-lifecycle-and-approval-audit.md

@@ -40,8 +40,8 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
     map[string]interface{}{"limit": 20}, "tenant token quota exceeded")
 ```
 
-`JSONWithCode` 见 `internal/api/error_codes.go:97-99`。注意它**当前没有任何调用点** ——
-线上响应里的 `code` 全部走路径 2。
+`JSONWithCode` 见 `internal/api/error_codes.go:97-99`。注意它**在生产代码里没有任何调用点** ——
+线上响应里的 `code` 全部走路径 2（唯一的调用在 `internal/api/error_codes_test.go:134`，是用例在钉它的行为）。
 
 ### 2. 按文案自动推断（既有调用点的默认行为）
 
@@ -100,21 +100,21 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 
 ## 前端如何消费
 
-优先级实现在 `frontend-vue/src/utils/apiError.ts:59-85`（`describeApiError`）：
+优先级实现在 `frontend-vue/src/utils/apiError.ts:139-165`（`describeApiError`）—— **2026-10-09 更正**：此前写的 `:59-85` 是**旧版行号**（该文件后来加了「取值口径（L3-2 定）」注释块，整体下移）：
 
 1. **后端 `code` 的本地化文案**（`errors.<code>`，见 `locales/<lang>/errors.ts`）；
-2. **已知状态码的文案**（`statusMessage`，映射见 `apiError.ts:25-41`）；
+2. **已知状态码的文案**（`statusMessage` `apiError.ts:59-62`；映射表在 `statusMessageKey` `:40-56`）；
 3. 后端 `error` / `message` 原文；
 4. 调用方兜底文案。
 
-5xx 是例外：仍把后端原文附在括号里（`apiError.ts:70-74`），因为那是定位服务端问题的唯一线索。
+5xx 是例外：仍把后端原文附在括号里（`apiError.ts:148-154`），因为那是定位服务端问题的唯一线索。
 
 两处需要留意的事实：
 
 - 因为「`error` 非空 ⇒ `code` 非空」，**第 2 步（状态码兜底）实际上只在响应不带 `error` 文案
   时才生效**；服务端已给出 `code` 时，状态码映射不会参与。映射表因此主要服务于
   「无 `code` 的老接口 / 网关前置组件（如 nginx）直接生成的响应」。
-- 状态码映射把 `500/502/503/504` 统一指向 `service_unavailable`（`apiError.ts:35-38`），
+- 状态码映射把 `500/502/503/504` 统一指向 `service_unavailable`（`apiError.ts:50-53`），
   比服务端更粗 —— 服务端有 `code` 时以 `code` 为准。
 
 ## `errors.ts` 的键集合
@@ -124,10 +124,10 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 | 类别 | 键 | 产生方 |
 |---|---|---|
 | 后端稳定码 | `auth_required` `forbidden` `invalid_request` `not_found` `rate_limited` `quota_exceeded` `insufficient_credits` `service_unavailable` `internal_error` `request_failed` | `internal/api/error_codes.go:22-33` |
-| 前端专用（后端不产生） | `timeout` `network_error` `payload_too_large` `http_status` | 客户端网络层，`apiError.ts:32-33,79,82-83` |
+| 前端专用（后端不产生） | `timeout` `network_error` `payload_too_large` `http_status` | 客户端网络层，`apiError.ts:47-48,159,162-163` |
 
 `http_status` 是**唯一带参数**的键，用命名插值：`t('errors.http_status', { status })`
-（`apiError.ts:79`）。
+（`apiError.ts:159`）。
 
 ## 新增 / 修改错误码的清单
 
@@ -155,5 +155,8 @@ go test -mod=mod ./internal/api/ -run "TestCodeForMessage|TestJSON_" -count=1
 cd frontend-vue && pnpm exec vitest run src/utils/__tests__/apiError.spec.ts
 ```
 
-> **仍未覆盖**：三语言 `errors.ts` 与 `Code*` 常量的**键集一致性**目前靠人工核对（见上节的同步清单）。
-> 自动化比对随 `ar` / `en-US` 译文补齐一并落地。
+> **键集一致性已机械化（2026-10-09）**：`scripts/check_error_code_keys.py`（已接进 CI 的
+> `Source encoding` job）断言三件事 —— ① 每个 `Code*` 的**值**在三语言 `errors.ts` 里都有同名键；
+> ② 上面 4 个**前端专用**键在三语言里都存在；③ **三语言键集完全相同**。
+> 当前实测：Go `Code*` **10** 个 + 前端专用 **4** 个，三语言各 **256** 键且键集一致。
+> 已做三个方向的变异验证（某语言契约键改名 / 某语言多一个独有键 / Go 侧 `Code*` 值改名 ⇒ 均判失败）。

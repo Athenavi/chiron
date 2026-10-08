@@ -81,7 +81,15 @@ class {{ class_name }}(Base):
     {% set index = field_def.get('index', False) %}
     {% set default = field_def.get('default') %}
     {% set max_length = field_def.get('max_length', 255) %}
-    {% set doc = field_def.get('doc', field_def.get('description', field_name)) %}
+    {#
+      doc 会被渲染进**单引号字符串**（模板里到处是 `doc='{{ doc }}'`）⇒ 必须在这里转义，
+      否则 description 里出现单引号（如 `DEFAULT '{}'`）就会生成**语法错误的 Python**。
+      实测（2026-10-09）：`unified_session.py` 曾因此写成 `doc='…'{}'…'` —— 而 yaml↔生成物守卫
+      只比文本、`shared/` 不在 ruff/mypy 内、引擎也不 import 它 ⇒ **所有其它门禁都看不见**，
+      只有 `scripts/check_orm_schema.py` 的 `ast.parse` 抓到。
+      顺序要紧：**先转义反斜杠、再转义单引号**（反过来会把刚加的反斜杠再转义一遍）。
+    #}
+    {% set doc = (field_def.get('doc', field_def.get('description', field_name)) or '') | replace('\\', '\\\\') | replace("'", "\\'") %}
     {% set db_column = field_def.get('db_column') %}
     {% set python_name = field_def.get('python_name', field_name) %}
 

@@ -1,41 +1,40 @@
-﻿# Python AI
-fastapi==0.115.12
-uvicorn==0.34.3
-# LLM Provider SDK
-anthropic==0.52.0
-openai==1.93.0
-pymilvus==2.5.10
-qdrant-client==1.12.1
-# Redis
-redis==5.3.0
-# gRPC
-grpcio==1.71.1
-protobuf==5.29.6
-# PostgreSQL
-asyncpg==0.30.0
-python-multipart==0.0.31
-pymupdf==1.25.5
-python-docx==1.1.2
-# HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
-# 两者都不曾被任何已声明依赖传递带入（此前 CI 只装本文件，Mypy 与 Pytest 首次运行都会红）。
-# httpx 不必显式声明：openai / anthropic / pydantic-ai 均依赖它。
-aiohttp==3.14.0
-beautifulsoup4==4.14.3
-# 图片元数据（EXIF）—— app/media/analyzer.py 的 extract_metadata 用
-Pillow==12.1.1
-pydantic==2.11.5
-pydantic-settings==2.10.1
-python-dotenv==1.1.0
-PyJWT==2.13.0
-structlog==25.4.0
-# 可观测性（app/observability/metrics.py 顶层 import）
-prometheus-client==0.25.0
-psutil==7.2.2
-opentelemetry-api==1.33.0
-opentelemetry-sdk==1.33.0
-opentelemetry-exporter-otlp-proto-grpc==1.33.0
-opentelemetry-instrumentation-fastapi==0.54b0
-opentelemetry-instrumentation-redis==0.54b0
-opentelemetry-instrumentation-httpx==0.54b0
-# Agent Tools & Workflow
-pydantic-ai==2.9.0
+# Python AI
+fastapi==0.115.12
+uvicorn==0.34.3
+# LLM Provider SDK
+anthropic==0.52.0
+openai==1.93.0
+pymilvus==2.5.10
+# Redis
+redis==5.3.0
+# gRPC
+grpcio==1.71.1
+protobuf==5.29.6
+# PostgreSQL
+asyncpg==0.30.0
+python-multipart==0.0.31
+pymupdf==1.25.5
+python-docx==1.1.2
+# HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
+# 两者都不曾被任何已声明依赖传递带入（此前 CI 只装本文件，Mypy 与 Pytest 首次运行都会红）。
+# httpx 不必显式声明：openai / anthropic / pydantic-ai 均依赖它。
+aiohttp==3.14.0
+beautifulsoup4==4.14.3
+# 图片元数据（EXIF）—— app/media/analyzer.py 的 extract_metadata 用
+Pillow==12.1.1
+pydantic==2.11.5
+pydantic-settings==2.10.1
+python-dotenv==1.1.0
+PyJWT==2.13.0
+structlog==25.4.0
+# 可观测性（app/observability/metrics.py 顶层 import）
+prometheus-client==0.25.0
+psutil==7.2.2
+opentelemetry-api==1.33.0
+opentelemetry-sdk==1.33.0
+opentelemetry-exporter-otlp-proto-grpc==1.33.0
+opentelemetry-instrumentation-fastapi==0.54b0
+opentelemetry-instrumentation-redis==0.54b0
+opentelemetry-instrumentation-httpx==0.54b0
+# Agent Tools & Workflow
+pydantic-ai==2.9.0

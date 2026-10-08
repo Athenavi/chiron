@@ -42,6 +42,7 @@ def _hooks_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(settings, "hooks_enabled", False)
     monkeypatch.setattr(settings, "hooks_allow_user_defined", False)
     monkeypatch.setattr(settings, "hooks_timeout_seconds", 5)
+    monkeypatch.setattr(settings, "hooks_event_budget_seconds", 10)
     hooks.clear()
     yield
     hooks.clear()
@@ -201,10 +202,11 @@ async def test_after_tool_use_routes_to_failure_event(tmp_path: Path, monkeypatc
 
 
 async def test_all_six_events_have_a_call_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """6 个引擎侧事件都能被触发（SessionStart/Stop 与 Subagent 对都要有落点）。"""
+    """非工具类事件都能被触发（SessionStart/UserPromptSubmit/Stop 与 Subagent 对都要有落点）。"""
     monkeypatch.setattr(settings, "hooks_enabled", True)
     for event in (
         events.SESSION_START,
+        events.USER_PROMPT_SUBMIT,
         events.STOP,
         events.SUBAGENT_START,
         events.SUBAGENT_STOP,
@@ -212,6 +214,7 @@ async def test_all_six_events_have_a_call_site(tmp_path: Path, monkeypatch: pyte
         hooks.register(event, f"h_{event}", NOOP_HOOK)
 
     await hooks.session_start(task=_task())
+    await hooks.user_prompt_submit(task=_task())
     await hooks.subagent_start(task=_task(), tool_call=_call("subagent"))
     await hooks.subagent_stop(task=_task(), tool_call=_call("subagent"), result={})
     await hooks.stop(task=_task())
@@ -219,10 +222,79 @@ async def test_all_six_events_have_a_call_site(tmp_path: Path, monkeypatch: pyte
     seen = {entry["event"] for entry in _entries(tmp_path)}
     assert {
         events.SESSION_START,
+        events.USER_PROMPT_SUBMIT,
         events.STOP,
         events.SUBAGENT_START,
         events.SUBAGENT_STOP,
     } <= seen
+
+
+# ── 批 G+：UserPromptSubmit 只观测 ───────────────────────────────────
+
+
+def test_user_prompt_submit_is_observe_only() -> None:
+    """`UserPromptSubmit` **不可阻断** —— 阻断用户自己的提示词是对用户的控制点。"""
+    assert events.USER_PROMPT_SUBMIT in events.ALL_EVENTS
+    assert events.USER_PROMPT_SUBMIT not in events.BLOCKING_EVENTS
+    assert events.BLOCKING_EVENTS == frozenset({events.PRE_TOOL_USE})
+    # 它也不允许 matcher（matcher 只对工具类事件有意义）
+    assert events.matcher_applies(events.USER_PROMPT_SUBMIT) is False
+
+
+async def test_user_prompt_submit_runs_and_is_audited(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(settings, "hooks_enabled", True)
+    hooks.register(events.USER_PROMPT_SUBMIT, "observer", NOOP_HOOK)
+
+    await hooks.user_prompt_submit(task=_task())
+
+    entries = _entries(tmp_path)
+    assert entries and entries[-1]["event"] == events.USER_PROMPT_SUBMIT
+    assert entries[-1]["hook"] == "observer"
+    assert entries[-1]["tenant"] == "t1"
+
+
+# ── 批 G+：一个事件的累计预算 ────────────────────────────────────────
+
+
+async def test_event_budget_caps_total_time(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """预算耗尽后不再执行后续 hook，且**留审计**（不静默跳过）。
+
+    没有预算时这里是 `2 × 单 hook 超时`；有预算（1 s）时应只花 ~1 s。
+    """
+    import time
+
+    monkeypatch.setattr(settings, "hooks_enabled", True)
+    monkeypatch.setattr(settings, "hooks_timeout_seconds", 5)
+    monkeypatch.setattr(settings, "hooks_event_budget_seconds", 1)
+    hooks.register(events.PRE_TOOL_USE, "slow_a", WHILE_TRUE_HOOK)
+    hooks.register(events.PRE_TOOL_USE, "slow_b", WHILE_TRUE_HOOK)
+
+    started = time.monotonic()
+    assert await hooks.before_tool_use(task=_task(), tool_call=_call()) is None
+    elapsed = time.monotonic() - started
+    assert elapsed < 3, f"预算没有生效：耗时 {elapsed:.1f}s"
+
+    entries = _entries(tmp_path)
+    outcomes = [(entry["hook"], entry["outcome"]) for entry in entries]
+    assert ("slow_a", "timeout") in outcomes
+    assert ("slow_b", "budget_exhausted") in outcomes
+    # 被预算拦下的 hook 不该有执行结果
+    assert not [h for h, o in outcomes if h == "slow_b" and o in {"ok", "error", "timeout"}]
+
+
+async def test_event_budget_keeps_single_hook_behavior(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """单个 hook（常见情形）行为不变：预算 > 单 hook 超时 ⇒ 仍按单 hook 超时处理。"""
+    monkeypatch.setattr(settings, "hooks_enabled", True)
+    monkeypatch.setattr(settings, "hooks_timeout_seconds", 1)
+    hooks.register(events.PRE_TOOL_USE, "slow", WHILE_TRUE_HOOK)
+
+    assert await hooks.before_tool_use(task=_task(), tool_call=_call()) is None
+    entries = _entries(tmp_path)
+    assert [entry["outcome"] for entry in entries] == ["timeout"]
 
 
 async def test_sandbox_blocks_dangerous_hook(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

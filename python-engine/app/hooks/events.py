@@ -1,8 +1,13 @@
 """批 G 生命周期 hook 的事件集与上下文契约（方案 03 §3.1）。
 
-只保留**引擎侧有真实对应点**的 6 个事件。deepagents 的 client 侧事件
-（`UserPromptSubmit` / `PermissionRequest` / `Notification`）在 Chiron 无对应
-进程 —— 硬造会变成"事件发了但没人用"的死面，故不取。
+保留**引擎侧有真实对应点**的 8 个事件。deepagents 的 client 侧事件
+（`PermissionRequest` / `Notification`）在 Chiron 无对应进程 —— 硬造会变成
+"事件发了但没人用"的死面，故不取。
+
+> 批 G+（`docs/hook-protocol-design.md` §4.1）：`UserPromptSubmit` **已加入**。早先
+> "Chiron 无对应进程"的口径只对**客户端**成立；引擎侧 `AgentRuntime.run()` 在输入
+> 护栏之后、主循环之前就是它的真实落点。它**只观测**（不在 `BLOCKING_EVENTS`）——
+> 阻断**用户自己的**提示词是对用户的控制点，与 `PreToolUse` 收紧工具策略性质不同。
 """
 
 from __future__ import annotations
@@ -11,6 +16,8 @@ from typing import Any
 
 #: 会话开始（一次 run 进入主循环之前）。
 SESSION_START = "SessionStart"
+#: 收到用户提示词（输入护栏校验之后、主循环之前）—— **只观测**，不可阻断。
+USER_PROMPT_SUBMIT = "UserPromptSubmit"
 #: 工具执行前 —— **唯一可阻断**的事件。
 PRE_TOOL_USE = "PreToolUse"
 #: 工具执行成功之后。
@@ -27,6 +34,7 @@ SUBAGENT_STOP = "SubagentStop"
 ALL_EVENTS: frozenset[str] = frozenset(
     {
         SESSION_START,
+        USER_PROMPT_SUBMIT,
         PRE_TOOL_USE,
         POST_TOOL_USE,
         POST_TOOL_USE_FAILURE,
@@ -40,6 +48,21 @@ ALL_EVENTS: frozenset[str] = frozenset(
 #: 让 hook 只能收紧、不能放宽工具策略，否则它就成了绕过 `tool_policy`
 #: 分级判定的新通道。
 BLOCKING_EVENTS: frozenset[str] = frozenset({PRE_TOOL_USE})
+
+#: `matcher` 只对**工具类事件**有意义（判定主体是工具名）。其余事件带 `matcher`
+#: 一律**拒绝**：与其为它们发明一个"主体"（会话来源 / 常量 `agent_type`），
+#: 不如显式失败 —— 免得配了却不生效（`docs/hook-protocol-design.md` §4.2）。
+MATCHER_EVENTS: frozenset[str] = frozenset(
+    {PRE_TOOL_USE, POST_TOOL_USE, POST_TOOL_USE_FAILURE}
+)
+
+#: `matcher` 的判定主体在上下文里的键名。
+MATCHER_SUBJECT_FIELD = "tool_name"
+
+
+def matcher_applies(event: str) -> bool:
+    """该事件是否允许 `matcher`（只有工具类事件允许）。"""
+    return event in MATCHER_EVENTS
 
 
 def build_context(

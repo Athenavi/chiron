@@ -239,8 +239,10 @@ var llmProviderCatalog = []llmProviderPreset{
 	},
 	{
 		// OpenCode Go：$10/月订阅（低成本的开放模型集）。官方要求客户端发稳定会话头
-		// `x-opencode-session`（用于路由与 prompt 缓存）—— Chiron 目前未发送该头，
-		// 不影响可用性，仅路由/缓存次优；如需补上见 docs/service-providers.md。
+		// `x-opencode-session`（用于路由与 prompt 缓存）——**缺失会直接 400**（`MissingSessionID`），
+		// 不是"仅路由/缓存次优"。**引擎侧已经在发**：`python-engine/app/providers/{openai,anthropic}.py`
+		// 对 `opencode*` 注入该头，会话 ID 来自 `app/providers/session_context.py`；见 docs/service-providers.md。
+		// （本注释此前写"Chiron 目前未发送该头"，**与代码相反**，2026-10-09 按代码更正。）
 		ID: "opencode-go", Label: "OpenCode Go（订阅）", Vendor: "OpenCode", Category: llmProviderCategoryAggregator,
 		Kind: llmProviderKindOpenAI, BaseURL: "https://opencode.ai/zen/go/v1",
 		APIKeyEnv: "OPENCODE_GO_API_KEY", APIKeyPrefix: "",

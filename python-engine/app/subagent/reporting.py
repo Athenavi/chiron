@@ -34,8 +34,12 @@ MAX_REPORTS = 10
 SUMMARY_MAX_CHARS = 600
 #: 首次汇报的起点（早于任何 run）
 EPOCH = "1970-01-01T00:00:00Z"
-#: 视为"有结论可汇报"的终态
-REPORTABLE = ("completed", "failed", "cancelled", "lost")
+#: 视为"有结论可汇报"的终态。
+#: **必须含 `partial`** —— 它正是"有产物但不完整"（A5）的那个状态，恰恰最该汇报给父会话；
+#: 漏了它 ⇒ 撞预算而部分完成的 run **永远不会**被回传（与 Go 侧 `terminalRunStatuses` 漏
+#: `partial` 是同一处缺陷的两半，2026-10-09 一并修）。跨语言/跨表一致性由
+#: `scripts/check_tool_policy_parity.py` 第八族守住。
+REPORTABLE = ("completed", "failed", "cancelled", "lost", "partial")
 
 PENDING_SQL = """
 SELECT id, status, profile_name, summary, steps, error, finished_at

@@ -735,6 +735,32 @@ def _record_approval_audit(
         logger.warning("approval audit skipped (id=%s)", tool_call_id)
 
 
+def _record_approval_request(
+    tool_call_id: str,
+    tool_name: str,
+    *,
+    level: str = "",
+    arguments: dict[str, Any] | None = None,
+) -> None:
+    """审批**请求**审计（fail-soft）—— 与决定按 `tool_call_id` 配对。
+
+    只记决定会让"**问了但没等到决定**"（等待期间进程被杀、副本被回收、连接断开后
+    无人再答）在流水里消失；见 `app/agent/approval_audit.py` 与
+    `docs/dsh-gap-analysis.md` 的"工具审批 / 权限"一行。
+    """
+    try:
+        from app.agent.approval_audit import record_approval_request
+
+        record_approval_request(
+            tool_call_id=tool_call_id,
+            tool=tool_name,
+            level=level,
+            arguments=arguments,
+        )
+    except Exception:  # noqa: BLE001 — 审计失败不影响审批流程
+        logger.warning("approval request audit skipped (id=%s)", tool_call_id)
+
+
 def parse_approval_payload(
     *,
     approved: Any = None,
@@ -1132,6 +1158,12 @@ class AgentRuntime:
             # ── 生命周期 hook：SessionStart（fire-and-forget，批 G）──
             # 默认关时空操作；其内部所有异常都被吞掉，不改变主流程。
             await hooks.session_start(task=task)
+
+            # ── 生命周期 hook：UserPromptSubmit（fire-and-forget，批 G+）──
+            # 落点：输入护栏校验之后、主循环之前（提示词此刻已在 `task` 上）。
+            # **只观测**：不可阻断 —— 阻断用户自己的提示词是对用户的控制点，
+            # 与 `PreToolUse` 收紧工具策略性质不同（见 docs/hook-protocol-design.md §4.1）。
+            await hooks.user_prompt_submit(task=task)
 
             # ── 0. 解析运行模式（persona/工具集/上下文/压缩策略） ──
             mode_cfg: ModeConfig = get_mode_config((task.llm_config or {}).get("mode"))
@@ -2419,6 +2451,11 @@ class AgentRuntime:
                     args_hash=_args_hash(tool_name, targs),
                     turn_id=str(getattr(task, "id", "") or ""),
                 )
+            )
+            # "问"也要留痕（与决定按 tool_call_id 配对）：只记决定的话，
+            # "问了但没等到决定"（等待期进程被杀 / 副本被回收 / 连接断开）在流水里看不出来。
+            _record_approval_request(
+                tc_id, tool_name, level=str(verdict.level or ""), arguments=targs
             )
             # 事前风险提示：**撤不回的操作必须在批准之前说清**（诚实优先，
             # 见 app/agent/side_effect_ledger.py）。只对"不可撤销"的加提示 ——

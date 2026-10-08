@@ -1,4 +1,4 @@
-﻿# Backend - Multi-stage build
+# Backend - Multi-stage build
 FROM golang:1.23-alpine AS builder
 WORKDIR /build
 COPY go.mod go.sum ./

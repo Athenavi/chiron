@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - Message
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-09-15 09:55:16
+生成时间：2026-10-09 07:14:28
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey, JSON
@@ -36,6 +36,8 @@ class Message(Base):
 
     turn_id = Column(String(36), nullable=True, doc='所属回合 ID（turn 一致性：消息/工具/计费同回合可幂等叙事）')
 
+    source = Column(String(32), default='', doc='消息来源（varchar(32) NOT NULL DEFAULT 空串，迁移 0001 起就有）')
+
 
     def to_dict(self, exclude_sensitive=True):
         """转换为字典
@@ -51,6 +53,7 @@ class Message(Base):
             'tool_calls': self.tool_calls,
             'created_at': self.created_at.isoformat() if self.created_at else None,
             'turn_id': self.turn_id,
+            'source': self.source,
         }
 
         if not exclude_sensitive:

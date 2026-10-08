@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - Session
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-09-15 09:55:16
+生成时间：2026-10-09 07:12:02
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey
@@ -43,6 +43,20 @@ class Session(Base):
 
     tag = Column(String(64), nullable=True, doc='会话标签（前端分类筛选用，持久化到 DB）')
 
+    parent_session_id = Column(String(36), nullable=True, doc='源会话（血缘）—— 分支特性')
+
+    alias = Column(String(64), nullable=True, doc='会话别名')
+
+    branch_from_seq = Column(Integer, doc='分叉点，保留到源会话的第几条消息（含该条，1 基）')
+
+
+    branch_mode = Column(String(16), nullable=True, doc='分支模式 truncate / condense')
+
+    branch_state = Column(String(16), nullable=True, doc='分支状态 NULL(truncate) / pending / ready / failed')
+
+    branch_keep_tail = Column(Integer, doc='condense 下保留的原文条数（truncate 写 NULL）')
+
+
 
     def to_dict(self, exclude_sensitive=True):
         """转换为字典
@@ -61,6 +75,12 @@ class Session(Base):
             'updated_at': self.updated_at.isoformat() if self.updated_at else None,
             'pinned': self.pinned,
             'tag': self.tag,
+            'parent_session_id': self.parent_session_id,
+            'alias': self.alias,
+            'branch_from_seq': self.branch_from_seq,
+            'branch_mode': self.branch_mode,
+            'branch_state': self.branch_state,
+            'branch_keep_tail': self.branch_keep_tail,
         }
 
         if not exclude_sensitive:

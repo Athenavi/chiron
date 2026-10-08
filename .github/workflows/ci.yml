@@ -152,9 +152,28 @@ jobs:
             echo "::error::expected exactly 1 alembic head, found $count"
             exit 1
           fi
-      # 迁移文件本身必须可被 Alembic 解析（离线模式不连库）
+      # 迁移文件本身必须可被 Alembic 解析（离线模式不连库）。
+      # ⚠ **离线渲染仍然需要"方言"**：本 job 没有 env、`alembic.ini` 的 `sqlalchemy.url`
+      # 是注释状态、`migrations/env.py` 取不到 URL 就返回 None ⇒ alembic 直接抛
+      # "Connection, url, or dialect_name is required."。**2026-10-09 本机实测：这一步按原样
+      # 在 CI 里必然红**（exit 1）。下面给一个**假 DSN**：只用于确定方言，不会去连库；
+      # 给了之后渲染出 81 个 CREATE TABLE / 164 个 ALTER TABLE、exit 0（同为本机实测）。
       - name: Migration renders offline
+        env:
+          DATABASE_DSN: postgresql://chiron:chiron@localhost:5432/chiron
         run: python -m alembic -c alembic.ini upgrade head --sql > /dev/null
+      # ORM 模型 ↔ 迁移 DDL 的**列集合**：`check_orm_models.py` 只保证「yaml ↔ 生成物」，
+      # 而第 68 轮那次漂移的**方向**是「迁移有、yaml 没有」—— 那时无人守。2026-10-09 实测：
+      # 补之前 `DDL 有、模型没有` = **12 列 / 5 表**（`sessions` 的 6 个分支血缘列 · `turns` 的
+      # `model`/`cache_hit`/`cached_tokens` · `messages.source` · `subagent_runs.rerun_of` ·
+      # `unified_sessions.runtime`），补完双向为 0。不建模的表走**显式白名单**（脚本里的
+      # `UNMODELED`，当前 10 张）—— 新增一张却忘了建模 ⇒ 这里直接红，不静默放过。
+      # 放在本 job：它本来就在渲染 DDL，且装了 alembic（encoding job 没有）。
+      # 已做变异验证（删一列 ⇒ exit 1 并点名 `sessions: ['branch_from_seq']`）。
+      - name: ORM models match migration DDL
+        env:
+          DATABASE_DSN: postgresql://chiron:chiron@localhost:5432/chiron
+        run: python scripts/check_orm_schema.py
 
   # ── 源码编码 ────────────────────────────────────────────────────────────
   encoding:
@@ -172,10 +191,21 @@ jobs:
       # frontend 容器直接起不来 —— 而前端 CI 只跑 dist 相关的 lint/build/test，全无察觉。
       - name: Encoding guard (U+FFFD / invalid UTF-8)
         run: python scripts/check_source_encoding.py
-      # Go 侧（权威判定）与 Python 侧（保守镜像）的工具动作分级表**必须同构**。两者语言
+      # Go 侧（权威判定）与 Python 侧（保守镜像）的判定表**必须同构**。两者语言
       # 不同、无法共享代码，此前只有一行注释约定 —— 并且已经漂移过
       # （read_tool_result / list_subagent_runs / rerun_subagent）。见路线图 L3-9。
-      - name: Tool policy parity (Go ↔ Python)
+      # 2026-10-09 起**同时覆盖另外四族**：对话模式（Go `validAgentModes` ↔ 引擎
+      # `AgentMode` 枚举 ↔ `_BASE_MODES` 覆盖，见 docs/session-runtime-spec.md §3）·
+      # 模型服务提供商目录（Go `llmProviderCatalog` ↔ 引擎 `providers/catalog.py`，
+      # 见 docs/service-providers.md §1）· 故障注入的作用面/类型（Go `chaosSupported*`
+      # ↔ 引擎 `chaos/injector.py`，见 internal/api/ent_chaos_handler.go 文件头）·
+      # **共享 Redis 键前缀**（`subagent:run:` / `subagent:cancel:ack:` / `engine:instance:`；
+      # 两侧各自都有测试钉住自己那份字面量 ⇒ 只改一侧时容易两边都绿而漂移上线）·
+      # **共享数值常量**（`defaultBranchKeepTail`/`minCondenseMessages` ↔ 引擎
+      # `DEFAULT_KEEP_TAIL`/`MIN_COMPRESSIBLE_MESSAGES`，同一个陷阱）·
+      # **工具授权模式**（唯一一条**三语言**约定：Go `mode.go` ↔ 引擎 `guards.py` ↔
+      # 前端 `ChatView.vue` 的联合类型；做集合比对，只在一侧新增模式也会被拦下）。
+      - name: Go-Python-TS parity (tables, modes, keys, constants)
         run: python scripts/check_tool_policy_parity.py
       # scripts/ 此前**没有任何 lint 门禁**（本 job 只跑上面两个守卫），于是攒下 8 处历史问题
       # （未用变量/未用导入/裸 except…），现已清零并纳入门禁。规则集与引擎一致（配置见仓库根
@@ -189,6 +219,27 @@ jobs:
       # （scripts/doc_link_baseline.txt，**只应缩小**），新增断链直接失败 —— 已用变异验证。
       - name: Doc links (referenced docs must exist)
         run: python scripts/check_doc_links.py
+      # Markdown 表格结构：同一表格块内每行的列数必须一致。手写的表格**多一个 / 少一个 `|`
+      # 不会让 Markdown 报错** —— 只是静默错位（看着"差不多"）。实测在
+      # docs/development-roadmap.md §3 抓到两处：一行多了一个分隔符、另一行少了行尾 `|`，
+      # 而当时四个守卫没有一个覆盖这个类别。存量基线（scripts/md_tables_baseline.txt，
+      # **只应缩小**）当前为**空** ⇒ 新增不一致直接失败（已做变异验证）。
+      - name: Markdown tables (consistent column counts)
+        run: python scripts/check_md_tables.py
+      # 错误码键集：Go `Code*` 必须与三语言 `errors.ts` 的契约键一致，且三语言键集完全相同。
+      # docs/error-codes.md 把这条写成**硬要求**，却自陈"目前靠人工核对" —— 缺一个键不会有
+      # 任何报错，只有该语言的用户会看到未本地化的原文。存量基线为空（当前一致）。
+      - name: Error code keys (Go Code* vs 3 locales)
+        run: python scripts/check_error_code_keys.py
+      # ORM 生成物新鲜度：`shared/models/**` 是**生成物**（`scripts/generate_orm_models.py`
+      # ← `configs/orm/V1/models.yaml`），却**既不在 ruff/mypy 门禁内，也没有任何用例提到它**
+      # （全仓只有生成器自己提它）。漂移过一次：`shared/models/subagent_run.py` 缺 7 列
+      # （`inherited_messages` / `retryable` / `output_bytes` / `validator_*` / `error_code`），
+      # 而迁移 0004/0006/0007 里都有 —— 靠人肉核对才发现。判据：把生成器重跑到**临时目录**
+      # 再逐文件比对，**只忽略模板的「生成时间」行**（它每次运行都不同；第 68 轮就是它造成
+      # 69 个文件的纯时间戳噪声）。已做变异验证（删一列 ⇒ exit 1 并点名行号）。
+      - name: ORM models match models.yaml
+        run: python scripts/check_orm_models.py
 
   # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
   # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧

@@ -61,7 +61,7 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
 2. **第三方库缺口走 `pyproject.toml` 的 `[[tool.mypy.overrides]]`，不许用 `# type: ignore` 绕**：
    - 缺 stub / 缺包 → `ignore_missing_imports`（现为 `asyncpg` / `boto3.*` / `botocore.*` / `docx` /
      `fitz` / `langchain.*` / `markitdown` / `openpyxl` / `pdfplumber` / `psutil` / `pymilvus` /
-     `qdrant_client` / `sentence_transformers` / `unstructured.*` / `uvicorn`）；
+     `sentence_transformers` / `unstructured.*` / `uvicorn`）；
    - **有** stub 但标注不全 → 在**调用方**上单项豁免（现为 `module = ["app.rag.parser", "app.main"]`
      的 `disallow_untyped_calls = false`，因 `pymupdf` 自带 `py.typed` 却缺 `open` / `Document` 注解）。
      该判定由调用方作出，豁免只能落在调用它的文件上。
@@ -98,11 +98,11 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
 ```bash
 pnpm install --frozen-lockfile
 pnpm run lint          # eslint src
-pnpm run build         # check:ui（5 道棘轮）→ vue-tsc -b → vite build
+pnpm run build         # check:ui（7 道棘轮）→ vue-tsc -b → vite build
 pnpm run test          # vitest run
 ```
 
-`check:ui` 是五道契约棘轮（z-index / 主题 token / 动效 token / i18n / a11y），任何一道不通过都会
+`check:ui` 是**七道**契约棘轮（z-index / 主题 token / 动效 token / i18n / i18n 键集 / a11y / **transcript 滚动单写者**），任何一道不通过都会
 **让构建失败**。其中 i18n 棘轮的存量账本是空账本 —— 它的作用是**阻止任何新增硬编码中文**
 （`$t('…')` / `t('…')` 里的中文不算，那是迁移目标）。
 
@@ -117,22 +117,30 @@ python -m alembic -c alembic.ini upgrade head --sql > /dev/null   # 离线渲染
 **迁移链必须单一 head**：分叉会让启动校验（`internal/db/schema_version.go` 的
 `ParseMigrationHead`）直接拒绝启动。新增迁移后请复核 README「数据库迁移」一节。
 
-### `encoding` — 仓库根守卫（**四个**）
+### `encoding` — 仓库根守卫（**七个**）
 
 ```bash
-python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8
-python scripts/check_tool_policy_parity.py   # Go ↔ Python 工具分级表必须同构（L3-9）
+python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8 / **UTF-8 BOM**
+python scripts/check_tool_policy_parity.py   # Go ↔ Python（↔ 前端）必须同构：分级表 / 对话模式 / 提供商目录 / 故障注入 / 共享键前缀 / 共享常量 / **工具授权模式**（L3-9）/ **子 Agent 终态集合**
 ruff check scripts/                          # 仓库根脚本（配置见仓库根 ruff.toml）
-python scripts/check_doc_links.py            # 被引用的 docs/*.md 必须存在（存量走基线，新增即失败）
+python scripts/check_doc_links.py            # 被引用的 docs/*.md **与相对 .md 链接**都必须存在（存量走基线，新增即失败）
+python scripts/check_md_tables.py            # Markdown 表格列数必须一致（存量走基线，新增即失败）
+python scripts/check_error_code_keys.py      # Go `Code*` ↔ 三语言 `errors.ts` 契约键必须一致，且三语言键集相同
+python scripts/check_orm_models.py           # `shared/models/**` 生成物必须与 `configs/orm/V1/models.yaml` 一致（重跑到**临时目录**比对，只忽略「生成时间」行）
+python scripts/check_orm_schema.py           # `shared/models/**` 的列集合必须与迁移 DDL 一致（**跑在 CI 的 Migration chain job**：那里才装了 alembic）
 ```
 
 `U+FFFD` / 非法 UTF-8 是**字节已损坏**的信号，不是排版问题：它曾把依赖清单吞进注释行、把
 `nginx.conf` 的 5 条配置指令吃掉（大括号失衡导致 frontend 容器起不来）。**看到该 job 红，
 先确认磁盘上的字节，别靠编辑器"看起来正常"判断。**
 
-后两个是**后加的**：`scripts/` 此前没有任何 lint 门禁（攒下 8 处历史问题）；文档断链此前无人管
-（一次扫出 19 份"被引用但从未提交过"的设计文档，现存 8 条在 `scripts/doc_link_baseline.txt` 里，
-**只应缩小**）。
+后几个是**后加的**：`scripts/` 此前没有任何 lint 门禁（攒下 8 处历史问题）；文档断链此前无人管
+（一次扫出 19 份"被引用但从未提交过"的设计文档，**现已全部还清：`scripts/doc_link_baseline.txt`
+为 0 条** —— 6 份按代码重建、2 条剔除为守卫误报、其余删冗余引用）。**表格列数、错误码键集、
+ORM 生成物新鲜度**同样一度无人管，且各自都抓到过真实缺陷：Markdown 表格两处**静默错位**
+（多一个 / 少一个 `|` 不会让渲染报错）· `Code*` 与三语言 `errors.ts` 的键集可能少键（只有该语言的
+用户会看到未本地化的原文）· `shared/models/subagent_run.py` 缺 7 列而迁移 `0004/0006/0007` 里都有
+（生成物不诚实，且 `shared/` 不在 ruff/mypy 门禁内）。
 
 ### 本机真实栈 —— 把网关也起起来，`integration` 才会全绿
 

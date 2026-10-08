@@ -17,6 +17,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './strip-comments.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -60,7 +61,9 @@ function walk(dir) {
 const counts = new Map()
 for (const file of walk(join(ROOT, 'src'))) {
   let n = 0
-  for (const line of stripScriptBlocks(readFileSync(file, 'utf8')).split('\n')) {
+  // 顺序：先剥 `<script>`（本机制在那里不适用），再剥注释 —— 否则注释里写一句
+  // `color: #fff` 就会被判违规（2026-10-09 实测过）。
+  for (const line of stripComments(stripScriptBlocks(readFileSync(file, 'utf8'))).split('\n')) {
     if (TOKEN_DEFINITION.test(line)) continue
     n += (line.replace(VAR_WITH_FALLBACK, 'VAR').match(COLOR_LITERAL) || []).length
   }

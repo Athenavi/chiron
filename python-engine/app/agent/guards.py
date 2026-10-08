@@ -91,6 +91,9 @@ DANGEROUS_TOOLS: frozenset[str] = frozenset(
 )
 
 # 会话授权模式（与 Go 侧 ModeStore / 前端选择器一致）
+# **三语言一致性已机械化**：`scripts/check_tool_policy_parity.py` 的"工具授权模式"族
+# （Go `mode.go` ↔ 本文件的 `_VALID_SESSION_MODES` ↔ 前端 `ChatView.vue` 的联合类型，
+# 集合比对 —— 只在一侧新增一个模式也会被拦下）。
 SESSION_MODE_ASK = "ask"
 SESSION_MODE_AUTO = "auto"
 SESSION_MODE_YOLO = "yolo"

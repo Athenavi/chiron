@@ -1,7 +1,8 @@
 # Transcript 契约
 
 > 本文把 `frontend-vue/src/components/chat/` 下 10 个模块**已经在代码注释里写对的不变量**固化为
-> **契约 + 验收清单**。形式参照 Reasonix 的 `docs/TRANSCRIPT_SCROLL_CONTRACT.md`。
+> **契约 + 验收清单**。形式参照 Reasonix 的 transcript 契约族（1.x 的 `TRANSCRIPT_SCROLL_CONTRACT`
+> 等；该文档族在 2.x 已退役，语义并入 `docs/SPEC.md` 的 §3.6 上下文管理）。
 >
 > **为什么值得固化**：transcript 是"只能靠肉眼与手感验证"的领域。契约的作用不是规定实现，而是让人
 > 知道**哪些行为是承诺**——改动时知道什么不能破，以及**怎么验证没破**。这些不变量原本散在代码注释里，
@@ -131,6 +132,21 @@ MessageList.vue / MessageItem.vue（渲染）
 | 长会话折叠 | 不超过 100 条/会话 | 自动 |
 | 正文含 `[thinking]` 字样 | 完整保留，不吞内容 | 自动（`chat-types.spec.ts`） |
 | 切会话 | 测量作废、不带着上一会话几何 | 手测 + `discard()` 断言 |
+
+**§1.1 的单写者另有源码级门禁（2026-10-09）**：`frontend-vue/scripts/check-transcript-scroll.mjs`
+（已接进 `check:ui` ⇒ 7 道棘轮）枚举 `src/**` 下所有 `scrollTop` **赋值**（先剥注释）并逐条归类
+——**单写者 / 写的是"别的"容器（必须写明是哪个）/ 测试豁免**，**未归类即失败**，清单过期也失败。
+刻意不用"某文件内不得出现 `scrollTop =`"那种写法：契约管的是**消息列表**，不是所有列表，
+否则会对统一任务模式的 `.unified-list` 假阳性。
+
+**由来（2026-10-09 全契约复核）**：§1.1 曾被违反 **2 处** —— `ChatView.vue` 在会话加载完成后
+直接写 `.message-list` 的 `scrollTop`（绕过输入租约与 writer provenance）；**已改为**
+`messageListRef.value?.scrollToBottom()`（`MessageList.vue` 新增 `defineExpose`，内部走
+`vp.release()` + `vp.follow(el)`）。同批复核确认 **§1.2–§1.8 全部成立**：无 `scrollTop +=`
+高度差补偿（§1.2）· `coversViewport` 覆盖优先且有"区间过小 ⇒ false"用例（§1.3.2）·
+`isUserText` 在投影的分组/折叠里保住用户行（§1.4.2）· `stage()`/`publish()` 原子发布，
+空批次/重复尺寸/NaN/负数/Infinity 都有用例（§1.5）· 折叠按会话分键且 LRU 上限 `100`（§1.6）·
+`onThinkingChunk` 自有累积、**绝不进 `streamBuf`**（§1.8）。
 
 ## 4. 已知取舍与不做的事
 

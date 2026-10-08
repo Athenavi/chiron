@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - Turn
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-09-15 09:55:16
+生成时间：2026-10-09 07:12:02
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey
@@ -43,6 +43,14 @@ class Turn(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, doc='创建时间')    
 
+    model = Column(String(128), nullable=True, doc='该回合使用的模型')
+
+    cache_hit = Column(Boolean, default=False, doc='是否命中提示缓存（NOT NULL DEFAULT false）')
+
+
+    cached_tokens = Column(BigInteger, default=0, doc='命中的缓存 token 数（bigint NOT NULL DEFAULT 0）')
+
+
 
     def to_dict(self, exclude_sensitive=True):
         """转换为字典
@@ -61,6 +69,9 @@ class Turn(Base):
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'model': self.model,
+            'cache_hit': self.cache_hit,
+            'cached_tokens': self.cached_tokens,
         }
 
         if not exclude_sensitive:

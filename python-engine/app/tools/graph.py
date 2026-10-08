@@ -24,7 +24,11 @@ def bind_gateway(gw: GatewayRouter) -> None:
     _gateway = gw
 
 
-# ── 内置模板（与 Go 侧一致）───────────────────────────────────
+# ── 内置模板 ─────────────────────────────────────────────────
+# 注：**不存在"Go 侧副本"需要同步** —— 网关对 `/v1/graphs*` 只是**反向代理**到引擎
+# （`internal/api/routes_proxy.go` 的 "Graphs (auth + rate limited, proxies to Python)"），
+# Go 侧仅在本工具分级表里登记了 `graph_templates` 这个名字。本注释此前写"与 Go 侧一致"，
+# 会让读者去找一份**并不存在**的 Go 侧模板表（2026-10-09 按代码更正）。
 _TEMPLATES: list[dict[str, Any]] = [
     {
         "name": "Web Research Automation",

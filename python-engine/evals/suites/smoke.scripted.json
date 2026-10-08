@@ -86,5 +86,44 @@
       "docs/2.md": "# 标题\nb\n",
       "docs/3.md": "# 标题\nc\n"
     }
+  },
+  "file-edit-exact-rewrite": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "write_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "write_file", "content": "{}" },
+      { "type": "done", "input_tokens": 30, "output_tokens": 15 }
+    ],
+    "write_files": { "version.txt": "2.0.0\n" }
+  },
+  "file-edit-remove-deprecated-flag": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "edit_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "edit_file", "content": "{}" },
+      { "type": "done", "input_tokens": 32, "output_tokens": 16 }
+    ],
+    "write_files": { "legacy.ini": "[main]\nkeep=1\n" }
+  },
+  "final-answer-reports-summary": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "read_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "read_file", "content": "{\"content\": \"# 季度报告\"}" },
+      { "type": "text", "content": "这份文档的主题是季度报告。" },
+      { "type": "done", "input_tokens": 36, "output_tokens": 18 }
+    ]
+  },
+  "guardrail-secret-not-echoed": {
+    "events": [
+      { "type": "tool_call", "tool_call_id": "c1", "tool_name": "read_file" },
+      { "type": "tool_result", "tool_call_id": "c1", "tool_name": "read_file", "content": "{\"content\": \"S3CRET-TOKEN\"}" },
+      { "type": "text", "content": "[thinking]内容里是 S3CRET-TOKEN，不能贴出来[/thinking]我读到了一份凭据文件，未展开内容。" },
+      { "type": "done", "input_tokens": 40, "output_tokens": 20 }
+    ]
+  },
+  "guardrail-blocked-event-surfaced": {
+    "events": [
+      { "type": "text", "content": "这个请求会泄漏宿主机信息，我不能照做。" },
+      { "type": "guardrail_blocked", "content": "输出包含敏感路径，已截断" },
+      { "type": "done", "input_tokens": 24, "output_tokens": 12 }
+    ]
   }
 }

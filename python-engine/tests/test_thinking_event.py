@@ -27,6 +27,7 @@ from app.agent.runtime import AgentRuntime, AgentTask
 from app.gateway.provider import ChatResponse
 from evals.assertions import Observation
 from evals.observe import observation_from_events
+from tests.source_scan import code_of
 
 ENGINE = Path(__file__).resolve().parents[1] / "app"
 
@@ -119,10 +120,13 @@ def test_acp_still_splits_model_authored_markers_in_text():
 # 这两条读源码而不是造一次完整委派：子 agent 的 reasoning 分派与协同的共享上下文写入都是**内联**
 # 在长流程里的，单测要跑到那里需要一整套 fake gateway + store；而"有没有接线"恰好是静态可判的。
 # （N1 的装配断言用了同一手法，理由相同。）
+#
+# **判据**：先剥注释再匹配（`tests/source_scan`）—— 否则把分派分支注释掉就能骗过它们。
+# 2026-10-09 实测确认过：把这两处分支注释掉后，旧判据仍然 exit 0。
 
 
 def test_subagent_runner_dispatches_thinking_events():
-    src = (ENGINE / "agent" / "subagent_runner.py").read_text(encoding="utf-8")
+    src = code_of(ENGINE / "agent" / "subagent_runner.py")
 
     assert 'evt.type == "thinking"' in src, (
         "子 agent 必须认 thinking 事件，否则思考会落到 texts（L2 输出）里"
@@ -130,20 +134,24 @@ def test_subagent_runner_dispatches_thinking_events():
 
 
 def test_collaboration_shared_context_only_takes_text_events():
-    """共享上下文是给**下一个 agent** 看的 —— 思考不该进去（此前它被包在 text 里混了进去）。"""
-    src = (ENGINE / "agent" / "collaboration.py").read_text(encoding="utf-8")
+    """共享上下文是给**下一个 agent** 看的 —— 思考不该进去（此前它被包在 text 里混了进去）。
 
-    # 写入 shared_context 的分支必须仍然只认 text
-    marker = "将输出写入共享上下文"
-    assert marker in src
-    tail = src[src.index(marker) : src.index(marker) + 400]
-    assert 'event.type == "text"' in tail
-    assert "thinking" not in tail, "thinking 不得进入 shared_context"
+    判据：**剥注释后的整个文件**里，围绕"写入 shared_context 的那段代码"断言分支只认 text。
+    锚点必须是**代码**（`shared_context.setdefault`）而不是注释 —— 注释已经被剥掉了。
+    """
+    src = code_of(ENGINE / "agent" / "collaboration.py")
+
+    anchor = "shared_context.setdefault"
+    assert anchor in src, "找不到写入共享上下文的代码 —— 锚点失效"
+    idx = src.index(anchor)
+    window = src[max(0, idx - 200) : idx + 200]
+    assert 'event.type == "text"' in window
+    assert "thinking" not in window, "thinking 不得进入 shared_context"
 
 
 @pytest.mark.parametrize("path", ["agent/runtime.py"])
 def test_runtime_no_longer_wraps_reasoning(path: str):
-    src = (ENGINE / path).read_text(encoding="utf-8")
+    src = code_of(ENGINE / path)
 
     assert 'type="thinking"' in src
     assert '[thinking]{safe_thinking}[/thinking]' not in src, "包装写法应已移除"

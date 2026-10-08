@@ -162,3 +162,64 @@ def test_all_audit_modules_share_one_timestamp_helper():
 
     for module in (approval_audit, hooks_audit, exec_audit):
         assert module.utc_timestamp is utc_timestamp, f"{module.__name__} 没有用共享时间戳"
+
+
+# ── "问"也要留痕：asked ↔ decided 按 tool_call_id 配对 ──────────────────
+
+
+def test_records_request_with_identity_level_and_args(audit_dir: Path):
+    """`asked` 记录：身份 / 级别 / 参数（脱敏）都在 —— 只记决定会丢掉"谁问了什么"。"""
+    from app.agent.approval_audit import EVENT_ASKED, record_approval_request
+
+    set_tool_context(session_id="s-ask", user_id="u-ask", tenant_id="t-ask")
+    record_approval_request(
+        tool_call_id="call-ask",
+        tool="shell_exec",
+        level="delete",
+        arguments={"command": "rm -rf x", "password": "hunter2secret"},
+    )
+
+    entry = _entries(audit_dir)[0]
+    assert entry["event"] == EVENT_ASKED
+    assert entry["tool_call_id"] == "call-ask"
+    assert entry["tool"] == "shell_exec"
+    assert entry["level"] == "delete"
+    assert entry["tenant"] == "t-ask"
+    assert entry["user"] == "u-ask"
+    assert entry["session"] == "s-ask"
+    assert "hunter2secret" not in entry["original_arguments"], "密钥不得以明文落盘"
+
+
+def test_request_and_decision_pair_by_tool_call_id(audit_dir: Path):
+    """配对不变式：同一次审批的 `asked` 与 `decided` 共享 `tool_call_id`。
+
+    **有 `asked` 而没有 `decided`** ⇒ "问了但没等到决定"（等待期间进程被杀、副本被回收、
+    连接断开后无人再答）。此前只记决定，这种情况在流水里**完全看不出来**。
+    """
+    from app.agent.approval_audit import (
+        EVENT_ASKED,
+        EVENT_DECIDED,
+        record_approval_decision,
+        record_approval_request,
+    )
+
+    set_tool_context(session_id="s-pair")
+    record_approval_request(tool_call_id="call-pair", tool="run_code", level="write")
+    record_approval_decision(
+        tool_call_id="call-pair", tool="run_code", decision="approve", level_before="write"
+    )
+
+    entries = _entries(audit_dir)
+    assert [e["event"] for e in entries] == [EVENT_ASKED, EVENT_DECIDED]
+    assert {e["tool_call_id"] for e in entries} == {"call-pair"}
+
+
+def test_request_audit_is_fail_soft(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """与决定一样：落盘失败只告警，不能让审批流程失败（审计是旁路）。"""
+    from app.agent import approval_audit
+
+    blocker = tmp_path / "not-a-dir"
+    blocker.write_text("x", encoding="utf-8")  # mkdir 必然失败
+    monkeypatch.setattr(approval_audit, "AUDIT_DIR", blocker)
+
+    approval_audit.record_approval_request(tool_call_id="c", tool="t")

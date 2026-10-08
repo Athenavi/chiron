@@ -1,4 +1,4 @@
-﻿"""Tests for app.trace.writer module.
+"""Tests for app.trace.writer module.
 
 Verifies:
 1. TraceWriter writes to Redis Stream (mocked)

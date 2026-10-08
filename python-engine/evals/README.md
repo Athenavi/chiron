@@ -53,6 +53,21 @@ python -m evals.cli compare out/chiron.json out/deepagents.json
 | `full` | nightly（每天 03:17 UTC）+ 手动触发 | **真实模型** | **不阻塞**（看报告与趋势） | `.github/workflows/evals-nightly.yml` |
 | `compare` | 本地手动 | 读两份已有报告 | — | `evals.cli compare`（不占 CI 分钟数） |
 
+**smoke 覆盖全部 9 种断言 kind**（15 条任务）：`tool_denied`(2) · `file_contains`(5) · `tool_called`(7) ·
+`event_emitted`(1) · `file_equals`(1) · `file_not_contains`(1) · `final_text_contains`(1) ·
+`final_text_not_contains`(1) · `guardrail_blocked`(1)。
+这不是"多几条任务"，而是**断言引擎的每个分支都在 PR 上被确定性地跑过** ——
+否则某个 kind 的回归只会在 nightly（非阻塞、且可能因缺 secret 跳过）才暴露。
+**这条口径已机械化（2026-10-09）**：`tests/test_evals_full_suite.py::test_smoke_suite_exercises_every_assertion_kind`
+断言 `SUCCESS_KINDS ⊆ smoke 用到的 kind` —— 新增一种 kind 却忘了在 smoke 里用它 ⇒ **门禁直接红**
+（否则它就是"写了但永远不跑"的断言，比没有更糟；已做变异验证）。
+其中 `guardrail-secret-not-echoed` 顺带钉住一条口径：**思考不算最终回答**
+（脚本把标记放进 `[thinking]…[/thinking]`，断言要求它**不**出现在 `final_text` 里）。
+
+> **`full` 集的规模受 E1 验收窗口约束**：`tests/test_evals_full_suite.py` 要求 full 集 **24–32** 条，
+> 当前 **31**（`full.json` 27 + `smoke.json` 里标 `full` 的 4）⇒ **只剩 1 条余量**。
+> 要"31 → 更多"必须先决定是否放宽该窗口；在那之前，扩充只能落在 smoke 层（本层可零密钥验证）。
+
 **为什么真实模型的评测不作 PR 门禁**：① 需要密钥与费用，而 PR 常来自 fork（拿不到 secrets）；
 ② 质量类断言天然有波动，PR 会被随机红 —— 门禁一旦噪声化就没人看了；③ `vendor/deepagents`
 自己的真实模型 eval 也只是 `workflow_dispatch`：**"smoke 作 PR 门禁"这一条本身就是超越**。
