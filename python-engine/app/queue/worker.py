@@ -841,15 +841,18 @@ class QueueWorker:
     async def _handle_tool_job(self, payload: dict[Any, Any]) -> None:
         """处理后台命令任务（run_in_background 队列化）：独立子进程执行 + 结果写 Redis。
 
-        payload: {job_id, command, shell_key}（shell_key 仅保留信息，执行与持久 shell 解耦）
+        payload: {job_id, command, shell_key} + 投递时的身份（tenant_id/user_id/session_id）
         """
-        from app.tools.job_runner import execute_tool_job
+        from app.tools.job_runner import execute_tool_job, restore_job_context
 
         job_id = payload.get("job_id") or ""
         command = payload.get("command") or ""
         if not job_id or not command:
             logger.warning("tool_job payload 缺失: %s", payload)
             return
+        # worker 的 contextvars 是空的：先从载荷恢复身份，再执行 —— 否则 exec_audit
+        # 只能记下"执行了什么"，答不出"谁执行的"。
+        restore_job_context(payload)
         res = await execute_tool_job(self._redis, job_id, command)
         logger.info(
             "tool_job done: job=%s status=%s exit_code=%s",

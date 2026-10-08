@@ -36,6 +36,11 @@ DANGEROUS_MODULES = {
     "dbm",
     "shelve",  # 防止序列化攻击
     "asyncio.tasks",
+    # asyncio 是**白名单模块**（模型代码常要 `await asyncio.sleep()`），但它夹带一个
+    # 能起进程的子模块：`asyncio.subprocess.create_subprocess_exec/shell` ⇒ **任意命令执行**，
+    # 绕开工具白名单与 exec 审计。此前只拦 `asyncio.tasks`，而这段比较只看**根段**（见
+    # `_module_blocked`），那条点分条目其实从未生效 —— 这个洞是补 `_module_blocked` 时一并修掉的。
+    "asyncio.subprocess",
     "http.client",
     "urllib",
     "requests",  # 防止网络请求
@@ -97,6 +102,21 @@ BLOCKED_SUBCLASS_ATTRS = frozenset(
 )
 
 
+def _module_blocked(name: str) -> bool:
+    """按**完整点分名逐级前缀**判定模块是否被禁。
+
+    为什么不能只看根段：`DANGEROUS_MODULES` 里有 `asyncio.tasks` / `http.client` 这类
+    **点分条目**，而"取根段比较"（`name.split('.')[0] in DANGEROUS_MODULES`）永远匹配不到它们
+    —— 于是 `import asyncio.subprocess` 这种写法**全部放行**（实测可拿到
+    `create_subprocess_exec`，等于绕开沙箱起进程）。逐级前缀比较让这些条目真正生效，
+    同时保留 `import os` / `import os.path` 都被拦的效果。
+    """
+    if not name:
+        return False
+    parts = name.split(".")
+    return any(".".join(parts[: i + 1]) in DANGEROUS_MODULES for i in range(len(parts)))
+
+
 def check_static(code: str) -> str | None:
     """AST 静态检查沙箱代码：命中危险模块导入/危险调用返回原因，否则 None。"""
     try:
@@ -108,11 +128,16 @@ def check_static(code: str) -> str | None:
         # import os / import pathlib / from X import Y
         if isinstance(node, ast.Import):
             for alias in node.names:
-                if alias.name.split(".")[0] in DANGEROUS_MODULES:
+                if _module_blocked(alias.name):
                     return f"module '{alias.name}' is not allowed — use tools.* instead"
         if isinstance(node, ast.ImportFrom):
-            if node.module and node.module.split(".")[0] in DANGEROUS_MODULES:
+            if _module_blocked(node.module or ""):
                 return f"module '{node.module}' is not allowed — use tools.* instead"
+            # `from asyncio import subprocess`：module 段是合法的 asyncio，危险在被导入的名字上
+            for alias in node.names:
+                combined = f"{node.module}.{alias.name}" if node.module else alias.name
+                if _module_blocked(combined):
+                    return f"name '{combined}' is not allowed — use tools.* instead"
 
         # open(...) / exec(...) / eval(...) / __import__(...) 等危险调用
         if isinstance(node, ast.Call):
@@ -143,8 +168,10 @@ def check_static(code: str) -> str | None:
 # builtin 调用均不可靠，实测弃用。）
 # S4 强化：移除 io/copy/operator/enum — 这些模块提供元编程链可触达 os/socket，
 # 导致沙箱逃逸。模型代码不需要它们（文件 IO 由 tools 注入 namespace 提供）。
-# asyncio 保留：模型代码常需 `await asyncio.sleep()`/`asyncio.gather()`，且
-# 危险子模块（asyncio.subprocess）由 DANGEROUS_ATTR_PATHS 静态守卫拦截。
+# asyncio 保留：模型代码常需 `await asyncio.sleep()`/`asyncio.gather()`；但它的危险子模块
+# （`asyncio.subprocess`，能起进程）**必须显式禁用** —— 见 `DANGEROUS_MODULES` 里的条目与
+# `_module_blocked`（静态 + 运行时两层都拦；早先只在注释里声称"由 DANGEROUS_ATTR_PATHS 拦截"，
+# 而那里并没有对应条目，属**注释声称了不存在的防护**）。
 SAFE_IMPORTS = frozenset(
     {
         "json",
@@ -189,7 +216,9 @@ def safe_builtins() -> dict[str, Any]:
         level: int = 0,
     ) -> Any:  # noqa: A002
         root = (name or "").split(".")[0]
-        if root in SAFE_IMPORTS:
+        # 两层都要判：根在白名单里、**且**没有命中禁用的点分条目 —— 否则
+        # `import asyncio.subprocess` 会因为根是合法的 asyncio 而一路放行（能起进程）。
+        if root in SAFE_IMPORTS and not _module_blocked(name):
             return real_import(name, globals, locals, fromlist, level)
         raise RuntimeError(f"blocked by runtime guard: import '{name}'")
 

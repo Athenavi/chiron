@@ -43,10 +43,10 @@ def tracked_files() -> list[str]:
         ).stdout
     except FileNotFoundError:
         print("FATAL: 未找到 git —— 本检查依赖 git ls-files 枚举被跟踪文件", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     except subprocess.CalledProcessError as exc:  # pragma: no cover - 仅环境异常
         print(f"FATAL: git ls-files 失败：{exc.stderr.decode('utf-8', 'replace')}", file=sys.stderr)
-        raise SystemExit(2)
+        raise SystemExit(2) from None
     return [os.fsdecode(name) for name in out.split(b"\x00") if name]
 
 

@@ -1,0 +1,12 @@
+# 仓库根 ruff 配置：覆盖 `scripts/`（以及将来任何根级 Python）。
+#
+# 为什么需要它：`python-engine/` 有自己的 pyproject.toml（就近优先，不受本文件影响），
+# 而 `scripts/` 此前**没有任何 lint 门禁** —— CI 只跑两个 `check_*.py` 守卫，于是攒下
+# 8 处历史问题（未用变量、未用导入、裸 `except`、以及该有的 `noqa` 说明）。
+# 规则集与引擎保持一致，避免"两个 Python 子项目两套标准"。
+line-length = 120
+target-version = "py311"
+
+[lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E501"]

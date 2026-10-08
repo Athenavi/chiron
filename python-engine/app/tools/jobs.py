@@ -45,6 +45,15 @@ def _job_id() -> str:
 
 async def _enqueue_tool_job(job_id: str, command: str, shell_key: str) -> bool:
     """投递 tool_job 到 engine:tasks；Redis 不可用/失败返回 False（调用方降级本地执行）。"""
+    # 身份随载荷一起投递：队列 worker 在**另一个任务**里执行，contextvars 不会跟过去 ——
+    # 不带上就永远答不出"谁发起的这条后台命令"，而那正是 exec_audit 存在的理由。
+    from app.tools.context import get_session_id, get_tenant_id, get_user_id
+
+    identity = {
+        "tenant_id": get_tenant_id() or "",
+        "user_id": get_user_id() or "",
+        "session_id": get_session_id() or "",
+    }
     try:
         redis = await _get_redis()
     except Exception as exc:  # noqa: BLE001
@@ -55,9 +64,9 @@ async def _enqueue_tool_job(job_id: str, command: str, shell_key: str) -> bool:
     msg = {
         "task_id": job_id,
         "task_type": "tool_job",
-        "tenant_id": "",
+        "tenant_id": identity["tenant_id"],
         "payload": json.dumps(
-            {"job_id": job_id, "command": command, "shell_key": shell_key},
+            {"job_id": job_id, "command": command, "shell_key": shell_key, **identity},
             ensure_ascii=False,
         ),
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

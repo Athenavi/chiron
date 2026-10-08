@@ -21,7 +21,6 @@ import json
 import logging
 import time
 from dataclasses import dataclass
-from pathlib import Path
 from typing import Any, cast
 
 try:
@@ -186,30 +185,23 @@ async def run_plugin_in_sandbox(
 def _audit(
     plugin_name: str, user_id: str, input_data: dict[str, Any], result: dict[str, Any], started: float
 ) -> None:
-    """审计日志：每次插件执行一条 JSONL（失败不阻断主流程）。"""
+    """审计日志：每次插件执行一条 JSONL（失败不阻断主流程）。
+
+    实际写盘在 `app/plugins/audit.py` —— 抽成可复用模块后，**运行时**拉起插件进程的两处
+    （`mcp/client.py`、`skill/manager.py`）才能用同一套格式/同一本账记录。
+    """
     if not SANDBOX_CONFIG.audit_log_enabled:
         return
-    try:
-        from app.config import settings
+    from app.plugins.audit import record_plugin
 
-        # Settings 上没有 log_dir 字段（原代码用 getattr 取它，兜底恒为真），
-        # 所以路径固定为 CWD 下的 logs/ —— 与 engine 的 logs/ 保持一致。
-        log_dir = Path(getattr(settings, "log_dir", "") or "logs")
-        log_dir.mkdir(parents=True, exist_ok=True)
-        entry = {
-            "ts": time.strftime("%Y-%m-%dT%H:%M:%S"),
-            "plugin": plugin_name,
-            "user": user_id,
-            "duration_ms": int((time.time() - started) * 1000),
-            "success": bool(result.get("success")),
-            "error": result.get("error"),
-            "input_keys": (
-                sorted(input_data.keys())
-                if isinstance(input_data, dict)
-                else str(type(input_data))
-            ),
-        }
-        with (log_dir / "plugin_audit.jsonl").open("a", encoding="utf-8") as f:
-            f.write(json.dumps(entry, ensure_ascii=False) + "\n")
-    except Exception:  # noqa: BLE001 — 审计失败不影响插件执行结果
-        logger.warning("plugin audit log write failed", exc_info=True)
+    record_plugin(
+        plugin=plugin_name,
+        action="execute",
+        user_id=user_id,
+        duration_ms=int((time.time() - started) * 1000),
+        success=bool(result.get("success")),
+        error=result.get("error"),
+        input_keys=(
+            sorted(input_data.keys()) if isinstance(input_data, dict) else [str(type(input_data))]
+        ),
+    )

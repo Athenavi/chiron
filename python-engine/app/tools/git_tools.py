@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import time
 from typing import Any
 
 from app.tools.registry import registry
@@ -16,9 +17,19 @@ async def _run_git(*args: str, timeout: int = 30) -> dict[str, Any]:
 
     **cwd 刻意不可传**：git 命令一律在工作区内执行（此前有个 `cwd` 参数被传进来又被忽略，
     是"参数说谎"的一种）。逃逸检查见 :func:`_run_git_guarded`。
+
+    **审计**：这是模型可触达的执行路径之一（参数由模型给出），与
+    `shell_exec` / `run_code` / `persistent_shell` / `tool_job` 同记一本账 —— 此前唯独它没有痕迹。
     """
+    from app.tools.exec_audit import (
+        OUTCOME_ERROR,
+        OUTCOME_OK,
+        OUTCOME_TIMEOUT,
+        record_execution,
+    )
     from app.tools.sandbox import sandboxed_env, workspace_dir
 
+    started = time.monotonic()
     cmd = ["git", *args]
     proc = await asyncio.create_subprocess_exec(
         *cmd,
@@ -31,7 +42,22 @@ async def _run_git(*args: str, timeout: int = 30) -> dict[str, Any]:
         stdout, stderr = await asyncio.wait_for(proc.communicate(), timeout=timeout)
     except TimeoutError:
         proc.kill()
+        record_execution(
+            tool="git",
+            command=" ".join(cmd),
+            outcome=OUTCOME_TIMEOUT,
+            reason=f"timeout after {timeout}s",
+            duration_ms=int((time.monotonic() - started) * 1000),
+        )
         return {"error": "timeout", "timeout": timeout}
+    exit_code = proc.returncode
+    record_execution(
+        tool="git",
+        command=" ".join(cmd),
+        outcome=OUTCOME_OK if exit_code == 0 else OUTCOME_ERROR,
+        exit_code=exit_code,
+        duration_ms=int((time.monotonic() - started) * 1000),
+    )
     return {
         "exit_code": proc.returncode,
         "stdout": stdout.decode("utf-8", errors="replace"),

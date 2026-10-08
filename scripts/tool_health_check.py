@@ -219,8 +219,8 @@ def main() -> int:
     args = parser.parse_args()
 
     import app.tools  # noqa: F401
-    from app.tools.registry import registry
     from app.agent import modes
+    from app.tools.registry import registry
 
     names = sorted(registry.list_names())
     print(f"注册工具总数: {len(names)}")

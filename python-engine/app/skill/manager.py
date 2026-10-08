@@ -350,6 +350,8 @@ class MCPClient:
         }
         payload = (json.dumps(init_req) + "\n" + json.dumps(actual_req) + "\n").encode()
 
+        from app.plugins.audit import record_plugin
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -358,9 +360,14 @@ class MCPClient:
                 stderr=asyncio.subprocess.PIPE,
             )
         except FileNotFoundError:
+            record_plugin(
+                plugin=cmd[0], action="skill_mcp_spawn", success=False, error="command not found"
+            )
             raise RuntimeError(f"STDIO transport: command not found: {cmd[0]}") from None
         except Exception as e:
+            record_plugin(plugin=cmd[0], action="skill_mcp_spawn", success=False, error=str(e))
             raise RuntimeError(f"STDIO transport: failed to spawn process: {e}") from e
+        record_plugin(plugin=cmd[0], action="skill_mcp_spawn", success=True)
 
         try:
             stdout, stderr = await asyncio.wait_for(

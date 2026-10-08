@@ -71,6 +71,17 @@
 - 契约：`app.state` 上挂的键名、`lifespan` 的 `yield` 前后顺序、`logging` 输出顺序都不动；顺序一乱就是行为变更。
 - 风险：中。启动顺序有隐含依赖（Redis → 网关 → 队列 worker），必须整段对照后再动。
 
+**✅ 已完成（批次 4 · ① 校验部分，2026-10-08）**：`verify_sandbox_root` / `verify_media_store` / `_is_inside_cwd` 移到 `app/deps.py`（`main.py` 再导出，既有 `app.main.verify_sandbox_root` 引用不变）。**`main.py` 2170 → 2061 行**。验收：AST 取源码段**逐字一致**（3/3）· `ruff` 0 · `mypy` 0（244 文件）· `pytest -m "not integration"` 1905 passed。
+
+**⚠ ② `lifespan` 分段化此前被低估了两个坑（实测后写在这里，动手前必须读）**：
+
+1. **`locals()` 探测**：关闭段用 `if '_metrics_task' in locals()` / `'_retention_task' in locals()` / `"_engine_registry" in locals()` 判断"启动时到底建没建"。把这些段**抽成函数**后，这些名字不再出现在 `lifespan` 的 locals 里 ⇒ 关闭逻辑会**静默跳过**（不报错、不告警，只是不再取消任务/注销实例）。正确做法是让 `_start_*` **返回句柄**（或返回一个 dataclass），由 `lifespan` 持有再传给关闭段 —— 即"① 引用变 ② 显式数据流"，不是纯移动。
+2. **模块级状态靠 `global` 改写**：`_redis` / `_gateway` / `_plugin_pool` / `_queue_worker` 等是 `main.py` 的模块全局，`lifespan` 里用 `global` 赋值。**依赖取用器**（`get_redis`/`get_gateway`/`get_plugin_pool`/`touch_user`）不能单独搬到 `deps.py`：跨模块后"`global` 改的是哪个模块的名字"会变得难以判断（搬状态则要改所有写入点，是行为变更）。所以 ① 只搬了**不依赖这些状态**的校验函数。
+
+> 结论：② 仍待做，且**必须先设计句柄传递**；把"分段"当成纯移动会静默破坏关闭路径。
+
+**✅ 已完成（批次 4 · ② 的第一步：关闭段，2026-10-08）**：关闭清理抽成 `_shutdown_lifespan(*, reconciler_task, metrics_task, retention_task, engine_registry)`，**句柄显式传入**；`lifespan` 顶部把这四个句柄显式初始化为 `None`（此前三个只在条件分支里赋值）。**`lifespan` 664 行**（原 ~740）。关闭路径此前**零覆盖**，本次补了 `python-engine/tests/test_shutdown_lifespan.py`（3 条：句柄被取消/停止 + 传 None 安全通过 + **源码级护栏**：`lifespan` 里不得再出现 `locals()` 探测）。**启动段（约 560 行）仍待按同一模式分段** —— 它们之间也有跨段局部变量，抽取前先做依赖分析。
+
 ### 2.4 `mail_handler.go` / `session/manager.go` — 按流程/职责切
 
 - `mail_handler.go`：`redisResetTokenStore` `76–100`（重置令牌存储）→ `mail_reset_store.go`；处理器按 **认证（`SendCode` 237 / `Login` 338 / `provisionMailUser` 415）** 与 **密码重置（`RequestPasswordReset` 462 / `ConfirmPasswordReset` 570）**、**配置（`GetConfig` 646 / `configResponse` 674）** 分三个文件。
@@ -106,7 +117,7 @@
 | 1 | `gateway_router.go` → `routes_*.go`（✅ 已完成：1254 → 442 行，逐函数文本一致） | 同包纯移动、仅换文件（各文件 import 由脚本静态推导），风险最低 |
 | 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py`（类型部分 ✅ 已完成：3370 → 3198 行，AST 逐字一致；压缩簇待**重新定界**后做） | 纯函数/数据类，旧路径再导出 |
 | 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切（✅ 已完成：mail 1488 → 695、session 1198 → 128，逐函数文本一致） | 同包，公开方法集不变 |
-| 4 | `main.py` 依赖取用器 + `lifespan` 分步 | 启动顺序敏感，需逐行对照 |
+| 4 | `main.py` 依赖取用器 + `lifespan` 分步（① 校验部分 ✅ 2170 → 2061；② 关闭段 ✅ 抽成 `_shutdown_lifespan`（句柄显式传递 + 3 条用例），`lifespan` 740 → 664 行；启动段仍待分段） | 启动顺序敏感，需逐行对照 |
 | 5 | 前端抽 composable（一次一簇，从有测试的 `WorkflowView` 起） | 隐式耦合最多，放最后 |
 
 每批的验收口径：

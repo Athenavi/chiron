@@ -140,3 +140,40 @@ async def test_pool_shares_connection_by_fingerprint(tmp_path, monkeypatch):
         assert len(pool._conns) == 0
     finally:
         await pool.stop()
+
+
+@pytest.mark.asyncio
+async def test_deactivating_plugin_removes_its_tools(tmp_path, monkeypatch):
+    """**用户显式停用**（插件页关掉开关）后，其工具必须从模型可调用集合里消失。
+
+    与上一条的区别：上一条测的是"用户长时间不活跃 → ActiveTracker 过期"这条**被动**路径；
+    这条测用户在 Plugins 页把 `status` 改成 `inactive` 的**主动**路径 —— 如果它不生效，
+    表现就是"以为停了，模型其实还能调用它"（安全面与成本面都不可接受）。
+    """
+    monkeypatch.setattr("app.plugins.pool.MCPClient", _FakeMCPClient)
+
+    store = PluginStore(tmp_path)
+    active = ServerConfig(
+        name="git", command="npx", args=["-y", "git-server"], status="active", read_only=True
+    )
+    store.save("u1", [active])
+
+    tracker = ActiveTracker()
+    tracker.touch("u1")
+    pool = MCPClientPool(store=store, tracker=tracker)
+
+    try:
+        await pool.reconcile()
+        assert registry.get("git_demo_tool") is not None, "启用中的插件，其工具应可见"
+
+        # 用户在插件页关掉开关：同一份配置，status 改成 inactive
+        store.save("u1", [ServerConfig(
+            name="git", command="npx", args=["-y", "git-server"],
+            status="inactive", read_only=True,
+        )])
+        await pool.reconcile()
+
+        assert registry.get("git_demo_tool") is None, "停用的插件不得继续向模型暴露工具"
+        assert len(pool._conns) == 0, "停用后本地连接应关闭（凭据/进程都不该留着）"
+    finally:
+        await pool.stop()
