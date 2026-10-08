@@ -82,6 +82,12 @@
 
 **✅ 已完成（批次 4 · ② 的第一步：关闭段，2026-10-08）**：关闭清理抽成 `_shutdown_lifespan(*, reconciler_task, metrics_task, retention_task, engine_registry)`，**句柄显式传入**；`lifespan` 顶部把这四个句柄显式初始化为 `None`（此前三个只在条件分支里赋值）。**`lifespan` 664 行**（原 ~740）。关闭路径此前**零覆盖**，本次补了 `python-engine/tests/test_shutdown_lifespan.py`（3 条：句柄被取消/停止 + 传 None 安全通过 + **源码级护栏**：`lifespan` 里不得再出现 `locals()` 探测）。**启动段（约 560 行）仍待按同一模式分段** —— 它们之间也有跨段局部变量，抽取前先做依赖分析。
 
+**✅ 已完成（批次 4 · ② 第二刀：6 个无耦合启动段，2026-10-08）**：用**双向依赖分析**（脚本 `.tmp` 已删，方法写在这里）挑出既无"外流局部名"也无"内依赖更早局部名"的段，抽成同名函数：`_install_global_exception_handler` · `_start_redis` · `_start_postgres` · `_register_workbench_capabilities` · `_start_mcp_pool` · `_start_subagent_governance`。**`lifespan` 664 → 561 行**（main.py 2085 → 2118，多出的是各函数表头与说明）。
+
+- **关键坑**：段内给模块全局赋值时（`_redis` / `_plugin_pool` …），lifespan 顶部的 `global` **不会跟着搬** —— 新函数必须自己声明，否则赋值变成局部变量、**模块全局永远为空**，而启动路径未必有测试覆盖。抽取脚本已按"段内赋值 ∩ lifespan 的 global 声明"自动补上。
+- **顺带发现（靠"真的进一次 lifespan"的尝试）**：关闭路径在调 `await _redis.close()`，而 redis-py ≥5.0.1 起该方法**已废弃**（要用 `aclose()`）。整段冒烟用例因**污染进程级单例**（记忆服务/能力注册表）会连累无关用例，已撤掉，改为在 `tests/test_shutdown_lifespan.py` 里用"未连接的真实客户端 + 捕获 DeprecationWarning"精准盯住。
+- **仍待抽**（有真实耦合）：§1 可观测性（132 行，外流 `routes`）· §3 LLM Gateway（184 行，外流 `TenantRateLimiter`/`exc`）· §3.4 记忆服务（79 行，外流 `pool`）· §7 Queue Worker（24 行，外流 `_retention_task`）· §6.5 指标/实例注册/僵尸巡检（85 行，外流三个句柄）—— 抽它们需要**显式传参或返回句柄**。
+
 ### 2.4 `mail_handler.go` / `session/manager.go` — 按流程/职责切
 
 - `mail_handler.go`：`redisResetTokenStore` `76–100`（重置令牌存储）→ `mail_reset_store.go`；处理器按 **认证（`SendCode` 237 / `Login` 338 / `provisionMailUser` 415）** 与 **密码重置（`RequestPasswordReset` 462 / `ConfirmPasswordReset` 570）**、**配置（`GetConfig` 646 / `configResponse` 674）** 分三个文件。
@@ -117,7 +123,7 @@
 | 1 | `gateway_router.go` → `routes_*.go`（✅ 已完成：1254 → 442 行，逐函数文本一致） | 同包纯移动、仅换文件（各文件 import 由脚本静态推导），风险最低 |
 | 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py`（类型部分 ✅ 已完成：3370 → 3198 行，AST 逐字一致；压缩簇待**重新定界**后做） | 纯函数/数据类，旧路径再导出 |
 | 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切（✅ 已完成：mail 1488 → 695、session 1198 → 128，逐函数文本一致） | 同包，公开方法集不变 |
-| 4 | `main.py` 依赖取用器 + `lifespan` 分步（① 校验部分 ✅ 2170 → 2061；② 关闭段 ✅ 抽成 `_shutdown_lifespan`（句柄显式传递 + 3 条用例），`lifespan` 740 → 664 行；启动段仍待分段） | 启动顺序敏感，需逐行对照 |
+| 4 | `main.py` 依赖取用器 + `lifespan` 分步（① 校验 ✅ · ② 关闭段 ✅ + **6 个无耦合启动段 ✅**：`lifespan` 740 → 561 行；剩余 5 段有真实耦合，需显式传参/返回句柄） | 启动顺序敏感，需逐行对照 |
 | 5 | 前端抽 composable（一次一簇，从有测试的 `WorkflowView` 起） | 隐式耦合最多，放最后 |
 
 每批的验收口径：

@@ -10,6 +10,7 @@
 import ast
 import asyncio
 import pathlib
+import warnings
 
 from app import main as main_mod
 from app.main import _shutdown_lifespan
@@ -70,6 +71,33 @@ async def test_shutdown_cancels_every_given_handle(monkeypatch) -> None:
 async def test_shutdown_without_handles_is_safe() -> None:
     """启动阶段失败（没有建任何句柄）时，关闭段必须安全通过 —— 这是 None 分支的意义。"""
     await _shutdown_lifespan()
+
+
+async def test_shutdown_closes_redis_without_deprecated_api(monkeypatch) -> None:
+    """关闭 Redis 必须走 `aclose()`：redis-py ≥5.0.1 起 `close()` 已废弃。
+
+    这条是被"真的进一次 lifespan"的尝试抓出来的（`await _redis.close()` →
+    DeprecationWarning）。那个整段冒烟用例因为**污染进程级单例**（记忆服务/能力注册表）
+    会连累无关用例，已撤掉；改成这里用**未连接的真实客户端**精准盯住这一点。
+    """
+    import redis.asyncio as aioredis
+
+    client = aioredis.from_url("redis://127.0.0.1:1/0")  # 不连接，仅用于关闭路径
+    monkeypatch.setattr(main_mod, "_redis", client)
+    monkeypatch.setattr(main_mod, "_gateway", None)
+    monkeypatch.setattr(main_mod, "_plugin_pool", None)
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            await _shutdown_lifespan()
+        deprecated = [
+            str(w.message)
+            for w in caught
+            if issubclass(w.category, DeprecationWarning) and "close" in str(w.message)
+        ]
+        assert not deprecated, f"关闭路径调用了废弃 API：{deprecated}"
+    finally:
+        await client.aclose()
 
 
 def test_lifespan_does_not_probe_locals_anymore() -> None:

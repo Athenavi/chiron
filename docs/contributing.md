@@ -126,6 +126,28 @@ python scripts/check_source_encoding.py
 `nginx.conf` 的 5 条配置指令吃掉（大括号失衡导致 frontend 容器起不来）。**看到该 job 红，
 先确认磁盘上的字节，别靠编辑器"看起来正常"判断。**
 
+### 本机真实栈 —— 把网关也起起来，`integration` 才会全绿
+
+CI 的 real-stack job 会拉一个真网关；**本机也能这么干**（2026-10-08 实测跑通 11/11）。此前
+`tests/test_unified_db.py` 的两条只能靠 CI，就是因为本机没起网关（引擎侧统一客户端会经
+`/v1/internal/*` 反向走网关）。
+
+```bash
+# 1) 库需已 alembic upgrade head；起本地 Redis
+redis-server --port 6390 --appendonly no --save ""
+
+# 2) 起网关（它读 REDIS_ADDR，不是 REDIS_URL；密钥用仓库根的 .env）
+REDIS_ADDR=127.0.0.1:6390 go run ./cmd/chiron     # 监听 8080
+curl -sS localhost:8080/health && curl -sS localhost:8080/ready   # 都应 200
+
+# 3) 再跑集成（引擎侧统一客户端会走网关的 /v1/internal/*）
+POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
+  python -m pytest -q -m integration
+```
+
+> 起不来的常见原因：库的 schema 与代码 head 不一致（网关默认拒绝启动，`ALLOW_SCHEMA_DRIFT=true`
+> 可临时放行）、`APP_SECRET` 短于 32 字符、Redis 地址写成 `REDIS_URL`（网关不认这个变量）。
+
 ## 提交前自查清单
 
 - [ ] 上面五个 job 对应的命令在本地全绿；
