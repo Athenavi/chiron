@@ -177,6 +177,13 @@ jobs:
       # （read_tool_result / list_subagent_runs / rerun_subagent）。见路线图 L3-9。
       - name: Tool policy parity (Go ↔ Python)
         run: python scripts/check_tool_policy_parity.py
+      # scripts/ 此前**没有任何 lint 门禁**（本 job 只跑上面两个守卫），于是攒下 8 处历史问题
+      # （未用变量/未用导入/裸 except…），现已清零并纳入门禁。规则集与引擎一致（配置见仓库根
+      # ruff.toml；python-engine 有自己的 pyproject.toml，就近优先，互不影响）。
+      - name: Ruff (repo-root scripts)
+        run: |
+          pip install --quiet 'ruff>=0.11.0'
+          ruff check scripts/
 
   # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
   # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧

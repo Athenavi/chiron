@@ -296,14 +296,23 @@ class MCPClient:
             from app.tools.sandbox import sandboxed_env
             env = {**sandboxed_env(), **server.env}
 
-        proc = await asyncio.create_subprocess_exec(
-            server.command,
-            *server.args,
-            stdin=asyncio.subprocess.PIPE,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            env=env,
-        )
+        from app.plugins.audit import record_plugin
+
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                server.command,
+                *server.args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=env,
+            )
+        except OSError as exc:
+            # 拉起插件进程失败同样要留痕（谁、哪个插件、哪个命令、为什么失败）
+            record_plugin(plugin=server.name, action="spawn", success=False, error=str(exc))
+            raise
+        # 成功拉起：这是"某租户在某会话里让宿主机起了一个插件进程"的事实记录
+        record_plugin(plugin=server.name, action="spawn", success=True)
         conn = ServerConnection(proc, server.name)
         self._conns[server.name] = conn
 

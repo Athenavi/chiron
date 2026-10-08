@@ -45,7 +45,7 @@ from app.backends.protocol import (
     ReadResult,
     WriteResult,
 )
-from app.tools.context import get_tenant_id
+from app.tools.context import get_session_id, get_tenant_id, get_user_id
 
 logger = logging.getLogger(__name__)
 
@@ -101,7 +101,15 @@ class RemoteExecBackend:
 
     async def _call_service(self, command: str, *, timeout: float | None = None) -> ExecuteResult:
         """调服务执行。**任何失败都不回退** —— 回退会让"隔离已生效"失真（见模块文档）。"""
-        payload = {"command": command}
+        payload = {
+            "command": command,
+            # 身份**必须**随请求带上：服务侧据此恢复工具上下文，`run_in_sandbox` 的审计
+            # 才答得出"谁在哪个租户/会话里执行的"。不带 ⇒ 流水里三个字段全空，
+            # 而这正是把执行挪出去之后最需要保留的信息（隔离不能以"看不见"为代价）。
+            "tenant_id": get_tenant_id() or "",
+            "user_id": get_user_id() or "",
+            "session_id": get_session_id() or "",
+        }
         # 服务侧的超时也由它自己兜（它有自己的 RLIMIT）；这里只是网络层上限
         wait = float(timeout) if timeout else self._timeout
         try:

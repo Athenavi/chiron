@@ -5,7 +5,7 @@
 
 ## 0. 当前状态
 
-**最近一次核验（2026-10-08）**：Go build/vet/test 通过；另以本机真实 Redis 跑通 `internal/broadcast` · `internal/api` · `internal/engine` 的 Live 用例（补发保序/排他、跨实例可见、缓冲上限、滑动 TTL、运行锁互斥/续期/释放-CAS、取消归属、**提交路径的会话忙拒绝（HTTP 级）**、归属路由与回退）· `ruff` 0 · `mypy app/ acp_adapter/` 0（242 文件）· `pytest -m "not integration"` **1855 passed** · `pytest -m integration`（真实 PG + Redis 8）**8 passed**（另 2 条依赖本机未启动的 Go 网关，CI 的 real-stack job 会拉）· `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
+**最近一次核验（2026-10-08）**：Go build/vet/test 通过；另以本机真实 Redis 跑通 `internal/broadcast` · `internal/api` · `internal/engine` 的 Live 用例（补发保序/排他、跨实例可见、缓冲上限、滑动 TTL、运行锁互斥/续期/释放-CAS、取消归属、**提交路径的会话忙拒绝（HTTP 级）**、**跨实例断线重连补发（HTTP 级：连 A、事件由 B 发）**、归属路由与回退）· `ruff` 0 · `mypy app/ acp_adapter/` 0（242 文件）· `pytest -m "not integration"` **1855 passed** · `pytest -m integration`（真实 PG + Redis 8）**8 passed**（另 2 条依赖本机未启动的 Go 网关，CI 的 real-stack job 会拉）· `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
 **前端（本机已核验）**：`npx vitest run` **477 passed**（56 文件）· `vue-tsc -b` 通过 · 本次改动文件 `eslint` 0 problems。**本机无 compose 插件、Docker daemon 未运行** ⇒ 容器相关改动（内置技能挂载）须在能跑 Docker 的环境复核。**CI 尚未实跑**（分支未 push，见 §3）。
 
 ## 1. 已完成（只留指针与仍生效的护栏）
@@ -19,7 +19,11 @@
 | L3-7 `WorkflowView` 组件测试 | `views/__tests__/WorkflowView.spec.ts` | 两个 VTU 坑记在测试注释里 |
 | L3-8 `SSEProducer` 死代码 | 已删除 | [架构与请求链路](architecture.md) §6 已同步 |
 | L3-9 工具名单漂移 | 两侧策略表已修 | **不变量**：`scripts/check_tool_policy_parity.py`（已接入 CI 的 `Source encoding` job）+ `tests/test_tool_policy_coverage.py` 的 `LEGACY_TOOL_NAMES` |
+| DSH 切口 #3（思考 / 用量） | [差距分析](dsh-gap-analysis.md) 切口 #3 | 思考走独立 `thinking`；`usage` 按**次**增量 + `done` 累计（网关按**事件类型**分流以防重复计费，前端 `mergeTurnStats` 合并成本轮一行）；**阶段已决定不做**（主对话无真实状态；子 agent 侧本就有 `subagent.status`） |
 | L4-2 CLI 迁移入口 | [决策记录](db-migration-entry.md) | **Alembic 唯一入口**：Go `db migrate`、Python `migrate run`/`downgrade` 均已删，只留**只读**诊断（`db status` / `migrate history`，失败非 0 退出）；`scripts/init.py` 第 6 步保留（跑的是同一份 `alembic.ini`，属部署向导） |
+| 沙箱/出站/命令守卫（A 层） | [差距分析](dsh-gap-analysis.md) 切口 #6 | 三处实证逃逸已修：① 白名单模块的**子模块**按**逐级前缀**判（`asyncio.subprocess` 曾可起进程）；② 出站 IP 按**语义归一**（`::ffff:169.254.169.254` 等 IPv4-mapped/6to4/Teredo 曾绕过 SSRF 名单）；③ 插件命令从"只比 basename"改为**裸 basename 或绝对路径**（`../`、UNC 曾可执行攻击者放置/远程的同名二进制，Go 与 Python 两侧同步）。护栏：`test_code_guard_submodule_escape.py` + `test_ssrf.py` + `plugin_command_allowlist_test.go` |
+| 执行审计覆盖面（`exec_audit` + `plugin_audit`） | [差距分析](dsh-gap-analysis.md) 切口 #4 | **每条执行路径都要进审计**：补了后台命令 `tool_job`（每个终态，含取消）与 git 工具；plugin audit 抽成可复用的 `app/plugins/audit.py`（`ts` 对齐 UTC+毫秒），运行时拉起插件进程的两处（`mcp/client.py`、`skill/manager.py`）已接入。**覆盖清单机械化**：`tests/test_exec_audit_inventory.py`（起进程位置未归类即失败）；护栏：`tests/test_job_exec_audit.py`、`tests/test_plugin_audit.py` |
+| `scripts/` lint 门禁 | 仓库根 `ruff.toml` + CI「Source encoding」job | 历史问题 **8 → 0**（未用变量/未用导入/裸 `except`/该有的 `noqa` 说明），规则集与引擎一致；护栏：CI 跑 `ruff check scripts/` |
 | L5-2 架构与请求链路 | `65b0558` | 文中命令均本机实测 |
 
 ## 2. 待办
@@ -38,15 +42,15 @@
 - 剩余步骤：① 生产先跑同一条诊断（或把两侧时区对齐）；② **抽样确认生产存量语义，不要套用本机结论**；③ 用**影子列回填 → 校验 → 切换**三步走，而不是一次性 `ALTER … USING`；④ ORM 渲染 `DateTime(timezone=True)`（模板现无条件渲染 `DateTime`）。
 - 前置：生产时区确认；需可达 PostgreSQL。验收：新迁移单 head + `alembic upgrade head --sql` 通过 + ORM 重新生成 + **迁移注释写清 `USING` 的时区依据**。
 
-### DSH 切口 #3 剩余的一半：阶段（Phase）事件
+### S5-(e) 执行沙箱服务 —— **服务应用已落地**，剩部署形态
 
-- 思考（A1 的 `thinking`）与用量（C3 的 `usage`，**每次 LLM 调用**一条增量）**两条通道已落地且前端已消费**：`usage` 经 `mergeTurnStats` **累加成本轮一行** `turn_stats`（多步 ReAct 每个工具步一条事件，逐条 push 会堆出 N 行）；跨层计费守卫见 `internal/api/usage_accounting.go`。见 [差距分析](dsh-gap-analysis.md) §1 与切口 #3。
-- 剩余**阶段**：需先定两件事 —— ① "新增事件类型"是否落入 `vendor/规划.md` §6「不改 SSE 协议」的边界；② 阶段的语义（当前运行时是 ReAct / Plan-and-Execute 循环，**对外没有阶段概念**，不应为了像对标物而造一个）。
+- 已落地：`sandbox-service/service.py`（`/v1/internal/exec/run` + health、令牌 fail-closed、**直接复用引擎的 `run_in_sandbox`** 基线与审计、身份随请求恢复）；引擎侧客户端 `app/backends/remote_exec.py` 已随请求带身份。测试 `python-engine/tests/test_sandbox_service.py`。
+- 剩余（**都在代码之外**）：**独立容器**部署（无 docker socket、仅内网、不与引擎共容器）· `SANDBOX_ROOT` **与引擎共享同一工作区卷**（否则命令产物与文件工具分叉）· 白名单租户**真的走服务**的服务侧断言 · 审计多副本收集 · 灰度/回滚手册。**真实部署验证不能靠单测替代**。
 
-### L3-4 巨型文件拆分 —— 批次 1、3 与批次 2(类型) 已完成
+### L3-4 巨型文件拆分 —— 批次 1、3、2(类型) 与 4(校验) 已完成
 
-- 已完成（每批都验证**逐函数/定义逐字一致**）：`gateway_router.go` → 11 个 `routes_*.go`（**1254→442**）· `mail_handler.go` → 4 个文件（**1488→695**）· `session/manager.go` → `manager_{crud,messages,queries,branch}.go`（**1198→128**）· `runtime.py` 类型与决策取值 → `runtime_types.py`（**3370→3198**）。
-- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界** —— 评估里的 1841/1557 行已过期）· `main.py` · 前端 composable。边界、批次与验收见 [拆分评估](split-assessment.md)；无功能收益，排最后（§4 批次 D）。
+- 已完成（每批都验证**逐函数/定义逐字一致**）：`gateway_router.go` → 11 个 `routes_*.go`（**1254→442**）· `mail_handler.go` → 4 个文件（**1488→695**）· `session/manager.go` → `manager_{crud,messages,queries,branch}.go`（**1198→128**）· `runtime.py` 类型与决策取值 → `runtime_types.py`（**3370→3198**）· `main.py` 的三个启动前置校验 → `app/deps.py`（**2170→2061**）。
+- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界**）· **`main.py` 的 `lifespan` 启动段分段化**（关闭段 ✅ 已抽成 `_shutdown_lifespan`：句柄显式传递、补了关闭路径的首批用例；`lifespan` 740 → 664 行。启动段之间仍有跨段局部变量，抽取前先做依赖分析）· 前端 composable。边界与验收见 [拆分评估](split-assessment.md)；无功能收益，排最后（§4 批次 D）。
 
 ## 3. 开放项（待确认，不作为计划依据）
 
@@ -58,9 +62,8 @@
 | 新功能方向 | 产品路线图输入 |
 | 前端 e2e（Playwright） | 当前无 e2e 配置，需确认是否引入浏览器依赖 |
 | `internal/{enterprise,monitor,storage,id,model}` 补测试 | 当前 0 测试文件但较小，需确认回归风险 |
-| `scripts/` 无 lint 门禁 | CI 只跑 `scripts/check_*.py` 两个守卫；`ruff check scripts/` 现有 **8** 处历史问题（含 `scripts/cli/__init__.py` 一处刻意的 E402）——需决定是否纳入门禁并清历史 |
 | `internal/api` 路由聚合方式 | 已评估（L3-4）：按业务域拆 `routes_*.go`，见 [拆分评估](split-assessment.md) |
-| **遗留的第二套 agent 循环 `app/agent/loop.py`** | 实测：它有自己的 `run_agent`（316 行，也自发 `usage`），经引擎路由 `/v1/agent/run` 暴露；而**产品链路是 `/v1/agent/submit` → `AgentRuntime`（`runtime.py`）**，且 Go 侧 `PythonClient.Run`（唯一会打 `/v1/agent/run` 的调用方）**零调用者** ⇒ 该文件＋该端点是**遗留**。待定：删除（含 `tests/test_agent.py` 的覆盖）还是显式标注 legacy；删前要确认没有外部调用方。
+| **遗留的第二套 agent 循环 `app/agent/loop.py`** | 实测：它有自己的 `run_agent`（316 行，也自发 `usage`），经引擎路由 `/v1/agent/run` 暴露；而**产品链路是 `/v1/agent/submit` → `AgentRuntime`（`runtime.py`）**，且 Go 侧 `PythonClient.Run`（唯一会打 `/v1/agent/run` 的调用方）**零调用者** ⇒ 该文件＋该端点是**遗留**。**已做**：① `loop.py` 标为遗留并写明"新能力一律加在 `runtime.py`"；② `/v1/agent/run` 加**一次性告警**，用来观测是否真有外部调用方（有证据再决定删，不靠猜）；③ 把该模块**独有覆盖**的安全性质用例搬到产品链路（`tests/test_runtime_tool_truncation.py`）—— 搬的过程中当场查出 **runtime 的截断 `tool_call` 在守卫之前就已下发**（前端多一张卡、网关把半截 JSON 落库），已修。**待做**：确认无调用方后，连同 `/v1/agent/run`、`PythonClient.Run`（Go 侧零调用者）与 `tests/test_agent.py` 一起删除。
 | 引擎镜像自包含内置技能 | 现由 compose 只读挂载 + `CHIRON_BUILTIN_SKILLS_PATH` 提供（源缺失会告警）；镜像自包含需把构建上下文改为仓库根并 `COPY market/skills` —— 必须**真实 `docker build` + 容器内自查**，不能用单测替代 |
 
 ## 4. 建议顺序
@@ -81,6 +84,7 @@
 go build -mod=mod ./... && go vet -mod=mod ./... && go test -mod=mod ./... -count=1
 python scripts/check_source_encoding.py
 python scripts/check_tool_policy_parity.py   # Go ↔ Python 分级表必须同构（L3-9）
+ruff check scripts/                           # 仓库根脚本（配置见 ruff.toml）
 python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # 真实栈用例（需可达 PostgreSQL / Redis；CI 由 real-stack job 跑）

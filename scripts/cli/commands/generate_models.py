@@ -16,7 +16,6 @@ import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
 
 import yaml
 from jinja2 import Environment, FileSystemLoader, TemplateNotFound
@@ -35,7 +34,7 @@ SHARED_MODELS_DIR = CONFIG_DIR / "models"
 class RouteGenerator:
     """路由代码生成器"""
 
-    def __init__(self, config_path: Optional[str] = None):
+    def __init__(self, config_path: str | None = None):
         """
         初始化生成器
 
@@ -48,7 +47,7 @@ class RouteGenerator:
         self.models_config_path = MODELS_YAML
         self.extra_models = {}
         if self.models_config_path.exists():
-            with open(self.models_config_path, 'r', encoding='utf-8') as f:
+            with open(self.models_config_path, encoding='utf-8') as f:
                 extra_config = yaml.safe_load(f)
                 self.extra_models = extra_config.get('models', {})
                 print(f"已加载模型配置：{len(self.extra_models)} 个模型")
@@ -140,7 +139,7 @@ class RouteGenerator:
                 import traceback
                 print(f"  [ERROR] 生成 {model_name} 失败：{e}")
                 print(f"    详细信息：{traceback.format_exc()}")
-                raise SystemExit(1)
+                raise SystemExit(1) from None
 
         # 为每个使用的子模块创建 __init__.py
         self._create_module_init_files(SHARED_MODELS_DIR, used_modules)
@@ -152,7 +151,7 @@ class RouteGenerator:
 
         print(f"  ✅ 共生成 {generated_count} 个模型文件")
 
-    def generate_single_model(self, model_names: List[str]):
+    def generate_single_model(self, model_names: list[str]):
         """
         仅生成指定的单个或多个 ORM 模型文件（不重新生成全部模型）
         Args:
@@ -212,7 +211,7 @@ class RouteGenerator:
 
         print(f"  ✅ 共生成 {generated_count} 个模型文件")
 
-    def _generate_model_file(self, model_name: str, model_def: Dict, output_path: Path, table_prefix: str):
+    def _generate_model_file(self, model_name: str, model_def: dict, output_path: Path, table_prefix: str):
         """生成单个模型的 SQLAlchemy 文件（提取的公共逻辑）"""
         # 从 properties 自动生成 SQLAlchemy 字段
         properties = model_def.get('properties', {})
@@ -277,7 +276,7 @@ class RouteGenerator:
         content = self._render_template('sqlalchemy_model.py.jinja2', template_data)
         self._write_file(output_path, content)
 
-    def _get_output_path(self, framework: str, config_key: str) -> Optional[Path]:
+    def _get_output_path(self, framework: str, config_key: str) -> Path | None:
         """获取输出文件路径（从 generation 配置读取）"""
         gen_config = self.generation_config.get(framework, {})
         if not gen_config:
@@ -292,7 +291,7 @@ class RouteGenerator:
 
         return None
 
-    def _filter_endpoints_by_module(self) -> Dict[str, List[Dict]]:
+    def _filter_endpoints_by_module(self) -> dict[str, list[dict]]:
         """按模块分组端点"""
         modules = {}
         for endpoint in self.endpoints:
@@ -300,7 +299,7 @@ class RouteGenerator:
             modules.setdefault(module_name, []).append(endpoint)
         return modules
 
-    def _collect_django_imports(self) -> List[str]:
+    def _collect_django_imports(self) -> list[str]:
         """收集 Django Ninja 需要的导入"""
         imports = {
             "from ninja import Router, Form, Query, Path",
@@ -315,7 +314,7 @@ class RouteGenerator:
                     imports.add(f"from ninja import {location.capitalize()}")
         return sorted(imports)
 
-    def _collect_fastapi_imports(self) -> List[str]:
+    def _collect_fastapi_imports(self) -> list[str]:
         """收集 FastAPI 需要的导入"""
         imports = {
             "from fastapi import APIRouter, Depends, Form, Query, Path",
@@ -334,37 +333,37 @@ class RouteGenerator:
     # ==================== 字段类型检查辅助方法 ====================
 
     @staticmethod
-    def _check_fields_any(properties: Dict, predicate) -> bool:
+    def _check_fields_any(properties: dict, predicate) -> bool:
         """通用检查：properties 中是否存在满足 predicate 的字段"""
         return any(predicate(field_def) for field_def in properties.values())
 
-    def _check_list_fields_from_properties(self, properties: Dict) -> bool:
+    def _check_list_fields_from_properties(self, properties: dict) -> bool:
         return self._check_fields_any(properties, lambda f: f.get('type') == 'array')
 
-    def _check_numeric_fields_from_properties(self, properties: Dict) -> bool:
+    def _check_numeric_fields_from_properties(self, properties: dict) -> bool:
         return self._check_fields_any(properties, lambda f: f.get('type') in ('number', 'integer'))
 
-    def _check_decimal_fields_from_properties(self, properties: Dict) -> bool:
+    def _check_decimal_fields_from_properties(self, properties: dict) -> bool:
         return self._check_fields_any(properties, lambda f: f.get('type') in ('number', 'float', 'decimal'))
 
-    def _check_text_fields_from_properties(self, properties: Dict) -> bool:
+    def _check_text_fields_from_properties(self, properties: dict) -> bool:
         return self._check_fields_any(properties, lambda f: f.get('type') == 'string' and f.get('maxLength', 0) > 500)
 
-    def _check_timestamp_fields_from_properties(self, properties: Dict) -> bool:
+    def _check_timestamp_fields_from_properties(self, properties: dict) -> bool:
         return self._check_fields_any(properties, lambda f: f.get('format') == 'date-time')
 
-    def _check_foreign_keys_in_fields(self, fields: Dict) -> bool:
+    def _check_foreign_keys_in_fields(self, fields: dict) -> bool:
         return any(field.get('foreign_key') for field in fields.values())
 
-    def _check_relationships(self, model_def: Dict) -> bool:
+    def _check_relationships(self, model_def: dict) -> bool:
         return bool(model_def.get('relationships', {}))
 
     # ==================== ORM 字段转换 ====================
 
-    def _convert_properties_to_fields(self, properties: Dict, model_name: str = None,
-                                      all_models: Dict = None, table_prefix: str = '') -> Dict:
+    def _convert_properties_to_fields(self, properties: dict, model_name: str = None,
+                                      all_models: dict = None, table_prefix: str = '') -> dict:
         """从 API properties 转换为 SQLAlchemy fields，支持完整配置"""
-        RESERVED_NAMES = {
+        reserved_names = {
             'metadata', 'registry', 'declarative_base', 'Base',
             'query', 'session', 'mapper', 'column_property',
             'composite', 'synonym', 'relationship', 'backref',
@@ -382,7 +381,7 @@ class RouteGenerator:
             # 处理保留字
             python_field_name = prop_name
             db_column_name = None
-            if prop_name.lower() in RESERVED_NAMES:
+            if prop_name.lower() in reserved_names:
                 python_field_name = f"extra_{prop_name}"
                 db_column_name = prop_name
 
@@ -508,7 +507,7 @@ class RouteGenerator:
 
     # ==================== 关联表扫描 ====================
 
-    def _scan_association_tables(self) -> Dict[str, list]:
+    def _scan_association_tables(self) -> dict[str, list]:
         """
         自动扫描 shared/models 目录下的关联表（Table 对象）
         Returns:
@@ -580,7 +579,7 @@ __all__ = [{all_section}]
             self._write_file(init_file, init_content)
             print(f"  [OK] Module __init__.py: {init_file} ({len(exports)} 个模型)")
 
-    def _update_shared_models_init_from_orm(self, orm_models_config: Dict):
+    def _update_shared_models_init_from_orm(self, orm_models_config: dict):
         """更新 shared/models/__init__.py 文件（懒加载版本）"""
         init_path = SHARED_MODELS_DIR / "__init__.py"
 
@@ -631,8 +630,6 @@ __all__ = [{all_section}]
                 lazy_entries.append((match.group(2), f'.{match.group(1)}'))
                 all_exports.append(match.group(2))
 
-        # 格式化懒加载映射表
-        max_name_len = max(len(name) for name, _ in lazy_entries) if lazy_entries else 20
         lazy_lines = [f"    '{name}': '{path}'," for name, path in sorted(lazy_entries, key=lambda x: x[0])]
         lazy_section = "\n".join(lazy_lines)
 
@@ -683,7 +680,7 @@ __all__ = [
         self._write_file(init_path, new_content)
         print(f"  [OK] 更新 shared/models/__init__.py（懒加载模式，{len(lazy_entries)} 个模型）")
 
-    def _render_template(self, template_name: str, context: Dict) -> str:
+    def _render_template(self, template_name: str, context: dict) -> str:
         """渲染 Jinja2 模板"""
         try:
             template = self.jinja_env.get_template(template_name)

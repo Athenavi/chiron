@@ -9,11 +9,11 @@ from datetime import datetime
 def map_ts_type(python_type: str, param_name: str = '') -> str:
     """
     将 Python 类型映射为 TypeScript 类型
-    
+
     Args:
         python_type: Python 类型名称
         param_name: 参数名称 (用于调试)
-    
+
     Returns:
         TypeScript 类型字符串
     """
@@ -51,10 +51,10 @@ def map_ts_type(python_type: str, param_name: str = '') -> str:
 def map_ninja_type(python_type: str) -> str:
     """
     将 Python 类型映射为 Python 类型注解 (用于 Django Ninja)
-    
+
     Args:
         python_type: Python 类型名称 (如 'int', 'str', 'float')
-    
+
     Returns:
         Python 类型注解字符串
     """
@@ -82,10 +82,10 @@ def map_ninja_type(python_type: str) -> str:
 def capitalize_first(s: str) -> str:
     """
     首字母大写
-    
+
     Args:
         s: 输入字符串
-    
+
     Returns:
         首字母大写的字符串
     """
@@ -97,11 +97,11 @@ def capitalize_first(s: str) -> str:
 def indent(text: str, width: int = 4) -> str:
     """
     为文本添加缩进
-    
+
     Args:
         text: 输入文本
         width: 缩进空格数
-    
+
     Returns:
         添加缩进后的文本
     """
@@ -120,10 +120,10 @@ def camel_to_underscore(name: str) -> str:
     例如：SystemSettings -> system_settings
          User -> users
          VIPPlan -> vip_plans
-    
+
     Args:
         name: 驼峰命名的类名
-    
+
     Returns:
         下划线命名的表名（复数形式）
     """
@@ -143,11 +143,11 @@ def get_table_name(model_name: str, all_models: dict) -> str:
     """
     根据模型名称获取实际的表名（包含前缀）
     优先使用模型定义中的 table 配置，如果没有则使用 camel_to_underscore 推断
-    
+
     Args:
         model_name: 模型名称（如 Media, MediaCategory）
         all_models: 所有模型的配置字典
-    
+
     Returns:
         实际的表名（带前缀）
     """
@@ -155,9 +155,9 @@ def get_table_name(model_name: str, all_models: dict) -> str:
     try:
         from src.setting import settings
         table_prefix = getattr(settings, 'db_table_prefix', '')
-    except:
+    except Exception:  # noqa: BLE001 - 读不到配置就用空前缀
         table_prefix = ''
-    
+
     # 查找模型配置
     model_def = all_models.get(model_name, {})
     if model_def and 'table' in model_def:
@@ -165,7 +165,7 @@ def get_table_name(model_name: str, all_models: dict) -> str:
     else:
         # 如果没有配置，使用默认规则推断
         base_table_name = camel_to_underscore(model_name)
-    
+
     # 添加表前缀
     return f"{table_prefix}{base_table_name}"
 
@@ -178,7 +178,7 @@ def now() -> str:
 def register_filters(env):
     """
     注册自定义过滤器到 Jinja2 环境
-    
+
     Args:
         env: Jinja2 Environment 实例
     """

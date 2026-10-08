@@ -3,12 +3,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import redis.asyncio as aioredis
@@ -17,6 +15,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
+from app.deps import verify_media_store, verify_sandbox_root
 from app.session_store import SessionStore
 
 if TYPE_CHECKING:
@@ -83,144 +82,20 @@ def touch_user(user_id: str) -> None:
         _plugin_pool._tracker.touch(user_id)  # noqa: SLF001 — 池内专用入口
 
 
-def verify_sandbox_root() -> None:
-    """校验 agent 沙箱根（SANDBOX_ROOT）是否满足部署要求 —— 多副本安全的关键前置。
-
-    背景：所有 agent 文件/命令/git 工具都被强制在
-    ``SANDBOX_ROOT/{tenant}/{user}/workspace`` 内执行。该变量的缺省值是
-    **进程本地路径**（cwd 上两级），单机开发可用；但多副本部署下，同一用户的任务
-    落到不同副本时会各自维护一份 workspace —— 文件/命令工具表现为"间歇性失忆"。
-
-    规则：
-    - ``CHIRON_ENV=production|prod`` 时必须显式设置 ``SANDBOX_ROOT``；
-      未设置则打印**具体原因与修复指引**后拒绝启动（``CHIRON_ALLOW_LOCAL_SANDBOX=true`` 仅限单机开发放行）。
-    - 非生产环境允许缺省，但打印 WARN 说明多副本要求。
-    - 已显式配置、但解析结果落在当前工作目录内时给出 WARN（疑似仍是容器本地盘）。
-    """
-    from app.tools.sandbox import SANDBOX_ROOT_ENV, sandbox_root
-
-    env_name = (os.getenv("CHIRON_ENV") or "").strip().lower()
-    is_prod = env_name in ("production", "prod")
-    allow_local = (os.getenv("CHIRON_ALLOW_LOCAL_SANDBOX") or "").strip().lower() in (
-        "1",
-        "true",
-        "yes",
-        "on",
-    )
-    raw = (os.getenv(SANDBOX_ROOT_ENV) or "").strip()
-    resolved = sandbox_root()
-
-    if raw:
-        logger.info("%s=%s (resolved: %s)", SANDBOX_ROOT_ENV, raw, resolved)
-        if not allow_local and _is_inside_cwd(resolved):
-            logger.warning(
-                "%s resolves inside the process working directory (%s). Multi-replica "
-                "deployments need a shared volume (NFS/PVC) — otherwise every replica "
-                "keeps its own copy of user workspaces.",
-                resolved,
-                Path.cwd(),
-            )
-    else:
-        logger.warning(
-            "%s is not set — agent file/shell/git tools will use the process-local default "
-            "(%s). Multi-replica deployments MUST set %s to a shared volume, otherwise "
-            "a user's files written on one replica are invisible on another.",
-            SANDBOX_ROOT_ENV,
-            resolved,
-            SANDBOX_ROOT_ENV,
-        )
-
-    if is_prod and not raw and not allow_local:
-        logger.error(
-            "Refusing to start: CHIRON_ENV=%s (production) but %s is not set "
-            "(agent sandbox would fall back to the process-local path %s). "
-            "Reason: %s/{tenant}/{user}/workspace is where all agent file, shell and git "
-            "tools operate; with a per-replica path, a task handled by a different replica "
-            "cannot see files written by another (intermittent 'amnesia' in file workflows). "
-            "Fix: point %s at a shared volume, e.g. %s=/shared/chiron-sandbox; "
-            "for single-node development only, bypass with CHIRON_ALLOW_LOCAL_SANDBOX=true.",
-            env_name,
-            SANDBOX_ROOT_ENV,
-            resolved,
-            SANDBOX_ROOT_ENV,
-            SANDBOX_ROOT_ENV,
-            SANDBOX_ROOT_ENV,
-        )
-        raise RuntimeError(
-            f"{SANDBOX_ROOT_ENV} must point to a shared volume when CHIRON_ENV={env_name} "
-            "(set CHIRON_ALLOW_LOCAL_SANDBOX=true for single-node development)"
-        )
-
-
-def verify_media_store() -> None:
-    """校验媒体存储后端配置 —— 多副本下媒体文件必须对每个副本可见。
-
-    - ``MEDIA_STORE_BACKEND=s3``：必须提供 ``S3_BUCKET`` 与 ``S3_ENDPOINT_URL``，
-      缺失即拒绝启动（缺失会让写入回退到进程本地路径，多副本下生成物只在单副本可见）。
-    - ``local``（默认）：打印 WARN 与落盘路径，提示多副本需切 s3。
-    """
-    backend = (os.getenv("MEDIA_STORE_BACKEND") or "local").strip().lower()
-
-    if backend == "s3":
-        missing = [
-            key for key in ("S3_BUCKET", "S3_ENDPOINT_URL") if not (os.getenv(key) or "").strip()
-        ]
-        if missing:
-            logger.error(
-                "Refusing to start: MEDIA_STORE_BACKEND=s3 but %s missing. "
-                "Reason: media writes would fall back to a process-local path, so files "
-                "produced on one replica return 404 when served from another. "
-                "Fix: set %s (plus S3_ACCESS_KEY/S3_SECRET_KEY when the bucket requires them).",
-                ", ".join(missing),
-                ", ".join(missing),
-            )
-            raise RuntimeError(
-                "MEDIA_STORE_BACKEND=s3 requires S3_BUCKET and S3_ENDPOINT_URL"
-            )
-        logger.info(
-            "Media store backend: s3 (bucket=%s, prefix=%s)",
-            os.getenv("S3_BUCKET"),
-            os.getenv("S3_PREFIX", "media/"),
-        )
-        return
-
-    logger.warning(
-        "Media store backend: local (path=%s). Multi-replica deployments should set "
-        "MEDIA_STORE_BACKEND=s3 with S3_* so generated media is visible to every replica.",
-        os.getenv("MEDIA_STORE_PATH", os.path.join(".", "data", "media")),
-    )
-
-
-def _is_inside_cwd(path: Path) -> bool:
-    """判断路径是否位于当前工作目录内（用于识别"仍是容器本地盘"的配置）。"""
-    try:
-        return path.resolve().is_relative_to(Path.cwd().resolve())
-    except Exception:  # noqa: BLE001 - 诊断用途，失败即视为无告警
-        return False
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """应用生命周期：启动初始化 + 关闭清理"""
     global _redis, _gateway, _queue_worker
+    # 关闭段要用的句柄：**显式初始化**（此前它们只在条件分支里赋值，关闭段靠 `'x' in locals()`
+    # 探测——那种写法会让"把启动段抽成函数"的纯移动重构静默跳过清理，见拆分评估 §2.3）
+    _metrics_task: Any = None
+    _retention_task: Any = None
+    _engine_registry: Any = None
 
     # ── 0. 全局异常处理 ──
-    import sys
-    import traceback
-
-    def global_exception_handler(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
-        if issubclass(exc_type, KeyboardInterrupt):
-            return
-        logger.critical(
-            "Unhandled exception",
-            exc_info=(exc_type, exc_value, exc_tb),
-            extra={
-                "traceback": "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-            },
-        )
-
-    sys.excepthook = global_exception_handler
-
+    await _install_global_exception_handler()
     # ── 1. 可观测性 ──
     from app.observability.logging import configure_logging
     from app.observability.metrics import ENGINE_INFO
@@ -354,63 +229,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             logger.info("deployment backend routes mounted: %s", sorted(routes))
 
     # ── 2. Redis 连接池 ──
-    # 依赖门禁：Redis 是生产必需依赖。未显式开启 DEGRADED_MODE 时，
-    # 未配置与连接失败都直接拒绝启动(fail fast)——进程内降级会让多副本看到不同的
-    # 会话/限流/队列/事件，问题会在运行期以不一致形式暴露而不是启动时暴露。
-    # 仅单机开发允许显式 DEGRADED_MODE=true 走进程内降级。
-    if not settings.redis_url:
-        if not settings.degraded_mode:
-            logger.error(
-                "REDIS_URL not configured — refusing to start "
-                "(set REDIS_URL, or DEGRADED_MODE=true for single-instance development)"
-            )
-            raise RuntimeError("REDIS_URL is required unless DEGRADED_MODE=true")
-        logger.warning(
-            "Redis URL not configured — degraded mode (session cache in-process, distributed features disabled)"
-        )
-        _redis = None
-    else:
-        _redis = aioredis.from_url(
-            settings.redis_url,
-            decode_responses=False,
-            max_connections=settings.redis_max_connections,
-        )
-        try:
-            await _redis.ping()
-            logger.info(
-                "Redis connected: %s (pool=%d)",
-                settings.redis_url,
-                settings.redis_max_connections,
-            )
-            # 将 SessionStore 接入 Redis，实现多实例共享
-            _session_cache._redis = _redis
-            logger.info("SessionStore switched to Redis backend")
-        except Exception as e:
-            if not settings.degraded_mode:
-                logger.error(
-                    "Redis unavailable — refusing to start (%s); "
-                    "set DEGRADED_MODE=true only for single-instance development",
-                    e,
-                )
-                raise RuntimeError("Redis is required but unavailable") from e
-            # 显式降级模式：SessionStore 回退进程内内存模式，依赖 Redis 的功能
-            #（分布式限流/会话多实例共享/队列）返回 503（就绪探针见 /readyz）。
-            logger.warning(
-                "Redis unavailable — degraded mode (session cache in-process, distributed features disabled): %s",
-                e,
-            )
-            _redis = None
+    await _start_redis()
     # ── 2.5. PostgreSQL ──
-    if settings.postgres_dsn:
-        from app.db import ensure_tables, init_pool
-
-        try:
-            await init_pool(settings.postgres_dsn)
-            await ensure_tables()
-            logger.info("PostgreSQL connected and tables ensured")
-        except Exception as e:
-            logger.warning("PostgreSQL not available: %s", e)
-
+    await _start_postgres()
     # ── 3. LLM Gateway ──
     from app.gateway.budget import TokenBudget
     from app.gateway.cache import SemanticCache
@@ -675,10 +496,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Memory service not available: %s", e)
 
     # ── 3.6. 六大工作台能力注册（互通基础：TaskRouter 依赖能力注册中心） ──
-    from app.core.capabilities import preload_default_capabilities
-
-    await preload_default_capabilities()
-
+    await _register_workbench_capabilities()
     # ── 4. 限流器（middleware 需要） ──
     # Redis 可用：分布式租户限流；Redis 不可用：本地限流兑底（避免裸奔/None 崩溃）。
     from app.gateway.ratelimit import LocalTenantRateLimiter
@@ -708,40 +526,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.limiter = limiter
 
     # ── 5. MCP Plugin System（用户级连接池：25s 轮询活跃用户配置） ──
-    # mcp_pool_enabled=False 时本实例不建立 MCP 连接（多实例部署按节点启用，
-    # 避免 N 实例 × 活跃用户 × server 的连接放大；默认开 = 保持单机现状）。
-    global _plugin_pool
-    if settings.mcp_pool_enabled:
-        from app.plugins.pool import MCPClientPool
-        from app.plugins.store import ActiveTracker, PluginStore
-
-        # redis 用于 MCP owner 租约（B1a，默认关闭；见 MCP_OWNER_LEASE_ENABLED）
-        _plugin_pool = MCPClientPool(
-            store=PluginStore(), tracker=ActiveTracker(), redis=_redis
-        )
-        await _plugin_pool.start()
-        logger.info("MCP plugin pool started (poll=%ds)", 25)
-    else:
-        _plugin_pool = None
-        logger.info("MCP plugin pool disabled on this instance (mcp_pool_enabled=false)")
-
+    await _start_mcp_pool()
     # ── 6. 子 Agent 运行期治理：必须独立于 Redis 可用性启动 ──
-    #
-    # 看门狗（空闲/超时自动中止）治理的是**进程内注册表**，不需要 Redis；
-    # 此前它挂在 _run_queue_worker 里，于是 Redis 不可用时连"本进程的子 Agent 卡住了"
-    # 都没人管 —— 而卡住恰恰是 Redis 抖动时最容易发生的事。
-    # 取消订阅需要 Redis（跨实例广播），单独在可用时启动。
-    from app.subagent import registry as _subagent_registry
-
-    _subagent_registry.start_watchdog()
-    if _redis is not None:
-        _subagent_registry.start_cancel_subscriber()
-    else:
-        logger.warning(
-            "subagent cancel subscriber NOT started (no Redis): 跨实例取消不可用，"
-            "本实例的子 Agent 只能靠看门狗按空闲/超时收口"
-        )
-
+    await _start_subagent_governance()
     # ── 7. 启动 Queue Worker ──
     if _redis is not None:
         _queue_worker = asyncio.create_task(_run_queue_worker(_redis, _gateway))
@@ -852,13 +639,173 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield  # ── 应用运行中 ──
 
     # ── 关闭 ──
+    # 句柄显式传递（不用 `'x' in locals()` 探测）：见 docs/split-assessment.md §2.3
+    await _shutdown_lifespan(
+        reconciler_task=_reconciler_task,
+        metrics_task=_metrics_task,
+        retention_task=_retention_task,
+        engine_registry=_engine_registry,
+    )
+
+
+async def _install_global_exception_handler() -> None:
+    """安装全局异常处理器（从 `lifespan` 抽出；必须在最早期）。"""
+
+    import sys
+    import traceback
+
+    def global_exception_handler(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+        logger.critical(
+            "Unhandled exception",
+            exc_info=(exc_type, exc_value, exc_tb),
+            extra={
+                "traceback": "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            },
+        )
+
+    sys.excepthook = global_exception_handler
+
+
+async def _start_redis() -> None:
+    """建立 Redis 连接池并探活（从 `lifespan` 抽出）。"""
+    global _redis  # 段内给模块全局赋值，必须自己声明
+
+    # 依赖门禁：Redis 是生产必需依赖。未显式开启 DEGRADED_MODE 时，
+    # 未配置与连接失败都直接拒绝启动(fail fast)——进程内降级会让多副本看到不同的
+    # 会话/限流/队列/事件，问题会在运行期以不一致形式暴露而不是启动时暴露。
+    # 仅单机开发允许显式 DEGRADED_MODE=true 走进程内降级。
+    if not settings.redis_url:
+        if not settings.degraded_mode:
+            logger.error(
+                "REDIS_URL not configured — refusing to start "
+                "(set REDIS_URL, or DEGRADED_MODE=true for single-instance development)"
+            )
+            raise RuntimeError("REDIS_URL is required unless DEGRADED_MODE=true")
+        logger.warning(
+            "Redis URL not configured — degraded mode (session cache in-process, distributed features disabled)"
+        )
+        _redis = None
+    else:
+        _redis = aioredis.from_url(
+            settings.redis_url,
+            decode_responses=False,
+            max_connections=settings.redis_max_connections,
+        )
+        try:
+            await _redis.ping()
+            logger.info(
+                "Redis connected: %s (pool=%d)",
+                settings.redis_url,
+                settings.redis_max_connections,
+            )
+            # 将 SessionStore 接入 Redis，实现多实例共享
+            _session_cache._redis = _redis
+            logger.info("SessionStore switched to Redis backend")
+        except Exception as e:
+            if not settings.degraded_mode:
+                logger.error(
+                    "Redis unavailable — refusing to start (%s); "
+                    "set DEGRADED_MODE=true only for single-instance development",
+                    e,
+                )
+                raise RuntimeError("Redis is required but unavailable") from e
+            # 显式降级模式：SessionStore 回退进程内内存模式，依赖 Redis 的功能
+            #（分布式限流/会话多实例共享/队列）返回 503（就绪探针见 /readyz）。
+            logger.warning(
+                "Redis unavailable — degraded mode (session cache in-process, distributed features disabled): %s",
+                e,
+            )
+            _redis = None
+
+async def _start_postgres() -> None:
+    """初始化 PostgreSQL 连接池（从 `lifespan` 抽出）。"""
+
+    if settings.postgres_dsn:
+        from app.db import ensure_tables, init_pool
+
+        try:
+            await init_pool(settings.postgres_dsn)
+            await ensure_tables()
+            logger.info("PostgreSQL connected and tables ensured")
+        except Exception as e:
+            logger.warning("PostgreSQL not available: %s", e)
+
+
+async def _register_workbench_capabilities() -> None:
+    """注册六大工作台能力（从 `lifespan` 抽出）。"""
+
+    from app.core.capabilities import preload_default_capabilities
+
+    await preload_default_capabilities()
+
+
+async def _start_mcp_pool() -> None:
+    """按开关建立 MCP 插件池（从 `lifespan` 抽出）。"""
+    global _plugin_pool  # 段内给模块全局赋值，必须自己声明
+
+    # mcp_pool_enabled=False 时本实例不建立 MCP 连接（多实例部署按节点启用，
+    # 避免 N 实例 × 活跃用户 × server 的连接放大；默认开 = 保持单机现状）。
+    if settings.mcp_pool_enabled:
+        from app.plugins.pool import MCPClientPool
+        from app.plugins.store import ActiveTracker, PluginStore
+
+        # redis 用于 MCP owner 租约（B1a，默认关闭；见 MCP_OWNER_LEASE_ENABLED）
+        _plugin_pool = MCPClientPool(
+            store=PluginStore(), tracker=ActiveTracker(), redis=_redis
+        )
+        await _plugin_pool.start()
+        logger.info("MCP plugin pool started (poll=%ds)", 25)
+    else:
+        _plugin_pool = None
+        logger.info("MCP plugin pool disabled on this instance (mcp_pool_enabled=false)")
+
+
+async def _start_subagent_governance() -> None:
+    """启动子 Agent 运行期治理（从 `lifespan` 抽出；**不依赖 Redis 可用性**）。"""
+
+    #
+    # 看门狗（空闲/超时自动中止）治理的是**进程内注册表**，不需要 Redis；
+    # 此前它挂在 _run_queue_worker 里，于是 Redis 不可用时连"本进程的子 Agent 卡住了"
+    # 都没人管 —— 而卡住恰恰是 Redis 抖动时最容易发生的事。
+    # 取消订阅需要 Redis（跨实例广播），单独在可用时启动。
+    from app.subagent import registry as _subagent_registry
+
+    _subagent_registry.start_watchdog()
+    if _redis is not None:
+        _subagent_registry.start_cancel_subscriber()
+    else:
+        logger.warning(
+            "subagent cancel subscriber NOT started (no Redis): 跨实例取消不可用，"
+            "本实例的子 Agent 只能靠看门狗按空闲/超时收口"
+        )
+
+
+
+async def _shutdown_lifespan(
+    *,
+    reconciler_task: Any = None,
+    metrics_task: Any = None,
+    retention_task: Any = None,
+    engine_registry: Any = None,
+) -> None:
+    """关闭清理（从 `lifespan` 提出，句柄**显式传入**）。
+
+    ⚠ 这里刻意**不用** `'x' in locals()` 探测"启动时到底建没建"：那种写法一旦把启动段抽成
+    函数就会**静默跳过**清理（任务不取消、实例不注销，还不报错）。判据与实测见
+    docs/split-assessment.md §2.3。
+    """
+    global _plugin_pool  # 关闭后置空，避免关闭完成后仍被读成"可用"
+
+    # ── 关闭 ──
     logger.info("Shutting down...")
 
     # C1 批 3：停 reconciler（它是周期任务，取消即可 —— 没有"进行中的批"需要排空）
-    if _reconciler_task is not None:
-        _reconciler_task.cancel()
+    if reconciler_task is not None:
+        reconciler_task.cancel()
         try:
-            await _reconciler_task
+            await reconciler_task
         except asyncio.CancelledError:
             pass
         except Exception as e:  # noqa: BLE001
@@ -891,18 +838,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             pass
 
     # 停止进程指标收集器
-    if '_metrics_task' in locals():
-        _metrics_task.cancel()
+    if metrics_task is not None:
+        metrics_task.cancel()
         try:
-            await _metrics_task
+            await metrics_task
         except asyncio.CancelledError:
             pass
 
     # 停止保留策略清理（A7/C1）
-    if '_retention_task' in locals():
-        _retention_task.cancel()
+    if retention_task is not None:
+        retention_task.cancel()
         try:
-            await _retention_task
+            await retention_task
         except asyncio.CancelledError:
             pass
 
@@ -917,8 +864,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     await close_pool()
 
     # 停止实例注册心跳（批 E1；优雅退出时主动注销）
-    if "_engine_registry" in locals() and _engine_registry:
-        await _engine_registry.stop()
+    if engine_registry is not None:
+        await engine_registry.stop()
 
     # 关闭 MCP 插件池
     if _plugin_pool:

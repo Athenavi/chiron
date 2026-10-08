@@ -124,7 +124,10 @@ async def test_whitelisted_tenant_routes_to_service():
 
     assert [c["url"] for c in _FakeClient.calls] == ["http://sandbox:9000/v1/internal/exec/run"]
     assert _FakeClient.calls[0]["headers"]["X-Internal-Token"] == "tk"
-    assert _FakeClient.calls[0]["json"] == {"command": "ls -la"}
+    sent = _FakeClient.calls[0]["json"]
+    assert sent["command"] == "ls -la"
+    # 身份必须随请求带上：服务侧靠它把审计归到租户/用户/会话（不带就是空身份流水）
+    assert {"tenant_id", "user_id", "session_id"} <= set(sent)
     assert result.output == "service-ran\n"
     assert result.exit_code == 0
     # 关键：**没有**在本地执行

@@ -41,6 +41,9 @@ OUTCOME_OK = "ok"
 OUTCOME_BLOCKED = "blocked"
 OUTCOME_TIMEOUT = "timeout"
 OUTCOME_ERROR = "error"
+#: 被显式取消（后台任务被 kill / 调用方 task.cancel）——与"失败"区分：
+#: 取消是**有人主动终止**，出错排查时两者的处置完全不同。
+OUTCOME_CANCELLED = "cancelled"
 
 
 def _audit_dir() -> Path:

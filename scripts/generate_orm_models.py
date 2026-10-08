@@ -5,10 +5,8 @@
 """
 
 import sys
-import os
-from pathlib import Path
 from datetime import datetime
-from typing import Dict, List, Optional, Any
+from pathlib import Path
 
 import yaml
 from jinja2 import Environment, FileSystemLoader
@@ -46,7 +44,7 @@ def model_name_to_filename(name: str) -> str:
 SQLALCHEMY_RESERVED_NAMES = {'metadata', 'query', 'session'}
 
 
-def convert_properties_to_fields(properties: Dict, model_name: str, all_models: Dict) -> Dict:
+def convert_properties_to_fields(properties: dict, model_name: str, all_models: dict) -> dict:
     """将 properties 转换为字段定义"""
     fields = {}
     for field_name, prop in properties.items():
@@ -97,31 +95,31 @@ def convert_properties_to_fields(properties: Dict, model_name: str, all_models: 
     return fields
 
 
-def check_decimal_fields(fields: Dict) -> bool:
+def check_decimal_fields(fields: dict) -> bool:
     return any(f.get('type') == 'decimal' for f in fields.values())
 
 
-def check_text_fields(fields: Dict) -> bool:
+def check_text_fields(fields: dict) -> bool:
     return any(f.get('type') == 'text' for f in fields.values())
 
 
-def check_timestamp_fields(fields: Dict) -> bool:
+def check_timestamp_fields(fields: dict) -> bool:
     return any(f.get('type') in ('datetime', 'timestamp') for f in fields.values())
 
 
-def check_json_fields(fields: Dict) -> bool:
+def check_json_fields(fields: dict) -> bool:
     return any(f.get('type') == 'object' for f in fields.values())
 
 
-def check_jsonb_fields(fields: Dict) -> bool:
+def check_jsonb_fields(fields: dict) -> bool:
     return any(f.get('db_type') == 'jsonb' for f in fields.values())
 
 
-def check_foreign_keys_in_fields(fields: Dict) -> bool:
+def check_foreign_keys_in_fields(fields: dict) -> bool:
     return any(f.get('foreign_key', False) for f in fields.values())
 
 
-def check_relationships(model_def: Dict) -> bool:
+def check_relationships(model_def: dict) -> bool:
     return bool(model_def.get('relationships'))
 
 
@@ -136,7 +134,7 @@ def generate_all():
         print(f"❌ models.yaml 不存在: {MODELS_YAML}")
         return
 
-    with open(MODELS_YAML, 'r', encoding='utf-8') as f:
+    with open(MODELS_YAML, encoding='utf-8') as f:
         data = yaml.safe_load(f)
 
     orm_models = {name: defn for name, defn in data.get('models', {}).items() if defn.get('orm') is True}
@@ -239,15 +237,10 @@ def generate_all():
     print(f"{'=' * 60}")
 
 
-def update_init(lazy_imports: Dict[str, str]):
+def update_init(lazy_imports: dict[str, str]):
     """更新 __init__.py 的 _LAZY_IMPORTS"""
     init_path = OUTPUT_DIR / '__init__.py'
 
-    # 读取现有内容
-    content = ''
-    if init_path.exists():
-        with open(init_path, 'r', encoding='utf-8') as f:
-            content = f.read()
 
     # 构建新的 _LAZY_IMPORTS 部分
     imports_lines = []

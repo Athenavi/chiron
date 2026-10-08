@@ -37,6 +37,43 @@ func allowedPluginCommands() map[string]bool {
 	return allowed
 }
 
+// pluginCommandPathAllowed 只接受**裸 basename**（走 PATH）或**绝对路径**：
+// 拒绝相对路径、`..` 段与 UNC。
+//
+// 为什么不能只比 basename：白名单管的是"哪个**名字**能跑"，而"**从哪跑**"同样要紧 ——
+// `../../tmp/npx` 与 `\\evil-host\share\npx` 会让宿主机执行**攻击者放置或远程共享**上的
+// 同名二进制，名字却仍然白名单命中。
+// ⚠ 与 Python 侧 `python-engine/app/tools/ssrf.py` 的 `_command_path_ok` 是**同一条规则**：
+// 改动其一必须同时改另一个（MCP 客户端与 skill 安装走 Python 侧，网关走这里）。
+func pluginCommandPathAllowed(command string) bool {
+	if strings.TrimSpace(command) == "" {
+		return false
+	}
+	// UNC（\\host\share\…）与协议相对形式（//host/share/…）
+	if strings.HasPrefix(command, `\\`) || strings.HasPrefix(command, "//") {
+		return false
+	}
+	parts := strings.FieldsFunc(command, func(r rune) bool { return r == '/' || r == '\\' })
+	if len(parts) <= 1 {
+		return true // 裸 basename
+	}
+	for _, p := range parts {
+		if p == ".." {
+			return false
+		}
+	}
+	if strings.HasPrefix(command, "/") {
+		return true // POSIX 绝对路径
+	}
+	// Windows 绝对路径：X:\… 或 X:/…
+	return len(command) >= 3 && command[1] == ':' &&
+		(command[2] == '\\' || command[2] == '/') && isASCIILetter(command[0])
+}
+
+func isASCIILetter(b byte) bool {
+	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
+}
+
 // checkPluginCommandAllowed 校验命令 basename 是否在白名单内。
 func checkPluginCommandAllowed(command string) error {
 	if strings.TrimSpace(command) == "" {
@@ -45,6 +82,10 @@ func checkPluginCommandAllowed(command string) error {
 	allowed := allowedPluginCommands()
 	if allowed == nil {
 		return fmt.Errorf("plugin command execution is disabled: set PLUGIN_COMMAND_ALLOWLIST to enable specific commands")
+	}
+	if !pluginCommandPathAllowed(command) {
+		return fmt.Errorf("plugin command %q must be a bare basename or an absolute path "+
+			"(relative paths, '..' and UNC are rejected)", command)
 	}
 	base := filepath.Base(command)
 	if !allowed[base] {
