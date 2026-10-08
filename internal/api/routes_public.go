@@ -53,6 +53,10 @@ func registerPublicEndpoints(
 	// （见 internal/api/tool_broker.go 与 tool_policy.go）。
 	mux.Handle("POST /v1/internal/tool-authorize", rlMW(internalTokenMW(cfg, http.HandlerFunc(ToolAuthorizeHandler))))
 
+	// 执行审计的集中摄取（N4）：多副本 / 独立沙箱服务各有自己的落盘目录，
+	// 送到这里统一落进同一条审计流，排障时不必逐台去捞。
+	mux.Handle("POST /v1/internal/audit/exec", rlMW(internalTokenMW(cfg, http.HandlerFunc(ExecAuditIngestHandler))))
+
 	// Python 引擎数据库/Redis 统一访问端点（X-Internal-Token 保护）
 	mux.Handle("POST /v1/internal/db/query", rlMW(internalTokenMW(cfg, http.HandlerFunc(systemHandler.DBQuery))))
 	mux.Handle("POST /v1/internal/db/execute", rlMW(internalTokenMW(cfg, http.HandlerFunc(systemHandler.DBExecute))))
