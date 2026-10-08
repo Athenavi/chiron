@@ -130,7 +130,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 复用批 B 的 `CompositeBackend`：非 `/skills/` 前缀一律透传默认后端，行为不变。
     from app.backends.composite import CompositeBackend
     from app.backends.local import LocalWorkspaceBackend
-    from app.backends.protocol import BackendProtocol, ExecutingBackendProtocol
+    from app.backends.protocol import BackendProtocol
     from app.backends.skill import MOUNT as SKILLS_MOUNT
     from app.backends.skill import SkillBackend
 
@@ -145,34 +145,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ⚠️ 部署前提：服务必须与引擎**共享同一工作区**。`CompositeBackend` 的注释点明了这条约束
     # （"`execute` 与 `read`/`write` 必须落在**同一文件系统**上，否则命令写出的文件与工具读到的
     # 文件会分叉"）—— 服务侧若看不到引擎的工作区，分叉就会**真实发生**。
-    if (settings.sandbox_backend or "local").strip().lower() == "service" and settings.sandbox_service_url:
-        from app.backends.remote_exec import RemoteExecBackend
-
-        # 默认后端不一定能执行（例如 filestore 只做存储）。配了 service 却指到这种后端是**配置
-        # 错误**，记 warning 而不是静默 —— 否则会得到一个"每次都失败"的包装。
-        if not base_backend.supports_execution():
-            logger.warning(
-                "SANDBOX_BACKEND=service 但默认后端不支持执行（supports_execution=false）；"
-                "执行不会走服务，请检查 SANDBOX_BACKEND 与 filestore 配置"
-            )
-        else:
-            from typing import cast
-
-            _sandbox_tenants = [
-                t.strip() for t in (settings.sandbox_service_tenants or "").split(",") if t.strip()
-            ]
-            base_backend = RemoteExecBackend(
-                # 上面的 supports_execution() 已在运行时确认过，这里只是把该事实告诉 mypy
-                cast("ExecutingBackendProtocol", base_backend),
-                url=settings.sandbox_service_url,
-                token=settings.internal_token,
-                tenants=_sandbox_tenants,
-            )
-            logger.info(
-                "exec backend: remote sandbox service at %s (tenants=%s)",
-                settings.sandbox_service_url,
-                _sandbox_tenants or "none — nobody will be routed",
-            )
+    base_backend = _apply_sandbox_service_branch(base_backend)
     # 用 set_default_backend（进程级）而不是 set_backend（contextvar）：lifespan 里设置的
     # contextvar 不会被后续请求任务继承（请求任务由 ASGI server 派生）—— 那会变成
     # "配了 filestore 但请求里仍走 local"，而日志看起来一切正常。
@@ -783,6 +756,46 @@ async def _start_subagent_governance() -> None:
 
 
 
+def _apply_sandbox_service_branch(base: Any) -> Any:
+    """按 `SANDBOX_BACKEND` / `SANDBOX_SERVICE_*` 决定是否把**执行**分流到独立服务。
+
+    默认（`local` / 空 / 没配 URL）⇒ **恒等返回**，一行行为都不变。
+
+    抽成函数是为了**可测**：这段"配置 → 运行期生效"的接线此前内联在 `lifespan` 里，
+    没有任何用例 —— 而"配置里写了却没人用"正是这个仓库反复踩的坑（见 vendor/规划.md §4）。
+    """
+    if (settings.sandbox_backend or "local").strip().lower() != "service" or not settings.sandbox_service_url:
+        return base
+    from app.backends.remote_exec import RemoteExecBackend
+
+    # 默认后端不一定能执行（例如 filestore 只做存储）。配了 service 却指到这种后端是**配置
+    # 错误**，记 warning 而不是静默 —— 否则会得到一个"每次都失败"的包装。
+    if not base.supports_execution():
+        logger.warning(
+            "SANDBOX_BACKEND=service 但默认后端不支持执行（supports_execution=false）；"
+            "执行不会走服务，请检查 SANDBOX_BACKEND 与 filestore 配置"
+        )
+        return base
+
+    from typing import cast
+
+    from app.backends.protocol import ExecutingBackendProtocol
+
+    tenants = [t.strip() for t in (settings.sandbox_service_tenants or "").split(",") if t.strip()]
+    wrapped = RemoteExecBackend(
+        cast(ExecutingBackendProtocol, base),
+        url=settings.sandbox_service_url,
+        token=settings.internal_token,
+        tenants=tenants,
+    )
+    logger.info(
+        "exec backend: remote sandbox service at %s (tenants=%s)",
+        settings.sandbox_service_url,
+        tenants or "none — nobody will be routed",
+    )
+    return wrapped
+
+
 async def _shutdown_lifespan(
     *,
     reconciler_task: Any = None,
@@ -879,9 +892,10 @@ async def _shutdown_lifespan(
         except Exception as e:
             logger.warning("Gateway close error: %s", e)
 
-    # 关闭 Redis
+    # 关闭 Redis（redis-py ≥5.0.1 起 `close()` 已废弃，用 `aclose()`；
+    # 这条只有进了 `lifespan` 的冒烟用例才会暴露 —— 见 tests/test_lifespan_smoke.py）
     if _redis:
-        await _redis.close()
+        await _redis.aclose()
 
     logger.info("Shutdown complete")
 

@@ -5,8 +5,9 @@
 
 ## 0. 当前状态
 
-**最近一次核验（2026-10-08）**：Go build/vet/test 通过；另以本机真实 Redis 跑通 `internal/broadcast` · `internal/api` · `internal/engine` 的 Live 用例（补发保序/排他、跨实例可见、缓冲上限、滑动 TTL、运行锁互斥/续期/释放-CAS、取消归属、**提交路径的会话忙拒绝（HTTP 级）**、**跨实例断线重连补发（HTTP 级：连 A、事件由 B 发）**、归属路由与回退）· `ruff` 0 · `mypy app/ acp_adapter/` 0（242 文件）· `pytest -m "not integration"` **1855 passed** · `pytest -m integration`（真实 PG + Redis 8）**8 passed**（另 2 条依赖本机未启动的 Go 网关，CI 的 real-stack job 会拉）· `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
-**前端（本机已核验）**：`npx vitest run` **477 passed**（56 文件）· `vue-tsc -b` 通过 · 本次改动文件 `eslint` 0 problems。**本机无 compose 插件、Docker daemon 未运行** ⇒ 容器相关改动（内置技能挂载）须在能跑 Docker 的环境复核。**CI 尚未实跑**（分支未 push，见 §3）。
+**最近一次全量核验（2026-10-08 · round 42，全部本机实测）**：Go `build`/`vet` 通过 · `go test ./...`（**真实 Redis 8** 在场，Live 用例覆盖断线补发/跨实例补发/运行锁/取消归属/会话忙拒绝/跨实例重连/归属路由——**逐条取证见 [多副本语义的对外保证](deployment-multi-instance.md)**）全绿 · **Go live 子集**（`CHIRON_TEST_POSTGRES_DSN` + `CHIRON_TEST_REDIS_ADDR`）`internal/{api,billing,settings,broadcast,engine}` 全绿 · `ruff check .` 0 · `ruff check scripts/` 0 · `mypy app/ acp_adapter/` 0（**244** 文件）· `pytest -m "not integration"` **1922 passed** · `pytest -m integration` **11 passed（全绿）** —— 本次把**网关也起在本机**（配方见 §5「本机真实栈」），此前那 2 条 `test_unified_db` 不再依赖 CI · 前端 `npx vitest run` **477 passed**（56 文件）+ `vue-tsc -b` 通过 · `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
+
+**本机做不到的**：**容器相关**（无 `docker compose` 插件、Docker daemon 未运行）⇒ 镜像/容器内自查、以及**沙箱服务的容器化部署**须在能跑 Docker 的环境验证。**CI 尚未实跑**（分支未 push，见 §3）。
 
 ## 1. 已完成（只留指针与仍生效的护栏）
 
@@ -44,13 +45,13 @@
 
 ### S5-(e) 执行沙箱服务 —— **服务应用已落地**，剩部署形态
 
-- 已落地：`sandbox-service/service.py`（`/v1/internal/exec/run` + health、令牌 fail-closed、**直接复用引擎的 `run_in_sandbox`** 基线与审计、身份随请求恢复）；引擎侧客户端 `app/backends/remote_exec.py` 已随请求带身份。测试 `python-engine/tests/test_sandbox_service.py`。
+- 已落地：`sandbox-service/service.py`（`/v1/internal/exec/run` + health、令牌 fail-closed、**直接复用引擎的 `run_in_sandbox`** 基线与审计、身份随请求恢复）；引擎侧客户端 `app/backends/remote_exec.py` 已随请求带身份；**接线**（`SANDBOX_BACKEND=service` → 分流）抽成 `_apply_sandbox_service_branch()` 并有 4 条分支用例。测试：`tests/test_sandbox_service.py`、`tests/test_sandbox_service_wiring.py`、**`tests/test_sandbox_service_multiprocess.py`（独立进程端到端）**。
 - 剩余（**都在代码之外**）：**独立容器**部署（无 docker socket、仅内网、不与引擎共容器）· `SANDBOX_ROOT` **与引擎共享同一工作区卷**（否则命令产物与文件工具分叉）· 白名单租户**真的走服务**的服务侧断言 · 审计多副本收集 · 灰度/回滚手册。**真实部署验证不能靠单测替代**。
 
 ### L3-4 巨型文件拆分 —— 批次 1、3、2(类型) 与 4(校验) 已完成
 
 - 已完成（每批都验证**逐函数/定义逐字一致**）：`gateway_router.go` → 11 个 `routes_*.go`（**1254→442**）· `mail_handler.go` → 4 个文件（**1488→695**）· `session/manager.go` → `manager_{crud,messages,queries,branch}.go`（**1198→128**）· `runtime.py` 类型与决策取值 → `runtime_types.py`（**3370→3198**）· `main.py` 的三个启动前置校验 → `app/deps.py`（**2170→2061**）。
-- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界**）· **`main.py` 的 `lifespan` 启动段分段化**（关闭段 ✅ 已抽成 `_shutdown_lifespan`：句柄显式传递、补了关闭路径的首批用例；`lifespan` 740 → 664 行。启动段之间仍有跨段局部变量，抽取前先做依赖分析）· 前端 composable。边界与验收见 [拆分评估](split-assessment.md)；无功能收益，排最后（§4 批次 D）。
+- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界**）· **`main.py` 的 `lifespan` 分段**（关闭段 + **6 个无耦合启动段** ✅ 已抽，`lifespan` 740 → 561 行；剩 5 段有真实耦合，需显式传参/返回句柄）· 前端 composable。边界与验收见 [拆分评估](split-assessment.md)；无功能收益，排最后（§4 批次 D）。
 
 ## 3. 开放项（待确认，不作为计划依据）
 
@@ -89,6 +90,9 @@ python -m alembic -c alembic.ini heads        # 必须只有 1 个 head
 
 # 真实栈用例（需可达 PostgreSQL / Redis；CI 由 real-stack job 跑）
 go test -mod=mod ./... -count=1 -run 'Live|Diag'   # CHIRON_TEST_POSTGRES_DSN / CHIRON_TEST_REDIS_ADDR
+
+# 本机真实栈：把**网关也起起来**，`pytest -m integration` 才会全绿（配方见
+# [贡献与验收流程](contributing.md) 的「本机真实栈」）
 
 # python-engine/
 ruff check . && mypy app/ acp_adapter/ && python -m pytest -q -m "not integration"
