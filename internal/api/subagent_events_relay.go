@@ -67,7 +67,10 @@ func StartSubagentEventsRelay(ctx context.Context, hub *broadcast.Hub) {
 					slog.Warn("subagent event without session_id, dropped", "type", eventType)
 					continue
 				}
-				hub.Publish(broadcast.Event{
+				// 走 RelayEvent 而不是 Publish：事件**本来就是跨实例来的**（Redis pub/sub），
+				// 再 Publish 会让每个实例都把同一事件跨实例广播一次 ⇒ 客户端收到 N 份重复。
+				// 双进程演练实测：扇出变成"同一事件两次"，重放变成 [2,2,3,3]（见 internal/broadcast/hub.go）。
+				hub.RelayEvent(broadcast.Event{
 					Type:      eventType,
 					SessionID: sessionID,
 					Data:      payload,

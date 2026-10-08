@@ -125,7 +125,7 @@ func ClosePostgres() {
 // If a DatabaseRouter with read replicas is configured, returns a healthy replica.
 // Otherwise falls back to the primary Pool.
 //
-// ⚠️ 只读副本一致性（见 docs/read-replica-consistency.md）：
+// ⚠️ 只读副本一致性：
 // 安全/钱包关键读（RBAC 权限、支付订单、余额）必须走主库 db.Pool，
 // 禁止使用本函数——副本延迟窗口会造成降权不即时 / "unknown order" / 余额回旧。
 // 仅统计/历史/展示类读允许走副本。

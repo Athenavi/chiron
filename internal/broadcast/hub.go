@@ -2,6 +2,8 @@ package broadcast
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"hash/fnv"
 	"log/slog"
@@ -243,6 +245,48 @@ func (h *Hub) fanoutLocal(event Event) {
 }
 
 // publishCrossInstance 通过 Redis Pub/Sub 通知其它实例（低延迟通道；事实源仍是会话 Stream）。
+// RelayEvent 处理**已经通过 Redis 到达本实例**的事件（引擎 pub/sub 通道 → 网关中继）。
+//
+// 与 Publish 的区别（都是 2026-10-08 双进程演练暴露出来的）：
+//   - 仍然追加本实例的会话缓冲流 —— 否则本实例的客户端拿不到 `id:`，重连时无法精确续传；
+//   - **不再跨实例广播**：事件本来就是从 Redis 过来的，每个实例再广播一次会让**每个客户端
+//     多收 N-1 份**（N = 实例数）；实测就是"同一事件收到两次"。
+//
+// 多实例下"同一条逻辑事件被 N 个实例各追加一次"的问题，由 ReplayAfter 按逻辑身份去重兜住
+// （见 logicalEventID），而不是靠写入端互斥 —— 写入端互斥会让 N-1 个实例的客户端丢 `id`。
+func (h *Hub) RelayEvent(event Event) {
+	h.mu.RLock()
+	closed := h.closed
+	h.mu.RUnlock()
+	if closed {
+		return
+	}
+	if !h.localOnly && event.SessionID != "" {
+		event.ID = h.appendSessionEvent(context.Background(), event)
+	}
+	h.fanoutLocal(event)
+	atomic.AddInt64(&h.statDelivered, 1)
+}
+
+// logicalEventID 取事件的**逻辑身份**，用于多实例下的重放去重：
+// 优先用 `Data.event_id`（引擎发布时带上的 uuid），否则退化为"type + payload 哈希"。
+//
+// 退化路径的精度上限：两条**内容完全相同**的事件会被当成同一条（现实里同一 run 的相邻事件
+// 至少 phase/status 不同，几率极低）。这条上限写在文档里，不藏着。
+func logicalEventID(ev Event) string {
+	if m, ok := ev.Data.(map[string]any); ok {
+		if id, _ := m["event_id"].(string); id != "" {
+			return ev.Type + "|" + id
+		}
+	}
+	raw, err := json.Marshal(ev.Data)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(append([]byte(ev.Type+"|"), raw...))
+	return ev.Type + "|" + hex.EncodeToString(sum[:16])
+}
+
 func (h *Hub) publishCrossInstance(event Event) {
 	env := envelope{Origin: h.instanceID, Event: event}
 	data, err := json.Marshal(env)
@@ -317,6 +361,7 @@ func (h *Hub) ReplayAfter(ctx context.Context, sessionID, after string) ([]Event
 		return nil, err
 	}
 	events := make([]Event, 0, len(msgs))
+	seen := make(map[string]struct{}, len(msgs))
 	for _, m := range msgs {
 		raw, ok := m.Values["e"].(string)
 		if !ok {
@@ -328,6 +373,14 @@ func (h *Hub) ReplayAfter(ctx context.Context, sessionID, after string) ([]Event
 			continue
 		}
 		ev.ID = m.ID
+		// 多实例去重：同一条逻辑事件会被每个实例各追加一次（N 份），重放时只保留最早的一份。
+		// 不去重的话，客户端断线重连后会看到 N 份重复事件（2026-10-08 双进程演练实测 [2,2,3,3]）。
+		if key := logicalEventID(ev); key != "" {
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+		}
 		events = append(events, ev)
 	}
 	return events, nil

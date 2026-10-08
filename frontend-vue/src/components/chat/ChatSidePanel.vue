@@ -67,7 +67,7 @@ const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
   open: boolean
-  /** 面板视图：trajectory（主）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计）/ map（会话地图，见 docs/session-map-plan.md） */
+  /** 面板视图：trajectory（主）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计）/ map（会话地图，见 docs/session-map-branch-design.md） */
   view: 'trajectory' | 'sessions' | 'agents' | 'stats' | 'map'
   sessions: ChatSession[]
   activeSessionId: string

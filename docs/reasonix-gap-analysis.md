@@ -3,8 +3,9 @@
 > **依据**：`vendor/DeepSeek-Reasonix`（5151 个 Go 文件、100+ 内部包；形态是 Electron 桌面 + Go TUI +
 > Go CLI + npm 包）+ Chiron 自身代码。**静态对照**，不是跑分。
 >
-> 与 `docs/deepagents-gap-analysis.md` 的区别：那份是"平台 vs agent 库"，这份是"**平台 vs 同类产品**" ——
-> 可比性更高，因此差距也更该认真对待。
+> 对照面：**平台 vs 同类产品**（不是 vs agent 库）—— 可比性更高，因此差距也更该认真对待。
+> （原先这里指向一份"平台 vs agent 库"的对照文档，但**该文件从未入库**；断链已由
+> `scripts/check_doc_links.py` 记录，见 [开发路线图](development-roadmap.md) §3。）
 >
 > 聚焦用户指定的三块：**核心 agent 循环事件** → **子 agent 交互** → **UI/UX**。
 

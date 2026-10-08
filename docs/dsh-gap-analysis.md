@@ -26,7 +26,7 @@
 |---|---|---|---|
 | Agent 循环 | `dsh-agent-loop` 插件 + Cordis seam | `app/agent/runtime.py`、`loop.py`、`loop_guard.py`、`task_budget.py` | 相当 |
 | 事件契约 | session 事件（`user/message` `assistant/message` `tool/call` `turn/end`…），**内部 TS 词汇表**，无对外稳定承诺 | SSE ~13 种；**思考**走独立 `thinking` 事件（A1，契约见 [聊天记录契约](transcript-contract.md)），**用量**自 C3 起每次 LLM 调用发独立 `usage` 事件（**本次调用增量**，`done` 仍给整轮累计）；**无 `TurnStarted`/`Message` 通道**（回合边界靠前端按 `turnId` 推断；`Phase` 已决定**不做** —— 主对话没有这个真实状态，见切口 #3） | DSH 的**边界更清晰**；Chiron 的思考与用量已对齐 |
-| Fork / 分支 | 原生 durable fork：`parentSession` + `seedLength`/`firstLiveSeq`，可 `atSeq` | `internal/session/branch_summary.go`、`manager.go`（分支语义待核实） | **DSH 更明确** |
+| Fork / 分支 | 原生 durable fork：`parentSession` + `seedLength`/`firstLiveSeq`，可 `atSeq` | **已实现，非"待核实"**（2026-10-08 核对）：血缘列 `sessions.parent_session_id`（+索引 `ix_sessions_parent_session_id`）· 分叉点 `branch_from_seq` · 模式 `branch_mode`/`branch_state`/`branch_keep_tail`；`internal/session/manager_branch.go::planBranch`（**truncate / condense 两模式**，纯函数可单测）· `BranchSession` 在**一个事务**里建血缘会话 + 复制消息窗口（并把窗口时间戳按全表序号重排，避免历史排序错乱）· `POST /v1/conversations/{id}/branch` 与 `/fork`（= truncate 别名）· 前端会话地图连线 + `docs/session-map-branch-design.md` · 用例 `TestPlanBranch`/`TestBranchHandlerParameterValidation` 等 | **相当**（Chiron 另有**压缩式分支** `condense`：只留尾部 K 条原文、其余交引擎压成核心摘要；DSH 侧 `dsh-synapse` 只按 `parentSession` 画边） |
 | 子 agent | `dsh-subagent*` + 实验性 `dsh-experimental-agent-team`（roster / durable mailbox / shared task DAG） | `app/subagent/`（R1 receipts / R2 写路径仲裁 / R3 结构化结局 / R4 可注入时钟已落地；R5 fork 待定） | 相当（Chiron 有**可核实行为**判据） |
 | **会话 checkpoint / 恢复** | `dsh-session-checkpoint-policy`（**策略插件**，2026-10-08 复核新发现） | ✅ **已落地并跨进程验证**（C1 批 2–4）：回合末落盘 `runtime.py::_save_checkpoint` · 状态机/快照 `app/agent/checkpoint.py`（schema v1、热 1h/冷 24h） · 续跑/接管 `app/agent/resume.py` + reconciler；**硬杀→接管不重放**由 `tests/test_resume_kill_drill.py` 端到端钉住（子进程真跑、回合 1 落盘后卡住、`kill`、新实例续跑断言历史里第 1 回合工具结果恰好一份） | **相当**（DSH 有该能力；Chiron 有**可核实行为**判据，且判据是跨进程的） |
 | 多租户 / 计费 | ⛔ **287 个依赖逐条枚举后，仍无任何租户/配额/账务/metering 包**（`dsh-api-gateway` / `dsh-authorization` / `dsh-api-account-controller` 是客户端对 DeepSeek 账号平台的集成，不是自建多租户） | JWT + RBAC + 402 计费预检 + 429 配额 + 租户并发池 | **Chiron** |
@@ -34,9 +34,9 @@
 | MCP | `dsh-mcp-client` 单用户直连 | 连接池 + owner lease + `MCP_MAX_*` 预算 + 拒绝指标 | **Chiron** |
 | 执行隔离 | OS 级本机限制（bwrap/landlock/Seatbelt/Windows ACL），威胁模型=**保护用户本机**；**且不只是一个沙箱，而是一层策略插件**：`dsh-sandbox-policy` / `dsh-permission-presets` / `dsh-user-approval` / `dsh-fs-observation-policy` / `dsh-output-retention` / `dsh-spill-policy` / `dsh-tool-call-timeout-policy`（2026-10-08 复核） | **A 层（代码层）**：`app/tools/{code_guard,sandbox,run_code,_sandbox_worker}.py` 的静态 AST 守卫 + 运行时 import/内置函数白名单 + RLIMIT + `exec_audit`；威胁模型=**保护平台与其它租户**。`chiron-sandbox/` 是**执行工作根**（本机已跑出 `default/anonymous`，未纳入版本控制），**独立 sandbox 服务仍未开工**（§3.1） | **不可比**（威胁模型相反）；且**A 层只提高门槛、不构成隔离** —— 实测就有一处逃逸（见切口 #6） |
 | 插件 / 技能生态 | Cordis profile patch + 插件面板 + HMR，已跑起 `dsh-synapse`/`dsh-im`；**另有 `dsh-hook-protocol` + `dsh-hooks-claude-code`/`dsh-hooks-codex`（钩子协议与 Claude Code/Codex 兼容）与 `dsh-webhook(-github)`**（2026-10-08 复核） | **技能侧已对齐**：`market/skills/` 6 个 SKILL.md 由 `SkillStore` 以 `scope=builtin` 读取（2026-10-08 复核并修好容器缺席问题）；**插件生态**（profile/面板/HMR/第三方插件真跑/**钩子协议**）仍明显落后 | **DSH 领先（插件侧）** |
-| 会话持久化 / 检索 | JSONL(zstd) + 格式 v0→v4 迁移链 + SQLite FTS5 | PG 单一持久层 + Alembic 单 head；会话检索走 PG | 相当 |
-| CLI / SDK | `dsh` CLI + **Python SDK(PyPI)** + ACP/JSON-RPC | `cmd/chiron-cli` 有；**无对外 SDK** | **DSH** |
-| 可观测性 | OTel + 产品分析（+ 日志默认上传） | OTel 类埋点 + Prometheus/Alertmanager + **不默认上传** | 相当（Chiron 隐私更优） |
+| 会话持久化 / 检索 | JSONL(zstd) + 格式 v0→v4 迁移链 + SQLite FTS5 | PG 单一持久层 + Alembic 单 head；**检索是真全文检索**（2026-10-08 核对）：`internal/api/search_handler.go` 用 `to_tsvector('simple', m.content) @@ plainto_tsquery('simple', $1)` + `ts_rank` 排序（消息与会话名两路），`NewSearchHandler()` 挂在 public 端点 | 相当 |
+| CLI / SDK | `dsh` CLI + **Python SDK(PyPI)** + ACP/JSON-RPC | `cmd/chiron-cli`（11 文件：start/stop/logs/health/instance/state/db/config…，是**运维 CLI，不是 API 客户端**）· **无对外 SDK**（2026-10-08 核对：`go.mod`/`internal`/`cmd` 里**没有** swagger/openapi 生成，也没有 JSON-RPC/ACP 面） | **DSH**（⇒ 已列为路线图 §2 的**候选**：属追平项，需产品决策） |
+| 可观测性 | OTel + 产品分析（+ 日志默认上传） | OTel 类埋点 + Prometheus/Alertmanager + **不默认上传**；2026-10-08 核对落点：`prometheus.yml` 抓 `python-engine:8000/metrics`（+ prometheus 自身）· `prometheus_alerts.yml`（`PythonEngineDown`/`HighPythonMemoryUsage`，**按 job 名写**）· `alertmanager.yml` · 网关侧 `GET /metrics`（admin） | 相当（Chiron 隐私更优） |
 | 国际化 | 客户端 locale 包（中文覆盖度未取证） | 三语种 + 缺键护栏 | **Chiron** |
 
 ## 2. 可"超越"的切口（按代价/可核实性排序）
@@ -78,6 +78,9 @@
     **② 原判断被证弱（需修口径）**：DSH 不是"只有沙箱"，而是一层**策略插件框架**（`dsh-permission-presets` / `dsh-user-approval` / `dsh-fs-observation-policy` / `dsh-output-retention` / `dsh-spill-policy` / `dsh-tool-call-timeout-policy`）；插件生态除 profile/HMR 外还有**钩子协议**（`dsh-hook-protocol` + Claude Code/Codex 兼容）与 `dsh-webhook`。
     **③ 新发现（会改优先级）**：**`dsh-session-checkpoint-policy`** —— DSH 已有会话 checkpoint/恢复能力，而 Chiron 的 L4-1 还卡在"待用户确认 5 问" ⇒ **L4-1 属"追平"，不能当差异化卖点**，已同步进路线图 §2 与 §1 对照表。
     ⇒ 教训：**"未发现证据"必须写清取证强度**（目录索引 / 依赖枚举 / 源码 / 运行时是四个量级）；本轮就是把 #2 从"未发现"升到"枚举后确认"，同时把两处被低估的地方补上。
+
+11. **原文更正（2026-10-08）**：Fork / 分支 一行原写 `internal/session/branch_summary.go`、`manager.go`**（分支语义待核实）**并判"**DSH 更明确**" —— 实测 **Chiron 早已实现且有测试**：`manager_branch.go` 的 `planBranch`（truncate / condense）与 `BranchSession`（一个事务内建血缘会话 + 复制消息窗口 + 时间戳重排）· `sessions` 的血缘/分叉列（含索引）· `POST /v1/conversations/{id}/branch` 与 `/fork` · 前端地图连线 · 设计文档 [会话地图与分支设计](session-map-branch-design.md)；`TestPlanBranch`、`TestBranchHandlerParameterValidation` 通过（2026-10-08 实测）。
+    ⇒ 该行已改为"**相当**"（Chiron 另有压缩式分支）。**教训**：**连自己文档里写着"待核实"的格子也必须真去核** —— 留一个未核实的判断在交付物里，它就会以"差距"的身份被引用（本文件第 8、9 条是同一类错误的另外两例）。
 
 ## 4. 复现取证的方法（只读）
 

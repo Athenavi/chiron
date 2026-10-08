@@ -43,8 +43,9 @@ python -m pytest -q -m "not integration"
 这是 25 批分批接线的结果：起点是 1171 条 / 130 文件，过程见
 [开发路线图](development-roadmap.md) 的 L2-1。
 
-标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL），**不在 CI 中执行**，
-需要时单独跑 `pytest -m integration`。
+标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL）：**CI 的 `Real-stack integration`
+job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、建 schema、构建并启动网关），
+本地按下面「本机真实栈」跑同一条命令即可。
 
 #### mypy strict 接线手册
 
@@ -147,6 +148,10 @@ POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
 
 > 起不来的常见原因：库的 schema 与代码 head 不一致（网关默认拒绝启动，`ALLOW_SCHEMA_DRIFT=true`
 > 可临时放行）、`APP_SECRET` 短于 32 字符、Redis 地址写成 `REDIS_URL`（网关不认这个变量）。
+>
+> **跨实例双进程演练**另有一条命令（CI 的 real-stack job 里也跑，用同一份已构建的网关二进制）：
+> `python tests/drills/multi_instance_drill.py <网关二进制>` —— 起**两个**真实网关进程，验跨实例扇出、
+> 实时不重复、断线重连补发不重复。它读环境变量（无需 `.env`），Redis 地址默认取 `REDIS_URL`。
 
 ## 提交前自查清单
 

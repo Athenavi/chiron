@@ -74,6 +74,8 @@ dev = [
     "pytest-cov>=6.0.0",
     "ruff>=0.11.0",
     "mypy>=1.15.0",
+    # 跨实例演练（tests/drills/multi_instance_drill.py）自签网关认可的 JWT 用
+    "PyJWT>=2.9.0",
 ]
 
 [project.scripts]
