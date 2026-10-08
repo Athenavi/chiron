@@ -1156,7 +1156,7 @@ const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajector
 /**
  * 会话地图：**独立的整屏大窗格**（不是侧栏里的一个小视图 —— 侧栏太窄，
  * 放不下"空间化排布"这件事本身）。位置稳定性是它的立身之本，
- * 见 docs/session-map-plan.md §〇。
+ * 见 docs/session-map-branch-design.md。
  */
 
 /**

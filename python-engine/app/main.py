@@ -1593,7 +1593,10 @@ async def agent_submit(
                                                    tenant=cache_tenant, payload=payload)
                 # ② pub/sub：供**实时**推送 —— 网关订阅后转投 SSE hub。
                 #    缺了它，前端只剩"选中某个 run 时 3s 轮询"这一条路。
-                await runtime_cache.publish_live_event(payload=payload)
+                #    带上 `event_id`：多实例下**每个**网关实例都会把这条事件追加进共享重放流，
+                #    网关侧据此按"逻辑身份"去重（否则断线重连补发会看到 N 份，见
+                #    internal/broadcast/hub.go 的 logicalEventID）。
+                await runtime_cache.publish_live_event(payload={**payload, "event_id": uuid.uuid4().hex})
 
         # 无论 Redis 是否可用都注册投递器：心跳不能因为缓存不可用就停
         sink.attach_persistent(_persist_subagent_event)

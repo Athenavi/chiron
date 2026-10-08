@@ -184,6 +184,11 @@ jobs:
         run: |
           pip install --quiet 'ruff>=0.11.0'
           ruff check scripts/
+      # 文档断链：被引用的 docs/*.md 必须存在。曾一次扫出 19 份**从未提交过**的设计文档
+      # （代码注释里写着"见某份设计文档"，读者去找只会扑空）。存量 19 条走基线白名单
+      # （scripts/doc_link_baseline.txt，**只应缩小**），新增断链直接失败 —— 已用变异验证。
+      - name: Doc links (referenced docs must exist)
+        run: python scripts/check_doc_links.py
 
   # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
   # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧
@@ -278,3 +283,11 @@ jobs:
       - name: Python integration tests (real stack)
         working-directory: python-engine
         run: python -m pytest -q -m integration
+
+      - name: Cross-instance drill (two gateway processes)
+        # **两个真实网关进程** + Redis：跨实例扇出、实时不重复、断线重连补发不重复。
+        # 此前这一格只有"进程内双 hub"用例（internal/api/sse_cross_instance_live_test.go）——
+        # 2026-10-08 正是这个演练挖出了"多实例重复投递"缺陷（实时与重放都 N 份）。
+        # 用上面已构建好的 /tmp/chiron，不再重复编译。
+        working-directory: python-engine
+        run: python tests/drills/multi_instance_drill.py /tmp/chiron

@@ -125,6 +125,48 @@ func TestLiveReplayAfterReturnsOnlyNewerEvents(t *testing.T) {
 	}
 }
 
+// 多实例去重：同一条**逻辑事件**会被每个实例各追加一次（N 份），补发时必须只给一份。
+// 这是 2026-10-08 双进程演练挖出来的缺陷（补发内容为 [2,2,3,3]）的回归护栏。
+func TestLiveReplayDedupesSameLogicalEventAcrossInstances(t *testing.T) {
+	rdb := liveRedisClient(t)
+	hubA := newLiveHub(t, rdb)
+	hubB := newLiveHub(t, rdb) // 第二个实例：模拟"两个网关各自收到并追加了同一条事件"
+	sid, key := liveSession(t, rdb, "dedupe")
+
+	sameEvent := func() Event {
+		return Event{
+			Type:      "subagent_status",
+			SessionID: sid,
+			Data:      map[string]any{"event_id": "evt-1", "run_id": "r1", "seq": 1},
+		}
+	}
+	hubA.RelayEvent(sameEvent())
+	hubB.RelayEvent(sameEvent())
+	waitXLen(t, rdb, key, 2) // 流里确实有两份（写入端不做互斥，保住客户端的 id）
+
+	got, err := hubA.ReplayAfter(context.Background(), sid, "0-0")
+	if err != nil {
+		t.Fatalf("ReplayAfter: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("同一条逻辑事件应只补发一份，实际 %d 份：%+v", len(got), got)
+	}
+	if got[0].ID == "" {
+		t.Fatal("补发条目必须带流 ID（SSE 的 id: 行依赖它）")
+	}
+
+	// 不同逻辑事件不能被误去重
+	hubA.RelayEvent(Event{Type: "subagent_status", SessionID: sid, Data: map[string]any{"event_id": "evt-2"}})
+	waitXLen(t, rdb, key, 3)
+	got2, err := hubA.ReplayAfter(context.Background(), sid, "0-0")
+	if err != nil {
+		t.Fatalf("ReplayAfter: %v", err)
+	}
+	if len(got2) != 2 {
+		t.Fatalf("两条不同逻辑事件应各补发一份，实际 %d 份", len(got2))
+	}
+}
+
 func TestLiveReplayAfterSeesAnotherInstanceEvents(t *testing.T) {
 	rdb := liveRedisClient(t)
 	publisher := newLiveHub(t, rdb)

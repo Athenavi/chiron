@@ -14,3 +14,7 @@ mypy>=1.15.0
 
 # S3 存储（可选，用于 MediaStore S3 后端）—— 对应 pyproject 的 [s3] extra
 boto3>=1.40.0
+
+# 跨实例演练（tests/drills/multi_instance_drill.py）要自签一枚**网关认可的** JWT（HS256）。
+# 明确声明，而不是依赖某个传递依赖碰巧装了 pyjwt —— 演练是 CI 的一步，缺它就红。
+PyJWT>=2.9.0
