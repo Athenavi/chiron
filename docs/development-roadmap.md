@@ -5,7 +5,7 @@
 
 ## 0. 当前状态
 
-**最近一次本机核验（2026-10-08）**：Go build/vet/test 通过 · `ruff check .` 0 · `mypy app/ acp_adapter/` 0（240 文件）· `pytest -m "not integration"` **1837 passed** · `pytest -m integration`（本机真实 PG + Redis 8）**8 passed**（另 2 条 `test_unified_db` 依赖本机未启动的 Go 网关，属环境限制，CI 的 real-stack job 会拉网关）· `scripts/check_source_encoding.py` 通过 · `scripts/check_tool_policy_parity.py` 通过 · alembic 单 head `0007_subagent_error_code`。
+**最近一次本机核验（2026-10-08）**：Go build/vet/test 通过 · `ruff check .` 0 · `mypy app/ acp_adapter/` 0（241 文件）· `pytest -m "not integration"` **1855 passed** · `pytest -m integration`（本机真实 PG + Redis 8）**8 passed**（另 2 条 `test_unified_db` 依赖本机未启动的 Go 网关，属环境限制，CI 的 real-stack job 会拉网关）· `scripts/check_source_encoding.py` 通过 · `scripts/check_tool_policy_parity.py` 通过 · alembic 单 head `0007_subagent_error_code`。
 **本机核验不了**（沿用最近一次全量）：`npm run test` 466 passed · `npm run check:ui` · `vue-tsc -b` · `npm run lint` 0 errors / 27 warnings。另：本机**无 compose 插件、Docker daemon 未运行** ⇒ `docker compose config` 与"镜像/容器内"自查做不了，容器相关改动（本轮的内置技能挂载）需在能跑 Docker 的环境复核。
 **CI 尚未实跑**（分支未 push，见 §6）。
 
