@@ -207,7 +207,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	// （引擎 PersistentTerminal/后台任务/簿记为进程内状态，round-robin 跨实例会断链）
 	ctx = engine.WithSession(ctx, sessionID)
 	if sessionID != "" {
-		sessionCancels.Store(sessionID, sessionCancel{userID: userID, cancel: cancel})
+		sessionCancels.Store(sessionID, &sessionCancel{userID: userID, cancel: cancel})
 		defer sessionCancels.Delete(sessionID)
 	}
 

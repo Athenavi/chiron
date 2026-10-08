@@ -142,10 +142,14 @@ func AgentFollowupHandler(
 		}
 		// 与 /submit 同理：后台执行必须脱离请求生命周期（响应一返回客户端连接即关闭）
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
+		// run 锁心跳：与 /submit 共用同一份实现。followup 的 timeout 可能长于锁 TTL(5min)，
+		// 不续期会让锁在运行中途过期 → 同一会话被再次抢占 → 两个 runtime 并发跑。
+		stopHeartbeat := StartSessionRunLockHeartbeat(ctx, body.SessionID, runToken)
 		content := buildFollowupContent(body)
 
 		go func() {
 			defer cancel()
+			defer stopHeartbeat()
 			defer func() {
 				if rec := recover(); rec != nil {
 					slog.Error("agent followup handler panic", "panic", rec, "run_id", body.RunID)
