@@ -125,7 +125,7 @@ class SSE:
             self.conn.sock.settimeout(remaining)
             try:
                 raw = self.resp.fp.readline()  # type: ignore[union-attr]
-            except (TimeoutError, socket.timeout):
+            except TimeoutError:
                 return None
             except OSError:
                 return None
@@ -268,7 +268,7 @@ def main() -> int:
         hit_a, hit_b = wait_for_seq(a, 1), wait_for_seq(b, 1)
         assert hit_a is not None, "A 进程没收到跨实例事件（扇出失败）"
         assert hit_b is not None, "B 进程没收到跨实例事件（扇出失败）"
-        (ev_a, _pay_a), (ev_b, _pay_b) = hit_a, hit_b
+        (ev_a, _pay_a), (_ev_b, _pay_b) = hit_a, hit_b
         for name, payload in (("A", _pay_a), ("B", _pay_b)):
             assert payload.get("session_id") == session_id, f"{name} 收到串扰：{payload}"
             assert payload.get("seq") == 1, f"{name} 收到的事件不对：{payload}"
