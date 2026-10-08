@@ -13,7 +13,9 @@
 
 键：``{REDIS_KEY_PREFIX}engine:run:{session_id}``
 值：``{"instance_id","run_token","owner_uid","url","started_at","last_seen"}``
-TTL 300s（与 Go 侧 session run 锁 5min 对齐），心跳 100s 续期。
+TTL 300s（与 Go 侧 session run 锁 5min 对齐 —— 那是**另一个机制**，只是约定相同），心跳 100s 续期。
+**键名与 Go 侧 `internal/engine/run_affinity.go` 的 `runRecordPrefix` 逐字一致**（引擎写、网关读）；
+该一致性已机械化：`scripts/check_tool_policy_parity.py` 的"共享键前缀"族。
 
 注意：这里只登记「归属」，不做 run 现场状态的持久化/迁移——实例故障时该 run 仍会中断
 （用户可重试），本模块消除的是「路由到错误实例 + 静默失败」这一类问题。

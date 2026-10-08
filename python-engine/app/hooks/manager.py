@@ -16,7 +16,9 @@ from __future__ import annotations
 
 import json
 import logging
-from dataclasses import dataclass
+import re
+import time
+from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
@@ -38,6 +40,12 @@ class Hook:
     name: str
     code: str
     owner: str = OWNER_DEPLOYMENT
+    #: 匹配模式（空 = 该事件的所有调用都跑）。**只对工具类事件合法**（`events.MATCHER_EVENTS`）。
+    #: 语义是**锚定**匹配（`re.fullmatch`）—— 未锚定会让"只想匹配 `file`"的钩子
+    #: 意外命中 `read_file`（Reasonix 2.x 文档里的同款教训）。
+    matcher: str = ""
+    #: `matcher` 的编译结果（注册时编译一次；非法正则在注册处即被拒绝，不会拖到执行期）。
+    matcher_re: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
 
 
 class HookRegistry:
@@ -116,6 +124,7 @@ class HookManager:
         code: str,
         *,
         owner: str = OWNER_DEPLOYMENT,
+        matcher: str = "",
     ) -> bool:
         """注册一个 hook，返回是否成功。
 
@@ -125,10 +134,40 @@ class HookManager:
 
         部署级注册不受 `hooks_allow_user_defined` 限制，但**是否执行**仍受总开关
         `hooks_enabled` 约束（可先注册、后开启）。
+
+        `matcher`（批 G+ 批次 1）：**锚定**正则，只对工具类事件合法；非法正则或
+        用错事件一律**当场拒绝并留审计** —— 配了却不生效是最难查的一类问题。
         """
         if event not in events.ALL_EVENTS:
             logger.warning("reject hook %r: unknown event %r", name, event)
             return False
+        compiled: re.Pattern[str] | None = None
+        if matcher:
+            if not events.matcher_applies(event):
+                audit.record_hook(
+                    event=event,
+                    hook=name,
+                    owner=owner,
+                    outcome="register_denied",
+                    reason="matcher is only valid on tool events "
+                    f"({', '.join(sorted(events.MATCHER_EVENTS))})",
+                )
+                logger.warning(
+                    "reject hook %r on %s: matcher is only valid on tool events", name, event
+                )
+                return False
+            try:
+                compiled = re.compile(matcher)
+            except re.error as exc:
+                audit.record_hook(
+                    event=event,
+                    hook=name,
+                    owner=owner,
+                    outcome="register_denied",
+                    reason=f"invalid matcher regex: {exc}",
+                )
+                logger.warning("reject hook %r on %s: invalid matcher regex: %s", name, event, exc)
+                return False
         if owner == OWNER_USER and not settings.hooks_allow_user_defined:
             audit.record_hook(
                 event=event,
@@ -143,7 +182,16 @@ class HookManager:
                 event,
             )
             return False
-        self.registry.add(Hook(event=event, name=name, code=code, owner=owner))
+        self.registry.add(
+            Hook(
+                event=event,
+                name=name,
+                code=code,
+                owner=owner,
+                matcher=matcher,
+                matcher_re=compiled,
+            )
+        )
         return True
 
     def clear(self) -> None:
@@ -154,19 +202,51 @@ class HookManager:
     async def _trigger(
         self, event: str, context: dict[str, Any]
     ) -> list[tuple[Hook, HookOutcome]]:
-        """执行某事件的全部 hook，逐个落审计，返回 `(hook, outcome)` 列表。
+        """执行某事件中 **matcher 命中**的 hook，逐个落审计，返回 `(hook, outcome)` 列表。
 
         - 默认关时立即返回空列表（零行为变化）；
+        - 无 `matcher` 的 hook 一律执行；有 `matcher` 的按**锚定**匹配工具名（见 `Hook.matcher`）；
+        - **一个事件的累计预算**（`hooks_event_budget_seconds`）封顶总耗时：没有它时
+          最坏情况是 `N × 单 hook 超时` 按 hook 数线性拖慢每个工具调用。预算耗尽后
+          后续 hook **不执行**，但会留一条 `budget_exhausted` 审计（不静默跳过）；
+          单个 hook 的常见情形行为不变（预算 > 单 hook 超时）；
         - 单个 hook 的宿主侧异常在此被吞掉（记 `error` 审计），**绝不冒泡**到主流程。
         """
         if not settings.hooks_enabled:
             return []
         results: list[tuple[Hook, HookOutcome]] = []
         timeout = float(settings.hooks_timeout_seconds or 5)
+        budget = float(settings.hooks_event_budget_seconds or 10)
+        deadline = time.monotonic() + budget
+        subject = str(context.get(events.MATCHER_SUBJECT_FIELD, ""))
         for hook in self.registry.for_event(event):
+            if hook.matcher_re is not None and hook.matcher_re.fullmatch(subject) is None:
+                continue
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                audit.record_hook(
+                    event=event,
+                    hook=hook.name,
+                    owner=hook.owner,
+                    tenant=str(context.get("tenant_id", "")),
+                    user=str(context.get("user_id", "")),
+                    session=str(context.get("session_id", "")),
+                    outcome="budget_exhausted",
+                    reason=f"event budget {budget:g}s exhausted; hook not run",
+                )
+                logger.warning(
+                    "hook %r on %s not run: event budget (%.1fs) exhausted",
+                    hook.name,
+                    event,
+                    budget,
+                )
+                break
             try:
                 outcome = await run_hook(
-                    name=hook.name, code=hook.code, context=context, timeout=timeout
+                    name=hook.name,
+                    code=hook.code,
+                    context=context,
+                    timeout=min(timeout, remaining),
                 )
             except Exception as exc:  # noqa: BLE001 — hook 失败不影响主流程
                 logger.warning("hook %r raised host-side error: %s", hook.name, exc)
@@ -214,6 +294,25 @@ class HookManager:
             events.SESSION_START,
             events.build_context(
                 events.SESSION_START,
+                session_id=_attr(task, "session_id"),
+                tenant_id=_attr(task, "tenant_id"),
+                user_id=_attr(task, "user_id"),
+            ),
+        )
+
+    async def user_prompt_submit(self, *, task: Any) -> None:
+        """`UserPromptSubmit` —— fire-and-forget（收到用户提示词、输入护栏之后）。
+
+        **刻意不可阻断**（不在 `BLOCKING_EVENTS`）：阻断用户自己的提示词是对**用户**
+        的控制点，与 `PreToolUse`"只收紧工具策略"性质不同；拒绝输入已由输入护栏承担。
+        见 `docs/hook-protocol-design.md` §4.1。
+        """
+        if not settings.hooks_enabled:
+            return
+        await self._trigger(
+            events.USER_PROMPT_SUBMIT,
+            events.build_context(
+                events.USER_PROMPT_SUBMIT,
                 session_id=_attr(task, "session_id"),
                 tenant_id=_attr(task, "tenant_id"),
                 user_id=_attr(task, "user_id"),

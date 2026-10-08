@@ -175,10 +175,10 @@ python -m pytest python-engine/tests -q
 | 同一会话**不会并发两个 runtime** | **HTTP 级**：`internal/api/submit_lock_live_test.go`（另一实例持锁 ⇒ `POST /v1/agent/submit` 返回 400「会话忙」；无锁 ⇒ 202，正对照）；锁原语级：`internal/api/session_coord_live_test.go`（互斥 / 续期归属 / 释放-CAS） | Redis 不可用时退化为**进程内**防重（多副本下仅近似）；锁被误丢时当前 run **不会被打断**，靠恢复期内的重复提交被拒兜底 |
 | 断线重连**不丢事件、不重复** | **HTTP 级跨实例**：`internal/api/sse_cross_instance_live_test.go`（两个 Hub = 两个实例，客户端连 A、事件由 B 发布，带 `Last-Event-ID` 重连到 A ⇒ 只补缺口、随后实时继续、共享流里恰好只剩实时那条）；Hub 级：`internal/broadcast/hub_live_test.go`（补发保序、`after` 排他、跨实例可见、缓冲上限、滑动 TTL）+ `streamid_test.go`（流 ID 按数值比较） | 每会话只保留**最近 200 条 + 1h**：超出窗口的断线无法补齐（需前端按 DB 状态自愈）；非法 `Last-Event-ID` 被忽略并转为实时（**宁可重复、不可丢弃**）。⚠ **已修复（2026-10-08，双进程演练发现）**：**子 Agent 事件**在多实例下曾**实时与重放都重复**（每条 N 份，N = 实例数）—— 中继对同一事件既追加共享重放流**又跨实例再广播**。修复：中继改走 `Hub.RelayEvent`（只追加本实例流 + 本地 fanout，**不再跨实例广播**），**写入端不做互斥**（否则 N-1 个实例的客户端拿不到 `id`、重连无法精确续传），改为 `ReplayAfter` **按逻辑身份去重**（`event_id`，退化用 payload 哈希）。取证与回归：`python-engine/tests/drills/multi_instance_drill.py`（双进程，4 条断言）· `internal/broadcast/hub_live_test.go::TestLiveReplayDedupesSameLogicalEventAcrossInstances` · `logical_id_test.go` |
 | 审批 / 取消**打到持有该 run 的实例** | `internal/engine/run_affinity_test.go`（归属记录契约、URL 优先、注册表回退、垃圾记录拒绝） | 映射缺失或 TTL 过期时**回退一致性哈希**（尽力而为）；实例故障该 run 仍中断，**不做现场迁移** |
-| 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份）+ 广播前的 `GetSession` 归属校验 | 归属校验分支需要真实 PG 的自动化用例**尚未补**；`subagent:cancel` 载荷本身不带身份，防线在网关侧 |
+| 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份，不需要库）+ **`internal/api/session_cancel_live_test.go`**（真实 PG：非属主 ⇒ **403** · 属主 ⇒ 放行 · 会话不存在 ⇒ 不广播） | **已补（2026-10-09）**：此前点名的"归属校验分支需要真实 PG 的自动化用例**尚未补**"已落地，并做过变异验证（把 `handlers.go` 的归属校验去掉 ⇒ 非属主用例**红**，得到 200 而非 403）。`subagent:cancel` 载荷本身不带身份，防线仍在网关侧 |
 | MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
 
-**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID，因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
+**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID（`ChatView.vue` 的 `crypto.randomUUID()`），因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发。机制本身**已有用例**（2026-10-09 补）：`internal/api/submit_dedup_live_test.go` —— 去重命中 ⇒ **不触发引擎**（用假引擎数调用次数）· 首次提交 ⇒ 打到引擎且落下 **5 分钟**窗口的键 · 无 `client_msg_id` / 只给空白 ⇒ 不去重（老客户端行为不变）；并做过变异验证（让"命中即返回"失效 ⇒ 该用例红，报"实际调用 1 次"）；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
 
 ```bash
 # 复现上表前三行（需可达 Redis；CI 的 real-stack job 注入 REDIS_URL）
@@ -200,7 +200,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 |---|---|---|
 | SSE 事件 ID 与业务 sequence 分离 | **不需要** | `id` 已是 Redis Stream ID（跨实例单调、可比较、支持 `Last-Event-ID` 精确续传）；业务序号仅在需要「业务语义重放/缺号聚类」时才必要，属协议设计而非缺陷 |
 | text 事件合帧下沉到 hub | **不建议** | 网关已有 50ms 合帧；下沉会让 `tool_call`、`[thinking]` 等**必须即时**的事件进窗口，复杂度与首字延迟风险大于省下的几次 Redis 写入 |
-| 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务**（原判「待独立立项」基于**错误前提**） | 原文称「当前 VARCHAR（PG `NOW()` 文本）」——**与实际不符**：实测该库 145 个时间列中 **136 个已是 `timestamp without time zone`**、9 个已是 `timestamp with time zone`，唯一的 VARCHAR 时间列是 `schema_migrations.applied_at`（该表本身已废弃，见第 7 节）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
+| 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务**（原判「待独立立项」基于**错误前提**） | 原文称「当前 VARCHAR（PG `NOW()` 文本）」——**与实际不符**：**2026-10-09 复核实测**该库 `timestamp without time zone` **142 列（72 表）**、`timestamp with time zone` **12 列（5 表）**；VARCHAR 侧**名字即时间的有 3 列** —— `schema_migrations.applied_at`（**该表本身已废弃**，见第 7 节）与两个**日期**列 `meeting_notes.date` / `admin_tenant_usage.stat_date`（本机这两张表为空，**无法从取值确认语义**；若确为"只有日期"的字段，属 `date` 类型的独立问题，不在本节的 `timestamp → timestamptz` 范围内）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
 
 ### 结构性后续
 

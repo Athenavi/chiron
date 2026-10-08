@@ -568,6 +568,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     warn_if_user_defined_enabled()
 
+    # 批 G+（钩子协议批次 1）：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）。
+    # 只接受部署级声明；解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
+    from app.hooks import load_hooks_config
+
+    load_hooks_config()
+
     # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
     # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
     # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里

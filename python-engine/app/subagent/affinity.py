@@ -38,8 +38,10 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 #: 归属键前缀（与 Go 侧 internal/engine/run_affinity.go 的 subagentRunPrefix 逐字一致）
+#: —— **两侧一致性已机械化**：`scripts/check_tool_policy_parity.py` 的"共享键前缀"族
+#: （理由：两侧各自都有测试钉住自己的字面量，只改一侧时容易两边都绿而漂移上线）。
 OWNER_KEY_PREFIX = "subagent:run:"
-#: 取消回执键前缀（与 Go 侧 internal/api/subagent_cancel.go 的 cancelAckKey 逐字一致）
+#: 取消回执键前缀（与 Go 侧 internal/api/subagent_cancel.go 的 cancelAckKey 逐字一致；同上）
 ACK_KEY_PREFIX = "subagent:cancel:ack:"
 
 #: 归属 TTL：必须显著长于单 run 的最长运行时间（SUBAGENT_MAX_RUNTIME 默认 1800s），

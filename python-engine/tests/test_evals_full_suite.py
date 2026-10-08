@@ -15,7 +15,7 @@ import pytest
 
 from evals.assertions import Observation, evaluate
 from evals.cli import _load_scripted, _load_tasks
-from evals.firmware import CATEGORIES, TIERS, Assertion, Efficiency, load_suite
+from evals.firmware import CATEGORIES, SUCCESS_KINDS, TIERS, Assertion, Efficiency, load_suite
 
 FULL = "full"
 
@@ -102,6 +102,23 @@ def test_scripted_scripts_merge_without_crashing():
 
 
 # ── 新增断言 kind ───────────────────────────────────────────────────────
+
+
+def test_smoke_suite_exercises_every_assertion_kind():
+    """**PR 门禁只跑 smoke** ⇒ `SUCCESS_KINDS` 里每一种都必须在 smoke 里出现。
+
+    为什么需要这条：解析器与求值器支持一种 kind、`evals/README.md` 也写着"9 种断言 kind 全部进
+    PR 门禁"，但只要 smoke 固件里**没有**用到它，它就**永远不会被执行** —— 这类"写了但没跑"的
+    断言比没有更糟：它给人一种"已被验证"的错觉。`full` 只在 nightly 跑，不能替 PR 门禁兜底。
+    """
+    smoke = _load_tasks("smoke", "smoke")
+    used = {a.kind for t in smoke for a in t.assertions}
+
+    missing = sorted(SUCCESS_KINDS - used)
+    assert not missing, (
+        f"这些断言 kind 不在 PR 门禁的 smoke 集里，永远不会被执行：{missing}；"
+        "要么在 evals/suites/smoke.json 补一条用到它的任务，要么把它从 SUCCESS_KINDS 去掉。"
+    )
 
 
 def test_file_not_contains_assertion():

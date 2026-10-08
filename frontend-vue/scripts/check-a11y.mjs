@@ -42,6 +42,7 @@
 import { readdirSync, readFileSync, statSync, writeFileSync, existsSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './strip-comments.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 const BASELINE_PATH = join(ROOT, 'scripts', 'a11y-baseline.json')
@@ -74,20 +75,10 @@ const CLICK_SELF_RE = /@click\.self\s*=/
 const DECORATIVE_RE = /\baria-hidden\s*=/
 const CLICK_DELEGATE_RE = /\bdata-click-delegate\b/
 /**
- * 剥离注释：HTML/Vue 模板注释、块注释、行注释（行注释避开 http:// 这类字符串）。
- * 注释内容用空格替换但**保留其中的换行** —— 行号必须与原文件一致，否则失败信息里的
- * 位置无法定位（跨行注释整体塌缩会让后面所有行号前移）。
+ * 剥离注释的实现已抽到 `scripts/strip-comments.mjs` 供**所有**源码守卫共用（2026-10-09）——
+ * 当时实测另外三个 token 棘轮都没剥注释，一条纯注释就能把它们顶红（假阳性会诱导上调基线）。
+ * 口径：模板/块/行注释，用空格替换但保留换行，行号与原文件一致。
  */
-function stripComments(source) {
-  const blank = text => text.replace(/[^\n]/g, ' ')
-  let out = source.replace(/<!--[\s\S]*?-->/g, blank)
-  out = out.replace(/\/\*[\s\S]*?\*\//g, blank)
-  out = out
-    .split(/\r?\n/)
-    .map(line => line.replace(/(^|[^:'"`\\])\/\/.*$/, '$1'))
-    .join('\n')
-  return out
-}
 
 function walk(dir) {
   const out = []

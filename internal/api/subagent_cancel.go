@@ -37,6 +37,9 @@ import (
 func subagentCancelChannel() string { return db.RedisKey("subagent:cancel") }
 
 // cancelAckKey 与引擎侧 `app/subagent/affinity.py` 的 ack_key 逐字一致。
+// （**已机械化**：`scripts/check_tool_policy_parity.py` 的"共享键前缀"族要求同一字面量
+// 同时出现在两侧源码里 —— 因为两侧**各自**都有测试钉住自己的那份字面量，
+// 只改一侧时"顺手把该侧测试也改了"会让两边都绿，漂移照样上线。）
 //
 // 引擎在**真的发出取消**之后往这个键 LPUSH，网关 BLPOP 等它 —— 这是"取消是否发生"
 // 的唯一可信依据（广播成功 ≠ 有人认领）。
@@ -247,7 +250,8 @@ func (h *SubagentHandler) sessionOwnedByUser(ctx context.Context, sessionID, use
 
 // terminalRunStatuses 是不可逆的终态：处于这些状态的 run 无法也不需要再取消。
 //
-// 与引擎侧状态机保持一致（见 app/subagent/store.py 与 docs/subagent-interaction-redesign.md）。
+// 与引擎侧状态机保持一致（**权威在** app/subagent/store.py 的终态白名单：completed/failed/cancelled/partial，
+// 外加本侧特有的 "lost"）。
 // 其中 "lost" 尤其重要：它表示"失联"（进程重启/心跳超时后被回收器标记），
 // 与 "cancelled"（被主动停掉）语义不同，但两者都属于终态。
 var terminalRunStatuses = map[string]bool{
@@ -255,6 +259,11 @@ var terminalRunStatuses = map[string]bool{
 	"failed":    true,
 	"cancelled": true,
 	"lost":      true,
+	// `partial`（部分完成：有产物但不完整，例如撞上预算）在引擎侧是**终态** ——
+	// 漏了它会让"取消一个已结束的 run"跳过下面的 not_running 幂等分支、照发广播，
+	// 前端显示"已请求停止"而状态永不变化（即本函数注释里说的那种假成功）。
+	// 跨语言一致性由 `scripts/check_tool_policy_parity.py` 的第八族守住。
+	"partial": true,
 }
 
 // runStatusForTenant 取 run 状态；第二个返回值表示"该 run 对本租户可见"。

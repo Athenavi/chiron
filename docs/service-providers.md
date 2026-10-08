@@ -8,7 +8,10 @@
 ## 1. 目录是什么
 
 `internal/api/llm_providers.go` 的 `llmProviderCatalog` 是**内建目录**（当前 **27 条**；新增提供商 =
-在此追加一项 + **同步 Python 兜底目录**）。每项是一个 `llmProviderPreset`：
+在此追加一项 + **同步 Python 兜底目录**）。**这条同步已机械化（2026-10-09）**：
+`scripts/check_tool_policy_parity.py` 比对 Go `llmProviderCatalog` 的 `ID` 与引擎
+`app/providers/catalog.py` 的 `"id"`（当前两侧各 **27** 条且集合相同），只加一侧即门禁红
+（已做变异验证）。每项是一个 `llmProviderPreset`：
 
 | 字段 | 含义 |
 |---|---|
@@ -111,5 +114,5 @@ key 从 <https://opencode.ai/auth> 获取。
 ## 10. 边界
 
 - 目录是**服务端**的单一事实源，前端只负责展示与提交覆盖值；
-- 新增 provider 时**必须同步 Python 兜底目录**，否则网关认得、引擎不认；
+- 新增 provider 时**必须同步 Python 兜底目录**，否则网关认得、引擎不认（**已有门禁**：见 §1）；
 - `model_prefixes` 是**前缀**匹配，因此新增同前缀模型无需改路由，但**跨厂商同前缀**模型会互相争抢候选。

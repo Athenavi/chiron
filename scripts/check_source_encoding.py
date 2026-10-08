@@ -13,7 +13,8 @@ U+FFFD 不是「字体问题」，而是**字节已经损坏**的信号 —— �
 
 判定口径：
   1. 被 git 跟踪的文本文件必须能按 UTF-8 解码；
-  2. 解码后不得含 U+FFFD。
+  2. 解码后不得含 U+FFFD；
+  3. **不得以 UTF-8 BOM 开头**（2026-10-09 补）。
 
 用 `git ls-files` 而不是自己遍历目录，是为了天然跳过未跟踪内容（`vendor/` 下的参考源码、
 `node_modules/`、构建产物等），只对真正入库的源码负责。
@@ -31,6 +32,14 @@ import subprocess
 import sys
 
 REPLACEMENT = "\ufffd"
+
+#: UTF-8 BOM。**为什么也要拦**：`Set-Content -Encoding UTF8`（Windows PowerShell）会给文件
+#: **加 BOM**，而 BOM 对若干消费者是**真故障** —— `Dockerfile` 的首个指令会被读成 `\ufeffFROM`、
+#: Makefile 的首行会被当成非法规则、严格的 JSON / shell 解析器直接拒绝。
+#: 2026-10-09 实测：仓库里有 **4 个被跟踪文件**带 BOM（`Dockerfile` · `Makefile` ·
+#: `python-engine/requirements.txt` · 一个测试文件），而当时的守卫只查 U+FFFD，**完全没覆盖 BOM**。
+#: （顺带确认过：`pip install -r` 本身**容忍** BOM，所以那不是 CI 红的原因；但 Docker/Make 侧不是。）
+BOM = b"\xef\xbb\xbf"
 
 
 def tracked_files() -> list[str]:
@@ -61,6 +70,12 @@ def check(path: str) -> list[str]:
     if b"\x00" in data:
         return []
 
+    if data.startswith(BOM):
+        return [
+            "文件以 UTF-8 BOM（U+FEFF）开头 —— 用**不带 BOM** 的 UTF-8 重写。"
+            "BOM 会让 Dockerfile 的首个指令 / Makefile 的首行 / 严格解析器出问题"
+        ]
+
     try:
         text = data.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -84,16 +99,16 @@ def main() -> int:
             problems.append((path, issue))
 
     if problems:
-        print("编码检查失败 —— 以下文件含 U+FFFD 或非法 UTF-8，属**字节级损坏**，不是排版问题：", file=sys.stderr)
+        print("编码检查失败 —— 以下文件含 U+FFFD、非法 UTF-8 或 UTF-8 BOM，属**字节级问题**，不是排版问题：", file=sys.stderr)
         for path, issue in problems:
             print(f"  {path}: {issue}", file=sys.stderr)
         print("", file=sys.stderr)
-        print("修复方式：用 UTF-8 重写该处文本（U+FFFD 无法自动还原）；"
+        print("修复方式：用**不带 BOM** 的 UTF-8 重写该处文本（U+FFFD 无法自动还原）；"
               "若乱码出现在配置里，务必确认没有被它吞掉的条目。", file=sys.stderr)
         return 1
 
     if verbose:
-        print(f"编码检查通过：{len(files)} 个被跟踪文件均为合法 UTF-8 且不含 U+FFFD")
+        print(f"编码检查通过：{len(files)} 个被跟踪文件均为合法 UTF-8、不含 U+FFFD、且无 BOM")
     else:
         print("编码检查通过")
     return 0

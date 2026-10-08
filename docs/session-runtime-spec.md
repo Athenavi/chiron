@@ -40,6 +40,10 @@ provider    : 请求显式 > runtime > 空（自动路由）
 
 注意 **`mode` / `tools_mode` 没有 runtime 这一层**（见 §2）。`validAgentModes` =
 `normal | minimal | ptc | creative`，与引擎 `app/agent/modes.py` 的 `_BASE_MODES` 对齐。
+**这条对齐已机械化（2026-10-09）**：`scripts/check_tool_policy_parity.py` 现在同时校验
+**Go `validAgentModes` ↔ 引擎 `AgentMode` 枚举 ↔ `_BASE_MODES` 实际覆盖**（三方必须一致，
+并单独拦"枚举加了成员却忘写 base 配置"——那种漂移只在真正选中该模式时才以 `KeyError` 暴露）。
+已做两次变异验证（Go 侧塞入引擎不认的模式 / 注释掉一个 base 配置，守卫均变红）。
 
 每个解析结果都带**来源**（`resolvedValue{value, source}`），`source` 取值：
 `request`（本次请求显式）· `session`（会话 runtime）· `default`（用户/全局默认）·

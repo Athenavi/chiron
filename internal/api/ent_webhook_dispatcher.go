@@ -16,7 +16,7 @@ import (
 	"github.com/redis/go-redis/v9"
 )
 
-// ── 企业 Webhook 投递器（多实例可靠投递，见 docs/ent-webhook-design.md）──
+// ── 企业 Webhook 投递器（多实例可靠投递）──
 //
 // 事件经 IngestEvent 持久化到 Redis Stream webhook:events；本投递器以消费组
 // （webhook-workers）跨实例共享读取并 HTTP 投递：

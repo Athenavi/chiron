@@ -20,20 +20,22 @@
 
 | 文件 | 行数 | KB | symbols | 主要矛盾 |
 |---|---|---|---|---|
-| `frontend-vue/src/views/ChatView.vue` | 3429 | 141.6 | 155 | 单文件承载整条对话链路 + 侧栏 + 导出 |
-| `python-engine/app/agent/runtime.py` | 3238 | 150.7 | 27 | 一个 `AgentRuntime` 类占大头（旧表的 1841/1557 已过期） |
+| `frontend-vue/src/views/ChatView.vue` | 3436 | 145.1 | 155 | 单文件承载整条对话链路 + 侧栏 + 导出 |
+| `python-engine/app/agent/runtime.py` | 3275 | 155.6 | 27 | 一个 `AgentRuntime` 类占大头（旧表的 1841/1557 已过期） |
 | `frontend-vue/src/views/MediaView.vue` | 1770 | 56.8 | 88 | 列表/筛选/多选/面包屑混在一起 |
 | `python-engine/app/memory/service.py` | 1667 | 63.9 | 10 | `MemoryService` 单类 |
-| `frontend-vue/src/views/WorkflowView.vue` | 1637 | 58.1 | 73 | 画布 + 模板 + 实例 + 执行日志（**执行/轮询簇已抽**，见 §2.5） |
+| `frontend-vue/src/views/WorkflowView.vue` | 1598 | 57.8 | 73 | 画布 + 模板 + 实例 + 执行日志（**执行/轮询簇已抽**，见 §2.5） |
 | `frontend-vue/src/components/chat/ChatInput.vue` | 1259 | 49.5 | 66 | 输入 + 附件 + 模型选择 + 提及 |
 | `frontend-vue/src/components/chat/ChatSidePanel.vue` | 1180 | 46.3 | 44 | 用户菜单 + 轨迹 + 会话列表 + 抽屉拖拽 |
 | `python-engine/app/queue/worker.py` | 1174 | 49.7 | 4 | `QueueWorker` 单类 |
-| `python-engine/app/main.py` | 2132 | 93.3 | 9 | 启动/关闭集中（已抽 7 个函数；`lifespan` 仍 ~560 行） |
+| `python-engine/app/main.py` | 2141 | 96.0 | 9 | 启动/关闭集中（已抽 7 个函数；`lifespan` 仍 ~560 行） |
 | `internal/api/mail_handler.go` | 696 | 25.3 | 32 | ✅ **已拆**（1488 → 695，4 个文件） |
 | `internal/api/gateway_router.go` | 500 | 21.7 | 7 | ✅ **已拆**（1254 → 442，11 个 `routes_*.go`；现 500 含后续新增路由） |
 | `internal/session/manager.go` | 129 | 3.5 | 8 | ✅ **已拆**（1198 → 128，4 个文件） |
 
 > **测得 2026-10-08（round 43）**：符号口径同上（Go `^func|^type`、Python `^(def|class)`、Vue/TS `^(function|const X = ref|computed)`）。此前表里的数字有多处过期到**不可用**（`runtime.py` 1841 → 实际 3238、`session/manager.go` 1098 → 已拆成 129），**引用规模前必须现场测量**。
+>
+> **复测 2026-10-09**：行数与 KB **逐条复测**，**4 处已过期并已更正** —— `ChatView.vue` 3429→**3436** / 141.6→**145.1 KB** · `runtime.py` 3238→**3275** / 150.7→**155.6** · `WorkflowView.vue` 1637→**1598** / 58.1→**57.8**（又抽走了一批） · `main.py` 2132→**2141** / 93.3→**96.0**；其余 **8 条逐字节对上**（顺带确认了两个口径：**KB = 字节数 ÷ 1024**、**行数 = 换行符数 + 1**）。**`symbols` 列未能复现**：按上表字面规则复测系统性偏低（`ChatView.vue` 155 vs 130 · `MediaView.vue` 88 vs 74 · `WorkflowView.vue` 73 vs 56 · `ChatInput.vue` 66 vs 60 · `ChatSidePanel.vue` 44 vs 37），说明当时那条口径比字面更宽 ⇒ **该列仅作参考，引用前请按自己的规则重测**（Go/Python 三列复测一致，差异只在 Vue/TS）。
 
 ## 2. 边界建议（按收益排序）
 

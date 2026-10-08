@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - SubagentRun
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-09-21 18:33:14
+生成时间：2026-10-09 07:12:02
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey, JSON
@@ -82,6 +82,26 @@ class SubagentRun(Base):
 
     created_at = Column(DateTime, default=datetime.utcnow, doc='创建时间')    
 
+    inherited_messages = Column(Integer, default=0, doc='fork 时继承的历史消息条数（审计，迁移 0004）')
+
+
+    retryable = Column(Boolean, default=False, doc='这次失败是否值得重试（与 error 文本分开，迁移 0006）')
+
+
+    output_bytes = Column(BigInteger, default=0, doc='产出体量（字节数，迁移 0006）')
+
+
+    validator_mode = Column(String(16), nullable=True, doc='收尾校验模式（迁移 0006）')
+
+    validator_outcome = Column(String(16), nullable=True, doc='收尾校验结论（迁移 0006）')
+
+    validator_attempt = Column(Integer, default=0, doc='收尾校验尝试次数（迁移 0006）')
+
+
+    error_code = Column(String(32), nullable=True, doc='机器可读的失败码（迁移 0007）')
+
+    rerun_of = Column(String(64), nullable=True, doc='该 run 是对哪个 run 的重跑（迁移 0006）')
+
 
     def to_dict(self, exclude_sensitive=True):
         """转换为字典
@@ -115,6 +135,14 @@ class SubagentRun(Base):
             'started_at': self.started_at.isoformat() if self.started_at else None,
             'finished_at': self.finished_at.isoformat() if self.finished_at else None,
             'created_at': self.created_at.isoformat() if self.created_at else None,
+            'inherited_messages': self.inherited_messages,
+            'retryable': self.retryable,
+            'output_bytes': self.output_bytes,
+            'validator_mode': self.validator_mode,
+            'validator_outcome': self.validator_outcome,
+            'validator_attempt': self.validator_attempt,
+            'error_code': self.error_code,
+            'rerun_of': self.rerun_of,
         }
 
         if not exclude_sensitive:

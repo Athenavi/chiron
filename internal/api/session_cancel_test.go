@@ -19,6 +19,7 @@ import (
 //
 // 归属校验分支需要真实 PostgreSQL（sessionMgr.GetSession），这里覆盖不需要库的那些：
 // 本地属主取消、非属主被拒且不扰动条目、缺身份/缺参数、以及"无本地任务且无 Redis"。
+// **那条分支的用例已补齐**：`session_cancel_live_test.go`（真实 PG，2026-10-09）。
 
 func cancelRequest(userID, sessionID string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/cancel?session_id="+sessionID, nil)

@@ -347,6 +347,42 @@ models:
         description: 创建时间
         default: now()
 
+      inherited_messages:
+        type: integer
+        description: fork 时继承的历史消息条数（审计，迁移 0004）
+        default: 0
+      retryable:
+        type: boolean
+        description: 这次失败是否值得重试（与 error 文本分开，迁移 0006）
+        default: false
+      output_bytes:
+        type: integer
+        db_type: bigint
+        description: 产出体量（字节数，迁移 0006）
+        default: 0
+      validator_mode:
+        type: string
+        maxLength: 16
+        description: 收尾校验模式（迁移 0006）
+        nullable: true
+      validator_outcome:
+        type: string
+        maxLength: 16
+        description: 收尾校验结论（迁移 0006）
+        nullable: true
+      validator_attempt:
+        type: integer
+        description: 收尾校验尝试次数（迁移 0006）
+        default: 0
+      error_code:
+        type: string
+        maxLength: 32
+        description: 机器可读的失败码（迁移 0007）
+        nullable: true
+      rerun_of:
+        type: string
+        maxLength: 64
+        description: 该 run 是对哪个 run 的重跑（迁移 0006）
   SubagentRunStep:
     table: subagent_run_steps
     orm: true
@@ -1471,6 +1507,28 @@ models:
         description: 会话标签（前端分类筛选用，持久化到 DB）
         nullable: true
 
+      parent_session_id:
+        type: string
+        maxLength: 36
+        description: 源会话（血缘）—— 分支特性
+      alias:
+        type: string
+        maxLength: 64
+        description: 会话别名
+      branch_from_seq:
+        type: integer
+        description: 分叉点，保留到源会话的第几条消息（含该条，1 基）
+      branch_mode:
+        type: string
+        maxLength: 16
+        description: 分支模式 truncate / condense
+      branch_state:
+        type: string
+        maxLength: 16
+        description: 分支状态 NULL(truncate) / pending / ready / failed
+      branch_keep_tail:
+        type: integer
+        description: condense 下保留的原文条数（truncate 写 NULL）
   BillingRecord:
     table: billing_records
     orm: true
@@ -1584,6 +1642,11 @@ models:
         description: 所属回合 ID（turn 一致性：消息/工具/计费同回合可幂等叙事）
         nullable: true
 
+      source:
+        type: string
+        maxLength: 32
+        default: ''
+        description: 消息来源（varchar(32) NOT NULL DEFAULT 空串，迁移 0001 起就有）
   Turn:
     table: turns
     orm: true
@@ -1645,6 +1708,19 @@ models:
         description: 创建时间
         default: now()
 
+      model:
+        type: string
+        maxLength: 128
+        description: 该回合使用的模型
+      cache_hit:
+        type: boolean
+        default: false
+        description: 是否命中提示缓存（NOT NULL DEFAULT false）
+      cached_tokens:
+        type: integer
+        db_type: bigint
+        default: 0
+        description: 命中的缓存 token 数（bigint NOT NULL DEFAULT 0）
   Task:
     table: tasks
     orm: true
@@ -3628,6 +3704,11 @@ models:
         description: 更新时间
         default: now()
 
+      runtime:
+        type: object
+        db_type: jsonb
+        default: '{}'
+        description: 运行期状态（jsonb NOT NULL DEFAULT 空对象）
   UnifiedMessage:
     table: unified_messages
     orm: true

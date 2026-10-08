@@ -14,6 +14,7 @@
 import { readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, relative } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { stripComments } from './strip-comments.mjs'
 
 const ROOT = fileURLToPath(new URL('..', import.meta.url))
 
@@ -40,7 +41,9 @@ function walk(dir) {
 const counts = new Map()
 for (const file of walk(join(ROOT, 'src'))) {
   const rel = relative(ROOT, file).split('\\').join('/')
-  const hits = readFileSync(file, 'utf8').match(BARE_Z_INDEX)
+  // 先剥注释再匹配：否则一条**纯注释**（`/* 备注：z-index: 9999 *\/`）就会被当成违规，
+  // 假阳性会诱导人上调基线、护栏随之失效（2026-10-09 实测过）。
+  const hits = stripComments(readFileSync(file, 'utf8')).match(BARE_Z_INDEX)
   if (hits) counts.set(rel, hits.length)
 }
 

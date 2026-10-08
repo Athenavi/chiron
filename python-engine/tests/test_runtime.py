@@ -7,6 +7,7 @@ back to the LLM (double-escaped). It must truncate the plain text directly.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import MagicMock
 
 import pytest
@@ -409,6 +410,72 @@ class TestToolGuardConfirmPath:
         assert evt is not None and evt.type == "approval"
         assert evt.tool_call_id == "tc1"
         assert "tc1" in runtime._pending_approvals, "approval future 未注册"
+
+    @pytest.mark.asyncio
+    async def test_confirm_path_records_asked_audit(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """确认路径必须留 `asked` 记录。
+
+        只记"决定"的话，**"问了但没等到决定"**（等待期间进程被杀、副本被回收、
+        连接断开后无人再答）在 `approval_audit.jsonl` 里**完全看不出来** ——
+        这正是本轮补上的缺口（见 docs/dsh-gap-analysis.md 的"工具审批 / 权限"一行）。
+        """
+        from app.agent import approval_audit
+
+        monkeypatch.setattr(approval_audit, "AUDIT_DIR", tmp_path)
+        runtime = AgentRuntime(gateway=None)
+        task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="",
+                         content="hi", max_turns=2)
+
+        _tool_result, evt = await runtime._guarded_execute_tool(self._tc("tc-ask"), task)
+        assert evt is not None and evt.type == "approval"
+
+        path = tmp_path / "approval_audit.jsonl"
+        entries = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+        ]
+        asked = [e for e in entries if e.get("event") == "asked"]
+        assert asked, f"确认路径没有写 asked 审计：{entries}"
+        assert asked[-1]["tool_call_id"] == "tc-ask"
+        assert asked[-1]["tool"] == "run_code"
+
+    @pytest.mark.asyncio
+    async def test_confirm_then_approve_pairs_asked_and_decided(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        """配对不变式（端到端）：确认 → 批准 ⇒ 流水里 `asked` 与 `decided` **各一条**且同 id。
+
+        * **有 `asked` 没有 `decided`** = 问了但没等到决定（等待期进程被杀 / 副本被回收 /
+          连接断开后无人再答）—— 这类记录以前根本不存在，现在可查；
+        * **有 `decided` 没有 `asked`** = 决定没有入口留痕（本类缺陷已修）。
+        """
+        import asyncio as _asyncio
+
+        from app.agent import approval_audit
+
+        monkeypatch.setattr(approval_audit, "AUDIT_DIR", tmp_path)
+        runtime = AgentRuntime(gateway=None)
+        task = AgentTask(id="t1", tenant_id="t", user_id="u", session_id="",
+                         content="hi", max_turns=2)
+
+        _tool_result, evt = await runtime._guarded_execute_tool(self._tc("tc-pair"), task)
+        assert evt is not None
+        fut = _asyncio.ensure_future(runtime._await_approval(self._tc("tc-pair"), task))
+        await _asyncio.sleep(0.05)
+        assert await runtime.submit_approval("tc-pair", True) is True
+        await _asyncio.wait_for(fut, timeout=5.0)
+
+        path = tmp_path / "approval_audit.jsonl"
+        entries = [
+            json.loads(line) for line in path.read_text(encoding="utf-8").splitlines() if line
+        ]
+        events = [(e.get("event"), e.get("tool_call_id")) for e in entries]
+        assert ("asked", "tc-pair") in events, f"缺少 asked 入口留痕：{events}"
+        assert ("decided", "tc-pair") in events, f"缺少 decided 留痕：{events}"
+        asked = [e for e in entries if e.get("event") == "asked"]
+        decided = [e for e in entries if e.get("event") == "decided"]
+        assert len(asked) == 1 and len(decided) == 1, f"配对应各一条：{events}"
 
     @pytest.mark.asyncio
     async def test_approve_resumes_execution(self):

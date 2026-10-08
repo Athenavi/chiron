@@ -20,6 +20,9 @@ from pathlib import Path
 from app.memory.service import MemoryService
 from app.memory.session_meta import IDLE_TTL, SessionMetaStore
 from tests.fakes import InMemoryProfileStore
+from tests.source_scan import without_comments
+
+MAIN_PY = Path(__file__).resolve().parents[1] / "app" / "main.py"
 
 
 def _expired(store: SessionMetaStore, session_id: str) -> None:
@@ -155,10 +158,10 @@ def test_assembly_starts_the_cleanup_task():
 
     这里读源码而不是起 lifespan：起一次完整 app 需要 PG/Redis，代价远大于这条断言的价值；
     而"有没有接线"恰好是静态可判的。
+
+    **判据**：先剥注释再匹配（`tests/source_scan.without_comments`）—— 否则把接线注释掉就能骗过它。
     """
-    src = (
-        Path(__file__).resolve().parents[1] / "app" / "main.py"
-    ).read_text(encoding="utf-8")
+    src = without_comments(MAIN_PY.read_text(encoding="utf-8"))
 
     assert "start_periodic_cleanup(on_expired=" in src, (
         "L1 清理任务没被启动 ⇒ 会话级 rollup 永不入队（N1 回归）"

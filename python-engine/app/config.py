@@ -138,6 +138,14 @@ class Settings(BaseSettings):
     hooks_allow_user_defined: bool = False
     #: 单个 hook 的硬超时（秒）。超时按"失败"处理但**不阻断主流程**（fire-and-forget）。
     hooks_timeout_seconds: int = 5
+    #: **一个事件**上所有 hook 的累计预算（秒）。没有它时最坏情况是 `N × 单 hook 超时`
+    #: 会按 hook 数线性拖慢每一个工具调用；预算耗尽后**不再执行**后续 hook 并留审计。
+    #: 默认 10 s：单个 hook（常见情形）行为与从前完全一致。
+    hooks_event_budget_seconds: int = 10
+    #: 部署级声明文件（`hooks.json`）路径。**默认空 = 不读文件、不注册、不执行 = 零行为变化**。
+    #: 只接受**部署级**声明（文件里的条目一律视为部署级）；格式与纪律见
+    #: `docs/hook-protocol-design.md` §4.2。改动需重启生效（不做热加载）。
+    hooks_config_path: str = ""
 
     # ── 部署级扩展（批 H）──
     #: 机制总开关。**默认关** —— 关闭时零行为变化（与批 G 的 hooks 同一约定）。
@@ -262,6 +270,15 @@ class Settings(BaseSettings):
     #: **租户白名单**（逗号分隔）。只有名单内的租户走服务；**空名单 = 谁都不走** ——
     #: 这不是"没配就全走服务"，后者是个危险的默认。
     sandbox_service_tenants: str = ""
+
+    #: read-before-write **严格模式**（默认关 —— 见 `vendor/规划.md` §3.3 的待决问题）。
+    #:
+    #: * 关（默认）：**兼容旧行为** —— 只拦"读过但已变化"的文件，未读过的文件放行；
+    #: * 开：**已存在但从未读过**的文件也拒绝（要求先 `read_file`），对位 DSH 的
+    #:   `dsh-fs-observation-policy`（它把 read-before-edit 当硬要求）。
+    #:
+    #: 不存在的路径**两种模式都放行**：没有可过期的内容，新建文件本就没有"读"可做。
+    fs_require_observation: bool = False
 
     # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──
     #
