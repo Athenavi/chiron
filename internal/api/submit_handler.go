@@ -384,10 +384,9 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 
 	var finalContent string
 	var streamErr string // 引擎回传的 error 事件内容（用于 turns.status=failed）
-	var inputTokens, outputTokens int
-	// 每轮统计：命中提示词缓存的输入 token，以及本次实际使用的模型（引擎随 done 事件回传）。
-	// 会话地图详情页的「缓存命中率」与「每轮模型」都来自这两个值。
-	var cachedTokens int
+	// 每轮累计用量：喂 FinishTurn（缓存命中率/每轮模型）与计费。**只收 `done` 的累计值** ——
+	// `usage` 是按次增量，并入会导致重复计费，守卫见 usageTotals.withEvent 与其单测。
+	var usage usageTotals
 	var turnModel string
 	turnToolCallIDs := []string{} // S 修复：messages.tool_calls 列只存 tool_call id 集合（内容在 tool_calls 表）
 
@@ -485,15 +484,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			// 引擎侧异常：记录原因，回合终态判为 failed（000.md 第 14 条：失败不再静默）
 			streamErr = evt.Content
 		}
-		if evt.InputTokens > 0 {
-			inputTokens += evt.InputTokens
-		}
-		if evt.OutputTokens > 0 {
-			outputTokens += evt.OutputTokens
-		}
-		if evt.CachedTokens > 0 {
-			cachedTokens += evt.CachedTokens
-		}
+		usage = usage.withEvent(evt.Type, evt.InputTokens, evt.OutputTokens, evt.CachedTokens)
 		// 模型名只在 done 事件里带：取最后一个非空值（一次提交可能跨多轮 LLM 调用）
 		if evt.Model != "" {
 			turnModel = evt.Model
@@ -542,7 +533,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		// 无文本无工具：仅用户消息已由 SaveUserMessage 持久化
 	}
 
-	if inputTokens > 0 || outputTokens > 0 {
+	if usage.input > 0 || usage.output > 0 {
 		if h.biller != nil {
 			// 检查是否仍在免费额度内
 			freeCount, fcErr := h.biller.DailyFreeCount(storeCtx, userID)
@@ -553,11 +544,11 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 				}
 			} else {
 				// 超出免费额度或查询失败：正常扣费
-				if _, err := h.biller.DeductTokens(userID, inputTokens, outputTokens, turnID); err != nil {
+				if _, err := h.biller.DeductTokens(userID, usage.input, usage.output, turnID); err != nil {
 					slog.Error("billing: DeductTokens failed", "user", userID, "error", err)
 				} else {
 					// 企业成本中心 token 明细（billing_records）；失败仅告警，不影响已扣费与流水
-					if recErr := h.biller.RecordTokenUsage(storeCtx, userID, sessionID, inputTokens, outputTokens, turnID); recErr != nil {
+					if recErr := h.biller.RecordTokenUsage(storeCtx, userID, sessionID, usage.input, usage.output, turnID); recErr != nil {
 						slog.Warn("billing: enterprise token usage record failed",
 							"user", userID, "session", sessionID, "error", recErr)
 					}
@@ -575,7 +566,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		turnStatus = "failed"
 	}
 	if turnID != "" {
-		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, inputTokens, outputTokens, cachedTokens)
+		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, usage.input, usage.output, usage.cached)
 	}
 
 	h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})

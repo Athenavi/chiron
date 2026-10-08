@@ -6,7 +6,7 @@
 ## 0. 当前状态
 
 **最近一次核验（2026-10-08）**：Go build/vet/test 通过；另以本机真实 Redis 跑通 `internal/broadcast` · `internal/api` · `internal/engine` 的 Live 用例（补发保序/排他、跨实例可见、缓冲上限、滑动 TTL、运行锁互斥/续期/释放-CAS、取消归属、**提交路径的会话忙拒绝（HTTP 级）**、归属路由与回退）· `ruff` 0 · `mypy app/ acp_adapter/` 0（242 文件）· `pytest -m "not integration"` **1855 passed** · `pytest -m integration`（真实 PG + Redis 8）**8 passed**（另 2 条依赖本机未启动的 Go 网关，CI 的 real-stack job 会拉）· `check_source_encoding` / `check_tool_policy_parity` 通过 · alembic 单 head `0007_subagent_error_code`。
-**未核验**（沿用上次全量）：`npm run test` 466 passed · `check:ui` · `vue-tsc -b` · `npm run lint` 0 errors / 27 warnings。**本机无 compose 插件、Docker daemon 未运行** ⇒ 容器相关改动（内置技能挂载）须在能跑 Docker 的环境复核。**CI 尚未实跑**（分支未 push，见 §3）。
+**前端（本机已核验）**：`npx vitest run` **477 passed**（56 文件）· `vue-tsc -b` 通过 · 本次改动文件 `eslint` 0 problems。**本机无 compose 插件、Docker daemon 未运行** ⇒ 容器相关改动（内置技能挂载）须在能跑 Docker 的环境复核。**CI 尚未实跑**（分支未 push，见 §3）。
 
 ## 1. 已完成（只留指针与仍生效的护栏）
 
@@ -19,6 +19,7 @@
 | L3-7 `WorkflowView` 组件测试 | `views/__tests__/WorkflowView.spec.ts` | 两个 VTU 坑记在测试注释里 |
 | L3-8 `SSEProducer` 死代码 | 已删除 | [架构与请求链路](architecture.md) §6 已同步 |
 | L3-9 工具名单漂移 | 两侧策略表已修 | **不变量**：`scripts/check_tool_policy_parity.py`（已接入 CI 的 `Source encoding` job）+ `tests/test_tool_policy_coverage.py` 的 `LEGACY_TOOL_NAMES` |
+| L4-2 CLI 迁移入口 | [决策记录](db-migration-entry.md) | **Alembic 唯一入口**：Go `db migrate`、Python `migrate run`/`downgrade` 均已删，只留**只读**诊断（`db status` / `migrate history`，失败非 0 退出）；`scripts/init.py` 第 6 步保留（跑的是同一份 `alembic.ini`，属部署向导） |
 | L5-2 架构与请求链路 | `65b0558` | 文中命令均本机实测 |
 
 ## 2. 待办
@@ -29,18 +30,18 @@
 - **待拍板**：设计 §8 的 5 问 —— 对话 run 是否改走 `engine:tasks`、messages 快照形状、非幂等工具的中断判定、reconciler 接管风暴、checkpoint TTL 取值。
 - 拆批见设计 §7（批 2 只增表与写入、无行为变更；批 3 才改执行路径）。
 
-### L4-2 CLI 迁移入口 —— 决策已落地，剩两处待定
-
-- 决策（用户）：**Alembic 唯一入口**（→ [决策记录](db-migration-entry.md)）。理由：迁移是发布流程步骤而非运行时命令；两套入口必然版本漂移；应用镜像**刻意不装 Python**，CLI 迁移在生产最需要时恰恰不可用。
-- 已落地：删 `chiron-cli db migrate` / `runDBMigrate`、失去调用者的 `internal/db/migrate.go`（含测试）与 `hasInternalMigrationFiles`；**保留**只读 `db status` 与 `internal/db/schema_version.go`。
-- **未处理**（决策文档 §4）：`scripts/cli/commands/migrate.py` 的 `revision`（**autogenerate**）/`upgrade`/`downgrade` 与 `scripts/init.py` 第 6 步自动迁移 —— 定下前「唯一入口」只在 Go CLI 层成立。
-
 ### L4-3 时间列 `timestamp` → `timestamptz`
 
-- 依据（实测）：**142 列** `timestamp without time zone`（72 表）、9 列 `with time zone`；唯一 VARCHAR 是已废弃 `schema_migrations.applied_at`。
-- ⚠ **前置未解**：naive 值的**时区语义未确认**，而它决定 `USING` 怎么写 —— Go 侧 `time.Now().UTC()` 仅 **7** 处、`time.Now()`（**本地时间**）**102** 处；PG 的 `now()` 写进无时区列时按**会话时区**丢弃时区（本机实测 `+08`）。照抄 `USING col AT TIME ZONE 'UTC'` 会让存量**整体偏移 8 小时**；须先抽样（近期写入行 vs `timestamptz` 列/UTC 时刻）再定 `AT TIME ZONE '<会话时区>'` 或分级处理。
-- 剩余：提升为 `timestamptz`（含 `scripts/generate_orm_models.py` 与数十张表）—— ORM 侧需渲染 `DateTime(timezone=True)`（模板 `orm-template.jinja2` 现无条件渲染 `DateTime`）。
-- 前置：① 上述抽样确认；② 需可达 PostgreSQL。验收：新迁移追加到 `migrations/versions/`（单 head，CI schema job 校验）· ORM 重新生成 · `alembic upgrade head --sql` 通过 · **迁移注释写清 `USING` 的时区依据**。
+- 依据（本机实测 2026-10-08）：**142 列** naive（72 表）· **12 列** `timestamptz`（5 表）· 唯一 VARCHAR 时间列是已废弃的 `schema_migrations.applied_at`。
+- **语义已抽样判定**：存量 naive 值存的是**本地墙钟（+08）**而非 UTC —— 同一轮 run 在 `agent_runs.*`（`timestamptz`）是 `2026-09-30T14:26:40Z`，而 `turns` / `messages`（naive）是 `22:26–22:27`。
+- ⚠ **风险不是"哪一侧对"，而是"同一列可能混着两种语义"**：`NOW()`/`CURRENT_TIMESTAMP`（**95** 处）跟**数据库会话时区**，`time.Now()`（**110** 处，含 6 处 `.UTC()`）跟**宿主时区**；两侧不一致时（典型：容器 TZ=UTC + 数据库 `timezone=Asia/Shanghai`）任何单条 `USING … AT TIME ZONE 'X'` 都会把一半的行移错时刻。**已加启动只读诊断**：`internal/db/tz_diagnostic.go` + `warnOnTimezoneMismatch`（不一致即告警；本机实测两侧同为 `+08` ⇒ aligned）。
+- 剩余步骤：① 生产先跑同一条诊断（或把两侧时区对齐）；② **抽样确认生产存量语义，不要套用本机结论**；③ 用**影子列回填 → 校验 → 切换**三步走，而不是一次性 `ALTER … USING`；④ ORM 渲染 `DateTime(timezone=True)`（模板现无条件渲染 `DateTime`）。
+- 前置：生产时区确认；需可达 PostgreSQL。验收：新迁移单 head + `alembic upgrade head --sql` 通过 + ORM 重新生成 + **迁移注释写清 `USING` 的时区依据**。
+
+### DSH 切口 #3 剩余的一半：阶段（Phase）事件
+
+- 思考（A1 的 `thinking`）与用量（C3 的 `usage`，**每次 LLM 调用**一条增量）**两条通道已落地且前端已消费**：`usage` 经 `mergeTurnStats` **累加成本轮一行** `turn_stats`（多步 ReAct 每个工具步一条事件，逐条 push 会堆出 N 行）；跨层计费守卫见 `internal/api/usage_accounting.go`。见 [差距分析](dsh-gap-analysis.md) §1 与切口 #3。
+- 剩余**阶段**：需先定两件事 —— ① "新增事件类型"是否落入 `vendor/规划.md` §6「不改 SSE 协议」的边界；② 阶段的语义（当前运行时是 ReAct / Plan-and-Execute 循环，**对外没有阶段概念**，不应为了像对标物而造一个）。
 
 ### L3-4 巨型文件拆分 —— 批次 1、3 与批次 2(类型) 已完成
 
@@ -57,7 +58,9 @@
 | 新功能方向 | 产品路线图输入 |
 | 前端 e2e（Playwright） | 当前无 e2e 配置，需确认是否引入浏览器依赖 |
 | `internal/{enterprise,monitor,storage,id,model}` 补测试 | 当前 0 测试文件但较小，需确认回归风险 |
+| `scripts/` 无 lint 门禁 | CI 只跑 `scripts/check_*.py` 两个守卫；`ruff check scripts/` 现有 **8** 处历史问题（含 `scripts/cli/__init__.py` 一处刻意的 E402）——需决定是否纳入门禁并清历史 |
 | `internal/api` 路由聚合方式 | 已评估（L3-4）：按业务域拆 `routes_*.go`，见 [拆分评估](split-assessment.md) |
+| **遗留的第二套 agent 循环 `app/agent/loop.py`** | 实测：它有自己的 `run_agent`（316 行，也自发 `usage`），经引擎路由 `/v1/agent/run` 暴露；而**产品链路是 `/v1/agent/submit` → `AgentRuntime`（`runtime.py`）**，且 Go 侧 `PythonClient.Run`（唯一会打 `/v1/agent/run` 的调用方）**零调用者** ⇒ 该文件＋该端点是**遗留**。待定：删除（含 `tests/test_agent.py` 的覆盖）还是显式标注 legacy；删前要确认没有外部调用方。
 | 引擎镜像自包含内置技能 | 现由 compose 只读挂载 + `CHIRON_BUILTIN_SKILLS_PATH` 提供（源缺失会告警）；镜像自包含需把构建上下文改为仓库根并 `COPY market/skills` —— 必须**真实 `docker build` + 容器内自查**，不能用单测替代 |
 
 ## 4. 建议顺序

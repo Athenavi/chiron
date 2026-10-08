@@ -410,6 +410,7 @@ func verifySchemaVersion(ctx context.Context, cfg *config.Config) {
 		// revision 一致 ≠ 表都在：手工删表后 revision 仍匹配，缺失会推迟到运行时
 		// 才以 relation does not exist 暴露。补一道只读的存在性校验。
 		verifyRequiredTables(ctx, cfg)
+		warnOnTimezoneMismatch(ctx)
 		return
 	}
 	slog.Error("database schema does not match this build",
@@ -421,6 +422,29 @@ func verifySchemaVersion(ctx context.Context, cfg *config.Config) {
 	}
 	slog.Error("FATAL: refusing to start on mismatched schema; set ALLOW_SCHEMA_DRIFT=true to bypass")
 	os.Exit(1)
+}
+
+// warnOnTimezoneMismatch 只读比对数据库会话时区与宿主时区，不一致时告警（不阻断启动）。
+//
+// 为什么值得一条启动诊断：库里 142 个 naive `timestamp` 列的语义**取决于写入路径**——
+// SQL 的 `NOW()` 跟**会话时区**，Go 的 `time.Now()` 跟**宿主时区**。两侧一致时语义单一；
+// 不一致时同一列会混着两种含义，届时 L4-3 的 `ALTER … USING` 无论选哪个时区都会移错一半的行
+// （见 docs/development-roadmap.md 的 L4-3 与 internal/db/tz_diagnostic.go）。
+func warnOnTimezoneMismatch(ctx context.Context) {
+	dbOffset, hostOffset, aligned, err := db.CheckTimezoneAlignment(ctx, time.Now())
+	if err != nil {
+		slog.Debug("timezone diagnostic unavailable", "error", err)
+		return
+	}
+	if aligned {
+		return
+	}
+	slog.Warn("database session timezone differs from host timezone: "+
+		"naive timestamp columns will hold MIXED semantics "+
+		"(PG now() follows the session timezone, Go time.Now() follows the host), "+
+		"so migrating them to timestamptz cannot use a single AT TIME ZONE; "+
+		"align the two first (see docs/development-roadmap.md L4-3)",
+		"db_offset_seconds", dbOffset, "host_offset_seconds", hostOffset)
 }
 
 // verifyRequiredTables 只读校验网关必需的表是否存在（清单见 db.RequiredTables）。

@@ -107,6 +107,51 @@ export interface TurnStatsItem extends ChatItemBase {
   durationSec?: number
 }
 
+/** 一条用量事件的增量。注意 `usage` 是**每次 LLM 调用**一条（C3），不是每轮一条。 */
+export interface TurnStatsDelta {
+  inputTokens: number
+  outputTokens: number
+  durationMs?: number
+}
+
+/**
+ * 把一条用量增量并入**本轮**的 `turn_stats` 条目，返回该条目在 `items` 里的 id。
+ *
+ * 为什么需要它：引擎的 `usage` 事件是**每次 LLM 调用**一条 —— 一次提交跨多步
+ * （多步 ReAct 每个工具步一次调用）就会有多条。若按事件逐条 push，记录里会堆出
+ * N 行"本轮用量"，而状态栏只该有**一行**本回合合计。
+ *
+ * 语义：同一 `statsId` 上累加；`statsId` 为空或对应条目已不在（被清掉/换会话）时新建一条。
+ * 会**原地修改** `items`（与视图层的响应式数组一致）。
+ */
+export function mergeTurnStats(
+  items: ChatItem[],
+  statsId: string,
+  delta: TurnStatsDelta,
+  makeId: () => string,
+): string {
+  const existing = statsId ? items.find(it => it.id === statsId) : undefined
+  if (existing?.kind === 'turn_stats') {
+    existing.inputTokens += delta.inputTokens
+    existing.outputTokens += delta.outputTokens
+    if (delta.durationMs && delta.durationMs > 0) {
+      existing.durationSec = Math.round((existing.durationSec ?? 0) * 10 + delta.durationMs / 100) / 10
+    }
+    return statsId
+  }
+  const id = makeId()
+  items.push({
+    kind: 'turn_stats',
+    id,
+    inputTokens: delta.inputTokens,
+    outputTokens: delta.outputTokens,
+    ...(delta.durationMs && delta.durationMs > 0
+      ? { durationSec: Math.round(delta.durationMs / 100) / 10 }
+      : {}),
+  })
+  return id
+}
+
 export type ChatItem = TextItem | ReasoningItem | ToolCallItem | ToolResultItem | TurnStatsItem | DateDividerItem
 
 /**

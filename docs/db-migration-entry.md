@@ -2,7 +2,7 @@
 
 > 决策日期：2026-09-28
 > 决策：**CLI 完全不接触迁移；Alembic 是唯一迁移入口。**
-> 状态：Go CLI 侧已落地；另有两处入口**待单独决定**（见 §4）。
+> 状态：**三处入口口径已统一**（Go CLI、Python CLI、初始化向导，见 §3/§4）。
 
 ## 1. 背景
 
@@ -32,12 +32,12 @@
 - **保留** `chiron-cli db status`（只读）与 `internal/db/schema_version.go`（网关启动时的 schema 校验，`ParseMigrationHead`/`CheckSchemaVersion`），后者不写任何 schema；
 - `db` 子命令组的帮助文本改写为「只读诊断 + 明确指向 Alembic」，并写清两条标准命令。
 
-## 4. 仍未处理（需单独决定）
+## 4. 另外两处入口（已决定，2026-10-08）
 
-1. **`scripts/cli/commands/migrate.py`**：`revision` 用的是 `command.revision(autogenerate=True)`，与「DDL 收敛到唯一权威基线迁移」的既定架构直接冲突。建议至少移除 `revision`/`upgrade`/`downgrade`，只留 `history`（只读）。
-2. **`scripts/init.py` 第 6 步**：初始化向导自动执行迁移。它属于部署工具而非 CLI，但同样构成第二入口；要么保留（向导即发布工具）、要么改为只打印命令让运维执行。
+1. **`scripts/cli/commands/migrate.py` —— 删除全部写操作**。`run`（内含 `command.revision(autogenerate=True)` 与 `upgrade`）与 `downgrade` 已移除，只留只读的 `history`；并且失败改为**非 0 退出**（旧实现只 `echo` 一句就返回 0，脚本里会被当成成功）。autogenerate 与「DDL 全部收敛到唯一权威基线迁移」**直接冲突** —— 它把"当前库长什么样"反向写进迁移文件，必然与显式提交的 DDL 漂移。
+2. **`scripts/init.py` 第 6 步 —— 保留**。它执行的是 `python -m alembic -c alembic.ini upgrade head`：**同一份配置、同一个工具**，只是由部署向导代跑一次发布流程步骤。
 
-在这两处定下之前，「Alembic 唯一入口」只在 Go CLI 层面成立。
+判据（§2 的理由在这里落地）：**"谁在跑"不构成第二入口，"用另一套实现 / 另一份配置跑"才是。** Go CLI 的问题正是后者 —— 它 shell 出 `python -m alembic`（目标机未必有 python）并顺手写 `.env`；而初始化向导跑的是仓库里那一份 `alembic.ini`，不会与运维手动执行产生版本漂移。
 
 ## 5. 运维指引（决策后的标准流程）
 
