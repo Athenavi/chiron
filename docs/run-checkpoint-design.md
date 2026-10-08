@@ -1,6 +1,11 @@
 # run 现场 checkpoint 续跑设计
 
-> 状态：**设计待评审**（路线图 L4-1）。本文只做设计与边界划定，**不含实现**；评审通过后再按 §7 分批落地。
+> 状态（**2026-10-08 核对代码后更正**）：批 1–4 **已实现**（代码里以 `C1 批 2/3/4` 标记）——
+> 表 `agent_runs` 见 `migrations/versions/0003_agent_runs.py`；写路径 `app/agent/runtime.py::_save_checkpoint`（回合末、只写不读、失败只降级恢复粒度）；
+> 快照与状态机 `app/agent/checkpoint.py`；续跑/接管 `app/agent/resume.py` + `main.py` 启动 reconciler；单测 **38 条**（`tests/test_checkpoint.py` · `test_checkpoint_schema_version.py` · `test_run_resume.py`）。
+> **§8 的 5 个未决问题已在实现中定案**（尾部窗口+摘要 / 热 1h·冷 24h / `replay_pending` / 60s+CAS / `rebuild_task`）⇒ **不要再当阻塞项**。批 5 按 §9 不做。
+> **唯一缺口（✅ 已补，2026-10-08）**：§7 批 3 的"kill → 重启 → 断言不重放"已由 `tests/test_resume_kill_drill.py` 自动化：子进程真跑 runtime（回合 1 落盘后卡在回合 2）→ **硬杀** → 新实例 `load_resume_state` → 真再跑一次，断言第一次 LLM 调用的历史里已带第 1 回合的工具结果且**恰好一份**（不重放）。
+> ⚠ 本文件曾写"新增表 `agent_runs`"，而该表早在 `0003_agent_runs` 就存在 —— **设计文档也会过期**，动手前先看代码（同 `vendor/规划.md` §4 的"引用前先跑现状"）。
 > 背景见 [多实例部署指南](deployment-multi-instance.md) §10「已知边界」与「结构性后续」。
 
 ## 0. 结论摘要
