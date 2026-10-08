@@ -4,7 +4,6 @@
 
 docs/ent-webhook-design.md
 docs/floating-panels-design.md
-docs/llm-provider-key-management-dr.md
 docs/multi-session-runtime-plan.md
 docs/production-readiness-fixes.md
 docs/subagent-design.md

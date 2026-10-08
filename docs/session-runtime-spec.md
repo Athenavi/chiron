@@ -2,7 +2,7 @@
 
 > **溯源（2026-10-08）**：本文件**原先缺失** —— 仓库里 7 处引用它（`internal/api/session_runtime.go`
 > 文件头、`internal/api/routes_proxy.go` §5、`internal/api/gateway_router.go`、`frontend-vue/src/api/sessionRuntime.ts`、
-> `components/chat/contextChips.ts`、`views/ChatView.vue`、`python-engine/app/core/task_router.py`），
+> `frontend-vue/src/components/chat/contextChips.ts`、`frontend-vue/src/views/ChatView.vue`、`python-engine/app/core/task_router.py`），
 > 但文件不在仓库中。现按**代码与注释**重建，**只写代码能证明的内容**；与代码冲突时以代码为准。
 > 门禁：`python scripts/check_doc_links.py` 拦住"引用了不存在的文档"这类断链。
 
@@ -88,7 +88,7 @@ provider    : 请求显式 > runtime > 空（自动路由）
 | 统一链路注入 | `internal/api/routes_proxy.go`（`mutateBody`，见 §5） |
 | 引擎侧取用 | `python-engine/app/core/task_router.py`（P1-d） |
 | 前端契约 | `frontend-vue/src/api/sessionRuntime.ts`（`ResolvedValue` / `SessionRuntime` / `SessionMetrics`） |
-| 上下文激活项 → 芯片 | `components/chat/contextChips.ts`（`runtime.context` 是唯一来源） |
+| 上下文激活项 → 芯片 | `frontend-vue/src/components/chat/contextChips.ts`（`runtime.context` 是唯一来源） |
 
 ## 8. 已知边界
 

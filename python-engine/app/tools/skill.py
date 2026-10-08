@@ -94,12 +94,12 @@ async def _fetch_skill_json(url: str) -> Any:
     （`skill_discover("http://169.254.169.254/latest/meta-data/")` 可打云元数据）。
     收敛到同一入口后，两处的策略不可能再漂移。
 
-    局限（已知）：体积上限在**完整读取之后**判断（与既有 install 实现一致）。要真正
-    限制下行流量需改流式读取，属后续优化，不在本批范围。
+    局限（已修）：体积上限原先是**完整读取之后**判断的 —— 那只拦住"解析"，拦不住下行流量与内存
+    （一个 1GB 的响应照样会被整段收下）。现改为**流式**：边收边计数，越过上限**立即中止并关闭响应**。
 
     Raises:
         ValueError: SSRF 校验不通过（由 `assert_safe_url` 抛出）。
-        RuntimeError: 响应超过体积上限。
+        RuntimeError: 响应**在读取过程中**越过体积上限。
     """
     from app.config import settings
     from app.tools.ssrf import assert_safe_url
@@ -108,13 +108,19 @@ async def _fetch_skill_json(url: str) -> Any:
 
     import httpx
 
+    total = 0
+    chunks: list[bytes] = []
     async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
-        resp = await client.get(url)
-        resp.raise_for_status()
-        if len(resp.content) > _SKILL_FETCH_MAX_BYTES:
-            msg = f"remote skill payload too large (max {_SKILL_FETCH_MAX_BYTES} bytes)"
-            raise RuntimeError(msg)
-        return resp.json()
+        async with client.stream("GET", url) as resp:
+            resp.raise_for_status()
+            async for chunk in resp.aiter_bytes():
+                total += len(chunk)
+                if total > _SKILL_FETCH_MAX_BYTES:
+                    msg = f"remote skill payload too large (max {_SKILL_FETCH_MAX_BYTES} bytes)"
+                    # 直接抛出：`async with` 退出时会关闭响应，不再继续拉取剩余字节
+                    raise RuntimeError(msg)
+                chunks.append(chunk)
+    return json.loads(b"".join(chunks))
 
 
 async def skill_install(
