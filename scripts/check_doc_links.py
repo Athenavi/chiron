@@ -29,7 +29,7 @@ import sys
 
 REPO = pathlib.Path(__file__).resolve().parent.parent
 BASELINE = REPO / "scripts" / "doc_link_baseline.txt"
-DOC_REF = re.compile(r"docs/([A-Za-z0-9_./-]+\.md)")
+DOC_REF = re.compile(r"(?<![\w./-])docs/([A-Za-z0-9_./-]+\.md)")
 SKIP_PREFIXES = ("vendor/", "node_modules/", "frontend-vue/dist/", "python-engine/data/")
 SKIP_PARTS = ("/tests/", "/__tests__/", "/evals/", "/testdata/")
 SKIP_NAME_SUFFIXES = ("_test.go", ".spec.ts", ".test.ts", "_test.py")
