@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { countItemsAfter, splitThinking } from '../chat-types'
+import { countItemsAfter, mergeTurnStats, splitThinking } from '../chat-types'
 import type { ChatItem } from '../chat-types'
 
 // 回归保护：引擎（python-engine/app/agent/runtime.py）按 ~80 字一段下发
@@ -67,5 +67,44 @@ describe('countItemsAfter（删除代价提示）', () => {
   it('找不到该消息时返回 0（按无代价处理）', () => {
     expect(countItemsAfter(items, 'missing')).toBe(0)
     expect(countItemsAfter([], 'x')).toBe(0)
+  })
+})
+
+// 回归保护：引擎的 `usage` 是**每次 LLM 调用**一条（runtime.py 的 C3 通道），
+// 一次提交跨多步就有多条。视图层若逐条 push，记录里会堆出 N 行"本轮用量"，
+// 而状态栏只该有**一行**本回合合计 —— 且合计值必须等于各次调用之和（否则就是漏算/重复算）。
+describe('mergeTurnStats（按次增量 → 本轮单行合计）', () => {
+  const makeId = () => 'stats_1'
+
+  it('多条按次增量合并进同一行，且数值等于各次之和', () => {
+    const items: ChatItem[] = []
+    let id = ''
+    for (const d of [{ inputTokens: 100, outputTokens: 20 }, { inputTokens: 30, outputTokens: 10 }]) {
+      id = mergeTurnStats(items, id, d, makeId)
+    }
+    expect(items).toHaveLength(1)
+    const stats = items[0]
+    expect(stats.kind).toBe('turn_stats')
+    if (stats.kind !== 'turn_stats') throw new Error('unreachable')
+    expect(stats.inputTokens).toBe(130)
+    expect(stats.outputTokens).toBe(30)
+  })
+
+  it('id 为空或条目已不在时新建一行（换会话/清理后不会写进旧条目）', () => {
+    const items: ChatItem[] = [{ kind: 'text', role: 'user', content: 'q', id: 'u1' }]
+    const id = mergeTurnStats(items, 'gone', { inputTokens: 5, outputTokens: 1 }, () => 'stats_new')
+    expect(id).toBe('stats_new')
+    expect(items).toHaveLength(2)
+    expect(items[1]?.id).toBe('stats_new')
+  })
+
+  it('durationSec 按累计毫秒换算，保留一位小数', () => {
+    const items: ChatItem[] = []
+    let id = mergeTurnStats(items, '', { inputTokens: 1, outputTokens: 1, durationMs: 1200 }, makeId)
+    id = mergeTurnStats(items, id, { inputTokens: 1, outputTokens: 1, durationMs: 800 }, makeId)
+    expect(id).toBe('stats_1')
+    const stats = items[0]
+    if (stats?.kind !== 'turn_stats') throw new Error('unreachable')
+    expect(stats.durationSec).toBe(2)
   })
 })

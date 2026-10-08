@@ -1480,6 +1480,11 @@ class AgentRuntime:
                     False  # 是否已收到 native reasoning_content（DeepSeek 模式）
                 )
                 llm_start = time.time()
+                # C3：记下**本次 LLM 调用前**的累计值 —— 调用结束后据此算出"本次用量"，
+                # 经独立的 `usage` 事件下发（见下方 trace_span 之前）。
+                call_input_before = total_input_tokens
+                call_output_before = total_output_tokens
+                call_cached_before = total_cached_tokens
                 # C2 段 b：溢出恢复（强制压缩 + 重试一次）。溢出事实经 `overflow_flags`
                 # 回传给这里，由本 generator yield 事件 —— helper 不能代劳。
                 overflow_flags: list[dict[str, Any]] = []
@@ -1563,7 +1568,11 @@ class AgentRuntime:
                             )
                             break
 
-                    # 工具调用
+                    # 工具调用：这里只**收集**，下发推迟到本次 LLM 调用结束之后 ——
+                    # 因为 provider 只在最后一个 chunk（带 finish_reason）才给出完整的
+                    # tool_calls，而"是否被 max_tokens 截断"也只有到那时才知道；
+                    # 早发会让**截断的**调用也被发出去（前端多一张卡、网关把半截 JSON 落库），
+                    # 而它随后并不会被执行。见下方截断保护后的统一下发。
                     if chunk.tool_calls:
                         for chunk_tc in chunk.tool_calls:
                             tool_calls.append(
@@ -1572,12 +1581,6 @@ class AgentRuntime:
                                     "name": chunk_tc.name,
                                     "arguments": chunk_tc.arguments,
                                 }
-                            )
-                            yield AgentEvent(
-                                type="tool_call",
-                                tool_call_id=chunk_tc.id,
-                                tool_name=chunk_tc.name,
-                                tool_arguments=chunk_tc.arguments,
                             )
 
                     # Token 用量
@@ -1608,6 +1611,19 @@ class AgentRuntime:
                         content=json.dumps(flag, ensure_ascii=False),
                         span_name="compaction",
                     )
+
+                # C3：**本次调用**的用量（增量）走独立事件 —— 与 `done` 的**整轮累计**分开，
+                # 消费方按 `type` 取值即可，不必只能等终态。
+                # ⚠ 增量**不要**再并回累计：网关侧的累计器按"字段非零"求和会把它与 `done`
+                # 的累计重复计一遍，而那个值直接喂计费（Go 侧 `usageTotals.withEvent` 有守卫与单测）。
+                yield AgentEvent(
+                    type="usage",
+                    input_tokens=total_input_tokens - call_input_before,
+                    output_tokens=total_output_tokens - call_output_before,
+                    cached_tokens=total_cached_tokens - call_cached_before,
+                    model=model,
+                    trace_id=trace_id,
+                )
 
                 # 记录 LLM span (毫秒级耗时)
                 llm_duration = int((time.time() - llm_start) * 1000)
@@ -1690,6 +1706,17 @@ class AgentRuntime:
                         )
                     _last_reasoning = reasoning_content
                     continue
+
+                # 工具调用事件在此统一下发（而不是收到 chunk 时）：到这里才既拿到**完整参数**、
+                # 又已知**没有**被 max_tokens 截断（截断的已在上面的分支 `continue` 掉）。
+                # 顺序：先告诉前端"要调这些工具"，随后才是执行与 tool_result。
+                for call in tool_calls:
+                    yield AgentEvent(
+                        type="tool_call",
+                        tool_call_id=call["id"],
+                        tool_name=call["name"],
+                        tool_arguments=call["arguments"],
+                    )
 
                 # 如果有工具调用，执行工具
                 if tool_calls:

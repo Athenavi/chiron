@@ -1,4 +1,18 @@
-# Agent 推理循环 — 使用接口注入
+"""Agent 推理循环 — 使用接口注入。
+
+⚠️ **遗留模块（2026-10-08 实测）**：产品链路是网关 `POST /v1/agent/submit` →
+`app/main.py` 的 submit 处理器 → **`app/agent/runtime.py` 的 `AgentRuntime`**。
+本模块只服务引擎自己的 `POST /v1/agent/run`（`app/main.py` 的 `agent_run`），而该端点
+**仓库内无任何调用方**：Go 侧唯一会打它的 `engine.PythonClient.Run` 零调用者。
+
+因此：
+- **新能力一律加在 `runtime.py`**，不要在这里补功能 —— 两套循环已经出现过行为分叉
+  （例如"被 max_tokens 截断的 tool_call 不得下发"这条安全性质，本模块不发 `tool_call` 事件，
+  而 runtime 曾经在截断校验**之前**就发出去；已按本模块的口径修好并把用例钉在产品链路上，
+  见 `tests/test_runtime_tool_truncation.py`）；
+- 保留它只为兼容**未知的外部调用方**；确认无人使用后应连同 `/v1/agent/run` 一起删除
+  （见 `docs/development-roadmap.md` 的开放项）。
+"""
 from __future__ import annotations
 
 import logging

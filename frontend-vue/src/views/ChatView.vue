@@ -37,7 +37,7 @@ import ChatDisplaySettings from '../components/chat/ChatDisplaySettings.vue'
 import AskCard from '../components/chat/AskCard.vue'
 import CallChainTimeline from '../components/CallChainTimeline.vue'
 import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
-import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter } from '../components/chat/chat-types'
+import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter, mergeTurnStats } from '../components/chat/chat-types'
 import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
 import { findMatches } from '../components/chat/transcriptSearch'
 import { describeApiError, errorDetail, serverErrorMessage } from '../utils/apiError'
@@ -2069,11 +2069,16 @@ async function copyShareLink() {
 let streamBuf = ''
 let streamTextId = ''
 let streamReasonId = ''
+// 本轮 `turn_stats` 条目的 id：引擎的 `usage` 是**每次 LLM 调用**一条（C3），
+// 一次提交可能有很多条（多步 ReAct 每个工具步都有一次调用），必须**累加进同一条**，
+// 否则一个回合会在记录里堆出 N 行"本轮用量"。
+let streamStatsId = ''
 
 function resetStreamState() {
   streamBuf = ''
   streamTextId = ''
   streamReasonId = ''
+  streamStatsId = ''
 }
 
 function appendUserText(text: string, attachments?: ChatAttachment[]) {
@@ -2171,21 +2176,21 @@ function onSSEMessage(raw: unknown) {
       })
     }
   } else if (type === 'usage' || type === 'turn_stats') {
-    // 本轮用量：引擎在每个回合结束时发 usage（python-engine/app/agent/loop.py:199：
-    // {"type":"usage","input_tokens":N,"output_tokens":N}）。此前**没有这个分支**，
-    // 于是 lastTurnStats 恒为空、状态栏整段隐藏 —— 这就是"看不到 tokens/消耗"的直接原因。
+    // 本轮用量：引擎在**每次 LLM 调用**结束后发一条 `usage`（增量），
+    // 终态 `done` 给的是整轮累计 —— 两条通道各自成立（Go 侧 `usageTotals` 同口径，见
+    // internal/api/usage_accounting.go：那里据此避免重复计费）。
+    // 因此这里必须**累加进同一条** `turn_stats`：一次提交跨多步，逐条 push 会堆出 N 行。
     // 会话级累计（tokens/费用/**缓存命中率**/吞吐）由 GET /v1/sessions/{id}/metrics 提供。
     const inputTokens = Number(d.input_tokens ?? evt.input_tokens ?? 0) || 0
     const outputTokens = Number(d.output_tokens ?? evt.output_tokens ?? 0) || 0
     const durationMs = Number(d.duration_ms ?? evt.duration_ms ?? 0) || 0
     if (inputTokens || outputTokens) {
-      items.value.push({
-        kind: 'turn_stats',
-        id: genItemId(),
-        inputTokens,
-        outputTokens,
-        ...(durationMs > 0 ? { durationSec: Math.round(durationMs / 100) / 10 } : {}),
-      } as TurnStatsItem)
+      streamStatsId = mergeTurnStats(
+        items.value,
+        streamStatsId,
+        { inputTokens, outputTokens, durationMs },
+        genItemId,
+      )
     }
   } else if (type === 'compaction') {
     // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
