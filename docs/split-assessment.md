@@ -20,18 +20,20 @@
 
 | 文件 | 行数 | KB | symbols | 主要矛盾 |
 |---|---|---|---|---|
-| `frontend-vue/src/views/ChatView.vue` | 3047 | 137.8 | 173 | 单文件承载整条对话链路 + 侧栏 + 导出 |
-| `python-engine/app/agent/runtime.py` | 1841 | 98.6 | 25 | 一个 `AgentRuntime` 类占 1557 行 |
-| `frontend-vue/src/views/MediaView.vue` | 1672 | 58.6 | 110 | 列表/筛选/多选/面包屑混在一起 |
-| `frontend-vue/src/views/WorkflowView.vue` | 1649 | 63.6 | 91 | 画布 + 模板 + 实例 + 执行日志 |
-| `python-engine/app/main.py` | 1509 | 82.1 | 24 | `lifespan` 单函数 559 行 |
-| `internal/api/mail_handler.go` | 1308 | 51.0 | 45 | 认证流程 / 密码重置 / 配置三簇并存 |
-| `python-engine/app/memory/service.py` | 1264 | 54.0 | 10 | `MemoryService` 单类 1240 行 |
-| `frontend-vue/src/components/chat/ChatInput.vue` | 1193 | 50.7 | 67 | 输入 + 附件 + 模型选择 + 提及 |
-| `frontend-vue/src/components/chat/ChatSidePanel.vue` | 1116 | 47.4 | 47 | 用户菜单 + 轨迹 + 会话列表 + 抽屉拖拽 |
-| `internal/session/manager.go` | 1098 | 44.1 | 41 | 会话 CRUD 与消息持久化同文件 |
-| `python-engine/app/queue/worker.py` | 981 | 49.4 | 4 | `QueueWorker` 单类 844 行 |
-| `internal/api/gateway_router.go` | 970 | 60.7 | 18 | `NewGatewayRouter` 单函数 372 行 + 10 个 `registerXxxRoutes` |
+| `frontend-vue/src/views/ChatView.vue` | 3429 | 141.6 | 155 | 单文件承载整条对话链路 + 侧栏 + 导出 |
+| `python-engine/app/agent/runtime.py` | 3238 | 150.7 | 27 | 一个 `AgentRuntime` 类占大头（旧表的 1841/1557 已过期） |
+| `frontend-vue/src/views/MediaView.vue` | 1770 | 56.8 | 88 | 列表/筛选/多选/面包屑混在一起 |
+| `python-engine/app/memory/service.py` | 1667 | 63.9 | 10 | `MemoryService` 单类 |
+| `frontend-vue/src/views/WorkflowView.vue` | 1637 | 58.1 | 73 | 画布 + 模板 + 实例 + 执行日志（**执行/轮询簇已抽**，见 §2.5） |
+| `frontend-vue/src/components/chat/ChatInput.vue` | 1259 | 49.5 | 66 | 输入 + 附件 + 模型选择 + 提及 |
+| `frontend-vue/src/components/chat/ChatSidePanel.vue` | 1180 | 46.3 | 44 | 用户菜单 + 轨迹 + 会话列表 + 抽屉拖拽 |
+| `python-engine/app/queue/worker.py` | 1174 | 49.7 | 4 | `QueueWorker` 单类 |
+| `python-engine/app/main.py` | 2132 | 93.3 | 9 | 启动/关闭集中（已抽 7 个函数；`lifespan` 仍 ~560 行） |
+| `internal/api/mail_handler.go` | 696 | 25.3 | 32 | ✅ **已拆**（1488 → 695，4 个文件） |
+| `internal/api/gateway_router.go` | 500 | 21.7 | 7 | ✅ **已拆**（1254 → 442，11 个 `routes_*.go`；现 500 含后续新增路由） |
+| `internal/session/manager.go` | 129 | 3.5 | 8 | ✅ **已拆**（1198 → 128，4 个文件） |
+
+> **测得 2026-10-08（round 43）**：符号口径同上（Go `^func|^type`、Python `^(def|class)`、Vue/TS `^(function|const X = ref|computed)`）。此前表里的数字有多处过期到**不可用**（`runtime.py` 1841 → 实际 3238、`session/manager.go` 1098 → 已拆成 129），**引用规模前必须现场测量**。
 
 ## 2. 边界建议（按收益排序）
 
@@ -106,7 +108,15 @@
 ### 2.5 前端 `views/` 与 `components/chat/` — 抽 composable
 
 - `ChatView.vue`（173 符号）按实测簇抽：工作流/Agent 导出 `57–190`、布局切换 `191–221`（`readLayoutSwap`/`toggleLayout`/`onToolbarMenu`）、搜索 `229–255`、统计与压缩 `256–271`、子代理面板 `272+`。
-- `ChatInput.vue`（67）/`ChatSidePanel.vue`（47）/`WorkflowView.vue`（91）/`MediaView.vue`（110）同法。
+> ⚠ 下括号里的数字是**符号数**（顶层声明个数），**不是行数** —— 实测行数：`ChatView.vue` **3429** · `MediaView.vue` 1769 · `WorkflowView.vue` 1746 · `ChatInput.vue` 1259 · `AgentsView.vue` 1190 · `ChatSidePanel.vue` 1179。引用规模前先现场测（本轮就有人把它误读成行数、差点去"更正"一份没错的文档）。
+
+- ✅ **批次 1 已抽（2026-10-08）**：`WorkflowView.vue` 的**执行与状态轮询簇**（提交运行 → 轮询状态 → 落到画布与日志 → 刷新运行历史）→ `src/composables/useWorkflowExecution.ts`。做法是**依赖注入**视图自己的 `ref`（`workflowId`/`getNodes`/`isExecuting`/`executionLogs`/`executionResults`/`instances`），返回视图需要的名字并由视图解构 ⇒ 模板与既有函数一行未改。**1746 → 1635 行**；共享类型抽到 `src/types/workflow.ts`（`NodeRunResult` / `InstanceRecord`，避免两处定义漂移）。护栏：`WorkflowView.spec.ts`（2 用例）· `vue-tsc -b` · `eslint` 0 problems · 全量 `vitest` 477 passed。
+- 下一簇候选（同文件）：持久化（`saveWorkflow`/`loadWorkflows`/`loadWorkflow`/`deleteWorkflow`/模板 `loadTemplates`/`useWorkflowTemplate`）约 120 行；节点编辑面板（`edit*` refs + `applyNodeConfig`/`onNodeClick`）分散在多处，跨簇依赖更多，放后面。
+- ✅ **批次 2 已抽（2026-10-08）**：**模板市场**簇（列表状态 + 加载 + 一键使用）→ `src/composables/useWorkflowTemplates.ts`；画布回填用**回调注入**（`resetCanvas` / `fromBackendFormat` / `fitView`），composable 不碰画布状态。**1636 → 1597 行**；抽取后视图侧 4 个 import（`nextTick`/`listTemplates`/`useTemplate`/`TemplateItem`）变为未使用，已清掉（`eslint` 0 problems 是靠这条暴露的）。护栏：`WorkflowView.spec.ts` 2 用例 · `vue-tsc -b` · 全量 `vitest` **477 passed**。
+- ⏸ **持久化簇（`saveWorkflow`/`loadWorkflows`/`loadWorkflow`/`deleteWorkflow` + `toBackendFormat`/`fromBackendFormat`）暂缓 —— 用"注入面"量出来的**：它的注入面是 **14 个** ref/回调（`getNodes`/`getEdges`/`nodes`/`edges`/`workflowId`/`workflowName`/`savedWorkflows`/`executionResults`/`executionLogs`/`getNodeColor`/`getNodeIcon`/`getUserIdFromToken`/`setNodeCounter`/`resetCanvas`），而模板簇只有 **3 个**。**注入面就是"这簇到底内不内聚"的度量**：14 个说明它与画布状态本身纠缠，正确顺序是先抽**画布状态**（`nodes`/`edges`/选中/`nodeCounter`/`genNodeId`），再谈持久化。
+- ✅ **`ChatView` 冒烟网已补（2026-10-08）**：`src/views/__tests__/ChatView.spec.ts`（3 条：能挂载 / 初始加载真的跑（`api.get('/v1/conversations')`）/ 挂载→卸载可重复且不抛错）。此前它是**全仓最大文件（3429 行）却零测试**，按"没网不动手"的纪律，先补网再拆。做法：重子组件全部打桩 + `../../api` 替身放 `vi.hoisted`（`vi.mock` 工厂会被提升，不能引用文件后面的顶层变量）+ 复用 `test-setup.ts` 的全局 i18n。
+- **下一簇（同文件）**：会话加载/切换 + SSE 生命周期（`loadSessions`/`switchSession`/`activeSSE`/`onUnmounted` 清理），这簇状态含 `items`/`activeSessionId`/`loading`，抽前先量注入面。
+- `ChatInput.vue`（67 符号）/`ChatSidePanel.vue`（47）/`MediaView.vue`（110）同法。
 - 契约：抽到 `src/composables/use*.ts`，入参/返回值保持现有 `ref`/`computed` 形状；模板改动限于改名调用。**props/emits 契约与 UI 输出不变**。
 - 风险：中偏高（`<script setup>` 里的闭包与生命周期钩子有隐式耦合）；建议一次只抽一簇，且该簇有组件测试兜底（如 `WorkflowView.spec.ts` 已有 2 用例）。
 
@@ -124,7 +134,7 @@
 | 2 | `runtime.py` → `runtime_compaction.py` + `runtime_types.py`（类型部分 ✅ 已完成：3370 → 3198 行，AST 逐字一致；压缩簇待**重新定界**后做） | 纯函数/数据类，旧路径再导出 |
 | 3 | `mail_handler.go`、`session/manager.go` 按流程/职责切（✅ 已完成：mail 1488 → 695、session 1198 → 128，逐函数文本一致） | 同包，公开方法集不变 |
 | 4 | `main.py` 依赖取用器 + `lifespan` 分步（① 校验 ✅ · ② 关闭段 ✅ + **6 个无耦合启动段 ✅**：`lifespan` 740 → 561 行；剩余 5 段有真实耦合，需显式传参/返回句柄） | 启动顺序敏感，需逐行对照 |
-| 5 | 前端抽 composable（一次一簇，从有测试的 `WorkflowView` 起） | 隐式耦合最多，放最后 |
+| 5 | 前端抽 composable（**批次 1 ✅** 执行/轮询簇 → `useWorkflowExecution.ts`，1746 → 1637 行；**批次 2 ✅** 模板市场簇 → `useWorkflowTemplates.ts`，1636 → 1597 行；持久化簇因注入面 14 个暂缓，见 §2.5） | 隐式耦合最多，放最后 |
 
 每批的验收口径：
 

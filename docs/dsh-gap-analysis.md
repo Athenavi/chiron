@@ -18,6 +18,7 @@
 | 默认危险权限是常态：SDK 最小 profile pin `danger-full-access` | [python-sdk 文档](https://deepseek-harness.github.io/deepseek-harness/en/guide/python-sdk) |
 | 会话日志**默认外发 DeepSeek**（`dsh-session-log-deepseek`） | 同上，`maxBytes` 8 MiB |
 | 明确不支持多写者 / 多实例 | `vendor/dsh-synapse/docs/architecture.md`（单文件 last-writer-wins） |
+| **复核（2026-10-08）**：**287 个依赖逐条枚举**（自写 asar 读取器，方法见 §4） | 仍**无**任何 tenant/org/quota/billing/metering 包 ⇒ 切口 #2 的"⛔ 未发现"升级为**枚举后确认**；但有 `dsh-api-account-controller` / `dsh-authorization` / `dsh-deepseek-account-platform` / `dsh-anonymous-user-id` —— 那是**客户端对 DeepSeek 账号平台的集成，不等于自建多租户** |
 
 ## 1. 逐层对照（只列"同一层"）
 
@@ -27,11 +28,12 @@
 | 事件契约 | session 事件（`user/message` `assistant/message` `tool/call` `turn/end`…），**内部 TS 词汇表**，无对外稳定承诺 | SSE ~13 种；**思考**走独立 `thinking` 事件（A1，契约见 [聊天记录契约](transcript-contract.md)），**用量**自 C3 起每次 LLM 调用发独立 `usage` 事件（**本次调用增量**，`done` 仍给整轮累计）；**无 `TurnStarted`/`Message` 通道**（回合边界靠前端按 `turnId` 推断；`Phase` 已决定**不做** —— 主对话没有这个真实状态，见切口 #3） | DSH 的**边界更清晰**；Chiron 的思考与用量已对齐 |
 | Fork / 分支 | 原生 durable fork：`parentSession` + `seedLength`/`firstLiveSeq`，可 `atSeq` | `internal/session/branch_summary.go`、`manager.go`（分支语义待核实） | **DSH 更明确** |
 | 子 agent | `dsh-subagent*` + 实验性 `dsh-experimental-agent-team`（roster / durable mailbox / shared task DAG） | `app/subagent/`（R1 receipts / R2 写路径仲裁 / R3 结构化结局 / R4 可注入时钟已落地；R5 fork 待定） | 相当（Chiron 有**可核实行为**判据） |
-| 多租户 / 计费 | ⛔ 未发现任何租户/配额/账务机制 | JWT + RBAC + 402 计费预检 + 429 配额 + 租户并发池 | **Chiron** |
+| **会话 checkpoint / 恢复** | `dsh-session-checkpoint-policy`（**策略插件**，2026-10-08 复核新发现） | ✅ **已落地并跨进程验证**（C1 批 2–4）：回合末落盘 `runtime.py::_save_checkpoint` · 状态机/快照 `app/agent/checkpoint.py`（schema v1、热 1h/冷 24h） · 续跑/接管 `app/agent/resume.py` + reconciler；**硬杀→接管不重放**由 `tests/test_resume_kill_drill.py` 端到端钉住（子进程真跑、回合 1 落盘后卡住、`kill`、新实例续跑断言历史里第 1 回合工具结果恰好一份） | **相当**（DSH 有该能力；Chiron 有**可核实行为**判据，且判据是跨进程的） |
+| 多租户 / 计费 | ⛔ **287 个依赖逐条枚举后，仍无任何租户/配额/账务/metering 包**（`dsh-api-gateway` / `dsh-authorization` / `dsh-api-account-controller` 是客户端对 DeepSeek 账号平台的集成，不是自建多租户） | JWT + RBAC + 402 计费预检 + 429 配额 + 租户并发池 | **Chiron** |
 | 多副本横向扩展 | 文档明确"只跑一个实例" | 跨实例会话运行锁 + Redis Stream 断线重放 + run 亲和 | **Chiron** |
 | MCP | `dsh-mcp-client` 单用户直连 | 连接池 + owner lease + `MCP_MAX_*` 预算 + 拒绝指标 | **Chiron** |
-| 执行隔离 | OS 级本机限制（bwrap/landlock/Seatbelt/Windows ACL），威胁模型=**保护用户本机** | **A 层（代码层）**：`app/tools/{code_guard,sandbox,run_code,_sandbox_worker}.py` 的静态 AST 守卫 + 运行时 import/内置函数白名单 + RLIMIT + `exec_audit`；威胁模型=**保护平台与其它租户**。`chiron-sandbox/` 是**执行工作根**（本机已跑出 `default/anonymous`，未纳入版本控制），**独立 sandbox 服务仍未开工**（§3.1） | **不可比**（威胁模型相反）；且**A 层只提高门槛、不构成隔离** —— 实测就有一处逃逸（见切口 #6） |
-| 插件 / 技能生态 | Cordis profile patch + 插件面板 + HMR，已跑起 `dsh-synapse`/`dsh-im` | **技能侧已对齐**：`market/skills/` 6 个 SKILL.md 由 `SkillStore` 以 `scope=builtin` 读取（2026-10-08 复核并修好容器缺席问题）；**插件生态**（profile/面板/HMR/第三方插件真跑）仍明显落后 | **DSH 领先（插件侧）** |
+| 执行隔离 | OS 级本机限制（bwrap/landlock/Seatbelt/Windows ACL），威胁模型=**保护用户本机**；**且不只是一个沙箱，而是一层策略插件**：`dsh-sandbox-policy` / `dsh-permission-presets` / `dsh-user-approval` / `dsh-fs-observation-policy` / `dsh-output-retention` / `dsh-spill-policy` / `dsh-tool-call-timeout-policy`（2026-10-08 复核） | **A 层（代码层）**：`app/tools/{code_guard,sandbox,run_code,_sandbox_worker}.py` 的静态 AST 守卫 + 运行时 import/内置函数白名单 + RLIMIT + `exec_audit`；威胁模型=**保护平台与其它租户**。`chiron-sandbox/` 是**执行工作根**（本机已跑出 `default/anonymous`，未纳入版本控制），**独立 sandbox 服务仍未开工**（§3.1） | **不可比**（威胁模型相反）；且**A 层只提高门槛、不构成隔离** —— 实测就有一处逃逸（见切口 #6） |
+| 插件 / 技能生态 | Cordis profile patch + 插件面板 + HMR，已跑起 `dsh-synapse`/`dsh-im`；**另有 `dsh-hook-protocol` + `dsh-hooks-claude-code`/`dsh-hooks-codex`（钩子协议与 Claude Code/Codex 兼容）与 `dsh-webhook(-github)`**（2026-10-08 复核） | **技能侧已对齐**：`market/skills/` 6 个 SKILL.md 由 `SkillStore` 以 `scope=builtin` 读取（2026-10-08 复核并修好容器缺席问题）；**插件生态**（profile/面板/HMR/第三方插件真跑/**钩子协议**）仍明显落后 | **DSH 领先（插件侧）** |
 | 会话持久化 / 检索 | JSONL(zstd) + 格式 v0→v4 迁移链 + SQLite FTS5 | PG 单一持久层 + Alembic 单 head；会话检索走 PG | 相当 |
 | CLI / SDK | `dsh` CLI + **Python SDK(PyPI)** + ACP/JSON-RPC | `cmd/chiron-cli` 有；**无对外 SDK** | **DSH** |
 | 可观测性 | OTel + 产品分析（+ 日志默认上传） | OTel 类埋点 + Prometheus/Alertmanager + **不默认上传** | 相当（Chiron 隐私更优） |
@@ -54,7 +56,7 @@
 ## 3. 不确定 / 未验证（不要当成事实引用）
 
 1. npm 元数据不可取（403）；GitHub 仓库未直接读取（策略拦截），monorepo 结构仅有 `repository` 字段为证。
-2. app.asar **只做了目录索引 + 定向读 `package.json`**，未解包、未读源码 ⇒ 能力判定基于包名与官方 description。
+2. app.asar：**已能解包**（自写读取器，见 §4），本轮据此**枚举了 287 个依赖**并做能力盘点；但**仍未读源码** ⇒ 能力判定基于包名 / 官方 description / 目录结构，运行时行为未验证。
 3. **从未运行 DSH**：沙箱是否真 fail-closed、fork `atSeq` 语义、HMR、插件热卸载均未实测。
 4. 多租户/计费属"**未发现证据**"，不等于官方声明不支持（可能在未读源码或 `harness.deepseek.com` 后端）。
 5. KV-cache 前缀复用、browser-trust 围栏均只有 `dsh-synapse` **插件侧声明**，未在 DSH 侧验证。
@@ -71,6 +73,12 @@
    实测插件链路的真实位置见切口 #5（Go `plugin_handler.go` + 前端 `PluginsView.vue` + 引擎 `app/plugins/*`）。
    **"分析里写的文件名"也要核**：连路径都没核过的差距，其"中/高"评级同样不可信。
 
+10. **复核（2026-10-08，v0.2.0-rc.2）**：写了一个 asar 读取器把 `app.asar` 解开索引、枚举全部 **287 个依赖**（方法见 §4）。结论分三类：
+    **① 原判断被证强**：仍无 tenant/org/quota/billing/metering 包 ⇒ 多租户与计费差距成立（切口 #2）；沙箱目标是本机（`dsh-sandbox-windows-acl` / `dsh-fs-sandbox`）⇒ 切口 #6 的"威胁模型相反"成立。
+    **② 原判断被证弱（需修口径）**：DSH 不是"只有沙箱"，而是一层**策略插件框架**（`dsh-permission-presets` / `dsh-user-approval` / `dsh-fs-observation-policy` / `dsh-output-retention` / `dsh-spill-policy` / `dsh-tool-call-timeout-policy`）；插件生态除 profile/HMR 外还有**钩子协议**（`dsh-hook-protocol` + Claude Code/Codex 兼容）与 `dsh-webhook`。
+    **③ 新发现（会改优先级）**：**`dsh-session-checkpoint-policy`** —— DSH 已有会话 checkpoint/恢复能力，而 Chiron 的 L4-1 还卡在"待用户确认 5 问" ⇒ **L4-1 属"追平"，不能当差异化卖点**，已同步进路线图 §2 与 §1 对照表。
+    ⇒ 教训：**"未发现证据"必须写清取证强度**（目录索引 / 依赖枚举 / 源码 / 运行时是四个量级）；本轮就是把 #2 从"未发现"升到"枚举后确认"，同时把两处被低估的地方补上。
+
 ## 4. 复现取证的方法（只读）
 
 ```powershell
@@ -78,8 +86,10 @@
 Get-Content "$env:ProgramFiles(x86)\deepseek-harness\version"
 Get-Content "$env:ProgramFiles(x86)\deepseek-harness\resources\runtime\cli\bin\dsh.cmd"
 
-# app.asar 目录索引（只读；不要解包）：UInt32LE@12 = JSON 长度，dataStart = 8 + UInt32LE@4
-# 解析后用 @deepseek-ai/* 的 name@version + description 做能力盘点
+# app.asar 解包（只读）：实测布局 = UInt32LE@0(=4) | UInt32LE@4 | UInt32LE@8 | UInt32LE@12(=JSON 长度)
+#   JSON 索引从 **offset 16** 开始；文件内容 dataStart = 16 + UInt32LE@12（等价于 8 + UInt32LE@4，两者实测一致）
+#   解析后遍历 JSON 索引，按 name@version 枚举依赖做能力盘点（本轮 = 287 个依赖）
+#   注意：`resources\app.asar.unpacked\dsh` 只有 node_modules，源码在 asar 内，不要把它当成源码树
 
 # DSH 状态根（不要输出来自 .credentials.yaml 的值）
 Get-ChildItem "$env:DSH_HOME" -Force

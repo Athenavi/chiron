@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onUnmounted, watch, nextTick } from 'vue'
+import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
 import { VueFlow, useVueFlow, Handle, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
@@ -15,8 +15,8 @@ import {
   AlignCenterOutlined, HistoryOutlined, MessageOutlined,
   RocketOutlined,
 } from '@ant-design/icons-vue'
-import { api, listAgents, listTemplates, useTemplate } from '../api'
-import type { Agent, TemplateItem } from '../api'
+import { api, listAgents } from '../api'
+import type { Agent } from '../api'
 import { useAuthStore } from '../stores/auth'
 import { collectBindingUsage } from '../utils/kbUsage'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
@@ -24,6 +24,9 @@ import EmptyState from '../components/common/EmptyState.vue'
 import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
 import type { Node, Edge, Connection, NodeMouseEvent } from '@vue-flow/core'
 import { errorDetail } from '../utils/apiError'
+import { useWorkflowExecution } from '../composables/useWorkflowExecution'
+import { useWorkflowTemplates } from '../composables/useWorkflowTemplates'
+import type { InstanceRecord, NodeRunResult } from '../types/workflow'
 import { setChatPrefill } from '../components/chat/chatPrefill'
 
 import { useI18n } from 'vue-i18n'
@@ -66,12 +69,6 @@ function continueInChat(inst: InstanceRecord) {
 }
 
 // ── Types ──
-/** 单个节点的执行产出（后端 /v1/workflows/{id}/status 的 results[node_id]） */
-interface NodeRunResult {
-  status: string
-  output: unknown
-  error?: string
-}
 
 interface GraphNodeBackend {
   id: string
@@ -95,16 +92,6 @@ interface GraphRecord {
   updated_at: string
 }
 
-interface InstanceRecord {
-  id: string
-  workflow_id: string
-  workflow_name: string
-  status: string
-  results: Record<string, NodeRunResult>
-  error?: string
-  created_at: string
-  updated_at: string
-}
 
 // ── Node type definitions ──
 const nodeTypes = [
@@ -560,122 +547,26 @@ async function deleteWorkflow(id: string) {
 }
 
 // ── API: Execute（提交后轮询状态） ──
-let statusTimer: number | undefined
-const loggedNodes = new Set<string>()
-
-function stopStatusPolling() {
-  if (statusTimer !== undefined) { window.clearInterval(statusTimer); statusTimer = undefined }
-}
-
-/** 运行输入：图里有 input 节点时才需要用户填（见 needsRunInput 的说明） */
-const runInputOpen = ref(false)
-const runInputValue = ref('')
-
-/** 装配到 Agent：把当前工作流持久绑定到某个 Agent（写回 agents.workflows） */
-const attachToAgentOpen = ref(false)
-
-/**
- * 图里是否存在 input 节点 —— 只有这时才需要向用户收集运行输入。
- *
- * 后端 `/v1/graphs/{id}/execute` 一直支持 initial_state，但前端此前恒定提交 `{}`：
- * engine.py 的 `_input_node`（`state[node_id]` → `state["input"]` → 兜底
- * `"[input] {label}"`）于是永远走兜底分支，input 下游的一切 —— knowledge 节点的
- * query（留空时取上游输出）、llm 节点的 user_message（留空时取上游输出）—— 拿到的
- * 都是占位串。任何"依赖运行时输入"的工作流设计因此无法生效，所以这里把输入接上。
- */
-const needsRunInput = computed(() =>
-  getNodes.value.some(n => (n.data?.nodeType || n.type) === 'input'),
-)
-
-function executeWorkflow() {
-  if (!workflowId.value) { message.warning(t('workflow.please_save_the_workflow_first')); return }
-  if (!needsRunInput.value) {
-    void submitWorkflowRun('')
-    return
-  }
-  runInputValue.value = ''
-  runInputOpen.value = true
-}
-
-function confirmRunInput() {
-  const value = runInputValue.value
-  runInputOpen.value = false
-  void submitWorkflowRun(value)
-}
-
-async function submitWorkflowRun(input: string) {
-  isExecuting.value = true
-  executionLogs.value = [t('common.submitting')]
-  executionResults.value = {}
-  loggedNodes.clear()
-  for (const n of getNodes.value) n.data = { ...n.data, execStatus: 'idle' }
-  try {
-    // 有输入才放进 initial_state：留空时保持旧行为（各节点走自身配置/兜底）
-    const initial_state = input.trim() ? { input } : {}
-    const resp = await api.post(`/v1/graphs/${workflowId.value}/execute`, { initial_state })
-    const instanceId = resp.data?.data?.instance_id || resp.data?.instance_id
-    if (!instanceId) throw new Error(t('common.no_instance_id'))
-    message.info(t('workflow.workflow_submitted_running'))
-    startStatusPolling(instanceId)
-  } catch (err) {
-    isExecuting.value = false
-    executionLogs.value.push(t('errors.submit_failed_error', { error: errorDetail(err, '') }))
-  }
-}
-
-function startStatusPolling(instanceId: string) {
-  stopStatusPolling()
-  statusTimer = window.setInterval(async () => {
-    try {
-      const resp = await api.get(`/v1/workflows/${instanceId}/status`)
-      const data = resp.data?.data || resp.data
-      applyExecutionStatus(data)
-      if (data.status === 'completed') {
-        executionLogs.value.push(t('common.done'))
-        isExecuting.value = false
-        stopStatusPolling()
-        await loadInstances()
-      } else if (data.status === 'error') {
-        executionLogs.value.push(t('errors.failed_error', { error: data.error || '' }))
-        isExecuting.value = false
-        stopStatusPolling()
-        await loadInstances()
-      }
-    } catch {
-      stopStatusPolling()
-      isExecuting.value = false
-      executionLogs.value.push(t('errors.status_query_failed'))
-    }
-  }, 2000)
-}
-
-function applyExecutionStatus(data: unknown) {
-  const d = (data ?? {}) as { results?: Record<string, NodeRunResult> }
-  const results = d.results || {}
-  executionResults.value = results
-  for (const n of getNodes.value) {
-    const r = results[n.id]
-    n.data = { ...n.data, execStatus: r ? (r.status === 'completed' ? 'completed' : 'error') : 'idle' }
-  }
-  for (const [nid, r] of Object.entries(results)) {
-    if (loggedNodes.has(nid)) continue
-    loggedNodes.add(nid)
-    const n = getNodes.value.find(x => x.id === nid)
-    const label = n?.data?.label || nid
-    if (r.status === 'completed') executionLogs.value.push(`✅ ${label}`)
-    else if (r.status === 'error') executionLogs.value.push(`❌ ${label}`)
-  }
-}
-
-// ── API: 执行历史 ──
-async function loadInstances() {
-  try {
-    const resp = await api.get('/v1/workflows/instances')
-    instances.value = resp.data?.data || []
-  } catch {
-    instances.value = []
-  }
-}
+// ── 执行与状态轮询：抽到 `useWorkflowExecution`（依赖注入视图自己的 ref）──
+// 解构出的名字与原来保持一致 ⇒ 模板与既有函数都不必改（可见行为逐字不变）
+// （`needsRunInput` / `submitWorkflowRun` / `startStatusPolling` / `applyExecutionStatus`
+//   只在 composable 内部使用，视图不解构 —— 解构了就会被 eslint 判为未使用）
+const {
+  runInputOpen,
+  runInputValue,
+  attachToAgentOpen,
+  executeWorkflow,
+  confirmRunInput,
+  stopStatusPolling,
+  loadInstances,
+} = useWorkflowExecution({
+  workflowId,
+  getNodes,
+  isExecuting,
+  executionLogs,
+  executionResults,
+  instances,
+})
 
 // ── Reset ──
 function resetCanvas() {
@@ -696,63 +587,23 @@ function runInChat() {
   router.push({ path: '/chat', query: { workflow: value, mode: 'workflow' } })
 }
 
-// ── 模板市场（一键使用：加载进画布，不落库）──
-// 此前这一整块是**未接线的实现**：数据加载在 onMounted 里每页跑一次、结果丢弃，
-// `useWorkflowTemplate` 从不被调用（见路线图 L3-6）。现在由工具栏的「模板」入口驱动。
-const templateOpen = ref(false)
-const templates = ref<TemplateItem[]>([])
-const templatesLoading = ref(false)
-const templatesError = ref(false)
-const templateUsingId = ref<string | null>(null)
-
-async function loadTemplates() {
-  templatesLoading.value = true
-  templatesError.value = false
-  try {
-    templates.value = await listTemplates('workflow')
-  } catch {
-    templatesError.value = true
-    message.error(t('errors.failed_to_fetch_workflow_templates'))
-  } finally {
-    templatesLoading.value = false
-  }
-}
-
-function templateNodeCount(t: TemplateItem): number {
-  return Array.isArray(t.payload?.nodes) ? t.payload.nodes.length : 0
-}
-
-function templateEdgeCount(t: TemplateItem): number {
-  return Array.isArray(t.payload?.edges) ? t.payload.edges.length : 0
-}
-
-async function useWorkflowTemplate(tpl: TemplateItem): Promise<boolean> {
-  templateUsingId.value = tpl.id
-  try {
-    const resp = await useTemplate(tpl.id)
-    // 兼容直接返回 {payload,...} 或 {data:{payload,...}} 包装
-    const body = resp?.data && typeof resp.data === 'object' && resp.data.payload ? resp.data : resp
-    const payload = body?.payload
-    if (!payload || !Array.isArray(payload.nodes)) throw new Error(t('common.incomplete_template_data'))
-    // 替换当前画布：模板只加载不落库，可编辑后手动保存
-    resetCanvas()
-    fromBackendFormat({ name: body?.name || tpl.name, nodes: payload.nodes, edges: payload.edges || [] })
-    message.success(t('common.loaded_template_name_edit_and_save', { name: body?.name || tpl.name }))
-    await nextTick()
-    try { fitView({ padding: 0.15 }) } catch { /* 忽略布局异常 */ }
-    return true
-  } catch (e) {
-    message.error(t('errors.failed_to_load_template_error', { error: errorDetail(e, '') }))
-    return false
-  } finally {
-    templateUsingId.value = null
-  }
-}
-
-/** 从弹窗里点「使用」：成功才关窗（失败时保留列表，用户可换一个模板） */
-async function onUseTemplate(tpl: TemplateItem) {
-  if (await useWorkflowTemplate(tpl)) templateOpen.value = false
-}
+// ── 模板市场：抽到 `useWorkflowTemplates`（画布回填用回调注入）──
+// 只需解构视图用到的名字 ⇒ 模板与既有函数不变；`useWorkflowTemplate` 只在 composable 内部用。
+const {
+  templateOpen,
+  templates,
+  templatesLoading,
+  templatesError,
+  templateUsingId,
+  loadTemplates,
+  templateNodeCount,
+  templateEdgeCount,
+  onUseTemplate,
+} = useWorkflowTemplates({
+  resetCanvas,
+  fromBackendFormat,
+  fitView,
+})
 
 // ── Mount ──
 onMounted(() => {
