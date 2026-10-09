@@ -201,8 +201,12 @@ async def test_after_tool_use_routes_to_failure_event(tmp_path: Path, monkeypatc
     assert _entries(tmp_path)[-1]["event"] == events.POST_TOOL_USE
 
 
-async def test_all_six_events_have_a_call_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """非工具类事件都能被触发（SessionStart/UserPromptSubmit/Stop 与 Subagent 对都要有落点）。"""
+async def test_all_non_tool_events_have_a_call_site(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """非工具类事件都能被触发（SessionStart/UserPromptSubmit/Stop 与 Subagent 对都要有落点）。
+
+    **2026-10-09 改名**：原名 `test_all_six_events_have_a_call_site` 里的「six」是**事件总数还是 6 时**留下的，
+    而它实际覆盖的是**非工具类**的 5 个（`ALL_EVENTS` 现为 8 个：3 个工具类 + 这 5 个）⇒ 名字与断言不符。
+    """
     monkeypatch.setattr(settings, "hooks_enabled", True)
     for event in (
         events.SESSION_START,

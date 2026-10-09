@@ -117,7 +117,7 @@ python -m alembic -c alembic.ini upgrade head --sql > /dev/null   # 离线渲染
 **迁移链必须单一 head**：分叉会让启动校验（`internal/db/schema_version.go` 的
 `ParseMigrationHead`）直接拒绝启动。新增迁移后请复核 README「数据库迁移」一节。
 
-### `encoding` — 仓库根守卫（**七个**）
+### `encoding` — 仓库根守卫（**八个**）
 
 ```bash
 python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8 / **UTF-8 BOM**
@@ -127,6 +127,7 @@ python scripts/check_doc_links.py            # 被引用的 docs/*.md **与相�
 python scripts/check_md_tables.py            # Markdown 表格列数必须一致（存量走基线，新增即失败）
 python scripts/check_error_code_keys.py      # Go `Code*` ↔ 三语言 `errors.ts` 契约键必须一致，且三语言键集相同
 python scripts/check_orm_models.py           # `shared/models/**` 生成物必须与 `configs/orm/V1/models.yaml` 一致（重跑到**临时目录**比对，只忽略「生成时间」行）
+python scripts/check_compose_env.py          # compose 里 `${VAR:?…}` 声明的**必填**变量必须在 `.env.example` 出现（注释形态也算）
 python scripts/check_orm_schema.py           # `shared/models/**` 的列集合必须与迁移 DDL 一致（**跑在 CI 的 Migration chain job**：那里才装了 alembic）
 ```
 
