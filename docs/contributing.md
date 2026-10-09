@@ -98,7 +98,7 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
 ```bash
 pnpm install --frozen-lockfile
 pnpm run lint          # eslint src
-pnpm run build         # check:ui（7 道棘轮）→ vue-tsc -b → vite build
+pnpm run build         # check:ui（8 道棘轮）→ vue-tsc -b → vite build
 pnpm run test          # vitest run
 ```
 
