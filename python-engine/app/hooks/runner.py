@@ -303,7 +303,7 @@ async def run_command_hook(
     - stdin 收事件上下文 JSON（DSH / Claude Code 约定）、stdout 收**可选**的结构化 JSON、
       stderr 作为原因通道；
     - **退出码 2 = 阻断** ⇒ 折成一个 `{"decision": "deny", ...}` 输出，于是上层的
-      `_blocking_decision` 无需为本形态写第二套判定；
+      `_decision_of` 无需为本形态写第二套判定；
     - 复用隔离原语：`sandboxed_env()`（清环境）+ `_rlimit_kwargs()`（内存/CPU）+
       `truncate_execute_output()`（输出上限 + **显式标注**截断量）。
 

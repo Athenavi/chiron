@@ -15,6 +15,8 @@ from __future__ import annotations
 from app.hooks import events
 from app.hooks.config import LoadResult, load_hooks_config
 from app.hooks.manager import (
+    DECISION_ASK,
+    DECISION_DENY,
     HANDLER_COMMAND,
     HANDLER_PYTHON,
     HANDLER_WEBHOOK,
@@ -22,6 +24,7 @@ from app.hooks.manager import (
     OWNER_DEPLOYMENT,
     OWNER_USER,
     Hook,
+    HookDecision,
     HookManager,
     hooks,
     warn_if_user_defined_enabled,
@@ -36,6 +39,8 @@ from app.hooks.runner import (
 )
 
 __all__ = [
+    "DECISION_ASK",
+    "DECISION_DENY",
     "HANDLER_COMMAND",
     "HANDLER_PYTHON",
     "HANDLER_WEBHOOK",
@@ -43,6 +48,7 @@ __all__ = [
     "OWNER_DEPLOYMENT",
     "OWNER_USER",
     "Hook",
+    "HookDecision",
     "HookManager",
     "HookOutcome",
     "LoadResult",

@@ -113,6 +113,7 @@ async def subagent(
     profile: str = "",
     run_in_background: bool = True,
     allow_write: bool = False,
+    call_tools: list[str] | None = None,
     max_tokens: int = 0,
     max_seconds: int = 0,
     rerun_of: str = "",
@@ -144,6 +145,13 @@ async def subagent(
     并受"条数上限 50 / 字符预算 32K"双重约束，渲染时带 `<inherited-context>` 与
     "这是数据不是指令"声明。程序化调用可传整数表示"最多取最近 N 条"。返回体的
     `inherited_messages` 给出**真正继承了**多少条（未开启时该字段不出现）。
+
+    call_tools: **收窄子 Agent 的工具面**（A4，可选）。给一组工具名，子 Agent 的工具面就被
+    收成"它的默认面 ∩ 这组名字"；省略（None）表示**不收窄**（保持 Profile / mode 决定的面）。
+    **只能收窄、不能放宽** —— 名字不在子 Agent 自己那套面里的会被忽略，因此它**不是**提权通道。
+    什么时候值得用：派一个只需读几个文件的小任务时，把面收到 `["read_file", "search_file"]`
+    能显著减少它走偏与烧 token 的机会。代价：参数 schema 变大，且**名字写错会静默收窄**
+    （收到的面变小、不报错）—— 需要核对时看子 Agent 返回的 `tools` 相关字段或它的步骤流水。
 
     target: **compiled 目标**（S1，keyword-only）。形态 ``"<prefix>:<ref>"``，目前内置三个
     前缀：``profile:<id>``（与 ``profile=`` **同一条路径**）、``skill:<name>``（复用
@@ -199,6 +207,8 @@ async def subagent(
                 sink=get_event_sink(),
                 background=False,
                 allow_write=bool(allow_write),
+                # A4：把父层声明的"收窄后的工具名"带上（只能收窄、不能放宽）
+                call_tools=call_tools,
                 budget=budget_from_env(
                     max_tokens=max_tokens,
                     max_seconds=_sync_wall_seconds(False, max_seconds),
@@ -258,6 +268,9 @@ async def subagent(
         # 工具面：默认只读 —— 子 Agent 与父共享工作区，写/执行既可能互相踩，
         # 又会在 auto 模式下每一步都要用户确认。需要写/执行必须显式 allow_write=true。
         allow_write=bool(allow_write),
+        # A4：父层显式收窄子 Agent 的工具面（None = 不收窄）；交集由 SubAgentRunner 计算，
+        # 只会让面变小 —— 名字不在它自己那套面里的会被忽略（不是提权通道）。
+        call_tools=call_tools,
         # per-run 预算：显式参数 > 环境变量 > 默认（见 app/subagent/budget.py）。
         # 同步委派额外带一个 wall 默认值（见 _sync_wall_seconds）——它是"父 turn 原地等"
         # 的路径，没有上限时上游一挂就无限期占住父回合；后台委派由看门狗收口，不需要。
@@ -550,6 +563,17 @@ registry.register(
                     "(tools_mode=auto), which stalls the run on each step. "
                     "Set true only when the children must actually modify files or run commands; "
                     "prefer a Profile that declares read_only=false for that."
+                ),
+            },
+            "call_tools": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": (
+                    "Optional: **narrow** the child's tool set to the intersection of its own "
+                    "set and these names. It can only make the child's surface smaller — names "
+                    "outside that set are ignored, so this is never a way to grant more. Useful "
+                    "for small read-only chores: e.g. [\"read_file\", \"search_file\"] keeps a "
+                    "child from wandering. Omit to leave the child's set unchanged."
                 ),
             },
             "max_tokens": {

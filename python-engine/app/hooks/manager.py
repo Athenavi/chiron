@@ -49,6 +49,31 @@ HANDLER_WEBHOOK = "webhook"
 #: 已知的执行形态（注册时校验；`events.ALL_EVENTS` 之于事件名的同款作用）。
 HANDLERS: frozenset[str] = frozenset({HANDLER_PYTHON, HANDLER_COMMAND, HANDLER_WEBHOOK})
 
+#: 判定档位（2026-10-09：`ask` 从"不支持"改为**支持**）。
+#: `DENY` = 拒绝；`ASK` = **要求用户确认** —— 引擎侧把它交给**既有的服务端审批通道**
+#: （不新增交互面，见 `docs/hook-protocol-design.md` §4.4）。
+DECISION_DENY = "deny"
+DECISION_ASK = "ask"
+
+
+class HookDecision(str):
+    """一次**可阻断事件**的判定结果：**是 `str` 的子类**（值 = 原因），另带 `kind`。
+
+    为什么继承 `str`：调用方与既有用例大量依赖"原因字符串"的用法（`is None` 判放行、
+    `"hook 名" in reason`、`reason.startswith(...)`）—— 换成一个普通对象会让几十处断言
+    失效，而它们表达的正是"放行 vs 拒绝"这件真事。`str` 子类让"拒绝"仍然**是**那句话，
+    同时把 `deny` 与 `ask` 分开（`ask` 要走审批，不是直接拒绝）。
+    """
+
+    __slots__ = ("kind",)
+
+    kind: str
+
+    def __new__(cls, reason: str, kind: str = DECISION_DENY) -> HookDecision:
+        obj = str.__new__(cls, reason)
+        obj.kind = kind
+        return obj
+
 
 @dataclass(frozen=True)
 class Hook:
@@ -120,25 +145,39 @@ def _outcome_label(outcome: HookOutcome) -> str:
     return "ok"
 
 
-def _blocking_decision(outcome: HookOutcome) -> str | None:
-    """从 PreToolUse 的执行结果里解析"是否阻断"，返回原因或 None。
+def _decision_of(outcome: HookOutcome) -> HookDecision | None:
+    """从一次可阻断事件的执行结果里解析判定：返回 `HookDecision`，放行时返回 `None`。
 
-    只有 hook **成功返回**且**显式 deny** 才算阻断；超时/崩溃/非法输出一律**放行** ——
-    对接"超时按失败处理但不阻断主流程"（方案 03 §3.2）。这也保证了 PreToolUse 的
-    失败是 fail-open 而非 fail-closed（否则 hook 一崩就把所有工具调用掐死）。
+    只有 hook **成功返回**且**显式表态**才算表态；超时 / 崩溃 / 非法输出一律**放行**
+    （fail-open，否则 hook 一崩就把所有工具调用掐死）。
 
-    `command` 形态无需第二套判定：`run_command_hook` 已把**退出码 2** 折成
-    `{"decision": "deny", ...}`，于是两种形态在这里合流（`docs/hook-protocol-design.md` §4.4）。
+    两个档位（2026-10-09 起）：
+    * `deny` / `block` / `block: true` ⇒ **拒绝**（原因回灌给调用方）；
+    * `ask` ⇒ **要求用户确认** —— 调用方把它交给**既有的服务端审批通道**（§4.4）；
+    * 其余取值（含 `allow`）⇒ `None`，与其他非法输出同待遇（放行 + 审计）。
+
+    **三种形态共用它**：`command` 的退出码 2 与 `webhook` 的 2xx + JSON 都在各自的 runner 里
+    折成 `{"decision": "deny", ...}`，因此判定只有一份。**两种可阻断事件也共用它**
+    （`PreToolUse` 与 `UserPromptSubmit`）—— 差别只在于"拒绝这次工具调用"还是"拒绝这一轮
+    提示词"，那由调用方解释。
     """
     if not outcome.success:
         return None
     output = outcome.output
     if not isinstance(output, dict):
         return None
-    denied = output.get("decision") in ("deny", "block") or output.get("block") is True
-    if not denied:
-        return None
-    return str(output.get("reason") or output.get("message") or "denied by hook")
+    decision = output.get("decision")
+    if decision in ("deny", "block") or output.get("block") is True:
+        return HookDecision(
+            str(output.get("reason") or output.get("message") or "denied by hook"),
+            DECISION_DENY,
+        )
+    if decision == DECISION_ASK:
+        return HookDecision(
+            str(output.get("reason") or output.get("message") or "hook requests confirmation"),
+            DECISION_ASK,
+        )
+    return None
 
 
 def _record_command_exec_audit(context: dict[str, Any], hook: Hook, outcome: HookOutcome) -> None:
@@ -438,25 +477,55 @@ class HookManager:
             task=task,
         )
 
-    async def user_prompt_submit(self, *, task: Any) -> None:
-        """`UserPromptSubmit` —— fire-and-forget（收到用户提示词、输入护栏之后）。
+    async def user_prompt_submit(self, *, task: Any) -> HookDecision | None:
+        """`UserPromptSubmit` —— **可阻断**（2026-10-09 拍板；此前是"只观测"）。
 
-        **刻意不可阻断**（不在 `BLOCKING_EVENTS`）：阻断用户自己的提示词是对**用户**
-        的控制点，与 `PreToolUse`"只收紧工具策略"性质不同；拒绝输入已由输入护栏承担。
-        见 `docs/hook-protocol-design.md` §4.1。
+        返回非空字符串 = **拒绝这一轮提示词**（调用方据此不进主循环，并把原因作为
+        `guardrail_blocked` 事件回给前端）；`None` = 放行。
+
+        与 `PreToolUse` 的分工：这里拦的是**用户自己的输入**，所以它做的只是"拒绝本轮"，
+        不放宽任何策略；**输入护栏仍然先跑**（两者叠加，不是二选一），hook 只是又一道
+        可由运维声明的闸。见 `docs/hook-protocol-design.md` §4.1。
         """
         if not settings.hooks_enabled:
-            return
-        await self._trigger(
+            return None
+        context = events.build_context(
             events.USER_PROMPT_SUBMIT,
-            events.build_context(
-                events.USER_PROMPT_SUBMIT,
-                session_id=_attr(task, "session_id"),
-                tenant_id=_attr(task, "tenant_id"),
-                user_id=_attr(task, "user_id"),
-            ),
-            task=task,
+            session_id=_attr(task, "session_id"),
+            tenant_id=_attr(task, "tenant_id"),
+            user_id=_attr(task, "user_id"),
         )
+        for hook, outcome in await self._trigger(events.USER_PROMPT_SUBMIT, context, task=task):
+            decision = _decision_of(outcome)
+            if decision is None:
+                continue
+            if decision.kind == DECISION_ASK:
+                # 提示词**没有"可确认的对象"**（它不是一次待执行的副作用）：`ask` 在这里按
+                # **拒绝**处理并写明原因 —— 方向是收紧，而不是静默放行。
+                decision = HookDecision(
+                    f"{decision}（ask 在 UserPromptSubmit 上没有可确认的对象，按拒绝处理）",
+                    DECISION_DENY,
+                )
+            audit.record_hook(
+                event=events.USER_PROMPT_SUBMIT,
+                hook=hook.name,
+                owner=hook.owner,
+                tenant=str(context.get("tenant_id", "")),
+                user=str(context.get("user_id", "")),
+                session=str(context.get("session_id", "")),
+                duration_ms=outcome.duration_ms,
+                exit_code=outcome.exit_code,
+                blocked=True,
+                outcome=DECISION_DENY,
+                reason=str(decision),
+                handler=hook.handler,
+                command=hook.target or None,
+                truncated=outcome.truncated,
+            )
+            return HookDecision(
+                f"blocked by UserPromptSubmit hook '{hook.name}': {decision}", DECISION_DENY
+            )
+        return None
 
     async def stop(self, *, task: Any) -> None:
         """`Stop` —— fire-and-forget（一次 run 结束时，含异常/中断退出路径）。"""
@@ -473,37 +542,47 @@ class HookManager:
             task=task,
         )
 
-    async def before_tool_use(self, *, task: Any, tool_call: dict[Any, Any]) -> str | None:
-        """`PreToolUse` —— **唯一可阻断**主流程的事件。
+    async def before_tool_use(
+        self, *, task: Any, tool_call: dict[Any, Any]
+    ) -> HookDecision | None:
+        """`PreToolUse` —— **可阻断**主流程的事件。
 
-        返回阻断原因字符串表示"拒绝执行该工具"；返回 `None` 表示放行。
-        调用方（runtime）在工具策略/审批判定**之后**调用它，因此 hook 只能进一步
-        收紧，不能放宽 —— 它没有"放行"语义。
+        返回 `HookDecision` 表示"有表态"，`None` 表示放行。`decision.kind` 决定是哪一档：
+
+        * `deny` ⇒ 调用方**拒绝执行该工具**（原因回灌为工具错误）；
+        * `ask` ⇒ 调用方**走既有的服务端审批通道**（2026-10-09 拍板；它**不是**拒绝 ——
+          用户批准后仍会执行，见 `docs/hook-protocol-design.md` §4.4）。
+
+        调用方（runtime）在工具策略 / 授权 / 审批判定**之后**调用它，因此 hook 只能进一步
+        **收紧**：它没有"放行"语义，也不会成为绕过 `tool_policy` 分级的新通道。
         """
         if not settings.hooks_enabled:
             return None
         context = self._tool_context(events.PRE_TOOL_USE, task, tool_call)
         for hook, outcome in await self._trigger(events.PRE_TOOL_USE, context, task=task):
-            reason = _blocking_decision(outcome)
-            if reason:
-                # 追加一条 blocked=True 的审计：区分"执行了但放行"与"执行了且拦下"。
-                audit.record_hook(
-                    event=events.PRE_TOOL_USE,
-                    hook=hook.name,
-                    owner=hook.owner,
-                    tenant=str(context.get("tenant_id", "")),
-                    user=str(context.get("user_id", "")),
-                    session=str(context.get("session_id", "")),
-                    duration_ms=outcome.duration_ms,
-                    exit_code=outcome.exit_code,
-                    blocked=True,
-                    outcome="blocked",
-                    reason=reason,
-                    handler=hook.handler,
-                    command=hook.target or None,
-                    truncated=outcome.truncated,
-                )
-                return f"blocked by PreToolUse hook '{hook.name}': {reason}"
+            decision = _decision_of(outcome)
+            if decision is None:
+                continue
+            # 追加一条审计：区分"执行了但放行"与"执行了且拦下 / 要求确认"。
+            # `ask` 也记（`outcome="ask"`、`blocked=False`）—— 运维配了 ask 却看不到它
+            # 到底发生过什么，是最难查的一类问题。
+            audit.record_hook(
+                event=events.PRE_TOOL_USE,
+                hook=hook.name,
+                owner=hook.owner,
+                tenant=str(context.get("tenant_id", "")),
+                user=str(context.get("user_id", "")),
+                session=str(context.get("session_id", "")),
+                duration_ms=outcome.duration_ms,
+                exit_code=outcome.exit_code,
+                blocked=decision.kind == DECISION_DENY,
+                outcome=decision.kind,
+                reason=str(decision),
+                handler=hook.handler,
+                command=hook.target or None,
+                truncated=outcome.truncated,
+            )
+            return decision
         return None
 
     async def after_tool_use(self, *, task: Any, tool_call: dict[Any, Any], result: Any) -> None:

@@ -289,13 +289,19 @@ class Settings(BaseSettings):
     #: 这不是"没配就全走服务"，后者是个危险的默认。
     sandbox_service_tenants: str = ""
 
-    #: read-before-write **严格模式**（默认关 —— 见 `vendor/规划.md` §3.3 的待决问题）。
+    #: read-before-write **严格模式**（**已拍板：保持默认关**，2026-10-09）。
     #:
     #: * 关（默认）：**兼容旧行为** —— 只拦"读过但已变化"的文件，未读过的文件放行；
     #: * 开：**已存在但从未读过**的文件也拒绝（要求先 `read_file`），对位 DSH 的
     #:   `dsh-fs-observation-policy`（它把 read-before-edit 当硬要求）。
     #:
     #: 不存在的路径**两种模式都放行**：没有可过期的内容，新建文件本就没有"读"可做。
+    #:
+    #: **为什么不默认开**：收紧会让既有写入流程多出重读步骤，而收益需要产品侧判断。
+    #: 与 DSH 的两处**已知差异**（同批决定不做，证据见 `docs/archive/dsh-gap-analysis.md`）：
+    #: ① DSH 把"读一个不存在的路径"当作**授权受保护的创建**（`writeIntent` 返回 `createIfAbsent`）；
+    #: ② DSH 有**并发创建**保护（读完缺失路径后别人建了它 ⇒ 拒绝），且它把原子新鲜度检查
+    #: 交给 provider。用例：`tests/test_fs_guard.py::TestStrictMode`。
     fs_require_observation: bool = False
 
     # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──
