@@ -1,7 +1,7 @@
 """
 SQLAlchemy 模型定义 - SubagentRun
 由代码生成器自动生成 (基于 models.yaml / routes.yaml) - 请勿手动修改
-生成时间：2026-10-09 07:12:02
+生成时间：2026-10-09 21:28:09
 """
 
 from sqlalchemy import Column, Integer, BigInteger, String, Text, Boolean, DateTime, ForeignKey, JSON
@@ -102,6 +102,11 @@ class SubagentRun(Base):
 
     rerun_of = Column(String(64), nullable=True, doc='该 run 是对哪个 run 的重跑（迁移 0006）')
 
+    resumed_from = Column(String(64), nullable=True, doc='该 run 是从哪个 run 续跑 / 分叉而来（R5(b)，迁移 0008）')
+
+    resume_at_step = Column(Integer, nullable=True, doc='分叉点（只继承 seq < 该值的步骤；NULL = 续到底）（R5(b)，迁移 0008）')
+
+
 
     def to_dict(self, exclude_sensitive=True):
         """转换为字典
@@ -143,6 +148,8 @@ class SubagentRun(Base):
             'validator_attempt': self.validator_attempt,
             'error_code': self.error_code,
             'rerun_of': self.rerun_of,
+            'resumed_from': self.resumed_from,
+            'resume_at_step': self.resume_at_step,
         }
 
         if not exclude_sensitive:

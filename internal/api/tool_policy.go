@@ -82,6 +82,8 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"subagent", "workflow_run", "graph_run",
 		// 重跑也是"再派一个作业"（会消耗 token 并复用原来的写权限），与 subagent 同级
 		"rerun_subagent",
+		// R5(b)：续跑/分叉同理（再派作业 + 沿原 run 的写权限，只能收紧不能放宽）
+		"resume_subagent",
 	)
 	add(ToolLevelDelete, "job_kill", "forget", "delete_file", "kb_delete")
 	add(ToolLevelExternal, "web_fetch", "web_search", "skill_install")

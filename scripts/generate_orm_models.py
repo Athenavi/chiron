@@ -11,6 +11,13 @@ from pathlib import Path
 import yaml
 from jinja2 import Environment, FileSystemLoader
 
+#: 控制台按 **UTF-8** 输出。脚本的进度行里有 emoji（📦 等），而 Windows 控制台默认是 GBK ⇒
+#: 直接 `UnicodeEncodeError` 崩在**生成之前**（实测：`python scripts/generate_orm_models.py`
+#: 在本机跑不动，于是"改 yaml → 跑生成器"这条路在 Windows 上不可用）。
+#: `reconfigure` 对管道 / CI 无害，且不改任何生成结果（只影响日志编码）。
+if hasattr(sys.stdout, "reconfigure"):  # pragma: no cover - 环境相关
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 # 添加项目根目录到路径
 PROJECT_ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(PROJECT_ROOT))

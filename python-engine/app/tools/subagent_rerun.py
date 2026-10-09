@@ -25,6 +25,7 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.subagent.access import RUN_ACCESS_CLAUSE
 from app.tools.context import get_session_id, get_tenant_id, get_user_id
 from app.tools.registry import registry
 
@@ -33,14 +34,12 @@ logger = logging.getLogger(__name__)
 #: 允许重跑的状态：都是终态。running 不在列 —— 它不需要重跑，重跑会得到两份并发作业。
 RERUNNABLE = ("completed", "failed", "cancelled", "lost")
 
-RUN_SQL = """
+#: 访问谓词与 `read_subagent_result` / `resume_subagent` **共用一份**
+#: （`app/subagent/access.py`）：同一件事写三遍必然漂移，而漂移方向通常是放宽。
+RUN_SQL = f"""
 SELECT id, task, profile_name, read_only, status, depth
   FROM subagent_runs
- WHERE id = $1
-   AND tenant_id = $2
-   AND (user_id = $3 OR user_id IS NULL)
-   -- 按对话会话隔离：与 read_subagent_result 同一套判定，绝不允许跨会话重跑
-   AND root_session_id = $4
+ WHERE id = $1{RUN_ACCESS_CLAUSE}
 """
 
 
