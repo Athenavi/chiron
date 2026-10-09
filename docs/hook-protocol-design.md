@@ -14,12 +14,16 @@
 > **批次 4（上下文注入；拍板 ③ = 做）**：hook 输出里的 **`additional_context`**（**结构化字段，
 > 不是 stdout**）经脱敏 + 长度上限 + 信任声明后作为**独立 system 消息**注入；独立开关
 > `hooks_allow_context_injection`（默认关 ⇒ 零行为变化）。
-> **批次 5（2026-10-09 拍板"两项都做"）**：**④ `UserPromptSubmit` 可阻断** ✅ **已落地**
+> **批次 5（2026-10-09 拍板"两项都做"）—— 两项均已落地**：**④ `UserPromptSubmit` 可阻断**
 > （进入 `BLOCKING_EVENTS`；`manager.user_prompt_submit()` 返回原因，runtime 以**既有**的
-> `guardrail_blocked` 事件结束本轮）· **② `ask` 判定** ⚠ **尚未落地** —— 形态已定：
-> **复用既有的服务端审批通道**（不新增交互面与端点），实现方案见 §4.4。
+> `guardrail_blocked` 事件结束本轮）· **② `ask` 判定**（判定层用 `HookDecision.kind` 区分
+> `deny`/`ask`；`ask` ⇒ `_guarded_execute_tool` 走**既有**的服务端审批通道 —— 与 `tool_policy`
+> 的 `confirm` **共用** `_begin_approval`，因此前端与网关**零改动**；批准后 `ask` 不再生效、
+> `deny` 仍生效）。
 >
-> **依据**：`vendor/规划.md` §3.2「追平 DSH：**钩子协议**」（用户 2026-10-09 指示）要求
+> **依据**：`vendor/规划.md` §3.2 曾有「追平 DSH：**钩子协议**」一条（用户 2026-10-09 指示：未来规划追平）。
+> **该条目现已完成、并按规划 §0 的约定从待做清单移除** ⇒ 本文是它的**唯一载体**（实现见 git
+> 历史与 `python-engine/app/hooks/`、`python-engine/tests/test_hooks*.py`）。本文要求
 > **落地前先出设计**，并指定三件必答：**事件清单 · 执行边界 · 与 §6「不扩大可执行面」的关系**。
 > 本文即对该三项的回答，外加声明面、执行形态、判定语义与实现批次。
 >
@@ -38,7 +42,7 @@
 |---|---|
 | 1 | **"钩子协议落后"这个判断要修口径**：Chiron 的钩子机制**已经落地并接线**（沙箱执行 / 审计 / 默认关 / 有测试），**事件集现为 8 个** —— 与 DSH **实际支持的 7 个**相比，并**多一个** DSH 不支持的 `PostToolUseFailure`（`UserPromptSubmit` 已由批次 2a 补齐） |
 | 2 | **声明面已补**（批次 1）：`settings.hooks_config_path`（**默认空 = 不读文件、不注册、不执行 = 零行为变化**）+ `load_hooks_config()` 已在 `app/main.py` 接线。**`command` 形态亦已落地**（批次 2b）：它才是"能搬动 DSH 既有钩子脚本"的那一环 |
-| 3 | **五件事的拍板结果（2026-10-09 两轮拍板）**：① = **(b)**（运维声明的命令钩子按"运维面"治理 + 在 §6 显式登记例外）**已落地**；② `ask` = **要做** —— 形态是**复用既有审批通道**（不新增交互面），**实现方案已定、尚未落地**（见 §4.4）；③ 上下文注入 = **做**（只走结构化字段，已落地）；④ `UserPromptSubmit` = **可阻断**（已落地）；⑤ `webhook` = **做**（载荷只送内容无关字段，已落地） |
+| 3 | **五件事的拍板结果（2026-10-09 两轮拍板）**：① = **(b)**（运维声明的命令钩子按"运维面"治理 + 在 §6 显式登记例外）**已落地**；② `ask` = **要做** ⇒ **已落地**（复用既有审批通道，与 `confirm` 共用 `_begin_approval`）；③ 上下文注入 = **做**（只走结构化字段，已落地）；④ `UserPromptSubmit` = **可阻断**（已落地）；⑤ `webhook` = **做**（载荷只送内容无关字段，已落地） |
 | 4 | **DSH 侧对同样四件事的答案**（读 `dsh-hook-protocol` README，实现源码级）：① **只跑 `command` 钩子**（`http`/`mcp_tool`/`prompt`/`agent` **跳过并告警**）⇒ 命令钩子是对标物**唯一**形态，与本设计一致；② **有 `ask`**（仅 Claude Code 桥；Codex 桥不提供）⇒ **有意偏离**；③ **有上下文注入** ⇒ **有意偏离**；④ **`UserPromptSubmit` 可阻断**（退出码 2）⇒ **有意偏离**。⑤ DSH **根本没有** http/webhook 形态 ⇒ webhook 属**超出对标** |
 
 > **另两条关键语义（照抄进实现）**：**只有退出码 2 才阻断**，其它退出码一律**非阻断失败**
@@ -61,7 +65,7 @@
 | 审计 | `logs/hooks_audit.jsonl`（UTC+毫秒：tenant/user/session/duration/exit_code/**blocked**/outcome/reason/脱敏+截断），批次 2b 增 **`handler`** / **`command`** / **`truncated`** 三个字段；**`command` 形态另写一条 `exec_audit.jsonl`（`tool="hook_command"`）** —— 它是唯一会跨副本集中摄取（N4）的那条流水 | `app/hooks/audit.py`、`app/hooks/manager.py::_record_command_exec_audit` |
 | 默认值 | `hooks_enabled=False` · `hooks_allow_user_defined=False` · `hooks_timeout_seconds=5` · `hooks_event_budget_seconds=10` · `hooks_config_path=""` · `hooks_allow_commands=False` · `hooks_command_allowlist=""` · **`hooks_allow_webhooks=False`** · **`hooks_webhook_allowlist=""`** · **`hooks_allow_context_injection=False`**（后三者为批次 3/4） | `app/config.py` 的 hooks 段 |
 | 执行入口清单 | `hooks/runner.py` **已被机械归类**为 `AUDITED_BY_CALLER`（"manager 在每次执行后调用 `audit.record_hook`；`command` 形态另写一条 exec_audit"）—— 新增起进程位置不归类即测试失败 | `tests/test_exec_audit_inventory.py` |
-| 测试 | `tests/test_hooks.py`（注册校验、阻断、超时放行、沙箱逃逸、用户 hook 拒绝、审计、启动告警、**两端 UTF-8 编码契约**）· `tests/test_hooks_config.py`（声明面加载 / **锚定 matcher** / 校验 / 预算 / 未知事件忽略）· `tests/test_hooks_command.py`（批次 2b：闸口 / 退出码判定 / stdin 载荷 / fail-open / 声明面端到端）· **`tests/test_hooks_webhook.py`（批次 3：闸口 / SSRF（真的 `assert_safe_url`）/ 判定语义 / 内容无关载荷）** · **`tests/test_hooks_context_injection.py`（批次 4：默认关 / 只走结构化字段 / 独立 system 消息 / 脱敏与上限）** | 见各文件 |
+| 测试 | `tests/test_hooks.py`（注册校验、阻断、超时放行、沙箱逃逸、用户 hook 拒绝、审计、启动告警、**两端 UTF-8 编码契约**、**`UserPromptSubmit` 可阻断**）· `tests/test_hooks_config.py`（声明面加载 / **锚定 matcher** / 校验 / 预算 / 未知事件忽略）· `tests/test_hooks_command.py`（批次 2b）· `tests/test_hooks_webhook.py`（批次 3）· `tests/test_hooks_context_injection.py`（批次 4）· **`tests/test_hooks_ask.py`（批次 5：`ask` 走审批 / 防重复询问 / 并发边界）** | 见各文件 |
 
 ### 1.1 本批新增的可执行面（原"没有声明面"缺口已补）
 
@@ -113,7 +117,7 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | **声明面** | **`hooks.json` 已落地**（批次 1：`settings.hooks_config_path` + **锚定 matcher** + 校验 + 预算 + 启动告警 + 未知事件忽略；**默认空 = 不读文件/不注册/不执行 = 零行为变化**） | `hooks.json`（Claude Code / Codex 方言） | **已追平**（批次 2b 补上 `command` 形态后，**handler 形态也已对齐**：`python` / `command`；`webhook` 属超出对标） |
 | 执行形态 | **两种**：Python `code`（沙箱子进程）+ **`command`（批次 2b：运维声明的本地命令）** | `command`（本地命令，走 `dsh-shell` 执行器） | **已对齐**（`command` 是 DSH 唯一形态；Chiron 的 `command` 不经过 shell，要 shell 特性须显式 `bash -c`） |
 | 判定语义 | 结构化 JSON `{decision, reason}` **与退出码 2 约定都支持**（后者批次 2b 落地）；失败 fail-open | **退出码 2 = 阻塞** + stderr 原因；其余非阻塞 | **已对齐** |
-| 判定档位 | 只有"阻断/放行" | `deny > ask > allow` | **`ask` 已拍板要做、方案已定**（复用既有的服务端审批通道 ⇒ 不新增交互面），**尚未落地**（§4.4） |
+| 判定档位 | `deny` / `allow` / **`ask`** | `deny > ask > allow` | **已对齐**：`ask` ⇒ **复用既有的服务端审批通道**（与 `tool_policy` 的 `confirm` 共用 `_begin_approval`），不新增交互面（§4.4） |
 | matcher | **已有**（**锚定**正则 `re.fullmatch`；**只对工具类事件合法** —— 其余事件带 matcher **直接拒绝**而不是静默丢弃） | 按名字 / pattern 选择 | **已追平且更严**（DSH 对 `UserPromptSubmit`/`Stop` 的 matcher 是 *discarded*）—— **2026-10-09 更正**：此行原写「无（注册到事件即全跑）」，是批次 1 之前的状态 |
 | 上下文注入 | **无**（§6 禁止 stdout 拼接） | `additionalContext` 模型可见 | **刻意不同** |
 | 运行级停止 | 无（也不该有） | `continue:false`（**且无实际效果**） | 不需要 |
@@ -221,15 +225,21 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
   ② **DSH/Claude Code 兼容**：**退出码 2 = 阻断**，stderr（尾部、脱敏、截断）作为原因。
   ⇒ 第二条让"已有的 Claude Code / Codex 钩子脚本"能直接复用；`run_command_hook` 把退出码 2 折成
   `{"decision": "deny", ...}`，于是 `_blocking_decision` **只有一套**，两种形态与两种输入都在此合流。
-* **档位：`deny` / `allow` 已落地；`ask` 已拍板要做、但（截至 2026-10-09）尚未实现**。
-  形态**不是**新增交互面：Chiron 的审批本来就是**服务端**流程，`ask` 的正确落点是**把这次调用
-  提升为"需要用户确认"** ⇒ **复用既有审批通道**（`runtime._guarded_execute_tool` 的 `confirm` 分支：
-  注册 pending future + 审批票据 + `approval` 事件，再由 `_await_approval` 收决定并把结果补回来）。
-  **实现方案（下一批，已定）**：① 判定层识别 `ask`；② `_execute_tool` 在 PreToolUse 返回 `ask` 时
-  把"需要审批"**上抛**给 `_guarded_execute_tool` 的 allow 分支 —— 那里**已经**是
-  `(result, approval_evt)` 两元返回，**主循环无需改动**；③ 给 `_execute_tool` 加 `approved` 标记
-  以防**重复询问**：`_await_approval` 批准后再执行时 `ask` 不再生效（`deny` 仍生效 —— hook 只能收紧）。
-  **当前行为**：hook 返回 `ask` ⇒ 按未知输出处理（告警 + 审计 + 放行，fail-open 且显式可见）。
+* **三个档位：`deny` / `allow` / `ask`（✅ 已落地，2026-10-09）**。
+  `ask` **不是**新增交互面：Chiron 的审批本来就是**服务端**流程，因此 `ask` 的落点是**把这次
+  调用提升为"需要用户确认"** —— 与 `tool_policy` 判 `confirm` 时**完全同一套**手续：
+  `runtime._begin_approval`（注册 pending future + 审批票据 + `asked` 审计 + `approval` 事件）
+  → 调用方 `yield` 事件 → `_await_approval` 收决定 → 批准后补执行。**前端与网关零改动。**
+  落地形态（三处）：① 判定层用 `HookDecision`（**`str` 子类**，值 = 原因、附加 `kind`）区分
+  `deny` / `ask` —— 继承 `str` 让既有"原因串"断言（`is None` / `in` / `startswith`）全部照旧；
+  ② `_execute_tool` 在 `PreToolUse` 返回 `ask` 时**不执行工具**，把"待确认原因"作为返回值的
+  第二项**上抛**给 `_guarded_execute_tool` 的 allow 分支（那里本来就是 `(result, approval_evt)`
+  两元契约，**主循环无需改动**）；③ `_execute_tool(..., approved=True)` 时 `ask` **不再生效**
+  （否则用户批一次、hook 问一次 ⇒ 无限循环），而 `deny` **仍然生效**（hook 只能收紧，
+  不会被"批准过"抵消）。
+  **两处边界**：`UserPromptSubmit` 上的 `ask` **按拒绝处理**（提示词没有"可确认的对象"，
+  方向是收紧而非静默放行）；**并发批**（`_run_parallel_batch`，无法交互）里遇 `ask` ⇒
+  **显式错误**返回给模型，而不是把审批事件丢掉（丢 = 静默变成"什么都没发生"）。
 * **多 hook 合并**：**任一 deny 即 deny**（最严格），按声明顺序串行执行（保持审计相邻与顺序确定）。
 * **fail-open 保持不变**：超时 / 崩溃 / 非法输出 / 未知 `decision` ⇒ 放行 + 审计。
 * **不做 `updatedInput`**（输入改写）：DSH 自己都"解析但不应用"，Chiron 更不该让 hook 改写工具参数
@@ -335,7 +345,11 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
     长度上限 + 信任声明后**独立成一条 system 消息**；
 16. **`UserPromptSubmit` 可阻断**：deny ⇒ `manager.user_prompt_submit()` 返回原因、runtime 以
     `guardrail_blocked` 事件结束本轮（**不进主循环**）；不 deny ⇒ 返回 `None` 且照常继续；
-    审计留一条 `blocked=True`。**它仍不允许 matcher**。
+    审计留一条 `blocked=True`。**它仍不允许 matcher**；
+17. **`ask` 走既有审批通道**：`PreToolUse` 返回 `ask` ⇒ **工具不执行**，`_guarded_execute_tool`
+    返回 `(None, approval 事件)`（与 `tool_policy` 的 `confirm` **同一套**手续、前端零改动）；
+    批准后由 `_await_approval` 执行时 **不再询问**；`deny` 仍生效；默认关时**零行为变化**；
+    并发批里遇 `ask` ⇒ 显式错误（不产生事件、不留 pending）。
 
 ---
 
@@ -349,7 +363,7 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | **3** ✅ **已落地（2026-10-09，拍板 ⑤ = 载荷只送内容无关字段）** | **`webhook` 形态**：出站 `POST`（不跟随重定向）+ `ssrf.py` 守卫 + host 白名单 + 内容无关载荷 + 响应体积上限；`app/hooks/runner.py::run_webhook_hook`（新） | 中（**数据出境面** ⇒ 载荷与身份默认都不出境） | **§7-13/14**（`tests/test_hooks_webhook.py`：SSRF 用**真的** `assert_safe_url`、判定语义用假客户端；已做变异验证：移除 SSRF 调用 ⇒ 2 条用例红） |
 | **4** ✅ **已落地（2026-10-09，拍板 ③ = 做）** | **上下文注入**：结构化字段 `additional_context` + 脱敏 + 长度上限 + 信任声明 + **独立 system 消息**；`app/hooks/inject.py`（新）+ `_apply_system_prefix` 一处接线 | 中高（**改变"什么能影响模型输入"** ⇒ 独立开关默认关） | **§7-15**（`tests/test_hooks_context_injection.py`） |
 
-| **5** ⚠ **部分落地（2026-10-09 拍板：两项都做）** | **`UserPromptSubmit` 可阻断** ✅（进入 `BLOCKING_EVENTS`；`manager.user_prompt_submit()` 返回原因，runtime 以**既有**的 `guardrail_blocked` 事件结束本轮 —— 不发明新事件）· **`ask` 判定** ❌ **未落地**（方案见 §4.4：复用 `confirm` 分支的审批通道 + `approved` 标记防重复询问） | 低（阻断**用户自己的**输入，不放宽策略） | **§7-16**（已落地部分）；`ask` 落地后补"hook 要求确认 ⇒ 走审批 ⇒ 批准后不再重复询问"的用例 |
+| **5** ✅ **已落地（2026-10-09 拍板：两项都做）** | **`UserPromptSubmit` 可阻断**（进入 `BLOCKING_EVENTS`；`manager.user_prompt_submit()` 返回原因，runtime 以**既有**的 `guardrail_blocked` 事件结束本轮 —— 不发明新事件）· **`ask` 判定**（`HookDecision.kind` 分 `deny`/`ask`；`ask` ⇒ 与 `tool_policy` 的 `confirm` **共用** `runtime._begin_approval` ⇒ 前端/网关零改动；`_execute_tool(approved=True)` 防重复询问，`deny` 仍生效；并发批与 `UserPromptSubmit` 两处边界显式处理） | 低（阻断**用户自己的**输入 / 只是把调用提升为需确认） | **§7-16/17**（`tests/test_hooks_ask.py` **8 条** + `test_hooks.py`；已做变异验证：把 `ask` 判定改成永不命中 ⇒ **3 条用例红**） |
 
 **批次 2a 落地清单**：`events.USER_PROMPT_SUBMIT`（加入 `ALL_EVENTS`；**2026-10-09 起也进 `BLOCKING_EVENTS`** —— 见批次 5）·
 `manager.user_prompt_submit()` · `manager._trigger` 的预算封顶（`min(单 hook 超时, 剩余预算)`）·
@@ -405,18 +419,19 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 路径 | 关键数据 |
 |---|---|
 | `python-engine/app/hooks/events.py` | **100 行；8 事件**；`BLOCKING_EVENTS={PreToolUse}`；`build_context` 显式字段（2026-10-09 复测；原记 77 行 / 7 事件） |
-| `python-engine/app/hooks/manager.py` | **562 行**；默认关 / owner 模型 / fail-open / 启动告警 / **锚定 matcher** / **每事件累计预算** / **按 `Hook.handler` 分派三种形态** / `command` 与 `webhook` 各自的注册闸口 / `command` 的 exec 审计 / 上下文收集（2026-10-09 批次 3/4 复测；原记 416 行） |
+| `python-engine/app/hooks/manager.py` | **648 行**；默认关 / owner 模型 / fail-open / 启动告警 / **锚定 matcher** / **每事件累计预算** / **按 `Hook.handler` 分派三种形态** / `command` 与 `webhook` 各自的注册闸口 / `command` 的 exec 审计 / 上下文收集 / **三态判定**（`HookDecision` + `_decision_of`）（2026-10-09 批次 5 复测；原记 416 行） |
 | `python-engine/app/hooks/runner.py` | **577 行**；三种形态：`run_hook`（`plugin_runner` 沙箱子进程）+ `run_command_hook`（批次 2b）+ **`run_webhook_hook`（批次 3：`webhook_target_error` / `webhook_payload` / 不跟随重定向 / 响应体积上限）**；永不抛（原记 143 行） |
 | `python-engine/app/hooks/inject.py` | **144 行（新，批次 4）**；`additional_context` 的**提取 / 脱敏 / 上限 / 信任声明渲染**；`collect()` 挂在 `task.hook_contexts`（per-run 隔离） |
 | `python-engine/app/hooks/audit.py` | **146 行**；`hooks_audit.jsonl`；脱敏 + 截断；批次 2b/3 加 `handler` / `command`（目标摘要：命令文本或 URL）/ `truncated` |
-| `python-engine/app/agent/runtime.py` | `session_start`（`1169`）· `user_prompt_submit`（`1175`）· `stop`（`2154`）· `before_tool_use`（`3114`）· `subagent_start` / `subagent_stop`（`3120` / `3125`）· `after_tool_use`（`3126`）；**`_apply_system_prefix`（`230`，system 段唯一定形点）** —— 批次 4 的注入落在其中的 `render_hook_context` 调用（`269`）。行号 2026-10-09 **实测** |
+| `python-engine/app/agent/runtime.py` | `_begin_approval`（审批的**唯一**手续点：`tool_policy` 的 `confirm` 与 hook 的 `ask` 共用）· `_execute_tool(..., approved=)` 返回 `(结果, 待确认原因)` · `_guarded_execute_tool(..., allow_approval=)`。hook 调用点：`session_start` · `user_prompt_submit`（**可阻断**）· `stop` · `before_tool_use` · `subagent_start` / `subagent_stop` · `after_tool_use`；`_apply_system_prefix`（批次 4 注入落点）—— 行号 2026-10-09 起多次变动，**按符号定位** |
 | `python-engine/app/config.py` | `hooks_enabled` / `hooks_allow_user_defined` / `hooks_timeout_seconds` / `hooks_event_budget_seconds` / `hooks_config_path` / `hooks_allow_commands` / `hooks_command_allowlist` / **`hooks_allow_webhooks`** / **`hooks_webhook_allowlist`** / **`hooks_allow_context_injection`**（后三者为批次 3/4） |
 | `python-engine/plugin_runner.py` | **139 行**；stdin/stdout **显式 UTF-8**（批次 3 顺手修的既有缺陷：`print` / `sys.stdin.read()` 走 locale 编码，Windows 上会让含非 ASCII 的 hook 源码/结果损坏） |
 | `python-engine/tests/test_hooks.py` | **357 行**；注册 / 阻断 / 超时 / 逃逸 / 用户拒绝 / 审计 + **两端 UTF-8 编码契约** |
 | `python-engine/tests/test_hooks_config.py` | **308 行**（批次 1）：声明面加载 / 锚定 matcher / 校验 / 预算 / 未知事件忽略 |
 | `python-engine/tests/test_hooks_command.py` | **399 行（批次 2b）**：闸口 fail-closed / 两张白名单不混 / 绝对路径 / 不走 shell / 退出码 2 与其余非 0 / stdout JSON / stdin 载荷 / 超时 / 输出截断 / 声明面端到端 |
 | `python-engine/tests/test_hooks_webhook.py` | **413 行（新，批次 3）**：闸口 / **SSRF（用真的 `assert_safe_url`）** / 判定语义（假 httpx 客户端）/ 不跟随重定向 / 超时与传输错误 / 体积上限 / **载荷内容无关** / 声明面端到端 |
-| `python-engine/tests/test_hooks_context_injection.py` | **237 行（新，批次 4）**：默认关零行为变化 / 只走结构化字段 / 失败与阻断的 hook 不注入 / 独立 system 消息 / 脱敏 / 单条与总量上限 |
+| `python-engine/tests/test_hooks_context_injection.py` | **237 行（批次 4）**：默认关零行为变化 / 只走结构化字段 / 失败与阻断的 hook 不注入 / 独立 system 消息 / 脱敏 / 单条与总量上限 |
+| `python-engine/tests/test_hooks_ask.py` | **205 行（批次 5）**：`ask` 是独立档位 / **走既有审批通道**（含 `asked` 审计与 pending future）/ 批准后不再询问（含对照）/ `deny` 不被"批准过"抵消 / 默认关零行为变化 / 并发批显式拒绝 |
 | `python-engine/tests/test_exec_audit_inventory.py` | `hooks/runner.py` = `AUDITED_BY_CALLER`（理由已含 `command` 形态的 exec 审计） |
 | `python-engine/app/tools/sandbox.py` | `sandboxed_env()` / `_rlimit_kwargs()` / `truncate_execute_output()` / `_normalize_exe`（`command` 形态**复用的隔离原语**；白名单**不**复用） |
 | `python-engine/app/tools/exec_audit.py` | `record_execution()`：批次 2b 加**显式身份覆盖**（默认仍取 contextvars —— hook 的早期事件早于 `set_tool_context`） |

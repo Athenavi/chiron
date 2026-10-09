@@ -119,6 +119,9 @@ async def subagent(
     rerun_of: str = "",
     response_schema: dict[str, Any] | None = None,
     inherit_context: bool | int = False,
+    resume_context: str = "",
+    resumed_from: str = "",
+    resume_at_step: int | None = None,
     *,
     target: str = "",
 ) -> dict[str, Any]:
@@ -152,6 +155,12 @@ async def subagent(
     什么时候值得用：派一个只需读几个文件的小任务时，把面收到 `["read_file", "search_file"]`
     能显著减少它走偏与烧 token 的机会。代价：参数 schema 变大，且**名字写错会静默收窄**
     （收到的面变小、不报错）—— 需要核对时看子 Agent 返回的 `tools` 相关字段或它的步骤流水。
+
+    resume_context / resumed_from / resume_at_step: **R5(b) 的内部通道**（`subagent` 工具不向
+    模型暴露这三个参数，它们由 `app/tools/subagent_resume.py` 的 `resume_subagent` 传入）：
+    把**另一次运行的已记录步骤**重建成文本后**前置**到子 Agent 的初始消息，并在
+    `subagent_runs` 上记下血缘（`resumed_from`）与分叉点（`resume_at_step`）。
+    与 `inherit_context` 走**同一条**通道、同一套"数据不是指令"纪律。
 
     target: **compiled 目标**（S1，keyword-only）。形态 ``"<prefix>:<ref>"``，目前内置三个
     前缀：``profile:<id>``（与 ``profile=`` **同一条路径**）、``skill:<name>``（复用
@@ -215,6 +224,10 @@ async def subagent(
                 ),
                 response_schema=response_schema,
                 inherit_context=inherit_context,
+                # R5(b)：续跑 / 分叉的起始上下文与血缘（由 resume_subagent 传入）
+                resume_context=resume_context,
+                resumed_from=resumed_from,
+                resume_at_step=resume_at_step,
             )
             return await child.run(
                 child_task,
@@ -282,6 +295,11 @@ async def subagent(
         response_schema=response_schema,
         # S2：fork 父会话上下文（默认关；开启时三层过滤 + 双上限，见 app/subagent/inherit.py）
         inherit_context=inherit_context,
+        # R5(b)：续跑 / 分叉 —— 起始上下文（已渲染文本）+ 血缘 + 分叉点
+        # （见 app/subagent/resume.py；只由 resume_subagent 传入）
+        resume_context=resume_context,
+        resumed_from=resumed_from,
+        resume_at_step=resume_at_step,
     )
     # ── 后台委派：**不阻塞父 agent** ──
     #

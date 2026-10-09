@@ -189,9 +189,16 @@ def _capture_execution(monkeypatch: pytest.MonkeyPatch, calls: list[dict[str, An
     （否则 TypeError 会被上层吞成"工具执行失败"，表现为"看起来执行了但结果全是错"）。
     """
 
-    async def _fake(self: AgentRuntime, tool_call: dict[Any, Any], task: Any) -> dict[Any, Any]:
+    async def _fake(
+        self: AgentRuntime,
+        tool_call: dict[Any, Any],
+        task: Any,
+        *,
+        approved: bool = False,
+    ) -> tuple[dict[Any, Any], str | None]:
         calls.append(json.loads(tool_call["arguments"]))
-        return {"output": "ok"}
+        # 与真实契约一致：`(结果, 待确认原因)`；这里模拟"PreToolUse hook 没有表态"。
+        return {"output": "ok"}, None
 
     monkeypatch.setattr(AgentRuntime, "_execute_tool", _fake)
 

@@ -582,7 +582,14 @@ class HookManager:
                 command=hook.target or None,
                 truncated=outcome.truncated,
             )
-            return decision
+            if decision.kind == DECISION_ASK:
+                return HookDecision(
+                    f"PreToolUse hook '{hook.name}' requests confirmation: {decision}",
+                    DECISION_ASK,
+                )
+            return HookDecision(
+                f"blocked by PreToolUse hook '{hook.name}': {decision}", DECISION_DENY
+            )
         return None
 
     async def after_tool_use(self, *, task: Any, tool_call: dict[Any, Any], result: Any) -> None:
