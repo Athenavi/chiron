@@ -26,6 +26,11 @@ import re
 import sys
 import tempfile
 
+#: 同 `generate_orm_models.py`：报告里含 `⇒` / emoji，Windows 控制台默认 GBK ⇒ 打印时崩
+#: （实测：**发现漂移的那一刻**脚本自己 `UnicodeEncodeError`，于是"修法"提示根本看不到）。
+if hasattr(sys.stdout, "reconfigure"):  # pragma: no cover - 环境相关
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 GENERATOR = ROOT / "scripts" / "generate_orm_models.py"
 COMMITTED = ROOT / "shared" / "models"
