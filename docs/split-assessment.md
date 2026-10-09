@@ -120,6 +120,25 @@
 - ⏸ **持久化簇（`saveWorkflow`/`loadWorkflows`/`loadWorkflow`/`deleteWorkflow` + `toBackendFormat`/`fromBackendFormat`）暂缓 —— 用"注入面"量出来的**：它的注入面是 **14 个** ref/回调（`getNodes`/`getEdges`/`nodes`/`edges`/`workflowId`/`workflowName`/`savedWorkflows`/`executionResults`/`executionLogs`/`getNodeColor`/`getNodeIcon`/`getUserIdFromToken`/`setNodeCounter`/`resetCanvas`），而模板簇只有 **3 个**。**注入面就是"这簇到底内不内聚"的度量**：14 个说明它与画布状态本身纠缠，正确顺序是先抽**画布状态**（`nodes`/`edges`/选中/`nodeCounter`/`genNodeId`），再谈持久化。
 - ✅ **`ChatView` 冒烟网已补（2026-10-08）**：`src/views/__tests__/ChatView.spec.ts`（3 条：能挂载 / 初始加载真的跑（`api.get('/v1/conversations')`）/ 挂载→卸载可重复且不抛错）。此前它是**全仓最大文件（3429 行）却零测试**，按"没网不动手"的纪律，先补网再拆。做法：重子组件全部打桩 + `../../api` 替身放 `vi.hoisted`（`vi.mock` 工厂会被提升，不能引用文件后面的顶层变量）+ 复用 `test-setup.ts` 的全局 i18n。
 - **下一簇（同文件）**：会话加载/切换 + SSE 生命周期（`loadSessions`/`switchSession`/`activeSSE`/`onUnmounted` 清理），这簇状态含 `items`/`activeSessionId`/`loading`，抽前先量注入面。
+  ⏸ **2026-10-09 量完 —— 这一簇不建议抽，且"SSE 生命周期"根本不是一簇**：
+  按同一口径实测（`ChatView.vue` 现 **3,458 行 / 218 个顶层声明**）：
+
+  | 候选 | 行数 | **注入面** |
+  |---|---|---|
+  | `switchSession`（单独） | 89 | **23** |
+  | `loadSessions` + `persistSessions` | 19 | **3** |
+  | 会话加载/切换 + SSE 生命周期（原提的整簇） | 105+ | **27** |
+
+  **判断**：持久化簇在 **14** 个时已判"暂缓"，而这一簇是 **27** ⇒ **更不该抽** ✓。
+  更要紧的是第二条：**"SSE 生命周期"不是一簇，而是散在 9 处**（`activeSSE` `L463` · `appliedQueryKey` `L848` ·
+  `applyRouteQuery` `L850` · `mapSessionStreams` `L1305` · `ensureSubagentStream` `L1477` · `switchSession` `L1770` ·
+  `onSSEMessage` `L2152` · `sendMessage` `L2298` · `stopGeneration` `L2448`）—— **横跨 1,100+ 行、含 `sendMessage`
+  与 `stopGeneration`** ⇒ 想"抽 SSE 生命周期"等于抽掉**半个视图**，那不是拆分、是搬家 ✗。
+  **唯一可抽的是** `loadSessions`+`persistSessions`+`sortSessions`（**~25 行 / 注入面 3**）—— 但它**太小**
+  （从 3,458 行里搬 25 行是**观感收益**），且 §2.5 自己要求"该簇有组件测试兜底"而它**没有** ⇒ **不做** ✓。
+  **⇒ 结论：这个文件的正确拆法不是"按生命周期阶段"，而是"按能力"** —— 承重的函数是
+  `sendMessage` / `switchSession` / `onSSEMessage`，要动它们得先有一层**能力级**的边界（例如把
+  "一次提交的编排"整体做成 `useSubmit()`，而不是把 SSE 的**开关**抽出来）。**下一簇应另选**。
 - `ChatInput.vue`（67 符号）/`ChatSidePanel.vue`（47）/`MediaView.vue`（110）同法。
 - 契约：抽到 `src/composables/use*.ts`，入参/返回值保持现有 `ref`/`computed` 形状；模板改动限于改名调用。**props/emits 契约与 UI 输出不变**。
 - 风险：中偏高（`<script setup>` 里的闭包与生命周期钩子有隐式耦合）；建议一次只抽一簇，且该簇有组件测试兜底（如 `WorkflowView.spec.ts` 已有 2 用例）。

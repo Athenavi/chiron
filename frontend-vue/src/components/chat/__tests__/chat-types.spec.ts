@@ -1,11 +1,47 @@
 import { describe, it, expect } from 'vitest'
-import { countItemsAfter, mergeTurnStats, splitThinking } from '../chat-types'
+import { countItemsAfter, mergeTurnStats, splitThinking, throttleRaf } from '../chat-types'
 import type { ChatItem } from '../chat-types'
 
 // 回归保护：引擎（python-engine/app/agent/runtime.py）按 ~80 字一段下发
 // "[thinking]片段[/thinking]"，因此流式 buffer 与落库文本都会出现多段思考块。
 // 旧 loose 实现用「配对提取 + 孤立标签剥离」，非 loose 实现只看开头，
 // 两者在第二段起都会把 "[/thinking][thinking]" 残留在正文里。
+/**
+ * `throttleRaf`（2026-10-09 起被 `MessageList` 的更新路径真正用上，此前**零调用点**）。
+ *
+ * 用**受控的 rAF 替身**测：真 jsdom 的 rAF 时序与浏览器不同（实测在 `await nextTick()`
+ * 之间就会落地），在那里"同一帧内合并"**根本观察不到** —— 所以这里直接控制帧边界。
+ * 这也解释了为什么 §4.3 后半**不适合**用组件级测试来钉：可观察性取决于运行环境的帧模型。
+ */
+describe('throttleRaf（按帧合并）', () => {
+  it('★ 同一帧内多次调用只执行一次，且用最后一次的参数', () => {
+    const frames: Array<() => void> = []
+    const original = globalThis.requestAnimationFrame
+    globalThis.requestAnimationFrame = ((cb: FrameRequestCallback) => {
+      frames.push(() => cb(0))
+      return frames.length
+    }) as typeof requestAnimationFrame
+
+    try {
+      const seen: number[] = []
+      const fn = throttleRaf((n: number) => { seen.push(n) })
+      fn(1)
+      fn(2)
+      fn(3)
+      expect(seen).toEqual([])          // 还没到帧边界 ⇒ 一次都没跑
+      expect(frames).toHaveLength(1)    // 只排了**一个**帧任务（这就是"合并"）
+      frames[0]!()
+      expect(seen).toEqual([3])         // 帧到了 ⇒ 只跑一次，取最后一次参数
+      fn(4)
+      expect(frames).toHaveLength(2)    // 新的一帧重新开始排
+      frames[1]!()
+      expect(seen).toEqual([3, 4])
+    } finally {
+      globalThis.requestAnimationFrame = original
+    }
+  })
+})
+
 describe('splitThinking（loose 状态机）', () => {
   it('多段思考块全部归 reasoning，正文不残留标签', () => {
     const { reasoning, body } = splitThinking('[thinking]想a[/thinking][thinking]想b[/thinking]最终回答', { loose: true })

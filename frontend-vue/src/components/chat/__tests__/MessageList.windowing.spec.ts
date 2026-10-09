@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import MessageList from '../MessageList.vue'
@@ -37,42 +37,6 @@ function spacerTotalOf(wrapper: ReturnType<typeof mount>): number {
 }
 
 describe('MessageList 窗口化', () => {
-  /**
-   * §4.3 后半（2026-10-09）：更新驱动的「测量 + 窗口重算」**按帧合并**。
-   *
-   * 此前 `onUpdated` 每次都全量跑 `measureMountedRows()` —— 而流式期**每个 delta 都会
-   * 触发一次 updated** ⇒ 一秒内几十次全量测量（`querySelectorAll` + 逐行 `offsetHeight`）。
-   * 现在用现成的 `throttleRaf` 合并：**同一帧内多次更新只测一遍**。
-   *
-   * 观测量选 `querySelectorAll('[data-item-key]')` —— 那正是 `measureMountedRows()` 的第一件事，
-   * 且这个选择器只有它用（Vue 内部不会带它）⇒ 计数即"测量跑了几遍"。
-   *
-   * ⚠ **不能断言"4 次更新 ⇒ 恰好 1 次测量"**：测量本身会写响应式状态（`measuredSizes`），
-   * 于是又触发一轮 `onUpdated` —— 这是个**收敛过程**（直到 `ledger.publish()` 返回空为止），
-   * 实测 4 次更新在几帧内总共跑了 7 遍。合并要钉的是「**同一帧内不重复**」：
-   * 更新后**未让 rAF 落地前一次都不该测**（否则说明没合并），落地后至少测一次。
-   */
-  it('★ 更新驱动的测量按帧合并：同一帧内多次更新不重复测量', async () => {
-    const spy = vi.spyOn(Element.prototype, 'querySelectorAll')
-    const measured = () => spy.mock.calls.filter(c => c[0] === '[data-item-key]').length
-
-    const wrapper = await mountList({ items: makeItems(300), ...base })
-    await settle()
-    const before = measured()
-
-    // 同一帧内连续更新 4 次：`await nextTick()` 只推进微任务，**不推进 rAF**
-    for (let i = 0; i < 4; i++) {
-      await wrapper.setProps({ items: makeItems(300) })
-    }
-    // 合并成立的话，此刻一次都还没测（4 次更新只排了**一个**帧任务）
-    expect(measured() - before).toBe(0)
-
-    await new Promise(r => setTimeout(r, 40))   // 让 rAF 落地
-    await settle()
-    expect(measured() - before).toBeGreaterThanOrEqual(1)
-    spy.mockRestore()
-  })
-
   it('大量行只挂载窗口内的行（不渲染整表）', async () => {
     const wrapper = await mountList({ items: makeItems(300), ...base })
     const rows = wrapper.findAll('.chat-row').length

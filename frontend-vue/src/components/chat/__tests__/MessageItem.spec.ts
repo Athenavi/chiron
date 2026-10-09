@@ -23,6 +23,39 @@ const mountText = (content: string) => mount(MessageItem, { props: { item: assis
  * 这里盯 `DOMPurify.sanitize`（**模块级**）而不是组件里的 `renderMarkdown`（局部函数、spy 不到）；
  * `vi.spyOn` 默认保留原实现，所以断言渲染结果的那半仍然是真的 sanitize 输出。
  */
+/**
+ * `notice` 行的**渲染**（2026-10-09）。
+ *
+ * 第 113–115 轮加的三种留痕（护栏拦截 / 上下文压缩 / 中断）此前只在**投影层**有测试
+ * （`chatHistory.test.ts` 断言"产生了 notice 条目"），而 `MessageItem` 里那条
+ * `v-else-if="item.kind === 'notice'"` **从没被渲染过** ✗ —— 少个分支、`role` 掉了、
+ * tone class 拼错，测试都不会红。这里把**渲染那一半**补上（DOM 级）。
+ */
+describe('notice 行的渲染', () => {
+  it('★ warning 通知行：文案 + role=status + tone class', async () => {
+    const wrapper = mount(MessageItem, {
+      props: { item: { kind: 'notice', tone: 'warning', content: '输入包含不允许的指令', id: 'n1' } as ChatItem },
+    })
+    await settleAsync()
+    const row = wrapper.find('.notice-row')
+    expect(row.exists()).toBe(true)
+    expect(row.classes()).toContain('warning')
+    expect(row.attributes('role')).toBe('status')   // 读屏要能播报
+    expect(row.text()).toContain('输入包含不允许的指令')
+  })
+
+  it('info 通知行：tone class 不同（压缩留痕走这条）', async () => {
+    const wrapper = mount(MessageItem, {
+      props: { item: { kind: 'notice', tone: 'info', content: '压缩前 42.0k → 后 18.0k', id: 'n2' } as ChatItem },
+    })
+    await settleAsync()
+    const row = wrapper.find('.notice-row')
+    expect(row.classes()).toContain('info')
+    expect(row.classes()).not.toContain('warning')
+    expect(row.text()).toContain('42.0k')
+  })
+})
+
 describe('流式期的渲染让位（§4.3）', () => {
   it('★ 流式期不跑 markdown/sanitize；回合结束才渲染一次（且真的走 v-html 分支）', async () => {
     const sanitize = vi.spyOn(DOMPurify, 'sanitize')

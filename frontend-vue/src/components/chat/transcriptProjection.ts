@@ -60,6 +60,19 @@ export interface ProjectionInput {
   mode?: ProjectionMode
   /** 尾部常驻的回合数（含活跃回合） */
   residentTailTurns?: number
+  /**
+   * 当前是否有回合**仍在运行**（2026-10-09，§4.7）。
+   *
+   * 活跃判据原先只看**位置**（`turn.to === items.length`）⇒ 只要后面没有更新的回合，
+   * 最后一轮就**永远**算"活跃"（工具组 `status: 'running'` 且默认展开）。而终结该轮的
+   * `done` 事件**只在带 token 时**才压入 `turn_stats`（`ChatView.vue:2239`）⇒
+   * **一次不带 token 的 `done` 会让最后一轮永远停在 running** ✗（一个用户看得见的 bug）。
+   *
+   * 现在由调用方给**生命周期**信号（`MessageList` 传自己的 `loading`）：`done` / `cancelled` /
+   * `error` / `guardrail_blocked` 都会把 `loading` 置 false ⇒ 该轮随之终结 ✓。
+   * 缺省 `false` ⇒ **历史**（没有正在跑的回合）里不该有任何回合是"活跃"的 ✓。
+   */
+  running?: boolean
 }
 
 export interface ProjectionResult {
@@ -333,7 +346,8 @@ export function projectTranscript(input: ProjectionInput): ProjectionResult {
   const rows: ProjectedRow[] = []
 
   for (const turn of turns) {
-    const active = turn.to === items.length
+    // 活跃 = **仍在运行** 且是最后一段（§4.7：不能只看位置，否则不带 token 的 done 会让它永远 running）
+    const active = Boolean(input.running) && turn.to === items.length
     const foldable = hasFoldableSegment(items, turn.from, turn.to)
     // 可折叠的回合默认展开；不可折叠的回合不生成头行（折起来也看得见全部内容）
     const turnOpen = !foldable || resolveOpen(folds, turn.key, true)
