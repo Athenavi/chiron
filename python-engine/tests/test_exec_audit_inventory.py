@@ -54,7 +54,10 @@ AUDITED = {
 }
 
 AUDITED_BY_CALLER = {
-    "hooks/runner.py": "hooks/manager.py 在执行前后调用 audit.record_hook（4 个终态）",
+    "hooks/runner.py": (
+        "hooks/manager.py 在每次执行后调用 audit.record_hook（含阻断）；"
+        "`command` 形态（批次 2b）另写一条 exec_audit（tool=hook_command）"
+    ),
 }
 
 EXEMPT = {

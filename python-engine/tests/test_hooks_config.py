@@ -231,9 +231,9 @@ def test_unknown_event_is_skipped_but_others_load(tmp_path: Path, monkeypatch: p
 
 
 def test_unsupported_handler_type_is_skipped(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """批次 1 只支持 `python`；`command` / `webhook` 在批次 2 / 3 落地，现在跳过并告警。"""
+    """批次 2b 支持 `python` 与 `command`；`webhook` 在批次 3 落地，现在跳过并告警。"""
     document = _doc(events.PRE_TOOL_USE, code=NOOP_HOOK)
-    document["hooks"][events.PRE_TOOL_USE][0]["hooks"][0]["type"] = "command"
+    document["hooks"][events.PRE_TOOL_USE][0]["hooks"][0]["type"] = "webhook"
 
     target = _write(tmp_path, document)
     monkeypatch.setattr(settings, "hooks_config_path", str(target))

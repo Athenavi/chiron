@@ -260,6 +260,15 @@ def _apply_system_prefix(
         )
     if task.memory_context:
         prefix.append(_normalize_msg(role="system", content=task.memory_context))
+    # 批 G+ 批次 4：hook 的**上下文注入**。与记忆同样**独立成 system 消息**（不拼进
+    # `system_prompt`，否则逐字稳定的前缀缓存会整段失效），且只走**结构化字段**
+    # （`additional_context`），不消费 stdout 正文 —— 见 `app/hooks/inject.py`。
+    # 默认关 ⇒ 渲染返回空串 ⇒ 这里零行为变化。
+    from app.hooks.inject import render_hook_context
+
+    hook_context = render_hook_context(getattr(task, "hook_contexts", None))
+    if hook_context:
+        prefix.append(_normalize_msg(role="system", content=hook_context))
     return prefix + rest
 
 

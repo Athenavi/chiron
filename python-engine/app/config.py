@@ -146,6 +146,24 @@ class Settings(BaseSettings):
     #: 只接受**部署级**声明（文件里的条目一律视为部署级）；格式与纪律见
     #: `docs/hook-protocol-design.md` §4.2。改动需重启生效（不做热加载）。
     hooks_config_path: str = ""
+    #: `command` 形态（运维声明的本地命令）的**独立开关**。**默认关** —— 它新增一个
+    #: **运维级**可执行面，是 §6「不扩大可执行面」的一处显式例外（`docs/hook-protocol-design.md` §4.3 (b)）。
+    hooks_allow_commands: bool = False
+    #: `command` 形态允许使用的可执行文件 allowlist（逗号分隔；**裸名**或**绝对路径**）。
+    #: **默认空 = 一条也不批准（fail-closed）**。它**不复制**面向模型的那张白名单 ——
+    #: 两者信任级不同（前者约束"模型挑的命令"，后者是"**运维**声明的命令"）。
+    hooks_command_allowlist: str = ""
+    #: `webhook` 形态（出站 POST 到运维声明的 URL）的**独立开关**。**默认关** ——
+    #: 它是一次**数据出境**面（`docs/hook-protocol-design.md` §4.3 批次 3）。
+    hooks_allow_webhooks: bool = False
+    #: `webhook` 形态允许的目标 host 白名单（逗号分隔，**只比 host 名**、不分大小写；
+    #: scheme / 端口 / IP 段由 `app/tools/ssrf.py` 的既有守卫管）。
+    #: **默认空 = 一个目标也不批准（fail-closed）**。
+    hooks_webhook_allowlist: str = ""
+    #: **上下文注入**开关（批次 4）。**默认关 ⇒ 零行为变化**。开启后，hook 输出里的
+    #: `additional_context`（**结构化字段**，不是 stdout）经脱敏 + 长度上限 + 信任声明后，
+    #: 作为**独立 system 消息**注入（复用记忆注入的形态）—— 它改变"什么能影响模型输入"。
+    hooks_allow_context_injection: bool = False
 
     # ── 部署级扩展（批 H）──
     #: 机制总开关。**默认关** —— 关闭时零行为变化（与批 G 的 hooks 同一约定）。

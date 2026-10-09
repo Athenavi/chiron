@@ -1,11 +1,14 @@
 # 钩子协议设计（追平 DSH 的钩子协议）
 
-> **状态：设计，待评审；批次 1 与 2a 已落地。**
+> **状态：设计 + 批次 1 / 2a / 2b 已落地。**（批次 3 / 4 未实现，见 §0）
 > **批次 1（声明面）** 已实现并验证（2026-10-09）：`app/hooks/config.py` + `hooks_config_path` +
-> 逐 hook `matcher`（锚定）+ 启动接线；`tests/test_hooks_config.py` **21 条用例**。
+> 逐 hook `matcher`（锚定）+ 启动接线；`tests/test_hooks_config.py`。
 > **批次 2a（事件 + 预算）** 已实现并验证（2026-10-09）：`UserPromptSubmit`（只观测）+ 每事件累计预算；
-> `tests/test_hooks.py` 新增 4 条。
-> 批次 2b（`command` 形态）**待拍板 ①**；批次 3 / 4 **未实现**（③ 待拍板，见 §0）。
+> `tests/test_hooks.py`。
+> **批次 2b（`command` 形态）** 已实现并验证（2026-10-09，**拍板 ① = 选项 (b)**）：独立开关
+> `hooks_allow_commands`（默认关）+ 部署自备 `hooks_command_allowlist`（默认空 = fail-closed）+
+> 退出码 2 约定 + `exec_audit(tool=hook_command)`；`tests/test_hooks_command.py`。
+> 批次 3（`webhook`）**待拍板 ⑤**（数据出境）；批次 4（上下文注入）**未实现**（③）。
 >
 > **依据**：`vendor/规划.md` §3.2「追平 DSH：**钩子协议**」（用户 2026-10-09 指示）要求
 > **落地前先出设计**，并指定三件必答：**事件清单 · 执行边界 · 与 §6「不扩大可执行面」的关系**。
@@ -13,32 +16,26 @@
 >
 > **约束**（`vendor/规划.md`）：§1.1 不引新依赖 · §1.3 新增机制默认值必须"什么都不做"、失败要显式 ·
 > §6 不照搬 deepagents 的 12 个事件、不把 hooks 的 stdout 拼进 system prompt、不为对齐形态发明事件、
-> 不扩大可执行面。
+> 不扩大可执行面（批次 2b 是**已在 §6 显式登记**的例外，见 §5）。
 >
-> **取证基线**：Chiron @ `master` `d7a9d501`（2026-10-09）；DSH = 本机安装的
+> **取证基线**：Chiron @ `master`（2026-10-09）；DSH = 本机安装的
 > `@deepseek-ai/dsh-hook-protocol` / `dsh-hooks-claude-code` / `dsh-hooks-codex` / `dsh-webhook`
 > （从 `app.asar` 枚举并导出原文，见 §10.1）。
-> **取证强度**：【枚举】读源码 · 【文档】读契约原文 · **【实测】** 本次跑过。**未跑过**任何 hook 运行时。
+> **取证强度**：【枚举】读源码 · 【文档】读契约原文 · **【实测】** 本次跑过。**未跑过** DSH 侧的 hook 运行时。
 
 ## 0. 结论摘要（需要拍板的四件事）
 
 | # | 结论 |
 |---|---|
-| 1 | **"钩子协议落后"这个判断要修口径**：Chiron 的钩子机制**已经落地并接线**（沙箱执行 / 审计 / 默认关 / 有测试），**事件集现为 8 个** —— 与 DSH **实际支持的 7 个**相比，`UserPromptSubmit` **已由批次 2a 补齐**（只观测），并**多一个** DSH 不支持的 `PostToolUseFailure`（**2026-10-09 更正**：本条此前写"缺 `UserPromptSubmit`"，与 §8 的批次表自相矛盾） |
-| 2 | ~~**真正的缺口是"没有声明面"**~~ —— **✅ 该缺口已补（批次 1，2026-10-09）**：`settings.hooks_config_path`（`app/config.py:148`，**默认空 = 不读文件、不注册、不执行 = 零行为变化**）+ `app/hooks/config.py` 的 `load_hooks_config()` 已在 **`app/main.py:571-575` 接线**，用例 `tests/test_hooks_config.py` **21 条**。**2026-10-09 更正**：本条此前写"`hooks.register()` 在生产代码里零调用者、也没有 `hooks.json` 一类的声明文件"，那是**批次 1 之前**的状态（同样与 §8 自相矛盾） |
-| 3 | **要拍板的四件事**：① **§6「不扩大可执行面」是否允许运维声明的本地命令钩子** —— 实测 `run_in_sandbox` **直接复用不可行**（无 stdin · 白名单仅 18 个可执行文件 · 绝对路径被逃逸拦截挡下 · cwd 锁沙箱 · 审计标签硬编码），三选项与推荐见 §4.3（**建议 (b)：允许但按运维面治理，并在 §6 显式登记为例外**）；② 是否支持 DSH 的 `ask` 判定（建议**不支持**，会新增交互面）；③ 上下文注入是否做（建议**Phase 1 不做**，§6 已禁止 stdout 注入）；④ `UserPromptSubmit` 是否允许阻断（现为**只观测**，建议维持） |
+| 1 | **"钩子协议落后"这个判断要修口径**：Chiron 的钩子机制**已经落地并接线**（沙箱执行 / 审计 / 默认关 / 有测试），**事件集现为 8 个** —— 与 DSH **实际支持的 7 个**相比，并**多一个** DSH 不支持的 `PostToolUseFailure`（`UserPromptSubmit` 已由批次 2a 补齐） |
+| 2 | **声明面已补**（批次 1）：`settings.hooks_config_path`（**默认空 = 不读文件、不注册、不执行 = 零行为变化**）+ `load_hooks_config()` 已在 `app/main.py` 接线。**`command` 形态亦已落地**（批次 2b）：它才是"能搬动 DSH 既有钩子脚本"的那一环 |
+| 3 | **四件事的拍板结果**：① **已拍板 = 选项 (b)**（允许运维声明的本地命令钩子，按"运维面"治理 + 在 §6 显式登记例外）—— **已落地**；② `ask` **不做**；③ 上下文注入 **Phase 1 不做**（§6 已禁止 stdout 注入）；④ `UserPromptSubmit` **维持只观测**（不可阻断） |
+| 4 | **DSH 侧对同样四件事的答案**（读 `dsh-hook-protocol` README，实现源码级）：① **只跑 `command` 钩子**（`http`/`mcp_tool`/`prompt`/`agent` **跳过并告警**）⇒ 命令钩子是对标物**唯一**形态，与本设计一致；② **有 `ask`**（仅 Claude Code 桥；Codex 桥不提供）⇒ **有意偏离**；③ **有上下文注入** ⇒ **有意偏离**；④ **`UserPromptSubmit` 可阻断**（退出码 2）⇒ **有意偏离**。⑤ DSH **根本没有** http/webhook 形态 ⇒ webhook 属**超出对标** |
 
-> **2026-10-09 补：DSH 侧对同样四件事的答案（读 `dsh-hook-protocol` 的 README，**实现源码级**）** ——
-> ① **只跑 `command` 钩子**（*"Only command hooks run; `http`, `mcp_tool`, `prompt`, and `agent` handlers are **skipped with a warning**"*）
-> ⇒ 命令钩子就是对标物的**唯一**形态；② **有 `ask`**（*"a Claude Code hook can **request confirmation** instead of blocking outright;
-> **the Codex bridge does not surface this option**"*）；③ **有上下文注入**（*"a hook can return extra text that the model sees in the next request"*）；
-> ④ **`UserPromptSubmit` 可阻断**（*"a hook that exits with code 2 **stops the prompt or tool call**, and its error output is shown as the reason"*）。
-> **另外两条关键语义**：**只有退出码 2 才阻断**，其它退出码一律**非阻断失败**（动作照走、失败记日志），
-> **连"起不来的钩子"也同等对待** ✓；钩子还能返回 `{"continue": false}` 请求停止运行，但**只记录、无运行级效果**
-> （它自己标为 Known Limitations ✓）。**另核**：`UserPromptSubmit` / `Stop` 在 DSH 里**没有 matcher 主体**（*matchers are discarded*）
-> —— Chiron 的 `MATCHER_EVENTS` **同样只含工具类事件**（且更严：带 matcher 的非工具事件**直接拒绝**而不是静默丢弃）✓。
-> **⇒ 结论**：②③④ 都是**有意的偏离**（Chiron 分别以「不新增交互面 / §6 禁止 stdout 注入 / 只观测」为由），
-> **不是"不知道对标物怎么做"**；① 与"追平 DSH"一致。**四条都可据此拍板。**
+> **另两条关键语义（照抄进实现）**：**只有退出码 2 才阻断**，其它退出码一律**非阻断失败**
+> （动作照走、失败记日志），**连"起不来的钩子"也同等对待**；`{"continue": false}` 只记录、无运行级效果。
+> **另核**：`UserPromptSubmit` / `Stop` 在 DSH 里**没有 matcher 主体**（*matchers are discarded*）——
+> Chiron 的 `MATCHER_EVENTS` 同样只含工具类事件（且更严：带 matcher 的非工具事件**直接拒绝**）。
 
 ---
 
@@ -47,23 +44,25 @@
 | 维度 | 现状 | 证据 |
 |---|---|---|
 | 事件集 | **8 个**：`SessionStart` · **`UserPromptSubmit`**（批次 2a，**只观测**）· `PreToolUse`（**唯一可阻断**）· `PostToolUse` · `PostToolUseFailure` · `Stop` · `SubagentStart` · `SubagentStop` —— **2026-10-09 复测**（原写 7 个） | `app/hooks/events.py`（**3,962 B / 100 行**），`ALL_EVENTS` 校验注册名 |
-| 执行隔离 | 独立子进程跑 `plugin_runner.py`，复用插件沙箱：`setrlimit` 128 MB / 5 s CPU、`code_guard` 静态 AST + 受控 builtins、`sandboxed_env()` 清空宿主 env；stdin 传 payload / stdout 收结果，**stdout 上限 256 KiB** | `app/hooks/runner.py`（4,959 B / 143 行） |
-| 失败姿态 | **永不抛给调用方**（`HookOutcome`）；超时/崩溃/非法输出**一律放行**（fail-open），但**必留审计** | `runner.py:91-134`、`manager.py:86-101` |
-| 编排 | 门面单例 `hooks`；按事件串行执行；`PreToolUse` 阻断以"工具错误"回灌给模型；**批次 2a 起每事件有累计预算**（`min(单 hook 超时, 剩余预算)`，默认 10 s ⇒ N 个 hook 不再线性拖慢） | `app/hooks/manager.py`（**17,461 B / 416 行**，2026-10-09 复测；原记 12,815 B / 317 行） |
-| 接线 | 启动告警 + **声明面加载** `main.py:566-575`；`runtime.py`：`1160`（SessionStart）· **`1166`（UserPromptSubmit，批次 2a）** · `2145`（Stop）· **`3105`（PreToolUse）· `3111/3116`（Subagent\*）· `3117`（PostToolUse）** | 【枚举】**2026-10-09 复测**：原记的 `main.py:567-569` 与 `runtime.py:1134/2113/3068/3074/3079/3080` **全部过期**（代码长大 + 批次 2a 新增一处） |
-| **分层顺序** | hook 在 `_guarded_execute_tool`（工具策略 / 服务端授权 / 审批）**之后**才跑 ⇒ **只能收紧、不能放宽**，不会成为绕过 `tool_policy` 的新通道 | **`runtime.py:3092`** 的注释 + 调用点（2026-10-09 复测；原记 `3050-3056`） |
-| 审计 | `logs/hooks_audit.jsonl`，UTC+毫秒，字段含 tenant/user/session/duration/exit_code/**blocked**/outcome/reason（脱敏 + 截断 200 字符） | `app/hooks/audit.py`（4,028 B / 112 行） |
-| 默认值 | `hooks_enabled=False` · `hooks_allow_user_defined=False` · `hooks_timeout_seconds=5` · **`hooks_event_budget_seconds=10`**（批次 2a：每事件累计预算）· **`hooks_config_path=""`**（批次 1：**默认空 = 不读文件 / 不注册 / 不执行 = 零行为变化**） | `app/config.py:135-148`（2026-10-09 复测；原记 `:133-140` 且只有前三个） |
-| 执行入口清单 | `hooks/runner.py` **已被机械归类**为 `AUDITED_BY_CALLER`（"manager 在执行前后调用 `audit.record_hook`"） | `tests/test_exec_audit_inventory.py:57` |
-| 测试 | `tests/test_hooks.py`（**14,655 B / 327 行**）：注册校验、阻断、超时放行、沙箱逃逸（`import os` 被拒）、用户 hook 拒绝、审计、启动告警 · **`tests/test_hooks_config.py`（13,064 B / 308 行，21 条，批次 1）**：声明面加载 / **锚定 matcher** / 校验 / 预算 / 未知事件忽略 | 【枚举】**2026-10-09 复测**（原记 `test_hooks.py` 11,331 B 且未提 `test_hooks_config.py`） |
+| 执行隔离 | **两种形态**：`python`（默认）独立子进程跑 `plugin_runner.py`，复用插件沙箱：`setrlimit` 128 MB / 5 s CPU、`code_guard` 静态 AST + 受控 builtins、`sandboxed_env()` 清空宿主 env，**stdout 上限 256 KiB（超限即拒）**；**`command`（批次 2b）** 直接 `create_subprocess_exec(argv…)`（**不经过 shell**）+ 同一套 `sandboxed_env()` / `_rlimit_kwargs()` / `truncate_execute_output()`，payload 走 **stdin**，输出**截断而非拒绝** | `app/hooks/runner.py`（`run_hook` / `run_command_hook`） |
+| 失败姿态 | **永不抛给调用方**（`HookOutcome`）；超时/崩溃/非法输出**一律放行**（fail-open），但**必留审计**；`command` 形态另按 DSH 约定：**只有退出码 2 阻断**，其余非 0 = 非阻断失败 | `app/hooks/runner.py`、`app/hooks/manager.py` |
+| 编排 | 门面单例 `hooks`；**按 `Hook.handler` 分派形态**；按事件串行执行；`PreToolUse` 阻断以"工具错误"回灌给模型；每事件有累计预算（`min(单 hook 超时, 剩余预算)`，默认 10 s ⇒ N 个 hook 不再线性拖慢） | `app/hooks/manager.py` |
+| 接线 | 启动告警 + **声明面加载**（`app/main.py`）；`app/agent/runtime.py`：`session_start` · `user_prompt_submit`（输入护栏之后、主循环之前）· `stop` · `before_tool_use` · `subagent_start` / `subagent_stop` · `after_tool_use` | `app/main.py`、`app/agent/runtime.py` |
+| **分层顺序** | hook 在 `_guarded_execute_tool`（工具策略 / 服务端授权 / 审批）**之后**才跑 ⇒ **只能收紧、不能放宽**，不会成为绕过 `tool_policy` 的新通道 | `runtime.py::_execute_with_hooks` 的注释 + 调用点 |
+| 审计 | `logs/hooks_audit.jsonl`（UTC+毫秒：tenant/user/session/duration/exit_code/**blocked**/outcome/reason/脱敏+截断），批次 2b 增 **`handler`** / **`command`** / **`truncated`** 三个字段；**`command` 形态另写一条 `exec_audit.jsonl`（`tool="hook_command"`）** —— 它是唯一会跨副本集中摄取（N4）的那条流水 | `app/hooks/audit.py`、`app/hooks/manager.py::_record_command_exec_audit` |
+| 默认值 | `hooks_enabled=False` · `hooks_allow_user_defined=False` · `hooks_timeout_seconds=5` · `hooks_event_budget_seconds=10` · `hooks_config_path=""` · **`hooks_allow_commands=False`**（批次 2b 独立开关）· **`hooks_command_allowlist=""`**（空 = fail-closed） | `app/config.py` 的 hooks 段 |
+| 执行入口清单 | `hooks/runner.py` **已被机械归类**为 `AUDITED_BY_CALLER`（"manager 在每次执行后调用 `audit.record_hook`；`command` 形态另写一条 exec_audit"）—— 新增起进程位置不归类即测试失败 | `tests/test_exec_audit_inventory.py` |
+| 测试 | `tests/test_hooks.py`（注册校验、阻断、超时放行、沙箱逃逸、用户 hook 拒绝、审计、启动告警）· `tests/test_hooks_config.py`（声明面加载 / **锚定 matcher** / 校验 / 预算 / 未知事件忽略）· **`tests/test_hooks_command.py`（批次 2b：闸口 / 退出码判定 / stdin 载荷 / fail-open / 声明面端到端）** | 见各文件 |
 
-### 1.1 关键缺口：**没有声明面**
+### 1.1 本批新增的可执行面（原"没有声明面"缺口已补）
 
-* `hooks.register()` 的调用者**只有测试**（`tests/test_hooks.py`）——生产代码零调用；
-* 仓库里**没有** `hooks.json` 一类的声明文件，`configs/`、`config/`、`.env.example`、`docker-compose.yml`
-  里**没有任何 hook 配置**；`app/config.py` 只有上述 3 个开关。【枚举】
-* ⇒ **今天没有任何办法让一个部署真正启用一个 hook**（除非改 Python 源码）。所以"落后"的实质不是机制缺失，
-  而是**缺少把机制接上产品的最后一环**。
+* 批次 1 + 2b 之后，一个部署**可以**只靠配置文件启用 hook：`hooks_config_path` 指向 `hooks.json`，
+  `hooks_enabled=true` 打开机制；`python` 形态到此即可用。
+* **`command` 形态另需两道闸**（否则条目在注册处就被拒并留审计）：
+  `hooks_allow_commands=true` **且** 可执行文件落在 `hooks_command_allowlist` 内。
+* ⇒ 这就是批次 2b 的实质：把 `run_in_sandbox` **不可直接复用**的地方（无 stdin · 白名单仅 18 个 ·
+  绝对路径被逃逸拦截挡下 · cwd 锁沙箱 · 审计标签硬编码，见 §4.3）**逐个正面解决**，并把它登记成
+  §6 的一处**显式例外**（运维级可执行面、租户不可达）。
 
 ---
 
@@ -102,10 +101,10 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 维度 | Chiron 现状 | DSH | 差距性质 |
 |---|---|---|---|
 | 事件集 | **8 个**（批次 2a 已补 `UserPromptSubmit`） | 7 个 | **Chiron 多 1 个**（`PostToolUseFailure`；`UserPromptSubmit` 已对齐）—— **2026-10-09 更正**：此行原写「7 个 / 只差 1 个事件」，与 §8 的批次表矛盾 |
-| **声明面** | **`hooks.json` 已落地**（批次 1：`settings.hooks_config_path` + **锚定 matcher** + 校验 + 预算 + 启动告警 + 未知事件忽略；**默认空 = 不读文件/不注册/不执行 = 零行为变化**） | `hooks.json`（Claude Code / Codex 方言） | **已追平**（形态仍是子集：Chiron 只接受 `type: python`；`command` / `webhook` 见批次 2b / 3）—— **2026-10-09 更正**：此行原写「**无**（只能进程内 `register`）」，是批次 1 之前的状态 |
-| 执行形态 | Python `code`（沙箱子进程） | `command`（本地命令，走 `dsh-shell` 执行器） | 形态不同 |
-| 判定语义 | 结构化 JSON `{decision, reason}`；失败 fail-open | **退出码 2 = 阻塞** + stderr 原因；其余非阻塞 | **缺退出码约定** |
-| 判定档位 | 只有"阻断/放行" | `deny > ask > allow` | Chiron 无 `ask` |
+| **声明面** | **`hooks.json` 已落地**（批次 1：`settings.hooks_config_path` + **锚定 matcher** + 校验 + 预算 + 启动告警 + 未知事件忽略；**默认空 = 不读文件/不注册/不执行 = 零行为变化**） | `hooks.json`（Claude Code / Codex 方言） | **已追平**（批次 2b 补上 `command` 形态后，**handler 形态也已对齐**：`python` / `command`；`webhook` 属超出对标） |
+| 执行形态 | **两种**：Python `code`（沙箱子进程）+ **`command`（批次 2b：运维声明的本地命令）** | `command`（本地命令，走 `dsh-shell` 执行器） | **已对齐**（`command` 是 DSH 唯一形态；Chiron 的 `command` 不经过 shell，要 shell 特性须显式 `bash -c`） |
+| 判定语义 | 结构化 JSON `{decision, reason}` **与退出码 2 约定都支持**（后者批次 2b 落地）；失败 fail-open | **退出码 2 = 阻塞** + stderr 原因；其余非阻塞 | **已对齐** |
+| 判定档位 | 只有"阻断/放行" | `deny > ask > allow` | Chiron 无 `ask`（**有意偏离**：审批是引擎的**服务端**流程） |
 | matcher | **已有**（**锚定**正则 `re.fullmatch`；**只对工具类事件合法** —— 其余事件带 matcher **直接拒绝**而不是静默丢弃） | 按名字 / pattern 选择 | **已追平且更严**（DSH 对 `UserPromptSubmit`/`Stop` 的 matcher 是 *discarded*）—— **2026-10-09 更正**：此行原写「无（注册到事件即全跑）」，是批次 1 之前的状态 |
 | 上下文注入 | **无**（§6 禁止 stdout 拼接） | `additionalContext` 模型可见 | **刻意不同** |
 | 运行级停止 | 无（也不该有） | `continue:false`（**且无实际效果**） | 不需要 |
@@ -113,7 +112,8 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 失败姿态 | fail-open + 审计 | 非 2 退出码非阻塞 + 记录 | **已一致** |
 | 不抛异常 | `HookOutcome` 永不抛 | 每步降级 | **已一致** |
 
-**结论**：真正要补的是 **声明面 + 本地命令形态 + 退出码约定**；事件集只差 1 个。
+**结论**：**声明面 + 本地命令形态 + 退出码约定**三者已全部落地（批次 1 / 2b）；事件集与 DSH 对齐且多 1 个。
+**剩余**只有 `webhook`（批次 3，**超出对标**、待拍板 ⑤）与上下文注入（批次 4，**有意偏离**）。
 
 ---
 
@@ -150,7 +150,7 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
   进程内 API + `hooks_allow_user_defined` 开关（现状）。
 * **格式**：Claude Code 兼容子集 —— `{ "hooks": { "<EventName>": [ { "matcher": "...", "hooks": [ { "type": "command", "command": "...", "timeout": 5 } ] } ] } }`。
   未知事件名 ⇒ **忽略并告警**（与 DSH 一致：不支持的事件既不让配置失效，也不注册 hook）。
-  ⚠ **批次 1 只注册 `type: "python"`**；`command` / `webhook` 目前**跳过并告警**（待 §4.3 的 ① 拍板）。
+  **已支持 `type: "python"` 与 `type: "command"`**（批次 2b）；`webhook` 目前**跳过并告警**（待 §4.3 的 ⑤ 拍板）。
 * **matcher**：**锚定正则**，`mode` 作为唯一的方言差异轴（照搬 DSH 的收拢手法）。
   ⚠ **必须锚定**：Reasonix 2.x 的教训写在它自己的文档里 —— *"Matchers are **anchored** regexes:
   `file` does not match `read_file`"*；未锚定会让"只想匹配 `file`"的钩子意外匹配一堆工具。
@@ -164,8 +164,8 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 形态 | 批次 | 怎么跑 | 关键约束 |
 |---|---|---|---|
 | `python`（现有） | 已落地 | `plugin_runner.py` 子进程 + 既有沙箱 | 保持不变 |
-| `command`（新） | **Phase 1** | 本地命令 | ⚠ **不能直接复用 `run_in_sandbox()`**，见下；**待拍板 ①** |
-| `webhook`（新） | **Phase 2** | 出站 `POST`，复用既有 HTTP 客户端 + **`app/tools/ssrf.py` 的 SSRF 守卫**（内网/云元数据拒绝 + 体积上限 + 流式越界即断） | 默认关 + 独立开关；**不新增任何入站端点**（§6）；⚠ **待拍板 ⑤：数据出境** —— 工具事件的载荷含 `tool_arguments` / `tool_result`（可能是租户内容），把它 POST 到运维配置的 URL 是一次**数据出境**决定（§6 排除远程 sandbox provider 的理由正是"数据出境 + 计费归属"）；建议默认只送**内容无关**字段（事件名 / 工具名 / 结果成败 / 耗时），要送载荷需单独开关 |
+| `command`（新） | **✅ 批次 2b 已落地** | `create_subprocess_exec(argv…)`（**不走 shell**）+ 复用隔离原语 | 独立开关 `hooks_allow_commands`（**默认关**）+ 部署自备 `hooks_command_allowlist`（**默认空 = fail-closed**，**允许绝对路径**）+ 审计标 `tool="hook_command"`；起进程前**再判一次**准入 |
+| `webhook`（新） | **批次 3（未做）** | 出站 `POST`，复用既有 HTTP 客户端 + **`app/tools/ssrf.py` 的 SSRF 守卫**（内网/云元数据拒绝 + 体积上限 + 流式越界即断） | 默认关 + 独立开关；**不新增任何入站端点**（§6）；⚠ **待拍板 ⑤：数据出境** —— 工具事件的载荷含 `tool_arguments` / `tool_result`（可能是租户内容），把它 POST 到运维配置的 URL 是一次**数据出境**决定（§6 排除远程 sandbox provider 的理由正是"数据出境 + 计费归属"）；建议默认只送**内容无关**字段（事件名 / 工具名 / 结果成败 / 耗时），要送载荷需单独开关 |
 
 **实测结论（2026-10-09 逐行核对 `app/tools/sandbox.py`）**：`run_in_sandbox(command, timeout)`
 **不是**可直接承载 hook 命令的执行器 —— 五条对不上：
@@ -194,20 +194,21 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 选项 | 做法 | 代价 / 收益 |
 |---|---|---|
 | **(a) 不做 `command` 形态**（§6 从严解释） | 只保留 `python` 形态；"追平"落在**声明面 + 事件 + 判定语义**上 | 零新增可执行面；**放弃** Claude Code/Codex 脚本的直接复用 |
-| **(b) 允许，但按"运维面"治理**（本文推荐） | 独立开关（默认关）+ **只允许部署级声明** + 复用隔离原语 + 审计标 `tool="hook_command"` + 命令走**部署自备的 allowlist**（允许绝对路径）+ 进执行入口清单 | 新增一个**运维级**可执行面 ⇒ **必须在 §6 显式登记为例外**并写明"租户不可达" |
+| **(b) 允许，但按"运维面"治理** —— **✅ 2026-10-09 已拍板并落地** | 独立开关（默认关）+ **只允许部署级声明** + 复用隔离原语 + 审计标 `tool="hook_command"` + 命令走**部署自备的 allowlist**（允许绝对路径）+ 进执行入口清单 | 新增一个**运维级**可执行面 ⇒ **已在 `vendor/规划.md` §6 显式登记为例外**并写明"租户不可达" |
 | **(c) 只允许白名单内可执行文件** | 严格复用 `_ALLOWED_EXECUTABLES` | 可执行面零变化；但兼容性目标**基本落空**（只多出 `git`/coreutils 钩子） |
 
-**本文推荐 (b)** —— 它是**唯一**能真正"追平 DSH 钩子协议"的选项，且风险面被三件事收住
-（默认关 · 只有运维能声明 · 租户不可达）。**但它需要 §6 的所有者同意**：这是一次**显式登记的可执行面扩大**，
-不是"复用既有基线"就能解释掉的。若选 (a) 或 (c)，本设计仍然自洽（声明面 + 事件 + 判定语义可单独交付），
-只是要接受"DSH 的 `command` 钩子搬不过来"。
+**拍板结果 (b)，落地落在五处**：`settings.hooks_allow_commands`（默认关）· `settings.hooks_command_allowlist`
+（默认空 = fail-closed，**不复制**面向模型那张白名单）· `runner.split_command` / `command_policy_error`
+（不走 shell；**起进程前**再判一次）· `manager`（注册处设闸 + 分派 + `exec_audit(tool=hook_command)`）·
+`config.SUPPORTED_TYPES`（文件入口认 `type: "command"`）。**租户不可达**由两道既有闸保证：
+声明文件不允许 `owner: user`，且 `hooks_allow_user_defined` 默认 false —— 两者都有用例打在 `command` 形态上。
 
 ### 4.4 判定语义：结构化 JSON + **退出码 2**，档位只有两档
 
-* **两种输入都接受**：① 既有结构化 JSON `{"decision": "deny"|"block", "reason": "..."}`；
+* **两种输入都接受**（**已落地**）：① 既有结构化 JSON `{"decision": "deny"|"block", "reason": "..."}`；
   ② **DSH/Claude Code 兼容**：**退出码 2 = 阻断**，stderr（尾部、脱敏、截断）作为原因。
-  ⇒ 这条让"已有的 Claude Code / Codex 钩子脚本"能直接复用，是"追平"的最低成本落点
-  —— **但能否复用取决于待拍板 ①**（§4.3 已实测：`run_in_sandbox` 的白名单/绝对路径限制会让它落空）。
+  ⇒ 第二条让"已有的 Claude Code / Codex 钩子脚本"能直接复用；`run_command_hook` 把退出码 2 折成
+  `{"decision": "deny", ...}`，于是 `_blocking_decision` **只有一套**，两种形态与两种输入都在此合流。
 * **档位只有 deny / allow**：**不支持 `ask`**。理由：Chiron 的审批是**服务端**流程（审批票据 + 网关路由），
   让 hook 触发一次交互式审批等于新增一个交互面与一条等待路径，与 §6「不新增服务端同步端点 / 不扩大可执行面」
   相抵触；DSH 的 `ask` 只在其 Claude Code 桥接里有，且它自己也把 `allow` 记为"不会预审批"。
@@ -230,12 +231,13 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 
 | 项 | 设计 |
 |---|---|
-| **身份** | hook 以**引擎进程的身份**在子进程中运行；审计带 `tenant/user/session`；**不继承宿主 env**（`sandboxed_env()`）；**看不到完整 task** —— `build_context()` 显式列字段（`events.py:61-77`）就是它**唯一**的输入面，**扩字段要评审**（这是契约，不是实现细节） |
-| **超时** | 保留每 hook 超时（`hooks_timeout_seconds`，默认 5 s）；**每事件累计预算已落地**（`hooks_event_budget_seconds`，默认 10 s）：没有它时最坏情况是 `N` 个 hook × 超时按 `N` 线性拖慢每一个工具调用；预算耗尽后后续 hook 不执行并留 `budget_exhausted` 审计。**单 hook（常见情形）行为不变**（预算 > 单 hook 超时） |
+| **身份** | hook 以**引擎进程的身份**在子进程中运行；审计带 `tenant/user/session`（`command` 形态**显式传入** —— `SessionStart` / `UserPromptSubmit` 早于 `set_tool_context`）；**不继承宿主 env**（`sandboxed_env()`）；**看不到完整 task** —— `build_context()` 显式列字段（`events.py`）就是它**唯一**的输入面（`command` 形态经 **stdin** 收到同一份 JSON），**扩字段要评审**（这是契约，不是实现细节） |
+| **工作目录与准入** | `python` 形态保持现状；`command` 形态 cwd = **声明文件所在目录**（无声明文件则进程 cwd）+ 可执行文件必须在 `hooks_command_allowlist` 内（**裸名或绝对路径**，绝对路径按解析后的真实路径比对） |
+| **超时** | 保留每 hook 超时（`hooks_timeout_seconds`，默认 5 s）；**每事件累计预算**（`hooks_event_budget_seconds`，默认 10 s）：没有它时最坏情况是 `N` 个 hook × 超时按 `N` 线性拖慢每一个工具调用；预算耗尽后后续 hook **不执行**并留 `budget_exhausted` 审计。**单 hook（常见情形）行为不变**（预算 > 单 hook 超时） |
 | **并发** | **串行**（与现状和 DSH 一致）：顺序确定、审计相邻、合并规则与顺序无关 |
-| **谁能注册** | 部署级（文件或进程内 API）；租户级仅进程内 + `hooks_allow_user_defined=true`（现状保留）；**文件不能声明租户级** |
-| **审计** | 复用 `hooks_audit.jsonl`；新增字段：`handler`（`python`/`command`/`webhook`）、`command` 摘要（脱敏）、`truncated`；沿用 UTC+毫秒与统一脱敏 |
-| **清单** | 任何**新的起进程位置**必须在 `tests/test_exec_audit_inventory.py` 里归类（`hooks/runner.py` 已是 `AUDITED_BY_CALLER`；`command` 形态若新增执行点，**不归类即测试失败**） |
+| **谁能注册** | 部署级（文件或进程内 API）；租户级仅进程内 + `hooks_allow_user_defined=true`（现状保留）；**文件不能声明租户级**。`command` 形态另需 `hooks_allow_commands=true` + allowlist 命中 —— **两道闸都在 `manager.register` 一处**，文件入口与进程内入口共用 |
+| **审计** | 复用 `hooks_audit.jsonl`（**已加** `handler` / `command` 摘要（脱敏+截断）/ `truncated`）；`command` 形态**另写一条 `exec_audit.jsonl`（`tool="hook_command"`）**，因为**只有 exec_audit 会跨副本集中摄取**（N4）—— 新面必须在集中审计里可见；沿用 UTC+毫秒与统一脱敏 |
+| **清单** | 任何**新的起进程位置**必须在 `tests/test_exec_audit_inventory.py` 里归类（`hooks/runner.py` 已是 `AUDITED_BY_CALLER`，理由已更新为"hooks 审计 + `command` 形态另写 exec 审计"；**不归类即测试失败**） |
 | **反向调用** | hook **不得**回调引擎内部 API（无入站通道、无内部令牌注入） |
 
 ---
@@ -244,12 +246,12 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 
 | §6 条款 | 本设计如何满足 |
 |---|---|
-| 不扩大可执行面 | **这一条正是待拍板 ① 的核心，不能靠"复用既有基线"解释掉**（§4.3 实测：直接复用不可行）。若选 **(b)**：`command` 形态**新增一个运维级可执行面** ⇒ ① 在 §6 **显式登记为例外**并写明"租户不可达"；② 独立开关**默认关**；③ 命令走**部署自备的 allowlist**（**不复制**面向模型的那张）；④ 复用隔离原语（`sandboxed_env` / RLIMIT / 截断 / 审计）且审计标 `hook_command`；⑤ 进执行入口清单。若选 **(a)/(c)**：本形态不做、或只允许白名单内可执行文件 ⇒ 可执行面零变化。**任何选项下租户都不可达**（`hooks_allow_user_defined` 默认 false，且文件不允许 `owner=user`） |
+| 不扩大可执行面 | **本批次的核心，不能靠"复用既有基线"解释掉**（§4.3 实测：直接复用不可行）。**2026-10-09 拍板 = (b)，且五条已全部落地**：① 在 §6 **显式登记为例外**并写明"租户不可达"；② 独立开关默认关；③ 命令走**部署自备的 allowlist**（**不复制**面向模型的那张）；④ 复用隔离原语（`sandboxed_env` / RLIMIT / 截断 / 审计）且审计标 `hook_command`；⑤ 进执行入口清单。**租户不可达**：`hooks_allow_user_defined` 默认 false，且文件不允许 `owner=user`（两者都有用例打在 `command` 形态上） |
 | 不照搬 deepagents 的 12 个事件 | 只加 **1** 个（`UserPromptSubmit`），且要求"引擎侧有真实对应点"（§4.1 给出点位）；其余 23 个 Claude Code 事件明确不加 |
-| 不把 hooks 的 stdout 拼进 system prompt | **不做 stdout 注入**；Phase 2 若做上下文注入，只走结构化字段 + 独立 system 消息 + 信任声明 |
+| 不把 hooks 的 stdout 拼进 system prompt | **不做 stdout 注入**；`command` 形态 exit 0 时也**只**把 stdout 当**结构化 JSON** 解析（正文绝不进上下文）；若做上下文注入（批次 4），只走结构化字段 + 独立 system 消息 + 信任声明 |
 | 不新增服务端同步端点 | `webhook` 是**出站**调用；不新增任何入站端点；hook 不能反向调用引擎 |
 | 不为对齐形态发明事件 | 不加 `PreCompact`/`SessionEnd`/运行级停止；不加 `ask` |
-| §1.1 不引新依赖 | `command` 复用 `run_in_sandbox`；`webhook` 复用既有 HTTP 客户端 + `ssrf.py`；声明文件用标准库 JSON |
+| §1.1 不引新依赖 | `command` 只用标准库（`shlex` / `asyncio`）+ **既有** `app/tools/sandbox.py` 的隔离原语；`webhook` 复用既有 HTTP 客户端 + `ssrf.py`；声明文件用标准库 JSON |
 | §1.3 默认值必须"什么都不做" | `hooks_enabled=False` **且** `hooks_config_path=""` 时：不读文件、不注册、不执行 —— **零行为变化**（现有回归用例即护栏） |
 | §1.3 失败要显式 | 解析失败：error 日志 + 审计 + 不注册（不静默降级）；执行失败：fail-open 但**必留审计**；`ask`/未知输出：告警 + 审计 |
 | §1.2 迁移单 head | **本设计不需要任何数据库迁移**（声明文件 + settings 开关），因此不引入单 head 风险 |
@@ -287,6 +289,15 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 8. **无新依赖**：`pyproject`/依赖清单不变（`ruff` / `mypy` 门禁不变）；
 9. **多租户不可用**：`hooks_allow_user_defined=false` 时，用户来源的注册被拒 + 审计（现有用例已覆盖）。
 
+**批次 2b 另加三条**（对 `command` 形态；用例落在 `tests/test_hooks_command.py`）：
+
+10. **闸口是 fail-closed 的**：`hooks_allow_commands=false` ⇒ 条目**被拒并留审计**（不是"配了但不生效"）；
+    allowlist 为空 ⇒ **一条也不批**；可执行文件不在 allowlist ⇒ 拒。且**起进程之前会再判一次**。
+11. **两张白名单不能混**：`git` 在**面向模型**的沙箱白名单里、却不在 hook allowlist 里 ⇒ **拒绝**
+    （这是把 §4.3 的实测结论变成断言，而不是留在注释里）。
+12. **新面进集中审计**：`command` 形态每次执行都写一条 `exec_audit.jsonl`（`tool="hook_command"`），
+    身份显式传入（`SessionStart` / `UserPromptSubmit` 早于 `set_tool_context`）。
+
 ---
 
 ## 8. 实现批次（每批独立可验收）
@@ -295,13 +306,22 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 |---|---|---|---|
 | **1** ✅ **已落地（2026-10-09）** | **声明面**：`hooks_config_path` + `hooks.json` 加载 + matcher（锚定正则）+ 校验 + 预算 + 启动告警 + 未知事件忽略 | 低（无新执行面） | **§7-1/2/6 已满足**（2026-10-09 逐条复验：用例名与判据一一对应 —— `test_default_off_zero_behavior_change` / `test_empty_path_is_a_noop` · `test_declared_hook_blocks_matching_tool` / `test_loaded_hooks_do_not_run_while_disabled` · `test_bad_json_registers_nothing` / `test_missing_file_is_a_failure_not_a_crash` / `test_structurally_wrong_documents_are_refused` / `test_oversized_file_is_refused`）；**§7-8 / §7-9 也满足**（`app/hooks/*.py` 顶层 import **只有标准库 + `app`** ⇒ 零新依赖 · 用户来源注册被拒有用例）· `tests/test_hooks_config.py` **21 条**全绿 · 引擎全量 `pytest -m "not integration"` **1957 passed** · `mypy app/ acp_adapter/` **245 文件 0 错** · `ruff check .` 干净 |
 | **2a** ✅ **已落地（2026-10-09）** | §4.1 的**事件新增**（`UserPromptSubmit`，**只观测**）+ 接线与用例；**每事件累计预算**（`hooks_event_budget_seconds`，默认 10 s：单 hook 情形行为不变，`N` 个 hook 不再线性拖慢） | 低 | 新事件有落点与用例；预算耗尽留 `budget_exhausted` 审计且**不静默跳过** |
-| **2b** | **`command` 形态**：复用**隔离原语**（env/RLIMIT/截断/审计）+ 部署自备 allowlist；退出码 2 约定；stderr 摘要；审计标 `hook_command`；进执行入口清单。⚠ **待拍板 ①**（§6 是否允许运维声明的本地命令钩子；实测 `run_in_sandbox` 直接复用不可行，见 §4.3） | 中 | §7-3/4/5/7 |
-| **3** | **`webhook` 形态**：复用 HTTP 客户端 + `ssrf.py`；独立开关；默认关 | 中 | §7-5 + SSRF 用例 |
-| **4**（可选） | **上下文注入**（结构化字段 + 独立 system 消息 + 信任声明）—— **需产品决定** | 中高 | 需先更新 §3.3 与 §6 |
+| **2b** ✅ **已落地（2026-10-09，拍板 ① = (b)）** | **`command` 形态**：`create_subprocess_exec`（不走 shell）+ **隔离原语复用**（`sandboxed_env` / `_rlimit_kwargs` / `truncate_execute_output`）+ **部署自备 allowlist**（`hooks_command_allowlist`，**允许绝对路径**）+ 独立开关 `hooks_allow_commands`（默认关）+ 退出码 2 约定 + stderr 摘要 + 审计 `handler`/`command`/`truncated` + `exec_audit(tool=hook_command)` + 进执行入口清单 | 中（新增**运维级**可执行面 ⇒ 已在 §6 登记例外） | **§7-3/4/5/7 + 10/11/12**（`tests/test_hooks_command.py` **19 条**，含真的起子进程；已做变异验证：把开关判定改成恒放行 ⇒ 2 条用例红） |
+| **3** | **`webhook` 形态**：复用 HTTP 客户端 + `ssrf.py`；独立开关；默认关。⚠ **待拍板 ⑤（数据出境）** | 中 | §7-5 + SSRF 用例 |
+| **4**（可选） | **上下文注入**（结构化字段 + 独立 system 消息 + 信任声明）—— **需产品决定**（③） | 中高 | 需先更新 §3.3 与 §6 |
 
 **批次 2a 落地清单**：`events.USER_PROMPT_SUBMIT`（加入 `ALL_EVENTS`，**不进** `BLOCKING_EVENTS`）·
 `manager.user_prompt_submit()` · `manager._trigger` 的预算封顶（`min(单 hook 超时, 剩余预算)`）·
 `settings.hooks_event_budget_seconds` · `runtime.py` 在输入护栏后接线 · `tests/test_hooks.py` 新增 4 条。
+
+**批次 2b 落地清单**（供评审对照）：`settings.hooks_allow_commands` + `settings.hooks_command_allowlist`
+（`app/config.py`）· `runner.split_command` / `runner.command_policy_error` / `runner._exe_identity` /
+`runner.run_command_hook` / `runner.BLOCK_EXIT_CODE`（新）· `manager.HANDLER_*` + `Hook.handler` /
+`Hook.command` + `manager.register` 的闸口 + `manager._trigger` 的分派 + `manager._record_command_exec_audit`（新）·
+`audit.record_hook` 的 `handler` / `command` / `truncated` 字段 · `config.SUPPORTED_TYPES` 纳入 `command` ·
+`exec_audit.record_execution` 的**显式身份覆盖**（`tenant`/`user`/`session`，默认仍取 contextvars）·
+`tests/test_hooks_command.py`（新，19 条）+ `test_hooks_config.py`（原"`command` 被跳过"的用例改用 `webhook`）·
+`tests/test_exec_audit_inventory.py` 的归类理由。
 
 **批次 1 落地清单**（供评审对照）：`python-engine/app/hooks/config.py`（新，加载 / 校验 / 预算 / 审计）·
 `manager.Hook.matcher` + `manager._trigger` 锚定筛选 · `events.MATCHER_EVENTS` + `matcher_applies()` ·
@@ -344,15 +364,17 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 | 路径 | 关键数据 |
 |---|---|
 | `python-engine/app/hooks/events.py` | **100 行；8 事件**；`BLOCKING_EVENTS={PreToolUse}`；`build_context` 显式字段（2026-10-09 复测；原记 77 行 / 7 事件） |
-| `python-engine/app/hooks/manager.py` | **416 行**；默认关 / owner 模型 / fail-open / 启动告警 / **锚定 matcher** / **每事件累计预算**（原记 317 行） |
-| `python-engine/app/hooks/runner.py` | 143 行；沙箱子进程；256 KiB 上限；永不抛 |
-| `python-engine/app/hooks/audit.py` | 112 行；`hooks_audit.jsonl`；脱敏 + 截断 |
+| `python-engine/app/hooks/manager.py` | **522 行**；默认关 / owner 模型 / fail-open / 启动告警 / **锚定 matcher** / **每事件累计预算** / **按 `Hook.handler` 分派** / `command` 形态的注册闸口与 exec 审计（2026-10-09 批次 2b 复测；原记 416 行） |
+| `python-engine/app/hooks/runner.py` | **400 行**；两种形态：`run_hook`（`plugin_runner` 沙箱子进程，stdout 256 KiB 上限）+ **`run_command_hook`（批次 2b：`split_command` / `command_policy_error` / 退出码 2 / stdin 载荷）**；永不抛（原记 143 行） |
+| `python-engine/app/hooks/audit.py` | **145 行**；`hooks_audit.jsonl`；脱敏 + 截断；批次 2b 加 `handler` / `command` / `truncated`（原记 112 行） |
 | `python-engine/app/agent/runtime.py` | **`1160`（SessionStart）· `1166`（UserPromptSubmit）** · `2145`（Stop）· **`3105`（PreToolUse）· `3111/3116`（Subagent\*）· `3117`（PostToolUse）** · **`3092`**（分层顺序：hook 在审批之后）—— 2026-10-09 复测（原记 `1131-1134` / `3050-3056` / `3068-3080`） |
-| `python-engine/app/config.py` | **`135-148`**：`hooks_enabled` / `hooks_allow_user_defined` / `hooks_timeout_seconds` / **`hooks_event_budget_seconds`** / **`hooks_config_path`**（原记 `133-140` 且只有前三个） |
-| `python-engine/tests/test_hooks.py` | **14,655 B / 327 行**；注册 / 阻断 / 超时 / 逃逸 / 用户拒绝 / 审计（原记 11,331 B） |
-| `python-engine/tests/test_hooks_config.py` | **13,064 B / 308 行 / 21 条**（批次 1）：声明面加载 / 锚定 matcher / 校验 / 预算 / 未知事件忽略 |
-| `python-engine/tests/test_exec_audit_inventory.py` | `hooks/runner.py` = `AUDITED_BY_CALLER` |
-| `python-engine/app/tools/sandbox.py` | `run_in_sandbox()` / `sandboxed_env()`（command 形态要复用的基线） |
+| `python-engine/app/config.py` | `hooks_enabled` / `hooks_allow_user_defined` / `hooks_timeout_seconds` / `hooks_event_budget_seconds` / `hooks_config_path` / **`hooks_allow_commands`** / **`hooks_command_allowlist`**（后两个为批次 2b 新增） |
+| `python-engine/tests/test_hooks.py` | **327 行**；注册 / 阻断 / 超时 / 逃逸 / 用户拒绝 / 审计 |
+| `python-engine/tests/test_hooks_config.py` | **308 行**（批次 1）：声明面加载 / 锚定 matcher / 校验 / 预算 / 未知事件忽略 |
+| `python-engine/tests/test_hooks_command.py` | **399 行 / 19 条（新，批次 2b）**：闸口 fail-closed / 两张白名单不混 / 绝对路径 / 不走 shell / 退出码 2 与其余非 0 / stdout JSON / stdin 载荷 / 超时 / 输出截断 / 声明面端到端 |
+| `python-engine/tests/test_exec_audit_inventory.py` | `hooks/runner.py` = `AUDITED_BY_CALLER`（理由已含 `command` 形态的 exec 审计） |
+| `python-engine/app/tools/sandbox.py` | `sandboxed_env()` / `_rlimit_kwargs()` / `truncate_execute_output()` / `_normalize_exe`（`command` 形态**复用的隔离原语**；白名单**不**复用） |
+| `python-engine/app/tools/exec_audit.py` | `record_execution()`：批次 2b 加**显式身份覆盖**（默认仍取 contextvars —— hook 的早期事件早于 `set_tool_context`） |
 | `python-engine/app/tools/ssrf.py` | 8,936 B（webhook 形态要复用的出站守卫） |
 
 ### 10.3 相关文档

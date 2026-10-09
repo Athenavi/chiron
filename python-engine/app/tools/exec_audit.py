@@ -82,19 +82,26 @@ def record_execution(
     exit_code: int | None = None,
     reason: str | None = None,
     duration_ms: int | None = None,
+    tenant: str | None = None,
+    user: str | None = None,
+    session: str | None = None,
 ) -> None:
     """记录一次执行（同步写，失败不阻断调用方）。
 
-    身份从 tool context（contextvars）取 —— 与工具链其它地方同源，调用方不必透传，
+    身份默认从 tool context（contextvars）取 —— 与工具链其它地方同源，调用方不必透传，
     也就不会出现"某条调用路径忘了带身份"的漏记。
 
     Args:
-        tool: 工具名（`shell_exec` / `run_code` / `persistent_shell`）。
+        tool: 工具名（`shell_exec` / `run_code` / `persistent_shell` / `hook_command` …）。
         command: 命令或代码文本（内部会脱敏 + 截断）。
         outcome: `ok` / `blocked` / `timeout` / `error`。
         exit_code: 进程退出码（被拦下或无法判定时为 None）。
         reason: 被拦下的原因（`outcome=blocked` 时给出）。
         duration_ms: 耗时（毫秒）。
+        tenant / user / session: **显式身份覆盖**（`None` = 从 contextvars 取）。
+            存在的理由：hook 的 `command` 形态由 `SessionStart` / `UserPromptSubmit`
+            **也**会触发，而这两个时点早于 runtime 的 `set_tool_context` —— 那时
+            contextvars 是空的，只靠默认来源会把身份记成空串（"谁执行的"就查不到了）。
     """
     if not EXEC_AUDIT_ENABLED:
         return
@@ -106,9 +113,9 @@ def record_execution(
         entry: dict[str, Any] = {
             "ts": utc_timestamp(),
             "tool": tool,
-            "tenant": get_tenant_id() or "",
-            "user": get_user_id() or "",
-            "session": get_session_id() or "",
+            "tenant": get_tenant_id() if tenant is None else tenant,
+            "user": get_user_id() if user is None else user,
+            "session": get_session_id() if session is None else session,
             "command": _summarize_command(command),
             "outcome": outcome,
             "exit_code": exit_code,

@@ -16,9 +16,16 @@
     ]}}
 
 `matcher` 是**锚定**正则（`re.fullmatch` 语义），**只对工具类事件合法**（`events.MATCHER_EVENTS`）；
-缺失 / 空 ⇒ 该事件的所有调用都跑。`type` 目前**只接受 `python`**（既有沙箱子进程形态）；
-`command` / `webhook` 在批次 2 / 3 落地，现在**跳过并告警**（与 DSH"跳过不支持的 handler 形态"
-同款姿态：不支持的形态既不让配置失效，也不注册 hook）。
+缺失 / 空 ⇒ 该事件的所有调用都跑。
+
+`type` 接受三种形态：`python`（沙箱子进程）· **`command`（批次 2b：运维声明的本地命令）**·
+**`webhook`（批次 3：出站 POST 到运维声明的 URL）**。后两者各自有一道闸（独立开关**默认关** +
+目标 allowlist **默认空 = fail-closed**），不满足的条目在 `manager.register` 处被拒并留审计 ——
+**配了却不生效是最难查的一类问题**，所以宁可当场拒（见 `docs/hook-protocol-design.md` §4.3）：
+
+* `command`：`hooks_allow_commands` + `hooks_command_allowlist`（可执行文件，裸名或绝对路径）；
+* `webhook`：`hooks_allow_webhooks` + `hooks_webhook_allowlist`（host 名；scheme/端口/IP 段由
+  `app/tools/ssrf.py` 在**执行时**判）。
 """
 
 from __future__ import annotations
@@ -32,7 +39,14 @@ from typing import Any
 
 from app.config import settings
 from app.hooks import audit, events
-from app.hooks.manager import OWNER_DEPLOYMENT, HookManager, hooks
+from app.hooks.manager import (
+    HANDLER_COMMAND,
+    HANDLER_PYTHON,
+    HANDLER_WEBHOOK,
+    OWNER_DEPLOYMENT,
+    HookManager,
+    hooks,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -42,10 +56,14 @@ MAX_FILE_BYTES = 1 << 20
 MAX_HOOKS_PER_LOAD = 64
 #: 单个 hook 的源码上限（64 KiB）。
 MAX_CODE_BYTES = 64 << 10
+#: `command` 形态的命令文本上限（64 KiB，与 `code` 同量级）—— 命令本就该是短的一行。
+MAX_COMMAND_BYTES = 64 << 10
+#: `webhook` 形态的目标 URL 长度上限（字符）。
+MAX_URL_CHARS = 2048
 #: `matcher` 字符串长度上限。
 MAX_MATCHER_CHARS = 256
-#: 目前支持的 handler 形态（批次 2 加 `command`，批次 3 加 `webhook`）。
-SUPPORTED_TYPES: frozenset[str] = frozenset({"python"})
+#: 目前支持的 handler 形态（批次 2b 加 `command`、批次 3 加 `webhook`）。
+SUPPORTED_TYPES: frozenset[str] = frozenset({HANDLER_PYTHON, HANDLER_COMMAND, HANDLER_WEBHOOK})
 #: 审计里代表"这不是某个事件、而是声明面本身"的伪事件名（与启动告警同款用法）。
 CONFIG_EVENT = "*"
 CONFIG_HOOK = "<config>"
@@ -129,9 +147,10 @@ def _register_group(
             _skip(f"{event}[{index}]: hook is not an object")
             skipped += 1
             continue
-        kind = _text(item.get("type")) or "python"
+        kind = _text(item.get("type")) or HANDLER_PYTHON
         if kind not in SUPPORTED_TYPES:
-            _skip(f"{event}[{index}]: unsupported handler type {kind!r} (supported: python)")
+            supported = ", ".join(sorted(SUPPORTED_TYPES))
+            _skip(f"{event}[{index}]: unsupported handler type {kind!r} (supported: {supported})")
             skipped += 1
             continue
         declared_owner = _text(item.get("owner"))
@@ -139,17 +158,59 @@ def _register_group(
             _skip(f"{event}[{index}]: declaration files may not register {declared_owner!r} hooks")
             skipped += 1
             continue
-        code = _text(item.get("code"))
-        if not code:
-            _skip(f"{event}[{index}]: missing 'code'")
-            skipped += 1
-            continue
-        if len(code.encode("utf-8")) > MAX_CODE_BYTES:
-            _skip(f"{event}[{index}]: code exceeds {MAX_CODE_BYTES} bytes")
-            skipped += 1
-            continue
         name = _text(item.get("name")) or f"{event}#{index}"
-        if manager.register(event, name, code, owner=OWNER_DEPLOYMENT, matcher=raw_matcher):
+        if kind == HANDLER_COMMAND:
+            command = _text(item.get("command"))
+            if not command:
+                _skip(f"{event}[{index}]: missing 'command'")
+                skipped += 1
+                continue
+            if len(command.encode("utf-8")) > MAX_COMMAND_BYTES:
+                _skip(f"{event}[{index}]: command exceeds {MAX_COMMAND_BYTES} bytes")
+                skipped += 1
+                continue
+            # 独立开关 + 部署自备 allowlist 的判定**只在 `manager.register` 一处** ——
+            # 文件入口与进程内入口共用同一条闸，不会"一边拦一边放"。
+            registered = manager.register(
+                event,
+                name,
+                owner=OWNER_DEPLOYMENT,
+                matcher=raw_matcher,
+                handler=HANDLER_COMMAND,
+                command=command,
+            )
+        elif kind == HANDLER_WEBHOOK:
+            url = _text(item.get("url"))
+            if not url:
+                _skip(f"{event}[{index}]: missing 'url'")
+                skipped += 1
+                continue
+            if len(url) > MAX_URL_CHARS:
+                _skip(f"{event}[{index}]: url exceeds {MAX_URL_CHARS} chars")
+                skipped += 1
+                continue
+            registered = manager.register(
+                event,
+                name,
+                owner=OWNER_DEPLOYMENT,
+                matcher=raw_matcher,
+                handler=HANDLER_WEBHOOK,
+                url=url,
+            )
+        else:
+            code = _text(item.get("code"))
+            if not code:
+                _skip(f"{event}[{index}]: missing 'code'")
+                skipped += 1
+                continue
+            if len(code.encode("utf-8")) > MAX_CODE_BYTES:
+                _skip(f"{event}[{index}]: code exceeds {MAX_CODE_BYTES} bytes")
+                skipped += 1
+                continue
+            registered = manager.register(
+                event, name, code, owner=OWNER_DEPLOYMENT, matcher=raw_matcher
+            )
+        if registered:
             loaded += 1
         else:
             skipped += 1
