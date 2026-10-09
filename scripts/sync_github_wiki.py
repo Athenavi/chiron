@@ -22,6 +22,16 @@ GitHub Wiki 是**独立仓库**（`<repo>.wiki.git`），而且它的页面是**
     python scripts/sync_github_wiki.py --push      # 真正推送到 <repo>.wiki.git
     python scripts/sync_github_wiki.py --repo owner/name --branch main --push
 
+## 认证（可选）
+
+token **只从环境变量读**（`CHIRON_WIKI_TOKEN` 或 `GITHUB_TOKEN`）：不进文件、不进 git 配置、
+**不进任何打印**；同时用 `-c credential.helper=` 关掉凭据助手，避免被写进系统凭据存储。
+
+    CHIRON_WIKI_TOKEN=<PAT> python scripts/sync_github_wiki.py --push
+
+⚠ **不要把 token 粘到聊天 / issue / 提交里** —— 一旦粘出去就当作已泄露，用完立即 revoke 重发。
+⚠ GitHub 要求 wiki **先有一个页面**（网页上手动建），否则 `chiron.wiki.git` 仓库根本不存在。
+
 ## 安全约定
 
 * **默认预演**，`--push` 才会推送；推送前会打印将要写入的页名清单。
@@ -150,15 +160,27 @@ def push(pages: dict[str, str], repo: str, dry_run: bool) -> int:
             return 0
 
         clone = staging / "_wiki_repo"
-        wiki_url = f"https://github.com/{repo}.wiki.git"
-        print(f"\n克隆 {wiki_url} …")
-        r = subprocess.run(["git", "clone", "--depth", "1", wiki_url, str(clone)])
+        plain_url = f"https://github.com/{repo}.wiki.git"
+
+        # 认证 token **只从环境变量读**（CHIRON_WIKI_TOKEN 或 GITHUB_TOKEN）：
+        # 不进文件、不进 git 配置、**不进任何打印**。
+        # 另外用 `-c credential.helper=` 关掉所有凭据助手 ⇒ token 不会被写进系统凭据存储。
+        token = os.environ.get("CHIRON_WIKI_TOKEN") or os.environ.get("GITHUB_TOKEN") or ""
+        if token:
+            auth_url = f"https://x-access-token:{token}@github.com/{repo}.wiki.git"
+            git_auth = ["-c", "credential.helper="]
+        else:
+            auth_url, git_auth = plain_url, []
+
+        print(f"\n克隆 {plain_url} …（认证：{'环境变量 token' if token else '系统凭据助手'}）")
+        r = subprocess.run(["git", *git_auth, "clone", "--depth", "1", auth_url, str(clone)])
         if r.returncode != 0:
-            print("!! 克隆失败。可能是：① wiki 还没初始化（先在 GitHub 上建一个页面）"
-                  "② 需要 PAT 认证。\n   手动替代："
-                  f"\n     git clone {wiki_url} /tmp/chiron-wiki"
-                  f"\n     cp <预演目录>/*.md /tmp/chiron-wiki/ && cd /tmp/chiron-wiki"
-                  "\n     git add -A && git commit -m 'docs: sync wiki from docs/wiki' && git push")
+            print("!! 克隆失败。可能是：① wiki 还没初始化（GitHub 要求先在网页上建**第一个页面**，"
+                  "否则 wiki 仓库不存在）② 认证无效 / token 无 repo 权限。")
+            print("   手动替代（把 $TOKEN 换成你的 PAT，注意不要粘到聊天或文件里）：")
+            print(f"     git clone https://x-access-token:$TOKEN@github.com/{repo}.wiki.git /tmp/chiron-wiki")
+            print("     cp <预演目录>/*.md /tmp/chiron-wiki/ && cd /tmp/chiron-wiki")
+            print("     git add -A && git commit -m 'docs: sync wiki from docs/wiki' && git push")
             return 3
 
         for f in clone.glob("*.md"):
@@ -174,11 +196,11 @@ def push(pages: dict[str, str], repo: str, dry_run: bool) -> int:
             return 0
         subprocess.run(["git", "commit", "-m", "docs: sync wiki from docs/wiki"],
                        cwd=clone, check=True)
-        r = subprocess.run(["git", "push", "origin", "HEAD"], cwd=clone)
+        r = subprocess.run(["git", *git_auth, "push", "origin", "HEAD"], cwd=clone)
         if r.returncode != 0:
-            print("!! 推送失败（多为认证问题：wiki 是独立仓库，通常需要 PAT）。")
+            print("!! 推送失败（多为认证问题：wiki 是独立仓库，token 需要 repo 权限）。")
             return 4
-        print("✓ 已推送到 GitHub Wiki。")
+        print(f"✓ 已推送。看这里：https://github.com/{repo}/wiki")
         return 0
     finally:
         shutil.rmtree(staging, ignore_errors=True)

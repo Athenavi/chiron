@@ -98,3 +98,52 @@ func TestProbesBypassRateLimitMiddleware(t *testing.T) {
 	// /ready 会自行检查 Redis/PG，依赖不可用时返回 503 是**正确语义**，
 	// 因此这里不断言它的状态码 —— 只断言它没有被限流中间件污染。
 }
+
+// TestAdminDatastoreRoutesAreExposed 盯的是「/admin/datastores 整页调不到后端」这类缺陷。
+//
+// 背景（2026-10-09 用户报「获取慢日志失败 / FLUSHALL 执行失败 / 获取数据库状态失败 /
+// 获取备份列表失败」）：这些 handler **全都写好了**（`admin_ops.go` 的 `RedisSlowLog` /
+// `RedisFlushAll` / `DatabaseStatus` / `DatabaseConfigs` / `DatabaseBackups` /
+// `CreateDatabaseBackup` / `RestoreDatabaseBackup` / `DatabaseQuery` / `DatabaseOptimize`），
+// 也都在 `adminMux` 上按相对路径注册了 —— 但**从未在 routes_admin.go 里暴露到外部 mux**。
+// Go 的 ServeMux 不会"落到子 mux 去试"，未注册的子路径就是 404 ⇒ 前端每个按钮都失败。
+//
+// 这已是**第三次**同一个坑：模型配置（本文件 :86-89 的注释）与系统设置（:96-97）此前各修过一次。
+//
+// 判据设计：用 `reject(401)` 的 authMW —— 请求只有**匹配到某个注册模式**才会进入中间件链，
+// 因此"探针记到了这个路径"等价于"该路径已注册"；未注册时 ServeMux 直接 404，探针什么也记不到。
+// 这样既不需要真 PostgreSQL/Redis，也不会真的执行破坏性操作（如 FLUSHDB）。
+func TestAdminDatastoreRoutesAreExposed(t *testing.T) {
+	mux := http.NewServeMux()
+	auth := &middlewareProbe{}
+	rl := &middlewareProbe{}
+	registerAdminRoutes(mux, auth.reject(http.StatusUnauthorized), rl.passthrough, &AdminHandler{}, nil)
+
+	cases := []struct{ method, path string }{
+		// Redis tab
+		{http.MethodGet, "/v1/admin/redis"},
+		{http.MethodGet, "/v1/admin/redis/slow-log"},
+		{http.MethodPost, "/v1/admin/redis/flush-all"},
+		// Database tab
+		{http.MethodGet, "/v1/admin/database/status"},
+		{http.MethodGet, "/v1/admin/database/configs"},
+		{http.MethodGet, "/v1/admin/database/backups"},
+		{http.MethodPost, "/v1/admin/database/backups"},
+		{http.MethodPost, "/v1/admin/database/backups/chiron_backup_x.sql/restore"},
+		{http.MethodPost, "/v1/admin/database/query"},
+		{http.MethodPost, "/v1/admin/database/optimize/analyze"},
+	}
+	for _, c := range cases {
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, httptest.NewRequest(c.method, c.path, nil))
+
+		if !auth.hit(c.path) {
+			t.Errorf("%s %s 没有匹配到任何注册模式 ⇒ 前端会拿到 404（handler 明明存在，只是没接线）",
+				c.method, c.path)
+			continue
+		}
+		if rec.Code != http.StatusUnauthorized {
+			t.Errorf("%s %s 应被 authMW 拦在 401，得到 %d", c.method, c.path, rec.Code)
+		}
+	}
+}

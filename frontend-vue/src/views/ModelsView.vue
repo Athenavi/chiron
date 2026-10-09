@@ -14,6 +14,7 @@ import { computed, onMounted, ref } from 'vue'
 import { Button, Input, InputNumber, Modal, Popconfirm, Select, Switch, Tag, message } from 'ant-design-vue'
 import { DeleteOutlined, PlusOutlined, ReloadOutlined, SearchOutlined } from '@ant-design/icons-vue'
 import { listModels } from '../api'
+import { TOUR_ANCHORS } from '../composables/useOnboardingTour'
 import {
   deleteAdminModel,
   listAdminModels,
@@ -191,6 +192,7 @@ onMounted(async () => {
         </Button>
         <Button
           type="primary"
+          :data-tour="TOUR_ANCHORS.modelsAdd"
           @click="addOpen = true"
         >
           <template #icon>

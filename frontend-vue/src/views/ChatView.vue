@@ -26,6 +26,8 @@ import MessageList from '../components/chat/MessageList.vue'
 import MessageItem from '../components/chat/MessageItem.vue'
 import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
 import ChatInput from '../components/chat/ChatInput.vue'
+import ChatSetupTour from '../components/chat/ChatSetupTour.vue'
+import type { TourReason } from '../composables/useOnboardingTour'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
 import { CloudUploadOutlined } from '@ant-design/icons-vue'
@@ -758,6 +760,78 @@ function buildPersistLlmConfig(base?: Record<string, unknown>): Record<string, u
 }
 
 /**
+ * 发送前确保有可用模型 —— **返回 false 就不要发**。
+ *
+ * 为什么必须在**发送前**做：`llm_config.model` 为空时后端会走"默认路由"，
+ * 而默认路由的 provider 一旦密钥无效 / 模型下架，用户看到的就是
+ * `provider opencode-go stream failed: AuthenticationError: 401 Invalid API key`
+ * 这种既看不懂、也不知道该去哪修的报错（产地：`python-engine/app/gateway/router.py:244`）。
+ *
+ * 列表就绪时本文件（`:347-357`）已经会自动选第一个模型，但**列表是异步的** ——
+ * 用户在它返回之前就发消息时 `llmModel` 仍为空，这正是线上那条 401 的入口。
+ * 与 `switchSession` 的第四级回落同一条纪律：**绝不把空值当成"可以用后端默认"来提交**。
+ */
+function ensureModel(): boolean {
+  if (!llmModel.value) llmModel.value = availableModels.value[0]?.name || ''
+  if (llmModel.value) return true
+  offerSetupTour('no-model', t('chat.no_available_model_configure_a_model_provider_and_api_key_in_settings_first'))
+  return false
+}
+
+/** 未配置引导的浮层（antd `Tour` 的封装，见 `ChatSetupTour.vue`）；`offer` 返回是否真的弹了 */
+const tourRef = ref<InstanceType<typeof ChatSetupTour> | null>(null)
+
+/**
+ * 弹引导；**弹不出来才退化成 toast** —— 保证"无论如何用户都至少得到一句提示"。
+ *
+ * 为什么要有兜底：引导依赖 DOM 锚点与已挂载的组件，toast 不依赖任何东西。
+ * 两者**互斥**（不叠加）：同一件事出现两个浮层比只有一个更烦。
+ */
+/**
+ * 弹引导；**弹不出来才退化成 toast** —— 保证"无论如何用户都至少得到一句提示"。
+ *
+ * 为什么要有兜底：引导依赖 DOM 锚点与已挂载的组件，toast 不依赖任何东西。
+ * 两者**互斥**（不叠加）：同一件事出现两个浮层比只有一个更烦。
+ *
+ * `tone` 保留原来的严重级别：认证失败过去是 `error`，不该因为改走引导就悄悄降成 `warning`。
+ */
+function offerSetupTour(reason: TourReason, fallback: string, tone: 'warning' | 'error' = 'warning'): void {
+  // `offer?.(…)`：真实组件一定 `defineExpose({ offer })`，但测试里它会被打桩成空组件
+  // ⇒ 这里对"没有 offer 的替身"保持安全，落回 toast（那正是兜底要覆盖的情形）。
+  const shown = tourRef.value?.offer?.(reason, false)
+  if (shown) return
+  if (tone === 'error') message.error(fallback)
+  else message.warning(fallback)
+}
+
+/** 引导最后一步的"去配置"：只有管理员会收到（`/models` 是 `requiresAdmin`，见 router/index.ts:46） */
+function goConfigureModel(): void {
+  router.push('/models')
+}
+
+/** provider 层认证失败的特征（与 `actionableStreamError` 共用一处判据，别写两遍） */
+function isProviderAuthError(raw: string): boolean {
+  return /AuthenticationError|Invalid API key|\b401\b/i.test(raw)
+}
+
+/**
+ * 把 provider 层的原始报错**加一句可行动的提示**，但**保留原文**。
+ *
+ * 原文是定位问题的唯一线索（本仓一贯做法，见 `describeApiError` 的注释），所以是
+ * "加一句"而不是"换掉"：只给 `provider opencode-go stream failed: AuthenticationError: 401`
+ * 这种英文原文，用户既不知道是谁的问题、也不知道该改哪里。
+ */
+function actionableStreamError(raw: string): string {
+  if (isProviderAuthError(raw)) {
+    return `${t('chat.model_provider_authentication_failed_check_the_provider_and_api_key_in_settings')}（${raw}）`
+  }
+  if (/Model is unavailable|\b404\b/i.test(raw)) {
+    return `${t('chat.the_selected_model_is_unavailable_pick_another_model')}（${raw}）`
+  }
+  return raw
+}
+
+/**
  * 把**会话级**运行时状态写进单一事实源（Redis 热 + `unified_sessions.runtime` 持久）。
  *
  * 只写 `/v1/sessions/{id}/runtime`：`PUT /v1/conversations/{id}` 只接受
@@ -1095,6 +1169,8 @@ function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
 /** 统一任务模式发送：POST /v1/chat/submit，返回 output 追加为 assistant 消息 */
 async function sendUnified(text: string, attachments?: ChatAttachment[]) {
   if (!unifiedSessionId.value) return
+  // 统一任务模式同样必须先有模型：空 model 一样会落到后端默认路由（见 ensureModel）
+  if (!ensureModel()) return
   loading.value = true
   startTurnTimer()
   appendUserText(text, attachments)
@@ -1108,8 +1184,8 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
       session_id: unifiedSessionId.value,
       mode: unifiedSubmitMode.value || 'auto',
       context: buildContext(),
-      // 模型路由：统一任务发送同样携带 llm_config.model（空 = 后端默认）
-      llm_config: llmModel.value ? { model: llmModel.value } : {},
+      // 模型路由：统一任务发送同样携带 llm_config.model（ensureModel 已保证非空）
+      llm_config: { model: llmModel.value },
       ...(resolvedAtts.length
         ? { attachments: resolvedAtts.map(a => ({ id: a.id, name: a.name, mime_type: a.mimeType, url: a.url, is_image: a.isImage })) }
         : {}),
@@ -2282,11 +2358,17 @@ function onSSEMessage(raw: unknown) {
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.error(
-      typeof d.content === 'string' && d.content
-        ? d.content
-        : (typeof d.error === 'string' && d.error ? d.error : t('errors.request_failed_2')),
-    )
+    const raw = typeof d.content === 'string' && d.content
+      ? d.content
+      : (typeof d.error === 'string' && d.error ? d.error : '')
+    // provider 认证失败：弹引导把用户**带路**到配置页（首次完整引导；之后降级为
+    // 一句带按钮的提示 —— 都由同一个 `Tour` 承担）。弹不出来才退化成 toast。
+    // 其余错误照旧：加一句可行动的提示，但**保留原文**（原文才是定位线索）。
+    if (raw && isProviderAuthError(raw)) {
+      offerSetupTour('provider-auth', actionableStreamError(raw), 'error')
+    } else {
+      message.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
+    }
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
@@ -2301,13 +2383,28 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     await sendUnified(text, attachments)
     return
   }
+  // ① 没有会话就**先建出来**（必须在 appendUserText 之前）：否则消息会落进"无会话"切片
+  //    `__none__`，而 activeSessionId 直到提交成功才写回 ⇒ 一旦失败，这条消息与这个会话
+  //    就都成了孤魂（侧栏里没有它、切走就再也回不来）。用户看到的现象正是"消息发出去就没了"。
+  if (!activeSessionId.value) {
+    if (!ensureModel()) return
+    await createSession()
+    if (!activeSessionId.value) {
+      message.error(t('chat.failed_to_create_the_conversation_please_retry'))
+      return
+    }
+  } else if (!ensureModel()) {
+    // ② 已有会话同样要确保有模型（空值 ⇒ 后端默认路由 ⇒ 401，见 ensureModel 的注释）
+    return
+  }
   loading.value = true
   startTurnTimer()
   resetStreamState()
   connectionLost.value = false
   appendUserText(text, attachments)
   const userItemId = items.value[items.value.length - 1]?.id
-  const sessionId = activeSessionId.value || crypto.randomUUID()
+  // 会话已在上面确保存在 ⇒ 这里**不再自己编 UUID**（编出来的 id 不属于任何侧栏会话）
+  const sessionId = activeSessionId.value
   currentTraceId.value = ''
   try {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
@@ -2344,7 +2441,6 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
       body.attachments = resolvedAtts.map(a => ({ id: a.id, name: a.name, mime_type: a.mimeType, url: a.url, is_image: a.isImage }))
     }
     await api.post('/submit', body)
-    activeSessionId.value = sessionId
   } catch (e) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     loading.value = false
@@ -2946,6 +3042,10 @@ function continueGeneration() {
         v-model:open="saveToKbOpen"
         :content="sessionMarkdownForDialog"
         :default-title="activeSession?.title || $t('chat.share.defaultTitle')"
+      />
+      <ChatSetupTour
+        ref="tourRef"
+        @go-configure="goConfigureModel"
       />
       <SaveToMemoryDialog
         v-model:open="saveToMemoryOpen"

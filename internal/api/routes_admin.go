@@ -61,6 +61,25 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/redis", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/redis", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("POST /v1/admin/redis/test", authMW(rlMW(adminWriteMW(adminStrip))))
+	// 慢日志 / 清库：handler 早已注册在 adminMux（admin_ops.go:56-57），但**从未在此暴露到外部 mux**
+	// ⇒ 前端「刷新慢日志」「执行 FLUSHALL」恒 404（与下面 models / settings 是同一个坑）。
+	// FLUSHDB 是**破坏性写操作** ⇒ 必须走 adminWriteMW，不能给读取权限。
+	mux.Handle("GET /v1/admin/redis/slow-log", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/redis/flush-all", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// Database admin routes（/admin/datastores?tab=database 整页依赖它们）
+	// 同样的问题：handler 早在 adminMux 里注册（admin_ops.go:47-53），但从未暴露 ⇒
+	// 「数据库状态 / 配置 / 备份列表 / 备份 / 恢复 / 查询 / 优化」七个端点全部 404。
+	// 判据照本文件既定口径（见文件头 P1-3）：GET 用 adminReadMW；
+	// 备份（pg_dump 落盘）、恢复（psql 覆盖当前库）、任意 SELECT、VACUUM/ANALYZE
+	// 都是**写操作** ⇒ 一律 adminWriteMW。
+	mux.Handle("GET /v1/admin/database/status", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/database/configs", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/database/backups", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/backups", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/backups/{backupId}/restore", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/query", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/optimize/{action}", authMW(rlMW(adminWriteMW(adminStrip))))
 
 	// Queue admin routes
 	mux.Handle("GET /v1/admin/queue", authMW(rlMW(adminReadMW(adminStrip))))

@@ -1,10 +1,8 @@
 <script setup lang="ts">
-import { ref, watch, type Component } from 'vue'
-import { useRoute, useRouter } from 'vue-router'
-import { Tabs, TabPane } from 'ant-design-vue'
+import { type Component } from 'vue'
 
-import { useI18n } from 'vue-i18n'
-const { t: tr } = useI18n()
+import { Tabs, TabPane } from 'ant-design-vue'
+import { useTabbedQuery } from '@/composables/useTabbedQuery'
 /**
  * 后台「多面板合并页」通用容器。
  *
@@ -39,37 +37,17 @@ const props = defineProps<{
   tabs: AdminTabDef[]
 }>()
 
-const route = useRoute()
-const router = useRouter()
-
-function normalizeTab(v: unknown): string {
-  const keys = props.tabs.map(t => t.key)
-  if (typeof v === 'string' && keys.includes(v)) return v
-  return props.defaultTab
-}
-
-const activeTab = ref<string>(normalizeTab(route.query.tab))
-// 已挂载过的 Tab（懒加载 + 切回不重复请求）
-const mountedTabs = ref<Set<string>>(new Set([activeTab.value]))
-
-// 旧路由重定向过来会带 ?tab=，此处跟随
-watch(() => route.query.tab, (v) => {
-  const t = normalizeTab(v)
-  activeTab.value = t
-  mountedTabs.value = new Set([...mountedTabs.value, t])
-})
-
-watch(activeTab, (t) => {
-  mountedTabs.value = new Set([...mountedTabs.value, t])
-})
-
-function onTabChange(key: string | number) {
-  const t = normalizeTab(key)
-  if (t === activeTab.value) return
-  activeTab.value = t
-  void router.replace({ path: props.routePath, query: { tab: t } })
-}
-</script>
+// `?tab=` 同步与"已访问"集合抽到 composable：`/admin/settings` 也要用同一套
+// （那边是单文件内的 Tabs，不适合挂这个容器组件）。逻辑只有一份。
+const {
+  activeTab,
+  visited: mountedTabs,
+  select: onTabChange,
+} = useTabbedQuery({
+  routePath: props.routePath,
+  defaultTab: props.defaultTab,
+  tabKeys: props.tabs.map(t => t.key),
+})</script>
 
 <template>
   <div class="tabbed-admin-page">

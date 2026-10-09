@@ -59,7 +59,18 @@ const apiMocks = vi.hoisted(() => {
   }
   return {
     emptyList,
-    api: { get: vi.fn(emptyList), post: vi.fn(emptyList), put: vi.fn(emptyList), delete: vi.fn(emptyList) },
+    api: {
+      get: vi.fn(emptyList),
+      // 形参写出来（并显式 void）：否则 `mock.calls` 被推断成 `[url?]` 一元组，
+      // 取 `calls[i][1]`（请求体）会报 TS2493；返回类型也要给成 `unknown`，
+      // 否则用例里改成别的响应形状会被判成类型不匹配。
+      post: vi.fn((url?: string, body?: unknown): Promise<unknown> => {
+        void url; void body
+        return Promise.resolve({ data: { data: [] } })
+      }),
+      put: vi.fn(emptyList),
+      delete: vi.fn(emptyList),
+    },
     createSSEConnection: vi.fn((_sessionId: string, onMessage: (data: unknown) => void, onError: () => void) => {
       stream.onMessages.push(onMessage)
       stream.onError = onError
@@ -80,7 +91,14 @@ const apiMocks = vi.hoisted(() => {
     // ⚠ `ChatInput.vue:160` 是 `models.value = await listModels()` —— 它要的是**数组本身**，
     // 不是 axios 的 `{ data: { data: [] } }` 外壳。冒烟网没暴露这点，是因为那里把 ChatInput
     // 打桩了；本文件把输入区解桩后，形状不对会以 `models.value.map is not a function` 浮出来。
-    listModels: vi.fn(() => Promise.resolve([])),
+    // ⚠ 这里**必须给一个模型**：`ChatView.sendMessage` 现在会在发送前确保有模型
+    //    （空 model ⇒ 后端走默认路由 ⇒ 线上那条 `provider opencode-go stream failed: 401`）。
+    //    此前这里返回**空数组**，于是整套交互测试都在"没有模型"的状态下跑 ——
+    //    它们断言的其实是**会 401 的那条路径**，等于把线上 bug 当成了正常路径
+    //    （2026-10-09 修此问题时暴露：13 个用例里 11 个依赖这个前提）。
+    listModels: vi.fn(() => Promise.resolve([
+      { provider: 'test-provider', name: 'test-model', display_name: 'Test Model', context_window: 8192 },
+    ])),
     createAgent: vi.fn(emptyList),
     createGraph: vi.fn(emptyList),
   }
@@ -105,6 +123,8 @@ vi.mock('../../stores/theme', () => ({
 
 import ChatView from '../ChatView.vue'
 import ChatInput from '../../components/chat/ChatInput.vue'
+import { message } from 'ant-design-vue'
+import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
 
 /** 除 ChatInput 外全部打桩：输入区是真组件（提交路径要真的走）。 */
 const STUBS = {
@@ -122,6 +142,10 @@ const STUBS = {
   ChatDisplaySettings: true,
   ChatStatusBar: true,
   AskCard: true,
+  // 未配置引导的浮层打桩：本文件测的是「SSE 帧 → 提示」这条链，
+  // 引导的**决策**在 `composables/__tests__/useOnboardingTour.spec.ts` 里测 ✓
+  // （打桩后 `offer` 不在，`offerSetupTour` 会落回 toast —— 这条兜底路径因此也被覆盖 ✓）
+  ChatSetupTour: true,
 }
 
 const router = createRouter({
@@ -152,6 +176,13 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
     stream.closed = 0
     apiMocks.api.get.mockImplementation(apiMocks.emptyList)
     apiMocks.getChatSessionMessages.mockImplementation(apiMocks.emptyList)
+    // ⚠ 这里必须**重新装回**默认模型列表：`vi.clearAllMocks()` 只清调用记录，
+    // **不重置 mock 实现** —— 某个用例把它改成 `[]` 之后会**泄漏**给后面的用例，
+    // 于是后面的发送会被 `ensureModel()` 拦下、`stream.onMessages` 变成空数组，
+    // 表现为"单独跑通过、全文件跑失败"（本轮就踩了这个，排查了一轮）。
+    apiMocks.listModels.mockImplementation(() => Promise.resolve([
+      { provider: 'test-provider', name: 'test-model', display_name: 'Test Model', context_window: 8192 },
+    ]))
   })
 
   async function mountAndSend(text = '你好') {
@@ -419,5 +450,80 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
 
     // 现状：切了会话，授权模式**没有**回到默认 —— 这正是 :675 那句警告说"绝不能"的事
     expect(v.toolsMode).toBe('yolo')
+  })
+
+  /**
+   * ── 2026-10-09 修复：无会话 / 无模型时的发送路径 ──
+   *
+   * 线上现象：用户不先「新建会话 + 选模型 + 配对话模式 + 配授权方式」就直接发消息 ⇒
+   * ① 会话**永久丢失** —— `sendMessage` 自己编了个 UUID，而 `activeSessionId` 只有提交
+   *    **成功**才写回（`ChatView.vue:2347` 原样），侧栏 `sessions` 里从来没有它；
+   *    消息又落进"无会话"占位切片 `__none__` ⇒ 切走就再也回不来；
+   * ② 大概率报 `provider opencode-go stream failed: AuthenticationError: 401 Invalid API key`
+   *    —— `llm_config.model` 为空 ⇒ 后端走默认路由 ⇒ 那个 provider 的密钥无效
+   *    （产地 `python-engine/app/gateway/router.py:244`）。
+   */
+  it('★★ 引导锚点真的挂出来了（锚点被改名/删掉时没人会知道 —— 本仓无 e2e）', async () => {
+    const wrapper = await mountAndSend('你好')
+    // 输入框与模型选择器这两条锚点必须真的在 DOM 里：`buildTourSteps` 用
+    // `[data-tour="…"]` 找元素，找不到时 antd 会退化成"居中浮层" —— **不报错、只是指错地方** ✗
+    expect(wrapper.find(`[data-tour="${TOUR_ANCHORS.input}"]`).exists()).toBe(true)
+    expect(wrapper.find(`[data-tour="${TOUR_ANCHORS.modelPicker}"]`).exists()).toBe(true)
+  })
+
+  it('★★ 没有会话时发送 ⇒ **先建会话再提交**，且用服务端会话 id（消息不再是无主孤魂）', async () => {
+    apiMocks.api.post.mockImplementation((url?: string) => {
+      if (url === '/v1/conversations') {
+        return Promise.resolve({ data: { data: { id: 'srv-1', title: '新对话' } } })
+      }
+      return Promise.resolve({ data: { data: [] } })
+    })
+
+    const wrapper = await mountAndSend('你好')
+    await flushPromises()
+
+    const calls = apiMocks.api.post.mock.calls.map(c => String(c[0]))
+    const convAt = calls.indexOf('/v1/conversations')
+    const submitAt = calls.indexOf('/submit')
+    expect(convAt).toBeGreaterThanOrEqual(0)      // 真的建了会话
+    expect(submitAt).toBeGreaterThan(convAt)      // 且**在建会话之后**才提交
+
+    const body = apiMocks.api.post.mock.calls[submitAt]?.[1] as { session_id?: string } | undefined
+    expect(body?.session_id).toBe('srv-1')        // 用服务端 id，而不是自己编的
+    expect(wrapper.text()).toContain('你好')
+  })
+
+  it('★★ 没有可用模型时**不发请求**（不再打到后端默认路由吃 401）', async () => {
+    apiMocks.listModels.mockImplementation(() => Promise.resolve([]))
+
+    const wrapper = await mountAndSend('你好')
+    await flushPromises()
+
+    const urls = apiMocks.api.post.mock.calls.map(c => String(c[0]))
+    expect(urls).not.toContain('/submit')
+    // 连模型都没有时也不该先造一个空会话出来
+    expect(urls).not.toContain('/v1/conversations')
+    void wrapper
+  })
+
+  it('★ provider 认证错误帧 ⇒ 提示「加一句可行动的」，且**保留原文**（原文才是线索）', async () => {
+    const errSpy = vi.spyOn(message, 'error').mockImplementation((() => undefined) as never)
+    try {
+      const wrapper = await mountAndSend('你好')
+      feed('error', {
+        content: "provider opencode-go stream failed: AuthenticationError: Error code: 401 "
+          + "- {'error': {'message': 'Invalid API key.'}}",
+      })
+      await flushPromises()
+
+      // 断言"所有调用里出现过"而不是"最后一次"：`feed` 会把帧喂给**每一个**已建立的流
+      // （提交流 / 会话映射流 / 子 Agent 流），最后一次调用未必来自这条错误分支。
+      const shown = errSpy.mock.calls.map(c => String(c[0])).join(' | ')
+      expect(shown).toContain('API Key')          // 可行动的那句
+      expect(shown).toContain('Invalid API key')  // 原文仍在
+      void wrapper
+    } finally {
+      errSpy.mockRestore()
+    }
   })
 })
