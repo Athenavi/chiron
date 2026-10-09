@@ -73,8 +73,8 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 | `invalid_request` | `CodeInvalidRequest` | `ErrInvalidReq` = `invalid request body`；或文案含 `invalid` / `required` | 400（`response.go:63` 的 `BadRequest`） |
 | `not_found` | `CodeNotFound` | `ErrNotFound` = `resource not found`；或文案含 `not found` | 404（`response.go:67`） |
 | `rate_limited` | `CodeRateLimited` | `rate limit exceeded`（`response.go:100`）；或文案含 `rate limit` / `too many request` | 429（`response.go:99-101`） |
-| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`gateway_router.go:660`） |
-| `insufficient_credits` | `CodeInsufficientCredits` | `insufficient credits — please recharge in Billing`；或文案含 `credit` | 402（`gateway_router.go:640`） |
+| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`routes_agent.go:122`，2026-10-09 更正；原记 `gateway_router.go:660` —— 该文件**没有**这段逻辑） |
+| `insufficient_credits` | `CodeInsufficientCredits` | `insufficient credits — please recharge in Billing`；或文案含 `credit` | 402（`routes_agent.go:102`，2026-10-09 更正；原记 `gateway_router.go:640` —— 同上） |
 | `service_unavailable` | `CodeServiceUnavailable` | `ErrDBUnavailable` = `service temporarily unavailable`；或文案含 `unavailable` / `redis down` / `timeout` | **500 或 503**（见下节） |
 | `internal_error` | `CodeInternal` | 文案含 `internal` | 500（经 `InternalError`，`response.go:71-73`） |
 | `request_failed` | `CodeRequestFailed` | 兜底：非空但未命中任何规则的文案 | 任意（随调用点） |
