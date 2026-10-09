@@ -383,6 +383,15 @@ models:
         type: string
         maxLength: 64
         description: 该 run 是对哪个 run 的重跑（迁移 0006）
+      resumed_from:
+        type: string
+        maxLength: 64
+        description: 该 run 是从哪个 run 续跑 / 分叉而来（R5(b)，迁移 0008）
+        nullable: true
+      resume_at_step:
+        type: integer
+        description: 分叉点（只继承 seq < 该值的步骤；NULL = 续到底）（R5(b)，迁移 0008）
+        nullable: true
   SubagentRunStep:
     table: subagent_run_steps
     orm: true

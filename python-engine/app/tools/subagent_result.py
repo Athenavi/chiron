@@ -13,20 +13,19 @@ import json
 import logging
 from typing import Any
 
+from app.subagent.access import RUN_ACCESS_CLAUSE
 from app.tools.context import get_session_id, get_tenant_id, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
 
 STEP_READ_MAX_CHARS = 8000  # 单步返回上限（防止一次拉回整份过程）
-RUN_SQL = """
+#: 访问谓词与 `rerun_subagent` / `resume_subagent` **共用一份**（`app/subagent/access.py`）。
+RUN_SQL = f"""
 SELECT id, status, profile_name, summary, artifacts, input_tokens, output_tokens,
        steps, redacted_count, error, created_at
   FROM subagent_runs
- WHERE id = $1 AND tenant_id = $2 AND (user_id = $3 OR user_id IS NULL)
-   -- 按对话会话隔离：主 Agent 不该读到**别的会话**的子 Agent 结果，
-   -- 否则它会拿别人的 run 当作自己的上下文（跨会话影响判断）。
-   AND root_session_id = $4
+ WHERE id = $1{RUN_ACCESS_CLAUSE}
 """
 STEPS_SQL = """
 SELECT seq, kind, role, tool_name, tool_call_id, content, truncated

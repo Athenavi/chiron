@@ -304,8 +304,15 @@ class Settings(BaseSettings):
     #: 交给 provider。用例：`tests/test_fs_guard.py::TestStrictMode`。
     fs_require_observation: bool = False
 
-    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──
+    # ── 子 Agent 的「继续 / 分叉」（R5(b)，见 vendor/规划.md §3.5）──
     #
+    # 默认**关**：它让模型能"带着某个子 Agent 已记录的步骤继续跑（或从某一步分叉）"，
+    # 是要显式开启的新能力（§1.3：会改变行为的机制一律默认关）。
+    # 关闭时 `resume_subagent` 仍注册（与 R1/R2 同款运行时开关），但对任何调用都返回
+    # **明确的"未启用"错误**，且不写 `subagent_runs.resumed_from` / `resume_at_step`。
+    subagent_resume_enabled: bool = False
+
+    # ── 子 Agent 的宿主证据（host receipts，见 vendor/规划.md §3.5 的 R1）──    #
     # 默认开：委派的价值就在**可信度** —— 父模型看到的 `summary` 是子 Agent 的自述，而收据是
     # **宿主观测**（工作区差分 + 执行计数），追加在摘要之后。
     # 关掉它会退回"只信自述"的旧行为（成本：执行前后各拍一次**有界**工作区快照）。
