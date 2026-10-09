@@ -2358,11 +2358,14 @@ class AgentRuntime:
         if verdict.hit:
             logger.warning("loop guard: %s (tool=%s)", verdict.detail, call["name"])
             return _loop_guard_result(verdict)
-        result, _approval = await self._guarded_execute_tool(call, task)
+        # `allow_approval=False`：并发批**不能交互** —— 组内若出现审批需求（`tool_policy` 的
+        # confirm 或 `PreToolUse` hook 的 `ask`），一律降级成**显式错误**返回给模型，
+        # 而不是把审批事件丢掉（丢掉就等于"这个调用什么也没发生"）。
+        result, _approval = await self._guarded_execute_tool(call, task, allow_approval=False)
         return result if result is not None else {}
 
     async def _guarded_execute_tool(
-        self, tool_call: dict[Any, Any], task: AgentTask
+        self, tool_call: dict[Any, Any], task: AgentTask, *, allow_approval: bool = True
     ) -> tuple[dict[Any, Any] | None, AgentEvent | None]:
         """工具栅栏三态裁决：block（拒绝）/ confirm（需要用户确认）/ allow（直接执行）。
 
@@ -2371,6 +2374,14 @@ class AgentRuntime:
         - confirm：``(None, approval_event)`` —— **不在此等待**，调用方必须先 yield
           approval 事件给前端（否则前端收不到确认卡片、任务永久挂起），
           再调用 ``_await_approval`` 等待用户批准/拒绝/超时。
+
+        ``allow`` 分支里还有**第三处**产生审批的来源：`PreToolUse` hook 返回 `ask`
+        （2026-10-09）—— 它复用**同一套**手续（`_begin_approval`），因此调用方的处理
+        逻辑不必分叉。
+
+        ``allow_approval=False``：调用方**无法交互**（并发批 `_run_parallel_batch`）——
+        此时"需要确认"降级为**显式错误**，而不是把审批事件丢掉（那会静默变成
+        "什么都没发生"，而并发批的 gather 前提是"组内不产生审批"）。
         """
         tool_name = tool_call["name"]
         try:
@@ -2453,52 +2464,108 @@ class AgentRuntime:
                 "error": f"Tool '{tool_name}' blocked by guard: {verdict.reason}"
             }, None
         if verdict.action == "confirm":
-            # 请求用户确认：注册 pending future，立即返回确认事件（不等待）
-            tc_id = tool_call.get("id") or tool_name
-            loop = asyncio.get_running_loop()
-            future: asyncio.Future[bool] = loop.create_future()
-            self._pending_approvals[tc_id] = future
-            # 票据：先把"我这次请求的是什么"写进 Redis，执行前再读回复核
-            # （见 _second_check_approval）。写失败不阻断审批——少一道校验，而不是卡住用户。
-            from app.agent.tool_policy import args_hash as _args_hash
+            if not allow_approval:
+                # 不可交互的调用方（并发批）：显式失败，而不是交出无人认领的审批事件。
+                # 读级工具本不该走到这里（`requires_confirmation` 只对 write/delete/external
+                # 为真）—— 所以这条是**防御性**的：一旦将来有读级工具被判 confirm，
+                # 也只是报错，而不是静默丢掉一次确认。
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' requires user confirmation, but it ran inside a "
+                        "concurrent batch where approval is impossible — re-issue it as a "
+                        "standalone call"
+                    )
+                }, None
+            return None, await self._begin_approval(
+                tool_call, task, level=str(verdict.level or ""), targs=targs
+            )
+        # allow：正常执行。执行里还可能被 `PreToolUse` hook 的 `ask` 拦成"需要确认" ——
+        # 那就走与 confirm **完全同一套**手续（`_begin_approval`），调用方不必分叉。
+        logger.info("Executing tool %s (id=%s)", tool_name, tool_call.get("id"))
+        result, ask_reason = await self._execute_tool(tool_call, task)
+        if ask_reason is None:
+            return result, None
 
-            await self._store_approval_ticket(
-                ApprovalTicket(
-                    tool_call_id=tc_id,
-                    tool_name=tool_name,
-                    args_hash=_args_hash(tool_name, targs),
-                    turn_id=str(getattr(task, "id", "") or ""),
+        # `PreToolUse` hook 要求人工确认（`ask` 档，2026-10-09）：**工具尚未执行**。
+        logger.info("PreToolUse hook asks for confirmation on %s — routing to approval", tool_name)
+        if not allow_approval:
+            # 并发批不能交互：给**显式**失败，而不是把审批事件丢掉
+            # （丢掉 = 静默变成"什么都没发生"，而并发批的 gather 前提是组内不产生审批）
+            return {
+                "error": (
+                    f"PreToolUse hook requires confirmation for '{tool_name}' ({ask_reason}), "
+                    "but it ran inside a concurrent batch where approval is impossible — "
+                    "re-issue it as a standalone call"
                 )
-            )
-            # "问"也要留痕（与决定按 tool_call_id 配对）：只记决定的话，
-            # "问了但没等到决定"（等待期进程被杀 / 副本被回收 / 连接断开）在流水里看不出来。
-            _record_approval_request(
-                tc_id, tool_name, level=str(verdict.level or ""), arguments=targs
-            )
-            # 事前风险提示：**撤不回的操作必须在批准之前说清**（诚实优先，
-            # 见 app/agent/side_effect_ledger.py）。只对"不可撤销"的加提示 ——
-            # 满屏警告等于没有警告。
-            from app.agent.side_effect_ledger import confirmation_warning
+            }, None
+        return None, await self._begin_approval(
+            tool_call, task, level=str(verdict.level or ""), targs=targs, reason=ask_reason
+        )
 
-            risk = confirmation_warning(verdict.level, tool_name)
-            approval_evt = AgentEvent(
-                type="approval",
+    async def _begin_approval(
+        self,
+        tool_call: dict[Any, Any],
+        task: AgentTask,
+        *,
+        level: str,
+        targs: dict[str, Any],
+        reason: str = "",
+    ) -> AgentEvent:
+        """发起一次审批：注册 pending future + 票据 + 请求审计，返回**待 yield 的审批事件**。
+
+        **两处来源共用它**（一处手续，避免两份必然漂移的拷贝）：
+
+        * `tool_policy` 判为 `confirm`（写 / 删 / 外部类工具）；
+        * `PreToolUse` hook 返回 `ask`（2026-10-09 拍板）—— 它**不新增任何交互面**，只是把
+          这次调用提升为"需要用户确认"，因此前端与网关侧不需要任何新东西。
+
+        **调用方必须先 `yield` 返回的事件**再 `_await_approval` —— 顺序不可颠倒，否则前端
+        收不到确认卡片、任务永久挂起。
+        """
+        tool_name = str(tool_call["name"])
+        tc_id = tool_call.get("id") or tool_name
+        loop = asyncio.get_running_loop()
+        future: asyncio.Future[bool] = loop.create_future()
+        self._pending_approvals[tc_id] = future
+        # 票据：先把"我这次请求的是什么"写进 Redis，执行前再读回复核
+        # （见 _second_check_approval）。写失败不阻断审批 —— 少一道校验，而不是卡住用户。
+        from app.agent.tool_policy import args_hash as _args_hash
+
+        await self._store_approval_ticket(
+            ApprovalTicket(
                 tool_call_id=tc_id,
                 tool_name=tool_name,
-                tool_arguments=json.dumps(targs, ensure_ascii=False),
-                content=f"请求执行 {tool_name}（级别 {verdict.level}{risk}）",
+                args_hash=_args_hash(tool_name, targs),
+                turn_id=str(getattr(task, "id", "") or ""),
             )
-            logger.info(
-                "Tool %s requires approval (id=%s level=%s second_check=%s), awaiting user decision",
-                tool_name,
-                tc_id,
-                verdict.level,
-                verdict.second_check,
-            )
-            return None, approval_evt
-        # allow：正常执行
-        logger.info("Executing tool %s (id=%s)", tool_name, tool_call.get("id"))
-        return await self._execute_tool(tool_call, task), None
+        )
+        # "问"也要留痕（与决定按 tool_call_id 配对）：只记决定的话，
+        # "问了但没等到决定"（等待期进程被杀 / 副本被回收 / 连接断开）在流水里看不出来。
+        _record_approval_request(tc_id, tool_name, level=level, arguments=targs)
+        # 事前风险提示：**撤不回的操作必须在批准之前说清**（诚实优先，
+        # 见 app/agent/side_effect_ledger.py）。只对"不可撤销"的加提示 ——
+        # 满屏警告等于没有警告。
+        from app.agent.side_effect_ledger import confirmation_warning
+
+        risk = confirmation_warning(level, tool_name)
+        content = f"请求执行 {tool_name}（级别 {level}{risk}）"
+        if reason:
+            # hook 的 `ask`：把"**谁**在要求确认"一并说清 —— 用户要能看出这不是工具策略判的
+            content = f"{content}；{reason}"
+        logger.info(
+            "Tool %s requires approval (id=%s level=%s hook_ask=%s), awaiting user decision",
+            tool_name,
+            tc_id,
+            level,
+            bool(reason),
+        )
+        return AgentEvent(
+            type="approval",
+            tool_call_id=tc_id,
+            tool_name=tool_name,
+            tool_arguments=json.dumps(targs, ensure_ascii=False),
+            content=content,
+        )
 
     async def _await_approval(
         self, tool_call: dict[Any, Any], task: AgentTask, timeout: float = 300.0
@@ -2655,7 +2722,10 @@ class AgentRuntime:
             tc_id,
             ", arguments edited" if edited_args is not None else "",
         )
-        return await self._execute_tool(tool_call, task)
+        # `approved=True`：批准后执行时，hook 的 `ask` **不再生效**（防重复询问）；
+        # `deny` 仍然生效 —— hook 只能收紧，不会被"批准过"抵消。
+        result, _ask = await self._execute_tool(tool_call, task, approved=True)
+        return result
 
     # ── 审批票据（二次校验的基础）──────────────────────────────────────────
 
@@ -3102,27 +3172,41 @@ class AgentRuntime:
             return False
 
     async def _execute_tool(
-        self, tool_call: dict[Any, Any], task: AgentTask
-    ) -> dict[Any, Any]:
+        self, tool_call: dict[Any, Any], task: AgentTask, *, approved: bool = False
+    ) -> tuple[dict[Any, Any], str | None]:
         """执行工具（含批 G 生命周期 hook）。
 
         分层顺序是刻意的：本方法在 `_guarded_execute_tool`（工具策略 / 服务端授权 /
         审批）**之后**才被调用，因此 `PreToolUse` hook 只能进一步**收紧** —— 它没有
         "放行"语义，也就不会成为绕过 `tool_policy` 分级的新通道（方案 03 §3.2）。
 
-        - `PreToolUse`：唯一可阻断的事件，阻断以"工具错误"回灌给模型；
+        - `PreToolUse`：**可阻断**（`deny` = 拒绝；`ask` = 要求用户确认，2026-10-09）；
         - `PostToolUse` / `PostToolUseFailure` / `SubagentStart` / `SubagentStop`：
           fire-and-forget，失败、超时、崩溃都不改变这里的返回值。
         默认 `hooks_enabled=False` 时以上调用全部是空操作（零行为变化）。
+
+        Returns:
+            `(结果, 待确认原因)`。**第二项非空表示"工具尚未执行、hook 要求用户确认"**
+            （`ask` 档）—— 调用方（`_guarded_execute_tool`）据此走既有的审批通道。
+            `approved=True`（审批通过后由 `_await_approval` 再次调用）时 `ask` **不再生效**
+            —— 否则用户批一次、hook 问一次，会无限循环；而 `deny` 依然生效
+            （hook 只能收紧，不会被"批准过"抵消）。
         """
         # 同样延迟导入（见 `run()` 中的说明）。
-        from app.hooks import hooks
+        from app.hooks import DECISION_ASK, hooks
 
         tool_name = str(tool_call["name"])
 
-        blocked = await hooks.before_tool_use(task=task, tool_call=tool_call)
-        if blocked:
-            return {"error": blocked}
+        decision = await hooks.before_tool_use(task=task, tool_call=tool_call)
+        if decision is not None:
+            if decision.kind == DECISION_ASK:
+                if not approved:
+                    return {}, str(decision)
+                logger.info(
+                    "PreToolUse hook asked again after approval for %s — proceeding", tool_name
+                )
+            else:
+                return {"error": decision}, None
 
         is_subagent = tool_name == SUBAGENT_TOOL
         if is_subagent:
@@ -3133,7 +3217,7 @@ class AgentRuntime:
         if is_subagent:
             await hooks.subagent_stop(task=task, tool_call=tool_call, result=result)
         await hooks.after_tool_use(task=task, tool_call=tool_call, result=result)
-        return result
+        return result, None
 
     async def _dispatch_tool(
         self, tool_call: dict[Any, Any], task: AgentTask

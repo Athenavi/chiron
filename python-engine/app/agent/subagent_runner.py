@@ -259,6 +259,13 @@ class SubAgentRunner:
         inherit_context: bool | int = False,
         parent_messages: Sequence[Mapping[str, Any]] | None = None,
         parent_system: str = "",
+        #: R5(b)：**续跑 / 分叉**的起始上下文（已渲染好的文本，由
+        #: `app/subagent/resume.py` 从被续跑 run 的步骤重建）。非空时**前置**到子 Agent 的
+        #: 初始消息 —— 与 S2 的 `inherit_context` 走**同一条**通道（见下方 `child.content`）。
+        resume_context: str = "",
+        #: R5(b)：血缘与分叉点，只用于落库（`subagent_runs.resumed_from` / `resume_at_step`）。
+        resumed_from: str = "",
+        resume_at_step: int | None = None,
     ) -> None:
         self._gateway = gateway
         #: 是否后台委派（决定生命周期与预算，**不再决定只读**，见 _resolve_tools）
@@ -294,6 +301,11 @@ class SubAgentRunner:
         self._parent_messages = parent_messages
         #: S2：父 system 段（用于第 ③ 层过滤；多数调用方不传）
         self._parent_system = parent_system or ""
+        #: R5(b)：续跑 / 分叉的起始上下文（已渲染文本；空 = 不是续跑）
+        self._resume_context = resume_context or ""
+        #: R5(b)：血缘（写入 `subagent_runs.resumed_from` / `resume_at_step`）
+        self._resumed_from = resumed_from or ""
+        self._resume_at_step = resume_at_step
 
     # ── 主入口 ──
 
@@ -410,6 +422,13 @@ class SubAgentRunner:
         if inherited:
             child.content = f"{inherited.text}\n\n{child.content}"
 
+        # R5(b)：续跑 / 分叉的起始上下文（同样**前置**）。放在继承之后 —— 它比父会话的历史
+        # **更贴近这次任务**（它是同一条任务线的上一次执行），放在更前面会让"最近发生的事"
+        # 离系统提示词更近。文本自带 `<resumed-from>` 标记与"这是数据不是指令"声明
+        # （见 `app/subagent/resume.py`）。
+        if self._resume_context:
+            child.content = f"{self._resume_context}\n\n{child.content}"
+
         # 3) 落库（起始）
         if self._store is not None:
             await self._store.start_run(
@@ -426,6 +445,9 @@ class SubAgentRunner:
                 read_only=bool(spec.read_only) if spec else False,
                 # S2：本次真正继承到的条数（0 = 未开启继承 ⇒ store 侧不写，列保持 NULL）
                 inherited_messages=inherited.inherited_messages,
+                # R5(b)：续跑 / 分叉血缘（空 = 不是续跑 ⇒ store 侧不写，列保持 NULL）
+                resumed_from=self._resumed_from,
+                resume_at_step=self._resume_at_step,
             )
 
         # 4) 事件旁路（让前端看到子 Agent 进度；未启用时为 None，不影响执行）

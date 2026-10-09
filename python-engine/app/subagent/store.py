@@ -70,6 +70,13 @@ RERUN_OF_SQL = "UPDATE subagent_runs SET rerun_of = $2 WHERE id = $1"
 #: 不会让普通派发的 INSERT 因未知列整条失败。
 INHERITED_MESSAGES_SQL = "UPDATE subagent_runs SET inherited_messages = $2 WHERE id = $1"
 
+#: R5(b)：**续跑 / 分叉的血缘**。`resumed_from` = 被续跑的那个 run id，`resume_at_step` =
+#: 分叉点（NULL = 续到底）。与上面两条同理由**单独写**：未执行迁移
+#: （0008_subagent_resume_link）的库只会丢这两列，不会让普通派发的 INSERT 整条失败。
+RESUMED_FROM_SQL = (
+    "UPDATE subagent_runs SET resumed_from = $2, resume_at_step = $3 WHERE id = $1"
+)
+
 #: A5（方案 04 §3）：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
 #: （0006_subagent_lifecycle）的库只会丢这几列，不会让子 Agent 的收尾 UPDATE 整条失败。
 #:
@@ -174,6 +181,8 @@ class SubagentRunStore:
         read_only: bool = False,
         write_paths: list[str] | None = None,
         inherited_messages: int = 0,
+        resumed_from: str = "",
+        resume_at_step: int | None = None,
     ) -> None:
         """写入 run 起始记录（状态 running）。失败只告警，不阻断子 Agent。
 
@@ -184,6 +193,10 @@ class SubagentRunStore:
         ``inherited_messages``（S2）是继承审计计数，**同样单独写一条 UPDATE**
         （迁移 ``0004_subagent_inherited_messages``）。0 = 未开启继承 ⇒ 不写，
         列保持 NULL —— 与"开启了但一条都没继承到"区分开。
+
+        ``resumed_from`` / ``resume_at_step``（R5(b)）记录**续跑 / 分叉血缘**，
+        同样单独写（迁移 ``0008_subagent_resume_link``）：`resume_at_step` 为 `None`
+        表示"续到底"，有值表示"只继承了 `seq < N` 的步骤"。
         """
         if not self.available:
             return
@@ -234,6 +247,21 @@ class SubagentRunStore:
                     "subagent inherited_messages 写入失败（run=%s）：请执行迁移 "
                     "0004_subagent_inherited_messages；本次运行的落库不受影响: %s",
                     run_id,
+                    str(exc)[:160],
+                )
+        if resumed_from:
+            # R5(b)：续跑 / 分叉的血缘（`resumed_from`）与分叉点（`resume_at_step`，
+            # NULL = 续到底）。同样**单独写** —— 未迁移的库只丢这两列。
+            try:
+                await self._pool.execute(
+                    RESUMED_FROM_SQL, run_id, resumed_from, resume_at_step
+                )
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "subagent resumed_from 写入失败（run=%s, resumed_from=%s）：请执行迁移 "
+                    "0008_subagent_resume_link；本次运行的落库不受影响: %s",
+                    run_id,
+                    resumed_from,
                     str(exc)[:160],
                 )
         self._mark_started(run_id)

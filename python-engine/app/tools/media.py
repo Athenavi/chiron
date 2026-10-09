@@ -22,6 +22,7 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, cast
 
 import httpx
@@ -255,6 +256,47 @@ def _sanitize_filename(prompt: str) -> str:
 
 
 # ── media_create ──────────────────────────────────────────────
+
+
+def _read_workspace_asset(rel: str) -> tuple[bytes, str | None]:
+    """把工作区里的一个文件读成字节。返回 `(数据, 错误原因)`（错误时数据为空）。
+
+    三条纪律：
+
+    * 路径必须过 `sandbox.safe_join` —— clamp 到**该用户自己的工作区**，`../` 与绝对路径
+      一律拒绝。没有这一步，这个参数就是一条新的任意文件读通道；
+    * **先 `stat()` 再读**：上限必须在**消费之前**生效（读完再判大小 = 把一个不受控的文件
+      整份读进内存。§4 的同族教训："有上限"不等于"在消费前拦住"）；
+    * 不存在 / 是目录 ⇒ **明确说清怎么办**（先生成到工作区），不静默回退到别处。
+    """
+    from app.tools.sandbox import safe_join
+
+    try:
+        target = safe_join(rel)
+    except ValueError as exc:
+        return b"", f"path is outside the sandbox workspace: {exc}"
+    if not target.exists():
+        return b"", (
+            f"no such file in the workspace: {rel!r} — generate it first (e.g. with "
+            "execute_python) and pass its path relative to the workspace"
+        )
+    if target.is_dir():
+        return b"", f"{rel!r} is a directory; pass a single file"
+    try:
+        size = target.stat().st_size
+    except OSError as exc:
+        return b"", f"cannot stat {rel!r}: {exc}"
+    if size > MAX_ASSET_BYTES:
+        return b"", (
+            f"asset too large: {size} bytes "
+            f"(max {MAX_ASSET_BYTES // (1024 * 1024)} MB)"
+        )
+    try:
+        return target.read_bytes(), None
+    except OSError as exc:
+        return b"", f"cannot read {rel!r}: {exc}"
+
+
 async def media_create(
     name: str,
     content: str = "",
@@ -263,8 +305,9 @@ async def media_create(
     tags: list[str] | None = None,
     content_base64: str = "",
     mime_type: str = "",
+    from_workspace: str = "",
 ) -> dict[str, Any]:
-    """创建一份**可下载的资产**并写入媒体库（文本或二进制）。
+    """创建一份**可下载的资产**并写入媒体库（文本 / 二进制 / **工作区里的文件**）。
 
     这是 agent 产出"用户能打开/下载的文件"的**正确通道**：不要在 shell / python 里往
     宿主路径写文件 —— 沙箱会拒绝绝对路径，而且即便写进工作区，产物也不在媒体库里，
@@ -273,8 +316,18 @@ async def media_create(
     走的是与**用户直传**（POST /v1/media/upload）完全相同的落库路径：同一个对象存储键
     布局（`media/<tenant>/<assetID>/<name>`）+ 同一张 `media_assets` 表，因此产物会出现在
     「媒体库」页面并可下载。
+
+    `from_workspace`（2026-10-09）：给一个**工作区相对路径**，把那个文件直接发布到媒体库。
+    这是"**先生成、再发布**"那条路的落点 —— 用 `execute_python` 在工作区里生成
+    docx/xlsx/pptx 之后，**不必**把字节编成 base64 递回来（那是这条路上最大的摩擦与出错源），
+    在这里指名该文件即可。三个来源（`content` / `content_base64` / `from_workspace`）
+    **互斥**，只能给一个。
     """
     display_name = (name or "").strip()
+    workspace_rel = (from_workspace or "").strip()
+    if not display_name and workspace_rel:
+        # 兜底：名字可从工作区路径推断（schema 仍要求给 `name` —— 通常就是那个文件名）
+        display_name = Path(workspace_rel).name
     if not display_name:
         return {"error": "name is required (include an extension, e.g. 'report.docx')"}
     if len(display_name) > MAX_NAME_CHARS:
@@ -289,9 +342,28 @@ async def media_create(
 
     raw_content = content or ""
     raw_b64 = (content_base64 or "").strip()
-    if raw_content and raw_b64:
-        return {"error": "provide either content or content_base64, not both"}
-    if raw_b64:
+    sources = [
+        label
+        for label, value in (
+            ("content", raw_content),
+            ("content_base64", raw_b64),
+            ("from_workspace", workspace_rel),
+        )
+        if value
+    ]
+    if len(sources) > 1:
+        return {
+            "error": (
+                f"provide only one of content / content_base64 / from_workspace "
+                f"(got {', '.join(sources)})"
+            )
+        }
+    if workspace_rel:
+        data, read_error = _read_workspace_asset(workspace_rel)
+        if read_error:
+            return {"error": read_error}
+        binary = True
+    elif raw_b64:
         try:
             data = _decode_base64(raw_b64)
         except Exception:
@@ -301,7 +373,7 @@ async def media_create(
         data = raw_content.encode("utf-8")
         binary = False
     else:
-        return {"error": "content or content_base64 is required"}
+        return {"error": "one of content, content_base64 or from_workspace is required"}
 
     # 体积前置校验：与网关内部端点的上限一致（跑到网关再被拒等于白跑一趟）
     if len(data) > MAX_ASSET_BYTES:
@@ -793,8 +865,9 @@ registry.register(
     name="media_create",
     description=(
         "Create a downloadable asset in the media library — this is THE way to produce a file "
-        "for the user: Markdown/CSV/JSON/code as plain text, and images / Office documents / any "
-        "other binary as base64. The asset shows up under 媒体库 (Media) and can be downloaded. "
+        "for the user: Markdown/CSV/JSON/code as plain text, images / Office documents as "
+        "base64, or **a file you already generated in the workspace** by naming its path. "
+        "The asset shows up under 媒体库 (Media) and can be downloaded. "
         "Do NOT write files to host paths via shell/python: that is sandboxed and the user cannot "
         "reach the result."
     ),
@@ -807,13 +880,23 @@ registry.register(
             },
             "content": {
                 "type": "string",
-                "description": "Text content. Omit when passing content_base64.",
+                "description": "Text content. Omit when passing content_base64 or from_workspace.",
             },
             "content_base64": {
                 "type": "string",
                 "description": (
                     "Base64 of the raw bytes, for binary files (docx/xlsx/pptx/pdf/png…). "
                     "Line breaks and missing padding are tolerated."
+                ),
+            },
+            "from_workspace": {
+                "type": "string",
+                "description": (
+                    "Workspace-relative path of an existing file to publish, e.g. "
+                    "'reports/q3.docx'. Use this after generating a file inside the workspace "
+                    "(python-docx / openpyxl / shell) instead of base64-encoding its bytes — "
+                    "the sandbox workspace is the only place the tool can read from. "
+                    "Exactly one of content / content_base64 / from_workspace must be given."
                 ),
             },
             "mime_type": {
