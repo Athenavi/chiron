@@ -1,8 +1,20 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 import MessageList from '../MessageList.vue'
 import type { ChatItem } from '../chat-types'
+
+/**
+ * ⚠ 本文件**显式放宽超时**（2026-10-09）。
+ *
+ * 原因不是"测试挂住了"，而是它**本来就慢**：窗口化用例要跑很多轮 `nextTick` 才能收敛 ——
+ * 单独跑整个文件约 **8s**（每例 ~1s），在并行全量跑里会飙到 **5s+**，正好撞上 Vitest 的**默认 5s**
+ * （`vitest.config.ts` 没设 `testTimeout`）。
+ *
+ * 证据：第 143、145 两轮各见一次失败，且**两次单独跑都通过**、重跑也通过 ⇒ **负载敏感，不是缺陷** ✓。
+ * 所以这里**显式**放宽，而不是"多跑几次碰运气"：5s 对这些用例是个**任意的**上限 ✓。
+ */
+vi.setConfig({ testTimeout: 30000 })
 
 function makeItems(n: number): ChatItem[] {
   return Array.from({ length: n }, (_, i) => ({

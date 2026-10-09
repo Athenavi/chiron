@@ -382,7 +382,7 @@ HTTP/SSE；启动凭据是每次启动的 `crypto/rand` 32 字节 + 严格 Host/
 
 | 旧断言 | 判定 | 今天的证据 |
 |---|---|---|
-| `docs/` 8 份，且无 transcript 契约 | **过期** | `docs/` **17** 份 `.md`；`docs/transcript-contract.md`（**10,335 B**，2026-10-09 复测；原记 8,926 B）存在 |
+| `docs/` 8 份，且无 transcript 契约 | **过期** | `docs/` **17** 份 `.md`；`docs/transcript-contract.md`（**11,671 B / 165 行**，2026-10-09 再测；此前记 10,335 B / 157 行，原记 8,926 B / 142 行）存在 |
 | 引擎事件"~13 种" | **过期** | `python-engine/app/agent/runtime.py`（**159,375 B / 3,274 行**，2026-10-09 复测；原记 157,589 B / 3,237 行）**15** 个 `type` 字面量 |
 | 思考内联在 `text` 的 `[thinking]…[/thinking]` | **过期** | `runtime.py:1542-1545` 独立 `type="thinking"`；前端 `ChatView.vue:2157-2160` |
 | 三处各自切分思考 | **部分过期** | 三处仍在（`evals/observe.py` / `acp_adapter/mapping.py` / `chat-types.ts`），但**只针对模型自产的标记**；native reasoning 不再需要切分。实际切分点已增至 **5** 处（+`internal/cli/run.go`、`internal/api/submit_handler.go`） |
@@ -402,7 +402,7 @@ HTTP/SSE；启动凭据是每次启动的 `crypto/rand` 32 字节 + 严格 Host/
 | 聊天组件字节（50.7/47.4/43.4/42.5/30.1 KB） | **确认** | 51,961 / 48,589 / 44,446 / 43,498 / 30,851 B |
 | "35 个聊天组件" | **过期** | `components/chat/` 70 文件；**36** 个非测试文件 |
 | "transcript 体系 10 个模块" | **错（口径）** | 旧文只点名 **7** 个，且 `transcript*.ts` 恰好 **7** 个；"10"是 [transcript 契约](transcript-contract.md) §0 地图的行数（含 3 行非 transcript） |
-| transcript 模块字节（15.4/6.9/5.1/2.3 KB） | **确认** | 15,817 / 7,025 / 5,177 / 2,327 B |
+| transcript 模块字节（16.5/6.9/5.1/2.3 KB） | **确认**（2026-10-09 再测：最大者已从 15,817 长到 **16,865** B，其余三个不变） | **16,865** / 7,025 / 5,177 / 2,327 B |
 | `check:ui` 四个契约脚本 | **过期** | `frontend-vue/package.json` → **7** 个 |
 | 3 语言 + 键集检查 | **确认** | zh-CN / en-US / ar，各 14 文件 |
 
