@@ -233,15 +233,21 @@ async def test_all_non_tool_events_have_a_call_site(tmp_path: Path, monkeypatch:
     } <= seen
 
 
-# ── 批 G+：UserPromptSubmit 只观测 ───────────────────────────────────
+# ── 批 G+：UserPromptSubmit（2026-10-09 起**可阻断**）────────────────
 
 
-def test_user_prompt_submit_is_observe_only() -> None:
-    """`UserPromptSubmit` **不可阻断** —— 阻断用户自己的提示词是对用户的控制点。"""
+def test_user_prompt_submit_is_a_blocking_event() -> None:
+    """`UserPromptSubmit` **可阻断**（2026-10-09 拍板）。
+
+    理由与 `PreToolUse` 不冲突：它拦的是**用户自己的输入**（拒绝本轮），**不放宽**任何策略
+    —— 而 `PreToolUse` 那条纪律针对的是"不许成为绕过 `tool_policy` 的新通道"。
+    """
     assert events.USER_PROMPT_SUBMIT in events.ALL_EVENTS
-    assert events.USER_PROMPT_SUBMIT not in events.BLOCKING_EVENTS
-    assert events.BLOCKING_EVENTS == frozenset({events.PRE_TOOL_USE})
-    # 它也不允许 matcher（matcher 只对工具类事件有意义）
+    assert events.USER_PROMPT_SUBMIT in events.BLOCKING_EVENTS
+    assert events.BLOCKING_EVENTS == frozenset(
+        {events.PRE_TOOL_USE, events.USER_PROMPT_SUBMIT}
+    )
+    # 它仍**不允许 matcher**：matcher 的判定主体是工具名，这个事件没有主体
     assert events.matcher_applies(events.USER_PROMPT_SUBMIT) is False
 
 
@@ -251,12 +257,28 @@ async def test_user_prompt_submit_runs_and_is_audited(
     monkeypatch.setattr(settings, "hooks_enabled", True)
     hooks.register(events.USER_PROMPT_SUBMIT, "observer", NOOP_HOOK)
 
-    await hooks.user_prompt_submit(task=_task())
+    assert await hooks.user_prompt_submit(task=_task()) is None, "不 deny ⇒ 放行"
 
     entries = _entries(tmp_path)
     assert entries and entries[-1]["event"] == events.USER_PROMPT_SUBMIT
     assert entries[-1]["hook"] == "observer"
     assert entries[-1]["tenant"] == "t1"
+    assert entries[-1]["blocked"] is False
+
+
+async def test_user_prompt_submit_can_block_the_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """deny ⇒ 返回原因（调用方据此不进主循环），并留一条 `blocked=True` 审计。"""
+    monkeypatch.setattr(settings, "hooks_enabled", True)
+    hooks.register(events.USER_PROMPT_SUBMIT, "deny_prompt", DENY_HOOK)
+
+    blocked = await hooks.user_prompt_submit(task=_task())
+
+    assert blocked is not None and "deny_prompt" in blocked
+    last = _entries(tmp_path)[-1]
+    assert last["event"] == events.USER_PROMPT_SUBMIT
+    assert last["blocked"] is True
 
 
 # ── 批 G+：一个事件的累计预算 ────────────────────────────────────────
@@ -329,3 +351,29 @@ def test_startup_warning_when_user_hooks_enabled(
 def test_deployment_owner_is_default() -> None:
     hooks.register(events.STOP, "d", NOOP_HOOK)
     assert hooks.registry.all()[0].owner == OWNER_DEPLOYMENT
+
+
+# ── 子进程两端的编码契约（UTF-8）──────────────────────────────────────────────
+
+
+async def test_non_ascii_payload_survives_the_subprocess(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`plugin_runner` 的 stdin/stdout 都显式按 **UTF-8**（不是 locale 编码）。
+
+    此前它用 `sys.stdin.read()` / `print`：走的是**进程 locale 编码**（Windows 上通常是 cp936），
+    而宿主按 UTF-8 解码 ⇒ 源码或结果含非 ASCII 时损坏（实测：hook 源码含中文，子进程
+    `ast.parse` 直接报非 UTF-8 语法错误）。这一条把"两端同源"钉住。
+    """
+    monkeypatch.setattr(settings, "hooks_enabled", True)
+    cn_hook = (
+        "def main(input):\n"
+        '    name = "钩子"\n'
+        '    return {"decision": "deny", "reason": name + " 拒绝：中文原因"}\n'
+    )
+    hooks.register(events.PRE_TOOL_USE, "cn", cn_hook)
+
+    blocked = await hooks.before_tool_use(task=_task(), tool_call=_call())
+
+    assert blocked is not None, "含非 ASCII 的 hook 必须照样能跑"
+    assert "中文原因" in blocked, "原因文本必须原样传回（不被 locale 编码弄坏）"

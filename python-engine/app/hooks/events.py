@@ -44,10 +44,12 @@ ALL_EVENTS: frozenset[str] = frozenset(
     }
 )
 
-#: 可阻断主流程的事件集合（方案 03 §3.2）。**只有** `PreToolUse` 在内 ——
-#: 让 hook 只能收紧、不能放宽工具策略，否则它就成了绕过 `tool_policy`
-#: 分级判定的新通道。
-BLOCKING_EVENTS: frozenset[str] = frozenset({PRE_TOOL_USE})
+#: 可阻断主流程的事件集合。最初**只有** `PreToolUse` —— 让 hook 只能收紧、不能放宽工具策略，
+#: 否则它就成了绕过 `tool_policy` 分级判定的新通道。
+#: **2026-10-09 拍板**把 `UserPromptSubmit` 也纳入（原本是"只观测"）：它拦的是**用户自己的
+#: 输入**（拒绝本轮），并不放宽任何策略，因此与上面那条理由不冲突。**两者语义不同** ——
+#: `PreToolUse` = 拒绝一次工具调用；`UserPromptSubmit` = 拒绝这一轮提示词。
+BLOCKING_EVENTS: frozenset[str] = frozenset({PRE_TOOL_USE, USER_PROMPT_SUBMIT})
 
 #: `matcher` 只对**工具类事件**有意义（判定主体是工具名）。其余事件带 `matcher`
 #: 一律**拒绝**：与其为它们发明一个"主体"（会话来源 / 常量 `agent_type`），

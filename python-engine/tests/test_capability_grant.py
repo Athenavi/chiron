@@ -81,3 +81,48 @@ def test_narrowing_semantics_are_distinct(value: list[str] | None):
         assert runner._resolve_tools(None, "normal", 1, 3) is not None  # noqa: SLF001
     else:
         assert runner._resolve_tools(None, "normal", 1, 3) == []  # noqa: SLF001
+
+
+# ── A4 的**声明面**：能力与语义早已在引擎侧（上面几条），这里钉"模型能不能用到它" ──
+
+
+def test_tool_schema_exposes_call_tools():
+    """`call_tools` 必须在委派工具的 parameters 里 —— 否则模型看不见，能力等于不存在。
+
+    同族教训（`vendor/规划.md` §4）：`media_create` 曾"注册了但不在 `CORE_TOOL_NAMES`"，
+    于是模型绕道写宿主路径 —— **"有工具" ≠ "模型知道有这个工具"**。
+    """
+    from app.tools.registry import registry
+
+    tool = registry.get("subagent")
+    assert tool is not None, "subagent 工具必须已注册"
+
+    prop = tool.parameters["properties"]["call_tools"]
+    assert prop["type"] == "array"
+    assert prop["items"]["type"] == "string"
+
+
+def test_handler_signature_accepts_call_tools():
+    """schema 与 handler 签名必须**同时**有它：只改一处等于"声明面与实现分叉"。"""
+    import inspect
+
+    from app.tools.subagent import subagent
+
+    assert "call_tools" in inspect.signature(subagent).parameters
+
+
+def test_call_tools_is_passed_at_every_construction_site():
+    """接线：每处 `SubAgentRunner(...)` 都要把它传下去。
+
+    为什么用源码级断言：漏传**不会报错**，只会让"收窄"在某个入口（这里是 `target=` 的
+    `_run_child` 与默认路径）静默失效 —— 那正是"改了 A 忘了 B"最典型的形态。
+    """
+    import pathlib
+
+    src = (
+        pathlib.Path(__file__).resolve().parents[1] / "app" / "tools" / "subagent.py"
+    ).read_text(encoding="utf-8")
+
+    constructions = src.count("SubAgentRunner(")
+    assert constructions == 2, f"构造点数量变了（{constructions}）—— 请检查是否每处都要传 call_tools"
+    assert src.count("call_tools=call_tools") == constructions

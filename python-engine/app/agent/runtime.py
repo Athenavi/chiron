@@ -1168,11 +1168,20 @@ class AgentRuntime:
             # 默认关时空操作；其内部所有异常都被吞掉，不改变主流程。
             await hooks.session_start(task=task)
 
-            # ── 生命周期 hook：UserPromptSubmit（fire-and-forget，批 G+）──
+            # ── 生命周期 hook：UserPromptSubmit（批 G+；2026-10-09 起**可阻断**）──
             # 落点：输入护栏校验之后、主循环之前（提示词此刻已在 `task` 上）。
-            # **只观测**：不可阻断 —— 阻断用户自己的提示词是对用户的控制点，
-            # 与 `PreToolUse` 收紧工具策略性质不同（见 docs/hook-protocol-design.md §4.1）。
-            await hooks.user_prompt_submit(task=task)
+            # 返回非空 = 运维声明"这一轮不许进"：以 `guardrail_blocked` 事件回给前端并结束本轮
+            # （复用输入护栏同一条通道，不发明新事件）。与输入护栏是**叠加**关系：
+            # 护栏先跑，hook 只是又一道闸；它**不放宽**任何策略。
+            submitted = await hooks.user_prompt_submit(task=task)
+            if submitted:
+                logger.warning("UserPromptSubmit hook blocked (task=%s)", task.id)
+                yield AgentEvent(
+                    type="guardrail_blocked",
+                    content=submitted,
+                    trace_id=trace_id,
+                )
+                return
 
             # ── 0. 解析运行模式（persona/工具集/上下文/压缩策略） ──
             mode_cfg: ModeConfig = get_mode_config((task.llm_config or {}).get("mode"))
