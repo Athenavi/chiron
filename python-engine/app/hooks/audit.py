@@ -27,6 +27,9 @@ HOOK_AUDIT_FILENAME = "hooks_audit.jsonl"
 #: `reason` 落盘前的截断长度（脱敏之后）。
 REASON_MAX_CHARS = 200
 
+#: `command`（`command` 形态的命令摘要）落盘前的截断长度（脱敏之后）。
+COMMAND_MAX_CHARS = 200
+
 #: 落盘目录覆盖（None = CWD 下 `logs/`）。测试通过 monkeypatch 指向 tmp_path。
 AUDIT_DIR: Path | None = None
 
@@ -58,6 +61,24 @@ def _summarize_reason(reason: str) -> str:
     return text
 
 
+def _summarize_command(command: str) -> str:
+    """脱敏 + 截断 `command` 形态的命令文本（与 `_summarize_reason` 同源同规则）。
+
+    命令文本同样可能夹带密钥（运维脚本里写死的 token 也会出现在命令行上），
+    且长度不受限 —— 因此与 `reason` 一样必须过同一套规则集。
+    """
+    text = command or ""
+    try:
+        from app.subagent.redact import redact_text
+
+        text, _hits = redact_text(text)
+    except Exception:  # noqa: BLE001 — 脱敏不可用不应阻断审计
+        pass
+    if len(text) > COMMAND_MAX_CHARS:
+        return f"{text[:COMMAND_MAX_CHARS]}...(truncated)"
+    return text
+
+
 def record_hook(
     *,
     event: str,
@@ -71,6 +92,9 @@ def record_hook(
     blocked: bool = False,
     outcome: str = "",
     reason: str | None = None,
+    handler: str = "",
+    command: str | None = None,
+    truncated: bool = False,
 ) -> None:
     """记录一次 hook 执行（同步写，失败不阻断调用方）。
 
@@ -84,6 +108,10 @@ def record_hook(
         blocked: 本次执行是否**阻断**了工具执行。
         outcome: `ok` / `error` / `timeout` / `blocked` / `register_denied` / ...
         reason: 补充原因（会脱敏 + 截断）。
+        handler: 执行形态（`python` / `command` / `webhook`，批次 2b/3 新增）；空串表示不适用。
+        command: 运维声明的**目标摘要** —— `command` 形态是命令文本、`webhook` 形态是目标 URL
+            （脱敏 + 截断）；`python` 形态不写该字段。
+        truncated: 输出是否被截断（批次 2b 新增，只在真发生截断时落字段）。
     """
     if not HOOK_AUDIT_ENABLED:
         return
@@ -102,6 +130,12 @@ def record_hook(
             "blocked": blocked,
             "exit_code": exit_code,
         }
+        if handler:
+            entry["handler"] = handler
+        if command:
+            entry["command"] = _summarize_command(command)
+        if truncated:
+            entry["truncated"] = True
         if duration_ms is not None:
             entry["duration_ms"] = duration_ms
         if reason:

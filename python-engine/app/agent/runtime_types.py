@@ -45,6 +45,11 @@ class AgentTask:
     #: 各家 provider 的前缀缓存（OpenAI/DeepSeek 自动、Anthropic 显式）都靠它命中；
     #: 把每轮可能变化的记忆拼进去，会让**整段前缀**的缓存一起失效。
     memory_context: str = ""
+    #: 批 G+ 批次 4：本次 run 里 hook 通过 `additional_context` 提供的**参考资料**。
+    #: 与 `memory_context` 同款处置 —— 不拼进 `system_prompt`，而是作为**独立的 system 消息**
+    #: 插在记忆之后（`_apply_system_prefix` 是 system 段的唯一定形点）。
+    #: 默认空列表 ⇒ 不开 `hooks_allow_context_injection` 时它永远是空的（零行为变化）。
+    hook_contexts: list[str] = field(default_factory=list)
 
     @classmethod
     def parse(cls, data: dict[str, Any]) -> AgentTask:

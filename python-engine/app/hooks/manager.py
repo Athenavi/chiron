@@ -22,14 +22,32 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
-from app.hooks import audit, events
-from app.hooks.runner import HookOutcome, run_hook
+from app.hooks import audit, events, inject
+from app.hooks.runner import (
+    COMMAND_BLOCKED_PREFIX,
+    HookOutcome,
+    command_policy_error,
+    run_command_hook,
+    run_hook,
+    run_webhook_hook,
+    webhook_target_error,
+)
 
 logger = logging.getLogger(__name__)
 
 #: 注册来源：部署级（部署者，受信） / 租户级（用户自定义，需显式开放）。
 OWNER_DEPLOYMENT = "deployment"
 OWNER_USER = "user"
+
+#: 执行形态：`python`（既有：`plugin_runner.py` 沙箱子进程）·
+#: `command`（批次 2b：**运维声明**的本地命令，独立开关默认关）·
+#: `webhook`（批次 3：**出站 POST** 到运维声明的 URL，独立开关 + host 白名单，默认关）。
+HANDLER_PYTHON = "python"
+HANDLER_COMMAND = "command"
+HANDLER_WEBHOOK = "webhook"
+
+#: 已知的执行形态（注册时校验；`events.ALL_EVENTS` 之于事件名的同款作用）。
+HANDLERS: frozenset[str] = frozenset({HANDLER_PYTHON, HANDLER_COMMAND, HANDLER_WEBHOOK})
 
 
 @dataclass(frozen=True)
@@ -38,7 +56,7 @@ class Hook:
 
     event: str
     name: str
-    code: str
+    code: str = ""
     owner: str = OWNER_DEPLOYMENT
     #: 匹配模式（空 = 该事件的所有调用都跑）。**只对工具类事件合法**（`events.MATCHER_EVENTS`）。
     #: 语义是**锚定**匹配（`re.fullmatch`）—— 未锚定会让"只想匹配 `file`"的钩子
@@ -46,6 +64,17 @@ class Hook:
     matcher: str = ""
     #: `matcher` 的编译结果（注册时编译一次；非法正则在注册处即被拒绝，不会拖到执行期）。
     matcher_re: re.Pattern[str] | None = field(default=None, repr=False, compare=False)
+    #: 执行形态（`python` / `command` / `webhook`）。`command` 用 `command`、`webhook` 用 `url`。
+    handler: str = HANDLER_PYTHON
+    #: `command` 形态的命令文本（其余形态为空 —— python 的脚本定义在 `code` 里）。
+    command: str = ""
+    #: `webhook` 形态的目标 URL（其余形态为空）。
+    url: str = ""
+
+    @property
+    def target(self) -> str:
+        """审计里要记的"**运维声明的目标摘要**"（命令文本或 URL）；无目标时为空串。"""
+        return self.command or self.url
 
 
 class HookRegistry:
@@ -97,6 +126,9 @@ def _blocking_decision(outcome: HookOutcome) -> str | None:
     只有 hook **成功返回**且**显式 deny** 才算阻断；超时/崩溃/非法输出一律**放行** ——
     对接"超时按失败处理但不阻断主流程"（方案 03 §3.2）。这也保证了 PreToolUse 的
     失败是 fail-open 而非 fail-closed（否则 hook 一崩就把所有工具调用掐死）。
+
+    `command` 形态无需第二套判定：`run_command_hook` 已把**退出码 2** 折成
+    `{"decision": "deny", ...}`，于是两种形态在这里合流（`docs/hook-protocol-design.md` §4.4）。
     """
     if not outcome.success:
         return None
@@ -107,6 +139,46 @@ def _blocking_decision(outcome: HookOutcome) -> str | None:
     if not denied:
         return None
     return str(output.get("reason") or output.get("message") or "denied by hook")
+
+
+def _record_command_exec_audit(context: dict[str, Any], hook: Hook, outcome: HookOutcome) -> None:
+    """`command` 形态**额外**落一条 exec 审计（`tool="hook_command"`）。
+
+    为什么两处都记：`hooks_audit.jsonl` 是 hook 自己的流水（事件 + 判定 + 阻断），
+    `exec_audit.jsonl` 是"**每条起进程的路径都留痕**"那一族，且**只有它会跨副本集中
+    摄取**（N4）—— 运维声明的本地命令是本批次新增的可执行面，出事时必须能在集中审计里
+    查到，而不是只留在某个副本的本地目录里。
+
+    身份**显式传入**：`SessionStart` / `UserPromptSubmit` 触发点早于 runtime 的
+    `set_tool_context`，那时 contextvars 还是空的（`exec_audit` 默认从那里取）。
+    """
+    from app.tools.exec_audit import (
+        OUTCOME_BLOCKED,
+        OUTCOME_ERROR,
+        OUTCOME_OK,
+        OUTCOME_TIMEOUT,
+        record_execution,
+    )
+
+    if outcome.timed_out:
+        outcome_label = OUTCOME_TIMEOUT
+    elif str(outcome.error or "").startswith(COMMAND_BLOCKED_PREFIX):
+        outcome_label = OUTCOME_BLOCKED
+    elif not outcome.success:
+        outcome_label = OUTCOME_ERROR
+    else:
+        outcome_label = OUTCOME_OK
+    record_execution(
+        tool="hook_command",
+        command=hook.command,
+        outcome=outcome_label,
+        exit_code=outcome.exit_code,
+        reason=outcome.error,
+        duration_ms=outcome.duration_ms,
+        tenant=str(context.get("tenant_id", "")),
+        user=str(context.get("user_id", "")),
+        session=str(context.get("session_id", "")),
+    )
 
 
 class HookManager:
@@ -121,10 +193,13 @@ class HookManager:
         self,
         event: str,
         name: str,
-        code: str,
+        code: str = "",
         *,
         owner: str = OWNER_DEPLOYMENT,
         matcher: str = "",
+        handler: str = HANDLER_PYTHON,
+        command: str = "",
+        url: str = "",
     ) -> bool:
         """注册一个 hook，返回是否成功。
 
@@ -137,9 +212,38 @@ class HookManager:
 
         `matcher`（批 G+ 批次 1）：**锚定**正则，只对工具类事件合法；非法正则或
         用错事件一律**当场拒绝并留审计** —— 配了却不生效是最难查的一类问题。
+
+        `handler`（批 G+ 批次 2b/3）：`python`（默认）/ `command` / `webhook`。后两者是
+        **运维面**的能力，因此注册处就设闸：独立的开关默认关 + 目标必须在各自的 allowlist 内
+        （fail-closed），不满足一律拒绝并留审计。
         """
         if event not in events.ALL_EVENTS:
             logger.warning("reject hook %r: unknown event %r", name, event)
+            return False
+        if handler not in HANDLERS:
+            audit.record_hook(
+                event=event,
+                hook=name,
+                owner=owner,
+                outcome="register_denied",
+                reason=f"unknown handler type {handler!r}",
+            )
+            logger.warning("reject hook %r on %s: unknown handler type %r", name, event, handler)
+            return False
+        policy = None
+        if handler == HANDLER_COMMAND:
+            policy = command_policy_error(command)
+        elif handler == HANDLER_WEBHOOK:
+            policy = webhook_target_error(url)
+        if policy:
+            audit.record_hook(
+                event=event,
+                hook=name,
+                owner=owner,
+                outcome="register_denied",
+                reason=policy,
+            )
+            logger.warning("reject %s hook %r on %s: %s", handler, name, event, policy)
             return False
         compiled: re.Pattern[str] | None = None
         if matcher:
@@ -190,6 +294,9 @@ class HookManager:
                 owner=owner,
                 matcher=matcher,
                 matcher_re=compiled,
+                handler=handler,
+                command=command,
+                url=url,
             )
         )
         return True
@@ -200,12 +307,19 @@ class HookManager:
     # ── 事件执行 ──────────────────────────────────────────────────────
 
     async def _trigger(
-        self, event: str, context: dict[str, Any]
+        self, event: str, context: dict[str, Any], *, task: Any = None
     ) -> list[tuple[Hook, HookOutcome]]:
         """执行某事件中 **matcher 命中**的 hook，逐个落审计，返回 `(hook, outcome)` 列表。
 
+        `task`（批次 4）：传入时把各 hook 输出的 `additional_context` **收集**到
+        `task.hook_contexts`；注入本身由 runtime 在 system 段定形时完成（`app/hooks/inject.py`）。
+        `None` = 不收集（例如没有 task 的调用方）。
+
         - 默认关时立即返回空列表（零行为变化）；
         - 无 `matcher` 的 hook 一律执行；有 `matcher` 的按**锚定**匹配工具名（见 `Hook.matcher`）；
+        - 按 `Hook.handler` **分派形态**：`python` 走 `plugin_runner` 沙箱，`command` 走
+          运维声明的本地命令（并**额外**落一条 `exec_audit`，见 `_record_command_exec_audit`），
+          `webhook` 走**出站 POST**（不起进程，故不写 exec 审计 —— 那不是"执行路径"）；
         - **一个事件的累计预算**（`hooks_event_budget_seconds`）封顶总耗时：没有它时
           最坏情况是 `N × 单 hook 超时` 按 hook 数线性拖慢每个工具调用。预算耗尽后
           后续 hook **不执行**，但会留一条 `budget_exhausted` 审计（不静默跳过）；
@@ -242,12 +356,27 @@ class HookManager:
                 )
                 break
             try:
-                outcome = await run_hook(
-                    name=hook.name,
-                    code=hook.code,
-                    context=context,
-                    timeout=min(timeout, remaining),
-                )
+                if hook.handler == HANDLER_COMMAND:
+                    outcome = await run_command_hook(
+                        name=hook.name,
+                        command=hook.command,
+                        context=context,
+                        timeout=min(timeout, remaining),
+                    )
+                elif hook.handler == HANDLER_WEBHOOK:
+                    outcome = await run_webhook_hook(
+                        name=hook.name,
+                        url=hook.url,
+                        context=context,
+                        timeout=min(timeout, remaining),
+                    )
+                else:
+                    outcome = await run_hook(
+                        name=hook.name,
+                        code=hook.code,
+                        context=context,
+                        timeout=min(timeout, remaining),
+                    )
             except Exception as exc:  # noqa: BLE001 — hook 失败不影响主流程
                 logger.warning("hook %r raised host-side error: %s", hook.name, exc)
                 outcome = HookOutcome(
@@ -269,8 +398,16 @@ class HookManager:
                 exit_code=outcome.exit_code,
                 outcome=_outcome_label(outcome),
                 reason=outcome.error if not outcome.success else None,
+                handler=hook.handler,
+                # 运维声明的**目标摘要**（`command` 形态是命令文本、`webhook` 形态是 URL）。
+                command=hook.target or None,
+                truncated=outcome.truncated,
             )
+            if hook.handler == HANDLER_COMMAND:
+                _record_command_exec_audit(context, hook, outcome)
             results.append((hook, outcome))
+        if task is not None:
+            inject.collect(task, results)
         return results
 
     def _tool_context(
@@ -298,6 +435,7 @@ class HookManager:
                 tenant_id=_attr(task, "tenant_id"),
                 user_id=_attr(task, "user_id"),
             ),
+            task=task,
         )
 
     async def user_prompt_submit(self, *, task: Any) -> None:
@@ -317,6 +455,7 @@ class HookManager:
                 tenant_id=_attr(task, "tenant_id"),
                 user_id=_attr(task, "user_id"),
             ),
+            task=task,
         )
 
     async def stop(self, *, task: Any) -> None:
@@ -331,6 +470,7 @@ class HookManager:
                 tenant_id=_attr(task, "tenant_id"),
                 user_id=_attr(task, "user_id"),
             ),
+            task=task,
         )
 
     async def before_tool_use(self, *, task: Any, tool_call: dict[Any, Any]) -> str | None:
@@ -343,7 +483,7 @@ class HookManager:
         if not settings.hooks_enabled:
             return None
         context = self._tool_context(events.PRE_TOOL_USE, task, tool_call)
-        for hook, outcome in await self._trigger(events.PRE_TOOL_USE, context):
+        for hook, outcome in await self._trigger(events.PRE_TOOL_USE, context, task=task):
             reason = _blocking_decision(outcome)
             if reason:
                 # 追加一条 blocked=True 的审计：区分"执行了但放行"与"执行了且拦下"。
@@ -359,6 +499,9 @@ class HookManager:
                     blocked=True,
                     outcome="blocked",
                     reason=reason,
+                    handler=hook.handler,
+                    command=hook.target or None,
+                    truncated=outcome.truncated,
                 )
                 return f"blocked by PreToolUse hook '{hook.name}': {reason}"
         return None
@@ -369,14 +512,16 @@ class HookManager:
             return
         failed = isinstance(result, dict) and bool(result.get("error"))
         event = events.POST_TOOL_USE_FAILURE if failed else events.POST_TOOL_USE
-        await self._trigger(event, self._tool_context(event, task, tool_call, result))
+        await self._trigger(event, self._tool_context(event, task, tool_call, result), task=task)
 
     async def subagent_start(self, *, task: Any, tool_call: dict[Any, Any]) -> None:
         """`SubagentStart` —— fire-and-forget。"""
         if not settings.hooks_enabled:
             return
         await self._trigger(
-            events.SUBAGENT_START, self._tool_context(events.SUBAGENT_START, task, tool_call)
+            events.SUBAGENT_START,
+            self._tool_context(events.SUBAGENT_START, task, tool_call),
+            task=task,
         )
 
     async def subagent_stop(
@@ -388,6 +533,7 @@ class HookManager:
         await self._trigger(
             events.SUBAGENT_STOP,
             self._tool_context(events.SUBAGENT_STOP, task, tool_call, result),
+            task=task,
         )
 
 

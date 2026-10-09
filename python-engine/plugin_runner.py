@@ -85,11 +85,25 @@ def _run_plugin(guard, payload: dict) -> dict:
     return {"success": True, "output": output}
 
 
+def _write_stdout(text: str) -> None:
+    """把结果按 **UTF-8** 写 stdout。
+
+    为什么不用 `print`：它走的是**进程 locale 编码**（Windows 上通常是 cp936），而宿主
+    （`app/hooks/runner.py` / `app/api/plugins.py`）按 **UTF-8** 解码 —— 内容含非 ASCII 时
+    会变成乱码或直接失败（实测：hook 源码含中文 ⇒ 宿主拿到的 code 已损坏 ⇒ `ast.parse` 报
+    非 UTF-8 语法错误）。两端同源（UTF-8）才算契约。
+    """
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def main() -> int:
     try:
-        payload = json.loads(sys.stdin.read())
-    except json.JSONDecodeError as e:
-        print(json.dumps({"success": False, "error": f"invalid runner payload: {e}"}))
+        # 同款对称：宿主发的是 **UTF-8 字节**，这里必须显式按 UTF-8 解码，
+        # 不能依赖 `sys.stdin.read()` 的 locale 编码。
+        payload = json.loads(sys.stdin.buffer.read().decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as e:
+        _write_stdout(json.dumps({"success": False, "error": f"invalid runner payload: {e}"}))
         return 0
 
     try:
@@ -117,7 +131,7 @@ def main() -> int:
             "output": str(result.get("output")) if "output" in result else None,
             "error": result.get("error") or "plugin output is not JSON-serializable (stringified)",
         }
-    print(json.dumps(result, ensure_ascii=False, default=str))
+    _write_stdout(json.dumps(result, ensure_ascii=False, default=str))
     return 0
 
 
