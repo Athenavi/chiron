@@ -20,4 +20,8 @@ export default {
   theme: "主题",
   theme_style: "主题风格",
   theme_settings: "主题设置",
+  tab_stability: "限流与稳定性",
+  tab_business: "业务配置",
+  tab_connections: "连接与密钥",
+  tab_ops: "运维片段",
 }

@@ -1,12 +1,24 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { Card, Row, Col, Form, FormItem, InputNumber, Input, InputPassword, Select, Button, Switch, Slider, message } from 'ant-design-vue'
+import { Card, Row, Col, Form, FormItem, InputNumber, Input, InputPassword, Select, Button, Switch, Slider, message, Tabs, TabPane } from 'ant-design-vue'
 import { saveSettings, getSettings, listLlmProviders } from '@/api/admin'
+import { useTabbedQuery } from '@/composables/useTabbedQuery'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const saving = ref(false)
 const loading = ref(false)
+
+/**
+ * Tab 与 `?tab=` 双向同步：**与 /admin/datastores 共用同一份实现**
+ * （`composables/useTabbedQuery.ts`，`AdminTabbedView` 也用它）—— 不复制这套逻辑，
+ * 否则以后修一处漏一处。默认落在「限流与稳定性」。
+ */
+const { activeTab, select: onTabChange } = useTabbedQuery({
+  routePath: '/admin/settings',
+  defaultTab: 'stability',
+  tabKeys: ['stability', 'business', 'connections', 'ops'],
+})
 
 /** 保存失败提示：优先 Error.message（调用方/axios 抛出时已带说明），取不到用兜底文案 */
 function saveErrorText(err: unknown): string {
@@ -408,629 +420,658 @@ onMounted(async () => {
 
 <template>
   <div class="settings">
-    <Row :gutter="16">
-      <!-- 限流配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('common.rate_limit_config')">
-          <Form
-            :model="rateLimitConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.global_per_minute')">
-              <InputNumber
-                v-model:value="rateLimitConfig.global"
-                :min="100"
-                :max="1000000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('admin.per_tenant_per_minute')">
-              <InputNumber
-                v-model:value="rateLimitConfig.tenant"
-                :min="10"
-                :max="100000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('admin.per_user_per_minute')">
-              <InputNumber
-                v-model:value="rateLimitConfig.user"
-                :min="1"
-                :max="10000"
-                style="width: 100%"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveRateLimit"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.takes_effect_immediately_after_saving_hot_reload') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- 降级配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('errors.failover_config')">
-          <Form
-            :model="degradationConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('errors.enable_failover')">
-              <Switch v-model:checked="degradationConfig.enabled" />
-            </FormItem>
-            <FormItem :label="$t('common.mild_overload_threshold')">
-              <InputNumber
-                v-model:value="degradationConfig.lightThreshold"
-                :min="10000"
-                :max="1000000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.moderate_overload_threshold')">
-              <InputNumber
-                v-model:value="degradationConfig.mediumThreshold"
-                :min="50000"
-                :max="1000000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.severe_overload_threshold')">
-              <InputNumber
-                v-model:value="degradationConfig.heavyThreshold"
-                :min="100000"
-                :max="1000000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.vip_priority')">
-              <Switch v-model:checked="degradationConfig.vipPriority" />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveDegradation"
-          >
-            {{ $t('common.save') }}
-          </Button>
-        </Card>
-      </Col>
-
-      <!-- 缓存配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('admin.cache_config')">
-          <Form
-            :model="cacheConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.l1_capacity')">
-              <InputNumber
-                v-model:value="cacheConfig.l1Capacity"
-                :min="100"
-                :max="10000"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem label="L2 TTL">
-              <InputNumber
-                v-model:value="cacheConfig.l2Ttl"
-                :min="60"
-                :max="86400"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('admin.semantic_cache_threshold')">
-              <Slider
-                v-model:value="cacheConfig.semanticThreshold"
-                :min="0.5"
-                :max="1"
-                :step="0.01"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.enable_prefetch')">
-              <Switch v-model:checked="cacheConfig.prefetchEnabled" />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveCache"
-          >
-            {{ $t('common.save') }}
-          </Button>
-        </Card>
-      </Col>
-
-      <!-- API Key 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('common.api_key_config')">
-          <Form
-            :model="apiKeyConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.circuit_breaker_threshold')">
-              <InputNumber
-                v-model:value="apiKeyConfig.circuitBreakerThreshold"
-                :min="1"
-                :max="100"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('errors.restore_timeout')">
-              <InputNumber
-                v-model:value="apiKeyConfig.recoveryTimeout"
-                :min="10"
-                :max="3600"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.weight_decay')">
-              <Slider
-                v-model:value="apiKeyConfig.weightDecay"
-                :min="0.1"
-                :max="1"
-                :step="0.1"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.auto_recover')">
-              <Switch v-model:checked="apiKeyConfig.autoRecovery" />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveApiKey"
-          >
-            {{ $t('common.save') }}
-          </Button>
-        </Card>
-      </Col>
-    </Row>
-
-    <!-- 迁移自 .env 的业务配置（持久化到 DB system_settings） -->
-    <Row
-      :gutter="16"
-      class="config-row"
+    <!-- Tab 划分**完全沿用本页原有的三个 Row 分组 + 尾部只读片段**，不重排任何卡片：
+           限流与稳定性（Row@原 411）· 业务配置（Row@原 609，作者注释「迁移自 .env 的业务配置」）·
+           连接与密钥（Row@原 752，作者注释原话）· 运维片段（Nginx / 内核，只读可复制）。
+         `?tab=` 同步与 /admin/datastores 同一套实现（composables/useTabbedQuery.ts）。 -->
+    <Tabs
+      :active-key="activeTab"
+      @change="onTabChange"
     >
-      <!-- Agent 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
+      <TabPane
+        key="stability"
+        :tab="$t('settings.tab_stability')"
       >
-        <Card :title="$t('agent.agent_config')">
-          <Form
-            :model="agentConfig"
-            layout="vertical"
+        <Row :gutter="16">
+          <!-- 限流配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
           >
-            <FormItem :label="$t('chat.max_reasoning_rounds')">
-              <InputNumber
-                v-model:value="agentConfig.max_turns"
-                :min="1"
-                :max="100"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('common.max_tokens_per_call')">
-              <InputNumber
-                v-model:value="agentConfig.max_tokens"
-                :min="256"
-                :max="32768"
-                style="width: 100%"
-              />
-            </FormItem>
-            <FormItem :label="$t('chat.context_message_limit')">
-              <InputNumber
-                v-model:value="agentConfig.context_limit"
-                :min="1"
-                :max="100"
-                style="width: 100%"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveAgent"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- LLM / 模型配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('agent.model_config')">
-          <Form
-            :model="llmConfig"
-            layout="vertical"
-          >
-            <FormItem label="Provider">
-              <Select
-                v-model:value="llmConfig.provider"
-                style="width: 100%"
-              >
-                <Select.Option value="openai">
-                  OpenAI
-                </Select.Option>
-                <Select.Option value="anthropic">
-                  Anthropic
-                </Select.Option>
-                <Select.Option value="deepseek">
-                  DeepSeek
-                </Select.Option>
-              </Select>
-            </FormItem>
-            <FormItem :label="$t('agent.default_model')">
-              <Input
-                v-model:value="llmConfig.model"
-                placeholder="gpt-4o"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveLlm"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('agent.provider_model_persisted_to_db_takes_effect_after_restart_secret_values_encrypted_at_rest') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- 存储配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('common.storage_config')">
-          <Form
-            :model="storageConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.backend_type')">
-              <Select
-                v-model:value="storageConfig.backend"
-                style="width: 100%"
-              >
-                <Select.Option value="local">
-                  {{ $t('common.local_disk') }}
-                </Select.Option>
-                <Select.Option value="s3">
-                  S3 / MinIO
-                </Select.Option>
-              </Select>
-            </FormItem>
-            <FormItem :label="$t('common.storage_root')">
-              <Input
-                v-model:value="storageConfig.root"
-                placeholder="./workspace"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveStorage"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
-          </div>
-        </Card>
-      </Col>
-    </Row>
-
-    <!-- 连接与密钥配置（敏感值 AES-GCM 加密入库） -->
-    <Row
-      :gutter="16"
-      class="config-row"
-    >
-      <!-- Redis 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('admin.redis_config')">
-          <Form
-            :model="redisConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.address')">
-              <Input
-                v-model:value="redisConfig.addr"
-                placeholder="localhost:6379"
-              />
-            </FormItem>
-            <FormItem :label="$t('auth.password_encrypted_at_rest')">
-              <InputPassword
-                v-model:value="redisConfig.password"
-                :placeholder="$t('auth.empty_means_no_password')"
-              />
-            </FormItem>
-            <FormItem label="DB">
-              <InputNumber
-                v-model:value="redisConfig.db"
-                :min="0"
-                :max="15"
-                style="width: 100%"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveRedis"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('admin.hot_reloads_the_connection_after_saving_can_switch_redis_clusters') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- PostgreSQL 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('admin.database_postgresql_config')">
-          <Form
-            :model="postgresConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.dsn_encrypted_at_rest')">
-              <InputPassword
-                v-model:value="postgresConfig.dsn"
-                placeholder="postgres://user:pass@host:5432/chiron"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="savePostgres"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('admin.saved_to_db_switching_the_database_cluster_requires_a_restart_to_take_effect') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- CORS 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('common.cors_config')">
-          <Form
-            :model="corsConfig"
-            layout="vertical"
-          >
-            <FormItem :label="$t('common.allowed_origins_comma_separated')">
-              <Input
-                v-model:value="corsConfig.origins"
-                placeholder="http://localhost:5173,https://app.example.com"
-              />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveCors"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.takes_effect_after_restart') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- S3 / MinIO 配置 -->
-      <Col
-        :xs="24"
-        :sm="12"
-      >
-        <Card :title="$t('common.object_storage_s3_minio_config')">
-          <Form
-            :model="s3Config"
-            layout="vertical"
-          >
-            <FormItem label="Endpoint">
-              <Input
-                v-model:value="s3Config.endpoint"
-                placeholder="localhost:9000"
-              />
-            </FormItem>
-            <FormItem label="Bucket">
-              <Input
-                v-model:value="s3Config.bucket"
-                placeholder="chiron-media"
-              />
-            </FormItem>
-            <FormItem label="Access Key">
-              <Input v-model:value="s3Config.access_key" />
-            </FormItem>
-            <FormItem :label="$t('common.secret_key_encrypted_at_rest')">
-              <InputPassword v-model:value="s3Config.secret_key" />
-            </FormItem>
-            <FormItem :label="$t('common.enable_ssl')">
-              <Switch v-model:checked="s3Config.use_ssl" />
-            </FormItem>
-          </Form>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="saveS3"
-          >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.takes_effect_after_restart') }}
-          </div>
-        </Card>
-      </Col>
-
-      <!-- Python AI 引擎配置 -->
-      <Col
-        :xs="24"
-        :sm="24"
-      >
-        <Card :title="$t('common.python_ai_engine_config')">
-          <Row :gutter="16">
-            <Col
-              :xs="24"
-              :sm="12"
-            >
+            <Card :title="$t('common.rate_limit_config')">
               <Form
-                :model="pythonConfig"
+                :model="rateLimitConfig"
                 layout="vertical"
               >
-                <FormItem label="LLM Provider">
-                  <Select
-                    v-model:value="pythonConfig.llm_provider"
-                    :options="llmProviderOptions"
-                    show-search
-                    option-filter-prop="label"
+                <FormItem :label="$t('common.global_per_minute')">
+                  <InputNumber
+                    v-model:value="rateLimitConfig.global"
+                    :min="100"
+                    :max="1000000"
                     style="width: 100%"
                   />
                 </FormItem>
-                <FormItem :label="$t('agent.default_model')">
-                  <Input
-                    v-model:value="pythonConfig.llm_model"
-                    placeholder="deepseek-v4-flash"
-                  />
-                </FormItem>
-                <FormItem :label="$t('common.llm_api_key_encrypted_at_rest')">
-                  <InputPassword v-model:value="pythonConfig.llm_api_key" />
-                </FormItem>
-                <FormItem label="LLM Base URL">
-                  <Input
-                    v-model:value="pythonConfig.llm_base_url"
-                    placeholder="https://api.deepseek.com"
-                  />
-                </FormItem>
-              </Form>
-            </Col>
-            <Col
-              :xs="24"
-              :sm="12"
-            >
-              <Form
-                :model="pythonConfig"
-                layout="vertical"
-              >
-                <FormItem :label="$t('agent.embedding_model')">
-                  <Input
-                    v-model:value="pythonConfig.embedding_model"
-                    placeholder="text-embedding-3-small"
-                  />
-                </FormItem>
-                <FormItem :label="$t('agent.agent_max_rounds')">
+                <FormItem :label="$t('admin.per_tenant_per_minute')">
                   <InputNumber
-                    v-model:value="pythonConfig.max_turns"
-                    :min="1"
-                    :max="100"
-                    style="width: 100%"
-                  />
-                </FormItem>
-                <FormItem :label="$t('admin.queue_concurrency')">
-                  <InputNumber
-                    v-model:value="pythonConfig.queue_worker_concurrency"
-                    :min="1"
-                    :max="100"
-                    style="width: 100%"
-                  />
-                </FormItem>
-                <FormItem :label="$t('admin.l1_cache_capacity')">
-                  <InputNumber
-                    v-model:value="pythonConfig.cache_l1_capacity"
-                    :min="128"
+                    v-model:value="rateLimitConfig.tenant"
+                    :min="10"
                     :max="100000"
                     style="width: 100%"
                   />
                 </FormItem>
+                <FormItem :label="$t('admin.per_user_per_minute')">
+                  <InputNumber
+                    v-model:value="rateLimitConfig.user"
+                    :min="1"
+                    :max="10000"
+                    style="width: 100%"
+                  />
+                </FormItem>
               </Form>
-            </Col>
-          </Row>
-          <Button
-            type="primary"
-            :loading="saving"
-            @click="savePython"
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveRateLimit"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.takes_effect_immediately_after_saving_hot_reload') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- 降级配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
           >
-            {{ $t('common.save') }}
-          </Button>
-          <div class="config-note">
-            {{ $t('common.pulled_via_an_internal_endpoint_when_the_engine_starts_api_key_encrypted_at_rest') }}
-          </div>
+            <Card :title="$t('errors.failover_config')">
+              <Form
+                :model="degradationConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('errors.enable_failover')">
+                  <Switch v-model:checked="degradationConfig.enabled" />
+                </FormItem>
+                <FormItem :label="$t('common.mild_overload_threshold')">
+                  <InputNumber
+                    v-model:value="degradationConfig.lightThreshold"
+                    :min="10000"
+                    :max="1000000"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.moderate_overload_threshold')">
+                  <InputNumber
+                    v-model:value="degradationConfig.mediumThreshold"
+                    :min="50000"
+                    :max="1000000"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.severe_overload_threshold')">
+                  <InputNumber
+                    v-model:value="degradationConfig.heavyThreshold"
+                    :min="100000"
+                    :max="1000000"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.vip_priority')">
+                  <Switch v-model:checked="degradationConfig.vipPriority" />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveDegradation"
+              >
+                {{ $t('common.save') }}
+              </Button>
+            </Card>
+          </Col>
+
+          <!-- 缓存配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('admin.cache_config')">
+              <Form
+                :model="cacheConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.l1_capacity')">
+                  <InputNumber
+                    v-model:value="cacheConfig.l1Capacity"
+                    :min="100"
+                    :max="10000"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem label="L2 TTL">
+                  <InputNumber
+                    v-model:value="cacheConfig.l2Ttl"
+                    :min="60"
+                    :max="86400"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('admin.semantic_cache_threshold')">
+                  <Slider
+                    v-model:value="cacheConfig.semanticThreshold"
+                    :min="0.5"
+                    :max="1"
+                    :step="0.01"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.enable_prefetch')">
+                  <Switch v-model:checked="cacheConfig.prefetchEnabled" />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveCache"
+              >
+                {{ $t('common.save') }}
+              </Button>
+            </Card>
+          </Col>
+
+          <!-- API Key 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('common.api_key_config')">
+              <Form
+                :model="apiKeyConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.circuit_breaker_threshold')">
+                  <InputNumber
+                    v-model:value="apiKeyConfig.circuitBreakerThreshold"
+                    :min="1"
+                    :max="100"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('errors.restore_timeout')">
+                  <InputNumber
+                    v-model:value="apiKeyConfig.recoveryTimeout"
+                    :min="10"
+                    :max="3600"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.weight_decay')">
+                  <Slider
+                    v-model:value="apiKeyConfig.weightDecay"
+                    :min="0.1"
+                    :max="1"
+                    :step="0.1"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.auto_recover')">
+                  <Switch v-model:checked="apiKeyConfig.autoRecovery" />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveApiKey"
+              >
+                {{ $t('common.save') }}
+              </Button>
+            </Card>
+          </Col>
+        </Row>
+      </TabPane>
+
+      <TabPane
+        key="business"
+        :tab="$t('settings.tab_business')"
+      >
+        <!-- 迁移自 .env 的业务配置（持久化到 DB system_settings） -->
+        <Row
+          :gutter="16"
+          class="config-row"
+        >
+          <!-- Agent 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('agent.agent_config')">
+              <Form
+                :model="agentConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('chat.max_reasoning_rounds')">
+                  <InputNumber
+                    v-model:value="agentConfig.max_turns"
+                    :min="1"
+                    :max="100"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('common.max_tokens_per_call')">
+                  <InputNumber
+                    v-model:value="agentConfig.max_tokens"
+                    :min="256"
+                    :max="32768"
+                    style="width: 100%"
+                  />
+                </FormItem>
+                <FormItem :label="$t('chat.context_message_limit')">
+                  <InputNumber
+                    v-model:value="agentConfig.context_limit"
+                    :min="1"
+                    :max="100"
+                    style="width: 100%"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveAgent"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- LLM / 模型配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('agent.model_config')">
+              <Form
+                :model="llmConfig"
+                layout="vertical"
+              >
+                <FormItem label="Provider">
+                  <Select
+                    v-model:value="llmConfig.provider"
+                    style="width: 100%"
+                  >
+                    <Select.Option value="openai">
+                      OpenAI
+                    </Select.Option>
+                    <Select.Option value="anthropic">
+                      Anthropic
+                    </Select.Option>
+                    <Select.Option value="deepseek">
+                      DeepSeek
+                    </Select.Option>
+                  </Select>
+                </FormItem>
+                <FormItem :label="$t('agent.default_model')">
+                  <Input
+                    v-model:value="llmConfig.model"
+                    placeholder="gpt-4o"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveLlm"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('agent.provider_model_persisted_to_db_takes_effect_after_restart_secret_values_encrypted_at_rest') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- 存储配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('common.storage_config')">
+              <Form
+                :model="storageConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.backend_type')">
+                  <Select
+                    v-model:value="storageConfig.backend"
+                    style="width: 100%"
+                  >
+                    <Select.Option value="local">
+                      {{ $t('common.local_disk') }}
+                    </Select.Option>
+                    <Select.Option value="s3">
+                      S3 / MinIO
+                    </Select.Option>
+                  </Select>
+                </FormItem>
+                <FormItem :label="$t('common.storage_root')">
+                  <Input
+                    v-model:value="storageConfig.root"
+                    placeholder="./workspace"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveStorage"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.saved_to_db_runtime_consumer_items_take_effect_after_restart') }}
+              </div>
+            </Card>
+          </Col>
+        </Row>
+      </TabPane>
+
+      <TabPane
+        key="connections"
+        :tab="$t('settings.tab_connections')"
+      >
+        <!-- 连接与密钥配置（敏感值 AES-GCM 加密入库） -->
+        <Row
+          :gutter="16"
+          class="config-row"
+        >
+          <!-- Redis 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('admin.redis_config')">
+              <Form
+                :model="redisConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.address')">
+                  <Input
+                    v-model:value="redisConfig.addr"
+                    placeholder="localhost:6379"
+                  />
+                </FormItem>
+                <FormItem :label="$t('auth.password_encrypted_at_rest')">
+                  <InputPassword
+                    v-model:value="redisConfig.password"
+                    :placeholder="$t('auth.empty_means_no_password')"
+                  />
+                </FormItem>
+                <FormItem label="DB">
+                  <InputNumber
+                    v-model:value="redisConfig.db"
+                    :min="0"
+                    :max="15"
+                    style="width: 100%"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveRedis"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('admin.hot_reloads_the_connection_after_saving_can_switch_redis_clusters') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- PostgreSQL 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('admin.database_postgresql_config')">
+              <Form
+                :model="postgresConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.dsn_encrypted_at_rest')">
+                  <InputPassword
+                    v-model:value="postgresConfig.dsn"
+                    placeholder="postgres://user:pass@host:5432/chiron"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="savePostgres"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('admin.saved_to_db_switching_the_database_cluster_requires_a_restart_to_take_effect') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- CORS 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('common.cors_config')">
+              <Form
+                :model="corsConfig"
+                layout="vertical"
+              >
+                <FormItem :label="$t('common.allowed_origins_comma_separated')">
+                  <Input
+                    v-model:value="corsConfig.origins"
+                    placeholder="http://localhost:5173,https://app.example.com"
+                  />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveCors"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.takes_effect_after_restart') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- S3 / MinIO 配置 -->
+          <Col
+            :xs="24"
+            :sm="12"
+          >
+            <Card :title="$t('common.object_storage_s3_minio_config')">
+              <Form
+                :model="s3Config"
+                layout="vertical"
+              >
+                <FormItem label="Endpoint">
+                  <Input
+                    v-model:value="s3Config.endpoint"
+                    placeholder="localhost:9000"
+                  />
+                </FormItem>
+                <FormItem label="Bucket">
+                  <Input
+                    v-model:value="s3Config.bucket"
+                    placeholder="chiron-media"
+                  />
+                </FormItem>
+                <FormItem label="Access Key">
+                  <Input v-model:value="s3Config.access_key" />
+                </FormItem>
+                <FormItem :label="$t('common.secret_key_encrypted_at_rest')">
+                  <InputPassword v-model:value="s3Config.secret_key" />
+                </FormItem>
+                <FormItem :label="$t('common.enable_ssl')">
+                  <Switch v-model:checked="s3Config.use_ssl" />
+                </FormItem>
+              </Form>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="saveS3"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.takes_effect_after_restart') }}
+              </div>
+            </Card>
+          </Col>
+
+          <!-- Python AI 引擎配置 -->
+          <Col
+            :xs="24"
+            :sm="24"
+          >
+            <Card :title="$t('common.python_ai_engine_config')">
+              <Row :gutter="16">
+                <Col
+                  :xs="24"
+                  :sm="12"
+                >
+                  <Form
+                    :model="pythonConfig"
+                    layout="vertical"
+                  >
+                    <FormItem label="LLM Provider">
+                      <Select
+                        v-model:value="pythonConfig.llm_provider"
+                        :options="llmProviderOptions"
+                        show-search
+                        option-filter-prop="label"
+                        style="width: 100%"
+                      />
+                    </FormItem>
+                    <FormItem :label="$t('agent.default_model')">
+                      <Input
+                        v-model:value="pythonConfig.llm_model"
+                        placeholder="deepseek-v4-flash"
+                      />
+                    </FormItem>
+                    <FormItem :label="$t('common.llm_api_key_encrypted_at_rest')">
+                      <InputPassword v-model:value="pythonConfig.llm_api_key" />
+                    </FormItem>
+                    <FormItem label="LLM Base URL">
+                      <Input
+                        v-model:value="pythonConfig.llm_base_url"
+                        placeholder="https://api.deepseek.com"
+                      />
+                    </FormItem>
+                  </Form>
+                </Col>
+                <Col
+                  :xs="24"
+                  :sm="12"
+                >
+                  <Form
+                    :model="pythonConfig"
+                    layout="vertical"
+                  >
+                    <FormItem :label="$t('agent.embedding_model')">
+                      <Input
+                        v-model:value="pythonConfig.embedding_model"
+                        placeholder="text-embedding-3-small"
+                      />
+                    </FormItem>
+                    <FormItem :label="$t('agent.agent_max_rounds')">
+                      <InputNumber
+                        v-model:value="pythonConfig.max_turns"
+                        :min="1"
+                        :max="100"
+                        style="width: 100%"
+                      />
+                    </FormItem>
+                    <FormItem :label="$t('admin.queue_concurrency')">
+                      <InputNumber
+                        v-model:value="pythonConfig.queue_worker_concurrency"
+                        :min="1"
+                        :max="100"
+                        style="width: 100%"
+                      />
+                    </FormItem>
+                    <FormItem :label="$t('admin.l1_cache_capacity')">
+                      <InputNumber
+                        v-model:value="pythonConfig.cache_l1_capacity"
+                        :min="128"
+                        :max="100000"
+                        style="width: 100%"
+                      />
+                    </FormItem>
+                  </Form>
+                </Col>
+              </Row>
+              <Button
+                type="primary"
+                :loading="saving"
+                @click="savePython"
+              >
+                {{ $t('common.save') }}
+              </Button>
+              <div class="config-note">
+                {{ $t('common.pulled_via_an_internal_endpoint_when_the_engine_starts_api_key_encrypted_at_rest') }}
+              </div>
+            </Card>
+          </Col>
+        </Row>
+      </TabPane>
+
+      <TabPane
+        key="ops"
+        :tab="$t('settings.tab_ops')"
+      >
+        <!-- Nginx 配置 -->
+        <Card
+          :title="$t('common.nginx_tuning_config')"
+          class="config-card"
+        >
+          <template #extra>
+            <Button
+              type="primary"
+              ghost
+              @click="copyNginx"
+            >
+              {{ $t('common.copy_config') }}
+            </Button>
+          </template>
+          <pre class="code-block">{{ nginxConfig }}</pre>
         </Card>
-      </Col>
-    </Row>
 
-    <!-- Nginx 配置 -->
-    <Card
-      :title="$t('common.nginx_tuning_config')"
-      class="config-card"
-    >
-      <template #extra>
-        <Button
-          type="primary"
-          ghost
-          @click="copyNginx"
+        <!-- 内核调优 -->
+        <Card
+          :title="$t('common.kernel_tuning_config')"
+          class="config-card"
         >
-          {{ $t('common.copy_config') }}
-        </Button>
-      </template>
-      <pre class="code-block">{{ nginxConfig }}</pre>
-    </Card>
-
-    <!-- 内核调优 -->
-    <Card
-      :title="$t('common.kernel_tuning_config')"
-      class="config-card"
-    >
-      <template #extra>
-        <Button
-          type="primary"
-          ghost
-          @click="copyKernel"
-        >
-          {{ $t('common.copy_config') }}
-        </Button>
-      </template>
-      <pre class="code-block">{{ kernelConfig }}</pre>
-    </Card>
+          <template #extra>
+            <Button
+              type="primary"
+              ghost
+              @click="copyKernel"
+            >
+              {{ $t('common.copy_config') }}
+            </Button>
+          </template>
+          <pre class="code-block">{{ kernelConfig }}</pre>
+        </Card>
+      </TabPane>
+    </Tabs>
   </div>
 </template>
 

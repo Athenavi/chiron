@@ -15,6 +15,7 @@
 export const PRIVATE_KEY_PREFIXES: readonly string[] = [
   'chiron:composer-history', // 输入框历史（↑ 召回）
   'chat_sessions',           // 会话列表缓存
+  'chiron:chat-setup-tour',  // "未配置引导看过了"标记（按账号隔离，登出时清）
 ]
 
 /** 构造带账号命名空间的私有键；无账号时退化为 `:anonymous`（登出态本就不应写入）。 */

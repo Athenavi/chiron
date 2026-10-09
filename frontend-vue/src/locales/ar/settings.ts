@@ -20,4 +20,8 @@ export default {
   theme: "السمة",
   theme_style: "نمط السمة",
   theme_settings: "إعدادات السمة",
+  tab_stability: "تحديد المعدل والاستقرار",
+  tab_business: "إعدادات الأعمال",
+  tab_connections: "الاتصالات والمفاتيح",
+  tab_ops: "مقتطفات التشغيل",
 }

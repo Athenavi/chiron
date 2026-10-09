@@ -9,6 +9,7 @@ import type { ContextChip } from './contextChips'
 import MediaPickerDialog from './MediaPickerDialog.vue'
 import { useAuthStore } from '../../stores/auth'
 import { privateKey } from '../../utils/privateStorage'
+import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -924,6 +925,7 @@ defineExpose({ insertText })
       <Input.TextArea
         ref="textareaRef"
         v-model:value="input"
+        :data-tour="TOUR_ANCHORS.input"
         :rows="1"
         :auto-size="{ minRows: 1, maxRows: 8 }"
         :placeholder="inputPlaceholder"
@@ -1032,6 +1034,7 @@ defineExpose({ insertText })
           <span class="mode-label">{{ $t('agent.model') }}</span>
           <Select
             class="model-select"
+            :data-tour="TOUR_ANCHORS.modelPicker"
             :model-value="modelValue"
             :options="modelOptions"
             :loading="modelsLoading"

@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -638,7 +639,149 @@ func (h *AdminHandler) RedisSlowLog(w http.ResponseWriter, r *http.Request) {
 		OK(w, map[string]interface{}{"slow_log": []interface{}{}, "error": "redis error"})
 		return
 	}
-	OK(w, map[string]interface{}{"slow_log": res})
+	OK(w, map[string]interface{}{"slow_log": normalizeSlowLog(res)})
+}
+
+// normalizeSlowLog 把 SLOWLOG GET 的结果规范成**具名字段**。
+//
+// 为什么需要这一层：Redis 的返回形状随协议与版本而变 ——
+//   - RESP2（或 Redis < 7）：每条是**位置数组** `[id, timestamp, duration_us, [args…], client, name]`；
+//   - RESP3 / Redis ≥ 7：每条是**映射** `{id, timestamp, duration, command, client-addr, client-name}`。
+//
+// 而前端 `RedisManagementView.vue` 的表格列是 `Object.keys(第一条)` 生成的 ⇒ 直接丢位置数组过去，
+// 表头会变成 `0/1/2/…`（有数据、没列名）。前端已按
+// `id / timestamp / duration_us / command / args / client / name` 备好列名与**微秒**单位
+// （`SLOW_LABELS` + `common.elapsed_s` = 「耗时 (μs)」）⇒ 这里统一成那套键。
+//
+// 纯函数（喂 map / 喂数组都能测），与 DB 无关。
+func normalizeSlowLog(raw interface{}) []map[string]interface{} {
+	items, ok := raw.([]interface{})
+	if !ok {
+		return []map[string]interface{}{}
+	}
+	out := make([]map[string]interface{}, 0, len(items))
+	for _, it := range items {
+		var entry map[string]interface{}
+		switch v := it.(type) {
+		case []interface{}: // RESP2 / Redis < 7
+			if len(v) < 4 {
+				continue
+			}
+			cmd, args := splitSlowLogCommand(v[3])
+			entry = map[string]interface{}{
+				"id":          asInt64(v[0]),
+				"timestamp":   asInt64(v[1]),
+				"duration_us": asInt64(v[2]), // SLOWLOG 的耗时字段本身就是微秒
+				"command":     cmd,
+				"args":        args,
+			}
+			if len(v) >= 5 {
+				entry["client"] = asString(v[4])
+			}
+			if len(v) >= 6 {
+				entry["name"] = asString(v[5])
+			}
+		default: // RESP3 / Redis ≥ 7：映射
+			m := slowLogStringMap(v)
+			if len(m) == 0 {
+				continue
+			}
+			cmd, args := splitSlowLogCommand(m["command"])
+			entry = map[string]interface{}{
+				"id":          asInt64(m["id"]),
+				"timestamp":   asInt64(m["timestamp"]),
+				"duration_us": asInt64(m["duration"]),
+				"command":     cmd,
+				"args":        args,
+			}
+			if c, ok := m["client-addr"]; ok {
+				entry["client"] = asString(c)
+			}
+			if n, ok := m["client-name"]; ok {
+				entry["name"] = asString(n)
+			}
+		}
+		if entry != nil {
+			out = append(out, entry)
+		}
+	}
+	return out
+}
+
+// splitSlowLogCommand 把「参数数组」或「命令行字符串」统一拆成 (命令, 其余参数)。
+func splitSlowLogCommand(v interface{}) (string, string) {
+	switch t := v.(type) {
+	case []interface{}:
+		parts := make([]string, 0, len(t))
+		for _, p := range t {
+			parts = append(parts, asString(p))
+		}
+		if len(parts) == 0 {
+			return "", ""
+		}
+		return parts[0], strings.Join(parts[1:], " ")
+	default:
+		fields := strings.Fields(asString(v))
+		if len(fields) == 0 {
+			return "", ""
+		}
+		return fields[0], strings.Join(fields[1:], " ")
+	}
+}
+
+// slowLogStringMap 兼容 go-redis 在两种协议下给出的映射类型（键可能是 interface{}）。
+//
+// ⚠ 不能叫 `toStringMap`：`market_user.go:261` 已有同名函数（签名是 map[string]interface{} → map[string]string，
+// 用途完全不同）—— 第一版就这么撞了，包内重名直接编译失败。
+func slowLogStringMap(v interface{}) map[string]interface{} {
+	switch t := v.(type) {
+	case map[string]interface{}:
+		return t
+	case map[interface{}]interface{}:
+		out := make(map[string]interface{}, len(t))
+		for k, val := range t {
+			out[fmt.Sprint(k)] = val
+		}
+		return out
+	default:
+		return nil
+	}
+}
+
+func asString(v interface{}) string {
+	switch t := v.(type) {
+	case nil:
+		return ""
+	case string:
+		return t
+	case []byte:
+		return string(t)
+	default:
+		return fmt.Sprint(t)
+	}
+}
+
+func asInt64(v interface{}) int64 {
+	switch t := v.(type) {
+	case nil:
+		return 0
+	case int64:
+		return t
+	case int:
+		return int64(t)
+	case uint64:
+		return int64(t)
+	case float64:
+		return int64(t)
+	case string:
+		n, _ := strconv.ParseInt(strings.TrimSpace(t), 10, 64)
+		return n
+	case []byte:
+		n, _ := strconv.ParseInt(strings.TrimSpace(string(t)), 10, 64)
+		return n
+	default:
+		return 0
+	}
 }
 
 func (h *AdminHandler) RedisFlushAll(w http.ResponseWriter, r *http.Request) {

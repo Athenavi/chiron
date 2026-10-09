@@ -20,4 +20,8 @@ export default {
   theme: "Theme",
   theme_style: "Theme style",
   theme_settings: "Theme settings",
+  tab_stability: "Rate limiting & resilience",
+  tab_business: "Business configuration",
+  tab_connections: "Connections & secrets",
+  tab_ops: "Ops snippets",
 }

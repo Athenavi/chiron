@@ -171,7 +171,76 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 	return ids, nil
 }
 
-// replaceProviderModels 用外部发现的模型重建该 provider 在 llm_models 的缓存行。
+// ── 模型同步：**保住用户的开关与行的身份** ──
+//
+// 2026-10-09 修（用户报「/models 刷新后全部变回启用」）：
+// 此前是「DELETE 该 provider 全部行 → 重新 INSERT」，而 INSERT 把 `enabled` **写死成 true**、
+// `id` 每次都是新的 `gen_random_uuid()` ⇒ 管理员刚关掉的模型，**下一次模型发现就被重新启用**。
+// 而 `GET /v1/models` 就会触发发现（对话页一打开就调）⇒ 表现为「刷新后全部变回启用」。
+//
+// 这与 P1-f（见下）修的是**同一类**问题：那次只保住了 context_window，漏了 enabled 与行的身份。
+//
+// 现在的口径：
+//   - **已存在的行原样留着** —— 连 `enabled` 都不在 SELECT/UPDATE 里出现，从代码上保证翻不动；
+//   - 只新建「新发现的」、只删除「这次没再发现的」；
+//   - 窗口只在"之前不知道（<=0）"时推断补一次，**不覆盖**已有值（P1-f 的原口径）。
+//
+// 抽成纯函数 `planModelSync` 是为了**能单测**：本仓不能假设测试环境有真 PostgreSQL
+// （DB 相关用例靠 `*_live_test.go` 的 env gating），所以决策必须与执行分离。
+type existingModel struct {
+	ID     string
+	Name   string
+	Window int
+}
+
+type windowBackfill struct {
+	ID     string
+	Window int
+}
+
+type modelSyncPlan struct {
+	Keep        []existingModel  // 原样保留（enabled / id / display_name 都不动）
+	BackfillWin []windowBackfill // 窗口未知 ⇒ 推断补一次
+	Insert      []string         // 新发现 ⇒ 新建（enabled = true）
+	Delete      []string         // 这次没再发现 ⇒ 删除
+}
+
+// planModelSync 给「库里的现有行」与「这次发现的模型名」，算出唯一一套动作。
+// 同名重复发现只算一次（provider 的 /models 可能重复返回）。
+func planModelSync(existing []existingModel, discovered []string) modelSyncPlan {
+	byName := make(map[string]existingModel, len(existing))
+	for _, m := range existing {
+		byName[m.Name] = m
+	}
+	seen := make(map[string]bool, len(discovered))
+	var plan modelSyncPlan
+	for _, id := range discovered {
+		if id == "" || seen[id] {
+			continue
+		}
+		seen[id] = true
+		prev, ok := byName[id]
+		if !ok {
+			plan.Insert = append(plan.Insert, id)
+			continue
+		}
+		plan.Keep = append(plan.Keep, prev)
+		if prev.Window <= 0 {
+			if w := inferContextWindow(id); w > 0 {
+				plan.BackfillWin = append(plan.BackfillWin, windowBackfill{ID: prev.ID, Window: w})
+			}
+		}
+	}
+	// 按库里的原顺序遍历（结果稳定，便于断言与排查）
+	for _, m := range existing {
+		if !seen[m.Name] {
+			plan.Delete = append(plan.Delete, m.ID)
+		}
+	}
+	return plan
+}
+
+// replaceProviderModels 用外部发现的模型同步该 provider 在 llm_models 的缓存行。
 //
 // P1-f：此前重建时把 context_window 写死为 0，导致前端上下文环的**分母恒为 0**
 // （环永远不显示 → 用户完全无法感知上下文占用与自动压缩）。现在：
@@ -179,6 +248,9 @@ func fetchProviderModels(ctx context.Context, base, apiKey string) ([]string, er
 //     都会把之前的正确值清掉；
 //  2. 新模型按名字约定推断一个**保守**窗口；推断不出时仍返回 0（宁可不显示环，
 //     也不给一个可能严重高估的分母去误导用户）。
+//
+// 2026-10-09 追加：**已存在的行连 id 一起保留**（见上面 modelSyncPlan 的说明）——
+// 用户设的 enabled 必须活过每一次发现。
 func replaceProviderModels(ctx context.Context, provider string, ids []string) error {
 	tx, err := db.Pool.Begin(ctx)
 	if err != nil {
@@ -186,31 +258,40 @@ func replaceProviderModels(ctx context.Context, provider string, ids []string) e
 	}
 	defer tx.Rollback(ctx)
 
-	known := make(map[string]int, len(ids))
+	// ⚠ 这里**刻意不 SELECT enabled**：不同步它，就不可能把它翻回去（比"读出来再写回去"更稳）
+	var existing []existingModel
 	if rows, err := tx.Query(ctx,
-		`SELECT name, context_window FROM llm_models WHERE provider = $1 AND context_window > 0`, provider); err == nil {
+		`SELECT id::text, name, COALESCE(context_window, 0) FROM llm_models WHERE provider = $1`,
+		provider); err == nil {
 		for rows.Next() {
-			var name string
-			var window int
-			if rows.Scan(&name, &window) == nil && window > 0 {
-				known[name] = window
+			var m existingModel
+			if rows.Scan(&m.ID, &m.Name, &m.Window) == nil {
+				existing = append(existing, m)
 			}
 		}
 		rows.Close()
 	}
 
-	if _, err := tx.Exec(ctx, `DELETE FROM llm_models WHERE provider = $1`, provider); err != nil {
-		return err
-	}
-	for _, id := range ids {
-		window := known[id]
-		if window <= 0 {
-			window = inferContextWindow(id)
+	plan := planModelSync(existing, ids)
+
+	for _, id := range plan.Delete {
+		if _, err := tx.Exec(ctx, `DELETE FROM llm_models WHERE id = $1`, id); err != nil {
+			return err
 		}
+	}
+	for _, id := range plan.Insert {
+		window := inferContextWindow(id)
 		if _, err := tx.Exec(ctx,
 			`INSERT INTO llm_models (id, provider, name, display_name, enabled, context_window, created_at, updated_at)
 			 VALUES (gen_random_uuid()::text, $1, $2, $3, true, $4, NOW(), NOW())`,
 			provider, id, id, window); err != nil {
+			return err
+		}
+	}
+	for _, b := range plan.BackfillWin {
+		if _, err := tx.Exec(ctx,
+			`UPDATE llm_models SET context_window = $1, updated_at = NOW() WHERE id = $2`,
+			b.Window, b.ID); err != nil {
 			return err
 		}
 	}
