@@ -12,7 +12,7 @@
 |---|---|
 | `vendor/**` | 第三方源码（`DeepSeek-Reasonix`、`ZCode`）；占满体积榜前 18 名，不归本项目维护 |
 | `frontend-vue/src/locales/**`（约 1000 行/语言） | 文案数据，按语言分文件本就是正确形态 |
-| `migrations/versions/0001_authoritative_baseline.py`（1475 行） | 已发布迁移**不可变**，拆分等于改写历史 |
+| `migrations/versions/0001_authoritative_baseline.py`（**1,495 行**，2026-10-09 复测；原记 1475 行） | 已发布迁移**不可变**，拆分等于改写历史 |
 | `shared/models/**` | ORM 生成物；要改就改生成器（见 L4-3） |
 | `node_modules/`、`dist/`、`__pycache__/` | 构建产物 |
 
@@ -28,7 +28,7 @@
 | `frontend-vue/src/components/chat/ChatInput.vue` | 1259 | 49.5 | 66 | 输入 + 附件 + 模型选择 + 提及 |
 | `frontend-vue/src/components/chat/ChatSidePanel.vue` | 1180 | 46.3 | 44 | 用户菜单 + 轨迹 + 会话列表 + 抽屉拖拽 |
 | `python-engine/app/queue/worker.py` | 1174 | 49.7 | 4 | `QueueWorker` 单类 |
-| `python-engine/app/main.py` | 2141 | 96.0 | 9 | 启动/关闭集中（已抽 7 个函数；`lifespan` 仍 ~560 行） |
+| `python-engine/app/main.py` | 2141 | 96.0 | 9 | 启动/关闭集中（已抽 7 个函数；`lifespan` 现 **540 行** —— 2026-10-09 用 `ast` 复测定义在 `88-627`；原记 ~560 行） |
 | `internal/api/mail_handler.go` | 696 | 25.3 | 32 | ✅ **已拆**（1488 → 695，4 个文件） |
 | `internal/api/gateway_router.go` | 500 | 21.7 | 7 | ✅ **已拆**（1254 → 442，11 个 `routes_*.go`；现 500 含后续新增路由） |
 | `internal/session/manager.go` | 129 | 3.5 | 8 | ✅ **已拆**（1198 → 128，4 个文件） |
@@ -53,7 +53,9 @@
 
 ### 2.2 `runtime.py` — 压缩工具簇天然独立
 
-> **行数已过期**：本文写作时 `runtime.py` 1841 行，**当前 3370 行**（`AgentRuntime` 从 1557 → 2315 行）。
+> **行数会持续过期**：本文写作时 `runtime.py` **1841 行**；**2026-10-09 用 `ast` 复测 = 3274 行**
+> （`AgentRuntime` **2352 行** · `run_agent` 在 `:3163` · `register_pending_approval` 在 `:3224`）——
+> 原写「当前 3370 行（`AgentRuntime` 2315 行）」也已过期。
 > 下面 ② 的**类型部分已完成**（`runtime_types.py`）；① 的压缩簇必须先按现状**重新定界**再动 ——
 > 启动前务必重新实测行号，不要照搬旧数字。
 
@@ -110,7 +112,7 @@
 ### 2.5 前端 `views/` 与 `components/chat/` — 抽 composable
 
 - `ChatView.vue`（173 符号）按实测簇抽：工作流/Agent 导出 `57–190`、布局切换 `191–221`（`readLayoutSwap`/`toggleLayout`/`onToolbarMenu`）、搜索 `229–255`、统计与压缩 `256–271`、子代理面板 `272+`。
-> ⚠ 下括号里的数字是**符号数**（顶层声明个数），**不是行数** —— 实测行数：`ChatView.vue` **3429** · `MediaView.vue` 1769 · `WorkflowView.vue` 1746 · `ChatInput.vue` 1259 · `AgentsView.vue` 1190 · `ChatSidePanel.vue` 1179。引用规模前先现场测（本轮就有人把它误读成行数、差点去"更正"一份没错的文档）。
+> ⚠ 下括号里的数字是**符号数**（顶层声明个数），**不是行数** —— 实测行数（**设计当时 2026-09-28**；**当前值见 §1 表**）：`ChatView.vue` **3429** · `MediaView.vue` 1769 · `WorkflowView.vue` 1746 · `ChatInput.vue` 1259 · `AgentsView.vue` 1190 · `ChatSidePanel.vue` 1179。引用规模前先现场测（本轮就有人把它误读成行数、差点去"更正"一份没错的文档）。
 
 - ✅ **批次 1 已抽（2026-10-08）**：`WorkflowView.vue` 的**执行与状态轮询簇**（提交运行 → 轮询状态 → 落到画布与日志 → 刷新运行历史）→ `src/composables/useWorkflowExecution.ts`。做法是**依赖注入**视图自己的 `ref`（`workflowId`/`getNodes`/`isExecuting`/`executionLogs`/`executionResults`/`instances`），返回视图需要的名字并由视图解构 ⇒ 模板与既有函数一行未改。**1746 → 1635 行**；共享类型抽到 `src/types/workflow.ts`（`NodeRunResult` / `InstanceRecord`，避免两处定义漂移）。护栏：`WorkflowView.spec.ts`（2 用例）· `vue-tsc -b` · `eslint` 0 problems · 全量 `vitest` 477 passed。
 - 下一簇候选（同文件）：持久化（`saveWorkflow`/`loadWorkflows`/`loadWorkflow`/`deleteWorkflow`/模板 `loadTemplates`/`useWorkflowTemplate`）约 120 行；节点编辑面板（`edit*` refs + `applyNodeConfig`/`onNodeClick`）分散在多处，跨簇依赖更多，放后面。

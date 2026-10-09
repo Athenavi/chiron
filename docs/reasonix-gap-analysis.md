@@ -382,8 +382,8 @@ HTTP/SSE；启动凭据是每次启动的 `crypto/rand` 32 字节 + 严格 Host/
 
 | 旧断言 | 判定 | 今天的证据 |
 |---|---|---|
-| `docs/` 8 份，且无 transcript 契约 | **过期** | `docs/` **17** 份 `.md`；`docs/transcript-contract.md`（8,926 B）存在 |
-| 引擎事件"~13 种" | **过期** | `python-engine/app/agent/runtime.py`（157,589 B / 3,237 行）**15** 个 `type` 字面量 |
+| `docs/` 8 份，且无 transcript 契约 | **过期** | `docs/` **17** 份 `.md`；`docs/transcript-contract.md`（**10,335 B**，2026-10-09 复测；原记 8,926 B）存在 |
+| 引擎事件"~13 种" | **过期** | `python-engine/app/agent/runtime.py`（**159,375 B / 3,274 行**，2026-10-09 复测；原记 157,589 B / 3,237 行）**15** 个 `type` 字面量 |
 | 思考内联在 `text` 的 `[thinking]…[/thinking]` | **过期** | `runtime.py:1542-1545` 独立 `type="thinking"`；前端 `ChatView.vue:2157-2160` |
 | 三处各自切分思考 | **部分过期** | 三处仍在（`evals/observe.py` / `acp_adapter/mapping.py` / `chat-types.ts`），但**只针对模型自产的标记**；native reasoning 不再需要切分。实际切分点已增至 **5** 处（+`internal/cli/run.go`、`internal/api/submit_handler.go`） |
 | "无消息完成事件" | **确认** | 15 个字面量里没有 `message`；`done` 只带 usage/model/trace_id |
