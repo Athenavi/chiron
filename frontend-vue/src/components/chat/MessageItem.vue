@@ -308,9 +308,29 @@ const renderedHtml = ref('')
 const pendingLargeRender = ref(false)
 let renderToken = 0
 
+/** 是否正在流式（只有 text 条目有这个概念）。 */
+const isStreaming = computed(
+  () => props.item.kind === 'text' && Boolean((props.item as TextItem).streaming),
+)
+
 function scheduleRender() {
   const src = displayContent.value
   const token = ++renderToken
+
+  // ── 流式期早退（2026-10-09）─────────────────────────────────
+  // 模板在 `item.streaming` 时显示的是**纯文本**（`{{ displayContent }}`），
+  // `renderedHtml` 只在回合结束、`streaming` 变 false 之后才被 `v-html` 用上
+  // ⇒ 流式期每个 delta 都跑一遍 `md.render` + `DOMPurify.sanitize` 是**纯浪费**
+  // （还会往 `mdCache` 里塞一堆用不到的半成品，把真正有用的条目挤出去）。
+  //
+  // ⚠ 注意：`displayContent` **不依赖 `streaming`**（它只看 `content` 与折叠状态），
+  // 所以 watcher 必须**同时监听 `isStreaming`** —— 否则"流式结束"那一刻不会重算，
+  // 消息会**一直停在纯文本**（这正是本次改动最容易引入的回归）。
+  if (isStreaming.value) {
+    pendingLargeRender.value = false
+    return
+  }
+
   if (!src) {
     renderedHtml.value = ''
     pendingLargeRender.value = false
@@ -340,7 +360,7 @@ function scheduleRender() {
   else setTimeout(run, 0)
 }
 
-watch(displayContent, scheduleRender, { immediate: true })
+watch([displayContent, isStreaming], scheduleRender, { immediate: true })
 
 function handleMsgClick(e: MouseEvent) {
   const target = e.target as HTMLElement
@@ -659,6 +679,17 @@ onUpdated(enhanceContent)
       tokens: {{ item.inputTokens }} in / {{ item.outputTokens }} out
     </span>
   </div>
+
+  <div
+    v-else-if="item.kind === 'notice'"
+    v-bind="$attrs"
+    class="notice-row"
+    :class="item.tone"
+    role="status"
+  >
+    <span class="notice-icon" aria-hidden="true">{{ item.tone === 'warning' ? '⚠' : 'ℹ' }}</span>
+    <span class="notice-text">{{ item.content }}</span>
+  </div>
 </template>
 
 <style scoped>
@@ -666,6 +697,22 @@ onUpdated(enhanceContent)
    注意：虚拟列表 item 为 absolute（left:0 right:0），此处不能设 width:100%，
    否则 left+width+right 超约束会让 right 失效、margin auto 退化为 0（消息列贴左） */
 .msg-row { padding: var(--chat-msg-gap, 6px) 0; max-width: min(var(--chat-content-width), 92%); margin: 0 auto; }
+/* 系统通知行（护栏拦截等）：不是工具卡，也不占用户/助手气泡的位。
+   `role="status"` 让读屏软件把它播报出来（拦截发生时用户可能正不看屏幕）。 */
+.notice-row {
+  display: flex; align-items: flex-start; gap: 6px;
+  max-width: min(var(--chat-content-width), 92%); margin: 6px auto;
+  padding: 8px 12px; border-radius: var(--sig-radius-card, 8px);
+  font-size: var(--font-size-sm, 13px); line-height: 1.5;
+  border: 1px solid var(--warning-border, var(--border-color));
+  background: var(--warning-bg, var(--bg-secondary));
+  color: var(--text-secondary, var(--text-primary));
+}
+.notice-row.info {
+  border-color: var(--primary-border, var(--border-color));
+  background: var(--primary-bg, var(--bg-secondary));
+}
+.notice-icon { flex: none; }
 .msg-row.user { display: flex; justify-content: flex-end; }
 /* 轨迹跳转高亮闪烁（deepseek data-current 聚焦反馈） */
 .msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash var(--dur-slow) ease-out; }

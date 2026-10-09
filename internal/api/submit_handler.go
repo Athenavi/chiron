@@ -480,12 +480,31 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 				cancelStore()
 			}
 		case "guardrail_blocked":
-			// SaaS 合规：栅栏拒绝留痕（输入注入/输出泄露/工具 block 审计）
+			// SaaS 合规：栅栏拒绝留痕（输入注入/输出泄露/工具 block 审计）。
+			//
+			// ⚠ **2026-10-09 修一处有损留痕**：早先这里写 `"guard_"+evt.ID`，但引擎的
+			// `AgentEvent` **根本没有 `id` 字段**（只有 `tool_call_id`，见
+			// `python-engine/app/agent/runtime_types.py`），而 `guardrail_blocked` 也不带
+			// `tool_call_id` ⇒ **`evt.ID` 恒为空**，于是 id 变成**常量** `"guard_"`；
+			// `SaveToolCall` 走 `ON CONFLICT (id) DO UPDATE` ⇒ **同会话里后一次拦截会覆盖前一次**，
+			// 留痕只剩最后一条（`SaveToolCall` 对**空** id 则直接 return，连一条都不留）。
+			// 改用 `spillRecordID` 生成唯一 id。
 			{
 				sctx, cancelStore := storeCtxFor()
 				h.sessionMgr.SaveToolCall(sctx, sessionID,
-					"guard_"+evt.ID, "guardrail",
+					spillRecordID("guard"), "guardrail",
 					fmt.Sprintf(`{"reason":%q}`, evt.Content), turnID)
+				cancelStore()
+			}
+		case "compaction":
+			// 上下文压缩留痕：引擎**只在真的压缩了**时才发它（`runtime.py:884-919`，返回 None 表示没压），
+			// 载荷是 `{before_tokens, after_tokens, saved_tokens, messages_before/after, strategy}` 的 JSON。
+			// 落成 `tool_name='compaction'` 的记录 ⇒ 前端投影把它渲染成 **notice 行**（刷新后仍可见），
+			// 与状态栏那行「压缩前→后」互补：状态栏是即时读数，notice 是**可追溯的留痕**。
+			{
+				sctx, cancelStore := storeCtxFor()
+				h.sessionMgr.SaveToolCall(sctx, sessionID,
+					spillRecordID("compaction"), "compaction", evt.Content, turnID)
 				cancelStore()
 			}
 		case "error":
@@ -497,8 +516,9 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		if evt.Model != "" {
 			turnModel = evt.Model
 		}
-		// 增量落库：工具事件是关键节点，立即写；其余事件走 3s 节流
-		saveDraft(evt.Type == "tool_call" || evt.Type == "tool_result" || evt.Type == "guardrail_blocked")
+		// 增量落库：工具事件是关键节点，立即写；其余事件走 3s 节流。
+		// `compaction` 也立即写：它一回合最多一次、且是"上下文被压过"的唯一留痕，丢了就查不出来。
+		saveDraft(evt.Type == "tool_call" || evt.Type == "tool_result" || evt.Type == "guardrail_blocked" || evt.Type == "compaction")
 	}
 	flushText()     // 流结束兜底冲刷
 	saveDraft(true) // 定型：覆盖正常结束、被取消、断线等所有路径
@@ -576,6 +596,21 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	if turnID != "" {
 		h.sessionMgr.FinishTurn(storeCtx, turnID, turnStatus, streamErr, turnModel, usage.input, usage.output, usage.cached)
 	}
+	// 中断留痕（2026-10-09）：`cancelled` 此前**只落在 `turns.status` 里**，界面无从呈现 ——
+	// 用户**主动停止**时前端自己有 `stopped` 标记（`ChatView.vue` 的停止分支），但
+	// **断线 / 会话取消 / 超时**这三种中断，用户侧**看不到任何痕迹**，刷新后更没有
+	// （`stopped` 是纯前端字段、不入库）。落一条 `tool_name='interrupted'` 的记录 ⇒
+	// 前端投影渲染成 notice 行（刷新后仍可追溯）。
+	// 区分超时与其它取消：`ctx.Err()` 只会有 `Canceled` / `DeadlineExceeded` 两种取值。
+	if turnStatus == "cancelled" {
+		reason := "cancelled"
+		if ctx.Err() == context.DeadlineExceeded {
+			reason = "timeout"
+		}
+		h.sessionMgr.SaveToolCall(storeCtx, sessionID,
+			spillRecordID("interrupted"), "interrupted",
+			fmt.Sprintf(`{"reason":%q}`, reason), turnID)
+	}
 
 	h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})
 }
@@ -594,4 +629,18 @@ func stripThinkingBlocks(s string) string {
 	s = strings.ReplaceAll(s, "[thinking]", "")
 	s = strings.ReplaceAll(s, "[/thinking]", "")
 	return strings.TrimSpace(s)
+}
+
+// spillRecordID 给「不是工具调用」的留痕（护栏拦截 / 上下文压缩）生成**唯一** id。
+//
+// 为什么不能直接用 `evt.ID`：引擎的 `AgentEvent` **没有 `id` 字段**（只有 `tool_call_id`），
+// 而这两类事件都不带 `tool_call_id` ⇒ 帧里根本没有 `id`，`evt.ID` 恒为空。而 `SaveToolCall`
+// 对**空 id 直接 return**（一条都不留）、对**重复 id 走 `ON CONFLICT (id) DO UPDATE`**（后一条
+// 覆盖前一条）—— 所以"`前缀 + evt.ID`"这种写法要么全丢、要么**有损**（2026-10-09 实测发现：
+// 同会话多次拦截只剩最后一条）。
+//
+// 用纳秒时间戳：这些留痕**不是业务主键**，只需在单进程内互不相同（同一纳秒两次不可能发生：
+// 事件是串行消费的）。`prefix` 保留可读性，排障时一眼能看出是哪类留痕。
+func spillRecordID(prefix string) string {
+	return fmt.Sprintf("%s_%d", prefix, time.Now().UnixNano())
 }

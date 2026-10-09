@@ -2208,6 +2208,18 @@ function onSSEMessage(raw: unknown) {
         afterTokens: Number(info.after_tokens) || 0,
         savedTokens: Number(info.saved_tokens) || 0,
       }
+      // 与**历史投影**产出同一种条目（`chat-history.ts` 把 `tool_name='compaction'` 映射成 notice）
+      // ⇒ 实时与刷新后观感一致；文案复用状态栏那个键与单位（k），两处读数不会互相矛盾。
+      const kTok = (n: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
+      items.value.push({
+        kind: 'notice',
+        tone: 'info',
+        content: t('common.compressed_before_after', {
+          before: kTok(Number(info.before_tokens) || 0),
+          after: kTok(Number(info.after_tokens) || 0),
+        }),
+        id: `compaction-${String(d.id ?? Date.now())}`,
+      })
     }
   } else if (type === 'done') {
     flushStreamingFlags()
@@ -2253,7 +2265,18 @@ function onSSEMessage(raw: unknown) {
     loading.value = false
     stopTurnTimer()
     activeSSE?.close(); activeSSE = null
-    message.warning(typeof d.content === 'string' && d.content ? d.content : t('admin.request_blocked_by_security_policy'))
+    const reason = typeof d.content === 'string' && d.content
+      ? d.content
+      : t('admin.request_blocked_by_security_policy')
+    // 与**历史投影**产出同一种条目（`chat-history.ts` 把 `tool_name='guardrail'` 映射成 notice）
+    // ⇒ "刚被拦下"与"刷新后"观感一致（2026-10-09）。toast 仍保留：即时可见；transcript 那行负责可追溯。
+    items.value.push({
+      kind: 'notice',
+      tone: 'warning',
+      content: reason,
+      id: `guard-${String(d.id ?? Date.now())}`,
+    })
+    message.warning(reason)
   } else if (type === 'error') {
     flushStreamingFlags()
     loading.value = false

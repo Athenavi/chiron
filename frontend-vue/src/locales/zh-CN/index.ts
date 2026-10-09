@@ -41,6 +41,13 @@ export default {
     copy: '复制',
     copied: '已复制',
     language: '语言',
+    // 浏览器标签页标题：由 `src/i18n/index.ts` 的 `applyDocumentLocale()` 写到 `document.title`。
+    // 此前只有 `index.html` 里写死的中文标题 ⇒ 切到 en-US/ar 后标签页仍是中文。
+    appTitle: 'Chiron AI Agent 工作平台',
+    // 中断留痕（notice 行）：断线 / 会话取消 / 超时这三种中断此前在界面上**毫无痕迹**，
+    // 用户主动停止才有 `stopped` 标记（且那个标记不入库、刷新即消失）。
+    turnInterrupted: '本回合被中断（连接断开或会话被取消）—— 已生成的内容保留在上方',
+    turnTimeout: '本回合超时中断 —— 已生成的内容保留在上方',
     unknownError: '未知错误',
     tcp_connection: "# TCP 连接",
     title: "# {title}",
