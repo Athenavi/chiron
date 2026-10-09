@@ -125,8 +125,29 @@ describe('transcriptProjection（行投影）', () => {
 
   it('活跃回合的工具组默认展开（完成回合才默认收起）', () => {
     const items: ChatItem[] = [user('m0', 'turn-1'), call('c1', 'read_file', 'turn-1'), result('c1', 'turn-1')]
-    const { rows } = projectTranscript({ items, mode: 'grouped' })
+    // `running: true` = 该轮**仍在跑**（§4.7 起活跃判据由**生命周期**给，不再只看位置）
+    const { rows } = projectTranscript({ items, mode: 'grouped', running: true })
     expect(rows.map(row => row.key)).toContain(itemKey(items[1]!, 1))
+  })
+
+  /**
+   * §4.7 的回归：**不带 token 的 `done` 也必须终结该轮**。
+   *
+   * 原先活跃判据是**位置**（`turn.to === items.length`），而 `ChatView` 只在 `done` **带 token** 时
+   * 才压入 `turn_stats` ⇒ 一次不带 token 的 `done` 会让最后一轮**永远** `status: 'running'`
+   * 且工具组默认展开 ✗（用户看得见的 bug）。现在由 `running`（`MessageList` 传自己的 `loading`）
+   * 提供生命周期信号 ⇒ `done` / `cancelled` / `error` 之后 `loading=false` ⇒ 该轮终结 ✓。
+   *
+   * 注意下面这组 items **没有 `turn_stats` 行** —— 那正是"不带 token 的 done"的形态。
+   */
+  it('★ 没有 token 的 done 也终结轮次（§4.7）：工具组收起', () => {
+    const items: ChatItem[] = [user('m0', 'turn-1'), call('c1', 'read_file', 'turn-1'), result('c1', 'turn-1')]
+    const done = projectTranscript({ items, mode: 'grouped', running: false })
+    expect(done.rows.map(r => r.key)).not.toContain(itemKey(items[1]!, 1))
+
+    // 对照：仍在运行时必须展开（否则就是"修好了 bug 但把展开也修没了"）
+    const running = projectTranscript({ items, mode: 'grouped', running: true })
+    expect(running.rows.map(r => r.key)).toContain(itemKey(items[1]!, 1))
   })
 
   it('纯正文回合不产生折叠入口（折起来也看得见全部内容）', () => {

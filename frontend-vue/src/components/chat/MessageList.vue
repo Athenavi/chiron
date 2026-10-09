@@ -132,6 +132,9 @@ const projection = computed(() => projectTranscript({
   mode: 'grouped',
   folds: folds.value,
   residentTailTurns: props.residentTailTurns ?? DEFAULT_RESIDENT_TAIL_TURNS,
+  // 生命周期信号（§4.7）：`loading` 为 false 时**没有**活跃回合 ——
+  // 否则"不带 token 的 done"会让最后一轮永远显示 running。
+  running: props.loading,
 }))
 const rows = computed(() => projection.value.rows)
 

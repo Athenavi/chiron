@@ -10,6 +10,7 @@ vi.mock('../../api', () => ({
 
 import { useAuthStore } from '../auth'
 import { api } from '../../api'
+import { privateKey } from '../../utils/privateStorage'
 
 const mockUser = { id: 'u1', email: 'a@b.c', name: 'A', role: 'admin', tenant_id: 't1' }
 
@@ -209,6 +210,36 @@ describe('auth store', () => {
       expect(store.token).toBe('')
       expect(store.user).toBeNull()
       expect(localStorage.getItem('user')).toBeNull()
+    })
+
+    /**
+     * **接线级**：`logout()` 真的调了 `clearPrivateStorage()`（2026-10-09）。
+     *
+     * `clearPrivateStorage` 本身在 `utils/__tests__/privateStorage.spec.ts` **有单测** ✓，
+     * 但"`logout` 到底有没有调它"此前**没人测** ✗ —— 而 `auth.ts:159-160` 的注释记着
+     * 一次**实测事故**：「输入历史（`↑` 召回）在换账号后召回了上一个账号发过的内容」✓。
+     * 也就是说：**这条断言防的是一次真实发生过的越权读取**，不是假想 ✓。
+     *
+     * 同时钉住**边界**：UI 偏好（主题等）不属于私有数据，**不该**被登出清掉
+     * （清掉会让用户每次登录都丢主题，是另一种回归）✓。
+     */
+    it('★ 登出清掉私有键（输入历史 / 会话缓存），但不碰 UI 偏好', async () => {
+      vi.mocked(api.post).mockResolvedValue({ data: {} })
+      // 私有数据：带账号命名空间
+      localStorage.setItem(privateKey('chiron:composer-history', 'u1'), JSON.stringify(['上一个账号发过的话']))
+      localStorage.setItem(privateKey('chat_sessions', 'u1'), JSON.stringify([{ id: 's-1' }]))
+      // 历史遗留：**没有**账号命名空间的那份（越权来源，按前缀也要清掉）
+      localStorage.setItem('chat_sessions', JSON.stringify([{ id: 'legacy' }]))
+      // UI 偏好：不属于私有数据
+      localStorage.setItem('theme', 'dark')
+
+      const store = useAuthStore()
+      await store.logout()
+
+      expect(localStorage.getItem(privateKey('chiron:composer-history', 'u1'))).toBeNull()
+      expect(localStorage.getItem(privateKey('chat_sessions', 'u1'))).toBeNull()
+      expect(localStorage.getItem('chat_sessions')).toBeNull()   // 遗留裸键也清
+      expect(localStorage.getItem('theme')).toBe('dark')          // 偏好保留
     })
   })
 })
