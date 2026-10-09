@@ -1,15 +1,56 @@
-import { afterAll, afterEach, beforeEach, describe, expect, it } from 'vitest'
+import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import DOMPurify from 'dompurify'
 import MessageItem from '../MessageItem.vue'
 import { setMermaidAdapter, type MermaidAdapter } from '../mermaidRenderer'
 import { setHighlightAdapter, type HighlightAdapter } from '../codeHighlighter'
 import { closeImageViewer, useImageViewer } from '../../common/imageViewerState'
-import type { ChatItem } from '../chat-types'
+import type { ChatItem, TextItem } from '../chat-types'
 
 const assistant = (content: string): ChatItem => ({ kind: 'text', role: 'assistant', content, id: 'm1' })
 
 const mountText = (content: string) => mount(MessageItem, { props: { item: assistant(content) } })
+
+/**
+ * 流式期不做 markdown + sanitize（§4.3 的性能项，2026-10-09）。
+ *
+ * 模板在 `item.streaming` 时显示的是**纯文本**（`{{ displayContent }}`），`renderedHtml`
+ * 只在回合结束、`streaming` 变 false 之后才被 `v-html` 用上 ⇒ 流式期每个 delta 都跑
+ * `md.render` + `DOMPurify.sanitize` 是**纯浪费**。验收口径就是 §4.3 写的那句：
+ * **N 次 delta 只渲染一次**。
+ *
+ * 这里盯 `DOMPurify.sanitize`（**模块级**）而不是组件里的 `renderMarkdown`（局部函数、spy 不到）；
+ * `vi.spyOn` 默认保留原实现，所以断言渲染结果的那半仍然是真的 sanitize 输出。
+ */
+describe('流式期的渲染让位（§4.3）', () => {
+  it('★ 流式期不跑 markdown/sanitize；回合结束才渲染一次（且真的走 v-html 分支）', async () => {
+    const sanitize = vi.spyOn(DOMPurify, 'sanitize')
+    // 用 `TextItem` 而不是 `ChatItem`：后者的联合类型在展开（`{ ...streaming, content }`）后
+    // 会丢掉判别字段的收窄，`content`/`streaming` 在别的成员上不存在 ⇒ tsc 报错。
+    const streaming: TextItem = { kind: 'text', role: 'assistant', content: 'a', id: 's1', streaming: true }
+    const wrapper = mount(MessageItem, { props: { item: streaming as ChatItem } })
+    await settleAsync()
+    // 初始挂载时就是流式中 ⇒ 不该渲染
+    expect(sanitize.mock.calls.length).toBe(0)
+
+    // 模拟 N 次流式增量
+    for (const text of ['ab', 'abc', 'abcd', 'abcde']) {
+      await wrapper.setProps({ item: { ...streaming, content: text } as ChatItem })
+      await settleAsync(2)
+    }
+    expect(sanitize.mock.calls.length).toBe(0)
+
+    // 回合结束：streaming → false。**这是最容易漏的回归点** ——
+    // `displayContent` 不依赖 `streaming`，所以 watcher 必须同时监听它，
+    // 否则消息会一直停在纯文本。
+    await wrapper.setProps({ item: { ...streaming, content: 'abcde', streaming: false } })
+    await settleAsync()
+    expect(sanitize.mock.calls.length).toBe(1)
+    expect(wrapper.html()).toContain('<p>abcde</p>')
+    sanitize.mockRestore()
+  })
+})
 
 /** 生成 n 行代码块，用于验证长代码折叠阈值 */
 const longCode = (lines: number) =>

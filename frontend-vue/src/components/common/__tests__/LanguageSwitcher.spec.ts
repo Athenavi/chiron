@@ -38,4 +38,16 @@ describe('LanguageSwitcher', () => {
     expect(document.documentElement.getAttribute('dir')).toBe('rtl')
     setLocale(DEFAULT_LOCALE)
   })
+
+  // 2026-10-09 补：`index.html` 的 `<title>` 是首屏之前的静态值（必须有），
+  // 而此前**没有任何地方在运行时更新它** ⇒ 切到 en-US/ar 后标签页仍是中文。
+  it('setLocale 同步浏览器标签页标题（document.title 随语言切换）', () => {
+    setLocale(DEFAULT_LOCALE)
+    expect(document.title).toBe('Chiron AI Agent 工作平台')
+    setLocale('en-US')
+    expect(document.title).toBe('Chiron AI Agent Platform')
+    setLocale('ar')
+    expect(document.title).toBe('منصة Chiron AI Agent')
+    setLocale(DEFAULT_LOCALE)
+  })
 })

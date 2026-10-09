@@ -47,6 +47,66 @@ export function normalizeMeta(raw: unknown): Record<string, unknown> | undefined
 }
 
 /**
+ * 从网关存的 `{"reason":"…"}` 里取护栏文案；取不到就回退到通用文案。
+ * 入参是 `unknown` 形状的字符串（后端两条链路的形状不保证），所以这里显式容错。
+ */
+function guardrailReason(input: string): string {
+  const raw = (input || '').trim()
+  if (raw) {
+    if (raw.startsWith('{')) {
+      try {
+        const parsed = JSON.parse(raw) as { reason?: unknown }
+        if (typeof parsed?.reason === 'string' && parsed.reason) return parsed.reason
+      } catch {
+        /* 不是合法 JSON：落到下面的通用文案 */
+      }
+    } else {
+      return raw
+    }
+  }
+  return t('admin.request_blocked_by_security_policy')
+}
+
+/**
+ * 压缩留痕的文案：载荷是引擎的 report JSON（`before_tokens` / `after_tokens` / `saved_tokens` …）。
+ *
+ * **复用状态栏那个键**（`common.compressed_before_after`）且单位一致（k）⇒ 两处读数不会互相矛盾
+ * （`ChatStatusBar.vue` 用的是同一个键）。解析不出返回空串 ⇒ 调用方**不插行**。
+ */
+function compactionText(input: string): string {
+  const k = (n: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
+  try {
+    const report = JSON.parse((input || '').trim() || '{}') as {
+      before_tokens?: unknown
+      after_tokens?: unknown
+    }
+    if (typeof report.before_tokens === 'number' && typeof report.after_tokens === 'number') {
+      return t('common.compressed_before_after', {
+        before: k(report.before_tokens),
+        after: k(report.after_tokens),
+      })
+    }
+  } catch {
+    /* 不是合法 JSON ⇒ 落到空串（不插行） */
+  }
+  return ''
+}
+
+/**
+ * 中断留痕用哪个 i18n 键：载荷是 `{"reason":"cancelled"|"timeout"}`。
+ * 超时与其它取消对用户的意义不同（前者"等太久了"、后者"被中断了"）⇒ 分开说。
+ */
+function interruptedKey(input: string): string {
+  try {
+    const report = JSON.parse((input || '').trim() || '{}') as { reason?: unknown }
+    if (report.reason === 'timeout') return 'common.turnTimeout'
+  } catch {
+    /* 解析不出 ⇒ 用通用文案 */
+  }
+  return 'common.turnInterrupted'
+}
+
+/**
  * 把 `/v1/conversations/{id}` 返回的 `messages` + `tool_calls` 合并成时间线条目。
  *
  * 行为与原先 `ChatView` 内部版本**逐字一致**（抽取时未改动逻辑，只补了导出与注释）。
@@ -153,6 +213,63 @@ export function mergeHistory(
 
   for (const tc of callsById.values()) {
     const turnId = turnOf(tc)
+    // 护栏拦截留痕：网关把 `guardrail_blocked` 存成一条 `tool_name='guardrail'` 的 tool_call
+    // （`submit_handler.go:482-490`，`input` 是 `{"reason":"…"}`）⇒ 渲染成**系统通知行**而不是
+    // 工具卡。实时路径（`ChatView.vue` 的 `guardrail_blocked` 分支）产出**同一种条目**，
+    // 所以"刚被拦下"与"刷新后"观感一致。
+    if ((tc.tool_name || '') === 'guardrail') {
+      timeline.push({
+        t: new Date(tc.created_at || '').getTime(),
+        items: [{
+          kind: 'notice',
+          tone: 'warning',
+          content: guardrailReason(tc.input || ''),
+          time: formatClock(tc.created_at),
+          id: tc.id,
+          turnId,
+        }],
+      })
+      continue
+    }
+    // 上下文压缩留痕（2026-10-09）：网关把引擎的 `compaction` 事件落成 `tool_name='compaction'`
+    // 的记录（载荷是 `{before_tokens, after_tokens, saved_tokens, …}` 的 JSON）⇒ 渲染成 **info 通知行**。
+    // 与状态栏那行互补：状态栏是即时读数，这里是**刷新后仍可追溯**的留痕。
+    // 载荷解析不出就**不插行**（宁可没有，也不给用户看半截信息）。
+    if ((tc.tool_name || '') === 'compaction') {
+      const text = compactionText(tc.input || '')
+      if (text) {
+        timeline.push({
+          t: new Date(tc.created_at || '').getTime(),
+          items: [{
+            kind: 'notice',
+            tone: 'info',
+            content: text,
+            time: formatClock(tc.created_at),
+            id: tc.id,
+            turnId,
+          }],
+        })
+      }
+      continue
+    }
+    // 中断留痕（2026-10-09）：网关在回合以 `cancelled` 收尾时落一条 `tool_name='interrupted'` 的记录
+    // （`reason` 是 `cancelled` | `timeout`）⇒ 渲染成 **warning 通知行**。此前**断线 / 会话取消 / 超时**
+    // 这三种中断在界面上**毫无痕迹**（用户主动停止才有 `stopped` 标记，而那个标记是纯前端字段、
+    // 不入库 ⇒ 刷新即消失）。
+    if ((tc.tool_name || '') === 'interrupted') {
+      timeline.push({
+        t: new Date(tc.created_at || '').getTime(),
+        items: [{
+          kind: 'notice',
+          tone: 'warning',
+          content: t(interruptedKey(tc.input || '')),
+          time: formatClock(tc.created_at),
+          id: tc.id,
+          turnId,
+        }],
+      })
+      continue
+    }
     const callItems: ChatItem[] = [
       {
         kind: 'tool_call',

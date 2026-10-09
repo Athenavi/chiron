@@ -82,14 +82,19 @@ export function currentLocale(): string {
 }
 
 /**
- * 把语言与书写方向写到 <html> 上，并同步 dayjs 语言。
+ * 把语言、书写方向与**标签页标题**写到文档上，并同步 dayjs 语言。
  * antd 组件库的 locale 由 App.vue 的 <ConfigProvider :locale> 绑定（见 languages.ts）。
+ *
+ * **标签页标题（2026-10-09 补）**：`index.html` 里的 `<title>` 是**首屏之前的**静态值（必须有，
+ * 因为 JS 还没跑），此前**没有任何地方在运行时更新它** ⇒ 切到 `en-US`/`ar` 后标签页仍是中文。
+ * 放在这里是因为 `applyDocumentLocale()` 同时覆盖**首次挂载**与**每次 `setLocale()`** 两条路径。
  */
 export function applyDocumentLocale(meta: LanguageMeta = languageMeta(currentLocale())): void {
   if (typeof document !== 'undefined') {
     const root = document.documentElement
     root.setAttribute('lang', meta.code)
     root.setAttribute('dir', meta.dir)
+    document.title = t('common.appTitle')
   }
   dayjs.locale(meta.dayjs)
 }

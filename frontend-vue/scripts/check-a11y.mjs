@@ -132,6 +132,24 @@ const RULES = {
   'img-missing-alt': '<img> 缺 alt —— 装饰图请显式写 alt=""，否则屏幕阅读器会朗读文件名',
 }
 
+/**
+ * R3 streaming-live-region —— **流式回答**所在的那个组件必须保留 `aria-live` 区域。
+ *
+ * 为什么单列成"必需不变量"而不是一条扫描规则：`aria-live` 该不该有**取决于语义**
+ * （"这块内容会不会在用户不看屏幕时自己变化"），从模板上无法机械推断 —— 硬扫会既漏又误报。
+ * 而 Chiron 是**流式界面**，全仓只有一处承载"逐字追加的助手回答"：
+ * `src/components/chat/MessageItem.vue`（`:aria-live="item.streaming ? 'polite' : 'off'"`）。
+ * 它一旦被删/被重构掉，屏幕阅读器用户就**完全失去**流式进度 —— 而视觉上毫无变化，
+ * 没有测试会红。所以这里把**这一条具体的不变量**钉住。
+ *
+ * **R4（模态焦点陷阱/归还）刻意不加**：全仓 62 处模态走 antd `Modal`（**自带焦点陷阱**），
+ * 自研浮层只有 `FloatingPanel.vue` 且它已做焦点归还（`lastFocused?.focus?.()`）。
+ * 想用文本规则表达"必须有陷阱/归还"只能退化成"文件里出现过 `.focus(`" —— 那是**伪判据**
+ * （既拦不住真问题，又会因无关改动误报）。按本文件开头那条原则：**宁可少收**。
+ */
+const LIVE_REGION_FILE = 'src/components/chat/MessageItem.vue'
+const LIVE_REGION_RE = /\baria-live\s*=/
+
 const current = {}
 for (const file of walk(join(ROOT, 'src'))) {
   const rel = relative(ROOT, file).split('\\').join('/')
@@ -139,6 +157,26 @@ for (const file of walk(join(ROOT, 'src'))) {
   if (Object.keys(hits).length > 0) current[rel] = hits
 }
 const sorted = Object.fromEntries(Object.entries(current).sort(([a], [b]) => a.localeCompare(b)))
+
+/**
+ * R3 是**必需不变量**，不是棘轮 —— 它没有"存量"可言（缺了就是缺陷），因此**不进基线**，
+ * 也**不因 `--write-baseline` / `--list` 而跳过**：任何模式下都先校验。
+ */
+const liveProblems = []
+const livePath = join(ROOT, LIVE_REGION_FILE)
+if (!existsSync(livePath)) {
+  liveProblems.push(`${LIVE_REGION_FILE} 不存在 —— R3 的判据已与代码结构脱节？请更新本脚本`)
+} else if (!LIVE_REGION_RE.test(stripComments(readFileSync(livePath, 'utf8')))) {
+  liveProblems.push(
+    `${LIVE_REGION_FILE} 里找不到 aria-live —— 流式回答对屏幕阅读器用户将**完全不可见**` +
+    '（视觉上毫无变化，没有别的测试会红）。请保留形如 `:aria-live="item.streaming ? \'polite\' : \'off\'"` 的绑定',
+  )
+}
+if (liveProblems.length) {
+  console.error('可访问性契约失败 —— R3 流式 live region：')
+  for (const p of liveProblems) console.error(`  ${p}`)
+  process.exit(1)
+}
 
 if (WRITE) {
   const out = {}

@@ -4,6 +4,7 @@ import { ArrowDownOutlined } from '@ant-design/icons-vue'
 import MessageItem from './MessageItem.vue'
 import FoldHeader from './FoldHeader.vue'
 import type { ChatItem, TextItem } from './chat-types'
+import { throttleRaf } from './chat-types'
 import { createTranscriptViewport } from './transcriptViewport'
 import { captureAnchor, resolveRestoreOffset, type RowRect } from './transcriptAnchor'
 import { createLedger } from './transcriptMeasurementLedger'
@@ -287,9 +288,26 @@ onMounted(() => {
   syncActiveQuestion()
 })
 
-onUpdated(() => {
+/**
+ * 更新后的「测量 + 窗口重算」**按帧合并**（2026-10-09，§4.3 的后半）。
+ *
+ * 原先 `onUpdated` 每次都全量跑 `measureMountedRows()`（`querySelectorAll` + 逐行
+ * `offsetHeight`）+ `recomputeWindow()` —— 而**流式期间每个 delta 都会触发一次 updated**
+ * ⇒ 一秒内几十次全量测量。滚动路径早就有 `scheduleWindowRecompute()` 做 rAF 节流，
+ * **更新路径没有**（这正是 §4.3 记的那条）。
+ *
+ * 这里用仓库里现成的 `throttleRaf`（此前**零调用点**）：同一帧内多次 updated 只测量/重算一次。
+ * **语义不变的部分**：测量仍发生在 DOM 更新**之后**（`onUpdated` 本身就是 post-flush，
+ * 只是把读取推迟到下一帧、读的是同一份 DOM）；`syncActiveQuestion()` 仍**同步**执行 ——
+ * 它很轻，且"提问导航条"随内容即时更新是可见行为，不该被并帧拖慢。
+ */
+const scheduleUpdateWork = throttleRaf(() => {
   measureMountedRows()
   recomputeWindow()
+})
+
+onUpdated(() => {
+  scheduleUpdateWork()
   syncActiveQuestion()
 })
 

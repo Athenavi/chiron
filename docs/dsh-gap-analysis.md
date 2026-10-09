@@ -115,7 +115,9 @@
    （*"Occupancy is a reference figure, **not a billing record**"*；*"reach for a provider tokenizer when a deployment
    needs exact **billing-grade** counts"*）。
    ⇒ **Chiron 的"租户级配额 / 计费"差距仍然成立**，但"**DSH 完全没有账务面**"这句话**不能再说**。
-5. **browser-trust 围栏**已由实现源码核实（2026-10-09）；**KV-cache 前缀复用**仍只有声明文本级证据。
+5. **browser-trust 围栏**与 **KV-cache 前缀复用** **均已由实现源码核实（2026-10-09）**。
+   **2026-10-09 更正**：本行原写「**KV-cache 前缀复用仍只有声明文本级证据**」，与本条下方正文
+   （已升到**实现源码级**、并给出「口径修正」）**自相矛盾** —— 正文是第 72 轮升级的，而这一行摘要忘了同步。
    **browser-trust —— 已核实（实现源码级）**：它**不只是** `dsh-synapse` 插件侧声明，**DSH 核心自己就实现了**：
    ① **鉴权之前先过 `api-request-trust`**：`Host` 必须**是 loopback 或命中 `trustedHosts`**（按 `host:port` 精确匹配），
    见 `dsh-client-connection/README.md` 的「Browser authentication and request trust」一节（`:36-48`）；

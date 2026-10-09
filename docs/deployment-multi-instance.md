@@ -204,7 +204,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 
 ### 结构性后续
 
-- **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；剩余价值是「实例故障后从 checkpoint 续跑而非重跑」，需跨 Go/Python 状态模型设计 —— **设计已产出**（[run 现场 checkpoint 续跑设计](run-checkpoint-design.md)，待评审）；
+- **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；「实例故障后从 checkpoint 续跑而非重跑」**已实现**（**2026-10-09 更正**：原写「设计已产出，**待评审**」✗ —— 该设计文档自己的状态行写着**批 1–4 已实现**，代码里以 `C1 批 2/3/4` 标记：表 `agent_runs`（迁移 `0003`）· 写路径 `app/agent/runtime.py::_save_checkpoint`（回合末、只写不读、失败只降级恢复粒度）· 状态机 `app/agent/checkpoint.py` · 续跑/接管 `app/agent/resume.py` + `main.py` 启动 reconciler；单测 **38 条** + `tests/test_resume_kill_drill.py` 的「kill → 重启 → 断言不重放」真子进程演练）。剩余价值仅「**跨实例的现场内存迁移**」——该设计文档 §9 明确**不做**；
 - ~~**`chiron-cli db` 的迁移入口**~~ **已决策并落地**（L4-2，见 [数据库迁移入口决策](db-migration-entry.md)）：CLI **完全不接触迁移**，Alembic 是唯一入口 —— `chiron-cli db migrate`、`internal/db/migrate.go`（`RunMigrations`）与 `hasInternalMigrationFiles` 已删除；只保留只读的 `db status`（读 `alembic_version`），以及网关启动时的 `internal/db/schema_version.go` 校验（不写 schema）；
 - ~~`credit_transactions` / `payments` 两处 DDL 需同步~~ **已解决**：DDL 全部收敛到唯一权威迁移
   `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables`（含 `ALTER TABLE users ADD COLUMN credits`）

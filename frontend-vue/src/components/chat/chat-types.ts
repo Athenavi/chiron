@@ -107,6 +107,23 @@ export interface TurnStatsItem extends ChatItemBase {
   durationSec?: number
 }
 
+/**
+ * 系统通知行（不是工具卡）。
+ *
+ * 为什么要单列一种 kind（2026-10-09）：护栏拦截（`guardrail_blocked`）此前**实时只有 toast**，
+ * 而**刷新后**它作为一条 `tool_name='guardrail'` 的 tool_call 从库里回来、渲染成**普通工具卡** ——
+ * 同一条记录在"刚被拦下"和"刷新后"长得不一样，且工具卡的形态也不像"系统告诉你发生了什么"。
+ *
+ * 现在**两条路径都产出 `notice`**：`chat-history.ts` 的投影把 `tool_name === 'guardrail'` 映射成它，
+ * 实时路径在收到 `guardrail_blocked` 时也插同一种条目 ⇒ 观感一致（见 `ChatView.vue` 的事件分支）。
+ */
+export interface NoticeItem extends ChatItemBase {
+  kind: 'notice'
+  /** `warning` = 被拦下/中断；`info` = 中性提示（如压缩进行中） */
+  tone: 'warning' | 'info'
+  content: string
+}
+
 /** 一条用量事件的增量。注意 `usage` 是**每次 LLM 调用**一条（C3），不是每轮一条。 */
 export interface TurnStatsDelta {
   inputTokens: number
@@ -152,7 +169,7 @@ export function mergeTurnStats(
   return id
 }
 
-export type ChatItem = TextItem | ReasoningItem | ToolCallItem | ToolResultItem | TurnStatsItem | DateDividerItem
+export type ChatItem = TextItem | ReasoningItem | ToolCallItem | ToolResultItem | TurnStatsItem | DateDividerItem | NoticeItem
 
 /**
  * assistant 消息上内联的 tool_call（OpenAI 形状）。
@@ -295,10 +312,16 @@ export function throttleRaf<T extends (...args: never[]) => void>(fn: T): T {
   const call = fn as (...args: Parameters<T>) => void
   let raf = 0
   let lastArgs: Parameters<T> | null = null
+  // `requestAnimationFrame` 在少数环境（无头运行器 / 旧 jsdom）可能缺席 —— 与
+  // `MessageList.scheduleWindowRecompute` 同款退到 `setTimeout`，免得"刚接进来就崩"。
+  const schedule: (run: () => void) => number =
+    typeof requestAnimationFrame === 'function'
+      ? (run) => requestAnimationFrame(run)
+      : (run) => setTimeout(run, 16) as unknown as number
   const wrapped = ((...args: Parameters<T>) => {
     lastArgs = args
     if (raf) return
-    raf = requestAnimationFrame(() => {
+    raf = schedule(() => {
       raf = 0
       const pending = lastArgs
       lastArgs = null
