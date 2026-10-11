@@ -46,6 +46,38 @@ function loadAdapter(): Promise<MermaidAdapter> {
 }
 
 /**
+ * 二次消毒 SVG。
+ *
+ * mermaid 已配置 `securityLevel: 'strict'`（见下），渲染阶段会做一层过滤 —— 但那是
+ * 库内部的实现细节：版本升级、配置漂移或渲染器换实现，都可能让那层过滤变松。图的内容
+ * 直接来自模型输出（可被提示注入影响），所以写入 DOM 前再剥一遍：`<script>`、`on*`
+ * 事件属性、以及 `javascript:` / `data:text/html` 形式的链接。
+ *
+ * 刻意**不**移除 `<foreignObject>`：mermaid 默认用它在节点里排 HTML 文本，移掉会让图
+ * 残缺；其中残留的事件属性同样会被下面的遍历清掉。
+ */
+function sanitizeSvg(svg: string): string {
+  const doc = new DOMParser().parseFromString(svg, 'image/svg+xml')
+  if (doc.querySelector('parsererror')) return ''
+  doc.querySelectorAll('script').forEach((el) => el.remove())
+  doc.querySelectorAll('*').forEach((el) => {
+    for (const attr of Array.from(el.attributes)) {
+      const name = attr.name.toLowerCase()
+      if (name.startsWith('on')) {
+        el.removeAttribute(attr.name)
+        continue
+      }
+      if ((name === 'href' || name === 'xlink:href') &&
+          /^\s*(javascript:|data:text\/html)/i.test(attr.value)) {
+        el.removeAttribute(attr.name)
+      }
+    }
+  })
+  const root = doc.documentElement
+  return root ? new XMLSerializer().serializeToString(root) : ''
+}
+
+/**
  * 渲染 host 内尚未处理的 `.mermaid` 块。
  * 幂等：已处理的块带 `data-rendered`，重复调用不会重复渲染。
  */
@@ -67,7 +99,14 @@ export async function renderMermaidBlocks(host: HTMLElement, options: RenderOpti
     slot.dataset.rendered = '1'
     try {
       const { svg } = await mermaid.render(`mmd-${++seq}`, code)
-      slot.innerHTML = svg
+      // 二次消毒后再写入（见 sanitizeSvg）；消毒失败则退回源码展示。
+      const safe = sanitizeSvg(svg)
+      if (!safe) {
+        slot.classList.add('mermaid-error')
+        slot.dataset.error = t('errors.chart_syntax_error_showing_source')
+        continue
+      }
+      slot.innerHTML = safe
       slot.classList.add('mermaid-diagram')
     } catch {
       slot.classList.add('mermaid-error')

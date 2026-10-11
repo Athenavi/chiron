@@ -199,11 +199,11 @@ func (h *SmsHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 		Endpoint:        row.Endpoint,
 	}, phone, code); err != nil {
 		if errors.Is(err, auth.ErrSmsUnreachable) {
-			db.AuditLog(ctx, "", db.DefaultTenantID, "sms_send_unreachable", r.URL.Path, "phone="+phone, r.RemoteAddr, nil)
+			db.AuditLog(ctx, "", db.DefaultTenantID, "sms_send_unreachable", r.URL.Path, "phone="+maskPhone(phone), r.RemoteAddr, nil)
 			logAndRespond(w, err, http.StatusBadGateway, "短信服务商不可达")
 			return
 		}
-		db.AuditLog(ctx, "", db.DefaultTenantID, "sms_send_failed", r.URL.Path, "phone="+phone, r.RemoteAddr, nil)
+		db.AuditLog(ctx, "", db.DefaultTenantID, "sms_send_failed", r.URL.Path, "phone="+maskPhone(phone), r.RemoteAddr, nil)
 		logAndRespond(w, err, http.StatusBadGateway, "短信发送失败")
 		return
 	}
@@ -220,7 +220,7 @@ func (h *SmsHandler) SendCode(w http.ResponseWriter, r *http.Request) {
 	if err := h.store.MarkCooldown(ctx, phone, interval); err != nil {
 		slog.Warn("sms mark cooldown failed", "error", err)
 	}
-	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_code_sent", r.URL.Path, "phone="+phone+" purpose="+req.Purpose, r.RemoteAddr, nil)
+	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_code_sent", r.URL.Path, "phone="+maskPhone(phone)+" purpose="+req.Purpose, r.RemoteAddr, nil)
 	OK(w, map[string]any{
 		"status":         "sent",
 		"expire_seconds": row.CodeTTLSeconds,
@@ -304,7 +304,7 @@ func (h *SmsHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	SetTokenCookie(w, token, int(h.cfg.JWTExpiration.Seconds()), h.cfg.CookieSecure)
-	db.AuditLog(ctx, "", db.DefaultTenantID, "login_success", "/v1/auth/sms/login", "phone="+phone, r.RemoteAddr, nil)
+	db.AuditLog(ctx, "", db.DefaultTenantID, "login_success", "/v1/auth/sms/login", "phone="+maskPhone(phone), r.RemoteAddr, nil)
 	OK(w, map[string]interface{}{
 		"token": token,
 		"user":  user,
@@ -341,7 +341,7 @@ func (h *SmsHandler) provisionSmsUser(ctx context.Context, phone string) (UserRe
 	if err != nil {
 		return UserResponse{}, err
 	}
-	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_provision", "/v1/auth/sms/login", "phone="+phone, "", nil)
+	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_provision", "/v1/auth/sms/login", "phone="+maskPhone(phone), "", nil)
 	return user, nil
 }
 
@@ -454,7 +454,7 @@ func (h *SmsHandler) Bind(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
-	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_bind", "/v1/auth/sms/bind", "phone="+phone, r.RemoteAddr, nil)
+	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_bind", "/v1/auth/sms/bind", "phone="+maskPhone(phone), r.RemoteAddr, nil)
 	OK(w, map[string]any{"status": "bound", "phone": phone})
 }
 
@@ -496,7 +496,7 @@ func (h *SmsHandler) Unbind(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
-	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_unbind", "/v1/auth/sms/bind", "phone="+*phone, r.RemoteAddr, nil)
+	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_unbind", "/v1/auth/sms/bind", "phone="+maskPhone(*phone), r.RemoteAddr, nil)
 	OK(w, map[string]string{"status": "unbound"})
 }
 

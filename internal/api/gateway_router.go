@@ -82,6 +82,31 @@ func requestIDHeader(next http.Handler) http.Handler {
 // realIPHeader extracts the real IP from X-Forwarded-For / X-Real-IP,
 // but ONLY when the direct peer is a trusted reverse proxy (P1 修复)：
 // 无条件信任客户端可伪造的 XFF 会绕过按 IP 的限流与验证码失败升级。
+// isTrustedProxyPeer 判断请求来源是否在可信代理网段内（与 realIPHeader 同一套判定）。
+// 用于决定是否采信客户端提供的 Host / X-Forwarded-* 头。
+//
+// 注意：TRUSTED_PROXY_CIDRS 为空 ⇒ 一律返回 false（fail-close）—— 不配置就等于
+// "没有可信代理"，此时不采信任何由客户端声明的来源信息。
+func isTrustedProxyPeer(remoteAddr string, trustedCIDRs []string) bool {
+	if len(trustedCIDRs) == 0 {
+		return false
+	}
+	host, _, err := net.SplitHostPort(remoteAddr)
+	if err != nil {
+		host = remoteAddr
+	}
+	ip := net.ParseIP(strings.TrimSpace(host))
+	if ip == nil {
+		return false
+	}
+	for _, c := range trustedCIDRs {
+		if _, n, err := net.ParseCIDR(strings.TrimSpace(c)); err == nil && n.Contains(ip) {
+			return true
+		}
+	}
+	return false
+}
+
 func realIPHeader(trustedCIDRs []string) func(http.Handler) http.Handler {
 	var trusted []*net.IPNet
 	for _, c := range trustedCIDRs {
@@ -262,6 +287,8 @@ func NewGatewayRouter(
 
 	// Tenant resource manager — per-tenant concurrency & storage quotas
 	tenantResMgr := NewTenantResourceManager(atomicRedis, cfg.AgentMaxConcurrency)
+	// 注入到上传路径的配额门禁（media_upload.go / uploads.go 通过 CheckUploadAllowed 使用）
+	SetTenantResourceManager(tenantResMgr)
 	tenantResMgr.StartCleanup(lifecycleCtx, 30*time.Minute)
 
 	// Submit handler (proxies to Python)

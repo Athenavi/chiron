@@ -137,6 +137,11 @@ func SSEHandler(hub *broadcast.Hub, sessionMgr *session.Manager) http.HandlerFun
 			Unauthorized(w, ErrAuthRequired)
 			return
 		}
+		// 订阅键归属隔离：hub 以 subID 为键，且 hub.Subscribe 在**同键**时会关闭旧
+		// 订阅通道（见 internal/broadcast/hub.go）。若直接采信客户端传来的 client_id，
+		// 攻击者用**他人**的 client_id 订阅即可把对方的 SSE 连接顶掉（拒绝服务）。
+		// 这里强制加上调用者维度前缀，使不同用户的订阅键不可能相同。
+		subID = claims.UserID + ":" + subID
 		if sessionMgr != nil {
 			s, err := sessionMgr.GetSession(r.Context(), sessionID)
 			if err != nil {

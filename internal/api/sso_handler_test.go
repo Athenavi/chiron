@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/athenavi/chiron/internal/auth"
+	"github.com/athenavi/chiron/config"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -191,7 +192,9 @@ func TestResolveTenantByHostRejectsUnmatchedAndEmpty(t *testing.T) {
 
 func TestListPublicProvidersReturnsEmptyForUnmatchedHost(t *testing.T) {
 	store := &recordingEntStore{} // 无匹配域名
-	h := &SSOHandler{db: store, encKey: make([]byte, 32)}
+	// cfg 指向可信代理网段（httptest 默认 RemoteAddr 192.0.2.1 落在其中），
+	// 这样才会真正走到"解析 Host → 未匹配"这条路径。
+	h := &SSOHandler{db: store, encKey: make([]byte, 32), cfg: trustedProxyTestCfg()}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/providers", nil)
 	req.Host = "unknown.example.org"
@@ -212,7 +215,7 @@ func TestListPublicProvidersReturnsEmptyForUnmatchedHost(t *testing.T) {
 func TestListPublicProvidersEmptyWhenTenantSSODisabled(t *testing.T) {
 	// 域名已验证并归属 tenant-b，但 features 无记录 ⇒ sso_enabled=false（灰度默认）
 	store := &recordingEntStore{domainTenant: "tenant-b"}
-	h := &SSOHandler{db: store, encKey: make([]byte, 32)}
+	h := &SSOHandler{db: store, encKey: make([]byte, 32), cfg: trustedProxyTestCfg()}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/providers", nil)
 	req.Host = "app.example.com"
@@ -225,6 +228,32 @@ func TestListPublicProvidersEmptyWhenTenantSSODisabled(t *testing.T) {
 	}
 	if strings.Contains(rec.Body.String(), "11111111-1111-1111-1111-111111111111") {
 		t.Error("租户未开通 SSO 时不得返回任何 provider")
+	}
+}
+
+// trustedProxyTestCfg 返回一份"请求来自可信代理"的配置：httptest.NewRequest 的默认
+// RemoteAddr 是 192.0.2.1:1234，把该网段标为可信即可走通 Host 解析路径。
+func trustedProxyTestCfg() *config.Config {
+	return &config.Config{TrustedProxyCIDRs: []string{"192.0.2.0/24"}}
+}
+
+// R3：Host 只应在请求来自可信代理时才被采信 —— 直连客户端可伪造 Host，把访客引到别的
+// 租户的 IdP。这里用"无可信代理"的 handler 验证：即使 Host 能匹配 domains 表也返回空。
+func TestListPublicProvidersIgnoresHostFromUntrustedPeer(t *testing.T) {
+	store := &recordingEntStore{domainTenant: "tenant-b", features: &TenantFeatures{SSOEnabled: true}}
+	h := &SSOHandler{db: store, encKey: make([]byte, 32)} // 无 cfg ⇒ 无可信代理
+
+	req := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/providers", nil)
+	req.Host = "app.example.com" // 即使能匹配 domains 表
+	rec := httptest.NewRecorder()
+
+	h.ListPublicProviders(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d，期望 200", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "11111111-1111-1111-1111-111111111111") {
+		t.Error("来源不可信时不得按客户端提供的 Host 返回 provider")
 	}
 }
 

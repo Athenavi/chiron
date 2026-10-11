@@ -281,6 +281,19 @@ func (h *SystemHandler) RedisHealth(w http.ResponseWriter, r *http.Request) {
 // 后的利用门槛，与 DBExecute 保持对称。
 var readOnlySQLPrefixes = []string{"SELECT", "WITH", "TABLE", "VALUES", "EXPLAIN", "SHOW"}
 
+// containsDMLKeyword 判断 SQL 是否含 DML 关键字（按空格词边界）。
+//
+// 只用于 `WITH` 前缀的额外筛查（其他只读前缀无法内嵌 DML）。用 `" KW "` 形式比较，
+// 可避开列名/标识符里的子串（如 `deleted_at` 不会命中 ` DELETE `）；宁可误拒也不放过。
+func containsDMLKeyword(upperSQL string) bool {
+	for _, kw := range []string{"DELETE", "INSERT", "UPDATE", "MERGE", "TRUNCATE"} {
+		if strings.HasPrefix(upperSQL, kw+" ") || strings.Contains(upperSQL, " "+kw+" ") {
+			return true
+		}
+	}
+	return false
+}
+
 // validateReadOnlySQL 校验 SQL 是否为**单条只读语句**，返回空串表示放行。
 //
 // 判据：① 首关键字属于只读白名单；② 去掉结尾分号/空白后不再含 `;`
@@ -301,6 +314,12 @@ func validateReadOnlySQL(sql string) string {
 	}
 	if !allowed {
 		return "only read-only statements (SELECT/WITH/TABLE/VALUES/EXPLAIN/SHOW) are allowed on this endpoint"
+	}
+	// `WITH` 是唯一能**内嵌 DML** 的只读前缀：PostgreSQL 的 data-modifying CTE
+	// （`WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x`）是**单语句**、无分号，
+	// 因此能穿过上面的前缀白名单与多语句检查。这里对 WITH 额外做 DML 关键字筛查。
+	if strings.HasPrefix(upper, "WITH") && containsDMLKeyword(upper) {
+		return "data-modifying CTE is not allowed on this endpoint"
 	}
 	if strings.Contains(strings.TrimRight(trimmed, "; \t\r\n"), ";") {
 		return "multiple statements are not allowed on this endpoint"

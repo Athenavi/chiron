@@ -35,10 +35,13 @@ func registerSystemRoutes(
 
 	// System (rate limited; spans/traces 仅管理员可见，S 安全修复：原为公开信息泄露)
 	// 健康评分属内部运行信息；同组的 spans/traces 都要求 PermAdminRead，此处漏了鉴权。
-	mux.Handle("GET /v1/system/health", authMW(rlMW(http.HandlerFunc(systemHandler.HealthScores))))
+	// 三处都要求 PermAdminRead：这些端点回的是**全局**运行指标（健康分/span/trace/计数器），
+	// 任意登录用户可读会泄漏平台内部状态。此前 health 与 metrics 漏了权限，与同组
+	// spans/traces 口径不一致（metrics 更矛盾：公开的 Prometheus /metrics 反而要求 admin）。
+	mux.Handle("GET /v1/system/health", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.HealthScores)))))
 	mux.Handle("GET /v1/system/spans", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.Spans)))))
 	mux.Handle("GET /v1/system/traces", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.Traces)))))
-	mux.Handle("GET /v1/metrics", authMW(rlMW(http.HandlerFunc(systemHandler.Metrics))))
+	mux.Handle("GET /v1/metrics", authMW(rlMW(RequirePermission(auth.PermAdminRead)(http.HandlerFunc(systemHandler.Metrics)))))
 	mux.Handle("POST /v1/admin/log-level", authMW(rlMW(RequirePermission(auth.PermAdminWrite)(http.HandlerFunc(systemHandler.SetLogLevel)))))
 
 	// Trace (user-level call chain tracing, tenant-isolated)

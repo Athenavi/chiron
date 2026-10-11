@@ -242,7 +242,24 @@ func (h *SSOHandler) resolveTenantByHost(ctx context.Context, host string) (stri
 // ListPublicProviders GET /v1/auth/sso/providers
 // 返回**当前 Host 所属租户**的 enabled provider 展示字段（不含任何敏感信息），按 sort_order 排序。
 func (h *SSOHandler) ListPublicProviders(w http.ResponseWriter, r *http.Request) {
-	tenantID, ok := h.resolveTenantByHost(r.Context(), r.Host)
+	// Host 信任：只有来自可信代理（nginx / Ingress）的请求，Host 才反映真实的外部域名。
+	// 直连网关的客户端可以任意伪造 Host —— 那会让 SSO 把访客引导到**别的租户**的 IdP
+	// （跨租户登录入口劫持）。不可信来源按"无 Host"处理 ⇒ 返回空列表（fail-close）。
+	//
+	// 部署要求：生产必须配置 TRUSTED_PROXY_CIDRS 指向反向代理网段，否则本接口
+	// （以及登录页的 SSO 入口）会一直返回空列表。
+	var trustedCIDRs []string
+	if h.cfg != nil {
+		trustedCIDRs = h.cfg.TrustedProxyCIDRs
+	}
+	host := ""
+	if isTrustedProxyPeer(r.RemoteAddr, trustedCIDRs) {
+		host = r.Host
+	} else {
+		slog.Warn("sso public providers: request not from trusted proxy, ignoring Host",
+			"remote_addr", r.RemoteAddr)
+	}
+	tenantID, ok := h.resolveTenantByHost(r.Context(), host)
 	if !ok {
 		// 未配/未验证域名：返回空列表（不是"全部"）
 		OK(w, []map[string]any{})

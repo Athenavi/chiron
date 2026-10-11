@@ -82,6 +82,13 @@ func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		name = header.Filename
 	}
 
+	// 租户配额门禁：存储容量 + 文件数量。此前 CheckStorageQuota / CheckFileCountQuota
+	// 从未被调用，配额完全不生效。放在落库**之前**，避免超限文件先入库再回滚。
+	if allowed, reason := CheckUploadAllowed(r.Context(), tenantID, fileSize); !allowed {
+		JSON(w, http.StatusRequestEntityTooLarge, APIResponse{Success: false, Error: reason})
+		return
+	}
+
 	// 先插入数据库获取 UUID（含 parent_id，子文件夹上传不落到根目录）
 	assetID, err := id.UUID()
 	if err != nil {

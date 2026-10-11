@@ -38,6 +38,15 @@ func maskEmail(email string) string {
 	return local[:3] + "***@" + domain[:1] + "***" + domain[dot:]
 }
 
+// maskPhone 保留前 3 位与后 2 位，中间打码（如 138****12）。
+// 与 maskEmail 同为日志脱敏：审计流水里出现完整手机号，等于把用户 PII 长期留痕。
+func maskPhone(phone string) string {
+	if len(phone) < 7 {
+		return "***"
+	}
+	return phone[:3] + "****" + phone[len(phone)-2:]
+}
+
 // DefaultTenantID is the default tenant ID for single-tenant mode.
 const DefaultTenantID = db.DefaultTenantID
 
@@ -329,7 +338,11 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if exists > 0 {
-		BadRequest(w, "email already registered")
+		// 用户枚举缓解：不再回 "email already registered" —— 那等于给出"该邮箱已注册"
+		// 的确定性答案，可被批量用来探测账号。改成与其它注册失败同形的模糊提示，
+		// 真实原因只进结构化日志。注册接口本身另有验证码 + 限流兜底。
+		slog.Info("registration rejected: email already exists", "tenant", tenantID)
+		BadRequest(w, "registration could not be completed")
 		return
 	}
 
