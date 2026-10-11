@@ -56,9 +56,12 @@ func AllowedByEntOrLegacy(ctx context.Context, claims *auth.Claims, perm string)
 	}
 	perms, err := enterprise.LoadEffectivePerms(ctx, claims.UserID)
 	if err != nil {
-		slog.Warn("ent rbac: load effective perms failed, falling back to legacy permissions",
+		// fail-close（P0 修复）：此前回退到 legacy 角色权限 —— 但用户可能已被 ent 角色
+		// **明确剥夺**了某权限（perms 为空切片），PG/Redis 抖动期间就会被 legacy 角色权限
+		// 放行，构成越权窗口。RBAC 是授权判定：读不到就应当**拒绝**，而不是放宽。
+		slog.Warn("ent rbac: load effective perms failed, denying (fail-close)",
 			"user_id", claims.UserID, "perm", perm, "error", err)
-		return auth.HasPermission(claims, perm)
+		return false
 	}
 	if perms == nil {
 		return auth.HasPermission(claims, perm)

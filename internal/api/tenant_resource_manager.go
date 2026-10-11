@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -267,4 +268,33 @@ func (trm *TenantResourceManager) CheckFileCountQuota(ctx context.Context, tenan
 		return false, currentCount, cfg.MaxStorageFiles
 	}
 	return true, currentCount, cfg.MaxStorageFiles
+}
+
+// ── 上传路径的配额门禁 ──────────────────────────────────────────────
+//
+// 背景：CheckStorageQuota / CheckFileCountQuota 此前**没有任何调用点**，租户存储配额
+// 形同虚设（只写进配置表，从不生效）。这里给上传 handler 提供统一入口。
+//
+// 为什么用包级变量而非穿透构造函数：配额检查散布在 MediaHandler / UploadHandler 的
+// 多个方法里，显式注入要改一批构造签名；包级单例与既有的 db.GlobalDBManager 做法一致。
+// 未注入时（单测 / CLI）视为"无配额管理器" ⇒ 放行。
+var tenantResMgrForQuota *TenantResourceManager
+
+// SetTenantResourceManager 由网关启动时注入（见 gateway_router.go）。
+func SetTenantResourceManager(m *TenantResourceManager) { tenantResMgrForQuota = m }
+
+// CheckUploadAllowed 是上传路径的统一配额门禁：同时检查存储容量与文件数量。
+// 返回 (是否放行, 拒绝原因)；未配置管理器或租户为空时放行。
+func CheckUploadAllowed(ctx context.Context, tenantID string, fileSize int64) (bool, string) {
+	m := tenantResMgrForQuota
+	if m == nil || tenantID == "" {
+		return true, ""
+	}
+	if allowed, used, limit := m.CheckStorageQuota(ctx, tenantID, fileSize); !allowed {
+		return false, fmt.Sprintf("租户存储配额不足：已用 %d 字节，上限 %d 字节，本次上传 %d 字节", used, limit, fileSize)
+	}
+	if allowed, current, limit := m.CheckFileCountQuota(ctx, tenantID); !allowed {
+		return false, fmt.Sprintf("租户文件数量已达上限：%d / %d", current, limit)
+	}
+	return true, ""
 }

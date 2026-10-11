@@ -171,6 +171,13 @@ func (h *UploadHandler) Init(w http.ResponseWriter, r *http.Request) {
 		chunkCount = 1
 	}
 
+	// 租户配额门禁（分片路径）：按声明的总大小预检存储容量 + 文件数量 —— 既避免把
+	// 超限文件完整传完才在收尾阶段被拒，也堵住"用分片上传绕过直传配额"的口子。
+	if allowed, reason := CheckUploadAllowed(r.Context(), claims.TenantID, body.Size); !allowed {
+		JSON(w, http.StatusRequestEntityTooLarge, APIResponse{Success: false, Error: reason})
+		return
+	}
+
 	uploadID, err := id.UUID()
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "generate id failed")

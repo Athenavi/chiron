@@ -94,8 +94,9 @@ type entGroupCost struct {
 
 // EntCostStore 是企业成本中心的数据访问接口。
 type EntCostStore interface {
-	CostSummary(ctx context.Context, from, to time.Time, groupBy string) (*entCostSummary, error)
-	GroupCost(ctx context.Context, groupID string, from, to time.Time) (*entGroupCost, error)
+	// tenantID 为空表示"全部租户"（仅平台 owner 可见）；非空则把结果限定在该租户内。
+	CostSummary(ctx context.Context, from, to time.Time, groupBy, tenantID string) (*entCostSummary, error)
+	GroupCost(ctx context.Context, groupID string, from, to time.Time, tenantID string) (*entGroupCost, error)
 
 	ListQuotaPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
 	GetQuotaPool(ctx context.Context, id string) (*EntQuotaPool, error)
@@ -132,7 +133,7 @@ func isUniqueViolation(err error) bool {
 
 // ── CostSummary：billing_records + credit_transactions + payments 跨租户汇总 ──
 
-func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, groupBy string) (*entCostSummary, error) {
+func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, groupBy, tenantID string) (*entCostSummary, error) {
 	// 白名单：仅允许 "day" 或 "tenant"
 	var keyExpr, groupExpr string
 	switch groupBy {
@@ -163,12 +164,16 @@ func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, gr
 	}
 
 	// 1) billing_records：成本与 token 明细（SQL 聚合）
+	// 租户过滤加在 WHERE 里而不是事后过滤：groupBy=day 时聚合结果无法拆回单租户。
+	// tenantID 为空 ⇒ $3 = '' ⇒ 条件恒真 ⇒ 全部租户（平台 owner 视角）。
 	qBilling := fmt.Sprintf(
 		`SELECT %s AS k, COALESCE(SUM(cost_cents),0), COALESCE(SUM(input_tokens),0),
 		        COALESCE(SUM(output_tokens),0), COUNT(*)
-		 FROM billing_records WHERE created_at >= $1 AND created_at < $2
+		 FROM billing_records
+		 WHERE created_at >= $1 AND created_at < $2
+		   AND ($3 = '' OR tenant_id::text = $3)
 		 GROUP BY %s`, keyExpr, groupExpr)
-	rows, err := db.GlobalDBManager.Query(ctx, qBilling, from, to)
+	rows, err := db.GlobalDBManager.Query(ctx, qBilling, from, to, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("summary billing_records: %w", err)
 	}
@@ -197,8 +202,9 @@ func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, gr
 		`SELECT %s AS k, COALESCE(-SUM(ct.amount),0)
 		 FROM credit_transactions ct JOIN users u ON u.id::text = ct.user_id::text
 		 WHERE ct.amount < 0 AND ct.created_at >= $1 AND ct.created_at < $2
+		   AND ($3 = '' OR u.tenant_id::text = $3)
 		 GROUP BY %s`, ctKey, ctGroup)
-	rows, err = db.GlobalDBManager.Query(ctx, qCredits, from, to)
+	rows, err = db.GlobalDBManager.Query(ctx, qCredits, from, to, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("summary credit_transactions: %w", err)
 	}
@@ -227,8 +233,9 @@ func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, gr
 		 FROM payments p JOIN users u ON u.id::text = p.user_id
 		 WHERE p.status = 'paid'
 		   AND COALESCE(p.paid_at, p.created_at) >= $1 AND COALESCE(p.paid_at, p.created_at) < $2
+		   AND ($3 = '' OR u.tenant_id::text = $3)
 		 GROUP BY %s`, pKey, pGroup)
-	rows, err = db.GlobalDBManager.Query(ctx, qPayments, from, to)
+	rows, err = db.GlobalDBManager.Query(ctx, qPayments, from, to, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("summary payments: %w", err)
 	}
@@ -260,14 +267,16 @@ func (s *pgEntCostStore) CostSummary(ctx context.Context, from, to time.Time, gr
 
 // ── GroupCost：群组计费归集明细 + 合计 ──
 
-func (s *pgEntCostStore) GroupCost(ctx context.Context, groupID string, from, to time.Time) (*entGroupCost, error) {
+func (s *pgEntCostStore) GroupCost(ctx context.Context, groupID string, from, to time.Time, tenantID string) (*entGroupCost, error) {
 	out := &entGroupCost{GroupID: groupID, Records: []entGroupCostRow{}}
 
 	err := db.GlobalDBManager.QueryRow(ctx,
 		`SELECT COUNT(*), COALESCE(SUM(cost_cents),0), COALESCE(SUM(input_tokens),0),
 		        COALESCE(SUM(output_tokens),0)
-		 FROM billing_records WHERE group_id = $1 AND created_at >= $2 AND created_at < $3`,
-		groupID, from, to).
+		 FROM billing_records
+		 WHERE group_id = $1 AND created_at >= $2 AND created_at < $3
+		   AND ($4 = '' OR tenant_id::text = $4)`,
+		groupID, from, to, tenantID).
 		Scan(&out.Total.Records, &out.Total.CostCents, &out.Total.InputTokens, &out.Total.OutputTokens)
 	if err != nil {
 		return nil, fmt.Errorf("group cost totals: %w", err)
@@ -279,8 +288,10 @@ func (s *pgEntCostStore) GroupCost(ctx context.Context, groupID string, from, to
 		// 与"真的用了 0 token"区分开。读侧 COALESCE 成 0 以保持 API 契约不变。
 		`SELECT id, user_id, session_id, COALESCE(input_tokens,0), COALESCE(output_tokens,0),
 		        cost_cents, created_at
-		 FROM billing_records WHERE group_id = $1 AND created_at >= $2 AND created_at < $3
-		 ORDER BY created_at DESC LIMIT 500`, groupID, from, to)
+		 FROM billing_records
+		 WHERE group_id = $1 AND created_at >= $2 AND created_at < $3
+		   AND ($4 = '' OR tenant_id::text = $4)
+		 ORDER BY created_at DESC LIMIT 500`, groupID, from, to, tenantID)
 	if err != nil {
 		return nil, fmt.Errorf("group cost records: %w", err)
 	}
@@ -544,9 +555,13 @@ func requirePerm(w http.ResponseWriter, r *http.Request, perm string) *auth.Clai
 	return claims
 }
 
-// scopedTenantID：非 owner 且 claims 携带租户时，强制锚定自身租户。
+// scopedTenantID：非 owner 一律强制锚定自身租户（fail-close）。
+//
+// 关键点：非 owner 时**不再**在 claims 缺租户的情况下退回 requested —— 那等于让调用方
+// （请求体 / 查询串）决定租户：越权方只要拿一个不带 tenant_id 的 token，就能写/读他租户。
+// 现在缺租户就返回空串：写路径的 uuid.Parse 会拒绝，读路径命中 0 条记录。
 func scopedTenantID(claims *auth.Claims, requested string) string {
-	if claims != nil && claims.TenantID != "" && claims.Role != "owner" {
+	if claims != nil && claims.Role != "owner" {
 		return claims.TenantID
 	}
 	return requested
@@ -582,7 +597,15 @@ func parseTimeRange(fromStr, toStr string) (time.Time, time.Time, error) {
 
 // CostSummary GET /v1/ent/cost/summary?from=&to=&group_by=tenant|day
 func (h *EntCostCenterHandler) CostSummary(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminRead) == nil {
+	claims := requirePerm(w, r, auth.PermAdminRead)
+	if claims == nil {
+		return
+	}
+	// 跨租户读防护：非 owner 只能看自己租户的成本汇总 —— 此前这条查询没有任何租户
+	// 过滤，任一持有 admin:read 的租户管理员都能读到**全平台**所有租户的消费与充值。
+	tenantID := scopedTenantID(claims, "")
+	if claims.Role != "owner" && tenantID == "" {
+		Forbidden(w, "tenant context missing")
 		return
 	}
 	groupBy := r.URL.Query().Get("group_by")
@@ -600,7 +623,7 @@ func (h *EntCostCenterHandler) CostSummary(w http.ResponseWriter, r *http.Reques
 		BadRequest(w, "invalid time range parameters")
 		return
 	}
-	summary, err := h.store.CostSummary(r.Context(), from, to, groupBy)
+	summary, err := h.store.CostSummary(r.Context(), from, to, groupBy, tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "cost summary failed")
 		return
@@ -610,7 +633,15 @@ func (h *EntCostCenterHandler) CostSummary(w http.ResponseWriter, r *http.Reques
 
 // GroupCostDetail GET /v1/ent/cost/groups/{id}?from=&to=
 func (h *EntCostCenterHandler) GroupCostDetail(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminRead) == nil {
+	claims := requirePerm(w, r, auth.PermAdminRead)
+	if claims == nil {
+		return
+	}
+	// 跨租户读防护：非 owner 只看自己租户；查他租户的 group 会因 tenant_id 过滤命中
+	// 0 条记录（不泄漏该 group 是否存在）。
+	tenantID := scopedTenantID(claims, "")
+	if claims.Role != "owner" && tenantID == "" {
+		Forbidden(w, "tenant context missing")
 		return
 	}
 	groupID := r.PathValue("id")
@@ -623,7 +654,7 @@ func (h *EntCostCenterHandler) GroupCostDetail(w http.ResponseWriter, r *http.Re
 		BadRequest(w, "invalid time range parameters")
 		return
 	}
-	out, err := h.store.GroupCost(r.Context(), groupID, from, to)
+	out, err := h.store.GroupCost(r.Context(), groupID, from, to, tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "group cost failed")
 		return
@@ -638,6 +669,10 @@ func (h *EntCostCenterHandler) ListQuotas(w http.ResponseWriter, r *http.Request
 		return
 	}
 	tenantID := scopedTenantID(claims, r.URL.Query().Get("tenant_id"))
+	if claims.Role != "owner" && tenantID == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	pools, err := h.store.ListQuotaPools(r.Context(), tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list quotas failed")
@@ -660,7 +695,8 @@ func (h *EntCostCenterHandler) ListQuotas(w http.ResponseWriter, r *http.Request
 
 // CreateQuota POST /v1/ent/quotas
 func (h *EntCostCenterHandler) CreateQuota(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminWrite) == nil {
+	claims := requirePerm(w, r, auth.PermAdminWrite)
+	if claims == nil {
 		return
 	}
 	var body struct {
@@ -673,6 +709,9 @@ func (h *EntCostCenterHandler) CreateQuota(w http.ResponseWriter, r *http.Reques
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
+	// 跨租户写防护：非 owner 只能给自己租户建配额池 —— 此前直接采信请求体里的
+	// tenant_id，任一持有 admin:write 的租户管理员都能给**别的租户**设配额（越权写）。
+	body.TenantID = scopedTenantID(claims, body.TenantID)
 	if _, err := uuid.Parse(body.TenantID); err != nil {
 		BadRequest(w, "valid tenant_id (uuid) required")
 		return
@@ -750,7 +789,8 @@ func (h *EntCostCenterHandler) GetQuota(w http.ResponseWriter, r *http.Request) 
 
 // UpdateQuota PUT /v1/ent/quotas/{id}
 func (h *EntCostCenterHandler) UpdateQuota(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminWrite) == nil {
+	claims := requirePerm(w, r, auth.PermAdminWrite)
+	if claims == nil {
 		return
 	}
 	id := r.PathValue("id")
@@ -775,6 +815,12 @@ func (h *EntCostCenterHandler) UpdateQuota(w http.ResponseWriter, r *http.Reques
 			return
 		}
 		logAndRespond(w, err, http.StatusInternalServerError, "get quota failed")
+		return
+	}
+	// 跨租户写防护：非 owner 不得改**别的租户**的配额池。这里返回 404 而非 403，
+	// 避免用状态码差异探测他租户的 pool id 是否存在。
+	if scopedTenantID(claims, pool.TenantID) != pool.TenantID {
+		NotFound(w, ErrNotFound)
 		return
 	}
 	if body.ResourceType != nil {
@@ -815,12 +861,28 @@ func (h *EntCostCenterHandler) UpdateQuota(w http.ResponseWriter, r *http.Reques
 
 // DeleteQuota DELETE /v1/ent/quotas/{id}（级联删除分配）
 func (h *EntCostCenterHandler) DeleteQuota(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminWrite) == nil {
+	claims := requirePerm(w, r, auth.PermAdminWrite)
+	if claims == nil {
 		return
 	}
 	id := r.PathValue("id")
 	if _, err := uuid.Parse(id); err != nil {
 		BadRequest(w, "invalid quota id")
+		return
+	}
+	// 跨租户写防护：先确认该池属于调用者租户 —— 越权删除他租户配额同样是破坏性写。
+	// 返回 404 以免用状态码差异探测他租户的 pool id 是否存在。
+	pool, err := h.store.GetQuotaPool(r.Context(), id)
+	if err != nil {
+		if errors.Is(err, errQuotaNotFound) {
+			NotFound(w, ErrNotFound)
+			return
+		}
+		logAndRespond(w, err, http.StatusInternalServerError, "get quota failed")
+		return
+	}
+	if scopedTenantID(claims, pool.TenantID) != pool.TenantID {
+		NotFound(w, ErrNotFound)
 		return
 	}
 	if err := h.store.DeleteQuotaPool(r.Context(), id); err != nil {
@@ -837,7 +899,8 @@ func (h *EntCostCenterHandler) DeleteQuota(w http.ResponseWriter, r *http.Reques
 // CreateAllocation POST /v1/ent/quotas/{id}/allocations
 // 校验分配总额不超过池总量（total_amount > 0 时），超出返回 422。
 func (h *EntCostCenterHandler) CreateAllocation(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminWrite) == nil {
+	claims := requirePerm(w, r, auth.PermAdminWrite)
+	if claims == nil {
 		return
 	}
 	poolID := r.PathValue("id")
@@ -874,6 +937,11 @@ func (h *EntCostCenterHandler) CreateAllocation(w http.ResponseWriter, r *http.R
 			return
 		}
 		logAndRespond(w, err, http.StatusInternalServerError, "get quota failed")
+		return
+	}
+	// 跨租户写防护：非 owner 不得往**别的租户**的配额池里加分配。
+	if scopedTenantID(claims, pool.TenantID) != pool.TenantID {
+		NotFound(w, ErrNotFound)
 		return
 	}
 

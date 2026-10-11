@@ -425,13 +425,20 @@ func (h *BillingHandler) AlipayCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// 金额校验：回调 total_amount（元）必须与订单一致
-	if amt, aErr := strconv.ParseFloat(params["total_amount"], 64); aErr == nil {
-		if int64(amt*100) != p.AmountCents {
-			slog.Warn("alipay callback amount mismatch", "order", p.ID, "got", params["total_amount"], "want", p.AmountCents)
-			BadRequest(w, "amount mismatch")
-			return
-		}
+	// 金额校验：回调 total_amount（元）必须与订单一致。
+	// 解析失败**即拒绝** —— 此前 aErr != nil 会整段跳过比对，攻击者只要构造一个不带
+	// total_amount（或金额非数字）的回调就能绕过金额校验直接入账。
+	amt, aErr := strconv.ParseFloat(params["total_amount"], 64)
+	if aErr != nil {
+		slog.Warn("alipay callback amount missing or unparseable",
+			"order", p.ID, "raw", params["total_amount"])
+		BadRequest(w, "amount missing")
+		return
+	}
+	if int64(amt*100) != p.AmountCents {
+		slog.Warn("alipay callback amount mismatch", "order", p.ID, "got", params["total_amount"], "want", p.AmountCents)
+		BadRequest(w, "amount mismatch")
+		return
 	}
 
 	if _, _, err := h.mgr.ConfirmPayment(ctx, p.ID, tradeNo); err != nil {
@@ -466,8 +473,14 @@ func (h *BillingHandler) WechatCallback(w http.ResponseWriter, r *http.Request) 
 		BadRequest(w, "unknown order")
 		return
 	}
-	if amountCents != nil && *amountCents != p.AmountCents {
-		slog.Warn("wechat callback amount mismatch", "order", p.ID, "got", amountCents, "want", p.AmountCents)
+	// 金额缺失即拒绝 —— 此前 amountCents == nil 会跳过比对，构造不带金额的回调即可绕过。
+	if amountCents == nil {
+		slog.Warn("wechat callback amount missing", "order", p.ID)
+		BadRequest(w, "amount missing")
+		return
+	}
+	if *amountCents != p.AmountCents {
+		slog.Warn("wechat callback amount mismatch", "order", p.ID, "got", *amountCents, "want", p.AmountCents)
 		BadRequest(w, "amount mismatch")
 		return
 	}

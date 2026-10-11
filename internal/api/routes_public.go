@@ -4,6 +4,7 @@ import (
 	"net/http"
 
 	"github.com/athenavi/chiron/config"
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/storage"
 )
 
@@ -38,7 +39,9 @@ func registerPublicEndpoints(
 	// Prometheus 指标端点：生产收敛为需要 PermAdminRead 权限，避免泄漏业务指标
 	mux.Handle("GET /metrics", rlMW(metricsAuthMW(cfg, authMW, systemHandler.PrometheusMetrics)))
 	// API 文档（OpenAPI spec，公开，供 Swagger/Redoc 展示）
-	mux.Handle("GET /docs/", http.StripPrefix("/docs/", http.FileServer(http.Dir("docs"))))
+	// API 文档：内容是**完整的攻击面清单**（所有端点与参数），不再对未认证访客开放。
+	mux.Handle("GET /docs/", authMW(RequirePermission(auth.PermAdminRead)(
+		http.StripPrefix("/docs/", http.FileServer(http.Dir("docs"))))))
 	// 就绪探针同样不挂限流：它自己会检查 Redis/PG 并如实返回 503，
 	// 而"限流组件不可用"并不等于"本实例未就绪"，不该借限流中间件的 503 表达。
 	mux.Handle("GET /ready", http.HandlerFunc(handleReadiness))

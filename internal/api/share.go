@@ -144,10 +144,12 @@ func (h *ShareHandler) Create(w http.ResponseWriter, r *http.Request) {
 	// 能过，但列类型一旦变动就会静默变形。
 	// 真正致命的是 message_ids：[]string 被 pgx 编码成数组字面量写进 varchar(255)，
 	// 超过 255 字符即报 value too long（修见迁移 d3e5f7a9b1c4）。
+	// 分享链接带 TTL（此前只有 revoked_at，链接一经生成即永久有效 —— 会话内容会一直
+	// 挂在一个 token 上）。默认 30 天，见 shareTTL。
 	_, err = db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO conversation_shares (id, session_id, user_id, title, message_ids, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6)`,
-		token, id, claims.UserID, sess.Title, valid, time.Now())
+		`INSERT INTO conversation_shares (id, session_id, user_id, title, message_ids, created_at, expires_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+		token, id, claims.UserID, sess.Title, valid, time.Now(), time.Now().Add(shareTTL))
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create share failed")
 		return
@@ -338,11 +340,20 @@ func (h *ShareHandler) PublicGet(w http.ResponseWriter, r *http.Request) {
 }
 
 // activeShare returns the session's non-revoked share, or nil.
+// shareTTL 是新建分享链接的有效期。此前 conversation_shares 只有 revoked_at，分享
+// 一经创建便永久有效；这里给新分享加上 TTL（存量行 expires_at 为 NULL，读侧视为
+// 永不过期，不受影响）。
+const shareTTL = 30 * 24 * time.Hour
+
 func (h *ShareHandler) activeShare(r *http.Request, sessionID string) (*model.ConversationShare, error) {
 	share := &model.ConversationShare{}
+	// 过期过滤：过期分享等同不存在。存量行 expires_at 为 NULL ⇒ 视为永不过期，
+	// 保持既有分享链接可用（新建分享一律带 TTL，见 CreateShare）。
 	err := db.GlobalDBManager.QueryRow(r.Context(),
 		`SELECT id, created_at FROM conversation_shares
-		 WHERE session_id = $1 AND revoked_at IS NULL LIMIT 1`, sessionID).
+		 WHERE session_id = $1 AND revoked_at IS NULL
+		   AND (expires_at IS NULL OR expires_at > NOW())
+		 LIMIT 1`, sessionID).
 		Scan(&share.ID, &share.CreatedAt)
 	if err != nil {
 		return nil, nil // no active share (or DB row missing)

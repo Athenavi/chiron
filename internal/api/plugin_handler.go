@@ -94,6 +94,24 @@ func checkPluginCommandAllowed(command string) error {
 	return nil
 }
 
+// checkPluginArgsAllowed 对插件参数做与命令同口径的防御性校验。
+//
+// 真正的边界是 PLUGIN_COMMAND_ALLOWLIST（**默认禁用**执行，见 checkPluginCommandAllowed），
+// 且 exec.CommandContext 不走 shell ⇒ 不存在命令注入。这里只挡两类"参数本身即越权"的
+// 形态：NUL/换行（可截断下游解析器）与路径穿越（可让白名单命令读写任意路径）。
+func checkPluginArgsAllowed(args []string) error {
+	for i, a := range args {
+		if strings.ContainsAny(a, "\x00\r\n") {
+			return fmt.Errorf("plugin arg #%d contains control characters", i)
+		}
+		if a == ".." || strings.HasPrefix(a, "../") || strings.HasSuffix(a, "/..") ||
+			strings.Contains(a, "/../") {
+			return fmt.Errorf("plugin arg #%d contains path traversal", i)
+		}
+	}
+	return nil
+}
+
 // isAdminRole 判断当前请求是否为 owner/admin（插件命令执行敏感操作）。
 func isAdminRole(r *http.Request) bool {
 	claims := auth.GetClaims(r.Context())
@@ -515,6 +533,14 @@ func (h *PluginHandler) Test(w http.ResponseWriter, r *http.Request) {
 	if err := checkPluginCommandAllowed(plugin.Command); err != nil {
 		OK(w, map[string]interface{}{
 			"ok": false, "message": "plugin command not allowed",
+			"duration_ms": time.Since(start).Milliseconds(),
+		})
+		return
+	}
+	// 参数校验：挡控制字符与路径穿越（命令白名单之外的补充，见 checkPluginArgsAllowed）。
+	if err := checkPluginArgsAllowed(plugin.Args); err != nil {
+		OK(w, map[string]interface{}{
+			"ok": false, "message": "plugin args rejected: " + err.Error(),
 			"duration_ms": time.Since(start).Milliseconds(),
 		})
 		return

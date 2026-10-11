@@ -239,7 +239,9 @@ func registerAgentRoutes(
 			submitHandler.HandleSubmit(ctx, userID, body.SessionID, body.Content, body.LLMConfig, body.Context)
 		}()
 	}
-	submitMW := authMW(sanitizeMW(http.HandlerFunc(submitHandlerFunc)))
+	// 限流：submit 会触发一次完整 agent run（昂贵链路），此前只有 authMW —— 缺少按用户/
+	// 租户的速率闸门，被劫持的 token 或异常客户端可高频触发昂贵链路。
+	submitMW := authMW(rlMW(sanitizeMW(http.HandlerFunc(submitHandlerFunc))))
 	// Legacy 路由：向前兼容旧版前端
 	mux.Handle("POST /submit", submitMW)
 	// 版本化路由：v1 agent submit 入口

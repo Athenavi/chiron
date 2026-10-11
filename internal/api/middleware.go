@@ -406,11 +406,14 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 							Unauthorized(w, "user has no tenant binding; contact admin")
 							return
 						}
+						// API Key 是长期凭据（不过期或长过期），泄漏面远大于短期 JWT：
+						// 这里只授予常规业务权限，剔除管理类权限（admin/users/policy/
+						// ent/market/audit）—— 管理操作必须走交互式登录。
 						claims := &auth.Claims{
 							UserID:   userID,
 							Role:     role,
 							TenantID: tenantID,
-							Perms:    auth.RolePermissions[role],
+							Perms:    auth.APIKeyPermissions(role),
 						}
 						ctx := auth.WithClaims(r.Context(), claims)
 						next.ServeHTTP(w, r.WithContext(ctx))
