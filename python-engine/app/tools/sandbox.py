@@ -210,6 +210,14 @@ def _parse_command(command: str) -> tuple[list[str], str | None]:
     return parts, None
 
 
+def _extract_inline_code(args: list[str]) -> str | None:
+    """从 python 参数中取出 `-c` 的内联代码体（没有则 None）。"""
+    for i, a in enumerate(args):
+        if a == "-c" and i + 1 < len(args):
+            return args[i + 1]
+    return None
+
+
 def _has_escape(command: str) -> str | None:
     """检测命令是否含逃逸模式，命中返回原因。"""
     import re
@@ -444,6 +452,23 @@ async def _run_in_sandbox_impl(command: str, timeout: int = 120) -> dict[str, An
 
     prog = args[0]
     rest = args[1:]
+
+    # 第二层半：`python -c "<code>"` 的内联代码体做 AST 静态检查（复用 code_guard，
+    # 与 run_code 工具同一套守卫）。逃逸正则只看**命令文本**，而解释器内部的代码
+    # 不受它约束 —— python 又在白名单里，于是 `python -c` 曾是绕过全部命令层防护的
+    # 直通车（用 chr(47) 拼路径即可避开绝对路径正则读任意文件）。静态检查不是完备
+    # 隔离（可混淆绕过，且 `-m` 仍可加载任意模块），但把门槛抬到与 run_code 一致；
+    # `python -m app.tools._sandbox_worker` 与脚本文件执行不受影响。
+    if _normalize_exe(prog) in ("python", "python3"):
+        inline_code = _extract_inline_code(rest)
+        if inline_code is not None:
+            from app.tools.code_guard import check_static
+
+            block_reason = check_static(inline_code)
+            if block_reason:
+                return {
+                    "error": f"command blocked: inline python rejected — {block_reason}"
+                }
 
     # 对 git 命令额外限制：禁止 clone/fetch/pull/push 等网络操作，仅允许本地操作
     git_restricted = {"clone", "fetch", "pull", "push", "remote", "submodule", "archive", "ls-remote"}

@@ -432,6 +432,20 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 				return
 			}
 
+			// ── 会话纪元检查（改密/密码重置后旧 token 立即失效）──
+			// 与黑名单同为 fail-close：Redis 不可用时拒绝请求，避免撤销在故障期间失效。
+			// 纪元 > token.iat ⇒ 该 token 签发于撤销之前 ⇒ 拒绝。
+			epoch, epochErr := sessionEpoch(r.Context(), claims.UserID)
+			if epochErr != nil {
+				slog.Warn("session epoch check failed (fail-close)", "error", epochErr)
+				Unauthorized(w, "authentication service unavailable")
+				return
+			}
+			if epoch > 0 && claims.IssuedAt != nil && epoch > claims.IssuedAt.Unix() {
+				Unauthorized(w, "token has been revoked")
+				return
+			}
+
 			// ── JWT 黑名单检查（登出后的 token 立即失效）──
 			// fail-close：Redis 不可用/检查失败时拒绝请求（安全优先），
 			// 避免故障期间登出 token 被复用。

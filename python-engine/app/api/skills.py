@@ -139,11 +139,11 @@ async def install_skill(
             safe_file = _safe_path(body.file, str(store.root))
             data = json.loads(safe_file.read_text(encoding="utf-8"))
         else:
-            import httpx
-
             from app.config import settings
 
-            async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
+            from app.http_client import shared_client
+
+            async with shared_client(timeout=settings.http_timeout_default) as client:
                 resp = await client.get(body.url)
                 resp.raise_for_status()
                 data = resp.json()
@@ -324,11 +324,11 @@ async def discover_skills(
 
     if url:
         try:
-            import httpx
-
             from app.config import settings
 
-            async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
+            from app.http_client import shared_client
+
+            async with shared_client(timeout=settings.http_timeout_default) as client:
                 resp = await client.get(url)
                 resp.raise_for_status()
                 items = resp.json()

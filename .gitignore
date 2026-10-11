@@ -31,7 +31,9 @@ out/
 .env
 # .env 的备份/变体同样含密钥。APP_SECRET 是唯一根密钥（派生 JWT_SECRET /
 # INTERNAL_TOKEN 与配置加密密钥），一个 `git add -A` 提交进去 = 全盘失守。
-.env.*
+# 用 `.env*` 而非 `.env.*`：后者不匹配无点号的变体（如 .env2 / .envbak），
+# 曾导致一份与 .env 内容完全相同的密钥副本以未跟踪状态长期留在工作区。
+.env*
 !.env.example
 *.bak
 .envrc
@@ -42,6 +44,8 @@ ENV/
 
 # ── Runtime data ──
 workspace/
+# CHIRON_DATA_DIR：运行时数据（媒体、技能缓存、worker.id 等），全部是实例本地产物
+data/
 backend/
 *.db
 *.sqlite*
@@ -50,10 +54,14 @@ backend/
 .pids/
 logs/
 *.jsonl
+# snowflake worker ID（internal/id/snowflake.go 的 resolveWorkerID 落盘）：
+# 每实例本地运行产物，入库会在多副本部署时把同一个 worker ID 复制给所有副本。
+worker.id
 
 # ── Reasonix / local tooling ──
 .reasonix/
 .agents/
+.workbuddy/
 reasonix.toml
 .cowork-temp/
 **/.cowork-temp/

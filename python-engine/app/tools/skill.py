@@ -106,11 +106,11 @@ async def _fetch_skill_json(url: str) -> Any:
 
     assert_safe_url(url)
 
-    import httpx
+    from app.http_client import shared_client
 
     total = 0
     chunks: list[bytes] = []
-    async with httpx.AsyncClient(timeout=settings.http_timeout_default) as client:
+    async with shared_client(timeout=settings.http_timeout_default) as client:
         async with client.stream("GET", url) as resp:
             resp.raise_for_status()
             async for chunk in resp.aiter_bytes():
@@ -381,9 +381,9 @@ async def _run_http_skill(skill: SkillDef, params: dict[str, Any]) -> str:
     url = _render_template(skill.source, params, skill.parameters).strip()
     if not url.startswith(("http://", "https://")):
         return f"error: invalid url: {url}"
-    import httpx
+    from app.http_client import shared_client
 
-    async with httpx.AsyncClient(timeout=settings.http_timeout_web) as client:
+    async with shared_client(timeout=settings.http_timeout_web) as client:
         resp = await fetch_url_safe(client, url)
         text = resp.text[:20000]
     return f"[HTTP {resp.status_code}]\n{text}"

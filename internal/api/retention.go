@@ -122,10 +122,15 @@ func retentionInterval() time.Duration {
 func purgeFinishedTurns(ctx context.Context, days int) {
 	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), retentionTimeout)
 	defer cancel()
+	// created_at 是 VARCHAR(255)，存的是 PG NOW() 的文本形式。**不要**写成
+	// `created_at::timestamptz`：表达式上的强转会让索引失效（且 text→timestamptz
+	// 只是 STABLE，无法建表达式索引），于是每 6h 全表扫 turns（P1）。
+	// 改为把右侧也转成同样的文本形式、左侧保持裸列 ⇒ 可走 0009 迁移补的
+	// ix_turns_created_at 做范围扫。
 	tag, err := db.Pool.Exec(cctx,
 		`DELETE FROM turns
 		 WHERE status <> 'running'
-		   AND created_at::timestamptz < NOW() - make_interval(days => $1)`,
+		   AND created_at < ((NOW() - make_interval(days => $1))::text)`,
 		days)
 	if err != nil {
 		slog.Warn("turn retention purge failed", "retention_days", days, "error", err)

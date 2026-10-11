@@ -11,11 +11,18 @@
 
 > 片 1 只把 `read` / `write` 接到工具上（`read_file` / `write_file`）；`ls` / `glob` / `grep`
 > 的实现在片 2 迁移工具时与现有实现逐条对齐后再启用 —— 先定义协议、后迁移，避免一次改太多。
+
+**并发约束（P1 修复）**：本类是 `async` 契约，但底层 `pathlib` 是**阻塞 I/O**。
+此前直接在 event loop 里调用 `read_text` / `write_text` / `rglob` / `stat`，一旦并发
+（尤其 `grep` 会遍历整个工作区并逐文件读取）就会冻结该 event loop 上的**所有**请求。
+现统一经 `asyncio.to_thread` 下沉到线程池；返回契约与安全语义保持不变。
 """
 
 from __future__ import annotations
 
+import asyncio
 import re
+from pathlib import Path
 
 from app.backends.protocol import (
     EditResult,
@@ -32,14 +39,42 @@ from app.backends.protocol import (
 from app.tools.sandbox import safe_join
 
 
+def _grep_sync(base: Path, regex: re.Pattern[str], max_results: int) -> GrepResult:
+    """`grep` 的同步实现（在工作线程中运行）：目录遍历 + 逐文件读取。"""
+    candidates = sorted(base.rglob("*")) if base.is_dir() else [base]
+    matches: list[GrepMatch] = []
+    truncated = False
+    for file in candidates:
+        if not file.is_file():
+            continue
+        try:
+            text = file.read_text(encoding="utf-8", errors="replace")
+        except OSError:  # 不可读文件跳过，不让整次搜索失败
+            continue
+        for number, line in enumerate(text.splitlines(), start=1):
+            if not regex.search(line):
+                continue
+            if len(matches) >= max_results:
+                truncated = True
+                break
+            matches.append(GrepMatch(path=str(file), line_number=number, line=line))
+        if truncated:
+            break
+    return GrepResult(
+        matches=matches, truncated=truncated, reason="budget" if truncated else None
+    )
+
+
 class LocalWorkspaceBackend:
     """`sandbox.safe_join` + 本地文件系统。"""
 
     async def read(self, path: str, *, offset: int = 0, limit: int = 200) -> ReadResult:
         target = safe_join(path)
-        if not target.exists():
+        if not await asyncio.to_thread(target.exists):
             return ReadResult(path=str(target), error=f"file not found: {path}")
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = await asyncio.to_thread(
+            target.read_text, encoding="utf-8", errors="replace"
+        )
         lines = text.splitlines()
         if limit <= 0:
             # `limit <= 0` = 读**全文原文**（忽略 offset）：`edit_file` 需要逐字节精确的内容
@@ -67,10 +102,11 @@ class LocalWorkspaceBackend:
 
     async def read_bytes(self, path: str) -> ReadBytesResult:
         target = safe_join(path)
-        if not target.exists():
+        if not await asyncio.to_thread(target.exists):
             return ReadBytesResult(path=str(target), error=f"file not found: {path}")
         try:
-            return ReadBytesResult(path=str(target), data=target.read_bytes())
+            data = await asyncio.to_thread(target.read_bytes)
+            return ReadBytesResult(path=str(target), data=data)
         except OSError as exc:
             # 目录 / 权限 / 占用：把 OS 错误变成结构化错误，而不是让调用方接异常
             return ReadBytesResult(path=str(target), error=str(exc))
@@ -78,39 +114,50 @@ class LocalWorkspaceBackend:
     async def stat(self, path: str) -> FileStat | None:
         target = safe_join(path)
         try:
-            info = target.stat()
+            info = await asyncio.to_thread(target.stat)
+            is_file = await asyncio.to_thread(target.is_file)
         except OSError:
             return None
-        return FileStat(path=str(target), size=info.st_size, is_file=target.is_file())
+        return FileStat(path=str(target), size=info.st_size, is_file=is_file)
 
     async def write(self, path: str, content: str) -> WriteResult:
         target = safe_join(path)
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content, encoding="utf-8")
+        await asyncio.to_thread(target.parent.mkdir, parents=True, exist_ok=True)
+        await asyncio.to_thread(target.write_text, content, encoding="utf-8")
         return WriteResult(path=str(target), bytes_written=len(content.encode("utf-8")))
 
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         target = safe_join(path)
-        if not target.exists():
+        if not await asyncio.to_thread(target.exists):
             return EditResult(path=str(target), error=f"file not found: {path}")
-        text = target.read_text(encoding="utf-8", errors="replace")
+        text = await asyncio.to_thread(
+            target.read_text, encoding="utf-8", errors="replace"
+        )
         occurrences = text.count(old)
         if occurrences == 0:
             return EditResult(path=str(target), error="old text not found")
-        target.write_text(text.replace(old, new), encoding="utf-8")
+        await asyncio.to_thread(
+            target.write_text, text.replace(old, new), encoding="utf-8"
+        )
         return EditResult(path=str(target), occurrences=occurrences)
 
     async def ls(self, path: str = ".") -> LsResult:
         target = safe_join(path)
-        if not target.exists():
+        if not await asyncio.to_thread(target.exists):
             return LsResult(error=f"path not found: {path}")
-        if target.is_file():
+        if await asyncio.to_thread(target.is_file):
             return LsResult(entries=[str(target)])
-        return LsResult(entries=sorted(str(p) for p in target.iterdir()))
+        entries = await asyncio.to_thread(
+            lambda: sorted(str(p) for p in target.iterdir())
+        )
+        return LsResult(entries=entries)
 
     async def glob(self, pattern: str, *, path: str = ".") -> GlobResult:
         base = safe_join(path)
-        return GlobResult(paths=sorted(str(p) for p in base.glob(pattern)))
+        paths = await asyncio.to_thread(
+            lambda: sorted(str(p) for p in base.glob(pattern))
+        )
+        return GlobResult(paths=paths)
 
     async def grep(
         self, pattern: str, *, path: str = ".", max_results: int = 100
@@ -121,28 +168,8 @@ class LocalWorkspaceBackend:
         except re.error as exc:
             return GrepResult(error=f"invalid pattern: {exc}")
 
-        candidates = sorted(base.rglob("*")) if base.is_dir() else [base]
-        matches: list[GrepMatch] = []
-        truncated = False
-        for file in candidates:
-            if not file.is_file():
-                continue
-            try:
-                text = file.read_text(encoding="utf-8", errors="replace")
-            except OSError:  # 不可读文件跳过，不让整次搜索失败
-                continue
-            for number, line in enumerate(text.splitlines(), start=1):
-                if not regex.search(line):
-                    continue
-                if len(matches) >= max_results:
-                    truncated = True
-                    break
-                matches.append(GrepMatch(path=str(file), line_number=number, line=line))
-            if truncated:
-                break
-        return GrepResult(
-            matches=matches, truncated=truncated, reason="budget" if truncated else None
-        )
+        # 目录遍历 + 逐文件读取下沉到线程池：这是本层最重的阻塞点。
+        return await asyncio.to_thread(_grep_sync, base, regex, max_results)
 
     def supports_execution(self) -> bool:
         return True

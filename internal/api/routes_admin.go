@@ -120,4 +120,35 @@ func registerAdminRoutes(
 	// 支付渠道配置（后台「支付配置」页面）
 	mux.Handle("GET /v1/admin/payments", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// 租户 / 域名 / 定时任务管理（后台「租户管理」「域名管理」「定时任务」三页）
+	// 与上面 redis/database/models/settings 是**同一个坑的第四次**：handler 早已
+	// 注册在 adminMux（admin_ops.go 的 registerOpsRoutes），但从未在此暴露到外部
+	// mux ⇒ 前端 CronView / DomainManagementView / TenantManagementView 恒 404。
+	// 鉴权口径沿用文件头 P1-3：GET 用 adminReadMW；创建/修改/删除/触发（含发信、
+	// 签发 SSL、写 DB）一律 adminWriteMW。
+	mux.Handle("GET /v1/admin/tenants", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/tenants", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/tenants/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/tenants/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/tenants/{id}/suspend", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/tenants/{id}/usage", authMW(rlMW(adminReadMW(adminStrip))))
+
+	mux.Handle("GET /v1/admin/domains", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/domains", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/domains/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/domains/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/domains/{id}/verify", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/domains/{id}/renew-ssl", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	mux.Handle("GET /v1/admin/cron-jobs", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/cron-jobs", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/cron-jobs/{id}/trigger", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// 租户邀请码（F2）：注册时据邀请码决定新用户归属哪个租户。
+	mux.Handle("GET /v1/admin/invites", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/invites", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/invites/{code}", authMW(rlMW(adminWriteMW(adminStrip))))
 }

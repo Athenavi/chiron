@@ -27,6 +27,7 @@ from typing import Any, cast
 
 import httpx
 
+from app.http_client import shared_client
 from app.media.store import create_store
 from app.tools.context import get_gateway, get_tenant_id, get_user_id
 from app.tools.registry import registry
@@ -186,7 +187,7 @@ async def persist_to_library(
 
     url = f"{settings.gateway_internal_url.rstrip('/')}/v1/internal/media/assets"
     try:
-        async with httpx.AsyncClient(timeout=settings.http_timeout_long) as client:
+        async with shared_client(timeout=settings.http_timeout_long) as client:
             resp = await client.post(
                 url,
                 json=payload,
@@ -471,7 +472,7 @@ async def image_generate(
     try:
         from app.config import settings
         headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
-        async with httpx.AsyncClient(timeout=settings.http_timeout_long) as client:
+        async with shared_client(timeout=settings.http_timeout_long) as client:
             resp = await client.post(
                 api_url,
                 json={"prompt": prompt, "width": width, "height": height},
@@ -562,7 +563,7 @@ async def vision_analyze(
         if not image_url.startswith("data:"):
             assert_safe_url(image_url)
 
-        async with httpx.AsyncClient(timeout=settings.http_timeout_web) as client:
+        async with shared_client(timeout=settings.http_timeout_web) as client:
             resp = await client.head(image_url, follow_redirects=False)
             content_type = resp.headers.get("content-type", "")
             if not content_type.startswith("image/"):
@@ -634,7 +635,7 @@ async def speech_to_text(
     try:
         from app.config import settings as s
 
-        async with httpx.AsyncClient(timeout=s.http_timeout_long, follow_redirects=False) as client:
+        async with shared_client(timeout=s.http_timeout_long, follow_redirects=False) as client:
             resp = await fetch_url_safe(client, audio_url)
             resp.raise_for_status()
             audio_data = resp.content
@@ -649,7 +650,7 @@ async def speech_to_text(
         if prompt:
             data["prompt"] = prompt
 
-        async with httpx.AsyncClient(timeout=s.http_timeout_long) as client:
+        async with shared_client(timeout=s.http_timeout_long) as client:
             whisper_resp = await client.post(
                 whisper_url,
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -715,7 +716,7 @@ async def text_to_speech(
         # SSRF 防护：校验 OPENAI_BASE_URL 不指向内网
         tts_url = f"{base_url.rstrip('/')}/audio/speech"
         assert_safe_url(tts_url)
-        async with httpx.AsyncClient(timeout=s.http_timeout_long) as client:
+        async with shared_client(timeout=s.http_timeout_long) as client:
             resp = await client.post(
                 tts_url,
                 headers={"Authorization": f"Bearer {api_key}"},
@@ -769,7 +770,7 @@ async def file_analyzer(
 
     try:
         # 下载文件
-        async with httpx.AsyncClient(timeout=s.http_timeout_long, follow_redirects=False) as client:
+        async with shared_client(timeout=s.http_timeout_long, follow_redirects=False) as client:
             resp = await fetch_url_safe(client, file_url)
             resp.raise_for_status()
             file_data = resp.content

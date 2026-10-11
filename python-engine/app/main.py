@@ -145,7 +145,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ⚠️ 部署前提：服务必须与引擎**共享同一工作区**。`CompositeBackend` 的注释点明了这条约束
     # （"`execute` 与 `read`/`write` 必须落在**同一文件系统**上，否则命令写出的文件与工具读到的
     # 文件会分叉"）—— 服务侧若看不到引擎的工作区，分叉就会**真实发生**。
-    base_backend = _apply_sandbox_service_branch(base_backend)
+    # 启动门禁：backend=service 时先探测独立沙箱服务健康，再决定是否分流。
+    # 不可达时由 `_apply_sandbox_service_branch` 按 DEGRADED_MODE 决定拒绝启动/回退。
+    _sandbox_healthy: bool | None = None
+    if (
+        (settings.sandbox_backend or "").strip().lower() == "service"
+        and settings.sandbox_service_url
+    ):
+        _sandbox_healthy = await _probe_sandbox_service(
+            settings.sandbox_service_url, settings.internal_token
+        )
+    base_backend = _apply_sandbox_service_branch(
+        base_backend, service_healthy=_sandbox_healthy
+    )
     # 用 set_default_backend（进程级）而不是 set_backend（contextvar）：lifespan 里设置的
     # contextvar 不会被后续请求任务继承（请求任务由 ASGI server 派生）—— 那会变成
     # "配了 filestore 但请求里仍走 local"，而日志看起来一切正常。
@@ -524,7 +536,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 6.2 幂等表保留策略（A7/C1）──
     # task_idempotency 每任务一行，长期运行必须清理；turns 由网关侧
     # src: internal/api/retention.go 的 StartRetentionCleaner 负责。
-    _retention_task = asyncio.create_task(_run_retention_cleaner())
+    _retention_task = asyncio.create_task(_run_retention_cleaner(_redis))
 
     # ── 6.5. 启动进程指标收集器 ──
     from app.observability.metrics import record_process_metrics
@@ -762,16 +774,55 @@ async def _start_subagent_governance() -> None:
 
 
 
-def _apply_sandbox_service_branch(base: Any) -> Any:
+async def _probe_sandbox_service(url: str, token: str, *, timeout: float = 3.0) -> bool:
+    """探测独立 sandbox 服务是否可达（`GET /v1/internal/exec/health`）。
+
+    用于**启动门禁**：`backend=service` 时服务不可达 ⇒ 生产拒绝启动（fail-closed）；
+    仅 `DEGRADED_MODE=true`（单机开发）才告警并回退进程内执行。
+    """
+    from app.http_client import shared_client
+
+    probe = f"{url.rstrip('/')}/v1/internal/exec/health"
+    try:
+        async with shared_client(timeout=timeout) as client:
+            resp = await client.get(probe, headers={"X-Internal-Token": token})
+        return resp.status_code == 200
+    except Exception as exc:  # noqa: BLE001 — 不可达即"不健康"
+        logger.warning("sandbox service probe failed (%s): %s", probe, exc)
+        return False
+
+
+def _apply_sandbox_service_branch(base: Any, *, service_healthy: bool | None = None) -> Any:
     """按 `SANDBOX_BACKEND` / `SANDBOX_SERVICE_*` 决定是否把**执行**分流到独立服务。
 
-    默认（`local` / 空 / 没配 URL）⇒ **恒等返回**，一行行为都不变。
+    `local` / 空 / 没配 URL ⇒ **恒等返回**，一行行为都不变。
+
+    `service_healthy` 是调用方（lifespan）探测到的服务健康状态：
+    * `None`（默认）= 未探测 ⇒ 不做门禁（单测直接调用走这条）；
+    * `False` ⇒ `DEGRADED_MODE=true` 时告警并回退进程内执行，否则**抛错拒绝启动**
+      （静默回退会让"隔离已生效"这个判断失真，见 config.py 同段说明）。
 
     抽成函数是为了**可测**：这段"配置 → 运行期生效"的接线此前内联在 `lifespan` 里，
     没有任何用例 —— 而"配置里写了却没人用"正是这个仓库反复踩的坑（见 vendor/规划.md §4）。
     """
     if (settings.sandbox_backend or "local").strip().lower() != "service" or not settings.sandbox_service_url:
         return base
+
+    # 启动门禁（fail-closed，P0-1 根治的一部分）：沙箱服务不可达时绝不静默降级。
+    if service_healthy is False:
+        if settings.degraded_mode:
+            logger.warning(
+                "sandbox service at %s unreachable; DEGRADED_MODE=true ⇒ 回退进程内执行"
+                "（隔离降级，仅限单机开发）",
+                settings.sandbox_service_url,
+            )
+            return base
+        raise RuntimeError(
+            f"sandbox service at {settings.sandbox_service_url} is unreachable and "
+            "DEGRADED_MODE=false. 请修好服务，或显式设 SANDBOX_BACKEND=local 退出隔离，"
+            "或 DEGRADED_MODE=true 允许进程内降级（仅限单机开发）。"
+        )
+
     from app.backends.remote_exec import RemoteExecBackend
 
     # 默认后端不一定能执行（例如 filestore 只做存储）。配了 service 却指到这种后端是**配置
@@ -793,6 +844,7 @@ def _apply_sandbox_service_branch(base: Any) -> Any:
         url=settings.sandbox_service_url,
         token=settings.internal_token,
         tenants=tenants,
+        max_concurrency=int(settings.sandbox_service_max_concurrency or 0),
     )
     logger.info(
         "exec backend: remote sandbox service at %s (tenants=%s)",
@@ -941,14 +993,14 @@ async def _resolve_attachments(content: str) -> str:
     if not matches:
         return content
 
-    import httpx
+    from app.http_client import shared_client
 
     from app.config import settings
     from app.tools.ssrf import fetch_url_safe
 
     # S 安全修复：禁用自动重定向，改用 ssrf.fetch_url_safe 逐跳校验
     # scheme/端口/DNS/IP（含重定向绕过）后再获取，防止附件 URL 打内网/云元数据。
-    async with httpx.AsyncClient(timeout=settings.http_timeout_web, follow_redirects=False) as client:
+    async with shared_client(timeout=settings.http_timeout_web, follow_redirects=False) as client:
         for is_image, name, url in matches:
             try:
                 resp = await fetch_url_safe(client, url)
@@ -1981,16 +2033,25 @@ async def kb_query(
     return {"success": True, "results": results, "count": len(results)}
 
 
-async def _run_retention_cleaner() -> None:
+async def _run_retention_cleaner(redis: aioredis.Redis | None = None) -> None:
     """定期清理 task_idempotency 历史记录（A7/C1：长期运行防表膨胀）。
 
     保留期 TASK_IDEMPOTENCY_RETENTION_DAYS（默认 30 天），
     间隔 RETENTION_INTERVAL_HOURS（默认 6 小时）；清理失败只告警，不影响主链路。
+
+    多副本互斥（P1）：此前每个引擎副本都会各自跑一遍 DELETE，N 个副本就是 N 倍
+    扫描与行锁争用。这里用 Redis `SET NX EX` 选出一个执行者 —— 与 Go 侧
+    internal/api/retention.go 的 `retention:lock` 同一做法，但**用不同键**：
+    两者清理的是不同表，共用一把锁会让其中一个长期被跳过。
     """
     import os as _os
 
+    from app.redis_keys import rkey
+
     days = int(_os.getenv("TASK_IDEMPOTENCY_RETENTION_DAYS", "30") or 30)
     hours = int(_os.getenv("RETENTION_INTERVAL_HOURS", "6") or 6)
+    lock_key = rkey("retention:lock:idempotency")
+    lock_ttl = 1800  # 30 分钟：远超一次清理耗时，下次循环（默认 6h）前必然过期
     from app.queue.idempotency import purge_older_than
 
     logger.info(
@@ -1999,6 +2060,19 @@ async def _run_retention_cleaner() -> None:
     while True:
         try:
             await asyncio.sleep(hours * 3600)
+            if redis is not None:
+                try:
+                    got = await redis.set(lock_key, "1", nx=True, ex=lock_ttl)
+                except Exception as lock_err:  # noqa: BLE001 - Redis 抖动：跳过本轮
+                    logger.warning(
+                        "idempotency retention lock failed, skipping: %s", lock_err
+                    )
+                    continue
+                if not got:
+                    logger.debug(
+                        "idempotency retention skipped: another instance holds the lock"
+                    )
+                    continue
             removed = await purge_older_than(days)
             if removed:
                 logger.info(

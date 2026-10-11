@@ -455,6 +455,9 @@ def _next_steps() -> None:
     info("     python -m alembic upgrade head")
     info("2) 启动服务：python run.py start   （或 docker compose up -d）")
     info("3) 打开前端到 /register 注册第一个账号 —— 它会自动成为系统管理员（owner）。")
+    info("4) 裸机 / 本地开发：请在 .env 设 SANDBOX_BACKEND=local —— 引擎默认把工具执行")
+    info("   下沉到独立受限容器（docker compose 的 sandbox-service），本地没有该容器时")
+    info("   启动探测失败会**拒绝启动**（fail-closed）；或设 DEGRADED_MODE=true 允许回退。")
 
 
 # ─────────────────────────── CLI ───────────────────────────

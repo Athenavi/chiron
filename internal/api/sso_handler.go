@@ -6,6 +6,8 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"log/slog"
+	"net"
 	"net/http"
 	"strings"
 	"time"
@@ -201,6 +203,8 @@ func (h *SSOHandler) RegisterAdminRoutes(mux *http.ServeMux, authMW func(http.Ha
 	}
 	mux.Handle("GET /v1/ent/sso/providers", sso(h.ListProviders))
 	mux.Handle("POST /v1/ent/sso/providers", sso(h.CreateProvider))
+	// 配置向导（字面量段优先于 {id} 通配，与下面那条不会冲突）
+	mux.Handle("GET /v1/ent/sso/providers/guide", sso(h.GetProviderGuide))
 	mux.Handle("GET /v1/ent/sso/providers/{id}", sso(h.GetProvider))
 	mux.Handle("PUT /v1/ent/sso/providers/{id}", sso(h.UpdateProvider))
 	mux.Handle("DELETE /v1/ent/sso/providers/{id}", sso(h.DeleteProvider))
@@ -208,12 +212,52 @@ func (h *SSOHandler) RegisterAdminRoutes(mux *http.ServeMux, authMW func(http.Ha
 
 // ── 公开路由 ────────────────────────────────────────────
 
+// resolveTenantByHost 按请求 Host 解析租户。
+//
+// P0（跨租户泄漏修复）：公开的 provider 列表此前只按 `enabled = TRUE` 过滤、**没有租户
+// 条件** —— 任何未登录访客都能看到所有租户的 IdP 及其 provider id，进而直接发起
+// `/v1/auth/sso/login/{id}`。现在改为：Host → `domains`（**已验证**）→ tenant_id。
+//
+// 匹配不到（未配域名 / 域名未验证 / Host 为空）⇒ 返回 ("", false)，调用方返回**空列表**。
+// 刻意不回退"全部"：宁可让未配域名的租户看不到 SSO 入口，也不把别人的 IdP 暴露出去。
+func (h *SSOHandler) resolveTenantByHost(ctx context.Context, host string) (string, bool) {
+	host = strings.ToLower(strings.TrimSpace(host))
+	if host == "" {
+		return "", false
+	}
+	// 剥掉端口（`example.com:3000` / `[::1]:3000`）；剥不掉就按原样比。
+	if h, _, err := net.SplitHostPort(host); err == nil {
+		host = h
+	}
+	var tenantID string
+	if err := h.db.QueryRow(ctx,
+		`SELECT tenant_id FROM domains
+		  WHERE lower(domain) = $1 AND verified = TRUE
+		  LIMIT 1`, host).Scan(&tenantID); err != nil || tenantID == "" {
+		return "", false
+	}
+	return tenantID, true
+}
+
 // ListPublicProviders GET /v1/auth/sso/providers
-// 返回 enabled provider 的展示字段（不含任何敏感信息），按 sort_order 排序。
+// 返回**当前 Host 所属租户**的 enabled provider 展示字段（不含任何敏感信息），按 sort_order 排序。
 func (h *SSOHandler) ListPublicProviders(w http.ResponseWriter, r *http.Request) {
+	tenantID, ok := h.resolveTenantByHost(r.Context(), r.Host)
+	if !ok {
+		// 未配/未验证域名：返回空列表（不是"全部"）
+		OK(w, []map[string]any{})
+		return
+	}
+	// 灰度：该租户未开通 SSO ⇒ 空列表（平台 owner 在
+	// `PUT /v1/ent/tenants/{id}/features` 逐个放开；见 tenant_features.go）。
+	if !loadTenantFeatures(r.Context(), h.db, tenantID).SSOEnabled {
+		OK(w, []map[string]any{})
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT id, name, display_name, provider_type, icon, sort_order, protocol
-		 FROM ent_oidc_providers WHERE enabled = TRUE ORDER BY sort_order, name`)
+		 FROM ent_oidc_providers WHERE enabled = TRUE AND tenant_id = $1
+		 ORDER BY sort_order, name`, tenantID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -275,6 +319,14 @@ func (h *SSOHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
+		return
+	}
+
+	// 灰度：provider 所属租户未开通 SSO ⇒ 拒绝。防的是"绕过登录页列表直连"——
+	// 列表已按租户过滤，但 provider id 一旦泄漏（历史数据/日志）仍可被直接调用。
+	// 用 NotFound 而非 Forbidden：不暴露"该租户存在但未开通"这一信息。
+	if !loadTenantFeatures(r.Context(), h.db, provider.TenantID).SSOEnabled {
+		NotFound(w, "provider not found or disabled")
 		return
 	}
 
@@ -646,6 +698,12 @@ func (h *SSOHandler) SetPassword(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
+	// 会话撤销：改密后**所有**旧 token 立即失效（含发起本次改密的那个 —— 前端会拿到
+	// 401 并跳登录页，这是"改密即登出所有设备"的常见语义，安全优先）。
+	// 撤销失败不回滚改密，但记日志（否则"以为踢下线了、其实没有"）。
+	if rerr := revokeUserSessions(ctx, claims.UserID); rerr != nil {
+		slog.Error("set password: session revoke failed", "user_id", claims.UserID, "error", rerr)
+	}
 	db.AuditLog(ctx, claims.UserID, claims.TenantID, "password_set", "/v1/auth/password", "", r.RemoteAddr, nil)
 	OK(w, map[string]string{"status": "updated"})
 }
@@ -732,6 +790,42 @@ func defaultStr(s, def string) string {
 	return s
 }
 
+// GetProviderGuide GET /v1/ent/sso/providers/guide —— 配置向导所需的信息。
+//
+// 存在的理由：配 SSO 最容易错的两件事是「**回调地址**填错」（IdP 侧校验失败，报错还很难懂）
+// 和「端点 / scope 不知道该填什么」（只能翻文档）。这里一次性给出本实例的回调地址与
+// 各内置 provider 的模板，前端据此渲染分步表单。
+func (h *SSOHandler) GetProviderGuide(w http.ResponseWriter, r *http.Request) {
+	tenantID := ""
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		tenantID = claims.TenantID
+	}
+
+	profiles := make([]map[string]any, 0, 8)
+	for _, t := range auth.KnownProviderTypes() {
+		p, ok := auth.GetProviderProfile(t)
+		if !ok {
+			continue
+		}
+		profiles = append(profiles, map[string]any{
+			"type":         p.Type,
+			"protocol":     p.Protocol,
+			"issuer":       p.Issuer,
+			"auth_url":     p.AuthURL,
+			"token_url":    p.TokenURL,
+			"userinfo_url": p.UserinfoURL,
+			"scopes":       p.Scopes,
+		})
+	}
+
+	OK(w, map[string]any{
+		// 需要在 IdP 后台登记的 redirect_uri（本实例）
+		"callback_url": h.redirectURL,
+		"tenant_id":    tenantID,
+		"providers":    profiles,
+	})
+}
+
 // CreateProvider POST /v1/ent/sso/providers
 // client_secret 以 AES-GCM 加密入库；密钥未配置时返回 503。
 func (h *SSOHandler) CreateProvider(w http.ResponseWriter, r *http.Request) {
@@ -752,6 +846,23 @@ func (h *SSOHandler) CreateProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if h.encKey == nil {
 		ServiceUnavailable(w, "SSO is not configured: "+auth.EnvOIDCSecretKey+" missing")
+		return
+	}
+
+	// 租户归属：provider 落在**调用者所属租户**（与 ent_identity_handler.go 的角色/
+	// 群组创建同口径，仅回退默认租户）。此前硬编码 db.DefaultTenantID ⇒ 多租户下
+	// 无法为其它租户配置 IdP（只能手工改库），那些租户的用户永远用不上 SSO。
+	// 登录链路本就读 provider.TenantID（见 Callback 的说明），修好创建端即两端一致。
+	tenantID := db.DefaultTenantID
+	if claims := auth.GetClaims(r.Context()); claims != nil && claims.TenantID != "" {
+		tenantID = claims.TenantID
+	}
+
+	// 自助开通开关：`sso_self_service=false`（默认）时只有**平台 owner** 能建 provider，
+	// 租户 admin 即便持有 `sso:manage` 也被拒 —— 灰度由平台逐个租户放开。
+	if !loadTenantFeatures(r.Context(), h.db, tenantID).SSOSelfService &&
+		!isPlatformOwner(auth.GetClaims(r.Context())) {
+		Forbidden(w, "该租户尚未开放 SSO 自助配置，请联系平台管理员")
 		return
 	}
 
@@ -808,7 +919,7 @@ func (h *SSOHandler) CreateProvider(w http.ResponseWriter, r *http.Request) {
 		   (tenant_id, name, issuer, client_id, client_secret_enc, scopes, enabled, auto_provision, role_mapping,
 		    protocol, provider_type, display_name, icon, sort_order, auth_url, token_url, userinfo_url, extra)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18) RETURNING id`,
-		db.DefaultTenantID, req.Name, nullString(issuer), req.ClientID, secretEnc,
+		tenantID, req.Name, nullString(issuer), req.ClientID, secretEnc,
 		scopes, enabled, autoProvision, mappingJSON,
 		protocol, providerType, nullString(req.DisplayName), nullString(req.Icon), sortOrder,
 		nullString(authURL), nullString(tokenURL), nullString(userinfoURL), extraJSON).Scan(&id)

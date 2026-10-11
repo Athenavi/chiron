@@ -34,6 +34,11 @@ python run.py start              # 网关 :8080 + 引擎 :8000 + 前端 :5173
 # 打开前端注册第一个账号 —— 它自动成为系统管理员（owner）
 ```
 
+> **本地开发需先退出沙箱隔离**：引擎默认 `SANDBOX_BACKEND=service`（把工具执行下沉到
+> 独立受限容器，见 [多实例部署指南](docs/deployment-multi-instance.md)），而本地没有该容器 ——
+> 启动探测失败会**拒绝启动**（fail-closed）。请在 `.env` 设 `SANDBOX_BACKEND=local`
+> （或用 `DEGRADED_MODE=true` 允许回退进程内执行）。
+
 > 非交互场景：`python scripts/init.py --check`（只自检）、
 > `python scripts/init.py --set POSTGRES_DSN=... --migrate`（写 .env 并执行迁移）。
 

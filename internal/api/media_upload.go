@@ -350,7 +350,14 @@ func isExecutableMIME(mime string, fileName string) bool {
 		switch ext {
 		case ".exe", ".dll", ".msi", ".sh", ".bat", ".cmd", ".com", ".scr",
 			".so", ".dylib", ".app", ".jar", ".class", ".py", ".rb", ".pl",
-			".ps1", ".vbs", ".wsf", ".htm", ".html":
+			".ps1", ".vbs", ".wsf", ".htm", ".html",
+			// SVG / XHTML / XML 家族：浏览器**按文档解析并执行其中的脚本**，而
+			// DetectContentType 会把它们判成 text/plain（正好走上面这个入口）⇒
+			// 此前可上传 `<svg><script>…</script></svg>`，再经 /media/s/ 签名 URL
+			// 以 image/svg+xml 返回 ⇒ **同源存储型 XSS**（S3 后端下 302 到对象存储域、
+			// 无 CSP 兜底，直接执行）。
+			".svg", ".svgz", ".xhtml", ".xht", ".xml", ".xsl", ".xslt",
+			".mhtml", ".mht", ".swf":
 			return true
 		}
 	}

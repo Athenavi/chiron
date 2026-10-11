@@ -121,3 +121,24 @@ def test_queue_is_bounded_and_counts_drops(monkeypatch):
         exec_audit._enqueue_for_shipping({"tool": "shell_exec", "outcome": "ok", "command": f"c{i}"})
     assert len(exec_audit._ship_queue) == 3
     assert exec_audit.SHIP_STATS["dropped"] == before + 2
+
+
+def test_ships_even_when_log_write_fails(monkeypatch):
+    """落盘失败（如 sandbox-service 的只读根）**不得阻断外发**。
+
+    此前外发与落盘耦合在同一个 try 里、且排在落盘**之后**：`mkdir` 一失败就跳 except，
+    即便配了 SHIP_URL 也一条都发不出去 —— 审计在只读容器（sandbox-service 的
+    `read_only: true`）里静默全丢。这条用例把"两者解耦"的顺序钉住。
+    """
+    monkeypatch.setenv(exec_audit.SHIP_URL_ENV, "http://gateway:8080/v1/internal/audit/exec")
+
+    def _read_only_dir() -> object:
+        raise OSError("read-only file system")
+
+    # 模拟 read_only 根：落盘必失败（_audit_dir 在写盘前被调用）
+    monkeypatch.setattr(exec_audit, "_audit_dir", _read_only_dir)
+
+    _record()
+
+    assert exec_audit.SHIP_STATS["enqueued"] == 1, "写盘失败时外发仍应发生"
+    assert len(exec_audit._ship_queue) == 1

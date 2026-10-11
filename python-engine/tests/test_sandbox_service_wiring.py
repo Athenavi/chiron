@@ -6,7 +6,7 @@
 
 1. 默认（`local` / 没配 URL）⇒ **恒等**，一行行为都不变；
 2. `service` + URL + 租户白名单 ⇒ 包装成 `RemoteExecBackend`，且**只有白名单租户**走服务；
-3. `service` + URL + **空白名单** ⇒ 包装了但**谁都不走**（刻意的安全默认）；
+3. `service` + URL + **空白名单** ⇒ 包装了且**全部租户走服务**（P0-1 默认启用）；
 4. `service` + URL + 不支持执行的默认后端 ⇒ 记 warning 并**保持恒等**（配置错误不静默）。
 """
 
@@ -60,12 +60,25 @@ def test_service_routes_only_whitelisted_tenants(cfg):
     assert wrapped.should_use_service(tenant="") is False, "无租户身份不得走服务"
 
 
-def test_service_with_empty_tenant_whitelist_routes_nobody(cfg):
-    """空白名单 = 谁都不走服务（刻意的安全默认，不是"没配就全走"）。"""
+def test_service_with_empty_tenant_whitelist_routes_everyone(cfg):
+    """空白名单 = **全部租户走服务**（P0-1：沙箱隔离是默认行为）。
+
+    旧语义（"空白名单谁都不走"）虽是刻意的安全默认，却让隔离在**默认配置下不生效**；
+    改为默认全走后，要豁免个别租户用白名单，要整体退回进程内用 `SANDBOX_BACKEND=local`。
+    """
     base = cfg(backend="service", url="http://sandbox:9000", tenants="")
     wrapped = _apply_sandbox_service_branch(base)
     assert isinstance(wrapped, RemoteExecBackend)
-    assert wrapped.should_use_service(tenant="t1") is False
+    assert wrapped.should_use_service(tenant="t1") is True
+    assert wrapped.should_use_service(tenant="") is True, "空名单下无租户身份也走服务"
+
+
+def test_service_with_star_whitelist_routes_everyone(cfg):
+    """`*` 是「全部租户」的显式写法（与空名单等价）。"""
+    base = cfg(backend="service", url="http://sandbox:9000", tenants="*")
+    wrapped = _apply_sandbox_service_branch(base)
+    assert isinstance(wrapped, RemoteExecBackend)
+    assert wrapped.should_use_service(tenant="t1") is True
 
 
 def test_service_with_non_executable_backend_stays_local(cfg):

@@ -28,10 +28,13 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Sequence
 
 import httpx
+
+from app.http_client import shared_client
 
 from app.backends.protocol import (
     EditResult,
@@ -60,12 +63,13 @@ DEFAULT_SERVICE_TIMEOUT_SECONDS = 60.0
 class RemoteExecBackend:
     """把 `execute` 转给独立 sandbox 服务；其余方法原样委托 `inner`。
 
-    分流条件（**同时**满足才走服务）：
+    分流条件：
 
     1. `url` 非空；
-    2. 当前租户在 `tenants` 白名单里。
+    2. `tenants` 为空或含 `*`（⇒ **全部租户**，默认），或当前租户在白名单里。
 
-    空白名单 ⇒ **谁都不走服务** —— 这是刻意的安全默认（不是"没配就全走服务"）。
+    空白名单 = **全部租户走服务**（P0-1：沙箱隔离是默认行为）。要豁免个别租户，
+    用白名单列出租户；要整体退回进程内执行，用 `SANDBOX_BACKEND=local`。
     """
 
     def __init__(
@@ -76,19 +80,33 @@ class RemoteExecBackend:
         token: str = "",
         tenants: Sequence[str] = (),
         timeout: float = DEFAULT_SERVICE_TIMEOUT_SECONDS,
+        max_concurrency: int = 0,
     ) -> None:
         self._inner = inner
         self._url = (url or "").strip().rstrip("/")
         self._token = token or ""
         self._tenants = frozenset(t.strip() for t in tenants if t and t.strip())
         self._timeout = float(timeout)
+        # 引擎侧并发闸门（0 = 不限）。多副本下 N 个引擎各自无限并发会把沙箱服务打满，
+        # 表现为排队 / 拒绝（服务侧 `/stats` 的 rejected_total 给出信号）。
+        self._semaphore = (
+            asyncio.Semaphore(max_concurrency) if max_concurrency > 0 else None
+        )
 
     # ── 分流判定 ──
 
     def should_use_service(self, *, tenant: str | None = None) -> bool:
-        """本次执行该不该走服务。`tenant` 显式传入便于测试；缺省取当前上下文租户。"""
+        """本次执行该不该走服务。`tenant` 显式传入便于测试；缺省取当前上下文租户。
+
+        分流规则（P0-1 默认启用）：
+        * `tenants` 为空 ⇒ **全部租户走服务**（默认；沙箱隔离是默认行为）；
+        * `tenants` 含 `*` ⇒ 同上（显式写法，便于"名单里写 `*` 再排除若干"）；
+        * 否则只有名单内的租户走服务（灰度 / 豁免用）。
+        """
         if not self._url:
             return False
+        if not self._tenants or "*" in self._tenants:
+            return True
         who = (tenant if tenant is not None else get_tenant_id()) or ""
         return bool(who) and who in self._tenants
 
@@ -100,7 +118,18 @@ class RemoteExecBackend:
         return await self._call_service(command, timeout=timeout)
 
     async def _call_service(self, command: str, *, timeout: float | None = None) -> ExecuteResult:
-        """调服务执行。**任何失败都不回退** —— 回退会让"隔离已生效"失真（见模块文档）。"""
+        """调服务执行。**任何失败都不回退** —— 回退会让"隔离已生效"失真（见模块文档）。
+
+        配了 `max_concurrency` 时先过闸门：**排队而非失败**（与沙箱服务侧的闸门同语义）。
+        """
+        if self._semaphore is None:
+            return await self._call_service_unbounded(command, timeout=timeout)
+        async with self._semaphore:
+            return await self._call_service_unbounded(command, timeout=timeout)
+
+    async def _call_service_unbounded(
+        self, command: str, *, timeout: float | None = None
+    ) -> ExecuteResult:
         payload = {
             "command": command,
             # 身份**必须**随请求带上：服务侧据此恢复工具上下文，`run_in_sandbox` 的审计
@@ -113,7 +142,7 @@ class RemoteExecBackend:
         # 服务侧的超时也由它自己兜（它有自己的 RLIMIT）；这里只是网络层上限
         wait = float(timeout) if timeout else self._timeout
         try:
-            async with httpx.AsyncClient(timeout=wait) as client:
+            async with shared_client(timeout=wait) as client:
                 resp = await client.post(
                     f"{self._url}{SERVICE_RUN_PATH}",
                     json=payload,

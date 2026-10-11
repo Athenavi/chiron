@@ -202,6 +202,34 @@ class QueueWorker:
 
         while self._running:
             try:
+                # 管理端「暂停队列」：置位期间不消费新任务。
+                # P1 修复：queue:paused 此前只被网关写入（admin_extras.go 的
+                # PauseQueue）、全仓库无人读取 —— 后台按钮是死功能。
+                if await self._redis.exists(rkey("queue:paused")):
+                    await asyncio.sleep(0.5)
+                    continue
+
+                # 管理端「清空队列」：先把本 group 的 pending 全部 ACK（避免残留
+                # dangling PEL 被 reclaim 循环反复认领），再截断主队列与延迟队列。
+                # 同样修复了 queue:flush 只写不读的死功能。
+                if await self._redis.exists(rkey("queue:flush")):
+                    await self._redis.delete(rkey("queue:flush"))
+                    while True:
+                        pending = await self._redis.xpending_range(
+                            TASK_STREAM, GROUP_NAME, min="-", max="+", count=1000
+                        )
+                        if not pending:
+                            break
+                        await self._redis.xack(
+                            TASK_STREAM,
+                            GROUP_NAME,
+                            *[p["message_id"] for p in pending],
+                        )
+                    await self._redis.xtrim(TASK_STREAM, maxlen=0)
+                    await self._redis.delete(DELAYED_ZSET)
+                    logger.warning("Queue flushed by admin request")
+                    continue
+
                 await self._consume_batch()
             except asyncio.CancelledError:
                 break
@@ -784,12 +812,12 @@ class QueueWorker:
         if not settings.internal_token:
             raise RuntimeError("agent_followup 需要 internal_token 才能调用网关")
 
-        import httpx
+        from app.http_client import shared_client
 
         url = f"{settings.gateway_internal_url.rstrip('/')}/v1/internal/agent-followup"
         headers = {"X-Internal-Token": settings.internal_token}
         try:
-            async with httpx.AsyncClient(timeout=20.0) as client:
+            async with shared_client(timeout=20.0) as client:
                 resp = await client.post(url, json=payload, headers=headers)
         except Exception as exc:  # noqa: BLE001 - 网关暂时不可达（重启/滚动升级）
             raise RetryLaterError(f"agent_followup transport error: {exc}") from exc

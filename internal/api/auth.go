@@ -14,6 +14,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
+	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
@@ -39,6 +40,33 @@ func maskEmail(email string) string {
 
 // DefaultTenantID is the default tenant ID for single-tenant mode.
 const DefaultTenantID = db.DefaultTenantID
+
+// consumeInvite 校验并消费一个租户邀请码，返回其对应的租户 ID（F2）。
+//
+// 校验与 `uses` 自增都在**注册事务内**完成：若注册后续步骤失败并回滚，计数一并
+// 回滚，不会出现"码被消费但用户没建成"。空码由调用方先行处理（走默认租户）。
+func consumeInvite(ctx context.Context, tx pgx.Tx, code string) (string, error) {
+	var tenantID string
+	err := tx.QueryRow(ctx,
+		`SELECT tenant_id FROM tenant_invites
+		  WHERE code = $1
+		    AND (expires_at IS NULL OR expires_at > NOW())
+		    AND (max_uses = 0 OR uses < max_uses)`,
+		code).Scan(&tenantID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", errors.New("邀请码无效、已过期或已达使用上限")
+	}
+	if err != nil {
+		slog.Error("consume invite: query failed", "error", err)
+		return "", errors.New("邀请码校验失败")
+	}
+	if _, err := tx.Exec(ctx,
+		`UPDATE tenant_invites SET uses = uses + 1 WHERE code = $1`, code); err != nil {
+		slog.Error("consume invite: increment failed", "error", err)
+		return "", errors.New("邀请码消费失败")
+	}
+	return tenantID, nil
+}
 
 type AuthHandler struct {
 	auth    *auth.Authenticator
@@ -164,8 +192,15 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	var user UserResponse
 	var passwordHash string
 	var tenantID string
+	// F2：不再用 `tenant_id = DefaultTenantID` 过滤 —— 经邀请码注册的用户属于别的
+	// 租户，硬过滤会让它们永远登不进来。改为按 email 取用户，并在同 email 跨租户
+	// 重名时优先默认租户（存量账号行为不变）。
 	err = tx.QueryRow(ctx,
-		`SELECT id, email, name, role, tenant_id, password_hash FROM users WHERE email = $1 AND tenant_id = $2`,
+		`SELECT id, email, name, role, tenant_id, password_hash
+		   FROM users
+		  WHERE email = $1
+		  ORDER BY (tenant_id = $2) DESC, created_at ASC
+		  LIMIT 1`,
 		req.Email, DefaultTenantID,
 	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash)
 	if err != nil {
@@ -214,6 +249,9 @@ type RegisterRequest struct {
 	EmailCode      string `json:"email_code"`
 	CaptchaToken   string `json:"captcha_token"`
 	CaptchaRandstr string `json:"captcha_randstr"`
+	// InviteCode 租户邀请码（F2）：非空时新用户归入该码对应的租户，
+	// 为空则归入默认租户（存量单租户行为不变）。
+	InviteCode string `json:"invite_code"`
 }
 
 func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
@@ -253,7 +291,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 	ctx := r.Context()
 
-	// 璁剧疆绉熸埛涓婁笅鏂囦互缁曡繃 RLS 鈥斺€?蹇呴』鍦ㄤ簨鍔′腑鎵嶈兘璁?SET LOCAL 鎸佺画鐢熸晥
+	// 设置租户上下文（SET LOCAL）：必须在事务中才持续生效
 	tx, err := db.GlobalDBManager.Begin(ctx)
 	if err != nil {
 		slog.Error("begin tx for tenant context", "error", err)
@@ -262,7 +300,19 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", DefaultTenantID); err != nil {
+	// 解析租户归属（F2）：携带邀请码则归入该租户，否则维持默认租户（存量行为）。
+	// 校验与计数都在本事务内完成 —— 后续步骤失败回滚时 uses 一并回滚。
+	tenantID := DefaultTenantID
+	if code := strings.TrimSpace(req.InviteCode); code != "" {
+		resolved, ierr := consumeInvite(ctx, tx, code)
+		if ierr != nil {
+			BadRequest(w, ierr.Error())
+			return
+		}
+		tenantID = resolved
+	}
+
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID); err != nil {
 		slog.Error("set tenant context", "error", err)
 		InternalError(w, "registration failed")
 		return
@@ -272,7 +322,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	var exists int
 	if err := tx.QueryRow(ctx,
 		`SELECT COUNT(*) FROM users WHERE email = $1 AND tenant_id = $2`,
-		req.Email, DefaultTenantID,
+		req.Email, tenantID,
 	).Scan(&exists); err != nil {
 		slog.Error("check existing user", "error", err)
 		InternalError(w, "registration failed")
@@ -333,13 +383,13 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 浣跨敤 PostgreSQL 鐨?gen_random_uuid() 鐢熸垚 UUID
+	// 使用 PostgreSQL 的 gen_random_uuid() 生成 UUID
 	var userID string
 	err = tx.QueryRow(ctx,
 		`INSERT INTO users (id, tenant_id, email, name, password_hash, role, created_at, updated_at)
 		 VALUES (gen_random_uuid(), $1, $2, $3, $4, $5, NOW(), NOW())
 		 RETURNING id`,
-		DefaultTenantID, req.Email, req.Name, string(hash), role,
+		tenantID, req.Email, req.Name, string(hash), role,
 	).Scan(&userID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "registration failed")
@@ -353,7 +403,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	token, err := h.auth.GenerateToken(userID, req.Email, role, DefaultTenantID, auth.RolePermissions[role])
+	token, err := h.auth.GenerateToken(userID, req.Email, role, tenantID, auth.RolePermissions[role])
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -535,16 +585,26 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 2) 校验用户仍然存在
-	var userExists bool
+	// 2) 校验用户仍然存在，并**重取最新角色/租户**。
+	//    此前直接 RefreshToken(旧 token) 会原样复制旧 claims 的 role/permissions，
+	//    于是管理员被降权后，只要在旧 token 有效期内刷新，权限就被「续期」——
+	//    降权不生效（P1）。这里改为从 users 表读当前 role 与 tenant_id 后重新签发。
+	var dbEmail, dbRole, dbTenant string
 	err = db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM users WHERE id = $1)`, oldClaims.UserID).Scan(&userExists)
-	if err != nil || !userExists {
+		`SELECT COALESCE(email, ''), COALESCE(role, ''), COALESCE(tenant_id::text, '')
+		   FROM users WHERE id = $1`,
+		oldClaims.UserID).Scan(&dbEmail, &dbRole, &dbTenant)
+	if err != nil {
 		Unauthorized(w, "user not found")
 		return
 	}
+	if dbTenant == "" {
+		dbTenant = DefaultTenantID
+	}
 
-	newToken, err := h.auth.RefreshToken(cookie.Value)
+	// 权限按**当前角色**重新计算，而非沿用旧 token 的快照。
+	newToken, err := h.auth.GenerateToken(
+		oldClaims.UserID, dbEmail, dbRole, dbTenant, auth.RolePermissions[dbRole])
 	if err != nil {
 		Unauthorized(w, "session expired")
 		return

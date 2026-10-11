@@ -97,12 +97,22 @@ const workerIDFile = "worker.id"
 
 // resolveWorkerID 返回实例的 snowflake worker ID，优先级：
 //  1. WORKER_ID 环境变量（显式编排，多实例推荐）
-//  2. data 目录下 worker.id 持久化文件（自动分配并固化，重启不变）
-//  3. 随机分配并写入 worker.id
+//  2. 主机名末尾序号（StatefulSet 的 chiron-0/1/2 ⇒ 0/1/2）—— 零配置多副本
+//  3. data 目录下 worker.id 持久化文件（自动分配并固化，重启不变）
+//  4. 随机分配并写入 worker.id
 // 修复前默认恒为 0：多实例同一毫秒各自递增 seq 会产出相同 ID（JWT jti 等碰撞）。
 func resolveWorkerID() int64 {
 	if v := os.Getenv("WORKER_ID"); v != "" {
 		if n, err := strconv.ParseInt(v, 10, 64); err == nil && n >= 0 && n <= workerMax {
+			return n
+		}
+	}
+	// 无 WORKER_ID 时，从主机名末尾的序号推导：StatefulSet 的 pod 名（chiron-0/1/2）
+	// 天然唯一，于是"多副本共享同一 CHIRON_DATA_DIR"不再让所有副本读到同一个
+	// worker.id（P1：worker ID 相同 + 同一毫秒 ⇒ ID 碰撞，JWT jti 等随之重复）。
+	// Deployment 的 pod 名后缀通常非纯数字，会自然跳过这一档。
+	if host, err := os.Hostname(); err == nil {
+		if n, ok := workerIDFromHostname(host); ok {
 			return n
 		}
 	}
@@ -120,6 +130,24 @@ func resolveWorkerID() int64 {
 		fmt.Fprintf(os.Stderr, "id: failed to persist worker id: %v\n", err)
 	}
 	return n
+}
+
+// workerIDFromHostname 从主机名末尾的序号推导 worker ID：StatefulSet 的
+// `chiron-0` / `chiron-1` 天然唯一，使多副本部署无需手工为每个实例配 WORKER_ID。
+// 末尾不是纯数字（如 Deployment 的随机后缀 `abcde`）或超出 0-1023 时返回 false。
+func workerIDFromHostname(host string) (int64, bool) {
+	i := len(host)
+	for i > 0 && host[i-1] >= '0' && host[i-1] <= '9' {
+		i--
+	}
+	if i == len(host) {
+		return 0, false
+	}
+	n, err := strconv.ParseInt(host[i:], 10, 64)
+	if err != nil || n < 0 || n > workerMax {
+		return 0, false
+	}
+	return n, true
 }
 
 // NextID returns a unique ID using the package-level default generator.

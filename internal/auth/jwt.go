@@ -24,10 +24,9 @@ type Authenticator struct {
 	expiration time.Duration
 }
 
-// SigningSecret 返回签名密钥（供媒体签名 URL 等复用同一密钥）。
-func (a *Authenticator) SigningSecret() []byte {
-	return a.secret
-}
+// 注意：这里原先有一个 `SigningSecret()`，被媒体签名 URL 复用来做 HMAC。
+// 复用 JWT 签名密钥会让「媒体 URL 的 HMAC」与「会话令牌签名」共享同一把钥匙，
+// 已移除。媒体签名改用独立派生密钥，见 internal/api/media_sign.go 的 mediaSignSecret()。
 
 func NewAuthenticator(secret string, expiration time.Duration) *Authenticator {
 	return &Authenticator{
@@ -77,13 +76,10 @@ func (a *Authenticator) ValidateToken(tokenStr string) (*Claims, error) {
 	return claims, nil
 }
 
-func (a *Authenticator) RefreshToken(tokenStr string) (string, error) {
-	claims, err := a.ValidateToken(tokenStr)
-	if err != nil {
-		return "", err
-	}
-	return a.GenerateToken(claims.UserID, claims.Email, claims.Role, claims.TenantID, claims.Perms)
-}
+// 注意：这里原先有一个 `RefreshToken(tokenStr)`，语义是「校验旧 token 后原样
+// 复制其 claims 重新签发」。它正是「管理员降权后刷新仍保留旧权限」的根因，
+// 已删除。刷新改由 api 层从 users 表重取 role/tenant 后重新签发
+// （见 internal/api/auth.go 的 AuthHandler.Refresh）。
 
 type contextKey string
 
@@ -163,8 +159,10 @@ func HasPermission(claims *Claims, perm string) bool {
 	if claims == nil {
 		return false
 	}
-	// 如果 claims.Perms 被显式设置（非空），以它为唯一权限白名单
-	if len(claims.Perms) > 0 {
+	// 如果 claims.Perms 被显式设置（含空数组），以它为唯一权限白名单。
+	// 用 `!= nil` 而非 `len(...) > 0`：后者会让「显式授予空权限」被回退到角色
+	// 默认权限而放大（P1）。仅当 Perms 为 nil（未设置）才回退到 RolePermissions。
+	if claims.Perms != nil {
 		for _, p := range claims.Perms {
 			if p == perm {
 				return true

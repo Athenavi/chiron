@@ -29,6 +29,7 @@ POST /v1/internal/exec/run      -> {"stdout","stderr","exit_code","truncated"}
 
 from __future__ import annotations
 
+import asyncio
 import hmac
 import os
 import sys
@@ -50,6 +51,24 @@ TOKEN_ENV = "INTERNAL_TOKEN"
 
 #: 单次执行的默认上限（秒）。服务自己的硬上限，不信任调用方传的值。
 DEFAULT_TIMEOUT_SECONDS = 120
+
+#: 同时在飞的执行数上限（超出则**排队**，而不是直接失败）。
+#: 与容器 `pids_limit` 对齐：一次执行约 2-3 个进程，因此 `pids_limit` 应 ≥ MAX_INFLIGHT × 3。
+MAX_INFLIGHT = max(1, int(os.getenv("SANDBOX_MAX_INFLIGHT", "8") or 8))
+
+#: 排队等待上限（秒）。超过即拒绝（非零退出码 + 原因）—— 避免请求无限堆积把内存吃满。
+QUEUE_TIMEOUT_SECONDS = float(os.getenv("SANDBOX_QUEUE_TIMEOUT_SECONDS", "30") or 30)
+
+#: 运行计数（单 event loop 下字典操作本身是原子的；仅供 `/stats` 观测）。
+_stats: dict[str, int] = {
+    "inflight": 0,
+    "queued": 0,
+    "executed_total": 0,
+    "rejected_total": 0,
+}
+
+#: 并发闸门。多副本 / 多 worker 部署时**每个 worker 各持一份**（见 docs 的扩缩说明）。
+_semaphore = asyncio.Semaphore(MAX_INFLIGHT)
 
 app = FastAPI(title="chiron-sandbox", docs_url=None, redoc_url=None, openapi_url=None)
 
@@ -99,21 +118,60 @@ async def health(x_internal_token: str = Header(default="")) -> dict[str, Any]:
     return {"status": "ok", "service": "chiron-sandbox"}
 
 
+@app.get("/v1/internal/exec/stats")
+async def stats(x_internal_token: str = Header(default="")) -> dict[str, Any]:
+    """并发观测：在飞 / 排队 / 累计执行 / 累计拒绝。
+
+    扩缩与压测的口径来源（见 `scripts/bench_sandbox.py`）：若 `queued` 持续 > 0 或
+    `rejected_total` 增长，说明 `MAX_INFLIGHT`（或副本数）不够。
+    """
+    require_token(x_internal_token)
+    return {
+        "max_inflight": MAX_INFLIGHT,
+        "queue_timeout_seconds": QUEUE_TIMEOUT_SECONDS,
+        **_stats,
+    }
+
+
 @app.post("/v1/internal/exec/run")
 async def run(
     req: RunRequest, x_internal_token: str = Header(default="")
 ) -> dict[str, Any]:
     require_token(x_internal_token)
 
-    # 身份恢复：`run_in_sandbox` 的审计从工具上下文取 tenant/user/session，
-    # 不恢复就会写出"空身份"的流水（谁执行的答不出来）。
-    if req.tenant_id or req.user_id or req.session_id:
-        from app.tools.context import set_tool_context
+    # 并发闸门：超出 MAX_INFLIGHT 则**排队**；排队超过 QUEUE_TIMEOUT_SECONDS 才拒绝。
+    # 突发流量因此表现为延迟而非失败，同时用 rejected_total 给出"该扩容了"的明确信号。
+    _stats["queued"] += 1
+    try:
+        await asyncio.wait_for(_semaphore.acquire(), timeout=QUEUE_TIMEOUT_SECONDS)
+    except TimeoutError:
+        _stats["queued"] -= 1
+        _stats["rejected_total"] += 1
+        return {
+            "stdout": "",
+            "stderr": (
+                f"queue timeout after {QUEUE_TIMEOUT_SECONDS:g}s "
+                f"(max_inflight={MAX_INFLIGHT}) — 沙箱执行容量已满，请扩容或降低并发"
+            ),
+            "exit_code": -1,
+            "truncated": False,
+        }
+    _stats["queued"] -= 1
+    _stats["inflight"] += 1
+    try:
+        # 身份恢复：`run_in_sandbox` 的审计从工具上下文取 tenant/user/session，
+        # 不恢复就会写出"空身份"的流水（谁执行的答不出来）。
+        if req.tenant_id or req.user_id or req.session_id:
+            from app.tools.context import set_tool_context
 
-        set_tool_context(
-            tenant_id=req.tenant_id, user_id=req.user_id, session_id=req.session_id
-        )
+            set_tool_context(
+                tenant_id=req.tenant_id, user_id=req.user_id, session_id=req.session_id
+            )
 
-    timeout = min(int(req.timeout_seconds or DEFAULT_TIMEOUT_SECONDS), DEFAULT_TIMEOUT_SECONDS)
-    result = await run_in_sandbox(req.command, timeout=timeout)
-    return to_client_shape(result)
+        timeout = min(int(req.timeout_seconds or DEFAULT_TIMEOUT_SECONDS), DEFAULT_TIMEOUT_SECONDS)
+        result = await run_in_sandbox(req.command, timeout=timeout)
+        _stats["executed_total"] += 1
+        return to_client_shape(result)
+    finally:
+        _stats["inflight"] -= 1
+        _semaphore.release()

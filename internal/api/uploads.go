@@ -140,7 +140,10 @@ func (h *UploadHandler) Init(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if ext := strings.ToLower(filepath.Ext(body.Name)); ext == ".html" || ext == ".htm" ||
-		ext == ".xml" || ext == ".xhtml" || ext == ".swf" {
+		ext == ".xml" || ext == ".xhtml" || ext == ".swf" ||
+		// SVG 家族：与 isExecutableMIME 同口径 —— 浏览器按文档解析并执行其中的脚本，
+		// 此前只拦了 .html/.xml/.xhtml/.swf，漏了 .svg（同源存储型 XSS）。
+		ext == ".svg" || ext == ".svgz" || ext == ".xsl" || ext == ".xslt" || ext == ".mht" {
 		BadRequest(w, "file type not allowed: "+ext)
 		return
 	}

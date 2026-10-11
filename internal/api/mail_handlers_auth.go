@@ -192,9 +192,16 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user UserResponse
+	var tenantID string
+	// F2：不再硬过滤默认租户（经邀请码注册的用户属于别的租户）。同 email 跨租户
+	// 重名时优先默认租户，存量账号行为不变。
 	err = h.db.QueryRow(ctx,
-		`SELECT id, email, name, role FROM users WHERE tenant_id = $1 AND lower(email) = lower($2)`,
-		db.DefaultTenantID, email).Scan(&user.ID, &user.Email, &user.Name, &user.Role)
+		`SELECT id, email, name, role, tenant_id
+		   FROM users
+		  WHERE lower(email) = lower($1)
+		  ORDER BY (tenant_id = $2) DESC, created_at ASC
+		  LIMIT 1`,
+		email, db.DefaultTenantID).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		if !row.AutoRegister {
 			NotFound(w, "该邮箱未注册")
@@ -205,6 +212,8 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 			logAndRespond(w, err, http.StatusInternalServerError, "auto register failed")
 			return
 		}
+		// provisionMailUser 建在默认租户下
+		tenantID = db.DefaultTenantID
 	} else if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -213,13 +222,13 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if h.captcha != nil {
 		h.captcha.ClearFailures(ctx, r)
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, db.DefaultTenantID, auth.RolePermissions[user.Role])
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID, auth.RolePermissions[user.Role])
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
 	}
 	SetTokenCookie(w, token, int(h.cfg.JWTExpiration.Seconds()), h.cfg.CookieSecure)
-	db.AuditLog(ctx, "", db.DefaultTenantID, "login_success", "/v1/auth/email/login",
+	db.AuditLog(ctx, user.ID, tenantID, "login_success", "/v1/auth/email/login",
 		"email="+maskEmail(email), r.RemoteAddr, nil)
 	OK(w, map[string]interface{}{
 		"token": token,
