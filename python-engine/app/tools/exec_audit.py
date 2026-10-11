@@ -105,11 +105,11 @@ def record_execution(
     """
     if not EXEC_AUDIT_ENABLED:
         return
+
+    # ① 组装条目（失败则既不能落盘也不能外发）
     try:
         from app.tools.context import get_session_id, get_tenant_id, get_user_id
 
-        log_dir = _audit_dir()
-        log_dir.mkdir(parents=True, exist_ok=True)
         entry: dict[str, Any] = {
             "ts": utc_timestamp(),
             "tool": tool,
@@ -124,11 +124,27 @@ def record_execution(
             entry["reason"] = reason
         if duration_ms is not None:
             entry["duration_ms"] = duration_ms
+    except Exception:  # noqa: BLE001 — 审计失败不影响执行结果
+        logger.warning("exec audit entry build failed", exc_info=True)
+        return
+
+    # ② 落盘（独立 try）
+    try:
+        log_dir = _audit_dir()
+        log_dir.mkdir(parents=True, exist_ok=True)
         with (log_dir / EXEC_AUDIT_FILENAME).open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry, ensure_ascii=False) + "\n")
-        _enqueue_for_shipping(entry)
     except Exception:  # noqa: BLE001 — 审计失败不影响执行结果
         logger.warning("exec audit log write failed", exc_info=True)
+
+    # ③ 外发（集中摄取）—— **必须与落盘解耦**。
+    # 此前它在同一个 try 里、且排在落盘**之后**：独立沙箱服务（sandbox-service）的根是
+    # `read_only`，`mkdir` 必失败 ⇒ 直接跳 except ⇒ 即便配了 `EXEC_AUDIT_SHIP_URL`
+    # 也**一条都发不出去**（审计在只读容器里静默全丢）。
+    try:
+        _enqueue_for_shipping(entry)
+    except Exception:  # noqa: BLE001 — 审计失败不影响执行结果
+        logger.warning("exec audit ship enqueue failed", exc_info=True)
 
 
 # ── 多副本集中摄取（N4）────────────────────────────────────────────────────
@@ -215,9 +231,9 @@ async def _post_batch(batch: list[dict[str, Any]]) -> bool:
 
     token = getattr(settings, "internal_token", "") or os.getenv("INTERNAL_TOKEN", "")
     try:
-        import httpx
+        from app.http_client import shared_client
 
-        async with httpx.AsyncClient(timeout=SHIP_TIMEOUT_SECONDS) as client:
+        async with shared_client(timeout=SHIP_TIMEOUT_SECONDS) as client:
             resp = await client.post(
                 url, json={"records": batch}, headers={"X-Internal-Token": token}
             )

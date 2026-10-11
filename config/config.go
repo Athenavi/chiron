@@ -192,7 +192,8 @@ func loadConfig() *Config {
 		JWTExpiration:       getDuration("JWT_EXPIRATION", 24*time.Hour),
 		InternalToken:       getEnv("INTERNAL_TOKEN", ""),
 		DisableRegistration: isTruthy(getEnv("DISABLE_REGISTRATION", "")),
-		CookieSecure:        isTruthy(getEnv("COOKIE_SECURE", "")),
+		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
+		CookieSecure: cookieSecure(),
 		CORSOrigins:         getEnv("CORS_ORIGINS", ""),
 		StorageBackend:      getEnv("STORAGE_BACKEND", "local"),
 		StorageRoot:         getEnv("STORAGE_ROOT", filepath.Join(GetDefaultDataDir(), "workspace")),
@@ -344,6 +345,24 @@ func getStringSlice(key string, fallback []string) []string {
 }
 
 // isTruthy returns true if s is "true", "1", "yes", or "on" (case-insensitive).
+// cookieSecure 决定会话 cookie 是否带 Secure 标志。
+//
+// 取值顺序：
+//  1. `COOKIE_SECURE` **显式设置**时以它为准（便于"反代终止 TLS、容器内仍是 HTTP"等拓扑）；
+//  2. 否则按 `PUBLIC_BASE_URL` 的 scheme 推导：https ⇒ true。
+//
+// 为什么不沿用"默认 false"：生产漏配 COOKIE_SECURE 会让会话 cookie 在明文 HTTP 上
+// 可被窃取（缺 Secure 时浏览器允许经 HTTP 发送）。生产必然设置 PUBLIC_BASE_URL
+// （SSO 回调地址也依赖它），因此推导是可靠的；本地 HTTP 开发则推导为 false，
+// 不会出现"带 Secure 的 cookie 在 http://localhost 下不被回传、登录不上"的问题。
+func cookieSecure() bool {
+	if v := strings.TrimSpace(getEnv("COOKIE_SECURE", "")); v != "" {
+		return isTruthy(v)
+	}
+	return strings.HasPrefix(
+		strings.ToLower(strings.TrimSpace(getEnv("PUBLIC_BASE_URL", ""))), "https://")
+}
+
 func isTruthy(s string) bool {
 	switch s {
 	case "true", "1", "yes", "on", "TRUE", "YES", "ON":

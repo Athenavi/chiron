@@ -81,6 +81,13 @@ func isMissingColumn(err error, column string) bool {
 // `INSERT ... ON CONFLICT (id) DO UPDATE`，**不比对归属** —— 任何登录用户只要知道别人的
 // session_id，就能往那个会话里塞消息（CreateSession 那处还会把对方的标题一起覆盖）。
 func (m *Manager) ensureSessionOwned(ctx context.Context, sessionID, userID string) error {
+	return m.ensureSessionOwnedWithTitle(ctx, sessionID, userID, "")
+}
+
+// ensureSessionOwnedWithTitle 同 ensureSessionOwned，但当 title 非空时**顺带**在
+// 同一条 upsert 里补上会话标题（仅在标题为空时覆盖），省掉 SaveUserMessage 之后
+// 原本独立的那次 `UPDATE sessions SET title`（P1：每条用户消息从 3 次 DB 往返降到 2 次）。
+func (m *Manager) ensureSessionOwnedWithTitle(ctx context.Context, sessionID, userID, title string) error {
 	if m.pool == nil {
 		return nil
 	}
@@ -90,11 +97,16 @@ func (m *Manager) ensureSessionOwned(ctx context.Context, sessionID, userID stri
 	var ensured string
 	err := m.pool.QueryRow(ctx,
 		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, NULLIF($3, '')::uuid, '', NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()
+		 VALUES ($1, $2, NULLIF($3, '')::uuid, LEFT($4, 255), NOW(), NOW())
+		 ON CONFLICT (id) DO UPDATE SET
+		     updated_at = NOW(),
+		     title = CASE
+		         WHEN sessions.title = '' OR sessions.title IS NULL THEN LEFT($4, 255)
+		         ELSE sessions.title
+		     END
 		  WHERE sessions.user_id = EXCLUDED.user_id
 		 RETURNING id`,
-		sessionID, DefaultTenantID, userID).Scan(&ensured)
+		sessionID, DefaultTenantID, userID, title).Scan(&ensured)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return fmt.Errorf("%w: %s", ErrSessionForbidden, sessionID)
 	}
@@ -105,8 +117,9 @@ func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userCo
 	if m.pool == nil || userContent == "" {
 		return
 	}
-	// 归属校验内聚在 ensureSessionOwned（fail-closed）：归属不符时不写任何消息
-	if err := m.ensureSessionOwned(ctx, sessionID, userID); err != nil {
+	// 归属校验内聚在 ensureSessionOwned（fail-closed）：归属不符时不写任何消息。
+	// 标题也在这一次 upsert 里补上（P1：省掉下方原本独立的 UPDATE sessions）。
+	if err := m.ensureSessionOwnedWithTitle(ctx, sessionID, userID, truncateTitle(userContent)); err != nil {
 		slog.Warn("save user message refused", "session", sessionID, "error", err)
 		return
 	}
@@ -131,13 +144,8 @@ func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userCo
 		// 失败不再静默（000.md 第 14 条）：用户消息丢失会导致刷新后对话缺头
 		slog.Error("save user message", "session", sessionID, "turn", turnID, "error", err)
 	}
-	_, err = m.pool.Exec(ctx,
-		`UPDATE sessions SET title = LEFT($1, 255), updated_at = NOW()
-		 WHERE id = $2 AND (title = '' OR title IS NULL)`,
-		truncateTitle(userContent), sessionID)
-	if err != nil {
-		slog.Warn("update session title", "error", err)
-	}
+	// 标题与 updated_at 已在上面的 ensureSessionOwnedWithTitle upsert 中一并处理
+	// （P1：此前这里还有一次独立的 UPDATE sessions，每条消息共 3 次 DB 往返）。
 	m.evictCache(ctx, sessionID)
 }
 

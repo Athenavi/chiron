@@ -508,9 +508,11 @@ async def run_webhook_hook(
 
     import httpx
 
+    from app.http_client import shared_client
+
     started = time.time()
     try:
-        async with httpx.AsyncClient(timeout=timeout, follow_redirects=False) as client:
+        async with shared_client(timeout=timeout, follow_redirects=False) as client:
             async with client.stream("POST", url, json=webhook_payload(context)) as resp:
                 status = resp.status_code
                 total = 0

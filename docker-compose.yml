@@ -86,6 +86,12 @@ services:
       - plugindata:/srv/chiron/plugins
     stop_grace_period: 30s
     restart: unless-stopped
+    # 加入 internal 沙箱网络：sandbox-service 需要把执行审计 POST 到
+    # `/v1/internal/audit/exec`，而它自己只在 internal 网络上（无外网出口），
+    # 因此必须由网关侧提供可达性。网关本身仍经 default 网络访问外网。
+    networks:
+      - default
+      - sandbox_net
     healthcheck:
       # 就绪探针用 /ready(检查 PG + Redis):依赖不可用时标记 unhealthy,
       # 避免编排器把流量继续打给处于降级状态的副本;/health 仅供存活检查。
@@ -99,6 +105,8 @@ services:
     build:
       context: python-engine
       dockerfile: Dockerfile
+    # 具名镜像：sandbox-service 复用同一份代码基线（同一份命令白名单，避免两份漂移）
+    image: chiron/python-engine:dev
     # 不暴露端口到外网：仅容器间网络通信，由 gateway 反向代理
     # 如需调试可临时映射: "127.0.0.1:8000:8000"
     expose:
@@ -125,6 +133,9 @@ services:
       RPA_GATEWAY_URL: http://gateway:8080
       # 共享卷:agent 沙箱 + 插件数据(与网关 plugins 卷一致)
       SANDBOX_ROOT: /srv/chiron/sandbox
+      # 沙箱执行地址：经内部 nginx 均衡到 sandbox-service 多副本。直连服务名时
+      # HTTP keep-alive 会让流量压在一个副本上（见 deploy/nginx/sandbox.conf）。
+      SANDBOX_SERVICE_URL: http://sandbox-lb:8001
       PLUGIN_DATA_DIR: ${PLUGIN_DATA_DIR:-/srv/chiron/plugins}
       # 向量库(Milvus 已在本 compose 提供;pgvector 时改 VECTOR_DB_TYPE=pgvector)
       MILVUS_ADDRESS: ${MILVUS_ADDRESS:-milvus:19530}
@@ -153,6 +164,10 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+      # 沙箱层是执行路径的**硬依赖**（backend 默认 service 且不回退）：等均衡器
+      # （它自己等 sandbox-service）健康再起引擎，避免启动探测失败导致引擎拒绝启动。
+      sandbox-lb:
+        condition: service_healthy
     volumes:
       - sandboxdata:/srv/chiron/sandbox
       - plugindata:/srv/chiron/plugins
@@ -160,6 +175,21 @@ services:
       - ./market/skills:/srv/chiron/builtin-skills:ro
     stop_grace_period: 30s
     restart: unless-stopped
+    # 沙箱加固（P0-1）：引擎容器内会执行 agent 生成的命令与 Python 代码，而进程内
+    # 沙箱（python-engine/app/tools/sandbox.py）只是"提高门槛"，**不是安全边界**。
+    # 这里做容器级兜底：丢弃全部 capability、禁止提权、限制进程数 —— 使逃逸后既
+    # 无法提权，也无法用 fork 炸弹拖垮宿主。彻底隔离需独立沙箱容器 / gVisor，
+    # 见 docs/deployment-multi-instance.md。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+    # 加入 internal 沙箱网络：既能调用 sandbox-service，又保留 default 网络的外网
+    # 出口（LLM API 走那里）。sandbox-service 自己只在 sandbox_net 上（无外网）。
+    networks:
+      - default
+      - sandbox_net
     healthcheck:
       # /readyz 检查 Redis(与 gateway 的 /ready 对齐);/healthz 仅为进程存活检查。
       test: [ "CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')" ]
@@ -167,6 +197,78 @@ services:
       timeout: 5s
       retries: 5
       start_period: 20s
+  # 独立沙箱执行服务（S5-(e)）：把 agent 生成的命令 / Python 代码从引擎进程里挪到
+  # **受限容器**执行 —— 这是 P0-1 的根治层。进程内沙箱（app/tools/sandbox.py）只是
+  # "提高门槛"，逃逸后仍在引擎容器里；本服务把逃逸的**影响面**限制在只读根、无
+  # capability、无外网出口、独立卷的容器内。
+  #
+  # 引擎侧启用方式：
+  #   SANDBOX_BACKEND=service
+  #   SANDBOX_SERVICE_URL=http://sandbox-service:8001
+  #   SANDBOX_SERVICE_TENANTS=<逗号分隔租户白名单>（空 = 谁都不走服务，刻意默认）
+  sandbox-service:
+    # 复用引擎镜像：与 app/tools/sandbox.py **同一份**白名单实现（两份名单必然漂移，
+    # 且漂移方向通常是放宽）。
+    image: chiron/python-engine:dev
+    command: ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8001"]
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN is required — set to same value as gateway's INTERNAL_TOKEN}
+      SANDBOX_ROOT: /srv/chiron/sandbox
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      # 审计集中摄取：本容器根是 read_only，落盘必失败 —— 必须外发到网关，
+      # 否则执行审计在只读容器里**静默全丢**（此前外发与落盘耦合在同一 try 里，
+      # 落盘一失败连外发也跳过，已解耦）。
+      # 注意端点是 `audit/exec`（不是 ingest）；网关已加入 sandbox_net 才可达。
+      EXEC_AUDIT_SHIP_URL: http://gateway:8080/v1/internal/audit/exec
+    volumes:
+      # 镜像里只有 app/，服务代码由这里只读挂入
+      - ./sandbox-service/service.py:/app/service.py:ro
+      - sandboxdata:/srv/chiron/sandbox
+    # ── 隔离强化：这一层才是安全边界 ──
+    read_only: true          # 只读根文件系统；可写处只有显式挂载的卷与下面的 tmpfs
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 1g
+    # 只在 internal 网络上：同网络容器可达（引擎能调它），但**没有外网出口** ——
+    # 逃逸后既打不到云元数据 169.254.169.254，也连不出互联网。
+    networks:
+      - sandbox_net
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import os,urllib.request;r=urllib.request.Request('http://localhost:8001/v1/internal/exec/health',headers={'X-Internal-Token':os.environ.get('INTERNAL_TOKEN','')});urllib.request.urlopen(r)"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  # sandbox-service 的内部负载均衡。引擎侧只有一个 URL，而 Docker DNS 的 round-robin
+  # 会被 HTTP keep-alive 抵消（连接一旦建立就复用）—— 见 deploy/nginx/sandbox.conf 的说明。
+  sandbox-lb:
+    image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 ≥ 1.27.3
+    volumes:
+      - ./deploy/nginx/sandbox.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - sandbox_net
+    depends_on:
+      - sandbox-service
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
   milvus:
     image: milvusdb/milvus:v2.4.17
     restart: unless-stopped
@@ -270,3 +372,9 @@ volumes:
   milvusdata:
   prometheusdata:
   alertmanagerdata:
+
+networks:
+  # internal: true ⇒ 无外网出口。sandbox-service 只能与同网络的引擎通信；
+  # 执行逃逸后既访问不到云元数据（169.254.169.254），也连不出互联网。
+  sandbox_net:
+    internal: true

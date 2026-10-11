@@ -278,16 +278,26 @@ class Settings(BaseSettings):
 
     # ── 独立 sandbox 服务（S5-(e)，见 vendor/设计-独立sandbox服务.md）──
     #
-    # `local`（默认）：执行走引擎进程内的基线（`app/tools/sandbox.py`）—— 行为与引入这个机制
-    # 之前**逐字一致**。
-    # `service`：执行转发给独立服务（`app/backends/remote_exec.py`）。**服务不可用时失败而不是
-    # 回退本地** —— 静默回退会让"隔离已生效"这个判断失真（方案 04 §4）。
-    sandbox_backend: str = "local"
-    #: `service` 时的服务地址（仅内网可达）。空 = 即便 `backend=service` 也不分流。
-    sandbox_service_url: str = ""
-    #: **租户白名单**（逗号分隔）。只有名单内的租户走服务；**空名单 = 谁都不走** ——
-    #: 这不是"没配就全走服务"，后者是个危险的默认。
+    # `service`（**默认**）：执行转发给独立服务（`app/backends/remote_exec.py`），把 agent
+    # 生成的命令 / Python 代码从引擎进程挪到**受限容器**里跑（只读根、无 capability、
+    # 无外网出口）。这是 P0-1 的根治层。
+    # `local`：执行走引擎进程内的基线（`app/tools/sandbox.py`）—— 仅适用于单机开发。
+    #
+    # **服务不可用时失败而不是回退本地** —— 静默回退会让"隔离已生效"这个判断失真
+    # （方案 04 §4）。启动时会探测服务健康：不可达且 `degraded_mode=false`（生产默认）
+    # ⇒ **拒绝启动**；`degraded_mode=true`（单机开发）⇒ 告警并回退本地。
+    sandbox_backend: str = "service"
+    #: `service` 时的服务地址（仅内网可达）。compose/k8s 内的服务同名，故给默认值；
+    #: 裸机开发想用进程内执行请设 `sandbox_backend=local`。
+    sandbox_service_url: str = "http://sandbox-service:8001"
+    #: **租户白名单**（逗号分隔）。空 = **全部租户走服务**（默认启用）；
+    #: 填了名单则只有名单内租户走服务，其余留在本地（灰度 / 豁免用）。
     sandbox_service_tenants: str = ""
+    #: 引擎侧对沙箱服务的**并发上限**（0 = 不限，保持现行为）。
+    #: 多副本时建议设置：N 个引擎副本各自无限并发会把 sandbox-service 打满，表现为
+    #: 排队 / 拒绝（其 `/v1/internal/exec/stats` 的 `rejected_total` 会给出信号）。
+    #: 取值参考 `scripts/bench_sandbox.py` 实测出的"每实例安全并发数"。
+    sandbox_service_max_concurrency: int = 0
 
     #: read-before-write **严格模式**（**已拍板：保持默认关**，2026-10-09）。
     #:

@@ -141,6 +141,16 @@ spec:
       labels: { app: python-engine }
     spec:
       terminationGracePeriodSeconds: 30   # 与 compose 的 stop_grace_period 对齐（worker 排空 in-flight）
+      # 多副本尽量分散到不同节点：每个引擎副本都持有活跃会话的 run 现场
+      # （审批/取消的亲和目标），全部挤在一个节点等于把副本数变成单点。
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: python-engine }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: python-engine
           image: chiron/python-engine:dev
@@ -174,9 +184,27 @@ spec:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: 2000m, memory: 2Gi }
       volumes:
-        # ⚠️ emptyDir 只适用于"单副本验证编排属性"。
-        # 真多副本必须共享（docs/deployment-multi-instance.md）：换成 RWX PVC，
-        # 本地 kind 的 local-path 只支持 RWO，需要 nfs-server-provisioner 之类。
+        # ⚠️ 下面两个 emptyDir 只适用于"单副本验证编排属性"。
+        #
+        # 真多副本必须让副本之间**共享** sandbox 与 plugins（见
+        # docs/deployment-multi-instance.md）：否则同一用户的任务落到不同副本时
+        # 看不到彼此写入的文件（agent 文件工作流"间歇性失忆"）。做法是把这两处
+        # 换成同一条 **RWX** PVC 的引用：
+        #
+        #   - name: sandbox
+        #     persistentVolumeClaim: { claimName: chiron-shared }
+        #   - name: plugins
+        #     persistentVolumeClaim: { claimName: chiron-shared }
+        #
+        # 并先创建支持 RWX 的 PVC（kind 的 local-path 只支持 RWO，需要
+        # nfs-server-provisioner / 云盘 RWX 之类）：
+        #
+        #   apiVersion: v1
+        #   kind: PersistentVolumeClaim
+        #   metadata: { name: chiron-shared, namespace: chiron }
+        #   spec:
+        #     accessModes: [ReadWriteMany]
+        #     resources: { requests: { storage: 20Gi } }
         - name: sandbox
           emptyDir: {}
         - name: plugins

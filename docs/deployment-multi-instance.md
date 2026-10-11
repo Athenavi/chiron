@@ -47,6 +47,8 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `MCP_POOL_ENABLED` | `false` | 每个开启副本会为活跃用户持有 MCP 连接（副本×用户×server 放大） |
 | `STORAGE_BACKEND` | `s3` | 媒体走 MinIO；`local` 时走共享卷 `STORAGE_ROOT` |
 | `SANDBOX_ROOT` / `PLUGIN_DATA_DIR` | — | 引擎沙箱与插件数据，**多副本必须共享同一卷** |
+| `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器（P0-1 根治）；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
+| `SANDBOX_SERVICE_MAX_CONCURRENCY` | `0`（不限） | 引擎侧对沙箱层的并发闸门；多副本时建议设置（容量与实测见 `sandbox-service/README.md` 的「扩缩与容量」） |
 | `TRUSTED_PROXY_CIDRS` | 空 | 前置 LB 时填真实来源网段（否则 IP 限流可被伪造） |
 | `TURN_RETENTION_DAYS` / `TASK_IDEMPOTENCY_RETENTION_DAYS` | 30 | 保留策略天数 |
 | `RETENTION_INTERVAL_HOURS` | 6 | 保留策略执行间隔 |
@@ -54,6 +56,7 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 ## 4. 依赖门禁与就绪探针
 
 - **启动期**：Redis 未配置或连接失败时，网关（`cmd/chiron/main.go`）与引擎（`python-engine/app/main.py`）默认**拒绝启动**（安装模式除外）。进程内降级会让各副本看到不同的限流配额、会话与事件，因此不再静默降级。
+- **沙箱服务门禁**：引擎 `SANDBOX_BACKEND=service`（默认）时探测沙箱层（compose 里是内部 nginx `sandbox-lb`）的 `/v1/internal/exec/health`；不可达且 `DEGRADED_MODE=false` ⇒ **拒绝启动**（compose 已用 `depends_on: condition: service_healthy` 排序）。沙箱层是**执行路径的硬依赖**，多副本引擎共用它 —— 容量、均衡与实测方法见 `sandbox-service/README.md` 的「扩缩与容量」。
 - **运行期**：就绪探针——网关 `GET /ready`（检查 PG + Redis）、引擎 `GET /readyz`（检查 Redis），依赖不可用返回 **503**；compose 的健康检查已指向这两个端点，故障副本被标记 `unhealthy`。
 - 存活检查：网关 `GET /health`、引擎 `GET /healthz`。
 

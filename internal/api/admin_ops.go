@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/athenavi/chiron/config"
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
 )
@@ -69,6 +70,11 @@ func (h *AdminHandler) registerOpsRoutes(r *http.ServeMux) {
 	r.HandleFunc("PUT /cron-jobs/{id}", h.UpdateCronJob)
 	r.HandleFunc("DELETE /cron-jobs/{id}", h.DeleteCronJob)
 	r.HandleFunc("POST /cron-jobs/{id}/trigger", h.HandleCronTrigger)
+
+	// 租户邀请码（F2）：注册时据邀请码决定新用户归属哪个租户
+	r.HandleFunc("GET /invites", h.ListInvites)
+	r.HandleFunc("POST /invites", h.CreateInvite)
+	r.HandleFunc("DELETE /invites/{code}", h.DeleteInvite)
 }
 
 // ── 租户管理 ──
@@ -78,6 +84,110 @@ type tenantRow struct {
 	Name      string    `json:"name"`
 	Status    string    `json:"status"`
 	CreatedAt time.Time `json:"created_at"`
+}
+
+// ── 租户邀请码（F2）──
+
+type inviteRow struct {
+	Code      string     `json:"code"`
+	TenantID  string     `json:"tenant_id"`
+	MaxUses   int        `json:"max_uses"`
+	Uses      int        `json:"uses"`
+	ExpiresAt *time.Time `json:"expires_at"`
+	CreatedAt time.Time  `json:"created_at"`
+}
+
+// ListInvites 列出全部租户邀请码。
+func (h *AdminHandler) ListInvites(w http.ResponseWriter, r *http.Request) {
+	rows, err := db.GlobalDBManager.Query(r.Context(),
+		`SELECT code, tenant_id::text, max_uses, uses, expires_at, created_at
+		   FROM tenant_invites ORDER BY created_at DESC`)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "list invites failed")
+		return
+	}
+	defer rows.Close()
+	out := []inviteRow{}
+	for rows.Next() {
+		var it inviteRow
+		if err := rows.Scan(&it.Code, &it.TenantID, &it.MaxUses, &it.Uses, &it.ExpiresAt, &it.CreatedAt); err == nil {
+			out = append(out, it)
+		}
+	}
+	OK(w, map[string]interface{}{"invites": out, "total": len(out)})
+}
+
+// CreateInvite 为一个租户创建邀请码（未提供 code 时自动生成 16 位随机码）。
+func (h *AdminHandler) CreateInvite(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		TenantID      string `json:"tenant_id"`
+		Code          string `json:"code"`
+		MaxUses       int    `json:"max_uses"`
+		ExpiresInDays int    `json:"expires_in_days"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	tenantID := strings.TrimSpace(body.TenantID)
+	if tenantID == "" {
+		BadRequest(w, "tenant_id is required")
+		return
+	}
+	var tenantExists bool
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM tenants WHERE id = $1)`, tenantID).Scan(&tenantExists); err != nil || !tenantExists {
+		BadRequest(w, "tenant not found")
+		return
+	}
+
+	code := strings.TrimSpace(body.Code)
+	if code == "" {
+		raw, err := id.UUID()
+		if err != nil {
+			InternalError(w, "generate code failed")
+			return
+		}
+		code = strings.ReplaceAll(raw, "-", "")[:16]
+	}
+
+	var expiresAt interface{}
+	if body.ExpiresInDays > 0 {
+		expiresAt = time.Now().AddDate(0, 0, body.ExpiresInDays)
+	}
+	createdBy := ""
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		createdBy = claims.UserID
+	}
+
+	if _, err := db.GlobalDBManager.Exec(r.Context(),
+		`INSERT INTO tenant_invites (code, tenant_id, created_by, max_uses, expires_at)
+		 VALUES ($1, $2, NULLIF($3, ''), $4, $5)`,
+		code, tenantID, createdBy, body.MaxUses, expiresAt); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "create invite failed")
+		return
+	}
+	OK(w, map[string]interface{}{"code": code, "tenant_id": tenantID})
+}
+
+// DeleteInvite 撤销邀请码（撤销即删除该行）。
+func (h *AdminHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
+	code := r.PathValue("code")
+	if code == "" {
+		BadRequest(w, "code is required")
+		return
+	}
+	res, err := db.GlobalDBManager.Exec(r.Context(),
+		`DELETE FROM tenant_invites WHERE code = $1`, code)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "delete invite failed")
+		return
+	}
+	if res.RowsAffected() == 0 {
+		NotFound(w, "invite not found")
+		return
+	}
+	OK(w, map[string]string{"status": "deleted"})
 }
 
 func (h *AdminHandler) ListTenants(w http.ResponseWriter, r *http.Request) {

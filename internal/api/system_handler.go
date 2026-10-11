@@ -273,6 +273,41 @@ func (h *SystemHandler) RedisHealth(w http.ResponseWriter, r *http.Request) {
 	OK(w, result)
 }
 
+// readOnlySQLPrefixes 是 DBQuery 允许的只读语句首关键字。
+//
+// 注意：`WITH` 允许 CTE，而 PostgreSQL 的 CTE 可以内嵌 DML（`WITH x AS
+// (DELETE … RETURNING *) SELECT …`），故前缀白名单并非密不透风。真正的兜底
+// 是给本端点使用**只读数据库角色**；此处白名单用于抬高 internal_token 泄露
+// 后的利用门槛，与 DBExecute 保持对称。
+var readOnlySQLPrefixes = []string{"SELECT", "WITH", "TABLE", "VALUES", "EXPLAIN", "SHOW"}
+
+// validateReadOnlySQL 校验 SQL 是否为**单条只读语句**，返回空串表示放行。
+//
+// 判据：① 首关键字属于只读白名单；② 去掉结尾分号/空白后不再含 `;`
+// （simple query protocol 下 `SELECT 1; DELETE …` 会被当作两条语句执行）。
+// 对字符串字面量中带 `;` 的查询会误拒 —— 内部端点一律走参数化查询，可接受。
+func validateReadOnlySQL(sql string) string {
+	trimmed := strings.TrimSpace(sql)
+	if trimmed == "" {
+		return "sql is required"
+	}
+	upper := strings.ToUpper(trimmed)
+	allowed := false
+	for _, p := range readOnlySQLPrefixes {
+		if strings.HasPrefix(upper, p) {
+			allowed = true
+			break
+		}
+	}
+	if !allowed {
+		return "only read-only statements (SELECT/WITH/TABLE/VALUES/EXPLAIN/SHOW) are allowed on this endpoint"
+	}
+	if strings.Contains(strings.TrimRight(trimmed, "; \t\r\n"), ";") {
+		return "multiple statements are not allowed on this endpoint"
+	}
+	return ""
+}
+
 // DBQuery 执行 SQL 查询并返回结果（供 Python 引擎调用）
 func (h *SystemHandler) DBQuery(w http.ResponseWriter, r *http.Request) {
 	var req struct {
@@ -287,6 +322,14 @@ func (h *SystemHandler) DBQuery(w http.ResponseWriter, r *http.Request) {
 
 	if req.SQL == "" {
 		BadRequest(w, "sql is required")
+		return
+	}
+
+	// P0 安全加固（与 DBExecute 对称）：本端点只读，必须限制为单条只读语句 ——
+	// 否则 internal_token 一旦泄露即可跨租户 SELECT 全库，或用 `SELECT 1;DROP …`
+	// 执行任意 DDL/DML。此前只有 DBExecute 做了前缀白名单，DBQuery 漏了。
+	if reason := validateReadOnlySQL(req.SQL); reason != "" {
+		Forbidden(w, reason)
 		return
 	}
 

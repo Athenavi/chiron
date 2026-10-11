@@ -132,6 +132,28 @@ func TestAdminDatastoreRoutesAreExposed(t *testing.T) {
 		{http.MethodPost, "/v1/admin/database/backups/chiron_backup_x.sql/restore"},
 		{http.MethodPost, "/v1/admin/database/query"},
 		{http.MethodPost, "/v1/admin/database/optimize/analyze"},
+		// 租户 / 域名 / 定时任务（同类缺陷第四次：handler 在 adminMux，未接线外部 mux）
+		{http.MethodGet, "/v1/admin/tenants"},
+		{http.MethodPost, "/v1/admin/tenants"},
+		{http.MethodPut, "/v1/admin/tenants/t1"},
+		{http.MethodDelete, "/v1/admin/tenants/t1"},
+		{http.MethodPost, "/v1/admin/tenants/t1/suspend"},
+		{http.MethodGet, "/v1/admin/tenants/t1/usage"},
+		{http.MethodGet, "/v1/admin/domains"},
+		{http.MethodPost, "/v1/admin/domains"},
+		{http.MethodPut, "/v1/admin/domains/d1"},
+		{http.MethodDelete, "/v1/admin/domains/d1"},
+		{http.MethodPost, "/v1/admin/domains/d1/verify"},
+		{http.MethodPost, "/v1/admin/domains/d1/renew-ssl"},
+		{http.MethodGet, "/v1/admin/cron-jobs"},
+		{http.MethodPost, "/v1/admin/cron-jobs"},
+		{http.MethodPut, "/v1/admin/cron-jobs/c1"},
+		{http.MethodDelete, "/v1/admin/cron-jobs/c1"},
+		{http.MethodPost, "/v1/admin/cron-jobs/c1/trigger"},
+		// 租户邀请码（F2）
+		{http.MethodGet, "/v1/admin/invites"},
+		{http.MethodPost, "/v1/admin/invites"},
+		{http.MethodDelete, "/v1/admin/invites/abc123"},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()

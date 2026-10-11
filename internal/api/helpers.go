@@ -55,12 +55,21 @@ func bytesReader(b []byte) io.Reader {
 }
 
 // httpClient is the default HTTP client for outgoing webhook requests.
+//
+// SSRF 防护（P0 修复）：**不跟随重定向**。默认 client 会跟随最多 10 跳，而出站
+// webhook 的初始 URL 虽经私网校验（validateWebhookURL），攻击者服务器仍可用
+// 302 把请求引到 `http://169.254.169.254/latest/meta-data/` 或 `http://127.0.0.1:…`
+// —— 校验只在创建/首次解析时做过，重定向后完全失效。
+// `ErrUseLastResponse` 让 client 直接返回 3xx 响应（投递方只读 statusCode，语义不变）。
 var httpClient = &http.Client{
 	Timeout: 10 * time.Second,
 	Transport: &http.Transport{
 		MaxIdleConns:       100,
 		IdleConnTimeout:    90 * time.Second,
 		DisableCompression: false,
+	},
+	CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
 	},
 }
 

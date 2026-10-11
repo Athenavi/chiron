@@ -149,9 +149,9 @@ async def run_remote(
         "depth": int(depth or 0),
     }
     try:
-        import httpx
+        from app.http_client import shared_client
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        async with shared_client(timeout=timeout) as client:
             response = await client.post(
                 f"{base_url}{REMOTE_RUN_PATH}",
                 json=body,

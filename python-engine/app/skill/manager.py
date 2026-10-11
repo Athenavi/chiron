@@ -143,9 +143,9 @@ class MCPClient:
             raise ValueError(f"Unsupported transport: {self.transport}")
 
         try:
-            import httpx
+            from app.http_client import shared_client
 
-            async with httpx.AsyncClient() as client:
+            async with shared_client() as client:
                 http_resp = await client.post(
                     f"{self.server_url}/rpc",
                     json={
@@ -225,9 +225,9 @@ class MCPClient:
             raise ValueError(f"Unsupported transport: {self.transport}")
 
         try:
-            import httpx
+            from app.http_client import shared_client
 
-            async with httpx.AsyncClient() as client:
+            async with shared_client() as client:
                 http_resp = await client.post(
                     f"{self.server_url}/rpc",
                     json={
@@ -831,7 +831,9 @@ class SkillManager:
         # SSRF 防护：拒绝内网/私有地址
         assert_safe_url(url)
 
-        async with httpx.AsyncClient(timeout=timeout) as client:
+        from app.http_client import shared_client
+
+        async with shared_client(timeout=timeout) as client:
             response = await client.request(
                 method,
                 url,

@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,9 +20,30 @@ import (
 )
 
 // 媒体签名 URL（P0 修复：媒体不再裸公开可猜测；本地后端 HMAC，S3 后端走原生预签名）。
-// 签名 = HMAC-SHA256(JWTSecret, assetID|exp)，短时效（默认 15 分钟），与资产绑定。
+// 签名 = HMAC-SHA256(媒体专用密钥, assetID|tenant|user|exp)，短时效（默认 15 分钟），
+// 与资产**及其归属**绑定。
+//
+// P1 修复：此前密钥直接复用 JWT 签名密钥、且签名输入只有 assetID|exp ——
+// 一是域未分隔（一侧密钥暴露波及另一侧），二是签名不绑归属（同签名可被换 assetID）。
 
 const mediaSignTTL = 15 * time.Minute
+
+// mediaSignSecret 返回媒体签名专用密钥，与 JWT 签名密钥**域分隔**。
+//
+// 取值顺序：
+//  1. MEDIA_SIGN_SECRET（≥16 字符）——专用密钥；
+//  2. APP_SECRET 域分隔派生（派生域与 JWT/settings/凭据加密各不相同）；
+//  3. 都没有时返回空串，调用方必须拒绝签发/校验（fail-close）。
+func mediaSignSecret() string {
+	if v := os.Getenv("MEDIA_SIGN_SECRET"); len(v) >= 16 {
+		return v
+	}
+	if app := os.Getenv("APP_SECRET"); len(app) >= 8 {
+		sum := sha256.Sum256([]byte("chiron-media-sign:" + app))
+		return hex.EncodeToString(sum[:])
+	}
+	return ""
+}
 
 // signMediaURL 为资产生成签名下载 URL（校验归属后签发）。
 func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string) (string, error) {
@@ -37,21 +59,26 @@ func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string)
 	ext := filepath.Ext(filePath)
 
 	exp := time.Now().Add(mediaSignTTL).Unix()
-	sig := mediaHMAC(secret, assetID, exp)
+	// 签名绑定 (assetID, tenant, user, exp)：A 租户拿到的 URL 无法用于访问
+	// B 租户的资产，即使 assetID 被猜到或泄漏（P1）。
+	sig := mediaHMAC(secret, assetID, tenantID, userID, exp)
 
 	// 如果有扩展名，附加到 URL 中（flyfish-viewer 需要）
-	url := "/media/s/" + assetID
+	signedURL := "/media/s/" + assetID
 	if ext != "" {
-		url += ext
+		signedURL += ext
 	}
-	url += "?exp=" + strconv.FormatInt(exp, 10) + "&sig=" + sig
+	signedURL += "?exp=" + strconv.FormatInt(exp, 10) +
+		"&t=" + url.QueryEscape(tenantID) +
+		"&u=" + url.QueryEscape(userID) +
+		"&sig=" + sig
 
-	return url, nil
+	return signedURL, nil
 }
 
-func mediaHMAC(secret, assetID string, exp int64) string {
+func mediaHMAC(secret, assetID, tenantID, userID string, exp int64) string {
 	mac := hmac.New(sha256.New, []byte(secret))
-	mac.Write([]byte(assetID + "|" + strconv.FormatInt(exp, 10)))
+	mac.Write([]byte(assetID + "|" + tenantID + "|" + userID + "|" + strconv.FormatInt(exp, 10)))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
@@ -67,15 +94,20 @@ func (h *MediaHandler) SignMedia(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "id is required")
 		return
 	}
-	url, err := signMediaURL(r.Context(), assetID, string(h.authenticator.SigningSecret()), claims.TenantID, claims.UserID)
+	secret := mediaSignSecret()
+	if secret == "" {
+		InternalError(w, "media signing key unavailable")
+		return
+	}
+	signedURL, err := signMediaURL(r.Context(), assetID, secret, claims.TenantID, claims.UserID)
 	if err != nil {
 		NotFound(w, "media asset not found")
 		return
 	}
-	OK(w, map[string]interface{}{"url": url})
+	OK(w, map[string]interface{}{"url": signedURL})
 }
 
-// ServeSignedMedia GET /media/s/{assetID}{ext}?exp=&sig= —— 校验签名后流式返回文件。
+// ServeSignedMedia GET /media/s/{assetID}{ext}?exp=&t=&u=&sig= —— 校验签名后流式返回文件。
 func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) {
 	// 从路径中提取 assetID（去掉可能的文件扩展名）
 	rawAssetID := r.PathValue("assetID")
@@ -83,7 +115,9 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 
 	expStr := r.URL.Query().Get("exp")
 	sig := r.URL.Query().Get("sig")
-	if assetID == "" || expStr == "" || sig == "" {
+	tenantID := r.URL.Query().Get("t")
+	userID := r.URL.Query().Get("u")
+	if assetID == "" || expStr == "" || sig == "" || tenantID == "" || userID == "" {
 		http.Error(w, "missing signature params", http.StatusBadRequest)
 		return
 	}
@@ -92,8 +126,13 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "link expired", http.StatusForbidden)
 		return
 	}
-	secret := string(h.authenticator.SigningSecret())
-	if !hmac.Equal([]byte(sig), []byte(mediaHMAC(secret, assetID, exp))) {
+	secret := mediaSignSecret()
+	if secret == "" {
+		http.Error(w, "media signing unavailable", http.StatusServiceUnavailable)
+		return
+	}
+	// 签名绑定 (assetID, tenant, user, exp)：租户之间不可互换（P1）。
+	if !hmac.Equal([]byte(sig), []byte(mediaHMAC(secret, assetID, tenantID, userID, exp))) {
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}

@@ -98,6 +98,10 @@ func (h *EntIdentityHandler) RegisterRoutes(mux *http.ServeMux, authMW func(http
 	mux.Handle("PUT /v1/ent/groups/{id}/roles", ent(h.SetGroupRoles))
 
 	mux.Handle("GET /v1/ent/tenants", ent(h.ListTenants))
+	// 租户功能开关（SSO 灰度载体）：读走 ent:manage；**写仅平台 owner**（handler 内判定，
+	// 因为"是否允许该租户用 SSO"是平台侧的信任边界，不该由租户 admin 自行放开）。
+	mux.Handle("GET /v1/ent/tenants/{id}/features", ent(h.GetTenantFeatures))
+	mux.Handle("PUT /v1/ent/tenants/{id}/features", ent(h.PutTenantFeatures))
 }
 
 // ── 用户 ────────────────────────────────────────────────
@@ -865,6 +869,57 @@ type entTenantItem struct {
 
 // ListTenants GET /v1/ent/tenants?page=&page_size=
 // 读真实 tenants 表 + LEFT JOIN ent_quota_pools 汇总（不引用影子表 admin_tenants）。
+// GetTenantFeatures GET /v1/ent/tenants/{id}/features —— 读租户功能开关。
+func (h *EntIdentityHandler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
+	tenantID := r.PathValue("id")
+	if !isValidUUID(tenantID) {
+		BadRequest(w, "invalid tenant id")
+		return
+	}
+	OK(w, loadTenantFeatures(r.Context(), h.db, tenantID))
+}
+
+// PutTenantFeatures PUT /v1/ent/tenants/{id}/features —— **仅平台 owner**。
+//
+// SSO 的灰度就是在这里放开：租户 admin 即便持有 `sso:manage` 也无法自行开启，
+// 因为"该租户能否用 SSO"是平台侧决定的事（见 tenant_features.go 的说明）。
+// 请求体字段可只给其一（未给的保持原值）。
+func (h *EntIdentityHandler) PutTenantFeatures(w http.ResponseWriter, r *http.Request) {
+	if !isPlatformOwner(auth.GetClaims(r.Context())) {
+		Forbidden(w, "only the platform owner can change tenant features")
+		return
+	}
+	tenantID := r.PathValue("id")
+	if !isValidUUID(tenantID) {
+		BadRequest(w, "invalid tenant id")
+		return
+	}
+	var body struct {
+		SSOEnabled     *bool `json:"sso_enabled"`
+		SSOSelfService *bool `json:"sso_self_service"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	if body.SSOEnabled == nil && body.SSOSelfService == nil {
+		BadRequest(w, "no fields to update")
+		return
+	}
+	cur := loadTenantFeatures(r.Context(), h.db, tenantID)
+	if body.SSOEnabled != nil {
+		cur.SSOEnabled = *body.SSOEnabled
+	}
+	if body.SSOSelfService != nil {
+		cur.SSOSelfService = *body.SSOSelfService
+	}
+	if err := saveTenantFeatures(r.Context(), h.db, tenantID, cur); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "save tenant features failed")
+		return
+	}
+	OK(w, cur)
+}
+
 func (h *EntIdentityHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
 	page, pageSize := parsePageQuery(r)
 	ctx := r.Context()

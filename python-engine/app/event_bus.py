@@ -47,7 +47,7 @@ async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: str = 
         "payload": payload,
     }
 
-    import httpx
+    from app.http_client import shared_client
 
     url = f"{settings.gateway_internal_url.rstrip('/')}/v1/internal/webhook-event"
     headers = {
@@ -56,7 +56,7 @@ async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: str = 
     }
 
     try:
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with shared_client(timeout=5.0) as client:
             resp = await client.post(url, json=body, headers=headers)
             if resp.is_success:
                 logger.debug("webhook event emitted: %s", event_type)

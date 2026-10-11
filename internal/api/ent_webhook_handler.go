@@ -15,6 +15,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/redis/go-redis/v9"
@@ -56,15 +57,27 @@ func deriveWebhookKey() []byte {
 }
 
 // RegisterRoutes 挂载 Webhook 管理路由（authMW + RequireEntPerm("webhook:manage")）。
-func (h *EntWebhookHandler) RegisterRoutes(mux *http.ServeMux, authMW func(http.Handler) http.Handler) {
+func (h *EntWebhookHandler) RegisterRoutes(
+	mux *http.ServeMux,
+	authMW func(http.Handler) http.Handler,
+	rlMW func(http.Handler) http.Handler,
+	cfg *config.Config,
+) {
 	permMW := RequireEntPerm("webhook:manage")
 	mux.Handle("GET /v1/ent/webhooks", authMW(permMW(http.HandlerFunc(h.List))))
 	mux.Handle("POST /v1/ent/webhooks", authMW(permMW(http.HandlerFunc(h.Create))))
 	mux.Handle("GET /v1/ent/webhooks/{id}", authMW(permMW(http.HandlerFunc(h.Get))))
 	mux.Handle("PUT /v1/ent/webhooks/{id}", authMW(permMW(http.HandlerFunc(h.Update))))
 	mux.Handle("DELETE /v1/ent/webhooks/{id}", authMW(permMW(http.HandlerFunc(h.Delete))))
-	// 内部端点：Python 引擎推送事件
-	mux.Handle("POST /v1/internal/webhook-event", internalTokenMW(nil, http.HandlerFunc(h.IngestEvent)))
+	// 内部端点：Python 引擎推送事件。
+	//
+	// ⚠️ 此前是 `internalTokenMW(nil, …)` —— 而 internalTokenMW 首行即读
+	// `cfg.InternalToken`，于是**每个请求都 nil 解引用 panic**（未认证即可无限触发，
+	// 只被 Recover 兜成 500）；且该端点漏了 rlMW（对比 routes_public.go 的 internal
+	// 端点全部是 `rlMW(internalTokenMW(cfg, …))`）。两者叠加使 IngestEvent **永不执行**
+	// —— 企业 webhook 事件注入功能整体失效。
+	mux.Handle("POST /v1/internal/webhook-event",
+		rlMW(internalTokenMW(cfg, http.HandlerFunc(h.IngestEvent))))
 }
 
 // ── 数据模型 ──

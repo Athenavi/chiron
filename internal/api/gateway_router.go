@@ -473,7 +473,7 @@ func NewGatewayRouter(
 	// 企业 Webhook 可靠投递器：Redis 消费组跨实例投递（入口 IngestEvent 已持久化入流）
 	whDispatcher := NewWebhookDispatcher(atomicRedis)
 	go whDispatcher.Start(lifecycleCtx)
-	NewEntWebhookHandler().RegisterRoutes(mux, authMW)
+	NewEntWebhookHandler().RegisterRoutes(mux, authMW, rlMW, cfg)
 
 	// RPA 跨实例桥接（批 D）：订阅 rpa:cmd/rpa:res，让插件 WS 与 exec 请求可落在不同网关副本。
 	// rpaHub 由 NewGatewayRouter 的调用方（main.go）以 db.Redis 构造；Redis 不可用时为 localOnly 空操作。

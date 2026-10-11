@@ -82,6 +82,19 @@ class FileStoreBackend:
 
     # ── 传输层（测试通过 monkeypatch 替换它，不必起真实网关）──
 
+    def _http_client(self) -> httpx.AsyncClient:
+        """实例级懒加载 client：base_url/headers 固定，无需每次请求重建连接池（P1）。"""
+        import httpx
+
+        client = getattr(self, "_client", None)
+        if client is None or client.is_closed:
+            headers = {"X-Internal-Token": self._token} if self._token else {}
+            client = httpx.AsyncClient(
+                base_url=self._base_url, timeout=self._timeout, headers=headers
+            )
+            self._client = client
+        return client
+
     async def _call(
         self, method: str, path: str, *, params: dict[str, str] | None = None,
         body: dict[str, Any] | None = None,
@@ -93,15 +106,9 @@ class FileStoreBackend:
         if not self._base_url:
             return 503, {"error": "file store backend not configured"}
 
-        import httpx
-
-        headers = {"X-Internal-Token": self._token} if self._token else {}
-        async with httpx.AsyncClient(
-            base_url=self._base_url, timeout=self._timeout, headers=headers
-        ) as client:
-            resp = await client.request(
-                method, path, params=params, json=body
-            )
+        # 复用实例级 client（P1：此前每次 _call 都新建连接池，重做 TCP 握手）
+        client = self._http_client()
+        resp = await client.request(method, path, params=params, json=body)
         try:
             payload = resp.json()
         except ValueError:

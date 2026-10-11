@@ -146,15 +146,16 @@ async def test_tenant_outside_whitelist_stays_local():
 
 
 @pytest.mark.asyncio
-async def test_empty_whitelist_routes_nobody():
-    """空名单 = 谁都不走服务。这是刻意的安全默认（而不是"没配就全走服务"）。"""
-    inner = _Inner()
-    backend = RemoteExecBackend(inner, url="http://sandbox:9000", tenants=[])
+async def test_empty_whitelist_routes_everyone():
+    """空名单 = **全部租户走服务**（P0-1：沙箱隔离默认生效）。
 
-    assert backend.should_use_service(tenant=TENANT) is False
-    await backend.execute("ls")
-    assert _FakeClient.calls == []
-    assert inner.executed == ["ls"]
+    旧语义（空名单谁都不走）会让默认配置下的隔离形同虚设；现改为默认全走 ——
+    豁免个别租户用白名单，整体退出用 `SANDBOX_BACKEND=local`。
+    """
+    backend = RemoteExecBackend(_Inner(), url="http://sandbox:9000", tenants=[])
+
+    assert backend.should_use_service(tenant=TENANT) is True
+    assert backend.should_use_service(tenant="") is True, "空名单下无租户身份也走服务"
 
 
 def test_whitelist_entries_are_trimmed_and_blanks_ignored():

@@ -1,5 +1,6 @@
 """AI驱动的媒体内容分析器"""
 
+import asyncio
 import logging
 import os
 from datetime import UTC, datetime
@@ -88,9 +89,9 @@ _MAX_METADATA_BYTES = 32 * 1024 * 1024
 
 async def _download(url: str) -> bytes:
     """下载媒体内容（超时与大小上限见上）。"""
-    import httpx
+    from app.http_client import shared_client
 
-    async with httpx.AsyncClient(timeout=30.0, follow_redirects=True) as client:
+    async with shared_client(timeout=30.0, follow_redirects=True) as client:
         resp = await client.get(url)
         resp.raise_for_status()
         return resp.content
@@ -200,10 +201,12 @@ async def extract_metadata(
                 "error": f"file too large for metadata extraction ({len(raw)} bytes)",
             }
 
+        # PIL / pymupdf / python-docx 都是**同步且 CPU 密集**的解析：直接在
+        # event loop 里跑，大文件会冻结整个进程数百 ms~数秒（P1）。下沉到线程池。
         if media_type == "image":
-            detail = _image_metadata(raw)
+            detail = await asyncio.to_thread(_image_metadata, raw)
         elif media_type == "document":
-            detail = _document_metadata(raw, media_url)
+            detail = await asyncio.to_thread(_document_metadata, raw, media_url)
         else:
             return {
                 **base,

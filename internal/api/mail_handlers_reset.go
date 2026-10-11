@@ -202,6 +202,12 @@ func (h *MailHandler) ConfirmPasswordReset(w http.ResponseWriter, r *http.Reques
 		BadRequest(w, "重置链接已失效，请重新申请")
 		return
 	}
+	// 会话撤销：让**所有**已签发的 JWT 立即失效 —— 密码重置是标准止血动作，
+	// 若旧会话仍可用，等于"改了密码但攻击者还在里面"。
+	// 撤销失败**不回滚**改密（改密已生效），但必须记日志，否则会以为踢下线了、其实没有。
+	if rerr := revokeUserSessions(ctx, userID); rerr != nil {
+		slog.Error("password reset: session revoke failed", "user_id", userID, "error", rerr)
+	}
 	db.AuditLog(ctx, userID, db.DefaultTenantID, "password_reset_completed",
 		r.URL.Path, "", r.RemoteAddr, nil)
 	OK(w, map[string]string{"status": "reset"})

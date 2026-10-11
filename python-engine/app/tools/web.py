@@ -17,6 +17,7 @@ from urllib.parse import parse_qs, unquote, urlparse
 import httpx
 from bs4 import BeautifulSoup
 
+from app.http_client import shared_client
 from app.tools.registry import registry
 from app.tools.ssrf import assert_safe_url, fetch_url_safe
 
@@ -44,7 +45,7 @@ class DuckDuckGoProvider(WebProvider):
     ) -> list[dict[str, Any]]:
         from app.config import settings
         assert_safe_url("https://html.duckduckgo.com/html/")  # SSRF 防护（S4）
-        async with httpx.AsyncClient(timeout=settings.http_timeout_web, follow_redirects=True) as client:
+        async with shared_client(timeout=settings.http_timeout_web, follow_redirects=True) as client:
             resp = await client.post(
                 "https://html.duckduckgo.com/html/", data={"q": query}
             )
@@ -77,7 +78,7 @@ class DuckDuckGoProvider(WebProvider):
     async def fetch(self, url: str, max_chars: int = FETCH_MAX_CHARS) -> dict[str, Any]:
         from app.config import settings
         assert_safe_url(url)  # SSRF 防护（S4）
-        async with httpx.AsyncClient(timeout=settings.http_timeout_web, follow_redirects=True) as client:
+        async with shared_client(timeout=settings.http_timeout_web, follow_redirects=True) as client:
             resp = await fetch_url_safe(client, url)
         content_type = resp.headers.get("content-type", "")
         body = resp.text
