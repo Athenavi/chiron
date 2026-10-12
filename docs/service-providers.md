@@ -109,6 +109,7 @@ key 从 <https://opencode.ai/auth> 获取。
 | 引擎侧 key 轮换 | `python-engine/app/gateway/key_ring.py` |
 | provider 实现 | `python-engine/app/providers/{openai,anthropic}.py`（协议差异与 `x-opencode-session` 注入） |
 | 会话/档位上下文 | `python-engine/app/providers/session_context.py`（会话 ID 与思考档位） |
+| SDK 参数兼容 | `python-engine/app/providers/sdk_compat.py`（按 SDK 签名裁参数，见 §11） |
 | 前端展示 | 管理端 provider 卡片（目录 + 生效端点 + 模型列表） |
 
 ## 10. 边界
@@ -116,3 +117,27 @@ key 从 <https://opencode.ai/auth> 获取。
 - 目录是**服务端**的单一事实源，前端只负责展示与提交覆盖值；
 - 新增 provider 时**必须同步 Python 兜底目录**，否则网关认得、引擎不认（**已有门禁**：见 §1）；
 - `model_prefixes` 是**前缀**匹配，因此新增同前缀模型无需改路由，但**跨厂商同前缀**模型会互相争抢候选。
+
+## 11. SDK 采样参数已废弃（2026-10-12 修复）
+
+`requirements.txt` 在 b9d9566（"python-engine 依赖升级至最新版"）把两个 provider SDK
+一起推到新大版本（`anthropic` 0.52.0 → 1.13.0、`openai` 1.93.0 → 3.29.0）。新 SDK 跟随
+上游 API 收紧了方法签名，**采样参数（`temperature` 等）在 Anthropic 侧已废弃**：继续透传
+拿到的不是上游 400，而是 Python 层的
+
+```
+provider opencode-go-anthropic stream failed:
+TypeError: AsyncMessages.stream() got an unexpected keyword argument 'temperature'
+```
+
+用户侧表现是"provider 配好了、模型也选对了，一发请求就失败"——与 provider 目录无关，
+所以现象容易误判为端点/密钥问题。
+
+**策略**：provider 在把参数交给 SDK 之前，用 `app/providers/sdk_compat.py::drop_unsupported_params`
+按目标方法（`messages.stream` / `messages.create` / `chat.completions.create`）的**实际签名**
+裁参数 —— 签名里没有的键就地丢弃、并在首次丢弃时告警一次；签名里有的照发。
+这样旧 SDK 行为不变，新 SDK 下退化为服务端默认采样值（与 `app/providers/effort.py`
+"只在能映射到对方词表时才发"同一策略：**宁可少发一个可选参数，也不要让整轮对话失败**）。
+
+回归用例：`python-engine/tests/test_provider_sdk_params.py`（用"签名里没有 temperature 的假
+SDK"复现新形态、"有的假 SDK"锁住旧行为）。

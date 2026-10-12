@@ -8,6 +8,7 @@ from typing import Any
 import anthropic
 
 from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, LLMProvider, ToolCall
+from app.providers.sdk_compat import drop_unsupported_params
 
 logger = logging.getLogger(__name__)
 
@@ -63,6 +64,9 @@ class AnthropicProvider(LLMProvider):
         input_tokens = 0
         output_tokens = 0
         client, key_item = await self._resolve_client()
+        # 只发 SDK 认的参数：anthropic 1.x 已移除采样参数（temperature/top_p/top_k），
+        # 透传会得到 Python 层 TypeError 而非上游 400（见 providers/sdk_compat.py）。
+        drop_unsupported_params(client.messages.stream, kwargs)
         try:
             async with client.messages.stream(**kwargs) as stream:
                 async for event in stream:
@@ -145,6 +149,8 @@ class AnthropicProvider(LLMProvider):
             kwargs["tools"] = self._convert_tools(tools)
 
         client, key_item = await self._resolve_client()
+        # 同上：签名里没有的参数不发（新 anthropic SDK 已删除 sampling 参数）。
+        drop_unsupported_params(client.messages.create, kwargs)
         try:
             resp = await client.messages.create(**kwargs)
         except Exception:

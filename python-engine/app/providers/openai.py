@@ -15,6 +15,7 @@ from app.gateway.provider import (
     ToolCall,
     cached_tokens_from_usage,
 )
+from app.providers.sdk_compat import drop_unsupported_params
 
 logger = logging.getLogger(__name__)
 
@@ -56,6 +57,8 @@ class OpenAIProvider(LLMProvider):
         kwargs["stream"] = True
 
         client, key_item = await self._resolve_client()
+        # 只发 SDK 认的参数（如新 SDK 已移除 temperature，见 providers/sdk_compat.py）。
+        drop_unsupported_params(client.chat.completions.create, kwargs)
         try:
             response = await client.chat.completions.create(**kwargs)
         except Exception:
@@ -145,6 +148,7 @@ class OpenAIProvider(LLMProvider):
     ) -> ChatResponse:
         kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
         client, key_item = await self._resolve_client()
+        drop_unsupported_params(client.chat.completions.create, kwargs)
         try:
             resp = await client.chat.completions.create(**kwargs)
         except Exception:
