@@ -134,6 +134,14 @@ func registerAdminRoutes(
 	mux.Handle("POST /v1/admin/tenants/{id}/suspend", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/tenants/{id}/usage", authMW(rlMW(adminReadMW(adminStrip))))
 
+	// 租户级 harness 配置（P1-④ 批 B）：读用 adminReadMW；**写用 PermPolicyManage**
+	// —— 它决定该租户所有会话的 system prompt，属"策略"而非"日常运维"。
+	harnessAdminHandler := NewHarnessProfileHandler(pgEntStore{}, notifyHarnessProfileChanged)
+	policyManageMW := RequirePermission(auth.PermPolicyManage)
+	mux.Handle("GET /v1/admin/settings/harness-profiles", authMW(rlMW(adminReadMW(http.HandlerFunc(harnessAdminHandler.GetTenant)))))
+	mux.Handle("PUT /v1/admin/settings/harness-profiles", authMW(rlMW(policyManageMW(http.HandlerFunc(harnessAdminHandler.PutTenant)))))
+	mux.Handle("DELETE /v1/admin/settings/harness-profiles/{prefix}", authMW(rlMW(policyManageMW(http.HandlerFunc(harnessAdminHandler.DeleteTenant)))))
+
 	mux.Handle("GET /v1/admin/domains", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/domains", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/domains/{id}", authMW(rlMW(adminWriteMW(adminStrip))))

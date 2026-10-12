@@ -1,5 +1,33 @@
 // 从 legacy 迁移的语义化 key（L1-4）
+//
+// ⚠️ P1-④ 批 B 新增的 harness_* 目前是**英文占位**（待专业阿拉伯语翻译）。
+// 不能省略不写：`scripts/check-i18n-keys.mjs` 要求各语言键集与 zh-CN 一一对应，
+// 且含 {max} 占位符的文案缺键时会显示成未插值的 key。
 export default {
+  harness_title: "Behavior shaping",
+  harness_warning_title: "This configuration changes how the model responds",
+  harness_warning_body: "The text is appended to the end of the system prompt for every session matching that model prefix, and takes effect from the next turn. It is sent to the model provider with your session — do not put secrets in it, and do not write anything that conflicts with the platform's safety constraints.",
+  harness_add: "Add or overwrite a configuration",
+  harness_limit: "Max {max} characters",
+  harness_prefix_placeholder: "Model prefix, e.g. claude- (empty = all models; lowercase letters/digits/._:- only)",
+  harness_suffix_placeholder: "Text appended to the end of the system prompt, e.g. Answer as briefly as possible.",
+  harness_enabled_hint: "Off = explicitly disabled (no fallback to the tenant default)",
+  harness_save: "Save",
+  harness_saved: "Saved — takes effect from the next turn",
+  harness_save_failed: "Failed to save",
+  harness_deleted: "Deleted",
+  harness_delete_failed: "Failed to delete",
+  harness_load_failed: "Failed to load configuration",
+  harness_edit: "Edit",
+  harness_configured: "Configured",
+  harness_empty: "Nothing configured yet",
+  harness_all_models: "All models",
+  harness_disabled: "Disabled",
+  harness_confirm_delete: "Delete this configuration?",
+  harness_effective: "Currently effective",
+  harness_effective_hint: "Your configuration overrides the tenant default",
+  harness_from_user: "From my configuration",
+  harness_from_tenant: "From tenant default",
   theme_dark_light_appearance: "theme مظهر داكن فاتح",
   tag_set_tag: "تم تعيين الوسم: {tag}",
   general_settings: "إعدادات عامة",

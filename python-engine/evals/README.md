@@ -96,6 +96,28 @@ python -m evals.cli compare out/chiron.json out/deepagents.json
 其余环节（落固件 / 读产物 / 判定 / 聚合）**复用 Chiron 侧同一套 runner 与断言引擎**，
 所以对照出来的差异是能力差，而不是评分口径差。
 
+### 一键复现（推荐路径）
+
+```bash
+python -m evals.reproduce --check          # 先体检：缺什么会明确报出并给出修复命令
+python -m evals.reproduce --model gpt-4o-mini --out-dir out
+```
+
+它把下面三条命令编排成一条，并在**跑之前**做前置体检（deepagents 依赖 / 模型密钥 / 网关可达 /
+固件可读）。缺任何一项就**中止**，而不是产出一份可能被误读的报告 ——
+"Chiron 侧没起来 ⇒ 报告全失败 ⇒ 被读成对手更强"是最危险的失败模式。
+
+**固定口径**（同时写进 `out/compare.meta.json`，供外部核对）：
+
+| 项 | 值 |
+|---|---|
+| 固件 | `suites/full.json` + `suites/smoke.json`（full tier 会并入后者标 full 的任务） |
+| 固件指纹 | 两者的 sha256 —— **同指纹 + 同模型 ⇒ 结果可比** |
+| 模型 | `--model`（**两侧必须同一个**，否则差异里混着模型差） |
+| 次数 | `--repeat`（pass@k；默认 1） |
+
+### 手动路径（分步）
+
 ```bash
 # deepagents 侧（需先装依赖并配模型密钥）
 pip install -e vendor/deepagents/libs/deepagents langchain-openai
@@ -125,4 +147,5 @@ python -m evals.cli compare out/chiron-full.json out/deepagents-full.json
 - 🔶 **`HttpSubmit` 的端到端 CI 接线（E2）**：`evals-nightly.yml` 已写好（栈、API key 引导、
   引擎与网关启动、报告上传、缺 secret 跳过），**但尚未在真实 Actions 上跑过一次** —— 首次运行
   可能还需要按实际部署调引擎启动参数；
-- 🔶 **对标执行器已就位、待跑一次真实对照（E3）**：见上文"与 deepagents 对标"一节。
+- 🔶 **对标执行器与一键复现编排（`evals.reproduce`）已就位、待跑一次真实对照（E3）**：
+  见上文"与 deepagents 对标"一节 —— **缺的是装好依赖与密钥的环境，不是代码**。

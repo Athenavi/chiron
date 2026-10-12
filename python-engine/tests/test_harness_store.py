@@ -104,3 +104,92 @@ def test_no_extra_suffix_keeps_the_prefix_identical():
     )
 
     assert without == with_empty
+
+
+# ── 查询语义：显式禁用不回落 ──────────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_explicit_disable_does_not_fall_back_to_tenant(monkeypatch):
+    """`enabled=false` 是**显式禁用**：它是最近的一条，必须返回空串而**不是**再去找租户级。
+
+    反例（曾经的写法）：把 `enabled = true` 写进 WHERE ⇒ 禁用记录被跳过 ⇒ 悄悄回落到
+    租户级 —— 用户"关掉租户给我加的 suffix"的意图被静默推翻。
+    """
+    recorded: list[str] = []
+
+    class _Pool:
+        async def fetchrow(self, sql: str, *_args: object) -> dict[str, object]:
+            recorded.append(sql)
+            return {"enabled": False, "system_prompt_suffix": "USER DISABLED"}
+
+    monkeypatch.setattr("app.db.get_pool", lambda: _Pool())
+
+    assert await harness_store.resolve_suffix("t1", "u1", "gpt-4o") == ""
+    assert "enabled = true" not in recorded[0], "禁用记录不能被 WHERE 跳过（否则会回落到租户级）"
+
+
+@pytest.mark.asyncio
+async def test_enabled_row_returns_clamped_suffix(monkeypatch):
+    class _Pool:
+        async def fetchrow(self, _sql: str, *_args: object) -> dict[str, object]:
+            return {"enabled": True, "system_prompt_suffix": "  BE TERSE  "}
+
+    monkeypatch.setattr("app.db.get_pool", lambda: _Pool())
+
+    assert await harness_store.resolve_suffix("t1", "u1", "gpt-4o") == "BE TERSE"
+
+
+# ── 变更广播（PubSub 即时生效）───────────────────────────────────────────
+
+
+@pytest.mark.asyncio
+async def test_listener_clears_cache_on_change_broadcast(monkeypatch):
+    """收到 Go 侧的变更广播 ⇒ 清缓存 ⇒ 下一个回合立刻用上新配置。"""
+    import asyncio
+
+    class _PubSub:
+        def __init__(self) -> None:
+            self._sent = False
+
+        async def subscribe(self, _channel: str) -> None:
+            return None
+
+        async def listen(self):  # type: ignore[no-untyped-def]
+            if self._sent:  # 第二次进入就挂住，避免测试里空转重连
+                await asyncio.sleep(3600)
+                return
+            self._sent = True
+            yield {"type": "message", "data": "t1"}
+            await asyncio.sleep(3600)
+
+        async def aclose(self) -> None:
+            return None
+
+    class _Redis:
+        def pubsub(self) -> _PubSub:
+            return _PubSub()
+
+    monkeypatch.setattr("app.redis_client.get_redis", lambda: _awaitable(_Redis()))
+    harness_store._cache[("t1", "u1", "gpt-4o")] = (float("inf"), "STALE")
+
+    task = asyncio.create_task(harness_store.listen_for_changes())
+    for _ in range(50):
+        await asyncio.sleep(0.01)
+        if not harness_store._cache:
+            break
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+
+    assert harness_store._cache == {}, "收到广播后必须清空缓存（否则配置变更要等 TTL）"
+
+
+async def _awaitable(value: object) -> object:
+    """把普通对象包成 await 结果（`get_redis()` 是 async）。"""
+    return value
+
+
+def test_change_channel_is_stable():
+    """该字面量必须与 Go 侧 `HarnessProfileChannel` **逐字相同**（两侧各钉一次）。"""
+    assert harness_store.CHANGE_CHANNEL == "chiron:harness_profile_changed"

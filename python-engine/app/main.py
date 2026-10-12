@@ -551,6 +551,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             await asyncio.sleep(10)
 
     _metrics_task = asyncio.create_task(metrics_collector())
+    # P1-④ 批 B：订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
+    # 把"最多滞后一个 TTL"变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
+    from app.agent.harness_store import listen_for_changes as _listen_harness_changes
+
+    _harness_task = asyncio.create_task(_listen_harness_changes())
     logger.info("Process metrics collector started (interval=10s)")
 
     # ── 8. 实例注册（批 E1：引擎动态发现）──
@@ -635,6 +640,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         reconciler_task=_reconciler_task,
         metrics_task=_metrics_task,
         retention_task=_retention_task,
+        harness_task=_harness_task,
         engine_registry=_engine_registry,
     )
 
@@ -859,6 +865,7 @@ async def _shutdown_lifespan(
     reconciler_task: Any = None,
     metrics_task: Any = None,
     retention_task: Any = None,
+    harness_task: Any = None,
     engine_registry: Any = None,
 ) -> None:
     """关闭清理（从 `lifespan` 提出，句柄**显式传入**）。
@@ -881,6 +888,16 @@ async def _shutdown_lifespan(
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning("run reconciler shutdown failed: %s", e)
+
+    # P1-④ 批 B：停 harness 配置订阅（PubSub 循环，取消即断开）
+    if harness_task is not None:
+        harness_task.cancel()
+        try:
+            await harness_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("harness profile listener shutdown failed: %s", e)
 
     # N1：停 L1 的周期清理任务（它现在会回调记忆的会话级收尾 —— 停机时不该留悬着的 task）
     try:

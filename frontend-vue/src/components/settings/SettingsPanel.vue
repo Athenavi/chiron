@@ -10,6 +10,7 @@ import { useRoute } from 'vue-router'
 import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider } from 'ant-design-vue'
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
 import EmptyState from '../common/EmptyState.vue'
+import HarnessProfilePanel from './HarnessProfilePanel.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useThemeStore } from '../../stores/theme'
@@ -996,6 +997,14 @@ onMounted(async () => {
           <p><strong>{{ $t('common.6_contact') }}</strong>{{ $t('admin.if_you_have_questions_about_this_policy_contact_us_via_the_channel_provided_by_the_deployer') }}</p>
         </div>
       </div>
+    </a-tab-pane>
+
+    <!-- ── 行为塑形（P1-④ 批 B）：会被追加到 system prompt 末尾，必须显著告知 ── -->
+    <a-tab-pane
+      key="harness"
+      :tab="$t('settings.harness_title')"
+    >
+      <HarnessProfilePanel scope="user" />
     </a-tab-pane>
   </a-tabs>
 </template>
