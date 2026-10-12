@@ -25,6 +25,7 @@ from pathlib import Path
 from typing import Any
 
 from app.backends.protocol import (
+    DeleteResult,
     EditResult,
     FileStat,
     GlobResult,
@@ -189,6 +190,10 @@ class SkillBackend:
 
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         return EditResult(path=path, error=_READ_ONLY)
+
+    async def delete(self, path: str) -> DeleteResult:
+        """只读后端：删除与写入同样被拒（见模块头「只读是硬约束」）。"""
+        return DeleteResult(path=path, error=_READ_ONLY)
 
     def supports_execution(self) -> bool:
         """技能目录不是执行面（执行走 `skill_run` 的五类通道）。"""

@@ -34,8 +34,6 @@ from collections.abc import Sequence
 
 import httpx
 
-from app.http_client import shared_client
-
 from app.backends.protocol import (
     EditResult,
     ExecuteResult,
@@ -48,6 +46,7 @@ from app.backends.protocol import (
     ReadResult,
     WriteResult,
 )
+from app.http_client import shared_client
 from app.tools.context import get_session_id, get_tenant_id, get_user_id
 
 logger = logging.getLogger(__name__)

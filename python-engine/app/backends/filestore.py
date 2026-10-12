@@ -19,9 +19,13 @@ from __future__ import annotations
 
 import base64
 import re
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # `httpx` 只在 `_http_client` 内延迟导入（避免硬依赖），注解交给类型检查器
+    import httpx
 
 from app.backends.protocol import (
+    DeleteResult,
     EditResult,
     FileStat,
     GlobResult,
@@ -227,6 +231,20 @@ class FileStoreBackend:
         if written.error:
             return EditResult(path=path, error=written.error)
         return EditResult(path=path, occurrences=occurrences)
+
+    async def delete(self, path: str) -> DeleteResult:
+        """经网关 `POST /v1/internal/storage/delete`（存储键由服务端拼，含租户隔离）。"""
+        tenant, user = self._identity()
+        status, payload = await self._call(
+            "POST",
+            "/v1/internal/storage/delete",
+            body={"tenant_id": tenant, "user_id": user, "path": path},
+        )
+        if status != 200:
+            return DeleteResult(
+                path=path, error=str(payload.get("error") or f"delete failed ({status})")
+            )
+        return DeleteResult(path=path, deleted=bool(payload.get("deleted", True)))
 
     async def ls(self, path: str = ".") -> LsResult:
         prefix = "" if path in (".", "./", "") else path.strip("/")

@@ -239,13 +239,21 @@ class AnthropicProvider(LLMProvider):
     @staticmethod
     def _convert_messages(
         messages: list[ChatMessage],
-    ) -> tuple[str, list[dict[str, Any]]]:
-        """分离 system prompt 并转换消息格式"""
-        system = ""
+    ) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]]]:
+        """分离 system prompt 并转换消息格式。
+
+        C2 / 切口 2a：system 段可能是**多条**消息（稳定前缀 → 记忆 → hook 上下文，见
+        `runtime._apply_system_prefix`）—— 必须**按序全部保留**。旧实现 `system =
+        msg.content` 只留最后一条，会把稳定前缀整条丢掉（正确性缺陷），断点也因此无处
+        可落（前缀缓存失效）。仅当存在 `cache_breakpoint` 时改用 Anthropic 的 block 数组
+        并打 `cache_control: {"type": "ephemeral"}`；否则逐字保持原字符串形态（默认不变）。
+        """
+        system_parts: list[ChatMessage] = []
         result = []
         for msg in messages:
             if msg.role == "system":
-                system = msg.content
+                if msg.content:  # 空内容不入 system（与旧行为一致：空 system 不发送）
+                    system_parts.append(msg)
             elif msg.role == "tool":
                 result.append(
                     {
@@ -277,6 +285,18 @@ class AnthropicProvider(LLMProvider):
                 result.append({"role": "assistant", "content": content})
             else:
                 result.append({"role": msg.role, "content": msg.content})
+        if any(m.cache_breakpoint for m in system_parts):
+            system: str | list[dict[str, Any]] = [
+                (
+                    {"type": "text", "text": m.content, "cache_control": {"type": "ephemeral"}}
+                    if m.cache_breakpoint
+                    else {"type": "text", "text": m.content}
+                )
+                for m in system_parts
+            ]
+        else:
+            # 无断点：逐字保持原调用方的字符串形态（默认不变）
+            system = "\n\n".join(m.content for m in system_parts)
         return system, result
 
     @staticmethod

@@ -3,11 +3,12 @@ FROM python:3.11-slim AS base
 
 WORKDIR /app
 
-# 系统依赖
+# 系统依赖（ffmpeg：video_analyze 抽帧需要；**不引 Python 依赖**，见 app/tools/video.py）
 RUN apt-get update && apt-get install -y --no-install-recommends \
     libffi-dev \
     libmagic1 \
     file \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # 依赖安装（缓存层）

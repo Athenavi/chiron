@@ -75,6 +75,20 @@ class EditResult:
 
 
 @dataclass(frozen=True)
+class DeleteResult:
+    """删除文件的结果。
+
+    `deleted=False` 且 `error=None` = "路径本来就不存在"（幂等删除**不算失败**）——
+    与 `EditResult` 把 "old text not found" 当 error 不同：删除的目标状态（不存在）
+    已经达成，调用方需要的是**区分"删掉了"与"本来就没有"**，而不是二值成功/失败。
+    """
+
+    path: str
+    deleted: bool = False
+    error: str | None = None
+
+
+@dataclass(frozen=True)
 class LsResult:
     """列目录的结果。"""
 
@@ -145,6 +159,8 @@ class BackendProtocol(Protocol):
     async def write(self, path: str, content: str) -> WriteResult: ...
 
     async def edit(self, path: str, old: str, new: str) -> EditResult: ...
+
+    async def delete(self, path: str) -> DeleteResult: ...
 
     async def ls(self, path: str = ".") -> LsResult: ...
 

@@ -18,6 +18,7 @@ import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻�
 import app.tools.browser  # noqa: F401
 import app.tools.core  # noqa: F401
 import app.tools.edit_file  # noqa: F401
+import app.tools.fs_tools  # noqa: F401 — ls（列目录）
 import app.tools.git_tools  # noqa: F401
 import app.tools.glob_tools  # noqa: F401
 import app.tools.graph  # noqa: F401
@@ -39,6 +40,7 @@ import app.tools.terminal  # noqa: F401
 import app.tools.todo  # noqa: F401 — write_todos（S6a 计划状态）
 import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
 import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy）
+import app.tools.video  # noqa: F401 — video_analyze（抽帧 + 多模态描述）
 import app.tools.web  # noqa: F401 — web_search / web_fetch
 
 # ⚠️ app.workflow.tools 注册的 workflow_run 会**覆盖** app.tools.graph 的同名工具

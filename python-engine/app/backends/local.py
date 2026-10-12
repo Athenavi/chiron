@@ -25,6 +25,7 @@ import re
 from pathlib import Path
 
 from app.backends.protocol import (
+    DeleteResult,
     EditResult,
     ExecuteResult,
     FileStat,
@@ -140,6 +141,23 @@ class LocalWorkspaceBackend:
             target.write_text, text.replace(old, new), encoding="utf-8"
         )
         return EditResult(path=str(target), occurrences=occurrences)
+
+    async def delete(self, path: str) -> DeleteResult:
+        """删除**文件**（不递归删目录 —— 那是更危险的动作，不做隐式扩展）。"""
+        target = safe_join(path)
+        if not await asyncio.to_thread(target.exists):
+            return DeleteResult(path=str(target), deleted=False)
+        if await asyncio.to_thread(target.is_dir):
+            return DeleteResult(
+                path=str(target),
+                error="path is a directory; delete_file only removes files",
+            )
+        try:
+            await asyncio.to_thread(target.unlink)
+        except OSError as exc:
+            # 权限 / 占用：把 OS 错误变成结构化错误，而不是让调用方接异常
+            return DeleteResult(path=str(target), error=str(exc))
+        return DeleteResult(path=str(target), deleted=True)
 
     async def ls(self, path: str = ".") -> LsResult:
         target = safe_join(path)
