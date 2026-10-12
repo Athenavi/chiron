@@ -41,6 +41,12 @@ services:
     build:
       context: .
       dockerfile: Dockerfile
+    # 具名镜像：compose 的 build 不支持 BuildKit 的 `--allow network.host` 许可，而 Go
+    # 模块下载必须借道代理（本机网络下 proxy.golang.org 不可直连）。因此需要能脱离
+    # compose 单独执行：
+    #   docker build --network=host --allow network.host -t chiron/gateway:dev .
+    # 之后 compose up 会直接复用这个镜像，不再自行构建。
+    image: chiron/gateway:dev
     # 不发布宿主机端口:多副本(--scale gateway=2)时固定端口会互相抢占,
     # 且宿主机端口发布不是服务发现方案。对外入口由 frontend 容器的 nginx
     # 同源反代(/v1、/events、/ws、/submit、/cancel、/media)提供;
@@ -77,7 +83,10 @@ services:
       STORAGE_ROOT: ${STORAGE_ROOT:-/app/workspace}
       # 云 S3 端点（**用云时必须覆盖**）：如 https://oss-cn-hangzhou.aliyuncs.com
       #   或 https://<accountid>.r2.cloudflarestorage.com
-      S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
+      # Go 端（minio-go）要求**纯 host**（不带 scheme）——带 https:// 会报
+      # 'Endpoint url cannot have fully qualified paths'。故 Go 用 S3_ENDPOINT_HOST，
+      # Python（boto3）用带 scheme 的 S3_ENDPOINT，两者在 .env 里成对配置。
+      S3_ENDPOINT: ${S3_ENDPOINT_HOST:-minio:9000}
       S3_BUCKET: ${S3_BUCKET:-chiron}
       # 变量名保持中性（此前复用 MINIO_ 前缀，换后端后语义不清）
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
@@ -135,6 +144,17 @@ services:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN is required — set to same value as gateway's INTERNAL_TOKEN}
       JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
       POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+      # app/tools/browser.py 在**模块级** _init_default_hub() 会 assert_safe_url(gateway 地址)，
+      # 而 gateway 解析到 Docker 内网 IP（如 172.18.0.4），被 ssrf.py 的私网检查拦下 →
+      # 引擎启动即崩（实测 "blocked address (internal/private): gateway -> 172.x"）。
+      # 这两个服务名按集群内部署放行；默认空 = 严格模式不变。
+      SSRF_ALLOW_PRIVATE_HOSTS: ${SSRF_ALLOW_PRIVATE_HOSTS:-gateway,python-engine}
+      # 同源问题（详见 sandbox-service 段的说明）：app/tools/__init__.py 会 import 全部工具，
+      # 其中 media.py:37 / skill.py:33 在**模块级**就对相对路径 `data` 建目录。本容器以非
+      # root 的 appuser 运行、而 WORKDIR /app 属 root，故报 Errno 13 Permission denied（实测）。
+      # 生产应挂持久卷；此处为本地验证指到可写的 /tmp。
+      MEDIA_STORE_PATH: /tmp/chiron-media
+      SKILL_STORE_PATH: /tmp/chiron-skills
       APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
       # 必须监听 0.0.0.0 供 gateway 容器访问(默认 127.0.0.1 会令网关连不上引擎)
       HTTP_HOST: "0.0.0.0"
@@ -232,6 +252,24 @@ services:
     environment:
       INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN is required — set to same value as gateway's INTERNAL_TOKEN}
       SANDBOX_ROOT: /srv/chiron/sandbox
+      # app/tools/__init__.py 会 import **所有**工具，其中 app/tools/media.py 在**模块级**
+      # 就 `create_store()` 并对落点做 `mkdir` —— 而本容器根是 read_only，默认落点
+      # （相对路径 ./data/media）必然 OSError: Read-only file system 并让容器崩溃重启（实测）。
+      # 注意变量名是 `MEDIA_STORE_PATH`（app/media/store.py 的 create_store() 读的就是它；
+      # 早先误写成 STORAGE_ROOT，config.py 里根本没这个字段，等于没生效）。
+      # 指到 tmpfs（下文的 /tmp）即可：本服务不需要持久化媒体，也不该为此扩大可写面。
+      MEDIA_STORE_PATH: /tmp/chiron-media
+      # 同源问题：app/tools/__init__.py:32 import app.tools.skill → app/tools/skill.py:33 的
+      # `_store = SkillStore()` 是**无参**构造 → app/skill/store.py:182 回退到默认 root
+      # （相对路径 data）→ 296 行 mkdir 在 read_only 根下必失败（实测同一 OSError）。
+      # 变量名是 SKILL_STORE_PATH（store.py:182 读的就是它）。
+      SKILL_STORE_PATH: /tmp/chiron-skills
+      # app/config.py 在**模块级**构造 `Settings()`，会校验 JWT_SECRET 长度 >=32 —— 而本
+      # 服务启动时 `import app.tools.sandbox` 会经 `app/tools/__init__.py` 链到 config，
+      # 缺它就直接 ValidationError、容器反复退出（实测 Restarting 循环）。
+      # 本服务**不签发也不校验 JWT**，故刻意用固定占位值而非复用真实 JWT_SECRET ——
+      # 沙箱是隔离最弱的容器，不该持有能伪造 token 的密钥。
+      JWT_SECRET: ${SANDBOX_PLACEHOLDER_JWT_SECRET:-sandbox-placeholder-secret-not-used-for-jwt-32b}
       PYTHONDONTWRITEBYTECODE: "1"
       PYTHONUNBUFFERED: "1"
       # 审计集中摄取：本容器根是 read_only，落盘必失败 —— 必须外发到网关，
@@ -281,11 +319,38 @@ services:
       - sandbox-service
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "wget", "-qO-", "http://localhost:8001/healthz"]
+      # 显式用 127.0.0.1：容器内 `localhost` 可能解析到 ::1，而 nginx 若只绑 IPv4
+      # 就会 Connection refused（实测）。双保险：nginx 侧也已加 `listen [::]:8001`。
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1:8001/healthz"]
       interval: 15s
       timeout: 5s
       retries: 5
       start_period: 10s
+
+  # 本地验证用的 PostgreSQL（可选，默认不启动：`docker compose --profile local-db up -d`）。
+  # 生产请用云托管 PG / DBA 维护的实例，把 .env 的 POSTGRES_DSN 指向它即可。
+  #
+  # 为什么本机验证需要它：容器有独立 netns，**容器内的 127.0.0.1 不是宿主**。实测容器既
+  # 到不了 host.docker.internal（host-gateway 在 mirrored 网络模式下不通），也到不了
+  # 127.0.0.1:5432 —— 所以装在 Windows 上的那份 PG 对容器**不可达**，gateway 会以
+  # "FATAL: PostgreSQL is required but unavailable" 反复重启。
+  postgres:
+    profiles: ["local-db"]
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chiron_app}
+      # 仅本地验证的默认值；生产必须用 POSTGRES_PASSWORD 覆盖。
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chironlocaldevonly}
+      POSTGRES_DB: ${POSTGRES_DB:-chiron}
+    ports:
+      # 避开宿主 PG 已占用的 5432
+      - "127.0.0.1:15432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chiron_app} -d ${POSTGRES_DB:-chiron}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
   # ⚠ Milvus 的对象层指向本地 minio（`MINIO_ADDRESS` 是 Milvus 的固定变量名，实际支持
   # 任意 S3）。所以 minio/etcd/milvus 必须同起同停，三者共用 `selfhosted-s3` profile，
@@ -342,6 +407,10 @@ services:
     build:
       context: frontend-vue
       dockerfile: Dockerfile
+    # 具名镜像：compose 的 build 不支持 --allow network.host，而前端构建需要宿主网络
+    # 才能装依赖（见 frontend-vue/.npmrc 的 registry 说明）。故镜像用 docker build
+    # 单独产出后在此引用，避免 `up` 触发一次注定失败的 compose 构建。
+    image: chiron/frontend:dev
     ports:
       - "3000:80"
     depends_on:
@@ -352,7 +421,9 @@ services:
     # 前端默认 API_URL=''(见 src/api/index.ts)即同源相对路径,
     # 由本容器 nginx.conf 反代到 gateway,无需配置对外地址。
     healthcheck:
-      test: [ "CMD", "wget", "-qO-", "http://localhost/" ]
+      # 用 127.0.0.1 而非 localhost：容器内 localhost 解析到 ::1，若 nginx 未监听 IPv6
+      # 会得到 Connection refused（实测 FailingStreak=9）。与 sandbox-lb 同做法。
+      test: [ "CMD", "wget", "-qO-", "http://127.0.0.1/" ]
       interval: 15s
       timeout: 5s
       retries: 5

@@ -94,6 +94,18 @@ def assert_safe_url(url: str) -> None:
     if not host:
         raise ValueError(f"invalid url: {url}")
 
+    # 显式放行名单（SSRF_ALLOW_PRIVATE_HOSTS，逗号分隔）。引擎需要访问**集群内服务名**
+    # （如 gateway:8080），而那是 Docker 内网地址，会被下面的私网/保留地址检查拦下 ——
+    # 实测 app/tools/browser.py 的 _init_default_hub() 就因此启动即崩。
+    # 默认空 = 严格模式不变（生产无需改动）；只有这类部署才显式放行。
+    allowed = {
+        h.strip().lower()
+        for h in os.getenv("SSRF_ALLOW_PRIVATE_HOSTS", "").split(",")
+        if h.strip()
+    }
+    if host.lower() in allowed:
+        return
+
     # 端口白名单：未显式指定端口时按 scheme 默认值（80/443）
     port = parsed.port
     if port is None:

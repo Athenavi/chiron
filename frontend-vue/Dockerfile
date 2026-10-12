@@ -5,7 +5,10 @@ WORKDIR /app
 
 # 安装pnpm与依赖（使用缓存加速）
 RUN npm install -g pnpm
-COPY package.json pnpm-lock.yaml ./
+# .npmrc / pnpm-workspace.yaml 必须与 package.json 同层 COPY：`pnpm install` 在下一层
+# 就执行，若等到 `COPY . .` 才带入，install 期间读不到 registry 与构建白名单配置
+# （实测表现为去连官方源长时间挂住，或 ERR_PNPM_IGNORED_BUILDS 直接退出）。
+COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
     pnpm install --frozen-lockfile
 
