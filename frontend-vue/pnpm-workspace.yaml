@@ -1,0 +1,23 @@
+# pnpm 10+ 默认**不执行**依赖的 postinstall 构建脚本（供应链安全策略）。但本项目
+# 有三个依赖确实需要它，否则 `pnpm install --frozen-lockfile` 会以
+# ERR_PNPM_IGNORED_BUILDS 直接退出（实测）：
+#   core-js  —— 生成 polyfill 元数据
+#   esbuild  —— 安装平台二进制（缺了它 vite build 无法工作）
+#   vue-demi —— 按 Vue 版本生成适配层
+#
+# 必须放在这里而不是 package.json 的 `pnpm` 字段：pnpm 10 以本文件为准
+# （`pnpm approve-builds` 也是写它），写在 package.json 里在 --frozen-lockfile 下不生效。
+# pnpm 12 起 `onlyBuiltDependencies` 已废弃（旧键会被读取但**不再生效**，install 仍以
+# ERR_PNPM_IGNORED_BUILDS 硬失败），新键是 `allowBuilds` —— 也就是 `pnpm approve-builds`
+# 现在写入的位置。本项目确实需要这三个依赖执行 postinstall：
+#   core-js  —— 生成 polyfill 元数据
+#   esbuild  —— 安装平台二进制（缺了它 vite build 无法工作）
+#   vue-demi —— 按 Vue 版本生成适配层
+# `packages` 字段不能省：pnpm 只把带该字段的同名文件当作工作区根。
+packages:
+  - '.'
+
+allowBuilds:
+  core-js: true
+  esbuild: true
+  vue-demi: true

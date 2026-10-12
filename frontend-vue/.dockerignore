@@ -1,0 +1,33 @@
+# 构建上下文排除清单。
+#
+# 为什么必须有：此前没有这个文件，`COPY . .` 会把整个 frontend-vue 目录打进构建
+# 上下文 —— 实测达到 **574MB 且仍在增长**，传到 141 秒时把 BuildKit 压垮：
+#   ERROR: failed to build: failed to receive status: rpc error: code = Unavailable
+#          desc = error reading from server: EOF
+# 现象很容易被误判成"pnpm 卡住"（构建长时间零输出、没有 pnpm 进程、没有网络连接），
+# 实际是卡在最早的 transferring context 阶段。
+
+# 依赖与产物：容器内会自己装（见 Dockerfile 的 pnpm install / pnpm run build）
+node_modules
+**/node_modules
+dist
+**/dist
+.pnpm-store
+**/.pnpm-store
+
+# 版本库与本地状态
+.git
+.gitignore
+.npmrc.local
+
+# 编辑器 / 系统 / 日志 / 测试产物
+.vscode
+.idea
+*.log
+coverage
+.vite
+.cache
+
+# 本地环境文件（不要把任何真实配置打进镜像）
+.env
+.env.*
