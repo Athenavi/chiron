@@ -11,7 +11,7 @@
                                                     ▼
                                     Python 引擎(python-engine, :8000)
                                                     │
-              PostgreSQL(pgvector) · Redis ◄───────┴───────► Milvus · MinIO/S3
+              PostgreSQL(pgvector) · Redis ◄───────┴───────► Milvus · S3（云端）/ 自托管 RustFS
 ```
 
 | 组件 | 目录 | 端口 | 职责 |
@@ -52,7 +52,7 @@ python -m pip install -r requirements-migrate.txt
 DATABASE_DSN='postgresql://user:pwd@your-pg:5432/dbname' \
   python -m alembic -c alembic.ini upgrade head
 # 2) 启动应用层
-docker compose up -d redis minio etcd milvus
+docker compose up -d redis  # 对象存储走云端 S3（配好 .env）；自托管则加 --profile selfhosted-s3
 docker compose up -d --scale gateway=2 --scale python-engine=2
 # 对外入口是 frontend 容器的 nginx：http://localhost:3000
 ```

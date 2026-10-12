@@ -22,7 +22,7 @@ python -m pip install -r requirements-migrate.txt
 DATABASE_DSN='postgresql://…' python -m alembic -c alembic.ini upgrade head
 
 # 4) 起应用层
-docker compose up -d redis minio etcd milvus
+docker compose up -d redis  # 对象存储走云端 S3（配好 .env）；自托管则加 --profile selfhosted-s3
 docker compose up -d --scale gateway=2 --scale python-engine=2
 ```
 
