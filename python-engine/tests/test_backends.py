@@ -14,6 +14,7 @@ from app.backends.context import get_backend, set_backend
 from app.backends.local import LocalWorkspaceBackend
 from app.backends.protocol import (
     BackendProtocol,
+    DeleteResult,
     EditResult,
     FileStat,
     GlobResult,
@@ -72,6 +73,12 @@ class _InMemoryBackend:
             return EditResult(path=path, error=f"file not found: {path}")
         self.files[path] = self.files[path].replace(old, new)
         return EditResult(path=path, occurrences=1)
+
+    async def delete(self, path: str) -> DeleteResult:
+        if path not in self.files:
+            return DeleteResult(path=path, deleted=False)
+        del self.files[path]
+        return DeleteResult(path=path, deleted=True)
 
     async def ls(self, path: str = ".") -> LsResult:
         return LsResult(entries=sorted(self.files))

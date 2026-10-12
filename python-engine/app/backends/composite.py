@@ -25,6 +25,7 @@ from __future__ import annotations
 
 from app.backends.protocol import (
     BackendProtocol,
+    DeleteResult,
     EditResult,
     ExecuteResult,
     ExecutingBackendProtocol,
@@ -91,6 +92,10 @@ class CompositeBackend:
     async def edit(self, path: str, old: str, new: str) -> EditResult:
         backend, inner = self._resolve(path)
         return await backend.edit(inner, old, new)
+
+    async def delete(self, path: str) -> DeleteResult:
+        backend, inner = self._resolve(path)
+        return await backend.delete(inner)
 
     async def ls(self, path: str = ".") -> LsResult:
         backend, inner = self._resolve(path)

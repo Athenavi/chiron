@@ -49,7 +49,9 @@ CORE_TOOL_NAMES = frozenset(
         "execute_python",  # 执行 Python
         "git_status",  # 查看项目状态
         "read_file",  # 读取文件
+        "ls",  # 列目录（非递归）
         "write_file",  # 写入/保存文件
+        "delete_file",  # 删除文件（delete 级：需人工确认 + 二次校验）
         "grep_files",  # 搜索文件
         "media_create",  # 产出可下载的资产（媒体库；含二进制——见 app/tools/media.py）
         "subagent",  # 子 agent 委派（多 agent 协作核心）

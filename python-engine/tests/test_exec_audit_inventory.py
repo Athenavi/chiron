@@ -51,6 +51,10 @@ AUDITED = {
         "技能安装路径拉起 MCP stdio 进程：写 plugin audit（含 command-not-found 与通用失败）",
         "record_plugin",
     ),
+    "tools/video.py": (
+        "video_analyze：ffmpeg 抽帧（参数由工具构造、路径经 safe_join），写 exec_audit",
+        "record_execution",
+    ),
 }
 
 AUDITED_BY_CALLER = {

@@ -228,7 +228,7 @@ def _normalize_msg(
 
 
 def _apply_system_prefix(
-    messages: list[dict[str, Any]], task: AgentTask
+    messages: list[dict[str, Any]], task: AgentTask, *, extra_suffix: str = ""
 ) -> list[dict[str, Any]]:
     """把 messages 的 system 段**重新定形**为「稳定前缀 + 记忆」（C2/D2 的统一落点）。
 
@@ -255,6 +255,11 @@ def _apply_system_prefix(
             task.system_prompt,
             model=str((task.llm_config or {}).get("model", "") or ""),
         )
+        # P1-④：租户/用户级 harness 塑形 —— deepagents **没有**这一层（它只有部署级注册）。
+        # 空串 = 未配置 / 未启用 ⇒ 逐字不变。位置在注册表 suffix **之后**、记忆之前，
+        # 因此它落在**稳定前缀的末尾**：同租户同模型下逐字稳定 ⇒ 前缀缓存仍然命中。
+        if extra_suffix:
+            base_prompt = f"{base_prompt}\n\n{extra_suffix}"
         prefix.append(
             _normalize_msg(role="system", content=base_prompt, cache_breakpoint=True)
         )
@@ -1379,7 +1384,16 @@ class AgentRuntime:
                     task.system_prompt = (
                         f"{task.system_prompt}\n\n{catalog}" if task.system_prompt else catalog
                     )
-            messages = _apply_system_prefix(messages, task)
+            # P1-④：租户/用户级 harness 塑形。读**一次**（进程内 TTL 缓存），不就地拼进
+            # `task.system_prompt` —— task 会跨轮复用，就地拼接会**累积**。
+            from app.agent import harness_store
+
+            _extra_suffix = await harness_store.resolve_suffix(
+                task.tenant_id or "",
+                task.user_id or "",
+                str((task.llm_config or {}).get("model", "") or ""),
+            )
+            messages = _apply_system_prefix(messages, task, extra_suffix=_extra_suffix)
 
             tools = (
                 self._convert_tools(task.tools)
@@ -2786,21 +2800,41 @@ class AgentRuntime:
         if len(text) <= compactor.INLINE_LIMIT:
             return text
 
-        tier = compactor.classify(text)
-        summary = compactor.summarize(
-            text, budget_chars=1500 if tier == compactor.REF_ONLY else 3000
+        decision = compactor.compact(
+            text,
+            budget_chars=1500 if compactor.classify(text) == compactor.REF_ONLY else 3000,
         )
         ref = f"tr_{_uuid.uuid4().hex[:12]}"
         saved = await result_store.store(getattr(task, "session_id", ""), ref, text)
+        # 切口 6：裁决是**机器可读**的 —— 记成结构化日志字段，而不是让人去摘要正文里
+        # 找"省略"两个字。上游（事件 / 审计 / 评测）可以据此断言"这条结果被怎么处理了"。
+        logger.info(
+            "tool result compacted: tier=%s strategy=%s clip=%s bytes=%d saved=%s",
+            decision.tier,
+            decision.strategy,
+            decision.clip_reason,
+            decision.original_bytes,
+            saved,
+        )
+        # 对位 deepagents：**只有在真的发生裁剪时才提示**（`CLIP_NONE` 时不留这句话）。
+        clip_note = (
+            ""
+            if decision.clip_reason == compactor.CLIP_NONE
+            else f"（摘要本身已按 {decision.clip_reason} 截断）"
+        )
         if saved:
             trailer = (
-                f'\n[结果过大，已按结构摘要] 原文 {len(text)} 字符，已保存为 result_ref="{ref}"。'
+                f"\n[结果过大，已按结构摘要] 原文 {decision.original_bytes} 字节，"
+                f'已保存为 result_ref="{ref}"。'
                 f'需要细节时用 read_tool_result(result_ref="{ref}", offset=0, limit=8000) 分段取，'
-                f"**不要**重复调用原工具去拿同样的内容。"
+                f"**不要**重复调用原工具去拿同样的内容。{clip_note}"
             )
         else:
-            trailer = f"\n[结果过大，已按结构摘要] 原文 {len(text)} 字符（落盘失败，细节不可取回）。"
-        return summary + trailer
+            trailer = (
+                f"\n[结果过大，已按结构摘要] 原文 {decision.original_bytes} 字节"
+                f"（落盘失败，细节不可取回）。{clip_note}"
+            )
+        return decision.text + trailer
 
     # ── C1 批 2：回合末 checkpoint（只写不读）────────────────────────────
 

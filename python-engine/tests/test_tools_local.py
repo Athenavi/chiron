@@ -22,7 +22,7 @@ def test_registry_lists_core_tools():
     names = set(registry.list_names())
     for expected in [
         # 文件系统 / 检索
-        "read_file", "write_file", "edit_file", "glob_files", "grep_files", "search_files",
+        "read_file", "write_file", "edit_file", "ls", "glob_files", "grep_files", "search_files",
         # 执行
         "shell_exec", "execute_python", "run_code", "persistent_shell",
         # 网络

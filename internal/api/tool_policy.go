@@ -19,7 +19,7 @@ import (
 // 该不变量由 scripts/check_tool_policy_parity.py 逐级别比对，漂移即失败；改动其一必须同步另一个。
 //
 // 表里刻意保留几个**当前注册表里没有的历史名**：read 侧 `knowledge`/`stderr_drain`/`tool`，
-// delete 侧 `delete_file`/`kb_delete`，命令类 `execute_command`。它们不是"漏删的死代码"，
+// delete 侧 `kb_delete`，命令类 `execute_command`。它们不是"漏删的死代码"，
 // 而是**保守兜底** —— 一旦旧客户端或兼容层按这些名字发起调用，仍按原级别处置，
 // 而不是 fail-closed 到 write（delete 侧尤其不能降级）。
 //
@@ -61,7 +61,7 @@ var toolLevelTable = func() map[string]ToolLevel {
 		}
 	}
 	add(ToolLevelRead,
-		"read_file", "read_image", "glob_files", "grep_files", "search_files", "file_analyzer",
+		"read_file", "read_image", "ls", "glob_files", "grep_files", "search_files", "file_analyzer",
 		"git_status", "git_log", "git_diff",
 		"kb_list", "kb_search", "rag_query", "knowledge",
 		"memory_search", "recall",
@@ -69,7 +69,7 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"mode_list", "graph_templates",
 		"read_subagent_result", "read_tool_result", "list_subagent_runs", "job_output", "stderr_drain",
 		"requirement_validate", "task_decompose", "tech_design", "prd_generate",
-		"vision_analyze", "speech_to_text",
+		"vision_analyze", "speech_to_text", "video_analyze",
 		"tool",
 	)
 	add(ToolLevelWrite,

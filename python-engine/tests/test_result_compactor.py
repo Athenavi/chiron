@@ -66,3 +66,47 @@ def test_fallback_is_head_tail():
     out = summarize(text, budget_chars=100)
     assert "省略" in out
     assert len(out) < len(text)
+
+
+# ── 裁决是机器可读的（切口 6）──────────────────────────────────────────────
+
+
+def test_compact_reports_strategy_and_no_clip_for_structured_summary():
+    from app.agent.result_compactor import CLIP_NONE, STRATEGY_JSON, compact
+
+    decision = compact(json.dumps({"a": 1, "b": [1, 2, 3]}))
+
+    assert decision.strategy == STRATEGY_JSON
+    assert decision.clip_reason == CLIP_NONE, "结构摘要完整呈现时不该报告裁剪"
+    assert decision.tier == INLINE
+
+
+def test_compact_reports_byte_cap_when_the_summary_itself_is_cut():
+    from app.agent.result_compactor import CLIP_BYTE_CAP, STRATEGY_LINES, compact
+
+    lines = "\n".join(f"line {index}" for index in range(400))
+    decision = compact(lines, budget_chars=50)
+
+    assert decision.strategy == STRATEGY_LINES
+    assert decision.clip_reason == CLIP_BYTE_CAP
+
+
+def test_compact_reports_head_tail_when_the_middle_is_dropped():
+    from app.agent.result_compactor import CLIP_HEAD_TAIL, STRATEGY_HEAD_TAIL, compact
+
+    decision = compact("abcdefghij" * 200, budget_chars=100)
+
+    assert decision.strategy == STRATEGY_HEAD_TAIL
+    assert decision.clip_reason == CLIP_HEAD_TAIL
+
+
+def test_compact_reports_original_bytes():
+    from app.agent.result_compactor import compact
+
+    assert compact("x" * 500, budget_chars=100).original_bytes == 500
+
+
+def test_summarize_still_returns_plain_text():
+    """兼容性：既有调用方（与下面的老断言）拿到的是字符串，不是裁决对象。"""
+    assert summarize("hello world") == "hello world"
+    assert isinstance(summarize("x" * (INLINE_LIMIT + 1)), str)

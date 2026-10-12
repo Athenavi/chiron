@@ -25,7 +25,6 @@ LEGACY_TOOL_NAMES: dict[str, str] = {
     "knowledge": "旧版知识库工具名，已被 kb_list/kb_search/rag_query 取代；read 兜底",
     "stderr_drain": "旧版后台任务日志工具名；read 兜底（勿降级为 write）",
     "tool": "早期通用工具代理名（对应已删除的 app/tools/agent.py 的 AgentInfo）；read 兜底",
-    "delete_file": "旧版删除工具名；**delete 兜底**（真出现时绝不能降级成 write）",
     "kb_delete": "旧版知识库删除工具名；**delete 兜底**",
     "execute_command": "旧版命令执行工具名（现为 shell_exec/persistent_shell）；命令类兜底",
 }
