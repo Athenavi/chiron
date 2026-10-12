@@ -56,10 +56,9 @@ async def _query(tenant_id: str, user_id: str, model: str) -> str:
         pool = get_pool()
         row = await pool.fetchrow(
             """
-            SELECT system_prompt_suffix
+            SELECT enabled, system_prompt_suffix
             FROM harness_profiles
             WHERE tenant_id = $1
-              AND enabled = true
               AND (user_id = $2 OR user_id = '')
               AND ($3 = '' OR model_prefix = '' OR lower($3) LIKE model_prefix || '%')
             ORDER BY (user_id = $2) DESC, length(model_prefix) DESC
@@ -73,6 +72,11 @@ async def _query(tenant_id: str, user_id: str, model: str) -> str:
         logger.warning("harness profile lookup failed: %s", exc)
         return ""
     if not row:
+        return ""
+    # `enabled = false` 是**显式禁用**，不是"未配置"：它占位并**阻止**回退到租户级 ——
+    # 否则用户没法关掉租户给他加上的 suffix。所以这里不能把 `enabled = true` 写进 WHERE
+    # （那会让禁用记录被跳过、悄悄回退到租户级），只能取到最近的一条再判断。
+    if not row["enabled"]:
         return ""
     return _clamp(str(row["system_prompt_suffix"] or ""))
 
@@ -94,3 +98,50 @@ async def resolve_suffix(tenant_id: str, user_id: str, model: str) -> str:
 def clear_cache() -> None:
     """清空进程内缓存（配置变更后立即生效 / 测试用）。"""
     _cache.clear()
+
+
+#: 变更广播频道。
+#:
+#: ⚠️ **必须与 Go 侧 `internal/api/harness_profiles.go` 的 `HarnessProfileChannel` 逐字相同**
+#: （语言不同，无法共享常量；`scripts/check_tool_policy_parity.py` 会断言这一对）。
+CHANGE_CHANNEL = "chiron:harness_profile_changed"
+
+#: 订阅断开后的重连退避（秒）
+RECONNECT_DELAY_SECONDS = 5.0
+
+
+async def listen_for_changes() -> None:
+    """订阅变更广播，收到即清缓存 —— 把"最多滞后一个 TTL"变成**即时生效**。
+
+    **失败不致命**：Redis 不可用或连接断开时记 warning 并退避重试；调用方（lifespan）
+    把它当周期任务取消即可（与 reconciler / retention 同一生命周期范式）。取消会让
+    `asyncio.CancelledError` 冒泡出去，因此停机不会卡在这里。
+    """
+    import asyncio
+
+    while True:
+        pubsub = None
+        try:
+            from app.redis_client import get_redis
+
+            redis = await get_redis()
+            if redis is None:
+                await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+                continue
+            pubsub = redis.pubsub()
+            await pubsub.subscribe(CHANGE_CHANNEL)
+            logger.info("harness profile listener subscribed: %s", CHANGE_CHANNEL)
+            async for message in pubsub.listen():
+                if message.get("type") == "message":
+                    clear_cache()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 订阅断了要能自己回来
+            logger.warning("harness profile listener error, retrying: %s", exc)
+            await asyncio.sleep(RECONNECT_DELAY_SECONDS)
+        finally:
+            if pubsub is not None:
+                try:
+                    await pubsub.aclose()
+                except Exception:  # noqa: BLE001 - 关连接失败不该盖住上面的异常
+                    logger.debug("harness pubsub close failed", exc_info=True)

@@ -124,6 +124,15 @@ SHARED_CONSTANTS: tuple[tuple[str, str, str, str, str], ...] = (
         "MIN_COMPRESSIBLE_MESSAGES",
         "python-engine/app/context/branch_condense.py",
     ),
+    (
+        # harness suffix 的长度上限：Go 侧校验写入、Python 侧读取时兜底截断，
+        # 两侧不一致等于"上限形同虚设"（P1-④ 批 B）
+        "MaxHarnessSuffixChars",
+        "2000",
+        "internal/api/harness_profiles.go",
+        "MAX_SUFFIX_CHARS",
+        "python-engine/app/agent/harness_store.py",
+    ),
 )
 
 LEVELS = ("READ", "WRITE", "DELETE", "EXTERNAL")

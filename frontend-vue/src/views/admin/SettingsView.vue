@@ -3,6 +3,7 @@ import { ref, computed, onMounted } from 'vue'
 import { Card, Row, Col, Form, FormItem, InputNumber, Input, InputPassword, Select, Button, Switch, Slider, message, Tabs, TabPane } from 'ant-design-vue'
 import { saveSettings, getSettings, listLlmProviders } from '@/api/admin'
 import { useTabbedQuery } from '@/composables/useTabbedQuery'
+import HarnessProfilePanel from '@/components/settings/HarnessProfilePanel.vue'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -1070,6 +1071,14 @@ onMounted(async () => {
           </template>
           <pre class="code-block">{{ kernelConfig }}</pre>
         </Card>
+      </TabPane>
+
+      <!-- 行为塑形（P1-④ 批 B）：租户级默认，对所有匹配该前缀的会话生效 -->
+      <TabPane
+        key="harness"
+        :tab="$t('settings.harness_title')"
+      >
+        <HarnessProfilePanel scope="tenant" />
       </TabPane>
     </Tabs>
   </div>
