@@ -9,7 +9,7 @@
 |---|---|
 | **PostgreSQL + pgvector** | 业务库；迁移由 Alembic 管 |
 | **Redis** | 会话事件流 / 锁 / 心跳（多副本一致性的基础） |
-| **Milvus · MinIO/S3** | 向量检索与对象存储（知识库 / 媒体） |
+| **Milvus · S3（云端）/ 自托管 RustFS** | 向量检索与对象存储（知识库 / 媒体） |
 | Go / Python / Node + pnpm | 工具链版本见 `docs/contributing.md` §工具链版本 |
 
 **容器形态里没有数据库**：PostgreSQL 由云厂商或 DBA 维护，**不在 compose 内** ⇒ 必须先把 `DATABASE_DSN`
@@ -40,7 +40,7 @@ DATABASE_DSN='postgresql://user:pwd@your-pg:5432/dbname' \
   python -m alembic -c alembic.ini upgrade head
 
 # 2) 启动应用层
-docker compose up -d redis minio etcd milvus
+docker compose up -d redis  # 对象存储走云端 S3（配好 .env）；自托管则加 --profile selfhosted-s3
 docker compose up -d --scale gateway=2 --scale python-engine=2
 ```
 

@@ -23,8 +23,16 @@ services:
       - "127.0.0.1:6379:6379"
     volumes:
       - redisdata:/data
+    environment:
+      # healthcheck 里的 redis-cli 需要密码才能通过认证（见下）
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
     healthcheck:
-      test: [ "CMD", "redis-cli", "ping" ]
+      # ⚠ 必须是带密码的 CMD-SHELL：requirepass 下未认证的 `redis-cli ping` 返回
+      # NOAUTH（退出码非 0），旧写法 `[ "CMD", "redis-cli", "ping" ]` 会让容器**永远
+      # unhealthy**；而依赖它的服务用了 `condition: service_healthy`，于是整个
+      # `docker compose up` 会一直卡在等待 redis 健康、永远起不来。
+      # `$$` 是 compose 的转义，落到容器里是字面 `$REDIS_PASSWORD`。
+      test: [ "CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG" ]
       interval: 5s
       timeout: 3s
       retries: 5
@@ -58,14 +66,24 @@ services:
       REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-}
       # 引擎地址:逗号分隔支持多引擎实例(如 http://python-engine:8000,http://python-engine-2:8000)
       PYTHON_ENGINE_ADDRESS: ${PYTHON_ENGINE_ADDRESS:-http://python-engine:8000}
-      # 媒体/对象存储:默认走本 compose 的 MinIO(S3)。local 兜底见 STORAGE_ROOT。
+      # 媒体/对象存储。默认走 **S3 兼容的云端对象存储**（阿里云 OSS / Cloudflare R2 /
+      # AWS S3 / 腾讯 COS 都提供 S3 兼容端点）。local 兜底见 STORAGE_ROOT。
+      #
+      # 默认不再起本地 MinIO：MinIO 自 2025 起大幅收缩社区版（控制台功能移入商业版
+      # AIStor、RELEASE tag 管理混乱），已不适合作为默认依赖。
+      # 仍需自托管时：`docker compose --profile selfhosted-s3 up -d`
+      # （该 profile 里的 minio 后续可平滑换成 RustFS 等其它 S3 兼容实现）。
       STORAGE_BACKEND: ${STORAGE_BACKEND:-s3}
       STORAGE_ROOT: ${STORAGE_ROOT:-/app/workspace}
+      # 云 S3 端点（**用云时必须覆盖**）：如 https://oss-cn-hangzhou.aliyuncs.com
+      #   或 https://<accountid>.r2.cloudflarestorage.com
       S3_ENDPOINT: ${S3_ENDPOINT:-http://minio:9000}
       S3_BUCKET: ${S3_BUCKET:-chiron}
-      S3_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
-      S3_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
-      S3_USE_SSL: "false"
+      # 变量名保持中性（此前复用 MINIO_ 前缀，换后端后语义不清）
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
+      # 云端对象存储普遍要求 TLS
+      S3_USE_SSL: ${S3_USE_SSL:-true}
       # 插件数据目录:与 python-engine 共享同一卷(plugins 卷)
       PLUGIN_DATA_DIR: ${PLUGIN_DATA_DIR:-/srv/chiron/plugins}
       # 限流无需按副本数调参:global/tenant/user 三级令牌桶均为"每分钟总量配额",
@@ -269,14 +287,20 @@ services:
       retries: 5
       start_period: 10s
 
+  # ⚠ Milvus 的对象层指向本地 minio（`MINIO_ADDRESS` 是 Milvus 的固定变量名，实际支持
+  # 任意 S3）。所以 minio/etcd/milvus 必须同起同停，三者共用 `selfhosted-s3` profile，
+  # 默认不启动 —— 用云端对象存储 + 外部向量库的用户不需要它们。
+  # 需要本地向量库时：docker compose --profile selfhosted-s3 up -d
   milvus:
+    profiles: ["selfhosted-s3"]
     image: milvusdb/milvus:v2.4.17
     restart: unless-stopped
     environment:
       ETCD_ENDPOINTS: etcd:2379
-      MINIO_ADDRESS: minio:9000
-      MINIO_ACCESS_KEY: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
-      MINIO_SECRET_KEY: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      # Milvus 要 host:port（不含 scheme）；用云时改成云的 S3 主机名
+      MINIO_ADDRESS: ${MILVUS_S3_ADDRESS:-minio:9000}
+      MINIO_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      MINIO_SECRET_KEY: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
     volumes:
       - milvusdata:/var/lib/milvus
     depends_on:
@@ -284,20 +308,25 @@ services:
     ports:
       - "127.0.0.1:19530:19530"
 
+  # 自托管 S3 后端（可选，默认不启动）。保留它只为兼容既有自托管部署；
+  # 后续规划替换为 **RustFS**（同为 Apache-2.0、S3 兼容）。
   minio:
+    profiles: ["selfhosted-s3"]
     image: minio/minio:RELEASE.2024-12-18T13-15-44Z
     restart: unless-stopped
     command: server /data --console-address ":9001"
     environment:
-      MINIO_ROOT_USER: ${MINIO_ACCESS_KEY:?MINIO_ACCESS_KEY is required}
-      MINIO_ROOT_PASSWORD: ${MINIO_SECRET_KEY:?MINIO_SECRET_KEY is required}
+      MINIO_ROOT_USER: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
+      MINIO_ROOT_PASSWORD: ${S3_SECRET_KEY:?S3_SECRET_KEY is required}
     volumes:
       - miniodata:/data
     ports:
       - "127.0.0.1:9000:9000"
       - "127.0.0.1:9001:9001"
 
+  # 只被 milvus 使用 ⇒ 与之一同归入 selfhosted-s3 profile
   etcd:
+    profiles: ["selfhosted-s3"]
     image: quay.io/coreos/etcd:v3.5.18
     restart: unless-stopped
     environment:

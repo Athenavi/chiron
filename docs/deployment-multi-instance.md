@@ -8,7 +8,7 @@
 ```
 浏览器 ─► 前端容器(Nginx, 宿主机 :3000) ─► gateway 副本 1..N ─► python-engine 副本 1..M
                                                         │
-                                        PostgreSQL · Redis · MinIO/S3 · Milvus
+                                        PostgreSQL · Redis · S3（云端）/ 自托管 RustFS · Milvus
 ```
 
 - `gateway` **不发布宿主机端口**（仅 `expose: 8080`）：多副本下固定端口互相抢占，且宿主机端口发布不是服务发现方案。对外只经前端 nginx 或外部 LB。
@@ -20,7 +20,7 @@
 ```bash
 cp .env.example .env
 # 必填：REDIS_PASSWORD、POSTGRES_DSN（外部 PostgreSQL）、APP_SECRET
-#       JWT_SECRET、INTERNAL_TOKEN、MINIO_ACCESS_KEY、MINIO_SECRET_KEY
+#       JWT_SECRET、INTERNAL_TOKEN、S3_ACCESS_KEY、S3_SECRET_KEY
 
 # 1) 迁移目标 PostgreSQL（PG 由云厂商/DBA 维护，不在本 compose 内）
 python -m pip install -r requirements-migrate.txt
@@ -28,7 +28,7 @@ DATABASE_DSN='postgresql://user:pwd@your-pg:5432/dbname' \
   python -m alembic -c alembic.ini upgrade head
 
 # 2) 启动应用层
-docker compose up -d redis minio etcd milvus
+docker compose up -d redis  # 对象存储走云端 S3（配好 .env）；自托管则加 --profile selfhosted-s3
 docker compose up -d --scale gateway=2 --scale python-engine=2
 curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同源反代）
 ```
@@ -45,7 +45,7 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `PYTHON_ENGINE_ADDRESS` | `http://python-engine:8000` | 引擎静态地址（注册表为空时的回退） |
 | `ENGINE_ADVERTISE_URL` | 空 | 引擎对外可达地址，设置后向 Redis 自注册；**run 归属路由的前置条件** |
 | `MCP_POOL_ENABLED` | `false` | 每个开启副本会为活跃用户持有 MCP 连接（副本×用户×server 放大） |
-| `STORAGE_BACKEND` | `s3` | 媒体走 MinIO；`local` 时走共享卷 `STORAGE_ROOT` |
+| `STORAGE_BACKEND` | `s3` | 媒体走 S3 兼容对象存储（默认云端）；`local` 时走共享卷 `STORAGE_ROOT` |
 | `SANDBOX_ROOT` / `PLUGIN_DATA_DIR` | — | 引擎沙箱与插件数据，**多副本必须共享同一卷** |
 | `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器（P0-1 根治）；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
 | `SANDBOX_SERVICE_MAX_CONCURRENCY` | `0`（不限） | 引擎侧对沙箱层的并发闸门；多副本时建议设置（容量与实测见 `sandbox-service/README.md` 的「扩缩与容量」） |
@@ -195,7 +195,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 
 - run 现场状态不迁移：实例故障该 run 中断（只保证「路由到正确实例 + 陈旧审批被拒」）；
 - SSE 跨实例实时通道为 Pub/Sub：断连窗口内的实时事件依赖客户端携带 `Last-Event-ID` 从 Stream 重放；
-- **PostgreSQL 已外置**（云托管或 DBA 维护，见第 7 节）；**Redis、MinIO、Milvus、etcd 在 compose 中仍是单点**：生产需替换为 Sentinel/Cluster、分布式 MinIO、Milvus 集群与多副本 etcd，并配套备份恢复与跨可用区演练。
+- **PostgreSQL 已外置**（云托管或 DBA 维护，见第 7 节）；**Redis、Milvus、etcd 在 compose 中仍是单点**（且 MinIO/Milvus/etcd 现已默认不启用，仅 `--profile selfhosted-s3` 下才起）：生产需替换为 Sentinel/Cluster、自托管的 S3 后端（如 RustFS / SeaweedFS）、Milvus 集群与多副本 etcd，并配套备份恢复与跨可用区演练。
 
 ### 明确不做的项（技术结论）
 
