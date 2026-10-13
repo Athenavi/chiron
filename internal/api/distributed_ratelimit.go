@@ -99,6 +99,28 @@ if not refill(KEYS[3], ARGV[5], ARGV[6]) then return "user" end
 return "ok"
 `
 
+// : 三级桶共用的 hash tag。
+// :
+// : Redis Cluster 要求**一次 EVAL 里的所有 key 同槽**，否则直接 `CROSSSLOT` 失败；
+// : 而限流是 fail-close —— 失败即 **全站 503**（见 `Allow` 的错误分支）。限流操作极短，
+// : 同槽带来的热点可接受；不正确不可接受。
+const rateLimitHashTag = "{ratelimit}"
+
+// rateLimitKeys 返回三级桶的 Redis key（global / tenant / user；无用户身份时 user 为空串，
+// Lua 据此跳过该级）。
+//
+// 抽成函数是为了让「**三级 key 同槽**」这条不变量能被单测钉住 —— 它此前**没有任何测试**，
+// 而它的失效形态只在 Redis Cluster 上暴露（单机/哨兵下多 key EVAL 不校验同槽）。
+func rateLimitKeys(tenantID, userID string) (string, string, string) {
+	globalKey := db.RedisKey("ratelimit:" + rateLimitHashTag + ":global")
+	tenantKey := db.RedisKey("ratelimit:" + rateLimitHashTag + ":tenant:" + tenantID)
+	userKey := ""
+	if userID != "" {
+		userKey = db.RedisKey("ratelimit:" + rateLimitHashTag + ":user:" + userID)
+	}
+	return globalKey, tenantKey, userKey
+}
+
 // rpmRateArgs 把每分钟配额换算为令牌桶 (rate, capacity) 参数串。
 // rate = rpm/60（每秒补充）, capacity = rpm（允许一次性突发整分钟额度）。
 func rpmRateArgs(rpm int64) (string, string) {
@@ -121,12 +143,7 @@ func (l *DistributedRateLimiter) Allow(ctx context.Context, tenantID, userID str
 		tenantID = "public"
 	}
 
-	globalKey := db.RedisKey("ratelimit:global")
-	tenantKey := fmt.Sprintf(db.RedisKey("ratelimit:tenant:%s"), tenantID)
-	userKey := ""
-	if userID != "" {
-		userKey = fmt.Sprintf(db.RedisKey("ratelimit:user:%s"), userID)
-	}
+	globalKey, tenantKey, userKey := rateLimitKeys(tenantID, userID)
 
 	gRate, gCap := rpmRateArgs(l.globalRPM.Load())
 	tRate, tCap := rpmRateArgs(l.tenantRPM.Load())
