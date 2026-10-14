@@ -24,10 +24,11 @@ for 'ask' permission decisions"）。语义映射到 Chiron：
 
 from __future__ import annotations
 
-import json
 import logging
 from dataclasses import dataclass
 from typing import Any
+
+from app.agent.bounded_llm import call_bounded, clip, parse_json_object
 
 logger = logging.getLogger(__name__)
 
@@ -75,29 +76,17 @@ def parse_assessment(text: str) -> GuardianAssessment:
     text = (text or "").strip()
     if not text:
         return GuardianAssessment("deny", "unknown", "guardian produced empty output", failed=True)
-    start, end = text.find("{"), text.rfind("}")
-    if start == -1 or end == -1 or end <= start:
-        return GuardianAssessment("deny", "unknown", "guardian output was not JSON", failed=True)
-    try:
-        obj = json.loads(text[start : end + 1])
-    except json.JSONDecodeError:
-        return GuardianAssessment("deny", "unknown", "guardian output was malformed JSON", failed=True)
-    if not isinstance(obj, dict):
-        return GuardianAssessment("deny", "unknown", "guardian output was not an object", failed=True)
+    obj = parse_json_object(text)
+    if obj is None:
+        return GuardianAssessment(
+            "deny", "unknown", "guardian output was not a JSON object", failed=True
+        )
 
     raw_outcome = str(obj.get("outcome", "")).strip().lower()
     outcome = "allow" if raw_outcome == "allow" else "deny"
     risk = str(obj.get("risk_level", "unknown")).strip().lower() or "unknown"
     rationale = str(obj.get("rationale", "")).strip()[:400]
     return GuardianAssessment(outcome, risk, rationale)
-
-
-def _clip(value: Any) -> str:
-    if not isinstance(value, str):
-        value = json.dumps(value, ensure_ascii=False)
-    if len(value) > MAX_ARG_CHARS:
-        return value[:MAX_ARG_CHARS] + "…(truncated)"
-    return value
 
 
 async def review_tool_call(
@@ -114,28 +103,35 @@ async def review_tool_call(
     「独立」的落实：一次**没有工具**、`temperature=0`、`max_tokens` 受限的普通 chat 调用，
     与主循环、与子 Agent 都无关 —— 评审模型看不到也不需要主循环的历史。
     """
-    arg_lines = "\n".join(f"- {k}: {_clip(v)}" for k, v in (args or {}).items()) or "(no arguments)"
+    arg_lines = (
+        "\n".join(f"- {k}: {clip(v, MAX_ARG_CHARS)}" for k, v in (args or {}).items())
+        or "(no arguments)"
+    )
     user = (
         f"TOOL: {tool_name}\n"
         f"ACTION LEVEL: {level or 'unknown'}\n"
         f"ARGUMENTS:\n{arg_lines}\n"
     )
     if task_intent:
-        user += f"\nSTATED TASK (for relevance only):\n<task>{_clip(task_intent)}</task>\n"
+        user += (
+            f"\nSTATED TASK (for relevance only):\n"
+            f"<task>{clip(task_intent, MAX_ARG_CHARS)}</task>\n"
+        )
     messages = [
         {"role": "system", "content": _SYSTEM_PROMPT},
         {"role": "user", "content": user},
     ]
-    try:
-        response = await gateway.chat(
-            messages=messages, model=model, max_tokens=GUARDIAN_MAX_TOKENS, temperature=0.0
-        )
-    except Exception as exc:  # noqa: BLE001 — 评审失败只影响"是否要人工"，不该抛出打断回合
-        logger.warning("guardian review failed for %s: %s", tool_name, str(exc)[:160])
-        return GuardianAssessment(
-            "deny", "unknown", f"guardian call failed: {str(exc)[:160]}", failed=True
-        )
-    return parse_assessment(str(getattr(response, "content", "") or ""))
+    result = await call_bounded(
+        gateway,
+        messages=messages,
+        model=model,
+        max_tokens=GUARDIAN_MAX_TOKENS,
+        purpose="guardian",
+    )
+    if not result.ok:
+        logger.warning("guardian review failed for %s: %s", tool_name, result.error)
+        return GuardianAssessment("deny", "unknown", result.error, failed=True)
+    return parse_assessment(result.text)
 
 
 def may_release(level: str, assessment: GuardianAssessment) -> bool:

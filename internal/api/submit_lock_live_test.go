@@ -41,6 +41,7 @@ func submitOnce(t *testing.T, sid string) *httptest.ResponseRecorder {
 		NewTenantResourceManager(db.Redis),
 		nil, nil, nil, nil, // eventHub / sessionMgr / authenticator / rpaHub
 		"pytest-internal-token", time.Second,
+		nil, // pythonClient（输出控制/精炼的透传端点用；本用例只测 submit 网关）
 	)
 
 	body := strings.NewReader(`{"content":"hi","session_id":"` + sid + `"}`)
