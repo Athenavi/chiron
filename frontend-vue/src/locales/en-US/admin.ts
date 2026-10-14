@@ -177,4 +177,17 @@ export default {
   redis_latency: "Redis latency",
   userinfo_endpoint_override: "Userinfo endpoint override",
   user_3: "🧑 User",
+  // ── D1: system diagnostics ──
+  diagnostics: "Diagnostics",
+  diagnostics_desc: "Check configuration and dependencies to answer “configured but not taking effect”.",
+  diagnostics_empty: "No diagnostics to show.",
+  diag_summary: "Overall: {status} (ok {ok} · warn {warn} · fail {fail} · skipped {skipped})",
+  diag_status_ok: "OK",
+  diag_status_warn: "Warning",
+  diag_status_fail: "Failed",
+  diag_status_skipped: "Not checked",
+  diag_category_dependency: "Dependency connectivity",
+  diag_category_config: "Configuration hygiene",
+  diag_category_capability: "Capability availability",
+  diag_category_other: "Other",
 }

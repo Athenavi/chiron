@@ -107,26 +107,47 @@ def language_instruction(language: str) -> str:
     )
 
 
-def build_controls_suffix(style: str = "", language: str = "") -> str:
-    """把风格与语言偏好拼成一段 suffix。
+def build_controls_suffix(
+    style: str = "", language: str = "", reasoning_language: str = ""
+) -> str:
+    """把风格、回复语言与**思考语言**拼成一段 suffix。
 
-    **默认态（default + auto）返回空串** —— 这是本模块最重要的性质：引入它不该改变任何
-    现有会话的 system prompt（从而不改变输出、不影响前缀缓存）。
+    **默认态（default + auto + auto）返回空串** —— 这是本模块最重要的性质：引入它不该改变
+    任何现有会话的 system prompt（从而不改变输出、不影响前缀缓存）。
+
+    思考语言（D2）与回复语言刻意分开：有人要"用英文思考、用中文回答"，
+    也有人要"思考和回答同语言" —— 合成一个旋钮就表达不出来。
     """
-    parts = [p for p in (style_instruction(style), language_instruction(language)) if p]
+    from app.providers.reasoning_language import reasoning_language_instruction
+
+    parts = [
+        p
+        for p in (
+            style_instruction(style),
+            language_instruction(language),
+            reasoning_language_instruction(reasoning_language),
+        )
+        if p
+    ]
     if not parts:
         return ""
     return "## Output preferences\n" + "\n\n".join(parts)
 
 
-def resolve_controls(llm_config: dict[str, Any] | None) -> tuple[str, str]:
-    """从请求的 ``llm_config`` 解析 (style, language)。
+def resolve_controls(llm_config: dict[str, Any] | None) -> tuple[str, str, str]:
+    """从请求的 ``llm_config`` 解析 (style, language, reasoning_language)。
 
     取值来自前端（用户实时选择，随每次提交上传）—— 与 `tools_mode` 同一处置：**服务端不存储**，
     避免"前端选、Redis、runtime"三份状态漂移（这是本项目反复踩过的坑）。
     """
+    from app.providers.reasoning_language import normalize_reasoning_language
+
     cfg = llm_config or {}
-    return normalize_style(cfg.get("output_style")), normalize_language(cfg.get("language"))
+    return (
+        normalize_style(cfg.get("output_style")),
+        normalize_language(cfg.get("language")),
+        normalize_reasoning_language(cfg.get("reasoning_language")),
+    )
 
 
 def describe_controls() -> dict[str, Any]:

@@ -213,7 +213,9 @@ async def _grade_once(
         purpose="rubric-grade",
     )
     if not result.ok:
-        return None, 0, 0, result.error
+        # 保持既有错误前缀（"grader call failed"）：它与注释、测试以及"评审失败不影响回答"
+        # 的语义绑定；直接透传组件的 purpose 前缀会让这条既有契约无声改变。
+        return None, 0, 0, f"grader call failed: {result.error}"
     grade = parse_grade(result.text)
     if grade is None:
         return None, result.input_tokens, result.output_tokens, "grader did not return a JSON object"

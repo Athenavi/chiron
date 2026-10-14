@@ -200,8 +200,7 @@ export default {
   tour_ask_admin_desc: "你的账号没有配置模型的权限 —— 请联系管理员，为你所在租户添加模型服务商与 API Key。",
   tour_provider_auth_title: "模型服务商认证失败",
   tour_provider_auth_desc: "这个服务商的 API Key 无效或已过期 —— 请到「模型管理 / API 密钥」里更新它，然后重发这条消息。",
-  tour_go_configure: "去配置",
-  // ── 差距B：输出控制（风格 / 语言偏好）+ 提示精炼 ──
+  tour_go_configure: "去配置",  // ── 差距B：输出控制（风格 / 语言偏好）+ 提示精炼 ──
   output_style: "回复风格",
   language_preference: "回复语言",
   style_default: "平台默认",
@@ -222,4 +221,10 @@ export default {
   trace_view_timeline: "时间线",
   trace_view_toggle_tooltip: "在时间线与执行图之间切换（执行图显示每一步的父节点）",
   trace_graph_empty: "暂无执行图数据（该 trace 可能早于本版本，或 span 尚未落库）",
+  // ── D2：思考语言（与"回复语言"分开设置） ──
+  reasoning_language: "思考语言",
+  think_lang_auto: "跟随模型",
+  think_lang_zh: "简体中文",
+  think_lang_en: "English",
+  think_lang_ar: "العربية",
 }

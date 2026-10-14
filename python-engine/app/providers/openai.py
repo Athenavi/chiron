@@ -271,12 +271,24 @@ class OpenAIProvider(LLMProvider):
         # （`effort=medium` 发给 deepseek-flash）。
         # `normalize_reasoning_effort` 返回空串即表示"不要发送该字段"（退化为 provider 默认）。
         # 注：Anthropic 协议用的是 `thinking` 块，语义不同，故这条路径只覆盖 OpenAI 兼容族。
-        from app.providers.effort import normalize_reasoning_effort
+        # 思考档位（D2 起按**契约表**）：不只归一**值**，还决定参数**放哪** ——
+        # OpenAI 兼容族是顶层 `reasoning_effort`，而 Anthropic 是 `thinking` 子对象、
+        # Responses 是 `reasoning: {effort}`、DeepSeek 直连**根本没有**档位参数。
+        # 只归一值会把字段发到不该去的地方（同样 400，且更难查）。
+        from app.providers import reasoning_contract as _rc
         from app.providers.session_context import get_llm_effort
 
-        effort = normalize_reasoning_effort(get_llm_effort())
-        if effort:
-            kwargs["reasoning_effort"] = effort
+        _effort = get_llm_effort()
+        reasoning_params = _rc.resolve(_effort, provider=self.name, model=model)
+        if not reasoning_params and _rc.resolve_contract(self.name, model) is None:
+            # **未匹配任何契约**：保持既有行为 —— 本类就是 OpenAI 兼容族，默认发顶层
+            # `reasoning_effort`。否则"契约表上线"会把原本可用的第三方网关参数悄悄关掉。
+            from app.providers.effort import normalize_reasoning_effort
+
+            level = normalize_reasoning_effort(_effort)
+            if level:
+                reasoning_params = {"reasoning_effort": level}
+        kwargs.update(reasoning_params)
         # ── 调试：检查消息序列中 tool 消息的配对 ──
         msgs = kwargs["messages"]
         for i, m in enumerate(msgs):

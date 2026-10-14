@@ -177,4 +177,17 @@ export default {
   redis_latency: "Redis 延迟",
   userinfo_endpoint_override: "Userinfo 端点覆盖",
   user_3: "🧑 用户",
+  // ── D1：系统自诊断 ──
+  diagnostics: "系统诊断",
+  diagnostics_desc: "检查配置与依赖，回答“配了但不生效”这类问题。",
+  diagnostics_empty: "没有可展示的诊断项。",
+  diag_summary: "总体：{status}（正常 {ok} · 警告 {warn} · 失败 {fail} · 未检查 {skipped}）",
+  diag_status_ok: "正常",
+  diag_status_warn: "警告",
+  diag_status_fail: "失败",
+  diag_status_skipped: "未检查",
+  diag_category_dependency: "依赖连通性",
+  diag_category_config: "配置卫生",
+  diag_category_capability: "能力可用性",
+  diag_category_other: "其它",
 }

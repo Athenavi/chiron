@@ -203,6 +203,13 @@ const routes = [
         component: () => import('../views/admin/AuditView.vue'),
         meta: { title: t('admin.operation_audit') },
       },
+      // D1：自诊断（"配了但不生效"的自答清单）
+      {
+        path: 'diagnostics',
+        name: 'AdminDiagnostics',
+        component: () => import('../views/admin/DiagnosticsView.vue'),
+        meta: { title: t('admin.diagnostics') },
+      },
       // ── 访问安全 ──
       {
         // 角色 + 群组合并

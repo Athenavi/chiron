@@ -218,4 +218,10 @@ export default {
   trace_view_timeline: "Timeline",
   trace_view_toggle_tooltip: "Switch between the timeline and the execution graph (the graph shows each step's parent)",
   trace_graph_empty: "No execution graph data yet (this trace may predate the feature, or spans are not stored)",
+  // ── D2: reasoning language (separate from reply language) ──
+  reasoning_language: "Reasoning language",
+  think_lang_auto: "Model default",
+  think_lang_zh: "简体中文",
+  think_lang_en: "English",
+  think_lang_ar: "العربية",
 }

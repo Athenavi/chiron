@@ -53,6 +53,10 @@ func (h *AdminHandler) RegisterRoutes(r *http.ServeMux) {
 	r.HandleFunc("PUT /users/{id}", h.UpdateUser)
 	r.HandleFunc("DELETE /users/{id}", h.DeleteUser)
 	r.HandleFunc("GET /system", h.SystemInfo)
+	// D1："配了但不生效"的自诊断 —— 与部署审计同一条线，把配置陷阱与依赖断链变成可自答。
+	r.HandleFunc("GET /diagnostics", h.GetDiagnostics)
+	// D3：用量目录 —— 配额用量回答"还剩多少"，这里回答"**花在哪**"（按天/模型/用户）。
+	r.HandleFunc("GET /usage/catalog", h.GetUsageCatalog)
 	r.HandleFunc("POST /maintenance", h.TriggerMaintenance)
 	r.HandleFunc("GET /storage", h.GetStorage)
 	r.HandleFunc("PUT /storage", h.UpdateStorage)

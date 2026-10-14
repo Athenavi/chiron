@@ -11,6 +11,7 @@ from typing import Any
 
 from app.providers.anthropic import AnthropicProvider
 from app.providers.openai import OpenAIProvider
+from app.providers.responses import ResponsesProvider
 
 
 class NamedOpenAIProvider(OpenAIProvider):
@@ -26,6 +27,28 @@ class NamedOpenAIProvider(OpenAIProvider):
     ) -> None:
         self.name = name
         super().__init__(api_key=api_key, base_url=base_url, key_ring=key_ring)
+
+
+class NamedResponsesProvider(ResponsesProvider):
+    """具名 **Responses API** provider（D2）。
+
+    Responses 与 chat/completions 是两套请求/响应形状，因此继承的是 `ResponsesProvider`
+    而不是 `OpenAIProvider`；name 同样注入，保证 KeyRing 分区按 provider id 隔离。
+    """
+
+    def __init__(
+        self,
+        name: str,
+        *,
+        api_key: str,
+        base_url: str = "",
+        key_ring: Any = None,
+    ) -> None:
+        self.name = name
+        # ResponsesProvider 不接受 key_ring（它自带最小 HTTP 客户端）；这里显式忽略，
+        # 保持与其它 Named* 相同的构造签名（装配处不必分叉）。
+        _ = key_ring
+        super().__init__(api_key=api_key, base_url=base_url)
 
 
 class NamedAnthropicProvider(AnthropicProvider):

@@ -28,6 +28,8 @@ const props = defineProps<{
   outputStyle?: string
   /** 语言偏好（auto/zh-CN/en-US/ar）：差距B */
   language?: string
+  /** 思考语言（D2）：与"回复语言"分开设置 —— 有人要"用英文思考、用中文回答" */
+  reasoningLanguage?: string
   /** 已带入本次对话的上下文（知识库 / Agent / 技能 / 工作流 / 插件 / 记忆分类）。
       对齐 reasonix 的 `composer-context`：绑定是"沉默生效"的，不显式呈现就是幽灵行为。 */
   contextChips?: ContextChip[]
@@ -47,6 +49,8 @@ const emit = defineEmits<{
   (e: 'update:outputStyle', style: string): void
   /** 语言偏好（差距B）：auto/zh-CN/en-US/ar */
   (e: 'update:language', lang: string): void
+  /** 思考语言（D2）：auto/zh-CN/en-US/ar */
+  (e: 'update:reasoningLanguage', lang: string): void
   /** 移除一个上下文 chip（点输入区上方 chip 行的 × ） */
   (e: 'remove-context-chip', chip: ContextChip): void
   /** 斜杠命令 */
@@ -140,6 +144,16 @@ const LANGUAGE_META = [
   { value: 'ar', label: tr('chat.lang_ar') },
 ] as const
 const languageOptions = computed(() => LANGUAGE_META.map(o => ({ value: o.value, label: o.label })))
+
+// D2：思考语言 —— 与"回复语言"分开。有人要"用英文思考、用中文回答"（便于复用英文思考链），
+// 也有人要"思考和回答同语言"；合成一个旋钮就表达不出来。
+const THINK_LANGUAGE_META = [
+  { value: 'auto', label: tr('chat.think_lang_auto') },
+  { value: 'zh-CN', label: tr('chat.think_lang_zh') },
+  { value: 'en-US', label: tr('chat.think_lang_en') },
+  { value: 'ar', label: tr('chat.think_lang_ar') },
+] as const
+const thinkLanguageOptions = computed(() => THINK_LANGUAGE_META.map(o => ({ value: o.value, label: o.label })))
 
 // ── 提示精炼（差距B）：把粗糙输入改成更明确的提示 ──
 //
@@ -1091,6 +1105,17 @@ defineExpose({ insertText })
                     size="small"
                     style="width: 150px"
                     @update:value="(v: any) => emit('update:language', String(v))"
+                  />
+                </label>
+                <!-- D2：思考语言 —— 与回复语言分开（"用英文思考、用中文回答"是合理诉求）。 -->
+                <label class="settings-pop__row">
+                  <span class="settings-pop__label">{{ $t('chat.reasoning_language') }}</span>
+                  <Select
+                    :model-value="reasoningLanguage || 'auto'"
+                    :options="thinkLanguageOptions"
+                    size="small"
+                    style="width: 150px"
+                    @update:value="(v: any) => emit('update:reasoningLanguage', String(v))"
                   />
                 </label>
               </div>
