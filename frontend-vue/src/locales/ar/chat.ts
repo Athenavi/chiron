@@ -222,4 +222,10 @@ export default {
   trace_view_timeline: "الخط الزمني",
   trace_view_toggle_tooltip: "التبديل بين الخط الزمني ومخطط التنفيذ (يعرض المخطط العقدة الأصلية لكل خطوة)",
   trace_graph_empty: "لا تتوفّر بيانات مخطط التنفيذ بعد (قد يكون هذا التتبّع أقدم من هذه الميزة، أو لم تُخزَّن المقاطع)",
+  // ── D2: لغة التفكير (منفصلة عن لغة الرد) ──
+  reasoning_language: "لغة التفكير",
+  think_lang_auto: "افتراضي النموذج",
+  think_lang_zh: "简体中文",
+  think_lang_en: "English",
+  think_lang_ar: "العربية",
 }

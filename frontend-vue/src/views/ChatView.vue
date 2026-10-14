@@ -674,12 +674,17 @@ function onToolsModeChange(v: unknown) {
 // `python-engine/app/agent/output_controls.py` 的枚举逐字一致。
 const outputStyle = ref<string>('default')
 const language = ref<string>('auto')
+// D2：思考语言 —— 与回复语言分开设置（请求级实时状态，同样随 llm_config 下发）。
+const reasoningLanguage = ref<string>('auto')
 
 function onOutputStyleChange(v: unknown) {
   outputStyle.value = String(v) || 'default'
 }
 function onLanguageChange(v: unknown) {
   language.value = String(v) || 'auto'
+}
+function onReasoningLanguageChange(v: unknown) {
+  reasoningLanguage.value = String(v) || 'auto'
 }
 
 // 模式
@@ -756,6 +761,8 @@ function buildLlmConfig(base?: Record<string, unknown>): Record<string, unknown>
   // 默认态（default / auto）不携带 ⇒ 引擎不注入任何片段（system 段逐字不变、前缀缓存不受影响）。
   if (outputStyle.value && outputStyle.value !== 'default') cfg.output_style = outputStyle.value
   if (language.value && language.value !== 'auto') cfg.language = language.value
+  // D2：思考语言（同样默认态不携带 ⇒ 引擎不注入任何片段）。
+  if (reasoningLanguage.value && reasoningLanguage.value !== 'auto') cfg.reasoning_language = reasoningLanguage.value
   const preset = MODE_PRESETS.value[mode.value]
   if (preset) {
     if (cfg.temperature === undefined) cfg.temperature = preset.temperature
@@ -3008,6 +3015,7 @@ function continueGeneration() {
         :tools-mode="toolsMode"
         :output-style="outputStyle"
         :language="language"
+        :reasoning-language="reasoningLanguage"
         :context-chips="contextChips"
         @send="sendMessage"
         @stop="stopGeneration"
@@ -3019,6 +3027,7 @@ function continueGeneration() {
         @tools-mode-change="onToolsModeChange"
         @update:outputStyle="onOutputStyleChange"
         @update:language="onLanguageChange"
+        @update:reasoningLanguage="onReasoningLanguageChange"
         @remove-context-chip="(c: ContextChip) => removeContextChip(c.type, c.value)"
       />
 

@@ -34,7 +34,7 @@ class _FakeGateway:
         self._responses = list(responses)
         self.calls: list[list[dict[str, Any]]] = []
 
-    async def chat(self, *, messages, model="", max_tokens=0):  # noqa: ANN001
+    async def chat(self, *, messages, model="", max_tokens=0, temperature=0.0):  # noqa: ANN001
         self.calls.append(list(messages))
         return self._responses.pop(0)
 

@@ -331,3 +331,32 @@ export async function savePaymentConfig(config: Record<string, unknown>): Promis
   const { data } = await api.put('/v1/admin/payments', { config })
   return data?.data ?? { config: {}, channels: {}, callback_urls: {} }
 }
+
+// ── D1：自诊断（"配了但不生效"的可自答清单）──────────────────────────────
+
+export type DiagnosticStatus = 'ok' | 'warn' | 'fail' | 'skipped'
+
+export interface DiagnosticCheck {
+  id: string
+  title: string
+  /** config / dependency / capability —— 前端据此分组 */
+  category: string
+  status: DiagnosticStatus
+  /** host 观测到的**事实**（不是建议） */
+  detail: string
+  /** 该怎么办；ok 时为空 */
+  remediation?: string
+}
+
+export interface DiagnosticsReport {
+  generated_at: number
+  status: DiagnosticStatus
+  counts: Record<string, number>
+  checks: DiagnosticCheck[]
+}
+
+/** 读取自诊断报告。 */
+export async function getDiagnostics(): Promise<DiagnosticsReport> {
+  const { data } = await api.get('/v1/admin/diagnostics')
+  return data?.data ?? { generated_at: 0, status: 'skipped', counts: {}, checks: [] }
+}

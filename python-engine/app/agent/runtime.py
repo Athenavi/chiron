@@ -1437,12 +1437,12 @@ class AgentRuntime:
             # （前端实时状态，服务端不存储 —— 与 tools_mode 同一处置，避免三份状态漂移）。
             from app.agent.output_controls import build_controls_suffix, resolve_controls
 
-            _out_style, _out_lang = resolve_controls(task.llm_config)
+            _out_style, _out_lang, _out_think_lang = resolve_controls(task.llm_config)
             messages = _apply_system_prefix(
                 messages,
                 task,
                 extra_suffix=_extra_suffix,
-                controls_suffix=build_controls_suffix(_out_style, _out_lang),
+                controls_suffix=build_controls_suffix(_out_style, _out_lang, _out_think_lang),
             )
 
             tools = (

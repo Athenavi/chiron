@@ -58,9 +58,20 @@ def test_normalize_rejects_unknown() -> None:
 
 
 def test_resolve_controls_from_llm_config() -> None:
-    assert resolve_controls({"output_style": "detailed", "language": "en-US"}) == ("detailed", "en-US")
-    assert resolve_controls(None) == ("default", LANGUAGE_AUTO)
-    assert resolve_controls({}) == ("default", LANGUAGE_AUTO)
+    # D2 起返回三元组：风格 / 回复语言 / **思考语言**（后者可独立设置）。
+    assert resolve_controls({"output_style": "detailed", "language": "en-US"}) == (
+        "detailed", "en-US", LANGUAGE_AUTO,
+    )
+    assert resolve_controls({"reasoning_language": "zh-CN"}) == ("default", LANGUAGE_AUTO, "zh-CN")
+    assert resolve_controls(None) == ("default", LANGUAGE_AUTO, LANGUAGE_AUTO)
+    assert resolve_controls({}) == ("default", LANGUAGE_AUTO, LANGUAGE_AUTO)
+
+
+def test_controls_suffix_includes_reasoning_language() -> None:
+    text = build_controls_suffix("", "", "zh-CN")
+    assert "Think and reason in Simplified Chinese" in text
+    # 默认态（三个 auto/default）必须仍然是空串。
+    assert build_controls_suffix("default", "auto", "auto") == ""
 
 
 def test_all_styles_have_instructions_except_default() -> None:

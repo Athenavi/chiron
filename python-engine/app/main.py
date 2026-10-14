@@ -261,7 +261,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         except Exception:
             return False
 
-    from app.providers.named import NamedAnthropicProvider, NamedOpenAIProvider
+    from app.providers.named import (
+        NamedAnthropicProvider,
+        NamedOpenAIProvider,
+        NamedResponsesProvider,
+    )
 
     for _preset in _catalog:
         _pid = str(_preset.get("id") or "")
@@ -288,9 +292,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                     _default_base or "<none>",
                 )
                 continue
-        _provider_cls = (
-            NamedAnthropicProvider if provider_kind(_preset) == "anthropic" else NamedOpenAIProvider
-        )
+        _kind = provider_kind(_preset)
+        if _kind == "anthropic":
+            _provider_cls = NamedAnthropicProvider
+        elif _kind == "responses":
+            # D2：Responses API 是**另一套请求/响应形状**（不是"换个 URL"），
+            # 所以走独立 provider，而不是塞进 OpenAI 兼容那一份里分叉。
+            _provider_cls = NamedResponsesProvider
+        else:
+            _provider_cls = NamedOpenAIProvider
         providers[_pid] = _provider_cls(
             _pid,
             api_key=_seed or placeholder,

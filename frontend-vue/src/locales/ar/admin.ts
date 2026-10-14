@@ -177,4 +177,17 @@ export default {
   redis_latency: "زمن استجابة Redis",
   userinfo_endpoint_override: "تجاوز نقطة نهاية Userinfo",
   user_3: "🧑 مستخدم",
+  // ── D1: التشخيص الذاتي ──
+  diagnostics: "تشخيص النظام",
+  diagnostics_desc: "افحص الإعدادات والاعتماديات للإجابة عن حالات «تم الإعداد لكنه لا يعمل».",
+  diagnostics_empty: "لا توجد عناصر تشخيص لعرضها.",
+  diag_summary: "الإجمالي: {status} (سليم {ok} · تحذير {warn} · فشل {fail} · لم يُفحص {skipped})",
+  diag_status_ok: "سليم",
+  diag_status_warn: "تحذير",
+  diag_status_fail: "فشل",
+  diag_status_skipped: "لم يُفحص",
+  diag_category_dependency: "اتصال الاعتماديات",
+  diag_category_config: "سلامة الإعدادات",
+  diag_category_capability: "توفّر القدرات",
+  diag_category_other: "أخرى",
 }

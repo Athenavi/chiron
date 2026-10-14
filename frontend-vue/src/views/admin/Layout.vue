@@ -32,6 +32,7 @@ import {
   TeamOutlined,
   SafetyOutlined,
   FileSearchOutlined,
+  MedicineBoxOutlined,
   IdcardOutlined,
   WalletOutlined,
   PayCircleOutlined,
@@ -114,6 +115,8 @@ const menuGroups = computed(() => [
       // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）
       { key: '/admin/tenancy', label: t('admin.tenants_and_domains'), icon: () => h(TeamOutlined) },
       { key: '/admin/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
+      // D1：自诊断 —— 与设置/数据存储同属"系统"类：都是"让部署正确运转"的操作面。
+      { key: '/admin/diagnostics', label: t('admin.diagnostics'), icon: () => h(MedicineBoxOutlined) },
     ],
   },
   {
