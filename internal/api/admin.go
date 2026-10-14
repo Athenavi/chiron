@@ -1,14 +1,11 @@
 package api
 
 import (
-	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
 	"strconv"
 	"time"
@@ -57,8 +54,6 @@ func (h *AdminHandler) RegisterRoutes(r *http.ServeMux) {
 	r.HandleFunc("DELETE /users/{id}", h.DeleteUser)
 	r.HandleFunc("GET /system", h.SystemInfo)
 	r.HandleFunc("POST /maintenance", h.TriggerMaintenance)
-	r.HandleFunc("POST /backup", h.CreateBackup)
-	r.HandleFunc("POST /restore", h.RestoreBackup)
 	r.HandleFunc("GET /storage", h.GetStorage)
 	r.HandleFunc("PUT /storage", h.UpdateStorage)
 	r.HandleFunc("POST /storage/test", h.TestStorage)
@@ -429,140 +424,6 @@ func dbNameFromDSN() string {
 	return "chiron"
 }
 
-// 鈹€鈹€ Backup & Restore 鈹€鈹€
-
-func (h *AdminHandler) CreateBackup(w http.ResponseWriter, r *http.Request) {
-	dsn := extractDSN()
-	if dsn == "" {
-		InternalError(w, "POSTGRES_DSN not configured")
-		return
-	}
-	host, port, user, dbname, password := parseDSNComponents(dsn)
-	cmd := exec.CommandContext(r.Context(), "pg_dump",
-		"--host", host,
-		"--port", port,
-		"--username", user,
-		"--dbname", dbname,
-	)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "backup failed")
-		return
-	}
-	if err := cmd.Start(); err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "backup failed")
-		return
-	}
-	w.Header().Set("Content-Type", "application/sql")
-	w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=chiron_backup_%s.sql", time.Now().Format("20060102_150405")))
-	if _, err := io.Copy(w, stdout); err != nil {
-		slog.Warn("backup stream failed", "error", err)
-	}
-	if err := cmd.Wait(); err != nil {
-		slog.Warn("pg_dump failed", "error", err)
-	}
-}
-
-func (h *AdminHandler) RestoreBackup(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 500<<20) // 500MB 上传上限，防止 OOM
-	file, _, err := r.FormFile("file")
-	if err != nil {
-		BadRequest(w, "file is required")
-		return
-	}
-	defer file.Close()
-
-	// P0-P4 防护：流式写入临时文件后用 psql 恢复，避免 OOM
-	const maxSize int64 = 512 << 20 // 512MB
-	tmpDir := h.cfg.DataDir
-	if tmpDir == "" {
-		tmpDir = config.GetDefaultDataDir()
-	}
-	tmpFile, err := os.CreateTemp(tmpDir, "chiron_restore_*.sql")
-	if err != nil {
-		InternalError(w, "cannot create temp file")
-		return
-	}
-	tmpPath := tmpFile.Name()
-	defer os.Remove(tmpPath)
-
-	written, err := io.Copy(tmpFile, io.LimitReader(file, maxSize))
-	if err != nil {
-		tmpFile.Close()
-		logAndRespond(w, err, http.StatusInternalServerError, "write temp file failed")
-		return
-	}
-	tmpFile.Close()
-	if written >= maxSize {
-		// 已读满限流器，可能有更多数据被截断
-		BadRequest(w, "backup file too large (max 512MB)")
-		return
-	}
-
-	// 使用 psql 执行恢复（密码通过 PGPASSWORD 环境变量传递，避免出现在命令行参数中）
-	restoreCtx, cancel := context.WithTimeout(r.Context(), 30*time.Minute)
-	defer cancel()
-	psqlDSN := extractDSN()
-	if psqlDSN == "" {
-		InternalError(w, "POSTGRES_DSN not configured")
-		return
-	}
-	host, port, user, dbname, password := parseDSNComponents(psqlDSN)
-	cmd := exec.CommandContext(restoreCtx, "psql",
-		"--host", host,
-		"--port", port,
-		"--username", user,
-		"--dbname", dbname,
-		"-f", tmpPath,
-		"-v", "ON_ERROR_STOP=1",
-	)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		slog.Error("restore failed", "error", err, "output", string(output))
-		logAndRespond(w, err, http.StatusInternalServerError, "restore failed")
-		return
-	}
-	OK(w, map[string]string{"message": "Database restored successfully"})
-}
-
-func extractDSN() string {
-	return os.Getenv("POSTGRES_DSN")
-}
-
-// parseDSNComponents 解析 PostgreSQL DSN 返回 host, port, user, dbname, password
-// P0 安全修复：密码用 PGPASSWORD 环境变量，避免出现在命令行参数中
-// DSN 格式: postgres://user:pass@host:port/dbname?params
-func parseDSNComponents(dsn string) (host, port, user, dbname, password string) {
-	host = "localhost"
-	port = "5432"
-	user = "postgres"
-	dbname = "chiron"
-	password = ""
-
-	u, err := url.Parse(dsn)
-	if err != nil {
-		return
-	}
-	if u.User != nil {
-		user = u.User.Username()
-		password, _ = u.User.Password()
-	}
-	if h := u.Hostname(); h != "" {
-		host = h
-	}
-	if p := u.Port(); p != "" {
-		port = p
-	}
-	if u.Path != "" && u.Path != "/" {
-		dbname = u.Path[1:]
-	}
-	return
-}
-
 // ─── Storage Management ────────────────────────────────────────────
 
 type StorageConfig struct {
@@ -637,6 +498,22 @@ func (h *AdminHandler) UpdateStorage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.store.Swap(newStore)
+
+	// 持久化到 system_settings（重启后仍生效）+ 跨副本广播（其它副本即时一致）。
+	// 此前这两个端点只做**本实例内存** Swap：重启即丢、多副本各说各话。
+	cfgMap := storageConfigMap(body.Backend, body.S3Endpoint, body.S3Bucket, body.S3AccessKey, body.S3SecretKey, body.S3UseSSL)
+	userID := ""
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		userID = claims.ID
+	}
+	if s := h.ensureSettingsStore(); s != nil {
+		if err := s.SaveConfig(r.Context(), settingsCategoryStorage, cfgMap, userID); err != nil {
+			slog.Warn("persist storage config failed", "error", err)
+		}
+	}
+	if err := PublishSettingsChanged(r.Context(), settingsCategoryStorage, cfgMap); err != nil {
+		slog.Warn("publish storage changed failed", "error", err)
+	}
 
 	warning := ""
 	if previous != body.Backend {

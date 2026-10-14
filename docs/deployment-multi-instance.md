@@ -281,3 +281,67 @@ unset CHAOS_ENABLED
 「连数据表都不存在」），Python 侧 `ChaosEngine` 的 `_inject_latency` 只是自己
 `asyncio.sleep`、`_inject_error` 只打日志后写 `{"injected": True}`。现已删除假实现，
 改为上述真实通道（表已建、注入已通、不支持的组合明确拒绝）。
+
+## 12. 备份与恢复（云数据库）
+
+**应用不提供数据库备份**。此前网关内置的 `/v1/admin/backup`、`/v1/admin/restore` 与
+`/v1/admin/database/backups` 系列（**在应用容器内**调用 `pg_dump`/`psql`）**已整体移除**：
+
+- 应用镜像刻意**不包含** `postgresql-client`，容器内也没有数据库的持久文件系统 —— 在容器里
+  跑 `pg_dump` 既非最佳实践（要把库工具与数据库凭据塞进应用镜像），也无法覆盖云托管 PG 的
+  实际形态；
+- 企业部署使用**云托管 PostgreSQL**，备份 / 恢复由服务商承担：
+  - 自动快照 + 时间点恢复（PITR）：在云控制台配置保留窗口；
+  - 跨可用区 / 跨区域只读副本；
+  - 若要额外的逻辑备份兜底（`pg_dump` 落对象存储），应作为**部署侧任务**（CI 定时 job /
+    运维脚本），使用只读角色与独立凭据，而不是经应用进程；
+- 自托管 PostgreSQL 同理：用 `pg_dump` / `pg_basebackup` + `cron` / systemd timer 在
+  **数据库主机**上执行，或交给 `pgBackRest` / `barman` 这类专用工具。
+
+前端「数据存储 → 数据库管理」页不再提供创建 / 恢复入口，仅保留**状态、配置、只读查询**与
+**优化**（`VACUUM` / `ANALYZE`）。
+
+> 若确有需要恢复某个备份：在**数据库主机**或运维环境执行 `psql -f <dump>`（离线场景先
+> `psql --dry-run` 或恢复到影子库验证），不要期望应用容器来做这件事。
+
+## 13. 高可用化指引（Redis / etcd / Milvus 等）
+
+**现状**：本 compose 里 **Redis、Milvus、etcd 是单实例**（PostgreSQL 已外置，见第 7 节）；
+MinIO/Milvus/etcd 默认不启用（仅 `--profile selfhosted-s3`）。单实例在**可用性**上是明确的
+单点：进程 / 节点故障 ⇒ 相关能力中断。**这不是代码缺陷，而是部署形态** —— 生产按下面的次序高可用化。
+
+### 13.1 优先级（收益/成本比从高到低）
+
+1. **PostgreSQL**（已在第 7 节外置）：用云托管实例的主备 + 只读副本 + PITR，收益最高的一步。
+2. **Redis**：会话 / 限流 / 队列 / SSE / run 归属都依赖它 —— Redis 不可用会触发**依赖门禁**
+   （默认拒绝启动 / 就绪探针摘流量）。生产方案：
+   - **云托管 Redis**（主备 / 集群版，最省事）；
+   - 自托管 **Sentinel**（1 主 + N 从 + 3 sentinel）：会话 / 限流不需要分片时首选；
+   - 自托管 **Cluster**：仅在数据量 / 带宽确实需要分片时用（客户端需支持，连接形态不同）。
+   网关 / 引擎已支持 sentinel / cluster 形态（`REDIS_SENTINEL_ADDRS` / `REDIS_MASTER_NAME`，
+   或后台「Redis 配置」热切换，见 `internal/api/admin.go` 的 `UpdateRedis`）。
+3. **对象存储**：用云厂商 S3（或多 AZ 的自托管 RustFS / SeaweedFS 集群），不要用单实例 MinIO。
+4. **Milvus**：向量库中断只影响 RAG 检索（会话 / 写路径不依赖）；高可用可用 Milvus 集群模式 +
+   多副本 etcd + 外部 S3。
+5. **etcd**：仅被 Milvus 使用；随 Milvus 一起高可用（3 / 5 节点）。
+
+### 13.2 应用侧要配合的配置
+
+- 多副本 + 前置**真实 LB**：`TRUSTED_PROXY_CIDRS` 填 LB 网段（否则 IP 限流可被伪造、
+  SSO 入口会因 fail-closed 而消失）；
+- `DEGRADED_MODE` 保持 `false`（依赖不可用时摘流量，而非静默降级成单实例语义）；
+- 就绪探针已指向 `/ready`（网关，查 PG + Redis）/ `/readyz`（引擎）—— 编排器据此摘除依赖异常的副本；
+- `REDIS_KEY_PREFIX` 在所有副本一致（切换集群 / 迁移时用前缀隔离键空间）。
+
+### 13.3 必须配套的演练与检查
+
+- **故障演练**：主动停一个 Redis 主节点 / 一个引擎副本，观察 `/ready` 摘流量与自动恢复；
+- **备份与恢复**：PostgreSQL 的自动快照 + PITR（见第 12 节），并**定期做恢复演练**
+  （不演练的备份等于没有）；
+- **容量**：连接预算（第 8 节）随副本数与 Redis / PG 上限一起核算；
+- **跨可用区**：生产实例应跨 AZ 部署，LB 健康检查 + 就绪探针共同保证流量只打健康副本。
+
+### 13.4 有意不做
+
+- **不**在应用进程内做 Redis 主从切换 / 故障转移（交给 Sentinel / 云托管）；
+- **不**保证"进行中的 run 在实例故障后迁移"（见第 10 节：只保证路由到正确实例 + 陈旧审批被拒）。

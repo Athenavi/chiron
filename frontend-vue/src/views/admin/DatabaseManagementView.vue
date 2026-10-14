@@ -1,11 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
 import {
-  Card, Table, Button, Space, Tag, Input, Popconfirm, Alert,
+  Card, Table, Button, Space, Tag, Input, Alert,
   Statistic, Descriptions, Spin, message,
 } from 'ant-design-vue'
 import {
-  ReloadOutlined, PlusOutlined, SearchOutlined, ThunderboltOutlined,
+  SearchOutlined, ThunderboltOutlined,
   DatabaseOutlined,
 } from '@ant-design/icons-vue'
 import { api } from '../../api'
@@ -23,12 +23,6 @@ const initialLoading = ref(true)
 interface DatabaseStatus {
   version?: string
   connected?: boolean
-}
-/** 备份列表项（GET /v1/admin/database/backups 的 backups[]） */
-interface BackupEntry {
-  name: string
-  size?: number | string
-  time?: string
 }
 /** SQL 查询结果（POST /v1/admin/database/query → { columns, rows, count, truncated }） */
 interface QueryResult {
@@ -84,60 +78,6 @@ async function loadConfigs() {
     message.error(apiErrorMessage(e, t('errors.failed_to_fetch_database_config')))
   } finally {
     configLoading.value = false
-  }
-}
-
-// ── 备份 ──
-// GET /v1/admin/database/backups → { backups: [{ name, size, time }] }
-// POST /v1/admin/database/backups → { name, status }
-// POST /v1/admin/database/backups/{name}/restore
-const backups = ref<BackupEntry[]>([])
-const backupsLoading = ref(false)
-const creatingBackup = ref(false)
-const restoringName = ref<string | null>(null)
-
-const backupColumns = [
-  { title: t('common.name'), dataIndex: 'name', key: 'name', ellipsis: true },
-  { title: t('common.size'), key: 'size', width: 120 },
-  { title: t('common.time'), key: 'time', width: 190 },
-  { title: t('common.action'), key: 'actions', width: 110, fixed: 'right' as const },
-]
-
-async function loadBackups() {
-  backupsLoading.value = true
-  try {
-    const resp = await api.get('/v1/admin/database/backups')
-    backups.value = resp.data?.data?.backups || []
-  } catch (e) {
-    message.error(apiErrorMessage(e, t('errors.failed_to_fetch_backup_list')))
-  } finally {
-    backupsLoading.value = false
-  }
-}
-
-async function createBackup() {
-  creatingBackup.value = true
-  try {
-    const resp = await api.post('/v1/admin/database/backups')
-    const d = resp.data?.data || {}
-    message.success(t('common.backup_created_name_status_status', { name: d.name || '—', status: d.status || 'pending' }))
-    await loadBackups()
-  } catch (e) {
-    message.error(apiErrorMessage(e, t('errors.failed_to_create_backup')))
-  } finally {
-    creatingBackup.value = false
-  }
-}
-
-async function restoreBackup(record: BackupEntry) {
-  restoringName.value = record.name
-  try {
-    await api.post(`/v1/admin/database/backups/${encodeURIComponent(record.name)}/restore`)
-    message.success(t('common.restoring_from_backup_name_refresh_shortly_to_see_the_result', { name: record.name }))
-  } catch (e) {
-    message.error(apiErrorMessage(e, t('errors.restore_failed')))
-  } finally {
-    restoringName.value = null
   }
 }
 
@@ -213,21 +153,6 @@ async function runOptimize(action: 'analyze' | 'vacuum') {
 }
 
 // ── 工具函数 ──
-function formatSize(s: unknown): string {
-  if (s == null || s === '') return '-'
-  if (typeof s === 'number') {
-    if (s >= 1024 * 1024 * 1024) return `${(s / (1024 * 1024 * 1024)).toFixed(2)} GB`
-    if (s >= 1024 * 1024) return `${(s / (1024 * 1024)).toFixed(2)} MB`
-    if (s >= 1024) return `${(s / 1024).toFixed(2)} KB`
-    return `${s} B`
-  }
-  return String(s)
-}
-
-function formatTime(value: unknown): string {
-  return value ? new Date(value as string | number).toLocaleString('zh-CN') : '-'
-}
-
 function cellText(v: unknown): string {
   if (v == null) return ''
   if (typeof v === 'object') return JSON.stringify(v)
@@ -235,7 +160,7 @@ function cellText(v: unknown): string {
 }
 
 onMounted(async () => {
-  await Promise.allSettled([loadStatus(), loadConfigs(), loadBackups()])
+  await Promise.allSettled([loadStatus(), loadConfigs()])
   initialLoading.value = false
 })
 </script>
@@ -247,12 +172,6 @@ onMounted(async () => {
       <Space>
         <Button @click="loadStatus">
           {{ $t('common.refresh_status') }}
-        </Button>
-        <Button @click="loadBackups">
-          <template #icon>
-            <ReloadOutlined />
-          </template>
-          {{ $t('common.refresh_backup') }}
         </Button>
       </Space>
     </div>
@@ -303,63 +222,20 @@ onMounted(async () => {
         </Table>
       </Card>
 
-      <!-- 备份列表 -->
-      <Card style="margin-bottom: 16px">
-        <template #title>
-          <Space>{{ $t('common.backup_list') }}</Space>
-        </template>
-        <template #extra>
-          <Button
-            type="primary"
-            :loading="creatingBackup"
-            @click="createBackup"
-          >
-            <template #icon>
-              <PlusOutlined />
-            </template>
-            {{ $t('common.create_backup') }}
-          </Button>
-        </template>
-        <Table
-          :columns="backupColumns"
-          :data-source="backups"
-          :loading="backupsLoading"
-          row-key="name"
-          :pagination="{ pageSize: 10, showSizeChanger: true }"
-          :scroll="{ x: 640 }"
-        >
-          <template #emptyText>
-            <EmptyState
-              :description="$t('common.no_backups_yet')"
-              :hint="$t('common.click_create_backup_at_the_top_right_to_make_a_backup')"
-            />
-          </template>
-
-          <template #bodyCell="{ column, record }">
-            <template v-if="column.key === 'size'">
-              {{ formatSize(record.size) }}
-            </template>
-            <template v-else-if="column.key === 'time'">
-              {{ formatTime(record.time) }}
-            </template>
-            <template v-else-if="column.key === 'actions'">
-              <Popconfirm
-                :title="$t('admin.warning_restoring_from_backup_will_overwrite_the_current_database_this_cannot_be_undone_continue')"
-                :ok-text="$t('common.confirm_restore')"
-                :cancel-text="$t('common.cancel')"
-                @confirm="restoreBackup(record as BackupEntry)"
-              >
-                <Button
-                  size="small"
-                  danger
-                  :loading="restoringName === record.name"
-                >
-                  {{ $t('common.restore') }}
-                </Button>
-              </Popconfirm>
-            </template>
-          </template>
-        </Table>
+      <!--
+        备份：已移除容器内备份/恢复（pg_dump/psql）。
+        企业部署使用云数据库，备份由服务商承担（快照 / PITR）—— 这里只保留说明，
+        不再提供创建/恢复入口（后端对应端点也已删除）。
+      -->
+      <Card
+        :title="$t('common.backup_list')"
+        style="margin-bottom: 16px"
+      >
+        <Alert
+          type="info"
+          show-icon
+          :message="$t('common.backups_are_managed_by_your_database_provider')"
+        />
       </Card>
 
       <!-- SQL 查询器 -->

@@ -556,6 +556,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.agent.harness_store import listen_for_changes as _listen_harness_changes
 
     _harness_task = asyncio.create_task(_listen_harness_changes())
+
+    # C4：存储配置变更订阅 —— 后台「存储」配置此前只对**网关**生效，引擎媒体后端由 env 在
+    # 启动时确定，改后台对引擎无效（网关写 S3、引擎写本地盘 ⇒ 多副本媒体"间歇性 404"）。
+    # 订阅同一广播，storage 分类到达即热切换媒体后端（app/media/reload.py）。
+    from app.media.reload import listen_for_storage_changes as _listen_storage_changes
+
+    _storage_task = asyncio.create_task(_listen_storage_changes())
     logger.info("Process metrics collector started (interval=10s)")
 
     # ── 8. 实例注册（批 E1：引擎动态发现）──
@@ -641,6 +648,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         metrics_task=_metrics_task,
         retention_task=_retention_task,
         harness_task=_harness_task,
+        storage_task=_storage_task,
         engine_registry=_engine_registry,
     )
 
@@ -866,6 +874,7 @@ async def _shutdown_lifespan(
     metrics_task: Any = None,
     retention_task: Any = None,
     harness_task: Any = None,
+    storage_task: Any = None,
     engine_registry: Any = None,
 ) -> None:
     """关闭清理（从 `lifespan` 提出，句柄**显式传入**）。
@@ -898,6 +907,16 @@ async def _shutdown_lifespan(
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning("harness profile listener shutdown failed: %s", e)
+
+    # C4：停存储配置订阅（同上，PubSub 循环，取消即断开）
+    if storage_task is not None:
+        storage_task.cancel()
+        try:
+            await storage_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("storage settings listener shutdown failed: %s", e)
 
     # N1：停 L1 的周期清理任务（它现在会回调记忆的会话级收尾 —— 停机时不该留悬着的 task）
     try:
@@ -1010,9 +1029,8 @@ async def _resolve_attachments(content: str) -> str:
     if not matches:
         return content
 
-    from app.http_client import shared_client
-
     from app.config import settings
+    from app.http_client import shared_client
     from app.tools.ssrf import fetch_url_safe
 
     # S 安全修复：禁用自动重定向，改用 ssrf.fetch_url_safe 逐跳校验

@@ -36,6 +36,11 @@ out/
 .env*
 !.env.example
 *.bak
+# compose 本机覆盖文件（端口避让等，本机专用）：不入库，各环境按需自建。
+# 曾因被提交而让**所有人**的 `docker compose up` 都用本机端口（前端 8081 / redis 16379），
+# 与 README 和 docs/deployment-multi-instance.md 写的 :3000 不一致 —— 而文件自己的
+# 注释就写着"不要提交到仓库（本机专用）"。`git rm --cached` 后本机文件仍在，行为不变。
+docker-compose.override.yml
 .envrc
 .venv
 env/

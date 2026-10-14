@@ -1,0 +1,127 @@
+# 前端 TLS 终结示例（生产用）。
+#
+# 用途：把它作为 server 块加入 nginx（替换 frontend 容器的 default.conf，或放到外部
+# LB / Ingress controller 上），并挂载证书到 /etc/nginx/certs/{tls.crt,tls.key}。
+#
+# **为什么需要**：frontend 容器默认只 `listen 80`（HTTP）—— `security-headers.conf` 里的
+# HSTS 在 HTTP 下会被浏览器忽略，且浏览器与 API 之间的 Token/Cookie 会**明文传输**。
+# 生产必须在前端终结 TLS。
+#
+# ⚠️ 更推荐由集群 Ingress / 云 LB 终结 TLS（证书自动续期、WAF、集中限流都在那一层），
+# 本文件是"没有 Ingress、直接由这个 nginx 做"时的示例。
+#
+# 部署后记得让应用知道"原始协议是 https"：
+#   * 上面已 `proxy_set_header X-Forwarded-Proto $scheme`；
+#   * 部署该代理的网段要写进 `TRUSTED_PROXY_CIDRS`（否则 IP 限流可被伪造、
+#     SSO 入口会因 fail-closed 而消失，见 docs/deployment-multi-instance.md §3）。
+
+# ── HTTP → HTTPS 重定向 ──
+server {
+    listen 80;
+    listen [::]:80;
+    server_name chiron.example.com;
+
+    # certbot（webroot 模式）的 ACME 挑战路径要放行
+    location /.well-known/acme-challenge/ { root /var/www/certbot; }
+
+    location / { return 301 https://$host$request_uri; }
+}
+
+# ── HTTPS ──
+server {
+    listen 443 ssl;
+    listen [::]:443 ssl;
+    http2 on;
+    server_name chiron.example.com;
+
+    ssl_certificate     /etc/nginx/certs/tls.crt;
+    ssl_certificate_key /etc/nginx/certs/tls.key;
+
+    # 现代 TLS 基线：TLS1.2+、禁用弱套件、会话复用与 OCSP stapling
+    ssl_protocols TLSv1.2 TLSv1.3;
+    ssl_ciphers 'ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-RSA-AES128-GCM-SHA256:ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384';
+    ssl_prefer_server_ciphers off;
+    ssl_session_cache shared:SSL:10m;
+    ssl_session_timeout 1d;
+    ssl_stapling on;
+    ssl_stapling_verify on;
+
+    # HSTS：**只在 HTTPS 下**才有意义。启用 includeSubDomains 前请确认所有子域都支持 HTTPS。
+    add_header Strict-Transport-Security "max-age=31536000; includeSubDomains" always;
+
+    # 其余安全头与前端一致
+    include snippets/security-headers.conf;
+
+    root /usr/share/nginx/html;
+    index index.html;
+    client_max_body_size 50m;
+    server_tokens off;
+
+    # 上游网关。K8s 用 gateway.<namespace>.svc.cluster.local:8080；
+    # compose 用服务名 gateway:8080。
+    set $chiron_gateway gateway:8080;
+    # compose 内嵌 DNS 是 127.0.0.11；K8s 改成 kube-dns ClusterIP（如 10.96.0.10）
+    resolver 127.0.0.11 valid=10s ipv6=off;
+
+    location /v1/ {
+        proxy_pass http://$chiron_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        # ← 关键：让网关/引擎知道原始协议是 https（否则生成的回调/分享链接会是 http）
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /events {
+        proxy_pass http://$chiron_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+        proxy_cache off;
+        proxy_read_timeout 3600s;
+    }
+
+    location /ws/ {
+        proxy_pass http://$chiron_gateway;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_set_header Host $host;
+        proxy_read_timeout 3600s;
+    }
+
+    location /submit {
+        proxy_pass http://$chiron_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /cancel {
+        proxy_pass http://$chiron_gateway;
+        proxy_set_header Host $host;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_read_timeout 300s;
+        proxy_send_timeout 300s;
+    }
+
+    location /media/ {
+        proxy_pass http://$chiron_gateway;
+        proxy_set_header Host $host;
+        proxy_read_timeout 300s;
+    }
+
+    location /health {
+        access_log off;
+        return 200 "ok\n";
+        add_header Content-Type text/plain;
+        include snippets/security-headers.conf;
+    }
+
+    location / {
+        try_files $uri $uri/ /index.html;
+    }
+}

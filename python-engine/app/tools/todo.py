@@ -35,41 +35,40 @@ def _render(todos: list[dict[str, Any]]) -> str:
 async def write_todos(todos: list[dict[str, Any]]) -> dict[str, Any]:
     """写入/更新计划（**整份替换**，与 deepagents 的语义一致：一次给全量列表）。
 
+    P3 起计划是**结构化契约**（见 ``app/agent/plan.py``）：每步可带
+    ``files``（推断**会**触及的文件）与 ``verified``（**已实际**读过/操作过的文件）——
+    前者是猜测、后者是事实，且 ``verified`` 必须是 ``files`` 的子集（否则整份计划被拒）。
+    步 id 由 host 赋予，模型不能自选身份来假装"同一条"。至多一个步处于 ``in_progress``。
+
     Args:
-        todos: 计划条目列表，每项形如 `{"content": "…", "status": "pending"}`。
-            `status` ∈ `pending` / `in_progress` / `completed`；缺省 `pending`。
+        todos: 计划条目列表，每项形如
+            ``{"content": "…", "status": "pending", "files": ["a.py"], "verified": ["a.py"]}``。
+            ``status`` ∈ ``pending`` / ``in_progress`` / ``completed``；缺省 ``pending``。
     """
     if not isinstance(todos, list) or not todos:
+        # 空列表：**拒绝**。清空计划应该是"换个新的完整列表"，而不是"提交一个空列表"
+        # （后者会让前端拿到一份渲染不出来的计划，且掩盖"忘了写条目"这种真错）。
         return {"error": "todos must be a non-empty list"}
-    if len(todos) > MAX_TODOS:
-        return {"error": f"too many todos ({len(todos)} > {MAX_TODOS})"}
 
-    normalized: list[dict[str, str]] = []
-    for index, item in enumerate(todos):
-        if not isinstance(item, dict):
-            return {"error": f"todo[{index}] must be an object"}
-        content = str(item.get("content", "")).strip()
-        if not content:
-            return {"error": f"todo[{index}] is missing 'content'"}
-        status = str(item.get("status", "pending"))
-        if status not in VALID_STATUSES:
-            return {
-                "error": (
-                    f"todo[{index}] has invalid status {status!r} "
-                    f"(allowed: {sorted(VALID_STATUSES)})"
-                )
-            }
-        normalized.append(
-            {"id": str(item.get("id") or f"t{index + 1}"), "content": content, "status": status}
-        )
+    from app.agent.plan import normalize, render, to_todos
+
+    plan, errors = normalize(todos)
+    if errors:
+        # 计划不可接受时**整份拒绝**（而不是部分接受）—— 半份计划比没有计划更误导。
+        return {"error": "invalid plan: " + "; ".join(errors)}
+
+    normalized = to_todos(plan)
 
     from app.tools.context import set_tool_context
 
     set_tool_context(todos=normalized)
 
-    counts = {status: sum(1 for t in normalized if t["status"] == status) for status in sorted(VALID_STATUSES)}
+    counts = {
+        status: sum(1 for t in normalized if t["status"] == status)
+        for status in sorted(VALID_STATUSES)
+    }
     return {
-        "output": _render(normalized),
+        "output": render(plan),
         "todos": normalized,
         "count": len(normalized),
         "summary": counts,

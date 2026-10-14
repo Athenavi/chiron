@@ -127,9 +127,6 @@ func TestAdminDatastoreRoutesAreExposed(t *testing.T) {
 		// Database tab
 		{http.MethodGet, "/v1/admin/database/status"},
 		{http.MethodGet, "/v1/admin/database/configs"},
-		{http.MethodGet, "/v1/admin/database/backups"},
-		{http.MethodPost, "/v1/admin/database/backups"},
-		{http.MethodPost, "/v1/admin/database/backups/chiron_backup_x.sql/restore"},
 		{http.MethodPost, "/v1/admin/database/query"},
 		{http.MethodPost, "/v1/admin/database/optimize/analyze"},
 		// 租户 / 域名 / 定时任务（同类缺陷第四次：handler 在 adminMux，未接线外部 mux）

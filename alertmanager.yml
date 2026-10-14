@@ -1,13 +1,24 @@
-# Alertmanager 配置
-# 用于多租户 SaaS AI Agent 平台的告警通知
+# Alertmanager 配置（多租户 SaaS AI Agent 平台）。
+#
+# ⚠️ **必须由部署方填入真实通知渠道**：Alertmanager **不支持**在配置里做环境变量替换
+# （与 Prometheus 的 `${VAR}` 不同），所以无法用 .env 注入。请在下面 `receivers` 里：
+#   1) 替换 `default-receiver` 的 webhook url 为企业自有告警网关；或
+#   2) 取消 `critical-alerts` 里 email / slack / pagerduty 示例块的注释并填写。
+#
+# ⚠️ 默认的 `http://alerts-sink:9095/...` 是**占位地址**：不部署 `alerts-sink` 时投递会
+# 失败（告警被接受但送不出去，日志里持续报 connection refused）—— 这**不会**让
+# Prometheus / Alertmanager 启动失败，只是没有通知送达。曾经这里写的是
+# `http://localhost:9094/...`，既不可达又无对应服务，更容易被误认为"已配置"。
 
 global:
   resolve_timeout: 5m
-  # SMTP 配置（生产环境需要设置）
+  # SMTP（启用下方 email_configs 时需要）。Alertmanager 不走环境变量：
+  # 直接填值，或由部署侧的密钥管理在渲染本文件时注入。
   # smtp_smarthost: 'smtp.example.com:587'
-  # smtp_from: 'alerts@chiron.example.com'
-  # smtp_auth_username: 'alerts@chiron.example.com'
-  # smtp_auth_password: '${SMTP_PASSWORD}'
+  # smtp_from: 'alerts@example.com'
+  # smtp_auth_username: 'alerts@example.com'
+  # smtp_auth_password: '<从密钥管理注入>'
+  # smtp_require_tls: true
 
 route:
   group_by: ['alertname', 'severity', 'component']
@@ -15,84 +26,88 @@ route:
   group_interval: 5m
   repeat_interval: 4h
   receiver: 'default-receiver'
-  
+
   routes:
-    # 严重告警立即发送，1小时后重复
+    # 严重告警立即发送，1 小时后重复
     - match:
         severity: critical
       receiver: 'critical-alerts'
       repeat_interval: 1h
       continue: true
-    
-    # 警告级别告警
+
+    # 警告级别
     - match:
         severity: warning
       receiver: 'warning-alerts'
       repeat_interval: 4h
       continue: true
-    
-    # 信息级别告警（不发送通知，仅记录）
+
+    # 信息级别（不发送通知，仅记录）
     - match:
         severity: info
       receiver: 'info-logging'
       repeat_interval: 24h
 
 receivers:
-  # 默认接收器（开发环境使用日志）
+  # ── 默认接收器 ──
+  # ⚠️ 占位地址：换成你的告警网关，或改用下面的 email / slack / pagerduty。
   - name: 'default-receiver'
     webhook_configs:
-      - url: 'http://localhost:9094/webhook'
+      - url: 'http://alerts-sink:9095/alerts'
         send_resolved: true
 
-  # 严重告警接收器
+  # ── 严重告警 ──
   - name: 'critical-alerts'
-    # 邮件通知（生产环境启用）
+    # 邮件（配合 global.smtp_* 启用）
     # email_configs:
-    #   - to: 'ops-team@example.com'
+    #   - to: 'ops-oncall@example.com'
     #     send_resolved: true
     #     headers:
     #       Subject: '[CRITICAL] {{ .GroupLabels.alertname }}'
-    
-    # Slack 通知（可选）
+
+    # Slack
     # slack_configs:
-    #   - api_url: '${SLACK_WEBHOOK_URL}'
+    #   - api_url: '<slack incoming webhook url>'
     #     channel: '#chiron-critical'
     #     title: '🚨 CRITICAL: {{ .GroupLabels.alertname }}'
     #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
     #     send_resolved: true
-    
-    # PagerDuty 通知（可选）
+
+    # PagerDuty
     # pagerduty_configs:
-    #   - service_key: '${PAGERDUTY_SERVICE_KEY}'
-    
-    # Webhook（自定义处理）
+    #   - service_key: '<pagerduty integration key>'
+
+    # 通用 webhook（企业自有告警网关）
+    # webhook_configs:
+    #   - url: 'https://alerts.internal.example.com/chiron'
+    #     send_resolved: true
+
+    # 占位：与 default 一样，未部署 alerts-sink 时投递失败
     webhook_configs:
-      - url: 'http://localhost:9094/critical-webhook'
+      - url: 'http://alerts-sink:9095/critical'
         send_resolved: true
 
-  # 警告级别接收器
+  # ── 警告级别 ──
   - name: 'warning-alerts'
-    # Slack 通知
     # slack_configs:
-    #   - api_url: '${SLACK_WEBHOOK_URL}'
+    #   - api_url: '<slack incoming webhook url>'
     #     channel: '#chiron-warnings'
     #     title: '⚠️ WARNING: {{ .GroupLabels.alertname }}'
     #     text: '{{ range .Alerts }}{{ .Annotations.description }}{{ end }}'
     #     send_resolved: true
-    
     webhook_configs:
-      - url: 'http://localhost:9094/warning-webhook'
+      - url: 'http://alerts-sink:9095/warning'
         send_resolved: true
 
-  # 信息级别接收器（仅记录）
+  # ── 信息级别（仅记录）──
   - name: 'info-logging'
     webhook_configs:
-      - url: 'http://localhost:9094/info-webhook'
+      - url: 'http://alerts-sink:9095/info'
         send_resolved: false
 
 # 抑制规则：避免告警风暴
 inhibit_rules:
-  # 如果基础设施故障，抑制相关的业务告警
+  # 基础设施故障时，抑制相关的业务告警
   - source_match:
       severity: critical
       component: database
@@ -100,7 +115,7 @@ inhibit_rules:
       severity: warning
     equal: ['alertname']
 
-  # 如果 Python Engine 宕机，抑制 LLM 相关告警
+  # Python 引擎宕机时，抑制 LLM 相关告警
   - source_match:
       alertname: PythonEngineDown
     target_match:

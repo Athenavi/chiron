@@ -3,20 +3,14 @@ package api
 import (
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net"
 	"net/http"
-	"os"
-	"os/exec"
-	"path/filepath"
 	"regexp"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
 
-	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
@@ -47,9 +41,6 @@ func (h *AdminHandler) registerOpsRoutes(r *http.ServeMux) {
 
 	// 数据库管理
 	r.HandleFunc("GET /database/configs", h.DatabaseConfigs)
-	r.HandleFunc("GET /database/backups", h.DatabaseBackups)
-	r.HandleFunc("POST /database/backups", h.CreateDatabaseBackup)
-	r.HandleFunc("POST /database/backups/{backupId}/restore", h.RestoreDatabaseBackup)
 	r.HandleFunc("GET /database/status", h.DatabaseStatus)
 	r.HandleFunc("POST /database/query", h.DatabaseQuery)
 	r.HandleFunc("POST /database/optimize/{action}", h.DatabaseOptimize)
@@ -522,100 +513,6 @@ func (h *AdminHandler) DatabaseConfigs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	OK(w, map[string]interface{}{"configs": configs})
-}
-
-func backupDir() string {
-	d := os.Getenv("BACKUP_DIR")
-	if d == "" {
-		d = os.Getenv("STORAGE_ROOT")
-		if d == "" {
-			d = config.LoadAllowUnconfigured().StorageRoot
-		}
-		if d != "" {
-			d = filepath.Join(d, "backups")
-			return d
-		}
-	}
-	if d == "" {
-		d = filepath.Join(config.GetDefaultDataDir(), "backups")
-	}
-	return d
-}
-
-func (h *AdminHandler) DatabaseBackups(w http.ResponseWriter, r *http.Request) {
-	dir := backupDir()
-	entries, err := os.ReadDir(dir)
-	if err != nil {
-		OK(w, map[string]interface{}{"backups": []interface{}{}, "total": 0})
-		return
-	}
-	type backupInfo struct {
-		Name string    `json:"name"`
-		Size int64     `json:"size"`
-		Time time.Time `json:"time"`
-	}
-	out := []backupInfo{}
-	for _, e := range entries {
-		if e.IsDir() || !strings.HasSuffix(e.Name(), ".sql") {
-			continue
-		}
-		info, _ := e.Info()
-		out = append(out, backupInfo{Name: e.Name(), Size: info.Size(), Time: info.ModTime()})
-	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Time.After(out[j].Time) })
-	OK(w, map[string]interface{}{"backups": out, "total": len(out)})
-}
-
-func (h *AdminHandler) CreateDatabaseBackup(w http.ResponseWriter, r *http.Request) {
-	// 复用 CreateBackup 的 pg_dump 能力，落盘到备份目录
-	if err := os.MkdirAll(backupDir(), 0o755); err != nil {
-		InternalError(w, "backup dir create failed")
-		return
-	}
-	name := fmt.Sprintf("chiron_backup_%s.sql", time.Now().Format("20060102_150405"))
-	target := filepath.Join(backupDir(), name)
-	if err := runPGDump(r.Context(), target); err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "backup failed")
-		return
-	}
-	OK(w, map[string]interface{}{"name": name, "status": "completed"})
-}
-
-func (h *AdminHandler) RestoreDatabaseBackup(w http.ResponseWriter, r *http.Request) {
-	name := r.PathValue("backupId")
-	if strings.Contains(name, "/") || strings.Contains(name, "..") {
-		BadRequest(w, "invalid backup name")
-		return
-	}
-	target := filepath.Join(backupDir(), name)
-	if _, err := os.Stat(target); err != nil {
-		NotFound(w, "backup not found")
-		return
-	}
-	dsn := extractDSN()
-	if dsn == "" {
-		InternalError(w, "POSTGRES_DSN not configured")
-		return
-	}
-	// P0 安全修复：密码通过 PGPASSWORD 环境变量传递，避免出现在命令行参数中
-	host, port, user, dbname, password := parseDSNComponents(dsn)
-	cmd := exec.CommandContext(r.Context(), "psql",
-		"--host", host,
-		"--port", port,
-		"--username", user,
-		"--dbname", dbname,
-		"-f", target,
-		"-v", "ON_ERROR_STOP=1",
-	)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		slog.Error("restore failed", "error", err, "output", string(output))
-		InternalError(w, "restore failed")
-		return
-	}
-	OK(w, map[string]interface{}{"status": "restored", "backup": name})
 }
 
 func (h *AdminHandler) DatabaseStatus(w http.ResponseWriter, r *http.Request) {
@@ -1167,49 +1064,4 @@ func (h *AdminHandler) DeleteCronJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, map[string]string{"status": "deleted"})
-}
-
-// ── 工具 ──
-
-// runPGDump 流式落盘 pg_dump（复用 extractDSN）。参数拆分传入防止注入。
-// P0 安全修复：密码通过 PGPASSWORD 环境变量传递，避免出现在命令行参数中。
-// 使用 stdout pipe 流式写入文件，避免整库缓冲入内存导致 OOM。
-func runPGDump(ctx context.Context, target string) error {
-	dsn := extractDSN()
-	if dsn == "" {
-		return fmt.Errorf("POSTGRES_DSN not configured")
-	}
-	host, port, user, dbname, password := parseDSNComponents(dsn)
-	cmd := exec.CommandContext(ctx, "pg_dump",
-		"--host", host,
-		"--port", port,
-		"--username", user,
-		"--dbname", dbname,
-	)
-	cmd.Env = os.Environ()
-	cmd.Env = append(cmd.Env, "PGPASSWORD="+password)
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("stdout pipe: %w", err)
-	}
-	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("pg_dump start: %w", err)
-	}
-	outFile, err := os.Create(target)
-	if err != nil {
-		cmd.Process.Kill()
-		cmd.Wait()
-		return fmt.Errorf("create target file: %w", err)
-	}
-	if _, err := io.Copy(outFile, stdout); err != nil {
-		outFile.Close()
-		cmd.Process.Kill()
-		cmd.Wait()
-		return fmt.Errorf("write dump: %w", err)
-	}
-	outFile.Close()
-	if err := cmd.Wait(); err != nil {
-		return fmt.Errorf("pg_dump failed: %w", err)
-	}
-	return nil
 }

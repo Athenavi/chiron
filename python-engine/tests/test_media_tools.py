@@ -18,6 +18,7 @@ from pathlib import Path
 
 import pytest
 
+from app.media import store as store_mod
 from app.media.store import LocalStore
 from app.tools import media as media_mod
 from app.tools.media import (
@@ -31,7 +32,7 @@ from app.tools.media import (
 def store(tmp_path, monkeypatch):
     """把引擎本地回退 store 指到临时目录（真实实现，不 mock）。"""
     local = LocalStore(str(tmp_path / "media"))
-    monkeypatch.setattr(media_mod, "_store", local)
+    monkeypatch.setattr(store_mod, "_current_store", local)
     return local
 
 
