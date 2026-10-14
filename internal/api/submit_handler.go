@@ -11,11 +11,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/athenavi/chiron/internal/agentgoal"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
+	"github.com/athenavi/chiron/internal/evidence"
 	"github.com/athenavi/chiron/internal/id"
 	"github.com/athenavi/chiron/internal/session"
 	"github.com/redis/go-redis/v9"
@@ -196,10 +198,98 @@ func (h *SubmitHandler) SubmitInterrupt(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
 
-// HandleSubmit proxies the submit request to Python engine and streams SSE events.
-// HandleSubmit 执行一次聊天提交。workbenchCtx 是前端组装的工作台上下文
-// （kb_id / agent / skill_names / workflow_id），透传给引擎消费 —— 网关不再丢弃它。
+// GoalEnforceKey 是 workbenchCtx 里的标记键：本次提交是**证据判定驱动的续跑轮**。
+const GoalEnforceKey = "goal_enforce"
+
+// GoalEnforceSource 是续跑轮注入消息的来源标记。
+//
+// 与 FollowupSource 同款考虑：续跑指令由**系统**产生，不能伪装成用户提问 ——
+// 前端据此渲染成系统卡片，模型也不会把它当真人输入。
+const GoalEnforceSource = "goal_enforce"
+
+// goalKeyPrefix 是目标状态在 Redis 里的键前缀（会话级，跨轮持久）。
+const goalKeyPrefix = "goal:"
+
+// goalTTL 是目标状态的存活时间：会话闲置后自然过期，不留永久的"半完成目标"。
+const goalTTL = 24 * time.Hour
+
+// HandleSubmit 执行一次聊天提交，并由 **Goal FSM（P6）** 驱动跨轮的自动续跑。
+//
+// 与 P1c 的区别：目标状态**跨用户请求持久化** —— 上一次没做完不会因为用户没再说话而消失。
+// 推进规则见 internal/agentgoal/goal.go 的 Advance（纯函数）：
+// 完成即终止；未完成则续跑到回合上限后判 **blocked（不是 completed）**；硬失败直接 blocked。
 func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}) {
+	goal := h.loadGoal(ctx, sessionID)
+	if goal == nil || goal.Terminal() {
+		goalID, _ := id.UUID()
+		g := agentgoal.NewGoal(goalID, sessionID, content, time.Now().Unix())
+		goal = &g
+	}
+
+	msg := content
+	wb := workbenchCtx
+	for {
+		report := h.submitOnce(ctx, userID, sessionID, msg, llmConfig, wb)
+		if report == nil {
+			// 引擎不可达 / 去重命中：目标**不推进**（否则会把"没跑起来"误判成"没完成"，
+			// 白烧一轮续跑）。原样结束。
+			return
+		}
+		advanced, cont := agentgoal.Advance(*goal, *report, time.Now().Unix())
+		*goal = advanced
+		h.saveGoal(ctx, *goal)
+		if !cont || ctx.Err() != nil {
+			return
+		}
+		// 续跑：把上一轮欠下的义务作为**系统指令**注入（带来源标记，不伪装成用户提问）。
+		msg = goalEnforcePrompt(report)
+		wb = withGoalEnforce(workbenchCtx)
+	}
+}
+
+// loadGoal 从 Redis 读回会话目标（fail-soft：读不到就当作没有目标）。
+func (h *SubmitHandler) loadGoal(ctx context.Context, sessionID string) *agentgoal.Goal {
+	if db.Redis == nil || sessionID == "" {
+		return nil
+	}
+	res := db.Redis.Do(ctx, "GET", db.RedisKey(goalKeyPrefix+sessionID))
+	if res.Err() != nil {
+		return nil
+	}
+	raw, err := res.Text()
+	if err != nil || raw == "" {
+		return nil
+	}
+	var g agentgoal.Goal
+	if json.Unmarshal([]byte(raw), &g) != nil {
+		return nil
+	}
+	return &g
+}
+
+// saveGoal 把目标状态写回 Redis（fail-soft：写失败只影响"跨轮记忆"，不影响本轮结论）。
+func (h *SubmitHandler) saveGoal(ctx context.Context, g agentgoal.Goal) {
+	if db.Redis == nil || g.SessionID == "" {
+		return
+	}
+	b, err := json.Marshal(g)
+	if err != nil {
+		return
+	}
+	if err := db.Redis.Do(
+		ctx, "SET", db.RedisKey(goalKeyPrefix+g.SessionID), string(b),
+		"EX", fmt.Sprintf("%d", int(goalTTL.Seconds())),
+	).Err(); err != nil {
+		slog.Warn("save goal state failed", "session", g.SessionID, "error", err)
+	}
+}
+
+// submitOnce 是**一轮**提交：把请求代理到 Python 引擎并流式转发 SSE，
+// 结束时用 host 证据判定本轮的完成情况，并返回该判定。
+//
+// workbenchCtx 是前端组装的工作台上下文（kb_id / agent / skill_names / workflow_id），
+// 透传给引擎消费 —— 网关不再丢弃它。
+func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}) *agentgoal.Report {
 	// P1 修复：与 Python 引擎 5min 客户端超时对齐，避免长任务被 180s 硬超时截断
 	ctx, cancel := context.WithTimeout(ctx, DefaultAgentTimeout)
 	defer cancel()
@@ -249,7 +339,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 				slog.Info("submit deduplicated (already processing)",
 					"session", sessionID, "client_msg_id", clientMsgID)
 				// 这条消息已在处理中（同一次提交的重试）：直接结束，不再触发引擎。
-				return
+				return nil
 			}
 			slog.Warn("submit dedup unavailable, proceeding", "error", err)
 		}
@@ -267,6 +357,10 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	msgSource := ""
 	if _, ok := workbenchCtx[FollowupKey]; ok {
 		msgSource = FollowupSource
+	}
+	// P1：证据判定驱动的续跑轮 —— 同样必须带来源标记，别让续跑指令伪装成用户提问。
+	if _, ok := workbenchCtx[GoalEnforceKey]; ok {
+		msgSource = GoalEnforceSource
 	}
 	// S 修复：上下文丢失 — 提交时立即持久化用户消息（SSE 中断/停止也不丢历史）
 	{
@@ -379,7 +473,7 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		}
 		h.eventHub.Publish(broadcast.Event{Type: "text", SessionID: sessionID, Data: map[string]string{"content": "Service temporarily unavailable. Please try again."}})
 		h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})
-		return
+		return nil
 	}
 
 	var finalContent string
@@ -389,6 +483,8 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 	var usage usageTotals
 	var turnModel string
 	turnToolCallIDs := []string{} // S 修复：messages.tool_calls 列只存 tool_call id 集合（内容在 tool_calls 表）
+	// P1：host 证据采集器 —— 本轮所有工具事件都喂给它，收尾时据此判定完成情况。
+	ev := evidence.NewCollector()
 
 	// P 性能：text 事件 50ms 合帧转发（公网多租户下 SSE 帧数减半，减少网关/前端处理开销）
 	const textFrameInterval = 50 * time.Millisecond
@@ -473,12 +569,16 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			if evt.ID != "" {
 				turnToolCallIDs = append(turnToolCallIDs, evt.ID)
 			}
+			// P1：host 证据（工具名 + 参数）。
+			ev.ObserveToolCall(evt.ID, evt.Name, evt.Arguments)
 		case "tool_result":
 			{
 				sctx, cancelStore := storeCtxFor()
 				h.sessionMgr.UpdateToolCall(sctx, evt.ID, evt.Content, strings.Contains(evt.Content, `"error"`), turnID)
 				cancelStore()
 			}
+			// P1：host 证据（工具结果 —— 成败与退出信息由它判定）。
+			ev.ObserveToolResult(evt.ID, "", evt.Content)
 		case "guardrail_blocked":
 			// SaaS 合规：栅栏拒绝留痕（输入注入/输出泄露/工具 block 审计）。
 			//
@@ -612,7 +712,62 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 			fmt.Sprintf(`{"reason":%q}`, reason), turnID)
 	}
 
+	// ── P1：host 证据判定（"完成"不再等于"模型不再调工具"）──
+	//
+	// 这一步把"这一轮做完没有"变成一个 **host 可复核的断言**：义务由 host 自己派生，
+	// 判定只看采集到的工具证据与本轮信号，不读模型写下的任何状态。
+	goalReport := agentgoal.Evaluate(ev, agentgoal.Signals{
+		HasError:     streamErr != "",
+		ErrorMessage: streamErr,
+		HasAnswer:    strings.TrimSpace(stripThinkingBlocks(finalContent)) != "",
+		Cancelled:    ctx.Err() != nil,
+	})
+	if b, err := json.Marshal(goalReport); err == nil {
+		h.eventHub.Publish(broadcast.Event{
+			Type:      "completion",
+			SessionID: sessionID,
+			Data:      engine.PythonEvent{Type: "completion", Content: string(b)},
+		})
+	}
+	if !goalReport.Complete() && goalReport.Outcome != agentgoal.None {
+		// 未完成留痕：走与 interrupted / compaction 相同的投影通道（前端渲染成 notice 行），
+		// 使"这轮没做完"在刷新后仍可追溯 —— 而不是只活在这一条 SSE 流里。
+		reasonsJSON, _ := json.Marshal(goalReport.Reasons)
+		h.sessionMgr.SaveToolCall(storeCtx, sessionID,
+			spillRecordID("goal"), "goal_incomplete",
+			fmt.Sprintf(`{"outcome":%q,"reasons":%s}`, goalReport.Outcome, reasonsJSON), turnID)
+		slog.Info("turn judged incomplete by host evidence",
+			"session", sessionID, "outcome", goalReport.Outcome, "reasons", goalReport.Reasons)
+	}
+
 	h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})
+	return &goalReport
+}
+
+// goalEnforcePrompt 把上一轮欠下的义务转成一条**系统续跑指令**。
+func goalEnforcePrompt(prev *agentgoal.Report) string {
+	var b strings.Builder
+	b.WriteString("继续完成上一轮未满足的义务 —— 这是系统自动续跑，不是用户的新提问。\n")
+	if prev != nil && len(prev.Reasons) > 0 {
+		b.WriteString("未满足项：\n")
+		for _, r := range prev.Reasons {
+			b.WriteString("- ")
+			b.WriteString(r)
+			b.WriteString("\n")
+		}
+	}
+	b.WriteString("请补上缺失的证据（例如对已改动运行验证命令并让它通过），然后给出简明结论。")
+	return b.String()
+}
+
+// withGoalEnforce 在 workbenchCtx 上打续跑标记（不改动调用方传入的原 map）。
+func withGoalEnforce(workbenchCtx map[string]interface{}) map[string]interface{} {
+	out := make(map[string]interface{}, len(workbenchCtx)+1)
+	for k, v := range workbenchCtx {
+		out[k] = v
+	}
+	out[GoalEnforceKey] = true
+	return out
 }
 
 // thinkingBlockRe 匹配引擎转发的思考块：runtime.py 在正文开始前按 ~80 字符分段

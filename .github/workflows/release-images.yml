@@ -1,0 +1,126 @@
+# 发布镜像：构建 gateway / python-engine / frontend 三个镜像并推送到 GitHub Container Registry，
+# 同时做**漏洞扫描**（Trivy）与**SBOM**生成（供供应链审计）。
+#
+# 为什么单独一个 workflow：`ci.yml` 只在 PR/push 上做构建与测试，**从不产出可分发的镜像、也没有
+# 任何漏洞扫描** —— 而企业化部署要么自己构建（no SBOM/no 扫描），要么无从获取受信镜像。
+#
+# 目标仓库：ghcr.io/<owner>/<repo>/{gateway,python-engine,frontend}。
+#   * 用 `GITHUB_TOKEN`（需 packages:write 权限），无需额外 secret；
+#   * 要推到企业自有 registry（Harbor / ECR / ACR…）时，改 `REGISTRY`/`IMAGE_PREFIX`
+#     并配置对应 `docker/login-action` 的凭据 secret。
+#
+# 触发：打 tag（v*）、或手动 `workflow_dispatch`。
+name: Release images
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      push:
+        description: '推送到 registry（false 时仅构建并扫描）'
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  packages: write
+  # Trivy 上传 SARIF 到 code scanning 时需要
+  security-events: write
+
+env:
+  REGISTRY: ghcr.io
+  # 小写化 owner/repo（ghcr 要求全小写）
+  IMAGE_PREFIX: ${{ github.repository }}
+
+jobs:
+  build:
+    name: Build & scan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: gateway
+            context: .
+            dockerfile: Dockerfile
+          - name: python-engine
+            context: python-engine
+            dockerfile: python-engine/Dockerfile
+          - name: frontend
+            context: frontend-vue
+            dockerfile: frontend-vue/Dockerfile
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: docker/setup-buildx-action@v3
+
+      # 仅在有推送意图时登录（tag push 或 dispatch 且 push=true）
+      - name: Log in to ${{ env.REGISTRY }}
+        if: github.event_name == 'push' || inputs.push
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}
+          tags: |
+            type=ref,event=tag
+            type=sha,format=long
+            type=raw,value=latest,enable=${{ github.ref_type == 'tag' }}
+
+      # 构建并（可选）推送。`-mod=mod` 与 GOPROXY 由各 Dockerfile 处理。
+      - name: Build and push ${{ matrix.name }}
+        uses: docker/build-push-action@v6
+        with:
+          context: ${{ matrix.context }}
+          file: ${{ matrix.dockerfile }}
+          push: ${{ github.event_name == 'push' || inputs.push }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          # 多平台可按需打开（frontend/gateway 均已支持；仅 arm64 构建时间翻倍）
+          # platforms: linux/amd64,linux/arm64
+          provenance: true
+          sbom: true
+          # 让后续步骤能扫描本地镜像（未推送时）
+          load: ${{ !(github.event_name == 'push' || inputs.push) }}
+
+      # ── 漏洞扫描（Trivy）：HIGH/CRITICAL 直接在 job 里失败 ──
+      - name: Trivy scan (table)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          # 优先扫本地刚构建的镜像；推送场景下按 tag 扫远端
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
+          format: table
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+          exit-code: '1'
+
+      - name: Trivy scan (SARIF)
+        if: always()
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
+          format: sarif
+          output: trivy-${{ matrix.name }}.sarif
+          severity: 'HIGH,CRITICAL'
+          ignore-unfixed: true
+
+      - name: Upload SARIF
+        if: always()
+        uses: github/codeql-action/upload-sarif@v3
+        with:
+          sarif_file: trivy-${{ matrix.name }}.sarif
+
+      # 依赖清单漏洞扫描（Python 引擎）：pip-audit 覆盖镜像里 pip 装的包
+      - name: Dependency audit (python-engine)
+        if: matrix.name == 'python-engine'
+        run: |
+          python -m pip install --quiet pip-audit
+          pip-audit -r python-engine/requirements.txt --strict --desc || true

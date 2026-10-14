@@ -45,14 +45,48 @@ kubectl -n chiron create secret generic chiron-secrets `
 > 顺序：先 `kubectl apply -f deploy/k8s/chiron.yaml`（含 Namespace/ConfigMap/Deployment）
 > 之后再执行上面的 secret 注入，或先 `kubectl create namespace chiron`。
 
+## 3b. 创建沙箱服务的 ConfigMap（**必须在 apply 之前**）
+
+`chiron.yaml` 里的 sandbox-service 复用引擎镜像，但服务入口（`service.py`）与
+sandbox-lb 的 nginx 配置**不内嵌进 YAML**（避免与仓库里的源文件漂移），而是从工作区
+文件创建 ConfigMap。**在仓库根目录**执行：
+
+```powershell
+kubectl -n chiron create configmap chiron-sandbox-code `
+  --from-file=service.py=sandbox-service/service.py `
+  --dry-run=client -o yaml | kubectl apply -f -
+kubectl -n chiron create configmap chiron-sandbox-lb-conf `
+  --from-file=sandbox-lb.conf=deploy/k8s/sandbox-lb.conf `
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+> **为什么必须有**：引擎默认 `SANDBOX_BACKEND=service` 且 fail-closed。这两个
+> ConfigMap 缺失 ⇒ sandbox-service Pod 起不来 ⇒ sandbox-lb 不健康 ⇒
+> **python-engine 拒绝启动**（`sandbox service ... unreachable and DEGRADED_MODE=false`）。
+> 若某次验证确实不想跑沙箱层，可临时把 ConfigMap 的 `SANDBOX_BACKEND` 改成 `local`
+> （会牺牲执行隔离，仅限验证）。
+
+## 3c. 创建前端 nginx 配置的 ConfigMap（必须在 apply 之前）
+
+frontend 容器用 **K8s 版** nginx 配置（`resolver` 指向 kube-dns、上游用 gateway 的 FQDN）：
+
+```powershell
+kubectl -n chiron create configmap chiron-frontend-nginx `
+  --from-file=default.conf=deploy/k8s/frontend-nginx.conf `
+  --dry-run=client -o yaml | kubectl apply -f -
+```
+
+> 同理不内嵌进 YAML，避免与 `deploy/k8s/frontend-nginx.conf` 漂移。
+
 ## 4. 部署并观察
 
 ```powershell
 kubectl apply -f deploy/k8s/chiron.yaml
-kubectl -n chiron get pods -w          # 期望 3 gateway + 3 python-engine 全 Ready
+kubectl -n chiron get pods -w   # 期望：3 gateway + 3 python-engine + 2 frontend + 1 sandbox-service + 1 sandbox-lb 全 Ready
 ```
 
-接口从宿主直连：`http://localhost:18080`（kind-config 把 30080 映射到 18080）。
+前端入口：`http://localhost:18082`（kind-config 把节点 30082 映射到宿主 18082）；
+网关可直连 `http://localhost:18080`（节点 30080）。
 
 ## 5. 验证清单（逐条对应项目已有的扩展设计）
 
@@ -71,11 +105,13 @@ kubectl -n chiron get pods -w          # 期望 3 gateway + 3 python-engine 全 
 
 ## 6. 已知约束（测的时候一定会撞到）
 
-1. **多副本必须共享 sandbox/plugins 卷**：本 YAML 用 `emptyDir`（仅够验编排属性）。kind 的 local-path 只支持 RWO，要真多副本得配 nfs-server-provisioner 或换云盘 RWX。
-2. **前端容器要改 resolver**：`frontend-vue/nginx.conf:11` 已注明——K8s 下把 `resolver` 换成 kube-dns 的 ClusterIP，否则上游解析不到 Service。
-3. **Redis/PG 仍是单点**（`docs/deployment-multi-instance.md:153` 自认）：本地验证不影响，评估"真企业化"时必须把它们高可用化——这比引入 MQ 的收益高得多。
-4. **持久 shell 不跨实例**（`app/tools/terminal.py:198,212`）：多副本轮转时 shell 的 cwd/env/后台进程会丢，工具描述承诺的"同 session 持久"只在单副本成立。
-5. **`/metrics` 走白名单**：引擎指标端点无需令牌，生产请用 NetworkPolicy 限制来源。
+1. **多副本必须共享 sandbox/plugins/builtin-skills 卷**：本 YAML 用 `emptyDir`（仅够验编排属性）。kind 的 local-path 只支持 RWO，要真多副本得配 nfs-server-provisioner 或换云盘 RWX。
+2. **内置技能在 K8s 下默认为空**：`builtin-skills` 是 `emptyDir`，引擎启动会告警且技能列表不含内置技能。要内置技能就把该卷换成 hostPath / PVC 指向仓库的 `market/skills`。
+3. **前端 resolver 已解决**：K8s 版配置 `deploy/k8s/frontend-nginx.conf` 的 `resolver` 指向 kube-dns（默认 10.96.0.10），不再是 Docker 内嵌 DNS。
+4. **Redis/PG 仍是单点**（`docs/deployment-multi-instance.md` §10 自认）：本地验证不影响，评估"真企业化"时必须把它们高可用化——这比引入 MQ 的收益高得多。
+5. **持久 shell 不跨实例**（`app/tools/terminal.py:198,212`）：多副本轮转时 shell 的 cwd/env/后台进程会丢，工具描述承诺的"同 session 持久"只在单副本成立。
+6. **`/metrics` 走白名单**：引擎指标端点无需令牌，生产请用 NetworkPolicy 限制来源。
+7. **TLS**：本清单的 frontend 只提供 HTTP。生产请用 Ingress / 外部 LB 终结 TLS（配置示例见 `deploy/nginx/tls.conf.example`）。
 
 ## 7. 清理
 

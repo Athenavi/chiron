@@ -24,13 +24,22 @@ class S3Store(BaseStore):
     """S3 存储后端。"""
 
     def __init__(
-        self, bucket: str, prefix: str = "media/", endpoint_url: str | None = None
+        self,
+        bucket: str,
+        prefix: str = "media/",
+        endpoint_url: str | None = None,
+        access_key: str | None = None,
+        secret_key: str | None = None,
     ) -> None:
         self._bucket = bucket
         self._prefix = prefix.rstrip("/") + "/"
+        # access_key/secret_key 为 None 时走 boto3 默认凭据链（env / IAM role）；
+        # 后台「存储配置」下发的凭据则显式传入，让引擎随后台配置写同一个桶。
         self._s3 = boto3.client(
             "s3",
             endpoint_url=endpoint_url,
+            aws_access_key_id=access_key,
+            aws_secret_access_key=secret_key,
             config=BotoConfig(
                 retries={"max_attempts": 3, "mode": "standard"},
                 signature_version="s3v4",

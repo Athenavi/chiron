@@ -345,9 +345,13 @@ func NewGatewayRouter(
 	}
 	billingHandler.ReloadPaymentConfig(context.Background(), settingsStore)
 
-	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment 跨副本即时热更。
+	// 后台已保存的存储配置在启动时应用一次（env 初始化之后、订阅之前）：
+	// 「后台改过存储后端」的环境重启后应沿用该配置，而非回退 env。
+	applyStorageFromSettings(context.Background(), settingsStore, fileStore)
+
+	// 系统设置变更订阅（批 B-2′）：rate_limit / cors / payment / storage 跨副本即时热更。
 	// 必须晚于 billingHandler 构造：订阅者需要它来重载 payment 分类的支付凭据。
-	StartSettingsSubscriber(lifecycleCtx, atomicRedis, distLimiter, billingHandler, settingsStore)
+	StartSettingsSubscriber(lifecycleCtx, atomicRedis, distLimiter, billingHandler, settingsStore, fileStore)
 
 	// Skill handler (proxies to Python)
 	skillHandler := NewSkillHandler(pythonClient)

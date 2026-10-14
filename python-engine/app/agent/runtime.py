@@ -468,6 +468,29 @@ def _truncate_tool_result(
 LOOP_GUARD_TAG = "[loop-guard]"
 
 
+def _record_recovery(
+    state: Any, tool_name: Any, verdict: Any, targs: dict[str, Any], result: Any
+) -> None:
+    """P5：把一次工具执行的结果并入恢复状态。
+
+    失败 ⇒ 记下**这次操作的指纹**；成功 ⇒ 清除 active failure（失败已被克服）。
+    指纹只看"工具 + 等价参数"，因此换个参数再试会被判为"不同操作"而放行。
+    """
+    from app.agent import recovery as _recovery_mod
+
+    if isinstance(result, dict) and result.get("error"):
+        state.record_failure(
+            _recovery_mod.Failure(
+                fingerprint=_recovery_mod.fingerprint(str(tool_name), targs),
+                tool_name=str(tool_name),
+                level=str(getattr(verdict, "level", "") or ""),
+                reason=str(result.get("error"))[:200],
+            )
+        )
+    else:
+        state.record_success()
+
+
 def _loop_guard_result(
     verdict: Any, previous: dict[Any, Any] | None = None
 ) -> dict[str, Any]:
@@ -1146,6 +1169,10 @@ class AgentRuntime:
         budget = _budget_from_env()
         self._budget = budget
         self._tool_steps = 0
+        # P5：恢复状态（每次 run 新建）—— 判据是"同一个失败操作"，不是"试了几次"。
+        from app.agent import recovery as _recovery_mod
+
+        self._recovery = _recovery_mod.RecoveryState()
 
         # ── 0. 输入栅栏：注入检测（S 安全修复）────────────────────────────
         injection = self._input_guard.check(task.content)
@@ -2477,6 +2504,44 @@ class AgentRuntime:
             return {
                 "error": f"Tool '{tool_name}' blocked by guard: {verdict.reason}"
             }, None
+        # ── P2：confirm 之前先过 **LLM 安全评审**（guardian）──
+        #
+        # 它替代"每次都弹窗"：write 级可被放行（免人工），delete / external 级**永不**放行
+        # （见 app/agent/guardian.py 的 may_release —— 不可逆 / 对外可见的操作始终要人）。
+        # 评审失败 / 未启用 / 无模型 ⇒ 什么都不改，走原有的人工审批（不猜测）。
+        if verdict.action == "confirm":
+            from app.agent.guardian import may_release as guardian_may_release
+
+            assessment = await self._guardian_review(tool_call, task, verdict, targs)
+            if assessment is not None and guardian_may_release(verdict.level, assessment):
+                logger.info(
+                    "guardian released %s (level=%s risk=%s): %s",
+                    tool_name,
+                    verdict.level,
+                    assessment.risk_level,
+                    assessment.rationale,
+                )
+                verdict = ToolVerdict(
+                    "allow",
+                    reason=f"released by security review (risk={assessment.risk_level})",
+                    risk_level=assessment.risk_level,
+                    level=verdict.level,
+                    second_check=verdict.second_check,
+                )
+            elif assessment is not None and not assessment.failed:
+                logger.warning(
+                    "guardian denied %s (level=%s risk=%s): %s",
+                    tool_name,
+                    verdict.level,
+                    assessment.risk_level,
+                    assessment.rationale,
+                )
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' denied by security review: {assessment.rationale}"
+                    )
+                }, None
+            # assessment is None（未启用 / 无 gateway）或 failed（评审没做成）⇒ 保持 confirm
         if verdict.action == "confirm":
             if not allow_approval:
                 # 不可交互的调用方（并发批）：显式失败，而不是交出无人认领的审批事件。
@@ -2493,10 +2558,31 @@ class AgentRuntime:
             return None, await self._begin_approval(
                 tool_call, task, level=str(verdict.level or ""), targs=targs
             )
+        # ── P5：恢复路由 —— 同一个失败操作不要反复重试 ──
+        #
+        # 判据是"这次调用是不是**同一个失败操作**"（指纹），不是"试了几次"（对齐 Reasonix
+        # `recovery.Decide`）。命中 REVIEW 时把失败事实与"已被拒"一起回灌给模型，
+        # 逼它换做法 —— 而不是继续烧预算重试同一个必然失败的操作。
+        recovery_state = getattr(self, "_recovery", None)
+        if recovery_state is not None:
+            from app.agent import recovery as _recovery_mod
+
+            rdec = _recovery_mod.decide(
+                tool_name=str(tool_name),
+                level=str(verdict.level or ""),
+                args=targs,
+                state=recovery_state,
+            )
+            if rdec.action == _recovery_mod.Action.REVIEW:
+                logger.warning("recovery gate (REVIEW): %s", rdec.reason)
+                return {"error": f"Recovery required: {rdec.reason}"}, None
+
         # allow：正常执行。执行里还可能被 `PreToolUse` hook 的 `ask` 拦成"需要确认" ——
         # 那就走与 confirm **完全同一套**手续（`_begin_approval`），调用方不必分叉。
         logger.info("Executing tool %s (id=%s)", tool_name, tool_call.get("id"))
         result, ask_reason = await self._execute_tool(tool_call, task)
+        if recovery_state is not None:
+            _record_recovery(recovery_state, tool_name, verdict, targs, result)
         if ask_reason is None:
             return result, None
 
@@ -2514,6 +2600,37 @@ class AgentRuntime:
             }, None
         return None, await self._begin_approval(
             tool_call, task, level=str(verdict.level or ""), targs=targs, reason=ask_reason
+        )
+
+    async def _guardian_review(
+        self,
+        tool_call: dict[Any, Any],
+        task: AgentTask,
+        verdict: Any,
+        targs: dict[str, Any],
+    ) -> Any | None:
+        """P2：让一个**独立、无工具、有界**的 LLM 会话评审一次工具调用。
+
+        返回 ``None`` 表示"**没有做评审**"（未启用 / 无模型 / 拿不到 gateway）——
+        调用方据此保持原有的人工审批，而**不是**把"没评审"当成"通过"。
+        """
+        if not getattr(settings, "guardian_enabled", True):
+            return None
+        gateway = getattr(self, "_gateway", None)
+        if gateway is None:
+            return None
+        model = str(getattr(settings, "guardian_model", "") or "") or str(
+            (task.llm_config or {}).get("model", "") or settings.default_model
+        )
+        from app.agent.guardian import review_tool_call
+
+        return await review_tool_call(
+            gateway,
+            model=model,
+            tool_name=str(tool_call.get("name", "")),
+            args=targs,
+            level=str(getattr(verdict, "level", "") or ""),
+            task_intent=str(getattr(task, "content", "") or "")[:500],
         )
 
     async def _begin_approval(
@@ -3270,6 +3387,32 @@ class AgentRuntime:
         except json.JSONDecodeError:
             params = {"raw": tool_arguments}
 
+        # ── P4：并行写占用裁决 —— 同一文件同一时刻只能有一个写者 ──
+        #
+        # 只在**跨 owner**（不同 agent / 子任务）时拦截；同一 owner 反复写自己正在迭代的
+        # 文件是正常的。没有它时，两个并行子 agent 写同一文件会**静默互相覆盖**且都报成功，
+        # 最终内容取决于完成顺序（竞态），而没有任何一处报错。
+        from app.agent.write_claim import FILE_WRITE_TOOLS, claim, path_of, release
+        from app.tools.context import get_session_id
+
+        claimed_path = ""
+        claim_owner = ""
+        if tool_name in FILE_WRITE_TOOLS:
+            claimed_path = path_of(tool_name, params if isinstance(params, dict) else None)
+            claim_owner = get_session_id() or ""
+            if claimed_path and claim_owner:
+                ok, holder = claim(claimed_path, claim_owner)
+                if not ok:
+                    logger.warning(
+                        "write claim denied: %s is being written by %s", claimed_path, holder
+                    )
+                    return {
+                        "error": (
+                            f"file '{claimed_path}' is currently being written by another "
+                            f"agent ({holder}); wait for it to finish or edit a different file"
+                        )
+                    }
+
         # 优先走本地 Python 工具注册表
         if local_tool_registry.get(tool_name) is not None:
             try:
@@ -3277,6 +3420,10 @@ class AgentRuntime:
             except Exception as e:
                 logger.error("Local tool execution failed (%s): %s", tool_name, e)
                 return {"error": str(e)}
+            finally:
+                # 写操作是短暂、逐次的 —— 占用只为阻止**同时**的另一个写者，执行完即释放。
+                if claimed_path and claim_owner:
+                    release(claimed_path, claim_owner)
 
         # 如果有外部工具执行器，使用它（兼容旧 Go 调用链）
         if self._tool_executor:

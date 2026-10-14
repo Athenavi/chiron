@@ -40,6 +40,7 @@ import app.tools.terminal  # noqa: F401
 import app.tools.todo  # noqa: F401 — write_todos（S6a 计划状态）
 import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
 import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy）
+import app.tools.use_capability  # noqa: F401 — P7：外部能力代理（MCP / 插件只经它进入）
 import app.tools.video  # noqa: F401 — video_analyze（抽帧 + 多模态描述）
 import app.tools.web  # noqa: F401 — web_search / web_fetch
 

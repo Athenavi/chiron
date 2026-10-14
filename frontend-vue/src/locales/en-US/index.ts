@@ -296,6 +296,7 @@ export default {
     flush_all_confirmation: "⚠️ FLUSH ALL confirmation",
     starting_from_item_n: ", starting from item {n}",
     backup_list: "💾 Backup list",
+    backups_are_managed_by_your_database_provider: "Backups are handled by your database provider (snapshots / PITR). This console no longer offers in-container backup or restore.",
     name_resource_usage: "📊 {name} - Resource usage",
     resource_usage: "📊 Resource usage",
     '1_service_scope': "1. Service scope.",

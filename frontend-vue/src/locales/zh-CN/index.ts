@@ -308,6 +308,7 @@ export default {
     flush_all_confirmation: "⚠️ FLUSH ALL 确认",
     starting_from_item_n: "，第 {n} 条起",
     backup_list: "💾 备份列表",
+    backups_are_managed_by_your_database_provider: "备份由云数据库服务商承担（快照 / PITR）；本控制台不再提供容器内备份/恢复。",
     name_resource_usage: "📊 {name} - 资源用量",
     resource_usage: "📊 资源用量",
     '1_service_scope': "1. 服务内容。",

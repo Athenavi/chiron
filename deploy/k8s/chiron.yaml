@@ -27,7 +27,16 @@ data:
   HTTP_PORT: "8000"
   GATEWAY_INTERNAL_URL: "http://gateway:8080"
   SANDBOX_ROOT: "/srv/chiron/sandbox"
+  # 独立沙箱执行（引擎默认 backend=service 且 **fail-closed**）：URL 指向下面的 sandbox-lb Service。
+  # 缺该服务或未设这两项时，引擎会因探测 `http://sandbox-lb:8001/v1/internal/exec/health`
+  # 失败而**拒绝启动**（与 docs/deployment-multi-instance.md §4 一致）。
+  SANDBOX_BACKEND: "service"
+  SANDBOX_SERVICE_URL: "http://sandbox-lb:8001"
+  SANDBOX_SERVICE_TENANTS: ""   # 空 = 全部租户走沙箱服务；填名单则仅名单内走服务
   PLUGIN_DATA_DIR: "/srv/chiron/plugins"
+  # 内置技能资产（market/skills）：引擎镜像只 COPY app/，market/ 进不去 ⇒ 靠只读挂载 +
+  # 这个变量提供。卷由下面的 python-engine Deployment 提供（默认 emptyDir，见 README 第 6 节）。
+  CHIRON_BUILTIN_SKILLS_PATH: "/srv/chiron/builtin-skills"
   # 每副本连接预算：docs/deployment-multi-instance.md 的公式
   #   N_gateway × POSTGRES_MAX_CONN + M_engine × DB_POOL_MAX_SIZE ≤ PG max_connections
   # 3+3 副本、PG 默认 100 连接 → 每侧 10 才安全。
@@ -180,6 +189,7 @@ spec:
           volumeMounts:
             - { name: sandbox, mountPath: /srv/chiron/sandbox }
             - { name: plugins, mountPath: /srv/chiron/plugins }
+            - { name: builtin-skills, mountPath: /srv/chiron/builtin-skills, readOnly: true }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: 2000m, memory: 2Gi }
@@ -208,6 +218,10 @@ spec:
         - name: sandbox
           emptyDir: {}
         - name: plugins
+          emptyDir: {}
+        # 内置技能（market/skills）：默认空 —— 要内置技能就把它换成 hostPath / PVC
+        # 挂载（见 README 第 6 节「已知约束」）。
+        - name: builtin-skills
           emptyDir: {}
 ---
 apiVersion: v1
@@ -249,8 +263,13 @@ spec:
   minReplicas: 3
   maxReplicas: 6
   metrics:
+    # CPU + 内存双指标：LLM 工作负载以 IO/等待为主，单看 CPU 可能长期偏低而该扩不扩；
+    # 内存能反映连接 / 会话 / 缓冲的堆积。更精确的「按并发/队列长度」伸缩需要
+    # prometheus-adapter 暴露自定义指标（见 docs/deployment-multi-instance.md §5）。
     - type: Resource
       resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
 ---
 apiVersion: autoscaling/v2
 kind: HorizontalPodAutoscaler
@@ -264,3 +283,213 @@ spec:
   metrics:
     - type: Resource
       resource: { name: cpu, target: { type: Utilization, averageUtilization: 70 } }
+    - type: Resource
+      resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# 沙箱执行服务（S5-(e) 的 B 层）—— 引擎默认 SANDBOX_BACKEND=service 且 **fail-closed**
+#
+# 引擎启动会探测 SANDBOX_SERVICE_URL（= 下面的 sandbox-lb Service）的
+# /v1/internal/exec/health；不可达且 DEGRADED_MODE=false ⇒ **拒绝启动**。
+# 因此本组资源与 python-engine 是**硬依赖**，不能省 —— 此前清单里没有它们，
+# python-engine 会因探测失败而 CrashLoop（与 README「3+3 全 Ready」矛盾）。
+#
+# 代码来源：复用引擎镜像（与 app/tools/sandbox.py **同一份**白名单实现），服务入口
+# `sandbox-service/service.py` 由 ConfigMap 只读挂入 —— 不在这里内嵌，避免与仓库里的
+# 源文件漂移。创建命令见 deploy/k8s/README.md（用 kubectl create configmap --from-file）。
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-service
+  namespace: chiron
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: sandbox-service }
+  template:
+    metadata:
+      labels: { app: sandbox-service }
+    spec:
+      securityContext:
+        runAsNonRoot: true
+      containers:
+        - name: sandbox-service
+          image: chiron/python-engine:dev
+          imagePullPolicy: Never
+          command: ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8001"]
+          ports: [{ containerPort: 8001 }]
+          env:
+            - name: INTERNAL_TOKEN
+              valueFrom: { secretKeyRef: { name: chiron-secrets, key: INTERNAL_TOKEN } }
+            - name: SANDBOX_ROOT
+              value: /srv/chiron/sandbox
+            # app/tools/__init__.py 在**模块级**对相对路径建目录，而本容器根是只读 —— 落到可写的 emptyDir。
+            - name: MEDIA_STORE_PATH
+              value: /tmp/chiron-media
+            - name: SKILL_STORE_PATH
+              value: /tmp/chiron-skills
+            # 沙箱是最脆弱的容器，不该持有能签发 JWT 的密钥 —— 用固定占位值（本服务不签发也不校验 JWT）。
+            - name: JWT_SECRET
+              value: sandbox-placeholder-secret-not-used-for-jwt-32b
+            - name: PYTHONDONTWRITEBYTECODE
+              value: "1"
+            - name: PYTHONUNBUFFERED
+              value: "1"
+            # 审计集中摄取：只读根下无法落盘，必须外发到网关（网关已在 default 网络可达）。
+            - name: EXEC_AUDIT_SHIP_URL
+              value: http://gateway:8080/v1/internal/audit/exec
+          # ── 隔离强化（与 compose 的 sandbox-service 段对齐）──
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1000m, memory: 1Gi }
+          volumeMounts:
+            # 服务代码：只读挂入 ConfigMap（chiron-sandbox-code，见 README 的创建命令）。
+            - { name: sandbox-code, mountPath: /app/service.py, subPath: service.py, readOnly: true }
+            - { name: sandbox, mountPath: /srv/chiron/sandbox }
+            - { name: tmp, mountPath: /tmp }
+          readinessProbe:
+            # 用 exec + 环境里的 INTERNAL_TOKEN：httpGet 的头**不支持** secretKeyRef。
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,urllib.request;r=urllib.request.Request('http://localhost:8001/v1/internal/exec/health',headers={'X-Internal-Token':os.environ.get('INTERNAL_TOKEN','')});urllib.request.urlopen(r)"
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+      volumes:
+        - name: sandbox-code
+          configMap: { name: chiron-sandbox-code }
+        # ⚠ 验证用 emptyDir：真多副本要让**引擎与沙箱**共享同一份 SANDBOX_ROOT（换成同一条
+        # RWX PVC），否则 agent 在引擎侧写的文件沙箱看不到（与上面 python-engine 的 sandbox 卷同理）。
+        - name: sandbox
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-service
+  namespace: chiron
+spec:
+  # headless：让 sandbox-lb 的 nginx 经 DNS 拿到**每个 Pod** 的地址（再自行 least_conn）。
+  clusterIP: None
+  selector: { app: sandbox-service }
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+---
+# sandbox-service 的 L7 负载均衡（least_conn）—— 引擎的 SANDBOX_SERVICE_URL 指向它。
+# 配置来自 ConfigMap chiron-sandbox-lb-conf（内容为 deploy/k8s/sandbox-lb.conf，见 README）。
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sandbox-lb
+  namespace: chiron
+spec:
+  replicas: 1
+  selector:
+    matchLabels: { app: sandbox-lb }
+  template:
+    metadata:
+      labels: { app: sandbox-lb }
+    spec:
+      containers:
+        - name: sandbox-lb
+          image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3
+          ports: [{ containerPort: 8001 }]
+          readinessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          resources:
+            requests: { cpu: 20m, memory: 32Mi }
+            limits: { cpu: 200m, memory: 128Mi }
+          volumeMounts:
+            - { name: conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: sandbox-lb.conf, readOnly: true }
+      volumes:
+        - name: conf
+          configMap: { name: chiron-sandbox-lb-conf }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: sandbox-lb
+  namespace: chiron
+spec:
+  selector: { app: sandbox-lb }
+  ports:
+    - name: http
+      port: 8001
+      targetPort: 8001
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# 前端（Nginx + 构建好的 SPA）—— 对外入口。
+#
+# 与 compose 的 frontend 服务对应：静态资源 + 同源反代 /v1、/events、/ws、/submit、
+# /cancel、/media 到 gateway Service。nginx 配置**不内嵌**（避免与仓库源文件漂移），
+# 由 ConfigMap `chiron-frontend-nginx` 挂入（创建命令见 README 第 3c 节）。
+#
+# ⚠️ 这里只是 L7 反代 + 静态资源；**TLS 终结 / 真实负载均衡 / WAF 应由集群 Ingress 或
+# 外部 LB 承担**（见 docs/deployment-multi-instance.md §1）。真实集群建议把下面 Service
+# 改成 ClusterIP 并交由 Ingress 暴露。
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: frontend
+  namespace: chiron
+spec:
+  replicas: 2
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: { maxUnavailable: 0, maxSurge: 1 }
+  selector:
+    matchLabels: { app: frontend }
+  template:
+    metadata:
+      labels: { app: frontend }
+    spec:
+      containers:
+        - name: frontend
+          image: chiron/frontend:dev
+          imagePullPolicy: Never
+          ports: [{ containerPort: 80 }]
+          readinessProbe:
+            httpGet: { path: /health, port: 80 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /health, port: 80 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+          resources:
+            requests: { cpu: 50m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+          volumeMounts:
+            - { name: nginx-conf, mountPath: /etc/nginx/conf.d/default.conf, subPath: default.conf, readOnly: true }
+      volumes:
+        - name: nginx-conf
+          configMap: { name: chiron-frontend-nginx }
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: frontend
+  namespace: chiron
+spec:
+  # NodePort：kind 已把节点 30082 映射到宿主 18082（见 kind-config.yaml）。
+  type: NodePort
+  selector: { app: frontend }
+  ports:
+    - name: http
+      port: 80
+      targetPort: 80
+      nodePort: 30082

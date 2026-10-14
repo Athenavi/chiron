@@ -3,14 +3,22 @@ FROM node:22-alpine AS builder
 
 WORKDIR /app
 
-# 安装pnpm与依赖（使用缓存加速）
-RUN npm install -g pnpm
+# 固定 pnpm 主版本到 10：与 CI（pnpm/action-setup version: 10）和 pnpm-lock（lockfileVersion
+# 9.0）一致。此前是 `npm install -g pnpm`（不固定版本），pnpm 一旦发布新大版本，本地构建
+# 与 CI 就会各装一份不同的 pnpm，锁文件解析与「构建白名单」（pnpm-workspace.yaml）语义随之漂移。
+RUN npm install -g pnpm@10
 # .npmrc / pnpm-workspace.yaml 必须与 package.json 同层 COPY：`pnpm install` 在下一层
 # 就执行，若等到 `COPY . .` 才带入，install 期间读不到 registry 与构建白名单配置
 # （实测表现为去连官方源长时间挂住，或 ERR_PNPM_IGNORED_BUILDS 直接退出）。
 COPY package.json pnpm-lock.yaml .npmrc pnpm-workspace.yaml ./
+# registry 自动选择：对候选源（官方源 / npmmirror / 可经 NPM_REGISTRY_CANDIDATES 追加私有源）
+# 测速取最快者 —— 受限网络直连官方源会挂起、海外直连 npmmirror 会慢，改由实测延迟决定。
+# 脚本 stdout 只输出 URL；全部不可达时非零退出，`|| echo` 兜底到官方源。
+COPY scripts/pick-registry.mjs scripts/
 RUN --mount=type=cache,target=/root/.local/share/pnpm/store \
-    pnpm install --frozen-lockfile
+    REG="$(node scripts/pick-registry.mjs || echo https://registry.npmjs.org)" && \
+    echo "pnpm install --registry $REG" && \
+    pnpm install --frozen-lockfile --registry "$REG"
 
 # 复制源码并构建
 COPY . .

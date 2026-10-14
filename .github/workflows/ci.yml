@@ -121,6 +121,11 @@ jobs:
           node-version: '22'
           cache: pnpm
           cache-dependency-path: frontend-vue/pnpm-lock.yaml
+      # registry 自动选择：与 Docker 构建同一套逻辑（frontend-vue/scripts/pick-registry.mjs），
+      # 对候选源测速取最快者。NPM_CONFIG_REGISTRY 优先级高于 .npmrc，因此本机 .npmrc 里
+      # 写死的 registry 不会影响 CI；全部不可达时兜底到官方源。
+      - name: Pick fastest npm registry
+        run: echo "NPM_CONFIG_REGISTRY=$(node scripts/pick-registry.mjs || echo https://registry.npmjs.org)" >> "$GITHUB_ENV"
       - run: pnpm install --frozen-lockfile
       - name: ESLint
         run: pnpm run lint

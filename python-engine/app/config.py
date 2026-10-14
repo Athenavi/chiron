@@ -126,6 +126,18 @@ class Settings(BaseSettings):
     #: （见 `runtime._split_tool_batch`）；写/删/外部类与审批始终串行。
     #: 设为 1 即等价于"完全串行"（回滚开关）。
     tool_concurrency_limit: int = 4
+
+    # ── P2：LLM 安全评审（guardian）──
+    #: 工具被判「需要用户确认」时，先用一个**独立、无工具、有界**的 LLM 会话评审，
+    #: 决定是否可以免人工审批（对照 Reasonix guardian）。默认开启。
+    #:
+    #: 安全底线（见 app/agent/guardian.py，**不接受配置放宽**）：
+    #: delete / external 级永不被放行（不可逆 / 对外可见的操作始终要人）；
+    #: 参数级硬拦截（secret 参数、路径逃逸）在评审**之前**已执行。
+    #: 评审失败 / 无模型时**不猜测**，回退人工审批。
+    guardian_enabled: bool = True
+    #: 评审用的模型；空 = 复用本轮的模型。
+    guardian_model: str = ""
     default_model: str = "claude-sonnet-4-20250514"
     default_max_tokens: int = 4096
     default_temperature: float = 0.1
@@ -493,6 +505,40 @@ class Settings(BaseSettings):
             self.default_model = self.llm_model
         return self
 
+
+def _load_secret_files() -> None:
+    """把 `${NAME}_FILE` 指向的文件内容注入对应环境变量（**必须在 Settings() 构造之前**）。
+
+    企业部署的密钥通常不在 env 里，而是由 Vault Agent Injector / K8s Secret 卷挂载 /
+    云 Secrets Manager / CSI driver 以**文件**投递。这里做通用桥接：设
+    `APP_SECRET_FILE=/vault/secrets/app_secret` 即可，无需把密钥展开成 env。
+    已显式设置的 env 变量优先（不覆盖）；文件缺失 / 不可读时静默跳过。
+    """
+    import os
+
+    for name in (
+        "APP_SECRET",
+        "JWT_SECRET",
+        "INTERNAL_TOKEN",
+        "S3_ACCESS_KEY",
+        "S3_SECRET_KEY",
+        "LLM_API_KEY",
+        "METRICS_TOKEN",
+    ):
+        if os.getenv(name):
+            continue  # 显式 env 优先
+        path = os.getenv(f"{name}_FILE")
+        if not path:
+            continue
+        try:
+            value = Path(path).read_text(encoding="utf-8").strip()
+        except OSError:
+            continue
+        if value:
+            os.environ[name] = value
+
+
+_load_secret_files()
 
 settings = Settings()
 

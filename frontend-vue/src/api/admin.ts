@@ -188,10 +188,8 @@ export async function triggerMaintenance(action: 'vacuum' | 'reindex' | 'analyze
   await api.post('/v1/admin/maintenance', { action })
 }
 
-export async function downloadBackup(): Promise<Blob> {
-  const response = await api.post('/v1/admin/backup', null, { responseType: 'blob' })
-  return response.data
-}
+// 注：`downloadBackup`（POST /v1/admin/backup）已随「容器内备份」整体移除 ——
+// 企业部署用云数据库，备份由服务商承担（快照 / PITR）。
 
 // ── Storage ──
 

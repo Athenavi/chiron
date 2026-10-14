@@ -25,16 +25,13 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-import httpx
-
 from app.http_client import shared_client
-from app.media.store import create_store
+from app.media.store import get_store
 from app.tools.context import get_gateway, get_tenant_id, get_user_id
 from app.tools.registry import registry
 from app.tools.ssrf import assert_safe_url, fetch_url_safe
 
 logger = logging.getLogger(__name__)
-_store = create_store()
 
 
 #: 单个资产的体积上限。**必须与网关内部端点的上限一致**（见
@@ -424,7 +421,7 @@ async def media_create(
 
     # 回退：引擎本地 store。**必须说出来** —— 否则"创建成功"是假的：用户按提示去媒体库
     # 什么也找不到，而模型一无所知（§1.3「失败要显式」）。
-    asset = _store.write(
+    asset = get_store().write(
         name=display_name,
         content=data,
         asset_type=resolved_type,
@@ -505,7 +502,7 @@ async def image_generate(
             "stored_in": "library",
         }
 
-    asset = _store.write(
+    asset = get_store().write(
         name=name,
         content=data,
         asset_type="image",

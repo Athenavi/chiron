@@ -25,6 +25,14 @@ from typing import Any
 SOURCE_BUILTIN = "builtin"
 SOURCE_MCP = "mcp"
 
+# 隐藏来源：这些工具**不进入模型可见清单**（也不被 tool_search 搜到/激活），
+# 只能经 `use_capability` 代理工具调用（P7，对齐 Reasonix usecap）。
+#
+# 理由：MCP / 插件工具的数量与 schema 由外部服务器决定，直接暴露会让请求体随
+# "这个用户连了几个 MCP、每个 MCP 有几个工具"而漂移 —— 既贵（每个 schema 都占 token）
+# 又不稳定（同名工具被不同服务器抢注册）。代理工具的 schema 是**固定的**，不随 MCP 增删改变。
+HIDDEN_SOURCES: frozenset[str] = frozenset({SOURCE_MCP})
+
 
 @dataclass
 class ToolDef:
@@ -100,6 +108,20 @@ class ToolRegistry:
     def list_names(self) -> list[str]:
         return list(self._tools.keys())
 
+    def list_capabilities(self, user_id: str = "") -> list[dict[str, str]]:
+        """列出**隐藏来源**的能力（供 use_capability 的按需发现使用）。
+
+        与 ``to_openai_tools`` 互补：那些**不进模型可见清单**的工具（MCP / 插件），
+        从这里能被列出来，模型据此知道代理背后有哪些能力。
+        """
+        user_id = self._resolve_user(user_id)
+        out: list[dict[str, str]] = []
+        for tool in self._tools.values():
+            if tool.source not in HIDDEN_SOURCES or not self._visible(tool, user_id):
+                continue
+            out.append({"name": tool.name, "description": tool.description})
+        return sorted(out, key=lambda t: t["name"])
+
     def _visible(self, tool: ToolDef, user_id: str) -> bool:
         return not tool.owners or user_id in tool.owners
 
@@ -116,15 +138,19 @@ class ToolRegistry:
             return ""
 
     def to_openai_tools(self, user_id: str = "") -> list[dict[str, Any]]:
-        """导出工具列表；按当前用户过滤掉其他用户的工具。
+        """导出工具列表；按当前用户过滤掉其他用户的工具，并**跳过隐藏来源**。
 
         source 放在 function 外层：它不属于 OpenAI 的 function schema，
         混进去会被上游 provider 拒绝。
+
+        P7：``HIDDEN_SOURCES``（MCP / 插件）**不进入可见清单** —— 它们只能经
+        ``use_capability`` 代理调用（见 app/tools/use_capability.py）。这样请求体里的
+        工具 schema **不随"用户连了几个 MCP"而漂移**，且 tool_search 也搜不到它们。
         """
         user_id = self._resolve_user(user_id)
         converted: list[dict[str, Any]] = []
         for tool in self._tools.values():
-            if not self._visible(tool, user_id):
+            if not self._visible(tool, user_id) or tool.source in HIDDEN_SOURCES:
                 continue
             converted.append(
                 {

@@ -8,6 +8,7 @@ import (
 
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/settings"
+	"github.com/athenavi/chiron/internal/storage"
 )
 
 // ── 系统设置变更跨副本广播（批 B-2′）──
@@ -19,7 +20,8 @@ import (
 //   - rate_limit → 令牌桶限流器 Configure（即时生效）
 //   - cors       → 运行时 CORS 白名单更新（即时生效）
 //   - payment    → 支付凭据热重载 + 重建渠道客户端（即时生效）
-//   - 其余分类   → slog.Warn 提示需滚动重启（如 redis 集群切换/存储后端等高风险项）
+//   - storage    → 文件后端（local/s3）热切换（即时生效，见 storage_reload.go）
+//   - 其余分类   → slog.Warn 提示需滚动重启（如 redis 集群切换等高风险项）
 
 type settingsChangedEvent struct {
 	Category string                 `json:"category"`
@@ -48,9 +50,10 @@ func PublishSettingsChanged(ctx context.Context, category string, config map[str
 }
 
 // StartSettingsSubscriber 每网关副本启动一次，消费系统设置变更广播。
-// billingHandler 用于 payment 分类的热重载，store 为其回源句柄；任一为 nil 时
-// 该分类退化为仅告警。
-func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *DistributedRateLimiter, billingHandler *BillingHandler, store *settings.Store) {
+// billingHandler 用于 payment 分类的热重载；atomicStore 用于 storage 分类的热切换；
+// store 是二者的**回源句柄**（订阅者据此从 DB 取与保存方相同的配置，避免广播内容漂移）。
+// 任一为 nil 时对应分类退化：payment → 仅告警；storage → 保持现状。
+func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *DistributedRateLimiter, billingHandler *BillingHandler, store *settings.Store, atomicStore *storage.AtomicStore) {
 	if rdb == nil {
 		return
 	}
@@ -93,8 +96,11 @@ func StartSettingsSubscriber(ctx context.Context, rdb db.RedisClient, limiter *D
 				// 从 DB 重载（与保存方同一事实源），副本间不会漂移
 				billingHandler.ReloadPaymentConfig(ctx, store)
 				slog.Info("payment config hot-reloaded via settings broadcast")
+			case "storage":
+				// 从 DB 重载并热切换文件后端（与保存方同一事实源，副本间不会漂移）
+				applyStorageFromSettings(ctx, store, atomicStore)
 			default:
-				// redis/storage/s3/agent 等：涉及进程级组件（连接池/存储后端），
+				// redis/s3/agent 等：涉及进程级组件（连接池等），
 				// 热切高风险，提示滚动重启以消除副本间不一致
 				slog.Warn("system settings changed on category; rolling restart required to apply",
 					"category", ev.Category)

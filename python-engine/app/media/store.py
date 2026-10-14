@@ -1,7 +1,8 @@
 """媒体资产存储接口与本地实现。
 
 提供 BaseStore 抽象接口和 LocalStore 本地文件系统实现。
-通过 create_store() 工厂函数根据环境变量选择后端。
+通过 create_store() 工厂函数根据环境变量选择后端；
+进程内**当前后端**由 get_store()/set_store() 管理，支持随后台配置热切换。
 """
 
 from __future__ import annotations
@@ -9,11 +10,13 @@ from __future__ import annotations
 import json
 import logging
 import os
+import threading
 import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -169,5 +172,63 @@ def create_store() -> BaseStore:
         return S3Store(bucket=bucket, prefix=prefix, endpoint_url=endpoint_url)
 
     # 默认本地存储
+    root = os.getenv("MEDIA_STORE_PATH", os.path.join(".", "data", "media"))
+    return LocalStore(root)
+
+
+# ── 进程内「当前后端」：支持随后台配置热切换 ──
+#
+# 此前各调用点各自持有模块级单例（tools/media.py 的 `_store`、agent/media_offload.py
+# 的 `_store_cache`），一旦后端配置变了，它们仍握着旧实例 —— 于是"后台改了存储"对引擎无效。
+# 这里收敛为**唯一**的当前后端：所有读写都经 get_store()，后台配置广播到达时用
+# set_store() 原子替换（见 app/media/reload.py）。
+_current_store: BaseStore | None = None
+_current_lock = threading.Lock()
+
+
+def get_store() -> BaseStore:
+    """返回进程内当前媒体后端；首次调用按 env 创建。"""
+    global _current_store
+    if _current_store is None:
+        with _current_lock:
+            if _current_store is None:
+                _current_store = create_store()
+    return _current_store
+
+
+def set_store(store: BaseStore) -> None:
+    """替换进程内当前后端（后台存储配置变更时调用）。"""
+    global _current_store
+    with _current_lock:
+        _current_store = store
+
+
+def store_from_config(cfg: dict[str, Any]) -> BaseStore:
+    """由「后台存储配置」构造后端。
+
+    `cfg` 的键与网关 storage 分类一致：
+    `backend` / `s3_endpoint` / `s3_bucket` / `s3_access_key` / `s3_secret_key` / `s3_use_ssl`。
+    而网关侧 `s3_endpoint` 是**纯 host**（minio-go 要求不带 scheme），这里补上 scheme 交给 boto3。
+    """
+    backend = str(cfg.get("backend") or "local").lower()
+    if backend == "s3":
+        from app.media.s3_store import S3Store
+
+        bucket = str(cfg.get("s3_bucket") or "")
+        if not bucket:
+            raise ValueError("s3_bucket is required for s3 backend")
+        host = str(cfg.get("s3_endpoint") or "")
+        use_ssl = bool(cfg.get("s3_use_ssl", True))
+        endpoint_url: str | None = host or None
+        if host and "://" not in host:
+            endpoint_url = f"{'https' if use_ssl else 'http'}://{host}"
+        return S3Store(
+            bucket=bucket,
+            prefix=os.getenv("S3_PREFIX", "media/"),
+            endpoint_url=endpoint_url,
+            access_key=str(cfg.get("s3_access_key") or "") or None,
+            secret_key=str(cfg.get("s3_secret_key") or "") or None,
+        )
+
     root = os.getenv("MEDIA_STORE_PATH", os.path.join(".", "data", "media"))
     return LocalStore(root)

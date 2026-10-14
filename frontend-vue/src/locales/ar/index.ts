@@ -298,6 +298,7 @@ export default {
     flush_all_confirmation: "⚠️ تأكيد FLUSH ALL",
     starting_from_item_n: "، بدءًا من العنصر {n}",
     backup_list: "💾 قائمة النسخ الاحتياطية",
+    backups_are_managed_by_your_database_provider: "تتم النسخ الاحتياطية بواسطة مزود قاعدة البيانات المُدارة (لقطات / PITR)؛ لم تعد هذه الواجهة توفر النسخ الاحتياطي/الاستعادة داخل الحاوية.",
     name_resource_usage: "📊 {name} - استخدام الموارد",
     resource_usage: "📊 استخدام الموارد",
     '1_service_scope': "1. نطاق الخدمة.",

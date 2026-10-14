@@ -38,17 +38,11 @@ MAX_INLINE_BYTES = 8 * 1024 * 1024
 #: 参数截断的标注（与方案 §3.2 的措辞一致，便于日志/测试检索）
 TRUNCATION_MARK = "...(argument truncated)"
 
-_store_cache: Any = None
-
-
 def _media_store() -> Any:
-    """本地媒体 store 的**惰性单例**（`create_store()` 每次都会重建索引，别每块调一次）。"""
-    global _store_cache
-    if _store_cache is None:
-        from app.media.store import create_store
+    """进程内**当前**媒体 store（get_store 内部缓存；后台配置变更会热切换）。"""
+    from app.media.store import get_store
 
-        _store_cache = create_store()
-    return _store_cache
+    return get_store()
 
 
 def _attr(value: str) -> str:

@@ -40,8 +40,6 @@ func registerAdminRoutes(
 	mux.Handle("DELETE /v1/admin/users/{id}", authMW(rlMW(usersManageMW(adminStrip))))
 	mux.Handle("GET /v1/admin/system", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/backup", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/restore", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/kb", authMW(rlMW(adminReadMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if pythonClient == nil || !pythonClient.IsConnected() {
 			InternalError(w, "python engine not available")
@@ -69,15 +67,12 @@ func registerAdminRoutes(
 
 	// Database admin routes（/admin/datastores?tab=database 整页依赖它们）
 	// 同样的问题：handler 早在 adminMux 里注册（admin_ops.go:47-53），但从未暴露 ⇒
-	// 「数据库状态 / 配置 / 备份列表 / 备份 / 恢复 / 查询 / 优化」七个端点全部 404。
+	// 「数据库状态 / 配置 / 查询 / 优化」四个端点全部 404。
 	// 判据照本文件既定口径（见文件头 P1-3）：GET 用 adminReadMW；
-	// 备份（pg_dump 落盘）、恢复（psql 覆盖当前库）、任意 SELECT、VACUUM/ANALYZE
-	// 都是**写操作** ⇒ 一律 adminWriteMW。
+	// 任意 SELECT、VACUUM/ANALYZE 都是**写操作** ⇒ 一律 adminWriteMW。
+	// 备份 / 恢复端点已移除：企业部署用云数据库（快照/PITR），容器内 pg_dump/psql 不适用。
 	mux.Handle("GET /v1/admin/database/status", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("GET /v1/admin/database/configs", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("GET /v1/admin/database/backups", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/database/backups", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/database/backups/{backupId}/restore", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("POST /v1/admin/database/query", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("POST /v1/admin/database/optimize/{action}", authMW(rlMW(adminWriteMW(adminStrip))))
 

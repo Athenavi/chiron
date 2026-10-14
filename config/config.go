@@ -171,7 +171,7 @@ func loadConfig() *Config {
 	loadDotEnv()     // .env file overrides config file
 	loadConfigFile() // JSON config file (lowest priority)
 	cfg := &Config{
-		AppSecret:           getEnv("APP_SECRET", ""),
+		AppSecret:           getSecret("APP_SECRET", ""),
 		Port:                getEnv("PORT", "8080"),
 		ReadTimeout:         getDuration("READ_TIMEOUT", 10*time.Second),
 		WriteTimeout:        getDuration("WRITE_TIMEOUT", 60*time.Second),
@@ -188,9 +188,9 @@ func loadConfig() *Config {
 		RedisMasterName:     getEnv("REDIS_MASTER_NAME", ""),
 		RedisSentinelAddrs:  getStringSlice("REDIS_SENTINEL_ADDRS", []string{}),
 		RedisPoolSize:       getInt("REDIS_POOL_SIZE", 100),
-		JWTSecret:           getEnv("JWT_SECRET", ""),
+		JWTSecret:           getSecret("JWT_SECRET", ""),
 		JWTExpiration:       getDuration("JWT_EXPIRATION", 24*time.Hour),
-		InternalToken:       getEnv("INTERNAL_TOKEN", ""),
+		InternalToken:       getSecret("INTERNAL_TOKEN", ""),
 		DisableRegistration: isTruthy(getEnv("DISABLE_REGISTRATION", "")),
 		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
 		CookieSecure: cookieSecure(),
@@ -199,14 +199,14 @@ func loadConfig() *Config {
 		StorageRoot:         getEnv("STORAGE_ROOT", filepath.Join(GetDefaultDataDir(), "workspace")),
 		S3Endpoint:          getEnv("S3_ENDPOINT", ""),
 		S3Bucket:            getEnv("S3_BUCKET", "chiron"),
-		S3AccessKey:         getEnv("S3_ACCESS_KEY", ""),
-		S3SecretKey:         getEnv("S3_SECRET_KEY", ""),
+		S3AccessKey:         getSecret("S3_ACCESS_KEY", ""),
+		S3SecretKey:         getSecret("S3_SECRET_KEY", ""),
 		S3UseSSL:            isTruthy(getEnv("S3_USE_SSL", "")),
 		RateLimitRPM:        getInt("RATE_LIMIT_RPM", 100),
 		RateLimitFailClose:  isTruthy(getEnv("RATE_LIMIT_FAIL_CLOSE", "")),
 		RateLimitGlobal:     getInt("RATE_LIMIT_GLOBAL", 10000),
 		TrustedProxyCIDRs:   getStringSlice("TRUSTED_PROXY_CIDRS", []string{}),
-		MetricsToken:        getEnv("METRICS_TOKEN", ""),
+		MetricsToken:        getSecret("METRICS_TOKEN", ""),
 		DegradedMode:        isTruthy(getEnv("DEGRADED_MODE", "")),
 		AllowSchemaDrift:    isTruthy(getEnv("ALLOW_SCHEMA_DRIFT", "")),
 		LogLevel:            getEnv("LOG_LEVEL", "info"),
@@ -306,6 +306,25 @@ func getEnv(key, fallback string) string {
 		return v
 	}
 	return fallback
+}
+
+// getSecret 读取**敏感**配置：优先 `${key}_FILE` 指向的**文件内容**，否则回退 `${key}` 环境变量。
+//
+// 为什么需要：企业部署的密钥通常不在 env 里，而是由 Vault Agent Injector / K8s Secret
+// 卷挂载 / 云 Secrets Manager / CSI driver 以**文件**形式投递（避免密钥出现在 `env`、
+// 进程列表或 `docker inspect` 里）。本函数是这类投递方式的通用桥接 —— 设
+// `APP_SECRET_FILE=/vault/secrets/app_secret` 即可，无需在部署层把密钥展开成 env。
+//
+// 文件内容两端的空白（含尾部换行）会被裁掉；文件为空 / 不可读时回退到环境变量。
+func getSecret(key, fallback string) string {
+	if p := os.Getenv(key + "_FILE"); p != "" {
+		if b, err := os.ReadFile(p); err == nil {
+			if v := strings.TrimSpace(string(b)); v != "" {
+				return v
+			}
+		}
+	}
+	return getEnv(key, fallback)
 }
 
 func getInt(key string, fallback int) int {

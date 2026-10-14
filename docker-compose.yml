@@ -86,7 +86,10 @@ services:
       # Go 端（minio-go）要求**纯 host**（不带 scheme）——带 https:// 会报
       # 'Endpoint url cannot have fully qualified paths'。故 Go 用 S3_ENDPOINT_HOST，
       # Python（boto3）用带 scheme 的 S3_ENDPOINT，两者在 .env 里成对配置。
-      S3_ENDPOINT: ${S3_ENDPOINT_HOST:-minio:9000}
+      # ⚠️ 必填：S3 兼容端点（**纯 host**，不带 scheme，如 oss-cn-hangzhou.aliyuncs.com）。
+      # 自托管（`--profile selfhosted-s3`）填 minio:9000。**不再默认指向 minio** ——
+      # 那个默认值会让"没起 minio"的部署静默连不上对象存储。
+      S3_ENDPOINT: ${S3_ENDPOINT_HOST:?S3_ENDPOINT_HOST is required — cloud S3 host, or minio:9000 with --profile selfhosted-s3}
       S3_BUCKET: ${S3_BUCKET:-chiron}
       # 变量名保持中性（此前复用 MINIO_ 前缀，换后端后语义不清）
       S3_ACCESS_KEY: ${S3_ACCESS_KEY:?S3_ACCESS_KEY is required}
