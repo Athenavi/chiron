@@ -1,8 +1,8 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick, h } from 'vue'
 import { Input, Button, Select, Tooltip, Popover, message } from 'ant-design-vue'
-import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined } from '@ant-design/icons-vue'
-import { uploadFile, listModels } from '../../api'
+import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
+import api, { uploadFile, listModels } from '../../api'
 import type { LlmModel } from '../../api'
 import type { ChatAttachment } from './chat-types'
 import type { ContextChip } from './contextChips'
@@ -24,6 +24,10 @@ const props = defineProps<{
   model?: string
   /** 工具授权模式（ask/auto/yolo）：控制工具执行是否需要用户确认 */
   toolsMode?: string
+  /** 输出风格（default/concise/detailed/teaching/code）：差距B，用户可见的输出控制 */
+  outputStyle?: string
+  /** 语言偏好（auto/zh-CN/en-US/ar）：差距B */
+  language?: string
   /** 已带入本次对话的上下文（知识库 / Agent / 技能 / 工作流 / 插件 / 记忆分类）。
       对齐 reasonix 的 `composer-context`：绑定是"沉默生效"的，不显式呈现就是幽灵行为。 */
   contextChips?: ContextChip[]
@@ -39,6 +43,10 @@ const emit = defineEmits<{
   (e: 'model-change', model: string): void
   /** 工具授权模式：ask=写类需确认 / auto=仅危险 / yolo=全跳过 */
   (e: 'tools-mode-change', mode: string): void
+  /** 输出风格（差距B）：default/concise/detailed/teaching/code */
+  (e: 'update:outputStyle', style: string): void
+  /** 语言偏好（差距B）：auto/zh-CN/en-US/ar */
+  (e: 'update:language', lang: string): void
   /** 移除一个上下文 chip（点输入区上方 chip 行的 × ） */
   (e: 'remove-context-chip', chip: ContextChip): void
   /** 斜杠命令 */
@@ -109,6 +117,53 @@ const toolsModeOptions = computed(() =>
 
 function onToolsModeChange(v: unknown) {
   emit('tools-mode-change', String(v))
+}
+
+// ── 输出控制（差距B）：输出风格 + 语言偏好 ──
+//
+// 与「对话模式」「工具授权」同一处置：**请求级实时状态**，随每条消息经 llm_config 下发
+// （服务端不存储，避免"前端选、Redis、runtime"三份状态漂移）。
+// ⚠️ value 集合必须与 `python-engine/app/agent/output_controls.py` 的枚举逐字一致。
+const OUTPUT_STYLE_META = [
+  { value: 'default', label: tr('chat.style_default') },
+  { value: 'concise', label: tr('chat.style_concise') },
+  { value: 'detailed', label: tr('chat.style_detailed') },
+  { value: 'teaching', label: tr('chat.style_teaching') },
+  { value: 'code', label: tr('chat.style_code') },
+] as const
+const outputStyleOptions = computed(() => OUTPUT_STYLE_META.map(o => ({ value: o.value, label: o.label })))
+
+const LANGUAGE_META = [
+  { value: 'auto', label: tr('chat.lang_auto') },
+  { value: 'zh-CN', label: tr('chat.lang_zh') },
+  { value: 'en-US', label: tr('chat.lang_en') },
+  { value: 'ar', label: tr('chat.lang_ar') },
+] as const
+const languageOptions = computed(() => LANGUAGE_META.map(o => ({ value: o.value, label: o.label })))
+
+// ── 提示精炼（差距B）：把粗糙输入改成更明确的提示 ──
+//
+// **不自动应用**：由用户点按触发，结果填回输入框（用户可继续改或撤销）。
+// 失败时**保持原输入不变**并提示 —— 精炼失败绝不能把用户写的话弄丢。
+const refining = ref(false)
+async function refineInput() {
+  const text = input.value.trim()
+  if (!text || refining.value) return
+  refining.value = true
+  try {
+    const res = await api.post('/v1/agent/refine', { content: text })
+    const data = res.data as { ok?: boolean; refined?: string; error?: string }
+    if (data?.ok && data.refined) {
+      input.value = data.refined
+      message.success(tr('chat.refined'))
+    } else {
+      message.warning(data?.error || tr('chat.refine_failed'))
+    }
+  } catch {
+    message.warning(tr('chat.refine_failed'))
+  } finally {
+    refining.value = false
+  }
 }
 
 // ── 输入框 placeholder 多态 ──
@@ -1016,6 +1071,28 @@ defineExpose({ insertText })
                     @update:value="onToolsModeChange"
                   />
                 </label>
+                <!-- 差距B：输出风格 / 语言偏好 —— 与上面的模式/授权同属"偶发调整的设置项"，
+                     故同处一个弹层；都是请求级实时状态（随 llm_config 下发，服务端不存储）。 -->
+                <label class="settings-pop__row">
+                  <span class="settings-pop__label">{{ $t('chat.output_style') }}</span>
+                  <Select
+                    :model-value="outputStyle || 'default'"
+                    :options="outputStyleOptions"
+                    size="small"
+                    style="width: 150px"
+                    @update:value="(v: any) => emit('update:outputStyle', String(v))"
+                  />
+                </label>
+                <label class="settings-pop__row">
+                  <span class="settings-pop__label">{{ $t('chat.language_preference') }}</span>
+                  <Select
+                    :model-value="language || 'auto'"
+                    :options="languageOptions"
+                    size="small"
+                    style="width: 150px"
+                    @update:value="(v: any) => emit('update:language', String(v))"
+                  />
+                </label>
               </div>
             </template>
             <Button
@@ -1044,6 +1121,22 @@ defineExpose({ insertText })
             :title="$t('chat.input.modelTitle', { model: modelValue || $t('chat.input.modelDefault') })"
             @update:value="onModelChange"
           />
+          <!-- 差距B：提示精炼 —— 把当前输入改写成更明确的提示（点按触发，不自动应用）。
+               常驻可见（而非收进设置弹层）：它作用的是"这一次输入"，属于即时动作。 -->
+          <Button
+            type="text"
+            size="small"
+            class="context-btn refine-btn"
+            :loading="refining"
+            :disabled="!input.trim()"
+            :title="$t('chat.refine_prompt_tooltip')"
+            @click="refineInput"
+          >
+            <template #icon>
+              <ThunderboltOutlined />
+            </template>
+            <span class="context-label">{{ $t('chat.refine') }}</span>
+          </Button>
           <Button
             type="text"
             size="small"

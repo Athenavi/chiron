@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"time"
 
@@ -20,6 +21,28 @@ type TraceSpan struct {
 	Timestamp  time.Time      `json:"timestamp"`
 	TenantID   string         `json:"tenant_id"`
 	Metadata   map[string]any `json:"metadata,omitempty"`
+	// 差距C（执行图）：稳定的节点 id、父指针与类别。
+	// 有了 ParentSpanID，"某一步是从哪来的"才是**可查询**的 —— 此前只有扁平时间序列。
+	SpanID       string `json:"span_id,omitempty"`
+	ParentSpanID string `json:"parent_span_id,omitempty"`
+	Kind         string `json:"kind,omitempty"`
+}
+
+// TraceGraphNode 是执行图里的一个节点（含其子节点，递归）。
+type TraceGraphNode struct {
+	TraceSpan
+	Children []TraceGraphNode `json:"children,omitempty"`
+}
+
+// TraceGraph 是一次 run 的**执行图**：根节点 + 便于渲染的扁平统计。
+type TraceGraph struct {
+	TraceID  string           `json:"trace_id"`
+	TenantID string           `json:"tenant_id"`
+	Roots    []TraceGraphNode `json:"roots"`
+	// NodeCount / OrphanCount 让"图是否完整"可判断：孤儿节点（父不在本 trace 内）
+	// 说明 span 写入有缺口（例如批量路径漏写父指针），排障时一眼可见。
+	NodeCount   int `json:"node_count"`
+	OrphanCount int `json:"orphan_count"`
 }
 
 // TraceQuery aggregates all spans for a given trace_id.
@@ -100,6 +123,112 @@ func (h *TraceHandler) GetTrace(w http.ResponseWriter, r *http.Request) {
 	}
 
 	OK(w, result)
+}
+
+// GetTraceGraph returns the **execution graph** for a trace_id.
+//
+// GET /v1/traces/{trace_id}/graph
+//
+// 与 GetTrace 的区别：GetTrace 返回**扁平的 span 列表**（"这次有哪些步骤"），
+// 本端点返回**父子连通的图**（"某一步是从哪来的"）。企业审计与排障要的是后者。
+func (h *TraceHandler) GetTraceGraph(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	traceID := r.PathValue("trace_id")
+	if traceID == "" {
+		BadRequest(w, "trace_id is required")
+		return
+	}
+	tenantID := claims.TenantID
+	if tenantID == "" {
+		tenantID = claims.UserID
+	}
+
+	spans, err := h.queryTraces(traceID, tenantID)
+	if err != nil {
+		slog.Error("trace graph query failed", "trace_id", traceID, "error", err)
+		InternalError(w, "trace query failed")
+		return
+	}
+	if len(spans) == 0 {
+		NotFound(w, "trace not found")
+		return
+	}
+	// 租户一致性：与 GetTrace 同一道校验（跨租户数据不得出现在响应里）。
+	for _, span := range spans {
+		if span.TenantID != tenantID && span.TenantID != "" {
+			slog.Warn("trace graph tenant mismatch (possible cross-tenant leak)",
+				"trace_id", traceID, "claim_tenant", tenantID, "span_tenant", span.TenantID)
+			InternalError(w, "trace data integrity check failed")
+			return
+		}
+	}
+
+	OK(w, BuildTraceGraph(traceID, tenantID, spans))
+}
+
+// BuildTraceGraph 把扁平的 span 列表组装成执行图。
+//
+// **纯函数**（无 IO、无并发、不改输入），因此可单测 —— 图的正确性是审计结论的前提。
+// 规则：
+//   - SpanID 为空（历史记录 / 未接入）⇒ 作为根节点（无父子信息，按扁平处理）；
+//   - ParentSpanID 为空 ⇒ 根节点；
+//   - ParentSpanID 非空但父不在本 trace 内 ⇒ 计入 OrphanCount 并提升为根
+//     （写入缺口 —— 例如批量路径漏写父指针 —— 排障时一眼可见）。
+// 同层按时间排序，保证渲染稳定。
+func BuildTraceGraph(traceID, tenantID string, spans []TraceSpan) TraceGraph {
+	byID := make(map[string]int, len(spans))
+	for i, s := range spans {
+		if s.SpanID != "" {
+			byID[s.SpanID] = i
+		}
+	}
+	children := make(map[string][]int)
+	var roots []int
+	orphans := 0
+	for i, s := range spans {
+		if s.ParentSpanID == "" {
+			roots = append(roots, i)
+			continue
+		}
+		if _, ok := byID[s.ParentSpanID]; ok {
+			children[s.ParentSpanID] = append(children[s.ParentSpanID], i)
+			continue
+		}
+		orphans++
+		roots = append(roots, i)
+	}
+
+	var build func(idx int) TraceGraphNode
+	build = func(idx int) TraceGraphNode {
+		s := spans[idx]
+		node := TraceGraphNode{TraceSpan: s}
+		kids := children[s.SpanID]
+		sort.SliceStable(kids, func(a, b int) bool {
+			return spans[kids[a]].Timestamp.Before(spans[kids[b]].Timestamp)
+		})
+		for _, k := range kids {
+			node.Children = append(node.Children, build(k))
+		}
+		return node
+	}
+
+	sort.SliceStable(roots, func(a, b int) bool {
+		return spans[roots[a]].Timestamp.Before(spans[roots[b]].Timestamp)
+	})
+	graph := TraceGraph{
+		TraceID:     traceID,
+		TenantID:    tenantID,
+		NodeCount:   len(spans),
+		OrphanCount: orphans,
+	}
+	for _, r := range roots {
+		graph.Roots = append(graph.Roots, build(r))
+	}
+	return graph
 }
 
 // ListTraces lists recent trace IDs for a tenant.
@@ -220,6 +349,10 @@ func (h *TraceHandler) queryTraces(traceID, tenantID string) ([]TraceSpan, error
 		span.TenantID, _ = entry.Values["tenant_id"].(string)
 		timestamp, _ := entry.Values["timestamp"].(string)
 		span.Timestamp, _ = time.Parse(time.RFC3339, timestamp)
+		// 差距C：执行图字段（旧记录没有这些键 ⇒ 保持零值，按扁平时间线处理）。
+		span.SpanID, _ = entry.Values["span_id"].(string)
+		span.ParentSpanID, _ = entry.Values["parent_span_id"].(string)
+		span.Kind, _ = entry.Values["kind"].(string)
 
 		spans = append(spans, span)
 	}

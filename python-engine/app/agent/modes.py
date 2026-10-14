@@ -56,6 +56,7 @@ CORE_TOOL_NAMES = frozenset(
         "media_create",  # 产出可下载的资产（媒体库；含二进制——见 app/tools/media.py）
         "subagent",  # 子 agent 委派（多 agent 协作核心）
         "use_capability",  # P7：外部能力（MCP / 插件）的单一代理入口
+        "best_of_n",  # 差距D：多条路并排比较后选优（重构/修 bug/设计取舍）
     }
 )
 

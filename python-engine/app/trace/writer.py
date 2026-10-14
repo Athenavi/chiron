@@ -74,6 +74,9 @@ class TraceWriter:
         duration_ms: int,
         metadata: dict[str, Any] | None = None,
         tenant_id: str | None = None,  # SaaS: 租户隔离
+        span_id: str = "",
+        parent_span_id: str = "",
+        kind: str = "",
     ) -> None:
         """写入单个 span 事件到 Redis Stream (按租户隔离).
 
@@ -83,6 +86,10 @@ class TraceWriter:
             duration_ms: span 耗时 (毫秒)
             metadata: 额外上下文 (model, input_tokens, tool_name 等)
             tenant_id: 租户 ID (用于流隔离,可选)
+            span_id: 该 span 的稳定标识（差距C：执行图靠它建立节点）
+            parent_span_id: 父 span 标识 —— **这一条就是"某步从哪来"的答案**；
+                例如 `trace:turn:2` 的父是 `trace:run`，一次工具调用的父是它所在的 turn。
+            kind: span 类别（run / turn / llm / tool / workflow），供前端按类别着色与折叠。
         """
         # 隐私模式: no_retention 时跳过 trace 写入 (不落盘)
         if is_no_retention():
@@ -106,6 +113,10 @@ class TraceWriter:
                 "timestamp": str(time.time()),
                 "tenant_id": tenant_id or "",
                 "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+                # 差距C：执行图的三要素（稳定的 id、父指针、类别）。
+                "span_id": span_id or "",
+                "parent_span_id": parent_span_id or "",
+                "kind": kind or "",
             }
             await self._redis.xadd(stream, entry, maxlen=10000, approximate=True)
         except Exception as e:
@@ -141,6 +152,11 @@ class TraceWriter:
                     "duration_ms": str(s["duration_ms"]),
                     "timestamp": str(time.time()),
                     "metadata": json.dumps(s.get("metadata", {}), ensure_ascii=False),
+                    # 差距C：与 write_span 保持同一套字段（批量路径不能少写父指针，
+                    # 否则经批量写入的 span 在执行图里会变成孤点）。
+                    "span_id": str(s.get("span_id", "") or ""),
+                    "parent_span_id": str(s.get("parent_span_id", "") or ""),
+                    "kind": str(s.get("kind", "") or ""),
                 }
                 entries.append(entry)
 
@@ -169,10 +185,16 @@ async def record_span(
     metadata: dict[str, Any] | None = None,
     tenant_id: str | None = None,  # SaaS: 租户隔离
     redis_url: str | None = None,
+    span_id: str = "",
+    parent_span_id: str = "",
+    kind: str = "",
 ) -> None:
     """便捷函数: 记录单个 span 到 Redis Stream (带租户隔离).
 
     自动初始化 TraceWriter (单例),确保首次调用时建立 Redis 连接.
+
+    ``span_id`` / ``parent_span_id`` / ``kind`` 是**执行图（差距C）**的三要素：有了父指针，
+    "某一步是从哪来的"才可查询（此前只有扁平的时间序列）。
 
     Example:
         await record_span(
@@ -181,6 +203,9 @@ async def record_span(
             duration_ms=1500,
             metadata={"model": "gpt-4", "input_tokens": 500},
             tenant_id="tenant_456",
+            span_id="abc123:turn:1:llm",
+            parent_span_id="abc123:turn:1",
+            kind="llm",
         )
     """
     global _trace_writer
@@ -191,5 +216,12 @@ async def record_span(
                 _trace_writer = await TraceWriter.get_instance(redis_url)
 
     await _trace_writer.write_span(
-        trace_id, span_name, duration_ms, metadata, tenant_id
+        trace_id,
+        span_name,
+        duration_ms,
+        metadata,
+        tenant_id,
+        span_id=span_id,
+        parent_span_id=parent_span_id,
+        kind=kind,
     )

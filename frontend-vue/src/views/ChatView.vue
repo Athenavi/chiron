@@ -667,6 +667,21 @@ function onToolsModeChange(v: unknown) {
   )
 }
 
+// ── 输出控制（差距B）：输出风格 / 语言偏好 ──
+//
+// 与 toolsMode 同一处置：**请求级实时状态**，经 llm_config 随每条消息下发（服务端不存储，
+// 避免"前端选、服务端存储、runtime"三份状态漂移）。取值集合须与
+// `python-engine/app/agent/output_controls.py` 的枚举逐字一致。
+const outputStyle = ref<string>('default')
+const language = ref<string>('auto')
+
+function onOutputStyleChange(v: unknown) {
+  outputStyle.value = String(v) || 'default'
+}
+function onLanguageChange(v: unknown) {
+  language.value = String(v) || 'auto'
+}
+
 // 模式
 const modeOptions = [
   { label: t('common.normal'), value: 'normal' },
@@ -737,6 +752,10 @@ function buildLlmConfig(base?: Record<string, unknown>): Record<string, unknown>
   if (llmModel.value) cfg.model = llmModel.value
   // 工具授权模式（ask/auto/yolo）：随请求下发，引擎侧 ToolGuard 据此裁决
   cfg.tools_mode = toolsMode.value
+  // 差距B：输出控制（风格 / 语言偏好）—— 同样是请求级实时状态，引擎侧会把它拼进 system 段。
+  // 默认态（default / auto）不携带 ⇒ 引擎不注入任何片段（system 段逐字不变、前缀缓存不受影响）。
+  if (outputStyle.value && outputStyle.value !== 'default') cfg.output_style = outputStyle.value
+  if (language.value && language.value !== 'auto') cfg.language = language.value
   const preset = MODE_PRESETS.value[mode.value]
   if (preset) {
     if (cfg.temperature === undefined) cfg.temperature = preset.temperature
@@ -2987,6 +3006,8 @@ function continueGeneration() {
         :model="llmModel"
         :session-id="unifiedMode ? unifiedSessionId : activeSessionId"
         :tools-mode="toolsMode"
+        :output-style="outputStyle"
+        :language="language"
         :context-chips="contextChips"
         @send="sendMessage"
         @stop="stopGeneration"
@@ -2996,6 +3017,8 @@ function continueGeneration() {
         @open-panel="openContextPanel"
         @mention-add="onMentionAdd"
         @tools-mode-change="onToolsModeChange"
+        @update:outputStyle="onOutputStyleChange"
+        @update:language="onLanguageChange"
         @remove-context-chip="(c: ContextChip) => removeContextChip(c.type, c.value)"
       />
 

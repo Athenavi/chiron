@@ -12,6 +12,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
+	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/monitor"
 	"github.com/athenavi/chiron/internal/session"
 )
@@ -36,6 +37,8 @@ func registerAgentRoutes(
 	// submitTimeout 单次提交（一条 SSE 回合）的后台执行上限；
 	// 来自 config.AgentSubmitTimeout，<=0 时回退 DefaultAgentTimeout。
 	submitTimeout time.Duration,
+	// pythonClient 用于"纯透传"端点（输出控制 / 提示精炼）——网关不存储、不改写。
+	pythonClient *engine.PythonClient,
 ) {
 	mux.Handle("POST /v1/agent/approval", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitApproval))))
 	// 结构化提问的回答：与审批同源（引擎 ask_user 阻塞等待用户输入），此前漏注册导致 404
@@ -43,6 +46,20 @@ func registerAgentRoutes(
 	// 真取消（ACP `session/cancel` 的落点）：与 approval / answer 同一套校验 —— 三者都是
 	// "从外部作用于正在运行的 agent 循环"的通道，少了身份校验就成了骚扰与成本攻击的入口。
 	mux.Handle("POST /v1/agent/interrupt", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitInterrupt))))
+
+	// 差距B：输出控制（风格 / 语言偏好）与提示精炼 —— **纯透传**到引擎。
+	// 两者都是"用户的实时选择 / 一次性动作"：网关不存储、不改写、不做业务判断，
+	// 因此直接转发（唯一必要的是身份与限流，与 agent 的其它外部通道一致）。
+	if pythonClient != nil {
+		mux.Handle("GET /v1/agent/output-controls",
+			authMW(rlMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				pythonClient.ForwardRequest(w, r, "/v1/agent/output-controls")
+			}))))
+		mux.Handle("POST /v1/agent/refine",
+			authMW(rlMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				pythonClient.ForwardRequest(w, r, "/v1/agent/refine")
+			}))))
+	}
 
 	// submitHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册
 	submitHandlerFunc := func(w http.ResponseWriter, r *http.Request) {

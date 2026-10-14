@@ -23,6 +23,8 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from app.agent.bounded_llm import call_bounded
+
 logger = logging.getLogger(__name__)
 
 #: 默认评审轮数上限（方案：开启时默认最多迭代 2 次）。
@@ -181,13 +183,6 @@ def wrap_untrusted(feedback: str) -> str:
     return f"<{FEEDBACK_TAG}>\n{FEEDBACK_NOTE}\n\n{body}\n</{FEEDBACK_TAG}>"
 
 
-def _usage(response: Any) -> tuple[int, int]:
-    return (
-        int(getattr(response, "input_tokens", 0) or 0),
-        int(getattr(response, "output_tokens", 0) or 0),
-    )
-
-
 async def _grade_once(
     *, gateway: Any, model: str, criteria: str, transcript: str, answer: str
 ) -> tuple[Grade | None, int, int, str]:
@@ -210,17 +205,19 @@ async def _grade_once(
             ),
         },
     ]
-    try:
-        response = await gateway.chat(
-            messages=prompt, model=model, max_tokens=GRADER_MAX_TOKENS
-        )
-    except Exception as exc:  # noqa: BLE001 — 评审失败不能影响已经产出的回答
-        return None, 0, 0, f"grader call failed: {str(exc)[:160]}"
-    in_tokens, out_tokens = _usage(response)
-    grade = parse_grade(str(getattr(response, "content", "") or ""))
+    result = await call_bounded(
+        gateway,
+        messages=prompt,
+        model=model,
+        max_tokens=GRADER_MAX_TOKENS,
+        purpose="rubric-grade",
+    )
+    if not result.ok:
+        return None, 0, 0, result.error
+    grade = parse_grade(result.text)
     if grade is None:
-        return None, in_tokens, out_tokens, "grader did not return a JSON object"
-    return grade, in_tokens, out_tokens, ""
+        return None, result.input_tokens, result.output_tokens, "grader did not return a JSON object"
+    return grade, result.input_tokens, result.output_tokens, ""
 
 
 async def _revise_once(
@@ -249,16 +246,17 @@ async def _revise_once(
             ),
         },
     ]
-    try:
-        response = await gateway.chat(
-            messages=prompt, model=model, max_tokens=REVISE_MAX_TOKENS
-        )
-    except Exception as exc:  # noqa: BLE001
-        logger.info("S6b revision call failed: %s", str(exc)[:160])
+    result = await call_bounded(
+        gateway,
+        messages=prompt,
+        model=model,
+        max_tokens=REVISE_MAX_TOKENS,
+        purpose="rubric-revise",
+    )
+    if not result.ok:
+        logger.info("S6b revision call failed: %s", result.error)
         return "", 0, 0
-    in_tokens, out_tokens = _usage(response)
-    revised = str(getattr(response, "content", "") or "").strip()
-    return revised, in_tokens, out_tokens
+    return result.text.strip(), result.input_tokens, result.output_tokens
 
 
 async def run_rubric(

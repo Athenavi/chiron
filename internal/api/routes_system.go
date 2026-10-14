@@ -48,6 +48,8 @@ func registerSystemRoutes(
 	if traceHandler != nil {
 		mux.Handle("GET /v1/traces", authMW(rlMW(http.HandlerFunc(traceHandler.ListTraces))))
 		mux.Handle("GET /v1/traces/{trace_id}", authMW(rlMW(http.HandlerFunc(traceHandler.GetTrace))))
+		// 差距C：执行图（父子连通）—— GetTrace 给的是扁平 span 列表，这里给的是"从哪来"。
+		mux.Handle("GET /v1/traces/{trace_id}/graph", authMW(rlMW(http.HandlerFunc(traceHandler.GetTraceGraph))))
 	}
 
 	// 子 Agent 运行观测（层级树 / 详情 / 过程）：Redis 优先、DB 回落，租户隔离。

@@ -8,6 +8,7 @@ from app.api.context import router as context_router
 from app.api.internal_subagent import router as internal_subagent_router
 from app.api.knowledge import router as knowledge_router
 from app.api.memory import router as memory_router
+from app.api.output_controls import router as output_controls_router
 from app.api.plugins import router as plugins_router
 from app.api.skills import router as skills_router
 from app.api.system import router as system_router
@@ -27,4 +28,5 @@ api_router.include_router(chat_router)
 api_router.include_router(capabilities_router)
 api_router.include_router(context_router)
 api_router.include_router(memory_router)
+api_router.include_router(output_controls_router)
 api_router.include_router(system_router)

@@ -29,6 +29,14 @@
           </svg>
           {{ $t('agent.tool_call_chain_n_tools_ms_ms_total', { n: spanCount, ms: totalDurationMs }) }}
         </span>
+        <!-- 差距C：时间线 / 执行图切换（同一份 trace 的两种视图） -->
+        <button
+          class="view-toggle"
+          :title="$t('chat.trace_view_toggle_tooltip')"
+          @click.stop="viewMode = viewMode === 'graph' ? 'timeline' : 'graph'"
+        >
+          {{ viewMode === 'graph' ? $t('chat.trace_view_timeline') : $t('chat.trace_view_graph') }}
+        </button>
         <span class="header-icon">{{ isExpanded ? '▼' : '▶' }}</span>
       </div>
 
@@ -36,7 +44,30 @@
         v-if="isExpanded"
         class="timeline-body"
       >
+        <!-- 差距C：执行图（父子连通）。时间线回答"有哪些步骤"，执行图回答"从哪来"。 -->
+        <div
+          v-if="viewMode === 'graph'"
+          class="graph-body"
+        >
+          <div
+            v-for="(row, idx) in graphRows"
+            :key="idx"
+            class="graph-node"
+            :style="{ paddingLeft: (row.depth * 18 + 8) + 'px' }"
+          >
+            <span class="graph-kind">{{ row.node.kind || 'span' }}</span>
+            <span class="node-name">{{ getSpanDisplayName(row.node) }}</span>
+            <span class="node-duration">{{ row.node.duration_ms }}ms</span>
+          </div>
+          <div
+            v-if="!graphRows.length"
+            class="graph-empty"
+          >
+            {{ $t('chat.trace_graph_empty') }}
+          </div>
+        </div>
         <!-- 时间线渲染 -->
+        <template v-else>
         <div
           v-for="(span, idx) in displaySpans"
           :key="idx"
@@ -76,6 +107,7 @@
           <CheckCircleOutlined style="color: var(--success)" />
           <span>{{ $t('chat.inference_complete_total_ms_ms', { ms: totalDurationMs }) }}</span>
         </div>
+        </template>
       </div>
     </CollapseTransition>
   </div>
@@ -98,6 +130,15 @@ interface TraceSpan {
   tenant_id: string
   metadata?: Record<string, unknown>
   showDetails?: boolean
+  // 差距C（执行图）：稳定的节点 id / 父指针 / 类别。
+  span_id?: string
+  parent_span_id?: string
+  kind?: string
+}
+
+/** 执行图节点（含子节点，递归）。 */
+interface TraceGraphNode extends TraceSpan {
+  children?: TraceGraphNode[]
 }
 
 const props = defineProps<{
@@ -149,6 +190,37 @@ function toggle() {
   isExpanded.value = !isExpanded.value
 }
 
+// ── 差距C：执行图视图 ──
+//
+// 时间线回答"这次有哪些步骤"（扁平），执行图回答"某一步是从哪来的"（父子连通）。
+// 两者是同一次 trace 的两种视图，因此放在同一组件里切换，而不是两个入口。
+const viewMode = ref<'timeline' | 'graph'>('timeline')
+const graphRoots = ref<TraceGraphNode[]>([])
+
+watch([() => props.traceId, viewMode], async ([id, mode]) => {
+  if (!id || mode !== 'graph') return
+  try {
+    const response = await api.get(`/v1/traces/${encodeURIComponent(id)}/graph`)
+    const payload = response.data?.data ?? response.data
+    graphRoots.value = payload?.roots || []
+  } catch {
+    graphRoots.value = []
+  }
+}, { immediate: true })
+
+interface GraphRow { node: TraceGraphNode; depth: number }
+
+/** 把树压成"带缩进的行" —— 避免为 v-for 引入递归组件（渲染更稳、更易测）。 */
+function flatten(nodes: TraceGraphNode[], depth = 0, out: GraphRow[] = []): GraphRow[] {
+  for (const n of nodes) {
+    out.push({ node: n, depth })
+    if (n.children?.length) flatten(n.children, depth + 1, out)
+  }
+  return out
+}
+
+const graphRows = computed<GraphRow[]>(() => flatten(graphRoots.value))
+
 const spanCount = computed(() => displaySpans.value.filter(s => s.span_name.startsWith('tool:')).length)
 const totalDurationMs = computed(() => displaySpans.value.reduce((sum, s) => sum + s.duration_ms, 0))
 
@@ -199,6 +271,38 @@ function capitalize(str: string): string {
 </script>
 
 <style scoped>
+/* 差距C：时间线 / 执行图 切换与执行图渲染 */
+.view-toggle {
+  margin-left: 8px;
+  padding: 1px 8px;
+  font-size: 11px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: transparent;
+  cursor: pointer;
+}
+.graph-body {
+  padding: 6px 0;
+}
+.graph-node {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 8px;
+  font-size: 12px;
+}
+.graph-kind {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 4px;
+}
+.graph-empty {
+  padding: 8px;
+  font-size: 12px;
+}
 .callchain-timeline {
   margin-top: 12px;
   border: 1px solid var(--border);

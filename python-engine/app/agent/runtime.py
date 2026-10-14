@@ -228,7 +228,11 @@ def _normalize_msg(
 
 
 def _apply_system_prefix(
-    messages: list[dict[str, Any]], task: AgentTask, *, extra_suffix: str = ""
+    messages: list[dict[str, Any]],
+    task: AgentTask,
+    *,
+    extra_suffix: str = "",
+    controls_suffix: str = "",
 ) -> list[dict[str, Any]]:
     """把 messages 的 system 段**重新定形**为「稳定前缀 + 记忆」（C2/D2 的统一落点）。
 
@@ -260,6 +264,11 @@ def _apply_system_prefix(
         # 因此它落在**稳定前缀的末尾**：同租户同模型下逐字稳定 ⇒ 前缀缓存仍然命中。
         if extra_suffix:
             base_prompt = f"{base_prompt}\n\n{extra_suffix}"
+        # 差距B：用户可见的**输出控制**（风格 / 语言偏好）。默认态（default + auto）为空串 ⇒
+        # system 段与引入前**逐字相同**；非默认时它落在**稳定前缀的末尾**（同会话同选择下
+        # 逐字稳定 ⇒ 前缀缓存仍命中）。位置与 harness suffix 一致：都在记忆之前。
+        if controls_suffix:
+            base_prompt = f"{base_prompt}\n\n{controls_suffix}"
         prefix.append(
             _normalize_msg(role="system", content=base_prompt, cache_breakpoint=True)
         )
@@ -1136,6 +1145,10 @@ class AgentRuntime:
 
         # ── 0.5 生成 trace_id (跨实例链路追踪) ───────────────────────────
         trace_id = uuid_mod.uuid4().hex[:12]
+        # 差距C（执行图）：run 是根 span，turn 是它的子节点，llm / tool 调用又是 turn 的子节点。
+        # 用**确定性 id**（`{trace}:run` / `{trace}:turn:N`）而非随机 id —— 父指针在写 span 时
+        # 无需共享状态即可算出，补写/重放也不会产生重影节点。
+        run_span_id = f"{trace_id}:run"
 
         # OpenCode（Zen / Go）强制要求请求带 `x-opencode-session`，缺失直接 400
         # （MissingSessionID）。把会话标识放进 contextvar，由 provider 层
@@ -1420,7 +1433,17 @@ class AgentRuntime:
                 task.user_id or "",
                 str((task.llm_config or {}).get("model", "") or ""),
             )
-            messages = _apply_system_prefix(messages, task, extra_suffix=_extra_suffix)
+            # 差距B：用户可见的**输出控制**（风格 / 语言偏好）。取值来自 llm_config
+            # （前端实时状态，服务端不存储 —— 与 tools_mode 同一处置，避免三份状态漂移）。
+            from app.agent.output_controls import build_controls_suffix, resolve_controls
+
+            _out_style, _out_lang = resolve_controls(task.llm_config)
+            messages = _apply_system_prefix(
+                messages,
+                task,
+                extra_suffix=_extra_suffix,
+                controls_suffix=build_controls_suffix(_out_style, _out_lang),
+            )
 
             tools = (
                 self._convert_tools(task.tools)
@@ -1480,6 +1503,9 @@ class AgentRuntime:
             from app.agent.interrupt import clear_interrupt, is_interrupted
 
             for turn in range(task.max_turns):
+                # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
+                turn_span_id = f"{trace_id}:turn:{turn + 1}"
+                _turn_started = time.time()
                 # ── 预算检查（每轮开头）──
                 # turns / tokens / wall 在这里判，steps 在每次工具调用后判（见下）。
                 # 越界产出 `budget_exceeded:<轴>` 并收尾 —— 与子 Agent 同一语义：是**失败**，
@@ -1748,6 +1774,10 @@ class AgentRuntime:
                         "turn": turn + 1,
                     },
                     tenant_id=task.tenant_id,  # SaaS 安全: 租户隔离
+                    # 差距C：挂在本轮 turn 节点下 —— 执行图里"这一步属于哪一轮"由此可知。
+                    span_id=f"{turn_span_id}:llm",
+                    parent_span_id=turn_span_id,
+                    kind="llm",
                 )
 
                 # ── max_tokens 截断保护（S 安全修复）─────────────────────────
@@ -1976,8 +2006,15 @@ class AgentRuntime:
                             metadata={
                                 "tool_name": call["name"],
                                 "success": tool_result.get("error") is None,
+                                "tool_call_id": call.get("id", ""),
                             },
                             tenant_id=task.tenant_id,  # SaaS 安全: 租户隔离
+                            # 差距C：工具节点挂在它所属的 turn 下；节点 id 用 tool_call_id，
+                            # 于是执行图节点与会话里落库的 tool_call 记录可**互相定位**
+                            # （审计时最常用的一条路径：从图点进那次调用的输入/输出）。
+                            span_id=f"{turn_span_id}:tool:{call.get('id') or call['name']}",
+                            parent_span_id=turn_span_id,
+                            kind="tool",
                         )
 
                         # tool 结果消息（清洗 → 分级 → 大结果结构摘要 + 落盘引用）
@@ -2011,6 +2048,20 @@ class AgentRuntime:
                             "output_tokens": total_output_tokens,
                             "cached_tokens": total_cached_tokens,
                         },
+                    )
+
+                    # 差距C：登记本轮在执行图里的节点（父 = run 节点）。放在回合边界，因为这里是
+                    # "这一轮完整结束"的唯一位置 —— 它的子节点（llm / tool）已在各自发生时写过。
+                    # 失败不致命：`record_span` 内部 fail-soft（Redis 不可用时只跳过追踪）。
+                    await record_span(
+                        trace_id=trace_id,
+                        span_name="turn",
+                        duration_ms=int((time.time() - _turn_started) * 1000),
+                        metadata={"turn": turn + 1, "tools": len(done_tool_ids)},
+                        tenant_id=task.tenant_id,
+                        span_id=turn_span_id,
+                        parent_span_id=run_span_id,
+                        kind="turn",
                     )
 
                     # ── C4：用 provider 回传的**真实** input_tokens 校准估算系数 ──

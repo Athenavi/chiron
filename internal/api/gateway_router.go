@@ -387,7 +387,7 @@ func NewGatewayRouter(
 	// ── Route registration by functional domain ──
 
 	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg, fileStore)
-	registerAgentRoutes(mux, authMW, rlMW, publicMW, sanitizeMW, submitHandler, billingMgr, agentSem, tenantResMgr, eventHub, sessionMgr, authenticator, rpaHub, cfg.InternalToken, cfg.AgentSubmitTimeout)
+	registerAgentRoutes(mux, authMW, rlMW, publicMW, sanitizeMW, submitHandler, billingMgr, agentSem, tenantResMgr, eventHub, sessionMgr, authenticator, rpaHub, cfg.InternalToken, cfg.AgentSubmitTimeout, pythonClient)
 
 	// 子 Agent 完成 → 父会话新一轮：由引擎队列（agent_followup 任务）调用，
 	// 复用 /submit 的全套闸门（幂等/会话锁/并发/计费预检，见 agent_followup.go）。

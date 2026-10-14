@@ -15,6 +15,7 @@ run_in_background / job_output / job_kill / persistent_shell 都曾因此不存�
 """
 
 import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻辑在 runtime）
+import app.tools.best_of_n  # noqa: F401 — 差距D：多候选 + judge 选优
 import app.tools.browser  # noqa: F401
 import app.tools.core  # noqa: F401
 import app.tools.edit_file  # noqa: F401
