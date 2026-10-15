@@ -14,17 +14,15 @@ chiron 一键运行脚本
     python run.py setup          # 首次安装依赖
 """
 
+import argparse
 import os
+import platform
+import signal
+import socket
+import subprocess
 import sys
 import time
-import signal
-import shutil
-import platform
-import argparse
-import subprocess
-import socket
 from pathlib import Path
-from typing import Optional
 
 # ── 配置 ──────────────────────────────────────────────────────
 
@@ -95,6 +93,41 @@ def load_env_file():
 # 启动时加载 .env 文件
 load_env_file()
 
+# ── 档位与自适应（多配置 + 参数选环境 + 缺失时自动检测）─────────────────────
+#
+# 同一个 .env 被 compose（容器主机名 postgres / sandbox-lb）与 run.py（本机直跑）共用，
+# 而容器名在本机解析不到 ⇒ 网关与引擎双双 fail-closed 拒绝启动。详见 local_env_profile.py。
+#
+# **这里只定义、不执行**：档位来自 `--env` 命令行参数，而 argparse 在 main() 里、晚于模块级
+# 代码。原先在模块级直接应用，导致 `--env` 永远取不到值（只能退回环境变量）。
+
+
+def _apply_env_profile(profile: str | None) -> None:
+    """应用档位与自适应。必须在 **argparse 之后、任何服务启动之前** 调用。
+
+    `_build_env` 取的是 `DEFAULT_ENV`，所以只要在起进程前应用即可（status / logs 之类
+    不读 env 的命令不调用它 —— 见 main() 里按命令收窄的那一段）。
+    """
+    try:
+        # 显式把项目根放进 sys.path：`local_env_profile` 就在 run.py 旁边，但 sys.path[0]
+        # 取决于**怎么调用**（`python run.py` 是脚本目录，`runpy` / `-m` 则可能是别处）。
+        # 不保底的话 import 会静默失败 → 档位与自适应不生效 → 直接退回"容器地址在本机
+        # 解析不了"的原始故障，且现场几乎看不出原因。
+        if str(BASE_DIR) not in sys.path:
+            sys.path.insert(0, str(BASE_DIR))
+        from local_env_profile import apply_profile
+
+        for note in apply_profile(BASE_DIR, DEFAULT_ENV, profile=profile):
+            print(f"  [env] {note}")
+    except Exception as exc:  # noqa: BLE001
+        # **显式指定的档位**出问题 ⇒ 拒绝启动：用户明确要求了它，静默忽略会让他以为生效了，
+        # 实际却拿另一套配置去起服务 —— 最坏的情况是"看着起来了、连的却是别的库"。
+        # 自动发现（profile 为 None）出问题则只提示、不阻塞：那是"尽力而为"。
+        if profile:
+            print(f"  [env] 档位 {profile!r} 无法加载：{exc}")
+            raise SystemExit(2) from exc
+        print(f"  [env] 档位/自适应跳过: {exc}")
+
 
 # ── 工具函数 ──────────────────────────────────────────────────
 
@@ -137,7 +170,7 @@ def get_pid_file(service: str) -> Path:
     return PID_DIR / f"{service}.pid"
 
 
-def read_pid(service: str) -> Optional[int]:
+def read_pid(service: str) -> int | None:
     pf = get_pid_file(service)
     if pf.exists():
         try:
@@ -282,7 +315,7 @@ class ServiceManager:
         print(green("编译成功"))
         return True
 
-    def _find_service_pid(self, key: str, port: int) -> Optional[int]:
+    def _find_service_pid(self, key: str, port: int) -> int | None:
         """找到监听指定端口的进程 PID"""
         try:
             if is_windows():
@@ -416,12 +449,41 @@ class ServiceManager:
                 return True
             if proc.poll() is not None:
                 print(f"  {name}: {red('启动失败（进程已退出）')} (退出码 {proc.returncode})")
+                # 失败时**直接把日志尾部贴出来** —— 否则用户得自己去 logs/ 里翻，
+                # 而启动失败的原因几乎总在最后几行（依赖不可用 / 配置错误）。
+                self._print_log_tail(key)
                 remove_pid(key)
                 return False
             time.sleep(1)
 
-        print(f"  {name}: {yellow('已启动但端口未就绪')} (PID {proc.pid})")
-        return True
+        # 端口 20 秒仍未就绪 **不等于成功**：进程可能卡在初始化，或已经进入"拒绝服务"状态
+        # 却还没退出。原先这里 `return True` 并打印"已启动但端口未就绪"，是一个**真实的误报点**
+        # —— 调用方（含 `restart` 的汇总）会把它当成启动成功。
+        print(f"  {name}: {red('启动失败（端口未就绪）')} (PID {proc.pid}, 端口 {port} 在 20s 内未监听)")
+        self._print_log_tail(key)
+        print(gray(f"  {name}: 进程仍在（PID {proc.pid}），可用 python run.py stop 停止"))
+        return False
+
+    def _print_log_tail(self, key: str, lines: int = 12):
+        """打印该服务 stdout/stderr 日志的尾部（启动失败时定位原因用）。
+
+        两个文件都看：Go 网关把 FATAL 写 stdout，Python 引擎把 traceback 写 stderr ——
+        只看一个会漏。取不到就**安静跳过**（日志缺失不该盖住"启动失败"这个主结论）。
+        """
+        for kind in ("stdout", "stderr"):
+            path = get_log_file(key, kind)
+            try:
+                if not path.exists() or path.stat().st_size == 0:
+                    continue
+                text = path.read_text(encoding="utf-8", errors="replace").strip()
+            except OSError:
+                continue
+            if not text:
+                continue
+            tail = text.splitlines()[-lines:]
+            print(gray(f"  ── {path.name} 末尾 {len(tail)} 行 ──"))
+            for line in tail:
+                print(gray(f"  │ {line}"))
 
     def stop_service(self, key: str):
         """停止单个服务"""
@@ -559,14 +621,14 @@ class ServiceManager:
         """打印启动摘要"""
         print(bold("\n═══ 服务访问地址 ═══\n"))
         print(f"  Gateway:      http://localhost:{SERVICES['gateway']['port']}")
-        print(f"  HTTP 引擎:    http://localhost:8000")
+        print("  HTTP 引擎:    http://localhost:8000")
         print()
         print(f"  日志目录:     {LOG_DIR}")
         print(f"  PID 目录:     {PID_DIR}")
         print()
-        print(f"  停止服务:     python run.py stop")
-        print(f"  查看状态:     python run.py status")
-        print(f"  查看日志:     python run.py logs")
+        print("  停止服务:     python run.py stop")
+        print("  查看状态:     python run.py status")
+        print("  查看日志:     python run.py logs")
         print()
 
 
@@ -597,8 +659,20 @@ def main():
     parser.add_argument("service", nargs="?", help="指定服务 (gateway/python-engine)")
     parser.add_argument("--fg", action="store_true", help="前台模式运行")
     parser.add_argument("--tail", type=int, default=50, help="日志行数")
+    parser.add_argument(
+        "--env",
+        default=os.environ.get("CHIRON_ENV") or None,
+        metavar="NAME",
+        help="配置档位：读取 .env.NAME（缺省时自动发现 .env.local，没有才退回环境自适应）",
+    )
 
     args = parser.parse_args()
+
+    # 档位与自适应只在**会用到 DEFAULT_ENV 的命令**上应用：start / restart / build。
+    # status / stop / logs 只读 PID 文件与日志、不读 env，对它们做档位既无意义，
+    # 又会往本应干净的输出里插一行 `[env] …`（没有 .env.local 时还会白跑一轮 TCP 探测）。
+    if args.command in ("start", "restart", "build"):
+        _apply_env_profile(args.env)
 
     mgr = ServiceManager()
 
