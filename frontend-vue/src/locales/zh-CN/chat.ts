@@ -227,4 +227,7 @@ export default {
   think_lang_zh: "简体中文",
   think_lang_en: "English",
   think_lang_ar: "العربية",
+  // ── 收尾1：P1 完成判定的界面呈现（实时事件与历史留痕共用同一套措辞） ──
+  turn_incomplete_reasons: "本轮未完成（host 证据判定）：{reasons}",
+  turn_incomplete_more: "另 {n} 项",
 }

@@ -229,9 +229,23 @@ class MCPClient:
         """Connect to all configured MCP servers and discover their tools."""
         for server in self._servers:
             try:
+                # 收尾3：把该 server 的凭据登记进**进程级集合**。于是所有走 `redact_text`
+                # 的出站路径（输出栅栏 / 审计留痕 / 工具结果回灌）自动覆盖它们 ——
+                # 不必要求每个调用点各自记得处理（那正是"迟早漏一处"的来源）。
+                from app.mcp.credential_projection import collect_secrets, register_secrets
+
+                register_secrets(collect_secrets(server))
                 await self._connect_server(server)
             except Exception as e:
-                logger.error("MCP connect %s failed: %s", server.name, e)
+                # D4：连接失败消息里可能带 url / env 的凭据（HTTP SSE 常把 token 放 query），
+                # 所以这里先**脱敏**再记日志 —— 日志会被采集、被转发、被贴进工单。
+                from app.mcp.credential_projection import collect_secrets, redact, safe_label
+
+                logger.error(
+                    "MCP connect %s failed: %s",
+                    safe_label(server),
+                    redact(str(e), collect_secrets(server)),
+                )
                 raise
 
     async def _connect_server(self, server: ServerDef) -> None:
@@ -375,7 +389,9 @@ class MCPClient:
             try:
                 await conn.close()
             except Exception as e:
-                logger.warning("Error closing MCP server %s: %s", name, e)
+                # 这里只有名字，拿不到 server 定义 ⇒ 无法枚举凭据；但仍按"可能含凭据"处理，
+                # 只记异常类型与名字（不对未知文本做替换，避免把日志弄得不可读）。
+                logger.warning("Error closing MCP server %s: %s", name, type(e).__name__)
         self._conns.clear()
 
 

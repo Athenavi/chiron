@@ -33,6 +33,7 @@ import {
   SafetyOutlined,
   FileSearchOutlined,
   MedicineBoxOutlined,
+  BarChartOutlined,
   IdcardOutlined,
   WalletOutlined,
   PayCircleOutlined,
@@ -123,6 +124,8 @@ const menuGroups = computed(() => [
     key: 'g-platform', label: t('common.platform'),
     children: [
       { key: '/admin/costcenter', label: t('common.cost_center'), icon: () => h(WalletOutlined) },
+      // D3：用量目录 —— 与成本中心同域（配额用量答"还剩多少"，它答"花在哪"）。
+      { key: '/admin/usage-catalog', label: t('admin.usage_catalog'), icon: () => h(BarChartOutlined) },
       // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
       { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
       { key: '/admin/api-docs', label: t('knowledge.api_documentation'), icon: () => h(FileTextOutlined) },

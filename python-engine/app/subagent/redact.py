@@ -49,6 +49,11 @@ def redact_text(text: str | None) -> tuple[str, int]:
     """脱敏 *text*，返回 ``(脱敏后文本, 命中数)``。
 
     非字符串/空值原样返回、计数为 0 —— 调用方无需先判空。
+
+    **两层**：先按模式（`PATTERNS`：密钥/路径的**通用形态**），再按**运行时登记的凭据**
+    （收尾3：MCP server 的 env / url / args 值，经 `credential_projection.register_secrets`
+    登记）。第二层的意义是"**知道确切值**"—— 通用规则认不出的自定义 token（例如自建网关的
+    一串随机串），只有值比对才拦得住。
     """
     if not text or not isinstance(text, str):
         return text or "", 0
@@ -57,6 +62,20 @@ def redact_text(text: str | None) -> tuple[str, int]:
     for kind, pattern in PATTERNS:
         out, replaced = pattern.subn(REDACTED_TEMPLATE.format(kind=kind), out)
         hits += replaced
+    # 收尾3：运行时登记的凭据（值比对）。**失败不影响主路径** —— 脱敏这一层出问题，
+    # 不该让本该发出的文本变成发不出去（那会把一个安全问题换成一个可用性事故）。
+    try:
+        from app.mcp.credential_projection import redact as _redact_known
+        from app.mcp.credential_projection import registered_secrets
+
+        secrets = registered_secrets()
+        if secrets:
+            before = out
+            out = _redact_known(out, secrets)
+            if out != before:
+                hits += 1
+    except Exception:  # noqa: BLE001
+        pass
     return out, hits
 
 

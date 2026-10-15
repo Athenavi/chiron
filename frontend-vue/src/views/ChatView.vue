@@ -2251,6 +2251,29 @@ function flushStreamingFlags() {
   resetStreamState()
 }
 
+/**
+ * 完成判定事件的**实时**文案（P1）：载荷是 host 证据判定的报告 `{outcome, findings, reasons}`。
+ *
+ * **只在未完成时返回文案** —— `completed` / `none` 不插行（正常对话不该多一行噪声）；
+ * 解析不出也不插行（宁可没有，也不给用户看半截信息）。与历史留痕（`goal_incomplete`）
+ * 同一套措辞，避免"实时看到的"和"刷新后看到的"说得不一样。
+ */
+function goalCompletionNotice(raw: string): string {
+  try {
+    const report = JSON.parse((raw || '').trim() || '{}') as { outcome?: unknown; reasons?: unknown }
+    const outcome = typeof report.outcome === 'string' ? report.outcome : ''
+    if (!outcome || outcome === 'completed' || outcome === 'none') return ''
+    const reasons = Array.isArray(report.reasons)
+      ? report.reasons.filter((r): r is string => typeof r === 'string' && r.trim() !== '')
+      : []
+    const head = reasons.slice(0, 3).join('；')
+    const more = reasons.length > 3 ? `（${t('chat.turn_incomplete_more', { n: reasons.length - 3 })}）` : ''
+    return t('chat.turn_incomplete_reasons', { reasons: head + more || outcome })
+  } catch {
+    return ''
+  }
+}
+
 function onSSEMessage(raw: unknown) {
   // SSE 载荷来自服务端 JSON（createSSEConnection 的 onMessage 契约即 unknown）：
   // 在边界一次性窄化成 Record，后续各事件分支只做字段级取值，不把 unknown 透出去。
@@ -2280,6 +2303,19 @@ function onSSEMessage(raw: unknown) {
         kind: 'tool_result', toolCallId: callId, id: `${callId}:res`,
         content: typeof content === 'string' ? content : JSON.stringify(content),
         isError: !!d.error,
+      })
+    }
+  } else if (type === 'completion') {
+    // P1：host 证据判定的**实时**结论。只在"未完成"时插一条通知行 —— 否则"这一轮没做完"
+    // 与"正常结束"在界面上完全一样（用户只看到回复停了下来）。
+    const notice = goalCompletionNotice(String(d.content ?? evt.content ?? ''))
+    if (notice) {
+      items.value.push({
+        kind: 'notice',
+        tone: 'warning',
+        content: notice,
+        time: new Date().toLocaleTimeString(),
+        id: `completion:${Date.now()}`,
       })
     }
   } else if (type === 'usage' || type === 'turn_stats') {

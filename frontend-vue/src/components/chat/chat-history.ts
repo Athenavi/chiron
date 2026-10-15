@@ -107,6 +107,32 @@ function interruptedKey(input: string): string {
 }
 
 /**
+ * 完成判定留痕的文案：载荷是 host 证据判定的报告 `{"outcome":"…","reasons":[…]}`。
+ *
+ * 它回答"这一轮**为什么不算做完**"。在此之前，**未完成与正常结束在界面上没有任何区别** ——
+ * 用户只看到回复停了下来（P1 把"完成"从模型自报改成 host 证据，但界面一直没展示结论）。
+ * 理由逐条列出（最多 3 条，其余折叠成计数）；解析不出返回空串 ⇒ 调用方**不插行**。
+ */
+function goalIncompleteText(input: string): string {
+  try {
+    const report = JSON.parse((input || '').trim() || '{}') as {
+      outcome?: unknown
+      reasons?: unknown
+    }
+    const reasons = Array.isArray(report.reasons)
+      ? report.reasons.filter((r): r is string => typeof r === 'string' && r.trim() !== '')
+      : []
+    if (!reasons.length) return ''
+    const head = reasons.slice(0, 3).join('；')
+    const more = reasons.length > 3 ? `（${t('chat.turn_incomplete_more', { n: reasons.length - 3 })}）` : ''
+    return t('chat.turn_incomplete_reasons', { reasons: head + more })
+  } catch {
+    /* 不是合法 JSON ⇒ 空串（不插行） */
+  }
+  return ''
+}
+
+/**
  * 把 `/v1/conversations/{id}` 返回的 `messages` + `tool_calls` 合并成时间线条目。
  *
  * 行为与原先 `ChatView` 内部版本**逐字一致**（抽取时未改动逻辑，只补了导出与注释）。
@@ -268,6 +294,27 @@ export function mergeHistory(
           turnId,
         }],
       })
+      continue
+    }
+    // 完成判定留痕（P1）：网关在 **host 证据判定为"未完成"** 时落一条
+    // `tool_name='goal_incomplete'` 的记录（载荷 `{outcome, reasons[]}`）⇒ 渲染成 **warning 通知行**。
+    // 与实时 `completion` 事件互补：那边是即时读数，这里是**刷新后仍可追溯**的留痕。
+    // 解析不出就不插行（宁可没有，也不给用户看半截信息）。
+    if ((tc.tool_name || '') === 'goal_incomplete') {
+      const text = goalIncompleteText(tc.input || '')
+      if (text) {
+        timeline.push({
+          t: new Date(tc.created_at || '').getTime(),
+          items: [{
+            kind: 'notice',
+            tone: 'warning',
+            content: text,
+            time: formatClock(tc.created_at),
+            id: tc.id,
+            turnId,
+          }],
+        })
+      }
       continue
     }
     const callItems: ChatItem[] = [
