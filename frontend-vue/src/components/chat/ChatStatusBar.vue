@@ -18,6 +18,8 @@ const props = defineProps<{
   compactRatio?: number | null
   /** 上下文分段（各类别的估算 token）：回答"上下文被谁占满了" */
   breakdown?: Record<string, number> | null
+  /** 占用最大的几条（只含类别/角色/大小，**不含消息内容**）：回答"是哪一条占的" */
+  largest?: Array<{ class?: string; role?: string; tokens?: number }> | null
   /** 前缀缓存诊断：`prefix_changed` 非空说明稳定前缀被打断（命中率会掉） */
   cache?: { prefix_changed?: string[]; first_turn?: boolean } | null
   /** 最近一次自动压缩（问题 4）：让"上下文被压缩了"可见，而不是悄悄变短 */
@@ -125,6 +127,7 @@ const cacheWarnText = computed(() => {
       :limit="contextLimit ?? null"
       :compact-ratio="compactRatio ?? null"
       :breakdown="breakdown ?? null"
+      :largest="largest ?? null"
     />
     <!-- 观测面板入口：子 Agent 与统计已从侧栏移出（侧栏只留"导航"：轨迹 / 会话历史）。
          复用 .cs-item 的行内样式，不引入新的尺寸体系；角标只在真有运行时出现。 -->

@@ -639,7 +639,7 @@ const budgetSnapshot = ref<Record<string, { used?: number; limit?: number }> | n
 const sessionCostCents = ref<number | null>(null)
 // 上下文快照（引擎 `done` 带 `context={used, limit, compact_ratio}`）。阈值也由引擎给出，
 // 前端不写死常量 —— 它可被租户/模式覆盖。
-const contextSnapshot = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> } | null>(null)
+const contextSnapshot = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number>; largest?: Array<{ class?: string; role?: string; tokens?: number }> } | null>(null)
 // 前缀缓存诊断（引擎 `done` 带 `cache={prefix_changed: ["system"|"tools"]}`）。空数组 = 逐字未变。
 const cacheSnapshot = ref<{ prefix_changed?: string[]; first_turn?: boolean } | null>(null)
 
@@ -2482,7 +2482,7 @@ function onSSEMessage(raw: unknown) {
       ? (d.budget as Record<string, { used?: number; limit?: number }>)
       : null
     contextSnapshot.value = (d.context && typeof d.context === 'object')
-      ? (d.context as { used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> })
+      ? (d.context as { used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number>; largest?: Array<{ class?: string; role?: string; tokens?: number }> })
       : null
     cacheSnapshot.value = (d.cache && typeof d.cache === 'object')
       ? (d.cache as { prefix_changed?: string[]; first_turn?: boolean })
@@ -3188,6 +3188,7 @@ function continueGeneration() {
         :context-limit="contextWindow"
         :compact-ratio="contextSnapshot?.compact_ratio ?? null"
         :breakdown="contextSnapshot?.breakdown ?? null"
+        :largest="contextSnapshot?.largest ?? null"
         :cache="cacheSnapshot"
         :compaction="lastCompaction"
         :budget="budgetSnapshot"

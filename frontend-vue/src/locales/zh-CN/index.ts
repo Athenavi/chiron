@@ -493,6 +493,7 @@ export default {
     context_remaining_tokens: "剩余 {n} tokens",
     context_compacts_at: "{pct}% 时自动压缩",
     context_breakdown: "系统 {system} · 历史 {history} · 工具 {tools} · 本轮 {current}",
+    context_largest_items: "最大 {items}",
     todo_pending: "待处理",
     todo_in_progress: "进行中",
     todo_completed: "已完成",
