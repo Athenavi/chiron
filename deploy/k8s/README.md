@@ -105,7 +105,7 @@ kubectl -n chiron get pods -w   # 期望：3 gateway + 3 python-engine + 2 front
 
 ## 6. 已知约束（测的时候一定会撞到）
 
-1. **多副本必须共享 sandbox/plugins/builtin-skills 卷**：本 YAML 用 `emptyDir`（仅够验编排属性）。kind 的 local-path 只支持 RWO，要真多副本得配 nfs-server-provisioner 或换云盘 RWX。
+1. **sandbox/plugins 用同一条 RWX PVC（`chiron-shared`）**：副本之间必须共享，否则同一用户的任务落到不同副本时会"间歇性失忆"。**前提是集群有支持 ReadWriteMany 的 provisioner** —— kind 自带的 local-path 只支持 RWO，本地验证前要装 nfs-server-provisioner（或把那两处临时改回 `emptyDir`），否则挂它的 Pod 会一直 Pending。
 2. **内置技能在 K8s 下默认为空**：`builtin-skills` 是 `emptyDir`，引擎启动会告警且技能列表不含内置技能。要内置技能就把该卷换成 hostPath / PVC 指向仓库的 `market/skills`。
 3. **前端 resolver 已解决**：K8s 版配置 `deploy/k8s/frontend-nginx.conf` 的 `resolver` 指向 kube-dns（默认 10.96.0.10），不再是 Docker 内嵌 DNS。
 4. **Redis/PG 仍是单点**（`docs/deployment-multi-instance.md` §10 自认）：本地验证不影响，评估"真企业化"时必须把它们高可用化——这比引入 MQ 的收益高得多。

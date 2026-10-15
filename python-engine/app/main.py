@@ -2184,10 +2184,19 @@ def main() -> None:
 
 def create_app() -> FastAPI:
     """创建 FastAPI 应用实例（供 uvicorn factory 模式使用）"""
+    # API 文档默认**关闭**：`/docs` 与 `/openapi.json` 在 `app/middleware/auth.py` 的
+    # `PUBLIC_PATHS` 里是**免认证**的 —— 端口一旦被反向代理误暴露，就等于公开整个 API 契约。
+    # 本地调试用 `DOCS_ENABLED=true` 打开。
+    from app.config import settings as _settings
+
+    docs_enabled = bool(getattr(_settings, "docs_enabled", False))
     app = FastAPI(
         title="Chiron Python AI Engine",
         version="3.0.0",
         lifespan=lifespan,
+        docs_url="/docs" if docs_enabled else None,
+        redoc_url="/redoc" if docs_enabled else None,
+        openapi_url="/openapi.json" if docs_enabled else None,
     )
     _setup_middleware_early(app)
     _setup_routes(app)

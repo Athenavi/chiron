@@ -18,7 +18,10 @@ from app.redis_keys import rkey
 logger = logging.getLogger(__name__)
 
 # 公开路径（不需要认证）
-PUBLIC_PATHS = {"/healthz", "/readyz", "/metrics", "/info", "/docs", "/openapi.json"}
+# `/docs` 与 `/openapi.json` 不在此列：它们在 `main.py` 里默认关闭（`DOCS_ENABLED`），
+# 即便打开也应要求认证 —— 免认证地公开整个 API 契约没有任何理由。
+# `/metrics` 留在这里是因为 Prometheus 采集需要；它的暴露面靠端口不外露控制。
+PUBLIC_PATHS = {"/healthz", "/readyz", "/metrics", "/info"}
 
 # 弱密钥黑名单：与 Go 端 config.go ValidateJWTSecret 保持一致
 _WEAK_JWT_SECRETS = frozenset(

@@ -11,6 +11,20 @@ kind: Namespace
 metadata:
   name: chiron
 ---
+# 副本之间共享的卷（sandbox / plugins 都挂它）。**必须是 RWX** —— 每个副本要同时读写同一份。
+# 前提：集群有支持 ReadWriteMany 的 provisioner。kind 自带的 local-path 只支持 RWO，
+# 本地验证前需装 nfs-server-provisioner，否则挂它的 Pod 会一直 Pending（详见 README 第 6 节）。
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: chiron-shared
+  namespace: chiron
+spec:
+  accessModes: [ReadWriteMany]
+  resources:
+    requests:
+      storage: 20Gi
+---
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -194,31 +208,16 @@ spec:
             requests: { cpu: 200m, memory: 512Mi }
             limits: { cpu: 2000m, memory: 2Gi }
       volumes:
-        # ⚠️ 下面两个 emptyDir 只适用于"单副本验证编排属性"。
+        # sandbox 与 plugins 必须由副本之间**共享**（见 docs/deployment-multi-instance.md）：
+        # 否则同一用户的任务落到不同副本时看不到彼此写入的文件（agent 文件工作流"间歇性失忆"）。
         #
-        # 真多副本必须让副本之间**共享** sandbox 与 plugins（见
-        # docs/deployment-multi-instance.md）：否则同一用户的任务落到不同副本时
-        # 看不到彼此写入的文件（agent 文件工作流"间歇性失忆"）。做法是把这两处
-        # 换成同一条 **RWX** PVC 的引用：
-        #
-        #   - name: sandbox
-        #     persistentVolumeClaim: { claimName: chiron-shared }
-        #   - name: plugins
-        #     persistentVolumeClaim: { claimName: chiron-shared }
-        #
-        # 并先创建支持 RWX 的 PVC（kind 的 local-path 只支持 RWO，需要
-        # nfs-server-provisioner / 云盘 RWX 之类）：
-        #
-        #   apiVersion: v1
-        #   kind: PersistentVolumeClaim
-        #   metadata: { name: chiron-shared, namespace: chiron }
-        #   spec:
-        #     accessModes: [ReadWriteMany]
-        #     resources: { requests: { storage: 20Gi } }
+        # 这里引用同一条 **RWX** PVC。前提是集群有支持 ReadWriteMany 的 provisioner ——
+        # kind 自带的 local-path **只支持 RWO**，直接 apply 会让挂它的 Pod 卡在 Pending。
+        # 本地验证要么先装 nfs-server-provisioner，要么把下面两处临时改回 `emptyDir: {}`。
         - name: sandbox
-          emptyDir: {}
+          persistentVolumeClaim: { claimName: chiron-shared }
         - name: plugins
-          emptyDir: {}
+          persistentVolumeClaim: { claimName: chiron-shared }
         # 内置技能（market/skills）：默认空 —— 要内置技能就把它换成 hostPath / PVC
         # 挂载（见 README 第 6 节「已知约束」）。
         - name: builtin-skills
