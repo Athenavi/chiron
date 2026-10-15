@@ -299,6 +299,11 @@ class Settings(BaseSettings):
     # （方案 04 §4）。启动时会探测服务健康：不可达且 `degraded_mode=false`（生产默认）
     # ⇒ **拒绝启动**；`degraded_mode=true`（单机开发）⇒ 告警并回退本地。
     sandbox_backend: str = "service"
+
+    #: 是否暴露 API 文档（`/docs`、`/redoc`、`/openapi.json`）。默认**关闭** ——
+    #: 这几个路径在 `app/middleware/auth.py` 的 `PUBLIC_PATHS` 里免认证，端口一旦被
+    #: 反向代理误暴露，就等于公开整个 API 契约。本地调试设 `DOCS_ENABLED=true`。
+    docs_enabled: bool = False
     #: `service` 时的服务地址（仅内网可达）。compose/k8s 内的服务同名，故给默认值；
     #: 裸机开发想用进程内执行请设 `sandbox_backend=local`。
     sandbox_service_url: str = "http://sandbox-service:8001"

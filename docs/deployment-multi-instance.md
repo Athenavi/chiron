@@ -46,6 +46,8 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `ENGINE_ADVERTISE_URL` | 空 | 引擎对外可达地址，设置后向 Redis 自注册；**run 归属路由的前置条件** |
 | `MCP_POOL_ENABLED` | `false` | 每个开启副本会为活跃用户持有 MCP 连接（副本×用户×server 放大） |
 | `STORAGE_BACKEND` | `s3` | 媒体走 S3 兼容对象存储（默认云端）；`local` 时走共享卷 `STORAGE_ROOT` |
+| `MEDIA_STORE_BACKEND` | `s3` | 引擎侧的媒体后端。**必须与 `STORAGE_BACKEND` 同值** —— 引擎代码默认 `local`，不设就是各副本各写本地盘、重启即丢、副本间互相看不见 |
+| `WORKER_ID` | 派生 | snowflake 实例 ID（0-1023）。**多副本必须每副本不同** —— 留空时先按主机名末尾数字推导（StatefulSet 的 `chiron-0/1/2` 天然唯一），推导不出就在 data 目录随机生成并落盘，多副本各自随机会撞号 |
 | `SANDBOX_ROOT` / `PLUGIN_DATA_DIR` | — | 引擎沙箱与插件数据，**多副本必须共享同一卷** |
 | `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器（P0-1 根治）；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
 | `SANDBOX_SERVICE_MAX_CONCURRENCY` | `0`（不限） | 引擎侧对沙箱层的并发闸门；多副本时建议设置（容量与实测见 `sandbox-service/README.md` 的「扩缩与容量」） |
