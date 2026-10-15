@@ -649,12 +649,27 @@ def _prune_messages(
             break
         start = need
     kept = processed[start:]
+    dropped_count = len(processed) - len(kept)
     result = system_msgs + kept
+    if dropped_count > 0:
+        # 给**模型**留痕：被淘汰的消息不能无声消失。此前只有 `compaction` 事件告诉**前端**
+        # "压缩了"，模型侧完全看不到自己少了多少上文 —— 它只会觉得自己记错了。
+        # 用 user 角色而不是 system：`_apply_system_prefix` 会把所有 system 消息摘掉重排，
+        # 放在 system 段里会被它吞掉。连续 user 消息是既有形态（`merge_user_message` 就处理这个）。
+        result.insert(
+            len(system_msgs),
+            {
+                "role": "user",
+                "content": (
+                    f"[{dropped_count} earlier message(s) were pruned to fit the context window]"
+                ),
+            },
+        )
     logger.info(
         "Prune: %d → %d messages (dropped %d old)",
         len(messages),
         len(result),
-        len(processed) - len(kept),
+        dropped_count,
     )
     return result
 
@@ -988,10 +1003,14 @@ class AgentRuntime:
             if comp_cfg is not None
             else CompactionConfig(max_context_tokens=budget, model=model)
         )
-        tokens_before = _estimate_tokens(messages)
+        # 与判定**同源**：`_compact_messages` 用的是校准后的估算（`cfg.model` → model_window
+        # 按 provider 回报反推的分词密度），这里若用无 model 的粗略近似，同一轮里就会出现
+        # "判定用的数字"与"报给前端的数字"两套口径 —— 前端显示的占用与触发线对不上，
+        # 用户无从判断还差多少才到压缩线。
+        tokens_before = _estimate_tokens(messages, comp_cfg.model)
         count_before = len(messages)
         compacted = _compact_messages(messages, comp_cfg, dropped=dropped)
-        tokens_after = _estimate_tokens(compacted)
+        tokens_after = _estimate_tokens(compacted, comp_cfg.model)
         if tokens_after >= tokens_before:
             return compacted, None
         report = {
@@ -1049,7 +1068,9 @@ class AgentRuntime:
         return compacted
 
     @staticmethod
-    def _context_breakdown(messages: list[dict[str, Any]]) -> dict[str, int]:
+    def _context_breakdown(
+        messages: list[dict[str, Any]], model: str = ""
+    ) -> dict[str, int]:
         """按**消息类别**给上下文分段（逐条估算 token）。
 
         回答"上下文被谁占满了"：系统提示（含技能目录与记忆注入）通常是大头，其次是历史与
@@ -1064,7 +1085,7 @@ class AgentRuntime:
         last = len(messages) - 1
         for i, m in enumerate(messages):
             role = m.get("role", "")
-            n = _estimate_tokens([m])
+            n = _estimate_tokens([m], model)
             if role == "system":
                 buckets["system"] += n
             elif role == "tool":
@@ -1126,13 +1147,16 @@ class AgentRuntime:
         （`_resolve_compaction`），前端复制一份必然与这里漂移。
         """
         comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
+        # 分段同样用**校准后**的估算（与判定同源）：只有传 model 才会走 model_window 的
+        # 密度反推，否则退化成 4 chars ≈ 1 token，分段之和与 `used`（服务商回报）就对不上。
+        model = str((llm_config or {}).get("model", "") or "")
         return {
             "used": used,
             "limit": limit,
             "compact_ratio": float(getattr(comp_cfg, "threshold_ratio", 0.0) or 0.0)
             if comp_cfg is not None
             else 0.0,
-            "breakdown": self._context_breakdown(messages) if messages else {},
+            "breakdown": self._context_breakdown(messages, model) if messages else {},
         }
 
     async def _run_slash_command(
@@ -2448,7 +2472,7 @@ class AgentRuntime:
             if self._memory is not None and memory_started and task.session_id:
                 try:
                     # 估算当前总 token 数（用于 compaction 预算检测）
-                    current_total_tokens = _estimate_tokens(messages)
+                    current_total_tokens = _estimate_tokens(messages, model)
                     max_ctx_tokens = (task.llm_config or {}).get(
                         "max_context_tokens", MAX_CONTEXT_TOKENS
                     )

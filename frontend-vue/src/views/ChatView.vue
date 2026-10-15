@@ -627,6 +627,8 @@ interface PendingQuestion {
   /** 到期时刻；到点置 `expired` 但**保留**卡片与问题上下文（对齐 AskCard 的 expired 语义） */
   expiresAt: number
   expired?: boolean
+  /** 用户**已经开始作答**（输入框有内容）。已开始的项不再判超时 —— 人还在写，不该夺走卡片 */
+  drafting?: boolean
 }
 
 const pendingQuestions = ref<PendingQuestion[]>([])
@@ -661,7 +663,8 @@ function ensureAskTimer() {
     const now = Date.now()
     let anyLive = false
     for (const item of pendingQuestions.value) {
-      if (item.expiresAt <= now) item.expired = true
+      // 已经在作答的项**不判超时**（上游 #12884 同款）：人还在写，把卡片禁掉只会白丢他的输入。
+      if (item.expiresAt <= now && !item.drafting) item.expired = true
       else anyLive = true
     }
     if (!anyLive) stopAskTimer()
@@ -3148,6 +3151,7 @@ function continueGeneration() {
           :expired="!!q.expired"
           @answer="(value: string) => answerQuestion(q, value)"
           @decline="() => declineQuestion(q)"
+          @drafting="(active: boolean) => { q.drafting = active }"
         />
       </div>
 
