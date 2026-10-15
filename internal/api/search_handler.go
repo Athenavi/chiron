@@ -1,8 +1,11 @@
 package api
 
 import (
+	"fmt"
 	"log/slog"
 	"net/http"
+	"strings"
+	"time"
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
@@ -53,6 +56,32 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 
 	var results []SearchResult
 
+	// 收尾2：**可选过滤** —— 会话内（`session_id`）与时间范围（`from` / `to`）。
+	//
+	// 两者都只作用于"用户自己的数据"（下面 `s.tenant_id = $2 AND s.user_id = $3` 是硬条件），
+	// 因此不引入新的越权面。**参数只拼占位符编号（$n），值一律走参数化** ——
+	// 用户输入永不进入 SQL 文本。
+	sessionFilter := strings.TrimSpace(r.URL.Query().Get("session_id"))
+	from, to, terr := parseSearchRange(r.URL.Query().Get("from"), r.URL.Query().Get("to"))
+	if terr != nil {
+		BadRequest(w, terr.Error())
+		return
+	}
+	msgArgs := []any{q, claims.TenantID, claims.UserID}
+	msgConds := ""
+	if sessionFilter != "" {
+		msgArgs = append(msgArgs, sessionFilter)
+		msgConds += fmt.Sprintf(" AND m.session_id = $%d", len(msgArgs))
+	}
+	if from != nil {
+		msgArgs = append(msgArgs, *from)
+		msgConds += fmt.Sprintf(" AND m.created_at >= $%d", len(msgArgs))
+	}
+	if to != nil {
+		msgArgs = append(msgArgs, *to)
+		msgConds += fmt.Sprintf(" AND m.created_at < $%d", len(msgArgs))
+	}
+
 	// 1. Search messages (conversations)
 	msgRows, err := pool.Query(r.Context(),
 		`SELECT m.id, m.session_id, m.content, s.title,
@@ -60,8 +89,8 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		 FROM messages m
 		 LEFT JOIN sessions s ON s.id = m.session_id
 		 WHERE to_tsvector('simple', m.content) @@ plainto_tsquery('simple', $1)
-		   AND s.tenant_id = $2 AND s.user_id = $3
-		 ORDER BY rank DESC LIMIT 20`, q, claims.TenantID, claims.UserID)
+		   AND s.tenant_id = $2 AND s.user_id = $3`+msgConds+`
+		 ORDER BY rank DESC LIMIT 20`, msgArgs...)
 	if err == nil {
 		defer msgRows.Close()
 		for msgRows.Next() {
@@ -118,6 +147,35 @@ func (h *SearchHandler) Search(w http.ResponseWriter, r *http.Request) {
 		"results": results,
 		"count":   len(results),
 	})
+}
+
+// parseSearchRange 解析搜索的时间范围（收尾2）。
+//
+// 两个参数都可选。**非法格式一律拒绝（400）而不是静默忽略** —— 静默忽略会让用户以为
+// 过滤生效了，却拿到超出范围的旧结果，那比报错更误导。`to` 缺省表示"不限"（不默认取 now，
+// 这样"到今天为止"能包含当天全部）。
+func parseSearchRange(rawFrom, rawTo string) (from, to *time.Time, err error) {
+	parse := func(s string) (*time.Time, error) {
+		s = strings.TrimSpace(s)
+		if s == "" {
+			return nil, nil
+		}
+		t, perr := time.Parse(time.RFC3339, s)
+		if perr != nil {
+			return nil, fmt.Errorf("time must be RFC3339, e.g. 2026-10-01T00:00:00Z")
+		}
+		return &t, nil
+	}
+	if from, err = parse(rawFrom); err != nil {
+		return nil, nil, err
+	}
+	if to, err = parse(rawTo); err != nil {
+		return nil, nil, err
+	}
+	if from != nil && to != nil && to.Before(*from) {
+		return nil, nil, fmt.Errorf("to must be after from")
+	}
+	return from, to, nil
 }
 
 func truncateText(s string, maxLen int) string {

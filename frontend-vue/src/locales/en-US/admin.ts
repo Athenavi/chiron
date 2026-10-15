@@ -190,4 +190,16 @@ export default {
   diag_category_config: "Configuration hygiene",
   diag_category_capability: "Capability availability",
   diag_category_other: "Other",
+  // ── D3: usage catalog ──
+  usage_catalog: "Usage catalog",
+  usage_catalog_desc: "Token and cost breakdown by day / model / user — quota usage answers “how much is left”, this answers “where it went”.",
+  usage_total: "Total",
+  usage_input_tokens: "Input tokens",
+  usage_output_tokens: "Output tokens",
+  usage_cost: "Cost",
+  usage_records: "Records",
+  usage_records_n: "{n} records",
+  usage_group_day: "Date",
+  usage_group_model: "Model",
+  usage_group_user: "User",
 }

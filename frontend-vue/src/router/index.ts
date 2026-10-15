@@ -239,6 +239,13 @@ const routes = [
         component: () => import('../views/admin/CostCenterView.vue'),
         meta: { title: t('common.cost_center') },
       },
+      // D3：用量目录（"花在哪"的构成）—— 与成本中心同域，故相邻。
+      {
+        path: 'usage-catalog',
+        name: 'AdminUsageCatalog',
+        component: () => import('../views/admin/UsageCatalogView.vue'),
+        meta: { title: t('admin.usage_catalog') },
+      },
       {
         path: 'market',
         name: 'AdminMarket',

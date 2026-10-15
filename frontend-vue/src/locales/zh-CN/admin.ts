@@ -190,4 +190,16 @@ export default {
   diag_category_config: "配置卫生",
   diag_category_capability: "能力可用性",
   diag_category_other: "其它",
+  // ── D3：用量目录 ──
+  usage_catalog: "用量目录",
+  usage_catalog_desc: "按天 / 模型 / 用户看 token 与成本的构成 —— 配额用量回答“还剩多少”，这里回答“花在哪”。",
+  usage_total: "合计",
+  usage_input_tokens: "输入 token",
+  usage_output_tokens: "输出 token",
+  usage_cost: "费用",
+  usage_records: "记录数",
+  usage_records_n: "{n} 条记录",
+  usage_group_day: "日期",
+  usage_group_model: "模型",
+  usage_group_user: "用户",
 }

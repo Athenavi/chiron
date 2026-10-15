@@ -190,4 +190,16 @@ export default {
   diag_category_config: "سلامة الإعدادات",
   diag_category_capability: "توفّر القدرات",
   diag_category_other: "أخرى",
+  // ── D3: دليل الاستخدام ──
+  usage_catalog: "دليل الاستخدام",
+  usage_catalog_desc: "توزيع الرموز والتكلفة حسب اليوم / النموذج / المستخدم — استخدام الحصة يجيب عن «كم تبقّى»، وهذا يجيب عن «أين ذهب».",
+  usage_total: "الإجمالي",
+  usage_input_tokens: "رموز الإدخال",
+  usage_output_tokens: "رموز الإخراج",
+  usage_cost: "التكلفة",
+  usage_records: "السجلات",
+  usage_records_n: "{n} سجل",
+  usage_group_day: "التاريخ",
+  usage_group_model: "النموذج",
+  usage_group_user: "المستخدم",
 }

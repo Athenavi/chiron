@@ -224,4 +224,7 @@ export default {
   think_lang_zh: "简体中文",
   think_lang_en: "English",
   think_lang_ar: "العربية",
+  // ── Wrap-up 1: surfacing P1's completion verdict (same wording for live event & persisted trace) ──
+  turn_incomplete_reasons: "Turn not completed (host evidence): {reasons}",
+  turn_incomplete_more: "{n} more",
 }

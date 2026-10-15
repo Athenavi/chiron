@@ -228,4 +228,7 @@ export default {
   think_lang_zh: "简体中文",
   think_lang_en: "English",
   think_lang_ar: "العربية",
+  // ── ختام 1: إظهار حكم الإكمال (نفس الصياغة للحدث المباشر والأثر المخزَّن) ──
+  turn_incomplete_reasons: "لم تكتمل هذه الجولة (وفق أدلة المضيف): {reasons}",
+  turn_incomplete_more: "{n} أخرى",
 }

@@ -360,3 +360,39 @@ export async function getDiagnostics(): Promise<DiagnosticsReport> {
   const { data } = await api.get('/v1/admin/diagnostics')
   return data?.data ?? { generated_at: 0, status: 'skipped', counts: {}, checks: [] }
 }
+
+// ── D3：用量目录（"花在哪"的构成，区别于配额用量的"还剩多少"）─────────────
+
+export interface UsageBucket {
+  bucket: string
+  input_tokens: number
+  output_tokens: number
+  cost_cents: number
+  records: number
+}
+
+export interface UsageCatalog {
+  group_by: string
+  from: string
+  to: string
+  buckets: UsageBucket[]
+  total: UsageBucket
+  bucket_cnt: number
+  note: string
+}
+
+/** 按维度（day / model / user）读取用量构成。 */
+export async function getUsageCatalog(params: {
+  groupBy: 'day' | 'model' | 'user'
+  from?: string
+  to?: string
+}): Promise<UsageCatalog> {
+  const { data } = await api.get('/v1/admin/usage/catalog', {
+    params: { group_by: params.groupBy, from: params.from, to: params.to },
+  })
+  return data?.data ?? {
+    group_by: params.groupBy, from: '', to: '',
+    buckets: [], total: { bucket: '', input_tokens: 0, output_tokens: 0, cost_cents: 0, records: 0 },
+    bucket_cnt: 0, note: '',
+  }
+}
