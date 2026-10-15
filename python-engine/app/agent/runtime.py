@@ -941,6 +941,9 @@ class AgentRuntime:
         self._loop_guard = LoopGuard()
         # 任务预算与步数计数：由 run() 开头按环境变量重建（见 0.4b）
         self._budget: TaskBudget | None = None
+        #: 上一轮稳定前缀的指纹（`(system 段, 工具表)` 两个哈希）。runtime 是**每会话**的
+        #: （`main.py` 的 `_ACTIVE_RUNTIMES[session_id]`），所以跨轮持有它就能发现前缀被打断。
+        self._last_prefix_fp: tuple[str, str] | None = None
         #: C1 批 3：本次 run 是否从 checkpoint 续跑（供落盘与指标使用）
         self._resumed_from_checkpoint: Any | None = None
         self._tool_steps = 0
@@ -1072,6 +1075,42 @@ class AgentRuntime:
                 buckets["history"] += n
         return buckets
 
+    @staticmethod
+    def _prefix_fingerprint(
+        messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+    ) -> tuple[str, str]:
+        """稳定前缀的指纹：`(system 段, 工具表)` 两个哈希。
+
+        分开记是因为"提示词变了"与"工具表变了"是**两个不同原因**，要采取的行动也不同：
+        前者常是 persona / 技能目录 / 记忆注入，后者是 `tool_search` 激活了新工具。
+        在一起只能报"前缀变了"，等于没说。
+        """
+        import hashlib
+
+        sys_text = "\n".join(
+            str(m.get("content") or "") for m in messages if m.get("role") == "system"
+        )
+        tools_text = json.dumps(tools or [], sort_keys=True, ensure_ascii=False, default=str)
+        return (
+            hashlib.sha256(sys_text.encode("utf-8", "replace")).hexdigest()[:12],
+            hashlib.sha256(tools_text.encode("utf-8", "replace")).hexdigest()[:12],
+        )
+
+    def _prefix_change(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
+        """对比上一轮的稳定前缀指纹，返回本轮的诊断（空列表 = 逐字未变）。"""
+        fp = self._prefix_fingerprint(messages, tools)
+        prev = self._last_prefix_fp
+        self._last_prefix_fp = fp
+        if prev is None:
+            # 本会话第一轮：没有可比对象，如实报"无基准"而不是谎报"没变"。
+            return {"prefix_changed": [], "first_turn": True}
+        changed: list[str] = []
+        if prev[0] != fp[0]:
+            changed.append("system")
+        if prev[1] != fp[1]:
+            changed.append("tools")
+        return {"prefix_changed": changed} if changed else {"prefix_changed": []}
+
     def _context_snapshot(
         self,
         *,
@@ -1111,6 +1150,27 @@ class AgentRuntime:
 
         name, args = registry.parse(raw)
         if registry.get(name) is None:
+            return None
+        if name == "retry":
+            # `/retry` 是**动作**，不是"一段文本"：引擎侧 `_retry` 只设置 `ctx.metadata["retry"]`
+            # 并回显一句话，而没人读那个标记 —— 照搬就会重演 `/undo` 的处境（回显"正在重试"
+            # 却什么都没发生，比没有这个命令更糟）。所以这里实现成真重发：取上一条**用户**消息
+            # 当本轮内容，然后返回 None **照常进循环**。
+            last_user = next(
+                (
+                    str(m.get("content") or "")
+                    for m in reversed(task.history or [])
+                    if m.get("role") == "user" and str(m.get("content") or "").strip()
+                ),
+                "",
+            )
+            if not last_user:
+                return AgentEvent(
+                    type="text",
+                    content="没有可重试的上一条消息。",
+                    trace_id=trace_id,
+                )
+            task.content = last_user
             return None
         ctx = CommandContext(
             model=str((task.llm_config or {}).get("model", "")),
@@ -2437,6 +2497,7 @@ class AgentRuntime:
                     llm_config=task.llm_config,
                     messages=messages,
                 ),
+                cache=self._prefix_change(messages, tools),
                 trace_id=trace_id,
             )
             logger.info(

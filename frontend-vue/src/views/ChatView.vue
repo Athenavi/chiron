@@ -638,6 +638,8 @@ const sessionCostCents = ref<number | null>(null)
 // 上下文快照（引擎 `done` 带 `context={used, limit, compact_ratio}`）。阈值也由引擎给出，
 // 前端不写死常量 —— 它可被租户/模式覆盖。
 const contextSnapshot = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> } | null>(null)
+// 前缀缓存诊断（引擎 `done` 带 `cache={prefix_changed: ["system"|"tools"]}`）。空数组 = 逐字未变。
+const cacheSnapshot = ref<{ prefix_changed?: string[]; first_turn?: boolean } | null>(null)
 
 // 提问的等待上限，与后端 `runtime.ASK_ANSWER_TTL_SECONDS = 300` 对齐。
 // 超时后后端把 `{"error": "user did not answer in time"}` 当**工具结果**回给模型，
@@ -1858,7 +1860,17 @@ function onSlashCommand(cmd: string) {
     case '/context':
     case '/cost':
     case '/help':
+    case '/think':
+    case '/act':
+    case '/retry':
       void sendMessage(cmd)
+      break
+    // 带参命令：**只填入输入框、不发送** —— 缺参调用对引擎没有意义（`/model` 不知道该切哪个模型）。
+    case '/model':
+    case '/temperature':
+    case '/skill':
+    case '/memory':
+      chatInputRef.value?.setCommandDraft(cmd)
       break
     default:
       message.warning(t('common.unknown_command_cmd', { cmd }))
@@ -2468,6 +2480,9 @@ function onSSEMessage(raw: unknown) {
       : null
     contextSnapshot.value = (d.context && typeof d.context === 'object')
       ? (d.context as { used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> })
+      : null
+    cacheSnapshot.value = (d.cache && typeof d.cache === 'object')
+      ? (d.cache as { prefix_changed?: string[]; first_turn?: boolean })
       : null
     // 成本常显：轮次结束拉一次会话级 metrics（此前只在需展开的 SessionStatsPanel 里能看到）
     void refreshSessionCost()
@@ -3169,6 +3184,7 @@ function continueGeneration() {
         :context-limit="contextWindow"
         :compact-ratio="contextSnapshot?.compact_ratio ?? null"
         :breakdown="contextSnapshot?.breakdown ?? null"
+        :cache="cacheSnapshot"
         :compaction="lastCompaction"
         :budget="budgetSnapshot"
         :cost-cents="sessionCostCents"

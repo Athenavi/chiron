@@ -46,12 +46,29 @@ interface SearchResult {
   count?: number
 }
 
+/** write_todos 返回（python-engine/app/tools/todo.py）：{ output, todos, count, summary } */
+interface TodoEntry {
+  id?: string
+  content?: string
+  status?: string
+  /** 推断**会**触及的文件 */
+  files?: string[]
+  /** **已实际**读过/操作过的文件（必须是 files 的子集） */
+  verified?: string[]
+}
+
+interface TodoResult {
+  todos?: TodoEntry[]
+  summary?: Record<string, number>
+}
+
 interface ParsedResult {
-  kind: 'read' | 'terminal' | 'search' | 'diff' | 'json' | 'text'
+  kind: 'read' | 'terminal' | 'search' | 'diff' | 'todos' | 'json' | 'text'
   read?: ReadResult
   terminal?: TerminalResult
   search?: SearchResult
   diff?: ParsedDiff
+  todos?: TodoResult
   path?: string
   text: string
 }
@@ -88,6 +105,19 @@ const parsed = computed<ParsedResult>(() => {
   }
   if (rec && Array.isArray(rec.matches)) {
     return { kind: 'search', search: { matches: rec.matches as SearchMatch[] }, text: '' }
+  }
+  // write_todos 的 `{ todos: [...], summary: {...} }`。**按形状识别，不按工具名** ——
+  // `ToolResultItem` 根本不带 toolName（见 chat-types.ts），判据只能是结构。
+  // 它是模型自己的计划，落到下面的 json 兜底就成了一坨原始 JSON，用户看不出进度。
+  if (rec && Array.isArray(rec.todos) && rec.todos.length > 0) {
+    return {
+      kind: 'todos',
+      todos: {
+        todos: rec.todos as TodoEntry[],
+        summary: asRecord(rec.summary) as Record<string, number> | undefined,
+      },
+      text: '',
+    }
   }
   if (rec) {
     return { kind: 'json', text: JSON.stringify(rec, null, 2) }
@@ -143,6 +173,18 @@ const diffTitle = computed(() => {
   if (files.length > 1) return t('media.n_files', { n: files.length })
   return files[0] || parsed.value.path || 'diff'
 })
+
+/** 计划条目状态 → 符号。与引擎 `app/tools/todo.py` 的 `_render` 用**同一套标记**。 */
+const TODO_MARKS: Record<string, string> = { pending: '☐', in_progress: '◐', completed: '☑' }
+
+function todoMark(status?: string): string {
+  return TODO_MARKS[status || 'pending'] || TODO_MARKS.pending
+}
+
+function todoStatusLabel(status?: string): string {
+  const key = `common.todo_${status || 'pending'}`
+  return t(key)
+}
 </script>
 
 <template>
@@ -237,6 +279,39 @@ const diffTitle = computed(() => {
         >exit {{ parsed.terminal?.exit_code ?? '?' }}</span>
       </div>
       <pre class="terminal-body">{{ terminalText }}</pre>
+    </div>
+
+    <!-- write_todos：模型自己的计划。此前它落进 json 兜底，用户只看见一坨原始 JSON、看不出进度 -->
+    <div
+      v-else-if="parsed.kind === 'todos'"
+      class="todos-block"
+    >
+      <div class="todos-banner">
+        <span class="todos-label">{{ $t('chat.plan_progress') }}</span>
+        <span class="todos-count">
+          {{ parsed.todos?.summary?.completed ?? 0 }}/{{ parsed.todos?.todos?.length ?? 0 }}
+        </span>
+      </div>
+      <ul class="todos-list">
+        <li
+          v-for="(todo, i) in parsed.todos?.todos"
+          :key="todo.id || i"
+          class="todo-item"
+          :data-status="todo.status || 'pending'"
+        >
+          <span
+            class="todo-mark"
+            :title="todoStatusLabel(todo.status)"
+            :aria-label="todoStatusLabel(todo.status)"
+          >{{ todoMark(todo.status) }}</span>
+          <span class="todo-content">{{ todo.content }}</span>
+          <span
+            v-if="todo.files?.length"
+            class="todo-files"
+            :title="todo.files.join('\n')"
+          >{{ $t('media.n_files', { n: todo.files.length }) }}</span>
+        </li>
+      </ul>
     </div>
 
     <!-- 搜索卡片（deepseek SearchBlock：banner + 行号 + pre 水平滚动） -->
@@ -358,6 +433,20 @@ const diffTitle = computed(() => {
 .terminal-exit { font-family: var(--font-mono); font-size: 12px; color: var(--success); }
 .terminal-exit.nonzero { color: var(--error); }
 .terminal-body { margin: 0; padding: 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--terminal-text); white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow-y: auto; }
+
+/* 计划清单（write_todos）：一眼看出还有几项没做完 */
+.todos-block { margin: 8px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
+.todos-banner { display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--terminal-header-bg); }
+.todos-label { font-size: 12px; color: var(--text-tertiary); }
+.todos-count { flex: 1; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.todos-list { list-style: none; margin: 0; padding: 10px 14px; }
+.todo-item { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12px; line-height: 1.6; }
+.todo-mark { font-family: var(--font-mono); color: var(--text-tertiary); }
+.todo-item[data-status='in_progress'] .todo-mark { color: var(--warning); }
+.todo-item[data-status='completed'] .todo-mark { color: var(--success); }
+.todo-item[data-status='completed'] .todo-content { color: var(--text-tertiary); text-decoration: line-through; }
+.todo-content { flex: 1; white-space: pre-wrap; word-break: break-word; }
+.todo-files { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
 
 /* 搜索卡片（deepseek SearchBlock：12px 圆角 + banner + 22px 行 + pre 不折行） */
 .search-block { margin: 8px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }

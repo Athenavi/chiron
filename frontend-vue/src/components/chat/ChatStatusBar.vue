@@ -18,6 +18,8 @@ const props = defineProps<{
   compactRatio?: number | null
   /** 上下文分段（各类别的估算 token）：回答"上下文被谁占满了" */
   breakdown?: Record<string, number> | null
+  /** 前缀缓存诊断：`prefix_changed` 非空说明稳定前缀被打断（命中率会掉） */
+  cache?: { prefix_changed?: string[]; first_turn?: boolean } | null
   /** 最近一次自动压缩（问题 4）：让"上下文被压缩了"可见，而不是悄悄变短 */
   compaction?: { beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null
   /** 任务预算快照（每轴 `{used, limit}`；`limit=0` = 该轴不限）。引擎五轴一直在跑，此前完全不外露 */
@@ -72,6 +74,16 @@ const costText = computed(() => {
   if (c == null) return ''
   return `¥${(c / 100).toFixed(2)}`
 })
+
+/**
+ * 前缀缓存被谁打断。**只在真的变了时显示**（`prefix_changed` 非空），首轮不算——
+ * 命中率掉下来时回答"为什么"，而不是把"没变"也摆出来占版面。
+ */
+const cacheWarnText = computed(() => {
+  const parts = props.cache?.prefix_changed
+  if (!parts || parts.length === 0) return ''
+  return t('common.cache_prefix_changed', { parts: parts.join(' + ') })
+})
 </script>
 
 <template>
@@ -87,6 +99,11 @@ const costText = computed(() => {
       v-if="costText"
       class="cs-item cs-cost"
     >{{ costText }}</span>
+    <!-- 前缀缓存被打断：只在真的变了时出现 —— 回答"命中率为什么会掉" -->
+    <span
+      v-if="cacheWarnText"
+      class="cs-item cs-cache-warn"
+    >{{ cacheWarnText }}</span>
     <template v-if="hasUsage">
       <span
         class="cs-sep"

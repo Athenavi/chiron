@@ -809,6 +809,16 @@ const SLASH_COMMANDS = computed(() => [
   { cmd: '/context', desc: tr('chat.show_current_context') },
   { cmd: '/cost', desc: tr('chat.show_token_usage_and_cost') },
   { cmd: '/help', desc: tr('chat.list_available_commands') },
+  // 带参命令：选中后**只填入输入框**（`setCommandDraft`），等用户补参数 —— 直接发出去
+  // 等于一次缺参调用（`/model` 不知道自己该切到哪个模型）。
+  { cmd: '/model', desc: tr('chat.switch_llm_model') },
+  { cmd: '/temperature', desc: tr('chat.adjust_temperature') },
+  { cmd: '/skill', desc: tr('chat.load_a_skill') },
+  { cmd: '/memory', desc: tr('chat.search_or_list_memories') },
+  // 无参命令：直接发送，引擎拦截后立即返回
+  { cmd: '/think', desc: tr('chat.enter_planning_mode') },
+  { cmd: '/act', desc: tr('chat.exit_planning_mode') },
+  { cmd: '/retry', desc: tr('chat.retry_last_agent_response') },
 ])
 const showSlashMenu = ref(false)
 const slashIndex = ref(0)
@@ -833,7 +843,19 @@ function insertText(text: string) {
   nextTick(() => textareaRef.value?.focus?.())
 }
 
-defineExpose({ insertText })
+/** 把命令名填入输入框并把光标放到末尾，等用户补参数。
+
+ * 与 `insertText` 的区别：那个是**引用消息**（每行加 `> `），这里要的是可继续编辑的命令行 ——
+ * 带参命令（`/model gpt-4`）直接发出去等于一次缺参调用，所以只填不发送。
+ */
+function setCommandDraft(cmd: string) {
+  input.value = `${cmd} `
+  historyCursor.value = null
+  showSlashMenu.value = false
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+defineExpose({ insertText, setCommandDraft })
 </script>
 
 <template>
