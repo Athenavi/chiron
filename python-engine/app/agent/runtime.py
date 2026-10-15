@@ -9,6 +9,7 @@ import asyncio
 import json
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, replace
 from functools import partial
@@ -75,6 +76,9 @@ APPROVAL_TTL_SECONDS = 300.0
 #: 工具名必须与 app/tools/ask_user.py 的 ASK_USER_TOOL 一致 —— runtime 靠它识别提问调用。
 ASK_USER_TOOL = "ask_user"
 ASK_ANSWER_TTL_SECONDS = 300.0
+#: ask_user 的"明确拒绝"应答。用带 `\x00` 的哨兵而非空串或固定词：空串会被端点拒绝，
+#: 而任何用户真能打出来的文本都可能与固定词碰撞 —— 拒绝与"没看见"在模型侧必须有不同 identity。
+ASK_DECLINED = "\x00__declined__\x00"
 
 #: 子 agent 委派工具名 —— 必须与 app/tools/subagent.py 的工具定义一致。
 #: runtime 靠它把该工具的调用识别为"子 agent 执行"，从而分发
@@ -439,14 +443,21 @@ def _truncate_text(
     max_chars: int = TOOL_RESULT_MAX_CHARS,
     head_chars: int = TOOL_RESULT_HEAD,
     tail_chars: int = TOOL_RESULT_TAIL,
+    *,
+    recall_ref: str = "",
 ) -> str:
-    """截断过长文本：保留 head + tail，中间用标记代替"""
+    """截断过长文本：保留 head + tail，中间用标记代替。
+
+    `recall_ref` 非空时把取回线索写进**那条标记**而不是文本末尾 —— 因为调用方与测试都
+    依赖"截断后仍以原文 tail 结尾"（`_snip_tool_results` 的既有契约），追加在尾部会破坏它。
+    """
     if len(text) <= max_chars:
         return text
     head = text[:head_chars]
     tail = text[-tail_chars:]
     middle_len = len(text) - head_chars - tail_chars
-    return f"{head}...(truncated {middle_len} chars)...{tail}"
+    hint = f'; 原文可用 read_tool_result("{recall_ref}") 取回' if recall_ref else ""
+    return f"{head}...(truncated {middle_len} chars{hint})...{tail}"
 
 
 def _sanitize_tool_result(result: dict[Any, Any]) -> str:
@@ -522,21 +533,35 @@ def _loop_guard_result(
 
 
 def _snip_tool_results(
-    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+    messages: list[dict[str, Any]],
+    cfg: CompactionConfig | None = None,
+    *,
+    dropped: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Snip 阶段：压缩旧工具结果（保留 head + tail），user/assistant 消息不动"""
+    """Snip 阶段：压缩旧工具结果（保留 head + tail），user/assistant 消息不动。
+
+    `dropped` 收集 `(ref, 原文)`：被压缩掉的原文不再永久丢失 —— 调用方（async 层）把它落进
+    `result_store`，截断标记里附上 `read_tool_result` 线索，模型可原样取回。这**不是**新机制：
+    与"单条超大结果落盘、上下文只留 `result_ref`"（`_compact_tool_result`）是同一条路径。
+    """
     cfg = cfg or CompactionConfig()
     result: list[dict[str, Any]] = []
     for msg in messages:
         if msg.get("role") == "tool" and msg.get("tool_call_id"):
-            content = msg.get("content", "")
-            if len(content) > cfg.tool_result_max_chars // 2:
+            original = msg.get("content", "") or ""
+            content = original
+            if len(original) > cfg.tool_result_max_chars // 2:
+                # 只在真要收集时才生成 ref —— 否则会造出一个只在本轮内存里飘着的字符串
+                ref = f"sn_{uuid.uuid4().hex[:12]}" if dropped is not None else ""
                 content = _truncate_text(
-                    content,
+                    original,
                     cfg.tool_result_max_chars,
                     cfg.tool_result_head,
                     cfg.tool_result_tail,
+                    recall_ref=ref,
                 )
+                if dropped is not None and len(content) < len(original):
+                    dropped.append((ref, original))
             result.append({**msg, "content": content})
         else:
             result.append(msg)
@@ -544,7 +569,10 @@ def _snip_tool_results(
 
 
 def _prune_messages(
-    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+    messages: list[dict[str, Any]],
+    cfg: CompactionConfig | None = None,
+    *,
+    dropped: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Prune 阶段：不区分消息类型，保留系统提示 + 最近非系统消息
 
@@ -562,16 +590,24 @@ def _prune_messages(
     processed: list[dict[str, Any]] = []
     for m in other_msgs:
         if m.get("role") == "tool" and m.get("tool_call_id"):
+            original = m.get("content", "") or ""
+            # 与 `_snip_tool_results` 同一套：只有真要收集时才生成 ref，被截掉的原文
+            # 交给调用方落 `result_store`，截断标记里附取回线索。
+            ref = f"sn_{uuid.uuid4().hex[:12]}" if dropped is not None else ""
+            content = _truncate_text(
+                original,
+                cfg.tool_result_max_chars,
+                cfg.tool_result_head,
+                cfg.tool_result_tail,
+                recall_ref=ref,
+            )
+            if dropped is not None and len(content) < len(original):
+                dropped.append((ref, original))
             processed.append(
                 {
                     "role": "tool",
                     "tool_call_id": m["tool_call_id"],
-                    "content": _truncate_text(
-                        m.get("content", "") or "",
-                        cfg.tool_result_max_chars,
-                        cfg.tool_result_head,
-                        cfg.tool_result_tail,
-                    ),
+                    "content": content,
                 }
             )
         else:
@@ -624,7 +660,10 @@ def _prune_messages(
 
 
 def _compact_messages(
-    messages: list[dict[str, Any]], cfg: CompactionConfig | None = None
+    messages: list[dict[str, Any]],
+    cfg: CompactionConfig | None = None,
+    *,
+    dropped: list[tuple[str, str]] | None = None,
 ) -> list[dict[str, Any]]:
     """分级压缩：根据配置的策略、上下文压力和消息数量选择压缩方式
 
@@ -644,13 +683,13 @@ def _compact_messages(
     # 是因为"显式声明不压缩"应当被尊重；而它本身不是压缩 —— 是"别把明知没用的字节反复发出去"。
     messages = truncate_tool_call_arguments(messages, cfg)
     if cfg.strategy == "snipe":
-        return _snip_tool_results(messages, cfg)
+        return _snip_tool_results(messages, cfg, dropped=dropped)
     if cfg.strategy == "prune":
-        return _prune_messages(messages, cfg)
+        return _prune_messages(messages, cfg, dropped=dropped)
 
     # auto：硬上限（无论 token 使用率多少，消息数不能超过 cfg.max_messages）
     if len(messages) > cfg.max_messages:
-        return _prune_messages(messages, cfg)
+        return _prune_messages(messages, cfg, dropped=dropped)
 
     # Token-based 压缩
     tokens = _estimate_tokens(messages, cfg.model)
@@ -663,7 +702,7 @@ def _compact_messages(
             tokens,
             cfg.max_context_tokens,
         )
-        return _prune_messages(messages, cfg)
+        return _prune_messages(messages, cfg, dropped=dropped)
     elif ratio >= cfg.snipe_ratio:
         logger.info(
             "Compact SNIP at %.0f%% (%d/%d tokens)",
@@ -671,7 +710,7 @@ def _compact_messages(
             tokens,
             cfg.max_context_tokens,
         )
-        return _snip_tool_results(messages, cfg)
+        return _snip_tool_results(messages, cfg, dropped=dropped)
 
     return messages  # 无需压缩
 
@@ -926,6 +965,7 @@ class AgentRuntime:
         *,
         window: int = 0,
         model: str = "",
+        dropped: list[tuple[str, str]] | None = None,
     ) -> tuple[list[dict[str, Any]], AgentEvent | None]:
         """压缩上下文；**真的压缩了**才返回一个 compaction 事件（否则 None）。
 
@@ -947,7 +987,7 @@ class AgentRuntime:
         )
         tokens_before = _estimate_tokens(messages)
         count_before = len(messages)
-        compacted = _compact_messages(messages, comp_cfg)
+        compacted = _compact_messages(messages, comp_cfg, dropped=dropped)
         tokens_after = _estimate_tokens(compacted)
         if tokens_after >= tokens_before:
             return compacted, None
@@ -973,6 +1013,7 @@ class AgentRuntime:
         *,
         window: int = 0,
         model: str = "",
+        dropped: list[tuple[str, str]] | None = None,
     ) -> list[dict[str, Any]]:
         """溢出恢复用的**强制**压缩（C2 段 b）。
 
@@ -994,13 +1035,134 @@ class AgentRuntime:
             strategy="auto",
             model=model,
         )
-        compacted = _compact_messages(messages, forced)
+        compacted = _compact_messages(messages, forced, dropped=dropped)
         if len(compacted) >= len(messages):
             # prune 没让出空间（消息数没超上限、或只剩 system）→ 直接砍消息数上限
             compacted = _prune_messages(
-                messages, replace(forced, max_messages=max(2, forced.max_messages // 2))
+                messages,
+                replace(forced, max_messages=max(2, forced.max_messages // 2)),
+                dropped=dropped,
             )
         return compacted
+
+    @staticmethod
+    def _context_breakdown(messages: list[dict[str, Any]]) -> dict[str, int]:
+        """按**消息类别**给上下文分段（逐条估算 token）。
+
+        回答"上下文被谁占满了"：系统提示（含技能目录与记忆注入）通常是大头，其次是历史与
+        工具结果。没有这个分解，用户只看到一个总数，无从判断该清哪一块。
+        """
+        buckets: dict[str, int] = {
+            "system": 0,
+            "history": 0,
+            "tool_results": 0,
+            "current": 0,
+        }
+        last = len(messages) - 1
+        for i, m in enumerate(messages):
+            role = m.get("role", "")
+            n = _estimate_tokens([m])
+            if role == "system":
+                buckets["system"] += n
+            elif role == "tool":
+                buckets["tool_results"] += n
+            elif i == last:
+                buckets["current"] += n
+            else:
+                buckets["history"] += n
+        return buckets
+
+    def _context_snapshot(
+        self,
+        *,
+        used: int,
+        limit: int,
+        mode_cfg: ModeConfig,
+        llm_config: dict[str, Any],
+        messages: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        """上下文占用快照：`used`/`limit` + **压缩阈值** + 分段。
+
+        阈值由引擎给出而不是让前端写死 —— `threshold_ratio` 可被租户/模式覆盖
+        （`_resolve_compaction`），前端复制一份必然与这里漂移。
+        """
+        comp_cfg = self._resolve_compaction(mode_cfg, llm_config)
+        return {
+            "used": used,
+            "limit": limit,
+            "compact_ratio": float(getattr(comp_cfg, "threshold_ratio", 0.0) or 0.0)
+            if comp_cfg is not None
+            else 0.0,
+            "breakdown": self._context_breakdown(messages) if messages else {},
+        }
+
+    async def _run_slash_command(
+        self, task: AgentTask, trace_id: str
+    ) -> AgentEvent | None:
+        """整条消息就是一个斜杠命令时执行它，返回一条事件；否则 None（照常进循环）。
+
+        照常进循环是**有意**的默认：未知命令、或用户只是以 `/` 开头说话（"路径是 /usr/bin"），
+        都交给模型正常处理，而不是回一个硬错误。命中判据是"**整条**消息是一个已注册命令"。
+        """
+        raw = (task.content or "").strip()
+        if not raw.startswith("/") or "\n" in raw:
+            return None
+        from app.commands import CommandContext, registry
+
+        name, args = registry.parse(raw)
+        if registry.get(name) is None:
+            return None
+        ctx = CommandContext(
+            model=str((task.llm_config or {}).get("model", "")),
+            # session_id 也进 metadata：命令若不走工具上下文也能拿到会话身份
+            metadata={"session_id": task.session_id, "user_id": task.user_id},
+        )
+        try:
+            output = await registry.get(name).handler(args, ctx)  # type: ignore[union-attr]
+        except Exception as e:  # noqa: BLE001 — 命令失败不能带崩整轮
+            logger.warning("slash command failed: /%s (%s)", name, e)
+            return AgentEvent(
+                type="error",
+                error=f"command_failed:{name}",
+                trace_id=trace_id,
+            )
+        return AgentEvent(type="text", content=str(output), trace_id=trace_id)
+
+    def _budget_snapshot(
+        self, budget: TaskBudget, *, turns_used: int, tokens_used: int
+    ) -> dict[str, Any]:
+        """预算快照：每轴 `{used, limit}`（`limit=0` 表示该轴不限）。
+
+        `cost` 轴的 `used` 恒为 0 —— 计价在网关侧（按 provider 口径换算），引擎不算钱，
+        所以只报它的 limit，不编造一个引擎无法负责的数字。
+        """
+        return {
+            "steps": {"used": self._tool_steps, "limit": budget.steps},
+            "turns": {"used": turns_used, "limit": budget.turns},
+            "tokens": {"used": tokens_used, "limit": budget.tokens},
+            "wall": {"used": int(budget.elapsed()), "limit": budget.wall},
+            "cost": {"used": 0.0, "limit": budget.cost},
+        }
+
+    async def _persist_dropped(
+        self, dropped: list[tuple[str, str]], task: AgentTask
+    ) -> None:
+        """把压缩掉的原文落进 `result_store` —— 与"单条超大结果落盘"同一条取回路径。
+
+        为什么副作用放这里、不放压缩函数里：压缩链（`_compact_messages` 及 `_snip_tool_results`
+        等分支）是**同步纯函数**，其中 `_force_compact` 还作为 `on_overflow` 回调被传入，不能
+        await；Redis 写入只能在 async 层做。所以纯函数只负责收集 `(ref, 原文)`，落盘由调用方完成。
+
+        失败不影响本轮：`result_store.store` 自己吞掉异常并返回 False（细节取不回而已）。
+        """
+        if not dropped:
+            return
+        from app.agent import result_store
+
+        session_id = getattr(task, "session_id", "")
+        for ref, text in dropped:
+            await result_store.store(session_id, ref, text)
+        logger.info("compaction dropped content persisted: count=%d", len(dropped))
 
     async def _load_resume_state(self, task: AgentTask) -> Any | None:
         """C1 批 3：尝试取续跑现场 —— **任何失败都回落现状**（恢复是增强路径，不阻断对话）。"""
@@ -1268,6 +1430,20 @@ class AgentRuntime:
                 project=(task.workbench_context or {}).get("project") or "",
             )
 
+            # ── 0.55 斜杠命令拦截（在进入 LLM 循环前）────────────────────────
+            # 命令注册表（app/commands/）此前**没有接入任何执行路径**：13 条命令（含 /undo）
+            # 实现齐全却无人调用。这里识别"整条消息就是一个命令"：命中就执行、把结果作为一条
+            # 文本事件回给前端并立即收尾 —— **不跑 LLM**（命令不是对话，不该花 token、不该等模型）。
+            command_event = await self._run_slash_command(task, trace_id)
+            if command_event is not None:
+                yield command_event
+                yield AgentEvent(
+                    type="done",
+                    model=str((task.llm_config or {}).get("model", "")),
+                    trace_id=trace_id,
+                )
+                return
+
             # ── 0.6 MemoryService.on_session_start（L1 建立 + L2/L3 预取） ──
             if self._memory is not None and task.session_id and task.user_id:
                 try:
@@ -1487,9 +1663,16 @@ class AgentRuntime:
                 # SaaS：截断策略由模式/租户配置（mode_overrides.json 的 compaction 字段）；
                 # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖。
                 # 真压缩了会带回事件 → 立刻让前端"看得见"（问题 4）。
+                compaction_dropped: list[tuple[str, str]] = []
                 messages, compaction_notice = self._compact_with_notice(
-                    messages, mode_cfg, llm_config, window=context_window, model=model
+                    messages,
+                    mode_cfg,
+                    llm_config,
+                    window=context_window,
+                    model=model,
+                    dropped=compaction_dropped,
                 )
+                await self._persist_dropped(compaction_dropped, task)
                 if compaction_notice is not None:
                     yield compaction_notice
 
@@ -1542,6 +1725,11 @@ class AgentRuntime:
                         output_tokens=total_output_tokens,
                         cached_tokens=total_cached_tokens,
                         model=model,
+                        budget=self._budget_snapshot(
+                            budget,
+                            turns_used=turn,
+                            tokens_used=total_input_tokens + total_output_tokens,
+                        ),
                         trace_id=trace_id,
                     )
                     return
@@ -1567,9 +1755,16 @@ class AgentRuntime:
 
                 # ── 分级压缩：根据 token 使用量选择压缩策略（SaaS：策略可配）──
                 if mode_cfg.enable_compaction:
+                    compaction_dropped: list[tuple[str, str]] = []
                     messages, compaction_notice = self._compact_with_notice(
-                        messages, mode_cfg, llm_config, window=context_window, model=model
+                        messages,
+                        mode_cfg,
+                        llm_config,
+                        window=context_window,
+                        model=model,
+                        dropped=compaction_dropped,
                     )
+                    await self._persist_dropped(compaction_dropped, task)
                     if compaction_notice is not None:
                         yield compaction_notice
 
@@ -1605,6 +1800,9 @@ class AgentRuntime:
                 # C2 段 b：溢出恢复（强制压缩 + 重试一次）。溢出事实经 `overflow_flags`
                 # 回传给这里，由本 generator yield 事件 —— helper 不能代劳。
                 overflow_flags: list[dict[str, Any]] = []
+                # 强制压缩掉的内容也走同一条取回路径。收集器**在这里**创建、循环结束后统一
+                # 落盘 —— 因为 `on_overflow` 是同步回调，它自己不能 await Redis 写入。
+                overflow_dropped: list[tuple[str, str]] = []
 
                 async for chunk in self._chat_stream_with_retry(
                     messages,
@@ -1626,6 +1824,7 @@ class AgentRuntime:
                         llm_config,
                         window=context_window,
                         model=model,
+                        dropped=overflow_dropped,
                     ),
                     overflow_flags=overflow_flags,
                 ):
@@ -1728,6 +1927,7 @@ class AgentRuntime:
                         content=json.dumps(flag, ensure_ascii=False),
                         span_name="compaction",
                     )
+                await self._persist_dropped(overflow_dropped, task)
 
                 # C3：**本次调用**的用量（增量）走独立事件 —— 与 `done` 的**整轮累计**分开，
                 # 消费方按 `type` 取值即可，不必只能等终态。
@@ -2225,6 +2425,18 @@ class AgentRuntime:
                 output_tokens=total_output_tokens,
                 cached_tokens=total_cached_tokens,
                 model=model,
+                budget=self._budget_snapshot(
+                    budget,
+                    turns_used=turn + 1,
+                    tokens_used=total_input_tokens + total_output_tokens,
+                ),
+                context=self._context_snapshot(
+                    used=total_input_tokens,
+                    limit=context_window,
+                    mode_cfg=mode_cfg,
+                    llm_config=task.llm_config,
+                    messages=messages,
+                ),
                 trace_id=trace_id,
             )
             logger.info(
@@ -3289,6 +3501,11 @@ class AgentRuntime:
         if answer is None:
             logger.warning("ask_user timed out (id=%s)", tc_id)
             return {"error": "user did not answer in time"}
+        if answer == ASK_DECLINED:
+            # 拒绝是**明确的答复**，不是失败：给模型一个可区分的 identity，
+            # 它才知道"用户看到了但不愿回答"，可以改问法或自行决定，而不是当成没收到。
+            logger.info("ask_user declined (id=%s)", tc_id)
+            return {"declined": True, "reason": "user declined to answer"}
         logger.info("ask_user answered (id=%s)", tc_id)
         return {"answer": answer}
 

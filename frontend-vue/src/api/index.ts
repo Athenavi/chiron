@@ -44,6 +44,8 @@ export async function submitAnswer(params: {
   session_id: string
   tool_call_id: string
   answer: string
+  /** 显式拒绝回答：与"超时/没看见"是不同的答复，后端据此回填哨兵值给模型。 */
+  declined?: boolean
 }): Promise<boolean> {
   const { data } = await api.post('/v1/agent/answer', params)
   return !!(data?.data?.ok ?? data?.ok)

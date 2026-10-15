@@ -14,6 +14,10 @@ const { t } = useI18n()
 const props = defineProps<{
   used?: number | null
   limit?: number | null
+  /** 压缩触发比例（0~1，引擎下发）。>0 时在 title 里提示"到多少会被压缩" */
+  compactRatio?: number | null
+  /** 上下文分段（`system`/`history`/`tool_results`/`current` 的估算 token） */
+  breakdown?: Record<string, number> | null
 }>()
 
 const R = 8
@@ -35,9 +39,32 @@ const tone = computed(() => {
 
 const label = computed(() => (percent.value === null ? '—' : `${Math.round(percent.value * 100)}%`))
 
+/** 剩余可用 token：比百分比更直接回答"还能聊多久"。`limit` 是模型窗口，`used` 是最近一轮 input。 */
+const remaining = computed(() => {
+  if (percent.value === null || props.limit == null || props.used == null) return null
+  return Math.max(0, props.limit - props.used)
+})
+
 const title = computed(() => {
   if (percent.value === null) return t('common.context_usage_no_data')
-  return t('common.context_usage_label_last_request_used_tokens_limit_limit', { label: label.value, used: props.used, limit: props.limit })
+  const parts = [t('common.context_usage_label_last_request_used_tokens_limit_limit', { label: label.value, used: props.used, limit: props.limit })]
+  if (remaining.value !== null) parts.push(t('common.context_remaining_tokens', { n: remaining.value }))
+  // 压缩阈值由**引擎**下发（租户/模式可覆盖），前端不复制常量
+  if (props.compactRatio && props.compactRatio > 0) {
+    parts.push(t('common.context_compacts_at', { pct: Math.round(props.compactRatio * 100) }))
+  }
+  // 分段：回答"上下文被谁占满了"。用**一个**带参数的键覆盖四类，避免四份易漂的独立文案。
+  const b = props.breakdown
+  if (b && (b.system || b.history || b.tool_results || b.current)) {
+    const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
+    parts.push(t('common.context_breakdown', {
+      system: k(b.system),
+      history: k(b.history),
+      tools: k(b.tool_results),
+      current: k(b.current),
+    }))
+  }
+  return parts.join(' · ')
 })
 </script>
 

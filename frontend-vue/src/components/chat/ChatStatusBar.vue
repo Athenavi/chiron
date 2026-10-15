@@ -14,8 +14,16 @@ const props = defineProps<{
   /** 上下文占用：分子 = 最近一轮 input tokens，分母 = 模型 context_window */
   contextUsed?: number | null
   contextLimit?: number | null
+  /** 压缩触发比例（引擎下发，租户/模式可覆盖）。前端不写死 —— 常量写两处必漂移 */
+  compactRatio?: number | null
+  /** 上下文分段（各类别的估算 token）：回答"上下文被谁占满了" */
+  breakdown?: Record<string, number> | null
   /** 最近一次自动压缩（问题 4）：让"上下文被压缩了"可见，而不是悄悄变短 */
   compaction?: { beforeTokens?: number; afterTokens?: number; savedTokens?: number } | null
+  /** 任务预算快照（每轴 `{used, limit}`；`limit=0` = 该轴不限）。引擎五轴一直在跑，此前完全不外露 */
+  budget?: Record<string, { used?: number; limit?: number }> | null
+  /** 会话累计成本（分）。计价在网关侧，引擎不产生该值；null = 未取到，不显示 */
+  costCents?: number | null
   online: boolean
   /**
    * 运行中的子 Agent 数。>0 时「子 Agent」触发器显示角标 ——
@@ -38,11 +46,47 @@ const compactionText = computed(() => {
   const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
   return t('common.compressed_before_after', { before: k(c.beforeTokens), after: k(c.afterTokens) })
 })
+
+/** 预算速览：只挑**有上限**的轴（`limit=0` 是"不限"，摆出来只是噪音）。 */
+const budgetText = computed(() => {
+  const b = props.budget
+  if (!b) return ''
+  const parts: string[] = []
+  if (b.steps?.limit) parts.push(`${b.steps.used ?? 0}/${b.steps.limit}`)
+  if (b.tokens?.limit) parts.push(`${Math.round(((b.tokens.used ?? 0) / b.tokens.limit) * 100)}%`)
+  return parts.join(' · ')
+})
+
+/** 完整快照进 title：不常看的轴（turns/wall/cost）不占版面，但查得到。 */
+const budgetTitle = computed(() => {
+  const b = props.budget
+  if (!b) return ''
+  return Object.entries(b)
+    .map(([axis, v]) => `${axis}: ${v?.used ?? 0}${v?.limit ? ` / ${v.limit}` : ' (unlimited)'}`)
+    .join('\n')
+})
+
+/** 会话累计成本（分 → 元）。此前只在需展开的 SessionStatsPanel 里能看到。 */
+const costText = computed(() => {
+  const c = props.costCents
+  if (c == null) return ''
+  return `¥${(c / 100).toFixed(2)}`
+})
 </script>
 
 <template>
   <div class="chat-status">
     <span class="cs-item cs-model">{{ model || $t('agent.default_model') }}</span>
+    <!-- 任务预算：仅在引擎下发了快照时显示；五轴里只在有上限的轴占版面，其余进 title -->
+    <span
+      v-if="budgetText"
+      class="cs-item cs-budget"
+      :title="budgetTitle"
+    >{{ budgetText }}</span>
+    <span
+      v-if="costText"
+      class="cs-item cs-cost"
+    >{{ costText }}</span>
     <template v-if="hasUsage">
       <span
         class="cs-sep"
@@ -62,6 +106,8 @@ const compactionText = computed(() => {
     <ContextRing
       :used="contextUsed ?? null"
       :limit="contextLimit ?? null"
+      :compact-ratio="compactRatio ?? null"
+      :breakdown="breakdown ?? null"
     />
     <!-- 观测面板入口：子 Agent 与统计已从侧栏移出（侧栏只留"导航"：轨迹 / 会话历史）。
          复用 .cs-item 的行内样式，不引入新的尺寸体系；角标只在真有运行时出现。 -->

@@ -85,6 +85,12 @@ class AgentEvent:
     cached_tokens: int = 0
     #: 本回合实际使用的模型名（供按轮记录模型；空 = 未取到）。
     model: str = ""
+    #: 任务预算快照：每轴 `{used, limit}`（`limit=0` = 该轴不限）。只在 `done` 上带 ——
+    #: 让前端能显示"还能跑多少"，而不是等到 `budget_exceeded` 才知道有上限。
+    budget: dict[str, Any] = field(default_factory=dict)
+    #: 上下文占用快照：`{used, limit, compact_ratio}`。`compact_ratio` 由引擎给出（租户/模式
+    #: 可覆盖），前端据此标出"到多少会被压缩"，不自己写死一个会漂移的常量。
+    context: dict[str, Any] = field(default_factory=dict)
     error: str = ""
     timestamp: float = field(default_factory=time.time)
     # ── Trace ID (新增: 支持分布式链路追踪) ──

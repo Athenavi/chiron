@@ -802,6 +802,13 @@ const SLASH_COMMANDS = computed(() => [
   { cmd: '/new', desc: tr('chat.new_session') },
   { cmd: '/theme', desc: tr('common.toggle_dark_light_mode') },
   { cmd: '/stop', desc: tr('common.stop_generating') },
+  // 引擎侧命令（python-engine/app/commands/）：前端**不重复实现**，选中后作为消息发出，
+  // 由引擎在进入推理循环前拦截执行（此前这批命令实现齐全却没有接入路径）。
+  { cmd: '/undo', desc: tr('chat.undo_last_file_write') },
+  { cmd: '/compact', desc: tr('chat.compress_conversation_context') },
+  { cmd: '/context', desc: tr('chat.show_current_context') },
+  { cmd: '/cost', desc: tr('chat.show_token_usage_and_cost') },
+  { cmd: '/help', desc: tr('chat.list_available_commands') },
 ])
 const showSlashMenu = ref(false)
 const slashIndex = ref(0)
