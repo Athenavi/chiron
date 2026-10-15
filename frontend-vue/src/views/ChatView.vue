@@ -10,7 +10,7 @@ import {
   createAgent, createGraph,
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
-import { getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
+import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
 import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
@@ -624,17 +624,88 @@ interface PendingQuestion {
   question: string
   options: string[]
   allowFreeText: boolean
+  /** 到期时刻；到点置 `expired` 但**保留**卡片与问题上下文（对齐 AskCard 的 expired 语义） */
+  expiresAt: number
+  expired?: boolean
 }
 
 const pendingQuestions = ref<PendingQuestion[]>([])
 
+// 任务预算快照（引擎 `done` 事件带 `budget={轴: {used, limit}}`，`limit=0` 表示该轴不限）。
+const budgetSnapshot = ref<Record<string, { used?: number; limit?: number }> | null>(null)
+// 会话累计成本（分）。计价在**网关**侧（`/v1/sessions/{id}/metrics`），引擎只产 token。
+const sessionCostCents = ref<number | null>(null)
+// 上下文快照（引擎 `done` 带 `context={used, limit, compact_ratio}`）。阈值也由引擎给出，
+// 前端不写死常量 —— 它可被租户/模式覆盖。
+const contextSnapshot = ref<{ used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> } | null>(null)
+
+// 提问的等待上限，与后端 `runtime.ASK_ANSWER_TTL_SECONDS = 300` 对齐。
+// 超时后后端把 `{"error": "user did not answer in time"}` 当**工具结果**回给模型，
+// 并不再发 fe 事件，所以前端必须自己判定过期 —— 否则卡片一直可点，用户以为还能答，
+// 点了才会失败。与审批卡（`APPROVAL_TIMEOUT_MS` + `ensureApprovalTimer`）同一套模式。
+const ASK_TIMEOUT_MS = 300_000
+let askTimer: ReturnType<typeof setInterval> | null = null
+
+function stopAskTimer() {
+  if (askTimer) {
+    clearInterval(askTimer)
+    askTimer = null
+  }
+}
+
+function ensureAskTimer() {
+  if (askTimer) return
+  askTimer = setInterval(() => {
+    const now = Date.now()
+    let anyLive = false
+    for (const item of pendingQuestions.value) {
+      if (item.expiresAt <= now) item.expired = true
+      else anyLive = true
+    }
+    if (!anyLive) stopAskTimer()
+  }, 1000)
+}
+
 async function answerQuestion(question: PendingQuestion, answer: string) {
   pendingQuestions.value = pendingQuestions.value.filter(item => item.id !== question.id)
+  if (pendingQuestions.value.length === 0) stopAskTimer()
   try {
     await submitAnswer({
       session_id: activeSessionId.value || '',
       tool_call_id: question.id,
       answer,
+    })
+  } catch {
+    message.error(t('errors.answer_submission_failed_please_retry'))
+  }
+}
+
+/** 成本常显：计价在网关侧，引擎只管 token，所以要拉会话级 metrics。 */
+async function refreshSessionCost() {
+  const sid = activeSessionId.value
+  if (!sid) {
+    sessionCostCents.value = null
+    return
+  }
+  try {
+    const m = await getSessionMetrics(sid)
+    sessionCostCents.value = Number(m?.totals?.cost_cents ?? 0)
+  } catch {
+    // 拉不到就不显示 —— 这是展示信息，不该打断对话
+    sessionCostCents.value = null
+  }
+}
+
+/** 明确拒绝回答：走同一条通道，但带 `declined` 标志 —— 模型收到的是"用户拒绝"，不是超时错误。 */
+async function declineQuestion(question: PendingQuestion) {
+  pendingQuestions.value = pendingQuestions.value.filter(item => item.id !== question.id)
+  if (pendingQuestions.value.length === 0) stopAskTimer()
+  try {
+    await submitAnswer({
+      session_id: activeSessionId.value || '',
+      tool_call_id: question.id,
+      answer: '',
+      declined: true,
     })
   } catch {
     message.error(t('errors.answer_submission_failed_please_retry'))
@@ -1780,6 +1851,15 @@ function onSlashCommand(cmd: string) {
     case '/stop':
       stopGeneration()
       break
+    // 引擎侧命令（app/commands/）：前端不重复实现，作为消息发出，由引擎在进推理循环前拦截。
+    // 只列真正的引擎命令 —— 笔误仍会落到 default 拿到"未知命令"提示，不会被静默当普通提问。
+    case '/undo':
+    case '/compact':
+    case '/context':
+    case '/cost':
+    case '/help':
+      void sendMessage(cmd)
+      break
     default:
       message.warning(t('common.unknown_command_cmd', { cmd }))
   }
@@ -1891,6 +1971,7 @@ async function switchSession(id: string) {
   // 它们是**那个**会话在等用户操作，显示在当前会话上会让人误以为"在等我处理"。
   pendingApprovals.value = []
   pendingQuestions.value = []
+  stopAskTimer()
   // `activeSSE` 只应指向"**本会话**正在跑的流"。本会话没在跑就置空 ——
   // 否则在会话 B 里点"停止"会去停 A 仍在跑的流。
   // （切回正在跑的会话时这里会置空、因而暂时停不了它：**宁可停不了，也不能停错**；
@@ -2380,6 +2461,16 @@ function onSSEMessage(raw: unknown) {
         durationSec: turnElapsed.value,
       })
     }
+    // 任务预算快照：引擎五轴（steps/turns/tokens/wall/cost）一直在强制生效，此前完全不外露，
+    // 用户只能等到 `budget_exceeded` 才知道原来有上限。
+    budgetSnapshot.value = (d.budget && typeof d.budget === 'object')
+      ? (d.budget as Record<string, { used?: number; limit?: number }>)
+      : null
+    contextSnapshot.value = (d.context && typeof d.context === 'object')
+      ? (d.context as { used?: number; limit?: number; compact_ratio?: number; breakdown?: Record<string, number> })
+      : null
+    // 成本常显：轮次结束拉一次会话级 metrics（此前只在需展开的 SessionStatsPanel 里能看到）
+    void refreshSessionCost()
   } else if (type === 'approval') {
     const callId = String(d.id ?? d.tool_call_id ?? Date.now())
     pendingApprovals.value.push({
@@ -2397,7 +2488,9 @@ function onSSEMessage(raw: unknown) {
       question: String(d.question ?? d.content ?? t('common.needs_your_confirmation')),
       options: Array.isArray(d.options) ? d.options.map((option: unknown) => String(option)) : [],
       allowFreeText: d.allow_free_text !== false,
+      expiresAt: Date.now() + ASK_TIMEOUT_MS,
     })
+    ensureAskTimer()
   } else if (type === 'guardrail_blocked') {
     flushStreamingFlags()
     loading.value = false
@@ -3037,7 +3130,9 @@ function continueGeneration() {
           :question="q.question"
           :options="q.options"
           :allow-free-text="q.allowFreeText"
+          :expired="!!q.expired"
           @answer="(value: string) => answerQuestion(q, value)"
+          @decline="() => declineQuestion(q)"
         />
       </div>
 
@@ -3072,7 +3167,11 @@ function continueGeneration() {
         :stats="lastTurnStats"
         :context-used="lastTurnStats?.inputTokens ?? null"
         :context-limit="contextWindow"
+        :compact-ratio="contextSnapshot?.compact_ratio ?? null"
+        :breakdown="contextSnapshot?.breakdown ?? null"
         :compaction="lastCompaction"
+        :budget="budgetSnapshot"
+        :cost-cents="sessionCostCents"
         :subagent-active-count="subagentActiveCount"
         :online="isOnline && !connectionLost"
         @toggle-subagents="subagentsOpen = !subagentsOpen"

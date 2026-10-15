@@ -25,7 +25,7 @@ const props = withDefaults(defineProps<{
   expired: false,
 })
 
-const emit = defineEmits<{ (e: 'answer', value: string): void }>()
+const emit = defineEmits<{ (e: 'answer', value: string): void; (e: 'decline'): void }>()
 
 const draft = ref('')
 
@@ -45,6 +45,12 @@ function submitDraft() {
   const text = draft.value.trim()
   if (!text || props.expired) return
   emit('answer', text)
+}
+
+/** 明确拒绝：不是"没回答"，而是一条**答复** —— 模型据此改问法或自行决定。 */
+function decline() {
+  if (props.expired) return
+  emit('decline')
 }
 </script>
 
@@ -98,6 +104,14 @@ function submitDraft() {
         @click="submitDraft"
       >
         {{ $t('common.answer') }}
+      </button>
+      <button
+        class="ask-decline"
+        type="button"
+        :disabled="expired"
+        @click="decline"
+      >
+        {{ $t('common.decline') }}
       </button>
     </div>
   </div>

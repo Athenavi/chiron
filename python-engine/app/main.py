@@ -1734,7 +1734,7 @@ async def agent_submit(
                     total_in += event.input_tokens
                 if event.output_tokens:
                     total_out += event.output_tokens
-                yield _frame({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens, 'cached_tokens': event.cached_tokens, 'model': event.model})
+                yield _frame({'type': event.type, 'content': event.content or event.error, 'id': event.tool_call_id, 'name': event.tool_name, 'arguments': event.tool_arguments, 'options': event.options, 'input_tokens': event.input_tokens, 'output_tokens': event.output_tokens, 'cached_tokens': event.cached_tokens, 'model': event.model, 'budget': event.budget, 'context': event.context})
             # 收尾：把旁路中剩余的预览与唯一终态送出
             async for frame in _sink_frames():
                 yield frame
@@ -1974,7 +1974,13 @@ async def agent_answer(
     session_id = body.get("session_id", "")
     tool_call_id = body.get("tool_call_id", "")
     answer = str(body.get("answer", ""))
-    if not answer.strip():
+    if body.get("declined"):
+        # 显式拒绝：是一条**有效答复**（模型能区分"拒绝"与"超时/没看见"），所以不走
+        # 下面的空答案校验，而是用哨兵回填、由 `_await_answer` 转成结构化结果。
+        from app.agent.runtime import ASK_DECLINED
+
+        answer = ASK_DECLINED
+    elif not answer.strip():
         return {"ok": False, "error": "answer is required"}
     entry = _ACTIVE_RUNTIMES.get(session_id)
     if entry is None:
