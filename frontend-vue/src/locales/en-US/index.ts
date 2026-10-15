@@ -481,6 +481,7 @@ export default {
     context_remaining_tokens: "{n} tokens left",
     context_compacts_at: "compacts at {pct}%",
     context_breakdown: "system {system} · history {history} · tools {tools} · turn {current}",
+    context_largest_items: "largest {items}",
     todo_pending: "Pending",
     todo_in_progress: "In progress",
     todo_completed: "Completed",

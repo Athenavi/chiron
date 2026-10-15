@@ -1069,12 +1069,13 @@ class AgentRuntime:
 
     @staticmethod
     def _context_breakdown(
-        messages: list[dict[str, Any]], model: str = ""
-    ) -> dict[str, int]:
-        """按**消息类别**给上下文分段（逐条估算 token）。
+        messages: list[dict[str, Any]], model: str = "", *, top_n: int = 5
+    ) -> tuple[dict[str, int], list[dict[str, Any]]]:
+        """按**消息类别**给上下文分段，并给出占用最大的几条。
 
-        回答"上下文被谁占满了"：系统提示（含技能目录与记忆注入）通常是大头，其次是历史与
-        工具结果。没有这个分解，用户只看到一个总数，无从判断该清哪一块。
+        返回 `(每类合计, 最大的 top_n 条)`，两者出自**同一遍遍历** —— 分两处算必然漂移。
+        `largest` 只报类别、角色与估算大小，**不含消息内容**：这份数据要送到前端，而消息
+        正文可能含用户隐私；"是谁占的"用大小与来源足以回答（与上游 2.41 的取舍一致）。
         """
         buckets: dict[str, int] = {
             "system": 0,
@@ -1082,19 +1083,23 @@ class AgentRuntime:
             "tool_results": 0,
             "current": 0,
         }
+        items: list[dict[str, Any]] = []
         last = len(messages) - 1
         for i, m in enumerate(messages):
             role = m.get("role", "")
             n = _estimate_tokens([m], model)
             if role == "system":
-                buckets["system"] += n
+                cls = "system"
             elif role == "tool":
-                buckets["tool_results"] += n
+                cls = "tool_results"
             elif i == last:
-                buckets["current"] += n
+                cls = "current"
             else:
-                buckets["history"] += n
-        return buckets
+                cls = "history"
+            buckets[cls] += n
+            items.append({"class": cls, "role": str(role or ""), "tokens": n})
+        items.sort(key=lambda x: int(x["tokens"]), reverse=True)
+        return buckets, items[:top_n]
 
     @staticmethod
     def _prefix_fingerprint(
@@ -1150,13 +1155,19 @@ class AgentRuntime:
         # 分段同样用**校准后**的估算（与判定同源）：只有传 model 才会走 model_window 的
         # 密度反推，否则退化成 4 chars ≈ 1 token，分段之和与 `used`（服务商回报）就对不上。
         model = str((llm_config or {}).get("model", "") or "")
+        breakdown: dict[str, int] = {}
+        largest: list[dict[str, Any]] = []
+        if messages:
+            breakdown, largest = self._context_breakdown(messages, model)
         return {
             "used": used,
             "limit": limit,
             "compact_ratio": float(getattr(comp_cfg, "threshold_ratio", 0.0) or 0.0)
             if comp_cfg is not None
             else 0.0,
-            "breakdown": self._context_breakdown(messages, model) if messages else {},
+            "breakdown": breakdown,
+            # 占用最大的几条（只含类别/角色/大小，不含内容）：回答"是哪一条占的"
+            "largest": largest,
         }
 
     async def _run_slash_command(

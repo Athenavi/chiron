@@ -18,6 +18,8 @@ const props = defineProps<{
   compactRatio?: number | null
   /** 上下文分段（`system`/`history`/`tool_results`/`current` 的估算 token） */
   breakdown?: Record<string, number> | null
+  /** 占用最大的几条（只含类别/角色/大小，**不含消息内容**） */
+  largest?: Array<{ class?: string; role?: string; tokens?: number }> | null
 }>()
 
 const R = 8
@@ -45,6 +47,9 @@ const remaining = computed(() => {
   return Math.max(0, props.limit - props.used)
 })
 
+/** token 数的紧凑显示（`1.2k`）。`title` 里分段与最大项两处共用，避免抄两份。 */
+const fmtK = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
+
 const title = computed(() => {
   if (percent.value === null) return t('common.context_usage_no_data')
   const parts = [t('common.context_usage_label_last_request_used_tokens_limit_limit', { label: label.value, used: props.used, limit: props.limit })]
@@ -56,12 +61,18 @@ const title = computed(() => {
   // 分段：回答"上下文被谁占满了"。用**一个**带参数的键覆盖四类，避免四份易漂的独立文案。
   const b = props.breakdown
   if (b && (b.system || b.history || b.tool_results || b.current)) {
-    const k = (n?: number) => (n ? `${(n / 1000).toFixed(1)}k` : '0')
     parts.push(t('common.context_breakdown', {
-      system: k(b.system),
-      history: k(b.history),
-      tools: k(b.tool_results),
-      current: k(b.current),
+      system: fmtK(b.system),
+      history: fmtK(b.history),
+      tools: fmtK(b.tool_results),
+      current: fmtK(b.current),
+    }))
+  }
+  // 最大的几项：引擎只给类别/角色/大小，**不含消息内容**（隐私）；"是谁占的"这就够了。
+  const top = props.largest
+  if (top?.length) {
+    parts.push(t('common.context_largest_items', {
+      items: top.map(x => `${x.role || x.class || '?'} ${fmtK(x.tokens)}`).join(' / '),
     }))
   }
   return parts.join(' · ')

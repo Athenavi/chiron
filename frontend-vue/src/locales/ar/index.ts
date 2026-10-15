@@ -483,6 +483,7 @@ export default {
     context_remaining_tokens: "المتبقي {n} من الرموز",
     context_compacts_at: "يُضغط عند {pct}%",
     context_breakdown: "النظام {system} · السجل {history} · الأدوات {tools} · الدور {current}",
+    context_largest_items: "الأكبر {items}",
     todo_pending: "قيد الانتظار",
     todo_in_progress: "جارٍ",
     todo_completed: "مكتمل",
