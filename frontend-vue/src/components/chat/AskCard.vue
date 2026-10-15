@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed } from 'vue'
+import { ref, computed, watch } from 'vue'
 
 export interface AskOption {
   label: string
@@ -25,9 +25,17 @@ const props = withDefaults(defineProps<{
   expired: false,
 })
 
-const emit = defineEmits<{ (e: 'answer', value: string): void; (e: 'decline'): void }>()
+const emit = defineEmits<{
+  (e: 'answer', value: string): void
+  (e: 'decline'): void
+  (e: 'drafting', active: boolean): void
+}>()
 
 const draft = ref('')
+
+// 已经开始作答就不该被超时判定（与上游 #12884 同款语义）：把草稿状态上报给父层，
+// 由它决定"这项不再算超时"。空草稿 = 未开始，照常超时。
+watch(draft, () => emit('drafting', draft.value.trim().length > 0))
 
 const normalized = computed<AskOption[]>(() =>
   (props.options ?? []).map(option => (typeof option === 'string' ? { label: option, value: option } : option)),
