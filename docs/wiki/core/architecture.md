@@ -29,7 +29,7 @@ cmd/               网关与 CLI（chiron 网关；chiron-cli 管理本地启动
 internal/          Go 网关实现（api、auth、billing、broadcast、db、engine、session、storage…）
 python-engine/     引擎实现（app/agent、queue、api、tools、workflow、memory、rag…）
 frontend-vue/      Vue 3 前端
-migrations/        Alembic 迁移；ORM 模型由 configs/orm/V1/models.yaml 生成到 shared/models/
+migrations/        Alembic 迁移（手写 SQL）；configs/orm/V1/models.yaml 仅作参考
 market/skills/     内置技能资产（{name}/SKILL.md 目录型技能）—— 容器部署必须挂载
 ```
 

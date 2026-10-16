@@ -22,6 +22,17 @@ router = APIRouter(prefix="/v1/kb", tags=["knowledge"])
 DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 
+def _now_naive() -> datetime:
+    """当前 UTC 时间（**naive**）。
+
+    ``knowledge_bases`` / ``knowledge_documents`` 的 ``created_at`` / ``updated_at`` 是
+    ``timestamp without time zone``：asyncpg 对这类列传 **aware** datetime 会直接抛
+    ``can't subtract offset-naive and offset-aware datetimes``（实测 ``POST /v1/kb`` 因此返回
+    500）。统一按 UTC 的 naive 值落库，口径同 ``app/memory/conflict_audit.py``。
+    """
+    return datetime.now(UTC).replace(tzinfo=None)
+
+
 # ── Models ──
 
 
@@ -173,7 +184,7 @@ async def create_knowledge_base(
 
     pool = get_pool()
     kb_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
+    now = _now_naive()
     await pool.execute(
         """INSERT INTO knowledge_bases (id, tenant_id, user_id, name, description, type, visibility, status, created_at, updated_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)""",
@@ -282,7 +293,7 @@ async def update_knowledge_base(
         raise HTTPException(status_code=400, detail="no fields to update")
 
     updates.append(f"updated_at = ${idx}")
-    params.append(datetime.now(UTC))
+    params.append(_now_naive())
     idx += 1
 
     params.append(kb_id)
@@ -356,7 +367,7 @@ async def upload_document(
         raise HTTPException(status_code=400, detail="document name must not be empty")
 
     doc_id = str(uuid.uuid4())
-    now = datetime.now(UTC)
+    now = _now_naive()
 
     # Insert the document
     await pool.execute(
@@ -550,7 +561,7 @@ async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") ->
         raise HTTPException(status_code=402, detail="insufficient credits")
 
     # Mark KB as building（条件更新：并发下仅一个请求能抢到，防 TOCTOU 双投递）
-    now = datetime.now(UTC)
+    now = _now_naive()
     res = await pool.execute(
         "UPDATE knowledge_bases SET status = 'building', updated_at = $1 WHERE id = $2 AND status <> 'building'",
         now,
@@ -570,7 +581,7 @@ async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") ->
             # 回滚 building 状态，避免 Redis 不可用时 KB 永久卡死（上传被 409 拒绝）
             await pool.execute(
                 "UPDATE knowledge_bases SET status = 'draft', updated_at = $1 WHERE id = $2",
-                datetime.now(UTC),
+                _now_naive(),
                 kb_id,
             )
             raise

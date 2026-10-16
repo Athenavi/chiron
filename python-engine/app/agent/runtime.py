@@ -408,6 +408,41 @@ def _auto_normalize(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return auto_normalize(messages)
 
 
+async def _with_attachment_parts(
+    messages: list[dict[str, Any]], task: AgentTask, model: str
+) -> list[dict[str, Any]]:
+    """把本轮用户消息换成带附件的 content parts（**无附件时原样返回**，零行为变化）。
+
+    附件不是文本：图片要以 `image_url` 块交给模型，docx/pdf 要先提取成文本 —— 两者的
+    判定都在 `app/media/attachments.py`（与统一链路共用一处）。这里只负责"挂到本轮那条
+    用户消息上"，并保证只有附件、没有文字时附件也不会丢。
+    """
+    if not task.attachments:
+        return messages
+
+    from app.agent.message_codec import make_message
+    from app.media.attachments import to_content_parts
+
+    parts = await to_content_parts(task.attachments, model=model)
+    if not parts:
+        return messages
+
+    content: list[dict[str, Any]] = []
+    if task.content.strip():
+        content.append({"type": "text", "text": task.content})
+    content.extend(parts)
+
+    for index in range(len(messages) - 1, -1, -1):
+        msg = messages[index]
+        if msg.get("role") == "user" and msg.get("content") == task.content:
+            out = list(messages)
+            out[index] = {**msg, "content": content}
+            return out
+
+    # 没找到本轮用户消息（例如续跑快照已把它合并）：追加一条，确保附件不丢。
+    return [*messages, make_message(role="user", content=content)]  # type: ignore[arg-type]
+
+
 def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
     """Token 估算。
 
@@ -418,9 +453,11 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
     无 `model` 时保持历史近似（4 chars ≈ 1 token），供不关心模型差异的调用点使用。
     """
     if model:
-        from app.agent.model_window import estimator
+        from app.agent.model_window import estimator, image_tokens
 
-        return estimator().estimate(messages, model=model)
+        # 图片不吃字符估算（base64 的字符数说明不了它的 token 成本），单独计价后相加，
+        # 否则一屏图的窗口会被算得比实际小得多、压缩迟迟不触发。
+        return estimator().estimate(messages, model=model) + image_tokens(messages)
 
     total = 0
     for m in messages:
@@ -1738,6 +1775,11 @@ class AgentRuntime:
 
             context_window = await model_window.context_window(model)
 
+            # ── 附件 → 模型可见内容（本轮用户消息携带的媒体库文件）──
+            # 放在窗口预算与压缩**之前**：附件会真的占上下文（图片块 + 提取出的文本），
+            # 必须在算预算时就算进去，而不是等压缩阶段才发现超了。
+            messages = await _with_attachment_parts(messages, task, str(model))
+
             # ── 消息规范化 + 分级压缩：请求开始时立即执行，确保上下文在预算内 ──
             messages = [
                 _normalize_msg(
@@ -1754,6 +1796,12 @@ class AgentRuntime:
                 from app.agent.media_offload import offload_inline_media
 
                 messages = await offload_inline_media(messages)
+
+                # 按**当前模型**的能力适配图片：读不了图的模型不塞图，否则 provider 会
+                # 整轮报错（见 `app/agent/model_capabilities.py`）。
+                from app.agent.media_offload import adapt_images_for_model
+
+                messages = await adapt_images_for_model(messages, model=model)
 
                 # SaaS：截断策略由模式/租户配置（mode_overrides.json 的 compaction 字段）；
                 # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖。

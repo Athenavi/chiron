@@ -74,22 +74,55 @@ func isASCIILetter(b byte) bool {
 	return (b >= 'a' && b <= 'z') || (b >= 'A' && b <= 'Z')
 }
 
-// checkPluginCommandAllowed 校验命令 basename 是否在白名单内。
-func checkPluginCommandAllowed(command string) error {
+// validatePluginCommandShape 校验命令**形态**（与授权无关，始终生效）：
+// 只接受裸 basename（走 PATH）或绝对路径，拒绝相对路径、`..` 段与 UNC。
+func validatePluginCommandShape(command string) error {
 	if strings.TrimSpace(command) == "" {
 		return fmt.Errorf("command is required")
-	}
-	allowed := allowedPluginCommands()
-	if allowed == nil {
-		return fmt.Errorf("plugin command execution is disabled: set PLUGIN_COMMAND_ALLOWLIST to enable specific commands")
 	}
 	if !pluginCommandPathAllowed(command) {
 		return fmt.Errorf("plugin command %q must be a bare basename or an absolute path "+
 			"(relative paths, '..' and UNC are rejected)", command)
 	}
+	return nil
+}
+
+// checkOperatorAllowlist 运维级命令白名单（**可选上界**）。
+//
+// 未配置 PLUGIN_COMMAND_ALLOWLIST ⇒ 不下发限制（授权交给**用户级**总开关 + 每插件确认）；
+// 配置了 ⇒ 命令 basename 必须命中，运维可用它对整台网关收紧可执行命令集。
+func checkOperatorAllowlist(command string) error {
+	allowed := allowedPluginCommands()
+	if allowed == nil {
+		return nil
+	}
 	base := filepath.Base(command)
 	if !allowed[base] {
-		return fmt.Errorf("plugin command %q not in allowlist (PLUGIN_COMMAND_ALLOWLIST)", base)
+		return fmt.Errorf("plugin command %q not in operator allowlist (PLUGIN_COMMAND_ALLOWLIST)", base)
+	}
+	return nil
+}
+
+// checkPluginExecutionAllowed 是**执行**插件前的完整闸门（deny-by-default，四层）：
+//
+//  1. 命令形态合法（validatePluginCommandShape）；
+//  2. 运维可选上界命中（checkOperatorAllowlist，未配置即不限制）；
+//  3. 用户级总开关 commands_enabled 已开启；
+//  4. 该插件已被用户**一次性授权**（approved）。
+//
+// 创建/更新插件**不**走这里 —— 允许保存配置（未授权状态），只有真正执行才需全部通过。
+func checkPluginExecutionAllowed(plugin MCPPlugin, commandsEnabled bool) error {
+	if err := validatePluginCommandShape(plugin.Command); err != nil {
+		return err
+	}
+	if err := checkOperatorAllowlist(plugin.Command); err != nil {
+		return err
+	}
+	if !commandsEnabled {
+		return fmt.Errorf("plugin command execution is disabled for this user: enable it in the plugin settings first")
+	}
+	if !plugin.Approved {
+		return fmt.Errorf("plugin %q is not approved: approve it before executing", plugin.Name)
 	}
 	return nil
 }
@@ -110,15 +143,6 @@ func checkPluginArgsAllowed(args []string) error {
 		}
 	}
 	return nil
-}
-
-// isAdminRole 判断当前请求是否为 owner/admin（插件命令执行敏感操作）。
-func isAdminRole(r *http.Request) bool {
-	claims := auth.GetClaims(r.Context())
-	if claims == nil {
-		return false
-	}
-	return claims.Role == "owner" || claims.Role == "admin"
 }
 
 // maskSensitiveEnv 对 MCPPlugin.Env 中疑似敏感字段做脱敏处理
@@ -159,11 +183,18 @@ type MCPPlugin struct {
 	Version     string            `json:"version,omitempty"`
 	Status      string            `json:"status"`
 	Source      string            `json:"source,omitempty"` // "market" = 市场授权叠加项（非用户本地配置）
+	// Approved：**用户级**「每插件一次性授权」——该插件是否已被用户确认可以执行。
+	// 默认 false（未授权，不可执行）；改 command 会重置为 false（旧授权不适用于新命令）。
+	Approved bool `json:"approved,omitempty"`
 }
 
 // pluginsFile is the on-disk structure of plugins.json.
 type pluginsFile struct {
 	MCPServers []MCPPlugin `json:"mcp_servers"`
+	// CommandsEnabled：**用户级总开关**——是否允许执行本用户的插件命令（默认 false = 未授权）。
+	// 与运维级的 PLUGIN_COMMAND_ALLOWLIST（**可选上界**）是两层不同的闸，
+	// 完整执行闸见 checkPluginExecutionAllowed。
+	CommandsEnabled bool `json:"commands_enabled,omitempty"`
 }
 
 func NewPluginHandler(cfg *config.Config, authenticator *auth.Authenticator) *PluginHandler {
@@ -300,8 +331,13 @@ func (h *PluginHandler) Install(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "command is required")
 		return
 	}
-	// P0-S7 修复：命令必须命中白名单（默认禁用），防任意命令执行
-	if err := checkPluginCommandAllowed(body.Command); err != nil {
+	// 创建**不再**要求命中运维白名单（那是可选上界）：只校验命令**形态**，允许先把插件存
+	// 下来；能否执行由**用户级**闸（总开关 + 每插件授权）在真正执行时决定。
+	if err := validatePluginCommandShape(body.Command); err != nil {
+		Forbidden(w, "plugin command not allowed")
+		return
+	}
+	if err := checkOperatorAllowlist(body.Command); err != nil {
 		Forbidden(w, "plugin command not allowed")
 		return
 	}
@@ -447,10 +483,18 @@ func (h *PluginHandler) Update(w http.ResponseWriter, r *http.Request) {
 				BadRequest(w, "command must not be empty")
 				return
 			}
-			// P0-S7 修复：命令必须命中白名单（默认禁用）
-			if err := checkPluginCommandAllowed(*body.Command); err != nil {
+			// 同 Install：只校验形态 + 可选运维上界；未配白名单不再拒绝。
+			if err := validatePluginCommandShape(*body.Command); err != nil {
 				Forbidden(w, "plugin command not allowed")
 				return
+			}
+			if err := checkOperatorAllowlist(*body.Command); err != nil {
+				Forbidden(w, "plugin command not allowed")
+				return
+			}
+			// 命令变了 ⇒ 旧的**一次性授权**不再适用，重置为未授权。
+			if plugins[i].Command != *body.Command {
+				plugins[i].Approved = false
 			}
 			plugins[i].Command = *body.Command
 		}
@@ -492,11 +536,8 @@ func (h *PluginHandler) Update(w http.ResponseWriter, r *http.Request) {
 // ── Test ──
 
 func (h *PluginHandler) Test(w http.ResponseWriter, r *http.Request) {
-	// P0-S7 修复：执行用户自定义命令的测试端点仅限 owner/admin
-	if !isAdminRole(r) {
-		Forbidden(w, "plugin test requires admin role")
-		return
-	}
+	// 执行**不再**强制 owner/admin —— 授权已下沉到**用户级**（总开关 + 每插件一次性授权）；
+	// 完整闸门见下方 checkPluginExecutionAllowed。
 	userID := h.resolveUser(r)
 	if userID == "" {
 		Unauthorized(w, ErrAuthRequired)
@@ -508,11 +549,12 @@ func (h *PluginHandler) Test(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	plugins, err := h.readPlugins(userID)
+	pf, err := h.readPluginsFile(userID)
 	if err != nil {
 		InternalError(w, "failed to read plugins config")
 		return
 	}
+	plugins := pf.MCPServers
 	var plugin *MCPPlugin
 	for i := range plugins {
 		if plugins[i].Name == name {
@@ -529,10 +571,10 @@ func (h *PluginHandler) Test(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
 
-	// P0 安全：命令白名单检查
-	if err := checkPluginCommandAllowed(plugin.Command); err != nil {
+	// 执行闸（deny-by-default）：命令形态 + 运维可选上界 + 用户总开关 + 该插件已授权
+	if err := checkPluginExecutionAllowed(*plugin, pf.CommandsEnabled); err != nil {
 		OK(w, map[string]interface{}{
-			"ok": false, "message": "plugin command not allowed",
+			"ok": false, "message": err.Error(),
 			"duration_ms": time.Since(start).Milliseconds(),
 		})
 		return
@@ -627,35 +669,159 @@ func (h *PluginHandler) Test(w http.ResponseWriter, r *http.Request) {
 
 // ── Internal helpers ──
 
-func (h *PluginHandler) readPlugins(userID string) ([]MCPPlugin, error) {
+func (h *PluginHandler) readPluginsFile(userID string) (pluginsFile, error) {
 	data, err := os.ReadFile(h.userPluginPath(userID))
 	if err != nil {
-		return nil, err
+		return pluginsFile{}, err
 	}
 	var pf pluginsFile
 	if err := json.Unmarshal(data, &pf); err != nil {
-		return nil, err
+		return pluginsFile{}, err
 	}
 	if pf.MCPServers == nil {
-		return []MCPPlugin{}, nil
+		pf.MCPServers = []MCPPlugin{}
+	}
+	return pf, nil
+}
+
+func (h *PluginHandler) readPlugins(userID string) ([]MCPPlugin, error) {
+	pf, err := h.readPluginsFile(userID)
+	if err != nil {
+		return nil, err
 	}
 	return pf.MCPServers, nil
 }
 
-func (h *PluginHandler) writePlugins(userID string, plugins []MCPPlugin) error {
-	if plugins == nil {
-		plugins = []MCPPlugin{}
+func (h *PluginHandler) savePluginsFile(userID string, pf pluginsFile) error {
+	if pf.MCPServers == nil {
+		pf.MCPServers = []MCPPlugin{}
 	}
 	path := h.userPluginPath(userID)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	pf := pluginsFile{MCPServers: plugins}
 	data, err := json.MarshalIndent(pf, "", "  ")
 	if err != nil {
 		return err
 	}
 	return os.WriteFile(path, data, 0o644)
+}
+
+func (h *PluginHandler) writePlugins(userID string, plugins []MCPPlugin) error {
+	// 保留 file 级既有字段（如 commands_enabled），避免"改插件把用户总开关写没"。
+	pf, err := h.readPluginsFile(userID)
+	if err != nil && !os.IsNotExist(err) {
+		pf = pluginsFile{}
+	}
+	pf.MCPServers = plugins
+	return h.savePluginsFile(userID, pf)
+}
+
+// ── Authorization（用户级）──
+
+// GetAuthorization GET /v1/plugins/authorization —— 返回用户级总开关状态。
+func (h *PluginHandler) GetAuthorization(w http.ResponseWriter, r *http.Request) {
+	userID := h.resolveUser(r)
+	if userID == "" {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	pf, err := h.readPluginsFile(userID)
+	if err != nil && !os.IsNotExist(err) {
+		InternalError(w, "failed to read plugins config")
+		return
+	}
+	OK(w, map[string]bool{"commands_enabled": pf.CommandsEnabled})
+}
+
+// SetAuthorization PUT /v1/plugins/authorization —— 设置用户级总开关
+// （是否允许执行本用户的插件命令；默认 false）。
+func (h *PluginHandler) SetAuthorization(w http.ResponseWriter, r *http.Request) {
+	userID := h.resolveUser(r)
+	if userID == "" {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	var body struct {
+		CommandsEnabled *bool `json:"commands_enabled"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil || body.CommandsEnabled == nil {
+		BadRequest(w, "commands_enabled is required")
+		return
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pf, err := h.readPluginsFile(userID)
+	if err != nil && !os.IsNotExist(err) {
+		InternalError(w, "failed to read plugins config")
+		return
+	}
+	pf.CommandsEnabled = *body.CommandsEnabled
+	if err := h.savePluginsFile(userID, pf); err != nil {
+		InternalError(w, "failed to save plugins config")
+		return
+	}
+	slog.Info("plugin authorization updated", "user", userID, "commands_enabled", *body.CommandsEnabled)
+	OK(w, map[string]bool{"commands_enabled": pf.CommandsEnabled})
+}
+
+// Approve POST /v1/plugins/{name}/approve —— 对单个插件做**一次性授权**
+// （缺省 approve，显式传 `{"approved": false}` 撤销）。改命令会由 Update 自动重置为未授权。
+func (h *PluginHandler) Approve(w http.ResponseWriter, r *http.Request) {
+	userID := h.resolveUser(r)
+	if userID == "" {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	name := r.PathValue("name")
+	if name == "" {
+		BadRequest(w, "plugin name is required")
+		return
+	}
+	approved := true
+	if r.ContentLength != 0 {
+		var body struct {
+			Approved *bool `json:"approved"`
+		}
+		if err := DecodeJSON(w, r, &body); err == nil && body.Approved != nil {
+			approved = *body.Approved
+		}
+	}
+
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	pf, err := h.readPluginsFile(userID)
+	if err != nil {
+		NotFound(w, "plugin not found: "+name)
+		return
+	}
+	found := false
+	for i := range pf.MCPServers {
+		if pf.MCPServers[i].Name != name {
+			continue
+		}
+		if approved {
+			// 授权前先确认命令形态合法（别授权一个根本执行不了的命令）。
+			if err := validatePluginCommandShape(pf.MCPServers[i].Command); err != nil {
+				BadRequest(w, err.Error())
+				return
+			}
+		}
+		pf.MCPServers[i].Approved = approved
+		found = true
+		break
+	}
+	if !found {
+		NotFound(w, "plugin not found: "+name)
+		return
+	}
+	if err := h.savePluginsFile(userID, pf); err != nil {
+		InternalError(w, "failed to save plugins config")
+		return
+	}
+	slog.Info("plugin authorization updated", "user", userID, "name", name, "approved", approved)
+	OK(w, map[string]interface{}{"name": name, "approved": approved})
 }
 
 var validPluginName = func() func(string) bool {

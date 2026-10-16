@@ -217,6 +217,10 @@ async def create_graph(
 
     graph_id = body.id or f"g-{_uuid.uuid4().hex[:10]}"
     now = datetime.datetime.now(datetime.UTC)
+    # 列是 `timestamp without time zone`：asyncpg 会拒绝 aware datetime
+    # （"can't subtract offset-naive and offset-aware datetimes"，同 execute_graph）。
+    # `now` 仅用于响应里的展示时间，**落库**一律用 naive 的 `now_db`。
+    now_db = now.replace(tzinfo=None)
 
     graph_json = body.graph_json
     if isinstance(graph_json, str):
@@ -244,8 +248,8 @@ async def create_graph(
             body.name,
             effective_user_id or None,
             json.dumps(graph_json),
-            now,
-            now,
+            now_db,
+            now_db,
         )
     except Exception as e:
         logger.error("graph insert failed: %s", e)

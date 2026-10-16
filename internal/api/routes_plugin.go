@@ -12,6 +12,10 @@ import (
 func registerPluginRoutes(mux *http.ServeMux, pluginHandler *PluginHandler, authMW, rlMW routeMiddleware) {
 	// Plugins (auth + rate limited)
 	mux.Handle("GET /v1/plugins", authMW(rlMW(http.HandlerFunc(pluginHandler.List))))
+	// 用户级授权：总开关（authorization）+ 每插件一次性授权（approve）。
+	mux.Handle("GET /v1/plugins/authorization", authMW(rlMW(http.HandlerFunc(pluginHandler.GetAuthorization))))
+	mux.Handle("PUT /v1/plugins/authorization", authMW(rlMW(http.HandlerFunc(pluginHandler.SetAuthorization))))
+	mux.Handle("POST /v1/plugins/{name}/approve", authMW(rlMW(http.HandlerFunc(pluginHandler.Approve))))
 	mux.Handle("POST /v1/plugins/{name}/install", authMW(rlMW(http.HandlerFunc(pluginHandler.Install))))
 	mux.Handle("PUT /v1/plugins/{name}", authMW(rlMW(http.HandlerFunc(pluginHandler.Update))))
 	mux.Handle("POST /v1/plugins/{name}/test", authMW(rlMW(http.HandlerFunc(pluginHandler.Test))))

@@ -218,7 +218,7 @@ const goalTTL = 24 * time.Hour
 // 与 P1c 的区别：目标状态**跨用户请求持久化** —— 上一次没做完不会因为用户没再说话而消失。
 // 推进规则见 internal/agentgoal/goal.go 的 Advance（纯函数）：
 // 完成即终止；未完成则续跑到回合上限后判 **blocked（不是 completed）**；硬失败直接 blocked。
-func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}) {
+func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}, attachments []map[string]interface{}) {
 	goal := h.loadGoal(ctx, sessionID)
 	if goal == nil || goal.Terminal() {
 		goalID, _ := id.UUID()
@@ -228,8 +228,12 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 
 	msg := content
 	wb := workbenchCtx
+	// 附件只随**用户那条消息**走（首轮）。续跑轮是系统指令（goalEnforcePrompt），
+	// 再带一次附件只会让模型以为用户又发了一遍同样的文件。
+	atts := attachments
 	for {
-		report := h.submitOnce(ctx, userID, sessionID, msg, llmConfig, wb)
+		report := h.submitOnce(ctx, userID, sessionID, msg, llmConfig, wb, atts)
+		atts = nil
 		if report == nil {
 			// 引擎不可达 / 去重命中：目标**不推进**（否则会把"没跑起来"误判成"没完成"，
 			// 白烧一轮续跑）。原样结束。
@@ -289,7 +293,7 @@ func (h *SubmitHandler) saveGoal(ctx context.Context, g agentgoal.Goal) {
 //
 // workbenchCtx 是前端组装的工作台上下文（kb_id / agent / skill_names / workflow_id），
 // 透传给引擎消费 —— 网关不再丢弃它。
-func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}) *agentgoal.Report {
+func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}, attachments []map[string]interface{}) *agentgoal.Report {
 	// P1 修复：与 Python 引擎 5min 客户端超时对齐，避免长任务被 180s 硬超时截断
 	ctx, cancel := context.WithTimeout(ctx, DefaultAgentTimeout)
 	defer cancel()
@@ -409,6 +413,11 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		"content":    content,
 		"history":    histMsgs,
 		"max_turns":  defaultMaxTurns,
+	}
+	// 附件原样透传给引擎：由引擎决定怎么变成模型可见内容（图片 / 文档 / 其他）。
+	// 只带附件不带文字时 content 为空串，引擎侧据此单独组一条 user 消息。
+	if len(attachments) > 0 {
+		pythonReq["attachments"] = attachments
 	}
 	// P1-c：用**会话运行时状态**解析最终生效的模式/模型/provider（唯一解析链，spec §3）。
 	// 前端 llm_config 视为"本次请求的显式意图"，优先级高于会话 runtime 与默认值；

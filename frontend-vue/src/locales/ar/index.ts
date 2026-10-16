@@ -346,6 +346,8 @@ export default {
     test_connection: "اختبار الاتصال",
     plugin: "إضافة",
     plugin_created: "تم إنشاء الإضافة",
+    allow_plugin_commands: "السماح بأوامر الإضافات",
+    revoke_authorization: "إلغاء التفويض",
     insert: "إدراج",
     view_result: "عرض النتيجة",
     view_market: "عرض السوق",

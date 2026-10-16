@@ -30,6 +30,8 @@ interface Plugin {
   description?: string
   version?: string
   status: string
+  /** 用户级「每插件一次性授权」：是否已被本用户确认可执行（后端 plugins.json 的 approved）。 */
+  approved?: boolean
 }
 
 const router = useRouter()
@@ -82,6 +84,7 @@ onMounted(() => {
   loadPlugins()
   loadMarket()
   loadPluginUsage()
+  loadAuthorization()
 })
 
 // ── MCP 市场：浏览 + 一键安装；命令未命中白名单时后端返回 403 ──
@@ -139,6 +142,42 @@ async function loadPlugins() {
     message.error(t('errors.failed_to_fetch_plugin_list'))
   } finally {
     loading.value = false
+  }
+}
+
+// ── 用户级授权：总开关 + 每插件一次性授权 ──
+// 语义（见 internal/api/plugin_handler.go 的 checkPluginExecutionAllowed）：
+//   执行插件 = 命令形态合法 ∧ 运维白名单（若配置）命中 ∧ 本用户总开关开启 ∧ 该插件已授权。
+// 创建/更新不再受此限制 —— 插件可先存下来（未授权状态），真正执行时才需要全部通过。
+const commandsEnabled = ref(false)
+
+async function loadAuthorization() {
+  try {
+    const res = await api.get('/v1/plugins/authorization')
+    commandsEnabled.value = !!res.data?.data?.commands_enabled
+  } catch {
+    commandsEnabled.value = false
+  }
+}
+
+async function toggleCommandsEnabled(v: boolean) {
+  try {
+    const res = await api.put('/v1/plugins/authorization', { commands_enabled: v })
+    commandsEnabled.value = !!res.data?.data?.commands_enabled
+    message.success(commandsEnabled.value ? t('common.allow_plugin_commands') : t('common.disabled'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.operation_failed')))
+    await loadAuthorization()
+  }
+}
+
+async function approvePlugin(p: Plugin, v: boolean) {
+  try {
+    const res = await api.post(`/v1/plugins/${encodeURIComponent(p.name)}/approve`, { approved: v })
+    p.approved = !!res.data?.data?.approved
+    message.success(p.approved ? t('common.authorized') : t('common.revoke_authorization'))
+  } catch (e) {
+    message.error(serverErrorMessage(e, t('errors.operation_failed')))
   }
 }
 
@@ -297,15 +336,27 @@ async function testPlugin(p: Plugin) {
           {{ $t('agent.manage_mcp_server_config_to_extend_agent_tool_capabilities') }}
         </p>
       </div>
-      <Button
-        type="primary"
-        @click="openCreate"
-      >
-        <template #icon>
-          <PlusOutlined />
-        </template>
-        {{ $t('common.new_plugin') }}
-      </Button>
+      <div class="page-head-actions">
+        <label class="auth-label">
+          <span>{{ $t('common.allow_plugin_commands') }}</span>
+          <Switch
+            :checked="commandsEnabled"
+            size="small"
+            :checked-children="$t('common.on')"
+            :un-checked-children="$t('common.off')"
+            @change="(v: any) => toggleCommandsEnabled(Boolean(v))"
+          />
+        </label>
+        <Button
+          type="primary"
+          @click="openCreate"
+        >
+          <template #icon>
+            <PlusOutlined />
+          </template>
+          {{ $t('common.new_plugin') }}
+        </Button>
+      </div>
     </div>
 
     <Tabs
@@ -409,6 +460,14 @@ async function testPlugin(p: Plugin) {
               </Tag>
             </div>
             <div class="card-actions">
+              <Button
+                size="small"
+                :type="p.approved ? 'default' : 'primary'"
+                :title="$t('common.allow_plugin_commands')"
+                @click="approvePlugin(p, !p.approved)"
+              >
+                {{ p.approved ? $t('common.revoke_authorization') : $t('common.authorize') }}
+              </Button>
               <Button
                 size="small"
                 :loading="testingName === p.name"
@@ -648,6 +707,8 @@ async function testPlugin(p: Plugin) {
 <style scoped>
 .plugins-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
+.page-head-actions { display: flex; align-items: center; gap: 16px; }
+.auth-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-tertiary); }
 .page-title { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .plugins-tabs :deep(.ant-tabs-nav) { margin-bottom: 16px; }
@@ -697,6 +758,7 @@ async function testPlugin(p: Plugin) {
 @media (max-width: 640px) {
   .plugin-grid { grid-template-columns: 1fr; }
   .page-head { flex-direction: column; align-items: flex-start; }
-  .page-head > .ant-btn { width: 100%; }
+  .page-head-actions { width: 100%; flex-direction: column; align-items: stretch; gap: 10px; }
+  .page-head-actions > .ant-btn { width: 100%; }
 }
 </style>

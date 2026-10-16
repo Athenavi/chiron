@@ -126,9 +126,7 @@ ruff check scripts/                          # 仓库根脚本（配置见仓库
 python scripts/check_doc_links.py            # 被引用的 docs/*.md **与相对 .md 链接**都必须存在（存量走基线，新增即失败）
 python scripts/check_md_tables.py            # Markdown 表格列数必须一致（存量走基线，新增即失败）
 python scripts/check_error_code_keys.py      # Go `Code*` ↔ 三语言 `errors.ts` 契约键必须一致，且三语言键集相同
-python scripts/check_orm_models.py           # `shared/models/**` 生成物必须与 `configs/orm/V1/models.yaml` 一致（重跑到**临时目录**比对，只忽略「生成时间」行）
 python scripts/check_compose_env.py          # compose 里 `${VAR:?…}` 声明的**必填**变量必须在 `.env.example` 出现（注释形态也算）
-python scripts/check_orm_schema.py           # `shared/models/**` 的列集合必须与迁移 DDL 一致（**跑在 CI 的 Migration chain job**：那里才装了 alembic）
 ```
 
 `U+FFFD` / 非法 UTF-8 是**字节已损坏**的信号，不是排版问题：它曾把依赖清单吞进注释行、把
@@ -137,11 +135,9 @@ python scripts/check_orm_schema.py           # `shared/models/**` 的列集合�
 
 后几个是**后加的**：`scripts/` 此前没有任何 lint 门禁（攒下 8 处历史问题）；文档断链此前无人管
 （一次扫出 19 份"被引用但从未提交过"的设计文档，**现已全部还清：`scripts/doc_link_baseline.txt`
-为 0 条** —— 6 份按代码重建、2 条剔除为守卫误报、其余删冗余引用）。**表格列数、错误码键集、
-ORM 生成物新鲜度**同样一度无人管，且各自都抓到过真实缺陷：Markdown 表格两处**静默错位**
-（多一个 / 少一个 `|` 不会让渲染报错）· `Code*` 与三语言 `errors.ts` 的键集可能少键（只有该语言的
-用户会看到未本地化的原文）· `shared/models/subagent_run.py` 缺 7 列而迁移 `0004/0006/0007` 里都有
-（生成物不诚实，且 `shared/` 不在 ruff/mypy 门禁内）。
+为 0 条** —— 6 份按代码重建、2 条剔除为守卫误报、其余删冗余引用）。**表格列数、错误码键集**
+同样一度无人管，且各自都抓到过真实缺陷：Markdown 表格两处**静默错位**（多一个 / 少一个 `|`
+不会让渲染报错）· `Code*` 与三语言 `errors.ts` 的键集可能少键（只有该语言的用户会看到未本地化的原文）。
 
 ### 本机真实栈 —— 把网关也起起来，`integration` 才会全绿
 

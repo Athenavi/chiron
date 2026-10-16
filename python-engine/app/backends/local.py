@@ -66,6 +66,43 @@ def _grep_sync(base: Path, regex: re.Pattern[str], max_results: int) -> GrepResu
     )
 
 
+#: 判二进制时探测的头部字节数（与 Reasonix 的 `readFileBinaryPeek` 同值）。
+_BINARY_PEEK = 8 * 1024
+#: UTF-16 的每个 ASCII 字符都含 0x00 —— 带 BOM 的 UTF-16 不是二进制（Reasonix 同款教训：
+#: 先查 BOM 再查 NUL，否则 Windows 源文件会被整片误判）。
+_UTF16_BOMS = (b"\xff\xfe", b"\xfe\xff")
+
+
+def _looks_binary(target: Path) -> bool:
+    """头部含 NUL 即判二进制；带 BOM 的 UTF-16 除外。"""
+    try:
+        with open(target, "rb") as handle:
+            head = handle.read(_BINARY_PEEK)
+    except OSError:  # 读不到头部就不拦，让真正的读取给出确切错误
+        return False
+    if head.startswith(_UTF16_BOMS):
+        return False
+    return b"\x00" in head
+
+
+def _read_window(target: Path, offset: int, limit: int) -> tuple[list[str], int]:
+    """流式取窗口，并把总行数数完 —— 只有窗口内容驻留内存。
+
+    数完 `total_lines` 是为了它对前端的既有承诺（`ToolResultBlock.vue` 显示「N 行」）；
+    代价是仍要扫一遍文件，换来的收益是内存从 O(文件大小) 降到 O(窗口)。
+    """
+    page: list[str] = []
+    total = 0
+    with open(target, encoding="utf-8", errors="replace") as handle:
+        for raw in handle:
+            total += 1
+            if total <= offset:
+                continue
+            if len(page) < limit:
+                page.append(raw.rstrip("\n").rstrip("\r"))
+    return page, total
+
+
 class LocalWorkspaceBackend:
     """`sandbox.safe_join` + 本地文件系统。"""
 
@@ -73,29 +110,39 @@ class LocalWorkspaceBackend:
         target = safe_join(path)
         if not await asyncio.to_thread(target.exists):
             return ReadResult(path=str(target), error=f"file not found: {path}")
-        text = await asyncio.to_thread(
-            target.read_text, encoding="utf-8", errors="replace"
-        )
-        lines = text.splitlines()
+
         if limit <= 0:
             # `limit <= 0` = 读**全文原文**（忽略 offset）：`edit_file` 需要逐字节精确的内容
             # 做唯一性校验与 diff —— 若这里做行归一化（`"\n".join(splitlines())`），
             # 原文末尾的换行会丢、CRLF 会被改写，替换语义随之漂移。
+            text = await asyncio.to_thread(target.read_text, encoding="utf-8", errors="replace")
             return ReadResult(
                 path=str(target),
                 content=text,
-                total_lines=len(lines),
+                total_lines=len(text.splitlines()),
                 offset=0,
                 limit=0,
                 truncated=False,
             )
-        page = lines[offset : offset + limit]
+
+        # 分页路径：先探头部判二进制，再**流式**取窗口 —— 文件不进内存，大文件才读得动。
+        # `total_lines` 仍然数完整文件（前端 `ToolResultBlock.vue` 要显示「N 行」），
+        # 但内容只驻留窗口。
+        if await asyncio.to_thread(_looks_binary, target):
+            return ReadResult(
+                path=str(target),
+                error=(
+                    f"{path} looks like a binary file (NUL byte in its first "
+                    f"{_BINARY_PEEK} bytes); read_file reads text"
+                ),
+            )
+        page, total_lines = await asyncio.to_thread(_read_window, target, offset, limit)
         # 截断由**产生截断的这一层**给出，不由调用方扫文本猜测（协议约束 2）
-        truncated = (offset + limit) < len(lines)
+        truncated = (offset + len(page)) < total_lines
         return ReadResult(
             path=str(target),
             content="\n".join(page),
-            total_lines=len(lines),
+            total_lines=total_lines,
             offset=offset,
             limit=limit,
             truncated=truncated,

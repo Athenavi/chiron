@@ -50,6 +50,11 @@ class AgentTask:
     #: 插在记忆之后（`_apply_system_prefix` 是 system 段的唯一定形点）。
     #: 默认空列表 ⇒ 不开 `hooks_allow_context_injection` 时它永远是空的（零行为变化）。
     hook_contexts: list[str] = field(default_factory=list)
+    #: 本轮用户消息附带的**媒体库附件**（`{id,name,mime_type,url,is_image}`，由 Go 网关
+    #: 从请求体透传）。引擎侧把它们变成模型可见内容：图片→`image_url` 块（尺寸/格式走
+    #: `app.media.image_fit`、能力判定走 `app.agent.model_capabilities`）；docx/pdf→文本
+    #: 提取；其余→提示模型用对应工具取回。空列表 = 无附件（行为与迁移前一致）。
+    attachments: list[dict[str, Any]] = field(default_factory=list)
 
     @classmethod
     def parse(cls, data: dict[str, Any]) -> AgentTask:
@@ -65,6 +70,7 @@ class AgentTask:
             tools=data.get("tools", []),
             llm_config=data.get("llm_config", {}),
             max_turns=data.get("max_turns", 10),
+            attachments=data.get("attachments") or [],
         )
 
 

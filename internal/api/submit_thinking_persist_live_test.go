@@ -41,7 +41,7 @@ func TestLiveSubmitPersistsThinkingEvent(t *testing.T) {
 	t.Cleanup(srv.Close)
 
 	h := NewSubmitHandler(engine.NewPythonClient(srv.URL), mgr, broadcast.NewHub(nil), nil)
-	h.HandleSubmit(context.Background(), owner, sid, "hi", map[string]interface{}{}, nil)
+	h.HandleSubmit(context.Background(), owner, sid, "hi", map[string]interface{}{}, nil, nil)
 
 	msgs, err := mgr.GetMessages(context.Background(), sid, 50)
 	if err != nil {

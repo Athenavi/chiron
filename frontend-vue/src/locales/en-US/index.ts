@@ -344,6 +344,8 @@ export default {
     test_connection: "Test connection",
     plugin: "Plugin",
     plugin_created: "Plugin created",
+    allow_plugin_commands: "Allow plugin commands",
+    revoke_authorization: "Revoke authorization",
     insert: "Insert",
     view_result: "View result",
     view_market: "View market",

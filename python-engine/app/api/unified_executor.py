@@ -196,6 +196,7 @@ class UnifiedChatHandler:
         context: dict[str, Any] | None = None,
         user_id: str = "",
         llm_config: dict[str, Any] | None = None,  # P1-d：会话运行时状态（模型/provider/模式）
+        attachments: list[Any] | None = None,  # 媒体库附件（与 SSE 链路同字段）
     ) -> dict[str, Any]:
         """提交任务 (自动编排)
 
@@ -350,6 +351,7 @@ class UnifiedChatHandler:
                     tenant_id,
                     trace_id,
                     agent_config=ctx_agent,
+                    attachments=attachments,
                 )
             elif mode == "workflow":
                 # 强制使用工作流工作台：按选择顺序执行用户自己的工作流（多选即流水线）
@@ -500,6 +502,7 @@ class UnifiedChatHandler:
         tenant_id: str,
         trace_id: str,
         agent_config: dict[str, Any] | None = None,
+        attachments: list[Any] | None = None,
     ) -> dict[str, Any]:
         """通过 Agent 工作台执行
 
@@ -557,8 +560,19 @@ class UnifiedChatHandler:
             max_turns=max_turns,
         )
 
+        # 附件 → 文本：SubAgent 只吃字符串，所以把附件内容渲染成一段文本前置到用户输入
+        # 之前（渲染口径与 SSE 链路共用一处，见 app/media/attachments.py）。图片在本入口
+        # 只能给出"请用 vision_analyze"的说明 —— SubAgent 不吃 content parts。
+        task_input = user_input
+        if attachments:
+            from app.media.attachments import to_text
+
+            rendered = await to_text(attachments)
+            if rendered:
+                task_input = f"{rendered}\n\n{user_input}" if user_input.strip() else rendered
+
         # SubAgent.run 已实现: 真实调用并透传结果 (绝不返回伪造输出)
-        agent_result = await agent.run(task=user_input, tenant_id=tenant_id)
+        agent_result = await agent.run(task=task_input, tenant_id=tenant_id)
         if not agent_result.success:
             # Fail loud: Agent 执行失败必须向上抛出,由 submit_task 返回 success=False
             raise RuntimeError(
@@ -1164,6 +1178,11 @@ async def submit_chat(request: Request) -> dict[str, Any]:
     llm_config = body.get("llm_config")
     if not isinstance(llm_config, dict):
         llm_config = {}
+    # 媒体库附件（与 SSE 链路同名字段）。统一链路的执行端（SubAgent）只吃字符串，
+    # 所以这里带上后由 `submit_task` 渲染成文本 —— 渲染口径与 SSE 链路共用一处
+    # （app/media/attachments.py）。
+    attach_raw = body.get("attachments")
+    attachments = attach_raw if isinstance(attach_raw, list) else []
     return await handler.submit_task(
         user_input=user_input,
         tenant_id=tenant_id,
@@ -1172,6 +1191,7 @@ async def submit_chat(request: Request) -> dict[str, Any]:
         context=context,
         user_id=user_id,
         llm_config=llm_config,
+        attachments=attachments,
     )
 
 

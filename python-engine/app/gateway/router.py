@@ -287,6 +287,7 @@ class GatewayRouter:
             return ChatResponse(
                 content="",
                 finish_reason="error",
+                message="no available provider for model (none configured or all circuit-open)",
                 provider="none",
                 model=model,
             )
@@ -298,6 +299,7 @@ class GatewayRouter:
                 return ChatResponse(
                     content="",
                     finish_reason="error",
+                    message="tenant budget exhausted",
                     provider=provider.name,
                     model=model,
                 )
@@ -337,6 +339,7 @@ class GatewayRouter:
             return ChatResponse(
                 content="",
                 finish_reason="error",
+                message=str(e)[:300],
                 provider=provider.name,
                 model=model,
             )

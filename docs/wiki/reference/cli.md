@@ -30,14 +30,12 @@ python run.py setup         # 安装 Python / 前端依赖
 python run.py start         # 起网关 + 引擎 + 前端
 ```
 
-## 迁移与模型生成（`scripts/cli/`）
+## 迁移与 shell（`scripts/cli/`）
 
 | 命令 | 作用 |
 |---|---|
 | `migrate` | Alembic 迁移入口（**Alembic 是唯一迁移入口**，见 [决策记录](../../db-migration-entry.md)） |
-| `generate_models` | 由 `configs/orm/V1/models.yaml` 生成 ORM 模型到 `shared/models/` |
 | `shell` | 交互式 shell |
-| `jinja_filters` | 模板过滤器（生成器内部用） |
 
 ## 直接跑（不用 CLI）
 

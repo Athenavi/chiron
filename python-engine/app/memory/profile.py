@@ -23,6 +23,28 @@ _COLUMNS = (
 )
 
 
+def _to_jsonb(value: Any) -> Any:
+    """写入 ``jsonb`` 列：asyncpg 默认 codec 下必须传**合法 JSON 文本**。
+
+    ``user_memory_entries.item_value`` 是 ``jsonb``。直接传裸文本（如
+    "尽量使用最新更真实的数据"）会被 PostgreSQL 拒绝：``invalid input syntax for
+    type json``（实测 ``POST /v1/memory/profile`` 因此返回 500）。``None`` 保持为 NULL。
+    """
+    if value is None:
+        return None
+    return json.dumps(value, ensure_ascii=False)
+
+
+def _from_jsonb(value: Any) -> Any:
+    """读取 ``jsonb`` 列的对称处理（默认 codec 返回 JSON 文本 → 解析回原值）。"""
+    if isinstance(value, str):
+        try:
+            return json.loads(value)
+        except (json.JSONDecodeError, TypeError):
+            return value
+    return value
+
+
 def _row_to_entry(row: Any) -> MemoryEntry:
     """asyncpg Record → MemoryEntry（embedding 兼容 str/list 两种形态）。"""
     emb_raw = row["embedding"]
@@ -41,7 +63,7 @@ def _row_to_entry(row: Any) -> MemoryEntry:
         user_id=row["user_id"],
         slot=row["slot"],
         item_key=row["item_key"],
-        item_value=row["item_value"],
+        item_value=_from_jsonb(row["item_value"]),
         confidence=int(row["confidence"]),
         source=row["source"],
         embedding=embedding,
@@ -144,7 +166,7 @@ class ProfileStore:
             entry.user_id,
             entry.slot,
             entry.item_key,
-            entry.item_value,
+            _to_jsonb(entry.item_value),
             entry.confidence,
             entry.source,
             emb,
@@ -184,7 +206,7 @@ class ProfileStore:
         if item_key is not None:
             _bind("item_key=?", item_key)
         if item_value is not None:
-            _bind("item_value=?", item_value)
+            _bind("item_value=?", _to_jsonb(item_value))
         if confidence is not None:
             _bind("confidence=?", confidence)
         if source is not None:

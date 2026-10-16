@@ -19,7 +19,7 @@
 | Go 网关 | `cmd/chiron`、`internal/*` | 8080（容器内，不发布宿主机端口） | 认证、路由、限流、计费、管理后台、SSE 转发 |
 | Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、工作流、RAG、技能、记忆、MCP |
 | 前端 | `frontend-vue/` | 5173（dev）/ 80（容器） | Vue 3 + TypeScript + Vite；nginx 同源反代 `/v1`、`/events`、`/ws` |
-| 数据库 | `migrations/`、`shared/models/` | 5432 | PostgreSQL + pgvector（Alembic 迁移 + 生成式 ORM 模型） |
+| 数据库 | `migrations/` | 5432 | PostgreSQL + pgvector（Alembic 迁移） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
 
 ## 快速开始
@@ -105,8 +105,7 @@ cmd/               网关与 CLI（chiron 网关；chiron-cli 管理本地启动
 internal/          Go 网关实现（api、auth、billing、broadcast、db、engine、session、storage…）
 python-engine/     引擎实现（app/agent、queue、api、tools、workflow、memory、rag…）
 frontend-vue/      Vue 3 前端（nginx 反代 /v1、/events、/ws、/submit、/cancel、/media 到网关）
-migrations/        Alembic 迁移；ORM 模型由 configs/orm/V1/models.yaml 经
-                   scripts/generate_orm_models.py 生成到 shared/models/
+migrations/        Alembic 迁移（手写 SQL；schema 直接改数据库，无 ORM 生成链路）
 market/skills/     内置技能资产（`{name}/SKILL.md` 目录型技能）。运行时经 `SkillStore` 的
                    内置源读取（scope=builtin，见 python-engine/app/skill/skillmd.py）：
                    本地开发从仓库根解析；**容器部署必须挂载**（compose 已只读挂载并设
@@ -136,7 +135,7 @@ python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：�
   > **每次向 `migrations/versions/` 新增迁移后，都必须复核本段。** 启动校验比对的是「代码期望的 head」与
   > 「数据库 `alembic_version`」（`internal/db/schema_version.go` 的 `CheckSchemaVersion`），
   > 把库 stamp 到**过期**的 revision 会让网关与引擎直接拒绝启动（仅 `ALLOW_SCHEMA_DRIFT=true` 放行）。
-- 需要 `alembic.ini`、`migrations/`、`shared/models/` 三者在运行目录内（`migrations/env.py` 会加载 ORM 元数据）；
+- 需要 `alembic.ini`、`migrations/` 在运行目录内（迁移为手写 SQL，`env.py` 不再加载 ORM 元数据）；
 - 启动校验：比对 `migrations/versions` 的 head 与数据库 `alembic_version`，不一致时拒绝启动（`ALLOW_SCHEMA_DRIFT=true` 可放行）；
 - 迁移链必须**单一 head**（分叉会导致启动校验失败）。
 
