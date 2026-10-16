@@ -81,7 +81,7 @@ async def test_content_parts_extracts_docx_text():
 
 
 async def test_content_parts_reads_plain_text():
-    parts = await to_content_parts([_att("notes.txt", "text/plain", "hello\nworld".encode())])
+    parts = await to_content_parts([_att("notes.txt", "text/plain", b"hello\nworld")])
 
     assert len(parts) == 1
     assert "hello" in parts[0]["text"]
