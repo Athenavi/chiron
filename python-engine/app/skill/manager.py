@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import importlib.util
 import json
 import logging
 import os
@@ -796,10 +797,8 @@ class SkillManager:
         """
         from app.tools.ssrf import assert_safe_url
 
-        try:
-            import httpx
-        except ImportError:
-            raise ValueError("httpx not installed — cannot execute HTTP request skill") from None
+        if importlib.util.find_spec("httpx") is None:
+            raise ValueError("httpx not installed — cannot execute HTTP request skill")
 
         url_template = skill_meta.config.get("url", "")
         method = skill_meta.config.get("method", "GET").upper()

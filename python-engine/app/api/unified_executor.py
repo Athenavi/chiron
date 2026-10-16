@@ -560,16 +560,21 @@ class UnifiedChatHandler:
             max_turns=max_turns,
         )
 
-        # 附件 → 文本：SubAgent 只吃字符串，所以把附件内容渲染成一段文本前置到用户输入
-        # 之前（渲染口径与 SSE 链路共用一处，见 app/media/attachments.py）。图片在本入口
-        # 只能给出"请用 vision_analyze"的说明 —— SubAgent 不吃 content parts。
-        task_input = user_input
+        # 附件 → 模型可见内容：与 SSE 链路**同一个判定**（app/media/attachments.py）。
+        # 产出 OpenAI 风格 content parts 交给 SubAgent（它现在接收 parts，见
+        # multi_agent.SubAgent.run），所以图片是真的交给模型看图，而不是退化成
+        # 一句"请调用 vision_analyze"。
+        task_input: str | list[dict[str, Any]] = user_input
         if attachments:
-            from app.media.attachments import to_text
+            from app.media.attachments import to_content_parts
 
-            rendered = await to_text(attachments)
-            if rendered:
-                task_input = f"{rendered}\n\n{user_input}" if user_input.strip() else rendered
+            parts = await to_content_parts(attachments, model=model)
+            if parts:
+                content: list[dict[str, Any]] = []
+                if user_input.strip():
+                    content.append({"type": "text", "text": user_input})
+                content.extend(parts)
+                task_input = content
 
         # SubAgent.run 已实现: 真实调用并透传结果 (绝不返回伪造输出)
         agent_result = await agent.run(task=task_input, tenant_id=tenant_id)
