@@ -157,6 +157,70 @@ class TokenEstimator:
         return self._scales.get(model, 1.0)
 
 
+#: 图片 token 的经验估算系数：宽×高 / 750（与 Reasonix 的 `requestImageTokens` 同值）。
+#: 没有 provider 会在 usage 返回前说清一张图值多少 token，这个系数对 `image_fit.Fit`
+#: 夹过的图偏高，正合需要 —— 估高让窗口早压，估低则溢出。
+_IMAGE_TOKENS_DIVISOR = 750
+
+
+def image_tokens(messages: list[dict[str, Any]]) -> int:
+    """估算这些消息里的图片会占多少 token。
+
+    只读图片**头**（`Image.open` 的 `.size`），不整图解码；尺寸读不出来的（网络 URL、
+    坏字节）按 `image_fit.MAX_DIM` 计满。图片不进字符估算（base64 是字符，`chars/4`
+    会把一张图算成几万 token 或几十 token 都说不准），所以单独走这里。
+    """
+    from app.media.image_fit import MAX_DIM
+
+    total = 0
+    for url in _iter_image_urls(messages):
+        size = _image_size(url)
+        if size is None:
+            total += (MAX_DIM * MAX_DIM + _IMAGE_TOKENS_DIVISOR - 1) // _IMAGE_TOKENS_DIVISOR
+            continue
+        width, height = size
+        total += (width * height + _IMAGE_TOKENS_DIVISOR - 1) // _IMAGE_TOKENS_DIVISOR
+    return total
+
+
+def _iter_image_urls(messages: list[dict[str, Any]]) -> list[str]:
+    """收集消息里的 `image_url` 值（内容可能是 str，也可能是 part 列表）。"""
+    urls: list[str] = []
+    for message in messages:
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            image = part.get("image_url")
+            url = image.get("url") if isinstance(image, dict) else None
+            if isinstance(url, str) and url:
+                urls.append(url)
+    return urls
+
+
+def _image_size(url: str) -> tuple[int, int] | None:
+    """只读头的尺寸；非 data URL 或读不出时返回 ``None``（调用方按 MAX_DIM 计）。"""
+    if not url.startswith("data:"):
+        return None
+    _, _, payload = url.partition(";base64,")
+    if not payload:
+        return None
+    try:
+        import base64
+        import io
+
+        from PIL import Image
+
+        # 头部通常在前几十 KB 内；多给一点以覆盖大 PNG 的 IHDR 之后的分块。
+        head = base64.b64decode(payload[: 96 * 1024], validate=False)
+        with Image.open(io.BytesIO(head)) as image:
+            return int(image.size[0]), int(image.size[1])
+    except Exception:  # noqa: BLE001 - 读不出头不是错误，按最大尺寸估
+        return None
+
+
 #: 进程内单例：校准系数跨回合累积才有意义（单次观测不足以定系数）
 _estimator = TokenEstimator()
 

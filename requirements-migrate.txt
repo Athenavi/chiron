@@ -8,8 +8,8 @@
 # 用法（离线：生成 DDL 供 DBA 审阅后在受控窗口执行，不需要数据库连接）：
 #   python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql
 #
-# 前置：运行目录需包含 alembic.ini、migrations/、shared/models/
-#       （migrations/env.py 会加载 shared/models 的 ORM 元数据做 autogenerate 校验）。
+# 前置：运行目录需包含 alembic.ini、migrations/
+#       （迁移为手写 SQL；已移除 ORM 生成链路，env.py 不再加载 ORM 元数据）。
 #
 # 应用侧不做迁移：网关启动只做只读的 schema 版本校验（internal/db/migrate.go），
 # 不一致时默认拒绝启动（可用 ALLOW_SCHEMA_DRIFT=true 放行）。

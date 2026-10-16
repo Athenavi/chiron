@@ -71,7 +71,7 @@ func TestLiveSubmitDedupSkipsEngineWhenClientMsgIDAlreadySeen(t *testing.T) {
 	}
 
 	h.HandleSubmit(context.Background(), uuid.NewString(), sid, "hello",
-		map[string]interface{}{"client_msg_id": cid}, nil)
+		map[string]interface{}{"client_msg_id": cid}, nil, nil)
 
 	if n := atomic.LoadInt32(calls); n != 0 {
 		t.Fatalf("去重命中时不该触发引擎，实际调用 %d 次", n)
@@ -90,7 +90,7 @@ func TestLiveSubmitDedupLetsFirstRequestThroughAndSetsWindow(t *testing.T) {
 	t.Cleanup(func() { _ = db.Redis.Del(context.Background(), key).Err() })
 
 	h.HandleSubmit(context.Background(), uuid.NewString(), sid, "hello",
-		map[string]interface{}{"client_msg_id": cid}, nil)
+		map[string]interface{}{"client_msg_id": cid}, nil, nil)
 
 	if n := atomic.LoadInt32(calls); n == 0 {
 		t.Fatal("首次提交必须打到引擎（否则上一条的 0 次没有意义）")
@@ -112,7 +112,7 @@ func TestLiveSubmitWithoutClientMsgIDIsNotDeduped(t *testing.T) {
 
 	sid := uuid.NewString()
 	h.HandleSubmit(context.Background(), uuid.NewString(), sid, "hello",
-		map[string]interface{}{}, nil)
+		map[string]interface{}{}, nil, nil)
 
 	if n := atomic.LoadInt32(calls); n == 0 {
 		t.Fatal("没有 client_msg_id 时不该被去重：老客户端行为必须不变")
@@ -122,7 +122,7 @@ func TestLiveSubmitWithoutClientMsgIDIsNotDeduped(t *testing.T) {
 	sid2 := uuid.NewString()
 	blankKey := dedupKeyFor(sid2, "")
 	h.HandleSubmit(context.Background(), uuid.NewString(), sid2, "hello",
-		map[string]interface{}{"client_msg_id": "   "}, nil)
+		map[string]interface{}{"client_msg_id": "   "}, nil, nil)
 
 	exists, err := db.Redis.Exists(context.Background(), blankKey).Result()
 	if err != nil {

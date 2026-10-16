@@ -236,6 +236,71 @@ async def offload_inline_media(
     return out
 
 
+# ── 按模型能力适配图片 ──────────────────────────────────────────────
+
+
+def _is_image_part(part: Any) -> bool:
+    """OpenAI 兼容的图片块：``{"type":"image_url","image_url":{"url":...}}``。"""
+    if not isinstance(part, dict):
+        return False
+    image = part.get("image_url")
+    return isinstance(image, dict) and isinstance(image.get("url"), str)
+
+
+def _visionless_note(model: str) -> str:
+    """读不了图的模型看到的替代文本 —— 不是静默丢弃，也不是假装图还在。"""
+    return (
+        f"[图片未交给模型：当前模型 {model} 不支持图片输入。"
+        "如需理解图片内容，请调用 vision_analyze（传 image_url 或图片路径）。]"
+    )
+
+
+async def adapt_images_for_model(
+    messages: list[dict[str, Any]], *, model: str
+) -> list[dict[str, Any]]:
+    """按**当前模型**的能力决定图片怎么进上下文。
+
+    能读图 ⇒ 原样（尺寸/格式已由 `app.media.image_fit` 夹过）。
+    读不了 ⇒ 把 `image_url` 块换成一行提示，指向 `vision_analyze` —— 既不把图塞给一个
+    会整轮报错的模型，也不让模型以为"当时根本没给图"。
+
+    能力来自 `app.agent.model_capabilities`（以接口的实际反馈为准，见其 docstring）。
+    """
+    from app.agent.model_capabilities import supports_vision
+
+    if await supports_vision(model):
+        return messages
+
+    out: list[dict[str, Any]] = []
+    changed = 0
+    note = _visionless_note(model)
+    for msg in messages:
+        content = msg.get("content")
+        if not isinstance(content, list):
+            out.append(msg)
+            continue
+        replaced = False
+        parts: list[Any] = []
+        for part in content:
+            if _is_image_part(part):
+                parts.append({"type": "text", "text": note})
+                replaced = True
+                continue
+            parts.append(part)
+        if replaced:
+            changed += 1
+            out.append({**msg, "content": parts})
+        else:
+            out.append(msg)
+    if changed:
+        logger.info(
+            "model %s cannot read images; replaced image parts in %d message(s)",
+            model,
+            changed,
+        )
+    return out
+
+
 # ── 历史参数截断（同步） ────────────────────────────────────────────────
 
 

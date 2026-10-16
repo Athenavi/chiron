@@ -155,8 +155,9 @@ func AgentFollowupHandler(
 					slog.Error("agent followup handler panic", "panic", rec, "run_id", body.RunID)
 				}
 			}()
+			// 子 Agent 自动轮不是用户发起的，没有附件 —— 显式传 nil。
 			submitHandler.HandleSubmit(ctx, body.UserID, body.SessionID, content,
-				map[string]interface{}{}, map[string]interface{}{FollowupKey: body.RunID})
+				map[string]interface{}{}, map[string]interface{}{FollowupKey: body.RunID}, nil)
 		}()
 
 		Accepted(w, map[string]string{"status": "accepted", "run_id": body.RunID})

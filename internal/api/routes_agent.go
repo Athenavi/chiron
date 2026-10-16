@@ -7,6 +7,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/athenavi/chiron/internal/auth"
@@ -71,12 +72,21 @@ func registerAgentRoutes(
 			// ChatView.buildContext 组装。此前该字段未被解析 → 前端的"带知识库/技能/
 			// Agent 进入对话"在网关就被丢弃，是六大工作台互通的根断点。
 			Context map[string]interface{} `json:"context"`
+			// 附件（媒体库选中的文件：图片/文档/音频）。此前同样**完全未被解析** ——
+			// 前端把它作为 `attachments` 发过来，网关直接丢弃，引擎永远看不到，
+			// 用户侧现象就是"选了文件却用不上"。这里原样透传给引擎，由引擎决定怎么
+			// 给模型看（图片→image_url 块走能力判定；docx/pdf→文本提取；其余→提示）。
+			Attachments []map[string]interface{} `json:"attachments"`
 		}
 		if err := DecodeJSON(w, r, &body); err != nil {
 			BadRequest(w, "invalid request")
 			return
 		}
-		if body.Content == "" {
+		// 只带附件、不带文字是**合法**输入（前端 ChatInput 明确允许这种状态点发送）。
+		// 此前一律要求 content 非空，于是"选个文件直接发"必然 400；而错误码映射把
+		// "content is required" 归成 invalid_request，用户看到的是"请求内容不被接受"，
+		// 与真实原因（内容为空）完全对不上。
+		if strings.TrimSpace(body.Content) == "" && len(body.Attachments) == 0 {
 			BadRequest(w, "content is required")
 			return
 		}
@@ -253,7 +263,7 @@ func registerAgentRoutes(
 			}()
 			defer cancel()
 			defer sessionCancels.Delete(body.SessionID)
-			submitHandler.HandleSubmit(ctx, userID, body.SessionID, body.Content, body.LLMConfig, body.Context)
+			submitHandler.HandleSubmit(ctx, userID, body.SessionID, body.Content, body.LLMConfig, body.Context, body.Attachments)
 		}()
 	}
 	// 限流：submit 会触发一次完整 agent run（昂贵链路），此前只有 authMW —— 缺少按用户/

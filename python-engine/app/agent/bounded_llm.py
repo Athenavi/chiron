@@ -84,6 +84,20 @@ async def call_bounded(
     """
     if gateway is None:
         return BoundedResult(ok=False, error=f"{purpose}: no gateway available")
+
+    # 旁路调用可能发生在**主对话 runtime 之外**（例如 HTTP 端点直接触发的提示精炼）：
+    # 此时 `x-opencode-session` 的 contextvar 为空，provider 便不注入该头，OpenCode 系
+    # 上游会直接 400 MissingSessionID。这里给旁路一个**稳定的兜底会话标识**
+    # （按 purpose 区分，让同用途走同一路由 / prompt 缓存），且**不改** provider
+    # 「空则不注入」的既有语义（见 tests/test_opencode_session_header.py）。
+    try:
+        from app.providers.session_context import get_llm_session_id, set_llm_session_id
+
+        if not get_llm_session_id():
+            set_llm_session_id(f"chiron-bypass-{purpose}")
+    except Exception:  # noqa: BLE001 — 兜底失败不应阻断调用本身
+        pass
+
     try:
         response = await asyncio.wait_for(
             gateway.chat(
@@ -101,10 +115,27 @@ async def call_bounded(
         logger.warning("bounded llm call failed (%s): %s", purpose, str(exc)[:200])
         return BoundedResult(ok=False, error=f"{purpose}: {str(exc)[:200]}")
 
+    input_tokens = int(getattr(response, "input_tokens", 0) or 0)
+    output_tokens = int(getattr(response, "output_tokens", 0) or 0)
+
+    # ``GatewayRouter.chat`` 在「选不到 provider / 预算不足 / provider 抛错」时**不抛异常**，
+    # 而是返回 ``finish_reason="error"`` 的空 content（真实原因放在 ``message``）。若这里只看
+    # content，就会把这类失败当成"成功但输出为空"，把 400 / 401 之类压成一句
+    # "produced empty output" —— 实测这正是「消息精炼」报错的来源。故显式识别。
+    if str(getattr(response, "finish_reason", "") or "") == "error":
+        detail = str(getattr(response, "message", "") or "") or "provider returned error"
+        logger.warning("bounded llm call returned error (%s): %s", purpose, detail[:200])
+        return BoundedResult(
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+            ok=False,
+            error=f"{purpose}: {detail[:200]}",
+        )
+
     return BoundedResult(
         text=str(getattr(response, "content", "") or ""),
-        input_tokens=int(getattr(response, "input_tokens", 0) or 0),
-        output_tokens=int(getattr(response, "output_tokens", 0) or 0),
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
         ok=True,
     )
 

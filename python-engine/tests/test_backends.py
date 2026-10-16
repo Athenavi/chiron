@@ -6,9 +6,11 @@
 """
 from __future__ import annotations
 
+import io
 from pathlib import Path
 
 import pytest
+from PIL import Image
 
 from app.backends.context import get_backend, set_backend
 from app.backends.local import LocalWorkspaceBackend
@@ -31,18 +33,26 @@ class _InMemoryBackend:
     """最小内存后端：只为证明"工具确实经后端访问"。"""
 
     def __init__(self) -> None:
-        self.files: dict[str, str] = {}
+        # 值可以是 str（文本）或 bytes（图片等二进制）——「按内容判类型」的工具需要真字节。
+        self.files: dict[str, str | bytes] = {}
         self.writes: list[str] = []
+
+    def _text(self, path: str) -> str:
+        raw = self.files[path]
+        return raw if isinstance(raw, str) else raw.decode("utf-8", "replace")
+
+    def _bytes(self, path: str) -> bytes:
+        raw = self.files[path]
+        return raw.encode("utf-8") if isinstance(raw, str) else raw
 
     async def read(self, path: str, *, offset: int = 0, limit: int = 200) -> ReadResult:
         if path not in self.files:
             return ReadResult(path=path, error=f"file not found: {path}")
-        lines = self.files[path].splitlines()
+        text = self._text(path)
+        lines = text.splitlines()
         if limit <= 0:
             # `limit <= 0` = 读全文原文（与 LocalWorkspaceBackend 的约定一致）
-            return ReadResult(
-                path=path, content=self.files[path], total_lines=len(lines), limit=0
-            )
+            return ReadResult(path=path, content=text, total_lines=len(lines), limit=0)
         return ReadResult(
             path=path,
             content="\n".join(lines[offset : offset + limit]),
@@ -54,14 +64,12 @@ class _InMemoryBackend:
     async def read_bytes(self, path: str) -> ReadBytesResult:
         if path not in self.files:
             return ReadBytesResult(path=path, error=f"file not found: {path}")
-        return ReadBytesResult(path=path, data=self.files[path].encode("utf-8"))
+        return ReadBytesResult(path=path, data=self._bytes(path))
 
     async def stat(self, path: str) -> FileStat | None:
         if path not in self.files:
             return None
-        return FileStat(
-            path=path, size=len(self.files[path].encode("utf-8")), is_file=True
-        )
+        return FileStat(path=path, size=len(self._bytes(path)), is_file=True)
 
     async def write(self, path: str, content: str) -> WriteResult:
         self.files[path] = content
@@ -230,8 +238,31 @@ async def test_grep_files_uses_injected_backend():
     assert out["matches"][0]["line"] == 2
 
 
+def _tiny_png() -> bytes:
+    """最小真 PNG —— 类型由**字节**判，所以这里必须是真图，不能是占位字符串。"""
+    buf = io.BytesIO()
+    Image.new("RGB", (2, 2), (1, 2, 3)).save(buf, format="PNG")
+    return buf.getvalue()
+
+
 @pytest.mark.asyncio
 async def test_read_image_uses_injected_backend():
+    from app.tools.core import read_image
+
+    backend = _InMemoryBackend()
+    raw = _tiny_png()
+    backend.files["pixel.png"] = raw
+    set_backend(backend)
+
+    out = await read_image("pixel.png")
+    assert out["media_type"] == "image/png"
+    assert out["bytes"] == len(raw)
+    assert out["data_url"].startswith("data:image/png;base64,")
+
+
+@pytest.mark.asyncio
+async def test_read_image_rejects_extension_that_lies():
+    """扩展名说 png、字节不是 —— 按内容判就该拒（旧实现只看后缀会放行）。"""
     from app.tools.core import read_image
 
     backend = _InMemoryBackend()
@@ -239,9 +270,7 @@ async def test_read_image_uses_injected_backend():
     set_backend(backend)
 
     out = await read_image("pixel.png")
-    assert out["media_type"] == "image/png"
-    assert out["bytes"] == len(b"fake-png-bytes")
-    assert out["data_url"].startswith("data:image/png;base64,")
+    assert "error" in out
 
 
 # ── 片 3：Composite 前缀路由 ──────────────────────────────────────────────

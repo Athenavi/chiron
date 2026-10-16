@@ -199,7 +199,7 @@ create table conversation_shares
     session_id  varchar(128),
     user_id     varchar(36),
     title       varchar(255),
-    message_ids varchar(255),
+    message_ids text[],
     created_at  timestamp,
     revoked_at  timestamp
 );
@@ -640,7 +640,7 @@ create table ent_oidc_providers
     issuer            varchar(512),
     client_id         varchar(256),
     client_secret_enc text        not null,
-    scopes            varchar(255),
+    scopes            text[],
     enabled           boolean,
     auto_provision    boolean,
     role_mapping      json,
@@ -679,7 +679,7 @@ create table ent_roles
     name         varchar(64),
     display_name varchar(128),
     is_builtin   boolean,
-    permissions  varchar(255),
+    permissions  text[],
     created_at   timestamp,
     updated_at   timestamp
 );
@@ -983,7 +983,7 @@ create table ent_model_policies
         references tenants,
     role_id          varchar(36)
         references ent_roles,
-    allowed_models   varchar(255),
+    allowed_models   text[],
     per_model_limits json,
     created_at       timestamp,
     updated_at       timestamp

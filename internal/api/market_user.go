@@ -198,7 +198,13 @@ func (h *UserMarketHandler) installMCP(w http.ResponseWriter, r *http.Request, c
 		BadRequest(w, "manifest missing mcp name/command")
 		return
 	}
-	if err := checkPluginCommandAllowed(command); err != nil {
+	// 命令**形态**必须合法；运维白名单（若配置了）是可选上界。
+	// 二者都不因"未配置白名单"而拒绝 —— 市场插件落地后默认**未授权**，执行时另走用户级闸。
+	if err := validatePluginCommandShape(command); err != nil {
+		Forbidden(w, "plugin command not allowed")
+		return
+	}
+	if err := checkOperatorAllowlist(command); err != nil {
 		Forbidden(w, "plugin command not allowed")
 		return
 	}
@@ -278,33 +284,40 @@ func userPluginPath(dataDir, userID string) string {
 }
 
 // appendPlugin 读取用户 plugins.json 并追加 MCP 插件（幂等：同名覆盖）。
+// 保留 file 级字段（commands_enabled），只替换 mcp_servers。
 func appendPlugin(dataDir, userID string, plugin MCPPlugin) error {
 	path := userPluginPath(dataDir, userID)
-	plugins := []MCPPlugin{}
+	pf := pluginsFile{MCPServers: []MCPPlugin{}}
 	if data, err := os.ReadFile(path); err == nil && len(data) > 0 {
-		var pf pluginsFile
-		if err := json.Unmarshal(data, &pf); err == nil {
-			plugins = pf.MCPServers
+		var existing pluginsFile
+		if err := json.Unmarshal(data, &existing); err == nil {
+			pf = existing
 		}
 	} else if err != nil && !os.IsNotExist(err) {
 		return err
 	}
+	if pf.MCPServers == nil {
+		pf.MCPServers = []MCPPlugin{}
+	}
 	replaced := false
-	for i := range plugins {
-		if plugins[i].Name == plugin.Name {
-			plugins[i] = plugin
+	for i := range pf.MCPServers {
+		if pf.MCPServers[i].Name == plugin.Name {
+			pf.MCPServers[i] = plugin
 			replaced = true
 			break
 		}
 	}
 	if !replaced {
-		plugins = append(plugins, plugin)
+		pf.MCPServers = append(pf.MCPServers, plugin)
 	}
-	return writePluginsFile(path, plugins)
+	return writePluginsFile(path, pf)
 }
 
-func writePluginsFile(path string, plugins []MCPPlugin) error {
-	data, err := json.MarshalIndent(pluginsFile{MCPServers: plugins}, "", "  ")
+func writePluginsFile(path string, pf pluginsFile) error {
+	if pf.MCPServers == nil {
+		pf.MCPServers = []MCPPlugin{}
+	}
+	data, err := json.MarshalIndent(pf, "", "  ")
 	if err != nil {
 		return err
 	}

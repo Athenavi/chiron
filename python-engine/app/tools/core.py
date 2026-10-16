@@ -27,11 +27,20 @@ def _safe_path(path: str, root: str) -> Path:
     return target
 
 
-async def read_file(path: str, offset: int = 0, limit: int = 200) -> dict[str, Any]:
+#: 一次返回的最大行数（未显式传 `limit` 时）。与 Reasonix 的 `readFileDefaultLimit` 同值：
+#: 分页的意义是"给一个能继续的窗口"，不是"一次读完"。
+READ_FILE_DEFAULT_LIMIT = 2000
+
+
+async def read_file(path: str, offset: int = 0, limit: int = READ_FILE_DEFAULT_LIMIT) -> dict[str, Any]:
     """读文件（分页）。
 
     路径一律 clamp 到当前工作区 —— 此前签名里有个 `root` 参数，模型以为能改根目录，
     实现根本不看它（已移除）。
+
+    **续读**：`offset` 是 0-based 行偏移，`limit` 是本次最多返回的行数。被截断时返回值
+    带 `truncated`，且正文末尾附一行 `[more lines below; pass offset=N to continue]` ——
+    模型据此继续读，不必靠比较 `offset + limit` 与 `total_lines` 去猜还有没有下文。
     """
     from app.backends.context import get_backend
     from app.tools.fs_guard import observe
@@ -43,28 +52,37 @@ async def read_file(path: str, offset: int = 0, limit: int = 200) -> dict[str, A
         return {"error": result.error}
     # 横切逻辑留在工具层：read-before-write 观测（写入校验依赖它）
     observe(safe_join(path))  # 记录版本，供 write/edit 的 read-before-write 校验
+    content = result.content
+    if result.truncated:
+        # 截断提示由**产生截断的这一层**给出（后端已算好 truncated），不在这里重算。
+        content = f"{content}\n[more lines below; pass offset={result.offset + result.limit} to continue]"
     return {
         "path": result.path,
         "total_lines": result.total_lines,
         "offset": result.offset,
         "limit": result.limit,
-        "content": result.content,
+        "truncated": result.truncated,
+        "content": content,
     }
 
 
-async def read_image(
-    path: str, max_bytes: int = 5 * 1024 * 1024
-) -> dict[str, Any]:
-    """Read an image file as a base64 data-URL (for vision-capable models).
+async def read_image(path: str, max_bytes: int = 0) -> dict[str, Any]:
+    """把工作区里的图片读成 data-URL（供 vision 模型）。
+
+    类型**按字节嗅探**（不看扩展名）；超过上限或装不进 `MAX_DIM` 的一律**明确拒绝**，
+    绝不把超限图片原样发给 provider —— 那会被当成 unsupported format，并连带毁掉
+    这个会话之后的每一轮。降采样/重编码的裁决统一在 `app.media.image_fit`。
 
     路径同样 clamp 到工作区（`root` 参数已移除，理由与 `read_file` 相同）。
     """
     import base64
 
     from app.backends.context import get_backend
+    from app.media.image_fit import MAX_IMAGE_BYTES, ImageUnfit, fit, sniff_mime
     from app.tools.fs_guard import observe
     from app.tools.sandbox import safe_join
 
+    limit = int(max_bytes) if max_bytes and max_bytes > 0 else MAX_IMAGE_BYTES
     backend = get_backend()
     target = safe_join(path)  # 沙箱隔离（S 安全修复）
 
@@ -72,30 +90,28 @@ async def read_image(
     info = await backend.stat(path)
     if info is None:
         return {"error": f"file not found: {path}"}
-    if info.size > max_bytes:
-        return {"error": f"image too large ({info.size} bytes, max {max_bytes})"}
-    ext = target.suffix.lower()
-    media_types = {
-        ".png": "image/png",
-        ".jpg": "image/jpeg",
-        ".jpeg": "image/jpeg",
-        ".webp": "image/webp",
-        ".gif": "image/gif",
-    }
-    if ext not in media_types:
-        return {
-            "error": f"unsupported image type: {ext or 'unknown'}; supported: png/jpg/webp/gif"
-        }
+    if info.size <= 0:
+        return {"error": f"image is empty: {path}"}
+    if info.size > limit:
+        return {"error": f"image too large ({info.size} bytes, max {limit})"}
     blob = await backend.read_bytes(path)
     if blob.error:
         return {"error": blob.error}
-    data = blob.data
+
+    # 类型由**字节**说了算：扩展名是声明，声明错了到 provider 那里就是不符的 media_type。
+    mime = sniff_mime(blob.data)
+    if not mime:
+        return {"error": f"unsupported image data: {path} is not PNG/JPEG/GIF/WebP"}
+    try:
+        data, mime = fit(blob.data, mime)
+    except ImageUnfit as exc:
+        return {"error": f"{path}: {exc}"}
     observe(target)
     return {
         "path": str(target),
-        "media_type": media_types[ext],
+        "media_type": mime,
         "bytes": len(data),
-        "data_url": f"data:{media_types[ext]};base64,{base64.b64encode(data).decode('ascii')}",
+        "data_url": f"data:{mime};base64,{base64.b64encode(data).decode('ascii')}",
     }
 
 
@@ -235,13 +251,21 @@ async def execute_python(code: str, timeout: int = 30) -> dict[str, Any]:
 # 注册工具（schema 与 Go 侧保持兼容）
 registry.register(
     name="read_file",
-    description="Read a text file from the workspace with pagination.",
+    description=(
+        "Read a text file from the workspace with pagination. Use `offset`/`limit` to page "
+        "through large files; a truncated result says so in a trailer and names the offset to "
+        "continue from."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "File path relative to the workspace root"},
             "offset": {"type": "integer", "default": 0, "description": "Line to start from (0-based)"},
-            "limit": {"type": "integer", "default": 200, "description": "Max lines to return"},
+            "limit": {
+                "type": "integer",
+                "default": 2000,
+                "description": "Max lines to return (default 2000)",
+            },
         },
         "required": ["path"],
     },
@@ -334,15 +358,19 @@ registry.register(
 
 registry.register(
     name="read_image",
-    description="Read an image file (PNG/JPEG/WebP/GIF) as a base64 data-URL for vision-capable models.",
+    description=(
+        "Read an image file (PNG/JPEG/GIF/WebP, sniffed from the bytes rather than the "
+        "extension) as a base64 data-URL for vision-capable models. Images larger than "
+        "MAX_DIM (1568px) are downscaled to fit before encoding."
+    ),
     parameters={
         "type": "object",
         "properties": {
             "path": {"type": "string", "description": "Image path relative to the workspace root"},
             "max_bytes": {
                 "type": "integer",
-                "default": 5242880,
-                "description": "Max image bytes (default 5 MB)",
+                "default": 10485760,
+                "description": "Max image bytes (default 10 MB)",
             },
         },
         "required": ["path"],

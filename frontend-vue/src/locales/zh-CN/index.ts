@@ -356,6 +356,8 @@ export default {
     test_connection: "测试连接",
     plugin: "插件",
     plugin_created: "插件已创建",
+    allow_plugin_commands: "允许执行插件命令",
+    revoke_authorization: "撤销授权",
     insert: "插入",
     view_result: "查看结果",
     view_market: "查看市场",

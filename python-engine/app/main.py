@@ -1502,6 +1502,8 @@ async def agent_submit(
         ),
         # 工作台上下文（网关透传）：知识库 / Agent / 技能 / 工作流
         workbench_context=body.get("context") or {},
+        # 媒体库附件（网关透传）：由 runtime 变成模型可见内容（见 AgentTask.attachments）
+        attachments=body.get("attachments") or [],
     )
 
     # ── 工作台上下文：Agent 覆盖 system_prompt / max_turns / model ──

@@ -167,18 +167,6 @@ jobs:
         env:
           DATABASE_DSN: postgresql://chiron:chiron@localhost:5432/chiron
         run: python -m alembic -c alembic.ini upgrade head --sql > /dev/null
-      # ORM 模型 ↔ 迁移 DDL 的**列集合**：`check_orm_models.py` 只保证「yaml ↔ 生成物」，
-      # 而第 68 轮那次漂移的**方向**是「迁移有、yaml 没有」—— 那时无人守。2026-10-09 实测：
-      # 补之前 `DDL 有、模型没有` = **12 列 / 5 表**（`sessions` 的 6 个分支血缘列 · `turns` 的
-      # `model`/`cache_hit`/`cached_tokens` · `messages.source` · `subagent_runs.rerun_of` ·
-      # `unified_sessions.runtime`），补完双向为 0。不建模的表走**显式白名单**（脚本里的
-      # `UNMODELED`，当前 10 张）—— 新增一张却忘了建模 ⇒ 这里直接红，不静默放过。
-      # 放在本 job：它本来就在渲染 DDL，且装了 alembic（encoding job 没有）。
-      # 已做变异验证（删一列 ⇒ exit 1 并点名 `sessions: ['branch_from_seq']`）。
-      - name: ORM models match migration DDL
-        env:
-          DATABASE_DSN: postgresql://chiron:chiron@localhost:5432/chiron
-        run: python scripts/check_orm_schema.py
 
   # ── 源码编码 ────────────────────────────────────────────────────────────
   encoding:
@@ -236,15 +224,6 @@ jobs:
       # 任何报错，只有该语言的用户会看到未本地化的原文。存量基线为空（当前一致）。
       - name: Error code keys (Go Code* vs 3 locales)
         run: python scripts/check_error_code_keys.py
-      # ORM 生成物新鲜度：`shared/models/**` 是**生成物**（`scripts/generate_orm_models.py`
-      # ← `configs/orm/V1/models.yaml`），却**既不在 ruff/mypy 门禁内，也没有任何用例提到它**
-      # （全仓只有生成器自己提它）。漂移过一次：`shared/models/subagent_run.py` 缺 7 列
-      # （`inherited_messages` / `retryable` / `output_bytes` / `validator_*` / `error_code`），
-      # 而迁移 0004/0006/0007 里都有 —— 靠人肉核对才发现。判据：把生成器重跑到**临时目录**
-      # 再逐文件比对，**只忽略模板的「生成时间」行**（它每次运行都不同；第 68 轮就是它造成
-      # 69 个文件的纯时间戳噪声）。已做变异验证（删一列 ⇒ exit 1 并点名行号）。
-      - name: ORM models match models.yaml
-        run: python scripts/check_orm_models.py
       # compose 必填环境变量必须有文档：`docker-compose.yml` 里用 `${VAR:?…}` 声明的变量
       # （compose 缺失时直接报错）必须在 `.env.example` 出现（**注释形态也算** —— 模板里
       # 可选/推荐项本来就是注释的）。判据是**先量过假阳性率**才定的：compose 引用了 29 个变量，

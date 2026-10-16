@@ -24,9 +24,7 @@ ruff check scripts/                          # 仓库根脚本
 python scripts/check_doc_links.py            # 被引用的 docs/*.md 与相对 .md 链接都必须存在
 python scripts/check_md_tables.py            # Markdown 表格列数必须一致
 python scripts/check_error_code_keys.py      # Go Code* ↔ 三语言 errors.ts 键集一致
-python scripts/check_orm_models.py           # shared/models 生成物与 models.yaml 一致
 python scripts/check_compose_env.py          # compose 必填变量必须在 .env.example 出现
-python scripts/check_orm_schema.py           # shared/models 列集合与迁移 DDL 一致（跑在 schema job）
 ```
 
 **门禁的共同形态是「基线化 + 拦增量」**：存量债务走基线文件，**新增即失败**。
