@@ -87,6 +87,11 @@ class SemanticCache:
         try:
             # 取最后 3 轮对话作为语义摘要
             recent = messages[-6:] if len(messages) > 6 else messages
+            # 含多模态 parts（图片）的对话不进语义缓存：`m.content` 是块数组，拼进
+            # 摘要文本会把整段 base64 送去 embedding（既无意义又昂贵），而且"换一张图"
+            # 在语义上高度相似 —— 命中反而是错的。
+            if any(not isinstance(m.content, str) for m in recent):
+                return None
             text = "\n".join(f"{m.role}:{m.content}" for m in recent if m.content)
             if len(text) < 10:
                 return None

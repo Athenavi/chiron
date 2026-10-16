@@ -75,7 +75,7 @@ class SubAgent:
 
     async def run(
         self,
-        task: str,
+        task: str | list[dict[str, Any]],
         context: dict[str, Any] | None = None,
         tenant_id: str = "",
     ) -> SubAgentResult:
@@ -83,7 +83,9 @@ class SubAgent:
         执行完整的子代理推理循环。
 
         Args:
-            task: 任务描述文本
+            task: 用户消息内容 —— 纯文本，或 OpenAI 风格的多模态 parts 数组
+                （`[{"type":"text",...},{"type":"image_url",...}]`）。用 parts 是为了把
+                媒体库附件（图片）真正交给模型，与 SSE 链路的用户消息同一种形状。
             context: 可选的上下文信息（会附加到 system prompt）
             tenant_id: 租户 ID（用于 Gateway 预算/路由）
 

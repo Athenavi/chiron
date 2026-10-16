@@ -237,6 +237,44 @@ class AnthropicProvider(LLMProvider):
     # ── 转换 ──
 
     @staticmethod
+    def _anthropic_content(
+        content: str | list[dict[str, Any]],
+    ) -> str | list[dict[str, Any]]:
+        """消息 content → Anthropic 形态：字符串原样返回；parts 则逐块翻译。
+
+        为什么要翻译：OpenAI 风格 parts 与 Anthropic blocks **不是同一种东西** —— 图片在
+        前者是 `{"type":"image_url","image_url":{"url":"data:..."}}`，在后者是
+        `{"type":"image","source":{"type":"base64","media_type":...,"data":...}}`。
+        直接透传会让 Anthropic 收到 `text: [...]` 而 400。
+        """
+        if isinstance(content, str):
+            return content
+        blocks: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text":
+                blocks.append({"type": "text", "text": str(part.get("text", ""))})
+                continue
+            if part.get("type") != "image_url":
+                continue
+            url = str((part.get("image_url") or {}).get("url") or "")
+            header, _, payload = url.partition(",")
+            media_type = (
+                (header[5:].split(";")[0] or "").strip().lower() if url.startswith("data:") else ""
+            )
+            if media_type not in ("image/png", "image/jpeg", "image/gif", "image/webp") or not payload:
+                continue
+            blocks.append(
+                {
+                    "type": "image",
+                    "source": {"type": "base64", "media_type": media_type, "data": payload},
+                }
+            )
+        # Anthropic 不接受空的 content 数组：退化为空串（与旧行为一致）
+        return blocks or ""
+
+    @staticmethod
     def _convert_messages(
         messages: list[ChatMessage],
     ) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]]]:
@@ -269,7 +307,9 @@ class AnthropicProvider(LLMProvider):
                 )
             elif msg.role == "assistant" and msg.tool_calls:
                 content = []
-                if msg.content:
+                # assistant 的 content 由 provider 产出（字符串）；这里加类型防御，
+                # 免得将来多模态 parts 误入此分支被拼成 {"type":"text","text":[...]}
+                if isinstance(msg.content, str) and msg.content:
                     content.append({"type": "text", "text": msg.content})
                 for tc in msg.tool_calls:
                     import json as _json
@@ -284,7 +324,12 @@ class AnthropicProvider(LLMProvider):
                     )
                 result.append({"role": "assistant", "content": content})
             else:
-                result.append({"role": msg.role, "content": msg.content})
+                result.append(
+                    {
+                        "role": msg.role,
+                        "content": AnthropicProvider._anthropic_content(msg.content),
+                    }
+                )
         if any(m.cache_breakpoint for m in system_parts):
             system: str | list[dict[str, Any]] = [
                 (

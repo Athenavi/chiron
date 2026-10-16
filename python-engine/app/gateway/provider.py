@@ -10,7 +10,11 @@ from typing import Any
 @dataclass
 class ChatMessage:
     role: str  # "system" | "user" | "assistant" | "tool"
-    content: str = ""
+    #: 纯文本，或 OpenAI 风格的多模态 parts（`[{"type":"text",...},{"type":"image_url",...}]`）。
+    #: 用 parts 时由各家 provider 自行适配（OpenAI 直接透传；Anthropic 见
+    #: `providers/anthropic.py::_anthropic_content`）。**只有 user 消息会带 parts** ——
+    #: system / assistant / tool 仍是字符串。
+    content: str | list[dict[str, Any]] = ""
     tool_call_id: str = ""
     tool_calls: list[ToolCall] | None = None
     #: C2：该消息是**提示词前缀的稳定末尾**，支持显式缓存断点的 provider（Anthropic 系）

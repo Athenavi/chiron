@@ -140,7 +140,6 @@ async def install_skill(
             data = json.loads(safe_file.read_text(encoding="utf-8"))
         else:
             from app.config import settings
-
             from app.http_client import shared_client
 
             async with shared_client(timeout=settings.http_timeout_default) as client:
@@ -325,7 +324,6 @@ async def discover_skills(
     if url:
         try:
             from app.config import settings
-
             from app.http_client import shared_client
 
             async with shared_client(timeout=settings.http_timeout_default) as client:
