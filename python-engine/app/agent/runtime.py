@@ -1828,7 +1828,29 @@ class AgentRuntime:
             _cache_saved = False  # S 修复：缓存是否已保存（finally 兜底）
             from app.agent.interrupt import clear_interrupt, is_interrupted
 
-            for turn in range(task.max_turns):
+            # A4（论文 §5.1 P1）：续跑必须**恢复计数起点**。快照的 turn_index 是上一段 run
+            # 已消耗的回合数（回合末按 turn+1 落盘）；从 0 重新计等于"每次崩溃白送一轮预算"。
+            # 夹到 max_turns-1：既继承预算，又保证循环至少能进一次（预算轴会在轮首判停）。
+            start_turn = 0
+            if self._resumed_from_checkpoint is not None:
+                start_turn = min(
+                    max(
+                        0,
+                        int(
+                            getattr(
+                                self._resumed_from_checkpoint, "turn_index", 0
+                            )
+                            or 0
+                        ),
+                    ),
+                    max(int(task.max_turns) - 1, 0),
+                )
+                self._tool_steps = max(
+                    self._tool_steps,
+                    int(getattr(self._resumed_from_checkpoint, "tool_steps", 0) or 0),
+                )
+
+            for turn in range(start_turn, task.max_turns):
                 # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
                 turn_span_id = f"{trace_id}:turn:{turn + 1}"
                 _turn_started = time.time()
@@ -1853,6 +1875,9 @@ class AgentRuntime:
                         error=f"budget_exceeded:{exceeded}",
                         trace_id=trace_id,
                     )
+                    # A4：预算越界是**本 run 的终态**（不是崩溃）——标 failed 后它不再可被
+                    # "用户重试续跑"误当现场；`ckpt.load` 只认活跃状态。
+                    await self._mark_run_status(task, "failed")
                     return
 
                 # ── 真取消检查（每轮开头，紧跟预算检查）──
@@ -1875,6 +1900,9 @@ class AgentRuntime:
                         ),
                         trace_id=trace_id,
                     )
+                    # A4：用户显式取消是**终态**（不是崩溃）——标 cancelled，其残留快照
+                    # 不再作为"可续跑现场"被下一次提交捡走。
+                    await self._mark_run_status(task, "cancelled")
                     return
 
                 logger.info(
@@ -2390,6 +2418,8 @@ class AgentRuntime:
                             "input_tokens": total_input_tokens,
                             "output_tokens": total_output_tokens,
                             "cached_tokens": total_cached_tokens,
+                            # A4：steps 轴也要跨续跑继承（读取侧见 ResumeState.tool_steps）
+                            "tool_steps": self._tool_steps,
                         },
                     )
 
@@ -2590,9 +2620,15 @@ class AgentRuntime:
                 total_duration,
                 turn + 1,
             )
+            # A4（论文 §5.1 P0-1）：**正常完成必须写终态**。此前完成行停留在 `running`，
+            # 既让唯一索引 `ux_agent_runs_session_active` 迟迟不放，又让 6 分钟后的
+            # reconciler 把"活得好好的已完成 run"当成僵尸标成 `checkpointed` ——
+            # 而 `ckpt.load` 不看状态，下一条消息就可能从这个陈旧快照"续跑"。
+            await self._mark_run_status(task, "completed")
 
         except Exception as e:
             logger.error("Agent runtime error (task=%s): %s", task.id, e)
+            await self._mark_run_status(task, "failed")
             yield AgentEvent(
                 type="error",
                 error=str(e),
@@ -3408,6 +3444,27 @@ class AgentRuntime:
             run_token=getattr(task, "run_token", "") or "",
             instance_id=instance,
         )
+
+    async def _mark_run_status(self, task: AgentTask, status: str) -> None:
+        """run 收尾时把 `agent_runs` 迁移到终态（A4）。
+
+        带 `run_token` 的归属条件防踩踏：若这期间同会话已有新 run 接管该行，
+        迟到的旧终态写入必须 0 命中，而不是把**正在运行的新 run** 标成终态。
+        失败只降级（`mark` 内部吞异常），绝不改变对话退出路径。
+        """
+        if not getattr(task, "session_id", ""):
+            return
+        try:
+            from app.agent import checkpoint as checkpoint_mod
+
+            await checkpoint_mod.mark(
+                tenant_id=task.tenant_id or "",
+                session_id=task.session_id,
+                status=status,
+                run_token=getattr(task, "run_token", "") or "",
+            )
+        except Exception as exc:  # noqa: BLE001 — 终态写入失败不该影响退出路径
+            logger.warning("mark run status failed (session=%s): %s", task.session_id, exc)
 
     @staticmethod
     def _instance_id() -> str:

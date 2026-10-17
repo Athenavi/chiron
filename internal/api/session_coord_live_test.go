@@ -81,11 +81,11 @@ func TestLiveSessionRunLockRefreshIsTokenScoped(t *testing.T) {
 	}
 	defer release()
 
-	if RefreshSessionRunLock(ctx, sid, "token-b") {
-		t.Fatal("非持有者不得续期（否则旧 run 能把已易主的锁无限续下去）")
+	if state, err := RefreshSessionRunLock(ctx, sid, "token-b"); err != nil || state == "renewed" {
+		t.Fatalf("非持有者不得续期（否则旧 run 能把已易主的锁无限续下去）：state=%s err=%v", state, err)
 	}
-	if !RefreshSessionRunLock(ctx, sid, "token-a") {
-		t.Fatal("持有者必须能续期")
+	if state, err := RefreshSessionRunLock(ctx, sid, "token-a"); err != nil || state != "renewed" {
+		t.Fatalf("持有者必须能续期：state=%s err=%v", state, err)
 	}
 	ttl, err := db.Redis.Do(ctx, "TTL", agentRunLockPrefix+sid).Int64()
 	if err != nil {
@@ -94,6 +94,43 @@ func TestLiveSessionRunLockRefreshIsTokenScoped(t *testing.T) {
 	if ttl <= 0 || ttl > int64(agentRunLockTTL.Seconds())+2 {
 		t.Fatalf("锁必须带 ≤%v 的 TTL，实际 %ds（崩溃后要能自动过期）", agentRunLockTTL, ttl)
 	}
+}
+
+// 心跳的"单向终止"缺陷回归：Redis 抖动导致锁中途过期后，仍存活的持有者
+// 必须能安全夺回（NX）；而锁已被新 run 接管的场合必须报 lost、绝不抢活人的锁。
+func TestLiveSessionRunLockReclaimsExpiredLock(t *testing.T) {
+	withLiveRedis(t)
+	sid := "pytest-lock-reclaim-" + uuid.NewString()
+	ctx := context.Background()
+
+	release, ok, err := AcquireSessionRunLock(ctx, sid, "token-a")
+	if err != nil || !ok {
+		t.Fatalf("获取失败：ok=%v err=%v", ok, err)
+	}
+	defer release()
+
+	if err := db.Redis.Del(ctx, agentRunLockPrefix+sid).Err(); err != nil {
+		t.Fatalf("Del: %v", err)
+	}
+	if state, err := RefreshSessionRunLock(ctx, sid, "token-a"); err != nil || state != "renewed" {
+		t.Fatalf("消失的锁应被原持有者夺回：state=%s err=%v", state, err)
+	}
+	v, err := db.Redis.Get(ctx, agentRunLockPrefix+sid).Result()
+	if err != nil || v != "token-a" {
+		t.Fatalf("夺回后锁仍属原 token：v=%q err=%v", v, err)
+	}
+
+	// 新 run 已接管：旧心跳不得抢走，也不得误报续期成功
+	if err := db.Redis.Del(ctx, agentRunLockPrefix+sid).Err(); err != nil {
+		t.Fatalf("Del: %v", err)
+	}
+	if _, ok2, err2 := AcquireSessionRunLock(ctx, sid, "token-b"); err2 != nil || !ok2 {
+		t.Fatalf("token-b 获取失败：ok=%v err=%v", ok2, err2)
+	}
+	if state, err := RefreshSessionRunLock(ctx, sid, "token-a"); err != nil || state != "lost" {
+		t.Fatalf("锁已被其它 token 持有时必须报 lost：state=%s err=%v", state, err)
+	}
+	_ = releaseSessionRunLock(ctx, agentRunLockPrefix+sid, "token-b")
 }
 
 func TestLiveSessionRunLockReleaseIsCompareAndDelete(t *testing.T) {

@@ -51,6 +51,8 @@ class ResumeState:
 
     messages: list[dict[str, Any]] = field(default_factory=list)
     turn_index: int = 0
+    #: 上一段 run 已消耗的工具步数（A4：steps 轴同样要跨续跑继承）
+    tool_steps: int = 0
     done_tools: tuple[str, ...] = ()
     #: "已开始未结束"的调用 id（`tool_calls.output = ''`）—— 不自动重放，只告知
     replay_pending: tuple[str, ...] = ()
@@ -98,9 +100,13 @@ async def load_resume_state(*, tenant_id: str, session_id: str) -> ResumeState |
         if row.get("id") and str(row.get("id")) not in done
     )
 
+    usage = snapshot.get("usage")
+    usage_map = usage if isinstance(usage, dict) else {}
+
     return ResumeState(
         messages=messages,
         turn_index=int(snapshot.get("turn_index") or 0),
+        tool_steps=int(usage_map.get("tool_steps") or 0),
         done_tools=done,
         replay_pending=tuple(item for item in pending if item),
         window=window,
