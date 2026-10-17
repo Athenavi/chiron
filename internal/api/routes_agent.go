@@ -137,12 +137,15 @@ func registerAgentRoutes(
 
 		// 租户 token 配额预检（企业版配额池 ent_quota_pools；fail-open，见
 		// ent_quota_enforce.go）。接线位置在 billing 预检之后、run 锁与并发槽位之前：
-		// 此时尚未占用任何资源，直接拒绝即可，无需回滚。
+		// 此时**除配额计数器自身的预留外**尚未占用资源，直接拒绝即可。
 		//
-		// 注意：EnforceTenantQuota 仅在配额超限时返回非 nil；其计数是"请求级近似
-		// 用量"（每次调用 INCR 1，缓存缺失时先从 billing_records 回填），真实 token
-		// 用量仍以计费链路为准。
-		if err := EnforceTenantQuota(r.Context(), claims, 0); err != nil {
+		// P0-3：此前固定传 0 ⇒ 每请求 INCR 1。配额池的单位是 token（月度池动辄百万），
+		// 一次长回合可烧掉数万 token，"每次 +1" 让池子退化成请求条数限流，
+		// 超限租户照样能放行 N 个在途长回合。现在按请求体**估算**预留，
+		// 回合末由 submit_handler 用真实 usage 校正（TrueUpTenantQuota）。
+		est := EstimateRequestTokens(body.Content, body.Attachments)
+		reserved, quotaErr := EnforceTenantQuota(r.Context(), claims, est)
+		if quotaErr != nil {
 			monitor.IncQuotaExceeded()
 			slog.Warn("tenant token quota exceeded, submit rejected",
 				"user_id", userID, "tenant_id", claims.TenantID)
@@ -151,6 +154,12 @@ func registerAgentRoutes(
 				Error:   "tenant token quota exceeded",
 			})
 			return
+		}
+		// 后面还有三道闸门（run 锁 / 全局槽位 / 租户并发）会拒绝请求。被它们挡下时
+		// 一个 token 都没烧，必须把预估**退还**，否则每被拒一次池子里就永久留下一次预估 ——
+		// 这是自伤式偏差：用户还没花钱就先被记了钱。
+		refundQuota := func() {
+			TrueUpTenantQuota(r.Context(), userID, claims.TenantID, 0, reserved)
 		}
 
 		// Reject concurrent submits within the same session（跨实例：Redis 运行锁）
@@ -167,6 +176,8 @@ func registerAgentRoutes(
 			limit = DefaultAgentTimeout
 		}
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), limit)
+		// 把预检预留的量带进真正的回合：结束时 submit_handler 据此把估算扣回、换成真实 usage。
+		ctx = WithQuotaReserve(ctx, reserved)
 		// 批 E2：每次 run 唯一 token（锁归属校验：续期/释放均需匹配，防旧 run 误删新锁）
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
@@ -182,11 +193,13 @@ func registerAgentRoutes(
 				"session_id", body.SessionID)
 			if _, loaded := sessionCancels.LoadOrStore(body.SessionID, &sessionCancel{userID: userID, cancel: cancel}); loaded {
 				cancel()
+				refundQuota()
 				BadRequest(w, sessionBusyMsg)
 				return
 			}
 		} else if !runLocked {
 			cancel() // cancel the new one since there's already an active task
+			refundQuota()
 			BadRequest(w, sessionBusyMsg)
 			return
 		} else {
@@ -203,6 +216,7 @@ func registerAgentRoutes(
 			}
 			sessionCancels.Delete(body.SessionID)
 			cancel()
+			refundQuota()
 			TooManyRequests(w)
 			return
 		}
@@ -222,6 +236,7 @@ func registerAgentRoutes(
 			releaseSem()
 			sessionCancels.Delete(body.SessionID)
 			cancel()
+			refundQuota()
 			TooManyRequests(w)
 			return
 		}

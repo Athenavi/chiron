@@ -411,3 +411,95 @@ class TestMemoryTools:
         r = await remember("legacy:k", "v")
         assert "not available" in r["output"]
         assert "warning" in r
+
+
+# ── 真实 ProfileStore 的语句形状 ──────────────────────────
+
+
+class _RecordingPool:
+    """记录 SQL/参数并按脚本返回行的假池（不连 PostgreSQL）。
+
+    存在的理由只有一件事：`upsert_protected` 的守卫写在 **SQL** 里，内存假件测不到。
+    这里钉住三条不能丢的子句，删掉任何一条测试即失败。
+    """
+
+    def __init__(self, rows: list) -> None:
+        self._rows = list(rows)
+        self.calls: list[tuple[str, tuple]] = []
+
+    async def fetchrow(self, sql, *params):
+        self.calls.append((sql, params))
+        return self._rows.pop(0) if self._rows else None
+
+    async def fetch(self, sql, *params):
+        self.calls.append((sql, params))
+        return []
+
+    async def fetchval(self, sql, *params):
+        self.calls.append((sql, params))
+        return 0
+
+
+def _row(**overrides):
+    row = {
+        "id": "m1", "tenant_id": "t1", "user_id": "u1", "slot": "fact",
+        "item_key": "city", "item_value": '"上海"', "confidence": 95,
+        "source": "user_confirmed", "embedding": None, "access_count": 0,
+        "last_accessed_at": None, "status": "active",
+        "created_at": datetime.now(UTC), "updated_at": datetime.now(UTC),
+        "project": "", "inserted": True,
+    }
+    row.update(overrides)
+    return row
+
+
+def _entry(**overrides):
+    from app.memory.layers import MemoryEntry
+
+    kwargs = dict(
+        id="m2", tenant_id="t1", user_id="u1", slot="fact", item_key="city",
+        item_value="北京", confidence=50, source="derived", project="",
+    )
+    kwargs.update(overrides)
+    return MemoryEntry(**kwargs)
+
+
+class TestProfileStoreUpsertProtected:
+    async def test_sql_carries_the_guard_and_the_insert_flag(self):
+        from app.memory.profile import ProfileStore
+
+        pool = _RecordingPool([_row()])
+        result = await ProfileStore(pool).upsert_protected(_entry())
+
+        sql = pool.calls[0][0]
+        # 1) 冲突目标含 project（少了它两个项目的同名键会互相覆盖）
+        assert "ON CONFLICT (tenant_id, user_id, project, slot, item_key)" in sql
+        # 2) 守卫：旧值是用户确认的、这次来的是派生值 ⇒ 不写
+        assert "user_memory_entries.source <> 'user_confirmed'" in sql
+        # 3) created 由写入本身判定，不再靠一次有竞态的预读
+        assert "(xmax = 0) AS inserted" in sql
+        assert result.protected is False
+        assert result.inserted is True
+
+    async def test_suppressed_write_reports_protected_with_the_old_row(self):
+        from app.memory.profile import ProfileStore
+
+        # RETURNING 无输出 = 守卫拦下了 UPDATE；随后 get_by_key 读回**未被改动**的旧行
+        pool = _RecordingPool([None, _row(inserted=False)])
+        result = await ProfileStore(pool).upsert_protected(_entry())
+
+        assert result.protected is True
+        assert result.inserted is False
+        assert result.entry.item_value == "上海"
+        assert len(pool.calls) == 2  # 写入 + 回读，没有第三次（守卫不该退化成先查后写）
+
+    async def test_fallback_when_the_row_disappeared_between_guard_and_read(self):
+        from app.memory.profile import ProfileStore
+
+        # 守卫拦下 → 回读为空（并发删除）→ 按普通 insert 落库，不能抛异常
+        pool = _RecordingPool([None, None, _row(item_value='"北京"', source="derived")])
+        result = await ProfileStore(pool).upsert_protected(_entry())
+
+        assert result.protected is False
+        assert result.inserted is True
+        assert result.entry.item_value == "北京"

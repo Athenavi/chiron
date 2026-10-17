@@ -42,14 +42,22 @@ class GraphExecuteRequest(BaseModel):
 
 
 async def _enqueue_with_retry(
-    instance_id: str, user_id: str, graph_json: dict[str, Any], initial_state: dict[str, Any], *, attempts: int = 3
+    instance_id: str,
+    user_id: str,
+    graph_json: dict[str, Any],
+    initial_state: dict[str, Any],
+    tenant_id: str = "",
+    *,
+    attempts: int = 3,
 ) -> bool:
     """投递到 engine:tasks，失败重试（指数退避，总等待 <3s）。
 
     重试值得做：入队失败的主因是 Redis/队列**瞬时**不可达，一次失败不代表这个任务注定跑不了。
     """
     for attempt in range(1, attempts + 1):
-        if await _enqueue_workflow_run(instance_id, user_id, graph_json, initial_state):
+        if await _enqueue_workflow_run(
+            instance_id, user_id, graph_json, initial_state, tenant_id=tenant_id
+        ):
             if attempt > 1:
                 logger.info("workflow enqueue succeeded on attempt %d: %s", attempt, instance_id)
             return True
@@ -128,7 +136,11 @@ async def requeue_pending_workflows(limit: int = 20) -> int:
 
 
 async def _enqueue_workflow_run(
-    instance_id: str, user_id: str, graph_json: dict[str, Any], initial_state: dict[str, Any]
+    instance_id: str,
+    user_id: str,
+    graph_json: dict[str, Any],
+    initial_state: dict[str, Any],
+    tenant_id: str = "",
 ) -> bool:
     """投递 workflow_run 到 engine:tasks（跨实例消费组，断点续跑执行）。失败返回 False。"""
     from app.redis_client import get_redis
@@ -142,11 +154,13 @@ async def _enqueue_workflow_run(
     msg: dict[Any, Any] = {
         "task_id": instance_id,
         "task_type": "workflow_run",
-        "tenant_id": "",
+        "tenant_id": tenant_id or "",
         "payload": json.dumps(
             {
                 "instance_id": instance_id,
                 "user_id": user_id,
+                # 租户身份贯穿到执行端（executor 不再用 user_id 冒充 tenant，论文 §5.1 P1）
+                "tenant_id": tenant_id or "",
                 "graph_json": graph_json,
                 "initial_state": initial_state,
             },
@@ -312,6 +326,7 @@ async def execute_graph(
     body: GraphExecuteRequest,
     gateway: Any = Depends(get_gateway),
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     """提交图执行：落库 pending 后后台任务执行，立即返回 instance_id（前端轮询状态）。"""
     graph_json = None
@@ -365,7 +380,9 @@ async def execute_graph(
     # "running" —— 用户以为任务在跑，其实它随进程一起消失了（"看起来成功、实际丢失"）。
     # 改为：重试入队；仍失败则把实例标记为**待执行**（连同重建入队所需的 graph 一起落库），
     # 由 requeue 机制拉起，并打点告警 —— 降级必须可见。
-    if not await _enqueue_with_retry(instance_id, user_id, graph_json, body.initial_state):
+    if not await _enqueue_with_retry(
+        instance_id, user_id, graph_json, body.initial_state, tenant_id=tenant_id
+    ):
         await _mark_enqueue_pending(instance_id, graph_json)
         try:
             from app.observability.metrics import WORKFLOW_ENQUEUE_PENDING
@@ -384,7 +401,12 @@ async def execute_graph(
             )
             task = asyncio.create_task(
                 execute_with_checkpoint(
-                    instance_id, graph_json, body.initial_state, user_id, gateway
+                    instance_id,
+                    graph_json,
+                    body.initial_state,
+                    user_id,
+                    gateway,
+                    tenant_id=tenant_id,
                 )
             )
             _background_tasks.add(task)

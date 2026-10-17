@@ -242,6 +242,9 @@ func (h *SubmitHandler) HandleSubmit(ctx context.Context, userID, sessionID, con
 		advanced, cont := agentgoal.Advance(*goal, *report, time.Now().Unix())
 		*goal = advanced
 		h.saveGoal(ctx, *goal)
+		// 配额预留只能在**首轮**扣回（预检按整条请求估算一次）。续跑的后续回合没有预留可退，
+		// 直接按各自的真实 usage 全额计入 —— 见 ent_quota_enforce.go 的 ConsumeQuotaReserve。
+		ctx = ConsumeQuotaReserve(ctx)
 		if !cont || ctx.Err() != nil {
 			return
 		}
@@ -343,6 +346,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				slog.Info("submit deduplicated (already processing)",
 					"session", sessionID, "client_msg_id", clientMsgID)
 				// 这条消息已在处理中（同一次提交的重试）：直接结束，不再触发引擎。
+				// 预检时预留的估算必须退还 —— 真实用量由**第一次**那个请求在回合末记账，
+				// 这里留下一份额外预估等于让重复提交"白占"租户额度。
+				// tenantID 在本函数更靠后才解析，留空由 TrueUpTenantQuota 自行经 users 表解析。
+				TrueUpTenantQuota(ctx, userID, "", 0, QuotaReserveFromContext(ctx))
 				return nil
 			}
 			slog.Warn("submit dedup unavailable, proceeding", "error", err)
@@ -480,6 +487,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			h.sessionMgr.FinishTurn(sctx, turnID, "failed", "engine unavailable: "+err.Error(), "", 0, 0, 0)
 			cancelStore()
 		}
+		// 一个 token 都没烧：退还预检预留的估算（与上面的 FinishTurn 同一语义 —— 这一轮没跑起来）。
+		qctx, cancelQuota := storeCtxFor()
+		TrueUpTenantQuota(qctx, userID, tenantID, 0, QuotaReserveFromContext(ctx))
+		cancelQuota()
 		h.eventHub.Publish(broadcast.Event{Type: "text", SessionID: sessionID, Data: map[string]string{"content": "Service temporarily unavailable. Please try again."}})
 		h.eventHub.Publish(broadcast.Event{Type: "turn_done", SessionID: sessionID, Data: map[string]string{"session_id": sessionID}})
 		return nil
@@ -693,6 +704,13 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			}
 		}
 	}
+
+	// P0-3 配额校正：预检在池子里记的是**估算**，这里换成这一轮的**真实** token。
+	// 单位与 billing_records 一致（input + output；cached 只影响读侧成本，不计入池用量），
+	// 因此每周期末 Redis 计数器与 SQL 回填口径相同。
+	// 放在扣费分支**之外**：免费额度内的回合同样消耗租户池，此前那部分根本不入账。
+	TrueUpTenantQuota(storeCtx, userID, tenantID, int64(usage.input+usage.output),
+		QuotaReserveFromContext(ctx))
 
 	// 回合终态收敛：取消(断开/超时) -> cancelled；引擎报错 -> failed；否则 completed。
 	turnStatus := "completed"

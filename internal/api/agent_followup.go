@@ -14,6 +14,7 @@ import (
 
 	"github.com/redis/go-redis/v9"
 
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/db"
 )
@@ -136,16 +137,31 @@ func AgentFollowupHandler(
 			}
 		}
 
+		// ③′ 租户 token 配额预检（P0-3）：自动轮此前只过"个人余额"闸门，**完全绕过租户池** ——
+		// 而子 Agent 的自动总结同样烧租户的钱，且由引擎队列发起，没有用户会去点"重试"。
+		// 与 /submit 同一套语义：按估算预留，回合末由 submit_handler 校正成真实用量。
+		content := buildFollowupContent(body)
+		reserved, quotaErr := EnforceTenantQuota(r.Context(),
+			&auth.Claims{UserID: body.UserID, TenantID: body.TenantID},
+			EstimateRequestTokens(content, nil))
+		if quotaErr != nil {
+			// 200 skipped：配额耗尽时重试也没用（队列正常 ACK，不无限重投）
+			slog.Warn("agent followup: tenant token quota exceeded",
+				"user_id", body.UserID, "tenant_id", body.TenantID, "run_id", body.RunID)
+			followupSkipped(w, "tenant token quota exceeded")
+			return
+		}
+
 		timeout := submitTimeout
 		if timeout < DefaultAgentTimeout {
 			timeout = DefaultAgentTimeout
 		}
 		// 与 /submit 同理：后台执行必须脱离请求生命周期（响应一返回客户端连接即关闭）
 		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
+		ctx = WithQuotaReserve(ctx, reserved)
 		// run 锁心跳：与 /submit 共用同一份实现。followup 的 timeout 可能长于锁 TTL(5min)，
 		// 不续期会让锁在运行中途过期 → 同一会话被再次抢占 → 两个 runtime 并发跑。
 		stopHeartbeat := StartSessionRunLockHeartbeat(ctx, body.SessionID, runToken)
-		content := buildFollowupContent(body)
 
 		go func() {
 			defer cancel()

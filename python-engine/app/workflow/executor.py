@@ -43,6 +43,7 @@ async def execute_with_checkpoint(
     initial_state: dict[str, Any],
     user_id: str = "",
     gateway: Any = None,
+    tenant_id: str = "",
 ) -> None:
     """执行（或续跑）一个 workflow instance 并写回终态。worker/fallback 均调用。"""
     from app.db import get_pool
@@ -57,10 +58,13 @@ async def execute_with_checkpoint(
         logger.info("workflow already terminal (%s), idempotent skip: %s", status, instance_id)
         return
 
-    # 工具沙箱上下文：队列 worker 的 contextvars 不含请求上下文，必须显式设置
+    # 工具沙箱上下文：队列 worker 的 contextvars 不含请求上下文，必须显式设置。
+    # tenant 语义是"实例所属租户"（由提交请求贯穿至此）；**不得再用 user_id 冒充** ——
+    # 下游工具授权/配额归属读的就是这个值，冒充会把账记到一个不存在的租户上。
+    # 未知时留空（requeue 兜底路径），由服务端按"无租户上下文"处置而不是错误归属。
     from app.tools.context import set_tool_context
 
-    set_tool_context(session_id=instance_id, user_id=user_id or "", tenant_id=user_id or "")
+    set_tool_context(session_id=instance_id, user_id=user_id or "", tenant_id=tenant_id or "")
 
     async def persist_checkpoint(state: dict[str, Any], done: list[str]) -> None:
         try:
