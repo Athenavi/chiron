@@ -221,7 +221,13 @@ async def save(
 
 
 async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
-    """读最近一次 checkpoint（**批 3 才接线到恢复路径**）。"""
+    """读最近一次**活跃 run** 的 checkpoint。
+
+    只认 `ACTIVE_STATUSES`（running/checkpointed/resuming）：终态行（completed/failed/
+    cancelled/abandoned）代表**已经画过句号**的 run，它们的快照只是历史残留 ——
+    不加这层过滤时，下一条消息可能从一个"早已正常结束"的陈旧尾部快照续跑
+    （终态行因保存缺终态写入而停留 running 时同样中招）。
+    """
     if not session_id:
         return None
     try:
@@ -233,6 +239,7 @@ async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
             SELECT checkpoint, checkpoint_at, status
               FROM agent_runs
              WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+               AND status IN ('running', 'checkpointed', 'resuming')
              ORDER BY updated_at DESC
              LIMIT 1
             """,
@@ -251,10 +258,22 @@ async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
         return None
 
 
-async def mark(*, tenant_id: str, session_id: str, status: str) -> bool:
+async def mark(
+    *,
+    tenant_id: str,
+    session_id: str,
+    status: str,
+    run_token: str = "",
+) -> bool:
     """迁移状态（`completed` / `failed` / `cancelled` / `abandoned` …）。
 
     终态行会被移出活跃集合（唯一索引随之释放），因此同一会话可以开始新 run。
+
+    `run_token` 是**防踩踏**条件：终态写入来自 run 自己的收尾路径，若这期间同会话已有
+    新 run 接管（save 会把行上的 token 换成新 run 的），带旧 token 的 UPDATE 必须
+    0 行命中 —— 否则旧 run 的迟到收尾会把**正在运行的新 run** 标成终态、
+    释放唯一索引，等于第三个 run 也能进来（双 runtime 竞态）。
+    reconciler/abandoned 等"旁观者"路径不带 token，保持原有语义。
     """
     if not session_id:
         return False
@@ -267,11 +286,13 @@ async def mark(*, tenant_id: str, session_id: str, status: str) -> bool:
             UPDATE agent_runs
                SET status = $3, updated_at = now()
              WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+               AND ($4 = '' OR run_token = $4)
                AND status IN ('running', 'checkpointed', 'resuming')
             """,
             session_id,
             tenant_id or "",
             status,
+            run_token or "",
         )
         return _rowcount(result) > 0
     except Exception as exc:  # noqa: BLE001

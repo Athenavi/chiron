@@ -73,7 +73,9 @@ def _patch_checkpoint(
     async def _pending(*, session_id: str, limit: int = 50):  # noqa: ANN202
         return list(pending or [])
 
-    async def _mark(*, tenant_id: str, session_id: str, status: str) -> bool:  # noqa: ANN202
+    async def _mark(  # noqa: ANN202 — 与 checkpoint.mark 同步接受 run_token（A4 防踩踏）
+        *, tenant_id: str, session_id: str, status: str, run_token: str = ""
+    ) -> bool:
         recorded.append((session_id, status))
         return True
 
@@ -196,7 +198,7 @@ def _patch_reconciler(
     marks: list[tuple[str, str]] = []
     claims: list[tuple[str, str, str]] = []
 
-    async def _mark(*, tenant_id: str, session_id: str, status: str) -> bool:  # noqa: ANN202
+    async def _mark(*, tenant_id: str, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
         marks.append((session_id, status))
         return True
 

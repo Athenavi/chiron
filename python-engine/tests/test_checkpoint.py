@@ -153,6 +153,32 @@ async def test_load_parses_checkpoint(fake_pool: _FakePool):
     assert loaded is not None
     assert loaded["turn_index"] == 2
     assert loaded["done_tools"] == ["c1"]
+    sql, _ = fake_pool.calls[0]
+    assert "status IN ('running', 'checkpointed', 'resuming')" in sql, (
+        "A4：恢复路径只认活跃行 —— 终态（completed/failed/cancelled/abandoned）的"
+        "陈旧快照不得被下一次提交捡走续跑"
+    )
+
+
+@pytest.mark.asyncio
+async def test_mark_with_run_token_adds_ownership_guard(fake_pool: _FakePool):
+    """A4 防踩踏：带 run_token 的终态写入必须校验归属，避免旧 run 标掉新 run 的行。"""
+    ok = await cp.mark(
+        tenant_id="t1", session_id="s1", status=cp.STATUS_COMPLETED, run_token="rt-1"
+    )
+    assert ok is True
+    sql, args = fake_pool.calls[0]
+    assert "AND ($4 = '' OR run_token = $4)" in sql
+    assert args[3] == "rt-1"
+
+
+@pytest.mark.asyncio
+async def test_mark_without_run_token_keeps_legacy_semantics(fake_pool: _FakePool):
+    """reconciler/abandoned 等旁观者路径不带 token：条件应短路放行（$4=''）。"""
+    ok = await cp.mark(tenant_id="t1", session_id="s1", status=cp.STATUS_ABANDONED)
+    assert ok is True
+    _, args = fake_pool.calls[0]
+    assert args[3] == ""
 
 
 @pytest.mark.asyncio

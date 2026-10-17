@@ -45,12 +45,26 @@ end
 return 0
 `
 
-const sessionRunLockRefreshLua = `
-if redis.call('GET', KEYS[1]) == ARGV[1] then
+// sessionRunLockRenewLua 单脚本原子的"探测+续期"：
+// 1=仍属本 token 且已续期，-1=键已不存在，0=已被其它 token 持有。
+// 续期与夺回都基于这个三态判定 —— **"键消失(可安全夺回)"与"已易主(必须停心跳)"必须区分**，
+// 否则一次 Redis 抖动就会被当成"锁已易主"，心跳单向终止后锁在 TTL 中途过期，
+// 而 run 仍在运行 ⇒ 同会话第二个 runtime 可以启动（正是这条机制要防的事）。
+const sessionRunLockRenewLua = `
+local v = redis.call('GET', KEYS[1])
+if v == false then
+  return -1
+end
+if v == ARGV[1] then
   redis.call('SET', KEYS[1], ARGV[1], 'EX', ARGV[2])
   return 1
 end
 return 0
+`
+
+// sessionRunLockReclaimLua 夺回一把**已消失**的锁（NX，绝不覆盖活人的锁）。
+const sessionRunLockReclaimLua = `
+return redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', ARGV[2]) and 1 or 0
 `
 
 const sessionRunLockReleaseLua = `
@@ -89,21 +103,42 @@ func AcquireSessionRunLock(ctx context.Context, sessionID, runToken string) (rel
 	}, true, nil
 }
 
-// RefreshSessionRunLock 续期运行锁 TTL（持有者心跳；值仍为本次 runToken 才续期）。
-// 返回是否续期成功（锁已易主或已过期时返回 false）。
-func RefreshSessionRunLock(ctx context.Context, sessionID, runToken string) bool {
+// 返回三态："renewed"=续期成功（含夺回已消失的锁），"lost"=锁已被其它 token 持有，
+// err != nil 表示 Redis 瞬时故障 —— 归属未知，调用方应重试而非停心跳。
+// 夺回只可能发生在"键不存在"时（NX），所以并发新 run 已持锁的场合绝不抢锁。
+func RefreshSessionRunLock(ctx context.Context, sessionID, runToken string) (state string, err error) {
 	if db.Redis == nil {
-		return false
+		return "lost", errRedisUnavailable
 	}
 	key := agentRunLockPrefix + sessionID
-	res := db.Redis.Eval(ctx, sessionRunLockRefreshLua,
+	res := db.Redis.Eval(ctx, sessionRunLockRenewLua,
 		[]string{key}, runToken, int(agentRunLockTTL.Seconds()))
 	if resErr := res.Err(); resErr != nil {
-		slog.Debug("refresh session run lock failed", "session_id", sessionID, "error", resErr)
-		return false
+		return "lost", resErr
 	}
-	n, _ := res.Int()
-	return n == 1
+	n, convErr := res.Int()
+	if convErr != nil {
+		return "lost", convErr
+	}
+	switch n {
+	case 1:
+		return "renewed", nil
+	case -1:
+		// 锁消失（心跳曾中断 / Redis 抖动后 TTL 到期）：run 仍存活时夺回。
+		rec := db.Redis.Eval(ctx, sessionRunLockReclaimLua,
+			[]string{key}, runToken, int(agentRunLockTTL.Seconds()))
+		if rec.Err() != nil {
+			return "lost", rec.Err()
+		}
+		if got, _ := rec.Int(); got == 1 {
+			slog.Warn("session run lock was lost to expiry and has been reclaimed",
+				"session_id", sessionID)
+			return "renewed", nil
+		}
+		return "lost", nil
+	default:
+		return "lost", nil
+	}
 }
 
 // releaseSessionRunLock compare-and-del 释放（仅当锁仍属于本次 runToken）。
@@ -122,8 +157,12 @@ func releaseSessionRunLock(ctx context.Context, key, runToken string) error {
 // StartSessionRunLockHeartbeat 启动 run 锁续期心跳，返回**幂等**的停止函数。
 //
 // 与 AcquireSessionRunLock 配套：TTL 只有 5 分钟，长于它的 run 必须续期。停止条件有三个 ——
-// ctx 结束、显式 stop、续期失败（锁已易主/已过期）。**只在持有锁的分支调用**；返回的 stop
-// 必须在 **run 自己的 goroutine** 里 defer（在 HTTP handler 里 defer 会在响应返回时立刻停掉心跳）。
+// ctx 结束、显式 stop、锁被**其它 token** 持有（真易主）。**Redis 瞬时故障不停止**：
+// 一次抖动就弃用心跳会把"崩溃后可重试"扩大成"活着也得重新排队"，甚至制造同会话双 runtime
+// 的窗口（锁中途过期而 run 还在跑），所以错误只记日志、下一拍重试；键消失时
+// RefreshSessionRunLock 会以 NX 安全夺回（绝不覆盖活人的锁）。
+// **只在持有锁的分支调用**；返回的 stop 必须在 **run 自己的 goroutine** 里 defer
+// （在 HTTP handler 里 defer 会在响应返回时立刻停掉心跳）。
 //
 // 统一放在这里而不是各 handler 各写一份：`/submit` 与 `/v1/agent/followup` 都要这把锁，
 // 两份实现必然漂移（followup 此前就**完全没有**心跳，锁会在运行中途过期）。
@@ -143,8 +182,14 @@ func StartSessionRunLockHeartbeat(ctx context.Context, sessionID, runToken strin
 			case <-stop:
 				return
 			case <-ticker.C:
-				if !RefreshSessionRunLock(ctx, sessionID, runToken) {
-					slog.Warn("session run lock heartbeat stopped: lock lost or expired",
+				state, err := RefreshSessionRunLock(ctx, sessionID, runToken)
+				if err != nil {
+					slog.Warn("session run lock heartbeat refresh failed (retrying next tick)",
+						"session_id", sessionID, "error", err)
+					continue
+				}
+				if state == "lost" {
+					slog.Warn("session run lock heartbeat stopped: lock now held by another owner",
 						"session_id", sessionID)
 					return
 				}
