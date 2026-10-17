@@ -356,7 +356,9 @@ class MemoryService:
 
         返回 ``{created, entry, conflict?, evicted?, duplicate_of?}``：
 
-        - ``conflict``：旧的用户确认值将被派生值覆盖 —— 不直接覆盖，而是登记待裁决。
+        - ``conflict``：旧值是经用户确认的、而这次来的是派生值 —— **不覆盖旧值**，
+          只登记待裁决（返回的 ``entry`` 就是那条没被改动的旧值）。
+          用户确认后走 ``resolve_conflict``（keep_old / adopt_new / manual）。
         - ``evicted``：触达条目上限时淘汰的低价值条目数。
         - ``duplicate_of``：命中的近重复条目（仅提示，不自动合并；合并交给智能整理）。
         """
@@ -378,29 +380,6 @@ class MemoryService:
         confidence = max(0, min(100, int(confidence)))
 
         store = self._require_store()
-        existing = await store.get_by_key(
-            tenant_id, user_id, slot_val, item_key, project=project
-        )
-
-        # 冲突：已确认的值被派生值覆盖。派生值再准也不该悄悄推翻用户确认过的东西，
-        # 所以先登记，等人在记忆页裁决（keep_old / adopt_new / manual）。
-        conflict: dict[str, Any] | None = None
-        if (
-            existing is not None
-            and _source_value(existing.source) == "user_confirmed"
-            and source_val != "user_confirmed"
-        ):
-            conflict = await self._register_conflict(
-                tenant_id=tenant_id,
-                user_id=user_id,
-                slot=slot_val,
-                key=item_key,
-                old_value=existing.item_value,
-                new_value=item_value,
-                source=source_val,
-                project=project,
-            )
-
         embedding = await self._embed(f"{item_key}: {item_value}")
 
         # 近重复提示：写之前先找一次，避免同一件事被记两遍。
@@ -415,7 +394,10 @@ class MemoryService:
                 project=project,
             )
 
-        entry = await store.insert(
+        # 写入与"是否覆盖用户确认值"的判定在**同一条语句**里完成（ProfileStore.upsert_protected）。
+        # 此前是 get_by_key → 判冲突 → insert：两个并发写各自读到"没有旧行"，
+        # 于是既不登记冲突、又把用户确认过的值盖掉 —— 与下面这段承诺正好相反。
+        result = await store.upsert_protected(
             _new_memory_entry(
                 tenant_id=tenant_id,
                 user_id=user_id,
@@ -429,9 +411,23 @@ class MemoryService:
             )
         )
 
+        # 冲突：派生值没能推翻用户确认的值，登记待裁决（keep_old / adopt_new / manual）。
+        conflict: dict[str, Any] | None = None
+        if result.protected:
+            conflict = await self._register_conflict(
+                tenant_id=tenant_id,
+                user_id=user_id,
+                slot=slot_val,
+                key=item_key,
+                old_value=result.entry.item_value,
+                new_value=item_value,
+                source=source_val,
+                project=project,
+            )
+
         resp: dict[str, Any] = {
-            "created": existing is None,
-            "entry": self._entry_dict(entry),
+            "created": result.inserted,
+            "entry": self._entry_dict(result.entry),
         }
         if conflict is not None:
             resp["conflict"] = conflict
@@ -482,7 +478,9 @@ class MemoryService:
                 continue
 
             embedding = await self._embed(f"{key}: {value}")
-            await store.insert(
+            # 与 `upsert` 同一条守卫写入：上面的 get_by_key 只是"同名就跳过"的快速路径，
+            # 并发下候选值若直接用 `insert`，会把用户确认过的值盖掉（派生候选最不该如此）。
+            await store.upsert_protected(
                 _new_memory_entry(
                     tenant_id=tenant_id,
                     user_id=user_id,

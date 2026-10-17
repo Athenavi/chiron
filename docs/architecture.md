@@ -56,7 +56,13 @@
    | 5 | **全局并发信号量** `agentSem.TryAcquire` | 429 |
    | 6 | **租户并发闸门**（`ent_quota_pools`，跨副本） | 429 |
 
+   第 3 步计的是 **token**，不是请求条数：预检按请求体估算预留（`EstimateRequestTokens`，中日韩 1 字≈1 token），
+   预留值经 `WithQuotaReserve` 带进回合，结束时由 `TrueUpTenantQuota` 扣回并换成真实 usage
+   （`submit_handler.go` 的收尾，与 `billing_records` 同口径：input+output）。
+   被第 4~6 步挡下、引擎不可达或命中发送侧幂等的请求**全额退还**预留。
+
    第 4 步顺带起了**锁心跳续期**（60s 一次，TTL 5min）：持有实例崩溃后锁自动过期，用户可重试。
+   子 Agent 自动轮（`POST /v1/agent/followup`）走同一套闸门与预留-校正，只是身份来自队列载荷。
 
 7. **立即返回 202**（`{"status":"accepted","session_id":…}`），真正的执行在后台 goroutine 里，且用 `context.WithoutCancel(r.Context())` + 独立超时（`AGENT_SUBMIT_TIMEOUT`，兜底 300s）—— 否则客户端断开会把整条链路取消。
 

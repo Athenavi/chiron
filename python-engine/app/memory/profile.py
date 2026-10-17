@@ -1,6 +1,6 @@
 """L2 档案卡持久层 — user_memory_entries 表的 asyncpg CRUD。
 
-- 槽位级 upsert（UNIQUE(tenant_id, user_id, slot, item_key)）
+- 槽位级 upsert（UNIQUE(tenant_id, user_id, project, slot, item_key)）
 - embedding 以 JSONB 文本存取（asyncpg 默认 codec 下 JSONB 进出为 str，写 json.dumps / 读 json.loads）
 - 所有方法显式携带 tenant_id/user_id，行级租户隔离
 """
@@ -11,7 +11,7 @@ import builtins
 import json
 import logging
 import uuid
-from typing import Any
+from typing import Any, NamedTuple
 
 from app.memory.layers import MemoryEntry
 
@@ -21,6 +21,19 @@ _COLUMNS = (
     "id, tenant_id, user_id, slot, item_key, item_value, confidence, source, "
     "embedding, access_count, last_accessed_at, status, created_at, updated_at, project"
 )
+
+
+class UpsertResult(NamedTuple):
+    """``upsert_protected`` 的结果三元组。
+
+    * ``entry``：写入后的**最终行**（被守卫拦下时是原封不动的旧行）；
+    * ``inserted``：本次是新建（True）还是覆盖已有行（False）；
+    * ``protected``：True = 守卫拦下了写入（旧值是用户确认过的，本次来的是派生值）。
+    """
+
+    entry: MemoryEntry
+    inserted: bool
+    protected: bool
 
 
 def _to_jsonb(value: Any) -> Any:
@@ -174,6 +187,62 @@ class ProfileStore:
             entry.project,
         )
         return _row_to_entry(row)
+
+    async def upsert_protected(self, entry: MemoryEntry) -> UpsertResult:
+        """一条语句完成"读—判—写"：**派生值不得覆盖用户确认过的值**。
+
+        与 `insert` 的差别只在 `ON CONFLICT … DO UPDATE … WHERE` 的守卫：守卫不成立时
+        UPDATE 影响 0 行、`RETURNING` 无输出 —— 于是回读原行并按"未写入"上报，
+        调用方据此登记待裁决冲突。
+
+        为什么把判定放进 SQL：此前 `upsert` 是 `get_by_key` → 据此决定是否登记冲突 → `insert`。
+        两个并发写会各自读到"没有旧行"，既不登冲突又把用户确认的值悄悄盖掉 ——
+        与 `MemoryService.upsert` 自己承诺的"不直接覆盖，登记待裁决"正好相反。
+        `created` 同理改由 `(xmax = 0)` 判定（PostgreSQL 区分 ON CONFLICT 走了
+        INSERT 还是 UPDATE 分支的标准手法），不再依赖那次有竞态的预读。
+        """
+        emb = json.dumps(entry.embedding) if entry.embedding else None
+        row = await self._pool.fetchrow(
+            "INSERT INTO user_memory_entries "
+            "(id, tenant_id, user_id, slot, item_key, item_value, confidence, source, "
+            "embedding, status, project) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) "
+            "ON CONFLICT (tenant_id, user_id, project, slot, item_key) DO UPDATE SET "
+            "item_value=EXCLUDED.item_value, confidence=EXCLUDED.confidence, "
+            "source=EXCLUDED.source, embedding=EXCLUDED.embedding, "
+            "status='active', updated_at=NOW() "
+            # 守卫：旧值是用户确认的、而这次来的是派生值 ⇒ 不写。
+            # 反过来（派生 → 用户确认、用户确认 → 用户确认）照写。
+            "WHERE user_memory_entries.source <> 'user_confirmed' "
+            "   OR EXCLUDED.source = 'user_confirmed' "
+            f"RETURNING {_COLUMNS}, (xmax = 0) AS inserted",
+            entry.id,
+            entry.tenant_id,
+            entry.user_id,
+            entry.slot,
+            entry.item_key,
+            _to_jsonb(entry.item_value),
+            entry.confidence,
+            entry.source,
+            emb,
+            entry.status,
+            entry.project,
+        )
+        if row is not None:
+            return UpsertResult(
+                entry=_row_to_entry(row), inserted=bool(row["inserted"]), protected=False
+            )
+
+        existing = await self.get_by_key(
+            entry.tenant_id, entry.user_id, entry.slot, entry.item_key, project=entry.project
+        )
+        if existing is not None:
+            return UpsertResult(entry=existing, inserted=False, protected=True)
+
+        # 守卫拦下、回读却已经没有这一行 ⇒ 极小概率的并发删除。此时按普通写入落库即可
+        # （没有需要保护的用户确认值了）。
+        created = await self.insert(entry)
+        return UpsertResult(entry=created, inserted=True, protected=False)
 
     async def update(
         self,

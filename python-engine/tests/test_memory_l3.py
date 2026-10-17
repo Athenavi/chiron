@@ -285,7 +285,7 @@ class TestServiceL3:
 # ── 冲突检测与裁决 ────────────────────────────────────────
 
 class TestConflictDetection:
-    async def test_upsert_creates_conflict_when_user_confirmed_overwritten_by_derived(self):
+    async def test_upsert_conflict_when_derived_blocked_by_user_confirmed(self):
         svc = _profile_svc()
         # 先用 user_confirmed 设一个值
         await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
@@ -296,6 +296,18 @@ class TestConflictDetection:
         assert result["conflict"]["old_value"] == "上海"
         assert result["conflict"]["new_value"] == "北京"
         assert result["conflict"]["status"] == "pending"
+        # **旧值没被改写**：裁决前派生值不得悄悄推翻用户确认过的东西
+        # （此前这里是"先盖掉再登记"，`keep_old` 只是把已经丢了的东西捡回来）。
+        assert result["entry"]["value"] == "上海"
+        stored = await svc._store.get_by_key("t1", "u1", "fact", "city")
+        assert stored.item_value == "上海"
+
+    async def test_upsert_created_distinguishes_insert_from_update(self):
+        svc = _profile_svc()
+        first = await svc.upsert("t1", "u1", "fact", "city", "上海", source="user_confirmed")
+        again = await svc.upsert("t1", "u1", "fact", "city", "北京", source="user_confirmed")
+        assert first["created"] is True
+        assert again["created"] is False
 
     async def test_upsert_no_conflict_when_both_user_confirmed(self):
         svc = _profile_svc()

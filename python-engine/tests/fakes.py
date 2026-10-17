@@ -194,6 +194,35 @@ class InMemoryProfileStore:
         self.by_id[entry.id] = entry
         return entry
 
+    async def upsert_protected(self, entry):
+        """与真实 `ProfileStore.upsert_protected` **同一组语义**（守卫 + 三个返回值）。
+
+        真实实现把"派生值盖不掉用户确认值"的判定放进 SQL（`ON CONFLICT … WHERE`）；
+        这里用等价的 Python 判定。两份必须同步：`MemoryService.upsert` 的冲突登记、
+        `created` 与返回的 `entry` 全依赖这三个值 —— 假件少了守卫，测试就测不到这条不变量。
+        """
+        from app.memory.profile import UpsertResult
+
+        existing = self.by_key.get(
+            self._key(
+                entry.tenant_id,
+                entry.user_id,
+                entry.slot,
+                entry.item_key,
+                _project_of(entry),
+            )
+        )
+        old_source = str(getattr(existing, "source", "") or "") if existing else ""
+        guarded = (
+            existing is not None
+            and old_source == "user_confirmed"
+            and str(entry.source or "") != "user_confirmed"
+        )
+        if guarded:
+            return UpsertResult(entry=existing, inserted=False, protected=True)
+        row = await self.insert(entry)
+        return UpsertResult(entry=row, inserted=existing is None, protected=False)
+
     async def update(
         self,
         tenant_id,

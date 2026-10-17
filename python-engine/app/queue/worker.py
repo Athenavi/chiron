@@ -863,6 +863,7 @@ class QueueWorker:
             payload.get("initial_state") or {},
             payload.get("user_id", ""),
             self._gateway,
+            tenant_id=payload.get("tenant_id", "") or "",
         )
         logger.info("workflow_run done: instance=%s", instance_id)
 
