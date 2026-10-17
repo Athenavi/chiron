@@ -69,6 +69,33 @@ async def test_disabled_lease_keeps_single_instance_semantics():
     assert await lease.read_tools("u1") == []
 
 
+class _ErroringRedis:
+    """Redis 抖动的最小模拟：一切命令抛异常。"""
+
+    async def eval(self, *args: Any, **kwargs: Any) -> Any:
+        raise ConnectionError("redis blip")
+
+
+async def test_acquire_defers_on_redis_blip():
+    """P0-4 回归：Redis 故障时**不得**"视作自己持有"。
+
+    退化自持会让所有实例在抖动期间同时建连（正是要消除的放大），且各实例都以为
+    自己是 owner，跨实例转发语义失效。宁可本轮无人接管。
+    """
+    lease = MCPOwnerLease(_ErroringRedis(), "inst-a", 60)
+    assert await lease.acquire("u1") is False
+
+
+async def test_renews_reports_unknown_not_lost_on_blip():
+    """续期遇到 Redis 故障返回 None（未知）而非 False（确证易主）。
+
+    调用方（pool）据此**保留** owner 身份 —— 一次抖动就放弃会把 90s 租约白白让给
+    别的实例（连接整体搬迁 + 转发窗口）。
+    """
+    lease = MCPOwnerLease(_ErroringRedis(), "inst-a", 60)
+    assert await lease.renew("u1") is None
+
+
 async def test_bridge_without_redis_fails_loudly():
     """无 Redis 时调用必须**显式报错** —— 不能返回空结果让 LLM 基于错误继续。"""
     bridge = MCPBridge(None, "inst-a", _echo_handler)

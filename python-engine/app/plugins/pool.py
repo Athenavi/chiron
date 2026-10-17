@@ -237,10 +237,13 @@ class MCPClientPool:
             for uid in list(self._owned_users):
                 if uid in owned:
                     continue
-                if await self._lease.renew(uid):
-                    owned.add(uid)  # 仍持有：续期待到下一轮
-                else:
+                state = await self._lease.renew(uid)
+                if state is False:
+                    # 确证易主才放弃；Redis 抖动（None）保留身份等下一轮再判 ——
+                    # 一次抖动就 release 会把 90s 的租约白白让给别的实例（连接整体搬迁）。
                     await self._lease.release(uid)
+                else:
+                    owned.add(uid)  # True=续期成功；None=归属未知，维持现状
             dropped = self._owned_users - owned
             if dropped:
                 logger.info("mcp owner lease lost for %d user(s)", len(dropped))
@@ -277,6 +280,11 @@ class MCPClientPool:
             return
         sig = self._store.signature(uid)
         if sig == self._user_sigs.get(uid):
+            # 稳态也要**心跳重发**工具清单：`mcp:tools:{uid}` 带 TTL（与租约同周期），
+            # 只在配置变化时发布会让键过期后"新加入的非 owner 实例"注册不到工具
+            # —— 租约语义只剩半条命（论文 §5.1 P0-4）。
+            if self._lease is not None and self._user_tools.get(uid):
+                await self._publish_manifest_locked(uid)
             return  # 配置无变动
         # 变更：先释放旧的，再按新配置建立
         await self._release_user_locked(uid)
@@ -335,20 +343,28 @@ class MCPClientPool:
         if self._user_tools[uid]:
             logger.info("user %s mcp tools: %d", uid, len(self._user_tools[uid]))
         # owner 公布工具清单（供非 owner 实例注册代理工具）
-        if self._lease is not None and self._user_tools.get(uid):
-            manifest = []
-            for name in self._user_tools[uid]:
-                t = registry.get(name)
-                if t is None:
-                    continue
-                manifest.append(
-                    {
-                        "name": name,
-                        "description": getattr(t, "description", "") or "",
-                        "schema": getattr(t, "parameters", None) or {},
-                    }
-                )
-            await self._lease.publish_tools(uid, manifest)
+        await self._publish_manifest_locked(uid)
+
+    async def _publish_manifest_locked(self, uid: str) -> None:
+        """公布/心跳重发工具清单到 `mcp:tools:{uid}`（键带 TTL，必须周期性重发）。
+
+        只有 owner 会走到这里（非 owner 在入口已转代理工具分支）；租约未启用时是 no-op。
+        """
+        if self._lease is None or not self._user_tools.get(uid):
+            return
+        manifest = []
+        for name in self._user_tools[uid]:
+            t = registry.get(name)
+            if t is None:
+                continue
+            manifest.append(
+                {
+                    "name": name,
+                    "description": getattr(t, "description", "") or "",
+                    "schema": getattr(t, "parameters", None) or {},
+                }
+            )
+        await self._lease.publish_tools(uid, manifest)
 
     async def _release_user_locked(self, uid: str) -> None:
         """移除用户对工具与连接的引用。"""
