@@ -22,8 +22,10 @@ broker 在执行前向 Go 的 Tool Broker 要一次授权（``POST /v1/internal/
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
+from collections import OrderedDict
 from typing import Any
 
 from fastapi import FastAPI, Header, HTTPException
@@ -34,8 +36,21 @@ logger = logging.getLogger("mcp-broker")
 
 app = FastAPI(title="chiron-mcp-broker")
 
-#: user_id → MCPClient（懒加载 + 常驻缓存：MCP 连接本身就是有状态的）
-_clients: dict[str, Any] = {}
+#: user_id → MCPClient（懒加载 + 常驻缓存：MCP 连接本身就是有状态的）。
+#:
+#: 三条约束（论文 §5.1 P0-4 的修复）：
+#: * **有上限**：`MCP_BROKER_MAX_CLIENTS`（默认 128）。无上限时本进程是"按用户只增不减"
+#:   的连接/内存放大点，与引擎侧每实例都有预算的池子（MCP_MAX_USERS_PER_INSTANCE）口径不一；
+#: * **同用户串行建连**：per-user 锁。此前 check-then-set 无锁，并发首调会各建一条连接，
+#:   前一条被覆盖后**无人 close**（凭据连接泄漏给对端 server）；
+#: * **LRU 淘汰**：超上限时关闭最久未用者。正在执行中的调用可能因此失败一次，
+#:   下一次调用会自动重连 —— 与"泄漏无界"相比是可接受的代价，且事件会记日志。
+_clients: "OrderedDict[str, Any]" = OrderedDict()
+_clients_lock = asyncio.Lock()  # 只保护表结构，不做慢 I/O
+_connect_locks: dict[str, asyncio.Lock] = {}  # per-user：串行化"连接+start"慢操作
+
+#: broker 连接缓存上限（部署可据以与引擎侧 MCP 池预算对齐）
+_MAX_CLIENTS = max(int(os.getenv("MCP_BROKER_MAX_CLIENTS", "128")), 1)
 
 
 class ToolListRequest(BaseModel):
@@ -69,25 +84,58 @@ def _check_token(token: str | None) -> None:
 
 
 async def _client_for(user_id: str):
-    """按用户懒加载 MCPClient。
+    """按用户懒加载 MCPClient（双检锁：并发首调只建一条连接）。
 
     ``role="broker"`` 是关键：它是**唯一**被允许持凭据连接危险 server 的角色
     （引擎侧调同一个函数会拿到 PermissionError）。
     """
-    client = _clients.get(user_id)
-    if client is not None:
+    async with _clients_lock:
+        client = _clients.get(user_id)
+        if client is not None:
+            _clients.move_to_end(user_id)
+            return client
+        connect_lock = _connect_locks.setdefault(user_id, asyncio.Lock())
+
+    async with connect_lock:
+        # 等锁期间可能已被并发请求建好 —— 再查一次（双检）
+        async with _clients_lock:
+            client = _clients.get(user_id)
+            if client is not None:
+                _clients.move_to_end(user_id)
+                return client
+
+        from app.mcp.client import MCPClient
+        from app.plugins.pool import _server_to_def
+        from app.plugins.store import PluginStore
+
+        servers = [_server_to_def(server) for server in PluginStore().load(user_id)]
+        client = MCPClient(servers, role="broker")
+        await client.start()
+
+        evicted: list[Any] = []
+        async with _clients_lock:
+            _clients[user_id] = client
+            _clients.move_to_end(user_id)
+            while len(_clients) > _MAX_CLIENTS:
+                evicted_uid, old = _clients.popitem(last=False)
+                _connect_locks.pop(evicted_uid, None)
+                evicted.append(old)
+        logger.info("mcp broker connected %d server(s) for user %s", len(servers), user_id)
+        for old in evicted:
+            _schedule_close(old)
         return client
 
-    from app.mcp.client import MCPClient
-    from app.plugins.pool import _server_to_def
-    from app.plugins.store import PluginStore
 
-    servers = [_server_to_def(server) for server in PluginStore().load(user_id)]
-    client = MCPClient(servers, role="broker")
-    await client.start()
-    _clients[user_id] = client
-    logger.info("mcp broker connected %d server(s) for user %s", len(servers), user_id)
-    return client
+def _schedule_close(client: Any) -> None:
+    """LRU 淘汰后关闭旧连接（失败只记日志）。"""
+
+    async def _close() -> None:
+        try:
+            await client.close()
+        except Exception as exc:  # noqa: BLE001 — 淘汰路径的错误不影响主流程
+            logger.warning("close evicted mcp client failed: %s", exc)
+
+    asyncio.get_running_loop().create_task(_close())
 
 
 def _pick(client, server_name: str):

@@ -98,7 +98,13 @@ class MCPOwnerLease:
         return self._redis is not None
 
     async def acquire(self, user_id: str) -> bool:
-        """抢占 owner（返回是否抢到）。抢不到说明其它实例持有。"""
+        """抢占 owner（返回是否抢到）。抢不到说明其它实例持有。
+
+        Redis 故障时**不视作自己持有**（返回 False）："视作自持"会让多个实例在抖动期间
+        同时建立连接 —— 正是租约要消除的连接放大，且各实例都以为自己是 owner 时，
+        跨实例转发语义整体失效。宁可本轮无人接管：已持有者靠 renew 保住，
+        新用户的 MCP 连接推迟到 Redis 恢复的下一轮再建（轮询 25s，代价一个周期）。
+        """
         if not self.enabled or not user_id:
             return True  # 未启用 → 视作自己持有（保持单实例语义）
         try:
@@ -106,12 +112,17 @@ class MCPOwnerLease:
                 _ACQUIRE_LUA, 1, _owner_key(user_id), self._instance_id, self._ttl
             )
             return int(res) == 1
-        except Exception as exc:  # noqa: BLE001 - Redis 抖动时退化为自己持有
-            logger.warning("mcp owner acquire failed for %s: %s", user_id, exc)
-            return True
+        except Exception as exc:  # noqa: BLE001 - Redis 抖动：本轮不接管
+            logger.warning("mcp owner acquire deferred for %s: %s", user_id, exc)
+            return False
 
-    async def renew(self, user_id: str) -> bool:
-        """续期（仅当自己仍是 owner）。"""
+    async def renew(self, user_id: str) -> bool | None:
+        """续期（仅当自己仍是 owner）。
+
+        三态：True=续期成功；False=**确证**已易主（租约键被别的实例持有）；
+        None=Redis 故障、归属未知。调用方对 None 应保留 owner 身份等下一轮再判 ——
+        一次抖动就放弃会让 TTL 90s 的租约白白丢给别的实例（与运行锁心跳同一课）。
+        """
         if not self.enabled or not user_id:
             return True
         try:
@@ -120,8 +131,8 @@ class MCPOwnerLease:
             )
             return int(res) == 1
         except Exception as exc:  # noqa: BLE001
-            logger.debug("mcp owner renew failed for %s: %s", user_id, exc)
-            return False
+            logger.debug("mcp owner renew errored for %s (keeping): %s", user_id, exc)
+            return None
 
     async def release(self, user_id: str) -> None:
         """释放（仅当自己仍是 owner）。"""
