@@ -147,3 +147,92 @@ class TestCommandWhitelist:
         out = await run_in_sandbox("bash -c 'echo pwned'")
         assert "error" in out
         assert "blocked" in out["error"]
+
+
+class TestPythonCodeLayerGuard:
+    """交给解释器执行的**代码本身**必须过 code_guard。
+
+    逃逸正则与白名单都只看命令文本，所以"代码层"的每条入口都要按来源分别处置：
+    `python -c <code>`（含紧贴/组合开关）、`python <脚本.py>`（读文件内容）、
+    `python -m mod`（源码不在 workspace，只能靠命令层）、`python -`（读 stdin，直接拒）。
+    """
+
+    def test_code_source_follows_python_cli_shape(self):
+        from app.tools.sandbox import _python_code_operand
+
+        # 内联代码：独立、紧贴、组合开关三种形态等价（实测都能跑）
+        assert _python_code_operand(["-c", "print(1)"]) == ("inline", "print(1)")
+        assert _python_code_operand(["-cprint(1)"]) == ("inline", "print(1)")
+        assert _python_code_operand(["-Bc", "print(1)"]) == ("inline", "print(1)")
+        assert _python_code_operand(["-Bcprint(1)"]) == ("inline", "print(1)")
+        # 裸开关没有代码体 ⇒ inline + None（没什么可查，也不该误判成脚本）
+        assert _python_code_operand(["-c"]) == ("inline", None)
+        # 已安装模块：源码不在 workspace
+        assert _python_code_operand(["-m", "json.tool"]) == ("module", "json.tool")
+        assert _python_code_operand(["-mjson.tool"]) == ("module", "json.tool")
+        # 脚本文件：第一个非选项参数才是，之后的都属于脚本自己的 argv
+        assert _python_code_operand(["script.py"]) == ("script", "script.py")
+        assert _python_code_operand(["s.py", "other.py"]) == ("script", "s.py")
+        assert _python_code_operand(["-X", "importtime", "s.py"]) == ("script", "s.py")
+        assert _python_code_operand(["--", "s.py"]) == ("script", "s.py")
+        # -c / -m 之后的一切是 sys.argv，没有 workspace 内的源文件可查
+        assert _python_code_operand(["-c", "print(1)", "extra"]) == ("inline", "print(1)")
+        # 无参数
+        assert _python_code_operand([]) == ("none", None)
+
+    def test_script_argv_is_not_mistaken_for_interpreter_flag(self):
+        """`python parse.py -c x` 里的 `-c` 属于脚本 argv，不是解释器开关。
+
+        误判会拿 `-c` 后面的 `x` 去过静态检查 —— 既漏掉真正执行的 parse.py，
+        又可能对无关字符串误报。
+        """
+        from app.tools.sandbox import _python_code_operand
+
+        assert _python_code_operand(["parse.py", "-c", "import os"]) == ("script", "parse.py")
+
+    def test_stdin_form_is_detected(self):
+        from app.tools.sandbox import _python_code_operand
+
+        assert _python_code_operand(["-"]) == ("stdin", None)
+        assert _python_code_operand(["-", "extra"]) == ("stdin", None)
+
+    @pytest.mark.asyncio
+    async def test_stdin_form_is_blocked(self):
+        """代码从 stdin 流入时命令文本里没有任何可查内容 ⇒ 拒（fail-closed）。"""
+        set_tool_context(session_id="s", user_id="u1", tenant_id="t1", gateway=None)
+        out = await run_in_sandbox("python -")
+        assert "blocked" in out.get("error", ""), out
+
+    @pytest.mark.asyncio
+    async def test_script_file_content_is_guarded(self):
+        from app.tools.sandbox import safe_join
+
+        set_tool_context(session_id="s", user_id="u1", tenant_id="t1", gateway=None)
+        path = safe_join("evil_guard_probe.py")
+        path.write_text("import os\nprint(os.listdir('.'))\n", encoding="utf-8")
+        try:
+            out = await run_in_sandbox("python evil_guard_probe.py")
+            assert "blocked" in out.get("error", ""), out
+            assert "os" in out["error"]
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_benign_script_still_executes(self):
+        from app.tools.sandbox import safe_join
+
+        set_tool_context(session_id="s", user_id="u1", tenant_id="t1", gateway=None)
+        path = safe_join("ok_guard_probe.py")
+        path.write_text("print('script-ok')\n", encoding="utf-8")
+        try:
+            out = await run_in_sandbox("python ok_guard_probe.py")
+            assert "script-ok" in out.get("stdout", ""), out
+        finally:
+            path.unlink(missing_ok=True)
+
+    @pytest.mark.asyncio
+    async def test_unreadable_script_is_blocked_not_skipped(self):
+        """读不到内容 ⇒ 拦下（fail-closed）。"看不见"不能等于"不用查"。"""
+        set_tool_context(session_id="s", user_id="u1", tenant_id="t1", gateway=None)
+        out = await run_in_sandbox("python no_such_file_probe.py")
+        assert "blocked" in out.get("error", ""), out

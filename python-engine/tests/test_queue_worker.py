@@ -70,8 +70,11 @@ class TestHandleRagIndex:
     """rag_index handler：读库内容 → build_document → 状态流转与扣费"""
 
     @staticmethod
-    def _make_pool(doc_rows, kb_status="draft"):
-        """构造 pool：首次 fetchrow 返回 KB 状态（幂等检查），随后返回各文档行"""
+    def _make_pool(doc_rows, kb_status="draft", kb_tenant="t-kb"):
+        """构造 pool：首次 fetchrow 返回 KB 行（幂等检查 + 租户归属），随后返回各文档行
+
+        kb_tenant=None 用来模拟 knowledge_bases.tenant_id 为空（列可空）的历史行。
+        """
         class _Acq:
             """asyncpg Pool.acquire() 的 mock：async with pool.acquire() as conn"""
 
@@ -85,7 +88,9 @@ class TestHandleRagIndex:
                 return False
 
         pool = AsyncMock()
-        pool.fetchrow = AsyncMock(side_effect=[{"status": kb_status}, *doc_rows])
+        pool.fetchrow = AsyncMock(
+            side_effect=[{"status": kb_status, "tenant_id": kb_tenant}, *doc_rows]
+        )
         pool.execute = AsyncMock()
         conn = AsyncMock()
         conn.execute = AsyncMock(return_value="UPDATE 1")  # 扣费防负检查要求返回 UPDATE n
@@ -212,6 +217,62 @@ class TestHandleRagIndex:
             })
         sqls = [c.args for c in pool.execute.await_args_list]
         assert any("status='error'" in s[0] and "parse failed" in s[1] for s in sqls)
+
+    async def test_vectors_and_events_use_the_kb_tenant(self):
+        """写入侧租户只取 KB 行，任务信封里的 tenant 不予采信
+
+        检索侧按 KB 的 tenant_id 过滤向量；构建侧若用别的值打标（信封可被投递方伪造），
+        两边对不上 → 「索引成功但一条也查不到」的假成功，或把向量写进别人的租户。
+        """
+        worker = make_worker()
+        pool, _ = self._make_pool(
+            [{"content": b"hello", "file_type": "txt", "name": "a.txt"}], kb_tenant="t-kb"
+        )
+        fake_builder = MagicMock()
+
+        async def gen():
+            yield {"type": "complete", "chunk_count": 1, "char_count": 5, "page_count": 0}
+
+        fake_builder.build_document.return_value = gen()
+        with patch("app.db.get_pool", return_value=pool), \
+             patch("app.rag.builder.RAGBuilder", return_value=fake_builder), \
+             patch("app.event_bus.emit_event", new=AsyncMock()) as emit:
+            await worker._handle_rag_index({
+                "kb_id": "kb-1", "user_id": "u-1", "tenant_id": "t-envelope",
+                "documents": [{"doc_id": "d-1", "file_type": "txt", "filename": "a.txt"}],
+                "estimated_cost": 1.0,
+            })
+        assert fake_builder.build_document.call_args.kwargs["tenant_id"] == "t-kb"
+        assert emit.await_args.kwargs["tenant_id"] == "t-kb"
+
+    async def test_blank_kb_tenant_normalizes_to_default(self):
+        """KB 行 tenant_id 为 NULL（存量数据）→ 归一到默认租户，与检索侧同规则
+
+        两边都用 `tenant_id or DEFAULT_TENANT_ID`：否则块打上默认租户、查询按空串降级，
+        存量库永远检索不到自己的内容。
+        """
+        from app.config import DEFAULT_TENANT_ID
+
+        worker = make_worker()
+        pool, _ = self._make_pool(
+            [{"content": b"hello", "file_type": "txt", "name": "a.txt"}], kb_tenant=None
+        )
+        fake_builder = MagicMock()
+
+        async def gen():
+            yield {"type": "complete", "chunk_count": 1, "char_count": 5, "page_count": 0}
+
+        fake_builder.build_document.return_value = gen()
+        with patch("app.db.get_pool", return_value=pool), \
+             patch("app.rag.builder.RAGBuilder", return_value=fake_builder), \
+             patch("app.event_bus.emit_event", new=AsyncMock()) as emit:
+            await worker._handle_rag_index({
+                "kb_id": "kb-1", "user_id": "u-1",
+                "documents": [{"doc_id": "d-1", "file_type": "txt", "filename": "a.txt"}],
+                "estimated_cost": 1.0,
+            })
+        assert fake_builder.build_document.call_args.kwargs["tenant_id"] == DEFAULT_TENANT_ID
+        assert emit.await_args.kwargs["tenant_id"] == DEFAULT_TENANT_ID
 
 
 class TestHandleMemorySave:

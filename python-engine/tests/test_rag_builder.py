@@ -243,3 +243,136 @@ class TestQueryPgvector:
             with pytest.raises(ValueError, match="非法表名"):
                 await builder.query_pgvector("kb-1", "query")
         pg.assert_not_awaited()
+
+
+# ── 查询侧租户过滤（S 修复） ────────────────────────────────
+
+
+class RecordingStore:
+    """记录 search 入参的 VectorStore 假实现（走 _query_with_interface 路径）"""
+
+    def __init__(self):
+        self.kwargs: dict = {}
+
+    async def search(self, **kwargs):
+        self.kwargs = kwargs
+        return []
+
+    async def insert(self, *a, **k):  # pragma: no cover - 协议占位
+        return 0
+
+    async def delete(self, *a, **k):  # pragma: no cover
+        return 0
+
+    async def ensure_collection(self, *a, **k):  # pragma: no cover
+        return None
+
+    async def close(self):  # pragma: no cover
+        return None
+
+
+class TestQueryTenantFilter:
+    async def test_pgvector_filters_by_tenant(self):
+        builder = make_builder()
+        builder._get_local_embedding = AsyncMock(return_value=[0.1, 0.2])
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        release = AsyncMock()
+        with patch.object(builder, "_pg_conn", new=AsyncMock(return_value=(conn, release))):
+            await builder.query_pgvector("kb-1", "query", tenant_id="t-1")
+
+        sql, *params = conn.fetch.await_args.args
+        assert "AND tenant_id = $5" in sql
+        assert params == ["kb-1", "[0.10000000,0.20000000]", 0.5, 5, "t-1"]
+
+    async def test_pgvector_without_tenant_keeps_four_params(self):
+        """反查不到租户时才允许不带租户过滤（历史数据 / 纯 Milvus 部署）"""
+        builder = make_builder()
+        builder._get_local_embedding = AsyncMock(return_value=[0.1])
+        conn = AsyncMock()
+        conn.fetch = AsyncMock(return_value=[])
+        release = AsyncMock()
+        with patch.object(builder, "_pg_conn", new=AsyncMock(return_value=(conn, release))):
+            await builder.query_pgvector("kb-1", "query")
+
+        sql, *params = conn.fetch.await_args.args
+        assert "tenant_id" not in sql
+        assert params == ["kb-1", "[0.10000000]", 0.5, 5]
+
+    async def test_interface_path_passes_tenant_expr(self):
+        store = RecordingStore()
+        builder = make_builder(vector_store=store)
+        builder._get_local_embedding = AsyncMock(return_value=[0.1])
+
+        await builder._query_with_interface("5f2a-1", "query", 5, 0.5, tenant_id='t"1')
+
+        # 集合名与写入侧同口径；租户值按 _sanitize_expr 同一纪律转义
+        assert store.kwargs["collection"] == "kb_5f2a_1"
+        assert store.kwargs["filter_expr"] == 'tenant_id == "t\\"1"'
+
+    async def test_interface_path_no_expr_without_tenant(self):
+        store = RecordingStore()
+        builder = make_builder(vector_store=store)
+        builder._get_local_embedding = AsyncMock(return_value=[0.1])
+
+        await builder._query_with_interface("kb-1", "query", 5, 0.5)
+
+        assert store.kwargs["filter_expr"] is None
+
+    async def test_milvus_direct_passes_expr(self):
+        """裸 pymilvus 路径同样要带 tenant expr（此前完全没有过滤）"""
+        searched = {}
+
+        class FakeCollection:
+            def load(self):
+                return None
+
+            def search(self, **kwargs):
+                searched.update(kwargs)
+                return [[]]
+
+        fake_pymilvus = MagicMock()
+        fake_pymilvus.Collection = MagicMock(return_value=FakeCollection())
+
+        builder = make_builder()
+        builder._ensure_milvus = MagicMock()
+        builder._get_local_embedding = AsyncMock(return_value=[0.1])
+        with patch.dict(sys.modules, {"pymilvus": fake_pymilvus}):
+            result = await builder.query_milvus("kb-1", "query", tenant_id="t-1")
+
+        assert result == []
+        assert searched["expr"] == 'tenant_id == "t-1"'
+        assert fake_pymilvus.Collection.call_args.args == ("kb_kb_1",)
+
+    async def test_query_derives_tenant_from_kb_row(self):
+        """调用方没传租户时，用 knowledge_bases 的真实租户兜底而不是裸查"""
+        builder = make_builder()
+        builder.query_milvus = AsyncMock(return_value=[])
+        conn = AsyncMock()
+        conn.fetchrow = AsyncMock(return_value={"tenant_id": "t-derived"})
+        release = AsyncMock()
+        with patch.object(builder, "_pg_conn", new=AsyncMock(return_value=(conn, release))):
+            await builder.query("kb-1", "query")
+
+        assert builder.query_milvus.await_args.kwargs["tenant_id"] == "t-derived"
+        assert conn.fetchrow.await_args.args[1] == "kb-1"
+
+    async def test_query_keeps_explicit_tenant(self):
+        builder = make_builder()
+        builder.query_milvus = AsyncMock(return_value=[])
+        builder._lookup_kb_tenant = AsyncMock(return_value="t-from-db")
+
+        await builder.query("kb-1", "query", tenant_id="t-arg")
+
+        builder._lookup_kb_tenant.assert_not_awaited()
+        assert builder.query_milvus.await_args.kwargs["tenant_id"] == "t-arg"
+
+    async def test_lookup_kb_tenant_swallows_db_failure(self):
+        """反查失败不该让检索整体崩掉；返回空串由调用方降级"""
+        builder = make_builder()
+        with patch.object(
+            builder, "_pg_conn", new=AsyncMock(side_effect=RuntimeError("no pool"))
+        ):
+            assert await builder._lookup_kb_tenant("kb-1") == ""
+        assert await builder._lookup_kb_tenant("") == ""
+

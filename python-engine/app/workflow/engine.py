@@ -292,6 +292,7 @@ async def run_workflow(
     resume_state: dict[str, Any] | None = None,
     resume_done: set[str] | None = None,
     on_node_done: Callable[[dict[str, Any], list[str]], Awaitable[None]] | None = None,
+    user_id: str = "",
 ) -> WorkflowInstance:
     """执行 Workflow（DAG 按拓扑序）。
 
@@ -304,6 +305,9 @@ async def run_workflow(
     instance = WorkflowInstance(
         instance_id=instance_id or f"wf_{uuid.uuid4().hex[:10]}",
         graph_name=graph_json.get("name", "workflow"),
+        # 内存实例也要带归属：`/v1/workflows/{id}/status` 先看内存，没有归属就没法判定
+        # "这条结果是给谁的"（此前该端点任何人拿 ID 都能读别人的执行输出）。
+        user_id=user_id or "",
         state=dict(resume_state if resume_state is not None else (initial_state or {})),
     )
     # 兜底设置工具会话上下文（幂等：不覆盖调用方已设置的 user/tenant）

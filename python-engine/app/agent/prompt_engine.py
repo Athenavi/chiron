@@ -353,6 +353,7 @@ class PromptEngine:
                     query=task.content,
                     top_k=3,
                     threshold=0.5,
+                    tenant_id=task.tenant_id or "",
                 )
             except Exception as exc:
                 # 单个库失败不拖垮其余库：多选场景下不该因为一个坏 id 全盘降级

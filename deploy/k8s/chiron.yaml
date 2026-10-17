@@ -364,10 +364,13 @@ spec:
       volumes:
         - name: sandbox-code
           configMap: { name: chiron-sandbox-code }
-        # ⚠ 验证用 emptyDir：真多副本要让**引擎与沙箱**共享同一份 SANDBOX_ROOT（换成同一条
-        # RWX PVC），否则 agent 在引擎侧写的文件沙箱看不到（与上面 python-engine 的 sandbox 卷同理）。
+        # SANDBOX_ROOT 必须是**与引擎同一条** RWX PVC：否则 agent 在引擎侧用文件工具
+        # 写进 workspace 的内容，沙箱侧看不到 —— run_in_sandbox 读到空目录，任务以
+        # "文件不存在"失败（或被降级路径吞掉）。上面 python-engine 的 sandbox 卷已换成
+        # chiron-shared，这里必须跟上，否则两侧根本不是同一份 workspace。
+        # 同前：kind 自带 local-path 只支持 RWO，本地验证需先装 nfs-server-provisioner。
         - name: sandbox
-          emptyDir: {}
+          persistentVolumeClaim: { claimName: chiron-shared }
         - name: tmp
           emptyDir: {}
 ---

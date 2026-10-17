@@ -210,12 +210,95 @@ def _parse_command(command: str) -> tuple[list[str], str | None]:
     return parts, None
 
 
-def _extract_inline_code(args: list[str]) -> str | None:
-    """从 python 参数中取出 `-c` 的内联代码体（没有则 None）。"""
-    for i, a in enumerate(args):
-        if a == "-c" and i + 1 < len(args):
-            return args[i + 1]
-    return None
+#: CPython 里"开关 + 独立的值 token"形态：漏判会把它的值误认成脚本名
+_PYTHON_VALUE_OPTS = frozenset({"-X", "-W", "--check-hash-based-pycs"})
+
+
+def _python_code_operand(args: list[str]) -> tuple[str, str | None]:
+    """按 CPython 的参数形态判断"要交给解释器执行的代码从哪来"。
+
+    返回 ``("inline", 代码体)`` / ``("script", 脚本路径)`` / ``("module", 模块名)`` /
+    ``("stdin", None)`` / ``("none", None)``。
+
+    三条口径决定静态守卫会不会被绕过：
+      * 紧贴与组合开关**等价** —— 实测 ``-cimport os``、``-Bc "import os"``、
+        ``-mjson.tool`` 都能跑，只匹配独立的 ``-c`` token 会整段跳过守卫；
+      * 只有**第一个**非选项参数才是脚本：``-c`` / ``-m`` 之后的一切是 ``sys.argv``，
+        所以 ``python parse.py -c x`` 里那个 ``-c`` 是脚本自己的参数，不能误判成内联代码；
+      * 带值开关（``-X`` / ``-W``）要连值一起跳过。
+    """
+    index = 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+
+        if arg == "--":
+            for item in args[index:]:
+                if not item.startswith("-"):
+                    return "script", item
+            return "none", None
+        if arg == "-":
+            return "stdin", None
+        if not arg.startswith("-"):
+            return "script", arg
+        if arg.startswith("--"):
+            # 长开关只认 `--opt=value` 形态，值不可能是脚本
+            if arg in _PYTHON_VALUE_OPTS:
+                index += 1
+            continue
+        if arg in _PYTHON_VALUE_OPTS:
+            index += 1  # 跳过它的值，别把 `importtime` 当成脚本
+            continue
+
+        flags = arg.lstrip("-")
+        if not flags:
+            continue
+        # 短开关可组合（-Bc、-OO）：从左往右第一个 c/m 就是代码/模块开关，
+        # 它后面紧贴的一切是值，值空则取下一个 token
+        for pos, ch in enumerate(flags):
+            if ch not in "cm":
+                continue
+            attached = flags[pos + 1 :]
+            if attached:
+                value = attached
+            elif index < len(args):
+                value = args[index]
+                index += 1
+            else:
+                value = ""
+            return ("inline" if ch == "c" else "module"), value or None
+    return "none", None
+
+
+#: 脚本内容检查的体积上限：超过就**拦下**（"读不动"不等于"不用查"）。
+_SCRIPT_INSPECT_MAX_BYTES = 1024 * 1024
+
+
+async def _read_workspace_script(name: str) -> tuple[str | None, str | None]:
+    """读出 workspace 内脚本的文本，供 `check_static` 使用；返回 (内容, 拒绝原因)。
+
+    读不到一律拦下（fail-closed）：静态层唯一的绕过方式就是"让它别看这份代码"，
+    而脚本文件执行正是此前完全没有被检查的那条路（`python 脚本.py` 的内容零检查，
+    逃逸正则只看命令文本）。路径同样过 `safe_join`，越界即拒。
+    """
+    import asyncio
+
+    def _read() -> tuple[str | None, str | None]:
+        try:
+            path = safe_join(name)
+        except ValueError as exc:
+            return None, f"script path rejected: {exc}"
+        if not path.is_file():
+            return None, f"script not found in workspace: {name}"
+        size = path.stat().st_size
+        if size > _SCRIPT_INSPECT_MAX_BYTES:
+            return None, f"script too large to inspect ({size} bytes)"
+        try:
+            return path.read_text(encoding="utf-8"), None
+        except (UnicodeDecodeError, OSError) as exc:
+            return None, f"script not readable as utf-8 source: {exc}"
+
+    return await asyncio.to_thread(_read)
 
 
 def _has_escape(command: str) -> str | None:
@@ -453,22 +536,35 @@ async def _run_in_sandbox_impl(command: str, timeout: int = 120) -> dict[str, An
     prog = args[0]
     rest = args[1:]
 
-    # 第二层半：`python -c "<code>"` 的内联代码体做 AST 静态检查（复用 code_guard，
-    # 与 run_code 工具同一套守卫）。逃逸正则只看**命令文本**，而解释器内部的代码
-    # 不受它约束 —— python 又在白名单里，于是 `python -c` 曾是绕过全部命令层防护的
-    # 直通车（用 chr(47) 拼路径即可避开绝对路径正则读任意文件）。静态检查不是完备
-    # 隔离（可混淆绕过，且 `-m` 仍可加载任意模块），但把门槛抬到与 run_code 一致；
-    # `python -m app.tools._sandbox_worker` 与脚本文件执行不受影响。
+    # 第二层半：交给 python 解释器的**代码本身**做 AST 静态检查（复用 code_guard，
+    # 与 run_code 工具同一套守卫）。逃逸正则与白名单都只看**命令文本**，而解释器内部
+    # 执行的代码不受它们约束 —— python 在白名单里，于是"代码层"曾是绕过全部命令防护的
+    # 直通车。按代码来源四条入口分别处置：
+    #   * inline（`-c`，含紧贴/组合开关 `-cimport os`、`-Bc "import os"`）→ 查代码体；
+    #   * script（`python <脚本.py>`）→ 读文件内容再查；此前脚本内容**完全不检查**，
+    #     先用文件工具把代码写进 workspace 再执行就绕过了整层静态防护；
+    #   * module（`-m`）→ 已安装模块源码不在 workspace，无从检查，仍只有命令层防护；
+    #   * stdin（`python -`）→ 代码根本不出现在命令文本里，直接拒。
+    # 静态检查不是完备隔离（可混淆绕过），但把能查的路都抬到与 run_code 一致的门槛。
     if _normalize_exe(prog) in ("python", "python3"):
-        inline_code = _extract_inline_code(rest)
-        if inline_code is not None:
-            from app.tools.code_guard import check_static
+        from app.tools.code_guard import check_static
 
-            block_reason = check_static(inline_code)
+        kind, operand = _python_code_operand(rest)
+        if kind == "stdin":
+            return {"error": "command blocked: python reads code from stdin, which the sandbox cannot inspect"}
+        code: str | None = None
+        if kind == "inline":
+            code = operand
+        elif kind == "script":
+            if not operand:
+                return {"error": "command blocked: python missing script operand"}
+            code, read_reason = await _read_workspace_script(operand)
+            if code is None:
+                return {"error": f"command blocked: {read_reason}"}
+        if code:
+            block_reason = check_static(code)
             if block_reason:
-                return {
-                    "error": f"command blocked: inline python rejected — {block_reason}"
-                }
+                return {"error": f"command blocked: python code rejected — {block_reason}"}
 
     # 对 git 命令额外限制：禁止 clone/fetch/pull/push 等网络操作，仅允许本地操作
     git_restricted = {"clone", "fetch", "pull", "push", "remote", "submodule", "archive", "ls-remote"}

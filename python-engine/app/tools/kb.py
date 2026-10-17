@@ -3,8 +3,9 @@
 - kb_list：列出当前用户可见的知识库（自有 + public），供 agent 选择检索目标
 - kb_search：在指定知识库内检索（wiki 全文检索 / RAG），返回片段与来源
 
-归属校验：仅允许检索「自己的」或 visibility=public 的知识库（与 API 层一致）。
-当前用户取自工具上下文（agent/对话/工作流运行时已设置）。
+归属校验：自己的 / visibility=public / 同租户共享的三选一才放行，规则与 API 层同源
+（`app.kb_access`，过去这里内联了一份"owner 或 public"的副本，把租户共享的库判给不了）。
+当前用户与租户取自工具上下文（agent/对话/工作流运行时已设置）。
 """
 
 from __future__ import annotations
@@ -12,7 +13,9 @@ from __future__ import annotations
 import logging
 from typing import Any
 
-from app.tools.context import get_user_id
+from app.config import DEFAULT_TENANT_ID
+from app.kb_access import kb_access_allowed, kb_storage_tenant
+from app.tools.context import get_tenant_id, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -39,10 +42,13 @@ async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
     except RuntimeError as e:
         return {"error": str(e)}
 
-    params: list[Any] = [user_id]
-    name_clause = ""
+    params: list[Any] = [user_id, get_tenant_id() or DEFAULT_TENANT_ID]
+    where = (
+        "(user_id = $1 OR visibility = 'public'"
+        " OR (visibility = 'tenant' AND tenant_id = $2))"
+    )
     if query:
-        name_clause = " AND name ILIKE $2"
+        where += f" AND name ILIKE ${len(params) + 1}"
         params.append(f"%{query}%")
     params.append(limit)
 
@@ -50,7 +56,7 @@ async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
         f"""SELECT id, name, COALESCE(description, '') as description, type, visibility,
                    document_count
             FROM knowledge_bases
-            WHERE (user_id = $1 OR visibility = 'public'){name_clause}
+            WHERE {where}
             ORDER BY created_at DESC
             LIMIT ${len(params)}""",
         *params,
@@ -84,12 +90,13 @@ async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
         return {"error": str(e)}
 
     kb_row = await pool.fetchrow(
-        """SELECT id, type, user_id, visibility FROM knowledge_bases WHERE id = $1""",
+        """SELECT id, type, user_id, visibility, tenant_id
+           FROM knowledge_bases WHERE id = $1""",
         kb_id,
     )
     if kb_row is None:
         return {"error": f"knowledge base not found: {kb_id}"}
-    if kb_row["user_id"] != user_id and kb_row["visibility"] != "public":
+    if not kb_access_allowed(kb_row, user_id, get_tenant_id()):
         return {"error": "not authorized to query this knowledge base"}
 
     kb_type = kb_row["type"]
@@ -124,25 +131,26 @@ async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
         ]
         return {"type": kb_type, "results": results}
     else:
-        # RAG 向量检索
+        # RAG 向量检索：走新栈 RAGBuilder（kb_* collection + tenant 过滤）。
+        # 旧 RAGRetriever 查共享 collection 且只按 tenant 收窄，会串读同租户其它库。
         try:
-            from app.rag.retriever import RAGRetriever
-            from app.tools.context import get_tenant_id
+            from app.main import get_gateway
+            from app.rag.builder import RAGBuilder
 
-            retriever = RAGRetriever()
-            tenant_id = get_tenant_id() or "default"
-            hits = await retriever.retrieve(
-                tenant_id=tenant_id,
+            builder = RAGBuilder(llm_gateway=await get_gateway())
+            hits = await builder.query(
+                kb_id=kb_id,
                 query=query,
                 top_k=top_k,
                 threshold=0.45,
+                tenant_id=kb_storage_tenant(kb_row),
             )
             results = [
                 {
-                    "document_id": h.get("document_id", ""),
-                    "chunk_id": h.get("chunk_id", ""),
+                    "document_id": h.get("doc_id", ""),
+                    "chunk_index": h.get("chunk_index", 0),
                     "content": h.get("content", "")[:500],
-                    "score": round(h.get("score", 0.0), 4),
+                    "score": round(float(h.get("score", 0.0)), 4),
                 }
                 for h in hits
             ]

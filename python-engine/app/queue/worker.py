@@ -770,6 +770,7 @@ class QueueWorker:
     ) -> None:
         """分发任务到具体处理器"""
         if task_type == "rag_index":
+            # 不传信封 tenant：租户只从 KB 行反查，避免投递方伪造归属把向量打进别的租户
             await self._handle_rag_index(payload)
         elif task_type == "memory_save":
             await self._handle_memory_save(payload, tenant_id)
@@ -892,8 +893,12 @@ class QueueWorker:
         """处理 RAG 文档索引任务：读库取内容 → RAGBuilder 构建 → 更新文档/KB 状态与扣费
 
         payload: {kb_id, user_id, documents: [{doc_id, file_type, filename}], estimated_cost}
+
+        写入侧租户只认 **KB 行**（不接受任务信封里的 tenant）：检索侧 `query_knowledge_base`
+        按 KB 的租户过滤，两边必须是同一条规则，否则构建成功却一条也查不到。
         """
         from app.db import get_pool
+        from app.kb_access import kb_storage_tenant
         from app.rag.builder import RAGBuilder
 
         kb_id = payload.get("kb_id")
@@ -906,7 +911,7 @@ class QueueWorker:
         pool = get_pool()
         # 幂等：任务级重试/重复投递时 KB 已激活则跳过（避免重复构建与扣费）
         kb = await pool.fetchrow(
-            "SELECT status FROM knowledge_bases WHERE id = $1", kb_id
+            "SELECT status, tenant_id FROM knowledge_bases WHERE id = $1", kb_id
         )
         if kb is None:
             # KB 已被删除（文档应随 CASCADE 清除）——直接失败进 DLQ，不误扣费
@@ -914,6 +919,11 @@ class QueueWorker:
         if kb["status"] == "active":
             logger.info("rag_index 跳过（KB 已激活）: kb_id=%s", kb_id)
             return
+
+        # 这里曾写成 `tenant_id=user_id` —— 把用户 ID 当租户用。向量里的块因此打上
+        # "用户 ID"标签，检索侧却按 KB 的真实租户过滤，两边永远对不上：构建报成功、
+        # 查询返回空，是典型的假成功。
+        kb_tenant = kb_storage_tenant(kb)
 
         builder = RAGBuilder(llm_gateway=self._gateway)
         errors = []
@@ -946,7 +956,7 @@ class QueueWorker:
                     content=bytes(row["content"]),
                     file_type=doc.get("file_type") or row["file_type"] or "txt",
                     filename=doc.get("filename") or row["name"] or doc_id,
-                    tenant_id=user_id or "",
+                    tenant_id=kb_tenant,
                 ):
                     if event.get("type") == "complete":
                         chunk_count = event.get("chunk_count", 0)
@@ -1005,17 +1015,20 @@ class QueueWorker:
             kb_payload = {
                 "kb_id": kb_id,
                 "user_id": user_id,
+                "tenant_id": kb_tenant,
                 "documents": [d.get("doc_id") for d in documents],
                 "doc_count": len(documents),
             }
+            # Webhook 按租户匹配订阅：`tenant_id=user_id` 会把事件投给"user_id 恰好等于
+            # 某个租户 ID"的租户，或落到 default —— 收件人错位的两种都算故障。
             if errors:
                 kb_payload["errors"] = errors[:20]
                 await emit_event(
-                    "knowledge.ingest_error", kb_payload, tenant_id=user_id or "default"
+                    "knowledge.ingest_error", kb_payload, tenant_id=kb_tenant
                 )
             else:
                 await emit_event(
-                    "knowledge.ingest", kb_payload, tenant_id=user_id or "default"
+                    "knowledge.ingest", kb_payload, tenant_id=kb_tenant
                 )
         except Exception as exc:  # noqa: BLE001
             logger.warning("knowledge webhook emit failed: %s", exc)

@@ -567,7 +567,6 @@ export async function searchCapabilities(query: string, limit = 20): Promise<Cap
 export async function createGraph(body: {
   name: string
   graph_json: unknown
-  user_id?: string
 }): Promise<{ id: string; name: string }> {
   const resp = await api.post('/v1/graphs', body)
   return resp.data?.data
