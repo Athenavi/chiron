@@ -98,7 +98,7 @@
 | Agent 派发 | `POST /v1/agents/{id}/run`、`POST /v1/agents/dispatch` | 与对话同构：闸门 + 异步执行 + 事件流 |
 | 审批 / 提问 | `POST /v1/agent/approval`、`POST /v1/agent/answer` | 工具需确认时前端回传布尔/文本，网关转引擎 |
 | RPA 插件桥 | `GET /ws/rpa` | **全站唯一的 WebSocket**（`internal/api/rpa_ws.go`，nginx `location /ws/`）；对话流**不用** WS |
-| 公开分享 | `GET /v1/share/{id}`、`GET /media/s/{assetID}` | 仅 `rlMW`，无登录；内容由分享记录限定 |
+| 公开分享 | `GET /v1/share/{id}`、`GET /media/s/{assetID}` | 仅 `rlMW`，无登录；内容由分享记录限定，且 `expires_at` 必须未过期（缺失/过期 ⇒ 410，见迁移 `0017`）；媒体侧走 S3 预签名 URL |
 
 > 会话流统一为 SSE 是有意为之：`gateway_router.go` 在注册 `/events` 的注释里写明"批 B-3′：下线 /ws/{sessionId} 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 /ws/rpa 保留"。
 

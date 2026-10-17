@@ -3,6 +3,7 @@ from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from fastapi import HTTPException
 
 
 @pytest.fixture
@@ -285,6 +286,7 @@ class TestDocumentUpload:
             "id": "kb-1",
             "status": "active",
             "user_id": "u1",
+            "tenant_id": "t-real",
         })
         mock_pool.execute = AsyncMock(return_value="INSERT 0 1")
 
@@ -309,9 +311,32 @@ class TestDocumentUpload:
         assert mock_pool.execute.call_count == 2
         insert_call = mock_pool.execute.call_args_list[0]
         assert "INSERT INTO knowledge_documents" in insert_call[0][0]
+        # 文档的租户必须跟着**父 KB**：过去恒写 DEFAULT_TENANT_ID，按真实租户过滤的检索
+        # 侧就永远找不到这些文档。
+        assert insert_call[0][2] == "t-real"
         update_call = mock_pool.execute.call_args_list[1]
         assert "UPDATE knowledge_bases" in update_call[0][0]
         assert "document_count" in update_call[0][0]
+
+    async def test_upload_document_falls_back_when_kb_tenant_missing(self, mock_pool):
+        """KB 的 tenant_id 为 NULL（存量行）⇒ 退回默认租户，而不是写出空归属。"""
+        from app.api.knowledge import DEFAULT_TENANT_ID
+
+        mock_pool.fetchrow = AsyncMock(return_value={
+            "id": "kb-1",
+            "status": "active",
+            "user_id": "u1",
+            "tenant_id": None,
+        })
+        mock_pool.execute = AsyncMock(return_value="INSERT 0 1")
+
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            from app.api.knowledge import upload_document
+            await upload_document(
+                kb_id="kb-1", user_id="u1", name="a.txt", file_type="txt", file_size_bytes=1
+            )
+
+        assert mock_pool.execute.call_args_list[0][0][2] == DEFAULT_TENANT_ID
 
     async def test_upload_rejects_building_kb(self, mock_pool):
         """Upload must be rejected when KB status is 'building'."""
@@ -390,6 +415,131 @@ class TestDocumentList:
         assert result["documents"][0]["name"] == "readme.pdf"
         assert result["documents"][1]["id"] == "doc-2"
         assert result["documents"][1]["name"] == "notes.txt"
+
+
+# ═══════════════════════════════════════════════════
+# KB VISIBILITY GATE tests
+# ═══════════════════════════════════════════════════
+
+class TestKbVisibilityGate:
+    """文档/检索/预览三处 gate 必须与列表、详情同口径：自己的 / 公开的 / 同租户的。
+
+    过去这三处写成「不是 owner 就只有 public 放行」，于是 visibility='tenant' 的库
+    对任何租户的任何用户都开放（标题看不到、整篇文档却能整篇读走）；preview 那处
+    还把条件写反（`visibility != 'tenant'` 才拒），等于拒掉公开库、放行租户库。
+    """
+
+    @staticmethod
+    def _kb(**overrides):
+        row = {"id": "kb-1", "user_id": "u-owner", "visibility": "tenant", "tenant_id": "t-1"}
+        row.update(overrides)
+        return row
+
+    async def test_private_kb_denies_non_owner(self, mock_pool):
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(visibility="private"))
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            with pytest.raises(HTTPException) as exc:
+                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
+        assert exc.value.status_code == 403
+        mock_pool.fetch.assert_not_awaited()  # 拒了就不再查文档
+
+    async def test_public_kb_allows_non_owner(self, mock_pool):
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(visibility="public"))
+        mock_pool.fetch = AsyncMock(return_value=[])
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            result = await list_documents("kb-1", user_id="u-stranger", tenant_id="t-2")
+        assert result == {"documents": [], "count": 0}
+
+    async def test_tenant_kb_allows_same_tenant(self, mock_pool):
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
+        mock_pool.fetch = AsyncMock(return_value=[])
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
+        mock_pool.fetch.assert_awaited_once()
+
+    async def test_tenant_kb_denies_other_tenant(self, mock_pool):
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            with pytest.raises(HTTPException) as exc:
+                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-2")
+        assert exc.value.status_code == 403
+
+    async def test_blank_caller_tenant_matches_default_tenant(self, mock_pool):
+        """单租户部署：网关没注入 tenant → 按默认租户比对，仍能共享"""
+        from app.config import DEFAULT_TENANT_ID
+
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id=DEFAULT_TENANT_ID))
+        mock_pool.fetch = AsyncMock(return_value=[])
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            await list_documents("kb-1", user_id="u-stranger", tenant_id="")
+        mock_pool.fetch.assert_awaited_once()
+
+    async def test_null_kb_tenant_is_not_open_to_everyone(self, mock_pool):
+        """存量 NULL 租户的共享库不放行（gate 不会把「归属未知」当成「人人可见」）"""
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id=None))
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            with pytest.raises(HTTPException) as exc:
+                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
+        assert exc.value.status_code == 403
+
+    async def test_owner_reads_own_kb_across_tenants(self, mock_pool):
+        """owner 永远可读：归属判定看 user_id，与调用方租户无关"""
+        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
+        mock_pool.fetch = AsyncMock(return_value=[])
+        from app.api.knowledge import list_documents
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            await list_documents("kb-1", user_id="u-owner", tenant_id="t-9")
+        mock_pool.fetch.assert_awaited_once()
+
+    async def test_query_gate_matches_list_gate(self, mock_pool):
+        """检索侧与文档侧同一判定：跨租户查询直接 403，不触发任何检索"""
+        mock_pool.fetchrow = AsyncMock(
+            return_value={**self._kb(tenant_id="t-1"), "type": "wiki"}
+        )
+        from app.api.knowledge import query_knowledge_base
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            with pytest.raises(HTTPException) as exc:
+                await query_knowledge_base(
+                    "kb-1", user_id="u-stranger", query="x", tenant_id="t-2"
+                )
+        assert exc.value.status_code == 403
+        mock_pool.fetch.assert_not_awaited()
+
+    async def test_preview_gate_allows_public_and_denies_foreign_tenant(self, mock_pool):
+        """preview 的反向条件已修正：公开库非 owner 可预览，跨租户共享库不行"""
+        from app.api.knowledge import preview_document
+
+        doc_row = {
+            "id": "d-1", "knowledge_base_id": "kb-1", "name": "a.txt", "file_type": "txt",
+            "file_size_bytes": 1, "chunk_count": 0, "status": "completed",
+            "error_message": "", "metadata": None, "created_at": datetime(2026, 1, 1),
+        }
+        mock_pool.fetch = AsyncMock(return_value=[])
+
+        def bind(kb_row):
+            async def _fetchrow(sql, *args):
+                return kb_row if "knowledge_bases" in sql else doc_row
+            return AsyncMock(side_effect=_fetchrow)
+
+        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
+            mock_pool.fetchrow = bind(self._kb(visibility="public"))
+            result = await preview_document(
+                "kb-1", "d-1", MagicMock(), user_id="u-stranger", tenant_id="t-2"
+            )
+            assert result["data"]["id"] == "d-1"
+
+            mock_pool.fetchrow = bind(self._kb(tenant_id="t-1"))
+            with pytest.raises(HTTPException) as exc:
+                await preview_document(
+                    "kb-1", "d-1", MagicMock(), user_id="u-stranger", tenant_id="t-2"
+                )
+        assert exc.value.status_code == 403
 
 
 # ═══════════════════════════════════════════════════
@@ -555,6 +705,63 @@ class TestKnowledgeQuery:
 
         assert result["type"] == "wiki"
         assert result["results"] == []
+
+    async def test_query_rag_uses_kb_scoped_builder(self, mock_pool):
+        """RAG 库查询走新栈：按 kb_id + 该库真实租户收窄。
+
+        旧 RAGRetriever 查的是共享 collection，只过滤 tenant_id —— 同租户其它
+        知识库的片段会串进结果，而新栈写进 kb_* 的向量它又读不到。
+        """
+        mock_pool.fetchrow = AsyncMock(return_value={
+            "id": "kb-1", "type": "rag", "user_id": "u1",
+            "visibility": "private", "tenant_id": "t-1",
+        })
+        fake_builder = MagicMock()
+        fake_builder.query = AsyncMock(return_value=[
+            {"id": "v1", "doc_id": "doc-1", "chunk_index": 3,
+             "content": "x" * 600, "score": 0.91234},
+        ])
+
+        with (
+            patch("app.api.knowledge.get_pool", return_value=mock_pool),
+            patch("app.main.get_gateway", new=AsyncMock(return_value=MagicMock())),
+            patch("app.rag.builder.RAGBuilder", return_value=fake_builder),
+        ):
+            from app.api.knowledge import query_knowledge_base
+            result = await query_knowledge_base(
+                kb_id="kb-1", user_id="u1", query="q", top_k=5,
+            )
+
+        kwargs = fake_builder.query.await_args.kwargs
+        assert kwargs["kb_id"] == "kb-1"
+        assert kwargs["tenant_id"] == "t-1"
+        hit = result["results"][0]
+        assert hit["document_id"] == "doc-1"
+        assert hit["chunk_index"] == 3
+        assert len(hit["content"]) == 500
+        assert hit["score"] == 0.9123
+
+    async def test_query_rag_failure_is_visible(self, mock_pool):
+        """检索失败要显式带出 error，不能伪装成"没命中"。"""
+        mock_pool.fetchrow = AsyncMock(return_value={
+            "id": "kb-1", "type": "rag", "user_id": "u1",
+            "visibility": "private", "tenant_id": "t-1",
+        })
+        fake_builder = MagicMock()
+        fake_builder.query = AsyncMock(side_effect=RuntimeError("milvus down"))
+
+        with (
+            patch("app.api.knowledge.get_pool", return_value=mock_pool),
+            patch("app.main.get_gateway", new=AsyncMock(return_value=MagicMock())),
+            patch("app.rag.builder.RAGBuilder", return_value=fake_builder),
+        ):
+            from app.api.knowledge import query_knowledge_base
+            result = await query_knowledge_base(
+                kb_id="kb-1", user_id="u1", query="q", top_k=5,
+            )
+
+        assert result["results"] == []
+        assert "milvus down" in result["error"]
 
 
 # ═══════════════════════════════════════════════════

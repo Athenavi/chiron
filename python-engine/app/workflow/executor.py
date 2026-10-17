@@ -92,6 +92,7 @@ async def execute_with_checkpoint(
             resume_state=resume_state or None,
             resume_done=resume_done or None,
             on_node_done=persist_checkpoint,
+            user_id=user_id or "",
         )
         if instance.status == "completed":
             final_status = "completed"
@@ -128,12 +129,15 @@ async def execute_with_checkpoint(
         wf_payload = {
             "instance_id": instance_id,
             "user_id": user_id,
+            "tenant_id": tenant_id or "",
             "status": final_status,
             "graph_name": (graph_json or {}).get("name", ""),
             "results": json.loads(results_json) if results_json and results_json != "{}" else {},
             "error": error_text or "",
         }
         event_type = "workflow.complete" if final_status == "completed" else "workflow.error"
-        await emit_event(event_type, wf_payload, tenant_id=user_id or "default")
+        # Webhook 按**租户**匹配订阅，这里曾是 `tenant_id=user_id`（同一个冒充口径的漏网处）：
+        # 事件会被投给"user_id 恰好等于某个租户 ID"的那个租户，或落到 default。
+        await emit_event(event_type, wf_payload, tenant_id=tenant_id or "default")
     except Exception as exc:  # noqa: BLE001
         logger.warning("workflow webhook emit failed: %s", exc)

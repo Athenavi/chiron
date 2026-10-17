@@ -17,7 +17,6 @@ import {
 } from '@ant-design/icons-vue'
 import { api, listAgents } from '../api'
 import type { Agent } from '../api'
-import { useAuthStore } from '../stores/auth'
 import { collectBindingUsage } from '../utils/kbUsage'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
@@ -31,13 +30,7 @@ import { setChatPrefill } from '../components/chat/chatPrefill'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
-const authStore = useAuthStore()
 const router = useRouter()
-
- // S 安全：user_id 从 authStore.user 读取（token 已迁至 httpOnly cookie，JS 不可读）
-function getUserIdFromToken(): string | null {
-  return authStore.user?.id || null
-}
 
 function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return ''
@@ -499,8 +492,8 @@ async function saveWorkflow() {
   const payload: Record<string, unknown> = {
     id: workflowId.value || undefined,
     name: workflowName.value,
+    // 归属由网关注入的 ?user_id=（取自 JWT claims）决定，请求体里的 user_id 不被采信
     graph_json: JSON.stringify({ name: workflowName.value, ...graphData }),
-    user_id: getUserIdFromToken() || undefined,
   }
   try {
     const resp = await api.post('/v1/graphs', payload)

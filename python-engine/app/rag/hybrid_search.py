@@ -117,9 +117,14 @@ class HybridRetriever:
         safe_tenant = self._vector_store._sanitize_expr(tenant_id)
         filter_expr = f'kb_id == "{safe_kb}" AND tenant_id == "{safe_tenant}"'
 
+        # 集合名口径必须与写入侧一致（RAGBuilder：kb_<kb_id 的 - 换 _>）。
+        # 此前传裸 kb_id：带连字符的 uuid 过不了 _validate_table_name 直接抛错，
+        # 被下面的 except 吞成空结果 —— 向量腿恒空，混合检索实际只剩全文腿。
+        collection = f"kb_{kb_id.replace('-', '_')}"
+
         try:
             results = await self._vector_store.search(
-                collection=kb_id,
+                collection=collection,
                 query_vector=query_embedding,
                 top_k=top_k,
                 threshold=threshold,

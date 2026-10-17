@@ -295,7 +295,9 @@ async def sweep_once(
     * 运行锁**仍在** ⇒ 旧主活着 ⇒ 跳过（不抢现场）；Redis 不可用时同样跳过；
     * 快照已超**冷窗口** ⇒ `abandoned`（可见，不静默）；
     * 快照在**热窗口**（1h）内 **且** 提供了 `runner` **且** 开关打开 ⇒ 用 CAS 抢占后
-      `runner(task)` **自动续跑**（带 `task_meta` 重建的 task）；
+      `runner(task)` **自动续跑**（带 `task_meta` 重建的 task）；续跑没落地（提前返回/抛错）
+      ⇒ 把 `resuming` 退回 `checkpointed`（指标 `outcome=released`），否则这一行会永久卡死
+      在扫描条件之外；
     * 其余（冷窗口 / 未提供 runner / 开关关闭 / 重建失败）⇒ 标记 `checkpointed`
       （"有快照、无人跑"，等**用户重试**走入口恢复）。
 
@@ -311,6 +313,7 @@ async def sweep_once(
         "abandoned": 0,
         "skipped_alive": 0,
         "contended": 0,
+        "released": 0,
         "failed": 0,
     }
     pool = ckpt._pool()  # noqa: SLF001 — 与 checkpoint 同一池来源（同模块族）
@@ -384,9 +387,35 @@ async def sweep_once(
                             session_id,
                             parsed.get("turn_index"),
                         )
-                        await runner(task)
-                        stats["resumed"] += 1
-                        _count("resumed")
+                        # `claim` 已把行改成 `resuming`，而扫描只看 `running|checkpointed`：
+                        # 续跑没落地（gateway 不可用而提前返回、或抛异常）时**必须把现场还回去**，
+                        # 否则这一行永远卡在 `resuming` —— 巡检不再挑它，用户也看不到任何信号。
+                        # runtime 正常收尾会写终态（M1），届时这条带 token 的条件更新命中 0 行：
+                        # 既不会覆盖跑完的结果，也不会误退一个已被新 run 接管的行。
+                        landed = False
+                        try:
+                            await runner(task)
+                            landed = True
+                        except Exception as exc:  # noqa: BLE001 — 单个续跑失败不影响其余行
+                            stats["failed"] += 1
+                            _count("failed")
+                            logger.warning("reconciler: session=%s 续跑抛错: %s", session_id, exc)
+                        released = await ckpt.mark(
+                            tenant_id=tenant_id,
+                            session_id=session_id,
+                            status=ckpt.STATUS_CHECKPOINTED,
+                            run_token=new_token,
+                        )
+                        if released:
+                            stats["released"] += 1
+                            _count("released")
+                            logger.warning(
+                                "reconciler: session=%s 续跑未落地 → 退回 checkpointed（下轮可重试）",
+                                session_id,
+                            )
+                        elif landed:
+                            stats["resumed"] += 1
+                            _count("resumed")
                         continue
                     # 重建失败：**回落**为"标记可续跑"（不把 run 卡在 resuming）
                     logger.warning(

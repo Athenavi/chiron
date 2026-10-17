@@ -5,6 +5,13 @@ from typing import Any, Self
 from pydantic import model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# 单租户默认租户 ID（与 Go internal/db/seed.go 保持一致）。
+# 放在 config 而不是某个 API 模块里：写入侧（api）与执行侧（queue worker）必须用**同一个**
+# 租户归一化规则，否则向量按 A 打标、检索按 B 过滤，结果是"构建成功但一条也查不到"。
+# 注意 tenant_id 列是**可空**的（迁移 0001），存量 NULL 行匹配不上任何租户条件 ——
+# 所以下游一律写 `tenant_id or DEFAULT_TENANT_ID`，而不是假设它非空。
+DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
+
 
 def _find_env_file() -> str:
     """从引擎代码位置向上探测项目根 .env（引擎可能以任意 cwd 启动）。

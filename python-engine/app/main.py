@@ -2082,6 +2082,7 @@ async def kb_query(
         top_k=body.get("top_k", 5),
         threshold=body.get("threshold", 0.5),
         vector_db=body.get("vector_db", "milvus"),
+        tenant_id=body.get("tenant_id", "") or "",
     )
     return {"success": True, "results": results, "count": len(results)}
 

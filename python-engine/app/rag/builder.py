@@ -13,6 +13,7 @@ from typing import Any
 from app.config import settings
 from app.gateway.router import GatewayRouter
 from app.interfaces.vectorstore import VectorStore
+from app.kb_access import kb_storage_tenant
 
 logger = logging.getLogger(__name__)
 
@@ -680,8 +681,21 @@ class RAGBuilder:
         top_k: int = 5,
         threshold: float = 0.5,
         vector_db: str | None = None,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
-        """查询知识库"""
+        """查询知识库
+
+        S 修复：查询侧必须按 tenant 收窄。两份存储写入时都落了 tenant_id，但查询
+        只按 kb_id 过滤——只要拿到（或猜到）别人的 kb_id，就能读出它的内容。
+        调用方没传 tenant_id 时从 knowledge_bases 反查该库的真实租户；反查不到
+        （纯 Milvus 部署、历史数据）才退化为不带租户过滤，并打警告。
+        """
+        tenant_id = tenant_id or await self._lookup_kb_tenant(kb_id)
+        if not tenant_id:
+            logger.warning(
+                "RAG 查询无租户上下文，退化为仅按 kb_id 过滤: kb_id=%s", kb_id
+            )
+
         if vector_db:
             try:
                 db_type = VectorDBType(vector_db)
@@ -696,18 +710,61 @@ class RAGBuilder:
             db_type = self._vector_db_type
 
         if db_type == VectorDBType.MILVUS:
-            return await self.query_milvus(kb_id, query, top_k, threshold)
+            return await self.query_milvus(
+                kb_id, query, top_k, threshold, tenant_id=tenant_id
+            )
         elif db_type == VectorDBType.PGVECTOR:
-            return await self.query_pgvector(kb_id, query, top_k, threshold)
+            return await self.query_pgvector(
+                kb_id, query, top_k, threshold, tenant_id=tenant_id
+            )
         else:
             raise ValueError(f"不支持的向量数据库: {db_type}")
 
+    async def _lookup_kb_tenant(self, kb_id: str) -> str:
+        """反查知识库所属租户；查询失败返回空串（调用方决定是否降级）。
+
+        行存在但 tenant_id 为 NULL 时返回 DEFAULT_TENANT_ID —— 与写入侧归一化同规则，
+        否则存量库的块被打上默认租户、查询却按"无租户"降级，两边口径又不一致。
+        """
+        if not kb_id:
+            return ""
+        try:
+            conn, release = await self._pg_conn()
+        except Exception as e:
+            logger.warning("RAG 租户反查跳过（数据库不可用）: %s", e)
+            return ""
+        try:
+            row = await conn.fetchrow(
+                "SELECT tenant_id FROM knowledge_bases WHERE id = $1", kb_id
+            )
+        except Exception as e:
+            logger.warning("RAG 租户反查失败 kb_id=%s: %s", kb_id, e)
+            return ""
+        finally:
+            await release(conn)
+        if row is None:
+            return ""
+        return kb_storage_tenant(row)
+
+    @staticmethod
+    def _milvus_eq(field: str, value: str) -> str:
+        """构造 `field == "value"` 表达式片段，转义口径与 stores.base._sanitize_expr 一致"""
+        safe = value.replace('"', '\\"').replace("'", "\\'")
+        return f'{field} == "{safe}"'
+
     async def query_milvus(
-        self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
+        self,
+        kb_id: str,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
         """从 Milvus 查询"""
         if self._vector_store:
-            return await self._query_with_interface(kb_id, query, top_k, threshold)
+            return await self._query_with_interface(
+                kb_id, query, top_k, threshold, tenant_id=tenant_id
+            )
 
         from pymilvus import Collection
 
@@ -724,12 +781,17 @@ class RAGBuilder:
         if not embedding:
             return []
 
+        # collection 按 KB 切分，tenant_id 再收一层：历史数据可能曾把多个租户
+        # 写进同一 collection
+        expr = self._milvus_eq("tenant_id", tenant_id) if tenant_id else None
+
         results = await asyncio.to_thread(
             collection.search,
             data=[embedding],
             anns_field="embedding",
             param={"metric_type": "COSINE", "params": {"nprobe": 10}},
             limit=top_k,
+            expr=expr,
             output_fields=["doc_id", "chunk_index", "content"],
         )
         return [
@@ -746,7 +808,12 @@ class RAGBuilder:
         ]
 
     async def _query_with_interface(
-        self, kb_id: str, query: str, top_k: int, threshold: float
+        self,
+        kb_id: str,
+        query: str,
+        top_k: int,
+        threshold: float,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
         """使用 VectorStore 接口查询"""
         collection = f"kb_{kb_id.replace('-', '_')}"
@@ -763,6 +830,9 @@ class RAGBuilder:
             query_vector=embedding,
             top_k=top_k,
             threshold=threshold,
+            filter_expr=(
+                self._milvus_eq("tenant_id", tenant_id) if tenant_id else None
+            ),
         )
 
         return [
@@ -777,7 +847,12 @@ class RAGBuilder:
         ]
 
     async def query_pgvector(
-        self, kb_id: str, query: str, top_k: int = 5, threshold: float = 0.5
+        self,
+        kb_id: str,
+        query: str,
+        top_k: int = 5,
+        threshold: float = 0.5,
+        tenant_id: str = "",
     ) -> list[dict[str, Any]]:
         """从 PostgreSQL (pgvector) 查询（余弦相似度，与 Milvus 语义对齐）"""
         query_vector = await self._embed_text(query)
@@ -791,6 +866,11 @@ class RAGBuilder:
         except Exception as e:
             logger.error("pgvector 连接失败: %s", e)
             return []
+        # $1=kb_id, $2=向量, $3=阈值, $4=top_k，$5（可选）=tenant_id
+        tenant_clause = "AND tenant_id = $5" if tenant_id else ""
+        params: list[Any] = [kb_id, qv, threshold, top_k]
+        if tenant_id:
+            params.append(tenant_id)
         try:
             rows = await conn.fetch(
                 f"""
@@ -798,14 +878,12 @@ class RAGBuilder:
                        1 - (embedding <=> $2::vector) AS score
                 FROM {table}
                 WHERE knowledge_base_id = $1
+                  {tenant_clause}
                   AND 1 - (embedding <=> $2::vector) >= $3
                 ORDER BY embedding <=> $2::vector
                 LIMIT $4
                 """,
-                kb_id,
-                qv,
-                threshold,
-                top_k,
+                *params,
             )
         except Exception as e:
             logger.error("pgvector 查询失败: %s", e)

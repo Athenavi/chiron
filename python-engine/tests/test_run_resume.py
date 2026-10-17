@@ -193,20 +193,41 @@ def _patch_reconciler(
     lock_held: bool,
     claim_ok: bool = True,
 ) -> tuple[list[tuple[str, str]], list[tuple[str, str, str]]]:
-    """返回 `(marks, claims)`：状态改动与接管 CAS 各记一份，便于断言"走没走接管"。"""
+    """返回 `(marks, claims)`：状态改动与接管 CAS 各记一份，便于断言"走没走接管"。
+
+    fake 同时按**真实 SQL 的前提条件**判定命中与否（活跃状态集合 + `run_token` 归属）。
+    这套恢复状态机的不变量全在条件里 —— fake 若无条件返回 True，"续跑没落地要退回
+    checkpointed"与"终态不能被旁观者覆盖"两类测试就只是在验证"调用发生过"。
+    """
     pool = _FakePool(rows)
     marks: list[tuple[str, str]] = []
     claims: list[tuple[str, str, str]] = []
+    active = {"running", "checkpointed", "resuming"}
+    state: dict[str, tuple[str, str]] = {
+        str(r["session_id"]): (str(r["status"]), str(r.get("run_token") or "")) for r in rows
+    }
 
     async def _mark(*, tenant_id: str, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
         marks.append((session_id, status))
-        return True
+        cur_status, cur_token = state.get(session_id, ("", ""))
+        hit = cur_status in active and (not run_token or cur_token == run_token)
+        if hit:
+            state[session_id] = (status, cur_token)
+        return hit
 
     async def _claim(  # noqa: ANN202
         *, tenant_id: str, session_id: str, expected_run_token: str, new_run_token: str
     ) -> bool:
         claims.append((session_id, expected_run_token, new_run_token))
-        return claim_ok
+        if not claim_ok:
+            return False
+        cur_status, cur_token = state.get(session_id, ("", ""))
+        hit = cur_status in active and (
+            not expected_run_token or cur_token == expected_run_token
+        )
+        if hit:
+            state[session_id] = ("resuming", new_run_token)
+        return hit
 
     async def _get_redis():  # noqa: ANN202
         return _FakeRedis(lock_held)
@@ -295,11 +316,21 @@ async def test_sweep_auto_resumes_within_hot_window(monkeypatch):
     ran: list[Any] = []
 
     async def runner(task: Any) -> None:
+        from app.agent import checkpoint as ckpt
+
         ran.append(task)
+        # 模拟 runtime 收尾写终态（M1）：这就是"续跑落地"的样子
+        await ckpt.mark(
+            tenant_id=task.tenant_id,
+            session_id=task.session_id,
+            status=ckpt.STATUS_COMPLETED,
+            run_token=task.run_token,
+        )
 
     stats = await sweep_once(runner=runner)
 
     assert stats["resumed"] == 1
+    assert stats["released"] == 0, "runtime 已写终态 ⇒ 现场退回的条件更新必须 0 行命中"
     assert len(ran) == 1, "runner 必须被调用（否则就只是标记了一下）"
     task = ran[0]
     assert task.session_id == "s1" and task.tenant_id == "t1"
@@ -307,7 +338,82 @@ async def test_sweep_auto_resumes_within_hot_window(monkeypatch):
     assert task.llm_config == {"model": "m"}, "重建的 task 要带上原 llm_config"
     assert task.content == "", "用户消息已在快照历史里 ⇒ content 置空（不重复追加）"
     assert claims and claims[0][1] == "tok_old", "接管前必须用旧 token 做 CAS"
-    assert marks == [], "接管成功路径不该再改状态（claim 已把它置为 resuming）"
+    assert marks[0] == ("s1", "completed"), "runner 收尾写终态"
+    assert marks[1] == ("s1", "checkpointed"), "sweep 也会试一次退回（真实 SQL 里 0 行命中）"
+    assert stats["released"] == 0, "终态已落 ⇒ 退回不得生效"
+
+
+async def test_sweep_returns_the_scene_when_runner_raises(monkeypatch):
+    """runner 抛错 ⇒ `resuming` 必须退回 `checkpointed`。
+
+    不退，这一行就永远落在扫描条件（`status IN ('running','checkpointed')`）之外：
+    巡检看不见、不再重试，前端也只是长时间无任何信号。
+    """
+    marks, _ = _patch_reconciler(monkeypatch, rows=[_row("running")], lock_held=False)
+
+    async def runner(task: Any) -> None:
+        raise RuntimeError("gateway exploded")
+
+    stats = await sweep_once(runner=runner)
+
+    assert stats["resumed"] == 0 and stats["failed"] == 1
+    assert stats["released"] == 1
+    assert marks == [("s1", "checkpointed")]
+
+
+async def test_sweep_returns_the_scene_when_runner_lands_nothing(monkeypatch):
+    """runner **正常返回但什么都没做**（gateway 不可用时 `_auto_resume_runner` 就是这样）也算没落地。
+
+    指标上 `released` 才是"续跑没落地"的权威计数：`resumed` 只在现场没被退回时才加。
+    """
+    marks, _ = _patch_reconciler(monkeypatch, rows=[_row("running")], lock_held=False)
+
+    async def runner(task: Any) -> None:
+        return None
+
+    stats = await sweep_once(runner=runner)
+
+    assert stats["resumed"] == 0 and stats["released"] == 1
+    assert marks == [("s1", "checkpointed")]
+
+
+async def test_sweep_release_is_scoped_to_the_taken_over_run(monkeypatch):
+    """现场退回必须带上**接管时的 run_token**：这期间同会话若已开新 run，旁观者不能踩。
+
+    状态前提（活跃集合 + token 归属）本身在 `checkpoint.mark` 的 SQL 里，这里钉住
+    "sweep 传了这个归属条件"。
+    """
+    pool = _FakePool([_row("running")])
+
+    async def _get_redis():  # noqa: ANN202
+        return _FakeRedis(False)
+
+    monkeypatch.setattr("app.agent.checkpoint._pool", lambda: pool)
+    monkeypatch.setattr("app.redis_client.get_redis", _get_redis)
+    monkeypatch.setattr("app.agent.resume._metrics", lambda: None)
+
+    new_tokens: list[str] = []
+    mark_calls: list[tuple[str, str, str]] = []
+
+    async def _claim(*, tenant_id: str, session_id: str, expected_run_token: str, new_run_token: str) -> bool:  # noqa: ANN202
+        new_tokens.append(new_run_token)
+        return True
+
+    async def _mark(*, tenant_id: str, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
+        mark_calls.append((session_id, status, run_token))
+        return True
+
+    async def runner(task: Any) -> None:
+        return None  # 落地失败：既不写终态也不抛错
+
+    monkeypatch.setattr("app.agent.checkpoint.claim", _claim)
+    monkeypatch.setattr("app.agent.checkpoint.mark", _mark)
+
+    stats = await sweep_once(runner=runner)
+
+    assert stats["released"] == 1 and stats["resumed"] == 0
+    assert mark_calls == [("s1", "checkpointed", new_tokens[0])], "退回必须以接管 token 为条件"
+
 
 
 async def test_sweep_does_not_auto_resume_in_cold_window(monkeypatch):

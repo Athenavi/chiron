@@ -12,14 +12,13 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, Request
 from pydantic import BaseModel
 
+from app.config import DEFAULT_TENANT_ID
 from app.db import get_pool
+from app.kb_access import kb_access_allowed, kb_storage_tenant
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/kb", tags=["knowledge"])
-
-# 单租户默认租户 ID（与 Go internal/db/seed.go 保持一致；两表 tenant_id 为 NOT NULL）
-DEFAULT_TENANT_ID = "00000000-0000-0000-0000-000000000001"
 
 
 def _now_naive() -> datetime:
@@ -229,6 +228,12 @@ async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> d
     return _serialize_kb(dict(row))
 
 
+def _require_kb_access(kb_row: Any, user_id: str, tenant_id: str, *, action: str) -> None:
+    """KB 可见性 gate —— 规则本体在 `app.kb_access`，与工具层 kb_search 共用一份。"""
+    if not kb_access_allowed(kb_row, user_id, tenant_id):
+        raise HTTPException(status_code=403, detail=f"not authorized to {action} this knowledge base")
+
+
 async def update_knowledge_base(
     kb_id: str,
     user_id: str,
@@ -346,7 +351,7 @@ async def upload_document(
 
     # Verify KB exists and is owned by (or visible to) user
     kb_row = await pool.fetchrow(
-        "SELECT id, status, user_id FROM knowledge_bases WHERE id = $1",
+        "SELECT id, status, user_id, tenant_id FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
     if kb_row is None:
@@ -370,12 +375,15 @@ async def upload_document(
     now = _now_naive()
 
     # Insert the document
+    # 文档的 tenant 取自**父 KB**：过去恒写 DEFAULT_TENANT_ID，于是所有租户的文档都登记在
+    # 默认租户名下，而按真实租户过滤的检索侧永远找不到它们（写入与读取的租户必须同源）。
+    doc_tenant = kb_storage_tenant(kb_row)
     await pool.execute(
         """INSERT INTO knowledge_documents
                (id, tenant_id, knowledge_base_id, user_id, name, file_type, file_size_bytes, status, content, created_at)
            VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)""",
         doc_id,
-        DEFAULT_TENANT_ID,
+        doc_tenant,
         kb_id,
         user_id,
         name.strip(),
@@ -408,21 +416,18 @@ async def upload_document(
     }
 
 
-async def list_documents(kb_id: str, user_id: str) -> dict[str, Any]:
+async def list_documents(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
     """List all documents in a knowledge base."""
     pool = get_pool()
 
     # Verify KB exists and is accessible
     kb_row = await pool.fetchrow(
-        "SELECT id, user_id, visibility FROM knowledge_bases WHERE id = $1",
+        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
     if kb_row is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id and kb_row["visibility"] != "public":
-        raise HTTPException(
-            status_code=403, detail="not authorized to view this knowledge base"
-        )
+    _require_kb_access(kb_row, user_id, tenant_id, action="view")
 
     rows = await pool.fetch(
         """SELECT id, knowledge_base_id, name, file_url, file_type, file_size_bytes,
@@ -629,22 +634,20 @@ async def query_knowledge_base(
     user_id: str,
     query: str,
     top_k: int = 5,
+    tenant_id: str = "",
 ) -> dict[str, Any]:
     """Query a knowledge base using full-text search (wiki) or RAG."""
     pool = get_pool()
 
     # Fetch KB and verify access
     kb_row = await pool.fetchrow(
-        """SELECT id, type, user_id, visibility
+        """SELECT id, type, user_id, visibility, tenant_id
            FROM knowledge_bases WHERE id = $1""",
         kb_id,
     )
     if kb_row is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id and kb_row["visibility"] != "public":
-        raise HTTPException(
-            status_code=403, detail="not authorized to query this knowledge base"
-        )
+    _require_kb_access(kb_row, user_id, tenant_id, action="query")
 
     kb_type = kb_row["type"]
 
@@ -682,35 +685,36 @@ async def query_knowledge_base(
             for row in rows
         ]
     else:
-        # RAG 向量检索
+        # RAG 向量检索。旧栈 RAGRetriever 已下线：它查的是共享 collection
+        # settings.milvus_collection，只按 tenant_id 过滤 —— 既能跨库串读（不认
+        # kb_id），又读不到新栈按 KB 切分的 kb_* collection，Milvus 不可用时还会
+        # 返回 status=indexed 的"假成功"。
         try:
-            from app.rag.retriever import RAGRetriever
+            from app.main import get_gateway
+            from app.rag.builder import RAGBuilder
 
-            retriever = RAGRetriever()
-            # 从 KB 获取 tenant_id
-            tenant_row = await pool.fetchrow(
-                "SELECT tenant_id FROM knowledge_bases WHERE id = $1",
-                kb_id,
-            )
-            tenant_id = tenant_row["tenant_id"] if tenant_row else "default"
-            hits = await retriever.retrieve(
-                tenant_id=tenant_id,
+            builder = RAGBuilder(llm_gateway=await get_gateway())
+            hits = await builder.query(
+                kb_id=kb_id,
                 query=query,
                 top_k=top_k,
                 threshold=0.45,
+                # 过滤值与写入侧同源（upload_document / rag_index worker），
+                # 都走 kb_storage_tenant 的 NULL 归一化，否则存量库稳定检索为空。
+                tenant_id=kb_storage_tenant(kb_row),
             )
             results = [
                 {
-                    "document_id": h.get("document_id", ""),
-                    "chunk_id": h.get("chunk_id", ""),
+                    "document_id": h.get("doc_id", ""),
+                    "chunk_index": h.get("chunk_index", 0),
                     "content": h.get("content", "")[:500],
-                    "score": round(h.get("score", 0.0), 4),
+                    "score": round(float(h.get("score", 0.0)), 4),
                 }
                 for h in hits
             ]
         except Exception as e:
             logger.warning("RAG query failed (kb_id=%s): %s", kb_id, e)
-            results = []
+            return {"type": kb_type, "results": [], "error": f"rag query failed: {e}"}
 
     return {"type": kb_type, "results": results}
 
@@ -865,11 +869,12 @@ async def list_docs(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     """List documents in a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await list_documents(kb_id=kb_id, user_id=user_id)
+    return await list_documents(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
 
 
 @router.post("/{kb_id}/build")
@@ -891,6 +896,7 @@ async def query_kb(
     request: Request,
     body: KBQuery,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     """Query a knowledge base."""
     if not user_id:
@@ -900,6 +906,7 @@ async def query_kb(
         user_id=user_id,
         query=body.query,
         top_k=body.top_k,
+        tenant_id=tenant_id,
     )
 
 
@@ -909,20 +916,20 @@ async def preview_document(
     doc_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     """预览文档内容 — 返回文档元信息及前 N 个分块的内容拼接"""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
 
-    # 验证知识库归属
+    # 验证知识库归属（与列表/详情同一套可见性规则）
     kb_row = await get_pool().fetchrow(
-        "SELECT id, user_id, visibility FROM knowledge_bases WHERE id = $1",
+        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
     if kb_row is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id and kb_row["visibility"] != "tenant":
-        raise HTTPException(status_code=403, detail="access denied")
+    _require_kb_access(kb_row, user_id, tenant_id, action="preview")
 
     pool = get_pool()
     doc_row = await pool.fetchrow(

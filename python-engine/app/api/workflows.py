@@ -31,7 +31,8 @@ class GraphCreateRequest(BaseModel):
     id: str | None = None
     name: str
     graph_json: Any = {}
-    user_id: str | None = None
+    # 故意**不接受** `user_id`：归属只认网关注入的 `?user_id=`（取自 JWT claims）。
+    # 自报的 body 值曾是劫持入口——填成别人的 ID 就能把图写到对方名下、再按同 id 覆盖。
 
 
 class GraphExecuteRequest(BaseModel):
@@ -39,6 +40,23 @@ class GraphExecuteRequest(BaseModel):
     nodes: list[dict[str, Any]] = []
     edges: list[dict[str, Any]] = []
     initial_state: dict[str, Any] = {}
+
+
+def _caller_user_id(user_id: str, *, endpoint: str) -> str:
+    """图/工作流子系统的归属只认 `?user_id=`（由网关从 JWT claims 注入，客户端伪造不了）。
+
+    这一组端点此前**完全没有归属条件**：`workflow_graphs` 只按 `id` 定位、
+    `workflow_instances` 的状态只按 `instance_id` 定位，于是任意登录用户拿到（或猜到）一个
+    ID 就能读别人的图定义、删别人的图、按别人的 ID 覆盖写入，还能轮询到别人的执行输出。
+    身份缺失只可能是"绕过网关的直连"或调用方漏带 ⇒ fail-closed。
+
+    `body.user_id` **不算身份**：那是自报的，攻击者填成受害者的 ID 就能把写入归到对方名下。
+    """
+    if not user_id:
+        raise HTTPException(
+            status_code=403, detail=f"{endpoint} requires an authenticated user_id"
+        )
+    return user_id
 
 
 async def _enqueue_with_retry(
@@ -188,23 +206,17 @@ async def _enqueue_workflow_run(
 
 
 @router.get("/v1/graphs")
-async def list_graphs(user_id: str | None = Query(None, alias="user_id")) -> dict[str, Any]:
-    """List all graphs, optionally filtered by user_id."""
+async def list_graphs(user_id: str = Query("", alias="user_id")) -> dict[str, Any]:
+    """List graphs owned by the authenticated caller（不再有"不带身份就列全库"的分支）。"""
+    owner = _caller_user_id(user_id, endpoint="graph list")
     try:
         pool = get_pool()
-        if user_id:
-            rows = await pool.fetch(
-                """SELECT id, name, COALESCE(user_id::VARCHAR,'') as user_id, graph_json, created_at, updated_at
-                   FROM workflow_graphs WHERE user_id::VARCHAR = $1
-                   ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 100""",
-                str(user_id),
-            )
-        else:
-            rows = await pool.fetch(
-                """SELECT id, name, COALESCE(user_id::VARCHAR,'') as user_id, graph_json, created_at, updated_at
-                   FROM workflow_graphs
-                   ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 100"""
-            )
+        rows = await pool.fetch(
+            """SELECT id, name, COALESCE(user_id::VARCHAR,'') as user_id, graph_json, created_at, updated_at
+               FROM workflow_graphs WHERE user_id::VARCHAR = $1
+               ORDER BY updated_at DESC NULLS LAST, created_at DESC LIMIT 100""",
+            owner,
+        )
         results = [dict(r) for r in rows]
         for r in results:
             if isinstance(r.get("graph_json"), str):
@@ -221,13 +233,12 @@ async def list_graphs(user_id: str | None = Query(None, alias="user_id")) -> dic
 async def create_graph(
     body: GraphCreateRequest, user_id: str = Query("", alias="user_id")
 ) -> dict[str, Any]:
-    """Create or update a graph definition."""
+    """Create or update a graph definition（只能覆盖自己名下的 id）。"""
     import uuid as _uuid
 
-    # 优先使用请求体中的 user_id，再回退到查询参数
-    effective_user_id = body.user_id or user_id
-    if not effective_user_id:
-        raise HTTPException(status_code=400, detail="user_id is required")
+    # 身份只取注入的 query 值：`body.user_id` 是自报的，攻击者填成别人的 ID 就能把行
+    # 写到对方名下（并与"按 id 覆盖"的 ON CONFLICT 合起来变成改写对方的图）。
+    effective_user_id = _caller_user_id(user_id, endpoint="graph create")
 
     graph_id = body.id or f"g-{_uuid.uuid4().hex[:10]}"
     now = datetime.datetime.now(datetime.UTC)
@@ -254,10 +265,12 @@ async def create_graph(
 
     try:
         pool = get_pool()
-        await pool.execute(
+        result = await pool.execute(
             """INSERT INTO workflow_graphs (id, name, user_id, graph_json, created_at, updated_at)
                VALUES ($1, $2, $3, $4, $5, $6)
-               ON CONFLICT (id) DO UPDATE SET name = EXCLUDED.name, graph_json = EXCLUDED.graph_json, updated_at = EXCLUDED.updated_at""",
+               ON CONFLICT (id) DO UPDATE
+                   SET name = EXCLUDED.name, graph_json = EXCLUDED.graph_json, updated_at = EXCLUDED.updated_at
+                 WHERE workflow_graphs.user_id::VARCHAR = EXCLUDED.user_id::VARCHAR""",
             graph_id,
             body.name,
             effective_user_id or None,
@@ -265,6 +278,12 @@ async def create_graph(
             now_db,
             now_db,
         )
+        # 带 `WHERE` 的 ON CONFLICT：撞别人的 id ⇒ 既没插入也没更新（"INSERT 0 0"）。
+        # 不做这个判定，劫持尝试会**静默成功**（响应 200，对方的图却一个字没变）。
+        if result.rsplit(" ", 1)[-1] == "0":
+            raise HTTPException(status_code=409, detail="graph id belongs to another user")
+    except HTTPException:
+        raise
     except Exception as e:
         logger.error("graph insert failed: %s", e)
         raise HTTPException(status_code=500, detail="failed to save graph") from e
@@ -273,14 +292,18 @@ async def create_graph(
 
 
 @router.get("/v1/graphs/{graph_id}")
-async def get_graph(graph_id: str) -> dict[str, Any]:
-    """Get a graph by ID."""
+async def get_graph(
+    graph_id: str, user_id: str = Query("", alias="user_id")
+) -> dict[str, Any]:
+    """Get a graph by ID（非本人 ⇒ 404：不区分"不存在"与"不是你的"，避免探测）。"""
+    owner = _caller_user_id(user_id, endpoint="graph get")
     try:
         pool = get_pool()
         row = await pool.fetchrow(
             """SELECT id, name, COALESCE(user_id,'') as user_id, graph_json, created_at, updated_at
-               FROM workflow_graphs WHERE id = $1""",
+               FROM workflow_graphs WHERE id = $1 AND user_id = $2""",
             graph_id,
+            owner,
         )
         if row:
             record = dict(row)
@@ -300,14 +323,19 @@ async def get_graph(graph_id: str) -> dict[str, Any]:
 
 
 @router.delete("/v1/graphs/{graph_id}")
-async def delete_graph(graph_id: str) -> dict[str, Any]:
-    """Delete a graph by ID."""
+async def delete_graph(
+    graph_id: str, user_id: str = Query("", alias="user_id")
+) -> dict[str, Any]:
+    """Delete a graph by ID（归属条件写进 DELETE，抢删别人的行 ⇒ 404）。"""
     if not graph_id or graph_id.strip() == "":
         raise HTTPException(status_code=400, detail="graph_id is required")
+    owner = _caller_user_id(user_id, endpoint="graph delete")
     try:
         pool = get_pool()
         result = await pool.execute(
-            "DELETE FROM workflow_graphs WHERE id = $1", graph_id
+            "DELETE FROM workflow_graphs WHERE id = $1 AND user_id = $2",
+            graph_id,
+            owner,
         )
         if result == "DELETE 0":
             raise HTTPException(status_code=404, detail="graph not found")
@@ -329,14 +357,17 @@ async def execute_graph(
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     """提交图执行：落库 pending 后后台任务执行，立即返回 instance_id（前端轮询状态）。"""
+    owner = _caller_user_id(user_id, endpoint="graph execute")
     graph_json = None
 
-    # 尝试从 PostgreSQL 加载
+    # 尝试从 PostgreSQL 加载（**只加载自己名下的图**：此前按 id 取，任何人猜到 id 就能用
+    # 别人的图定义起一次执行，结果还写进他自己的历史）
     try:
         pool = get_pool()
         row = await pool.fetchrow(
-            "SELECT graph_json FROM workflow_graphs WHERE id = $1",
+            "SELECT graph_json FROM workflow_graphs WHERE id = $1 AND user_id = $2",
             graph_id,
+            owner,
         )
         if row:
             graph_json = row["graph_json"]
@@ -417,21 +448,16 @@ async def execute_graph(
 
 @router.get("/v1/workflows/instances")
 async def list_instances(user_id: str = Query("", alias="user_id")) -> dict[str, Any]:
-    """持久化的工作流执行历史（按用户）。"""
+    """持久化的工作流执行历史（只列调用者自己的；不带身份不再返回全库）。"""
+    owner = _caller_user_id(user_id, endpoint="instance list")
     try:
         pool = get_pool()
-        if user_id:
-            rows = await pool.fetch(
-                """SELECT id, workflow_id, workflow_name, status, results, COALESCE(error,'') as error, created_at, updated_at
-                   FROM workflow_instances WHERE user_id = $1
-                   ORDER BY created_at DESC LIMIT 100""",
-                user_id,
-            )
-        else:
-            rows = await pool.fetch(
-                """SELECT id, workflow_id, workflow_name, status, results, COALESCE(error,'') as error, created_at, updated_at
-                   FROM workflow_instances ORDER BY created_at DESC LIMIT 100"""
-            )
+        rows = await pool.fetch(
+            """SELECT id, workflow_id, workflow_name, status, results, COALESCE(error,'') as error, created_at, updated_at
+               FROM workflow_instances WHERE user_id = $1
+               ORDER BY created_at DESC LIMIT 100""",
+            owner,
+        )
         out = []
         for r in rows:
             d = dict(r)
@@ -450,10 +476,17 @@ async def list_instances(user_id: str = Query("", alias="user_id")) -> dict[str,
 
 
 @router.get("/v1/workflows/{instance_id}/status")
-async def workflow_status(instance_id: str) -> dict[str, Any]:
-    """获取工作流执行状态（内存实例优先，落库记录回退）。"""
+async def workflow_status(
+    instance_id: str, user_id: str = Query("", alias="user_id")
+) -> dict[str, Any]:
+    """获取工作流执行状态（内存实例优先，落库记录回退；两者都按归属过滤）。
+
+    这里曾是整个工作流子系统最干净的一条越权路径：**没有任何身份参数**，拿到
+    `instance_id` 就能读到别人那次执行的**全部节点输出**。
+    """
+    owner = _caller_user_id(user_id, endpoint="workflow status")
     inst = get_instance(instance_id)
-    if inst:
+    if inst and inst.user_id == owner:
         return {
             "instance_id": inst.instance_id,
             "workflow": inst.graph_name,
@@ -463,12 +496,14 @@ async def workflow_status(instance_id: str) -> dict[str, Any]:
                 for nid, nr in inst.results.items()
             },
         }
+    # 内存里没有/不属于本人 ⇒ 只认落库行（同样带归属条件，两条路都不给别人的结果）。
     try:
         pool = get_pool()
         row = await pool.fetchrow(
             """SELECT id, workflow_name, status, results, COALESCE(error,'') as error
-               FROM workflow_instances WHERE id = $1""",
+               FROM workflow_instances WHERE id = $1 AND user_id = $2""",
             instance_id,
+            owner,
         )
         if row:
             results = row["results"]

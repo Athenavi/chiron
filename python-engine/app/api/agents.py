@@ -148,6 +148,7 @@ async def _workbench_binding(body: AgentDispatchRequest, gateway: Any) -> str:
                 query=body.task,
                 top_k=3,
                 threshold=0.5,
+                tenant_id=body.tenant_id,
             )
             snippets: list[str] = []
             for doc in results or []:
