@@ -121,6 +121,7 @@ testpaths = ["tests"]
 asyncio_mode = "auto"
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "live: 需要真实外部依赖(Redis 等)、但不需要 PostgreSQL 的用例；连不上即自跳过(与 integration 分开门控，避免被 PG autouse fixture 拦下)",
 ]
 
 [tool.mypy]

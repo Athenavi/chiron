@@ -273,7 +273,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
 
     _catalog = provider_catalog()
-    # KeyRing(DR 集中派):管理端密钥的明文环(Redis keyset 镜像)+ env 种子兜底。
+    # KeyRing(DR 集中派 V2):管理端密钥的 Redis 原子池(单键 Lua 取 key)+ env 种子降级兜底。
     # provider 在 key_ring 模式下按活跃 key 轮换调用并上报失败。
     from app.gateway.key_ring import KeyRing
 
