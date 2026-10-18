@@ -203,6 +203,11 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 
 - run 现场状态不迁移：实例故障该 run 中断（只保证「路由到正确实例 + 陈旧审批被拒」）；
 - SSE 跨实例实时通道为 Pub/Sub：断连窗口内的实时事件依赖客户端携带 `Last-Event-ID` 从 Stream 重放；
+- **自动续跑的那一轮是无人值守回合**：reconciler 接管后跑的 runtime 没有 SSE 订阅者、也不在 `_ACTIVE_RUNTIMES` 里，
+  审批与 `ask_user` 都定位不到它。现在它立刻按「拒绝 / 无人应答」fail-closed（理由写进审批审计与工具结果，
+  标记还沿 `profile=remote:*` 的跨实例委派继承），不再每条空等 300s 把该实例整轮巡检钉住；
+  **但用户仍然看不到「这一步需要你确认」** —— 续跑事件不进会话流，要做到可见需要一条「待答审批」的持久化与
+  通知通道（属产品决策，未做）。取证：`python-engine/tests/test_unattended_turn.py`；
 - **PostgreSQL 已外置**（云托管或 DBA 维护，见第 7 节）；**Redis、Milvus、etcd 在 compose 中仍是单点**（且 MinIO/Milvus/etcd 现已默认不启用，仅 `--profile selfhosted-s3` 下才起）：生产需替换为 Sentinel/Cluster、自托管的 S3 后端（如 RustFS / SeaweedFS）、Milvus 集群与多副本 etcd，并配套备份恢复与跨可用区演练。
 
 ### 明确不做的项（技术结论）

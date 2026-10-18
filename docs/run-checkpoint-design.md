@@ -101,7 +101,7 @@ agent_runs.checkpoint = {
 | 非幂等工具**中断在中间** | 保守策略：视为**已完成**，在续跑的首条事件里显式告知"该工具结果可能不完整" | 无法证明"未执行"；宁可少做不漏告知。选项见 §8 |
 | 计费 | 沿用同一 `turn_id`；`usage` 累计写入 checkpoint，续跑只补差额 | 依据：`turns` 表按 turn 一行（`CreateTurn`）、`billing_records` 按 usage 落账 |
 | 提交去重 | 续跑**不新造** `client_msg_id` | 否则绕过 `SET … NX EX` 去重（§1） |
-| 审批/提问 | 未决项随 checkpoint 存；续跑后**不自动重放**，由用户重新确认（前端已有 approval 卡片协议） | 与"陈旧审批被拒"的现有语义一致（部署指南 §10 第一条） |
+| 审批/提问 | 未决项随 checkpoint 存；续跑后**不自动重放**。reconciler 接管出来的那一轮是**无人值守回合**（没有 SSE 订阅者，也不在 `_ACTIVE_RUNTIMES` 里，两个应答端点都定位不到它），所以本轮新触发的审批与 `ask_user` 立刻按"拒绝 / 无人应答"收口，理由写进审批审计与模型看到的工具结果（`149f6a7` + `1644e0d`，测试 `python-engine/tests/test_unattended_turn.py`） | 与"陈旧审批被拒"的现有语义一致（部署指南 §10 第一条）；等下去只是每条 300s 的白等，还会钉住该实例整轮巡检 |
 | **保留期不等式** | `checkpoint_ttl ≤ TASK_IDEMPOTENCY_RETENTION_DAYS`（30 天），且**只有幂等键仍有效时才允许续跑**；超出即 `abandoned` | 幂等表被清理后，同 `task_id` 的 claim 会被当成**新任务**（`app/queue/idempotency.py` 的 claim 语义）→ 必须让 checkpoint 先失效 |
 
 ## 6. 恢复路径
