@@ -158,6 +158,23 @@ UPDATE subagent_runs
 #: 已知局限：子 Agent 若卡在**单个**长工具调用内，步骤时间也会停滞，可能被误判为 lost。
 #: 那个场景由 wall 定时器（app/agent/subagent_runner.py 的 _watch_wall_budget）负责终止，
 #: 不依赖本收口器。
+#:
+#: M15d：收口时**顺手把这一段花掉的 token 补上**。
+#:
+#: `subagent_runs.input_tokens/output_tokens` 只由 `finish_run` 写；进程崩在半路的那一段
+#: 因此永远停在初值 0，而任务线账的 `used` 正是按 `root_run_id` 求和这张表
+#: （见 `line_ledger.py` 的 `LINEAGE_USAGE_SQL`）⇒ **账上少算这一段实际花掉的钱**，
+#: M15b 的闸门与 M15c 的待办都按这个偏小的数字判断，用户看到的"已花"也就是假的。
+#:
+#: 能重建的唯一依据是 `subagent_run_steps`：runner 每处理一条事件都写一行，并把这次 LLM
+#: 调用的 `input_tokens/output_tokens` 记在该行上（累加口径与 run 行的终值同源，见
+#: `subagent_runner.py` 里 `in_tokens += evt.input_tokens` 与同循环内的 `add_step`）。
+#:
+#: 这里是**赋值而不是相加**：这一列的既有值必然是初值 0（只有 `finish_run` 会写它，而写它
+#: 就意味着已经离开 running）。相加会把同一批 token 数两遍。
+#:
+#: 已知偏差（方向仍是**少算**，与线账整体的 fail-open 取向一致）：步骤是**攒批 flush** 的，
+#: 崩溃时缓冲区里那不到 `STEP_FLUSH_SIZE` 条一起丢了，补不回来。
 REAP_STALE_SQL = """
 WITH last_seen AS (
     SELECT r.id,
@@ -168,13 +185,58 @@ WITH last_seen AS (
            ) AS seen_at
       FROM subagent_runs r
      WHERE r.status = 'running'
+),
+doomed AS (
+    SELECT ls.id,
+           (SELECT COALESCE(SUM(s.input_tokens), 0)
+              FROM subagent_run_steps s WHERE s.run_id = ls.id)::bigint  AS in_tokens,
+           (SELECT COALESCE(SUM(s.output_tokens), 0)
+              FROM subagent_run_steps s WHERE s.run_id = ls.id)::bigint  AS out_tokens,
+           (SELECT COUNT(*) FROM subagent_run_steps s WHERE s.run_id = ls.id)::int AS step_rows
+      FROM last_seen ls
+     WHERE ls.seen_at < now() - make_interval(hours => $1::int)
 )
 UPDATE subagent_runs r
    SET status = 'lost', finished_at = now(),
-       error = 'unreaped: 进程未收尾（重启或超时）'
-  FROM last_seen
- WHERE r.id = last_seen.id
-   AND last_seen.seen_at < now() - make_interval(hours => $1::int)
+       error = 'unreaped: 进程未收尾（重启或超时）',
+       input_tokens = d.in_tokens,
+       output_tokens = d.out_tokens,
+       steps = CASE WHEN d.step_rows > COALESCE(r.steps, 0) THEN d.step_rows ELSE r.steps END
+  FROM doomed d
+ WHERE r.id = d.id
+"""
+
+#: M15d：给**已经被别人标成 lost** 的行补账。
+#:
+#: 为什么单独一条：网关的取消路径（`internal/api/subagent_cancel.go` 的 `markRunLost`）在
+#: "没有任何实例认领这条 run"时**立刻**把行写成 `lost`，而它不写 token —— 上面那条收口的
+#: 谓词只认 `status='running'`，因此那一行会**永久**停在 0，再也没人来补。
+#: 把口径留在引擎这一处（两条 SQL 同一个求和形状），比让网关也抄一份求和 SQL 更可查。
+#:
+#: 谓词要求"当前 token 为 0 且步骤求和 > 0" ⇒ 天然幂等：补过一次就不再命中。
+BACKFILL_LOST_USAGE_SQL = """
+WITH zeroed AS (
+    SELECT r.id
+      FROM subagent_runs r
+     WHERE r.status = 'lost'
+       AND COALESCE(r.input_tokens, 0) + COALESCE(r.output_tokens, 0) = 0
+),
+filled AS (
+    SELECT z.id,
+           (SELECT COALESCE(SUM(s.input_tokens), 0)
+              FROM subagent_run_steps s WHERE s.run_id = z.id)::bigint  AS in_tokens,
+           (SELECT COALESCE(SUM(s.output_tokens), 0)
+              FROM subagent_run_steps s WHERE s.run_id = z.id)::bigint  AS out_tokens,
+           (SELECT COUNT(*) FROM subagent_run_steps s WHERE s.run_id = z.id)::int AS step_rows
+      FROM zeroed z
+)
+UPDATE subagent_runs r
+   SET input_tokens = f.in_tokens,
+       output_tokens = f.out_tokens,
+       steps = CASE WHEN f.step_rows > COALESCE(r.steps, 0) THEN f.step_rows ELSE r.steps END
+  FROM filled f
+ WHERE r.id = f.id
+   AND f.in_tokens + f.out_tokens > 0
 """
 
 RUN_FINISH_SQL = """
@@ -184,6 +246,23 @@ UPDATE subagent_runs
        redacted_count = $10, error = $11, finished_at = now()
  WHERE id = $1
 """
+
+#: `RUN_FINISH_SQL` 的 `cost_cents` **恒为 0**（没有任何调用方传过非零值），这是有意的口径，
+#: 不是漏填：引擎侧没有价格表 —— 单价只存在于网关的 `internal/billing/billing.go`
+#: （`BillingConfig.LLMCostPerToken/…PerOutput`，按 1000 token 计"额度"而不是按模型计金额）。
+#: 在下游没有换算的情况下自己填一个数，写进去的就是**假钱**：这条线真正的成本由 Go 侧的
+#: `billing_records.cost_cents`（`observer_enterprise.go` 随扣费事件写入）承担，两边各写一份
+#: 必然对不上。而网关读子 Agent 运行列表时只选 `input_tokens/output_tokens/steps`
+#: （见 `internal/api/subagent_handler.go:269`），并没有消费这一列 ⇒ 保持 0 不会让任何展示出错。
+#: 要金额，去计费侧按那条线的实际模型名换算。
+
+
+def _update_count(result: Any) -> int:
+    """asyncpg 的 ``execute`` 返回 ``"UPDATE n"``；解析失败只影响日志，不影响结果。"""
+    try:
+        return int(str(result).split()[-1])
+    except Exception:  # noqa: BLE001
+        return 0
 
 
 class SubagentRunStore:
@@ -479,7 +558,7 @@ class SubagentRunStore:
             self._degrade("mark_lifecycle", exc)
 
     async def reap_stale_runs(self, *, max_age_hours: int) -> int:
-        """僵尸收口：把"还在 running 但早已超龄"的 run 标记为 ``lost``。
+        """僵尸收口：把"还在 running 但早已超龄"的 run 标记为 ``lost``，并补上它的用量。
 
         为什么需要：进程重启/崩溃后，那些 run 的收尾代码再也不会执行 —— 数据库里会永久
         留一行 ``status='running'``，前端因此**永远显示"运行中"**（假活跃），也会污染
@@ -487,6 +566,12 @@ class SubagentRunStore:
 
         ``lost`` 与 ``cancelled`` 的语义差别很重要：前者是"没收到结果"，后者是"被停掉"。
         只动 ``status='running'`` 的行，绝不触碰任何终态记录。
+
+        M15d 之后还跑第二条语句（``BACKFILL_LOST_USAGE_SQL``）给**已经**是 lost 但 token
+        仍为 0 的行补账 —— 网关的取消路径会立即标 lost 而不写用量，那些行落在上面那条
+        的谓词之外，不补就永久少算。**返回值只含 running→lost 的转移数**：它是"收口器是否
+        在干活"的指标口径，把补账的 UPDATE 数混进去会让计数虚高（补账是幂等的修复动作，
+        不是状态转移）。补账条数单独记日志。
         """
         if not self.available or max_age_hours <= 0:
             return 0
@@ -495,17 +580,26 @@ class SubagentRunStore:
         except Exception as exc:  # noqa: BLE001
             self._degrade("reap_stale_runs", exc)
             return 0
-        # asyncpg 的 execute 返回 "UPDATE n"；解析失败只影响日志，不影响结果
-        count = 0
-        try:
-            count = int(str(result).split()[-1])
-        except Exception:  # noqa: BLE001
-            count = 0
+        count = _update_count(result)
         if count > 0:
             # 收口是**状态转移**（running → lost），必须计入指标 —— 否则
             # "收口器是否在干活"仍然只能靠查 DB。这里不递减 unfinalized：
             # 被收口的 run 由**上一个进程**启动，不在本实例的集合里。
             SUBAGENT_RUN_TERMINAL.labels(status="lost").inc(count)
+        try:
+            backfilled = _update_count(await self._pool.execute(BACKFILL_LOST_USAGE_SQL))
+        except Exception as exc:  # noqa: BLE001
+            # 与收口同一条降级路径：未迁移的库不该在这里抛新错误
+            self._degrade("backfill_lost_usage", exc)
+            backfilled = 0
+        if backfilled > 0:
+            logger.warning(
+                "subagent reaper: backfilled usage on %d lost run(s) from step rows", backfilled
+            )
+            # Redis 的 `used` 镜像**不需要**在这里显式失效：它的 TTL 是
+            # `line_ledger.USED_TTL_SECONDS`（60s），过期后第一次读会按新的 PG 求和回填
+            # （NX 语义，不会复活已删的键）。也就是说闸门最多在一个 TTL 内继续按偏小的
+            # 数字判断 —— 方向仍是"少算"，与线账整体的 fail-open 取向一致。
         return count
 
     async def lineage_usage(self, root_run_id: str, tenant_id: str) -> tuple[int, int] | None:

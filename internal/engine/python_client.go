@@ -539,7 +539,11 @@ type PythonEvent struct {
 	Profile     string         `json:"profile,omitempty"`
 	Status      string         `json:"status,omitempty"`
 	Truncated   bool           `json:"truncated,omitempty"`
-	Usage       map[string]any `json:"usage,omitempty"`
+	// Usage 是子 Agent 自己那一段的用量（`{input_tokens, output_tokens, steps}`），
+	// 只用于展示。**故意不喂给 usageTotals**：子 Agent 的 token 只记进引擎侧的
+	// 任务线账（subagent_runs + run_lineage_ledger，由线账闸门约束），不进租户额度池。
+	// 接线前请看 internal/api/usage_accounting.go 的 withEvent 注释。
+	Usage map[string]any `json:"usage,omitempty"`
 }
 
 // IsConnected checks if any Python engine instance is reachable.

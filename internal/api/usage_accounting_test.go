@@ -29,3 +29,26 @@ func TestUsageEventIsNotCountedIntoRunTotals(t *testing.T) {
 		t.Fatalf("非 usage 事件应照常并入，得到 %+v", got)
 	}
 }
+
+// M15d（方案 2B）：子 Agent 的 token 只进引擎侧的任务线账，**不进租户额度池**。
+//
+// 引擎今天把子 Agent 的用量放在 `subagent.done` 的**嵌套** `usage` 字段里，父帧的扁平
+// `input_tokens/output_tokens` 是 0 —— 所以"不并入"过去只是一个巧合。这一条把它变成契约：
+// 只要事件类型带 `subagent.` 前缀，即便带上了扁平 token 也不许进入这里的累计，
+// 因为它下游就是 `DeductTokens` / `RecordTokenUsage` / `TrueUpTenantQuota`。
+func TestSubagentEventsNeverChargeTheTenantPool(t *testing.T) {
+	for _, et := range []string{"subagent.done", "subagent.text", "subagent.status", "subagent.notice"} {
+		var got usageTotals
+		got = got.withEvent(et, 4000, 900, 120)
+		if got != (usageTotals{}) {
+			t.Fatalf("%s 的用量不得并入租户累计（子 Agent 只记线账），得到 %+v", et, got)
+		}
+	}
+
+	// 前缀判定不能顺手把主对话的终态也挡掉：done 仍要计。
+	var got usageTotals
+	got = got.withEvent("subagent.done", 4000, 900, 0).withEvent("done", 10, 2, 1)
+	if got.input != 10 || got.output != 2 || got.cached != 1 {
+		t.Fatalf("父 turn 的 done 必须照常计入，得到 %+v", got)
+	}
+}

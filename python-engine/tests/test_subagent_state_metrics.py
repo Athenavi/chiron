@@ -25,7 +25,7 @@ from app.observability.metrics import (
     SUBAGENT_RUN_TERMINAL,
     SUBAGENT_RUN_UNFINALIZED,
 )
-from app.subagent.store import SubagentRunStore
+from app.subagent.store import BACKFILL_LOST_USAGE_SQL, REAP_STALE_SQL, SubagentRunStore
 
 
 def _counter(counter, **labels) -> float:
@@ -116,6 +116,100 @@ async def test_reaper_counts_lost_transitions():
     store = SubagentRunStore(_FakePool(update_rows=3))
     assert await store.reap_stale_runs(max_age_hours=2) == 3
     assert _counter(SUBAGENT_RUN_TERMINAL, status="lost") == lost_before + 3
+
+
+class _TwoStatementPool:
+    """M15d：收口器现在发**两条** UPDATE（收口 + 补账），且必须返回不同条数。
+
+    用 `make_interval` 区分：只有收口那条带超龄参数。桩不解释 SQL 语义 ——
+    它只钉住"谁被调用、返回值取哪一条"，真正的求和口径由
+    `tests/test_reap_backfill_db.py` 在真库里判。
+    """
+
+    def __init__(self, reap_rows: int = 3, backfill_rows: int = 7) -> None:
+        self.reap_rows = reap_rows
+        self.backfill_rows = backfill_rows
+        self.sqls: list[str] = []
+        self.args: list[tuple] = []
+        self.fail_backfill = False
+
+    @staticmethod
+    def _is_reap(sql: str) -> bool:
+        return "make_interval" in sql
+
+    async def execute(self, sql, *args):
+        norm = " ".join(sql.split())
+        self.sqls.append(norm)
+        self.args.append(args)
+        if not self._is_reap(sql) and self.fail_backfill:
+            raise RuntimeError("connection lost")
+        return f"UPDATE {self.reap_rows if self._is_reap(sql) else self.backfill_rows}"
+
+    async def fetchrow(self, sql, *args):
+        return None
+
+    async def executemany(self, sql, rows):
+        return None
+
+
+@pytest.mark.asyncio
+async def test_reaper_returns_only_transitions_and_backfills_separately():
+    """补账（幂等修复）不许混进"running→lost 转移数"—— 否则 reaper 指标虚高。"""
+    lost_before = _counter(SUBAGENT_RUN_TERMINAL, status="lost")
+    pool = _TwoStatementPool(reap_rows=3, backfill_rows=7)
+    store = SubagentRunStore(pool)
+
+    assert await store.reap_stale_runs(max_age_hours=2) == 3
+    assert _counter(SUBAGENT_RUN_TERMINAL, status="lost") == lost_before + 3
+    assert len(pool.sqls) == 2, "收口之后必须再发一条补账语句"
+    assert pool.args[0] == (2,) and pool.args[1] == (), "补账是无参的（它按 status 筛，不看年龄）"
+
+
+@pytest.mark.asyncio
+async def test_reaper_backfills_even_with_no_transitions():
+    """网关取消路径标的 lost 行**从来没经过收口**（它一开始就不是 running）。
+
+    补账必须在"这次没有任何僵尸"时照跑，否则那类行永远停在 0 token、任务线账永久少算。
+    """
+    pool = _TwoStatementPool(reap_rows=0, backfill_rows=2)
+    store = SubagentRunStore(pool)
+    assert await store.reap_stale_runs(max_age_hours=2) == 0
+    assert len(pool.sqls) == 2
+
+
+@pytest.mark.asyncio
+async def test_reaper_backfill_failure_does_not_hide_transitions():
+    """补账失败只降级补账：已经发生的收口（和它的指标）不能被一起吞掉。"""
+    lost_before = _counter(SUBAGENT_RUN_TERMINAL, status="lost")
+    pool = _TwoStatementPool(reap_rows=1, backfill_rows=0)
+    pool.fail_backfill = True
+    store = SubagentRunStore(pool)
+
+    assert await store.reap_stale_runs(max_age_hours=2) == 1
+    assert _counter(SUBAGENT_RUN_TERMINAL, status="lost") == lost_before + 1
+    assert store.available, "补账语句失败是这一次的问题，不该把整个 store 标成不可用"
+
+
+def test_reap_sql_fills_usage_from_step_rows():
+    """收口那条 SQL 必须**赋值**（不是相加）补上 token：既有值必然是初值 0，相加会数两遍。"""
+    sql = " ".join(REAP_STALE_SQL.split())
+    assert "input_tokens = d.in_tokens" in sql
+    assert "output_tokens = d.out_tokens" in sql
+    assert "input_tokens + r.input_tokens" not in sql, "赋值而不是相加：相加会把同一批 token 数两遍"
+    # 步骤求和是唯一的重建依据；收口仍只动 running
+    assert "subagent_run_steps" in sql
+    assert "r.status = 'running'" in sql, "收口只动 running，绝不触碰任何终态行"
+
+
+def test_backfill_sql_is_idempotent_by_predicate():
+    """补账靠"当前为 0 且步骤和 > 0"收敛：写过的行下次不再命中（否则每次收口都重写）。"""
+    sql = " ".join(BACKFILL_LOST_USAGE_SQL.split())
+    assert "r.status = 'lost'" in sql
+    assert "COALESCE(r.input_tokens, 0) + COALESCE(r.output_tokens, 0) = 0" in sql
+    assert "f.in_tokens + f.out_tokens > 0" in sql
+    set_clause = sql.split("UPDATE subagent_runs r SET", 1)[1].split(" FROM filled", 1)[0]
+    for frozen in ("status", "finished_at", "error"):
+        assert frozen not in set_clause, f"补账不许改动 {frozen}：那是网关已经定的终态"
 
 
 @pytest.mark.asyncio
