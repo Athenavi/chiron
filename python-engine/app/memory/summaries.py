@@ -1,8 +1,15 @@
-"""L3 摘要持久层 — memory_summaries 表的 asyncpg CRUD + Milvus 向量双写。
+"""L3 摘要持久层 — memory_summaries 表的 asyncpg CRUD + 嵌入向量。
 
-- PG 存正文/元数据/运维字段；Milvus memory_store collection 存嵌入向量
+- PG 存正文/元数据/运维字段，**也存向量**（`embedding float8[]`，迁移 0019）：向量是判重与
+  语义召回的唯一数据来源，只活在外部库里就等于降级模式下没有这一层
+- Milvus 只是**可选镜像**：`MEMORY_VECTOR_BACKEND=milvus` 时才写（默认 pg 时不写，
+  因为没人会去查它）
 - content_hash 精确去重（PG 唯一索引拦截）
 - 租户行级隔离：所有查询携带 tenant_id/user_id
+
+投影口径与 M12 一致：**向量只在真要算相似度的那条路上取**。`_COLUMNS` 不含 embedding，
+`list_active(with_embedding=True)` 才走 `_COLUMNS_WITH_VECTOR` —— 记忆面板列 50 条摘要
+不该为此反序列化 50×1536 个浮点数。
 """
 
 from __future__ import annotations
@@ -12,10 +19,10 @@ import json
 import logging
 import time
 import uuid
-from datetime import UTC, datetime
 from typing import Any
 
 from app.memory.layers import SummaryEntry
+from app.memory.vector_backend import MILVUS, FailureLog, parse_vector, resolve
 
 logger = logging.getLogger(__name__)
 
@@ -24,6 +31,9 @@ _COLUMNS = (
     "turn_start, turn_end, content_hash, access_count, last_accessed_at, "
     "status, created_at"
 )
+
+# 只有近重复扫描这一条路需要向量，所以它单独一个投影而不是给所有读路径都带上列。
+_COLUMNS_WITH_VECTOR = f"{_COLUMNS}, embedding"
 
 
 def new_summary_id() -> str:
@@ -61,15 +71,18 @@ def _row_to_entry(row: Any) -> SummaryEntry:
         last_accessed_at=row["last_accessed_at"],
         status=row["status"],
         created_at=row["created_at"],
+        # 未选这一列的投影返回 None（"这条只能按时间参与召回"），不是空向量。
+        embedding=parse_vector(row.get("embedding")),
     )
 
 
 class SummaryStore:
-    """memory_summaries 表 + Milvus memory_store 双写。"""
+    """memory_summaries 表（含向量列）+ 可选 Milvus 镜像。"""
 
     def __init__(self, pool: Any, milvus_collection: Any = None) -> None:
         self._pool = pool
         self._milvus_collection = milvus_collection
+        self._milvus_fail = FailureLog("Milvus 摘要写入")
 
     def _get_milvus(self) -> Any:
         """延迟获取 Milvus collection（与 MemoryManager 同模式）。"""
@@ -89,30 +102,36 @@ class SummaryStore:
             connections.connect(alias="memory", host=host, port=port)
             self._milvus_collection = Collection("memory_store", using="memory")
             self._milvus_collection.load(using="memory")
+            self._milvus_fail.success()
         except Exception as e:
-            logger.warning("Milvus not available for summaries: %s", e)
+            # 不可达要看得见：静默返回 None 的话，症状只是"镜像里没有数据"。
+            self._milvus_fail.failure(str(e))
             self._milvus_collection = None
         return self._milvus_collection
 
     async def insert(
         self, entry: SummaryEntry, embedding: list[float] | None = None
     ) -> SummaryEntry:
-        """插入摘要（PG + Milvus 双写）。content_hash 冲突时返回既有条目。"""
+        """插入摘要。content_hash 冲突时返回既有条目。
+
+        向量**总是**写进 PG（判重与语义召回的数据来源，迁移 0019）；Milvus 只在后端配成
+        milvus 时镜像一份 —— 配成 pg 时没有人查它，写它纯属多一次外部调用。
+        """
         pool = self._pool
         ch = entry.content_hash or compute_hash(
             entry.tenant_id, entry.user_id, entry.content
         )
         topics_json = json.dumps(entry.topics, ensure_ascii=False)
         entities_json = json.dumps(entry.entities, ensure_ascii=False)
-        datetime.now(UTC)
 
         try:
             row = await pool.fetchrow(
                 """INSERT INTO memory_summaries
                    (id, tenant_id, user_id, session_id, content, topics, entities,
                     turn_start, turn_end, content_hash, access_count, last_accessed_at,
-                    status, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active', NOW())
+                    status, created_at, embedding)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active',
+                           NOW(), $11)
                    ON CONFLICT (tenant_id, user_id, content_hash) DO NOTHING
                    RETURNING id""",
                 entry.id,
@@ -125,6 +144,7 @@ class SummaryStore:
                 entry.turn_start,
                 entry.turn_end,
                 ch,
+                list(embedding) if embedding else None,
             )
         except Exception as e:
             logger.error("SummaryStore insert PG failed: %s", e)
@@ -140,11 +160,11 @@ class SummaryStore:
             raise RuntimeError(
                 f"summary insert succeeded but row not found: {entry.id}"
             )
+        # get_by_id 走的是不含向量的投影；向量已经在手上，不必再读一遍 6KB 数组。
+        created.embedding = embedding
 
-        # Milvus 双写（fail-soft：失败只警告，PG 已有数据）
-        if embedding:
+        if embedding and resolve() == MILVUS:
             await self._milvus_insert(created, embedding)
-            created.embedding = embedding
 
         return created
 
@@ -180,8 +200,11 @@ class SummaryStore:
                 ]
             )
             coll.flush(using="memory")
+            self._milvus_fail.success()
         except Exception as e:
-            logger.warning("Milvus insert summary failed (PG has data): %s", e)
+            # PG 已经有这条（含向量），所以镜像失败不致命 —— 但必须记，
+            # 否则"后端配成 milvus 却一直在写空的 Milvus"查不出来。
+            self._milvus_fail.failure(f"insert summary {entry.id}: {e}")
 
     async def get_by_id(
         self, tenant_id: str, user_id: str, summary_id: str
@@ -206,10 +229,17 @@ class SummaryStore:
         return _row_to_entry(row) if row else None
 
     async def list_active(
-        self, tenant_id: str, user_id: str, limit: int = 50
+        self, tenant_id: str, user_id: str, limit: int = 50, *, with_embedding: bool = False
     ) -> list[SummaryEntry]:
+        """列出活跃摘要。
+
+        ``with_embedding=True`` 只有一处正当用途：近重复扫描/语义召回要算余弦。
+        默认不取，因为记忆面板列 50 条摘要时反序列化 50×1536 个浮点数是纯浪费（同 M12 对
+        容量淘汰的处置）。
+        """
+        columns = _COLUMNS_WITH_VECTOR if with_embedding else _COLUMNS
         rows = await self._pool.fetch(
-            f"""SELECT {_COLUMNS} FROM memory_summaries
+            f"""SELECT {columns} FROM memory_summaries
                 WHERE tenant_id=$1 AND user_id=$2 AND status='active'
                 ORDER BY created_at DESC LIMIT $3""",
             tenant_id,

@@ -187,7 +187,7 @@ class MockSummaryStore:
     def __init__(self):
         self._summaries: list[dict[str, Any]] = []
 
-    async def list_active(self, tenant_id, user_id, limit=50):
+    async def list_active(self, tenant_id, user_id, limit=50, *, with_embedding=False):
         return [s for s in self._summaries
                 if s["tenant_id"] == tenant_id and s["user_id"] == user_id][:limit]
 

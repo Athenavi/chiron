@@ -342,7 +342,9 @@ MinIO/Milvus/etcd 默认不启用（仅 `--profile selfhosted-s3`）。单实例
    或后台「Redis 配置」热切换，见 `internal/api/admin.go` 的 `UpdateRedis`）。
 3. **对象存储**：用云厂商 S3（或多 AZ 的自托管 RustFS / SeaweedFS 集群），不要用单实例 MinIO。
 4. **Milvus**：向量库中断只影响 RAG 检索（会话 / 写路径不依赖）；高可用可用 Milvus 集群模式 +
-   多副本 etcd + 外部 S3。
+   多副本 etcd + 外部 S3。记忆层 L3 的摘要向量自 M13 起**默认存 PG**（`memory_summaries.embedding`，
+   迁移 `0019`），`MEMORY_VECTOR_BACKEND` 默认 `pg` 时 Milvus 连不上也不影响语义召回；只有显式把它
+   配成 `milvus` 时，Milvus 才同时成为 L3 的依赖（那时它是 ANN 那条腿，挂掉会退回 PG 的精确余弦扫描）。
 5. **etcd**：仅被 Milvus 使用；随 Milvus 一起高可用（3 / 5 节点）。
 
 ### 13.2 应用侧要配合的配置

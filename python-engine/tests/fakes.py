@@ -66,7 +66,7 @@ class InMemorySummaryStore:
                 return e
         return None
 
-    async def list_active(self, tenant_id, user_id, limit=50):
+    async def list_active(self, tenant_id, user_id, limit=50, *, with_embedding=False):
         items = self._active(tenant_id, user_id)
         items.sort(
             key=lambda e: e.created_at or datetime.min.replace(tzinfo=UTC),

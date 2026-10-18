@@ -403,10 +403,12 @@ class _LimitRecordingSummaryStore:
     def __init__(self, items: list[SummaryEntry]) -> None:
         self.items = items
         self.limits: list[int] = []
+        self.probes: list[bool] = []
         self.touched: list[str] = []
 
-    async def list_active(self, tenant_id, user_id, limit=50):
+    async def list_active(self, tenant_id, user_id, limit=50, *, with_embedding=False):
         self.limits.append(limit)
+        self.probes.append(with_embedding)
         return self.items[:limit]
 
     async def touch(self, summary_id):
@@ -418,6 +420,8 @@ async def test_recall_summaries_without_query_loads_only_top_k():
     out = await MemoryService(summary_store=store).recall_summaries("t", "u", "", top_k=5)
 
     assert store.limits == [5], f"取最近只需 5 条，却请求了 {store.limits}"
+    # 按时间取不需要向量：一条都不该反序列化（与 M12 对容量淘汰那条路的处置同口径）。
+    assert store.probes == [False]
     assert out["mode"] == "recent"
     assert out["count"] == 5
     assert [s["id"] for s in out["summaries"]] == ["s0", "s1", "s2", "s3", "s4"]
@@ -450,6 +454,7 @@ async def test_recall_summaries_semantic_fallback_ranks_by_similarity():
     )
 
     assert out["mode"] == "semantic"
+    assert store.probes == [True], "算余弦的那条路必须显式要求向量列"
     assert [s["id"] for s in out["summaries"]] == ["s1"]  # 只有够像的才留下
     assert out["count"] == 1
     assert store.touched == ["s1"]

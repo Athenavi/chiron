@@ -82,9 +82,11 @@ class FakeSummaryStore:
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        *,
+        with_embedding: bool = False,
     ) -> list[SummaryEntry]:
         """列出活跃摘要。"""
-        self._list_active_calls.append((tenant_id, user_id, limit))
+        self._list_active_calls.append((tenant_id, user_id, limit, with_embedding))
         if self._should_fail_list_active:
             raise RuntimeError("DB error")
         return list(self._entries.values())

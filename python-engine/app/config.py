@@ -232,6 +232,14 @@ class Settings(BaseSettings):
     memory_archive_days: int = 180  # 超期未引用且低置信 → 归档
     memory_dedup_threshold: float = 0.95  # cosine 超过该阈值判定近重复 → 整理时合并
     memory_search_min_cosine: float = 0.30  # 语义检索召回下限
+    # L3 摘要向量的后端：pg | milvus（pgvector/postgres 等写法归一到 pg）。
+    # 默认 **pg**：向量落 `memory_summaries.embedding`（迁移 0019），PG 是本项目唯一恒在的
+    # 持久存储 —— 把 Milvus 当默认等于"语义层默认是死的"（compose 里 Milvus 属
+    # selfhosted-s3 profile，注释自陈"默认不启动"），这正是本轮修掉的缺陷。
+    # 与 RAG 的 `vector_db_type` 是**两个口径**：那个决定知识库向量存哪，这个只管摘要向量
+    # 存哪 / 怎么扫；不跟着翻那个默认值，是为了不把 RAG 的存储路由一起改掉。
+    # 切换 = 改配置 + 重启（后台系统设置里没有这一项，不是热开关）。非法值退回 pg 并告警。
+    memory_vector_backend: str = "pg"
     # L3 近期对话摘要（语义检索层）
     memory_summary_top_k: int = 5  # 每回合召回的摘要条数
     memory_summary_retention_days: int = 90  # 超期未命中 → archived
