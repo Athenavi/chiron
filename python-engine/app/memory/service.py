@@ -27,6 +27,7 @@ from typing import Any
 from app.config import settings
 from app.memory.layers import (
     SLOT_LABELS,
+    CosineScorer,
     EntryChannel,
     MemoryConflict,
     ProfileItem,
@@ -37,9 +38,10 @@ from app.memory.layers import (
     SessionContext,
     SlotType,
     SourceType,
-    cosine_similarity,
+    dot_product,
     recency_decay,
     rerank_score,
+    unit_vector,
 )
 from app.memory.profile import new_entry_id
 from app.memory.profile_card import ProfileCard
@@ -606,10 +608,11 @@ class MemoryService:
 
         if qvec:
             mode = "semantic"
+            scorer = CosineScorer(qvec)
             for item in items:
                 if not item.embedding:
                     continue
-                sim = cosine_similarity(qvec, item.embedding)
+                sim = scorer.score(item.embedding)
                 if sim < SIMILARITY_THRESHOLD:
                     continue
                 score = rerank_score(
@@ -801,23 +804,27 @@ class MemoryService:
                 "mode": "semantic",
             }
 
-        items = await store.list_active(tenant_id, user_id, 200)
-        if not items:
-            return {"summaries": [], "count": 0, "mode": "empty"}
-
         ordered: list[Any] = []
         if not q:
-            ordered = items[:top_k]
+            # 「取最近」一条向量都用不上，没必要为此拉满 200 行再切片。
+            items = await store.list_active(tenant_id, user_id, max(1, int(top_k)))
+            if not items:
+                return {"summaries": [], "count": 0, "mode": "empty"}
+            ordered = list(items)
             mode = "recent"
         else:
+            items = await store.list_active(tenant_id, user_id, 200)
+            if not items:
+                return {"summaries": [], "count": 0, "mode": "empty"}
             qvec = await self._embed(q)
             if qvec:
                 mode = "semantic"
+                scorer = CosineScorer(qvec)
                 scored = []
                 for item in items:
                     if not item.embedding:
                         continue
-                    sim = cosine_similarity(qvec, item.embedding)
+                    sim = scorer.score(item.embedding)
                     if sim < SIMILARITY_THRESHOLD:
                         continue
                     scored.append((item, sim))
@@ -1272,38 +1279,19 @@ class MemoryService:
             except Exception as e:
                 result.errors.append(f"backfill {item.id}: {e}")
 
-        # ② 合并近重复：保留置信度高的那条
-        survivors: list[Any] = []
-        for item in items:
-            if not item.embedding:
-                survivors.append(item)
-                continue
-            duplicate_of = None
-            for kept in survivors:
-                if not kept.embedding:
-                    continue
-                if cosine_similarity(item.embedding, kept.embedding) <= NEAR_DUPLICATE_THRESHOLD:
-                    continue
-                duplicate_of = kept
-                break
-            if duplicate_of is None:
-                survivors.append(item)
-                continue
-            # 置信度高的留下；两者相同时保留先入库的那条（更早的引用更多）
-            keeper, victim = (
-                (item, duplicate_of)
-                if item.confidence > duplicate_of.confidence
-                else (duplicate_of, item)
-            )
+        # ② 合并近重复：保留置信度高的那条。
+        # 比较是纯 CPU（最坏 N²/2 次 1536 维点积，N = memory_profile_max_items），
+        # 且内层一个 await 都没有 —— 实测 N=200 时在事件循环上要连续阻塞约 2 秒，
+        # 那期间**同一个 worker 上所有并发请求都停在原地**（整理是后台任务，
+        # 但它卡的是前台）。所以计划放线程里算，删除回到 loop 上执行
+        # （存储层不保证线程安全）。
+        victims, survivors = await asyncio.to_thread(_plan_near_duplicate_merge, items)
+        for victim in victims:
             try:
                 await store.delete(tenant_id, user_id, victim.id, project=project)
                 result.merged += 1
             except Exception as e:
                 result.errors.append(f"merge {victim.id}: {e}")
-                continue
-            if keeper is item:
-                survivors = [s for s in survivors if s is not duplicate_of]
-                survivors.append(item)
 
         # ③ 归档陈旧低置信条目
         now = datetime.now(UTC)
@@ -1424,12 +1412,13 @@ class MemoryService:
             )
         except Exception:
             return None
+        scorer = CosineScorer(embedding)
         for item in items:
             if exclude_key is not None and item.item_key == exclude_key:
                 continue
             if not item.embedding:
                 continue
-            if cosine_similarity(embedding, item.embedding) > NEAR_DUPLICATE_THRESHOLD:
+            if scorer.score(item.embedding) > NEAR_DUPLICATE_THRESHOLD:
                 return item
         return None
 
@@ -1440,14 +1429,16 @@ class MemoryService:
 
         用户确认过的条目（source=user_confirmed）最后才动 —— 它们是人明确要求记住的。
         C3：**上限按项目计**（否则一个项目的条目会把另一个项目的额度挤掉）。
+
+        走 `list_evictable` 而不是 `list`：这里只用到 id/置信度/来源/最近引用时间，
+        而 `list` 会把每条的 1536 维 JSONB 向量反序列化一遍 —— 这个路径**每次写入
+        都要跑一次**（`upsert` 收尾），白解析 200 条向量是纯浪费。
         """
         store = self._require_store()
         limit = int(getattr(settings, "memory_profile_max_items", 0) or 0)
         if limit <= 0:
             return 0
-        items = await store.list(
-            tenant_id, user_id, include_archived=False, project=project
-        )
+        items = await store.list_evictable(tenant_id, user_id, project=project)
         overflow = len(items) - limit
         if overflow <= 0:
             return 0
@@ -1623,6 +1614,52 @@ def _new_memory_entry(
         updated_at=None,
         project=project,
     )
+
+
+def _plan_near_duplicate_merge(items: list[Any]) -> tuple[list[Any], list[Any]]:
+    """纯 CPU：把「近重复合并」算成 ``(该删的条目, 存活的条目)``，不做任何 IO。
+
+    判定口径与阈值沿用原实现（``> NEAR_DUPLICATE_THRESHOLD`` 即视为同一件事，
+    置信度高的留下、并列时留先入库的那条），区别只有两处：
+
+    1. **每个向量只单位化一次**，内层做点积。余弦是尺度不变的，所以结论一致，
+       但省掉了"每对比较都重算两遍模长 + 两次开方"—— 成对比较里同一个存活向量
+       会被反复比 N 次，这部分原本是纯浪费。
+    2. 删除失败时，被并入的那条**继续留在 survivors 里**参与后续归档/淘汰。
+       原实现只在这种"库里没删掉"的情况下把新条目从 survivors 里漏掉，于是那条
+       既没被删、也没被记账，要到下一轮整理才重新露面。
+
+    放在线程里跑（见 `organize_now` ②），因为它内层没有任何 await。
+    """
+    units = [unit_vector(item.embedding) if item.embedding else None for item in items]
+    survivors: list[int] = []
+    victims: list[Any] = []
+
+    for idx, item in enumerate(items):
+        unit = units[idx]
+        if unit is None:
+            survivors.append(idx)
+            continue
+        duplicate_pos: int | None = None
+        for kept_pos in survivors:
+            kept_unit = units[kept_pos]
+            if kept_unit is None:
+                continue
+            if dot_product(unit, kept_unit) <= NEAR_DUPLICATE_THRESHOLD:
+                continue
+            duplicate_pos = kept_pos
+            break
+        if duplicate_pos is None:
+            survivors.append(idx)
+            continue
+        if item.confidence > items[duplicate_pos].confidence:
+            victims.append(items[duplicate_pos])
+            survivors = [p for p in survivors if p != duplicate_pos]
+            survivors.append(idx)
+        else:
+            victims.append(item)
+
+    return victims, [items[p] for p in survivors]
 
 
 # ── 全局单例工厂 ──────────────────────────────────────────────────────────

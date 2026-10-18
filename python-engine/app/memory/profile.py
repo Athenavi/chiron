@@ -22,6 +22,21 @@ _COLUMNS = (
     "embedding, access_count, last_accessed_at, status, created_at, updated_at, project"
 )
 
+#: 淘汰记账所需的最小列 —— **故意不含 embedding / item_value**（见 `list_evictable`）。
+_EVICTION_COLUMNS = "id, confidence, source, last_accessed_at"
+
+
+class EvictionRow(NamedTuple):
+    """`list_evictable` 的行模型：容量淘汰判定要的四个字段，到此为止。
+
+    与 ``MemoryEntry`` 分开是有意的 —— 它**没有向量**，绝不能喂给任何相似度逻辑。
+    """
+
+    id: str
+    confidence: int
+    source: Any
+    last_accessed_at: Any
+
 
 class UpsertResult(NamedTuple):
     """``upsert_protected`` 的结果三元组。
@@ -122,6 +137,36 @@ class ProfileStore:
         sql += " ORDER BY slot, updated_at DESC"
         rows = await self._pool.fetch(sql, *params)
         return [_row_to_entry(r) for r in rows]
+
+    async def list_evictable(
+        self, tenant_id: str, user_id: str, project: str = ""
+    ) -> list[EvictionRow]:
+        """列出**未分组/某项目**内参与容量淘汰的行的最小必要列。
+
+        为什么不复用 `list()`：淘汰只看置信度与新近度，而 `list()` 会把每条的
+        1536 维 ``jsonb`` 向量 ``json.loads`` + 逐元素 ``float()`` 一遍。上限是 200 条，
+        而这条路径**每次写记忆都要走一次** —— 等于每次写入白解析 20 万个浮点。
+
+        排序与 `list()` 保持一致（``slot, updated_at DESC``）：淘汰打分并列时靠它保证
+        确定性，换成别的顺序会让"哪条被挤掉"变得不可复现。
+        """
+        rows = await self._pool.fetch(
+            f"SELECT {_EVICTION_COLUMNS} FROM user_memory_entries "
+            "WHERE tenant_id=$1 AND user_id=$2 AND project=$3 AND status='active' "
+            "ORDER BY slot, updated_at DESC",
+            tenant_id,
+            user_id,
+            project,
+        )
+        return [
+            EvictionRow(
+                id=row["id"],
+                confidence=int(row["confidence"]),
+                source=row["source"],
+                last_accessed_at=row["last_accessed_at"],
+            )
+            for row in rows
+        ]
 
     async def get_by_id(
         self, tenant_id: str, user_id: str, entry_id: str, project: str = ""

@@ -24,7 +24,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
-from app.memory.layers import SummaryEntry, cosine_similarity
+from app.memory.layers import CosineScorer, SummaryEntry
 
 logger = logging.getLogger(__name__)
 
@@ -160,10 +160,11 @@ class Consolidator:
             existing = await self._store.list_active(tenant_id, user_id, limit=50)
         except Exception:
             return None
+        scorer = CosineScorer(embedding)
         for e in existing:
             if not e.embedding:
                 continue
-            if cosine_similarity(embedding, e.embedding) > 0.95:
+            if scorer.score(e.embedding) > 0.95:
                 return str(e.id)
         return None
 
