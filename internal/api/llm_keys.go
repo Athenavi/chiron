@@ -72,34 +72,53 @@ func syncProviderKeyset(ctx context.Context, cfg *config.Config, provider string
 		}
 	}
 
-	hashKey := llmKeysHashPrefix + provider
 	enc := llmEnc(cfg)
-	if len(rows) == 0 {
-		if err := db.Redis.Del(ctx, hashKey).Err(); err != nil {
-			slog.Warn("llm keyset del failed", "provider", provider, "error", err)
+
+	// 从库里**解得开**的每一条，构成这份 keyset 的新内容（Redis 只是 DB 权威层的运行时镜像）。
+	// 解不开就跳过 —— 那是"这条不该进缓存"，不是"整份不刷新"（否则换 APP_SECRET 后旧明文会一直留着）。
+	fields := make([]interface{}, 0, 2*len(rows))
+	for _, r := range rows {
+		plain, err := enc.DecryptString(r.encrypted)
+		if err != nil {
+			slog.Warn("llm keyset decrypt failed, dropping key from cache", "provider", provider, "error", err)
+			continue
 		}
-	} else {
-		args := make([]interface{}, 0, 1+2*len(rows))
-		args = append(args, hashKey)
-		for _, r := range rows {
-			plain, err := enc.DecryptString(r.encrypted)
-			if err != nil {
-				slog.Warn("llm keyset decrypt failed, skipping key", "provider", provider, "error", err)
-				continue
-			}
-			payload, _ := json.Marshal(map[string]string{"k": plain, "s": r.status})
-			args = append(args, r.keyHash[:12], string(payload))
-		}
-		if len(args) > 1 {
-			cmdArgs := append([]interface{}{"HMSET"}, args...)
-			if err := db.Redis.Do(ctx, cmdArgs...).Err(); err != nil {
-				slog.Warn("llm keyset hmset failed", "provider", provider, "error", err)
-			}
-		}
+		payload, _ := json.Marshal(map[string]string{"k": plain, "s": r.status})
+		fields = append(fields, r.keyHash[:12], string(payload))
+	}
+
+	// **整体替换**而非 HMSET 增量写。HMSET 只增不删：一条 key 从库里删掉、只要该 provider 还剩别的 key，
+	// 它那 12 位指纹字段就永久留在 hash 里 —— 而引擎 KeyRing 是 `HGETALL` 整份镜像当"当前可用 key"轮询的
+	// （app/gateway/key_ring.py `_refresh`），于是**一把已撤销的 key 会被继续拿去打上游**。
+	// 全部解密失败 / 该 provider 已无 key ⇒ fields 为空 ⇒ 等价于清空 ⇒ 陈旧明文不再被服务（正确）。
+	if _, err := llmReplaceKeyset(ctx, provider, fields); err != nil {
+		slog.Warn("llm keyset replace failed", "provider", provider, "error", err)
 	}
 	_, _ = db.Redis.Incr(ctx, llmKeysVerKey).Result()
 	_ = db.Redis.Publish(ctx, llmKeysChangedChannel, provider).Err()
 	return nil
+}
+
+// llmReplaceKeyset 用**一次原子 Lua 调用**把 `llm:keys:{provider}` 换成给定的 field/value 集合
+// （先 DEL 再逐对 HSET）。之所以必须"替换"而非 HMSET 增量，见 syncProviderKeyset 的注释：
+// 引擎把整份 hash 当"当前可用 key"轮询，残留字段等于把一把已删除的 key 一直服务下去。
+// 返回写入后的 HLEN（便于观测与测试）；fields 为空 ⇒ 结果为空（哈希被删）。
+// 单 key 脚本在 Cluster 下按该 key 路由到对应节点，安全；DEL+写入原子，读者不会看到中间态。
+func llmReplaceKeyset(ctx context.Context, provider string, fields []interface{}) (int64, error) {
+	if db.Redis == nil {
+		return 0, nil
+	}
+	const script = `
+redis.call('DEL', KEYS[1])
+for i = 1, #ARGV, 2 do
+  redis.call('HSET', KEYS[1], ARGV[i], ARGV[i + 1])
+end
+return redis.call('HLEN', KEYS[1])`
+	n, err := db.Redis.Eval(ctx, script, []string{llmKeysHashPrefix + provider}, fields...).Int64()
+	if err != nil {
+		return 0, err
+	}
+	return n, nil
 }
 
 // ── HTTP handlers(注册于 /v1/admin/api-keys,鉴权由路由中间件完成)──
