@@ -46,6 +46,9 @@ class InternalSubagentRequest(BaseModel):
     #: 注意它**只收窄粒度、不放宽权限** —— "能不能写"仍由本实例的 `allow_write` 决定。
     write_paths: list[str] | None = None
     depth: int = 0
+    #: 父回合是否无人值守（自动续跑）。与 `call_tools`/`write_paths` 同一方向：请求体只能
+    #: **收窄**本实例的行为 —— 置真让审批闸门立刻拒绝，置假最多退回等待，都换不到权限。
+    unattended: bool = False
 
 
 @router.post("/v1/internal/subagent/run")
@@ -96,6 +99,7 @@ async def internal_subagent_run(body: InternalSubagentRequest) -> dict[str, Any]
         allow_write=bool(body.allow_write),
         call_tools=body.call_tools,
         write_paths=body.write_paths,
+        unattended=bool(body.unattended),
     )
     try:
         result = await runner.run(
