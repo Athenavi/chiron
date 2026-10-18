@@ -82,6 +82,42 @@ def touch_user(user_id: str) -> None:
         _plugin_pool._tracker.touch(user_id)  # noqa: SLF001 — 池内专用入口
 
 
+async def _auto_resume_runner(task: Any) -> None:
+    """reconciler 自动续跑的**执行体**（C1 批 3+）—— 一个**无人值守回合**。
+
+    与 `/v1/agent/submit` 那条路径**同源**（同样的 gateway / session_store / memory 依赖）；
+    区别是这里**没有 SSE 订阅者**：用户早已离开，所以他回来时看到的是**会话消息**
+    （runtime 收尾会写 `session_store`），而不是实时流。
+
+    因此这一轮**不能等人**：审批与 `ask_user` 的回答都只经 `_ACTIVE_RUNTIMES`（只有
+    submit 流会注册）定位，续跑的 runtime 不在其中 —— 等下去就是每条 300s 的白等，
+    而 reconciler 是 `await runner(task)` 串行的，一次等待把该实例的整轮巡检钉住，
+    用户回来还只看到一条没有任何上下文的中断。`unattended=True` 让交互闸门直接
+    fail-closed（与用户点"拒绝"同一条收口，理由进审计与工具结果）。
+    """
+    from app.agent.event_sink import EventSink
+    from app.agent.runtime import AgentRuntime
+    from app.memory.service import get_service as get_memory_service
+    from app.tools.context import set_tool_context
+
+    gateway = await get_gateway()
+    if gateway is None:
+        logger.warning("auto-resume skipped: gateway unavailable")
+        return
+    set_tool_context(
+        event_sink=EventSink(session_id=getattr(task, "session_id", "") or ""),
+        unattended=True,
+    )
+    resume_runtime = AgentRuntime(
+        gateway=gateway,
+        session_store=_session_cache,
+        memory=get_memory_service(),
+        unattended=True,
+    )
+    async for _ev in resume_runtime.run(task):
+        pass  # 事件无人订阅；结论经 session_store / subagent_runs 落库
+
+
 
 
 @asynccontextmanager
@@ -612,31 +648,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
     # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
     # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
-    # runner：reconciler 自动续跑的**执行体**（C1 批 3+）。
-    # 与 `/v1/agent/submit` 那条路径**同源**（同样的 gateway / session_store / memory 依赖）；
-    # 区别是这里**没有 SSE 订阅者** —— 用户早已离开，所以他回来时看到的是**会话消息**
-    # （runtime 收尾会写 `session_store`），而不是实时流。
-    async def _auto_resume_runner(task: Any) -> None:
-        from app.agent.event_sink import EventSink
-        from app.agent.runtime import AgentRuntime
-        from app.memory.service import get_service as get_memory_service
-        from app.tools.context import set_tool_context
-
-        gateway = await get_gateway()
-        if gateway is None:
-            logger.warning("auto-resume skipped: gateway unavailable")
-            return
-        set_tool_context(
-            event_sink=EventSink(session_id=getattr(task, "session_id", "") or "")
-        )
-        resume_runtime = AgentRuntime(
-            gateway=gateway,
-            session_store=_session_cache,
-            memory=get_memory_service(),
-        )
-        async for _ev in resume_runtime.run(task):
-            pass  # 事件无人订阅；结论经 session_store / subagent_runs 落库
-
+    # 续跑的执行体是模块级的 `_auto_resume_runner`（无人值守回合，见其注释）。
     _reconciler_task: Any = None
     try:
         from app.agent.resume import start_reconciler
