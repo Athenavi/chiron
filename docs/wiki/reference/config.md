@@ -29,6 +29,8 @@ python scripts/init.py --check    # 只自检：必填项 + 连通性
 | `CHIRON_BUILTIN_SKILLS_PATH` | 内置技能目录；**容器部署必须挂载 `market/skills/`**，缺了会告警且技能列表为空 |
 | `MCP_POOL_ENABLED` / `MCP_MAX_*` / `MCP_OWNER_LEASE_ENABLED` | MCP 连接池与 owner lease（多租户连接经济学） |
 | `MEMORY_VECTOR_BACKEND` | 只管 **L3 摘要向量**存哪 / 怎么扫（`pg` 默认，可配 `milvus`）；**不是** RAG 的 `VECTOR_DB_TYPE`（那个决定知识库向量存哪），别互相抄值。切换 = 改配置 + 重启，后台「系统设置」里没有这一项 |
+| `MEMORY_CONSOLIDATE_BATCH` | L3 巩固的节拍：**每 N 回合入队一次**，会话结束的 `memory_rollup` 覆盖不足一批的尾巴。M14 之前这条配置全库无人引用（实际每回合同步整段会话）；`<=1` 是"每回合都巩固"，不是"关掉" |
+| `MEMORY_SUMMARISER_*` | 摘要正文由 LLM 生成（`_ENABLED` **默认开**、`_MODEL` 空则复用 `DEFAULT_MODEL`、`_MAX_TOKENS`/`_MAX_INPUT_CHARS` 是两次上限）。与 C6 提炼（默认关）相反是有意的：提炼每回合多一次调用、成本随对话量线性涨，巩固按批走且正文会被长期召回。关掉后正文退回"每条消息前 200 字符"的抽取式拼接——那不是你想要的东西，除非在为一个没有 embedding 服务的部署兜底 |
 | `CHIRON_TEST_POSTGRES_DSN` / `CHIRON_TEST_REDIS_ADDR` | **只给测试用**：置上它们才会跑真实栈的 live 子集 |
 
 ## 校验配置本身

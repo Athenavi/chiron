@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import math
 import time
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from typing import Any
 import pytest
 
 from app.config import settings
+from app.memory import vector_backend
 from app.memory.layers import (
     MemoryType,
     RecalledItem,
@@ -100,8 +102,11 @@ class MockDatabasePool:
                 "last_accessed_at": None,
                 "status": "active",
                 "created_at": now,
-                # $11 = embedding（迁移 0019 的那一列）；替身按位置取，位置变了就该失败。
+                # $11 = embedding（迁移 0019），$12/$13 = 口径标签（迁移 0020）；
+                # 替身按位置取，位置变了就该失败。
                 "embedding": args[10] if len(args) > 10 else None,
+                "embedding_model": args[11] if len(args) > 11 else None,
+                "embedding_dim": args[12] if len(args) > 12 else None,
             }
             self._inserted_ids.append(summary_id)
             return {"id": summary_id}
@@ -365,12 +370,18 @@ class TestSaveSummary:
     async def test_save_inserts_to_milvus(
         self, store, mock_pool, mock_milvus, milvus_backend, scope
     ):
-        """save_summary 应将摘要插入 Milvus。"""
+        """配成 milvus **且调用方给了向量**时，PG 之外再镜像一份。
+
+        镜像只是副本：PG 那份才是判定召回结果的唯一来源（切回 pg 也不至于没数据）。
+        """
+        vector = [0.1] * 32
         result = await store.save_summary(
             scope=scope,
             content="双写测试",
             topics=["测试"],
             turn_range=(0, 3),
+            embedding=vector,
+            embedding_model="fake-embed",
         )
 
         assert result is not None
@@ -382,6 +393,36 @@ class TestSaveSummary:
         assert inserted["user_id"] == "u1"
         assert inserted["memory_type"] == MemoryType.SUMMARY.value
         assert inserted["content"] == "双写测试"
+        assert inserted["embedding"] == vector
+
+    @pytest.mark.asyncio
+    async def test_save_never_embeds_on_its_own(
+        self, store, mock_pool, mock_milvus, milvus_backend, scope, monkeypatch
+    ):
+        """B1：向量口径收敛到 Consolidator 一处，store 不再按正文补嵌。
+
+        补嵌会造出第二套口径 —— 裸正文的向量和 `topics + 正文` 的向量算余弦，得分照样是
+        0~1 之间一个像样的数，只是永远够不到阈值。这种静默退化比"这条没有向量"更难查。
+        """
+        calls: list[str] = []
+
+        async def _spy(query: str) -> list[float]:
+            calls.append(query)
+            return [0.0] * 32
+
+        monkeypatch.setattr(store, "_get_embedding", _spy)
+
+        result = await store.save_summary(
+            scope=scope, content="没有向量", turn_range=(0, 1)
+        )
+
+        assert result is not None
+        assert calls == []
+        assert mock_milvus._inserted == [], "没有向量就没有可镜像的东西"
+        stored = mock_pool._summaries[result]
+        assert stored["embedding"] is None
+        assert stored["embedding_model"] is None
+        assert stored["embedding_dim"] is None
 
     @pytest.mark.asyncio
     async def test_save_dedup_by_content_hash(self, store, mock_pool, scope):
@@ -720,6 +761,72 @@ class TestPgVectorBackend:
         items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
 
         assert [i.content for i in items] == ["自己的"]
+
+    @pytest.mark.asyncio
+    async def test_rows_from_another_model_are_not_compared(
+        self, store, mock_pool, scope, monkeypatch, caplog
+    ):
+        """同维跨模型是**必须**排除的那一类（C3 立意的正面回归）。
+
+        两棵 8 维向量来自不同模型时，余弦照样落在 0~1 且常常 >0.95，跨模型空间里这个数
+        不对应任何语义 —— 它会把无关摘要判成近重复、把噪声排到召回首位。
+        """
+        monkeypatch.setattr(vector_backend, "_space_warned", set())
+        await store.save_summary(
+            scope=scope,
+            content="别的模型",
+            embedding=_axis(0),
+            embedding_model="someone-elses-embedder",
+        )
+        await store.save_summary(scope=scope, content="当前模型", embedding=_axis(0))
+
+        with caplog.at_level(logging.WARNING, logger="app.memory.vector_backend"):
+            items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert [i.content for i in items] == ["当前模型"]
+        assert "someone-elses-embedder/8" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_dim_mismatch_is_named_instead_of_scoring_zero(self, store, scope, monkeypatch, caplog):
+        """维度对不上时 `dot_product` 给 0.0 —— 不算错，但**永不相似**，得说一声。
+
+        过滤与否结论相同，区别只在于可不可查：没有这句警告，"语义层怎么空了"又要重新
+        从 SQL 开始排查一遍。
+        """
+        monkeypatch.setattr(vector_backend, "_space_warned", set())
+        await store.save_summary(scope=scope, content="四到八", embedding=_axis(0, dim=4))
+
+        with caplog.at_level(logging.WARNING, logger="app.memory.vector_backend"):
+            items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert items == []
+        assert "口径未知/4" in caplog.text
+
+    @pytest.mark.asyncio
+    async def test_unlabelled_rows_keep_participating(self, store, scope):
+        """标签为 NULL 的行继续比：严格排除会让迁移 0020 之前的历史行突然失忆。"""
+        await store.save_summary(scope=scope, content="未标", embedding=_axis(0))
+
+        items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert [i.content for i in items] == ["未标"]
+
+    @pytest.mark.asyncio
+    async def test_space_warning_is_emitted_once_per_space(self, store, scope, monkeypatch, caplog):
+        """同类口径只警告一次：同一批历史行会在每次召回时重复出现，刷日志没有信息量。"""
+        monkeypatch.setattr(vector_backend, "_space_warned", set())
+        await store.save_summary(
+            scope=scope,
+            content="别的模型",
+            embedding=_axis(0),
+            embedding_model="someone-elses-embedder",
+        )
+
+        with caplog.at_level(logging.WARNING, logger="app.memory.vector_backend"):
+            for _ in range(3):
+                await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert caplog.text.count("someone-elses-embedder/8") == 1
 
 
 def _query_embedder(vec: list[float]):

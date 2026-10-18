@@ -1081,33 +1081,35 @@ class QueueWorker:
             logger.warning("No messages to consolidate: session=%s", session_id)
             return
 
-        # 调用 Consolidator 进行巩固
-        from app.memory.consolidator import Consolidator
-
-        if self._memory_service._summary_store is None:
-            logger.debug("SummaryStore not available, skip consolidate")
-            return
-
-        consolidator = Consolidator(store=self._memory_service._summary_store)
-        turn_count = payload.get("turn_count", 0)
-        result = await consolidator.consolidate(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            session_id=session_id,
-            messages=messages,
-            turn_start=max(0, turn_count - 10),
-            turn_end=turn_count,
+        turn_count = int(payload.get("turn_count", 0) or 0)
+        # 走 MemoryService 而不是就地再建一个 Consolidator：过去这里 `Consolidator(store=…)`
+        # 只给了 store，embedder/summariser 都是空的 —— 摘要退化成抽取式、向量恒为 NULL，
+        # 与 app/main.py 装配的那一个口径分裂。装配只该有一处。
+        # turn 区间如实记 0..turn_count：`_get_session_messages` 取的是**整段会话**，
+        # 过去标成 `turn_count-10` 会让摘要的 lineage 与实际覆盖内容不符。
+        outcome = await self._memory_service.save_summary(
+            tenant_id,
+            user_id,
+            session_id,
+            messages,
+            0,
+            turn_count,
         )
 
-        if result.error:
-            logger.error("Consolidate failed: %s", result.error)
-        elif result.deduplicated:
+        if outcome.get("error"):
+            # 抛出而不是记一条 error 日志就 ACK：巩固失败是"该写的记忆没写"，
+            # 静默确认等于永久丢失。走 worker 的重试→DLQ，失败至少看得见。
+            raise RuntimeError(f"consolidate failed: {outcome['error']}")
+        if outcome.get("skipped"):
+            # 模型判定"这一窗没什么值得记" —— 正常收口，不是失败，不该重试。
+            logger.info("Consolidate skipped: session=%s 无值得长期记忆的内容", session_id)
+        elif outcome.get("deduplicated"):
             logger.debug("Consolidate deduplicated: session=%s", session_id)
         else:
             logger.info(
                 "Consolidate completed: session=%s, summary_id=%s",
                 session_id,
-                result.summary.id if result.summary else None,
+                (outcome.get("summary") or {}).get("id"),
             )
 
     async def _handle_memory_rollup(self, payload: dict[Any, Any], tenant_id: str) -> None:
@@ -1129,32 +1131,25 @@ class QueueWorker:
             logger.debug("No messages to rollup: session=%s", session_id)
             return
 
-        # 调用 Consolidator 进行完整 rollup
-        from app.memory.consolidator import Consolidator
-
-        if self._memory_service._summary_store is None:
-            logger.debug("SummaryStore not available, skip rollup")
-            return
-
-        consolidator = Consolidator(store=self._memory_service._summary_store)
-        result = await consolidator.consolidate(
-            tenant_id=tenant_id,
-            user_id=user_id,
-            session_id=session_id,
-            messages=messages,
-            turn_start=0,
-            turn_end=len(messages),
+        # 调用 Consolidator 进行完整 rollup —— 同样经 MemoryService，理由见
+        # `_handle_memory_consolidate`。
+        outcome = await self._memory_service.save_summary(
+            tenant_id,
+            user_id,
+            session_id,
+            messages,
+            0,
+            len(messages),
         )
 
-        if result.error:
-            logger.error("Rollup failed: %s", result.error)
-        else:
-            logger.info(
-                "Rollup completed: session=%s, messages=%d, summary_id=%s",
-                session_id,
-                len(messages),
-                result.summary.id if result.summary else None,
-            )
+        if outcome.get("error"):
+            raise RuntimeError(f"rollup failed: {outcome['error']}")
+        logger.info(
+            "Rollup completed: session=%s, messages=%d, summary_id=%s",
+            session_id,
+            len(messages),
+            (outcome.get("summary") or {}).get("id"),
+        )
 
     async def _get_session_messages(
         self, tenant_id: str, user_id: str, session_id: str
@@ -1162,26 +1157,45 @@ class QueueWorker:
         """获取会话消息（从数据库）。"""
         from app.db import get_pool
 
-        try:
-            pool = get_pool()
-            rows = await pool.fetch(
-                """SELECT role, content, created_at
-                   FROM unified_messages
-                   WHERE session_id = $1
-                   ORDER BY created_at ASC""",
-                session_id,
+        pool = get_pool()
+        # 租户条件不能省：巩固是"把会话内容写进长期记忆"的写入动作，此前只按 session_id
+        # 取消息（`session_id` 有 FK、全局唯一，所以不是已证实的越权，但任务信封里的
+        # tenant_id 一旦被投错就会白送给别人加记忆，且没有任何一道条件会拦）。
+        # unified_messages 自己没有租户列，只能经 unified_sessions 关联。
+        rows = await pool.fetch(
+            """SELECT m.role, m.content
+               FROM unified_messages m
+               JOIN unified_sessions s ON s.id = m.session_id
+               WHERE m.session_id = $1 AND s.tenant_id = $2
+               ORDER BY m.created_at ASC""",
+            session_id,
+            tenant_id,
+        )
+        messages = [
+            {"role": row["role"], "content": row["content"]}
+            for row in rows
+            if row["content"] and isinstance(row["content"], str)
+        ]
+        if not messages:
+            # 空结果要分两种：会话真没内容，还是这个会话不属于该租户（含历史会话的
+            # tenant_id 为 NULL）。前者正常，后者是配置/数据问题，必须说出来 ——
+            # "记忆为什么没生效"不该变成一个查不出来的问题。
+            owner = await pool.fetchval(
+                "SELECT tenant_id FROM unified_sessions WHERE id = $1", session_id
             )
-            return [
-                {
-                    "role": row["role"],
-                    "content": row["content"],
-                }
-                for row in rows
-                if row["content"] and isinstance(row["content"], str)
-            ]
-        except Exception as e:
-            logger.warning("Failed to get session messages: %s", e)
-            return []
+            if owner is not None and owner != tenant_id:
+                logger.warning(
+                    "Skipping consolidation for session=%s: 会话属于租户 %r，任务租户是 %r",
+                    session_id,
+                    owner,
+                    tenant_id,
+                )
+            elif owner is None:
+                logger.warning(
+                    "Skipping consolidation for session=%s: unified_sessions 里没有这个会话",
+                    session_id,
+                )
+        return messages
 
     async def _handle_embed_batch(self, payload: dict[Any, Any]) -> None:
         """处理批量嵌入任务：批量计算嵌入并存储向量

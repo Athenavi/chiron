@@ -208,6 +208,16 @@ services:
       # 与上面的 VECTOR_DB_TYPE 是两个口径(那个管知识库向量,这个管摘要向量;见 app/config.py)。
       # 切换 = 改这里 + 重启,不是后台热开关。
       MEMORY_VECTOR_BACKEND: ${MEMORY_VECTOR_BACKEND:-pg}
+      # L3 巩固节拍:每 N 回合入队一次巩固,会话结束的 rollup 覆盖不足一批的尾巴。
+      # M14 之前这条无人引用(实际每回合同步整段会话 —— 队列里绝大多数任务是重复劳动)。
+      MEMORY_CONSOLIDATE_BATCH: ${MEMORY_CONSOLIDATE_BATCH:-32}
+      # 摘要正文交给 LLM 生成(默认开)。与 C6 提炼默认关相反是有意的:提炼每回合多一次调用、
+      # 成本随对话量线性涨;巩固按批走且正文会被长期召回。关掉后正文退回"每条消息前 200 字符"
+      # 的抽取式拼接。模型留空 = 复用 DEFAULT_MODEL。
+      MEMORY_SUMMARISER_ENABLED: ${MEMORY_SUMMARISER_ENABLED:-true}
+      MEMORY_SUMMARISER_MODEL: ${MEMORY_SUMMARISER_MODEL:-}
+      MEMORY_SUMMARISER_MAX_TOKENS: ${MEMORY_SUMMARISER_MAX_TOKENS:-700}
+      MEMORY_SUMMARISER_MAX_INPUT_CHARS: ${MEMORY_SUMMARISER_MAX_INPUT_CHARS:-12000}
       # 多实例注意:每个启用 MCP 的引擎副本都会对活跃用户持有 MCP 连接,
       # 连接规模 ≈ 副本数 × 活跃用户数 × MCP server 数,扩容会瞬间放大第三方连接。
       # compose 面向多副本编排,因此默认关闭;需要 MCP 的副本(或单机部署)请显式

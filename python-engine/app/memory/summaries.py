@@ -33,7 +33,8 @@ _COLUMNS = (
 )
 
 # 只有近重复扫描这一条路需要向量，所以它单独一个投影而不是给所有读路径都带上列。
-_COLUMNS_WITH_VECTOR = f"{_COLUMNS}, embedding"
+# 口径标签（迁移 0020）跟着向量走：不认得"这个向量属于哪个模型/几维"的读侧无法判断可比性。
+_COLUMNS_WITH_VECTOR = f"{_COLUMNS}, embedding, embedding_model, embedding_dim"
 
 
 def new_summary_id() -> str:
@@ -73,6 +74,8 @@ def _row_to_entry(row: Any) -> SummaryEntry:
         created_at=row["created_at"],
         # 未选这一列的投影返回 None（"这条只能按时间参与召回"），不是空向量。
         embedding=parse_vector(row.get("embedding")),
+        embedding_model=row.get("embedding_model"),
+        embedding_dim=row.get("embedding_dim"),
     )
 
 
@@ -129,9 +132,9 @@ class SummaryStore:
                 """INSERT INTO memory_summaries
                    (id, tenant_id, user_id, session_id, content, topics, entities,
                     turn_start, turn_end, content_hash, access_count, last_accessed_at,
-                    status, created_at, embedding)
+                    status, created_at, embedding, embedding_model, embedding_dim)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active',
-                           NOW(), $11)
+                           NOW(), $11, $12, $13)
                    ON CONFLICT (tenant_id, user_id, content_hash) DO NOTHING
                    RETURNING id""",
                 entry.id,
@@ -145,6 +148,8 @@ class SummaryStore:
                 entry.turn_end,
                 ch,
                 list(embedding) if embedding else None,
+                entry.embedding_model,
+                len(embedding) if embedding else None,
             )
         except Exception as e:
             logger.error("SummaryStore insert PG failed: %s", e)
@@ -162,6 +167,8 @@ class SummaryStore:
             )
         # get_by_id 走的是不含向量的投影；向量已经在手上，不必再读一遍 6KB 数组。
         created.embedding = embedding
+        created.embedding_model = entry.embedding_model
+        created.embedding_dim = len(embedding) if embedding else None
 
         if embedding and resolve() == MILVUS:
             await self._milvus_insert(created, embedding)

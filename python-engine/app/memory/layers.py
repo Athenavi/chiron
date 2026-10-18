@@ -296,6 +296,11 @@ class SummaryEntry:
     status: str = "active"
     created_at: float = 0.0
     embedding: list[float] | None = None
+    #: 这一条向量属于哪个口径（迁移 0020）。语义比较只在同口径之间进行：跨模型的余弦
+    #: 照样落在 0~1，但那个数不对应任何语义，够到 0.95 就会把无关的两条标成近重复。
+    #: None = 口径未知（本改造之前写的行），按原样继续参与比较。
+    embedding_model: str | None = None
+    embedding_dim: int | None = None
 
     @property
     def embed_text(self) -> str:

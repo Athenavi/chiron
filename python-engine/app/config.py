@@ -246,6 +246,24 @@ class Settings(BaseSettings):
     memory_summary_min_cosine: float = 0.45  # 摘要语义检索召回下限
     memory_recall_token_budget: int = 8000  # L2+L3 总注入预算（tokens）
     memory_consolidate_batch: int = 32  # 巩固攒批大小
+    # ↑ 这个值此前**没有任何引用**（全库只在这一行出现），而 `on_turn_complete` 每回合
+    # 都入队一次巩固，等于把"攒批"设计写成了"每回合"。本轮接上判定：只有 turn_count
+    # 越过 batch 的整数倍才入队，会话末尾另由 rollup 覆盖。
+
+    # ── L3 摘要正文的生成方式（A3：生成式摘要）──
+    # 抽取式（旧行为）只是把每条消息前 200 字拼起来，既不像"摘要"，也让近重复判定的
+    # 输入几乎全是原文噪声。默认开：巩固的节拍已被上面收成"每 batch 回合一次 + 会话
+    # 结束一次"，不像 C6 提炼那样随对话量线性增长，所以不必默认关。
+    # 关掉即退回抽取式拼接（Consolidator 的既有分支），不影响写入与向量。
+    memory_summariser_enabled: bool = True
+    #: 摘要用的模型；空 = 复用 `default_model`（与 `guardian_model` 同一口径）。
+    #: 后台任务不必跟着本轮的会话模型走：那条信息在这里拿不到（任务只带 session_id）。
+    memory_summariser_model: str = ""
+    #: 输出上限：摘要是"几行要点"，给多了就是在为噪声付费。
+    memory_summariser_max_tokens: int = 700
+    #: 输入上限：巩固窗口取的是会话**全部**消息，长会话必须截断，否则每次调用都把
+    #: 整段历史重送一遍，成本随会话长度平方增长（回合数 × 每回合的消息数）。
+    memory_summariser_max_input_chars: int = 12000
 
     # ── C5：整理调度（自动触发，三个条件**任一**满足即可）──
     # 默认开：整理本身是既有能力（`organize_now` 幂等），自动化的价值是"不用等人点"。
