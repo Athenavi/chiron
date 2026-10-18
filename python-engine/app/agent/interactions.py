@@ -281,6 +281,51 @@ async def consume_grant(
     return out
 
 
+async def settle(
+    *, interaction_id: str, decision: dict[str, Any], reason: str = "", decided_by: str = ""
+) -> bool:
+    """**实时通道**给出了答复：把现场一并记上答复并直接关掉（`pending`/`answered` → `consumed`）。
+
+    这条是必需的，不是"顺手写个审计"：如果实时路径（前端点确认 → Redis 决策键）答完之后
+    那一行还留在 `pending`，就会有三个可见后果 —— 列表里挂着一个早已答完的问题、用户可能
+    再答一次、而第二次答复会变成一张**将来**能被同类调用取走的授权票。所以"答复已经生效"
+    必须同时把行关掉。
+
+    `consume_grant` 与它的区别只在**谁**拿到了答复：`consume_grant` 是"续跑回合来取票"
+    （`answered → consumed`，票只有一次），`settle` 是"发起它的那一轮自己收到了答复"
+    （`pending → consumed`，票不进入下一个回合）。
+
+    已是 `consumed` / `expired` 的行不会被改写（返回 False）：一张已经被取走的票不该因为
+    一次迟到的实时答复而复活。
+    """
+    if not interaction_id:
+        return False
+    try:
+        pool = _pool()
+        if pool is None:
+            return False
+        result = await pool.execute(
+            """
+            UPDATE pending_interactions
+               SET status = 'consumed',
+                   decision = $2::jsonb,
+                   reason = $3,
+                   decided_by = COALESCE(NULLIF($4, ''), decided_by),
+                   updated_at = now()
+             WHERE id = $1
+               AND status IN ('pending', 'answered')
+            """,
+            interaction_id,
+            json.dumps(decision or {}, ensure_ascii=False),
+            (reason or "")[:2000],
+            decided_by or "",
+        )
+    except Exception as exc:  # noqa: BLE001 — 收尾失败不影响这一轮已经拿到的答复
+        logger.warning("pending interaction settle failed (id=%s): %s", interaction_id, exc)
+        return False
+    return _rowcount(result) > 0
+
+
 async def list_open(
     *, tenant_id: str, user_id: str, session_id: str, limit: int = 20
 ) -> list[dict[str, Any]]:

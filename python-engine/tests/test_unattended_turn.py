@@ -115,7 +115,7 @@ class TestUnattendedAskUser:
         monkeypatch.setattr(rt, "_wait_answer_decision", _never)
         call = {"id": "tc-ask", "name": "ask_user", "arguments": '{"question": "选哪个？"}'}
 
-        rt._ask_event(call)  # noqa: SLF001 — 登记待回答 future
+        await rt._ask_event(call, _task())  # noqa: SLF001 — 登记待回答 future
         answer = await rt._await_answer(call, _task())
 
         assert answer["declined"] is True

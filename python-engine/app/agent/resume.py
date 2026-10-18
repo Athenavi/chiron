@@ -62,23 +62,45 @@ class ResumeState:
     reason: str = ""
 
 
-async def load_resume_state(*, tenant_id: str, session_id: str) -> ResumeState | None:
-    """读该会话的续跑现场；不可用时返回 None（调用方回落现状语义）。"""
+async def load_resume_state(
+    *, tenant_id: str, session_id: str, run_token: str = ""
+) -> ResumeState | None:
+    """读该会话的续跑现场；不可用时返回 None（调用方回落现状语义）。
+
+    M7：除了"崩溃留下的活跃现场"，还会接**人工介入挂起**的那个（`awaiting_input`）。
+    两条路径的区别不在数据形状而在**义务**：挂起现场一旦被读到，就必须以 `claim_awaiting`
+    接手或以 `release_awaiting` 作废 —— 留着它等于让之后每一条消息都白读一次旧现场。
+    `run_token` 为空（没有归属凭据的调用方）时**完全不碰**挂起现场，行为与本条之前一致。
+    """
     if not session_id:
         return None
 
     from app.agent import checkpoint as ckpt
 
     snapshot = await ckpt.load(tenant_id=tenant_id, session_id=session_id)
+    #: 挂起现场的旧 token（非空 = 这次读到的就是"等人"的那一份）
+    awaiting_token = ""
+    if snapshot is None and run_token:
+        found = await ckpt.load_awaiting(tenant_id=tenant_id, session_id=session_id)
+        if found:
+            snapshot = found["checkpoint"]
+            awaiting_token = str(found["run_token"] or "")
     if not snapshot:
         return None
 
     window = ckpt.resume_window(snapshot)
     if window == "abandoned":
         # 超窗：**可见**地放弃（方案 §3.1 的降级路径必须显式），并回落现状语义
-        await ckpt.mark(
-            tenant_id=tenant_id, session_id=session_id, status=ckpt.STATUS_ABANDONED
-        )
+        if awaiting_token:
+            # `mark()` 的谓词只认活跃状态 ⇒ 对挂起行是 0 命中；不单独收尾就会永远停在
+            # `awaiting_input`，之后每一次 run 都白读一遍这份超窗现场。
+            await ckpt.release_awaiting(
+                tenant_id=tenant_id, session_id=session_id, run_token=awaiting_token
+            )
+        else:
+            await ckpt.mark(
+                tenant_id=tenant_id, session_id=session_id, status=ckpt.STATUS_ABANDONED
+            )
         logger.warning(
             "checkpoint window exceeded (session=%s) — marked abandoned; "
             "the user can retry the whole turn",
@@ -89,8 +111,24 @@ async def load_resume_state(*, tenant_id: str, session_id: str) -> ResumeState |
     messages = [m for m in (snapshot.get("messages") or []) if isinstance(m, dict)]
     if not messages:
         # 快照损坏 / 空：同样回落现状（并把原因写清楚，别让"没续跑"看起来像"续跑了"）
+        if awaiting_token:
+            await ckpt.release_awaiting(
+                tenant_id=tenant_id, session_id=session_id, run_token=awaiting_token
+            )
         logger.warning("checkpoint for session=%s is unusable (empty) — falling back", session_id)
         return None
+
+    if awaiting_token:
+        # 接手：`awaiting_input → resuming`。抢不到说明有别的回合已经拿了这份现场
+        # （或会话上已有活跃 run 撞了唯一索引）⇒ 这一轮**不**拿它续跑，走普通路径。
+        if not await ckpt.claim_awaiting(
+            tenant_id=tenant_id, session_id=session_id, new_run_token=run_token
+        ):
+            logger.info(
+                "awaiting checkpoint not claimed (session=%s) — another run took it over",
+                session_id,
+            )
+            return None
 
     done = tuple(str(item) for item in (snapshot.get("done_tools") or []))
     pending_rows = await ckpt.pending_tool_calls(session_id=session_id)
@@ -300,6 +338,7 @@ async def sweep_once(
       在扫描条件之外；
     * 其余（冷窗口 / 未提供 runner / 开关关闭 / 重建失败）⇒ 标记 `checkpointed`
       （"有快照、无人跑"，等**用户重试**走入口恢复）。
+    * 每次巡检**顺带**把过期的人工介入现场转成 `expired`（见下方注释）。
 
     **为什么只自动续跑热窗口**：热窗口内"用户无感"才成立（SSE 重放能补齐缺口）；冷窗口里
     用户早已离开，自动烧 token 替他跑完，是花钱买一个他可能不想要的答案。
@@ -315,7 +354,21 @@ async def sweep_once(
         "contended": 0,
         "released": 0,
         "failed": 0,
+        "pending_expired": 0,
     }
+
+    # M7：顺带回收过期的人工介入现场。放在**扫描之前**：run 表读不到不该连带把票也留着。
+    # 为什么需要这一步而不是只在读时过滤 `expires_at > now()`：`create` 依赖
+    # `ux_pending_interactions_open` 部分唯一索引，一条过期但仍挂着的票会占住"同一会话
+    # 同一调用只有一个未完成"的名额，让重新询问静默失败（`expire_stale` 的 docstring 有细节）。
+    # 关掉 reconciler 的部署不会走到这里 —— 后果只是"名额晚点释放"，过期票本来就取不走。
+    try:
+        from app.agent import interactions as pending_interactions
+
+        stats["pending_expired"] = await pending_interactions.expire_stale()
+    except Exception as exc:  # noqa: BLE001 — 回收失败不影响 run 巡检
+        logger.warning("reconciler: 介入现场过期回收失败: %s", exc)
+
     pool = ckpt._pool()  # noqa: SLF001 — 与 checkpoint 同一池来源（同模块族）
     if pool is None:
         return stats

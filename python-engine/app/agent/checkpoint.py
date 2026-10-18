@@ -434,6 +434,40 @@ async def claim_awaiting(
         return False
 
 
+async def release_awaiting(
+    *, tenant_id: str, session_id: str, run_token: str = ""
+) -> bool:
+    """M7：把挂起现场**作废**（`awaiting_input → abandoned`）—— 读完之后唯一的其他出路。
+
+    `load()` / `claim()` / `mark()` 的谓词都不含 `awaiting_input`，所以超窗或快照损坏时
+    **不能**用 `mark()` 收尾（0 行命中 = 那一行会永远停在 `awaiting_input`，每一条后续消息
+    都再白读一次）。可见地放弃、并且真的把它移出"可被接手"的集合，是批 3 那条"降级必须显式"
+    的同一原则。
+    """
+    if not session_id:
+        return False
+    try:
+        pool = _pool()
+        if pool is None:
+            return False
+        result = await pool.execute(
+            """
+            UPDATE agent_runs
+               SET status = 'abandoned', updated_at = now()
+             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+               AND status = 'awaiting_input'
+               AND ($3 = '' OR run_token = $3)
+            """,
+            session_id,
+            tenant_id or "",
+            run_token or "",
+        )
+        return _rowcount(result) > 0
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("awaiting-input release failed (session=%s): %s", session_id, exc)
+        return False
+
+
 async def pending_tool_calls(
     *, session_id: str, limit: int = 50
 ) -> list[dict[str, Any]]:

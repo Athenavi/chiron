@@ -157,9 +157,15 @@ def _call(arguments: dict[str, Any], name: str = "shell_exec") -> dict[str, Any]
 
 
 def _runtime() -> AgentRuntime:
-    """最小 runtime：`_await_approval` 只用到 `_pending_approvals` 与若干方法。"""
+    """最小 runtime：`_await_approval` 只用到 `_pending_approvals` 与若干方法。
+
+    绕过 `__init__` 就不再有 M7 的介入簿记（`_grants` / `_interactions` / `_awaiting_input`），
+    而 `_await_approval` 现在会读它们 —— 用 `_reset_interaction_state()` 补上，将来加字段
+    也不必回来改这里。
+    """
     runtime = AgentRuntime.__new__(AgentRuntime)
-    runtime._pending_approvals = {}
+    runtime._pending_approvals = {}  # noqa: SLF001
+    runtime._reset_interaction_state()  # noqa: SLF001
     return runtime
 
 

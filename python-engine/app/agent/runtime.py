@@ -1006,6 +1006,21 @@ class AgentRuntime:
         #: C1 批 3：本次 run 是否从 checkpoint 续跑（供落盘与指标使用）
         self._resumed_from_checkpoint: Any | None = None
         self._tool_steps = 0
+        # ── M7 人工介入闭环（`app/agent/interactions.py`）──
+        # 三个簿记都以 `tool_call_id` 为键，实例级 ⇒ 天然只活到这一轮结束。
+        # runtime 是**每会话**复用的（见上面 `_last_prefix_fp` 的说明），所以每次 `run()`
+        # 开头必须清一遍：否则上一轮没被取走的票会漏到下一轮去（那是"用旧答复放行新调用"）。
+        #: tc_id → 落库现场 `{id, question}`：这一轮在这里向用户问过的东西
+        self._interactions: dict[str, dict[str, Any]] = {}
+        #: tc_id → 已经在**上一轮挂起期间**收到的答复（`consume_grant` 的返回值）
+        self._grants: dict[str, dict[str, Any]] = {}
+        #: 本轮是否停在"等一个人回答"上（非空 ⇒ 回合末把 run 迁到 `awaiting_input` 并结束）
+        self._awaiting_input: dict[str, Any] | None = None
+
+    def _reset_interaction_state(self) -> None:
+        self._interactions = {}
+        self._grants = {}
+        self._awaiting_input = None
 
     @staticmethod
     def _resolve_compaction(
@@ -1304,14 +1319,21 @@ class AgentRuntime:
         logger.info("compaction dropped content persisted: count=%d", len(dropped))
 
     async def _load_resume_state(self, task: AgentTask) -> Any | None:
-        """C1 批 3：尝试取续跑现场 —— **任何失败都回落现状**（恢复是增强路径，不阻断对话）。"""
+        """C1 批 3：尝试取续跑现场 —— **任何失败都回落现状**（恢复是增强路径，不阻断对话）。
+
+        带上 `run_token` 才允许接**人工介入挂起**的现场（M7）：那份现场读到之后必须交接手或
+        作废，而"接手"要有一个能写进 `agent_runs.run_token` 的归属凭据 —— 没有它，续跑的
+        回合与挂起的回合在库里就是同一个人，踩踏无从判定。
+        """
         if not getattr(task, "session_id", ""):
             return None
         try:
             from app.agent.resume import load_resume_state
 
             return await load_resume_state(
-                tenant_id=task.tenant_id or "", session_id=task.session_id or ""
+                tenant_id=task.tenant_id or "",
+                session_id=task.session_id or "",
+                run_token=getattr(task, "run_token", "") or "",
             )
         except Exception as exc:  # noqa: BLE001
             logger.warning("resume state lookup failed (session=%s): %s", task.session_id, exc)
@@ -1437,6 +1459,9 @@ class AgentRuntime:
             AgentEvent: 推理事件（文本、工具调用、完成等）
         """
         import uuid as uuid_mod
+
+        # M7：交互闸门的簿记是实例级的，而实例是**每会话**复用的 ⇒ 每轮开头清一次。
+        self._reset_interaction_state()
 
         start_time = time.time()
         total_input_tokens = 0
@@ -2282,10 +2307,16 @@ class AgentRuntime:
 
                     for call in serial_calls:
                         if call.get("name") == ASK_USER_TOOL:
-                            # 提问不执行任何副作用：先发 ask 事件（前端弹卡片），再等答案回填。
-                            # 顺序不可颠倒，否则前端收不到事件、任务永久挂起。
-                            yield self._ask_event(call)
-                            tool_result = await self._await_answer(call, task)
+                            # M7：先取"上一轮挂起期间已经得到的回答"—— 取到了就**不再发问**
+                            # （重复问一遍会把用户答过的东西变成一次新的等待）。
+                            answered = await self._take_ask_grant(call, task)
+                            if answered is not None:
+                                tool_result = answered
+                            else:
+                                # 提问不执行任何副作用：先发 ask 事件（前端弹卡片），再等答案回填。
+                                # 顺序不可颠倒，否则前端收不到事件、任务永久挂起。
+                                yield await self._ask_event(call, task)
+                                tool_result = await self._await_answer(call, task)
                         else:
                             # 循环护栏（**执行前**）：重复调用与来回摆动必须在这里拦下 ——
                             # 放到执行后就晚了，重复的写操作已经落盘。命中即跳过执行，
@@ -2311,8 +2342,29 @@ class AgentRuntime:
                                 # confirm 分支不执行工具（exec_result 为 None），决策回来后由
                                 # _await_approval 补上真实结果；两条路到此处都已是真实结果。
                                 tool_result = exec_result if exec_result is not None else {}
-                                executed_ids.add(call["id"])
+                                if self._awaiting_input is None:
+                                    executed_ids.add(call["id"])
                         batch_results[call["id"]] = tool_result
+                        if self._awaiting_input is not None:
+                            # M7：这一步在等人 ⇒ 本轮到此为止。后面还没跑的调用不会拿到
+                            # 空 `{}`（那在模型眼里是一次没有解释的失败），见下面的补齐。
+                            break
+
+                    #: 因为挂起而**没有执行**的调用（不进 checkpoint 的 done_tools：
+                    #: 它们没做完，续跑的那一轮还要做）
+                    deferred_ids: set[str] = set()
+                    if self._awaiting_input is not None:
+                        for call in tool_calls:
+                            if call["id"] in batch_results or call["id"] in duplicate_plan_ids:
+                                continue
+                            batch_results[call["id"]] = {
+                                "not_executed": True,
+                                "reason": (
+                                    "本轮停在一步等待用户确认，这一次调用**没有执行**；"
+                                    "用户确认后会从暂停处继续。"
+                                ),
+                            }
+                            deferred_ids.add(call["id"])
 
                     for call in tool_calls:
                         tool_result = batch_results.get(call["id"], {})
@@ -2337,22 +2389,27 @@ class AgentRuntime:
 
                         # ── 预算：步数轴 ──
                         # `max_turns` 限的是"轮"，而一轮里可以调任意多次工具 —— 这是最直接的漏口。
-                        self._tool_steps += 1
-                        if budget.exceeded(steps=self._tool_steps) == "steps":
-                            logger.warning(
-                                "Agent budget exceeded (axis=steps, steps=%d, task=%s)",
-                                self._tool_steps,
-                                task.id,
-                            )
-                            yield AgentEvent(
-                                type="error",
-                                error="budget_exceeded:steps",
-                                trace_id=trace_id,
-                            )
-                            return
+                        #
+                        # M7：因挂起而**没执行**的调用不计步、也不记副作用。它既没花 token 也没
+                        # 动手，记进去除了把"这一步没做完"伪装成"这一步做过了"之外没有别的作用 ——
+                        # 而副作用账本会据此列出一个根本没有发生过的改动。
+                        if call["id"] not in deferred_ids:
+                            self._tool_steps += 1
+                            if budget.exceeded(steps=self._tool_steps) == "steps":
+                                logger.warning(
+                                    "Agent budget exceeded (axis=steps, steps=%d, task=%s)",
+                                    self._tool_steps,
+                                    task.id,
+                                )
+                                yield AgentEvent(
+                                    type="error",
+                                    error="budget_exceeded:steps",
+                                    trace_id=trace_id,
+                                )
+                                return
 
-                        # 副作用账本：记下这次动用了什么能力、能不能撤销
-                        await self._record_side_effect(task, call, tool_result)
+                            # 副作用账本：记下这次动用了什么能力、能不能撤销
+                            await self._record_side_effect(task, call, tool_result)
 
                         # 记录工具执行结果 (带 trace span)
                         tool_start = time.time()
@@ -2404,13 +2461,28 @@ class AgentRuntime:
                                 tool_call_id=call["id"],
                             )
                         )
-                        done_tool_ids.append(call["id"])
+                        # M7：停在"等人"上的那一轮里，没有执行的调用**不算完成** ——
+                        # 把它们记进 done_tools，续跑的那一轮就会以为它们已经做过了。
+                        if call["id"] not in deferred_ids:
+                            done_tool_ids.append(call["id"])
 
                     logger.info(
                         "Tool calls processed: %d tools, total msgs=%d",
                         len(tool_calls),
                         len(messages),
                     )
+
+                    if self._awaiting_input is not None:
+                        # M7：**先**把"这一步在等你"写进历史与事件，**再**落 checkpoint ——
+                        # 顺序反了，续跑那一轮看到的现场就没有这句解释（而用户看到的最后一条
+                        # 消息会停在一个没有下文的工具结果上）。
+                        # 用普通 `text` 事件而不是新事件类型：SSE 与前端早就认这条，
+                        # 挂起因此不依赖任何前端改动就能"看得见"。
+                        _notice = str(self._awaiting_input.get("notice") or "")
+                        if _notice:
+                            messages.append(_normalize_msg(role="assistant", content=_notice))
+                            _answered = True
+                            yield AgentEvent(type="text", content=_notice, trace_id=trace_id)
 
                     # ── C1 批 2：回合末 checkpoint 落盘（**只写不读**）──
                     # 回合边界是唯一"粒度够粗、语义又完整"的落点（工具调用发生在回合内，
@@ -2452,6 +2524,21 @@ class AgentRuntime:
                             messages, model=model, actual_input_tokens=total_input_tokens
                         )
 
+                    if self._awaiting_input is not None:
+                        # 停在"等人"上：把 run 迁到 `awaiting_input` 并**结束本轮**。
+                        #
+                        # 用 `break` 而不是 `return` 是这条路径的关键：走正常的回合末出口才会
+                        # 保存 session 缓存（`_cache_saved`），而 `finally` 把"缓存没保存"当作
+                        # **异常退出**处理 —— 那会触发一次会话级记忆 rollup 并丢掉 L1 簿记
+                        # （见本方法 `finally` 里 A3 的核实）。挂起不是会话结束。
+                        #
+                        # 迁出活跃集合的三个后果都是要的：唯一索引释放会话（用户可以接着聊别的）、
+                        # reconciler 不可能接管一个等人的回合、陈旧挂起快照不会被无关消息复活。
+                        from app.agent.checkpoint import STATUS_AWAITING_INPUT
+
+                        await self._mark_run_status(task, STATUS_AWAITING_INPUT)
+                        break
+
                     # 继续推理
                     continue
 
@@ -2480,13 +2567,18 @@ class AgentRuntime:
             # 评审 → 不合格则修订 → 再评审，最多 cfg.max_iterations 轮。
             # 用量**计入** total_*_tokens：它同时进 done 事件与 tokens 轴的越界判定，
             # 否则"自查花了多少"在预算上完全不可见。
-            rubric_outcome = await self._run_rubric_turn(
-                task=task,
-                model=model,
-                messages=messages,
-                budget=budget,
-                tokens_used=total_input_tokens + total_output_tokens,
-            )
+            # S6b 的自查/修订是一次**新的 LLM 调用**：把它接在"等你确认"之后，等于在
+            # 用户还没回答时就对一份没做完的草稿下评审结论（修订稿还会盖掉暂停点）。
+            if self._awaiting_input is None:
+                rubric_outcome = await self._run_rubric_turn(
+                    task=task,
+                    model=model,
+                    messages=messages,
+                    budget=budget,
+                    tokens_used=total_input_tokens + total_output_tokens,
+                )
+            else:
+                rubric_outcome = None
             if rubric_outcome is not None:
                 total_input_tokens += rubric_outcome.input_tokens
                 total_output_tokens += rubric_outcome.output_tokens
@@ -2631,7 +2723,12 @@ class AgentRuntime:
             # 既让唯一索引 `ux_agent_runs_session_active` 迟迟不放，又让 6 分钟后的
             # reconciler 把"活得好好的已完成 run"当成僵尸标成 `checkpointed` ——
             # 而 `ckpt.load` 不看状态，下一条消息就可能从这个陈旧快照"续跑"。
-            await self._mark_run_status(task, "completed")
+            #
+            # 挂起路径**不写** completed：这一轮没有完成，`awaiting_input` 才是它的终态。
+            # （不显式挡住也不会出错 —— `mark()` 只迁活跃集合内的行，而 awaiting_input
+            # 刻意不在里面 —— 但"靠 0 命中来表达语义"迟早会被下一个人改坏。）
+            if self._awaiting_input is None:
+                await self._mark_run_status(task, "completed")
 
         except Exception as e:
             logger.error("Agent runtime error (task=%s): %s", task.id, e)
@@ -3083,6 +3180,140 @@ class AgentRuntime:
             task_intent=str(getattr(task, "content", "") or "")[:500],
         )
 
+    # ── M7 人工介入现场：落库 / 取票 / 挂起 ────────────────────────────────
+    #
+    # 这三条都必须是**fail-soft** 的：持久通道是"让等待可见、可跨进程"的增强路径，
+    # 不是许可来源。任何一步失败都退回 M6 的即时拒绝（`149f6a7`），绝不会出现
+    # "没落库所以自动批准"或"异常把整轮打断"。
+
+    async def _take_interaction_grant(
+        self, task: AgentTask, *, kind: str, tool_name: str, args_hash: str
+    ) -> dict[str, Any] | None:
+        """取回用户在**上一轮挂起期间**给出的答复（单次消费）。
+
+        认票的是 (会话, 类型, 工具名, 参数哈希)，不是 `tool_call_id`：续跑的是新回合，
+        模型会把同一个调用排成新 id。参数变了就是另外一件事，必须重新问。
+        """
+        if not getattr(task, "session_id", "") or not args_hash:
+            return None
+        from app.agent import interactions
+
+        return await interactions.consume_grant(
+            tenant_id=task.tenant_id or "",
+            session_id=task.session_id or "",
+            kind=kind,
+            tool_name=tool_name,
+            args_hash=args_hash,
+        )
+
+    async def _register_interaction(
+        self,
+        task: AgentTask,
+        *,
+        kind: str,
+        tool_call_id: str,
+        tool_name: str,
+        args_hash: str,
+        question: str,
+        request: dict[str, Any],
+    ) -> str:
+        """把"这一步在等人"登记成落库现场，返回行 id（写不进去返回空串）。
+
+        **前提：这一轮必须有一份能被续跑的 run 现场**（`task.run_token` 非空，由提交入口注入，
+        见 `app/main.py` 的 `_ACTIVE_RUNTIMES`）。不满足时**不登记**，而不是登记了再挂着：
+        子 Agent 的任务跑在合成会话 `sub:<父>:<run>` 下、没有 run 行，一张这样的票既不会被
+        任何续跑取走，也不会出现在父会话的待办列表里 —— 用户答了却没有下文，比"没人答所以拒了"
+        更不诚实（这条路径因此保持 M6 的即时拒绝）。
+        """
+        if not getattr(task, "run_token", ""):
+            return ""
+        from app.agent import interactions
+
+        interaction_id = await interactions.create(
+            tenant_id=getattr(task, "tenant_id", "") or "",
+            user_id=getattr(task, "user_id", "") or "",
+            session_id=getattr(task, "session_id", "") or "",
+            kind=kind,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            args_hash=args_hash,
+            request=request,
+            run_token=getattr(task, "run_token", "") or "",
+            turn_id=str(getattr(task, "id", "") or ""),
+        )
+        if interaction_id:
+            self._interactions[tool_call_id] = {"id": interaction_id, "question": question}
+        return interaction_id
+
+    async def _settle_interaction(
+        self, task: AgentTask, tool_call_id: str, decision: dict[str, Any], *, reason: str = ""
+    ) -> None:
+        """实时通道收到了答复 ⇒ 把落库现场一并记上答复并关掉。
+
+        这一步不是"顺手写审计"：如果那条行留在 `pending`，列表里会挂着一个早已答完的问题，
+        而用户答第二次就变成一张**将来**能被同类调用取走的票。
+        """
+        interaction = self._interactions.pop(tool_call_id, None)
+        if not interaction:
+            return
+        from app.agent import interactions
+
+        await interactions.settle(
+            interaction_id=str(interaction.get("id") or ""),
+            decision=decision,
+            reason=reason,
+            decided_by=task.user_id or "",
+        )
+
+    def _suspend_for_input(
+        self, task: AgentTask, tool_call_id: str, *, tool_name: str, kind: str
+    ) -> dict[str, Any] | None:
+        """把"这一轮停在等人上"登记下来，返回给模型看的工具结果；没有落库现场则 None。
+
+        返回 None = 这一轮**不能**挂起（没有持久通道：PG 不可用，或没有 run 现场可迁 ——
+        见 `_register_interaction` 的前提）。调用方必须退回原有行为（M6 的即时拒绝 / 超时错误）：
+        **没有下文的挂起等于永久挂起**。
+        """
+        interaction = self._interactions.get(tool_call_id)
+        if not interaction:
+            return None
+        question = str(interaction.get("question") or "")
+        if kind == "question":
+            notice = (
+                f"这个问题需要你回答后才继续：{question}\n"
+                "（本轮到此暂停，已完成的部分不会重做；你的回答会开启接着跑的新一轮。）"
+            )
+        else:
+            notice = (
+                f"这一步需要你确认后才继续：{question}\n"
+                "（本轮到此暂停，已完成的部分不会重做；你确认后会自动接着跑。）"
+            )
+        self._awaiting_input = {
+            "id": str(interaction.get("id") or ""),
+            "kind": kind,
+            "tool_call_id": tool_call_id,
+            "tool_name": tool_name,
+            "question": question,
+            "notice": notice,
+        }
+        logger.info(
+            "turn suspended awaiting user input (session=%s kind=%s tool=%s interaction=%s)",
+            task.session_id,
+            kind,
+            tool_name,
+            self._awaiting_input["id"],
+        )
+        return {
+            "awaiting_user_input": True,
+            "interaction_id": self._awaiting_input["id"],
+            "question": question,
+            "note": (
+                "本轮已在这一步暂停，等用户在会话里回答；他的回答会自动开启新一轮从这一步继续。"
+                "**现在不要再发起这个调用，也不要换个写法重试** —— 把已完成的步骤和"
+                "为什么需要确认讲清楚，然后结束这一轮。"
+            ),
+        }
+
     async def _begin_approval(
         self,
         tool_call: dict[Any, Any],
@@ -3112,11 +3343,12 @@ class AgentRuntime:
         # （见 _second_check_approval）。写失败不阻断审批 —— 少一道校验，而不是卡住用户。
         from app.agent.tool_policy import args_hash as _args_hash
 
+        ahash = _args_hash(tool_name, targs)
         await self._store_approval_ticket(
             ApprovalTicket(
                 tool_call_id=tc_id,
                 tool_name=tool_name,
-                args_hash=_args_hash(tool_name, targs),
+                args_hash=ahash,
                 turn_id=str(getattr(task, "id", "") or ""),
             )
         )
@@ -3133,12 +3365,46 @@ class AgentRuntime:
         if reason:
             # hook 的 `ask`：把"**谁**在要求确认"一并说清 —— 用户要能看出这不是工具策略判的
             content = f"{content}；{reason}"
+
+        # ── M7：先取票，再决定要不要问 ──
+        # 顺序是有意的：`consume_grant` 会把那条落库现场置成 `consumed`，于是"用户已经答过"
+        # 的这一轮不会再登记一条新的等待（否则同一个问题在列表里出现两遍，而第二次答复会变成
+        # 一张能被将来同类调用取走的票）。取不到票才登记"正在等人"。
+        from app.agent import interactions as _ix
+
+        grant = await self._take_interaction_grant(
+            task, kind=_ix.KIND_APPROVAL, tool_name=tool_name, args_hash=ahash
+        )
+        if grant is not None:
+            self._grants[tc_id] = grant
+            content = f"（已按你先前的确认执行）{content}"
+        else:
+            await self._register_interaction(
+                task,
+                kind=_ix.KIND_APPROVAL,
+                tool_call_id=tc_id,
+                tool_name=tool_name,
+                args_hash=ahash,
+                question=content,
+                request={
+                    "kind": _ix.KIND_APPROVAL,
+                    "tool_name": tool_name,
+                    "level": level,
+                    "arguments": targs,
+                    "question": content,
+                    "risk": risk,
+                },
+            )
+
         logger.info(
-            "Tool %s requires approval (id=%s level=%s hook_ask=%s), awaiting user decision",
+            "Tool %s requires approval (id=%s level=%s hook_ask=%s): %s",
             tool_name,
             tc_id,
             level,
             bool(reason),
+            "carrying a decision from the earlier turn"
+            if grant is not None
+            else "awaiting user decision",
         )
         return AgentEvent(
             type="approval",
@@ -3159,7 +3425,14 @@ class AgentRuntime:
         依赖（副本扩缩容会导致亲和漂移、审批静默超时），这里同时等待两条通道：
         1. 本地 Future —— 同副本命中，零延迟；
         2. Redis 决策键 ``{prefix}approval:{tool_call_id}`` —— 任意副本写入，单次消费（GET+DEL）。
-        先到者胜；超时仍视为拒绝（与单副本语义一致）。
+        先到者胜。
+
+        M7 之后决定有**三个**来源，优先级就是下面代码的顺序：
+        ① 上一轮挂起期间用户经 `/v1/interactions/{id}/resolve` 给出的落库答复（`_grants`）；
+        ② 本轮的实时答复（Future / Redis 键），收到后把落库现场一并 `settle` 掉；
+        ③ 没有人答（无人值守，或等到超时）⇒ **挂起**：把这一步留在"等你确认"上、
+        以 `awaiting_input` 结束本轮（见 `_suspend_for_input`）。只有**连落库现场都没有**
+        时才退回 M6 的即时拒绝 / 超时错误 —— 没有现场的挂起等于永久挂起。
         """
         tool_name = tool_call.get("name", "")
         tc_id = tool_call.get("id") or tool_name
@@ -3179,11 +3452,50 @@ class AgentRuntime:
         if future is None:
             return {"error": f"Tool '{tool_name}' approval state missing"}
 
-        if self._unattended:
-            # 与"用户点了拒绝"同一条收口，只是原因是没人能点。空等 300s 的代价不只是慢：
-            # reconciler 是 `await runner(task)` 串行跑续跑的，一次审批把整个巡检节拍钉住，
-            # 而用户回来看到的是一条没有任何上下文的中断。
+        grant = self._grants.pop(tc_id, None)
+        if grant is not None:
+            # M7：这张票是用户在**上一轮挂起期间**给出的（`consume_grant` 已把它置成
+            # consumed ⇒ 只会生效一次）。这里不再等，直接走下面同一条 批准/拒绝/编辑 路径：
+            # 二次校验照跑，"批准的正是执行的"这条不变量**不因跨进程而松动**。
             self._pending_approvals.pop(tc_id, None)
+            decision = ApprovalDecision.from_raw(json.dumps(grant.get("decision") or {}))
+            if decision is None:
+                # 载荷读不出 = 没有任何人给过一次可执行的批准 ⇒ fail-closed
+                logger.warning(
+                    "durable grant for tool %s (id=%s) is unreadable — not executed",
+                    tool_name, tc_id,
+                )
+                _record_approval_audit(
+                    tc_id, tool_name, DECISION_REJECT,
+                    original_arguments=orig_args,
+                    reason="durable grant payload is not a valid decision",
+                )
+                return {
+                    "error": (
+                        f"Tool '{tool_name}' was NOT executed: the stored decision could not be "
+                        f"read; re-issue the tool call to ask the user again"
+                    )
+                }
+            decision.reason = (
+                decision.reason
+                or str(grant.get("reason") or "")
+                or "answered in an earlier turn"
+            )
+            logger.info("Tool %s carried a decision from the earlier turn (id=%s)", tool_name, tc_id)
+        elif self._unattended:
+            # 与"用户点了拒绝"同一条收口，只是原因是没人能点。空等 300s 的代价不只是慢：
+            # reconciler 是 `await runner(task)` 串行跑续跑的，一次审批把整个巡检节拍钉住。
+            self._pending_approvals.pop(tc_id, None)
+            suspended = self._suspend_for_input(
+                task, tc_id, tool_name=tool_name, kind="approval"
+            )
+            if suspended is not None:
+                # M7：这一步**留在"等你确认"上**而不是假装被拒绝 —— 落库现场已经在，
+                # 用户现在有了一个可以回答的地方。
+                # 这里**不**写决定审计：决定还没发生；`_record_approval_request` 已经记下了
+                # "问了但没等到决定"，那正是这条路径要能被看出来的原因。
+                return suspended
+            # 没有可挂起的现场（PG 不可用 / 这一轮没有可续跑的 run）⇒ 退回 M6 的即时拒绝
             logger.info("Tool %s auto-denied (unattended turn, id=%s)", tool_name, tc_id)
             _record_approval_audit(
                 tc_id, tool_name, DECISION_REJECT,
@@ -3196,18 +3508,38 @@ class AgentRuntime:
                     "Finish without it or tell the user which step needs their confirmation."
                 )
             }
+        else:
+            # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例
+            register_pending_approval(tc_id, self)
+            try:
+                decision = await self._wait_approval_decision(tc_id, future, timeout)
+            finally:
+                self._pending_approvals.pop(tc_id, None)
+                unregister_pending_approval(tc_id)
 
-        # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例
-        register_pending_approval(tc_id, self)
-        try:
-            decision = await self._wait_approval_decision(tc_id, future, timeout)
-        finally:
-            self._pending_approvals.pop(tc_id, None)
-            unregister_pending_approval(tc_id)
+            if decision is None:
+                suspended = self._suspend_for_input(
+                    task, tc_id, tool_name=tool_name, kind="approval"
+                )
+                if suspended is not None:
+                    # 没人答 ≠ 答了"不"：把这一步原样留在"等你确认"里，本轮到此为止。
+                    logger.info(
+                        "Tool %s parked after %ss without an answer (id=%s) — the turn stops here",
+                        tool_name, int(timeout), tc_id,
+                    )
+                    return suspended
+                logger.warning("Tool %s approval timed out (id=%s)", tool_name, tc_id)
+                return {"error": f"Tool '{tool_name}' approval timed out"}
 
-        if decision is None:
-            logger.warning("Tool %s approval timed out (id=%s)", tool_name, tc_id)
-            return {"error": f"Tool '{tool_name}' approval timed out"}
+            # 实时通道收到了答复 ⇒ 一并关掉那条落库现场（没有现场时是 no-op）。
+            # 不关的后果不是"多一行脏数据"而是**语义**：列表里挂着一个早已答完的问题，
+            # 用户再答一次就变成一张将来能被同类调用取走的票。
+            payload: dict[str, Any] = {"decision": decision.decision}
+            if decision.arguments is not None:
+                payload["arguments"] = decision.arguments
+            await self._settle_interaction(
+                task, tc_id, payload, reason=decision.reason
+            )
 
         if decision.decision == DECISION_REJECT:
             logger.info("Tool %s denied by user (id=%s)", tool_name, tc_id)
@@ -3678,33 +4010,87 @@ class AgentRuntime:
         return await _write_approval_decision(tool_call_id, decision)
 
     # ── 结构化提问（ask_user）：与审批同构的答案回收通道 ──────────────
-    def _ask_event(self, tool_call: dict[Any, Any]) -> AgentEvent:
-        """登记待回答 future 并构造 ask 事件。
+    @staticmethod
+    def _ask_args(tool_call: dict[Any, Any]) -> tuple[str, dict[str, Any]]:
+        """`ask_user` 调用的 (tc_id, 参数 dict) —— 取票与发问都要同一份参数指纹。"""
+        tc_id = str(tool_call.get("id") or ASK_USER_TOOL)
+        raw = tool_call.get("arguments")
+        try:
+            targs = json.loads(raw) if isinstance(raw, str) else raw
+        except (json.JSONDecodeError, TypeError):
+            targs = {}
+        return tc_id, (targs if isinstance(targs, dict) else {})
+
+    async def _take_ask_grant(
+        self, tool_call: dict[Any, Any], task: AgentTask
+    ) -> dict[str, Any] | None:
+        """M7：用户在**上一轮挂起期间**回答过这个问题 ⇒ 直接把答复当结果用（不再发问）。
+
+        返回 None = 没有可用答复（或答复载荷读不出）⇒ 调用方照常问一次。载荷读不出时那张票
+        已被 `consume_grant` 消费掉、不会再被复用 —— 宁可重新问一次，也不猜用户想答什么。
+        """
+        from app.agent.interactions import KIND_QUESTION
+        from app.agent.tool_policy import args_hash as _args_hash
+
+        _tc_id, targs = self._ask_args(tool_call)
+        grant = await self._take_interaction_grant(
+            task,
+            kind=KIND_QUESTION,
+            tool_name=ASK_USER_TOOL,
+            args_hash=_args_hash(ASK_USER_TOOL, targs),
+        )
+        if grant is None:
+            return None
+        decision = grant.get("decision") or {}
+        answer = decision.get("answer")
+        if isinstance(answer, str) and answer.strip():
+            logger.info("ask_user answered in an earlier turn (id=%s)", _tc_id)
+            return {"answer": answer}
+        if decision.get("declined"):
+            logger.info("ask_user declined in an earlier turn (id=%s)", _tc_id)
+            return {
+                "declined": True,
+                "reason": str(decision.get("reason") or "user declined to answer"),
+            }
+        logger.warning("ask_user grant payload is not an answer (id=%s) — asking again", _tc_id)
+        return None
+
+    async def _ask_event(self, tool_call: dict[Any, Any], task: AgentTask) -> AgentEvent:
+        """登记待回答 future + 落库现场，并构造 ask 事件。
 
         **不在本方法内等待**：调用方必须先 yield 该事件（否则前端收不到提问卡片，
         任务会挂到超时），再调 ``_await_answer``。
         """
-        tc_id = tool_call.get("id") or ASK_USER_TOOL
-        try:
-            targs = (
-                json.loads(tool_call["arguments"])
-                if isinstance(tool_call["arguments"], str)
-                else tool_call["arguments"]
-            )
-        except (json.JSONDecodeError, TypeError):
-            targs = {}
-        targs = targs or {}
+        from app.agent.interactions import KIND_QUESTION
+        from app.agent.tool_policy import args_hash as _args_hash
+
+        tc_id, targs = self._ask_args(tool_call)
         loop = asyncio.get_running_loop()
         future: asyncio.Future[Any] = loop.create_future()
         self._pending_answers[tc_id] = future
         options = targs.get("options")
+        question = str(targs.get("question") or "需要你的确认")
+        await self._register_interaction(
+            task,
+            kind=KIND_QUESTION,
+            tool_call_id=tc_id,
+            tool_name=ASK_USER_TOOL,
+            args_hash=_args_hash(ASK_USER_TOOL, targs),
+            question=question,
+            request={
+                "kind": KIND_QUESTION,
+                "tool_name": ASK_USER_TOOL,
+                "question": question,
+                "options": [str(o) for o in options] if isinstance(options, list) else [],
+            },
+        )
         logger.info("ask_user awaiting answer (id=%s)", tc_id)
         return AgentEvent(
             type="ask",
             tool_call_id=tc_id,
             tool_name=ASK_USER_TOOL,
             tool_arguments=json.dumps(targs, ensure_ascii=False),
-            content=str(targs.get("question") or "需要你的确认"),
+            content=question,
             options=[str(o) for o in options] if isinstance(options, list) else [],
         )
 
@@ -3713,17 +4099,27 @@ class AgentRuntime:
     ) -> dict[Any, Any]:
         """等待用户回答（前端经 /v1/agent/answer → submit_answer）。
 
-        多副本与审批同理：同时等待本地 Future 与 Redis 答案键，先到者胜；
-        超时按「未回答」返回错误，让模型可以继续或改问别的。
+        多副本与审批同理：同时等待本地 Future 与 Redis 答案键，先到者胜。
+
+        M7：**没人答**（无人值守 / 等到超时）时不再当成一次失败，而是把这个问题原样留在
+        "等你回答"上并以 `awaiting_input` 结束本轮 —— 只有连落库现场都没有时才退回旧行为
+        （`declined` / 超时错误），因为没有现场的等待等于永久等待。
         """
+        from app.agent.interactions import KIND_QUESTION
+
         tc_id = tool_call.get("id") or ASK_USER_TOOL
         future = self._pending_answers.get(tc_id)
         if future is None:
             return {"error": "ask_user state missing"}
         if self._unattended:
+            self._pending_answers.pop(tc_id, None)
+            suspended = self._suspend_for_input(
+                task, tc_id, tool_name=ASK_USER_TOOL, kind=KIND_QUESTION
+            )
+            if suspended is not None:
+                return suspended
             # 用 `declined` 而不是 `error`：这是**一个答复**（没人能答），不是故障。
             # 模型据此可以自行决定或改做别的，而不是把它当成网络问题重试。
-            self._pending_answers.pop(tc_id, None)
             logger.info("ask_user auto-declined (unattended turn, id=%s)", tc_id)
             return {
                 "declined": True,
@@ -3734,14 +4130,29 @@ class AgentRuntime:
         finally:
             self._pending_answers.pop(tc_id, None)
         if answer is None:
+            suspended = self._suspend_for_input(
+                task, tc_id, tool_name=ASK_USER_TOOL, kind=KIND_QUESTION
+            )
+            if suspended is not None:
+                logger.info(
+                    "ask_user parked after %ss without an answer (id=%s) — the turn stops here",
+                    int(timeout),
+                    tc_id,
+                )
+                return suspended
             logger.warning("ask_user timed out (id=%s)", tc_id)
             return {"error": "user did not answer in time"}
+
         if answer == ASK_DECLINED:
             # 拒绝是**明确的答复**，不是失败：给模型一个可区分的 identity，
             # 它才知道"用户看到了但不愿回答"，可以改问法或自行决定，而不是当成没收到。
             logger.info("ask_user declined (id=%s)", tc_id)
+            await self._settle_interaction(
+                task, tc_id, {"declined": True}, reason="user declined to answer"
+            )
             return {"declined": True, "reason": "user declined to answer"}
         logger.info("ask_user answered (id=%s)", tc_id)
+        await self._settle_interaction(task, tc_id, {"answer": answer})
         return {"answer": answer}
 
     async def _wait_answer_decision(
