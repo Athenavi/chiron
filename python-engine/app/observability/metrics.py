@@ -136,6 +136,11 @@ SUBAGENT_RUN_UNFINALIZED = Gauge(
     "Runs this instance started but has not finalized (persistent growth means a "
     "finalize path is missing; 本项即 P1-3「状态转移的观测面」，定义见本文件上方同名小节)",
 )
+SUBAGENT_LINE_GATE = Counter(
+    "subagent_line_gate_total",
+    "Run-line budget gate trips (M15b): line_tokens = 累计到上限, line_paused = 被人按了暂停",
+    ["axis"],
+)
 SUBAGENT_PERSIST_FAILED = Counter(
     "subagent_persist_failed_total",
     "Subagent state persistence failures (run state may be lost permanently)",

@@ -34,6 +34,10 @@ class AgentTask:
     llm_config: dict[str, Any] = field(default_factory=dict)
     max_turns: int = 5
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
+    #: M15b：本次 run 归属的**任务线根**（`subagent_runs.root_run_id`，见迁移 0021）。
+    #: 只有子 Agent 有它 —— 线账统计的是委派树的 token（主 run 自己那一份不在 `subagent_runs`
+    #: 里），runtime 据此在每轮开头判"这条线是不是已经花到上限"。空串 = 不做线账判定。
+    subagent_line: str = ""
     #: 本次 run 的唯一凭据（由入口生成，与 Go 侧运行锁 / Redis 归属租约同源）。
     #: C1 批 3+ 的**接管 CAS** 靠它判定"要接管的那一行是不是我看到的那个 run"。
     run_token: str = ""
