@@ -202,6 +202,12 @@ services:
       # 向量库(Milvus 已在本 compose 提供;pgvector 时改 VECTOR_DB_TYPE=pgvector)
       MILVUS_ADDRESS: ${MILVUS_ADDRESS:-milvus:19530}
       VECTOR_DB_TYPE: ${VECTOR_DB_TYPE:-milvus}
+      # 记忆层(L3 摘要向量)后端:pg | milvus。默认 pg —— 向量落 memory_summaries.embedding
+      # (迁移 0019),判重与语义召回直接读它。Milvus 属 selfhosted-s3 profile(默认不启动),
+      # 把它当默认后端会让"L3 语义召回"静默恒空 —— 这正是本轮修掉的缺陷。
+      # 与上面的 VECTOR_DB_TYPE 是两个口径(那个管知识库向量,这个管摘要向量;见 app/config.py)。
+      # 切换 = 改这里 + 重启,不是后台热开关。
+      MEMORY_VECTOR_BACKEND: ${MEMORY_VECTOR_BACKEND:-pg}
       # 多实例注意:每个启用 MCP 的引擎副本都会对活跃用户持有 MCP 连接,
       # 连接规模 ≈ 副本数 × 活跃用户数 × MCP server 数,扩容会瞬间放大第三方连接。
       # compose 面向多副本编排,因此默认关闭;需要 MCP 的副本(或单机部署)请显式

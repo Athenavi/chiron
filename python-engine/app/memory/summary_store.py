@@ -1,8 +1,9 @@
 """L3 SummaryStore Provider - 对话摘要存储与语义检索。
 
 本模块实现 L3 层对话摘要的存储与检索：
-- save_summary: 双写 PG（memory_summaries 表）+ Milvus（向量索引）
-- recall: 向量检索 + final_score 排序 + token 预算控制
+- save_summary: 写 PG（memory_summaries 表，**含向量列**），配成 milvus 时再镜像一份到 Milvus
+- recall: 按 `MEMORY_VECTOR_BACKEND` 选路 —— pg 走「取候选 + 本层精确余弦」，
+  milvus 走 ANN；两级都拿不到时退回按时间取，并把 source 记成 `recent`（不再冒充语义命中）
 - 查询缓存: Redis 5 分钟缓存 query 结果
 - 嵌入向量缓存: Redis 30 分钟缓存 query embedding
 """
@@ -17,8 +18,21 @@ from typing import Any
 
 import redis.asyncio as aioredis
 
+from app.config import settings
 from app.db import get_pool
-from app.memory.layers import MemoryType, RecalledItem, Scope, SummaryEntry
+from app.memory.layers import (
+    CosineScorer,
+    MemoryType,
+    RecalledItem,
+    Scope,
+    SummaryEntry,
+)
+from app.memory.vector_backend import (
+    MILVUS,
+    FailureLog,
+    parse_vector,
+    resolve,
+)
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -32,6 +46,16 @@ DEFAULT_TOP_K = 5  # 默认返回条数
 FINAL_SCORE_WEIGHT_RECENCY = 0.4  # recency 权重
 FINAL_SCORE_WEIGHT_ACCESS = 0.3  # access_count 权重
 FINAL_SCORE_WEIGHT_SIMILARITY = 0.3  # 相似度权重
+
+#: PG 语义扫描一次取多少条候选。不是"全表"：单租户/单用户的活跃摘要被保留期
+#: （`archive_expired`）与这里的上限双重夹住，M12 实测 200 条 1-vs-N 精确扫描约 16ms，
+#: 所以这一层不需要 ANN 索引（同迁移 0019 的判定）。
+CANDIDATE_LIMIT = 200
+
+_RECALL_COLUMNS = (
+    "id, content, topics, entities, turn_start, turn_end, session_id, "
+    "access_count, last_accessed_at, created_at"
+)
 
 # Milvus collection name
 MILVUS_COLLECTION = "memory_store"
@@ -49,8 +73,8 @@ MILVUS_FIELD_METADATA = "metadata"
 class SummaryStore:
     """L3 摘要存储 Provider。
 
-    负责管理 PostgreSQL 中 memory_summaries 表和 Milvus 向量索引的双写操作，
-    并通过 Redis 缓存优化查询性能。
+    负责 PG 中 memory_summaries 表（正文 + 元数据 + 向量列）的读写，
+    并按配置可选地维护一份 Milvus 镜像；查询结果经 Redis 缓存。
     """
 
     def __init__(self, redis: aioredis.Redis, embedding_fn: Any = None) -> None:
@@ -64,6 +88,7 @@ class SummaryStore:
         self._pool = get_pool()
         self._embedding_fn = embedding_fn
         self._milvus_collection = None
+        self._milvus_fail = FailureLog("Milvus 摘要检索")
 
     # ── 缓存键生成 ──────────────────────────────────────────────────────
 
@@ -120,7 +145,7 @@ class SummaryStore:
     # ── Milvus 连接管理 ────────────────────────────────────────────────
 
     def _get_milvus_collection(self) -> Any:
-        """延迟获取 Milvus collection。"""
+        """延迟获取 Milvus collection；不可达时由 FailureLog 大声一次。"""
         if self._milvus_collection is not None:
             return self._milvus_collection
 
@@ -128,9 +153,10 @@ class SummaryStore:
             from pymilvus import Collection
 
             self._milvus_collection = Collection(MILVUS_COLLECTION)
+            self._milvus_fail.success()
             return self._milvus_collection
         except Exception as e:
-            logger.warning("Failed to connect to Milvus: %s", e)
+            self._milvus_fail.failure(f"connect: {e}")
             return None
 
     # ── save_summary ──────────────────────────────────────────────────────
@@ -142,8 +168,9 @@ class SummaryStore:
         topics: list[str] | None = None,
         entities: dict[str, list[str]] | None = None,
         turn_range: tuple[int, int] = (0, 0),
+        embedding: list[float] | None = None,
     ) -> str | None:
-        """保存摘要（PG + Milvus 双写）。
+        """保存摘要（向量落 PG，配了 milvus 再镜像一份）。
 
         Args:
             scope: 记忆范围（含 tenant_id, user_id, session_id）。
@@ -151,6 +178,8 @@ class SummaryStore:
             topics: 主题列表。
             entities: 实体字典。
             turn_range: 覆盖的对话轮次范围。
+            embedding: 已算好的向量（Consolidator 按 `topics + 正文` 嵌过就用它的，
+                口径要和判重/召回那两侧一致）；为 None 且配了嵌入函数时按正文补一次。
 
         Returns:
             摘要 ID 或 None（失败时）。
@@ -167,14 +196,21 @@ class SummaryStore:
         raw = f"{tenant_id}:{user_id}:{content}"
         content_hash = f"sha256:{hl.sha256(raw.encode()).hexdigest()[:40]}"
 
+        # 嵌入在 INSERT **之前**：向量是这一行的一个列，分两次写就存在
+        # "行落库了、向量没落"的中间态（PG 提交失败时镜像已经写出去了）。
+        # 失败照旧 fail-soft —— 没向量的摘要仍然有资格按时间被召回。
+        if embedding is None:
+            embedding = await self._get_embedding(content)
+
         # PG 插入
         try:
             row = await self._pool.fetchrow(
                 """INSERT INTO memory_summaries
                    (id, tenant_id, user_id, session_id, content, topics, entities,
                     turn_start, turn_end, content_hash, access_count, last_accessed_at,
-                    status, created_at)
-                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active', NOW())
+                    status, created_at, embedding)
+                   VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active',
+                           NOW(), $11)
                    ON CONFLICT (tenant_id, user_id, content_hash) DO NOTHING
                    RETURNING id""",
                 summary_id,
@@ -187,6 +223,7 @@ class SummaryStore:
                 turn_range[0],
                 turn_range[1],
                 content_hash,
+                list(embedding) if embedding else None,
             )
             if row is None:
                 # 已存在相同 hash，返回已有 ID
@@ -203,9 +240,8 @@ class SummaryStore:
             logger.error("PG insert failed for summary: %s", e)
             return None
 
-        # Milvus 双写（fail-soft）
-        embedding = await self._get_embedding(content)
-        if embedding:
+        # Milvus 镜像（仅当后端配成 milvus —— 配成 pg 时没人查它，写了只是多一次外部调用）
+        if embedding and resolve() == MILVUS:
             await self._milvus_insert(
                 summary_id,
                 tenant_id,
@@ -235,7 +271,7 @@ class SummaryStore:
         topics: list[str] | None,
         entities: dict[str, list[str]] | None,
     ) -> None:
-        """插入向量到 Milvus（fail-soft：失败只警告）。"""
+        """插入向量到 Milvus（fail-soft：PG 已有数据，失败只记日志）。"""
         coll = self._get_milvus_collection()
         if coll is None:
             return
@@ -271,8 +307,10 @@ class SummaryStore:
                 ]
             )
             coll.flush()
+            self._milvus_fail.success()
         except Exception as e:
-            logger.warning("Milvus insert failed (PG has data): %s", e)
+            # PG 已经有这条（含向量），所以镜像失败不致命 —— 但必须记下来。
+            self._milvus_fail.failure(f"insert {summary_id}: {e}")
 
     # ── recall ──────────────────────────────────────────────────────────
 
@@ -282,7 +320,7 @@ class SummaryStore:
         query: str = "",
         top_k: int = DEFAULT_TOP_K,
     ) -> list[RecalledItem]:
-        """召回相关摘要（向量检索 + final_score 排序）。
+        """召回相关摘要（语义检索 + final_score 排序，见下面的三级取数）。
 
         Args:
             scope: 记忆范围。
@@ -290,7 +328,8 @@ class SummaryStore:
             top_k: 返回条数上限。
 
         Returns:
-            按 final_score 排序的召回项列表。
+            按 final_score 排序的召回项列表；`source` 说明这一条是被哪一级选出来的
+            （"vector" = 按查询向量筛过，"recent" = 只按时间取）。
         """
         tenant_id = scope.tenant_id
         user_id = scope.user_id
@@ -304,13 +343,20 @@ class SummaryStore:
         # 获取嵌入向量
         embedding = await self._get_embedding(query) if query else None
 
-        # 向量检索
+        # 取数分三级，从"最准"到"最保底"：
+        #   ① Milvus ANN —— 只有把它配成后端时才查（默认是 pg，见 `MEMORY_VECTOR_BACKEND`）；
+        #   ② PG 精确余弦 —— 用 `memory_summaries.embedding`（迁移 0019 起这一列才有数据）；
+        #   ③ PG 按时间 —— 连查询向量都拿不到（没有嵌入函数 / 嵌入失败 / 空 query）时的保底。
+        # ②③ 都在 PG 里，所以"Milvus 没起来"不再等于"这一轮根本没有语义召回"。
+        items: list[RecalledItem] = []
         if embedding:
-            items = await self._milvus_search(
-                tenant_id, user_id, query, embedding, top_k
-            )
-        else:
-            # 无嵌入时降级：从 PG 取最近摘要
+            if resolve() == MILVUS:
+                items = await self._milvus_search(tenant_id, user_id, embedding, top_k)
+            if not items:
+                items = await self._pg_vector_summaries(
+                    tenant_id, user_id, embedding, top_k
+                )
+        if not items:
             items = await self._pg_recent_summaries(tenant_id, user_id, top_k)
 
         # final_score 排序
@@ -333,14 +379,17 @@ class SummaryStore:
         self,
         tenant_id: str,
         user_id: str,
-        query: str,
         embedding: list[float],
         top_k: int,
     ) -> list[RecalledItem]:
-        """从 Milvus 检索向量相似度。"""
+        """从 Milvus 做 ANN 检索；拿不到就返回空，由 `recall` 的下一级去查 PG。
+
+        这里**不再**顺手降级到"按时间取"：那会跳过 ②（PG 里可能有向量、能算余弦），
+        把一次 ANN 故障直接说成"只能按时间给你"。
+        """
         coll = self._get_milvus_collection()
         if coll is None:
-            return await self._pg_recent_summaries(tenant_id, user_id, top_k)
+            return []
 
         try:
             results = coll.search(
@@ -379,13 +428,61 @@ class SummaryStore:
                                 hit.entity.get(MILVUS_FIELD_CREATED_AT, 0)
                             ),
                             score=hit.score,  # 初始为 cosine 相似度
+                            source="vector",
                         )
                     )
+            self._milvus_fail.success()
             return items
 
         except Exception as e:
-            logger.warning("Milvus search failed, falling back to PG: %s", e)
-            return await self._pg_recent_summaries(tenant_id, user_id, top_k)
+            self._milvus_fail.failure(f"search: {e}")
+            return []
+
+    async def _pg_vector_summaries(
+        self,
+        tenant_id: str,
+        user_id: str,
+        embedding: list[float],
+        top_k: int,
+    ) -> list[RecalledItem]:
+        """② 在 PG 里做 1-vs-N 精确余弦（没有 ANN 索引，候选上限见 `CANDIDATE_LIMIT`）。
+
+        取候选而不是取 top_k：这一级要的是"在全体有向量的摘要里挑最像的 k 条"，
+        按时间取 k 条再在这 k 条里算相似度会挑出"新而不像"。
+        """
+        try:
+            rows = await self._pool.fetch(
+                f"""SELECT {_RECALL_COLUMNS}, embedding
+                   FROM memory_summaries
+                   WHERE tenant_id=$1 AND user_id=$2 AND status='active'
+                   ORDER BY created_at DESC
+                   LIMIT $3""",
+                tenant_id,
+                user_id,
+                CANDIDATE_LIMIT,
+            )
+        except Exception as e:
+            logger.error("PG vector query failed for summaries: %s", e)
+            return []
+
+        scorer = CosineScorer(embedding)
+        threshold = settings.memory_summary_min_cosine
+        scored: list[tuple[float, Any]] = []
+        for row in rows:
+            vec = parse_vector(row["embedding"])
+            if not vec:
+                # 迁移 0019 之前的行没有向量（本轮不做批量回填）：它仍然有资格被 ③ 按时间给出。
+                continue
+            sim = scorer.score(vec)
+            if sim < threshold:
+                continue
+            scored.append((sim, row))
+
+        scored.sort(key=lambda t: -t[0])
+        return [
+            self._row_to_recalled(row, score=sim, source="vector")
+            for sim, row in scored[:top_k]
+        ]
 
     async def _pg_recent_summaries(
         self,
@@ -393,12 +490,10 @@ class SummaryStore:
         user_id: str,
         limit: int,
     ) -> list[RecalledItem]:
-        """从 PG 获取最近摘要（降级方案）。"""
+        """③ 按时间取最近摘要（保底，不是语义命中：source 记成 recent 让读侧如实报 mode）。"""
         try:
             rows = await self._pool.fetch(
-                """SELECT id, content, topics, entities,
-                          turn_start, turn_end, session_id,
-                          access_count, last_accessed_at, created_at
+                f"""SELECT {_RECALL_COLUMNS}
                    FROM memory_summaries
                    WHERE tenant_id=$1 AND user_id=$2 AND status='active'
                    ORDER BY created_at DESC
@@ -407,44 +502,44 @@ class SummaryStore:
                 user_id,
                 limit,
             )
-
-            items = []
-            for row in rows:
-                topics = row["topics"]
-                entities = row["entities"]
-                if isinstance(topics, str):
-                    topics = json.loads(topics)
-                if isinstance(entities, str):
-                    entities = json.loads(entities)
-
-                last_accessed = row["last_accessed_at"]
-                if last_accessed is not None:
-                    last_accessed = last_accessed.timestamp()
-                else:
-                    last_accessed = 0.0
-
-                items.append(
-                    RecalledItem(
-                        id=row["id"],
-                        content=row["content"],
-                        topics=topics or [],
-                        entities=entities or {},
-                        turn_range=(row["turn_start"], row["turn_end"]),
-                        session_id=row["session_id"],
-                        access_count=row["access_count"],
-                        last_accessed_at=last_accessed,
-                        created_at=(
-                            row["created_at"].timestamp()
-                            if row["created_at"]
-                            else time.time()
-                        ),
-                        score=0.0,
-                    )
-                )
-            return items
+            return [
+                self._row_to_recalled(row, score=0.0, source="recent") for row in rows
+            ]
         except Exception as e:
             logger.error("PG query failed for summaries: %s", e)
             return []
+
+    @staticmethod
+    def _row_to_recalled(row: Any, *, score: float, source: str) -> RecalledItem:
+        """memory_summaries 行 → RecalledItem（②③ 共用，差别只在 score 与 source）。"""
+        topics = row["topics"]
+        entities = row["entities"]
+        if isinstance(topics, str):
+            topics = json.loads(topics)
+        if isinstance(entities, str):
+            entities = json.loads(entities)
+
+        last_accessed = row["last_accessed_at"]
+        if last_accessed is not None:
+            last_accessed = last_accessed.timestamp()
+        else:
+            last_accessed = 0.0
+
+        return RecalledItem(
+            id=row["id"],
+            content=row["content"],
+            topics=topics or [],
+            entities=entities or {},
+            turn_range=(row["turn_start"], row["turn_end"]),
+            session_id=row["session_id"],
+            access_count=row["access_count"],
+            last_accessed_at=last_accessed,
+            created_at=(
+                row["created_at"].timestamp() if row["created_at"] else time.time()
+            ),
+            score=score,
+            source=source,
+        )
 
     def _compute_final_scores(self, items: list[RecalledItem]) -> list[RecalledItem]:
         """计算 final_score 排序。
@@ -650,7 +745,12 @@ class SummaryStore:
         entry: SummaryEntry,
         embedding: list[float] | None = None,
     ) -> SummaryEntry:
-        """插入摘要（供 Consolidator 使用，兼容旧接口）。"""
+        """插入摘要（供 Consolidator 使用，兼容旧接口）。
+
+        向量**透传给 `save_summary`** 而不是在这里再补一次：过去这两件事都干了 ——
+        `save_summary` 自己按正文嵌一次并写 Milvus，这里又用调用方给的（`topics + 正文`）
+        向量再写一次，同一个 `summary_id` 在 Milvus 里落两条**不同口径**的向量。
+        """
         result = await self.save_summary(
             scope=Scope(
                 tenant_id=entry.tenant_id,
@@ -661,6 +761,7 @@ class SummaryStore:
             topics=entry.topics,
             entities=entry.entities,
             turn_range=(entry.turn_start, entry.turn_end),
+            embedding=embedding,
         )
         if result is None:
             raise RuntimeError("Failed to insert summary")
@@ -669,19 +770,8 @@ class SummaryStore:
         if created is None:
             raise RuntimeError(f"Summary not found after insert: {result}")
 
-        if embedding:
-            await self._milvus_insert(
-                created.id,
-                created.tenant_id,
-                created.user_id,
-                created.session_id,
-                created.content,
-                embedding,
-                (created.turn_start, created.turn_end),
-                created.topics,
-                created.entities,
-            )
-            created.embedding = embedding
+        # get_by_id 的投影不含向量，手上有就直接挂上，省一次 6KB 数组的往返。
+        created.embedding = embedding
 
         return created
 
@@ -715,13 +805,29 @@ class SummaryStore:
         tenant_id: str,
         user_id: str,
         limit: int = 50,
+        *,
+        with_embedding: bool = False,
     ) -> list[SummaryEntry]:
-        """列出活跃摘要（供 Consolidator 近重复检测使用）。"""
+        """列出活跃摘要。
+
+        `with_embedding=True` 只该出现在要算余弦的地方（Consolidator 的近重复扫描、
+        `MemoryService` 的退化召回）：默认投影不带向量，记忆面板列 50 条时
+        反序列化 50×1536 个浮点数是纯浪费（同 M12 对容量淘汰那条路的处置）。
+        """
+        columns = (
+            "id, tenant_id, user_id, session_id, content, topics, entities, "
+            "turn_start, turn_end, content_hash, access_count, last_accessed_at, "
+            "status, created_at, embedding"
+            if with_embedding
+            else (
+                "id, tenant_id, user_id, session_id, content, topics, entities, "
+                "turn_start, turn_end, content_hash, access_count, last_accessed_at, "
+                "status, created_at"
+            )
+        )
         try:
             rows = await self._pool.fetch(
-                """SELECT id, tenant_id, user_id, session_id, content, topics, entities,
-                          turn_start, turn_end, content_hash, access_count, last_accessed_at,
-                          status, created_at
+                f"""SELECT {columns}
                    FROM memory_summaries
                    WHERE tenant_id=$1 AND user_id=$2 AND status='active'
                    ORDER BY created_at DESC
@@ -775,4 +881,6 @@ class SummaryStore:
             last_accessed_at=last_accessed,
             status=row["status"],
             created_at=created_at,
+            # 投影没选这一列时 .get 返回 None = "这条没有向量"，与 NULL 同义。
+            embedding=parse_vector(row.get("embedding")),
         )

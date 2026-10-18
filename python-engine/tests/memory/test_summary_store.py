@@ -8,18 +8,21 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import time
 from datetime import UTC, datetime
 from typing import Any
 
 import pytest
 
+from app.config import settings
 from app.memory.layers import (
     MemoryType,
     RecalledItem,
     Scope,
 )
 from app.memory.summary_store import (
+    CANDIDATE_LIMIT,
     DEFAULT_TOP_K,
     EMBEDDING_CACHE_TTL,
     FINAL_SCORE_WEIGHT_ACCESS,
@@ -97,9 +100,33 @@ class MockDatabasePool:
                 "last_accessed_at": None,
                 "status": "active",
                 "created_at": now,
+                # $11 = embedding（迁移 0019 的那一列）；替身按位置取，位置变了就该失败。
+                "embedding": args[10] if len(args) > 10 else None,
             }
             self._inserted_ids.append(summary_id)
             return {"id": summary_id}
+
+        elif "SELECT id, content, topics, entities, turn_start, turn_end, session_id, " in (
+            query
+        ) and "embedding" in query:
+            # _pg_vector_summaries 查询（② 候选扫描：必须带向量列）
+            tenant_id, user_id = args[0], args[1]
+            limit = args[2] if len(args) > 2 else CANDIDATE_LIMIT
+            results = []
+            for _sid, s in sorted(
+                self._summaries.items(), key=lambda x: x[1]["created_at"], reverse=True
+            ):
+                if (
+                    s["tenant_id"] == tenant_id
+                    and s["user_id"] == user_id
+                    and s["status"] == "active"
+                ):
+                    # 真实 SQL 投影里这一列恒在（值可以是 NULL）；替身也照办，
+                    # 否则读侧 `row["embedding"]` 的 KeyError 会伪装成"生产里也有的接线错误"。
+                    results.append({**s, "embedding": s.get("embedding")})
+                    if len(results) >= limit:
+                        break
+            return results
 
         elif "SELECT id FROM memory_summaries WHERE content_hash=" in query:
             content_hash, tenant_id, user_id = args
@@ -292,6 +319,16 @@ def scope():
     return Scope(tenant_id="t1", user_id="u1", session_id="sess-001")
 
 
+@pytest.fixture
+def milvus_backend(monkeypatch):
+    """把记忆层向量后端显式配成 milvus。
+
+    默认是 pg（M13 起），而这一组用例要验的正是 Milvus 那条支路 —— 注入替身集合不再
+    等于"会被查询"，后端必须写出来，否则读用例会在没人注意的时候变成空跑。
+    """
+    monkeypatch.setattr(settings, "memory_vector_backend", "milvus")
+
+
 # ── Task 17.2: save_summary 双写测试 ──────────────────────────────────
 
 
@@ -325,7 +362,9 @@ class TestSaveSummary:
         assert stored["turn_end"] == 5
 
     @pytest.mark.asyncio
-    async def test_save_inserts_to_milvus(self, store, mock_pool, mock_milvus, scope):
+    async def test_save_inserts_to_milvus(
+        self, store, mock_pool, mock_milvus, milvus_backend, scope
+    ):
         """save_summary 应将摘要插入 Milvus。"""
         result = await store.save_summary(
             scope=scope,
@@ -420,8 +459,9 @@ class TestSaveSummary:
 # ── Task 17.3: recall 向量检索测试 ────────────────────────────────────
 
 
+@pytest.mark.usefixtures("milvus_backend")
 class TestRecallVectorSearch:
-    """测试 recall 向量检索功能。"""
+    """测试 recall 向量检索功能（这一组走的是 Milvus 那条支路）。"""
 
     @pytest.mark.asyncio
     async def test_recall_with_query_fetches_embedding(self, store, mock_redis, scope):
@@ -564,6 +604,133 @@ class TestRecallVectorSearch:
             assert items[i].score >= items[i + 1].score
 
 
+# ── M13: 默认 pg 后端下，摘要向量真的有数据来源 ───────────────────────
+
+
+def _axis(i: int, dim: int = 8) -> list[float]:
+    """第 i 个分量为 1、其余为 0 的向量 —— 用来把余弦钉在可手算的值上。
+
+    不用 `_fake_embedding` 那种「全正分量」的哈希向量造对照组：任意两个全正向量的
+    余弦本来就在 0.7 上下，`memory_summary_min_cosine = 0.45` 那道阈值根本拦不住它们。
+    """
+    v = [0.0] * dim
+    v[i] = 1.0
+    return v
+
+
+_HALF = math.sqrt(0.5)
+
+
+class TestPgVectorBackend:
+    """`MEMORY_VECTOR_BACKEND` 的默认值（pg）下的读写。
+
+    这一组是 §5.1 那条缺陷的正面回归：过去向量只往 Milvus 写，而 Milvus 属
+    `selfhosted-s3` profile、默认不启动，PG 里根本没有可比的东西 —— 症状是判重
+    永不触发、`memory_summary_min_cosine` 是死配置、语义召回恒空却自称 semantic。
+    """
+
+    @pytest.mark.asyncio
+    async def test_vector_lands_in_pg_and_milvus_is_left_alone(
+        self, store, mock_pool, mock_milvus, scope
+    ):
+        """默认后端下向量落 PG 行；没人查的 Milvus 不该再多打一次外部写。"""
+        await store.save_summary(scope=scope, content="落库的摘要", embedding=_axis(0))
+
+        row = mock_pool._summaries[next(iter(mock_pool._summaries))]
+        assert row["embedding"] == _axis(0)
+        assert mock_milvus._inserted == []
+
+    @pytest.mark.asyncio
+    async def test_pg_vector_tier_ranks_by_cosine(self, store, scope):
+        """② 在 PG 里按余弦排序，而不是按时间。"""
+        await store.save_summary(scope=scope, content="正交", embedding=_axis(3))
+        await store.save_summary(
+            scope=scope, content="半同向", embedding=[_HALF, _HALF, 0, 0, 0, 0, 0, 0]
+        )
+        await store.save_summary(scope=scope, content="同向", embedding=_axis(0))
+
+        items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert [i.content for i in items] == ["同向", "半同向"]
+        assert items[0].score == pytest.approx(1.0)
+        assert items[1].score == pytest.approx(_HALF, abs=1e-6)
+        assert all(i.source == "vector" for i in items)
+
+    @pytest.mark.asyncio
+    async def test_min_cosine_threshold_is_live(self, store, scope, monkeypatch):
+        """`memory_summary_min_cosine` 不再是一条读不到的配置。"""
+        await store.save_summary(scope=scope, content="同向", embedding=_axis(0))
+        await store.save_summary(
+            scope=scope, content="半同向", embedding=[_HALF, _HALF, 0, 0, 0, 0, 0, 0]
+        )
+
+        monkeypatch.setattr(settings, "memory_summary_min_cosine", 0.9)
+        items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert [i.content for i in items] == ["同向"]
+
+    @pytest.mark.asyncio
+    async def test_recall_uses_pg_vectors_without_touching_milvus(self, store, mock_milvus, scope):
+        """有查询向量 + 后端是 pg ⇒ 根本不查 Milvus，命中记作 vector。"""
+        store._embedding_fn = _query_embedder(_axis(0))
+        await store.save_summary(scope=scope, content="同向", embedding=_axis(0))
+
+        items = await store.recall(scope=scope, query="同向")
+
+        assert [i.content for i in items] == ["同向"]
+        assert items[0].source == "vector"
+        assert mock_milvus._search_called is False
+
+    @pytest.mark.asyncio
+    async def test_legacy_rows_without_vector_report_recent(self, store, scope):
+        """迁移 0019 之前的行没有向量：退回按时间取，并且**照实**记成 recent。"""
+        store._embedding_fn = _query_embedder(_axis(0))
+        await store.save_summary(scope=scope, content="旧行", embedding=[])
+
+        items = await store.recall(scope=scope, query="旧行")
+
+        assert [i.content for i in items] == ["旧行"]
+        assert items[0].source == "recent"
+
+    @pytest.mark.asyncio
+    async def test_milvus_failure_falls_to_pg_vectors(
+        self, store, mock_milvus, scope, milvus_backend
+    ):
+        """配成 milvus 却挂了 ⇒ ② 顶上，而不是直接退到"只能按时间给你"。"""
+        store._embedding_fn = _query_embedder(_axis(0))
+        await store.save_summary(scope=scope, content="同向", embedding=_axis(0))
+
+        def _boom(*args, **kwargs):
+            raise RuntimeError("milvus down")
+
+        mock_milvus.search = _boom
+
+        items = await store.recall(scope=scope, query="同向")
+
+        assert [i.content for i in items] == ["同向"]
+        assert items[0].source == "vector"
+
+    @pytest.mark.asyncio
+    async def test_pg_vector_tier_isolates_tenants(self, store, scope):
+        """② 的候选扫描也带 tenant/user 过滤 —— 它是现在的主路，不是"回退"。"""
+        other = Scope(tenant_id="t2", user_id="u2", session_id="sess-002")
+        await store.save_summary(scope=other, content="别人的", embedding=_axis(0))
+        await store.save_summary(scope=scope, content="自己的", embedding=_axis(0))
+
+        items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)
+
+        assert [i.content for i in items] == ["自己的"]
+
+
+def _query_embedder(vec: list[float]):
+    """固定返回同一向量的嵌入函数（绕开"查询与候选必须同口径才可比"这个约束）。"""
+
+    async def _embed(query: str) -> list[float]:
+        return list(vec)
+
+    return _embed
+
+
 # ── Task 17.4: final_score 排序测试 ───────────────────────────────────
 
 
@@ -661,8 +828,8 @@ class TestFinalScoreComputation:
         assert 0 <= result[0].score <= 1.0
 
     @pytest.mark.asyncio
-    async def test_recall_sorted_by_final_score(self, store, scope):
-        """recall 返回结果应按 final_score 降序排列。"""
+    async def test_recall_sorted_by_final_score(self, store, scope, milvus_backend):
+        """recall 返回结果应按 final_score 降序排列（Milvus 那条支路）。"""
         now = time.time()
         items_data = [
             {"id": "low_sim", "score": 0.3, "created_at": now - 3600, "access_count": 0},
@@ -700,6 +867,7 @@ class TestFinalScoreComputation:
 # ── Task 17.5: 查询缓存测试 ──────────────────────────────────────────
 
 
+@pytest.mark.usefixtures("milvus_backend")
 class TestQueryCache:
     """测试查询缓存功能。"""
 

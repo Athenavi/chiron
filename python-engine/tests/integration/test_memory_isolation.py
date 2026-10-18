@@ -8,6 +8,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from datetime import UTC, datetime
 from typing import Any
 from unittest.mock import MagicMock
@@ -41,7 +42,8 @@ class _MemoryPool:
         })
 
     def add_summary(self, summary_id, tenant_id, user_id, content, topics=None,
-                    entities=None, turn_start=0, turn_end=0, session_id="s"):
+                    entities=None, turn_start=0, turn_end=0, session_id="s",
+                    embedding=None):
         self._summary_rows.append({
             "id": summary_id,
             "tenant_id": tenant_id,
@@ -55,6 +57,7 @@ class _MemoryPool:
             "access_count": 0,
             "last_accessed_at": None,
             "created_at": datetime.now(UTC),
+            "embedding": embedding,
         })
 
     async def fetch(self, query, *args):
@@ -64,7 +67,7 @@ class _MemoryPool:
                 if row["tenant_id"] == args[0] and row["user_id"] == args[1]:
                     results.append(self._row_to_db(row))
         elif "FROM memory_summaries" in query and "SELECT" in query:
-            # PG 回退路径：WHERE tenant_id=$1 AND user_id=$2 AND ... LIMIT $3
+            # PG 取数（②带向量的余弦扫描与③按时间取都用这一条 WHERE）
             tenant_id, user_id, limit = args[0], args[1], args[2]
             matched = [r for r in self._summary_rows
                        if r["tenant_id"] == tenant_id and r["user_id"] == user_id]
@@ -120,7 +123,21 @@ class _MemoryPool:
             "access_count": row["access_count"],
             "last_accessed_at": None,
             "created_at": row["created_at"],
+            # 生产代码只在②那条投影里读 embedding；double 必须提供这一列，
+            # 否则 KeyError 会伪装成"生产接线错了"。
+            "embedding": row.get("embedding"),
         }
+
+
+def _embed(text: str) -> list[float]:
+    """确定性"嵌入"口径的同步版：预置行要拿它算出与查询同口径的向量。"""
+    h = hashlib.sha256(text.encode()).digest()
+    return [b / 255.0 for b in h]
+
+
+async def _embed_fn(text: str) -> list[float]:
+    """`embedding_fn` 必须是协程（`_get_embedding` 会 await 它）。"""
+    return _embed(text)
 
 
 class _FakeRedis:
@@ -229,7 +246,7 @@ def _build_service(pool=None, redis=None, vector=None, with_embedding=True) -> M
         pool: Mock 数据库池。
         redis: Mock Redis 实例。
         vector: Mock 向量存储（设为 None 则不注入向量检索）。
-        with_embedding: 是否启用嵌入函数（False 时 SummaryStore 走 PG 路径）。
+        with_embedding: 是否启用嵌入函数（False ⇒ 拿不到查询向量，recall 只能按时间取）。
     """
     pool = pool or _MemoryPool()
     redis = redis or _FakeRedis()
@@ -248,13 +265,7 @@ def _build_service(pool=None, redis=None, vector=None, with_embedding=True) -> M
     try:
         profile = ProfileCard(redis=redis)
 
-        embedding_fn = None
-        if with_embedding:
-            async def _fake_embedding(query: str):
-                import hashlib
-                h = hashlib.sha256(query.encode()).digest()
-                return [b / 255.0 for b in h]
-            embedding_fn = _fake_embedding
+        embedding_fn = _embed_fn if with_embedding else None
 
         summary = SummaryStore(redis=redis, embedding_fn=embedding_fn)
         if vector is not None and with_embedding:
@@ -321,62 +332,63 @@ class TestPGRowLevelFiltering:
 
 
 class TestVectorFiltering:
-    """SummaryStore recall 通过 tenant_id/user_id 过滤。"""
+    """SummaryStore recall 通过 tenant_id/user_id 过滤。
+
+    两种后端都要证明：`MEMORY_VECTOR_BACKEND` 默认是 pg（迁移 0019 起向量就在
+    PG 行里），milvus 只在显式配它时才被查询 —— 隔离不能只在一个后端上测。
+    """
 
     @pytest.mark.asyncio
-    async def test_summary_store_recall_isolates_tenants(self):
+    @pytest.mark.parametrize("backend", ["pg", "milvus"])
+    async def test_summary_store_recall_isolates_tenants(self, backend, monkeypatch):
         import time as _time
-        now_ts = _time.time()
-        vector = _FakeVectorStore()
-        vector.insert({
-            "id": "s1", "tenant_id": "tA", "user_id": "uA",
-            "content": "tenant A secret about project X",
-            "final_score": 0.9,
-            "metadata": {"topics": ["project_x"], "entities": {}, "turn_range": [0, 0]},
-            "created_at": now_ts,
-            "memory_type": "summary",
-        })
-        vector.insert({
-            "id": "s2", "tenant_id": "tB", "user_id": "uB",
-            "content": "tenant B secret about project Y",
-            "final_score": 0.9,
-            "metadata": {"topics": ["project_y"], "entities": {}, "turn_range": [0, 0]},
-            "created_at": now_ts,
-            "memory_type": "summary",
-        })
-
-        pool = _MemoryPool()
-        redis = _FakeRedis()
 
         import app.memory.summary_store as _ss_mod
-        orig = _ss_mod.get_pool
-        _ss_mod.get_pool = lambda: pool
-        try:
-            async def _fake_embedding(query):
-                import hashlib
-                h = hashlib.sha256(query.encode()).digest()
-                return [b / 255.0 for b in h]
+        from app.config import settings
 
-            store = SummaryStore(redis=redis, embedding_fn=_fake_embedding)
-            store._milvus_collection = vector
+        monkeypatch.setattr(settings, "memory_vector_backend", backend)
 
-            results_a = await store.recall(
-                scope=Scope(tenant_id="tA", user_id="uA", session_id=""),
-                query="project",
+        now_ts = _time.time()
+        query = "project"
+        qv = _embed(query)
+
+        vector = _FakeVectorStore()
+        pool = _MemoryPool()
+        for sid, tenant, user, content, topics in (
+            ("s1", "tA", "uA", "tenant A secret about project X", ["project_x"]),
+            ("s2", "tB", "uB", "tenant B secret about project Y", ["project_y"]),
+        ):
+            vector.insert({
+                "id": sid, "tenant_id": tenant, "user_id": user,
+                "content": content,
+                "final_score": 0.9,
+                "metadata": {"topics": topics, "entities": {}, "turn_range": [0, 0]},
+                "created_at": now_ts,
+                "memory_type": "summary",
+            })
+            # 同一条摘要在 PG 里也有一份（带向量），pg 后端走的就是它
+            pool.add_summary(sid, tenant_id=tenant, user_id=user, content=content,
+                             topics=topics, embedding=qv)
+
+        monkeypatch.setattr(_ss_mod, "get_pool", lambda: pool)
+        store = SummaryStore(redis=_FakeRedis(), embedding_fn=_embed_fn)
+        store._milvus_collection = vector
+
+        for tenant, user, own, other in (
+            ("tA", "uA", "tenant A", "tenant B"),
+            ("tB", "uB", "tenant B", "tenant A"),
+        ):
+            items = await store.recall(
+                scope=Scope(tenant_id=tenant, user_id=user, session_id=""),
+                query=query,
             )
-            contents_a = [r.content for r in results_a]
-            assert "tenant B" not in " ".join(contents_a)
-            assert any("tenant A" in c for c in contents_a)
-
-            results_b = await store.recall(
-                scope=Scope(tenant_id="tB", user_id="uB", session_id=""),
-                query="project",
+            contents = [r.content for r in items]
+            assert other not in " ".join(contents)
+            assert any(own in c for c in contents)
+            # 必须真是语义那一级选出来的：若退回按时间取，这一跑等于没测到向量路径
+            assert all(r.source == "vector" for r in items), (
+                f"backend={backend} 下 {tenant} 的命中来自时间保底，不是向量"
             )
-            contents_b = [r.content for r in results_b]
-            assert "tenant A" not in " ".join(contents_b)
-            assert any("tenant B" in c for c in contents_b)
-        finally:
-            _ss_mod.get_pool = orig
 
 
 class TestEndToEndTenantIsolation:

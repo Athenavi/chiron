@@ -142,6 +142,9 @@ class Consolidator:
             content_hash=ch,
             access_count=0,
             last_accessed_at=None,
+            # 条目自己带上向量：写入侧返回的是重新查回来的行，但 `has_embedding`
+            # 是给用户看的（记忆面板），不该取决于哪一条投影把行读回来。
+            embedding=embedding,
         )
         try:
             created = await self._store.insert(entry, embedding)
@@ -157,7 +160,9 @@ class Consolidator:
     ) -> str | None:
         """在既有摘要中查找近重复（cosine > 0.95）。"""
         try:
-            existing = await self._store.list_active(tenant_id, user_id, limit=50)
+            existing = await self._store.list_active(
+                tenant_id, user_id, limit=50, with_embedding=True
+            )
         except Exception:
             return None
         scorer = CosineScorer(embedding)

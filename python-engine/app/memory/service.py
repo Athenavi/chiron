@@ -798,10 +798,16 @@ class MemoryService:
                     "status": getattr(item, "status", "active"),
                 }
 
+            # mode 如实：只有"按查询向量筛过"的条目才算 semantic。
+            # 过去这条分支无论后端有没有真的做语义检索都报 semantic —— 而 L3 的向量当时
+            # 既不在 PG 里、Milvus 又默认不启动，前端因此一直显示"语义模式"。
+            sources = {getattr(i, "source", "recent") for i in raw}
+            mode = "semantic" if "vector" in sources else "recent"
+
             return {
                 "summaries": [_as_dict(i) for i in raw],
                 "count": len(raw),
-                "mode": "semantic",
+                "mode": mode,
             }
 
         ordered: list[Any] = []
@@ -813,7 +819,9 @@ class MemoryService:
             ordered = list(items)
             mode = "recent"
         else:
-            items = await store.list_active(tenant_id, user_id, 200)
+            items = await store.list_active(
+                tenant_id, user_id, 200, with_embedding=True
+            )
             if not items:
                 return {"summaries": [], "count": 0, "mode": "empty"}
             qvec = await self._embed(q)

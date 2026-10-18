@@ -339,6 +339,11 @@ class RecalledItem:
     last_accessed_at: float
     created_at: float
     score: float  # final_score
+    #: 这一条是**怎么**被选出来的："vector"（按查询向量筛过）或 "recent"（只按时间取）。
+    #: 默认 "recent" —— 保守取值：声称"语义命中"必须由产出方显式写下，
+    #: 否则新增一条读取路径就会悄悄把时间排序说成语义排序（这正是论文 §5.1 那条
+    #: "恒 0 命中却标 mode=semantic"的来源）。
+    source: str = "recent"
 
 
 @dataclass
