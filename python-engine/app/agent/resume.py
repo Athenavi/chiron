@@ -53,6 +53,17 @@ class ResumeState:
     turn_index: int = 0
     #: 上一段 run 已消耗的工具步数（A4：steps 轴同样要跨续跑继承）
     tool_steps: int = 0
+    #: M15e：**token 与 wall 两轴的续跑起点**，与 `tool_steps` 同源（快照的 `usage`）。
+    #: 此前只有 steps 被继承，于是每次崩溃接管都白送一整份 per-run 额度 —— 那正是论文 §5.2
+    #: 「续跑次数 × 每 run 额度」在主 Agent 侧的形态：接管这一段既不走网关（没有租户额度池
+    #: 的估算与校正），又拿着一份全新的预算起算，两件事叠在一起就是彻底没有上限。
+    #: 口径：这些数是**本 run 全程累计**（上一段落盘时的累计），不是"上一次 LLM 调用"。
+    input_tokens: int = 0
+    output_tokens: int = 0
+    cached_tokens: int = 0
+    #: 上一段已消耗的墙钟（秒）。快照只在**回合末**落盘，所以崩溃前那半回合的时间不在里面
+    #: —— 与 token 轴同一方向的偏差（继承的是**少算**的那份，宁可少继承，也不误停一个正常 run）。
+    wall_seconds: int = 0
     done_tools: tuple[str, ...] = ()
     #: "已开始未结束"的调用 id（`tool_calls.output = ''`）—— 不自动重放，只告知
     replay_pending: tuple[str, ...] = ()
@@ -144,11 +155,27 @@ async def load_resume_state(
     return ResumeState(
         messages=messages,
         turn_index=int(snapshot.get("turn_index") or 0),
-        tool_steps=int(usage_map.get("tool_steps") or 0),
+        tool_steps=_usage_int(usage_map, "tool_steps"),
+        input_tokens=_usage_int(usage_map, "input_tokens"),
+        output_tokens=_usage_int(usage_map, "output_tokens"),
+        cached_tokens=_usage_int(usage_map, "cached_tokens"),
+        wall_seconds=_usage_int(usage_map, "wall_seconds"),
         done_tools=done,
         replay_pending=tuple(item for item in pending if item),
         window=window,
     )
+
+
+def _usage_int(usage_map: dict[str, Any], key: str) -> int:
+    """读快照 `usage` 里的一个计数；缺失或脏值一律按 0（= 这一轴不继承起点）。
+
+    负数不是纸上值：`usage` 是 JSONB，人工修数据就能写歪。一个负的起点等于**白送**一份额度，
+    而这份现场正是 run 级上限跨续跑唯一的依据，所以这里只接受非负。
+    """
+    try:
+        return max(0, int(usage_map.get(key) or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def merge_user_message(

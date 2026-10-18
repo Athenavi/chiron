@@ -1913,7 +1913,20 @@ class AgentRuntime:
             # A4（论文 §5.1 P1）：续跑必须**恢复计数起点**。快照的 turn_index 是上一段 run
             # 已消耗的回合数（回合末按 turn+1 落盘）；从 0 重新计等于"每次崩溃白送一轮预算"。
             # 夹到 max_turns-1：既继承预算，又保证循环至少能进一次（预算轴会在轮首判停）。
+            #
+            # M15e（论文 §5.2）：**token 与 wall 两轴补齐同一处理**。此前只有 turns/steps 继承
+            # 了起点，而快照的 `usage` 里那几个 token 计数一直躺着没人读 —— 于是接管那一段
+            # 拿着一份全新的 400k 额度起算。接管段又不走网关（`app/main.py` 的
+            # `_auto_resume_runner` 直接构造 runtime 打 LLM），租户额度池那侧连估算都不记，
+            # 两边都是零 ⇒ 这条路径上**没有任何上限**。
+            # 已发生量的落点因此是**引擎自己写的这一格**：`agent_runs.checkpoint.usage`
+            # 每回合末由"花钱的那一段"整体覆写（赋值而非累加 ⇒ 重复落盘不会数两遍），
+            # 下一段接管时读回来当起点。**不新增预留**：接管段既没有可预留的先行额度，
+            # 也不该为一段还不知道会跑多久的续跑先占住预算（4B 的取舍：承认对突发无防护）。
             start_turn = 0
+            resumed_input_tokens = 0
+            resumed_output_tokens = 0
+            resumed_cached_tokens = 0
             if self._resumed_from_checkpoint is not None:
                 start_turn = min(
                     max(
@@ -1931,6 +1944,37 @@ class AgentRuntime:
                     self._tool_steps,
                     int(getattr(self._resumed_from_checkpoint, "tool_steps", 0) or 0),
                 )
+                resumed_input_tokens = int(
+                    getattr(self._resumed_from_checkpoint, "input_tokens", 0) or 0
+                )
+                resumed_output_tokens = int(
+                    getattr(self._resumed_from_checkpoint, "output_tokens", 0) or 0
+                )
+                resumed_cached_tokens = int(
+                    getattr(self._resumed_from_checkpoint, "cached_tokens", 0) or 0
+                )
+                # wall 轴：把本段的起点拨回"接管时刻减去上一段已花的时间"。`budget.wall`
+                # 默认 0（不限），所以这只影响显式设了 `AGENT_MAX_SECONDS` 的部署 ——
+                # 但对它们来说，"每次接管重拨一次表"与 tokens 是同一个洞。
+                wall_carried = int(
+                    getattr(self._resumed_from_checkpoint, "wall_seconds", 0) or 0
+                )
+                if wall_carried > 0:
+                    budget.started_at -= wall_carried
+
+            def _tokens_spent() -> int:
+                """本 run **全程**的 token 花销 = 续跑继承的那一段 + 本段已花。
+
+                预算轴、线账闸门、`budget` 快照都读这个数；而 `done` 事件的扁平
+                `input_tokens/output_tokens` **仍是本段**的量（见下面那条发 `done` 的注释：
+                那是网关的计费入口，改成全程会把"人工介入挂起前已经报过账的那一段"再扣一遍）。
+                """
+                return (
+                    resumed_input_tokens
+                    + resumed_output_tokens
+                    + total_input_tokens
+                    + total_output_tokens
+                )
 
             for turn in range(start_turn, task.max_turns):
                 # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
@@ -1943,7 +1987,7 @@ class AgentRuntime:
                 exceeded = budget.exceeded(
                     steps=self._tool_steps,
                     turns=turn,
-                    tokens=total_input_tokens + total_output_tokens,
+                    tokens=_tokens_spent(),
                 )
                 if exceeded:
                     logger.warning(
@@ -1969,7 +2013,7 @@ class AgentRuntime:
                 # "停下来等人"由 runner 的终态路径负责：暂停这条线 + 挂出一张提额待办（M15c，
                 # 见 `app/agent/subagent_runner.py` 的 `_report_line_exhaustion`）。
                 line_axis = await self._line_violation(
-                    task, own_tokens=total_input_tokens + total_output_tokens
+                    task, own_tokens=_tokens_spent()
                 )
                 if line_axis:
                     yield AgentEvent(
@@ -1996,7 +2040,7 @@ class AgentRuntime:
                         budget=self._budget_snapshot(
                             budget,
                             turns_used=turn,
-                            tokens_used=total_input_tokens + total_output_tokens,
+                            tokens_used=_tokens_spent(),
                         ),
                         trace_id=trace_id,
                     )
@@ -2552,21 +2596,28 @@ class AgentRuntime:
                             _answered = True
                             yield AgentEvent(type="text", content=_notice, trace_id=trace_id)
 
-                    # ── C1 批 2：回合末 checkpoint 落盘（**只写不读**）──
+                    # ── C1 批 2：回合末 checkpoint 落盘 ──
                     # 回合边界是唯一"粒度够粗、语义又完整"的落点（工具调用发生在回合内，
                     # 逐个工具落盘会把"不可续跑"的判断成本推给每一个工具）。
+                    # 本段**不回读**它（读的是下一段接管/重试的 `load_resume_state`），
                     # 失败只降级恢复粒度，**不改变对话行为**（见 app/agent/checkpoint.py）。
                     await self._save_checkpoint(
                         task,
                         messages,
                         turn_index=turn + 1,
                         done_tools=done_tool_ids,
+                        # 这一格就是 run 级预算**跨续跑**的账：写的是本 run 全程累计（本段
+                        # 已花 + 上一段落盘的那份），读取侧见 `ResumeState.input_tokens` 与
+                        # 上面的 `_tokens_spent`。**赋值而不是相加** —— 快照是同一行的同一格，
+                        # 每回合末整体覆写一次；相加会让同一批 token 在接管链上数很多遍。
                         usage={
-                            "input_tokens": total_input_tokens,
-                            "output_tokens": total_output_tokens,
-                            "cached_tokens": total_cached_tokens,
-                            # A4：steps 轴也要跨续跑继承（读取侧见 ResumeState.tool_steps）
+                            "input_tokens": resumed_input_tokens + total_input_tokens,
+                            "output_tokens": resumed_output_tokens + total_output_tokens,
+                            "cached_tokens": resumed_cached_tokens + total_cached_tokens,
+                            # A4：steps 轴也要跨续跑继承（起点已经并进 self._tool_steps）
                             "tool_steps": self._tool_steps,
+                            # wall 轴：本段用时 + 继承来的用时（`budget.started_at` 已被拨回）
+                            "wall_seconds": int(budget.elapsed()),
                         },
                     )
 
@@ -2643,7 +2694,7 @@ class AgentRuntime:
                     model=model,
                     messages=messages,
                     budget=budget,
-                    tokens_used=total_input_tokens + total_output_tokens,
+                    tokens_used=_tokens_spent(),
                 )
             else:
                 rubric_outcome = None
@@ -2759,6 +2810,13 @@ class AgentRuntime:
 
             # 发送完成事件 (含完整链路 trace_id)
             total_duration = int((time.time() - start_time) * 1000)
+            # ⚠ 扁平的 `input_tokens/output_tokens/cached_tokens` 是**本段**的量，不是全程累计
+            # （`budget.used` 才是全程，M15e）。这里刻意不跟着线账口径走：网关按**终态事件**
+            # 计费（Go 的 `usageTotals.withEvent` 只并 `done`），而"人工介入挂起"那一段已经
+            # 用它自己的 `done` 报过一次账 —— 续跑这段再报全程累计，就是把同一段扣两遍到租户
+            # 头上。崩溃接管那段从来没有 `done`（进程没了），所以它的那一份确实没入账；
+            # 要把那份补回来，得让**网关**按 run 的权威账校正，而不是让引擎把累计塞进事件里
+            # （见论文 §5.2 的「计费缺口」与本轮的取舍）。
             yield AgentEvent(
                 type="done",
                 input_tokens=total_input_tokens,
@@ -2768,7 +2826,7 @@ class AgentRuntime:
                 budget=self._budget_snapshot(
                     budget,
                     turns_used=turn + 1,
-                    tokens_used=total_input_tokens + total_output_tokens,
+                    tokens_used=_tokens_spent(),
                 ),
                 context=self._context_snapshot(
                     used=total_input_tokens,
