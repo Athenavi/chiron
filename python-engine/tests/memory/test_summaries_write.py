@@ -16,7 +16,7 @@ from app.config import settings
 from app.memory.layers import SummaryEntry
 from app.memory.summaries import SummaryStore
 
-#: INSERT 里按位置绑定的 11 个参数（其余 4 个是写死的 0 / NULL / 'active' / NOW()）。
+#: INSERT 里按位置绑定的 13 个参数（其余 4 个是写死的 0 / NULL / 'active' / NOW()）。
 _INSERT_FIELDS = (
     "id",
     "tenant_id",
@@ -29,7 +29,12 @@ _INSERT_FIELDS = (
     "turn_end",
     "content_hash",
     "embedding",
+    "embedding_model",
+    "embedding_dim",
 )
+
+#: 只有真取向量时才可见的三列（迁移 0019 + 0020）。
+_VECTOR_COLUMNS = ("embedding", "embedding_model", "embedding_dim")
 
 
 class _RecordingPool:
@@ -91,9 +96,10 @@ class _RecordingPool:
 
     @staticmethod
     def _project(query: str, row: dict[str, Any]) -> dict[str, Any]:
-        if "embedding" not in query:
-            return {k: v for k, v in row.items() if k != "embedding"}
-        return dict(row)
+        hidden = {c for c in _VECTOR_COLUMNS if c not in query}
+        if not hidden:
+            return dict(row)
+        return {k: v for k, v in row.items() if k not in hidden}
 
 
 class _MilvusSpy:
@@ -169,7 +175,8 @@ class TestVectorLandsInPg:
         """没有嵌入（embedder 挂了）不挡正文：这条之后仍可按时间被召回。"""
         created = await SummaryStore(pool, milvus).insert(_entry(), embedding=None)
 
-        assert next(iter(pool.rows.values()))["embedding"] is None
+        stored = next(iter(pool.rows.values()))
+        assert stored["embedding"] is None
         assert created.embedding is None
 
     async def test_created_entry_carries_the_vector_without_an_extra_read(self, pool, milvus):
@@ -177,6 +184,43 @@ class TestVectorLandsInPg:
         created = await SummaryStore(pool, milvus).insert(_entry(), embedding=VEC)
 
         assert created.embedding == VEC
+
+
+class TestVectorSpaceTags:
+    """迁移 0020（C3）：每行要能说清自己那颗向量属于哪个空间。
+
+    维度不符时 `dot_product` 返回 0.0 —— 不会算错，而是**永不相似**；同维跨模型才会造出
+    虚假的高分。两列都是为这两种退化准备的判据，所以必须跟着向量一起落库。
+    """
+
+    async def test_insert_records_model_and_actual_dim(self, pool, milvus):
+        entry = _entry()
+        entry.embedding_model = "bge-m3"
+        entry.embedding_dim = 4096  # 手上有向量就按向量的长度写，不接受调用方的自述
+
+        await SummaryStore(pool, milvus).insert(entry, embedding=VEC)
+
+        stored = next(iter(pool.rows.values()))
+        assert stored["embedding_model"] == "bge-m3"
+        assert stored["embedding_dim"] == len(VEC)
+
+    async def test_created_entry_carries_the_tags(self, pool, milvus):
+        """判重紧接着要比这颗向量，返回体不带标签就得再读一次库。"""
+        entry = _entry()
+        entry.embedding_model = "bge-m3"
+
+        created = await SummaryStore(pool, milvus).insert(entry, embedding=VEC)
+
+        assert created.embedding_model == "bge-m3"
+        assert created.embedding_dim == len(VEC)
+
+    async def test_row_without_vector_has_no_space_to_label(self, pool, milvus):
+        """生产里 Consolidator 只在有向量时才设标签；这里的 `_entry()` 就是那个形状。"""
+        await SummaryStore(pool, milvus).insert(_entry(), embedding=None)
+
+        stored = next(iter(pool.rows.values()))
+        assert stored["embedding_model"] is None
+        assert stored["embedding_dim"] is None
 
 
 class TestProjection:
@@ -189,9 +233,14 @@ class TestProjection:
 
         assert "embedding" not in pool.selects[-1]
         assert items[0].embedding is None
+        # 标签只在有向量可比时才有意义，所以和向量同进同出
+        assert items[0].embedding_model is None
+        assert items[0].embedding_dim is None
 
     async def test_list_active_with_embedding_reads_it_back(self, pool, milvus):
-        await SummaryStore(pool, milvus).insert(_entry(), embedding=VEC)
+        entry = _entry()
+        entry.embedding_model = "bge-m3"
+        await SummaryStore(pool, milvus).insert(entry, embedding=VEC)
 
         items = await SummaryStore(pool, milvus).list_active(
             "t1", "u1", 50, with_embedding=True
@@ -199,6 +248,9 @@ class TestProjection:
 
         assert "embedding" in pool.selects[-1]
         assert items[0].embedding == VEC
+        # 判重要在内存里比口径，所以取向量的那条投影必须把标签一起带上
+        assert items[0].embedding_model == "bge-m3"
+        assert items[0].embedding_dim == len(VEC)
 
     async def test_get_by_id_projection_has_no_vector(self, pool, milvus):
         """单条读取走的是不含向量的投影 —— 判重扫描不该用它，别把它误当"这条没有向量"。"""

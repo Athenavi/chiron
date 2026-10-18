@@ -473,7 +473,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         from app.memory.service import MemoryService, set_memory_service
         from app.memory.session_meta import SessionMetaStore
         from app.memory.summaries import SummaryStore as SummaryWriteStore
+        from app.memory.summariser import build_summariser
         from app.memory.summary_store import SummaryStore as SummaryRecallStore
+        from app.queue.producer import QueueProducer
 
         pool = get_pool()
 
@@ -490,7 +492,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # - app.memory.summary_store.SummaryStore：读取侧，带查询缓存与向量召回
         # 因此「写入用前者、召回用后者」不会造成数据分裂。
         summary_write = SummaryWriteStore(pool)
-        consolidator = Consolidator(store=summary_write, embedder=llm_client.embed)
+        # 摘要正文由模型生成（A3）。关不掉网关时它自己返回空串 ⇒ Consolidator 退回
+        # 抽取式正文，所以这里无条件装配、由 `memory_summariser_enabled` 决定行为。
+        # 全进程**只建这一个** Consolidator：worker 的两个 handler 经 save_summary 复用它，
+        # 否则装配口径会分裂（此前正是 worker 就地新建了一个只有 store 的裸 Consolidator）。
+        consolidator = Consolidator(
+            store=summary_write,
+            embedder=llm_client.embed,
+            summariser=build_summariser(_gateway),
+        )
         # Redis 不可用时降级到写入侧（它也有 list_active，只是没有缓存的 recall）——
         # 让 L3 列表仍能看到数据，而不是整块变成空。
         summary_store = (
@@ -502,6 +512,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 冲突落 Redis：多副本下任一副本登记的冲突，其余副本都看得到。
         # 进程内那份只是 Redis 不可用时的降级视图。
         conflict_manager = ConflictManager(_redis)
+        # 巩固任务的投递口。此前**从未注入**，于是 `_enqueue_consolidate` /
+        # `_enqueue_rollup` / `on_session_end` 三处 `if not self._producer: return`
+        # 全部静默返回，全库唯一的 `memory_consolidate` 生产者一次都没跑过 —— L3 摘要
+        # 在生产里一条也没写过。Redis 不可用时仍然不注入：那时连消费者都没有
+        #（启动序列第 7 步按 `_redis is not None` 起 worker），投进去只会堆到流上限被裁掉。
         mem_svc = MemoryService(
             store=profile_store,
             embedder=llm_client.embed,
@@ -510,6 +525,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session_meta_store=session_meta_store,
             profile_card=ProfileCard(redis=_redis),
             conflict_manager=conflict_manager,
+            producer=QueueProducer(_redis) if _redis is not None else None,
         )
         set_memory_service(mem_svc)
         bind_prompt_memory(mem_svc)
@@ -521,7 +537,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # 被触发过，**会话级 rollup 永不入队**。
         await session_meta_store.start_periodic_cleanup(on_expired=mem_svc.on_session_end)
         logger.info(
-            "Memory service initialized (L2 entries + profile card + L3 summaries)"
+            "Memory service initialized (L2 entries + profile card + L3 summaries; "
+            "consolidation enqueue %s)",
+            "on" if _redis is not None else "OFF — Redis unavailable, L3 不会入队",
         )
     except Exception as e:
         logger.warning("Memory service not available: %s", e)
@@ -2088,6 +2106,7 @@ async def _run_retention_cleaner(redis: aioredis.Redis | None = None) -> None:
 async def _run_queue_worker(redis: aioredis.Redis, gateway: Any = None) -> None:
     """后台队列消费者。"""
     global _queue_worker_instance
+    from app.memory.service import get_service as get_memory_service
     from app.queue.worker import QueueWorker
 
     # 注意：子 Agent 的看门狗与取消订阅**不在这里**启动。它们由 lifespan 直接启动，
@@ -2098,6 +2117,10 @@ async def _run_queue_worker(redis: aioredis.Redis, gateway: Any = None) -> None:
         redis=redis,
         concurrency=settings.queue_worker_concurrency,
         gateway=gateway,
+        # 同样漏过：`memory_consolidate` / `memory_rollup` 的 handler 一进门就
+        # `raise RuntimeError("… 需要 memory_service 支持")`，任务烧完 3 次重试进 DLQ。
+        # 这里取启动序列前一步绑定的实例（`set_memory_service`），与 HTTP 侧同源。
+        memory_service=get_memory_service(),
         global_concurrency=settings.queue_worker_global_concurrency,
     )
     _queue_worker_instance = worker

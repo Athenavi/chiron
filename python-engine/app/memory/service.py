@@ -46,6 +46,11 @@ from app.memory.layers import (
 from app.memory.profile import new_entry_id
 from app.memory.profile_card import ProfileCard
 from app.memory.session_meta import SessionMetaStore
+from app.memory.vector_backend import (
+    active_embedding_model,
+    report_space_mismatch,
+    same_vector_space,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -214,7 +219,12 @@ class MemoryService:
                 if store is not None:
                     store.update(session_id)
 
-        if meta and self._producer:
+        # 攒批节拍。此前**每回合**都入队一次巩固，而 `memory_consolidate_batch=32`
+        # 全库无人引用 —— 配置的"攒批"意图从没生效过。每回合同步整段会话的代价有两层：
+        # 队列里绝大多数任务是重复劳动，而接了生成式摘要之后它是**每回合一次 LLM 调用**
+        #（成本随会话长度 × 回合数增长）。会话末尾的 rollup 仍然覆盖不足一批的尾巴。
+        batch = int(settings.memory_consolidate_batch or 0)
+        if meta and self._producer and (batch <= 1 or meta.turn_count % batch == 0):
             await self._enqueue_consolidate(
                 tenant_id=meta.tenant_id,
                 user_id=meta.user_id,
@@ -733,6 +743,7 @@ class MemoryService:
             "error": result.error or None,
             "summary": result.summary.to_dict() if result.summary else None,
             "deduplicated": result.deduplicated,
+            "skipped": result.skipped,
         }
 
     async def list_summaries(
@@ -827,15 +838,27 @@ class MemoryService:
             qvec = await self._embed(q)
             if qvec:
                 mode = "semantic"
+                # 同口径才可比：这条是 Redis 不可用时才走到的退化分支，跨模型/跨维度的
+                # 余弦会给出一个看着合理却没有意义的排名（迁移 0020 的理由）。
+                model_tag = active_embedding_model()
                 scorer = CosineScorer(qvec)
                 scored = []
+                skipped: list[Any] = []
                 for item in items:
                     if not item.embedding:
                         continue
+                    recorded = (item.embedding_model, item.embedding_dim)
+                    if not same_vector_space(*recorded, model=model_tag, dim=len(qvec)):
+                        skipped.append(recorded)
+                        continue
                     sim = scorer.score(item.embedding)
-                    if sim < SIMILARITY_THRESHOLD:
+                    # 阈值走 L3 自己的配置（`memory_summary_min_cosine`），不是 L2 那条
+                    # `SIMILARITY_THRESHOLD`：走到这一支只是因为 Redis 不可用，摘要召回的
+                    # 松紧不该因此悄悄变一档。
+                    if sim < float(settings.memory_summary_min_cosine):
                         continue
                     scored.append((item, sim))
+                report_space_mismatch(skipped, model=model_tag, dim=len(qvec))
                 scored.sort(key=lambda t: -t[1])
                 ordered = [s[0] for s in scored[:top_k]]
             else:

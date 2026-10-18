@@ -11,11 +11,12 @@
 from __future__ import annotations
 
 from typing import Any
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, create_autospec
 
 import pytest
 
 from app.context.manager import ContextManager
+from app.memory.service import MemoryService
 
 # ── Helpers ──────────────────────────────────────────────────────────
 
@@ -26,6 +27,22 @@ def _make_messages(n_user_turns: int) -> list[dict[str, Any]]:
         messages.append({"role": "user", "content": f"user-turn-{i}: " + ("u" * 200)})
         messages.append({"role": "assistant", "content": f"assistant-turn-{i}: " + ("a" * 200)})
     return messages
+
+
+def _memory_service_double() -> Any:
+    """按位置的六个参数被调用时才记一次的 MemoryService 替身。
+
+    形状不符时 autospec 会抛 TypeError 且**不记录这次调用** —— 这正是我们要的：降级提交
+    过去就是因为签名写错（`scope=/content=/topics=`）每次都抛错再被宽 except 咽掉。
+    """
+    svc = create_autospec(MemoryService)
+    svc.save_summary.return_value = {
+        "error": None,
+        "summary": {"id": "sms_test"},
+        "deduplicated": False,
+        "skipped": False,
+    }
+    return svc
 
 
 class _SuccessGateway:
@@ -142,22 +159,12 @@ class TestDegradationChain:
 
     @pytest.mark.asyncio
     async def test_degraded_content_submitted_to_l3(self):
-        """降级模式下被压缩的消息应提交到 L3 巩固。"""
-        from app.memory.layers import Scope
+        """降级模式下被压缩的消息应提交到 L3 巩固。
 
-        class _FakeMemoryService:
-            def __init__(self):
-                self.saved: list[dict[str, Any]] = []
-
-            async def save_summary(self, scope, content, topics=None):
-                self.saved.append({
-                    "scope": scope,
-                    "content": content,
-                    "topics": topics,
-                })
-                return None
-
-        svc = _FakeMemoryService()
+        断言写在**调用形状**上（见 `_memory_service_double`）：这一路过去因为签名写错，
+        每次都抛 TypeError 再被咽掉，"降级内容进了长期记忆"从来没发生过，测试却是绿的。
+        """
+        svc = _memory_service_double()
         # 给消息加上 tenant_id/user_id 以辅助 scope 推断
         original = _make_messages(20)
         for m in original:
@@ -171,47 +178,46 @@ class TestDegradationChain:
         middle = original[1:-8]
         await ContextManager._submit_degraded_content(middle, svc)
 
-        assert len(svc.saved) == 1
-        saved = svc.saved[0]
-        assert saved["topics"] == ["degraded_compaction"]
-        assert isinstance(saved["scope"], Scope)
-        assert saved["scope"].tenant_id == "t1"
-        assert saved["scope"].user_id == "u1"
+        svc.save_summary.assert_called_once()
+        args = svc.save_summary.call_args.args
+        assert args[0] == "t1"
+        assert args[1] == "u1"
+        assert args[3] == [
+            m for m in middle if m["role"] in ("user", "assistant") and m["content"]
+        ]
+        # 区间如实记：正文由 Consolidator 生成，这里只交代覆盖了哪些消息
+        assert (args[4], args[5]) == (0, len(args[3]))
+
+    @pytest.mark.asyncio
+    async def test_degraded_submission_keeps_session_id(self):
+        """session_id 要从消息里带过去 —— 恒空会让这批摘要无法回溯到会话。"""
+        svc = _memory_service_double()
+        messages = [
+            {"role": "user", "content": "u", "tenant_id": "t1", "user_id": "u1", "session_id": "sess-7"},
+        ]
+
+        await ContextManager._submit_degraded_content(messages, svc)
+
+        assert svc.save_summary.call_args.args[2] == "sess-7"
 
     @pytest.mark.asyncio
     async def test_submit_degraded_handles_missing_scope(self):
         """消息无 tenant_id/user_id 时，应回退到 default。"""
-        class _FakeMemoryService:
-            def __init__(self):
-                self.saved: list[dict[str, Any]] = []
-
-            async def save_summary(self, scope, content, topics=None):
-                self.saved.append({"scope": scope})
-                return None
-
-        svc = _FakeMemoryService()
+        svc = _memory_service_double()
         messages = [
             {"role": "user", "content": "hi"},
             {"role": "assistant", "content": "hello"},
         ]
+
         await ContextManager._submit_degraded_content(messages, svc)
 
-        assert len(svc.saved) == 1
-        scope = svc.saved[0]["scope"]
-        assert scope.tenant_id == "default"
-        assert scope.user_id == "unknown"
+        args = svc.save_summary.call_args.args
+        assert (args[0], args[1], args[2]) == ("default", "unknown", "")
 
     @pytest.mark.asyncio
     async def test_submit_degraded_no_convo_messages(self):
         """无 user/assistant 内容时应跳过保存。"""
-        class _FakeMemoryService:
-            def __init__(self):
-                self.called = False
-
-            async def save_summary(self, *args, **kwargs):
-                self.called = True
-
-        svc = _FakeMemoryService()
+        svc = _memory_service_double()
         messages = [{"role": "system", "content": "only system"}]
         await ContextManager._submit_degraded_content(messages, svc)
-        assert svc.called is False
+        svc.save_summary.assert_not_called()

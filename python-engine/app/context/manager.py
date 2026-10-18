@@ -443,7 +443,8 @@ class ContextManager:
                             scope = Scope(
                                 tenant_id=tenant_id,
                                 user_id=user_id,
-                                session_id="",
+                                # 带着就记：session_id 恒空会让这批摘要无法回溯到会话。
+                                session_id=str(msg.get("session_id", "") or ""),
                             )
                             break
 
@@ -456,19 +457,27 @@ class ContextManager:
                         session_id="",
                     )
 
-                # 保存摘要到 L3
-                combined_content = "\n".join(
-                    f"[{m.get('role', 'user')}]: {m.get('content', '')[:200]}"
-                    for m in convo_msgs
-                )
-                await memory_service.save_summary(
-                    scope=scope,
-                    content=combined_content,
-                    topics=["degraded_compaction"],
-                )
-                logger.info(
-                    "Submitted degraded content to L3 consolidation " "(%d messages)",
+                # 保存摘要到 L3。这里过去传的是 `scope=/content=/topics=`，而签名是
+                # `(tenant_id, user_id, session_id, messages, …)` —— 每次调用都抛
+                # TypeError，再被下面的 `except Exception` 降成一条 warning，于是"降级
+                # 内容进了长期记忆"这件事从来没发生过。正文交给 Consolidator 生成
+                #（有 summariser 用模型，没有则抽取式拼接，与本仓库其它降级路径同口径）。
+                outcome = await memory_service.save_summary(
+                    scope.tenant_id,
+                    scope.user_id,
+                    scope.session_id,
+                    convo_msgs,
+                    0,
                     len(convo_msgs),
+                )
+                # 记结果而不是记"我调过了"：巩固是后台链路，调用成功≠写出了摘要
+                #（去重命中、空正文、写库失败都会以 result.error/deduplicated 收口）。
+                logger.info(
+                    "Degraded content submitted to L3: messages=%d summary_id=%s dedup=%s%s",
+                    len(convo_msgs),
+                    (outcome.get("summary") or {}).get("id"),
+                    outcome.get("deduplicated"),
+                    f" error={outcome.get('error')}" if outcome.get("error") else "",
                 )
         except Exception as exc:
             logger.warning("Failed to submit degraded content to L3: %s", exc)

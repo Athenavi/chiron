@@ -212,7 +212,7 @@ class TestConsolidatorPipeline:
     async def test_consolidate_with_custom_summariser(self):
         ss = InMemorySummaryStore()
 
-        async def custom_summariser(messages):
+        async def custom_summariser(messages, tenant_id=""):
             return "topics: API, 设计\n用户讨论了 API 设计最佳实践"
 
         con = Consolidator(store=ss, summariser=custom_summariser)

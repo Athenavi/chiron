@@ -24,12 +24,21 @@ from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from typing import Any
 
+from app.config import settings
 from app.memory.layers import CosineScorer, SummaryEntry
+from app.memory.summariser import NothingWorthRememberingError
+from app.memory.vector_backend import (
+    active_embedding_model,
+    report_space_mismatch,
+    same_vector_space,
+)
 
 logger = logging.getLogger(__name__)
 
 Embedder = Callable[[str], Awaitable[list[float] | None]]
-Summariser = Callable[[list[dict[str, Any]]], Awaitable[str]]
+#: 摘要正文的生成口。第二个参数是**这次巩固所属的租户**（可为空）：网关的预算预检与
+#: 扣减只在 `tenant_id` 非空时发生，不传等于让后台记忆任务绕过租户记账。
+Summariser = Callable[..., Awaitable[str]]
 
 
 @dataclass
@@ -39,6 +48,7 @@ class ConsolidateResult:
     summary: SummaryEntry | None = None
     deduplicated: bool = False  # 精确 hash 命中既有条目
     near_duplicate_of: str | None = None  # 近重复既有 summary id
+    skipped: bool = False  # 判定"这一窗没什么值得记"，未写入（不是失败）
     error: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -46,6 +56,7 @@ class ConsolidateResult:
             "summary": asdict(self.summary) if self.summary else None,
             "deduplicated": self.deduplicated,
             "near_duplicate_of": self.near_duplicate_of,
+            "skipped": self.skipped,
             "error": self.error or None,
         }
 
@@ -83,15 +94,25 @@ class Consolidator:
 
         # ① 摘要
         try:
-            if self._summariser:
-                content = await self._summariser(messages)
-            else:
-                content = _extract_summary(messages)
+            content = (
+                await self._summariser(messages, tenant_id)
+                if self._summariser
+                else _extract_summary(messages)
+            )
+        except NothingWorthRememberingError:
+            # 模型的判定就是产出：这一窗没什么值得记。写入一段截断原文比不写更糟，
+            # 因为 L3 会被后续每回合召回。这不是失败，所以不进 error（失败会重试）。
+            result.skipped = True
+            return result
         except Exception as e:
             logger.warning("Consolidator summarise failed: %s", e)
             content = _extract_summary(messages)
 
-        content = content.strip()
+        # 空串 = 生成式这条路这次**没做成**（网关没绑、额度耗尽、模型空回）。退回抽取式
+        # 而不是判失败：降级正文仍然可检索，而抛错会让整条记忆写入进重试直至 DLQ。
+        content = (content or "").strip()
+        if not content:
+            content = _extract_summary(messages).strip()
         if not content:
             return ConsolidateResult(error="summary is empty")
 
@@ -110,25 +131,10 @@ class Consolidator:
             result.deduplicated = True
             return result
 
-        # ④ 嵌入
-        embed_text = ", ".join(topics) + ": " + content if topics else content
-        embedding = None
-        if self._embedder:
-            try:
-                embedding = await self._embedder(embed_text)
-            except Exception as e:
-                logger.warning("Consolidator embed failed: %s", e)
-                embedding = None
-
-        # 近重复检测（cosine > 0.95）
-        if embedding:
-            dup_id = await self._find_near_duplicate(tenant_id, user_id, embedding)
-            if dup_id:
-                result.near_duplicate_of = dup_id
-                # 近重复仍写入（保留 lineage），但标记
-                # 设计文档：合并保留新，旧的 archived
-
-        # ⑤ 写 L3
+        # ④ 条目先成形，再按**它自己的** `embed_text` 嵌一次。
+        # 口径从此只有一处定义（`SummaryEntry.embed_text`：topics 置于正文之前）。过去这里
+        # 写的是 `", ".join(topics) + ": " + content`，而那个属性是 `" ".join(topics) + "\n"
+        # + content` —— 两处都自称"topics + 正文"，落库的却是两个互不可比的向量空间。
         entry = SummaryEntry(
             id=new_summary_id(),
             tenant_id=tenant_id,
@@ -142,10 +148,37 @@ class Consolidator:
             content_hash=ch,
             access_count=0,
             last_accessed_at=None,
+        )
+        embedding: list[float] | None = None
+        if self._embedder:
+            try:
+                embedding = await self._embedder(entry.embed_text)
+            except Exception as e:
+                logger.warning("Consolidator embed failed: %s", e)
+                embedding = None
+        if embedding:
+            model_tag = active_embedding_model()
             # 条目自己带上向量：写入侧返回的是重新查回来的行，但 `has_embedding`
             # 是给用户看的（记忆面板），不该取决于哪一条投影把行读回来。
-            embedding=embedding,
-        )
+            entry.embedding = embedding
+            # 口径标签与向量同生同灭：没有向量就没有"属于哪个空间"可声称。
+            entry.embedding_model = model_tag
+            entry.embedding_dim = len(embedding)
+        else:
+            model_tag = ""
+
+        # 近重复检测（cosine > `memory_dedup_threshold`）。这个配置此前无人引用，
+        # 阈值硬编在代码里 —— 与 memory_consolidate_batch 同一类"写了但没接"的死配置。
+        if embedding:
+            dup_id = await self._find_near_duplicate(
+                tenant_id, user_id, embedding, model=model_tag, dim=len(embedding)
+            )
+            if dup_id:
+                result.near_duplicate_of = dup_id
+                # 近重复仍写入（保留 lineage），但标记
+                # 设计文档：合并保留新，旧的 archived
+
+        # ⑤ 写 L3
         try:
             created = await self._store.insert(entry, embedding)
             result.summary = created
@@ -156,9 +189,15 @@ class Consolidator:
         return result
 
     async def _find_near_duplicate(
-        self, tenant_id: str, user_id: str, embedding: list[float]
+        self,
+        tenant_id: str,
+        user_id: str,
+        embedding: list[float],
+        *,
+        model: str,
+        dim: int,
     ) -> str | None:
-        """在既有摘要中查找近重复（cosine > 0.95）。"""
+        """在既有摘要中查找近重复（cosine > `memory_dedup_threshold`）。"""
         try:
             existing = await self._store.list_active(
                 tenant_id, user_id, limit=50, with_embedding=True
@@ -166,12 +205,22 @@ class Consolidator:
         except Exception:
             return None
         scorer = CosineScorer(embedding)
+        threshold = float(settings.memory_dedup_threshold)
+        skipped: list[Any] = []
+        dup_id: str | None = None
         for e in existing:
             if not e.embedding:
                 continue
-            if scorer.score(e.embedding) > 0.95:
-                return str(e.id)
-        return None
+            recorded = (getattr(e, "embedding_model", None), getattr(e, "embedding_dim", None))
+            if not same_vector_space(*recorded, model=model, dim=dim):
+                skipped.append(recorded)
+                continue
+            if scorer.score(e.embedding) > threshold:
+                dup_id = str(e.id)
+                break
+        # 跳出循环也要报：口径过滤掉了几条历史行，是"判重为什么没命中"的唯一线索。
+        report_space_mismatch(skipped, model=model, dim=dim)
+        return dup_id
 
 
 # ── 纯函数（无外部依赖）──

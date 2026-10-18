@@ -30,8 +30,11 @@ from app.memory.layers import (
 from app.memory.vector_backend import (
     MILVUS,
     FailureLog,
+    active_embedding_model,
     parse_vector,
+    report_space_mismatch,
     resolve,
+    same_vector_space,
 )
 from app.redis_keys import rkey
 
@@ -169,6 +172,7 @@ class SummaryStore:
         entities: dict[str, list[str]] | None = None,
         turn_range: tuple[int, int] = (0, 0),
         embedding: list[float] | None = None,
+        embedding_model: str | None = None,
     ) -> str | None:
         """保存摘要（向量落 PG，配了 milvus 再镜像一份）。
 
@@ -178,8 +182,8 @@ class SummaryStore:
             topics: 主题列表。
             entities: 实体字典。
             turn_range: 覆盖的对话轮次范围。
-            embedding: 已算好的向量（Consolidator 按 `topics + 正文` 嵌过就用它的，
-                口径要和判重/召回那两侧一致）；为 None 且配了嵌入函数时按正文补一次。
+            embedding: 已算好的向量。口径由 `Consolidator` 决定（`topics + 正文`），
+                这里不补嵌；为 None 就如实写 NULL 列。
 
         Returns:
             摘要 ID 或 None（失败时）。
@@ -198,9 +202,11 @@ class SummaryStore:
 
         # 嵌入在 INSERT **之前**：向量是这一行的一个列，分两次写就存在
         # "行落库了、向量没落"的中间态（PG 提交失败时镜像已经写出去了）。
-        # 失败照旧 fail-soft —— 没向量的摘要仍然有资格按时间被召回。
-        if embedding is None:
-            embedding = await self._get_embedding(content)
+        #
+        # 这里**不再按正文补嵌**（B1：口径收敛到 Consolidator 的 `topics + 正文`）。
+        # 补嵌本身会错：判重与召回比的是同一个向量空间，混进"裸正文"口径的行之后，
+        # 相似度算出来的仍是 0~1 之间的数，看不出错，只是永远够不到阈值 —— 静默退化
+        # 比没有向量更难查。没有向量就如实写 NULL，它照样有资格按时间被召回。
 
         # PG 插入
         try:
@@ -208,9 +214,9 @@ class SummaryStore:
                 """INSERT INTO memory_summaries
                    (id, tenant_id, user_id, session_id, content, topics, entities,
                     turn_start, turn_end, content_hash, access_count, last_accessed_at,
-                    status, created_at, embedding)
+                    status, created_at, embedding, embedding_model, embedding_dim)
                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NULL, 'active',
-                           NOW(), $11)
+                           NOW(), $11, $12, $13)
                    ON CONFLICT (tenant_id, user_id, content_hash) DO NOTHING
                    RETURNING id""",
                 summary_id,
@@ -224,6 +230,8 @@ class SummaryStore:
                 turn_range[1],
                 content_hash,
                 list(embedding) if embedding else None,
+                embedding_model,
+                len(embedding) if embedding else None,
             )
             if row is None:
                 # 已存在相同 hash，返回已有 ID
@@ -452,7 +460,7 @@ class SummaryStore:
         """
         try:
             rows = await self._pool.fetch(
-                f"""SELECT {_RECALL_COLUMNS}, embedding
+                f"""SELECT {_RECALL_COLUMNS}, embedding, embedding_model, embedding_dim
                    FROM memory_summaries
                    WHERE tenant_id=$1 AND user_id=$2 AND status='active'
                    ORDER BY created_at DESC
@@ -465,18 +473,27 @@ class SummaryStore:
             logger.error("PG vector query failed for summaries: %s", e)
             return []
 
+        # 只在同一向量空间里比：这一级挑的是"最像的 k 条"，而跨模型的余弦数虽然也在 0~1，
+        # 却不对应任何语义 —— 它会把无关的摘要排到前面去（迁移 0020 记的正是这件事）。
+        model_tag = active_embedding_model()
         scorer = CosineScorer(embedding)
         threshold = settings.memory_summary_min_cosine
         scored: list[tuple[float, Any]] = []
+        skipped: list[Any] = []
         for row in rows:
             vec = parse_vector(row["embedding"])
             if not vec:
                 # 迁移 0019 之前的行没有向量（本轮不做批量回填）：它仍然有资格被 ③ 按时间给出。
                 continue
+            recorded = (row.get("embedding_model"), row.get("embedding_dim"))
+            if not same_vector_space(*recorded, model=model_tag, dim=len(embedding)):
+                skipped.append(recorded)
+                continue
             sim = scorer.score(vec)
             if sim < threshold:
                 continue
             scored.append((sim, row))
+        report_space_mismatch(skipped, model=model_tag, dim=len(embedding))
 
         scored.sort(key=lambda t: -t[0])
         return [
@@ -762,6 +779,7 @@ class SummaryStore:
             entities=entry.entities,
             turn_range=(entry.turn_start, entry.turn_end),
             embedding=embedding,
+            embedding_model=entry.embedding_model,
         )
         if result is None:
             raise RuntimeError("Failed to insert summary")
@@ -772,6 +790,8 @@ class SummaryStore:
 
         # get_by_id 的投影不含向量，手上有就直接挂上，省一次 6KB 数组的往返。
         created.embedding = embedding
+        created.embedding_model = entry.embedding_model
+        created.embedding_dim = len(embedding) if embedding else None
 
         return created
 
@@ -817,7 +837,7 @@ class SummaryStore:
         columns = (
             "id, tenant_id, user_id, session_id, content, topics, entities, "
             "turn_start, turn_end, content_hash, access_count, last_accessed_at, "
-            "status, created_at, embedding"
+            "status, created_at, embedding, embedding_model, embedding_dim"
             if with_embedding
             else (
                 "id, tenant_id, user_id, session_id, content, topics, entities, "
@@ -883,4 +903,6 @@ class SummaryStore:
             created_at=created_at,
             # 投影没选这一列时 .get 返回 None = "这条没有向量"，与 NULL 同义。
             embedding=parse_vector(row.get("embedding")),
+            embedding_model=row.get("embedding_model"),
+            embedding_dim=row.get("embedding_dim"),
         )

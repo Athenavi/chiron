@@ -103,3 +103,80 @@ class FailureLog:
 
     def success(self) -> None:
         self._armed = True
+
+
+# ── 向量口径（embedding space）───────────────────────────────────────────
+
+#: 已经警告过的"与当前口径不符的历史行"，按 `model/dim` 去重。
+_space_warned: set[str] = set()
+
+
+def active_embedding_model() -> str:
+    """当前 L3 写入应该打的模型标签。
+
+    与 `app.llm.client.LLMClient.embed` 的选择顺序一致：**本地模型优先**，否则用
+    `embedding_model` 走网关。已知边界：本地模型已配置但那次调用**失败回退到网关**时，
+    这里给出的标签会是本地的名字 —— 两种模型维度通常不同，`embedding_dim` 记的是向量的
+    真实长度，所以这种错标会被维度守卫接住；同维互换（例如 1536 维换 1536 维）才会漏。
+    """
+    from app.config import settings
+
+    local = (settings.local_embedding_model or "").strip()
+    return local or (settings.embedding_model or "").strip()
+
+
+def same_vector_space(
+    recorded_model: Any,
+    recorded_dim: Any,
+    *,
+    model: str,
+    dim: int,
+) -> bool:
+    """这一行的向量能不能和当前口径的向量放在同一个空间里比。
+
+    * 维度对不上：``dot_product`` 对长度不一致返回 0.0（layers.py 的显式口径），所以它
+      不会算错，而是**永不相似** —— 近重复与语义召回静默变空。既然结论已经注定，就把它
+      显式过滤掉并说一声，而不是让调用方拿着一个 0.0 去猜为什么。
+    * 模型对不上（维数却相同）：余弦照样落在 0~1，跨模型空间里这个数没有意义，一个
+      >0.95 会把两条无关摘要标成近重复。这是必须排除的那一类。
+    * 标签为 NULL：口径**未知**，按本改造之前的行为继续参与。严格排除会让历史行突然
+      失忆，而未标行本来就是这个形状。
+    """
+    if recorded_model is not None and str(recorded_model) != model:
+        return False
+    if recorded_dim is not None and int(recorded_dim) != dim:
+        return False
+    return True
+
+
+def _space_key(recorded: tuple[Any, Any]) -> str:
+    """把一行的口径写成 `model/dim`。
+
+    未打标签（迁移 0020 之前的行）要有能读的名字 —— 日志里出现 `None/4` 会让人以为
+    是代码坏了，而不是"这一行没记口径"。
+    """
+    model, dim = recorded
+    return f"{model or '口径未知'}/{dim if dim is not None else '?'}"
+
+
+def report_space_mismatch(skipped: list[Any], *, model: str, dim: int) -> int:
+    """把"因口径不符被跳过的行"说一次，返回跳过条数。
+
+    `skipped` 收的是 `same_vector_space` 的那两个入参原值（模型标签、维度），格式化留
+    在这里做，三处调用点就不必各自想一遍 None 该怎么写。
+
+    每种口径只警告一次（同一种不符会在每次巩固/召回时重复出现，刷日志没有信息量），
+    但第一次必须说 —— 否则"语义层怎么空了"又变成一个查不出来的问题。
+    """
+    if not skipped:
+        return 0
+    for key in sorted({_space_key(s) for s in skipped}):
+        if key not in _space_warned:
+            _space_warned.add(key)
+            logger.warning(
+                "L3 摘要向量的口径与当前 %s/%d 不符，这些历史行不参与语义判定（同类只警告一次）：%s",
+                model,
+                dim,
+                key,
+            )
+    return len(skipped)

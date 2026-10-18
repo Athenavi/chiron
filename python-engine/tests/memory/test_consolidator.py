@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import pytest
 
+from app.memory import vector_backend
 from app.memory.consolidator import (
     ConsolidateResult,
     Consolidator,
@@ -17,6 +18,7 @@ from app.memory.consolidator import (
     new_summary_id,
 )
 from app.memory.layers import SummaryEntry
+from app.memory.vector_backend import active_embedding_model
 
 # ── Mock / Fake 基础设施 ─────────────────────────────────────────────────
 
@@ -130,7 +132,7 @@ def mock_embedder():
 @pytest.fixture
 def mock_summariser():
     """创建模拟摘要函数。"""
-    async def summariser(messages: list[dict]) -> str:
+    async def summariser(messages: list[dict], tenant_id: str = "") -> str:
         return "这是一段测试摘要，关于 Python 编程学习"
     return summariser
 
@@ -138,7 +140,7 @@ def mock_summariser():
 @pytest.fixture
 def mock_summariser_failing():
     """创建失败的模拟摘要函数。"""
-    async def summariser(messages: list[dict]) -> str:
+    async def summariser(messages: list[dict], tenant_id: str = "") -> str:
         raise RuntimeError("LLM service unavailable")
     return summariser
 
@@ -700,7 +702,7 @@ class TestIdempotencyAndOrder:
         assert result1.summary is not None
 
         # 第二次：使用不同的 summariser 产生不同内容，模拟 insert 失败
-        async def different_summariser(messages):
+        async def different_summariser(messages, tenant_id=""):
             return "这是一段不同的测试摘要内容"
 
         fake_store._should_fail_insert = True
@@ -836,7 +838,7 @@ class TestTenantIsolation:
         )
 
         # 租户 2 相同内容（应该独立，不被去重）
-        async def tenant2_summariser(messages):
+        async def tenant2_summariser(messages, tenant_id=""):
             return "这是一段测试摘要，关于 Python 编程学习"  # 与 tenant1 相同
 
         consolidator2 = Consolidator(
@@ -855,6 +857,27 @@ class TestTenantIsolation:
         assert result1.deduplicated is False
         assert result2.deduplicated is False
         assert len(fake_store._insert_calls) == 2
+
+    @pytest.mark.asyncio
+    async def test_summariser_is_told_which_tenant_this_is(self, fake_store, simple_messages, mock_embedder):
+        """租户必须传给摘要生成口：网关的预算预检与扣减只在 `tenant_id` 非空时发生。
+
+        漏传等于让后台记忆任务白吃 token —— 不报错、不超限，只是账记不到人身上。
+        """
+        seen: list[str] = []
+
+        async def summariser(messages, tenant_id=""):
+            seen.append(tenant_id)
+            return "测试摘要"
+
+        consolidator = Consolidator(
+            store=fake_store, embedder=mock_embedder, summariser=summariser
+        )
+        await consolidator.consolidate(
+            tenant_id="tenant-9", user_id="u1", session_id="s1", messages=simple_messages
+        )
+
+        assert seen == ["tenant-9"]
 
     @pytest.mark.asyncio
     async def test_same_tenant_same_user_dedup(
@@ -939,9 +962,15 @@ class TestEdgeCases:
         assert result.summary is not None
 
     @pytest.mark.asyncio
-    async def test_empty_content_after_summarise(self, fake_store):
-        """测试摘要为空的情况。"""
-        async def empty_summariser(messages):
+    async def test_blank_summariser_output_falls_back_to_extractive(self, fake_store):
+        """模型只回了空白 = 这次没做成，退回抽取式正文，而不是丢掉这条记忆。
+
+        旧口径是 `error="summary is empty"`：那时 consolidator 只在测试里被赋 summariser，
+        生产恒走抽取式，所以"空正文"等同于"没消息"。现在生成式是生产路径，模型超时/空回
+        是常事，把它当成失败会让整条巩固进重试直至 DLQ —— 而一段截断过的原文仍然可检索。
+        """
+
+        async def empty_summariser(messages, tenant_id=""):
             return "   \n\n  "  # 只有空白字符
 
         consolidator = Consolidator(
@@ -955,8 +984,30 @@ class TestEdgeCases:
             messages=[{"role": "user", "content": "test"}],
         )
 
-        assert result.error == "summary is empty"
+        assert result.error == ""
+        assert result.summary is not None
+        assert "test" in result.summary.content  # 抽取式的形状：[role]: 原文片段
+
+    @pytest.mark.asyncio
+    async def test_model_says_nothing_worth_remembering_skips_write(self, fake_store):
+        """模型判定"没什么值得记" ≠ 模型没回话：前者如实跳过，不写噪声。"""
+        from app.memory.summariser import NothingWorthRememberingError
+
+        async def none_summariser(messages, tenant_id=""):
+            raise NothingWorthRememberingError("NONE")
+
+        consolidator = Consolidator(store=fake_store, summariser=none_summariser)
+        result = await consolidator.consolidate(
+            tenant_id="tenant1",
+            user_id="user1",
+            session_id="session1",
+            messages=[{"role": "user", "content": "hi"}],
+        )
+
+        assert result.skipped is True
+        assert result.error == ""  # 不是失败：调用方不该为它重试
         assert result.summary is None
+        assert fake_store._insert_calls == []
 
     @pytest.mark.asyncio
     async def test_concurrent_consolidate(
@@ -991,3 +1042,148 @@ class TestEdgeCases:
         # 但由于 summariser 返回相同内容，实际上 content_hash 相同，所以只有 1 次成功写入
         # 后续的会被去重
         assert len(fake_store._insert_calls) >= 1
+
+
+# ── 单元测试：嵌入输入口径与向量空间标签 ──────────────────────────────────
+
+
+class TestEmbedInputAndSpaceTags:
+    """M14c（口径只有一处定义）与 M14d（每行说清自己属于哪个空间）。
+
+    判重和召回比的是同一批向量，所以"用什么文本算向量"和"这颗向量属于哪个空间"必须是
+    写库时就定下来的事实，而不是读取时再猜一次。
+    """
+
+    @staticmethod
+    def _entry(topics: list[str], content: str) -> SummaryEntry:
+        return SummaryEntry(
+            id="sms_existing_space_001",
+            tenant_id="tenant1",
+            user_id="user1",
+            session_id="session1",
+            content=content,
+            topics=topics,
+            entities={},
+            turn_start=0,
+            turn_end=1,
+            content_hash="sha256:existing",
+            embedding=[1.0, 0.0, 0.0],
+        )
+
+    async def test_embed_input_is_the_entry_own_embed_text(
+        self, fake_store, simple_messages
+    ):
+        """喂给 embedder 的就是 `entry.embed_text`（topics 在正文之前）—— 不是第二套拼接。
+
+        Consolidator 过去自己写了一遍 `", ".join(topics) + ": " + content`，而读取侧另一个
+        口径是裸正文：同一句话会算出两颗不同的向量，判重与召回因此各说各话。
+        """
+        # 正文里重复出现的词会被 `_extract_topics` 提成主题，非空主题才检验得到"前置"那一半
+        async def summariser(messages: list[dict], tenant_id: str = "") -> str:
+            return "Python 编程 Python 编程"
+
+        texts: list[str] = []
+
+        async def spy_embedder(text: str) -> list[float]:
+            texts.append(text)
+            return [0.1, 0.2, 0.3]
+
+        consolidator = Consolidator(
+            store=fake_store, embedder=spy_embedder, summariser=summariser
+        )
+        result = await consolidator.consolidate(
+            tenant_id="tenant1", user_id="user1", session_id="session1",
+            messages=simple_messages,
+        )
+
+        assert len(texts) == 1
+        entry = result.summary
+        assert entry.topics, "主题空了这条用例就只检验到正文，需要换个造主题的办法"
+        assert texts[0] == entry.embed_text
+        assert texts[0] == f"{' '.join(entry.topics)}\n{entry.content}"
+
+    async def test_written_entry_is_labelled_with_the_active_space(
+        self, fake_store, simple_messages, mock_embedder, mock_summariser
+    ):
+        """向量与它的 `model/dim` 标签同批产生，否则守卫没有可判的依据。"""
+        consolidator = Consolidator(
+            store=fake_store, embedder=mock_embedder, summariser=mock_summariser
+        )
+        result = await consolidator.consolidate(
+            tenant_id="tenant1", user_id="user1", session_id="session1",
+            messages=simple_messages,
+        )
+
+        entry = result.summary
+        assert entry.embedding_model == active_embedding_model()
+        assert entry.embedding_dim == len(entry.embedding)
+        stored_entry, stored_vector = fake_store._insert_calls[0]
+        assert stored_entry.embedding_model == entry.embedding_model
+        assert stored_entry.embedding_dim == len(stored_vector)
+
+    async def test_a_row_from_another_model_cannot_claim_to_be_a_duplicate(
+        self, fake_store, simple_messages, mock_summariser, monkeypatch, caplog
+    ):
+        """同维跨模型是最危险的一类：余弦 = 1.0 却不代表同一句话。
+
+        排除它不是洁癖 —— `memory_dedup_threshold` 一旦被这个数超过，两条无关摘要会被标成
+        近重复、其中一条从此不再写入。
+        """
+        monkeypatch.setattr(vector_backend, "_space_warned", set())
+        entry = self._entry(["测试"], "别的模型算出来的向量，内容完全不同")
+        entry.embedding_model = "someone-elses-embedder"
+        entry.embedding_dim = 3
+        await fake_store.insert(entry, entry.embedding)
+        fake_store._insert_calls.clear()  # 只数这一次巩固写没写
+
+        async def same_vector(text: str) -> list[float]:
+            return [1.0, 0.0, 0.0]
+
+        consolidator = Consolidator(store=fake_store, embedder=same_vector, summariser=mock_summariser)
+        with caplog.at_level("WARNING", logger="app.memory.vector_backend"):
+            result = await consolidator.consolidate(
+                tenant_id="tenant1", user_id="user1", session_id="session1",
+                messages=simple_messages,
+            )
+
+        assert result.near_duplicate_of is None
+        assert result.deduplicated is False
+        assert len(fake_store._insert_calls) == 1
+        assert "someone-elses-embedder/3" in caplog.text
+
+    async def test_a_row_of_the_active_space_is_still_a_duplicate(
+        self, fake_store, simple_messages, mock_summariser
+    ):
+        """对照组：标签对上时守卫不该改变判重结论 —— 它只排除不可比的那几行。"""
+        entry = self._entry(["测试"], "同一口径下的另一条摘要")
+        entry.embedding_model = active_embedding_model()
+        entry.embedding_dim = 3
+        await fake_store.insert(entry, entry.embedding)
+
+        async def same_vector(text: str) -> list[float]:
+            return [1.0, 0.0, 0.0]
+
+        consolidator = Consolidator(store=fake_store, embedder=same_vector, summariser=mock_summariser)
+        result = await consolidator.consolidate(
+            tenant_id="tenant1", user_id="user1", session_id="session1",
+            messages=simple_messages,
+        )
+
+        assert result.near_duplicate_of == "sms_existing_space_001"
+
+    async def test_unlabelled_rows_keep_being_compared(
+        self, fake_store, simple_messages, mock_summariser
+    ):
+        """迁移 0020 之前的行没有标签：继续按原样参与，否则历史记忆会突然失忆。"""
+        await fake_store.insert(self._entry(["测试"], "没有标签的老行"), [1.0, 0.0, 0.0])
+
+        async def same_vector(text: str) -> list[float]:
+            return [1.0, 0.0, 0.0]
+
+        consolidator = Consolidator(store=fake_store, embedder=same_vector, summariser=mock_summariser)
+        result = await consolidator.consolidate(
+            tenant_id="tenant1", user_id="user1", session_id="session1",
+            messages=simple_messages,
+        )
+
+        assert result.near_duplicate_of == "sms_existing_space_001"
