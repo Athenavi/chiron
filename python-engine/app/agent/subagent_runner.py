@@ -168,6 +168,43 @@ def _wrap_result(run_id: str, profile: str, status: str, output: str, truncated:
     ])
 
 
+async def _reserve_line(
+    root: str, tenant_id: str, *, member: str, tokens: int
+) -> str:
+    """M15b：为这一 run 在任务线上预留 ``tokens``，返回句柄（``""`` = 没预留）。
+
+    预留是**增强路径**：Redis 没配 / 抖动 / root 不合字符集，都退成"不预留"，闸门退回
+    "只按已结算量判定"。这里的异常一个也不该让子 Agent 起不来。
+    """
+    if tokens <= 0:
+        return ""
+    try:
+        from app.subagent.line_ledger import get_line_ledger
+
+        return await get_line_ledger().reserve(root, tenant_id, member, int(tokens))
+    except Exception as exc:  # noqa: BLE001 - 预留失败不影响执行
+        logger.warning(
+            "subagent %s: line reserve unavailable (root=%s): %s", member, root, str(exc)[:160]
+        )
+        return ""
+
+
+async def _settle_line(root: str, handle: str, actual_tokens: int) -> None:
+    """M15b：收尾时摘掉自己的预留、把**实际**用量并进镜像。
+
+    调用点必须在 ``store.finish_run`` **之后**：那一行落库才是权威，先累加镜像再落库，
+    中间的一次回填会把同一段算两次（多算对上限是安全的一侧，但没必要主动制造）。
+    """
+    if not root:
+        return
+    try:
+        from app.subagent.line_ledger import get_line_ledger
+
+        await get_line_ledger().settle(root, handle, actual_tokens)
+    except Exception as exc:  # noqa: BLE001 - 收尾失败由预留的自然到期兜底
+        logger.warning("subagent line settle failed (root=%s): %s", root, str(exc)[:160])
+
+
 async def _persist_terminal_to_cache(
     cache: Any,
     *,
@@ -441,8 +478,9 @@ class SubAgentRunner:
         parent_run_id = self._parent_run_id or _context_run_id()
 
         # 3) 落库（起始）
+        line_root = ""
         if self._store is not None:
-            await self._store.start_run(
+            line_root = await self._store.start_run(
                 run_id=run_id,
                 root_session_id=self._parent_session_id,
                 turn_id=self._turn_id,
@@ -460,6 +498,21 @@ class SubAgentRunner:
                 # R5(b)：续跑 / 分叉血缘（空 = 不是续跑 ⇒ store 侧不写，列保持 NULL）
                 resumed_from=self._resumed_from,
                 resume_at_step=self._resume_at_step,
+            )
+
+        # M15b：把这条线的根交给 runtime（每轮开头的线账闸门用它），并为这一 run 预留它的
+        # per-run token 上限。预留是悲观的，约束的是"同一条线上能并发几个在途 run"：
+        # 不预留时，N 个并发 run 都按同一份"剩余量"起算，合起来就是 N 倍溢出。
+        # `line_root` 为空 = 落库不可用 ⇒ 线账没有权威可读，闸门保持 inert，
+        # 不在这里假装"有一条以自己的 id 为根的线"（那只会让 Redis 里多一堆无人认领的预留）。
+        line_handle = ""
+        if line_root:
+            child.subagent_line = line_root
+            line_handle = await _reserve_line(
+                line_root,
+                self._tenant_id,
+                member=child.id,
+                tokens=int(self._budget.tokens) if self._budget is not None else 0,
             )
 
         # 4) 事件旁路（让前端看到子 Agent 进度；未启用时为 None，不影响执行）
@@ -765,6 +818,7 @@ class SubAgentRunner:
                             steps=steps,
                             error=cancel_reason,
                         )
+                    await _settle_line(line_root, line_handle, in_tokens + out_tokens)
                     # 统一入口：run Hash + 整树骨架一起写（此前这里漏了整树骨架，
                     # 被取消的 run 因此在侧边栏/树里停在 running）。
                     await _persist_terminal_to_cache(
@@ -869,6 +923,7 @@ class SubAgentRunner:
                 steps=steps,
                 error=" | ".join(errors)[:1000],
             )
+            await _settle_line(line_root, line_handle, in_tokens + out_tokens)
 
         usage = {"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps}
 

@@ -1320,6 +1320,34 @@ class AgentRuntime:
             "cost": {"used": 0.0, "limit": budget.cost},
         }
 
+    async def _line_violation(self, task: AgentTask, *, own_tokens: int) -> str:
+        """M15b 任务线闸门：这条委派线到今天该不该停（返回轴名，``""`` = 放行）。
+
+        只有子 Agent 带 ``task.subagent_line``：线账的账本是 ``subagent_runs`` 按
+        ``root_run_id`` 的求和，主 run 自己那一份不在里面（口径与取舍见
+        ``app/subagent/line_ledger.py``）。
+
+        判定放在**每轮开头**而不是只在委派入口：一次 run 能跑几十轮，只在入口判就等于
+        给每一段都额外放行一整轮的额度。
+
+        任何一步问不出来都放行 —— 线账是第二道闸门（per-run 预算与租户预算都还在），
+        让它的一次抖动停掉全站子 Agent 不划算。
+        """
+        root = str(getattr(task, "subagent_line", "") or "")
+        if not root:
+            return ""
+        try:
+            from app.subagent.line_ledger import get_line_ledger
+
+            return await get_line_ledger().check(
+                root, task.tenant_id, run_id=task.id, own_tokens=own_tokens
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "subagent line gate unavailable (task=%s): %s", task.id, str(exc)[:160]
+            )
+            return ""
+
     async def _persist_dropped(
         self, dropped: list[tuple[str, str]], task: AgentTask
     ) -> None:
@@ -1931,6 +1959,22 @@ class AgentRuntime:
                     )
                     # A4：预算越界是**本 run 的终态**（不是崩溃）——标 failed 后它不再可被
                     # "用户重试续跑"误当现场；`ckpt.load` 只认活跃状态。
+                    await self._mark_run_status(task, "failed")
+                    return
+
+                # ── 任务线闸门（M15b，紧跟 per-run 预算）──
+                # per-run 预算管"这一段"，线账管"这条线一共"（续跑与嵌套委派并进同一条线）。
+                # 越界的反应先与 per-run 同一形状（error 收尾 + 标 failed）；M15c 会把
+                # `line_paused` 改接成"挂起等人工提额"，那时改的是这里的反应，不是判定。
+                line_axis = await self._line_violation(
+                    task, own_tokens=total_input_tokens + total_output_tokens
+                )
+                if line_axis:
+                    yield AgentEvent(
+                        type="error",
+                        error=f"budget_exceeded:{line_axis}",
+                        trace_id=trace_id,
+                    )
                     await self._mark_run_status(task, "failed")
                     return
 

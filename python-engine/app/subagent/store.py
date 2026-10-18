@@ -232,8 +232,12 @@ class SubagentRunStore:
         inherited_messages: int = 0,
         resumed_from: str = "",
         resume_at_step: int | None = None,
-    ) -> None:
+    ) -> str:
         """写入 run 起始记录（状态 running）。失败只告警，不阻断子 Agent。
+
+        返回值是这条 run 的**任务线根**（``root_run_id``，M15a/0021）：调用方要用它去问
+        "这条线到今天花了多少"。落库不可用时返回**空串** —— 那是"不知道"，不是"以自己为根"：
+        把不知道伪装成一条新线，闸门就会按每段重算额度。
 
         ``rerun_of`` 记录**重跑血缘**（由哪个 run 重跑而来），见
         app/tools/subagent_rerun.py；它单独写一条 UPDATE，因此未执行迁移的老库
@@ -248,7 +252,7 @@ class SubagentRunStore:
         表示"续到底"，有值表示"只继承了 `seq < N` 的步骤"。
         """
         if not self.available:
-            return
+            return ""
         import json
 
         safe_task, hits = redact_text(task)
@@ -274,7 +278,7 @@ class SubagentRunStore:
             )
         except Exception as exc:  # noqa: BLE001
             self._degrade("start_run", exc)
-            return
+            return ""
         if rerun_of:
             # 血缘写入失败**不能**影响这次运行本身：只告警（并给出迁移提示）
             try:
@@ -315,6 +319,7 @@ class SubagentRunStore:
                 )
         # M15a：这条 run 归属的任务线。必须在 `resumed_from` 之后写 —— 解析根的查询读的就是
         # 那一列；写在前面会让续跑出来的新 run 认不出自己的来源，额度按每段重算。
+        root = run_id
         try:
             row = await self._pool.fetchrow(
                 ROOT_RESOLVE_SQL, run_id, resumed_from, parent_run_id
@@ -335,6 +340,9 @@ class SubagentRunStore:
                 str(exc)[:160],
             )
         self._mark_started(run_id)
+        # 解析失败时这里是 `run_id`（"自己一条线"）：库里的 root_run_id 因此可能是 NULL，
+        # 于是这条线的求和会**少算**这一段 —— 与"按每段重算额度"（多算）相比是可接受的一侧。
+        return root
 
     async def add_step(
         self,

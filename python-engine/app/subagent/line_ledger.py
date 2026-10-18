@@ -1,0 +1,460 @@
+"""任务线账（run 级预算的第二道闸门）—— M15b，账本单位是 0021 的 ``root_run_id``。
+
+**要拦的是什么**（论文 §5.2）：一条任务线可以被反复续跑，每次都是全新 run_id，而 per-run
+预算只认自己这一 run。于是"续跑次数 × 每 run 额度"就是实际花销，而实际花销没有任何上限。
+
+**口径**（只有一个加法，写在 ``LineState.charged`` 里）::
+
+    charged(line) = settled(line)        # 已终态 run 的 token 之和 —— 权威：subagent_runs 求和
+                  + reserved(line)       # **其它**在途 run 的预留（Redis，到点自动回收）
+                  + own                  # 当前 run 自己已花（它的行还没终态，不在 settled 里）
+
+    越界 ⇔ cap > 0 且 charged >= cap（轴名 ``line_tokens``）；或 ``paused``（轴名 ``line_paused``）
+
+**为什么 ``settled`` 不抄进表里**：那张表（迁移 0022）只存控制态（cap / paused）。累计一旦
+有了第二份，它就一定会和明细对不上（写 run 行与加累计是两条语句，中间崩溃、补偿、人工修数据
+都能把它们岔开）—— 预算账上最坏的一类静默。Redis 里的那个键只是**镜像**：缺失就从 PG 求和
+回填，TTL 60s，权威永远是求和。
+
+**为什么预留放 Redis 而不是表里**：预留是"到点就该消失"的协调态。放 PG 就得配回收任务 ——
+崩溃的 run 会把预留永久留在条线上，那条线从此被占住、新派发一律被拒，比没有闸门更糟。Redis
+sorted set 以**到期时刻为 score**、读时先按 score 清，崩溃留下的预留到点自己消失；正常收尾
+由 :meth:`LineLedger.settle` 显式摘掉。Redis 整个不可用时退回**只结算不预留**（最坏后果是
+同一条线上并发的几个 run 各自按剩余量起算，溢出至多半 run —— 而 per-run 预算与租户预算仍在）。
+
+**fail-open**：任何一步问不出来（没有租户、PG 不可用、列还没迁移）都返回 ``None`` / 放行。
+线账是第二道闸门，不是唯一一道；反过来 fail-closed 会让一次 PG 抖动停掉全站子 Agent，代价与
+收益不符 —— 与 ``internal/api/ent_quota_enforce.go`` 的 ``consume()`` 同一取向（那里也是
+"计数失败 ⇒ fail-open + warn"）。``paused`` 不同：它是**人显式按下的暂停键**，读得到就必须停。
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import time
+from dataclasses import dataclass
+from typing import Any
+
+from app.observability.metrics import SUBAGENT_LINE_GATE
+from app.redis_keys import rkey
+
+logger = logging.getLogger(__name__)
+
+#: 一条线的默认 token 上限。取值参照 per-run 默认（子 Agent 200k）与"正常一个 run 约
+#: 2k–20k token"的实测：2M ≈ 100–1000 个 run 的全程用量 —— 只拦"明显失控"（无人值守
+#: 续跑循环、被 prompt 注入驱动的连环委派），不会碰掉正常任务。
+DEFAULT_LINE_MAX_TOKENS = 2_000_000
+#: ``run_lineage_ledger.cap_tokens`` 的显式"这条线不限"。与 0（= 跟随默认）分开：
+#: 默认值改了不该悄悄关掉一条被明确放行的大线。
+CAP_UNLIMITED = -1
+
+#: settled 镜像的 TTL。它只用于吸收 fan-out 时的重复聚合，故意取短：漂移上界就是这段时间
+#: 内**丢掉**的终态写入（镜像只在键还活着时 INCRBY；键没了 ⇒ 下一次读走 PG 求和）。
+USED_TTL_SECONDS = 60
+#: 单条在途预留的自然到期。必须宽过"一次 run 可能跑多久"（后台 run 的 wall 默认不限，
+#: 由注册表看门狗收口），又要短到崩溃留下的预留不会长期占住这条线。
+RESERVE_TTL_SECONDS = 3600
+
+#: 线账读过的控制态行（迁移 0022）。``tenant_id`` 是**必填**过滤：闸门的调用形状是
+#: "给我一个 run id 我就能问这条线的额度"，不按租户收就是跨租户读数。
+LEDGER_SELECT_SQL = (
+    "SELECT cap_tokens, paused, pause_reason FROM run_lineage_ledger "
+    "WHERE root_run_id = $1 AND tenant_id = $2"
+)
+
+_TAB = "\t"
+
+# 预留表的一个原子操作：可选删除 / 可选新增 / 清过期 / 求和（排除 exclude 那个 run ——
+# 它的花销由调用方按**实际** token 计，不能再算一遍预留）。
+# KEYS[1]=预留 zset；ARGV: 1=now(unix s) 2=add member 3=add expiry 4=del member
+# 5=exclude run_id 6=ttl s。member 形状 `run_id<TAB>tokens`，score = 到期时刻。
+_RSVD_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local del = ARGV[4]
+if del ~= '' then redis.call('ZREM', key, del) end
+local add = ARGV[2]
+if add ~= '' then redis.call('ZADD', key, tonumber(ARGV[3]), add) end
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+local skip = ARGV[5]
+local total = 0
+local members = redis.call('ZRANGE', key, 0, -1)
+for i = 1, #members do
+  local m = members[i]
+  local p = string.find(m, '\\t', 1, true)
+  if p then
+    local who = string.sub(m, 1, p - 1)
+    if who ~= skip then
+      total = total + (tonumber(string.sub(m, p + 1)) or 0)
+    end
+  end
+end
+if #members > 0 then
+  redis.call('EXPIRE', key, tonumber(ARGV[6]))
+else
+  redis.call('DEL', key)
+end
+return total
+"""
+
+# 镜像缺失时的回填：**只在键不存在时**写（NX）。已经存在的值可能是并发 run 刚 INCRBY 过的，
+# 覆盖它会把那段实际用量抹掉（**少算**，是这条线最坏的一侧）。
+_USED_BACKFILL_LUA = """
+if redis.call('SET', KEYS[1], ARGV[1], 'NX', 'EX', tonumber(ARGV[2])) then return 1 end
+return 0
+"""
+
+# 终态写入后的镜像累加：键不在了就**什么都不做**（那一步的权威值已经在 PG 的那一行里，
+# 下一次读会直接从求和回填出来）。这里不加回一个已消失的键，否则会绕过权威口径。
+_USED_BUMP_LUA = """
+if redis.call('EXISTS', KEYS[1]) == 1 then
+  local n = redis.call('INCRBY', KEYS[1], ARGV[1])
+  redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
+  return n
+end
+return -1
+"""
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = (os.getenv(name) or "").strip()
+    try:
+        return int(raw) if raw else default
+    except ValueError:
+        return default
+
+
+def default_cap() -> int:
+    """线级默认上限（``SUBAGENT_LINE_MAX_TOKENS``）。0 = 该轴不限。"""
+    return _env_int("SUBAGENT_LINE_MAX_TOKENS", DEFAULT_LINE_MAX_TOKENS)
+
+
+def _usable_root(root: str) -> bool:
+    """run id 会进 Redis 键名与 Lua 参数 —— 只接受自己的 id 字符集。
+
+    预留的 member 用 TAB 分隔，一个带 TAB/空白/控制字符的 id 会把它拼出来的 member 变成
+    另一条记录；这不是"理论上脏数据"，而是键空间与账目的注入面。
+    """
+    if not root or len(root) > 64:
+        return False
+    return all(c.isalnum() or c in "-_." for c in root)
+
+
+@dataclass(frozen=True)
+class LineState:
+    """一条任务线在被问到的那一刻的账目。"""
+
+    root: str
+    tenant_id: str
+    #: 生效上限（已解析过默认值）：``0`` = 该轴不限。
+    cap: int
+    settled: int
+    reserved: int
+    paused: bool
+    pause_reason: str
+
+    def charged(self, own_tokens: int) -> int:
+        return self.settled + self.reserved + max(0, int(own_tokens or 0))
+
+    def violation(self, own_tokens: int) -> str:
+        """越界轴名（``line_paused`` / ``line_tokens``）；没越界返回空串。
+
+        判定顺序固定：先 ``paused`` —— 它是人显式按下的暂停键，与"数算到了上限"是两件事，
+        上层要据此决定"是等人提额还是直接判失败"。
+        """
+        if self.paused:
+            return "line_paused"
+        if self.cap > 0 and self.charged(own_tokens) >= self.cap:
+            return "line_tokens"
+        return ""
+
+    def describe(self) -> str:
+        cap = self.cap if self.cap > 0 else "unlimited"
+        return (
+            f"root={self.root} settled={self.settled} reserved={self.reserved} "
+            f"cap={cap} paused={int(self.paused)}{(':' + self.pause_reason) if self.pause_reason else ''}"
+        )
+
+
+class LineLedger:
+    """线账的读写。不持有 run 级状态 ⇒ 进程内共享一个实例（见 :func:`get_line_ledger`）。"""
+
+    def __init__(self, *, pool: Any = None, redis: Any = None, store: Any = None) -> None:
+        self._pool = pool
+        self._redis = redis
+        self._store = store
+        #: 同类失败只告警一次：闸门每轮都会被问一次，Redis 抖动时这会变成日志洪水。
+        self._warned: set[str] = set()
+
+    # ── 连接 ──
+
+    async def _redis_conn(self) -> Any:
+        if self._redis is not None:
+            return self._redis
+        from app.redis_client import get_redis
+
+        self._redis = await get_redis()
+        return self._redis
+
+    def _db_pool(self) -> Any:
+        if self._pool is not None:
+            return self._pool
+        from app.db import get_pool
+
+        self._pool = get_pool()
+        return self._pool
+
+    def _run_store(self) -> Any:
+        """复用 ``SubagentRunStore`` 的求和口径（``lineage_usage``），别再写一遍 SQL。"""
+        if self._store is not None:
+            return self._store
+        from app.subagent.store import SubagentRunStore
+
+        self._store = SubagentRunStore(self._db_pool())
+        return self._store
+
+    def _warn(self, tag: str, msg: str, *args: Any) -> None:
+        if tag in self._warned:
+            return
+        self._warned.add(tag)
+        logger.warning(msg, *args)
+
+    # ── 读 ──
+
+    async def state(
+        self, root: str, tenant_id: str, *, exclude_run_id: str = ""
+    ) -> LineState | None:
+        """这条线今天的账目。``None`` = **问不出来**（调用方按"没有这条线"放行）。
+
+        ``exclude_run_id`` 是"这笔查询替谁算"：它自己的预留要从 ``reserved`` 里剔除，
+        因为它的花销按**实际** token（``own_tokens``）计 —— 两者都算就是双算，
+        一条线会提前一个 per-run 预算被判满。
+        """
+        if not _usable_root(root) or not tenant_id:
+            return None
+        ctrl = await self._ctrl_row(root, tenant_id)
+        if ctrl is None:
+            return None
+        settled = await self._settled(root, tenant_id)
+        if settled is None:
+            return None
+        cap = ctrl[0] if ctrl[0] != 0 else default_cap()
+        if cap == CAP_UNLIMITED:
+            cap = 0
+        return LineState(
+            root=root,
+            tenant_id=tenant_id,
+            cap=int(cap),
+            settled=int(settled),
+            reserved=int(await self._reserved(root, exclude_run_id)),
+            paused=bool(ctrl[1]),
+            pause_reason=str(ctrl[2] or ""),
+        )
+
+    async def check(
+        self, root: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0
+    ) -> str:
+        """闸门：返回越界轴名（``""`` = 放行，含"问不出来"）。"""
+        state = await self.state(root, tenant_id, exclude_run_id=run_id)
+        if state is None:
+            return ""
+        axis = state.violation(own_tokens)
+        if axis:
+            SUBAGENT_LINE_GATE.labels(axis=axis).inc()
+            logger.warning("subagent line gate tripped (%s): %s", axis, state.describe())
+        return axis
+
+    async def _ctrl_row(self, root: str, tenant_id: str) -> tuple[int, bool, str] | None:
+        """控制态**直接读 PG、不做镜像**。
+
+        这是刻意的：cap/paused 是"人改了就应当生效"的东西。缓存 60s 换来的是
+        "提了额这条线还在停"的最坏一分钟，而它只是主键上的一行读 —— 不值得。
+        """
+        try:
+            row = await self._db_pool().fetchrow(LEDGER_SELECT_SQL, root, tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            self._warn(
+                "ctrl",
+                "subagent 线账读控制态失败（此后不再重复告警）：请执行迁移 "
+                "0022_run_lineage_ledger: %s",
+                str(exc)[:160],
+            )
+            return None
+        if row is None:
+            # 没有行 = 这条线没被设过 = 跟随默认、未暂停。**不是**"问不出来"。
+            return (0, False, "")
+        return (int(row["cap_tokens"] or 0), bool(row["paused"]), str(row["pause_reason"] or ""))
+
+    async def _settled(self, root: str, tenant_id: str) -> int | None:
+        """**先读镜像，缺了才去 PG 求和** —— 这条快路径存在的全部理由。
+
+        fan-out 时同一条线上多个 run 每轮都要问一次闸门；没有镜像就等于每轮一次
+        ``SUM(input_tokens + output_tokens)``（`subagent_runs` 上按 `root_run_id` 的聚合）。
+        镜像最多陈旧 ``USED_TTL_SECONDS``，漂移只来自这段时间里**丢掉**的终态写入，方向是
+        **少算** —— 与"每轮都求和但会多算"相比，这一侧的代价是一轮 run 的量级。
+
+        回填用 NX：并发里另一个 run 可能刚把键建起来并 INCRBY 过，覆盖它会把那段实际用量抹掉。
+        """
+        redis = await self._redis_safe()
+        if redis is not None:
+            mirrored = await self._mirror_get(root)
+            if mirrored is not None:
+                return mirrored
+        usage = await self._run_store().lineage_usage(root, tenant_id)
+        if usage is None:
+            return None
+        tokens = max(0, int(usage[0]))
+        if redis is not None:
+            try:
+                await redis.eval(
+                    _USED_BACKFILL_LUA, 1, _used_key(root), str(tokens), str(USED_TTL_SECONDS)
+                )
+            except Exception as exc:  # noqa: BLE001
+                self._warn(
+                    "used",
+                    "subagent 线账镜像回填失败（此后不再重复告警，按 PG 值继续）: %s",
+                    str(exc)[:160],
+                )
+        return tokens
+
+    async def _mirror_get(self, root: str) -> int | None:
+        """读镜像；**None = 没有可用镜像**（键不存在、Redis 抖了、值是脏的）。"""
+        redis = await self._redis_safe()
+        if redis is None:
+            return None
+        try:
+            raw = await redis.get(_used_key(root))
+        except Exception as exc:  # noqa: BLE001
+            self._warn(
+                "used",
+                "subagent 线账镜像读失败（此后不再重复告警，改问 PG）: %s",
+                str(exc)[:160],
+            )
+            return None
+        if raw is None:
+            return None
+        try:
+            return max(0, int(raw))
+        except (TypeError, ValueError):
+            return None
+
+    async def _reserved(self, root: str, exclude_run_id: str) -> int:
+        """在途预留之和；取不到 ⇒ 0（= 退回"只结算不预留"，方向是**少算**）。"""
+        redis = await self._redis_safe()
+        if redis is None or not _usable_root(root):
+            return 0
+        now = int(time.time())
+        try:
+            res = await redis.eval(
+                _RSVD_LUA,
+                1,
+                _rsv_key(root),
+                str(now),
+                "",
+                str(now + RESERVE_TTL_SECONDS),
+                "",
+                exclude_run_id or "",
+                str(RESERVE_TTL_SECONDS),
+            )
+            return int(res or 0)
+        except Exception as exc:  # noqa: BLE001
+            self._warn("rsv", "subagent 线账预留读失败（此后不再重复告警，按 0 继续）: %s", str(exc)[:160])
+            return 0
+
+    async def _redis_safe(self) -> Any:
+        """Redis 可选件：没配 / 连不上都按 ``None``，让线账退回纯 PG 口径。"""
+        try:
+            return await self._redis_conn()
+        except Exception as exc:  # noqa: BLE001
+            self._warn("redis", "subagent 线账无 Redis 可用（此后不再重复告警）：预留轴退化，只按已结算量判: %s", str(exc)[:160])
+            return None
+
+    # ── 写 ──
+
+    async def reserve(self, root: str, tenant_id: str, member: str, tokens: int) -> str:
+        """为这一 run 预留 ``tokens``，返回**句柄**（``""`` = 没预留成）。
+
+        悲观预留（按该 run 的 per-run token 上限）是有意的：它把"同一条线上并发多少个在途
+        run"约束成 ``cap / per_run`` 量级。宁可拒绝第 N 个并发派发（M15c 让它变成待办），
+        也不要放任 N 个 run 各自按同一份剩余量起算 —— 那是真的会花超。
+
+        member 用 run 的 task id 而不是 run id：闸门那边能按 ``task.id`` 把自己从求和里剔掉，
+        不必再往 ``AgentTask`` 上多塞一个"我预留了多少"的字段。
+        """
+        tokens = int(tokens or 0)
+        if tokens <= 0 or not _usable_root(root) or not tenant_id or not member:
+            return ""
+        redis = await self._redis_safe()
+        if redis is None:
+            return ""
+        handle = f"{member}{_TAB}{tokens}"
+        now = int(time.time())
+        try:
+            await redis.eval(
+                _RSVD_LUA,
+                1,
+                _rsv_key(root),
+                str(now),
+                handle,
+                str(now + RESERVE_TTL_SECONDS),
+                "",
+                member,
+                str(RESERVE_TTL_SECONDS),
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._warn("rsvw", "subagent 线账预留写入失败（此后不再重复告警）: %s", str(exc)[:160])
+            return ""
+        return handle
+
+    async def settle(self, root: str, handle: str, actual_tokens: int) -> None:
+        """收尾：摘掉自己的预留，并把**实际**用量并进镜像。
+
+        调用时机必须在 ``finish_run`` 之后 —— 那一行落库才是权威；顺序颠倒时，中间的
+        一次回填会把"还没落库的这一次"当成 0，随后的 INCRBY 再补上，结果一致；
+        反过来先 INCRBY 再落库，回填可能把同一段算两次（**多算**，对上限是安全的一侧）。
+        """
+        if not _usable_root(root):
+            return
+        redis = await self._redis_safe()
+        if redis is None:
+            return
+        now = int(time.time())
+        try:
+            if handle:
+                await redis.eval(
+                    _RSVD_LUA,
+                    1,
+                    _rsv_key(root),
+                    str(now),
+                    "",
+                    str(now + RESERVE_TTL_SECONDS),
+                    handle,
+                    "",
+                    str(RESERVE_TTL_SECONDS),
+                )
+            if int(actual_tokens or 0) > 0:
+                await redis.eval(
+                    _USED_BUMP_LUA, 1, _used_key(root), str(int(actual_tokens)), str(USED_TTL_SECONDS)
+                )
+        except Exception as exc:  # noqa: BLE001
+            self._warn("settle", "subagent 线账收尾失败（此后不再重复告警，预留会自然到期）: %s", str(exc)[:160])
+
+
+def _used_key(root: str) -> str:
+    return rkey(f"subagent:line:{root}:used")
+
+
+def _rsv_key(root: str) -> str:
+    return rkey(f"subagent:line:{root}:rsv")
+
+
+_ledger: LineLedger | None = None
+
+
+def get_line_ledger() -> LineLedger:
+    """进程内单例（只持有连接，不持有 run 状态）。"""
+    global _ledger
+    if _ledger is None:
+        _ledger = LineLedger()
+    return _ledger
