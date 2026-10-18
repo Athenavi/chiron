@@ -76,6 +76,28 @@ APPROVAL_TTL_SECONDS = 300.0
 #: 工具名必须与 app/tools/ask_user.py 的 ASK_USER_TOOL 一致 —— runtime 靠它识别提问调用。
 ASK_USER_TOOL = "ask_user"
 ASK_ANSWER_TTL_SECONDS = 300.0
+#: 跨副本审批/回答的兜底轮询间隔（秒）。唤醒频道只是**加速器**，不是仲裁者：
+#: 写入方 SET 决策/答案键后 PUBLISH 一条 per-tc 唤醒，等待副本收到即提前 GET+DEL；
+#: 但订阅建立前的写入、或订阅端断连丢消息，都靠这条兜底轮询收口 —— 所以最坏退化=纯轮询，
+#: 绝不双消费、绝不永久卡住（deadline 到即返回 None）。0.15s 忙轮询放宽到此值把 QPS 降 ~10x，
+#: 即时性反而更好（正常路径靠 wake 秒级认领，不再等下一轮 0.15s）。
+REMOTE_WAIT_POLL_INTERVAL_SECONDS = 1.5
+
+
+def _approval_wake_channel(tc_id: str) -> str:
+    """跨副本审批的 per-tc 唤醒频道（只叫醒等待该 tc_id 的副本，避免惊群）。"""
+    from app.redis_keys import rkey
+
+    return rkey(f"approval:wake:{tc_id}")
+
+
+def _ask_wake_channel(tc_id: str) -> str:
+    """ask_user 跨副本回答的 per-tc 唤醒频道（与审批同构）。"""
+    from app.redis_keys import rkey
+
+    return rkey(f"answer:wake:{tc_id}")
+
+
 #: ask_user 的"明确拒绝"应答。用带 `\x00` 的哨兵而非空串或固定词：空串会被端点拒绝，
 #: 而任何用户真能打出来的文本都可能与固定词碰撞 —— 拒绝与"没看见"在模型侧必须有不同 identity。
 ASK_DECLINED = "\x00__declined__\x00"
@@ -3962,35 +3984,83 @@ class AgentRuntime:
                 )
         return None
 
-    async def _poll_remote_decision(
-        self, tc_id: str, timeout: float, interval: float = 0.15
-    ) -> ApprovalDecision | None:
-        """轮询 Redis 决策键（跨副本通道）；命中即取走（单次消费）。超时返回 None。"""
-        deadline = asyncio.get_running_loop().time() + timeout
+    async def _take_key_with_wake(
+        self, key: str, channel: str, timeout: float, interval: float
+    ) -> Any | None:
+        """等待某 Redis 键出现并**原子取走**（GET+DEL 单次消费是仲裁，不可动摇）。
+
+        hybrid：唤醒频道只是加速器。写入方 SET 后 PUBLISH `channel`（per-tc），这里先订阅
+        再进循环 —— 每轮先 GET（覆盖"订阅建立前键已写入"的竞态），未命中就等唤醒或兜底
+        `interval` 超时，二者先到即回到顶部再 GET。唤醒丢失（订阅端断连）时兜底轮询仍收口。
+        因此最坏退化=纯轮询（间隔 `interval`），绝不双消费、deadline 到即返回 None 不卡死。
+        """
         try:
-            from app.redis_client import get_redis
-            from app.redis_keys import rkey
+            from app.redis_client import aclose_pubsub, get_redis
 
             redis = await get_redis()
         except Exception as e:  # noqa: BLE001
-            logger.warning("approval poll: redis unavailable (%s)", e)
+            logger.warning("remote wait: redis unavailable (%s)", e)
             return None
         if redis is None:
             return None
 
-        key = rkey(f"approval:{tc_id}")
         loop = asyncio.get_running_loop()
-        while loop.time() < deadline:
-            try:
-                raw = await redis.get(key)
-                if raw is not None:
-                    await redis.delete(key)  # 单次消费：决策只被一个副本读取
-                    # `from_raw` 同时接受新的 JSON 形态与旧的 "1"/"0"（见其 docstring）
-                    return ApprovalDecision.from_raw(raw)
-            except Exception as e:  # noqa: BLE001 - 轮询失败不致命，继续等待
-                logger.debug("approval poll error: %s", e)
-            await asyncio.sleep(interval)
-        return None
+        deadline = loop.time() + timeout
+        pubsub = None
+        try:
+            pubsub = redis.pubsub()
+            await pubsub.subscribe(channel)
+        except Exception as e:  # noqa: BLE001 - 订阅失败降级为纯轮询（仍正确，只是慢）
+            logger.debug("remote wait: subscribe failed, poll-only fallback: %s", e)
+            if pubsub is not None:
+                try:
+                    await aclose_pubsub(pubsub)
+                except Exception:  # noqa: BLE001
+                    logger.debug("remote wait: failed-subscribe pubsub close", exc_info=True)
+            pubsub = None
+
+        try:
+            while True:
+                try:
+                    raw = await redis.get(key)
+                    if raw is not None:
+                        await redis.delete(key)  # 单次消费：只有一个副本能取走
+                        return raw
+                except Exception as e:  # noqa: BLE001 - 取键失败不致命，继续等待
+                    logger.debug("remote wait poll error: %s", e)
+                remain = deadline - loop.time()
+                if remain <= 0:
+                    return None
+                wait = min(interval, remain)
+                if pubsub is None:
+                    await asyncio.sleep(wait)
+                    continue
+                try:
+                    # 收到本 tc 的唤醒 → 立即回到顶部 GET；无唤醒则最多等 wait 后兜底 GET。
+                    await pubsub.get_message(ignore_subscribe_messages=True, timeout=wait)
+                except Exception as e:  # noqa: BLE001 - 唤醒通道异常退回 sleep，不丢正确性
+                    logger.debug("remote wait wake error: %s", e)
+                    await asyncio.sleep(wait)
+        finally:
+            if pubsub is not None:
+                try:
+                    await aclose_pubsub(pubsub)
+                except Exception:  # noqa: BLE001 - 关连接失败不该盖住上面的返回
+                    logger.debug("remote wait pubsub close failed", exc_info=True)
+
+    async def _poll_remote_decision(
+        self, tc_id: str, timeout: float, interval: float = REMOTE_WAIT_POLL_INTERVAL_SECONDS
+    ) -> ApprovalDecision | None:
+        """跨副本审批：等决策键出现并取走（hybrid 唤醒 + 兜底轮询，见 `_take_key_with_wake`）。"""
+        from app.redis_keys import rkey
+
+        raw = await self._take_key_with_wake(
+            rkey(f"approval:{tc_id}"), _approval_wake_channel(tc_id), timeout, interval
+        )
+        if raw is None:
+            return None
+        # `from_raw` 同时接受新的 JSON 形态与旧的 "1"/"0"（见其 docstring）
+        return ApprovalDecision.from_raw(raw)
 
     async def submit_approval(self, tool_call_id: str, decision: ApprovalDecision) -> bool:
         """外部（HTTP 端点，可能落在任一网关副本）解决待确认的工具调用。
@@ -4179,33 +4249,17 @@ class AgentRuntime:
         return None
 
     async def _poll_remote_answer(
-        self, tc_id: str, timeout: float, interval: float = 0.15
+        self, tc_id: str, timeout: float, interval: float = REMOTE_WAIT_POLL_INTERVAL_SECONDS
     ) -> str | None:
-        """轮询 Redis 答案键（跨副本通道）；命中即取走（单次消费）。超时返回 None。"""
-        deadline = asyncio.get_running_loop().time() + timeout
-        try:
-            from app.redis_client import get_redis
-            from app.redis_keys import rkey
+        """跨副本回答：等答案键出现并取走（hybrid 唤醒 + 兜底轮询，见 `_take_key_with_wake`）。"""
+        from app.redis_keys import rkey
 
-            redis = await get_redis()
-        except Exception as e:  # noqa: BLE001
-            logger.warning("ask_user poll: redis unavailable (%s)", e)
+        raw = await self._take_key_with_wake(
+            rkey(f"answer:{tc_id}"), _ask_wake_channel(tc_id), timeout, interval
+        )
+        if raw is None:
             return None
-        if redis is None:
-            return None
-
-        key = rkey(f"answer:{tc_id}")
-        loop = asyncio.get_running_loop()
-        while loop.time() < deadline:
-            try:
-                raw = await redis.get(key)
-                if raw is not None:
-                    await redis.delete(key)  # 单次消费：答案只被一个副本读取
-                    return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
-            except Exception as e:  # noqa: BLE001 - 轮询失败不致命，继续等待
-                logger.debug("ask_user poll error: %s", e)
-            await asyncio.sleep(interval)
-        return None
+        return raw.decode() if isinstance(raw, (bytes, bytearray)) else str(raw)
 
     async def submit_answer(self, tool_call_id: str, answer: str) -> bool:
         """外部（HTTP 端点，可能落在任一网关副本）回填 ask_user 的答案。
@@ -4231,6 +4285,11 @@ class AgentRuntime:
                 answer,
                 ex=int(ASK_ANSWER_TTL_SECONDS),
             )
+            # 加速器：叫醒等待该 tc_id 的副本。丢了也非致命 —— 兜底轮询仍会取走（键已写）。
+            try:
+                await redis.publish(_ask_wake_channel(tool_call_id), tool_call_id)
+            except Exception:  # noqa: BLE001
+                logger.debug("submit_answer: wake publish failed (fallback poll covers it)")
             return True
         except Exception as e:  # noqa: BLE001
             logger.warning("submit_answer: redis write failed (%s)", e)
@@ -4448,6 +4507,11 @@ async def _write_approval_decision(tool_call_id: str, decision: ApprovalDecision
             decision.to_json(),
             ex=int(APPROVAL_TTL_SECONDS),
         )
+        # 加速器：叫醒等待该 tc_id 的副本。丢了也非致命 —— 兜底轮询仍会取走（键已写）。
+        try:
+            await redis.publish(_approval_wake_channel(tool_call_id), tool_call_id)
+        except Exception:  # noqa: BLE001
+            logger.debug("approval decision: wake publish failed (fallback poll covers it)")
         return True
     except Exception as e:  # noqa: BLE001
         logger.warning("approval decision write failed (%s)", e)
