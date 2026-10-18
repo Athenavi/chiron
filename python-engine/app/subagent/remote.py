@@ -121,6 +121,7 @@ async def run_remote(
     max_turns: int = 5,
     allow_write: bool = False,
     depth: int = 0,
+    unattended: bool = False,
     timeout: float = DEFAULT_REMOTE_TIMEOUT,
 ) -> RemoteResult:
     """把一次委派发给远端引擎；**任何失败都返回 `ok=False`**（由调用方决定回退）。"""
@@ -147,6 +148,9 @@ async def run_remote(
         "max_turns": int(max_turns or 0),
         "allow_write": bool(allow_write),
         "depth": int(depth or 0),
+        # 父回合无人值守 ⇒ 远端子 Agent 也是。**方向是收窄不是授权**：置真让远端的审批闸门
+        # 立刻拒绝（比有人值守更严），置假最多退回"白等 300s"，都换不到任何权限。
+        "unattended": bool(unattended),
     }
     try:
         from app.http_client import shared_client
@@ -206,6 +210,7 @@ class RemoteSubagentTarget:
     async def run(self, task: str, ctx: Any) -> Any:
         from app.config import settings
         from app.subagent.registry_targets import failed_result, result_from_payload
+        from app.tools.context import get_tool_context
 
         if not getattr(settings, "remote_subagent_enabled", False):
             # 默认关：显式开关才开放跨实例执行（与 hooks / 部署级扩展同一约定）
@@ -225,6 +230,8 @@ class RemoteSubagentTarget:
             session_id=ctx.session_id,
             mode=ctx.mode,
             depth=ctx.depth,
+            # 与本地委派同一条判定：从工具上下文读，父回合是自动续跑时子 Agent 也别等人
+            unattended=bool(get_tool_context("unattended", False)),
         )
         if not result.ok:
             return await self._fallback(task, ctx, reason=result.error)

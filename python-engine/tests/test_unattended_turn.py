@@ -172,3 +172,114 @@ class TestFlagPlumbing:
         assert captured["gateway"] is sentinel_gateway
         assert captured["unattended"] is True
         assert ctx_calls and ctx_calls[0]["unattended"] is True
+
+
+class TestRemoteDelegation:
+    """跨实例委派：无人值守标记要跟着请求走，否则子 Agent 在另一台实例上又白等一次。"""
+
+    async def test_run_remote_sends_the_flag(self, monkeypatch: pytest.MonkeyPatch):
+        import httpx
+
+        from app.subagent.remote import run_remote
+
+        calls: list[dict[str, Any]] = []
+
+        class _Response:
+            status_code = 200
+
+            def raise_for_status(self) -> None:
+                return None
+
+            def json(self) -> Any:
+                return {"ok": True, "data": {"status": "completed", "output": "done"}}
+
+        class _Client:
+            async def __aenter__(self) -> Any:
+                return self
+
+            async def __aexit__(self, *_a: Any) -> bool:
+                return False
+
+            async def post(self, url: str, json: Any = None, headers: Any = None) -> Any:  # noqa: A002
+                calls.append({"url": url, "json": json})
+                return _Response()
+
+        monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+        monkeypatch.setattr("app.config.settings.internal_token", "tok")
+
+        await run_remote(
+            engine={"instance_id": "b", "url": "http://b"},
+            task="t", tenant_id="t1", user_id="u1", unattended=True,
+        )
+        assert calls[-1]["json"]["unattended"] is True
+
+        await run_remote(
+            engine={"instance_id": "b", "url": "http://b"}, task="t", tenant_id="t1", user_id="u1"
+        )
+        assert calls[-1]["json"]["unattended"] is False, "缺省仍是有人值守"
+
+    async def test_target_reads_the_parent_context(self, monkeypatch: pytest.MonkeyPatch):
+        from app.subagent import remote as remote_module
+        from app.subagent.remote import RemoteResult, RemoteSubagentTarget
+        from app.tools.context import set_tool_context
+
+        captured: dict[str, Any] = {}
+
+        async def _engine(ref: str) -> Any:
+            return {"instance_id": ref, "url": f"http://{ref}"}
+
+        async def _run_remote(**kwargs: Any) -> RemoteResult:
+            captured.update(kwargs)
+            return RemoteResult(ok=True, payload={"status": "completed", "output": "x"})
+
+        monkeypatch.setattr(remote_module, "resolve_engine", _engine)
+        monkeypatch.setattr(remote_module, "run_remote", _run_remote)
+        monkeypatch.setattr("app.config.settings.remote_subagent_enabled", True)
+
+        class _Ctx:
+            tenant_id = "t1"
+            user_id = "u1"
+            session_id = "s1"
+            mode = "normal"
+            depth = 1
+            run_child = None
+
+        set_tool_context(unattended=True)
+        await RemoteSubagentTarget("b").run("t", _Ctx())
+        assert captured["unattended"] is True
+
+        captured.clear()
+        set_tool_context(unattended=False)
+        await RemoteSubagentTarget("b").run("t", _Ctx())
+        assert captured["unattended"] is False
+
+    async def test_receiver_forwards_it_to_the_child_runner(self, monkeypatch: pytest.MonkeyPatch):
+        import app.agent.subagent_runner as runner_module
+        import app.api.internal_subagent as internal_module
+
+        captured: dict[str, Any] = {}
+
+        class _Result:
+            def to_tool_payload(self) -> Any:
+                return {"status": "completed", "output": "x"}
+
+        class _RecordingRunner:
+            def __init__(self, gateway: Any, **kwargs: Any) -> None:
+                captured.update(kwargs)
+
+            async def run(self, *_a: Any, **_kw: Any) -> _Result:
+                return _Result()
+
+        async def _gateway() -> Any:
+            return object()
+
+        monkeypatch.setattr(runner_module, "SubAgentRunner", _RecordingRunner)
+        monkeypatch.setattr(internal_module, "get_gateway", _gateway, raising=False)
+        monkeypatch.setattr("app.main.get_gateway", _gateway)
+
+        await internal_module.internal_subagent_run(
+            internal_module.InternalSubagentRequest(
+                task="t", tenant_id="t1", user_id="u1", unattended=True
+            )
+        )
+        assert captured["unattended"] is True
