@@ -1,8 +1,8 @@
 """L3 写入侧 store（`app/memory/summaries.py`）的向量落库。
 
 生产里 Consolidator 用的就是这个 store（`app/main.py` 的四层装配），所以"摘要向量有没有
-数据来源"这件事必须由这里来证明，而不是只测读取侧的 `save_summary`。对应
-`docs/core-mechanisms-paper.md` §5.1 与迁移 0019。
+数据来源"这件事必须由这里来证明，而不是只测读取侧的 `save_summary`。守的是缺陷
+「L3 摘要向量没有数据来源」（剖析文档不在仓库里），落地见迁移 0019。
 """
 
 from __future__ import annotations

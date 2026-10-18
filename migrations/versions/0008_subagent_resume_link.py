@@ -1,4 +1,4 @@
-"""subagent_runs 增「继续 / 分叉」血缘列（R5(b)，设计见 docs/subagent-resume-design.md）
+"""subagent_runs 增「继续 / 分叉」血缘列（R5(b)）
 
 Revision ID: 0008_subagent_resume_link
 Revises: 0007_subagent_error_code

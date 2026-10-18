@@ -1,7 +1,7 @@
 """记忆层向量后端的选路与"后端不可达"的可见性。
 
-两件事放在一起，是因为它们属于同一个缺陷的两半（`docs/core-mechanisms-paper.md` §5.1
-「L3 摘要向量没有数据来源」）：过去这两个 store 都**硬编 Milvus**，而 Milvus 在 compose 里属
+两件事放在一起，是因为它们属于同一个缺陷的两半（「L3 摘要向量没有数据来源」；那份核心机制
+剖析文档**不在仓库里**，结论全部写在下面）：过去这两个 store 都**硬编 Milvus**，而 Milvus 在 compose 里属
 `selfhosted-s3` profile、默认不启动；连不上时只 `logger.warning` 一句然后返回空 ——
 症状是"L3 语义召回恒空却标着 mode=semantic"，而不是"后端没起来"。
 

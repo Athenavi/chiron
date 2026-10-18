@@ -4,7 +4,8 @@ Revision ID: 0020_memory_summary_embedding_space
 Revises: 0019_memory_summary_embedding
 Create Date: 2026-10-18
 
-背景（`docs/core-mechanisms-paper.md` §5.1「L3 摘要的向量口径不可判定」）：0019 把向量落进了
+背景（缺陷「L3 摘要的向量口径不可判定」；那份核心机制剖析文档**不在仓库里**，结论全部写在下面）：
+0019 把向量落进了
 PG，但**一个数是多少维、由哪个模型算出来的，行里没有任何记录**。列型是无长度约束的
 ``double precision[]``，而 `settings.embedding_model` / `embedding_dim` 只管 L2 与 RAG，
 不作用于 L3 —— 于是换一次嵌入模型（或本地/远端后端切来切去）之后：

@@ -1,6 +1,6 @@
 """记忆层向量后端的选路与故障可见性（M13）。
 
-对应 `docs/core-mechanisms-paper.md` §5.1：过去这两个 store 硬编 Milvus，而 Milvus
+对应缺陷「L3 摘要向量没有数据来源」（剖析文档不在仓库里）：过去这两个 store 硬编 Milvus，而 Milvus
 默认不启动 ⇒ 语义召回恒空却自称 semantic。这里锁两条规矩：配置未知退回 PG、
 后端不可达只在第一次大声。
 """
