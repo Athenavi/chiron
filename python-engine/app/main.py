@@ -764,12 +764,10 @@ async def _start_mcp_pool() -> None:
     # 避免 N 实例 × 活跃用户 × server 的连接放大；默认开 = 保持单机现状）。
     if settings.mcp_pool_enabled:
         from app.plugins.pool import MCPClientPool
-        from app.plugins.store import ActiveTracker, PluginStore
+        from app.plugins.store import PluginStore
 
-        # redis 用于 MCP owner 租约（B1a，默认关闭；见 MCP_OWNER_LEASE_ENABLED）
-        _plugin_pool = MCPClientPool(
-            store=PluginStore(), tracker=ActiveTracker(), redis=_redis
-        )
+        # redis 两用：MCP owner 租约（B1a，默认关闭）+ 活跃标记跨实例共享（见 RedisActiveTracker）
+        _plugin_pool = MCPClientPool(store=PluginStore(), redis=_redis)
         await _plugin_pool.start()
         logger.info("MCP plugin pool started (poll=%ds)", 25)
     else:

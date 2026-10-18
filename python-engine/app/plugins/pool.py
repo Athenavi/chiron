@@ -6,8 +6,8 @@
   用户不再活跃时释放其工具与连接引用（引用归零的连接关闭）。
 - 状态均为进程内可重建缓存：实例重启后从 PluginStore 重新加载（幂等）。
 
-多实例部署：各实例独立运行本池（MCP stdio 子进程无法跨实例共享）；
-ActiveTracker 换 Redis 实现后，轮询范围由共享活跃标记驱动。
+多实例部署：各实例独立运行本池（MCP stdio 子进程无法跨实例共享）；开启 owner 租约时
+活跃标记改走 `RedisActiveTracker`（Redis ZSET），让 owner 实例看得见落在别的实例上的请求。
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ from app.observability.metrics import (
     MCP_POOL_USERS,
 )
 from app.plugins.owner_lease import MCPBridge, MCPOwnerLease
-from app.plugins.store import ActiveTracker, PluginStore, ServerConfig
+from app.plugins.store import ActiveTracker, PluginStore, RedisActiveTracker, ServerConfig
 from app.tools.registry import SOURCE_MCP, registry
 
 logger = logging.getLogger(__name__)
@@ -75,9 +75,23 @@ class MCPClientPool:
         tracker: ActiveTracker | None = None,
         redis: Any = None,
     ) -> None:
+        from app.config import settings as _settings
+
         self._store = store or PluginStore()
-        self._tracker = tracker or ActiveTracker()
         self._redis = redis
+        # 活跃标记何时共享：**只在 owner 租约开启时**。
+        # 租约下每个用户的连接只由 owner 实例维护，而会话请求会被网关轮询到任意实例 ——
+        # 不共享标记，owner 就永远看不见别人的 touch，会把正在使用的用户释放掉
+        # （表现为 MCP 工具凭空消失）。
+        # 反之租约关闭时每个实例都会自己建连：共享标记让所有实例去抢同一批"最近活跃
+        # N 个用户"（预算截断按时间排序，各实例算出的前 N 名基本重合），连接放大从
+        # "按路由自然分散"变成"实例数 × N 的重复"，比现状更差 —— 所以保持进程内。
+        if tracker is not None:
+            self._tracker = tracker
+        elif redis is not None and _settings.mcp_owner_lease_enabled:
+            self._tracker = RedisActiveTracker(redis)
+        else:
+            self._tracker = ActiveTracker()
         # owner 租约（B1a）：启用时只有 owner 实例建 MCP 连接，其余实例注册代理工具
         self._lease: MCPOwnerLease | None = None
         self._bridge: MCPBridge | None = None
@@ -218,6 +232,9 @@ class MCPClientPool:
         from app.config import settings as _settings
 
         max_users = _settings.mcp_max_users_per_instance
+        # 先同步共享标记（进程内实现是 no-op），否则连接预算按"本实例见过的用户"截断，
+        # 会话被网关轮询到别的实例的那些用户会在预算紧张时被优先淘汰。
+        await self._tracker.pull()
         active_list = self._tracker.active_users_sorted(limit=max_users)
         skipped = len(self._tracker.active_users()) - len(active_list)
         if skipped > 0:
@@ -393,6 +410,7 @@ class MCPClientPool:
 
         return {
             "active_users": len(self._tracker.active_users()),
+            "active_marks_shared": bool(getattr(self._tracker, "shared", False)),
             "shared_connections": len(self._conns),
             "user_loaded": len(self._user_sigs),
             "max_users_per_instance": _settings.mcp_max_users_per_instance,

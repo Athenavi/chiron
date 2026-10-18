@@ -130,10 +130,14 @@ class RAGContextInjector:
                 if not query_embedding:
                     continue
 
-                filter_expr = (
-                    f'kb_id == "{kb_id}" AND tenant_id == "{tenant_id}"'
-                )
-                results = await self._hybrid_retriever.vector_store.search(
+                store = self._hybrid_retriever.vector_store
+                # kb_id / tenant_id 会拼进表达式字面量：混合检索那条路已经按
+                # _sanitize_expr 转义（hybrid_search），纯向量这条漏了 —— 值里带引号
+                # 就能提前闭合字面量、把过滤条件改成宽匹配。同一个纪律补上。
+                safe_kb = store._sanitize_expr(str(kb_id))
+                safe_tenant = store._sanitize_expr(str(tenant_id))
+                filter_expr = f'kb_id == "{safe_kb}" AND tenant_id == "{safe_tenant}"'
+                results = await store.search(
                     collection=kb_id,
                     query_vector=query_embedding,
                     top_k=top_k,

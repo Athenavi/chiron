@@ -5,11 +5,12 @@
   实例无进程内业务状态——多副本共享数据目录即可水平扩展；
   未来可加 Redis 实现（仅替换本类，接口不变）。
 - ActiveTracker：标记"有活跃会话"的用户（驱动 MCP 25s 轮询范围）。
-  当前为进程内实现；多实例场景可替换为 Redis（SETEX + TTL）实现。
+  进程内实现 + `RedisActiveTracker`（Redis ZSET 双写，多实例共享轮询范围）。
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,6 +18,7 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -109,8 +111,8 @@ class PluginStore:
 class ActiveTracker:
     """标记有活跃会话的用户（驱动 MCP 轮询范围）。
 
-    进程内实现：touch 记录 last_active，is_active 按时间窗口判断。
-    多实例部署时可替换为 Redis 实现（同一接口），让各实例共享活跃标记。
+    进程内实现：touch 记录 last_active，is_active 按时间窗口判断。多实例部署请用
+    下面的 `RedisActiveTracker`（同一接口，额外把标记同步到 Redis）。
     """
 
     DEFAULT_WINDOW = 30 * 60  # 30 分钟无请求视为空闲
@@ -163,3 +165,104 @@ class ActiveTracker:
             for uid in stale:
                 del self._last[uid]
         return len(stale)
+
+    #: 是否跨实例共享（诊断用；Redis 实现覆盖为 True）
+    shared = False
+
+    async def pull(self) -> None:
+        """与远端存储同步标记。进程内实现无事可做，接口留给 Redis 实现覆盖，
+        这样调用方（MCPClientPool.reconcile）不必分辨实现类型。"""
+        return None
+
+
+def active_users_key() -> str:
+    """共享活跃标记的 ZSET 键（成员=user_id，分值=最近活跃时间戳）。"""
+    from app.redis_keys import rkey
+
+    return rkey("mcp:active_users")
+
+
+class RedisActiveTracker(ActiveTracker):
+    """进程内标记 + Redis ZSET 双写：让各实例看到同一份"谁还活跃"。
+
+    为什么保留本地字典而不是纯 Redis：读侧接口是**同步**的（`status()` 与
+    `active_users_sorted()` 的调用点都不在 await 上下文里），没法 await Redis。
+    所以本地继续作读缓存，Redis 只负责把别的实例打过的标记合并过来 —— 可见延迟
+    ≤ 一个轮询周期（25s），而活跃标记只决定"这一轮去轮询谁"，晚一拍既不丢连接、
+    也不会多占连接预算。
+
+    Redis 出错时**降级为进程内行为**并告警：活跃范围是效率问题，不是安全边界，
+    不值得为此让整条 MCP 轮询链失败。
+    """
+
+    shared = True
+
+    def __init__(self, redis: Any, *, window: int | None = None) -> None:
+        super().__init__()
+        self._redis = redis
+        self._window_override = window
+        self._pending: dict[str, float] = {}
+        self._flush_tasks: set[Any] = set()
+        self._key = active_users_key()
+
+    def touch(self, user_id: str) -> None:
+        if not user_id:
+            return
+        ts = time.time()
+        with self._lock:
+            self._last[user_id] = ts
+            self._pending[user_id] = ts
+        self._schedule_flush()
+
+    def _schedule_flush(self) -> None:
+        """有事件循环就立刻 ZADD；没有（同步启动路径）留到下一次 pull()。"""
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        # 留住强引用：asyncio 只持弱引用，任务在完成前可能被回收（表现为标记静默不写）
+        task = loop.create_task(self.flush_pending())
+        self._flush_tasks.add(task)
+        task.add_done_callback(self._flush_tasks.discard)
+
+    async def flush_pending(self) -> None:
+        with self._lock:
+            if not self._pending:
+                return
+            items = dict(self._pending)
+            self._pending.clear()
+        try:
+            await self._redis.zadd(self._key, items)
+            # 整键 TTL 兜底：全集群长期空闲时不要让标记永久留着
+            await self._redis.expire(self._key, self._window(None) + 60)
+        except Exception as e:  # noqa: BLE001 — 降级为进程内，不影响轮询
+            logger.warning("MCP 活跃标记写入失败（降级为进程内）: %s", e)
+            with self._lock:
+                for uid, ts in items.items():
+                    if ts > self._pending.get(uid, 0):
+                        self._pending[uid] = ts
+
+    async def pull(self) -> None:
+        """先把本地待发标记写出去，再把其它实例的标记合并进读缓存。"""
+        await self.flush_pending()
+        cutoff = time.time() - self._window(None)
+        try:
+            remote = await self._redis.zrangebyscore(
+                self._key, min=cutoff, max="+inf", withscores=True
+            )
+            await self._redis.zremrangebyscore(self._key, min="-inf", max=cutoff)
+        except Exception as e:  # noqa: BLE001
+            logger.warning("MCP 活跃标记同步失败（沿用本实例视角）: %s", e)
+            return
+        with self._lock:
+            for uid, ts in remote:
+                ts_f = float(ts)
+                if ts_f > self._last.get(str(uid), 0):
+                    self._last[str(uid)] = ts_f
+
+    def _window(self, window: int | None) -> int:
+        if window is not None:
+            return window
+        if self._window_override is not None:
+            return self._window_override
+        return self.DEFAULT_WINDOW
