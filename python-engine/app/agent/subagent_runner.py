@@ -433,12 +433,20 @@ class SubAgentRunner:
         if self._resume_context:
             child.content = f"{self._resume_context}\n\n{child.content}"
 
+        # M15a：父 run 标识**必须在落库之前**算出来。它此前只在这里的下方算一次、只喂给
+        # 事件与运行期缓存，`start_run` 没收到它 ⇒ `subagent_runs.parent_run_id` 对所有
+        # 历史行都是 NULL，任务树在库里从未被记录过，"这条线花了多少"也就无从聚合。
+        # 取值顺序与 `_context_run_id` 的语义一致：显式传入 > 父层 tool context 里的 run id
+        #（嵌套委派才有）> 空串（顶层委派 ⇒ store 把它当"没有来源"，以自己的 id 开线）。
+        parent_run_id = self._parent_run_id or _context_run_id()
+
         # 3) 落库（起始）
         if self._store is not None:
             await self._store.start_run(
                 run_id=run_id,
                 root_session_id=self._parent_session_id,
                 turn_id=self._turn_id,
+                parent_run_id=parent_run_id,
                 rerun_of=rerun_of,
                 depth=child_depth,
                 tenant_id=self._tenant_id,
@@ -474,7 +482,6 @@ class SubAgentRunner:
             )
         else:
             logger.debug("subagent %s: event sink resolved via %s", run_id, sink_source)
-        parent_run_id = self._parent_run_id or _context_run_id()
         if sink is not None:
             sink.emit_started(run_id=run_id, parent_run_id=parent_run_id,
                               depth=child_depth, profile=profile_name)

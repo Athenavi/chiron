@@ -123,6 +123,11 @@ class _FakePool:
     async def execute(self, sql, *args):
         self.executed.append((sql.strip().split()[0].upper(), args))
 
+    async def fetchrow(self, sql, *args):
+        """M15a 起 `start_run` 解析 root 会用 asyncpg 的 fetchrow —— 桩缺这个字会让落库
+        静默走异常降级分支，用例看着绿、其实一行 UPDATE 没写。返回 None ⇒ 以自己为根。"""
+        return None
+
     async def executemany(self, sql, rows):
         self.batches.append(len(rows))
 
