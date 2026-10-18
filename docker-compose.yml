@@ -223,6 +223,23 @@ services:
       # compose 面向多副本编排,因此默认关闭;需要 MCP 的副本(或单机部署)请显式
       # 设置 MCP_POOL_ENABLED=true,详见 docs/deployment-multi-instance.md。
       MCP_POOL_ENABLED: ${MCP_POOL_ENABLED:-false}
+      # Agent 运行预算(引擎侧读取;**留空 = 用代码默认**,不要把"想关某一轴"写成空值之外的东西)。
+      # 口径、默认值与"网关 config 里同名变量是另一回事(且当前无人读取)"的说明都在 .env.example。
+      # 主 Agent run 级:steps 60 / tokens 400k / turns·wall·cost 不限;起点跨崩溃接管续跑继承(M15e)。
+      AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-}
+      AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-}
+      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-}
+      AGENT_MAX_SECONDS: ${AGENT_MAX_SECONDS:-}
+      AGENT_MAX_COST: ${AGENT_MAX_COST:-}
+      # 子 Agent run 级:tokens 200k,其余轴不限(步数由 max_turns 与看门狗管;时长另有 SUBAGENT_MAX_RUNTIME)
+      SUBAGENT_MAX_STEPS: ${SUBAGENT_MAX_STEPS:-}
+      SUBAGENT_MAX_TURNS: ${SUBAGENT_MAX_TURNS:-}
+      SUBAGENT_MAX_TOKENS: ${SUBAGENT_MAX_TOKENS:-}
+      SUBAGENT_MAX_SECONDS: ${SUBAGENT_MAX_SECONDS:-}
+      SUBAGENT_MAX_COST: ${SUBAGENT_MAX_COST:-}
+      # 任务线(同一 root run 的全部委派与续跑)的第二道闸门,默认 2M;耗尽 ⇒ 暂停该线并挂出「提额」待办。
+      # 与上面两套的关系:per-run 预算拦"一个 run 失控",这一条拦"一条线被反复续跑"。
+      SUBAGENT_LINE_MAX_TOKENS: ${SUBAGENT_LINE_MAX_TOKENS:-}
       # K8s 注入实例标识;compose 下留空由引擎自生成
       INSTANCE_ID: ${INSTANCE_ID:-}
       # 引擎对外可达地址(批 E1):设置后引擎向 Redis 自注册,网关据此把某个 session 的

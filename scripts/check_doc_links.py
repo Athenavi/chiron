@@ -17,7 +17,11 @@ churn；而"新断链"必须当场拦住。所以：
 * 跳过测试/评测 fixture（`_test.go`/`.spec.ts`/`test_*`/`/tests/`/`/evals/`）——那里的
   `docs/a.md` 是**合成路径**，不是"指向某份设计文档"；
 * 显式列出合成占位路径（`docs/a.md` 之类），理由同上；
-* 接受 vendor 下**对标项目自己的**同名文档（形如 `docs/<名字>.md`，只要 vendor 里真有）。
+* **上游对标项目自己的**文档（`UPSTREAM_DOC_REFS` 名单）不计 —— 那些出现在归档差距分析的
+  **逐文件枚举**里，本仓不提供、也不该为门禁去删历史记录。**2026-10-18 更正（实测出来的）**：
+  这一族此前靠"`vendor/**` 里有同名文件就算存在"放行，而**引用方只扫 `git ls-files`、被引目标却查
+  文件系统** —— `vendor/` 整目录未跟踪 ⇒ **本机绿、任何干净检出红**（实测同一份 HEAD：本机 exit 0、
+  `git clone` 后 exit 1 且 18 条断链）。名单化之后本机与 CI 判据一致，兜底的 `vendor/**` 查找已删。
 * **围栏代码块**与**模板占位行**（全大写字段名 + 冒号，如 `PLAN_OR_REQUIREMENTS: …`）整块/整行跳过 ——
   两者都是**示例文本**，不是引用（2026-10-09 补：此前只有"相对链接"那遍跳围栏，`docs/` 那遍是
   **整段文本匹配**，于是围栏里的示例路径也被算成引用，与本节口径自相矛盾）；
@@ -53,6 +57,36 @@ SKIP_PREFIXES = ("vendor/", "node_modules/", "frontend-vue/dist/", "python-engin
 SKIP_PARTS = ("/tests/", "/__tests__/", "/evals/", "/testdata/")
 SKIP_NAME_SUFFIXES = ("_test.go", ".spec.ts", ".test.ts", "_test.py")
 SYNTHETIC_REFS = {"docs/a.md", "docs/b.md", "docs/1.md", "docs/2.md", "docs/3.md"}
+#: **上游对标项目自己仓库里的**文档（Reasonix 的 `docs/` 族）。它们出现在
+#: `docs/archive/reasonix-*.md` 的**逐文件枚举**（带字节数、行数）与
+#: `docs/transcript-contract.md` 的溯源说明里 —— 那是在描述**别人的仓库**，不是本仓文档之间的引用，
+#: 本仓既不提供它们、也不该为了门禁去删改这些取证记录。
+#: **为什么写死名单而不是"按引用方目录豁免"**：豁免整个 `docs/archive/` 会让归档文档里
+#: **指向本仓真实文档**的那些引用一起失去检查；写名单则每加一条都是**一次显式决定**
+#: （新增一个上游文档名 ⇒ 门禁红 ⇒ 有人来认领它）。名单来自 2026-10-18 的干净检出实测（16 条）。
+#: ⚠ **名单只写不带 `docs/` 前缀的文件名** —— 写成完整路径会被**本守卫自己**读成引用
+#: （实测：把豁免去掉后，引用方里第一条就是 `scripts/check_doc_links.py:69`）。
+UPSTREAM_DOC_REFS = frozenset(
+    "docs/" + name
+    for name in (
+        "BILLING.md",
+        "CLI.zh-CN.md",
+        "DOCS_STANDARD.md",
+        "GUIDE.zh-CN.md",
+        "MIGRATING.md",
+        "ROADMAP.md",
+        "SESSION_MEMORY_RETRIEVAL.md",
+        "SPEC.md",
+        "STUDIO_PARITY.md",
+        "STUDIO_SHELL_BOUNDARIES.md",
+        "THEME_ASSETS.md",
+        "THEME_AUTHOR_GUIDE.md",
+        "THEME_PACK.md",
+        "TOOL_APPROVAL_MODES.md",
+        "USAGE_CATALOG.md",
+        "design/TRUSTED_EXECUTION.md",
+    )
+)
 TEXT_SUFFIXES = {".go", ".py", ".ts", ".vue", ".md", ".yml", ".yaml", ".json", ".toml", ".sql", ".sh"}
 
 
@@ -116,10 +150,10 @@ def main() -> int:
             if not TEMPLATE_FIELD.match(line):
                 for name in DOC_REF.findall(line):
                     ref = f"docs/{name}"
-                    if ref in SYNTHETIC_REFS:
+                    if ref in SYNTHETIC_REFS or ref in UPSTREAM_DOC_REFS:
                         continue
                     checked += 1
-                    if (REPO / ref).exists() or next(REPO.glob(f"vendor/**/{ref}"), None) is not None:
+                    if (REPO / ref).exists():
                         continue
                     missing.setdefault(ref, []).append(f"{rel}:{lineno}")
 

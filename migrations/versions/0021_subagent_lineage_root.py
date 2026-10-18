@@ -4,7 +4,8 @@ Revision ID: 0021_subagent_lineage_root
 Revises: 0020_memory_summary_embedding_space
 Create Date: 2026-10-18
 
-背景（`docs/core-mechanisms-paper.md` §5.2「子 Agent 续跑未计配额」）：一条任务线可以被反复
+背景（缺陷「子 Agent 续跑未计配额」；那份核心机制剖析文档**不在仓库里**，结论全部写在下面）：
+一条任务线可以被反复
 续跑（`resume_subagent` 每次派一个**全新 run_id**），而每条 run 的 token 只记在自己那一行上，
 **没有任何口径能把"这条线一共花了多少"问出来**。要设上限就得先有"这条线"的标识。
 

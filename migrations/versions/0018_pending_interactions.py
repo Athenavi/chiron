@@ -4,8 +4,9 @@ Revision ID: 0018_pending_interactions
 Revises: 0017_conversation_shares_expires_backfill
 Create Date: 2026-10-18
 
-背景（`docs/core-mechanisms-paper.md` §5.1「人工介入闭环」，1A+1B）：审批 / `ask_user` 的
-现场**只存在于进程内存**里 —— `AgentRuntime._pending_approvals` 的 Future 加一条 Redis 决策键
+背景（缺陷「人工介入闭环」，方案 1A+1B；那份核心机制剖析文档**不在仓库里**，
+结论全部写在下面）：审批 / `ask_user` 的现场**只存在于进程内存**里 ——
+`AgentRuntime._pending_approvals` 的 Future 加一条 Redis 决策键
 （`app/agent/runtime.py:_await_approval`）。于是：
 
 * 发起确认的那个进程一死，待确认的那一步就**无人知晓**：用户看不到"这里在等你"，

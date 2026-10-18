@@ -4,8 +4,8 @@ Revision ID: 0019_memory_summary_embedding
 Revises: 0018_pending_interactions
 Create Date: 2026-10-18
 
-背景（`docs/core-mechanisms-paper.md` §5.1「L3 摘要向量没有数据来源」）：L3 的三项语义能力
-—— `Consolidator._find_near_duplicate` 的近重复判定、`SummaryStore.recall` 的语义召回、
+背景（缺陷「L3 摘要向量没有数据来源」；那份核心机制剖析文档**不在仓库里**，结论全部写在下面）：
+L3 的三项语义能力 —— `Consolidator._find_near_duplicate` 的近重复判定、`SummaryStore.recall` 的语义召回、
 配置项 `memory_summary_min_cosine` —— **过去全部悬空**。向量只往 Milvus 写，而 Milvus 在
 compose 里属于 `selfhosted-s3` profile、注释自陈"默认不启动"；`memory_summaries` 表里连一列
 向量都没有，于是读侧 `list_active` 选不出 embedding，判重循环每条都走
