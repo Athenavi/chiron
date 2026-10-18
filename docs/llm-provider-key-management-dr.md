@@ -77,6 +77,13 @@ V1 是"本地环 + 轮询"；V2 计划把本类替换为 **Redis Lua 原子取 k
 写操作后会**重建该 provider 的 keyset 并广播变更**（`syncProviderKeyset`）；
 **Redis 不可用时只返回 nil**（DB 仍是权威，引擎退化为 env 种子），由调用方按需告警。
 
+「重建」是**整体替换**而非增量写：一次原子 Lua 脚本先 `DEL` 该 hash 再逐对 `HSET`
+当前 DB 里解得开的每一把 key（`llmReplaceKeyset`）。之所以不能用 HMSET 增量——
+引擎 `KeyRing._refresh` 用 `HGETALL` 把整份 hash 当作「当前可用 key」轮询，一条 key 从
+DB 删除后只要该 provider 还剩别的 key，它的指纹字段就会被增量写残留下来，等于**把一把
+已撤销的 key 一直服务下去**（拿去打上游）。全部解密失败或该 provider 已无 key ⇒ 结果为空
+⇒ 陈旧明文不再被服务。
+
 ## 8. 实现落点
 
 | 环节 | 位置 |
