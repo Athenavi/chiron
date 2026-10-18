@@ -37,6 +37,7 @@ import { sessionToAgent, agentBindingsFromContext } from '../utils/sessionAgent'
 import ChatStatusBar from '../components/chat/ChatStatusBar.vue'
 import ChatDisplaySettings from '../components/chat/ChatDisplaySettings.vue'
 import AskCard from '../components/chat/AskCard.vue'
+import InteractionInbox from '../components/chat/InteractionInbox.vue'
 import CallChainTimeline from '../components/CallChainTimeline.vue'
 import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter, mergeTurnStats } from '../components/chat/chat-types'
@@ -717,7 +718,31 @@ async function declineQuestion(question: PendingQuestion) {
   }
 }
 
-// ── 工具授权模式（ask/auto/yolo）──────────────────────────────────────────
+// ── 人工介入待办收件箱（M7c）──────────────────────────────────────────────
+// 实时审批/提问卡片只在 SSE 还开着时出现；`awaiting_input` 收尾、刷新页面或那一轮进程
+// 已经没了之后，只剩 pending_interactions 记着"欠用户一个答复"。收件箱补的就是这一段。
+const interactionInboxRef = ref<InstanceType<typeof InteractionInbox> | null>(null)
+// 同一批待办里连点多个"允许"只唤醒一次：唤醒是一条真实提交，重复发会在历史里堆"继续"。
+let wakingFromInbox = false
+
+/**
+ * 答复落库后顺手提交一轮，让引擎从暂停处接手并消费这张票。
+ *
+ * 只在会话空闲（`!loading`）时唤醒；正在跑说明现场已被别的提交接管（票会在下一次续跑时被
+ * 消费），此时再发一条只是往历史里塞噪音。唤醒内容本身不被引擎解读 —— 续跑靠 (kind,tool,args)
+ * 指纹匹配 grant，不看这条消息说了什么，所以它只需要是句人话。
+ */
+async function wakeFromInbox() {
+  if (loading.value || wakingFromInbox) return
+  wakingFromInbox = true
+  try {
+    await sendMessage(t('agent.interaction_continue_message'))
+  } finally {
+    wakingFromInbox = false
+    // 续跑会把这些票从 answered 翻成 consumed（或留作下一次），列表要跟着更新
+    void interactionInboxRef.value?.refresh()
+  }
+}
 // 与下方「对话模式」(mode: normal/minimal/ptc/creative) 是两个不同维度：
 // 本项控制**工具执行是否需要用户确认**。
 //
@@ -2489,6 +2514,9 @@ function onSSEMessage(raw: unknown) {
       : null
     // 成本常显：轮次结束拉一次会话级 metrics（此前只在需展开的 SessionStatsPanel 里能看到）
     void refreshSessionCost()
+    // 轮次可能以 `awaiting_input` 收尾（SSE 已关，实时卡片不会再出现）：刷新收件箱把
+    // 落在 pending_interactions 里的待办补上，否则用户只看到"回合结束"却不知还欠一次答复。
+    void interactionInboxRef.value?.refresh()
   } else if (type === 'approval') {
     const callId = String(d.id ?? d.tool_call_id ?? Date.now())
     pendingApprovals.value.push({
@@ -3154,6 +3182,14 @@ function continueGeneration() {
           @drafting="(active: boolean) => { q.drafting = active }"
         />
       </div>
+
+      <!-- 人工介入待办：只在有跨进程遗留的待答项时出现（列表为空即整块不渲染）。
+           答复成功即发 `wake`，由 wakeFromInbox 顺手提交一轮让引擎从暂停处接手。 -->
+      <InteractionInbox
+        ref="interactionInboxRef"
+        :session-id="activeSessionId"
+        @wake="wakeFromInbox"
+      />
 
       <ChatInput
         ref="chatInputRef"

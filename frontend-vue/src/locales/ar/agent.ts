@@ -179,4 +179,8 @@ export default {
   skill_mcp_tool: "skill مهارة mcp أداة",
   system_prompt_auto_filled_overridable: "System Prompt (يُملأ تلقائيًا، قابل للتجاوز)",
   tools_is_not_a_valid_json_array: "tools ليست مصفوفة JSON صالحة",
+  // ── M7c: صندوق تدخلات المستخدم المعلّقة (تذاكر awaiting_input عبر العمليات) ──
+  pending_interactions_title: "بانتظار إجرائك",
+  interaction_answered_waiting: "تمت الإجابة، والرسالة التالية تُستأنف من نقطة التوقف",
+  interaction_continue_message: "(تمت معالجة العناصر المعلّقة، يُرجى المتابعة)",
 }

@@ -60,6 +60,17 @@ func registerAgentRoutes(
 			authMW(rlMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				pythonClient.ForwardRequest(w, r, "/v1/agent/refine")
 			}))))
+
+		// M7 人工介入闭环：某一步在等人（审批 / ask_user）时，那一轮以 `awaiting_input` 收尾，
+		// 现场落在引擎的 `pending_interactions` 里。这两条路由让用户**看见**并**答上**它。
+		// 与 approval/answer 同源的是"认证 + 会话归属 + 身份只来自 claims"；与它们不同的是
+		// 这里**不唤醒续跑** —— 答复只把票写成 answered，接着跑由下一轮提交在引擎侧接手
+		// （见 interactions.go 顶部说明）。
+		interactionH := NewInteractionHandler(pythonClient, sessionMgr)
+		mux.Handle("GET /v1/agent/sessions/{session_id}/interactions",
+			authMW(rlMW(http.HandlerFunc(interactionH.List))))
+		mux.Handle("POST /v1/agent/interactions/{interaction_id}/resolve",
+			authMW(rlMW(http.HandlerFunc(interactionH.Resolve))))
 	}
 
 	// submitHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册

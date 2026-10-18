@@ -179,4 +179,8 @@ export default {
   skill_mcp_tool: "skill mcp tool",
   system_prompt_auto_filled_overridable: "System Prompt (auto-filled, overridable)",
   tools_is_not_a_valid_json_array: "tools is not a valid JSON array",
+  // ── M7c: pending human-interaction inbox (cross-process awaiting_input tickets) ──
+  pending_interactions_title: "Needs your action",
+  interaction_answered_waiting: "Answered — the next send resumes it from where it paused",
+  interaction_continue_message: "(pending items handled, please continue)",
 }

@@ -179,4 +179,8 @@ export default {
   skill_mcp_tool: "skill 技能 mcp 工具",
   system_prompt_auto_filled_overridable: "System Prompt（自动填入，可覆盖）",
   tools_is_not_a_valid_json_array: "tools 不是合法的 JSON 数组",
+  // ── M7c：人工介入待办收件箱（跨进程的 awaiting_input 票） ──
+  pending_interactions_title: "待你处理",
+  interaction_answered_waiting: "已答复，下一次发送即从暂停处继续",
+  interaction_continue_message: "（已处理待确认项，请继续）",
 }
