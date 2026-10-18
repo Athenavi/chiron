@@ -136,6 +136,90 @@ async def test_missing_snapshot_returns_none(monkeypatch):
     assert await load_resume_state(tenant_id="t1", session_id="s1") is None
 
 
+# ── M7：接手"等人"的挂起现场 ────────────────────────────────────────────
+
+
+def _patch_awaiting(
+    monkeypatch: Any, *, found: dict[str, Any] | None, claim_ok: bool = True
+) -> dict[str, list[str]]:
+    """挂起现场的读 / 接手 / 作废三条通道各记一份调用（真实实现是 CAS UPDATE）。"""
+    calls: dict[str, list[str]] = {"read": [], "claim": [], "release": []}
+
+    async def _load_awaiting(*, tenant_id: str, session_id: str):  # noqa: ANN202
+        calls["read"].append(session_id)
+        return found
+
+    async def _claim(*, tenant_id: str, session_id: str, new_run_token: str) -> bool:  # noqa: ANN202
+        calls["claim"].append(new_run_token)
+        return claim_ok
+
+    async def _release(*, tenant_id: str, session_id: str, run_token: str) -> bool:  # noqa: ANN202
+        calls["release"].append(run_token)
+        return True
+
+    monkeypatch.setattr("app.agent.checkpoint.load_awaiting", _load_awaiting)
+    monkeypatch.setattr("app.agent.checkpoint.claim_awaiting", _claim)
+    monkeypatch.setattr("app.agent.checkpoint.release_awaiting", _release)
+    return calls
+
+
+async def test_awaiting_snapshot_is_claimed_with_the_new_run_token(monkeypatch):
+    """读挂起现场**必须**与接手配对：以本次 run 的 token 把 `awaiting_input → resuming`。"""
+    _patch_checkpoint(monkeypatch, snapshot=None)
+    calls = _patch_awaiting(
+        monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"}
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new")
+
+    assert state is not None and state.window == "hot"
+    assert calls["claim"] == ["rt-new"], "接手要以**新** token 为归属凭据"
+
+
+async def test_awaiting_not_claimed_falls_back_to_a_plain_turn(monkeypatch):
+    """抢不到（别的回合已接手 / 会话上已有活跃 run 撞唯一索引）⇒ 不拿这份现场续跑。"""
+    _patch_checkpoint(monkeypatch, snapshot=None)
+    _patch_awaiting(
+        monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"}, claim_ok=False
+    )
+
+    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+
+
+async def test_over_window_awaiting_is_released_not_left_hanging(monkeypatch):
+    """超窗的挂起现场要**作废**：`mark()` 只认活跃状态 ⇒ 不单独收尾就永远停在
+    `awaiting_input`，之后每一次 run 都白读一遍这份陈旧现场。"""
+    marks = _patch_checkpoint(monkeypatch, snapshot=None)
+    calls = _patch_awaiting(
+        monkeypatch,
+        found={"checkpoint": _snapshot(seconds_ago=COLD_RESUME_WINDOW_SECONDS + 60), "run_token": "rt-old"},
+    )
+
+    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+    assert calls["release"] == ["rt-old"]
+    assert marks == [], "挂起行不能被 `mark()` 迁（那是活跃集合的通道）"
+
+
+async def test_broken_awaiting_snapshot_is_released(monkeypatch):
+    _patch_checkpoint(monkeypatch, snapshot=None)
+    calls = _patch_awaiting(
+        monkeypatch, found={"checkpoint": {"messages": [], "saved_at": _saved_at()}, "run_token": "rt-old"}
+    )
+
+    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+    assert calls["release"] == ["rt-old"]
+    assert calls["claim"] == [], "没有可用消息 ⇒ 不该把它标成 resuming（那会占住会话）"
+
+
+async def test_caller_without_run_token_never_touches_a_suspension(monkeypatch):
+    """没有归属凭据的调用方**完全不碰**挂起现场 —— 否则陈旧挂起会被无关消息复活。"""
+    _patch_checkpoint(monkeypatch, snapshot=None)
+    calls = _patch_awaiting(monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"})
+
+    assert await load_resume_state(tenant_id="t1", session_id="s1") is None
+    assert calls["read"] == []
+
+
 # ── 用户消息合并与 replay_pending 注入 ──────────────────────────────────
 
 
@@ -494,3 +578,49 @@ def test_rebuild_task_requires_task_meta():
         )
         is None
     )
+
+
+# ── M7：巡检顺带回收过期的人工介入现场 ──────────────────────────────────
+
+
+async def test_sweep_expires_stale_interactions(monkeypatch):
+    """过期票要**落成状态**：不回收的话 `ux_pending_interactions_open` 一直为它留名额，
+    重新询问同一件事时 `create` 会静默失败。"""
+    from app.agent import interactions
+
+    seen: list[int] = []
+
+    async def _expire(*, limit: int = 50) -> int:
+        seen.append(limit)
+        return 3
+
+    monkeypatch.setattr(interactions, "expire_stale", _expire)
+    _patch_reconciler(monkeypatch, rows=[], lock_held=False)
+
+    stats = await sweep_once()
+
+    assert seen == [50]
+    assert stats["pending_expired"] == 3
+
+
+async def test_sweep_still_expires_when_the_run_scan_fails(monkeypatch):
+    """run 表读不到不该连带把票也留着（过期回收与僵尸扫描是两件事）。
+
+    真实实现里 `expire_stale` 自己 fail-soft（返回 0），所以这里同样不需要它抛出去。
+    """
+    from app.agent import interactions
+
+    async def _expire(*, limit: int = 50) -> int:
+        return 1
+
+    class _BoomPool:
+        async def fetch(self, *_a: Any, **_k: Any) -> Any:
+            raise RuntimeError("db down")
+
+    monkeypatch.setattr(interactions, "expire_stale", _expire)
+    monkeypatch.setattr("app.agent.checkpoint._pool", lambda: _BoomPool())
+
+    stats = await sweep_once()
+
+    assert stats["scanned"] == 0
+    assert stats["pending_expired"] == 1
