@@ -6,6 +6,7 @@
 > **§8 的 5 个未决问题已在实现中定案**（尾部窗口+摘要 / 热 1h·冷 24h / `replay_pending` / 60s+CAS / `rebuild_task`）⇒ **不要再当阻塞项**。批 5 按 §9 不做。
 > **唯一缺口（✅ 已补，2026-10-08）**：§7 批 3 的"kill → 重启 → 断言不重放"已由 `tests/test_resume_kill_drill.py` 自动化：子进程真跑 runtime（回合 1 落盘后卡在回合 2）→ **硬杀** → 新实例 `load_resume_state` → 真再跑一次，断言第一次 LLM 调用的历史里已带第 1 回合的工具结果且**恰好一份**（不重放）。
 > ⚠ 本文件曾写"新增表 `agent_runs`"，而该表早在 `0003_agent_runs` 就存在 —— **设计文档也会过期**，动手前先看代码（同 `vendor/规划.md` §4 的"引用前先跑现状"）。
+> ✅ **M7（`32ebc58`）**：§5 的"挂起而非拒绝"从设计变成实现 —— 见 **§10「人工介入闭环」**：`pending_interactions` 票表、`awaiting_input` 状态、答复即续跑、答复不在网关唤醒、子 Agent 不挂起的边界。
 > 背景见 [多实例部署指南](deployment-multi-instance.md) §10「已知边界」与「结构性后续」。
 
 ## 0. 结论摘要
@@ -49,13 +50,19 @@ run 状态（新增 PG 表 `agent_runs`，见 §4；`workflow_instances.status` 
 |---|---|---|---|
 | `running` | 引擎正在执行（持 `run_token`） | 网关提交后、引擎侧 `RunLease.start()` 成功 | → `checkpointed`（回合末）、`completed`、`failed`、`cancelled` |
 | `checkpointed` | 已有 checkpoint，但**当前无实例持有**（心跳/租约过期判定） | 租约 TTL 过期且进程未上报终态**或**进程优雅停机前落盘 | → `resuming`（被接管）、`abandoned`（超过续跑窗口） |
-| `resuming` | 新实例已取得租约、正从 checkpoint 继续 | 接管方拿到会话运行锁 + 新 `run_token` | → `completed` / `failed` / `cancelled` |
+| `awaiting_input` | 跑到需要人的一步（审批 / `ask_user`）⇒ **进程退出、现场落盘、等用户答复**（M7b） | 引擎 `_suspend_for_input` 拿到持久通道（PG 可写 + 有 run 现场）时把该 row 从 `running` 翻过来 | → `resuming`（用户答复后，下一轮提交经 `claim_awaiting` 采纳新 token）、`abandoned`（`release_awaiting`，票过期/被放弃） |
+| `resuming` | 新实例已取得租约、正从 checkpoint 继续 | 接管方拿到会话运行锁 + 新 `run_token`；或 `claim_awaiting` 从 `awaiting_input` 接手 | → `completed` / `failed` / `cancelled` |
 | `completed` / `failed` / `cancelled` | 终态（与现有一致） | 引擎上报 | — |
 | `abandoned` | 放弃续跑（超出窗口/checkpoint 不可用） | 见 §5 的不等式被打破时 | — |
 
 要点：
 - **`running` → `checkpointed` 的判定不在引擎内部**（故障进程无法自证死亡），而由**接管方**依据 `engine:run:{sid}` 租约过期 + 会话运行锁可获取来判定（两个既有信号，见 §1）。
 - `resuming` 与 `running` 的区别只在**入口**（是否读 checkpoint），对 SSE/计费/审计应不可区分。
+- **`awaiting_input` 刻意不列入 `ACTIVE_STATUSES`**：会话上那条"至多一个活跃 run"的唯一索引
+  `ux_agent_runs_session_active` 因此**被释放**，用户可以正常在这个会话上发新消息；同时 reconciler
+  把它当"非活跃"，**永远不会去接管一个正在等人、而非崩溃的 run**。续跑顺序安全：`_load_resume_state()`
+  在 run 开头、第一次 `_save_checkpoint()`（真正建 `running` row 之处）之前先 `claim_awaiting` 把
+  `awaiting_input → resuming`，所以不会撞唯一索引。
 
 ## 4. checkpoint 的内容与落点
 
@@ -101,7 +108,7 @@ agent_runs.checkpoint = {
 | 非幂等工具**中断在中间** | 保守策略：视为**已完成**，在续跑的首条事件里显式告知"该工具结果可能不完整" | 无法证明"未执行"；宁可少做不漏告知。选项见 §8 |
 | 计费 | 沿用同一 `turn_id`；`usage` 累计写入 checkpoint，续跑只补差额 | 依据：`turns` 表按 turn 一行（`CreateTurn`）、`billing_records` 按 usage 落账 |
 | 提交去重 | 续跑**不新造** `client_msg_id` | 否则绕过 `SET … NX EX` 去重（§1） |
-| 审批/提问 | 未决项随 checkpoint 存；续跑后**不自动重放**。reconciler 接管出来的那一轮是**无人值守回合**（没有 SSE 订阅者，也不在 `_ACTIVE_RUNTIMES` 里，两个应答端点都定位不到它），所以本轮新触发的审批与 `ask_user` 立刻按"拒绝 / 无人应答"收口，理由写进审批审计与模型看到的工具结果（`149f6a7` + `1644e0d`，测试 `python-engine/tests/test_unattended_turn.py`） | 与"陈旧审批被拒"的现有语义一致（部署指南 §10 第一条）；等下去只是每条 300s 的白等，还会钉住该实例整轮巡检 |
+| 审批/提问 | **M7：挂起而非拒绝**。本轮走到需要人的一步 ⇒ 以 `awaiting_input` 收尾，票写进 `pending_interactions`（见 §10），答复把票写成 `answered`，**下一轮提交**从暂停处接手并**单次消费**该授权（`consume_grant`）。若这一轮**没有持久通道**（PG 写不进、或没有 run 现场可迁——典型是子 Agent 跑在合成会话 `sub:<父>:<run>` 下、无 run row / 无 run_token），`_suspend_for_input` 返回 None ⇒ **回落 M6 的即时拒绝 / 超时收口**（`149f6a7` + `1644e0d`，测试 `python-engine/tests/test_unattended_turn.py`）。授权绑定 `(session_id, kind, tool_name, args_hash)`，**认参数不认 id**：续跑是新 run，模型可能把同一调用排成新 `tool_call_id`；参数变了就是另一件事、须重新确认（C5 原则跨进程化）。 | "没有下文的挂起等于永久挂起"⇒ 持久通道是增强路径，**不是许可来源**；取不到授权 = 没批过，调用方按"未获批准"处理，绝不会出现"没人批准却执行了"。单次消费用 PG 的 EPQ（`UPDATE … WHERE status='answered'`），两个回合并列续跑时第二个拿到 None ⇒ 它会重新问，而不是重复执行 |
 | **保留期不等式** | `checkpoint_ttl ≤ TASK_IDEMPOTENCY_RETENTION_DAYS`（30 天），且**只有幂等键仍有效时才允许续跑**；超出即 `abandoned` | 幂等表被清理后，同 `task_id` 的 claim 会被当成**新任务**（`app/queue/idempotency.py` 的 claim 语义）→ 必须让 checkpoint 先失效 |
 
 ## 6. 恢复路径
@@ -142,3 +149,33 @@ agent_runs.checkpoint = {
 - **不**改 SSE 协议（事件 ID 已是 Stream ID，续跑只需沿用 `Last-Event-ID`）；
 - **不**做工具级 checkpoint（批 5 才评估）；
 - **不**引入新的存储组件（只用 PG + Redis）。
+
+## 10. 人工介入闭环：`pending_interactions` 与"答复即续跑"（M7，✅ 已实现 `32ebc58`）
+
+§5 的"挂起而非拒绝"落到一张独立的票表上，读写面跨三层：
+
+- **表**（`migrations/versions/0018_pending_interactions.py`）：`pending → answered → consumed` + 旁路 `expired`，TTL 24h。
+  部分唯一索引 `(session_id, tool_call_id) WHERE status IN ('pending','answered')` 保证同一调用只挂一张活票；
+  授权按 `(session_id, kind, tool_name, args_hash)` 认领（**不含 tool_call_id**，见 §5）。引擎是**唯一写入方**
+  （`python-engine/app/agent/interactions.py`：`create/peek/resolve/settle/consume_grant/list_open`）。
+- **引擎端点**（`python-engine/app/api/interactions.py`）：
+  - `GET /v1/agent/sessions/{session_id}/interactions` —— 该会话仍"等着人"的票（只回公开字段，`args_hash` **不外泄**：
+    暴露它等于邀请客户端拿它当凭据）；
+  - `POST /v1/agent/interactions/{interaction_id}/resolve` —— 先 `peek()` 按**库里的 kind** 校验答复形状
+    （approval 走 `parse_approval_payload`、question 走 `{answer}` 或 `{declined}`），核对票确属该会话，再 `resolve()`；
+  - 业务失败一律 **HTTP 200 + `{ok:false, error_code}`**（`not_found`/`stale`/`invalid_decision`/`invalid_request`/`unauthorized`/`storage_error`）。
+- **网关**（`internal/api/interactions.go`）：认证 + **会话归属校验** + 把上面的 `error_code` 映射成稳定状态码
+  （404/409/400/401/500）。身份**只从 claims 取**，忽略客户端伪造的 `user_id`/`tenant_id` 查询串。
+- **前端**（`frontend-vue/src/components/chat/InteractionInbox.vue`）：会话空闲时拉列表，复用 `SubAgentApprovalCard`/`AskCard`；
+  `answered` 行只读不给按钮（重复答同一张票会造出一张将来能被同类调用取走的票）。
+
+**答复不唤醒（关键取舍）**：`resolve` 只把票写成 `answered`，**不**在网关侧起续跑。两条原因写进代码注释：
+① SSE 按 subID 分线程，后台唤醒那一轮的消息流进不到"正在答复"的客户端所盯着的那条流（只落 DB）；
+② 网关唤醒需要第三次复制 `/submit` 的那串闸门（run 锁 → agentSem → 租户并发 → 计费 → `EnforceTenantQuota` →
+WithoutCancel+心跳 → `HandleSubmit`），任一处修了而这里没跟上就变成一条**绕过限流的昂贵入口**（P0-3 配额教训）。
+所以"接着跑"= 前端在 `!loading` 时顺手发一轮 `/submit`（`wakeFromInbox`），引擎开头 `_load_resume_state` 认领
+`awaiting_input` 并 `consume_grant`。历史投影与实时用同一种条目，刷新前后观感一致。
+
+**边界（须诚实标注）**：**子 Agent 的 run 不挂起** —— 它跑在合成会话下、没有 run row / run_token，`_suspend_for_input`
+直接返回 None，保持 M6 的即时拒绝。用户答了却没有下文，比"没人答所以拒了"更不诚实，故这里宁可不增强。
+集成 SQL 测试仍只在 CI 跑（本地无可用 PostgreSQL）；跨实例答复与单次消费见部署指南 §10 的并发条目。

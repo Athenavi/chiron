@@ -203,11 +203,18 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 
 - run 现场状态不迁移：实例故障该 run 中断（只保证「路由到正确实例 + 陈旧审批被拒」）；
 - SSE 跨实例实时通道为 Pub/Sub：断连窗口内的实时事件依赖客户端携带 `Last-Event-ID` 从 Stream 重放；
-- **自动续跑的那一轮是无人值守回合**：reconciler 接管后跑的 runtime 没有 SSE 订阅者、也不在 `_ACTIVE_RUNTIMES` 里，
-  审批与 `ask_user` 都定位不到它。现在它立刻按「拒绝 / 无人应答」fail-closed（理由写进审批审计与工具结果，
-  标记还沿 `profile=remote:*` 的跨实例委派继承），不再每条空等 300s 把该实例整轮巡检钉住；
-  **但用户仍然看不到「这一步需要你确认」** —— 续跑事件不进会话流，要做到可见需要一条「待答审批」的持久化与
-  通知通道（属产品决策，未做）。取证：`python-engine/tests/test_unattended_turn.py`；
+- **人工介入（审批 / `ask_user`）已跨进程可见、可答复**（M7，✅ `32ebc58`）：这一轮只要**有可续跑的 run 现场**
+  （`run_token` 非空、PG 可写 —— 用户提交、**也包括** reconciler 接管续跑起来的那一轮，它同样带新 `run_token`），
+  走到需要人的一步就**以 `awaiting_input` 收尾**，票落 `pending_interactions`（迁移 `0018`）；该状态**不在** `ACTIVE_STATUSES` 里，
+  所以会话唯一活跃索引被释放（用户能正常发下一条），而 reconciler **不会**去接管一个"正在等人"而非"已崩溃"的 run。
+  用户从会话空闲时的「待你处理」收件箱（`frontend-vue/src/components/chat/InteractionInbox.vue`，读 `GET /v1/agent/sessions/{id}/interactions`）
+  直接答复 ⇒ 票写成 `answered` ⇒ **下一条提交**经 `claim_awaiting` 从暂停处接手并 `consume_grant` **单次消费**
+  （PG 的 EPQ：两个回合并列续跑时第二个拿到 None ⇒ 重新问，而非重复执行）。**答复不在网关侧唤醒**（见 run-checkpoint-design §10）。
+  取证：`python-engine/tests/api/test_interactions_api.py`（18）、`internal/api/interactions_test.go`（10）、`frontend-vue/.../InteractionInbox.spec.ts`（7）；
+  **跨实例并发单次消费的 SQL 级取证在 CI**（本地无可用 PostgreSQL）。
+  **仍 fail-closed（即时拒绝）的两类**：① **子 Agent** 的 run 跑在合成会话 `sub:<父>:<run>` 下，没有 run row / run_token ⇒
+  `_suspend_for_input` 返回 None；② PG 写不进（持久通道缺失）。两者都退回 M6 语义，理由写进审批审计与工具结果，
+  取证：`python-engine/tests/test_unattended_turn.py` —— 持久通道是**增强路径，不是许可来源**，绝不会出现"没人批准却执行了"；
 - **PostgreSQL 已外置**（云托管或 DBA 维护，见第 7 节）；**Redis、Milvus、etcd 在 compose 中仍是单点**（且 MinIO/Milvus/etcd 现已默认不启用，仅 `--profile selfhosted-s3` 下才起）：生产需替换为 Sentinel/Cluster、自托管的 S3 后端（如 RustFS / SeaweedFS）、Milvus 集群与多副本 etcd，并配套备份恢复与跨可用区演练。
 
 ### 明确不做的项（技术结论）
