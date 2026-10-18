@@ -47,6 +47,11 @@ class _FakePool:
         self.executed.append(sql.strip().split()[0].upper())
         return f"UPDATE {self.update_rows}"
 
+    async def fetchrow(self, sql, *args):
+        """M15a 起 `start_run` 会解析 root —— 桩得有这个字，否则落库走的是异常降级分支。"""
+        self.executed.append("SELECT")
+        return None
+
     async def executemany(self, sql, rows):
         return None
 

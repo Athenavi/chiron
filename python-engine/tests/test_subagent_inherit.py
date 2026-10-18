@@ -144,9 +144,17 @@ class _FakePool:
 
     def __init__(self) -> None:
         self.executed: list[tuple[str, tuple]] = []
+        self.sqls: list[str] = []
 
     async def execute(self, sql, *args):
+        self.sqls.append(" ".join(sql.split()))
         self.executed.append((sql.strip().split()[0].upper(), args))
+
+    async def fetchrow(self, sql, *args):
+        """M15a 起 `start_run` 会先解析根再写 —— 桩不实现这个字，走的就是异常降级分支，
+        "落库照常"的用例其实什么也没落。返回 None = 解析不到 ⇒ 以自己为根。"""
+        self.sqls.append(" ".join(sql.split()))
+        return None
 
     async def executemany(self, sql, rows):  # pragma: no cover — 本文件不触发
         pass
@@ -159,8 +167,10 @@ async def test_store_writes_inherited_messages_as_separate_update():
 
     await store.start_run(run_id="rs_1", root_session_id="s1", inherited_messages=7)
 
-    assert [kind for kind, _ in pool.executed] == ["INSERT", "UPDATE"]
+    assert [kind for kind, _ in pool.executed] == ["INSERT", "UPDATE", "UPDATE"]
     assert pool.executed[1][1] == ("rs_1", 7)
+    assert pool.sqls[1].startswith("UPDATE subagent_runs SET inherited_messages")
+    assert "root_run_id = $2" in pool.sqls[-1]
 
 
 async def test_store_skips_inherited_write_when_zero():
@@ -170,4 +180,5 @@ async def test_store_skips_inherited_write_when_zero():
 
     await store.start_run(run_id="rs_2", root_session_id="s1")
 
-    assert [kind for kind, _ in pool.executed] == ["INSERT"]
+    assert [kind for kind, _ in pool.executed] == ["INSERT", "UPDATE"]
+    assert not any("inherited_messages" in sql for sql in pool.sqls)

@@ -77,6 +77,53 @@ RESUMED_FROM_SQL = (
     "UPDATE subagent_runs SET resumed_from = $2, resume_at_step = $3 WHERE id = $1"
 )
 
+#: M15a：这条 run 属于**哪条任务线**（`root_run_id`）。同上一批的理由单独写（迁移
+#: 0021_subagent_lineage_root）：未迁移的库只丢血缘，派发落库不受影响。
+#: `AND root_run_id IS NULL` 是有意的：血缘一旦确定就不该再改，否则一条线中途换根
+#: 会把已经计入的用量从新根下抹掉 —— 那是预算账上最坏的一类静默。
+LINEAGE_SQL = (
+    "UPDATE subagent_runs SET root_run_id = $2 WHERE id = $1 AND root_run_id IS NULL"
+)
+
+#: 解析新 run 的根。三条规则都写在这一个查询里，避免"读三次、在 Python 里拼"的竞态：
+#:
+#: 1. **续跑来源优先于父子**：续跑派生的新 run 同时也是当前回合的一棵新树，按父取根会把
+#:    一条线按续跑次数切成若干段、每段各自有额度 —— 正是要修的缺陷。
+#: 2. 来源行存在但它自己还没有根 ⇒ 取来源行的 id 开线，并靠 `claim_source` 把来源行**也**
+#:    拉进这条线（它花过 token，漏掉就是少算）。
+#: 3. 两者都解析不出（老数据 / 来源行不存在）⇒ 以自己为根。**不**回退成 NULL：闸门问
+#:    "这条线花了多少"时必须有一个可查的键。
+#:
+#: 用相关子查询而不是 JOIN：`$2`/`$3` 常是空串（不是续跑、顶层委派），空串匹配不到行，
+#: 标量子查询自然给 NULL，正好让 COALESCE 往下走 —— 换成 JOIN 会把整行丢掉。
+ROOT_RESOLVE_SQL = """
+WITH src AS (
+    SELECT (SELECT root_run_id FROM subagent_runs WHERE id = $2) AS resumed_root,
+           (SELECT id         FROM subagent_runs WHERE id = $2) AS resumed_row,
+           (SELECT root_run_id FROM subagent_runs WHERE id = $3) AS parent_root,
+           (SELECT id          FROM subagent_runs WHERE id = $3) AS parent_row
+)
+SELECT COALESCE(resumed_root, resumed_row, parent_root, parent_row, $1) AS root,
+       CASE WHEN resumed_row IS NOT NULL AND resumed_root IS NULL
+            THEN $2 ELSE NULL END AS claim_source
+  FROM src
+"""
+
+#: 一条任务线累计花掉的 token。**直接对 run 行求和而不是另建一张累计表**：
+#: `subagent_runs` 的行是每条 run 的**全程累计**且只在终态写一次，孙代的 token 记在孙自己
+#: 那一行（`subagent` 工具回给父的只是文本，见 subagent_runner 的事件循环） ⇒ 求和不会双算，
+#: 也不存在"累计表与明细行对不上"这种第二份真相。
+#:
+#: `tenant_id` 是**必填**过滤：这条 SQL 会被"拿一个 run id 就能问出用量"的调用用到，
+#: 不按租户收就是跨租户读数。注意求和因此**不含** `tenant_id` 为 NULL 的行 —— 那是
+#: 派发时就没有租户上下文的老数据，宁可少算（上限更早触发），不可跨租户多算。
+LINEAGE_USAGE_SQL = """
+SELECT COALESCE(sum(input_tokens + output_tokens), 0)::bigint AS tokens,
+       count(*)::int                                           AS runs
+  FROM subagent_runs
+ WHERE root_run_id = $1 AND tenant_id = $2
+"""
+
 #: A5（方案 04 §3）：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
 #: （0006_subagent_lifecycle）的库只会丢这几列，不会让子 Agent 的收尾 UPDATE 整条失败。
 #:
@@ -151,6 +198,8 @@ class SubagentRunStore:
         self._redacted_hits: dict[str, int] = {}
         self._lock = asyncio.Lock()
         self._broken = False  # 表缺失等不可恢复错误：本次进程内不再尝试
+        #: 血缘读失败的**告警去重**标记（只影响日志，不影响 `_broken` 的降级判定）。
+        self._lineage_warned = False
         #: 本实例已入 running 但尚未写终态的 run（用于 unfinalized 指标）。
         #: 用集合而不是裸计数器：终态可能被写两次（正常收尾 + 取消收尾竞争），
         #: 集合能保证同一个 run 只减一次，指标不会变成负数。
@@ -264,6 +313,27 @@ class SubagentRunStore:
                     resumed_from,
                     str(exc)[:160],
                 )
+        # M15a：这条 run 归属的任务线。必须在 `resumed_from` 之后写 —— 解析根的查询读的就是
+        # 那一列；写在前面会让续跑出来的新 run 认不出自己的来源，额度按每段重算。
+        try:
+            row = await self._pool.fetchrow(
+                ROOT_RESOLVE_SQL, run_id, resumed_from, parent_run_id
+            )
+            root = str((row["root"] if row else "") or run_id)
+            await self._pool.execute(LINEAGE_SQL, run_id, root)
+            claim = (row["claim_source"] if row else None) or ""
+            if claim:
+                # 来源行自己还没有根 ⇒ 把它也拉进这条线，否则这条线的求和会漏掉它那一段。
+                await self._pool.execute(LINEAGE_SQL, claim, root)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning(
+                "subagent root_run_id 写入失败（run=%s, resumed_from=%s, parent=%s）："
+                "请执行迁移 0021_subagent_lineage_root；本次运行的落库不受影响: %s",
+                run_id,
+                resumed_from,
+                parent_run_id,
+                str(exc)[:160],
+            )
         self._mark_started(run_id)
 
     async def add_step(
@@ -429,6 +499,33 @@ class SubagentRunStore:
             # 被收口的 run 由**上一个进程**启动，不在本实例的集合里。
             SUBAGENT_RUN_TERMINAL.labels(status="lost").inc(count)
         return count
+
+    async def lineage_usage(self, root_run_id: str, tenant_id: str) -> tuple[int, int] | None:
+        """这条任务线（`root_run_id`）到今天为止累计花掉多少 token、跑过几条 run。
+
+        返回 ``None`` = **问不出来**（表/列缺失、库不可用、或没有租户可比对）。
+        刻意不用 ``_degrade``：那条路径会把整个 store 标成 broken，而这里只是一个读 ——
+        让"未迁移的库"把子 Agent 落库整体关掉，代价远超收益。
+
+        没有 `tenant_id` 时也返回 ``None`` 而不是 ``(0, 0)``：把"查不到"和"确实没花"混成
+        一个值，会让 M15 的闸门在缺租户的派发上判成"还有额度"。调用方必须能区分这两件事。
+        """
+        if not self.available or not root_run_id or not tenant_id:
+            return None
+        try:
+            row = await self._pool.fetchrow(LINEAGE_USAGE_SQL, root_run_id, tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            if not self._lineage_warned:
+                self._lineage_warned = True
+                logger.warning(
+                    "subagent lineage_usage 查询失败（此后不再重复告警）：请执行迁移 "
+                    "0021_subagent_lineage_root: %s",
+                    str(exc)[:160],
+                )
+            return None
+        if row is None:
+            return (0, 0)
+        return int(row["tokens"] or 0), int(row["runs"] or 0)
 
     # ── 指标记账（只在权威写入成功后调用）──
 
