@@ -955,17 +955,24 @@ class AgentRuntime:
     5. 上报 Token 用量给 Go 计费
     """
 
+    #: 类级默认，让绕过 `__init__` 构造的实例（测试里的骨架实例）也是"有人值守"
+    _unattended: bool = False
+
     def __init__(
         self,
         gateway: GatewayRouter,
         tool_executor: Any = None,
         session_store: Any = None,
         memory: Any = None,
+        unattended: bool = False,
     ):
         self._gateway = gateway
         self._tool_executor = tool_executor
         self._session_store = session_store
         self._memory = memory  # MemoryService | None（None 时行为不变）
+        # 无人值守：这一轮**没有任何人能应答**（自动续跑 —— 事件不进 SSE 流，也没注册进
+        # `_ACTIVE_RUNTIMES`，审批/提问端点都定位不到它）。交互闸门据此立刻 fail-closed。
+        self._unattended = bool(unattended)
         # 三栅栏（S 安全修复：输入/工具/输出）
         from app.agent.guards import (
             SESSION_MODE_AUTO,
@@ -3172,6 +3179,24 @@ class AgentRuntime:
         if future is None:
             return {"error": f"Tool '{tool_name}' approval state missing"}
 
+        if self._unattended:
+            # 与"用户点了拒绝"同一条收口，只是原因是没人能点。空等 300s 的代价不只是慢：
+            # reconciler 是 `await runner(task)` 串行跑续跑的，一次审批把整个巡检节拍钉住，
+            # 而用户回来看到的是一条没有任何上下文的中断。
+            self._pending_approvals.pop(tc_id, None)
+            logger.info("Tool %s auto-denied (unattended turn, id=%s)", tool_name, tc_id)
+            _record_approval_audit(
+                tc_id, tool_name, DECISION_REJECT,
+                original_arguments=orig_args, reason="unattended turn: no one to approve",
+            )
+            return {
+                "error": (
+                    f"Tool '{tool_name}' requires approval, but this turn is running unattended "
+                    "(auto-resume) with no one able to approve — it was denied. "
+                    "Finish without it or tell the user which step needs their confirmation."
+                )
+            }
+
         # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例
         register_pending_approval(tc_id, self)
         try:
@@ -3695,6 +3720,15 @@ class AgentRuntime:
         future = self._pending_answers.get(tc_id)
         if future is None:
             return {"error": "ask_user state missing"}
+        if self._unattended:
+            # 用 `declined` 而不是 `error`：这是**一个答复**（没人能答），不是故障。
+            # 模型据此可以自行决定或改做别的，而不是把它当成网络问题重试。
+            self._pending_answers.pop(tc_id, None)
+            logger.info("ask_user auto-declined (unattended turn, id=%s)", tc_id)
+            return {
+                "declined": True,
+                "reason": "this turn is running unattended (auto-resume), no one to answer",
+            }
         try:
             answer = await self._wait_answer_decision(tc_id, future, timeout)
         finally:

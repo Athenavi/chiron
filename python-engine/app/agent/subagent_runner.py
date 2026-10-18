@@ -266,8 +266,12 @@ class SubAgentRunner:
         #: R5(b)：血缘与分叉点，只用于落库（`subagent_runs.resumed_from` / `resume_at_step`）。
         resumed_from: str = "",
         resume_at_step: int | None = None,
+        #: 父回合是否无人值守（自动续跑）。子 Agent 继承它：审批/提问端点同样定位不到
+        #: 子 runtime，不继承就是每个交互闸门白等 300s。
+        unattended: bool = False,
     ) -> None:
         self._gateway = gateway
+        self._unattended = bool(unattended)
         #: 是否后台委派（决定生命周期与预算，**不再决定只读**，见 _resolve_tools）
         self._background = bool(background)
         #: 是否**显式**授权写/执行：默认 False ⇒ 子 Agent 工具面只读（见 _resolve_tools）
@@ -513,7 +517,7 @@ class SubAgentRunner:
             owner_lease = None
 
         # 5) 运行并收集：L0 落库 + 旁路转发；reasoning 与正文分离（思考不进父上下文）
-        runtime = AgentRuntime(gateway=self._gateway)
+        runtime = AgentRuntime(gateway=self._gateway, unattended=self._unattended)
         texts: list[str] = []
         reasoning_parts: list[str] = []
         errors: list[str] = []

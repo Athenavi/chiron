@@ -213,6 +213,8 @@ async def subagent(
                 turn_id=str(get_tool_context("turn_id", "") or ""),
                 tenant_id=get_tenant_id(),
                 user_id=get_user_id(),
+                # 父回合无人值守 ⇒ 子 Agent 也是（审批/提问没人应答，见 AgentRuntime.unattended）
+                unattended=bool(get_tool_context("unattended", False)),
                 sink=get_event_sink(),
                 background=False,
                 allow_write=bool(allow_write),
@@ -275,6 +277,7 @@ async def subagent(
         turn_id=str(get_tool_context("turn_id", "") or ""),
         tenant_id=get_tenant_id(),
         user_id=get_user_id(),
+        unattended=bool(get_tool_context("unattended", False)),
         sink=get_event_sink(),
         # 后台委派（决定生命周期）；**只读与否由 allow_write 决定**（见下）
         background=bool(run_in_background),
