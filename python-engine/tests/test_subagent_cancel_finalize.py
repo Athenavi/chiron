@@ -31,6 +31,7 @@ class _RecordingStore:
         self.finished = False
         self.finished_status: str | None = None
         self.finished_summary: str | None = None
+        self.finished_usage: dict = {}
 
     async def start_run(self, *args, **kwargs):  # noqa: ANN002, ANN003
         self.started = True
@@ -46,11 +47,32 @@ class _RecordingStore:
         self.finished = True
         self.finished_status = kwargs.get("status")
         self.finished_summary = kwargs.get("summary")
+        self.finished_usage = {
+            "input_tokens": kwargs.get("input_tokens"),
+            "output_tokens": kwargs.get("output_tokens"),
+            "steps": kwargs.get("steps"),
+        }
 
     async def mark_lifecycle(self, *args, **kwargs):  # noqa: ANN002, ANN003
         """A5：记录遥测调用（真实写入由 store 自己的测试覆盖）。"""
         self.lifecycles = getattr(self, "lifecycles", [])
         self.lifecycles.append(kwargs)
+
+
+class _RecordingSink:
+    """只关心终态那一帧；其余 `emit_*` 由 `__getattr__` 吞掉。"""
+
+    def __init__(self) -> None:
+        self.done_events: list[dict] = []
+
+    def emit_done(self, **kwargs):  # noqa: ANN002
+        self.done_events.append(kwargs)
+
+    def __getattr__(self, name: str):
+        def _noop(*args, **kwargs):  # noqa: ANN002, ANN003
+            return None
+
+        return _noop
 
 
 @pytest.mark.asyncio
@@ -62,6 +84,7 @@ async def test_cancel_persists_terminal_state(monkeypatch):
 
     async def _hung_run(self, task):  # noqa: ANN001
         started.set()
+        yield runtime_mod.AgentEvent(type="text", content="先出了一段结果", input_tokens=120, output_tokens=30)
         await asyncio.sleep(3600)  # 永不结束：等外部取消
         yield runtime_mod.AgentEvent(type="text", content="unreachable")
 
@@ -93,3 +116,56 @@ async def test_cancel_persists_terminal_state(monkeypatch):
         "侧边栏永远拿不到结果（这正是被修复的故障）"
     )
     assert store.finished_status == "cancelled"
+
+
+@pytest.mark.asyncio
+async def test_cancel_emits_terminal_event_with_real_usage(monkeypatch):
+    """M15d：取消路径的 `subagent.done` 必须带**真实**用量，且与落库的那一份一致。
+
+    此前它不带 `usage` ⇒ 实时流上表现为"这一段没花钱"，而几秒后 PG 里写着真实数字。
+    两个面各说一套时，前端面板先显示的是那个假的。
+    """
+    from app.agent import runtime as runtime_mod
+
+    started = asyncio.Event()
+
+    async def _hung_run(self, task):  # noqa: ANN001
+        started.set()
+        yield runtime_mod.AgentEvent(type="text", content="花过 token 的一段", input_tokens=800, output_tokens=210)
+        await asyncio.sleep(3600)
+        yield runtime_mod.AgentEvent(type="text", content="unreachable")
+
+    monkeypatch.setattr(runtime_mod.AgentRuntime, "run", _hung_run)
+
+    store = _RecordingStore()
+    sink = _RecordingSink()
+    runner = SubAgentRunner(
+        store=store,
+        sink=sink,
+        gateway=object(),
+        parent_session_id="s1",
+        parent_run_id="rs_parent",
+        tenant_id="t1",
+        user_id="u1",
+    )
+
+    task = asyncio.create_task(runner.run("阻塞任务", profile_ref="", mode="normal", max_turns=3))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    for _ in range(5):
+        await asyncio.sleep(0)
+
+    terminal = [e for e in sink.done_events if e.get("status") == "cancelled"]
+    assert terminal, "取消必须有一帧终态，否则前端停在'运行中'"
+    usage = terminal[-1].get("usage") or {}
+    assert usage == {"input_tokens": 800, "output_tokens": 210, "steps": 1}, (
+        f"终态帧的用量不能是空的（前端会显示 0），得到 {usage}"
+    )
+    # 一致性的另一半：实时流报的数 == 落库的数
+    assert store.finished_usage == {
+        "input_tokens": usage["input_tokens"],
+        "output_tokens": usage["output_tokens"],
+        "steps": usage["steps"],
+    }

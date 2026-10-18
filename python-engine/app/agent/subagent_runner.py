@@ -890,8 +890,18 @@ class SubAgentRunner:
                 )
             )
             if sink is not None:
-                sink.emit_done(run_id=run_id, status=ST_CANCELLED, parent_run_id=parent_run_id,
-                               depth=child_depth, profile=profile_name)
+                # usage 必须带上：`in/out_tokens` 到这里已经**定型**（事件循环已经退出），
+                # 不带就等于对实时流说"这一段没花钱"，而几秒后 PG 里却写着真实数字 ——
+                # 同一件事两个答案，前端面板还会先把 0 显示成结论。
+                # 放在 detach 写库**之前**发是安全的：数字已经不再变化，晚一步落库的只是行。
+                sink.emit_done(
+                    run_id=run_id,
+                    status=ST_CANCELLED,
+                    parent_run_id=parent_run_id,
+                    depth=child_depth,
+                    profile=profile_name,
+                    usage={"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps},
+                )
 
             # ★ 关键修复（实测故障）：父任务结束、SSE 断流、用户切会话都会取消子 Agent，
             # 而**取消传播会打断此后所有 await** —— 于是原来的 finish_run 从不执行：
