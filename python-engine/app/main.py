@@ -1264,7 +1264,6 @@ def _setup_routes(app: FastAPI) -> None:
             )
 
     # ── Agent 推理（模块级路由函数） ──
-    app.post("/v1/agent/run")(agent_run)
     app.post("/v1/agent/submit")(agent_submit)
     app.post("/v1/agent/approval")(agent_approval)
     app.post("/v1/agent/interrupt")(agent_interrupt)
@@ -1337,69 +1336,6 @@ def _setup_routes(app: FastAPI) -> None:
 
 
 # ── 模块级路由处理函数（FastAPI 需在模块作用域才能正确推断 body 类型） ──
-
-
-#: 遗留端点 `/v1/agent/run`（走 `app/agent/loop.py`，非产品链路）是否已被调用过 —— 只告警一次。
-#: 用途：**观测是否真有外部调用方**；有了证据才能决定删掉它，而不是凭猜。
-_LEGACY_AGENT_RUN_WARNED = False
-
-
-async def agent_run(
-    request: Request,
-    gateway: Any = Depends(get_gateway),
-) -> Any:
-    """流式 Agent 推理 — SSE 输出（**遗留端点**：见 app/agent/loop.py 的说明）"""
-    import json
-
-    from app.agent.loop import run_agent
-
-    global _LEGACY_AGENT_RUN_WARNED
-    if not _LEGACY_AGENT_RUN_WARNED:
-        _LEGACY_AGENT_RUN_WARNED = True
-        logger.warning(
-            "legacy endpoint /v1/agent/run called: it serves app/agent/loop.py, "
-            "NOT the product path (/v1/agent/submit -> AgentRuntime). "
-            "Record the caller; with no caller it can be removed (see roadmap open item)."
-        )
-
-    body = await request.json()
-    llm_config = body.get("llm_config") or {}
-    provider_hint = llm_config.get("provider", "")
-
-    async def event_generator() -> AsyncIterator[Any]:
-        try:
-            async for event in run_agent(
-                gateway=gateway,
-                system_prompt=body.get("system_prompt", ""),
-                history=body.get("history", []),
-                content=body.get("content", ""),
-                tools=body.get("tools") or None,
-                llm_config=llm_config,
-                max_turns=(
-                    (body.get("max_turns") or 0)
-                    if body.get("max_turns", 0) > 0
-                    else None
-                ),
-                tenant_id=body.get("tenant_id", ""),
-                provider_hint=provider_hint,
-            ):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except asyncio.CancelledError:
-            # 客户端断开/网关取消：流式生成器被 ASGI 取消 → 中止 agent 循环，不吞取消
-            logger.info(
-                "Agent run stream cancelled (client disconnected)",
-                extra={"session_id": body.get("session_id", "")},
-            )
-            raise
-        except Exception as e:
-            logger.error("Agent run error: %s", e)
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
 
 
 async def _workflow_context_stream(
