@@ -15,6 +15,7 @@ import time
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import Enum, StrEnum
+from operator import mul as _mul
 from typing import Any, Literal
 
 # ── L1: 会话元数据 ─────────────────────────────────────────────────────
@@ -415,21 +416,72 @@ class TokenUsage:
 # ── 工具函数 ─────────────────────────────────────────────────────────────
 
 
-def cosine_similarity(a: list[float], b: list[float]) -> float:
-    """计算两个向量的余弦相似度。"""
-    import math
+def _mul_sum(a: list[float], b: list[float]) -> float:
+    """``Σ aᵢbᵢ``。``map`` 版省掉生成器每对分量一次的元组解包。"""
+    return sum(map(_mul, a, b))
 
+
+def dot_product(a: list[float], b: list[float]) -> float:
+    """点积。长度不一致返回 0.0（与 :func:`cosine_similarity` 同一口径）。
+
+    1536 维向量上的相似度是本模块的热点，所以走 :func:`_mul_sum` 而不是
+    ``sum(x*y for x, y in zip(...))`` —— 后者每对分量都要建一次元组。
+    """
     if len(a) != len(b):
         return 0.0
+    return _mul_sum(a, b)
 
-    dot_product = sum(x * y for x, y in zip(a, b, strict=False))
-    norm_a = math.sqrt(sum(x * x for x in a))
-    norm_b = math.sqrt(sum(x * x for x in b))
 
+def vector_norm(vec: list[float]) -> float:
+    """向量模长（零向量返回 0.0）。"""
+    return math.sqrt(_mul_sum(vec, vec))
+
+
+def unit_vector(vec: list[float]) -> list[float] | None:
+    """归一化副本；零向量/空向量返回 ``None``（无法参与相似度）。
+
+    只在**同一批向量要参与多次比较**时用：余弦是尺度不变的，所以先单位化一次、
+    内层只点积，与逐次调用 :func:`cosine_similarity` 等价但省掉每次两趟遍历 + 两次开方。
+    """
+    if not vec:
+        return None
+    norm = vector_norm(vec)
+    if norm == 0:
+        return None
+    return [x / norm for x in vec]
+
+
+class CosineScorer:
+    """同一个 query 向量对**多个候选**算余弦相似度：把 query 的模长提到循环外。
+
+    ``cosine_similarity(q, c)`` 在循环里会把 ``|q|`` 重算 N 次 —— 检索/判重都是
+    "一个 query 打一批候选"的形状，这类重算正是纯 Python 相似度最贵的那部分。
+    """
+
+    __slots__ = ("_q", "_norm")
+
+    def __init__(self, query: list[float]) -> None:
+        self._q = list(query)
+        self._norm = vector_norm(self._q)
+
+    def score(self, candidate: list[float]) -> float:
+        if self._norm == 0 or not candidate:
+            return 0.0
+        cand_norm = vector_norm(candidate)
+        if cand_norm == 0:
+            return 0.0
+        return dot_product(self._q, candidate) / (self._norm * cand_norm)
+
+
+def cosine_similarity(a: list[float], b: list[float]) -> float:
+    """计算两个向量的余弦相似度（单次比较用这个；一批候选请用 :class:`CosineScorer`）。"""
+    if len(a) != len(b):
+        return 0.0
+    norm_a = vector_norm(a)
+    norm_b = vector_norm(b)
     if norm_a == 0 or norm_b == 0:
         return 0.0
-
-    return dot_product / (norm_a * norm_b)
+    return dot_product(a, b) / (norm_a * norm_b)
 
 
 def recency_decay(when: datetime | None, half_life_days: float = 60.0) -> float:

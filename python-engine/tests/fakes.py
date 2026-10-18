@@ -16,6 +16,8 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from app.memory.profile import EvictionRow
+
 
 class InMemorySummaryStore:
     """``app.memory.summaries.SummaryStore`` 的内存实现（方法签名一致）。"""
@@ -150,6 +152,31 @@ class InMemoryProfileStore:
         if e and e.tenant_id == tenant_id and e.user_id == user_id:
             return e if _project_of(e) == project else None
         return None
+
+    async def list_evictable(self, tenant_id, user_id, project=""):
+        """与真实 `ProfileStore.list_evictable` 同形：只给淘汰要的四个字段。"""
+        rows = [
+            e for e in self.by_key.values()
+            if e.tenant_id == tenant_id
+            and e.user_id == user_id
+            and _project_of(e) == project
+            and e.status == "active"
+        ]
+        rows.sort(
+            key=lambda e: (
+                e.slot,
+                e.updated_at or datetime.min.replace(tzinfo=UTC),
+            )
+        )
+        return [
+            EvictionRow(
+                id=e.id,
+                confidence=int(e.confidence),
+                source=e.source,
+                last_accessed_at=e.last_accessed_at,
+            )
+            for e in rows
+        ]
 
     async def get_by_key(self, tenant_id, user_id, slot, item_key, project=""):
         return self.by_key.get(self._key(tenant_id, user_id, slot, item_key, project))
