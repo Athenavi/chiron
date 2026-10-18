@@ -1964,8 +1964,10 @@ class AgentRuntime:
 
                 # ── 任务线闸门（M15b，紧跟 per-run 预算）──
                 # per-run 预算管"这一段"，线账管"这条线一共"（续跑与嵌套委派并进同一条线）。
-                # 越界的反应先与 per-run 同一形状（error 收尾 + 标 failed）；M15c 会把
-                # `line_paused` 改接成"挂起等人工提额"，那时改的是这里的反应，不是判定。
+                # 越界的反应与 per-run 同一形状（error 收尾 + 标 failed）：这里**不**挂起等答复 ——
+                # 子 Agent 跑在合成会话里、没有 `agent_runs` 行，M7 那套 awaiting_input 接不上手。
+                # "停下来等人"由 runner 的终态路径负责：暂停这条线 + 挂出一张提额待办（M15c，
+                # 见 `app/agent/subagent_runner.py` 的 `_report_line_exhaustion`）。
                 line_axis = await self._line_violation(
                     task, own_tokens=total_input_tokens + total_output_tokens
                 )

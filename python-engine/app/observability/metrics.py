@@ -141,6 +141,18 @@ SUBAGENT_LINE_GATE = Counter(
     "Run-line budget gate trips (M15b): line_tokens = 累计到上限, line_paused = 被人按了暂停",
     ["axis"],
 )
+SUBAGENT_LINE_PAUSE = Counter(
+    "subagent_line_pause_total",
+    "M15c 线暂停与提额：paused = 暂停并挂出待办, paused_no_ticket = 暂停了但待办没建成（用户看不见）, "
+    "raised = 人提了额并解除暂停, raise_failed = 提额写库失败",
+    ["outcome"],
+)
+INTERACTION_CREATE_FAILED = Counter(
+    "interaction_create_failed_total",
+    "Pending-interaction tickets that could not be written —— 一次"
+    "「本该等人、但人永远不会看到」的人工介入",
+    ["reason"],  # unknown_kind / missing_keys / no_pool / storage_error / conflict_answered
+)
 SUBAGENT_PERSIST_FAILED = Counter(
     "subagent_persist_failed_total",
     "Subagent state persistence failures (run state may be lost permanently)",

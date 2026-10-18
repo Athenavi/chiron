@@ -183,4 +183,9 @@ export default {
   pending_interactions_title: "待你处理",
   interaction_answered_waiting: "已答复，下一次发送即从暂停处继续",
   interaction_continue_message: "（已处理待确认项，请继续）",
+  // ── M15c：任务线预算耗尽的提额待办 ──
+  budget_exhausted_summary: "这条任务线已花 {spent} token，上限 {cap}",
+  budget_new_cap_label: "新上限（token）",
+  budget_submit: "提额并继续",
+  budget_invalid_cap: "请输入大于 0 的整数",
 }

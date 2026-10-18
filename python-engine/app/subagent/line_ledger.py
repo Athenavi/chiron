@@ -49,6 +49,32 @@ DEFAULT_LINE_MAX_TOKENS = 2_000_000
 #: 默认值改了不该悄悄关掉一条被明确放行的大线。
 CAP_UNLIMITED = -1
 
+#: ``pause_reason`` 的取值：闸门因预算耗尽自己按下的暂停。写进库、也写进待办的 request，
+#: 让人一眼分清"这条线是被钱停的"还是"被谁手动停的"（后者目前还没有入口，但这一列的语义
+#: 从第一天起就按可区开来设计，免得以后要靠时间戳猜）。
+PAUSE_REASON_BUDGET = "budget_exhausted"
+
+#: 人工提额允许写进去的上限上界。它只用来挡住"手滑多打两个 0"，不是产品语义 ——
+#: 真要一条不限的线，由运维把 ``cap_tokens`` 直接写成 ``-1``（API 故意不开这个口子：
+#: "把上限关掉"和"这次多给一点"是两个决定，前者不该由一张待办的一次答复完成）。
+MAX_CAP_TOKENS = 10**12
+
+
+def _rowcount(result: Any) -> int:
+    """从 asyncpg 的 ``UPDATE n`` / ``INSERT 0 n`` 状态串里取行数。"""
+    parts = str(result or "").split()
+    if len(parts) >= 2 and parts[0] in ("UPDATE", "DELETE"):
+        try:
+            return int(parts[1])
+        except ValueError:
+            return 0
+    if len(parts) == 3 and parts[0] == "INSERT":
+        try:
+            return int(parts[2])
+        except ValueError:
+            return 0
+    return 0
+
 #: settled 镜像的 TTL。它只用于吸收 fan-out 时的重复聚合，故意取短：漂移上界就是这段时间
 #: 内**丢掉**的终态写入（镜像只在键还活着时 INCRBY；键没了 ⇒ 下一次读走 PG 求和）。
 USED_TTL_SECONDS = 60
@@ -62,6 +88,30 @@ LEDGER_SELECT_SQL = (
     "SELECT cap_tokens, paused, pause_reason FROM run_lineage_ledger "
     "WHERE root_run_id = $1 AND tenant_id = $2"
 )
+
+#: 保证那一行存在（没被设过的线在表里本来就没有行）。`DO NOTHING`：已有行**一律不动**，
+#: 要改的东西全部交给下面那条 UPDATE —— 两条各司其职，比一条带六个 COALESCE 的
+#: `ON CONFLICT DO UPDATE` 好读，也好让"归属不符"只可能出现在 UPDATE 的行数上。
+LEDGER_ENSURE_SQL = (
+    "INSERT INTO run_lineage_ledger (root_run_id, tenant_id) VALUES ($1, $2) "
+    "ON CONFLICT (root_run_id) DO NOTHING"
+)
+
+#: 控制态的**增量**写：`NULL` = 这一列不改。`pause_reason` 用显式 `::text` 区分
+#: "没带这个字段"（NULL，保持原值）与"要清掉它"（空串 ⇒ 落 NULL）。
+#:
+#: `AND tenant_id = $2` 是这条写路径唯一的跨租户护栏（主键只有 `root_run_id`）：归属不符时
+#: UPDATE 匹配 0 行 ⇒ 返回 False，调用方如实报错，而不会把别人的线上限改掉。
+LEDGER_UPDATE_SQL = """
+UPDATE run_lineage_ledger
+   SET cap_tokens   = COALESCE($3, cap_tokens),
+       paused       = COALESCE($4, paused),
+       pause_reason = CASE WHEN $5::text IS NULL THEN pause_reason ELSE NULLIF($5, '')::text END,
+       updated_by   = COALESCE(NULLIF($6, ''), updated_by),
+       updated_at   = now()
+ WHERE root_run_id = $1
+   AND tenant_id = $2
+"""
 
 _TAB = "\t"
 
@@ -406,6 +456,75 @@ class LineLedger:
             self._warn("rsvw", "subagent 线账预留写入失败（此后不再重复告警）: %s", str(exc)[:160])
             return ""
         return handle
+
+    async def set_control(
+        self,
+        root: str,
+        tenant_id: str,
+        *,
+        cap_tokens: int | None = None,
+        paused: bool | None = None,
+        reason: str | None = None,
+        updated_by: str = "",
+    ) -> bool:
+        """写控制态；``None`` = 那一列不动。返回**是否真的写到了这一行**。
+
+        与读侧相反，这里**不 fail-open**：``False`` 必须让调用方报错。闸门读不到就放行是
+        取舍（还有两道预算在），而"人提了额却没写进去、票却答掉了"是纯粹的谎 —— 用户接下来
+        看到的是同一道闸门再次拦下同一件事。
+
+        归属不符（那条线属于别的租户）也返回 ``False``，且**不区分**于"写失败"：区分它会让我
+        能枚举别人的 ``root_run_id`` 是否存在，而这条 API 本来就不该回答这个问题。
+        """
+        if not _usable_root(root) or not tenant_id:
+            return False
+        if cap_tokens is None and paused is None and reason is None and not updated_by:
+            return True  # 什么都没要改：不假装写了一次
+        try:
+            pool = self._db_pool()
+            await pool.execute(LEDGER_ENSURE_SQL, root, tenant_id)
+            result = await pool.execute(
+                LEDGER_UPDATE_SQL,
+                root,
+                tenant_id,
+                None if cap_tokens is None else int(cap_tokens),
+                None if paused is None else bool(paused),
+                reason,
+                updated_by or "",
+            )
+        except Exception as exc:  # noqa: BLE001 — 写失败如实返回 False，由调用方报错
+            self._warn(
+                "ctrlw",
+                "subagent 线账写控制态失败（此后不再重复告警）：请执行迁移 "
+                "0022_run_lineage_ledger: %s",
+                str(exc)[:160],
+            )
+            return False
+        return _rowcount(result) > 0
+
+    async def pause_for_budget(self, root: str, tenant_id: str) -> bool:
+        """闸门越界 ⇒ 暂停这条线（**不动 cap**：暂停是"停下来等人"，不是"额度变了"）。
+
+        幂等：已经是 paused 的行再写一次没有副作用，所以每个失败段都可以放心调它。
+        """
+        return await self.set_control(root, tenant_id, paused=True, reason=PAUSE_REASON_BUDGET)
+
+    async def raise_cap_and_resume(
+        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+    ) -> bool:
+        """人工提额：写新上限**并**清暂停 —— 两者必须同时发生。
+
+        只清暂停不写 cap，下一条线会以同样的数字再次拦下；只写 cap 不清暂停，闸门会一直报
+        ``line_paused`` 而那条待办的语义已经不再是"等人决定"。上限与暂停是一个决定的两半。
+        """
+        return await self.set_control(
+            root,
+            tenant_id,
+            cap_tokens=int(cap_tokens),
+            paused=False,
+            reason="",
+            updated_by=updated_by,
+        )
 
     async def settle(self, root: str, handle: str, actual_tokens: int) -> None:
         """收尾：摘掉自己的预留，并把**实际**用量并进镜像。

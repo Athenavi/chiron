@@ -183,4 +183,9 @@ export default {
   pending_interactions_title: "Needs your action",
   interaction_answered_waiting: "Answered — the next send resumes it from where it paused",
   interaction_continue_message: "(pending items handled, please continue)",
+  // ── M15c: raise-the-cap ticket for an exhausted run line ──
+  budget_exhausted_summary: "This run line has spent {spent} tokens of a {cap} cap",
+  budget_new_cap_label: "New cap (tokens)",
+  budget_submit: "Raise and continue",
+  budget_invalid_cap: "Enter a whole number greater than 0",
 }

@@ -17,6 +17,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import re
@@ -203,6 +204,118 @@ async def _settle_line(root: str, handle: str, actual_tokens: int) -> None:
         await get_line_ledger().settle(root, handle, actual_tokens)
     except Exception as exc:  # noqa: BLE001 - 收尾失败由预留的自然到期兜底
         logger.warning("subagent line settle failed (root=%s): %s", root, str(exc)[:160])
+
+
+#: runtime 越界事件的形状：``budget_exceeded:<轴>``。线账的轴名自带 ``line_`` 前缀
+#: （``line_tokens`` / ``line_paused``，与 ``LineState.violation`` 的返回值逐字相同 ——
+#: 它是待办与指标里的同一个字符串，不能在这里被削成 ``tokens``，那是 per-run 轴的写法）。
+LINE_ERROR_PREFIX = "budget_exceeded:"
+LINE_AXIS_PREFIX = "line_"
+
+
+def _line_axis(errors: list[str]) -> str:
+    """从这一段的错误里取线账轴名（``line_tokens`` / ``line_paused``）；没有则空串。"""
+    for err in errors:
+        if err.startswith(LINE_ERROR_PREFIX + LINE_AXIS_PREFIX):
+            return err[len(LINE_ERROR_PREFIX):]
+    return ""
+
+
+async def _report_line_exhaustion(
+    *,
+    root: str,
+    tenant_id: str,
+    user_id: str,
+    session_id: str,
+    run_id: str,
+    axis: str,
+) -> None:
+    """M15c：线账越界 ⇒ 把这条线**暂停**并挂出一张"请提额"的人工介入待办。
+
+    为什么是"暂停 + 待办"而不是"挂起这一段等答复"（3B）：越界的子 Agent 跑在合成会话
+    ``sub:<父>:<run>`` 里、没有 ``agent_runs`` 行，M7 那套 ``awaiting_input`` 挂起/接手的前提
+    都不成立（``_register_interaction`` 还要求 ``run_token``）。把它挂起会得到一个**没有任何
+    东西能唤醒**的状态；而失败收尾 + 待办不丢现场：这一段的步骤与结论已经落库，提额后新的段
+    自动放行，被砍掉的这一段用 ``subagent_rerun`` 接上。
+
+    两件事都必须**不影响这一轮的收尾**：它们全是增强路径，异常一律吞在这里 —— 一段已经失败的
+    run 不该因为"通知人"这件事没做成而再失败一次。但**不能静默**：票没建成 = 这条线停着却没人
+    能提额，那是要按 error 报出来的运维事故，不是一个警告。
+    """
+    if not root or not axis:
+        return
+    from app.observability.metrics import SUBAGENT_LINE_PAUSE
+    from app.subagent.line_ledger import DEFAULT_LINE_MAX_TOKENS, get_line_ledger
+
+    led = get_line_ledger()
+    try:
+        paused = await led.pause_for_budget(root, tenant_id)
+        if not paused:
+            SUBAGENT_LINE_PAUSE.labels(outcome="pause_failed").inc()
+            logger.error(
+                "subagent line %s hit %s but could NOT be paused (tenant=%s)：这条线仍在花钱，"
+                "而闸门只对已暂停的线停手 —— 请检查迁移 0022 是否已执行",
+                root, axis, tenant_id,
+            )
+
+        numbers: dict[str, int] = {}
+        state = await led.state(root, tenant_id)
+        if state is not None:
+            numbers = {
+                "cap_tokens": int(state.cap),
+                "settled_tokens": int(state.settled),
+                "reserved_tokens": int(state.reserved),
+            }
+        cap = int(numbers.get("cap_tokens") or 0)
+        # 建议值只是**预填**，不是决定：让人一眼有个起点，而不是面对一个空框去猜量级。
+        suggested = cap * 2 if cap > 0 else DEFAULT_LINE_MAX_TOKENS * 2
+
+        from app.agent import interactions
+
+        ticket = await interactions.create(
+            tenant_id=tenant_id,
+            user_id=user_id,
+            session_id=session_id,
+            kind=interactions.KIND_BUDGET,
+            # 合成 id：一条线一个会话只有一张未决提额票（靠 ux_pending_interactions_open 去重）。
+            # 反复越界会刷新它，而不是攒出一摞长得一样的待办。
+            tool_call_id=f"budget:{root}",
+            tool_name="subagent",
+            args_hash=hashlib.sha256(f"{root}|{axis}|{cap}".encode()).hexdigest(),
+            request={
+                "root_run_id": root,
+                "axis": axis,
+                "suggested_cap_tokens": suggested,
+                "run_id": run_id,
+                "question": (
+                    f"这条子 Agent 任务线已花到 token 上限（{cap:,}），新的段已被拦下。"
+                    "要把上限提到多少？"
+                )
+                if axis == "line_tokens"
+                else (
+                    f"这条子 Agent 任务线处于暂停（{axis}），新的段仍被拦下。"
+                    "要把上限提到多少？"
+                ),
+                **numbers,
+            },
+        )
+    except Exception as exc:  # noqa: BLE001 — 通知人这件事失败，不该让这一段再失败一次
+        SUBAGENT_LINE_PAUSE.labels(outcome="pause_failed").inc()
+        logger.error("subagent line %s: pause/ticket step failed (axis=%s): %s", root, axis, exc)
+        return
+    if not ticket:
+        SUBAGENT_LINE_PAUSE.labels(outcome="paused_no_ticket").inc()
+        logger.error(
+            "subagent line %s paused but no ticket was written (tenant=%s session=%s)："
+            "这条线停着，而没有任何人能替它提额",
+            root, tenant_id, session_id,
+        )
+        return
+    SUBAGENT_LINE_PAUSE.labels(outcome="paused").inc()
+    logger.warning(
+        "subagent line paused for budget: root=%s axis=%s cap=%s settled=%s ticket=%s",
+        root, axis, cap, numbers.get("settled_tokens"), ticket,
+    )
 
 
 async def _persist_terminal_to_cache(
@@ -924,6 +1037,19 @@ class SubAgentRunner:
                 error=" | ".join(errors)[:1000],
             )
             await _settle_line(line_root, line_handle, in_tokens + out_tokens)
+
+        # M15c：这一段是被**线账**拦下的 ⇒ 把这条线暂停，并挂出一张提额待办。
+        # 放在 settle 之后：待办上显示的"已花"要包含刚刚落库的这一段，否则用户按一个偏小的
+        # 数字提额、下一段立刻又被拦下。
+        if line_root:
+            await _report_line_exhaustion(
+                root=line_root,
+                tenant_id=self._tenant_id,
+                user_id=self._user_id,
+                session_id=self._parent_session_id,
+                run_id=run_id,
+                axis=_line_axis(errors),
+            )
 
         usage = {"input_tokens": in_tokens, "output_tokens": out_tokens, "steps": steps}
 

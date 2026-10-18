@@ -155,6 +155,116 @@ async def test_create_degrades_to_empty_on_any_failure(
     assert await ix.create(**kwargs) == ""
 
 
+# ── M15c：`budget` 这一类，以及"写不进去"必须可见 ────────────────────────
+
+
+def _fail_count(reason: str) -> float:
+    from app.observability.metrics import INTERACTION_CREATE_FAILED
+
+    return INTERACTION_CREATE_FAILED.labels(reason=reason)._value.get()
+
+
+async def test_create_accepts_a_budget_ticket(pool: _FakePool) -> None:
+    """线账越界的票**不需要 run_token** 也能挂出去：它不靠"下一轮来取"生效。
+
+    这一条值得单独锁住 —— 子 Agent 的失败段跑在合成会话里，本来就没有可交给下一轮的东西，
+    如果 `create` 要求 run_token，那条被暂停的线就永远挂不出票（= 没人能提额）。
+    """
+    pool.row = {"id": "int-2"}
+    got = await ix.create(
+        tenant_id="t1",
+        user_id="u1",
+        session_id="s-main",
+        kind=ix.KIND_BUDGET,
+        tool_call_id="budget:rs_root",
+        tool_name="subagent",
+        args_hash="h2",
+        request={"root_run_id": "rs_root", "axis": "line_tokens"},
+    )
+    assert got == "int-2"
+    assert pool.last_args[6] == ix.KIND_BUDGET
+    assert pool.last_args[4] is None, "run_id 列存的是 run_token，没有就是 NULL"
+    assert json.loads(pool.last_args[10])["root_run_id"] == "rs_root"
+
+
+async def test_create_failure_is_counted_per_reason(pool: _FakePool) -> None:
+    """每条返回空串的路径都要留下可见痕迹：approval 失败只是"回落 M6 的即时拒绝"，而
+    budget 票失败意味着"一条被暂停的线，没有任何人能看见"。返回值仍是空串（改成异常会把
+    增强路径变成能打断对话的东西），但不再静默。"""
+    base = dict(tenant_id="t1", user_id="u1", session_id="s1")
+
+    before = _fail_count("unknown_kind")
+    assert await ix.create(kind="approve_me", tool_call_id="tc1", **base) == ""
+    assert _fail_count("unknown_kind") == before + 1
+    assert pool.calls == [], "认不出的 kind 连库都不该碰"
+
+    before = _fail_count("missing_keys")
+    assert await ix.create(kind=ix.KIND_BUDGET, tool_call_id="", **base) == ""
+    assert _fail_count("missing_keys") == before + 1
+
+    before = _fail_count("storage_error")
+    pool.raise_on = "INSERT INTO pending_interactions"
+    assert await ix.create(kind=ix.KIND_BUDGET, tool_call_id="budget:rs", **base) == ""
+    assert _fail_count("storage_error") == before + 1
+
+    # ON CONFLICT 命中一个已 `answered` 的名额 ⇒ RETURNING 无行：这张占位的票必须可见
+    pool.raise_on = ""
+    pool.row = None
+    before = _fail_count("conflict_answered")
+    assert await ix.create(kind=ix.KIND_BUDGET, tool_call_id="budget:rs", **base) == ""
+    assert _fail_count("conflict_answered") == before + 1
+
+
+async def test_create_without_a_pool_is_counted(pool: _FakePool, monkeypatch) -> None:
+    monkeypatch.setattr(ix, "_pool", lambda: None)
+    before = _fail_count("no_pool")
+    assert await ix.create(
+        tenant_id="t1", user_id="u1", session_id="s1",
+        kind=ix.KIND_BUDGET, tool_call_id="budget:rs",
+    ) == ""
+    assert _fail_count("no_pool") == before + 1
+
+
+# ── settle：把现场一并记上答复并关掉 ─────────────────────────────────────
+
+
+async def test_settle_closes_the_ticket_and_records_the_reply(pool: _FakePool) -> None:
+    pool.status = "UPDATE 1"
+    assert await ix.settle(
+        interaction_id="int-1",
+        decision={"cap_tokens": 5000},
+        reason="提到了 5000",
+        decided_by="u1",
+        tenant_id="t1",
+        user_id="u1",
+    ) is True
+    norm = _norm(pool.last_sql)
+    assert "SET status = 'consumed'" in norm
+    assert "AND status IN ('pending', 'answered')" in norm
+    assert "AND ($5 = '' OR tenant_id = $5)" in norm
+    assert "AND ($6 = '' OR user_id = $6)" in norm
+    args = pool.last_args
+    assert args[0] == "int-1"
+    assert json.loads(args[1]) == {"cap_tokens": 5000}
+    assert args[2] == "提到了 5000"
+    assert args[3:] == ("u1", "t1", "u1")
+
+
+async def test_settle_without_identity_matches_the_m7_callers(pool: _FakePool) -> None:
+    """M7 的实时路径不传身份 ⇒ 空串谓词恒真，与加这两个参数之前逐字等价。"""
+    pool.status = "UPDATE 1"
+    assert await ix.settle(interaction_id="int-1", decision={"answer": "B"}) is True
+    assert pool.last_args[3:] == ("", "", "")
+
+
+@pytest.mark.parametrize("status", ["UPDATE 0", "UPDATE 1"])
+async def test_settle_reports_the_rowcount(pool: _FakePool, status: str) -> None:
+    """0 行 = 那张票已经被取走/过期 ⇒ False，调用方据此不写"已经关掉"的谎。"""
+    pool.status = status
+    got = await ix.settle(interaction_id="int-1", decision={})
+    assert got is (status == "UPDATE 1")
+
+
 # ── resolve：用户给出答复 ─────────────────────────────────────────────────
 
 
