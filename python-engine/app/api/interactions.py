@@ -94,7 +94,9 @@ async def resolve_interaction(
 
     * `approval`：沿用审批三态（`decision=approve|reject|edit`，兼容旧的 `approved: bool`），
       解析**委托** `runtime.parse_approval_payload` —— 与实时审批端点同源，避免两份实现漂移；
-    * `question`：`{"answer": "..."}` 或 `{"declined": true, "reason": "..."}`。
+    * `question`：`{"answer": "..."}` 或 `{"declined": true, "reason": "..."}`；
+    * `budget`：**不在这条通用路径上**，见下面的分支与 `_resolve_budget` —— 它的答复是一次
+      控制态写入，不是一张待取的票。
 
     答错形状一律拒绝（`invalid_decision`）而不是"先存着，续跑时再说"：一张存进去就取不出
     来的票会白占住这个会话的唯一名额（`ux_pending_interactions_open`），用户看到的是
@@ -137,6 +139,16 @@ async def resolve_interaction(
         }
 
     kind = str(row.get("kind") or "")
+    if kind == interactions.KIND_BUDGET:
+        # 提额票单独走：它要**立刻改变一条任务线的控制态**，而下面那条通用路径写完
+        # `answered` 就结束了（票等着被续跑的那一轮取走）。budget 没有"下一轮"会来取它。
+        return await _resolve_budget(
+            row=row,
+            interaction_id=interaction_id,
+            response=response,
+            tenant=tenant,
+            user=user,
+        )
     if kind == interactions.KIND_APPROVAL:
         decision = parse_approval_payload(
             approved=response.get("approved"),
@@ -193,5 +205,103 @@ async def resolve_interaction(
             "tool_name": resolved.get("tool_name"),
             "status": interactions.STATUS_ANSWERED,
             "decision": resolved.get("decision") or {},
+        },
+    }
+
+
+async def _resolve_budget(
+    *, row: dict[str, Any], interaction_id: str, response: dict[str, Any], tenant: str, user: str
+) -> dict[str, Any]:
+    """提额票的答复 = **写一次线账控制态**（新上限 + 清暂停），然后把那张票关掉。
+
+    与 approval/question 的三点不同，都是有意的：
+
+    1. **没有 decline**。"拒绝提额"与"还没决定"在效果上完全相同 —— 线继续停着。做一个会把票
+       关掉却不改变任何事的按钮，只会给用户"我处理过了"的错觉，而下一条新段仍然被拦。
+    2. **写失败必须报错、票保持 `pending`**（`cap` 只写进 PG 那一行才算数）。反过来"写成功但
+       没能关掉票"仍返回 `ok`：用户要的结果已经生效了，告诉他失败只会让他再点一次、第二次
+       拿到 `stale`。
+    3. **上限只能提、不能在这张票上关掉**。``-1``（``CAP_UNLIMITED``）留给运维直接改库 ——
+       "把上限关掉"和"这次多给一点"是两个决定，后者不该由一张待办的一次答复完成。
+    """
+    from app.agent import interactions
+    from app.observability.metrics import SUBAGENT_LINE_PAUSE
+    from app.subagent.line_ledger import MAX_CAP_TOKENS, get_line_ledger
+
+    if not tenant:
+        # 线账按租户归属过滤（主键只有 root_run_id）：没有租户就没法安全地写这一行。
+        # 网关路径总会带上它，缺了它的是内部直连 —— 宁可如实拒绝，也不要"按猜的租户写"。
+        return {
+            "ok": False,
+            "error_code": "invalid_request",
+            "error": "tenant_id is required to raise a line budget",
+        }
+
+    request = row.get("request") or {}
+    root = str(request.get("root_run_id") or "")
+    if not root:
+        logger.error("budget ticket %s has no root_run_id in request", interaction_id)
+        return {
+            "ok": False,
+            "error_code": "storage_error",
+            "error": "budget ticket is missing its lineage id",
+        }
+
+    raw_cap = response.get("cap_tokens")
+    if isinstance(raw_cap, bool) or not isinstance(raw_cap, int):
+        return {
+            "ok": False,
+            "error_code": "invalid_decision",
+            "error": "cap_tokens is required and must be an integer",
+        }
+    if not 1 <= raw_cap <= MAX_CAP_TOKENS:
+        return {
+            "ok": False,
+            "error_code": "invalid_decision",
+            "error": f"cap_tokens must be between 1 and {MAX_CAP_TOKENS}",
+        }
+
+    raised = await get_line_ledger().raise_cap_and_resume(
+        root, tenant, cap_tokens=raw_cap, updated_by=user
+    )
+    if not raised:
+        SUBAGENT_LINE_PAUSE.labels(outcome="raise_failed").inc()
+        logger.error(
+            "line budget raise not written (root=%s tenant=%s cap=%s)：ticket stays open",
+            root, tenant, raw_cap,
+        )
+        return {
+            "ok": False,
+            "error_code": "storage_error",
+            "error": "could not update the line budget; the request is still open",
+        }
+
+    decision = {"cap_tokens": raw_cap, "root_run_id": root}
+    reason = str(response.get("reason") or "")
+    closed = await interactions.settle(
+        interaction_id=interaction_id,
+        decision=decision,
+        reason=reason,
+        decided_by=user,
+        tenant_id=tenant,
+        user_id=user,
+    )
+    if not closed:
+        # 票在 peek 与 settle 之间被别人关掉 / 过期了，而提额本身已经生效 ⇒ 仍然返回成功。
+        logger.warning("budget ticket %s raised cap but was not closed by this reply", interaction_id)
+    SUBAGENT_LINE_PAUSE.labels(outcome="raised").inc()
+    logger.info(
+        "subagent line budget raised: root=%s tenant=%s cap=%s by=%s", root, tenant, raw_cap, user
+    )
+    return {
+        "ok": True,
+        "data": {
+            "id": row.get("id"),
+            "kind": row.get("kind"),
+            "session_id": row.get("session_id"),
+            "tool_name": row.get("tool_name"),
+            "status": interactions.STATUS_CONSUMED if closed else row.get("status"),
+            "decision": decision,
+            "root_run_id": root,
         },
     }

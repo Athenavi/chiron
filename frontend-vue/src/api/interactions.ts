@@ -11,7 +11,7 @@
  */
 import { api } from './index'
 
-export type InteractionKind = 'approval' | 'question'
+export type InteractionKind = 'approval' | 'question' | 'budget'
 export type InteractionStatus = 'pending' | 'answered'
 
 export interface PendingInteraction {
@@ -20,7 +20,8 @@ export interface PendingInteraction {
   status: InteractionStatus
   tool_name?: string
   tool_call_id?: string
-  /** approval: `{question, level, risk, arguments}`；question: `{question, options}` */
+  /** approval: `{question, level, risk, arguments}`；question: `{question, options}`；
+   *  budget: `{question, root_run_id, axis, cap_tokens, settled_tokens, suggested_cap_tokens}` */
   request?: Record<string, unknown>
   /** 仅 `answered`：已收到的答复（列表里显示"你答过了"，避免重复作答的困惑） */
   decision?: Record<string, unknown>
@@ -44,7 +45,11 @@ export async function listPendingInteractions(sessionId: string, limit = 20): Pr
  *
  * * approval：`{decision: 'approve'|'reject'|'edit', arguments?, reason?}`
  *   —— `edit` 的 `arguments` 是**编辑后的完整参数对象**（JSON 字符串），与实时审批卡同一契约；
- * * question：`{answer}` 或 `{declined: true, reason?}`。
+ * * question：`{answer}` 或 `{declined: true, reason?}`；
+ * * budget：`{cap_tokens: <整数>}`。它**不是一张等着被取走的授权票**：答复即刻改写那条任务线
+ *   的上限并解除暂停，那一行同时关掉（`consumed`），所以它不会像前两类那样停在 `answered`。
+ *   也没有"拒绝"这一项 —— 不答复就等于不提额，线继续停着，做一个关掉票却不改变任何事的按钮
+ *   只会造出"我处理过了"的错觉。
  *
  * 业务失败是 HTTP 状态码（404 不存在 / 409 已有下文 / 400 形状不对），由调用方呈现；
  * 返回 false 表示"没答上"，调用方**不该**随后再去提交唤醒。

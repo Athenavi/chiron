@@ -183,4 +183,9 @@ export default {
   pending_interactions_title: "بانتظار إجرائك",
   interaction_answered_waiting: "تمت الإجابة، والرسالة التالية تُستأنف من نقطة التوقف",
   interaction_continue_message: "(تمت معالجة العناصر المعلّقة، يُرجى المتابعة)",
+  // ── M15c: تذكرة رفع الحدّ عند استنفاد سلسلة التشغيل ──
+  budget_exhausted_summary: "استهلكت سلسلة التشغيل هذه {spent} رمزًا من أصل حدّ {cap}",
+  budget_new_cap_label: "الحدّ الجديد (رموز)",
+  budget_submit: "ارفع الحدّ وتابع",
+  budget_invalid_cap: "أدخل عددًا صحيحًا أكبر من صفر",
 }

@@ -13,6 +13,10 @@
  *
  * 渲染复用两张已有卡片（`SubAgentApprovalCard` / `AskCard`）：同一件事在第二个地方出现时，
  * 不该让用户重新建立心智。这里只负责取列表、按库里的 `kind` 提交、把结果回填成已答复态。
+ *
+ * M15c 起多了第三类 `budget`（任务线预算耗尽 ⇒ 线被暂停，请人决定提到多少）。它没有现成卡片
+ * 可复用，形状也根本不同：答复即刻改写那条线的上限并解除暂停，票当场关闭（不停在 `answered`
+ * 等下一轮来取），而且**没有"拒绝"这一项** —— 不答复与拒绝提额在效果上是同一件事。
  */
 import { ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -34,6 +38,10 @@ const items = ref<PendingInteraction[]>([])
 const loadingList = ref(false)
 const submitting = ref<Record<string, boolean>>({})
 const errors = ref<Record<string, string>>({})
+/** 提额输入框的草稿（按票 id 存）。预填的是字符串，而 `type=number` 的 v-model 回填的是
+ *  **数字**（Vue 对 number 输入框做了 castToNumber），所以读取时统一 `String()` 再校验 ——
+ *  当字符串直接 `.trim()` 会在用户改过一次输入框后抛 TypeError。 */
+const capDraft = ref<Record<string, string | number>>({})
 
 async function refresh() {
   if (!props.sessionId) {
@@ -43,6 +51,12 @@ async function refresh() {
   loadingList.value = true
   try {
     items.value = await listPendingInteractions(props.sessionId)
+    // 预填建议值：那是引擎按当前上限算出来的起点，让用户有个数字可改，而不是面对空框猜量级
+    for (const item of items.value) {
+      if (item.kind === 'budget' && capDraft.value[item.id] === undefined) {
+        capDraft.value[item.id] = String(suggestedCap(item))
+      }
+    }
   } catch {
     // 拉不到就什么都不显示：这是"补漏"的入口，实时卡片才是主路径，不该因为它反过来打断对话
     items.value = []
@@ -71,8 +85,15 @@ async function respond(item: PendingInteraction, response: Record<string, unknow
       errors.value[item.id] = t('errors.answer_submission_failed_please_retry')
       return
     }
-    // 就地转成已答复态：不必重拉列表就能看到"这张已处理"，也不给重复作答留按钮
-    item.status = 'answered'
+    if (item.kind === 'budget') {
+      // 提额是**即刻生效**的：那张票已被关掉（consumed），不会再出现在列表里。
+      // 把它就地标成"已答复"反而会留着一行谎 —— 它不是等下一轮来取的票。
+      // 留着草稿：后端关票失败时这行还在，让用户看得见自己刚提交了什么。
+      void refresh()
+    } else {
+      // 就地转成已答复态：不必重拉列表就能看到"这张已处理"，也不给重复作答留按钮
+      item.status = 'answered'
+    }
     emit('wake')
   } catch (e) {
     // 业务失败是网关映射出来的状态码（404 不存在 / 409 已有下文 / 400 形状不对）：
@@ -114,6 +135,33 @@ function questionText(item: PendingInteraction): string {
 function questionOptions(item: PendingInteraction): string[] {
   const options = item.request?.options
   return Array.isArray(options) ? options.map(o => String(o)) : []
+}
+
+// ── 提额卡：把"这条线停了"变成"决定提到多少" ──
+function suggestedCap(item: PendingInteraction): number {
+  const raw = Number(item.request?.suggested_cap_tokens ?? 0)
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 0
+}
+
+/** request 里的 token 数。读不到账目时后端**不写**这些键（`null` 不是"账上是 0"），
+ *  所以缺键与负数一律显示破折号；这里宁可少给一个数字，也不能给一个看着可信的 0 ——
+ *  用户会照着它决定提到多少。 */
+function tokenCount(item: PendingInteraction, key: string): string {
+  const raw = item.request?.[key]
+  if (typeof raw !== 'number' || !Number.isFinite(raw) || raw < 0) return '—'
+  return raw.toLocaleString()
+}
+
+function raiseBudget(item: PendingInteraction) {
+  const raw = String(capDraft.value[item.id] ?? '').trim()
+  const cap = Number(raw)
+  // 只收正整数：`-1` 在后端是"显式不限"的哨兵值，而"不限"只能由运维配置，不能由一张待办发出来
+  if (!raw || !Number.isInteger(cap) || cap <= 0) {
+    errors.value[item.id] = t('agent.budget_invalid_cap')
+    return
+  }
+  errors.value[item.id] = ''
+  void respond(item, { cap_tokens: cap })
 }
 </script>
 
@@ -169,6 +217,46 @@ function questionOptions(item: PendingInteraction): string[] {
         @answer="(value: string) => respond(item, { answer: value })"
         @decline="() => respond(item, { declined: true })"
       />
+
+      <!-- 提额：一个数字框 + 一个提交。故意没有"拒绝"—— 不答复就是不提额，线继续停着 -->
+      <div
+        v-else-if="item.kind === 'budget'"
+        class="inbox-budget"
+      >
+        <p class="inbox-budget-question">
+          {{ questionText(item) }}
+        </p>
+        <p class="inbox-budget-numbers">
+          {{ $t('agent.budget_exhausted_summary', {
+            spent: tokenCount(item, 'settled_tokens'),
+            cap: tokenCount(item, 'cap_tokens'),
+          }) }}
+        </p>
+        <label class="inbox-budget-field">
+          <span>{{ $t('agent.budget_new_cap_label') }}</span>
+          <input
+            v-model="capDraft[item.id]"
+            type="number"
+            min="1"
+            step="1"
+            :disabled="!!submitting[item.id]"
+          >
+        </label>
+        <button
+          class="inbox-budget-submit"
+          type="button"
+          :disabled="!!submitting[item.id]"
+          @click="raiseBudget(item)"
+        >
+          {{ $t('agent.budget_submit') }}
+        </button>
+        <div
+          v-if="errors[item.id]"
+          class="inbox-error"
+        >
+          {{ errors[item.id] }}
+        </div>
+      </div>
 
       <div
         v-if="errors[item.id] && item.kind === 'question'"
@@ -228,6 +316,51 @@ function questionOptions(item: PendingInteraction): string[] {
   font-size: 13px;
 }
 .inbox-answered-mark { color: var(--success, #16a34a); }
+.inbox-budget {
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--bg-card);
+}
+.inbox-budget-question {
+  margin: 0 0 6px;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.inbox-budget-numbers {
+  margin: 0 0 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.inbox-budget-field {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+.inbox-budget-field input {
+  width: 160px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--bg-surface);
+  color: var(--text-primary);
+  font-size: 13px;
+}
+.inbox-budget-submit {
+  border: 1px solid var(--accent);
+  border-radius: var(--sig-radius-button);
+  background: var(--accent);
+  color: var(--accent-text, #fff);
+  font-size: 12px;
+  line-height: 18px;
+  padding: 3px 12px;
+  cursor: pointer;
+}
+.inbox-budget-submit:disabled { opacity: 0.5; cursor: default; }
 .inbox-error {
   margin-top: 6px;
   font-size: 12px;

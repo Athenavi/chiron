@@ -76,9 +76,22 @@ class _FakeStore:
 
 
 class _FakePool:
-    def __init__(self, row: dict[str, Any] | None = None, *, error: bool = False) -> None:
+    """`fetchrow` = 读控制态，`execute` = 写控制态。读与写的失败**分开**注入：
+    读失败要 fail-open，写失败要如实返回 False —— 同一条 `error` 开关测不到两侧。
+    """
+
+    def __init__(
+        self,
+        row: dict[str, Any] | None = None,
+        *,
+        error: bool = False,
+        write_error: bool = False,
+        update_count: int = 1,
+    ) -> None:
         self.row = row
         self.error = error
+        self.write_error = write_error
+        self.update_count = update_count
         self.calls: list[tuple[str, tuple]] = []
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
@@ -86,6 +99,19 @@ class _FakePool:
         if self.error:
             raise RuntimeError('relation "run_lineage_ledger" does not exist')
         return self.row
+
+    async def execute(self, sql: str, *args: Any) -> str:
+        norm = " ".join(sql.split())
+        self.calls.append((norm, args))
+        if self.write_error:
+            raise RuntimeError('relation "run_lineage_ledger" does not exist')
+        return "INSERT 0 1" if norm.startswith("INSERT") else f"UPDATE {self.update_count}"
+
+    def updates(self) -> list[tuple[str, tuple]]:
+        return [c for c in self.calls if c[0].startswith("UPDATE run_lineage_ledger")]
+
+    def ensures(self) -> list[tuple[str, tuple]]:
+        return [c for c in self.calls if c[0].startswith("INSERT INTO run_lineage_ledger")]
 
 
 class _FakeRedis:
@@ -150,10 +176,20 @@ def _ledger(
 class _StubLedger:
     """按调用顺序可编程返回轴名的替身（`axes[i]` 对应第 i 次 `check`）。"""
 
-    def __init__(self, *, axis: str = "", axes: list[str] | None = None, error: bool = False) -> None:
+    def __init__(
+        self,
+        *,
+        axis: str = "",
+        axes: list[str] | None = None,
+        error: bool = False,
+        pause_ok: bool = True,
+        state_obj: LineState | None = None,
+    ) -> None:
         self.axis = axis
         self.axes = axes
         self.error = error
+        self.pause_ok = pause_ok
+        self.state_obj = state_obj
         self.calls: list[Any] = []
 
     async def check(self, root: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0) -> str:
@@ -171,6 +207,22 @@ class _StubLedger:
 
     async def settle(self, root: str, handle: str, actual_tokens: int) -> None:
         self.calls.append(("settle", root, handle, actual_tokens))
+
+    # ── M15c 写侧 ──
+
+    async def pause_for_budget(self, root: str, tenant_id: str) -> bool:
+        self.calls.append(("pause", root, tenant_id))
+        return self.pause_ok
+
+    async def raise_cap_and_resume(
+        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+    ) -> bool:
+        self.calls.append(("raise", root, tenant_id, cap_tokens, updated_by))
+        return True
+
+    async def state(self, root: str, tenant_id: str, *, exclude_run_id: str = "") -> LineState | None:
+        self.calls.append(("state", root, tenant_id))
+        return self.state_obj
 
 
 # ── 算术与优先级（纯函数，不需要任何依赖）───────────────────────────────
@@ -404,6 +456,72 @@ class TestRedisOrchestration:
         assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=100) == "line_tokens"
 
 
+# ── 控制态的写（M15c：暂停与提额）──────────────────────────────────────
+
+
+class TestControlStateWrite:
+    """读侧 fail-open，**写侧必须如实返回失败** —— 这两个取向在 `set_control` 里分开。"""
+
+    async def test_pause_stops_the_line_without_changing_the_cap(self) -> None:
+        pool = _FakePool()
+        assert await _ledger(pool=pool).pause_for_budget("rs_root", "t1") is True
+        assert [c[1] for c in pool.ensures()] == [("rs_root", "t1")]
+        assert len(pool.updates()) == 1
+        root, tenant, cap, paused, reason, updated_by = pool.updates()[0][1]
+        assert (root, tenant) == ("rs_root", "t1")
+        assert cap is None, "暂停是停下来等人，不是额度变了 —— 动 cap 会让提额无从对账"
+        assert paused is True
+        assert reason == ledger_mod.PAUSE_REASON_BUDGET
+        assert updated_by == ""
+
+    async def test_raise_writes_cap_and_clears_pause_together(self) -> None:
+        """上限与暂停是**一个决定的两半**：只提额不清暂停，闸门会继续报 `line_paused`。"""
+        pool = _FakePool()
+        led = _ledger(pool=pool)
+        assert await led.raise_cap_and_resume(
+            "rs_root", "t1", cap_tokens=5000, updated_by="u1"
+        ) is True
+        root, tenant, cap, paused, reason, updated_by = pool.updates()[0][1]
+        assert (cap, paused, updated_by) == (5000, False, "u1")
+        assert reason == "", "空串 = 清掉暂停原因（SQL 里 NULLIF 落 NULL），不是「不改」"
+
+    async def test_ensure_row_runs_before_the_update(self) -> None:
+        """没被设过的线在表里**没有行** ⇒ 先 `INSERT … DO NOTHING` 才能保证 UPDATE 命中 1 行。"""
+        pool = _FakePool()
+        await _ledger(pool=pool).pause_for_budget("rs_root", "t1")
+        assert [c[0].split()[0] for c in pool.calls] == ["INSERT", "UPDATE"]
+
+    async def test_wrong_tenant_reports_failure_and_writes_nothing_else(self) -> None:
+        """主键只有 `root_run_id`，租户过滤全在那条 UPDATE 的 WHERE 上：匹配 0 行必须返回
+        False（调用方据此报错），而不是"看起来成功了"。"""
+        pool = _FakePool(update_count=0)
+        assert await _ledger(pool=pool).pause_for_budget("rs_root", "other") is False
+        assert len(pool.updates()) == 1
+
+    async def test_write_failure_returns_false_instead_of_raising(self) -> None:
+        """不 fail-open、也不抛：抛会把"通知人"变成能打断收尾的东西，fail-open 则是说谎。"""
+        pool = _FakePool(write_error=True)
+        assert await _ledger(pool=pool).pause_for_budget("rs_root", "t1") is False
+
+    async def test_noop_change_does_not_touch_the_database(self) -> None:
+        pool = _FakePool()
+        assert await _ledger(pool=pool).set_control("rs_root", "t1") is True
+        assert pool.calls == [], "什么都没要改，不该假装写了一次"
+
+    @pytest.mark.parametrize("root,tenant", [("", "t1"), ("rs_root", ""), ("bad\troot", "t1")])
+    async def test_unusable_keys_never_reach_the_database(self, root: str, tenant: str) -> None:
+        pool = _FakePool()
+        assert await _ledger(pool=pool).set_control(root, tenant, paused=True) is False
+        assert pool.calls == []
+
+    def test_update_sql_is_tenant_scoped_and_incremental(self) -> None:
+        norm = " ".join(ledger_mod.LEDGER_UPDATE_SQL.split())
+        assert "WHERE root_run_id = $1" in norm and "AND tenant_id = $2" in norm
+        for col in ("cap_tokens", "paused"):
+            assert f"COALESCE(${3 if col == 'cap_tokens' else 4}, {col})" in norm, col
+        assert "NULLIF($5, '')::text" in norm, "要能区分「没带这个字段」与「要清掉它」"
+
+
 # ── runtime 的介入点 ────────────────────────────────────────────────────
 
 
@@ -538,9 +656,12 @@ class TestRunnerWiring:
         store_root: str,
         budget_tokens: int = 200_000,
         ledger: _StubLedger | None = None,
+        error: str = "",
+        ticket_id: str = "tk_1",
     ) -> dict[str, Any]:
         import asyncio
 
+        from app.agent import interactions as interactions_mod
         from app.agent import runtime as runtime_mod
         from app.agent.subagent_runner import SubAgentRunner
         from app.subagent.budget import TaskBudget
@@ -548,6 +669,13 @@ class TestRunnerWiring:
         stub = ledger or _StubLedger()
         monkeypatch.setattr(ledger_mod, "get_line_ledger", lambda: stub)
         seen: dict[str, Any] = {}
+        tickets: list[dict[str, Any]] = []
+
+        async def _create(**kwargs: Any) -> str:
+            tickets.append(kwargs)
+            return ticket_id
+
+        monkeypatch.setattr(interactions_mod, "create", _create)
 
         class _Store:
             available = True
@@ -570,9 +698,12 @@ class TestRunnerWiring:
         async def _one_step_run(self: Any, task: Any):  # noqa: ANN001
             seen["subagent_line"] = getattr(task, "subagent_line", "")
             seen["task_id"] = task.id
-            yield runtime_mod.AgentEvent(
-                type="text", content="done", input_tokens=10, output_tokens=5
-            )
+            if error:
+                yield runtime_mod.AgentEvent(type="error", error=error)
+            else:
+                yield runtime_mod.AgentEvent(
+                    type="text", content="done", input_tokens=10, output_tokens=5
+                )
 
         monkeypatch.setattr(runtime_mod.AgentRuntime, "run", _one_step_run)
         runner = SubAgentRunner(
@@ -587,6 +718,7 @@ class TestRunnerWiring:
             runner.run("跑一件事", profile_ref="", mode="normal", max_turns=1), timeout=10
         )
         seen["ledger_calls"] = list(stub.calls)
+        seen["tickets"] = tickets
         return seen
 
     async def test_line_root_reaches_the_runtime_and_is_reserved(self, monkeypatch) -> None:
@@ -670,6 +802,112 @@ class TestRunnerWiring:
 
         seen = await self._drive(monkeypatch, store_root="rs_root", ledger=_Boom())
         assert seen["subagent_line"] == "rs_root"  # 线根照样传下去了，只是没预留成
+
+    # ── M15c：越界 ⇒ 暂停这条线 + 挂出一张提额待办 ──
+
+    def _state(self, *, cap: int = 1000, settled: int = 1000) -> LineState:
+        return LineState(
+            root="rs_root",
+            tenant_id="t1",
+            cap=cap,
+            settled=settled,
+            reserved=0,
+            paused=True,
+            pause_reason=ledger_mod.PAUSE_REASON_BUDGET,
+        )
+
+    async def test_line_trip_pauses_the_line_and_files_one_ticket(self, monkeypatch) -> None:
+        """闭环入口：越界那一段照常**失败收尾**（子 Agent 没有可接手挂起的现场），但这条线被
+        暂停、并挂出一张用户答得上的票。"""
+        stub = _StubLedger(state_obj=self._state())
+        seen = await self._drive(
+            monkeypatch, store_root="rs_root", ledger=stub, error="budget_exceeded:line_tokens"
+        )
+        assert [c for c in seen["ledger_calls"] if c[0] == "pause"] == [("pause", "rs_root", "t1")]
+        # 票上的"已花"要包含刚刚落库的这一段 ⇒ 暂停/挂票必须排在 settle 之后，
+        # 否则用户按一个偏小的数字提额，下一段立刻又被拦下。
+        kinds = [c[0] for c in seen["ledger_calls"]]
+        assert kinds.index("settle") < kinds.index("pause")
+        assert seen["finish_kwargs"]["status"] == "failed", "越界是失败收尾，不是挂起"
+
+        (ticket,) = seen["tickets"]
+        assert ticket["kind"] == "budget"
+        # 票落在**父会话**：合成会话 `sub:<父>:<run>` 没有待办列表 —— 用户看不见就等于线永远停着
+        assert ticket["session_id"] == "s-main"
+        assert (ticket["tenant_id"], ticket["user_id"]) == ("t1", "u1")
+        # 合成 tool_call_id：一条线只有一张未决提额票（靠 ux_pending_interactions_open 去重）
+        assert ticket["tool_call_id"] == "budget:rs_root"
+        req = ticket["request"]
+        assert req["root_run_id"] == "rs_root" and req["axis"] == "line_tokens"
+        assert (req["cap_tokens"], req["settled_tokens"], req["reserved_tokens"]) == (
+            1000,
+            1000,
+            0,
+        )
+        assert req["suggested_cap_tokens"] == 2000, "建议值只是预填的起点，不是决定"
+        assert "1,000" in req["question"]
+
+    async def test_paused_axis_also_files_a_ticket(self, monkeypatch) -> None:
+        """`line_paused` 也要带出票 —— 线停着却没有待办，就是一个没有任何出口的状态。
+
+        这条同时覆盖"读不到数字"（`state` 返回 None）时的取值：上限退成 0，建议值用默认的两倍，
+        而不是留一个空框让人猜量级。
+        """
+        seen = await self._drive(
+            monkeypatch, store_root="rs_root", error="budget_exceeded:line_paused"
+        )
+        (ticket,) = seen["tickets"]
+        assert ticket["request"]["axis"] == "line_paused"
+        assert ticket["request"]["suggested_cap_tokens"] == (
+            ledger_mod.DEFAULT_LINE_MAX_TOKENS * 2
+        )
+
+    async def test_other_failures_do_not_pause_the_line(self, monkeypatch) -> None:
+        """per-run 预算越界与"这条线花光了"是两件事：前者不该停线、也不该挂提额票。"""
+        seen = await self._drive(
+            monkeypatch, store_root="rs_root", error="budget_exceeded:tokens"
+        )
+        assert seen["tickets"] == []
+        assert [c for c in seen["ledger_calls"] if c[0] in ("pause", "state")] == []
+
+    async def test_no_line_means_no_ticket(self, monkeypatch) -> None:
+        seen = await self._drive(
+            monkeypatch, store_root="", error="budget_exceeded:line_tokens"
+        )
+        assert seen["tickets"] == [] and seen["ledger_calls"] == []
+
+    async def test_pause_failure_still_files_the_ticket(self, monkeypatch) -> None:
+        """暂停写不进去（多半是迁移 0022 没跑）时**仍然挂票**：宁可用户看见一张提额待办
+        再去查为什么没生效，也不要一条既没停、也没人知道的线。"""
+        seen = await self._drive(
+            monkeypatch,
+            store_root="rs_root",
+            ledger=_StubLedger(pause_ok=False),
+            error="budget_exceeded:line_tokens",
+        )
+        assert len(seen["tickets"]) == 1
+
+    async def test_ticket_write_failure_does_not_break_the_run(self, monkeypatch) -> None:
+        """挂票失败不改这一段已经定下的终态，也不抛 —— 但它是运维事故（线停着却没人能提额）。"""
+        seen = await self._drive(
+            monkeypatch,
+            store_root="rs_root",
+            error="budget_exceeded:line_tokens",
+            ticket_id="",
+        )
+        assert [c for c in seen["ledger_calls"] if c[0] == "pause"]
+        assert seen["finish_kwargs"]["status"] == "failed"
+
+    async def test_pause_blowup_does_not_break_the_run(self, monkeypatch) -> None:
+        class _Boom(_StubLedger):
+            async def pause_for_budget(self, *a: Any, **k: Any) -> bool:
+                raise RuntimeError("pg down")
+
+        seen = await self._drive(
+            monkeypatch, store_root="rs_root", ledger=_Boom(), error="budget_exceeded:line_tokens"
+        )
+        assert seen["tickets"] == []
+        assert seen["finish_kwargs"]["status"] == "failed"
 
 
 # ── 迁移 0022 的契约（口径写进 DDL，别在下一轮被顺手改掉）───────────────
@@ -1023,3 +1261,67 @@ class TestRealPostgresLedger:
         await led.settle(root, handle, 0)
         state2 = await led.state(root, "t1", exclude_run_id="sub_me")
         assert state2 is not None and state2.reserved == 0
+
+    # ── M15c 写侧：真库里的 ensure + 增量 UPDATE ──
+
+    async def test_set_control_creates_the_row_for_an_unset_line(self, monkeypatch) -> None:
+        """没被设过的线在表里**没有行** ⇒ 写侧必须先 ensure。少了那一步，UPDATE 命中 0 行、
+        `set_control` 返回 False，而提额 API 会如实报错 —— 用户看到的是"提了却没提上去"。"""
+        from app.db import get_pool
+
+        monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000")
+        root = self._root("ensure")
+        led = await self._ledger()
+        assert await led.pause_for_budget(root, "t1") is True
+        state = await led.state(root, "t1")
+        assert state is not None
+        assert (state.paused, state.pause_reason) == (True, ledger_mod.PAUSE_REASON_BUDGET)
+        assert await led.check(root, "t1", own_tokens=0) == "line_paused"
+        row = await get_pool().fetchrow(
+            "SELECT tenant_id FROM run_lineage_ledger WHERE root_run_id = $1", root
+        )
+        assert row is not None and row["tenant_id"] == "t1"
+
+    async def test_pause_is_idempotent(self) -> None:
+        """每个失败段都会按一次暂停键 ⇒ 重复写必须没有副作用（这条线只该停一次）。"""
+        root = self._root("idemp")
+        led = await self._ledger()
+        assert await led.pause_for_budget(root, "t1") is True
+        assert await led.pause_for_budget(root, "t1") is True
+        assert await led.check(root, "t1") == "line_paused"
+
+    async def test_raise_cap_and_resume_is_one_decision_with_two_halves(self, monkeypatch) -> None:
+        """提额同时清上限、清暂停、清原因并记下是谁抬的 —— 少一半就是"用户答了却没反应"。"""
+        from app.db import get_pool
+
+        monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000")
+        root = self._root("raise")
+        await self._seed_run(root, tokens=900)
+        led = await self._ledger()
+        assert await led.pause_for_budget(root, "t1") is True
+        assert await led.check(root, "t1", own_tokens=100) == "line_paused"
+
+        assert await led.raise_cap_and_resume(
+            root, "t1", cap_tokens=5000, updated_by="u1"
+        ) is True
+        state = await led.state(root, "t1")
+        assert state is not None
+        assert (state.cap, state.paused, state.pause_reason) == (5000, False, "")
+        assert await led.check(root, "t1", own_tokens=100) == ""
+        row = await get_pool().fetchrow(
+            "SELECT updated_by FROM run_lineage_ledger WHERE root_run_id = $1", root
+        )
+        assert row["updated_by"] == "u1", "上限是谁抬的，出事时要能问到人"
+
+    async def test_control_write_does_not_cross_tenants(self) -> None:
+        """主键只有 `root_run_id`，那条 UPDATE 的租户条件是这条写路径唯一的护栏；
+        `ensure` 用 DO NOTHING，也不会替别人的线建一行。"""
+        root = self._root("crossw")
+        await self._set_ledger(root, tenant="t1", cap=1000)
+        led = await self._ledger()
+        assert (
+            await led.raise_cap_and_resume(root, "t2", cap_tokens=9_999_999, updated_by="u2")
+            is False
+        )
+        state = await led.state(root, "t1")
+        assert state is not None and state.cap == 1000, "别租户的线一个字都没被改"

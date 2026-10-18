@@ -20,7 +20,7 @@ from typing import Any
 import pytest
 
 from app.agent import interactions
-from app.agent.interactions import KIND_APPROVAL, KIND_QUESTION
+from app.agent.interactions import KIND_APPROVAL, KIND_BUDGET, KIND_QUESTION
 from app.agent.runtime_types import ApprovalDecision
 from app.api import interactions as api_mod
 
@@ -39,16 +39,58 @@ def _approval_row(**over: Any) -> dict[str, Any]:
     return row
 
 
-class FakeStore:
-    """替掉 `interactions` 的三个读入口，并记录 `resolve` 收到了什么载荷。"""
+def _budget_row(**over: Any) -> dict[str, Any]:
+    row = {
+        "id": "b1",
+        "kind": KIND_BUDGET,
+        "status": interactions.STATUS_PENDING,
+        "session_id": "s-main",
+        "tool_name": "subagent",
+        "args_hash": "deadbeef",
+        "request": {
+            "root_run_id": "rs_root",
+            "axis": "line_tokens",
+            "cap_tokens": 1000,
+            "settled_tokens": 1000,
+            "suggested_cap_tokens": 2000,
+        },
+    }
+    row.update(over)
+    return row
 
-    def __init__(self, *, row: dict[str, Any] | None = None, resolved: dict[str, Any] | None = None,
-                 open_rows: list[dict[str, Any]] | None = None) -> None:
+
+class FakeLedger:
+    """替掉线账的写侧：提额是这条分支唯一真正的副作用，必须能断言它收到了什么。"""
+
+    def __init__(self, *, ok: bool = True) -> None:
+        self.ok = ok
+        self.calls: list[tuple[Any, ...]] = []
+
+    async def raise_cap_and_resume(
+        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+    ) -> bool:
+        self.calls.append((root, tenant_id, cap_tokens, updated_by))
+        return self.ok
+
+
+class FakeStore:
+    """替掉 `interactions` 的读写入口，并记录 `resolve` / `settle` 收到了什么载荷。"""
+
+    def __init__(
+        self,
+        *,
+        row: dict[str, Any] | None = None,
+        resolved: dict[str, Any] | None = None,
+        open_rows: list[dict[str, Any]] | None = None,
+        settle_ok: bool = True,
+    ) -> None:
         self.row = row
         self.resolved = resolved
         self.open_rows = open_rows if open_rows is not None else []
+        self.settle_ok = settle_ok
         self.peek_calls: list[dict[str, str]] = []
         self.resolve_calls: list[dict[str, Any]] = []
+        self.settle_calls: list[dict[str, Any]] = []
         self.list_calls: list[dict[str, Any]] = []
 
     async def peek(self, *, interaction_id: str, tenant_id: str, user_id: str) -> dict[str, Any] | None:
@@ -59,6 +101,10 @@ class FakeStore:
         self.resolve_calls.append(kw)
         return self.resolved
 
+    async def settle(self, **kw: Any) -> bool:
+        self.settle_calls.append(kw)
+        return self.settle_ok
+
     async def list_open(self, **kw: Any) -> list[dict[str, Any]]:
         self.list_calls.append(kw)
         return self.open_rows
@@ -66,12 +112,24 @@ class FakeStore:
 
 @pytest.fixture
 def store(monkeypatch):
-    """把 `interactions` 的三个读入口换成假存储，返回那个可断言的替身。"""
+    """把 `interactions` 的读写入口换成假存储，返回那个可断言的替身。"""
 
     def use(fake: FakeStore) -> FakeStore:
         monkeypatch.setattr(interactions, "peek", fake.peek)
         monkeypatch.setattr(interactions, "resolve", fake.resolve)
+        monkeypatch.setattr(interactions, "settle", fake.settle)
         monkeypatch.setattr(interactions, "list_open", fake.list_open)
+        return fake
+
+    return use
+
+
+@pytest.fixture
+def ledger(monkeypatch):
+    from app.subagent import line_ledger as ledger_mod
+
+    def use(fake: FakeLedger) -> FakeLedger:
+        monkeypatch.setattr(ledger_mod, "get_line_ledger", lambda: fake)
         return fake
 
     return use
@@ -270,6 +328,89 @@ async def test_identity_may_come_from_the_body(store):  # noqa: ARG001
     missing = await _resolve(body={"session_id": "s1", "response": {"decision": "approve"}},
                              tenant_id="", user_id="")
     assert missing["error_code"] == "unauthorized"
+
+
+# ── M15c：提额票（`kind=budget`）走的是写控制态，不是一张待取的票 ──
+
+
+async def test_budget_reply_raises_the_cap_and_closes_the_ticket(store, ledger):  # noqa: ARG001
+    fake = store(FakeStore(row=_budget_row()))
+    led = ledger(FakeLedger())
+    out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
+
+    assert led.calls == [("rs_root", "t1", 5000, "u1")], "上限与清暂停必须一次写完成"
+    assert out["ok"] is True and out["data"]["status"] == interactions.STATUS_CONSUMED
+    assert fake.settle_calls[0]["decision"] == {"cap_tokens": 5000, "root_run_id": "rs_root"}
+    # 关掉票时带上身份：`settle` 本身可以按 id 关任何人的票，这条分支不行
+    assert fake.settle_calls[0]["tenant_id"] == "t1"
+    assert fake.settle_calls[0]["user_id"] == "u1"
+    # **不走 `resolve`**：停在 `answered` 的票会永久占住 `ux_pending_interactions_open` 的名额，
+    # 下次再耗尽时新票创建不出来 ⇒ "线停了却没有待办"。
+    assert fake.resolve_calls == []
+
+
+@pytest.mark.parametrize(
+    "response",
+    [
+        {"cap_tokens": "5000"},
+        {"cap_tokens": True},
+        {"cap_tokens": 1.5},
+        {"cap_tokens": 0},
+        {"cap_tokens": -1},
+        {"cap_tokens": 10**12 + 1},
+    ],
+)
+async def test_budget_shape_is_checked_before_any_write(store, ledger, response):  # noqa: ARG001
+    """写错了不该"先存着"：那等于告诉用户提了额，而下一条段照样被拦。"""
+    fake = store(FakeStore(row=_budget_row()))
+    led = ledger(FakeLedger())
+    out = await _resolve(body={"session_id": "s-main", "response": response})
+
+    assert out["error_code"] == "invalid_decision", response
+    assert led.calls == [] and fake.settle_calls == []
+
+
+async def test_budget_write_failure_keeps_the_ticket_open(store, ledger):  # noqa: ARG001
+    """提额没写进库 ⇒ 如实报错、票保持 `pending`。返回 ok 是说谎：用户会以为已经提上去了。"""
+    fake = store(FakeStore(row=_budget_row()))
+    led = ledger(FakeLedger(ok=False))
+    out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
+
+    assert out["ok"] is False and out["error_code"] == "storage_error"
+    assert len(led.calls) == 1 and fake.settle_calls == []
+
+
+async def test_budget_reply_is_ok_even_when_the_ticket_was_already_closed(store, ledger):  # noqa: ARG001
+    """关票失败（被巡检抢先转成 `expired`）不推翻已经生效的提额 —— 告诉他失败只会让他再点一次。"""
+    fake = store(FakeStore(row=_budget_row(), settle_ok=False))
+    ledger(FakeLedger())
+    out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
+
+    assert out["ok"] is True
+    assert len(fake.settle_calls) == 1, "确实试过关票，只是没关掉"
+    assert out["data"]["status"] == interactions.STATUS_PENDING, "如实回显票此刻的状态"
+
+
+async def test_budget_needs_a_tenant(store, ledger):  # noqa: ARG001
+    """线账按租户归属过滤：没有 tenant_id 就没法安全地写那一行 ⇒ 宁可拒绝。"""
+    fake = store(FakeStore(row=_budget_row()))
+    led = ledger(FakeLedger())
+    out = await _resolve(
+        body={"session_id": "s-main", "response": {"cap_tokens": 5000}}, tenant_id=""
+    )
+
+    assert out["error_code"] == "invalid_request"
+    assert led.calls == [] and fake.settle_calls == []
+
+
+async def test_budget_ticket_without_a_line_root_is_a_storage_error(store, ledger):  # noqa: ARG001
+    """票上的 `root_run_id` 是写入目标；缺了它 = 写入方与读取方对同一张表的理解漂移了。"""
+    fake = store(FakeStore(row=_budget_row(request={"axis": "line_tokens"})))
+    led = ledger(FakeLedger())
+    out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
+
+    assert out["error_code"] == "storage_error"
+    assert led.calls == [] and fake.settle_calls == []
 
 
 # ── 路由确实挂上了（网关按字面路径代理） ──

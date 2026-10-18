@@ -30,10 +30,25 @@ from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: 人工介入类型。两类形状相同（一个问题 + 一个答复），差别只在答复载荷，因此共用一张表。
+#: 人工介入类型。前两类形状相同（一个问题 + 一个答复），差别只在答复载荷，因此共用一张表。
 KIND_APPROVAL = "approval"
 KIND_QUESTION = "question"
-VALID_KINDS: frozenset[str] = frozenset({KIND_APPROVAL, KIND_QUESTION})
+#: M15c：一条任务线花到上限 ⇒ 线被暂停，并请人来决定"提到多少"。
+#:
+#: 它与前两类**不是一回事**，共用这张表只共用"看得见、答得上"这半条通道：
+#:
+#: * approval/question 的答复是一张**授权票**，由续跑的那一轮经 `consume_grant` 取走；
+#: * budget 没有"续跑的那一轮"可以接手 —— 越界的那一段已经按失败收尾（子 Agent 跑在合成会话
+#:   `sub:<父>:<run>` 里、没有 `agent_runs` 行，`_register_interaction` 因此不会为它挂起）。
+#:   答复它等于**写一次控制态**（提上限 + 清暂停），写完这条线之后的每个新段就自己放行；
+#:   所以它走 `settle`（一次性生效并关掉），故意不走 `resolve`：停在 `answered` 的票会一直占住
+#:   `ux_pending_interactions_open` 的名额，下次再耗尽时新票就**创建不出来**了 —— 用户看到的是
+#:   "线停了却没有待办"。
+#: * 不答复 = 不提额 = 线继续停着，票保持 `pending`（24h 后过期；过期后再撞一次闸门会重新生成
+#:   一张，因为 `line_paused` 也会带出票）。这里**没有 decline**：拒绝提额与"还没决定"在效果上
+#:   完全相同（都该继续停），做一个会把票关掉却不改变任何事的按钮只会制造"我处理过了"的错觉。
+KIND_BUDGET = "budget"
+VALID_KINDS: frozenset[str] = frozenset({KIND_APPROVAL, KIND_QUESTION, KIND_BUDGET})
 
 STATUS_PENDING = "pending"
 STATUS_ANSWERED = "answered"
@@ -106,6 +121,11 @@ async def create(
     kind 会写进一条**永远匹配不上**的授权（`consume_grant` 按 kind 认票），等于静默丢失一次
     人工介入。
 
+    **每一条返回空串的路径都要留下可见痕迹**（warn/error 日志 + `interaction_create_failed_total`）：
+    approval/question 失败只是"回落 M6 的即时拒绝"，而 M15c 的 budget 票失败意味着"一条被暂停的线
+    没有任何人能看见" —— 线停着、待办为空，运维只会看到子 Agent 反复失败。返回值仍然是空串
+    （改成异常会把一条增强路径变成能打断对话的东西），但**不再静默**。
+
     `ON CONFLICT … DO UPDATE … WHERE status = 'pending'` 两个方向都要：
 
     * 同一个 ``tool_call_id`` 被**重新问一次**（模型换了说法、参数不变）：复用那一行并刷新
@@ -114,15 +134,30 @@ async def create(
       覆盖 —— **已收到的答复不能被一次重新提问擦掉**。此时 `RETURNING` 无行 ⇒ 返回空串，
       调用方按"没有持久通道"处理（宁可拒绝对待答复的那一次执行，也不猜用户想要什么）。
     """
+    from app.observability.metrics import INTERACTION_CREATE_FAILED
+
+    def _fail(reason: str, msg: str, *args: Any) -> str:
+        INTERACTION_CREATE_FAILED.labels(reason=reason).inc()
+        logger.warning(msg, *args)
+        return ""
+
     if kind not in VALID_KINDS:
-        logger.warning("pending interaction rejected: unknown kind=%r", kind)
+        # 拼错的 kind 是**写侧的 bug**，不是运行时状况：按 error 记，别让它混在告警洪水里
+        INTERACTION_CREATE_FAILED.labels(reason="unknown_kind").inc()
+        logger.error("pending interaction rejected: unknown kind=%r", kind)
         return ""
     if not session_id or not tool_call_id:
-        return ""
+        return _fail(
+            "missing_keys",
+            "pending interaction rejected: session_id/tool_call_id required (kind=%s)",
+            kind,
+        )
     try:
         pool = _pool()
         if pool is None:
-            return ""
+            return _fail(
+                "no_pool", "pending interaction create skipped: no PostgreSQL pool (kind=%s)", kind
+            )
         row = await pool.fetchrow(
             """
             INSERT INTO pending_interactions
@@ -159,10 +194,26 @@ async def create(
             # 传 int 会直接报类型错 —— 这里必须是 float。
             float(max(60, int(ttl_seconds or TTL_SECONDS))),
         )
-        return str(row["id"]) if row is not None else ""
+        if row is None:
+            # 唯一索引命中、而那一行已是 `answered`：票只有一张，不覆盖（见上面 docstring）。
+            # 对 budget 这类"一次性"的票，这条路径意味着**已经有一张答过却没生效的票**占着名额 ——
+            # 所以它必须可见，否则暂停的线从此没人能再提额。
+            return _fail(
+                "conflict_answered",
+                "pending interaction not written: an answered ticket already holds this slot "
+                "(session=%s kind=%s tool_call_id=%s)",
+                session_id,
+                kind,
+                tool_call_id,
+            )
+        return str(row["id"])
     except Exception as exc:  # noqa: BLE001 — 持久通道失败不改变对话行为（回落 M6 的即时拒绝）
-        logger.warning("pending interaction create failed (session=%s): %s", session_id, exc)
-        return ""
+        return _fail(
+            "storage_error",
+            "pending interaction create failed (session=%s): %s",
+            session_id,
+            exc,
+        )
 
 
 async def resolve(
@@ -322,7 +373,13 @@ async def consume_grant(
 
 
 async def settle(
-    *, interaction_id: str, decision: dict[str, Any], reason: str = "", decided_by: str = ""
+    *,
+    interaction_id: str,
+    decision: dict[str, Any],
+    reason: str = "",
+    decided_by: str = "",
+    tenant_id: str = "",
+    user_id: str = "",
 ) -> bool:
     """**实时通道**给出了答复：把现场一并记上答复并直接关掉（`pending`/`answered` → `consumed`）。
 
@@ -337,6 +394,11 @@ async def settle(
 
     已是 `consumed` / `expired` 的行不会被改写（返回 False）：一张已经被取走的票不该因为
     一次迟到的实时答复而复活。
+
+    ``tenant_id`` / ``user_id`` 是 M15c 加的**可选**归属谓词（空串 = 不按它过滤，与既有调用方
+    逐字等价）：`resolve` 一直是按"这张票是不是这个人的"来改状态的，而 budget 的答复要先写
+    `run_lineage_ledger` 再关票 —— 一条"按 id 就能关任何人的票"的通道会让那道写也变成可被
+    他人触发的前置步骤。HTTP 侧因此两者都传。
     """
     if not interaction_id:
         return False
@@ -354,11 +416,15 @@ async def settle(
                    updated_at = now()
              WHERE id = $1
                AND status IN ('pending', 'answered')
+               AND ($5 = '' OR tenant_id = $5)
+               AND ($6 = '' OR user_id = $6)
             """,
             interaction_id,
             json.dumps(decision or {}, ensure_ascii=False),
             (reason or "")[:2000],
             decided_by or "",
+            tenant_id or "",
+            user_id or "",
         )
     except Exception as exc:  # noqa: BLE001 — 收尾失败不影响这一轮已经拿到的答复
         logger.warning("pending interaction settle failed (id=%s): %s", interaction_id, exc)
