@@ -18,6 +18,7 @@
 状态机：`running` / `checkpointed` / `resuming` / `completed` / `failed` / `cancelled` / `abandoned`。
 其中 `running → checkpointed` 的判定**不在引擎内部**（故障进程无法自证死亡），由接管方依据
 run 租约过期 + 会话运行锁可获取来判定（方案 01 §3.1）。
+第八个取值 `awaiting_input`（M7，见 `load_awaiting` / `claim_awaiting`）**刻意不属于活跃集合**。
 """
 
 from __future__ import annotations
@@ -44,6 +45,21 @@ STATUS_COMPLETED = "completed"
 STATUS_FAILED = "failed"
 STATUS_CANCELLED = "cancelled"
 STATUS_ABANDONED = "abandoned"
+
+#: M7（人工介入闭环）：这个 run **停在"等一个人回答"**上，不是崩溃、也不是结束。
+#:
+#: **刻意不进 `ACTIVE_STATUSES`**，三个后果都是要的：
+#:
+#: * `ux_agent_runs_session_active` 的谓词不含它 ⇒ 会话被**释放**，用户可以接着聊别的，
+#:   也可以永远不回来（"等人"不该把整个会话锁住）；
+#: * reconciler 的扫描只认 `running` / `checkpointed` ⇒ 巡检**在定义上**不可能接管一个
+#:   等人的回合 —— 不会出现"机器代替用户点了批准"；
+#: * `load()` / `claim()` 的活跃集合过滤也不含它 ⇒ 一个"早已没人等"的陈旧挂起快照不会
+#:   被后面某条无关消息复活（那正是批 3 加状态过滤要防的事）。
+#:
+#: 读取它需要走 `load_awaiting` + `claim_awaiting`：**读与交还同一个动作**，读完就变成
+#: `resuming`（此后按普通活跃 run 处理），因此不存在"第二次读到同一份挂起现场"。
+STATUS_AWAITING_INPUT = "awaiting_input"
 
 #: 活跃状态 —— 与唯一索引 `ux_agent_runs_session_active` 的谓词一致
 ACTIVE_STATUSES: tuple[str, ...] = (STATUS_RUNNING, STATUS_CHECKPOINTED, STATUS_RESUMING)
@@ -341,6 +357,80 @@ async def claim(
         return _rowcount(result) > 0
     except Exception as exc:  # noqa: BLE001
         logger.warning("checkpoint claim failed (session=%s): %s", session_id, exc)
+        return False
+
+
+async def load_awaiting(
+    *, tenant_id: str, session_id: str
+) -> dict[str, Any] | None:
+    """M7：读那个"正在等人"的 run 的现场（`{checkpoint, run_token}`）；没有则 None。
+
+    `load()` 只认活跃状态，因此挂起中的现场需要一个专门的读入口 —— 而它**必须**与
+    `claim_awaiting` 配对使用：只读不交还会留下一个"谁都不认领、但下次又能被读到"的现场。
+    """
+    if not session_id:
+        return None
+    try:
+        pool = _pool()
+        if pool is None:
+            return None
+        row = await pool.fetchrow(
+            """
+            SELECT checkpoint, run_token
+              FROM agent_runs
+             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+               AND status = 'awaiting_input'
+             ORDER BY updated_at DESC
+             LIMIT 1
+            """,
+            session_id,
+            tenant_id or "",
+        )
+        if row is None or row["checkpoint"] is None:
+            return None
+        raw = row["checkpoint"]
+        parsed = json.loads(raw) if isinstance(raw, str) else dict(raw)
+        if not isinstance(parsed, dict):
+            return None
+        return {"checkpoint": cast(RunCheckpoint, parsed), "run_token": str(row["run_token"] or "")}
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("awaiting-input load failed (session=%s): %s", session_id, exc)
+        return None
+
+
+async def claim_awaiting(
+    *, tenant_id: str, session_id: str, new_run_token: str
+) -> bool:
+    """把挂起的 run **交还给即将续跑的这一轮**（`awaiting_input → resuming`）。
+
+    为什么在这里做 CAS 而不是让调用方"先读后改"：同一会话的挂起现场只该被**一个**回合接手。
+    条件更新只有第一个能命中；其余 0 行。
+
+    它同时是**防脑裂的兜底**：`resuming` 属于活跃集合，若此时会话上已有另一个活跃行
+    （用户一边等批准、一边又开了新回合且锁失效了），这条 UPDATE 会撞
+    `ux_agent_runs_session_active` ⇒ 抛异常 ⇒ 返回 False ⇒ 调用方按"没能续跑"走普通路径。
+    也就是说：**宁可重来一遍上下文，也不会让两个 run 共用一份挂起现场。**
+    """
+    if not session_id or not new_run_token:
+        return False
+    try:
+        pool = _pool()
+        if pool is None:
+            return False
+        result = await pool.execute(
+            """
+            UPDATE agent_runs
+               SET status = 'resuming', run_token = $3, updated_at = now()
+             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+               AND status = 'awaiting_input'
+            """,
+            session_id,
+            tenant_id or "",
+            new_run_token,
+        )
+        return _rowcount(result) > 0
+    except Exception as exc:  # noqa: BLE001 — 唯一索引冲突是**预期**结果，不是故障
+        logger.info("awaiting-input claim rejected (session=%s): %s", session_id, str(exc)[:160])
         return False
 
 

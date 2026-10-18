@@ -1,0 +1,355 @@
+"""M7 人工介入闭环：审批 / `ask_user` 的**落库现场**（1A）。
+
+补的是 §5.1 里最后一条"正确性=可见性"的缺口：在 M6 之前，"这一步需要你确认"只活在
+发起它的那个进程内存里（`AgentRuntime._pending_approvals` 的 Future + 一条 Redis 决策键）。
+进程一死，用户既看不到"在等你"，也看不到"等的是哪一步"；M6 让无人值守回合不再空等，
+但看到的仍然只是一句拒绝，不是一个可以回答的问题。
+
+本模块是 `pending_interactions` 表（迁移 ``0018``）的唯一写入方，语义三条：
+
+1. **状态机单向**：`pending → answered → consumed`，旁路只有 `expired`。
+   `answered → consumed` 是**一次原子 UPDATE**（``consume_grant``）：批准只能被一个回合取走，
+   两个回合并列续跑时第二个拿到 None ⇒ 它会重新问，而不是重复执行。
+2. **认票认参数，不认 id**：续跑的那一轮是新 run，模型完全可能把同一个调用排成新的
+   ``tool_call_id``。因此授权绑定 ``(session_id, kind, tool_name, args_hash)`` ——
+   **参数变了就是另一件事**，必须重新确认（这是 C5 二次校验已有的原则，这里只是把它跨进程化）。
+3. **一切失败都回落 M6**：写不进去 / 读不出来时，调用方退回"无人值守 ⇒ 即时拒绝"，
+   **不会**出现"没人批准却执行了"。持久通道是增强路径，不是许可来源。
+
+Redis 决策键（`approval:{tc_id}` / `answer:{tc_id}`）继续负责它擅长的事：**同一次运行内**
+跨副本把决定送到正在空等的那个协程。两者不互相替换 —— 一个解决"进程还活着但请求落到了
+另一个副本"，一个解决"进程没了 / 用户几小时后才看到"。
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+import uuid
+from typing import Any
+
+logger = logging.getLogger(__name__)
+
+#: 人工介入类型。两类形状相同（一个问题 + 一个答复），差别只在答复载荷，因此共用一张表。
+KIND_APPROVAL = "approval"
+KIND_QUESTION = "question"
+VALID_KINDS: frozenset[str] = frozenset({KIND_APPROVAL, KIND_QUESTION})
+
+STATUS_PENDING = "pending"
+STATUS_ANSWERED = "answered"
+STATUS_CONSUMED = "consumed"
+STATUS_EXPIRED = "expired"
+
+#: 未完成（仍占用"同一会话同一调用只有一个待确认"这条唯一约束）的状态
+OPEN_STATUSES: tuple[str, ...] = (STATUS_PENDING, STATUS_ANSWERED)
+
+#: 现场有效期（秒）：与 `agent_runs` 的冷恢复窗口（``COLD_RESUME_WINDOW_SECONDS``）对齐。
+#: 超出它，快照本身已判 `abandoned` —— 留着一条"可以批准"的票只会让用户批准一件
+#: 早已无法续跑的事。到期不是删除（审计要留痕），而是转成 `expired` 这个**可见**的状态。
+TTL_SECONDS = 24 * 3600
+
+
+def _pool() -> Any:
+    from app.db import get_pool
+
+    return get_pool()
+
+
+def _rowcount(result: Any) -> int:
+    """从 asyncpg 的 `UPDATE n` / `INSERT 0 n` 状态串里取行数。"""
+    parts = str(result or "").split()
+    if len(parts) >= 2 and parts[0] in ("UPDATE", "DELETE"):
+        try:
+            return int(parts[1])
+        except ValueError:
+            return 0
+    if len(parts) == 3 and parts[0] == "INSERT":
+        try:
+            return int(parts[2])
+        except ValueError:
+            return 0
+    return 0
+
+
+def _decode(raw: Any) -> dict[str, Any]:
+    """jsonb 列可能是 str（文本协议）也可能已是 dict（二进制协议）—— 统一成 dict。"""
+    if raw is None:
+        return {}
+    if isinstance(raw, (str, bytes, bytearray)):
+        try:
+            parsed = json.loads(bytes(raw).decode() if isinstance(raw, (bytes, bytearray)) else raw)
+        except (json.JSONDecodeError, TypeError, UnicodeDecodeError):
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    if isinstance(raw, dict):
+        return dict(raw)
+    return {}
+
+
+async def create(
+    *,
+    tenant_id: str,
+    user_id: str,
+    session_id: str,
+    kind: str,
+    tool_call_id: str,
+    tool_name: str = "",
+    args_hash: str = "",
+    request: dict[str, Any] | None = None,
+    run_token: str = "",
+    turn_id: str = "",
+    ttl_seconds: int = TTL_SECONDS,
+) -> str:
+    """登记一次"正在等人"，返回行 id；**写不进去返回空串**（调用方回落 M6）。
+
+    `kind` 不在 `VALID_KINDS` 里时直接返回空串：这不是"参数校验的礼貌"，而是因为一个拼错的
+    kind 会写进一条**永远匹配不上**的授权（`consume_grant` 按 kind 认票），等于静默丢失一次
+    人工介入。
+
+    `ON CONFLICT … DO UPDATE … WHERE status = 'pending'` 两个方向都要：
+
+    * 同一个 ``tool_call_id`` 被**重新问一次**（模型换了说法、参数不变）：复用那一行并刷新
+      展示内容，否则唯一索引会让第二次询问**静默失败**；
+    * 但那一行若已是 `answered`（用户答了、还没被回合取走）：`WHERE status = 'pending'` 挡住
+      覆盖 —— **已收到的答复不能被一次重新提问擦掉**。此时 `RETURNING` 无行 ⇒ 返回空串，
+      调用方按"没有持久通道"处理（宁可拒绝对待答复的那一次执行，也不猜用户想要什么）。
+    """
+    if kind not in VALID_KINDS:
+        logger.warning("pending interaction rejected: unknown kind=%r", kind)
+        return ""
+    if not session_id or not tool_call_id:
+        return ""
+    try:
+        pool = _pool()
+        if pool is None:
+            return ""
+        row = await pool.fetchrow(
+            """
+            INSERT INTO pending_interactions
+                (id, tenant_id, user_id, session_id, run_id, turn_id, kind,
+                 tool_call_id, tool_name, args_hash, request, status,
+                 created_at, updated_at, expires_at)
+            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11::jsonb,
+                    'pending', now(), now(), now() + make_interval(secs => $12::double precision))
+            ON CONFLICT (session_id, tool_call_id)
+                WHERE status IN ('pending', 'answered')
+            DO UPDATE
+               SET request = EXCLUDED.request,
+                   args_hash = EXCLUDED.args_hash,
+                   tool_name = EXCLUDED.tool_name,
+                   run_id = EXCLUDED.run_id,
+                   turn_id = EXCLUDED.turn_id,
+                   updated_at = now(),
+                   expires_at = now() + make_interval(secs => $12::double precision)
+             WHERE pending_interactions.status = 'pending'
+            RETURNING id
+            """,
+            uuid.uuid4().hex,
+            tenant_id or None,
+            user_id or None,
+            session_id,
+            run_token or None,
+            turn_id or None,
+            kind,
+            tool_call_id,
+            tool_name or "",
+            args_hash or "",
+            json.dumps(request or {}, ensure_ascii=False),
+            # `make_interval(secs => double precision)`：asyncpg 会按 float8 绑定该参数，
+            # 传 int 会直接报类型错 —— 这里必须是 float。
+            float(max(60, int(ttl_seconds or TTL_SECONDS))),
+        )
+        return str(row["id"]) if row is not None else ""
+    except Exception as exc:  # noqa: BLE001 — 持久通道失败不改变对话行为（回落 M6 的即时拒绝）
+        logger.warning("pending interaction create failed (session=%s): %s", session_id, exc)
+        return ""
+
+
+async def resolve(
+    *,
+    interaction_id: str,
+    tenant_id: str,
+    user_id: str,
+    decision: dict[str, Any],
+    reason: str = "",
+) -> dict[str, Any] | None:
+    """用户给出答复：`pending → answered`（**原子**，返回该行摘要）。
+
+    返回 None 只有三种情况：不存在 / 不是这个人的 / 已经不 `pending`（已答、已消费、已过期）。
+    调用方把它们一律当作 404/409 处理是**正确**的，不做区分 —— 区分本身会泄漏"别人的介入
+    存在与否"。
+
+    `tenant_id` 与 `user_id` 都进 WHERE：介入是**授权**（"这个参数组合可以执行"），
+    跨用户命中等于把别人的批准拿来给自己的调用放行。
+    """
+    if not interaction_id:
+        return None
+    try:
+        pool = _pool()
+        if pool is None:
+            return None
+        row = await pool.fetchrow(
+            """
+            UPDATE pending_interactions
+               SET status = 'answered',
+                   decision = $4::jsonb,
+                   reason = $5,
+                   decided_by = $3,
+                   updated_at = now()
+             WHERE id = $1
+               AND ($2 = '' OR tenant_id = $2)
+               AND user_id = $3
+               AND status = 'pending'
+               AND expires_at > now()
+            RETURNING id, kind, session_id, run_id, turn_id,
+                      tool_call_id, tool_name, args_hash, request, decision
+            """,
+            interaction_id,
+            tenant_id or "",
+            user_id or "",
+            json.dumps(decision or {}, ensure_ascii=False),
+            (reason or "")[:2000],
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending interaction resolve failed (id=%s): %s", interaction_id, exc)
+        return None
+    if row is None:
+        return None
+    out = {str(k): row[k] for k in row.keys()}
+    out["request"] = _decode(out.get("request"))
+    out["decision"] = _decode(out.get("decision"))
+    return out
+
+
+async def consume_grant(
+    *,
+    tenant_id: str,
+    session_id: str,
+    kind: str,
+    tool_name: str,
+    args_hash: str,
+) -> dict[str, Any] | None:
+    """续跑回合取走一次授权：`answered → consumed`（**单次消费**）。
+
+    命中返回 `{decision, reason, decided_by, id}`；没有可用授权返回 None。
+
+    并发下为什么不需要显式加锁：PG 在 READ COMMITTED 下对被更新的行做 EPQ ——
+    第二个 `UPDATE … WHERE status = 'answered'` 会**等锁后重新判定谓词**，此时行已是
+    `consumed`，于是 0 行命中。所以"批准生效两次"在 SQL 层面就写不出来。
+
+    `args_hash` 为空时**直接不匹配**：空哈希意味着"没有参数指纹"，而"没有指纹的授权"
+    可以匹配这个工具名下的任何一次调用 —— 那是绕过确认，不是人工介入。
+    """
+    if not session_id or not args_hash or kind not in VALID_KINDS:
+        return None
+    try:
+        pool = _pool()
+        if pool is None:
+            return None
+        row = await pool.fetchrow(
+            """
+            UPDATE pending_interactions
+               SET status = 'consumed', updated_at = now()
+             WHERE id = (
+                       SELECT id FROM pending_interactions
+                        WHERE session_id = $1
+                          AND ($2 = '' OR tenant_id = $2)
+                          AND kind = $3
+                          AND tool_name = $4
+                          AND args_hash = $5
+                          AND status = 'answered'
+                          AND expires_at > now()
+                        ORDER BY created_at DESC
+                        LIMIT 1
+                   )
+               AND status = 'answered'
+            RETURNING id, decision, reason, decided_by
+            """,
+            session_id,
+            tenant_id or "",
+            kind,
+            tool_name or "",
+            args_hash,
+        )
+    except Exception as exc:  # noqa: BLE001 — 取不到授权 = 没批过，调用方按"未获批准"处理
+        logger.warning("grant consume failed (session=%s): %s", session_id, exc)
+        return None
+    if row is None:
+        return None
+    out = {str(k): row[k] for k in row.keys()}
+    out["decision"] = _decode(out.get("decision"))
+    return out
+
+
+async def list_open(
+    *, tenant_id: str, user_id: str, session_id: str, limit: int = 20
+) -> list[dict[str, Any]]:
+    """列出该会话"还等着人"的介入（网关列表路由用）。
+
+    只回 `pending` / `answered`：`consumed` / `expired` 已经与用户无关（前者已被回合取走，
+    后者连快照都续不上了），留在列表里只会让用户去批准一件已经不存在的事。
+    """
+    if not session_id:
+        return []
+    try:
+        pool = _pool()
+        if pool is None:
+            return []
+        rows = await pool.fetch(
+            """
+            SELECT id, kind, status, run_id, turn_id, tool_call_id, tool_name,
+                   args_hash, request, decision, reason, created_at, updated_at, expires_at
+              FROM pending_interactions
+             WHERE session_id = $1
+               AND ($2 = '' OR tenant_id = $2)
+               AND user_id = $3
+               AND status IN ('pending', 'answered')
+             ORDER BY created_at ASC
+             LIMIT $4
+            """,
+            session_id,
+            tenant_id or "",
+            user_id or "",
+            max(1, int(limit)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending interaction list failed (session=%s): %s", session_id, exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        item = {str(k): row[k] for k in row.keys()}
+        item["request"] = _decode(item.get("request"))
+        item["decision"] = _decode(item.get("decision"))
+        out.append(item)
+    return out
+
+
+async def expire_stale(*, limit: int = 50) -> int:
+    """把过期仍未完成的转成 `expired`，返回处理条数（reconciler 顺带扫）。
+
+    为什么必须**转状态**而不是查询时用 `expires_at > now()` 过滤掉：一条 `answered` 的票
+    过期后若不落状态，`ux_pending_interactions_open` 会一直为它保留"同一调用只有一个未完成"
+    的名额 ⇒ 该会话重新问同一件事时 `create` 静默失败。过期是个**事件**，得留下痕迹。
+    """
+    try:
+        pool = _pool()
+        if pool is None:
+            return 0
+        result = await pool.execute(
+            """
+            UPDATE pending_interactions
+               SET status = 'expired', updated_at = now()
+             WHERE id IN (
+                       SELECT id FROM pending_interactions
+                        WHERE status IN ('pending', 'answered')
+                          AND expires_at <= now()
+                        ORDER BY expires_at ASC
+                        LIMIT $1
+                   )
+            """,
+            max(1, int(limit)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending interaction expiry sweep failed: %s", exc)
+        return 0
+    return _rowcount(result)
