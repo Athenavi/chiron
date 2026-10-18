@@ -12,6 +12,61 @@ from app.rag.stores.base import VectorStoreBase
 
 logger = logging.getLogger(__name__)
 
+# 表达式里的字段名 → 本表列名。写死映射而不是"任意合法标识符"：调用方按 Milvus
+# 的 schema 命名（doc_id），本表列名不同（document_id），放行标识符只会放行错列。
+# kb_id 不在这里 —— 它由 search() 的 collection 参数承担，见 _translate_filter。
+_FILTER_COLUMNS = {
+    "tenant_id": "tenant_id",
+    "doc_id": "document_id",
+}
+
+# 单个 `field == "字符串字面量"`，值允许双引号或单引号、允许 Milvus 反斜杠转义。
+# 锚定在头部，配合 _translate_filter 的循环把整条表达式逐段吃完。
+_EQ_PREDICATE = re.compile(
+    r"""\s*(?P<field>[A-Za-z_][A-Za-z0-9_]*)\s*==\s*"""
+    r"""(?:(?P<dq>"(?:[^"\\]|\\.)*")|(?P<sq>'(?:[^'\\]|\\.)*'))"""
+)
+_AND = re.compile(r"\s+and\s+", re.IGNORECASE)
+
+
+def _unescape_milvus_string(raw: str) -> str:
+    """去掉 Milvus 表达式里的反斜杠转义，还原调用方本意的那个值。"""
+    return re.sub(r"\\(.)", r"\1", raw[1:-1])
+
+
+def _translate_filter(filter_expr: str) -> list[tuple[str, Any]]:
+    """Milvus 口径的过滤表达式 → [(本表列名, 参数值)]，供参数化下推。
+
+    只承认「`field == "value"` 的合取」这一子集（历史上三个调用方产出的就是这个形状）。
+    翻译不了必须抛，不能退化成空结果：向量腿静默为空会被读成"知识库里没东西"，
+    而真实原因通常是接线或表达式写法错了 —— 这正是本文件此前的故障。
+    """
+    rest = filter_expr
+    out: list[tuple[str, Any]] = []
+    while True:
+        m = _EQ_PREDICATE.match(rest)
+        if not m:
+            raise ValueError(f"无法翻译向量过滤表达式: {filter_expr!r}")
+        field = m.group("field")
+        raw = m.group("dq") if m.group("dq") is not None else m.group("sq")
+        if field != "kb_id":
+            # kb_id 是 Milvus 里对"哪个集合"的复述。本表不按集合分表，
+            # KB 约束由 search(collection=...) 下推；在这里再拼一次只会和它冲突
+            # （RAGBuilder 写入裸 kb_id，HybridRetriever 传 kb_<id 的 - 换 _>），
+            # 两个口径不一致时静默恒空。以 collection 为准。
+            column = _FILTER_COLUMNS.get(field)
+            if column is None:
+                raise ValueError(f"向量过滤字段不受支持: {field!r} (表达式 {filter_expr!r})")
+            out.append((column, _unescape_milvus_string(raw)))
+        rest = rest[m.end():]
+        tail = _AND.match(rest)
+        if not tail:
+            break
+        rest = rest[tail.end():]
+    if rest.strip():
+        raise ValueError(f"向量过滤表达式含不支持的写法: {filter_expr!r}")
+    return out
+
 
 class PgvectorStore(VectorStoreBase):
     """pgvector 向量存储"""
@@ -133,27 +188,31 @@ class PgvectorStore(VectorStoreBase):
 
         # 构建 WHERE 子句
         # 安全：kb_id 通过参数化查询传入，避免注入
-        conditions = [("knowledge_base_id = $1", [collection])]
         params: list[Any] = [collection]
+        conditions = [f"knowledge_base_id = ${len(params)}"]
 
         if filter_expr:
-            # 安全：filter_expr 仅支持简单的 `field == "value"` 模式
-            # 只允许字母数字、下划线、空格、引号、== 和括号
-            # 移除所有可能造成 SQL 注入的字符
-            cleaned = re.sub(r"[^A-Za-z0-9_\"' ==()]", "", filter_expr)
-            # 将内部双引号转义为 SQL 安全形式
-            cleaned = cleaned.replace("'", "''")
-            conditions.append((f"({cleaned})", []))
+            # 此前是把表达式清洗字符后原样拼进 WHERE。Milvus 写法（`kb_id == "x"`）
+            # 在 PG 里既不是合法语法也不是合法列名，查询报错又被下面的 except 吞成
+            # []，故障表现是"混合检索只剩全文腿"而不是异常 —— 现在逐条翻译成
+            # 参数化条件，翻译不了就抛，让接线错误可见。
+            for column, value in _translate_filter(filter_expr):
+                params.append(value)
+                conditions.append(f"{column} = ${len(params)}")
 
-        where_clause = " AND ".join(c[0] for c in conditions)
+        # 占位符必须跟着 params 长度走：过滤条件多一条，向量/阈值/limit 就后移一位
+        n = len(params)
+        vec = f"${n + 1}::vector"
+        score = f"1 - (embedding <=> {vec})"
+        where_clause = " AND ".join(conditions)
         query = f"""
             SELECT id, document_id, chunk_index, content,
-                   1 - (embedding <=> $2::vector) AS score
+                   {score} AS score
             FROM {table}
             WHERE {where_clause}
-              AND 1 - (embedding <=> $2::vector) >= $3
-            ORDER BY embedding <=> $2::vector
-            LIMIT $4
+              AND {score} >= ${n + 2}
+            ORDER BY embedding <=> {vec}
+            LIMIT ${n + 3}
         """
         try:
             async with self._pool.acquire() as conn:

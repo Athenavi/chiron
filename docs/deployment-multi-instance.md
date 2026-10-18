@@ -133,6 +133,12 @@ MCP 连接规模 ≈ **引擎副本数 × 活跃用户数 × 每用户 server �
   （已有共享连接仍可复用）。被跳过的用户/服务器计入 `mcp_pool_rejected_total`，下一轮轮询会重试；
   `0` = 不限制；
 - 观测：`mcp_pool_connections`、`mcp_pool_users`（gauge）、`mcp_pool_rejected_total`（counter）。
+- **活跃标记何时共享**：开启 owner 租约后，活跃用户集合改由 Redis ZSET `mcp:active_users` 跨实例
+  共享（每轮轮询读预算前先同步）。原因是租约下连接只在 owner 实例上，而请求被轮询到任意实例，
+  不共享标记 owner 就看不见别人的 touch、会把正在使用的用户释放掉。**租约关闭时故意不共享**：
+  那时每个实例自己建连，共享只会让所有实例去抢同一个"最近活跃前 N"，把按路由自然分散的放大变成
+  `实例数 × N` 的重复。共享开启时"前 N 名"是全集群排名，`mcp_pool_rejected_total` 是集群口径；
+  `GET /v1/plugins/status` 的 `active_marks_shared` 可确认当前实例走哪种。
 
 #### owner 租约（可选，彻底消除「实例数」因子）
 
@@ -181,7 +187,7 @@ python -m pytest python-engine/tests -q
 | 断线重连**不丢事件、不重复** | **HTTP 级跨实例**：`internal/api/sse_cross_instance_live_test.go`（两个 Hub = 两个实例，客户端连 A、事件由 B 发布，带 `Last-Event-ID` 重连到 A ⇒ 只补缺口、随后实时继续、共享流里恰好只剩实时那条）；Hub 级：`internal/broadcast/hub_live_test.go`（补发保序、`after` 排他、跨实例可见、缓冲上限、滑动 TTL）+ `streamid_test.go`（流 ID 按数值比较） | 每会话只保留**最近 200 条 + 1h**：超出窗口的断线无法补齐（需前端按 DB 状态自愈）；非法 `Last-Event-ID` 被忽略并转为实时（**宁可重复、不可丢弃**）。⚠ **已修复（2026-10-08，双进程演练发现）**：**子 Agent 事件**在多实例下曾**实时与重放都重复**（每条 N 份，N = 实例数）—— 中继对同一事件既追加共享重放流**又跨实例再广播**。修复：中继改走 `Hub.RelayEvent`（只追加本实例流 + 本地 fanout，**不再跨实例广播**），**写入端不做互斥**（否则 N-1 个实例的客户端拿不到 `id`、重连无法精确续传），改为 `ReplayAfter` **按逻辑身份去重**（`event_id`，退化用 payload 哈希）。取证与回归：`python-engine/tests/drills/multi_instance_drill.py`（双进程，4 条断言）· `internal/broadcast/hub_live_test.go::TestLiveReplayDedupesSameLogicalEventAcrossInstances` · `logical_id_test.go` |
 | 审批 / 取消**打到持有该 run 的实例** | `internal/engine/run_affinity_test.go`（归属记录契约、URL 优先、注册表回退、垃圾记录拒绝） | 映射缺失或 TTL 过期时**回退一致性哈希**（尽力而为）；实例故障该 run 仍中断，**不做现场迁移** |
 | 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份，不需要库）+ **`internal/api/session_cancel_live_test.go`**（真实 PG：非属主 ⇒ **403** · 属主 ⇒ 放行 · 会话不存在 ⇒ 不广播） | **已补（2026-10-09）**：此前点名的"归属校验分支需要真实 PG 的自动化用例**尚未补**"已落地，并做过变异验证（把 `handlers.go` 的归属校验去掉 ⇒ 非属主用例**红**，得到 200 而非 403）。`subagent:cancel` 载荷本身不带身份，防线仍在网关侧 |
-| MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
+| MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` + `test_plugins.py`（活跃标记只在开租约时共享、Redis 故障退回进程内、读预算前先同步） | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
 
 **如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID（`ChatView.vue` 的 `crypto.randomUUID()`），因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发。机制本身**已有用例**（2026-10-09 补）：`internal/api/submit_dedup_live_test.go` —— 去重命中 ⇒ **不触发引擎**（用假引擎数调用次数）· 首次提交 ⇒ 打到引擎且落下 **5 分钟**窗口的键 · 无 `client_msg_id` / 只给空白 ⇒ 不去重（老客户端行为不变）；并做过变异验证（让"命中即返回"失效 ⇒ 该用例红，报"实际调用 1 次"）；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
 

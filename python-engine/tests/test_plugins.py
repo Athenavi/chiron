@@ -1,10 +1,19 @@
 """插件模块测试：PluginStore per-user 隔离、ActiveTracker、registry owner 过滤、连接池去重共享。"""
 from __future__ import annotations
 
+import asyncio
+import time
+
 import pytest
 
 from app.plugins.pool import MCPClientPool
-from app.plugins.store import ActiveTracker, PluginStore, ServerConfig
+from app.plugins.store import (
+    ActiveTracker,
+    PluginStore,
+    RedisActiveTracker,
+    ServerConfig,
+    active_users_key,
+)
 from app.tools.registry import registry
 
 # ── PluginStore per-user 隔离 ─────────────────────────────────────────────
@@ -43,6 +52,152 @@ def test_active_tracker_window():
     assert "u1" in tracker.active_users(window=3600)
     tracker.prune(window=0)  # 立即过期
     assert tracker.is_active("u1", window=0) is False
+
+
+# ── ActiveTracker（Redis 共享实现） ───────────────────────────────────────
+
+
+class _FakeActiveRedis:
+    """只实现 RedisActiveTracker 用到的四个命令，并记录调用"""
+
+    def __init__(self, remote: dict[str, float] | None = None, *, fail: bool = False):
+        self.zadd_calls: list[tuple[str, dict[str, float]]] = []
+        self.expire_calls: list[tuple[str, int]] = []
+        self.zrem_calls: list[tuple[str, float]] = []
+        self._remote = dict(remote or {})
+        self._fail = fail
+
+    async def zadd(self, key, mapping):
+        if self._fail:
+            raise ConnectionError("redis down")
+        self.zadd_calls.append((key, {k: float(v) for k, v in mapping.items()}))
+        self._remote.update({k: float(v) for k, v in mapping.items()})
+
+    async def expire(self, key, ttl):
+        if self._fail:
+            raise ConnectionError("redis down")
+        self.expire_calls.append((key, ttl))
+
+    async def zrangebyscore(self, key, min=None, max=None, withscores=False):  # noqa: A002
+        if self._fail:
+            raise ConnectionError("redis down")
+        lo = float(min)
+        items = [(uid, ts) for uid, ts in self._remote.items() if ts >= lo]
+        return items if withscores else [uid for uid, _ in items]
+
+    async def zremrangebyscore(self, key, min=None, max=None):  # noqa: A002
+        if self._fail:
+            raise ConnectionError("redis down")
+        hi = float(max)
+        stale = [uid for uid, ts in self._remote.items() if ts <= hi]
+        for uid in stale:
+            del self._remote[uid]
+        self.zrem_calls.append((key, hi))
+        return len(stale)
+
+
+@pytest.mark.asyncio
+async def test_redis_tracker_touch_is_locally_visible_and_shared():
+    """touch 立即可被本实例读到（读侧接口是同步的），并把标记推给其它实例"""
+    redis = _FakeActiveRedis()
+    tracker = RedisActiveTracker(redis)
+    tracker.touch("u1")
+    assert tracker.is_active("u1")
+
+    await tracker.pull()
+    key = active_users_key()
+    assert redis.zadd_calls and redis.zadd_calls[0][0] == key
+    assert "u1" in redis.zadd_calls[0][1]
+    # 整键 TTL 兜底：全集群都空闲时标记不会永久留着
+    assert redis.expire_calls == [(key, ActiveTracker.DEFAULT_WINDOW + 60)]
+
+
+@pytest.mark.asyncio
+async def test_redis_tracker_touch_flushes_without_an_explicit_pull():
+    """touch 自己就把标记推出去（不等到下一轮 pull）：owner 可能在本次轮询里就需要它"""
+    redis = _FakeActiveRedis()
+    tracker = RedisActiveTracker(redis)
+
+    tracker.touch("u1")
+    await asyncio.sleep(0)  # 让 _schedule_flush 建的任务跑完
+
+    assert "u1" in redis.zadd_calls[0][1]
+
+
+@pytest.mark.asyncio
+async def test_redis_tracker_pull_merges_newer_remote_marks_only():
+    """远端标记只**向前**合并；超出窗口的成员既不合并，也从 ZSET 清掉"""
+    now = time.time()
+    redis = _FakeActiveRedis({
+        "u-other-instance": now,
+        "u-expired": now - ActiveTracker.DEFAULT_WINDOW - 10,
+    })
+    tracker = RedisActiveTracker(redis)
+    local_ts = now + 5
+    tracker._last["u-other-instance"] = local_ts  # noqa: SLF001 — 本地更新，不该被回退
+
+    await tracker.pull()
+
+    assert tracker.is_active("u-other-instance")
+    assert tracker._last["u-other-instance"] == local_ts  # noqa: SLF001
+    assert "u-expired" not in tracker._last  # noqa: SLF001
+    assert redis.zrem_calls and redis.zrem_calls[0][1] <= now
+
+
+@pytest.mark.asyncio
+async def test_redis_tracker_degrades_to_in_process_when_redis_down():
+    """Redis 故障不能让 MCP 轮询链失败：退回进程内行为，读侧继续可用"""
+    redis = _FakeActiveRedis(fail=True)
+    tracker = RedisActiveTracker(redis)
+    tracker.touch("u1")
+    await tracker.pull()  # 不抛
+
+    assert redis.zadd_calls == []
+    assert tracker.is_active("u1")
+    assert "u1" in tracker.active_users()
+
+
+@pytest.mark.asyncio
+async def test_pool_shares_marks_only_with_owner_lease(monkeypatch):
+    """共享标记只在 owner 租约开启时启用
+
+    租约关闭时每个实例都会自己建连，共享反而让所有实例去抢同一批"最近 N 名用户"
+    （按时间排序的前 N 名各实例算出的几乎一致），把连接放大变成重复放大。
+    """
+    from app.config import settings
+
+    monkeypatch.setattr(settings, "mcp_owner_lease_enabled", True)
+    pool = MCPClientPool(redis=object())
+    try:
+        assert isinstance(pool._tracker, RedisActiveTracker)
+        assert pool.status()["active_marks_shared"] is True
+    finally:
+        await pool.stop()
+
+    monkeypatch.setattr(settings, "mcp_owner_lease_enabled", False)
+    pool2 = MCPClientPool(redis=object())
+    try:
+        assert type(pool2._tracker) is ActiveTracker
+        assert pool2.status()["active_marks_shared"] is False
+    finally:
+        await pool2.stop()
+
+
+@pytest.mark.asyncio
+async def test_reconcile_syncs_marks_before_reading_budget(tmp_path):
+    """reconcile 先 pull 再取活跃列表，否则预算截断用的仍是"本实例见过的那半张图"。"""
+    calls: list[str] = []
+
+    class _RecordingTracker(ActiveTracker):
+        async def pull(self) -> None:
+            calls.append("pull")
+
+    pool = MCPClientPool(store=PluginStore(tmp_path), tracker=_RecordingTracker())
+    try:
+        await pool.reconcile()
+    finally:
+        await pool.stop()
+    assert calls == ["pull"]
 
 
 # ── registry owner 过滤 ───────────────────────────────────────────────────
