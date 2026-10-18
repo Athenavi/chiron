@@ -221,6 +221,46 @@ async def resolve(
     return out
 
 
+async def peek(
+    *, interaction_id: str, tenant_id: str, user_id: str
+) -> dict[str, Any] | None:
+    """按 id 读一张**自己的**票（`{id, kind, status, session_id, tool_name, args_hash, request}`）。
+
+    存在它是为了答复端点能在写入前做两件**必须**的事：按行上的 `kind` 校验答复形状（否则
+    存进去一张取不出来的票），以及核对"这张票确实属于用户声称的那个会话"。
+
+    `user_id` 是硬条件（空值匹配不到任何行，因为建表时 `user_id` 来自已验证身份）：跨用户
+    读别人的介入 = 读出"哪一步正在等人"，那本身就是待办信息。这里能区分 `not_found` 与
+    `stale` 也只对**票的主人**成立，不构成信息泄漏。
+    """
+    if not interaction_id or not user_id:
+        return None
+    try:
+        pool = _pool()
+        if pool is None:
+            return None
+        row = await pool.fetchrow(
+            """
+            SELECT id, kind, status, session_id, tool_name, args_hash, request
+              FROM pending_interactions
+             WHERE id = $1
+               AND ($2 = '' OR tenant_id = $2)
+               AND user_id = $3
+            """,
+            interaction_id,
+            tenant_id or "",
+            user_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending interaction peek failed (id=%s): %s", interaction_id, exc)
+        return None
+    if row is None:
+        return None
+    out = {str(k): row[k] for k in row.keys()}
+    out["request"] = _decode(out.get("request"))
+    return out
+
+
 async def consume_grant(
     *,
     tenant_id: str,
