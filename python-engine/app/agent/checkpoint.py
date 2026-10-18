@@ -97,6 +97,10 @@ class RunCheckpoint(TypedDict, total=False):
     replay_pending: list[str]
     pending: dict[str, Any]
     turn_id: str
+    #: 本 run 的**全程累计**用量（`input_tokens` / `output_tokens` / `cached_tokens` /
+    #: `tool_steps` / `wall_seconds`）。M15e 起它是 run 级预算跨续跑的唯一依据：接管那一段
+    #: 读回它当起点（见 `ResumeState.input_tokens`），否则"每次接管白送一份 per-run 额度"。
+    #: 每回合末由**花钱的那一段**整体覆写（赋值，不相加），所以它最多陈旧到上一个回合边界。
     usage: dict[str, int]
     last_event_id: str
     instance_id: str

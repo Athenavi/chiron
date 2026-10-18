@@ -34,6 +34,7 @@ def _snapshot(
     turn_index: int = 2,
     done: list[str] | None = None,
     task_meta: bool = True,
+    usage: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     snapshot: dict[str, Any] = {
         "messages": [
@@ -45,6 +46,9 @@ def _snapshot(
         "done_tools": done if done is not None else ["call_a"],
         "saved_at": _saved_at(seconds_ago),
     }
+    if usage is not None:
+        # M15e：run 级预算跨续跑的账就记在这一格（旧快照可能整格没有）
+        snapshot["usage"] = usage
     if task_meta:
         # 自动续跑的唯一来源：这些配置只存在于提交请求里
         snapshot["task_meta"] = {
@@ -136,6 +140,64 @@ async def test_missing_snapshot_returns_none(monkeypatch):
     assert await load_resume_state(tenant_id="t1", session_id="s1") is None
 
 
+# ── M15e：token / wall 两轴的续跑起点 ───────────────────────────────────
+
+
+async def test_resume_state_inherits_the_token_axes(monkeypatch):
+    """接管那一段**不能**从 0 起算预算：快照里那份累计就是它的起点。
+
+    `turn_index` 与 `tool_steps` 早就这么办了（A4），tokens 一直躺在同一个 `usage` 格子里
+    没人读 —— 于是每次崩溃接管都白送一整份 per-run 额度（论文 §5.2）。
+    """
+    _patch_checkpoint(
+        monkeypatch,
+        snapshot=_snapshot(
+            usage={
+                "input_tokens": 12_000,
+                "output_tokens": 3_400,
+                "cached_tokens": 500,
+                "tool_steps": 7,
+                "wall_seconds": 41,
+            }
+        ),
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None
+    assert (state.input_tokens, state.output_tokens) == (12_000, 3_400)
+    assert state.cached_tokens == 500
+    assert (state.tool_steps, state.wall_seconds) == (7, 41)
+
+
+async def test_legacy_snapshot_without_usage_starts_at_zero(monkeypatch):
+    """旧快照没有这些键 ⇒ 起点 0（**不能**因为读不到就抛，也不能猜一个数）。"""
+    _patch_checkpoint(monkeypatch, snapshot=_snapshot())
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None
+    assert (state.input_tokens, state.output_tokens, state.cached_tokens) == (0, 0, 0)
+    assert (state.tool_steps, state.wall_seconds) == (0, 0)
+
+
+async def test_dirty_usage_reads_as_zero_not_as_a_negative_allowance(monkeypatch):
+    """`usage` 是 JSONB，人工修数据写得歪。负的起点等于**白送**额度，所以只接受非负；
+    非数值同理按"这一轴没记"处理，而不是把整份现场判成不可用（那会连带丢掉可续跑的历史）。
+    """
+    _patch_checkpoint(
+        monkeypatch,
+        snapshot=_snapshot(
+            usage={"input_tokens": -999_999, "output_tokens": "n/a", "wall_seconds": None}
+        ),
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None, "脏计数不该废掉整份现场"
+    assert (state.input_tokens, state.output_tokens, state.wall_seconds) == (0, 0, 0)
+
+
 # ── M7：接手"等人"的挂起现场 ────────────────────────────────────────────
 
 
@@ -174,6 +236,28 @@ async def test_awaiting_snapshot_is_claimed_with_the_new_run_token(monkeypatch):
 
     assert state is not None and state.window == "hot"
     assert calls["claim"] == ["rt-new"], "接手要以**新** token 为归属凭据"
+
+
+async def test_awaiting_snapshot_also_carries_the_budget_seed(monkeypatch):
+    """人工介入的续跑走的是另一条读路径（`load_awaiting`），但**同一份账**：也继承起点。
+
+    它同时解释了"为什么事件的扁平 token 必须留在本段口径" —— 挂起那一段已经用它自己的
+    `done` 报过一次账，续跑再报全程累计就是把同一段扣两遍（断言见
+    `tests/test_run_budget_resume.py`）。
+    """
+    _patch_checkpoint(monkeypatch, snapshot=None)
+    _patch_awaiting(
+        monkeypatch,
+        found={
+            "checkpoint": _snapshot(usage={"input_tokens": 800, "output_tokens": 120}),
+            "run_token": "rt-old",
+        },
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new")
+
+    assert state is not None
+    assert (state.input_tokens, state.output_tokens) == (800, 120)
 
 
 async def test_awaiting_not_claimed_falls_back_to_a_plain_turn(monkeypatch):
