@@ -43,9 +43,17 @@ python -m pytest -q -m "not integration"
 这是 25 批分批接线的结果：起点是 1171 条 / 130 文件，过程见
 [开发路线图](development-roadmap.md) 的 L2-1。
 
-标记为 `integration` 的用例需要完整栈（网关 HTTP / 真实 PostgreSQL）：**CI 的 `Real-stack integration`
-job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、建 schema、构建并启动网关），
-本地按下面「本机真实栈」跑同一条命令即可。
+标记分两层，**按"这条用例到底需要什么"选，不是按"它算不算集成测试"选**：
+
+* `integration`：需要**真实 PostgreSQL**（或完整栈：网关 HTTP + 库）。`tests/conftest.py` 里那个
+  autouse fixture 在 `POSTGRES_DSN` 没设时**整类 skip** —— 于是"本机没接库"与"代码坏了"能分开。
+* `live`：只需要**真实 Redis**（Lua 的算术、EVAL 的原子性……桩判不了的那些，如
+  `tests/test_key_ring_live.py`、`tests/test_line_ledger.py::TestRealRedisSemantics`）。
+  **别把它们标成 `integration`**：那会被上面那个"必须有 PG"的 fixture 整类拦下，本机明明有 Redis
+  却永远验不到脚本；连不上时它们自己 skip。
+
+CI 的 `Real-stack integration` job 跑 `pytest -q -m "integration or live"`（两类都覆盖，前置是起
+PostgreSQL/Redis 服务、建 schema、构建并启动网关），本地按下面「本机真实栈」跑同一条命令即可。
 
 #### mypy strict 接线手册
 

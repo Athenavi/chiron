@@ -73,6 +73,10 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 5. **后台任务**：统一走 `engine:tasks` 消费组：失败按 `retry_count` 重投，超限进 `engine:tasks:dlq`；过期任务（`deadline`，按任务类型取值）进 DLQ 而非丢弃；进行中消息有 lease 心跳（`XCLAIM JUSTID`），副本被杀后约 10 分钟内被其它副本 reclaim；执行前经 `task_idempotency` 幂等闸门（同一键已完成则直接 ACK 跳过）。优雅下线会先排空进行中任务（最多 30s）。
 6. **计费**：同一回合（turn）只扣一次——`credit_transactions.turn_id` 唯一索引 + `ON CONFLICT DO NOTHING`，重试不会重复扣费。
 7. **MCP**：默认关闭；需要 MCP 工具能力的副本请显式 `MCP_POOL_ENABLED=true`。
+8. **子 Agent 线账的死预留**：引擎**无条件**写存活键 `engine:alive:{instance_id}`（TTL 60s / 续期 20s，优雅退出时主动删）。在途预留的 member 是 `run_id<TAB>tokens<TAB>持有者实例 id`，读某条线时每隔 30s 核对一次持有者：存活键不在了 ⇒ 当场摘掉那条预留（崩溃/`SIGKILL` 留下的"幽灵预留"不必再占满 1h 自然到期）。三点部署含义：
+   - **与 `ENGINE_ADVERTISE_URL` 无关**：发现表那个键 `engine:instance:*` 只在配了广告地址时才写，而存活键总是写 —— 判"进程还在不在"不能用前者（没配的部署会集体被判成已死）。
+   - **副本数无关，也不新增配置**：没 Redis 时心跳起不来，清扫随之**自动禁用**（本进程不在协议里 ⇒ "读不到别人的键"不算证据），退化回"预留等自然到期"，不会误删。
+   - **滚动升级安全**：升级窗口里老实例写的两段 member（无持有者）**照旧计入预算、且永不按持有者删除**，只由 score 收口；新实例自己的预留在优雅退出时由 drain 主动释放。
 
 ## 6. 数据与保留策略
 
