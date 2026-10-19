@@ -35,7 +35,7 @@ go test -mod=mod ./... -count=1
 python -m pip install -r requirements.txt
 python -m pip install -r requirements-dev.txt   # 与 pyproject 的 [dev] extra 对齐
 ruff check .
-mypy app/          # strict；全量，见下方「mypy strict 接线手册」
+mypy app/ acp_adapter/   # strict；全量，见下方「mypy strict 接线手册」（与 CI 同一条命令）
 python -m pytest -q -m "not integration"
 ```
 
@@ -51,6 +51,8 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
 
 分批接线**已经收尾**（`mypy app/` 全量通过），下面这些约束与踩过的坑留作维护参考：
 新增第三方依赖、或要动 `pyproject.toml` 的 overrides 时照办。
+⚠ **"通过"是会回潮的**：2026-10-19 · M16 在干净工作树实测 `mypy app/ acp_adapter/` 有 **14 条真错**（10 文件），
+而路线图上一轮记的是 0 —— 逐条改代码清零的过程与判据见 [开发路线图](development-roadmap.md) §1 的 M16 行。
 
 **两条始终生效的约束**
 
@@ -62,9 +64,11 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
    - 缺 stub / 缺包 → `ignore_missing_imports`（现为 `asyncpg` / `boto3.*` / `botocore.*` / `docx` /
      `fitz` / `langchain.*` / `markitdown` / `openpyxl` / `pdfplumber` / `psutil` / `pymilvus` /
      `sentence_transformers` / `unstructured.*` / `uvicorn`）；
-   - **有** stub 但标注不全 → 在**调用方**上单项豁免（现为 `module = ["app.rag.parser", "app.main"]`
+   - **有** stub 但标注不全 → 在**调用方**上单项豁免（现为
+     `module = ["app.rag.parser", "app.main", "app.tools.media", "app.media.attachments"]`
      的 `disallow_untyped_calls = false`，因 `pymupdf` 自带 `py.typed` 却缺 `open` / `Document` 注解）。
-     该判定由调用方作出，豁免只能落在调用它的文件上。
+     该判定由调用方作出，豁免只能落在调用它的文件上。**新增一个 pymupdf 调用方 = 往这个列表里加一个模块名**，
+     不动全局 `strict`；反过来，**不是 pymupdf 造成的错，不许用这条豁免兜**。
 
 **已踩过的坑**
 
@@ -73,6 +77,10 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
   字段类型，后果是**测试在 collection 阶段就报** `FastAPIError: Invalid args for response field!`。
   这些 handler 的出口分两类（错误时 `JSONResponse`、正常时 dict），要么统一写 `-> Any`
   （`Any` 是合法字段类型），要么在装饰器上显式 `response_model=None`。
+- ⚠ **`pymupdf` 的 `Document` 不要写 `for page in doc`**（2026-10-19 · M16）：它没有 `__iter__`，靠的是
+  `__getitem__` 的旧式迭代协议（越界靠 `IndexError` 收尾）—— 跑得通，但既不是官方口径、类型上也只能报
+  "not iterable"。写 `doc.pages()`，`doc.close()` 放 `try/finally`（判例：`app/media/attachments.py`，
+  实测新旧提取结果逐字节一致、坏字节仍得 `""`）。
 - ⚠ **`[tool.mypy]` 的 `platform = "linux"`** 不可删：生产与 CI 都在 Linux，而本机可能是 Windows。
   不声明的话，Unix-only 模块的成员（`app/tools/_sandbox_worker.py` 的 `resource.setrlimit` /
   `RLIMIT_*`）在 Windows 上会误报 `attr-defined`。
@@ -92,6 +100,9 @@ job 会跑**（`pytest -m integration`，前置是起 PostgreSQL/Redis 服务、
   - `markitdown` 的 `convert()` 参数签名（本机装了、CI 不装）→ 复查发现**代码本身也是错的**
     （给只接受 `str | Path | Response | BinaryIO` 的 API 传了裸 `bytes`），改成 `io.BytesIO`
     后两边都对。**看到"环境差异"先确认代码是否真的对，别急着加豁免。**
+  - ⚠ **反例，值得记**（2026-10-19 · M16）：CI 的 mypy step 注释曾写着"本机仍会报 2 条环境相关错误、以 CI 为准"，
+    而本机实跑是 **14 条真错**（10 文件）—— 那句话把**真的红**长期解释成了**环境差异**。逐条按代码判定后清零，
+    现在本机（3.14 + 未固定版本）`mypy app/ acp_adapter/` 报 **0 / 276 文件**。**默认假设"本地红是真错"，把它推给环境之前要先拿到证据。**
 
 ### `frontend` — 前端（工作目录 `frontend-vue/`）
 

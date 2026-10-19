@@ -113,3 +113,18 @@ async def test_embed_refuses_instead_of_returning_empty_vector() -> None:
 
     with pytest.raises(NotImplementedError):
         await _p().embed("x")
+
+
+def test_is_a_concrete_llm_provider() -> None:
+    """必须**名义上**也是 `LLMProvider` —— `app/main.py` 把它塞进 `dict[str, LLMProvider]` 用。
+
+    此前它只是结构上凑齐四个方法，却没有继承 ABC ⇒ 那次赋值在类型层看不见，连构造签名
+    都没被检查（`providers: dict[str, LLMProvider]` 的声明一直在骗人）。实例化本身又是
+    ABC 的运行时验收：抽象方法少一个就 `TypeError`。
+    """
+    from app.gateway.provider import LLMProvider
+    from app.providers.named import NamedResponsesProvider
+
+    assert issubclass(ResponsesProvider, LLMProvider)
+    assert issubclass(NamedResponsesProvider, LLMProvider)
+    assert isinstance(_p(), LLMProvider)

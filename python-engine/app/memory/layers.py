@@ -427,8 +427,12 @@ class TokenUsage:
 
 
 def _mul_sum(a: list[float], b: list[float]) -> float:
-    """``Σ aᵢbᵢ``。``map`` 版省掉生成器每对分量一次的元组解包。"""
-    return sum(map(_mul, a, b))
+    """``Σ aᵢbᵢ``。``map`` 版省掉生成器每对分量一次的元组解包。
+
+    `operator.mul` 在类型层面是 `Any`，空向量的 `sum` 又是 int `0` ⇒ 显式收口成 float，
+    调用方（相似度阈值比较）拿到的类型与声明一致。
+    """
+    return float(sum(map(_mul, a, b)))
 
 
 def dot_product(a: list[float], b: list[float]) -> float:

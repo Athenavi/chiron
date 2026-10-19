@@ -275,6 +275,24 @@ class AnthropicProvider(LLMProvider):
         return blocks or ""
 
     @staticmethod
+    def _system_text(content: str | list[dict[str, Any]]) -> str:
+        """system 段的 content → **纯文本**。
+
+        为什么要单独收口：Anthropic 的 `system` 只收文本（字符串或 `{"type":"text"}` 块），
+        而 `ChatMessage.content` 是 `str | parts`。parts 形态原样透传的后果是轻则把 list 的
+        Python repr 发给模型、重则 400（与 :meth:`_anthropic_content` 的注释同一件事）；
+        `str.join` 则会直接 TypeError。非 text 的块（图片）在这里**如实丢弃** ——
+        system 带图不是本仓库任何一条链路会产生的形态。
+        """
+        if isinstance(content, str):
+            return content
+        return "\n".join(
+            str(part.get("text", ""))
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text"
+        )
+
+    @staticmethod
     def _convert_messages(
         messages: list[ChatMessage],
     ) -> tuple[str | list[dict[str, Any]], list[dict[str, Any]]]:
@@ -333,15 +351,19 @@ class AnthropicProvider(LLMProvider):
         if any(m.cache_breakpoint for m in system_parts):
             system: str | list[dict[str, Any]] = [
                 (
-                    {"type": "text", "text": m.content, "cache_control": {"type": "ephemeral"}}
+                    {
+                        "type": "text",
+                        "text": AnthropicProvider._system_text(m.content),
+                        "cache_control": {"type": "ephemeral"},
+                    }
                     if m.cache_breakpoint
-                    else {"type": "text", "text": m.content}
+                    else {"type": "text", "text": AnthropicProvider._system_text(m.content)}
                 )
                 for m in system_parts
             ]
         else:
             # 无断点：逐字保持原调用方的字符串形态（默认不变）
-            system = "\n\n".join(m.content for m in system_parts)
+            system = "\n\n".join(AnthropicProvider._system_text(m.content) for m in system_parts)
         return system, result
 
     @staticmethod

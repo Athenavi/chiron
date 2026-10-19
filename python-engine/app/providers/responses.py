@@ -33,7 +33,7 @@ from typing import Any
 
 import httpx
 
-from app.gateway.provider import ChatMessage, ChatResponse, ToolCall
+from app.gateway.provider import ChatMessage, ChatResponse, LLMProvider, ToolCall
 
 logger = logging.getLogger(__name__)
 
@@ -45,8 +45,14 @@ _EV_COMPLETED = "response.completed"
 _EV_FAILED = "response.failed"
 
 
-class ResponsesProvider:
-    """OpenAI Responses API 提供者。"""
+class ResponsesProvider(LLMProvider):
+    """OpenAI Responses API 提供者。
+
+    继承 `LLMProvider` 不只是形式：`app/main.py` 的 `providers: dict[str, LLMProvider]`
+    一直把它当 LLMProvider 用（`chat` / `chat_stream` / `close` / `embed` 四件套齐全），
+    但没有名义继承 ⇒ mypy 只能按赋值推断，于是"Responses 分支塞进 LLMProvider 字典"这件
+    事在类型层是**看不见**的（同一原因也让构造签名逃过检查）。
+    """
 
     name = "openai-responses"
 

@@ -143,7 +143,7 @@ class KeyRing:
         return sources
 
     @staticmethod
-    def _usable(obj: Any, now: float) -> tuple[str, str] | None:
+    def _usable(obj: Any, now: float) -> tuple[str, float] | None:
         """从一条字段 payload 判可用：s 必须 active（引擎不改 s），且冷却时间戳到期。"""
         if not isinstance(obj, dict):
             return None

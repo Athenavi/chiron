@@ -16,7 +16,11 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    # 只在类型层引用：consolidator 运行时要 import 本模块，反向 import 会成环。
+    from app.memory.consolidator import Summariser
 
 logger = logging.getLogger(__name__)
 
@@ -136,7 +140,7 @@ def build_summariser(
     tenant_id: str = "",
     max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
-):
+) -> Summariser:
     """装配成一个 `Consolidator` 认识的 Summariser（`Callable[[messages], Awaitable[str]]`）。
 
     配置在这里收口一次而不是散到各装配点：`Consolidator` 由 app/main.py 建一个实例，
