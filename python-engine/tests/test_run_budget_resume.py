@@ -94,9 +94,9 @@ async def _drive(
     import app.subagent.line_ledger as ledger_mod
     from app.agent.runtime import AgentRuntime, AgentTask
 
-    monkeypatch.setenv("AGENT_MAX_TOKENS", str(cap_tokens))
+    monkeypatch.setenv("AGENT_RUN_MAX_TOKENS", str(cap_tokens))
     monkeypatch.setenv("AGENT_MAX_STEPS", "0")
-    monkeypatch.setenv("AGENT_MAX_TURNS", "0")
+    monkeypatch.setenv("AGENT_RUN_MAX_TURNS", "0")
     monkeypatch.setenv("AGENT_MAX_SECONDS", "0")
 
     spy = _LedgerSpy()

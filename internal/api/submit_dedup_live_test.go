@@ -48,6 +48,7 @@ func dedupTestHandler(srv *httptest.Server) *SubmitHandler {
 		session.NewManager(nil, nil),
 		broadcast.NewHub(nil),
 		nil,
+		nil, // M20：测试不走后台「系统设置」，回落包内默认
 	)
 }
 

@@ -30,7 +30,7 @@ func newApprovalTestHandler(t *testing.T, seen map[string]any) (*SubmitHandler, 
 		w.Header().Set("Content-Type", "application/json")
 		fmt.Fprint(w, `{"ok":true}`)
 	}))
-	h := NewSubmitHandler(engine.NewPythonClient(srv.URL), nil, nil, nil)
+	h := NewSubmitHandler(engine.NewPythonClient(srv.URL), nil, nil, nil, nil)
 	return h, srv.Close
 }
 

@@ -104,10 +104,22 @@ type Config struct {
 	WechatMchPrivateKey   string
 
 	// Agent behavior
-	AgentMaxTurns       int // max LLM-tool turns per run (default 10)
-	AgentMaxTokens      int // max output tokens per LLM call (default 8192)
-	AgentContextLimit   int // max messages before pruning (default 20)
-	AgentMaxConcurrency int // max concurrent agent runs (default 20)
+	//
+	// ⚠ 这三个字段的命名在 M20 做过一次**破坏性改名**，起因是"同名不同义"：
+	//   * `AGENT_MAX_TOKENS` 在网关是"单次调用的 max output tokens"，在**引擎**却是
+	//     "一个 run 全程的 token 预算"（默认 400k）。共享 env 的部署按网关口径设 8192，
+	//     引擎几乎每个 run 都以 `budget_exceeded:tokens` 收口，两侧还都没有校验；
+	//   * `AGENT_MAX_TURNS` 同样是"网关的默认提交回合数"与"引擎的 run 回合上限"两回事。
+	// 现在：单次/默认一类的裸名归网关，run 级的归引擎并带 `RUN_`（见 .env.example）。
+	// 旧名一律**不再读取**，启动时由 `ValidateRenamedAgentEnv` 直接拒绝（失败要显式）。
+	//
+	// AgentDefaultMaxTurns 每次提交（一条 SSE 回合）的默认回合数；请求里的
+	// `llm_config.max_turns` 优先（前端与 Agent 档案都走这条路）。
+	AgentDefaultMaxTurns int
+	// AgentMaxOutputTokens 单次 LLM 调用的 max output tokens。它不是 run 预算：
+	// run 全程的 token 上限在**引擎**侧（`AGENT_RUN_MAX_TOKENS`，默认 400k）。
+	AgentMaxOutputTokens int
+	AgentMaxConcurrency   int // max concurrent agent runs (default 20)
 	// AgentSubmitTimeout 单次提交（一条 SSE 回合）在网关侧的后台执行上限。
 	// 必须 >= api.DefaultAgentTimeout（300s）：曾经硬编码 180s，比它短，
 	// 长回合（多轮工具调用）必然被提前取消，表现为"思考/工具调用做一半就断"。
@@ -223,9 +235,8 @@ func loadConfig() *Config {
 		WechatAPIv3Key:        getEnv("WXPAY_API_V3_KEY", ""),
 		WechatMchCertSerialNo: getEnv("WXPAY_MCH_CERT_SERIAL_NO", ""),
 		WechatMchPrivateKey:   getEnv("WXPAY_MCH_PRIVATE_KEY", ""),
-		AgentMaxTurns:         getInt("AGENT_MAX_TURNS", 10),
-		AgentMaxTokens:        getInt("AGENT_MAX_TOKENS", 8192),
-		AgentContextLimit:     getInt("AGENT_CONTEXT_LIMIT", 20),
+		AgentDefaultMaxTurns:  getInt("AGENT_DEFAULT_MAX_TURNS", 5),
+		AgentMaxOutputTokens:  getInt("AGENT_MAX_OUTPUT_TOKENS", 8192),
 		AgentMaxConcurrency:   getInt("AGENT_MAX_CONCURRENCY", 20),
 		// 默认 5 分钟，与 api.DefaultAgentTimeout 对齐（env AGENT_SUBMIT_TIMEOUT 可调大）
 		AgentSubmitTimeout: getDuration("AGENT_SUBMIT_TIMEOUT", 5*time.Minute),

@@ -602,7 +602,7 @@ registry.register(
                 "default": 0,
                 "description": (
                     "Optional per-run token ceiling (input+output). 0 = use the deployment "
-                    "default (SUBAGENT_MAX_TOKENS). Exceeding it ends the run with "
+                    "default (SUBAGENT_RUN_MAX_TOKENS). Exceeding it ends the run with "
                     "status=failed and error='budget_exceeded:tokens' instead of burning "
                     "unbounded tokens — use it for exploratory fan-out."
                 ),

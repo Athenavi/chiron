@@ -17,6 +17,12 @@ import (
 const (
 	DefaultAgentTimeout = 300 * time.Second
 	DefaultMaxTurns     = 5
+	// DefaultMaxOutputTokens 单次 LLM 调用的默认 max output tokens。
+	//
+	// M20：它不是 run 预算 —— run 全程的 token 上限在引擎侧（`AGENT_RUN_MAX_TOKENS`）。
+	// 与后台「系统设置」的 `agent.max_tokens` 是同一个量；与引擎 `app/main.py` 的兜底
+	// 8192 同值，所以"网关没配"时行为与改动前完全一致。
+	DefaultMaxOutputTokens = 8192
 )
 
 // nullableStr returns nil for empty strings, useful for nullable DB columns.

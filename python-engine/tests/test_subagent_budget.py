@@ -45,7 +45,7 @@ def test_多轴同时越界时优先报_tokens():
 
 def test_from_env_优先级(monkeypatch):
     # 环境变量生效
-    monkeypatch.setenv("SUBAGENT_MAX_TOKENS", "1234")
+    monkeypatch.setenv("SUBAGENT_RUN_MAX_TOKENS", "1234")
     monkeypatch.setenv("SUBAGENT_MAX_SECONDS", "60")
     assert from_env().tokens == 1234
     assert from_env().wall == 60
@@ -55,9 +55,9 @@ def test_from_env_优先级(monkeypatch):
 
 
 def test_from_env_非法值回落默认(monkeypatch):
-    monkeypatch.setenv("SUBAGENT_MAX_TOKENS", "not-a-number")
+    monkeypatch.setenv("SUBAGENT_RUN_MAX_TOKENS", "not-a-number")
     assert from_env().tokens == DEFAULT_MAX_TOKENS
-    monkeypatch.delenv("SUBAGENT_MAX_TOKENS", raising=False)
+    monkeypatch.delenv("SUBAGENT_RUN_MAX_TOKENS", raising=False)
     assert from_env().tokens == DEFAULT_MAX_TOKENS
 
 

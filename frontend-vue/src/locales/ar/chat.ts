@@ -149,7 +149,6 @@ export default {
   confirm_deleting_the_selected_sessions_this_action_cannot_be_undone: "تأكيد حذف الجلسات المحددة؟ لا يمكن التراجع عن هذا الإجراء.",
   delete_conversation: "حذف المحادثة",
   context_window_updated_the_context_ring_on_the_conversation_page_is_calculated_from_it: "تم تحديث نافذة السياق (تُحسب حلقة السياق في صفحة المحادثة بناءً عليها)",
-  context_message_limit: "حد رسائل السياق",
   no_conversations_shared_yet: "لم تُشارك أي محادثات بعد",
   enter_a_new_conversation_name: "أدخل اسم محادثة جديد",
   reasoning: "تفكير",

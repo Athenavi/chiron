@@ -149,7 +149,6 @@ export default {
   confirm_deleting_the_selected_sessions_this_action_cannot_be_undone: "确定删除所选会话？此操作不可恢复。",
   delete_conversation: "删除对话",
   context_window_updated_the_context_ring_on_the_conversation_page_is_calculated_from_it: "上下文窗口已更新（对话页的上下文环按它计算）",
-  context_message_limit: "上下文消息数限制",
   no_conversations_shared_yet: "尚未分享任何对话",
   enter_a_new_conversation_name: "输入新的对话名称",
   reasoning: "思考",
