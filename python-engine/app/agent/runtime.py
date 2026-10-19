@@ -1638,6 +1638,10 @@ class AgentRuntime:
                 session_id=task.session_id,
                 user_id=task.user_id,
                 tenant_id=task.tenant_id,
+                # M19：网关的 turn id（提交载荷透传）。checkpoint 的 `turn_id` 一格与
+                # 子 Agent 的归属都从这里取；此前**没有任何地方设置它**，于是
+                # `agent_runs.turn_id` 恒空、对账无法把 run 与已计费回合对应起来。
+                turn_id=task.turn_id,
                 gateway=self._gateway,
                 subagent_depth=task.subagent_depth,
                 experts=experts,
@@ -3910,10 +3914,23 @@ class AgentRuntime:
         from app.tools.context import get_tool_context
 
         instance = self._instance_id()
+        # M19：这条 run 链的网关 turn 集合 = 继承（上一段快照）+ 本次提交的 turn。
+        # 续跑段（无人值守）没有自己的 turn，这里只会把继承的集合原样带下去 —— 这正是
+        # 对账需要的语义：那一段的用量属于**之前那个提交**，不该被当成"没有账"。
+        current_turn_id = str(get_tool_context("turn_id", "") or "")
+        turn_ids, turn_ids_truncated = checkpoint_mod.merge_turn_ids(
+            getattr(self._resumed_from_checkpoint, "turn_ids", ()),
+            current_turn_id,
+            already_truncated=bool(
+                getattr(self._resumed_from_checkpoint, "turn_ids_truncated", False)
+            ),
+        )
         snapshot = checkpoint_mod.build_snapshot(
             messages=messages,
             turn_index=turn_index,
-            turn_id=str(get_tool_context("turn_id", "") or ""),
+            turn_id=current_turn_id,
+            turn_ids=turn_ids,
+            turn_ids_truncated=turn_ids_truncated,
             done_tools=done_tools,
             replay_pending=[],
             usage=usage,

@@ -64,6 +64,11 @@ class ResumeState:
     #: 上一段已消耗的墙钟（秒）。快照只在**回合末**落盘，所以崩溃前那半回合的时间不在里面
     #: —— 与 token 轴同一方向的偏差（继承的是**少算**的那份，宁可少继承，也不误停一个正常 run）。
     wall_seconds: int = 0
+    #: M19：这条 run 链涉及过的网关 turn id（见 `checkpoint.RunCheckpoint.turn_ids`）。
+    #: 续跑段必须继承它 —— 网关的对账 job 靠"完整集合"扣掉已经计过费的回合。
+    turn_ids: tuple[str, ...] = ()
+    #: 集合是否被 `MAX_TRACKED_TURN_IDS` 截断过（对账据此跳过该 run，避免多收）
+    turn_ids_truncated: bool = False
     done_tools: tuple[str, ...] = ()
     #: "已开始未结束"的调用 id（`tool_calls.output = ''`）—— 不自动重放，只告知
     replay_pending: tuple[str, ...] = ()
@@ -151,6 +156,12 @@ async def load_resume_state(
 
     usage = snapshot.get("usage")
     usage_map = usage if isinstance(usage, dict) else {}
+    raw_turn_ids = snapshot.get("turn_ids")
+    turn_ids = tuple(
+        str(item)
+        for item in (raw_turn_ids if isinstance(raw_turn_ids, list) else [])
+        if str(item or "").strip()
+    )
 
     return ResumeState(
         messages=messages,
@@ -160,6 +171,8 @@ async def load_resume_state(
         output_tokens=_usage_int(usage_map, "output_tokens"),
         cached_tokens=_usage_int(usage_map, "cached_tokens"),
         wall_seconds=_usage_int(usage_map, "wall_seconds"),
+        turn_ids=turn_ids,
+        turn_ids_truncated=bool(snapshot.get("turn_ids_truncated")),
         done_tools=done,
         replay_pending=tuple(item for item in pending if item),
         window=window,

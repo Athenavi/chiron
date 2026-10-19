@@ -63,6 +63,55 @@ def test_snapshot_keeps_tail_window():
     assert len(snapshot["messages"]) < len(messages)
 
 
+def test_merge_turn_ids_dedupes_and_keeps_order():
+    """M19：一条 run 链的网关回合集合 —— 去重、保序、空值忽略。"""
+    merged, truncated = cp.merge_turn_ids(["t1", "t2", "t1", ""], "t3")
+
+    assert merged == ["t1", "t2", "t3"]
+    assert truncated is False
+
+
+def test_merge_turn_ids_truncation_is_sticky():
+    """超上限只保留最近 N 条；截断标记一旦置上就不会被后续合并洗掉。
+
+    对账依赖这份集合是**完整的**：少一条历史 turn 就会把已计费的回合再补一遍。
+    """
+    existing = [f"t{i}" for i in range(cp.MAX_TRACKED_TURN_IDS + 5)]
+
+    merged, truncated = cp.merge_turn_ids(existing, "t-new", already_truncated=True)
+    again, still_truncated = cp.merge_turn_ids(merged, "t-next", already_truncated=truncated)
+
+    assert len(merged) == cp.MAX_TRACKED_TURN_IDS
+    assert merged[-1] == "t-new", "保最近的回合（更早的可能已被 turns 保留期清掉）"
+    assert truncated is True
+    assert still_truncated is True
+
+
+def test_merge_turn_ids_keeps_truncation_flag_without_new_overflow():
+    """已截断的集合再合并**不会**变回完整（哪怕这次没有新溢出）。
+
+    这条独立于上一条：上一条靠"新合并又超上限"顺带把标记置上，掩盖了
+    `already_truncated` 是否真的被保留。
+    """
+    merged, truncated = cp.merge_turn_ids(["t1"], "t2", already_truncated=True)
+
+    assert merged == ["t1", "t2"]
+    assert truncated is True
+
+
+def test_snapshot_carries_turn_ids():
+    snapshot = cp.build_snapshot(
+        messages=[{"role": "user", "content": "hi"}],
+        turn_index=1,
+        turn_id="turn-1",
+        turn_ids=["turn-0", "turn-1"],
+    )
+
+    assert snapshot["turn_id"] == "turn-1"
+    assert snapshot["turn_ids"] == ["turn-0", "turn-1"]
+    assert snapshot["turn_ids_truncated"] is False
+
+
 def test_snapshot_respects_min_tail_messages():
     """下限保证最近若干条完整保留 —— 否则 `assistant(tool_calls)`/`tool` 配对待断在快照边上。"""
     messages = [
@@ -247,6 +296,7 @@ async def test_runtime_writes_checkpoint_at_turn_end(monkeypatch: pytest.MonkeyP
         user_id="u1",
         session_id="s-cp",
         content="hi",
+        turn_id="turn-1",
         system_prompt="sp",
         llm_config={"mode": "normal", "tools_mode": "yolo"},
         max_turns=3,
@@ -256,3 +306,43 @@ async def test_runtime_writes_checkpoint_at_turn_end(monkeypatch: pytest.MonkeyP
     assert saved, "回合末未落 checkpoint"
     assert saved[0]["session_id"] == "s-cp"
     assert saved[0]["checkpoint"]["turn_index"] >= 1
+    # M19：run 与网关回合的对应关系必须随快照落盘，否则对账无从知道哪些回合已计费
+    assert saved[0]["checkpoint"]["turn_id"] == "turn-1"
+    assert saved[0]["checkpoint"]["turn_ids"] == ["turn-1"]
+    assert saved[0]["checkpoint"]["turn_ids_truncated"] is False
+
+
+@pytest.mark.asyncio
+async def test_runtime_merges_inherited_turn_ids(monkeypatch: pytest.MonkeyPatch):
+    """续跑段必须把上一段的网关回合带下来。
+
+    只写当前 turn = 丢掉历史集合 ⇒ 网关对账把已计费的回合再补一遍（多收）。
+    """
+    from unittest.mock import MagicMock
+
+    from app.agent.resume import ResumeState
+    from app.agent.runtime import AgentRuntime, AgentTask
+    from app.tools.context import set_tool_context
+
+    captured: dict[str, Any] = {}
+
+    def fake_build(**kwargs: Any) -> dict[str, Any]:
+        captured.update(kwargs)
+        return {}
+
+    async def fake_save(**kwargs: Any) -> bool:
+        return True
+
+    monkeypatch.setattr(cp, "build_snapshot", fake_build)
+    monkeypatch.setattr(cp, "save", fake_save)
+    set_tool_context(turn_id="turn-1")
+
+    runtime = AgentRuntime(gateway=MagicMock())
+    runtime._resumed_from_checkpoint = ResumeState(turn_ids=("turn-0",))
+    task = AgentTask(id="t", tenant_id="t1", user_id="u1", session_id="s1", content="hi")
+    await runtime._save_checkpoint(
+        task, [{"role": "user", "content": "hi"}], turn_index=1, done_tools=[], usage={}
+    )
+
+    assert captured["turn_ids"] == ["turn-0", "turn-1"]
+    assert captured["turn_ids_truncated"] is False
