@@ -24,7 +24,7 @@ import os
 import re
 import threading
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 __all__ = [
     "BlobStore",
@@ -135,7 +135,9 @@ class S3BlobStore:
 
     def get(self, key: str) -> bytes:
         resp = self._s3.get_object(Bucket=self._bucket, Key=self._object_key(key))
-        return resp["Body"].read()
+        # boto3 的返回是 dict[str, Any]（stub 未细化 Body），显式 cast 让类型与
+        # 实际契约一致：这里读到的就是对象字节。
+        return cast(bytes, resp["Body"].read())
 
     def delete(self, key: str) -> None:
         self._s3.delete_object(Bucket=self._bucket, Key=self._object_key(key))

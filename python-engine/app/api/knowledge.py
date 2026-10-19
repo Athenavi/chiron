@@ -27,13 +27,12 @@ from app.config import DEFAULT_TENANT_ID
 from app.db import get_pool
 from app.kb_access import kb_access_allowed
 from app.knowledge import blob, settings_store
-from app.knowledge.errors import KnowledgeError, ProviderUnavailable, UnsupportedDocument
+from app.knowledge.errors import KnowledgeError, ProviderUnavailableError
 from app.knowledge.providers import registry
 from app.knowledge.providers.base import (
     KNOWN_PROVIDERS,
     STATUS_DISABLED,
     STATUS_ERROR,
-    STATUS_READY,
     is_known_provider,
 )
 from app.knowledge.service import answer_question
@@ -190,7 +189,7 @@ async def _assert_provider_matches(*, user_id: str, kb_provider: str) -> None:
         )
 
 
-async def _resolve_provider_or_error(*, user_id: str, index_ref: str = ""):
+async def _resolve_provider_or_error(*, user_id: str, index_ref: str = "") -> Any:
     provider, _settings, health = await registry.resolve_for_user(user_id, folder_id=index_ref)
     if provider is None or not health.ok:
         raise HTTPException(
@@ -414,7 +413,7 @@ async def delete_knowledge_base(
     return {"id": kb_id, "deleted": True}
 
 
-def _context_for(kb: Any):
+def _context_for(kb: Any) -> Any:
     from app.knowledge.providers.base import ProviderContext
 
     return ProviderContext(
@@ -688,7 +687,7 @@ async def query_knowledge_base(
         result, provider_name = await answer_question(
             kb_id=kb_id, user_id=user_id, question=query.strip()
         )
-    except ProviderUnavailable as exc:
+    except ProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KnowledgeError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
@@ -818,7 +817,7 @@ async def put_user_settings(
         saved = await settings_store.save(
             user_id=user_id, tenant_id=tenant_id, provider=provider, cloud_api_key=cloud_api_key
         )
-    except ProviderUnavailable as exc:
+    except ProviderUnavailableError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     except KnowledgeError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

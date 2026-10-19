@@ -16,7 +16,7 @@ PageIndex 的 ``index`` 与 ``chat`` **都跑"你自己的模型"**（不是平�
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 logger = logging.getLogger(__name__)

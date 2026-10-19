@@ -22,7 +22,8 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 
-from app.queue.worker import DELAY_MAX_ATTEMPTS, DLQ_STREAM, TASK_STREAM, QueueWorker, RetryLaterError
+from app.queue.streams import DLQ_STREAM, TASK_STREAM
+from app.queue.worker import DELAY_MAX_ATTEMPTS, QueueWorker, RetryLaterError
 
 
 class FakeRedis:

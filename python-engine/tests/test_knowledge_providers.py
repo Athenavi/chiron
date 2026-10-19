@@ -8,16 +8,15 @@
 
 from __future__ import annotations
 
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock
 
 import pytest
 
 from app.config import settings
-from app.knowledge.errors import KnowledgeError, ProviderFailed, ProviderUnavailable
+from app.knowledge.errors import KnowledgeError, ProviderFailedError, ProviderUnavailableError
 from app.knowledge.providers import registry
-from app.knowledge.providers.base import ProviderContext
+from app.knowledge.providers.base import AnswerResult, Citation, ProviderContext
 from app.knowledge.service import serialize_answer
-from app.knowledge.providers.base import AnswerResult, Citation
 
 
 def _ctx(**overrides) -> ProviderContext:
@@ -105,7 +104,7 @@ async def test_answer_rejects_out_of_scope_citations(monkeypatch) -> None:
         "_post",
         AsyncMock(return_value={"answer": "a", "citations": [{"doc_name": "deadbeef-x.pdf"}]}),
     )
-    with pytest.raises(ProviderFailed):
+    with pytest.raises(ProviderFailedError):
         await provider.answer(_ctx(doc_ids=("doc-1",)), question="q")
 
 
@@ -113,7 +112,7 @@ async def test_answer_rejects_out_of_scope_citations(monkeypatch) -> None:
 async def test_indexing_is_not_done_by_the_engine() -> None:
     """引擎不索引：调用 submit_document 必须是**显式失败**，而不是悄悄走进程内实现。"""
     provider = registry.build_provider("selfhosted")
-    with pytest.raises(ProviderUnavailable):
+    with pytest.raises(ProviderUnavailableError):
         await provider.submit_document(
             _ctx(), doc_id="doc-1", filename="a.pdf", data=b"%PDF", file_type="pdf"
         )

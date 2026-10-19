@@ -15,17 +15,14 @@
 
 from __future__ import annotations
 
-import asyncio
 import json
 import logging
 from dataclasses import asdict
 from typing import Any
 
-from app.knowledge.errors import KnowledgeError, ProviderUnavailable
+from app.knowledge.errors import KnowledgeError, ProviderUnavailableError
 from app.knowledge.providers import registry
 from app.knowledge.providers.base import (
-    STATUS_ERROR,
-    STATUS_READY,
     AnswerResult,
     ProviderContext,
 )
@@ -115,7 +112,7 @@ async def answer_question(
         user_id, folder_id=str(kb["index_ref"] or "")
     )
     if provider is None or not health.ok:
-        raise ProviderUnavailable(health.detail or "provider 不可用")
+        raise ProviderUnavailableError(health.detail or "provider 不可用")
 
     rows = await pool.fetch(
         """SELECT pageindex_doc_id FROM knowledge_documents
