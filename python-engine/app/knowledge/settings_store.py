@@ -18,7 +18,7 @@ from typing import Any
 
 from app.config import settings
 from app.knowledge import crypto
-from app.knowledge.errors import KnowledgeError, ProviderUnavailable
+from app.knowledge.errors import KnowledgeError, ProviderUnavailableError
 from app.knowledge.providers.base import (
     PROVIDER_CLOUD,
     STATUS_DISABLED,
@@ -113,7 +113,7 @@ async def save(
         if not key:
             raise KnowledgeError("选择 Cloud 模式必须提供 PageIndex Cloud API key")
         if not crypto.encryption_available(settings.app_secret):
-            raise ProviderUnavailable("APP_SECRET 未配置，无法保存 Cloud API key")
+            raise ProviderUnavailableError("APP_SECRET 未配置，无法保存 Cloud API key")
         encrypted = crypto.encrypt_secret(key, settings.app_secret)
         fingerprint = crypto.key_fingerprint(key)
         status = "active"

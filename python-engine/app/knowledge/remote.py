@@ -20,7 +20,7 @@ import logging
 from typing import Any
 
 from app.config import settings
-from app.knowledge.errors import ProviderFailed, ProviderUnavailable
+from app.knowledge.errors import ProviderFailedError, ProviderUnavailableError
 from app.knowledge.providers.base import (
     STATUS_DISABLED,
     STATUS_ERROR,
@@ -66,10 +66,10 @@ class RemoteProvider:
 
         base = self._base_url()
         if not base:
-            raise ProviderUnavailable("KNOWLEDGE_SERVICE_URL 未配置（知识库服务不可用）")
+            raise ProviderUnavailableError("KNOWLEDGE_SERVICE_URL 未配置（知识库服务不可用）")
         token = str(getattr(settings, "internal_token", "") or "")
         if not token:
-            raise ProviderUnavailable("INTERNAL_TOKEN 未配置，无法调用知识库服务")
+            raise ProviderUnavailableError("INTERNAL_TOKEN 未配置，无法调用知识库服务")
         try:
             async with httpx.AsyncClient(
                 base_url=base,
@@ -78,20 +78,20 @@ class RemoteProvider:
             ) as client:
                 resp = await client.post(path, json=payload)
         except Exception as exc:  # noqa: BLE001 — 服务不可达 = provider 不可用，不是 500
-            raise ProviderUnavailable(f"知识库服务不可达: {exc}") from exc
+            raise ProviderUnavailableError(f"知识库服务不可达: {exc}") from exc
         if resp.status_code == 401:
-            raise ProviderUnavailable("知识库服务拒绝内部令牌（INTERNAL_TOKEN 不一致？）")
+            raise ProviderUnavailableError("知识库服务拒绝内部令牌（INTERNAL_TOKEN 不一致？）")
         if resp.status_code >= 400:
             detail = ""
             try:
                 detail = str((resp.json() or {}).get("detail") or "")
             except Exception:  # noqa: BLE001
                 detail = resp.text[:200]
-            raise ProviderFailed(detail or f"知识库服务返回 {resp.status_code}")
+            raise ProviderFailedError(detail or f"知识库服务返回 {resp.status_code}")
         try:
             return dict(resp.json() or {})
         except Exception as exc:  # noqa: BLE001
-            raise ProviderFailed(f"知识库服务返回非 JSON: {exc}") from exc
+            raise ProviderFailedError(f"知识库服务返回非 JSON: {exc}") from exc
 
     def _ctx_payload(self, ctx: ProviderContext) -> dict[str, Any]:
         return {
@@ -153,7 +153,7 @@ class RemoteProvider:
     ) -> SubmitResult:
         # 引擎**不索引**：索引由 pageindex-worker 消费 engine:tasks:kb 执行。
         # 这里显式报错而不是"悄悄走进程内实现"——后者正是 S4 要消除的双路径。
-        raise ProviderUnavailable(
+        raise ProviderUnavailableError(
             "索引由 pageindex-worker 执行（引擎不装 PageIndex SDK）；请通过 /build 投递任务"
         )
 
@@ -188,7 +188,7 @@ class RemoteProvider:
         ]
         if strays:
             logger.warning("remote answer out-of-scope citations: %s", strays[:3])
-            raise ProviderFailed("检索结果包含知识库范围外的文档，已拒绝返回")
+            raise ProviderFailedError("检索结果包含知识库范围外的文档，已拒绝返回")
         return AnswerResult(answer=str(body.get("answer") or ""), citations=citations)
 
     def agent_tools(self, ctx: ProviderContext) -> list[Any]:

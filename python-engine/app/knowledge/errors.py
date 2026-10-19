@@ -11,15 +11,15 @@ class KnowledgeError(Exception):
     """知识库领域错误基类。"""
 
 
-class ProviderUnavailable(KnowledgeError):
+class ProviderUnavailableError(KnowledgeError):
     """provider 未配置 / 未启用（对应 HTTP 503，且消息面向用户可读）。"""
 
 
-class ProviderFailed(KnowledgeError):
+class ProviderFailedError(KnowledgeError):
     """provider 调用失败（凭据错误、上游不可达、索引失败等）。"""
 
 
-class UnsupportedDocument(KnowledgeError):
+class UnsupportedDocumentError(KnowledgeError):
     """当前 provider 不支持该文档类型。
 
     local（自托管）只吃 text-based PDF —— 这是 PageIndex 的既定边界，不是实现取舍；
@@ -27,5 +27,5 @@ class UnsupportedDocument(KnowledgeError):
     """
 
 
-class BlobMissing(KnowledgeError):
+class BlobMissingError(KnowledgeError):
     """原文对象不存在（对象存储被清空/迁移不完整）。"""

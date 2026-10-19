@@ -10,7 +10,7 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from app.observability.logging import trace_id_var
-from app.queue.streams import ENGINE_QUEUE, queue_for_task
+from app.queue.streams import queue_for_task
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)

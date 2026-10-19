@@ -109,7 +109,7 @@ class TestKbSearchToolGate:
 
 class TestKbSearchErrorSurfacing:
     async def test_provider_failure_is_returned_not_raised(self, tool_ctx):
-        from app.knowledge.errors import ProviderUnavailable
+        from app.knowledge.errors import ProviderUnavailableError
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
@@ -119,7 +119,7 @@ class TestKbSearchErrorSurfacing:
             patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
             patch(
                 "app.tools.kb.answer_question",
-                AsyncMock(side_effect=ProviderUnavailable("provider 未配置")),
+                AsyncMock(side_effect=ProviderUnavailableError("provider 未配置")),
             ),
         ):
             result = await kb_search("kb-1", "q")
