@@ -84,3 +84,25 @@ def test_build_key_sanitizes_filename() -> None:
     assert ".." not in key
     assert " " not in key
     assert key.startswith("t1/kb1/doc1/")
+
+
+def test_blob_backend_survives_empty_env(monkeypatch, tmp_path) -> None:
+    """compose 用 `${VAR:-}` 注入的是**空串**（键存在）：回退不能被空串吃掉。
+
+    ``os.getenv("K", default)`` 只在键不存在时用 default —— 空串会让
+    "knowledge 未配 → 跟随 media → local" 这条链断在第一环，静默落到 local。
+    """
+    monkeypatch.setenv("KNOWLEDGE_BLOB_BACKEND", "")
+    monkeypatch.setenv("MEDIA_STORE_BACKEND", "")
+    monkeypatch.setenv("KNOWLEDGE_LOCAL_PATH", str(tmp_path))
+    store = blob.create_blob_store()
+    assert isinstance(store, blob.LocalBlobStore)
+
+
+def test_blob_backend_follows_media_backend(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv("KNOWLEDGE_BLOB_BACKEND", "")
+    monkeypatch.setenv("MEDIA_STORE_BACKEND", "local")
+    monkeypatch.setenv("KNOWLEDGE_LOCAL_PATH", str(tmp_path))
+    store = blob.create_blob_store()
+    assert isinstance(store, blob.LocalBlobStore)
+    assert tmp_path.exists()

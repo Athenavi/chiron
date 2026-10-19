@@ -7,6 +7,15 @@ openai==3.29.0
 # pymilvus 只服务记忆层的可选向量后端（MEMORY_VECTOR_BACKEND=milvus，默认 pg）。
 # 知识库已改用 PageIndex，不再需要向量库。
 pymilvus==3.0.2
+# 知识库检索引擎（PageIndex）：自托管 local 与 Cloud 共用同一 SDK。
+# ⚠ **暂未启用**：pageindex 0.4.3 → litellm 要求 openai<3.0.0，与本文件固定的
+#   openai==3.29.0 直接冲突（pip 解析 ResolutionImpossible，镜像构建会失败）。
+#   解冲突方案待定，见变更单：
+#     A) 把 openai 降到 2.54.0 —— 已验证整套依赖可解析（litellm 1.106.0 / pageindex 0.4.3
+#        与其它固定版本共存）；引擎只用 AsyncOpenAI 的基础面，responses 走自研 HTTP。
+#     B) 把 PageIndex 隔离到独立进程/容器（主依赖不动，代价是 sidecar + IPC）。
+#   定案前**不要**打开这一行。
+#pageindex==0.4.3
 # Redis
 redis==8.1.0
 # gRPC

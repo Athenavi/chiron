@@ -1,8 +1,8 @@
 """知识库 provider 实现与注册表。
 
 * ``base``       —— 接口与数据类（对外只依赖这里）
-* ``selfhosted`` —— PageIndex local 模式（每个知识库一个索引目录）
-* ``cloud``      —— PageIndex Cloud（用户自带 API key）
+* ``remote``     —— 引擎侧唯一实现（内网 HTTP 调 pageindex-search）
+  （进程内实现已删除：``pageindex → litellm → openai<3`` 与引擎的 ``openai 3.x`` 无法共存）
 * ``registry``   —— 名字 → 实例；按用户解析可用 provider
 """
 

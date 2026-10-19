@@ -1,0 +1,4 @@
+# pageindex-service 的开发/测试依赖（生产镜像只装 requirements.txt）
+pytest==8.4.2
+pytest-asyncio==1.2.0
+httpx==0.28.1

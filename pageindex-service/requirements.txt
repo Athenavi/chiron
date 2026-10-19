@@ -1,0 +1,25 @@
+# PageIndex 运行时 —— **独立于 python-engine 的依赖环境**（S4 隔离）。
+#
+# 为什么单独一份：pageindex → litellm 要求 openai<3.0.0，而引擎固定 openai==3.29.0，
+# 两者的依赖树在同一个环境里无法共存（pip 直接 ResolutionImpossible）。把索引与检索
+# 放进独立进程/容器后，两边各自演进：升级 pageindex 只需重建本镜像。
+#
+# 版本**锁死**（不用 >=）：SDK 迭代以小时计（0.4.3 → 0.4.4 同日发布），API 面会漂移
+# （如 0.4.4 引入 enable_citations / optimize），索引文件格式也可能变。升级必须是一次
+# 显式动作：改这里 → 跑 tests/test_sdk_contract.py → 按 docs 的升级 checklist 重建索引。
+pageindex==0.4.4
+
+# 服务与 worker 共用的最小依赖（不引引擎的任何东西）
+fastapi==0.143.0
+uvicorn==0.54.0
+pydantic==2.14.1
+pydantic-settings==2.15.0
+
+# 队列（worker 消费 engine:tasks:kb）+ 数据库（回写索引状态）
+redis==8.1.0
+# 用户级 Cloud key 解密（runtime.decrypt_secret，与 Go internal/settings 同算法）
+cryptography==49.0.0
+asyncpg==0.32.0
+
+# 原文对象存储：与引擎同一套 S3 变量（worker 需要读原文才能索引）
+boto3==1.43.114

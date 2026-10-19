@@ -1,92 +1,89 @@
 # 核心组件：知识库（PageIndex）
 
-> **权威来源**：代码本身（`python-engine/app/knowledge/` + `app/api/knowledge.py`）+ `README.md` §关键配置。
-> 本页只给「链路怎么走、代码在哪」。
+> **权威来源**：`python-engine/app/knowledge/`、`pageindex-service/app/`、`app/api/knowledge.py`。
+> 本页只给「链路怎么走、代码在哪、运维怎么做」。
 
-## 一条知识从上传到被引用
+## 架构（S4：依赖隔离）
+
+PageIndex 跑在**独立镜像**里，原因是硬约束而非偏好：`pageindex → litellm → openai<3.0.0`
+与引擎固定的 `openai 3.x` 在同一个环境里 pip 直接 `ResolutionImpossible`。
 
 ```
-上传（前端 base64） ─► 对象存储（S3 / 共享卷） ─► knowledge_documents(pending)
-                                                        │
-                                          POST /v1/kb/{id}/build  →  队列任务 kb_index
-                                                        │
-                                                        ▼
-                        provider.submit_document：解析 → 建树索引 → 存到 provider 侧
-                                                        │
-用户提问 ─► provider.answer（在树上推理） ◄──────────────┘
-                    │
-                    ▼
-            答案 + 引用（页 / 块） ─► POST /v1/kb/{id}/query、agent 工具 kb_search
+      ┌──────────────────────────────────────────────┐
+      │ python-engine（openai 3.x，不装 PageIndex）    │
+      │  /v1/kb/*  权限、DB、解密、状态机              │
+      │  kb_search → HTTP                              │
+      └────────┬─────────────────────────┬────────────┘
+   内部 HTTP   │(X-Internal-Token)        │ 投递 kb_index
+               ▼                         ▼
+   ┌────────────────────────┐  ┌───────────────────────────┐
+   │ pageindex-search       │  │ pageindex-worker          │
+   │  无状态；chat/folder    │  │  消费 engine:tasks:kb      │
+   │  索引卷（只读）          │  │  读原文 → 索引 → 回写 PG    │
+   └────────────────────────┘  │  索引卷（读写）             │
+                               └───────────────────────────┘
+                    同一镜像 chiron/pageindex-service
 ```
 
-与旧实现（切块 + 向量 + 全文检索 + RRF）相比的**四处语义变化**：
-
-1. **没有"片段"这个概念**：PageIndex 是推理式检索，返回的是答案与可追溯引用（页码 / 块）。
-2. **上传 ≠ 索引**：上传只把原文落到对象存储并记一行 `pending`；索引是队列任务 `kb_index`。
-3. **provider 二选一**：每个用户只能选自托管（PageIndex local）或 PageIndex Cloud，见下。
-4. **没有向量库**：Milvus / pgvector 不再参与知识库（Milvus 只剩记忆层的可选后端）。
+一条知识的旅程：**上传**（引擎写原文对象 + `pending` 行）→ **Build**（引擎投递队列任务）
+→ **worker 索引**（读原文 → `submit_document` → 回写 `pageindex_doc_id`/`page_count`/状态）
+→ **检索**（引擎查本库已就绪 `doc_id` → HTTP 问 search → 答案 + 引用）。
 
 ## 代码在哪
 
 ```
 python-engine/app/knowledge/
-  providers/base.py        provider 协议 + 数据类（ProviderContext / AnswerResult / Citation）
-  providers/selfhosted.py  PageIndex local：每个知识库一个 storage_path，仅 PDF
-  providers/cloud.py       PageIndex Cloud：用户自带 API key，支持 folder/metadata
-  providers/registry.py    名字 → 实例；按用户解析可用 provider + 健康探测
-  service.py               业务编排（索引、问答、状态回写）—— API 与队列共用
-  settings_store.py        用户级设置（provider + Cloud key 密文）
-  crypto.py                AES-256-GCM，与 Go 侧 internal/settings 同域派生、字节级兼容
-  blob.py                  原文对象存储（local 共享卷 / S3）
-  llm.py                   模型名 → litellm 目标（复用 app/providers 的端点与 key）
-python-engine/app/api/knowledge.py     /v1/kb/*  HTTP 面
-python-engine/app/tools/kb.py          agent 工具：kb_list / kb_search
-frontend-vue/src/views/Knowledge*.vue  列表 / 详情 / 设置
+  remote.py           引擎侧唯一实现：RemoteProvider（HTTP 客户端 + 越界守卫兜底）
+  service.py          answer_question / serialize_answer（索引已移出引擎）
+  settings_store.py   用户级设置（provider + Cloud key 密文）
+  crypto.py           AES-256-GCM，与 Go internal/settings 同域派生、字节级兼容
+  blob.py             原文对象存储（local 共享卷 / S3）
+pageindex-service/app/
+  adapter.py          PageIndex 唯一出口：文件名前缀、folder 层级、越界守卫
+  search_api.py       无状态检索服务（/v1/answer /v1/prepare /v1/delete /healthz）
+  index_worker.py     消费 engine:tasks:kb：库级锁、索引、回写状态与 index_engine
+  store.py / runtime.py / config.py
+python-engine/app/queue/streams.py   队列规格（引擎队列 / kb 队列各自的 stream/组/DLQ）
 ```
 
-## 两种 provider
-
-| | 自托管（`selfhosted`） | Cloud（`cloud`） |
-|---|---|---|
-| 索引与存储 | 本地目录（**必须落在所有副本可见的共享存储上**） | PageIndex 托管 |
-| 支持的文档 | 仅 text-based PDF | PDF / PPTX / Word（含扫描件 OCR） |
-| 引用粒度 | 页 | 块 |
-| 依赖 | 部署方配置的 LLM（index + chat 两个模型） | 用户自己的 PageIndex API key + 我们的 chat 模型 |
-
-**二选一是产品约束**（`user_knowledge_settings.provider`）：知识库的 `provider` 必须与用户当前
-设置一致，否则 409 —— 否则会出现"库建在自托管、用户却切到 Cloud"，表现为"传了文档却查不到"。
-已有知识库时不允许直接切换 provider（要先删除或重建）。
-
-## 三个实现细节（会真出问题的）
-
-1. **每个知识库一个 `storage_path`**。PageIndex local 的 `browse_documents` 会列出 storage 里的
-   **全部**文档；所有库共用一个目录就会跨库、乃至跨租户列出别人的文档。
-2. **多实例必须共享索引目录**。local 模式没有中心服务，索引文件就是唯一真相；放在 Pod 本地盘上
-   会表现为"同一份文档时而能查、时而查不到"。同一 KB 的索引任务由队列按库串行化（`kb_index`）。
-3. **索引任务不乐观置成功**。文档状态是 `pending → indexing → ready/error`，只有真正跑完才回写。
-
-## 隔离与信任边界（重要）
+## 隔离与信任边界
 
 | 边界 | 机制 | 强度 |
 |---|---|---|
-| 跨用户 / 跨租户 | API 与 agent 工具都过 `kb_access_allowed`（自有 / public / 同租户）；provider 凭据取 **KB 属主** | 强（服务端校验） |
-| 库 ↔ 库（自托管） | 每个库一个 `storage_path`，PageIndex 的 `DocStore` 只读该目录 | **强（目录即边界）** |
-| 库 ↔ 库（Cloud） | 检索时显式传本库已就绪文档的 `doc_id`；引用名 `<doc_id 前缀>-<随机>_<原名>` 可**验证**归属，越界即拒绝返回 | 引擎侧兜底，见下 |
+| 跨用户 / 跨租户 | 引擎的 `kb_access_allowed`（自有 / public / 同租户）；凭据取 **KB 属主** | 强（服务端） |
+| 库 ↔ 库（自托管） | 每库一个 `storage_path`；`DocStore` 只读该目录 | **强（目录即边界）** |
+| 库 ↔ 库（Cloud） | 检索显式传本库 `doc_id`；引用名 `<doc_id 前缀>-<随机>_<原名>` 可验证，越界**整条拒绝** | 引擎 + 服务双道 |
+| 原文访问 | **只有 worker** 能读原文（引擎上传后不读；search 不挂原文卷） | 强（部署层） |
+| 账号级工具 | `agent_tools()` 不接线（它作用于用户整个 PageIndex 账号） | 强（未暴露） |
 
-**PageIndex 的 `doc_id` / `folder_id` 是「引导」不是「限制」**（官方文档原话：
-context "does not restrict tool access"）。所以 Cloud 模式的加固有三条，全在引擎侧：
+**PageIndex 的 `doc_id` / `folder_id` 是「引导」不是「限制」**（官方原文："targets at the
+prompt level"）。所以隔离靠上面三条引擎/服务侧机制，folder（用户空间 → 库）只是**组织与
+审计**手段。
 
-1. 库里没有已就绪文档 → **拒绝检索**，绝不放宽到整个账号；
-2. 引用必须能映射回本库文档，越界 → **整条拒绝返回**（`chat_result.guard_citations`）——
-   只删引用不行：答案正文可能已经写进了范围外内容；
-3. 账号级的浏览工具（`agent_tools`）**不接线**给 agent —— 它作用于整个账号。
+## 升级 pageindex（checklist）
 
-Cloud 模式下 **PageIndex 账号本身就是信任边界**：同一个账号里不要放不该被检索到的文档。
-Chiron 把上传的文档放进**以 user_id 命名的 folder**（其下按知识库再分一层），便于识别与
-审计 —— 但这是组织手段，**不是**安全边界。
+SDK 迭代以小时计（0.4.3 → 0.4.4 同日），API 面会漂移（如 0.4.4 引入 `enable_citations` /
+`optimize`），索引文件格式也可能变。升级**必须**走完这几步：
+
+1. 改 `pageindex-service/requirements.txt` 的**锁死版本**（不用 `>=`），重建镜像；
+2. 跑契约测试（`pytest pageindex-service/tests/test_sdk_contract.py`）—— 它钉住我们使用的
+   6 个方法与参数名（`chat(citations=...)`、`submit_document(folder_id/wait/metadata)` 等），
+   漂移在 CI 就失败，而不是上线后；
+3. 核对 `optimize` 等**我们显式传的参数**在新版本里的语义（它改变索引成本/耗时）；
+4. 上线后比对 `knowledge_bases.index_engine` 与当前镜像版本；不一致的库用
+   `POST /v1/kb/{id}/build`（body `{"force": true}`）**重建索引**（增量 build 会跳过已 ready
+   的文档；不自动重建：重建要重跑 LLM，时间与费用由人决定）；
+5. 灰度：先在一个知识库验证"上传 → build → 查询 → 引用"闭环。
+
+## 部署要点
+
+* `KNOWLEDGE_SERVICE_URL` 未配 → 知识库显示**未启用**，服务照常启动（不阻塞）；
+* 索引卷（`kbindexdata`）多副本下**必须是共享卷**：search **只读**、worker 读写；
+* 原文卷（`kblobdata`）只挂引擎与 worker —— search 拿不到原文；
+* 内部鉴权复用 `INTERNAL_TOKEN`（fail-close：未配置时 search 拒绝一切请求）；
+* 自托管的 LLM 连接由**索引侧独立配置**（`KNOWLEDGE_SELFHOSTED_LLM_*`），与在线对话的
+  凭据解耦、可分别轮换。
 
 ## 延伸阅读
 
-- [架构](architecture.md) —— 存储栈的位置
-- [安装](../getting-started/install.md) —— S3 / 共享存储的依赖与起法
-- [工具与审批](tools.md) —— 检索类工具在工具面上的位置
+- [架构](architecture.md) · [安装](../getting-started/install.md) · [工具与审批](tools.md)

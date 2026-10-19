@@ -214,7 +214,14 @@ class Settings(BaseSettings):
     # 本地嵌入模型路径（BGE/Jina 等），为空则跳过本地嵌入、回退到 API
     local_embedding_model: str = ""
 
-    # ── 知识库配置（PageIndex）──
+    # ── 知识库配置（PageIndex / S4 独立服务）──
+    #: 检索服务内网地址（compose 里是 http://pageindex-search:8100）
+    knowledge_service_url: str = ""
+    # 问答是分钟级（多轮工具循环），120s 会误杀长文档；索引不走 HTTP。
+    knowledge_service_timeout: float = 600.0
+    #
+    # 以下 knowledge_selfhosted_* 现在由**索引服务侧**读取（引擎不再索引文档）；
+    # 保留声明只为兼容既有部署变量的文档与透传。
     # 自托管（PageIndex local 模式）的索引根目录。**必须位于所有引擎副本可见的存储上**
     # （共享卷 / NFS / RWX PVC）：local 模式没有中心服务，索引文件就是唯一真相，
     # 放在 Pod 本地盘上会表现为"同一份文档时而能查、时而查不到"。

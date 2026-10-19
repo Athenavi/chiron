@@ -1299,6 +1299,11 @@ models:
         maxLength: 255
         description: provider 侧的索引位置（自托管=索引目录，cloud=folder_id）
         nullable: true
+      index_engine:
+        type: string
+        maxLength: 64
+        description: 建立该库索引时的检索引擎版本（如 pageindex==0.4.4）；与当前镜像不一致 ⇒ 需重建
+        nullable: true
       error_message:
         type: text
         description: 最近一次错误

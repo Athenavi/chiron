@@ -21,7 +21,6 @@ import logging
 from dataclasses import asdict
 from typing import Any
 
-from app.knowledge import blob, settings_store
 from app.knowledge.errors import KnowledgeError, ProviderUnavailable
 from app.knowledge.providers import registry
 from app.knowledge.providers.base import (
@@ -89,108 +88,16 @@ async def _load_kb(pool: Any, kb_id: str) -> Any:
 
 
 async def index_knowledge_base(*, kb_id: str, user_id: str) -> dict[str, Any]:
-    """索引一个知识库下所有未就绪的文档（队列任务 ``kb_index`` 的任务体）。
+    """**索引已移出引擎**（S4）：由 ``pageindex-worker`` 消费 ``engine:tasks:kb`` 执行。
 
-    串行处理文档：local 建树是分钟级 CPU/网络密集型任务，并发跑只会把同一条 LLM
-    配额打满并让 ``manifest.json`` 的写更密集。库级串行由队列的单消费者语义保证。
+    引擎不装 PageIndex SDK（``pageindex → litellm → openai<3`` 与引擎的 ``openai 3.x``
+    无法共存）。这里保留一个**显式的失败点**而不是静默降级：有人调到它，说明还在走旧路径，
+    应当改为投递队列任务（见 ``app/api/knowledge.py::build_knowledge_base``）。
     """
-    pool = await _pool()
-    kb = await _load_kb(pool, kb_id)
-
-    provider, user_settings, health = await registry.resolve_for_user(
-        user_id, folder_id=str(kb["index_ref"] or "")
+    raise KnowledgeError(
+        "索引由 pageindex-worker 执行（引擎不装 PageIndex SDK）；请通过 "
+        "POST /v1/kb/{id}/build 投递任务"
     )
-    if provider is None or not health.ok:
-        detail = health.detail or "provider 不可用"
-        await _set_kb_status(pool, kb_id, STATUS_ERROR, detail)
-        return {"status": STATUS_ERROR, "indexed": 0, "failed": 0, "detail": detail}
-
-    await _set_kb_status(pool, kb_id, STATUS_INDEXING)
-
-    # 让 provider 决定索引位置并回写（自托管=索引目录；Cloud=库 folder，其上层是以
-    # user_id 命名的用户 folder）。放在"提交文档之前"：位置没准备好就不该开始索引。
-    try:
-        index_ref = await provider.prepare_index(_context(kb))
-    except Exception as exc:  # noqa: BLE001 — 位置准备失败 = 整库失败，逐文档重试没有意义
-        detail = f"索引位置准备失败: {exc}"
-        await _set_kb_status(pool, kb_id, STATUS_ERROR, detail)
-        return {"status": STATUS_ERROR, "indexed": 0, "failed": 0, "detail": detail}
-
-    if index_ref and index_ref != str(kb["index_ref"] or ""):
-        await pool.execute(
-            "UPDATE knowledge_bases SET index_ref = $2, updated_at = NOW() WHERE id = $1",
-            kb_id,
-            index_ref,
-        )
-        # 后续文档级 ctx 要带上新位置（Cloud 的 folder_id 正是从这里进 provider 的）
-        kb = dict(kb) | {"index_ref": index_ref}
-
-    # Cloud 的用户级 folder 也落库：下次索引不必再列取一遍账号
-    user_folder = str(getattr(provider, "user_folder_id", "") or "")
-    if user_folder and user_folder != (user_settings.cloud_folder_id if user_settings else ""):
-        await settings_store.set_cloud_folder(user_id=user_id, folder_id=user_folder)
-
-    docs = await pool.fetch(
-        """SELECT id, name, file_type, storage_key
-             FROM knowledge_documents
-            WHERE knowledge_base_id = $1 AND status <> 'ready'
-            ORDER BY created_at""",
-        kb_id,
-    )
-
-    store = blob.get_blob_store()
-    indexed = 0
-    errors: list[str] = []
-    for doc in docs:
-        doc_id = str(doc["id"])
-        ctx = _context(kb)
-        try:
-            storage_key = str(doc["storage_key"] or "")
-            if not storage_key:
-                raise KnowledgeError("文档缺少原文对象（storage_key 为空）")
-            data = await asyncio.to_thread(store.get, storage_key)
-            await pool.execute(
-                "UPDATE knowledge_documents SET status = $2, updated_at = NOW() WHERE id = $1",
-                doc_id,
-                STATUS_INDEXING,
-            )
-            result = await provider.submit_document(
-                ctx,
-                doc_id=doc_id,
-                filename=str(doc["name"] or f"{doc_id}.pdf"),
-                data=data,
-                file_type=str(doc["file_type"] or "pdf"),
-            )
-            await pool.execute(
-                """UPDATE knowledge_documents
-                      SET status = $2, pageindex_doc_id = $3, page_count = $4,
-                          error_message = NULL, updated_at = NOW()
-                    WHERE id = $1""",
-                doc_id,
-                STATUS_READY,
-                result.doc_id,
-                result.page_count,
-            )
-            indexed += 1
-        except Exception as exc:  # noqa: BLE001 — 单文档失败不该拖垮整库
-            message = str(exc)[:500]
-            errors.append(f"{doc['name']}: {message}")
-            logger.warning("knowledge index failed kb=%s doc=%s: %s", kb_id, doc_id, message)
-            await pool.execute(
-                """UPDATE knowledge_documents
-                      SET status = $2, error_message = $3, updated_at = NOW()
-                    WHERE id = $1""",
-                doc_id,
-                STATUS_ERROR,
-                message,
-            )
-
-    final = STATUS_ERROR if errors else STATUS_READY
-    await _set_kb_status(pool, kb_id, final, "; ".join(errors))
-    logger.info(
-        "knowledge index done kb=%s indexed=%d failed=%d", kb_id, indexed, len(errors)
-    )
-    return {"status": final, "indexed": indexed, "failed": len(errors)}
 
 
 async def answer_question(

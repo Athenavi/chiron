@@ -153,8 +153,10 @@ _store_lock = threading.Lock()
 
 
 def create_blob_store() -> BlobStore:
-    backend = os.getenv(
-        "KNOWLEDGE_BLOB_BACKEND", os.getenv("MEDIA_STORE_BACKEND", "local")
+    # 用 `or` 链而不是 getenv 的默认值：compose 用 `${VAR:-}` 注入时变量**存在但为空串**，
+    # 而 getenv 的 default 只在键不存在时生效 —— 空串会让回退悄悄失效、落到 local。
+    backend = (
+        os.getenv("KNOWLEDGE_BLOB_BACKEND") or os.getenv("MEDIA_STORE_BACKEND") or "local"
     ).lower()
     if backend == "s3":
         bucket = os.getenv("KNOWLEDGE_S3_BUCKET") or os.getenv("S3_BUCKET", "")

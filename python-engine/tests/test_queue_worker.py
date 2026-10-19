@@ -6,7 +6,8 @@ import pytest
 
 from app.memory.layers import SlotType, SourceType
 from app.queue import worker as worker_module
-from app.queue.worker import DLQ_STREAM, MAX_RETRIES, TASK_STREAM, QueueWorker
+from app.queue.streams import DLQ_STREAM, TASK_STREAM
+from app.queue.worker import MAX_RETRIES, QueueWorker
 
 
 def make_worker(redis=None):
@@ -25,7 +26,7 @@ def _session_pool(rows, owner="t1"):
     return pool
 
 
-def fields(task_type="kb_index", task_id="t1", payload="{}", retry_count=0):
+def fields(task_type="tool_job", task_id="t1", payload="{}", retry_count=0):
     return {
         b"task_type": task_type.encode(),
         b"task_id": task_id.encode(),
@@ -55,7 +56,7 @@ class TestProcessMessage:
         redis.xadd.assert_awaited_once()
         stream, message, *_ = redis.xadd.await_args.args
         assert stream == TASK_STREAM
-        assert message["task_type"] == "kb_index"
+        assert message["task_type"] == "tool_job"
         assert message["retry_count"] == "1"
         redis.xack.assert_awaited()
 
@@ -249,3 +250,58 @@ class TestHandleMemoryRollup:
         with patch("app.db.get_pool", return_value=pool):
             with pytest.raises(RuntimeError, match="db down"):
                 await worker._handle_memory_rollup({"session_id": "s1"}, tenant_id="t1")
+
+
+# ── 独立队列：外来任务转发（滚动升级兼容）────────────────────────────────
+#
+# 注意信封用 **bytes 键**：真实的 XREADGROUP 返回 bytes 键/值，用 str 键会让
+# ``_process_message`` 的类型解析走到另一分支（task_type 变成 bytes 而匹配不上）。
+
+@pytest.mark.asyncio
+async def test_foreign_task_is_forwarded_to_its_queue():
+    """引擎队列里出现 kb_index（本该走知识库索引队列）→ 转发 + ACK。
+
+    升级期间旧版 producer 仍按老路由投递；引擎镜像没有 PageIndex SDK，就地执行会失败，
+    失败就会把升级窗口内的索引任务全部打进 DLQ。
+    """
+    from app.queue.streams import KB_QUEUE
+
+    redis = AsyncMock()
+    redis.xadd = AsyncMock(return_value="1-1")
+    redis.xack = AsyncMock()
+    worker = QueueWorker(redis)
+
+    await worker._process_message(
+        "1-0",
+        {
+            b"task_type": b"kb_index",
+            b"task_id": b"t1",
+            b"payload": b"{}",
+            b"retry_count": b"0",
+        },
+    )
+
+    assert redis.xadd.await_args.args[0] == KB_QUEUE.stream
+    redis.xack.assert_awaited()
+
+
+@pytest.mark.asyncio
+async def test_own_task_is_not_forwarded():
+    """本队列自己的任务不会被转发到知识库队列（无论它后续成功还是重投）。"""
+    from app.queue.streams import KB_QUEUE
+
+    redis = AsyncMock()
+    redis.xadd = AsyncMock()
+    redis.xack = AsyncMock()
+    worker = QueueWorker(redis)
+
+    await worker._process_message(
+        "1-0",
+        {
+            b"task_type": b"tool_job",
+            b"task_id": b"t1",
+            b"payload": b'{"job_id": "j1"}',
+        },
+    )
+    forwarded = [call.args[0] for call in redis.xadd.await_args_list]
+    assert KB_QUEUE.stream not in forwarded
