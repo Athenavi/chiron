@@ -80,7 +80,11 @@ def main() -> int:
 
     over: list[tuple[str, int, int | None, int, pathlib.Path, list[str]]] = []
     unresolved: list[tuple[str, int, list[str]]] = []
-    for (path, start, end), refs in sorted(candidates.items()):
+    # 排序键里把 `end=None` 折成 0：同一个 `path:start` 可能同时以"单行"和"区间"两种写法出现，
+    # 直接 sorted() 会去比 `int` 与 `None`（2026-10-19 实跑撞到的 TypeError）。
+    for (path, start, end), refs in sorted(
+        candidates.items(), key=lambda item: (item[0][0], item[0][1], item[0][2] or 0)
+    ):
         real = resolve(path)
         if real is None:
             unresolved.append((path, start, refs))

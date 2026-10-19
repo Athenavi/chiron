@@ -7,12 +7,15 @@ Lua 脚本的算术**不在这里**判定：桩里的 Python 镜像按自己写�
 
 * 单测：Python 侧编排 —— 发**哪个脚本、哪些参数**、取不到时退回什么、闸门在 runtime 的
   哪一步介入、runner 有没有把线根与预留句柄传下去；
-* ``@pytest.mark.integration``：**真 Redis** 判 `_RSVD_LUA` / `_USED_*_LUA` 的实际算术
-  （剔除自己、按 score 清过期、镜像不复活、回填只用 NX），**真 PG** 判控制态覆盖与跨租户过滤。
+* ``@pytest.mark.live``：**真 Redis** 判 `_RSVD_LUA` / `_USED_*_LUA` / `_RSVD_DROP_HOLDER_LUA` 的
+  实际算术（剔除自己、按 score 清过期、镜像不复活、回填只用 NX、按持有者摘预留）；
+* ``@pytest.mark.integration``：**真 PG** 判控制态覆盖与跨租户过滤。
 
-标记的门槛在 `tests/conftest.py`：`integration` 用例只有在 `POSTGRES_DSN` 已设置时才跑，本地
-没设就**整类 skip**（不是"红"）—— 真跑由 CI 的 real-stack job 注入 DSN 并先 `alembic upgrade head`。
-`redis_client` 那个 fixture 另有一层：DSN 设了但 Redis 连不上时它是 `pytest.fail`，不会静默跳。
+门槛（`tests/conftest.py` + `pyproject.toml` 的 markers）：`integration` 用例只有在 `POSTGRES_DSN`
+已设置时才跑，本地没设就**整类 skip**（不是"红"）—— 真跑由 CI 的 real-stack job 注入 DSN 并先
+`alembic upgrade head`。`live` 刻意与它**分开**：这些用例只要 Redis，若也打 `integration`，就会被
+那个"integration ⇒ 必须有 PG"的 autouse fixture 整类拦下，于是"本机有 Redis"永远验不到脚本的算术 ——
+而上面说了，桩判不了 Lua。CI 的选择表达式 `-m "integration or live"`，两类都跑。
 """
 
 from __future__ import annotations
@@ -115,11 +118,14 @@ class _FakePool:
 
 
 class _FakeRedis:
-    """记录 `get` / `eval` 的调用；**不解释 Lua**。
+    """记录 `get` / `eval` / `zrange` 的调用；**不解释 Lua**。
 
     `eval` 的返回值可按脚本里的标志子串挑（`results`），挑不到用 `result` 兜底：一次 `state`
     会发两三个不同脚本（镜像回填 / 预留求和 / 终态累加），只给一个常量就没法把"结算 600 +
     预留 300"这种两笔账分开喂进去。`got` 是镜像键的当前值（``None`` = 键不存在）。
+    `members` 是预留 zset 的成员（M17 的清扫要 `ZRANGE` 它）—— 同样**不参与算术**。
+    `scan_error` / `drop_error` 分开注入：清扫的"读成员"与"按 holder 删"是两步，失败之后的
+    退化不一样（前者只是这次没核对，后者是删不掉、判定照旧按 TTL），用一条 `error` 测不出来。
     """
 
     def __init__(
@@ -128,14 +134,21 @@ class _FakeRedis:
         result: Any = "0",
         results: dict[str, Any] | None = None,
         got: Any = None,
+        members: list[str] | None = None,
         error: bool = False,
+        scan_error: bool = False,
+        drop_error: bool = False,
     ) -> None:
         self.result = result
         self.results = results or {}
         self.got = got
+        self.members = members or []
         self.error = error
+        self.scan_error = scan_error
+        self.drop_error = drop_error
         self.calls: list[tuple[str, tuple]] = []
         self.gets: list[str] = []
+        self.zranges: list[str] = []
 
     async def get(self, key: str) -> Any:
         self.gets.append(key)
@@ -143,9 +156,15 @@ class _FakeRedis:
             raise RuntimeError("redis down")
         return self.got
 
+    async def zrange(self, key: str, start: int, stop: int) -> list[str]:
+        self.zranges.append(key)
+        if self.error or self.scan_error:
+            raise RuntimeError("redis down")
+        return list(self.members)
+
     async def eval(self, script: str, numkeys: int, *args: Any) -> Any:
         self.calls.append((" ".join(script.split()), args))
-        if self.error:
+        if self.error or (self.drop_error and "ZCARD" in script):
             raise RuntimeError("redis down")
         for marker, value in self.results.items():
             if marker in script:
@@ -154,6 +173,10 @@ class _FakeRedis:
 
     def args_for(self, marker: str) -> list[tuple]:
         return [a for head, a in self.calls if marker in head]
+
+    def calls_of(self, marker: str) -> list[str]:
+        """按**发生顺序**取匹配某个脚本标志的调用（用来断言先后，而不是各自计数）。"""
+        return [head for head, _ in self.calls if marker in head]
 
 
 async def _no_redis() -> Any:
@@ -171,6 +194,32 @@ def _ledger(
     if redis is None:
         led._redis_conn = _no_redis  # type: ignore[method-assign]
     return led
+
+
+def _set_holder(monkeypatch: pytest.MonkeyPatch, holder: str) -> None:
+    """把"本实例 id"钉住：预留句柄的第三段与 drain 的匹配键都由它决定。"""
+    from app.subagent import affinity
+
+    monkeypatch.setattr(affinity, "cached_instance_id", lambda: holder)
+
+
+def _participating(
+    monkeypatch: pytest.MonkeyPatch, redis: Any, *, alive: set[str]
+) -> LineLedger:
+    """把线账放进**存活协议**里：``participates()=True``，探测只认 ``alive`` 那批实例。
+
+    只钉这两个判据，清扫的编排（什么时候扫、扫到谁、删完要不要重读）才由被测代码决定。
+    探测本身（自我豁免、缓存、未参与时返回 ``{}``）在 ``tests/test_instance_liveness.py``。
+    """
+    from app import instance_liveness
+
+    monkeypatch.setattr(instance_liveness, "participates", lambda: True)
+
+    async def _probe(holders: Any) -> dict[str, bool]:
+        return {h: (h in alive) for h in holders}
+
+    monkeypatch.setattr(instance_liveness, "holders_alive", _probe)
+    return _ledger(redis=redis)
 
 
 class _StubLedger:
@@ -383,17 +432,42 @@ class TestRedisOrchestration:
         state = await led.state("rs_root", "t1")
         assert state is not None and (state.settled, state.reserved) == (900, 0)
 
-    async def test_reserve_sends_handle_and_expiry(self) -> None:
+    async def test_reserve_sends_handle_and_expiry(self, monkeypatch) -> None:
         redis = _FakeRedis(result="200000")
+        _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
         handle = await led.reserve("rs_root", "t1", "sub_rs_1", 200_000)
-        assert handle == f"sub_rs_1{_TAB}200000"
-        args = redis.args_for("ZREM")
+        # 三段：member / tokens / **持有者实例 id**（M17）—— 清扫与 drain 都按第三段收账
+        assert handle == f"sub_rs_1{_TAB}200000{_TAB}engine-A"
+        args = redis.args_for("ZREMRANGEBYSCORE")
         assert len(args) == 1
         key, now, add, expiry, delete, skip, ttl = args[0]
         assert key.endswith("subagent:line:rs_root:rsv")
         assert add == handle and delete == "" and skip == "sub_rs_1"
         assert int(expiry) > int(now) and ttl == str(ledger_mod.RESERVE_TTL_SECONDS)
+
+    async def test_a_member_with_a_tab_reserves_nothing(self, monkeypatch) -> None:
+        """member 与 root 走同一份字符集校验：带 TAB 的 member 会把拼出来的记录拆成两段
+        （``who`` 变成前缀、tokens 解析成 0），这条预留就此失明 —— 上限静默失效的一侧。"""
+        redis = _FakeRedis()
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=redis)
+        assert await led.reserve("rs_root", "t1", f"sub{_TAB}9", 1000) == ""
+        assert redis.calls == []
+
+    async def test_a_poisonous_instance_id_is_not_stamped(self, monkeypatch) -> None:
+        """持有者来自部署配置（`INSTANCE_ID` / `POD_NAME`），**不保证**符合 id 字符集。
+
+        `engine\tA` 会把 member 的字段协议拆坏：``_holder_of`` 读出 ``engine`` ⇒ 问的是**别人**
+        的存活键、删的是按 ``engine`` 匹配的那条 —— 本实例在跑的预留会被自己扫掉（少算）。
+        不署名（退化成两段 member，与滚动升级期间老实例写的同形）才是安全的方向。
+        """
+        redis = _FakeRedis(result="0")
+        _set_holder(monkeypatch, f"engine{_TAB}A")
+        led = _ledger(redis=redis)
+        handle = await led.reserve("rs_root", "t1", "sub_a", 100)
+        assert handle == f"sub_a{_TAB}100"
+        assert ledger_mod._holder_of(handle) == "", "没署名的预留不该被任何一次核对认领"
 
     async def test_zero_token_run_reserves_nothing(self) -> None:
         """per-run token 轴为 0（不限）时**不预留**：预留一个猜出来的值只会把并发卡死，
@@ -454,6 +528,198 @@ class TestRedisOrchestration:
         )
         assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=99) == ""
         assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=100) == "line_tokens"
+
+
+# ── M17：死实例预留的清扫 ───────────────────────────────────────────────
+
+
+class TestDeadHolderSweep:
+    """清扫的**编排**：什么时候扫、拿谁当依据、删完要不要重读。
+
+    三段 member 的算术（脚本怎么解释字段）不在这里判 —— 桩不解释 Lua，那是
+    ``TestRealRedisSemantics`` 的职责。判据选择（自我豁免、正向缓存、未参与时回空）在
+    ``tests/test_instance_liveness.py``。
+    """
+
+    async def test_no_participation_means_no_sweep_at_all(self) -> None:
+        """本进程没在写存活键 ⇒ "读不到别人的键"不构成证据，一条 ``ZRANGE`` 都不该发。
+
+        这条同时是"未参与协议时零额外 Redis 调用"的回归护栏：单实例部署（绝大多数）不该为
+        这套机制多付一次命令，也不该有任何删除动作发生。
+        """
+        redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}gone"])
+        led = _ledger(redis=redis)
+        state = await led.state("rs_root", "t1")
+        assert state is not None and state.reserved == 300
+        assert redis.zranges == [] and redis.args_for("ZCARD") == []
+
+    async def test_zero_sum_is_not_swept(self, monkeypatch) -> None:
+        """线上一条正数预留都没有 ⇒ 没有可收回的东西，不必再发两条命令。"""
+        redis = _FakeRedis(result="0", members=[f"sub_a{_TAB}100{_TAB}gone"])
+        led = _participating(monkeypatch, redis, alive=set())
+        assert await led.state("rs_root", "t1") is not None
+        assert redis.zranges == []
+
+    async def test_dead_holder_is_dropped_and_the_sum_reread(self, monkeypatch) -> None:
+        redis = _FakeRedis(
+            result="300",
+            results={"ZCARD": "1"},
+            members=[f"sub_a{_TAB}100{_TAB}gone", f"sub_b{_TAB}200{_TAB}mine"],
+        )
+        led = _participating(monkeypatch, redis, alive={"mine"})
+        state = await led.state("rs_root", "t1")
+        assert state is not None
+        drops = redis.args_for("ZCARD")
+        assert len(drops) == 1
+        key, holder = drops[0]
+        assert key.endswith("subagent:line:rs_root:rsv")
+        assert holder == "gone", "只删死掉的那个持有者，一个 holder 一条脚本（不拼 IN 列表）"
+        # 删完必须重读：不重读，"收回幽灵预留"对本次判定毫无影响 —— 而那是它存在的全部理由
+        assert len(redis.args_for("ZREMRANGEBYSCORE")) == 2
+
+    async def test_alive_holders_cost_one_scan_per_cooldown(self, monkeypatch) -> None:
+        """全都在世 ⇒ 扫一次、什么都不删；冷却期内第二次问连扫都不扫。"""
+        redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}mine"])
+        led = _participating(monkeypatch, redis, alive={"mine"})
+        assert await led.state("rs_root", "t1") is not None
+        assert await led.state("rs_root", "t1") is not None
+        assert len(redis.zranges) == 1, "按线节流：同一条线一个冷却周期只核对一次"
+        assert redis.args_for("ZCARD") == []
+
+    async def test_the_cooldown_is_per_line(self, monkeypatch) -> None:
+        """节流按**线**而不是全局：一条新线第一次被问就该核对，不能被别的线的冷却挡住。"""
+        redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}gone"])
+        led = _participating(monkeypatch, redis, alive=set())
+        await led.state("rs_root_a", "t1")
+        await led.state("rs_root_b", "t1")
+        assert len(redis.zranges) == 2
+        assert redis.zranges[0] != redis.zranges[1], "两条线各扫各的，不能共用一份冷却"
+
+    async def test_legacy_members_without_a_holder_are_never_touched(self, monkeypatch) -> None:
+        """滚动升级：老实例写的两段 member 没有持有者可依据 ⇒ 不动，仍由 score 收口。"""
+        redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100", f"sub_b{_TAB}200"])
+        led = _participating(monkeypatch, redis, alive=set())
+        assert await led.state("rs_root", "t1") is not None
+        assert redis.zranges and redis.args_for("ZCARD") == []
+
+    async def test_an_emptied_probe_blocks_every_removal(self, monkeypatch) -> None:
+        """探测回空（协议没跑起来 / 连接没了）⇒ 一个都不删 —— 与"没参与"同一取向。"""
+        from app import instance_liveness
+
+        redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}gone"])
+        led = _participating(monkeypatch, redis, alive=set())
+
+        async def _unknown(_holders: Any) -> dict[str, bool]:
+            return {}
+
+        monkeypatch.setattr(instance_liveness, "holders_alive", _unknown)
+        assert await led.state("rs_root", "t1") is not None
+        assert redis.args_for("ZCARD") == []
+
+    async def test_scan_failure_leaves_the_verdict_alone(self, monkeypatch) -> None:
+        """读成员失败不改判定：预留数已经拿到了，扫不动就照原样判（TTL 仍是兜底）。"""
+        redis = _FakeRedis(
+            result="300", scan_error=True, members=[f"sub_a{_TAB}100{_TAB}gone"]
+        )
+        led = _participating(monkeypatch, redis, alive=set())
+        state = await led.state("rs_root", "t1")
+        assert state is not None and state.reserved == 300
+
+    async def test_drop_failure_keeps_the_stale_number_but_never_raises(self, monkeypatch) -> None:
+        """删不掉就**不重读**（重读只会拿到同一个数、白付一次往返），也不把异常抛进闸门。"""
+        redis = _FakeRedis(
+            result="300", drop_error=True, members=[f"sub_a{_TAB}100{_TAB}gone"]
+        )
+        led = _participating(monkeypatch, redis, alive=set())
+        state = await led.state("rs_root", "t1")
+        assert state is not None and state.reserved == 300
+        assert len(redis.args_for("ZREMRANGEBYSCORE")) == 1
+
+    def test_holder_field_is_the_third_segment(self) -> None:
+        assert ledger_mod._holder_of(f"sub_a{_TAB}100{_TAB}engine-A") == "engine-A"
+        assert ledger_mod._holder_of(f"sub_a{_TAB}100") == ""
+        assert ledger_mod._holder_of("sub_a") == ""
+
+
+# ── M17：优雅退出时的主动释放（drain）───────────────────────────────────
+
+
+class TestDrainOnShutdown:
+    async def test_drain_releases_every_root_still_held(self, monkeypatch) -> None:
+        redis = _FakeRedis(result="0", results={"ZCARD": "1"})
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=redis)
+        await led.reserve("rs_root1", "t1", "sub_a", 10)
+        await led.reserve("rs_root2", "t1", "sub_b", 10)
+        assert await led.drain("engine-A") == 2
+        assert sorted(a[0].split(":")[-2] for a in redis.args_for("ZCARD")) == [
+            "rs_root1",
+            "rs_root2",
+        ]
+        assert {a[1] for a in redis.args_for("ZCARD")} == {"engine-A"}
+
+    async def test_a_settled_handle_is_not_drained_again(self, monkeypatch) -> None:
+        """收尾出账：drain 只该处理"还没来得及 settle"的那些。"""
+        redis = _FakeRedis(result="0", results={"ZCARD": "1"})
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=redis)
+        h1 = await led.reserve("rs_root1", "t1", "sub_a", 10)
+        await led.reserve("rs_root2", "t1", "sub_b", 10)
+        await led.settle("rs_root1", h1, 5)
+        assert await led.drain("engine-A") == 1
+        assert [a[0].split(":")[-2] for a in redis.args_for("ZCARD")] == ["rs_root2"]
+
+    async def test_drain_forgets_what_it_released(self, monkeypatch) -> None:
+        """删失败也不重试：登记簿先清，剩下的交给 TTL —— 关机不该被"还账没还干净"卡住。"""
+        redis = _FakeRedis(result="0", results={"ZCARD": "1"})
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=redis)
+        await led.reserve("rs_root", "t1", "sub_a", 10)
+        await led.drain("engine-A")
+        first = len(redis.args_for("ZCARD"))
+        assert await led.drain("engine-A") == 0
+        assert len(redis.args_for("ZCARD")) == first
+
+    async def test_drain_without_an_instance_id_touches_nothing(self) -> None:
+        redis = _FakeRedis()
+        led = _ledger(redis=redis)
+        assert await led.drain("") == 0
+        assert redis.calls == [] and redis.zranges == []
+
+    async def test_drain_with_nothing_held_asks_for_no_connection(self) -> None:
+        """这个进程从没预留过 ⇒ 关机不该为 drain 去起一条 Redis 连接。
+
+        关闭段**每个**实例都会走这条路，而"没派发过子 Agent"是绝大多数实例的常态；为一个空
+        账去懒建连接既不必要（没有可摘的东西）也会让纯 PG 部署的关机多一条失败告警。
+        """
+        attempts: list[str] = []
+        redis = _FakeRedis()
+
+        async def _conn() -> Any:
+            attempts.append("connect")
+            return redis
+
+        led = _ledger(redis=None)
+        led._redis_conn = _conn  # type: ignore[method-assign]
+        assert await led.drain("engine-A") == 0
+        assert attempts == [] and redis.calls == []
+
+    async def test_drain_failure_does_not_raise(self, monkeypatch) -> None:
+        redis = _FakeRedis(result="0", drop_error=True)
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=redis)
+        await led.reserve("rs_root", "t1", "sub_a", 10)
+        assert await led.drain("engine-A") == 0
+
+    async def test_release_helper_uses_the_process_identity(self, monkeypatch) -> None:
+        """关机钩子那层的契约：拿的是本进程实例 id（与句柄第三段同一来源），且永不抛。"""
+        redis = _FakeRedis(result="0", results={"ZCARD": "1"})
+        led = _ledger(redis=redis)
+        monkeypatch.setattr(ledger_mod, "_ledger", led)
+        _set_holder(monkeypatch, "engine-A")
+        await led.reserve("rs_root", "t1", "sub_a", 10)
+        assert await ledger_mod.release_instance_reservations() == 1
+        assert [a[1] for a in redis.args_for("ZCARD")] == ["engine-A"]
 
 
 # ── 控制态的写（M15c：暂停与提额）──────────────────────────────────────
@@ -982,7 +1248,11 @@ async def redis_client():
         await client.ping()
     except Exception as exc:  # noqa: BLE001
         await client.aclose()
-        pytest.fail(f"需要可达的 Redis（{_REDIS_URL}）才能跑线账的集成用例：{exc}")
+        # 环境**声明了** Redis（CI 的 real-stack job 设 REDIS_URL）却连不上 ⇒ 这是环境坏了，
+        # 要红；没声明 ⇒ 这台机器/这个 job 本来就不跑真 Redis，skip 而不是静默地"通过"。
+        if (os.getenv("REDIS_URL") or "").strip():
+            pytest.fail(f"REDIS_URL 已设置但连不上（{_REDIS_URL}）：{exc}")
+        pytest.skip(f"需要可达的 Redis（{_REDIS_URL}）才能跑线账的真脚本用例")
     try:
         yield client
     finally:
@@ -1000,9 +1270,33 @@ def _root_id(tag: str) -> str:
     return f"rsit{uuid.uuid4().hex[:12]}{tag}"[:60]
 
 
-@pytest.mark.integration
+@pytest.mark.live
 class TestRealRedisSemantics:
     """这些断言判的是脚本的**实际算术**：PG 侧一律用替身，保证只有 Redis 是真的。"""
+
+    #: 钉死的持有者 id：预留句柄的第三段与 drain 的匹配键都由它决定，不钉住就只能断言前缀。
+    HOLDER = "engine-livetest"
+
+    @pytest.fixture(autouse=True)
+    async def _outside_the_liveness_protocol(self, monkeypatch):
+        """每条用例都从"本进程没在写存活键"开始，并把持有者钉成常量。
+
+        ``participates()`` 与探测缓存是**模块级**状态：上一用例（包括 `test_instance_liveness.py`
+        起过的心跳）留下的登记会让这里"不该扫"的用例真去扫，反之"该扫"的用例会拿到一份
+        过期缓存。清扫的用例自己在用例里起心跳。
+        """
+        from app import instance_liveness as il
+
+        saved_active, saved_cache = il._ACTIVE, dict(il._PROBE_CACHE)
+        il._ACTIVE = None
+        il._PROBE_CACHE.clear()
+        _set_holder(monkeypatch, self.HOLDER)
+        try:
+            yield
+        finally:
+            il._ACTIVE = saved_active
+            il._PROBE_CACHE.clear()
+            il._PROBE_CACHE.update(saved_cache)
 
     def _ledger(self, redis: Any, *, usage: tuple[int, int] = (0, 0)) -> LineLedger:
         return LineLedger(
@@ -1012,8 +1306,9 @@ class TestRealRedisSemantics:
     async def test_reserve_excludes_the_callers_own_reservation(self, redis_client) -> None:
         root = _root_id("ex")
         led = self._ledger(redis_client)
-        assert await led.reserve(root, "t1", "sub_a", 100) == f"sub_a{_TAB}100"
-        assert await led.reserve(root, "t1", "sub_b", 250) == f"sub_b{_TAB}250"
+        # 句柄三段：member、tokens、持有者实例 id（M17）—— 第三段是清扫与 drain 的匹配键
+        assert await led.reserve(root, "t1", "sub_a", 100) == f"sub_a{_TAB}100{_TAB}{self.HOLDER}"
+        assert await led.reserve(root, "t1", "sub_b", 250) == f"sub_b{_TAB}250{_TAB}{self.HOLDER}"
         state = await led.state(root, "t1", exclude_run_id="sub_a")
         assert state is not None
         # 350 里减去自己那 100 ⇒ 250：自己的花销按**实际 token** 计，预留不能再算一遍
@@ -1102,6 +1397,103 @@ class TestRealRedisSemantics:
         assert await led.reserve(root, "t1", f"x{_TAB}9", 5) == ""
         await led.settle(root, f"x{_TAB}9", 5)  # 不抛
         assert await redis_client.exists(_rkey(f"subagent:line:{root}:rsv")) == 0
+
+    # ── M17：持有者段、死实例清扫、退出 drain ──────────────────────────
+
+    async def test_a_third_segment_does_not_void_the_reservation(self, redis_client) -> None:
+        """预留求和必须**只取第二段**：三段 member 上 ``tonumber("1000\\tengine-Z")`` 是 nil。
+
+        这是 M17 里唯一"错了还看起来一切正常"的地方 —— 那条预留按 0 计 ⇒ 上限静默失效，
+        而且**只有**加上持有者段之后才发作。滚动升级窗口里老实例写的两段 member 同表核对：
+        它也必须照旧计（少算的另一个来源）。
+        """
+        root = _root_id("seg")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        until = int(time.time()) + 600
+        await redis_client.zadd(
+            key,
+            {f"sub_new{_TAB}1000{_TAB}engine-Z": until, f"sub_old{_TAB}5": until},
+        )
+        try:
+            state = await self._ledger(redis_client).state(root, "t1")
+            assert state is not None and state.reserved == 1005
+        finally:
+            await redis_client.delete(key)
+
+    async def test_a_sweep_drops_the_dead_holders_and_keeps_the_rest(self, redis_client) -> None:
+        """真 Redis 上走完整条判据：死了的摘掉、活着的不碰、没署名的（滚动升级）留下等 TTL。
+
+        ``engine-peer`` 的存活键是真 ``EXISTS`` 问出来的（不是自我豁免），``engine-gone``
+        没有这个键 —— 这两条分支在桩里都只是字典查表，只有在真 Redis 上才是"读到了没有"。
+        """
+        from app import instance_liveness as il
+
+        root = _root_id("sweep")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        peer_alive = il.alive_key("engine-peer")
+        until = int(time.time()) + 600
+        await redis_client.zadd(
+            key,
+            {
+                f"sub_dead{_TAB}700{_TAB}engine-gone": until,
+                f"sub_live{_TAB}300{_TAB}engine-peer": until,
+                f"sub_legacy{_TAB}100": until,
+            },
+        )
+        await redis_client.set(peer_alive, "1", ex=il.ALIVE_TTL_SECONDS)
+        hb = il.InstanceLiveness(redis=redis_client, instance_id="engine-self")
+        assert await hb.start() is True
+        try:
+            state = await self._ledger(redis_client).state(root, "t1")
+            assert state is not None and state.reserved == 400, "清扫后的重读口径不对"
+            assert sorted(await redis_client.zrange(key, 0, -1)) == sorted(
+                [f"sub_live{_TAB}300{_TAB}engine-peer", f"sub_legacy{_TAB}100"]
+            ), "摘除必须按持有者精确到条：活着的那条与没署名的那条都不该动"
+        finally:
+            await hb.stop()
+            await redis_client.delete(key, peer_alive, il.alive_key("engine-self"))
+
+    async def test_no_participation_means_no_sweep(self, redis_client) -> None:
+        """本进程没在写存活键 ⇒ "读不到别人的键"不是证据，一条都不许删。
+
+        方向是**多算**（预留多占一个 TTL，派发被误拦），这是这条线可以接受的错；反过来
+        （心跳没起来还照删）会把全站的在途预留扫空 —— 少算、上限静默失效，最坏的一类。
+        用例里的 ``engine-gone`` 在任何存活键都查不到时依然留在全额里，就是这个安全阀。
+        """
+        from app import instance_liveness as il
+
+        assert il.participates() is False
+        root = _root_id("nosweep")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        until = int(time.time()) + 600
+        await redis_client.zadd(key, {f"sub_dead{_TAB}700{_TAB}engine-gone": until})
+        try:
+            state = await self._ledger(redis_client).state(root, "t1")
+            assert state is not None and state.reserved == 700
+            assert await redis_client.zrange(key, 0, -1) == [f"sub_dead{_TAB}700{_TAB}engine-gone"]
+        finally:
+            await redis_client.delete(key)
+
+    async def test_drain_releases_only_this_instances_reservations(self, redis_client) -> None:
+        """优雅退出：本实例在册的两条线都腾空，别的实例在同一条线上的预留一条不动。"""
+        root_a, root_b = _root_id("draina"), _root_id("drainb")
+        key_a = _rkey(f"subagent:line:{root_a}:rsv")
+        key_b = _rkey(f"subagent:line:{root_b}:rsv")
+        led = self._ledger(redis_client)
+        assert await led.reserve(root_a, "t1", "sub_a", 60)
+        assert await led.reserve(root_b, "t1", "sub_b", 90)
+        peer = f"sub_peer{_TAB}700{_TAB}engine-Z"
+        await redis_client.zadd(key_a, {peer: int(time.time()) + 600})
+
+        assert await led.drain(self.HOLDER) == 2
+        assert await redis_client.zrange(key_a, 0, -1) == [peer], "drain 不能越走别人的预留"
+        # 摘空就把键收掉：root_b 上只剩本实例那一条
+        assert await redis_client.exists(key_b) == 0
+        state = await led.state(root_a, "t1")
+        assert state is not None and state.reserved == 700
+        # 登记簿当场清空：同一次关机里重复 drain 不该把"已经还掉的"再报一遍
+        assert await led.drain(self.HOLDER) == 0
+        await redis_client.delete(key_a)
 
 
 # ── 真 PG：控制态覆盖与跨租户过滤 ──────────────────────────────────────

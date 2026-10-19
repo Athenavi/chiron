@@ -22,6 +22,18 @@ sorted set 以**到期时刻为 score**、读时先按 score 清，崩溃留下�
 由 :meth:`LineLedger.settle` 显式摘掉。Redis 整个不可用时退回**只结算不预留**（最坏后果是
 同一条线上并发的几个 run 各自按剩余量起算，溢出至多半 run —— 而 per-run 预算与租户预算仍在）。
 
+**崩溃留下的预留怎么提前收回**（M17）：只靠 score 的话，一条被死实例占住的线要空等
+``RESERVE_TTL_SECONDS``（1h）才恢复。现在 member 第三段带**持有者实例 id**
+（``member<TAB>tokens<TAB>holder``），读路径对每条线每隔 ``SWEEP_COOLDOWN_SECONDS`` 拿
+``app/instance_liveness.py`` 的存活键核对一次持有者：实例已经没了 ⇒ 它的预留当场作废。对
+``SIGKILL`` 也成立 —— 判据是"心跳键不见了"，不是"进程自己告诉我它要走了"。优雅退出那一路
+另有主动释放：:meth:`LineLedger.drain` 在 lifespan 关闭时按 holder 摘掉本进程还挂着的全部
+预留，不必等 TTL（参照 etcd ``Session.Close()`` 撤销挂在其下的键、Kafka 的 ``LeaveGroup``）。
+
+清扫的**前提**是本进程自己也在写存活键（``instance_liveness.participates()``）：不在协议里时
+"读不到别人的存活键"根本不构成证据，照删等于把全站的在途预留扫空 —— 少算（上限失效）正是这条
+账最坏的一类静默。滚动升级期间没有第三段的旧 member 不参与清扫，仍由 score 收口。
+
 **fail-open**：任何一步问不出来（没有租户、PG 不可用、列还没迁移）都返回 ``None`` / 放行。
 线账是第二道闸门，不是唯一一道；反过来 fail-closed 会让一次 PG 抖动停掉全站子 Agent，代价与
 收益不符 —— 与 ``internal/api/ent_quota_enforce.go`` 的 ``consume()`` 同一取向（那里也是
@@ -36,7 +48,7 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from app.observability.metrics import SUBAGENT_LINE_GATE
+from app.observability.metrics import SUBAGENT_LINE_GATE, SUBAGENT_LINE_SWEEP
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -81,6 +93,12 @@ USED_TTL_SECONDS = 60
 #: 单条在途预留的自然到期。必须宽过"一次 run 可能跑多久"（后台 run 的 wall 默认不限，
 #: 由注册表看门狗收口），又要短到崩溃留下的预留不会长期占住这条线。
 RESERVE_TTL_SECONDS = 3600
+#: 死实例预留清扫的最小间隔（**按线**计）。它是"读路径顺带做对账"的节流：一小时的幽灵预留
+#: 缩成最多 30 秒，代价是每条**有在途预留**的线每 30 秒多一次 ``ZRANGE`` + 几次 ``EXISTS``。
+SWEEP_COOLDOWN_SECONDS = 30
+#: 本进程在途预留登记簿的上界。正常尺寸 = 并发 run 数（个位数），`settle` 会逐条摘掉；
+#: 这一条只挡"收尾路径被跳过"时的无界增长（长时间运行的进程，每条 50B 也迟早变成显性泄漏）。
+MAX_TRACKED_HANDLES = 4096
 
 #: 线账读过的控制态行（迁移 0022）。``tenant_id`` 是**必填**过滤：闸门的调用形状是
 #: "给我一个 run id 我就能问这条线的额度"，不按租户收就是跨租户读数。
@@ -118,7 +136,11 @@ _TAB = "\t"
 # 预留表的一个原子操作：可选删除 / 可选新增 / 清过期 / 求和（排除 exclude 那个 run ——
 # 它的花销由调用方按**实际** token 计，不能再算一遍预留）。
 # KEYS[1]=预留 zset；ARGV: 1=now(unix s) 2=add member 3=add expiry 4=del member
-# 5=exclude run_id 6=ttl s。member 形状 `run_id<TAB>tokens`，score = 到期时刻。
+# 5=exclude run_id 6=ttl s。member 形状 `run_id<TAB>tokens<TAB>holder`，score = 到期时刻。
+#
+# 取 tokens 时必须**只取第二段**（``rest`` 到下一个 TAB 为止）：直接 ``tonumber(sub(p+1))``
+# 在三段 member 上会得到 nil ⇒ 该条预留按 0 计 —— 上限静默失效，而且只有加了 holder 之后
+# 才会出现，是"看起来还在工作"的最坏形状。第三段缺失（滚动升级期间的老实例）照常计。
 _RSVD_LUA = """
 local key = KEYS[1]
 local now = tonumber(ARGV[1])
@@ -136,7 +158,10 @@ for i = 1, #members do
   if p then
     local who = string.sub(m, 1, p - 1)
     if who ~= skip then
-      total = total + (tonumber(string.sub(m, p + 1)) or 0)
+      local rest = string.sub(m, p + 1)
+      local q = string.find(rest, '\\t', 1, true)
+      if q then rest = string.sub(rest, 1, q - 1) end
+      total = total + (tonumber(rest) or 0)
     end
   end
 end
@@ -146,6 +171,31 @@ else
   redis.call('DEL', key)
 end
 return total
+"""
+
+# 按**持有者**摘预留：清扫（某实例的存活键没了）与 drain（本进程优雅退出）共用这一条规则。
+# 一个 EVAL 只碰一个键（与上面同样口径：跨键会在 Cluster 下 CROSSSLOT，见 KeyRing V2 的教训），
+# 所以存活键由 Python 侧读，这里只按传进来的 holder 匹配第三段。
+# 没有第三段的旧 member **不匹配**（``second`` 为 nil）—— 老实例的预留只能由 score 收口，
+# 这条脚本在滚动升级期间不会误删还在跑的东西。
+_RSVD_DROP_HOLDER_LUA = """
+local key = KEYS[1]
+local holder = ARGV[1]
+local removed = 0
+local members = redis.call('ZRANGE', key, 0, -1)
+for i = 1, #members do
+  local m = members[i]
+  local first = string.find(m, '\\t', 1, true)
+  if first then
+    local rest = string.sub(m, first + 1)
+    local second = string.find(rest, '\\t', 1, true)
+    if second and string.sub(rest, second + 1) == holder then
+      removed = removed + redis.call('ZREM', key, m)
+    end
+  end
+end
+if redis.call('ZCARD', key) == 0 then redis.call('DEL', key) end
+return removed
 """
 
 # 镜像缺失时的回填：**只在键不存在时**写（NX）。已经存在的值可能是并发 run 刚 INCRBY 过的，
@@ -189,6 +239,16 @@ def _usable_root(root: str) -> bool:
     if not root or len(root) > 64:
         return False
     return all(c.isalnum() or c in "-_." for c in root)
+
+
+def _holder_of(member: str) -> str:
+    """预留 member 的第三段（持有者实例 id）；老实例写的两段 member 返回空串。
+
+    与 ``_RSVD_LUA`` 里的字段顺序一一对应 —— Python 侧只用来**挑出要问谁**，删除动作全在脚本里，
+    两处对字段的解释必须一致，所以字段口径只在这一份脚本 + 这一个函数里定义。
+    """
+    parts = member.split(_TAB)
+    return parts[2] if len(parts) >= 3 else ""
 
 
 @dataclass(frozen=True)
@@ -236,6 +296,11 @@ class LineLedger:
         self._store = store
         #: 同类失败只告警一次：闸门每轮都会被问一次，Redis 抖动时这会变成日志洪水。
         self._warned: set[str] = set()
+        #: 本进程还挂着的预留：``handle → root``。只服务一件事 —— 优雅退出时的
+        #: :meth:`drain`（要知道该去哪几条线上摘自己的预留）。收尾即出账，正常尺寸 = 并发 run 数。
+        self._held: dict[str, str] = {}
+        #: 每条线**下一次**允许清扫的时刻（``time.monotonic`` 口径，不受改时钟影响）。
+        self._swept_at: dict[str, float] = {}
 
     # ── 连接 ──
 
@@ -389,8 +454,21 @@ class LineLedger:
         except (TypeError, ValueError):
             return None
 
-    async def _reserved(self, root: str, exclude_run_id: str) -> int:
-        """在途预留之和；取不到 ⇒ 0（= 退回"只结算不预留"，方向是**少算**）。"""
+    async def _reserved(self, root: str, exclude_run_id: str, *, sweep: bool = True) -> int:
+        """在途预留之和；取不到 ⇒ 0（= 退回"只结算不预留"，方向是**少算**）。
+
+        ``sweep=True`` 时顺带做死实例核对（按线节流）。``total > 0`` 是它的廉价前置：一条线上
+        连一个正数预留都没有时，没有什么可收回的，不必再发两次命令。
+        """
+        total = await self._sum_reserved(root, exclude_run_id)
+        if sweep and total > 0 and self._sweep_now(root):
+            if await self._sweep_dead_holders(root):
+                # 重算走的是**同一个** ``_sum_reserved``：清扫的意义就在于"这次判定不再计入幽灵"，
+                # 而 Python 侧再拼一遍求和口径迟早和脚本漂移。
+                total = await self._sum_reserved(root, exclude_run_id)
+        return total
+
+    async def _sum_reserved(self, root: str, exclude_run_id: str) -> int:
         redis = await self._redis_safe()
         if redis is None or not _usable_root(root):
             return 0
@@ -412,6 +490,70 @@ class LineLedger:
             self._warn("rsv", "subagent 线账预留读失败（此后不再重复告警，按 0 继续）: %s", str(exc)[:160])
             return 0
 
+    def _sweep_now(self, root: str) -> bool:
+        """这条线现在该不该做一次存活核对 —— 以及**能不能**核对。
+
+        ``participates()`` 是前置：本进程没在写存活键时，"读不到别人的存活键"不构成证据，照删
+        会把全站的在途预留扫空（少算 = 上限静默失效）。这一条判据在``instance_liveness``里，
+        不在这里重复实现。
+        """
+        from app import instance_liveness
+
+        if not instance_liveness.participates():
+            return False
+        now = time.monotonic()
+        if now < self._swept_at.get(root, 0.0):
+            return False
+        self._swept_at[root] = now + SWEEP_COOLDOWN_SECONDS
+        if len(self._swept_at) > MAX_TRACKED_HANDLES:
+            self._swept_at = {k: v for k, v in self._swept_at.items() if v > now}
+        return True
+
+    async def _sweep_dead_holders(self, root: str) -> int:
+        """把持有者已经不存在的预留当场摘掉，返回摘掉的条数。
+
+        两步、且**各自都只碰一个键**：先 ``ZRANGE`` 取成员、由 Python 读存活键，再用一条只操作
+        zset 的脚本按 holder 删。存活键绝不能进 ``EVAL`` —— 那正是 KeyRing V2 学到的 CROSSSLOT。
+        """
+        from app import instance_liveness
+
+        redis = await self._redis_safe()
+        if redis is None:
+            return 0
+        try:
+            members = await redis.zrange(_rsv_key(root), 0, -1)
+        except Exception as exc:  # noqa: BLE001 - 扫不动就照旧按 TTL 收口
+            SUBAGENT_LINE_SWEEP.labels(outcome="failed").inc()
+            self._warn("rsvscan", "subagent 线账预留成员扫描失败（此后不再重复告警）: %s", str(exc)[:160])
+            return 0
+        holders = {h for h in (_holder_of(str(m)) for m in members) if h}
+        if not holders:
+            return 0  # 全是滚动升级期间写的两段 member：无持有者可依据，不动
+        alive = await instance_liveness.holders_alive(holders)
+        if not alive:
+            return 0
+        dead = sorted(h for h, ok in alive.items() if not ok)
+        if not dead:
+            SUBAGENT_LINE_SWEEP.labels(outcome="scanned").inc()
+            return 0
+        removed = 0
+        for holder in dead:
+            try:
+                res = await redis.eval(_RSVD_DROP_HOLDER_LUA, 1, _rsv_key(root), holder)
+                removed += int(res or 0)
+            except Exception as exc:  # noqa: BLE001
+                SUBAGENT_LINE_SWEEP.labels(outcome="failed").inc()
+                self._warn(
+                    "rsvsweep", "subagent 线账死预留清扫失败（此后不再重复告警）: %s", str(exc)[:160]
+                )
+        if removed:
+            SUBAGENT_LINE_SWEEP.labels(outcome="removed").inc(removed)
+            logger.warning(
+                "subagent line %s: dropped %d reservation(s) held by dead instance(s) %s",
+                root, removed, ",".join(dead),
+            )
+        return removed
+
     async def _redis_safe(self) -> Any:
         """Redis 可选件：没配 / 连不上都按 ``None``，让线账退回纯 PG 口径。"""
         try:
@@ -431,14 +573,28 @@ class LineLedger:
 
         member 用 run 的 task id 而不是 run id：闸门那边能按 ``task.id`` 把自己从求和里剔掉，
         不必再往 ``AgentTask`` 上多塞一个"我预留了多少"的字段。
+
+        第三段是**持有者实例 id**（M17）：清扫与 drain 都按它收账。句柄本身就带着三段，所以
+        ``settle`` 只要把句柄原样还回来就行，不需要第二个索引。
         """
+        from app.subagent.affinity import cached_instance_id
+
         tokens = int(tokens or 0)
-        if tokens <= 0 or not _usable_root(root) or not tenant_id or not member:
+        # member 与 root 走同一份字符集校验：它同样拼进 TAB 分隔的 member 里，一个带 TAB 的
+        # id 会把自己那条记录拆成两段（``who`` 变成前缀、tokens 解析成 0），预留就此失明。
+        if tokens <= 0 or not _usable_root(root) or not _usable_root(member) or not tenant_id:
             return ""
         redis = await self._redis_safe()
         if redis is None:
             return ""
-        handle = f"{member}{_TAB}{tokens}"
+        # 持有者来自部署配置（`INSTANCE_ID` / `POD_NAME`），**不保证**符合 id 字符集：一个带 TAB
+        # 的值会把 member 的字段协议拆坏（`_holder_of` 读出前缀 ⇒ 问错存活键、按错 holder 删，
+        # 本实例在跑的预留会被自己扫掉）。不署名的退化是安全的：照旧计入求和、只由 score 收口，
+        # 与滚动升级期间老实例写的两段 member 完全同形。
+        holder = cached_instance_id()
+        if not _usable_root(holder):
+            holder = ""
+        handle = f"{member}{_TAB}{tokens}{_TAB}{holder}" if holder else f"{member}{_TAB}{tokens}"
         now = int(time.time())
         try:
             await redis.eval(
@@ -455,6 +611,8 @@ class LineLedger:
         except Exception as exc:  # noqa: BLE001
             self._warn("rsvw", "subagent 线账预留写入失败（此后不再重复告警）: %s", str(exc)[:160])
             return ""
+        if len(self._held) < MAX_TRACKED_HANDLES:
+            self._held[handle] = root
         return handle
 
     async def set_control(
@@ -535,6 +693,7 @@ class LineLedger:
         """
         if not _usable_root(root):
             return
+        self._held.pop(handle, None)
         redis = await self._redis_safe()
         if redis is None:
             return
@@ -559,6 +718,47 @@ class LineLedger:
         except Exception as exc:  # noqa: BLE001
             self._warn("settle", "subagent 线账收尾失败（此后不再重复告警，预留会自然到期）: %s", str(exc)[:160])
 
+    async def drain(self, holder: str) -> int:
+        """优雅退出：把 ``holder`` 这个实例还挂着的预留全部摘掉，返回摘掉的条数。
+
+        只覆盖"来得及告别"的那一半（正常重启、缩容、发布 —— 恰好是最常制造幽灵预留的场景）；
+        ``SIGKILL`` / OOM 走不到这里，那一侧由 :meth:`_sweep_dead_holders` 按存活键收口。
+        两者合起来才是完整的：告别让账立刻准，清扫让**没**告别的也只会错一个冷却周期。
+
+        先清登记簿再删：删失败（Redis 正好抖）不该让下次 drain 重试同一批，更不该让进程退不出去。
+        """
+        if not holder:
+            return 0
+        roots = sorted(set(self._held.values()))
+        self._held.clear()
+        if not roots:
+            # 这个进程从没预留过（没派发过子 Agent 是常态）⇒ 不建连接、不发命令。
+            # 关闭段每个实例都会走到这里，为一个空账去 `_redis_safe()` 会凭空起一条 Redis 连接。
+            return 0
+        redis = await self._redis_safe()
+        if redis is None:
+            return 0
+        removed = 0
+        for root in roots:
+            if not _usable_root(root):
+                continue
+            try:
+                res = await redis.eval(_RSVD_DROP_HOLDER_LUA, 1, _rsv_key(root), holder)
+                removed += int(res or 0)
+            except Exception as exc:  # noqa: BLE001 - 收尾失败由预留的自然到期兜底
+                SUBAGENT_LINE_SWEEP.labels(outcome="failed").inc()
+                self._warn(
+                    "drain", "subagent 线账 drain 失败（此后不再重复告警，预留会自然到期）: %s",
+                    str(exc)[:160],
+                )
+        if removed:
+            SUBAGENT_LINE_SWEEP.labels(outcome="drained").inc(removed)
+            logger.info(
+                "subagent line ledger: released %d reservation(s) for instance %s on shutdown",
+                removed, holder,
+            )
+        return removed
+
 
 def _used_key(root: str) -> str:
     return rkey(f"subagent:line:{root}:used")
@@ -577,3 +777,19 @@ def get_line_ledger() -> LineLedger:
     if _ledger is None:
         _ledger = LineLedger()
     return _ledger
+
+
+async def release_instance_reservations() -> int:
+    """lifespan 关闭路径调这个：释放**本实例**的在途预留（M17 的 drain 半边）。
+
+    放在这里而不是 ``app.subagent.registry.stop()`` 里，是因为这条是**唯一保证执行**的关闭路径
+    （``_shutdown_lifespan``），而注册表的 stop() 挂在队列 worker 的 ``finally`` 上、worker 没起
+    时整个不走。永不抛：关机不能因为"预留没还干净"就退不出去。
+    """
+    from app.subagent.affinity import cached_instance_id
+
+    try:
+        return await get_line_ledger().drain(cached_instance_id())
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("subagent line drain failed: %s", str(exc)[:160])
+        return 0

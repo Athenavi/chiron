@@ -147,6 +147,12 @@ SUBAGENT_LINE_PAUSE = Counter(
     "raised = 人提了额并解除暂停, raise_failed = 提额写库失败",
     ["outcome"],
 )
+SUBAGENT_LINE_SWEEP = Counter(
+    "subagent_line_sweep_total",
+    "M17 死实例预留清扫：scanned = 核对了持有者但没有人死, removed = 摘掉的预留条数, "
+    "drained = 优雅退出时主动释放的条数, failed = 清扫本身失败（不阻断判定，预留仍会自然到期）",
+    ["outcome"],
+)
 INTERACTION_CREATE_FAILED = Counter(
     "interaction_create_failed_total",
     "Pending-interaction tickets that could not be written —— 一次"

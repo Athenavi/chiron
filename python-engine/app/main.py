@@ -658,6 +658,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     await _engine_registry.start()
 
+    # ── 8b. 实例存活心跳（M17）──
+    # 线账靠它判断"某个在途预留的持有者是不是已经死了"（``engine:alive:{instance_id}``，
+    # 见 app/instance_liveness.py）。**刻意不复用上面那个注册表键**：它只在配了
+    # ENGINE_ADVERTISE_URL 时才写，用它当存活判据 ⇒ 未配置的部署里清扫会静默地把全站预留删空
+    # （读不到键 = 判定所有人都死了）。没 Redis 时 start() 返回 False，清扫随之禁用。
+    from app.instance_liveness import InstanceLiveness
+
+    _liveness = InstanceLiveness(redis=_redis, instance_id=_get_instance_id())
+    await _liveness.start()
+
     # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
     from app.hooks import warn_if_user_defined_enabled
 
@@ -697,6 +707,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         harness_task=_harness_task,
         storage_task=_storage_task,
         engine_registry=_engine_registry,
+        liveness=_liveness,
     )
 
 
@@ -921,6 +932,7 @@ async def _shutdown_lifespan(
     harness_task: Any = None,
     storage_task: Any = None,
     engine_registry: Any = None,
+    liveness: Any = None,
 ) -> None:
     """关闭清理（从 `lifespan` 提出，句柄**显式传入**）。
 
@@ -1018,6 +1030,16 @@ async def _shutdown_lifespan(
     # 停止实例注册心跳（批 E1；优雅退出时主动注销）
     if engine_registry is not None:
         await engine_registry.stop()
+
+    # ── M17：释放本实例的线账预留，再注销存活键 ──
+    # 顺序有意义：存活键是本进程在这套协议里**最后一个**撤掉的东西 —— 键还在时别的实例不会
+    # 误判我们已经走了，等它下次核对到键消失，我们的预留早就自己还干净了（不用等一个冷却周期）。
+    # 放在这里（而不是队列 worker 的 finally）是因为 `_shutdown_lifespan` 是唯一保证执行的路径。
+    from app.subagent.line_ledger import release_instance_reservations
+
+    await release_instance_reservations()
+    if liveness is not None:
+        await liveness.stop()
 
     # 关闭 MCP 插件池
     if _plugin_pool:

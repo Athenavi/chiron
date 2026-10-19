@@ -3,8 +3,9 @@
 为什么值得测：关闭段此前藏在 `lifespan` 里、靠 `'x' in locals()` 探测"启动时到底建没建"，
 **没有任何用例**。把它抽出来时踩到的坑是——一旦启动段被抽成函数，这些名字就不在 `lifespan`
 的 locals 里了，清理会**静默跳过**（任务不取消、实例不注销，还不报错）。
-所以这里钉两件事：① 传进来的句柄**一定**被取消/停止；② 传 None 时安全跳过（这正是当年
-`locals()` 探测想表达的意思，现在由显式参数表达）。
+所以这里钉三件事：① 传进来的句柄**一定**被取消/停止；② 传 None 时安全跳过（这正是当年
+`locals()` 探测想表达的意思，现在由显式参数表达）；③ M17 的收尾两半挂在**这条唯一保证执行的
+路径**上，且顺序是"先还预留、再撤存活键"。
 """
 
 import ast
@@ -46,12 +47,21 @@ class _FakePool:
         self.stopped += 1
 
 
+class _FakeLiveness:
+    def __init__(self) -> None:
+        self.stopped = 0
+
+    async def stop(self) -> None:
+        self.stopped += 1
+
+
 async def test_shutdown_cancels_every_given_handle(monkeypatch) -> None:
     reconciler = await _running_task()
     metrics = await _running_task()
     retention = await _running_task()
     registry = _FakeRegistry()
     pool = _FakePool()
+    liveness = _FakeLiveness()
     monkeypatch.setattr(main_mod, "_plugin_pool", pool)
 
     # **刻意用 `asyncio.wait`（带超时）而不是 `wait_for`**：后者超时会**取消被等待的协程**，
@@ -64,6 +74,7 @@ async def test_shutdown_cancels_every_given_handle(monkeypatch) -> None:
             metrics_task=metrics,
             retention_task=retention,
             engine_registry=registry,
+            liveness=liveness,
         )
     )
     try:
@@ -82,8 +93,36 @@ async def test_shutdown_cancels_every_given_handle(monkeypatch) -> None:
     for name, task in (("reconciler", reconciler), ("metrics", metrics), ("retention", retention)):
         assert task.cancelled() or task.done(), f"{name} 任务没有被取消（清理被跳过）"
     assert registry.stopped == 1, "实例注册心跳没有主动注销"
+    assert liveness.stopped == 1, "存活心跳没有注销：本实例的预留会被别的实例当成'还活着'整个 TTL"
     assert pool.stopped == 1, "MCP 插件池没有关闭"
     assert main_mod._plugin_pool is None, "关闭后插件池应被置空"
+
+
+async def test_shutdown_drains_the_line_ledger_before_withdrawing_the_alive_key(
+    monkeypatch,
+) -> None:
+    """M17 的两半都挂在关闭段，而**顺序**才是契约：先自己把预留还掉，再撤存活键。
+
+    反过来的那一瞬，别的实例来核对会看到"键没了、预留还在"⇒ 当场摘除 —— 而本进程此刻可能还有
+    一笔正在收尾。它同时钉住"drain 挂在这条**唯一保证执行**的路径上"（不是队列 worker 的
+    `finally`：worker 没起时那段整个不走）。
+    """
+    from app.subagent import line_ledger as line_ledger_mod
+
+    events: list[str] = []
+
+    async def _drain() -> int:
+        events.append("drain")
+        return 0
+
+    monkeypatch.setattr(line_ledger_mod, "release_instance_reservations", _drain)
+
+    class _Withdraw:
+        async def stop(self) -> None:
+            events.append("alive-key")
+
+    await _shutdown_lifespan(liveness=_Withdraw())
+    assert events == ["drain", "alive-key"], "预留必须自己还干净，之后才轮到存活键退出协议"
 
 
 async def test_shutdown_without_handles_is_safe() -> None:
@@ -143,3 +182,37 @@ def test_lifespan_does_not_probe_locals_anymore() -> None:
         isinstance(node, ast.AsyncFunctionDef) and node.name == "_shutdown_lifespan"
         for node in tree.body
     ), "关闭清理应独立成 _shutdown_lifespan（句柄显式传入）"
+
+
+def test_lifespan_passes_every_shutdown_parameter() -> None:
+    """机械护栏：`lifespan` 里那次调用必须把 `_shutdown_lifespan` 的**每个参数**都传下去。
+
+    上一条钉的是"给了句柄就一定处理"，这一条钉的是另一半：**启动段新建的句柄别在调用点被忘掉**。
+    少传一个和当年那个 `locals()` 探测一样静默 —— 每个参数都有默认值，不报错，只是不清理。
+    参数清单直接从函数签名取（不是测试里抄一份字面量）：加一个句柄，护栏立刻要求调用点跟上。
+    """
+    tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
+    params = next(
+        node
+        for node in tree.body
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_shutdown_lifespan"
+    ).args
+    accepts = {a.arg for a in [*params.posonlyargs, *params.args, *params.kwonlyargs]}
+    lifespan = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.AsyncFunctionDef) and node.name == "lifespan"
+    )
+    call = next(
+        node
+        for node in ast.walk(lifespan)
+        if isinstance(node, ast.Call)
+        and isinstance(node.func, ast.Name)
+        and node.func.id == "_shutdown_lifespan"
+    )
+    passed = {k.arg for k in call.keywords if k.arg is not None}
+    assert not any(getattr(k, "arg", None) is None for k in call.keywords), (
+        "调用里用了 **kwargs 展开：护栏读不到具体句柄，逐个写出来"
+    )
+    missing = sorted(accepts - passed)
+    assert not missing, f"lifespan 没把 {missing} 传给关闭段 —— 那个句柄永远不会被清理（静默）"
