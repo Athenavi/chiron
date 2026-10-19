@@ -145,7 +145,6 @@ export default {
   confirm_deleting_the_selected_sessions_this_action_cannot_be_undone: "Confirm deleting the selected sessions? This action cannot be undone.",
   delete_conversation: "Delete conversation",
   context_window_updated_the_context_ring_on_the_conversation_page_is_calculated_from_it: "Context window updated (the context ring on the conversation page is calculated from it)",
-  context_message_limit: "Context message limit",
   no_conversations_shared_yet: "No conversations shared yet",
   enter_a_new_conversation_name: "Enter a new conversation name",
   reasoning: "Reasoning",

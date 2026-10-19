@@ -295,7 +295,7 @@ func NewGatewayRouter(
 	tenantResMgr.StartCleanup(lifecycleCtx, 30*time.Minute)
 
 	// Submit handler (proxies to Python)
-	submitHandler := NewSubmitHandler(pythonClient, sessionMgr, eventHub, billingMgr)
+	submitHandler := NewSubmitHandler(pythonClient, sessionMgr, eventHub, billingMgr, cfg)
 
 	// Plugins (MCP server config management)
 	pluginHandler := NewPluginHandler(cfg, authenticator)

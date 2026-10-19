@@ -15,6 +15,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
+	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/evidence"
@@ -24,19 +25,55 @@ import (
 )
 
 // SubmitHandler proxies /submit requests to the Python AI engine.
+// agentDefaults 返回（单次输出上限, 默认回合数）。
+//
+// M20：这两个数来自后台「系统设置」；此前它们被写进 `config.Config` 却**没有任何读取点**。
+// nil cfg（测试）与非法值（<=0）都回落到包内默认 —— 不做"0 = 关掉预算"的隐式语义。
+func (h *SubmitHandler) agentDefaults() (int, int) {
+	maxOutputTokens, defaultMaxTurns := DefaultMaxOutputTokens, DefaultMaxTurns
+	if h.agentCfg != nil {
+		if h.agentCfg.AgentMaxOutputTokens > 0 {
+			maxOutputTokens = h.agentCfg.AgentMaxOutputTokens
+		}
+		if h.agentCfg.AgentDefaultMaxTurns > 0 {
+			defaultMaxTurns = h.agentCfg.AgentDefaultMaxTurns
+		}
+	}
+	return maxOutputTokens, defaultMaxTurns
+}
+
+// applyMaxOutputDefault 只在请求**没带** `max_tokens` 时注入后台值。
+//
+// 显式值优先是契约的一部分：前端 / Agent 档案选了单次输出上限，后台的全局默认不能盖掉它；
+// 反过来，后台设了值也必须真的出现在发给引擎的 `llm_config` 里（这正是 M20 要修的缺口）。
+func applyMaxOutputDefault(llmConfig map[string]interface{}, maxOutputTokens int) {
+	if llmConfig == nil {
+		return
+	}
+	if _, ok := llmConfig["max_tokens"]; ok {
+		return
+	}
+	llmConfig["max_tokens"] = maxOutputTokens
+}
+
 type SubmitHandler struct {
 	python     *engine.PythonClient
 	sessionMgr *session.Manager
 	eventHub   *broadcast.Hub
 	biller     engine.Biller
+	// agentCfg 只用来读后台「系统设置」里的两个 Agent 默认值（M20 把它们接到真实读取点）：
+	// `AgentDefaultMaxTurns`（默认提交回合数）与 `AgentMaxOutputTokens`（单次调用上限）。
+	// 允许为 nil（测试里就是这样）：此时回落到包内的 DefaultMaxTurns / DefaultMaxOutputTokens。
+	agentCfg *config.Config
 }
 
-func NewSubmitHandler(python *engine.PythonClient, sessionMgr *session.Manager, eventHub *broadcast.Hub, biller engine.Biller) *SubmitHandler {
+func NewSubmitHandler(python *engine.PythonClient, sessionMgr *session.Manager, eventHub *broadcast.Hub, biller engine.Biller, agentCfg *config.Config) *SubmitHandler {
 	return &SubmitHandler{
 		python:     python,
 		sessionMgr: sessionMgr,
 		eventHub:   eventHub,
 		biller:     biller,
+		agentCfg:   agentCfg,
 	}
 }
 
@@ -408,7 +445,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	}
 
 	// 默认 max_turns，若 llm_config 中有则使用前端指定的值
-	defaultMaxTurns := DefaultMaxTurns
+	//
+	// M20：这里的"默认"改由后台「系统设置」的 agent.max_turns 决定（此前是一个死字段）。
+	// 优先级：请求显式（前端 / Agent 档案）> 后台全局默认 > 包内常量。
+	maxOutputTokens, defaultMaxTurns := h.agentDefaults()
 	if llmConfig != nil {
 		if mt, ok := llmConfig["max_turns"].(float64); ok && mt > 0 {
 			defaultMaxTurns = int(mt)
@@ -459,6 +499,12 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	if llmConfig == nil {
 		llmConfig = map[string]interface{}{}
 	}
+	// M20：后台「系统设置」的单次 max output 上限（agent.max_tokens）接到这里 ——
+	// 它此前写进 config.Config.AgentMaxTokens，而那个字段**全库零读取点**，
+	// 于是"用户在后台改了数字，什么都没发生"。
+	// **只在请求没带时注入**：前端 / Agent 档案的显式值优先（与 max_turns 同一优先级）；
+	// 引擎 `app/main.py` 的兜底 8192 因此只在"绕过网关直连引擎"时才生效。
+	applyMaxOutputDefault(llmConfig, maxOutputTokens)
 	llmConfig["mode"] = agentCfg.mode.Value
 	// 工具授权模式随请求下发（**不再经 Redis 往返**）：引擎在任务开始时读取一次并用于
 	// 每次工具裁决（python-engine/app/agent/runtime.py）。此前它存在 Redis 里由引擎反查，

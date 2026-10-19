@@ -30,6 +30,14 @@ func main() {
 		slog.Error("FATAL: invalid configuration - refusing to start (run `python scripts/init.py`)", "error", err)
 		return
 	}
+	// M20：Agent 预算变量的破坏性改名。旧名（AGENT_MAX_TOKENS / AGENT_MAX_TURNS /
+	// AGENT_CONTEXT_LIMIT）不再被任何一侧读取 —— 它们曾是"同名不同义"的源头
+	// （网关的单次输出上限 vs 引擎的 run 全程预算）。这里显式拒绝启动，
+	// 而不是让一份"看起来设了"的旧配置静默失效。
+	if err := config.ValidateRenamedAgentEnv(); err != nil {
+		slog.Error("FATAL: deprecated agent budget environment variables - refusing to start", "error", err)
+		return
+	}
 
 	// Logger
 	slog.SetDefault(slog.New(slog.NewJSONHandler(os.Stdout, &slog.HandlerOptions{
@@ -367,13 +375,17 @@ func applyDBSettingsAfterConnect(ctx context.Context, cfg *config.Config) {
 
 	apply("agent", func(m map[string]interface{}) {
 		if v, ok := m["max_turns"].(float64); ok && v > 0 {
-			cfg.AgentMaxTurns = int(v)
+			cfg.AgentDefaultMaxTurns = int(v)
 		}
 		if v, ok := m["max_tokens"].(float64); ok && v > 0 {
-			cfg.AgentMaxTokens = int(v)
+			cfg.AgentMaxOutputTokens = int(v)
 		}
-		if v, ok := m["context_limit"].(float64); ok && v > 0 {
-			cfg.AgentContextLimit = int(v)
+		// `context_limit` 自 M20 起**没有消费点**：引擎按模型窗口的 token 预算压缩，
+		// 不存在"消息条数上限"这个量，设置页的输入框也已摘掉。旧库里可能还留着这个键
+		// ——显式提示它被忽略，而不是让它看起来生效（"改了没反应"正是本轮要消灭的形态）。
+		if _, ok := m["context_limit"]; ok {
+			slog.Warn("system setting agent.context_limit is deprecated and ignored (M20): " +
+				"engine compacts by token budget, not by message count")
 		}
 	})
 

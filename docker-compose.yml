@@ -125,11 +125,14 @@ services:
       # 依赖门禁:默认 false = Redis 不可用时拒绝启动(多副本一致性优先);
       # 仅单机开发设 true 才允许进程内降级(限流/会话/事件退化为单实例语义)。
       DEGRADED_MODE: ${DEGRADED_MODE:-false}
+      # M20：网关侧的"单次 / 默认"两个数（后台「系统设置」优先，这里只是部署默认）。
+      # 与引擎的 AGENT_RUN_MAX_* 不是一回事：那两个是一个 run 全程的上限。
+      AGENT_MAX_OUTPUT_TOKENS: ${AGENT_MAX_OUTPUT_TOKENS:-}
+      AGENT_DEFAULT_MAX_TURNS: ${AGENT_DEFAULT_MAX_TURNS:-}
       # 按-run 用量对账(M19):崩溃/自动接管段不经过网关,靠读 agent_runs.checkpoint.usage
       # 补进用户余额 + billing_records + 租户池。默认 shadow(只算、打点、不动账);
       # 切 enforce 前看 run_usage_reconcile_shadowed / run_usage_reconcile_tokens。
-      RUN_USAGE_RECONCILE_MODE: ${RUN_USAGE_RECONCILE_MODE:-}
-      RUN_USAGE_RECONCILE_INTERVAL_SECONDS: ${RUN_USAGE_RECONCILE_INTERVAL_SECONDS:-}
+      RUN_USAGE_RECONCILE_MODE: ${RUN_USAGE_RECONCILE_MODE:-}      RUN_USAGE_RECONCILE_INTERVAL_SECONDS: ${RUN_USAGE_RECONCILE_INTERVAL_SECONDS:-}
       RUN_USAGE_RECONCILE_MIN_AGE_SECONDS: ${RUN_USAGE_RECONCILE_MIN_AGE_SECONDS:-}
       RUN_USAGE_RECONCILE_MAX_AGE_DAYS: ${RUN_USAGE_RECONCILE_MAX_AGE_DAYS:-}
       RUN_USAGE_RECONCILE_BATCH: ${RUN_USAGE_RECONCILE_BATCH:-}
@@ -247,17 +250,17 @@ services:
       # 设置 MCP_POOL_ENABLED=true,详见 docs/deployment-multi-instance.md。
       MCP_POOL_ENABLED: ${MCP_POOL_ENABLED:-false}
       # Agent 运行预算(引擎侧读取;**留空 = 用代码默认**,不要把"想关某一轴"写成空值之外的东西)。
-      # 口径、默认值与"网关 config 里同名变量是另一回事(且当前无人读取)"的说明都在 .env.example。
+      # M20 起命名与网关分开:tokens/turns 两轴带 RUN_(run 全程),其余三轴只由引擎读、保留原名。
       # 主 Agent run 级:steps 60 / tokens 400k / turns·wall·cost 不限;起点跨崩溃接管续跑继承(M15e)。
       AGENT_MAX_STEPS: ${AGENT_MAX_STEPS:-}
-      AGENT_MAX_TURNS: ${AGENT_MAX_TURNS:-}
-      AGENT_MAX_TOKENS: ${AGENT_MAX_TOKENS:-}
+      AGENT_RUN_MAX_TURNS: ${AGENT_RUN_MAX_TURNS:-}
+      AGENT_RUN_MAX_TOKENS: ${AGENT_RUN_MAX_TOKENS:-}
       AGENT_MAX_SECONDS: ${AGENT_MAX_SECONDS:-}
       AGENT_MAX_COST: ${AGENT_MAX_COST:-}
       # 子 Agent run 级:tokens 200k,其余轴不限(步数由 max_turns 与看门狗管;时长另有 SUBAGENT_MAX_RUNTIME)
       SUBAGENT_MAX_STEPS: ${SUBAGENT_MAX_STEPS:-}
-      SUBAGENT_MAX_TURNS: ${SUBAGENT_MAX_TURNS:-}
-      SUBAGENT_MAX_TOKENS: ${SUBAGENT_MAX_TOKENS:-}
+      SUBAGENT_RUN_MAX_TURNS: ${SUBAGENT_RUN_MAX_TURNS:-}
+      SUBAGENT_RUN_MAX_TOKENS: ${SUBAGENT_RUN_MAX_TOKENS:-}
       SUBAGENT_MAX_SECONDS: ${SUBAGENT_MAX_SECONDS:-}
       SUBAGENT_MAX_COST: ${SUBAGENT_MAX_COST:-}
       # 任务线(同一 root run 的全部委派与续跑)的第二道闸门,默认 2M;耗尽 ⇒ 暂停该线并挂出「提额」待办。

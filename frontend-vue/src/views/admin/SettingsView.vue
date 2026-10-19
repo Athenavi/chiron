@@ -35,7 +35,9 @@ const rateLimitConfig = ref({
 const agentConfig = ref({
   max_turns: 10,
   max_tokens: 4096,
-  context_limit: 20,
+  // M20：`context_limit` 已摘掉 —— 引擎按模型窗口的 **token** 预算压缩，
+  // 没有"消息条数上限"这个量；字段此前只写进一个零读取点的配置
+  // （`.env.example` / `docs/wiki/reference/config.md` 有迁移说明）。
 })
 
 const llmConfig = ref({
@@ -663,14 +665,6 @@ onMounted(async () => {
                     v-model:value="agentConfig.max_tokens"
                     :min="256"
                     :max="32768"
-                    style="width: 100%"
-                  />
-                </FormItem>
-                <FormItem :label="$t('chat.context_message_limit')">
-                  <InputNumber
-                    v-model:value="agentConfig.context_limit"
-                    :min="1"
-                    :max="100"
                     style="width: 100%"
                   />
                 </FormItem>

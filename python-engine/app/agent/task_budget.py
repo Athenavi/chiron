@@ -124,11 +124,18 @@ def from_env(
     显式传 0 表示"用默认"（调用方不传就是默认策略）。主 Agent 用默认前缀 ``AGENT``；
     子 Agent 传 ``prefix="SUBAGENT"``、自己的 token 默认值，以及 ``default_steps=0``
     （它不需要步数轴）—— 同一个实现、两套阈值来源，避免两份会各自漂移的预算代码。
+
+    ⚠ **tokens / turns 两轴的名字带 `RUN_`**（``AGENT_RUN_MAX_TOKENS`` /
+    ``SUBAGENT_RUN_MAX_TOKENS`` / ``..._RUN_MAX_TURNS``），与其余三轴不同。这不是手滑：
+    那两轴的裸名（``AGENT_MAX_TOKENS`` / ``AGENT_MAX_TURNS``）在**网关**里是另一个意思
+    （单次调用的 max output / 每次提交的默认回合数），同名不同义会让共享 env 的部署
+    把引擎的 run 预算顶成"单次输出上限"（M20）。steps / seconds / cost 三轴只由引擎读，
+    不与网关撞名，因此保留原名 —— 改名要精确到"真正会撞的那两个"。
     """
     return TaskBudget(
         steps=int(steps or 0) or _env_int(f"{prefix}_MAX_STEPS", default_steps),
-        turns=int(turns or 0) or _env_int(f"{prefix}_MAX_TURNS", 0),
-        tokens=int(tokens or 0) or _env_int(f"{prefix}_MAX_TOKENS", default_tokens),
+        turns=int(turns or 0) or _env_int(f"{prefix}_RUN_MAX_TURNS", 0),
+        tokens=int(tokens or 0) or _env_int(f"{prefix}_RUN_MAX_TOKENS", default_tokens),
         wall=int(seconds or 0) or _env_int(f"{prefix}_MAX_SECONDS", DEFAULT_MAX_SECONDS),
         cost=float(cost or 0.0) or float(_env_int(f"{prefix}_MAX_COST", int(DEFAULT_MAX_COST))),
     )
