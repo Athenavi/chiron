@@ -84,6 +84,11 @@ class DocumentUpload(BaseModel):
     content: str = ""  # base64 或纯文本
 
 
+class BuildBody(BaseModel):
+    #: 重建索引。增量模式会跳过已 ready 的文档 —— 升级 pageindex 后必须走它。
+    force: bool = False
+
+
 class KBQuery(BaseModel):
     query: str
     top_k: int = 5  # 保留字段以兼容旧前端；推理式检索不使用 top-k
@@ -605,7 +610,9 @@ async def delete_document(kb_id: str, user_id: str, doc_id: str) -> dict[str, An
 # ── Build & Query ──
 
 
-async def _enqueue_kb_index(*, kb_id: str, user_id: str, tenant_id: str) -> str:
+async def _enqueue_kb_index(
+    *, kb_id: str, user_id: str, tenant_id: str, force: bool = False
+) -> str:
     """投递 ``kb_index`` 任务。
 
     租户只从 KB 行反查（不接受调用方传值），与 worker 侧的约定一致。
@@ -619,13 +626,15 @@ async def _enqueue_kb_index(*, kb_id: str, user_id: str, tenant_id: str) -> str:
         return await producer.enqueue(
             "kb_index",
             tenant_id=tenant_id or DEFAULT_TENANT_ID,
-            payload={"kb_id": kb_id, "user_id": user_id},
+            payload={"kb_id": kb_id, "user_id": user_id, "force": bool(force)},
         )
     finally:
         await redis.aclose()
 
 
-async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
+async def build_knowledge_base(
+    kb_id: str, user_id: str, tenant_id: str = "", force: bool = False
+) -> dict[str, Any]:
     """投递索引任务（把 pending 文档交给 ``kb_index``）。"""
     pool = get_pool()
     kb = await pool.fetchrow(
@@ -646,8 +655,15 @@ async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") ->
     # 先确认 provider 真的可用，再投递：否则用户会等一个注定失败的长任务
     await _resolve_provider_or_error(user_id=str(user_id))
 
-    task_id = await _enqueue_kb_index(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
-    return {"status": "indexing", "task_id": task_id, "provider": kb["provider"]}
+    task_id = await _enqueue_kb_index(
+        kb_id=kb_id, user_id=user_id, tenant_id=tenant_id, force=force
+    )
+    return {
+        "status": "indexing",
+        "task_id": task_id,
+        "provider": kb["provider"],
+        "force": bool(force),
+    }
 
 
 async def query_knowledge_base(
@@ -821,12 +837,19 @@ async def verify_user_settings(user_id: str) -> dict[str, Any]:
         return {"ok": False, "status": health.status, "detail": health.detail}
 
     result = health
-    verify = getattr(provider, "verify", None)
-    if health.ok and callable(verify):
-        import asyncio
+    # 探测方法名兼容：RemoteProvider 用 `probe`（async HTTP），旧实现用 `verify`（同步）。
+    # 之前只找 `verify`，于是"测试连接"永远退回本地配置检查 —— 服务没起也会显示正常。
+    import inspect
 
+    probe = getattr(provider, "probe", None) or getattr(provider, "verify", None)
+    if health.ok and callable(probe):
         try:
-            result = await asyncio.to_thread(verify)
+            if inspect.iscoroutinefunction(probe):
+                result = await probe()
+            else:
+                import asyncio
+
+                result = await asyncio.to_thread(probe)
         except Exception as exc:  # noqa: BLE001
             from app.knowledge.providers.base import HealthResult
 
@@ -1013,12 +1036,18 @@ async def delete_doc(
 async def build_kb(
     kb_id: str,
     request: Request,
+    body: BuildBody | None = None,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await build_knowledge_base(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
+    return await build_knowledge_base(
+        kb_id=kb_id,
+        user_id=user_id,
+        tenant_id=tenant_id,
+        force=bool(body and body.force),
+    )
 
 
 @router.post("/{kb_id}/query")

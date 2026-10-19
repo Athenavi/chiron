@@ -202,6 +202,22 @@ services:
       # 向量库:知识库已改用 PageIndex(不再需要向量库);MILVUS_ADDRESS 现在只服务
       # 记忆层的可选后端(见下方 MEMORY_VECTOR_BACKEND=milvus)
       MILVUS_ADDRESS: ${MILVUS_ADDRESS:-milvus:19530}
+      # 知识库(PageIndex)。未配自托管时服务照常启动,该 provider 显示"未启用";
+      # 用户仍可在「知识库设置」里选 Cloud 并自带 API key。
+      # KNOWLEDGE_SELFHOSTED_ROOT 必须挂**所有副本可见**的共享卷(否则多实例下索引时有时无)。
+      KNOWLEDGE_SELFHOSTED_ROOT: ${KNOWLEDGE_SELFHOSTED_ROOT:-}
+      KNOWLEDGE_SELFHOSTED_INDEX_MODEL: ${KNOWLEDGE_SELFHOSTED_INDEX_MODEL:-}
+      KNOWLEDGE_SELFHOSTED_CHAT_MODEL: ${KNOWLEDGE_SELFHOSTED_CHAT_MODEL:-}
+      KNOWLEDGE_CLOUD_CHAT_MODEL: ${KNOWLEDGE_CLOUD_CHAT_MODEL:-}
+      # 原文对象存储:留空 = 跟随 MEDIA_STORE_BACKEND(引擎侧回退);生产建议显式设 s3。
+      # local 后端同样必须挂在共享卷上。
+      KNOWLEDGE_BLOB_BACKEND: ${KNOWLEDGE_BLOB_BACKEND:-}
+      KNOWLEDGE_LOCAL_PATH: ${KNOWLEDGE_LOCAL_PATH:-/srv/chiron/knowledge}
+      KNOWLEDGE_S3_BUCKET: ${KNOWLEDGE_S3_BUCKET:-}
+      KNOWLEDGE_S3_PREFIX: ${KNOWLEDGE_S3_PREFIX:-knowledge/}
+      # 检索服务内部地址（S4：引擎不再内嵌 PageIndex；未配则知识库显示"未启用"）
+      KNOWLEDGE_SERVICE_URL: ${KNOWLEDGE_SERVICE_URL:-http://pageindex-search:8100}
+      KNOWLEDGE_SERVICE_TIMEOUT: ${KNOWLEDGE_SERVICE_TIMEOUT:-120}
       # 记忆层(L3 摘要向量)后端:pg | milvus。默认 pg —— 向量落 memory_summaries.embedding
       # (迁移 0019),判重与语义召回直接读它。Milvus 属 selfhosted-s3 profile(默认不启动),
       # 把它当默认后端会让"L3 语义召回"静默恒空 —— 这正是本轮修掉的缺陷。
@@ -270,6 +286,8 @@ services:
       - plugindata:/srv/chiron/plugins
       # 内置技能资产：只读挂载进引擎（配合上面的 CHIRON_BUILTIN_SKILLS_PATH）。
       - ./market/skills:/srv/chiron/builtin-skills:ro
+      # 知识库原文（local 后端）：与 pageindex-worker **同卷**，否则引擎写的原文 worker 读不到
+      - kblobdata:/srv/chiron/knowledge
     stop_grace_period: 30s
     restart: unless-stopped
     # 沙箱加固（P0-1）：引擎容器内会执行 agent 生成的命令与 Python 代码，而进程内
@@ -479,6 +497,73 @@ services:
       - etcddata:/etcd
     command: etcd --advertise-client-urls=http://etcd:2379 -listen-client-urls http://0.0.0.0:2379 --data-dir /etcd
 
+  # ── 知识库检索服务（无状态，可水平扩展）────────────────────────────────
+  # 引擎经内网 HTTP 调它；凭据与文档范围都由引擎解析好后随请求传入（它不读 DB）。
+  pageindex-search:
+    build:
+      context: ./pageindex-service
+    image: chiron/pageindex-service:dev
+    logging: *default-logging
+    cpus: 1.0
+    mem_limit: 1g
+    restart: unless-stopped
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      KNOWLEDGE_SELFHOSTED_ROOT: /srv/chiron/knowledge_index
+      KNOWLEDGE_SELFHOSTED_INDEX_MODEL: ${KNOWLEDGE_SELFHOSTED_INDEX_MODEL:-}
+      KNOWLEDGE_SELFHOSTED_CHAT_MODEL: ${KNOWLEDGE_SELFHOSTED_CHAT_MODEL:-}
+      KNOWLEDGE_CLOUD_CHAT_MODEL: ${KNOWLEDGE_CLOUD_CHAT_MODEL:-}
+      KNOWLEDGE_SELFHOSTED_LLM_BASE_URL: ${KNOWLEDGE_SELFHOSTED_LLM_BASE_URL:-}
+      KNOWLEDGE_SELFHOSTED_LLM_API_KEY: ${KNOWLEDGE_SELFHOSTED_LLM_API_KEY:-}
+      KNOWLEDGE_SELFHOSTED_OPTIMIZE: ${KNOWLEDGE_SELFHOSTED_OPTIMIZE:-full}
+    volumes:
+      # 索引目录：检索侧**只读**（worker 才是写方）—— 权限最小化
+      - kbindexdata:/srv/chiron/knowledge_index:ro
+    networks:
+      - default
+    expose:
+      - "8100"
+
+  # ── 索引 worker（消费 engine:tasks:kb；与检索服务同镜像）──────────────
+  pageindex-worker:
+    build:
+      context: ./pageindex-service
+    image: chiron/pageindex-service:dev
+    command: ["python", "-m", "app.index_worker"]
+    logging: *default-logging
+    cpus: 2.0
+    mem_limit: 3g
+    restart: unless-stopped
+    environment:
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:?INTERNAL_TOKEN is required}
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/${REDIS_DB:-0}
+      REDIS_KEY_PREFIX: ${REDIS_KEY_PREFIX:-}
+      # 与引擎同一个 DSN（worker 直连 PG 回写状态；schema 由 migrations 单一定义）
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required}
+      PAGEINDEX_WORKER_CONCURRENCY: ${PAGEINDEX_WORKER_CONCURRENCY:-2}
+      KNOWLEDGE_SELFHOSTED_ROOT: /srv/chiron/knowledge_index
+      KNOWLEDGE_SELFHOSTED_INDEX_MODEL: ${KNOWLEDGE_SELFHOSTED_INDEX_MODEL:-}
+      KNOWLEDGE_SELFHOSTED_CHAT_MODEL: ${KNOWLEDGE_SELFHOSTED_CHAT_MODEL:-}
+      KNOWLEDGE_CLOUD_CHAT_MODEL: ${KNOWLEDGE_CLOUD_CHAT_MODEL:-}
+      KNOWLEDGE_SELFHOSTED_LLM_BASE_URL: ${KNOWLEDGE_SELFHOSTED_LLM_BASE_URL:-}
+      KNOWLEDGE_SELFHOSTED_LLM_API_KEY: ${KNOWLEDGE_SELFHOSTED_LLM_API_KEY:-}
+      KNOWLEDGE_SELFHOSTED_OPTIMIZE: ${KNOWLEDGE_SELFHOSTED_OPTIMIZE:-full}
+      # 原文（local 后端）与引擎同卷：它要读原文才能索引
+      KNOWLEDGE_BLOB_BACKEND: ${KNOWLEDGE_BLOB_BACKEND:-}
+      KNOWLEDGE_LOCAL_PATH: /srv/chiron/knowledge
+      KNOWLEDGE_S3_BUCKET: ${KNOWLEDGE_S3_BUCKET:-}
+      KNOWLEDGE_S3_PREFIX: ${KNOWLEDGE_S3_PREFIX:-knowledge/}
+      S3_ENDPOINT_URL: ${S3_ENDPOINT_URL:-}
+      S3_ACCESS_KEY: ${S3_ACCESS_KEY:-}
+      S3_SECRET_KEY: ${S3_SECRET_KEY:-}
+    volumes:
+      - kbindexdata:/srv/chiron/knowledge_index
+      - kblobdata:/srv/chiron/knowledge
+    networks:
+      - default
+
   frontend:
     build:
       context: frontend-vue
@@ -550,6 +635,8 @@ services:
 volumes:
   redisdata:
   miniodata:
+  kbindexdata:
+  kblobdata:
   workspace:
   sandboxdata:
   plugindata:

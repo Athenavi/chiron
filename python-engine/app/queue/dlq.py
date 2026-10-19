@@ -7,24 +7,28 @@ from typing import Any
 import redis.asyncio as aioredis
 
 # 统一键前缀（与 Go 网关 RedisKey 语义一致，多环境隔离）
-from app.redis_keys import rkey
+from app.queue.streams import ENGINE_QUEUE, QueueSpec
 
 logger = logging.getLogger(__name__)
 
-# 主任务流与死信流（消费组名 engine-workers 挂在流上，无需前缀）
-TASK_STREAM = rkey("engine:tasks")
-DLQ_STREAM = rkey("engine:tasks:dlq")
+# 兼容旧引用：这两个常量现在指向**引擎队列**的键（知识库索引队列见 app/queue/streams.py）。
+# 新代码请直接用 QueueSpec —— "任务该投哪条队列"只应该有一个答案。
+TASK_STREAM = ENGINE_QUEUE.stream
+DLQ_STREAM = ENGINE_QUEUE.dlq
 
 
 class DeadLetterQueue:
     """死信队列管理 — 查看、重试、清理"""
 
-    def __init__(self, redis: aioredis.Redis):
+    def __init__(self, redis: aioredis.Redis, queue: QueueSpec = ENGINE_QUEUE) -> None:
         self._redis = redis
+        # 死信属于哪条队列：引擎任务与知识库索引的消费方不同，混在一起会变成
+        # "怎么重投都修不好"的死信。
+        self._q = queue
 
     async def list(self, count: int = 50) -> list[dict[str, Any]]:
         """列出死信消息"""
-        results = await self._redis.xrevrange(DLQ_STREAM, count=count)
+        results = await self._redis.xrevrange(self._q.dlq, count=count)
         messages = []
         for stream_id, fields in results or []:
             msg: dict[Any, Any] = {}
@@ -39,7 +43,7 @@ class DeadLetterQueue:
     async def retry(self, stream_id: str) -> bool:
         """将死信消息重新入队"""
         # 读取消息
-        results = await self._redis.xrange(DLQ_STREAM, min=stream_id, max=stream_id)
+        results = await self._redis.xrange(self._q.dlq, min=stream_id, max=stream_id)
         if not results:
             return False
 
@@ -54,9 +58,9 @@ class DeadLetterQueue:
         message["retry_count"] = "0"
 
         # 重新入队（MAXLEN 限界，防长期运行下流无界增长）
-        await self._redis.xadd(TASK_STREAM, message, maxlen=100000)
+        await self._redis.xadd(self._q.stream, message, maxlen=self._q.maxlen)
         # 从 DLQ 删除
-        await self._redis.xdel(DLQ_STREAM, stream_id)
+        await self._redis.xdel(self._q.dlq, stream_id)
         logger.info("DLQ message requeued: %s", stream_id)
         return True
 
@@ -74,14 +78,14 @@ class DeadLetterQueue:
         messages = await self.list(count=10000)
         count = 0
         for msg in messages:
-            await self._redis.xdel(DLQ_STREAM, msg["stream_id"])
+            await self._redis.xdel(self._q.dlq, msg["stream_id"])
             count += 1
         return count
 
     async def depth(self) -> int:
         """死信队列深度"""
         try:
-            info = await self._redis.xinfo_stream(DLQ_STREAM)
+            info = await self._redis.xinfo_stream(self._q.dlq)
             return int(info.get("length", 0) or 0)
         except Exception:
             return 0

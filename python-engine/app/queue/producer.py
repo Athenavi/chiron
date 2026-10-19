@@ -10,6 +10,7 @@ from typing import Any
 import redis.asyncio as aioredis
 
 from app.observability.logging import trace_id_var
+from app.queue.streams import ENGINE_QUEUE, queue_for_task
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -110,9 +111,14 @@ class QueueProducer:
             ),
         }
 
-        stream_id = await self._redis.xadd(TASK_STREAM, message, maxlen=TASK_STREAM_MAXLEN)
+        spec = queue_for_task(task_type)
+        stream_id = await self._redis.xadd(spec.stream, message, maxlen=spec.maxlen)
         logger.info(
-            "Task enqueued: id=%s type=%s stream_id=%s", task_id, task_type, stream_id
+            "Task enqueued: id=%s type=%s queue=%s stream_id=%s",
+            task_id,
+            task_type,
+            spec.key,
+            stream_id,
         )
         return task_id
 

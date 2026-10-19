@@ -18,17 +18,17 @@ from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
 
-# 流名与保留上限从 producer 统一取得。此前本文件自己又定义了一份流名，
-# 且重投/放回用了比生产者更小的 maxlen（10000 vs 100000）—— 积压超过 1 万条时，
-# 一次重投就会静默修剪掉最老的待处理任务。
-from app.queue.producer import (  # noqa: E402
-    DLQ_STREAM,
-    DLQ_STREAM_MAXLEN,
-    TASK_STREAM,
-    TASK_STREAM_MAXLEN,
+# 队列规格（stream / 消费组 / DLQ / 延迟键）统一在 app/queue/streams.py：引擎任务与
+# 知识库索引**分属两条 stream** —— Redis Stream 单消费组语义下，"让引擎 worker 别碰
+# kb_index"不能靠过滤（消息已被取走），只能换队列。此前本文件自己又定义了一份流名，
+# 且重投用了比生产者更小的 maxlen —— 积压时一次重投就会静默修剪掉最老的任务。
+from app.queue.streams import (  # noqa: E402
+    ENGINE_QUEUE,
+    QueueSpec,
+    is_foreign,
+    queue_for_task,
 )
 
-GROUP_NAME = "engine-workers"
 CONSUMER_PREFIX = "worker"
 MAX_RETRIES = 3
 
@@ -80,7 +80,7 @@ return 0
 # 这里给"等一会儿再试"一条独立通路：延迟集合（ZSET，score=可执行时间），
 # 到点由 `_promote_delayed` 搬回主队列，**不消耗重试预算**（它没有失败），
 # 由 deadline 与 delay 次数上限兜底，超限则进 DLQ（可见、可人工重投）。
-DELAYED_ZSET = rkey("engine:tasks:delayed")
+DELAYED_ZSET = ENGINE_QUEUE.delayed
 DELAY_LOOP_SECS = float(os.getenv("QUEUE_DELAY_LOOP_SECS", "15"))
 DELAY_BASE_SECONDS = float(os.getenv("QUEUE_DELAY_BASE_SECONDS", "20"))
 DELAY_MAX_SECONDS = float(os.getenv("QUEUE_DELAY_MAX_SECONDS", "300"))
@@ -150,6 +150,7 @@ class QueueWorker:
         self,
         redis: aioredis.Redis,
         concurrency: int = 10,
+        queue: QueueSpec = ENGINE_QUEUE,
         gateway: Any = None,
         memory_service: Any = None,
         global_concurrency: int = 10,
@@ -164,6 +165,8 @@ class QueueWorker:
         self._running = False
         self._semaphore = asyncio.Semaphore(concurrency)
         self._in_flight: set[asyncio.Task[Any]] = set()
+        # 本 worker 消费哪条队列（引擎 / 知识库索引）—— 见 app/queue/streams.py
+        self._q = queue
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
         self._reclaim_task: asyncio.Task[Any] | None = None
         self._delay_task: asyncio.Task[Any] | None = None
@@ -178,13 +181,13 @@ class QueueWorker:
         # 确保 Consumer Group 存在
         try:
             await self._redis.xgroup_create(
-                TASK_STREAM, GROUP_NAME, id="0", mkstream=True
+                self._q.stream, self._q.group, id="0", mkstream=True
             )
-            logger.info("Consumer group '%s' created", GROUP_NAME)
+            logger.info("Consumer group '%s' created", self._q.group)
         except aioredis.ResponseError as e:
             if "BUSYGROUP" not in str(e):
                 raise
-            logger.debug("Consumer group '%s' already exists", GROUP_NAME)
+            logger.debug("Consumer group '%s' already exists", self._q.group)
 
         logger.info(
             "Queue worker started: consumer=%s concurrency=%d",
@@ -216,17 +219,17 @@ class QueueWorker:
                     await self._redis.delete(rkey("queue:flush"))
                     while True:
                         pending = await self._redis.xpending_range(
-                            TASK_STREAM, GROUP_NAME, min="-", max="+", count=1000
+                            self._q.stream, self._q.group, min="-", max="+", count=1000
                         )
                         if not pending:
                             break
                         await self._redis.xack(
-                            TASK_STREAM,
-                            GROUP_NAME,
+                            self._q.stream,
+                            self._q.group,
                             *[p["message_id"] for p in pending],
                         )
-                    await self._redis.xtrim(TASK_STREAM, maxlen=0)
-                    await self._redis.delete(DELAYED_ZSET)
+                    await self._redis.xtrim(self._q.stream, maxlen=0)
+                    await self._redis.delete(self._q.delayed)
                     logger.warning("Queue flushed by admin request")
                     continue
 
@@ -285,9 +288,9 @@ class QueueWorker:
         """批量消费一批消息"""
         try:
             results = await self._redis.xreadgroup(
-                GROUP_NAME,
+                self._q.group,
                 self._consumer_name,
-                {TASK_STREAM: ">"},
+                {self._q.stream: ">"},
                 count=self._concurrency,
                 block=5000,  # 5 秒超时
             )
@@ -337,8 +340,8 @@ class QueueWorker:
                 return
             try:
                 await self._redis.xclaim(
-                    TASK_STREAM,
-                    GROUP_NAME,
+                    self._q.stream,
+                    self._q.group,
                     self._consumer_name,
                     0,
                     [stream_id],
@@ -369,8 +372,8 @@ class QueueWorker:
         """
         try:
             pend = await self._redis.xpending_range(
-                TASK_STREAM,
-                GROUP_NAME,
+                self._q.stream,
+                self._q.group,
                 min="-",
                 max="+",
                 count=CLAIM_BATCH,
@@ -390,7 +393,7 @@ class QueueWorker:
             return
         try:
             claimed = await self._redis.xclaim(
-                TASK_STREAM, GROUP_NAME, self._consumer_name, CLAIM_MIN_IDLE_MS, ids
+                self._q.stream, self._q.group, self._consumer_name, CLAIM_MIN_IDLE_MS, ids
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("worker xclaim failed: %s", e)
@@ -413,8 +416,8 @@ class QueueWorker:
             raw_type = fields.get(b"task_type", fields.get("task_type", ""))
             task_type = raw_type.decode() if isinstance(raw_type, bytes) else str(raw_type or "")
             try:
-                await self._redis.xadd(DLQ_STREAM, fields, maxlen=DLQ_STREAM_MAXLEN)
-                await self._redis.xack(TASK_STREAM, GROUP_NAME, msg_id)
+                await self._redis.xadd(self._q.dlq, fields, maxlen=self._q.dlq_maxlen)
+                await self._redis.xack(self._q.stream, self._q.group, msg_id)
                 # 必须带 task_type 标签：QUEUE_DLQ_TOTAL 定义了该标签，无标签调用会抛
                 # ValueError，被下面的 except 吞掉 —— 结果是"进 DLQ"这件事在指标里
                 # 完全不可见（这正是"要么可见地失败"要消灭的形态）。
@@ -450,8 +453,8 @@ class QueueWorker:
                     for k, v in fields.items()
                 }
                 try:
-                    await self._redis.xadd(TASK_STREAM, requeue, maxlen=TASK_STREAM_MAXLEN)
-                    await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+                    await self._redis.xadd(self._q.stream, requeue, maxlen=self._q.maxlen)
+                    await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 except Exception as exc:
                     logger.warning("worker gate requeue failed: %s", exc)
                     return True  # 放回失败：宁可处理也不丢
@@ -479,6 +482,36 @@ class QueueWorker:
         if task.exception():
             logger.error("Task exception: %s", task.exception())
 
+    async def _forward_foreign(
+        self, stream_id: str, task_type: str, fields: dict[Any, Any]
+    ) -> None:
+        """把不属于本队列的任务**原样**转发到它的目标队列，然后 ACK。
+
+        为什么是转发而不是就地失败：滚动升级期间旧版 producer 仍会把 kb_index 投到主
+        队列（它还不知道新队列）。就地失败 → 升级窗口内的索引任务全部进 DLQ，需要人工
+        重投；转发则保留原信封（task_id / idempotency_key / deadline），目标 worker
+        能照常处理。转发失败**不 ACK**，留给既有重试/DLQ 路径兜底。
+        """
+        target = queue_for_task(task_type)
+        try:
+            await self._redis.xadd(target.stream, fields, maxlen=target.maxlen)
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "Forward foreign task failed: type=%s to=%s: %s",
+                task_type,
+                target.key,
+                exc,
+            )
+            raise
+        await self._redis.xack(self._q.stream, self._q.group, stream_id)
+        logger.warning(
+            "Forwarded foreign task: id=%s type=%s from=%s to=%s",
+            stream_id,
+            task_type,
+            self._q.key,
+            target.key,
+        )
+
     async def _process_message(self, stream_id: str, fields: dict[Any, Any]) -> None:
         """处理单条消息"""
         task_type = (
@@ -486,6 +519,13 @@ class QueueWorker:
             if isinstance(fields.get(b"task_type"), bytes)
             else fields.get("task_type", "")
         )
+
+        # 本该投到别的队列却出现在本队列 = 滚动升级期间旧版 producer 的路由。
+        # 转发过去并 ACK（本镜像可能根本没有那个 SDK，就地失败会把升级窗口内的
+        # 任务全打进 DLQ）。
+        if is_foreign(task_type, self._q):
+            await self._forward_foreign(stream_id, task_type, fields)
+            return
         task_id = (
             fields.get(b"task_id", b"").decode()
             if isinstance(fields.get(b"task_id"), bytes)
@@ -540,7 +580,7 @@ class QueueWorker:
                 )
                 try:
                     await self._redis.xadd(
-                        DLQ_STREAM,
+                        self._q.dlq,
                         {
                             "task_id": task_id,
                             "task_type": task_type,
@@ -548,12 +588,12 @@ class QueueWorker:
                             "error": f"deadline exceeded: {deadline_raw}",
                             "retry_count": str(retry_count),
                         },
-                        maxlen=DLQ_STREAM_MAXLEN,
+                        maxlen=self._q.dlq_maxlen,
                     )
                     QUEUE_DLQ_TOTAL.labels(task_type=task_type).inc()
                 except Exception as exc:  # noqa: BLE001 - DLQ 写入失败也必须 ACK，避免无限重投
                     logger.warning("expired DLQ move failed: %s", exc)
-                await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+                await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 return
 
         start = time.monotonic()
@@ -562,13 +602,13 @@ class QueueWorker:
             # 幂等闸门：该键已 completed 说明是重复投递（执行后 ACK 前崩溃被 reclaim），
             # 直接 ACK 丢弃，避免 workflow_run/tool_job 等副作用任务重复执行。
             if not await idempotency.claim(idem_key, task_id, task_type, tenant_id):
-                await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+                await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 return
             await self._dispatch(task_type, payload, tenant_id)
             await idempotency.complete(idem_key)
 
             # 成功 → ACK
-            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            await self._redis.xack(self._q.stream, self._q.group, stream_id)
             elapsed = time.monotonic() - start
             QUEUE_PROCESSING_DURATION.labels(task_type=task_type).observe(elapsed)
             logger.info(
@@ -593,7 +633,7 @@ class QueueWorker:
             if retry_count >= MAX_RETRIES:
                 # 移入死信队列
                 await self._move_to_dlq(task_id, task_type, payload_raw, str(e), retry_count)
-                await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+                await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 logger.warning(
                     "Task moved to DLQ: id=%s (retries=%d)", task_id, retry_count
                 )
@@ -608,8 +648,8 @@ class QueueWorker:
                 }
                 if tenant_id:
                     retry_msg["tenant_id"] = tenant_id
-                await self._redis.xadd(TASK_STREAM, retry_msg, maxlen=TASK_STREAM_MAXLEN)
-                await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+                await self._redis.xadd(self._q.stream, retry_msg, maxlen=self._q.maxlen)
+                await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 QUEUE_RETRY_TOTAL.labels(task_type=task_type).inc()
                 logger.info(
                     "Task re-queued for retry: id=%s (retry=%d/%d)",
@@ -625,7 +665,7 @@ class QueueWorker:
     ) -> None:
         """把任务移进死信队列（可见、可人工重投；绝不静默丢弃）。"""
         await self._redis.xadd(
-            DLQ_STREAM,
+            self._q.dlq,
             {
                 "task_id": task_id,
                 "task_type": task_type,
@@ -684,16 +724,16 @@ class QueueWorker:
                 f"deferred retry limit ({DELAY_MAX_ATTEMPTS}) reached: {exc}",
                 message.get("retry_count", "0"),
             )
-            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            await self._redis.xack(self._q.stream, self._q.group, stream_id)
             return
 
         message["delay_count"] = str(attempts)
         delay = self._defer_delay(attempts, exc)
         try:
             await self._redis.zadd(
-                DELAYED_ZSET, {json.dumps(message, ensure_ascii=False): time.time() + delay}
+                self._q.delayed, {json.dumps(message, ensure_ascii=False): time.time() + delay}
             )
-            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            await self._redis.xack(self._q.stream, self._q.group, stream_id)
         except Exception as e:  # noqa: BLE001 - 延迟集合不可用：退回立即重投（至少不丢）
             logger.warning(
                 "Task defer failed (%s), falling back to immediate requeue: id=%s",
@@ -708,9 +748,9 @@ class QueueWorker:
                 requeue = dict(message)
                 requeue["retry_count"] = str(retry_count + 1)
                 requeue.pop("delay_count", None)
-                await self._redis.xadd(TASK_STREAM, requeue, maxlen=TASK_STREAM_MAXLEN)
+                await self._redis.xadd(self._q.stream, requeue, maxlen=self._q.maxlen)
                 QUEUE_RETRY_TOTAL.labels(task_type=task_type).inc()
-            await self._redis.xack(TASK_STREAM, GROUP_NAME, stream_id)
+            await self._redis.xack(self._q.stream, self._q.group, stream_id)
             return
         logger.warning(
             "Task deferred %.0fs (attempt %d/%d): id=%s type=%s reason=%s",
@@ -737,7 +777,7 @@ class QueueWorker:
         ts = time.time() if now is None else now
         try:
             members: list[Any] = await self._redis.zrangebyscore(
-                DELAYED_ZSET, "-inf", ts, start=0, num=DELAY_BATCH
+                self._q.delayed, "-inf", ts, start=0, num=DELAY_BATCH
             )
         except Exception as e:  # noqa: BLE001
             logger.warning("worker delayed scan failed: %s", e)
@@ -745,7 +785,7 @@ class QueueWorker:
         promoted = 0
         for raw in members or []:
             try:
-                claimed = await self._redis.zrem(DELAYED_ZSET, raw)
+                claimed = await self._redis.zrem(self._q.delayed, raw)
             except Exception as e:  # noqa: BLE001
                 logger.warning("worker delayed claim failed: %s", e)
                 continue
@@ -754,13 +794,13 @@ class QueueWorker:
             text = raw.decode() if isinstance(raw, bytes) else raw
             try:
                 message = json.loads(text)
-                await self._redis.xadd(TASK_STREAM, message, maxlen=TASK_STREAM_MAXLEN)
+                await self._redis.xadd(self._q.stream, message, maxlen=self._q.maxlen)
                 promoted += 1
             except Exception as e:  # noqa: BLE001 - 放回延迟集合，不丢
                 logger.warning("worker delayed requeue failed (%s), re-scheduling: %s",
                                str(e)[:160], text[:160])
                 try:
-                    await self._redis.zadd(DELAYED_ZSET, {text: time.time() + DELAY_BASE_SECONDS})
+                    await self._redis.zadd(self._q.delayed, {text: time.time() + DELAY_BASE_SECONDS})
                 except Exception as e2:  # noqa: BLE001
                     logger.error("worker delayed re-schedule failed, message lost: %s", e2)
         return promoted
@@ -769,10 +809,7 @@ class QueueWorker:
         self, task_type: str, payload: dict[Any, Any], tenant_id: str = ""
     ) -> None:
         """分发任务到具体处理器"""
-        if task_type == "kb_index":
-            # 不传信封 tenant：租户/归属只从 KB 行反查
-            await self._handle_kb_index(payload)
-        elif task_type == "memory_save":
+        if task_type == "memory_save":
             await self._handle_memory_save(payload, tenant_id)
         elif task_type == "memory_consolidate":
             await self._handle_memory_consolidate(payload, tenant_id)
@@ -886,23 +923,6 @@ class QueueWorker:
             "tool_job done: job=%s status=%s exit_code=%s",
             job_id, res.get("status"), res.get("exit_code"),
         )
-
-    async def _handle_kb_index(self, payload: dict[Any, Any]) -> None:
-        """PageIndex 知识库索引任务。
-
-        payload: {kb_id, user_id}
-
-        幂等：service 层只处理 ``status <> 'ready'`` 的文档，重复投递不会重复索引。
-        租户/归属只从 KB 行反查（不接受任务信封里的 tenant）。
-        """
-        from app.knowledge.service import index_knowledge_base
-
-        kb_id = payload.get("kb_id")
-        user_id = payload.get("user_id")
-        if not kb_id or not user_id:
-            raise ValueError(f"kb_index payload 缺失: {payload}")
-        result = await index_knowledge_base(kb_id=str(kb_id), user_id=str(user_id))
-        logger.info("kb_index done: kb=%s result=%s", kb_id, result)
 
     async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: str = "") -> None:
         """处理记忆持久化任务
@@ -1071,7 +1091,7 @@ class QueueWorker:
     async def update_queue_depth(self) -> None:
         """更新队列深度指标"""
         try:
-            info = await self._redis.xinfo_stream(TASK_STREAM)
+            info = await self._redis.xinfo_stream(self._q.stream)
             QUEUE_DEPTH.labels(stream="engine:tasks").set(info.get("length", 0))
         except Exception:
             logger.warning("Failed to update queue depth metric")

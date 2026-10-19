@@ -19,8 +19,13 @@ dependencies = [
     # LLM Provider SDK（自研多 Provider 适配）
     "anthropic>=0.52.0",
     "openai>=1.93.0",
-    # 向量数据库
+    # 向量数据库（仅记忆层的可选后端）
     "pymilvus>=2.5.0",
+    # 知识库检索引擎（PageIndex）。⚠ 暂未启用：pageindex → litellm 要求 openai<3，
+    # 与本文件的 openai>=3 策略冲突；解冲突方案待定（见 requirements.txt 的说明）。
+    # "pageindex>=0.4.3",
+    # 用户级 Cloud key 的加解密（与 Go internal/settings 同算法）
+    "cryptography>=42.0",
     # PostgreSQL (pgvector)
     "asyncpg>=0.30.0",
     # gRPC
