@@ -100,6 +100,12 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    path: '/knowledge/settings',
+    name: 'KnowledgeSettings',
+    component: () => import('../views/KnowledgeSettingsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/memory',
     name: 'Memory',
     component: () => import('../views/MemoryView.vue'),

@@ -82,7 +82,6 @@ class Settings(BaseSettings):
 
     # ── Milvus ──
     milvus_address: str = ""
-    milvus_collection: str = "knowledge_base"
 
     # ── LLM Provider API Keys ──
     anthropic_api_key: str = ""
@@ -209,18 +208,23 @@ class Settings(BaseSettings):
     #: 开启后 `target="remote:<instance_id|auto>"` 才可用；远端不可达时**回退本实例**。
     remote_subagent_enabled: bool = False
 
-    # ── RAG 配置 ──
+    # ── 嵌入配置（记忆层复用：L3 摘要向量的语义召回与近重复判定）──
     embedding_model: str = "text-embedding-3-small"
     embedding_dim: int = 1536  # 嵌入维度，可配置
-    chunk_size: int = 1000
-    chunk_overlap: int = 200
-    default_top_k: int = 5
-    default_threshold: float = 0.7
-    # 默认向量数据库: milvus | pgvector
-    vector_db_type: str = "milvus"
-    pgvector_table: str = "knowledge_chunk_vectors"
     # 本地嵌入模型路径（BGE/Jina 等），为空则跳过本地嵌入、回退到 API
     local_embedding_model: str = ""
+
+    # ── 知识库配置（PageIndex）──
+    # 自托管（PageIndex local 模式）的索引根目录。**必须位于所有引擎副本可见的存储上**
+    # （共享卷 / NFS / RWX PVC）：local 模式没有中心服务，索引文件就是唯一真相，
+    # 放在 Pod 本地盘上会表现为"同一份文档时而能查、时而查不到"。
+    knowledge_selfhosted_root: str = ""
+    # 自托管模式使用的索引 / 问答模型（经 app/providers 的 provider 解析拿端点与 key）。
+    # 索引模型用基础档即可（树结构由布局提取，模型只做摘要精炼）；问答模型越强检索越准。
+    knowledge_selfhosted_index_model: str = ""
+    knowledge_selfhosted_chat_model: str = ""
+    # Cloud 模式的问答模型（索引与存储在 PageIndex Cloud，只有"在树上推理"这一步用我们的模型）
+    knowledge_cloud_chat_model: str = ""
 
     # ── 记忆配置 ──
     short_term_ttl: int = 604800  # 7 天（秒）

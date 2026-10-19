@@ -758,11 +758,13 @@ class UnifiedChatHandler:
                         "KB context retrieval skipped (kb_id=%s): %s", kb_id, error
                     )
                     continue
-                hits = result.get("results", []) or []
-                total_hits += len(hits)
-                snippets = [
-                    (hit.get("content") or hit.get("name") or "").strip()[:300]
-                    for hit in hits[:top_k]
+                # PageIndex 返回"答案 + 引用"而不是片段：答案本身就是要注入的上下文，
+                # 引用提供可追溯来源（仍截断到 300 字符，与旧的片段注入同一预算口径）
+                answer = str(result.get("answer") or "").strip()
+                citations = [c for c in (result.get("citations") or []) if isinstance(c, dict)]
+                total_hits += len(citations) or (1 if answer else 0)
+                snippets = ([answer[:300]] if answer else []) + [
+                    str(c.get("snippet") or "").strip()[:300] for c in citations
                 ]
                 snippets = [s for s in snippets if s]
                 if snippets:

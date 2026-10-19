@@ -65,35 +65,30 @@ async def test_kb_search_requires_auth_context():
 
 
 @pytest.mark.asyncio
-async def test_kb_search_rag_scopes_to_kb_and_tenant():
-    """RAG 类型库走新栈：kb_id + 该库真实租户双收窄，不再串读同租户其它库。"""
+async def test_kb_search_answers_via_provider():
+    """知识库检索走 provider：kb_search 返回答案 + 引用，且用 KB 属主解析 provider。"""
     from unittest.mock import AsyncMock, MagicMock, patch
 
+    from app.knowledge.providers.base import AnswerResult, Citation
     from app.tools import kb as kb_mod
 
     pool = MagicMock()
     pool.fetchrow = AsyncMock(return_value={
-        "id": "kb-9", "type": "rag", "user_id": "u1",
+        "id": "kb-9", "provider": "cloud", "user_id": "u1",
         "visibility": "private", "tenant_id": "t-9",
     })
-    builder = MagicMock()
-    builder.query = AsyncMock(return_value=[
-        {"id": "v", "doc_id": "d1", "chunk_index": 2, "content": "hello", "score": 0.7},
-    ])
+    answer = AnswerResult(answer="部署方式是…", citations=[Citation(doc_name="a.pdf", page=3)])
 
     set_tool_context(session_id="s", user_id="u1", tenant_id="t-9")
     with (
-        patch("app.db.get_pool", return_value=pool),
-        patch("app.main.get_gateway", new=AsyncMock(return_value=MagicMock())),
-        patch("app.rag.builder.RAGBuilder", return_value=builder),
+        patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
+        patch("app.tools.kb.answer_question", AsyncMock(return_value=(answer, "cloud"))),
     ):
         r = await kb_mod.kb_search(kb_id="kb-9", query="q", top_k=5)
 
-    kwargs = builder.query.await_args.kwargs
-    assert kwargs["kb_id"] == "kb-9"
-    assert kwargs["tenant_id"] == "t-9"
-    assert r["results"][0]["document_id"] == "d1"
-    assert r["results"][0]["chunk_index"] == 2
+    assert r["answer"] == "部署方式是…"
+    assert r["provider"] == "cloud"
+    assert r["citations"][0]["page"] == 3
 
 
 # ── 工作流内 skill 节点 ───────────────────────────────────────────────────

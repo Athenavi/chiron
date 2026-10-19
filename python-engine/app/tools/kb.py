@@ -1,20 +1,30 @@
-"""kb 工具集 — 知识库检索能力工具化（六大互通的「知识库」侧）。
+"""kb 工具集 — 知识库能力工具化。
 
-- kb_list：列出当前用户可见的知识库（自有 + public），供 agent 选择检索目标
-- kb_search：在指定知识库内检索（wiki 全文检索 / RAG），返回片段与来源
+- ``kb_list``：列出当前用户可见的知识库（自有 + public + 同租户共享）
+- ``kb_search``：在指定知识库内提问（PageIndex 推理式检索），返回答案与引用
 
-归属校验：自己的 / visibility=public / 同租户共享的三选一才放行，规则与 API 层同源
-（`app.kb_access`，过去这里内联了一份"owner 或 public"的副本，把租户共享的库判给不了）。
-当前用户与租户取自工具上下文（agent/对话/工作流运行时已设置）。
+**工具名刻意保持不变**：它们是 agent 能力面的稳定契约 —— ``app/core/capabilities``、
+``app/core/task_router``、``app/core/agent_skill_selector`` 都按这些名字编排与选择能力，
+改名等于在所有编排点上做一次同步手术。换掉的是实现（向量 + FTS → PageIndex）。
+
+**provider 解析用知识库所有者的设置**：Cloud key 是用户级的（只有所有者配过），
+调用者身份只用于权限校验（``kb_access_allowed``）。两件事混用会得到"能看见库却查不了"
+（拿别人的身份去找 key）。
+
+**返回形状变了**：旧 ``kb_search`` 返回 ``{results: [片段]}``，现在返回
+``{answer, citations}`` —— PageIndex 是推理式检索，没有"top-k 相似片段"这一层。
 """
 
 from __future__ import annotations
 
 import logging
+from dataclasses import asdict
 from typing import Any
 
 from app.config import DEFAULT_TENANT_ID
-from app.kb_access import kb_access_allowed, kb_storage_tenant
+from app.kb_access import kb_access_allowed
+from app.knowledge.errors import KnowledgeError
+from app.knowledge.service import answer_question
 from app.tools.context import get_tenant_id, get_user_id
 from app.tools.registry import registry
 
@@ -31,7 +41,7 @@ async def _pool() -> Any:
 
 
 async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
-    """列出当前用户可见的知识库（自有 + public），可按名称过滤。"""
+    """列出当前用户可见的知识库，可按名称过滤。"""
     user_id = get_user_id() or ""
     if not user_id:
         return {"error": "authentication context missing"}
@@ -53,12 +63,12 @@ async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
     params.append(limit)
 
     rows = await pool.fetch(
-        f"""SELECT id, name, COALESCE(description, '') as description, type, visibility,
-                   document_count
-            FROM knowledge_bases
-            WHERE {where}
-            ORDER BY created_at DESC
-            LIMIT ${len(params)}""",
+        f"""SELECT id, name, COALESCE(description, '') AS description, provider, visibility,
+                   status, document_count
+              FROM knowledge_bases
+             WHERE {where}
+             ORDER BY created_at DESC
+             LIMIT ${len(params)}""",
         *params,
     )
     kbs = [
@@ -66,8 +76,9 @@ async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
             "id": r["id"],
             "name": r["name"],
             "description": r["description"],
-            "type": r["type"],
+            "provider": r["provider"],
             "visibility": r["visibility"],
+            "status": r["status"],
             "document_count": r["document_count"],
         }
         for r in rows
@@ -76,11 +87,12 @@ async def kb_list(query: str = "", limit: int = 20) -> dict[str, Any]:
 
 
 async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
-    """在指定知识库内检索（wiki 全文检索；RAG 待实现时提示）。"""
+    """在指定知识库内提问，返回答案与引用。
+
+    ``top_k`` 仅为兼容旧调用方保留（推理式检索由 provider 决定读多少节点）。
+    """
     if not kb_id or not query:
         return {"error": "kb_id and query are required"}
-    if top_k <= 0 or top_k > 20:
-        top_k = 5
     user_id = get_user_id() or ""
     if not user_id:
         return {"error": "authentication context missing"}
@@ -90,8 +102,8 @@ async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
         return {"error": str(e)}
 
     kb_row = await pool.fetchrow(
-        """SELECT id, type, user_id, visibility, tenant_id
-           FROM knowledge_bases WHERE id = $1""",
+        """SELECT id, user_id, tenant_id, visibility, provider, status
+             FROM knowledge_bases WHERE id = $1""",
         kb_id,
     )
     if kb_row is None:
@@ -99,78 +111,34 @@ async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
     if not kb_access_allowed(kb_row, user_id, get_tenant_id()):
         return {"error": "not authorized to query this knowledge base"}
 
-    kb_type = kb_row["type"]
-    if kb_type == "wiki":
-        try:
-            rows = await pool.fetch(
-                """SELECT id, name, file_type,
-                          ts_rank(to_tsvector('chinese', COALESCE(convert_from(content, 'UTF8'), '')),
-                                  plainto_tsquery('chinese', $1)) AS rank
-               FROM knowledge_documents
-               WHERE knowledge_base_id = $2
-                 AND status = 'completed'
-                 AND to_tsvector('chinese', COALESCE(convert_from(content, 'UTF8'), ''))
-                     @@ plainto_tsquery('chinese', $1)
-               ORDER BY rank DESC
-               LIMIT $3""",
-                query,
-                kb_id,
-                top_k,
-            )
-        except Exception as e:  # noqa: BLE001 — 全文检索失败降级返回空结果
-            logger.warning("kb_search full-text failed (kb_id=%s): %s", kb_id, e)
-            rows = []
-        results = [
-            {
-                "id": r["id"],
-                "name": r["name"],
-                "file_type": r["file_type"],
-                "rank": float(r["rank"]),
-            }
-            for r in rows
-        ]
-        return {"type": kb_type, "results": results}
-    else:
-        # RAG 向量检索：走新栈 RAGBuilder（kb_* collection + tenant 过滤）。
-        # 旧 RAGRetriever 查共享 collection 且只按 tenant 收窄，会串读同租户其它库。
-        try:
-            from app.main import get_gateway
-            from app.rag.builder import RAGBuilder
+    owner_id = str(kb_row["user_id"] or "")
+    try:
+        result, provider_name = await answer_question(
+            kb_id=kb_id, user_id=owner_id, question=query
+        )
+    except KnowledgeError as exc:
+        logger.warning("kb_search failed (kb_id=%s): %s", kb_id, exc)
+        return {"error": str(exc), "provider": str(kb_row["provider"] or "")}
 
-            builder = RAGBuilder(llm_gateway=await get_gateway())
-            hits = await builder.query(
-                kb_id=kb_id,
-                query=query,
-                top_k=top_k,
-                threshold=0.45,
-                tenant_id=kb_storage_tenant(kb_row),
-            )
-            results = [
-                {
-                    "document_id": h.get("doc_id", ""),
-                    "chunk_index": h.get("chunk_index", 0),
-                    "content": h.get("content", "")[:500],
-                    "score": round(float(h.get("score", 0.0)), 4),
-                }
-                for h in hits
-            ]
-            return {"type": kb_type, "results": results}
-        except Exception as e:
-            logger.warning("kb_search RAG failed (kb_id=%s): %s", kb_id, e)
-            return {"type": kb_type, "results": [], "error": str(e)}
+    citations = [asdict(c) for c in result.citations]
+    return {
+        "provider": provider_name,
+        "answer": result.answer,
+        "citations": citations,
+        "count": len(citations),
+    }
 
 
 registry.register(
     name="kb_list",
-    description="List knowledge bases visible to the current user (own + public). Use this before kb_search to find a knowledge base id.",
+    description=(
+        "List knowledge bases visible to the current user (own + public + same-tenant). "
+        "Use this before kb_search to find a knowledge base id."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "query": {
-                "type": "string",
-                "default": "",
-                "description": "Optional name filter",
-            },
+            "query": {"type": "string", "default": "", "description": "Optional name filter"},
             "limit": {"type": "integer", "default": 20},
         },
     },
@@ -179,16 +147,16 @@ registry.register(
 
 registry.register(
     name="kb_search",
-    description="Search a knowledge base by id and query; returns ranked document hits with sources. Use kb_list first to obtain kb_id.",
+    description=(
+        "Ask a question against a knowledge base; returns a reasoned answer with citations "
+        "(document name / page). Use kb_list first to obtain kb_id."
+    ),
     parameters={
         "type": "object",
         "properties": {
-            "kb_id": {
-                "type": "string",
-                "description": "Knowledge base id (from kb_list)",
-            },
-            "query": {"type": "string", "description": "Search query"},
-            "top_k": {"type": "integer", "default": 5},
+            "kb_id": {"type": "string", "description": "Knowledge base id (from kb_list)"},
+            "query": {"type": "string", "description": "Natural-language question"},
+            "top_k": {"type": "integer", "default": 5, "description": "Kept for compatibility"},
         },
         "required": ["kb_id", "query"],
     },

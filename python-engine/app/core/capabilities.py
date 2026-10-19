@@ -517,7 +517,7 @@ async def preload_default_capabilities(
         Capability(
             capability_id="knowledge:kb_search",
             name="Search Knowledge Base",
-            description="在指定知识库中检索相关文档片段 search knowledge base rag documents",
+            description="在指定知识库中提问并返回答案与引用 search knowledge base pageindex documents",
             workstation_type=WorkstationType.KNOWLEDGE,
             capability_type=CapabilityType.SERVICE,
             input_schema=[
@@ -529,8 +529,8 @@ async def preload_default_capabilities(
                     "top_k", "number", "返回结果数", required=False, default=5
                 ),
             ],
-            output_schema=CapabilityResult(fields=["results", "count"]),
-            tags=["knowledge", "rag", "search", "vector"],
+            output_schema=CapabilityResult(fields=["answer", "citations", "count"]),
+            tags=["knowledge", "search", "pageindex"],
             _executor=_tool_executor("kb_search"),
         )
     )

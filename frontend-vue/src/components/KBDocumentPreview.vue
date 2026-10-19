@@ -32,7 +32,7 @@
         >
           <div class="content-header">
             <span class="content-label">{{ $t('knowledge.document_content_preview') }}</span>
-            <span class="content-chunks">{{ $t('knowledge.n_chunks', { n: chunkCount }) }}</span>
+            <span class="content-chunks">{{ $t('knowledge.n_pages', { n: pageCount }) }}</span>
           </div>
           <pre class="content-body">{{ content }}</pre>
         </div>
@@ -72,7 +72,7 @@ interface Document {
   file_type: string
   file_size_bytes: number
   status: string
-  chunk_count?: number
+  page_count?: number
   content?: string
 }
 
@@ -99,7 +99,7 @@ const loading = ref(false)
 const content = ref('')
 const error = ref('')
 const document = ref<Document | null>(null)
-const chunkCount = ref(0)
+const pageCount = ref(0)
 
 const docStatusColor = computed(() => {
   const s = document.value?.status
@@ -126,7 +126,7 @@ async function loadPreview() {
     const data = res.data?.data || res.data
     document.value = data
     content.value = data.content || ''
-    chunkCount.value = data.chunk_count || 0
+    pageCount.value = data.page_count || 0
   } catch (e) {
     const data = (e as { response?: { data?: { detail?: unknown; error?: unknown } } }).response?.data
     const detail = typeof data?.detail === 'string' ? data.detail : ''

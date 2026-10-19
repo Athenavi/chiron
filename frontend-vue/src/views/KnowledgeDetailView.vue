@@ -42,13 +42,25 @@ function kbErrorText(err: unknown, fallback: string): string {
   return fallback
 }
 
+// 库状态：disabled/indexing/ready/error（0023 迁移的取值集合）
+function kbStatusColor(status?: string): string {
+  if (status === 'ready') return 'green'
+  if (status === 'indexing') return 'processing'
+  if (status === 'error') return 'red'
+  return 'default'
+}
+
+function kbStatusLabel(status?: string): string {
+  return t(`knowledge.status_${status || 'disabled'}`)
+}
+
 /** GET /v1/kb/{id}（网关字段 + 引擎补充的统计字段） */
 interface KnowledgeBase {
   id?: string
   name?: string
   description?: string
   status?: string
-  type?: string
+  provider?: string
   visibility?: string
   document_count?: number
   total_size_bytes?: number
@@ -62,16 +74,22 @@ interface KnowledgeDocument {
   file_type?: string
   file_size_bytes?: number
   status?: string
-  chunk_count?: number
+  page_count?: number
+  pageindex_doc_id?: string
   created_at?: string
 }
 
-/** POST /v1/kb/{id}/query 的 results[]（检索片段 + 相似度） */
-interface KbQueryHit {
-  content?: string
-  score?: number
-  name?: string
-  document_name?: string
+/** POST /v1/kb/{id}/query 的返回：答案 + 引用（推理式检索没有"片段分数"这一层） */
+interface Citation {
+  doc_name?: string
+  page?: number | null
+  block_id?: string
+  snippet?: string
+}
+interface KnowledgeAnswer {
+  provider?: string
+  answer?: string
+  citations?: Citation[]
 }
 
 /** GET /v1/media 的 items[]（媒体库选取弹窗用到的字段） */
@@ -95,7 +113,7 @@ const kb = ref<KnowledgeBase | null>(null)
 const documents = ref<KnowledgeDocument[]>([])
 const showQueryModal = ref(false)
 const queryText = ref('')
-const queryResults = ref<KbQueryHit[]>([])
+const queryAnswer = ref<KnowledgeAnswer | null>(null)
 const buildProgress = ref(0)
 
 // 文档列表列定义
@@ -109,7 +127,7 @@ const docColumns = [
   {
     title: t('common.status'), dataIndex: 'status', width: 100,
   },
-  { title: t('knowledge.chunk_count'), dataIndex: 'chunk_count', width: 80 },
+  { title: t('knowledge.page_count'), dataIndex: 'page_count', width: 80 },
   {
     title: t('common.upload_time'), dataIndex: 'created_at', width: 160,
     customRender: ({ text }: { text: string }) => {
@@ -375,13 +393,11 @@ async function queryKnowledgeBase() {
     return
   }
 
+  queryAnswer.value = null
   try {
-    const res = await api.post(`/v1/kb/${kbId}/query`, {
-      query: queryText.value,
-      top_k: 5,
-    })
-    queryResults.value = res.data?.data?.results || []
-    if (queryResults.value.length === 0) {
+    const res = await api.post(`/v1/kb/${kbId}/query`, { query: queryText.value })
+    queryAnswer.value = (res.data?.data || null) as KnowledgeAnswer | null
+    if (!queryAnswer.value?.answer) {
       message.info(t('errors.no_relevant_content_found'))
     }
   } catch (error) {
@@ -499,9 +515,9 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         <Card>
           <div class="info-grid">
             <div class="info-item">
-              <span class="label">{{ $t('common.type') }}</span>
-              <Tag :color="kb.type === 'rag' ? 'success' : 'blue'">
-                {{ (kb.type || '').toUpperCase() }}
+              <span class="label">{{ $t('knowledge.provider') }}</span>
+              <Tag :color="kb.provider === 'cloud' ? 'geekblue' : 'cyan'">
+                {{ kb.provider === 'cloud' ? 'PageIndex Cloud' : $t('knowledge.provider_selfhosted_short') }}
               </Tag>
             </div>
             <div class="info-item">
@@ -512,8 +528,8 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             </div>
             <div class="info-item">
               <span class="label">{{ $t('common.status') }}</span>
-              <Tag :color="kb.status === 'active' ? 'success' : kb.status === 'building' ? 'processing' : 'error'">
-                {{ kb.status }}
+              <Tag :color="kbStatusColor(kb.status)">
+                {{ kbStatusLabel(kb.status) }}
               </Tag>
             </div>
             <div class="info-item">
@@ -713,38 +729,50 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
         </Button>
       </div>
 
-      <!-- 查询结果 -->
+      <!-- 查询结果：答案 + 引用（PageIndex 返回推理结果，不是相似度片段） -->
       <div
-        v-if="queryResults.length > 0"
+        v-if="queryAnswer"
         class="query-results"
       >
-        <h3>{{ $t('common.query_result') }}</h3>
-        <div
-          v-for="(result, index) in queryResults"
-          :key="index"
-          class="query-result-item"
-        >
-          <div class="result-header">
-            <Tag>{{ $t('common.relevance_n', { n: ((result.score ?? 0) * 100).toFixed(1) }) }}</Tag>
-            <span
-              v-if="result.name || result.document_name"
-              class="result-source"
-            >📄 {{ result.name || result.document_name }}</span>
-          </div>
-          <p class="result-content">
-            <!-- 高亮显示查询关键词 -->
-            <span
-              v-for="(seg, segIdx) in highlightSegments(result.content || '')"
-              :key="segIdx"
+        <h3>{{ $t('knowledge.answer') }}</h3>
+        <p class="result-content">
+          <span
+            v-for="(seg, segIdx) in highlightSegments(queryAnswer.answer || '')"
+            :key="segIdx"
+          >
+            <mark
+              v-if="seg.highlight"
+              class="search-highlight"
+            >{{ seg.text }}</mark>
+            <template v-else>{{ seg.text }}</template>
+          </span>
+        </p>
+        <template v-if="(queryAnswer.citations || []).length">
+          <h4 class="citations-title">
+            {{ $t('knowledge.citations') }}
+          </h4>
+          <div
+            v-for="(cite, index) in queryAnswer.citations"
+            :key="index"
+            class="query-result-item"
+          >
+            <div class="result-header">
+              <Tag v-if="cite.page">
+                P{{ cite.page }}
+              </Tag>
+              <span
+                v-if="cite.doc_name"
+                class="result-source"
+              >📄 {{ cite.doc_name }}</span>
+            </div>
+            <p
+              v-if="cite.snippet"
+              class="result-content"
             >
-              <mark
-                v-if="seg.highlight"
-                class="search-highlight"
-              >{{ seg.text }}</mark>
-              <template v-else>{{ seg.text }}</template>
-            </span>
-          </p>
-        </div>
+              {{ cite.snippet }}
+            </p>
+          </div>
+        </template>
       </div>
     </Modal>
 

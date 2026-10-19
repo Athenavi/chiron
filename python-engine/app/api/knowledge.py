@@ -1,10 +1,21 @@
-"""Knowledge Base API — CRUD operations with PostgreSQL."""
+"""Knowledge Base API — PageIndex 驱动的知识库。
+
+与旧实现的四处**语义变化**（前端与工具都按新语义消费）：
+
+1. **provider 二选一**：知识库的 ``provider`` 在创建时确定，且必须与用户当前的
+   ``user_knowledge_settings.provider`` 一致。不一致返回 409 —— 否则会出现"库建在自托管、
+   用户却已切到 Cloud"，表现为"传了文档却永远查不到"。
+2. **上传 ≠ 索引**：上传把原文写进对象存储并落 ``pending``；索引是队列任务 ``kb_index``。
+   旧实现把"投递任务"当成功，检索时才发现是空库。
+3. **查询返回答案 + 引用**：PageIndex 是推理式检索，没有"top-k 相似片段"这个概念。
+4. **不在这里扣费**：Cloud 由 PageIndex 按页计费，自托管的成本是 LLM 用量。Chiron 侧的
+   计费口径需要产品定（``credits_consumed`` 字段保留但不再自增）。
+"""
 
 from __future__ import annotations
 
-import json
+import base64
 import logging
-import math
 import uuid
 from datetime import UTC, datetime
 from typing import Any
@@ -14,20 +25,38 @@ from pydantic import BaseModel
 
 from app.config import DEFAULT_TENANT_ID
 from app.db import get_pool
-from app.kb_access import kb_access_allowed, kb_storage_tenant
+from app.kb_access import kb_access_allowed
+from app.knowledge import blob, settings_store
+from app.knowledge.errors import KnowledgeError, ProviderUnavailable, UnsupportedDocument
+from app.knowledge.providers import registry
+from app.knowledge.providers.base import (
+    KNOWN_PROVIDERS,
+    STATUS_DISABLED,
+    STATUS_ERROR,
+    STATUS_READY,
+    is_known_provider,
+)
+from app.knowledge.service import answer_question
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/v1/kb", tags=["knowledge"])
 
+#: 单次上传的原文上限（base64 解码后）。SaaS 下必须有个闸门：
+#: 没有上限的上传等于把对象存储与内存交给调用方。
+MAX_UPLOAD_BYTES = 64 * 1024 * 1024
+
+#: 预览时按文本读取的扩展名（PDF 等二进制交给下载/引用，不做文本内联）
+_TEXT_PREVIEW_SUFFIXES = {".txt", ".md", ".csv", ".json", ".html", ".htm", ".log"}
+
+_ALLOWED_VISIBILITY = ("public", "private", "tenant")
+
 
 def _now_naive() -> datetime:
     """当前 UTC 时间（**naive**）。
 
-    ``knowledge_bases`` / ``knowledge_documents`` 的 ``created_at`` / ``updated_at`` 是
-    ``timestamp without time zone``：asyncpg 对这类列传 **aware** datetime 会直接抛
-    ``can't subtract offset-naive and offset-aware datetimes``（实测 ``POST /v1/kb`` 因此返回
-    500）。统一按 UTC 的 naive 值落库，口径同 ``app/memory/conflict_audit.py``。
+    知识库表的时间列是 ``timestamp without time zone``：asyncpg 对这类列传 aware datetime 会
+    直接抛 ``can't subtract offset-naive and offset-aware datetimes``。统一按 UTC 的 naive 值落库。
     """
     return datetime.now(UTC).replace(tzinfo=None)
 
@@ -38,104 +67,141 @@ def _now_naive() -> datetime:
 class KnowledgeBaseCreate(BaseModel):
     name: str
     description: str = ""
-    type: str = "wiki"  # wiki | rag
-    visibility: str = "private"  # public | private
+    provider: str = ""  # selfhosted | cloud（留空 = 跟随用户设置）
+    visibility: str = "private"  # public | private | tenant
 
 
 class KnowledgeBaseUpdate(BaseModel):
     name: str | None = None
     description: str | None = None
-    type: str | None = None
     visibility: str | None = None
 
 
 class DocumentUpload(BaseModel):
     name: str
-    file_type: str
+    file_type: str = ""
     file_size_bytes: int = 0
-    content: str = ""  # base64 or plain text
+    content: str = ""  # base64 或纯文本
 
 
 class KBQuery(BaseModel):
     query: str
-    top_k: int = 5
+    top_k: int = 5  # 保留字段以兼容旧前端；推理式检索不使用 top-k
 
 
-# ── Helpers ──
+class UserSettingsUpdate(BaseModel):
+    provider: str
+    cloud_api_key: str | None = None  # 省略 = 沿用已存的 key；空串 = 清空
 
 
-def _serialize_kb(row: dict[str, Any]) -> dict[str, Any]:
-    """Serialize a knowledge_bases row to JSON response."""
-    config = row.get("config")
-    if config and isinstance(config, str):
-        try:
-            config = json.loads(config)
-        except json.JSONDecodeError:
-            config = None
+# ── Serialization ──
+
+
+def _serialize_kb(row: Any) -> dict[str, Any]:
+    data = dict(row)
     return {
-        "id": row["id"],
-        "name": row["name"],
-        "description": row.get("description", ""),
-        "type": row["type"],
-        "visibility": row["visibility"],
-        "status": row["status"],
-        "document_count": row.get("document_count", 0),
-        "total_size_bytes": row.get("total_size_bytes", 0),
-        "credits_consumed": row.get("credits_consumed", 0),
-        "config": config,
-        "created_at": (
-            row["created_at"].isoformat()
-            if isinstance(row["created_at"], datetime)
-            else str(row["created_at"])
-        ),
-        "updated_at": (
-            row["updated_at"].isoformat()
-            if isinstance(row["updated_at"], datetime)
-            else str(row["updated_at"])
-        ),
+        "id": data["id"],
+        "name": data["name"],
+        "description": data.get("description") or "",
+        "provider": data["provider"],
+        "visibility": data["visibility"],
+        "status": data["status"],
+        "document_count": data.get("document_count", 0),
+        "total_size_bytes": data.get("total_size_bytes", 0),
+        "credits_consumed": data.get("credits_consumed", 0),
+        "error_message": data.get("error_message") or "",
+        "config": _maybe_json(data.get("config")),
+        "created_at": _iso(data.get("created_at")),
+        "updated_at": _iso(data.get("updated_at")),
     }
 
 
-def _serialize_doc(row: dict[str, Any]) -> dict[str, Any]:
-    """Serialize a knowledge_documents row to JSON response."""
-    metadata = row.get("metadata")
-    if metadata and isinstance(metadata, str):
-        try:
-            metadata = json.loads(metadata)
-        except json.JSONDecodeError:
-            metadata = None
+def _serialize_doc(row: Any) -> dict[str, Any]:
+    data = dict(row)
     return {
-        "id": row["id"],
-        "knowledge_base_id": row["knowledge_base_id"],
-        "name": row["name"],
-        "file_url": row.get("file_url", ""),
-        "file_type": row.get("file_type", ""),
-        "file_size_bytes": row.get("file_size_bytes", 0),
-        "chunk_count": row.get("chunk_count", 0),
-        "status": row["status"],
-        "error_message": row.get("error_message", ""),
-        "metadata": metadata,
-        "created_at": (
-            row["created_at"].isoformat()
-            if isinstance(row["created_at"], datetime)
-            else str(row["created_at"])
-        ),
+        "id": data["id"],
+        "knowledge_base_id": data["knowledge_base_id"],
+        "name": data["name"],
+        "file_type": data.get("file_type") or "",
+        "file_size_bytes": data.get("file_size_bytes", 0),
+        "page_count": data.get("page_count", 0),
+        "status": data["status"],
+        "pageindex_doc_id": data.get("pageindex_doc_id") or "",
+        "error_message": data.get("error_message") or "",
+        "metadata": _maybe_json(data.get("metadata")),
+        "created_at": _iso(data.get("created_at")),
+        "updated_at": _iso(data.get("updated_at")),
     }
 
 
-# ── Core Functions (testable without FastAPI) ──
+def _iso(value: Any) -> str:
+    return value.isoformat() if isinstance(value, datetime) else (str(value) if value else "")
+
+
+def _maybe_json(value: Any) -> Any:
+    if isinstance(value, (dict, list)):
+        return value
+    if isinstance(value, str) and value:
+        import json
+
+        try:
+            return json.loads(value)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
+# ── Access helpers ──
+
+
+def _require_kb_access(kb_row: Any, user_id: str, tenant_id: str, *, action: str) -> None:
+    """KB 可见性 gate —— 规则本体在 ``app.kb_access``，与工具层共用一份。"""
+    if not kb_access_allowed(kb_row, user_id, tenant_id):
+        raise HTTPException(
+            status_code=403, detail=f"not authorized to {action} this knowledge base"
+        )
+
+
+async def _load_user_provider(user_id: str) -> str:
+    """取用户当前 provider；未选择时给出可操作的提示（400 而非 500）。"""
+    user_settings = await settings_store.load(user_id)
+    if user_settings is None or not user_settings.provider:
+        raise HTTPException(
+            status_code=400,
+            detail="请先在知识库设置中选择 provider（自托管 / PageIndex Cloud）",
+        )
+    return user_settings.provider
+
+
+async def _assert_provider_matches(*, user_id: str, kb_provider: str) -> None:
+    current = await _load_user_provider(user_id)
+    if current != kb_provider:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"该知识库使用 {kb_provider}，与当前设置 {current} 不一致；"
+                "请先切换设置或改用一致的知识库"
+            ),
+        )
+
+
+async def _resolve_provider_or_error(*, user_id: str, index_ref: str = ""):
+    provider, _settings, health = await registry.resolve_for_user(user_id, folder_id=index_ref)
+    if provider is None or not health.ok:
+        raise HTTPException(
+            status_code=503, detail=health.detail or "知识库 provider 不可用"
+        )
+    return provider
+
+
+# ── Knowledge base CRUD ──
 
 
 async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict[str, Any]:
-    """List knowledge bases visible to this user.
+    """列出可见知识库：自己的 + 公开的 + **同租户共享的**。
 
-    可见范围：
-      - 自己的（user_id 匹配）
-      - 公开的（visibility='public'，有意跨租户）
-      - **同租户共享的**（visibility='tenant'）← 必须同时匹配 tenant_id
-
-    最后一条原先只写了 `visibility = 'tenant'`、没有租户条件 —— 这等于把
-    "租户内共享"实现成了"全站共享"：任何租户的用户都能列出并读取别人的知识库。
+    最后一条必须同时匹配 ``tenant_id``：只写 ``visibility='tenant'`` 等于把"租户内共享"
+    实现成"全站共享"。
     """
     try:
         pool = get_pool()
@@ -143,95 +209,90 @@ async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict[str, A
         return {"knowledge_bases": [], "count": 0}
 
     rows = await pool.fetch(
-        """SELECT id, name, COALESCE(description, '') as description, type, visibility, status,
-                  document_count, total_size_bytes, credits_consumed, config, created_at, updated_at
-           FROM knowledge_bases
-           WHERE user_id = $1
-              OR visibility = 'public'
-              OR (visibility = 'tenant' AND tenant_id = $2)
-           ORDER BY created_at DESC""",
+        """SELECT id, name, COALESCE(description, '') AS description, provider, visibility, status,
+                  document_count, total_size_bytes, credits_consumed, config, error_message,
+                  created_at, updated_at
+             FROM knowledge_bases
+            WHERE user_id = $1
+               OR visibility = 'public'
+               OR (visibility = 'tenant' AND tenant_id = $2)
+            ORDER BY created_at DESC""",
         user_id,
         tenant_id or DEFAULT_TENANT_ID,
     )
-    kbs = [_serialize_kb(dict(row)) for row in rows]
+    kbs = [_serialize_kb(row) for row in rows]
     return {"knowledge_bases": kbs, "count": len(kbs)}
 
 
 async def create_knowledge_base(
+    *,
     user_id: str,
+    tenant_id: str,
     name: str,
     description: str = "",
-    kb_type: str = "wiki",
+    provider: str = "",
     visibility: str = "private",
-    tenant_id: str = "",
 ) -> dict[str, Any]:
-    """Create a new knowledge base.
-
-    tenant_id 必须由调用方（网关注入的租户）提供。原先恒写 DEFAULT_TENANT_ID 常量，
-    导致所有租户的知识库都落在同一个"默认租户"上 —— 既然 visibility='tenant'
-    是按 tenant_id 判断可见性的，写入端的租户就必须是真实的，否则两边永远对不上。
-    """
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="name must not be empty")
-    if kb_type not in ("wiki", "rag"):
-        raise HTTPException(status_code=400, detail="type must be 'wiki' or 'rag'")
-    if visibility not in ("public", "private", "tenant"):
+    if visibility not in _ALLOWED_VISIBILITY:
         raise HTTPException(
-            status_code=400,
-            detail="visibility must be 'public', 'private', or 'tenant'",
+            status_code=400, detail="visibility must be 'public', 'private', or 'tenant'"
         )
+
+    current_provider = await _load_user_provider(user_id)
+    if provider and not is_known_provider(provider):
+        raise HTTPException(
+            status_code=400, detail=f"provider must be one of {KNOWN_PROVIDERS}"
+        )
+    if provider and provider != current_provider:
+        raise HTTPException(
+            status_code=409,
+            detail=f"知识库 provider 必须与当前设置一致（当前为 {current_provider}）",
+        )
+    effective_provider = current_provider
 
     pool = get_pool()
     kb_id = str(uuid.uuid4())
-    now = _now_naive()
+    # index_ref 在首次索引时由 provider 决定（自托管=索引目录，Cloud=folder），此处留空
     await pool.execute(
-        """INSERT INTO knowledge_bases (id, tenant_id, user_id, name, description, type, visibility, status, created_at, updated_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'active', $8, $8)""",
+        """INSERT INTO knowledge_bases
+               (id, tenant_id, user_id, name, description, provider, visibility, status,
+                config, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, '{}'::jsonb, $9, $9)""",
         kb_id,
         tenant_id or DEFAULT_TENANT_ID,
         user_id,
         name.strip(),
         description,
-        kb_type,
+        effective_provider,
         visibility,
-        now,
+        STATUS_DISABLED,
+        _now_naive(),
     )
-    return {
-        "id": kb_id,
-        "name": name.strip(),
-        "type": kb_type,
-        "visibility": visibility,
-    }
+    logger.info("knowledge base created id=%s provider=%s", kb_id, effective_provider)
+    return await get_knowledge_base(kb_id, user_id, tenant_id)
 
 
 async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
-    """Get a single knowledge base by id（自己的 / 公开的 / 同租户共享的）。
-
-    与 ``list_knowledge_bases`` 用**同一套**可见性规则。两处一旦不一致，
-    就会出现"列表里看不到、但猜到 id 就能直接读"的绕过。
-    """
+    """取单个知识库（可见性规则与列表**同一份**，否则会出现"列表看不到但猜到 id 能读"）。"""
     pool = get_pool()
     row = await pool.fetchrow(
-        """SELECT id, name, COALESCE(description, '') as description, type, visibility, status,
-                  document_count, total_size_bytes, credits_consumed, config, created_at, updated_at
-           FROM knowledge_bases
-           WHERE id = $1
-             AND (user_id = $2
-                  OR visibility = 'public'
-                  OR (visibility = 'tenant' AND tenant_id = $3))""",
+        """SELECT id, name, COALESCE(description, '') AS description, provider, visibility, status,
+                  document_count, total_size_bytes, credits_consumed, config, error_message,
+                  created_at, updated_at
+             FROM knowledge_bases
+            WHERE id = $1
+              AND (user_id = $2
+                   OR visibility = 'public'
+                   OR (visibility = 'tenant' AND tenant_id = $3))""",
         kb_id,
         user_id,
         tenant_id or DEFAULT_TENANT_ID,
     )
     if row is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    return _serialize_kb(dict(row))
-
-
-def _require_kb_access(kb_row: Any, user_id: str, tenant_id: str, *, action: str) -> None:
-    """KB 可见性 gate —— 规则本体在 `app.kb_access`，与工具层 kb_search 共用一份。"""
-    if not kb_access_allowed(kb_row, user_id, tenant_id):
-        raise HTTPException(status_code=403, detail=f"not authorized to {action} this knowledge base")
+    return _serialize_kb(row)
 
 
 async def update_knowledge_base(
@@ -239,16 +300,12 @@ async def update_knowledge_base(
     user_id: str,
     name: str | None = None,
     description: str | None = None,
-    kb_type: str | None = None,
     visibility: str | None = None,
 ) -> dict[str, Any]:
-    """Update a knowledge base (owner only). Public KBs cannot change type."""
+    """更新知识库（仅 owner）。provider 不可改 —— 换 provider 等于换索引，必须重建。"""
     pool = get_pool()
-
-    # Verify ownership
     existing = await pool.fetchrow(
-        "SELECT id, user_id, visibility FROM knowledge_bases WHERE id = $1",
-        kb_id,
+        "SELECT id, user_id FROM knowledge_bases WHERE id = $1", kb_id
     )
     if existing is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
@@ -257,484 +314,527 @@ async def update_knowledge_base(
             status_code=403, detail="not authorized to update this knowledge base"
         )
 
-    # Public KBs can't change type
-    if kb_type is not None and existing["visibility"] == "public":
-        raise HTTPException(
-            status_code=400, detail="cannot change type of a public knowledge base"
-        )
-
-    if kb_type is not None and kb_type not in ("wiki", "rag"):
-        raise HTTPException(status_code=400, detail="type must be 'wiki' or 'rag'")
-
-    # Dynamic UPDATE — only set provided fields
     updates: list[str] = []
     params: list[Any] = []
-    idx = 1
     if name is not None:
         if not name.strip():
             raise HTTPException(status_code=400, detail="name must not be empty")
-        updates.append(f"name = ${idx}")
         params.append(name.strip())
-        idx += 1
+        updates.append(f"name = ${len(params)}")
     if description is not None:
-        updates.append(f"description = ${idx}")
         params.append(description)
-        idx += 1
-    if kb_type is not None:
-        updates.append(f"type = ${idx}")
-        params.append(kb_type)
-        idx += 1
+        updates.append(f"description = ${len(params)}")
     if visibility is not None:
-        if visibility not in ("public", "private", "tenant"):
+        if visibility not in _ALLOWED_VISIBILITY:
             raise HTTPException(
-                status_code=400,
-                detail="visibility must be 'public', 'private', or 'tenant'",
+                status_code=400, detail="visibility must be 'public', 'private', or 'tenant'"
             )
-        updates.append(f"visibility = ${idx}")
         params.append(visibility)
-        idx += 1
+        updates.append(f"visibility = ${len(params)}")
 
     if not updates:
         raise HTTPException(status_code=400, detail="no fields to update")
 
-    updates.append(f"updated_at = ${idx}")
-    params.append(_now_naive())
-    idx += 1
-
     params.append(kb_id)
-    query = f"UPDATE knowledge_bases SET {', '.join(updates)} WHERE id = ${idx}"
-    await pool.execute(query, *params)
-
+    await pool.execute(
+        f"UPDATE knowledge_bases SET {', '.join(updates)}, updated_at = NOW() WHERE id = ${len(params)}",
+        *params,
+    )
     return {"id": kb_id, "updated": True}
 
 
 async def delete_knowledge_base(
     kb_id: str, user_id: str, is_admin: bool = False
 ) -> dict[str, Any]:
-    """Delete a knowledge base. Admin can delete any; users can only delete their own."""
-    pool = get_pool()
+    """删除知识库：先清 provider 侧文档与原文对象，再删库（文档随外键级联）。
 
-    existing = await pool.fetchrow(
-        "SELECT id, user_id FROM knowledge_bases WHERE id = $1",
+    **provider 侧清理失败不阻断删除**：用户要求删除数据时必须删得掉；失败记日志，
+    由离线巡检收敛（否则一个失效的 Cloud key 会让用户永远删不掉自己的库）。
+    """
+    pool = get_pool()
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, tenant_id, provider, index_ref FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
-    if existing is None:
+    if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-
-    if not is_admin and existing["user_id"] != user_id:
+    if not is_admin and kb["user_id"] != user_id:
         raise HTTPException(
             status_code=403, detail="not authorized to delete this knowledge base"
         )
 
+    docs = await pool.fetch(
+        """SELECT id, storage_key, pageindex_doc_id FROM knowledge_documents
+            WHERE knowledge_base_id = $1""",
+        kb_id,
+    )
+
+    if kb["provider"] == "cloud" or kb["provider"] == "selfhosted":
+        try:
+            provider, _st, health = await registry.resolve_for_user(
+                str(kb["user_id"]), folder_id=str(kb["index_ref"] or "")
+            )
+        except Exception as exc:  # noqa: BLE001
+            provider, health = None, None
+            logger.warning("knowledge delete: provider resolve failed kb=%s: %s", kb_id, exc)
+        if provider is not None and health is not None and health.ok:
+            for doc in docs:
+                pageindex_doc_id = str(doc["pageindex_doc_id"] or "")
+                if not pageindex_doc_id:
+                    continue
+                try:
+                    await provider.delete_document(
+                        _context_for(kb), pageindex_doc_id=pageindex_doc_id
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "knowledge delete: provider delete failed kb=%s doc=%s: %s",
+                        kb_id,
+                        doc["id"],
+                        exc,
+                    )
+
+    store = blob.get_blob_store()
+    for doc in docs:
+        storage_key = str(doc["storage_key"] or "")
+        if not storage_key:
+            continue
+        try:
+            store.delete(storage_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("knowledge delete: blob delete failed key=%s: %s", storage_key, exc)
+
     await pool.execute("DELETE FROM knowledge_bases WHERE id = $1", kb_id)
+    logger.info("knowledge base deleted id=%s", kb_id)
     return {"id": kb_id, "deleted": True}
 
 
-# ── Core Functions — Documents ──
+def _context_for(kb: Any):
+    from app.knowledge.providers.base import ProviderContext
+
+    return ProviderContext(
+        kb_id=str(kb["id"]),
+        tenant_id=str(kb["tenant_id"] or ""),
+        user_id=str(kb["user_id"] or ""),
+        index_ref=str(kb["index_ref"] or ""),
+    )
+
+
+# ── Documents ──
 
 
 async def upload_document(
+    *,
     kb_id: str,
     user_id: str,
     name: str,
-    file_type: str,
+    file_type: str = "",
     file_size_bytes: int = 0,
     content: bytes | None = None,
 ) -> dict[str, Any]:
-    """Upload a document into a knowledge base.
-
-    Verifies the KB exists, is not currently building, inserts the document
-    row (including raw content for later async RAG build), and atomically
-    updates the KB aggregate stats.
-    """
-    pool = get_pool()
-
-    # Verify KB exists and is owned by (or visible to) user
-    kb_row = await pool.fetchrow(
-        "SELECT id, status, user_id, tenant_id FROM knowledge_bases WHERE id = $1",
-        kb_id,
-    )
-    if kb_row is None:
-        raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id:
-        raise HTTPException(
-            status_code=403, detail="not authorized to upload to this knowledge base"
-        )
-
-    # Reject if KB is currently building
-    if kb_row["status"] == "building":
-        raise HTTPException(
-            status_code=409,
-            detail="knowledge base is currently building, try again later",
-        )
-
+    """上传原文：写对象存储 + 落 ``pending`` 行，等待 ``kb_index`` 索引。"""
     if not name or not name.strip():
         raise HTTPException(status_code=400, detail="document name must not be empty")
 
-    doc_id = str(uuid.uuid4())
-    now = _now_naive()
+    pool = get_pool()
+    kb = await pool.fetchrow(
+        "SELECT id, tenant_id, user_id, provider, status FROM knowledge_bases WHERE id = $1",
+        kb_id,
+    )
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    if kb["user_id"] != user_id:
+        raise HTTPException(
+            status_code=403, detail="not authorized to upload to this knowledge base"
+        )
+    await _assert_provider_matches(user_id=str(user_id), kb_provider=str(kb["provider"]))
 
-    # Insert the document
-    # 文档的 tenant 取自**父 KB**：过去恒写 DEFAULT_TENANT_ID，于是所有租户的文档都登记在
-    # 默认租户名下，而按真实租户过滤的检索侧永远找不到它们（写入与读取的租户必须同源）。
-    doc_tenant = kb_storage_tenant(kb_row)
+    payload = content or b""
+    if len(payload) > MAX_UPLOAD_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"文件超过上限（{MAX_UPLOAD_BYTES // (1024 * 1024)} MB）",
+        )
+
+    # 类型在**上传时**就校验：等索引阶段才拒绝会让人以为"传成功了"
+    provider = await _resolve_provider_or_error(user_id=str(user_id))
+    if not provider.supports(name):
+        raise HTTPException(
+            status_code=400,
+            detail=f"当前 provider 不支持该文件类型（{name.rsplit('.', 1)[-1] if '.' in name else '未知'}）",
+        )
+
+    doc_id = str(uuid.uuid4())
+    storage_key = blob.build_key(str(kb["tenant_id"] or ""), kb_id, doc_id, name.strip())
+    store = blob.get_blob_store()
+    import asyncio
+
+    try:
+        await asyncio.to_thread(store.put, storage_key, payload, _content_type(name, file_type))
+    except Exception as exc:  # noqa: BLE001 — 对象存储故障是 503（可重试），不是 500
+        logger.error("knowledge upload: blob put failed kb=%s: %s", kb_id, exc)
+        raise HTTPException(status_code=503, detail=f"原文存储不可用: {exc}") from exc
+
+    now = _now_naive()
     await pool.execute(
         """INSERT INTO knowledge_documents
-               (id, tenant_id, knowledge_base_id, user_id, name, file_type, file_size_bytes, status, content, created_at)
-           VALUES ($1, $2, $3, $4, $5, $6, $7, 'pending', $8, $9)""",
+               (id, knowledge_base_id, tenant_id, user_id, name, file_type, file_size_bytes,
+                storage_key, status, created_at, updated_at)
+           VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $9)""",
         doc_id,
-        doc_tenant,
         kb_id,
+        str(kb["tenant_id"] or DEFAULT_TENANT_ID),
         user_id,
         name.strip(),
-        file_type,
-        file_size_bytes,
-        content,
+        (file_type or name.rsplit(".", 1)[-1]).lower(),
+        file_size_bytes or len(payload),
+        storage_key,
         now,
     )
+    await _refresh_kb_stats(pool, kb_id)
+    return await _get_document_row(pool, kb_id, doc_id)
 
-    # Update KB aggregate stats
-    await pool.execute(
-        """UPDATE knowledge_bases
-           SET document_count = document_count + 1,
-               total_size_bytes = total_size_bytes + $1,
-               updated_at = $2
-           WHERE id = $3""",
-        file_size_bytes,
-        now,
-        kb_id,
-    )
 
+def _content_type(name: str, file_type: str) -> str:
+    suffix = (file_type or name.rsplit(".", 1)[-1] or "").lower().lstrip(".")
     return {
-        "id": doc_id,
-        "knowledge_base_id": kb_id,
-        "name": name.strip(),
-        "file_type": file_type,
-        "file_size_bytes": file_size_bytes,
-        "status": "pending",
-        "created_at": now.isoformat(),
-    }
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "doc": "application/msword",
+        "pptx": "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+        "txt": "text/plain",
+        "md": "text/markdown",
+    }.get(suffix, "application/octet-stream")
 
 
 async def list_documents(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
-    """List all documents in a knowledge base."""
     pool = get_pool()
-
-    # Verify KB exists and is accessible
-    kb_row = await pool.fetchrow(
-        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1",
-        kb_id,
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1", kb_id
     )
-    if kb_row is None:
+    if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    _require_kb_access(kb_row, user_id, tenant_id, action="view")
+    _require_kb_access(kb, user_id, tenant_id, action="view")
 
     rows = await pool.fetch(
-        """SELECT id, knowledge_base_id, name, file_url, file_type, file_size_bytes,
-                  chunk_count, status, error_message, metadata, created_at
-           FROM knowledge_documents
-           WHERE knowledge_base_id = $1
-           ORDER BY created_at DESC""",
+        """SELECT id, knowledge_base_id, name, file_type, file_size_bytes, page_count, status,
+                  pageindex_doc_id, error_message, metadata, created_at, updated_at
+             FROM knowledge_documents
+            WHERE knowledge_base_id = $1
+            ORDER BY created_at DESC""",
         kb_id,
     )
-    docs = [_serialize_doc(dict(row)) for row in rows]
+    docs = [_serialize_doc(row) for row in rows]
     return {"documents": docs, "count": len(docs)}
 
 
-@router.delete("/{kb_id}/documents")
-async def delete_doc(
-    kb_id: str,
-    request: Request,
-    user_id: str = Query("", alias="user_id"),
-    doc_id: str = Query("", alias="doc_id"),
-) -> dict[str, Any]:
-    """删除单个文档（前端批量删除循环调用；删除后重算 KB 统计）。"""
-    if not doc_id:
-        raise HTTPException(status_code=400, detail="doc_id is required")
-    pool = get_pool()
-
-    kb_row = await pool.fetchrow(
-        "SELECT id, user_id FROM knowledge_bases WHERE id = $1", kb_id
-    )
-    if kb_row is None:
-        raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id:
-        raise HTTPException(
-            status_code=403, detail="not authorized to delete documents"
-        )
-
-    await pool.execute(
-        "DELETE FROM knowledge_documents WHERE id = $1 AND knowledge_base_id = $2",
+async def _get_document_row(pool: Any, kb_id: str, doc_id: str) -> dict[str, Any]:
+    row = await pool.fetchrow(
+        """SELECT id, knowledge_base_id, name, file_type, file_size_bytes, page_count, status,
+                  pageindex_doc_id, error_message, metadata, created_at, updated_at
+             FROM knowledge_documents WHERE id = $1 AND knowledge_base_id = $2""",
         doc_id,
         kb_id,
     )
+    if row is None:
+        raise HTTPException(status_code=404, detail="document not found")
+    return _serialize_doc(row)
+
+
+async def _refresh_kb_stats(pool: Any, kb_id: str) -> None:
+    """重算 KB 聚合统计（上传/删除后调用）。"""
     await pool.execute(
         """UPDATE knowledge_bases
-           SET document_count = (SELECT COUNT(*) FROM knowledge_documents WHERE knowledge_base_id = $1),
-               total_size_bytes = COALESCE((SELECT SUM(file_size_bytes) FROM knowledge_documents WHERE knowledge_base_id = $1), 0),
-               updated_at = NOW()
-           WHERE id = $1""",
+              SET document_count = (SELECT COUNT(*) FROM knowledge_documents WHERE knowledge_base_id = $1),
+                  total_size_bytes = COALESCE(
+                      (SELECT SUM(file_size_bytes) FROM knowledge_documents WHERE knowledge_base_id = $1), 0),
+                  updated_at = NOW()
+            WHERE id = $1""",
         kb_id,
     )
-    return {"deleted": doc_id, "knowledge_base_id": kb_id}
 
 
-# ── Core Functions — Build & Query ──
+async def delete_document(kb_id: str, user_id: str, doc_id: str) -> dict[str, Any]:
+    """删除文档：provider 侧删除 + 原文对象删除 + 行删除 + 统计重算。"""
+    pool = get_pool()
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, tenant_id, provider, index_ref FROM knowledge_bases WHERE id = $1",
+        kb_id,
+    )
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    if kb["user_id"] != user_id:
+        raise HTTPException(status_code=403, detail="not authorized to delete documents")
+
+    doc = await pool.fetchrow(
+        """SELECT id, storage_key, pageindex_doc_id FROM knowledge_documents
+            WHERE id = $1 AND knowledge_base_id = $2""",
+        doc_id,
+        kb_id,
+    )
+    if doc is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    pageindex_doc_id = str(doc["pageindex_doc_id"] or "")
+    if pageindex_doc_id:
+        try:
+            provider, _st, health = await registry.resolve_for_user(
+                str(kb["user_id"]), folder_id=str(kb["index_ref"] or "")
+            )
+            if provider is not None and health.ok:
+                await provider.delete_document(
+                    _context_for(kb), pageindex_doc_id=pageindex_doc_id
+                )
+        except Exception as exc:  # noqa: BLE001 — 与整库删除同一条取舍
+            logger.warning("knowledge delete doc: provider delete failed doc=%s: %s", doc_id, exc)
+
+    storage_key = str(doc["storage_key"] or "")
+    if storage_key:
+        try:
+            blob.get_blob_store().delete(storage_key)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("knowledge delete doc: blob delete failed key=%s: %s", storage_key, exc)
+
+    await pool.execute(
+        "DELETE FROM knowledge_documents WHERE id = $1 AND knowledge_base_id = $2", doc_id, kb_id
+    )
+    await _refresh_kb_stats(pool, kb_id)
+    return {"id": doc_id, "knowledge_base_id": kb_id, "deleted": True}
 
 
-async def _enqueue_rag_build(
-    kb_id: str, user_id: str, estimated_cost: float, tenant_id: str = ""
-) -> str:
-    """投递 rag_index 异步任务（RAG 知识库构建）"""
+# ── Build & Query ──
 
+
+async def _enqueue_kb_index(*, kb_id: str, user_id: str, tenant_id: str) -> str:
+    """投递 ``kb_index`` 任务。
+
+    租户只从 KB 行反查（不接受调用方传值），与 worker 侧的约定一致。
+    """
     from app.queue.producer import QueueProducer
     from app.redis_client import get_redis
 
-    pool = get_pool()
-    docs = await pool.fetch(
-        "SELECT id, file_type, name FROM knowledge_documents WHERE knowledge_base_id = $1",
-        kb_id,
-    )
     redis = await get_redis()
     try:
         producer = QueueProducer(redis)
-        task_id = await producer.enqueue(
-            "rag_index",
-            # 这里曾经写成 tenant_id=user_id —— 把用户 ID 当租户用。后果是同一租户的
-            # 多个用户各自形成一个"伪租户"，与 knowledge_bases 里的真实 tenant_id 对不上：
-            # 要么检索不到（功能故障），要么形成按用户切分的假隔离。
+        return await producer.enqueue(
+            "kb_index",
             tenant_id=tenant_id or DEFAULT_TENANT_ID,
-            payload={
-                "kb_id": kb_id,
-                "user_id": user_id,
-                "documents": [
-                    {
-                        "doc_id": d["id"],
-                        "file_type": d["file_type"],
-                        "filename": d["name"],
-                    }
-                    for d in docs
-                ],
-                "estimated_cost": estimated_cost,
-            },
+            payload={"kb_id": kb_id, "user_id": user_id},
         )
-        return task_id
     finally:
         await redis.aclose()
 
 
 async def build_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
-    """Build a knowledge base — mark documents as completed and deduct credits."""
+    """投递索引任务（把 pending 文档交给 ``kb_index``）。"""
     pool = get_pool()
-
-    # Fetch KB
-    kb_row = await pool.fetchrow(
-        """SELECT id, type, status, document_count, total_size_bytes, user_id
-           FROM knowledge_bases WHERE id = $1""",
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, provider, status, document_count FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
-    if kb_row is None:
+    if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    if kb_row["user_id"] != user_id:
+    if kb["user_id"] != user_id:
         raise HTTPException(
             status_code=403, detail="not authorized to build this knowledge base"
         )
-
-    doc_count = kb_row["document_count"] or 0
-    if doc_count == 0:
+    if (kb["document_count"] or 0) == 0:
         raise HTTPException(
             status_code=400, detail="cannot build knowledge base with no documents"
         )
+    await _assert_provider_matches(user_id=str(user_id), kb_provider=str(kb["provider"]))
+    # 先确认 provider 真的可用，再投递：否则用户会等一个注定失败的长任务
+    await _resolve_provider_or_error(user_id=str(user_id))
 
-    # Calculate cost（credits 为 INTEGER 列，统一向上取整与 Go 侧整数口径一致）
-    char_count = kb_row["total_size_bytes"] or 0
-    kb_type = kb_row["type"]
-    coefficient = 0.5 if kb_type == "wiki" else 2.0
-    rate = 0.001
-    estimated_cost = min(math.ceil(char_count * coefficient * rate), 499)
-
-    # Check user credits
-    user_row = await pool.fetchrow(
-        "SELECT credits FROM users WHERE id = $1",
-        user_id,
-    )
-    if user_row is None:
-        raise HTTPException(status_code=404, detail="user not found")
-
-    user_credits = user_row["credits"] or 0
-    if user_credits < estimated_cost:
-        raise HTTPException(status_code=402, detail="insufficient credits")
-
-    # Mark KB as building（条件更新：并发下仅一个请求能抢到，防 TOCTOU 双投递）
-    now = _now_naive()
-    res = await pool.execute(
-        "UPDATE knowledge_bases SET status = 'building', updated_at = $1 WHERE id = $2 AND status <> 'building'",
-        now,
-        kb_id,
-    )
-    if res.startswith("UPDATE 0"):
-        raise HTTPException(
-            status_code=409, detail="knowledge base is currently building"
-        )
-
-    if kb_type == "rag":
-        # 异步 RAG 构建：投递 rag_index 任务，由 queue worker 执行向量构建，
-        # 完成后由 worker 更新文档状态、激活知识库并扣费
-        try:
-            task_id = await _enqueue_rag_build(kb_id, user_id, estimated_cost, tenant_id=tenant_id)
-        except Exception:
-            # 回滚 building 状态，避免 Redis 不可用时 KB 永久卡死（上传被 409 拒绝）
-            await pool.execute(
-                "UPDATE knowledge_bases SET status = 'draft', updated_at = $1 WHERE id = $2",
-                _now_naive(),
-                kb_id,
-            )
-            raise
-        return {
-            "status": "building",
-            "task_id": task_id,
-            "estimated_cost": round(estimated_cost, 4),
-            "doc_count": doc_count,
-            "type": kb_type,
-        }
-
-    # Transaction: update documents, deduct credits, activate KB
-    async with pool.acquire() as conn:
-        async with conn.transaction():
-            await conn.execute(
-                """UPDATE knowledge_documents
-                   SET status = 'completed'
-                   WHERE knowledge_base_id = $1""",
-                kb_id,
-            )
-            await conn.execute(
-                "UPDATE users SET credits = credits - $1 WHERE id = $2",
-                estimated_cost,
-                user_id,
-            )
-            await conn.execute(
-                """UPDATE knowledge_bases
-                   SET status = 'active', credits_consumed = credits_consumed + $1, updated_at = $2
-                   WHERE id = $3""",
-                estimated_cost,
-                now,
-                kb_id,
-            )
-
-    return {
-        "status": "active",
-        "estimated_cost": round(estimated_cost, 4),
-        "doc_count": doc_count,
-        "type": kb_type,
-    }
+    task_id = await _enqueue_kb_index(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
+    return {"status": "indexing", "task_id": task_id, "provider": kb["provider"]}
 
 
 async def query_knowledge_base(
-    kb_id: str,
-    user_id: str,
-    query: str,
-    top_k: int = 5,
-    tenant_id: str = "",
+    *, kb_id: str, user_id: str, query: str, tenant_id: str = "", top_k: int = 5
 ) -> dict[str, Any]:
-    """Query a knowledge base using full-text search (wiki) or RAG."""
-    pool = get_pool()
+    """在知识库内提问，返回答案与引用。"""
+    if not query or not query.strip():
+        raise HTTPException(status_code=400, detail="query must not be empty")
 
-    # Fetch KB and verify access
-    kb_row = await pool.fetchrow(
-        """SELECT id, type, user_id, visibility, tenant_id
-           FROM knowledge_bases WHERE id = $1""",
+    pool = get_pool()
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, visibility, tenant_id, provider FROM knowledge_bases WHERE id = $1",
         kb_id,
     )
-    if kb_row is None:
+    if kb is None:
         raise HTTPException(status_code=404, detail="knowledge base not found")
-    _require_kb_access(kb_row, user_id, tenant_id, action="query")
+    _require_kb_access(kb, user_id, tenant_id, action="query")
+    # 读操作也要校验 provider 一致：否则在错误的索引上"检索成功但零命中"
+    await _assert_provider_matches(user_id=str(user_id), kb_provider=str(kb["provider"]))
 
-    kb_type = kb_row["type"]
+    try:
+        result, provider_name = await answer_question(
+            kb_id=kb_id, user_id=user_id, question=query.strip()
+        )
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KnowledgeError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    if kb_type == "wiki":
-        try:
-            # content 列为 BYTEA（异步 RAG 构建时保存的原始文件字节），
-            # 全文搜索前必须转回文本；convert_from 对非法 UTF-8 会抛错，
-            # 捕获后降级返回空结果而非 500（二进制文档本就不适合全文检索）
-            rows = await pool.fetch(
-                """SELECT id, knowledge_base_id, name, file_type, status,
-                          ts_rank(to_tsvector('chinese', COALESCE(convert_from(content, 'UTF8'), '')),
-                                  plainto_tsquery('chinese', $1)) AS rank
-                   FROM knowledge_documents
-                   WHERE knowledge_base_id = $2
-                     AND status = 'completed'
-                     AND to_tsvector('chinese', COALESCE(convert_from(content, 'UTF8'), ''))
-                         @@ plainto_tsquery('chinese', $1)
-                   ORDER BY rank DESC
-                   LIMIT $3""",
-                query,
-                kb_id,
-                top_k,
-            )
-        except Exception as e:
-            logger.warning("wiki full-text search failed (kb_id=%s): %s", kb_id, e)
-            rows = []
-        results = [
+    return {
+        "provider": provider_name,
+        "answer": result.answer,
+        "citations": [
             {
-                "id": row["id"],
-                "knowledge_base_id": row["knowledge_base_id"],
-                "name": row["name"],
-                "file_type": row["file_type"],
-                "rank": float(row["rank"]),
+                "doc_name": c.doc_name,
+                "page": c.page,
+                "block_id": c.block_id,
+                "snippet": c.snippet,
             }
-            for row in rows
-        ]
-    else:
-        # RAG 向量检索。旧栈 RAGRetriever 已下线：它查的是共享 collection
-        # settings.milvus_collection，只按 tenant_id 过滤 —— 既能跨库串读（不认
-        # kb_id），又读不到新栈按 KB 切分的 kb_* collection，Milvus 不可用时还会
-        # 返回 status=indexed 的"假成功"。
+            for c in result.citations
+        ],
+    }
+
+
+async def preview_document(
+    kb_id: str, doc_id: str, user_id: str, tenant_id: str = ""
+) -> dict[str, Any]:
+    """文档预览：文本类返回头部内容；二进制返回元信息并提示下载/引用。"""
+    pool = get_pool()
+    kb = await pool.fetchrow(
+        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1", kb_id
+    )
+    if kb is None:
+        raise HTTPException(status_code=404, detail="knowledge base not found")
+    _require_kb_access(kb, user_id, tenant_id, action="preview")
+
+    row = await pool.fetchrow(
+        """SELECT id, knowledge_base_id, name, file_type, file_size_bytes, page_count, status,
+                  pageindex_doc_id, error_message, metadata, storage_key, created_at, updated_at
+             FROM knowledge_documents WHERE id = $1 AND knowledge_base_id = $2""",
+        doc_id,
+        kb_id,
+    )
+    if row is None:
+        raise HTTPException(status_code=404, detail="document not found")
+
+    doc = _serialize_doc(row)
+    doc["content"] = ""
+    suffix = f".{(row['file_type'] or '').lower().lstrip('.')}"
+    if suffix in _TEXT_PREVIEW_SUFFIXES and row["storage_key"]:
         try:
-            from app.main import get_gateway
-            from app.rag.builder import RAGBuilder
+            import asyncio
 
-            builder = RAGBuilder(llm_gateway=await get_gateway())
-            hits = await builder.query(
-                kb_id=kb_id,
-                query=query,
-                top_k=top_k,
-                threshold=0.45,
-                # 过滤值与写入侧同源（upload_document / rag_index worker），
-                # 都走 kb_storage_tenant 的 NULL 归一化，否则存量库稳定检索为空。
-                tenant_id=kb_storage_tenant(kb_row),
-            )
-            results = [
-                {
-                    "document_id": h.get("doc_id", ""),
-                    "chunk_index": h.get("chunk_index", 0),
-                    "content": h.get("content", "")[:500],
-                    "score": round(float(h.get("score", 0.0)), 4),
-                }
-                for h in hits
-            ]
-        except Exception as e:
-            logger.warning("RAG query failed (kb_id=%s): %s", kb_id, e)
-            return {"type": kb_type, "results": [], "error": f"rag query failed: {e}"}
-
-    return {"type": kb_type, "results": results}
+            raw = await asyncio.to_thread(blob.get_blob_store().get, str(row["storage_key"]))
+            doc["content"] = raw[:10000].decode("utf-8", errors="replace")
+        except Exception as exc:  # noqa: BLE001 — 预览失败不该 500
+            logger.warning("knowledge preview: read failed doc=%s: %s", doc_id, exc)
+    return {"data": doc}
 
 
 async def admin_list_knowledge_bases() -> dict[str, Any]:
-    """List all public knowledge bases (admin/owner only)."""
+    """管理员视角：全部公开知识库。"""
     try:
         pool = get_pool()
     except RuntimeError:
         return {"knowledge_bases": [], "count": 0}
 
     rows = await pool.fetch(
-        """SELECT id, name, COALESCE(description, '') as description, type, visibility, status,
-                  document_count, total_size_bytes, credits_consumed, config, created_at, updated_at
-           FROM knowledge_bases
-           WHERE visibility = 'public'
-           ORDER BY created_at DESC""",
+        """SELECT id, name, COALESCE(description, '') AS description, provider, visibility, status,
+                  document_count, total_size_bytes, credits_consumed, config, error_message,
+                  created_at, updated_at
+             FROM knowledge_bases
+            WHERE visibility = 'public'
+            ORDER BY created_at DESC""",
     )
-    kbs = [_serialize_kb(dict(row)) for row in rows]
+    kbs = [_serialize_kb(row) for row in rows]
     return {"knowledge_bases": kbs, "count": len(kbs)}
+
+
+# ── User settings ──
+
+
+async def get_user_settings(user_id: str) -> dict[str, Any]:
+    """用户知识库设置（不回传 key 明文，只给"是否已配置"+指纹）。"""
+    stored = await settings_store.load(user_id)
+    system_health = registry.selfhosted_health()
+    return {
+        "provider": stored.provider if stored else "",
+        "status": stored.status if stored else STATUS_DISABLED,
+        "error_message": stored.error_message if stored else "",
+        "cloud_key_configured": bool(stored and stored.cloud_api_key),
+        "providers": [
+            {
+                "name": "selfhosted",
+                "label": "自托管（PageIndex local）",
+                "available": system_health.ok,
+                "status": system_health.status,
+                "detail": system_health.detail,
+            },
+            {
+                "name": "cloud",
+                "label": "PageIndex Cloud",
+                "available": bool(stored and stored.cloud_api_key),
+                "status": stored.status if stored and stored.provider == "cloud" else STATUS_DISABLED,
+                "detail": "",
+            },
+        ],
+    }
+
+
+async def put_user_settings(
+    *, user_id: str, tenant_id: str, provider: str, cloud_api_key: str | None
+) -> dict[str, Any]:
+    """保存 provider 选择（Cloud 时同时落密文）。"""
+    if not is_known_provider(provider):
+        raise HTTPException(
+            status_code=400, detail=f"provider must be one of {KNOWN_PROVIDERS}"
+        )
+    # 已有知识库不允许随意切换 provider：库的索引在旧 provider 侧，切了就是"查不到"
+    pool = get_pool()
+    mismatched = await pool.fetchval(
+        "SELECT COUNT(*) FROM knowledge_bases WHERE user_id = $1 AND provider <> $2",
+        user_id,
+        provider,
+    )
+    if mismatched:
+        raise HTTPException(
+            status_code=409,
+            detail=f"还有 {mismatched} 个知识库使用其它 provider，请先删除或重建后再切换",
+        )
+    try:
+        saved = await settings_store.save(
+            user_id=user_id, tenant_id=tenant_id, provider=provider, cloud_api_key=cloud_api_key
+        )
+    except ProviderUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    except KnowledgeError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {
+        "provider": saved.provider,
+        "status": saved.status,
+        "cloud_key_configured": bool(saved.cloud_api_key),
+    }
+
+
+async def verify_user_settings(user_id: str) -> dict[str, Any]:
+    """显式连通性探测（"测试连接"）：不放在启动路径上。"""
+    provider, stored, health = await registry.resolve_for_user(user_id)
+    if provider is None or stored is None:
+        return {"ok": False, "status": health.status, "detail": health.detail}
+
+    result = health
+    verify = getattr(provider, "verify", None)
+    if health.ok and callable(verify):
+        import asyncio
+
+        try:
+            result = await asyncio.to_thread(verify)
+        except Exception as exc:  # noqa: BLE001
+            from app.knowledge.providers.base import HealthResult
+
+            result = HealthResult(False, STATUS_ERROR, str(exc))
+    await settings_store.update_status(
+        user_id=user_id, status=result.status, error_message="" if result.ok else result.detail
+    )
+    return {"ok": result.ok, "status": result.status, "detail": result.detail}
 
 
 # ── Routes ──
@@ -746,7 +846,6 @@ async def list_kb(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """List knowledge bases."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await list_knowledge_bases(user_id, tenant_id=tenant_id)
@@ -759,25 +858,60 @@ async def create_kb(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """Create a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await create_knowledge_base(
         user_id=user_id,
+        tenant_id=tenant_id,
         name=body.name,
         description=body.description,
-        kb_type=body.type,
+        provider=body.provider,
         visibility=body.visibility,
-        tenant_id=tenant_id,
     )
+
+
+# 注意顺序：``/settings`` 与 ``/admin/list`` 必须注册在 ``/{kb_id}`` 之前，
+# 否则会被当成 kb_id 吃掉。
+@router.get("/settings")
+async def get_settings_route(
+    request: Request, user_id: str = Query("", alias="user_id")
+) -> dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+    return await get_user_settings(user_id)
+
+
+@router.put("/settings")
+async def put_settings_route(
+    request: Request,
+    body: UserSettingsUpdate,
+    user_id: str = Query("", alias="user_id"),
+    tenant_id: str = Query("", alias="tenant_id"),
+) -> dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+    return await put_user_settings(
+        user_id=user_id,
+        tenant_id=tenant_id,
+        provider=body.provider,
+        cloud_api_key=body.cloud_api_key,
+    )
+
+
+@router.post("/settings/verify")
+async def verify_settings_route(
+    request: Request, user_id: str = Query("", alias="user_id")
+) -> dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+    return await verify_user_settings(user_id)
 
 
 @router.get("/admin/list")
 async def admin_list_kb(request: Request) -> dict[str, Any]:
-    """Admin endpoint: list all public knowledge bases."""
     role = request.headers.get("X-User-Role", "")
     if role not in ("admin", "owner"):
-        raise HTTPException(status_code=403, detail="admin or owner role required")
+        raise HTTPException(status_code=403, detail="admin role required")
     return await admin_list_knowledge_bases()
 
 
@@ -788,10 +922,9 @@ async def get_kb(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """Get a knowledge base by id."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await get_knowledge_base(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
+    return await get_knowledge_base(kb_id, user_id, tenant_id=tenant_id)
 
 
 @router.put("/{kb_id}")
@@ -801,7 +934,6 @@ async def update_kb(
     body: KnowledgeBaseUpdate,
     user_id: str = Query("", alias="user_id"),
 ) -> dict[str, Any]:
-    """Update a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await update_knowledge_base(
@@ -809,7 +941,6 @@ async def update_kb(
         user_id=user_id,
         name=body.name,
         description=body.description,
-        kb_type=body.type,
         visibility=body.visibility,
     )
 
@@ -820,18 +951,10 @@ async def delete_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
 ) -> dict[str, Any]:
-    """Delete a knowledge base（仅限拥有者）。
-
-    这里曾经接受 `?is_admin=true` 作为"管理员可删任意知识库"的判据 ——
-    但那是**调用方自报**的查询参数，等于把授权决定权交给了请求者。
-    网关虽然会重写查询串、使它在网关路径下暂不可利用，但那是"靠上游兜住"，
-    不是这里的正确性：任何直连路径（引擎端口可达 / 内部 token 泄露）都能立刻利用。
-
-    真正的管理员删除应当走独立的 admin 端点，并基于服务端可信身份判断。
-    """
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    return await delete_knowledge_base(kb_id=kb_id, user_id=user_id)
+    is_admin = request.headers.get("X-User-Role", "") in ("admin", "owner")
+    return await delete_knowledge_base(kb_id, user_id, is_admin=is_admin)
 
 
 @router.post("/{kb_id}/documents")
@@ -841,26 +964,22 @@ async def upload_doc(
     body: DocumentUpload,
     user_id: str = Query("", alias="user_id"),
 ) -> dict[str, Any]:
-    """Upload a document to a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-    # content 字段: base64 或纯文本 → 解码为 bytes 落库（异步 RAG 构建时使用）
-    content = None
+    payload: bytes | None = None
     if body.content:
         try:
-            import base64
-
-            # validate=True：非法 base64 字符直接抛错，避免纯文本被静默解成垃圾字节
-            content = base64.b64decode(body.content, validate=True)
+            # validate=True：非法 base64 直接抛错，避免纯文本被静默解成垃圾字节
+            payload = base64.b64decode(body.content, validate=True)
         except Exception:
-            content = body.content.encode("utf-8")
+            payload = body.content.encode("utf-8")
     return await upload_document(
         kb_id=kb_id,
         user_id=user_id,
         name=body.name,
         file_type=body.file_type,
         file_size_bytes=body.file_size_bytes,
-        content=content,
+        content=payload,
     )
 
 
@@ -871,10 +990,23 @@ async def list_docs(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """List documents in a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await list_documents(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
+
+
+@router.delete("/{kb_id}/documents")
+async def delete_doc(
+    kb_id: str,
+    request: Request,
+    user_id: str = Query("", alias="user_id"),
+    doc_id: str = Query("", alias="doc_id"),
+) -> dict[str, Any]:
+    if not user_id:
+        raise HTTPException(status_code=401, detail="user_id required")
+    if not doc_id:
+        raise HTTPException(status_code=400, detail="doc_id is required")
+    return await delete_document(kb_id, user_id, doc_id)
 
 
 @router.post("/{kb_id}/build")
@@ -884,7 +1016,6 @@ async def build_kb(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """Build a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await build_knowledge_base(kb_id=kb_id, user_id=user_id, tenant_id=tenant_id)
@@ -898,7 +1029,6 @@ async def query_kb(
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """Query a knowledge base."""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
     return await query_knowledge_base(
@@ -911,62 +1041,13 @@ async def query_kb(
 
 
 @router.get("/{kb_id}/documents/{doc_id}/preview")
-async def preview_document(
+async def preview_doc(
     kb_id: str,
     doc_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
     tenant_id: str = Query("", alias="tenant_id"),
 ) -> dict[str, Any]:
-    """预览文档内容 — 返回文档元信息及前 N 个分块的内容拼接"""
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
-
-    # 验证知识库归属（与列表/详情同一套可见性规则）
-    kb_row = await get_pool().fetchrow(
-        "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1",
-        kb_id,
-    )
-    if kb_row is None:
-        raise HTTPException(status_code=404, detail="knowledge base not found")
-    _require_kb_access(kb_row, user_id, tenant_id, action="preview")
-
-    pool = get_pool()
-    doc_row = await pool.fetchrow(
-        """SELECT id, knowledge_base_id, name, file_type, file_size_bytes,
-                  chunk_count, status, error_message, metadata, created_at
-           FROM knowledge_documents
-           WHERE id = $1 AND knowledge_base_id = $2""",
-        doc_id,
-        kb_id,
-    )
-    if doc_row is None:
-        raise HTTPException(status_code=404, detail="document not found")
-
-    doc = dict(doc_row)
-
-    # 尝试从 knowledge_chunks 表获取前 5 个分块作为预览内容
-    content_parts = []
-    try:
-        chunk_rows = await pool.fetch(
-            """SELECT content FROM knowledge_chunks
-               WHERE document_id = $1 AND knowledge_base_id = $2
-               ORDER BY chunk_index ASC
-               LIMIT 5""",
-            doc_id,
-            kb_id,
-        )
-        content_parts = [r["content"] for r in chunk_rows if r["content"]]
-    except Exception:
-        # knowledge_chunks 表可能不存在
-        pass
-
-    doc["content"] = "\n\n".join(content_parts) if content_parts else ""
-    if len(doc["content"]) > 10000:
-        doc["content"] = doc["content"][:10000] + "\n\n…（内容已截断，仅展示前 10000 字符）"
-
-    # 删除 metadata 中可能存在的敏感信息（如 file_url 中的签名）
-    if "metadata" in doc and isinstance(doc["metadata"], dict):
-        doc["metadata"] = {k: v for k, v in doc["metadata"].items() if k not in ("file_url", "signed_url")}
-
-    return {"data": doc}
+    return await preview_document(kb_id, doc_id, user_id, tenant_id=tenant_id)

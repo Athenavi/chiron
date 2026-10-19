@@ -7,7 +7,7 @@
 
 **为什么不用"compose 用到的所有变量"**：实测 29 个里只有 7 个是 `:?`，其余 22 个都带
 `:-默认值`（可选覆盖）；若按"全部 29 个都要有"去要求，会为 **9 个有默认值的可选变量**报假阳性
-（`S3_BUCKET` / `VECTOR_DB_TYPE` / `MILVUS_ADDRESS` … —— 而 `.env.example` 自己写明
+（`S3_BUCKET` / `MEMORY_VECTOR_BACKEND` / `MILVUS_ADDRESS` … —— 而 `.env.example` 自己写明
 "业务/基础设施配置已迁移至后台「系统设置」"）⇒ 那种守卫会惩罚**正确的文档**。
 
 退出码：0 = 必填项都有文档；1 = 有遗漏。

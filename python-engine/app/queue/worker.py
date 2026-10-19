@@ -769,17 +769,15 @@ class QueueWorker:
         self, task_type: str, payload: dict[Any, Any], tenant_id: str = ""
     ) -> None:
         """分发任务到具体处理器"""
-        if task_type == "rag_index":
-            # 不传信封 tenant：租户只从 KB 行反查，避免投递方伪造归属把向量打进别的租户
-            await self._handle_rag_index(payload)
+        if task_type == "kb_index":
+            # 不传信封 tenant：租户/归属只从 KB 行反查
+            await self._handle_kb_index(payload)
         elif task_type == "memory_save":
             await self._handle_memory_save(payload, tenant_id)
         elif task_type == "memory_consolidate":
             await self._handle_memory_consolidate(payload, tenant_id)
         elif task_type == "memory_rollup":
             await self._handle_memory_rollup(payload, tenant_id)
-        elif task_type == "embed_batch":
-            await self._handle_embed_batch(payload)
         elif task_type == "tool_job":
             await self._handle_tool_job(payload)
         elif task_type == "workflow_run":
@@ -889,149 +887,22 @@ class QueueWorker:
             job_id, res.get("status"), res.get("exit_code"),
         )
 
-    async def _handle_rag_index(self, payload: dict[Any, Any]) -> None:
-        """处理 RAG 文档索引任务：读库取内容 → RAGBuilder 构建 → 更新文档/KB 状态与扣费
+    async def _handle_kb_index(self, payload: dict[Any, Any]) -> None:
+        """PageIndex 知识库索引任务。
 
-        payload: {kb_id, user_id, documents: [{doc_id, file_type, filename}], estimated_cost}
+        payload: {kb_id, user_id}
 
-        写入侧租户只认 **KB 行**（不接受任务信封里的 tenant）：检索侧 `query_knowledge_base`
-        按 KB 的租户过滤，两边必须是同一条规则，否则构建成功却一条也查不到。
+        幂等：service 层只处理 ``status <> 'ready'`` 的文档，重复投递不会重复索引。
+        租户/归属只从 KB 行反查（不接受任务信封里的 tenant）。
         """
-        from app.db import get_pool
-        from app.kb_access import kb_storage_tenant
-        from app.rag.builder import RAGBuilder
+        from app.knowledge.service import index_knowledge_base
 
         kb_id = payload.get("kb_id")
         user_id = payload.get("user_id")
-        documents = payload.get("documents") or []
-        estimated_cost = payload.get("estimated_cost", 0)
-        if not kb_id or not documents:
-            raise ValueError(f"rag_index payload 缺失: {payload}")
-
-        pool = get_pool()
-        # 幂等：任务级重试/重复投递时 KB 已激活则跳过（避免重复构建与扣费）
-        kb = await pool.fetchrow(
-            "SELECT status, tenant_id FROM knowledge_bases WHERE id = $1", kb_id
-        )
-        if kb is None:
-            # KB 已被删除（文档应随 CASCADE 清除）——直接失败进 DLQ，不误扣费
-            raise ValueError(f"知识库不存在: {kb_id}")
-        if kb["status"] == "active":
-            logger.info("rag_index 跳过（KB 已激活）: kb_id=%s", kb_id)
-            return
-
-        # 这里曾写成 `tenant_id=user_id` —— 把用户 ID 当租户用。向量里的块因此打上
-        # "用户 ID"标签，检索侧却按 KB 的真实租户过滤，两边永远对不上：构建报成功、
-        # 查询返回空，是典型的假成功。
-        kb_tenant = kb_storage_tenant(kb)
-
-        builder = RAGBuilder(llm_gateway=self._gateway)
-        errors = []
-
-        for doc in documents:
-            doc_id = doc.get("doc_id")
-            row = await pool.fetchrow(
-                "SELECT content, file_type, name FROM knowledge_documents WHERE id = $1",
-                doc_id,
-            )
-            if row is None or row["content"] is None:
-                errors.append(f"{doc_id}: 无内容")
-                await pool.execute(
-                    "UPDATE knowledge_documents SET status='error', error_message=$1 WHERE id=$2",
-                    "no content",
-                    doc_id,
-                )
-                continue
-
-            await pool.execute(
-                "UPDATE knowledge_documents SET status='processing' WHERE id=$1",
-                doc_id,
-            )
-            chunk_count = 0
-            error_msg = None
-            try:
-                async for event in builder.build_document(
-                    kb_id=kb_id,
-                    doc_id=doc_id,
-                    content=bytes(row["content"]),
-                    file_type=doc.get("file_type") or row["file_type"] or "txt",
-                    filename=doc.get("filename") or row["name"] or doc_id,
-                    tenant_id=kb_tenant,
-                ):
-                    if event.get("type") == "complete":
-                        chunk_count = event.get("chunk_count", 0)
-                    elif event.get("type") == "error":
-                        error_msg = event.get("message")
-            except Exception as e:
-                error_msg = str(e)
-
-            if error_msg:
-                errors.append(f"{doc_id}: {error_msg}")
-                await pool.execute(
-                    "UPDATE knowledge_documents SET status='error', error_message=$1 WHERE id=$2",
-                    error_msg,
-                    doc_id,
-                )
-            else:
-                await pool.execute(
-                    "UPDATE knowledge_documents SET status='completed', chunk_count=$1 WHERE id=$2",
-                    chunk_count,
-                    doc_id,
-                )
-
-        # 全部文档成功才扣费并激活；有失败则置 error（与 wiki 分支「成功才激活」语义一致）
-        async with pool.acquire() as conn:
-            async with conn.transaction():
-                if errors:
-                    await conn.execute(
-                        "UPDATE knowledge_bases SET status='error', updated_at=NOW() WHERE id=$1",
-                        kb_id,
-                    )
-                else:
-                    # 防负扣费：余额不足时事务回滚并报错（任务进 DLQ，不重复扣费）
-                    res = await conn.execute(
-                        "UPDATE users SET credits = credits - $1 WHERE id = $2 AND credits >= $1",
-                        estimated_cost,
-                        user_id,
-                    )
-                    if not res or res.startswith("UPDATE 0"):
-                        raise RuntimeError(
-                            f"用户 {user_id} 积分不足，无法扣费 {estimated_cost}"
-                        )
-                    await conn.execute(
-                        """UPDATE knowledge_bases
-                           SET status = 'active', credits_consumed = credits_consumed + $1, updated_at = NOW()
-                           WHERE id = $2""",
-                        estimated_cost,
-                        kb_id,
-                    )
-        if errors:
-            logger.warning("rag_index 部分文档失败，KB 置 error: %s", errors)
-
-        # Webhook 事件（knowledge.ingest/ingest_error）：跨实例统一出口（队列 worker）
-        try:
-            from app.event_bus import emit_event
-
-            kb_payload = {
-                "kb_id": kb_id,
-                "user_id": user_id,
-                "tenant_id": kb_tenant,
-                "documents": [d.get("doc_id") for d in documents],
-                "doc_count": len(documents),
-            }
-            # Webhook 按租户匹配订阅：`tenant_id=user_id` 会把事件投给"user_id 恰好等于
-            # 某个租户 ID"的租户，或落到 default —— 收件人错位的两种都算故障。
-            if errors:
-                kb_payload["errors"] = errors[:20]
-                await emit_event(
-                    "knowledge.ingest_error", kb_payload, tenant_id=kb_tenant
-                )
-            else:
-                await emit_event(
-                    "knowledge.ingest", kb_payload, tenant_id=kb_tenant
-                )
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("knowledge webhook emit failed: %s", exc)
+        if not kb_id or not user_id:
+            raise ValueError(f"kb_index payload 缺失: {payload}")
+        result = await index_knowledge_base(kb_id=str(kb_id), user_id=str(user_id))
+        logger.info("kb_index done: kb=%s result=%s", kb_id, result)
 
     async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: str = "") -> None:
         """处理记忆持久化任务
@@ -1196,29 +1067,6 @@ class QueueWorker:
                     session_id,
                 )
         return messages
-
-    async def _handle_embed_batch(self, payload: dict[Any, Any]) -> None:
-        """处理批量嵌入任务：批量计算嵌入并存储向量
-
-        payload: {texts, kb_id, doc_id, tenant_id}
-        """
-        from app.rag.builder import RAGBuilder
-
-        texts = payload.get("texts") or []
-        if not texts:
-            raise ValueError("embed_batch payload 缺少 texts")
-        builder = RAGBuilder(llm_gateway=self._gateway)
-        chunks = [{"index": i, "content": t} for i, t in enumerate(texts)]
-        embeddings = await builder._compute_embeddings(chunks)
-        await builder._store_vectors(
-            payload.get("kb_id", ""),
-            payload.get("doc_id", ""),
-            payload.get("tenant_id", ""),
-            chunks,
-            embeddings,
-            builder._vector_db_type,
-        )
-        logger.info("embed_batch 完成: count=%d", len(texts))
 
     async def update_queue_depth(self) -> None:
         """更新队列深度指标"""

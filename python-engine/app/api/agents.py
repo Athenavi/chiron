@@ -138,30 +138,28 @@ async def _workbench_binding(body: AgentDispatchRequest, gateway: Any) -> str:
         except Exception as exc:  # pragma: no cover - 降级路径
             logger.warning("agent binding: skill lookup failed: %s", exc)
 
-    if body.kb_id and gateway is not None:
+    if body.kb_id:
         try:
-            from app.rag.builder import RAGBuilder
+            from app.db import get_pool
+            from app.knowledge.service import answer_question
 
-            builder = RAGBuilder(llm_gateway=gateway)
-            results = await builder.query(
-                kb_id=body.kb_id,
-                query=body.task,
-                top_k=3,
-                threshold=0.5,
-                tenant_id=body.tenant_id,
+            # provider 解析用 **KB 所有者**（Cloud key 是用户级的，只有属主配过）；
+            # 检索范围由 service 按"已就绪文档"收敛 —— 不传文档等于在空集上推理
+            pool = get_pool()
+            kb_row = await pool.fetchrow(
+                "SELECT user_id FROM knowledge_bases WHERE id = $1", body.kb_id
             )
-            snippets: list[str] = []
-            for doc in results or []:
-                snippet = str(doc.get("content", doc.get("text", ""))).strip()
-                if not snippet:
-                    continue
-                if len(snippet) > 500:
-                    snippet = snippet[:500] + "…"
-                snippets.append(f"- (score {doc.get('score', 0):.2f}) {snippet}")
-            if snippets:
-                sections.append("## 知识库参考\n\n" + "\n".join(snippets))
+            if kb_row is not None:
+                answer, _provider = await answer_question(
+                    kb_id=body.kb_id, user_id=str(kb_row["user_id"]), question=body.task
+                )
+                text = (answer.answer or "").strip()
+                if text:
+                    if len(text) > 1500:
+                        text = text[:1500] + "…"
+                    sections.append("## 知识库参考\n\n" + text)
         except Exception as exc:  # pragma: no cover - 降级路径
-            logger.warning("agent binding: rag query failed: %s", exc)
+            logger.warning("agent binding: knowledge query failed: %s", exc)
 
     return "\n\n".join(sections)
 

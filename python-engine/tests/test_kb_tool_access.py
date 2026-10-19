@@ -1,16 +1,19 @@
-"""工具层知识库访问控制 —— kb_list / kb_search / rag_query 与 API 层同一套可见性规则。
+"""工具层知识库访问控制 —— kb_list / kb_search 与 API 层同一套可见性规则。
 
-这三处各自内联过一份判定（或干脆没判），后果分两类：
-- 判得比 API 严（"owner 或 public"）：同租户共享的库在 agent 里检索不到，用户看到的是
-  "UI 里能选、agent 说没权限"；
-- 判得比 API 松（rag_query 完全不核验 kb_id）：kb_id 由模型给出，提示注入即可换一个
-  别人的库 ID 读出其中的文档片段。
+规则本体在 ``app.kb_access``（``kb_access_allowed``），工具层只做"校验 + 取数"。
+**provider 解析用 KB 所有者**（Cloud API key 是用户级的，只有属主配过），调用者身份
+只用于权限判定 —— 两件事混用会得到"能看见库却查不了"。
+
+旧版这里还覆盖 ``rag_query``（不核验 kb_id、只按调用方自称的租户过滤，提示注入即可
+换一个别人的库 ID）：该工具连同向量检索一起退场，用例随之移除。
 """
-from unittest.mock import AsyncMock, MagicMock, patch
+
+from unittest.mock import AsyncMock, patch
 
 import pytest
 
 from app.config import DEFAULT_TENANT_ID
+from app.knowledge.providers.base import AnswerResult, Citation
 from app.tools.context import get_all, restore_context, set_tool_context
 
 
@@ -24,7 +27,7 @@ def tool_ctx():
 def _kb_row(**overrides):
     row = {
         "id": "kb-1",
-        "type": "rag",
+        "provider": "cloud",
         "user_id": "u-owner",
         "visibility": "tenant",
         "tenant_id": "t-real",
@@ -64,107 +67,61 @@ class TestKbListToolScope:
 
 
 class TestKbSearchToolGate:
-    async def test_denies_cross_tenant_before_touching_vectors(self, tool_ctx):
+    async def test_denies_cross_tenant_before_resolving_provider(self, tool_ctx):
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
         pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="t-real"))
         set_tool_context(user_id="u-stranger", tenant_id="t-other")
-        with patch("app.tools.kb._pool", AsyncMock(return_value=pool)), \
-             patch("app.main.get_gateway", AsyncMock()) as gw, \
-             patch("app.rag.builder.RAGBuilder") as builder_cls:
+        with (
+            patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
+            patch("app.tools.kb.answer_question", AsyncMock()) as ask,
+        ):
             result = await kb_search("kb-1", "怎么部署")
         assert result == {"error": "not authorized to query this knowledge base"}
-        gw.assert_not_awaited()
-        builder_cls.assert_not_called()
+        ask.assert_not_awaited()
 
-    async def test_allows_same_tenant_and_filters_by_kb_tenant(self, tool_ctx):
+    async def test_uses_kb_owner_for_provider_resolution(self, tool_ctx):
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
         pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="t-real"))
-        fake_builder = MagicMock()
-        fake_builder.query = AsyncMock(return_value=[])
+        ask = AsyncMock(
+            return_value=(
+                AnswerResult(answer="答案", citations=[Citation(doc_name="a.pdf", page=2)]),
+                "cloud",
+            )
+        )
         set_tool_context(user_id="u-stranger", tenant_id="t-real")
-        with patch("app.tools.kb._pool", AsyncMock(return_value=pool)), \
-             patch("app.main.get_gateway", AsyncMock(return_value=MagicMock())), \
-             patch("app.rag.builder.RAGBuilder", return_value=fake_builder):
+        with (
+            patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
+            patch("app.tools.kb.answer_question", ask),
+        ):
             result = await kb_search("kb-1", "怎么部署")
 
-        assert result == {"type": "rag", "results": []}
-        # 过滤值来自 KB 行，而不是调用方自称的租户
-        assert fake_builder.query.call_args.kwargs["tenant_id"] == "t-real"
+        assert result["answer"] == "答案"
+        assert result["count"] == 1
+        assert result["citations"][0]["page"] == 2
+        # provider 解析（即 Cloud key 的来源）必须是 KB 属主，而不是调用方
+        assert ask.await_args.kwargs["user_id"] == "u-owner"
+        assert ask.await_args.kwargs["kb_id"] == "kb-1"
 
-    async def test_null_kb_tenant_is_normalized_for_storage(self, tool_ctx):
-        """owner 读自己的存量库（tenant_id 为 NULL）→ 按默认租户过滤，与写入侧同值"""
+
+class TestKbSearchErrorSurfacing:
+    async def test_provider_failure_is_returned_not_raised(self, tool_ctx):
+        from app.knowledge.errors import ProviderUnavailable
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id=None))
-        fake_builder = MagicMock()
-        fake_builder.query = AsyncMock(return_value=[])
-        set_tool_context(user_id="u-owner", tenant_id="")
-        with patch("app.tools.kb._pool", AsyncMock(return_value=pool)), \
-             patch("app.main.get_gateway", AsyncMock(return_value=MagicMock())), \
-             patch("app.rag.builder.RAGBuilder", return_value=fake_builder):
-            await kb_search("kb-1", "怎么部署")
-        assert fake_builder.query.call_args.kwargs["tenant_id"] == DEFAULT_TENANT_ID
-
-
-class TestRagQueryToolGate:
-    @staticmethod
-    def _retriever(pool):
-        retriever = MagicMock()
-        retriever._pg_pool = pool
-        retriever.hybrid_search = AsyncMock(return_value=[])
-        return retriever
-
-    async def test_denies_foreign_kb_without_searching(self, tool_ctx):
-        from app.tools.rag_query import rag_query
-
-        pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=_kb_row(visibility="private"))
-        retriever = self._retriever(pool)
-        set_tool_context(user_id="u-stranger", tenant_id="t-real")
-        with patch("app.tools.rag_query._get_hybrid_retriever", AsyncMock(return_value=retriever)):
-            result = await rag_query(query="机密", kb_id="kb-1")
-
-        assert result == {"error": "not authorized to query this knowledge base"}
-        retriever.hybrid_search.assert_not_awaited()
-        # 只查了归属，没有跑默认库那条 SELECT
-        assert pool.fetchrow.await_args.args[1] == "kb-1"
-
-    async def test_unknown_kb_reports_not_found(self, tool_ctx):
-        from app.tools.rag_query import rag_query
-
-        pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=None)
-        retriever = self._retriever(pool)
+        pool.fetchrow = AsyncMock(return_value=_kb_row())
         set_tool_context(user_id="u-owner", tenant_id="t-real")
-        with patch("app.tools.rag_query._get_hybrid_retriever", AsyncMock(return_value=retriever)):
-            result = await rag_query(query="x", kb_id="kb-missing")
-        assert "not found" in result["error"]
-        retriever.hybrid_search.assert_not_awaited()
-
-    async def test_no_pool_fails_closed(self, tool_ctx):
-        """PG 不可用时不能核验归属 → 拒绝检索（此前的代码照旧按 caller 租户搜向量）"""
-        from app.tools.rag_query import rag_query
-
-        retriever = self._retriever(None)
-        set_tool_context(user_id="u-owner", tenant_id="t-real")
-        with patch("app.tools.rag_query._get_hybrid_retriever", AsyncMock(return_value=retriever)):
-            result = await rag_query(query="x", kb_id="kb-1")
-        assert "cannot be verified" in result["error"]
-        retriever.hybrid_search.assert_not_awaited()
-
-    async def test_owner_search_uses_kb_tenant_not_context(self, tool_ctx):
-        from app.tools.rag_query import rag_query
-
-        pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="t-real"))
-        retriever = self._retriever(pool)
-        set_tool_context(user_id="u-owner", tenant_id="t-stale")
-        with patch("app.tools.rag_query._get_hybrid_retriever", AsyncMock(return_value=retriever)):
-            result = await rag_query(query="x", kb_id="kb-1")
-        assert result["count"] == 0
-        assert retriever.hybrid_search.await_args.kwargs["tenant_id"] == "t-real"
+        with (
+            patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
+            patch(
+                "app.tools.kb.answer_question",
+                AsyncMock(side_effect=ProviderUnavailable("provider 未配置")),
+            ),
+        ):
+            result = await kb_search("kb-1", "q")
+        assert result["error"] == "provider 未配置"
+        assert result["provider"] == "cloud"

@@ -1316,10 +1316,6 @@ def _setup_routes(app: FastAPI) -> None:
     app.post("/v1/agent/interrupt")(agent_interrupt)
     app.post("/v1/agent/answer")(agent_answer)
 
-    # ── 知识库（模块级路由函数） ──
-    app.post("/v1/kb/build")(kb_build)
-    app.post("/v1/kb/query")(kb_query)
-
     # ── 网关管理（模型热切换、熔断器重置） ──
     @app.post("/v1/gateway/sync-routes")
     async def gateway_sync_routes() -> Any:
@@ -2017,67 +2013,6 @@ async def agent_answer(
         return {"ok": False, "error": "stale run token"}
     resolved = await runtime.submit_answer(tool_call_id, answer)
     return {"ok": resolved}
-
-
-async def kb_build(
-    request: Request,
-    gateway: Any = Depends(get_gateway),
-) -> Any:
-    """文档 RAG 索引 — SSE 流式进度"""
-    import base64
-    import json
-
-    from app.rag.builder import RAGBuilder
-
-    body = await request.json()
-    content_raw = body.get("content", "")
-    try:
-        content_bytes = base64.b64decode(content_raw)
-    except Exception:
-        content_bytes = content_raw.encode("utf-8")
-
-    builder = RAGBuilder(llm_gateway=gateway)
-
-    async def event_generator() -> AsyncIterator[Any]:
-        try:
-            async for event in builder.build_document(
-                kb_id=body.get("kb_id", ""),
-                doc_id=body.get("doc_id", ""),
-                content=content_bytes,
-                file_type=body.get("file_type", ""),
-                filename=body.get("filename", ""),
-                tenant_id=body.get("tenant_id", ""),
-                vector_db=body.get("vector_db", "milvus"),
-            ):
-                yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
-        except Exception as e:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
-
-    return StreamingResponse(
-        event_generator(),
-        media_type="text/event-stream",
-        headers={"Cache-Control": "no-cache"},
-    )
-
-
-async def kb_query(
-    request: Request,
-    gateway: Any = Depends(get_gateway),
-) -> Any:
-    """查询知识库"""
-    from app.rag.builder import RAGBuilder
-
-    body = await request.json()
-    builder = RAGBuilder(llm_gateway=gateway)
-    results = await builder.query(
-        kb_id=body.get("kb_id", ""),
-        query=body.get("query", ""),
-        top_k=body.get("top_k", 5),
-        threshold=body.get("threshold", 0.5),
-        vector_db=body.get("vector_db", "milvus"),
-        tenant_id=body.get("tenant_id", "") or "",
-    )
-    return {"success": True, "results": results, "count": len(results)}
 
 
 async def _run_retention_cleaner(redis: aioredis.Redis | None = None) -> None:

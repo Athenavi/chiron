@@ -116,6 +116,12 @@ func registerProxyRoutes(
 	kbP := newProxy("/v1/kb", proxyOpt{logTag: "kb"})
 	mux.Handle("GET /v1/kb", authMW(kbRateMW(kbP(pathFn("/v1/kb")))))
 	mux.Handle("POST /v1/kb", authMW(kbRateMW(kbP(pathFn("/v1/kb")))))
+	// 用户级知识库设置（provider 二选一 + Cloud key 密文，由引擎侧加密落库）。
+	// 字面量路径比 /v1/kb/{id} 更具体，Go 1.22 ServeMux 按具体性匹配，不会被吃掉。
+	mux.Handle("GET /v1/kb/settings", authMW(kbRateMW(kbP(pathFn("/v1/kb/settings")))))
+	mux.Handle("PUT /v1/kb/settings", authMW(kbRateMW(kbP(pathFn("/v1/kb/settings")))))
+	mux.Handle("POST /v1/kb/settings/verify", authMW(kbRateMW(kbP(pathFn("/v1/kb/settings/verify")))))
+	mux.Handle("GET /v1/kb/admin/list", authMW(kbRateMW(kbP(pathFn("/v1/kb/admin/list")))))
 	mux.Handle("GET /v1/kb/{id}", authMW(kbRateMW(kbP(pathParam("/v1/kb")))))
 	mux.Handle("PUT /v1/kb/{id}", authMW(kbRateMW(kbP(pathParam("/v1/kb")))))
 	mux.Handle("DELETE /v1/kb/{id}", authMW(kbRateMW(kbP(pathParam("/v1/kb")))))
@@ -130,6 +136,10 @@ func registerProxyRoutes(
 	mux.Handle("GET /v1/kb/{id}/documents", authMW(kbRateMW(kbP(pathParamSuffix("/v1/kb", "/documents")))))
 	mux.Handle("POST /v1/kb/{id}/build", authMW(kbRateMW(kbP(pathParamSuffix("/v1/kb", "/build")))))
 	mux.Handle("POST /v1/kb/{id}/query", authMW(kbRateMW(kbP(pathParamSuffix("/v1/kb", "/query")))))
+	// 文档预览（两个路径参数，pathParamSuffix 只支持一个）
+	mux.Handle("GET /v1/kb/{id}/documents/{doc_id}/preview", authMW(kbRateMW(kbP(func(r *http.Request) string {
+		return "/v1/kb/" + r.PathValue("id") + "/documents/" + r.PathValue("doc_id") + "/preview"
+	}))))
 	// 知识库删除文档（P1 修复：Python 端已有 DELETE /{kb_id}/documents?doc_id=，
 	// 网关此前缺失该路由导致前端删除文档 404）
 	mux.Handle("PUT /v1/kb/{id}/visibility", authMW(kbRateMW(http.HandlerFunc(handleKBVisibility))))

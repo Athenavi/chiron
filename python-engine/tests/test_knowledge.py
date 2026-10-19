@@ -1,38 +1,70 @@
-"""Tests for knowledge base API endpoints."""
+"""知识库 API 单元测试（PageIndex 版）。
+
+只覆盖**不依赖外部服务**的部分：字段序列化、权限与 provider 一致性 gate、上传前校验。
+真实的索引/检索需要 LLM 凭据（P0 结论），由部署环境验证。
+
+旧的 wiki/rag 双分支用例整体退场：那两个分支连同 ``app/rag`` 一起被本轮重构删除。
+"""
+
+from __future__ import annotations
+
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 
+from app.api.knowledge import (
+    _content_type,
+    _serialize_doc,
+    _serialize_kb,
+    build_knowledge_base,
+    create_knowledge_base,
+    list_knowledge_bases,
+    put_user_settings,
+    query_knowledge_base,
+    upload_document,
+)
+from app.knowledge.providers.base import STATUS_READY, HealthResult
+from app.knowledge.settings_store import UserKnowledgeSettings
 
-@pytest.fixture
-def mock_pool():
-    """Mock asyncpg pool."""
-    pool = AsyncMock()
-    return pool
 
-
-@pytest.fixture
-def mock_user_id():
-    return "test-user-123"
-
-
-# ── Shared row factories ──
-
-def _make_kb_row(**overrides):
-    """Build a knowledge_bases row dict with sensible defaults."""
+def _kb_row(**overrides):
     base = {
         "id": "kb-1",
-        "name": "My KB",
-        "description": "desc",
-        "type": "wiki",
+        "name": "KB",
+        "description": "d",
+        "provider": "selfhosted",
         "visibility": "private",
-        "status": "active",
+        "status": "disabled",
         "document_count": 0,
         "total_size_bytes": 0,
         "credits_consumed": 0,
         "config": None,
+        "error_message": None,
+        "created_at": datetime(2026, 1, 1),
+        "updated_at": datetime(2026, 1, 1),
+        "tenant_id": "t1",
+        "user_id": "u1",
+        "index_ref": "",
+    }
+    base.update(overrides)
+    return base
+
+
+def _doc_row(**overrides):
+    base = {
+        "id": "doc-1",
+        "knowledge_base_id": "kb-1",
+        "name": "a.pdf",
+        "file_type": "pdf",
+        "file_size_bytes": 10,
+        "page_count": 3,
+        "status": "ready",
+        "pageindex_doc_id": "pi-1",
+        "error_message": None,
+        "metadata": None,
+        "storage_key": "t1/kb-1/doc-1/a.pdf",
         "created_at": datetime(2026, 1, 1),
         "updated_at": datetime(2026, 1, 1),
     }
@@ -40,806 +72,189 @@ def _make_kb_row(**overrides):
     return base
 
 
-# ═══════════════════════════════════════════════════
-# LIST tests (existing)
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeList:
-    """Tests for GET /v1/kb endpoint."""
-
-    async def test_list_returns_empty_when_no_pool(self):
-        with patch("app.api.knowledge.get_pool", side_effect=RuntimeError("no pool")):
-            from app.api.knowledge import list_knowledge_bases
-            result = await list_knowledge_bases(user_id="u1")
-            assert result == {"knowledge_bases": [], "count": 0}
-
-    async def test_list_returns_user_and_public_kbs(self, mock_pool):
-        mock_rows = [
-            _make_kb_row(id="kb-1", name="My KB", visibility="private"),
-            _make_kb_row(id="kb-2", name="Public KB", type="rag", visibility="public"),
-        ]
-        mock_pool.fetch = AsyncMock(return_value=mock_rows)
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import list_knowledge_bases
-            result = await list_knowledge_bases(user_id="u1")
-
-        assert result["count"] == 2
-        assert result["knowledge_bases"][0]["id"] == "kb-1"
-        assert result["knowledge_bases"][1]["id"] == "kb-2"
-
-    async def test_list_queries_with_correct_params(self, mock_pool):
-        mock_pool.fetch = AsyncMock(return_value=[])
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import list_knowledge_bases
-            await list_knowledge_bases(user_id="user-abc")
-
-        call_args = mock_pool.fetch.call_args
-        query = call_args[0][0]
-        assert "user_id = $1" in query
-        assert "visibility = 'public'" in query
-        # 租户共享（visibility='tenant'）必须带租户条件：少了它，"租户内共享"
-        # 就退化成"全站共享" —— 任何租户的用户都能列出并读取别人的知识库。
-        assert "tenant_id = $2" in query, "tenant 可见性缺少租户条件"
-        assert call_args[0][1] == "user-abc"
-        # 未显式传租户时回落到默认租户（保守），而不是"不过滤"。
-        from app.api.knowledge import DEFAULT_TENANT_ID
-
-        assert call_args[0][2] == DEFAULT_TENANT_ID
+def _settings(provider: str = "selfhosted") -> UserKnowledgeSettings:
+    return UserKnowledgeSettings(user_id="u1", tenant_id="t1", provider=provider)
 
 
-class TestKnowledgeTenantScope:
-    """SEC-11 回归：租户共享的可见范围必须限定在同租户内。"""
+# ── 序列化 ──
 
-    async def test_list_uses_caller_tenant(self):
-        mock_pool = AsyncMock()
-        mock_pool.fetch = AsyncMock(return_value=[])
 
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import list_knowledge_bases
+def test_serialize_kb_exposes_provider_semantics() -> None:
+    out = _serialize_kb(_kb_row())
+    assert out["provider"] == "selfhosted"
+    assert out["status"] == "disabled"
+    assert out["error_message"] == ""
+    assert "type" not in out  # 旧字段必须消失，否则前端会继续按 wiki/rag 分流
+    assert out["created_at"].startswith("2026-01-01")
 
-            await list_knowledge_bases(user_id="user-abc", tenant_id="tenant-xyz")
 
-        assert mock_pool.fetch.call_args[0][2] == "tenant-xyz"
+def test_serialize_doc_exposes_pageindex_fields() -> None:
+    out = _serialize_doc(_doc_row())
+    assert out["pageindex_doc_id"] == "pi-1"
+    assert out["page_count"] == 3
+    assert "chunk_count" not in out
 
-    async def test_get_requires_tenant_match(self):
-        mock_pool = AsyncMock()
-        mock_pool.fetchrow = AsyncMock(return_value=None)
 
-        from fastapi import HTTPException
+def test_content_type_mapping() -> None:
+    assert _content_type("a.pdf", "") == "application/pdf"
+    assert _content_type("a.unknownext", "") == "application/octet-stream"
 
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import get_knowledge_base
 
-            with pytest.raises(HTTPException) as exc:
-                await get_knowledge_base("kb-1", "user-abc", tenant_id="tenant-xyz")
+# ── 列表 / 可用性 ──
 
-        assert exc.value.status_code == 404
-        query = mock_pool.fetchrow.call_args[0][0]
-        assert "tenant_id = $3" in query, "按 id 直读也必须校验租户"
 
-    async def test_create_records_caller_tenant(self):
-        mock_pool = AsyncMock()
-        mock_pool.execute = AsyncMock(return_value=None)
+async def test_list_without_pool_returns_empty() -> None:
+    with patch("app.api.knowledge.get_pool", side_effect=RuntimeError("no pool")):
+        assert await list_knowledge_bases("u1") == {"knowledge_bases": [], "count": 0}
 
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import create_knowledge_base
 
+# ── 创建：provider 二选一 ──
+
+
+async def test_create_requires_provider_choice() -> None:
+    with patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=None)):
+        with pytest.raises(HTTPException) as exc:
+            await create_knowledge_base(user_id="u1", tenant_id="t1", name="KB")
+    assert exc.value.status_code == 400
+    assert "provider" in exc.value.detail
+
+
+async def test_create_rejects_unknown_provider() -> None:
+    with patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings())):
+        with pytest.raises(HTTPException) as exc:
             await create_knowledge_base(
-                user_id="user-abc", name="KB", tenant_id="tenant-xyz"
+                user_id="u1", tenant_id="t1", name="KB", provider="pinecone"
             )
-
-        # INSERT 的 tenant_id 必须是真实租户，否则查询端永远匹配不上
-        assert "tenant-xyz" in mock_pool.execute.call_args[0]
+    assert exc.value.status_code == 400
 
 
-# ═══════════════════════════════════════════════════
-# CREATE tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeCreate:
-    """Tests for POST /v1/kb endpoint."""
-
-    async def test_create_kb_returns_id(self, mock_pool):
-        mock_pool.execute = AsyncMock(return_value="INSERT 0 1")
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import create_knowledge_base
-            result = await create_knowledge_base(
-                user_id="u1",
-                name="New KB",
-                description="some desc",
-                kb_type="wiki",
-                visibility="private",
+async def test_create_rejects_provider_mismatch() -> None:
+    with patch(
+        "app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings("selfhosted"))
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await create_knowledge_base(
+                user_id="u1", tenant_id="t1", name="KB", provider="cloud"
             )
-
-        assert "id" in result
-        assert result["name"] == "New KB"
-        assert result["type"] == "wiki"
-        assert result["visibility"] == "private"
-        # Verify pool.execute was called with the INSERT
-        mock_pool.execute.assert_called_once()
-        call_args = mock_pool.execute.call_args
-        assert "INSERT INTO knowledge_bases" in call_args[0][0]
-
-    async def test_create_rejects_empty_name(self, mock_pool):
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import create_knowledge_base
-            with pytest.raises(HTTPException) as exc_info:
-                await create_knowledge_base(user_id="u1", name="")
-            assert exc_info.value.status_code == 400
-            assert "name" in exc_info.value.detail.lower()
-
-    async def test_create_rejects_invalid_type(self, mock_pool):
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import create_knowledge_base
-            with pytest.raises(HTTPException) as exc_info:
-                await create_knowledge_base(user_id="u1", name="Valid", kb_type="invalid")
-            assert exc_info.value.status_code == 400
-            assert "type" in exc_info.value.detail.lower()
+    assert exc.value.status_code == 409
 
 
-# ═══════════════════════════════════════════════════
-# GET tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeGet:
-    """Tests for GET /v1/kb/{kb_id} endpoint."""
-
-    async def test_get_kb_by_id(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=_make_kb_row(id="kb-42", name="Found KB"))
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import get_knowledge_base
-            result = await get_knowledge_base(kb_id="kb-42", user_id="u1")
-
-        assert result["id"] == "kb-42"
-        assert result["name"] == "Found KB"
-        mock_pool.fetchrow.assert_called_once()
-
-    async def test_get_kb_not_found(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=None)
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import get_knowledge_base
-            with pytest.raises(HTTPException) as exc_info:
-                await get_knowledge_base(kb_id="nonexistent", user_id="u1")
-            assert exc_info.value.status_code == 404
-
-
-# ═══════════════════════════════════════════════════
-# UPDATE tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeUpdate:
-    """Tests for PUT /v1/kb/{kb_id} endpoint."""
-
-    async def test_update_kb_name(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=_make_kb_row(id="kb-1", user_id="u1", visibility="private"))
-        mock_pool.execute = AsyncMock(return_value="UPDATE 1")
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import update_knowledge_base
-            result = await update_knowledge_base(
-                kb_id="kb-1",
-                user_id="u1",
-                name="Updated Name",
+async def test_create_rejects_bad_visibility() -> None:
+    with patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings())):
+        with pytest.raises(HTTPException) as exc:
+            await create_knowledge_base(
+                user_id="u1", tenant_id="t1", name="KB", visibility="everyone"
             )
-
-        assert result["id"] == "kb-1"
-        assert result["updated"] is True
-        # Verify the UPDATE query was executed
-        mock_pool.execute.assert_called_once()
-        call_args = mock_pool.execute.call_args
-        assert "UPDATE knowledge_bases" in call_args[0][0]
-        assert "name = $1" in call_args[0][0]
+    assert exc.value.status_code == 400
 
 
-# ═══════════════════════════════════════════════════
-# DELETE tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeDelete:
-    """Tests for DELETE /v1/kb/{kb_id} endpoint."""
-
-    async def test_delete_own_kb(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value={"id": "kb-1", "user_id": "u1"})
-        mock_pool.execute = AsyncMock(return_value="DELETE 1")
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import delete_knowledge_base
-            result = await delete_knowledge_base(kb_id="kb-1", user_id="u1")
-
-        assert result["id"] == "kb-1"
-        assert result["deleted"] is True
-        mock_pool.execute.assert_called_once()
-
-    async def test_delete_not_found(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=None)
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import delete_knowledge_base
-            with pytest.raises(HTTPException) as exc_info:
-                await delete_knowledge_base(kb_id="nonexistent", user_id="u1")
-            assert exc_info.value.status_code == 404
+async def test_create_persists_user_provider() -> None:
+    pool = AsyncMock()
+    pool.execute = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=_kb_row(provider="cloud"))
+    with (
+        patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings("cloud"))),
+        patch("app.api.knowledge.get_pool", return_value=pool),
+    ):
+        result = await create_knowledge_base(user_id="u1", tenant_id="t1", name="KB")
+    assert result["provider"] == "cloud"
+    # 落库的 provider 必须是用户当前设置，而不是请求里可能被篡改的值
+    assert "cloud" in pool.execute.await_args.args
 
 
-# ═══════════════════════════════════════════════════
-# DOCUMENT UPLOAD tests
-# ═══════════════════════════════════════════════════
+# ── 上传：类型在入库前就被拒绝 ──
 
-class TestDocumentUpload:
-    """Tests for POST /v1/kb/{kb_id}/documents endpoint."""
 
-    async def test_upload_document(self, mock_pool):
-        """Uploading a document inserts it and updates KB stats."""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "status": "active",
-            "user_id": "u1",
-            "tenant_id": "t-real",
-        })
-        mock_pool.execute = AsyncMock(return_value="INSERT 0 1")
+async def test_upload_rejects_unsupported_type() -> None:
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=_kb_row())
+    provider = MagicMock()
+    provider.supports = MagicMock(return_value=False)
+    with (
+        patch("app.api.knowledge.get_pool", return_value=pool),
+        patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings())),
+        patch(
+            "app.api.knowledge.registry.resolve_for_user",
+            AsyncMock(return_value=(provider, _settings(), HealthResult(True, STATUS_READY))),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await upload_document(kb_id="kb-1", user_id="u1", name="a.docx", content=b"x")
+    assert exc.value.status_code == 400
 
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import upload_document
-            result = await upload_document(
-                kb_id="kb-1",
-                user_id="u1",
-                name="readme.pdf",
-                file_type="pdf",
-                file_size_bytes=1024,
-            )
 
-        assert "id" in result
-        assert result["knowledge_base_id"] == "kb-1"
-        assert result["name"] == "readme.pdf"
-        assert result["file_type"] == "pdf"
-        assert result["file_size_bytes"] == 1024
-        assert result["status"] == "pending"
+async def test_upload_rejects_oversize_payload() -> None:
+    from app.api.knowledge import MAX_UPLOAD_BYTES
 
-        # Two SQL calls: INSERT doc + UPDATE KB stats
-        assert mock_pool.execute.call_count == 2
-        insert_call = mock_pool.execute.call_args_list[0]
-        assert "INSERT INTO knowledge_documents" in insert_call[0][0]
-        # 文档的租户必须跟着**父 KB**：过去恒写 DEFAULT_TENANT_ID，按真实租户过滤的检索
-        # 侧就永远找不到这些文档。
-        assert insert_call[0][2] == "t-real"
-        update_call = mock_pool.execute.call_args_list[1]
-        assert "UPDATE knowledge_bases" in update_call[0][0]
-        assert "document_count" in update_call[0][0]
-
-    async def test_upload_document_falls_back_when_kb_tenant_missing(self, mock_pool):
-        """KB 的 tenant_id 为 NULL（存量行）⇒ 退回默认租户，而不是写出空归属。"""
-        from app.api.knowledge import DEFAULT_TENANT_ID
-
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "status": "active",
-            "user_id": "u1",
-            "tenant_id": None,
-        })
-        mock_pool.execute = AsyncMock(return_value="INSERT 0 1")
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import upload_document
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=_kb_row())
+    provider = MagicMock()
+    provider.supports = MagicMock(return_value=True)
+    with (
+        patch("app.api.knowledge.get_pool", return_value=pool),
+        patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings())),
+        patch(
+            "app.api.knowledge.registry.resolve_for_user",
+            AsyncMock(return_value=(provider, _settings(), HealthResult(True, STATUS_READY))),
+        ),
+    ):
+        with pytest.raises(HTTPException) as exc:
             await upload_document(
-                kb_id="kb-1", user_id="u1", name="a.txt", file_type="txt", file_size_bytes=1
+                kb_id="kb-1",
+                user_id="u1",
+                name="a.pdf",
+                content=b"0" * (MAX_UPLOAD_BYTES + 1),
             )
-
-        assert mock_pool.execute.call_args_list[0][0][2] == DEFAULT_TENANT_ID
-
-    async def test_upload_rejects_building_kb(self, mock_pool):
-        """Upload must be rejected when KB status is 'building'."""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "status": "building",
-            "user_id": "u1",
-        })
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import upload_document
-            with pytest.raises(HTTPException) as exc_info:
-                await upload_document(
-                    kb_id="kb-1",
-                    user_id="u1",
-                    name="doc.txt",
-                    file_type="txt",
-                    file_size_bytes=100,
-                )
-            assert exc_info.value.status_code == 409
-            assert "building" in exc_info.value.detail.lower()
+    assert exc.value.status_code == 413
 
 
-# ═══════════════════════════════════════════════════
-# DOCUMENT LIST tests
-# ═══════════════════════════════════════════════════
-
-class TestDocumentList:
-    """Tests for GET /v1/kb/{kb_id}/documents endpoint."""
-
-    async def test_list_documents(self, mock_pool):
-        """Listing documents returns all docs for the KB."""
-        now = datetime(2026, 1, 1)
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "user_id": "u1",
-            "visibility": "private",
-        })
-        mock_pool.fetch = AsyncMock(return_value=[
-            {
-                "id": "doc-1",
-                "knowledge_base_id": "kb-1",
-                "name": "readme.pdf",
-                "file_url": "",
-                "file_type": "pdf",
-                "file_size_bytes": 1024,
-                "chunk_count": 0,
-                "status": "pending",
-                "error_message": "",
-                "metadata": None,
-                "created_at": now,
-            },
-            {
-                "id": "doc-2",
-                "knowledge_base_id": "kb-1",
-                "name": "notes.txt",
-                "file_url": "",
-                "file_type": "txt",
-                "file_size_bytes": 512,
-                "chunk_count": 0,
-                "status": "completed",
-                "error_message": "",
-                "metadata": None,
-                "created_at": now,
-            },
-        ])
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import list_documents
-            result = await list_documents(kb_id="kb-1", user_id="u1")
-
-        assert result["count"] == 2
-        assert result["documents"][0]["id"] == "doc-1"
-        assert result["documents"][0]["name"] == "readme.pdf"
-        assert result["documents"][1]["id"] == "doc-2"
-        assert result["documents"][1]["name"] == "notes.txt"
+# ── 索引与查询 gate ──
 
 
-# ═══════════════════════════════════════════════════
-# KB VISIBILITY GATE tests
-# ═══════════════════════════════════════════════════
+async def test_build_requires_documents() -> None:
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=_kb_row(document_count=0))
+    with patch("app.api.knowledge.get_pool", return_value=pool):
+        with pytest.raises(HTTPException) as exc:
+            await build_knowledge_base("kb-1", "u1")
+    assert exc.value.status_code == 400
 
-class TestKbVisibilityGate:
-    """文档/检索/预览三处 gate 必须与列表、详情同口径：自己的 / 公开的 / 同租户的。
 
-    过去这三处写成「不是 owner 就只有 public 放行」，于是 visibility='tenant' 的库
-    对任何租户的任何用户都开放（标题看不到、整篇文档却能整篇读走）；preview 那处
-    还把条件写反（`visibility != 'tenant'` 才拒），等于拒掉公开库、放行租户库。
-    """
+async def test_query_rejects_provider_mismatch() -> None:
+    pool = AsyncMock()
+    pool.fetchrow = AsyncMock(return_value=_kb_row(provider="selfhosted"))
+    with (
+        patch("app.api.knowledge.get_pool", return_value=pool),
+        patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=_settings("cloud"))),
+    ):
+        with pytest.raises(HTTPException) as exc:
+            await query_knowledge_base(kb_id="kb-1", user_id="u1", query="q")
+    assert exc.value.status_code == 409
 
-    @staticmethod
-    def _kb(**overrides):
-        row = {"id": "kb-1", "user_id": "u-owner", "visibility": "tenant", "tenant_id": "t-1"}
-        row.update(overrides)
-        return row
 
-    async def test_private_kb_denies_non_owner(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(visibility="private"))
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            with pytest.raises(HTTPException) as exc:
-                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
-        assert exc.value.status_code == 403
-        mock_pool.fetch.assert_not_awaited()  # 拒了就不再查文档
+async def test_query_rejects_empty_question() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await query_knowledge_base(kb_id="kb-1", user_id="u1", query="   ")
+    assert exc.value.status_code == 400
 
-    async def test_public_kb_allows_non_owner(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(visibility="public"))
-        mock_pool.fetch = AsyncMock(return_value=[])
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            result = await list_documents("kb-1", user_id="u-stranger", tenant_id="t-2")
-        assert result == {"documents": [], "count": 0}
 
-    async def test_tenant_kb_allows_same_tenant(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
-        mock_pool.fetch = AsyncMock(return_value=[])
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
-        mock_pool.fetch.assert_awaited_once()
+# ── 用户设置 ──
 
-    async def test_tenant_kb_denies_other_tenant(self, mock_pool):
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            with pytest.raises(HTTPException) as exc:
-                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-2")
-        assert exc.value.status_code == 403
 
-    async def test_blank_caller_tenant_matches_default_tenant(self, mock_pool):
-        """单租户部署：网关没注入 tenant → 按默认租户比对，仍能共享"""
-        from app.config import DEFAULT_TENANT_ID
+async def test_switch_provider_blocked_when_kbs_exist() -> None:
+    pool = AsyncMock()
+    pool.fetchval = AsyncMock(return_value=2)
+    with patch("app.api.knowledge.get_pool", return_value=pool):
+        with pytest.raises(HTTPException) as exc:
+            await put_user_settings(
+                user_id="u1", tenant_id="t1", provider="cloud", cloud_api_key="k"
+            )
+    assert exc.value.status_code == 409
 
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id=DEFAULT_TENANT_ID))
-        mock_pool.fetch = AsyncMock(return_value=[])
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            await list_documents("kb-1", user_id="u-stranger", tenant_id="")
-        mock_pool.fetch.assert_awaited_once()
 
-    async def test_null_kb_tenant_is_not_open_to_everyone(self, mock_pool):
-        """存量 NULL 租户的共享库不放行（gate 不会把「归属未知」当成「人人可见」）"""
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id=None))
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            with pytest.raises(HTTPException) as exc:
-                await list_documents("kb-1", user_id="u-stranger", tenant_id="t-1")
-        assert exc.value.status_code == 403
-
-    async def test_owner_reads_own_kb_across_tenants(self, mock_pool):
-        """owner 永远可读：归属判定看 user_id，与调用方租户无关"""
-        mock_pool.fetchrow = AsyncMock(return_value=self._kb(tenant_id="t-1"))
-        mock_pool.fetch = AsyncMock(return_value=[])
-        from app.api.knowledge import list_documents
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            await list_documents("kb-1", user_id="u-owner", tenant_id="t-9")
-        mock_pool.fetch.assert_awaited_once()
-
-    async def test_query_gate_matches_list_gate(self, mock_pool):
-        """检索侧与文档侧同一判定：跨租户查询直接 403，不触发任何检索"""
-        mock_pool.fetchrow = AsyncMock(
-            return_value={**self._kb(tenant_id="t-1"), "type": "wiki"}
+async def test_switch_provider_rejects_unknown_name() -> None:
+    with pytest.raises(HTTPException) as exc:
+        await put_user_settings(
+            user_id="u1", tenant_id="t1", provider="milvus", cloud_api_key="k"
         )
-        from app.api.knowledge import query_knowledge_base
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            with pytest.raises(HTTPException) as exc:
-                await query_knowledge_base(
-                    "kb-1", user_id="u-stranger", query="x", tenant_id="t-2"
-                )
-        assert exc.value.status_code == 403
-        mock_pool.fetch.assert_not_awaited()
-
-    async def test_preview_gate_allows_public_and_denies_foreign_tenant(self, mock_pool):
-        """preview 的反向条件已修正：公开库非 owner 可预览，跨租户共享库不行"""
-        from app.api.knowledge import preview_document
-
-        doc_row = {
-            "id": "d-1", "knowledge_base_id": "kb-1", "name": "a.txt", "file_type": "txt",
-            "file_size_bytes": 1, "chunk_count": 0, "status": "completed",
-            "error_message": "", "metadata": None, "created_at": datetime(2026, 1, 1),
-        }
-        mock_pool.fetch = AsyncMock(return_value=[])
-
-        def bind(kb_row):
-            async def _fetchrow(sql, *args):
-                return kb_row if "knowledge_bases" in sql else doc_row
-            return AsyncMock(side_effect=_fetchrow)
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            mock_pool.fetchrow = bind(self._kb(visibility="public"))
-            result = await preview_document(
-                "kb-1", "d-1", MagicMock(), user_id="u-stranger", tenant_id="t-2"
-            )
-            assert result["data"]["id"] == "d-1"
-
-            mock_pool.fetchrow = bind(self._kb(tenant_id="t-1"))
-            with pytest.raises(HTTPException) as exc:
-                await preview_document(
-                    "kb-1", "d-1", MagicMock(), user_id="u-stranger", tenant_id="t-2"
-                )
-        assert exc.value.status_code == 403
-
-
-# ═══════════════════════════════════════════════════
-# BUILD tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeBuild:
-    """Tests for POST /v1/kb/{kb_id}/build endpoint."""
-
-    async def test_build_calculates_cost(self, mock_pool):
-        """Building a wiki KB calculates cost with coefficient 0.5."""
-        mock_pool.fetchrow = AsyncMock(side_effect=[
-            # First call: KB row
-            _make_kb_row(
-                id="kb-1", type="wiki", document_count=3,
-                total_size_bytes=10000, user_id="u1",
-            ),
-            # Second call: user credits
-            {"credits": 500},
-        ])
-        mock_pool.execute = AsyncMock(return_value="UPDATE 1")
-
-        # Mock async context managers for acquire() and transaction()
-        mock_conn = AsyncMock()
-        mock_conn.execute = AsyncMock(return_value="UPDATE 1")
-
-        class _AcquireCM:
-            async def __aenter__(self):
-                return mock_conn
-            async def __aexit__(self, *a):
-                return False
-
-        class _TxnCM:
-            async def __aenter__(self):
-                return self
-            async def __aexit__(self, *a):
-                return False
-
-        mock_conn.transaction = MagicMock(return_value=_TxnCM())
-        mock_pool.acquire = MagicMock(return_value=_AcquireCM())
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import build_knowledge_base
-            result = await build_knowledge_base(kb_id="kb-1", user_id="u1")
-
-        assert result["status"] == "active"
-        assert result["doc_count"] == 3
-        assert result["type"] == "wiki"
-        # wiki: 10000 * 0.5 * 0.001 = 5.0
-        assert result["estimated_cost"] == 5.0
-
-        # Verify building→active lifecycle
-        build_call = mock_pool.execute.call_args
-        assert "building" in build_call[0][0]
-
-    async def test_build_rejects_empty_docs(self, mock_pool):
-        """Building a KB with no documents is rejected."""
-        mock_pool.fetchrow = AsyncMock(return_value=_make_kb_row(
-            id="kb-1", type="wiki", document_count=0,
-            total_size_bytes=0, user_id="u1",
-        ))
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from fastapi import HTTPException
-
-            from app.api.knowledge import build_knowledge_base
-            with pytest.raises(HTTPException) as exc_info:
-                await build_knowledge_base(kb_id="kb-1", user_id="u1")
-            assert exc_info.value.status_code == 400
-            assert "no documents" in exc_info.value.detail.lower()
-
-
-# ═══════════════════════════════════════════════════
-# QUERY tests
-# ═══════════════════════════════════════════════════
-
-class TestKnowledgeQuery:
-    """Tests for POST /v1/kb/{kb_id}/query endpoint."""
-
-    async def test_query_wiki(self, mock_pool):
-        """Querying a wiki KB performs full-text search with Chinese analyzer."""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "type": "wiki",
-            "user_id": "u1",
-            "visibility": "private",
-        })
-        mock_pool.fetch = AsyncMock(return_value=[
-            {
-                "id": "doc-1", "knowledge_base_id": "kb-1",
-                "name": "readme.pdf", "file_type": "pdf",
-                "status": "completed", "rank": 0.85,
-            },
-            {
-                "id": "doc-2", "knowledge_base_id": "kb-1",
-                "name": "guide.txt", "file_type": "txt",
-                "status": "completed", "rank": 0.42,
-            },
-        ])
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import query_knowledge_base
-            result = await query_knowledge_base(
-                kb_id="kb-1", user_id="u1", query="test query", top_k=5,
-            )
-
-        assert result["type"] == "wiki"
-        assert len(result["results"]) == 2
-        assert result["results"][0]["id"] == "doc-1"
-        assert result["results"][0]["rank"] == 0.85
-        assert result["results"][1]["id"] == "doc-2"
-
-        # Verify the SQL uses Chinese full-text search
-        call_args = mock_pool.fetch.call_args
-        query_sql = call_args[0][0]
-        assert "plainto_tsquery('chinese'" in query_sql
-        assert "ts_rank" in query_sql
-
-    async def test_query_wiki_converts_bytea_content_to_text(self, mock_pool):
-        """wiki 全文搜索必须先把 BYTEA 的 content 转回文本，否则真实库上 to_tsvector 报错。
-
-        knowledge_documents.content 是 BYTEA 列（异步 RAG 构建存原始字节），
-        直接对其调用 to_tsvector('chinese', content) 在 PostgreSQL 会报
-        'function to_tsvector(unknown, bytea) does not exist' 导致查询 500。
-        """
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "type": "wiki",
-            "user_id": "u1",
-            "visibility": "private",
-        })
-        mock_pool.fetch = AsyncMock(return_value=[])
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import query_knowledge_base
-            await query_knowledge_base(
-                kb_id="kb-1", user_id="u1", query="test", top_k=5,
-            )
-
-        call_args = mock_pool.fetch.call_args
-        query_sql = call_args[0][0]
-        # 不再把 bytea 直接传给 to_tsvector
-        assert "to_tsvector('chinese', COALESCE(content, ''))" not in query_sql
-        assert "convert_from(content, 'UTF8')" in query_sql
-
-    async def test_query_wiki_falls_back_to_empty_on_db_error(self, mock_pool):
-        """二进制文档无法按 UTF-8 解码时 to_tsvector 抛错，应降级返回空结果而非 500。"""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1",
-            "type": "wiki",
-            "user_id": "u1",
-            "visibility": "private",
-        })
-        mock_pool.fetch = AsyncMock(
-            side_effect=Exception('function to_tsvector(unknown, bytea) does not exist')
-        )
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import query_knowledge_base
-            result = await query_knowledge_base(
-                kb_id="kb-1", user_id="u1", query="test", top_k=5,
-            )
-
-        assert result["type"] == "wiki"
-        assert result["results"] == []
-
-    async def test_query_rag_uses_kb_scoped_builder(self, mock_pool):
-        """RAG 库查询走新栈：按 kb_id + 该库真实租户收窄。
-
-        旧 RAGRetriever 查的是共享 collection，只过滤 tenant_id —— 同租户其它
-        知识库的片段会串进结果，而新栈写进 kb_* 的向量它又读不到。
-        """
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1", "type": "rag", "user_id": "u1",
-            "visibility": "private", "tenant_id": "t-1",
-        })
-        fake_builder = MagicMock()
-        fake_builder.query = AsyncMock(return_value=[
-            {"id": "v1", "doc_id": "doc-1", "chunk_index": 3,
-             "content": "x" * 600, "score": 0.91234},
-        ])
-
-        with (
-            patch("app.api.knowledge.get_pool", return_value=mock_pool),
-            patch("app.main.get_gateway", new=AsyncMock(return_value=MagicMock())),
-            patch("app.rag.builder.RAGBuilder", return_value=fake_builder),
-        ):
-            from app.api.knowledge import query_knowledge_base
-            result = await query_knowledge_base(
-                kb_id="kb-1", user_id="u1", query="q", top_k=5,
-            )
-
-        kwargs = fake_builder.query.await_args.kwargs
-        assert kwargs["kb_id"] == "kb-1"
-        assert kwargs["tenant_id"] == "t-1"
-        hit = result["results"][0]
-        assert hit["document_id"] == "doc-1"
-        assert hit["chunk_index"] == 3
-        assert len(hit["content"]) == 500
-        assert hit["score"] == 0.9123
-
-    async def test_query_rag_failure_is_visible(self, mock_pool):
-        """检索失败要显式带出 error，不能伪装成"没命中"。"""
-        mock_pool.fetchrow = AsyncMock(return_value={
-            "id": "kb-1", "type": "rag", "user_id": "u1",
-            "visibility": "private", "tenant_id": "t-1",
-        })
-        fake_builder = MagicMock()
-        fake_builder.query = AsyncMock(side_effect=RuntimeError("milvus down"))
-
-        with (
-            patch("app.api.knowledge.get_pool", return_value=mock_pool),
-            patch("app.main.get_gateway", new=AsyncMock(return_value=MagicMock())),
-            patch("app.rag.builder.RAGBuilder", return_value=fake_builder),
-        ):
-            from app.api.knowledge import query_knowledge_base
-            result = await query_knowledge_base(
-                kb_id="kb-1", user_id="u1", query="q", top_k=5,
-            )
-
-        assert result["results"] == []
-        assert "milvus down" in result["error"]
-
-
-# ═══════════════════════════════════════════════════
-# ADMIN LIST tests
-# ═══════════════════════════════════════════════════
-
-class TestAdminList:
-    """Tests for GET /v1/kb/admin/list endpoint."""
-
-    async def test_admin_list_returns_public_kbs(self, mock_pool):
-        """Admin list returns only public knowledge bases."""
-        mock_rows = [
-            _make_kb_row(id="kb-1", name="Public Wiki", visibility="public", type="wiki"),
-            _make_kb_row(id="kb-2", name="Public RAG", visibility="public", type="rag"),
-        ]
-        mock_pool.fetch = AsyncMock(return_value=mock_rows)
-
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            from app.api.knowledge import admin_list_knowledge_bases
-            result = await admin_list_knowledge_bases()
-
-        assert result["count"] == 2
-        assert result["knowledge_bases"][0]["id"] == "kb-1"
-        assert result["knowledge_bases"][0]["name"] == "Public Wiki"
-        assert result["knowledge_bases"][0]["visibility"] == "public"
-        assert result["knowledge_bases"][1]["id"] == "kb-2"
-        assert result["knowledge_bases"][1]["name"] == "Public RAG"
-        assert result["knowledge_bases"][1]["visibility"] == "public"
-
-        # Verify the SQL filters only public
-        call_args = mock_pool.fetch.call_args
-        query_sql = call_args[0][0]
-        assert "visibility = 'public'" in query_sql
-        assert "user_id" not in query_sql  # no user filter for admin
-
-    async def test_admin_list_returns_empty_when_no_pool(self):
-        """Gracefully returns empty when no DB pool."""
-        with patch("app.api.knowledge.get_pool", side_effect=RuntimeError("no pool")):
-            from app.api.knowledge import admin_list_knowledge_bases
-            result = await admin_list_knowledge_bases()
-            assert result == {"knowledge_bases": [], "count": 0}
-
-    async def test_admin_list_rejects_non_admin_role(self):
-        """Route returns 403 when X-User-Role is not admin/owner."""
-        from fastapi import FastAPI
-        from starlette.testclient import TestClient
-
-        from app.api.knowledge import router
-
-        app = FastAPI()
-        app.include_router(router)
-        client = TestClient(app)
-
-        # No role header
-        response = client.get("/v1/kb/admin/list")
-        assert response.status_code == 403
-        assert "admin" in response.json()["detail"].lower()
-
-        # Wrong role
-        response = client.get("/v1/kb/admin/list", headers={"X-User-Role": "viewer"})
-        assert response.status_code == 403
-
-    async def test_admin_list_allows_admin_role(self, mock_pool):
-        """Route succeeds when X-User-Role is 'admin'."""
-        mock_pool.fetch = AsyncMock(return_value=[])
-
-        from fastapi import FastAPI
-
-        from app.api.knowledge import router
-
-        app = FastAPI()
-        app.include_router(router)
-
-        # Use httpx async client via starlette
-        from starlette.testclient import TestClient
-        with patch("app.api.knowledge.get_pool", return_value=mock_pool):
-            client = TestClient(app)
-            response = client.get("/v1/kb/admin/list", headers={"X-User-Role": "admin"})
-
-        assert response.status_code == 200
-        assert response.json()["count"] == 0
+    assert exc.value.status_code == 400

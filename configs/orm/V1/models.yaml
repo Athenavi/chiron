@@ -1253,11 +1253,10 @@ models:
         type: text
         description: 描述
         nullable: true
-      type:
+      provider:
         type: string
-        maxLength: 32
-        description: 类型
-        default: 'rag'
+        maxLength: 16
+        description: 检索 provider（selfhosted | cloud）
       visibility:
         type: string
         maxLength: 32
@@ -1266,8 +1265,8 @@ models:
       status:
         type: string
         maxLength: 32
-        description: 状态
-        default: 'active'
+        description: 状态（disabled | indexing | ready | error）
+        default: 'disabled'
       document_count:
         type: integer
         description: 文档数量
@@ -1295,11 +1294,15 @@ models:
         format: date-time
         description: 更新时间
         default: now()
-      doc_count:
-        type: integer
-        description: 文档计数
+      index_ref:
+        type: string
+        maxLength: 255
+        description: provider 侧的索引位置（自托管=索引目录，cloud=folder_id）
         nullable: true
-        default: 0
+      error_message:
+        type: text
+        description: 最近一次错误
+        nullable: true
 
   KnowledgeDocument:
     table: knowledge_documents
@@ -1341,10 +1344,10 @@ models:
         type: string
         maxLength: 255
         description: 文档名称
-      file_url:
+      storage_key:
         type: string
-        maxLength: 1024
-        description: 文件 URL
+        maxLength: 512
+        description: 原文在对象存储中的 key（不含 bucket）
         nullable: true
       file_type:
         type: string
@@ -1357,16 +1360,21 @@ models:
         db_type: bigint
         nullable: true
         default: 0
-      chunk_count:
+      page_count:
         type: integer
-        description: 分块数量
+        description: 页数（PageIndex 为页级索引）
         nullable: true
         default: 0
       status:
         type: string
-        maxLength: 32
-        description: 状态
+        maxLength: 16
+        description: 状态（pending | indexing | ready | error）
         default: 'pending'
+      pageindex_doc_id:
+        type: string
+        maxLength: 64
+        description: PageIndex 侧的文档 ID
+        nullable: true
       error_message:
         type: text
         description: 错误信息
@@ -1385,39 +1393,20 @@ models:
         format: date-time
         description: 更新时间
         default: now()
-      content:
-        type: string
-        format: binary
-        description: 二进制内容
-        nullable: true
 
-  KnowledgeChunk:
-    table: knowledge_chunks
+  UserKnowledgeSetting:
+    table: user_knowledge_settings
     orm: true
-    description: 知识库分块
+    description: 用户级知识库 provider 设置（自托管 / Cloud 二选一）
     properties:
-      id:
+      user_id:
         type: string
         format: uuid
         maxLength: 36
-        description: 分块 ID
+        description: 用户 ID
         primary_key: true
-        default: gen_random_uuid()
-      document_id:
-        type: string
-        format: uuid
-        maxLength: 36
-        description: 文档 ID
         foreign_key: true
-        fk_table: knowledge_documents
-        fk_column: id
-      knowledge_base_id:
-        type: string
-        format: uuid
-        maxLength: 36
-        description: 知识库 ID
-        foreign_key: true
-        fk_table: knowledge_bases
+        fk_table: users
         fk_column: id
       tenant_id:
         type: string
@@ -1427,25 +1416,47 @@ models:
         foreign_key: true
         fk_table: tenants
         fk_column: id
-      chunk_index:
-        type: integer
-        description: 分块索引
-      content:
-        type: text
-        description: 内容
-      metadata:
-        type: object
-        description: 元数据（JSONB）
-        default: '{}'
-      search_vector:
+      provider:
         type: string
-        format: tsvector
-        description: 搜索向量
+        maxLength: 16
+        description: selfhosted | cloud
+      cloud_api_key_enc:
+        type: text
+        description: 'Cloud API key 密文（v1: + base64(nonce||ct||tag)）'
+        nullable: true
+      cloud_key_hash:
+        type: string
+        maxLength: 64
+        description: 密钥指纹（展示 / 去重，不可逆）
+        nullable: true
+      cloud_folder_id:
+        type: string
+        maxLength: 64
+        description: PageIndex Cloud 上的用户级 folder id（以 user_id 命名；非安全边界，见迁移 0024）
+        nullable: true
+      status:
+        type: string
+        maxLength: 16
+        description: disabled | active | invalid
+        default: 'disabled'
+      last_checked_at:
+        type: string
+        format: date-time
+        description: 最近一次探测时间
+        nullable: true
+      error_message:
+        type: text
+        description: 最近一次错误
         nullable: true
       created_at:
         type: string
         format: date-time
         description: 创建时间
+        default: now()
+      updated_at:
+        type: string
+        format: date-time
+        description: 更新时间
         default: now()
 
   Session:

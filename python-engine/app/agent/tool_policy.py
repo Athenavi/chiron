@@ -51,7 +51,7 @@ _READ_TOOLS: frozenset[str] = frozenset(
     {
         "read_file", "read_image", "ls", "glob_files", "grep_files", "search_files", "file_analyzer",
         "git_status", "git_log", "git_diff",
-        "kb_list", "kb_search", "rag_query", "knowledge",
+        "kb_list", "kb_search", "knowledge",
         "memory_search", "recall",
         "skill_list", "skill_discover", "skill_run",
         "mode_list", "graph_templates",
