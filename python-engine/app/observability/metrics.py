@@ -153,6 +153,19 @@ SUBAGENT_LINE_SWEEP = Counter(
     "drained = 优雅退出时主动释放的条数, failed = 清扫本身失败（不阻断判定，预留仍会自然到期）",
     ["outcome"],
 )
+SUBAGENT_LINE_PROJECTION = Counter(
+    "subagent_line_projection_total",
+    "M18 在途预留的重述（shadow 默认只算不写）：off = 开关关掉, shadow = 算了没写, "
+    "seeded = 这条 run 本来没有预留、这次写上, raised / lowered / flat = 相对上一条的方向, "
+    "skipped = 没有样本（还没花钱）⇒ 一个字都不写, failed = 写 Redis 失败（沿用旧预留）",
+    ["outcome"],  # 标签必须有界：与 SUBAGENT_LINE_SWEEP 同一理由
+)
+SUBAGENT_LINE_PROJECTION_TOKENS = Histogram(
+    "subagent_line_projection_tokens",
+    "M18 重述后那条预留的值（切换 SUBAGENT_LINE_PROJECTION=enforce 前要先看这一条的分布： "
+    "它决定同一条线允许的并发在途量会不会被放大）",
+    buckets=[1_000, 5_000, 20_000, 50_000, 100_000, 200_000, 500_000, 1_000_000, 2_000_000],
+)
 INTERACTION_CREATE_FAILED = Counter(
     "interaction_create_failed_total",
     "Pending-interaction tickets that could not be written —— 一次"

@@ -34,6 +34,27 @@ sorted set 以**到期时刻为 score**、读时先按 score 清，崩溃留下�
 "读不到别人的存活键"根本不构成证据，照删等于把全站的在途预留扫空 —— 少算（上限失效）正是这条
 账最坏的一类静默。滚动升级期间没有第三段的旧 member 不参与清扫，仍由 score 收口。
 
+**在途预留为什么会过时**（M18）：预留只在派发时写一次，值是"这一 run 的 per-run token 上限"
+—— 而那是一个**猜**：上限已知时它是个确定上界（一个 run 不可能花超自己的上限），未知时
+（token 轴为 0 = 不限）**干脆不写**。于是同一条线上并发的其它 run 永远只看到一个静态数字，
+这个 run 真实花了多少只有它自己知道；再叠加上 ``RESERVE_TTL_SECONDS`` 到点蒸发（跑满 1h 的
+合法 run 会中途失去预留），"在途那一段"就是论文 §5.2 ② 那笔系统性少算的主要来源。
+
+现在预留是**覆盖式重述**的：:meth:`LineLedger.project` 把这一 run 的预留改写成
+``已花 + 投影余量``，投影 = 观测速率 × ``PROJECTION_LOOKAHEAD_SECONDS``（速率分母最小
+``PROJECTION_MIN_SAMPLE_SECONDS``，否则一个 1 秒的样本能外推出 60 倍），上限夹在 per-run
+token 上限（已知时），下限不许低于已花。**没有样本就不预测**：``spent`` 为 0 时一个字都不写，
+派发时那份 seed 原样保留 —— 宁可沿用"确定上界"，也不编一个数。参照 K8s APF 的"按观测到的
+demand 周期性重算动态并发上限（floor / ceiling 夹住）"与 Stripe 预聚合的"同一窗口后写覆盖前写"。
+重述顺带把 score 推到 ``now + RESERVE_TTL`` ⇒ **活着的** run 不再因为跑得久而丢掉预留，而死了的
+由 M17 的清扫当场摘掉（两件事合起来才自洽：刷新让长 run 不被误当成幽灵，清扫让幽灵不被刷新
+当成活人）。
+
+⚠ **代价要说清**：派发时的 seed 是确定上界，重述之后它变成估计。一个"花得比上限慢"的 run
+对同线其它 run 的可见量会**下降** ⇒ 同一条线允许的并发在途变多。这是"双向覆盖"相对"只升不降"
+的取舍（换到的是在途那一段不再是盲区）。因此默认 **shadow**（``SUBAGENT_LINE_PROJECTION``）：
+只算、只打点，**不写、不改判定**；看过 ``subagent_line_projection_*`` 的分布再按部署切 enforce。
+
 **fail-open**：任何一步问不出来（没有租户、PG 不可用、列还没迁移）都返回 ``None`` / 放行。
 线账是第二道闸门，不是唯一一道；反过来 fail-closed 会让一次 PG 抖动停掉全站子 Agent，代价与
 收益不符 —— 与 ``internal/api/ent_quota_enforce.go`` 的 ``consume()`` 同一取向（那里也是
@@ -48,7 +69,12 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from app.observability.metrics import SUBAGENT_LINE_GATE, SUBAGENT_LINE_SWEEP
+from app.observability.metrics import (
+    SUBAGENT_LINE_GATE,
+    SUBAGENT_LINE_PROJECTION,
+    SUBAGENT_LINE_PROJECTION_TOKENS,
+    SUBAGENT_LINE_SWEEP,
+)
 from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
@@ -70,6 +96,17 @@ PAUSE_REASON_BUDGET = "budget_exhausted"
 #: 真要一条不限的线，由运维把 ``cap_tokens`` 直接写成 ``-1``（API 故意不开这个口子：
 #: "把上限关掉"和"这次多给一点"是两个决定，前者不该由一张待办的一次答复完成）。
 MAX_CAP_TOKENS = 10**12
+
+#: 投影窗口（秒）：``重述值 = 已花 + 观测速率 × 这一条``。
+#: 判据是"必须明显宽于重述的节拍"—— 节拍是每一次带用量的模型调用（≈一个回合，实测 10s
+#: 量级），取 120s ⇒ 两次重述之间，这条预留不会先于真实花销见底。
+PROJECTION_LOOKAHEAD_SECONDS = 120
+#: 速率的分母下限（秒）。没有它，一个 1 秒的样本就能把 5k token 外推成 60 倍 ——
+#: 而猜大了会误拦同一条线上的其它 run（预留是别人的账）。
+PROJECTION_MIN_SAMPLE_SECONDS = 30
+#: ``SUBAGENT_LINE_PROJECTION`` 的取值与默认。默认 shadow 的理由写在模块头"代价要说清"那段。
+PROJECTION_MODES = ("off", "shadow", "enforce")
+DEFAULT_PROJECTION_MODE = "shadow"
 
 
 def _rowcount(result: Any) -> int:
@@ -198,6 +235,40 @@ if redis.call('ZCARD', key) == 0 then redis.call('DEL', key) end
 return removed
 """
 
+# 预留的**覆盖式重述**（M18）：把这一 run 在 Redis 里的那条（些）预留摘掉，换上
+# `member<TAB>新 tokens<TAB>持有者`，并把 score 推到新的到期时刻。
+#
+# 按**第一段**匹配而不是整条 member：重述本来就是要换掉那条 member（tokens 就编在名字里），
+# 拿旧串去 `ZREM` 只能摘掉"自己写的那一版"，一旦中途重述过就会留下几条同 run 的预留并存 ——
+# 求和把同一段花销数好几遍（**多算**，会把一条正常的线判死）。所以这里把所有 `who` 命中的
+# 都摘掉、把它们的 tokens 相加返回（"上一条是多少"只用来报方向，判定不读它）。
+#
+# 一次 EVAL 只碰一个键（KeyRing V2 的 CROSSSLOT 教训同上），且顺带做完过期清理与 EXPIRE，
+# 与 `_RSVD_LUA` 的收尾口径一致：空了就 DEL，不留"存在但为 0"的键。
+_RSVD_RESTATE_LUA = """
+local key = KEYS[1]
+local now = tonumber(ARGV[1])
+local who = ARGV[2]
+local member = ARGV[3]
+local prior = 0
+local members = redis.call('ZRANGE', key, 0, -1)
+for i = 1, #members do
+  local m = members[i]
+  local p = string.find(m, '\\t', 1, true)
+  if p and string.sub(m, 1, p - 1) == who then
+    local rest = string.sub(m, p + 1)
+    local q = string.find(rest, '\\t', 1, true)
+    if q then rest = string.sub(rest, 1, q - 1) end
+    prior = prior + (tonumber(rest) or 0)
+    redis.call('ZREM', key, m)
+  end
+end
+redis.call('ZREMRANGEBYSCORE', key, '-inf', now)
+redis.call('ZADD', key, tonumber(ARGV[4]), member)
+redis.call('EXPIRE', key, tonumber(ARGV[5]))
+return prior
+"""
+
 # 镜像缺失时的回填：**只在键不存在时**写（NX）。已经存在的值可能是并发 run 刚 INCRBY 过的，
 # 覆盖它会把那段实际用量抹掉（**少算**，是这条线最坏的一侧）。
 _USED_BACKFILL_LUA = """
@@ -230,6 +301,19 @@ def default_cap() -> int:
     return _env_int("SUBAGENT_LINE_MAX_TOKENS", DEFAULT_LINE_MAX_TOKENS)
 
 
+def projection_mode() -> str:
+    """预留重述的开关（``SUBAGENT_LINE_PROJECTION``）：``off`` / ``shadow`` / ``enforce``。
+
+    默认 **shadow**：算、打点，但不写 Redis、不改判定。理由见模块头"代价要说清"那一段 ——
+    重述把派发时那份"确定上界"换成估计，一个花得比上限慢的 run 会让同线的其它 run 看到
+    **更小**的预留，于是允许的并发在途变多。这个开关是给运维看过
+    ``subagent_line_projection_tokens`` 的分布之后、**按部署**切 enforce 用的。
+    取不到或不认识的值一律回落到默认（与 ``_env_int`` 同一口径：配置写错不该改变判定）。
+    """
+    raw = (os.getenv("SUBAGENT_LINE_PROJECTION") or "").strip().lower()
+    return raw if raw in PROJECTION_MODES else DEFAULT_PROJECTION_MODE
+
+
 def _usable_root(root: str) -> bool:
     """run id 会进 Redis 键名与 Lua 参数 —— 只接受自己的 id 字符集。
 
@@ -249,6 +333,26 @@ def _holder_of(member: str) -> str:
     """
     parts = member.split(_TAB)
     return parts[2] if len(parts) >= 3 else ""
+
+
+def projected_tokens(*, spent: int, elapsed_seconds: float, per_run_cap: int) -> int:
+    """这一 run 该让同线其它 run 看见的预留 = 已花 + 观测速率 × 投影窗口。
+
+    返回 ``0`` = **不预测**（还没有样本）：调用方据此什么都不写，派发时那份 seed 原样保留 ——
+    宁可沿用"确定上界"，也不编一个数。
+
+    两道夹紧都是方向性的：上限夹在 per-run token 上限（已知时 —— 一个 run 不可能花超自己的
+    上限，超出那部分不是"这条线多出来的风险"），下限不许低于已花（重述绝不能把**已经花掉的**
+    钱变得看不见）。per_run_cap 为 0（不限）时只有下限，投出去的是一个纯估计。
+    """
+    spent = max(0, int(spent or 0))
+    if spent <= 0:
+        return 0
+    sample = max(float(elapsed_seconds or 0.0), float(PROJECTION_MIN_SAMPLE_SECONDS))
+    projected = spent + int(spent / sample * PROJECTION_LOOKAHEAD_SECONDS)
+    if per_run_cap > 0:
+        projected = min(projected, int(per_run_cap))
+    return max(projected, spent)
 
 
 @dataclass(frozen=True)
@@ -285,6 +389,25 @@ class LineState:
             f"root={self.root} settled={self.settled} reserved={self.reserved} "
             f"cap={cap} paused={int(self.paused)}{(':' + self.pause_reason) if self.pause_reason else ''}"
         )
+
+
+def _handle_for(member: str, tokens: int) -> str:
+    """预留 member 的字段协议只有一个写法：``member<TAB>tokens<TAB>持有者``。
+
+    ``reserve`` 与 ``project`` 都从这里拼串 —— 两处各拼一遍迟早和 ``_holder_of`` / Lua 脚本
+    对字段的解释漂移（而那条漂移的方向是"预留按 0 计"= 上限静默失效）。
+
+    持有者来自部署配置（``INSTANCE_ID`` / ``POD_NAME``），**不保证**符合 id 字符集：一个带 TAB
+    的值会把 member 的字段协议拆坏（``_holder_of`` 读出前缀 ⇒ 问错存活键、按错 holder 删，
+    本实例在跑的预留会被自己扫掉）。不署名的退化是安全的：照旧计入求和、只由 score 收口，
+    与滚动升级期间老实例写的两段 member 完全同形。
+    """
+    from app.subagent.affinity import cached_instance_id
+
+    holder = cached_instance_id()
+    if not _usable_root(holder):
+        holder = ""
+    return f"{member}{_TAB}{tokens}{_TAB}{holder}" if holder else f"{member}{_TAB}{tokens}"
 
 
 class LineLedger:
@@ -577,8 +700,6 @@ class LineLedger:
         第三段是**持有者实例 id**（M17）：清扫与 drain 都按它收账。句柄本身就带着三段，所以
         ``settle`` 只要把句柄原样还回来就行，不需要第二个索引。
         """
-        from app.subagent.affinity import cached_instance_id
-
         tokens = int(tokens or 0)
         # member 与 root 走同一份字符集校验：它同样拼进 TAB 分隔的 member 里，一个带 TAB 的
         # id 会把自己那条记录拆成两段（``who`` 变成前缀、tokens 解析成 0），预留就此失明。
@@ -587,14 +708,7 @@ class LineLedger:
         redis = await self._redis_safe()
         if redis is None:
             return ""
-        # 持有者来自部署配置（`INSTANCE_ID` / `POD_NAME`），**不保证**符合 id 字符集：一个带 TAB
-        # 的值会把 member 的字段协议拆坏（`_holder_of` 读出前缀 ⇒ 问错存活键、按错 holder 删，
-        # 本实例在跑的预留会被自己扫掉）。不署名的退化是安全的：照旧计入求和、只由 score 收口，
-        # 与滚动升级期间老实例写的两段 member 完全同形。
-        holder = cached_instance_id()
-        if not _usable_root(holder):
-            holder = ""
-        handle = f"{member}{_TAB}{tokens}{_TAB}{holder}" if holder else f"{member}{_TAB}{tokens}"
+        handle = _handle_for(member, tokens)
         now = int(time.time())
         try:
             await redis.eval(
@@ -614,6 +728,86 @@ class LineLedger:
         if len(self._held) < MAX_TRACKED_HANDLES:
             self._held[handle] = root
         return handle
+
+    async def project(
+        self,
+        root: str,
+        tenant_id: str,
+        *,
+        member: str,
+        handle: str,
+        spent: int,
+        elapsed_seconds: float,
+        per_run_cap: int = 0,
+    ) -> str:
+        """M18：把这一 run 的在途预留**覆盖式重述**成 ``已花 + 投影余量``。
+
+        返回值是**后续该用的句柄**：改成新值时是新句柄，什么都没动时原样还回 ``handle``。
+        调用方必须把返回值写回去 —— 预留的 tokens 就编在 member 的名字里，重述等于换了一条
+        member；继续拿旧句柄去 ``ZREM`` 会摘不掉，那条旧预留会占满一个 ``RESERVE_TTL``
+        （**多算**，同线的派发会被误拦）。
+
+        ``handle`` 可以为空：per-run token 轴不限时派发不写 seed（见 :meth:`reserve`），
+        那正是"在途那一段完全看不见"的另一半 —— 有样本就照样补一条纯估计的预留上去。
+
+        **返回原句柄 = 这次没改**，五种情形都是：``off``、``shadow``（默认：算、打点、不写）、
+        没有样本（``spent`` 为 0 ⇒ 不编数）、键不合字符集、Redis 写失败（沿用旧预留，
+        它仍在求和里，方向是**多算** = 安全的一侧）。
+        """
+        mode = projection_mode()
+        if mode == "off":
+            SUBAGENT_LINE_PROJECTION.labels(outcome="off").inc()
+            return handle
+        if not _usable_root(root) or not _usable_root(member) or not tenant_id:
+            return handle
+        projected = projected_tokens(
+            spent=spent, elapsed_seconds=elapsed_seconds, per_run_cap=per_run_cap
+        )
+        if projected <= 0:
+            SUBAGENT_LINE_PROJECTION.labels(outcome="skipped").inc()
+            return handle
+        SUBAGENT_LINE_PROJECTION_TOKENS.observe(projected)
+        if mode != "enforce":
+            SUBAGENT_LINE_PROJECTION.labels(outcome="shadow").inc()
+            return handle
+        redis = await self._redis_safe()
+        if redis is None:
+            return handle
+        new_handle = _handle_for(member, projected)
+        now = int(time.time())
+        try:
+            prior = int(
+                await redis.eval(
+                    _RSVD_RESTATE_LUA,
+                    1,
+                    _rsv_key(root),
+                    str(now),
+                    member,
+                    new_handle,
+                    str(now + RESERVE_TTL_SECONDS),
+                    str(RESERVE_TTL_SECONDS),
+                )
+                or 0
+            )
+        except Exception as exc:  # noqa: BLE001
+            SUBAGENT_LINE_PROJECTION.labels(outcome="failed").inc()
+            self._warn(
+                "rsvproj",
+                "subagent 线账预留重述失败（此后不再重复告警，沿用派发时那份）: %s",
+                str(exc)[:160],
+            )
+            return handle
+        # 登记簿跟着换：drain 按 root 逐线摘，旧句柄留在册上只会让 MAX_TRACKED_HANDLES 先满
+        self._held.pop(handle, None)
+        if len(self._held) < MAX_TRACKED_HANDLES:
+            self._held[new_handle] = root
+        direction = (
+            "seeded"
+            if not handle
+            else ("raised" if projected > prior else ("lowered" if projected < prior else "flat"))
+        )
+        SUBAGENT_LINE_PROJECTION.labels(outcome=direction).inc()
+        return new_handle
 
     async def set_control(
         self,

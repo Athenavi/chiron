@@ -38,6 +38,8 @@ from app.subagent.line_ledger import (
     LineState,
     _usable_root,
     default_cap,
+    projected_tokens,
+    projection_mode,
 )
 
 _REDIS_URL = (
@@ -253,6 +255,22 @@ class _StubLedger:
     async def reserve(self, root: str, tenant_id: str, member: str, tokens: int) -> str:
         self.calls.append(("reserve", root, member, tokens))
         return f"{member}{_TAB}{tokens}"
+
+    async def project(
+        self,
+        root: str,
+        tenant_id: str,
+        *,
+        member: str,
+        handle: str,
+        spent: int,
+        elapsed_seconds: float,
+        per_run_cap: int = 0,
+    ) -> str:
+        self.calls.append(("project", root, tenant_id, member, handle, spent, per_run_cap))
+        # 替身必须**换**句柄：tokens 编在 member 名字里，重述就是换一条 member（runner 要把
+        # 返回值接住传给 settle，否则收尾摘不掉 —— 那正是本套件要钉住的接线）
+        return f"{member}{_TAB}{spent + 100}"
 
     async def settle(self, root: str, handle: str, actual_tokens: int) -> None:
         self.calls.append(("settle", root, handle, actual_tokens))
@@ -528,6 +546,231 @@ class TestRedisOrchestration:
         )
         assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=99) == ""
         assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=100) == "line_tokens"
+
+
+# ── M18：在途预留的覆盖式重述（投影）───────────────────────────────────
+
+
+class TestProjectionMath:
+    """`projected_tokens` 是纯函数：两道夹紧的方向，以及"没样本就不编数"都在这里判。"""
+
+    def test_no_sample_projects_nothing(self) -> None:
+        """``spent=0`` ⇒ 返回 0 = **不写**：宁可沿用派发时那份确定上界，也不编一个数。"""
+        assert projected_tokens(spent=0, elapsed_seconds=100, per_run_cap=200_000) == 0
+
+    def test_a_negative_reading_is_not_a_sample(self) -> None:
+        assert projected_tokens(spent=-5_000, elapsed_seconds=10, per_run_cap=200_000) == 0
+
+    def test_ceiling_is_the_per_run_cap(self) -> None:
+        """一个 run 不可能花超自己的上限 ⇒ 超出那部分不是"这条线多出来的风险"。"""
+        assert projected_tokens(spent=180_000, elapsed_seconds=1, per_run_cap=200_000) == 200_000
+
+    def test_a_very_slow_run_projects_to_just_what_was_spent(self) -> None:
+        """跑了很久、速率很慢 ⇒ 投影就贴着"已花"：这条线看见的是真实速度，不是猜的上限。"""
+        assert projected_tokens(spent=9_000, elapsed_seconds=10**9, per_run_cap=200_000) == 9_000
+
+    def test_floor_is_what_was_already_spent(self) -> None:
+        """夹紧的顺序不能反：先夹上限，再保证不低于**已花**。
+
+        碰得到的一档是"上限比已花还小"（cap 被调低、或接管段读回来的用量已超过本段上限）——
+        少了这一道，重述会把已经花掉的钱从同线其它 run 的视野里抹掉（少算，不安全的一侧）。
+        """
+        assert projected_tokens(spent=300_000, elapsed_seconds=60, per_run_cap=200_000) == 300_000
+
+    def test_a_one_second_sample_does_not_extrapolate_sixty_fold(self) -> None:
+        """速率分母有下限：开局 1 秒的 6k token 若按 1s 算，会被投成 60 倍。"""
+        short = projected_tokens(spent=6_000, elapsed_seconds=1, per_run_cap=0)
+        floored = projected_tokens(
+            spent=6_000, elapsed_seconds=ledger_mod.PROJECTION_MIN_SAMPLE_SECONDS, per_run_cap=0
+        )
+        assert short == floored == 30_000
+
+    def test_unlimited_per_run_axis_has_no_ceiling(self) -> None:
+        """per-run token 轴不限 ⇒ 只剩下限，投出去的是一个纯估计（这仍比"完全看不见"好）。"""
+        assert projected_tokens(spent=400_000, elapsed_seconds=60, per_run_cap=0) == 1_200_000
+
+    def test_a_backwards_clock_does_not_inflate_the_rate(self) -> None:
+        """``elapsed`` 为负（改过时钟 / 单调钟混用）不能把速率算成负数把预留抹掉。"""
+        assert projected_tokens(spent=3_000, elapsed_seconds=-500, per_run_cap=0) == 15_000
+
+
+class TestProjectionSwitch:
+    def test_default_is_shadow(self, monkeypatch) -> None:
+        monkeypatch.delenv("SUBAGENT_LINE_PROJECTION", raising=False)
+        assert projection_mode() == "shadow"
+
+    @pytest.mark.parametrize("raw", ["ENFORCE", " enforce "])
+    def test_recognised_values_are_normalised(self, monkeypatch, raw: str) -> None:
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", raw)
+        assert projection_mode() == "enforce"
+
+    @pytest.mark.parametrize("raw", ["", "always", "1"])
+    def test_unknown_values_fall_back_to_the_default(self, monkeypatch, raw: str) -> None:
+        """配置写错不该改变判定（与 `_env_int` 同一口径）。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", raw)
+        assert projection_mode() == "shadow"
+
+
+def _projection_outcome(outcome: str) -> float:
+    """按标签读 M18 计数器的当前值（取**增量**：进程起点不由本文件决定）。"""
+    from app.observability.metrics import SUBAGENT_LINE_PROJECTION
+
+    return SUBAGENT_LINE_PROJECTION.labels(outcome=outcome)._value.get()
+
+
+def _projection_observed_sum() -> float:
+    """投影直方图的累计观测和 —— "有没有真的算出一个值"只有这里看得见。"""
+    from app.observability.metrics import SUBAGENT_LINE_PROJECTION_TOKENS
+
+    return SUBAGENT_LINE_PROJECTION_TOKENS._sum.get()
+
+
+class TestReserveRestate:
+    """重述的**编排**：什么时候写、发哪条脚本、失败退回什么、句柄怎么换。
+
+    脚本的算术（同 ``who`` 的旧条目摘干净没有、score 推没推）不在这里判 —— 桩不解释 Lua，
+    那是 ``TestRealRedisSemantics`` 的职责（与本文件开头同一分层取舍）。
+    """
+
+    #: `_RSVD_RESTATE_LUA` 独有的标志子串（`_RSVD_LUA` 里没有 `who` 这个变量名）
+    MARKER = "local who = ARGV[2]"
+
+    async def test_shadow_computes_but_writes_nothing(self, monkeypatch) -> None:
+        monkeypatch.delenv("SUBAGENT_LINE_PROJECTION", raising=False)
+        redis = _FakeRedis()
+        led = _ledger(redis=redis)
+        sum_before = _projection_observed_sum()
+        seed = f"sub_a{_TAB}200000{_TAB}engine-A"
+        out = await led.project(
+            "rs_root", "t1", member="sub_a", handle=seed,
+            spent=5_000, elapsed_seconds=20, per_run_cap=200_000,
+        )
+        assert out == seed, "shadow 不改判定也不改账：句柄原样还回"
+        assert redis.calls == []
+        assert _projection_observed_sum() == sum_before + 25_000, (
+            "shadow 唯一的可见效果就是打点：没有它，运维无法知道投影值长什么样，"
+            "也就没有切 enforce 的依据"
+        )
+
+    async def test_off_does_not_even_compute(self, monkeypatch) -> None:
+        """`off` 与 `shadow` 的分工只在**打点**上可辨：一个连算都不算，一个算而不写。
+
+        运维是靠 `subagent_line_projection_total{outcome=...}` 判断开关落在哪一档的，所以
+        "off 也顺手算一份、往直方图里 observe 一笔"必须是红的 —— 那会在明确关掉了这个特性的
+        部署里长出数据，看起来正好像"shadow 在跑"。
+        """
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "off")
+        redis = _FakeRedis()
+        led = _ledger(redis=redis)
+        off_before = _projection_outcome("off")
+        shadow_before = _projection_outcome("shadow")
+        sum_before = _projection_observed_sum()
+        assert (
+            await led.project(
+                "rs_root", "t1", member="sub_a", handle="h", spent=5_000, elapsed_seconds=20
+            )
+            == "h"
+        )
+        assert redis.calls == []
+        assert (_projection_outcome("off"), _projection_outcome("shadow")) == (
+            off_before + 1,
+            shadow_before,
+        )
+        assert _projection_observed_sum() == sum_before, "没算就不该有投影值"
+
+    async def test_no_sample_writes_nothing(self, monkeypatch) -> None:
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        redis = _FakeRedis()
+        led = _ledger(redis=redis)
+        seed = f"sub_a{_TAB}200000"
+        assert (
+            await led.project(
+                "rs_root", "t1", member="sub_a", handle=seed,
+                spent=0, elapsed_seconds=5, per_run_cap=200_000,
+            )
+            == seed
+        )
+        assert redis.calls == []
+
+    async def test_enforce_sends_the_restate_script_and_returns_a_new_handle(
+        self, monkeypatch
+    ) -> None:
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        _set_holder(monkeypatch, "engine-A")
+        redis = _FakeRedis(result="200000")  # 上一条 = 派发时那份 seed
+        led = _ledger(redis=redis)
+        seed = f"sub_a{_TAB}200000{_TAB}engine-A"
+        out = await led.project(
+            "rs_root", "t1", member="sub_a", handle=seed,
+            spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
+        )
+        assert out == f"sub_a{_TAB}30000{_TAB}engine-A"
+        args = redis.args_for(self.MARKER)
+        assert len(args) == 1
+        key, now, who, member, expiry, ttl = args[0]
+        assert key.endswith("subagent:line:rs_root:rsv")
+        assert who == "sub_a", "按第一段匹配旧条目，不是拿整条 member 去 ZREM"
+        assert member == out and ttl == str(ledger_mod.RESERVE_TTL_SECONDS)
+        assert int(expiry) > int(now)
+
+    async def test_a_run_that_was_never_seeded_still_gets_a_reservation(
+        self, monkeypatch
+    ) -> None:
+        """per-run token 轴不限 ⇒ 派发**不写** seed，而"这一 run 在途时完全看不见"正是
+        §5.2 ② 的另一半：有样本就照样补一条纯估计的预留上去。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        _set_holder(monkeypatch, "engine-A")
+        redis = _FakeRedis(result="0")
+        led = _ledger(redis=redis)
+        out = await led.project(
+            "rs_root", "t1", member="sub_a", handle="",
+            spent=4_000, elapsed_seconds=60, per_run_cap=0,
+        )
+        assert out == f"sub_a{_TAB}12000{_TAB}engine-A"
+
+    async def test_write_failure_keeps_the_old_handle(self, monkeypatch) -> None:
+        """Redis 抖了不改账：原样还回旧句柄（那条预留仍在求和里，方向是**多算**），也不抛。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        led = _ledger(redis=_FakeRedis(error=True))
+        seed = f"sub_a{_TAB}200000"
+        assert (
+            await led.project(
+                "rs_root", "t1", member="sub_a", handle=seed,
+                spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
+            )
+            == seed
+        )
+
+    @pytest.mark.parametrize(
+        "root,member,tenant",
+        [("bad\troot", "sub_a", "t1"), ("rs_root", "sub\tA", "t1"), ("rs_root", "sub_a", "")],
+    )
+    async def test_unusable_keys_never_reach_redis(
+        self, monkeypatch, root: str, member: str, tenant: str
+    ) -> None:
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        redis = _FakeRedis()
+        led = _ledger(redis=redis)
+        assert (
+            await led.project(
+                root, tenant, member=member, handle="h", spent=6_000, elapsed_seconds=30
+            )
+            == "h"
+        )
+        assert redis.calls == []
+
+    async def test_the_shutdown_registry_follows_the_new_handle(self, monkeypatch) -> None:
+        """`_held` 里只能留**当前在 Redis 上那一版**：旧句柄留在册上，`settle` 就永久摘不掉它，
+        登记簿只涨不落（`MAX_TRACKED_HANDLES` 那道上界迟早把新 run 的登记挤掉，drain 失明）。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        _set_holder(monkeypatch, "engine-A")
+        led = _ledger(redis=_FakeRedis(result="200000"))
+        seed = await led.reserve("rs_root", "t1", "sub_a", 200_000)
+        out = await led.project(
+            "rs_root", "t1", member="sub_a", handle=seed,
+            spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
+        )
+        assert list(led._held) == [out]
 
 
 # ── M17：死实例预留的清扫 ───────────────────────────────────────────────
@@ -936,6 +1179,7 @@ class TestRunnerWiring:
         monkeypatch.setattr(ledger_mod, "get_line_ledger", lambda: stub)
         seen: dict[str, Any] = {}
         tickets: list[dict[str, Any]] = []
+        flushes: list[str] = []
 
         async def _create(**kwargs: Any) -> str:
             tickets.append(kwargs)
@@ -952,8 +1196,8 @@ class TestRunnerWiring:
             async def add_step(self, *args: Any, **kwargs: Any) -> None:
                 return None
 
-            async def flush_steps(self, *args: Any, **kwargs: Any) -> None:
-                return None
+            async def flush_steps(self, run_id: str, *args: Any, **kwargs: Any) -> None:
+                flushes.append(run_id)
 
             async def finish_run(self, *a: Any, **kw: Any) -> None:
                 seen["finish_kwargs"] = kw
@@ -985,6 +1229,7 @@ class TestRunnerWiring:
         )
         seen["ledger_calls"] = list(stub.calls)
         seen["tickets"] = tickets
+        seen["flushes"] = flushes
         return seen
 
     async def test_line_root_reaches_the_runtime_and_is_reserved(self, monkeypatch) -> None:
@@ -1068,6 +1313,44 @@ class TestRunnerWiring:
 
         seen = await self._drive(monkeypatch, store_root="rs_root", ledger=_Boom())
         assert seen["subagent_line"] == "rs_root"  # 线根照样传下去了，只是没预留成
+
+    # ── M18：花了钱就当场把这一格刷新（冲刷步骤缓冲 + 重述预留）──
+
+    async def test_usage_flushes_the_steps_and_restates_the_reservation(
+        self, monkeypatch
+    ) -> None:
+        """两件一起挂在**带用量的事件**上，因为它们是同一笔账的两半：崩在半路时，
+        补账只认**已落库**的步骤行，而同线其它 run 只认 Redis 上那条预留。
+        留在派发时那一格 = §5.2 ② 那笔系统性少算。"""
+        seen = await self._drive(monkeypatch, store_root="rs_root")
+        kinds = [c[0] for c in seen["ledger_calls"]]
+        assert kinds == ["reserve", "project", "settle"], "顺序也是口径：预留要一直活着到收尾"
+        assert len(seen["flushes"]) == 1
+        (proj,) = [c for c in seen["ledger_calls"] if c[0] == "project"]
+        assert proj[1:3] == ("rs_root", "t1")
+        assert proj[3] == seen["task_id"], "member 与 reserve 用同一个键（task.id）"
+        assert proj[4] == f"{seen['task_id']}{_TAB}200000", "带进去的是派发时那份 seed"
+        assert proj[5:7] == (15, 200_000), "spent = 这一段看到的用量，cap = per-run token 上限"
+
+    async def test_settle_uses_the_restatement_handle(self, monkeypatch) -> None:
+        """句柄**会换**：tokens 编在 member 名字里，重述就是换一条 member。收尾拿旧句柄去
+        `ZREM` 摘不掉新那条 ⇒ 它要占满一个 `RESERVE_TTL`，同线的派发被误拦（多算的一侧）。"""
+        seen = await self._drive(monkeypatch, store_root="rs_root")
+        (settle,) = [c for c in seen["ledger_calls"] if c[0] == "settle"]
+        assert settle[2] == f"{seen['task_id']}{_TAB}115"  # = 替身 project 返回的新句柄
+
+    async def test_events_without_usage_do_not_move_the_ledger(self, monkeypatch) -> None:
+        """只带工具/错误的事件不刷：token 只在每次模型调用结束时出现一次，逐条事件都刷
+        等于给工具流付两倍往返，而账上什么也没多。"""
+        seen = await self._drive(monkeypatch, store_root="rs_root", error="tool_blew_up")
+        assert [c for c in seen["ledger_calls"] if c[0] == "project"] == []
+        assert seen["flushes"] == []
+
+    async def test_no_line_means_no_restatement(self, monkeypatch) -> None:
+        """落库不可用 ⇒ 没有线，也就没有可重述的预留（与"不假装有一条线"同一口径）。"""
+        seen = await self._drive(monkeypatch, store_root="")
+        assert [c for c in seen["ledger_calls"] if c[0] == "project"] == []
+        assert seen["flushes"] == []
 
     # ── M15c：越界 ⇒ 暂停这条线 + 挂出一张提额待办 ──
 
@@ -1473,6 +1756,111 @@ class TestRealRedisSemantics:
             assert await redis_client.zrange(key, 0, -1) == [f"sub_dead{_TAB}700{_TAB}engine-gone"]
         finally:
             await redis_client.delete(key)
+
+    # ── M18：覆盖式重述的实际算术 ────────────────────────────────────────
+
+    async def test_a_restatement_replaces_the_seed_instead_of_adding_to_it(
+        self, redis_client, monkeypatch
+    ) -> None:
+        """重述必须**换掉**旧那条：两条并存会一起进同线其它 run 的求和，200k 的 seed 加 30k 的
+        投影 = 230k —— 一个 run 占了两个 run 的量（**多算**，会把一条正常的线判死）。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        root = _root_id("proj")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        led = self._ledger(redis_client)
+        seed = await led.reserve(root, "t1", "sub_a", 200_000)
+        out = await led.project(
+            root,
+            "t1",
+            member="sub_a",
+            handle=seed,
+            spent=6_000,
+            elapsed_seconds=30,
+            per_run_cap=200_000,
+        )
+        assert out == f"sub_a{_TAB}30000{_TAB}{self.HOLDER}"
+        assert await redis_client.zrange(key, 0, -1) == [out]
+        state = await led.state(root, "t1")
+        assert state is not None and state.reserved == 30_000, "别的 run 看得见的是投影值"
+        own = await led.state(root, "t1", exclude_run_id="sub_a")
+        assert own is not None and own.reserved == 0, "自己那份仍按实际 token 计，不能再算预留"
+        await led.settle(root, out, 0)
+        assert await redis_client.exists(key) == 0, "摘干净就该把键收掉"
+
+    async def test_a_legacy_two_segment_member_is_restated_too(
+        self, redis_client, monkeypatch
+    ) -> None:
+        """匹配只看第一段 ⇒ 老实例（或 shadow 期）写的两段 member 也换得掉，即使数值没变。
+
+        这一条同时钉住"值不变也要重述"：留着那条没署名的，本实例退出时无从按 holder 摘它。
+        """
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        root = _root_id("projleg")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        await redis_client.zadd(key, {f"sub_a{_TAB}1000": int(time.time()) + 600})
+        led = self._ledger(redis_client)
+        out = await led.project(
+            root,
+            "t1",
+            member="sub_a",
+            handle="",
+            spent=1_000,
+            elapsed_seconds=10**6,
+            per_run_cap=0,
+        )
+        assert out == f"sub_a{_TAB}1000{_TAB}{self.HOLDER}"
+        assert await redis_client.zrange(key, 0, -1) == [out]
+
+    async def test_a_restatement_leaves_other_runs_reservations_alone(
+        self, redis_client, monkeypatch
+    ) -> None:
+        """同一条线上别的 run 的预留一条不动：那是它们各自的账。"""
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        root = _root_id("projpeer")
+        led = self._ledger(redis_client)
+        assert await led.reserve(root, "t1", "sub_a", 200_000)
+        peer = await led.reserve(root, "t1", "sub_b", 50_000)
+        out = await led.project(
+            root,
+            "t1",
+            member="sub_a",
+            handle=f"sub_a{_TAB}200000{_TAB}{self.HOLDER}",
+            spent=6_000,
+            elapsed_seconds=30,
+            per_run_cap=200_000,
+        )
+        state = await led.state(root, "t1", exclude_run_id="sub_b")
+        assert state is not None and state.reserved == 30_000, "剔掉 sub_b 后只剩重述过的那条"
+        both = await led.state(root, "t1")
+        assert both is not None and both.reserved == 80_000
+        await led.settle(root, out, 0)
+        await led.settle(root, peer, 0)
+
+    async def test_a_restatement_pushes_the_expiry_forward(
+        self, redis_client, monkeypatch
+    ) -> None:
+        """跑得久的合法 run 不该中途丢掉预留：重述顺带把 score 推到 ``now + RESERVE_TTL``。
+
+        与 M17 的清扫是同一枚硬币的两面 —— 刷新让长 run 不被误当成幽灵，清扫让幽灵不被
+        刷新当成活人。这里手工把 score 压到"马上到期"，重述后必须回到一小时的窗口。
+        """
+        monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
+        root = _root_id("projttl")
+        key = _rkey(f"subagent:line:{root}:rsv")
+        await redis_client.zadd(key, {f"sub_a{_TAB}1000{_TAB}{self.HOLDER}": int(time.time()) + 5})
+        led = self._ledger(redis_client)
+        out = await led.project(
+            root,
+            "t1",
+            member="sub_a",
+            handle=f"sub_a{_TAB}1000{_TAB}{self.HOLDER}",
+            spent=8_000,
+            elapsed_seconds=60,
+            per_run_cap=200_000,
+        )
+        score = await redis_client.zscore(key, out)
+        assert score is not None
+        assert score > time.time() + ledger_mod.RESERVE_TTL_SECONDS - 60
 
     async def test_drain_releases_only_this_instances_reservations(self, redis_client) -> None:
         """优雅退出：本实例在册的两条线都腾空，别的实例在同一条线上的预留一条不动。"""
