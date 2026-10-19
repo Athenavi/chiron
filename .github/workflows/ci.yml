@@ -233,7 +233,7 @@ jobs:
       # （compose 缺失时直接报错）必须在 `.env.example` 出现（**注释形态也算** —— 模板里
       # 可选/推荐项本来就是注释的）。判据是**先量过假阳性率**才定的：compose 引用了 29 个变量，
       # 但只有 **7** 个是 `:?`，其余 22 个都带 `:-默认值`（可选覆盖）；若要求"全部 29 个都要有文档"，
-      # 会为 9 个**有默认值**的可选变量报假阳性（S3_BUCKET / VECTOR_DB_TYPE / MILVUS_ADDRESS …，
+      # 会为 9 个**有默认值**的可选变量报假阳性（S3_BUCKET / MEMORY_VECTOR_BACKEND / MILVUS_ADDRESS …，
       # 而 `.env.example` 自己写明"业务/基础设施配置已迁移至后台「系统设置」"）—— 那种守卫会惩罚
       # **正确的文档**。已做变异验证（拿掉 `#JWT_SECRET=` ⇒ exit 1 并点名）。
       - name: Compose required env vars are documented

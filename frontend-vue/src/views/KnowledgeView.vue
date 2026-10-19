@@ -18,9 +18,10 @@ interface KnowledgeBase {
   id: string
   name: string
   description: string
-  type: 'wiki' | 'rag'
+  provider: 'selfhosted' | 'cloud'
   visibility: 'public' | 'private' | 'tenant'
-  status: string
+  status: 'disabled' | 'indexing' | 'ready' | 'error'
+  error_message?: string
   document_count: number
   total_size_bytes: number
   credits_consumed: number
@@ -36,14 +37,14 @@ const searchQuery = ref('')
 // 创建表单
 const showCreateModal = ref(false)
 const createForm = ref({
-  name: '', description: '', type: 'wiki' as 'wiki' | 'rag', visibility: 'private' as 'public' | 'private',
+  name: '', description: '', visibility: 'private' as 'public' | 'private',
 })
 const creating = ref(false)
 
 // 编辑表单
 const showEditModal = ref(false)
 const editingKb = ref<KnowledgeBase | null>(null)
-const editForm = ref({ name: '', description: '', type: 'wiki' as 'wiki' | 'rag', visibility: 'private' as 'public' | 'private' })
+const editForm = ref({ name: '', description: '', visibility: 'private' as 'public' | 'private' })
 const saving = ref(false)
 const visibilityTogglingId = ref('')
 
@@ -108,7 +109,7 @@ async function createKnowledgeBase() {
     await api.post('/v1/kb', createForm.value)
     message.success(t('knowledge.knowledge_base_created_successfully'))
     showCreateModal.value = false
-    createForm.value = { name: '', description: '', type: 'wiki', visibility: 'private' }
+    createForm.value = { name: '', description: '', visibility: 'private' }
     await loadKnowledgeBases()
   } catch (e) {
     message.error(serverErrorDetail(e, t('errors.creation_failed')))
@@ -120,7 +121,7 @@ async function createKnowledgeBase() {
 function openEdit(kb: KnowledgeBase) {
   editingKb.value = kb
   // 编辑弹窗只管理 私有/公开；团队共享态映射为 private（团队共享由独立开关切换）
-  editForm.value = { name: kb.name, description: kb.description, type: kb.type, visibility: kb.visibility === 'tenant' ? 'private' : kb.visibility }
+  editForm.value = { name: kb.name, description: kb.description, visibility: kb.visibility === 'tenant' ? 'private' : kb.visibility }
   showEditModal.value = true
 }
 
@@ -186,6 +187,18 @@ function formatDate(iso: string): string {
   const d = new Date(iso)
   if (isNaN(d.getTime())) return ''
   return d.toLocaleDateString('zh-CN', { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+// 库状态：disabled/indexing/ready/error（0023 迁移的取值集合）
+function statusColor(status: string): string {
+  if (status === 'ready') return 'green'
+  if (status === 'indexing') return 'processing'
+  if (status === 'error') return 'red'
+  return 'default'
+}
+
+function statusLabel(status: string): string {
+  return t(`knowledge.status_${status || 'disabled'}`)
 }
 </script>
 
@@ -280,10 +293,10 @@ function formatDate(iso: string): string {
                 <span class="kb-desc">{{ kb.description || $t('common.no_description') }}</span>
               </div>
               <Tag
-                :color="kb.type === 'rag' ? 'success' : 'blue'"
+                :color="kb.provider === 'cloud' ? 'geekblue' : 'cyan'"
                 class="type-tag"
               >
-                {{ kb.type.toUpperCase() }}
+                {{ kb.provider === 'cloud' ? 'Cloud' : $t('knowledge.provider_selfhosted_short') }}
               </Tag>
               <Tag
                 v-if="kb.visibility === 'tenant'"
@@ -296,8 +309,8 @@ function formatDate(iso: string): string {
             <div class="kb-stats">
               <span class="stat"><FileTextOutlined /> {{ $t('knowledge.n_docs', { n: kb.document_count }) }}</span>
               <span class="stat"><DatabaseOutlined /> {{ formatSize(kb.total_size_bytes) }}</span>
-              <Tag :color="kb.status === 'active' ? 'green' : kb.status === 'building' ? 'processing' : 'default'">
-                {{ kb.status }}
+              <Tag :color="statusColor(kb.status)">
+                {{ statusLabel(kb.status) }}
               </Tag>
               <Tag
                 v-if="usageLabel(kb.id)"
@@ -458,15 +471,8 @@ function formatDate(iso: string): string {
           />
         </div>
         <div class="form-row">
-          <label class="form-label">{{ $t('common.type') }}</label>
-          <Radio.Group v-model:value="createForm.type">
-            <Radio value="wiki">
-              {{ $t('knowledge.wiki_full_text_search') }}
-            </Radio>
-            <Radio value="rag">
-              {{ $t('knowledge.rag_vector_q_a') }}
-            </Radio>
-          </Radio.Group>
+          <label class="form-label">{{ $t('knowledge.provider') }}</label>
+          <span class="form-static">{{ $t('knowledge.provider_follows_settings') }}</span>
         </div>
         <div class="form-row">
           <label class="form-label">{{ $t('common.visibility') }}</label>
@@ -506,17 +512,6 @@ function formatDate(iso: string): string {
             v-model:value="editForm.description"
             :rows="2"
           />
-        </div>
-        <div class="form-row">
-          <label class="form-label">{{ $t('common.type') }}</label>
-          <Radio.Group v-model:value="editForm.type">
-            <Radio value="wiki">
-              Wiki
-            </Radio>
-            <Radio value="rag">
-              RAG
-            </Radio>
-          </Radio.Group>
         </div>
         <div class="form-row">
           <label class="form-label">{{ $t('common.visibility') }}</label>

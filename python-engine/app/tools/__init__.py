@@ -29,7 +29,6 @@ import app.tools.media  # noqa: F401
 import app.tools.memory  # noqa: F401
 import app.tools.mode_admin  # noqa: F401
 import app.tools.pm  # noqa: F401
-import app.tools.rag_query  # noqa: F401
 import app.tools.run_code  # noqa: F401
 import app.tools.skill  # noqa: F401
 import app.tools.subagent  # noqa: F401

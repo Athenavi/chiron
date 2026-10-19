@@ -2,7 +2,7 @@
 
 背景：Redis Streams 消费组是 at-least-once——worker 执行成功但 ACK 前崩溃/被杀，
 消息会由本实例或其它实例的 reclaim 再次投递。缺少幂等约束时，有副作用的任务
-（workflow_run / tool_job / rag_index 等）会被重复执行：重复扣费、重复写文件、
+（workflow_run / tool_job / kb_index 等）会被重复执行：重复扣费、重复写文件、
 重复调用外部 API。
 
 策略：

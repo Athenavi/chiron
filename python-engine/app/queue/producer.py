@@ -28,8 +28,8 @@ DLQ_STREAM_MAXLEN = 10000
 # 按任务类型的默认截止时间(秒):既避免"堆积后执行早已无意义的旧任务",
 # 也不能误杀长任务(知识库建索引可能数小时)。
 DEFAULT_DEADLINE_SECONDS = {
-    "rag_index": 6 * 3600,
-    "embed_batch": 3600,
+    # PageIndex 知识库索引（自托管建树是分钟级；Cloud 是异步处理 + 轮询）
+    "kb_index": 6 * 3600,
     "memory_save": 900,
     "tool_job": 3600,
     "workflow_run": 7200,
@@ -59,7 +59,7 @@ class QueueProducer:
         发布任务到 Redis Streams
 
         Args:
-            task_type: "rag_index" | "memory_save" | "embed_batch"
+            task_type: "kb_index" | "memory_save" | "memory_consolidate"
             tenant_id: 租户 ID
             payload: 任务数据
             priority: 优先级（0=普通，1=高）
@@ -70,7 +70,7 @@ class QueueProducer:
                 一次"时才传稳定键（如 tool_job 用 job_id、workflow_run 用 instance_id）。
                 注意 worker 的 claim 只拒绝 `completed`：传稳定键会让**用户再次主动发起
                 的同一操作**被跳过，因此不可用于可重复发起的动作（如"重建索引"——
-                该场景由 `_handle_rag_index` 的自身幂等负责）。
+                该场景由 `_handle_kb_index` 的自身幂等负责）。
 
         Returns:
             task_id

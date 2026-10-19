@@ -11,13 +11,14 @@
                                                     ▼
                                     Python 引擎(python-engine, :8000)
                                                     │
-              PostgreSQL(pgvector) · Redis ◄───────┴───────► Milvus · S3（云端）/ 自托管 RustFS
+              PostgreSQL(pgvector) · Redis ◄───────┴───────► S3（云端）/ 自托管 RustFS
+                                                    （Milvus 仅记忆层的可选后端）
 ```
 
 | 组件 | 目录 | 端口 | 职责 |
 |---|---|---|---|
 | Go 网关 | `cmd/chiron`、`internal/*` | 8080（容器内，不发布宿主机端口） | 认证、路由、限流、计费、管理后台、SSE 转发 |
-| Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、工作流、RAG、技能、记忆、MCP |
+| Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、工作流、知识库、技能、记忆、MCP |
 | 前端 | `frontend-vue/` | 5173（dev）/ 80（容器） | Vue 3 + TypeScript + Vite；nginx 同源反代 `/v1`、`/events`、`/ws` |
 | 数据库 | `migrations/` | 5432 | PostgreSQL + pgvector（Alembic 迁移） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
@@ -103,7 +104,7 @@ make build                                # 见 Makefile（fmt/lint/test/build�
 ```
 cmd/               网关与 CLI（chiron 网关；chiron-cli 管理本地启动的进程）
 internal/          Go 网关实现（api、auth、billing、broadcast、db、engine、session、storage…）
-python-engine/     引擎实现（app/agent、queue、api、tools、workflow、memory、rag…）
+python-engine/     引擎实现（app/agent、queue、api、tools、workflow、knowledge、memory…）
 frontend-vue/      Vue 3 前端（nginx 反代 /v1、/events、/ws、/submit、/cancel、/media 到网关）
 migrations/        Alembic 迁移（手写 SQL；schema 直接改数据库，无 ORM 生成链路）
 market/skills/     内置技能资产（`{name}/SKILL.md` 目录型技能）。运行时经 `SkillStore` 的

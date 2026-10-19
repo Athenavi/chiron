@@ -867,8 +867,16 @@ Return ONLY valid JSON without markdown formatting."""
         for r in completed:
             out = r.output
             if isinstance(out, dict):
-                # kb_search 返回 {results: [...]} 或 {knowledge_bases: [...]}
-                items = out.get("results") or out.get("knowledge_bases") or []
+                # kb_search 返回 {answer, citations}；kb_list 返回 {knowledge_bases}
+                answer = out.get("answer")
+                if isinstance(answer, str) and answer:
+                    snippets.append(answer[:200])
+                items = (
+                    out.get("results")
+                    or out.get("knowledge_bases")
+                    or out.get("citations")
+                    or []
+                )
                 for item in items:
                     if isinstance(item, dict):
                         title = item.get("title", item.get("name", ""))
