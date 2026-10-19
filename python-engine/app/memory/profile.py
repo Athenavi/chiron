@@ -140,7 +140,7 @@ class ProfileStore:
 
     async def list_evictable(
         self, tenant_id: str, user_id: str, project: str = ""
-    ) -> list[EvictionRow]:
+    ) -> builtins.list[EvictionRow]:
         """列出**未分组/某项目**内参与容量淘汰的行的最小必要列。
 
         为什么不复用 `list()`：淘汰只看置信度与新近度，而 `list()` 会把每条的

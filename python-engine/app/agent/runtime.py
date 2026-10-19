@@ -1184,7 +1184,7 @@ class AgentRuntime:
 
     @staticmethod
     def _prefix_fingerprint(
-        messages: list[dict[str, Any]], tools: list[dict[str, Any]]
+        messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
     ) -> tuple[str, str]:
         """稳定前缀的指纹：`(system 段, 工具表)` 两个哈希。
 
@@ -1203,7 +1203,9 @@ class AgentRuntime:
             hashlib.sha256(tools_text.encode("utf-8", "replace")).hexdigest()[:12],
         )
 
-    def _prefix_change(self, messages: list[dict[str, Any]], tools: list[dict[str, Any]]) -> dict[str, Any]:
+    def _prefix_change(
+        self, messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None
+    ) -> dict[str, Any]:
         """对比上一轮的稳定前缀指纹，返回本轮的诊断（空列表 = 逐字未变）。"""
         fp = self._prefix_fingerprint(messages, tools)
         prev = self._last_prefix_fp
@@ -2070,7 +2072,7 @@ class AgentRuntime:
 
                 # ── 分级压缩：根据 token 使用量选择压缩策略（SaaS：策略可配）──
                 if mode_cfg.enable_compaction:
-                    compaction_dropped: list[tuple[str, str]] = []
+                    compaction_dropped = []
                     messages, compaction_notice = self._compact_with_notice(
                         messages,
                         mode_cfg,

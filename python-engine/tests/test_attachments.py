@@ -104,3 +104,32 @@ async def test_to_text_flags_images_and_extracts_docx():
 
     assert "vision_analyze" in out          # 这条路径只能传文本，必须说清
     assert "统一链路正文" in out            # 文档照常提取
+
+
+def _pdf(*lines: str) -> bytes:
+    import pytest
+
+    pymupdf = pytest.importorskip("pymupdf")
+    doc = pymupdf.open()
+    for line in lines:
+        page = doc.new_page()
+        page.insert_text((72, 72), line)
+    data = doc.tobytes()
+    doc.close()
+    return data
+
+
+async def test_to_text_extracts_every_pdf_page_in_order():
+    """PDF 提取走 `doc.pages()`，不再靠隐式迭代。
+
+    `Document` 没有 `__iter__`，此前靠旧式 `__getitem__` 协议迭代（能跑，但不是官方口径，
+    类型上也只能报 not iterable）。这条用例钉住"每页都取到、顺序不变"，换写法时才不会
+    把提取改成静默半截 —— 顺带钉住"坏字节 ⇒ 空文本而不是抛穿"。
+    """
+    out = await to_text([_att("a.pdf", "application/pdf", _pdf("PAGE ONE", "PAGE TWO"))])
+
+    assert "PAGE ONE" in out and "PAGE TWO" in out
+    assert out.index("PAGE ONE") < out.index("PAGE TWO")
+
+    broken = await to_text([_att("b.pdf", "application/pdf", b"not a pdf at all")])
+    assert "PAGE ONE" not in broken

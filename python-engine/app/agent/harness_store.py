@@ -122,7 +122,7 @@ async def listen_for_changes() -> None:
     while True:
         pubsub = None
         try:
-            from app.redis_client import get_redis
+            from app.redis_client import aclose_pubsub, get_redis
 
             redis = await get_redis()
             if redis is None:
@@ -142,6 +142,6 @@ async def listen_for_changes() -> None:
         finally:
             if pubsub is not None:
                 try:
-                    await pubsub.aclose()
+                    await aclose_pubsub(pubsub)
                 except Exception:  # noqa: BLE001 - 关连接失败不该盖住上面的异常
                     logger.debug("harness pubsub close failed", exc_info=True)

@@ -121,7 +121,10 @@ def _pdf_text(data: bytes) -> str:
 
         doc = pymupdf.open(stream=data, filetype="pdf")
         try:
-            return "\n".join(page.get_text() for page in doc)
+            # 走 `pages()` 而不是 `for page in doc`：Document 没有 `__iter__`，靠的是
+            # `__getitem__` 的旧式迭代协议（越界靠 IndexError 收尾）—— 能跑，但既不是
+            # 官方口径、类型上也只能报"not iterable"。
+            return "\n".join(page.get_text() for page in doc.pages())
         finally:
             doc.close()
     except Exception as exc:  # noqa: BLE001 — 解析失败按"提取不出"处理

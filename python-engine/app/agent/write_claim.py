@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import logging
 import time
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -86,7 +87,7 @@ def release_all(owner: str) -> int:
     return len(mine)
 
 
-def path_of(tool_name: str, params: dict | None) -> str:
+def path_of(tool_name: str, params: dict[str, Any] | None) -> str:
     """从工具参数里取被写的文件路径（与各写工具的字段名对齐）。"""
     if tool_name not in FILE_WRITE_TOOLS or not isinstance(params, dict):
         return ""

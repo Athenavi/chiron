@@ -42,7 +42,7 @@ python-engine/app/
 | 安全与可靠性（威胁模型） | [agent-safety-and-reliability.md](../../agent-safety-and-reliability.md) |
 | 工具策略（与 Go 成对） | 同上 + `internal/api/tool_policy.go` |
 
-**引擎侧的 `mypy app/` 是 strict 的**，`ruff check .` 零容忍 —— 改引擎前先看
+**引擎侧的 `mypy app/ acp_adapter/` 是 strict 的**，`ruff check .` 零容忍 —— 改引擎前先看
 [贡献与验收](../contributing/overview.md) 的 `python` job。
 
 ## 两个已知的"大文件"

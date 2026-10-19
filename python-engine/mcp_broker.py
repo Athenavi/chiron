@@ -45,7 +45,7 @@ app = FastAPI(title="chiron-mcp-broker")
 #:   前一条被覆盖后**无人 close**（凭据连接泄漏给对端 server）；
 #: * **LRU 淘汰**：超上限时关闭最久未用者。正在执行中的调用可能因此失败一次，
 #:   下一次调用会自动重连 —— 与"泄漏无界"相比是可接受的代价，且事件会记日志。
-_clients: "OrderedDict[str, Any]" = OrderedDict()
+_clients: OrderedDict[str, Any] = OrderedDict()
 _clients_lock = asyncio.Lock()  # 只保护表结构，不做慢 I/O
 _connect_locks: dict[str, asyncio.Lock] = {}  # per-user：串行化"连接+start"慢操作
 

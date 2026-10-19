@@ -7,7 +7,7 @@
 | job | 工作目录 | 主要命令 |
 |---|---|---|
 | `go` | 仓库根 | `go build -mod=mod ./...` · `go vet -mod=mod ./...` · `go test -mod=mod ./... -count=1` |
-| `python` | `python-engine/` | `ruff check .` · `mypy app/`（strict）· `python -m pytest -q -m "not integration"` |
+| `python` | `python-engine/` | `ruff check .` · `mypy app/ acp_adapter/`（strict）· `python -m pytest -q -m "not integration"` |
 | `frontend` | `frontend-vue/` | `pnpm run lint` · `pnpm run build`（`check:ui` 棘轮 → `vue-tsc -b` → `vite build`）· `pnpm run test` |
 | `schema` | 仓库根 | `alembic heads` **必须恰好 1 个 head** · 离线渲染 DDL · ORM 生成物与迁移 DDL 一致 |
 | `encoding` | 仓库根 | **八个根守卫**（见下） |

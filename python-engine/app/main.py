@@ -329,6 +329,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 )
                 continue
         _kind = provider_kind(_preset)
+        # 显式标注三类具名 provider 的并集：不标注时 mypy 只按**第一个分支**推断，
+        # 于是 Responses / OpenAI 两条分支既没被检查构造签名，也没被检查能否塞进
+        # `providers: dict[str, LLMProvider]`（这正是上一轮"Responses 不继承 LLMProvider"
+        # 那个洞一直没被发现的原因）。三者的构造签名一致，见 app/providers/named.py。
+        _provider_cls: (
+            type[NamedAnthropicProvider] | type[NamedResponsesProvider] | type[NamedOpenAIProvider]
+        )
         if _kind == "anthropic":
             _provider_cls = NamedAnthropicProvider
         elif _kind == "responses":
