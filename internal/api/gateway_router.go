@@ -277,6 +277,9 @@ func NewGatewayRouter(
 		slog.Error("billing schema verification failed; run `alembic upgrade head`", "error", err)
 	}
 	billingMgr := billing.NewManager(billingStore)
+	// M19：崩溃/自动接管那一段从不经过网关 ⇒ 网关按终态事件计费永远看不到它。
+	// 这里起一个按-run 权威账对账的后台循环；默认 shadow（只算、打指标、不动账）。
+	StartRunUsageReconciler(lifecycleCtx, billingMgr)
 	// P0-P1 修复：余额已由 Deduct/AddCredits 同步写库（PG 原子 UPDATE），
 	// 移除 BalanceSyncer 异步落库订阅，避免多副本 split-brain 与重复扣费。
 	// 2026-09 增强：扣减/入账与 credit_transactions 流水已同 PG 事务落库

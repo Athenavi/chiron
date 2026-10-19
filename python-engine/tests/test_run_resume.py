@@ -35,6 +35,8 @@ def _snapshot(
     done: list[str] | None = None,
     task_meta: bool = True,
     usage: dict[str, Any] | None = None,
+    turn_ids: list[str] | None = None,
+    turn_ids_truncated: bool = False,
 ) -> dict[str, Any]:
     snapshot: dict[str, Any] = {
         "messages": [
@@ -49,6 +51,10 @@ def _snapshot(
     if usage is not None:
         # M15e：run 级预算跨续跑的账就记在这一格（旧快照可能整格没有）
         snapshot["usage"] = usage
+    if turn_ids is not None:
+        snapshot["turn_ids"] = turn_ids
+    if turn_ids_truncated:
+        snapshot["turn_ids_truncated"] = True
     if task_meta:
         # 自动续跑的唯一来源：这些配置只存在于提交请求里
         snapshot["task_meta"] = {
@@ -179,6 +185,50 @@ async def test_legacy_snapshot_without_usage_starts_at_zero(monkeypatch):
     assert state is not None
     assert (state.input_tokens, state.output_tokens, state.cached_tokens) == (0, 0, 0)
     assert (state.tool_steps, state.wall_seconds) == (0, 0)
+
+
+# ── M19：run 链的网关 turn 集合（网关按-run 对账的依据）──────────────────
+
+
+async def test_resume_state_inherits_turn_ids(monkeypatch):
+    """续跑段没有自己的网关 turn，但**必须**继承历史集合。
+
+    否则网关对账看到的"已计费回合"少一个，会把那条已计过费的回合再补一遍（多收）。
+    """
+    _patch_checkpoint(
+        monkeypatch,
+        snapshot=_snapshot(turn_ids=["turn-a", "turn-b"], turn_ids_truncated=False),
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None
+    assert state.turn_ids == ("turn-a", "turn-b")
+    assert state.turn_ids_truncated is False
+
+
+async def test_legacy_snapshot_has_no_turn_ids(monkeypatch):
+    """本字段引入前的快照：集合为空、不算截断（旧 run 不参与对账，也不报错）。"""
+    _patch_checkpoint(monkeypatch, snapshot=_snapshot())
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None
+    assert state.turn_ids == ()
+    assert state.turn_ids_truncated is False
+
+
+async def test_truncated_turn_ids_stay_marked(monkeypatch):
+    """截断标记要原样带出：对账据此**跳过**该 run，而不是拿不完整的集合去补差。"""
+    _patch_checkpoint(
+        monkeypatch,
+        snapshot=_snapshot(turn_ids=["turn-b"], turn_ids_truncated=True),
+    )
+
+    state = await load_resume_state(tenant_id="t1", session_id="s1")
+
+    assert state is not None
+    assert state.turn_ids_truncated is True
 
 
 async def test_dirty_usage_reads_as_zero_not_as_a_negative_allowance(monkeypatch):

@@ -85,6 +85,14 @@ SNAPSHOT_SCHEMA_VERSION = 1
 #: `tool` 结果切到快照两侧）
 SNAPSHOT_MIN_TAIL_MESSAGES = 4
 
+#: M19：一条 run 链最多跟踪多少个网关 turn id。
+#:
+#: 正常一链是"1 个提交 turn + 若干次无人值守续跑（没有 turn）"，远小于这个数；真到了
+#: 上限说明这条链被重试过很多次，再往快照里堆 id 只会让 jsonb 无界增长。截断时**必须**
+#: 置 `turn_ids_truncated`：对账依赖"已计费 turn 的完整集合"，少一个就会把已计费的钱
+#: 再补一遍（多收）。
+MAX_TRACKED_TURN_IDS = 512
+
 
 class RunCheckpoint(TypedDict, total=False):
     """回合边界快照。字段语义见模块文档与方案 01 §3.1。"""
@@ -97,6 +105,14 @@ class RunCheckpoint(TypedDict, total=False):
     replay_pending: list[str]
     pending: dict[str, Any]
     turn_id: str
+    #: M19：**这一条 run 链涉及过的网关 turn id**（本次 run + 历次续跑继承的）。
+    #: 网关的对账 job 靠它把快照里的全程用量与 `turns` 里已经计过费的回合对应起来 ——
+    #: 崩溃/接管那一段没有自己的 turn，但它的用量必须算进这条链的账。
+    #: 只存 id、不存用量：用量真相仍在 `usage` 一格，避免同一笔钱有两个数。
+    turn_ids: list[str]
+    #: `turn_ids` 达到上限被截断（只保留最近 N 个）。对账看到它就**跳过**该 run：
+    #: 漏掉的历史 turn 会让"已计费量"偏小，照补就是**多收**用户的钱。
+    turn_ids_truncated: bool
     #: 本 run 的**全程累计**用量（`input_tokens` / `output_tokens` / `cached_tokens` /
     #: `tool_steps` / `wall_seconds`）。M15e 起它是 run 级预算跨续跑的唯一依据：接管那一段
     #: 读回它当起点（见 `ResumeState.input_tokens`），否则"每次接管白送一份 per-run 额度"。
@@ -118,11 +134,42 @@ def _pool() -> Any:
     return get_pool()
 
 
+def merge_turn_ids(
+    existing: Any,
+    current: str,
+    *,
+    already_truncated: bool = False,
+) -> tuple[list[str], bool]:
+    """把当前 turn id 并入快照的 `turn_ids`，返回 `(列表, 是否截断)`。
+
+    * 去重、保序（历史在前），空值忽略 —— 无人值守的续跑段本来就没有网关 turn；
+    * `already_truncated` 一旦为真就**保持为真**：后续再合并也不会把丢掉的历史找回来，
+      对账因此不会误以为这份集合是完整的；
+    * 超上限时保留**最近**的若干条并置截断标记。保最近而不是保最早：`turns` 表按
+      created_at 有保留期，早先的 turn 本来就可能已被清理。
+    """
+    out: list[str] = []
+    for item in list(existing or []):
+        value = str(item or "").strip()
+        if value and value not in out:
+            out.append(value)
+    value = str(current or "").strip()
+    if value and value not in out:
+        out.append(value)
+    truncated = bool(already_truncated)
+    if len(out) > MAX_TRACKED_TURN_IDS:
+        out = out[-MAX_TRACKED_TURN_IDS:]
+        truncated = True
+    return out, truncated
+
+
 def build_snapshot(
     *,
     messages: list[dict[str, Any]],
     turn_index: int,
     turn_id: str = "",
+    turn_ids: list[str] | None = None,
+    turn_ids_truncated: bool = False,
     done_tools: list[str] | None = None,
     replay_pending: list[str] | None = None,
     usage: dict[str, int] | None = None,
@@ -163,6 +210,8 @@ def build_snapshot(
         replay_pending=list(replay_pending or []),
         usage=dict(usage or {}),
         turn_id=turn_id,
+        turn_ids=list(turn_ids or []),
+        turn_ids_truncated=bool(turn_ids_truncated),
         last_event_id=last_event_id,
         instance_id=instance_id,
         saved_at=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),

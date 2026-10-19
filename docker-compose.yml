@@ -125,6 +125,14 @@ services:
       # 依赖门禁:默认 false = Redis 不可用时拒绝启动(多副本一致性优先);
       # 仅单机开发设 true 才允许进程内降级(限流/会话/事件退化为单实例语义)。
       DEGRADED_MODE: ${DEGRADED_MODE:-false}
+      # 按-run 用量对账(M19):崩溃/自动接管段不经过网关,靠读 agent_runs.checkpoint.usage
+      # 补进用户余额 + billing_records + 租户池。默认 shadow(只算、打点、不动账);
+      # 切 enforce 前看 run_usage_reconcile_shadowed / run_usage_reconcile_tokens。
+      RUN_USAGE_RECONCILE_MODE: ${RUN_USAGE_RECONCILE_MODE:-}
+      RUN_USAGE_RECONCILE_INTERVAL_SECONDS: ${RUN_USAGE_RECONCILE_INTERVAL_SECONDS:-}
+      RUN_USAGE_RECONCILE_MIN_AGE_SECONDS: ${RUN_USAGE_RECONCILE_MIN_AGE_SECONDS:-}
+      RUN_USAGE_RECONCILE_MAX_AGE_DAYS: ${RUN_USAGE_RECONCILE_MAX_AGE_DAYS:-}
+      RUN_USAGE_RECONCILE_BATCH: ${RUN_USAGE_RECONCILE_BATCH:-}
     volumes:
       - workspace:/app/workspace
       - plugindata:/srv/chiron/plugins

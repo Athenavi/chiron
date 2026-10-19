@@ -420,6 +420,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		"content":    content,
 		"history":    histMsgs,
 		"max_turns":  defaultMaxTurns,
+		// M19：run 与 `turns` 的**唯一**对应关系。引擎自己生成的 task id 是内部标识，
+		// 与计费回合无关；没有这个字段，崩溃/接管段的用量就无法与已计费回合对账。
+		"turn_id": turnID,
 	}
 	// 附件原样透传给引擎：由引擎决定怎么变成模型可见内容（图片 / 文档 / 其他）。
 	// 只带附件不带文字时 content 为空串，引擎侧据此单独组一条 user 消息。

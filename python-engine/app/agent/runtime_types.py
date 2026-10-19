@@ -28,6 +28,10 @@ class AgentTask:
     user_id: str
     session_id: str
     content: str
+    #: M19：**网关侧这一轮的 turn id**（提交载荷 `turn_id` 透传）。引擎自己生成的
+    #: `id` 是内部任务标识，与 `turns` 表无关；只有这个字段能把一次 run 与网关已经
+    #: 计过费的回合对应起来。无人值守的续跑段没有它（那一整段正是要对账补的缺口）。
+    turn_id: str = ""
     system_prompt: str = ""
     history: list[dict[str, Any]] = field(default_factory=list)
     tools: list[dict[str, Any]] = field(default_factory=list)
@@ -69,6 +73,7 @@ class AgentTask:
             user_id=data.get("user_id", ""),
             session_id=data.get("session_id", ""),
             content=data.get("content", ""),
+            turn_id=str(data.get("turn_id", "") or ""),
             system_prompt=data.get("system_prompt", ""),
             history=data.get("history", []),
             tools=data.get("tools", []),

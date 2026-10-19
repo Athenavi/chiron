@@ -1485,6 +1485,9 @@ async def agent_submit(
         user_id=gw_user or body.get("user_id", ""),
         session_id=body.get("session_id", ""),
         content=body.get("content", ""),
+        # M19：网关这一轮的 turn id（用于把 run 与 `turns` 里已计费的回合对应起来）。
+        # 直连引擎的调用方可以不带；缺席时 checkpoint 的 `turn_ids` 只保留历史。
+        turn_id=str(body.get("turn_id", "") or ""),
         history=body.get("history", []),
         max_turns=max(
             1, min(body.get("max_turns") or settings.max_turns, settings.max_turns)

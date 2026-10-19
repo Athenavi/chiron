@@ -95,6 +95,13 @@ type Metrics struct {
 	SSOLoginAttempts   atomic.Int64
 	SSOLoginSuccesses  atomic.Int64
 	SSOLoginFailures   atomic.Int64
+	// M19：按-run 用量对账（崩溃/接管段的补偿）。`Reconciled` = 真正补了账的次数，
+	// `Shadowed` = shadow 下**本应**补的次数（切 enforce 前看它判断规模）。
+	RunUsageReconciled       atomic.Int64
+	RunUsageReconcileShadowed atomic.Int64
+	RunUsageReconcileFailed  atomic.Int64
+	RunUsageReconcileSkipped atomic.Int64
+	RunUsageReconcileTokens  atomic.Int64
 	StartTime          time.Time
 }
 
@@ -185,6 +192,29 @@ func IncSSOLoginFailure() {
 	Global.SSOLoginFailures.Add(1)
 }
 
+// M19：按-run 用量对账。`tokens` 是被补偿的 input+output 总量（用于判断规模与方向）。
+func IncRunUsageReconciled(tokens int64) {
+	Global.RunUsageReconciled.Add(1)
+	if tokens > 0 {
+		Global.RunUsageReconcileTokens.Add(tokens)
+	}
+}
+
+func IncRunUsageReconcileShadowed(tokens int64) {
+	Global.RunUsageReconcileShadowed.Add(1)
+	if tokens > 0 {
+		Global.RunUsageReconcileTokens.Add(tokens)
+	}
+}
+
+func IncRunUsageReconcileFailed() {
+	Global.RunUsageReconcileFailed.Add(1)
+}
+
+func IncRunUsageReconcileSkipped() {
+	Global.RunUsageReconcileSkipped.Add(1)
+}
+
 var extraStatsMu sync.RWMutex
 var extraStatsFuncs []func() map[string]interface{}
 
@@ -215,6 +245,11 @@ func Snapshot() map[string]interface{} {
 		"sso_login_attempts":  Global.SSOLoginAttempts.Load(),
 		"sso_login_successes": Global.SSOLoginSuccesses.Load(),
 		"sso_login_failures":  Global.SSOLoginFailures.Load(),
+		"run_usage_reconciled":        Global.RunUsageReconciled.Load(),
+		"run_usage_reconcile_shadowed": Global.RunUsageReconcileShadowed.Load(),
+		"run_usage_reconcile_failed":  Global.RunUsageReconcileFailed.Load(),
+		"run_usage_reconcile_skipped": Global.RunUsageReconcileSkipped.Load(),
+		"run_usage_reconcile_tokens":  Global.RunUsageReconcileTokens.Load(),
 		"uptime_seconds":      time.Since(Global.StartTime).Seconds(),
 		"started_at":          Global.StartTime.Format(time.RFC3339),
 	}
