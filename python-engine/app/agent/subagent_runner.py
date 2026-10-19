@@ -22,6 +22,7 @@ import json
 import logging
 import re
 import textwrap
+import time
 import uuid
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
@@ -188,6 +189,46 @@ async def _reserve_line(
             "subagent %s: line reserve unavailable (root=%s): %s", member, root, str(exc)[:160]
         )
         return ""
+
+
+async def _project_line(
+    root: str,
+    tenant_id: str,
+    *,
+    handle: str,
+    member: str,
+    spent: int,
+    elapsed_seconds: float,
+    per_run_cap: int,
+) -> str:
+    """M18：把这一 run 的在途预留按「已花 + 投影余量」重述，返回**后续要用的句柄**。
+
+    与 :func:`_reserve_line` 同为增强路径：任何失败都原样还回旧句柄（那条预留仍在求和里，
+    方向是**多算** = 安全的一侧）。默认 ``SUBAGENT_LINE_PROJECTION=shadow`` 时只打点、不写。
+
+    句柄**必须**由调用方接住并传下去：tokens 编在预留的 member 名字里，重述就是换一条 member，
+    拿旧句柄去收尾会摘不掉（旧那条要占满一个 TTL，同线的派发因此被误拦）。
+    """
+    if not root:
+        return handle
+    try:
+        from app.subagent.line_ledger import get_line_ledger
+
+        return await get_line_ledger().project(
+            root,
+            tenant_id,
+            member=member,
+            handle=handle,
+            spent=spent,
+            elapsed_seconds=elapsed_seconds,
+            per_run_cap=per_run_cap,
+        )
+    except Exception as exc:  # noqa: BLE001 - 重述失败不影响执行
+        logger.warning(
+            "subagent %s: line reserve restate unavailable (root=%s): %s",
+            member, root, str(exc)[:160],
+        )
+        return handle
 
 
 async def _settle_line(root: str, handle: str, actual_tokens: int) -> None:
@@ -695,6 +736,10 @@ class SubAgentRunner:
         reasoning_parts: list[str] = []
         errors: list[str] = []
         in_tokens = out_tokens = steps = 0
+        # M18：投影预留的速率分母 = **本段**从开跑到现在的时间。刻意不是全程：
+        # 续跑那一段继承的用量不在这里的 `in/out_tokens` 里，用全程的花销配本段的时长
+        # 会把速率放大（⇒ 预留虚高、同线的派发被误拦）。
+        _seg_started = time.time()
         status = "completed"
         budget = self._budget
         ctx_snapshot = _snapshot_context()
@@ -874,6 +919,27 @@ class SubAgentRunner:
                         tool_call_id=evt.tool_call_id or "",
                         input_tokens=evt.input_tokens or 0,
                         output_tokens=evt.output_tokens or 0,
+                    )
+                # ── M18：花了钱就当场把这条线"看到"的这一格刷新一次 ──
+                # 两件事挂在同一个触发点上，因为它们是同一笔账的两半：
+                #   * flush 步骤缓冲 —— 崩掉后 `REAP_STALE_SQL` 只能按**已落库**的步骤行补账，
+                #     缓冲里那不到 `STEP_FLUSH_SIZE` 条一起丢；逐次冲刷把上界从"20 条事件"
+                #     收到"当前这一回合的尾巴"。
+                #   * 重述预留 —— 派发时那份是 per-run 上限的**静态猜值**，同线其它 run 看不到
+                #     这一段的真实速度（论文 §5.2 ② 那笔系统性少算的主要来源）。
+                # 只挂在**带用量**的事件上：token 只在每次模型调用结束时出现一次，
+                # 逐条事件都刷就成了给工具流付两倍往返。默认 shadow 时第二条只打点不写。
+                if line_root and (evt.input_tokens or evt.output_tokens):
+                    if self._store is not None:
+                        await self._store.flush_steps(run_id)
+                    line_handle = await _project_line(
+                        line_root,
+                        self._tenant_id,
+                        handle=line_handle,
+                        member=child.id,
+                        spent=in_tokens + out_tokens,
+                        elapsed_seconds=time.time() - _seg_started,
+                        per_run_cap=int(budget.tokens) if budget is not None else 0,
                     )
         except asyncio.CancelledError as exc:
             _last_error = exc
