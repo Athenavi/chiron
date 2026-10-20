@@ -271,6 +271,7 @@ export default {
     used_by_label: "يُستخدم بواسطة {label}",
     accessed_n_times_updated_date: "تم الوصول {n} مرة · حُدّث في {date}",
     semantic_mode: "الوضع الدلالي",
+    recent_mode: "الأحدث",
     please_choose_or_enter_a_top_up_amount: "يرجى اختيار أو إدخال مبلغ الشحن",
     read_n: "قراءة {n}",
     jump_to_question_preview: "انتقل إلى السؤال: {preview}",

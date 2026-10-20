@@ -136,6 +136,14 @@ export interface MemorySearchResponse {
   /** L3 区：同一 query 在历史对话摘要里的命中 */
   summaries: MemorySearchSummary[]
   summary_count: number
+  /**
+   * L3 的检索方式（M22）：`semantic`（按查询向量筛过）/ `recent`（没做向量，取最近）/
+   * `keyword`（嵌入不可用时的关键词降级）/ `empty`（没命中，或 L3 不可用）。
+   *
+   * ⚠ 与上面的 `mode`（L2）**是两回事**：两条链路各算各的，可以同时不同
+   * （例如 L2 走关键词、L3 走向量）。旧后端不带这个字段时为 `undefined`。
+   */
+  summary_mode?: 'semantic' | 'recent' | 'keyword' | 'empty'
 }
 
 /** 检索记忆：返回 L2 条目命中 + L3 摘要命中两个独立结果区 */

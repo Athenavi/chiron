@@ -660,10 +660,19 @@ class MemoryService:
         # L3 区：「我记下的条目」与「历史对话片段」是两种东西，混在一个列表里
         # 用户无法判断某条到底来自哪里，也就无从决定该编辑还是该忽略。
         summaries: list[dict[str, Any]] = []
+        # L3 的检索模式**如实透出**（M22）：`recall_summaries` 已经算好了
+        # `semantic` / `recent` / `keyword` / `empty`，但这里过去只取 `summaries`、
+        # 把 `mode` 丢掉 —— 前端因此回答不了"这批摘要是怎么被选出来的"。
+        #
+        # 它与上面那个 `mode`（L2 的检索模式）**不是一回事**，所以用独立字段
+        # `summary_mode`，既不合并也不覆盖：两条链路的模式可以同时不同（例如 L2 走了
+        # 关键词、L3 走了向量）。L3 失败时保持 `empty` —— 那是"没拿到"，不是"最近"。
+        summary_mode = "empty"
         if self._summary_store is not None:
             try:
                 data = await self.recall_summaries(tenant_id, user_id, q, top_k=top_k)
                 summaries = data["summaries"]
+                summary_mode = str(data.get("mode") or "empty")
             except Exception as e:  # L3 是增强项，失败不该让整个检索失败
                 logger.warning("L3 search failed (fail-soft): %s", e)
 
@@ -674,6 +683,7 @@ class MemoryService:
             "results": results,
             "summaries": summaries,
             "summary_count": len(summaries),
+            "summary_mode": summary_mode,
         }
 
     # ── L2 个性化设置档案卡（user_memory_profile）───────────────────
