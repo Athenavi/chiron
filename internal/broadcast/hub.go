@@ -55,6 +55,12 @@ type Event struct {
 	Type      string      `json:"type"`
 	Data      interface{} `json:"data"`
 	SessionID string      `json:"session_id,omitempty"`
+	// UserID（M21）是**用户通道**的路由依据：跨会话的待办提醒要送到"这个人"，
+	// 而不是某一个会话。空 = 只走会话通道（既有事件全都不带它，行为不变）。
+	//
+	// 与 SessionID 的关系：一条事件可以两者都有 —— 待办提醒既进那个会话的流
+	// （用户正开着该会话时实时看到卡片），也进该用户的用户通道（角标）。
+	UserID string `json:"user_id,omitempty"`
 }
 
 // Hub manages SSE subscribers and cross-instance event broadcasting.

@@ -81,6 +81,45 @@ async def list_session_interactions(
     return {"ok": True, "session_id": session_id, "count": len(items), "items": items}
 
 
+@router.get("/v1/agent/interactions")
+async def list_user_interactions(
+    tenant_id: str = Query("", alias="tenant_id"),
+    user_id: str = Query("", alias="user_id"),
+    limit: int = Query(20, ge=1, le=MAX_LIST_LIMIT),
+) -> dict[str, Any]:
+    """**跨会话**列出这个人还等着的介入（M21：全局角标的数据源）。
+
+    与按会话那条的分工：那条回答"这个会话欠我什么"（会话内收件箱），这条回答
+    "我到底还欠哪些会话"（侧边栏角标）。身份谓词完全相同（`tenant_id` + `user_id`），
+    因此这条**不会**成为越权通道 —— 它只是把同一个谓词的作用域从会话放宽到人。
+    """
+    from app.agent import interactions
+
+    if not user_id:
+        return {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+    rows = await interactions.list_open_for_user(
+        tenant_id=tenant_id, user_id=user_id, limit=limit
+    )
+    items = [
+        {
+            "id": row.get("id"),
+            # 跨会话列表必须带 session_id：前端要靠它跳回那个会话。
+            "session_id": row.get("session_id"),
+            "kind": row.get("kind"),
+            "status": row.get("status"),
+            "tool_name": row.get("tool_name"),
+            "tool_call_id": row.get("tool_call_id"),
+            "request": row.get("request") or {},
+            "decision": row.get("decision") or {},
+            "reason": row.get("reason") or "",
+            "created_at": row.get("created_at"),
+            "expires_at": row.get("expires_at"),
+        }
+        for row in rows
+    ]
+    return {"ok": True, "count": len(items), "items": items}
+
+
 @router.post("/v1/agent/interactions/{interaction_id}/resolve")
 async def resolve_interaction(
     interaction_id: str,

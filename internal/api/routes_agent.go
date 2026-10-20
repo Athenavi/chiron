@@ -71,6 +71,12 @@ func registerAgentRoutes(
 			authMW(rlMW(http.HandlerFunc(interactionH.List))))
 		mux.Handle("POST /v1/agent/interactions/{interaction_id}/resolve",
 			authMW(rlMW(http.HandlerFunc(interactionH.Resolve))))
+		// M21：跨会话汇总（侧边栏角标的数据源）与用户级 SSE（实时提醒）。
+		// 前者是"我到底还欠哪些会话"，后者是"刚多了一张票"的推送 —— 两者都只认 claims。
+		mux.Handle("GET /v1/agent/interactions",
+			authMW(rlMW(http.HandlerFunc(interactionH.ListForUser))))
+		mux.Handle("GET /v1/agent/interactions/stream",
+			authMW(rlMW(UserSSEHandler(eventHub))))
 	}
 
 	// submitHandlerFunc 提取为命名函数，用于 legacy 和 v1 双路由注册

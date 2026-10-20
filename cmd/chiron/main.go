@@ -250,6 +250,9 @@ func main() {
 	// 子 Agent 事件中继：引擎把事件 pub 到 Redis，这里转投 SSE hub ——
 	// 前端 /events 才可能**实时**看到后台子 Agent 的进度（否则只剩选中 run 时的轮询）。
 	api.StartSubagentEventsRelay(lifecycleCtx, eventHub)
+	// M21：待办提醒的用户级中继 —— 引擎落票时广播"多了一张票"，这里转投 SSE hub
+	// （带 UserID ⇒ 同时进该会话流与该用户的用户通道）。
+	api.StartInteractionEventsRelay(lifecycleCtx, eventHub)
 
 	// 会话地图布局：Redis 热层 → 异步落 PG（关机前做一次 flush，避免"拖过的位置"丢失）
 	api.StartSessionMapFlusher(lifecycleCtx)

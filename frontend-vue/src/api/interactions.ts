@@ -9,13 +9,15 @@
  * 所以"答完没反应"不是 bug —— 会话下一次提交时会自动从暂停处接手；
  * 但如果那一行停在 `answered`，列表里就一直看得到它，用户知道还欠一次继续。
  */
-import { api } from './index'
+import { api, API_URL } from './index'
 
 export type InteractionKind = 'approval' | 'question' | 'budget'
 export type InteractionStatus = 'pending' | 'answered'
 
 export interface PendingInteraction {
   id: string
+  /** 仅**跨会话**列表（`listMyPendingInteractions`）返回：前端靠它跳回那个会话。 */
+  session_id?: string
   kind: InteractionKind
   status: InteractionStatus
   tool_name?: string
@@ -38,6 +40,43 @@ export async function listPendingInteractions(sessionId: string, limit = 20): Pr
   })
   const items = data?.data?.items
   return Array.isArray(items) ? (items as PendingInteraction[]) : []
+}
+
+/**
+ * **跨会话**列出"我"还等着的介入（M21）：侧边栏角标的数据源。
+ *
+ * 与 `listPendingInteractions` 的分工：那条回答"这个会话欠我什么"（会话内收件箱），
+ * 这条回答"我到底还欠哪些会话"。身份由服务端从 claims 取，前端不需要（也不该）传 user_id。
+ */
+export async function listMyPendingInteractions(limit = 20): Promise<PendingInteraction[]> {
+  const { data } = await api.get('/v1/agent/interactions', { params: { limit } })
+  const items = data?.data?.items
+  return Array.isArray(items) ? (items as PendingInteraction[]) : []
+}
+
+/**
+ * 用户级待办事件流（M21）：一条连接收"挂在我名下"的待办提醒。
+ *
+ * 与服务端 `UserSSEHandler` 对位 —— 它**不传 `session_id`**，这正是这条通道存在的理由：
+ * 用户没打开那个会话时，会话级 SSE 什么也收不到。
+ *
+ * `client_id` 每个连接随机生成：服务端以 `user:client_id` 作订阅键，因此多标签页不会
+ * 互相顶掉（同键订阅会让 hub 关掉旧连接，见 `internal/broadcast/hub.go`）。
+ * 返回的 `EventSource` 交给调用方在卸载时 `close()`。
+ */
+export function createUserEventsConnection(onEvent: (data: unknown) => void): EventSource {
+  const clientId = `ui-${Math.random().toString(36).slice(2)}-${Date.now()}`
+  const url = `${API_URL}/v1/agent/interactions/stream?client_id=${encodeURIComponent(clientId)}`
+  const source = new EventSource(url, { withCredentials: true })
+  source.onmessage = (ev: MessageEvent) => {
+    if (!ev.data) return
+    try {
+      onEvent(JSON.parse(ev.data))
+    } catch {
+      // 非 JSON 帧（服务端只发 JSON）忽略即可，不打断连接
+    }
+  }
+  return source
 }
 
 /**

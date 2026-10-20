@@ -4,7 +4,7 @@ import { toToolList, type ToolInfo } from '../utils/toolList'
 import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
-const API_URL = import.meta.env.VITE_API_URL || ''
+export const API_URL = import.meta.env.VITE_API_URL || ''
 
 // 注意：不要在这里设置默认 Content-Type！
 // - 对 JSON 对象 axios 的 transformRequest 会自动设置 application/json

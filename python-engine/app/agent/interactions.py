@@ -206,7 +206,17 @@ async def create(
                 kind,
                 tool_call_id,
             )
-        return str(row["id"])
+        interaction_id = str(row["id"])
+        # M21：票已经落库 ⇒ 再广播一条"多了一张待办"（失败不影响落票，见函数注释）。
+        await _publish_pending_event(
+            interaction_id=interaction_id,
+            tenant_id=tenant_id or "",
+            user_id=user_id or "",
+            session_id=session_id,
+            kind=kind,
+            request=request,
+        )
+        return interaction_id
     except Exception as exc:  # noqa: BLE001 — 持久通道失败不改变对话行为（回落 M6 的即时拒绝）
         return _fail(
             "storage_error",
@@ -473,6 +483,108 @@ async def list_open(
         item["decision"] = _decode(item.get("decision"))
         out.append(item)
     return out
+
+
+async def list_open_for_user(
+    *, tenant_id: str, user_id: str, limit: int = 20
+) -> list[dict[str, Any]]:
+    """**跨会话**列出这个人还等着的介入（M21 全局角标用）。
+
+    与 `list_open` 的唯一区别是不按 `session_id` 过滤，其余谓词一字不改 ——
+    `tenant_id` + `user_id` 那两条正是"只能看自己的票"的边界：少任何一条，
+    这个端点就变成"列出所有人的待办"。`session_id` 进结果列，前端据此跳转。
+    """
+    if not user_id:
+        return []
+    try:
+        pool = _pool()
+        if pool is None:
+            return []
+        rows = await pool.fetch(
+            """
+            SELECT id, tenant_id, user_id, session_id, kind, status, run_id, turn_id,
+                   tool_call_id, tool_name, args_hash, request, decision, reason,
+                   created_at, updated_at, expires_at
+              FROM pending_interactions
+             WHERE user_id = $1
+               AND ($2 = '' OR tenant_id = $2)
+               AND status IN ('pending', 'answered')
+             ORDER BY created_at ASC
+             LIMIT $3
+            """,
+            user_id or "",
+            tenant_id or "",
+            max(1, int(limit)),
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("pending interaction user list failed (user=%s): %s", user_id, exc)
+        return []
+    out: list[dict[str, Any]] = []
+    for row in rows or []:
+        item = {str(k): row[k] for k in row.keys()}
+        item["request"] = _decode(item.get("request"))
+        item["decision"] = _decode(item.get("decision"))
+        out.append(item)
+    return out
+
+
+#: 网关转投 SSE 用的 Redis 频道（订阅端见 internal/api/interaction_events_relay.go）。
+#: 与 `subagent:events` 分开：两条通道的**受众不同**（子 Agent 进度 vs 等人答复），
+#: 混在一条频道里以后谁都说不清"这条事件该给谁"。
+INTERACTION_EVENTS_CHANNEL = "interaction:events"
+
+
+async def _publish_pending_event(
+    *,
+    interaction_id: str,
+    tenant_id: str,
+    user_id: str,
+    session_id: str,
+    kind: str,
+    request: dict[str, Any] | None,
+) -> None:
+    """把"多了一张待办"实时广播给网关（网关转投 SSE：会话通道 + 用户通道）。
+
+    三条纪律：
+    * **失败绝不影响落票** —— 票已经在 PG 里，通知只是让它更快被看见；
+      前端角标还会按汇总端点轮询自愈（见 `list_open_for_user`）。
+    * **不携带 `arguments`**：审批请求的参数可能含敏感内容，而这条事件会经 Redis 与
+      SSE 到浏览器。只带"给人看的问题描述"（`question`），与列表端点不外泄 `args_hash`
+      是同一条边界。
+    * **没有 user_id 就不发**：用户通道靠它路由，缺了只能落到会话通道；宁可少一条推送，
+      也不让一条无主事件被任何人认领。
+    """
+    if not user_id:
+        return
+    question = ""
+    if isinstance(request, dict):
+        question = str(request.get("question") or "")
+    try:
+        from app.redis_client import get_redis
+        from app.redis_keys import rkey
+
+        redis = await get_redis()
+        if redis is None:
+            return
+        await redis.publish(
+            rkey(INTERACTION_EVENTS_CHANNEL),
+            json.dumps(
+                {
+                    "type": "interaction_pending",
+                    "interaction_id": interaction_id,
+                    "session_id": session_id,
+                    "user_id": user_id,
+                    "tenant_id": tenant_id,
+                    "kind": kind,
+                    "title": question[:200],
+                },
+                ensure_ascii=False,
+            ),
+        )
+    except Exception as exc:  # noqa: BLE001 — 广播失败绝不能影响落票
+        logger.warning(
+            "interaction pending event publish failed (id=%s): %s", interaction_id, exc
+        )
 
 
 async def expire_stale(*, limit: int = 50) -> int:
