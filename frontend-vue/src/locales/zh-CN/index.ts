@@ -281,6 +281,7 @@ export default {
     used_by_label: "被 {label} 使用",
     accessed_n_times_updated_date: "访问 {n} 次 · 更新于 {date}",
     semantic_mode: "语义模式",
+    recent_mode: "最近",
     please_choose_or_enter_a_top_up_amount: "请选择或输入充值数量",
     read_n: "读取 {n}",
     jump_to_question_preview: "跳转到提问：{preview}",

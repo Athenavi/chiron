@@ -269,6 +269,7 @@ export default {
     used_by_label: "Used by {label}",
     accessed_n_times_updated_date: "Accessed {n} times · updated {date}",
     semantic_mode: "Semantic mode",
+    recent_mode: "Recent",
     please_choose_or_enter_a_top_up_amount: "Please choose or enter a top-up amount",
     read_n: "Read {n}",
     jump_to_question_preview: "Jump to question: {preview}",

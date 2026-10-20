@@ -196,6 +196,100 @@ describe('MemoryView', () => {
     expect(wrapper.text()).toContain('返回列表')
   })
 
+  it('摘要区显示 L3 自己的检索方式，且与 L2 的模式互不覆盖（M22）', async () => {
+    vi.mocked(memoryApi.searchMemory).mockResolvedValue({
+      query: '部署方案',
+      // L2 走关键词降级……
+      mode: 'keyword',
+      count: 0,
+      results: [],
+      // ……而 L3 只做了"取最近"（没有查询向量）。两个模式必须各说各话。
+      summaries: [
+        {
+          id: 's1',
+          session_id: 'sess-1',
+          content: '上次讨论的部署方案',
+          topics: [],
+          turn_range: [0, 3],
+          access_count: 1,
+          created_at: null,
+          has_embedding: true,
+          status: 'active',
+        },
+      ],
+      summary_count: 1,
+      summary_mode: 'recent',
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="语义检索"]').setValue('部署方案')
+    const searchBtn = wrapper.findAll('button').find((b) => b.text().includes('智能检索'))
+    await searchBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('关键词模式')
+    expect(wrapper.find('.summary-mode-tag').exists()).toBe(true)
+    expect(wrapper.find('.summary-mode-tag').text()).toContain('最近')
+  })
+
+  it('L3 报 empty 时不显示模式标签（那是"没拿到"，不是一种检索方式）', async () => {
+    vi.mocked(memoryApi.searchMemory).mockResolvedValue({
+      query: '部署方案',
+      mode: 'keyword',
+      count: 0,
+      results: [],
+      summaries: [],
+      summary_count: 0,
+      summary_mode: 'empty',
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="语义检索"]').setValue('部署方案')
+    const searchBtn = wrapper.findAll('button').find((b) => b.text().includes('智能检索'))
+    await searchBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.find('.summary-mode-tag').exists()).toBe(false)
+  })
+
+  it('后端未带 summary_mode 时（旧版本）也不显示标签', async () => {
+    // 这一条**独立于上一条**：上一条没有摘要，标题整块不渲染，标签"不存在"是顺带的；
+    // 这里摘要非空、只有 mode 缺失 —— 它才是 `default` 分支真正的覆盖点。
+    vi.mocked(memoryApi.searchMemory).mockResolvedValue({
+      query: '部署方案',
+      mode: 'keyword',
+      count: 0,
+      results: [],
+      summaries: [
+        {
+          id: 's1',
+          session_id: 'sess-1',
+          content: '上次讨论的部署方案',
+          topics: [],
+          turn_range: [0, 3],
+          access_count: 1,
+          created_at: null,
+          has_embedding: true,
+          status: 'active',
+        },
+      ],
+      summary_count: 1,
+      // summary_mode 缺席 = 后端还没升级到双区契约
+    })
+    const wrapper = mountView()
+    await flushPromises()
+
+    await wrapper.find('input[placeholder*="语义检索"]').setValue('部署方案')
+    const searchBtn = wrapper.findAll('button').find((b) => b.text().includes('智能检索'))
+    await searchBtn!.trigger('click')
+    await flushPromises()
+
+    expect(wrapper.text()).toContain('上次讨论的部署方案')
+    expect(wrapper.find('.summary-mode-tag').exists()).toBe(false)
+  })
+
   it('点击「智能整理」触发 startOrganize', async () => {
     vi.mocked(memoryApi.startOrganize).mockResolvedValue({
       started: true,

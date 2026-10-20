@@ -86,6 +86,9 @@ const filteredEntries = computed(() =>
 const searchInput = ref('')
 const searching = ref(false)
 const searchingMode = ref<'semantic' | 'keyword'>('semantic')
+// L3（历史摘要）的检索方式，与上面那条**不是一回事**（M22）：两条链路各算各的。
+// `''` = 后端还没带这个字段（旧版本）/ 不该显示标签。
+const searchingSummaryMode = ref<'semantic' | 'recent' | 'keyword' | 'empty' | ''>('')
 const searchResults = ref<MemorySearchHit[] | null>(null)
 const searchSummaries = ref<MemorySearchSummary[]>([])
 
@@ -99,6 +102,7 @@ async function handleSearch() {
   try {
     const data = await searchMemory(q, { top_k: 10 })
     searchingMode.value = data.mode
+    searchingSummaryMode.value = data.summary_mode ?? ''
     searchResults.value = data.results ?? []
     // L3 区做兜底：后端尚未升级到双区契约时，不该让整个检索崩在 .length 上。
     searchSummaries.value = data.summaries ?? []
@@ -116,7 +120,23 @@ function clearSearch() {
   searchInput.value = ''
   searchResults.value = null
   searchSummaries.value = []
+  searchingSummaryMode.value = ''
 }
+
+// L3 的检索方式 → 文案。**只显示有信息量的三种**：`empty`（没命中/L3 不可用）不显示 ——
+// 一个"无模式"标签只会让人以为检索出问题了。
+const summaryModeLabel = computed(() => {
+  switch (searchingSummaryMode.value) {
+    case 'semantic':
+      return t('common.semantic_mode')
+    case 'keyword':
+      return t('common.keyword_mode')
+    case 'recent':
+      return t('common.recent_mode')
+    default:
+      return ''
+  }
+})
 
 // ── 增删改 ──
 const formVisible = ref(false)
@@ -521,6 +541,15 @@ function pct(n: number): string {
         class="result-section-title"
       >
         {{ $t('chat.history_n', { n: searchSummaries.length }) }}
+        <!-- M22：L3 自己报的检索方式。它与上方那个（L2 的）标签各说各话：
+             同一句话可以 L2 走关键词、L3 走向量，用户需要知道"这批摘要是怎么被选出来的"。 -->
+        <Tag
+          v-if="summaryModeLabel"
+          class="summary-mode-tag"
+          :color="searchingSummaryMode === 'semantic' ? 'blue' : 'default'"
+        >
+          {{ summaryModeLabel }}
+        </Tag>
       </h3>
       <List
         :data-source="searchSummaries"
