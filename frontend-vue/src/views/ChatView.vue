@@ -38,6 +38,7 @@ import ChatStatusBar from '../components/chat/ChatStatusBar.vue'
 import ChatDisplaySettings from '../components/chat/ChatDisplaySettings.vue'
 import AskCard from '../components/chat/AskCard.vue'
 import InteractionInbox from '../components/chat/InteractionInbox.vue'
+import InteractionBadge from '../components/chat/InteractionBadge.vue'
 import CallChainTimeline from '../components/CallChainTimeline.vue'
 import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter, mergeTurnStats } from '../components/chat/chat-types'
@@ -2829,6 +2830,9 @@ function continueGeneration() {
             </button>
           </div>
           <div class="toolbar-side toolbar-actions">
+            <!-- M21：跨会话待办角标 —— 任何页面都能看到"我还欠哪些答复"，点一下跳过去。
+                 M7 的收件箱只在打开那个会话时可见，这条补的正是"不知道哪个会话欠答复"。 -->
+            <InteractionBadge @select="switchSession" />
             <Button
               type="text"
               size="small"

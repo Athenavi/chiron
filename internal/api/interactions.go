@@ -95,6 +95,48 @@ func (h *InteractionHandler) List(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// ListForUser GET /v1/agent/interactions
+//
+// **跨会话**列出"这个人"还等着的介入（M21：全局角标的数据源）。
+//
+// 与 `List` 的区别只有作用域：那条按会话问，这条按人问。身份**同样只来自 claims**，
+// 引擎侧的谓词也完全相同（`tenant_id` + `user_id`）⇒ 放宽作用域不会放宽权限；
+// 这也是为什么这里不需要额外的归属校验（没有"别人的会话"这个概念，只有"别人的票"，
+// 而那个由引擎的 `user_id = 来电者` 谓词挡住）。
+func (h *InteractionHandler) ListForUser(w http.ResponseWriter, r *http.Request) {
+	userID, tenantID, ok := interactionIdentity(w, r)
+	if !ok {
+		return
+	}
+	if h.python == nil {
+		InternalError(w, "python engine not available")
+		return
+	}
+
+	limit := interactionListLimit(r)
+	target := "/v1/agent/interactions" +
+		"?user_id=" + url.QueryEscape(userID) +
+		"&tenant_id=" + url.QueryEscape(tenantID) +
+		"&limit=" + strconv.Itoa(limit)
+
+	var resp map[string]interface{}
+	if err := h.python.GetJSON(r.Context(), target, &resp); err != nil {
+		slog.Error("interactions: user list proxy failed", "user", userID, "error", err)
+		logAndRespond(w, err, http.StatusInternalServerError, "python engine error")
+		return
+	}
+	if msg, code, status := interactionEngineError(resp); code != "" {
+		JSONWithCode(w, status, code, nil, msg)
+		return
+	}
+	items, _ := resp["items"].([]interface{})
+	count, _ := resp["count"].(float64)
+	OK(w, map[string]interface{}{
+		"count": int(count),
+		"items": items,
+	})
+}
+
 // Resolve POST /v1/agent/interactions/{interaction_id}/resolve
 //
 // 请求体：`{"session_id": "...", "response": {...}}`。
