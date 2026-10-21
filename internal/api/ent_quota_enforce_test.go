@@ -78,6 +78,9 @@ type fakeQuotaStore struct {
 	tenantID string
 	pools    []EntQuotaPool
 	sqlUsage int64
+	// M24：credits 池与它的权威用量（`credit_transactions` 扣减量）。
+	creditPools    []EntQuotaPool
+	sqlCreditUsage int64
 }
 
 func (s fakeQuotaStore) ResolveTenantID(_ context.Context, _ string) (string, error) {
@@ -91,8 +94,19 @@ func (s fakeQuotaStore) TenantTokenPools(_ context.Context, tenantID string) ([]
 	return s.pools, nil
 }
 
+func (s fakeQuotaStore) TenantCreditPools(_ context.Context, tenantID string) ([]EntQuotaPool, error) {
+	if tenantID != s.tenantID {
+		return nil, nil
+	}
+	return s.creditPools, nil
+}
+
 func (s fakeQuotaStore) TokenUsageSQL(_ context.Context, _ string, _ time.Time) (int64, error) {
 	return s.sqlUsage, nil
+}
+
+func (s fakeQuotaStore) CreditUsageSQL(_ context.Context, _ string, _ time.Time) (int64, error) {
+	return s.sqlCreditUsage, nil
 }
 
 func newTestEnforcer(redisClient quotaRedis, store quotaStore) *tenantQuotaEnforcer {
@@ -257,9 +271,72 @@ func TestQuotaReserveContextRoundTrip(t *testing.T) {
 }
 
 // quotaMonthlyKeyForTest 取当前测试时钟下的月度计数器键。
+// ── M24：credits 池 ───────────────────────────────────────────────────
+//
+// 现场：`ent_quota_pools.resource_type` 允许 credits、后台「成本中心」的下拉里也有
+// "积分"，但执行侧此前**只查 token** ⇒ 管理员配的成本池永远不会被检查。
+// 这三条钉住"接上之后"的语义：只读判定、硬拦、不预留也不参与 token 单位的校正。
+
+func TestEnforceBlocksWhenCreditPoolIsExhausted(t *testing.T) {
+	e := newTestEnforcer(newFakeQuotaRedis(), fakeQuotaStore{
+		tenantID: "t1",
+		creditPools: []EntQuotaPool{
+			{TenantID: "t1", ResourceType: "credits", TotalAmount: 100, Period: "monthly"},
+		},
+		sqlCreditUsage: 100, // 已花满
+	})
+	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+
+	_, err := e.enforce(context.Background(), claims, 10)
+
+	if !errors.Is(err, ErrTenantQuotaExceeded) {
+		t.Fatalf("err = %v, want ErrTenantQuotaExceeded（credits 池必须真的拦）", err)
+	}
+}
+
+func TestEnforceAllowsWhenCreditPoolHasRoom(t *testing.T) {
+	e := newTestEnforcer(newFakeQuotaRedis(), fakeQuotaStore{
+		tenantID: "t1",
+		creditPools: []EntQuotaPool{
+			{TenantID: "t1", ResourceType: "credits", TotalAmount: 100, Period: "monthly"},
+		},
+		sqlCreditUsage: 40,
+	})
+	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+
+	if _, err := e.enforce(context.Background(), claims, 10); err != nil {
+		t.Fatalf("err = %v, want nil", err)
+	}
+}
+
+func TestCreditPoolIsNeverCountedInRedis(t *testing.T) {
+	// credits 池**不预留**（预检无法预估 credits），也不参与 token 单位的校正 ——
+	// 两件事都会把 token 数当积分记账。断言：credits 池不在 Redis 里留下任何计数器。
+	rdb := newFakeQuotaRedis()
+	e := newTestEnforcer(rdb, fakeQuotaStore{
+		tenantID: "t1",
+		creditPools: []EntQuotaPool{
+			{TenantID: "t1", ResourceType: "credits", TotalAmount: 1000, Period: "monthly"},
+		},
+		sqlCreditUsage: 10,
+	})
+	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+
+	if _, err := e.enforce(context.Background(), claims, 500); err != nil {
+		t.Fatalf("err = %v", err)
+	}
+	e.trueUp(context.Background(), "u1", "t1", 300)
+
+	for k := range rdb.values {
+		if strings.Contains(k, "credits") {
+			t.Fatalf("credits 池不该被计数（键 %s）", k)
+		}
+	}
+}
+
 func quotaMonthlyKeyForTest(t *testing.T, tenantID string) string {
 	t.Helper()
 	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
-	key, _, _ := quotaPeriodKey(tenantID, "monthly", now)
+	key, _, _ := quotaPeriodKey(tenantID, "token", "monthly", now)
 	return key
 }

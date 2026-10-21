@@ -38,7 +38,13 @@ type quotaRedis interface {
 type quotaStore interface {
 	ResolveTenantID(ctx context.Context, userID string) (string, error)
 	TenantTokenPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
+	// M24：`ent_quota_pools.resource_type` 允许 credits，后台也能配，但执行侧此前只查
+	// token ⇒ 管理员配的成本池**永远不会被检查**（看起来像成本闸门，实际不存在）。
+	TenantCreditPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
 	TokenUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
+	// CreditUsageSQL 按**扣减量**求和（`credit_transactions.amount < 0` 的绝对值）：
+	// 与用户余额/流水同单位，而不是 billing_records 的"分"。
+	CreditUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
 }
 
 // quotaIncrScript 原子自增并刷新月末/日末过期时间，返回自增后的值。
@@ -122,7 +128,7 @@ func (e *tenantQuotaEnforcer) enforce(ctx context.Context, claims *auth.Claims, 
 		}
 	}
 
-	pools, err := e.store.TenantTokenPools(ctx, tenantID)
+	pools, err := e.tenantPools(ctx, tenantID)
 	if err != nil {
 		slog.Warn("quota enforce: pool query failed, fail-open",
 			"tenant_id", tenantID, "error", err)
@@ -138,6 +144,31 @@ func (e *tenantQuotaEnforcer) enforce(ctx context.Context, claims *auth.Claims, 
 	// 这种漂移不会累积。
 	var committed int64
 	for _, pool := range pools {
+		if pool.ResourceType == "credits" {
+			// credits 池：**只读判定、不预留**（M24）。
+			//
+			// 为什么不预留：预检预留的是 token 预估，而 credits 池的单位是 credits
+			// （= tokens × 单价 / 1000）—— 拿 token 数去给 credits 池记账，等于把一个
+			// 粗估的 token 数当成"花了多少积分"，误差还会被单价放大。
+			// 权威用量由 `credit_transactions` 的扣减量给出（与用户账单同源）⇒
+			// 已花到上限就拒绝新请求（硬拦，fail-closed）；查询失败则 fail-open。
+			now := time.Now()
+			if e.now != nil {
+				now = e.now()
+			}
+			_, periodStart, _ := quotaPeriodKey(tenantID, "credits", pool.Period, now)
+			used, err := e.store.CreditUsageSQL(ctx, tenantID, periodStart)
+			if err != nil {
+				slog.Warn("quota enforce: credits usage query failed, fail-open",
+					"tenant_id", tenantID, "error", err)
+				continue
+			}
+			if pool.TotalAmount > 0 && used >= pool.TotalAmount {
+				return 0, fmt.Errorf("%w: tenant %s credits %s used %d/%d",
+					ErrTenantQuotaExceeded, tenantID, pool.Period, used, pool.TotalAmount)
+			}
+			continue
+		}
 		used, ok := e.consume(ctx, tenantID, pool, estimatedTokens)
 		if !ok {
 			continue // 计数链路任何失败 → fail-open
@@ -193,16 +224,40 @@ func (e *tenantQuotaEnforcer) trueUp(ctx context.Context, userID, tenantID strin
 		}
 		tenantID = resolved
 	}
-	pools, err := e.store.TenantTokenPools(ctx, tenantID)
+	pools, err := e.tenantPools(ctx, tenantID)
 	if err != nil {
 		slog.Warn("quota true-up: pool query failed, skip", "tenant_id", tenantID, "error", err)
 		return
 	}
 	for _, pool := range pools {
+		if pool.ResourceType == "credits" {
+			// credits 池没有预留（见 `enforce` 里的注释）⇒ 校正不适用：这里的 delta 是
+			// **token** 单位，施加到 credits 池上就是把 token 数当积分记账。
+			continue
+		}
 		if _, ok := e.consume(ctx, tenantID, pool, delta); !ok {
 			continue
 		}
 	}
+}
+
+// tenantPools 取该租户的**全部**配额池（token + credits）。
+//
+// 为什么必须两类都取：`ent_quota_pools.resource_type` 允许 `credits`，后台「成本中心」
+// 的下拉里也有"积分"，但执行侧此前只查 token ⇒ 管理员配的成本池**永远不会被检查**
+// —— 那比"改了没反应"更危险，因为它看起来就是一个成本闸门。
+//
+// 失败语义与预检一致：任一类查询失败都返回错误，调用方 fail-open（配额变松，不影响对话）。
+func (e *tenantQuotaEnforcer) tenantPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error) {
+	tokenPools, err := e.store.TenantTokenPools(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	creditPools, err := e.store.TenantCreditPools(ctx, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	return append(tokenPools, creditPools...), nil
 }
 
 // consume 对单个配额池执行"回填（如需）+ 原子自增"，返回自增后的用量。
@@ -216,9 +271,12 @@ func (e *tenantQuotaEnforcer) consume(ctx context.Context, tenantID string, pool
 	if e.now != nil {
 		now = e.now()
 	}
-	key, periodStart, expireAt := quotaPeriodKey(tenantID, pool.Period, now)
+	key, periodStart, expireAt := quotaPeriodKey(tenantID, "token", pool.Period, now)
 
-	// 缓存键缺失 → 从 billing_records SQL 聚合回填
+	// 缓存键缺失 → 从 billing_records SQL 聚合回填。
+	// ⚠ **credits 池不走这里**：credits 无法在预检时预估（它 = tokens × 单价 / 1000，
+	// 而 token 预估值本身就是按字符数的粗估），所以 credits 池由 `enforce` 直接读 SQL
+	// 判定、不做预留计数（见那里的注释）。
 	if n, err := e.redis.Exists(ctx, key).Result(); err != nil {
 		slog.Warn("quota enforce: redis exists failed, fail-open", "key", quotaKeyPrefix(key), "error", err)
 		return 0, false
@@ -254,16 +312,25 @@ func (e *tenantQuotaEnforcer) consume(ctx context.Context, tenantID string, pool
 }
 
 // quotaPeriodKey 返回计数器键、周期起点与过期时间（UTC）。
-// monthly → ent:quota:tokens:{tenant}:{yyyymm}；daily → ent:quota:tokens:{tenant}:{yyyymmdd}。
-func quotaPeriodKey(tenantID, period string, now time.Time) (key string, start, expireAt time.Time) {
+// monthly → ent:quota:{resource}:{tenant}:{yyyymm}；daily → ent:quota:{resource}:{tenant}:{yyyymmdd}。
+//
+// ⚠ 键里**必须**带 `resource_type`（M24）：token 与 credits 池若共用同一个计数器，
+// 两类配额会互相污染 —— credits 池的上限会被 token 用量顶爆（反之亦然），而
+// "已用量"还会按各自的数据源回填出两个不同的值，同一个键反复被覆盖。
+func quotaPeriodKey(tenantID, resourceType, period string, now time.Time) (key string, start, expireAt time.Time) {
 	now = now.UTC()
+	resource := resourceType
+	if resource == "" {
+		// 兼容：调用方没给类型时按 token（M24 之前的键语义）。
+		resource = "token"
+	}
 	if period == "daily" {
 		start = time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, time.UTC)
-		return db.RedisKey(fmt.Sprintf("ent:quota:tokens:%s:%s", tenantID, now.Format("20060102"))),
+		return db.RedisKey(fmt.Sprintf("ent:quota:%s:%s:%s", resource, tenantID, now.Format("20060102"))),
 			start, start.AddDate(0, 0, 1)
 	}
 	start = time.Date(now.Year(), now.Month(), 1, 0, 0, 0, 0, time.UTC)
-	return db.RedisKey(fmt.Sprintf("ent:quota:tokens:%s:%s", tenantID, now.Format("200601"))),
+	return db.RedisKey(fmt.Sprintf("ent:quota:%s:%s:%s", resource, tenantID, now.Format("200601"))),
 		start, start.AddDate(0, 1, 0)
 }
 
@@ -271,14 +338,14 @@ func quotaPeriodKey(tenantID, period string, now time.Time) (key string, start, 
 // billing_records SQL 聚合（只读，不回填）。供 QuotaUsage 端点复用。
 func tenantTokenUsage(ctx context.Context, store quotaStore, r quotaRedis, tenantID, period string, now time.Time) (int64, string) {
 	if r != nil {
-		key, _, _ := quotaPeriodKey(tenantID, period, now)
+		key, _, _ := quotaPeriodKey(tenantID, "token", period, now)
 		if v, err := r.Get(ctx, key).Result(); err == nil && v != "" {
 			if used, pErr := strconv.ParseInt(v, 10, 64); pErr == nil {
 				return used, "redis"
 			}
 		}
 	}
-	_, periodStart, _ := quotaPeriodKey(tenantID, period, now)
+	_, periodStart, _ := quotaPeriodKey(tenantID, "token", period, now)
 	used, err := store.TokenUsageSQL(ctx, tenantID, periodStart)
 	if err != nil {
 		slog.Warn("quota usage: sql aggregation failed", "tenant_id", tenantID, "error", err)
