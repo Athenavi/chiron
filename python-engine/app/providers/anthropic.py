@@ -7,6 +7,7 @@ from typing import Any
 
 import anthropic
 
+from app.gateway.key_retry import call_with_key_retry
 from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, LLMProvider, ToolCall
 from app.providers.sdk_compat import drop_unsupported_params
 
@@ -63,6 +64,10 @@ class AnthropicProvider(LLMProvider):
 
         input_tokens = 0
         output_tokens = 0
+        # M23 边界：流式这里**不做换 key 重试**。`client.messages.stream()` 是把"打开流"
+        # 与"消费事件"包在一起的上下文管理器，而换 key 只允许发生在"还没 yield 过任何东西"
+        # 之前；安全拆开它得改用手动 __aenter__/__aexit__（异常传播易错），收益不抵风险。
+        # 非流式路径（chat）与 OpenAI 的三条路径都已支持重试。
         client, key_item = await self._resolve_client()
         # 只发 SDK 认的参数：anthropic 1.x 已移除采样参数（temperature/top_p/top_k），
         # 透传会得到 Python 层 TypeError 而非上游 400（见 providers/sdk_compat.py）。
@@ -148,14 +153,18 @@ class AnthropicProvider(LLMProvider):
         if tools:
             kwargs["tools"] = self._convert_tools(tools)
 
-        client, key_item = await self._resolve_client()
-        # 同上：签名里没有的参数不发（新 anthropic SDK 已删除 sampling 参数）。
-        drop_unsupported_params(client.messages.create, kwargs)
-        try:
-            resp = await client.messages.create(**kwargs)
-        except Exception:
-            await self._report_failure(key_item)
-            raise
+        # M23：非流式的提交点 = 这次 create() 返回；失败时换一把 key 重试（见 key_retry）。
+        async def _create(client: Any) -> Any:
+            # 同上：签名里没有的参数不发（新 anthropic SDK 已删除 sampling 参数）。
+            drop_unsupported_params(client.messages.create, kwargs)
+            return await client.messages.create(**kwargs)
+
+        resp = await call_with_key_retry(
+            provider=self.name,
+            resolve=self._resolve_client,
+            call=_create,
+            report_failure=self._report_failure,
+        )
 
         content = ""
         tool_calls = []

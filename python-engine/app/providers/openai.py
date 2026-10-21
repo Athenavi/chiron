@@ -7,6 +7,7 @@ from typing import Any
 
 from openai import AsyncOpenAI
 
+from app.gateway.key_retry import call_with_key_retry
 from app.gateway.provider import (
     ChatMessage,
     ChatResponse,
@@ -56,14 +57,20 @@ class OpenAIProvider(LLMProvider):
         kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
         kwargs["stream"] = True
 
-        client, key_item = await self._resolve_client()
-        # 只发 SDK 认的参数（如新 SDK 已移除 temperature，见 providers/sdk_compat.py）。
-        drop_unsupported_params(client.chat.completions.create, kwargs)
-        try:
-            response = await client.chat.completions.create(**kwargs)
-        except Exception:
-            await self._report_failure(key_item)
-            raise
+        # M23：**提交点 = 这次 create() 成功返回** —— 它之前失败时还没 yield 任何 chunk，
+        # 可以换一把 key 重试（401/403/429/5xx 换 key 往往立刻就好）；一旦进入下面的
+        # chunk 循环，任何异常都**不**重试，否则会重复输出 + 重复计费。
+        async def _create(client: Any) -> Any:
+            # 只发 SDK 认的参数（如新 SDK 已移除 temperature，见 providers/sdk_compat.py）。
+            drop_unsupported_params(client.chat.completions.create, kwargs)
+            return await client.chat.completions.create(**kwargs)
+
+        response = await call_with_key_retry(
+            provider=self.name,
+            resolve=self._resolve_client,
+            call=_create,
+            report_failure=self._report_failure,
+        )
 
         tool_calls: list[dict[str, Any]] = []
         input_tokens = 0
@@ -147,13 +154,17 @@ class OpenAIProvider(LLMProvider):
         tools: list[dict[str, Any]] | None = None,
     ) -> ChatResponse:
         kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
-        client, key_item = await self._resolve_client()
-        drop_unsupported_params(client.chat.completions.create, kwargs)
-        try:
-            resp = await client.chat.completions.create(**kwargs)
-        except Exception:
-            await self._report_failure(key_item)
-            raise
+        # M23：非流式调用的提交点 = 这次 create() 返回；失败时换一把 key 重试（见 key_retry）。
+        async def _create(client: Any) -> Any:
+            drop_unsupported_params(client.chat.completions.create, kwargs)
+            return await client.chat.completions.create(**kwargs)
+
+        resp = await call_with_key_retry(
+            provider=self.name,
+            resolve=self._resolve_client,
+            call=_create,
+            report_failure=self._report_failure,
+        )
 
         choice = resp.choices[0]
         content = choice.message.content or ""
@@ -179,12 +190,16 @@ class OpenAIProvider(LLMProvider):
         )
 
     async def embed(self, text: str, model: str) -> EmbeddingResponse:
-        client, key_item = await self._resolve_client()
-        try:
-            resp = await client.embeddings.create(model=model, input=text)
-        except Exception:
-            await self._report_failure(key_item)
-            raise
+        # M23：嵌入同样只在"这次调用返回之前"重试（一次 embed 没有"半途已提交"这回事）。
+        async def _embed(client: Any) -> Any:
+            return await client.embeddings.create(model=model, input=text)
+
+        resp = await call_with_key_retry(
+            provider=self.name,
+            resolve=self._resolve_client,
+            call=_embed,
+            report_failure=self._report_failure,
+        )
         usage = resp.usage
         return EmbeddingResponse(
             embedding=resp.data[0].embedding,

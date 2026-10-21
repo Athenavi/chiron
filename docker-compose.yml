@@ -269,6 +269,9 @@ services:
       # 在途预留的重述(M18):默认 shadow 只算只打点、不改账;enforce 才把派发时那份静态猜值换成
       # "已花 + 观测速率×投影窗口"。先观察 subagent_line_projection_tokens 的分布再切。
       SUBAGENT_LINE_PROJECTION: ${SUBAGENT_LINE_PROJECTION:-}
+      # 换 key 重试(M23):一次请求遇到坏 key/限流时换一把 key 再试(提交点之前才允许);
+      # 默认 1,0 = 关。详见 .env.example。
+      KEY_RETRY_MAX: ${KEY_RETRY_MAX:-}
       # K8s 注入实例标识;compose 下留空由引擎自生成
       INSTANCE_ID: ${INSTANCE_ID:-}
       # 引擎对外可达地址(批 E1):设置后引擎向 Redis 自注册,网关据此把某个 session 的
