@@ -73,6 +73,28 @@ PY_REPORT_FILE = ROOT / "python-engine" / "app" / "subagent" / "reporting.py"
 #:   只比裸字面量会被注释满足 ⇒ 改名照样漏过（2026-10-09 实测踩到）。
 #: * **必须容忍空白** —— Go 的 `const` 块是 gofmt 对齐的（`runRecordPrefix   = "..."`），
 #:   写死单空格的片段会假红（同日实测踩到）。
+#: M24 第八族：**跨语言共享的请求字段名**。
+#:
+#: 网关把计价口径写进 `llm_config`（`submit_handler.go` 的 `applyCostDefaults`），引擎按同名读
+#: （`runtime.py`）—— 两侧是**同一个契约的两半**，任一侧改名都会让 cost 轴**静默失效**
+#: （引擎读到 0 ⇒ 永不触发，而没有任何报错）。与第五族同形：比代码形态、先剥注释。
+SHARED_PAYLOAD_FIELDS: tuple[tuple[str, str, str, str, str], ...] = (
+    (
+        "cost_per_1k_input",
+        "internal/api/submit_handler.go",
+        r'"cost_per_1k_input"',
+        "python-engine/app/agent/runtime.py",
+        r'"cost_per_1k_input"',
+    ),
+    (
+        "cost_per_1k_output",
+        "internal/api/submit_handler.go",
+        r'"cost_per_1k_output"',
+        "python-engine/app/agent/runtime.py",
+        r'"cost_per_1k_output"',
+    ),
+)
+
 SHARED_REDIS_KEY_PREFIXES: tuple[tuple[str, str, str, str, str], ...] = (
     (
         "subagent:run:",
@@ -426,6 +448,16 @@ def main() -> int:
             problems.append(f"KEY {literal!r}: Go 侧 {go_rel} 匹配不到 /{go_pat}/（改名了？）")
         if not re.search(py_pat, py_text):
             problems.append(f"KEY {literal!r}: Python 侧 {py_rel} 匹配不到 /{py_pat}/（改名了？）")
+
+    # 第八族：跨语言共享的**请求字段名**（计价口径随 `llm_config` 下发，两侧同名是契约）
+    for literal, go_rel, go_pat, py_rel, py_pat in SHARED_PAYLOAD_FIELDS:
+        go_path, py_path = ROOT / go_rel, ROOT / py_rel
+        go_text = _code_lines(go_path.read_text(encoding="utf-8")) if go_path.exists() else ""
+        py_text = _code_lines(py_path.read_text(encoding="utf-8")) if py_path.exists() else ""
+        if not re.search(go_pat, go_text):
+            problems.append(f"FIELD {literal!r}: Go 侧 {go_rel} 匹配不到 /{go_pat}/（改名了？）")
+        if not re.search(py_pat, py_text):
+            problems.append(f"FIELD {literal!r}: Python 侧 {py_rel} 匹配不到 /{py_pat}/（改名了？）")
 
     # 第六族：跨语言共享的数值常量（同样：剥注释 + 容忍空白）
     for go_var, value, go_rel, py_var, py_rel in SHARED_CONSTANTS:
