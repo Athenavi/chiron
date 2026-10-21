@@ -56,6 +56,27 @@ func applyMaxOutputDefault(llmConfig map[string]interface{}, maxOutputTokens int
 	llmConfig["max_tokens"] = maxOutputTokens
 }
 
+// applyCostDefaults 把**计价口径**随请求下发（M24 下半）。
+//
+// 为什么必须下发而不是让引擎自己算：计价表是网关的商业口径（credits / 1000 tokens），
+// 引擎持有第二份必然漂移 —— 与 §4 同族"注释写清要同步"那条教训同源。下发的代价是
+// 两侧字段名/单位要一致，因此 `scripts/check_tool_policy_parity.py` 有一族断言钉住它。
+//
+// 零值（未配置）与请求已带该字段时都不注入：前者是"网关没配计价"，后者是显式优先。
+func applyCostDefaults(llmConfig map[string]interface{}, c billing.BillingConfig) {
+	if llmConfig == nil {
+		return
+	}
+	if c.LLMCostPerToken <= 0 && c.LLMCostPerOutput <= 0 {
+		return
+	}
+	if _, ok := llmConfig["cost_per_1k_input"]; ok {
+		return
+	}
+	llmConfig["cost_per_1k_input"] = c.LLMCostPerToken
+	llmConfig["cost_per_1k_output"] = c.LLMCostPerOutput
+}
+
 type SubmitHandler struct {
 	python     *engine.PythonClient
 	sessionMgr *session.Manager
@@ -65,6 +86,17 @@ type SubmitHandler struct {
 	// `AgentDefaultMaxTurns`（默认提交回合数）与 `AgentMaxOutputTokens`（单次调用上限）。
 	// 允许为 nil（测试里就是这样）：此时回落到包内的 DefaultMaxTurns / DefaultMaxOutputTokens。
 	agentCfg *config.Config
+	// costCfg 是**计价口径**（M24 下半）：引擎的 cost 轴要能拦"跑了多少钱"，就必须知道
+	// 单价 —— 而计价口径的权威在网关（`billing.Manager`）。零值 = 不注入（测试/未配置）。
+	costCfg billing.BillingConfig
+}
+
+// SetCostConfig 注入计价口径（credits / 1000 tokens），供 `llm_config` 下发给引擎。
+//
+// 用 setter 而不是加构造参数：现有 4 处测试构造点都不关心计价，加参数会逼它们一起改，
+// 而"零值 = 不注入"让未调用它的路径行为完全不变。
+func (h *SubmitHandler) SetCostConfig(c billing.BillingConfig) {
+	h.costCfg = c
 }
 
 func NewSubmitHandler(python *engine.PythonClient, sessionMgr *session.Manager, eventHub *broadcast.Hub, biller engine.Biller, agentCfg *config.Config) *SubmitHandler {
@@ -505,6 +537,8 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	// **只在请求没带时注入**：前端 / Agent 档案的显式值优先（与 max_turns 同一优先级）；
 	// 引擎 `app/main.py` 的兜底 8192 因此只在"绕过网关直连引擎"时才生效。
 	applyMaxOutputDefault(llmConfig, maxOutputTokens)
+	// M24 下半：把计价口径一起下发 —— 引擎的 cost 轴靠它把 token 换算成 credits。
+	applyCostDefaults(llmConfig, h.costCfg)
 	llmConfig["mode"] = agentCfg.mode.Value
 	// 工具授权模式随请求下发（**不再经 Redis 往返**）：引擎在任务开始时读取一次并用于
 	// 每次工具裁决（python-engine/app/agent/runtime.py）。此前它存在 Redis 里由引擎反查，

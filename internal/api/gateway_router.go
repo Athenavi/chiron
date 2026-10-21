@@ -296,6 +296,8 @@ func NewGatewayRouter(
 
 	// Submit handler (proxies to Python)
 	submitHandler := NewSubmitHandler(pythonClient, sessionMgr, eventHub, billingMgr, cfg)
+	// M24 下半：计价口径的权威在网关（`billing.Manager` 的 config），随请求下发给引擎。
+	submitHandler.SetCostConfig(billingMgr.Config())
 
 	// Plugins (MCP server config management)
 	pluginHandler := NewPluginHandler(cfg, authenticator)

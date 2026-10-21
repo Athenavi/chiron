@@ -1307,19 +1307,20 @@ class AgentRuntime:
         return AgentEvent(type="text", content=str(output), trace_id=trace_id)
 
     def _budget_snapshot(
-        self, budget: TaskBudget, *, turns_used: int, tokens_used: int
+        self, budget: TaskBudget, *, turns_used: int, tokens_used: int, cost_used: float = 0.0
     ) -> dict[str, Any]:
         """预算快照：每轴 `{used, limit}`（`limit=0` 表示该轴不限）。
 
-        `cost` 轴的 `used` 恒为 0 —— 计价在网关侧（按 provider 口径换算），引擎不算钱，
-        所以只报它的 limit，不编造一个引擎无法负责的数字。
+        `cost` 轴的 `used` 由**网关下发的单价**换算而来（M24）：引擎不再"只报 limit" ——
+        单价经 `llm_config.cost_per_1k_*` 下发，换算口径与网关的 `DeductTokens` 一致。
+        网关没下发（旧网关 / 直连引擎）时 `cost_used` 为 0，`limit` 照报，行为与 M24 之前一致。
         """
         return {
             "steps": {"used": self._tool_steps, "limit": budget.steps},
             "turns": {"used": turns_used, "limit": budget.turns},
             "tokens": {"used": tokens_used, "limit": budget.tokens},
             "wall": {"used": int(budget.elapsed()), "limit": budget.wall},
-            "cost": {"used": 0.0, "limit": budget.cost},
+            "cost": {"used": round(cost_used, 4), "limit": budget.cost},
         }
 
     async def _line_violation(self, task: AgentTask, *, own_tokens: int) -> str:
@@ -1968,6 +1969,26 @@ class AgentRuntime:
                 if wall_carried > 0:
                     budget.started_at -= wall_carried
 
+            # M24 下半：计价口径由**网关下发**（`llm_config.cost_per_1k_*`，credits/1000 tokens）。
+            # 引擎不持有自己的价表 —— 两份必然漂移（见 internal/api/submit_handler.go 的
+            # `applyCostDefaults` 与 scripts/check_tool_policy_parity.py 里钉住字段名的那一族）。
+            # 取不到（旧网关 / 直连引擎）时为 0 ⇒ cost 轴不触发，行为与 M24 之前一致。
+            self._cost_per_1k_in = float(llm_config.get("cost_per_1k_input") or 0.0)
+            self._cost_per_1k_out = float(llm_config.get("cost_per_1k_output") or 0.0)
+
+            def _cost_spent() -> float:
+                """本 run 全程的**估算成本**（credits）= 全程 token × 下发单价。
+
+                与 `_tokens_spent` 同源（含续跑继承的那一段）：成本轴要拦的是"跨接管一共
+                花了多少"，起点必须与预算轴一致，否则接管一次就白送一份成本额度。
+                """
+                return (
+                    (resumed_input_tokens + total_input_tokens) / 1000.0 * self._cost_per_1k_in
+                    + (resumed_output_tokens + total_output_tokens)
+                    / 1000.0
+                    * self._cost_per_1k_out
+                )
+
             def _tokens_spent() -> int:
                 """本 run **全程**的 token 花销 = 续跑继承的那一段 + 本段已花。
 
@@ -1994,6 +2015,9 @@ class AgentRuntime:
                     steps=self._tool_steps,
                     turns=turn,
                     tokens=_tokens_spent(),
+                    # M24：cost 轴现在有真值（全程 token × 网关下发的单价）。
+                    # 取不到单价时为 0 ⇒ 该轴不触发，与 M24 之前一致。
+                    cost=_cost_spent(),
                 )
                 if exceeded:
                     logger.warning(
@@ -2047,6 +2071,7 @@ class AgentRuntime:
                             budget,
                             turns_used=turn,
                             tokens_used=_tokens_spent(),
+                            cost_used=_cost_spent(),
                         ),
                         trace_id=trace_id,
                     )
@@ -2833,6 +2858,7 @@ class AgentRuntime:
                     budget,
                     turns_used=turn + 1,
                     tokens_used=_tokens_spent(),
+                    cost_used=_cost_spent(),
                 ),
                 context=self._context_snapshot(
                     used=total_input_tokens,
