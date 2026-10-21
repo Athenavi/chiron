@@ -124,6 +124,19 @@ SELECT COALESCE(sum(input_tokens + output_tokens), 0)::bigint AS tokens,
  WHERE root_run_id = $1 AND tenant_id = $2
 """
 
+#: M26 会话线：**主 run 的回合用量**（`turns` 是网关按回合记账的权威表）。
+#:
+#: 为什么必须 join `users`：`turns` 只记 `user_id`、没有 `tenant_id`，不 join 就会把别的租户
+#: 恰好同名的 `session_id` 的用量算进来 —— 与 M24 的 credits 求和同一个理由。
+#: 为什么不用 `subagent_runs`：主 run 不写那张表（它就是"主"），它的用量只在这里。
+SESSION_USAGE_SQL = """
+SELECT COALESCE(sum(t.input_tokens + t.output_tokens), 0)::bigint AS tokens,
+       count(*)::int                                              AS runs
+  FROM turns t
+  JOIN users u ON u.id = t.user_id
+ WHERE t.session_id = $1 AND u.tenant_id = $2
+"""
+
 #: A5（方案 04 §3）：生命周期遥测**单独写**，与上面两条同理由 —— 未迁移
 #: （0006_subagent_lifecycle）的库只会丢这几列，不会让子 Agent 的收尾 UPDATE 整条失败。
 #:
@@ -283,6 +296,8 @@ class SubagentRunStore:
         self._broken = False  # 表缺失等不可恢复错误：本次进程内不再尝试
         #: 血缘读失败的**告警去重**标记（只影响日志，不影响 `_broken` 的降级判定）。
         self._lineage_warned = False
+        #: M26 会话线：`session_usage` 的"只告警一次"旗标（与 `_lineage_warned` 同理由）。
+        self._session_warned = False
         #: 本实例已入 running 但尚未写终态的 run（用于 unfinalized 指标）。
         #: 用集合而不是裸计数器：终态可能被写两次（正常收尾 + 取消收尾竞争），
         #: 集合能保证同一个 run 只减一次，指标不会变成负数。
@@ -631,6 +646,31 @@ class SubagentRunStore:
             return None
         if row is None:
             return (0, 0)
+        return int(row["tokens"] or 0), int(row["runs"] or 0)
+
+    async def session_usage(self, session_id: str, tenant_id: str) -> tuple[int, int] | None:
+        """这个**会话**到今天为止累计花掉多少 token、跑过几回合（M26 会话线）。
+
+        与 `lineage_usage` 的分工：那条按 `root_run_id` 数**子 Agent 委派树**；这条按
+        `session_id` 数**主 run 的回合**。主 run 自己不写 `subagent_runs`，它的用量只能从
+        `turns`（网关按回合记账的权威表）拿 —— 这正是"主 run 不在线账之内"那个缺口。
+
+        返回 ``None`` = **问不出来**（缺租户、库不可用、表缺失），与 `lineage_usage` 同口径：
+        把"查不到"和"确实没花"混成一个值，会让闸门在缺租户的路径上判成"还有额度"。
+        """
+        if not self.available or not session_id or not tenant_id:
+            return None
+        try:
+            row = await self._pool.fetchrow(SESSION_USAGE_SQL, session_id, tenant_id)
+        except Exception as exc:  # noqa: BLE001
+            if not self._session_warned:
+                self._session_warned = True
+                logger.warning(
+                    "subagent session_usage 查询失败（此后不再重复告警）：%s", str(exc)[:160]
+                )
+            return None
+        if row is None:
+            return None
         return int(row["tokens"] or 0), int(row["runs"] or 0)
 
     # ── 指标记账（只在权威写入成功后调用）──

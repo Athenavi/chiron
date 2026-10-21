@@ -1324,32 +1324,67 @@ class AgentRuntime:
         }
 
     async def _line_violation(self, task: AgentTask, *, own_tokens: int) -> str:
-        """M15b 任务线闸门：这条委派线到今天该不该停（返回轴名，``""`` = 放行）。
+        """任务线闸门：这条线到今天该不该停（返回轴名，``""`` = 放行）。
 
-        只有子 Agent 带 ``task.subagent_line``：线账的账本是 ``subagent_runs`` 按
-        ``root_run_id`` 的求和，主 run 自己那一份不在里面（口径与取舍见
-        ``app/subagent/line_ledger.py``）。
+        **两条线**（M26 起）：
 
-        判定放在**每轮开头**而不是只在委派入口：一次 run 能跑几十轮，只在入口判就等于
-        给每一段都额外放行一整轮的额度。
+        * 子 Agent 委派（``task.subagent_line`` 非空）—— M15b 的委派树线，账本是
+          `subagent_runs` 按 `root_run_id` 的求和；
+        * **主 run 自己** —— M26 的会话线，账本是 `turns` 按 `session_id` 的求和。
 
-        任何一步问不出来都放行 —— 线账是第二道闸门（per-run 预算与租户预算都还在），
-        让它的一次抖动停掉全站子 Agent 不划算。
+        为什么主 run 也要问：线账要拦的是"续跑次数 × 每 run 额度 = 无上限"，而主 run 的反复
+        续跑正是这句话的字面场景 —— 此前它**完全不在线账内**（`subagent_runs` 里没有主 run 的
+        行，所以那条线对只有主 run 的会话等于没有闸门）。
+
+        判定放在**每轮开头**而不是只在委派入口：一次 run 能跑几十轮，只在入口判就等于给每一段
+        都额外放行一整轮的额度。
+
+        任何一步问不出来都放行 —— 线账是第二道闸门（per-run 预算与租户预算都还在），让它的一次
+        抖动停掉全站不划算。
         """
-        root = str(getattr(task, "subagent_line", "") or "")
-        if not root:
-            return ""
         try:
             from app.subagent.line_ledger import get_line_ledger
 
-            return await get_line_ledger().check(
-                root, task.tenant_id, run_id=task.id, own_tokens=own_tokens
+            led = get_line_ledger()
+            root = str(getattr(task, "subagent_line", "") or "")
+            if root:
+                return await led.check(root, task.tenant_id, run_id=task.id, own_tokens=own_tokens)
+            # M26：主 run 的线是**会话**（`session_id` 跨续跑/接管稳定，而 run_id 每次都是新的）。
+            session_id = str(getattr(task, "session_id", "") or "")
+            if not session_id:
+                return ""
+            return await led.check_session(
+                session_id, task.tenant_id, run_id=task.id, own_tokens=own_tokens
             )
         except Exception as exc:  # noqa: BLE001
-            logger.warning(
-                "subagent line gate unavailable (task=%s): %s", task.id, str(exc)[:160]
-            )
+            logger.warning("line gate unavailable (task=%s): %s", task.id, str(exc)[:160])
             return ""
+
+    async def _pause_session_line(self, task: AgentTask, axis: str) -> None:
+        """M26：会话线到限 ⇒ 暂停这条会话线并挂出提额待办。
+
+        与子 Agent 线越界**共用** `_report_line_exhaustion`（`scope="session"`），差别只在账本
+        （`turns` vs `subagent_runs`）与指标。这里**不让异常冒出去**：通知人失败不该让"已经失败
+        的那一轮"再失败一次 —— 与子 Agent 侧同一条纪律。
+        """
+        try:
+            from app.agent.subagent_runner import _report_line_exhaustion
+
+            session_id = str(getattr(task, "session_id", "") or "")
+            await _report_line_exhaustion(
+                root=session_id,
+                tenant_id=task.tenant_id,
+                user_id=task.user_id,
+                session_id=session_id,
+                run_id=task.id,
+                axis=axis,
+                scope="session",
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.error(
+                "session line %s: pause/ticket step failed (axis=%s): %s",
+                getattr(task, "session_id", ""), axis, exc,
+            )
 
     async def _persist_dropped(
         self, dropped: list[tuple[str, str]], task: AgentTask
@@ -2046,6 +2081,11 @@ class AgentRuntime:
                     task, own_tokens=_tokens_spent()
                 )
                 if line_axis:
+                    # M26：主 run 的会话线越界 —— 除了硬拦，还要**挂一张提额票**：只报错的话
+                    # 用户看到的只是"消息失败了"，既不知道这是额度问题、也不知道可以提额。
+                    # 子 Agent 的委派线越界由 subagent_runner 自己挂票，这里不重复挂。
+                    if not str(getattr(task, "subagent_line", "") or ""):
+                        await self._pause_session_line(task, line_axis)
                     yield AgentEvent(
                         type="error",
                         error=f"budget_exceeded:{line_axis}",

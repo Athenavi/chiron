@@ -70,6 +70,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.observability.metrics import (
+    SESSION_LINE_GATE,
     SUBAGENT_LINE_GATE,
     SUBAGENT_LINE_PROJECTION,
     SUBAGENT_LINE_PROJECTION_TOKENS,
@@ -107,6 +108,14 @@ PROJECTION_MIN_SAMPLE_SECONDS = 30
 #: ``SUBAGENT_LINE_PROJECTION`` 的取值与默认。默认 shadow 的理由写在模块头"代价要说清"那段。
 PROJECTION_MODES = ("off", "shadow", "enforce")
 DEFAULT_PROJECTION_MODE = "shadow"
+
+#: M26 会话线闸门（``SESSION_LINE_GATE``）的取值与默认。
+#:
+#: 与 ``SUBAGENT_LINE_PROJECTION`` 同一套三档（off / shadow / enforce），默认同样是 **shadow**：
+#: 这条闸门要改变的是**主 run**（每一条消息）的行为，一旦判错就是"用户的消息跑不动了"。
+#: 先只算、只打点，看过 ``session_line_gate_total`` 的分布再按部署切 enforce。
+SESSION_LINE_MODES = ("off", "shadow", "enforce")
+DEFAULT_SESSION_LINE_MODE = "shadow"
 
 
 def _rowcount(result: Any) -> int:
@@ -314,6 +323,16 @@ def projection_mode() -> str:
     return raw if raw in PROJECTION_MODES else DEFAULT_PROJECTION_MODE
 
 
+def session_line_mode() -> str:
+    """会话线闸门的开关（``SESSION_LINE_GATE``）：``off`` / ``shadow`` / ``enforce``。
+
+    默认 **shadow**：算、打点、**不改判定**。取不到或不认识的值一律回落到默认 —— 与
+    ``projection_mode`` 同一口径：配置写错不该改变判定。
+    """
+    raw = (os.getenv("SESSION_LINE_GATE") or "").strip().lower()
+    return raw if raw in SESSION_LINE_MODES else DEFAULT_SESSION_LINE_MODE
+
+
 def _usable_root(root: str) -> bool:
     """run id 会进 Redis 键名与 Lua 参数 —— 只接受自己的 id 字符集。
 
@@ -461,7 +480,12 @@ class LineLedger:
     # ── 读 ──
 
     async def state(
-        self, root: str, tenant_id: str, *, exclude_run_id: str = ""
+        self,
+        root: str,
+        tenant_id: str,
+        *,
+        exclude_run_id: str = "",
+        scope: str = "delegation",
     ) -> LineState | None:
         """这条线今天的账目。``None`` = **问不出来**（调用方按"没有这条线"放行）。
 
@@ -474,7 +498,7 @@ class LineLedger:
         ctrl = await self._ctrl_row(root, tenant_id)
         if ctrl is None:
             return None
-        settled = await self._settled(root, tenant_id)
+        settled = await self._settled(root, tenant_id, scope=scope)
         if settled is None:
             return None
         cap = ctrl[0] if ctrl[0] != 0 else default_cap()
@@ -503,6 +527,39 @@ class LineLedger:
             logger.warning("subagent line gate tripped (%s): %s", axis, state.describe())
         return axis
 
+    async def check_session(
+        self, session_id: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0
+    ) -> str:
+        """M26 会话线闸门：这条**会话**到今天该不该停（返回轴名，``""`` = 放行）。
+
+        与 :meth:`check` 的分工：那条数**委派树**（`subagent_runs` 按 `root_run_id`），这条数
+        **主 run 的回合**（`turns` 按 `session_id`）。主 run 不写 `subagent_runs`，所以它此前
+        完全不在线账内 —— 而"续跑次数 × 每 run 额度 = 无上限"这句话说的正是主 run 的反复续跑。
+
+        **只判定、不预留**：主 run 是执行体本身，"预留自己的上限"是自指。预留仍只属于被派发出
+        去的那一层（子 Agent）；这里的到限处置交给调用方（硬拦 + 挂提额待办）。
+
+        开关（``SESSION_LINE_GATE``）：``off`` 直接放行；``shadow``（默认）算、打点、**不改判定**；
+        ``enforce`` 越界即返回轴名。``state`` 为 ``None``（问不出来）一律放行 —— 与 :meth:`check`
+        同口径：闸门抖动不该停掉全站。
+        """
+        mode = session_line_mode()
+        if mode == "off":
+            SESSION_LINE_GATE.labels(outcome="off", axis="-").inc()
+            return ""
+        state = await self.state(session_id, tenant_id, exclude_run_id=run_id, scope="session")
+        if state is None:
+            SESSION_LINE_GATE.labels(outcome="unknown", axis="-").inc()
+            return ""
+        axis = state.violation(own_tokens)
+        if not axis:
+            SESSION_LINE_GATE.labels(outcome="ok", axis="-").inc()
+            return ""
+        outcome = "tripped" if mode == "enforce" else "shadow"
+        SESSION_LINE_GATE.labels(outcome=outcome, axis=axis).inc()
+        logger.warning("session line gate (%s, mode=%s): %s", axis, mode, state.describe())
+        return axis if mode == "enforce" else ""
+
     async def _ctrl_row(self, root: str, tenant_id: str) -> tuple[int, bool, str] | None:
         """控制态**直接读 PG、不做镜像**。
 
@@ -524,7 +581,9 @@ class LineLedger:
             return (0, False, "")
         return (int(row["cap_tokens"] or 0), bool(row["paused"]), str(row["pause_reason"] or ""))
 
-    async def _settled(self, root: str, tenant_id: str) -> int | None:
+    async def _settled(
+        self, root: str, tenant_id: str, *, scope: str = "delegation"
+    ) -> int | None:
         """**先读镜像，缺了才去 PG 求和** —— 这条快路径存在的全部理由。
 
         fan-out 时同一条线上多个 run 每轮都要问一次闸门；没有镜像就等于每轮一次
@@ -533,7 +592,14 @@ class LineLedger:
         **少算** —— 与"每轮都求和但会多算"相比，这一侧的代价是一轮 run 的量级。
 
         回填用 NX：并发里另一个 run 可能刚把键建起来并 INCRBY 过，覆盖它会把那段实际用量抹掉。
+
+        ``scope="session"``（M26 会话线）：账本换成 `turns` 按 `session_id` 的求和 —— 主 run
+        的回合用量。**会话线不做 Redis 镜像**：镜像存在的理由是省 fan-out 的 QPS，而主 run 每
+        会话只有一条、每轮一次聚合，量级完全不同；为它维护第二份可能漂移的账不划算。
         """
+        if scope == "session":
+            usage = await self._run_store().session_usage(root, tenant_id)
+            return None if usage is None else max(0, int(usage[0]))
         redis = await self._redis_safe()
         if redis is not None:
             mirrored = await self._mirror_get(root)
