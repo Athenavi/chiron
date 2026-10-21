@@ -111,6 +111,9 @@ type EntCostStore interface {
 
 	// TenantTokenPools 返回租户的 resource_type='token' 配额池（quota 强制用）
 	TenantTokenPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
+	// M24：credits 池此前只有"能配、不检查"的半个实现。
+	TenantCreditPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
+	CreditUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
 	// TokenUsageSQL 从 billing_records SQL 聚合 token 用量（Redis 计数器回填用）
 	TokenUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
 	// ResolveTenantID 经 users 表解析用户所属租户
@@ -486,6 +489,46 @@ func (s *pgEntCostStore) TokenUsageSQL(ctx context.Context, tenantID string, sin
 		`SELECT COALESCE(SUM(input_tokens + output_tokens),0)
 		 FROM billing_records WHERE tenant_id = $1 AND created_at >= $2`, tenantID, since).
 		Scan(&used)
+	return used, err
+}
+
+// TenantCreditPools 取该租户的 **credits** 配额池（M24）。
+//
+// 与 `TenantTokenPools` 只差 `resource_type`：`ent_quota_pools` 一直允许 credits
+// （后台「成本中心」的下拉里就有"积分"），但执行侧此前只查 token ⇒ 管理员配的成本池
+// **永远不会被检查**。
+func (s *pgEntCostStore) TenantCreditPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error) {
+	rows, err := db.GlobalDBManager.Query(ctx,
+		`SELECT `+quotaPoolColumns+` FROM ent_quota_pools
+		 WHERE tenant_id = $1 AND resource_type = 'credits' ORDER BY created_at`, tenantID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	pools := []EntQuotaPool{}
+	for rows.Next() {
+		p, err := scanQuotaPool(rows)
+		if err != nil {
+			return nil, err
+		}
+		pools = append(pools, *p)
+	}
+	return pools, rows.Err()
+}
+
+// CreditUsageSQL 按**扣减量**求和：`credit_transactions` 里 `amount < 0` 的绝对值之和。
+//
+// 单位是 credits（与用户余额、流水同源），**不是** `billing_records.cost_cents` 的"分"
+// —— 两个量在库里并存，混用会让"已用量"与管理员看到的账单对不上。
+// 该表只有 `user_id`，租户维度必须 join `users`（与 `ResolveTenantID` 同源）。
+func (s *pgEntCostStore) CreditUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error) {
+	var used int64
+	err := db.GlobalDBManager.QueryRow(ctx,
+		`SELECT COALESCE(SUM(-ct.amount), 0)
+		   FROM credit_transactions ct
+		   JOIN users u ON u.id = ct.user_id
+		  WHERE u.tenant_id = $1 AND ct.created_at >= $2 AND ct.amount < 0`,
+		tenantID, since).Scan(&used)
 	return used, err
 }
 
