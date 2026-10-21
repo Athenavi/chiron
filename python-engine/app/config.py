@@ -128,6 +128,11 @@ class Settings(BaseSettings):
 
     # ── Agent 配置 ──
     max_turns: int = 10
+    #: M23：一次 LLM 请求内**最多换几把 key** 再试一次（0 = 关掉整个机制，默认 1）。
+    #: 只覆盖"还没向调用方产出任何东西"的那一次调用（见 `app/gateway/key_retry.py` 的
+    #: "提交点"）—— 流式响应一旦开始吐 chunk 就绝不重试，否则重复输出 + 重复计费。
+    #: 上限刻意低：重试会放大上游压力（LiteLLM 把 `max_retries` 钉成 0 正是为此）。
+    key_retry_max: int = 1
     #: 单批内**并发**执行的工具数上限（C3）。只对"读级且无交互语义"的调用生效
     #: （见 `runtime._split_tool_batch`）；写/删/外部类与审批始终串行。
     #: 设为 1 即等价于"完全串行"（回滚开关）。

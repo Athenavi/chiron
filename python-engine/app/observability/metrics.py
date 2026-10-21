@@ -42,6 +42,14 @@ LLM_CACHE_HITS = Counter(
     ["level"],  # l1 / l2 / l3
 )
 LLM_CACHE_MISSES = Counter("llm_cache_misses_total", "LLM cache misses")
+# M23：换 key 重试的结果分布。`retried` = 换了 key 再试（不是失败），`ok` = 换 key 后成功，
+# `skipped` = 没换（错误不可重试 / 预算用尽 / 无 key 可换）。三个读数合起来回答
+# "这套 key 环的健康度"：retried 持续上涨说明有 key 在反复失效。
+LLM_KEY_RETRY = Counter(
+    "llm_key_retry_total",
+    "LLM key rotation retries (outcome: retried/ok/skipped)",
+    ["provider", "outcome"],
+)
 LLM_CIRCUIT_STATE = Gauge(
     "llm_circuit_breaker_state",
     "Circuit breaker state (0=closed, 1=open)",
