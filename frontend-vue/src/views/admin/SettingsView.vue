@@ -73,18 +73,6 @@ const s3Config = ref({
   use_ssl: false,
 })
 
-// Python AI 引擎配置（下发到引擎，api_key 等敏感值加密入库）
-const pythonConfig = ref({
-  llm_provider: 'openai',
-  llm_model: '',
-  llm_api_key: '',
-  llm_base_url: '',
-  embedding_model: '',
-  max_turns: 10,
-  queue_worker_concurrency: 10,
-  cache_l1_capacity: 2048,
-})
-
 /**
  * 默认 Provider 选项来自服务提供商目录（GET /v1/admin/llm-providers），
  * 避免把提供商写死在此处；目录不可达时退回当前值，保证下拉不空。
@@ -100,10 +88,6 @@ async function loadLlmProviderOptions() {
     }))
   } catch {
     llmProviderOptions.value = []
-  }
-  const current = pythonConfig.value.llm_provider
-  if (current && !llmProviderOptions.value.some(o => o.value === current)) {
-    llmProviderOptions.value = [{ label: current, value: current }, ...llmProviderOptions.value]
   }
 }
 
@@ -366,18 +350,6 @@ async function saveS3() {
   }
 }
 
-async function savePython() {
-  saving.value = true
-  try {
-    await saveSettings('python', pythonConfig.value)
-    message.success(t('common.python_engine_config_saved_takes_effect_after_engine_restart'))
-  } catch (err) {
-    message.error(t('errors.save_failed_error', { error: saveErrorText(err) }))
-  } finally {
-    saving.value = false
-  }
-}
-
 const copyNginx = () => {
   navigator.clipboard.writeText(nginxConfig)
   message.success(t('common.copied_to_clipboard'))
@@ -410,7 +382,6 @@ onMounted(async () => {
     mergeConfig(postgresConfig, await getSettings('postgres'))
     mergeConfig(corsConfig, await getSettings('cors'))
     mergeConfig(s3Config, await getSettings('s3'))
-    mergeConfig(pythonConfig, await getSettings('python'))
   } catch {
     // 拉取失败保留默认值，不阻断页面
   } finally {
@@ -931,100 +902,6 @@ onMounted(async () => {
             </Card>
           </Col>
 
-          <!-- Python AI 引擎配置 -->
-          <Col
-            :xs="24"
-            :sm="24"
-          >
-            <Card :title="$t('common.python_ai_engine_config')">
-              <Row :gutter="16">
-                <Col
-                  :xs="24"
-                  :sm="12"
-                >
-                  <Form
-                    :model="pythonConfig"
-                    layout="vertical"
-                  >
-                    <FormItem label="LLM Provider">
-                      <Select
-                        v-model:value="pythonConfig.llm_provider"
-                        :options="llmProviderOptions"
-                        show-search
-                        option-filter-prop="label"
-                        style="width: 100%"
-                      />
-                    </FormItem>
-                    <FormItem :label="$t('agent.default_model')">
-                      <Input
-                        v-model:value="pythonConfig.llm_model"
-                        placeholder="deepseek-v4-flash"
-                      />
-                    </FormItem>
-                    <FormItem :label="$t('common.llm_api_key_encrypted_at_rest')">
-                      <InputPassword v-model:value="pythonConfig.llm_api_key" />
-                    </FormItem>
-                    <FormItem label="LLM Base URL">
-                      <Input
-                        v-model:value="pythonConfig.llm_base_url"
-                        placeholder="https://api.deepseek.com"
-                      />
-                    </FormItem>
-                  </Form>
-                </Col>
-                <Col
-                  :xs="24"
-                  :sm="12"
-                >
-                  <Form
-                    :model="pythonConfig"
-                    layout="vertical"
-                  >
-                    <FormItem :label="$t('agent.embedding_model')">
-                      <Input
-                        v-model:value="pythonConfig.embedding_model"
-                        placeholder="text-embedding-3-small"
-                      />
-                    </FormItem>
-                    <FormItem :label="$t('agent.agent_max_rounds')">
-                      <InputNumber
-                        v-model:value="pythonConfig.max_turns"
-                        :min="1"
-                        :max="100"
-                        style="width: 100%"
-                      />
-                    </FormItem>
-                    <FormItem :label="$t('admin.queue_concurrency')">
-                      <InputNumber
-                        v-model:value="pythonConfig.queue_worker_concurrency"
-                        :min="1"
-                        :max="100"
-                        style="width: 100%"
-                      />
-                    </FormItem>
-                    <FormItem :label="$t('admin.l1_cache_capacity')">
-                      <InputNumber
-                        v-model:value="pythonConfig.cache_l1_capacity"
-                        :min="128"
-                        :max="100000"
-                        style="width: 100%"
-                      />
-                    </FormItem>
-                  </Form>
-                </Col>
-              </Row>
-              <Button
-                type="primary"
-                :loading="saving"
-                @click="savePython"
-              >
-                {{ $t('common.save') }}
-              </Button>
-              <div class="config-note">
-                {{ $t('common.pulled_via_an_internal_endpoint_when_the_engine_starts_api_key_encrypted_at_rest') }}
-              </div>
-            </Card>
-          </Col>
         </Row>
       </TabPane>
 
