@@ -149,6 +149,18 @@ SUBAGENT_LINE_GATE = Counter(
     "Run-line budget gate trips (M15b): line_tokens = 累计到上限, line_paused = 被人按了暂停",
     ["axis"],
 )
+SESSION_LINE_GATE = Counter(
+    "session_line_gate_total",
+    "M26 会话线闸门（主 run 的回合累计）：outcome = off/shadow/ok/tripped/unknown，"
+    "axis = line_tokens/line_paused（未越界时记 '-'）",
+    ["outcome", "axis"],
+)
+SESSION_LINE_PAUSE = Counter(
+    "session_line_pause_total",
+    "M26 会话线到限的暂停与提额：与 subagent_line_pause_total 同四态，"
+    "分开是为了两条线的 enforce 能分别切",
+    ["outcome"],
+)
 SUBAGENT_LINE_PAUSE = Counter(
     "subagent_line_pause_total",
     "M15c 线暂停与提额：paused = 暂停并挂出待办, paused_no_ticket = 暂停了但待办没建成（用户看不见）, "

@@ -287,7 +287,14 @@ class _StubLedger:
         self.calls.append(("raise", root, tenant_id, cap_tokens, updated_by))
         return True
 
-    async def state(self, root: str, tenant_id: str, *, exclude_run_id: str = "") -> LineState | None:
+    async def state(
+        self,
+        root: str,
+        tenant_id: str,
+        *,
+        exclude_run_id: str = "",
+        scope: str = "delegation",
+    ) -> LineState | None:
         self.calls.append(("state", root, tenant_id))
         return self.state_obj
 

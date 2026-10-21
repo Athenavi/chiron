@@ -270,6 +270,7 @@ async def _report_line_exhaustion(
     session_id: str,
     run_id: str,
     axis: str,
+    scope: str = "delegation",
 ) -> None:
     """M15c：线账越界 ⇒ 把这条线**暂停**并挂出一张"请提额"的人工介入待办。
 
@@ -285,22 +286,29 @@ async def _report_line_exhaustion(
     """
     if not root or not axis:
         return
-    from app.observability.metrics import SUBAGENT_LINE_PAUSE
+    from app.observability.metrics import SESSION_LINE_PAUSE, SUBAGENT_LINE_PAUSE
     from app.subagent.line_ledger import DEFAULT_LINE_MAX_TOKENS, get_line_ledger
+
+    # 两条线共用这一套（M26）：子 Agent 委派树（scope="delegation"）与会话线（scope="session"）。
+    # 指标与措辞分开，是因为"要不要切 enforce"是两条线各自的决定。
+    is_session = scope == "session"
+    pause_counter = SESSION_LINE_PAUSE if is_session else SUBAGENT_LINE_PAUSE
+    what = "会话线（主 run 的回合累计）" if is_session else "子 Agent 任务线"
+    log_name = "session line" if is_session else "subagent line"
 
     led = get_line_ledger()
     try:
         paused = await led.pause_for_budget(root, tenant_id)
         if not paused:
-            SUBAGENT_LINE_PAUSE.labels(outcome="pause_failed").inc()
+            pause_counter.labels(outcome="pause_failed").inc()
             logger.error(
-                "subagent line %s hit %s but could NOT be paused (tenant=%s)：这条线仍在花钱，"
+                "%s %s hit %s but could NOT be paused (tenant=%s)：这条线仍在花钱，"
                 "而闸门只对已暂停的线停手 —— 请检查迁移 0022 是否已执行",
-                root, axis, tenant_id,
+                log_name, root, axis, tenant_id,
             )
 
         numbers: dict[str, int] = {}
-        state = await led.state(root, tenant_id)
+        state = await led.state(root, tenant_id, scope=scope)
         if state is not None:
             numbers = {
                 "cap_tokens": int(state.cap),
@@ -321,41 +329,43 @@ async def _report_line_exhaustion(
             # 合成 id：一条线一个会话只有一张未决提额票（靠 ux_pending_interactions_open 去重）。
             # 反复越界会刷新它，而不是攒出一摞长得一样的待办。
             tool_call_id=f"budget:{root}",
-            tool_name="subagent",
+            tool_name="session" if is_session else "subagent",
             args_hash=hashlib.sha256(f"{root}|{axis}|{cap}".encode()).hexdigest(),
             request={
+                # ⚠ 键名保持 `root_run_id`：提额那条路径（`app/api/interactions.py`）按它取值并调
+                # `raise_cap_and_resume`。会话线的值就是 `session_id` —— 改键名会让提额静默失效。
                 "root_run_id": root,
                 "axis": axis,
                 "suggested_cap_tokens": suggested,
                 "run_id": run_id,
                 "question": (
-                    f"这条子 Agent 任务线已花到 token 上限（{cap:,}），新的段已被拦下。"
+                    f"这条{what}已花到 token 上限（{cap:,}），新的段已被拦下。"
                     "要把上限提到多少？"
                 )
                 if axis == "line_tokens"
                 else (
-                    f"这条子 Agent 任务线处于暂停（{axis}），新的段仍被拦下。"
+                    f"这条{what}处于暂停（{axis}），新的段仍被拦下。"
                     "要把上限提到多少？"
                 ),
                 **numbers,
             },
         )
     except Exception as exc:  # noqa: BLE001 — 通知人这件事失败，不该让这一段再失败一次
-        SUBAGENT_LINE_PAUSE.labels(outcome="pause_failed").inc()
-        logger.error("subagent line %s: pause/ticket step failed (axis=%s): %s", root, axis, exc)
+        pause_counter.labels(outcome="pause_failed").inc()
+        logger.error("%s %s: pause/ticket step failed (axis=%s): %s", log_name, root, axis, exc)
         return
     if not ticket:
-        SUBAGENT_LINE_PAUSE.labels(outcome="paused_no_ticket").inc()
+        pause_counter.labels(outcome="paused_no_ticket").inc()
         logger.error(
-            "subagent line %s paused but no ticket was written (tenant=%s session=%s)："
+            "%s %s paused but no ticket was written (tenant=%s session=%s)："
             "这条线停着，而没有任何人能替它提额",
-            root, tenant_id, session_id,
+            log_name, root, tenant_id, session_id,
         )
         return
-    SUBAGENT_LINE_PAUSE.labels(outcome="paused").inc()
+    pause_counter.labels(outcome="paused").inc()
     logger.warning(
-        "subagent line paused for budget: root=%s axis=%s cap=%s settled=%s ticket=%s",
-        root, axis, cap, numbers.get("settled_tokens"), ticket,
+        "%s paused for budget: root=%s axis=%s cap=%s settled=%s ticket=%s",
+        log_name, root, axis, cap, numbers.get("settled_tokens"), ticket,
     )
 
 
