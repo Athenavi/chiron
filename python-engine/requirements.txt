@@ -1,15 +1,15 @@
 # Python AI
-fastapi==0.143.0
+fastapi==0.148.0
 uvicorn==0.54.0
 # LLM Provider SDK
-anthropic==1.13.0
-openai==3.29.0
+anthropic==1.15.0
+openai==3.35.1
 # pymilvus 只服务记忆层的可选向量后端（MEMORY_VECTOR_BACKEND=milvus，默认 pg）。
 # 知识库已改用 PageIndex，不再需要向量库。
 pymilvus==3.0.2
 # 知识库检索引擎（PageIndex）：自托管 local 与 Cloud 共用同一 SDK。
 # ⚠ **暂未启用**：pageindex 0.4.3 → litellm 要求 openai<3.0.0，与本文件固定的
-#   openai==3.29.0 直接冲突（pip 解析 ResolutionImpossible，镜像构建会失败）。
+#   openai==3.35.1 直接冲突（pip 解析 ResolutionImpossible，镜像构建会失败）。
 #   解冲突方案待定，见变更单：
 #     A) 把 openai 降到 2.54.0 —— 已验证整套依赖可解析（litellm 1.106.0 / pageindex 0.4.3
 #        与其它固定版本共存）；引擎只用 AsyncOpenAI 的基础面，responses 走自研 HTTP。
@@ -25,7 +25,7 @@ protobuf==7.36.2
 asyncpg==0.32.0
 python-multipart==0.0.32
 # 用户级 Cloud key 的加解密（app/knowledge/crypto.py，算法与 Go internal/settings 同构）
-cryptography==50.0.0
+cryptography==50.0.2
 pymupdf==1.28.2
 python-docx==1.2.0
 # HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
@@ -36,7 +36,7 @@ beautifulsoup4==4.15.0
 # 图片元数据（EXIF）—— app/media/analyzer.py 的 extract_metadata 用
 Pillow==13.0.0
 pydantic==2.14.1
-pydantic-settings==2.15.0
+pydantic-settings==2.16.0
 python-dotenv==1.2.4
 PyJWT==2.15.1
 structlog==26.1.0
@@ -47,11 +47,11 @@ psutil==7.2.2
 # 这组版本由 pip 在全量放开约束时解出，是当前依赖树唯一自洽的组合 —— 单独升级其中任意一个
 # 都会与其它项冲突（例如 sdk 升到 1.45 就与 exporter 的 ~=1.44 以及 instrumentation 的
 # ~=1.44 同时对不上）。
-opentelemetry-api==1.44.0
-opentelemetry-sdk==1.44.0
-opentelemetry-exporter-otlp-proto-grpc==1.44.0
-opentelemetry-instrumentation-fastapi==0.65b0
-opentelemetry-instrumentation-redis==0.65b0
-opentelemetry-instrumentation-httpx==0.65b0
+opentelemetry-api==1.45.1
+opentelemetry-sdk==1.45.1
+opentelemetry-exporter-otlp-proto-grpc==1.45.1
+opentelemetry-instrumentation-fastapi==0.66b1
+opentelemetry-instrumentation-redis==0.66b1
+opentelemetry-instrumentation-httpx==0.66b1
 # Agent Tools & Workflow
-pydantic-ai==2.53.0
+pydantic-ai==2.57.0
