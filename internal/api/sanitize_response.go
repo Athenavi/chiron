@@ -9,8 +9,17 @@ import (
 )
 
 // SensitiveFields 需要脱敏的字段名列表
+//
+// ⚠ **不要放 `token`**：它是**本来就要交给客户端的凭据**（登录/注册的响应体里就是这个字段），
+// 脱敏它等于**打破认证** —— 而 `/v1/auth/login` 与 `/v1/auth/register` 恰恰在下面的
+// `sanitizeSensitivePaths` 白名单里（意图是"脱敏密码传输"），于是 body 里的 `token` 被换成
+// `********`。症状极具迷惑性：**浏览器端一切正常**（走 `SetTokenCookie` 的响应头，不经 body
+// 脱敏），而**任何读 body 的 API/SDK 客户端一律 401 "invalid or expired token"**
+// （SaaS 端到端用例 test_chiron_client_sdk_live.py 就是这么红了很久）。
+// ⚠ 注意 `isSensitiveField` 用的是**子串**匹配 ⇒ 名单里任何一项都会连带命中包含它的字段名。
+// ⚠ 同族待查：`api_key` 也在名单里，而"新建 API key"同样要把明文交给客户端 —— 未在本轮改动。
 var SensitiveFields = []string{
-	"password", "secret", "token", "key", "dsn", "credential",
+	"password", "secret", "key", "dsn", "credential",
 	"access_key", "secret_key", "private_key", "api_key",
 }
 

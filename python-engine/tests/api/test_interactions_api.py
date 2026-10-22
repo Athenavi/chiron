@@ -417,9 +417,18 @@ async def test_budget_ticket_without_a_line_root_is_a_storage_error(store, ledge
 
 
 def test_routes_are_registered_on_the_api_router():
+    from fastapi import FastAPI
+
     from app.api import api_router
 
-    paths = {getattr(route, "path", "") for route in api_router.routes}
+    # ⚠ 用 **`openapi()` 的 paths**，而不是 `api_router.routes`：后者的**形状随 FastAPI 版本变**
+    # —— `requirements.txt` 钉 `fastapi==0.143.0`（CI 装的就是它），该版本把 `include_router`
+    # 改成惰性的 `_IncludedRouter` 占位对象（**没有 `path` 属性**），于是 `routes` 上根本看不到
+    # 真实路径；本机 0.136.3 还是展平的，所以这条只在 CI 红。`openapi()` 是**公共契约**，
+    # 跨版本稳定，而且它同时证明"路由真的可路由"，比看内部结构更有意义。
+    app = FastAPI()
+    app.include_router(api_router)
+    paths = set(app.openapi().get("paths", {}))
     # ⚠ CI（Linux/3.11）上这条曾经红过：`paths == {''}` —— 不是"集合为空"，而是**恰好一个
     # 取不到 `path` 的对象**。本机（Windows/3.14）跑同一命令是绿的 ⇒ 光看断言只能知道
     # "路由没挂上"，不知道挂成了什么。所以在断言**之前**把实际内容打出来。
