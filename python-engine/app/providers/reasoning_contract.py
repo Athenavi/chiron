@@ -28,7 +28,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field as dc_field
 from types import MappingProxyType
 from typing import Any
 
@@ -52,7 +52,12 @@ class ReasoningContract:
     #: 子对象里放档位的键（style=nested 时用）。
     nested_key: str = "effort"
     #: 档位 → 该后端接受的写法。缺省的档位按"不发"处理。
-    levels: Mapping[str, str] = MappingProxyType({})
+    #: ⚠ 必须用 `default_factory`：Python 3.11 的 dataclasses 拒绝 `mappingproxy` 这类
+    #: **mutable default**（报 `ValueError: mutable default <class 'mappingproxy'>`），
+    #: 3.12+ 放宽了 ⇒ 本机（3.14）绿、CI（3.11，`requires-python >= 3.11` 的下限）红。
+    #: ⚠ 别名导入是必须的：本类**有一个字段就叫 `field`**（见上），而类体里 `field` 会先被
+    #: 那个字段的默认值绑定 ⇒ 直接用 `field(...)` 会报 `'str' object is not callable`。
+    levels: Mapping[str, str] = dc_field(default_factory=lambda: MappingProxyType({}))
     #: 说明（供诊断页/文档展示；也是"为什么这样配"的落点）。
     notes: str = ""
 

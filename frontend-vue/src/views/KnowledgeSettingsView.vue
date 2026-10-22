@@ -206,7 +206,7 @@ onMounted(load)
   border: 1px solid var(--ant-color-border, #d9d9d9);
   border-radius: 10px;
   cursor: pointer;
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color var(--dur-normal), box-shadow var(--dur-normal);
 }
 .provider-card.is-active {
   border-color: var(--ant-color-primary, #1677ff);
