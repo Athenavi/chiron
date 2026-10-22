@@ -12,43 +12,59 @@ run_in_background / job_output / job_kill / persistent_shell 都曾因此不存�
 
 ⚠️ 不要把注册清单复制到别处（``app/main.py`` 曾经另有一份、且两份都不完整，
 于是"哪些工具存在"取决于从哪个入口 import —— 见 vendor/规划.md §4 的"注册 ≠ 可见"）。
+
+⚠️ **沙箱子进程的短路开关**（``CHIRON_TOOLS_SKIP_REGISTRY=1``）：上面那串注册 import 是
+**eager** 的，而 ``app/tools/_sandbox_worker.py`` 被 ``run_code`` 以 ``python -m
+app.tools._sandbox_worker`` 启动 ⇒ 解释器**先执行本文件** ⇒ 整条注册链（含
+``app.tools.graph`` → ``app.gateway.router`` → … → ``logfire``）会被拉进那个
+**env 已被 :func:`app.tools.sandbox.sandboxed_env` 清空**的子进程；``logfire`` 在 import
+期就调 ``Path.home()``，没有可用的 HOME 直接 ``RuntimeError``（CI 上 15 条 run_code 用例
+就是这么红的：子进程"起不来"，症状却是"守卫没生效"）。
+子进程真正需要的只有 ``code_guard`` 与 ``sandbox`` 两个纯标准库模块 ⇒ 由
+``sandboxed_env()`` 设置该变量短路注册表。**它只影响这类子进程**（3 个调用场景 ——
+run_code 子进程 / 插件命令 / 钩子命令 —— 都不需要工具注册表）。
 """
 
-import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻辑在 runtime）
-import app.tools.best_of_n  # noqa: F401 — 差距D：多候选 + judge 选优
-import app.tools.browser  # noqa: F401
-import app.tools.core  # noqa: F401
-import app.tools.edit_file  # noqa: F401
-import app.tools.fs_tools  # noqa: F401 — ls（列目录）
-import app.tools.git_tools  # noqa: F401
-import app.tools.glob_tools  # noqa: F401
-import app.tools.graph  # noqa: F401
-import app.tools.jobs  # noqa: F401
-import app.tools.kb  # noqa: F401
-import app.tools.media  # noqa: F401
-import app.tools.memory  # noqa: F401
-import app.tools.mode_admin  # noqa: F401
-import app.tools.pm  # noqa: F401
-import app.tools.run_code  # noqa: F401
-import app.tools.skill  # noqa: F401
-import app.tools.subagent  # noqa: F401
-import app.tools.subagent_list  # noqa: F401 — list_subagent_runs（主 Agent 主动感知）
-import app.tools.subagent_rerun  # noqa: F401 — rerun_subagent（重跑已结束的子 Agent）
-import app.tools.subagent_result  # noqa: F401 — read_subagent_result
-import app.tools.subagent_resume  # noqa: F401 — resume_subagent（R5(b)：带步骤继续 / 分叉）
-import app.tools.terminal  # noqa: F401
-import app.tools.todo  # noqa: F401 — write_todos（S6a 计划状态）
-import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
-import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy）
-import app.tools.use_capability  # noqa: F401 — P7：外部能力代理（MCP / 插件只经它进入）
-import app.tools.video  # noqa: F401 — video_analyze（抽帧 + 多模态描述）
-import app.tools.web  # noqa: F401 — web_search / web_fetch
+import os as _os
 
-# ⚠️ app.workflow.tools 注册的 workflow_run 会**覆盖** app.tools.graph 的同名工具
-# （后者已删除，见 graph.py 的说明）。新增工具前先在注册表里查重名。
-import app.workflow.tools  # noqa: F401 — workflow_run / workflow_status
-from app.tools.client import SystemToolClient
-from app.tools.discovery import ToolDiscovery
-from app.tools.registry import ToolRegistry, registry
+if _os.environ.get("CHIRON_TOOLS_SKIP_REGISTRY") == "1":  # 见上方说明
+    __all__: list[str] = []
+else:
+    import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻辑在 runtime）
+    import app.tools.best_of_n  # noqa: F401 — 差距D：多候选 + judge 选优
+    import app.tools.browser  # noqa: F401
+    import app.tools.core  # noqa: F401
+    import app.tools.edit_file  # noqa: F401
+    import app.tools.fs_tools  # noqa: F401 — ls（列目录）
+    import app.tools.git_tools  # noqa: F401
+    import app.tools.glob_tools  # noqa: F401
+    import app.tools.graph  # noqa: F401
+    import app.tools.jobs  # noqa: F401
+    import app.tools.kb  # noqa: F401
+    import app.tools.media  # noqa: F401
+    import app.tools.memory  # noqa: F401
+    import app.tools.mode_admin  # noqa: F401
+    import app.tools.pm  # noqa: F401
+    import app.tools.run_code  # noqa: F401
+    import app.tools.skill  # noqa: F401
+    import app.tools.subagent  # noqa: F401
+    import app.tools.subagent_list  # noqa: F401 — list_subagent_runs（主 Agent 主动感知）
+    import app.tools.subagent_rerun  # noqa: F401 — rerun_subagent（重跑已结束的子 Agent）
+    import app.tools.subagent_result  # noqa: F401 — read_subagent_result
+    import app.tools.subagent_resume  # noqa: F401 — resume_subagent（R5(b)：带步骤继续 / 分叉）
+    import app.tools.terminal  # noqa: F401
+    import app.tools.todo  # noqa: F401 — write_todos（S6a 计划状态）
+    import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
+    import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy）
+    import app.tools.use_capability  # noqa: F401 — P7：外部能力代理（MCP / 插件只经它进入）
+    import app.tools.video  # noqa: F401 — video_analyze（抽帧 + 多模态描述）
+    import app.tools.web  # noqa: F401 — web_search / web_fetch
 
-__all__ = ["SystemToolClient", "ToolDiscovery", "ToolRegistry", "registry"]
+    # ⚠️ app.workflow.tools 注册的 workflow_run 会**覆盖** app.tools.graph 的同名工具
+    # （后者已删除，见 graph.py 的说明）。新增工具前先在注册表里查重名。
+    import app.workflow.tools  # noqa: F401 — workflow_run / workflow_status
+    from app.tools.client import SystemToolClient
+    from app.tools.discovery import ToolDiscovery
+    from app.tools.registry import ToolRegistry, registry
+
+    __all__ = ["SystemToolClient", "ToolDiscovery", "ToolRegistry", "registry"]

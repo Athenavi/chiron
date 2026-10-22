@@ -90,6 +90,28 @@ class TestPluginCommandPathRule:
         monkeypatch.setenv("PLUGIN_COMMAND_ALLOWLIST", "npx")
         assert command_allowed("/usr/bin/bash") is False
 
+    def test_symlinked_executable_is_allowed(self, tmp_path, monkeypatch):
+        """⚠ **符号链接不能**被判成「basename 不一致」。
+
+        真现场（CI）：`/usr/local/bin/npx` 与 `/opt/…/x64/bin/python` 都是**符号链接**
+        （分别指到 `…/npx-cli.js` 与 `python3.11`），而实现曾用 `os.path.realpath` 做穿越
+        检查 ⇒ 解析后 basename 变了 ⇒ **合法命令被拒**（CI 上 `test_ssrf` 1 条 +
+        `test_skill_manager` 5 条全红；本机 Windows 没有这两个路径，realpath 原样返回，
+        所以一直绿）。穿越与 UNC 已由 `_command_path_ok` 拒绝 ⇒ 这里只需纯字符串归一化。
+
+        本用例是本机（Windows）**唯一**能钉住它的形态：造一个名字命中白名单、而指向
+        另一个名字的真实符号链接。
+        """
+        target = tmp_path / "npx-real"
+        target.write_text("#!/bin/sh\n", encoding="utf-8")
+        link = tmp_path / "npx"  # 名字命中白名单，realpath 后 basename 会变成 npx-real
+        try:
+            link.symlink_to(target)
+        except (OSError, NotImplementedError):
+            pytest.skip("该平台不允许创建符号链接（Windows 需开发者模式 / 管理员）")
+        monkeypatch.setenv("PLUGIN_COMMAND_ALLOWLIST", "npx")
+        assert command_allowed(str(link)) is True, "符号链接指向的真实 basename 不该影响判定"
+
     def test_disabled_when_allowlist_empty(self, monkeypatch):
         monkeypatch.delenv("PLUGIN_COMMAND_ALLOWLIST", raising=False)
         assert command_allowed("npx") is False, "白名单未配置 = 禁止所有自定义插件命令"

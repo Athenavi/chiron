@@ -35,6 +35,21 @@ jobs:
   python:
     name: Python engine
     runs-on: ubuntu-latest
+    # ⚠ 起一个真 Redis：审批票（`submit_approval` / `_await_approval`）与一批 `live` 用例
+    # 都依赖它 —— 没有 Redis 时 `approval ticket store failed (Redis URL not configured)`
+    # ⇒ `submit_approval` 恒返回 False，`TestToolGuardConfirmPath` 的 3 条**核心逻辑**用例
+    # （asked/decided 配对、批准续跑、拒绝报错）在 CI 上全红，而本机因为设了 `REDIS_URL`
+    # 一直绿。这些不是"外部集成"，不该靠环境缺失来跳过。
+    services:
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     # ⚠ `app/config.py` 的 `Settings()` 在 **import 时**就校验 `JWT_SECRET`（≥32 字符，弱值被拒），
     # 而大量测试模块 import 引擎包 ⇒ 缺它会在**收集阶段**整片报错（不是"跑失败"而是"收集失败"，
     # 症状就是 `Interrupted: 184 errors during collection`，每条都写着同一句 JWT_SECRET 校验失败）。
@@ -42,6 +57,7 @@ jobs:
     env:
       APP_SECRET: ci-python-app-secret-0123456789abcdef
       JWT_SECRET: ci-python-jwt-secret-0123456789abcdef
+      REDIS_URL: redis://127.0.0.1:6379/0
     defaults:
       run:
         working-directory: python-engine
