@@ -35,6 +35,13 @@ jobs:
   python:
     name: Python engine
     runs-on: ubuntu-latest
+    # ⚠ `app/config.py` 的 `Settings()` 在 **import 时**就校验 `JWT_SECRET`（≥32 字符，弱值被拒），
+    # 而大量测试模块 import 引擎包 ⇒ 缺它会在**收集阶段**整片报错（不是"跑失败"而是"收集失败"，
+    # 症状就是 `Interrupted: 184 errors during collection`，每条都写着同一句 JWT_SECRET 校验失败）。
+    # 值与 `integration` job 分开，避免两处互相掩盖。
+    env:
+      APP_SECRET: ci-python-app-secret-0123456789abcdef
+      JWT_SECRET: ci-python-jwt-secret-0123456789abcdef
     defaults:
       run:
         working-directory: python-engine

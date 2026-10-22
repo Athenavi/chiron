@@ -210,7 +210,7 @@ onMounted(load)
 }
 .provider-card.is-active {
   border-color: var(--ant-color-primary, #1677ff);
-  box-shadow: 0 0 0 2px rgba(22, 119, 255, 0.08);
+  box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 8%, transparent);
 }
 .provider-icon {
   font-size: 20px;
