@@ -55,30 +55,24 @@ func withLiveSessionManager(t *testing.T) (*session.Manager, *pgxpool.Pool) {
 // `name` 打上可检索的标记，便于核对"跑完没有残留"。
 func liveUser(t *testing.T, pool *pgxpool.Pool) string {
 	t.Helper()
-	// ⚠ `sessions.tenant_id` 有外键指向 `tenants`（`sessions_tenant_id_fkey`）⇒ 建 user 之前
-	// **必须先建 tenant** 并把它挂到 user 上。原来只写 `INSERT INTO users (id, name)`（那时
-	// "users 只有 id 必填"是对的，但漏了这条外键链）⇒ `CreateSession` 会撞外键。
-	// CI 首次真跑时暴露：本机没设 `CHIRON_TEST_POSTGRES_DSN`，这些 live 用例一直 skip。
-	tenant := uuid.NewString()
+	// ⚠ `CreateSession` 写的 `sessions.tenant_id` 是**常量 `DefaultTenantID`**（见
+	// `internal/session/manager_crud.go` 的 INSERT），**不是** user 的 tenant ⇒
+	// `sessions_tenant_id_fkey` 要求那行 tenant 存在；CI 的库没有它就会撞外键
+	// （本机没设 `CHIRON_TEST_POSTGRES_DSN`，这些 live 用例一直 skip，所以从没暴露）。
+	// **不删它**：默认租户是共享的，别处也可能依赖。
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO tenants (id, name) VALUES ($1, $2)`, tenant, "pytest-live-tenant"); err != nil {
-		t.Fatalf("建租户失败: %v", err)
+		`INSERT INTO tenants (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING`,
+		db.DefaultTenantID, "default"); err != nil {
+		t.Fatalf("确保默认租户存在失败: %v", err)
 	}
 	id := uuid.NewString()
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, name, tenant_id) VALUES ($1, $2, $3)`,
-		id, "pytest-cancel-live", tenant); err != nil {
+		`INSERT INTO users (id, name) VALUES ($1, $2)`, id, "pytest-cancel-live"); err != nil {
 		t.Fatalf("建用户失败: %v", err)
 	}
-	// 清理按 LIFO：**用户先删、租户后删**（反了会撞 `users_tenant_id_fkey`）。
 	t.Cleanup(func() {
 		if _, err := pool.Exec(context.Background(), `DELETE FROM users WHERE id = $1`, id); err != nil {
 			t.Logf("清理用户 %s 失败: %v", id, err)
-		}
-	})
-	t.Cleanup(func() {
-		if _, err := pool.Exec(context.Background(), `DELETE FROM tenants WHERE id = $1`, tenant); err != nil {
-			t.Logf("清理租户 %s 失败: %v", tenant, err)
 		}
 	})
 	return id
