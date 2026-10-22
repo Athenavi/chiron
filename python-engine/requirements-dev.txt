@@ -10,7 +10,7 @@ pytest>=8.4.0
 pytest-asyncio>=1.0.0
 pytest-cov>=6.0.0
 ruff>=0.11.0
-mypy>=1.15.0
+mypy>=2.4.0
 
 # S3 存储（可选，用于 MediaStore S3 后端）—— 对应 pyproject 的 [s3] extra
 boto3>=1.40.0
