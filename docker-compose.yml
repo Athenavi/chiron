@@ -132,7 +132,8 @@ services:
       # 按-run 用量对账(M19):崩溃/自动接管段不经过网关,靠读 agent_runs.checkpoint.usage
       # 补进用户余额 + billing_records + 租户池。默认 shadow(只算、打点、不动账);
       # 切 enforce 前看 run_usage_reconcile_shadowed / run_usage_reconcile_tokens。
-      RUN_USAGE_RECONCILE_MODE: ${RUN_USAGE_RECONCILE_MODE:-}      RUN_USAGE_RECONCILE_INTERVAL_SECONDS: ${RUN_USAGE_RECONCILE_INTERVAL_SECONDS:-}
+      RUN_USAGE_RECONCILE_MODE: ${RUN_USAGE_RECONCILE_MODE:-}
+      RUN_USAGE_RECONCILE_INTERVAL_SECONDS: ${RUN_USAGE_RECONCILE_INTERVAL_SECONDS:-}
       RUN_USAGE_RECONCILE_MIN_AGE_SECONDS: ${RUN_USAGE_RECONCILE_MIN_AGE_SECONDS:-}
       RUN_USAGE_RECONCILE_MAX_AGE_DAYS: ${RUN_USAGE_RECONCILE_MAX_AGE_DAYS:-}
       RUN_USAGE_RECONCILE_BATCH: ${RUN_USAGE_RECONCILE_BATCH:-}
@@ -269,6 +270,11 @@ services:
       # 在途预留的重述(M18):默认 shadow 只算只打点、不改账;enforce 才把派发时那份静态猜值换成
       # "已花 + 观测速率×投影窗口"。先观察 subagent_line_projection_tokens 的分布再切。
       SUBAGENT_LINE_PROJECTION: ${SUBAGENT_LINE_PROJECTION:-}
+      # M26 会话线闸门：off / shadow(代码默认) / enforce(主 run 会被真的拦下)
+      SESSION_LINE_GATE: ${SESSION_LINE_GATE:-}
+      # M28 按模型价格同步：默认关；开启后每 MODEL_PRICE_SYNC_INTERVAL_SECONDS 拉一次多源并交叉验证
+      MODEL_PRICE_SYNC: ${MODEL_PRICE_SYNC:-}
+      MODEL_PRICE_SYNC_INTERVAL_SECONDS: ${MODEL_PRICE_SYNC_INTERVAL_SECONDS:-}
       # 换 key 重试(M23):一次请求遇到坏 key/限流时换一把 key 再试(提交点之前才允许);
       # 默认 1,0 = 关。详见 .env.example。
       KEY_RETRY_MAX: ${KEY_RETRY_MAX:-}
