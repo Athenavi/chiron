@@ -19,7 +19,7 @@ jobs:
     name: Go gateway
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
@@ -62,7 +62,7 @@ jobs:
       run:
         working-directory: python-engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           # 刻意用**声明下限**而不是最新版：pyproject 写的是 requires-python >= 3.11，
@@ -116,7 +116,7 @@ jobs:
       run:
         working-directory: python-engine
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -140,7 +140,7 @@ jobs:
       run:
         working-directory: frontend-vue
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -168,7 +168,7 @@ jobs:
     name: Migration chain
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -201,7 +201,7 @@ jobs:
     name: Source encoding
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -307,7 +307,7 @@ jobs:
       JWT_SECRET: ci-integration-jwt-secret-0123456789abcdef
       INTERNAL_TOKEN: ci-integration-internal-token-0123456789
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: actions/setup-go@v5
         with:
