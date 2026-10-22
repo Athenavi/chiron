@@ -161,6 +161,13 @@ SESSION_LINE_PAUSE = Counter(
     "分开是为了两条线的 enforce 能分别切",
     ["outcome"],
 )
+MODEL_PRICE_SYNC = Counter(
+    "model_price_sync_total",
+    "M28 按模型价格的同步：outcome = agreed/single_source/disagreement/written/skipped_currency/"
+    "fetch_failed/parse_failed/bad_payload/no_source/db_unavailable/write_failed/cycle_failed，"
+    "source = 源名（无源的 outcome 记 '-'）",
+    ["outcome", "source"],
+)
 SUBAGENT_LINE_PAUSE = Counter(
     "subagent_line_pause_total",
     "M15c 线暂停与提额：paused = 暂停并挂出待办, paused_no_ticket = 暂停了但待办没建成（用户看不见）, "
