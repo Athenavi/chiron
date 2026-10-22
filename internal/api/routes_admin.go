@@ -95,6 +95,9 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/api-keys", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.ListLLMKeys)))))
 	mux.Handle("POST /v1/admin/api-keys", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.AddLLMKey)))))
 	mux.Handle("PUT /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyStatus)))))
+	// M27：改分配权重（smooth WRR 的比例）。与 status 分开是有意的 —— `weight = 0` 的语义是
+	// "不参与选择但保留状态"，而 status 的语义是"这把 key 能不能用"。
+	mux.Handle("PUT /v1/admin/api-keys/{id}/weight", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyWeight)))))
 	mux.Handle("DELETE /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.DeleteLLMKey)))))
 
 	// LLM provider catalog routes（服务提供商目录与端点覆盖）

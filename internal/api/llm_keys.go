@@ -50,11 +50,12 @@ func syncProviderKeyset(ctx context.Context, cfg *config.Config, provider string
 		encrypted string
 		keyHash   string
 		status    string
+		weight    int
 	}
 	var rows []row
 	if db.Pool != nil {
 		rs, err := db.Pool.Query(ctx,
-			`SELECT encrypted_key, key_hash, status FROM llm_provider_keys WHERE provider = $1`,
+			`SELECT encrypted_key, key_hash, status, weight FROM llm_provider_keys WHERE provider = $1`,
 			provider)
 		if err != nil {
 			return err
@@ -62,7 +63,7 @@ func syncProviderKeyset(ctx context.Context, cfg *config.Config, provider string
 		defer rs.Close()
 		for rs.Next() {
 			var r row
-			if err := rs.Scan(&r.encrypted, &r.keyHash, &r.status); err != nil {
+			if err := rs.Scan(&r.encrypted, &r.keyHash, &r.status, &r.weight); err != nil {
 				continue
 			}
 			rows = append(rows, r)
@@ -83,7 +84,13 @@ func syncProviderKeyset(ctx context.Context, cfg *config.Config, provider string
 			slog.Warn("llm keyset decrypt failed, dropping key from cache", "provider", provider, "error", err)
 			continue
 		}
-		payload, _ := json.Marshal(map[string]string{"k": plain, "s": r.status})
+		// M27：权重必须随 keyset 一起镜像进 Redis 的 `w` 字段 —— 少了这一步，PG 里设的权重
+		// 永远到不了引擎（Lua 读不到 `w` 就按 1 兜底），那就是"看起来生效"的假象。
+		payload, _ := json.Marshal(map[string]interface{}{
+			"k": plain,
+			"s": r.status,
+			"w": r.weight,
+		})
 		fields = append(fields, r.keyHash[:12], string(payload))
 	}
 
@@ -129,7 +136,7 @@ func (h *AdminHandler) ListLLMKeys(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	rows, err := db.Pool.Query(r.Context(),
-		`SELECT id, provider, key_hash, status, COALESCE(remark, '') FROM llm_provider_keys
+		`SELECT id, provider, key_hash, status, COALESCE(remark, ''), weight FROM llm_provider_keys
 		 ORDER BY provider, created_at`)
 	if err != nil {
 		slog.Error("list llm keys", "error", err)
@@ -144,7 +151,8 @@ func (h *AdminHandler) ListLLMKeys(w http.ResponseWriter, r *http.Request) {
 	}
 	for rows.Next() {
 		var id, provider, keyHash, status, remark string
-		if err := rows.Scan(&id, &provider, &keyHash, &status, &remark); err != nil {
+		var weight int
+		if err := rows.Scan(&id, &provider, &keyHash, &status, &remark, &weight); err != nil {
 			continue
 		}
 		keys = append(keys, map[string]interface{}{
@@ -153,6 +161,7 @@ func (h *AdminHandler) ListLLMKeys(w http.ResponseWriter, r *http.Request) {
 			"key":      "•••••" + keyHash[:8], // 仅指纹，不触碰明文
 			"status":   status,
 			"remark":   remark,
+			"weight":   weight, // M27：每 key 权重（smooth WRR 的分配比例）
 		})
 		stats["total"] = stats["total"].(int) + 1
 		stats[status] = stats[status].(int) + 1
@@ -279,6 +288,58 @@ func (h *AdminHandler) UpdateLLMKeyStatus(w http.ResponseWriter, r *http.Request
 		_ = syncProviderKeyset(r.Context(), h.cfg, provider)
 	}
 	OK(w, map[string]interface{}{"status": "updated", "id": digest, "key_status": body.Status})
+}
+
+// UpdateLLMKeyWeight 改一把 key 的**分配权重**（M27：smooth WRR 的比例）。
+//
+// 为什么单独一个端点而不是塞进 status：两者语义不同 —— status 是"这把 key 能不能用"，
+// weight 是"能用的话分多少流量"。`weight = 0` 是第三种语义：**不参与选择但保留状态**
+// （灰度摘流量的正确姿势，比改 status 更适合"先摘一半再看看"）。
+//
+// 上限 100：权重是**相对比例**，没有"绝对配额"的语义；允许 10000 只会让人以为它代表别的。
+func (h *AdminHandler) UpdateLLMKeyWeight(w http.ResponseWriter, r *http.Request) {
+	if db.Pool == nil {
+		InternalError(w, "database unavailable")
+		return
+	}
+	digest := strings.ToLower(r.PathValue("id"))
+	if len(digest) != 12 {
+		NotFound(w, "api key not found")
+		return
+	}
+	// 指针类型是必须的：`0` 是**合法值**（不参与选择），用值类型分不出"没传"与"传 0"。
+	var body struct {
+		Weight *int `json:"weight"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil {
+		BadRequest(w, ErrInvalidReq)
+		return
+	}
+	if body.Weight == nil || *body.Weight < 0 || *body.Weight > 100 {
+		BadRequest(w, "invalid weight: 0..100（0 = 不参与选择）")
+		return
+	}
+	tag, err := db.Pool.Exec(r.Context(),
+		`UPDATE llm_provider_keys SET weight = $1, updated_at = NOW() WHERE left(key_hash, 12) = $2`,
+		*body.Weight, digest)
+	if err != nil {
+		slog.Error("update llm key weight", "error", err)
+		InternalError(w, "failed to update api key weight")
+		return
+	}
+	if tag.RowsAffected() == 0 {
+		NotFound(w, "api key not found")
+		return
+	}
+	// **必须重刷 keyset**：权重是随 keyset 镜像进 Redis 的 `w` 字段的（见 syncProviderKeyset）。
+	// 少这一步，库里改了权重而引擎看不到 —— 就是"改了没反应"。
+	var provider string
+	_ = db.Pool.QueryRow(r.Context(),
+		`SELECT provider FROM llm_provider_keys WHERE left(key_hash, 12) = $1`, digest).Scan(&provider)
+	if provider != "" {
+		_ = syncProviderKeyset(r.Context(), h.cfg, provider)
+	}
+	OK(w, map[string]interface{}{"status": "updated", "id": digest, "weight": *body.Weight})
 }
 
 func (h *AdminHandler) DeleteLLMKey(w http.ResponseWriter, r *http.Request) {

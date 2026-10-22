@@ -267,6 +267,16 @@ export async function updateApiKey(id: string, updates: Partial<ApiKey>): Promis
   await api.put(`/v1/admin/api-keys/${id}`, updates)
 }
 
+/**
+ * M27：改一把 key 的**分配权重**（smooth WRR 的比例）。
+ *
+ * 与 status 分开是有意的：`weight = 0` 的语义是"不参与选择但保留状态"（灰度摘流量），
+ * 而不是"停用这把 key"（那是 status 的事）。
+ */
+export async function updateApiKeyWeight(id: string, weight: number) {
+  await api.put(`/v1/admin/api-keys/${id}/weight`, { weight })
+}
+
 export async function deleteApiKey(id: string): Promise<void> {
   await api.delete(`/v1/admin/api-keys/${id}`)
 }

@@ -201,3 +201,68 @@ async def test_pick_writes_last_used_back(redis, provider):
     after = await _get_field(redis, provider, digest)
     assert after["u"] == pytest.approx(time.time(), abs=5)
     assert after["k"] == "sk-1" and after["s"] == "active"  # 记账不破坏权威字段
+
+
+# ── M27：每 key 权重（smooth WRR）──
+#
+# 现场：选择一直是纯 LRU 轮转（选 `u` 最小的），没有"某把 key 该多分流量"的表达能力。
+# 权重来自 `llm_provider_keys.weight`（默认 1），只在**可用**的 key 之间分配。
+
+
+async def test_equal_weights_rotate_strictly(redis, provider):
+    """等权（默认 1）必须是**严格轮转** —— 这是"默认什么都不做"的落点：
+    换算法不能改变"没人设权重时"的分配行为。"""
+    keys = [f"sk-{i}" for i in range(3)]
+    await _seed(redis, provider, {_field(provider, k): {"k": k, "s": "active"} for k in keys})
+    picked = [(await KeyRing(redis=redis).get_key(provider))["key"] for _ in range(6)]
+
+    assert set(picked[:3]) == set(keys)
+    assert picked[:3] == picked[3:6], "等权 ⇒ 周期为 3 的严格轮转"
+
+
+async def test_weight_shifts_the_ratio(redis, provider):
+    """权重 2:1 ⇒ 3 次里高权重那把拿 2 次，且序列是 **A,B,A**（smooth WRR 无突发；
+    朴素 WRR 会给出 A,A,B）。"""
+    a, b = _field(provider, "sk-a"), _field(provider, "sk-b")
+    await _seed(
+        redis,
+        provider,
+        {a: {"k": "sk-a", "s": "active", "w": 2}, b: {"k": "sk-b", "s": "active", "w": 1}},
+    )
+    picked = [(await KeyRing(redis=redis).get_key(provider))["key"] for _ in range(3)]
+
+    assert picked == ["sk-a", "sk-b", "sk-a"]
+
+
+async def test_zero_weight_key_is_never_picked(redis, provider):
+    """`w = 0` = 不参与选择（灰度摘流量），且**不计入 total** ——
+    否则它会把其它 key 的 cw 分配拉偏。"""
+    off, on = _field(provider, "sk-off"), _field(provider, "sk-on")
+    await _seed(
+        redis,
+        provider,
+        {
+            off: {"k": "sk-off", "s": "active", "w": 0},
+            on: {"k": "sk-on", "s": "active", "w": 1},
+        },
+    )
+    picked = {(await KeyRing(redis=redis).get_key(provider))["key"] for _ in range(6)}
+
+    assert picked == {"sk-on"}
+
+
+async def test_cooldown_is_orthogonal_to_weight(redis, provider):
+    """冷却与权重正交（LiteLLM 同一条纪律）：冷却中的 key 直接不参与，
+    权重只在**可用**的 key 之间分配 —— 高权重也救不了一个正在冷却的 key。"""
+    hot, cold = _field(provider, "sk-hot"), _field(provider, "sk-cold")
+    await _seed(
+        redis,
+        provider,
+        {
+            hot: {"k": "sk-hot", "s": "active", "w": 1},
+            cold: {"k": "sk-cold", "s": "active", "w": 100, "c": time.time() + 600},
+        },
+    )
+    picked = {(await KeyRing(redis=redis).get_key(provider))["key"] for _ in range(5)}
+
+    assert picked == {"sk-hot"}
