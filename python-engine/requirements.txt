@@ -26,7 +26,7 @@ asyncpg==0.32.0
 python-multipart==0.0.32
 # 用户级 Cloud key 的加解密（app/knowledge/crypto.py，算法与 Go internal/settings 同构）
 cryptography==50.0.0
-pymupdf==1.28.2
+pymupdf==2.0
 python-docx==1.2.0
 # HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
 # 两者都不曾被任何已声明依赖传递带入（此前 CI 只装本文件，Mypy 与 Pytest 首次运行都会红）。
