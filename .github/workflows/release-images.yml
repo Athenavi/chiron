@@ -14,7 +14,10 @@ name: Release images
 
 on:
   push:
-    tags: ['v*']
+    # ⚠ **大小写都要**：本仓的历史 tag 是**大写** `V0.1.<YYMMDD>.<NN>`（如 `V0.1.261019.01`），
+    # 而这条 pattern 原本只写了小写 `v*` ⇒ 打大写 tag **根本不会触发**这个工作流
+    # （上一个发布 `V0.1.261019.01` 就踩了：镜像没构建、也没扫）。
+    tags: ['v*', 'V*']
   workflow_dispatch:
     inputs:
       push:
