@@ -40,7 +40,7 @@
 ## 5. 给 `docs/wiki/` 加一个英文 landing page
 
 - **现状**：wiki 全中文，README 只有一段英文摘要。
-- **做什么**：新增 `docs/wiki/README.en.md`（架构一段 + 5 分钟跑起来 + 链到中文各页），
+- **做什么**：新增 `README.en.md`（放在 `docs/wiki/` 下；架构一段 + 5 分钟跑起来 + 链到中文各页），
   并在 `docs/wiki/README.md` 顶部互链。
 - **验收**：`python scripts/check_doc_links.py` 绿（相对链接会被真实校验）。
 - **预计**：2 小时 · 需要英文写作
