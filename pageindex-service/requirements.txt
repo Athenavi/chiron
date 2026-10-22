@@ -18,7 +18,7 @@ pydantic-settings==2.15.0
 # 队列（worker 消费 engine:tasks:kb）+ 数据库（回写索引状态）
 redis==8.1.0
 # 用户级 Cloud key 解密（runtime.decrypt_secret，与 Go internal/settings 同算法）
-cryptography==49.0.0
+cryptography==50.0.2
 asyncpg==0.32.0
 
 # 原文对象存储：与引擎同一套 S3 变量（worker 需要读原文才能索引）

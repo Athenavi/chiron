@@ -25,7 +25,7 @@ protobuf==7.36.2
 asyncpg==0.32.0
 python-multipart==0.0.32
 # 用户级 Cloud key 的加解密（app/knowledge/crypto.py，算法与 Go internal/settings 同构）
-cryptography==50.0.0
+cryptography==50.0.2
 pymupdf==1.28.2
 python-docx==1.2.0
 # HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
