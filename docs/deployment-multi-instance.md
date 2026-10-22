@@ -54,6 +54,9 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `TRUSTED_PROXY_CIDRS` | 空 | 前置 LB 时填真实来源网段（否则 IP 限流可被伪造） |
 | `TURN_RETENTION_DAYS` / `TASK_IDEMPOTENCY_RETENTION_DAYS` | 30 | 保留策略天数 |
 | `RETENTION_INTERVAL_HOURS` | 6 | 保留策略执行间隔 |
+| `CHIRON_ENV` / `APP_ENV` / `PYTHON_ENV` | 空 | **生产判定**（任一为 `production`/`prod` 即视为生产），统一入口见 `python-engine/app/envmode.py` |
+| `METRICS_TOKEN` | 空 | `/metrics` 的 Bearer 凭据。**网关与引擎都要有**（引擎侧未配置即 401）；Prometheus 用同一个值抓两边 |
+| `PG_STATEMENT_CACHE_SIZE` | `0` | 引擎 asyncpg 的 statement cache。经 PgBouncer（transaction 池）**必须为 0**，否则报 `prepared statement "..." does not exist` |
 
 ## 4. 依赖门禁与就绪探针
 
@@ -91,9 +94,14 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
   历史上 Go 侧还留有启动兜底建表（`EnsureTables` / `InitTable` / `episodes`），已全部改为**只读校验**（`VerifySchema` / `VerifyTable`），DDL 只存在于迁移里；
 - **谁执行**：CI 流水线或 DBA，用 `requirements-migrate.txt` 的环境在受控窗口执行
   `python -m alembic -c alembic.ini upgrade head`（离线场景可 `--sql` 生成 DDL 审阅后执行）；
-- **迁移链**：`migrations/versions/` 只有**一个**权威基线 `0001_authoritative_baseline`（DDL 取自稳定后的数据库）。
+- **迁移链**：`migrations/versions/` 只有**一个**权威基线 `0001_authoritative_baseline`。
   此后所有 schema 变更都必须在此基础上追加新的 revision；**单一 head** 是硬要求（分叉会直接报错），
   当前 head 以 `python -m alembic -c alembic.ini heads` 为准。
+  **2026-10-22 重建**：此前链上是 `0001`…`0029` 的逐次变更，其中 `0023` 会先
+  `DROP TABLE knowledge_*` 再重建（对已有库是删数据）。现已把"旧链跑到 head 后的终态 schema"
+  用 `pg_dump --schema-only` 导出、固化成这**一条**基线并删除 `0002`–`0029` ——
+  全新库一次 `upgrade head` 即达终态，"先建后删"的历史不再存在。等价性已对拍（1549 行结构元数据 diff 为空）。
+  已存在于旧 revision 的库：`alembic stamp head` 即可（只改版本号，不重放 DDL）。
   全新库 `alembic upgrade head`；**已存在的库**（表已齐全、`alembic_version` 仍是旧 revision）执行
   `alembic stamp head` —— 只改版本号、不重放 DDL。**不要把此处写死成某个基线**：链上已有更新的迁移时，
   stamp 到过期 revision 会让 `alembic_version` 与期望 head 不一致，触发下方「校验规则」拒绝启动；
@@ -111,7 +119,9 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 
 ## 8. 连接预算（扩容必读）
 
-PostgreSQL 的 `max_connections` 是**硬上限**，而连接数随副本数线性增长：
+PostgreSQL 的 `max_connections` 是**硬上限**，而连接数随副本数线性增长。有**两条**可选路径：
+
+**（A）直连 PG**（默认形态）：
 
 ```
 网关: POSTGRES_MAX_CONN × 网关副本数
@@ -121,11 +131,20 @@ PostgreSQL 的 `max_connections` 是**硬上限**，而连接数随副本数线�
 合计必须留出余量（建议 ≤ max_connections 的 70%）
 ```
 
+**（B）经 PgBouncer**（推荐给"副本数会随 HPA 变化"的部署）：PG 侧只看到
+`default_pool_size × PgBouncer 副本数`（仓库给的编排是 25 × 2 = **50**），**与业务副本数无关**。
+编排：`deploy/pgbouncer/`（compose）与 `deploy/k8s/chiron.yaml` 的 `pgbouncer-config`（k8s）。
+切换只要把应用的 `POSTGRES_DSN` 指向 `pgbouncer:6432` 并带 `default_query_exec_mode=exec`。
+三个兼容点（会话级 `SET` 的跟踪、prepared statement、引擎的 statement cache）写在
+`deploy/pgbouncer/pgbouncer.ini` 的注释里，**改之前请读**。
+
 - PostgreSQL 由云厂商/DBA 维护，`max_connections` 是其**实例参数**（云实例通常按规格限制，PostgreSQL 默认仅 100）：请在扩容前确认上限，并据此下调应用侧池大小；
 - 应用侧默认值：`POSTGRES_MAX_CONN=20`、`DB_POOL_MAX_SIZE=20`。**4 个副本时就应下调到 10 左右**，例如：
   `POSTGRES_MAX_CONN=10 DB_POOL_MAX_SIZE=10 docker compose up -d --scale gateway=4 --scale python-engine=4`
-- 托管数据库（RDS/Cloud SQL）请按实例规格确认上限，必要时改用 PgBouncer 之类的连接池中间件；
+- 托管数据库（RDS/Cloud SQL）请按实例规格确认上限；**若副本数由 HPA 自动变化（例如两侧各 6），
+  直连的算式会到 120 > 100 —— 这种部署应当走 (B) PgBouncer**，而不是把池压到每副本 5 个连接；
 - Redis 侧同理（`REDIS_POOL_SIZE` 默认 100 × 副本数），需对照 `redis-cli info clients` 的 `maxclients`（默认 10000）。
+  注意引擎侧还有**两个独立**的 Redis 池（`app/redis_client.py` 与 `app/main.py`，各默认 50），预算时别漏算。
 
 ### MCP 插件连接（第三方连接放大）
 

@@ -4,7 +4,11 @@
 # Pod 通过 host.docker.internal 直连即可（Docker Desktop 会注入这个域名）。
 # 这样把变量收敛到"编排层"，才能干净地验证扩展性。
 #
-# 镜像：kind load 之后用 imagePullPolicy: Never，避免去拉不存在的远端镜像。
+# 镜像：kind load 之后本地已有镜像，用 imagePullPolicy: IfNotPresent 就能复用它们，
+# 同时**生产**（镜像来自 registry）也能正常拉取 —— 原先写死 `Never` 只在 kind 可用，
+# 换到真集群会因为"本地没有该镜像"而永远 ErrImageNeverPull。
+# ⚠ 生产请把下面的 `:dev` 换成不可变 tag 或 digest：`:dev` 是可被覆盖的浮动标签，
+#   配 IfNotPresent 会让"镜像已重建但 Pod 仍在跑旧的"这类问题极难察觉。
 ---
 apiVersion: v1
 kind: Namespace
@@ -53,9 +57,15 @@ data:
   CHIRON_BUILTIN_SKILLS_PATH: "/srv/chiron/builtin-skills"
   # 每副本连接预算：docs/deployment-multi-instance.md 的公式
   #   N_gateway × POSTGRES_MAX_CONN + M_engine × DB_POOL_MAX_SIZE ≤ PG max_connections
-  # 3+3 副本、PG 默认 100 连接 → 每侧 10 才安全。
+  # ⚠ 这条公式只描述**直连 PG** 的情形。本清单的两个 HPA 允许各扩到 6：
+  #   6×10 + 6×10 = 120 > PG 默认 100 ⇒ 必须经 PgBouncer（见下方 pgbouncer 段）。
+  #   接入后 PG 侧只看到 default_pool_size（固定 25 × 2 副本 = 50），副本数不再放大连接。
+  #   切换只要把应用侧 POSTGRES_DSN 指向 pgbouncer:6432。
   DB_POOL_MAX_SIZE: "10"
   POSTGRES_MAX_CONN: "10"
+  # PgBouncer 的 transaction 池下 asyncpg 的 statement cache 必须关：
+  # 否则 prepared statement 会在 server 连接被复用时错配（"prepared statement does not exist"）。
+  PG_STATEMENT_CACHE_SIZE: "0"
   # ── 网关 ──
   PORT: "8080"
   STORAGE_BACKEND: "local"
@@ -79,8 +89,16 @@ stringData:
   APP_SECRET: "REPLACE_ME"
   JWT_SECRET: "REPLACE_ME"
   INTERNAL_TOKEN: "REPLACE_ME"
+  # 经 PgBouncer 时把它指向 pgbouncer:6432（并保留 default_query_exec_mode=exec，见下）
   POSTGRES_DSN: "postgresql://postgres@host.docker.internal:5432/chiron0915"
   METRICS_TOKEN: "REPLACE_ME"
+  # PgBouncer 的 userlist.txt 全文（会被挂成 /etc/pgbouncer/userlist.txt）。
+  # 生成方式：取 PG 里该角色**已有的 SCRAM secret**，不必写明文密码 ——
+  #   psql "$POSTGRES_DSN" -Atc \
+  #     "SELECT format('\"%s\" \"%s\"', rolname, rolpassword) FROM pg_authid WHERE rolname='<user>'"
+  # （pg_authid 需超级用户可读；也可用 pg_shadow，权限要求相同。取不到 secret 时退而写明文条目
+  #   `"<user>" "<password>"`，auth_type=scram-sha-256 同样接受。）
+  PGBOUNCER_USERLIST: "REPLACE_ME"
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -99,12 +117,32 @@ spec:
     metadata:
       labels: { app: gateway }
     spec:
-      terminationGracePeriodSeconds: 30
+      # 60s（原 30s 不够）：引擎关闭要**串行**做「队列排空（worker.py 最多 30s）+
+      # 后台任务（wait_background_tasks 10s）」，30s 必然被 SIGKILL 截断 —— 被截断的
+      # in-flight 任务只能等 PEL 重投，存在重复执行的可能。这里同时给 preStop 留出窗口。
+      terminationGracePeriodSeconds: 60
+      # 多副本尽量分散到不同节点：这批副本是同构的无状态网关，全挤在一个节点等于
+      # 把副本数变成单点（该节点故障 ⇒ 对外入口整体不可用）。用 preferred 而非 required：
+      # 节点数少于副本数时仍能调度（required 会让多出来的 Pod 永久 Pending）。
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: gateway }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: gateway
           image: chiron/gateway:dev
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
+          lifecycle:
+            preStop:
+              # SIGTERM 与「从 Service 端点摘除」是并发的：没有这段等待，正在关闭的 Pod
+              # 仍会在端点更新的窗口里收到新请求（表现为升级期零星的 502 / SSE 断流）。
+              # 本镜像是 alpine（见 Dockerfile），`sh` 一定存在。
+              exec: { command: ["sh", "-c", "sleep 5"] }
           envFrom:
             - configMapRef: { name: chiron-config }
             - secretRef: { name: chiron-secrets }
@@ -122,6 +160,21 @@ spec:
           resources:
             requests: { cpu: 100m, memory: 128Mi }
             limits: { cpu: 1000m, memory: 512Mi }
+          # 网关自己也读写本地盘，必须挂**共享**卷：
+          #   - STORAGE_ROOT：editor/media/upload 三处 handler 都建在它之下
+          #     （internal/api/gateway_router.go 的 NewEditorHandler / SetMediaRoot / NewUploadHandler）
+          #   - PLUGIN_DATA_DIR：插件配置写在 {dir}/{user_id}/plugins.json（internal/api/plugin_handler.go）
+          # 不挂卷的后果是多副本各自写容器可写层：A 副本上传的媒体 B 副本 404、
+          # A 副本装的插件 B 副本看不到，且 Pod 重建即全丢。
+          volumeMounts:
+            - { name: workspace, mountPath: /srv/chiron/workspace }
+            - { name: plugins, mountPath: /srv/chiron/plugins }
+      volumes:
+        # 与 python-engine 引用同一条 **RWX** PVC（前提同 README：集群需支持 ReadWriteMany）。
+        - name: workspace
+          persistentVolumeClaim: { claimName: chiron-shared }
+        - name: plugins
+          persistentVolumeClaim: { claimName: chiron-shared }
 ---
 apiVersion: v1
 kind: Service
@@ -129,13 +182,19 @@ metadata:
   name: gateway
   namespace: chiron
 spec:
-  type: NodePort
+  # ⚠ 刻意**不是** NodePort：网关的 mux 上同时挂着对外的 /v1/* 与内部的
+  # /v1/internal/*（其中 /v1/internal/db/execute 能执行 SQL、/v1/internal/redis/*
+  # 能读写 Redis），而这些"内部"端点只靠 X-Internal-Token 一道门。
+  # NodePort 会把它们暴露在**每个节点 IP** 上 —— 等于把内部端点真放到了内网可达处。
+  # 对外入口只保留 frontend（30082：静态资源 + 同源反代），网关只被 frontend 与
+  # python-engine 访问。本地调试用：
+  #   kubectl -n chiron port-forward svc/gateway 8080:8080
+  type: ClusterIP
   selector: { app: gateway }
   ports:
     - name: http
       port: 8080
       targetPort: 8080
-      nodePort: 30080
 ---
 apiVersion: policy/v1
 kind: PodDisruptionBudget
@@ -163,7 +222,8 @@ spec:
     metadata:
       labels: { app: python-engine }
     spec:
-      terminationGracePeriodSeconds: 30   # 与 compose 的 stop_grace_period 对齐（worker 排空 in-flight）
+      # 60s（原 30s）：worker 排空最多 30s + 后台任务 10s 已到 40s，30s 必被 SIGKILL 截断。
+      terminationGracePeriodSeconds: 60   # 与 compose 的 stop_grace_period 对齐（worker 排空 in-flight）
       # 多副本尽量分散到不同节点：每个引擎副本都持有活跃会话的 run 现场
       # （审批/取消的亲和目标），全部挤在一个节点等于把副本数变成单点。
       affinity:
@@ -177,8 +237,13 @@ spec:
       containers:
         - name: python-engine
           image: chiron/python-engine:dev
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8000 }]
+          lifecycle:
+            preStop:
+              # 先摘流量再 SIGTERM：否则端点更新窗口内进来的新任务，会在排空开始后才到达。
+              # 这段时间也算在 terminationGracePeriodSeconds 里（60s 减去它是排空余量）。
+              exec: { command: ["sh", "-c", "sleep 5"] }
           envFrom:
             - configMapRef: { name: chiron-config }
             - secretRef: { name: chiron-secrets }
@@ -285,6 +350,107 @@ spec:
     - type: Resource
       resource: { name: memory, target: { type: Utilization, averageUtilization: 80 } }
 ---
+# ── PgBouncer：把「副本数 × 池大小」的连接放大收成对 PG 的固定池 ──
+#
+# 为什么需要它：`POSTGRES_MAX_CONN` / `DB_POOL_MAX_SIZE` 是**每副本**的，而上面两个
+# HPA 都允许扩到 6 ⇒ 6×10 + 6×10 = 120，直接越过 PostgreSQL 默认 max_connections=100。
+# 接入 PgBouncer（transaction 池）后，PG 侧只看到 default_pool_size（固定），
+# 副本再扩也**不**线性放大连接数。
+#
+# ⚠ 三个必须知道的兼容点（都已在下面或应用侧处理）：
+#  1. transaction 池下**会话级 SET 不跨事务保留** —— Go 侧 AfterConnect 会执行
+#     `SET statement_timeout = 30000`（internal/db/postgres.go）。这里用
+#     `track_extra_parameters = statement_timeout` 让 PgBouncer 在连接复用时保住它，
+#     否则慢查询会占住 server 连接，直到池被耗尽。
+#  2. pgx 默认使用 prepared statements，transaction 池下必须让客户端避开它：
+#     POSTGRES_DSN 里加 `default_query_exec_mode=exec`（无需改代码，pgx 认这个连接参数），
+#     或依赖 PgBouncer ≥1.21 的 `max_prepared_statements`（两者都留了）。
+#  3. 引擎侧 asyncpg 默认开 statement cache，必须关：`PG_STATEMENT_CACHE_SIZE=0`
+#     （见 chiron-config）。
+#
+# 切换方式：把应用的 POSTGRES_DSN 指向 `pgbouncer:6432`。
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: pgbouncer-config
+  namespace: chiron
+data:
+  pgbouncer.ini: |
+    [databases]
+    chiron = host=host.docker.internal port=5432 dbname=chiron
+
+    [pgbouncer]
+    listen_addr = 0.0.0.0
+    listen_port = 6432
+    auth_type = scram-sha-256
+    auth_file = /etc/pgbouncer/userlist.txt
+    pool_mode = transaction
+    # 对 PG 的固定连接数：与副本数无关 —— 接入 PgBouncer 的全部意义就在这里
+    default_pool_size = 25
+    max_client_conn = 2000
+    # 兼容点 1：会话参数跨事务保留
+    track_extra_parameters = statement_timeout
+    # 兼容点 2：≥1.21 的内置 prepared statement 支持
+    max_prepared_statements = 200
+    server_reset_query = DISCARD ALL
+    ignore_startup_parameters = extra_float_digits
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: pgbouncer
+  namespace: chiron
+spec:
+  # 只被集群内的 gateway / python-engine 调用，不对外暴露
+  clusterIP: None
+  selector: { app: pgbouncer }
+  ports:
+    - { name: postgres, port: 6432, targetPort: 6432 }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: pgbouncer
+  namespace: chiron
+spec:
+  # PgBouncer 的连接表在内存里：加副本是"提高总池量"，不是无脑水平扩展。
+  # 2 个副本 + 反亲和，配合 default_pool_size=25 ⇒ 对 PG 合计 50 连接（另留 70 给运维/迁移）。
+  replicas: 2
+  selector:
+    matchLabels: { app: pgbouncer }
+  template:
+    metadata:
+      labels: { app: pgbouncer }
+    spec:
+      # 两个副本落在同一节点不致命（各自池独立），但会一起随节点故障消失
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: pgbouncer }
+                topologyKey: kubernetes.io/hostname
+      containers:
+        - name: pgbouncer
+          image: pgbouncer/pgbouncer:1.24.1
+          imagePullPolicy: IfNotPresent
+          ports: [{ containerPort: 6432 }]
+          args: ["/etc/pgbouncer/pgbouncer.ini"]
+          volumeMounts:
+            - { name: config, mountPath: /etc/pgbouncer/pgbouncer.ini, subPath: pgbouncer.ini, readOnly: true }
+            - { name: userlist, mountPath: /etc/pgbouncer/userlist.txt, subPath: PGBOUNCER_USERLIST, readOnly: true }
+          resources:
+            requests: { cpu: 100m, memory: 64Mi }
+            limits: { cpu: 500m, memory: 256Mi }
+      volumes:
+        - name: config
+          configMap: { name: pgbouncer-config }
+        - name: userlist
+          secret:
+            secretName: chiron-secrets
+            items: [{ key: PGBOUNCER_USERLIST, path: PGBOUNCER_USERLIST }]
+---
 # ═══════════════════════════════════════════════════════════════════════════
 # 沙箱执行服务（S5-(e) 的 B 层）—— 引擎默认 SANDBOX_BACKEND=service 且 **fail-closed**
 #
@@ -315,7 +481,7 @@ spec:
       containers:
         - name: sandbox-service
           image: chiron/python-engine:dev
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           command: ["python", "-m", "uvicorn", "service:app", "--host", "0.0.0.0", "--port", "8001"]
           ports: [{ containerPort: 8001 }]
           env:
@@ -462,7 +628,7 @@ spec:
       containers:
         - name: frontend
           image: chiron/frontend:dev
-          imagePullPolicy: Never
+          imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 80 }]
           readinessProbe:
             httpGet: { path: /health, port: 80 }
@@ -487,7 +653,9 @@ metadata:
   name: frontend
   namespace: chiron
 spec:
-  # NodePort：kind 已把节点 30082 映射到宿主 18082（见 kind-config.yaml）。
+  # ⚠ 这是**唯一**的对外入口（静态资源 + 同源反代，网关那侧已收回 ClusterIP）。
+  # NodePort 会把端口暴露在**每个节点 IP** 上 ⇒ 生产必须前置真实 LB / Ingress，
+  # 或用节点防火墙把它限制在可信来源；kind 用它做本地验证（30082 → 宿主 18082）。
   type: NodePort
   selector: { app: frontend }
   ports:
@@ -495,3 +663,117 @@ spec:
       port: 80
       targetPort: 80
       nodePort: 30082
+---
+# ═══════════════════════════════════════════════════════════════════════════
+# 网络策略（B3）：内部特权端点的**第二道**防线
+#
+# 背景：网关的 mux 上同时挂着对外的 /v1/* 与内部的 /v1/internal/*（任意 SQL 执行、
+# Redis 读写、媒体写入），而这些"内部"端点只靠 `X-Internal-Token` 一道门。上面已把
+# gateway 的 Service 从 NodePort 收回 ClusterIP（不再暴露在节点 IP 上）；本策略再钉住
+# **集群内哪些 Pod 能访问哪些 Pod** —— token 是第一道，网络是第二道。
+#
+# ⚠ 前提：CNI 必须支持 NetworkPolicy（Calico / Cilium 等）。kind 自带的 kindnet
+# **不支持** —— apply 不报错但策略不生效，用实际连通性测试确认（见 README §5）。
+# egress 刻意不限制：引擎要出网调 LLM 与对象存储，列白名单域名会把部署绑死在具体
+# 供应商上，收益远小于代价。
+# ═══════════════════════════════════════════════════════════════════════════
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-ingress
+  namespace: chiron
+spec:
+  # 命名空间内所有 Pod 默认不接受任何入站：新加的服务不会因为"忘了写策略"而裸奔
+  podSelector: {}
+  policyTypes: [Ingress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: frontend-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: frontend }
+  policyTypes: [Ingress]
+  ingress:
+    # 不限定来源：NodePort 的源地址随 CNI 的 SNAT 行为变化，写死 ipBlock 会把入口
+    # 一起挡掉。对外收口靠 LB / 防火墙（见上面 Service 的注释），不靠这里。
+    - ports:
+        - { port: 80, protocol: TCP }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: gateway }
+  policyTypes: [Ingress]
+  ingress:
+    # 浏览器流量：只经 frontend 的同源反代（/v1、/events、/ws、/submit、/cancel）
+    - from:
+        - podSelector: { matchLabels: { app: frontend } }
+      ports: [{ port: 8080, protocol: TCP }]
+    # 引擎回连：/v1/internal/*、tool-authorize、执行审计摄取
+    - from:
+        - podSelector: { matchLabels: { app: python-engine } }
+      ports: [{ port: 8080, protocol: TCP }]
+    # 独立沙箱服务也把执行审计送到网关（/v1/internal/audit/exec）
+    - from:
+        - podSelector: { matchLabels: { app: sandbox-service } }
+      ports: [{ port: 8080, protocol: TCP }]
+    # kubelet 的 readiness/liveness 探针来源是**节点**而不是 Pod。多数 CNI 会放通
+    # host→pod，但 Calico 的默认策略可能拦 —— 若 Pod 一直 NotReady 先查这里。
+    # 这里只列 RFC1918，够覆盖常规集群；节点网段不在这三个里的请按实际调整。
+    - from:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
+      ports: [{ port: 8080, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: python-engine-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: python-engine }
+  policyTypes: [Ingress]
+  ingress:
+    # 只有网关会调用引擎（含 SSE 转发）；引擎本身不对外
+    - from:
+        - podSelector: { matchLabels: { app: gateway } }
+      ports: [{ port: 8000, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: pgbouncer-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: pgbouncer }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector: { matchLabels: { app: gateway } }
+        - podSelector: { matchLabels: { app: python-engine } }
+      ports: [{ port: 6432, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: sandbox-lb }
+  policyTypes: [Ingress]
+  ingress:
+    # 只有引擎向沙箱层发起执行请求；sandbox-lb → sandbox-service 由内部 nginx 转发
+    - from:
+        - podSelector: { matchLabels: { app: python-engine } }
+      ports: [{ port: 8001, protocol: TCP }]

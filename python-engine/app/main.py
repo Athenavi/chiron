@@ -15,7 +15,7 @@ from fastapi import Depends, FastAPI, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.config import settings
-from app.deps import verify_media_store, verify_sandbox_root
+from app.deps import verify_media_store, verify_sandbox_backend, verify_sandbox_root
 from app.session_store import SessionStore
 
 if TYPE_CHECKING:
@@ -152,6 +152,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 1.5 部署前置校验：多副本安全前置（沙箱根 + 媒体后端）──
     # 与下方 Redis 门禁同一策略：多副本下状态必须共享，否则在运行期以
     # "文件工具间歇性失忆"/"媒体下载 404"的形式暴露；这里提前到启动时暴露。
+    verify_sandbox_backend()
     verify_sandbox_root()
     verify_media_store()
 
@@ -928,7 +929,7 @@ def _apply_sandbox_service_branch(base: Any, *, service_healthy: bool | None = N
     logger.info(
         "exec backend: remote sandbox service at %s (tenants=%s)",
         settings.sandbox_service_url,
-        tenants or "none — nobody will be routed",
+        tenants or "* (all tenants — an empty whitelist routes everyone)",
     )
     return wrapped
 

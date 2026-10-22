@@ -54,12 +54,18 @@ async def init_pool(dsn: str) -> asyncpg.Pool | None:
 
     global _pool
     _pool = await asyncpg.create_pool(
-        dsn, min_size=settings.db_pool_min_size, max_size=settings.db_pool_max_size
+        dsn,
+        min_size=settings.db_pool_min_size,
+        max_size=settings.db_pool_max_size,
+        # 见 settings.pg_statement_cache_size 的注释：经 PgBouncer 的 transaction 池时必须为 0，
+        # 否则 prepared statement 会在 server 连接被复用后错配。
+        statement_cache_size=settings.pg_statement_cache_size,
     )
     logger.info(
-        "PostgreSQL connected directly (pool=%d-%d)",
+        "PostgreSQL connected directly (pool=%d-%d, statement_cache_size=%d)",
         settings.db_pool_min_size,
         settings.db_pool_max_size,
+        settings.pg_statement_cache_size,
     )
     await _log_pool_capacity(_pool)
     return _pool

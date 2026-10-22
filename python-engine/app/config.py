@@ -79,6 +79,11 @@ class Settings(BaseSettings):
     # 连接池大小（水平扩展时注意总连接数不超过数据库上限）
     db_pool_min_size: int = 5
     db_pool_max_size: int = 20
+    # asyncpg 的 statement cache 大小。**经 PgBouncer（pool_mode=transaction）时必须为 0**：
+    # prepared statement 绑在 server 连接上，而 transaction 池会在事务之间把连接换给别的客户端，
+    # 缓存下来的语句名到下一个事务就不存在了（症状：`prepared statement "..." does not exist`，
+    # 且只在并发下偶发）。默认 0 = 对两种部署都安全；确认直连 PG 且想省一次 parse 时可调到 100。
+    pg_statement_cache_size: int = 0
 
     # ── Milvus ──
     milvus_address: str = ""
@@ -337,6 +342,12 @@ class Settings(BaseSettings):
     # 网关透传的 ?tenant_id= / ?user_id= query 身份（防直连绕过）
     internal_token: str = ""
 
+    # ── 观测端点令牌（/metrics、/info）──
+    # 与网关的 METRICS_TOKEN 同值：Prometheus 抓取时带 `Authorization: Bearer <它>`。
+    # 未配置时引擎**拒绝**这两个端点（fail-closed）—— 引擎在 k8s 里是 headless
+    # Service，集群内任何 Pod 都能直连 8000，靠"端口不外露"是部署假设而不是保证。
+    metrics_token: str = ""
+
     # ── 独立 sandbox 服务（S5-(e)，见 vendor/设计-独立sandbox服务.md）──
     #
     # `service`（**默认**）：执行转发给独立服务（`app/backends/remote_exec.py`），把 agent
@@ -451,18 +462,20 @@ class Settings(BaseSettings):
         任何知道该值的攻击者可伪造任意租户身份的 JWT。Go 端已对弱值黑名单拒绝，
         Python 端必须保持一致校验，否则一旦 Python 端口直连暴露即可被绕过。
 
-        生产模式（APP_ENV=production 或 PYTHON_ENV=production）下额外禁止
-        sslmode=disable；开发模式允许，便于本地 docker postgres。
+        生产模式（见 app/envmode.py：CHIRON_ENV / APP_ENV / PYTHON_ENV 任一命中）
+        下额外禁止 sslmode=disable；开发模式允许，便于本地 docker postgres。
         """
         import base64
         import hashlib
         import hmac
         import os
 
-        is_prod = (
-            os.getenv("APP_ENV", "").lower() == "production"
-            or os.getenv("PYTHON_ENV", "").lower() == "production"
-        )
+        # 生产判定走 app.envmode 的**唯一入口**（并集认 CHIRON_ENV / APP_ENV / PYTHON_ENV）。
+        # 此前这里只看 APP_ENV/PYTHON_ENV，而 deps.verify_sandbox_root 只看 CHIRON_ENV ⇒
+        # 运维只设其中一个时，另一半门禁静默失效（"配置错了却起得来"）。
+        from app.envmode import is_production
+
+        is_prod = is_production()
 
         # JWT_SECRET 未显式配置时，由 APP_SECRET 派生（与 Go 网关 deriveSubsecret 完全一致：
         # HMAC-SHA256(APP_SECRET, "chiron-jwt") → base64url 无 padding）。

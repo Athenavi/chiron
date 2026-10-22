@@ -27,15 +27,20 @@ def verify_sandbox_root() -> None:
     落到不同副本时会各自维护一份 workspace —— 文件/命令工具表现为"间歇性失忆"。
 
     规则：
-    - ``CHIRON_ENV=production|prod`` 时必须显式设置 ``SANDBOX_ROOT``；
+    - 生产环境（见 ``app/envmode.py``：``CHIRON_ENV`` / ``APP_ENV`` / ``PYTHON_ENV``
+      任一为 ``production|prod``）必须显式设置 ``SANDBOX_ROOT``；
       未设置则打印**具体原因与修复指引**后拒绝启动（``CHIRON_ALLOW_LOCAL_SANDBOX=true`` 仅限单机开发放行）。
     - 非生产环境允许缺省，但打印 WARN 说明多副本要求。
     - 已显式配置、但解析结果落在当前工作目录内时给出 WARN（疑似仍是容器本地盘）。
     """
     from app.tools.sandbox import SANDBOX_ROOT_ENV, sandbox_root
 
-    env_name = (os.getenv("CHIRON_ENV") or "").strip().lower()
-    is_prod = env_name in ("production", "prod")
+    from app.envmode import env_name as _current_env_name, is_production
+
+    # 生产判定走 app.envmode 的**唯一入口**：此前这里只看 CHIRON_ENV，而 config.py 的
+    # fail-fast 看 APP_ENV/PYTHON_ENV ⇒ 只设其中一个时另一半门禁静默失效。
+    env_name = _current_env_name()
+    is_prod = is_production()
     allow_local = (os.getenv("CHIRON_ALLOW_LOCAL_SANDBOX") or "").strip().lower() in (
         "1",
         "true",
@@ -67,7 +72,7 @@ def verify_sandbox_root() -> None:
 
     if is_prod and not raw and not allow_local:
         logger.error(
-            "Refusing to start: CHIRON_ENV=%s (production) but %s is not set "
+            "Refusing to start: production detected (env_name=%s) but %s is not set "
             "(agent sandbox would fall back to the process-local path %s). "
             "Reason: %s/{tenant}/{user}/workspace is where all agent file, shell and git "
             "tools operate; with a per-replica path, a task handled by a different replica "
@@ -82,9 +87,73 @@ def verify_sandbox_root() -> None:
             SANDBOX_ROOT_ENV,
         )
         raise RuntimeError(
-            f"{SANDBOX_ROOT_ENV} must point to a shared volume when CHIRON_ENV={env_name} "
+            f"{SANDBOX_ROOT_ENV} must point to a shared volume when env={env_name} "
             "(set CHIRON_ALLOW_LOCAL_SANDBOX=true for single-node development)"
         )
+
+
+def verify_sandbox_backend() -> None:
+    """校验 `SANDBOX_BACKEND` 取值合法 —— 拼错一个字母就等于关掉沙箱隔离。
+
+    为什么必须 fail-fast（而不是打个 warning 继续）：`main.py` 的
+    `_apply_sandbox_service_branch` 只认**精确等于** `service`（去空白转小写后）的取值，
+    其余任何取值都走"恒等返回"分支 —— 也就是**静默地在引擎进程内执行**。而进程内沙箱
+    自述不是安全边界（见 `app/backends/remote_exec.py` 的模块文档："它不是安全等级的
+    跃升"），真正把逃逸影响面限制在只读根 / 无 capability / 无外网出口容器里的，是独立
+    沙箱服务。
+
+    于是「配置写错」与「隔离没生效」之间只差一个字母，而且**没有任何日志会说出来**
+    （取值不精确等于 `service` 时，那段代码连 warning 都不打）。企业部署里这个变量常由
+    模板或托管平台注入，拼错无人可察 —— 所以这里把取值收紧成硬校验。
+
+    允许的取值：
+    * `service`（默认，隔离生效）：必须同时给出 `SANDBOX_SERVICE_URL`；
+    * `local`：**显式**退出隔离，允许（单机开发），不做 URL 校验；
+    * 空：按默认值 `service` 处理（与 `app/config.py` 的字段默认一致）——
+      "没写"应当等于安全默认，而不是悄悄退回进程内。
+    """
+    allowed = ("service", "local")
+    raw = (os.getenv("SANDBOX_BACKEND") or "").strip()
+    backend = raw.lower() or "service"
+
+    if backend not in allowed:
+        logger.error(
+            "Refusing to start: SANDBOX_BACKEND=%r is not a valid value. "
+            "Reason: only an exact 'service' activates the isolated sandbox service; any "
+            "other value silently falls back to in-process execution, where the static "
+            "guards are a speed bump rather than a boundary. "
+            "Fix: SANDBOX_BACKEND=service (plus SANDBOX_SERVICE_URL), or explicitly "
+            "SANDBOX_BACKEND=local to opt out.",
+            raw,
+        )
+        raise RuntimeError(
+            f"SANDBOX_BACKEND={raw!r} is invalid; allowed values are {allowed} "
+            "(empty means 'service')"
+        )
+
+    if backend == "local":
+        logger.warning(
+            "SANDBOX_BACKEND=local — command/code execution runs inside the engine "
+            "process (the in-process sandbox is not a security boundary). "
+            "Use SANDBOX_BACKEND=service for isolated execution."
+        )
+        return
+
+    url = (os.getenv("SANDBOX_SERVICE_URL") or "").strip()
+    if not url:
+        logger.error(
+            "Refusing to start: SANDBOX_BACKEND=service but SANDBOX_SERVICE_URL is not set. "
+            "Reason: without the URL the execution branch is skipped silently and every "
+            "command runs in-process instead of in the isolated sandbox container. "
+            "Fix: set SANDBOX_SERVICE_URL (e.g. http://sandbox-lb:8001), or explicitly opt "
+            "out with SANDBOX_BACKEND=local."
+        )
+        raise RuntimeError(
+            "SANDBOX_BACKEND=service requires SANDBOX_SERVICE_URL "
+            "(or set SANDBOX_BACKEND=local to opt out of isolation)"
+        )
+
+    logger.info("Sandbox backend: service at %s (isolated execution)", url)
 
 
 def verify_media_store() -> None:

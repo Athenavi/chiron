@@ -38,9 +38,16 @@ scrape_configs:
   # 都只存在于进程内，扩展性测试时看不到任何队列行为 —— 等于盲测。
   # job 名必须叫 python-engine：prometheus_alerts.yml 的 PythonEngineDown /
   # HighPythonMemoryUsage 就是按这个名字写的（此前那条告警不可能成立）。
-  # /metrics 在引擎的 middleware 白名单里，不需要令牌（生产请用网络策略限制来源）。
+  # 鉴权:引擎 /metrics 现在也要求 `Authorization: Bearer ${METRICS_TOKEN}`
+  # （与网关同口径，见 python-engine/app/middleware/auth.py 的 METRICS_PATHS）——
+  # 引擎在 k8s 里是 headless Service，集群内任何 Pod 都能直连 8000，
+  # "端口不外露"是部署假设而不是保证。compose 已把同一个 METRICS_TOKEN 也传给引擎。
+  # 未设置该变量时本 job 会 401（引擎侧 fail-closed），生产必须设置。
   - job_name: python-engine
     metrics_path: /metrics
+    authorization:
+      type: Bearer
+      credentials: ${METRICS_TOKEN}
     dns_sd_configs:
       - names: ["python-engine"]
         type: A

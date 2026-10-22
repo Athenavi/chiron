@@ -17,11 +17,21 @@ from app.redis_keys import rkey
 
 logger = logging.getLogger(__name__)
 
-# 公开路径（不需要认证）
+# 公开路径（不需要认证）：**只有探针**。
 # `/docs` 与 `/openapi.json` 不在此列：它们在 `main.py` 里默认关闭（`DOCS_ENABLED`），
 # 即便打开也应要求认证 —— 免认证地公开整个 API 契约没有任何理由。
-# `/metrics` 留在这里是因为 Prometheus 采集需要；它的暴露面靠端口不外露控制。
-PUBLIC_PATHS = {"/healthz", "/readyz", "/metrics", "/info"}
+PUBLIC_PATHS = {"/healthz", "/readyz"}
+
+# 观测端点：需要 `Authorization: Bearer <METRICS_TOKEN>`（与网关 /metrics 同口径）。
+#
+# 这两个路径此前在 PUBLIC_PATHS 里，理由是"暴露面靠端口不外露控制"。但引擎在 k8s 里
+# 是 **headless Service**：集群内任何 Pod 都能直连 8000。而 `/metrics` 吐的是队列积压、
+# DLQ 增长、租户 token 预算这类业务指标，`/info` 还带活跃请求数与进程资源 ——
+# "端口不外露"是部署假设，不是这里的保证。
+#
+# 未配置 `METRICS_TOKEN` 时**拒绝**（fail-closed）：没有凭据可验就不该放行，
+# 否则"配了才安全"会退化成"忘了配就敞开"。
+METRICS_PATHS = {"/metrics", "/info"}
 
 # 弱密钥黑名单：与 Go 端 config.go ValidateJWTSecret 保持一致
 _WEAK_JWT_SECRETS = frozenset(
@@ -82,9 +92,13 @@ class AuthMiddleware(BaseHTTPMiddleware):
     async def dispatch(
         self, request: Request, call_next: RequestResponseEndpoint
     ) -> Response:
-        # 公开路径
+        # 公开路径（只有探针）
         if request.url.path in PUBLIC_PATHS:
             return await call_next(request)
+
+        # 观测端点：需要 METRICS_TOKEN（见 METRICS_PATHS 的注释）
+        if request.url.path in METRICS_PATHS:
+            return await self._metrics_endpoint(request, call_next)
 
         # Bearer Token 路径（直连备用）：默认关闭，见 ENGINE_ALLOW_DIRECT_JWT。
         # 开启时持有任意合法 JWT 即可直连引擎、自报 tenant_id，从而绕过 Go 网关的
@@ -161,6 +175,31 @@ class AuthMiddleware(BaseHTTPMiddleware):
             )
 
         return JSONResponse({"error": "Authentication required"}, status_code=401)
+
+    async def _metrics_endpoint(
+        self, request: Request, call_next: RequestResponseEndpoint
+    ) -> Response:
+        """观测端点的鉴权：与网关 `/metrics` 同口径（Bearer METRICS_TOKEN）。
+
+        * 配了 `METRICS_TOKEN` 且 `Authorization: Bearer <token>` 常量时间匹配 ⇒ 放行；
+        * 没配 `METRICS_TOKEN` ⇒ **拒绝**（fail-closed），并在日志里点明原因 ——
+          否则运维只会看到 Prometheus 抓取失败，却不知道该配哪个变量。
+        """
+        from app.config import settings
+
+        token = (settings.metrics_token or "").strip()
+        if token:
+            provided = request.headers.get("Authorization", "")
+            if hmac.compare_digest(provided, f"Bearer {token}"):
+                return await call_next(request)
+        else:
+            logger.warning(
+                "Metrics endpoint %s denied: METRICS_TOKEN is not configured "
+                "(set it to the same value as the gateway's METRICS_TOKEN, "
+                "and give Prometheus the same Bearer credential)",
+                request.url.path,
+            )
+        return JSONResponse({"error": "metrics token required"}, status_code=401)
 
     def _is_internal_request(self, request: Request) -> bool:
         """校验 X-Internal-Token 是否与配置的 internal_token 常量时间匹配。

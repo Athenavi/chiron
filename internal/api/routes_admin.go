@@ -110,6 +110,9 @@ func registerAdminRoutes(
 	// 一旦发现失败（provider 无 /models、UA 被拦、网络不可达），可用模型集永远是空的。
 	mux.Handle("GET /v1/admin/models", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/models", authMW(rlMW(adminWriteMW(adminStrip))))
+	// 批量开关（/models 页的组内全选 → 启用/禁用）。必须**在 {id} 之外单独注册**：
+	// 前者是写操作，鉴权口径与 PUT /models/{id} 一致。
+	mux.Handle("PUT /v1/admin/models/batch", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("DELETE /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
 

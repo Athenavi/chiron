@@ -85,8 +85,19 @@ kubectl apply -f deploy/k8s/chiron.yaml
 kubectl -n chiron get pods -w   # 期望：3 gateway + 3 python-engine + 2 frontend + 1 sandbox-service + 1 sandbox-lb 全 Ready
 ```
 
-前端入口：`http://localhost:18082`（kind-config 把节点 30082 映射到宿主 18082）；
-网关可直连 `http://localhost:18080`（节点 30080）。
+前端入口：`http://localhost:18082`（kind-config 把节点 30082 映射到宿主 18082）。
+
+网关**不再**发布节点端口：它的 mux 上同时挂着 `/v1/internal/*`（含 `/v1/internal/db/execute`
+这类能执行 SQL 的端点），NodePort 会把它们暴露在每个节点 IP 上，因此这里已收回
+`ClusterIP`。本地直连调试改用：
+
+```powershell
+kubectl -n chiron port-forward svc/gateway 8080:8080
+```
+
+`chiron.yaml` 末尾是一组 `NetworkPolicy`（默认拒绝入站 + 逐服务放行）。**kind 自带的
+kindnet 不支持 NetworkPolicy**，apply 不报错但策略不生效；要验证策略得换 CNI
+（Calico/Cilium）或至少在真集群上测。
 
 ## 5. 验证清单（逐条对应项目已有的扩展设计）
 

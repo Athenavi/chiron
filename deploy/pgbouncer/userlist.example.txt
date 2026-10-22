@@ -1,0 +1,14 @@
+; 复制成 userlist.txt 并填入真实条目：
+;   cp deploy/pgbouncer/userlist.example.txt deploy/pgbouncer/userlist.txt
+;
+; 内容形如（用户名列 + 该角色的 SCRAM secret 或明文密码）：
+;   "chiron_app" "SCRAM-SHA-256$4096:...."
+;
+; 优先用 secret 而不是明文密码 —— 它就在 PG 里，不必再保存一份口令：
+;   psql "$POSTGRES_DSN" -Atc \
+;     "SELECT format('\"%s\" \"%s\"', rolname, rolpassword) FROM pg_authid WHERE rolname='chiron_app'"
+; （pg_authid 需超级用户可读；pg_shadow 权限要求相同。取不到时退而写明文条目，
+;   auth_type=scram-sha-256 同样接受。）
+;
+; userlist.txt 已被 deploy/pgbouncer/.gitignore 排除，不会误提交。
+"chiron_app" "REPLACE_WITH_SCRAM_SECRET_OR_PASSWORD"

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"regexp"
 	"strings"
 	"time"
 
@@ -286,17 +287,21 @@ func (h *SystemHandler) RedisHealth(w http.ResponseWriter, r *http.Request) {
 // 后的利用门槛，与 DBExecute 保持对称。
 var readOnlySQLPrefixes = []string{"SELECT", "WITH", "TABLE", "VALUES", "EXPLAIN", "SHOW"}
 
-// containsDMLKeyword 判断 SQL 是否含 DML 关键字（按空格词边界）。
+// dmlKeywordRe 匹配 SQL 里的 DML 关键字，用**真正的词边界**（`\b`）而不是"空格包围"。
 //
-// 只用于 `WITH` 前缀的额外筛查（其他只读前缀无法内嵌 DML）。用 `" KW "` 形式比较，
-// 可避开列名/标识符里的子串（如 `deleted_at` 不会命中 ` DELETE `）；宁可误拒也不放过。
+// 为什么必须换掉旧的 `" "+kw+" "` 判定：关键字紧跟括号/逗号/等号时前面没有空格，
+// 而 `WITH x AS (DELETE FROM t RETURNING *) SELECT 1` 恰恰是**合法且危险**的单语句
+// CTE —— 旧判定放它过去（实测：打到数据库才失败，返回 500 而不是 403）。
+//
+// `\b` 的边界是 `\w` 与 `\W` 之间，而 `_` 属于 `\w` ⇒ `deleted_at` / `my_delete`
+// 这类标识符依旧不会误命中（旧写法的这个好处被保留）。
+var dmlKeywordRe = regexp.MustCompile(`\b(DELETE|INSERT|UPDATE|MERGE|TRUNCATE)\b`)
+
+// containsDMLKeyword 判断 SQL 是否含 DML 关键字。只用于 `WITH` 前缀的额外筛查
+// （其它只读前缀内嵌不了 DML）。宁可误拒也不放过：字符串字面量里出现这些词
+// （如 `SELECT 'delete me'`）会被一并拒掉 —— 内部端点走参数化查询，可以接受。
 func containsDMLKeyword(upperSQL string) bool {
-	for _, kw := range []string{"DELETE", "INSERT", "UPDATE", "MERGE", "TRUNCATE"} {
-		if strings.HasPrefix(upperSQL, kw+" ") || strings.Contains(upperSQL, " "+kw+" ") {
-			return true
-		}
-	}
-	return false
+	return dmlKeywordRe.MatchString(upperSQL)
 }
 
 // validateReadOnlySQL 校验 SQL 是否为**单条只读语句**，返回空串表示放行。
@@ -370,9 +375,11 @@ func (h *SystemHandler) DBQuery(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// DBExecute 执行 SQL 写操作（供 Python 引擎调用）
-// P1 安全加固：非维护模式下仅允许 SELECT/EXPLAIN/SAVEPOINT/ROLLBACK
-// 查询，防止 internal_token 泄露时数据库被完全控制。
+// DBExecute 执行 SQL（供 Python 引擎调用）：**只读**白名单与 DBQuery 同源。
+//
+// 函数名里的 "Execute" 是历史包袱：它从来不允许写（旧白名单也只放行
+// SELECT/EXPLAIN/SHOW/SET/BEGIN/COMMIT 这类只读或事务控制语句）。真正的写路径
+// 是应用自己的 API，不是这个内部端点。
 func (h *SystemHandler) DBExecute(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		SQL  string        `json:"sql"`
@@ -389,23 +396,20 @@ func (h *SystemHandler) DBExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// P1 安全加固：检查 SQL 关键词，拒绝 DDL/DML 写操作
-	cleanSQL := strings.TrimSpace(strings.ToUpper(req.SQL))
-	// 允许的查询前缀（安全）
-	allowedPrefixes := []string{
-		"SELECT", "EXPLAIN", "SAVEPOINT", "ROLLBACK",
-		"RELEASE", "SET", "SHOW", "BEGIN", "COMMIT",
-	}
-	isAllowed := false
-	for _, p := range allowedPrefixes {
-		if strings.HasPrefix(cleanSQL, p) {
-			isAllowed = true
-			break
-		}
-	}
-	if !isAllowed {
-		// 拒绝写操作（INSERT/UPDATE/DELETE/DROP/ALTER/VACUUM/REINDEX/TRUNCATE/CREATE）
-		Forbidden(w, "write operations are not allowed on this endpoint; use the application API instead")
+	// 与 DBQuery **同一套**校验：只读前缀 + 拒多语句 + WITH 的 DML 关键字筛查。
+	//
+	// 此前这里是自己一份更宽松的白名单（含 SET / BEGIN / COMMIT / ROLLBACK /
+	// SAVEPOINT / RELEASE），而且**没有**多语句与 CTE 检查 —— 同一个文件里，只读端点
+	// 用着最严的校验，"执行"端点却用着最松的（DBQuery 的注释写着"与 DBExecute 对称"，
+	// 可见给 DBQuery 升级校验时漏了回填这里）。
+	//
+	// 收紧的依据：这三个端点都挂在对外同一个 mux 上、只靠 X-Internal-Token 一道门，
+	// 而 token 泄露的后果在 DBQuery 的注释里已经写明（跨租户读全库、`SELECT 1;DROP …`
+	// 执行任意 DDL/DML）。事务控制语句（SET/BEGIN/COMMIT）在本端点没有用途：
+	// 引擎默认走直连池（USE_UNIFIED_DB_CLIENT=false），启用统一客户端时也只走
+	// fetch_*（→ /db/query）与本端点两条只读路径。
+	if reason := validateReadOnlySQL(req.SQL); reason != "" {
+		Forbidden(w, reason)
 		return
 	}
 
@@ -430,7 +434,7 @@ func nilIfEmpty(s string) *string {
 }
 
 // DBBatchExecute 批量执行 SQL（供 Python 引擎调用）
-// P1 安全加固：同 DBExecute，拒绝 DDL/DML 写操作。
+// 同样只允许只读语句，且**逐条**走 validateReadOnlySQL。
 func (h *SystemHandler) DBBatchExecute(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		Queries []string `json:"queries"`
@@ -446,22 +450,11 @@ func (h *SystemHandler) DBBatchExecute(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// P1 安全加固：检查每条 SQL
-	allowedPrefixes := []string{
-		"SELECT", "EXPLAIN", "SAVEPOINT", "ROLLBACK",
-		"RELEASE", "SET", "SHOW", "BEGIN", "COMMIT",
-	}
+	// 每条都与 DBQuery / DBExecute 同源校验（只读前缀 + 拒多语句 + CTE DML 筛查）。
+	// 逐条校验是必须的：批量端点最容易变成"一条合法语句捎带一条 DROP"的通道。
 	for _, sql := range req.Queries {
-		cleanSQL := strings.TrimSpace(strings.ToUpper(sql))
-		isAllowed := false
-		for _, p := range allowedPrefixes {
-			if strings.HasPrefix(cleanSQL, p) {
-				isAllowed = true
-				break
-			}
-		}
-		if !isAllowed {
-			Forbidden(w, "write operations are not allowed on this endpoint; use the application API instead")
+		if reason := validateReadOnlySQL(sql); reason != "" {
+			Forbidden(w, reason)
 			return
 		}
 	}

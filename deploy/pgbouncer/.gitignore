@@ -1,0 +1,2 @@
+# userlist.txt 含角色凭据（SCRAM secret 或明文口令），不提交；示例见 userlist.example.txt
+userlist.txt

@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net"
@@ -52,6 +53,9 @@ func (h *AdminHandler) registerOpsRoutes(r *http.ServeMux) {
 	// 模型注册表
 	r.HandleFunc("GET /models", h.ListModels)
 	r.HandleFunc("POST /models", h.CreateModel)
+	// 批量开关（/models 页的"组内全选 → 启用/禁用"）：字面量段比 /models/{id} 更具体，
+	// Go 1.22+ 的 ServeMux 据此优先匹配，两者可共存。
+	r.HandleFunc("PUT /models/batch", h.BatchUpdateModels)
 	r.HandleFunc("PUT /models/{id}", h.UpdateModel)
 	r.HandleFunc("DELETE /models/{id}", h.DeleteModel)
 
@@ -929,6 +933,73 @@ func (h *AdminHandler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	OK(w, map[string]string{"status": "updated"})
+}
+
+// maxBatchModelIDs 单次批量的 id 上限。存在的意义是防呆而非性能：这个端点是给
+// "整组开关"用的，一次上千个 id 只可能来自前端选择逻辑出错或脚本滥用，
+// 而 `unnest($2::text[])` 的参数量也不该无界。
+const maxBatchModelIDs = 500
+
+// normalizeBatchModelIDs 归一化批量模型 id：去空白、丢空串、去重。
+//
+// 去重是必须的：两级分组的"跨组全选"很容易把同一个 id 选两次（同一模型既在
+// provider 组又在子组里），重复不影响 UPDATE 的结果，但会让返回的 updated
+// 计数虚高 —— 前端拿它提示就会显示"已更新 12 个"而实际只有 10 个。
+func normalizeBatchModelIDs(raw []string) ([]string, error) {
+	seen := make(map[string]struct{}, len(raw))
+	out := make([]string, 0, len(raw))
+	for _, id := range raw {
+		id = strings.TrimSpace(id)
+		if id == "" {
+			continue
+		}
+		if _, dup := seen[id]; dup {
+			continue
+		}
+		seen[id] = struct{}{}
+		out = append(out, id)
+	}
+	if len(out) == 0 {
+		return nil, errors.New("ids is empty")
+	}
+	if len(out) > maxBatchModelIDs {
+		return nil, fmt.Errorf("too many ids (max %d)", maxBatchModelIDs)
+	}
+	return out, nil
+}
+
+// BatchUpdateModels 批量启用/禁用：`PUT /admin/models/batch`。
+//
+// 为什么需要它：在 /models 页把一个 provider 下的几十个模型一起关掉，逐条打
+// `PUT /models/{id}` 会发出同样数量的请求，且中途失败会留下"一半开一半关"的
+// 中间态、无从回滚。这里一条 `UPDATE ... WHERE id IN (...)` 原子完成。
+func (h *AdminHandler) BatchUpdateModels(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		IDs []string `json:"ids"`
+		// 用指针区分"没传 enabled"与"传了 false"——后者是合法且最常用的请求
+		Enabled *bool `json:"enabled"`
+	}
+	if err := DecodeJSON(w, r, &body); err != nil || body.Enabled == nil {
+		BadRequest(w, "ids and enabled are required")
+		return
+	}
+	ids, err := normalizeBatchModelIDs(body.IDs)
+	if err != nil {
+		BadRequest(w, err.Error())
+		return
+	}
+	// 参数写成 `$2::text[]`：`llm_models.id` 是 `character varying(36)`（见 0001 基线建表），
+	// **不是** uuid 类型。真库用例 TestLiveBatchUpdateModels 在最初写成
+	// `unnest($2::text[])::uuid` 时直接报 `operator does not exist: character varying = uuid`。
+	// id 里存的就是 UUID 字符串，按文本数组比较即可，且 `= ANY(...)` 仍走主键索引。
+	tag, err := db.GlobalDBManager.Exec(r.Context(),
+		`UPDATE llm_models SET enabled = $1, updated_at = NOW() WHERE id = ANY($2::text[])`,
+		*body.Enabled, ids)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "batch update models failed")
+		return
+	}
+	OK(w, map[string]interface{}{"updated": tag.RowsAffected(), "enabled": *body.Enabled})
 }
 
 func (h *AdminHandler) DeleteModel(w http.ResponseWriter, r *http.Request) {

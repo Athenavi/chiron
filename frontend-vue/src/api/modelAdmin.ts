@@ -49,6 +49,20 @@ export async function updateAdminModel(
   await api.put(`/v1/admin/models/${encodeURIComponent(id)}`, patch)
 }
 
+/**
+ * 批量启用/禁用（/models 页的「组内全选 → 启用/禁用」）。
+ *
+ * 为什么不在这里 `Promise.all` 一串单条 PUT：整组开关会一次改几十上百行，
+ * 逐个请求除了慢，中途失败还会留下「一半开一半关」的中间态且无从回滚。
+ * 后端 `PUT /v1/admin/models/batch` 用一条 `UPDATE ... WHERE id = ANY(...)`
+ * 原子完成，并返回**实际影响的行数**（去重后、且不含已不存在的 id）。
+ */
+export async function batchUpdateAdminModels(ids: string[], enabled: boolean): Promise<number> {
+  const res = await api.put('/v1/admin/models/batch', { ids, enabled })
+  const data = unwrap<{ updated?: number }>(res.data)
+  return Number(data?.updated ?? 0)
+}
+
 export async function deleteAdminModel(id: string): Promise<void> {
   await api.delete(`/v1/admin/models/${encodeURIComponent(id)}`)
 }
