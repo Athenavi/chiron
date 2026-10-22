@@ -94,9 +94,14 @@ jobs:
           load: ${{ !(github.event_name == 'push' || inputs.push) }}
 
       # ── 漏洞扫描（Trivy）：HIGH/CRITICAL 直接在 job 里失败 ──
+      # ⚠ 用 `@master` 而**不是**固定版本：原先钉的 `0.28.0` 上游已解析不到
+      # （CI 报 `Unable to resolve action aquasecurity/trivy-action@0.28.0`），
+      # 而本机网络查不到该仓库当前可用的 tag 列表 ⇒ 经用户拍板改用 `@master`。
+      # **代价要记住**：`master` 是浮动的，上游改动会直接影响镜像构建 —— 若将来要收紧
+      # 供应链，应换成"联网确认存在的具体版本"或 commit SHA（本仓纪律：取不到就写未固化）。
       - name: Trivy scan (table)
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           # 优先扫本地刚构建的镜像；推送场景下按 tag 扫远端
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
@@ -107,7 +112,7 @@ jobs:
 
       - name: Trivy scan (SARIF)
         if: always()
-        uses: aquasecurity/trivy-action@0.28.0
+        uses: aquasecurity/trivy-action@master
         with:
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
           format: sarif
