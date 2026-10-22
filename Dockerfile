@@ -1,5 +1,5 @@
 # Backend - Multi-stage build
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26-alpine AS builder
 
 # Go 模块代理做成可覆盖：默认走官方 proxy.golang.org（境外，国内网络下 `go mod download`
 # 会 i/o timeout）。国内构建传： --build-arg GOPROXY=https://goproxy.cn,direct
