@@ -218,12 +218,18 @@ def command_allowed(command: str) -> bool:
         return False
     base = os.path.basename(command)
 
-    # P0修正: 检查路径穿越
-    resolved = os.path.realpath(command)
-    _, resolved_base = os.path.split(resolved)
+    # 防「路径里的 basename 与归一化后的 basename 不同」这一种混淆。
+    # ⚠ **不能用 `os.path.realpath`**：它会**解析符号链接**，于是
+    # `/usr/local/bin/npx`（→ …/npx-cli.js）与 `/opt/…/bin/python`（→ python3.11）这类
+    # **合法**的符号链接会被判成"basename 不一致"而拒绝 —— 本机 Windows 上这两个路径
+    # 不存在（realpath 原样返回）所以一直绿，CI（Linux runner 预装 node / python 是
+    # 符号链接）上直接红（test_ssrf 1 条 + test_skill_manager 5 条）。
+    # 穿越（`..`）与 UNC 已由 `_command_path_ok` 拒绝 ⇒ 这里只需 `normpath`（纯字符串，
+    # 不碰文件系统）。
+    normalized = os.path.normpath(command)
+    _, normalized_base = os.path.split(normalized)
 
-    # basename 和 resolved basename 必须一致 (防 ../../tmp/evil.py)
-    if resolved_base.lower() != base.lower():
+    if normalized_base.lower() != base.lower():
         return False
 
     return base in allowed

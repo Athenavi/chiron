@@ -68,6 +68,14 @@ def workspace_dir() -> Path:
 
 def safe_join(rel: str) -> Path:
     """将相对路径 clamp 到 workspace，拒绝逃逸（绝对路径/../）。"""
+    # ⚠ **跨平台**：`C:/Windows/win.ini` 这类 Windows 风格绝对路径在 **Linux** 上会被
+    # `(base / rel)` 当成**相对路径**（`C:` 不是驱动器）⇒ clamp 出一个无害但**语义错**的
+    # 子目录，而不是本节承诺的"拒绝绝对路径"。CI（Linux）上
+    # `test_safe_join_rejects_escape` 就是这么红的（本机 Windows 绿：那里它确实是绝对路径）。
+    # UNC（`\\\\host\\share`）在 Linux 上同理 —— 一并拒。规则与 `app/tools/ssrf.py` 的
+    # `_command_path_ok` 一致（同一条"哪条路径可以碰"的判据，两处各写一遍就要同款）。
+    if re.match(r"^[A-Za-z]:[\\/]", rel) or rel.startswith(("\\\\", "//")):
+        raise ValueError(f"path escapes sandbox: {rel}")
     base = workspace_dir().resolve()
     target = (base / rel).resolve()
     if target != base and not str(target).startswith(str(base) + os.sep):
@@ -101,6 +109,11 @@ def sandboxed_env() -> dict[str, str]:
     env["USERPROFILE"] = str(workspace_dir())
     env["TEMP"] = str(get_sandbox_dir())
     env["TMP"] = str(get_sandbox_dir())
+    # 沙箱子进程只跑模型代码（`run_code` 的 worker / 插件命令 / 钩子命令），**不需要**工具
+    # 注册表 ⇒ 短路 `app/tools/__init__.py` 的 35 个 eager import。否则以
+    # `python -m app.tools._sandbox_worker` 启动时会先把整条引擎依赖链拉进这个被清空的
+    # env（其中 `logfire` 在 import 期调 `Path.home()`，缺 HOME 即 RuntimeError）。
+    env["CHIRON_TOOLS_SKIP_REGISTRY"] = "1"
     return env
 
 
