@@ -16,10 +16,31 @@ def _enable_unified_clients(monkeypatch):
     monkeypatch.setenv("USE_UNIFIED_REDIS_CLIENT", "true")
 
 
+async def _require_gateway() -> None:
+    """这两条走的是**网关的内部 API**（`/v1/internal/db/*`、`/v1/internal/redis/*`），
+    不是直连 PG/Redis —— 见 `app/db_client.py` 的模块头。
+
+    没有运行中的网关时它们必然 `RedisClientError: All connection attempts failed`，
+    而那是**环境不具备**、不是代码缺陷 ⇒ 按本仓纪律 skip 而不是红（与 `conftest.py` 对
+    `POSTGRES_DSN` 的处理同一条口径）。
+    """
+    import httpx
+
+    from app.config import settings
+
+    url = settings.gateway_internal_url.rstrip("/") + "/v1/internal/db/health"
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            await client.get(url, headers={"X-Internal-Token": settings.internal_token})
+    except Exception as exc:  # noqa: BLE001
+        pytest.skip(f"网关不可达（{settings.gateway_internal_url}）：{str(exc)[:80]}")
+
+
 @pytest.mark.integration
 @pytest.mark.asyncio
 async def test_unified_db_client():
     """Test unified database client operations."""
+    await _require_gateway()
     from app.db_client import get_db_client
 
     db = get_db_client()
@@ -38,6 +59,7 @@ async def test_unified_db_client():
 @pytest.mark.asyncio
 async def test_unified_redis_client():
     """Test unified Redis client operations."""
+    await _require_gateway()
     from app.db_client import get_redis_client
 
     redis = get_redis_client()
