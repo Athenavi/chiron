@@ -40,7 +40,7 @@
     "vue": "^3.5.39",
     "vue-echarts": "^8.0.1",
     "vue-i18n": "^11.4.10",
-    "vue-router": "^4.6.4",
+    "vue-router": "^5.4.0",
     "web-vitals": "^6.2.1"
   },
   "devDependencies": {
