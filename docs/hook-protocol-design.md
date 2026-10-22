@@ -439,7 +439,7 @@ DSH 自陈的三条已知限制：`updatedInput` **解析但不应用**；折叠
 
 ### 10.3 相关文档
 
-[与 DSH 的差距分析](dsh-gap-analysis.md)（§插件生态一行：钩子协议已列未来规划）·
+与 DSH 的差距分析（§插件生态一行：钩子协议已列未来规划）·
 [Agent 安全与可靠性](agent-safety-and-reliability.md)（§1.4 MCP 收窄、§4.2 撤销栈）·
 [运行现场 checkpoint 续跑设计](run-checkpoint-design.md)（同类"设计先行"文档的格式先例）·
 [多实例部署指南](deployment-multi-instance.md) · [架构与请求链路](architecture.md) ·

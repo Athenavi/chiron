@@ -17,7 +17,7 @@ import (
 // 为什么值得单独一条：引擎自 A1 起不再把 native reasoning 包进 `text`，改为发独立
 // `thinking` 事件；而网关的落库累计**只认 `evt.Type == "text"`**（`submit_handler.go`
 // 里那条 `[thinking]` 前缀分支是**旧文本路径**）。2026-10-09 复核
-// `docs/reasonix-gap-analysis.md` 的自家不一致清单时确认：新路径**没有落库** ⇒
+// `内部差距分析` 的自家不一致清单时确认：新路径**没有落库** ⇒
 // assistant 的 content 只剩正文，前端历史回放拿不到思考块。
 //
 // 手法：假引擎（httptest）按序发 `thinking` / `text` / `done`，**真 PG** 落库，

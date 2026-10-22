@@ -708,7 +708,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield  # ── 应用运行中 ──
 
     # ── 关闭 ──
-    # 句柄显式传递（不用 `'x' in locals()` 探测）：见 docs/split-assessment.md §2.3
+    # 句柄显式传递（不用 `'x' in locals()` 探测）：见 内部文档 §2.3
     await _shutdown_lifespan(
         reconciler_task=_reconciler_task,
         metrics_task=_metrics_task,
@@ -949,7 +949,7 @@ async def _shutdown_lifespan(
 
     ⚠ 这里刻意**不用** `'x' in locals()` 探测"启动时到底建没建"：那种写法一旦把启动段抽成
     函数就会**静默跳过**清理（任务不取消、实例不注销，还不报错）。判据与实测见
-    docs/split-assessment.md §2.3。
+    内部文档 §2.3。
     """
     global _plugin_pool  # 关闭后置空，避免关闭完成后仍被读成"可用"
 

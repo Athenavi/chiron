@@ -66,7 +66,7 @@ POST /v1/internal/tool-authorize        （内部令牌；由引擎调用）
 IPv4-mapped / 6to4 / Teredo 里内嵌的 IPv4 会按**同一套策略递归判定**（否则
 `http://[::ffff:169.254.169.254]/` 这类写法会整体绕过名单）。命令白名单另要求
 **裸 basename 或绝对路径**（`../`、UNC 会被拒）。细节与三处实证逃逸见
-[差距分析](dsh-gap-analysis.md) 切口 #6。
+差距分析 切口 #6。
 
 ## 4. 副作用与可撤销性
 

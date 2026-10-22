@@ -385,7 +385,7 @@ class Settings(BaseSettings):
     #: 不存在的路径**两种模式都放行**：没有可过期的内容，新建文件本就没有"读"可做。
     #:
     #: **为什么不默认开**：收紧会让既有写入流程多出重读步骤，而收益需要产品侧判断。
-    #: 与 DSH 的两处**已知差异**（同批决定不做，证据见 `docs/archive/dsh-gap-analysis.md`）：
+    #: 与 DSH 的两处**已知差异**（同批决定不做，证据见 `内部差距分析`）：
     #: ① DSH 把"读一个不存在的路径"当作**授权受保护的创建**（`writeIntent` 返回 `createIfAbsent`）；
     #: ② DSH 有**并发创建**保护（读完缺失路径后别人建了它 ⇒ 拒绝），且它把原子新鲜度检查
     #: 交给 provider。用例：`tests/test_fs_guard.py::TestStrictMode`。

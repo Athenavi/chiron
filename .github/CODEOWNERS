@@ -1,0 +1,15 @@
+# 默认所有路径都请维护者 review。
+# ⚠️ 把 @OWNER 换成真实 GitHub 用户名（或团队 @org/team）。
+* @OWNER
+
+# 关键面：这些路径的改动建议**必须**有人看过再合。
+/SECURITY.md            @OWNER
+/CODE_OF_CONDUCT.md     @OWNER
+/.github/               @OWNER
+/migrations/            @OWNER
+/internal/api/          @OWNER
+/internal/auth/         @OWNER
+/internal/db/           @OWNER
+/python-engine/app/agent/  @OWNER
+/python-engine/app/api/    @OWNER
+/deploy/                @OWNER

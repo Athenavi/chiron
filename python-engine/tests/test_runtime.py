@@ -419,7 +419,7 @@ class TestToolGuardConfirmPath:
 
         只记"决定"的话，**"问了但没等到决定"**（等待期间进程被杀、副本被回收、
         连接断开后无人再答）在 `approval_audit.jsonl` 里**完全看不出来** ——
-        这正是本轮补上的缺口（见 docs/dsh-gap-analysis.md 的"工具审批 / 权限"一行）。
+        这正是本轮补上的缺口（见 内部差距分析 的"工具审批 / 权限"一行）。
         """
         from app.agent import approval_audit
 

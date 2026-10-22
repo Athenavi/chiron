@@ -15,7 +15,7 @@ import (
 // 真实 Redis 用例（断线重放的核心契约）。
 //
 // 为什么值得单独一套：`ReplayAfter` 是"多副本 / 断线重连不丢事件"这条**对外可核实行为**
-// 的唯一实现（见 docs/dsh-gap-analysis.md 切口 #1），但此前只有 `FormatSSE` 与
+// 的唯一实现（见 内部差距分析 切口 #1），但此前只有 `FormatSSE` 与
 // `localOnly` 两条无关用例 —— 补测时正是这里挖出了流 ID 字符串比较导致的丢事件缺陷
 // （见 streamid_test.go）。
 //

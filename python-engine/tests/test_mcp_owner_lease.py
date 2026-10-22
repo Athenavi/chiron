@@ -5,7 +5,7 @@
 DSH（DeepSeek Harness）是本地单用户 harness，架构上**不存在**"多个实例共享同一批用户"
 这件事；Chiron 是多副本 SaaS，MCP 连接规模 ≈ 实例数 × 活跃用户数 × server 数，扩容会线性
 放大对第三方 MCP server 的连接。owner 租约 + 连接预算是为此而设（见
-docs/dsh-gap-analysis.md 切口 #2）。但这套机制此前**一条用例都没有**，
+内部差距分析 切口 #2）。但这套机制此前**一条用例都没有**，
 `vendor/规划.md` §3.2 因此长期把它列在"缺实测证据"里。
 
 分两层：

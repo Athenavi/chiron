@@ -1,0 +1,65 @@
+name: Bug 报告
+description: 报告一个可复现的问题
+labels: ["bug", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        感谢反馈。提交前请先搜一下现有 issue。
+
+        ⚠️ **安全问题不要在这里报** —— 请按 [SECURITY.md](../../SECURITY.md) 走私有渠道。
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: 发生了什么
+      description: 期望行为 vs 实际行为。如果涉及并发/多副本，请说明有几个副本。
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现步骤
+      description: |
+        最小可复现步骤。涉及配置时请只写**变量名**（如 `SANDBOX_BACKEND`），
+        **不要贴任何密钥或 token**。
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: 版本或 commit
+      placeholder: v0.1.261022.01 / commit sha
+    validations:
+      required: true
+
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: 部署形态
+      options:
+        - docker compose（多副本）
+        - docker compose（单副本）
+        - 本地非容器
+        - 其他（在补充信息里说明）
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: 请先脱敏（token、密钥、手机号、用户对话内容）。
+      render: text
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我已搜索过现有 issue
+          required: true
+        - label: 这不是安全问题（安全问题按 SECURITY.md 私有报告）
+          required: true

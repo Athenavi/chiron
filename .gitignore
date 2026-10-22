@@ -97,3 +97,22 @@ sandbox/
 
 # 数据库凭据（本地明文，仅用于交接记录，禁止入库）
 .pg-credentials.txt
+
+# ── 公开仓库的凭据兜底（与语言无关）──
+# 上面各节按生态分类；这一节兜住**凭据/私钥形态**。社区化之后贡献者会带来自己的本机文件，
+# 这些形态一旦入库就是全盘失守。
+*.pem
+*.key
+*.p12
+*.pfx
+id_rsa*
+id_ed25519*
+*.keystore
+*.jks
+# PgBouncer 的 userlist 含角色凭据（deploy/pgbouncer/.gitignore 已局部覆盖，这里兜底）
+userlist.txt
+# 编辑器 / 系统垃圾
+.DS_Store
+Thumbs.db
+*.orig
+*.rej

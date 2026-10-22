@@ -905,7 +905,7 @@ def _record_approval_request(
 
     只记决定会让"**问了但没等到决定**"（等待期间进程被杀、副本被回收、连接断开后
     无人再答）在流水里消失；见 `app/agent/approval_audit.py` 与
-    `docs/dsh-gap-analysis.md` 的"工具审批 / 权限"一行。
+    `内部差距分析` 的"工具审批 / 权限"一行。
     """
     try:
         from app.agent.approval_audit import record_approval_request

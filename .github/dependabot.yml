@@ -1,0 +1,51 @@
+# 依赖更新。
+# 设计取舍：
+#   * minor / patch 按生态聚合成一个 PR（否则每周十几个 PR 没人看）；
+#   * **major 不聚合** —— 大版本升级必须单独立项评估（本仓有过 pydantic/依赖大版本带来的
+#     CVE 与行为变更，混在一个 PR 里会看不出是谁引入的）；
+#   * GitHub Actions 月度检查即可（它们的 breaking change 频率低但影响面大）。
+version: 2
+updates:
+  - package-ecosystem: gomod
+    directory: "/"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      go-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: pip
+    directory: "/python-engine"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      py-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  # 根目录的 requirements-migrate.txt（Alembic 迁移环境）
+  - package-ecosystem: pip
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+
+  - package-ecosystem: npm
+    directory: "/frontend-vue"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 5
+    groups:
+      npm-minor-patch:
+        patterns: ["*"]
+        update-types: ["minor", "patch"]
+
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 3
+
+  # 容器基础镜像（Dockerfile）—— 建议开启，基础镜像的 CVE 修得比应用依赖更急
+  - package-ecosystem: docker
+    directory: "/"
+    schedule: { interval: weekly }
+    open-pull-requests-limit: 3

@@ -327,7 +327,7 @@ jobs:
       - name: Go live tests (real PostgreSQL + Redis)
         # -run 只挑真实库用例（Live/Diag）：其余用例与 go job 重复，不必再跑一遍
         # broadcast：断线重放/跨实例补发；engine：session→实例归属（审批/取消路由依据）；
-        # 两者都走 REDIS_URL，此前没有真实 Redis 覆盖（docs/dsh-gap-analysis.md 切口 #1）。
+        # 两者都走 REDIS_URL，此前没有真实 Redis 覆盖（内部差距分析 切口 #1）。
         run: go test -mod=mod ./internal/api/... ./internal/billing/... ./internal/settings/... ./internal/broadcast/... ./internal/engine/... -count=1 -run 'Live|Diag' -v
 
       - name: Build and start gateway

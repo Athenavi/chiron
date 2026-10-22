@@ -7,7 +7,7 @@
 > 为什么要有它：Reasonix 2.x 的 `app.css`（320 KB）**不带注释**，理由全部写在
 > `styles/LAYOUT.md`（90,649 B / 1,439 行 / 56 节）+ `styles/TOKENS.md`；
 > Chiron 的知识**分散在** `style.css` 的分节注释与组件注释里 —— 两边都"写了"，差别是**能不能检索**。
-> （见 `docs/reasonix-ui-ux-gap-analysis.md` §4.10 的「文档分层」行。）
+> （见 `内部差距分析` §4.10 的「文档分层」行。）
 
 ## 1. 分层：`style.css` 里的三种东西
 
@@ -57,6 +57,6 @@
 | 想知道 | 去哪 |
 |---|---|
 | transcript 的几何/滚动法 | `docs/transcript-contract.md`（9 组不变量 + 单写者门禁） |
-| 主题 token 与 antd 的关系 | `frontend-vue/src/stores/theme.ts`（头部注释）+ `docs/reasonix-ui-ux-gap-analysis.md` §4.10 |
+| 主题 token 与 antd 的关系 | `frontend-vue/src/stores/theme.ts`（头部注释）+ `内部差距分析` §4.10 |
 | i18n / RTL 与书写方向 | `frontend-vue/src/i18n/README.md` |
-| 拆分与"注入面"度量 | `docs/split-assessment.md` |
+| 拆分与"注入面"度量 | `内部文档` |

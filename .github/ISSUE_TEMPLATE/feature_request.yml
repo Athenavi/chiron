@@ -1,0 +1,50 @@
+name: 功能建议
+description: 提出一个能力或改进方向
+labels: ["enhancement", "triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        请先说明**要解决的问题**，再说你设想的方案 —— 方案可以有很多种，
+        问题定义清楚才谈得上取舍。
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: 你想解决什么问题
+      description: 现在的做法哪里不舒服？在什么场景下会遇到？
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 你设想的方案（可选）
+      description: 如果有多个方案，列出来并说明取舍。
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 你试过的替代方案（可选）
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: 影响面
+      options:
+        - 网关 / API
+        - 引擎 / Agent 运行时
+        - 前端
+        - 部署与运维（多副本 / 扩容）
+        - 文档
+        - 其他
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirm
+    attributes:
+      label: 确认
+      options:
+        - label: 我已搜索过现有 issue 与路线图
+          required: true

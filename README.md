@@ -1,7 +1,28 @@
 # Chiron
 
+[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/Athenavi/chiorn/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
+![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
+![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)
+
 多租户 SaaS AI Agent 平台：**Go 网关 + Python AI 引擎 + Vue 3 前端** 三层架构。
 对话、Agent、工作流、技能、知识库、插件与多层级记忆一体化；轨迹可循、过程可见。
+
+
+### 为什么还有必要做一个？
+
+因为**能跑 demo 的 Agent 框架很多，能跑第二个副本的很少**。Chiron 把这几件事当成一等公民：
+
+- **多副本真的能扩**：会话运行锁、SSE 跨实例广播与断线重放、run 归属路由、队列消费组与 PEL 接管。
+  每条都附可复现的取证（见下方「能不能上生产？」），而不是"实现了某个模块"。
+- **多租户不是加个字段**：租户/用户配额、租户级审计与可回放证据链、SSO、计费幂等。
+- **执行隔离是默认值**：工具执行下沉到独立受限容器；沙箱服务不可用时**拒绝启动**，
+  不偷偷回退到进程内执行。
+- **过程可见**：思考、工具调用、用量都是独立事件；断线后带 `Last-Event-ID` 重连可精确续传。
+
+> **它不是什么**：不是低代码工作流编辑器，也不是模型评测/微调平台。
+> 它假设你要的是"**多人、多租户、能自己部署**"的 Agent 底座。
 
 ## 架构
 
@@ -23,7 +44,26 @@
 | 数据库 | `migrations/` | 5432 | PostgreSQL + pgvector（Alembic 迁移） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
 
+## 能不能上生产？
+
+这个仓库的取舍是"先把第二个副本的问题解决掉"。下面每条都**可以自己在 CI 里跑**：
+
+| 保证 | 取证（测试文件） |
+|---|---|
+| 同一会话不会并发两个 runtime | `internal/api/submit_lock_live_test.go`、`session_coord_live_test.go` |
+| 断线重连不丢事件、不重复 | `internal/api/sse_cross_instance_live_test.go`、`internal/broadcast/hub_live_test.go` |
+| 审批 / 取消打到持有该 run 的实例 | `internal/engine/run_affinity_test.go` |
+| 同一回合只扣一次费 | `credit_transactions.turn_id` 唯一索引 + `ON CONFLICT DO NOTHING` |
+| 后台任务崩溃后由其它副本接管 | `engine:tasks` 消费组 + lease 心跳 + `XCLAIM` |
+| 执行隔离不可用时不降级 | 启动探测失败即拒绝启动（`SANDBOX_BACKEND=service` 默认） |
+
+完整清单、**每条明确不保证什么**、以及扩容时的连接预算与探针语义，见
+[多副本部署指南](docs/deployment-multi-instance.md)。
+
 ## 快速开始
+
+> **最短路径**：容器起单副本 ≈ 4 条命令（见下方「容器」一节，去掉 `--scale` 即可）。
+> 只想先看看效果，不必配多副本。
 
 ### 本地开发（非容器）
 
@@ -89,6 +129,9 @@ python -m alembic upgrade head            # 迁移到最新（发布流程/DBA �
 python -m alembic heads                   # 迁移链检查（应只有一个 head）
 docker compose config --quiet             # compose 配置校验
 make build                                # 见 Makefile（fmt/lint/test/build） 
+make check                                # 提交前快检：Go build/vet + 4 个文档守卫（几十秒）
+make check-all                            # 全量：再加 Python(pytest/ruff/mypy) 与前端(build/test)
+make dev-up                               # 容器一键起（单副本）；make dev-up-scale 起 2+2 验证跨实例语义
 ```
 
 > **`go` 命令请保留 `-mod=mod`**：仓库的 `vendor/` 下放的是参考源码（`vendor/DeepSeek-Reasonix`，
@@ -149,3 +192,20 @@ python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：�
 ## 许可
 
 MIT（见 [LICENSE](LICENSE)）
+
+## English summary
+
+Chiron is a **multi-tenant AI agent platform** built for horizontal scale:
+a Go gateway (auth, rate limiting, billing, SSE), a Python engine (agent runtime,
+workflows, RAG, memory, MCP), and a Vue 3 frontend.
+
+What makes it different from demo-grade agent frameworks is what happens with a **second replica**:
+cross-instance session locks, SSE replay between replicas, run-affinity routing for approvals,
+idempotent billing, crash-takeover of queued work, and tool execution isolated in a separate
+sandbox container (fail-closed — the engine refuses to start if the sandbox is unreachable).
+
+- Docs: [docs/wiki/](docs/wiki/README.md) (Chinese, with English section here)
+- Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
+- Security reports: [SECURITY.md](SECURITY.md) — private channel only
+- License: MIT
+

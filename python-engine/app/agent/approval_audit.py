@@ -65,7 +65,7 @@ def _summarize_args(args: dict[str, Any] | None) -> str:
 #: 记录类型：**"问"也要留痕**（`asked`），与决定（`decided`）按 `tool_call_id` 配对。
 #: 为什么必须有 `asked`：只记决定的话，"**问了但没等到决定**"（等待期间进程被杀、
 #: 副本被回收、连接断开后无人再答）在流水里**看不出来** —— 而"审批发生过但没人回答"
-#: 恰恰是事后最需要回答的那类问题（见 `docs/dsh-gap-analysis.md` 的"工具审批 / 权限"一行：
+#: 恰恰是事后最需要回答的那类问题（见 `内部差距分析` 的"工具审批 / 权限"一行：
 #: DSH 记的是 *"every request **and** outcome"*）。
 EVENT_ASKED = "asked"
 EVENT_DECIDED = "decided"

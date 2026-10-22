@@ -6,7 +6,7 @@
 
 ⚠ 本模块**只放不依赖 lifespan 局部状态**的东西：`main.py` 里的 `_redis` / `_gateway` /
 `_plugin_pool` 等模块级状态与依赖取用器暂不搬迁 —— 它们被 lifespan 用 `global` 赋值，
-跨模块移动会让"改的是哪个模块的名字"变得难以判断（见 docs/split-assessment.md 批次 4）。
+跨模块移动会让"改的是哪个模块的名字"变得难以判断（见 内部文档 批次 4）。
 """
 
 from __future__ import annotations

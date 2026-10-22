@@ -1,0 +1,13 @@
+# Issue 入口配置。
+# ⚠️ 请把下面的 OWNER/REPO 换成真实仓库路径（GitHub 不会自动替换）。
+blank_issues_enabled: false
+contact_links:
+  - name: 报告安全漏洞
+    url: https://github.com/OWNER/REPO/security/advisories/new
+    about: 请勿在公开 issue 中报告漏洞；流程见 SECURITY.md
+  - name: 使用问题 / 想法讨论
+    url: https://github.com/OWNER/REPO/discussions
+    about: 提问与开放式讨论请走 Discussions，issue 用于可复现的 bug 与明确的功能建议
+  - name: 阅读文档
+    url: https://github.com/OWNER/REPO/blob/main/docs/wiki/README.md
+    about: 快速开始、架构、部署与配置说明
