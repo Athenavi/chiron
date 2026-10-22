@@ -128,6 +128,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 探测——那种写法会让"把启动段抽成函数"的纯移动重构静默跳过清理，见拆分评估 §2.3）
     _metrics_task: Any = None
     _retention_task: Any = None
+    #: M28：按模型的价格同步（默认关，见 app/pricing/sync.py 的 sync_enabled）。
+    _price_sync_task: Any = None
     _engine_registry: Any = None
 
     # ── 0. 全局异常处理 ──
@@ -634,6 +636,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.media.reload import listen_for_storage_changes as _listen_storage_changes
 
     _storage_task = asyncio.create_task(_listen_storage_changes())
+
+    # M28：按模型的公开价格同步（多源 + 交叉验证）。`start_price_sync()` 自己判开关，
+    # 未启用时立刻返回 ⇒ 这里可以无条件创建（默认关 = 什么都不做）。
+    from app.pricing.sync import start_price_sync
+
+    _price_sync_task = asyncio.create_task(start_price_sync())
     logger.info("Process metrics collector started (interval=10s)")
 
     # ── 8. 实例注册（批 E1：引擎动态发现）──
@@ -706,6 +714,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retention_task=_retention_task,
         harness_task=_harness_task,
         storage_task=_storage_task,
+        price_sync_task=_price_sync_task,
         engine_registry=_engine_registry,
         liveness=_liveness,
     )
@@ -931,6 +940,7 @@ async def _shutdown_lifespan(
     retention_task: Any = None,
     harness_task: Any = None,
     storage_task: Any = None,
+    price_sync_task: Any = None,
     engine_registry: Any = None,
     liveness: Any = None,
 ) -> None:
@@ -954,6 +964,16 @@ async def _shutdown_lifespan(
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning("run reconciler shutdown failed: %s", e)
+
+    # M28：停按模型的价格同步（周期任务，取消即可 —— 一轮没跑完不影响别的清理）
+    if price_sync_task is not None:
+        price_sync_task.cancel()
+        try:
+            await price_sync_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("model price sync shutdown failed: %s", e)
 
     # P1-④ 批 B：停 harness 配置订阅（PubSub 循环，取消即断开）
     if harness_task is not None:
