@@ -477,7 +477,11 @@ class TestRealPostgresSemantics:
 
     async def test_resume_lineage_beats_the_parent(self) -> None:
         tree_root = await self._seed()
-        child = await self._seed(parent=tree_root)
+        # ⚠ `_seed` 的 `root` 默认是 `"self"`（把自己当根）—— 这里必须显式把 child 挂到
+        # `tree_root` 那条线上，否则 `child.root_run_id` 会等于 child 自己，`new_run` 的血缘
+        # 解析会落到 `COALESCE` 的第二项（`resumed_row`）而不是树根。原用例漏了这个参数，
+        # 一直是红的（`integration` 标记，真库出现之前从没跑过）。
+        child = await self._seed(parent=tree_root, root=tree_root)
         other_tree = await self._seed()
 
         new_run = self._id("new")

@@ -1983,7 +1983,10 @@ class TestRealPostgresLedger:
         root = self._root("defcap")
         await self._seed_run(root, tokens=140)
         led = await self._ledger()
-        assert await led.check(root, "t1", own_tokens=9) == "line_tokens"
+        # 140（已结算）+ 10（own）= 150，**正好触界**（判据是 `charged >= cap`）。
+        # 原写的是 `own_tokens=9` ⇒ 149 < 150 并不越界，用例一直在断言一个算不出来的
+        # 结果。它是 `integration` 标记，在真库出现之前从没跑过 ⇒ 一直没暴露。
+        assert await led.check(root, "t1", own_tokens=10) == "line_tokens"
         assert await led.check(root, "t1", own_tokens=8) == ""
 
     async def test_default_of_zero_disables_the_axis(self, monkeypatch) -> None:
