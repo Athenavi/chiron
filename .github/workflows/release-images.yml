@@ -59,6 +59,19 @@ jobs:
       - uses: docker/setup-buildx-action@v3
 
       # 仅在有推送意图时登录（tag push 或 dispatch 且 push=true）
+      # ⚠ `${{ github.repository }}` 是 **`Athenavi/chiron`**（保留 owner 的原始大小写），
+      # 而 OCI reference 的 **repository 部分必须全小写** —— 上面那行注释早就写着"小写化"，
+      # 但代码从未真的做。症状很有迷惑性：**build/push 成功**（docker/metadata-action 会
+      # 自行规范化），而 Trivy 的 `image-ref` 直接吃 `env.IMAGE_PREFIX` ⇒
+      # `FATAL could not parse reference: ghcr.io/Athenavi/chiron/gateway:V…`
+      # ⇒ 扫描失败、SARIF 不产出 ⇒ 紧接着 `upload-sarif` 报 `Path does not exist: trivy-*.sarif`。
+      # Actions 没有内建的 lowercase 函数 ⇒ 用 shell 转一次写回 `GITHUB_ENV`（标准做法）。
+      # 注意用 `env:` 传值而**不是**在 run 里插值 `${{ }}`，避免仓库名带特殊字符时被注入。
+      - name: Lowercase image prefix（OCI reference 的 repository 必须全小写）
+        env:
+          REPO: ${{ github.repository }}
+        run: echo "IMAGE_PREFIX=${REPO,,}" >> "$GITHUB_ENV"
+
       - name: Log in to ${{ env.REGISTRY }}
         if: github.event_name == 'push' || inputs.push
         uses: docker/login-action@v3
