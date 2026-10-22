@@ -8,7 +8,7 @@
  * 目录 id 与 llm_provider_keys.provider、引擎 keyset(llm:keys:{id}) 同名。
  */
 import { ref, onMounted, computed } from 'vue'
-import { Card, Row, Col, Statistic, Table, Modal, Form, FormItem, Input, Tag, Button, Spin, message } from 'ant-design-vue'
+import { Card, Row, Col, Statistic, Table, Modal, Form, FormItem, Input, InputNumber, Tag, Button, Spin, message } from 'ant-design-vue'
 import { PlusOutlined, CheckCircleOutlined, WarningOutlined, CloseCircleOutlined } from '@ant-design/icons-vue'
 import {
   listApiKeys,
@@ -17,6 +17,7 @@ import {
   deleteApiKey,
   listLlmProviders,
   saveLlmProviderBaseURL,
+  updateApiKeyWeight,
   type LlmProviderPreset,
   type LlmProviderCategory,
   type ApiKey,
@@ -247,6 +248,25 @@ async function handleSaveBaseURL() {
   }
 }
 
+/**
+ * M27：改分配权重（smooth WRR 的比例）。`0` = 不参与选择但保留状态（灰度摘流量）。
+ *
+ * 成功时不弹提示：输入框的值本身变了就是反馈，多一个 toast 只是噪声；**失败必须提示** ——
+ * 那时显示的值与实际值不一致，不提示就是在骗人。
+ */
+async function handleWeightChange(row: ApiKey, raw: number | string | null) {
+  // InputNumber 的 change 给的是 ValueType（可能带 string）⇒ 在这里收窄，别把类型转换
+  // 散到 template 里去。
+  const weight = typeof raw === 'number' ? raw : null
+  if (weight === null || weight === row.weight) return
+  try {
+    await updateApiKeyWeight(row.id, weight)
+    row.weight = weight
+  } catch (err) {
+    message.error(serverErrorMessage(err, ''))
+  }
+}
+
 async function handleEdit(row: ApiKey) {
   const newStatus = row.status === 'active' ? 'rate_limited' : 'active'
   try {
@@ -354,6 +374,17 @@ onMounted(() => {
               <Tag :color="record.status === 'active' ? 'success' : record.status === 'rate_limited' ? 'warning' : 'error'">
                 {{ record.status === 'active' ? $t('admin.keyStatus.active') : record.status === 'rate_limited' ? $t('admin.keyStatus.rateLimited') : $t('admin.keyStatus.circuitOpen') }}
               </Tag>
+            </template>
+            <template v-else-if="column.dataIndex === 'weight'">
+              <!-- M27：分配权重（smooth WRR 的比例）。0 = 不参与选择但保留状态（灰度摘流量）。 -->
+              <InputNumber
+                :value="record.weight"
+                :min="0"
+                :max="100"
+                size="small"
+                style="width: 72px"
+                @change="(v: string | number | null) => handleWeightChange(record as ApiKey, v)"
+              />
             </template>
             <template v-else-if="column.dataIndex === 'actions'">
               <Button

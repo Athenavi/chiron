@@ -64,25 +64,44 @@ def _key_id(provider: str, key: str) -> str:
 _PICK_SCRIPT = """
 local now = tonumber(ARGV[1])
 local flat = redis.call('HGETALL', KEYS[1])
-local bf, bk, bu = nil, nil, nil
+local best_field, best_key, best_cw = nil, nil, nil
+local total = 0
+local updates = {}
 for i = 1, #flat, 2 do
+  local field = flat[i]
   local ok, o = pcall(cjson.decode, flat[i + 1])
   if ok and type(o) == 'table' and (o.s or 'active') == 'active' then
     local k = o.k
     local c = tonumber(o.c) or 0
-    if k and k ~= '' and (c == 0 or c <= now) then
-      local u = tonumber(o.u) or 0
-      if bf == nil or u < bu then bf = flat[i]; bk = k; bu = u end
+    -- M27：权重缺省 1（老字段没有 w ⇒ 与"每把等权"的旧行为一致）；
+    -- w <= 0 表示**不参与选择**（管理员用它把流量从某把 key 上摘掉）。
+    local w = tonumber(o.w) or 1
+    if k and k ~= '' and w > 0 and (c == 0 or c <= now) then
+      local cw = (tonumber(o.cw) or 0) + w
+      o.cw = cw
+      total = total + w
+      updates[#updates + 1] = {field, cw}
+      if best_cw == nil or cw > best_cw then best_field = field; best_key = k; best_cw = cw end
     end
   end
 end
-if bf == nil then return nil end
-local ok2, o2 = pcall(cjson.decode, redis.call('HGET', KEYS[1], bf))
-if ok2 and type(o2) == 'table' then
-  o2.u = now
-  redis.call('HSET', KEYS[1], bf, cjson.encode(o2))
+if best_field == nil then return nil end
+-- 落盘：**所有参与者**的 cw 前移，选中者再减 total（smooth WRR 的定义）。
+-- 只写选中者是错的：那样其它 key 的 cw 永远停在原地，下一次还会选同一把。
+for j = 1, #updates do
+  local field = updates[j][1]
+  local cw = updates[j][2]
+  local ok2, o2 = pcall(cjson.decode, redis.call('HGET', KEYS[1], field))
+  if ok2 and type(o2) == 'table' then
+    o2.cw = cw
+    if field == best_field then
+      o2.cw = cw - total
+      o2.u = now
+    end
+    redis.call('HSET', KEYS[1], field, cjson.encode(o2))
+  end
 end
-return {bf, bk}
+return {best_field, best_key}
 """
 
 # 单键原子失败上报：把 digest 字段的窗口化失败计数 +1，盖软冷却 c=now+soft；
@@ -128,6 +147,9 @@ class KeyRing:
         # env 兜底路径（无 Redis）用的进程内 LRU 游标与软冷却：digest -> epoch。
         self._env_used: dict[str, float] = {}
         self._env_cool: dict[str, float] = {}
+        #: M27 smooth WRR 的进程内游标（digest → current_weight）。与 Redis 侧的 `cw` 字段
+        #: 同一套算法 —— 两条路径的分配行为必须一致，否则 Redis 抖一下流量分配就变样。
+        self._env_cw: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
     @staticmethod
@@ -226,19 +248,34 @@ class KeyRing:
         return self._env_pick(provider, now)
 
     def _env_pick(self, provider: str, now: float) -> dict[str, Any] | None:
-        """无 Redis：在 env 种子里按进程内 LRU 选一把，跳过软冷却中的。"""
-        candidates: list[tuple[float, str, str]] = []
+        """无 Redis：在 env 种子里按进程内 **smooth WRR** 选一把，跳过软冷却中的。
+
+        与 Redis 侧同一套算法（M27）—— 两条路径的分配行为必须一致，否则"Redis 抖一下"
+        就会让流量分配突然变样。权重 0 与冷却中的 key 都不参与，也不计入 total。
+        env 种子没有权重概念（它本来就是兜底路径）⇒ 恒按 1 处理。
+        """
+        cands: list[tuple[str, str, int]] = []
+        total = 0
         for src in self._sources(provider):
             for digest, item in self._env_digests(src).items():
                 if now < self._env_cool.get(digest, 0.0):
                     continue
-                candidates.append((self._env_used.get(digest, 0.0), digest, item["key"]))
-        if not candidates:
+                weight = int(item.get("weight") or 1)
+                if weight <= 0:
+                    continue
+                cands.append((digest, item["key"], weight))
+                total += weight
+        if not cands:
             return None
-        candidates.sort(key=lambda c: (c[0], c[1]))
-        _, digest, key = candidates[0]
-        self._env_used[digest] = now
-        return {"key": key, "id": digest}
+        best_digest, best_key, best_cw = "", "", 0
+        for digest, key, weight in cands:
+            cw = self._env_cw.get(digest, 0) + weight
+            self._env_cw[digest] = cw
+            if best_digest == "" or cw > best_cw:
+                best_digest, best_key, best_cw = digest, key, cw
+        self._env_cw[best_digest] = best_cw - total
+        self._env_used[best_digest] = now
+        return {"key": best_key, "id": best_digest}
 
     async def report_failure(self, provider: str, key: str) -> None:
         """失败上报：Redis 侧单键 EVAL 原子盖冷却/计阈值；无 Redis 退进程内软冷却。"""
