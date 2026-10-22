@@ -96,7 +96,14 @@ func checkOperatorAllowlist(command string) error {
 	if allowed == nil {
 		return nil
 	}
-	base := filepath.Base(command)
+	// ⚠ **不能用 `filepath.Base`**：它是**平台相关**的 —— Linux 上 `\` 不是路径分隔符，
+	// 于是 `C:\tools\npx` 的 basename 会变成整个字符串，在 CI（Linux）上被判"不在白名单"，
+	// 而本机（Windows）却是绿的。命令字符串来自**运维配置**，不保证与运行平台同源，
+	// 所以这里自己按**两种分隔符**取 basename。
+	base := command
+	if i := strings.LastIndexAny(command, `/\`); i >= 0 {
+		base = command[i+1:]
+	}
 	if !allowed[base] {
 		return fmt.Errorf("plugin command %q not in operator allowlist (PLUGIN_COMMAND_ALLOWLIST)", base)
 	}
