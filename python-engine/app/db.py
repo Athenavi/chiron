@@ -194,7 +194,6 @@ REQUIRED_TABLES = [
     "messages",
     "knowledge_bases",
     "knowledge_documents",
-    "knowledge_chunks",
     "media_assets",
     "uploads",
     "workflow_instances",
