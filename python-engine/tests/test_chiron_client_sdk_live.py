@@ -86,6 +86,13 @@ def test_client_against_real_gateway():
         auth_path = f"minted-token（注册不可用：{exc}）"
     assert client.token, "必须持有令牌"
     print(f"[sdk-live] 认证路径：{auth_path}")
+    # ⚠ CI 上这条一直红在**下一步**：读 `/v1/events` 报 `401 invalid or expired token`，
+    # 而注册/登录本身成功（`auth_path` 仍是初始值）⇒ 说明拿到的 token **不被网关接受**。
+    # 已排除：密钥不一致（签发与校验同为 `cfg.JWTSecret`）、客户端没带 header
+    # （`stream_events` 带 `Bearer`）、网关不认 header（`AuthMiddleware` 支持 `Bearer`）、
+    # 字段名不匹配（两边都是 `token`）。剩下要靠"这个 token 从哪来、长什么样"定论 ⇒ 打出来。
+    _tok = str(client.token or "")
+    print(f"[sdk-live] token 长度={len(_tok)} 前缀={_tok[:24]!r}")
 
     # ── 事件流：订阅真网关的 SSE，再从 Redis 通道注入一条（模拟引擎侧广播）──
     import redis

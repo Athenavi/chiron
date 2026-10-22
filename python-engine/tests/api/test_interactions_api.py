@@ -420,5 +420,15 @@ def test_routes_are_registered_on_the_api_router():
     from app.api import api_router
 
     paths = {getattr(route, "path", "") for route in api_router.routes}
+    # ⚠ CI（Linux/3.11）上这条曾经红过：`paths == {''}` —— 不是"集合为空"，而是**恰好一个
+    # 取不到 `path` 的对象**。本机（Windows/3.14）跑同一命令是绿的 ⇒ 光看断言只能知道
+    # "路由没挂上"，不知道挂成了什么。所以在断言**之前**把实际内容打出来。
+    if len(paths) <= 1:
+        print(f"[routes] n={len(api_router.routes)} paths={sorted(paths)}")
+        for route in api_router.routes:
+            print(
+                f"[routes] {type(route).__module__}.{type(route).__name__} "
+                f"path={getattr(route, 'path', '<无 path 属性>')!r}"
+            )
     assert "/v1/agent/sessions/{session_id}/interactions" in paths
     assert "/v1/agent/interactions/{interaction_id}/resolve" in paths
