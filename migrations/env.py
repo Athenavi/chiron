@@ -173,6 +173,27 @@ def run_migrations_online() -> None:
     )
 
     with connectable.connect() as connection:
+        # 先保证 `alembic_version.version_num` 够宽（M30）：alembic 自建这张表时用默认
+        # `varchar(32)`，而本仓的 revision id 有 **39 字符**
+        # （`0017_conversation_shares_expires_backfill`）⇒ 跑到那一步会
+        # `StringDataRightTruncation: value too long for type character varying(32)`，
+        # 而且**整个事务回滚**（库里连 `alembic_version` 都不会留下，症状是"迁移静默失败"）。
+        #
+        # 关键：**表不存在时要先预建**（带 alembic 认的形状：NOT NULL + 同名主键约束，只是列更宽）。
+        # 只写 `ALTER`（表存在才改）在**首次迁移**上是空转 —— alembic 随后自己建的还是
+        # `varchar(32)`，于是照旧失败。这一条是幂等的：已有表就只加宽。
+        # ⚠ 只有真实库能发现它：本仓的纪律是"dev 库不迁移"，从没在干净库上跑过全量迁移。
+        connection.exec_driver_sql(
+            "DO $$ BEGIN "
+            "IF to_regclass('public.alembic_version') IS NULL THEN "
+            "CREATE TABLE public.alembic_version ("
+            "version_num varchar(255) NOT NULL, "
+            "CONSTRAINT alembic_version_pkc PRIMARY KEY (version_num)); "
+            "ELSE "
+            "ALTER TABLE public.alembic_version ALTER COLUMN version_num TYPE varchar(255); "
+            "END IF; END $$;"
+        )
+        connection.commit()
         context.configure(
             connection=connection,
             target_metadata=target_metadata,
