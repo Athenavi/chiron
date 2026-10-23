@@ -201,7 +201,7 @@ async def _resolve_provider_or_error(*, user_id: str, index_ref: str = "") -> An
 # ── Knowledge base CRUD ──
 
 
-async def list_knowledge_bases(user_id: str, tenant_id: str = "") -> dict[str, Any]:
+async def list_knowledge_bases(user_id: str, tenant_id: int = 0) -> dict[str, Any]:
     """列出可见知识库：自己的 + 公开的 + **同租户共享的**。
 
     最后一条必须同时匹配 ``tenant_id``：只写 ``visibility='tenant'`` 等于把"租户内共享"
@@ -278,7 +278,7 @@ async def create_knowledge_base(
     return await get_knowledge_base(kb_id, user_id, tenant_id)
 
 
-async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
+async def get_knowledge_base(kb_id: str, user_id: str, tenant_id: int = 0) -> dict[str, Any]:
     """取单个知识库（可见性规则与列表**同一份**，否则会出现"列表看不到但猜到 id 能读"）。"""
     pool = get_pool()
     row = await pool.fetchrow(
@@ -511,7 +511,7 @@ def _content_type(name: str, file_type: str) -> str:
     }.get(suffix, "application/octet-stream")
 
 
-async def list_documents(kb_id: str, user_id: str, tenant_id: str = "") -> dict[str, Any]:
+async def list_documents(kb_id: str, user_id: str, tenant_id: int = 0) -> dict[str, Any]:
     pool = get_pool()
     kb = await pool.fetchrow(
         "SELECT id, user_id, visibility, tenant_id FROM knowledge_bases WHERE id = $1", kb_id
@@ -632,7 +632,7 @@ async def _enqueue_kb_index(
 
 
 async def build_knowledge_base(
-    kb_id: str, user_id: str, tenant_id: str = "", force: bool = False
+    kb_id: str, user_id: str, tenant_id: int = 0, force: bool = False
 ) -> dict[str, Any]:
     """投递索引任务（把 pending 文档交给 ``kb_index``）。"""
     pool = get_pool()
@@ -666,7 +666,7 @@ async def build_knowledge_base(
 
 
 async def query_knowledge_base(
-    *, kb_id: str, user_id: str, query: str, tenant_id: str = "", top_k: int = 5
+    *, kb_id: str, user_id: str, query: str, tenant_id: int = 0, top_k: int = 5
 ) -> dict[str, Any]:
     """在知识库内提问，返回答案与引用。"""
     if not query or not query.strip():
@@ -708,7 +708,7 @@ async def query_knowledge_base(
 
 
 async def preview_document(
-    kb_id: str, doc_id: str, user_id: str, tenant_id: str = ""
+    kb_id: str, doc_id: str, user_id: str, tenant_id: int = 0
 ) -> dict[str, Any]:
     """文档预览：文本类返回头部内容；二进制返回元信息并提示下载/引用。"""
     pool = get_pool()
@@ -866,7 +866,7 @@ async def verify_user_settings(user_id: str) -> dict[str, Any]:
 async def list_kb(
     request: Request,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -878,7 +878,7 @@ async def create_kb(
     request: Request,
     body: KnowledgeBaseCreate,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -908,7 +908,7 @@ async def put_settings_route(
     request: Request,
     body: UserSettingsUpdate,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -942,7 +942,7 @@ async def get_kb(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -1010,7 +1010,7 @@ async def list_docs(
     kb_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -1037,7 +1037,7 @@ async def build_kb(
     request: Request,
     body: BuildBody | None = None,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -1055,7 +1055,7 @@ async def query_kb(
     request: Request,
     body: KBQuery,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")
@@ -1074,7 +1074,7 @@ async def preview_doc(
     doc_id: str,
     request: Request,
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     if not user_id:
         raise HTTPException(status_code=401, detail="user_id required")

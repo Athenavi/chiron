@@ -451,7 +451,7 @@ func (h *AgentHandler) Run(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (h *AgentHandler) executeAgent(agent *Agent, task, sessionID, userID, tenantID string, timeout time.Duration) {
+func (h *AgentHandler) executeAgent(agent *Agent, task, sessionID, userID string, tenantID int16, timeout time.Duration) {
 	ctx, cancel := context.WithTimeout(context.Background(), timeout)
 	defer cancel()
 
@@ -506,7 +506,7 @@ func (h *AgentHandler) executeAgent(agent *Agent, task, sessionID, userID, tenan
 // SetVisibility 设置 Agent 共享可见性（仅 owner）：PUT /v1/agents/{id}/visibility
 func (h *AgentHandler) SetVisibility(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -584,7 +584,7 @@ func (h *AgentHandler) GetSession(w http.ResponseWriter, r *http.Request) {
 // ── helpers ───────────────────────────────────────────────────
 
 // queryAgent 按 id 取 Agent（含租户归属与 tenant 共享可见性校验）。
-func (h *AgentHandler) queryAgent(ctx context.Context, tenantID, userID, agentID string) (*Agent, error) {
+func (h *AgentHandler) queryAgent(ctx context.Context, tenantID int16, userID, agentID string) (*Agent, error) {
 	return loadAgent(ctx, tenantID, userID, agentID)
 }
 
@@ -592,7 +592,7 @@ func (h *AgentHandler) queryAgent(ctx context.Context, tenantID, userID, agentID
 // "只带 agent_id、没带 agent 配置"时补全（见 gateway_router.go 的 submitHandlerFunc），
 // 而那里只有 db、拿不到 AgentHandler 实例。共用同一查询才能保证
 // 工作台页与直达 API 走同一套可见性规则，而不是两套。
-func loadAgent(ctx context.Context, tenantID, userID, agentID string) (*Agent, error) {
+func loadAgent(ctx context.Context, tenantID int16, userID, agentID string) (*Agent, error) {
 	var a Agent
 	err := db.GlobalDBManager.QueryRow(ctx,
 		// 列类型必须对齐：tools / llm_config / skills / plugins / workflows **全部是 json 列**，
@@ -737,7 +737,7 @@ func agentModel(raw json.RawMessage) string {
 // 幂等：已有完整 agent 对象时不动。查不到 Agent（不存在/非本人/非共享）时保持原样并
 // 记日志 —— 让请求继续走，只是"这次没带 Agent"，与改动前的行为一致；
 // 不因为一个坏 agent_id 让整条对话失败。
-func resolveAgentContext(ctx context.Context, wbCtx map[string]any, tenantID, userID string) {
+func resolveAgentContext(ctx context.Context, wbCtx map[string]any, tenantID int16, userID string) {
 	if wbCtx == nil {
 		return
 	}
@@ -806,7 +806,7 @@ func applyAgentBindings(wbCtx map[string]any, agent *Agent) {
 //
 // 单个查不到就跳过：不该因为列表里一个坏 id 让其余专家一起丢失。专家只带
 // 展示与人格所需字段，不带工具集 —— 委派出去的 child 复用主对话的工具预算。
-func loadExpertPayloads(ctx context.Context, wbCtx map[string]any, tenantID, userID string) []map[string]any {
+func loadExpertPayloads(ctx context.Context, wbCtx map[string]any, tenantID int16, userID string) []map[string]any {
 	ids := contextIDList(wbCtx, "agent")
 	if len(ids) < 2 {
 		return nil

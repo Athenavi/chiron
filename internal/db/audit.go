@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -127,7 +128,7 @@ func (w *auditResponseWriter) WriteHeader(code int) {
 
 // AuditLog 全局审计日志函数（简化接口）
 // 用于 middleware.go 中的快速调用
-func AuditLog(ctx context.Context, userID, tenantID, action, resource, detail, ip string, meta map[string]interface{}) {
+func AuditLog(ctx context.Context, userID string, tenantID int16, action, resource, detail, ip string, meta map[string]interface{}) {
 	if Redis == nil {
 		return
 	}
@@ -141,7 +142,7 @@ func AuditLog(ctx context.Context, userID, tenantID, action, resource, detail, i
 	}
 
 	entry := AuditEntry{
-		TenantID:  tenantID,
+		TenantID:  strconv.Itoa(int(tenantID)),
 		UserID:    userID,
 		Action:    action,
 		Resource:  resource,
@@ -161,7 +162,7 @@ func AuditLog(ctx context.Context, userID, tenantID, action, resource, detail, i
 		MaxLen: 100000,
 		Approx: true,
 		Values: map[string]any{
-			"tenant_id": tenantID,
+			"tenant_id": strconv.Itoa(int(tenantID)),
 			"user_id":   userID,
 			"action":    action,
 			"resource":  resource,

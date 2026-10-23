@@ -48,7 +48,7 @@ func activityStatusText(status string) string {
 // 因此不产生活动条目 —— 这是数据源缺失，不是漏写；要补得先让它们落库。
 func handleActivities(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}

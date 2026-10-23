@@ -64,7 +64,7 @@ async def _enqueue_with_retry(
     user_id: str,
     graph_json: dict[str, Any],
     initial_state: dict[str, Any],
-    tenant_id: str = "",
+    tenant_id: int = 0,
     *,
     attempts: int = 3,
 ) -> bool:
@@ -158,7 +158,7 @@ async def _enqueue_workflow_run(
     user_id: str,
     graph_json: dict[str, Any],
     initial_state: dict[str, Any],
-    tenant_id: str = "",
+    tenant_id: int = 0,
 ) -> bool:
     """投递 workflow_run 到 engine:tasks（跨实例消费组，断点续跑执行）。失败返回 False。"""
     from app.redis_client import get_redis
@@ -354,7 +354,7 @@ async def execute_graph(
     body: GraphExecuteRequest,
     gateway: Any = Depends(get_gateway),
     user_id: str = Query("", alias="user_id"),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
 ) -> dict[str, Any]:
     """提交图执行：落库 pending 后后台任务执行，立即返回 instance_id（前端轮询状态）。"""
     owner = _caller_user_id(user_id, endpoint="graph execute")

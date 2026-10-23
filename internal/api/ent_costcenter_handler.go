@@ -113,11 +113,11 @@ type EntCostStore interface {
 	TenantTokenPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
 	// M24：credits 池此前只有"能配、不检查"的半个实现。
 	TenantCreditPools(ctx context.Context, tenantID string) ([]EntQuotaPool, error)
-	CreditUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
+	CreditUsageSQL(ctx context.Context, tenantID int16, since time.Time) (int64, error)
 	// TokenUsageSQL 从 billing_records SQL 聚合 token 用量（Redis 计数器回填用）
 	TokenUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error)
 	// ResolveTenantID 经 users 表解析用户所属租户
-	ResolveTenantID(ctx context.Context, userID string) (string, error)
+	ResolveTenantID(ctx context.Context, userID string) (int16, error)
 }
 
 // pgEntCostStore 是基于全局 db.Pool / db.ReadPool 的 EntCostStore 实现。
@@ -521,7 +521,7 @@ func (s *pgEntCostStore) TenantCreditPools(ctx context.Context, tenantID string)
 // 单位是 credits（与用户余额、流水同源），**不是** `billing_records.cost_cents` 的"分"
 // —— 两个量在库里并存，混用会让"已用量"与管理员看到的账单对不上。
 // 该表只有 `user_id`，租户维度必须 join `users`（与 `ResolveTenantID` 同源）。
-func (s *pgEntCostStore) CreditUsageSQL(ctx context.Context, tenantID string, since time.Time) (int64, error) {
+func (s *pgEntCostStore) CreditUsageSQL(ctx context.Context, tenantID int16, since time.Time) (int64, error) {
 	var used int64
 	err := db.GlobalDBManager.QueryRow(ctx,
 		`SELECT COALESCE(SUM(-ct.amount), 0)
@@ -532,12 +532,12 @@ func (s *pgEntCostStore) CreditUsageSQL(ctx context.Context, tenantID string, si
 	return used, err
 }
 
-func (s *pgEntCostStore) ResolveTenantID(ctx context.Context, userID string) (string, error) {
-	var tenantID string
+func (s *pgEntCostStore) ResolveTenantID(ctx context.Context, userID string) (int16, error) {
+	var tenantID int16
 	err := db.GlobalDBManager.QueryRow(ctx,
 		`SELECT tenant_id FROM users WHERE id = $1`, userID).Scan(&tenantID)
 	if err != nil {
-		return "", err
+		return 0, err
 	}
 	return tenantID, nil
 }
@@ -605,7 +605,7 @@ func requirePerm(w http.ResponseWriter, r *http.Request, perm string) *auth.Clai
 // 现在缺租户就返回空串：写路径的 uuid.Parse 会拒绝，读路径命中 0 条记录。
 func scopedTenantID(claims *auth.Claims, requested string) string {
 	if claims != nil && claims.Role != "owner" {
-		return claims.TenantID
+		return tenantStr(claims.TenantID)
 	}
 	return requested
 }
@@ -1089,7 +1089,7 @@ func (h *EntCostCenterHandler) QuotaUsage(w http.ResponseWriter, r *http.Request
 			Source:       "none",
 		}
 		if p.ResourceType == "token" {
-			row.Used, row.Source = tenantTokenUsage(r.Context(), h.store, h.redis, tenantID, p.Period, time.Now())
+			row.Used, row.Source = tenantTokenUsage(r.Context(), h.store, h.redis, parseTenantID(tenantID), p.Period, time.Now())
 		}
 		if p.TotalAmount > 0 {
 			row.UsageRatio = float64(row.Used) / float64(p.TotalAmount)

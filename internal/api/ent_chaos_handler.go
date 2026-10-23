@@ -80,11 +80,11 @@ func (h *EntChaosHandler) RegisterRoutes(mux *http.ServeMux, authMW func(http.Ha
 // tenantOf 校验租户上下文；未通过时已写出响应并返回 ""。
 func (h *EntChaosHandler) tenantOf(w http.ResponseWriter, r *http.Request) string {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Forbidden(w, "tenant_id not found")
 		return ""
 	}
-	return claims.TenantID
+	return tenantStr(claims.TenantID)
 }
 
 // invalidateCache 让注入中间件下一次读取时回源数据库。

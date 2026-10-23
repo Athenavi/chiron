@@ -30,6 +30,10 @@ const (
 	CodeServiceUnavailable  = "service_unavailable"
 	CodeInternal            = "internal_error"
 	CodeRequestFailed       = "request_failed"
+	// CodeSessionBusy 表示"同会话已有一轮在跑"。此前它被归到 invalid_request，
+	// 客户端渲染成"请求内容不被接受，请检查后重试"—— 把用户引向完全错误的方向
+	// （该改的是"等一下或修好卡住的会话"，不是改请求内容）。
+	CodeSessionBusy = "session_busy"
 )
 
 // knownMessageCodes 已知文案 → 错误码（键为小写原文）。
@@ -44,7 +48,7 @@ var knownMessageCodes = map[string]string{
 	"tenant concurrency quota exhausted":    CodeQuotaExceeded,
 	"insufficient permissions":              CodeForbidden,
 	"insufficient enterprise permissions":   CodeForbidden,
-	"task already running for this session": CodeInvalidRequest,
+	"task already running for this session": CodeSessionBusy,
 }
 
 // messageCodeRules 关键词 → 错误码，按序匹配先到先得。

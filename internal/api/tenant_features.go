@@ -18,8 +18,8 @@ type TenantFeatures struct {
 //
 // **无记录 ⇒ 零值（全关）**，这是刻意的灰度默认；**读取失败也一律按全关**
 // （fail-closed）—— 绝不能因为一次 DB 抖动或表未迁移就把 SSO 放开。
-func loadTenantFeatures(ctx context.Context, db entQuerier, tenantID string) TenantFeatures {
-	if tenantID == "" {
+func loadTenantFeatures(ctx context.Context, db entQuerier, tenantID int16) TenantFeatures {
+	if tenantID == 0 {
 		return TenantFeatures{}
 	}
 	var f TenantFeatures
@@ -32,7 +32,7 @@ func loadTenantFeatures(ctx context.Context, db entQuerier, tenantID string) Ten
 }
 
 // saveTenantFeatures 写入（upsert）租户功能开关。
-func saveTenantFeatures(ctx context.Context, db entQuerier, tenantID string, f TenantFeatures) error {
+func saveTenantFeatures(ctx context.Context, db entQuerier, tenantID int16, f TenantFeatures) error {
 	_, err := db.Exec(ctx,
 		`INSERT INTO tenant_features (tenant_id, sso_enabled, sso_self_service, updated_at)
 		 VALUES ($1, $2, $3, NOW())

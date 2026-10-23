@@ -211,11 +211,11 @@ func interactionIdentity(w http.ResponseWriter, r *http.Request) (string, string
 		Unauthorized(w, ErrAuthRequired)
 		return "", "", false
 	}
-	if claims.TenantID == "" {
+	if claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return "", "", false
 	}
-	return claims.UserID, claims.TenantID, true
+	return claims.UserID, tenantStr(claims.TenantID), true
 }
 
 // interactionListLimit 解析并夹紧 limit（非法值回落到默认，而不是报错：这只是显示条数）。

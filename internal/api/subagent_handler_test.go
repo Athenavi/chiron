@@ -32,7 +32,7 @@ func TestSubagentTenantFallsBackToUserID(t *testing.T) {
 	if got := subagentTenant(nil); got != "" {
 		t.Errorf("nil claims → %q, want empty", got)
 	}
-	if got := subagentTenant(&auth.Claims{TenantID: "t1", UserID: "u1"}); got != "t1" {
+	if got := subagentTenant(&auth.Claims{TenantID: 1, UserID: "u1"}); got != "1" {
 		t.Errorf("tenant should win, got %q", got)
 	}
 	if got := subagentTenant(&auth.Claims{UserID: "u1"}); got != "u1" {

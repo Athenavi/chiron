@@ -40,7 +40,7 @@ type marketItemSummary struct {
 // List 浏览市场：GET /v1/market?type=skill|agent|mcp
 func (h *UserMarketHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -81,7 +81,7 @@ func (h *UserMarketHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 // itemEnabledForTenant 查询租户安装记录（fail-open：无记录视为未安装）。
-func itemEnabledForTenant(ctx context.Context, itemID, tenantID string) (bool, error) {
+func itemEnabledForTenant(ctx context.Context, itemID string, tenantID int16) (bool, error) {
 	var enabled bool
 	err := db.GlobalDBManager.QueryRow(ctx,
 		`SELECT COALESCE(enabled, false) FROM ent_catalog_installs WHERE item_id = $1 AND tenant_id = $2`,
@@ -95,7 +95,7 @@ func itemEnabledForTenant(ctx context.Context, itemID, tenantID string) (bool, e
 // Install 一键安装：POST /v1/market/{type}/{itemID}/install
 func (h *UserMarketHandler) Install(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -151,7 +151,7 @@ func (h *UserMarketHandler) installSkill(w http.ResponseWriter, r *http.Request,
 		"parameters":  m["parameters"],
 	}
 	body := map[string]interface{}{"inline": mustJSON(inline)}
-	target := "/v1/skills/install?user_id=" + claims.UserID + "&tenant_id=" + claims.TenantID
+	target := "/v1/skills/install?user_id=" + claims.UserID + "&tenant_id=" + tenantStr(claims.TenantID)
 	var resp map[string]interface{}
 	if err := h.pythonClient.PostJSON(r.Context(), target, body, &resp); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "skill install failed")

@@ -26,7 +26,7 @@ func TestIdentityParamsCarriesClaimsIdentity(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/skills", nil)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
 		UserID:   "u1",
-		TenantID: "t1",
+		TenantID: 1,
 	}))
 
 	q := identityParams(req)
@@ -34,8 +34,8 @@ func TestIdentityParamsCarriesClaimsIdentity(t *testing.T) {
 	if got := q.Get("user_id"); got != "u1" {
 		t.Errorf("user_id = %q, want %q", got, "u1")
 	}
-	if got := q.Get("tenant_id"); got != "t1" {
-		t.Errorf("tenant_id = %q, want %q", got, "t1")
+	if got := q.Get("tenant_id"); got != "1" {
+		t.Errorf("tenant_id = %q, want %q", got, "1")
 	}
 }
 
@@ -58,7 +58,7 @@ func TestIdentityParamsEscapesSegments(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v1/skills", nil)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
 		UserID:   "../etc",
-		TenantID: "t1",
+		TenantID: 1,
 	}))
 
 	encoded := identityParams(req).Encode()

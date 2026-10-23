@@ -48,7 +48,7 @@ def _serialize(cap: Any) -> dict[str, Any]:
 
 @router.get("/v1/capabilities")
 async def list_capabilities(
-    workstation: str | None = None, tenant_id: str = ""
+    workstation: str | None = None, tenant_id: int = 0
 ) -> dict[str, Any]:
     """列出能力（可按工作台过滤）；全局能力对所有租户可见"""
     reg = get_registry()

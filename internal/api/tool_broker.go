@@ -91,7 +91,7 @@ func ToolAuthorizeHandler(w http.ResponseWriter, r *http.Request) {
 		if resp.Enforced {
 			detail += " enforced"
 		}
-		db.AuditLog(r.Context(), body.UserID, body.TenantID,
+		db.AuditLog(r.Context(), body.UserID, parseTenantID(body.TenantID),
 			"tool.authorize", "tool:"+body.ToolName, detail, clientIP(r),
 			map[string]interface{}{
 				"tool":       body.ToolName,

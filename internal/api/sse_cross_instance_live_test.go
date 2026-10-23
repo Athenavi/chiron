@@ -103,7 +103,7 @@ func TestLiveSSEAcrossInstancesReplaysGapThenGoesLive(t *testing.T) {
 
 func injectTestClaims(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ctx := auth.WithClaims(r.Context(), &auth.Claims{TenantID: "t1", UserID: "u1"})
+		ctx := auth.WithClaims(r.Context(), &auth.Claims{TenantID: 1, UserID: "u1"})
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})
 }

@@ -25,6 +25,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
+from app.tools.context import to_tenant_int
+
 logger = logging.getLogger(__name__)
 
 # ── 默认值（与设计文档 §3.4/§7 一致）──
@@ -191,7 +193,7 @@ async def load_profile(
         return None
     try:
         row = await pool.fetchrow(
-            LOAD_PROFILE_SQL, PROFILE_KIND, ref, tenant_id or "", user_id or ""
+            LOAD_PROFILE_SQL, PROFILE_KIND, ref, to_tenant_int(tenant_id), user_id or ""
         )
     except Exception as exc:  # noqa: BLE001 - Profile 解析失败不应阻断委派
         logger.warning("load_profile 失败（ref=%s）: %s", ref, str(exc)[:200])

@@ -21,7 +21,7 @@ import (
 //  2. **超长/非法前缀是拒绝而不是截断** —— 写入时就该失败，否则用户对不上账；
 //  3. **enabled=false 是显式禁用**（占位、不回落），否则用户无法关掉租户强加的 suffix。
 
-const harnessTenantID = "11111111-1111-1111-1111-111111111111"
+const harnessTenantID int16 = 1
 const harnessUserID = "22222222-2222-2222-2222-222222222222"
 
 // ── 替身 ─────────────────────────────────────────────────────────────────
@@ -127,7 +127,7 @@ func TestHarnessProfileIgnoresBodyIdentity(t *testing.T) {
 		t.Fatalf("exec calls = %d, want 1", len(store.execArgs))
 	}
 	args := store.execArgs[0]
-	if args[0] != harnessTenantID || args[1] != harnessUserID {
+	if args[0] != tenantStr(harnessTenantID) || args[1] != harnessUserID {
 		t.Fatalf("scope = (%v, %v)，应来自 claims 而不是请求体", args[0], args[1])
 	}
 }
@@ -238,7 +238,7 @@ func TestHarnessProfileDeleteUsesClaimsScope(t *testing.T) {
 		t.Fatalf("status = %d, want 200", w.Code)
 	}
 	args := store.execArgs[0]
-	if args[0] != harnessTenantID || args[1] != harnessUserID || args[2] != "claude-" {
+	if args[0] != tenantStr(harnessTenantID) || args[1] != harnessUserID || args[2] != "claude-" {
 		t.Fatalf("delete args = %v，应为 (claims.tenant, claims.user, prefix)", args)
 	}
 }
@@ -254,7 +254,7 @@ func TestHarnessProfileNotifiesOnWrite(t *testing.T) {
 	h.PutMine(w, newHarnessRequest(http.MethodPut, "/v1/settings/harness-profiles",
 		`{"model_prefix":"","system_prompt_suffix":"X","enabled":true}`, tenantAdminClaims()))
 
-	if len(notified) != 1 || notified[0] != harnessTenantID {
+	if len(notified) != 1 || notified[0] != tenantStr(harnessTenantID) {
 		t.Fatalf("notified = %v，写成功后应广播该租户（引擎据此清缓存）", notified)
 	}
 }

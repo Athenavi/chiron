@@ -21,7 +21,7 @@ import (
 
 func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
@@ -84,7 +84,7 @@ func (h *MediaHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	// 租户配额门禁：存储容量 + 文件数量。此前 CheckStorageQuota / CheckFileCountQuota
 	// 从未被调用，配额完全不生效。放在落库**之前**，避免超限文件先入库再回滚。
-	if allowed, reason := CheckUploadAllowed(r.Context(), tenantID, fileSize); !allowed {
+	if allowed, reason := CheckUploadAllowed(r.Context(), tenantStr(tenantID), fileSize); !allowed {
 		JSON(w, http.StatusRequestEntityTooLarge, APIResponse{Success: false, Error: reason})
 		return
 	}
@@ -163,7 +163,7 @@ func (h *MediaHandler) PresignUpload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
@@ -198,7 +198,7 @@ func (h *MediaHandler) PresignUpload(w http.ResponseWriter, r *http.Request) {
 
 func (h *MediaHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
@@ -275,7 +275,7 @@ func (h *MediaHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 	// 「其对象键确实位于本租户前缀 media/<tenantID>/<assetID>/ 之下」时才复用，
 	// 因此无法用它去覆盖他人或其他路径的对象。其余情况回退到服务端新生成。
 	assetID := ""
-	if uuidRe.MatchString(body.ID) && strings.Contains(body.FileURL, "/"+tenantID+"/"+body.ID+"/") {
+	if uuidRe.MatchString(body.ID) && strings.Contains(body.FileURL, "/"+tenantStr(tenantID)+"/"+body.ID+"/") {
 		assetID = body.ID
 	}
 	if assetID == "" {

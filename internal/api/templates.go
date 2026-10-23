@@ -83,7 +83,7 @@ func (h *TemplateHandler) Get(w http.ResponseWriter, r *http.Request) {
 // Use POST /v1/templates/{id}/use 鈥斺€?涓€閿鍒跺埌鑷繁鐨勫伐浣滃彴
 func (h *TemplateHandler) Use(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -146,7 +146,7 @@ func (h *TemplateHandler) useSkill(w http.ResponseWriter, r *http.Request, claim
 		return
 	}
 	body := map[string]interface{}{"inline": mustJSON(m)}
-	target := "/v1/skills/install?user_id=" + claims.UserID + "&tenant_id=" + claims.TenantID
+	target := "/v1/skills/install?user_id=" + claims.UserID + "&tenant_id=" + tenantStr(claims.TenantID)
 	var resp map[string]interface{}
 	if err := h.pythonClient.PostJSON(r.Context(), target, body, &resp); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "install skill from template failed")

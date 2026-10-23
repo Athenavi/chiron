@@ -269,6 +269,16 @@ func NewGatewayRouter(
 	// 注册流程复用邮件能力（邮箱验证码校验 + 欢迎邮件）
 	authHandler.SetMailHandler(mailHandler)
 
+	// 注册邮箱判重布隆过滤器（按租户分片）：默认开启，可用 EMAIL_BLOOM_FILTER_ENABLED=false 关闭。
+	// 它只做快速否定以跳过 DB 判重；预热在后台异步进行，完成前一律回落 DB，
+	// 真相源始终是 users(tenant_id, email) 唯一索引。
+	if cfg.EmailBloomEnabled {
+		emailBloom := newUserEmailBloom(cfg.EmailBloomCapacity, cfg.EmailBloomFPRate)
+		authHandler.SetEmailBloomHandler(emailBloom)
+		go emailBloom.Warmup(lifecycleCtx, pgBloomQuerier{})
+		StartUserEmailBloomSubscriber(lifecycleCtx, emailBloom)
+	}
+
 	// Billing
 	billingStore := billing.NewPGStore()
 	if err := billingStore.VerifySchema(context.Background()); err != nil {

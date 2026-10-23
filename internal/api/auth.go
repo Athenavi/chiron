@@ -54,8 +54,8 @@ const DefaultTenantID = db.DefaultTenantID
 //
 // 校验与 `uses` 自增都在**注册事务内**完成：若注册后续步骤失败并回滚，计数一并
 // 回滚，不会出现"码被消费但用户没建成"。空码由调用方先行处理（走默认租户）。
-func consumeInvite(ctx context.Context, tx pgx.Tx, code string) (string, error) {
-	var tenantID string
+func consumeInvite(ctx context.Context, tx pgx.Tx, code string) (int16, error) {
+	var tenantID int16
 	err := tx.QueryRow(ctx,
 		`SELECT tenant_id FROM tenant_invites
 		  WHERE code = $1
@@ -63,16 +63,16 @@ func consumeInvite(ctx context.Context, tx pgx.Tx, code string) (string, error) 
 		    AND (max_uses = 0 OR uses < max_uses)`,
 		code).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", errors.New("邀请码无效、已过期或已达使用上限")
+		return 0, errors.New("邀请码无效、已过期或已达使用上限")
 	}
 	if err != nil {
 		slog.Error("consume invite: query failed", "error", err)
-		return "", errors.New("邀请码校验失败")
+		return 0, errors.New("邀请码校验失败")
 	}
 	if _, err := tx.Exec(ctx,
 		`UPDATE tenant_invites SET uses = uses + 1 WHERE code = $1`, code); err != nil {
 		slog.Error("consume invite: increment failed", "error", err)
-		return "", errors.New("邀请码消费失败")
+		return 0, errors.New("邀请码消费失败")
 	}
 	return tenantID, nil
 }
@@ -83,6 +83,9 @@ type AuthHandler struct {
 	captcha *CaptchaHandler
 	// mail 可选：注入后注册流程支持"邮箱验证码校验 + 欢迎邮件"。
 	mail *MailHandler
+	// emailBloom 可选：注入后注册流程先用布隆过滤器快速否定"该邮箱未注册"，
+	// 从而跳过昂贵的 DB 判重。nil 表示未启用（始终回落 DB 查证）。
+	emailBloom *userEmailBloom
 }
 
 func NewAuthHandler(cfg *config.Config) *AuthHandler {
@@ -100,6 +103,12 @@ func (h *AuthHandler) SetCaptchaHandler(c *CaptchaHandler) {
 // SetMailHandler injects the mail handler (邮箱验证码注册校验 / 欢迎邮件).
 func (h *AuthHandler) SetMailHandler(m *MailHandler) {
 	h.mail = m
+}
+
+// SetEmailBloomHandler injects the registration email bloom filter.
+// 传 nil 表示关闭该优化（注册流程始终回落 DB 判重）。
+func (h *AuthHandler) SetEmailBloomHandler(b *userEmailBloom) {
+	h.emailBloom = b
 }
 
 type LoginRequest struct {
@@ -142,7 +151,7 @@ func ClearTokenCookie(w http.ResponseWriter, secure bool) {
 }
 
 // logLoginFailure 统一的登录失败审计日志+验证码记录
-func (h *AuthHandler) logLoginFailure(ctx context.Context, r *http.Request, email, tenantID, remoteAddr string) {
+func (h *AuthHandler) logLoginFailure(ctx context.Context, r *http.Request, email string, tenantID int16, remoteAddr string) {
 	db.AuditLog(ctx, "", tenantID, "login_failed", "/v1/auth/login", "email="+maskEmail(email), remoteAddr, nil)
 	if h.captcha != nil {
 		// 必须传真实请求：RecordFailure 会经 clientIP(r) 读 r.RemoteAddr，
@@ -200,7 +209,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	var user UserResponse
 	var passwordHash string
-	var tenantID string
+	var tenantID int16
 	// F2：不再用 `tenant_id = DefaultTenantID` 过滤 —— 经邀请码注册的用户属于别的
 	// 租户，硬过滤会让它们永远登不进来。改为按 email 取用户，并在同 email 跨租户
 	// 重名时优先默认租户（存量账号行为不变）。
@@ -231,7 +240,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// multi-tenant isolation
 	// P1-5: tenant_id 为空直接拒绝登录
-	if tenantID == "" {
+	if tenantID == 0 {
 		slog.Warn("login rejected: user has null tenant_id", "user_id", user.ID)
 		Unauthorized(w, "user has no tenant binding; contact admin")
 		return
@@ -328,22 +337,29 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Check for existing user
-	var exists int
-	if err := tx.QueryRow(ctx,
-		`SELECT COUNT(*) FROM users WHERE email = $1 AND tenant_id = $2`,
-		req.Email, tenantID,
-	).Scan(&exists); err != nil {
-		slog.Error("check existing user", "error", err)
-		InternalError(w, "registration failed")
-		return
-	}
-	if exists > 0 {
-		// 用户枚举缓解：不再回 "email already registered" —— 那等于给出"该邮箱已注册"
-		// 的确定性答案，可被批量用来探测账号。改成与其它注册失败同形的模糊提示，
-		// 真实原因只进结构化日志。注册接口本身另有验证码 + 限流兜底。
-		slog.Info("registration rejected: email already exists", "tenant", tenantID)
-		BadRequest(w, "registration could not be completed")
-		return
+	//
+	// 布隆过滤器前置快速否定：**仅当**它断言"该租户下这个邮箱一定不存在"时才跳过
+	// 这次 DB 判重 —— users 上 email 无索引时这是一次全表扫描，也是注册热路径上
+	// 最贵的一步。只要判定为"可能存在"（含预热未完成、跨实例广播滞后的保守态），
+	// 就照常查库：唯一索引始终是真相源，过滤器出错最多让我们多查一次库。
+	if h.emailBloom.MightExist(tenantStr(tenantID), req.Email) {
+		var exists int
+		if err := tx.QueryRow(ctx,
+			`SELECT COUNT(*) FROM users WHERE email = $1 AND tenant_id = $2`,
+			req.Email, tenantID,
+		).Scan(&exists); err != nil {
+			slog.Error("check existing user", "error", err)
+			InternalError(w, "registration failed")
+			return
+		}
+		if exists > 0 {
+			// 用户枚举缓解：不再回 "email already registered" —— 那等于给出"该邮箱已注册"
+			// 的确定性答案，可被批量用来探测账号。改成与其它注册失败同形的模糊提示，
+			// 真实原因只进结构化日志。注册接口本身另有验证码 + 限流兜底。
+			slog.Info("registration rejected: email already exists", "tenant", tenantID)
+			BadRequest(w, "registration could not be completed")
+			return
+		}
 	}
 
 	// 邮箱验证码校验（后台开启「注册邮箱验证」时必填）。
@@ -405,6 +421,15 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		tenantID, req.Email, req.Name, string(hash), role,
 	).Scan(&userID)
 	if err != nil {
+		// 唯一索引兜底：布隆过滤器同步滞后（预热未完成 / 广播延迟 / 实例刚重启）时，
+		// 重复邮箱会走到这里被拦下。返回与"邮箱已存在"同形的模糊提示以避免用户枚举。
+		// users 的 INSERT 除 (tenant_id, email) 外没有会冲突的唯一列（id 用
+		// gen_random_uuid、其余唯一列为空），所以 23505 即等价于邮箱冲突。
+		if isUniqueViolation(err) {
+			slog.Info("registration rejected: email already exists (unique index)", "tenant", tenantID)
+			BadRequest(w, "registration could not be completed")
+			return
+		}
 		logAndRespond(w, err, http.StatusInternalServerError, "registration failed")
 		return
 	}
@@ -414,6 +439,14 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		slog.Error("commit tx", "error", err)
 		InternalError(w, "registration failed")
 		return
+	}
+
+	// 登记到布隆过滤器并广播给其他副本。放在 commit 之后是有意为之：只有真正落库的
+	// 邮箱才值得登记；若在 commit 前登记而事务回滚，会留下一个永久的假阳性 —— 无害
+	// 但降低过滤器的过滤率。广播失败同样无害（其他副本只是回落 DB 多查一次）。
+	if h.emailBloom != nil {
+		h.emailBloom.Add(tenantStr(tenantID), req.Email)
+		broadcastUserEmailBloomAdd(tenantStr(tenantID), req.Email)
 	}
 
 	token, err := h.auth.GenerateToken(userID, req.Email, role, tenantID, auth.RolePermissions[role])
@@ -602,16 +635,17 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 	//    此前直接 RefreshToken(旧 token) 会原样复制旧 claims 的 role/permissions，
 	//    于是管理员被降权后，只要在旧 token 有效期内刷新，权限就被「续期」——
 	//    降权不生效（P1）。这里改为从 users 表读当前 role 与 tenant_id 后重新签发。
-	var dbEmail, dbRole, dbTenant string
+	var dbEmail, dbRole string
+	var dbTenant int16
 	err = db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT COALESCE(email, ''), COALESCE(role, ''), COALESCE(tenant_id::text, '')
+		`SELECT COALESCE(email, ''), COALESCE(role, ''), COALESCE(tenant_id, 0)
 		   FROM users WHERE id = $1`,
 		oldClaims.UserID).Scan(&dbEmail, &dbRole, &dbTenant)
 	if err != nil {
 		Unauthorized(w, "user not found")
 		return
 	}
-	if dbTenant == "" {
+	if dbTenant == 0 {
 		dbTenant = DefaultTenantID
 	}
 

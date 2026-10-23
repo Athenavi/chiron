@@ -46,7 +46,7 @@ func mediaSignSecret() string {
 }
 
 // signMediaURL 为资产生成签名下载 URL（校验归属后签发）。
-func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string) (string, error) {
+func signMediaURL(ctx context.Context, assetID, secret string, tenantID int16, userID string) (string, error) {
 	// 归属校验并获取文件扩展名
 	var filePath string
 	if err := db.GlobalDBManager.QueryRow(ctx,
@@ -61,7 +61,7 @@ func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string)
 	exp := time.Now().Add(mediaSignTTL).Unix()
 	// 签名绑定 (assetID, tenant, user, exp)：A 租户拿到的 URL 无法用于访问
 	// B 租户的资产，即使 assetID 被猜到或泄漏（P1）。
-	sig := mediaHMAC(secret, assetID, tenantID, userID, exp)
+	sig := mediaHMAC(secret, assetID, tenantStr(tenantID), userID, exp)
 
 	// 如果有扩展名，附加到 URL 中（flyfish-viewer 需要）
 	signedURL := "/media/s/" + assetID
@@ -69,7 +69,7 @@ func signMediaURL(ctx context.Context, assetID, secret, tenantID, userID string)
 		signedURL += ext
 	}
 	signedURL += "?exp=" + strconv.FormatInt(exp, 10) +
-		"&t=" + url.QueryEscape(tenantID) +
+		"&t=" + url.QueryEscape(tenantStr(tenantID)) +
 		"&u=" + url.QueryEscape(userID) +
 		"&sig=" + sig
 
@@ -85,7 +85,7 @@ func mediaHMAC(secret, assetID, tenantID, userID string, exp int64) string {
 // SignMedia POST /v1/media/{id}/sign —— 鉴权后签发签名 URL。
 func (h *MediaHandler) SignMedia(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}

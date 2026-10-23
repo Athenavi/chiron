@@ -23,7 +23,7 @@ import (
 
 func cancelRequest(userID, sessionID string) *http.Request {
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/cancel?session_id="+sessionID, nil)
-	return req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{TenantID: "t1", UserID: userID}))
+	return req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{TenantID: 1, UserID: userID}))
 }
 
 func TestCancelLocalOwnerCancelsAndClearsEntry(t *testing.T) {

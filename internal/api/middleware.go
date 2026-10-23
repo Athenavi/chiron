@@ -25,7 +25,7 @@ import (
 type auditLogTask struct {
 	ctx        context.Context
 	userID     string
-	tenantID   string
+	tenantID   int16
 	method     string
 	path       string
 	remoteAddr string
@@ -412,7 +412,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 						claims := &auth.Claims{
 							UserID:   userID,
 							Role:     role,
-							TenantID: tenantID,
+							TenantID: parseTenantID(tenantID),
 							Perms:    auth.APIKeyPermissions(role),
 						}
 						ctx := auth.WithClaims(r.Context(), claims)

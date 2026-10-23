@@ -56,7 +56,7 @@ type EntPolicyHandler struct {
 	// resolveAllowed 解析用户适用的模型白名单。
 	// 返回 (allowed, hasPolicy, err)：hasPolicy=false 表示无任何策略（放行）。
 	// nil 时使用默认 PG 实现；测试可注入 fake。
-	resolveAllowed func(ctx context.Context, tenantID, userID string) ([]string, bool, error)
+	resolveAllowed func(ctx context.Context, tenantID int16, userID string) ([]string, bool, error)
 }
 
 // NewEntPolicyHandler 创建策略 handler（默认 PG 实现）。
@@ -82,10 +82,10 @@ func (h *EntPolicyHandler) RegisterRoutes(mux *http.ServeMux, authMW func(http.H
 // entPolicyTenantID 取当前请求的租户 ID：claims 优先，缺省回退默认租户
 // （现行登录链路未签发 tenant_id claim，单租户模式下恒为默认租户）。
 func entPolicyTenantID(claims *auth.Claims) string {
-	if claims != nil && claims.TenantID != "" {
-		return claims.TenantID
+	if claims != nil && claims.TenantID != 0 {
+		return tenantStr(claims.TenantID)
 	}
-	return DefaultTenantID
+	return tenantStr(DefaultTenantID)
 }
 
 // ── 强制点函数（导出给集成任务，独立可测） ────────────────────────────────
@@ -132,7 +132,7 @@ func EnforceEnterprisePolicy(r *http.Request, claims *auth.Claims, modelID strin
 // ResolveAllowedModels 返回用户视角的可用模型清单：
 // 有生效策略时返回白名单；无任何策略时返回 admin_model_configs 全量模型。
 // 查询失败返回 error（供 GET /v1/models 改造后按 fail-open 处理）。
-func (h *EntPolicyHandler) ResolveAllowedModels(ctx context.Context, tenantID, userID string) ([]string, error) {
+func (h *EntPolicyHandler) ResolveAllowedModels(ctx context.Context, tenantID int16, userID string) ([]string, error) {
 	allowed, hasPolicy, err := h.resolveAllowed(ctx, tenantID, userID)
 	if err != nil {
 		return nil, err
@@ -147,7 +147,7 @@ func (h *EntPolicyHandler) ResolveAllowedModels(ctx context.Context, tenantID, u
 }
 
 // ResolveAllowedModels 包级入口。
-func ResolveAllowedModels(ctx context.Context, tenantID, userID string) ([]string, error) {
+func ResolveAllowedModels(ctx context.Context, tenantID int16, userID string) ([]string, error) {
 	return defaultPolicyHandler.ResolveAllowedModels(ctx, tenantID, userID)
 }
 
@@ -223,13 +223,13 @@ func CheckModelRate(ctx context.Context, tenantID, modelID string, rpmLimit int)
 // defaultResolveAllowedModels 从 PG 解析用户适用的模型白名单。
 // 步骤：tenantID 缺省经 users 表解析 → 聚合用户角色（直接 ∪ 群组）→
 // role 精确策略优先、租户级兜底。无策略返回 (nil, false, nil)。
-func defaultResolveAllowedModels(ctx context.Context, tenantID, userID string) ([]string, bool, error) {
+func defaultResolveAllowedModels(ctx context.Context, tenantID int16, userID string) ([]string, bool, error) {
 	pool := db.ReadPool()
 	if pool == nil {
 		return nil, false, errors.New("ent policy: postgres pool unavailable")
 	}
 
-	if tenantID == "" {
+	if tenantID == 0 {
 		if userID == "" {
 			return nil, false, errors.New("ent policy: missing tenant_id and user_id")
 		}

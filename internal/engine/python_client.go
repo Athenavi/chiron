@@ -675,8 +675,8 @@ func (c *PythonClient) ForwardRequest(w http.ResponseWriter, r *http.Request, pa
 		if claims.UserID != "" {
 			req.Header.Set("X-User-Id", claims.UserID)
 		}
-		if claims.TenantID != "" {
-			req.Header.Set("X-Tenant-Id", claims.TenantID)
+		if claims.TenantID != 0 {
+			req.Header.Set("X-Tenant-Id", fmt.Sprintf("%d", claims.TenantID))
 		}
 	}
 	resp, err := c.do(req)

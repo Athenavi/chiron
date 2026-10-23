@@ -95,7 +95,7 @@ func ExecAuditIngestHandler(w http.ResponseWriter, r *http.Request) {
 		if rec.ExitCode != nil {
 			meta["exit_code"] = *rec.ExitCode
 		}
-		db.AuditLog(r.Context(), rec.UserID, rec.TenantID, "tool.exec", "tool:"+tool, detail, "", meta)
+		db.AuditLog(r.Context(), rec.UserID, parseTenantID(rec.TenantID), "tool.exec", "tool:"+tool, detail, "", meta)
 		accepted++
 	}
 

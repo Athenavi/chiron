@@ -37,8 +37,27 @@ def get_user_id() -> str:
     return str(get_tool_context("user_id", ""))
 
 
-def get_tenant_id() -> str:
-    return str(get_tool_context("tenant_id", ""))
+def get_tenant_id() -> int:
+    """当前租户 ID（int16）。无法解析时返回 0（视作未绑定）。
+
+    tenant_id 在 Go 侧已统一为 smallint/JWT 整数；网关透传的 header/query
+    可能仍是字符串（HTTP 本身如此），故这里宽容解析。
+    """
+    return to_tenant_int(get_tool_context("tenant_id", 0))
+
+
+def to_tenant_int(value: Any) -> int:
+    """把租户 ID 宽容解析为 int16 域内的整数；无法解析时返回 0。
+
+    用于 SQL 参数：`tenant_id` 列已改为 smallint，asyncpg 传 str 会直接报错。
+    """
+    try:
+        n = int(value)
+    except (TypeError, ValueError):
+        return 0
+    if n < 0 or n > 32767:
+        return 0
+    return n
 
 
 def get_project() -> str:

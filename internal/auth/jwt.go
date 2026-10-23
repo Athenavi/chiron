@@ -14,7 +14,7 @@ type Claims struct {
 	UserID   string   `json:"uid"`
 	Email    string   `json:"email"`
 	Role     string   `json:"role"` // owner / admin / user
-	TenantID string   `json:"tenant_id,omitempty"`
+	TenantID int16    `json:"tenant_id,omitempty"`
 	Perms    []string `json:"perms,omitempty"`
 	jwt.RegisteredClaims
 }
@@ -36,7 +36,7 @@ func NewAuthenticator(secret string, expiration time.Duration) *Authenticator {
 }
 
 // GenerateToken 签发 JWT。tenantID 必须由调用方从用户记录中传入（多租户隔离键）。
-func (a *Authenticator) GenerateToken(userID, email, role, tenantID string, perms []string) (string, error) {
+func (a *Authenticator) GenerateToken(userID, email, role string, tenantID int16, perms []string) (string, error) {
 	now := time.Now()
 	claims := &Claims{
 		UserID:   userID,

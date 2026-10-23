@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -148,9 +149,10 @@ func WriteAuditLogs(ctx context.Context, entries []AuditEntry) error {
 	next := func() string { idx++; return fmt.Sprintf("$%d", idx) }
 
 	for i, e := range entries {
-		tenantID := e.TenantID
-		if !auditSinkUUIDRe.MatchString(tenantID) {
-			tenantID = DefaultTenantID
+		// tenant_id 现为 smallint：条目里是正整数字串则采用，否则回退默认租户。
+		tenantID := DefaultTenantID
+		if v, perr := strconv.ParseInt(strings.TrimSpace(e.TenantID), 10, 16); perr == nil && v > 0 {
+			tenantID = int16(v)
 		}
 		var userID any
 		if auditSinkUUIDRe.MatchString(e.UserID) {

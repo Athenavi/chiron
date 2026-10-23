@@ -418,7 +418,7 @@ async def sweep_once(
             """
             SELECT session_id, tenant_id, status, checkpoint, run_token
               FROM agent_runs
-             WHERE status IN ('running', 'checkpointed')
+             WHERE status IN ('running', 'checkpointed', 'resuming')
                AND COALESCE(checkpoint_at, updated_at, created_at)
                    < now() - make_interval(secs => $1::int)
              ORDER BY COALESCE(checkpoint_at, updated_at, created_at) ASC
@@ -436,6 +436,22 @@ async def sweep_once(
         session_id = str(row["session_id"] or "")
         tenant_id = str(row["tenant_id"] or "")
         if not session_id:
+            continue
+        # `resuming` 是 claim() 的交接中间态：写它的进程要么在同一轮把它推成
+        # checkpointed/终态，要么崩在这里。跨进程崩溃后 run_token 已随进程消失，
+        # 而 claim() 只接受 running/checkpointed ⇒ 这行永远无法再被接管。
+        # 直接标 abandoned（可见），否则它会一直占着同会话的唯一活跃位。
+        if str(row["status"]) == ckpt.STATUS_RESUMING:
+            await ckpt.mark(
+                tenant_id=tenant_id,
+                session_id=session_id,
+                status=ckpt.STATUS_ABANDONED,
+            )
+            stats["abandoned"] += 1
+            _count("abandoned")
+            logger.warning(
+                "reconciler: session=%s 停在 resuming（交接进程已死）→ abandoned", session_id
+            )
             continue
         try:
             if await _lock_is_held(session_id):

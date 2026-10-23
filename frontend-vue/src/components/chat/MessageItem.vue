@@ -59,6 +59,19 @@ function inkIndex(i: number): number {
   return Math.min(Math.max(i - inkBatchStart.value, 0), INK_MAX_STAGGER)
 }
 
+/**
+ * "约 N 分钟后自动恢复"里的 N（分钟）。
+ *
+ * 秒数来自后端的 `params.retry_after_seconds` —— 它是**算出来的**（stale 阈值 + 一次
+ * 巡检间隔），不是猜的。只对 `session_busy` 显示：别的失败原因不存在"等一会儿就好"。
+ */
+const repairWaitMinutes = computed(() => {
+  const it = props.item
+  if (!('errorCode' in it) || it.errorCode !== 'session_busy') return 0
+  const sec = 'errorRetryAfterSec' in it ? Number(it.errorRetryAfterSec || 0) : 0
+  return sec > 0 ? Math.max(1, Math.ceil(sec / 60)) : 0
+})
+
 const emit = defineEmits<{
   /** 用户消息编辑后重发：删除该消息及其后所有消息，用新文本重发 */
   (e: 'retry-from', itemId: string, text: string): void
@@ -70,6 +83,8 @@ const emit = defineEmits<{
   (e: 'retry-failed', itemId: string): void
   /** 引用整条消息到输入框（与选中文本引用同一出口） */
   (e: 'quote', text: string): void
+  /** 手动修复卡住的会话（同会话还有一轮没收口时，"重试"必然再撞同一道闸门） */
+  (e: 'repair-session', itemId: string): void
 }>()
 
 // ── 反向定位：消息 → 来源工作台 chips（assistant metadata 驱动）──
@@ -595,6 +610,19 @@ onUpdated(enhanceContent)
           class="msg-error-banner"
         >
           <span class="error-text">{{ $t('errors.send_failed_msg', { msg: (item as TextItem).errorMsg || $t('errors.network_error_2') }) }}</span>
+          <!-- 会话忙：给“修复”而不只是“重试” —— 重试必然再撞同一道闸门 -->
+          <button
+            v-if="(item as TextItem).errorCode === 'session_busy'"
+            class="retry-btn"
+            type="button"
+            @click.stop="emit('repair-session', String((item as TextItem).id || ''))"
+          >
+            {{ $t('errors.session_busy_repair') }}
+          </button>
+          <span
+            v-if="repairWaitMinutes"
+            class="repair-hint"
+          >{{ $t('errors.session_busy_auto_recover', { n: repairWaitMinutes }) }}</span>
           <button
             class="retry-btn"
             type="button"
@@ -779,6 +807,8 @@ onUpdated(enhanceContent)
 @media (prefers-reduced-motion: reduce) {
   .ink { animation: none; }
 }
+/* 会话修复提示：显示自动恢复的最坏等待（后端算的 stale 阈值 + 一次巡检间隔） */
+.repair-hint { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 /* UI/UX：流式生成光标（deepseek 打字效果） */
 .streaming-text::after {
   content: '▍';

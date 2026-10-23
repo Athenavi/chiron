@@ -37,12 +37,12 @@ func registerProxyRoutes(
 					return
 				}
 				claims := auth.GetClaims(r.Context())
-				if claims == nil || claims.TenantID == "" {
+				if claims == nil || claims.TenantID == 0 {
 					Unauthorized(w, "missing tenant context")
 					return
 				}
 				// 多租户隔离：透传 tenant_id 给 Python 引擎（query 参数兼容，header 见 pythonClient.WithTenant）
-				proxiedPath := buildPath(r) + "?user_id=" + claims.UserID + "&tenant_id=" + claims.TenantID
+				proxiedPath := buildPath(r) + "?user_id=" + claims.UserID + "&tenant_id=" + tenantStr(claims.TenantID)
 				var resp interface{}
 				var err error
 				switch r.Method {
@@ -131,7 +131,7 @@ func registerProxyRoutes(
 			return
 		}
 		claims := auth.GetClaims(r.Context())
-		pythonClient.ForwardRequest(w, r, "/v1/kb/"+r.PathValue("id")+"/documents?user_id="+claims.UserID+"&tenant_id="+claims.TenantID)
+		pythonClient.ForwardRequest(w, r, "/v1/kb/"+r.PathValue("id")+"/documents?user_id="+claims.UserID+"&tenant_id="+tenantStr(claims.TenantID))
 	}))))
 	mux.Handle("GET /v1/kb/{id}/documents", authMW(kbRateMW(kbP(pathParamSuffix("/v1/kb", "/documents")))))
 	mux.Handle("POST /v1/kb/{id}/build", authMW(kbRateMW(kbP(pathParamSuffix("/v1/kb", "/build")))))
@@ -149,13 +149,13 @@ func registerProxyRoutes(
 			return
 		}
 		claims := auth.GetClaims(r.Context())
-		if claims == nil || claims.TenantID == "" {
+		if claims == nil || claims.TenantID == 0 {
 			Unauthorized(w, "missing tenant context")
 			return
 		}
 		// 保留原始 doc_id 查询参数（newProxy 的 buildPath 会丢弃原始 query）
 		target := "/v1/kb/" + r.PathValue("id") + "/documents?doc_id=" + url.QueryEscape(r.URL.Query().Get("doc_id")) +
-			"&user_id=" + claims.UserID + "&tenant_id=" + claims.TenantID
+			"&user_id=" + claims.UserID + "&tenant_id=" + tenantStr(claims.TenantID)
 		var resp interface{}
 		if err := pythonClient.DeleteJSON(r.Context(), target, &resp); err != nil {
 			logAndRespond(w, err, http.StatusInternalServerError, "python engine error")

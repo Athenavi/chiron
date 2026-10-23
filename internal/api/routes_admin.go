@@ -51,7 +51,7 @@ func registerAdminRoutes(
 		}
 		claims := auth.GetClaims(r.Context())
 		r.Header.Set("X-User-Role", claims.Role)
-		pythonClient.ForwardRequest(w, r, "/v1/admin/kb?user_id="+claims.UserID+"&tenant_id="+claims.TenantID)
+		pythonClient.ForwardRequest(w, r, "/v1/admin/kb?user_id="+claims.UserID+"&tenant_id="+tenantStr(claims.TenantID))
 	})))))
 
 	// Storage admin routes

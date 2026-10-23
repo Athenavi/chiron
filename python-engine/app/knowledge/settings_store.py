@@ -139,7 +139,7 @@ async def save(
                   END,
                   updated_at = NOW()""",
         user_id,
-        tenant_id or "",
+        to_tenant_int(tenant_id),
         provider,
         encrypted or None,
         fingerprint or None,

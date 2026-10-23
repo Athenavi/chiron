@@ -40,7 +40,7 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
-	tenantID := claims.TenantID
+	tenantID := tenantStr(claims.TenantID)
 	if tenantID == "" {
 		tenantID = claims.UserID
 	}

@@ -109,14 +109,14 @@ func (rl *TenantRateLimiter) Allow(ctx context.Context, resource, tenantID strin
 func (rl *TenantRateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		claims := auth.GetClaims(r.Context())
-		if claims == nil || claims.TenantID == "" {
+		if claims == nil || claims.TenantID == 0 {
 			Unauthorized(w, ErrAuthRequired)
 			return
 		}
 		tenantID := claims.TenantID
 		resource := extractResource(r.URL.Path)
 
-		allowed, retryAfter := rl.Allow(r.Context(), resource, tenantID)
+		allowed, retryAfter := rl.Allow(r.Context(), resource, tenantStr(tenantID))
 		if !allowed {
 			slog.Warn("tenant rate limit exceeded",
 				"resource", resource, "tenant", tenantID, "retry_after", retryAfter)

@@ -8,7 +8,7 @@ type User struct {
 	Email    string `json:"email"`
 	Name     string `json:"name"`
 	Role     string `json:"role"`
-	TenantID string `json:"tenant_id"`
+	TenantID int16  `json:"tenant_id"`
 }
 
 // AuthService defines the authentication service interface.
@@ -18,7 +18,7 @@ type AuthService interface {
 
 	// GetUserByEmail retrieves a user by email within the given tenant.
 	// tenantID 防止跨租户同 email 误登录。
-	GetUserByEmail(ctx context.Context, email, tenantID string) (*User, error)
+	GetUserByEmail(ctx context.Context, email string, tenantID int16) (*User, error)
 
 	// ValidateToken validates a JWT token and returns claims.
 	ValidateToken(ctx context.Context, token string) (*Claims, error)
@@ -33,5 +33,5 @@ type AuthService interface {
 	DeleteUser(ctx context.Context, userID string) error
 
 	// ListUsers lists users in the given tenant (admin only).
-	ListUsers(ctx context.Context, tenantID string) ([]User, error)
+	ListUsers(ctx context.Context, tenantID int16) ([]User, error)
 }

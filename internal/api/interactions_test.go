@@ -62,7 +62,7 @@ func TestInteractionListForwardsClaimIdentity(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/v1/agent/sessions/s1/interactions?user_id=attacker&tenant_id=t-victim", nil)
 	req.SetPathValue("session_id", "s1")
-	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u-owner", TenantID: "t-own"}))
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u-owner", TenantID: 1}))
 	rec := httptest.NewRecorder()
 
 	h.List(rec, req)
@@ -74,7 +74,7 @@ func TestInteractionListForwardsClaimIdentity(t *testing.T) {
 		t.Fatalf("转发路径不对: %v", seen["path"])
 	}
 	q, _ := seen["query"].(string)
-	if !strings.Contains(q, "user_id=u-owner") || !strings.Contains(q, "tenant_id=t-own") {
+	if !strings.Contains(q, "user_id=u-owner") || !strings.Contains(q, "tenant_id=1") {
 		t.Fatalf("未按 claims 注入身份: %s", q)
 	}
 	if strings.Contains(q, "attacker") || strings.Contains(q, "t-victim") {
@@ -145,7 +145,7 @@ func TestInteractionListClampsLimit(t *testing.T) {
 		h, closeSrv := newInteractionTestHandlers(t, seen, "")
 		req := httptest.NewRequest(http.MethodGet, "/v1/agent/sessions/s1/interactions"+tc.in, nil)
 		req.SetPathValue("session_id", "s1")
-		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: "t1"}))
+		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: 1}))
 		rec := httptest.NewRecorder()
 		h.List(rec, req)
 		closeSrv()
@@ -166,7 +166,7 @@ func TestInteractionListMapsEngineFailure(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/agent/sessions/s1/interactions", nil)
 	req.SetPathValue("session_id", "s1")
-	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: "t1"}))
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: 1}))
 	rec := httptest.NewRecorder()
 	h.List(rec, req)
 
@@ -185,7 +185,7 @@ func TestInteractionResolveUsesClaimsIdentityNotBody(t *testing.T) {
 		`"response":{"decision":"edit","arguments":{"command":"ls -1"}}}`
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/interactions/i1/resolve", strings.NewReader(body))
 	req.SetPathValue("interaction_id", "i1")
-	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u-owner", TenantID: "t-own"}))
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u-owner", TenantID: 1}))
 	rec := httptest.NewRecorder()
 
 	h.Resolve(rec, req)
@@ -194,7 +194,7 @@ func TestInteractionResolveUsesClaimsIdentityNotBody(t *testing.T) {
 		t.Fatalf("code=%d body=%s", rec.Code, rec.Body.String())
 	}
 	fwd, _ := seen["body"].(map[string]any)
-	if fwd["user_id"] != "u-owner" || fwd["tenant_id"] != "t-own" {
+	if fwd["user_id"] != "u-owner" || fwd["tenant_id"] != "1" {
 		t.Fatalf("身份未被 claims 覆盖: %+v", fwd)
 	}
 	if strings.Contains(seen["query"].(string), "user_id=") {
@@ -234,7 +234,7 @@ func TestInteractionResolveFieldValidation(t *testing.T) {
 		h, closeSrv := newInteractionTestHandlers(t, seen, "")
 		req := httptest.NewRequest(http.MethodPost, "/v1/agent/interactions/i1/resolve", strings.NewReader(tc.body))
 		req.SetPathValue("interaction_id", "i1")
-		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: "t1"}))
+		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: 1}))
 		rec := httptest.NewRecorder()
 		h.Resolve(rec, req)
 		closeSrv()
@@ -268,7 +268,7 @@ func TestInteractionResolveMapsEngineErrorCodes(t *testing.T) {
 		req := httptest.NewRequest(http.MethodPost, "/v1/agent/interactions/i1/resolve",
 			strings.NewReader(`{"session_id":"s1","response":{"decision":"approve"}}`))
 		req.SetPathValue("interaction_id", "i1")
-		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: "t1"}))
+		req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: 1}))
 		rec := httptest.NewRecorder()
 		h.Resolve(rec, req)
 		closeSrv()
@@ -297,7 +297,7 @@ func TestInteractionResolveEscapesPathParams(t *testing.T) {
 	req := httptest.NewRequest(http.MethodPost, "/v1/agent/interactions/x/resolve",
 		strings.NewReader(`{"session_id":"s1","response":{"decision":"approve"}}`))
 	req.SetPathValue("interaction_id", nasty)
-	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: "t1"}))
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{UserID: "u1", TenantID: 1}))
 	rec := httptest.NewRecorder()
 	h.Resolve(rec, req)
 

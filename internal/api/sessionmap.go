@@ -85,8 +85,8 @@ func smTenant(claims *auth.Claims) string {
 	if claims == nil {
 		return ""
 	}
-	if claims.TenantID != "" {
-		return claims.TenantID
+	if claims.TenantID != 0 {
+		return tenantStr(claims.TenantID)
 	}
 	return claims.UserID
 }

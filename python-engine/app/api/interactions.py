@@ -51,7 +51,7 @@ def _identity(
 @router.get("/v1/agent/sessions/{session_id}/interactions")
 async def list_session_interactions(
     session_id: str,
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
     user_id: str = Query("", alias="user_id"),
     limit: int = Query(20, ge=1, le=MAX_LIST_LIMIT),
 ) -> dict[str, Any]:
@@ -83,7 +83,7 @@ async def list_session_interactions(
 
 @router.get("/v1/agent/interactions")
 async def list_user_interactions(
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
     user_id: str = Query("", alias="user_id"),
     limit: int = Query(20, ge=1, le=MAX_LIST_LIMIT),
 ) -> dict[str, Any]:
@@ -124,7 +124,7 @@ async def list_user_interactions(
 async def resolve_interaction(
     interaction_id: str,
     body: dict[str, Any] = Body(default_factory=dict),
-    tenant_id: str = Query("", alias="tenant_id"),
+    tenant_id: int = Query(0, alias="tenant_id"),
     user_id: str = Query("", alias="user_id"),
 ) -> dict[str, Any]:
     """将用户的答复落到那张票上（`pending → answered`）。

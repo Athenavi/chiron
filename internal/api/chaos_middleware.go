@@ -117,18 +117,18 @@ func chaosErrorCode(raw json.RawMessage) int {
 //
 // 回源是必要的：纯网关流量（不经过 Python 引擎）不会触发 Python 侧回填，没有回源就
 // 只能靠 TTL 内的旧值 —— 新建的实验会"看起来创建成功、却始终不生效"。
-func pickGatewayFault(ctx context.Context, redis db.RedisClient, tenantID string) *chaosFault {
-	if tenantID == "" {
+func pickGatewayFault(ctx context.Context, redis db.RedisClient, tenantID int16) *chaosFault {
+	if tenantID == 0 {
 		return nil
 	}
 
-	faults, ok := chaosCachedFaults(ctx, redis, tenantID)
+	faults, ok := chaosCachedFaults(ctx, redis, tenantStr(tenantID))
 	if !ok {
-		faults = chaosLoadFaultsFromDB(ctx, tenantID)
+		faults = chaosLoadFaultsFromDB(ctx, tenantStr(tenantID))
 		if faults == nil {
 			return nil
 		}
-		chaosCacheFaults(ctx, redis, tenantID, faults)
+		chaosCacheFaults(ctx, redis, tenantStr(tenantID), faults)
 	}
 
 	for i := range faults {

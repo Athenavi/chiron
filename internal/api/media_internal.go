@@ -148,7 +148,7 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 与用户直传共用同一键布局：media/<tenantID>/<assetID>/<name>
-	objectKey := mediaObjectKey(body.TenantID, assetID, sanitizeUploadName(body.Name))
+	objectKey := mediaObjectKey(parseTenantID(body.TenantID), assetID, sanitizeUploadName(body.Name))
 
 	if err := h.store.Write(r.Context(), objectKey, data); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "save file failed")

@@ -418,7 +418,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				// 预检时预留的估算必须退还 —— 真实用量由**第一次**那个请求在回合末记账，
 				// 这里留下一份额外预估等于让重复提交"白占"租户额度。
 				// tenantID 在本函数更靠后才解析，留空由 TrueUpTenantQuota 自行经 users 表解析。
-				TrueUpTenantQuota(ctx, userID, "", 0, QuotaReserveFromContext(ctx))
+				TrueUpTenantQuota(ctx, userID, 0, 0, QuotaReserveFromContext(ctx))
 				return nil
 			}
 			slog.Warn("submit dedup unavailable, proceeding", "error", err)
@@ -518,16 +518,16 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			explicit["model"] = v
 		}
 	}
-	tenantID := ""
+	var tenantID int16
 	if claims := auth.GetClaims(ctx); claims != nil {
 		tenantID = claims.TenantID
-		if tenantID == "" {
-			tenantID = claims.UserID
+		if tenantID == 0 {
+			tenantID = parseTenantID(claims.UserID)
 		}
 	}
 	// tenant_id 仍要透传：引擎侧按它隔离记忆/知识库/审计。
 	pythonReq["tenant_id"] = tenantID
-	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantID, userID, sessionID, explicit)
+	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantStr(tenantID), userID, sessionID, explicit)
 	if llmConfig == nil {
 		llmConfig = map[string]interface{}{}
 	}

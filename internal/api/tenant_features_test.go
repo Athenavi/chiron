@@ -16,7 +16,7 @@ import (
 //     （"该租户能否用 SSO"是平台侧的信任边界）；
 //  2. **无记录 = 全关** —— 灰度默认，绝不因"没配"而自动开放。
 
-const featTenantID = "11111111-1111-1111-1111-111111111111"
+const featTenantID = "1"
 
 func newFeaturesRequest(method, body string, claims *auth.Claims) *http.Request {
 	var r *http.Request
@@ -42,8 +42,8 @@ func TestPutTenantFeaturesRequiresPlatformOwner(t *testing.T) {
 		claims *auth.Claims
 	}{
 		{"无 claims", nil},
-		{"租户 admin（有 sso:manage 也不行）", &auth.Claims{UserID: "u1", Role: "admin", TenantID: featTenantID}},
-		{"普通用户", &auth.Claims{UserID: "u2", Role: "user", TenantID: featTenantID}},
+		{"租户 admin（有 sso:manage 也不行）", &auth.Claims{UserID: "u1", Role: "admin", TenantID: 1}},
+		{"普通用户", &auth.Claims{UserID: "u2", Role: "user", TenantID: 1}},
 	}
 	for _, c := range cases {
 		rec := httptest.NewRecorder()

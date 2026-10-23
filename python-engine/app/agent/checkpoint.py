@@ -30,6 +30,8 @@ import time
 import uuid
 from typing import Any, TypedDict, cast
 
+from app.tools.context import to_tenant_int
+
 logger = logging.getLogger(__name__)
 
 #: 热续跑窗口（秒）：与 SSE 重放窗口对齐（`internal/broadcast/hub.go` 的 sseEventsTTL = 1h）。
@@ -255,11 +257,11 @@ async def save(
                    instance_id = COALESCE(NULLIF($6, ''), instance_id),
                    updated_at = now()
              WHERE session_id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND status IN ('running', 'checkpointed', 'resuming')
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             payload,
             str(checkpoint.get("turn_id", "") or ""),
             now_token,
@@ -276,7 +278,7 @@ async def save(
             VALUES ($1, $2, $3, $4, $5, 'running', $6::jsonb, now(), $7, now(), now())
             """,
             uuid.uuid4().hex,
-            tenant_id or None,
+            to_tenant_int(tenant_id),
             session_id,
             str(checkpoint.get("turn_id", "") or "") or None,
             now_token,
@@ -307,13 +309,13 @@ async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
             """
             SELECT checkpoint, checkpoint_at, status
               FROM agent_runs
-             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+             WHERE session_id = $1 AND ($2 = 0 OR tenant_id = $2)
                AND status IN ('running', 'checkpointed', 'resuming')
              ORDER BY updated_at DESC
              LIMIT 1
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
         )
         if row is None:
             return None
@@ -354,12 +356,12 @@ async def mark(
             """
             UPDATE agent_runs
                SET status = $3, updated_at = now()
-             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+             WHERE session_id = $1 AND ($2 = 0 OR tenant_id = $2)
                AND ($4 = '' OR run_token = $4)
                AND status IN ('running', 'checkpointed', 'resuming')
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             status,
             run_token or "",
         )
@@ -397,12 +399,12 @@ async def claim(
             UPDATE agent_runs
                SET status = $4, run_token = $5, updated_at = now()
              WHERE session_id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND status IN ('running', 'checkpointed')
                AND ($3 = '' OR run_token = $3)
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             expected_run_token or "",
             STATUS_RESUMING,
             new_run_token,
@@ -431,13 +433,13 @@ async def load_awaiting(
             """
             SELECT checkpoint, run_token
               FROM agent_runs
-             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+             WHERE session_id = $1 AND ($2 = 0 OR tenant_id = $2)
                AND status = 'awaiting_input'
              ORDER BY updated_at DESC
              LIMIT 1
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
         )
         if row is None or row["checkpoint"] is None:
             return None
@@ -474,11 +476,11 @@ async def claim_awaiting(
             """
             UPDATE agent_runs
                SET status = 'resuming', run_token = $3, updated_at = now()
-             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+             WHERE session_id = $1 AND ($2 = 0 OR tenant_id = $2)
                AND status = 'awaiting_input'
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             new_run_token,
         )
         return _rowcount(result) > 0
@@ -507,12 +509,12 @@ async def release_awaiting(
             """
             UPDATE agent_runs
                SET status = 'abandoned', updated_at = now()
-             WHERE session_id = $1 AND ($2 = '' OR tenant_id = $2)
+             WHERE session_id = $1 AND ($2 = 0 OR tenant_id = $2)
                AND status = 'awaiting_input'
                AND ($3 = '' OR run_token = $3)
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             run_token or "",
         )
         return _rowcount(result) > 0

@@ -8,6 +8,10 @@ export default {
   forbidden: 'You do not have permission to perform this action.',
   // Request
   invalid_request: 'The request was rejected. Please review and try again.',
+  session_busy: 'The previous turn is still in progress. Wait for it to finish, or repair the session and retry.',
+  session_busy_repair: 'Repair session',
+  session_busy_auto_recover: 'auto-recovers in ~{n} min',
+  session_repaired: 'Session repaired — you can send again',
   not_found: 'The requested resource does not exist or has been deleted.',
   // Rate limit & quota
   rate_limited: 'Too many requests. Please try again shortly.',

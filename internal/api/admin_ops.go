@@ -389,7 +389,7 @@ func (h *AdminHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
 	}
 	domain := strings.ToLower(strings.TrimSpace(body.Domain))
 	tenantID := GetTenantID(r)
-	if tenantID == "" {
+	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -425,7 +425,7 @@ func (h *AdminHandler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 	// P0 安全修复：校验域名所有权，仅允许管理员删除（AdminHandler 已受 admin 权限保护）
 	// 或校验 tenant_id 防止越权删除
 	tenantID := GetTenantID(r)
-	if tenantID != "" {
+	if tenantID != 0 {
 		// 多租户模式：校验域名归属
 		var currentTenantID string
 		if err := db.GlobalDBManager.QueryRow(r.Context(),
@@ -433,7 +433,7 @@ func (h *AdminHandler) DeleteDomain(w http.ResponseWriter, r *http.Request) {
 			NotFound(w, "domain not found")
 			return
 		}
-		if currentTenantID != tenantID {
+		if currentTenantID != tenantStr(tenantID) {
 			Forbidden(w, "cannot delete domain from another tenant")
 			return
 		}

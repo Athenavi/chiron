@@ -4,7 +4,7 @@ import { api } from './index'
 
 export interface QuotaPool {
   id: string
-  tenant_id: string
+  tenant_id: number
   resource_type: 'token' | 'storage_mb' | 'concurrency' | 'credits'
   total_amount: number // 0 = 无限制
   period: 'daily' | 'monthly'
@@ -36,7 +36,7 @@ export interface QuotaUsageRow {
 }
 
 export interface QuotaUsage {
-  tenant_id: string
+  tenant_id: number
   as_of: string
   pools: QuotaUsageRow[]
 }
@@ -54,7 +54,7 @@ export async function getQuota(id: string): Promise<{ pool: QuotaPool; allocatio
 }
 
 export async function createQuota(body: {
-  tenant_id: string
+  tenant_id: number
   resource_type: string
   total_amount: number
   period?: string

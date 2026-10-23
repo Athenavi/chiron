@@ -37,7 +37,7 @@ func TestCodeForMessage_KnownMessagesExactMatch(t *testing.T) {
 		{"tenant concurrency quota exhausted", CodeQuotaExceeded},
 		{"insufficient permissions", CodeForbidden},
 		{"insufficient enterprise permissions", CodeForbidden},
-		{"task already running for this session", CodeInvalidRequest},
+		{"task already running for this session", CodeSessionBusy},
 	}
 	for _, c := range cases {
 		if got := codeForMessage(c.msg); got != c.want {

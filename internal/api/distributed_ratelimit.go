@@ -181,7 +181,7 @@ func DistributedRateLimitMiddleware(limiter *DistributedRateLimiter) func(http.H
 			var tenantID, userID string
 			claims := auth.GetClaims(r.Context())
 			if claims != nil {
-				tenantID = claims.TenantID
+				tenantID = tenantStr(claims.TenantID)
 				userID = claims.UserID
 			}
 

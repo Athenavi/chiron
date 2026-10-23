@@ -31,7 +31,7 @@ class InternalSubagentRequest(BaseModel):
     """跨实例委派请求（**身份必填**：这是接收方重新校验的依据）。"""
 
     task: str
-    tenant_id: str = ""
+    tenant_id: int = 0
     user_id: str = ""
     session_id: str = ""
     mode: str = "normal"

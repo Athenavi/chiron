@@ -95,7 +95,7 @@ func (h *UploadHandler) userID(r *http.Request) (string, bool) {
 // claimsOf 返回当前请求的 claims（含 tenant_id 与 user_id）。
 func (h *UploadHandler) claimsOf(r *http.Request) (*auth.Claims, bool) {
 	c := auth.GetClaims(r.Context())
-	if c == nil || c.TenantID == "" {
+	if c == nil || c.TenantID == 0 {
 		return nil, false
 	}
 	return c, true
@@ -173,7 +173,7 @@ func (h *UploadHandler) Init(w http.ResponseWriter, r *http.Request) {
 
 	// 租户配额门禁（分片路径）：按声明的总大小预检存储容量 + 文件数量 —— 既避免把
 	// 超限文件完整传完才在收尾阶段被拒，也堵住"用分片上传绕过直传配额"的口子。
-	if allowed, reason := CheckUploadAllowed(r.Context(), claims.TenantID, body.Size); !allowed {
+	if allowed, reason := CheckUploadAllowed(r.Context(), tenantStr(claims.TenantID), body.Size); !allowed {
 		JSON(w, http.StatusRequestEntityTooLarge, APIResponse{Success: false, Error: reason})
 		return
 	}
@@ -360,9 +360,9 @@ func (h *UploadHandler) Complete(w http.ResponseWriter, r *http.Request) {
 	var assetID string
 	switch up.Purpose {
 	case "media":
-		assetID, fileURL, err = h.finalizeMedia(r, claims.TenantID, up, stream)
+		assetID, fileURL, err = h.finalizeMedia(r, tenantStr(claims.TenantID), up, stream)
 	case "kb_doc":
-		fileURL, err = h.finalizeKBDoc(r, claims.TenantID, up, stream)
+		fileURL, err = h.finalizeKBDoc(r, tenantStr(claims.TenantID), up, stream)
 	default:
 		fileURL, err = h.finalizeGeneric(up, stream)
 	}
@@ -488,7 +488,7 @@ func (h *UploadHandler) finalizeMedia(r *http.Request, tenantID string, up struc
 	if err != nil {
 		return "", "", err
 	}
-	objectKey := mediaObjectKey(tenantID, assetID, name)
+	objectKey := mediaObjectKey(parseTenantID(tenantID), assetID, name)
 	// 流式落盘到存储后端（多副本统一可见）。旧实现直接写本地盘：s3 后端下会"上传成功但下载 404"。
 	if err := h.store.WriteStream(r.Context(), objectKey, stream, up.Size, 0o644); err != nil {
 		return "", "", err

@@ -49,6 +49,14 @@ export interface TextItem extends ChatItemBase {
   error?: boolean
   /** 失败消息的错误提示文案 */
   errorMsg?: string
+  /**
+   * 失败原因的后端稳定错误码（见 internal/api/error_codes.go）。
+   * 用于在错误提示里给出**针对性的**动作，而不只是"重试"：
+   * `session_busy` 说明同会话有一轮还没收口，此时"修复会话"才是对的解法。
+   */
+  errorCode?: string
+  /** 自动恢复的最坏等待秒数（后端算的：stale 阈值 + 一次巡检间隔）。 */
+  errorRetryAfterSec?: number
   /** 附件列表（用户消息可携带图片/文件，发送时一并上传） */
   attachments?: ChatAttachment[]
   /** P2-F: 生成被用户手动停止，显示"继续生成"提示 */

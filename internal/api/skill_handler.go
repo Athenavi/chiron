@@ -60,7 +60,7 @@ func (h *SkillHandler) register(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	target := "/v1/skills/" + name + "/register"
 	if claims != nil {
-		target += "?user_id=" + claims.UserID + "&tenant_id=" + claims.TenantID
+		target += "?user_id=" + claims.UserID + "&tenant_id=" + tenantStr(claims.TenantID)
 	}
 	var body map[string]interface{}
 	if r.ContentLength > 0 {
@@ -97,8 +97,8 @@ func identityParams(r *http.Request) url.Values {
 	if claims.UserID != "" {
 		q.Set("user_id", claims.UserID)
 	}
-	if tid := ResolveTenantID(r); tid != "" {
-		q.Set("tenant_id", tid)
+	if tid := ResolveTenantID(r); tid != 0 {
+		q.Set("tenant_id", tenantStr(tid))
 	}
 	return q
 }
@@ -140,7 +140,7 @@ func (h *SkillHandler) proxy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		// 身份注入（网关为唯一可信边界）：引擎无鉴权，必须由网关注入租户/用户身份。
-		if tid := ResolveTenantID(r); tid != "" {
+		if tid := ResolveTenantID(r); tid != 0 {
 			body["tenant_id"] = tid
 		}
 		if uid := auth.GetClaims(r.Context()); uid != nil && uid.UserID != "" {
@@ -211,7 +211,7 @@ func (h *SkillHandler) proxyDelete(w http.ResponseWriter, r *http.Request) {
 // filterDiscoverByMarket 对 discover 代理响应做市场白名单过滤：
 // 仅当市场存在同名 published 条目时按租户授权过滤（IsItemEnabledForTenant
 // 内部保证未上架能力与查询故障均放行）。PG 不可用时整体跳过，避免逐条 warn。
-func filterDiscoverByMarket(ctx context.Context, result map[string]interface{}, tenantID string) {
+func filterDiscoverByMarket(ctx context.Context, result map[string]interface{}, tenantID int16) {
 	if db.ReadPool() == nil {
 		return
 	}
@@ -227,7 +227,7 @@ func filterDiscoverByMarket(ctx context.Context, result map[string]interface{}, 
 	if listKey == "" {
 		return
 	}
-	result[listKey] = filterSkillsByMarket(ctx, list, tenantID)
+	result[listKey] = filterSkillsByMarket(ctx, list, tenantStr(tenantID))
 }
 
 // filterSkillsByMarket 对技能列表逐项做市场门控过滤（纯逻辑，独立可测）。

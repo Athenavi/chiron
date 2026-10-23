@@ -10,7 +10,7 @@ import (
 // handleKBVisibility 知识库共享可见性（owner-only）：PUT /v1/kb/{id}/visibility
 func handleKBVisibility(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}

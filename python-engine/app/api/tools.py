@@ -23,7 +23,7 @@ class ToolExecuteRequest(BaseModel):
     name: str
     input: dict[str, Any] = {}
     user_id: str = ""
-    tenant_id: str = ""
+    tenant_id: int = 0
 
 
 @router.post("/v1/tools/execute")

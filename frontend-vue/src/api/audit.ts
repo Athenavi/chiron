@@ -3,7 +3,7 @@ import { api } from './index'
 // 审计日志行（对齐后端 auditLogRow）
 export interface AuditLog {
   id: string
-  tenant_id: string
+  tenant_id: number
   user_id: string | null
   action: string
   resource_type: string

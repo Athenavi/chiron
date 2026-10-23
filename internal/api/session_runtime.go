@@ -193,10 +193,10 @@ func (h *SessionRuntimeHandler) authorize(w http.ResponseWriter, r *http.Request
 		}
 	}
 	tenant := claims.TenantID
-	if tenant == "" {
-		tenant = claims.UserID
+	if tenant == 0 {
+		tenant = parseTenantID(claims.UserID)
 	}
-	return claims, tenant, sessionID, true
+	return claims, tenantStr(tenant), sessionID, true
 }
 
 // loadRuntime 读运行时状态：Redis 热层优先，缺失字段由 DB 权威层回填。
@@ -365,8 +365,8 @@ func InjectSessionRuntime(r *http.Request, body map[string]interface{}) bool {
 		return true // 无会话上下文：交给引擎按默认处理，不阻断
 	}
 	tenant := claims.TenantID
-	if tenant == "" {
-		tenant = claims.UserID
+	if tenant == 0 {
+		tenant = parseTenantID(claims.UserID)
 	}
 	llmConfig, _ := body["llm_config"].(map[string]interface{})
 	if llmConfig == nil {
@@ -382,7 +382,7 @@ func InjectSessionRuntime(r *http.Request, body map[string]interface{}) bool {
 	if v, ok := llmConfig["tools_mode"].(string); ok && v != "" {
 		explicit["tools_mode"] = normalizeToolsMode(v)
 	}
-	cfg := ResolveSessionAgentConfig(r.Context(), db.Redis, tenant, claims.UserID, sessionID, explicit)
+	cfg := ResolveSessionAgentConfig(r.Context(), db.Redis, tenantStr(tenant), claims.UserID, sessionID, explicit)
 	llmConfig["mode"] = cfg.mode.Value
 	llmConfig["tools_mode"] = cfg.toolsMode.Value
 	llmConfig["model"] = cfg.model.Value

@@ -48,6 +48,12 @@ func registerAgentRoutes(
 	// "从外部作用于正在运行的 agent 循环"的通道，少了身份校验就成了骚扰与成本攻击的入口。
 	mux.Handle("POST /v1/agent/interrupt", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitInterrupt))))
 
+	// 手动修复卡住的会话：一次失败若没写成终态，同会话的唯一活跃位会被永久占住，
+	// 该会话再也提交不了新消息（用户只看到"请求失败"）。本端点让用户立即恢复，
+	// 而不是等 reconciler 的 6 分钟兜底。严格闸门见 RecoverSession 的注释。
+	mux.Handle("POST /v1/agent/sessions/{session_id}/recover",
+		authMW(rlMW(http.HandlerFunc(submitHandler.RecoverSession))))
+
 	// 差距B：输出控制（风格 / 语言偏好）与提示精炼 —— **纯透传**到引擎。
 	// 两者都是"用户的实时选择 / 一次性动作"：网关不存储、不改写、不做业务判断，
 	// 因此直接转发（唯一必要的是身份与限流，与 agent 的其它外部通道一致）。
@@ -242,7 +248,7 @@ func registerAgentRoutes(
 		// 未配置该配额的租户恒放行，见 TenantResourceManager.Acquire）。
 		// 与全局 agentSem 合并为一个释放函数：后台 goroutine 继续 defer releaseSem()
 		// 即可，无需再感知第二把闸门（避免漏释放导致租户槽位泄漏）。
-		releaseTenant, tenantOK := tenantResMgr.Acquire(claims.TenantID)
+		releaseTenant, tenantOK := tenantResMgr.Acquire(tenantStr(claims.TenantID))
 		if !tenantOK {
 			monitor.IncRateLimitBlocked()
 			slog.Warn("tenant concurrency quota exhausted, submit rejected",

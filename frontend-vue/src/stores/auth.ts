@@ -8,7 +8,7 @@ export interface User {
   email: string
   name: string
   role: string
-  tenant_id: string
+  tenant_id: number
   /** 用户设置（换肤、朗读音色等）。由 GET /v1/auth/profile 下发、PUT 局部合并。 */
   settings?: Record<string, unknown>
 }

@@ -28,7 +28,7 @@ class AgentDispatchRequest(BaseModel):
     max_turns: int = 5
     max_tokens: int = 4096
     temperature: float = 0.7
-    tenant_id: str = ""
+    tenant_id: int = 0
     user_id: str = ""
     session_id: str = ""
     # 工作台绑定（Go 的 agents 表新增列）：Agent 自带的知识库与技能

@@ -18,6 +18,17 @@ export const api = axios.create({
   withCredentials: true,
 })
 
+/**
+ * 手动修复卡住的会话（网关 `POST /v1/agent/sessions/{id}/recover`）。
+ *
+ * 严格模式：只有**确实停滞**的 run 才会被收口 —— Redis 运行锁仍在、或该行最后更新
+ * 距今不足 6 分钟时，后端返回 409（`session_busy`）并在 `params.retry_after_seconds`
+ * 里给出"最坏还要等多久"。
+ */
+export async function recoverSession(sessionId: string) {
+  return api.post(`/v1/agent/sessions/${encodeURIComponent(sessionId)}/recover`)
+}
+
 // 工具确认（S 安全修复：三态栅栏“确认”态 — 前端确认卡片回调）
 export async function submitApproval(params: {
   session_id: string

@@ -28,7 +28,7 @@ import (
 type recordingEntStore struct {
 	insertArgs []any
 	// domainTenant 非空时，`FROM domains` 的查询返回它（模拟"该域名已验证并归属此租户"）
-	domainTenant string
+	domainTenant int16
 	// domainQueryArg 记录 domains 查询实际传入的域名（用于断言 Host 归一化）
 	domainQueryArg string
 	// features 非 nil 时，`FROM tenant_features` 返回它（nil = 无记录 ⇒ 全关的灰度默认）
@@ -53,11 +53,11 @@ func (s *recordingEntStore) QueryRow(_ context.Context, sql string, args ...any)
 				s.domainQueryArg = d
 			}
 		}
-		if s.domainTenant == "" {
+		if s.domainTenant == 0 {
 			return deadRow{err: pgx.ErrNoRows}
 		}
 		return fakeScanRow{fn: func(dest ...any) error {
-			*(dest[0].(*string)) = s.domainTenant
+			*(dest[0].(*int16)) = s.domainTenant
 			return nil
 		}}
 	}
@@ -94,14 +94,14 @@ func TestCreateProviderUsesCallerTenant(t *testing.T) {
 	store := &recordingEntStore{features: &TenantFeatures{SSOSelfService: true}}
 	h := &SSOHandler{db: store, encKey: make([]byte, 32)} // 32 字节 = AES-256 密钥
 
-	req := newCreateProviderRequest(&auth.Claims{UserID: "u1", TenantID: "tenant-b", Role: "admin"})
+	req := newCreateProviderRequest(&auth.Claims{UserID: "u1", TenantID: 2, Role: "admin"})
 	rec := httptest.NewRecorder()
 	h.CreateProvider(rec, req)
 
 	if len(store.insertArgs) == 0 {
 		t.Fatalf("未走到 INSERT：status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if got := store.insertArgs[0]; got != "tenant-b" {
+	if got := store.insertArgs[0]; got != int16(2) {
 		t.Errorf("INSERT tenant_id = %v，期望 tenant-b（应取自调用者 claims）", got)
 	}
 }
@@ -119,7 +119,7 @@ func TestCreateProviderFallsBackToDefaultTenant(t *testing.T) {
 		t.Fatalf("未走到 INSERT：status=%d body=%s", rec.Code, rec.Body.String())
 	}
 	if got := store.insertArgs[0]; got != DefaultTenantID {
-		t.Errorf("INSERT tenant_id = %v，期望 %s（无 claims 时回退默认租户）", got, DefaultTenantID)
+		t.Errorf("INSERT tenant_id = %v，期望 %d（无 claims 时回退默认租户）", got, DefaultTenantID)
 	}
 }
 
@@ -128,7 +128,7 @@ func TestCreateProviderRejectedWithoutSelfService(t *testing.T) {
 	store := &recordingEntStore{} // 无 features 记录 ⇒ sso_self_service=false
 	h := &SSOHandler{db: store, encKey: make([]byte, 32)}
 
-	req := newCreateProviderRequest(&auth.Claims{UserID: "u1", TenantID: "tenant-b", Role: "admin"})
+	req := newCreateProviderRequest(&auth.Claims{UserID: "u1", TenantID: 2, Role: "admin"})
 	rec := httptest.NewRecorder()
 	h.CreateProvider(rec, req)
 
@@ -145,14 +145,14 @@ func TestCreateProviderAllowedForPlatformOwner(t *testing.T) {
 	store := &recordingEntStore{} // sso_self_service=false
 	h := &SSOHandler{db: store, encKey: make([]byte, 32)}
 
-	req := newCreateProviderRequest(&auth.Claims{UserID: "root", TenantID: "tenant-b", Role: "owner"})
+	req := newCreateProviderRequest(&auth.Claims{UserID: "root", TenantID: 2, Role: "owner"})
 	rec := httptest.NewRecorder()
 	h.CreateProvider(rec, req)
 
 	if len(store.insertArgs) == 0 {
 		t.Fatalf("平台 owner 应能建 provider：status=%d body=%s", rec.Code, rec.Body.String())
 	}
-	if got := store.insertArgs[0]; got != "tenant-b" {
+	if got := store.insertArgs[0]; got != int16(2) {
 		t.Errorf("INSERT tenant_id = %v，期望 tenant-b", got)
 	}
 }
@@ -163,13 +163,13 @@ func TestCreateProviderAllowedForPlatformOwner(t *testing.T) {
 // 的 IdP 及其 provider id。现在按请求 Host → `domains`（已验证）→ 租户过滤。
 
 func TestResolveTenantByHostNormalizesAndMatchesVerifiedDomain(t *testing.T) {
-	store := &recordingEntStore{domainTenant: "tenant-b"}
+	store := &recordingEntStore{domainTenant: 2}
 	h := &SSOHandler{db: store}
 
 	// 大写 + 带端口都应被归一化后匹配
 	tid, ok := h.resolveTenantByHost(context.Background(), "App.Example.com:3000")
-	if !ok || tid != "tenant-b" {
-		t.Fatalf("resolveTenantByHost = (%q,%v)，期望 (tenant-b,true)", tid, ok)
+	if !ok || tid != 2 {
+		t.Fatalf("resolveTenantByHost = (%d,%v)，期望 (2,true)", tid, ok)
 	}
 	if store.domainQueryArg != "app.example.com" {
 		t.Errorf("查询用的域名 = %q，期望归一化后的 app.example.com", store.domainQueryArg)
@@ -180,7 +180,7 @@ func TestResolveTenantByHostRejectsUnmatchedAndEmpty(t *testing.T) {
 	h := &SSOHandler{db: &recordingEntStore{}} // 无匹配域名
 
 	if tid, ok := h.resolveTenantByHost(context.Background(), "unknown.example.org"); ok {
-		t.Errorf("未验证/未知域名不应解析出租户，得到 %q", tid)
+		t.Errorf("未验证/未知域名不应解析出租户，得到 %d", tid)
 	}
 	if _, ok := h.resolveTenantByHost(context.Background(), ""); ok {
 		t.Error("空 Host 不应解析出租户")
@@ -214,7 +214,7 @@ func TestListPublicProvidersReturnsEmptyForUnmatchedHost(t *testing.T) {
 // L1 灰度生效点：域名匹配上了，但该租户**未开通 SSO** ⇒ 仍然返回空列表。
 func TestListPublicProvidersEmptyWhenTenantSSODisabled(t *testing.T) {
 	// 域名已验证并归属 tenant-b，但 features 无记录 ⇒ sso_enabled=false（灰度默认）
-	store := &recordingEntStore{domainTenant: "tenant-b"}
+	store := &recordingEntStore{domainTenant: 2}
 	h := &SSOHandler{db: store, encKey: make([]byte, 32), cfg: trustedProxyTestCfg()}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/providers", nil)
@@ -240,7 +240,7 @@ func trustedProxyTestCfg() *config.Config {
 // R3：Host 只应在请求来自可信代理时才被采信 —— 直连客户端可伪造 Host，把访客引到别的
 // 租户的 IdP。这里用"无可信代理"的 handler 验证：即使 Host 能匹配 domains 表也返回空。
 func TestListPublicProvidersIgnoresHostFromUntrustedPeer(t *testing.T) {
-	store := &recordingEntStore{domainTenant: "tenant-b", features: &TenantFeatures{SSOEnabled: true}}
+	store := &recordingEntStore{domainTenant: 2, features: &TenantFeatures{SSOEnabled: true}}
 	h := &SSOHandler{db: store, encKey: make([]byte, 32)} // 无 cfg ⇒ 无可信代理
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/auth/sso/providers", nil)
@@ -263,7 +263,7 @@ func TestGetProviderGuideReturnsCallbackAndTemplates(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/ent/sso/providers/guide", nil)
 	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
-		UserID: "u1", TenantID: "tenant-b", Role: "admin",
+		UserID: "u1", TenantID: 2, Role: "admin",
 	}))
 	rec := httptest.NewRecorder()
 
@@ -276,7 +276,7 @@ func TestGetProviderGuideReturnsCallbackAndTemplates(t *testing.T) {
 	for _, want := range []string{
 		"callback_url",
 		"https://app.example.com/v1/auth/sso/callback",
-		"tenant-b",
+		"2",
 		"google",
 		"github",
 		"oidc",

@@ -75,7 +75,7 @@ func (f *fakeQuotaRedis) Eval(_ context.Context, script string, keys []string, a
 }
 
 type fakeQuotaStore struct {
-	tenantID string
+	tenantID int16
 	pools    []EntQuotaPool
 	sqlUsage int64
 	// M24：credits 池与它的权威用量（`credit_transactions` 扣减量）。
@@ -83,19 +83,19 @@ type fakeQuotaStore struct {
 	sqlCreditUsage int64
 }
 
-func (s fakeQuotaStore) ResolveTenantID(_ context.Context, _ string) (string, error) {
+func (s fakeQuotaStore) ResolveTenantID(_ context.Context, _ string) (int16, error) {
 	return s.tenantID, nil
 }
 
 func (s fakeQuotaStore) TenantTokenPools(_ context.Context, tenantID string) ([]EntQuotaPool, error) {
-	if tenantID != s.tenantID {
+	if tenantID != tenantStr(s.tenantID) {
 		return nil, nil
 	}
 	return s.pools, nil
 }
 
 func (s fakeQuotaStore) TenantCreditPools(_ context.Context, tenantID string) ([]EntQuotaPool, error) {
-	if tenantID != s.tenantID {
+	if tenantID != tenantStr(s.tenantID) {
 		return nil, nil
 	}
 	return s.creditPools, nil
@@ -105,7 +105,7 @@ func (s fakeQuotaStore) TokenUsageSQL(_ context.Context, _ string, _ time.Time) 
 	return s.sqlUsage, nil
 }
 
-func (s fakeQuotaStore) CreditUsageSQL(_ context.Context, _ string, _ time.Time) (int64, error) {
+func (s fakeQuotaStore) CreditUsageSQL(_ context.Context, _ int16, _ time.Time) (int64, error) {
 	return s.sqlCreditUsage, nil
 }
 
@@ -137,16 +137,16 @@ func TestEstimateRequestTokensCountsCJKAsOneTokenPerChar(t *testing.T) {
 func TestEnforceReservesEstimatedTokensNotOnePerRequest(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 1000, Period: "monthly"}},
 	})
-	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+	claims := &auth.Claims{UserID: "u1", TenantID: 1}
 
 	reserved, err := e.enforce(context.Background(), claims, 500)
 	if err != nil || reserved != 500 {
 		t.Fatalf("enforce = (%d, %v), want (500, nil)", reserved, err)
 	}
-	key := quotaMonthlyKeyForTest(t, "t1")
+	key := quotaMonthlyKeyForTest(t, 1)
 	if got := rdb.values[key]; got != 500 {
 		t.Fatalf("counter = %d, want 500（此前每请求只 +1）", got)
 	}
@@ -165,10 +165,10 @@ func TestEnforceFailOpenKeepsReservationAtZero(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	rdb.failEval = true
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 1000, Period: "monthly"}},
 	})
-	reserved, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: "t1"}, 300)
+	reserved, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: 1}, 300)
 	if err != nil || reserved != 0 {
 		t.Fatalf("enforce = (%d, %v), want (0, nil) — Redis 抖动必须 fail-open 且不谎报预留", reserved, err)
 	}
@@ -177,16 +177,16 @@ func TestEnforceFailOpenKeepsReservationAtZero(t *testing.T) {
 func TestEnforceCountsUnlimitedPools(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 0, Period: "monthly"}},
 	})
 	// TotalAmount=0 是"不限额"，但**仍然要计数**（面板/告警靠它）；此前直接 continue，
 	// 与代码里"仅计数不拦截"的注释相反。
-	reserved, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: "t1"}, 400)
+	reserved, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: 1}, 400)
 	if err != nil || reserved != 400 {
 		t.Fatalf("enforce = (%d, %v), want (400, nil)", reserved, err)
 	}
-	if got := rdb.values[quotaMonthlyKeyForTest(t, "t1")]; got != 400 {
+	if got := rdb.values[quotaMonthlyKeyForTest(t, 1)]; got != 400 {
 		t.Fatalf("counter = %d, want 400", got)
 	}
 }
@@ -196,16 +196,16 @@ func TestEnforceCountsUnlimitedPools(t *testing.T) {
 func TestTrueUpReplacesEstimateWithRealUsage(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 1000, Period: "monthly"}},
 	})
-	key := quotaMonthlyKeyForTest(t, "t1")
+	key := quotaMonthlyKeyForTest(t, 1)
 
-	if _, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: "t1"}, 500); err != nil {
+	if _, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: 1}, 500); err != nil {
 		t.Fatalf("enforce: %v", err)
 	}
 	// 真实用量 1200、预留 500 ⇒ 补 700，池子里最终等于真实值（与 billing_records 同口径）
-	e.trueUp(context.Background(), "u1", "t1", 1200-500)
+	e.trueUp(context.Background(), "u1", 1, 1200-500)
 	if got := rdb.values[key]; got != 1200 {
 		t.Fatalf("counter = %d, want 1200", got)
 	}
@@ -214,23 +214,23 @@ func TestTrueUpReplacesEstimateWithRealUsage(t *testing.T) {
 func TestTrueUpRefundClampsAtZero(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 1000, Period: "monthly"}},
 	})
-	key := quotaMonthlyKeyForTest(t, "t1")
+	key := quotaMonthlyKeyForTest(t, 1)
 
 	// 预留 500 后请求被闸门挡下（一 token 未烧）⇒ 全额退还
-	if _, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: "t1"}, 500); err != nil {
+	if _, err := e.enforce(context.Background(), &auth.Claims{UserID: "u1", TenantID: 1}, 500); err != nil {
 		t.Fatalf("enforce: %v", err)
 	}
-	e.trueUp(context.Background(), "u1", "t1", -500)
+	e.trueUp(context.Background(), "u1", 1, -500)
 	if got := rdb.values[key]; got != 0 {
 		t.Fatalf("counter = %d, want 0", got)
 	}
 
 	// 退还超过已计入的量（回填偏低时可能发生）不能把计数器压成负数 ——
 	// 负值会让"用量 > 上限"永不成立，配额彻底失效。
-	e.trueUp(context.Background(), "u1", "t1", -500)
+	e.trueUp(context.Background(), "u1", 1, -500)
 	if got := rdb.values[key]; got != 0 {
 		t.Fatalf("counter = %d, want 0（负增量必须夹到下界）", got)
 	}
@@ -239,12 +239,12 @@ func TestTrueUpRefundClampsAtZero(t *testing.T) {
 func TestTrueUpResolvesTenantWhenEmpty(t *testing.T) {
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		pools:    []EntQuotaPool{{TenantID: "t1", ResourceType: "token", TotalAmount: 1000, Period: "monthly"}},
 	})
 	// 子 Agent 自动轮没有用户 JWT ⇒ claims 里没有 tenantID，必须经 users 表解析后照样入账
-	e.trueUp(context.Background(), "u1", "", 700)
-	if got := rdb.values[quotaMonthlyKeyForTest(t, "t1")]; got != 700 {
+	e.trueUp(context.Background(), "u1", 0, 700)
+	if got := rdb.values[quotaMonthlyKeyForTest(t, 1)]; got != 700 {
 		t.Fatalf("counter = %d, want 700", got)
 	}
 }
@@ -279,13 +279,13 @@ func TestQuotaReserveContextRoundTrip(t *testing.T) {
 
 func TestEnforceBlocksWhenCreditPoolIsExhausted(t *testing.T) {
 	e := newTestEnforcer(newFakeQuotaRedis(), fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		creditPools: []EntQuotaPool{
 			{TenantID: "t1", ResourceType: "credits", TotalAmount: 100, Period: "monthly"},
 		},
 		sqlCreditUsage: 100, // 已花满
 	})
-	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+	claims := &auth.Claims{UserID: "u1", TenantID: 1}
 
 	_, err := e.enforce(context.Background(), claims, 10)
 
@@ -296,13 +296,13 @@ func TestEnforceBlocksWhenCreditPoolIsExhausted(t *testing.T) {
 
 func TestEnforceAllowsWhenCreditPoolHasRoom(t *testing.T) {
 	e := newTestEnforcer(newFakeQuotaRedis(), fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		creditPools: []EntQuotaPool{
 			{TenantID: "t1", ResourceType: "credits", TotalAmount: 100, Period: "monthly"},
 		},
 		sqlCreditUsage: 40,
 	})
-	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+	claims := &auth.Claims{UserID: "u1", TenantID: 1}
 
 	if _, err := e.enforce(context.Background(), claims, 10); err != nil {
 		t.Fatalf("err = %v, want nil", err)
@@ -314,18 +314,18 @@ func TestCreditPoolIsNeverCountedInRedis(t *testing.T) {
 	// 两件事都会把 token 数当积分记账。断言：credits 池不在 Redis 里留下任何计数器。
 	rdb := newFakeQuotaRedis()
 	e := newTestEnforcer(rdb, fakeQuotaStore{
-		tenantID: "t1",
+		tenantID: 1,
 		creditPools: []EntQuotaPool{
 			{TenantID: "t1", ResourceType: "credits", TotalAmount: 1000, Period: "monthly"},
 		},
 		sqlCreditUsage: 10,
 	})
-	claims := &auth.Claims{UserID: "u1", TenantID: "t1"}
+	claims := &auth.Claims{UserID: "u1", TenantID: 1}
 
 	if _, err := e.enforce(context.Background(), claims, 500); err != nil {
 		t.Fatalf("err = %v", err)
 	}
-	e.trueUp(context.Background(), "u1", "t1", 300)
+	e.trueUp(context.Background(), "u1", 1, 300)
 
 	for k := range rdb.values {
 		if strings.Contains(k, "credits") {
@@ -334,7 +334,7 @@ func TestCreditPoolIsNeverCountedInRedis(t *testing.T) {
 	}
 }
 
-func quotaMonthlyKeyForTest(t *testing.T, tenantID string) string {
+func quotaMonthlyKeyForTest(t *testing.T, tenantID int16) string {
 	t.Helper()
 	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
 	key, _, _ := quotaPeriodKey(tenantID, "token", "monthly", now)

@@ -144,16 +144,16 @@ func validateHarnessProfile(p HarnessProfile) string {
 // harnessScope 从 claims 取 scope；`tenantScoped=true` 时 user_id 固定为 ""（租户级）。
 func harnessScope(r *http.Request, tenantScoped bool) (tenantID, userID string, ok bool) {
 	claims := auth.GetClaims(r.Context())
-	if claims == nil || claims.TenantID == "" {
+	if claims == nil || claims.TenantID == 0 {
 		return "", "", false
 	}
 	if tenantScoped {
-		return claims.TenantID, "", true
+		return tenantStr(claims.TenantID), "", true
 	}
 	if claims.UserID == "" {
 		return "", "", false
 	}
-	return claims.TenantID, claims.UserID, true
+	return tenantStr(claims.TenantID), claims.UserID, true
 }
 
 func (h *HarnessProfileHandler) handleGet(w http.ResponseWriter, r *http.Request, tenantScoped bool) {

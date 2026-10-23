@@ -25,6 +25,8 @@ from __future__ import annotations
 import logging
 from typing import Any
 
+from app.tools.context import to_tenant_int
+
 logger = logging.getLogger(__name__)
 
 CURSOR_KEY_PREFIX = "subagent:reports_cursor:"
@@ -127,7 +129,7 @@ async def consume_pending_reports(
         return []
     try:
         rows = await pool.fetch(
-            PENDING_SQL, session_id, tenant_id or "", user_id or "",
+            PENDING_SQL, session_id, to_tenant_int(tenant_id), user_id or "",
             list(REPORTABLE), since, MAX_REPORTS,
         )
     except Exception as exc:  # noqa: BLE001 - 表缺失等：不阻断父回合

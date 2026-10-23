@@ -29,7 +29,7 @@ func (s *LocalAuthService) GetUser(ctx context.Context, userID string) (*User, e
 
 	var user User
 	err := s.db.QueryRow(ctx,
-		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, '')
+		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, 0)
 		 FROM users WHERE id = $1`, userID).
 		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.TenantID)
 	if err != nil {
@@ -40,17 +40,17 @@ func (s *LocalAuthService) GetUser(ctx context.Context, userID string) (*User, e
 
 // GetUserByEmail 多租户查询：email+tenant_id 双键定位，防止跨租户登录。
 // tenantID 为空时回退 DefaultTenantID（单租户兼容，未来收紧）。
-func (s *LocalAuthService) GetUserByEmail(ctx context.Context, email, tenantID string) (*User, error) {
+func (s *LocalAuthService) GetUserByEmail(ctx context.Context, email string, tenantID int16) (*User, error) {
 	if s.db == nil {
 		return nil, fmt.Errorf("database not available")
 	}
-	if tenantID == "" {
+	if tenantID == 0 {
 		tenantID = db.DefaultTenantID
 	}
 
 	var user User
 	err := s.db.QueryRow(ctx,
-		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, '')
+		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, 0)
 		 FROM users WHERE email = $1 AND tenant_id = $2`, email, tenantID).
 		Scan(&user.ID, &user.Email, &user.Name, &user.Role, &user.TenantID)
 	if err != nil {
@@ -129,7 +129,7 @@ func (s *LocalAuthService) ListUsers(ctx context.Context, tenantID string) ([]Us
 	}
 
 	rows, err := s.db.Query(ctx,
-		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, '')
+		`SELECT id, COALESCE(email, ''), COALESCE(name, ''), COALESCE(role, 'user'), COALESCE(tenant_id, 0)
 		 FROM users WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT 100`,
 		tenantID)
 	if err != nil {

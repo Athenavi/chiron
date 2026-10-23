@@ -56,6 +56,14 @@ type Config struct {
 	// Registration
 	DisableRegistration bool
 
+	// EmailBloom 是注册流程里"邮箱是否已存在"判重的布隆过滤器（按租户分片）。
+	// 它只做**快速否定**：命中"一定不存在"才跳过 DB 判重，真相源始终是
+	// users(tenant_id, email) 唯一索引。默认开启 —— 它是纯性能优化，
+	// 任何漏记都只会退化为回落 DB，不会放进重复邮箱。
+	EmailBloomEnabled  bool
+	EmailBloomCapacity uint64  // 每个租户分片的默认预期容量
+	EmailBloomFPRate   float64 // 目标误报率
+
 	// Cookie
 	CookieSecure bool
 
@@ -204,6 +212,9 @@ func loadConfig() *Config {
 		JWTExpiration:       getDuration("JWT_EXPIRATION", 24*time.Hour),
 		InternalToken:       getSecret("INTERNAL_TOKEN", ""),
 		DisableRegistration: isTruthy(getEnv("DISABLE_REGISTRATION", "")),
+		EmailBloomEnabled:   isTruthy(getEnv("EMAIL_BLOOM_FILTER_ENABLED", "true")),
+		EmailBloomCapacity:  uint64(getInt("EMAIL_BLOOM_CAPACITY", 100000)),
+		EmailBloomFPRate:    getFloat("EMAIL_BLOOM_FP_RATE", 0.001),
 		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
 		CookieSecure: cookieSecure(),
 		CORSOrigins:         getEnv("CORS_ORIGINS", ""),
@@ -342,6 +353,15 @@ func getInt(key string, fallback int) int {
 	if v := os.Getenv(key); v != "" {
 		if i, err := strconv.Atoi(v); err == nil {
 			return i
+		}
+	}
+	return fallback
+}
+
+func getFloat(key string, fallback float64) float64 {
+	if v := os.Getenv(key); v != "" {
+		if f, err := strconv.ParseFloat(v, 64); err == nil {
+			return f
 		}
 	}
 	return fallback

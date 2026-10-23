@@ -68,7 +68,7 @@ export interface AuthUser {
   email: string
   name: string
   role: string
-  tenant_id: string
+  tenant_id: number
 }
 
 export interface UserIdentity {

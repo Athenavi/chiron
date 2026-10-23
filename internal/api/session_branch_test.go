@@ -28,7 +28,7 @@ func postBranch(claims *auth.Claims, sessionID, body string) *httptest.ResponseR
 // TestBranchHandlerParameterValidation 参数校验是分支端点的第一道闸门：
 // 越界/非法的参数必须**在碰数据库之前**被拒，且错误信息要能指导调用方改对。
 func TestBranchHandlerParameterValidation(t *testing.T) {
-	claims := &auth.Claims{TenantID: "t1", UserID: "u1"}
+	claims := &auth.Claims{TenantID: 1, UserID: "u1"}
 
 	t.Run("未登录 401", func(t *testing.T) {
 		if got := postBranch(nil, "s1", `{"from_index":5}`).Code; got != http.StatusUnauthorized {

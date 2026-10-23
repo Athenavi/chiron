@@ -21,102 +21,6 @@ depends_on: Union[str, Sequence[str], None] = None
 # 顺序即 pg_dump 的可重放顺序：建表 → 序列与 OWNED BY → 列默认值 → 约束 → 索引。
 # 不要重排：默认值依赖先建好的序列，主键约束依赖先建好的表。
 _DDL: tuple[str, ...] = (
-    """CREATE TABLE public.admin_api_call_logs (
-    id character varying(36) NOT NULL,
-    api_key_id character varying(36),
-    model_id character varying(50),
-    workflow_id character varying(50),
-    endpoint character varying(100),
-    method character varying(10),
-    request_size_bytes integer,
-    response_size_bytes integer,
-    duration_ms integer,
-    status_code integer,
-    retry_count integer,
-    input_tokens integer,
-    output_tokens integer,
-    credits_consumed bigint,
-    created_at timestamp without time zone
-);""",
-    """CREATE TABLE public.admin_api_keys (
-    id character varying(36) NOT NULL,
-    key_hash character varying(64),
-    name character varying(100),
-    tenant_id character varying(50),
-    user_id character varying(50),
-    monthly_quota integer,
-    used_count bigint,
-    used_credits bigint,
-    status character varying(20),
-    expires_at timestamp without time zone,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    created_by character varying(50),
-    description text,
-    allowed_models character varying(255),
-    rate_limit_qps integer
-);""",
-    """CREATE TABLE public.admin_cron_jobs (
-    id character varying(36) NOT NULL,
-    job_id character varying(50),
-    name character varying(100),
-    schedule character varying(50),
-    last_run_at timestamp without time zone,
-    last_run_status character varying(20),
-    last_error text,
-    next_run_at timestamp without time zone,
-    enabled boolean,
-    metadata json,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
-    """CREATE TABLE public.admin_database_backups (
-    id character varying(36) NOT NULL,
-    backup_type character varying(20),
-    description text,
-    file_path character varying(500),
-    file_size_mb character varying(255),
-    status character varying(20),
-    error_message text,
-    started_at timestamp without time zone,
-    completed_at timestamp without time zone,
-    duration_seconds integer,
-    created_by character varying(50)
-);""",
-    """CREATE TABLE public.admin_db_configs (
-    id character varying(36) NOT NULL,
-    dsn character varying(500),
-    host character varying(100),
-    port integer,
-    dbname character varying(100),
-    max_open_connections integer,
-    max_idle_connections integer,
-    conn_max_lifetime character varying(255),
-    status character varying(20),
-    last_health_check timestamp without time zone,
-    avg_query_time_ms character varying(255),
-    database_size_mb character varying(255),
-    total_tables integer,
-    sequential_scans bigint,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
-    """CREATE TABLE public.admin_domains (
-    id character varying(36) NOT NULL,
-    domain character varying(100),
-    tenant_id character varying(50),
-    dns_provider character varying(50),
-    dns_record_id character varying(100),
-    cname_target character varying(200),
-    ssl_status character varying(20),
-    ssl_expires_at timestamp without time zone,
-    auto_renew boolean,
-    status character varying(20),
-    verified_at timestamp without time zone,
-    verified_by character varying(50),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """CREATE TABLE public.admin_model_configs (
     id character varying(36) NOT NULL,
     model_id character varying(50),
@@ -136,96 +40,9 @@ _DDL: tuple[str, ...] = (
     created_at timestamp without time zone,
     updated_at timestamp without time zone
 );""",
-    """CREATE TABLE public.admin_redis_configs (
-    id character varying(36) NOT NULL,
-    host character varying(100),
-    port integer,
-    password_hash character varying(256),
-    db_index integer,
-    pool_size integer,
-    min_idle_connections integer,
-    max_conn_age character varying(255),
-    status character varying(20),
-    last_health_check timestamp without time zone,
-    avg_latency_ms character varying(255),
-    memory_used_mb character varying(255),
-    connected_clients integer,
-    hits bigint,
-    misses bigint,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
-    """CREATE TABLE public.admin_tenant_usage (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(50),
-    stat_date character varying(255),
-    api_calls bigint,
-    tokens_used bigint,
-    credits_consumed bigint,
-    storage_mb character varying(255),
-    created_at timestamp without time zone
-);""",
-    """CREATE TABLE public.admin_tenants (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(50),
-    name character varying(100),
-    company_name character varying(200),
-    contact_email character varying(100),
-    contact_phone character varying(20),
-    max_api_keys integer,
-    max_models integer,
-    monthly_quota bigint,
-    max_concurrent_sessions integer,
-    status character varying(20),
-    expires_at timestamp without time zone,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    created_by character varying(50),
-    features json
-);""",
-    """CREATE TABLE public.admin_workflow_executions (
-    id character varying(36) NOT NULL,
-    workflow_id character varying(50),
-    workflow_version integer,
-    status character varying(20),
-    started_at timestamp without time zone,
-    completed_at timestamp without time zone,
-    duration_ms integer,
-    input_data json,
-    output_data json,
-    error_message text,
-    triggered_by character varying(50),
-    node_results json
-);""",
-    """CREATE TABLE public.admin_workflows (
-    id character varying(36) NOT NULL,
-    workflow_id character varying(50),
-    name character varying(100),
-    description text,
-    nodes json,
-    edges json,
-    error_handling_strategy character varying(20),
-    timeout_ms integer,
-    max_retries integer,
-    version integer,
-    published_version integer,
-    status character varying(20),
-    created_by character varying(50),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone,
-    published_at timestamp without time zone
-);""",
-    """CREATE TABLE public.agent_registry (
-    agent_type character varying(32) NOT NULL,
-    name character varying(128),
-    description text NOT NULL,
-    enabled boolean,
-    config json,
-    created_at timestamp without time zone
-);""",
     """CREATE TABLE public.agent_runs (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     session_id character varying(128),
     turn_id character varying(36),
     run_token character varying(64),
@@ -246,11 +63,11 @@ _DDL: tuple[str, ...] = (
     result text,
     created_at timestamp without time zone,
     updated_at timestamp without time zone,
-    tenant_id character varying(36)
+    tenant_id smallint NOT NULL
 );""",
     """CREATE TABLE public.agents (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     name character varying(255),
     description text,
     system_prompt text,
@@ -281,7 +98,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.audit_logs (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     action character varying(64),
     resource_type character varying(64),
@@ -292,7 +109,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.billing_records (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     session_id character varying(36),
     input_tokens bigint,
@@ -331,13 +148,13 @@ _DDL: tuple[str, ...] = (
     last_status character varying(16),
     created_at timestamp without time zone,
     updated_at timestamp without time zone,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     webhook_token character varying(64)
 );""",
     """CREATE TABLE public.domains (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     domain character varying(255),
     ssl_status character varying(16),
     verified boolean,
@@ -346,7 +163,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_captcha_config (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     provider character varying(32),
     site_key character varying(256),
     secret_enc text NOT NULL,
@@ -357,7 +174,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_catalog_installs (
     item_id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     enabled boolean,
     installed_at timestamp without time zone
 );""",
@@ -374,7 +191,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_chaos_experiments (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     fault_type character varying(16) NOT NULL,
     target character varying(64) DEFAULT ''::character varying NOT NULL,
     duration_ms integer DEFAULT 1000 NOT NULL,
@@ -398,14 +215,14 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_groups (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     name character varying(128),
     description text,
     created_at timestamp without time zone
 );""",
     """CREATE TABLE public.ent_mail_config (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     provider character varying(32),
     enabled boolean DEFAULT false NOT NULL,
     smtp_host character varying(255),
@@ -443,7 +260,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_model_policies (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     role_id character varying(36),
     allowed_models text[] DEFAULT ARRAY[]::text[],
     per_model_limits json,
@@ -452,7 +269,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_model_routes (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     model_id character varying(128) NOT NULL,
     primary_provider character varying(64) NOT NULL,
     fallback_order jsonb DEFAULT '[]'::jsonb,
@@ -464,7 +281,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_oidc_providers (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     name character varying(64),
     issuer character varying(512),
     client_id character varying(256),
@@ -495,7 +312,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_quota_pools (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     resource_type character varying(20),
     total_amount bigint,
     period character varying(10),
@@ -504,7 +321,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_roles (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     name character varying(64),
     display_name character varying(128),
     is_builtin boolean,
@@ -513,7 +330,7 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp without time zone
 );""",
     """CREATE TABLE public.ent_sms_config (
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     provider character varying(32) DEFAULT 'aliyun'::character varying NOT NULL,
     sign_name character varying(64) DEFAULT ''::character varying NOT NULL,
     template_id character varying(64) DEFAULT ''::character varying NOT NULL,
@@ -540,7 +357,7 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp without time zone
 );""",
     """CREATE TABLE public.ent_tenant_policies (
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     privacy_mode boolean,
     data_retention_days integer,
     training_allowed boolean,
@@ -561,7 +378,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.ent_webhooks (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     name character varying(255) DEFAULT ''::character varying NOT NULL,
     event_types jsonb DEFAULT '[]'::jsonb NOT NULL,
     url text DEFAULT ''::text NOT NULL,
@@ -571,46 +388,17 @@ _DDL: tuple[str, ...] = (
     created_at timestamp without time zone DEFAULT now() NOT NULL,
     updated_at timestamp without time zone DEFAULT now() NOT NULL
 );""",
-    """CREATE TABLE public.enterprise_tasks (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    title character varying(255),
-    description text NOT NULL,
-    project character varying(128),
-    assignee character varying(128),
-    priority character varying(16),
-    status character varying(16),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
-    """CREATE TABLE public.guest_storage (
-    client_id character varying(64) NOT NULL,
-    storage_id character varying(64),
-    created_at timestamp without time zone
-);""",
     """CREATE TABLE public.harness_profiles (
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     user_id character varying(64) DEFAULT ''::character varying NOT NULL,
     model_prefix character varying(128) DEFAULT ''::character varying NOT NULL,
     system_prompt_suffix text DEFAULT ''::text NOT NULL,
     enabled boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
-    """CREATE TABLE public.kb_articles (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    title character varying(255),
-    content text NOT NULL,
-    tags character varying(255),
-    category character varying(64),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """CREATE TABLE public.knowledge_bases (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     user_id character varying(36) NOT NULL,
     name character varying(255) NOT NULL,
     description text,
@@ -630,7 +418,7 @@ _DDL: tuple[str, ...] = (
     """CREATE TABLE public.knowledge_documents (
     id character varying(36) NOT NULL,
     knowledge_base_id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     user_id character varying(36) NOT NULL,
     name character varying(255) NOT NULL,
     file_type character varying(32),
@@ -665,21 +453,9 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp with time zone,
     weight integer DEFAULT 1 NOT NULL
 );""",
-    """CREATE TABLE public.marketing_campaigns (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    name character varying(255),
-    description text NOT NULL,
-    campaign_type character varying(32),
-    config json,
-    status character varying(16),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """CREATE TABLE public.media_assets (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     type character varying(16),
     name character varying(255),
@@ -695,20 +471,9 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp without time zone,
     parent_id character varying(64)
 );""",
-    """CREATE TABLE public.meeting_notes (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    title character varying(255),
-    notes text NOT NULL,
-    summary text,
-    participants character varying(255),
-    date character varying(255),
-    created_at timestamp without time zone
-);""",
     """CREATE TABLE public.memory_summaries (
     id character varying(64) NOT NULL,
-    tenant_id character varying(64),
+    tenant_id smallint NOT NULL,
     user_id character varying(64),
     session_id character varying(64),
     content text NOT NULL,
@@ -746,17 +511,6 @@ _DDL: tuple[str, ...] = (
     verified_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
-    """CREATE TABLE public.okrs (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    objective character varying(255),
-    key_results json,
-    quarter character varying(16),
-    status character varying(16),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """CREATE TABLE public.payments (
     id character varying(64) NOT NULL,
     user_id character varying(36),
@@ -774,7 +528,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.pending_interactions (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     session_id character varying(128),
     run_id character varying(64),
@@ -794,7 +548,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.run_lineage_ledger (
     root_run_id character varying(64) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     cap_tokens bigint DEFAULT 0 NOT NULL,
     paused boolean DEFAULT false NOT NULL,
     pause_reason character varying(64),
@@ -804,7 +558,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.run_usage_settlements (
     run_id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     session_id character varying(128),
     settled_input bigint DEFAULT 0 NOT NULL,
@@ -836,7 +590,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.session_map_workspaces (
     id character varying(64) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     name character varying(255) DEFAULT ''::character varying NOT NULL,
     viewport jsonb DEFAULT '{}'::jsonb NOT NULL,
@@ -845,7 +599,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.sessions (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     agent_id character varying(36),
     title character varying(255),
@@ -860,15 +614,6 @@ _DDL: tuple[str, ...] = (
     branch_mode character varying(16),
     branch_state character varying(16),
     branch_keep_tail integer
-);""",
-    """CREATE TABLE public.stripe_payments (
-    session_id character varying(128) NOT NULL,
-    user_id character varying(36),
-    credits integer,
-    amount_cents bigint,
-    status character varying(16),
-    created_at timestamp without time zone,
-    completed_at timestamp without time zone
 );""",
     """CREATE TABLE public.subagent_run_steps (
     id bigint NOT NULL,
@@ -897,7 +642,7 @@ _DDL: tuple[str, ...] = (
     turn_id character varying(64),
     parent_run_id character varying(64),
     depth integer DEFAULT 1 NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     agent_id character varying(36),
     profile_name character varying(128),
@@ -929,18 +674,6 @@ _DDL: tuple[str, ...] = (
     resume_at_step integer,
     root_run_id character varying(64)
 );""",
-    """CREATE TABLE public.support_tickets (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    subject character varying(255),
-    description text NOT NULL,
-    priority character varying(16),
-    status character varying(16),
-    assignee character varying(128),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """CREATE TABLE public.system_settings (
     id integer NOT NULL,
     category character varying(32),
@@ -948,7 +681,8 @@ _DDL: tuple[str, ...] = (
     value json,
     updated_at timestamp without time zone,
     updated_by character varying(36),
-    encrypted boolean
+    encrypted boolean,
+    UNIQUE (category, key)
 );""",
     """CREATE SEQUENCE public.system_settings_id_seq
     AS integer
@@ -962,7 +696,7 @@ _DDL: tuple[str, ...] = (
     idempotency_key character varying(255) NOT NULL,
     task_id character varying(64),
     task_type character varying(64),
-    tenant_id character varying(64),
+    tenant_id smallint NOT NULL,
     status character varying(16) DEFAULT 'running'::character varying NOT NULL,
     attempt integer DEFAULT 1 NOT NULL,
     result_ref text,
@@ -984,14 +718,14 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp without time zone
 );""",
     """CREATE TABLE public.tenant_features (
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     sso_enabled boolean DEFAULT false NOT NULL,
     sso_self_service boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
     """CREATE TABLE public.tenant_invites (
     code character varying(64) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     created_by character varying(36),
     max_uses integer DEFAULT 0 NOT NULL,
     uses integer DEFAULT 0 NOT NULL,
@@ -999,7 +733,7 @@ _DDL: tuple[str, ...] = (
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
     """CREATE TABLE public.tenants (
-    id character varying(36) NOT NULL,
+    id smallserial NOT NULL,
     name character varying(255),
     created_at timestamp without time zone,
     status character varying(16)
@@ -1050,7 +784,7 @@ _DDL: tuple[str, ...] = (
     """ALTER SEQUENCE public.unified_messages_id_seq OWNED BY public.unified_messages.id;""",
     """CREATE TABLE public.unified_sessions (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     user_id character varying(36),
     title character varying(255),
     mode character varying(16),
@@ -1074,11 +808,11 @@ _DDL: tuple[str, ...] = (
     status character varying(16),
     created_at timestamp without time zone,
     updated_at timestamp without time zone,
-    tenant_id character varying(36)
+    tenant_id smallint NOT NULL
 );""",
     """CREATE TABLE public.user_knowledge_settings (
     user_id character varying(36) NOT NULL,
-    tenant_id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
     provider character varying(16) NOT NULL,
     cloud_api_key_enc text,
     cloud_key_hash character varying(64),
@@ -1091,7 +825,7 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.user_memory_entries (
     id character varying(64) NOT NULL,
-    tenant_id character varying(64) NOT NULL,
+    tenant_id smallint NOT NULL,
     user_id character varying(64) NOT NULL,
     slot character varying(64) NOT NULL,
     item_key character varying(255) NOT NULL,
@@ -1107,7 +841,7 @@ _DDL: tuple[str, ...] = (
     project character varying(120) DEFAULT ''::character varying NOT NULL
 );""",
     """CREATE TABLE public.user_memory_profile (
-    tenant_id character varying(64) NOT NULL,
+    tenant_id smallint NOT NULL,
     user_id character varying(64) NOT NULL,
     slot character varying(32) NOT NULL,
     item_key character varying(128) NOT NULL,
@@ -1122,28 +856,17 @@ _DDL: tuple[str, ...] = (
 );""",
     """CREATE TABLE public.users (
     id character varying(36) NOT NULL,
-    tenant_id character varying(36),
+    tenant_id smallint NOT NULL,
     email character varying(255),
     name character varying(128),
     password_hash character varying(255),
     role character varying(16),
-    storage_id character varying(64),
     credits integer DEFAULT 1000,
     created_at timestamp without time zone,
     updated_at timestamp without time zone,
     phone character varying(32),
     password_set boolean,
     settings json
-);""",
-    """CREATE TABLE public.wiki_pages (
-    id character varying(36) NOT NULL,
-    tenant_id character varying(36),
-    user_id character varying(36),
-    title character varying(255),
-    content text NOT NULL,
-    tags character varying(255),
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
 );""",
     """CREATE TABLE public.workflow_graphs (
     id character varying(36) NOT NULL,
@@ -1167,44 +890,10 @@ _DDL: tuple[str, ...] = (
     """ALTER TABLE ONLY public.subagent_run_steps ALTER COLUMN id SET DEFAULT nextval('public.subagent_run_steps_id_seq'::regclass);""",
     """ALTER TABLE ONLY public.system_settings ALTER COLUMN id SET DEFAULT nextval('public.system_settings_id_seq'::regclass);""",
     """ALTER TABLE ONLY public.unified_messages ALTER COLUMN id SET DEFAULT nextval('public.unified_messages_id_seq'::regclass);""",
-    """ALTER TABLE ONLY public.admin_api_call_logs
-    ADD CONSTRAINT admin_api_call_logs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_api_keys
-    ADD CONSTRAINT admin_api_keys_key_hash_key UNIQUE (key_hash);""",
-    """ALTER TABLE ONLY public.admin_api_keys
-    ADD CONSTRAINT admin_api_keys_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_cron_jobs
-    ADD CONSTRAINT admin_cron_jobs_job_id_key UNIQUE (job_id);""",
-    """ALTER TABLE ONLY public.admin_cron_jobs
-    ADD CONSTRAINT admin_cron_jobs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_database_backups
-    ADD CONSTRAINT admin_database_backups_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_db_configs
-    ADD CONSTRAINT admin_db_configs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_domains
-    ADD CONSTRAINT admin_domains_domain_key UNIQUE (domain);""",
-    """ALTER TABLE ONLY public.admin_domains
-    ADD CONSTRAINT admin_domains_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.admin_model_configs
     ADD CONSTRAINT admin_model_configs_model_id_key UNIQUE (model_id);""",
     """ALTER TABLE ONLY public.admin_model_configs
     ADD CONSTRAINT admin_model_configs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_redis_configs
-    ADD CONSTRAINT admin_redis_configs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_tenant_usage
-    ADD CONSTRAINT admin_tenant_usage_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_tenants
-    ADD CONSTRAINT admin_tenants_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_tenants
-    ADD CONSTRAINT admin_tenants_tenant_id_key UNIQUE (tenant_id);""",
-    """ALTER TABLE ONLY public.admin_workflow_executions
-    ADD CONSTRAINT admin_workflow_executions_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_workflows
-    ADD CONSTRAINT admin_workflows_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.admin_workflows
-    ADD CONSTRAINT admin_workflows_workflow_id_key UNIQUE (workflow_id);""",
-    """ALTER TABLE ONLY public.agent_registry
-    ADD CONSTRAINT agent_registry_pkey PRIMARY KEY (agent_type);""",
     """ALTER TABLE ONLY public.agent_runs
     ADD CONSTRAINT agent_runs_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.agent_sessions
@@ -1271,16 +960,8 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT ent_user_roles_pkey PRIMARY KEY (user_id, role_id);""",
     """ALTER TABLE ONLY public.ent_webhooks
     ADD CONSTRAINT ent_webhooks_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.enterprise_tasks
-    ADD CONSTRAINT enterprise_tasks_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.guest_storage
-    ADD CONSTRAINT guest_storage_pkey PRIMARY KEY (client_id);""",
-    """ALTER TABLE ONLY public.guest_storage
-    ADD CONSTRAINT guest_storage_storage_id_key UNIQUE (storage_id);""",
     """ALTER TABLE ONLY public.harness_profiles
     ADD CONSTRAINT harness_profiles_pkey PRIMARY KEY (tenant_id, user_id, model_prefix);""",
-    """ALTER TABLE ONLY public.kb_articles
-    ADD CONSTRAINT kb_articles_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.knowledge_bases
     ADD CONSTRAINT knowledge_bases_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.knowledge_documents
@@ -1291,20 +972,14 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT llm_provider_keys_key_hash_key UNIQUE (key_hash);""",
     """ALTER TABLE ONLY public.llm_provider_keys
     ADD CONSTRAINT llm_provider_keys_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.marketing_campaigns
-    ADD CONSTRAINT marketing_campaigns_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.media_assets
     ADD CONSTRAINT media_assets_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.meeting_notes
-    ADD CONSTRAINT meeting_notes_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.memory_summaries
     ADD CONSTRAINT memory_summaries_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.messages
     ADD CONSTRAINT messages_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.model_prices
     ADD CONSTRAINT model_prices_pkey PRIMARY KEY (model, provider);""",
-    """ALTER TABLE ONLY public.okrs
-    ADD CONSTRAINT okrs_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.payments
     ADD CONSTRAINT payments_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.pending_interactions
@@ -1319,14 +994,10 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT session_map_workspaces_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.sessions
     ADD CONSTRAINT sessions_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.stripe_payments
-    ADD CONSTRAINT stripe_payments_pkey PRIMARY KEY (session_id);""",
     """ALTER TABLE ONLY public.subagent_run_steps
     ADD CONSTRAINT subagent_run_steps_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.subagent_runs
     ADD CONSTRAINT subagent_runs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.support_tickets
-    ADD CONSTRAINT support_tickets_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.system_settings
     ADD CONSTRAINT system_settings_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.task_idempotency
@@ -1359,10 +1030,6 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT user_memory_profile_pkey PRIMARY KEY (tenant_id, user_id, slot, item_key);""",
     """ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.users
-    ADD CONSTRAINT users_storage_id_key UNIQUE (storage_id);""",
-    """ALTER TABLE ONLY public.wiki_pages
-    ADD CONSTRAINT wiki_pages_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.workflow_graphs
     ADD CONSTRAINT workflow_graphs_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.workflow_instances
@@ -1423,12 +1090,6 @@ _DDL: tuple[str, ...] = (
     """CREATE UNIQUE INDEX ux_knowledge_bases_index_ref ON public.knowledge_bases USING btree (provider, index_ref) WHERE (index_ref IS NOT NULL);""",
     """CREATE UNIQUE INDEX ux_knowledge_documents_pageindex ON public.knowledge_documents USING btree (knowledge_base_id, pageindex_doc_id) WHERE (pageindex_doc_id IS NOT NULL);""",
     """CREATE UNIQUE INDEX ux_pending_interactions_open ON public.pending_interactions USING btree (session_id, tool_call_id) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'answered'::character varying])::text[]));""",
-    """ALTER TABLE ONLY public.admin_api_call_logs
-    ADD CONSTRAINT admin_api_call_logs_api_key_id_fkey FOREIGN KEY (api_key_id) REFERENCES public.admin_api_keys(id);""",
-    """ALTER TABLE ONLY public.admin_domains
-    ADD CONSTRAINT admin_domains_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.admin_tenants(tenant_id);""",
-    """ALTER TABLE ONLY public.admin_tenant_usage
-    ADD CONSTRAINT admin_tenant_usage_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.admin_tenants(tenant_id);""",
     """ALTER TABLE ONLY public.agent_sessions
     ADD CONSTRAINT agent_sessions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id);""",
     """ALTER TABLE ONLY public.agent_sessions
@@ -1479,10 +1140,6 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT ent_user_identities_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
     """ALTER TABLE ONLY public.ent_webhooks
     ADD CONSTRAINT ent_webhooks_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
-    """ALTER TABLE ONLY public.enterprise_tasks
-    ADD CONSTRAINT enterprise_tasks_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
-    """ALTER TABLE ONLY public.kb_articles
-    ADD CONSTRAINT kb_articles_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.knowledge_bases
     ADD CONSTRAINT knowledge_bases_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.knowledge_bases
@@ -1493,16 +1150,10 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT knowledge_documents_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.knowledge_documents
     ADD CONSTRAINT knowledge_documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
-    """ALTER TABLE ONLY public.marketing_campaigns
-    ADD CONSTRAINT marketing_campaigns_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.media_assets
     ADD CONSTRAINT media_assets_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
-    """ALTER TABLE ONLY public.meeting_notes
-    ADD CONSTRAINT meeting_notes_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.messages
     ADD CONSTRAINT messages_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id);""",
-    """ALTER TABLE ONLY public.okrs
-    ADD CONSTRAINT okrs_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.session_map_nodes
     ADD CONSTRAINT session_map_nodes_parent_node_id_fkey FOREIGN KEY (parent_node_id) REFERENCES public.session_map_nodes(id) ON DELETE SET NULL;""",
     """ALTER TABLE ONLY public.session_map_nodes
@@ -1521,8 +1172,6 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT subagent_run_steps_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.subagent_runs(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.subagent_runs
     ADD CONSTRAINT subagent_runs_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE SET NULL;""",
-    """ALTER TABLE ONLY public.support_tickets
-    ADD CONSTRAINT support_tickets_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.tasks
     ADD CONSTRAINT tasks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
     """ALTER TABLE ONLY public.turns
@@ -1537,26 +1186,12 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT user_knowledge_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
-    """ALTER TABLE ONLY public.wiki_pages
-    ADD CONSTRAINT wiki_pages_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.workflow_graphs
     ADD CONSTRAINT workflow_graphs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
 )
 
 _TABLES: tuple[str, ...] = (
-    "admin_api_call_logs",
-    "admin_api_keys",
-    "admin_cron_jobs",
-    "admin_database_backups",
-    "admin_db_configs",
-    "admin_domains",
     "admin_model_configs",
-    "admin_redis_configs",
-    "admin_tenant_usage",
-    "admin_tenants",
-    "admin_workflow_executions",
-    "admin_workflows",
-    "agent_registry",
     "agent_runs",
     "agent_sessions",
     "agents",
@@ -1587,21 +1222,15 @@ _TABLES: tuple[str, ...] = (
     "ent_user_identities",
     "ent_user_roles",
     "ent_webhooks",
-    "enterprise_tasks",
-    "guest_storage",
     "harness_profiles",
-    "kb_articles",
     "knowledge_bases",
     "knowledge_documents",
     "llm_models",
     "llm_provider_keys",
-    "marketing_campaigns",
     "media_assets",
-    "meeting_notes",
     "memory_summaries",
     "messages",
     "model_prices",
-    "okrs",
     "payments",
     "pending_interactions",
     "run_lineage_ledger",
@@ -1609,10 +1238,8 @@ _TABLES: tuple[str, ...] = (
     "session_map_nodes",
     "session_map_workspaces",
     "sessions",
-    "stripe_payments",
     "subagent_run_steps",
     "subagent_runs",
-    "support_tickets",
     "system_settings",
     "task_idempotency",
     "tasks",
@@ -1628,7 +1255,6 @@ _TABLES: tuple[str, ...] = (
     "user_memory_entries",
     "user_memory_profile",
     "users",
-    "wiki_pages",
     "workflow_graphs",
     "workflow_instances",
 )

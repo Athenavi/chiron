@@ -393,7 +393,7 @@ func (h *EntIdentityHandler) CreateRole(w http.ResponseWriter, r *http.Request) 
 
 	claims := auth.GetClaims(r.Context())
 	tenantID := db.DefaultTenantID
-	if claims != nil && claims.TenantID != "" {
+	if claims != nil && claims.TenantID != 0 {
 		tenantID = claims.TenantID
 	}
 	role, err := func() (*entRoleResponse, error) {
@@ -638,7 +638,7 @@ func (h *EntIdentityHandler) CreateGroup(w http.ResponseWriter, r *http.Request)
 
 	claims := auth.GetClaims(r.Context())
 	tenantID := db.DefaultTenantID
-	if claims != nil && claims.TenantID != "" {
+	if claims != nil && claims.TenantID != 0 {
 		tenantID = claims.TenantID
 	}
 
@@ -871,12 +871,12 @@ type entTenantItem struct {
 // 读真实 tenants 表 + LEFT JOIN ent_quota_pools 汇总（不引用影子表 admin_tenants）。
 // GetTenantFeatures GET /v1/ent/tenants/{id}/features —— 读租户功能开关。
 func (h *EntIdentityHandler) GetTenantFeatures(w http.ResponseWriter, r *http.Request) {
-	tenantID := r.PathValue("id")
-	if !isValidUUID(tenantID) {
+	tid := parseTenantID(r.PathValue("id"))
+	if tid == 0 {
 		BadRequest(w, "invalid tenant id")
 		return
 	}
-	OK(w, loadTenantFeatures(r.Context(), h.db, tenantID))
+	OK(w, loadTenantFeatures(r.Context(), h.db, tid))
 }
 
 // PutTenantFeatures PUT /v1/ent/tenants/{id}/features —— **仅平台 owner**。
@@ -889,8 +889,8 @@ func (h *EntIdentityHandler) PutTenantFeatures(w http.ResponseWriter, r *http.Re
 		Forbidden(w, "only the platform owner can change tenant features")
 		return
 	}
-	tenantID := r.PathValue("id")
-	if !isValidUUID(tenantID) {
+	tid := parseTenantID(r.PathValue("id"))
+	if tid == 0 {
 		BadRequest(w, "invalid tenant id")
 		return
 	}
@@ -906,14 +906,14 @@ func (h *EntIdentityHandler) PutTenantFeatures(w http.ResponseWriter, r *http.Re
 		BadRequest(w, "no fields to update")
 		return
 	}
-	cur := loadTenantFeatures(r.Context(), h.db, tenantID)
+	cur := loadTenantFeatures(r.Context(), h.db, tid)
 	if body.SSOEnabled != nil {
 		cur.SSOEnabled = *body.SSOEnabled
 	}
 	if body.SSOSelfService != nil {
 		cur.SSOSelfService = *body.SSOSelfService
 	}
-	if err := saveTenantFeatures(r.Context(), h.db, tenantID, cur); err != nil {
+	if err := saveTenantFeatures(r.Context(), h.db, tid, cur); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "save tenant features failed")
 		return
 	}

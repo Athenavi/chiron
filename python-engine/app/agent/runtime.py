@@ -2936,6 +2936,25 @@ class AgentRuntime:
                 error=str(e),
             )
         finally:
+            # ── 兜底写终态（A4 补口）──
+            # `asyncio.CancelledError` / `GeneratorExit` 是 **BaseException**，
+            # 上面那处 `except Exception` 接不住 —— 客户端断开、网关 300s 超时、
+            # SSE 生成器被关闭都走这条路。不在这里收口，`agent_runs` 行会永远停在
+            # `running`，而 `ux_agent_runs_session_active` 会让该会话再也提交不了新 run。
+            # `mark()` 只迁活跃行 + 带 run_token 归属校验 ⇒ 与正常路径重复写也是幂等的。
+            try:
+                import sys as _sys
+
+                from app.agent import checkpoint as _ckpt
+
+                _exc = _sys.exc_info()[1]
+                if isinstance(_exc, (asyncio.CancelledError, GeneratorExit)):
+                    await self._mark_run_status(task, _ckpt.STATUS_CANCELLED)
+                elif _exc is not None:
+                    await self._mark_run_status(task, _ckpt.STATUS_FAILED)
+            except Exception as e:  # noqa: BLE001 — 终态兜底失败不该影响退出路径
+                logger.warning("finalize run status failed (non-blocking): %s", e)
+
             # ── 真取消信号必须清掉（否则会误伤**下一次**会话）──
             # 放在 finally 的最前面：正常结束、异常、被取消退出，三条路径都要清。
             try:

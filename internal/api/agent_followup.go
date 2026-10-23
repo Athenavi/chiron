@@ -142,7 +142,7 @@ func AgentFollowupHandler(
 		// 与 /submit 同一套语义：按估算预留，回合末由 submit_handler 校正成真实用量。
 		content := buildFollowupContent(body)
 		reserved, quotaErr := EnforceTenantQuota(r.Context(),
-			&auth.Claims{UserID: body.UserID, TenantID: body.TenantID},
+			&auth.Claims{UserID: body.UserID, TenantID: parseTenantID(body.TenantID)},
 			EstimateRequestTokens(content, nil))
 		if quotaErr != nil {
 			// 200 skipped：配额耗尽时重试也没用（队列正常 ACK，不无限重投）

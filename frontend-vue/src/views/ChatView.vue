@@ -10,6 +10,7 @@ import {
   createAgent, createGraph,
 } from '../api'
 import type { ShareInfo, LlmModel } from '../api'
+import { recoverSession } from '../api'
 import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
@@ -1325,7 +1326,7 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
     flashUnifiedDone()
   } catch (e) {
     const reason = describeApiError(e)
-    markMessageFailed(userItemId, reason)
+    markMessageFailed(userItemId, reason, describeFailureMeta(e))
     message.error(t('errors.send_failed') + reason)
   } finally {
     loading.value = false
@@ -2655,12 +2656,71 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
 }
 
 // ── 失败消息标记 ──
-function markMessageFailed(itemId: string | undefined, errorMsg: string) {
+function markMessageFailed(
+  itemId: string | undefined,
+  errorMsg: string,
+  meta?: { code?: string; retryAfterSec?: number },
+) {
   if (!itemId) return
   const it = items.value.find(i => i.id === itemId)
   if (it && it.kind === 'text') {
     it.error = true
     it.errorMsg = errorMsg
+    // 记下后端错误码与"最坏等待秒数"：错误块据此给出**针对性动作** ——
+    // session_busy 该显示的是"修复会话 + 约 N 分钟自动恢复"，而不是"重试"
+    // （重试必然再撞同一道闸门）。
+    it.errorCode = meta?.code
+    it.errorRetryAfterSec = meta?.retryAfterSec
+  }
+}
+
+/**
+ * 从失败响应里取"结构性"信息：稳定错误码 + 自动恢复的最坏等待秒数。
+ *
+ * 秒数由后端算（stale 阈值 + 一次巡检间隔），前端只负责呈现 ——
+ * 这样"还要等多久"与实际自动恢复时机不会各说各话。
+ */
+function describeFailureMeta(e: unknown): { code?: string; retryAfterSec?: number } {
+  const data = (
+    e as { response?: { data?: { code?: string; params?: { retry_after_seconds?: number } } } }
+  )?.response?.data
+  if (!data) return {}
+  const sec = data.params?.retry_after_seconds
+  return {
+    code: typeof data.code === 'string' ? data.code : undefined,
+    retryAfterSec: typeof sec === 'number' ? sec : undefined,
+  }
+}
+
+/**
+ * 手动修复卡住的会话：把同会话那条一直没收口的 run 收口。
+ *
+ * 网关是**严格模式**：仍在跑（Redis 运行锁在）或没到 stale 窗口时会回 409，
+ * 并把"还要等多久"放在 params 里 —— 这里如实转告，而不是笼统报"失败"。
+ */
+async function repairSession(itemId: string) {
+  const target = activeSessionId.value
+  if (!target) return
+  try {
+    await recoverSession(target)
+    const it = items.value.find(i => i.id === itemId)
+    if (it && it.kind === 'text') {
+      // 收口成功、或本来就没卡（已被自动收口）—— 两种都是"现在可以发了"
+      it.error = false
+      it.errorMsg = undefined
+      it.errorCode = undefined
+      it.errorRetryAfterSec = undefined
+    }
+    message.success(t('errors.session_repaired'))
+  } catch (e) {
+    const meta = describeFailureMeta(e)
+    const min = meta.retryAfterSec ? Math.max(1, Math.ceil(meta.retryAfterSec / 60)) : 0
+    if (min) {
+      // 409：确实还在跑 / 还没到 stale 窗口 —— 告诉用户具体还要等多久
+      message.warning(`${t('errors.session_busy')} ${t('errors.session_busy_auto_recover', { n: min })}`)
+    } else {
+      message.error(describeApiError(e))
+    }
   }
 }
 
@@ -3029,6 +3089,7 @@ function continueGeneration() {
                 @regenerate="regenerateAssistant"
                 @continue="continueGeneration"
                 @retry-failed="retryFailedMessage"
+                @repair-session="repairSession"
               />
               <div
                 v-else-if="(it as any).kind === 'kb_hits'"

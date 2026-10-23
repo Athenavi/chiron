@@ -577,7 +577,7 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 // 鈹€鈹€ Shared helpers 鈹€鈹€
 
 // getChildren returns the child asset IDs for a given parent folder.
-func (h *MediaHandler) getChildren(ctx context.Context, tenantID, userID, parentID string) ([]string, error) {
+func (h *MediaHandler) getChildren(ctx context.Context, tenantID int16, userID, parentID string) ([]string, error) {
 	rows, err := db.GlobalDBManager.Query(ctx,
 		`SELECT id FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND parent_id=$3`,
 		tenantID, userID, parentID)
@@ -616,11 +616,11 @@ func (h *MediaHandler) objectURL(objectKey string) string {
 //     shortAssetID 取前 8 字符，而 snowflake 派生的 ID 高位是毫秒时间戳，
 //     同一毫秒内前 8 字符必然相同，同名文件会直接互相覆盖；
 //   - name    ：已净化的展示文件名，仅用于 Content-Disposition 与人工排查。
-func mediaObjectKey(tenantID, assetID, name string) string {
+func mediaObjectKey(tenantID int16, assetID, name string) string {
 	if name == "" {
 		name = "file"
 	}
-	return "media/" + tenantID + "/" + assetID + "/" + name
+	return "media/" + tenantStr(tenantID) + "/" + assetID + "/" + name
 }
 
 // legacyShortAssetID 返回历史（v1）对象键的 8 字符前缀。

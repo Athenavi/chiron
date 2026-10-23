@@ -57,17 +57,17 @@ export async function retireMarketItem(id: string): Promise<void> {
 
 export interface MarketGrant {
   item_id: string
-  tenant_id: string
+  tenant_id: number
   enabled: boolean
   installed_at: string
 }
 
-export async function listMarketGrants(params?: { item_id?: string; tenant_id?: string }): Promise<MarketGrant[]> {
+export async function listMarketGrants(params?: { item_id?: string; tenant_id?: number }): Promise<MarketGrant[]> {
   const { data } = await api.get('/v1/ent/market/grants', { params })
   return data?.data ?? []
 }
 
-export async function grantMarketItem(body: { item_id: string; tenant_id: string; enabled?: boolean }): Promise<void> {
+export async function grantMarketItem(body: { item_id: string; tenant_id: number; enabled?: boolean }): Promise<void> {
   await api.post('/v1/ent/market/grants', body)
 }
 

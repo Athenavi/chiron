@@ -28,6 +28,8 @@ import logging
 import uuid
 from typing import Any
 
+from app.tools.context import to_tenant_int
+
 logger = logging.getLogger(__name__)
 
 #: 人工介入类型。前两类形状相同（一个问题 + 一个答复），差别只在答复载荷，因此共用一张表。
@@ -180,7 +182,7 @@ async def create(
             RETURNING id
             """,
             uuid.uuid4().hex,
-            tenant_id or None,
+            to_tenant_int(tenant_id),
             user_id or None,
             session_id,
             run_token or None,
@@ -210,7 +212,7 @@ async def create(
         # M21：票已经落库 ⇒ 再广播一条"多了一张待办"（失败不影响落票，见函数注释）。
         await _publish_pending_event(
             interaction_id=interaction_id,
-            tenant_id=tenant_id or "",
+            tenant_id=to_tenant_int(tenant_id),
             user_id=user_id or "",
             session_id=session_id,
             kind=kind,
@@ -258,7 +260,7 @@ async def resolve(
                    decided_by = $3,
                    updated_at = now()
              WHERE id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND user_id = $3
                AND status = 'pending'
                AND expires_at > now()
@@ -266,7 +268,7 @@ async def resolve(
                       tool_call_id, tool_name, args_hash, request, decision
             """,
             interaction_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             user_id or "",
             json.dumps(decision or {}, ensure_ascii=False),
             (reason or "")[:2000],
@@ -305,11 +307,11 @@ async def peek(
             SELECT id, kind, status, session_id, tool_name, args_hash, request
               FROM pending_interactions
              WHERE id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND user_id = $3
             """,
             interaction_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             user_id,
         )
     except Exception as exc:  # noqa: BLE001
@@ -354,7 +356,7 @@ async def consume_grant(
              WHERE id = (
                        SELECT id FROM pending_interactions
                         WHERE session_id = $1
-                          AND ($2 = '' OR tenant_id = $2)
+                          AND ($2 = 0 OR tenant_id = $2)
                           AND kind = $3
                           AND tool_name = $4
                           AND args_hash = $5
@@ -367,7 +369,7 @@ async def consume_grant(
             RETURNING id, decision, reason, decided_by
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             kind,
             tool_name or "",
             args_hash,
@@ -426,14 +428,14 @@ async def settle(
                    updated_at = now()
              WHERE id = $1
                AND status IN ('pending', 'answered')
-               AND ($5 = '' OR tenant_id = $5)
+               AND ($5 = 0 OR tenant_id = $5)
                AND ($6 = '' OR user_id = $6)
             """,
             interaction_id,
             json.dumps(decision or {}, ensure_ascii=False),
             (reason or "")[:2000],
             decided_by or "",
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             user_id or "",
         )
     except Exception as exc:  # noqa: BLE001 — 收尾失败不影响这一轮已经拿到的答复
@@ -462,14 +464,14 @@ async def list_open(
                    args_hash, request, decision, reason, created_at, updated_at, expires_at
               FROM pending_interactions
              WHERE session_id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND user_id = $3
                AND status IN ('pending', 'answered')
              ORDER BY created_at ASC
              LIMIT $4
             """,
             session_id,
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             user_id or "",
             max(1, int(limit)),
         )
@@ -507,13 +509,13 @@ async def list_open_for_user(
                    created_at, updated_at, expires_at
               FROM pending_interactions
              WHERE user_id = $1
-               AND ($2 = '' OR tenant_id = $2)
+               AND ($2 = 0 OR tenant_id = $2)
                AND status IN ('pending', 'answered')
              ORDER BY created_at ASC
              LIMIT $3
             """,
             user_id or "",
-            tenant_id or "",
+            to_tenant_int(tenant_id),
             max(1, int(limit)),
         )
     except Exception as exc:  # noqa: BLE001

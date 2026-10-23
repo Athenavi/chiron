@@ -220,21 +220,21 @@ func (h *SSOHandler) RegisterAdminRoutes(mux *http.ServeMux, authMW func(http.Ha
 //
 // 匹配不到（未配域名 / 域名未验证 / Host 为空）⇒ 返回 ("", false)，调用方返回**空列表**。
 // 刻意不回退"全部"：宁可让未配域名的租户看不到 SSO 入口，也不把别人的 IdP 暴露出去。
-func (h *SSOHandler) resolveTenantByHost(ctx context.Context, host string) (string, bool) {
+func (h *SSOHandler) resolveTenantByHost(ctx context.Context, host string) (int16, bool) {
 	host = strings.ToLower(strings.TrimSpace(host))
 	if host == "" {
-		return "", false
+		return 0, false
 	}
 	// 剥掉端口（`example.com:3000` / `[::1]:3000`）；剥不掉就按原样比。
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	var tenantID string
+	var tenantID int16
 	if err := h.db.QueryRow(ctx,
 		`SELECT tenant_id FROM domains
 		  WHERE lower(domain) = $1 AND verified = TRUE
-		  LIMIT 1`, host).Scan(&tenantID); err != nil || tenantID == "" {
-		return "", false
+		  LIMIT 1`, host).Scan(&tenantID); err != nil || tenantID == 0 {
+		return 0, false
 	}
 	return tenantID, true
 }
@@ -342,7 +342,7 @@ func (h *SSOHandler) Login(w http.ResponseWriter, r *http.Request) {
 	// 灰度：provider 所属租户未开通 SSO ⇒ 拒绝。防的是"绕过登录页列表直连"——
 	// 列表已按租户过滤，但 provider id 一旦泄漏（历史数据/日志）仍可被直接调用。
 	// 用 NotFound 而非 Forbidden：不暴露"该租户存在但未开通"这一信息。
-	if !loadTenantFeatures(r.Context(), h.db, provider.TenantID).SSOEnabled {
+	if !loadTenantFeatures(r.Context(), h.db, parseTenantID(provider.TenantID)).SSOEnabled {
 		NotFound(w, "provider not found or disabled")
 		return
 	}
@@ -484,13 +484,13 @@ func (h *SSOHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, "sso provider missing tenant_id configuration")
 		return
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, provider.TenantID, auth.RolePermissions[user.Role])
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, parseTenantID(provider.TenantID), auth.RolePermissions[user.Role])
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
 	}
 	SetTokenCookie(w, token, int(h.cfg.JWTExpiration.Seconds()), h.cfg.CookieSecure)
-	db.AuditLog(r.Context(), user.ID, provider.TenantID, "sso_login", "/v1/auth/sso/callback", "provider="+provider.Name, r.RemoteAddr, nil)
+	db.AuditLog(r.Context(), user.ID, parseTenantID(provider.TenantID), "sso_login", "/v1/auth/sso/callback", "provider="+provider.Name, r.RemoteAddr, nil)
 	http.Redirect(w, r, h.successURL, http.StatusFound)
 }
 
@@ -506,7 +506,7 @@ func (h *SSOHandler) handleBindCallback(w http.ResponseWriter, r *http.Request, 
 	}
 	if existing != nil {
 		if existing.ID != payload.UID {
-			db.AuditLog(ctx, payload.UID, provider.TenantID, "sso_bind_conflict", "/v1/auth/sso/callback",
+			db.AuditLog(ctx, payload.UID, parseTenantID(provider.TenantID), "sso_bind_conflict", "/v1/auth/sso/callback",
 				"provider="+provider.Name, r.RemoteAddr, nil)
 			JSON(w, http.StatusConflict, APIResponse{
 				Success: false,
@@ -534,7 +534,7 @@ func (h *SSOHandler) handleBindCallback(w http.ResponseWriter, r *http.Request, 
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
-	db.AuditLog(ctx, payload.UID, provider.TenantID, "sso_bind", "/v1/auth/sso/callback",
+	db.AuditLog(ctx, payload.UID, parseTenantID(provider.TenantID), "sso_bind", "/v1/auth/sso/callback",
 		"provider="+provider.Name, r.RemoteAddr, nil)
 	http.Redirect(w, r, h.bindURL, http.StatusFound)
 }
@@ -815,7 +815,7 @@ func defaultStr(s, def string) string {
 func (h *SSOHandler) GetProviderGuide(w http.ResponseWriter, r *http.Request) {
 	tenantID := ""
 	if claims := auth.GetClaims(r.Context()); claims != nil {
-		tenantID = claims.TenantID
+		tenantID = tenantStr(claims.TenantID)
 	}
 
 	profiles := make([]map[string]any, 0, 8)
@@ -871,7 +871,7 @@ func (h *SSOHandler) CreateProvider(w http.ResponseWriter, r *http.Request) {
 	// 无法为其它租户配置 IdP（只能手工改库），那些租户的用户永远用不上 SSO。
 	// 登录链路本就读 provider.TenantID（见 Callback 的说明），修好创建端即两端一致。
 	tenantID := db.DefaultTenantID
-	if claims := auth.GetClaims(r.Context()); claims != nil && claims.TenantID != "" {
+	if claims := auth.GetClaims(r.Context()); claims != nil && claims.TenantID != 0 {
 		tenantID = claims.TenantID
 	}
 
@@ -1336,7 +1336,7 @@ func (h *SSOHandler) provisionAndBind(r *http.Request, provider *ssoProvider, id
 		}
 		return nil, err
 	}
-	db.AuditLog(ctx, user.ID, provider.TenantID, "sso_provision", "/v1/auth/sso/callback",
+	db.AuditLog(ctx, user.ID, parseTenantID(provider.TenantID), "sso_provision", "/v1/auth/sso/callback",
 		"provider="+provider.Name+" email="+email, r.RemoteAddr, nil)
 	return &user, nil
 }

@@ -127,7 +127,7 @@ interface TraceSpan {
   span_name: string
   duration_ms: number
   timestamp: string
-  tenant_id: string
+  tenant_id: number
   metadata?: Record<string, unknown>
   showDetails?: boolean
   // 差距C（执行图）：稳定的节点 id / 父指针 / 类别。

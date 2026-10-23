@@ -336,7 +336,7 @@ func (r *runUsageReconciler) settleOnce(ctx context.Context, row runUsageRow) st
 			"run", row.RunID, "user", userID, "error", err)
 	}
 	// 租户池与用户余额是两本账：用量发生了就该进池，哪怕扣费失败（这里已经成功）。
-	TrueUpTenantQuota(ctx, userID, row.TenantID, delta, 0)
+	TrueUpTenantQuota(ctx, userID, parseTenantID(row.TenantID), delta, 0)
 
 	if err := r.markSettled(ctx, row, snap); err != nil {
 		// 扣费已成功、水位没落库 ⇒ 下一轮会再算一次。扣费幂等键（含水位总量）会把

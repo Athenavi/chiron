@@ -44,7 +44,7 @@ def _valid_scope(scope: str = "") -> str:
     )
 
 
-def _store_for(user_id: str = "", tenant_id: str = "", scope: str = "") -> SkillStore:
+def _store_for(user_id: str = "", tenant_id: int = 0, scope: str = "") -> SkillStore:
     """按请求身份构造 store；身份非法时 400（防路径穿越）。"""
     try:
         return SkillStore(tenant_id=tenant_id, user_id=user_id, scope=scope)
@@ -60,7 +60,7 @@ def _skill_payload(s: SkillDef) -> dict[str, Any]:
 
 
 @router.get("/v1/skills")
-async def list_skills(user_id: str = "", tenant_id: str = "") -> dict[str, Any]:
+async def list_skills(user_id: str = "", tenant_id: int = 0) -> dict[str, Any]:
     """列出全部可用技能：合并 user 目录 + 租户 _shared + 全局 _shared（去重，user 优先）。"""
     store = _store_for(user_id, tenant_id)
     skills = store.list()
@@ -78,7 +78,7 @@ class SkillInstallRequest(BaseModel):
 
 @router.post("/v1/skills/{name}/register")
 async def register_skill(
-    name: str, user_id: str = "", tenant_id: str = "", scope: str = ""
+    name: str, user_id: str = "", tenant_id: int = 0, scope: str = ""
 ) -> dict[str, Any]:
     """将能力注册中心的技能注册为本地技能（SkillStore），供对话/Agent 工具链调用。
 
@@ -122,7 +122,7 @@ async def register_skill(
 
 @router.post("/v1/skills/install")
 async def install_skill(
-    body: SkillInstallRequest, user_id: str = "", tenant_id: str = "", scope: str = ""
+    body: SkillInstallRequest, user_id: str = "", tenant_id: int = 0, scope: str = ""
 ) -> dict[str, Any]:
     """安装技能（url / file / inline）；scope=tenant 时安装进租户共享层。"""
     store = _store_for(user_id, tenant_id, _valid_scope(scope))
@@ -182,7 +182,7 @@ class SkillGenerateRequest(BaseModel):
 
 @router.post("/v1/skills/generate")
 async def generate_skill(
-    body: SkillGenerateRequest, user_id: str = "", tenant_id: str = "", scope: str = ""
+    body: SkillGenerateRequest, user_id: str = "", tenant_id: int = 0, scope: str = ""
 ) -> dict[str, Any]:
     """用 LLM 生成技能（D4）；`auto_install` 时落盘（`scope=tenant` 则落租户共享层）。
 
@@ -212,7 +212,7 @@ async def generate_skill(
 
 @router.delete("/v1/skills/{name}")
 async def delete_skill(
-    name: str, user_id: str = "", tenant_id: str = "", scope: str = ""
+    name: str, user_id: str = "", tenant_id: int = 0, scope: str = ""
 ) -> dict[str, str]:
     """删除技能。
 
@@ -255,7 +255,7 @@ class SkillToggleRequest(BaseModel):
 
 @router.put("/v1/skills/{name}")
 async def toggle_skill(
-    name: str, body: SkillToggleRequest, user_id: str = "", tenant_id: str = ""
+    name: str, body: SkillToggleRequest, user_id: str = "", tenant_id: int = 0
 ) -> dict[str, Any]:
     """启用/停用技能（停用后不进 agent 目录、不可运行）。
 
@@ -283,7 +283,7 @@ class SkillRunRequest(BaseModel):
 
 @router.post("/v1/skills/{name}/run")
 async def run_skill(
-    name: str, body: SkillRunRequest, user_id: str = "", tenant_id: str = ""
+    name: str, body: SkillRunRequest, user_id: str = "", tenant_id: int = 0
 ) -> dict[str, Any]:
     """运行技能（校验启用状态后调 skill_run）。
 
@@ -316,7 +316,7 @@ async def run_skill(
 
 @router.get("/v1/skills/discover")
 async def discover_skills(
-    url: str = "", user_id: str = "", tenant_id: str = ""
+    url: str = "", user_id: str = "", tenant_id: int = 0
 ) -> dict[str, Any]:
     store = _store_for(user_id, tenant_id)
     results: list[dict[str, Any]] = []

@@ -89,7 +89,7 @@ func TestInteractionListForUserForwardsClaimIdentity(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet,
 		"/v1/agent/interactions?user_id=attacker&tenant_id=t-victim", nil)
 	req = req.WithContext(auth.WithClaims(req.Context(),
-		&auth.Claims{UserID: "u-owner", TenantID: "t-own"}))
+		&auth.Claims{UserID: "u-owner", TenantID: 1}))
 	rec := httptest.NewRecorder()
 
 	h.ListForUser(rec, req)
@@ -101,7 +101,7 @@ func TestInteractionListForUserForwardsClaimIdentity(t *testing.T) {
 		t.Fatalf("转发路径不对: %v", seen["path"])
 	}
 	q, _ := seen["query"].(string)
-	if !strings.Contains(q, "user_id=u-owner") || !strings.Contains(q, "tenant_id=t-own") {
+	if !strings.Contains(q, "user_id=u-owner") || !strings.Contains(q, "tenant_id=1") {
 		t.Fatalf("未按 claims 注入身份: %s", q)
 	}
 	if strings.Contains(q, "attacker") || strings.Contains(q, "t-victim") {

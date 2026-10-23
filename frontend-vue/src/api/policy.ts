@@ -3,7 +3,7 @@ import { api } from './index'
 // ── 隐私策略（EntTenantPolicy）──
 
 export interface TenantPrivacy {
-  tenant_id: string
+  tenant_id: number
   privacy_mode: boolean
   data_retention_days: number
   training_allowed: boolean
@@ -30,7 +30,7 @@ export async function putPrivacy(body: {
 
 export interface ModelPolicy {
   id: string
-  tenant_id: string
+  tenant_id: number
   role_id: string | null
   allowed_models: string[]
   per_model_limits: Record<string, Record<string, number>>

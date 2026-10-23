@@ -192,7 +192,7 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var user UserResponse
-	var tenantID string
+	var tenantID int16
 	// F2：不再硬过滤默认租户（经邀请码注册的用户属于别的租户）。同 email 跨租户
 	// 重名时优先默认租户，存量账号行为不变。
 	err = h.db.QueryRow(ctx,

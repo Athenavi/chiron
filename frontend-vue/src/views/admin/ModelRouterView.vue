@@ -9,7 +9,7 @@ import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
 interface ModelRoute {
   id: string
-  tenant_id: string
+  tenant_id: number
   model_id: string
   primary_provider: string
   fallback_order: string[]

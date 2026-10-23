@@ -79,7 +79,7 @@ func (h *TraceHandler) GetTrace(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	tenantID := claims.TenantID
+	tenantID := tenantStr(claims.TenantID)
 	if tenantID == "" {
 		tenantID = claims.UserID
 	}
@@ -142,7 +142,7 @@ func (h *TraceHandler) GetTraceGraph(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "trace_id is required")
 		return
 	}
-	tenantID := claims.TenantID
+	tenantID := tenantStr(claims.TenantID)
 	if tenantID == "" {
 		tenantID = claims.UserID
 	}
@@ -246,7 +246,7 @@ func (h *TraceHandler) ListTraces(w http.ResponseWriter, r *http.Request) {
 		limit = 20
 	}
 
-	tenantID := claims.TenantID
+	tenantID := tenantStr(claims.TenantID)
 	if tenantID == "" {
 		tenantID = claims.UserID
 	}

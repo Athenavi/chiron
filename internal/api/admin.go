@@ -123,7 +123,7 @@ type AdminUser struct {
 
 func (h *AdminHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	tenantID := GetTenantID(r)
-	if tenantID == "" {
+	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -193,7 +193,7 @@ func (h *AdminHandler) GetUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := GetTenantID(r)
-	if tenantID == "" {
+	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -221,7 +221,7 @@ func (h *AdminHandler) UpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := GetTenantID(r)
-	if tenantID == "" {
+	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
@@ -307,7 +307,7 @@ func (h *AdminHandler) DeleteUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	tenantID := GetTenantID(r)
-	if tenantID == "" {
+	if tenantID == 0 {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
