@@ -39,11 +39,17 @@ def test_auth_middleware_is_mounted():
 
 
 def test_probe_paths_stay_public():
-    """带认证后，探针路径仍必须放行，否则容器会被判定为不健康。"""
-    from app.middleware.auth import PUBLIC_PATHS
+    """带认证后，探针路径仍必须放行；观测端点则需凭据（fail-closed）。"""
+    from app.middleware.auth import METRICS_PATHS, PUBLIC_PATHS
 
-    for path in ("/healthz", "/readyz", "/metrics"):
+    for path in ("/healthz", "/readyz"):
         assert path in PUBLIC_PATHS, f"{path} 不在 PUBLIC_PATHS：挂上认证后探针会被 401"
+    # `/metrics` / `/info` 故意**不**在 PUBLIC_PATHS：引擎在 k8s 里是 headless Service，
+    # 集群内任何 Pod 都能直连 8000，而这些端点吐租户预算/队列积压等业务指标。
+    # 它们走 METRICS_PATHS（`Authorization: Bearer <METRICS_TOKEN>`），未配 token 即拒绝。
+    for path in ("/metrics", "/info"):
+        assert path in METRICS_PATHS, f"{path} 不在 METRICS_PATHS"
+        assert path not in PUBLIC_PATHS, f"{path} 不得无条件公开"
 
 
 @pytest.mark.parametrize("path", ["/v1/memory/profile", "/v1/kb", "/v1/chat/sessions/x/messages"])

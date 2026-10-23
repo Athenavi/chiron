@@ -86,7 +86,7 @@ def _norm(sql: str) -> str:
 async def test_create_returns_the_row_id(pool: _FakePool) -> None:
     pool.row = {"id": "int-1"}
     got = await ix.create(
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
         session_id="s1",
         kind=ix.KIND_APPROVAL,
@@ -99,7 +99,7 @@ async def test_create_returns_the_row_id(pool: _FakePool) -> None:
     assert got == "int-1"
     sql, args = pool.last_sql, pool.last_args
     assert "INSERT INTO pending_interactions" in sql
-    assert args[1] == "t1" and args[2] == "u1" and args[3] == "s1"
+    assert args[1] == 1 and args[2] == "u1" and args[3] == "s1"
     assert args[6] == ix.KIND_APPROVAL and args[7] == "tc1"
     # run_id 存 run_token（诊断用），ttl 走 make_interval 而不是拼字符串
     assert args[4] == "rt1"
@@ -113,7 +113,7 @@ async def test_create_reuse_never_overwrites_an_unconsumed_answer(pool: _FakePoo
     """重新问同一件事时复用唯一索引上的那一行，但**已收到的答复不能被擦掉**。"""
     pool.row = {"id": "int-1"}
     await ix.create(
-        tenant_id="",
+        tenant_id=0,
         user_id="u1",
         session_id="s1",
         kind=ix.KIND_QUESTION,
@@ -135,7 +135,7 @@ async def test_create_reuse_never_overwrites_an_unconsumed_answer(pool: _FakePoo
 async def test_create_refuses_before_touching_the_db(
     pool: _FakePool, kwargs: dict[str, Any]
 ) -> None:
-    assert await ix.create(tenant_id="", user_id="u1", **kwargs) == ""
+    assert await ix.create(tenant_id=0, user_id="u1", **kwargs) == ""
     assert pool.calls == []
 
 
@@ -144,7 +144,7 @@ async def test_create_degrades_to_empty_on_any_failure(
 ) -> None:
     """写不进去 ⇒ 返回空串（调用方回落 M6 的即时拒绝）。**不能**抛出去打断对话。"""
     kwargs = dict(
-        tenant_id="", user_id="u1", session_id="s1",
+        tenant_id=0, user_id="u1", session_id="s1",
         kind=ix.KIND_APPROVAL, tool_call_id="tc1",
     )
     pool.raise_on = "INSERT INTO pending_interactions"
@@ -172,7 +172,7 @@ async def test_create_accepts_a_budget_ticket(pool: _FakePool) -> None:
     """
     pool.row = {"id": "int-2"}
     got = await ix.create(
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
         session_id="s-main",
         kind=ix.KIND_BUDGET,
@@ -191,7 +191,7 @@ async def test_create_failure_is_counted_per_reason(pool: _FakePool) -> None:
     """每条返回空串的路径都要留下可见痕迹：approval 失败只是"回落 M6 的即时拒绝"，而
     budget 票失败意味着"一条被暂停的线，没有任何人能看见"。返回值仍是空串（改成异常会把
     增强路径变成能打断对话的东西），但不再静默。"""
-    base = dict(tenant_id="t1", user_id="u1", session_id="s1")
+    base = dict(tenant_id=1, user_id="u1", session_id="s1")
 
     before = _fail_count("unknown_kind")
     assert await ix.create(kind="approve_me", tool_call_id="tc1", **base) == ""
@@ -219,7 +219,7 @@ async def test_create_without_a_pool_is_counted(pool: _FakePool, monkeypatch) ->
     monkeypatch.setattr(ix, "_pool", lambda: None)
     before = _fail_count("no_pool")
     assert await ix.create(
-        tenant_id="t1", user_id="u1", session_id="s1",
+        tenant_id=1, user_id="u1", session_id="s1",
         kind=ix.KIND_BUDGET, tool_call_id="budget:rs",
     ) == ""
     assert _fail_count("no_pool") == before + 1
@@ -235,26 +235,26 @@ async def test_settle_closes_the_ticket_and_records_the_reply(pool: _FakePool) -
         decision={"cap_tokens": 5000},
         reason="提到了 5000",
         decided_by="u1",
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
     ) is True
     norm = _norm(pool.last_sql)
     assert "SET status = 'consumed'" in norm
     assert "AND status IN ('pending', 'answered')" in norm
-    assert "AND ($5 = '' OR tenant_id = $5)" in norm
+    assert "AND ($5 = 0 OR tenant_id = $5)" in norm
     assert "AND ($6 = '' OR user_id = $6)" in norm
     args = pool.last_args
     assert args[0] == "int-1"
     assert json.loads(args[1]) == {"cap_tokens": 5000}
     assert args[2] == "提到了 5000"
-    assert args[3:] == ("u1", "t1", "u1")
+    assert args[3:] == ("u1", 1, "u1")
 
 
 async def test_settle_without_identity_matches_the_m7_callers(pool: _FakePool) -> None:
     """M7 的实时路径不传身份 ⇒ 空串谓词恒真，与加这两个参数之前逐字等价。"""
     pool.status = "UPDATE 1"
     assert await ix.settle(interaction_id="int-1", decision={"answer": "B"}) is True
-    assert pool.last_args[3:] == ("", "", "")
+    assert pool.last_args[3:] == ("", 0, "")
 
 
 @pytest.mark.parametrize("status", ["UPDATE 0", "UPDATE 1"])
@@ -283,7 +283,7 @@ async def test_resolve_is_ownership_scoped_and_single_shot(pool: _FakePool) -> N
     }
     got = await ix.resolve(
         interaction_id="int-1",
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
         decision={"decision": "approve"},
         reason="看了，可以",
@@ -294,25 +294,25 @@ async def test_resolve_is_ownership_scoped_and_single_shot(pool: _FakePool) -> N
     sql, args = pool.last_sql, pool.last_args
     norm = _norm(sql)
     assert "SET status = 'answered'" in norm
-    assert "AND ($2 = '' OR tenant_id = $2)" in norm
+    assert "AND ($2 = 0 OR tenant_id = $2)" in norm
     assert "AND user_id = $3" in norm
     assert "AND status = 'pending'" in norm
     assert "AND expires_at > now()" in norm
-    assert args[:3] == ("int-1", "t1", "u1")
+    assert args[:3] == ("int-1", 1, "u1")
 
 
 async def test_resolve_returns_none_when_the_row_is_not_mine(pool: _FakePool) -> None:
     """不存在 / 不是这个人的 / 已答过 / 已过期 —— 一律 None（调用方统一 404，不做区分）。"""
     pool.row = None
     assert await ix.resolve(
-        interaction_id="int-1", tenant_id="t1", user_id="u1", decision={"decision": "reject"}
+        interaction_id="int-1", tenant_id=1, user_id="u1", decision={"decision": "reject"}
     ) is None
     assert await ix.resolve(
-        interaction_id="", tenant_id="t1", user_id="u1", decision={}
+        interaction_id="", tenant_id=1, user_id="u1", decision={}
     ) is None
     pool.raise_on = "UPDATE pending_interactions"
     assert await ix.resolve(
-        interaction_id="int-1", tenant_id="t1", user_id="u1", decision={}
+        interaction_id="int-1", tenant_id=1, user_id="u1", decision={}
     ) is None
 
 
@@ -327,7 +327,7 @@ async def test_grant_matches_arguments_not_call_id(pool: _FakePool) -> None:
         "decided_by": "u1",
     }
     got = await ix.consume_grant(
-        tenant_id="t1",
+        tenant_id=1,
         session_id="s1",
         kind=ix.KIND_APPROVAL,
         tool_name="shell",
@@ -346,19 +346,19 @@ async def test_grant_matches_arguments_not_call_id(pool: _FakePool) -> None:
     assert "SET status = 'consumed'" in norm
     # `tool_call_id` 只出现在 INSERT 那条语句里，认票 SQL 不涉及它（新 run 的 id 必然不同）
     assert "tool_call_id" not in norm
-    assert args == ("s1", "t1", ix.KIND_APPROVAL, "shell", "h1")
+    assert args == ("s1", 1, ix.KIND_APPROVAL, "shell", "h1")
 
 
 async def test_grant_refuses_without_a_argument_fingerprint(pool: _FakePool) -> None:
     """空 args_hash 的授权能匹配该工具名下的**任何**一次调用 —— 那是绕过确认，不是介入。"""
     assert await ix.consume_grant(
-        tenant_id="t1", session_id="s1", kind=ix.KIND_APPROVAL, tool_name="shell", args_hash=""
+        tenant_id=1, session_id="s1", kind=ix.KIND_APPROVAL, tool_name="shell", args_hash=""
     ) is None
     assert await ix.consume_grant(
-        tenant_id="t1", session_id="s1", kind="bogus", tool_name="shell", args_hash="h1"
+        tenant_id=1, session_id="s1", kind="bogus", tool_name="shell", args_hash="h1"
     ) is None
     assert await ix.consume_grant(
-        tenant_id="t1", session_id="", kind=ix.KIND_APPROVAL, tool_name="shell", args_hash="h1"
+        tenant_id=1, session_id="", kind=ix.KIND_APPROVAL, tool_name="shell", args_hash="h1"
     ) is None
     assert pool.calls == []
 
@@ -366,7 +366,7 @@ async def test_grant_refuses_without_a_argument_fingerprint(pool: _FakePool) -> 
 async def test_grant_miss_and_failure_both_mean_not_approved(pool: _FakePool) -> None:
     pool.row = None
     kwargs = dict(
-        tenant_id="t1", session_id="s1",
+        tenant_id=1, session_id="s1",
         kind=ix.KIND_APPROVAL, tool_name="shell", args_hash="h1",
     )
     assert await ix.consume_grant(**kwargs) is None
@@ -386,14 +386,14 @@ async def test_list_open_only_shows_rows_still_waiting(pool: _FakePool) -> None:
             "reason": None, "created_at": None, "updated_at": None, "expires_at": None,
         }
     ]
-    got = await ix.list_open(tenant_id="t1", user_id="u1", session_id="s1")
+    got = await ix.list_open(tenant_id=1, user_id="u1", session_id="s1")
     assert len(got) == 1
     assert got[0]["request"] == {"question": "q"}
     assert got[0]["decision"] == {}
     norm = _norm(pool.last_sql)
     assert "AND user_id = $3" in norm
     assert "status IN ('pending', 'answered')" in norm
-    assert await ix.list_open(tenant_id="t1", user_id="u1", session_id="") == []
+    assert await ix.list_open(tenant_id=1, user_id="u1", session_id="") == []
 
 
 async def test_expire_stale_marks_rather_than_filters(pool: _FakePool) -> None:
@@ -427,7 +427,7 @@ async def test_load_awaiting_parses_the_suspended_snapshot(
     fake = _FakePool(row={"checkpoint": json.dumps({"turn_index": 4, "done_tools": ["c1"]}),
                           "run_token": "rt-old"})
     monkeypatch.setattr(cp, "_pool", lambda: fake)
-    got = await cp.load_awaiting(tenant_id="t1", session_id="s1")
+    got = await cp.load_awaiting(tenant_id=1, session_id="s1")
     assert got is not None
     assert got["run_token"] == "rt-old"
     assert got["checkpoint"]["turn_index"] == 4
@@ -436,20 +436,20 @@ async def test_load_awaiting_parses_the_suspended_snapshot(
     # 普通活跃现场读不到挂起行（`load()` 的过滤不动，批 3 修的陈旧快照问题不会复发）
     fake.row = {"checkpoint": {"turn_index": 1}, "run_token": "rt"}
     monkeypatch.setattr(cp, "_pool", lambda: fake)
-    assert await cp.load(tenant_id="t1", session_id="s1") is not None
+    assert await cp.load(tenant_id=1, session_id="s1") is not None
     assert "'running', 'checkpointed', 'resuming'" in _norm(fake.calls[-1][0])
     assert "awaiting_input" not in _norm(fake.calls[-1][0])
 
 
 async def test_load_awaiting_degrades_to_none(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(row=None))
-    assert await cp.load_awaiting(tenant_id="t1", session_id="s1") is None
+    assert await cp.load_awaiting(tenant_id=1, session_id="s1") is None
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(row={"checkpoint": None, "run_token": ""}))
-    assert await cp.load_awaiting(tenant_id="t1", session_id="s1") is None
+    assert await cp.load_awaiting(tenant_id=1, session_id="s1") is None
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(raise_on="SELECT checkpoint, run_token"))
-    assert await cp.load_awaiting(tenant_id="t1", session_id="s1") is None
+    assert await cp.load_awaiting(tenant_id=1, session_id="s1") is None
     monkeypatch.setattr(cp, "_pool", lambda: None)
-    assert await cp.load_awaiting(tenant_id="t1", session_id="") is None
+    assert await cp.load_awaiting(tenant_id=1, session_id="") is None
 
 
 async def test_claim_awaiting_is_cas_and_rejects_on_unique_conflict(
@@ -458,23 +458,23 @@ async def test_claim_awaiting_is_cas_and_rejects_on_unique_conflict(
     """读挂起现场必须与交还同一个动作；交还失败（含撞唯一索引）时调用方按"没续上"走。"""
     fake = _FakePool(status="UPDATE 1")
     monkeypatch.setattr(cp, "_pool", lambda: fake)
-    assert await cp.claim_awaiting(tenant_id="t1", session_id="s1", new_run_token="rt-new")
+    assert await cp.claim_awaiting(tenant_id=1, session_id="s1", new_run_token="rt-new")
     norm = _norm(fake.last_sql)
     assert "SET status = 'resuming', run_token = $3" in norm
     assert "AND status = 'awaiting_input'" in norm
-    assert fake.last_args == ("s1", "t1", "rt-new")
+    assert fake.last_args == ("s1", 1, "rt-new")
 
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(status="UPDATE 0"))
-    assert not await cp.claim_awaiting(tenant_id="t1", session_id="s1", new_run_token="rt-new")
+    assert not await cp.claim_awaiting(tenant_id=1, session_id="s1", new_run_token="rt-new")
     # 会话上已有别的活跃行 ⇒ ux_agent_runs_session_active 冲突，必须**不**抛出去
     monkeypatch.setattr(
         cp, "_pool",
         lambda: _FakePool(raise_on="UPDATE agent_runs", status="UPDATE 1"),
     )
-    assert not await cp.claim_awaiting(tenant_id="t1", session_id="s1", new_run_token="rt-new")
+    assert not await cp.claim_awaiting(tenant_id=1, session_id="s1", new_run_token="rt-new")
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool())
-    assert not await cp.claim_awaiting(tenant_id="t1", session_id="s1", new_run_token="")
-    assert not await cp.claim_awaiting(tenant_id="t1", session_id="", new_run_token="rt")
+    assert not await cp.claim_awaiting(tenant_id=1, session_id="s1", new_run_token="")
+    assert not await cp.claim_awaiting(tenant_id=1, session_id="", new_run_token="rt")
 
 
 async def test_suspend_transition_leaves_the_active_set(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -482,7 +482,7 @@ async def test_suspend_transition_leaves_the_active_set(monkeypatch: pytest.Monk
     fake = _FakePool(status="UPDATE 1")
     monkeypatch.setattr(cp, "_pool", lambda: fake)
     assert await cp.mark(
-        tenant_id="t1",
+        tenant_id=1,
         session_id="s1",
         status=cp.STATUS_AWAITING_INPUT,
         run_token="rt-1",

@@ -12,7 +12,7 @@ from httpx import ASGITransport, AsyncClient
 from app.main import create_app, get_gateway
 
 # 网关注入的身份（AuthMiddleware 要求 query 身份 + X-Internal-Token 同时存在）
-IDENTITY = {"user_id": "test-user", "tenant_id": "test-tenant"}
+IDENTITY = {"user_id": "test-user", "tenant_id": "1"}
 
 
 def _mock_gateway():

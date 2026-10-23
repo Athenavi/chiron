@@ -78,7 +78,7 @@ async def test_collects_reportable_runs_and_advances_cursor(monkeypatch):
     _patch(monkeypatch, redis, pool)
 
     items = await reporting.consume_pending_reports(
-        session_id="s1", tenant_id="t1", user_id="u1", pool=pool
+        session_id="s1", tenant_id=1, user_id="u1", pool=pool
     )
 
     assert len(items) == 1
@@ -95,7 +95,7 @@ async def test_collects_reportable_runs_and_advances_cursor(monkeypatch):
     assert "status = ANY($4::text[])" in sql
     assert "root_session_id = $1" in sql
     assert "finished_at > $5::timestamptz" in sql
-    assert args[0] == "s1" and args[1] == "t1" and args[2] == "u1"
+    assert args[0] == "s1" and args[1] == 1 and args[2] == "u1"
     assert list(args[3]) == list(reporting.REPORTABLE)
     assert args[4] == reporting.EPOCH
     assert args[5] == reporting.MAX_REPORTS

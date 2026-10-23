@@ -135,26 +135,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 0. 全局异常处理 ──
     await _install_global_exception_handler()
     # ── 1. 可观测性 ──
-    from app.observability.logging import configure_logging
-    from app.observability.metrics import ENGINE_INFO
-    from app.observability.tracing import configure_tracing
-
-    configure_logging(settings.log_level)
-    configure_tracing(
-        service_name="python-engine", otlp_endpoint=settings.otel_endpoint
-    )
-    ENGINE_INFO.info({"version": "3.0.0", "instance_id": _get_instance_id()})
-
-    logger.info("=" * 60)
-    logger.info("Chiron Python AI Engine v3.0 — Enterprise Edition")
-    logger.info("=" * 60)
+    _start_observability()
 
     # ── 1.5 部署前置校验：多副本安全前置（沙箱根 + 媒体后端）──
-    # 与下方 Redis 门禁同一策略：多副本下状态必须共享，否则在运行期以
-    # "文件工具间歇性失忆"/"媒体下载 404"的形式暴露；这里提前到启动时暴露。
-    verify_sandbox_backend()
-    verify_sandbox_root()
-    verify_media_store()
+    _verify_deployment_preconditions()
 
     # ── 1.6 文件后端选择（批 B 片 4）──
     # 默认 `local`：agent 文件工具直接读写 per-user workspace（行为与历史完全一致）。
@@ -260,7 +244,6 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     from app.gateway.budget import TokenBudget
     from app.gateway.cache import SemanticCache
     from app.gateway.provider import LLMProvider
-    from app.gateway.ratelimit import TenantRateLimiter
     from app.gateway.router import GatewayRouter
 
     providers: dict[str, LLMProvider] = {}
@@ -557,32 +540,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 3.6. 六大工作台能力注册（互通基础：TaskRouter 依赖能力注册中心） ──
     await _register_workbench_capabilities()
     # ── 4. 限流器（middleware 需要） ──
-    # Redis 可用：分布式租户限流；Redis 不可用：本地限流兑底（避免裸奔/None 崩溃）。
-    from app.gateway.ratelimit import LocalTenantRateLimiter
-
-    # 两个实现（Redis 版 / 进程内降级版）接口一致但无共同基类，故按 Any 收。
-    limiter: Any
-    if _redis is not None:
-        limiter = TenantRateLimiter(
-            redis=_redis,
-            requests_per_minute=settings.rate_limit_rpm,
-            requests_per_second=settings.rate_limit_rps,
-        )
-    else:
-        # 降级**必须可见**：多副本下进程内限流的额度会放大 N 倍，即全局限流已失效。
-        # 日志给人看，指标给告警用 —— 两者都要，否则这次降级只会静静躺在某行日志里。
-        from app.observability.metrics import RATE_LIMIT_DEGRADED
-
-        RATE_LIMIT_DEGRADED.inc()
-        logger.warning(
-            "Redis unavailable: falling back to in-process tenant rate limiter "
-            "(single-instance semantics) — global limit is NOT enforced across replicas"
-        )
-        limiter = LocalTenantRateLimiter(
-            requests_per_minute=settings.rate_limit_rpm,
-            requests_per_second=settings.rate_limit_rps,
-        )
-    app.state.limiter = limiter
+    _start_rate_limiter(app)
 
     # ── 5. MCP Plugin System（用户级连接池：25s 轮询活跃用户配置） ──
     await _start_mcp_pool()
@@ -608,41 +566,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.info("Queue worker skipped (Redis not available)")
 
     # ── 6.2 幂等表保留策略（A7/C1）──
-    # task_idempotency 每任务一行，长期运行必须清理；turns 由网关侧
-    # src: internal/api/retention.go 的 StartRetentionCleaner 负责。
-    _retention_task = asyncio.create_task(_run_retention_cleaner(_redis))
+    _retention_task = _start_retention_cleaner()
 
     # ── 6.5. 启动进程指标收集器 ──
-    from app.observability.metrics import record_process_metrics
-
-    async def metrics_collector() -> None:
-        """定期收集进程资源指标"""
-        while True:
-            try:
-                record_process_metrics()
-            except Exception as e:
-                logger.warning(f"Failed to record process metrics: {e}")
-            await asyncio.sleep(10)
-
-    _metrics_task = asyncio.create_task(metrics_collector())
+    _metrics_task = _start_process_metrics()
     # P1-④ 批 B：订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
     # 把"最多滞后一个 TTL"变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
-    from app.agent.harness_store import listen_for_changes as _listen_harness_changes
-
-    _harness_task = asyncio.create_task(_listen_harness_changes())
+    _harness_task = _start_harness_watch()
 
     # C4：存储配置变更订阅 —— 后台「存储」配置此前只对**网关**生效，引擎媒体后端由 env 在
     # 启动时确定，改后台对引擎无效（网关写 S3、引擎写本地盘 ⇒ 多副本媒体"间歇性 404"）。
     # 订阅同一广播，storage 分类到达即热切换媒体后端（app/media/reload.py）。
-    from app.media.reload import listen_for_storage_changes as _listen_storage_changes
-
-    _storage_task = asyncio.create_task(_listen_storage_changes())
+    _storage_task = _start_storage_watch()
 
     # M28：按模型的公开价格同步（多源 + 交叉验证）。`start_price_sync()` 自己判开关，
     # 未启用时立刻返回 ⇒ 这里可以无条件创建（默认关 = 什么都不做）。
-    from app.pricing.sync import start_price_sync
-
-    _price_sync_task = asyncio.create_task(start_price_sync())
+    _price_sync_task = _start_price_sync()
     logger.info("Process metrics collector started (interval=10s)")
 
     # ── 8. 实例注册（批 E1：引擎动态发现）──
@@ -651,55 +590,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # A4：run 归属路由（engine:run:*，批 4）依赖本注册表才能把 instance_id 解析成地址——
     # 未配置时归属映射会被写入但网关查不到地址，审批/取消仍按一致性哈希漂移。
     # 这不是故障，但必须让部署者知道"亲和是尽力而为"，而不是以为已按归属路由。
-    if _redis is not None and not settings.engine_advertise_url:
-        logger.warning(
-            "ENGINE_ADVERTISE_URL not set: engine will not register, so run-owner "
-            "affinity falls back to session hash (approvals/cancel may drift after "
-            "scale-out or instance restart)"
-        )
-    from app.engine_registry import EngineRegistry
-
-    _engine_registry = EngineRegistry(
-        redis=_redis,
-        instance_id=_get_instance_id(),
-        advertise_url=settings.engine_advertise_url,
-        version="3.0.0",
-    )
-    await _engine_registry.start()
+    _engine_registry = await _start_engine_registry()
 
     # ── 8b. 实例存活心跳（M17）──
     # 线账靠它判断"某个在途预留的持有者是不是已经死了"（``engine:alive:{instance_id}``，
     # 见 app/instance_liveness.py）。**刻意不复用上面那个注册表键**：它只在配了
     # ENGINE_ADVERTISE_URL 时才写，用它当存活判据 ⇒ 未配置的部署里清扫会静默地把全站预留删空
     # （读不到键 = 判定所有人都死了）。没 Redis 时 start() 返回 False，清扫随之禁用。
-    from app.instance_liveness import InstanceLiveness
-
-    _liveness = InstanceLiveness(redis=_redis, instance_id=_get_instance_id())
-    await _liveness.start()
+    _liveness = await _start_instance_liveness()
 
     # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
-    from app.hooks import warn_if_user_defined_enabled
-
-    warn_if_user_defined_enabled()
-
     # 批 G+（钩子协议批次 1）：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）。
     # 只接受部署级声明；解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
-    from app.hooks import load_hooks_config
-
-    load_hooks_config()
+    _apply_hook_config()
 
     # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
     # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
     # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
     # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
     # 续跑的执行体是模块级的 `_auto_resume_runner`（无人值守回合，见其注释）。
-    _reconciler_task: Any = None
-    try:
-        from app.agent.resume import start_reconciler
-
-        _reconciler_task = await start_reconciler(runner=_auto_resume_runner)
-    except Exception as e:  # noqa: BLE001
-        logger.warning("run reconciler failed to start: %s", e)
+    _reconciler_task = await _start_run_reconciler()
 
     logger.info("=" * 60)
     logger.info("Ready. HTTP port: %d", settings.http_port)
@@ -739,6 +649,38 @@ async def _install_global_exception_handler() -> None:
         )
 
     sys.excepthook = global_exception_handler
+
+
+def _start_observability() -> None:
+    """启动可观测性：日志 / tracing / 引擎信息（从 `lifespan` 抽出）。
+
+    **无局部状态耦合**：只读 `settings`，不产生关闭段要用的句柄 —— 纯移动。
+    """
+    from app.observability.logging import configure_logging
+    from app.observability.metrics import ENGINE_INFO
+    from app.observability.tracing import configure_tracing
+
+    configure_logging(settings.log_level)
+    configure_tracing(
+        service_name="python-engine", otlp_endpoint=settings.otel_endpoint
+    )
+    ENGINE_INFO.info({"version": "3.0.0", "instance_id": _get_instance_id()})
+
+    logger.info("=" * 60)
+    logger.info("Chiron Python AI Engine v3.0 — Enterprise Edition")
+    logger.info("=" * 60)
+
+
+def _verify_deployment_preconditions() -> None:
+    """部署前置校验：多副本安全前置（沙箱根 + 媒体后端），从 `lifespan` 抽出。
+
+    与下方 Redis 门禁同一策略：多副本下状态必须共享，否则在运行期以
+    "文件工具间歇性失忆"/"媒体下载 404"的形式暴露；这里提前到启动时暴露。
+    **无局部状态耦合**：纯移动。
+    """
+    verify_sandbox_backend()
+    verify_sandbox_root()
+    verify_media_store()
 
 
 async def _start_redis() -> None:
@@ -852,6 +794,169 @@ async def _start_subagent_governance() -> None:
             "本实例的子 Agent 只能靠看门狗按空闲/超时收口"
         )
 
+
+async def _metrics_collector() -> None:
+    """定期收集进程资源指标（从 `lifespan` 内的局部 `metrics_collector` 原样提出）。"""
+    from app.observability.metrics import record_process_metrics
+
+    while True:
+        try:
+            record_process_metrics()
+        except Exception as e:
+            logger.warning(f"Failed to record process metrics: {e}")
+        await asyncio.sleep(10)
+
+
+def _start_process_metrics() -> Any:
+    """启动进程指标收集器（从 `lifespan` 抽出）；**返回句柄**供关闭段取消。"""
+    return asyncio.create_task(_metrics_collector())
+
+
+def _start_harness_watch() -> Any:
+    """订阅 harness 配置变更（从 `lifespan` 抽出）；**返回句柄**供关闭段取消。
+
+    P1-④ 批 B：Go 侧写入后广播，收到即清进程内缓存 —— 把"最多滞后一个 TTL"
+    变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
+    """
+    from app.agent.harness_store import listen_for_changes as _listen_harness_changes
+
+    return asyncio.create_task(_listen_harness_changes())
+
+
+def _start_storage_watch() -> Any:
+    """订阅存储配置变更、热切换媒体后端（从 `lifespan` 抽出）；**返回句柄**。
+
+    C4：后台「存储」配置此前只对**网关**生效，引擎媒体后端由 env 在启动时确定，
+    改后台对引擎无效（网关写 S3、引擎写本地盘 ⇒ 多副本媒体"间歇性 404"）。
+    """
+    from app.media.reload import listen_for_storage_changes as _listen_storage_changes
+
+    return asyncio.create_task(_listen_storage_changes())
+
+
+def _start_price_sync() -> Any:
+    """启动按模型的公开价格同步（从 `lifespan` 抽出）；**返回句柄**供关闭段取消。
+
+    M28：多源 + 交叉验证。`start_price_sync()` 自己判开关，未启用时立刻返回
+    ⇒ 这里可以无条件创建（默认关 = 什么都不做）。
+    """
+    from app.pricing.sync import start_price_sync
+
+    return asyncio.create_task(start_price_sync())
+
+
+def _start_rate_limiter(app: FastAPI) -> None:
+    """建立租户限流器并挂到 ``app.state.limiter``（从 `lifespan` 抽出）。
+
+    Redis 可用：分布式租户限流；Redis 不可用：本地限流兑底（避免裸奔/None 崩溃）。
+    """
+    from app.gateway.ratelimit import LocalTenantRateLimiter, TenantRateLimiter
+
+    # 两个实现（Redis 版 / 进程内降级版）接口一致但无共同基类，故按 Any 收。
+    limiter: Any
+    if _redis is not None:
+        limiter = TenantRateLimiter(
+            redis=_redis,
+            requests_per_minute=settings.rate_limit_rpm,
+            requests_per_second=settings.rate_limit_rps,
+        )
+    else:
+        # 降级**必须可见**：多副本下进程内限流的额度会放大 N 倍，即全局限流已失效。
+        # 日志给人看，指标给告警用 —— 两者都要，否则这次降级只会静静躺在某行日志里。
+        from app.observability.metrics import RATE_LIMIT_DEGRADED
+
+        RATE_LIMIT_DEGRADED.inc()
+        logger.warning(
+            "Redis unavailable: falling back to in-process tenant rate limiter "
+            "(single-instance semantics) — global limit is NOT enforced across replicas"
+        )
+        limiter = LocalTenantRateLimiter(
+            requests_per_minute=settings.rate_limit_rpm,
+            requests_per_second=settings.rate_limit_rps,
+        )
+    app.state.limiter = limiter
+
+
+def _start_retention_cleaner() -> Any:
+    """启动幂等表保留清理（从 `lifespan` 抽出）；**返回句柄**供关闭段取消。
+
+    A7/C1：`task_idempotency` 每任务一行，长期运行必须清理；`turns` 由网关侧
+    `src: internal/api/retention.go` 的 `StartRetentionCleaner` 负责。
+    """
+    return asyncio.create_task(_run_retention_cleaner(_redis))
+
+
+async def _start_engine_registry() -> Any:
+    """启动引擎实例注册（从 `lifespan` 抽出）；**返回句柄**供关闭段注销。
+
+    批 E1：网关 `StartEngineDiscovery` 每 15s 消费本注册表并动态更新引擎地址
+    （替代静态清单）。A4：run 归属路由（`engine:run:*`）依赖本注册表才能把
+    `instance_id` 解析成地址 —— 未配 `ENGINE_ADVERTISE_URL` 时归属映射会被写入
+    但网关查不到地址，审批/取消仍按一致性哈希漂移。这不是故障，但必须让部署者
+    知道"亲和是尽力而为"，而不是以为已按归属路由。
+    """
+    if _redis is not None and not settings.engine_advertise_url:
+        logger.warning(
+            "ENGINE_ADVERTISE_URL not set: engine will not register, so run-owner "
+            "affinity falls back to session hash (approvals/cancel may drift after "
+            "scale-out or instance restart)"
+        )
+    from app.engine_registry import EngineRegistry
+
+    registry = EngineRegistry(
+        redis=_redis,
+        instance_id=_get_instance_id(),
+        advertise_url=settings.engine_advertise_url,
+        version="3.0.0",
+    )
+    await registry.start()
+    return registry
+
+
+async def _start_instance_liveness() -> Any:
+    """启动实例存活心跳（从 `lifespan` 抽出）；**返回句柄**供关闭段停止。
+
+    M17：线账靠它判断"某个在途预留的持有者是不是已经死了"
+    （``engine:alive:{instance_id}``，见 app/instance_liveness.py）。**刻意不复用
+    注册表键**：它只在配了 `ENGINE_ADVERTISE_URL` 时才写，用它当存活判据 ⇒
+    未配置的部署里清扫会静默地把全站预留删空。没 Redis 时 start() 返回 False。
+    """
+    from app.instance_liveness import InstanceLiveness
+
+    liveness = InstanceLiveness(redis=_redis, instance_id=_get_instance_id())
+    await liveness.start()
+    return liveness
+
+
+def _apply_hook_config() -> None:
+    """应用部署级 hook 配置（从 `lifespan` 抽出）。
+
+    批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）。
+    批 G+：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）；只接受
+    部署级声明，解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
+    """
+    from app.hooks import load_hooks_config, warn_if_user_defined_enabled
+
+    warn_if_user_defined_enabled()
+    load_hooks_config()
+
+
+async def _start_run_reconciler() -> Any:
+    """启动僵尸 run 巡检（从 `lifespan` 抽出）；**返回句柄**（失败时返回 None）。
+
+    C1 批 3：启动一次 + 周期 60s + 每实例抖动。它只修正"旧主已死"的 run 状态
+    （`running` → `checkpointed`；快照超冷窗口 → `abandoned`），**不触发续跑** ——
+    自动续跑需要重建 AgentTask，而配置只存在于提交请求里（见评审 03 §17.2）。
+    巡检起不来不该拖垮引擎启动，故 try 包住。续跑的执行体是模块级的
+    `_auto_resume_runner`（无人值守回合，见其注释）。
+    """
+    try:
+        from app.agent.resume import start_reconciler
+
+        return await start_reconciler(runner=_auto_resume_runner)
+    except Exception as e:  # noqa: BLE001
+        logger.warning("run reconciler failed to start: %s", e)
+        return None
 
 
 async def _probe_sandbox_service(url: str, token: str, *, timeout: float = 3.0) -> bool:

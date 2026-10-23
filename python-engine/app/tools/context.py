@@ -37,12 +37,23 @@ def get_user_id() -> str:
     return str(get_tool_context("user_id", ""))
 
 
-def get_tenant_id() -> int:
-    """当前租户 ID（int16）。无法解析时返回 0（视作未绑定）。
+def get_tenant_id() -> str:
+    """当前租户 ID 的**字符串形式**（未绑定 / 无法解析时返回 ``""``）。
 
-    tenant_id 在 Go 侧已统一为 smallint/JWT 整数；网关透传的 header/query
-    可能仍是字符串（HTTP 本身如此），故这里宽容解析。
+    为什么默认是 str：绝大多数调用点是**格式化**场景 —— 沙箱路径拼接
+    （``sandbox_root() / tenant``）、审计条目的 ``tenant`` 字段、
+    ``kb_access_allowed`` 的租户比较、``SkillStore`` 的目录段。
+    需要整数（SQL 参数 / Pydantic 请求体）的地方用 ``get_tenant_id_int()``。
+
+    与 Go 的契约：网关与 JWT 里的 tenant_id 已是整数，py 侧只在**边界**把它
+    规约到整数域（见 ``to_tenant_int``），对外仍以字符串形式供格式化使用。
     """
+    tid = get_tenant_id_int()
+    return str(tid) if tid else ""
+
+
+def get_tenant_id_int() -> int:
+    """当前租户 ID 的**整数形式**（SQL 参数 / Pydantic 请求体用）；未绑定为 0。"""
     return to_tenant_int(get_tool_context("tenant_id", 0))
 
 

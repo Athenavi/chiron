@@ -49,7 +49,7 @@ def _entries(root: Path) -> list[dict]:
 def test_records_identity_and_decision(audit_dir: Path):
     from app.agent.approval_audit import record_approval_decision
 
-    set_tool_context(session_id="s-appr", user_id="u-appr", tenant_id="t-appr")
+    set_tool_context(session_id="s-appr", user_id="u-appr", tenant_id=1)
     record_approval_decision(
         tool_call_id="call-1",
         tool="shell_exec",
@@ -62,7 +62,7 @@ def test_records_identity_and_decision(audit_dir: Path):
     assert entry["tool_call_id"] == "call-1"
     assert entry["tool"] == "shell_exec"
     assert entry["decision"] == "approve"
-    assert entry["tenant"] == "t-appr"
+    assert entry["tenant"] == "1"
     assert entry["user"] == "u-appr"
     assert entry["session"] == "s-appr"
     assert entry["level_before"] == "write"
@@ -171,7 +171,7 @@ def test_records_request_with_identity_level_and_args(audit_dir: Path):
     """`asked` 记录：身份 / 级别 / 参数（脱敏）都在 —— 只记决定会丢掉"谁问了什么"。"""
     from app.agent.approval_audit import EVENT_ASKED, record_approval_request
 
-    set_tool_context(session_id="s-ask", user_id="u-ask", tenant_id="t-ask")
+    set_tool_context(session_id="s-ask", user_id="u-ask", tenant_id=2)
     record_approval_request(
         tool_call_id="call-ask",
         tool="shell_exec",
@@ -184,7 +184,7 @@ def test_records_request_with_identity_level_and_args(audit_dir: Path):
     assert entry["tool_call_id"] == "call-ask"
     assert entry["tool"] == "shell_exec"
     assert entry["level"] == "delete"
-    assert entry["tenant"] == "t-ask"
+    assert entry["tenant"] == "2"
     assert entry["user"] == "u-ask"
     assert entry["session"] == "s-ask"
     assert "hunter2secret" not in entry["original_arguments"], "密钥不得以明文落盘"

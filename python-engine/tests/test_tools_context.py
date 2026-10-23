@@ -7,6 +7,7 @@ from app.tools.context import (
     get_gateway,
     get_session_id,
     get_tenant_id,
+    get_tenant_id_int,
     get_tool_context,
     get_user_id,
     set_tool_context,
@@ -22,13 +23,16 @@ class TestToolContext:
         assert get_tool_context("nope", "d") == "d"
 
     def test_set_and_get(self):
-        set_tool_context(session_id="s1", user_id="u1", tenant_id="t1", gateway="gw")
+        set_tool_context(session_id="s1", user_id="u1", tenant_id=1, gateway="gw")
         assert get_session_id() == "s1"
         assert get_user_id() == "u1"
-        assert get_tenant_id() == "t1"
+        # tenant_id 的**对外形式是字符串**（格式化场景占绝大多数：沙箱路径 /
+        # 审计条目 / KB 租户比较）；整数值请用 get_tenant_id_int()。
+        assert get_tenant_id() == "1"
+        assert get_tenant_id_int() == 1
         assert get_gateway() == "gw"
         # 重置避免污染其它测试
-        set_tool_context(session_id="", user_id="", tenant_id="", gateway=None)
+        set_tool_context(session_id="", user_id="", tenant_id=0, gateway=None)
 
     def test_async_propagation(self):
         async def worker():

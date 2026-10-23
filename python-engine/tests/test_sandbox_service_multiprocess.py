@@ -123,13 +123,13 @@ def test_engine_client_executes_in_a_separate_service_process(sandbox_service, m
     from app.tools.context import set_tool_context
 
     url, tmp_path = sandbox_service
-    set_tool_context(tenant_id="t1", user_id="u1", session_id="s1")
+    set_tool_context(tenant_id="1", user_id="u1", session_id="s1")
 
     backend = RemoteExecBackend(
         LocalWorkspaceBackend(),
         url=url,
         token=TOKEN,
-        tenants=["t1"],  # 白名单租户才走服务
+        tenants=["1"],  # 白名单租户才走服务
     )
     assert backend.should_use_service() is True
 
@@ -144,7 +144,7 @@ def test_engine_client_executes_in_a_separate_service_process(sandbox_service, m
     entries = [json.loads(line) for line in audit_file.read_text(encoding="utf-8").splitlines() if line.strip()]
     last = entries[-1]
     assert last["tool"] == "shell_exec"
-    assert (last["tenant"], last["user"], last["session"]) == ("t1", "u1", "s1")
+    assert (last["tenant"], last["user"], last["session"]) == ("1", "u1", "s1")
 
 
 def test_non_whitelisted_tenant_stays_in_engine_process(sandbox_service, monkeypatch):
@@ -154,9 +154,9 @@ def test_non_whitelisted_tenant_stays_in_engine_process(sandbox_service, monkeyp
     from app.tools.context import set_tool_context
 
     url, tmp_path = sandbox_service
-    set_tool_context(tenant_id="t2", user_id="u2", session_id="s2")
+    set_tool_context(tenant_id="2", user_id="u2", session_id="s2")
 
-    backend = RemoteExecBackend(LocalWorkspaceBackend(), url=url, token=TOKEN, tenants=["t1"])
+    backend = RemoteExecBackend(LocalWorkspaceBackend(), url=url, token=TOKEN, tenants=["1"])
     assert backend.should_use_service() is False
 
     result = asyncio.run(backend.execute("echo hello-from-engine"))

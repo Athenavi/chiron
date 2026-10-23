@@ -30,7 +30,7 @@ def _kb_row(**overrides):
         "provider": "cloud",
         "user_id": "u-owner",
         "visibility": "tenant",
-        "tenant_id": "t-real",
+        "tenant_id": "1",
     }
     row.update(overrides)
     return row
@@ -42,7 +42,7 @@ class TestKbListToolScope:
 
         pool = AsyncMock()
         pool.fetch = AsyncMock(return_value=[])
-        set_tool_context(user_id="u-stranger", tenant_id="t-2")
+        set_tool_context(user_id="u-stranger", tenant_id="2")
         with patch("app.tools.kb._pool", AsyncMock(return_value=pool)):
             result = await kb_list(query="ops")
 
@@ -50,7 +50,7 @@ class TestKbListToolScope:
         sql, args = pool.fetch.call_args.args[0], pool.fetch.call_args.args[1:]
         assert "visibility = 'tenant' AND tenant_id = $2" in sql
         assert args[0] == "u-stranger"
-        assert args[1] == "t-2"
+        assert args[1] == "2"
         # 动态拼 name ILIKE 后，limit 仍是最后一个占位符
         assert "name ILIKE $3" in sql
         assert args[-1] == 20
@@ -71,8 +71,8 @@ class TestKbSearchToolGate:
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="t-real"))
-        set_tool_context(user_id="u-stranger", tenant_id="t-other")
+        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="1"))
+        set_tool_context(user_id="u-stranger", tenant_id="3")
         with (
             patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
             patch("app.tools.kb.answer_question", AsyncMock()) as ask,
@@ -85,14 +85,14 @@ class TestKbSearchToolGate:
         from app.tools.kb import kb_search
 
         pool = AsyncMock()
-        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="t-real"))
+        pool.fetchrow = AsyncMock(return_value=_kb_row(tenant_id="1"))
         ask = AsyncMock(
             return_value=(
                 AnswerResult(answer="答案", citations=[Citation(doc_name="a.pdf", page=2)]),
                 "cloud",
             )
         )
-        set_tool_context(user_id="u-stranger", tenant_id="t-real")
+        set_tool_context(user_id="u-stranger", tenant_id="1")
         with (
             patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
             patch("app.tools.kb.answer_question", ask),
@@ -114,7 +114,7 @@ class TestKbSearchErrorSurfacing:
 
         pool = AsyncMock()
         pool.fetchrow = AsyncMock(return_value=_kb_row())
-        set_tool_context(user_id="u-owner", tenant_id="t-real")
+        set_tool_context(user_id="u-owner", tenant_id="1")
         with (
             patch("app.tools.kb._pool", AsyncMock(return_value=pool)),
             patch(

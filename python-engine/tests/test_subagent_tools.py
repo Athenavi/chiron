@@ -73,13 +73,13 @@ async def test_subagent_executes_tool_and_returns_result():
 async def test_subagent_tool_sandbox_context_isolated():
     gw = _ToolGateway()
     agent = SubAgent(name="t", description="", system_prompt="sys", gateway=gw, max_turns=5)
-    result = await agent.run(task="do it", tenant_id="user-42")
+    result = await agent.run(task="do it", context={"user_id": "user-42"}, tenant_id="42")
 
     assert result.success
     content = json.loads(gw.tool_msgs[-1].content)
     # 沙箱上下文按租户/用户隔离（而非全部落到 default/anonymous）
     assert content.get("sandbox_user") == "user-42"
-    assert content.get("sandbox_tenant") == "user-42"
+    assert content.get("sandbox_tenant") == "42"
 
 
 @pytest.mark.asyncio

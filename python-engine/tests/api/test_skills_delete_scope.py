@@ -21,7 +21,7 @@ from httpx import ASGITransport
 from app.main import create_app
 from app.skill.store import SkillDef, SkillStore
 
-TENANT = "t1"
+TENANT = "1"
 USER = "u1"
 
 

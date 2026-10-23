@@ -23,7 +23,7 @@ from app.core.capabilities import (
 from app.core.task_router import ExecutedTask, SubTask, TaskRouter
 from app.main import create_app
 
-TENANT = "u-interop"
+TENANT = "1"
 
 
 def _fake_gateway(intent: dict):

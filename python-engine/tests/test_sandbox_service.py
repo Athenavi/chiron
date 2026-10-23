@@ -83,12 +83,12 @@ def test_identity_is_restored_so_audit_can_name_who(service, tmp_path):
     """带上身份 ⇒ 审计流水里必须能答出"谁执行的"（否则隔离服务的审计等于白记）。"""
     resp = service.post(
         "/v1/internal/exec/run",
-        json={"command": "echo hi", "tenant_id": "t1", "user_id": "u1", "session_id": "s1"},
+        json={"command": "echo hi", "tenant_id": "1", "user_id": "u1", "session_id": "s1"},
         headers=TOKEN,
     )
     assert resp.status_code == 200
     last = _audit_entries(tmp_path)[-1]
-    assert (last["tenant"], last["user"], last["session"]) == ("t1", "u1", "s1")
+    assert (last["tenant"], last["user"], last["session"]) == ("1", "u1", "s1")
 
 
 def test_missing_token_config_fails_closed(tmp_path, monkeypatch):

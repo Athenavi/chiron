@@ -180,13 +180,13 @@ async def test_remember_uses_context_project(monkeypatch):
     svc = _svc()
     monkeypatch.setattr(memory_tools, "_get_memory_service", lambda: svc)
 
-    tool_context.set_tool_context(user_id="u", tenant_id="t", project="proj-a")
+    tool_context.set_tool_context(user_id="u", tenant_id=1, project="proj-a")
     out = await memory_tools.remember("lang", "中文")
     assert out.get("success") is True
 
-    tool_context.set_tool_context(user_id="u", tenant_id="t", project="proj-b")
-    assert (await svc.list_entries("t", "u", project="proj-b"))["total"] == 0
-    assert (await svc.list_entries("t", "u", project="proj-a"))["total"] == 1
+    tool_context.set_tool_context(user_id="u", tenant_id=1, project="proj-b")
+    assert (await svc.list_entries("1", "u", project="proj-b"))["total"] == 0
+    assert (await svc.list_entries("1", "u", project="proj-a"))["total"] == 1
 
 
 async def test_forget_uses_context_project(monkeypatch):
@@ -195,15 +195,15 @@ async def test_forget_uses_context_project(monkeypatch):
     svc = _svc()
     monkeypatch.setattr(memory_tools, "_get_memory_service", lambda: svc)
 
-    tool_context.set_tool_context(user_id="u", tenant_id="t", project="proj-a")
+    tool_context.set_tool_context(user_id="u", tenant_id=1, project="proj-a")
     await memory_tools.remember("lang", "中文")
 
     # 换到另一个项目再遗忘 —— 不该动到 proj-a 的那条
-    tool_context.set_tool_context(user_id="u", tenant_id="t", project="proj-b")
+    tool_context.set_tool_context(user_id="u", tenant_id=1, project="proj-b")
     out = await memory_tools.forget("lang")
 
     assert out.get("deleted") == 0
-    assert (await svc.list_entries("t", "u", project="proj-a"))["total"] == 1
+    assert (await svc.list_entries("1", "u", project="proj-a"))["total"] == 1
 
 
 # ── HTTP 层：project 从 query 读 ────────────────────────────────────────
@@ -216,7 +216,7 @@ def _patch_api_service(monkeypatch: pytest.MonkeyPatch, svc: MemoryService) -> N
 async def test_http_profile_is_project_scoped(monkeypatch):
     svc = _svc()
     _patch_api_service(monkeypatch, svc)
-    params = {"user_id": "u", "tenant_id": "t"}
+    params = {"user_id": "u", "tenant_id": 1}
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=create_app()), base_url="http://t"
@@ -238,9 +238,9 @@ async def test_http_profile_is_project_scoped(monkeypatch):
 async def test_http_clear_only_clears_that_project(monkeypatch):
     svc = _svc()
     _patch_api_service(monkeypatch, svc)
-    params = {"user_id": "u", "tenant_id": "t"}
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="k", value="B", project="proj-b")
+    params = {"user_id": "u", "tenant_id": 1}
+    await svc.upsert("1", "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert("1", "u", slot="fact", key="k", value="B", project="proj-b")
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=create_app()), base_url="http://t"
@@ -252,4 +252,4 @@ async def test_http_clear_only_clears_that_project(monkeypatch):
         )
 
     assert resp.status_code == 200 and resp.json()["deleted"] == 1
-    assert (await svc.list_entries("t", "u", project="proj-b"))["total"] == 1
+    assert (await svc.list_entries("1", "u", project="proj-b"))["total"] == 1

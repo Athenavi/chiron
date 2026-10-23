@@ -20,7 +20,7 @@ from app.backends.protocol import ExecuteResult
 from app.backends.remote_exec import RemoteExecBackend
 from app.tools.context import set_tool_context
 
-TENANT = "tenant-a"
+TENANT = "1"
 
 
 class _Inner:

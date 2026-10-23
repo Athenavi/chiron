@@ -681,8 +681,7 @@ _DDL: tuple[str, ...] = (
     value json,
     updated_at timestamp without time zone,
     updated_by character varying(36),
-    encrypted boolean,
-    UNIQUE (category, key)
+    encrypted boolean
 );""",
     """CREATE SEQUENCE public.system_settings_id_seq
     AS integer

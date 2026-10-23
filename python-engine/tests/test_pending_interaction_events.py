@@ -183,7 +183,7 @@ async def test_list_open_for_user_keeps_the_identity_predicate(pool: _FakePool) 
         }
     ]
 
-    out = await ix.list_open_for_user(tenant_id="t1", user_id="u1", limit=5)
+    out = await ix.list_open_for_user(tenant_id=1, user_id="u1", limit=5)
 
     norm = _norm(pool.last_sql)
     assert "WHERE user_id = $1" in norm
@@ -191,12 +191,12 @@ async def test_list_open_for_user_keeps_the_identity_predicate(pool: _FakePool) 
     # 跨会话 = **只**去掉会话那一维；身份谓词一字不改。
     assert "session_id = $" not in norm
     assert "status IN ('pending', 'answered')" in norm
-    assert pool.last_args == ("u1", "t1", 5)
+    assert pool.last_args == ("u1", 1, 5)
     assert out and out[0]["session_id"] == "s9", "跨会话列表必须带 session_id（前端靠它跳转）"
 
 
 async def test_list_open_for_user_without_identity_does_not_query(pool: _FakePool) -> None:
-    assert await ix.list_open_for_user(tenant_id="t1", user_id="") == []
+    assert await ix.list_open_for_user(tenant_id=1, user_id="") == []
     assert pool.calls == [], "身份不明时不该碰库"
 
 

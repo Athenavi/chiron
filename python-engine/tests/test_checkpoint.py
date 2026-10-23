@@ -151,7 +151,7 @@ def test_resume_window_three_tiers():
 @pytest.mark.asyncio
 async def test_save_updates_active_row(fake_pool: _FakePool):
     ok = await cp.save(
-        tenant_id="t1",
+        tenant_id=1,
         session_id="s1",
         checkpoint=cp.build_snapshot(messages=[{"role": "user", "content": "hi"}], turn_index=1),
     )
@@ -159,7 +159,7 @@ async def test_save_updates_active_row(fake_pool: _FakePool):
     assert len(fake_pool.calls) == 1
     sql, args = fake_pool.calls[0]
     assert sql.strip().startswith("UPDATE")
-    assert args[0] == "s1" and args[1] == "t1"
+    assert args[0] == "s1" and args[1] == 1
 
 
 @pytest.mark.asyncio
@@ -168,7 +168,7 @@ async def test_save_inserts_when_no_active_row(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(cp, "_pool", lambda: pool)
 
     ok = await cp.save(
-        tenant_id="t1",
+        tenant_id=1,
         session_id="s1",
         checkpoint=cp.build_snapshot(messages=[{"role": "user", "content": "hi"}], turn_index=1),
     )
@@ -183,7 +183,7 @@ async def test_save_failure_does_not_raise(fake_pool: _FakePool, monkeypatch: py
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(raise_on="UPDATE"))
 
     ok = await cp.save(
-        tenant_id="t1",
+        tenant_id=1,
         session_id="s1",
         checkpoint=cp.build_snapshot(messages=[{"role": "user", "content": "hi"}], turn_index=1),
     )
@@ -192,13 +192,13 @@ async def test_save_failure_does_not_raise(fake_pool: _FakePool, monkeypatch: py
 
 @pytest.mark.asyncio
 async def test_save_skips_without_session_id(fake_pool: _FakePool):
-    assert await cp.save(tenant_id="t1", session_id="", checkpoint={}) is False
+    assert await cp.save(tenant_id=1, session_id="", checkpoint={}) is False
     assert fake_pool.calls == []
 
 
 @pytest.mark.asyncio
 async def test_load_parses_checkpoint(fake_pool: _FakePool):
-    loaded = await cp.load(tenant_id="t1", session_id="s1")
+    loaded = await cp.load(tenant_id=1, session_id="s1")
     assert loaded is not None
     assert loaded["turn_index"] == 2
     assert loaded["done_tools"] == ["c1"]
@@ -213,7 +213,7 @@ async def test_load_parses_checkpoint(fake_pool: _FakePool):
 async def test_mark_with_run_token_adds_ownership_guard(fake_pool: _FakePool):
     """A4 防踩踏：带 run_token 的终态写入必须校验归属，避免旧 run 标掉新 run 的行。"""
     ok = await cp.mark(
-        tenant_id="t1", session_id="s1", status=cp.STATUS_COMPLETED, run_token="rt-1"
+        tenant_id=1, session_id="s1", status=cp.STATUS_COMPLETED, run_token="rt-1"
     )
     assert ok is True
     sql, args = fake_pool.calls[0]
@@ -224,7 +224,7 @@ async def test_mark_with_run_token_adds_ownership_guard(fake_pool: _FakePool):
 @pytest.mark.asyncio
 async def test_mark_without_run_token_keeps_legacy_semantics(fake_pool: _FakePool):
     """reconciler/abandoned 等旁观者路径不带 token：条件应短路放行（$4=''）。"""
-    ok = await cp.mark(tenant_id="t1", session_id="s1", status=cp.STATUS_ABANDONED)
+    ok = await cp.mark(tenant_id=1, session_id="s1", status=cp.STATUS_ABANDONED)
     assert ok is True
     _, args = fake_pool.calls[0]
     assert args[3] == ""
@@ -232,7 +232,7 @@ async def test_mark_without_run_token_keeps_legacy_semantics(fake_pool: _FakePoo
 
 @pytest.mark.asyncio
 async def test_mark_moves_row_out_of_active_set(fake_pool: _FakePool):
-    ok = await cp.mark(tenant_id="t1", session_id="s1", status=cp.STATUS_COMPLETED)
+    ok = await cp.mark(tenant_id=1, session_id="s1", status=cp.STATUS_COMPLETED)
     assert ok is True
     sql, args = fake_pool.calls[0]
     assert "status IN ('running', 'checkpointed', 'resuming')" in sql, (
@@ -292,7 +292,7 @@ async def test_runtime_writes_checkpoint_at_turn_end(monkeypatch: pytest.MonkeyP
     runtime = AgentRuntime(gateway=gateway)
     task = AgentTask(
         id="t",
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
         session_id="s-cp",
         content="hi",
@@ -339,7 +339,7 @@ async def test_runtime_merges_inherited_turn_ids(monkeypatch: pytest.MonkeyPatch
 
     runtime = AgentRuntime(gateway=MagicMock())
     runtime._resumed_from_checkpoint = ResumeState(turn_ids=("turn-0",))
-    task = AgentTask(id="t", tenant_id="t1", user_id="u1", session_id="s1", content="hi")
+    task = AgentTask(id="t", tenant_id=1, user_id="u1", session_id="s1", content="hi")
     await runtime._save_checkpoint(
         task, [{"role": "user", "content": "hi"}], turn_index=1, done_tools=[], usage={}
     )

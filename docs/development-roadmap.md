@@ -100,7 +100,8 @@ alembic 单 head `0029_model_prices`。integration 已在真实 PG 上跑通（4
 ### L3-4 巨型文件拆分 —— 批次 1、3、2(类型) 与 4(校验) 已完成
 
 - 已完成（每批都验证**逐函数/定义逐字一致**）：`gateway_router.go` → 11 个 `routes_*.go`（**1254→442**）· `mail_handler.go` → 4 个文件（**1488→695**）· `session/manager.go` → `manager_{crud,messages,queries,branch}.go`（**1198→128**）· `runtime.py` 类型与决策取值 → `runtime_types.py`（**3370→3198**）· `main.py` 的三个启动前置校验 → `app/deps.py`（**2170→2061**）。
-- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界**）· **`main.py` 的 `lifespan` 分段**（关闭段 + **6 个无耦合启动段** ✅ 已抽，`lifespan` 740 → 561 行；剩 5 段有真实耦合，需显式传参/返回句柄）· **前端 composable**（**批次 1 ✅** 执行/轮询簇 → `useWorkflowExecution.ts`，1746 → 1637 行；**批次 2 ✅** 模板市场簇 → `useWorkflowTemplates.ts`，1636 → 1597 行；持久化簇因**注入面 14 个**暂缓，须先抽画布状态；另 **`ChatView`（3429 行）已补冒烟网** 3 条，可开始拆簇）。边界与验收见 拆分评估；无功能收益，排最后（§4 批次 D）。
+- 剩余：`runtime.py` 压缩簇（**必须先按现状重新定界**）· **`main.py` 的 `lifespan` 分段**（关闭段 + **6 个无耦合启动段** ✅ 已抽；**2026-10-23 续抽 12 段**：可观测性 / 部署前置校验 / 进程指标收集 / harness 订阅 / storage 订阅 / 按模型价格同步 / 租户限流器 / 幂等表保留 / 实例注册 / 存活心跳 / hook 配置 / 僵尸 run 巡检 —— 按"显式传参或返回句柄"抽出，`lifespan` **590 → 511 行**；余 1.6 文件后端 / 1.7 部署扩展 / 3. LLM Gateway 因顺序包装 `base_backend` 与 `_gateway` 耦合较重，暂未动）· **前端 composable**（**批次 1 ✅** 执行/轮询簇 → `useWorkflowExecution.ts`，1746 → 1637 行；**批次 2 ✅** 模板市场簇 → `useWorkflowTemplates.ts`，1636 → 1597 行；持久化簇因**注入面 14 个**暂缓，须先抽画布状态；另 **`ChatView`（3429 行）已补冒烟网** 3 条，可开始拆簇）。边界与验收见 拆分评估；无功能收益，排最后（§4 批次 D）。
+- ⚠ **续抽 lifespan 时顺带修掉两处既有遗留**（均由本仓早前的 `tenant_id → int16/int` 改造引入、在本次全量 `ruff check .` + `pytest` 中才暴露）：`app/knowledge/settings_store.py` 用了 `to_tenant_int(...)` 却**漏了 import**（运行时 `NameError`，静态单文件检查看不出来）· `tests/test_tools_context.py` 的 `get_tenant_id()` 断言仍按字符串写（应为 `0` / `1`）。另：`pytest tests/ --ignore=tests/integration` 在**改动前后均为 53 failed / 2750 passed / 42 skipped**（`git stash` 对比确认），那 53 项与本次拆分无关。
 
 ## 3. 开放项（待确认，不作为计划依据）
 

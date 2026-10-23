@@ -5,6 +5,22 @@
 
 ## [Unreleased]
 
+### 修复
+
+- **统一 Python 侧 `tenant_id` 的消费契约**：`get_tenant_id()` 的调用方绝大多数是「格式化」场景
+  （沙箱路径拼接 `sandbox_root()/tenant`、审计条目的 `tenant` 字段、`kb_access_allowed` 的租户比较、
+  `SkillStore` 目录段）。此前把它改成 `int` 会让 `Path / int` 直接抛 `TypeError`、审计字段变成 `""`。
+  现恢复 `get_tenant_id() -> str`（值规约为数字串，未绑定返回 `""`），另加 `get_tenant_id_int()`
+  供 SQL 参数与 Pydantic 请求体使用。
+- **修复 `app/knowledge/settings_store.py` 的循环导入**：`from app.tools.context import to_tenant_int`
+  放在模块顶部会与 `app.tools.__init__` 形成环（`ImportError: partially initialized module`），
+  改为函数内延迟导入。
+- **同步 53 个因此失配的 Python 测试**（断言仍按字符串租户、SQL 期望仍写 `$N = ''`、请求 query 仍是
+  `tenant_id=t1` 导致 FastAPI 422 等）；`test_line_ledger.TestMigration0022Contract` 因 `0022` 已收敛进
+  基线而显式 skip（非本次改动引入）。
+  验证：`pytest tests/ --ignore=tests/integration` **2797 passed / 48 skipped / 0 failed**，
+  `ruff check .` 全绿。
+
 ### 新增
 
 - **注册邮箱判重布隆过滤器**：注册时先用按租户分片的布隆过滤器快速否定"邮箱未注册"，
@@ -23,6 +39,10 @@
   `tenants.id`（改为 `smallserial`）统一为 2 字节整数，并补 `NOT NULL`。Go 侧
   `DefaultTenantID`/JWT `Claims.TenantID`/各结构体字段改为 `int16`；Python 引擎的 SQL 参数与
   Pydantic 字段、前端 TS 类型同步跟进。设计说明见 `docs/tenant-id-smallint-migration.md`。
+- **`system_settings` 补 `UNIQUE(category, key)`**（迁移 `0003_system_settings_key_unique`）：
+  原先只有 `id` 主键、靠代码"先查后写"保证唯一，并发写可能插出重复键。迁移先检测存量重复、
+  有则 **fail-fast 并列出冲突**，不静默删数据。全链已在真实 PostgreSQL 18.1 上实跑验证
+  （空库 `alembic upgrade head` 到 0003；两条 fail-fast 路径确认生效且不删数据）。
 
 ## [v0.1.261022.01] - 2026-10-22
 

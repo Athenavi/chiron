@@ -240,8 +240,7 @@ create table if not exists system_settings
     value      json,
     updated_at timestamp,
     updated_by varchar(36),
-    encrypted  boolean,
-    unique (category, key)
+    encrypted  boolean
 );
 
 create table if not exists task_idempotency

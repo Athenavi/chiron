@@ -35,13 +35,13 @@ def _entries(directory) -> list[dict]:
 
 
 def test_record_plugin_writes_utc_ts_and_identity(audit_dir):
-    set_tool_context(tenant_id="t1", user_id="u1", session_id="s1")
+    set_tool_context(tenant_id=1, user_id="u1", session_id="s1")
     plugin_audit.record_plugin(plugin="git-helper", action="spawn", success=True, input_keys=["a", "b"])
 
     entry = _entries(audit_dir)[-1]
     assert entry["plugin"] == "git-helper"
     assert entry["action"] == "spawn"
-    assert (entry["tenant"], entry["user"], entry["session"]) == ("t1", "u1", "s1")
+    assert (entry["tenant"], entry["user"], entry["session"]) == ("1", "u1", "s1")
     assert entry["success"] is True
     assert entry["input_keys"] == ["a", "b"]
     assert _UTC_MS.match(entry["ts"]), f"ts 必须是 UTC+毫秒（与另外三条流水一致），得到 {entry['ts']!r}"

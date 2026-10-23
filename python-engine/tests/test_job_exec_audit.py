@@ -48,26 +48,26 @@ async def test_blocked_job_is_audited(audit_dir):
 @pytest.mark.asyncio
 async def test_completed_job_is_audited_with_identity(audit_dir):
     """成功的后台命令：记下命令、结果分类，以及**发起人**（租户/用户/会话）。"""
-    set_tool_context(tenant_id="t1", user_id="u1", session_id="s1")
+    set_tool_context(tenant_id=1, user_id="u1", session_id="s1")
     result = await execute_tool_job(None, "job-ok", "echo hi")
     assert result["status"] == "completed"
 
     last = _entries(audit_dir)[-1]
     assert last["outcome"] == exec_audit.OUTCOME_OK
-    assert (last["tenant"], last["user"], last["session"]) == ("t1", "u1", "s1")
+    assert (last["tenant"], last["user"], last["session"]) == ("1", "u1", "s1")
 
 
 def test_restore_job_context_puts_identity_back():
     """队列 worker 侧的恢复：载荷里带什么，上下文中就恢复什么。"""
-    set_tool_context(tenant_id="", user_id="", session_id="")
+    set_tool_context(tenant_id=0, user_id="", session_id="")
     restore_job_context(
-        {"job_id": "j1", "tenant_id": "t9", "user_id": "u9", "session_id": "s9"}
+        {"job_id": "j1", "tenant_id": "9", "user_id": "u9", "session_id": "s9"}
     )
-    assert (get_tenant_id(), get_user_id(), get_session_id()) == ("t9", "u9", "s9")
+    assert (get_tenant_id(), get_user_id(), get_session_id()) == ("9", "u9", "s9")
 
 
 def test_restore_job_context_ignores_missing_identity():
     """载荷没有身份（旧任务）时不得清空已有上下文，也不得抛错。"""
-    set_tool_context(tenant_id="t-keep", user_id="u-keep", session_id="s-keep")
+    set_tool_context(tenant_id=7, user_id="u-keep", session_id="s-keep")
     restore_job_context({"job_id": "j2", "command": "echo hi"})
-    assert (get_tenant_id(), get_user_id(), get_session_id()) == ("t-keep", "u-keep", "s-keep")
+    assert (get_tenant_id(), get_user_id(), get_session_id()) == ("7", "u-keep", "s-keep")

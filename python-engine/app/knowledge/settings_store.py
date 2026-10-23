@@ -97,6 +97,10 @@ async def save(
     ``cloud_api_key`` 为 None 表示"沿用已存的 key"（改选 provider 之外的场景不强迫重填）；
     显式传空串表示"清空 key"。
     """
+    # 延迟导入：`app.tools` 包会在 __init__ 里拉入知识库相关模块，
+    # 顶部 import 会与本模块形成循环（ImportError: partially initialized module）。
+    from app.tools.context import to_tenant_int
+
     if not user_id:
         raise KnowledgeError("user_id is required")
     if not is_known_provider(provider):

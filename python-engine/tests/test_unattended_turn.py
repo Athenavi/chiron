@@ -279,7 +279,7 @@ class TestRemoteDelegation:
 
         await internal_module.internal_subagent_run(
             internal_module.InternalSubagentRequest(
-                task="t", tenant_id="t1", user_id="u1", unattended=True
+                task="t", tenant_id=1, user_id="u1", unattended=True
             )
         )
         assert captured["unattended"] is True

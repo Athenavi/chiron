@@ -78,7 +78,7 @@ class TestInputValidation:
         from app.tools.memory import memory_search
         svc = FakeMemoryService()
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("")
             assert "query is required" in result["error"]
@@ -91,7 +91,7 @@ class TestInputValidation:
         from app.tools.memory import _MEMORY_SEARCH_MAX_QUERY, memory_search
         svc = FakeMemoryService()
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             long_query = "a" * (_MEMORY_SEARCH_MAX_QUERY + 1)
             result = await memory_search(long_query)
@@ -108,7 +108,7 @@ class TestInputValidation:
         items = [_make_item("m1", "content", 0.9)]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             await memory_search("test", limit=0)
             assert svc.last_top_k == 1
@@ -120,7 +120,7 @@ class TestInputValidation:
         from app.tools.memory import memory_search
         svc = FakeMemoryService()
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             await memory_search("test", limit=1000)
             assert svc.last_top_k == 20
@@ -132,7 +132,7 @@ class TestInputValidation:
         from app.tools.memory import memory_search
         svc = FakeMemoryService()
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             await memory_search("test", limit="not-a-number")
             assert svc.last_top_k == 10
@@ -149,14 +149,14 @@ class TestServiceInvocation:
         from app.tools.memory import memory_search
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=[]))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1", session_id="sess-001")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1, session_id="sess-001")
         try:
             await memory_search("hello", limit=5)
             assert svc.recall_called is True
             assert svc.last_query == "hello"
             assert svc.last_top_k == 5
             assert svc.last_user_id == "u1"
-            assert svc.last_tenant_id == "t1"
+            assert svc.last_tenant_id == "1"
         finally:
             tool_context.restore_context({})
 
@@ -165,7 +165,7 @@ class TestServiceInvocation:
         from app.tools.memory import memory_search
         svc = FakeMemoryService(should_fail=True)
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test")
             assert "error" in result
@@ -189,7 +189,7 @@ class TestServiceInvocation:
     async def test_no_service_returns_not_available(self, monkeypatch):
         from app.tools.memory import memory_search
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: None)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test")
             assert "not available" in result["output"]
@@ -209,7 +209,7 @@ class TestCharacterBudget:
         items = [_make_item("m1", long_content, 0.9)]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test", limit=1)
             assert len(result["results"]) == 1
@@ -226,7 +226,7 @@ class TestCharacterBudget:
         items = [_make_item(f"m{i}", "a" * 400, 0.9 - i * 0.01) for i in range(20)]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test", limit=20)
             # 因字符预算限制，不能返回全部 20 条
@@ -243,7 +243,7 @@ class TestCharacterBudget:
         items = [_make_item(f"m{i}", f"short content {i}", 0.9) for i in range(3)]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test", limit=3)
             assert len(result["results"]) == 3
@@ -261,7 +261,7 @@ class TestResultFormat:
         from app.tools.memory import memory_search
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=[]))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test")
             assert result["count"] == 0
@@ -276,7 +276,7 @@ class TestResultFormat:
         items = [_make_item("m1", "Python asyncio", 0.92, topics=["Python", "asyncio"])]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("Python")
             assert result["count"] == 1
@@ -299,7 +299,7 @@ class TestResultFormat:
         items = [_make_item(f"m{i}", f"c{i}", 0.9 - i * 0.01) for i in range(10)]
         svc = FakeMemoryService(RecallResult(profile_block="", summary_items=items))
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test", limit=3)
             assert result["count"] == 3
@@ -317,7 +317,7 @@ class TestResultFormat:
 
         svc = FakeMemoryService(WeirdResult())
         monkeypatch.setattr("app.memory.service.get_memory_service", lambda: svc)
-        tool_context.set_tool_context(user_id="u1", tenant_id="t1")
+        tool_context.set_tool_context(user_id="u1", tenant_id=1)
         try:
             result = await memory_search("test")
             assert result["count"] == 0

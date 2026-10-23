@@ -71,7 +71,7 @@ async def test_ships_batch_with_token_and_field_mapping(monkeypatch):
 
     from app.tools.context import set_tool_context
 
-    set_tool_context(tenant_id="t1", user_id="u1", session_id="s1")
+    set_tool_context(tenant_id=1, user_id="u1", session_id="s1")
     _record()
     assert exec_audit.SHIP_STATS["enqueued"] == 1
 
@@ -87,7 +87,7 @@ async def test_ships_batch_with_token_and_field_mapping(monkeypatch):
     assert len(records) == 1
     rec = records[0]
     # 字段映射：落盘名 → 网关契约名
-    assert (rec["tenant_id"], rec["user_id"], rec["session_id"]) == ("t1", "u1", "s1")
+    assert (rec["tenant_id"], rec["user_id"], rec["session_id"]) == ("1", "u1", "s1")
     assert rec["tool"] == "shell_exec" and rec["outcome"] == "ok"
     assert rec["exit_code"] == 0 and rec["duration_ms"] == 12
     assert rec["instance"], "必须带来源实例（否则集中之后分不清是谁发的）"

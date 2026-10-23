@@ -21,7 +21,7 @@ from app.gateway.provider import ChatResponse
 from app.main import create_app
 from app.skill.store import SkillStore
 
-TENANT = "t1"
+TENANT = "1"
 USER = "u1"
 
 

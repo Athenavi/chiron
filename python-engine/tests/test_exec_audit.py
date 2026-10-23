@@ -54,14 +54,14 @@ def _entries(root: Path) -> list[dict]:
 def test_records_identity_and_outcome(audit_dir: Path):
     from app.tools.exec_audit import record_execution
 
-    set_tool_context(session_id="s-audit", user_id="u-audit", tenant_id="t-audit")
+    set_tool_context(session_id="s-audit", user_id="u-audit", tenant_id=1)
     record_execution(tool="shell_exec", command="echo hi", outcome="ok", exit_code=0)
 
     entries = _entries(audit_dir)
     assert len(entries) == 1
     entry = entries[0]
     assert entry["tool"] == "shell_exec"
-    assert entry["tenant"] == "t-audit"
+    assert entry["tenant"] == "1"
     assert entry["user"] == "u-audit"
     assert entry["session"] == "s-audit"
     assert entry["outcome"] == "ok"

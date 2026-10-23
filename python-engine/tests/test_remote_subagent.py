@@ -166,7 +166,7 @@ async def test_run_remote_sends_identity_and_token(monkeypatch):
     result = await run_remote(
         engine={"instance_id": "other", "url": "http://b"},
         task="do it",
-        tenant_id="t1",
+        tenant_id=1,
         user_id="u1",
         session_id="s1",
     )
@@ -176,7 +176,7 @@ async def test_run_remote_sends_identity_and_token(monkeypatch):
     assert call["url"] == "http://b/v1/internal/subagent/run"
     assert call["headers"]["X-Internal-Token"] == "tok"
     # 身份必须随请求走（接收方据此重新校验）
-    assert call["json"]["tenant_id"] == "t1" and call["json"]["user_id"] == "u1"
+    assert call["json"]["tenant_id"] == 1 and call["json"]["user_id"] == "u1"
 
 
 async def test_run_remote_without_token_does_not_call(monkeypatch):
@@ -281,18 +281,18 @@ async def test_already_wrapped_output_is_passed_through(monkeypatch):
 
 async def test_receiver_rejects_missing_identity():
     """接收方**重新校验**身份：无归属的跨实例调用一律拒绝。"""
-    out = await internal_subagent_run(InternalSubagentRequest(task="do", tenant_id="", user_id=""))
+    out = await internal_subagent_run(InternalSubagentRequest(task="do", tenant_id=0, user_id=""))
     assert out["ok"] is False and "required" in out["error"]
 
     out2 = await internal_subagent_run(
-        InternalSubagentRequest(task="do", tenant_id="t1", user_id="")
+        InternalSubagentRequest(task="do", tenant_id=1, user_id="")
     )
     assert out2["ok"] is False
 
 
 async def test_receiver_rejects_empty_task():
     out = await internal_subagent_run(
-        InternalSubagentRequest(task="   ", tenant_id="t1", user_id="u1")
+        InternalSubagentRequest(task="   ", tenant_id=1, user_id="u1")
     )
     assert out["ok"] is False and "task" in out["error"]
 
@@ -302,6 +302,6 @@ async def test_receiver_rejects_excessive_depth():
     from app.tools.subagent import MAX_DEPTH
 
     out = await internal_subagent_run(
-        InternalSubagentRequest(task="do", tenant_id="t1", user_id="u1", depth=MAX_DEPTH)
+        InternalSubagentRequest(task="do", tenant_id=1, user_id="u1", depth=MAX_DEPTH)
     )
     assert out["ok"] is False and "depth" in out["error"]
