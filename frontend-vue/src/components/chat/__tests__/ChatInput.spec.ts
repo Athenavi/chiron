@@ -28,7 +28,7 @@ beforeEach(() => {
   localStorage.clear()
   setActivePinia(createPinia())
   // 组件用 auth.user.id 拼历史键；不注入 user 会退化成 :anonymous，就测不到真实路径
-  useAuthStore().user = { id: TEST_USER_ID, email: '', name: '', role: 'user', tenant_id: 't1' }
+  useAuthStore().user = { id: TEST_USER_ID, email: '', name: '', role: 'user', tenant_id: 0 }
 })
 
 describe('ChatInput（输入区交互）', () => {

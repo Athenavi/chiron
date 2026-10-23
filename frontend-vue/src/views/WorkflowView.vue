@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onUnmounted, watch } from 'vue'
 import { useRouter } from 'vue-router'
-import { VueFlow, useVueFlow, Handle, Position } from '@vue-flow/core'
+import { VueFlow, Handle, Position } from '@vue-flow/core'
 import { Background } from '@vue-flow/background'
 import { Controls } from '@vue-flow/controls'
 import { MiniMap } from '@vue-flow/minimap'
@@ -15,16 +15,17 @@ import {
   AlignCenterOutlined, HistoryOutlined, MessageOutlined,
   RocketOutlined,
 } from '@ant-design/icons-vue'
-import { api, listAgents } from '../api'
+import { listAgents } from '../api'
 import type { Agent } from '../api'
 import { collectBindingUsage } from '../utils/kbUsage'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import AttachToAgentDialog from '../components/common/AttachToAgentDialog.vue'
-import type { Node, Edge, Connection, NodeMouseEvent } from '@vue-flow/core'
-import { errorDetail } from '../utils/apiError'
+import type { NodeMouseEvent } from '@vue-flow/core'
 import { useWorkflowExecution } from '../composables/useWorkflowExecution'
 import { useWorkflowTemplates } from '../composables/useWorkflowTemplates'
+import { useWorkflowCanvas } from '../composables/useWorkflowCanvas'
+import { useWorkflowPersistence } from '../composables/useWorkflowPersistence'
 import type { InstanceRecord, NodeRunResult } from '../types/workflow'
 import { setChatPrefill } from '../components/chat/chatPrefill'
 
@@ -63,29 +64,6 @@ function continueInChat(inst: InstanceRecord) {
 
 // ── Types ──
 
-interface GraphNodeBackend {
-  id: string
-  label: string
-  node_type: string
-  config?: Record<string, unknown>
-}
-
-interface GraphEdgeBackend {
-  source_id: string
-  target_id: string
-  condition?: string
-  label?: string
-}
-
-interface GraphRecord {
-  id: string
-  name: string
-  graph_json: string
-  created_at: string
-  updated_at: string
-}
-
-
 // ── Node type definitions ──
 const nodeTypes = [
   { type: 'input', label: t('common.input'), color: '#22c55e', icon: '📥', description: t('admin.receive_user_input') },
@@ -122,27 +100,40 @@ const modelOptions = [
   { value: 'claude-sonnet-4-20250514', label: 'Claude Sonnet 4' },
 ]
 
-// ── Vue Flow ──
-const { findNode, addNodes, addEdges, removeNodes, getNodes, getEdges, getSelectedNodes, fitView } = useVueFlow({
-  defaultEdgeOptions: { type: 'smoothstep', animated: true },
-  multiSelectionKeyCode: ['Shift', 'Meta', 'Control'],
-})
-
 // ── State ──
-const nodes = ref<Node[]>([])
-const edges = ref<Edge[]>([])
 const workflowName = ref(t('workflow.new_workflow'))
 const workflowId = ref<string | null>(null)
-const savedWorkflows = ref<GraphRecord[]>([])
 const instances = ref<InstanceRecord[]>([])
 const showPanel = ref(false)
-const selectedNode = ref<Node | null>(null)
 const isExecuting = ref(false)
 const executionLogs = ref<string[]>([])
 const executionResults = ref<Record<string, NodeRunResult>>({})
 const showDrawer = ref(false)
 const showHistory = ref(false)
-const dragNodeType = ref<string | null>(null)
+
+// ── 画布状态与结构操作：抽到 `useWorkflowCanvas`（依赖注入本视图的 nodeTypes / workflowName / showPanel）──
+// 解构出的名字与原来保持一致 ⇒ 模板与既有函数不必改（可见行为逐字不变）；
+// `genNodeId` / `getNodeColor` / `getNodeIcon` / `addNodes` / `addEdges` / `removeNodes` /
+// `getEdges` / `getSelectedNodes` 只在 composable 内部使用，视图不解构。
+const {
+  nodes,
+  edges,
+  selectedNode,
+  findNode,
+  getNodes,
+  fitView,
+  onDragStart,
+  onDragOver,
+  onDrop,
+  onConnect,
+  autoLayout,
+  deleteSelectedNode,
+  duplicateSelectedNode,
+  onKeydown,
+  toBackendFormat,
+  fromBackendFormat,
+  clearCanvas,
+} = useWorkflowCanvas({ nodeTypes, workflowName, showPanel })
 
 // ── Node config form fields ──
 const editLabel = ref('')
@@ -201,51 +192,7 @@ const agentModelOptions = computed(() => {
   return list
 })
 
-// ── Helper ──
-let nodeCounter = 0
-
-function genNodeId(type: string): string {
-  nodeCounter++
-  return `${type}_${nodeCounter}`
-}
-
-function getNodeColor(type: string): string {
-  return nodeTypes.find(n => n.type === type)?.color || '#6b7280'
-}
-
-function getNodeIcon(type: string): string {
-  return nodeTypes.find(n => n.type === type)?.icon || '📦'
-}
-
-// ── Drag & Drop ──
-function onDragStart(event: DragEvent, type: string) {
-  if (event.dataTransfer) {
-    event.dataTransfer.setData('application/vueflow', type)
-    event.dataTransfer.effectAllowed = 'move'
-  }
-  dragNodeType.value = type
-}
-
-function onDragOver(event: DragEvent) {
-  event.preventDefault()
-  if (event.dataTransfer) event.dataTransfer.dropEffect = 'move'
-}
-
-function onDrop(event: DragEvent) {
-  const type = event.dataTransfer?.getData('application/vueflow')
-  if (!type) return
-  const flowEl = document.querySelector('.vue-flow')
-  if (!flowEl) return
-  const rect = flowEl.getBoundingClientRect()
-  const position = { x: event.clientX - rect.left - 80, y: event.clientY - rect.top - 30 }
-  const nodeDef = nodeTypes.find(n => n.type === type)
-  addNodes([{
-    id: genNodeId(type),
-    type,
-    position,
-    data: { label: nodeDef?.label || type, nodeType: type, color: nodeDef?.color || '#6b7280', icon: nodeDef?.icon || '📦' },
-  }])
-}
+// ── Helper（genNodeId / 颜色 / 图标）与 Drag & Drop：抽到 `useWorkflowCanvas` ──
 
 // ── Node selection ──
 function onNodeClick(event: NodeMouseEvent) {
@@ -345,199 +292,11 @@ watch([editLabel, editSystemPrompt, editPrompt, editUserMessage, editToolName, e
   applyNodeConfig()
 })
 
-// ── Delete / duplicate ──
-function deleteSelectedNode() {
-  if (!selectedNode.value) return
-  removeNodes([selectedNode.value.id])
-  selectedNode.value = null
-  showPanel.value = false
-}
+// ── Delete / duplicate / 快捷键 / Auto layout / Edge connection / 格式转换：抽到 `useWorkflowCanvas` ──
 
-function deleteSelectedNodes() {
-  const selected = getSelectedNodes.value
-  if (selected.length > 0) {
-    removeNodes(selected.map(n => n.id))
-    selectedNode.value = null
-    showPanel.value = false
-  }
-}
+// ── 格式互转（toBackendFormat / fromBackendFormat）已抽到 `useWorkflowCanvas` ──
 
-function duplicateSelectedNode() {
-  if (!selectedNode.value) return
-  const src = findNode(selectedNode.value.id)
-  if (!src) return
-  const copy: Node = {
-    id: genNodeId(src.data?.nodeType || src.type || 'node'),
-    type: src.type,
-    position: { x: src.position.x + 40, y: src.position.y + 40 },
-    data: JSON.parse(JSON.stringify(src.data || {})),
-  }
-  addNodes([copy])
-  message.success(t('workflow.node_copied'))
-}
-
-// 快捷键：Delete 删除选中；Ctrl+D 复制
-function onKeydown(e: KeyboardEvent) {
-  const tag = (e.target as HTMLElement)?.tagName
-  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
-  if ((e.key === 'Delete' || e.key === 'Backspace')) {
-    const selected = getSelectedNodes.value
-    if (selected.length > 0) { e.preventDefault(); deleteSelectedNodes() }
-  } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'd') {
-    e.preventDefault()
-    if (selectedNode.value) duplicateSelectedNode()
-  }
-}
-
-// ── Auto layout（BFS 按层排列） ──
-function autoLayout() {
-  const allNodes = getNodes.value
-  const allEdges = getEdges.value
-  if (allNodes.length === 0) return
-  const indegree: Record<string, number> = {}
-  const adj: Record<string, string[]> = {}
-  for (const n of allNodes) indegree[n.id] = 0
-  for (const e of allEdges) {
-    indegree[e.target] = (indegree[e.target] || 0) + 1
-    ;(adj[e.source] = adj[e.source] || []).push(e.target)
-  }
-  const layer: Record<string, number> = {}
-  const queue: string[] = []
-  for (const n of allNodes) if (indegree[n.id] === 0) { layer[n.id] = 0; queue.push(n.id) }
-  while (queue.length > 0) {
-    const id = queue.shift()!
-    for (const t of adj[id] || []) {
-      layer[t] = Math.max(layer[t] || 0, (layer[id] || 0) + 1)
-      if (--indegree[t] === 0) queue.push(t)
-    }
-  }
-  const colCount: Record<number, number> = {}
-  for (const n of allNodes) {
-    const l = layer[n.id] || 0
-    const col = colCount[l] || 0
-    colCount[l] = col + 1
-    n.position = { x: 40 + l * 220, y: 40 + col * 110 }
-  }
-  message.success(t('common.auto_layout_applied'))
-}
-
-// ── Edge connection（条件节点 handle → 边 label） ──
-function onConnect(params: Connection) {
-  const handle = params.sourceHandle === 'false' ? 'false' : params.sourceHandle === 'true' ? 'true' : undefined
-  addEdges([{
-    id: `e-${params.source}-${params.target}-${Date.now()}`,
-    source: params.source as string,
-    target: params.target as string,
-    sourceHandle: params.sourceHandle || undefined,
-    targetHandle: params.targetHandle || undefined,
-    label: handle,
-    data: { condition: handle },
-    type: 'smoothstep',
-    animated: true,
-  }])
-}
-
-// ── Convert between VueFlow ↔ Backend format ──
-function toBackendFormat(): { nodes: GraphNodeBackend[]; edges: GraphEdgeBackend[]; entry_point: string } {
-  const allNodes = getNodes.value
-  const allEdges = getEdges.value
-  const backendNodes: GraphNodeBackend[] = allNodes.map((n) => {
-    const config: Record<string, unknown> = { ...(n.data?.config || {}) }
-    config.position = { x: Math.round(n.position.x), y: Math.round(n.position.y) }
-    return { id: n.id, label: n.data?.label || n.id, node_type: n.data?.nodeType || n.type || 'tool', config }
-  })
-  const backendEdges: GraphEdgeBackend[] = allEdges.map((e) => ({
-    source_id: e.source,
-    target_id: e.target,
-    condition: e.data?.condition || '',
-    label: typeof e.label === 'string' ? e.label : '',
-  }))
-  const inputNode = allNodes.find(n => n.data?.nodeType === 'input')
-  return { nodes: backendNodes, edges: backendEdges, entry_point: inputNode?.id || allNodes[0]?.id || '' }
-}
-
-function fromBackendFormat(data: unknown) {
-  if (!data) return
-  const graphDef = (typeof data === 'string' ? JSON.parse(data) : data) as {
-    name?: string
-    nodes?: GraphNodeBackend[]
-    edges?: GraphEdgeBackend[]
-  }
-  nodes.value = (graphDef.nodes || []).map((n: GraphNodeBackend): Node => {
-    const cfg = n.config || {}
-    const pos = (cfg.position ?? {}) as { x?: number; y?: number }
-    return {
-      id: n.id,
-      type: n.node_type,
-      position: { x: pos.x || 0, y: pos.y || 0 },
-      data: { label: n.label, nodeType: n.node_type, color: getNodeColor(n.node_type), icon: getNodeIcon(n.node_type), config: cfg },
-    }
-  })
-  edges.value = (graphDef.edges || []).map((e: GraphEdgeBackend, i: number): Edge => ({
-    id: `e-${e.source_id}-${e.target_id}-${i}`,
-    source: e.source_id,
-    target: e.target_id,
-    label: e.label || undefined,
-    data: { condition: e.condition || e.label || undefined },
-    type: 'smoothstep',
-    animated: true,
-  }))
-  workflowName.value = graphDef.name || t('workflow.untitled_workflow')
-  nodeCounter = nodes.value.length + 10
-}
-
-// ── API: Save ──
-async function saveWorkflow() {
-  const graphData = toBackendFormat()
-  const payload: Record<string, unknown> = {
-    id: workflowId.value || undefined,
-    name: workflowName.value,
-    // 归属由网关注入的 ?user_id=（取自 JWT claims）决定，请求体里的 user_id 不被采信
-    graph_json: JSON.stringify({ name: workflowName.value, ...graphData }),
-  }
-  try {
-    const resp = await api.post('/v1/graphs', payload)
-    workflowId.value = resp.data?.data?.id || resp.data?.id
-    message.success(t('workflow.workflow_saved'))
-    await loadWorkflows()
-  } catch (err) {
-    message.error(t('errors.save_failed_error', { error: errorDetail(err, '') }))
-  }
-}
-
-// ── API: Load list ──
-async function loadWorkflows() {
-  try {
-    const resp = await api.get('/v1/graphs')
-    savedWorkflows.value = ((resp.data?.data || []) as GraphRecord[]).filter(r => r.id)
-  } catch {
-    savedWorkflows.value = []
-  }
-}
-
-function loadWorkflow(record: GraphRecord) {
-  workflowId.value = record.id
-  workflowName.value = record.name
-  fromBackendFormat(record.graph_json)
-  executionResults.value = {}
-  executionLogs.value = []
-  message.success(t('common.loaded_name', { name: record.name }))
-}
-
-// ── API: Delete ──
-async function deleteWorkflow(id: string) {
-  try {
-    await api.delete(`/v1/graphs/${id}`)
-    message.success(t('common.deleted'))
-    await loadWorkflows()
-    if (workflowId.value === id) {
-      workflowId.value = null
-      resetCanvas()
-    }
-  } catch (err) {
-    message.error(t('errors.delete_failed_error', { error: errorDetail(err, '') }))
-  }
-}
+// ── 持久化（saveWorkflow / loadWorkflows / loadWorkflow / deleteWorkflow）：抽到 `useWorkflowPersistence` ──
 
 // ── API: Execute（提交后轮询状态） ──
 // ── 执行与状态轮询：抽到 `useWorkflowExecution`（依赖注入视图自己的 ref）──
@@ -563,16 +322,29 @@ const {
 
 // ── Reset ──
 function resetCanvas() {
-  nodes.value = []
-  edges.value = []
-  workflowName.value = t('workflow.new_workflow')
+  clearCanvas()
   workflowId.value = null
-  selectedNode.value = null
-  showPanel.value = false
   executionResults.value = {}
   executionLogs.value = []
-  nodeCounter = 0
 }
+
+// ── 持久化：抽到 `useWorkflowPersistence`（依赖注入画布读写与 resetCanvas）──
+// 解构出的名字与原来保持一致 ⇒ 模板与既有函数不必改（可见行为逐字不变）。
+const {
+  savedWorkflows,
+  saveWorkflow,
+  loadWorkflows,
+  loadWorkflow,
+  deleteWorkflow,
+} = useWorkflowPersistence({
+  workflowId,
+  workflowName,
+  executionResults,
+  executionLogs,
+  toBackendFormat,
+  fromBackendFormat,
+  resetCanvas,
+})
 
 // ── 互联互通：运行到对话（有 id 传 id，未保存则传画布名称，由后端兼容）──
 function runInChat() {

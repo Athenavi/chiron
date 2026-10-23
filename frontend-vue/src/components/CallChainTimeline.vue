@@ -147,7 +147,7 @@ const props = defineProps<{
   spans?: TraceSpan[]
   /** 新用法：传 traceId 由组件自行拉取 GET /v1/traces/{trace_id} */
   traceId?: string
-  tenantId?: string
+  tenantId?: string | number
 }>()
 
 const emit = defineEmits<{

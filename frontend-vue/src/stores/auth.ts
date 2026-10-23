@@ -26,7 +26,7 @@ function loadUserFromStorage(): User | null {
     if (!raw) return null
     const stored = JSON.parse(raw) as UserStored
     // 从存储恢复最小字段，其余字段由后端 profile 填充
-    return { id: stored.id, role: stored.role, name: stored.name, email: '', tenant_id: '' }
+    return { id: stored.id, role: stored.role, name: stored.name, email: '', tenant_id: 0 }
   } catch {
     return null
   }
@@ -113,7 +113,7 @@ export const useAuthStore = defineStore('auth', () => {
         email: data.email,
         name: data.name || data.email,
         role: data.role,
-        tenant_id: data.tenant_id || '',
+        tenant_id: data.tenant_id || 0,
       }
       persistUserToStorage(user.value)
     } catch {

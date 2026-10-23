@@ -12,7 +12,7 @@ import { useAuthStore } from '../auth'
 import { api } from '../../api'
 import { privateKey } from '../../utils/privateStorage'
 
-const mockUser = { id: 'u1', email: 'a@b.c', name: 'A', role: 'admin', tenant_id: 't1' }
+const mockUser = { id: 'u1', email: 'a@b.c', name: 'A', role: 'admin', tenant_id: 1 }
 
 /**
  * localStorage 里**只允许**出现最小字段。
@@ -120,7 +120,7 @@ describe('auth store', () => {
       const store = useAuthStore()
       expect(store.token).toBe('')
       // 恢复时 email / tenant_id 为空 —— 它们不落 localStorage，靠 /v1/auth/profile 回填
-      expect(store.user).toEqual({ ...mockUserStored, email: '', tenant_id: '' })
+      expect(store.user).toEqual({ ...mockUserStored, email: '', tenant_id: 0 })
       expect(store.isAuthenticated).toBe(true)
     })
 
@@ -135,11 +135,11 @@ describe('auth store', () => {
     it('成功后更新并持久化 user', async () => {
       localStorage.setItem('user', JSON.stringify(mockUser))
       vi.mocked(api.get).mockResolvedValue({
-        data: { data: { user_id: 'u2', email: 'x@y.z', name: 'X', role: 'user', tenant_id: 't2' } },
+        data: { data: { user_id: 'u2', email: 'x@y.z', name: 'X', role: 'user', tenant_id: 2 } },
       })
       const store = useAuthStore()
       await store.fetchProfile()
-      expect(store.user).toEqual({ id: 'u2', email: 'x@y.z', name: 'X', role: 'user', tenant_id: 't2' })
+      expect(store.user).toEqual({ id: 'u2', email: 'x@y.z', name: 'X', role: 'user', tenant_id: 2 })
       expect(JSON.parse(localStorage.getItem('user') || 'null')).toEqual({ id: 'u2', name: 'X', role: 'user' })
     })
 

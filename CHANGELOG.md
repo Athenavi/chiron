@@ -22,6 +22,26 @@
   `ADD CONSTRAINT`）、partial index（`WHERE paused`）与 downgrade 断言全部保留，skip 取消。
   验证：`pytest tests/ --ignore=tests/integration` **2803 passed / 42 skipped / 0 failed**，
   `ruff check .` 全绿。
+- **修复前端 `tenant_id → number` 的类型遗留（8 处）**：`vue-tsc -b`（`npm run build` 的前置）
+  此前是**失败**的 —— `stores/auth.ts` 两处恢复/回填仍赋 `''`（`User.tenant_id` 已是 `number`）·
+  `auth.spec.ts` 的 mock 与断言仍用 `'t1'` / `'t2'` / `''` · `CostCenterView` / `MarketView` 的
+  表单字符串未与 API 的 `number` 互转 · `CallChainTimeline` 的 `tenantId?: string` 与调用方
+  （传 `number`）不一致。现已全部归位。
+  验证：`npx vue-tsc -b` 通过 · `npm test` **81 files / 631 tests passed** · `eslint` 0 error。
+
+### 重构
+
+- **拆出 `useWorkflowCanvas.ts` + `useWorkflowPersistence.ts`**（L3-4 前端 composable 批次 4）：
+  `WorkflowView` 的画布核心（Vue Flow 实例、`nodes` / `edges` / 选中态、节点 id 生成、拖拽落点、
+  连线、自动布局、删除/复制/快捷键、VueFlow ↔ 后端格式互转）与持久化（保存 / 列表 / 载入 / 删除）
+  分别抽出，`WorkflowView.vue` **1590 → 1362 行**。「节点配置表单」那一簇（`edit*` 字段 +
+  `onNodeClick` / `applyNodeConfig`）与 16 个表单字段强耦合，保留在视图；`resetCanvas` 横跨画布与
+  执行态，拆为 `clearCanvas()` + 视图侧重置。
+  验证：`npx vue-tsc -b` 通过 · `npm test` **81 files / 631 tests passed** · `eslint` 0 problem。
+- **拆出 `useChatShare.ts`**（L3-4 前端 composable 批次 3）：ChatView 的分享簇（弹窗状态 +
+  选消息 → 生成链接 → 撤销/复制）原样迁到 composable，`ChatView.vue` **3846 → 3771 行**；
+  会话状态经依赖注入（`items` / `sessions` / `activeSessionId` / `switchSession`），模板侧引用的
+  名字不变。
 
 ### 新增
 

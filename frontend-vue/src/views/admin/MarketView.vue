@@ -148,7 +148,7 @@ async function addGrant() {
   try {
     await grantMarketItem({
       item_id: currentItem.value.id,
-      tenant_id: grantForm.tenant_id,
+      tenant_id: Number(grantForm.tenant_id),
       enabled: grantForm.enabled,
     })
     message.success(t('common.authorized'))
@@ -163,7 +163,7 @@ async function addGrant() {
 
 async function removeGrant(g: MarketGrant) {
   try {
-    await deleteMarketGrant(g.item_id, g.tenant_id)
+    await deleteMarketGrant(g.item_id, String(g.tenant_id))
     message.success(t('common.authorization_revoked'))
     grants.value = grants.value.filter(x => !(x.item_id === g.item_id && x.tenant_id === g.tenant_id))
   } catch (e) {

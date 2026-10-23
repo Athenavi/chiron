@@ -65,7 +65,7 @@ function openCreatePool() {
 
 function openEditPool(p: QuotaPoolWithAllocated) {
   poolModalMode.value = 'edit'
-  poolForm.value = { id: p.id, tenant_id: p.tenant_id, resource_type: p.resource_type, total_amount: p.total_amount, period: p.period }
+  poolForm.value = { id: p.id, tenant_id: String(p.tenant_id), resource_type: p.resource_type, total_amount: p.total_amount, period: p.period }
   poolModalVisible.value = true
 }
 
@@ -78,7 +78,7 @@ async function savePool() {
   try {
     if (poolModalMode.value === 'create') {
       await createQuota({
-        tenant_id: poolForm.value.tenant_id,
+        tenant_id: Number(poolForm.value.tenant_id),
         resource_type: poolForm.value.resource_type,
         total_amount: poolForm.value.total_amount,
         period: poolForm.value.period,
