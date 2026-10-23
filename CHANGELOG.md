@@ -16,9 +16,11 @@
   放在模块顶部会与 `app.tools.__init__` 形成环（`ImportError: partially initialized module`），
   改为函数内延迟导入。
 - **同步 53 个因此失配的 Python 测试**（断言仍按字符串租户、SQL 期望仍写 `$N = ''`、请求 query 仍是
-  `tenant_id=t1` 导致 FastAPI 422 等）；`test_line_ledger.TestMigration0022Contract` 因 `0022` 已收敛进
-  基线而显式 skip（非本次改动引入）。
-  验证：`pytest tests/ --ignore=tests/integration` **2797 passed / 48 skipped / 0 failed**，
+  `tenant_id=t1` 导致 FastAPI 422 等）。
+- **线账表 DDL 契约测试迁到基线**：`0022_run_lineage_ledger` 已收敛进 `0001_authoritative_baseline.py`，
+  原测试读取的独立迁移文件不存在。改为从基线 `_DDL` 元组提取，建表列约束、主键（单独的
+  `ADD CONSTRAINT`）、partial index（`WHERE paused`）与 downgrade 断言全部保留，skip 取消。
+  验证：`pytest tests/ --ignore=tests/integration` **2803 passed / 42 skipped / 0 failed**，
   `ruff check .` 全绿。
 
 ### 新增

@@ -141,6 +141,161 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     _verify_deployment_preconditions()
 
     # ── 1.6 文件后端选择（批 B 片 4）──
+    await _start_file_backend()
+
+    # ── 1.7 部署级扩展（批 H）──
+    _start_deployment_extensions()
+
+    # ── 2. Redis 连接池 ──
+    await _start_redis()
+    # ── 2.5. PostgreSQL ──
+    await _start_postgres()
+    # ── 3. LLM Gateway ──
+    await _start_gateway()
+
+    # ── 3.4. 工具/工作流 gateway 注入（六大互通：对话/agent 可调用工作流） ──
+    _bind_gateways()
+
+    # ── 3.45 记忆服务（L2 档案卡：跨会话长期记忆 + 语义检索）──
+    await _start_memory_service()
+
+    # ── 3.6. 六大工作台能力注册（互通基础：TaskRouter 依赖能力注册中心） ──
+    await _register_workbench_capabilities()
+    # ── 4. 限流器（middleware 需要） ──
+    _start_rate_limiter(app)
+
+    # ── 5. MCP Plugin System（用户级连接池：25s 轮询活跃用户配置） ──
+    await _start_mcp_pool()
+    # ── 6. 子 Agent 运行期治理：必须独立于 Redis 可用性启动 ──
+    await _start_subagent_governance()
+    # ── 7. 启动 Queue Worker ──
+    await _start_queue_worker()
+
+    # ── 6.2 幂等表保留策略（A7/C1）──
+    _retention_task = _start_retention_cleaner()
+
+    # ── 6.5. 启动进程指标收集器 ──
+    _metrics_task = _start_process_metrics()
+    # P1-④ 批 B：订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
+    # 把"最多滞后一个 TTL"变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
+    _harness_task = _start_harness_watch()
+
+    # C4：存储配置变更订阅 —— 后台「存储」配置此前只对**网关**生效，引擎媒体后端由 env 在
+    # 启动时确定，改后台对引擎无效（网关写 S3、引擎写本地盘 ⇒ 多副本媒体"间歇性 404"）。
+    # 订阅同一广播，storage 分类到达即热切换媒体后端（app/media/reload.py）。
+    _storage_task = _start_storage_watch()
+
+    # M28：按模型的公开价格同步（多源 + 交叉验证）。`start_price_sync()` 自己判开关，
+    # 未启用时立刻返回 ⇒ 这里可以无条件创建（默认关 = 什么都不做）。
+    _price_sync_task = _start_price_sync()
+    logger.info("Process metrics collector started (interval=10s)")
+
+    # ── 8. 实例注册（批 E1：引擎动态发现）──
+    # 网关 StartEngineDiscovery 每 15s 消费本注册表并动态更新引擎地址（替代静态清单）。
+    # 需 ENGINE_ADVERTISE_URL（引擎网络可达地址）;Redis 不可用/未配置时跳过,网关回退静态地址。
+    # A4：run 归属路由（engine:run:*，批 4）依赖本注册表才能把 instance_id 解析成地址——
+    # 未配置时归属映射会被写入但网关查不到地址，审批/取消仍按一致性哈希漂移。
+    # 这不是故障，但必须让部署者知道"亲和是尽力而为"，而不是以为已按归属路由。
+    _engine_registry = await _start_engine_registry()
+
+    # ── 8b. 实例存活心跳（M17）──
+    # 线账靠它判断"某个在途预留的持有者是不是已经死了"（``engine:alive:{instance_id}``，
+    # 见 app/instance_liveness.py）。**刻意不复用上面那个注册表键**：它只在配了
+    # ENGINE_ADVERTISE_URL 时才写，用它当存活判据 ⇒ 未配置的部署里清扫会静默地把全站预留删空
+    # （读不到键 = 判定所有人都死了）。没 Redis 时 start() 返回 False，清扫随之禁用。
+    _liveness = await _start_instance_liveness()
+
+    # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
+    # 批 G+（钩子协议批次 1）：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）。
+    # 只接受部署级声明；解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
+    _apply_hook_config()
+
+    # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
+    # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
+    # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
+    # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
+    # 续跑的执行体是模块级的 `_auto_resume_runner`（无人值守回合，见其注释）。
+    _reconciler_task = await _start_run_reconciler()
+
+    logger.info("=" * 60)
+    logger.info("Ready. HTTP port: %d", settings.http_port)
+    logger.info("=" * 60)
+
+    yield  # ── 应用运行中 ──
+
+    # ── 关闭 ──
+    # 句柄显式传递（不用 `'x' in locals()` 探测）：见 内部文档 §2.3
+    await _shutdown_lifespan(
+        reconciler_task=_reconciler_task,
+        metrics_task=_metrics_task,
+        retention_task=_retention_task,
+        harness_task=_harness_task,
+        storage_task=_storage_task,
+        price_sync_task=_price_sync_task,
+        engine_registry=_engine_registry,
+        liveness=_liveness,
+    )
+
+
+async def _install_global_exception_handler() -> None:
+    """安装全局异常处理器（从 `lifespan` 抽出；必须在最早期）。"""
+
+    import sys
+    import traceback
+
+    def global_exception_handler(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
+        if issubclass(exc_type, KeyboardInterrupt):
+            return
+        logger.critical(
+            "Unhandled exception",
+            exc_info=(exc_type, exc_value, exc_tb),
+            extra={
+                "traceback": "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
+            },
+        )
+
+    sys.excepthook = global_exception_handler
+
+
+def _start_observability() -> None:
+    """启动可观测性：日志 / tracing / 引擎信息（从 `lifespan` 抽出）。
+
+    **无局部状态耦合**：只读 `settings`，不产生关闭段要用的句柄 —— 纯移动。
+    """
+    from app.observability.logging import configure_logging
+    from app.observability.metrics import ENGINE_INFO
+    from app.observability.tracing import configure_tracing
+
+    configure_logging(settings.log_level)
+    configure_tracing(
+        service_name="python-engine", otlp_endpoint=settings.otel_endpoint
+    )
+    ENGINE_INFO.info({"version": "3.0.0", "instance_id": _get_instance_id()})
+
+    logger.info("=" * 60)
+    logger.info("Chiron Python AI Engine v3.0 — Enterprise Edition")
+    logger.info("=" * 60)
+
+
+def _verify_deployment_preconditions() -> None:
+    """部署前置校验：多副本安全前置（沙箱根 + 媒体后端），从 `lifespan` 抽出。
+
+    与下方 Redis 门禁同一策略：多副本下状态必须共享，否则在运行期以
+    "文件工具间歇性失忆"/"媒体下载 404"的形式暴露；这里提前到启动时暴露。
+    **无局部状态耦合**：纯移动。
+    """
+    verify_sandbox_backend()
+    verify_sandbox_root()
+    verify_media_store()
+
+
+async def _start_file_backend() -> None:
+    """选择文件后端（local / filestore）并按需把执行分流到 sandbox 服务（从 `lifespan` 抽出）。
+
+    **通过 `set_default_backend` 造成进程级副作用**，不返回句柄：后续的部署扩展段与所有工具
+    都从 `app.backends.context.get_backend()` 取，所以这里是纯装配。
+    """
+    # ── 1.6 文件后端选择（批 B 片 4）──
     # 默认 `local`：agent 文件工具直接读写 per-user workspace（行为与历史完全一致）。
     # `filestore`：改为经网关 `/v1/internal/storage/*` 读写部署级 FileStore（共享卷 / S3），
     # 多副本下不再"写 A 副本、读 B 副本"失忆。**显式开关**，不猜部署形态（评审 02 §1）。
@@ -198,49 +353,154 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             "will lose agent file writes across replicas"
         )
 
-    # ── 1.7 部署级扩展（批 H）──
-    # **默认关**：`deploy_extensions_enabled=false` 时 `load_*_from_settings` 直接返回
-    # `None`，连后端都不触碰 —— 零行为变化。开启时从**部署目录**读 `extensions.json`：
-    # 工具登记进注册表，后端虚拟路由装配进默认后端（**重启生效**，不做热切换）。
-    # 任何失败都 fail-soft：记日志、绝不拖垮引擎启动（方案 03 §4 验收③）。
-    from app.plugins.extensions import (
-        DeploymentExtensions,
-        load_deployment_extensions_from_settings,
-    )
-    from app.tools.registry import registry as tool_registry
 
-    deploy_extensions = DeploymentExtensions()
-    deploy_report = load_deployment_extensions_from_settings(
-        tool_registry, extensions=deploy_extensions
-    )
-    if deploy_report is not None:
-        if deploy_report.ok:
-            logger.info(
-                "deployment extensions loaded: tools=%s",
-                deploy_report.loaded_tools or "none",
-            )
-        else:
-            # 部分成功也要可见：`ok` 为假说明清单里有被拒条目（越界 / 非法引用），
-            # 静默会让"配了扩展却没生效"难以排查。
-            logger.warning(
-                "deployment extensions: %d entry(ies) rejected: %s",
-                len(deploy_report.errors),
-                "; ".join(deploy_report.errors),
-            )
-        routes = deploy_extensions.routes
-        if routes:
-            # 基于**当前**默认后端再包一层（它此刻已含 `/skills/` 挂载）——
-            # 不能让这次装配把上一次的挂载覆盖掉。
-            from app.backends.context import get_backend
+def _bind_gateways() -> None:
+    """把 gateway 注入工具 / 工作流 / LLM client（从 `lifespan` 抽出；六大互通基础）。
 
-            set_default_backend(deploy_extensions.build_backend(get_backend()))
-            logger.info("deployment backend routes mounted: %s", sorted(routes))
+    只经各模块的 `bind_gateway(...)` 设置进程级单例，不返回句柄。
+    """
+    from app.tools.graph import bind_gateway as bind_graph_gateway
+    from app.tools.pm import bind_gateway as bind_pm_gateway
+    from app.workflow.tools import bind_gateway as bind_workflow_gateway
 
-    # ── 2. Redis 连接池 ──
-    await _start_redis()
-    # ── 2.5. PostgreSQL ──
-    await _start_postgres()
-    # ── 3. LLM Gateway ──
+    bind_graph_gateway(_gateway)
+    bind_pm_gateway(_gateway)
+    bind_workflow_gateway(_gateway)
+    # LLM client（RAG 检索嵌入）同样接入 gateway
+    from app.llm.client import llm_client
+
+    llm_client.bind_gateway(_gateway)
+    logger.info("Tool/Workflow gateways bound")
+
+
+async def _start_queue_worker() -> None:
+    """启动 Queue Worker，并补投递上次入队失败的工作流（从 `lifespan` 抽出）。
+
+    `_queue_worker` 是模块全局（关闭段按它取消任务），故声明 `global`；
+    `_redis` / `_gateway` 只读，无需声明。
+    """
+    global _queue_worker
+
+    if _redis is not None:
+        _queue_worker = asyncio.create_task(_run_queue_worker(_redis, _gateway))
+        logger.info(
+            "Queue worker started (concurrency=%d)", settings.queue_worker_concurrency
+        )
+    else:
+        logger.info("Queue worker skipped (Redis not available)")
+
+    # 拉起上次入队失败的工作流（X3）：它们在 DB 里是 queued_pending，不拉起就永远不会跑。
+    # 放在队列 worker **之后** —— 先有消费者，再补投递。
+    try:
+        from app.api.workflows import requeue_pending_workflows
+
+        if await requeue_pending_workflows():
+            logger.info("workflow requeue at startup completed")
+    except Exception as exc:  # noqa: BLE001 - 拉起失败不该阻断启动
+        logger.warning("workflow requeue at startup failed: %s", exc)
+
+
+async def _start_memory_service() -> None:
+    """装配记忆服务：L2 档案卡 / 冲突登记 / L3 摘要与巩固投递（从 `lifespan` 抽出）。
+
+    依赖 PostgreSQL 连接池与嵌入链路；任一不可用则记忆服务不启用（API 返回 503 fail-loud）。
+    结果经 `set_memory_service` / `bind_prompt_memory` 注册为**进程级单例**（关闭段与 worker
+    都从 `get_memory_service()` 取），段内其余局部变量无后续引用，故**不返回句柄**。
+
+    注：`llm_client` 原本由上面的 3.4 注入段导入，抽成独立函数后必须自带 import。
+    """
+    try:
+        from app.agent.prompt_engine import bind_memory_service as bind_prompt_memory
+        from app.db import get_pool
+        from app.llm.client import llm_client
+        from app.memory.conflict_manager import ConflictManager
+        from app.memory.consolidator import Consolidator
+        from app.memory.profile import ProfileStore
+        from app.memory.profile_card import ProfileCard
+        from app.memory.service import MemoryService, set_memory_service
+        from app.memory.session_meta import SessionMetaStore
+        from app.memory.summaries import SummaryStore as SummaryWriteStore
+        from app.memory.summariser import build_summariser
+        from app.memory.summary_store import SummaryStore as SummaryRecallStore
+        from app.queue.producer import QueueProducer
+
+        pool = get_pool()
+
+        # 四层装配各归其位。此前这里把 ProfileStore 装到了 session_meta_store 参数上、
+        # 把 Consolidator 装到了 summary_store 参数上 —— 前者导致 L2 条目 API 全走
+        # ProfileCard（没有 access_count/status 等列），后者导致 recall/list_summaries
+        # 调用的方法在 Consolidator 上根本不存在。
+        profile_store = ProfileStore(pool)
+        session_meta_store = SessionMetaStore()
+
+        # 两个同名 SummaryStore 职责不同，且操作同一张 memory_summaries 表：
+        # - app.memory.summaries.SummaryStore：写入侧，Consolidator 依赖它的
+        #   get_by_hash / insert(entry, embedding)
+        # - app.memory.summary_store.SummaryStore：读取侧，带查询缓存与向量召回
+        # 因此「写入用前者、召回用后者」不会造成数据分裂。
+        summary_write = SummaryWriteStore(pool)
+        # 摘要正文由模型生成（A3）。关不掉网关时它自己返回空串 ⇒ Consolidator 退回
+        # 抽取式正文，所以这里无条件装配、由 `memory_summariser_enabled` 决定行为。
+        # 全进程**只建这一个** Consolidator：worker 的两个 handler 经 save_summary 复用它，
+        # 否则装配口径会分裂（此前正是 worker 就地新建了一个只有 store 的裸 Consolidator）。
+        consolidator = Consolidator(
+            store=summary_write,
+            embedder=llm_client.embed,
+            summariser=build_summariser(_gateway),
+        )
+        # Redis 不可用时降级到写入侧（它也有 list_active，只是没有缓存的 recall）——
+        # 让 L3 列表仍能看到数据，而不是整块变成空。
+        summary_store = (
+            SummaryRecallStore(_redis, embedding_fn=llm_client.embed)
+            if _redis is not None
+            else summary_write
+        )
+
+        # 冲突落 Redis：多副本下任一副本登记的冲突，其余副本都看得到。
+        # 进程内那份只是 Redis 不可用时的降级视图。
+        conflict_manager = ConflictManager(_redis)
+        # 巩固任务的投递口。此前**从未注入**，于是 `_enqueue_consolidate` /
+        # `_enqueue_rollup` / `on_session_end` 三处 `if not self._producer: return`
+        # 全部静默返回，全库唯一的 `memory_consolidate` 生产者一次都没跑过 —— L3 摘要
+        # 在生产里一条也没写过。Redis 不可用时仍然不注入：那时连消费者都没有
+        #（启动序列第 7 步按 `_redis is not None` 起 worker），投进去只会堆到流上限被裁掉。
+        mem_svc = MemoryService(
+            store=profile_store,
+            embedder=llm_client.embed,
+            summary_store=summary_store,
+            consolidator=consolidator,
+            session_meta_store=session_meta_store,
+            profile_card=ProfileCard(redis=_redis),
+            conflict_manager=conflict_manager,
+            producer=QueueProducer(_redis) if _redis is not None else None,
+        )
+        set_memory_service(mem_svc)
+        bind_prompt_memory(mem_svc)
+
+        # N1（评审 03 §1.2）：把"空闲会话结束"接到记忆的会话级收尾上。
+        #
+        # 此前 `start_periodic_cleanup` **从未被调用** —— 空闲会话既不清理也不通知，于是
+        # `on_session_end`（会话级 L3 rollup 入队 + 丢 L1）只在"异常/中断退出"那条路径上
+        # 被触发过，**会话级 rollup 永不入队**。
+        await session_meta_store.start_periodic_cleanup(on_expired=mem_svc.on_session_end)
+        logger.info(
+            "Memory service initialized (L2 entries + profile card + L3 summaries; "
+            "consolidation enqueue %s)",
+            "on" if _redis is not None else "OFF — Redis unavailable, L3 不会入队",
+        )
+    except Exception as e:
+        logger.warning("Memory service not available: %s", e)
+
+
+async def _start_gateway() -> None:
+    """装配 LLM Gateway：注册 provider、语义缓存 / 预算、同步租户模型路由（从 `lifespan` 抽出）。
+
+    结果写进**模块全局 `_gateway`**（`get_gateway()`、3.4 注入段与关闭段都从这里取），
+    故声明 `global`。段内其余变量（providers / cache / budget / key_ring / catalog）都是
+    本段私有的，后续段只经 `_gateway` 访问，因此**不返回句柄**。
+    """
+    global _gateway
+
     from app.gateway.budget import TokenBudget
     from app.gateway.cache import SemanticCache
     from app.gateway.provider import LLMProvider
@@ -440,247 +700,50 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("Model route sync failed (non-blocking): %s", e)
     logger.info("LLM Gateway: %s providers", ", ".join(providers.keys()) or "none")
 
-    # ── 3.4. 工具/工作流 gateway 注入（六大互通：对话/agent 可调用工作流） ──
-    from app.tools.graph import bind_gateway as bind_graph_gateway
-    from app.tools.pm import bind_gateway as bind_pm_gateway
-    from app.workflow.tools import bind_gateway as bind_workflow_gateway
 
-    bind_graph_gateway(_gateway)
-    bind_pm_gateway(_gateway)
-    bind_workflow_gateway(_gateway)
-    # LLM client（RAG 检索嵌入）同样接入 gateway
-    from app.llm.client import llm_client
+def _start_deployment_extensions() -> None:
+    """装载部署级扩展：登记工具、把后端虚拟路由装配进默认后端（从 `lifespan` 抽出）。
 
-    llm_client.bind_gateway(_gateway)
-    logger.info("Tool/Workflow gateways bound")
+    **默认关**：`deploy_extensions_enabled=false` 时 `load_*_from_settings` 直接返回
+    `None`，连后端都不触碰 —— 零行为变化。开启时从**部署目录**读 `extensions.json`：
+    工具登记进注册表，后端虚拟路由装配进默认后端（**重启生效**，不做热切换）。
+    任何失败都 fail-soft：记日志、绝不拖垮引擎启动（方案 03 §4 验收③）。
 
-    # ── 3.45 记忆服务（L2 档案卡：跨会话长期记忆 + 语义检索）──
-    # 依赖 PostgreSQL 连接池与嵌入链路；任一不可用则记忆服务不启用（API 返回 503 fail-loud）
-    try:
-        from app.agent.prompt_engine import bind_memory_service as bind_prompt_memory
-        from app.db import get_pool
-        from app.memory.conflict_manager import ConflictManager
-        from app.memory.consolidator import Consolidator
-        from app.memory.profile import ProfileStore
-        from app.memory.profile_card import ProfileCard
-        from app.memory.service import MemoryService, set_memory_service
-        from app.memory.session_meta import SessionMetaStore
-        from app.memory.summaries import SummaryStore as SummaryWriteStore
-        from app.memory.summariser import build_summariser
-        from app.memory.summary_store import SummaryStore as SummaryRecallStore
-        from app.queue.producer import QueueProducer
-
-        pool = get_pool()
-
-        # 四层装配各归其位。此前这里把 ProfileStore 装到了 session_meta_store 参数上、
-        # 把 Consolidator 装到了 summary_store 参数上 —— 前者导致 L2 条目 API 全走
-        # ProfileCard（没有 access_count/status 等列），后者导致 recall/list_summaries
-        # 调用的方法在 Consolidator 上根本不存在。
-        profile_store = ProfileStore(pool)
-        session_meta_store = SessionMetaStore()
-
-        # 两个同名 SummaryStore 职责不同，且操作同一张 memory_summaries 表：
-        # - app.memory.summaries.SummaryStore：写入侧，Consolidator 依赖它的
-        #   get_by_hash / insert(entry, embedding)
-        # - app.memory.summary_store.SummaryStore：读取侧，带查询缓存与向量召回
-        # 因此「写入用前者、召回用后者」不会造成数据分裂。
-        summary_write = SummaryWriteStore(pool)
-        # 摘要正文由模型生成（A3）。关不掉网关时它自己返回空串 ⇒ Consolidator 退回
-        # 抽取式正文，所以这里无条件装配、由 `memory_summariser_enabled` 决定行为。
-        # 全进程**只建这一个** Consolidator：worker 的两个 handler 经 save_summary 复用它，
-        # 否则装配口径会分裂（此前正是 worker 就地新建了一个只有 store 的裸 Consolidator）。
-        consolidator = Consolidator(
-            store=summary_write,
-            embedder=llm_client.embed,
-            summariser=build_summariser(_gateway),
-        )
-        # Redis 不可用时降级到写入侧（它也有 list_active，只是没有缓存的 recall）——
-        # 让 L3 列表仍能看到数据，而不是整块变成空。
-        summary_store = (
-            SummaryRecallStore(_redis, embedding_fn=llm_client.embed)
-            if _redis is not None
-            else summary_write
-        )
-
-        # 冲突落 Redis：多副本下任一副本登记的冲突，其余副本都看得到。
-        # 进程内那份只是 Redis 不可用时的降级视图。
-        conflict_manager = ConflictManager(_redis)
-        # 巩固任务的投递口。此前**从未注入**，于是 `_enqueue_consolidate` /
-        # `_enqueue_rollup` / `on_session_end` 三处 `if not self._producer: return`
-        # 全部静默返回，全库唯一的 `memory_consolidate` 生产者一次都没跑过 —— L3 摘要
-        # 在生产里一条也没写过。Redis 不可用时仍然不注入：那时连消费者都没有
-        #（启动序列第 7 步按 `_redis is not None` 起 worker），投进去只会堆到流上限被裁掉。
-        mem_svc = MemoryService(
-            store=profile_store,
-            embedder=llm_client.embed,
-            summary_store=summary_store,
-            consolidator=consolidator,
-            session_meta_store=session_meta_store,
-            profile_card=ProfileCard(redis=_redis),
-            conflict_manager=conflict_manager,
-            producer=QueueProducer(_redis) if _redis is not None else None,
-        )
-        set_memory_service(mem_svc)
-        bind_prompt_memory(mem_svc)
-
-        # N1（评审 03 §1.2）：把"空闲会话结束"接到记忆的会话级收尾上。
-        #
-        # 此前 `start_periodic_cleanup` **从未被调用** —— 空闲会话既不清理也不通知，于是
-        # `on_session_end`（会话级 L3 rollup 入队 + 丢 L1）只在"异常/中断退出"那条路径上
-        # 被触发过，**会话级 rollup 永不入队**。
-        await session_meta_store.start_periodic_cleanup(on_expired=mem_svc.on_session_end)
-        logger.info(
-            "Memory service initialized (L2 entries + profile card + L3 summaries; "
-            "consolidation enqueue %s)",
-            "on" if _redis is not None else "OFF — Redis unavailable, L3 不会入队",
-        )
-    except Exception as e:
-        logger.warning("Memory service not available: %s", e)
-
-    # ── 3.6. 六大工作台能力注册（互通基础：TaskRouter 依赖能力注册中心） ──
-    await _register_workbench_capabilities()
-    # ── 4. 限流器（middleware 需要） ──
-    _start_rate_limiter(app)
-
-    # ── 5. MCP Plugin System（用户级连接池：25s 轮询活跃用户配置） ──
-    await _start_mcp_pool()
-    # ── 6. 子 Agent 运行期治理：必须独立于 Redis 可用性启动 ──
-    await _start_subagent_governance()
-    # ── 7. 启动 Queue Worker ──
-    if _redis is not None:
-        _queue_worker = asyncio.create_task(_run_queue_worker(_redis, _gateway))
-
-    # 拉起上次入队失败的工作流（X3）：它们在 DB 里是 queued_pending，不拉起就永远不会跑。
-    # 放在队列 worker **之后** —— 先有消费者，再补投递。
-    try:
-        from app.api.workflows import requeue_pending_workflows
-
-        if await requeue_pending_workflows():
-            logger.info("workflow requeue at startup completed")
-    except Exception as exc:  # noqa: BLE001 - 拉起失败不该阻断启动
-        logger.warning("workflow requeue at startup failed: %s", exc)
-        logger.info(
-            "Queue worker started (concurrency=%d)", settings.queue_worker_concurrency
-        )
-    else:
-        logger.info("Queue worker skipped (Redis not available)")
-
-    # ── 6.2 幂等表保留策略（A7/C1）──
-    _retention_task = _start_retention_cleaner()
-
-    # ── 6.5. 启动进程指标收集器 ──
-    _metrics_task = _start_process_metrics()
-    # P1-④ 批 B：订阅 harness 配置变更（Go 侧写入后广播），收到即清进程内缓存 ——
-    # 把"最多滞后一个 TTL"变成即时生效。Redis 不可用时它自己退避重试，不影响启动。
-    _harness_task = _start_harness_watch()
-
-    # C4：存储配置变更订阅 —— 后台「存储」配置此前只对**网关**生效，引擎媒体后端由 env 在
-    # 启动时确定，改后台对引擎无效（网关写 S3、引擎写本地盘 ⇒ 多副本媒体"间歇性 404"）。
-    # 订阅同一广播，storage 分类到达即热切换媒体后端（app/media/reload.py）。
-    _storage_task = _start_storage_watch()
-
-    # M28：按模型的公开价格同步（多源 + 交叉验证）。`start_price_sync()` 自己判开关，
-    # 未启用时立刻返回 ⇒ 这里可以无条件创建（默认关 = 什么都不做）。
-    _price_sync_task = _start_price_sync()
-    logger.info("Process metrics collector started (interval=10s)")
-
-    # ── 8. 实例注册（批 E1：引擎动态发现）──
-    # 网关 StartEngineDiscovery 每 15s 消费本注册表并动态更新引擎地址（替代静态清单）。
-    # 需 ENGINE_ADVERTISE_URL（引擎网络可达地址）;Redis 不可用/未配置时跳过,网关回退静态地址。
-    # A4：run 归属路由（engine:run:*，批 4）依赖本注册表才能把 instance_id 解析成地址——
-    # 未配置时归属映射会被写入但网关查不到地址，审批/取消仍按一致性哈希漂移。
-    # 这不是故障，但必须让部署者知道"亲和是尽力而为"，而不是以为已按归属路由。
-    _engine_registry = await _start_engine_registry()
-
-    # ── 8b. 实例存活心跳（M17）──
-    # 线账靠它判断"某个在途预留的持有者是不是已经死了"（``engine:alive:{instance_id}``，
-    # 见 app/instance_liveness.py）。**刻意不复用上面那个注册表键**：它只在配了
-    # ENGINE_ADVERTISE_URL 时才写，用它当存活判据 ⇒ 未配置的部署里清扫会静默地把全站预留删空
-    # （读不到键 = 判定所有人都死了）。没 Redis 时 start() 返回 False，清扫随之禁用。
-    _liveness = await _start_instance_liveness()
-
-    # 批 G：用户自定义 hook 误开必须可见（方案 03 §3.2）
-    # 批 G+（钩子协议批次 1）：部署级声明文件（`hooks_config_path` 为空 ⇒ 零行为变化）。
-    # 只接受部署级声明；解析失败只记 error + 审计并**不注册任何 hook**，绝不拖垮启动。
-    _apply_hook_config()
-
-    # ── C1 批 3：僵尸 run 巡检（启动一次 + 周期 60s + 每实例抖动）──
-    # 它只修正"旧主已死"的 run 状态（`running` → `checkpointed`；快照超冷窗口 → `abandoned`），
-    # **不触发续跑** —— 自动续跑需要重建 AgentTask，而配置只存在于提交请求里
-    # （见评审 03 §17.2）。巡检起不来不该拖垮引擎启动，故 try 包住。
-    # 续跑的执行体是模块级的 `_auto_resume_runner`（无人值守回合，见其注释）。
-    _reconciler_task = await _start_run_reconciler()
-
-    logger.info("=" * 60)
-    logger.info("Ready. HTTP port: %d", settings.http_port)
-    logger.info("=" * 60)
-
-    yield  # ── 应用运行中 ──
-
-    # ── 关闭 ──
-    # 句柄显式传递（不用 `'x' in locals()` 探测）：见 内部文档 §2.3
-    await _shutdown_lifespan(
-        reconciler_task=_reconciler_task,
-        metrics_task=_metrics_task,
-        retention_task=_retention_task,
-        harness_task=_harness_task,
-        storage_task=_storage_task,
-        price_sync_task=_price_sync_task,
-        engine_registry=_engine_registry,
-        liveness=_liveness,
-    )
-
-
-async def _install_global_exception_handler() -> None:
-    """安装全局异常处理器（从 `lifespan` 抽出；必须在最早期）。"""
-
-    import sys
-    import traceback
-
-    def global_exception_handler(exc_type: Any, exc_value: Any, exc_tb: Any) -> None:
-        if issubclass(exc_type, KeyboardInterrupt):
-            return
-        logger.critical(
-            "Unhandled exception",
-            exc_info=(exc_type, exc_value, exc_tb),
-            extra={
-                "traceback": "".join(traceback.format_exception(exc_type, exc_value, exc_tb))
-            },
-        )
-
-    sys.excepthook = global_exception_handler
-
-
-def _start_observability() -> None:
-    """启动可观测性：日志 / tracing / 引擎信息（从 `lifespan` 抽出）。
-
-    **无局部状态耦合**：只读 `settings`，不产生关闭段要用的句柄 —— 纯移动。
+    只经 `set_default_backend` 产生进程级副作用，**不返回句柄**：扩展登记的工具与路由都落在
+    全局注册表 / 默认后端里，后续的关闭段无需再持有 `deploy_extensions`。
     """
-    from app.observability.logging import configure_logging
-    from app.observability.metrics import ENGINE_INFO
-    from app.observability.tracing import configure_tracing
-
-    configure_logging(settings.log_level)
-    configure_tracing(
-        service_name="python-engine", otlp_endpoint=settings.otel_endpoint
+    from app.plugins.extensions import (
+        DeploymentExtensions,
+        load_deployment_extensions_from_settings,
     )
-    ENGINE_INFO.info({"version": "3.0.0", "instance_id": _get_instance_id()})
+    from app.tools.registry import registry as tool_registry
 
-    logger.info("=" * 60)
-    logger.info("Chiron Python AI Engine v3.0 — Enterprise Edition")
-    logger.info("=" * 60)
+    deploy_extensions = DeploymentExtensions()
+    deploy_report = load_deployment_extensions_from_settings(
+        tool_registry, extensions=deploy_extensions
+    )
+    if deploy_report is not None:
+        if deploy_report.ok:
+            logger.info(
+                "deployment extensions loaded: tools=%s",
+                deploy_report.loaded_tools or "none",
+            )
+        else:
+            # 部分成功也要可见：`ok` 为假说明清单里有被拒条目（越界 / 非法引用），
+            # 静默会让"配了扩展却没生效"难以排查。
+            logger.warning(
+                "deployment extensions: %d entry(ies) rejected: %s",
+                len(deploy_report.errors),
+                "; ".join(deploy_report.errors),
+            )
+        routes = deploy_extensions.routes
+        if routes:
+            # 基于**当前**默认后端再包一层（它此刻已含 `/skills/` 挂载）——
+            # 不能让这次装配把上一次的挂载覆盖掉。
+            from app.backends.context import get_backend, set_default_backend
 
-
-def _verify_deployment_preconditions() -> None:
-    """部署前置校验：多副本安全前置（沙箱根 + 媒体后端），从 `lifespan` 抽出。
-
-    与下方 Redis 门禁同一策略：多副本下状态必须共享，否则在运行期以
-    "文件工具间歇性失忆"/"媒体下载 404"的形式暴露；这里提前到启动时暴露。
-    **无局部状态耦合**：纯移动。
-    """
-    verify_sandbox_backend()
-    verify_sandbox_root()
-    verify_media_store()
+            set_default_backend(deploy_extensions.build_backend(get_backend()))
+            logger.info("deployment backend routes mounted: %s", sorted(routes))
 
 
 async def _start_redis() -> None:

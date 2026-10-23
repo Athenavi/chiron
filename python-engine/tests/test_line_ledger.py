@@ -46,26 +46,36 @@ _REDIS_URL = (
     os.getenv("CHIRON_TEST_REDIS_URL") or os.getenv("REDIS_URL") or "redis://127.0.0.1:6379/0"
 )
 
-_MIGRATION_0022 = (
-    Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0022_run_lineage_ledger.py"
+_BASELINE = (
+    Path(__file__).resolve().parents[2] / "migrations" / "versions" / "0001_authoritative_baseline.py"
 )
 
 
-def _migration_sql_statements() -> list[str]:
-    """把迁移里每条 ``op.execute`` 的 SQL 字面量取出来（空白归一），而不是在测试里重打一遍。"""
-    tree = ast.parse(_MIGRATION_0022.read_text(encoding="utf-8"))
-    out: list[str] = []
-    for node in ast.walk(tree):
+def _baseline_ddl() -> list[str]:
+    """从基线 `_DDL` 元组取出全部 DDL 字面量（空白归一）。
+
+    `0022_run_lineage_ledger` 已收敛进权威基线 —— 契约仍然有效，只是数据源从
+    「独立迁移文件」换成「基线 `_DDL` 元组」，避免测试指向一个已不存在的文件。
+    """
+    tree = ast.parse(_BASELINE.read_text(encoding="utf-8"))
+    for node in tree.body:
         if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "execute"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
+            isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "_DDL"
+            and isinstance(node.value, ast.Tuple)
         ):
-            out.append(" ".join(str(node.args[0].value).split()))
-    return out
+            return [
+                " ".join(str(elt.value).split())
+                for elt in node.value.elts
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str)
+            ]
+    raise AssertionError("baseline `_DDL` tuple not found")
+
+
+def _lineage_ddl() -> list[str]:
+    """基线里所有触及 `run_lineage_ledger` 的 DDL（建表 / 约束 / 索引）。"""
+    return [s for s in _baseline_ddl() if "run_lineage_ledger" in s]
 
 
 class _FakeStore:
@@ -1466,34 +1476,30 @@ class TestRunnerWiring:
         assert seen["finish_kwargs"]["status"] == "failed"
 
 
-# ── 迁移 0022 的契约（口径写进 DDL，别在下一轮被顺手改掉）───────────────
+# ── 线账表的 DDL 契约（口径写进 DDL，别在下一轮被顺手改掉）───────────────
 #
-# ⚠ 2026-10-23：迁移 `0022_run_lineage_ledger.py` 已被**收敛进权威基线**
-# `0001_authoritative_baseline.py`（同一份 DDL 见基线 549/986/1059 行，含 partial
-# index `... WHERE paused`），本文件的读取路径因此失效。这五项不是 `tenant_id`
-# 改型引入的回归，而是“迁移收敛时未同步契约测试”的旧账；契约本身仍有效，
-# 应迁到基线再开。在此之前显式 skip，避免用改断言的方式伪装成功。
-@pytest.mark.skip(
-    reason="0022 已收敛进 0001 基线；契约测试待迁移到基线（见本段注释）"
-)
-class TestMigration0022Contract:
-    def test_chain_head(self) -> None:
-        src = _MIGRATION_0022.read_text(encoding="utf-8")
-        assert 'revision: str = "0022_run_lineage_ledger"' in src
-        assert '"0021_subagent_lineage_root"' in src
+# 这些断言原先读 `0022_run_lineage_ledger.py`；该迁移已**收敛进权威基线**
+# `0001_authoritative_baseline.py`（建表 / 约束 / 索引分别见基线 `_DDL`），
+# 契约本身不变，数据源改为基线。
+class TestLineageLedgerBaselineContract:
+    def test_baseline_owns_the_table(self) -> None:
+        """基线是根（无前驱），且表登记进 `_TABLES` —— downgrade 才能按 reversed 删掉它。"""
+        src = _BASELINE.read_text(encoding="utf-8")
+        assert 'revision: str = "0001_authoritative_baseline"' in src
+        assert "down_revision: Union[str, Sequence[str], None] = None" in src
+        assert '"run_lineage_ledger",' in src
 
-    def test_table_is_idempotent_and_stores_no_usage(self) -> None:
+    def test_table_stores_no_usage(self) -> None:
         """**本表不存 used / reserved**。累计一旦有第二份就一定会和明细对不上；预留则是
         会过期的协调态 —— 放表里需要一个回收任务，崩溃的 run 会把额度永久占住。
 
         判的是**列名**，不是子串：`updated_at` / `updated_by` 里也含 "used"，按子串禁会把
-        一条正常的时间列也禁掉（那种断言要么写成一长串 replace 补丁，要么迟早被误改）。
+        一条正常的时间列也禁掉。
         """
-        ddl = [s for s in _migration_sql_statements() if "CREATE TABLE" in s]
+        ddl = [s for s in _baseline_ddl() if "CREATE TABLE public.run_lineage_ledger" in s]
         assert len(ddl) == 1
-        assert "CREATE TABLE IF NOT EXISTS run_lineage_ledger" in ddl[0]
-        body = ddl[0].split("run_lineage_ledger", 1)[1]
-        body = body[body.index("(") + 1 : body.rindex("PRIMARY KEY")]
+        body = ddl[0].split("public.run_lineage_ledger", 1)[1]
+        body = body[body.index("(") + 1 : body.rindex(")")]
         cols = [part.strip().split()[0] for part in body.split(",") if part.strip()]
         assert {"root_run_id", "tenant_id", "cap_tokens", "paused"} <= set(cols), cols
         for forbidden in (
@@ -1507,30 +1513,36 @@ class TestMigration0022Contract:
         ):
             assert forbidden not in cols, forbidden
         for required in (
-            "cap_tokens bigint NOT NULL DEFAULT 0",
-            "paused boolean NOT NULL DEFAULT false",
+            "cap_tokens bigint DEFAULT 0 NOT NULL",
+            "paused boolean DEFAULT false NOT NULL",
             "updated_by",
-            "PRIMARY KEY (root_run_id)",
         ):
             assert required in ddl[0], required
+        # 主键在单独的 ALTER TABLE 里（pg_dump 顺序：建表 → 约束）
+        assert any(
+            "ADD CONSTRAINT run_lineage_ledger_pkey PRIMARY KEY (root_run_id)" in s
+            for s in _lineage_ddl()
+        )
 
     def test_paused_index_is_partial(self) -> None:
         """绝大多数线永远不会被暂停 ⇒ 只给 paused 行建索引。"""
-        idx = [s for s in _migration_sql_statements() if "CREATE INDEX" in s]
+        idx = [s for s in _lineage_ddl() if "CREATE INDEX" in s]
         assert len(idx) == 1
-        assert "IF NOT EXISTS ix_run_lineage_ledger_paused" in idx[0]
+        assert "ix_run_lineage_ledger_paused" in idx[0]
         assert "WHERE paused" in idx[0]
 
     def test_control_state_query_is_tenant_scoped(self) -> None:
         assert "WHERE root_run_id = $1 AND tenant_id = $2" in " ".join(LEDGER_SELECT_SQL.split())
 
     def test_no_plpgsql_block(self) -> None:
-        assert "$$" not in _MIGRATION_0022.read_text(encoding="utf-8")
+        # 只判本表相关语句：基线里其它表可能含函数体
+        assert all("$$" not in s for s in _lineage_ddl())
 
     def test_downgrade_is_the_reverse_order(self) -> None:
-        src = _MIGRATION_0022.read_text(encoding="utf-8")
+        src = _BASELINE.read_text(encoding="utf-8")
         down = src.split("def downgrade", 1)[1]
-        assert "ix_run_lineage_ledger_paused" in down and "DROP TABLE IF EXISTS run_lineage_ledger" in down
+        assert "reversed(_TABLES)" in down
+        assert "DROP TABLE IF EXISTS public.{name} CASCADE" in down
 
 
 # ── 真 Redis：Lua 的算术只有 Redis 能判 ─────────────────────────────────
