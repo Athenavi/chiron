@@ -33,9 +33,9 @@ def verify_sandbox_root() -> None:
     - 非生产环境允许缺省，但打印 WARN 说明多副本要求。
     - 已显式配置、但解析结果落在当前工作目录内时给出 WARN（疑似仍是容器本地盘）。
     """
+    from app.envmode import env_name as _current_env_name
+    from app.envmode import is_production
     from app.tools.sandbox import SANDBOX_ROOT_ENV, sandbox_root
-
-    from app.envmode import env_name as _current_env_name, is_production
 
     # 生产判定走 app.envmode 的**唯一入口**：此前这里只看 CHIRON_ENV，而 config.py 的
     # fail-fast 看 APP_ENV/PYTHON_ENV ⇒ 只设其中一个时另一半门禁静默失效。

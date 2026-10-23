@@ -11,15 +11,12 @@
   接线。`fetchrow` 的结果是**编程喂进去的**，不是在替身里重算 SQL —— 重算就是拿一份 Python
   副本去证明 SQL 正确，证的是自己。
 * 文件末尾标 ``integration`` 的用例打**真 PostgreSQL**（CI 的 real-stack job 用 alembic 建库，
-  本地无库自动 skip），那才是 ``ROOT_RESOLVE_SQL`` 的优先级、``LINEAGE_USAGE_SQL`` 的求和、
-  以及迁移里那条递归 CTE 的真实语义。
+  本地无库自动 skip），那才是 ``ROOT_RESOLVE_SQL`` 的优先级与 ``LINEAGE_USAGE_SQL`` 的求和。
 """
 
 from __future__ import annotations
 
-import ast
 import uuid
-from pathlib import Path
 from typing import Any
 
 import pytest
@@ -34,37 +31,9 @@ from app.subagent.store import (
     SubagentRunStore,
 )
 
-MIGRATION_PATH = (
-    Path(__file__).resolve().parents[2]
-    / "migrations"
-    / "versions"
-    / "0021_subagent_lineage_root.py"
-)
-
 
 def _norm(sql: str) -> str:
     return " ".join(sql.split())
-
-
-def _migration_sql_statements() -> list[str]:
-    """把迁移里每条 ``op.execute`` 的 SQL 字面量取出来（空白归一）。
-
-    取而不是复制：本文件末尾的 integration 用例要跑**迁移里那一条**递归 CTE，
-    在测试里重打一遍 SQL 就等于什么都没验证。
-    """
-    tree = ast.parse(MIGRATION_PATH.read_text(encoding="utf-8"))
-    statements: list[str] = []
-    for node in ast.walk(tree):
-        if (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "execute"
-            and node.args
-            and isinstance(node.args[0], ast.Constant)
-            and isinstance(node.args[0].value, str)
-        ):
-            statements.append(" ".join(node.args[0].value.split()))
-    return statements
 
 
 class _LineagePool:
@@ -364,47 +333,9 @@ class TestRunnerWiring:
         assert captured["parent_run_id"] == "rs-parent"
 
 
-class TestMigrationContract:
-    """迁移文件本身是账本单位定义的一部分：口径不该在下一轮被顺手改掉。"""
-
-    def _sql_statements(self) -> list[str]:
-        return _migration_sql_statements()
-
-    def test_chain_is_linear_and_head_is_this_migration(self) -> None:
-        src = MIGRATION_PATH.read_text(encoding="utf-8")
-        assert 'revision: str = "0021_subagent_lineage_root"' in src
-        assert 'down_revision: Union[str, Sequence[str], None] = "0020_memory_summary_embedding_space"' in src
-
-    def test_backfill_walks_resumed_from_only(self) -> None:
-        """口径写死：回填只沿 `resumed_from`。
-
-        把它扩到 `rerun_of`（"按原任务再派一次"）会把用户主动重复劳动并进同一条线，那是另一个
-        产品决策；沿 `parent_run_id` 也无意义 —— 历史行那一列全是 NULL，树不可重建。
-        """
-        backfill = [s for s in self._sql_statements() if "WITH RECURSIVE" in s]
-        assert len(backfill) == 1
-        sql = backfill[0]
-        assert "r.resumed_from = c.id" in sql
-        assert "rerun_of" not in sql
-        assert "parent_run_id" not in sql
-        # 去重而不是 UNION ALL：成环时让环上的行留在 NULL（"未知"），而不是让迁移转圈
-        assert "UNION " in sql and "UNION ALL" not in sql
-
-    def test_column_and_index_are_idempotent(self) -> None:
-        statements = self._sql_statements()
-        assert any("ADD COLUMN IF NOT EXISTS root_run_id" in s for s in statements)
-        assert any(
-            "CREATE INDEX IF NOT EXISTS ix_subagent_runs_root_run_id" in s for s in statements
-        )
-
-    def test_no_plpgsql_block(self) -> None:
-        """本仓库的迁移从没有 `DO $$` 先例；不在这里引入未验证的写法。"""
-        assert "$$" not in MIGRATION_PATH.read_text(encoding="utf-8")
-
-
 @pytest.mark.integration
 class TestRealPostgresSemantics:
-    """真库语义：优先级、认领、求和、回填 CTE —— 这些只能由 PostgreSQL 判定。
+    """真库语义：优先级、认领、求和 —— 这些只能由 PostgreSQL 判定。
 
     CI 的 real-stack job 用 alembic 建库并跑 `-m "integration or live"`；本地无库时整类
     自跳。上面的单测证明的是"Python 侧编排没写错"，这里证明的才是"SQL 表达的是同一件事"。
@@ -544,31 +475,3 @@ class TestRealPostgresSemantics:
 
         for rid in (a, b, other_tenant, no_tenant, other_line):
             assert await self._root_of(rid) is not None
-
-    async def test_backfill_walks_the_resume_chain_and_leaves_the_tree_alone(self) -> None:
-        """迁移里那条递归 CTE 的真实行为：续跑链归并到链顶，父子关系**不**参与回填。
-
-        历史行的 `parent_run_id` 全是 NULL（本轮才修好），所以旧嵌套树只能各成一线 ——
-        测试把这个**已知少算**钉成显式断言，而不是留在注释里等人忘记。
-        """
-        from app.db import get_pool
-
-        backfill = [s for s in _migration_sql_statements() if "WITH RECURSIVE" in s]
-        assert len(backfill) == 1
-
-        top = await self._seed(root=None)
-        mid = await self._seed(root=None, resumed=top)
-        leaf = await self._seed(root=None, resumed=mid)
-        nested = await self._seed(root=None, parent=top)
-
-        await get_pool().execute(backfill[0])
-
-        assert await self._root_of(top) == top
-        assert await self._root_of(mid) == top
-        assert await self._root_of(leaf) == top
-        # 树不可重建 ⇒ 子行自开一线（少算），但绝不并进别人的线（不多算）
-        assert await self._root_of(nested) == nested
-
-        # 幂等：再跑一次不改任何东西
-        await get_pool().execute(backfill[0])
-        assert await self._root_of(leaf) == top

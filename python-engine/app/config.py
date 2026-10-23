@@ -468,7 +468,6 @@ class Settings(BaseSettings):
         import base64
         import hashlib
         import hmac
-        import os
 
         # 生产判定走 app.envmode 的**唯一入口**（并集认 CHIRON_ENV / APP_ENV / PYTHON_ENV）。
         # 此前这里只看 APP_ENV/PYTHON_ENV，而 deps.verify_sandbox_root 只看 CHIRON_ENV ⇒
