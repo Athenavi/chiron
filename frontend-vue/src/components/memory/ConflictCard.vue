@@ -188,7 +188,7 @@ async function dismiss() {
 }
 
 .conflict-title {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--warning);
   flex: 1;
 }
@@ -232,7 +232,7 @@ async function dismiss() {
 }
 
 .value-content {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   word-break: break-all;
 }
 

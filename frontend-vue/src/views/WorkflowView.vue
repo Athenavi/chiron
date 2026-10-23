@@ -1474,12 +1474,12 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .main-area { display: flex; flex: 1; overflow: hidden; position: relative; }
 .node-palette { width: 168px; padding: 12px; border-right: 1px solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
-.palette-title { font-weight: 600; font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+.palette-title { font-weight: var(--fw-semibold); font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
 .palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: 1px solid var(--border-card); border-radius: 8px; cursor: grab; font-size: 13px; transition: box-shadow var(--dur-fast), border-color var(--dur-fast); user-select: none; }
 .palette-item:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
 .palette-item:active { cursor: grabbing; }
 .palette-icon { font-size: 16px; }
-.palette-label { font-weight: 500; color: var(--text-primary); }
+.palette-label { font-weight: var(--fw-medium); color: var(--text-primary); }
 .palette-hint { margin-top: 14px; font-size: 11px; line-height: 1.7; color: var(--text-tertiary); }
 .canvas-wrapper { flex: 1; position: relative; }
 /* 自定义节点：主题变量 + 执行状态 */
@@ -1488,15 +1488,15 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .custom-node.status-error { box-shadow: 0 0 0 2px var(--error), var(--shadow-lg); }
 .custom-node.status-running { animation: nodePulse var(--dur-pulse) ease-in-out infinite; }
 @keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 2px var(--info-bg); } 50% { box-shadow: 0 0 0 4px var(--info); } }
-.node-header { padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: 600; font-size: 13px; white-space: nowrap; color: var(--text-primary); }
+.node-header { padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: var(--fw-semibold); font-size: 13px; white-space: nowrap; color: var(--text-primary); }
 .node-body { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
 .node-type-tag { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-size: 10px; color: var(--text-tertiary); }
 .node-detail { font-size: 10px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
 .property-panel { width: 300px; border-left: 1px solid var(--border); background: var(--bg-card); flex-shrink: 0; overflow-y: auto; }
-.panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid var(--border); font-weight: var(--fw-semibold); font-size: 14px; color: var(--text-primary); }
 .panel-body { padding: 12px; }
 .section-divider { height: 1px; background: var(--border); margin: 12px 0; }
-.section-title { font-weight: 600; font-size: 13px; color: var(--text-primary); margin-bottom: 8px; }
+.section-title { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); margin-bottom: 8px; }
 .agent-hint { margin-top: 4px; font-size: 11px; color: var(--warning); }
 /* 执行日志 + 结果 */
 .execution-bar { border-top: 1px solid var(--border); background: var(--bg-secondary); color: var(--text-primary); font-family: var(--font-mono); font-size: 12px; padding: 8px 16px; flex-shrink: 0; max-height: 220px; overflow-y: auto; }
@@ -1506,7 +1506,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .execution-results { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
 .result-item { border: 1px solid var(--border); border-radius: 8px; background: var(--bg-card); overflow: hidden; }
 .result-item-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: 1px solid var(--border); }
-.result-node { font-weight: 600; color: var(--text-primary); }
+.result-node { font-weight: var(--fw-semibold); color: var(--text-primary); }
 .result-status { margin-left: auto; }
 .result-output { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); max-height: 140px; overflow-y: auto; }
 /* 列表 */
@@ -1514,18 +1514,18 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .workflow-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: 1px solid var(--border-card); border-radius: 8px; background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
 .workflow-item:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
 .wf-item-info { flex: 1; min-width: 0; }
-.wf-item-name { font-weight: 600; font-size: 14px; color: var(--text-primary); }
+.wf-item-name { font-weight: var(--fw-semibold); font-size: 14px; color: var(--text-primary); }
 .wf-item-time { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
 /* 执行历史 */
 .history-list { display: flex; flex-direction: column; gap: 10px; }
 .history-item { border: 1px solid var(--border-card); border-radius: 8px; background: var(--bg-card); padding: 10px 12px; }
 .history-head { display: flex; align-items: center; gap: 8px; }
-.history-name { font-weight: 600; font-size: 13px; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.history-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { font-size: 11px; color: var(--text-tertiary); }
 .history-error { margin-top: 6px; font-size: 12px; color: var(--error); }
 .history-results { margin-top: 8px; display: flex; flex-direction: column; gap: 6px; }
 .history-result { border-top: 1px dashed var(--border); padding-top: 6px; }
-.history-node { font-size: 11px; font-weight: 600; color: var(--primary); }
+.history-node { font-size: 11px; font-weight: var(--fw-semibold); color: var(--primary); }
 .history-output { margin: 4px 0 0; font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
 
 /* 移动端：节点面板和属性面板收窄，toolbar 允许换行；属性面板改为浮层保证画布宽度 */
@@ -1585,6 +1585,6 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
   padding: 10px 4px; border-bottom: 1px solid var(--border-color); }
 .template-item:last-child { border-bottom: none; }
 .template-meta { display: flex; flex-direction: column; gap: 2px; min-inline-size: 0; }
-.template-name { font-weight: 500; }
+.template-name { font-weight: var(--fw-medium); }
 .template-count { color: var(--text-secondary); font-size: 12px; }
 </style>

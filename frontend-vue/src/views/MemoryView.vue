@@ -868,12 +868,12 @@ function pct(n: number): string {
   align-items: center;
   gap: 8px;
   font-size: 24px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   letter-spacing: -0.01em;
 }
 .title .subtitle {
   font-size: 12px;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   color: var(--text-secondary, #888);
 }
 .search-card {
@@ -882,7 +882,7 @@ function pct(n: number): string {
 .result-section-title {
   margin: 18px 0 8px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-secondary, #888);
 }
 .entry-card {
@@ -895,7 +895,7 @@ function pct(n: number): string {
   flex-wrap: wrap;
 }
 .entry-key {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .entry-actions {
   margin-left: auto;

@@ -146,7 +146,7 @@ function startSso(p: SsoPublicProvider) {
   border-radius: 5px;
   color: var(--on-solid);
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   display: inline-flex;
   align-items: center;
   justify-content: center;

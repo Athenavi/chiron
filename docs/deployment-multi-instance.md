@@ -102,6 +102,11 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
   用 `pg_dump --schema-only` 导出、固化成这**一条**基线并删除 `0002`–`0029` ——
   全新库一次 `upgrade head` 即达终态，"先建后删"的历史不再存在。等价性已对拍（1549 行结构元数据 diff 为空）。
   已存在于旧 revision 的库：`alembic stamp head` 即可（只改版本号，不重放 DDL）。
+  ⚠ **旧 revision 文件已删时，`stamp` 会先死在"解析当前版本"那一步**（报
+  `Can't locate revision identified by '0029_model_prices'`，`current` 同样失败）——
+  因为 alembic 在执行任何命令前都要把库里的 version_num 映射回 revision。
+  此时直接改那一行即可（与 stamp 等价、可逆）：
+  `UPDATE public.alembic_version SET version_num='0001_authoritative_baseline';`
   全新库 `alembic upgrade head`；**已存在的库**（表已齐全、`alembic_version` 仍是旧 revision）执行
   `alembic stamp head` —— 只改版本号、不重放 DDL。**不要把此处写死成某个基线**：链上已有更新的迁移时，
   stamp 到过期 revision 会让 `alembic_version` 与期望 head 不一致，触发下方「校验规则」拒绝启动；

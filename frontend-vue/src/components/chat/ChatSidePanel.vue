@@ -1001,7 +1001,7 @@ function pickSession(id: string) {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
   height: 28px; padding: 0 8px; border: none; border-radius: var(--sig-radius-button);
   background: transparent; color: var(--text-primary);
-  font-size: 13px; font-weight: 600; cursor: pointer;
+  font-size: 13px; font-weight: var(--fw-semibold); cursor: pointer;
   transition: background var(--dur-fast) ease;
 }
 .session-picker:hover, .session-back:hover { background: var(--bg-hover); }
@@ -1047,7 +1047,7 @@ function pickSession(id: string) {
 .tool-badge {
   flex: none; padding: 0 6px; border-radius: var(--sig-radius-card);
   background: var(--primary-bg); color: var(--primary);
-  font-size: 10px; line-height: 16px; font-weight: 600;
+  font-size: 10px; line-height: 16px; font-weight: var(--fw-semibold);
 }
 
 /* 搜索框（轨迹 / 会话通用） */
@@ -1092,7 +1092,7 @@ function pickSession(id: string) {
 .anchor-row.active { background: var(--primary-bg); }
 .row-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: var(--primary); }
 .row-text { flex: 1; min-width: 0; font-size: 12px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.anchor-row.active .row-text { color: var(--primary); font-weight: 600; }
+.anchor-row.active .row-text { color: var(--primary); font-weight: var(--fw-semibold); }
 .list-empty { padding: 20px 8px; text-align: center; color: var(--text-muted); font-size: 12px; }
 
 /* ── 从视图：会话历史列表 ── */
@@ -1107,7 +1107,7 @@ function pickSession(id: string) {
 .session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
 /* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
 .session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
-.session-group-label { font-size: 11px; font-weight: 600; color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.session-group-label { font-size: 11px; font-weight: var(--fw-semibold); color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .session-row {
   display: flex; align-items: center; gap: 4px;
   padding: 0 10px; height: 40px; border-radius: var(--sig-radius-card);
@@ -1125,7 +1125,7 @@ function pickSession(id: string) {
 .session-title-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .pin-icon { flex: none; font-size: 11px; color: var(--primary); }
 .session-title { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
-.session-row.active .session-title { color: var(--primary); font-weight: 600; }
+.session-row.active .session-title { color: var(--primary); font-weight: var(--fw-semibold); }
 .session-time { font-size: 11px; color: var(--text-muted); line-height: 14px; }
 .session-more-btn { opacity: 0; flex-shrink: 0; width: 22px; height: 22px; color: var(--text-muted); }
 .session-row:hover .session-more-btn, .session-row.menu-open .session-more-btn { opacity: 1; }

@@ -34,7 +34,9 @@ describe('ReasoningBlock', () => {
     await wrapper.setProps({ streaming: false })
 
     expect(wrapper.find('.reasoning-main').attributes('aria-expanded')).toBe('false')
-    expect(wrapper.find('.think-body-wrap').exists()).toBe(false)
+    // 折叠后内容仍在 DOM（网格 0fr + overflow:hidden），高度归零但不卸载 ——
+    // 卸载会让展开时重新挂载，内部滚动位置与 `following` 状态一起丢。
+    expect(wrapper.find('.think-grid').classes()).not.toContain('open')
     expect(wrapper.attributes('data-state')).toBe('ok')
   })
 

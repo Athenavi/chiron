@@ -111,11 +111,11 @@ const cacheWarnText = computed(() => {
         class="cs-sep"
         aria-hidden
       />
-      <span class="cs-item">{{ stats?.inputTokens ?? 0 }} in / {{ stats?.outputTokens ?? 0 }} out</span>
+      <span class="cs-item tnum">{{ stats?.inputTokens ?? 0 }} in / {{ stats?.outputTokens ?? 0 }} out</span>
       <span
         v-if="stats?.durationSec"
         class="cs-item"
-      >{{ stats.durationSec }}s</span>
+      ><span class="tnum-fixed">{{ stats.durationSec }}s</span></span>
     </template>
     <span
       v-if="compactionText"

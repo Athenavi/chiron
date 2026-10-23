@@ -1,4 +1,11 @@
-create table admin_api_keys
+create table if not exists alembic_version
+(
+    version_num varchar(32) not null
+        constraint alembic_version_pkc
+            primary key
+);
+
+create table if not exists admin_api_keys
 (
     id             varchar(36) not null
         primary key,
@@ -20,7 +27,28 @@ create table admin_api_keys
     rate_limit_qps integer
 );
 
-create table admin_cron_jobs
+create table if not exists admin_api_call_logs
+(
+    id                  varchar(36) not null
+        primary key,
+    api_key_id          varchar(36)
+        references admin_api_keys,
+    model_id            varchar(50),
+    workflow_id         varchar(50),
+    endpoint            varchar(100),
+    method              varchar(10),
+    request_size_bytes  integer,
+    response_size_bytes integer,
+    duration_ms         integer,
+    status_code         integer,
+    retry_count         integer,
+    input_tokens        integer,
+    output_tokens       integer,
+    credits_consumed    bigint,
+    created_at          timestamp
+);
+
+create table if not exists admin_cron_jobs
 (
     id              varchar(36) not null
         primary key,
@@ -38,7 +66,7 @@ create table admin_cron_jobs
     updated_at      timestamp
 );
 
-create table admin_database_backups
+create table if not exists admin_database_backups
 (
     id               varchar(36) not null
         primary key,
@@ -54,7 +82,7 @@ create table admin_database_backups
     created_by       varchar(50)
 );
 
-create table admin_db_configs
+create table if not exists admin_db_configs
 (
     id                   varchar(36) not null
         primary key,
@@ -75,7 +103,7 @@ create table admin_db_configs
     updated_at           timestamp
 );
 
-create table admin_model_configs
+create table if not exists admin_model_configs
 (
     id                 varchar(36) not null
         primary key,
@@ -98,7 +126,7 @@ create table admin_model_configs
     updated_at         timestamp
 );
 
-create table admin_redis_configs
+create table if not exists admin_redis_configs
 (
     id                   varchar(36) not null
         primary key,
@@ -120,7 +148,7 @@ create table admin_redis_configs
     updated_at           timestamp
 );
 
-create table admin_tenants
+create table if not exists admin_tenants
 (
     id                      varchar(36) not null
         primary key,
@@ -142,7 +170,42 @@ create table admin_tenants
     features                json
 );
 
-create table admin_workflow_executions
+create table if not exists admin_domains
+(
+    id             varchar(36) not null
+        primary key,
+    domain         varchar(100)
+        unique,
+    tenant_id      varchar(50)
+        references admin_tenants (tenant_id),
+    dns_provider   varchar(50),
+    dns_record_id  varchar(100),
+    cname_target   varchar(200),
+    ssl_status     varchar(20),
+    ssl_expires_at timestamp,
+    auto_renew     boolean,
+    status         varchar(20),
+    verified_at    timestamp,
+    verified_by    varchar(50),
+    created_at     timestamp,
+    updated_at     timestamp
+);
+
+create table if not exists admin_tenant_usage
+(
+    id               varchar(36) not null
+        primary key,
+    tenant_id        varchar(50)
+        references admin_tenants (tenant_id),
+    stat_date        varchar(255),
+    api_calls        bigint,
+    tokens_used      bigint,
+    credits_consumed bigint,
+    storage_mb       varchar(255),
+    created_at       timestamp
+);
+
+create table if not exists admin_workflow_executions
 (
     id               varchar(36) not null
         primary key,
@@ -159,7 +222,7 @@ create table admin_workflow_executions
     node_results     json
 );
 
-create table admin_workflows
+create table if not exists admin_workflows
 (
     id                      varchar(36) not null
         primary key,
@@ -181,7 +244,7 @@ create table admin_workflows
     published_at            timestamp
 );
 
-create table agent_registry
+create table if not exists agent_registry
 (
     agent_type  varchar(32) not null
         primary key,
@@ -192,19 +255,20 @@ create table agent_registry
     created_at  timestamp
 );
 
-create table conversation_shares
+create table if not exists conversation_shares
 (
     id          varchar(36) not null
         primary key,
     session_id  varchar(128),
     user_id     varchar(36),
     title       varchar(255),
-    message_ids text[],
+    message_ids varchar(255),
     created_at  timestamp,
-    revoked_at  timestamp
+    revoked_at  timestamp,
+    expires_at  timestamp with time zone
 );
 
-create table cron_jobs
+create table if not exists cron_jobs
 (
     id            varchar(36) not null
         primary key,
@@ -221,7 +285,7 @@ create table cron_jobs
     webhook_token varchar(64)
 );
 
-create table ent_catalog_installs
+create table if not exists ent_catalog_installs
 (
     item_id      varchar(36) not null,
     tenant_id    varchar(36) not null,
@@ -230,7 +294,7 @@ create table ent_catalog_installs
     primary key (item_id, tenant_id)
 );
 
-create table ent_catalog_items
+create table if not exists ent_catalog_items
 (
     id         varchar(36) not null
         primary key,
@@ -244,21 +308,37 @@ create table ent_catalog_items
     updated_at timestamp
 );
 
-create table ent_group_members
+create table if not exists ent_group_members
 (
     group_id varchar(36) not null,
     user_id  varchar(36) not null,
     primary key (group_id, user_id)
 );
 
-create table ent_group_roles
+create table if not exists ent_group_roles
 (
     group_id varchar(36) not null,
     role_id  varchar(36) not null,
     primary key (group_id, role_id)
 );
 
-create table ent_templates
+create table if not exists ent_model_routes
+(
+    id               varchar(36)  not null
+        primary key,
+    tenant_id        varchar(36)  not null,
+    model_id         varchar(128) not null,
+    primary_provider varchar(64)  not null,
+    fallback_order   jsonb                    default '[]'::jsonb,
+    provider_config  jsonb                    default '{}'::jsonb,
+    enabled          boolean                  default true,
+    priority         integer                  default 1,
+    created_at       timestamp with time zone default now(),
+    updated_at       timestamp with time zone default now(),
+    unique (tenant_id, model_id)
+);
+
+create table if not exists ent_templates
 (
     id          varchar(36) not null
         primary key,
@@ -271,7 +351,7 @@ create table ent_templates
     updated_at  timestamp
 );
 
-create table ent_tenant_policies
+create table if not exists ent_tenant_policies
 (
     tenant_id           varchar(36) not null
         primary key,
@@ -282,14 +362,14 @@ create table ent_tenant_policies
     updated_at          timestamp
 );
 
-create table ent_user_roles
+create table if not exists ent_user_roles
 (
     user_id varchar(36) not null,
     role_id varchar(36) not null,
     primary key (user_id, role_id)
 );
 
-create table guest_storage
+create table if not exists guest_storage
 (
     client_id  varchar(64) not null
         primary key,
@@ -298,7 +378,7 @@ create table guest_storage
     created_at timestamp
 );
 
-create table llm_models
+create table if not exists llm_models
 (
     id             varchar(36) not null
         primary key,
@@ -311,7 +391,24 @@ create table llm_models
     updated_at     timestamp
 );
 
-create table memory_summaries
+create table if not exists llm_provider_keys
+(
+    id            varchar(36)                                     not null
+        primary key,
+    provider      varchar(50)                                     not null,
+    encrypted_key text                                            not null,
+    key_hash      varchar(64)                                     not null
+        unique,
+    status        varchar(20) default 'active'::character varying not null,
+    remark        text,
+    created_at    timestamp with time zone,
+    updated_at    timestamp with time zone
+);
+
+create index if not exists ix_llm_provider_keys_provider
+    on llm_provider_keys (provider);
+
+create table if not exists memory_summaries
 (
     id               varchar(64) not null
         primary key,
@@ -330,7 +427,7 @@ create table memory_summaries
     created_at       timestamp
 );
 
-create table payments
+create table if not exists payments
 (
     id                varchar(64) not null
         primary key,
@@ -348,23 +445,29 @@ create table payments
     expired_at        timestamp
 );
 
-create index idx_payments_provider
+create index if not exists idx_payments_provider
     on payments (provider_order_id)
     where ((provider_order_id)::text <> ''::text);
 
-create index idx_payments_user
+create index if not exists idx_payments_user
     on payments (user_id asc, created_at desc);
 
-create table schema_migrations
+create table if not exists session_map_workspaces
 (
-    version    bigserial
+    id         varchar(64)                                not null
         primary key,
-    name       varchar(255),
-    checksum   varchar(128),
-    applied_at varchar(255)
+    tenant_id  varchar(36),
+    user_id    varchar(36),
+    name       varchar(255) default ''::character varying not null,
+    viewport   jsonb        default '{}'::jsonb           not null,
+    created_at timestamp    default now()                 not null,
+    updated_at timestamp    default now()                 not null
 );
 
-create table stripe_payments
+create index if not exists session_map_workspaces_owner_idx
+    on session_map_workspaces (tenant_id, user_id);
+
+create table if not exists stripe_payments
 (
     session_id   varchar(128) not null
         primary key,
@@ -376,7 +479,7 @@ create table stripe_payments
     completed_at timestamp
 );
 
-create table system_settings
+create table if not exists system_settings
 (
     id         serial
         primary key,
@@ -388,7 +491,30 @@ create table system_settings
     encrypted  boolean
 );
 
-create table tenants
+create table if not exists task_idempotency
+(
+    idempotency_key varchar(255)                                                  not null
+        primary key,
+    task_id         varchar(64),
+    task_type       varchar(64),
+    tenant_id       varchar(64),
+    status          varchar(16)              default 'running'::character varying not null,
+    attempt         integer                  default 1                            not null,
+    result_ref      text,
+    created_at      timestamp with time zone default now(),
+    updated_at      timestamp with time zone default now()
+);
+
+create index if not exists ix_task_idempotency_status
+    on task_idempotency (status);
+
+create index if not exists ix_task_idempotency_status_updated
+    on task_idempotency (status, updated_at);
+
+create index if not exists ix_task_idempotency_task_id
+    on task_idempotency (task_id);
+
+create table if not exists tenants
 (
     id         varchar(36) not null
         primary key,
@@ -397,126 +523,7 @@ create table tenants
     status     varchar(16)
 );
 
-create table tool_calls
-(
-    id          varchar(36) not null
-        primary key,
-    session_id  varchar(36),
-    message_id  varchar(36),
-    tool_name   varchar(128),
-    input       json,
-    output      text        not null,
-    is_error    boolean,
-    duration_ms bigint,
-    created_at  timestamp,
-    turn_id     varchar(36)
-);
-
-create index ix_tool_calls_turn_id
-    on tool_calls (turn_id);
-
-create table unified_sessions
-(
-    id             varchar(36)               not null
-        primary key,
-    tenant_id      varchar(36),
-    user_id        varchar(36),
-    title          varchar(255),
-    mode           varchar(16),
-    shared_context json,
-    created_at     timestamp,
-    updated_at     timestamp,
-    runtime        jsonb default '{}'::jsonb not null
-);
-
-create table user_memory_profile
-(
-    tenant_id          varchar(64)  not null,
-    user_id            varchar(64)  not null,
-    slot               varchar(32)  not null,
-    item_key           varchar(128) not null,
-    item_value         json,
-    confidence         integer,
-    source             varchar(16),
-    version            integer,
-    confirmed_at       timestamp,
-    last_referenced_at timestamp,
-    created_at         timestamp,
-    updated_at         timestamp,
-    primary key (tenant_id, user_id, slot, item_key)
-);
-
-create table workflow_instances
-(
-    id            varchar(64) not null
-        primary key,
-    user_id       varchar(64),
-    workflow_id   varchar(64),
-    workflow_name varchar(255),
-    status        varchar(16),
-    results       json,
-    error         text,
-    created_at    timestamp,
-    updated_at    timestamp
-);
-
-create table admin_api_call_logs
-(
-    id                  varchar(36) not null
-        primary key,
-    api_key_id          varchar(36)
-        references admin_api_keys,
-    model_id            varchar(50),
-    workflow_id         varchar(50),
-    endpoint            varchar(100),
-    method              varchar(10),
-    request_size_bytes  integer,
-    response_size_bytes integer,
-    duration_ms         integer,
-    status_code         integer,
-    retry_count         integer,
-    input_tokens        integer,
-    output_tokens       integer,
-    credits_consumed    bigint,
-    created_at          timestamp
-);
-
-create table admin_domains
-(
-    id             varchar(36) not null
-        primary key,
-    domain         varchar(100)
-        unique,
-    tenant_id      varchar(50)
-        references admin_tenants (tenant_id),
-    dns_provider   varchar(50),
-    dns_record_id  varchar(100),
-    cname_target   varchar(200),
-    ssl_status     varchar(20),
-    ssl_expires_at timestamp,
-    auto_renew     boolean,
-    status         varchar(20),
-    verified_at    timestamp,
-    verified_by    varchar(50),
-    created_at     timestamp,
-    updated_at     timestamp
-);
-
-create table admin_tenant_usage
-(
-    id               varchar(36) not null
-        primary key,
-    tenant_id        varchar(50)
-        references admin_tenants (tenant_id),
-    stat_date        varchar(255),
-    api_calls        bigint,
-    tokens_used      bigint,
-    credits_consumed bigint,
-    storage_mb       varchar(255),
-    created_at       timestamp
-);
-
-create table agents
+create table if not exists agents
 (
     id              varchar(36)                                   not null
         primary key,
@@ -541,10 +548,10 @@ create table agents
     kind            varchar(16) default 'chat'::character varying not null
 );
 
-create index agents_kind_idx
+create index if not exists agents_kind_idx
     on agents (kind);
 
-create table domains
+create table if not exists domains
 (
     id         varchar(36) not null
         primary key,
@@ -558,7 +565,7 @@ create table domains
     updated_at timestamp
 );
 
-create table ent_captcha_config
+create table if not exists ent_captcha_config
 (
     id         varchar(36) not null
         primary key,
@@ -573,7 +580,7 @@ create table ent_captcha_config
     updated_at timestamp
 );
 
-create table ent_groups
+create table if not exists ent_groups
 (
     id          varchar(36) not null
         primary key,
@@ -584,14 +591,11 @@ create table ent_groups
     created_at  timestamp
 );
 
--- 邮件发信配置（后台「邮件配置」）。单租户单行：tenant_id 唯一，
--- 保存路径靠 ON CONFLICT (tenant_id) 做 upsert，因此这里必须是唯一约束。
--- 凭据列 (*_enc) 与 ent_sms_config.secret_enc 同口径：AES-256-GCM 密文。
-create table ent_mail_config
+create table if not exists ent_mail_config
 (
-    id                    varchar(36) not null
+    id                    varchar(36)           not null
         primary key,
-    tenant_id             varchar(36) not null
+    tenant_id             varchar(36)           not null
         unique
         references tenants,
     provider              varchar(32),
@@ -615,22 +619,22 @@ create table ent_mail_config
     register_verify       boolean default false not null,
     auto_register         boolean default false not null,
     reset_enabled         boolean default false not null,
-    welcome_enabled       boolean default true not null,
+    welcome_enabled       boolean default true  not null,
     code_subject          varchar(255),
     code_body             text,
     welcome_subject       varchar(255),
     welcome_body          text,
     reset_subject         varchar(255),
     reset_body            text,
-    code_ttl_seconds      integer default 300 not null,
-    send_interval_seconds integer default 60 not null,
-    daily_limit           integer default 10 not null,
-    timeout_seconds       integer default 30 not null,
+    code_ttl_seconds      integer default 300   not null,
+    send_interval_seconds integer default 60    not null,
+    daily_limit           integer default 10    not null,
+    timeout_seconds       integer default 30    not null,
     created_at            timestamp,
     updated_at            timestamp
 );
 
-create table ent_oidc_providers
+create table if not exists ent_oidc_providers
 (
     id                varchar(36) not null
         primary key,
@@ -640,7 +644,7 @@ create table ent_oidc_providers
     issuer            varchar(512),
     client_id         varchar(256),
     client_secret_enc text        not null,
-    scopes            text[],
+    scopes            varchar(255),
     enabled           boolean,
     auto_provision    boolean,
     role_mapping      json,
@@ -657,7 +661,7 @@ create table ent_oidc_providers
     extra             json
 );
 
-create table ent_quota_pools
+create table if not exists ent_quota_pools
 (
     id            varchar(36) not null
         primary key,
@@ -670,7 +674,19 @@ create table ent_quota_pools
     updated_at    timestamp
 );
 
-create table ent_roles
+create table if not exists ent_quota_allocations
+(
+    id          varchar(36) not null
+        primary key,
+    pool_id     varchar(36)
+        references ent_quota_pools,
+    target_type varchar(10),
+    target_id   varchar(36),
+    amount      bigint,
+    created_at  timestamp
+);
+
+create table if not exists ent_roles
 (
     id           varchar(36) not null
         primary key,
@@ -679,37 +695,66 @@ create table ent_roles
     name         varchar(64),
     display_name varchar(128),
     is_builtin   boolean,
-    permissions  text[],
+    permissions  varchar(255),
     created_at   timestamp,
     updated_at   timestamp
 );
 
--- 短信发信配置（后台「短信配置」/ 短信验证码登录）。单租户单行：tenant_id 作主键，
--- 同时满足 ON CONFLICT (tenant_id) 的 upsert。列的可空性以 internal/api/sms_handler.go
--- 的读取方式为准：除 endpoint 外都扫进非指针 Go 变量，故必须 NOT NULL + 默认值；
--- 该表的 INSERT 不写 id，因此这里不设 id 列。
-create table ent_sms_config
+create table if not exists ent_model_policies
 (
-    tenant_id             varchar(36) not null
+    id               varchar(36) not null
+        primary key,
+    tenant_id        varchar(36)
+        references tenants,
+    role_id          varchar(36)
+        references ent_roles,
+    allowed_models   varchar(255),
+    per_model_limits json,
+    created_at       timestamp,
+    updated_at       timestamp
+);
+
+create table if not exists ent_sms_config
+(
+    tenant_id             varchar(36)                                      not null
         primary key
         references tenants,
-    provider              varchar(32)  default 'aliyun' not null,
-    sign_name             varchar(64)  default '' not null,
-    template_id           varchar(64)  default '' not null,
-    access_key_id         varchar(256) default '' not null,
-    secret_enc            text         default '' not null,
+    provider              varchar(32)  default 'aliyun'::character varying not null,
+    sign_name             varchar(64)  default ''::character varying       not null,
+    template_id           varchar(64)  default ''::character varying       not null,
+    access_key_id         varchar(256) default ''::character varying       not null,
+    secret_enc            text         default ''::text                    not null,
     endpoint              varchar(512),
-    code_ttl_seconds      integer      default 300 not null,
-    send_interval_seconds integer      default 60 not null,
-    daily_limit           integer      default 10 not null,
-    login_enabled         boolean      default false not null,
-    auto_register         boolean      default false not null,
-    enabled               boolean      default false not null,
+    code_ttl_seconds      integer      default 300                         not null,
+    send_interval_seconds integer      default 60                          not null,
+    daily_limit           integer      default 10                          not null,
+    login_enabled         boolean      default false                       not null,
+    auto_register         boolean      default false                       not null,
+    enabled               boolean      default false                       not null,
     created_at            timestamp    default now(),
     updated_at            timestamp    default now()
 );
 
-create table enterprise_tasks
+create table if not exists ent_webhooks
+(
+    id           varchar(36)                                not null
+        primary key,
+    tenant_id    varchar(36)                                not null
+        references tenants,
+    name         varchar(255) default ''::character varying not null,
+    event_types  jsonb        default '[]'::jsonb           not null,
+    url          text         default ''::text              not null,
+    secret       text         default ''::text              not null,
+    enabled      boolean      default true                  not null,
+    retry_policy jsonb        default '{}'::jsonb           not null,
+    created_at   timestamp    default now()                 not null,
+    updated_at   timestamp    default now()                 not null
+);
+
+create index if not exists ix_ent_webhooks_tenant_enabled
+    on ent_webhooks (tenant_id, enabled);
+
+create table if not exists enterprise_tasks
 (
     id          varchar(36) not null
         primary key,
@@ -726,7 +771,7 @@ create table enterprise_tasks
     updated_at  timestamp
 );
 
-create table kb_articles
+create table if not exists kb_articles
 (
     id         varchar(36) not null
         primary key,
@@ -741,7 +786,7 @@ create table kb_articles
     updated_at timestamp
 );
 
-create table marketing_campaigns
+create table if not exists marketing_campaigns
 (
     id            varchar(36) not null
         primary key,
@@ -757,7 +802,7 @@ create table marketing_campaigns
     updated_at    timestamp
 );
 
-create table media_assets
+create table if not exists media_assets
 (
     id         varchar(36) not null
         primary key,
@@ -779,10 +824,10 @@ create table media_assets
     parent_id  varchar(64)
 );
 
-create index ix_media_assets_tenant_user_parent
+create index if not exists ix_media_assets_tenant_user_parent
     on media_assets (tenant_id, user_id, parent_id);
 
-create table meeting_notes
+create table if not exists meeting_notes
 (
     id           varchar(36) not null
         primary key,
@@ -797,7 +842,7 @@ create table meeting_notes
     created_at   timestamp
 );
 
-create table okrs
+create table if not exists okrs
 (
     id          varchar(36) not null
         primary key,
@@ -812,7 +857,83 @@ create table okrs
     updated_at  timestamp
 );
 
-create table support_tickets
+create table if not exists subagent_runs
+(
+    id                 varchar(64)                                       not null
+        primary key,
+    root_session_id    varchar(128)                                      not null,
+    turn_id            varchar(64),
+    parent_run_id      varchar(64),
+    depth              integer     default 1                             not null,
+    tenant_id          varchar(36),
+    user_id            varchar(36),
+    agent_id           varchar(36)
+                                                                         references agents
+                                                                             on delete set null,
+    profile_name       varchar(128),
+    task               text                                              not null,
+    status             varchar(16)                                       not null,
+    summary            text,
+    summary_format     varchar(16) default 'markdown'::character varying not null,
+    artifacts          jsonb       default '[]'::jsonb,
+    write_paths        jsonb       default '[]'::jsonb,
+    read_only          boolean     default false                         not null,
+    input_tokens       bigint      default 0                             not null,
+    output_tokens      bigint      default 0                             not null,
+    steps              integer     default 0                             not null,
+    cost_cents         integer     default 0                             not null,
+    redacted_count     integer     default 0                             not null,
+    error              text,
+    started_at         timestamp,
+    finished_at        timestamp,
+    created_at         timestamp   default now()                         not null,
+    rerun_of           varchar(64),
+    inherited_messages integer,
+    retryable          boolean     default false                         not null,
+    output_bytes       bigint      default 0                             not null,
+    validator_mode     varchar(16),
+    validator_outcome  varchar(16),
+    validator_attempt  integer     default 0                             not null,
+    error_code         varchar(32),
+    resumed_from       varchar(64),
+    resume_at_step     integer
+);
+
+create table if not exists subagent_run_steps
+(
+    id            bigserial
+        primary key,
+    run_id        varchar(64)             not null
+        references subagent_runs
+            on delete cascade,
+    seq           integer                 not null,
+    kind          varchar(16)             not null,
+    role          varchar(16),
+    tool_name     varchar(64),
+    tool_call_id  varchar(128),
+    content       text,
+    truncated     boolean   default false not null,
+    input_tokens  integer   default 0     not null,
+    output_tokens integer   default 0     not null,
+    created_at    timestamp default now() not null
+);
+
+create unique index if not exists subagent_run_steps_seq_idx
+    on subagent_run_steps (run_id, seq);
+
+create index if not exists subagent_runs_parent_idx
+    on subagent_runs (parent_run_id);
+
+create index if not exists subagent_runs_tenant_idx
+    on subagent_runs (tenant_id, created_at);
+
+create index if not exists subagent_runs_tree_idx
+    on subagent_runs (root_session_id, created_at);
+
+create index if not exists subagent_runs_turn_idx
+    on subagent_runs (turn_id);
+
+create table if not exists support_tickets
 (
     id          varchar(36) not null
         primary key,
@@ -828,7 +949,39 @@ create table support_tickets
     updated_at  timestamp
 );
 
-create table unified_messages
+create table if not exists tool_calls
+(
+    id          varchar(36) not null
+        primary key,
+    session_id  varchar(36),
+    message_id  varchar(36),
+    tool_name   varchar(128),
+    input       json,
+    output      text        not null,
+    is_error    boolean,
+    duration_ms bigint,
+    created_at  timestamp,
+    turn_id     varchar(36)
+);
+
+create index if not exists ix_tool_calls_turn_id
+    on tool_calls (turn_id);
+
+create table if not exists unified_sessions
+(
+    id             varchar(36)               not null
+        primary key,
+    tenant_id      varchar(36),
+    user_id        varchar(36),
+    title          varchar(255),
+    mode           varchar(16),
+    shared_context json,
+    created_at     timestamp,
+    updated_at     timestamp,
+    runtime        jsonb default '{}'::jsonb not null
+);
+
+create table if not exists unified_messages
 (
     id         serial
         primary key,
@@ -841,7 +994,7 @@ create table unified_messages
     created_at timestamp
 );
 
-create table uploads
+create table if not exists uploads
 (
     id              varchar(64) not null
         primary key,
@@ -862,10 +1015,55 @@ create table uploads
         references tenants
 );
 
-create index ix_uploads_tenant_user_status
+create index if not exists ix_uploads_tenant_user_status
     on uploads (tenant_id, user_id, status);
 
-create table users
+create table if not exists user_memory_entries
+(
+    id               varchar(64)                                                  not null
+        primary key,
+    tenant_id        varchar(64)                                                  not null,
+    user_id          varchar(64)                                                  not null,
+    slot             varchar(64)                                                  not null,
+    item_key         varchar(255)                                                 not null,
+    item_value       jsonb,
+    confidence       integer,
+    source           varchar(32),
+    embedding        jsonb,
+    access_count     integer                  default 0                           not null,
+    last_accessed_at timestamp with time zone,
+    status           varchar(16)              default 'active'::character varying not null,
+    created_at       timestamp with time zone default now()                       not null,
+    updated_at       timestamp with time zone default now()                       not null,
+    project          varchar(120)             default ''::character varying       not null,
+    constraint user_memory_entries_identity_uniq
+        unique (tenant_id, user_id, project, slot, item_key)
+);
+
+create index if not exists ix_user_memory_entries_lookup
+    on user_memory_entries (tenant_id, user_id, status);
+
+create index if not exists ix_user_memory_entries_project
+    on user_memory_entries (tenant_id, user_id, project, status);
+
+create table if not exists user_memory_profile
+(
+    tenant_id          varchar(64)  not null,
+    user_id            varchar(64)  not null,
+    slot               varchar(32)  not null,
+    item_key           varchar(128) not null,
+    item_value         json,
+    confidence         integer,
+    source             varchar(16),
+    version            integer,
+    confirmed_at       timestamp,
+    last_referenced_at timestamp,
+    created_at         timestamp,
+    updated_at         timestamp,
+    primary key (tenant_id, user_id, slot, item_key)
+);
+
+create table if not exists users
 (
     id            varchar(36) not null
         primary key,
@@ -877,7 +1075,7 @@ create table users
     role          varchar(16),
     storage_id    varchar(64)
         unique,
-    credits       integer,
+    credits       integer default 1000,
     created_at    timestamp,
     updated_at    timestamp,
     phone         varchar(32),
@@ -885,24 +1083,7 @@ create table users
     settings      json
 );
 
-create index ix_users_tenant_created
-    on users (tenant_id asc, created_at desc);
-
-create table wiki_pages
-(
-    id         varchar(36) not null
-        primary key,
-    tenant_id  varchar(36)
-        references tenants,
-    user_id    varchar(36),
-    title      varchar(255),
-    content    text        not null,
-    tags       varchar(255),
-    created_at timestamp,
-    updated_at timestamp
-);
-
-create table agent_sessions
+create table if not exists agent_sessions
 (
     id         varchar(128) not null
         primary key,
@@ -920,10 +1101,10 @@ create table agent_sessions
         references tenants
 );
 
-create index ix_agent_sessions_tenant_user_created
+create index if not exists ix_agent_sessions_tenant_user_created
     on agent_sessions (tenant_id asc, user_id asc, created_at desc);
 
-create table api_keys
+create table if not exists api_keys
 (
     id           varchar(36) not null
         primary key,
@@ -937,7 +1118,7 @@ create table api_keys
     revoked      boolean
 );
 
-create table audit_logs
+create table if not exists audit_logs
 (
     id            varchar(36) not null
         primary key,
@@ -953,10 +1134,10 @@ create table audit_logs
     created_at    timestamp
 );
 
-create index ix_audit_logs_tenant_created
+create index if not exists ix_audit_logs_tenant_created
     on audit_logs (tenant_id asc, created_at desc);
 
-create table credit_transactions
+create table if not exists credit_transactions
 (
     id         varchar(36) not null
         primary key,
@@ -969,63 +1150,13 @@ create table credit_transactions
     turn_id    varchar(36)
 );
 
-create index idx_credit_tx_user
+create index if not exists idx_credit_tx_user
     on credit_transactions (user_id asc, created_at desc);
 
-create unique index uniq_credit_tx_turn
+create unique index if not exists uniq_credit_tx_turn
     on credit_transactions (turn_id);
 
-create table ent_model_policies
-(
-    id               varchar(36) not null
-        primary key,
-    tenant_id        varchar(36)
-        references tenants,
-    role_id          varchar(36)
-        references ent_roles,
-    allowed_models   text[],
-    per_model_limits json,
-    created_at       timestamp,
-    updated_at       timestamp
-);
-
--- 企业 Webhook 订阅（ent_webhook_handler.go 的 CRUD + ent_webhook_dispatcher.go 的投递）。
--- event_types / retry_policy 必须是 jsonb：分发侧用 `event_types::jsonb @> to_jsonb($2::text)`
--- 做包含匹配；写入侧传的是 json.Marshal 出来的字节（pgx 的 JSON 编解码器直接接受）。
--- 其余列 NOT NULL：scanWebhookRow 把除 enabled 外的列全部扫进非指针 Go 变量，
--- NULL 会让 pgx 直接报错。url 用 text：Create 未做长度校验，避免列宽引入额外失败。
-create table ent_webhooks
-(
-    id           varchar(36) not null
-        primary key,
-    tenant_id    varchar(36) not null
-        references tenants,
-    name         varchar(255) default '' not null,
-    event_types  jsonb        default '[]'::jsonb not null,
-    url          text         default '' not null,
-    secret       text         default '' not null,
-    enabled      boolean      default true not null,
-    retry_policy jsonb        default '{}'::jsonb not null,
-    created_at   timestamp    default now() not null,
-    updated_at   timestamp    default now() not null
-);
-
-create index ix_ent_webhooks_tenant_enabled
-    on ent_webhooks (tenant_id, enabled);
-
-create table ent_quota_allocations
-(
-    id          varchar(36) not null
-        primary key,
-    pool_id     varchar(36)
-        references ent_quota_pools,
-    target_type varchar(10),
-    target_id   varchar(36),
-    amount      bigint,
-    created_at  timestamp
-);
-
-create table ent_user_identities
+create table if not exists ent_user_identities
 (
     id          varchar(36) not null
         primary key,
@@ -1038,7 +1169,7 @@ create table ent_user_identities
     created_at  timestamp
 );
 
-create table knowledge_bases
+create table if not exists knowledge_bases
 (
     id               varchar(36) not null
         primary key,
@@ -1060,7 +1191,53 @@ create table knowledge_bases
     doc_count        integer
 );
 
-create table sessions
+create table if not exists knowledge_documents
+(
+    id                varchar(36) not null
+        primary key,
+    knowledge_base_id varchar(36)
+        references knowledge_bases,
+    tenant_id         varchar(36)
+        references tenants,
+    user_id           varchar(36)
+        references users,
+    name              varchar(255),
+    file_url          varchar(1024),
+    file_type         varchar(32),
+    file_size_bytes   bigint,
+    chunk_count       integer,
+    status            varchar(32),
+    error_message     text,
+    metadata          json,
+    created_at        timestamp,
+    updated_at        timestamp,
+    content           varchar(255)
+);
+
+create table if not exists knowledge_chunks
+(
+    id                varchar(36) not null
+        primary key,
+    document_id       varchar(36)
+        references knowledge_documents,
+    knowledge_base_id varchar(36)
+        references knowledge_bases,
+    tenant_id         varchar(36)
+        references tenants,
+    chunk_index       integer,
+    content           text        not null,
+    metadata          json,
+    search_vector     varchar(255),
+    created_at        timestamp
+);
+
+create index if not exists ix_knowledge_chunks_content_fts
+    on knowledge_chunks using gin (to_tsvector('simple'::regconfig, content));
+
+create index if not exists ix_kb_documents_kb_tenant
+    on knowledge_documents (knowledge_base_id, tenant_id);
+
+create table if not exists sessions
 (
     id                varchar(36) not null
         primary key,
@@ -1086,43 +1263,7 @@ create table sessions
     branch_keep_tail  integer
 );
 
-create index ix_sessions_tag
-    on sessions (tag);
-
-create index ix_sessions_parent_session_id
-    on sessions (parent_session_id);
-
-create table tasks
-(
-    id          varchar(36) not null
-        primary key,
-    user_id     varchar(36)
-        references users,
-    type        varchar(32),
-    status      varchar(16),
-    priority    integer,
-    payload     json,
-    result      json,
-    error       text,
-    retries     integer,
-    max_retries integer,
-    created_at  timestamp,
-    updated_at  timestamp
-);
-
-create table workflow_graphs
-(
-    id         varchar(36) not null
-        primary key,
-    name       varchar(255),
-    user_id    varchar(36)
-        references users,
-    graph_json json,
-    created_at timestamp,
-    updated_at timestamp
-);
-
-create table billing_records
+create table if not exists billing_records
 (
     id            varchar(36) not null
         primary key,
@@ -1140,36 +1281,10 @@ create table billing_records
     turn_id       varchar(36)
 );
 
-create unique index uniq_billing_records_turn
+create unique index if not exists uniq_billing_records_turn
     on billing_records (turn_id);
 
-create table knowledge_documents
-(
-    id                varchar(36) not null
-        primary key,
-    knowledge_base_id varchar(36)
-        references knowledge_bases,
-    tenant_id         varchar(36)
-        references tenants,
-    user_id           varchar(36)
-        references users,
-    name              varchar(255),
-    file_url          varchar(1024),
-    file_type         varchar(32),
-    file_size_bytes   bigint,
-    chunk_count       integer,
-    status            varchar(32),
-    error_message     text,
-    metadata          json,
-    created_at        timestamp,
-    updated_at        timestamp,
-    content           varchar(255)
-);
-
-create index ix_kb_documents_kb_tenant
-    on knowledge_documents (knowledge_base_id, tenant_id);
-
-create table messages
+create table if not exists messages
 (
     id         varchar(36)                               not null
         primary key,
@@ -1183,232 +1298,13 @@ create table messages
     source     varchar(32) default ''::character varying not null
 );
 
-comment on column messages.source is '消息来源：空=用户输入；subagent_followup=子 Agent 自动轮注入';
-
-create index ix_messages_turn_id
-    on messages (turn_id);
-
-create index ix_messages_session_created
+create index if not exists ix_messages_session_created
     on messages (session_id asc, created_at desc, id desc);
 
-create table turns
-(
-    id            varchar(36)           not null
-        primary key,
-    session_id    varchar(36)
-        references sessions,
-    user_id       varchar(36),
-    status        varchar(16),
-    error         text,
-    input_tokens  bigint,
-    output_tokens bigint,
-    started_at    timestamp,
-    finished_at   timestamp,
-    created_at    timestamp,
-    cached_tokens bigint  default 0     not null,
-    cache_hit     boolean default false not null,
-    model         varchar(128)
-);
+create index if not exists ix_messages_turn_id
+    on messages (turn_id);
 
-create index ix_turns_session_id
-    on turns (session_id);
-
-create index ix_turns_status
-    on turns (status);
-
-create index ix_turns_status_created
-    on turns (status, created_at);
-
-create index turns_session_created_idx
-    on turns (session_id, created_at);
-
-create table knowledge_chunks
-(
-    id                varchar(36) not null
-        primary key,
-    document_id       varchar(36)
-        references knowledge_documents,
-    knowledge_base_id varchar(36)
-        references knowledge_bases,
-    tenant_id         varchar(36)
-        references tenants,
-    chunk_index       integer,
-    content           text        not null,
-    metadata          json,
-    search_vector     varchar(255),
-    created_at        timestamp
-);
-
-create table llm_provider_keys
-(
-    id            varchar(36)                                     not null
-        primary key,
-    provider      varchar(50)                                     not null,
-    encrypted_key text                                            not null,
-    key_hash      varchar(64)                                     not null
-        unique,
-    status        varchar(20) default 'active'::character varying not null,
-    remark        text,
-    created_at    timestamp with time zone,
-    updated_at    timestamp with time zone
-);
-
-create index ix_llm_provider_keys_provider
-    on llm_provider_keys (provider);
-
-create table ent_model_routes
-(
-    id               varchar(36)  not null
-        primary key,
-    tenant_id        varchar(36)  not null,
-    model_id         varchar(128) not null,
-    primary_provider varchar(64)  not null,
-    fallback_order   jsonb                    default '[]'::jsonb,
-    provider_config  jsonb                    default '{}'::jsonb,
-    enabled          boolean                  default true,
-    priority         integer                  default 1,
-    created_at       timestamp with time zone default now(),
-    updated_at       timestamp with time zone default now(),
-    unique (tenant_id, model_id)
-);
-
-create table task_idempotency
-(
-    idempotency_key varchar(255)                                                  not null
-        primary key,
-    task_id         varchar(64),
-    task_type       varchar(64),
-    tenant_id       varchar(64),
-    status          varchar(16)              default 'running'::character varying not null,
-    attempt         integer                  default 1                            not null,
-    result_ref      text,
-    created_at      timestamp with time zone default now(),
-    updated_at      timestamp with time zone default now()
-);
-
-create index ix_task_idempotency_status
-    on task_idempotency (status);
-
-create index ix_task_idempotency_status_updated
-    on task_idempotency (status, updated_at);
-
-create index ix_task_idempotency_task_id
-    on task_idempotency (task_id);
-
-create table user_memory_entries
-(
-    id               varchar(64)                                                  not null
-        primary key,
-    tenant_id        varchar(64)                                                  not null,
-    user_id          varchar(64)                                                  not null,
-    slot             varchar(64)                                                  not null,
-    item_key         varchar(255)                                                 not null,
-    item_value       jsonb,
-    confidence       integer,
-    source           varchar(32),
-    embedding        jsonb,
-    access_count     integer                  default 0                           not null,
-    last_accessed_at timestamp with time zone,
-    status           varchar(16)              default 'active'::character varying not null,
-    created_at       timestamp with time zone default now()                       not null,
-    updated_at       timestamp with time zone default now()                       not null,
-    constraint user_memory_entries_identity_uniq
-        unique (tenant_id, user_id, slot, item_key)
-);
-
-create index ix_user_memory_entries_lookup
-    on user_memory_entries (tenant_id, user_id, status);
-
-create table subagent_runs
-(
-    id              varchar(64)                                       not null
-        primary key,
-    root_session_id varchar(128)                                      not null,
-    turn_id         varchar(64),
-    parent_run_id   varchar(64),
-    depth           integer     default 1                             not null,
-    tenant_id       varchar(36),
-    user_id         varchar(36),
-    agent_id        varchar(36)
-                                                                      references agents
-                                                                          on delete set null,
-    profile_name    varchar(128),
-    task            text                                              not null,
-    status          varchar(16)                                       not null,
-    summary         text,
-    summary_format  varchar(16) default 'markdown'::character varying not null,
-    artifacts       jsonb       default '[]'::jsonb,
-    write_paths     jsonb       default '[]'::jsonb,
-    read_only       boolean     default false                         not null,
-    input_tokens    bigint      default 0                             not null,
-    output_tokens   bigint      default 0                             not null,
-    steps           integer     default 0                             not null,
-    cost_cents      integer     default 0                             not null,
-    redacted_count  integer     default 0                             not null,
-    error           text,
-    started_at      timestamp,
-    finished_at     timestamp,
-    created_at      timestamp   default now()                         not null,
-    rerun_of        varchar(64)
-);
-
-create index subagent_runs_tree_idx
-    on subagent_runs (root_session_id, created_at);
-
-create index subagent_runs_parent_idx
-    on subagent_runs (parent_run_id);
-
-create index subagent_runs_turn_idx
-    on subagent_runs (turn_id);
-
-create index subagent_runs_tenant_idx
-    on subagent_runs (tenant_id, created_at);
-
-create table subagent_run_steps
-(
-    id            bigserial
-        primary key,
-    run_id        varchar(64)             not null
-        references subagent_runs
-            on delete cascade,
-    seq           integer                 not null,
-    kind          varchar(16)             not null,
-    role          varchar(16),
-    tool_name     varchar(64),
-    tool_call_id  varchar(128),
-    content       text,
-    truncated     boolean   default false not null,
-    input_tokens  integer   default 0     not null,
-    output_tokens integer   default 0     not null,
-    created_at    timestamp default now() not null
-);
-
-create unique index subagent_run_steps_seq_idx
-    on subagent_run_steps (run_id, seq);
-
-create table alembic_version
-(
-    version_num varchar(32) not null
-        constraint alembic_version_pkc
-            primary key
-);
-
-create table session_map_workspaces
-(
-    id         varchar(64)                                not null
-        primary key,
-    tenant_id  varchar(36),
-    user_id    varchar(36),
-    name       varchar(255) default ''::character varying not null,
-    viewport   jsonb        default '{}'::jsonb           not null,
-    created_at timestamp    default now()                 not null,
-    updated_at timestamp    default now()                 not null
-);
-
-create index session_map_workspaces_owner_idx
-    on session_map_workspaces (tenant_id, user_id);
-
-create table session_map_nodes
+create table if not exists session_map_nodes
 (
     id              varchar(64)                                     not null
         primary key,
@@ -1434,9 +1330,198 @@ create table session_map_nodes
     updated_at      timestamp   default now()                       not null
 );
 
-create index session_map_nodes_workspace_idx
+create index if not exists session_map_nodes_session_idx
+    on session_map_nodes (session_id);
+
+create index if not exists session_map_nodes_workspace_idx
     on session_map_nodes (workspace_id);
 
-create index session_map_nodes_session_idx
-    on session_map_nodes (session_id);
+create index if not exists ix_sessions_parent_session_id
+    on sessions (parent_session_id);
+
+create index if not exists ix_sessions_tag
+    on sessions (tag);
+
+create table if not exists tasks
+(
+    id          varchar(36) not null
+        primary key,
+    user_id     varchar(36)
+        references users,
+    type        varchar(32),
+    status      varchar(16),
+    priority    integer,
+    payload     json,
+    result      json,
+    error       text,
+    retries     integer,
+    max_retries integer,
+    created_at  timestamp,
+    updated_at  timestamp
+);
+
+create table if not exists turns
+(
+    id            varchar(36)           not null
+        primary key,
+    session_id    varchar(36)
+        references sessions,
+    user_id       varchar(36),
+    status        varchar(16),
+    error         text,
+    input_tokens  bigint,
+    output_tokens bigint,
+    started_at    timestamp,
+    finished_at   timestamp,
+    created_at    timestamp,
+    cached_tokens bigint  default 0     not null,
+    cache_hit     boolean default false not null,
+    model         varchar(128)
+);
+
+create index if not exists ix_turns_session_id
+    on turns (session_id);
+
+create index if not exists ix_turns_status
+    on turns (status);
+
+create index if not exists ix_turns_status_created
+    on turns (status, created_at);
+
+create index if not exists turns_session_created_idx
+    on turns (session_id, created_at);
+
+create index if not exists ix_turns_created_at
+    on turns (created_at);
+
+create index if not exists ix_users_tenant_created
+    on users (tenant_id asc, created_at desc);
+
+create table if not exists wiki_pages
+(
+    id         varchar(36) not null
+        primary key,
+    tenant_id  varchar(36)
+        references tenants,
+    user_id    varchar(36),
+    title      varchar(255),
+    content    text        not null,
+    tags       varchar(255),
+    created_at timestamp,
+    updated_at timestamp
+);
+
+create table if not exists workflow_graphs
+(
+    id         varchar(36) not null
+        primary key,
+    name       varchar(255),
+    user_id    varchar(36)
+        references users,
+    graph_json json,
+    created_at timestamp,
+    updated_at timestamp
+);
+
+create table if not exists workflow_instances
+(
+    id            varchar(64) not null
+        primary key,
+    user_id       varchar(64),
+    workflow_id   varchar(64),
+    workflow_name varchar(255),
+    status        varchar(16),
+    results       json,
+    error         text,
+    created_at    timestamp,
+    updated_at    timestamp
+);
+
+create table if not exists ent_chaos_experiments
+(
+    id           varchar(36)                                      not null
+        primary key,
+    tenant_id    varchar(36)                                      not null,
+    fault_type   varchar(16)                                      not null,
+    target       varchar(64) default ''::character varying        not null,
+    duration_ms  integer     default 1000                         not null,
+    intensity    real        default 0.5                          not null,
+    status       varchar(16) default 'pending'::character varying not null,
+    config       jsonb       default '{}'::jsonb                  not null,
+    result       jsonb       default '{}'::jsonb                  not null,
+    created_by   varchar(36) default ''::character varying        not null,
+    started_at   timestamp,
+    completed_at timestamp,
+    created_at   timestamp   default now()                        not null,
+    updated_at   timestamp   default now()                        not null
+);
+
+create index if not exists ix_ent_chaos_experiments_tenant_status
+    on ent_chaos_experiments (tenant_id, status);
+
+create index if not exists ix_ent_chaos_experiments_active
+    on ent_chaos_experiments (status)
+    where ((status)::text = ANY ((ARRAY ['pending'::character varying, 'running'::character varying])::text[]));
+
+create table if not exists agent_runs
+(
+    id            varchar(36)                                                   not null
+        primary key,
+    tenant_id     varchar(36),
+    session_id    varchar(128),
+    turn_id       varchar(36),
+    run_token     varchar(64),
+    status        varchar(16)              default 'running'::character varying not null,
+    checkpoint    jsonb,
+    checkpoint_at timestamp with time zone,
+    instance_id   varchar(128),
+    created_at    timestamp with time zone default now()                        not null,
+    updated_at    timestamp with time zone default now()                        not null
+);
+
+create unique index if not exists ux_agent_runs_session_active
+    on agent_runs (session_id)
+    where ((status)::text = ANY
+           ((ARRAY ['running'::character varying, 'checkpointed'::character varying, 'resuming'::character varying])::text[]));
+
+create index if not exists ix_agent_runs_status_cp
+    on agent_runs (status, checkpoint_at);
+
+create index if not exists ix_agent_runs_session_updated
+    on agent_runs (session_id asc, updated_at desc);
+
+create table if not exists tenant_invites
+(
+    code       varchar(64)                            not null
+        primary key,
+    tenant_id  varchar(36)                            not null,
+    created_by varchar(36),
+    max_uses   integer                  default 0     not null,
+    uses       integer                  default 0     not null,
+    expires_at timestamp with time zone,
+    created_at timestamp with time zone default now() not null
+);
+
+create index if not exists ix_tenant_invites_tenant
+    on tenant_invites (tenant_id);
+
+create table if not exists tenant_features
+(
+    tenant_id        varchar(36)                            not null
+        primary key,
+    sso_enabled      boolean                  default false not null,
+    sso_self_service boolean                  default false not null,
+    updated_at       timestamp with time zone default now() not null
+);
+
+create table if not exists harness_profiles
+(
+    tenant_id            varchar(36)                                            not null,
+    user_id              varchar(64)              default ''::character varying not null,
+    model_prefix         varchar(128)             default ''::character varying not null,
+    system_prompt_suffix text                     default ''::text              not null,
+    enabled              boolean                  default false                 not null,
+    updated_at           timestamp with time zone default now()                 not null,
+    primary key (tenant_id, user_id, model_prefix)
+);
 

@@ -276,7 +276,7 @@ onMounted(() => {
 }
 .audit-detail-label {
   margin-bottom: 8px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .audit-detail-json {
   margin: 0;

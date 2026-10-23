@@ -117,7 +117,7 @@ onMounted(() => {
             size="small"
           >
             <template #format>
-              <span style="font-size: 24px; font-weight: 600">{{ cacheStats.totalHitRate }}%</span>
+              <span style="font-size: 24px; font-weight: var(--fw-semibold)">{{ cacheStats.totalHitRate }}%</span>
             </template>
           </Progress>
           <Descriptions

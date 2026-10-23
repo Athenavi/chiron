@@ -43,7 +43,7 @@ const router = useRouter()
 }
 .nf-code {
   font-size: 84px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   line-height: 1;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   -webkit-background-clip: text;

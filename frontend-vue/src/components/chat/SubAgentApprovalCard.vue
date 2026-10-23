@@ -198,7 +198,7 @@ function submitEdit() {
   flex: none; font-size: 11px; color: var(--primary);
   background: var(--primary-bg); padding: 2px 8px; border-radius: 10px;
 }
-.approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
 .approval-hint { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
 .approval-desc { font-size: 12px; color: var(--text-secondary, #595959); margin-bottom: 6px; }
 .approval-args {

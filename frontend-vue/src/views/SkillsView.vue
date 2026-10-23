@@ -779,7 +779,7 @@ async function handleGenerate() {
 <style scoped>
 .skills-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.page-title { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .skills-tabs :deep(.ant-tabs-nav) { margin-bottom: 20px; }
 
@@ -803,7 +803,7 @@ async function handleGenerate() {
 .card-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
 .card-titles { flex: 1; min-width: 0; }
 .card-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
-.card-name { font-size: 14px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .exec-tag { flex: none; }
 .card-desc { display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary); line-height: 1.5; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
@@ -815,12 +815,12 @@ async function handleGenerate() {
 
 .skill-detail { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
-.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }
+.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .detail-value { font-size: 12px; color: var(--text-primary); }
 .detail-pre { margin: 0; padding: 8px; background: var(--bg-secondary); border-radius: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; }
 
 .panel-card { max-width: 640px; border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--shadow-md); padding: 20px; }
-.panel-title { font-size: 14px; font-weight: 600; color: var(--text-primary); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
+.panel-title { font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
 .or-divider { text-align: center; color: var(--text-tertiary); margin: 14px 0; }
 .mono-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
 .install-btn { margin-top: 14px; }
@@ -830,7 +830,7 @@ async function handleGenerate() {
 .run-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; }
 .run-form { display: flex; flex-direction: column; gap: 12px; }
 .run-field { display: flex; flex-direction: column; gap: 6px; }
-.field-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; display: flex; align-items: center; gap: 6px; }
+.field-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); display: flex; align-items: center; gap: 6px; }
 .required { color: var(--error); }
 .field-type { font-size: 10px; color: var(--text-tertiary); background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; }
 .run-empty { color: var(--text-tertiary); font-size: 13px; padding: 8px 0; }

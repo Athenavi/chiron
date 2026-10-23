@@ -169,7 +169,7 @@ async function attach() {
 
 <style scoped>
 .attach-form { display: flex; flex-direction: column; gap: 10px; }
-.attach-subject { margin: 0; font-size: 13px; font-weight: 600; color: var(--text-primary); }
+.attach-subject { margin: 0; font-size: 13px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .attach-select { width: 100%; }
 .attach-hint { margin: 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
 </style>

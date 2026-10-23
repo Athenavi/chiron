@@ -245,7 +245,7 @@ const filteredItems = computed(() => {
   display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
 }
 .card-titles { flex: 1; min-width: 0; }
-.card-name { display: block; font-size: 14px; font-weight: 600; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-desc {
   display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary);
   line-height: 1.5; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
@@ -260,7 +260,7 @@ const filteredItems = computed(() => {
   background: var(--bg-secondary);
   padding: 8px 10px;
 }
-.prompt-label { font-size: 10px; color: var(--text-tertiary); font-weight: 500; margin-bottom: 4px; }
+.prompt-label { font-size: 10px; color: var(--text-tertiary); font-weight: var(--fw-medium); margin-bottom: 4px; }
 .prompt-text {
   font-size: 12px; color: var(--text-secondary); line-height: 1.5;
   overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
@@ -275,7 +275,7 @@ const filteredItems = computed(() => {
   padding: 8px 10px;
 }
 .mcp-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.mcp-label { flex: none; font-size: 10px; color: var(--text-tertiary); font-weight: 500; }
+.mcp-label { flex: none; font-size: 10px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .mcp-code {
   font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;

@@ -1,5 +1,6 @@
 import { createApp } from 'vue'
 import { createPinia } from 'pinia'
+import { message } from 'ant-design-vue'
 // antd 已按需引入（unplugin-vue-components），无需全局 app.use(Antd)
 import 'ant-design-vue/dist/reset.css'
 import '@fontsource-variable/geist'
@@ -37,6 +38,11 @@ const pinia = createPinia()
 app.use(i18n)
 app.use(pinia)
 app.use(router)
+
+// 统一提示时长：成功/信息类 2.5s（"复制成功"看一眼就够）。
+// 错误类需要读完，调用点单独传 { duration: 4 }（见 docs/ui-refinement-design.md §8）。
+message.config({ duration: 2.5 })
+
 app.mount('#app')
 
 // 标记首次渲染完成

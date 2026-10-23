@@ -394,7 +394,7 @@ onUnmounted(() => {
 .cron-card :deep(.ant-table-thead > tr > th) {
   background: var(--bg-secondary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-tertiary);
   border-bottom: 1px solid var(--border-card);
 }
@@ -423,14 +423,14 @@ onUnmounted(() => {
   font-size: 12px;
   color: var(--text-secondary);
 }
-.chart-title { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: 600; }
+.chart-title { display: inline-flex; align-items: center; gap: 6px; font-size: 14px; font-weight: var(--fw-semibold); }
 .chart-title-icon { color: var(--primary); }
 
 /* ── 新建/编辑对话框 ── */
 .cron-form { display: flex; flex-direction: column; gap: 12px; }
 .cron-field { display: flex; flex-direction: column; gap: 4px; }
 .cron-field-row { flex-direction: row; align-items: center; gap: 8px; }
-.cron-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.cron-label { font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-secondary); }
 .cron-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.7; }
 .cron-hint code {
   font-family: var(--font-mono);

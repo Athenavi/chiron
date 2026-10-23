@@ -1099,7 +1099,7 @@ function toolCount(a: Agent): number {
 .agents-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
 .result-actions { margin-top: 16px; display: flex; justify-content: flex-end; gap: 8px; }
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.page-title { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .agents-tabs :deep(.ant-tabs-nav) { margin-bottom: 20px; }
 
@@ -1123,7 +1123,7 @@ function toolCount(a: Agent): number {
   display: inline-flex; align-items: center; justify-content: center; font-size: 18px;
 }
 .card-titles { flex: 1; min-width: 0; }
-.card-name { display: block; font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.card-name { display: block; font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .card-desc {
   display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary);
   line-height: 1.5; overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
@@ -1162,7 +1162,7 @@ function toolCount(a: Agent): number {
 .form-row { display: flex; flex-direction: column; gap: 6px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
 .w-full { width: 100%; }
 .binding-select { width: 100%; }
 .tools-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }

@@ -427,7 +427,7 @@ async function runQuickCommand() {
   border-radius: var(--sig-radius-button);
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: var(--on-solid);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   font-size: 11px;
   display: inline-flex;
   align-items: center;
@@ -438,7 +438,7 @@ async function runQuickCommand() {
 
 .brand-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -510,7 +510,7 @@ async function runQuickCommand() {
 .nav-menu :deep(.ant-dropdown-menu-item-selected) {
   background: var(--primary-bg) !important;
   color: var(--primary) !important;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 .app-content {
@@ -631,7 +631,7 @@ async function runQuickCommand() {
   box-shadow: var(--sig-shadow-card);
   color: var(--text-primary);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   white-space: nowrap;
   opacity: 0;
   pointer-events: none;
@@ -645,7 +645,7 @@ async function runQuickCommand() {
 
 .dock-tip-desc {
   font-size: 11px;
-  font-weight: 400;
+  font-weight: var(--fw-regular);
   color: var(--text-tertiary);
   line-height: 15px;
 }
@@ -711,7 +711,7 @@ async function runQuickCommand() {
 .dock-popover-title {
   display: block;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 
@@ -761,7 +761,7 @@ async function runQuickCommand() {
   background: var(--primary);
   color: var(--text-inverse);
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   cursor: pointer;
   transition: background var(--dur-normal) ease, opacity var(--dur-normal) ease;
 }

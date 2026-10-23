@@ -31,6 +31,34 @@ const props = defineProps<{
 /** 正文容器：mermaid 渲染需要拿到已挂载的 DOM */
 const msgTextRef = ref<HTMLElement | null>(null)
 
+/**
+ * 水墨逐字：流式期把正文拆成单字，让每个新字符"从模糊到对焦"。
+ *
+ * 两条硬约束：
+ *  1. **≤ 2000 字才拆** —— 逐字 DOM 数量与字符数线性相关，长回答会拖慢滚动；
+ *     超过就退回整条插值（长回答本就在快速滚动，逐字反而不易读）。
+ *  2. **只为本批新增字符计时** —— `--i = min(i - batchStart, 12)`：
+ *     否则第 500 个字要等 14 秒才出现；上限 12 档让"一次返回一大段"也在 ~340ms 内铺开。
+ */
+const INK_MAX_CHARS = 2000
+const INK_MAX_STAGGER = 12
+const inkChars = computed(() => {
+  if (!('streaming' in props.item) || !props.item.streaming) return null
+  const text = ('content' in props.item ? props.item.content : '') || ''
+  return text && text.length <= INK_MAX_CHARS ? Array.from(text) : null
+})
+const inkBatchStart = ref(0)
+watch(
+  () => ('content' in props.item ? props.item.content : '') || '',
+  (now, before) => {
+    const prev = (before || '').length
+    inkBatchStart.value = (now || '').length > prev ? prev : 0
+  },
+)
+function inkIndex(i: number): number {
+  return Math.min(Math.max(i - inkBatchStart.value, 0), INK_MAX_STAGGER)
+}
+
 const emit = defineEmits<{
   /** 用户消息编辑后重发：删除该消息及其后所有消息，用新文本重发 */
   (e: 'retry-from', itemId: string, text: string): void
@@ -459,7 +487,16 @@ onUpdated(enhanceContent)
           v-if="item.streaming"
           class="msg-text streaming-text"
         >
-          {{ item.content }}
+          <!-- 水墨逐字：≤2000 字才拆；超过退回整条插值（见 script 里的注释） -->
+          <template v-if="inkChars">
+            <span
+              v-for="(ch, i) in inkChars"
+              :key="i"
+              class="ink"
+              :style="{ '--i': inkIndex(i) }"
+            >{{ ch }}</span>
+          </template>
+          <template v-else>{{ item.content }}</template>
         </div>
         <!-- 超长正文让位期间先给纯文本，避免空白；渲染完成后由下方 v-html 分支接管 -->
         <div
@@ -674,7 +711,10 @@ onUpdated(enhanceContent)
     v-bind="$attrs"
     class="turn-stats"
   >
-    <span v-if="item.inputTokens || item.outputTokens || item.durationSec">
+    <span
+      v-if="item.inputTokens || item.outputTokens || item.durationSec"
+      class="tnum"
+    >
       <template v-if="item.durationSec">{{ $t('common.elapsed_n_s', { n: item.durationSec }) }} · </template>
       tokens: {{ item.inputTokens }} in / {{ item.outputTokens }} out
     </span>
@@ -718,8 +758,27 @@ onUpdated(enhanceContent)
 .msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash var(--dur-slow) ease-out; }
 @keyframes trajectoryFlash { 0% { background: var(--primary-bg); } 100% { background: transparent; } }
 .msg-content { min-width: 0; }
-.msg-text { font-size: var(--chat-text-size, 16px); line-height: var(--chat-text-leading, 1.75); color: var(--text-primary); }
+.msg-text { font-size: var(--chat-text-size, 16px); line-height: var(--chat-text-leading, 1.75); color: var(--text-primary);
+  /* 行末单字保护：浏览器会在最后一行避免孤字（不支持时无副作用） */
+  text-wrap: pretty;
+  /* 长 URL / 英文串不撑破容器；代码块有自己的横向滚动，不受影响 */
+  overflow-wrap: anywhere;
+}
 .streaming-text { white-space: pre-wrap; word-break: break-word; }
+/* 水墨晕染：极快高斯模糊 → 对焦；相邻字错开（步长走 token，见 style.css :root） */
+.ink {
+  animation: inkIn var(--dur-ink) var(--ease-out) both;
+  animation-delay: calc(var(--i, 0) * var(--dur-ink-stagger));
+}
+@keyframes inkIn {
+  from { filter: blur(6px); opacity: 0.35; transform: translateY(1px); }
+  to { filter: blur(0); opacity: 1; transform: none; }
+}
+/* 行内图标下移 1/8 字高（与正文基线咬合） */
+.msg-text :is(svg, img) { vertical-align: -0.125em; }
+@media (prefers-reduced-motion: reduce) {
+  .ink { animation: none; }
+}
 /* UI/UX：流式生成光标（deepseek 打字效果） */
 .streaming-text::after {
   content: '▍';
@@ -757,11 +816,11 @@ onUpdated(enhanceContent)
 /* markdown 正文（deepseek MarkdownText：16/28、标题层级、块 gap 16） */
 .msg-text :deep(p) { margin: 16px 0; }
 .msg-text :deep(p:first-child) { margin-top: 0; }
-.msg-text :deep(h1) { font-size: 24px; line-height: 34px; font-weight: 700; margin: 32px 0 16px; }
-.msg-text :deep(h2) { font-size: 22px; line-height: 32px; font-weight: 700; margin: 32px 0 16px; }
-.msg-text :deep(h3) { font-size: 20px; line-height: 30px; font-weight: 700; margin: 32px 0 16px; }
-.msg-text :deep(h4) { font-size: 16px; line-height: 28px; font-weight: 600; margin: 16px 0; }
-.msg-text :deep(strong) { font-weight: 600; }
+.msg-text :deep(h1) { font-size: 24px; line-height: 34px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
+.msg-text :deep(h2) { font-size: 22px; line-height: 32px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
+.msg-text :deep(h3) { font-size: 20px; line-height: 30px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
+.msg-text :deep(h4) { font-size: 16px; line-height: 28px; font-weight: var(--fw-semibold); margin: 16px 0; }
+.msg-text :deep(strong) { font-weight: var(--fw-semibold); }
 .msg-text :deep(ul), .msg-text :deep(ol) { padding-left: 24px; margin: 16px 0; }
 .msg-text :deep(li) { margin: 4px 0; }
 .msg-text :deep(blockquote) { margin: 16px 0; padding: 6px 12px; border-left: 3px solid var(--primary); background: var(--bg-hover); border-radius: var(--sig-radius-button); }
@@ -769,7 +828,7 @@ onUpdated(enhanceContent)
 .msg-text :deep(a:hover) { text-decoration: underline; }
 .msg-text :deep(table) { border-collapse: collapse; margin: 16px 0; display: block; width: max-content; min-width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
 .msg-text :deep(th), .msg-text :deep(td) { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
-.msg-text :deep(th) { background: var(--bg-secondary); font-weight: 600; }
+.msg-text :deep(th) { background: var(--bg-secondary); font-weight: var(--fw-semibold); }
 .msg-text :deep(img) { max-width: 100%; border-radius: var(--sig-radius-code); }/* 行内代码（deepseek markdown-inline-code：bluish-100 底） */
 .msg-text :deep(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-secondary); padding: 2px 6px; border-radius: var(--sig-radius-button); }
 /* 代码块：12px 圆角 + banner（deepseek CodeBlock） */
@@ -823,7 +882,7 @@ onUpdated(enhanceContent)
 .msg-actions.user { justify-content: flex-end; }
 .msg-time { padding-right: 6px; font-size: 12px; color: var(--text-tertiary); opacity: 0; transition: opacity var(--dur-fast) ease; }
 [data-time-hover-root]:hover .msg-time, [data-time-hover-root]:focus-within .msg-time { opacity: 1; }
-.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-fast) ease; }
+.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-spring) var(--ease-spring); }
 .msg-action:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-action.active { color: var(--primary); opacity: 1; }
 .msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: var(--on-solid); font-size: 12px; gap: 4px; opacity: 1; }
@@ -843,7 +902,12 @@ onUpdated(enhanceContent)
 .collapse-toggle { margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
 .collapse-toggle:hover { border-color: var(--primary); color: var(--primary); }
 .collapse-toggle:active { transform: scale(0.97); }
-.msg-action:active { transform: scale(0.9); }
+/* 点赞/点踩：按下走"过阻尼"（60ms 跟手），松开由上面的 --ease-spring 回弹一下 */
+.msg-action:active {
+  transform: scale(0.86);
+  transition-duration: var(--dur-instant);
+  transition-timing-function: var(--ease-snap);
+}
 .retry-btn:active { transform: scale(0.96); }
 .edit-btn:active { transform: scale(0.97); }
 [data-time-hover-root]:hover .msg-action, [data-time-hover-root]:focus-within .msg-action { opacity: 1; }

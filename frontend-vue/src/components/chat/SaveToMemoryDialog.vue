@@ -165,7 +165,7 @@ async function save() {
   display: block;
   margin-bottom: var(--space-1);
   font-size: var(--fs-sm);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-secondary);
 }
 </style>

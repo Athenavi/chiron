@@ -182,7 +182,7 @@ onMounted(load)
 .page-title {
   margin: 0;
   font-size: 20px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .page-sub {
   margin: 4px 0 0;
@@ -220,7 +220,7 @@ onMounted(load)
   display: flex;
   align-items: center;
   gap: 8px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .provider-desc {
   margin: 6px 0 0;
@@ -238,7 +238,7 @@ onMounted(load)
 .key-label {
   display: block;
   margin-bottom: 6px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .key-hint {
   margin: 6px 0 0;

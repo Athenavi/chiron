@@ -3510,7 +3510,7 @@ function continueGeneration() {
 .toolbar-title {
   max-width: 40vw;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   white-space: nowrap;
   overflow: hidden;
@@ -3572,7 +3572,7 @@ function continueGeneration() {
 .approval-countdown { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag { font-size: 11px; color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
-.approval-name { font-weight: 600; font-size: 13px; color: var(--text-primary); }
+.approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
 .approval-args { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 8px; }
 .approval-edit { margin-bottom: 8px; }
 .approval-edit-text {
@@ -3618,7 +3618,7 @@ function continueGeneration() {
 .share-link-input { flex: 1; }
 .share-manage { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; }
 .share-manage-hint { font-size: 12px; color: var(--text-tertiary); }
-.share-select-title { font-size: 13px; font-weight: 600; color: var(--text-primary); margin: 14px 0 8px; }
+.share-select-title { font-size: 13px; font-weight: var(--fw-semibold); color: var(--text-primary); margin: 14px 0 8px; }
 .share-select-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; width: 100%; }
 .share-select-item {
   display: flex; align-items: center; gap: 8px;
@@ -3626,7 +3626,7 @@ function continueGeneration() {
   transition: background var(--dur-fast) ease;
 }
 .share-select-item:hover { background: var(--bg-hover); }
-.share-select-role { flex: none; font-size: 11px; font-weight: 600; padding: 1px 7px; border-radius: 10px; }
+.share-select-role { flex: none; font-size: 11px; font-weight: var(--fw-semibold); padding: 1px 7px; border-radius: 10px; }
 .share-select-role.user { color: var(--primary); background: var(--primary-bg); }
 .share-select-role.assistant { color: var(--text-secondary); background: var(--bg-secondary); }
 .share-select-preview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3635,7 +3635,7 @@ function continueGeneration() {
 .turn-status {
   align-self: flex-start; margin: 10px auto 0; max-width: min(var(--chat-content-width), 92%); padding: 0 24px;
   height: 26px; display: inline-flex; align-items: center;
-  font-size: 13px; font-weight: 600; white-space: nowrap;
+  font-size: 13px; font-weight: var(--fw-semibold); white-space: nowrap;
   background: linear-gradient(90deg, var(--primary) 0%, var(--primary) 40%, var(--accent) 50%, var(--primary) 60%, var(--primary) 100%);
   background-position: 100% 0; background-size: 250% 100%; background-clip: text; -webkit-background-clip: text;
   color: transparent; -webkit-text-fill-color: transparent;
@@ -3674,7 +3674,7 @@ function continueGeneration() {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
   padding: 1px 10px; border-radius: 10px;
   background: var(--primary); color: var(--on-solid);
-  font-size: 11px; font-weight: 600; line-height: 18px;
+  font-size: 11px; font-weight: var(--fw-semibold); line-height: 18px;
   transition: background var(--dur-normal) ease;
 }
 .ub-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--on-viewer-strong); }
@@ -3738,7 +3738,7 @@ function continueGeneration() {
 .kb-hits-text { flex: 1; min-width: 0; }
 .kb-hits-link {
   flex: none; margin-left: auto; padding-left: 12px;
-  color: var(--primary); font-weight: 600; white-space: nowrap;
+  color: var(--primary); font-weight: var(--fw-semibold); white-space: nowrap;
   text-decoration: none;
 }
 .kb-hits-link:hover { text-decoration: underline; }
@@ -3750,7 +3750,7 @@ function continueGeneration() {
 
 /* ── 存为 Agent 弹窗 ── */
 .save-agent-form { display: flex; flex-direction: column; gap: 6px; }
-.save-agent-label { font-size: 12px; font-weight: 600; color: var(--text-secondary); }
+.save-agent-label { font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-secondary); }
 .save-agent-hint { margin: 8px 0 0; font-size: 12px; line-height: 1.6; color: var(--text-secondary); }
 
 @media (max-width: 768px) {

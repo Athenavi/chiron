@@ -308,7 +308,7 @@ async function handleSubmit() {
   border-radius: 12px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: var(--on-solid);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   font-size: 16px;
   display: flex;
   align-items: center;
@@ -318,7 +318,7 @@ async function handleSubmit() {
 
 .auth-title {
   font-size: 22px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 

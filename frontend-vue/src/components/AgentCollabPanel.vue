@@ -233,7 +233,7 @@ defineExpose({
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 
@@ -333,7 +333,7 @@ defineExpose({
 
 .agent-name {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   margin-bottom: 2px;
 }
@@ -370,13 +370,13 @@ defineExpose({
 .check-icon {
   color: var(--success);
   font-size: 18px;
-  font-weight: bold;
+  font-weight: var(--fw-bold);
 }
 
 .error-icon {
   color: var(--error);
   font-size: 18px;
-  font-weight: bold;
+  font-weight: var(--fw-bold);
 }
 
 .agent-output {
@@ -414,7 +414,7 @@ defineExpose({
 
 .log-header span {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 

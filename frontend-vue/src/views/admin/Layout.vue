@@ -388,7 +388,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   background: linear-gradient(135deg, var(--primary), var(--primary-active));
   color: var(--on-solid);
   font-size: 11px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -396,7 +396,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 }
 .sider-name {
   font-size: 15px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   letter-spacing: -0.01em;
   white-space: nowrap;
@@ -410,7 +410,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 }
 .sider-menu :deep(.ant-menu-item-group-title) {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: var(--text-muted);
@@ -434,7 +434,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 .sider-menu :deep(.ant-menu-item-selected) {
   background: var(--primary-bg) !important;
   color: var(--primary) !important;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .sider-menu :deep(.ant-menu-item-selected::after) { display: none; }
 
@@ -474,7 +474,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 }
 .header-breadcrumb :deep(.ant-breadcrumb-link:last-child) {
   color: var(--text-primary);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .header-actions { display: flex; align-items: center; gap: 8px; flex-shrink: 0; }

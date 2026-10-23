@@ -621,7 +621,7 @@ onMounted(async () => {
   display: flex; align-items: flex-start; justify-content: space-between;
   gap: 16px; flex-wrap: wrap; margin-bottom: 12px;
 }
-.mv-title { margin: 0; font-size: 16px; font-weight: 600; }
+.mv-title { margin: 0; font-size: 16px; font-weight: var(--fw-semibold); }
 .mv-sub { margin: 4px 0 0; font-size: 12px; color: var(--text-tertiary); }
 .mv-actions { display: flex; align-items: center; gap: 8px; }
 .mv-search { width: 220px; }
@@ -646,7 +646,7 @@ onMounted(async () => {
   font-size: 13px;
 }
 .mv-row:last-child { border-bottom: 0; }
-.mv-row-head { color: var(--text-tertiary); font-size: 12px; font-weight: 500; border-bottom: 1px solid var(--border-subtle); }
+.mv-row-head { color: var(--text-tertiary); font-size: 12px; font-weight: var(--fw-medium); border-bottom: 1px solid var(--border-subtle); }
 .mv-name { font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
 .mv-display { color: var(--text-secondary); overflow-wrap: anywhere; }
 .mv-op { display: flex; justify-content: flex-end; }

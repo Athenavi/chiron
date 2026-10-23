@@ -1024,8 +1024,8 @@ defineExpose({ insertText, setCommandDraft })
         ref="textareaRef"
         v-model:value="input"
         :data-tour="TOUR_ANCHORS.input"
-        :rows="1"
-        :auto-size="{ minRows: 1, maxRows: 8 }"
+        :rows="3"
+        :auto-size="{ minRows: 3, maxRows: 8 }"
         :placeholder="inputPlaceholder"
         class="input-field"
         :disabled="disabled"
@@ -1210,7 +1210,7 @@ defineExpose({ insertText, setCommandDraft })
             class="run-hint"
           >
             <span class="run-dot" />
-            {{ $t('common.generating') }} · {{ elapsed }}s
+            {{ $t('common.generating') }} · <span class="tnum-fixed">{{ elapsed }}s</span>
           </span>
           <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
           <Button
@@ -1251,17 +1251,19 @@ defineExpose({ insertText, setCommandDraft })
   display: flex; flex-direction: column; gap: 2px;
   width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
   padding: 12px 14px 10px;
-  border: 1px solid var(--border); border-radius: 16px;
+  /* 扔掉描边：层次由背景色阶承担（见 docs/ui-refinement-design.md §1） */
+  border: 0; border-radius: 16px;
   background: var(--bg-input);
   box-shadow: var(--shadow-md);
   font-size: 16px; line-height: 24px;
-  transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
+  transition: box-shadow var(--dur-normal) var(--ease-out);
 }
-/* 聚焦态：主色描边 + 柔和光晕（用 color-mix 让深浅色主题都自然过渡） */
+/* 聚焦态：双环咬合，不用亮线。
+   内环 inset（同色系加深，替代原来的描边）+ 外环柔光 + 投影托起。 */
 .input-card:focus-within {
-  border-color: color-mix(in srgb, var(--primary) 45%, var(--border));
   box-shadow:
-    0 0 0 3px color-mix(in srgb, var(--primary) 14%, transparent),
+    inset 0 0 0 var(--sig-input-ring, 1px) var(--ring-inner),
+    0 0 0 4px var(--ring-outer, var(--border-subtle)),
     var(--shadow-md);
 }
 .input-field { background: transparent !important; }
@@ -1379,7 +1381,12 @@ defineExpose({ insertText, setCommandDraft })
 }
 .recording-timer { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 32px; }
 /* 拖拽态：边框主色 + 背景淡色 */
-.input-card.drag-active { border-color: var(--primary); background: var(--primary-bg); box-shadow: var(--shadow-md), 0 0 0 3px var(--primary-bg); }
+/* 拖拽态：雷厉风行 —— 进出都不做过渡（避免拖入/拖出时"慢半拍"） */
+.input-card.drag-active {
+  transition: none;
+  background: var(--primary-bg);
+  box-shadow: var(--shadow-md), 0 0 0 3px var(--ring-outer, var(--border-subtle));
+}
 
 /* 斜杠命令面板 */
 .slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: var(--z-sticky); }
@@ -1389,12 +1396,12 @@ defineExpose({ insertText, setCommandDraft })
   position: sticky; top: 0; z-index: var(--z-content);
   padding: 4px 12px;
   background: var(--bg-card);
-  color: var(--text-tertiary); font-size: 11px; font-weight: 600;
+  color: var(--text-tertiary); font-size: 11px; font-weight: var(--fw-semibold);
   border-bottom: 1px solid var(--border);
 }
 .slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background var(--dur-fast) ease; }
 .slash-item.active { background: var(--bg-hover); }
-.slash-cmd { font-weight: 600; color: var(--primary); font-size: 13px; }
+.slash-cmd { font-weight: var(--fw-semibold); color: var(--primary); font-size: 13px; }
 .slash-desc { color: var(--text-tertiary); font-size: 12px; }
 
 /* 大文本粘贴折叠预览 */

@@ -430,7 +430,7 @@ async function handleRegister() {
   border-radius: 12px;
   background: linear-gradient(135deg, var(--primary), var(--primary-dark));
   color: var(--on-solid);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   font-size: 16px;
   letter-spacing: 0.02em;
   display: flex;
@@ -441,7 +441,7 @@ async function handleRegister() {
 
 .register-title {
   font-size: 22px;
-  font-weight: 650;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }

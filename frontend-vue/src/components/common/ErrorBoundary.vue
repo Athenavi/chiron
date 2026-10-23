@@ -82,7 +82,7 @@ function reload() {
 }
 .error-title {
   font-size: 16px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary, #0f1115);
 }
 .error-message {

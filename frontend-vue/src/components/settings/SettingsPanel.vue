@@ -1015,9 +1015,9 @@ onMounted(async () => {
 .setting-block + .setting-block { border-top: 1px solid var(--border-card, var(--border)); padding-top: 20px; }
 .setting-title {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
-  font-size: 14px; font-weight: 600; margin-bottom: 12px;
+  font-size: 14px; font-weight: var(--fw-semibold); margin-bottom: 12px;
 }
-.setting-hint { font-size: 12px; font-weight: 400; color: var(--text-tertiary); }
+.setting-hint { font-size: 12px; font-weight: var(--fw-regular); color: var(--text-tertiary); }
 
 .setting-form { max-width: 360px; }
 
@@ -1043,7 +1043,7 @@ onMounted(async () => {
 .identity-row:last-of-type { border-bottom: none; }
 .identity-info { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .identity-name {
-  font-weight: 500; color: var(--text-primary);
+  font-weight: var(--fw-medium); color: var(--text-primary);
   font-variant-numeric: tabular-nums;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
 }

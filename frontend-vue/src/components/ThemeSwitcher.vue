@@ -145,7 +145,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 }
 .ts-section-title {
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
   color: var(--text-tertiary);
@@ -217,7 +217,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 }
 .ts-theme-name {
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   line-height: 1.2;
 }
 .ts-theme-desc {
@@ -247,7 +247,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   gap: 5px;
   padding: 7px 8px;
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   border: 1px solid var(--border-default);
   border-radius: 8px;
   background: var(--bg-surface);
@@ -263,7 +263,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   color: var(--primary);
   border-color: var(--primary);
   background: var(--primary-bg);
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 </style>
 

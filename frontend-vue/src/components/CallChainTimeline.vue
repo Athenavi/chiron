@@ -331,7 +331,7 @@ function capitalize(str: string): string {
   align-items: center;
   gap: 8px;
   font-size: 13px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 
@@ -354,7 +354,7 @@ function capitalize(str: string): string {
 
 .complete {
   color: var(--success);
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 
 .node-line {
@@ -403,7 +403,7 @@ function capitalize(str: string): string {
 
 .node-name {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text-primary);
   min-width: 0;
   overflow: hidden;

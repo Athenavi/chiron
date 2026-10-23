@@ -72,6 +72,30 @@
        原有散落取值为 0.6s/0.8s/0.9s/1s，此处收敛到 0.8s 作为统一节奏。 */
     --dur-spin: 800ms;
 
+    /* ── 两族动效（见 docs/ui-refinement-design.md §6）──
+       拖拽/吸附：过阻尼（快出、不回头）；点赞：欠阻尼（回弹一下再停）。 */
+    --dur-instant: 60ms;
+    --dur-snap: 120ms;
+    --dur-spring: 420ms;
+    --ease-snap: cubic-bezier(0.2, 0, 0, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* 水墨逐字：单字对焦时长 + 相邻字错开步长。
+       注意 animation-delay 里的毫秒也算"硬编码动效"，必须走 token。 */
+    --dur-ink: 140ms;
+    --dur-ink-stagger: 28ms;
+
+    /* ── 明度阶（第三层：别名层）──
+       只在这里定义一次；主题切换时 --bg-* 变，别名自动跟随。
+       这就是为什么 8 个主题块**不需要**各写一份明度值。 */
+    --elev-0: var(--bg-base);
+    --elev-1: var(--bg-surface);
+    --elev-2: var(--bg-surface-hover);
+    --elev-3: var(--bg-elevated);
+    --hairline: var(--border-subtle);
+    --ring-inner: var(--border-strong);
+    --ring-outer: color-mix(in srgb, var(--primary) 12%, transparent);
+
     /* 层级（z-index）—— 只表达堆叠高低，与主题无关，故定义在 :root 而非各主题块。
        取值刻意保留既有数字：本次只做命名，不改变任何层叠关系。
        参照：ant-design-vue 的 Modal / Drawer 默认 z-index 为 1000，本表按此分段。
@@ -165,6 +189,35 @@
 /* 极简功能（默认主题）：同时挂在 :root 上作为兜底 —— <html data-theme> 尚未被 JS
    设置时（首帧之前 / JS 未执行）也不会闪白或落到未定义值。 */
 :root,
+/* 暗色整体下调一档：字重 −10%、界面字号 −1px。
+   用 html.dark（0,1,1）而不是 .dark（0,1,0）—— 后者与 [data-theme='x-dark'] 同级，
+   谁生效取决于源码先后；前者恒定胜出，不受主题块位置影响。 */
+html.dark {
+    --fw-regular: 360;
+    --fw-medium: 460;
+    --fw-semibold: 560;
+    --fw-bold: 660;
+
+    /* 14 → 13。小字号档同时收窄偏移，避免 11px 掉到 10px（暗色下几乎不可读） */
+    --ui-font-size: 13px;
+    --fs-xs: calc(var(--ui-font-size) - 2px);   /* 13 → 11px */
+    --fs-sm: calc(var(--ui-font-size) - 1px);   /* 13 → 12px */
+}
+
+/* 数字锁宽：只加在"显示数字"的地方（时长、用量、计费、时间戳），不全局设 */
+.tnum {
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+}
+/* 秒数专用：9s → 10s → 100s 时容器宽度不跳（user: "避免乱晃"） */
+.tnum-fixed {
+    display: inline-block;
+    min-width: 3ch;
+    text-align: right;
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'tnum';
+}
+
 [data-theme='notion-light'] {
     --brand-50: #f8fafc;
     --brand-100: #f1f5f9;

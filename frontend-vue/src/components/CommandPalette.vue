@@ -634,7 +634,7 @@ onUnmounted(() => {
 .palette-group {
   padding: 8px 10px 4px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
   color: var(--text-tertiary);

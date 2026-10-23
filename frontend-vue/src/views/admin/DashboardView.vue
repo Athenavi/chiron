@@ -450,7 +450,7 @@ onUnmounted(() => {
 .nav-card-body { flex: 1; min-width: 0; }
 .nav-card-label {
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 .nav-card-desc {
@@ -504,7 +504,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 8px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-primary);
 }
 .chart-title-icon { color: var(--primary); font-size: 15px; }
@@ -523,7 +523,7 @@ onUnmounted(() => {
 .alert-card :deep(.ant-table-thead > tr > th) {
   background: var(--bg-secondary);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--text-tertiary);
   border-bottom: 1px solid var(--border-card);
 }

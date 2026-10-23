@@ -413,7 +413,7 @@ function scrollToTop() {
   border-radius: var(--radius-full);
   background: var(--bg-surface);
   font-size: 12px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text-secondary);
   box-shadow: var(--shadow-sm);
   animation: heroReveal var(--dur-slow) ease-out both;
@@ -431,7 +431,7 @@ function scrollToTop() {
   margin: 22px 0 16px;
   font-size: clamp(34px, 5.5vw, 56px);
   line-height: 1.15;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   letter-spacing: -0.02em;
   color: var(--text-primary);
   animation: heroReveal var(--dur-slow) 0.08s cubic-bezier(0.22, 0.8, 0.36, 1) both;
@@ -463,7 +463,7 @@ function scrollToTop() {
   padding: 0 26px;
   height: 44px;
   font-size: 14px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   transition: transform var(--dur-normal) ease-out, box-shadow var(--dur-normal) ease, border-color var(--dur-normal) ease, background var(--dur-normal) ease;
 }
 .hero-cta.glow {
@@ -479,7 +479,7 @@ function scrollToTop() {
 
 /* ── 特性网格 ── */
 .features { max-width: 1080px; margin: 0 auto; padding: 40px 24px 56px; position: relative; }
-.section-title { font-size: 28px; font-weight: 700; letter-spacing: -0.01em; text-align: center; }
+.section-title { font-size: 28px; font-weight: var(--fw-bold); letter-spacing: -0.01em; text-align: center; }
 .section-sub { margin-top: 8px; text-align: center; font-size: 14px; color: var(--text-tertiary); }
 .feature-grid {
   position: relative;
@@ -528,13 +528,13 @@ function scrollToTop() {
 .feature-icon { font-size: 20px; }
 .feature-en {
   font-size: 10px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   letter-spacing: 0.16em;
   color: var(--text-tertiary);
   text-transform: uppercase;
   margin-bottom: 4px;
 }
-.feature-title { font-size: 15px; font-weight: 600; color: var(--text-primary); }
+.feature-title { font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .feature-desc { margin-top: 6px; font-size: 13px; line-height: 20px; color: var(--text-secondary); flex: 1; }
 .feature-go { margin-top: 12px; font-size: 12px; color: var(--primary); opacity: 0; transform: translateX(-4px); transition: opacity var(--dur-normal) ease, transform var(--dur-normal) ease; }
 .feature-card:hover .feature-go { opacity: 1; transform: translateX(0); }
@@ -628,7 +628,7 @@ function scrollToTop() {
   border-bottom: 1px solid var(--border-subtle);
   margin-bottom: 4px;
 }
-.pv-panel-title { font-size: 12px; font-weight: 600; color: var(--text-primary); }
+.pv-panel-title { font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .pv-panel-caret { font-size: 10px; color: var(--text-tertiary); }
 .pv-timeline {
   height: 34px;
@@ -655,7 +655,7 @@ function scrollToTop() {
   font-size: 12px;
   color: var(--text-secondary);
 }
-.pv-row.active { background: var(--primary-bg); color: var(--primary); font-weight: 600; }
+.pv-row.active { background: var(--primary-bg); color: var(--primary); font-weight: var(--fw-semibold); }
 .pv-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--primary); opacity: 0.7; }
 
 /* ── 快速开始：终端代码块 ── */
@@ -685,7 +685,7 @@ function scrollToTop() {
 .term-copy:hover { color: var(--primary); border-color: var(--primary); }
 .terminal-body { padding: 16px 18px; font-family: var(--font-mono); font-size: 12.5px; line-height: 24px; background: var(--bg-code); }
 .term-line { color: var(--text-primary); white-space: pre-wrap; word-break: break-all; }
-.term-prompt { color: var(--primary); font-weight: 600; margin-right: 8px; }
+.term-prompt { color: var(--primary); font-weight: var(--fw-semibold); margin-right: 8px; }
 .term-out { color: var(--text-tertiary); margin-top: 6px; }
 
 /* ── 页脚 ── */
@@ -700,11 +700,11 @@ function scrollToTop() {
   color: var(--text-tertiary);
   background: var(--bg-surface);
 }
-.home-footer-brand { display: flex; align-items: center; gap: 8px; font-weight: 600; color: var(--text-secondary); }
+.home-footer-brand { display: flex; align-items: center; gap: 8px; font-weight: var(--fw-semibold); color: var(--text-secondary); }
 .home-footer-logo {
   width: 20px; height: 20px; border-radius: 6px;
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: var(--on-solid); font-size: 9px; font-weight: 700;
+  color: var(--on-solid); font-size: 9px; font-weight: var(--fw-bold);
   display: inline-flex; align-items: center; justify-content: center;
 }
 

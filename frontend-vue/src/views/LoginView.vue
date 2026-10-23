@@ -792,7 +792,7 @@ async function handleLogin() {
   border-radius: 14px;
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: var(--on-solid);
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   font-size: 18px;
   letter-spacing: 0.02em;
   display: flex;
@@ -803,7 +803,7 @@ async function handleLogin() {
 
 .login-title {
   font-size: 24px;
-  font-weight: 700;
+  font-weight: var(--fw-bold);
   color: var(--text-primary);
   letter-spacing: -0.01em;
 }
@@ -823,7 +823,7 @@ async function handleLogin() {
 .login-form-card :deep(.ant-card-body) { padding: 0; }
 
 .login-form-card :deep(.ant-form-item-label > label) {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text-secondary);
   font-size: 13px;
   height: 24px;
@@ -838,17 +838,17 @@ async function handleLogin() {
 
 .login-form-card :deep(.ant-btn-primary) {
   height: 44px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-size: 14px;
   letter-spacing: 0.01em;
 }
 
 .login-form-card :deep(.ant-tabs-tab) {
   font-size: 13px;
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .login-form-card :deep(.ant-tabs-tab-active .ant-tabs-tab-btn) {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 @keyframes loginFadeIn {
@@ -878,7 +878,7 @@ async function handleLogin() {
     background: var(--primary-bg);
     color: var(--primary);
     font-size: 12px;
-    font-weight: 600;
+    font-weight: var(--fw-semibold);
     width: fit-content;
     margin-bottom: 24px;
   }
@@ -892,7 +892,7 @@ async function handleLogin() {
   }
   .login-brand-title {
     font-size: clamp(36px, 4.5vw, 52px);
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     line-height: 1.1;
     letter-spacing: -0.02em;
     color: var(--text-primary);
@@ -927,7 +927,7 @@ async function handleLogin() {
   .login-brand-feature::before {
     content: '✓';
     color: var(--success);
-    font-weight: 700;
+    font-weight: var(--fw-bold);
     flex-shrink: 0;
   }
 }

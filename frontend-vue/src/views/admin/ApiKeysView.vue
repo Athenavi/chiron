@@ -650,7 +650,7 @@ onMounted(() => {
   align-items: center;
   justify-content: space-between;
   gap: 6px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 .provider-card-line {
   font-size: 12px;

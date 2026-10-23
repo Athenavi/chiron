@@ -284,7 +284,7 @@ function raiseBudget(item: PendingInteraction) {
 }
 .inbox-title {
   font-size: 12px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   color: var(--accent);
   background: var(--accent-bg);
   padding: 2px 10px;

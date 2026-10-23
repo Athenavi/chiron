@@ -188,7 +188,7 @@ onMounted(load)
 .harness-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .harness-hint { color: var(--text-secondary); font-size: 12px; }
 .harness-count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
-.harness-count.over { color: var(--error, #ff4d4f); font-weight: 600; }
+.harness-count.over { color: var(--error, #ff4d4f); font-weight: var(--fw-semibold); }
 .harness-item { padding: 10px 0; border-bottom: 1px dashed var(--border-color, #f0f0f0); }
 .harness-item-head { display: flex; align-items: center; gap: 8px; }
 .harness-item-actions { margin-left: auto; display: flex; gap: 12px; }

@@ -287,7 +287,7 @@ onMounted(() => {
   transition: background-color var(--dur-normal) ease;
 }
 .role-item:hover { background: var(--bg-hover); }
-.role-name { font-weight: 500; }
+.role-name { font-weight: var(--fw-medium); }
 .role-desc { margin-left: 8px; color: var(--text-tertiary); font-size: 12px; }
 
 /* 空状态统一 */

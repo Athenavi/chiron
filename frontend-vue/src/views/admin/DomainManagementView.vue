@@ -363,7 +363,7 @@ onMounted(loadDomains)
 <style scoped>
 .domain-management { padding: 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 24px; flex-wrap: wrap; }
-.page-header h1 { margin: 0; font-size: 24px; font-weight: 600; color: var(--text-primary); }
+.page-header h1 { margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 
 @media (max-width: 768px) {
   .domain-management { padding: 16px 12px; }

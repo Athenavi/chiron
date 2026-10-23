@@ -36,7 +36,7 @@ import SettingsPanel from '../components/settings/SettingsPanel.vue'
 .profile-header h1 {
   margin: 0;
   font-size: 24px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
 }
 
 @media (max-width: 640px) {

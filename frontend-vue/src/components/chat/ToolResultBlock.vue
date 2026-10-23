@@ -453,7 +453,7 @@ function todoStatusLabel(status?: string): string {
 .search-header { display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--bg-secondary); }
 .search-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-secondary); }
 .search-body { padding: 8px 14px 12px 0; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; }
-.search-file { padding: 6px 0 2px 14px; color: var(--primary); font-weight: 600; white-space: pre; }
+.search-file { padding: 6px 0 2px 14px; color: var(--primary); font-weight: var(--fw-semibold); white-space: pre; }
 .search-line { min-height: 22px; padding-left: 14px; white-space: pre; color: var(--text-primary); }
 .search-line-no { display: inline-block; width: 40px; color: var(--text-tertiary); user-select: none; }
 .search-line-text { color: var(--text-primary); }

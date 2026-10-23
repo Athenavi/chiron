@@ -1652,7 +1652,7 @@ onUnmounted(() => {
 .breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .crumb { font-size: 14px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
 .crumb:hover { color: var(--primary); }
-.crumb.active { color: var(--text-primary); font-weight: 600; }
+.crumb.active { color: var(--text-primary); font-weight: var(--fw-semibold); }
 .crumb-sep { margin-left: 4px; color: var(--text-muted); }
 .toolbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 24px; }
@@ -1747,7 +1747,7 @@ onUnmounted(() => {
 }
 .upload-status { 
   font-size: 12px; 
-  font-weight: 500;
+  font-weight: var(--fw-medium);
 }
 .upload-status.uploading { color: var(--primary); }
 .upload-status.success { color: var(--success); }

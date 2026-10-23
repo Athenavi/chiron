@@ -709,7 +709,7 @@ async function testPlugin(p: Plugin) {
 .page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
 .page-head-actions { display: flex; align-items: center; gap: 16px; }
 .auth-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-tertiary); }
-.page-title { font-size: 24px; font-weight: 700; margin: 0; letter-spacing: -0.01em; }
+.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .plugins-tabs :deep(.ant-tabs-nav) { margin-bottom: 16px; }
 .list-toolbar { margin-bottom: 16px; }
@@ -730,7 +730,7 @@ async function testPlugin(p: Plugin) {
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
 .card-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
 .card-titles { flex: 1; min-width: 0; }
-.plugin-name { display: block; font-size: 14px; font-weight: 600; color: var(--text-primary); }
+.plugin-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .plugin-desc { display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .card-command { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -741,13 +741,13 @@ async function testPlugin(p: Plugin) {
 .test-result.ok { background: var(--success-bg); color: var(--success); }
 .plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-card); padding-top: 10px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
-.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: 500; }
+.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .detail-code { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); word-break: break-all; }
 .detail-code-block { background: var(--bg-secondary); border-radius: 8px; padding: 8px; }
 .detail-line { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); word-break: break-all; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
 .form-row { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
 .mono-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
 @media (max-width: 768px) {
   .plugins-page { padding: 20px 16px 48px; }

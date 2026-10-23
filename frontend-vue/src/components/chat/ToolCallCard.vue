@@ -87,7 +87,7 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 
 .tool-row { overflow: hidden; border-radius: var(--sig-radius-code); }
 .tool-row:hover { background: var(--bg-hover); }
-.tool-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); font-weight: 400; white-space: nowrap; }
+.tool-name { font-family: var(--font-mono); font-size: 13px; color: var(--text-primary); font-weight: var(--fw-regular); white-space: nowrap; }
 /* 家族着色：让一屏工具调用能被"扫"出来，而不是一片同色行。
    只按家族调色相、不引入新的颜色体系；未知变量一律带 fallback，缺 token 时退化为原色。 */
 .tool-row-wrap[data-family='modify'] .tool-name { color: var(--warning, #d97706); }

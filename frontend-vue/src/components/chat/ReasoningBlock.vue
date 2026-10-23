@@ -111,30 +111,34 @@ async function stickToBottom() {
       />
       <span class="think-summary">{{ summary }}</span>
     </button>
-    <Transition name="chat-expand">
-      <div
-        v-if="expanded"
-        class="think-body-wrap"
-      >
-        <!-- 思考体自己滚动：长思考不再把整页撑长 -->
-        <div
-          ref="bodyRef"
-          class="think-body"
-          @scroll.passive="onBodyScroll"
-        >
-          {{ content }}
+    <!-- 展开用网格 0fr→1fr：浏览器自己算高度，不需要知道内容多高，
+         也不会有 max-height 写死后的"前 80% 时间空跑"。见 docs/ui-refinement-design.md §5 -->
+    <div
+      class="think-grid"
+      :class="{ open: expanded }"
+    >
+      <div class="think-inner">
+        <div class="think-body-wrap">
+          <!-- 思考体自己滚动：长思考不再把整页撑长 -->
+          <div
+            ref="bodyRef"
+            class="think-body"
+            @scroll.passive="onBodyScroll"
+          >
+            {{ content }}
+          </div>
+          <!-- 用户上滚离底时给出口，避免他"找不到最新思考"而困惑 -->
+          <button
+            v-if="!following"
+            type="button"
+            class="think-bottom"
+            @click="stickToBottom"
+          >
+            {{ $t('common.back_to_bottom') }}
+          </button>
         </div>
-        <!-- 用户上滚离底时给出口，避免他"找不到最新思考"而困惑 -->
-        <button
-          v-if="!following"
-          type="button"
-          class="think-bottom"
-          @click="stickToBottom"
-        >
-          {{ $t('common.back_to_bottom') }}
-        </button>
       </div>
-    </Transition>
+    </div>
   </div>
 </template>
 
@@ -142,16 +146,28 @@ async function stickToBottom() {
      （src/style.css），此处只保留 Think 行独有的内容样式 -->
 <style scoped>
 .think-icon { font-size: 12px; flex-shrink: 0; }
-.think-label { font-weight: 600; color: var(--text-primary); font-size: 13px; }
+.think-label { font-weight: var(--fw-semibold); color: var(--text-primary); font-size: 13px; }
 .think-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; text-align: left; }
 .reasoning-row[data-state='running'] .think-summary { color: var(--primary); }
+
+/* 网格撑开：0fr → 1fr。内层必须 min-height:0 + overflow:hidden，
+   否则 grid 子项的最小内容高度会顶住，动画退化成"跳变"。 */
+.think-grid {
+  display: grid;
+  grid-template-rows: 0fr;
+  transition: grid-template-rows var(--dur-normal) var(--ease-out);
+}
+.think-grid.open { grid-template-rows: 1fr; }
+.think-inner { min-height: 0; overflow: hidden; }
+
 .think-body-wrap { position: relative; }
 .think-body {
   padding: 10px 12px; margin-top: 2px;
   /* 自身滚动：长思考只在这一块内滚，不把整页撑长 */
   max-height: 40vh; overflow: auto;
   font-size: 13px; line-height: 1.7; color: var(--text-secondary);
-  background: var(--bg-secondary); border: 1px solid var(--border-card);
+  /* 去描边：用背景色阶区分（见 docs/ui-refinement-design.md §1） */
+  background: var(--elev-1); border: 0;
   border-radius: var(--sig-radius-button); white-space: pre-wrap;
 }
 .think-bottom {

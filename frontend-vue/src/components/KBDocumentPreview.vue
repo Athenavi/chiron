@@ -162,14 +162,14 @@ function formatSize(bytes: number): string {
   flex-wrap: wrap;
 }
 .doc-name {
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   font-size: 15px;
   color: var(--text-primary);
 }
 .doc-type {
   padding: 2px 8px;
   font-size: 11px;
-  font-weight: 600;
+  font-weight: var(--fw-semibold);
   background: var(--bg-secondary);
   border-radius: 4px;
   color: var(--text-secondary);
@@ -193,7 +193,7 @@ function formatSize(bytes: number): string {
   font-size: 13px;
 }
 .content-label {
-  font-weight: 500;
+  font-weight: var(--fw-medium);
   color: var(--text-primary);
 }
 .content-chunks {

@@ -659,23 +659,23 @@ function amountText(amount: number): string {
 <style scoped>
 .billing-container { padding: 24px; max-width: 1080px; margin: 0 auto; }
 .billing-header { display: flex; align-items: center; gap: 12px; margin-bottom: 20px; }
-.billing-header h1 { margin: 0; font-size: 24px; font-weight: 600; color: var(--text-primary); }
+.billing-header h1 { margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .loading-state { padding: 0; }
 
 /* 概览卡片：auto-fill 网格，窄屏自动折行（无需手写断点） */
 .overview-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 16px; }
 
 .balance-display { display: flex; align-items: baseline; gap: 12px; }
-.balance-amount { font-size: 44px; font-weight: 700; color: var(--colorWarning, var(--warning)); line-height: 1.2; font-variant-numeric: tabular-nums; }
+.balance-amount { font-size: 44px; font-weight: var(--fw-bold); color: var(--colorWarning, var(--warning)); line-height: 1.2; font-variant-numeric: tabular-nums; }
 .free-quota { margin-top: 16px; }
 .free-quota-label { display: flex; justify-content: space-between; color: var(--text-tertiary); font-size: 13px; margin-bottom: 4px; }
-.free-quota-count { font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.free-quota-count { font-weight: var(--fw-semibold); color: var(--text-primary); font-variant-numeric: tabular-nums; }
 
 /* 使用统计：auto-fill 自适应列数（窄屏自动从 3 列降为 2 列） */
 .usage-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
 .stat-item { text-align: center; padding: 14px 8px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: 8px; }
 .stat-label { display: block; color: var(--text-tertiary); font-size: 12px; margin-bottom: 6px; }
-.stat-value { font-size: 22px; font-weight: 600; color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.stat-value { font-size: 22px; font-weight: var(--fw-semibold); color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .stat-spent { color: var(--colorError, var(--error)); }
 .stat-added { color: var(--colorSuccess, #10b981); }
 
@@ -688,7 +688,7 @@ function amountText(amount: number): string {
 
 .purchase-form { display: flex; flex-direction: column; gap: 18px; max-width: 480px; }
 .form-item { display: flex; flex-direction: column; gap: 8px; }
-.form-item label { font-weight: 500; color: var(--text-primary); }
+.form-item label { font-weight: var(--fw-medium); color: var(--text-primary); }
 .preset-row { display: flex; flex-wrap: wrap; gap: 8px; }
 .preset-row :deep(.ant-btn) { min-height: 40px; } /* 触控目标 */
 /* 充值方式单选按钮组：触控目标 ≥ 40px */
@@ -699,15 +699,15 @@ function amountText(amount: number): string {
 .price-hint { font-size: 14px; color: var(--text-tertiary); }
 .purchase-note { font-size: 12px; color: var(--text-tertiary); }
 
-.amount-add { color: var(--colorSuccess, #10b981); font-weight: 600; font-variant-numeric: tabular-nums; }
-.amount-deduct { color: var(--colorError, var(--error)); font-weight: 600; font-variant-numeric: tabular-nums; }
+.amount-add { color: var(--colorSuccess, #10b981); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+.amount-deduct { color: var(--colorError, var(--error)); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 
 .qr-body { text-align: center; padding: 8px 0; }
-.qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: 600; display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }
+.qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: var(--fw-semibold); display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }
 .qr-canvas { width: 220px; height: 220px; border: 1px solid var(--border-card); border-radius: 8px; }
 .qr-tip { margin-top: 14px; color: var(--text-primary); font-size: 14px; }
 .qr-sub { color: var(--text-tertiary); font-size: 12px; }
-.qr-success { margin-top: 16px; color: var(--colorSuccess, #10b981); font-size: 16px; font-weight: 600; }
+.qr-success { margin-top: 16px; color: var(--colorSuccess, #10b981); font-size: 16px; font-weight: var(--fw-semibold); }
 .qr-expired { margin-top: 16px; text-align: left; }
 
 /* 窄屏（≤576px，与 .u-hide-sm 断点一致）：卡片贴边、表单全宽、iOS 防缩放 */

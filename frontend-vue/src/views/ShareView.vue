@@ -178,11 +178,11 @@ function formatDate(iso: string): string {
 <style scoped>
 .share-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg-page); color: var(--text-primary); }
 .share-header { height: 52px; display: flex; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
-.share-brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: 600; color: var(--text-primary); }
-.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: var(--on-solid); font-weight: 700; font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
+.share-brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
+.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: var(--on-solid); font-weight: var(--fw-bold); font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
 .share-main { flex: 1; width: 100%; max-width: 748px; margin: 0 auto; padding: 32px 24px 60px; min-width: 0; }
 .share-head { margin-bottom: 24px; }
-.share-title { font-size: 22px; line-height: 30px; font-weight: 700; margin: 0 0 6px; word-break: break-word; }
+.share-title { font-size: 22px; line-height: 30px; font-weight: var(--fw-bold); margin: 0 0 6px; word-break: break-word; }
 .share-meta { font-size: 12px; color: var(--text-tertiary); }
 .share-thread { display: flex; flex-direction: column; gap: 18px; }
 .share-msg { display: flex; }
@@ -198,9 +198,9 @@ function formatDate(iso: string): string {
 .share-msg-text { font-size: 16px; line-height: 28px; color: var(--text-primary); word-break: break-word; }
 .share-msg-text :deep(p) { margin: 16px 0; }
 .share-msg-text :deep(p:first-child) { margin-top: 0; }
-.share-msg-text :deep(h1) { font-size: 24px; line-height: 34px; font-weight: 700; margin: 32px 0 16px; }
-.share-msg-text :deep(h2) { font-size: 22px; line-height: 32px; font-weight: 700; margin: 32px 0 16px; }
-.share-msg-text :deep(h3) { font-size: 20px; line-height: 30px; font-weight: 700; margin: 32px 0 16px; }
+.share-msg-text :deep(h1) { font-size: 24px; line-height: 34px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
+.share-msg-text :deep(h2) { font-size: 22px; line-height: 32px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
+.share-msg-text :deep(h3) { font-size: 20px; line-height: 30px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
 .share-msg-text :deep(ul), .share-msg-text :deep(ol) { padding-left: 24px; margin: 16px 0; }
 .share-msg-text :deep(li) { margin: 4px 0; }
 .share-msg-text :deep(blockquote) { margin: 16px 0; padding: 6px 12px; border-left: 3px solid var(--primary); background: var(--bg-hover); border-radius: 6px; }
@@ -217,7 +217,7 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(pre code) { background: none; padding: 0; font-size: 0.9em; color: var(--text-code); }
 .share-msg-text :deep(table) { border-collapse: collapse; margin: 16px 0; width: 100%; }
 .share-msg-text :deep(th), .share-msg-text :deep(td) { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
-.share-msg-text :deep(th) { background: var(--bg-secondary); font-weight: 600; }
+.share-msg-text :deep(th) { background: var(--bg-secondary); font-weight: var(--fw-semibold); }
 .share-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); }
 
 /* 移动端：小屏收紧 padding 和字号 */

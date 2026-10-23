@@ -879,7 +879,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 <style scoped>
 .kb-detail-container { padding: 24px; max-width: 1200px; margin: 0 auto; }
 .kb-detail-header { display: flex; align-items: center; gap: 16px; margin-bottom: 24px; }
-.kb-detail-header h1 { flex: 1; margin: 0; font-size: 24px; font-weight: 600; color: var(--text-primary); }
+.kb-detail-header h1 { flex: 1; margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .info-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 16px; }
 .info-item { display: flex; flex-direction: column; gap: 4px; }
 .info-item .label { font-size: 13px; color: var(--text-tertiary); }
@@ -894,7 +894,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .result-header { margin-bottom: 8px; }
 .result-content { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-primary); }
 .search-highlight { background: var(--highlight-bg); color: var(--highlight-fg); padding: 1px 2px; border-radius: 2px; }
-.doc-name-link { color: var(--primary-color, #1890ff); cursor: pointer; font-weight: 500; }
+.doc-name-link { color: var(--primary-color, #1890ff); cursor: pointer; font-weight: var(--fw-medium); }
 .doc-name-link:hover { text-decoration: underline; }
 
 .media-search-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
@@ -907,7 +907,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .media-item:hover { background: var(--bg-hover, rgba(0,0,0,0.03)); }
 .media-item.selected { background: var(--primary-bg, #e6f7ff); }
 .media-info { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-.media-name { font-weight: 500; font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
+.media-name { font-weight: var(--fw-medium); font-size: 14px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-primary); }
 .media-meta { display: flex; gap: 12px; font-size: 12px; color: var(--text-tertiary); }
 .media-type { text-transform: uppercase; }
 
