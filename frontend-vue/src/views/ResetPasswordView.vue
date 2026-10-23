@@ -294,7 +294,7 @@ async function handleSubmit() {
 
 .auth-form-card {
   border-radius: var(--radius-lg) !important;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   box-shadow: var(--shadow-lg);
   background: var(--bg-card);
 }

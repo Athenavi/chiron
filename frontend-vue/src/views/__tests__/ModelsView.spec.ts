@@ -74,7 +74,7 @@ describe('ModelsView 分组', () => {
     const groupHeads = wrapper.findAll('.mv-group-head')
     expect(groupHeads.length).toBe(2)
     expect(groupHeads[0].text()).toContain('openrouter')
-    expect(groupHeads[0].text()).toContain('共 3 个 · 已启用 2')
+    expect(groupHeads[0].text()).toContain('共 3 个 已启用 2')
     expect(groupHeads[1].text()).toContain('deepseek')
 
     // openrouter 下：anthropic（2 个）成组，孤零零的 openai/gpt-4o 归「其他」

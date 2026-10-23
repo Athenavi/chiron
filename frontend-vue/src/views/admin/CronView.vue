@@ -386,7 +386,7 @@ onUnmounted(() => {
 }
 .cron-card :deep(.ant-card-head) {
   min-height: 44px;
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
   padding: 0 16px;
 }
 .cron-card :deep(.ant-card-body) { padding: 4px 16px 16px; }
@@ -396,10 +396,10 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: var(--fw-semibold);
   color: var(--text-tertiary);
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
 }
 .cron-card :deep(.ant-table-tbody > tr > td) {
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
   font-size: 13px;
 }
 .cron-card :deep(.ant-table-tbody > tr:hover > td) {
@@ -434,7 +434,7 @@ onUnmounted(() => {
 .cron-hint { font-size: 12px; color: var(--text-tertiary); line-height: 1.7; }
 .cron-hint code {
   font-family: var(--font-mono);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   background: var(--bg-secondary);
   padding: 1px 5px;
   border-radius: 4px;

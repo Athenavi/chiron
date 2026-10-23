@@ -167,7 +167,7 @@ onMounted(load)
 .summary { margin-bottom: 16px; }
 .group { margin-bottom: 18px; }
 .group-title { font-size: 13px; font-weight: var(--fw-semibold); margin: 0 0 8px; color: var(--text-secondary); }
-.check-row { display: flex; gap: 10px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg-card); }
+.check-row { display: flex; gap: 10px; padding: 10px 12px; border: var(--hairline-width) solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg-card); }
 .check-status { flex: 0 0 auto; width: 18px; text-align: center; font-weight: var(--fw-bold); line-height: 20px; }
 .check-row--ok .check-status { color: var(--success); }
 .check-row--warn .check-status { color: var(--warning); }

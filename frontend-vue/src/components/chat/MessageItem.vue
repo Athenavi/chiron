@@ -748,7 +748,7 @@ onUpdated(enhanceContent)
       v-if="item.inputTokens || item.outputTokens || item.durationSec"
       class="tnum"
     >
-      <template v-if="item.durationSec">{{ $t('common.elapsed_n_s', { n: item.durationSec }) }} · </template>
+      <template v-if="item.durationSec">{{ $t('common.elapsed_n_s', { n: item.durationSec }) }} </template>
       tokens: {{ item.inputTokens }} in / {{ item.outputTokens }} out
     </span>
   </div>
@@ -777,7 +777,7 @@ onUpdated(enhanceContent)
   max-width: min(var(--chat-content-width), 92%); margin: 6px auto;
   padding: 8px 12px; border-radius: var(--sig-radius-card, 8px);
   font-size: var(--font-size-sm, 13px); line-height: 1.5;
-  border: 1px solid var(--warning-border, var(--border-color));
+  border: var(--hairline-width) solid var(--warning-border, var(--border-color));
   background: var(--warning-bg, var(--bg-secondary));
   color: var(--text-secondary, var(--text-primary));
 }
@@ -814,7 +814,7 @@ onUpdated(enhanceContent)
   .action-pop { animation: none; }
 }
 /* 会话修复提示：显示自动恢复的最坏等待（后端算的 stale 阈值 + 一次巡检间隔） */
-.repair-hint { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.repair-hint { font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 /* UI/UX：流式生成光标（deepseek 打字效果） */
 .streaming-text::after {
   content: '▍';
@@ -848,7 +848,7 @@ onUpdated(enhanceContent)
   transition: box-shadow var(--dur-normal) ease;
 }
 .msg-row.user .msg-text:hover { box-shadow: var(--sig-shadow-hover); }
-.turn-stats { max-width: min(var(--chat-content-width), 92%); margin: 0 auto; padding: 4px 0 10px; font-size: 11px; color: var(--text-muted); text-align: right; }
+.turn-stats { max-width: min(var(--chat-content-width), 92%); margin: 0 auto; padding: 4px 0 10px; font-size: var(--fs-xs); color: var(--text-muted); text-align: right; }
 /* markdown 正文（deepseek MarkdownText：16/28、标题层级、块 gap 16） */
 .msg-text :deep(p) { margin: 16px 0; }
 .msg-text :deep(p:first-child) { margin-top: 0; }
@@ -863,7 +863,7 @@ onUpdated(enhanceContent)
 .msg-text :deep(a) { color: var(--primary); text-decoration: none; }
 .msg-text :deep(a:hover) { text-decoration: underline; }
 .msg-text :deep(table) { border-collapse: collapse; margin: 16px 0; display: block; width: max-content; min-width: 100%; max-width: 100%; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-.msg-text :deep(th), .msg-text :deep(td) { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+.msg-text :deep(th), .msg-text :deep(td) { border: var(--hairline-width) solid var(--border); padding: 8px 12px; text-align: left; }
 .msg-text :deep(th) { background: var(--bg-secondary); font-weight: var(--fw-semibold); }
 .msg-text :deep(img) { max-width: 100%; border-radius: var(--sig-radius-code); }/* 行内代码（deepseek markdown-inline-code：bluish-100 底） */
 .msg-text :deep(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-secondary); padding: 2px 6px; border-radius: var(--sig-radius-button); }
@@ -871,7 +871,7 @@ onUpdated(enhanceContent)
 .msg-text :deep(.code-block-wrapper) { margin: 16px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
 .msg-text :deep(.code-block-header) { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px; background: var(--bg-secondary); }
 .msg-text :deep(.code-lang) { font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--text-primary); }
-.msg-text :deep(.code-lines) { flex: 1; min-width: 0; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.msg-text :deep(.code-lines) { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .msg-text :deep(.code-copy-btn) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 0; }
 .msg-text :deep(.code-copy-btn:hover) { color: var(--primary); }
 /* 长代码默认折叠：给一段可读预览 + 底部渐隐提示，展开按钮写明总行数 */
@@ -884,7 +884,7 @@ onUpdated(enhanceContent)
 }
 .msg-text :deep(.code-expand-btn) {
   display: block; width: 100%; padding: 6px;
-  border: none; border-top: 1px solid var(--border-subtle);
+  border: none; border-top: var(--hairline-width) solid var(--border-subtle);
   background: var(--bg-secondary); color: var(--text-secondary);
   font-size: 12px; cursor: pointer;
 }
@@ -935,7 +935,7 @@ onUpdated(enhanceContent)
 .hljs-meta, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--hljs-meta); }
 
 /* P3-B: 长消息折叠 */
-.collapse-toggle { margin-top: 8px; padding: 4px 12px; border: 1px solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
+.collapse-toggle { margin-top: 8px; padding: 4px 12px; border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
 .collapse-toggle:hover { border-color: var(--primary); color: var(--primary); }
 .collapse-toggle:active { transform: scale(0.97); }
 /* 点赞/点踩：按下走"过阻尼"（60ms 跟手），松开由上面的 --ease-spring 回弹一下 */
@@ -967,7 +967,7 @@ onUpdated(enhanceContent)
   .msg-row { padding: 4px 0; }
   .source-chip { min-height: 28px; } /* 反向定位 chip 触控目标微放大 */
   .msg-actions { gap: 4px; height: 40px; }
-  .msg-time { opacity: 1; font-size: 11px; padding-right: 4px; }
+  .msg-time { opacity: 1; font-size: var(--fs-xs); padding-right: 4px; }
   .msg-action { width: 40px; height: 40px; opacity: 1; }
   .msg-action.continue-btn { width: auto; height: 40px; padding: 0 14px; border-radius: var(--sig-radius-bubble); }
   .msg-text :deep(pre) { white-space: pre; overflow-x: auto; -webkit-overflow-scrolling: touch; }
@@ -991,20 +991,20 @@ onUpdated(enhanceContent)
 .edit-textarea { border-radius: var(--sig-radius-card) !important; border-color: var(--primary) !important; }
 .edit-textarea :deep(textarea) { font-size: 16px !important; line-height: 24px !important; }
 .edit-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.edit-btn { padding: 4px 12px; border-radius: var(--sig-radius-button); font-size: 12px; cursor: pointer; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); transition: all var(--dur-fast) ease; }
+.edit-btn { padding: 4px 12px; border-radius: var(--sig-radius-button); font-size: 12px; cursor: pointer; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); transition: all var(--dur-fast) ease; }
 .edit-btn.save { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .edit-btn.save:hover { opacity: 0.9; }
 .edit-btn.cancel:hover { color: var(--text-primary); background: var(--bg-hover); }
 
 /* ── P1-2 附件展示 ── */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
-.msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); object-fit: cover; }
-.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
+.msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); object-fit: cover; }
+.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
 .msg-attachment-file:hover { border-color: var(--primary); color: var(--primary); }
 .msg-attachment-file .att-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-attachment-file .att-size { color: var(--text-tertiary); font-size: 12px; }
 /* 音频播放器 */
-.msg-attachment-audio { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 300px; padding: 8px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); }
+.msg-attachment-audio { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 300px; padding: 8px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); }
 .msg-audio-player { width: 100%; height: 40px; border-radius: 4px; }
 .msg-audio-player::-webkit-media-controls-panel { background: var(--bg-card); }
 .att-audio-name { font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1014,29 +1014,29 @@ onUpdated(enhanceContent)
 /* 子 Agent 自动轮注入的消息标记（见 internal/api/agent_followup.go） */
 .followup-badge {
   display: inline-flex; align-items: center; gap: 4px;
-  margin-top: 6px; padding: 2px 8px; font-size: 11px;
+  margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
   color: var(--text-tertiary); background: var(--bg-code);
-  border: 1px solid var(--border-subtle); border-radius: var(--sig-radius-button);
+  border: var(--hairline-width) solid var(--border-subtle); border-radius: var(--sig-radius-button);
 }
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;
   padding: 2px 10px; border-radius: 10px;
   font-size: 12px; line-height: 18px; text-decoration: none; cursor: pointer;
   background: var(--bg-secondary); color: var(--text-secondary);
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .source-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
 .source-chip.kb { background: var(--primary-bg); color: var(--primary); border-color: transparent; }
 .source-chip.kb:hover { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .source-chip.agent { background: var(--bg-hover); color: var(--text-primary); }
-.source-chip.trace { background: var(--bg-card); color: var(--text-secondary); border-color: var(--border); font-family: var(--font-mono); font-size: 11px; }
+.source-chip.trace { background: var(--bg-card); color: var(--text-secondary); border-color: var(--border); font-family: var(--font-mono); font-size: var(--fs-xs); }
 .source-chip.trace:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
 
 /* ── P1-3 错误状态 ── */
 .msg-row.msg-error .msg-text { opacity: 0.6; }
-.msg-error-banner { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); background: var(--error-bg); border: 1px solid var(--error); }
+.msg-error-banner { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); background: var(--error-bg); border: var(--hairline-width) solid var(--error); }
 .msg-error-banner .error-text { font-size: 13px; color: var(--error); flex: 1; }
-.retry-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--sig-radius-button); border: 1px solid var(--error); background: transparent; color: var(--error); font-size: 12px; cursor: pointer; transition: background var(--dur-fast) ease, color var(--dur-fast) ease; }
+.retry-btn { display: inline-flex; align-items: center; gap: 4px; padding: 4px 12px; border-radius: var(--sig-radius-button); border: var(--hairline-width) solid var(--error); background: transparent; color: var(--error); font-size: 12px; cursor: pointer; transition: background var(--dur-fast) ease, color var(--dur-fast) ease; }
 .retry-btn:hover { background: var(--error); color: var(--on-solid); }
 </style>

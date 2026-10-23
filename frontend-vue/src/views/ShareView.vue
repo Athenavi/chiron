@@ -177,9 +177,9 @@ function formatDate(iso: string): string {
 
 <style scoped>
 .share-page { min-height: 100vh; display: flex; flex-direction: column; background: var(--bg-page); color: var(--text-primary); }
-.share-header { height: 52px; display: flex; align-items: center; padding: 0 24px; border-bottom: 1px solid var(--border); background: var(--bg-card); }
+.share-header { height: 52px; display: flex; align-items: center; padding: 0 24px; border-bottom: var(--hairline-width) solid var(--border); background: var(--bg-card); }
 .share-brand { display: flex; align-items: center; gap: 8px; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
-.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: var(--on-solid); font-weight: var(--fw-bold); font-size: 10px; display: inline-flex; align-items: center; justify-content: center; }
+.share-brand-mark { width: 22px; height: 22px; border-radius: 6px; background: linear-gradient(135deg, var(--primary), var(--primary-dark)); color: var(--on-solid); font-weight: var(--fw-bold); font-size: var(--fs-xs); display: inline-flex; align-items: center; justify-content: center; }
 .share-main { flex: 1; width: 100%; max-width: 748px; margin: 0 auto; padding: 32px 24px 60px; min-width: 0; }
 .share-head { margin-bottom: 24px; }
 .share-title { font-size: 22px; line-height: 30px; font-weight: var(--fw-bold); margin: 0 0 6px; word-break: break-word; }
@@ -216,9 +216,9 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(pre) { margin: 0 !important; padding: 16px; overflow-x: auto; white-space: pre; word-break: normal; -webkit-overflow-scrolling: touch; }
 .share-msg-text :deep(pre code) { background: none; padding: 0; font-size: 0.9em; color: var(--text-code); }
 .share-msg-text :deep(table) { border-collapse: collapse; margin: 16px 0; width: 100%; }
-.share-msg-text :deep(th), .share-msg-text :deep(td) { border: 1px solid var(--border); padding: 8px 12px; text-align: left; }
+.share-msg-text :deep(th), .share-msg-text :deep(td) { border: var(--hairline-width) solid var(--border); padding: 8px 12px; text-align: left; }
 .share-msg-text :deep(th) { background: var(--bg-secondary); font-weight: var(--fw-semibold); }
-.share-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: var(--text-muted); border-top: 1px solid var(--border); }
+.share-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: var(--text-muted); border-top: var(--hairline-width) solid var(--border); }
 
 /* 移动端：小屏收紧 padding 和字号 */
 @media (max-width: 640px) {
@@ -233,7 +233,7 @@ function formatDate(iso: string): string {
   .share-msg-text :deep(pre) { padding: 12px; font-size: 12px; }
   /* 宽表格窄屏横向滚动，避免撑破页面 */
   .share-msg-text :deep(table) { display: block; overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .share-footer { padding: 14px 16px; font-size: 11px; }
+  .share-footer { padding: 14px 16px; font-size: var(--fs-xs); }
 }
 
 /* 窄屏（≤576px）：复制按钮触控目标 ≥ 40px */

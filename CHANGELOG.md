@@ -76,6 +76,21 @@
 - **新增 `utils/notify.ts`**：统一提示封装 —— 成功/提醒/信息 **2.5s**、错误 **4s**（错误要能读完）。
   `MessageItem` / `ChatView` / `ChatInput` 共 **50 处** `message.*` 改为 `notify.*`。
   验收：`npm run check:ui` 八项守卫全绿 · `vue-tsc -b` 通过 · `npm test` **83 files / 635 tests**。
+- **落地 desktop-agent-ui 界面规约（四项，见 `docs/ui-refinement-design.md` §14）**：
+  ① **12px 最小字号门禁** —— `--fs-xs` 在 `:root` 与 `html.dark` 都改为 12px，全仓 35 个文件
+  共 **122 处** 9/10/11px 硬编码字号统一改用 `var(--fs-xs)`（此项**覆盖**了上一轮 UI 精修里
+  「暗色小字号收窄到 11px」的决策）；② **移除中点「·」分隔符** —— 代码 14 处 + 三语言 i18n
+  共 24 个文件，改用布局留白（flex 容器内由 `gap` 承担）；③ **同心圆圆角** —— 新增约定
+  （内层 = `max(0, 外层 − padding)`；外层用主题 token 时以 `calc` 跟随，不写死像素），
+  应用于 `ChatInput` 的 `.input-card` / `.paste-preview` 与 `ChatSidePanel` 的 `.session-menu`；
+  ④ **0.5px 精细微边框** —— 新增 `--hairline-width` token，56 个文件共 **194 处** `1px solid` 改用它。
+- **新增三项桌面端防错机制**：① **CJK 输入法伴生 Enter 守卫** —— `compositionend` 之后 500ms 内的
+  Enter 视为「选词确认」的幽灵键，拦截并复位时间戳（`frontend-vue/src/components/chat/ime.ts`；
+  此前只判 `e.isComposing`，高负载下该事件可能在 `isComposing` 转 false 后才到达，导致只想选词却发出消息）；
+  ② **分栏拖拽 Escape 取消闭环** —— 复位状态机并把宽度还回拖拽前基准（`SessionPreviewPane.vue`），
+  防止手柄 DOM 丢失后无法再展开；③ **composer 局部滚动条收敛** —— 仅输入框内隐藏原生滚动条外观，
+  保留滚轮 / 触控 / 选中 / 键盘导航。
+  验收：`npm run build`（八项守卫 + `vue-tsc -b` + `vite build`）通过 · `npm test` **84 files / 639 tests**。
 
 ## [v0.1.261022.01] - 2026-10-22
 

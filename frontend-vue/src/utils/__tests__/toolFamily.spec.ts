@@ -10,7 +10,7 @@ import { toolSummary } from '../toolFamily'
  * 正好是第 142 轮 `ToolCallCard`（钉的是**接线**）的**逻辑那一半** ✓。
  *
  * **这个文件自己的注释就把判据写全了**（`:11-19`），所以用例直接照它写：
- * - `read_file {path, offset, limit}` **不能**摘成 `src/a.ts · 0`（第二个是无意义的 offset）✓；
+ * - `read_file {path, offset, limit}` **不能**摘成 `src/a.ts 0`（第二个是无意义的 offset）✓；
  * - `shell_exec {command, timeout}` **不能**带上 timeout ✓；
  * - `run_code {code, language}` **不能**把整段代码塞进摘要 ✓；
  * - 未登记工具走**通用兜底**（前两个短字段），**与既有行为一致 ⇒ 零退化** ✓；
@@ -43,9 +43,9 @@ describe('toolSummary（单条工具行的摘要）', () => {
     expect(noLang).not.toContain('line1')
   })
 
-  it('★ 未登记的工具走通用兜底：前两个短字段，用 · 连接（零退化）', () => {
+  it('★ 未登记的工具走通用兜底：前两个短字段，用空格连接（零退化）', () => {
     const s = toolSummary('some_new_tool', JSON.stringify({ alpha: 'A', beta: 'B', gamma: 'C' }))
-    expect(s).toBe('A · B')
+    expect(s).toBe('A B')
     expect(s).not.toContain('C')
   })
 

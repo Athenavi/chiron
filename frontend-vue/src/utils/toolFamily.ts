@@ -94,7 +94,7 @@ export function toolSummary(toolName: string, rawArgs: string, maxLen = 60): str
           const v = parsed[k]
           return clip(typeof v === 'string' ? v : JSON.stringify(v), 40)
         })
-        .join(' · ')
+        .join(' ')
     }
   }
 

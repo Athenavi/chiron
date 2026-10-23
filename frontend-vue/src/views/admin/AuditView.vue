@@ -282,7 +282,7 @@ onMounted(() => {
   margin: 0;
   padding: 12px;
   background: var(--bg-secondary);
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-md);
   font-size: 12px;
   max-height: 320px;

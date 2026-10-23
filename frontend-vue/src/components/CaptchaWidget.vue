@@ -289,7 +289,7 @@ defineExpose({ reset })
   width: 100%;
   min-height: 40px; /* 触控目标 ≥ 40px */
   padding: 10px 12px;
-  border: 1px solid var(--border-card, #d9d9d9);
+  border: var(--hairline-width) solid var(--border-card, #d9d9d9);
   border-radius: 8px;
   background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));

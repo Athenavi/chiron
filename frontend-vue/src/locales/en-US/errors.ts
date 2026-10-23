@@ -86,7 +86,7 @@ export default {
   unified_session_failed_to_load_you_can_still_send_a_message_to_continue: "Unified session failed to load; you can still send a message to continue",
   edit_quota_pool: "Edit quota pool",
   trigger_failed_error: "Trigger failed: {error}",
-  memory_conflict_slot_key: "Memory conflict: {slot} · {key}",
+  memory_conflict_slot_key: "Memory conflict: {slot} {key}",
   timeout_2: "Timeout",
   quota_allocation: "Quota allocation",
   quota_allocation_type_period: "Quota allocation - {type}/{period}",

@@ -214,7 +214,7 @@ defineExpose({
 <style scoped>
 .agent-collab-panel {
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 12px;
   overflow: hidden;
 }
@@ -225,7 +225,7 @@ defineExpose({
   justify-content: space-between;
   padding: 12px 16px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
 }
 
 .header-title {
@@ -245,7 +245,7 @@ defineExpose({
 .btn-collapse {
   min-height: 34px;
   padding: 6px 14px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   color: var(--text-secondary);
@@ -277,7 +277,7 @@ defineExpose({
   flex-wrap: wrap;
   gap: 12px;
   padding: 12px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 10px;
   background: var(--bg-card);
   cursor: pointer;
@@ -345,7 +345,7 @@ defineExpose({
 }
 
 .agent-status {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
 }
 
@@ -400,7 +400,7 @@ defineExpose({
 }
 
 .execution-log {
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline-width) solid var(--border);
 }
 
 .log-header {
@@ -409,7 +409,7 @@ defineExpose({
   justify-content: space-between;
   padding: 8px 16px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
 }
 
 .log-header span {
@@ -425,7 +425,7 @@ defineExpose({
   border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-secondary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   cursor: pointer;
 }
 

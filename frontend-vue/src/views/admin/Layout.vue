@@ -346,7 +346,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 
 .admin-sider {
   background: var(--bg-card) !important;
-  border-right: 1px solid var(--border);
+  border-right: var(--hairline-width) solid var(--border);
   position: relative;
   z-index: var(--z-dropdown);
 }
@@ -376,7 +376,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   gap: 10px;
   height: 56px;
   padding: 0 18px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
   flex-shrink: 0;
 }
 .sider-logo {
@@ -387,7 +387,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
      --primary-active 代替。 */
   background: linear-gradient(135deg, var(--primary), var(--primary-active));
   color: var(--on-solid);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-bold);
   display: inline-flex;
   align-items: center;
@@ -409,7 +409,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   border: none !important;
 }
 .sider-menu :deep(.ant-menu-item-group-title) {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.08em;
   text-transform: uppercase;
@@ -446,7 +446,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   padding: 0 16px 0 12px;
   height: 56px;
   background: var(--bg-card) !important;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
   flex-shrink: 0;
 }
 .header-left { display: flex; align-items: center; gap: 8px; min-width: 0; flex: 1; }

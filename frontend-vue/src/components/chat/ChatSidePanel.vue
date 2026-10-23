@@ -955,7 +955,7 @@ function pickSession(id: string) {
   z-index: var(--z-page-panel);
   display: flex; flex-direction: column;
   background: var(--bg-card);
-  border-left: 1px solid var(--border);
+  border-left: var(--hairline-width) solid var(--border);
   box-shadow: var(--sig-shadow-hover);
   transform: translateX(100%);
   visibility: hidden;
@@ -995,7 +995,7 @@ function pickSession(id: string) {
 .panel-toolbar {
   flex: none; display: flex; align-items: center; gap: 8px;
   height: 44px; padding: 0 12px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
 }
 .session-picker, .session-back {
   flex: 1; min-width: 0; display: flex; align-items: center; gap: 6px;
@@ -1006,38 +1006,38 @@ function pickSession(id: string) {
 }
 .session-picker:hover, .session-back:hover { background: var(--bg-hover); }
 .session-picker-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
-.session-picker-arrow { flex: none; font-size: 10px; color: var(--text-tertiary); }
+.session-picker-arrow { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
 .toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: 4px; transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
 .toolbar-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 
 /* ── 当前会话上下文 chips（与消息区/侧栏 tag-chip 同设计语言）── */
 .panel-context { flex: none; padding: 8px 12px 0; }
-.ctx-title { display: block; font-size: 11px; color: var(--text-tertiary); margin-bottom: 6px; }
+.ctx-title { display: block; font-size: var(--fs-xs); color: var(--text-tertiary); margin-bottom: 6px; }
 .ctx-chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .ctx-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 8px; border-radius: var(--sig-radius-button);
-  border: 1px solid var(--border); background: var(--bg-card);
+  border: var(--hairline-width) solid var(--border); background: var(--bg-card);
   color: var(--text-secondary); font-size: 12px;
   transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease;
 }
 .ctx-chip:hover { border-color: var(--primary); color: var(--primary); }
 .ctx-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctx-chip-remove { font-size: 10px; color: var(--text-tertiary); cursor: pointer; }
+.ctx-chip-remove { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; }
 .ctx-chip-remove:hover { color: var(--danger, var(--error)); }
 
 /* ── 可用工具：让 MCP/插件注入的工具在对话页可见（默认收起）── */
-.panel-tools { flex: none; border-bottom: 1px solid var(--border); }
+.panel-tools { flex: none; border-bottom: var(--hairline-width) solid var(--border); }
 .tools-head {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 8px 12px; border: none; background: none;
-  color: var(--text-tertiary); font-size: 11px; text-align: left; cursor: pointer;
+  color: var(--text-tertiary); font-size: var(--fs-xs); text-align: left; cursor: pointer;
   transition: color var(--dur-fast) ease;
 }
 .tools-head:hover { color: var(--primary); }
 .tools-title { flex: none; }
 .tools-count { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.tools-arrow { flex: none; font-size: 10px; transition: transform var(--dur-fast) ease; }
+.tools-arrow { flex: none; font-size: var(--fs-xs); transition: transform var(--dur-fast) ease; }
 .tools-arrow.expanded { transform: rotate(180deg); }
 .tools-body { max-height: 200px; overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 .tools-empty { padding: 10px 8px; text-align: center; color: var(--text-muted); font-size: 12px; }
@@ -1047,24 +1047,24 @@ function pickSession(id: string) {
 .tool-badge {
   flex: none; padding: 0 6px; border-radius: var(--sig-radius-card);
   background: var(--primary-bg); color: var(--primary);
-  font-size: 10px; line-height: 16px; font-weight: var(--fw-semibold);
+  font-size: var(--fs-xs); line-height: 16px; font-weight: var(--fw-semibold);
 }
 
 /* 搜索框（轨迹 / 会话通用） */
 .panel-search { flex: none; display: flex; align-items: center; gap: 4px; margin: 8px 12px 0; padding: 0 8px; height: 28px; background: var(--bg-secondary); border-radius: var(--sig-radius-button); }
-.search-icon { font-size: 11px; color: var(--text-tertiary); }
+.search-icon { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .search-input { flex: 1; border: none; outline: none; background: none; font-size: 12px; color: var(--text-primary); }
-.search-clear { font-size: 10px; color: var(--text-tertiary); cursor: pointer; }
+.search-clear { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; }
 
 /* ── 主视图：时间线 ── */
 .timeline {
   flex: none; display: grid; grid-template-columns: 44px minmax(0, 1fr);
   height: 50px; margin-top: 8px; overflow: hidden;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
   background: var(--bg-secondary);
   user-select: none;
 }
-.timeline-labels { position: relative; border-right: 1px solid var(--border); color: var(--text-tertiary); font-size: 10px; line-height: 1; }
+.timeline-labels { position: relative; border-right: var(--hairline-width) solid var(--border); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1; }
 .timeline-labels span { position: absolute; right: 3px; height: 8px; display: flex; align-items: center; }
 .timeline-labels span:nth-child(1) { top: 7px; }
 .timeline-labels span:nth-child(2) { top: 21px; }
@@ -1101,13 +1101,13 @@ function pickSession(id: string) {
 
 /* P3-D: 标签筛选与展示 */
 .tag-filter { display: flex; gap: 6px; padding: 4px 12px 8px; flex-wrap: wrap; }
-.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: 11px; cursor: pointer; transition: all var(--dur-fast) ease; }
+.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: all var(--dur-fast) ease; }
 .tag-chip:hover { border-color: var(--primary); color: var(--primary); }
 .tag-chip.active { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
-.session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
+.session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
 /* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
-.session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: 10px; line-height: 16px; margin-left: 4px; flex-shrink: 0; }
-.session-group-label { font-size: 11px; font-weight: var(--fw-semibold); color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
+.session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
+.session-group-label { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .session-row {
   display: flex; align-items: center; gap: 4px;
   padding: 0 10px; height: 40px; border-radius: var(--sig-radius-card);
@@ -1123,26 +1123,28 @@ function pickSession(id: string) {
 }
 .session-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .session-title-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.pin-icon { flex: none; font-size: 11px; color: var(--primary); }
+.pin-icon { flex: none; font-size: var(--fs-xs); color: var(--primary); }
 .session-title { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
 .session-row.active .session-title { color: var(--primary); font-weight: var(--fw-semibold); }
-.session-time { font-size: 11px; color: var(--text-muted); line-height: 14px; }
+.session-time { font-size: var(--fs-xs); color: var(--text-muted); line-height: 14px; }
 .session-more-btn { opacity: 0; flex-shrink: 0; width: 22px; height: 22px; color: var(--text-muted); }
 .session-row:hover .session-more-btn, .session-row.menu-open .session-more-btn { opacity: 1; }
 .session-more-btn:hover { color: var(--text-primary); }
-.session-menu { min-width: 148px; border-radius: var(--sig-radius-code); padding: 4px; box-shadow: var(--shadow-lg); }
-.session-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: var(--sig-radius-button); }
+/* 同心圆圆角（desktop-agent-ui §6）：外层用主题 token，内层用 calc 跟随主题 ——
+   写死像素会让换了主题（--sig-radius-code 在 0~10px 之间）的同心关系断掉。 */
+.session-menu { --session-menu-r: var(--sig-radius-code); --session-menu-pad: 4px; --session-menu-inner-r: max(0px, calc(var(--session-menu-r) - var(--session-menu-pad))); min-width: 148px; border-radius: var(--session-menu-r); padding: var(--session-menu-pad); box-shadow: var(--shadow-lg); }
+.session-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: var(--session-menu-inner-r, var(--sig-radius-button)); }
 .menu-icon { font-size: 14px; }
 
 /* ── 最近活动（/v1/activities，30s 轮询）── */
 .panel-activities {
   flex: none; display: flex; flex-direction: column;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline-width) solid var(--border);
   max-height: 220px;
 }
 .act-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; }
-.act-title { font-size: 11px; color: var(--text-tertiary); }
-.act-refresh { font-size: 11px; color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; transition: color var(--dur-fast) ease; }
+.act-title { font-size: var(--fs-xs); color: var(--text-tertiary); }
+.act-refresh { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; transition: color var(--dur-fast) ease; }
 .act-refresh:hover { color: var(--primary); }
 .act-list { overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 .act-row {
@@ -1158,13 +1160,13 @@ function pickSession(id: string) {
 .act-dot.running, .act-dot.pending { background: var(--primary); }
 .act-dot.failed, .act-dot.error { background: var(--danger, var(--error)); }
 .act-text { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.act-time { flex: none; font-size: 10px; color: var(--text-muted); }
-.act-empty { padding: 10px 12px; font-size: 11px; color: var(--text-muted); }
+.act-time { flex: none; font-size: var(--fs-xs); color: var(--text-muted); }
+.act-empty { padding: 10px 12px; font-size: var(--fs-xs); color: var(--text-muted); }
 
 /* 底部用户信息 */
 .panel-foot {
   flex: none; display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-top: 1px solid var(--border);
+  padding: 10px 14px; border-top: var(--hairline-width) solid var(--border);
 }
 .foot-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 主题切换与用户菜单推到最右，与左侧头像/名字分开 */

@@ -177,7 +177,7 @@ const cardCount = computed(() => props.columns * 2)
 }
 .sk-card {
   padding: 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: 10px;
   background: var(--bg-card);
 }
@@ -188,7 +188,7 @@ const cardCount = computed(() => props.columns * 2)
 
 /* 表格 */
 .sk-table {
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: 10px;
   overflow: hidden;
   margin-top: 16px;
@@ -200,7 +200,7 @@ const cardCount = computed(() => props.columns * 2)
   gap: 8px;
   padding: 12px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
 }
 .sk-table-row {
   display: grid;
@@ -208,7 +208,7 @@ const cardCount = computed(() => props.columns * 2)
   grid-auto-columns: 1fr;
   gap: 8px;
   padding: 12px;
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
 }
 .sk-table-row:last-child { border-bottom: none; }
 .sk-cell { min-width: 0; }

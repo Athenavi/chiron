@@ -1,7 +1,7 @@
 // 从 legacy 迁移的语义化 key（L1-4）
 export default {
   file_descriptors: "# 文件描述符",
-  matched_matches_files_files: "{matched} 个匹配 · {files} 个文件",
+  matched_matches_files_files: "{matched} 个匹配 {files} 个文件",
   n_files: "{n} 个文件",
   all_files: "全部文件",
   original_report_pdf_prefix_2024_suffix_final_2024_report_final_pdf: "原文件名 \"report.pdf\" → 前缀 \"[2024]_\" + 后缀 \"_final\" = \"[2024]_report_final.pdf\"",

@@ -570,7 +570,7 @@ function pct(n: number): string {
                   v-if="item.topics && item.topics.length"
                   color="default"
                 >
-                  {{ item.topics.slice(0, 3).join(' · ') }}
+                  {{ item.topics.slice(0, 3).join(' ') }}
                 </Tag>
               </div>
               <div class="entry-value">
@@ -768,7 +768,7 @@ function pct(n: number): string {
                     v-if="item.topics && item.topics.length"
                     color="default"
                   >
-                    {{ item.topics.slice(0, 3).join(' · ') }}
+                    {{ item.topics.slice(0, 3).join(' ') }}
                   </Tag>
                 </div>
                 <div class="entry-value">

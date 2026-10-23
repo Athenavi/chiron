@@ -170,7 +170,7 @@ async function dismiss() {
 <style scoped>
 .conflict-card {
   background: var(--warning-bg);
-  border: 1px solid var(--warning);
+  border: var(--hairline-width) solid var(--warning);
   border-radius: var(--radius-lg);
   padding: 16px;
   margin: 12px 0;
@@ -217,12 +217,12 @@ async function dismiss() {
 
 .value-item.old {
   background: var(--error-bg);
-  border: 1px solid var(--error);
+  border: var(--hairline-width) solid var(--error);
 }
 
 .value-item.new {
   background: var(--info-bg);
-  border: 1px solid var(--info);
+  border: var(--hairline-width) solid var(--info);
 }
 
 .value-label {
@@ -291,13 +291,13 @@ async function dismiss() {
   padding: 12px;
   background: var(--bg-surface);
   border-radius: var(--radius-sm);
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
 }
 
 .manual-input {
   width: 100%;
   padding: 8px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: var(--radius-sm);
   margin-bottom: 8px;
 }
@@ -310,7 +310,7 @@ async function dismiss() {
 
 .manual-actions button {
   padding: 6px 12px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   border-radius: var(--radius-sm);
   cursor: pointer;

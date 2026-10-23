@@ -1012,7 +1012,7 @@ onMounted(async () => {
 <style scoped>
 /* 每个设置主题块之间用分隔线隔开，块内标题统一 */
 .setting-block { padding: 4px 0 20px; }
-.setting-block + .setting-block { border-top: 1px solid var(--border-card, var(--border)); padding-top: 20px; }
+.setting-block + .setting-block { border-top: var(--hairline-width) solid var(--border-card, var(--border)); padding-top: 20px; }
 .setting-title {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   font-size: 14px; font-weight: var(--fw-semibold); margin-bottom: 12px;
@@ -1038,7 +1038,7 @@ onMounted(async () => {
 
 .identity-row {
   display: flex; align-items: center; justify-content: space-between;
-  gap: 8px; padding: 10px 0; border-bottom: 1px solid var(--border-card, var(--border));
+  gap: 8px; padding: 10px 0; border-bottom: var(--hairline-width) solid var(--border-card, var(--border));
 }
 .identity-row:last-of-type { border-bottom: none; }
 .identity-info { display: flex; align-items: center; gap: 8px; min-width: 0; }

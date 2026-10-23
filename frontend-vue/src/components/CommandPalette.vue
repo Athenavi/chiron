@@ -582,7 +582,7 @@ onUnmounted(() => {
   background: var(--bg-surface);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   box-shadow: var(--shadow-lg);
 }
 
@@ -592,7 +592,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 14px 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
   flex: none;
 }
 .palette-search-icon {
@@ -615,10 +615,10 @@ onUnmounted(() => {
   flex: none;
   padding: 2px 7px;
   border-radius: 5px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   background: var(--bg-secondary);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-family: var(--font-mono);
 }
 
@@ -633,7 +633,7 @@ onUnmounted(() => {
 
 .palette-group {
   padding: 8px 10px 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.06em;
   text-transform: uppercase;
@@ -726,20 +726,20 @@ onUnmounted(() => {
   align-items: center;
   gap: 14px;
   padding: 9px 16px;
-  border-top: 1px solid var(--border);
+  border-top: var(--hairline-width) solid var(--border);
   background: var(--bg-secondary);
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   flex: none;
 }
 .palette-footer kbd {
   padding: 1px 5px;
   border-radius: 4px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   background: var(--bg-card);
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: var(--fs-xs);
 }
 .palette-footer-tip {
   margin-left: auto;

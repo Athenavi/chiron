@@ -190,16 +190,16 @@ function submitEdit() {
 
 <style scoped>
 .approval-card {
-  background: var(--bg-card); border: 1px solid var(--border);
+  background: var(--bg-card); border: var(--hairline-width) solid var(--border);
   border-left: 3px solid var(--primary); border-radius: 10px; padding: 8px 10px;
 }
 .approval-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag {
-  flex: none; font-size: 11px; color: var(--primary);
+  flex: none; font-size: var(--fs-xs); color: var(--primary);
   background: var(--primary-bg); padding: 2px 8px; border-radius: 10px;
 }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
-.approval-hint { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
+.approval-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
 .approval-desc { font-size: 12px; color: var(--text-secondary, #595959); margin-bottom: 6px; }
 .approval-args {
   font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
@@ -219,7 +219,7 @@ function submitEdit() {
 .approval-edit-text {
   width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px;
   color: var(--text-primary); background: var(--bg-card);
-  border: 1px solid var(--border); border-radius: 8px; padding: 6px 8px; resize: vertical;
+  border: var(--hairline-width) solid var(--border); border-radius: 8px; padding: 6px 8px; resize: vertical;
 }
 .approval-edit-text:focus { outline: none; border-color: var(--primary); }
 .approval-edit-error { margin-top: 4px; font-size: 12px; color: var(--danger, var(--error)); }

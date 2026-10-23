@@ -145,12 +145,12 @@ const speedRows = computed(() => {
 }
 .stats-sub {
   margin: 10px 0 4px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-tertiary);
 }
 .stats-source {
   margin-top: 10px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-tertiary);
 }
 </style>

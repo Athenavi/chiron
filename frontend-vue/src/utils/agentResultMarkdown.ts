@@ -59,7 +59,7 @@ function metaLine(parsed: ParsedAgentResult): string {
   if (Array.isArray(parsed.tool_calls) && parsed.tool_calls.length > 0) {
     parts.push(t('agent.tool_calls_n', { n: parsed.tool_calls.length }))
   }
-  return parts.join(' · ')
+  return parts.join(' ')
 }
 
 /**

@@ -597,7 +597,7 @@ onBeforeUnmount(() => {
     <div class="panel-head">
       <span class="panel-title">{{ $t('agent.sub_agent') }}</span>
       <span class="panel-meta">
-        {{ runs.length }} {{ $t('common.running_3') }} · ↑{{ totals.input }} / ↓{{ totals.output }}
+        {{ runs.length }} {{ $t('common.running_3') }} ↑{{ totals.input }} / ↓{{ totals.output }}
         <Tooltip :title="$t('admin.data_source_redis_runtime_cache_db_history')">
           <Tag
             v-if="source"
@@ -922,7 +922,7 @@ onBeforeUnmount(() => {
               v-else-if="event.type === 'subagent.status'"
               class="line status"
             >
-              {{ event.status }}<span v-if="event.truncated"> · {{ $t('common.preview_truncated') }}</span>
+              {{ event.status }}<span v-if="event.truncated"> {{ $t('common.preview_truncated') }}</span>
             </div>
             <div
               v-else-if="event.type === 'subagent.done'"
@@ -972,7 +972,7 @@ onBeforeUnmount(() => {
 .tree-row.active { background: var(--primary-light, var(--shadow-brand)); }
 .twisty {
   width: 14px; flex: none; border: none; background: none; cursor: pointer;
-  color: var(--text-tertiary, #8c8c8c); font-size: 11px; padding: 0;
+  color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); padding: 0;
 }
 .twisty.placeholder { cursor: default; }
 .run-profile { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -980,8 +980,8 @@ onBeforeUnmount(() => {
 /* 中止按钮：紧凑型，别把行撑高；hover 用错误色（停止是破坏性动作） */
 .run-stop {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
-  font-size: 11px; color: var(--text-secondary, #595959);
-  background: transparent; border: 1px solid var(--border-color, rgba(127, 127, 127, 0.24));
+  font-size: var(--fs-xs); color: var(--text-secondary, #595959);
+  background: transparent; border: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24));
   border-radius: 4px;
 }
 .run-stop:hover:not(:disabled) { color: var(--error, var(--error)); border-color: var(--error, var(--error)); }
@@ -992,14 +992,14 @@ onBeforeUnmount(() => {
 .run-tail {
   flex: 1 1 auto; min-width: 40px; max-width: 50%;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
-  font-size: 11px; color: var(--text-tertiary, #8c8c8c);
+  font-size: var(--fs-xs); color: var(--text-tertiary, #8c8c8c);
 }
 
 /* 待确认标记：让"有东西在等我"在不点开该 run 时也看得见 */
 .run-approval {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
-  font-size: 11px; color: var(--warning, var(--warning));
-  background: transparent; border: 1px solid var(--warning, var(--warning)); border-radius: 4px;
+  font-size: var(--fs-xs); color: var(--warning, var(--warning));
+  background: transparent; border: var(--hairline-width) solid var(--warning, var(--warning)); border-radius: 4px;
 }
 
 /* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
@@ -1008,7 +1008,7 @@ onBeforeUnmount(() => {
 .line.ask { width: 100%; }
 .ask-done { margin-top: 6px; font-size: 12px; color: var(--success, #16a34a); }
 
-.output { border-top: 1px solid var(--border-color, rgba(127, 127, 127, 0.24)); padding-top: 10px; }
+.output { border-top: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24)); padding-top: 10px; }
 .output-head { display: flex; justify-content: space-between; font-weight: var(--fw-semibold); }
 .output-meta { font-size: 12px; color: var(--text-tertiary, #8c8c8c); }
 .output-summary {
@@ -1022,7 +1022,7 @@ onBeforeUnmount(() => {
 .line.notice { color: var(--warning, var(--warning)); }
 .line.status, .line.done { color: var(--text-secondary, #595959); font-size: 12px; }
 .line-tag {
-  display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: 11px;
+  display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: var(--fs-xs);
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 .stream-empty { color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
@@ -1046,7 +1046,7 @@ onBeforeUnmount(() => {
 .sa-tab-count {
   min-width: 16px; padding: 0 4px; border-radius: 8px;
   background: var(--surface-2, rgba(127, 127, 127, 0.16));
-  font-size: 10px; font-variant-numeric: tabular-nums;
+  font-size: var(--fs-xs); font-variant-numeric: tabular-nums;
 }
 .sa-empty { padding: 10px 2px; color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
 
@@ -1055,17 +1055,17 @@ onBeforeUnmount(() => {
 .usage-row {
   display: grid; grid-template-columns: 1fr auto 56px 56px 48px;
   align-items: center; gap: 6px; padding: 4px 2px;
-  border-bottom: 1px solid var(--border-color, rgba(127, 127, 127, 0.12));
+  border-bottom: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.12));
   font-size: 12px;
 }
-.usage-head { color: var(--text-tertiary, #8c8c8c); font-size: 11px; }
+.usage-head { color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); }
 .usage-row .num { text-align: right; font-variant-numeric: tabular-nums; }
 .u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.usage-note { margin: 10px 0 0; color: var(--text-tertiary, #8c8c8c); font-size: 11px; }
+.usage-note { margin: 10px 0 0; color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); }
 
 /* 事件流：原始事件，等宽 + 紧凑行（--font-mono 已含 CJK 字体栈，中文不会掉宋体） */
 .events { display: flex; flex-direction: column; gap: 2px; max-height: 320px; overflow: auto; }
-.ev-row { display: grid; grid-template-columns: 132px 96px 1fr; gap: 6px; font-size: 11px; }
+.ev-row { display: grid; grid-template-columns: 132px 96px 1fr; gap: 6px; font-size: var(--fs-xs); }
 .ev-type { color: var(--primary, #1677ff); font-family: var(--font-mono); }
 .ev-run { color: var(--text-tertiary, #8c8c8c); font-family: var(--font-mono); }
 .ev-text {
@@ -1075,7 +1075,7 @@ onBeforeUnmount(() => {
 /* 产物 tab：按目录分组 + 点击复制（空态复用 .sa-empty） */
 .artifacts { display: flex; flex-direction: column; gap: 8px; }
 .art-group { display: flex; flex-direction: column; gap: 2px; }
-.art-dir { color: var(--text-tertiary, #8c8c8c); font-size: 11px; font-family: var(--font-mono); }
+.art-dir { color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); font-family: var(--font-mono); }
 .art-item {
   padding: 3px 6px; border: none; border-radius: 4px; cursor: pointer;
   background: transparent; color: var(--text-secondary, #595959);

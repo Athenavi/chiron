@@ -281,7 +281,7 @@ onMounted(() => {
 .role-list { display: flex; flex-direction: column; gap: 8px; }
 .role-item {
   padding: 12px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: var(--radius-md);
   background: var(--bg-card);
   transition: background-color var(--dur-normal) ease;

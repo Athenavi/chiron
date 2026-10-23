@@ -422,7 +422,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 12px;
   padding: 14px 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: 10px;
   background: var(--bg-card);
   cursor: pointer;
@@ -484,7 +484,7 @@ onUnmounted(() => {
   margin-bottom: 6px;
 }
 .stat-icon { font-size: 18px; color: var(--primary); margin-right: 4px; }
-.stat-trend { font-size: 11px; padding: 0 6px; border-radius: 4px; margin-left: 4px; }
+.stat-trend { font-size: var(--fs-xs); padding: 0 6px; border-radius: 4px; margin-left: 4px; }
 
 /* ── 图表卡片 ── */
 .charts-row { margin-bottom: 0 !important; }
@@ -495,7 +495,7 @@ onUnmounted(() => {
 }
 .chart-card :deep(.ant-card-head) {
   min-height: 44px;
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
   padding: 0 16px;
 }
 .chart-card :deep(.ant-card-body) { padding: 12px 16px 16px; }
@@ -525,10 +525,10 @@ onUnmounted(() => {
   font-size: 12px;
   font-weight: var(--fw-semibold);
   color: var(--text-tertiary);
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
 }
 .alert-card :deep(.ant-table-tbody > tr > td) {
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
   font-size: 13px;
 }
 .alert-card :deep(.ant-table-tbody > tr:hover > td) {

@@ -60,7 +60,7 @@ const redocUrl = computed(() =>
   flex: 1;
   min-height: 0;
   overflow: hidden;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
 }

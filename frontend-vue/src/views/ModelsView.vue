@@ -630,7 +630,7 @@ onMounted(async () => {
 .mv-toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px; margin-bottom: 8px;
-  border: 1px solid var(--border-subtle); border-radius: 8px;
+  border: var(--hairline-width) solid var(--border-subtle); border-radius: 8px;
   font-size: 13px;
 }
 .mv-picked { font-size: 12px; color: var(--text-tertiary); }
@@ -642,24 +642,24 @@ onMounted(async () => {
   grid-template-columns: 32px minmax(160px, 1fr) minmax(120px, 1fr) 150px 68px 44px;
   align-items: center; gap: 8px;
   padding: 6px 10px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: var(--hairline-width) solid var(--border-subtle);
   font-size: 13px;
 }
 .mv-row:last-child { border-bottom: 0; }
-.mv-row-head { color: var(--text-tertiary); font-size: 12px; font-weight: var(--fw-medium); border-bottom: 1px solid var(--border-subtle); }
+.mv-row-head { color: var(--text-tertiary); font-size: 12px; font-weight: var(--fw-medium); border-bottom: var(--hairline-width) solid var(--border-subtle); }
 .mv-name { font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
 .mv-display { color: var(--text-secondary); overflow-wrap: anywhere; }
 .mv-op { display: flex; justify-content: flex-end; }
 
-.mv-group { border: 1px solid var(--border-subtle); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.mv-group { border: var(--hairline-width) solid var(--border-subtle); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
 .mv-group-head {
   display: flex; align-items: center; gap: 8px;
-  padding: 4px 10px; border-bottom: 1px solid var(--border-subtle);
+  padding: 4px 10px; border-bottom: var(--hairline-width) solid var(--border-subtle);
 }
 .mv-subgroup-head {
   display: flex; align-items: center; gap: 8px;
   padding: 2px 10px 2px 22px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: var(--hairline-width) solid var(--border-subtle);
 }
 /* 组头里唯一可点的元素：折叠开关。用 <button> 而不是给 div 绑 @click，
    键盘才能聚焦（见 scripts/check-a11y.mjs 的 R1）。 */

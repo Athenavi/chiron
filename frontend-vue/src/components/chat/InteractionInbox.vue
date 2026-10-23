@@ -272,7 +272,7 @@ function raiseBudget(item: PendingInteraction) {
 .interaction-inbox {
   margin: 0 0 8px;
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 12px;
   background: var(--bg-surface);
 }
@@ -292,7 +292,7 @@ function raiseBudget(item: PendingInteraction) {
 }
 .inbox-refresh {
   margin-left: auto;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: var(--sig-radius-button);
   background: var(--bg-surface);
   color: var(--text-secondary);
@@ -318,7 +318,7 @@ function raiseBudget(item: PendingInteraction) {
 .inbox-answered-mark { color: var(--success, #16a34a); }
 .inbox-budget {
   padding: 10px 12px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 10px;
   background: var(--bg-card);
 }
@@ -344,14 +344,14 @@ function raiseBudget(item: PendingInteraction) {
 .inbox-budget-field input {
   width: 160px;
   padding: 4px 8px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 8px;
   background: var(--bg-surface);
   color: var(--text-primary);
   font-size: 13px;
 }
 .inbox-budget-submit {
-  border: 1px solid var(--accent);
+  border: var(--hairline-width) solid var(--accent);
   border-radius: var(--sig-radius-button);
   background: var(--accent);
   color: var(--accent-text, #fff);

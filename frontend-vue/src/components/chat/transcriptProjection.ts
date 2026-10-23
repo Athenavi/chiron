@@ -209,7 +209,7 @@ export function toolGroupSummary(kind: ToolGroupKind, names: readonly string[]):
   }
   const other = names.length - labelled
   if (other > 0) parts.push(t('common.other_n', { n: other }))
-  return parts.join(' · ')
+  return parts.join(' ')
 }
 
 function turnSummary(items: readonly ChatItem[], from: number, to: number): string {
@@ -227,7 +227,7 @@ function turnSummary(items: readonly ChatItem[], from: number, to: number): stri
   if (thinking) parts.push(t('chat.reasoning_n', { n: thinking }))
   if (tools) parts.push(t('agent.tools_n', { n: tools }))
   if (text) parts.push(t('common.body'))
-  return parts.join(' · ')
+  return parts.join(' ')
 }
 
 function sliceTurns(items: readonly ChatItem[]): TurnSlice[] {

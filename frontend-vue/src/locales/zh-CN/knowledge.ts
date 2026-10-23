@@ -28,7 +28,7 @@ export default {
   notes_you_save_are_automatically_attached_in_future_conversations_distinct_from_save_to_knowledge_base_which_stores_documents_for_retrieval: "记下的内容会在**后续对话**中自动带上（区别于「存入知识库」：那条路是给检索用的文档）。",
   search_question: "检索问题",
   retrieve_knowledge_base_snippets: "检索知识库片段",
-  cross_session_retention_semantic_retrieval_auto_organization: "跨会话留存 · 语义检索 · 自动整理",
+  cross_session_retention_semantic_retrieval_auto_organization: "跨会话留存 语义检索 自动整理",
   blank_uses_the_upstream_output_as_the_search_term: "留空则用上游输出作为检索词",
   default_knowledge_base: "默认知识库",
   target_knowledge_base: "目标知识库",

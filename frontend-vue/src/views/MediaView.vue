@@ -1656,7 +1656,7 @@ onUnmounted(() => {
 .crumb-sep { margin-left: 4px; color: var(--text-muted); }
 .toolbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 24px; }
-.file-card { border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
+.file-card { border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
 .file-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow-md); }
 .file-card:focus-visible,
 .lb-btn:focus-visible,
@@ -1670,10 +1670,10 @@ onUnmounted(() => {
 .thumb-icon { font-size: 32px; color: var(--text-tertiary); }
 .thumb-icon.folder { color: var(--primary); }
 .card-name { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-.card-meta { font-size: 11px; color: var(--text-muted); font-variant-numeric: tabular-nums; }
-.pagination-bar { display: flex; justify-content: flex-end; padding-top: 8px; border-top: 1px solid var(--border); }
+.card-meta { font-size: var(--fs-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.pagination-bar { display: flex; justify-content: flex-end; padding-top: 8px; border-top: var(--hairline-width) solid var(--border); }
 :deep(.row-selected) { background: var(--primary-bg) !important; }
-.batch-bar { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-card); border: 1px solid var(--primary); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
+.batch-bar { position: sticky; top: 0; z-index: var(--z-sticky); display: flex; align-items: center; gap: 12px; padding: 8px 12px; background: var(--bg-card); border: var(--hairline-width) solid var(--primary); border-radius: var(--radius-md); box-shadow: var(--shadow-md); }
 .batch-count { font-size: 13px; color: var(--text-primary); }
 .card-check { position: absolute; top: 6px; left: 6px; }
 .file-card { position: relative; }
@@ -1692,11 +1692,11 @@ onUnmounted(() => {
 .tag-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .no-tags { font-size: 12px; color: var(--text-muted); }
 .tag-add { margin-top: 6px; }
-.move-tree { max-height: 320px; overflow-y: auto; border: 1px solid var(--border); border-radius: 8px; padding: 8px; }
+.move-tree { max-height: 320px; overflow-y: auto; border: var(--hairline-width) solid var(--border); border-radius: 8px; padding: 8px; }
 .folder-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 .lightbox { position: relative; display: flex; align-items: center; justify-content: center; min-height: 60vh; }
 .lb-img { max-width: 82%; max-height: 72vh; object-fit: contain; border-radius: 8px; box-shadow: var(--shadow-lg); }
-.lb-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: 1px solid var(--border); border-radius: 50%; background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); }
+.lb-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: var(--hairline-width) solid var(--border); border-radius: 50%; background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); }
 .lb-prev { left: 8px; }
 .lb-next { right: 8px; }
 .lb-btn:hover { color: var(--primary); border-color: var(--primary); }
@@ -1727,7 +1727,7 @@ onUnmounted(() => {
 .upload-item { 
   padding: 10px; 
   margin-bottom: 8px; 
-  border: 1px solid var(--border); 
+  border: var(--hairline-width) solid var(--border);
   border-radius: var(--radius-md); 
   background: var(--bg-secondary);
 }

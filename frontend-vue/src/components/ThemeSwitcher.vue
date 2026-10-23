@@ -121,7 +121,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   align-items: center;
   justify-content: center;
   border-radius: 8px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   color: var(--text-secondary);
   cursor: pointer;
@@ -144,7 +144,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   margin-bottom: 0;
 }
 .ts-section-title {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.04em;
   text-transform: uppercase;
@@ -165,7 +165,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   gap: 10px;
   width: 100%;
   padding: 8px 10px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: 10px;
   background: var(--bg-surface);
   color: var(--text-primary);
@@ -188,7 +188,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   padding: 3px;
   border-radius: 8px;
   background: var(--bg-base);
-  border: 1px solid var(--border-subtle);
+  border: var(--hairline-width) solid var(--border-subtle);
   flex-shrink: 0;
 }
 .ts-swatch-dot {
@@ -205,7 +205,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 }
 .ts-swatch-bg {
   background: var(--bg-page);
-  border: 1px solid var(--border-subtle);
+  border: var(--hairline-width) solid var(--border-subtle);
 }
 
 .ts-theme-info {
@@ -221,7 +221,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   line-height: 1.2;
 }
 .ts-theme-desc {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   color: var(--text-tertiary);
   line-height: 1.2;
   white-space: nowrap;
@@ -248,7 +248,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   padding: 7px 8px;
   font-size: 12px;
   font-weight: var(--fw-medium);
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: 8px;
   background: var(--bg-surface);
   color: var(--text-secondary);
@@ -271,7 +271,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 .theme-switcher-popover {
   padding: 12px !important;
   border-radius: 14px !important;
-  border: 1px solid var(--border-default) !important;
+  border: var(--hairline-width) solid var(--border-default) !important;
   box-shadow: var(--shadow-lg) !important;
   background: var(--bg-elevated) !important;
 }

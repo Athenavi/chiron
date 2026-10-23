@@ -1108,7 +1108,7 @@ function toolCount(a: Agent): number {
 .agent-card {
   display: flex; flex-direction: column; gap: 12px;
   padding: 18px 18px 14px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -1141,7 +1141,7 @@ function toolCount(a: Agent): number {
 .session-row {
   display: flex; align-items: center; gap: 12px;
   padding: 12px 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -1170,8 +1170,8 @@ function toolCount(a: Agent): number {
 /* ── 运行结果 ── */
 .run-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 .run-result { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
-.result-block { border: 1px solid var(--border-card); border-radius: 10px; background: var(--bg-secondary); overflow: hidden; }
-.result-label { padding: 8px 12px; font-size: 12px; color: var(--text-tertiary); border-bottom: 1px solid var(--border-card); }
+.result-block { border: var(--hairline-width) solid var(--border-card); border-radius: 10px; background: var(--bg-secondary); overflow: hidden; }
+.result-label { padding: 8px 12px; font-size: 12px; color: var(--text-tertiary); border-bottom: var(--hairline-width) solid var(--border-card); }
 .result-output { margin: 0; padding: 12px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
 .result-meta { display: flex; flex-wrap: wrap; gap: 4px; }
 

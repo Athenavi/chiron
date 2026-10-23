@@ -91,7 +91,7 @@ export default {
   unified_session_failed_to_load_you_can_still_send_a_message_to_continue: "统一会话加载失败，可直接发送消息继续",
   edit_quota_pool: "编辑配额池",
   trigger_failed_error: "触发失败: {error}",
-  memory_conflict_slot_key: "记忆冲突：{slot} · {key}",
+  memory_conflict_slot_key: "记忆冲突：{slot} {key}",
   timeout_2: "超时",
   quota_allocation: "配额分配",
   quota_allocation_type_period: "配额分配 - {type}/{period}",

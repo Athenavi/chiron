@@ -181,7 +181,7 @@ export default {
   diagnostics: "تشخيص النظام",
   diagnostics_desc: "افحص الإعدادات والاعتماديات للإجابة عن حالات «تم الإعداد لكنه لا يعمل».",
   diagnostics_empty: "لا توجد عناصر تشخيص لعرضها.",
-  diag_summary: "الإجمالي: {status} (سليم {ok} · تحذير {warn} · فشل {fail} · لم يُفحص {skipped})",
+  diag_summary: "الإجمالي: {status} (سليم {ok} تحذير {warn} فشل {fail} لم يُفحص {skipped})",
   diag_status_ok: "سليم",
   diag_status_warn: "تحذير",
   diag_status_fail: "فشل",

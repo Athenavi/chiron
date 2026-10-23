@@ -47,7 +47,7 @@ describe('resultText（取文优先级）', () => {
 describe('agentResultToMarkdown（运行结果沉淀为知识库文档）', () => {
   it('产出标题、任务与输出', () => {
     const md = agentResultToMarkdown(session(asJson({ output: '归档完成，共 12 个文件' })))
-    expect(md.startsWith('# 运行结果 · 归档助手')).toBe(true)
+    expect(md.startsWith('# 运行结果 归档助手')).toBe(true)
     expect(md).toContain('## 任务')
     expect(md).toContain('总结这份文档')
     expect(md).toContain('## 输出')
@@ -91,7 +91,7 @@ describe('agentResultToMarkdown（运行结果沉淀为知识库文档）', () =
 
   it('没有 agent 名字时用兜底标题', () => {
     const md = agentResultToMarkdown({ task: '任务', result: undefined, agent_name: undefined } as never)
-    expect(md.startsWith('# 运行结果 · Agent')).toBe(true)
+    expect(md.startsWith('# 运行结果 Agent')).toBe(true)
   })
 
   it('任务与结果都为空时返回空串（调用方据此禁止上传）', () => {

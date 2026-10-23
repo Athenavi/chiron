@@ -75,7 +75,7 @@ const title = computed(() => {
       items: top.map(x => `${x.role || x.class || '?'} ${fmtK(x.tokens)}`).join(' / '),
     }))
   }
-  return parts.join(' · ')
+  return parts.join(' ')
 })
 </script>
 

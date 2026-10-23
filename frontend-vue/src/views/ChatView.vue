@@ -3484,7 +3484,7 @@ function continueGeneration() {
   align-items: center;
   height: 40px;
   padding: 0 16px;
-  border-bottom: 1px solid var(--border);
+  border-bottom: var(--hairline-width) solid var(--border);
 }
 .toolbar-side { display: flex; align-items: center; gap: 8px; min-width: 0; }
 .toolbar-center {
@@ -3503,9 +3503,9 @@ function continueGeneration() {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.toolbar-mode { flex: none; font-size: 11px; color: var(--text-tertiary); background: var(--bg-secondary); padding: 2px 8px; border-radius: var(--radius-full); }
+.toolbar-mode { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); background: var(--bg-secondary); padding: 2px 8px; border-radius: var(--radius-full); }
 /* 思考档位按钮：复用 .toolbar-mode 的胶囊外观，只重置 button 默认样式 */
-.toolbar-effort { border: none; cursor: pointer; font: inherit; font-size: 11px; }
+.toolbar-effort { border: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); }
 .toolbar-effort:hover { color: var(--text-primary); }
 .toolbar-effort.active { color: var(--primary); }
 .toolbar-actions { justify-content: flex-end; gap: 2px; }
@@ -3519,13 +3519,13 @@ function continueGeneration() {
   flex: none;
   display: flex; align-items: center; gap: 8px;
   margin: 8px 16px 0; padding: 5px 10px;
-  border: 1px solid var(--border); border-radius: var(--radius-lg);
+  border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg);
   background: var(--bg-card);
 }
 .chat-search-icon { flex: none; font-size: 13px; color: var(--text-tertiary); }
 .chat-search-input { flex: 1; min-width: 0; border: none; background: none; outline: none; color: var(--text-primary); font-size: 13px; }
 .chat-search-input::placeholder { color: var(--text-quaternary); }
-.chat-search-count { flex: none; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
+.chat-search-count { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chat-search-actions { flex: none; display: flex; gap: 2px; }
 .chat-search-btn { border: none; background: none; color: var(--text-secondary); font-size: 12px; line-height: 18px; padding: 2px 6px; border-radius: var(--radius-sm); cursor: pointer; }
 .chat-search-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
@@ -3552,13 +3552,13 @@ function continueGeneration() {
 .approval-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
 /* 结构化提问卡片区：与审批卡同样贴输入区上方 */
 .ask-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
-.approval-card { background: var(--bg-card); border: 1px solid var(--border); border-left: 3px solid var(--primary); border-radius: 10px; padding: 10px 14px; }
+.approval-card { background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--primary); border-radius: 10px; padding: 10px 14px; }
 /* 工具授权模式栏（与「对话模式」并列但语义独立的第二个维度） */
 /* 工具授权已内联到输入区底栏（模型选择器右侧），样式见 ChatInput.vue 的
    `.tools-mode-select` —— 这里不再需要独立的 `.tools-mode-bar`。 */
-.approval-countdown { margin-left: auto; font-size: 11px; color: var(--warning, var(--warning)); }
+.approval-countdown { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.approval-tag { font-size: 11px; color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
+.approval-tag { font-size: var(--fs-xs); color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
 .approval-args { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 8px; }
 .approval-edit { margin-bottom: 8px; }
@@ -3569,7 +3569,7 @@ function continueGeneration() {
   font-size: 12px;
   color: var(--text-primary);
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 8px;
   padding: 6px 8px;
   resize: vertical;
@@ -3613,7 +3613,7 @@ function continueGeneration() {
   transition: background var(--dur-fast) ease;
 }
 .share-select-item:hover { background: var(--bg-hover); }
-.share-select-role { flex: none; font-size: 11px; font-weight: var(--fw-semibold); padding: 1px 7px; border-radius: 10px; }
+.share-select-role { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semibold); padding: 1px 7px; border-radius: 10px; }
 .share-select-role.user { color: var(--primary); background: var(--primary-bg); }
 .share-select-role.assistant { color: var(--text-secondary); background: var(--bg-secondary); }
 .share-select-preview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3644,7 +3644,7 @@ function continueGeneration() {
 .unified-error-banner {
   flex: none; display: flex; align-items: center; gap: 8px;
   margin: 8px 20px 0; padding: 8px 12px;
-  background: var(--error-bg); border: 1px solid var(--error);
+  background: var(--error-bg); border: var(--hairline-width) solid var(--error);
   border-radius: 10px; color: var(--danger, var(--error)); font-size: 13px;
 }
 .ueb-text { flex: 1; min-width: 0; line-height: 1.5; }
@@ -3654,14 +3654,14 @@ function continueGeneration() {
 .unified-bar {
   flex: none; display: flex; align-items: center; gap: 8px;
   margin: 8px 20px 0; padding: 6px 10px;
-  border: 1px solid var(--border); border-radius: 10px;
+  border: var(--hairline-width) solid var(--border); border-radius: 10px;
   background: var(--bg-card);
 }
 .ub-badge {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
   padding: 1px 10px; border-radius: 10px;
   background: var(--primary); color: var(--on-solid);
-  font-size: 11px; font-weight: var(--fw-semibold); line-height: 18px;
+  font-size: var(--fs-xs); font-weight: var(--fw-semibold); line-height: 18px;
   transition: background var(--dur-normal) ease;
 }
 .ub-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: var(--on-viewer-strong); }
@@ -3673,14 +3673,14 @@ function continueGeneration() {
 .ub-badge.done { background: var(--success); }
 .ub-badge.done::before { animation: none; }
 .ub-mode {
-  flex: none; font-size: 11px; color: var(--text-secondary);
+  flex: none; font-size: var(--fs-xs); color: var(--text-secondary);
   background: var(--bg-secondary); padding: 1px 8px; border-radius: 10px; line-height: 18px;
 }
 .ub-spacer { flex: 1; }
 .ub-btn {
-  flex: none; border: 1px solid var(--border); border-radius: 8px;
+  flex: none; border: var(--hairline-width) solid var(--border); border-radius: 8px;
   background: var(--bg-card); color: var(--text-secondary);
-  font-size: 11px; line-height: 18px; padding: 1px 10px; cursor: pointer;
+  font-size: var(--fs-xs); line-height: 18px; padding: 1px 10px; cursor: pointer;
   transition: all var(--dur-fast) ease;
 }
 .ub-btn:focus-visible,
@@ -3720,7 +3720,7 @@ function continueGeneration() {
   max-width: min(var(--chat-content-width), 92%); margin: 2px auto 6px;
   padding: 2px 10px; border-radius: 10px;
   background: var(--primary-bg); color: var(--primary);
-  font-size: 11px; line-height: 18px;
+  font-size: var(--fs-xs); line-height: 18px;
 }
 .kb-hits-text { flex: 1; min-width: 0; }
 .kb-hits-link {

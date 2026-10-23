@@ -543,7 +543,7 @@ function statusLabel(status: string): string {
 .kb-card {
   display: flex; flex-direction: column; gap: 10px;
   padding: 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -565,8 +565,8 @@ function statusLabel(status: string): string {
 .kb-stats { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .stat { font-size: 12px; color: var(--text-secondary); display: inline-flex; align-items: center; gap: 4px; font-variant-numeric: tabular-nums; }
 .stat :deep(svg) { font-size: 12px; color: var(--text-tertiary); }
-.kb-footer { display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--border-card); padding-top: 10px; }
-.kb-time { font-size: 11px; color: var(--text-tertiary); }
+.kb-footer { display: flex; justify-content: space-between; align-items: center; border-top: var(--hairline-width) solid var(--border-card); padding-top: 10px; }
+.kb-time { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .footer-actions { display: flex; gap: 2px; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
 .form-row { display: flex; flex-direction: column; gap: 6px; }

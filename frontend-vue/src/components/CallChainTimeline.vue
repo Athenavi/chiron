@@ -275,8 +275,8 @@ function capitalize(str: string): string {
 .view-toggle {
   margin-left: 8px;
   padding: 1px 8px;
-  font-size: 11px;
-  border: 1px solid var(--border);
+  font-size: var(--fs-xs);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 6px;
   background: transparent;
   cursor: pointer;
@@ -292,10 +292,10 @@ function capitalize(str: string): string {
   font-size: 12px;
 }
 .graph-kind {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   text-transform: uppercase;
   letter-spacing: 0.04em;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: 4px;
   padding: 0 4px;
 }
@@ -305,7 +305,7 @@ function capitalize(str: string): string {
 }
 .callchain-timeline {
   margin-top: 12px;
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-radius: var(--radius-lg);
   overflow: hidden;
   background: var(--bg-card);
@@ -363,7 +363,7 @@ function capitalize(str: string): string {
   gap: 12px;
   padding: 8px 12px;
   background: var(--bg-card);
-  border: 1px solid var(--border);
+  border: var(--hairline-width) solid var(--border);
   border-left: 3px solid var(--border);
   border-radius: 8px;
   transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
@@ -441,7 +441,7 @@ function capitalize(str: string): string {
   font-size: 12px;
   color: var(--primary);
   background: none;
-  border: 1px solid var(--primary);
+  border: var(--hairline-width) solid var(--primary);
   border-radius: 6px;
   cursor: pointer;
   transition: background var(--dur-fast) ease, color var(--dur-fast) ease;

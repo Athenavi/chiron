@@ -62,7 +62,7 @@ const suggestions = [
 .hero-logo { width: 56px; height: 56px; margin: 0 auto 18px; border-radius: var(--sig-radius-card); background: linear-gradient(135deg, var(--primary), var(--accent)); color: var(--on-solid); font-weight: var(--fw-bold); font-size: 20px; display: flex; align-items: center; justify-content: center; box-shadow: var(--sig-shadow-hover); }
 .hero-title { font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); letter-spacing: -0.01em; margin-bottom: 28px; }
 .suggestion-grid { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-.suggestion-card { width: 250px; padding: 14px; border-radius: var(--sig-radius-card); border: 1px solid var(--border-card); background: var(--bg-card); cursor: pointer; transition: all var(--dur-normal); text-align: left; box-shadow: var(--sig-shadow-card); }
+.suggestion-card { width: 250px; padding: 14px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); background: var(--bg-card); cursor: pointer; transition: all var(--dur-normal); text-align: left; box-shadow: var(--sig-shadow-card); }
 .suggestion-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--sig-shadow-hover); }
 .card-icon { display: block; font-size: 18px; line-height: 1; color: var(--text-secondary); margin-bottom: 8px; transition: color var(--dur-normal); }
 .suggestion-card:hover .card-icon { color: var(--primary); }

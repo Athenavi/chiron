@@ -76,7 +76,7 @@ describe('transcriptProjection（行投影）', () => {
     const head = rows.find(row => row.key === headerKey('t:turn-1'))
     expect(head?.kind).toBe('turn_header')
     expect(head?.header?.scope).toBe('turn')
-    expect(head?.header?.summary).toBe('思考 ×1 · 工具 ×2 · 正文')
+    expect(head?.header?.summary).toBe('思考 ×1 工具 ×2 正文')
     // 用户消息仍在该回合头之前
     expect(rows.findIndex(row => row.key === headerKey('t:turn-1'))).toBeGreaterThan(rows.findIndex(row => row.key === itemKey(items[0]!, 0)))
   })
@@ -87,7 +87,7 @@ describe('transcriptProjection（行投影）', () => {
     const group = rows.find(row => row.kind === 'tool_group_header')
     expect(group?.header?.fold).toBe('t:turn-1:g0')
     expect(group?.header?.group).toBe('explore')
-    expect(group?.header?.summary).toBe('读取 1 · 搜索 1')
+    expect(group?.header?.summary).toBe('读取 1 搜索 1')
   })
 
   it('完成的回合里工具组默认收起：只留组头，组内行不进入渲染序列', () => {
@@ -202,9 +202,9 @@ describe('工具语义分组（对应 python-engine 工具注册表）', () => {
   })
 
   it('组头摘要按语义分档计数', () => {
-    expect(toolGroupSummary('explore', ['read_file', 'grep_files', 'read_file'])).toBe('读取 2 · 搜索 1')
-    expect(toolGroupSummary('modify', ['write_file', 'edit_file'])).toBe('写入 1 · 编辑 1')
+    expect(toolGroupSummary('explore', ['read_file', 'grep_files', 'read_file'])).toBe('读取 2 搜索 1')
+    expect(toolGroupSummary('modify', ['write_file', 'edit_file'])).toBe('写入 1 编辑 1')
     expect(toolGroupSummary('delegate', ['subagent', 'graph_run'])).toBe('委派 2')
-    expect(toolGroupSummary('shell', ['shell_exec', 'run_in_background'])).toBe('命令 1 · 作业 1')
+    expect(toolGroupSummary('shell', ['shell_exec', 'run_in_background'])).toBe('命令 1 作业 1')
   })
 })

@@ -58,7 +58,7 @@ const budgetText = computed(() => {
   const parts: string[] = []
   if (b.steps?.limit) parts.push(`${b.steps.used ?? 0}/${b.steps.limit}`)
   if (b.tokens?.limit) parts.push(`${Math.round(((b.tokens.used ?? 0) / b.tokens.limit) * 100)}%`)
-  return parts.join(' · ')
+  return parts.join(' ')
 })
 
 /** 完整快照进 title：不常看的轴（turns/wall/cost）不占版面，但查得到。 */
@@ -170,9 +170,9 @@ const cacheWarnText = computed(() => {
   flex: none;
   display: flex; align-items: center; gap: 8px;
   height: 26px; padding: 0 16px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: var(--hairline-width) solid var(--border-subtle);
   background: var(--bg-page);
-  font-size: 11px; color: var(--text-tertiary);
+  font-size: var(--fs-xs); color: var(--text-tertiary);
   font-variant-numeric: tabular-nums;
 }
 .cs-item { display: inline-flex; align-items: center; gap: 4px; white-space: nowrap; }
@@ -195,7 +195,7 @@ const cacheWarnText = computed(() => {
   min-width: 14px; height: 14px; padding: 0 4px;
   border-radius: var(--radius-full);
   background: var(--primary); color: var(--on-solid);
-  font-size: 10px; line-height: 14px; text-align: center;
+  font-size: var(--fs-xs); line-height: 14px; text-align: center;
   font-variant-numeric: tabular-nums;
 }
 @media (max-width: 576px) { .chat-status { padding: 0 12px; } .cs-model { max-width: 30%; } }

@@ -681,10 +681,10 @@ function amountText(amount: number): string {
 
 .bar-chart { display: flex; align-items: flex-end; gap: 6px; height: 170px; overflow-x: auto; padding-top: 8px; -webkit-overflow-scrolling: touch; }
 .bar-col { flex: 1; min-width: 26px; display: flex; flex-direction: column; align-items: center; justify-content: flex-end; height: 100%; }
-.bar-value { font-size: 11px; color: var(--text-tertiary); margin-bottom: 2px; white-space: nowrap; }
+.bar-value { font-size: var(--fs-xs); color: var(--text-tertiary); margin-bottom: 2px; white-space: nowrap; }
 .bar { width: 70%; border-radius: 3px 3px 0 0; background: linear-gradient(180deg, var(--colorWarning, var(--warning)), var(--colorWarning-bg, #fbbf24)); }
 .bar-zero { background: var(--border-card, #e5e7eb); }
-.bar-label { font-size: 10px; color: var(--text-tertiary); margin-top: 4px; white-space: nowrap; transform: rotate(-30deg); transform-origin: top left; }
+.bar-label { font-size: var(--fs-xs); color: var(--text-tertiary); margin-top: 4px; white-space: nowrap; transform: rotate(-30deg); transform-origin: top left; }
 
 .purchase-form { display: flex; flex-direction: column; gap: 18px; max-width: 480px; }
 .form-item { display: flex; flex-direction: column; gap: 8px; }
@@ -704,7 +704,7 @@ function amountText(amount: number): string {
 
 .qr-body { text-align: center; padding: 8px 0; }
 .qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: var(--fw-semibold); display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }
-.qr-canvas { width: 220px; height: 220px; border: 1px solid var(--border-card); border-radius: 8px; }
+.qr-canvas { width: 220px; height: 220px; border: var(--hairline-width) solid var(--border-card); border-radius: 8px; }
 .qr-tip { margin-top: 14px; color: var(--text-primary); font-size: 14px; }
 .qr-sub { color: var(--text-tertiary); font-size: 12px; }
 .qr-success { margin-top: 16px; color: var(--colorSuccess, #10b981); font-size: 16px; font-weight: var(--fw-semibold); }

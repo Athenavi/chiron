@@ -203,7 +203,7 @@ onMounted(load)
   align-items: flex-start;
   gap: 12px;
   padding: 16px;
-  border: 1px solid var(--ant-color-border, #d9d9d9);
+  border: var(--hairline-width) solid var(--ant-color-border, #d9d9d9);
   border-radius: 10px;
   cursor: pointer;
   transition: border-color var(--dur-normal), box-shadow var(--dur-normal);

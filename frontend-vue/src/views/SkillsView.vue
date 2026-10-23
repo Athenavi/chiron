@@ -791,7 +791,7 @@ async function handleGenerate() {
 .skill-card {
   display: flex; flex-direction: column; gap: 12px;
   padding: 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -813,30 +813,30 @@ async function handleGenerate() {
 .card-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: 6px; }
 .menu-icon { font-size: 14px; }
 
-.skill-detail { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border); padding-top: 12px; }
+.skill-detail { display: flex; flex-direction: column; gap: 8px; border-top: var(--hairline-width) solid var(--border); padding-top: 12px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
-.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
+.detail-label { font-size: var(--fs-xs); color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .detail-value { font-size: 12px; color: var(--text-primary); }
-.detail-pre { margin: 0; padding: 8px; background: var(--bg-secondary); border-radius: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; }
+.detail-pre { margin: 0; padding: 8px; background: var(--bg-secondary); border-radius: 8px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; max-height: 180px; overflow-y: auto; }
 
-.panel-card { max-width: 640px; border: 1px solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--shadow-md); padding: 20px; }
+.panel-card { max-width: 640px; border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); box-shadow: var(--shadow-md); padding: 20px; }
 .panel-title { font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); margin: 0 0 10px; display: flex; align-items: center; gap: 8px; }
 .or-divider { text-align: center; color: var(--text-tertiary); margin: 14px 0; }
 .mono-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
 .install-btn { margin-top: 14px; }
 .gen-alert { margin-top: 14px; }
-.gen-pre { margin: 12px 0 0; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
+.gen-pre { margin: 12px 0 0; padding: 10px; background: var(--bg-secondary); border-radius: 8px; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); white-space: pre-wrap; max-height: 260px; overflow-y: auto; }
 
 .run-desc { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; }
 .run-form { display: flex; flex-direction: column; gap: 12px; }
 .run-field { display: flex; flex-direction: column; gap: 6px; }
 .field-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); display: flex; align-items: center; gap: 6px; }
 .required { color: var(--error); }
-.field-type { font-size: 10px; color: var(--text-tertiary); background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; }
+.field-type { font-size: var(--fs-xs); color: var(--text-tertiary); background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; }
 .run-empty { color: var(--text-tertiary); font-size: 13px; padding: 8px 0; }
 .run-actions { display: flex; justify-content: flex-end; margin-top: 14px; }
-.run-result { margin-top: 14px; border: 1px solid var(--border-card); border-radius: 10px; overflow: hidden; }
-.result-label { padding: 8px 12px; font-size: 12px; color: var(--text-tertiary); background: var(--bg-secondary); border-bottom: 1px solid var(--border-card); }
+.run-result { margin-top: 14px; border: var(--hairline-width) solid var(--border-card); border-radius: 10px; overflow: hidden; }
+.result-label { padding: 8px 12px; font-size: 12px; color: var(--text-tertiary); background: var(--bg-secondary); border-bottom: var(--hairline-width) solid var(--border-card); }
 .result-pre { margin: 0; padding: 12px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
 
 @media (max-width: 768px) {

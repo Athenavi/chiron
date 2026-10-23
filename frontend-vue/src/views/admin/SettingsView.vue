@@ -972,7 +972,7 @@ onMounted(async () => {
 
 .code-block {
   background: var(--bg-code);
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-md);
   padding: 16px;
   font-family: var(--font-mono, 'JetBrains Mono', 'Cascadia Code', 'Fira Code', monospace);
@@ -986,7 +986,7 @@ onMounted(async () => {
 
 /* 移动端 */
 @media (max-width: 640px) {
-  .code-block { padding: 12px; font-size: 11px; }
+  .code-block { padding: 12px; font-size: var(--fs-xs); }
 }
 
 /* 窄屏：按钮提高触控高度 */

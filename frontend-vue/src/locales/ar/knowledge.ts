@@ -28,7 +28,7 @@ export default {
   notes_you_save_are_automatically_attached_in_future_conversations_distinct_from_save_to_knowledge_base_which_stores_documents_for_retrieval: "تُرفق الملاحظات التي تحفظها تلقائيًا في **المحادثات اللاحقة** (تختلف عن «حفظ في قاعدة المعرفة» التي تخزّن مستندات للاسترجاع).",
   search_question: "بحث عن سؤال",
   retrieve_knowledge_base_snippets: "استرجاع مقاطع قاعدة المعرفة",
-  cross_session_retention_semantic_retrieval_auto_organization: "حفظ عبر الجلسات · استرجاع دلالي · تنظيم تلقائي",
+  cross_session_retention_semantic_retrieval_auto_organization: "حفظ عبر الجلسات استرجاع دلالي تنظيم تلقائي",
   blank_uses_the_upstream_output_as_the_search_term: "الفارغ يستخدم مخرج المنبع ككلمة بحث",
   default_knowledge_base: "قاعدة المعرفة الافتراضية",
   target_knowledge_base: "قاعدة المعرفة الهدف",

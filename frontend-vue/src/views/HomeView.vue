@@ -409,7 +409,7 @@ function scrollToTop() {
   align-items: center;
   gap: 8px;
   padding: 5px 14px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: var(--radius-full);
   background: var(--bg-surface);
   font-size: 12px;
@@ -494,7 +494,7 @@ function scrollToTop() {
   display: flex;
   flex-direction: column;
   padding: 22px 20px 18px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: var(--comp-card-radius);
   background: var(--bg-surface);
   box-shadow: var(--shadow-sm);
@@ -527,7 +527,7 @@ function scrollToTop() {
 }
 .feature-icon { font-size: 20px; }
 .feature-en {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   letter-spacing: 0.16em;
   color: var(--text-tertiary);
@@ -550,7 +550,7 @@ function scrollToTop() {
 .window-card {
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   box-shadow: var(--shadow-md);
   transition: transform var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
@@ -562,14 +562,14 @@ function scrollToTop() {
   gap: 7px;
   height: 36px;
   padding: 0 12px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: var(--hairline-width) solid var(--border-subtle);
   background: var(--bg-surface-hover);
 }
 .win-dot { width: 10px; height: 10px; border-radius: 50%; flex: none; }
 .win-dot.red { background: var(--traffic-red); }
 .win-dot.yellow { background: var(--traffic-amber); }
 .win-dot.green { background: var(--traffic-green); }
-.win-title { flex: 1; text-align: center; font-size: 11px; color: var(--text-tertiary); margin-right: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.win-title { flex: 1; text-align: center; font-size: var(--fs-xs); color: var(--text-tertiary); margin-right: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .window-body { padding: 16px; }
 
 .chat-preview { display: flex; flex-direction: column; gap: 10px; min-height: 200px; }
@@ -581,7 +581,7 @@ function scrollToTop() {
   border-radius: 14px;
   border-bottom-left-radius: 4px;
   background: var(--bg-code);
-  border: 1px solid var(--border-subtle);
+  border: var(--hairline-width) solid var(--border-subtle);
   font-size: 12px;
   line-height: 19px;
   color: var(--text-primary);
@@ -600,8 +600,8 @@ function scrollToTop() {
   padding: 3px 10px;
   border-radius: 999px;
   background: var(--bg-surface-hover);
-  border: 1px solid var(--border-subtle);
-  font-size: 11px;
+  border: var(--hairline-width) solid var(--border-subtle);
+  font-size: var(--fs-xs);
   color: var(--text-secondary);
   font-family: var(--font-mono);
 }
@@ -613,7 +613,7 @@ function scrollToTop() {
   margin-top: 2px;
   padding: 8px 12px;
   border-radius: 12px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface-hover);
   font-size: 12px;
   color: var(--text-tertiary);
@@ -625,16 +625,16 @@ function scrollToTop() {
   align-items: center;
   justify-content: space-between;
   padding: 4px 8px 8px;
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: var(--hairline-width) solid var(--border-subtle);
   margin-bottom: 4px;
 }
 .pv-panel-title { font-size: 12px; font-weight: var(--fw-semibold); color: var(--text-primary); }
-.pv-panel-caret { font-size: 10px; color: var(--text-tertiary); }
+.pv-panel-caret { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .pv-timeline {
   height: 34px;
   border-radius: 8px;
   background: var(--bg-surface-hover);
-  border: 1px solid var(--border-subtle);
+  border: var(--hairline-width) solid var(--border-subtle);
   position: relative;
 }
 .pv-timeline-track { position: absolute; inset: 12px 10px; }
@@ -664,7 +664,7 @@ function scrollToTop() {
   margin-top: 30px;
   border-radius: 14px;
   overflow: hidden;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   box-shadow: var(--shadow-md);
 }
@@ -673,11 +673,11 @@ function scrollToTop() {
   flex: none;
   margin-left: auto;
   min-height: 28px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: 6px;
   background: transparent;
   color: var(--text-tertiary);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   padding: 4px 12px;
   cursor: pointer;
   transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
@@ -695,7 +695,7 @@ function scrollToTop() {
   justify-content: space-between;
   gap: 12px;
   padding: 18px 28px;
-  border-top: 1px solid var(--border-subtle);
+  border-top: var(--hairline-width) solid var(--border-subtle);
   font-size: 12px;
   color: var(--text-tertiary);
   background: var(--bg-surface);
@@ -704,7 +704,7 @@ function scrollToTop() {
 .home-footer-logo {
   width: 20px; height: 20px; border-radius: 6px;
   background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: var(--on-solid); font-size: 9px; font-weight: var(--fw-bold);
+  color: var(--on-solid); font-size: var(--fs-xs); font-weight: var(--fw-bold);
   display: inline-flex; align-items: center; justify-content: center;
 }
 
@@ -746,7 +746,7 @@ function scrollToTop() {
   width: 40px;
   height: 40px;
   border-radius: 50%;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   color: var(--text-primary);
   display: inline-flex;

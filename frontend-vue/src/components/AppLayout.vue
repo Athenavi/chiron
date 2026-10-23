@@ -400,7 +400,7 @@ async function runQuickCommand() {
   background: var(--comp-header-bg);
   backdrop-filter: blur(var(--sig-blur-header));
   -webkit-backdrop-filter: blur(var(--sig-blur-header));
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   box-shadow: var(--sig-shadow-card);
 }
 
@@ -428,7 +428,7 @@ async function runQuickCommand() {
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: var(--on-solid);
   font-weight: var(--fw-bold);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   display: inline-flex;
   align-items: center;
   justify-content: center;
@@ -445,7 +445,7 @@ async function runQuickCommand() {
 }
 
 .brand-caret {
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--text-tertiary);
 }
 
@@ -472,7 +472,7 @@ async function runQuickCommand() {
   background: var(--comp-header-bg);
   backdrop-filter: blur(var(--sig-blur-header));
   -webkit-backdrop-filter: blur(var(--sig-blur-header));
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   box-shadow: var(--sig-shadow-card);
   cursor: pointer;
 }
@@ -495,7 +495,7 @@ async function runQuickCommand() {
   background: var(--panel-bg) !important;
   backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
   -webkit-backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
-  border: 1px solid var(--panel-border);
+  border: var(--hairline-width) solid var(--panel-border);
 }
 
 .nav-menu :deep(.ant-dropdown-menu-item) {
@@ -536,7 +536,7 @@ async function runQuickCommand() {
   background: var(--panel-bg);
   backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
   -webkit-backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
-  border: 1px solid var(--panel-border);
+  border: var(--hairline-width) solid var(--panel-border);
   box-shadow: var(--sig-shadow-card);
   overflow-y: auto;
   scrollbar-width: none;
@@ -627,7 +627,7 @@ async function runQuickCommand() {
   background: var(--panel-bg);
   backdrop-filter: blur(var(--sig-blur-header));
   -webkit-backdrop-filter: blur(var(--sig-blur-header));
-  border: 1px solid var(--panel-border);
+  border: var(--hairline-width) solid var(--panel-border);
   box-shadow: var(--sig-shadow-card);
   color: var(--text-primary);
   font-size: 12px;
@@ -644,7 +644,7 @@ async function runQuickCommand() {
 }
 
 .dock-tip-desc {
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-regular);
   color: var(--text-tertiary);
   line-height: 15px;
@@ -699,7 +699,7 @@ async function runQuickCommand() {
   background: var(--panel-bg);
   backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
   -webkit-backdrop-filter: blur(calc(var(--sig-blur-header) + 4px));
-  border: 1px solid var(--panel-border);
+  border: var(--hairline-width) solid var(--panel-border);
   box-shadow: var(--sig-shadow-hover);
   z-index: var(--z-dock);
 }
@@ -718,7 +718,7 @@ async function runQuickCommand() {
 .dock-popover-hint {
   display: block;
   margin-top: 2px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   line-height: 16px;
   color: var(--text-tertiary);
 }
@@ -733,7 +733,7 @@ async function runQuickCommand() {
   min-width: 0;
   min-height: 40px;
   padding: 8px 12px;
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   border-radius: var(--sig-radius-card);
   background: var(--bg-surface);
   color: var(--text-primary);

@@ -775,7 +775,7 @@ async function handleLogin() {
   padding: 32px 36px;
   border-radius: var(--radius-2xl);
   background: var(--bg-surface);
-  border: 1px solid var(--border-default);
+  border: var(--hairline-width) solid var(--border-default);
   box-shadow: var(--shadow-lg), 0 0 0 1px var(--border-subtle) inset;
   animation: loginFadeIn var(--dur-slow) ease;
 }

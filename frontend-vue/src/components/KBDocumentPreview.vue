@@ -168,7 +168,7 @@ function formatSize(bytes: number): string {
 }
 .doc-type {
   padding: 2px 8px;
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   background: var(--bg-secondary);
   border-radius: 4px;
@@ -179,7 +179,7 @@ function formatSize(bytes: number): string {
   color: var(--text-tertiary);
 }
 .doc-content {
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: 8px;
   overflow: hidden;
 }
@@ -189,7 +189,7 @@ function formatSize(bytes: number): string {
   align-items: center;
   padding: 10px 14px;
   background: var(--bg-secondary);
-  border-bottom: 1px solid var(--border-card);
+  border-bottom: var(--hairline-width) solid var(--border-card);
   font-size: 13px;
 }
 .content-label {

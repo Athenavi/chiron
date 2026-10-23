@@ -97,7 +97,7 @@ watch(
   display: flex;
   flex-direction: column;
   background: var(--bg-elevated, var(--bg-page));
-  border: 1px solid var(--border-subtle);
+  border: var(--hairline-width) solid var(--border-subtle);
   border-radius: var(--radius-xl);
   box-shadow: var(--shadow-lg);
   overflow: hidden;
@@ -108,7 +108,7 @@ watch(
   justify-content: space-between;
   gap: var(--space-2);
   padding: var(--space-2) var(--space-3);
-  border-bottom: 1px solid var(--border-subtle);
+  border-bottom: var(--hairline-width) solid var(--border-subtle);
 }
 .fp-title {
   font-size: var(--fs-sm);

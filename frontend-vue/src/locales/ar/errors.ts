@@ -86,7 +86,7 @@ export default {
   unified_session_failed_to_load_you_can_still_send_a_message_to_continue: "فشل تحميل الجلسة الموحدة؛ يمكنك إرسال رسالة للمتابعة",
   edit_quota_pool: "تحرير مجمع الحصص",
   trigger_failed_error: "فشل التشغيل: {error}",
-  memory_conflict_slot_key: "تعارض في الذاكرة: {slot} · {key}",
+  memory_conflict_slot_key: "تعارض في الذاكرة: {slot} {key}",
   timeout_2: "انتهاء المهلة",
   quota_allocation: "تخصيص الحصص",
   quota_allocation_type_period: "تخصيص الحصص - {type}/{period}",

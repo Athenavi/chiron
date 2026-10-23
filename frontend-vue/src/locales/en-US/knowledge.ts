@@ -28,7 +28,7 @@ export default {
   notes_you_save_are_automatically_attached_in_future_conversations_distinct_from_save_to_knowledge_base_which_stores_documents_for_retrieval: "Notes you save are automatically attached in **future conversations** (distinct from \"save to knowledge base\", which stores documents for retrieval).",
   search_question: "Search question",
   retrieve_knowledge_base_snippets: "Retrieve knowledge base snippets",
-  cross_session_retention_semantic_retrieval_auto_organization: "Cross-session retention · semantic retrieval · auto-organization",
+  cross_session_retention_semantic_retrieval_auto_organization: "Cross-session retention semantic retrieval auto-organization",
   blank_uses_the_upstream_output_as_the_search_term: "Blank uses the upstream output as the search term",
   default_knowledge_base: "Default knowledge base",
   target_knowledge_base: "Target knowledge base",

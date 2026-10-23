@@ -884,10 +884,10 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .info-item { display: flex; flex-direction: column; gap: 4px; }
 .info-item .label { font-size: 13px; color: var(--text-tertiary); }
 .info-item .value { color: var(--text-primary); }
-.kb-description { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-card); color: var(--text-secondary); line-height: 1.6; }
+.kb-description { margin-top: 16px; padding-top: 16px; border-top: var(--hairline-width) solid var(--border-card); color: var(--text-secondary); line-height: 1.6; }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 
-.query-results { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--border-card); }
+.query-results { margin-top: 16px; padding-top: 16px; border-top: var(--hairline-width) solid var(--border-card); }
 .query-results h3 { margin: 0 0 12px; font-size: 16px; color: var(--text-primary); }
 .query-result-item { padding: 12px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: 8px; margin-bottom: 8px; }
 .result-source { font-size: 12px; color: var(--text-tertiary); }
@@ -901,8 +901,8 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .media-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .selected-count { font-size: 13px; color: var(--text-secondary); }
 .media-empty { padding: 40px 0; }
-.media-list { border: 1px solid var(--border-card); border-radius: 8px; overflow: hidden; max-height: 400px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
-.media-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--border-card); cursor: pointer; transition: background var(--dur-normal); }
+.media-list { border: var(--hairline-width) solid var(--border-card); border-radius: 8px; overflow: hidden; max-height: 400px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.media-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: var(--hairline-width) solid var(--border-card); cursor: pointer; transition: background var(--dur-normal); }
 .media-item:last-child { border-bottom: none; }
 .media-item:hover { background: var(--bg-hover, rgba(0,0,0,0.03)); }
 .media-item.selected { background: var(--primary-bg, #e6f7ff); }

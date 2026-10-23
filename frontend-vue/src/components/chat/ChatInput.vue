@@ -11,6 +11,7 @@ import { useAuthStore } from '../../stores/auth'
 import { privateKey } from '../../utils/privateStorage'
 import { notify } from '../../utils/notify'
 import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
+import { classifyEnter } from './ime'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -90,7 +91,7 @@ const modelsLoading = ref(false)
 const modelValue = ref('')
 const modelOptions = computed(() =>
   models.value.map(m => ({
-    label: m.display_name ? `${m.provider} · ${m.display_name}` : `${m.provider} · ${m.name}`,
+    label: m.display_name ? `${m.provider} ${m.display_name}` : `${m.provider} ${m.name}`,
     value: m.name,
   })),
 )
@@ -488,7 +489,24 @@ function onComposerInput() {
   onSlashInput()
 }
 
+/** `compositionend` 时刻（`performance.now()`）：CJK 伴生 Enter 守卫的判据，见 `./ime.ts`。 */
+const lastCompositionEndAt = ref(0)
+
+function onCompositionEnd() {
+  lastCompositionEndAt.value = performance.now()
+}
+
 function onKeydown(e: KeyboardEvent) {
+  // CJK 输入法：选词确认时伴生的 Enter 幽灵键（见 `./ime.ts`）。
+  // 必须在所有 Enter 分支之前判 —— 否则「只想选词」会被 mention 选择或直接发送。
+  if (e.key === 'Enter' && !e.shiftKey) {
+    const { ghost, nextTimestamp } = classifyEnter(lastCompositionEndAt.value, performance.now())
+    if (ghost) {
+      lastCompositionEndAt.value = nextTimestamp // 立即复位，杜绝误吞下一次正常击键
+      e.preventDefault()
+      return
+    }
+  }
   // `@` 提及面板导航（先判它：与斜杠菜单不会同时开，但先判更安全）
   if (mentionOpen.value) {
     if (e.key === 'ArrowDown') {
@@ -1033,6 +1051,7 @@ defineExpose({ insertText, setCommandDraft })
         :aria-label="$t('chat.message_input_box')"
         @keydown="onKeydown"
         @input="onComposerInput"
+        @compositionend="onCompositionEnd"
         @paste="onPaste"
       />
       <input
@@ -1211,7 +1230,7 @@ defineExpose({ insertText, setCommandDraft })
             class="run-hint"
           >
             <span class="run-dot" />
-            {{ $t('common.generating') }} · <span class="tnum-fixed">{{ elapsed }}s</span>
+            {{ $t('common.generating') }}<span class="tnum-fixed">{{ elapsed }}s</span>
           </span>
           <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
           <Button
@@ -1251,9 +1270,15 @@ defineExpose({ insertText, setCommandDraft })
   position: relative;
   display: flex; flex-direction: column; gap: 2px;
   width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
+  /* 同心圆圆角（desktop-agent-ui §6）：内层 = max(0, 外层 − padding)。
+     不做这一步，内层四角的弧度会比外层更“紧”，肉眼可见地变形。
+     变量在下面的媒体查询里随断点覆盖，内层元素统一消费 --input-card-inner-r。 */
+  --input-card-r: 16px;
+  --input-card-pad: 12px;
+  --input-card-inner-r: max(0px, calc(var(--input-card-r) - var(--input-card-pad)));
   padding: 12px 14px 10px;
   /* 扔掉描边：层次由背景色阶承担（见 docs/ui-refinement-design.md §1） */
-  border: 0; border-radius: 16px;
+  border: 0; border-radius: var(--input-card-r);
   background: var(--bg-input);
   box-shadow: var(--shadow-md);
   font-size: 16px; line-height: 24px;
@@ -1269,12 +1294,21 @@ defineExpose({ insertText, setCommandDraft })
 }
 .input-field { background: transparent !important; }
 .input-field :deep(textarea) { color: var(--text-primary) !important; font-size: 16px !important; line-height: 24px !important; }
+/* Composer 内的原生滚动条收敛（desktop-agent-ui components-motion §1.3）：
+   只隐藏**外观**，滚轮 / 触控板手势 / 文本选中 / 键盘导航全部保留 ——
+   刻意限定在输入框内，**绝不全局隐藏**系统滚动条（那会伤害其它长列表的可发现性）。 */
+.input-field :deep(textarea) {
+  scrollbar-width: none; /* Firefox */
+}
+.input-field :deep(textarea)::-webkit-scrollbar {
+  display: none; /* Chromium / WebKit */
+}
 /* 操作区：与输入区之间一条分隔线（reasonix 的分区思路），不再与文字抢同一块空间 */
 .input-actions {
   display: flex; align-items: center; justify-content: space-between;
   gap: 8px; flex-wrap: wrap;
   padding-top: 8px; margin-top: 6px;
-  border-top: 1px solid var(--border-soft, var(--border));
+  border-top: var(--hairline-width) solid var(--border-soft, var(--border));
 }
 .input-left { display: flex; align-items: center; gap: 2px; }
 /* 竖分隔线：把"工具按钮组"与"模型下拉"在视觉上分开，避免一堆控件糊成一片 */
@@ -1285,8 +1319,8 @@ defineExpose({ insertText, setCommandDraft })
 @container (max-width: 620px) { .input-divider { display: none; } }
 .input-hint { font-size: 12px; color: var(--text-tertiary); }
 /* 工具栏控件统一规格：32px 触控目标 + 8px 圆角（覆盖 antd 的 size=small 观感） */
-.input-actions .ant-btn:not(.send-btn) { height: 32px; min-width: 32px; border-radius: 8px; }
-.input-actions .ant-select-single .ant-select-selector { border-radius: 8px; }
+.input-actions .ant-btn:not(.send-btn) { height: 32px; min-width: 32px; border-radius: var(--input-card-inner-r, 8px); }
+.input-actions .ant-select-single .ant-select-selector { border-radius: var(--input-card-inner-r, 8px); }
 /* 运行态内联：生成中的活性证据（走秒），减少"以为卡死→点停止"的误操作 */
 .run-hint {
   display: inline-flex; align-items: center; gap: 6px;
@@ -1304,7 +1338,7 @@ defineExpose({ insertText, setCommandDraft })
 .model-select { width: 170px; }
 .model-select :deep(.ant-select-selector) { font-size: 12px; }
 /* 上下文快捷按钮：展开侧栏（抽屉模式） */
-.context-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; gap: 4px; border-radius: 8px; }
+.context-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; gap: 4px; border-radius: var(--input-card-inner-r, 8px); }
 .context-btn:hover { color: var(--primary) !important; background: var(--primary-bg) !important; }
 /* 对话设置 popover（模式 / 工具授权）：垂直两行，label 右对齐，与底栏解耦 */
 .settings-pop { display: flex; flex-direction: column; gap: 10px; min-width: 230px; }
@@ -1319,7 +1353,7 @@ defineExpose({ insertText, setCommandDraft })
 /* 生成中：圆形 → 方形，让"现在能停"一眼可辨。
    antd-vue 的 ButtonShape 只有 circle/round（不含 square），故用圆角覆盖实现；
    同时取消"放大 + 加深"的 hover —— 那是"发送"的暗示，不该出现在"停止"上。 */
-.send-btn--stop { border-radius: var(--radius-lg) !important; }
+.send-btn--stop { border-radius: var(--input-card-inner-r, var(--radius-lg)) !important; }
 .send-btn--stop:not(:disabled):hover { transform: none; box-shadow: none; filter: none; }
 
 /* ── 响应式：以**卡片自身宽度**为准（container query），比视口断点更准确 ── */
@@ -1333,15 +1367,15 @@ defineExpose({ insertText, setCommandDraft })
 }
 @media (max-width: 768px) {
   .input-area { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
-  .input-card { border-radius: 14px; padding: 10px 12px 8px; }
+  .input-card { --input-card-r: 14px; --input-card-pad: 10px; border-radius: var(--input-card-r); padding: 10px 12px 8px; }
   .input-actions { gap: 6px; row-gap: 4px; }
 }
 /* ── 移动端：贴底 + 安全区 + 触控目标放大到 40px（拇指友好） ── */
 @media (max-width: 576px) {
   .input-area { padding: 0 8px calc(10px + env(safe-area-inset-bottom)); }
-  .input-card { border-radius: 12px; padding: 10px 10px 8px; }
+  .input-card { --input-card-r: 12px; --input-card-pad: 10px; border-radius: var(--input-card-r); padding: 10px 10px 8px; }
   .context-label { display: none; }
-  .input-actions .ant-btn:not(.send-btn) { height: 40px; min-width: 40px; border-radius: 10px; }
+  .input-actions .ant-btn:not(.send-btn) { height: 40px; min-width: 40px; border-radius: var(--input-card-inner-r, 10px); }
   .send-btn.ant-btn { width: 40px; height: 40px; min-width: 40px; }
   .input-left:last-child { margin-left: auto; }   /* 发送组靠右，避免与左侧工具组抢行 */
   .paste-btn { min-height: 36px; }
@@ -1353,7 +1387,7 @@ defineExpose({ insertText, setCommandDraft })
 .context-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .context-chip {
   display: inline-flex; align-items: center; gap: 4px; max-width: 220px;
-  padding: 2px 4px 2px 8px; border: 1px solid var(--border); border-radius: 999px;
+  padding: 2px 4px 2px 8px; border: var(--hairline-width) solid var(--border); border-radius: 999px;
   background: var(--bg-hover, rgba(127, 127, 127, 0.08));
   font-size: 12px; color: var(--text-secondary);
 }
@@ -1361,14 +1395,14 @@ defineExpose({ insertText, setCommandDraft })
 .context-chip__x {
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; cursor: pointer; line-height: 1;
-  color: var(--text-tertiary); font-size: 10px; padding: 0 2px;
+  color: var(--text-tertiary); font-size: var(--fs-xs); padding: 0 2px;
 }
 .context-chip__x:hover { color: var(--danger, var(--error)); }
-.att-thumb { position: relative; width: 64px; height: 64px; border-radius: var(--sig-radius-card); border: 1px solid var(--border); background: var(--bg-card); overflow: hidden; }
+.att-thumb { position: relative; width: 64px; height: 64px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); overflow: hidden; }
 .att-thumb-img { width: 100%; height: 100%; object-fit: cover; }
-.att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: 10px; }
+.att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: var(--fs-xs); }
 .att-thumb-name { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: 10px; }
+.att-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: var(--fs-xs); }
 .att-remove:hover { background: var(--error); }
 .attach-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; justify-content: center; }
 .attach-btn:hover { color: var(--primary); }
@@ -1390,15 +1424,15 @@ defineExpose({ insertText, setCommandDraft })
 }
 
 /* 斜杠命令面板 */
-.slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: 1px solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: var(--z-sticky); }
+.slash-menu { position: absolute; bottom: 100%; left: 0; right: 0; margin-bottom: 4px; background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-card); box-shadow: var(--shadow-lg); overflow: hidden; z-index: var(--z-sticky); }
 /* 分组标题：**粘在列表顶部**，滚动时始终看得出"当前在哪一类"
    （比整块滚动遮罩更实用：遮罩只提示"还有内容"，粘性标题直接回答"我在哪"）。 */
 .slash-group {
   position: sticky; top: 0; z-index: var(--z-content);
   padding: 4px 12px;
   background: var(--bg-card);
-  color: var(--text-tertiary); font-size: 11px; font-weight: var(--fw-semibold);
-  border-bottom: 1px solid var(--border);
+  color: var(--text-tertiary); font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+  border-bottom: var(--hairline-width) solid var(--border);
 }
 .slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background var(--dur-fast) ease; }
 .slash-item.active { background: var(--bg-hover); }
@@ -1406,11 +1440,19 @@ defineExpose({ insertText, setCommandDraft })
 .slash-desc { color: var(--text-tertiary); font-size: 12px; }
 
 /* 大文本粘贴折叠预览 */
-.paste-preview { border: 1px solid var(--border); border-radius: var(--sig-radius-card); padding: 8px 12px; background: var(--bg-secondary); margin-bottom: 4px; }
+.paste-preview {
+  /* 同心圆圆角（desktop-agent-ui §6）：内层 = max(0, 外层 − padding)。
+     外层用主题 token，所以内层用 calc 跟随主题，而非写死像素 ——
+     否则换个主题（圆角 0~14px）同心关系就断了。 */
+  --paste-preview-r: var(--sig-radius-card);
+  --paste-preview-pad: 8px;
+  --paste-preview-inner-r: max(0px, calc(var(--paste-preview-r) - var(--paste-preview-pad)));
+  border: var(--hairline-width) solid var(--border); border-radius: var(--paste-preview-r); padding: 8px 12px; background: var(--bg-secondary); margin-bottom: 4px;
+}
 .paste-preview-text { font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-height: 80px; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
-.paste-preview-meta { font-size: 11px; color: var(--text-tertiary); margin: 4px 0; }
+.paste-preview-meta { font-size: var(--fs-xs); color: var(--text-tertiary); margin: 4px 0; }
 .paste-preview-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.paste-btn { padding: 2px 10px; border-radius: var(--sig-radius-button); border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.paste-btn { padding: 2px 10px; border-radius: var(--paste-preview-inner-r, var(--sig-radius-button)); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .paste-btn.accept { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .paste-btn.accept:hover { opacity: 0.9; }
 .paste-btn.discard:hover { color: var(--error); border-color: var(--error); }

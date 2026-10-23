@@ -128,18 +128,18 @@ function decline() {
 <style scoped>
 .ask-card {
   padding: 10px 14px;
-  border: 1px solid var(--border); border-left: 3px solid var(--accent);
+  border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--accent);
   border-radius: 10px;
   background: var(--bg-card);
 }
 .ask-card.expired { opacity: 0.66; }
 .ask-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.ask-tag { font-size: 11px; color: var(--accent); background: var(--accent-bg); padding: 2px 8px; border-radius: 10px; }
-.ask-expired { font-size: 11px; color: var(--text-tertiary); }
+.ask-tag { font-size: var(--fs-xs); color: var(--accent); background: var(--accent-bg); padding: 2px 8px; border-radius: 10px; }
+.ask-expired { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .ask-question { margin: 0 0 10px; font-size: 13px; line-height: 1.6; color: var(--text-primary); }
 .ask-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .ask-option {
-  border: 1px solid var(--border); border-radius: var(--sig-radius-button);
+  border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-button);
   background: var(--bg-surface); color: var(--text-primary);
   font-size: 13px; line-height: 20px; padding: 5px 14px; cursor: pointer;
   transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
@@ -150,7 +150,7 @@ function decline() {
 .ask-free { display: flex; gap: 8px; }
 .ask-input {
   flex: 1; min-width: 0;
-  border: 1px solid var(--border); border-radius: var(--sig-radius-button);
+  border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-button);
   background: var(--bg-input); color: var(--text-primary);
   font-size: 13px; line-height: 20px; padding: 5px 10px;
 }

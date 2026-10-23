@@ -719,7 +719,7 @@ async function testPlugin(p: Plugin) {
 .plugin-card {
   display: flex; flex-direction: column; gap: 10px;
   padding: 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -733,18 +733,18 @@ async function testPlugin(p: Plugin) {
 .plugin-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .plugin-desc { display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.card-command { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-command { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
-.mini-icon { font-size: 10px; }
+.mini-icon { font-size: var(--fs-xs); }
 .action-right { margin-left: auto; display: flex; gap: 2px; }
 .test-result { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--error-bg); color: var(--error); }
 .test-result.ok { background: var(--success-bg); color: var(--success); }
-.plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: 1px solid var(--border-card); padding-top: 10px; }
+.plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: var(--hairline-width) solid var(--border-card); padding-top: 10px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
-.detail-label { font-size: 11px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
+.detail-label { font-size: var(--fs-xs); color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .detail-code { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); word-break: break-all; }
 .detail-code-block { background: var(--bg-secondary); border-radius: 8px; padding: 8px; }
-.detail-line { font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary); word-break: break-all; }
+.detail-line { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); word-break: break-all; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
 .form-row { display: flex; flex-direction: column; gap: 6px; }
 .form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }

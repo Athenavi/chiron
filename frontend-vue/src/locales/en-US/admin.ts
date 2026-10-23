@@ -181,7 +181,7 @@ export default {
   diagnostics: "Diagnostics",
   diagnostics_desc: "Check configuration and dependencies to answer “configured but not taking effect”.",
   diagnostics_empty: "No diagnostics to show.",
-  diag_summary: "Overall: {status} (ok {ok} · warn {warn} · fail {fail} · skipped {skipped})",
+  diag_summary: "Overall: {status} (ok {ok} warn {warn} fail {fail} skipped {skipped})",
   diag_status_ok: "OK",
   diag_status_warn: "Warning",
   diag_status_fail: "Failed",

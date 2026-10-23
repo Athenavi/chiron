@@ -69,6 +69,6 @@ const typography = useTypographyStore()
 <style scoped>
 .display-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; padding: 8px 0; }
 .display-label { font-size: 13px; color: var(--text-secondary); }
-.display-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--border-subtle); }
-.display-hint { font-size: 11px; color: var(--text-tertiary); }
+.display-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 14px; padding-top: 12px; border-top: var(--hairline-width) solid var(--border-subtle); }
+.display-hint { font-size: var(--fs-xs); color: var(--text-tertiary); }
 </style>

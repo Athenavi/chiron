@@ -22,6 +22,25 @@
     --radius-3xl: 20px;
     --radius-full: 9999px;
 
+    /* 精细微边框宽度（desktop-agent-ui 铁律 #5）：线条 / 容器描边 / 卡片边框统一 0.5px，
+       在高分屏下呈半像素 Hairline 质感，替代笨重的 1px。集中成一个 token 是为了
+       万一某类屏幕（低 DPR）把 0.5px 抹成不可见时，只改这一处就能整体回退。
+       注意：--hairline 已被占用为「颜色别名」（= --border-subtle），勿混淆。 */
+    --hairline-width: 0.5px;
+
+    /* 同心圆圆角（desktop-agent-ui §6）：嵌套容器的内层圆角 = max(0, 外层 − padding)。
+       内外同值会因内边距挤压让内层四角变形，所以内层要「缩」掉一个 padding。
+       用法：容器上声明外层半径与 padding，内层元素消费算出来的内层半径——
+           .card {
+               --r-outer: 16px; --r-pad: 12px;
+               --r-inner: max(0px, calc(var(--r-outer) - var(--r-pad)));
+               border-radius: var(--r-outer); padding: var(--r-pad);
+           }
+           .card > * { border-radius: var(--r-inner); }
+       外层用主题 token 时把 var(--r-outer) 换成该 token（如 var(--sig-radius-card)）：
+       同心关系随之一起变化 —— **不要写死像素**，否则换个主题（圆角 0~14px）就断了。
+       已应用：components/chat/ChatInput.vue 的 .input-card、.paste-preview。 */
+
     --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI',
         'PingFang SC', 'Hiragino Sans GB', 'Microsoft YaHei', 'Helvetica Neue', Helvetica, Arial, sans-serif;
     /* 中西文混排：Windows 的 Consolas / JetBrains Mono 等**西文等宽字体不含中文字形**，
@@ -36,7 +55,7 @@
        否则放大字号会把布局撑破（这也是不直接改 html/root font-size 的原因）。
        以下每一档都是「基准 ± 偏移」，默认 14px 下与原先的固定像素值逐一对齐（零视觉变化）。 */
     --ui-font-size: 14px;
-    --fs-xs: calc(var(--ui-font-size) - 3px);   /* 14 → 11px */
+    --fs-xs: calc(var(--ui-font-size) - 2px);   /* 14 → 12px（12px 最小门禁） */
     --fs-sm: calc(var(--ui-font-size) - 2px);   /* 14 → 12px */
     --fs-base: var(--ui-font-size);             /* 14 → 14px */
     --fs-md: calc(var(--ui-font-size) + 1px);   /* 14 → 15px */
@@ -200,7 +219,7 @@ html.dark {
 
     /* 14 → 13。小字号档同时收窄偏移，避免 11px 掉到 10px（暗色下几乎不可读） */
     --ui-font-size: 13px;
-    --fs-xs: calc(var(--ui-font-size) - 2px);   /* 13 → 11px */
+    --fs-xs: calc(var(--ui-font-size) - 1px);   /* 13 → 12px（暗色同守 12px 门禁） */
     --fs-sm: calc(var(--ui-font-size) - 1px);   /* 13 → 12px */
 }
 
@@ -1186,9 +1205,9 @@ body {
 .u-rounded { border-radius: var(--radius-lg) !important; }
 .u-rounded-lg { border-radius: var(--radius-xl) !important; }
 .u-shadow { box-shadow: var(--shadow-md) !important; }
-.u-border { border: 1px solid var(--border-default) !important; }
-.u-border-b { border-bottom: 1px solid var(--border-default) !important; }
-.u-border-t { border-top: 1px solid var(--border-default) !important; }
+.u-border { border: var(--hairline-width) solid var(--border-default) !important; }
+.u-border-b { border-bottom: var(--hairline-width) solid var(--border-default) !important; }
+.u-border-t { border-top: var(--hairline-width) solid var(--border-default) !important; }
 
 @media (max-width: 576px) {
     .u-hide-sm { display: none !important; }
@@ -1385,7 +1404,7 @@ html[data-theme="notion-dark"] .suggestion-card {
 
 /* 极简功能：用户气泡 1px 实线描边（无阴影的替代表达） */
 html[data-theme="notion-light"] .msg-row.user .msg-text {
-    border: 1px solid var(--border-default) !important;
+    border: var(--hairline-width) solid var(--border-default) !important;
 }
 
 /* 玻璃柔光：柔光底 + 顶栏毛玻璃（渐变用 color-mix 引用 token，避免硬编码色值） */
@@ -1537,7 +1556,7 @@ body {
 
 .chat-chevron {
   flex: none;
-  font-size: 10px;
+  font-size: var(--fs-xs);
   color: var(--text-muted);
   transition: transform var(--dur-normal) var(--ease-out);
 }

@@ -116,7 +116,7 @@ function startSso(p: SsoPublicProvider) {
   justify-content: center;
   gap: 8px;
   padding: 9px 12px;
-  border: 1px solid var(--border-card, #d9d9d9);
+  border: var(--hairline-width) solid var(--border-card, #d9d9d9);
   border-radius: 8px;
   background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));
@@ -145,7 +145,7 @@ function startSso(p: SsoPublicProvider) {
   height: 20px;
   border-radius: 5px;
   color: var(--on-solid);
-  font-size: 11px;
+  font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   display: inline-flex;
   align-items: center;

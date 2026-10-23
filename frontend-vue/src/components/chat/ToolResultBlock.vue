@@ -385,11 +385,11 @@ function todoStatusLabel(status?: string): string {
 .result-error-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 5px 10px; border-radius: var(--sig-radius-button); background: var(--error-bg); color: var(--error); font-size: 12px; }
 .result-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 0; border: none; background: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; }
 .result-head:hover { color: var(--primary); }
-.result-lines { flex: none; font-size: 11px; color: var(--text-tertiary); }
+.result-lines { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
 .tool-result.error .result-label { color: var(--error); }
 .result-code { margin: 0; padding: 12px; background: var(--bg-code); border-radius: var(--sig-radius-code); font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-code); white-space: pre-wrap; word-break: break-all; }
 .result-text { padding: 10px 12px; background: var(--bg-secondary); border-radius: var(--sig-radius-button); font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
-.result-image { max-width: min(320px, 80vw); max-height: 240px; border-radius: var(--sig-radius-card); border: 1px solid var(--border-card); display: block; margin-top: 4px; }
+.result-image { max-width: min(320px, 80vw); max-height: 240px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); display: block; margin-top: 4px; }
 
 /* 失败结果：卡片 banner 统一转错误色，扫一眼就能定位是哪一步断了 */
 .tool-result.error .read-banner,
@@ -411,7 +411,7 @@ function todoStatusLabel(status?: string): string {
 .diff-line.hunk { color: var(--accent); background: var(--bg-secondary); }
 .diff-line.file { color: var(--text-tertiary); background: var(--bg-secondary); }
 .diff-line.context { color: var(--text-secondary); }
-.diff-more { width: 100%; padding: 6px; border: none; border-top: 1px solid var(--border-card); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.diff-more { width: 100%; padding: 6px; border: none; border-top: var(--hairline-width) solid var(--border-card); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
 .diff-more:hover { color: var(--primary); }
 .diff-more:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
@@ -429,7 +429,7 @@ function todoStatusLabel(status?: string): string {
 .terminal-block { margin: 8px 0; background: var(--terminal-bg); border-radius: var(--sig-radius-code); overflow: hidden; }
 .terminal-banner { display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--terminal-header-bg); }
 .terminal-label { font-family: var(--font-mono); font-size: 12px; color: var(--terminal-text); }
-.terminal-lines { flex: 1; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.terminal-lines { flex: 1; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .terminal-exit { font-family: var(--font-mono); font-size: 12px; color: var(--success); }
 .terminal-exit.nonzero { color: var(--error); }
 .terminal-body { margin: 0; padding: 14px; font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--terminal-text); white-space: pre-wrap; word-break: break-all; max-height: 360px; overflow-y: auto; }
@@ -438,7 +438,7 @@ function todoStatusLabel(status?: string): string {
 .todos-block { margin: 8px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
 .todos-banner { display: flex; align-items: center; gap: 12px; padding: 9px 14px; background: var(--terminal-header-bg); }
 .todos-label { font-size: 12px; color: var(--text-tertiary); }
-.todos-count { flex: 1; font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.todos-count { flex: 1; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
 .todos-list { list-style: none; margin: 0; padding: 10px 14px; }
 .todo-item { display: flex; align-items: baseline; gap: 8px; padding: 3px 0; font-size: 12px; line-height: 1.6; }
 .todo-mark { font-family: var(--font-mono); color: var(--text-tertiary); }
@@ -446,7 +446,7 @@ function todoStatusLabel(status?: string): string {
 .todo-item[data-status='completed'] .todo-mark { color: var(--success); }
 .todo-item[data-status='completed'] .todo-content { color: var(--text-tertiary); text-decoration: line-through; }
 .todo-content { flex: 1; white-space: pre-wrap; word-break: break-word; }
-.todo-files { font-size: 11px; color: var(--text-tertiary); white-space: nowrap; }
+.todo-files { font-size: var(--fs-xs); color: var(--text-tertiary); white-space: nowrap; }
 
 /* 搜索卡片（deepseek SearchBlock：12px 圆角 + banner + 22px 行 + pre 不折行） */
 .search-block { margin: 8px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
@@ -459,12 +459,12 @@ function todoStatusLabel(status?: string): string {
 .search-line-text { color: var(--text-primary); }
 /* ── 移动端：结果卡片内边距/字号压缩 ── */
 @media (max-width: 768px) {
-  .result-code { padding: 10px; font-size: 11px; }
+  .result-code { padding: 10px; font-size: var(--fs-xs); }
   .result-text { padding: 8px 10px; }
   .read-banner, .terminal-banner { padding: 8px 10px; }
-  .read-line { line-height: 20px; font-size: 11px; }
-  .diff-body { font-size: 11px; line-height: 18px; }
+  .read-line { line-height: 20px; font-size: var(--fs-xs); }
+  .diff-body { font-size: var(--fs-xs); line-height: 18px; }
   .diff-line { padding: 0 10px; }
-  .search-body { font-size: 11px; }
+  .search-body { font-size: var(--fs-xs); }
 }
 </style>

@@ -229,7 +229,7 @@ const filteredItems = computed(() => {
 .market-card {
   display: flex; flex-direction: column; gap: 10px;
   padding: 16px;
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: var(--radius-lg);
   background: var(--bg-card);
   box-shadow: var(--shadow-md);
@@ -255,12 +255,12 @@ const filteredItems = computed(() => {
 
 /* Agent：系统提示词摘要 */
 .prompt-preview {
-  border: 1px solid var(--border-card);
+  border: var(--hairline-width) solid var(--border-card);
   border-radius: 8px;
   background: var(--bg-secondary);
   padding: 8px 10px;
 }
-.prompt-label { font-size: 10px; color: var(--text-tertiary); font-weight: var(--fw-medium); margin-bottom: 4px; }
+.prompt-label { font-size: var(--fs-xs); color: var(--text-tertiary); font-weight: var(--fw-medium); margin-bottom: 4px; }
 .prompt-text {
   font-size: 12px; color: var(--text-secondary); line-height: 1.5;
   overflow: hidden; text-overflow: ellipsis; display: -webkit-box;
@@ -275,9 +275,9 @@ const filteredItems = computed(() => {
   padding: 8px 10px;
 }
 .mcp-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
-.mcp-label { flex: none; font-size: 10px; color: var(--text-tertiary); font-weight: var(--fw-medium); }
+.mcp-label { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .mcp-code {
-  font-family: var(--font-mono); font-size: 11px; color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary);
   white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
 }
 

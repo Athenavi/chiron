@@ -721,9 +721,9 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .loading-indicator { display: flex; justify-content: center; gap: 6px; padding: 14px 0; }
 /* 尺寸/底色保留，脉冲与错峰延迟由全局 .chat-pulse 提供（src/style.css） */
 .loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
-.back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: 1px solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
+.back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
 .back-to-bottom:hover { color: var(--primary); border-color: var(--primary); }
-.back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: var(--on-solid); font-size: 11px; line-height: 18px; text-align: center; }
+.back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: var(--on-solid); font-size: var(--fs-xs); line-height: 18px; text-align: center; }
 .back-fade-enter-active, .back-fade-leave-active { transition: opacity var(--dur-normal), transform var(--dur-normal); }
 .back-fade-enter-from, .back-fade-leave-to { opacity: 0; transform: translateY(8px); }
 
@@ -734,7 +734,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
   display: flex; flex-direction: column; align-items: center; gap: 7px;
   max-height: 46vh; overflow-y: auto;
   margin-right: 8px; padding: 8px 7px;
-  border: 1px solid var(--border-card); border-radius: var(--radius-full);
+  border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-card) 88%, transparent);
   box-shadow: var(--sig-shadow-card);
   scrollbar-width: none;
@@ -756,7 +756,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .selection-menu {
   position: absolute; z-index: var(--z-dropdown);
   display: flex; gap: 2px; padding: 3px;
-  border: 1px solid var(--border-card); border-radius: var(--sig-radius-button);
+  border: var(--hairline-width) solid var(--border-card); border-radius: var(--sig-radius-button);
   background: var(--bg-card); box-shadow: var(--sig-shadow-hover);
   transform: translate(-50%, -100%);
 }

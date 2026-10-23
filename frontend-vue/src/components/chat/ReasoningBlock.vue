@@ -173,9 +173,9 @@ async function stickToBottom() {
 .think-bottom {
   position: absolute; right: 10px; bottom: 10px;
   padding: 3px 8px;
-  border: 1px solid var(--border-card); border-radius: var(--radius-full);
+  border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-full);
   background: var(--bg-page); color: var(--text-secondary);
-  font-size: 11px; cursor: pointer;
+  font-size: var(--fs-xs); cursor: pointer;
 }
 .think-bottom:hover { color: var(--text-primary); }
 </style>

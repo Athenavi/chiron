@@ -21,7 +21,7 @@
  *
  * 传入 `sessions` 后，头部会出现下拉，可以直接换分屏显示哪个会话（无需先收起再开）。
  */
-import { computed, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, watch } from 'vue'
 import { api } from '../../api'
 import MessageList from './MessageList.vue'
 import { mergeHistory } from './chat-history'
@@ -132,6 +132,8 @@ function persistWidth() {
 
 let startX = 0
 let startWidth = 0
+/** 拖拽开始前的宽度基准：`null` 表示当时的「内容决定宽度」，撤销时要原样还回 */
+let widthBeforeDrag: number | null = null
 
 function onResizeStart(e: PointerEvent) {
   const el = paneRef.value
@@ -140,9 +142,32 @@ function onResizeStart(e: PointerEvent) {
   startX = e.clientX
   // 以**当前实际宽度**为起点：否则第一次拖动会突然跳到某个默认值
   startWidth = el.getBoundingClientRect().width
+  widthBeforeDrag = paneWidth.value
   // 指针捕获：拖出窗口也不丢事件，且不必往 document 上挂/摘监听
   ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
+  // 拖拽期间才挂全局 Escape（捕获阶段）：成对摘除见 onResizeEnd / cancelResize / onUnmounted
+  window.addEventListener('keydown', onResizeEscape, true)
   e.preventDefault()
+}
+
+/**
+ * 拖拽中途按 Escape：三步复位（对齐 desktop-agent-ui 的分栏取消闭环）
+ *   1. 摘掉全局监听、清 `resizing` 标记；
+ *   2. 手柄保持挂载 —— 本组件的手柄始终在 `<aside>` 内、不随宽度卸载，天然满足；
+ *   3. 宽度还回拖拽前的基准，`null` 也照还（即恢复「内容决定宽度」）。
+ * 刻意**不** `persistWidth()`：用户撤销了这次拖拽，不该写进本地记忆。
+ */
+function onResizeEscape(e: KeyboardEvent) {
+  if (e.key !== 'Escape') return
+  e.preventDefault()
+  e.stopPropagation()
+  cancelResize()
+}
+
+function cancelResize() {
+  resizing.value = false
+  window.removeEventListener('keydown', onResizeEscape, true)
+  paneWidth.value = widthBeforeDrag
 }
 
 function onResizeMove(e: PointerEvent) {
@@ -155,6 +180,7 @@ function onResizeMove(e: PointerEvent) {
 function onResizeEnd(e: PointerEvent) {
   if (!resizing.value) return
   resizing.value = false
+  window.removeEventListener('keydown', onResizeEscape, true)
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
   persistWidth()
 }
@@ -174,6 +200,7 @@ function onResizeKey(e: KeyboardEvent) {
 function resetWidth() {
   paneWidth.value = null
   resizing.value = false
+  window.removeEventListener('keydown', onResizeEscape, true)
   try {
     localStorage.removeItem(WIDTH_KEY)
   } catch {
@@ -184,6 +211,9 @@ function resetWidth() {
 const paneStyle = computed(() =>
   paneWidth.value ? { width: `${paneWidth.value}px`, flex: '0 0 auto' } : {},
 )
+
+// 兜底：组件卸载时摘掉可能还挂着的拖拽 Escape（正常路径已在 end/cancel 里摘过）
+onUnmounted(() => window.removeEventListener('keydown', onResizeEscape, true))
 
 defineExpose({ refresh })
 </script>
@@ -277,13 +307,13 @@ defineExpose({ refresh })
 .preview-pane {
   position: relative; /* 分栏手柄的定位锚点 */
   display: flex; flex-direction: column; min-width: 0; height: 100%;
-  border-left: 1px solid var(--border-subtle);
+  border-left: var(--hairline-width) solid var(--border-subtle);
   /* 参考栏自己滚动，避免把主会话的滚动位置带跑 */
   overflow: hidden;
 }
 .pp-head {
   flex: none; display: flex; align-items: center; justify-content: space-between; gap: 8px;
-  padding: 6px 12px; border-bottom: 1px solid var(--border-subtle);
+  padding: 6px 12px; border-bottom: var(--hairline-width) solid var(--border-subtle);
 }
 .pp-title {
   font-size: var(--fs-sm); font-weight: var(--fw-semibold);
