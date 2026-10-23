@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick, h } from 'vue'
-import { Input, Button, Select, Tooltip, Popover, message } from 'ant-design-vue'
+import { Input, Button, Select, Tooltip, Popover } from 'ant-design-vue'
 import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
 import api, { uploadFile, listModels } from '../../api'
 import type { LlmModel } from '../../api'
@@ -9,6 +9,7 @@ import type { ContextChip } from './contextChips'
 import MediaPickerDialog from './MediaPickerDialog.vue'
 import { useAuthStore } from '../../stores/auth'
 import { privateKey } from '../../utils/privateStorage'
+import { notify } from '../../utils/notify'
 import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
 
 import { useI18n } from 'vue-i18n'
@@ -169,12 +170,12 @@ async function refineInput() {
     const data = res.data as { ok?: boolean; refined?: string; error?: string }
     if (data?.ok && data.refined) {
       input.value = data.refined
-      message.success(tr('chat.refined'))
+      notify.success(tr('chat.refined'))
     } else {
-      message.warning(data?.error || tr('chat.refine_failed'))
+      notify.warning(data?.error || tr('chat.refine_failed'))
     }
   } catch {
-    message.warning(tr('chat.refine_failed'))
+    notify.warning(tr('chat.refine_failed'))
   } finally {
     refining.value = false
   }
@@ -585,7 +586,7 @@ async function handleFiles(files: FileList | File[]) {
   try {
     for (const file of arr) {
       if (file.size > MAX_FILE_SIZE) {
-        message.error(tr('errors.name_exceeds_the_50mb_limit', { name: file.name }))
+        notify.error(tr('errors.name_exceeds_the_50mb_limit', { name: file.name }))
         continue
       }
       const result = await uploadFile(file)
@@ -601,7 +602,7 @@ async function handleFiles(files: FileList | File[]) {
     }
   } catch (e) {
     const detail = e instanceof Error ? e.message : ''
-    message.error(tr('errors.file_upload_failed_error', { error: detail || tr('errors.network_error_2') }))
+    notify.error(tr('errors.file_upload_failed_error', { error: detail || tr('errors.network_error_2') }))
   } finally {
     uploading.value = false
     if (fileInputRef.value) fileInputRef.value.value = ''
@@ -729,7 +730,7 @@ let speechPrefix = ''
 
 function startRecording() {
   if (!speechSupported) {
-    message.warning(tr('chat.current_browser_does_not_support_speech_to_text_please_use_chrome_edge_safari'))
+    notify.warning(tr('chat.current_browser_does_not_support_speech_to_text_please_use_chrome_edge_safari'))
     return
   }
   try {
@@ -754,7 +755,7 @@ function startRecording() {
     recognizer.onerror = (e: SpeechErrorEvent) => {
       // no-speech / aborted 属正常收尾（静音超时、用户停止），不当错误
       if (e?.error === 'no-speech' || e?.error === 'aborted') return
-      message.error(
+      notify.error(
         e?.error === 'not-allowed'
           ? tr('errors.microphone_permission_denied_please_allow_it_in_your_browser_settings_and_retry')
           : `${tr('errors.speech_transcription_failed')}: ${e?.error || ''}`,
@@ -769,7 +770,7 @@ function startRecording() {
     recordingTimer.value = 0
     recordingInterval = setInterval(() => { recordingTimer.value++ }, 1000)
   } catch {
-    message.error(tr('errors.unable_to_start_speech_transcription_please_check_microphone_permission'))
+    notify.error(tr('errors.unable_to_start_speech_transcription_please_check_microphone_permission'))
   }
 }
 

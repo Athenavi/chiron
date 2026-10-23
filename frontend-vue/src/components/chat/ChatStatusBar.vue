@@ -99,7 +99,7 @@ const cacheWarnText = computed(() => {
     >{{ budgetText }}</span>
     <span
       v-if="costText"
-      class="cs-item cs-cost"
+      class="cs-item cs-cost tnum"
     >{{ costText }}</span>
     <!-- 前缀缓存被打断：只在真的变了时出现 —— 回答"命中率为什么会掉" -->
     <span

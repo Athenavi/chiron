@@ -7,9 +7,11 @@ import 'highlight.js/styles/github.css'
 import texmath from 'markdown-it-texmath'
 import katex from 'katex'
 import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue'
-import { message, Input } from 'ant-design-vue'
+import { Input } from 'ant-design-vue'
+import { notify } from '../../utils/notify'
 import { CopyOutlined, EditOutlined, ReloadOutlined, FileOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
 import ReasoningBlock from './ReasoningBlock.vue'
+import { inkCharsFor, inkIndexFor } from './ink'
 import ToolCallCard from './ToolCallCard.vue'
 import ToolResultBlock from './ToolResultBlock.vue'
 import { renderMermaidBlocks } from './mermaidRenderer'
@@ -40,12 +42,9 @@ const msgTextRef = ref<HTMLElement | null>(null)
  *  2. **只为本批新增字符计时** —— `--i = min(i - batchStart, 12)`：
  *     否则第 500 个字要等 14 秒才出现；上限 12 档让"一次返回一大段"也在 ~340ms 内铺开。
  */
-const INK_MAX_CHARS = 2000
-const INK_MAX_STAGGER = 12
 const inkChars = computed(() => {
   if (!('streaming' in props.item) || !props.item.streaming) return null
-  const text = ('content' in props.item ? props.item.content : '') || ''
-  return text && text.length <= INK_MAX_CHARS ? Array.from(text) : null
+  return inkCharsFor(('content' in props.item ? props.item.content : '') || '')
 })
 const inkBatchStart = ref(0)
 watch(
@@ -56,7 +55,7 @@ watch(
   },
 )
 function inkIndex(i: number): number {
-  return Math.min(Math.max(i - inkBatchStart.value, 0), INK_MAX_STAGGER)
+  return inkIndexFor(i, inkBatchStart.value)
 }
 
 /**
@@ -137,8 +136,8 @@ const sourceChips = computed<SourceChip[]>(() => {
       title: t('common.trace_id_click_to_copy', { id: traceId }),
       go: () => {
         navigator.clipboard.writeText(traceId)
-          .then(() => message.success(t('common.trace_id_copied')))
-          .catch(() => message.error(t('errors.copy_failed')))
+          .then(() => notify.success(t('common.trace_id_copied')))
+          .catch(() => notify.error(t('errors.copy_failed')))
       },
     })
   }
@@ -193,9 +192,9 @@ async function copyMessage() {
   if (props.item.kind !== 'text') return
   try {
     await navigator.clipboard.writeText(props.item.content)
-    message.success(t('common.copied_2'))
+    notify.success(t('common.copied_2'))
   } catch {
-    message.error(t('errors.copy_failed'))
+    notify.error(t('errors.copy_failed'))
   }
 }
 
@@ -261,7 +260,7 @@ const feedback = ref<'up' | 'down' | null>(null)
 function setFeedback(dir: 'up' | 'down') {
   feedback.value = feedback.value === dir ? null : dir
   // 设计说明：反馈上报留待模型评估链路接入后端 API
-  if (feedback.value) message.success(feedback.value === 'up' ? t('common.thanks_for_the_upvote') : t('common.your_feedback_has_been_recorded'))
+  if (feedback.value) notify.success(feedback.value === 'up' ? t('common.thanks_for_the_upvote') : t('common.your_feedback_has_been_recorded'))
 }
 
 // ── Markdown 引擎（迁移自原 ChatView） ──
@@ -635,7 +634,7 @@ onUpdated(enhanceContent)
           class="msg-actions"
           :class="item.role"
         >
-          <span class="msg-time">{{ timeLabel }}</span>
+          <span class="msg-time tnum">{{ timeLabel }}</span>
           <button
             class="msg-action"
             type="button"
@@ -693,7 +692,10 @@ onUpdated(enhanceContent)
               :title="feedback === 'up' ? $t('common.cancel_upvote') : $t('common.upvote')"
               @click.stop="setFeedback('up')"
             >
-              <LikeFilled v-if="feedback === 'up'" />
+              <LikeFilled
+                v-if="feedback === 'up'"
+                class="action-pop"
+              />
               <LikeOutlined v-else />
             </button>
             <button
@@ -703,7 +705,10 @@ onUpdated(enhanceContent)
               :title="feedback === 'down' ? $t('common.cancel_downvote') : $t('common.downvote')"
               @click.stop="setFeedback('down')"
             >
-              <DislikeFilled v-if="feedback === 'down'" />
+              <DislikeFilled
+                v-if="feedback === 'down'"
+                class="action-pop action-pop-down"
+              />
               <DislikeOutlined v-else />
             </button>
           </template>
@@ -806,6 +811,7 @@ onUpdated(enhanceContent)
 .msg-text :is(svg, img) { vertical-align: -0.125em; }
 @media (prefers-reduced-motion: reduce) {
   .ink { animation: none; }
+  .action-pop { animation: none; }
 }
 /* 会话修复提示：显示自动恢复的最坏等待（后端算的 stale 阈值 + 一次巡检间隔） */
 .repair-hint { font-size: 11px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
@@ -938,6 +944,20 @@ onUpdated(enhanceContent)
   transition-duration: var(--dur-instant);
   transition-timing-function: var(--ease-snap);
 }
+/* 选中瞬间图标弹一下：1 → 1.18 → 1；点踩幅度减半（1.09）——
+   避免"负面操作也很欢快"的语义错位。v-if 挂载即播，不需要额外 JS。 */
+@keyframes action-pop {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.18); }
+  100% { transform: scale(1); }
+}
+@keyframes action-pop-down {
+  0% { transform: scale(1); }
+  45% { transform: scale(1.09); }
+  100% { transform: scale(1); }
+}
+.action-pop { animation: action-pop var(--dur-spring) var(--ease-spring); }
+.action-pop-down { animation-name: action-pop-down; }
 .retry-btn:active { transform: scale(0.96); }
 .edit-btn:active { transform: scale(0.97); }
 [data-time-hover-root]:hover .msg-action, [data-time-hover-root]:focus-within .msg-action { opacity: 1; }

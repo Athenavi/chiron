@@ -518,7 +518,10 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
 
       // 断言"所有调用里出现过"而不是"最后一次"：`feed` 会把帧喂给**每一个**已建立的流
       // （提交流 / 会话映射流 / 子 Agent 流），最后一次调用未必来自这条错误分支。
-      const shown = errSpy.mock.calls.map(c => String(c[0])).join(' | ')
+      // notify.error 传的是 `{ content, duration }`，故先从参数里取出正文再拼接。
+      const shown = errSpy.mock.calls
+        .map(c => (typeof c[0] === 'string' ? c[0] : (c[0] as { content?: string })?.content ?? ''))
+        .join(' | ')
       expect(shown).toContain('API Key')          // 可行动的那句
       expect(shown).toContain('Invalid API key')  // 原文仍在
       void wrapper

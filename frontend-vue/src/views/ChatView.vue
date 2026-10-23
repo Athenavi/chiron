@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
 import { FOLLOWUP_TEMPLATE, handleMapRpc, type MapRpcHost } from '../components/chat/sessionmapBridge'
-import { Button, Input, Modal, Checkbox, Alert, message, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
+import { Button, Input, Modal, Checkbox, Alert, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
   api, createSSEConnection, submitApproval, submitAnswer,
@@ -18,6 +18,7 @@ import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
 import { useAuthStore } from '../stores/auth'
 import { privateKey } from '../utils/privateStorage'
+import { notify } from '../utils/notify'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
 import type { LocationQuery } from 'vue-router'
@@ -112,15 +113,15 @@ async function saveAsWorkflow() {
     kbId: agentBindingsFromContext(buildContext()).kb_id,
   })
   if (!graph) {
-    message.warning(t('chat.this_session_has_no_text_worth_saving'))
+    notify.warning(t('chat.this_session_has_no_text_worth_saving'))
     return
   }
   savingWorkflow.value = true
   try {
     const saved = await createGraph({ name: graph.name, graph_json: graph.graph_json })
-    message.success(t('workflow.saved_as_workflow_name_open_it_on_the_workflows_page_to_adjust', { name: saved?.name || graph.name }))
+    notify.success(t('workflow.saved_as_workflow_name_open_it_on_the_workflows_page_to_adjust', { name: saved?.name || graph.name }))
   } catch (e) {
-    message.error(t('errors.failed_to_save_workflow_error', { error: describeApiError(e) }))
+    notify.error(t('errors.failed_to_save_workflow_error', { error: describeApiError(e) }))
   } finally {
     savingWorkflow.value = false
   }
@@ -139,7 +140,7 @@ const agentDraft = ref({ name: '', description: '', system_prompt: '' })
 function openSaveAsAgent() {
   const draft = sessionToAgent(items.value, activeSession.value?.title || '')
   if (!draft) {
-    message.warning(t('chat.this_session_has_no_text_worth_saving'))
+    notify.warning(t('chat.this_session_has_no_text_worth_saving'))
     return
   }
   agentDraft.value = draft
@@ -150,7 +151,7 @@ async function saveAsAgent() {
   const draft = agentDraft.value
   const name = draft.name.trim()
   if (!name) {
-    message.warning(t('agent.please_enter_agent_name'))
+    notify.warning(t('agent.please_enter_agent_name'))
     return
   }
   savingAgent.value = true
@@ -171,7 +172,7 @@ async function saveAsAgent() {
       bindings.skills?.length ? t('agent.n_skills', { n: bindings.skills.length }) : '',
       bindings.plugins?.length ? t('common.n_plugins', { n: bindings.plugins.length }) : '',
     ].filter(Boolean)
-    message.success(
+    notify.success(
       inherited.length
         ? t('agent.created_agent_name_inheriting_this_conversation_s_list_adjust_on_the_agents_page', {
             name,
@@ -181,7 +182,7 @@ async function saveAsAgent() {
     )
     saveAgentOpen.value = false
   } catch (e) {
-    message.error(t('errors.failed_to_create_agent_error', { error: describeApiError(e) }))
+    notify.error(t('errors.failed_to_create_agent_error', { error: describeApiError(e) }))
   } finally {
     savingAgent.value = false
   }
@@ -301,7 +302,7 @@ function toggleSplit() {
   // 于是既能拿到最新值，又不会触发 TDZ（"used before its declaration"）。
   const prev = sessions.value.find(s => s.id !== activeSessionId.value)
   if (!prev) {
-    message.info(t('chat.no_other_session_available_as_reference'))
+    notify.info(t('chat.no_other_session_available_as_reference'))
     return
   }
   splitSessionId.value = prev.id
@@ -685,7 +686,7 @@ async function answerQuestion(question: PendingQuestion, answer: string) {
       answer,
     })
   } catch {
-    message.error(t('errors.answer_submission_failed_please_retry'))
+    notify.error(t('errors.answer_submission_failed_please_retry'))
   }
 }
 
@@ -717,7 +718,7 @@ async function declineQuestion(question: PendingQuestion) {
       declined: true,
     })
   } catch {
-    message.error(t('errors.answer_submission_failed_please_retry'))
+    notify.error(t('errors.answer_submission_failed_please_retry'))
   }
 }
 
@@ -764,7 +765,7 @@ function onToolsModeChange(v: unknown) {
   const m = String(v) as 'ask' | 'auto' | 'yolo'
   if (m === toolsMode.value) return
   toolsMode.value = m
-  message.success(
+  notify.success(
     m === 'yolo'
       ? t('agent.switched_to_fully_automatic_tool_confirmation_skipped_this_leaves_an_audit_trail')
       : t('agent.tool_auth_mode_set_to_mode', { mode: toolsModeOptions.find(o => o.value === m)?.label || m }),
@@ -834,7 +835,7 @@ const effortLabel = computed(() => EFFORT_LABEL.value[effort.value] || t('common
 function onEffortChange(v: string) {
   effort.value = (EFFORT_ORDER as readonly string[]).includes(v) ? v : ''
   persistRuntime({})
-  message.info(
+  notify.info(
     effort.value ? t('chat.reasoning_level_level', { level: EFFORT_LABEL.value[effort.value] }) : t('auth.reasoning_level_reset_to_default'),
   )
 }
@@ -930,8 +931,8 @@ function offerSetupTour(reason: TourReason, fallback: string, tone: 'warning' | 
   // ⇒ 这里对"没有 offer 的替身"保持安全，落回 toast（那正是兜底要覆盖的情形）。
   const shown = tourRef.value?.offer?.(reason, false)
   if (shown) return
-  if (tone === 'error') message.error(fallback)
-  else message.warning(fallback)
+  if (tone === 'error') notify.error(fallback)
+  else notify.warning(fallback)
 }
 
 /** 引导最后一步的"去配置"：只有管理员会收到（`/models` 是 `requiresAdmin`，见 router/index.ts:46） */
@@ -1001,7 +1002,7 @@ function onMentionAdd(p: { type: string; id: string; name: string }) {
 function onModelChange(m: string) {
   if (m === llmModel.value) return
   llmModel.value = m
-  message.info(m ? t('agent.model_switched_model_affects_subsequent_messages_only', { model: m }) : t('auth.model_reset_to_default_backend_routing'))
+  notify.info(m ? t('agent.model_switched_model_affects_subsequent_messages_only', { model: m }) : t('auth.model_reset_to_default_backend_routing'))
   persistRuntime({ model: m || null })
 }
 
@@ -1016,7 +1017,7 @@ function onModeChange(m: string) {
   mode.value = m
   const opt = modeOptions.find(o => o.value === m)
   const preset = MODE_PRESETS.value[m]
-  message.info(
+  notify.info(
     preset?.desc
       ? t('chat.switched_to_mode_mode_desc_affects_subsequent_messages_only', { mode: opt?.label || m, desc: preset.desc })
       : t('chat.switched_to_mode_mode_affects_subsequent_messages_only', { mode: opt?.label || m }),
@@ -1178,7 +1179,7 @@ function clearContext() {
 function clearUnifiedMessages() {
   items.value = []
   currentTraceId.value = ''
-  message.info(t('workflow.unified_task_messages_cleared'))
+  notify.info(t('workflow.unified_task_messages_cleared'))
 }
 
 /** 统一任务模式：退出（移除 task/error query；路由 watcher 触发 applyRouteQuery 重置消息区） */
@@ -1328,7 +1329,7 @@ async function sendUnified(text: string, attachments?: ChatAttachment[]) {
   } catch (e) {
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason, describeFailureMeta(e))
-    message.error(t('errors.send_failed') + reason)
+    notify.error(t('errors.send_failed') + reason)
   } finally {
     loading.value = false
     stopTurnTimer()
@@ -1819,7 +1820,7 @@ async function attemptReconnect() {
 // 导出当前会话为 Markdown 文件
 function exportMarkdown() {
   if (!items.value.length) {
-    message.warning(t('chat.no_messages_available_to_export'))
+    notify.warning(t('chat.no_messages_available_to_export'))
     return
   }
   const session = sessions.value.find(s => s.id === activeSessionId.value)
@@ -1857,7 +1858,7 @@ function exportMarkdown() {
   a.click()
   document.body.removeChild(a)
   URL.revokeObjectURL(url)
-  message.success(t('common.markdown_exported'))
+  notify.success(t('common.markdown_exported'))
 }
 
 // 斜杠命令处理
@@ -1866,7 +1867,7 @@ function onSlashCommand(cmd: string) {
     case '/clear':
       items.value = []
       activeSessionId.value = ''
-      message.info(t('chat.current_conversation_cleared'))
+      notify.info(t('chat.current_conversation_cleared'))
       break
     case '/export':
       exportMarkdown()
@@ -1875,11 +1876,11 @@ function onSlashCommand(cmd: string) {
       items.value = []
       activeSessionId.value = ''
       panelOpen.value = false
-      message.info(t('chat.session_created'))
+      notify.info(t('chat.session_created'))
       break
     case '/theme':
       themeStore.toggleTheme()
-      message.success(themeStore.isDark ? t('common.switched_to_dark_mode') : t('common.switched_to_light_mode'))
+      notify.success(themeStore.isDark ? t('common.switched_to_dark_mode') : t('common.switched_to_light_mode'))
       break
     case '/stop':
       stopGeneration()
@@ -1904,7 +1905,7 @@ function onSlashCommand(cmd: string) {
       chatInputRef.value?.setCommandDraft(cmd)
       break
     default:
-      message.warning(t('common.unknown_command_cmd', { cmd }))
+      notify.warning(t('common.unknown_command_cmd', { cmd }))
   }
 }
 
@@ -2159,10 +2160,10 @@ async function confirmRename() {
     const s = sessions.value.find(x => x.id === target.id)
     if (s) s.title = title
     persistSessions()
-    message.success(t('common.renamed'))
+    notify.success(t('common.renamed'))
     renameTarget.value = null
   } catch (e) {
-    message.error(t('errors.rename_failed') + errorDetail(e, t('errors.network_error_2')))
+    notify.error(t('errors.rename_failed') + errorDetail(e, t('errors.network_error_2')))
   } finally {
     renaming.value = false
   }
@@ -2187,7 +2188,7 @@ async function togglePin(id: string, pinned: boolean) {
   } catch {
     s.pinned = prev
     sortSessions(); persistSessions()
-    message.error(t('errors.pin_failed'))
+    notify.error(t('errors.pin_failed'))
   }
 }
 
@@ -2203,11 +2204,11 @@ async function setSessionTag(id: string, tag: string) {
   try {
     // 空串表示清除标签（后端 NULLIF 写 NULL）
     await updateConversation(id, { tag: tag || '' })
-    message.success(tag ? t('settings.tag_set_tag', { tag }) : t('common.tags_cleared'))
+    notify.success(tag ? t('settings.tag_set_tag', { tag }) : t('common.tags_cleared'))
   } catch {
     s.tag = prev
     sortSessions(); persistSessions()
-    message.error(t('errors.failed_to_save_tag'))
+    notify.error(t('errors.failed_to_save_tag'))
   }
 }
 
@@ -2480,7 +2481,7 @@ function onSSEMessage(raw: unknown) {
       content: reason,
       id: `guard-${String(d.id ?? Date.now())}`,
     })
-    message.warning(reason)
+    notify.warning(reason)
   } else if (type === 'error') {
     flushStreamingFlags()
     loading.value = false
@@ -2495,7 +2496,7 @@ function onSSEMessage(raw: unknown) {
     if (raw && isProviderAuthError(raw)) {
       offerSetupTour('provider-auth', actionableStreamError(raw), 'error')
     } else {
-      message.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
+      notify.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
     }
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
@@ -2518,7 +2519,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     if (!ensureModel()) return
     await createSession()
     if (!activeSessionId.value) {
-      message.error(t('chat.failed_to_create_the_conversation_please_retry'))
+      notify.error(t('chat.failed_to_create_the_conversation_please_retry'))
       return
     }
   } else if (!ensureModel()) {
@@ -2576,7 +2577,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     flushStreamingFlags()
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason)
-    message.error(t('errors.send_failed') + reason)
+    notify.error(t('errors.send_failed') + reason)
   }
 }
 
@@ -2636,15 +2637,15 @@ async function repairSession(itemId: string) {
       it.errorCode = undefined
       it.errorRetryAfterSec = undefined
     }
-    message.success(t('errors.session_repaired'))
+    notify.success(t('errors.session_repaired'))
   } catch (e) {
     const meta = describeFailureMeta(e)
     const min = meta.retryAfterSec ? Math.max(1, Math.ceil(meta.retryAfterSec / 60)) : 0
     if (min) {
       // 409：确实还在跑 / 还没到 stale 窗口 —— 告诉用户具体还要等多久
-      message.warning(`${t('errors.session_busy')} ${t('errors.session_busy_auto_recover', { n: min })}`)
+      notify.warning(`${t('errors.session_busy')} ${t('errors.session_busy_auto_recover', { n: min })}`)
     } else {
-      message.error(describeApiError(e))
+      notify.error(describeApiError(e))
     }
   }
 }
@@ -2705,7 +2706,7 @@ function regenerateAssistant(itemId: string) {
     if (it.kind === 'text' && it.role === 'user') { userMsg = it; break }
   }
   if (!userMsg) {
-    message.warning(t('errors.no_matching_user_message_found_cannot_regenerate'))
+    notify.warning(t('errors.no_matching_user_message_found_cannot_regenerate'))
     return
   }
   confirmDestructive(messagesAfter(itemId), t('common.regenerate'), () => {
@@ -3049,7 +3050,7 @@ function continueGeneration() {
             class="turn-status"
           >
             {{ $t('chat.reasoning_2') }}<template v-if="turnElapsed >= 2">
-              &nbsp;·&nbsp;{{ turnElapsed }}s
+              &nbsp;·&nbsp;<span class="tnum-fixed">{{ turnElapsed }}s</span>
             </template>
           </div>
           <MessageList
