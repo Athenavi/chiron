@@ -389,7 +389,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 					var userID, role, tenantID string
 					keyHash := sha256.Sum256([]byte(key))
 					err := db.GlobalDBManager.QueryRow(r.Context(),
-						`SELECT u.id, u.role, COALESCE(u.tenant_id, '') AS tenant_id
+						`SELECT u.id, u.role, COALESCE(u.tenant_id::text, '') AS tenant_id
 					 FROM users u
 					 JOIN api_keys ak ON ak.user_id = u.id
 					 WHERE ak.key_hash = $1

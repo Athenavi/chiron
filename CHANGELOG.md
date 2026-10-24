@@ -7,6 +7,13 @@
 
 ### 修复
 
+- **修 `tenant_id` 改 `smallint` 后的两处 `COALESCE` 空串遗留**：`run_usage_reconciler` 的
+  `runUsageScanSQL` 与 `middleware` 的 API-Key 校验查询都写了 `COALESCE(tenant_id, '')`——
+  列是 `varchar` 时合法，改 `smallint` 后 PG 会报 `invalid input syntax for type smallint: ""`
+  (`SQLSTATE 22P02`)。两处加 `::text`，保持 Go 侧 `string` 契约与「tenant_id 为空直接拒绝」
+  的判断不变。**这类问题编译与单测都发现不了，只有真库运行才暴露**（reconciler 每 5 分钟
+  打一条 WARN）；已在重建库上实跑 Gateway 确认该 WARN 消失。
+
 - **统一 Python 侧 `tenant_id` 的消费契约**：`get_tenant_id()` 的调用方绝大多数是「格式化」场景
   （沙箱路径拼接 `sandbox_root()/tenant`、审计条目的 `tenant` 字段、`kb_access_allowed` 的租户比较、
   `SkillStore` 目录段）。此前把它改成 `int` 会让 `Path / int` 直接抛 `TypeError`、审计字段变成 `""`。

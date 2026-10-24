@@ -79,7 +79,7 @@ const (
 //   - 失败 / 跳过 ⇒ 失败不推进（下轮重试）；跳过推进（skipped 是"这类 run 不再处理"）。
 const runUsageScanSQL = `
 SELECT ar.id,
-       COALESCE(ar.tenant_id, ''),
+       COALESCE(ar.tenant_id::text, ''),   -- tenant_id 已经是 smallint；这里要的是「文本化后的空串兜底」，必须显式 ::text，否则 PG 会报 invalid input syntax for type smallint: ""
        COALESCE(ar.session_id, ''),
        ar.checkpoint,
        COALESCE(ar.checkpoint_at, ar.updated_at, ar.created_at) AS effective_at,
