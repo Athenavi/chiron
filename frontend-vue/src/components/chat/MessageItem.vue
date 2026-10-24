@@ -918,7 +918,7 @@ onUpdated(enhanceContent)
 .msg-actions.user { justify-content: flex-end; }
 .msg-time { padding-right: 6px; font-size: 12px; color: var(--text-tertiary); opacity: 0; transition: opacity var(--dur-fast) ease; }
 [data-time-hover-root]:hover .msg-time, [data-time-hover-root]:focus-within .msg-time { opacity: 1; }
-.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--dur-spring) var(--ease-spring); }
+.msg-action { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border: none; border-radius: 50%; background: transparent; color: var(--text-tertiary); cursor: pointer; opacity: 0; transition: opacity var(--dur-fast) ease, background var(--dur-fast) ease, transform var(--spring-bouncy); }
 .msg-action:hover { background: var(--bg-hover); color: var(--text-primary); }
 .msg-action.active { color: var(--primary); opacity: 1; }
 .msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: var(--on-solid); font-size: 12px; gap: 4px; opacity: 1; }
@@ -956,7 +956,7 @@ onUpdated(enhanceContent)
   45% { transform: scale(1.09); }
   100% { transform: scale(1); }
 }
-.action-pop { animation: action-pop var(--dur-spring) var(--ease-spring); }
+.action-pop { animation: action-pop var(--spring-bouncy); }
 .action-pop-down { animation-name: action-pop-down; }
 .retry-btn:active { transform: scale(0.96); }
 .edit-btn:active { transform: scale(0.97); }

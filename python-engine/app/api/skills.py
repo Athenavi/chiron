@@ -143,7 +143,12 @@ async def install_skill(
             from app.http_client import shared_client
 
             async with shared_client(timeout=settings.http_timeout_default) as client:
-                resp = await client.get(body.url)
+                # SSRF 防护：目标 URL 完全由调用方控制，必须走解析级校验
+                #（与 web_fetch / media / browser 等出站路径一致），否则可被用来
+                # 探测内网服务与云元数据端点。
+                from app.tools.ssrf import fetch_url_safe
+
+                resp = await fetch_url_safe(client, body.url)
                 resp.raise_for_status()
                 data = resp.json()
     except Exception as e:
@@ -327,7 +332,10 @@ async def discover_skills(
             from app.http_client import shared_client
 
             async with shared_client(timeout=settings.http_timeout_default) as client:
-                resp = await client.get(url)
+                # SSRF 防护：同 install_skill —— url 由调用方控制，须走解析级校验。
+                from app.tools.ssrf import fetch_url_safe
+
+                resp = await fetch_url_safe(client, url)
                 resp.raise_for_status()
                 items = resp.json()
                 installed_names = {s.name for s in store.list()}

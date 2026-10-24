@@ -132,11 +132,21 @@ spec:
                 labelSelector:
                   matchLabels: { app: gateway }
                 topologyKey: kubernetes.io/hostname
+      # 最小加固：镜像本身已是非 root（见 Dockerfile 的 appuser:1001），这里显式钉住，
+      # 避免"基础镜像换了默认 USER 就变 root"。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
         - name: gateway
-          image: chiron/gateway:dev
+          image: chiron/gateway:dev   # ⚠ 生产必须换成不可变 tag 或 @sha256 digest；:dev 仅供 kind 本地验证（见 README）
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8080 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           lifecycle:
             preStop:
               # SIGTERM 与「从 Service 端点摘除」是并发的：没有这段等待，正在关闭的 Pod
@@ -234,11 +244,19 @@ spec:
                 labelSelector:
                   matchLabels: { app: python-engine }
                 topologyKey: kubernetes.io/hostname
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
         - name: python-engine
-          image: chiron/python-engine:dev
+          image: chiron/python-engine:dev   # ⚠ 生产必须换成不可变 tag 或 @sha256 digest；:dev 仅供 kind 本地验证（见 README）
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 8000 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
           lifecycle:
             preStop:
               # 先摘流量再 SIGTERM：否则端点更新窗口内进来的新任务，会在排空开始后才到达。

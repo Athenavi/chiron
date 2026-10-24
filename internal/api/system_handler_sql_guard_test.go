@@ -43,6 +43,13 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		{"ROLLBACK（此前放行）", "ROLLBACK"},
 		{"SAVEPOINT（此前放行）", "SAVEPOINT sp1"},
 		{"RELEASE（此前放行）", "RELEASE SAVEPOINT sp1"},
+		// EXPLAIN 会**执行**被解释语句（EXPLAIN ANALYZE 尤甚）：此前只看首关键字，放行
+		{"EXPLAIN ANALYZE DELETE", "EXPLAIN ANALYZE DELETE FROM users"},
+		{"EXPLAIN (ANALYZE) UPDATE", "EXPLAIN (ANALYZE) UPDATE users SET credits = 0"},
+		{"EXPLAIN VERBOSE INSERT", "EXPLAIN VERBOSE INSERT INTO t VALUES (1)"},
+		// `SELECT ... INTO` 会建表/写入，不是只读
+		{"SELECT INTO", "SELECT * INTO newtbl FROM users"},
+		{"WITH ... SELECT INTO", "WITH x AS (SELECT 1) SELECT * INTO t FROM x"},
 	}
 	for _, c := range rejected {
 		t.Run("拒绝/"+c.name, func(t *testing.T) {
@@ -65,6 +72,10 @@ func TestValidateReadOnlySQL(t *testing.T) {
 		{"VALUES", "VALUES (1), (2)"},
 		{"WITH（纯读 CTE）", "WITH x AS (SELECT 1 AS n) SELECT n FROM x"},
 		{"尾随分号（单语句）", "SELECT 1;"},
+		// EXPLAIN 的合法只读用法仍须放行（收紧不能误伤引擎的正常读路径）
+		{"EXPLAIN ANALYZE SELECT", "EXPLAIN ANALYZE SELECT 1"},
+		{"EXPLAIN 选项括号", "EXPLAIN (ANALYZE, BUFFERS) SELECT 1"},
+		{"EXPLAIN VERBOSE SELECT", "EXPLAIN VERBOSE SELECT 1"},
 	}
 	for _, c := range allowed {
 		t.Run("放行/"+c.name, func(t *testing.T) {

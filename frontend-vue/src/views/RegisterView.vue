@@ -477,8 +477,8 @@ async function handleRegister() {
 .register-form-card :deep(.ant-input:focus),
 .register-form-card :deep(.ant-input:focus-within),
 .register-form-card :deep(.ant-btn:focus-visible) {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 @media (prefers-reduced-motion: reduce) {

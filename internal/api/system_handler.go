@@ -304,37 +304,96 @@ func containsDMLKeyword(upperSQL string) bool {
 	return dmlKeywordRe.MatchString(upperSQL)
 }
 
+// selectIntoRe 匹配 `SELECT ... INTO` —— Postgres 里它一定会建表/写入，不存在只读用法。
+var selectIntoRe = regexp.MustCompile(`\bINTO\b`)
+
+// explainOptionRe 匹配 EXPLAIN 的 legacy 选项关键字（`EXPLAIN ANALYZE VERBOSE …`）。
+var explainOptionRe = regexp.MustCompile(`^(ANALYZE|ANALYSE|VERBOSE|COSTS|SETTINGS|BUFFERS|WAL|TIMING|SUMMARY|FORMAT)\b`)
+
 // validateReadOnlySQL 校验 SQL 是否为**单条只读语句**，返回空串表示放行。
 //
-// 判据：① 首关键字属于只读白名单；② 去掉结尾分号/空白后不再含 `;`
-// （simple query protocol 下 `SELECT 1; DELETE …` 会被当作两条语句执行）。
-// 对字符串字面量中带 `;` 的查询会误拒 —— 内部端点一律走参数化查询，可接受。
+// 判据：① 单语句（不含 `;`）；② 语句本身（含 EXPLAIN 的被解释语句）以只读前缀开头；
+// ③ 不含 DML 关键字（拦 `WITH` 的 data-modifying CTE）；④ 不含 `SELECT ... INTO`。
+//
+// 对字符串字面量中带这些词的查询会误拒（如 `SELECT 'delete me'`）—— 内部端点一律走
+// 参数化查询，可以接受"宁可误拒"。
 func validateReadOnlySQL(sql string) string {
 	trimmed := strings.TrimSpace(sql)
 	if trimmed == "" {
 		return "sql is required"
 	}
-	upper := strings.ToUpper(trimmed)
-	allowed := false
-	for _, p := range readOnlySQLPrefixes {
-		if strings.HasPrefix(upper, p) {
-			allowed = true
-			break
-		}
+	// 去掉结尾分号/空白后仍含 `;` ⇒ 多语句（simple query protocol 下
+	// `SELECT 1; DELETE …` 会被当作两条语句逐条执行）。
+	if strings.Contains(strings.TrimRight(trimmed, "; \t\r\n"), ";") {
+		return "multiple statements are not allowed on this endpoint"
 	}
-	if !allowed {
+	upper := strings.ToUpper(trimmed)
+
+	// `EXPLAIN` 会**执行**被解释的语句（EXPLAIN ANALYZE 尤甚）：`EXPLAIN ANALYZE
+	// DELETE FROM t` 会真正删数据，且 `EXPLAIN` 首关键字能穿过前缀白名单。因此剥掉
+	// EXPLAIN [选项…] 头后，对**被解释的语句**套用同一套只读规则。
+	if strings.HasPrefix(upper, "EXPLAIN") {
+		rest := skipExplainOptions(strings.TrimSpace(upper[len("EXPLAIN"):]))
+		if rest == "" {
+			return "EXPLAIN requires a statement to explain"
+		}
+		if !hasReadOnlyPrefix(rest) {
+			return "EXPLAIN of a non-read-only statement is not allowed on this endpoint"
+		}
+		if containsDMLKeyword(rest) {
+			return "EXPLAIN of a data-modifying statement is not allowed on this endpoint"
+		}
+		if selectIntoRe.MatchString(rest) {
+			return "SELECT ... INTO is not allowed on this endpoint"
+		}
+		return ""
+	}
+
+	if !hasReadOnlyPrefix(upper) {
 		return "only read-only statements (SELECT/WITH/TABLE/VALUES/EXPLAIN/SHOW) are allowed on this endpoint"
 	}
 	// `WITH` 是唯一能**内嵌 DML** 的只读前缀：PostgreSQL 的 data-modifying CTE
 	// （`WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x`）是**单语句**、无分号，
-	// 因此能穿过上面的前缀白名单与多语句检查。这里对 WITH 额外做 DML 关键字筛查。
+	// 因此能穿过前缀白名单与多语句检查。这里对 WITH 额外做 DML 关键字筛查。
 	if strings.HasPrefix(upper, "WITH") && containsDMLKeyword(upper) {
 		return "data-modifying CTE is not allowed on this endpoint"
 	}
-	if strings.Contains(strings.TrimRight(trimmed, "; \t\r\n"), ";") {
-		return "multiple statements are not allowed on this endpoint"
+	// `SELECT ... INTO newtbl` 会建表/写入，不是只读。
+	if selectIntoRe.MatchString(upper) {
+		return "SELECT ... INTO is not allowed on this endpoint"
 	}
 	return ""
+}
+
+// hasReadOnlyPrefix 判断语句是否以只读关键字开头。
+func hasReadOnlyPrefix(upperSQL string) bool {
+	for _, p := range readOnlySQLPrefixes {
+		if strings.HasPrefix(upperSQL, p) {
+			return true
+		}
+	}
+	return false
+}
+
+// skipExplainOptions 跳过 EXPLAIN 后的选项（legacy 关键字形式与 `(…)` 形式），
+// 返回被解释语句的大写文本。
+func skipExplainOptions(rest string) string {
+	for {
+		rest = strings.TrimSpace(rest)
+		if strings.HasPrefix(rest, "(") {
+			closeIdx := strings.Index(rest, ")")
+			if closeIdx < 0 {
+				return ""
+			}
+			rest = strings.TrimSpace(rest[closeIdx+1:])
+			continue
+		}
+		m := explainOptionRe.FindString(rest)
+		if m == "" {
+			return rest
+		}
+		rest = strings.TrimSpace(rest[len(m):])
+	}
 }
 
 // DBQuery 执行 SQL 查询并返回结果（供 Python 引擎调用）

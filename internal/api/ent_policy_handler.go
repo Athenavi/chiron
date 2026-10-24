@@ -603,8 +603,14 @@ func (h *EntPolicyHandler) CreateModelPolicy(w http.ResponseWriter, r *http.Requ
 
 // GetModelPolicy GET /v1/ent/model-policies/{id}
 func (h *EntPolicyHandler) GetModelPolicy(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
 		return
 	}
 	id := r.PathValue("id")
@@ -618,7 +624,7 @@ func (h *EntPolicyHandler) GetModelPolicy(w http.ResponseWriter, r *http.Request
 		return
 	}
 	p, err := scanModelPolicy(pool.QueryRow(r.Context(),
-		`SELECT `+modelPolicyColumns+` FROM ent_model_policies WHERE id = $1`, id))
+		`SELECT `+modelPolicyColumns+` FROM ent_model_policies WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			NotFound(w, ErrNotFound)
@@ -633,8 +639,14 @@ func (h *EntPolicyHandler) GetModelPolicy(w http.ResponseWriter, r *http.Request
 // UpdateModelPolicy PUT /v1/ent/model-policies/{id}（全量替换 allowed_models /
 // per_model_limits / role_id；校验规则同创建）。
 func (h *EntPolicyHandler) UpdateModelPolicy(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
 		return
 	}
 	id := r.PathValue("id")
@@ -664,8 +676,8 @@ func (h *EntPolicyHandler) UpdateModelPolicy(w http.ResponseWriter, r *http.Requ
 	updated, err := scanModelPolicy(db.GlobalDBManager.QueryRow(r.Context(),
 		`UPDATE ent_model_policies
 		 SET role_id = $2, allowed_models = $3, per_model_limits = $4, updated_at = NOW()
-		 WHERE id = $1 RETURNING `+modelPolicyColumns,
-		id, p.RoleID, p.AllowedModels, string(limitsJSON)))
+		 WHERE id = $1 AND ($19 = '' OR tenant_id::text = $19) RETURNING `+modelPolicyColumns,
+		id, p.RoleID, p.AllowedModels, string(limitsJSON), scope))
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			NotFound(w, ErrNotFound)
@@ -686,8 +698,14 @@ func (h *EntPolicyHandler) UpdateModelPolicy(w http.ResponseWriter, r *http.Requ
 
 // DeleteModelPolicy DELETE /v1/ent/model-policies/{id}
 func (h *EntPolicyHandler) DeleteModelPolicy(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
 		return
 	}
 	id := r.PathValue("id")
@@ -699,7 +717,7 @@ func (h *EntPolicyHandler) DeleteModelPolicy(w http.ResponseWriter, r *http.Requ
 		ServiceUnavailable(w, ErrDBUnavailable)
 		return
 	}
-	tag, err := db.GlobalDBManager.Exec(r.Context(), `DELETE FROM ent_model_policies WHERE id = $1`, id)
+	tag, err := db.GlobalDBManager.Exec(r.Context(), `DELETE FROM ent_model_policies WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "delete model policy failed")
 		return

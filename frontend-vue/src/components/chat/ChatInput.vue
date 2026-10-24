@@ -1277,20 +1277,22 @@ defineExpose({ insertText, setCommandDraft })
   --input-card-pad: 12px;
   --input-card-inner-r: max(0px, calc(var(--input-card-r) - var(--input-card-pad)));
   padding: 12px 14px 10px;
-  /* 扔掉描边：层次由背景色阶承担（见 docs/ui-refinement-design.md §1） */
+  /* 扔掉描边：层次由背景色阶承担（见 docs/ui-refinement-design.md §1）；
+     三态投影（常态/悬停/聚焦）由 style.css 的 --composer-shadow* 提供，
+     对齐 CDS §1.4.4 的 Composer Dual-Ring。 */
   border: 0; border-radius: var(--input-card-r);
   background: var(--bg-input);
-  box-shadow: var(--shadow-md);
+  box-shadow: var(--composer-shadow);
   font-size: 16px; line-height: 24px;
   transition: box-shadow var(--dur-normal) var(--ease-out);
 }
+/* 悬停：投影加深、内环变实（三态的第一级） */
+.input-card:hover { box-shadow: var(--composer-shadow-hover); }
 /* 聚焦态：双环咬合，不用亮线。
-   内环 inset（同色系加深，替代原来的描边）+ 外环柔光 + 投影托起。 */
+   内环 inset（同色系加深，替代原来的描边）+ 外环柔光 + 投影托起。
+   刻意排在 :hover 之后：两者特异性相同，靠顺序让聚焦态胜出。 */
 .input-card:focus-within {
-  box-shadow:
-    inset 0 0 0 var(--sig-input-ring, 1px) var(--ring-inner),
-    0 0 0 4px var(--ring-outer, var(--border-subtle)),
-    var(--shadow-md);
+  box-shadow: var(--composer-shadow-focus);
 }
 .input-field { background: transparent !important; }
 .input-field :deep(textarea) { color: var(--text-primary) !important; font-size: 16px !important; line-height: 24px !important; }
@@ -1420,7 +1422,7 @@ defineExpose({ insertText, setCommandDraft })
 .input-card.drag-active {
   transition: none;
   background: var(--primary-bg);
-  box-shadow: var(--shadow-md), 0 0 0 3px var(--ring-outer, var(--border-subtle));
+  box-shadow: var(--composer-shadow-hover), 0 0 0 3px var(--ring-outer);
 }
 
 /* 斜杠命令面板 */

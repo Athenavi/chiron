@@ -31,9 +31,11 @@ self.addEventListener('fetch', (event) => {
   // 仅处理同源请求
   if (url.origin !== self.location.origin) return
   
-  // API 请求：网络优先，缓存回退
+  // 鉴权 API / 事件流：**只走网络，不落缓存**。
+  // 此前这里走 networkFirst 会 cache.put 带用户数据的响应，而登出只清 localStorage、
+  // 不清 Cache Storage ⇒ 同浏览器换账号或离线回退（fetch 失败）时可读到上一账号的响应体。
   if (NETWORK_ONLY_PATHS.some(path => url.pathname.startsWith(path))) {
-    event.respondWith(fetchAndApply(request, 'networkFirst'))
+    event.respondWith(fetch(request))
     return
   }
   

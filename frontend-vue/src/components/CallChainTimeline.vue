@@ -433,7 +433,10 @@ function capitalize(str: string): string {
   max-height: 200px;
   overflow-y: auto;
   color: var(--text-secondary);
-  word-break: break-all;
+  /* 这里的内容是工具入参（模型 ID / 无空格路径 / JSON），用 anywhere —— break-all
+     会把正常英文单词也拦腰截断（见 style.css 的 .wrap-anywhere 注） */
+  overflow-wrap: anywhere;
+  word-break: normal;
 }
 
 .details-toggle {
@@ -455,8 +458,8 @@ function capitalize(str: string): string {
 
 .details-toggle:focus-visible,
 .timeline-header:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 /* 移动端：行内元素压缩，详情按钮触控目标放大 */

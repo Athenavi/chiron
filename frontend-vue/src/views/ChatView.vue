@@ -3686,8 +3686,8 @@ function continueGeneration() {
 .ub-btn:focus-visible,
 .ueb-close:focus-visible,
 .approval-btn:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 .ueb-close:focus-visible { border-radius: 4px; }
 .ub-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }

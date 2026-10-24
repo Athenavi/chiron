@@ -70,6 +70,12 @@ type SessionMapWorkspace struct {
 	Nodes     []SessionMapNode       `json:"nodes"`
 	CreatedAt string                 `json:"created_at,omitempty"`
 	UpdatedAt string                 `json:"updated_at,omitempty"`
+	// TenantID / UserID 是画布归属，用于热层命中后的跨租户/跨用户校验（M3 修复）：
+	// 热层 key 只有 workspaceID，命中即返回会让任何人凭 wsID 读到他人画布，且
+	// SaveWorkspace 可污染他人热层并经 flusher 落库覆盖（smPersist 的 UPDATE 只按 id）。
+	// 前端不消费这两个字段。
+	TenantID string `json:"tenant_id,omitempty"`
+	UserID   string `json:"user_id,omitempty"`
 }
 
 type SessionMapHandler struct{}
@@ -308,7 +314,7 @@ func smLoadFromPG(ctx context.Context, workspaceID, tenant, userID string) (*Ses
 	if err != nil || row == nil {
 		return nil, err
 	}
-	ws := &SessionMapWorkspace{ID: stringOf(row["id"]), Name: stringOf(row["name"]), Nodes: []SessionMapNode{}}
+	ws := &SessionMapWorkspace{ID: stringOf(row["id"]), Name: stringOf(row["name"]), Nodes: []SessionMapNode{}, TenantID: tenant, UserID: userID}
 	_ = json.Unmarshal([]byte(stringOf(row["viewport"])), &ws.Viewport)
 	if ws.Viewport == nil {
 		ws.Viewport = map[string]interface{}{}
@@ -484,7 +490,8 @@ func (h *SessionMapHandler) CreateWorkspace(w http.ResponseWriter, r *http.Reque
 		JSON(w, http.StatusInternalServerError, APIResponse{Success: false, Error: "create failed"})
 		return
 	}
-	ws := &SessionMapWorkspace{ID: wsID, Name: body.Name, Viewport: map[string]interface{}{}, Nodes: []SessionMapNode{}}
+	ws := &SessionMapWorkspace{ID: wsID, Name: body.Name, Viewport: map[string]interface{}{}, Nodes: []SessionMapNode{},
+		TenantID: smTenant(claims), UserID: claims.UserID}
 	smCachePut(r.Context(), ws)
 	JSON(w, http.StatusCreated, APIResponse{Success: true, Data: ws})
 }
@@ -501,8 +508,13 @@ func (h *SessionMapHandler) GetWorkspace(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	// 热层优先；miss 再回源 PG 并回填（布局是"看地图的姿势"，热层丢了不影响数据）
+	// 热层 key 只含 workspaceID，命中后**必须**校验归属，否则任何人凭 wsID 即读到他人画布。
 	if ws, ok := smCacheGet(r.Context(), wsID); ok {
-		OK(w, smPruneMissingSessions(r.Context(), ws))
+		if ws.TenantID == smTenant(claims) && ws.UserID == claims.UserID {
+			OK(w, smPruneMissingSessions(r.Context(), ws))
+			return
+		}
+		JSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "workspace not found"})
 		return
 	}
 	ws, err := smLoadFromPG(r.Context(), wsID, smTenant(claims), claims.UserID)
@@ -542,6 +554,16 @@ func (h *SessionMapHandler) SaveWorkspace(w http.ResponseWriter, r *http.Request
 	if body.Viewport == nil {
 		body.Viewport = map[string]interface{}{}
 	}
+	// 归属校验：热层若已有同 ID 画布且不属于当前用户，拒绝覆盖 —— 否则攻击者用他人 wsID
+	// 保存即可污染他人热层，并经 flusher 落库覆盖（smPersist 的 UPDATE 只按 id）。
+	if existing, ok := smCacheGet(r.Context(), wsID); ok {
+		if existing.TenantID != smTenant(claims) || existing.UserID != claims.UserID {
+			JSON(w, http.StatusNotFound, APIResponse{Success: false, Error: "workspace not found"})
+			return
+		}
+	}
+	body.TenantID = smTenant(claims)
+	body.UserID = claims.UserID
 	if db.Redis == nil {
 		// 降级：没有热层就直写 PG（可用性优先，不丢用户拖动）
 		if err := smPersist(r.Context(), &body); err != nil {

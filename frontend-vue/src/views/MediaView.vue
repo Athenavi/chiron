@@ -1661,8 +1661,8 @@ onUnmounted(() => {
 .file-card:focus-visible,
 .lb-btn:focus-visible,
 .lb-close:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 .file-card.selected { border-color: var(--primary); background: var(--primary-bg); }
 .card-thumb { height: 84px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: var(--bg-secondary); overflow: hidden; }

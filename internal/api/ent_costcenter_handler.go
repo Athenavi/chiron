@@ -797,7 +797,8 @@ func (h *EntCostCenterHandler) CreateQuota(w http.ResponseWriter, r *http.Reques
 
 // GetQuota GET /v1/ent/quotas/{id}
 func (h *EntCostCenterHandler) GetQuota(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminRead) == nil {
+	claims := requirePerm(w, r, auth.PermAdminRead)
+	if claims == nil {
 		return
 	}
 	id := r.PathValue("id")
@@ -812,6 +813,12 @@ func (h *EntCostCenterHandler) GetQuota(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		logAndRespond(w, err, http.StatusInternalServerError, "get quota failed")
+		return
+	}
+	// 跨租户读防护：非 owner 只能看自己租户的配额池（与 UpdateQuota/DeleteQuota 同口径）。
+	// 此前缺这一步，任一持有 admin:read 的租户管理员可读他租户的配额池与分配明细。
+	if scopedTenantID(claims, pool.TenantID) != pool.TenantID {
+		NotFound(w, ErrNotFound)
 		return
 	}
 	allocs, err := h.store.ListAllocations(r.Context(), id)
@@ -1028,13 +1035,29 @@ func (h *EntCostCenterHandler) CreateAllocation(w http.ResponseWriter, r *http.R
 
 // DeleteAllocation DELETE /v1/ent/quotas/{id}/allocations/{allocID}
 func (h *EntCostCenterHandler) DeleteAllocation(w http.ResponseWriter, r *http.Request) {
-	if requirePerm(w, r, auth.PermAdminWrite) == nil {
+	claims := requirePerm(w, r, auth.PermAdminWrite)
+	if claims == nil {
 		return
 	}
 	poolID := r.PathValue("id")
 	allocID := r.PathValue("allocID")
 	if _, err := uuid.Parse(poolID); err != nil || uuidValidate(allocID) != nil {
 		BadRequest(w, "invalid quota or allocation id")
+		return
+	}
+	// 跨租户写防护：先取配额池校验归属，再删其分配明细（此前直接按 poolID 删除，
+	// 任一持有 admin:write 的租户管理员可删掉他租户配额池下的分配）。
+	pool, err := h.store.GetQuotaPool(r.Context(), poolID)
+	if err != nil {
+		if errors.Is(err, errQuotaNotFound) {
+			NotFound(w, ErrNotFound)
+			return
+		}
+		logAndRespond(w, err, http.StatusInternalServerError, "get quota failed")
+		return
+	}
+	if scopedTenantID(claims, pool.TenantID) != pool.TenantID {
+		NotFound(w, ErrNotFound)
 		return
 	}
 	deleted, err := h.store.DeleteAllocation(r.Context(), poolID, allocID)

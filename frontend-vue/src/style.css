@@ -50,6 +50,12 @@
         'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',
         'Noto Sans CJK SC', monospace;
 
+    /* 展示级衬线（空状态问候语等版面标题）。CDS 的 .font-display 走 serif 轴，
+       但它的字体栈只有西文衬线 —— 中文字形不显式补衬线体会回退到 --font-sans，
+       变成"西文衬线 + 中文黑体"的混排，所以这里补了一整条 CJK 衬线回退链。 */
+    --font-serif: ui-serif, Georgia, 'Iowan Old Style', 'Times New Roman',
+        'Songti SC', 'STSong', 'Source Han Serif SC', 'Noto Serif CJK SC', 'SimSun', serif;
+
     /* 界面字号：全局唯一缩放入口。改这一个值即可让整套界面文字等比缩放。
        注意：**图标、间距、圆角（--space-* / --radius-*）刻意不跟随**，
        否则放大字号会把布局撑破（这也是不直接改 html/root font-size 的原因）。
@@ -69,6 +75,14 @@
     --fs-7xl: calc(var(--ui-font-size) + 28px); /* 14 → 42px */
     --fs-8xl: calc(var(--ui-font-size) + 34px); /* 14 → 48px */
 
+    /* 展示级字号（空状态问候语等"版面标题"）。
+       对齐 CDS 的 .font-display（38px / 行高 1.2 / 字重 330 / serif 轴）；
+       与上面各档一样由 --ui-font-size 派生，所以仍受"唯一缩放入口"约束。 */
+    --fs-display: calc(var(--ui-font-size) + 24px); /* 14 → 38px */
+
+    /* 展示级字重：CDS 的 .font-display 用 330。大字号下端笔画会显著变粗，
+       semibold 会显得笨重，轻一档才有版面感。 */
+    --fw-light: 300;
     --fw-regular: 400;
     --fw-medium: 500;
     --fw-semibold: 600;
@@ -98,6 +112,30 @@
     --dur-spring: 420ms;
     --ease-snap: cubic-bezier(0.2, 0, 0, 1);
     --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* ── CDS 阶梯补齐（open-claude-ui v1/01 §1.6 · v2/04 §4.3）──
+       CDS 的响应时间阶梯是 60 / 120 / 200 / 300 / 450ms。本表原本有 60/100/120/200/350，
+       缺的是 300ms（抽屉大面板滑出、视口图钉追踪）与 450ms（页面级大转场、模态升降）。
+       补这两档而不是把既有的 350 改成 450：后者会改变现网观感，不属"补阶梯"。 */
+    --dur-sheet: 300ms;
+    --dur-page: 450ms;
+
+    /* CDS 的物理过冲曲线（约 +30% 超调，用于胶囊滑块与小药丸形变）。
+       它是 --ease-spring（+56%，弹窗弹出）的同族轻量级 —— 两级而非一条曲线打天下。 */
+    --ease-overshoot: cubic-bezier(0.34, 1.3, 0.64, 1);
+
+    /* ── 四套弹簧预设（CDS v1/08 §8.3 的决策树）──
+       按「交互类型 → 预设」选用，而不是每次手写"时长 + 曲线"：
+         按钮点击 / 胶囊切换 / Tab 移动     → --spring-snappy（+8.8% 超调）
+         开关切换 / Badge 入场 / 成功微反馈 → --spring-bouncy（+19.4% 超调）
+         对话框打开 / Thinking 展开 / 气泡进入 → --spring-gentle（+1.8% 超调）
+         拖拽占位线 / 边缘吸附 / 抽屉关闭   → --spring-heavy（严格 0% 超调）
+       值是**组合别名**（时长 + 曲线），引用处直接写 `transition: transform var(--spring-snappy)`。
+       内嵌的仍是 --dur-*，所以动效口径没有被绕过。 */
+    --spring-snappy: var(--dur-normal) var(--ease-overshoot);
+    --spring-bouncy: var(--dur-spring) var(--ease-spring);
+    --spring-gentle: var(--dur-slow) var(--ease-out);
+    --spring-heavy: var(--dur-snap) var(--ease-snap);
 
     /* 水墨逐字：单字对焦时长 + 相邻字错开步长。
        注意 animation-delay 里的毫秒也算"硬编码动效"，必须走 token。 */
@@ -345,6 +383,10 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(15, 23, 42, 0.10), 0 2px 6px rgba(15, 23, 42, 0.06);
 }
 
 [data-theme='notion-dark'] {
@@ -455,93 +497,103 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.40);
 }
 
 /* ============================================================ */
-/* 暖纸阅读 */
+/* 陶土暖纸（clay paper）：把原来的「暖纸 + 琥珀」调性改为 CDS 的陶土体系。
+   数值出处（open-claude-ui 手册）：表面明度阶 #f9f9f7 / #fcfcfb / #ffffff 与深色
+   #0b0b0b / #151515 / #1a1a19 / #20201f 取自 v1/01 §1.3；文本阶梯 #151515 /
+   #525252 / #8a8a8a 取自 §1.4.1；发丝边的 alpha（浅 12% / 暗 10%）取自 v1/08 §8.1；
+   四层环境光阴影公式取自 §1.2；品牌色取陶土（浅色用较深的 #c6613f 以便白字可读，
+   深色用 #d97757，hover 沿 #cc5a36 方向加重）。
+   **改这里必须同时改 stores/theme.ts 的 paper 两个 token 对象**（见该文件头注释）。 */
 [data-theme='paper-light'] {
-    --brand-50: #faf7f2;
-    --brand-100: #f3ede3;
-    --brand-200: #e7dfd2;
-    --brand-300: #d6cbba;
-    --brand-400: #b3a693;
-    --brand-500: #8a7d69;
-    --brand-600: #6b6152;
-    --brand-700: #4f4638;
-    --brand-800: #322d24;
-    --brand-900: #1f1b15;
+    --brand-50: #fbf3ef;
+    --brand-100: #f7e9e2;
+    --brand-200: #f0d6c9;
+    --brand-300: #e5b8a3;
+    --brand-400: #d97757;
+    --brand-500: #c6613f;
+    --brand-600: #a94e2f;
+    --brand-700: #8a3f26;
+    --brand-800: #6b311e;
+    --brand-900: #4a2215;
 
-    --primary: #3d3630;
-    --primary-hover: #524a42;
-    --primary-active: #2b2620;
-    --primary-bg: rgba(61, 54, 48, 0.06);
-    --primary-border: rgba(61, 54, 48, 0.12);
+    --primary: #c6613f;
+    --primary-hover: #a94e2f;
+    --primary-active: #8a3f26;
+    --primary-bg: rgba(198, 97, 63, 0.08);
+    --primary-border: rgba(198, 97, 63, 0.18);
 
-    --accent: #b45309;
-    --accent-light: #d97706;
-    --accent-bg: rgba(180, 83, 9, 0.08);
+    --accent: #d97757;
+    --accent-light: #e08b6e;
+    --accent-bg: rgba(217, 119, 87, 0.10);
 
-    --success: #15803d;
-    --success-bg: rgba(21, 128, 61, 0.08);
-    --warning: #b45309;
-    --warning-bg: rgba(180, 83, 9, 0.08);
-    --error: #b91c1c;
-    --error-bg: rgba(185, 28, 28, 0.08);
-    --info: #1d4ed8;
-    --info-bg: rgba(29, 78, 216, 0.08);
+    --success: #3f7a52;
+    --success-bg: rgba(63, 122, 82, 0.10);
+    --warning: #b0731c;
+    --warning-bg: rgba(176, 115, 28, 0.10);
+    --error: #b23a2c;
+    --error-bg: rgba(178, 58, 44, 0.10);
+    --info: #4a6b8a;
+    --info-bg: rgba(74, 107, 138, 0.10);
 
-    --bg-base: #fbf8f3;
-    --bg-page: #fbf8f3;
+    --bg-base: #f9f9f7;
+    --bg-page: #fcfcfb;
     --bg-surface: #ffffff;
-    --bg-surface-hover: #f3ede3;
+    --bg-surface-hover: #f2f2ef;
     --bg-elevated: #ffffff;
-    --bg-overlay: rgba(45, 38, 30, 0.5);
-    --bg-sidebar: #f7f2ea;
-    --bg-sidebar-hover: #efe7db;
+    --bg-overlay: rgba(21, 21, 21, 0.5);
+    --bg-sidebar: #f9f9f7;
+    --bg-sidebar-hover: #f0f0ec;
     --bg-input: #ffffff;
     --bg-input-focus: #ffffff;
-    --bg-code: #f3ede3;
-    --bg-bubble-user: #f1e9dd;
+    --bg-code: #f4f4f1;
+    --bg-bubble-user: #f2efea;
     --bg-bubble-assistant: #ffffff;
 
-    --text-primary: #2a241d;
-    --text-secondary: #5c5348;
-    --text-tertiary: #786f61;
-    --text-quaternary: #a2988a;
-    --text-disabled: #cfc6b8;
+    --text-primary: #151515;
+    --text-secondary: #525252;
+    --text-tertiary: #8a8a8a;
+    --text-quaternary: #a9a9a9;
+    --text-disabled: #c7c7c7;
     --text-inverse: #ffffff;
-    --text-link: #b45309;
-    --text-link-hover: #92400e;
-    --text-bubble-user: #2a241d;
-    --text-bubble-assistant: #3d362e;
+    --text-link: #c6613f;
+    --text-link-hover: #a94e2f;
+    --text-bubble-user: #151515;
+    --text-bubble-assistant: #262626;
 
-    --border-default: #e6ddcf;
-    --border-subtle: #efe8dc;
-    --border-strong: #d3c7b6;
+    --border-default: rgba(21, 21, 21, 0.12);
+    --border-subtle: rgba(21, 21, 21, 0.07);
+    --border-strong: rgba(21, 21, 21, 0.22);
 
-    --comp-header-bg: rgba(251, 248, 243, 0.85);
+    --comp-header-bg: rgba(252, 252, 251, 0.85);
     --comp-card-radius: 8px;
     --comp-input-radius: 8px;
     --comp-button-radius: 6px;
-    --comp-button-primary-shadow: 0 1px 2px rgba(61, 54, 48, 0.12);
+    --comp-button-primary-shadow: 0 1px 2px rgba(120, 60, 35, 0.18);
     --chat-bubble-radius-lg: 10px;
     --chat-bubble-radius-sm: 8px;
-    --bubble-user: #f1e9dd;
-    --bubble-user-text: #2a241d;
+    --bubble-user: #f2efea;
+    --bubble-user-text: #151515;
 
-    --hljs-fg: #2a241d;
-    --hljs-bg: #f7f2e6;
-    --hljs-keyword: #9a3412;
-    --hljs-string: #15803d;
-    --hljs-number: #1d4ed8;
-    --hljs-comment: #a2988a;
-    --hljs-title: #9a3412;
-    --hljs-built-in: #0f766e;
-    --hljs-meta: #9a3412;
+    --hljs-fg: #262626;
+    --hljs-bg: #f4f4f1;
+    --hljs-keyword: #a94e2f;
+    --hljs-string: #3f7a52;
+    --hljs-number: #4a6b8a;
+    --hljs-comment: #a9a9a9;
+    --hljs-title: #a94e2f;
+    --hljs-built-in: #2f6b63;
+    --hljs-meta: #a94e2f;
 
-    --terminal-bg: #1f1b15;
-    --terminal-header-bg: #322d24;
-    --terminal-text: #ece5d8;
+    --terminal-bg: #151515;
+    --terminal-header-bg: #262626;
+    --terminal-text: #e8e6e3;
 
     --sig-radius-card: 8px;
     --sig-radius-button: 6px;
@@ -553,105 +605,109 @@ html.dark {
     --sig-blur-header: 8px;
     --sig-blur-panel: 0px;
     --sig-glass-opacity: 1;
-    --sig-shadow-card: 0 1px 2px rgba(90, 70, 40, 0.06);
-    --sig-shadow-hover: 0 4px 12px rgba(90, 70, 40, 0.1);
-    --sig-input-shadow: 0 1px 2px rgba(90, 70, 40, 0.05);
+    --sig-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --sig-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.10);
+    --sig-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     --sig-input-ring: 3px;
     --sig-glow-color: transparent;
     --sig-glow-intensity: 0;
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
-    --shadow-xs: 0 1px 2px rgba(90, 70, 40, 0.04);
-    --shadow-sm: 0 1px 3px rgba(90, 70, 40, 0.06), 0 1px 2px rgba(90, 70, 40, 0.04);
-    --shadow-md: 0 4px 12px rgba(90, 70, 40, 0.08), 0 2px 4px rgba(90, 70, 40, 0.04);
-    --shadow-lg: 0 12px 32px rgba(90, 70, 40, 0.1), 0 4px 8px rgba(90, 70, 40, 0.04);
-    --shadow-xl: 0 20px 44px rgba(90, 70, 40, 0.12), 0 8px 16px rgba(90, 70, 40, 0.06);
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.08);
+    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.05), 0 6px 16px rgba(0, 0, 0, 0.08);
+    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.06), 0 12px 28px -2px rgba(0, 0, 0, 0.08);
+    --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.06), 0 24px 48px -6px rgba(0, 0, 0, 0.10);
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
 }
 
 [data-theme='paper-dark'] {
-    --brand-50: #1c1917;
-    --brand-100: #292524;
-    --brand-200: #3a332c;
-    --brand-300: #4d443a;
-    --brand-400: #6b6152;
-    --brand-500: #8a7d69;
-    --brand-600: #b3a693;
-    --brand-700: #d6cbba;
-    --brand-800: #e7dfd2;
-    --brand-900: #f5f0e8;
+    --brand-50: #1a1a19;
+    --brand-100: #20201f;
+    --brand-200: #2c2c2a;
+    --brand-300: #3d3d3a;
+    --brand-400: #6b6b66;
+    --brand-500: #8a8a84;
+    --brand-600: #b3b3ab;
+    --brand-700: #d6d6cd;
+    --brand-800: #e9e9e1;
+    --brand-900: #f5f5f0;
 
-    --primary: #f0e9de;
-    --primary-hover: #ddd4c6;
-    --primary-active: #c4b9a8;
-    --primary-bg: rgba(240, 233, 222, 0.08);
-    --primary-border: rgba(240, 233, 222, 0.14);
+    --primary: #d97757;
+    --primary-hover: #e08b6e;
+    --primary-active: #c6613f;
+    --primary-bg: rgba(217, 119, 87, 0.14);
+    --primary-border: rgba(217, 119, 87, 0.24);
 
-    --accent: #fbbf24;
-    --accent-light: #fcd34d;
-    --accent-bg: rgba(251, 191, 36, 0.12);
+    --accent: #e08b6e;
+    --accent-light: #eda98e;
+    --accent-bg: rgba(224, 139, 110, 0.14);
 
-    --success: #4ade80;
-    --success-bg: rgba(74, 222, 128, 0.12);
-    --warning: #fbbf24;
-    --warning-bg: rgba(251, 191, 36, 0.12);
-    --error: #f87171;
-    --error-bg: rgba(248, 113, 113, 0.12);
-    --info: #60a5fa;
-    --info-bg: rgba(96, 165, 250, 0.12);
+    --success: #6fae87;
+    --success-bg: rgba(111, 174, 135, 0.14);
+    --warning: #d9a15c;
+    --warning-bg: rgba(217, 161, 92, 0.14);
+    --error: #e07a68;
+    --error-bg: rgba(224, 122, 104, 0.14);
+    --info: #7f9fc0;
+    --info-bg: rgba(127, 159, 192, 0.14);
 
-    --bg-base: #1c1917;
-    --bg-page: #1c1917;
-    --bg-surface: #292524;
-    --bg-surface-hover: #3a332c;
-    --bg-elevated: #322d28;
-    --bg-overlay: rgba(12, 10, 8, 0.6);
-    --bg-sidebar: #1c1917;
-    --bg-sidebar-hover: #292524;
-    --bg-input: #292524;
-    --bg-input-focus: #3a332c;
-    --bg-code: #241f1b;
-    --bg-bubble-user: #3a332c;
-    --bg-bubble-assistant: #292524;
+    --bg-base: #0b0b0b;
+    --bg-page: #151515;
+    --bg-surface: #1a1a19;
+    --bg-surface-hover: #20201f;
+    --bg-elevated: #20201f;
+    --bg-overlay: rgba(0, 0, 0, 0.65);
+    --bg-sidebar: #0b0b0b;
+    --bg-sidebar-hover: #1a1a19;
+    --bg-input: #20201f;
+    --bg-input-focus: #2c2c2a;
+    --bg-code: #0d0d0c;
+    --bg-bubble-user: #20201f;
+    --bg-bubble-assistant: #1a1a19;
 
-    --text-primary: #f5f0e8;
-    --text-secondary: #d6cbba;
-    --text-tertiary: #b3a693;
-    --text-quaternary: #8a7d69;
-    --text-disabled: #6b6152;
-    --text-inverse: #1c1917;
-    --text-link: #fbbf24;
-    --text-link-hover: #fcd34d;
-    --text-bubble-user: #f5f0e8;
-    --text-bubble-assistant: #d6cbba;
+    --text-primary: #f5f5f5;
+    --text-secondary: #a3a3a3;
+    --text-tertiary: #8a8a8a;
+    --text-quaternary: #666666;
+    --text-disabled: #4d4d4d;
+    --text-inverse: #0b0b0b;
+    --text-link: #e08b6e;
+    --text-link-hover: #eda98e;
+    --text-bubble-user: #f5f5f5;
+    --text-bubble-assistant: #d4d4d4;
 
-    --border-default: #3f3830;
-    --border-subtle: #2f2a24;
-    --border-strong: #554b40;
+    --border-default: rgba(255, 255, 255, 0.10);
+    --border-subtle: rgba(255, 255, 255, 0.06);
+    --border-strong: rgba(255, 255, 255, 0.18);
 
-    --comp-header-bg: rgba(28, 25, 23, 0.85);
+    --comp-header-bg: rgba(21, 21, 21, 0.85);
     --comp-card-radius: 8px;
     --comp-input-radius: 8px;
     --comp-button-radius: 6px;
-    --comp-button-primary-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+    --comp-button-primary-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
     --chat-bubble-radius-lg: 10px;
     --chat-bubble-radius-sm: 8px;
-    --bubble-user: #3a332c;
-    --bubble-user-text: #f5f0e8;
+    --bubble-user: #20201f;
+    --bubble-user-text: #f5f5f5;
 
-    --hljs-fg: #e8e0d2;
-    --hljs-bg: #241f1b;
-    --hljs-keyword: #f0a868;
-    --hljs-string: #4ade80;
-    --hljs-number: #7dd3fc;
-    --hljs-comment: #8a7d69;
-    --hljs-title: #f0a868;
-    --hljs-built-in: #5eead4;
-    --hljs-meta: #f0a868;
+    --hljs-fg: #e8e6e3;
+    --hljs-bg: #0d0d0c;
+    --hljs-keyword: #e8a07a;
+    --hljs-string: #6fae87;
+    --hljs-number: #93b8d6;
+    --hljs-comment: #6b6b66;
+    --hljs-title: #e8a07a;
+    --hljs-built-in: #7fc4b4;
+    --hljs-meta: #e8a07a;
 
-    --terminal-bg: #14110f;
-    --terminal-header-bg: #241f1b;
-    --terminal-text: #e8e0d2;
+    --terminal-bg: #0b0b0b;
+    --terminal-header-bg: #1a1a19;
+    --terminal-text: #e8e6e3;
 
     --sig-radius-card: 8px;
     --sig-radius-button: 6px;
@@ -663,9 +719,9 @@ html.dark {
     --sig-blur-header: 8px;
     --sig-blur-panel: 0px;
     --sig-glass-opacity: 1;
-    --sig-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.4);
-    --sig-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.5);
-    --sig-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --sig-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45);
+    --sig-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.55);
+    --sig-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
     --sig-input-ring: 3px;
     --sig-glow-color: transparent;
     --sig-glow-intensity: 0;
@@ -673,10 +729,14 @@ html.dark {
     --sig-accent-gradient: none;
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-sm: 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
-    --shadow-lg: 0 12px 34px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.35);
-    --shadow-xl: 0 22px 48px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.35);
+    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
+    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
+    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 12px 34px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.35);
+    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 22px 48px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.35);
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.12), 0 8px 28px rgba(0, 0, 0, 0.70), 0 2px 8px rgba(0, 0, 0, 0.50);
 }
 
 /* ============================================================ */
@@ -789,6 +849,10 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(6, 16, 13, 0.10), 0 2px 6px rgba(6, 16, 13, 0.06);
 }
 
 [data-theme='terminal-dark'] {
@@ -899,6 +963,10 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.60), 0 2px 8px rgba(0, 0, 0, 0.40);
 }
 
 /* ============================================================ */
@@ -1011,6 +1079,10 @@ html.dark {
     --shadow-md: 0 8px 24px rgba(76, 79, 150, 0.12), 0 2px 6px rgba(76, 79, 150, 0.06);
     --shadow-lg: 0 18px 44px rgba(76, 79, 150, 0.16), 0 6px 12px rgba(76, 79, 150, 0.08);
     --shadow-xl: 0 28px 64px rgba(76, 79, 150, 0.2), 0 10px 20px rgba(76, 79, 150, 0.1);
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(76, 79, 150, 0.16), 0 2px 6px rgba(76, 79, 150, 0.08);
 }
 
 [data-theme='aurora-dark'] {
@@ -1117,10 +1189,14 @@ html.dark {
     --sig-accent-gradient: linear-gradient(135deg, var(--primary), var(--accent));
 
     --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-sm: 0 2px 10px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-md: 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
-    --shadow-lg: 0 20px 50px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.3);
-    --shadow-xl: 0 30px 70px rgba(0, 0, 0, 0.6), 0 10px 20px rgba(0, 0, 0, 0.35);
+    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 2px 10px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.2);
+    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
+    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 20px 50px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.3);
+    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 30px 70px rgba(0, 0, 0, 0.6), 0 10px 20px rgba(0, 0, 0, 0.35);
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+       浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
+       改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45);
 }
 
 
@@ -1270,6 +1346,15 @@ body {
 
 .ant-dropdown-menu,
 .ant-menu { background: var(--bg-elevated) !important; }
+
+/* 浮层投影统一走 --shadow-popover（CDS §1.4 的双环浮层：浅色是外包含线 + 弥散投影，
+   深色是**内侧倒角高光**而非外圈白线）。此前这三类浮层用的是 antd 自带投影，
+   既不随主题、也与自研组件不在同一套光线上。 */
+.ant-dropdown-menu,
+.ant-select-dropdown,
+.ant-popover-inner {
+    box-shadow: var(--shadow-popover) !important;
+}
 .ant-dropdown-menu-item,
 .ant-menu-item {
     border-radius: var(--radius-md) !important;
@@ -1386,7 +1471,6 @@ html[data-theme="notion-dark"] #app {
 }
 
 /* 未走 --sig-radius-* 的聊天类组件（历史类名）跟随主题圆角 */
-html[data-theme="notion-light"] .input-card,
 html[data-theme="notion-light"] .tool-row,
 html[data-theme="notion-light"] .tool-result,
 html[data-theme="notion-light"] .suggestion-card {
@@ -1394,12 +1478,33 @@ html[data-theme="notion-light"] .suggestion-card {
     box-shadow: none !important;
 }
 
-html[data-theme="notion-dark"] .input-card,
+/* 输入框**不**并入上面的"无投影"名单：它的底色与画布同值，一旦连内环都没有
+   就整个隐进背景里（原先正是如此）。CDS 也把 Composer 归为"必须有闭合外框"一类。 */
+html[data-theme="notion-light"] .input-card {
+    border-radius: 3px !important;
+}
+
 html[data-theme="notion-dark"] .tool-row,
 html[data-theme="notion-dark"] .tool-result,
 html[data-theme="notion-dark"] .suggestion-card {
     border-radius: 3px !important;
     box-shadow: none !important;
+}
+
+html[data-theme="notion-dark"] .input-card {
+    border-radius: 3px !important;
+}
+
+/* 极简功能刻意不要环境光（该主题以硬边表达层次），所以只把输入框三态的
+   **环境光分量**清零 —— 内环发丝线与聚焦外环保留，否则输入框在获得焦点时
+   没有任何可见反馈。这里覆盖的是 :root 里的别名，不涉及 8 个主题块。
+   选择器刻意写成 :is(...) 而不是并列两个 html[data-theme=...] ——
+   后者末尾会构成 `[data-theme='x'] {`，被 check-theme-token-parity 的
+   正则误认成"某个主题块"，进而报出这个块与其它块 token 名不一致。 */
+html:is([data-theme="notion-light"], [data-theme="notion-dark"]) {
+    --composer-ambient: transparent;
+    --composer-ambient-hover: transparent;
+    --composer-ambient-focus: transparent;
 }
 
 /* 极简功能：用户气泡 1px 实线描边（无阴影的替代表达） */
@@ -1481,8 +1586,8 @@ html[data-theme="paper-dark"] .topbar {
 
 /* 4. GPU 加速：transform/opacity 替换 top/left 变化 */
 .transform-transition {
-  transition: transform var(--dur-normal) cubic-bezier(0.22, 1, 0.36, 1),
-              opacity var(--dur-normal) cubic-bezier(0.22, 1, 0.36, 1);
+  transition: transform var(--dur-normal) var(--ease-out),
+              opacity var(--dur-normal) var(--ease-out);
 }
 
 /* 5. 文本渲染优化 */
@@ -1558,7 +1663,8 @@ body {
   flex: none;
   font-size: var(--fs-xs);
   color: var(--text-muted);
-  transition: transform var(--dur-normal) var(--ease-out);
+  /* 箭头展开属「胶囊 / Tab 移动」一档 → CDS 的 SPRING_SNAPPY 预设 */
+  transition: transform var(--spring-snappy);
 }
 .chat-chevron.open { transform: rotate(90deg); }
 
@@ -1601,4 +1707,175 @@ body {
 }
 @media (max-width: 576px) {
   .chat-row-shell { padding: 0 12px; }
+}
+
+/* ============================================================ */
+/* CDS 对齐层（open-claude-ui 分析手册）
+   出处：v1/01 §1.4 滚动驱动渐隐遮罩 · §1.6 动效令牌与物理曲线 ·
+        v1/02 原子控件阶梯 · v1/08 §8.2–8.5 Agent 前端规约 · v2/04 §4.3 响应时间矩阵。
+   本层只补"机制"，取值一律走 token —— check:ui 的四条棘轮仍是硬约束。 */
+
+/* ── 1. 滚动渐隐（7 档非线性遮罩）──────────────────────────────
+   两个理由说明为什么不用"盖一层渐变"：
+     ① 遮罩不参与布局、不吃指针事件，且不会与可滚动内容互相干扰；
+     ② 单段线性渐变在边缘会被读成"硬切" —— CDS 用的是按感知伽马校准的 7 档采样点。
+   渐隐尺寸由**滚动时间轴**驱动（触顶归零、滚离渐开至 28px），全程只走合成器，
+   不进主线程 —— 这是它比"scroll 事件里改 opacity"更该用的原因。
+   不支持 animation-timeline 的引擎**完全不应用遮罩**（渐进增强），
+   而不是退化成"永远淡着一层"。 */
+@property --scroll-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --scroll-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+
+:root {
+  /* 物理宽度严格 28px（CDS 明确否掉了近似的 24px / 32px） */
+  --scroll-fade-size: 28px;
+  --scroll-fade-top: 0px;
+  --scroll-fade-bottom: 0px;
+  /* 7 档非线性采样：.05 / .15 / .3 / .5 / .7 / .85 / 1
+     必须写成**一行** —— check-theme-token-contract 按行判定，色值只允许出现在
+     `--name:` 定义行上，换行后余下的档位会被判为组件里的硬编码色值。 */
+  --scroll-fade-mask: linear-gradient(to bottom, #0000, #0000000d calc(var(--scroll-fade-top) * .15), #00000026 calc(var(--scroll-fade-top) * .3), #0000004d calc(var(--scroll-fade-top) * .45), #00000080 calc(var(--scroll-fade-top) * .6), #000000b3 calc(var(--scroll-fade-top) * .75), #000000d9 calc(var(--scroll-fade-top) * .87), #000 var(--scroll-fade-top), #000 calc(100% - var(--scroll-fade-bottom)), #000000d9 calc(100% - var(--scroll-fade-bottom) * .87), #000000b3 calc(100% - var(--scroll-fade-bottom) * .75), #00000080 calc(100% - var(--scroll-fade-bottom) * .6), #0000004d calc(100% - var(--scroll-fade-bottom) * .45), #00000026 calc(100% - var(--scroll-fade-bottom) * .3), #0000000d calc(100% - var(--scroll-fade-bottom) * .15), #0000);
+}
+
+@keyframes cdsScrollFadeTop { from { --scroll-fade-top: 0px; } to { --scroll-fade-top: var(--scroll-fade-size); } }
+@keyframes cdsScrollFadeBottom { from { --scroll-fade-bottom: 0px; } to { --scroll-fade-bottom: var(--scroll-fade-size); } }
+
+/* 应用点：滚动容器自带 .scroll-fade（上下缘）或 .scroll-fade-top（**仅上缘**）。
+   仅上缘这一档是给「底部有 sticky 子元素」的容器用的（如 .message-list 的
+   「回到底部」按钮与提问导航条）—— 下缘遮罩会把它们一起淡掉。
+   用 animation 长手属性而不是简写：简写的第一个时长在滚动时间轴下无意义，
+   而全局 prefers-reduced-motion 的 `animation-duration: .01ms !important` 会污染它。 */
+@supports (animation-timeline: scroll()) {
+  @media (prefers-reduced-motion: no-preference) {
+    .scroll-fade,
+    .scroll-fade-top {
+      mask-image: var(--scroll-fade-mask);
+      -webkit-mask-image: var(--scroll-fade-mask);
+      animation-name: cdsScrollFadeTop;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: scroll(self block);
+      animation-range: 0 var(--scroll-fade-size);
+    }
+
+    .scroll-fade {
+      animation-name: cdsScrollFadeTop, cdsScrollFadeBottom;
+      animation-timeline: scroll(self block), scroll(self block);
+      animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
+    }
+  }
+}
+
+/* ── 2. 焦点环契约 ───────────────────────────────────────────────
+   CDS 明确不用操作系统的默认蓝色外框，而是品牌色的三层环：
+     ① 1px 隔离垫片（隔开控件与光晕）② 1.5px 主聚焦环 ③ 6px 弥散光晕。
+   本实现的取舍（写清理由，避免后来者以为是漏做）：
+     · 第①层"垫片"用 **outline-offset 的间隙**表达，而不是 `inset` 阴影 ——
+       垫片要取"控件背后的底色"，用固定色（如 --bg-page）会在页面上其它底色处
+       露出错误的一圈；间隙让真实的父级背景透出来，天然正确。
+     · 第③层"光晕"不进全局基线：它必须走 box-shadow，而 box-shadow 会把控件
+       自己的投影**整个顶掉**（焦点一落在带阴影的卡片上，阴影就跳一下）。
+       需要完整三层环的控件自己组合 `--focus-ring-shadow`（见 P1-8 的输入框）。
+   `--focus-ring-color` 单列成 token：换主题只改这一处，陶土主题即为 clay。 */
+:root {
+  --focus-ring-color: var(--primary);
+  --focus-ring-width: 2px;
+  --focus-ring-offset: 2px;
+  --focus-ring-glow: color-mix(in srgb, var(--focus-ring-color) 25%, transparent);
+  /* 完整三层环（供自行组合 box-shadow 的控件使用） */
+  --focus-ring-shadow: 0 0 0 var(--focus-ring-width) var(--focus-ring-color), 0 0 6px 1px var(--focus-ring-glow);
+}
+
+/* 全局基线：`:where()` 的 0 特异性意味着任何组件自带写法都能覆盖它 ——
+   它只负责"没人写过的交互元素"也有可见焦点。键盘之外不出现（:focus-visible）。 */
+:where(
+  button,
+  a[href],
+  summary,
+  [role='button'],
+  [role='tab'],
+  [role='option'],
+  [role='menuitem'],
+  [tabindex]:not([tabindex='-1'])
+):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
+}
+
+/* 表单域：外扩的环会被 overflow:hidden 的容器裁掉，故贴边（offset 0）。
+   现代引擎的 outline 会跟随 border-radius，不会切角。 */
+:where(input, select, textarea):focus-visible {
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: 0;
+}
+
+/* ── 2b. 输入框双环三态（CDS §1.4.4 Composer Dual-Ring）─────────
+   输入框是这套界面里唯一"必须有闭合外框 + 弥散投影"的常驻容器，
+   三态共用一条**环境光**分量。环境光以色源 --bg-overlay 做 color-mix 派生，
+   所以一份定义就能在明暗主题下都得到"该暗的暗"的投影，
+   不必往 8 个主题块里各加一条 token（parity 守卫因此不受影响）。 */
+:root {
+  --composer-ambient: color-mix(in srgb, var(--bg-overlay) 8%, transparent);
+  --composer-ambient-hover: color-mix(in srgb, var(--bg-overlay) 12%, transparent);
+  --composer-ambient-focus: color-mix(in srgb, var(--bg-overlay) 16%, transparent);
+  /* 常态：托起感 + 内环发丝线。内环用 inset 阴影而不是 border —— 不参与盒模型，
+     所以从常态切到聚焦态不会挤出 1px 的位移抖动。 */
+  --composer-shadow: 0 4px 20px var(--composer-ambient), inset 0 0 0 var(--hairline-width) var(--border-subtle);
+  /* 悬停：投影加深、内环变实 */
+  --composer-shadow-hover: 0 4px 24px var(--composer-ambient-hover), inset 0 0 0 var(--hairline-width) var(--border-default);
+  /* 聚焦：内环 + 外环双环咬合。环宽交给 --sig-input-ring，
+     让各主题的性格参与（如 aurora 是 4px 柔光、notion 是 2px 硬边）。 */
+  --composer-shadow-focus: 0 4px 24px var(--composer-ambient-focus), inset 0 0 0 var(--sig-input-ring) var(--ring-inner), 0 0 0 var(--sig-input-ring) var(--ring-outer);
+}
+
+/* ── 3. 排印防御（CDS v1/01 §1.5）──────────────────────────────
+   这四条是"生成式前端最常见、也最显廉价"的排版缺陷，逐条给机制而不是逐处手改。 */
+
+/* ① 标题行均衡 / 正文去孤字。
+   浏览器自带断行算法负责分配，`text-wrap: balance` 避免多行标题末行只剩一个词，
+   `pretty` 避免段落尾行落单字。`:where()` 保持 0 特异性，组件仍可覆盖。 */
+:where(h1, h2, h3, h4, h5, h6) { text-wrap: balance; }
+:where(p, li, dd, blockquote) { text-wrap: pretty; }
+
+/* ② 超长串安全换行。
+   模型 ID（claude-3-7-sonnet-20250219-thinking-exp）、commit hash、无空格路径会撑破容器。
+   用 overflow-wrap: anywhere 而不是 word-break: break-all —— 后者会连正常英文单词
+   也从中间打断，读起来像坏掉的排版（本仓历史上有 12 处 break-all，属同一类问题）。 */
+.wrap-anywhere { overflow-wrap: anywhere; word-break: normal; }
+
+/* ③ 多行截断阶梯：1 行（侧栏会话标题）/ 2 行（思考折叠摘要）/ 3 行（卡片描述）。
+   三档统一在此定义，避免各处各写一份 -webkit-box 组合。 */
+.clamp-1,
+.clamp-2,
+.clamp-3 {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.clamp-1 { -webkit-line-clamp: 1; }
+.clamp-2 { -webkit-line-clamp: 2; }
+.clamp-3 { -webkit-line-clamp: 3; overflow-wrap: anywhere; }
+
+/* ④ 行内图标的光学基线。
+   SVG 默认坐 baseline，视觉重心明显高于小写字母的 x-height，看起来"浮在上空"。
+   下沉 1/8em（14~16px 文本约 1.8~2px）后与字母几何重心重合；11~12px 的小字用 0.075em。
+   注意 antd 的 .anticon 自带同类校准，本工具类是给自绘图标/图片用的。 */
+.icon-inline { vertical-align: -0.125em; }
+.icon-inline-sm { vertical-align: -0.075em; }
+
+/* ⑤ 输入控件字号地板。
+   iOS WebKit 下任何 font-size < 16px 的输入框获得焦点都会强制放大整页，且不会自动缩回。
+   只在窄屏生效，不干扰桌面端的等比缩放入口（--ui-font-size）。
+   必须 !important：antd 的 .ant-input 字号是运行时注入的，选择器顺序不可依赖 ——
+   与本文档既有的 antd 覆盖约定一致；ConfigProvider 无法表达"只在窄屏生效"。 */
+@media (max-width: 768px) {
+  .ant-input,
+  .ant-input-affix-wrapper .ant-input,
+  .ant-select-selector,
+  textarea,
+  select,
+  input:not([type='checkbox']):not([type='radio']):not([type='file']) {
+    font-size: max(16px, var(--fs-base)) !important;
+  }
 }

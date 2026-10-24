@@ -65,8 +65,8 @@ html, body, #app {
   min-height: 100dvh;
   background: var(--bg-page);
   color: var(--text-primary);
-  transition: background-color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1),
-              color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-color var(--dur-slow) var(--ease-out),
+              color var(--dur-slow) var(--ease-out);
 }
 
 body {
@@ -75,15 +75,16 @@ body {
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
   background: var(--bg-page);
-  transition: background-color var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1),
-              background-image var(--dur-slow) cubic-bezier(0.22, 1, 0.36, 1);
+  transition: background-color var(--dur-slow) var(--ease-out),
+              background-image var(--dur-slow) var(--ease-out);
 }
 
 /* 主题切换：全局平滑过渡 - 仅对特定属性生效，避免 * 选择器性能问题 */
 :root {
   transition-property: background-color, border-color, box-shadow, color;
-  transition-duration: 0.3s;
-  transition-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+  /* 0.3s 正是 CDS 阶梯里的 --dur-sheet（抽屉/大面板一档），改为 token 以免与阶梯脱钩 */
+  transition-duration: var(--dur-sheet);
+  transition-timing-function: var(--ease-out);
   transition-delay: 0s;
 }
 

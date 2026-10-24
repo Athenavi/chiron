@@ -433,7 +433,7 @@ onUnmounted(() => {
   box-shadow: var(--shadow-md);
   transform: translateY(-1px);
 }
-.nav-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.nav-card:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 .nav-card:active { transform: translateY(0); }
 .nav-card-icon {
   display: inline-flex;

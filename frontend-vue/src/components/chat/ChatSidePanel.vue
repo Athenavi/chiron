@@ -588,7 +588,7 @@ function pickSession(id: string) {
         </div>
       </div>
 
-      <div class="anchor-list">
+      <div class="anchor-list scroll-fade">
         <div
           v-for="i in filteredIndexes"
           :key="i"
@@ -710,7 +710,7 @@ function pickSession(id: string) {
         </div>
       </div>
 
-      <div class="session-list">
+      <div class="session-list scroll-fade">
         <div
           v-if="filteredSessions.length === 0"
           class="list-empty"

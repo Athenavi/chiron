@@ -959,6 +959,16 @@ func (h *SSOHandler) CreateProvider(w http.ResponseWriter, r *http.Request) {
 
 // GetProvider GET /v1/ent/sso/providers/{id}
 func (h *SSOHandler) GetProvider(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid provider id")
@@ -971,6 +981,11 @@ func (h *SSOHandler) GetProvider(w http.ResponseWriter, r *http.Request) {
 	}
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
+		return
+	}
+	// 跨租户读防护：非 owner 只能读自己租户的 SSO Provider。
+	if !isOwner && provider.TenantID != scope {
+		NotFound(w, ErrNotFound)
 		return
 	}
 	OK(w, sanitizeProvider(provider))
@@ -1000,6 +1015,16 @@ type updateProviderRequest struct {
 // UpdateProvider PUT /v1/ent/sso/providers/{id}
 // client_secret 为空串或脱敏占位符时保留原密文；提供新值时重新加密（需密钥）。
 func (h *SSOHandler) UpdateProvider(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid provider id")
@@ -1159,10 +1184,10 @@ func (h *SSOHandler) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 		     protocol = $10, provider_type = $11, display_name = $12, icon = $13, sort_order = $14,
 		     auth_url = $15, token_url = $16, userinfo_url = $17, extra = $18,
 		     updated_at = NOW()
-		 WHERE id = $1`,
+		 WHERE id = $1 AND ($19 = '' OR tenant_id::text = $19)`,
 		id, name, nullString(issuer), clientID, secretEnc, scopes, enabled, autoProvision, mappingJSON,
 		protocol, providerType, nullString(displayName), nullString(icon), sortOrder,
-		nullString(authURL), nullString(tokenURL), nullString(userinfoURL), extraJSON); err != nil {
+		nullString(authURL), nullString(tokenURL), nullString(userinfoURL), extraJSON, scope); err != nil {
 		if isUniqueViolation(err) {
 			logAndRespond(w, err, http.StatusConflict, "provider name already exists")
 			return
@@ -1181,12 +1206,22 @@ func (h *SSOHandler) UpdateProvider(w http.ResponseWriter, r *http.Request) {
 
 // DeleteProvider DELETE /v1/ent/sso/providers/{id}
 func (h *SSOHandler) DeleteProvider(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid provider id")
 		return
 	}
-	tag, err := h.db.Exec(r.Context(), `DELETE FROM ent_oidc_providers WHERE id = $1`, id)
+	tag, err := h.db.Exec(r.Context(), `DELETE FROM ent_oidc_providers WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return

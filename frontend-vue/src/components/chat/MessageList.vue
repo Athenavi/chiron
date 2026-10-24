@@ -513,7 +513,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 <template>
   <div
     ref="scrollRef"
-    class="message-list"
+    class="message-list scroll-fade-top"
     @scroll.passive="onScroll"
     @wheel.passive="onUserInput"
     @touchstart.passive="onUserInput"
@@ -749,7 +749,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 }
 .rail-dot:hover { background: var(--text-secondary); transform: scale(1.35); }
 .rail-dot.active { background: var(--primary); transform: scale(1.35); }
-.rail-dot:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.rail-dot:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 @media (max-width: 768px) { .question-rail { display: none; } }   /* 窄屏优先保证内容宽度 */
 
 /* 选中文本操作菜单：贴在选区上方（放不下则翻到下方） */

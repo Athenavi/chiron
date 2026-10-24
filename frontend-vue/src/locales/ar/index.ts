@@ -584,7 +584,7 @@ export default {
     built_in: "مدمج",
     hello_how_can_i_help_you: "مرحبًا، كيف يمكنني مساعدتك؟",
     your_input_belongs_to_you_using_generated_content_must_comply_with_applicable_law_you_are_responsible_for_content_you_publish: "المحتوى الذي تُدخله ملك لك؛ ويجب امتثال استخدام المحتوى المولَّد للقانون المطبّق. أنت مسؤول عن المحتوى الذي تنشره.",
-    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "خلفية ورقية دافئة + لمسات كهرمانية، زوايا ناعمة، مريحة للقراءة الطويلة",
+    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "خلفية ورقية دافئة بلمسات طينية (كلاي)، زوايا ناعمة، مريحة للقراءة الطويلة",
     queuing: "في الطابور",
     sort: "ترتيب",
     sort_smaller_first: "ترتيب (الأصغر أولًا)",

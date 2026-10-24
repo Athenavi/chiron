@@ -119,6 +119,11 @@ type entUserItem struct {
 // ListUsers GET /v1/ent/users?search=&page=&page_size=
 // users LEFT JOIN ent_user_roles/ent_roles + 群组信息，email/姓名模糊搜索 + 分页。
 func (h *EntIdentityHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	search := r.URL.Query().Get("search")
 	if len(search) > 200 {
 		search = search[:200]
@@ -129,8 +134,9 @@ func (h *EntIdentityHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 	var total int
 	err := h.db.QueryRow(ctx,
 		`SELECT COUNT(*)::int FROM users u
-		 WHERE ($1::text = '' OR u.email ILIKE '%' || $1 || '%' OR u.name ILIKE '%' || $1 || '%')`,
-		search).Scan(&total)
+		 WHERE ($1::text = '' OR u.email ILIKE '%' || $1 || '%' OR u.name ILIKE '%' || $1 || '%')
+		   AND ($2 = '' OR u.tenant_id::text = $2)`,
+		search, scope).Scan(&total)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -146,9 +152,10 @@ func (h *EntIdentityHandler) ListUsers(w http.ResponseWriter, r *http.Request) {
 		                  WHERE gm.user_id = u.id), '[]'::json) AS groups
 		 FROM users u
 		 WHERE ($1::text = '' OR u.email ILIKE '%' || $1 || '%' OR u.name ILIKE '%' || $1 || '%')
+		   AND ($4 = '' OR u.tenant_id::text = $4)
 		 ORDER BY u.created_at DESC
 		 LIMIT $2 OFFSET $3`,
-		search, pageSize, (page-1)*pageSize)
+		search, pageSize, (page-1)*pageSize, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -198,12 +205,17 @@ func (h *EntIdentityHandler) SetUserRoles(w http.ResponseWriter, r *http.Request
 		return
 	}
 	ctx := r.Context()
+	scope, isOwner := entTenantScope(auth.GetClaims(ctx))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 
-	if !h.userExists(ctx, userID) {
+	if !h.userExists(ctx, userID, scope) {
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[])`, req.RoleIDs) {
+	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
 		BadRequest(w, "one or more role_ids do not exist")
 		return
 	}
@@ -248,12 +260,17 @@ func (h *EntIdentityHandler) SetUserGroups(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ctx := r.Context()
+	scope, isOwner := entTenantScope(auth.GetClaims(ctx))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 
-	if !h.userExists(ctx, userID) {
+	if !h.userExists(ctx, userID, scope) {
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.GroupIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_groups WHERE id = ANY($1::uuid[])`, req.GroupIDs) {
+	if len(req.GroupIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_groups WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.GroupIDs, scope) {
 		BadRequest(w, "one or more group_ids do not exist")
 		return
 	}
@@ -295,7 +312,7 @@ type entRoleResponse struct {
 	UpdatedAt   time.Time `json:"updated_at"`
 }
 
-func (h *EntIdentityHandler) scanRole(ctx context.Context, id string, withUserCount bool) (*entRoleResponse, error) {
+func (h *EntIdentityHandler) scanRole(ctx context.Context, id string, withUserCount bool, scope string) (*entRoleResponse, error) {
 	userCountExpr := `0`
 	if withUserCount {
 		userCountExpr = `(SELECT COUNT(*)::int FROM ent_user_roles ur WHERE ur.role_id = r.id)`
@@ -305,7 +322,7 @@ func (h *EntIdentityHandler) scanRole(ctx context.Context, id string, withUserCo
 	err := h.db.QueryRow(ctx,
 		`SELECT r.id, r.name, r.display_name, r.is_builtin, COALESCE(r.permissions, '{}'),
 		        `+userCountExpr+`, r.created_at, r.updated_at
-		 FROM ent_roles r WHERE r.id = $1`, id).
+		 FROM ent_roles r WHERE r.id = $1 AND ($2 = '' OR r.tenant_id::text = $2)`, id, scope).
 		Scan(&role.ID, &role.Name, &displayName, &role.IsBuiltin, &role.Permissions,
 			&role.UserCount, &role.CreatedAt, &role.UpdatedAt)
 	if err != nil {
@@ -322,8 +339,14 @@ func (h *EntIdentityHandler) scanRole(ctx context.Context, id string, withUserCo
 
 // ListRoles GET /v1/ent/roles
 func (h *EntIdentityHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
-		`SELECT r.id FROM ent_roles r ORDER BY r.is_builtin DESC, r.name`)
+		`SELECT r.id FROM ent_roles r WHERE ($1 = '' OR r.tenant_id::text = $1) ORDER BY r.is_builtin DESC, r.name`,
+		scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -337,7 +360,7 @@ func (h *EntIdentityHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 			logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 			return
 		}
-		role, err := h.scanRole(r.Context(), id, true)
+		role, err := h.scanRole(r.Context(), id, true, scope)
 		if err != nil {
 			logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 			return
@@ -353,12 +376,17 @@ func (h *EntIdentityHandler) ListRoles(w http.ResponseWriter, r *http.Request) {
 
 // GetRole GET /v1/ent/roles/{id}
 func (h *EntIdentityHandler) GetRole(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid role id")
 		return
 	}
-	role, err := h.scanRole(r.Context(), id, true)
+	role, err := h.scanRole(r.Context(), id, true, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, ErrNotFound)
 		return
@@ -405,7 +433,7 @@ func (h *EntIdentityHandler) CreateRole(w http.ResponseWriter, r *http.Request) 
 		if err != nil {
 			return nil, err
 		}
-		return h.scanRole(r.Context(), id, true)
+		return h.scanRole(r.Context(), id, true, tenantStr(tenantID))
 	}()
 	if err != nil {
 		if isUniqueViolation(err) {
@@ -427,6 +455,11 @@ type updateRoleRequest struct {
 // UpdateRole PUT /v1/ent/roles/{id}。
 // 内置角色禁止修改 name/permissions，违反返回 409。
 func (h *EntIdentityHandler) UpdateRole(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid role id")
@@ -439,7 +472,7 @@ func (h *EntIdentityHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx := r.Context()
 
-	existing, err := h.scanRole(ctx, id, false)
+	existing, err := h.scanRole(ctx, id, false, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, ErrNotFound)
 		return
@@ -475,8 +508,8 @@ func (h *EntIdentityHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 	}
 
 	if _, err := h.db.Exec(ctx,
-		`UPDATE ent_roles SET name = $2, display_name = $3, permissions = $4, updated_at = NOW() WHERE id = $1`,
-		id, newName, newDisplay, newPerms); err != nil {
+		`UPDATE ent_roles SET name = $2, display_name = $3, permissions = $4, updated_at = NOW() WHERE id = $1 AND ($5 = '' OR tenant_id::text = $5)`,
+		id, newName, newDisplay, newPerms, scope); err != nil {
 		if isUniqueViolation(err) {
 			logAndRespond(w, err, http.StatusConflict, "role name already exists")
 			return
@@ -496,6 +529,11 @@ func (h *EntIdentityHandler) UpdateRole(w http.ResponseWriter, r *http.Request) 
 
 // DeleteRole DELETE /v1/ent/roles/{id}。内置角色禁止删除（409）。
 func (h *EntIdentityHandler) DeleteRole(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid role id")
@@ -503,7 +541,7 @@ func (h *EntIdentityHandler) DeleteRole(w http.ResponseWriter, r *http.Request) 
 	}
 	ctx := r.Context()
 
-	existing, err := h.scanRole(ctx, id, false)
+	existing, err := h.scanRole(ctx, id, false, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, ErrNotFound)
 		return
@@ -520,7 +558,7 @@ func (h *EntIdentityHandler) DeleteRole(w http.ResponseWriter, r *http.Request) 
 
 	// 先收集受影响用户（级联删除后关联即消失），再执行删除
 	affected := h.usersAffectedByRole(ctx, id)
-	tag, err := h.db.Exec(ctx, `DELETE FROM ent_roles WHERE id = $1`, id)
+	tag, err := h.db.Exec(ctx, `DELETE FROM ent_roles WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -546,13 +584,13 @@ type entGroupResponse struct {
 	CreatedAt   time.Time `json:"created_at"`
 }
 
-func (h *EntIdentityHandler) scanGroup(ctx context.Context, id string) (*entGroupResponse, error) {
+func (h *EntIdentityHandler) scanGroup(ctx context.Context, id string, scope string) (*entGroupResponse, error) {
 	var group entGroupResponse
 	var description *string
 	err := h.db.QueryRow(ctx,
 		`SELECT g.id, g.name, g.description, g.created_at,
 		        (SELECT COUNT(*)::int FROM ent_group_members gm WHERE gm.group_id = g.id)
-		 FROM ent_groups g WHERE g.id = $1`, id).
+		 FROM ent_groups g WHERE g.id = $1 AND ($2 = '' OR g.tenant_id::text = $2)`, id, scope).
 		Scan(&group.ID, &group.Name, &description, &group.CreatedAt, &group.MemberCount)
 	if err != nil {
 		return nil, err
@@ -569,11 +607,18 @@ func (h *EntIdentityHandler) scanGroup(ctx context.Context, id string) (*entGrou
 
 // ListGroups GET /v1/ent/groups
 func (h *EntIdentityHandler) ListGroups(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	rows, err := h.db.Query(r.Context(),
 		`SELECT g.id, g.name, g.description, g.created_at, COUNT(gm.user_id)::int AS member_count
 		 FROM ent_groups g
 		 LEFT JOIN ent_group_members gm ON gm.group_id = g.id
-		 GROUP BY g.id ORDER BY g.name`)
+		 WHERE ($1 = '' OR g.tenant_id::text = $1)
+		 GROUP BY g.id ORDER BY g.name`,
+		scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -602,12 +647,17 @@ func (h *EntIdentityHandler) ListGroups(w http.ResponseWriter, r *http.Request) 
 
 // GetGroup GET /v1/ent/groups/{id}
 func (h *EntIdentityHandler) GetGroup(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid group id")
 		return
 	}
-	group, err := h.scanGroup(r.Context(), id)
+	group, err := h.scanGroup(r.Context(), id, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, ErrNotFound)
 		return
@@ -641,6 +691,11 @@ func (h *EntIdentityHandler) CreateGroup(w http.ResponseWriter, r *http.Request)
 	if claims != nil && claims.TenantID != 0 {
 		tenantID = claims.TenantID
 	}
+	scope, isOwner := entTenantScope(claims)
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 
 	var id string
 	err := h.db.QueryRow(r.Context(),
@@ -654,7 +709,7 @@ func (h *EntIdentityHandler) CreateGroup(w http.ResponseWriter, r *http.Request)
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
-	group, err := h.scanGroup(r.Context(), id)
+	group, err := h.scanGroup(r.Context(), id, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -669,6 +724,11 @@ type updateGroupRequest struct {
 
 // UpdateGroup PUT /v1/ent/groups/{id}
 func (h *EntIdentityHandler) UpdateGroup(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid group id")
@@ -685,7 +745,7 @@ func (h *EntIdentityHandler) UpdateGroup(w http.ResponseWriter, r *http.Request)
 	}
 	ctx := r.Context()
 
-	existing, err := h.scanGroup(ctx, id)
+	existing, err := h.scanGroup(ctx, id, scope)
 	if errors.Is(err, pgx.ErrNoRows) {
 		NotFound(w, ErrNotFound)
 		return
@@ -708,8 +768,8 @@ func (h *EntIdentityHandler) UpdateGroup(w http.ResponseWriter, r *http.Request)
 	}
 
 	if _, err := h.db.Exec(ctx,
-		`UPDATE ent_groups SET name = $2, description = $3 WHERE id = $1`,
-		id, newName, newDesc); err != nil {
+		`UPDATE ent_groups SET name = $2, description = $3 WHERE id = $1 AND ($4 = '' OR tenant_id::text = $4)`,
+		id, newName, newDesc, scope); err != nil {
 		if isUniqueViolation(err) {
 			logAndRespond(w, err, http.StatusConflict, "group name already exists")
 			return
@@ -722,6 +782,11 @@ func (h *EntIdentityHandler) UpdateGroup(w http.ResponseWriter, r *http.Request)
 
 // DeleteGroup DELETE /v1/ent/groups/{id}
 func (h *EntIdentityHandler) DeleteGroup(w http.ResponseWriter, r *http.Request) {
+	scope, isOwner := entTenantScope(auth.GetClaims(r.Context()))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 	id := r.PathValue("id")
 	if !isValidUUID(id) {
 		BadRequest(w, "invalid group id")
@@ -731,7 +796,7 @@ func (h *EntIdentityHandler) DeleteGroup(w http.ResponseWriter, r *http.Request)
 
 	// 成员/角色关联随群组级联删除；先收集成员以便失效其权限缓存
 	members := h.groupMemberIDs(ctx, id)
-	tag, err := h.db.Exec(ctx, `DELETE FROM ent_groups WHERE id = $1`, id)
+	tag, err := h.db.Exec(ctx, `DELETE FROM ent_groups WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -767,12 +832,17 @@ func (h *EntIdentityHandler) SetGroupMembers(w http.ResponseWriter, r *http.Requ
 		return
 	}
 	ctx := r.Context()
+	scope, isOwner := entTenantScope(auth.GetClaims(ctx))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 
-	if !h.groupExists(ctx, groupID) {
+	if !h.groupExists(ctx, groupID, scope) {
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.UserIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM users WHERE id = ANY($1::uuid[])`, req.UserIDs) {
+	if len(req.UserIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM users WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.UserIDs, scope) {
 		BadRequest(w, "one or more user_ids do not exist")
 		return
 	}
@@ -828,12 +898,17 @@ func (h *EntIdentityHandler) SetGroupRoles(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	ctx := r.Context()
+	scope, isOwner := entTenantScope(auth.GetClaims(ctx))
+	if !isOwner && scope == "" {
+		Forbidden(w, "tenant context missing")
+		return
+	}
 
-	if !h.groupExists(ctx, groupID) {
+	if !h.groupExists(ctx, groupID, scope) {
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[])`, req.RoleIDs) {
+	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
 		BadRequest(w, "one or more role_ids do not exist")
 		return
 	}
@@ -972,20 +1047,21 @@ func (h *EntIdentityHandler) ListTenants(w http.ResponseWriter, r *http.Request)
 
 // ── 内部辅助 ────────────────────────────────────────────
 
-func (h *EntIdentityHandler) userExists(ctx context.Context, id string) bool {
+func (h *EntIdentityHandler) userExists(ctx context.Context, id, scope string) bool {
 	var one int
-	return h.db.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1`, id).Scan(&one) == nil
+	return h.db.QueryRow(ctx, `SELECT 1 FROM users WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope).Scan(&one) == nil
 }
 
-func (h *EntIdentityHandler) groupExists(ctx context.Context, id string) bool {
+func (h *EntIdentityHandler) groupExists(ctx context.Context, id, scope string) bool {
 	var one int
-	return h.db.QueryRow(ctx, `SELECT 1 FROM ent_groups WHERE id = $1`, id).Scan(&one) == nil
+	return h.db.QueryRow(ctx, `SELECT 1 FROM ent_groups WHERE id = $1 AND ($2 = '' OR tenant_id::text = $2)`, id, scope).Scan(&one) == nil
 }
 
-// allExist 校验 ids 全部存在于目标表（countSQL 需返回 DISTINCT 计数，$1 为 uuid[]）。
-func (h *EntIdentityHandler) allExist(ctx context.Context, countSQL string, ids []string) bool {
+// allExist 校验 ids 全部存在于目标表（countSQL 需返回 DISTINCT 计数，$1 为 uuid[]，
+// $2 为租户作用域 scope：'' = 不过滤/owner）。
+func (h *EntIdentityHandler) allExist(ctx context.Context, countSQL string, ids []string, scope string) bool {
 	var count int
-	if err := h.db.QueryRow(ctx, countSQL, ids).Scan(&count); err != nil {
+	if err := h.db.QueryRow(ctx, countSQL, ids, scope).Scan(&count); err != nil {
 		return false
 	}
 	return count == len(ids)

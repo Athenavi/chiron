@@ -108,6 +108,6 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 }
 
 .tool-args { padding: 8px 12px; margin: 2px 8px 6px; background: var(--bg-secondary); border: var(--hairline-width) solid var(--border-card); border-radius: var(--sig-radius-button); }
-.tool-args pre { margin: 0; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
+.tool-args pre { margin: 0; font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); white-space: pre-wrap; overflow-wrap: anywhere; word-break: normal; }
 @media (max-width: 576px) { .tool-args { margin: 2px 4px 6px; } }
 </style>

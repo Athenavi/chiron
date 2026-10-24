@@ -163,6 +163,6 @@ function decline() {
   font-size: 13px; line-height: 20px; padding: 5px 16px; cursor: pointer;
 }
 .ask-submit:disabled { opacity: 0.4; cursor: not-allowed; }
-.ask-submit:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.ask-submit:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 @media (max-width: 576px) { .ask-options { gap: 6px; } .ask-option { padding: 5px 10px; } }
 </style>

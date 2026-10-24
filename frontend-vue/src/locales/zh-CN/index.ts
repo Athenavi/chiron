@@ -594,7 +594,7 @@ export default {
     built_in: "内置",
     hello_how_can_i_help_you: "你好，有什么可以帮助你的？",
     your_input_belongs_to_you_using_generated_content_must_comply_with_applicable_law_you_are_responsible_for_content_you_publish: "你输入的内容归你所有；生成内容的使用需遵守适用法律。你需对自己发布的内容负责。",
-    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "暖纸底 + 琥珀强调，圆角柔和，长文护眼",
+    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "陶土暖纸底 + 陶土强调色，圆角柔和，长文护眼",
     queuing: "排队中",
     sort: "排序",
     sort_smaller_first: "排序（小者靠前）",

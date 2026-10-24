@@ -107,6 +107,22 @@ def test_check_command_text_rejects_escape_patterns_and_empty():
     assert check_command_text("   ") is not None  # 空命令
 
 
+def test_check_command_text_rejects_command_substitution_and_newline():
+    """白名单只看每段**首个**可执行名，故必须挡住命令替换与换行。
+
+    `echo $(rm -rf x)` / `echo ok<换行>rm -rf x` 的首词都是 echo，若不拦就会放行
+    而 shell 实际执行其中夹带的命令（沙箱提权）。
+    """
+    from app.tools.sandbox import check_command_text
+
+    assert check_command_text("echo $(rm -rf x)") is not None  # $( ) 命令替换
+    assert check_command_text("echo `rm -rf x`") is not None  # 反引号命令替换
+    assert check_command_text("echo ok\nrm -rf x") is not None  # 换行后的第二条命令
+    # 不含这些语法的同类命令仍须放行（不得误伤正常命令）
+    assert check_command_text("echo hello") is None
+    assert check_command_text("ls -la") is None
+
+
 @pytest.mark.asyncio
 async def test_persistent_shell_blocks_non_whitelisted_command():
     set_tool_context(session_id="t-sess-guard")

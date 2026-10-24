@@ -582,7 +582,7 @@ export default {
     built_in: "Built-in",
     hello_how_can_i_help_you: "Hello, how can I help you?",
     your_input_belongs_to_you_using_generated_content_must_comply_with_applicable_law_you_are_responsible_for_content_you_publish: "Your input belongs to you; using generated content must comply with applicable law. You are responsible for content you publish.",
-    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "Warm paper background + amber accents, soft rounded corners, easy on the eyes for long reads",
+    warm_paper_background_amber_accents_soft_rounded_corners_easy_on_the_eyes_for_long_reads: "Warm paper background with clay accents, soft rounded corners, easy on the eyes for long reads",
     queuing: "Queuing",
     sort: "Sort",
     sort_smaller_first: "Sort (smaller first)",

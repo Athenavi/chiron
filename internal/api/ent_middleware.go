@@ -73,3 +73,27 @@ func AllowedByEntOrLegacy(ctx context.Context, claims *auth.Claims, perm string)
 	}
 	return false
 }
+
+// entTenantScope 解析企业版管理端点的租户作用域（M1 跨租户越权修复）。
+//
+// 这些端点挂 RequireEntPerm("ent:manage")，而该权限**租户级管理员也可能持有**
+// （见 CreateRole/CreateGroup 会按 claims.TenantID 锚定写入租户）—— 因此必须做租户
+// 隔离，否则持有该权限的租户 A 管理员可读/改/删租户 B 的角色、群组、用户、策略、
+// 配额与 SSO Provider。
+//
+// 语义（与 ent_costcenter 的 scopedTenantID 对齐）：
+//   - owner：平台级视角 → ("", true)，调用方**不加**租户过滤；
+//   - 非 owner：→ (自身租户数字串, false)，调用方按该值过滤；
+//   - 非 owner 且无租户绑定：→ ("", false)，调用方须 fail-close（拒绝）。
+func entTenantScope(claims *auth.Claims) (string, bool) {
+	if claims == nil {
+		return "", false
+	}
+	if claims.Role == "owner" {
+		return "", true
+	}
+	if claims.TenantID != 0 {
+		return tenantStr(claims.TenantID), false
+	}
+	return "", false
+}

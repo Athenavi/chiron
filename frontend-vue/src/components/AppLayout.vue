@@ -580,8 +580,8 @@ async function runQuickCommand() {
 .dock-item:focus-visible,
 .dock-command-btn:focus-visible,
 .brand-btn:focus-visible {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 .dock-item.active {

@@ -434,13 +434,16 @@ func (h *MediaHandler) assetObjectKey(r *http.Request, id string) (string, error
 }
 
 // assetObjectKeys 批量解析资产对象存储 key（单次查询，修复逐资产 N+1）。
-func (h *MediaHandler) assetObjectKeys(ctx context.Context, ids []string) (map[string]string, error) {
+func (h *MediaHandler) assetObjectKeys(ctx context.Context, ids []string, tenantID int16, userID string) (map[string]string, error) {
 	if len(ids) == 0 {
 		return map[string]string{}, nil
 	}
+	// 必须带 tenant/user 过滤：ids 可源自请求体（客户端可控），无过滤会解析出
+	// 他人资产的对象键，进而被 store.Delete 删除他人文件（跨租户数据破坏）。
 	rows, err := db.GlobalDBManager.Query(ctx,
 		`SELECT id::text, COALESCE(name,''), COALESCE(file_path,''), COALESCE(user_id,'')
-		 FROM media_assets WHERE id = ANY($1)`, ids)
+		 FROM media_assets WHERE id = ANY($1) AND tenant_id = $2 AND user_id = $3`,
+		ids, tenantID, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -499,7 +502,7 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 鍒犻櫎瀛樺偍瀵硅薄锛圖B 涓哄噯锛屽け璐ヤ粎璁版棩蹇楋級
-	keys, err := h.assetObjectKeys(ctx, ids)
+	keys, err := h.assetObjectKeys(ctx, ids, claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "resolve media keys failed")
 		return
@@ -527,6 +530,10 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 // BatchDelete deletes multiple assets, folders recursively.
 func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
+	if claims == nil {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
 	var body struct {
 		IDs []string `json:"ids"`
 	}
@@ -539,10 +546,31 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	allIDs := make([]string, 0, len(body.IDs))
+	ctx := r.Context()
+
+	// 归属过滤：collectFolderIDs 会把传入的起始 id **无条件**纳入返回集
+	// （media_helpers.go:39），若直接展开，攻击者提交他人 assetID 即可让后续
+	// assetObjectKeys / store.Delete 命中他人的对象存储键 —— 跨租户删除文件。
+	// 展开前先剔除不属于当前租户/用户的 id（静默跳过，避免枚举探测）。
+	owned := make([]string, 0, len(body.IDs))
 	for _, id := range body.IDs {
+		var one int
+		if err := db.GlobalDBManager.QueryRow(ctx,
+			`SELECT 1 FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
+			id, claims.TenantID, claims.UserID).Scan(&one); err != nil {
+			continue
+		}
+		owned = append(owned, id)
+	}
+	if len(owned) == 0 {
+		NotFound(w, "media asset not found")
+		return
+	}
+
+	allIDs := make([]string, 0, len(owned))
+	for _, id := range owned {
 		sub, err := collectFolderIDs(func(parent string) ([]string, error) {
-			return h.getChildren(r.Context(), claims.TenantID, claims.UserID, parent)
+			return h.getChildren(ctx, claims.TenantID, claims.UserID, parent)
 		}, id)
 		if err != nil {
 			logAndRespond(w, err, http.StatusInternalServerError, "collect folder tree failed")
@@ -552,7 +580,7 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 鍒犻櫎瀛樺偍瀵硅薄锛圖B 涓哄噯锛屽け璐ヤ粎璁版棩蹇楋級
-	keys, err := h.assetObjectKeys(r.Context(), allIDs)
+	keys, err := h.assetObjectKeys(ctx, allIDs, claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "resolve media keys failed")
 		return

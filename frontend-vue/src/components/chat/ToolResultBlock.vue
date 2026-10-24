@@ -221,7 +221,7 @@ function todoStatusLabel(status?: string): string {
           <span class="diff-del">−{{ parsed.diff!.deletions }}</span>
         </span>
       </div>
-      <div class="diff-body">
+      <div class="diff-body scroll-fade">
         <div
           v-for="(line, i) in visibleDiffLines"
           :key="i"
@@ -250,7 +250,7 @@ function todoStatusLabel(status?: string): string {
         <span class="read-path">{{ parsed.read?.path }}</span>
         <span class="read-count">{{ $t('common.n_lines', { n: parsed.read?.total_lines }) }}</span>
       </div>
-      <div class="read-body">
+      <div class="read-body scroll-fade">
         <div
           v-for="row in readLines"
           :key="row.n"
@@ -278,7 +278,7 @@ function todoStatusLabel(status?: string): string {
           :class="{ nonzero: parsed.terminal?.exit_code }"
         >exit {{ parsed.terminal?.exit_code ?? '?' }}</span>
       </div>
-      <pre class="terminal-body">{{ terminalText }}</pre>
+      <pre class="terminal-body scroll-fade">{{ terminalText }}</pre>
     </div>
 
     <!-- write_todos：模型自己的计划。此前它落进 json 兜底，用户只看见一坨原始 JSON、看不出进度 -->

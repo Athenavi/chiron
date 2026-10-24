@@ -416,7 +416,7 @@ function scrollToTop() {
   font-weight: var(--fw-medium);
   color: var(--text-secondary);
   box-shadow: var(--shadow-sm);
-  animation: heroReveal var(--dur-slow) ease-out both;
+  animation: heroReveal var(--dur-page) ease-out both;
 }
 .hero-badge-dot {
   width: 7px; height: 7px; border-radius: 50%;
@@ -434,7 +434,7 @@ function scrollToTop() {
   font-weight: var(--fw-bold);
   letter-spacing: -0.02em;
   color: var(--text-primary);
-  animation: heroReveal var(--dur-slow) 0.08s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-page) 0.08s cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
 .hero-title-accent {
   background: linear-gradient(100deg, var(--primary), var(--accent));
@@ -449,9 +449,9 @@ function scrollToTop() {
   line-height: 26px;
   color: var(--text-secondary);
   max-width: 560px;
-  animation: heroReveal var(--dur-slow) 0.16s cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: heroReveal var(--dur-page) 0.16s cubic-bezier(0.22, 0.8, 0.36, 1) both;
 }
-.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal var(--dur-slow) 0.24s cubic-bezier(0.22, 0.8, 0.36, 1) both; }
+.hero-actions { display: flex; gap: 12px; justify-content: center; margin-top: 30px; animation: heroReveal var(--dur-page) 0.24s cubic-bezier(0.22, 0.8, 0.36, 1) both; }
 @keyframes heroReveal {
   from { opacity: 0; transform: translateY(16px); }
   to { opacity: 1; transform: translateY(0); }
@@ -504,7 +504,7 @@ function scrollToTop() {
               box-shadow var(--dur-normal) var(--ease-out);
 }
 .feature-card.visible {
-  animation: cardIn var(--dur-slow) cubic-bezier(0.22, 0.8, 0.36, 1) both;
+  animation: cardIn var(--dur-page) cubic-bezier(0.22, 0.8, 0.36, 1) both;
   animation-delay: var(--card-delay, 0ms);
 }
 @keyframes cardIn {
@@ -516,7 +516,7 @@ function scrollToTop() {
   border-color: var(--primary);
   box-shadow: var(--shadow-md), 0 0 0 3px var(--primary-bg);
 }
-.feature-card:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.feature-card:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }
 .feature-icon-wrap {
   width: 42px; height: 42px;
   display: inline-flex; align-items: center; justify-content: center;

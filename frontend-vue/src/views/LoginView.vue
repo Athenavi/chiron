@@ -954,8 +954,8 @@ async function handleLogin() {
 .login-form-card :deep(.ant-input:focus),
 .login-form-card :deep(.ant-input-affix-wrapper-focused),
 .login-form-card :deep(.ant-btn:focus-visible) {
-  outline: 2px solid var(--primary);
-  outline-offset: 2px;
+  outline: var(--focus-ring-width) solid var(--focus-ring-color);
+  outline-offset: var(--focus-ring-offset);
 }
 
 @media (prefers-reduced-motion: reduce) {
