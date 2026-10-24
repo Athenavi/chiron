@@ -171,7 +171,7 @@ function formatSize(bytes: number): string {
   font-size: var(--fs-xs);
   font-weight: var(--fw-semibold);
   background: var(--bg-secondary);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   color: var(--text-secondary);
 }
 .doc-size {
@@ -180,7 +180,7 @@ function formatSize(bytes: number): string {
 }
 .doc-content {
   border: var(--hairline-width) solid var(--border-card);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   overflow: hidden;
 }
 .content-header {

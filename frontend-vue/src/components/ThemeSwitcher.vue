@@ -120,7 +120,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
   color: var(--text-secondary);
@@ -166,7 +166,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   width: 100%;
   padding: 8px 10px;
   border: var(--hairline-width) solid var(--border-default);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   background: var(--bg-surface);
   color: var(--text-primary);
   cursor: pointer;
@@ -186,7 +186,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   display: inline-flex;
   gap: 3px;
   padding: 3px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-base);
   border: var(--hairline-width) solid var(--border-subtle);
   flex-shrink: 0;
@@ -249,7 +249,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   font-size: 12px;
   font-weight: var(--fw-medium);
   border: var(--hairline-width) solid var(--border-default);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-surface);
   color: var(--text-secondary);
   cursor: pointer;
@@ -270,7 +270,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
 <style>
 .theme-switcher-popover {
   padding: 12px !important;
-  border-radius: 14px !important;
+  border-radius: var(--sig-radius-card) !important;
   border: var(--hairline-width) solid var(--border-default) !important;
   box-shadow: var(--shadow-lg) !important;
   background: var(--bg-elevated) !important;

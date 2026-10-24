@@ -673,7 +673,7 @@ function amountText(amount: number): string {
 
 /* 使用统计：auto-fill 自适应列数（窄屏自动从 3 列降为 2 列） */
 .usage-stats { display: grid; grid-template-columns: repeat(auto-fill, minmax(130px, 1fr)); gap: 12px; }
-.stat-item { text-align: center; padding: 14px 8px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: 8px; }
+.stat-item { text-align: center; padding: 14px 8px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: var(--radius-lg); }
 .stat-label { display: block; color: var(--text-tertiary); font-size: 12px; margin-bottom: 6px; }
 .stat-value { font-size: 22px; font-weight: var(--fw-semibold); color: var(--text-primary); font-variant-numeric: tabular-nums; }
 .stat-spent { color: var(--colorError, var(--error)); }
@@ -704,7 +704,7 @@ function amountText(amount: number): string {
 
 .qr-body { text-align: center; padding: 8px 0; }
 .qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: var(--fw-semibold); display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }
-.qr-canvas { width: 220px; height: 220px; border: var(--hairline-width) solid var(--border-card); border-radius: 8px; }
+.qr-canvas { width: 220px; height: 220px; border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); }
 .qr-tip { margin-top: 14px; color: var(--text-primary); font-size: 14px; }
 .qr-sub { color: var(--text-tertiary); font-size: 12px; }
 .qr-success { margin-top: 16px; color: var(--colorSuccess, #10b981); font-size: 16px; font-weight: var(--fw-semibold); }

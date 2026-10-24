@@ -162,12 +162,12 @@ onMounted(load)
 <style scoped>
 .diagnostics-view { padding: 4px; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.page-title { margin: 0; font-size: 18px; font-weight: var(--fw-semibold); }
+.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .page-desc { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
 .summary { margin-bottom: 16px; }
 .group { margin-bottom: 18px; }
 .group-title { font-size: 13px; font-weight: var(--fw-semibold); margin: 0 0 8px; color: var(--text-secondary); }
-.check-row { display: flex; gap: 10px; padding: 10px 12px; border: var(--hairline-width) solid var(--border); border-radius: 8px; margin-bottom: 8px; background: var(--bg-card); }
+.check-row { display: flex; gap: 10px; padding: 10px 12px; border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); margin-bottom: 8px; background: var(--bg-card); }
 .check-status { flex: 0 0 auto; width: 18px; text-align: center; font-weight: var(--fw-bold); line-height: 20px; }
 .check-row--ok .check-status { color: var(--success); }
 .check-row--warn .check-status { color: var(--warning); }
@@ -176,5 +176,5 @@ onMounted(load)
 .check-head { display: flex; align-items: center; gap: 8px; }
 .check-title { font-weight: var(--fw-medium); }
 .check-detail { font-size: 12px; color: var(--text-secondary); margin-top: 2px; word-break: break-word; }
-.check-fix { display: flex; gap: 6px; font-size: 12px; margin-top: 6px; padding: 6px 8px; border-radius: 6px; background: var(--bg-subtle, transparent); border: 1px dashed var(--border); }
+.check-fix { display: flex; gap: 6px; font-size: 12px; margin-top: 6px; padding: 6px 8px; border-radius: var(--radius-md); background: var(--bg-subtle, transparent); border: 1px dashed var(--border); }
 </style>

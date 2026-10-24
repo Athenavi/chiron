@@ -118,7 +118,7 @@ onMounted(fetchPrivacy)
 <style scoped>
 .privacy-view { padding: 16px 24px; }
 .page-header { margin-bottom: 16px; }
-.page-title { margin: 0; font-size: 20px; }
+.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .hint { margin-left: 12px; color: var(--text-secondary); font-size: 12px; }
 
 /* JSON 编辑区:等宽字体、min-height 自适应、可纵向拉伸 */

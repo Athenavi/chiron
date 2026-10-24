@@ -398,14 +398,14 @@ function todoStatusLabel(status?: string): string {
 .tool-result.error .diff-banner { background: var(--error-bg); }
 
 /* diff 卡片：banner（文件 + 增删统计）+ 行级着色 */
-.diff-block { margin: 8px 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
-.diff-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px; background: var(--bg-secondary); }
+.diff-block { margin: var(--diff-gap-block) 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
+.diff-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px var(--diff-gap-inline); background: var(--bg-secondary); }
 .diff-files { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .diff-stat { display: flex; gap: 8px; flex: none; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
 .diff-add { color: var(--success); }
 .diff-del { color: var(--error); }
 .diff-body { max-height: 420px; overflow: auto; font-family: var(--font-mono); font-size: 12px; line-height: 20px; }
-.diff-line { padding: 0 14px; white-space: pre; color: var(--text-primary); }
+.diff-line { padding: 0 var(--diff-gap-inline); white-space: pre; color: var(--text-primary); }
 .diff-line.add { background: color-mix(in srgb, var(--success) 14%, transparent); }
 .diff-line.del { background: color-mix(in srgb, var(--error) 14%, transparent); }
 .diff-line.hunk { color: var(--accent); background: var(--bg-secondary); }

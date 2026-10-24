@@ -99,6 +99,9 @@ const WIDTH_KEY = 'chiron:split-width:v1'
 const MIN_WIDTH = 260
 /** 上限 = 容器宽度的这个比例：保证主区域永远留得下可用宽度 */
 const MAX_RATIO = 0.6
+/** 指针死区（CDS v1 §5.3.2 的 `qM = 4px`）：轻点手柄或手抖不该被当成拖拽 ——
+ *  没有它时，单击一次分割条就会把「内容决定宽度」变成固定 px 宽度，还会写进本地记忆。 */
+const DEAD_ZONE_PX = 4
 
 const paneRef = ref<HTMLElement | null>(null)
 const paneWidth = ref<number | null>(readWidth())
@@ -132,21 +135,23 @@ function persistWidth() {
 
 let startX = 0
 let startWidth = 0
+/** 已按下指针、但位移还没越过死区：此阶段既不进入拖拽态，也不挂全局 Escape。 */
+let pressing = false
 /** 拖拽开始前的宽度基准：`null` 表示当时的「内容决定宽度」，撤销时要原样还回 */
 let widthBeforeDrag: number | null = null
 
 function onResizeStart(e: PointerEvent) {
   const el = paneRef.value
   if (!el) return
-  resizing.value = true
+  // 先只记录起点：是否真的进入拖拽由 onResizeMove 越过死区后决定
+  pressing = true
+  resizing.value = false
   startX = e.clientX
   // 以**当前实际宽度**为起点：否则第一次拖动会突然跳到某个默认值
   startWidth = el.getBoundingClientRect().width
   widthBeforeDrag = paneWidth.value
   // 指针捕获：拖出窗口也不丢事件，且不必往 document 上挂/摘监听
   ;(e.currentTarget as HTMLElement).setPointerCapture?.(e.pointerId)
-  // 拖拽期间才挂全局 Escape（捕获阶段）：成对摘除见 onResizeEnd / cancelResize / onUnmounted
-  window.addEventListener('keydown', onResizeEscape, true)
   e.preventDefault()
 }
 
@@ -166,19 +171,31 @@ function onResizeEscape(e: KeyboardEvent) {
 
 function cancelResize() {
   resizing.value = false
+  pressing = false
   window.removeEventListener('keydown', onResizeEscape, true)
   paneWidth.value = widthBeforeDrag
 }
 
 function onResizeMove(e: PointerEvent) {
-  if (!resizing.value) return
+  if (!pressing && !resizing.value) return
+  if (!resizing.value) {
+    // 死区内只记录、不动作；越过阈值才真正开始拖拽（此刻才挂全局 Escape）
+    if (Math.abs(e.clientX - startX) < DEAD_ZONE_PX) return
+    resizing.value = true
+    window.addEventListener('keydown', onResizeEscape, true)
+  }
   // 手柄贴右边缘时向右拖 = 变宽；贴左边缘时向左拖 = 变宽
   const delta = props.handleSide === 'left' ? startX - e.clientX : e.clientX - startX
   paneWidth.value = clampWidth(startWidth + delta)
 }
 
 function onResizeEnd(e: PointerEvent) {
-  if (!resizing.value) return
+  pressing = false
+  if (!resizing.value) {
+    // 死区内的单击：当作没拖过 —— 不改宽度、也不写本地记忆
+    ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)
+    return
+  }
   resizing.value = false
   window.removeEventListener('keydown', onResizeEscape, true)
   ;(e.currentTarget as HTMLElement).releasePointerCapture?.(e.pointerId)

@@ -21,9 +21,9 @@ logger = logging.getLogger(__name__)
 # 而调用点（下面的 browser_* 工具）本身也是 async def —— 协议若声明同步方法，
 # 调用点拿到的会是 coroutine，`ids[0]` 直接 TypeError（历史 bug，见提交信息）。
 class BrowserHub(Protocol):
-    async def connected_client_ids(self) -> list[str]: ...
+    async def connected_client_ids(self, user_id: str = "") -> list[str]: ...
     async def exec_command(
-        self, client_id: str, method: str, params: dict[str, Any]
+        self, client_id: str, method: str, params: dict[str, Any], user_id: str = ""
     ) -> Any: ...
 
 
@@ -35,11 +35,11 @@ class StubHub:
         default_factory=lambda: {"stub-client": {"url": "about:blank"}}
     )
 
-    async def connected_client_ids(self) -> list[str]:
+    async def connected_client_ids(self, user_id: str = "") -> list[str]:
         return list(self._clients.keys())
 
     async def exec_command(
-        self, client_id: str, method: str, params: dict[str, Any]
+        self, client_id: str, method: str, params: dict[str, Any], user_id: str = ""
     ) -> Any:
         return {
             "status": "ok",
@@ -79,7 +79,7 @@ class GatewayBrowserHub:
             follow_redirects=False,
         )
 
-    async def connected_client_ids(self) -> list[str]:
+    async def connected_client_ids(self, user_id: str = "") -> list[str]:
         import os
 
         from app.config import settings
@@ -87,6 +87,7 @@ class GatewayBrowserHub:
         url = f"{self._base_url}/v1/rpa/clients"
         resp = await self._client.get(
             url,
+            params={"user_id": user_id} if user_id else None,
             headers={
                 "X-Internal-Token": settings.internal_token
                 or os.getenv("INTERNAL_TOKEN", "")
@@ -96,15 +97,20 @@ class GatewayBrowserHub:
         data = resp.json()
         return data.get("client_ids") or []
 
-    async def exec_command(self, client_id: str, method: str, params: dict[str, Any]) -> Any:
+    async def exec_command(
+        self, client_id: str, method: str, params: dict[str, Any], user_id: str = ""
+    ) -> Any:
         import os
 
         from app.config import settings
 
         url = f"{self._base_url}/v1/rpa/exec"
+        body: dict[str, Any] = {"client_id": client_id, "method": method, "params": params}
+        if user_id:
+            body["user_id"] = user_id
         resp = await self._client.post(
             url,
-            json={"client_id": client_id, "method": method, "params": params},
+            json=body,
             headers={
                 "X-Internal-Token": settings.internal_token
                 or os.getenv("INTERNAL_TOKEN", "")
@@ -138,7 +144,10 @@ def _hub_or_raise() -> BrowserHub:
 
 
 async def _resolve_client(tab_id: int | None = None) -> str:
-    ids = await _hub_or_raise().connected_client_ids()
+    from app.tools.context import get_user_id
+
+    # 按当前用户过滤：只在该用户自己的浏览器插件里挑选，避免选到（或投给）他人连接。
+    ids = await _hub_or_raise().connected_client_ids(get_user_id())
     if not ids:
         raise RuntimeError("no connected browser clients")
     return ids[0]
@@ -147,11 +156,13 @@ async def _resolve_client(tab_id: int | None = None) -> str:
 async def _exec(
     method: str, params: dict[str, Any], tab_id: int | None = None
 ) -> dict[str, Any]:
+    from app.tools.context import get_user_id
+
     hub = _hub_or_raise()
     client_id = await _resolve_client(tab_id)
     if tab_id and tab_id > 0:
         params = {**params, "tabId": tab_id}
-    result = await hub.exec_command(client_id, method, params)
+    result = await hub.exec_command(client_id, method, params, get_user_id())
     return result if isinstance(result, dict) else {"result": result}
 
 

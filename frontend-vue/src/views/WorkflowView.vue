@@ -784,7 +784,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
       <!-- Right: Property Panel -->
       <div
         v-if="showPanel && selectedNode"
-        class="property-panel"
+        class="property-panel scroll-fade"
       >
         <div class="panel-header">
           <span>{{ $t('workflow.node_properties') }}</span>
@@ -1000,7 +1000,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
     <!-- Execution logs + results bar -->
     <div
       v-if="executionLogs.length > 0 || Object.keys(executionResults).length > 0"
-      class="execution-bar"
+      class="execution-bar scroll-fade"
     >
       <div class="execution-header">
         <span>{{ $t('common.execution_log') }}</span>
@@ -1247,7 +1247,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .main-area { display: flex; flex: 1; overflow: hidden; position: relative; }
 .node-palette { width: 168px; padding: 12px; border-right: var(--hairline-width) solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
 .palette-title { font-weight: var(--fw-semibold); font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
-.palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: var(--hairline-width) solid var(--border-card); border-radius: 8px; cursor: grab; font-size: 13px; transition: box-shadow var(--dur-fast), border-color var(--dur-fast); user-select: none; }
+.palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); cursor: grab; font-size: 13px; transition: box-shadow var(--dur-fast), border-color var(--dur-fast); user-select: none; }
 .palette-item:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
 .palette-item:active { cursor: grabbing; }
 .palette-icon { font-size: 16px; }
@@ -1255,14 +1255,14 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .palette-hint { margin-top: 14px; font-size: var(--fs-xs); line-height: 1.7; color: var(--text-tertiary); }
 .canvas-wrapper { flex: 1; position: relative; }
 /* 自定义节点：主题变量 + 执行状态 */
-.custom-node { background: var(--bg-card); border: 2px solid; border-radius: 8px; min-width: 150px; font-size: 12px; box-shadow: var(--shadow-md); color: var(--text-primary); transition: box-shadow var(--dur-normal); }
+.custom-node { background: var(--bg-card); border: 2px solid; border-radius: var(--radius-lg); min-width: 150px; font-size: 12px; box-shadow: var(--shadow-md); color: var(--text-primary); transition: box-shadow var(--dur-normal); }
 .custom-node.status-completed { box-shadow: 0 0 0 2px var(--success), var(--shadow-lg); }
 .custom-node.status-error { box-shadow: 0 0 0 2px var(--error), var(--shadow-lg); }
 .custom-node.status-running { animation: nodePulse var(--dur-pulse) ease-in-out infinite; }
 @keyframes nodePulse { 0%, 100% { box-shadow: 0 0 0 2px var(--info-bg); } 50% { box-shadow: 0 0 0 4px var(--info); } }
 .node-header { padding: 6px 10px; border-radius: 6px 6px 0 0; font-weight: var(--fw-semibold); font-size: 13px; white-space: nowrap; color: var(--text-primary); }
 .node-body { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
-.node-type-tag { background: var(--bg-secondary); padding: 1px 6px; border-radius: 4px; font-size: var(--fs-xs); color: var(--text-tertiary); }
+.node-type-tag { background: var(--bg-secondary); padding: 1px 6px; border-radius: var(--radius-sm); font-size: var(--fs-xs); color: var(--text-tertiary); }
 .node-detail { font-size: var(--fs-xs); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
 .property-panel { width: 300px; border-left: var(--hairline-width) solid var(--border); background: var(--bg-card); flex-shrink: 0; overflow-y: auto; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: var(--hairline-width) solid var(--border); font-weight: var(--fw-semibold); font-size: 14px; color: var(--text-primary); }
@@ -1276,21 +1276,21 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .exec-clear { color: var(--text-tertiary) !important; }
 .log-line { padding: 2px 0; white-space: pre-wrap; word-break: break-all; }
 .execution-results { display: flex; flex-direction: column; gap: 8px; margin-top: 8px; }
-.result-item { border: var(--hairline-width) solid var(--border); border-radius: 8px; background: var(--bg-card); overflow: hidden; }
+.result-item { border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); overflow: hidden; }
 .result-item-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: var(--hairline-width) solid var(--border); }
 .result-node { font-weight: var(--fw-semibold); color: var(--text-primary); }
 .result-status { margin-left: auto; }
 .result-output { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); max-height: 140px; overflow-y: auto; }
 /* 列表 */
 .workflow-list { display: flex; flex-direction: column; gap: 8px; }
-.workflow-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: var(--hairline-width) solid var(--border-card); border-radius: 8px; background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
+.workflow-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 10px 12px; border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-fast), box-shadow var(--dur-fast); }
 .workflow-item:hover { border-color: var(--primary); box-shadow: var(--shadow-md); }
 .wf-item-info { flex: 1; min-width: 0; }
 .wf-item-name { font-weight: var(--fw-semibold); font-size: 14px; color: var(--text-primary); }
 .wf-item-time { font-size: 12px; color: var(--text-tertiary); margin-top: 2px; }
 /* 执行历史 */
 .history-list { display: flex; flex-direction: column; gap: 10px; }
-.history-item { border: var(--hairline-width) solid var(--border-card); border-radius: 8px; background: var(--bg-card); padding: 10px 12px; }
+.history-item { border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px 12px; }
 .history-head { display: flex; align-items: center; gap: 8px; }
 .history-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .history-time { font-size: var(--fs-xs); color: var(--text-tertiary); }

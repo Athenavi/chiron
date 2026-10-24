@@ -521,6 +521,8 @@ export default {
     amount: "المبلغ",
     save_endpoint_only: "حفظ نقطة النهاية فقط",
     compact: "مضغوط",
+    interface_density: "كثافة الواجهة",
+    sound_effects: "أصوات الواجهة",
     enter: "دخول",
     ask_about_this: "اسأل عن هذا",
     start_upload: "بدء الرفع",

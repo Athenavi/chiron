@@ -519,6 +519,8 @@ export default {
     amount: "Amount",
     save_endpoint_only: "Save endpoint only",
     compact: "Compact",
+    interface_density: "Interface density",
+    sound_effects: "Interface sounds",
     enter: "Enter",
     ask_about_this: "Ask about this",
     start_upload: "Start upload",

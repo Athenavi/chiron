@@ -240,7 +240,7 @@ const filteredItems = computed(() => {
 
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
 .card-icon {
-  flex: none; width: 36px; height: 36px; border-radius: 10px;
+  flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card);
   background: var(--primary-bg); color: var(--primary);
   display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
 }
@@ -256,7 +256,7 @@ const filteredItems = computed(() => {
 /* Agent：系统提示词摘要 */
 .prompt-preview {
   border: var(--hairline-width) solid var(--border-card);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-secondary);
   padding: 8px 10px;
 }
@@ -271,7 +271,7 @@ const filteredItems = computed(() => {
 .mcp-info {
   display: flex; flex-direction: column; gap: 6px;
   background: var(--bg-secondary);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 8px 10px;
 }
 .mcp-line { display: flex; align-items: baseline; gap: 8px; min-width: 0; }

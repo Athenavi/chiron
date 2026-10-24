@@ -123,10 +123,28 @@ ASK_ANSWER_TTL_SECONDS = 300.0
 REMOTE_WAIT_POLL_INTERVAL_SECONDS = 1.5
 
 
-def _approval_wake_channel(tc_id: str) -> str:
+def _approval_scope(user_id: str) -> str:
+    """审批键的用户作用域段（JWT/网关注入）。非空时把审批隔离到该用户。"""
+    return (user_id or "").strip()
+
+
+def _approval_key(tc_id: str, user_id: str = "") -> str:
+    """跨副本审批决策键。带用户作用域，避免他人写入同键干扰或越权。"""
+    from app.redis_keys import rkey
+
+    scope = _approval_scope(user_id)
+    if scope:
+        return rkey(f"approval:{scope}:{tc_id}")
+    return rkey(f"approval:{tc_id}")
+
+
+def _approval_wake_channel(tc_id: str, user_id: str = "") -> str:
     """跨副本审批的 per-tc 唤醒频道（只叫醒等待该 tc_id 的副本，避免惊群）。"""
     from app.redis_keys import rkey
 
+    scope = _approval_scope(user_id)
+    if scope:
+        return rkey(f"approval:wake:{scope}:{tc_id}")
     return rkey(f"approval:wake:{tc_id}")
 
 
@@ -3384,10 +3402,12 @@ class AgentRuntime:
                 )
             }
         else:
-            # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例
-            register_pending_approval(tc_id, self)
+            # 注册到进程内注册表：让 HTTP 审批端点（可能由任意请求触发）能定位到本实例，
+            # 并带上 owner user 供归属校验（防他人代批）。
+            approval_uid = getattr(task, "user_id", "") or ""
+            register_pending_approval(tc_id, self, approval_uid)
             try:
-                decision = await self._wait_approval_decision(tc_id, future, timeout)
+                decision = await self._wait_approval_decision(tc_id, future, timeout, approval_uid)
             finally:
                 self._pending_approvals.pop(tc_id, None)
                 unregister_pending_approval(tc_id)
@@ -3823,10 +3843,10 @@ class AgentRuntime:
         return ""
 
     async def _wait_approval_decision(
-        self, tc_id: str, future: asyncio.Future[Any], timeout: float
+        self, tc_id: str, future: asyncio.Future[Any], timeout: float, user_id: str = ""
     ) -> ApprovalDecision | None:
         """本地 Future 与 Redis 决策键竞争，返回决策；超时返回 None。"""
-        poll = asyncio.create_task(self._poll_remote_decision(tc_id, timeout))
+        poll = asyncio.create_task(self._poll_remote_decision(tc_id, timeout, user_id))
         waiters: list[asyncio.Future[Any]] = [poll, asyncio.ensure_future(future)]
         try:
             done, _pending = await asyncio.wait(
@@ -3915,20 +3935,52 @@ class AgentRuntime:
                     logger.debug("remote wait pubsub close failed", exc_info=True)
 
     async def _poll_remote_decision(
-        self, tc_id: str, timeout: float, interval: float = REMOTE_WAIT_POLL_INTERVAL_SECONDS
+        self,
+        tc_id: str,
+        timeout: float,
+        user_id: str = "",
+        interval: float = REMOTE_WAIT_POLL_INTERVAL_SECONDS,
     ) -> ApprovalDecision | None:
-        """跨副本审批：等决策键出现并取走（hybrid 唤醒 + 兜底轮询，见 `_take_key_with_wake`）。"""
-        from app.redis_keys import rkey
+        """跨副本审批：等决策键出现并取走（hybrid 唤醒 + 兜底轮询，见 `_take_key_with_wake`）。
 
-        raw = await self._take_key_with_wake(
-            rkey(f"approval:{tc_id}"), _approval_wake_channel(tc_id), timeout, interval
-        )
-        if raw is None:
-            return None
-        # `from_raw` 同时接受新的 JSON 形态与旧的 "1"/"0"（见其 docstring）
-        return ApprovalDecision.from_raw(raw)
+        `user_id` 非空时校验决策载荷的归属：不匹配的载荷（他人写入同键或串键）一律丢弃
+        并继续等待 —— 键带用户作用域只是第一层，载荷校验才是"不能替他人批准"的判据。
+        """
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while True:
+            remain = deadline - loop.time()
+            if remain <= 0:
+                return None
+            try:
+                raw = await self._take_key_with_wake(
+                    _approval_key(tc_id, user_id),
+                    _approval_wake_channel(tc_id, user_id),
+                    remain,
+                    interval,
+                )
+            except Exception as e:  # noqa: BLE001 - 轮询异常不该把审批直接判失败
+                logger.debug("remote approval poll failed: %s", e)
+                return None
+            if raw is None:
+                return None
+            # `from_raw` 同时接受新的 JSON 形态与旧的 "1"/"0"（见其 docstring）
+            decision = ApprovalDecision.from_raw(raw)
+            if decision is None:
+                return None
+            if user_id and decision.user_id != user_id:
+                logger.warning(
+                    "remote approval decision ownership mismatch (tc=%s expected=%s got=%s) — dropped",
+                    tc_id,
+                    user_id,
+                    decision.user_id,
+                )
+                continue
+            return decision
 
-    async def submit_approval(self, tool_call_id: str, decision: ApprovalDecision) -> bool:
+    async def submit_approval(
+        self, tool_call_id: str, decision: ApprovalDecision, user_id: str = ""
+    ) -> bool:
         """外部（HTTP 端点，可能落在任一网关副本）解决待确认的工具调用。
 
         1) 本实例持有该 Future → 直接唤醒（同副本快路径，零延迟）；
@@ -3943,7 +3995,7 @@ class AgentRuntime:
             future.set_result(decision)
             return True
 
-        return await _write_approval_decision(tool_call_id, decision)
+        return await _write_approval_decision(tool_call_id, decision, user_id)
 
     # ── 结构化提问（ask_user）：与审批同构的答案回收通道 ──────────────
     @staticmethod
@@ -4340,13 +4392,13 @@ async def run_agent(
 # 注册表把 "tool_call_id → 正在等待的 runtime 实例" 记在进程内，
 # 使 HTTP 端点（由任意请求线程触发）能定位到正确的实例。
 
-_PENDING_APPROVAL_OWNERS: dict[str, AgentRuntime] = {}
+_PENDING_APPROVAL_OWNERS: dict[str, tuple[AgentRuntime, str]] = {}
 
 
-def register_pending_approval(tool_call_id: str, runtime: AgentRuntime) -> None:
-    """登记"正在等待该工具审批"的运行时实例。"""
+def register_pending_approval(tool_call_id: str, runtime: AgentRuntime, user_id: str = "") -> None:
+    """登记"正在等待该工具审批"的运行时实例与其 owner user（归属校验用）。"""
     if tool_call_id:
-        _PENDING_APPROVAL_OWNERS[tool_call_id] = runtime
+        _PENDING_APPROVAL_OWNERS[tool_call_id] = (runtime, (user_id or "").strip())
 
 
 def unregister_pending_approval(tool_call_id: str) -> None:
@@ -4354,7 +4406,9 @@ def unregister_pending_approval(tool_call_id: str) -> None:
     _PENDING_APPROVAL_OWNERS.pop(tool_call_id, None)
 
 
-async def _write_approval_decision(tool_call_id: str, decision: ApprovalDecision) -> bool:
+async def _write_approval_decision(
+    tool_call_id: str, decision: ApprovalDecision, user_id: str = ""
+) -> bool:
     """把审批决策写入 Redis 决策键（跨副本通道，等待方 GET+DEL 单次消费）。
 
     值是一个 JSON 对象（`ApprovalDecision.to_json`）：`edit` 的编辑后参数必须跟着决策走，
@@ -4363,19 +4417,27 @@ async def _write_approval_decision(tool_call_id: str, decision: ApprovalDecision
     """
     try:
         from app.redis_client import get_redis
-        from app.redis_keys import rkey
 
         redis = await get_redis()
         if redis is None:
             return False
+        # 归属：调用者 user 同时进入键作用域与载荷 —— 等待方据此校验（双保险）。
+        stored = decision
+        if user_id and not decision.user_id:
+            stored = ApprovalDecision(
+                decision=decision.decision,
+                arguments=decision.arguments,
+                reason=decision.reason,
+                user_id=user_id.strip(),
+            )
         await redis.set(
-            rkey(f"approval:{tool_call_id}"),
-            decision.to_json(),
+            _approval_key(tool_call_id, user_id),
+            stored.to_json(),
             ex=int(APPROVAL_TTL_SECONDS),
         )
         # 加速器：叫醒等待该 tc_id 的副本。丢了也非致命 —— 兜底轮询仍会取走（键已写）。
         try:
-            await redis.publish(_approval_wake_channel(tool_call_id), tool_call_id)
+            await redis.publish(_approval_wake_channel(tool_call_id, user_id), tool_call_id)
         except Exception:  # noqa: BLE001
             logger.debug("approval decision: wake publish failed (fallback poll covers it)")
         return True
@@ -4384,18 +4446,34 @@ async def _write_approval_decision(tool_call_id: str, decision: ApprovalDecision
         return False
 
 
-async def submit_approval_global(tool_call_id: str, decision: ApprovalDecision) -> bool:
+async def submit_approval_global(
+    tool_call_id: str, decision: ApprovalDecision, user_id: str = ""
+) -> bool:
     """全局审批入口：唤醒本实例等待者，否则写 Redis 决策键（跨副本）。
+
+    `user_id` 是调用者身份（Go 网关从已验证 JWT claims 注入）。若非空且与等待方会话的
+    owner 不一致，**一律拒绝** —— 防止他人代批/拒批危险工具（与 main.py 的
+    `agent_approval` 同一判据）。
 
     返回值表示"决策已投递"（不等于已被消费）：
     - True：已唤醒本地等待者，或已成功写入 Redis 决策键；
-    - False：本实例无人等待且 Redis 不可用（决策无处送达）。
+    - False：归属校验未通过，或本实例无人等待且 Redis 不可用。
     """
     if not tool_call_id:
         return False
 
-    runtime = _PENDING_APPROVAL_OWNERS.get(tool_call_id)
-    if runtime is not None:
-        if await runtime.submit_approval(tool_call_id, decision):
+    caller = (user_id or "").strip()
+    entry = _PENDING_APPROVAL_OWNERS.get(tool_call_id)
+    if entry is not None:
+        runtime, owner_uid = entry
+        if owner_uid and caller and owner_uid != caller:
+            logger.warning(
+                "approval rejected: caller %s != owner %s (tc=%s)",
+                caller,
+                owner_uid,
+                tool_call_id,
+            )
+            return False
+        if await runtime.submit_approval(tool_call_id, decision, caller):
             return True
-    return await _write_approval_decision(tool_call_id, decision)
+    return await _write_approval_decision(tool_call_id, decision, caller)

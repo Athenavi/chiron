@@ -414,7 +414,7 @@ onMounted(fetchItems)
 <style scoped>
 .market-view { padding: 16px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
-.page-title { margin: 0; font-size: 20px; }
+.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .grant-form { display: flex; gap: 8px; align-items: center; }
 .hint { color: var(--text-secondary); font-size: 12px; }
 

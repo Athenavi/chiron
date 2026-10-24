@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, watch, nextTick, computed, onErrorCaptured, onMounted, onUpdated } from 'vue'
+import { ref, watch, nextTick, computed, onErrorCaptured, onMounted, onUpdated, onBeforeUnmount } from 'vue'
 import { ArrowDownOutlined } from '@ant-design/icons-vue'
 import MessageItem from './MessageItem.vue'
 import FoldHeader from './FoldHeader.vue'
@@ -99,6 +99,33 @@ const windowRange = ref<WindowRange>({ start: 0, end: 0, tailStart: 0, tailEnd: 
 /** 首次渲染先全量，挂载后测量再切窗口：避免首屏用未经测量的几何画出空白。 */
 const fullRender = ref(true)
 let coverFailures = 0
+
+/* ── 新消息入场门控（CDS v1 §4.1.1）────────────────────────────
+   只有"真的新到"的行才播一次入场：已见过的 id 记在 seenIds 里，所以窗口化滚出/滚回
+   导致的**重新挂载**不会重播动画。
+   两条额外规则：① 一次性冒出很多 id（切会话 / 载入历史）不播 —— 那是换了页面而不是来了新消息；
+   ② 只看 id 不看内容，所以流式期间对同一行的内容更新不会反复触发。 */
+const seenIds = new Set<string>(props.items.map(i => i.id).filter((x): x is string => !!x))
+const enteringIds = ref<Set<string>>(new Set())
+let enterTimer: ReturnType<typeof setTimeout> | null = null
+function noteEnteringRows() {
+  const fresh: string[] = []
+  for (const it of props.items) {
+    if (it.id && !seenIds.has(it.id)) fresh.push(it.id)
+  }
+  if (fresh.length === 0) return
+  for (const id of fresh) seenIds.add(id)
+  if (fresh.length > 3) return   // 批量替换：不播
+  const next = new Set(enteringIds.value)
+  for (const id of fresh) next.add(id)
+  enteringIds.value = next
+  if (enterTimer) clearTimeout(enterTimer)
+  enterTimer = setTimeout(() => { enteringIds.value = new Set() }, 420)
+}
+// 追加消息只改长度、换会话/重载换引用 —— 两个都要听，否则其中一路会漏
+watch(() => props.items.length, noteEnteringRows)
+watch(() => props.items, noteEnteringRows)
+onBeforeUnmount(() => { if (enterTimer) clearTimeout(enterTimer) })
 
 /** 用户输入早于 scroll 事件到达：提前取得租约，避免流式增长抢走阅读位置。 */
 function onUserInput() {
@@ -530,15 +557,21 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
         class="skeleton-msg"
         :class="n % 2 === 0 ? 'user' : 'assistant'"
       >
-        <div class="skeleton-avatar" />
+        <div
+          class="skeleton-avatar skeleton"
+          data-motion="wave"
+          :style="{ '--skel-i': 0 }"
+        />
         <div class="skeleton-lines">
           <div
-            class="skeleton-line"
-            :style="{ width: 60 + (n * 7) % 30 + '%' }"
+            class="skeleton-line skeleton"
+            data-motion="wave"
+            :style="{ width: 60 + (n * 7) % 30 + '%', '--skel-i': 1 }"
           />
           <div
-            class="skeleton-line"
-            :style="{ width: 80 + (n * 11) % 15 + '%' }"
+            class="skeleton-line skeleton"
+            data-motion="wave"
+            :style="{ width: 80 + (n * 11) % 15 + '%', '--skel-i': 2 }"
           />
         </div>
       </div>
@@ -554,7 +587,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       class="earlier-loader"
     >
       <template v-if="props.loadingEarlier">
-        <span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" />
+        <span class="loading-dots"><span /><span /><span /></span>
       </template>
       <span v-else>{{ $t('chat.load_earlier_messages') }}</span>
     </div>
@@ -591,6 +624,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
             :item="(node as any).row.item"
             :anchor-key="isUserAnchor((node as any).row.item) ? (node as any).row.index : undefined"
             :highlighted="highlightIndex === (node as any).row.index"
+            :entering="enteringIds.has((node as any).row.item.id ?? '')"
             @retry-from="(id: string, text: string) => emit('retry-from', id, text)"
             @regenerate="(id: string) => emit('regenerate', id)"
             @continue="(id: string) => emit('continue', id)"
@@ -618,7 +652,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       v-if="loading"
       class="loading-indicator"
     >
-      <span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" /><span class="loading-dot chat-pulse" />
+      <span class="loading-dots"><span /><span /><span /></span>
     </div>
 
     <!-- 回到底部按钮：离开底部时显示 + 新消息未读徽标（deepseek bottom-follow 语义补充） -->
@@ -696,13 +730,16 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .skeleton-list { padding: 16px 24px; }
 .skeleton-msg { display: flex; gap: 12px; margin-bottom: 24px; }
 .skeleton-msg.user { flex-direction: row-reverse; }
-.skeleton-avatar { width: 28px; height: 28px; border-radius: 50%; background: var(--bg-hover); flex-shrink: 0; animation: skeleton-pulse var(--dur-pulse) ease-in-out infinite; }
+/* 骨架形状只留几何；呼吸 + 扫光由 style.css 的 .skeleton 一族提供（统一语言） */
+.skeleton-avatar { width: 28px; height: 28px; border-radius: 50%; flex-shrink: 0; }
 .skeleton-lines { flex: 1; display: flex; flex-direction: column; gap: 8px; max-width: 70%; }
 .skeleton-msg.user .skeleton-lines { align-items: flex-end; }
-.skeleton-line { height: 14px; border-radius: 4px; background: var(--bg-hover); animation: skeleton-pulse var(--dur-pulse) ease-in-out infinite; }
-.skeleton-line:nth-child(2) { animation-delay: 0.2s; }
-@keyframes skeleton-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
-@media (prefers-reduced-motion: reduce) { .skeleton-avatar, .skeleton-line { animation: none; } }
+.skeleton-line { height: 14px; border-radius: var(--radius-sm); }
+.skeleton-line:nth-child(2) { animation-delay: var(--dur-normal); }
+@media (prefers-reduced-motion: reduce) {
+  .skeleton-avatar, .skeleton-line,
+  .skeleton-avatar::after, .skeleton-line::after { animation: none; }
+}
 /* ── 移动端：骨架屏间距/头像压缩 ── */
 @media (max-width: 768px) {
   .skeleton-list { padding: 12px 16px; }
@@ -719,8 +756,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 /* 窗口占位：只提供高度，不参与锚点身份收集 */
 .window-spacer { width: 100%; flex: none; }
 .loading-indicator { display: flex; justify-content: center; gap: 6px; padding: 14px 0; }
-/* 尺寸/底色保留，脉冲与错峰延迟由全局 .chat-pulse 提供（src/style.css） */
-.loading-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text-tertiary); }
+/* 三点波浪的形状/节奏由全局 .loading-dots 提供（CDS v1 §3.2.1，见 src/style.css） */
 .back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
 .back-to-bottom:hover { color: var(--primary); border-color: var(--primary); }
 .back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: var(--on-solid); font-size: var(--fs-xs); line-height: 18px; text-align: center; }

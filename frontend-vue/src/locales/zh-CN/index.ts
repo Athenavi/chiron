@@ -531,6 +531,8 @@ export default {
     amount: "金额",
     save_endpoint_only: "仅保存端点",
     compact: "紧凑",
+    interface_density: "界面密度",
+    sound_effects: "交互音效",
     enter: "进入",
     ask_about_this: "就此提问",
     start_upload: "开始上传",

@@ -1025,11 +1025,11 @@ onMounted(async () => {
 .appearance-label { font-size: 13px; color: var(--text-secondary); min-width: 72px; }
 .accent-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .accent-swatch {
-  width: 26px; height: 26px; border-radius: 50%; border: 2px solid transparent;
-  cursor: pointer; padding: 0; transition: transform var(--dur-fast) ease, border-color var(--dur-fast) ease;
+  width: 26px; height: 26px; border-radius: 50%; box-shadow: inset 0 0 0 2px transparent;
+  cursor: pointer; padding: 0; transition: transform var(--dur-fast) ease, box-shadow var(--dur-fast) ease;
 }
 .accent-swatch:hover { transform: scale(1.12); }
-.accent-swatch.active { border-color: var(--text-primary); }
+.accent-swatch.active { box-shadow: inset 0 0 0 2px var(--text-primary); }
 .accent-custom {
   position: relative; width: 30px; height: 30px; border-radius: 50%; overflow: hidden;
   border: 2px solid var(--border); display: inline-flex; align-items: center; justify-content: center;

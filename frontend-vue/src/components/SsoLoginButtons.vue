@@ -117,7 +117,7 @@ function startSso(p: SsoPublicProvider) {
   gap: 8px;
   padding: 9px 12px;
   border: var(--hairline-width) solid var(--border-card, #d9d9d9);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));
   font-size: 14px;

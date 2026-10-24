@@ -11,6 +11,7 @@ export default {
   session_busy: 'The previous turn is still in progress. Wait for it to finish, or repair the session and retry.',
   session_busy_repair: 'Repair session',
   session_busy_auto_recover: 'auto-recovers in ~{n} min',
+  session_busy_auto_recover_in: 'auto-recovers in {time}',
   session_repaired: 'Session repaired — you can send again',
   not_found: 'The requested resource does not exist or has been deleted.',
   // Rate limit & quota

@@ -471,18 +471,23 @@ func scanMarketGrant(row interface{ Scan(...any) error }) (*MarketGrant, error) 
 
 // ListGrants GET /v1/ent/market/grants?item_id=&tenant_id=
 func (h *MarketHandler) ListGrants(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
+	// 跨租户读防护：非 owner 强制锚定自身租户（ent_catalog_installs.tenant_id 是 smallint）。
+	// 此前是裸 `WHERE TRUE` + 可选的 query 过滤 ⇒ 任一持有 market:manage 的租户管理员
+	// 都能列出**所有租户**的能力授权。
+	scoped := scopedTenantID(claims, r.URL.Query().Get("tenant_id"))
 	query := `SELECT item_id, tenant_id, enabled, installed_at FROM ent_catalog_installs WHERE TRUE`
 	args := []any{}
 	if itemID := r.URL.Query().Get("item_id"); itemID != "" {
 		args = append(args, itemID)
 		query += ` AND item_id = $` + string(rune('0'+len(args)))
 	}
-	if tenantID := r.URL.Query().Get("tenant_id"); tenantID != "" {
-		args = append(args, tenantID)
+	if scoped != "" {
+		args = append(args, scoped)
 		query += ` AND tenant_id = $` + string(rune('0'+len(args)))
 	}
 	query += ` ORDER BY installed_at DESC LIMIT 500`
@@ -516,7 +521,8 @@ func (h *MarketHandler) ListGrants(w http.ResponseWriter, r *http.Request) {
 
 // GrantItem POST /v1/ent/market/grants（UPSERT：item_id + tenant_id 主键）。
 func (h *MarketHandler) GrantItem(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
@@ -533,8 +539,12 @@ func (h *MarketHandler) GrantItem(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "valid item_id (uuid) required")
 		return
 	}
-	if _, err := uuid.Parse(body.TenantID); err != nil {
-		BadRequest(w, "valid tenant_id (uuid) required")
+	// 跨租户写防护：tenant_id 列是 smallint（ent_catalog_installs，见 0001 baseline），
+	// 此前按 uuid 校验 ⇒ 合法请求一律 400，且完全没有归属锚定。现按 smallint 语义校验，
+	// 并用 scopedTenantID 锚定 —— 非 owner 只能给自己租户授权。
+	body.TenantID = scopedTenantID(claims, body.TenantID)
+	if parseTenantID(body.TenantID) == 0 {
+		BadRequest(w, "valid tenant_id required")
 		return
 	}
 	enabled := true
@@ -571,14 +581,20 @@ func (h *MarketHandler) GrantItem(w http.ResponseWriter, r *http.Request) {
 
 // UpdateGrant PUT /v1/ent/market/grants/{itemID}/{tenantID}（仅切换 enabled）。
 func (h *MarketHandler) UpdateGrant(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
 	itemID := r.PathValue("itemID")
 	tenantID := r.PathValue("tenantID")
-	if _, err := uuid.Parse(itemID); err != nil || uuidValidate(tenantID) != nil {
+	if _, err := uuid.Parse(itemID); err != nil || parseTenantID(tenantID) == 0 {
 		BadRequest(w, "invalid item or tenant id")
+		return
+	}
+	// 跨租户写防护：非 owner 只能改自己租户的授权。
+	if scopedTenantID(claims, tenantID) != tenantID {
+		Forbidden(w, "access denied")
 		return
 	}
 	var body struct {
@@ -609,14 +625,20 @@ func (h *MarketHandler) UpdateGrant(w http.ResponseWriter, r *http.Request) {
 
 // DeleteGrant DELETE /v1/ent/market/grants/{itemID}/{tenantID}
 func (h *MarketHandler) DeleteGrant(w http.ResponseWriter, r *http.Request) {
-	if claims := auth.GetClaims(r.Context()); claims == nil {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil {
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
 	itemID := r.PathValue("itemID")
 	tenantID := r.PathValue("tenantID")
-	if _, err := uuid.Parse(itemID); err != nil || uuidValidate(tenantID) != nil {
+	if _, err := uuid.Parse(itemID); err != nil || parseTenantID(tenantID) == 0 {
 		BadRequest(w, "invalid item or tenant id")
+		return
+	}
+	// 跨租户写防护：非 owner 只能删自己租户的授权。
+	if scopedTenantID(claims, tenantID) != tenantID {
+		Forbidden(w, "access denied")
 		return
 	}
 	if db.Pool == nil {

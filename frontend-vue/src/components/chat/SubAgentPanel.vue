@@ -949,7 +949,7 @@ onBeforeUnmount(() => {
 
 .cost-hint {
   display: flex; align-items: flex-start; gap: 8px;
-  padding: 8px 10px; border-radius: 6px;
+  padding: 8px 10px; border-radius: var(--radius-md);
   background: var(--warning-bg, rgba(245, 158, 11, 0.12));
   color: var(--text-secondary, #595959); line-height: 1.5;
 }
@@ -966,7 +966,7 @@ onBeforeUnmount(() => {
 .tree { display: flex; flex-direction: column; }
 .tree-row {
   display: flex; align-items: center; gap: 6px;
-  padding: 4px 8px; border-radius: 6px; cursor: pointer;
+  padding: 4px 8px; border-radius: var(--radius-md); cursor: pointer;
 }
 .tree-row:hover { background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
 .tree-row.active { background: var(--primary-light, var(--shadow-brand)); }
@@ -982,7 +982,7 @@ onBeforeUnmount(() => {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
   font-size: var(--fs-xs); color: var(--text-secondary, #595959);
   background: transparent; border: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24));
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .run-stop:hover:not(:disabled) { color: var(--error, var(--error)); border-color: var(--error, var(--error)); }
 .run-stop:disabled { opacity: 0.5; cursor: default; }
@@ -999,7 +999,7 @@ onBeforeUnmount(() => {
 .run-approval {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
   font-size: var(--fs-xs); color: var(--warning, var(--warning));
-  background: transparent; border: var(--hairline-width) solid var(--warning, var(--warning)); border-radius: 4px;
+  background: transparent; border: var(--hairline-width) solid var(--warning, var(--warning)); border-radius: var(--radius-sm);
 }
 
 /* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
@@ -1012,7 +1012,7 @@ onBeforeUnmount(() => {
 .output-head { display: flex; justify-content: space-between; font-weight: var(--fw-semibold); }
 .output-meta { font-size: 12px; color: var(--text-tertiary, #8c8c8c); }
 .output-summary {
-  margin: 6px 0; padding: 8px; border-radius: 6px;
+  margin: 6px 0; padding: 8px; border-radius: var(--radius-md);
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
   white-space: pre-wrap; max-height: 160px; overflow: auto;
 }
@@ -1022,7 +1022,7 @@ onBeforeUnmount(() => {
 .line.notice { color: var(--warning, var(--warning)); }
 .line.status, .line.done { color: var(--text-secondary, #595959); font-size: 12px; }
 .line-tag {
-  display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: 4px; font-size: var(--fs-xs);
+  display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs);
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 .stream-empty { color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
@@ -1030,12 +1030,12 @@ onBeforeUnmount(() => {
 /* ── 内部 tab（运行 · 输出 · 用量 · 事件流）── */
 .sa-tabs {
   display: flex; gap: 2px; margin: 8px 0 10px;
-  padding: 2px; border-radius: 8px;
+  padding: 2px; border-radius: var(--radius-lg);
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
 }
 .sa-tab {
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
-  padding: 4px 8px; border: none; border-radius: 6px; cursor: pointer;
+  padding: 4px 8px; border: none; border-radius: var(--radius-md); cursor: pointer;
   background: transparent; color: var(--text-secondary, #595959); font-size: 12px;
 }
 .sa-tab:hover { color: var(--text-primary, #262626); }
@@ -1044,7 +1044,7 @@ onBeforeUnmount(() => {
   font-weight: var(--fw-semibold); box-shadow: var(--shadow-xs);
 }
 .sa-tab-count {
-  min-width: 16px; padding: 0 4px; border-radius: 8px;
+  min-width: 16px; padding: 0 4px; border-radius: var(--radius-lg);
   background: var(--surface-2, rgba(127, 127, 127, 0.16));
   font-size: var(--fs-xs); font-variant-numeric: tabular-nums;
 }
@@ -1077,7 +1077,7 @@ onBeforeUnmount(() => {
 .art-group { display: flex; flex-direction: column; gap: 2px; }
 .art-dir { color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); font-family: var(--font-mono); }
 .art-item {
-  padding: 3px 6px; border: none; border-radius: 4px; cursor: pointer;
+  padding: 3px 6px; border: none; border-radius: var(--radius-sm); cursor: pointer;
   background: transparent; color: var(--text-secondary, #595959);
   font-size: 12px; font-family: var(--font-mono); text-align: left;
 }

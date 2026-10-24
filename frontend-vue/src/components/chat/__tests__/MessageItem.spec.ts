@@ -283,7 +283,8 @@ describe('MessageItem（超长正文让位渲染）', () => {
 
   afterEach(() => { (window as any).requestIdleCallback = originalIdle })
 
-  /** 超过 LARGE_MESSAGE_CHARS（30000）才进让位；助手长文默认折叠，需先展开 */
+  /** 让位是**按字符数**触发的（> LARGE_MESSAGE_CHARS=30000），与折叠无关：
+   *  折叠态现在渲染全文（只由 CSS 裁切），所以超长正文在挂载时就已经进入让位。 */
   const hugeBody = (chars: number) => '正文段落内容。'.repeat(Math.ceil(chars / 7)).slice(0, chars)
 
   it('超长正文展开后先让位（纯文本），idle 回调才渲染 markdown', async () => {
@@ -308,19 +309,22 @@ describe('MessageItem（超长正文让位渲染）', () => {
     expect(idleQueue).toHaveLength(0)
   })
 
-  it('让位期间内容又变，旧回调作废（不会用过期内容覆盖）', async () => {
+  it('让位期间正文又变，旧回调作废（不会用过期内容覆盖）', async () => {
     const wrapper = mountText(hugeBody(40000))
     await settleAsync()
-    await wrapper.find('.collapse-toggle').trigger('click')
-    await settleAsync()
-    expect(idleQueue).toHaveLength(1)
+    expect(idleQueue).toHaveLength(1)                          // 超长正文在挂载时已进入让位
+    const stale = idleQueue[0]!
 
-    await wrapper.find('.collapse-toggle').trigger('click')     // 又收起
+    // 正文在让位期间变了：短内容同步渲染，所以此刻界面已是新正文
+    await wrapper.setProps({ item: assistant('新正文段落。'.repeat(100)) })
     await settleAsync()
-    idleQueue[0]!()                                             // 执行过期的让位回调
-    await settleAsync()
+    expect(wrapper.find('.msg-text').html()).toContain('新正文段落。')
 
-    expect(wrapper.html()).toContain('已折叠')                  // 仍是折叠预览，没被全文覆盖
+    stale()                                                     // 执行**过期**的让位回调
+    await settleAsync()
+    // token 不匹配 ⇒ 旧长文被丢弃，界面仍是新正文
+    expect(wrapper.find('.msg-text').html()).toContain('新正文段落。')
+    expect(wrapper.find('.msg-text').html()).not.toContain('正文段落内容。')
   })
 })
 
@@ -331,20 +335,25 @@ describe('MessageItem（长内容渲染让位）', () => {
     expect(wrapper.find('.msg-text').html()).toContain('<strong>')
   })
 
-  it('展开超长正文时先给纯文本，空闲后再渲染 markdown', async () => {
-    const long = '段落内容测试文本\n\n'.repeat(4000)   // ~40000 字符：超过折叠阈值与让位阈值
+  it('折叠态渲染的是全文（CSS 裁切），超长时先纯文本、空闲后再换 markdown', async () => {
+    const long = '段落内容测试文本\n\n'.repeat(4000)   // ~40000 字符：同时超过折叠阈值与让位阈值
     const wrapper = mountText(long)
 
-    // 默认折叠成预览：短内容同步渲染，不出现过渡
-    expect(wrapper.find('.msg-text').classes()).not.toContain('streaming-text')
-
-    await wrapper.find('.collapse-toggle').trigger('click')
-    await nextTick()
-    expect(wrapper.find('.msg-text').classes()).toContain('streaming-text')   // 让位中：显示纯文本
+    // 折叠不再伪造截断：正文里没有"已折叠"提示，折叠由 class 表达（max-height + 羽化蒙版）
+    expect(wrapper.html()).not.toContain('已折叠')
+    expect(wrapper.find('.msg-text').classes()).toContain('collapsed')
+    // 超长正文即使折叠也走让位：先纯文本（同样带 collapsed，所以不会铺满一屏）
+    expect(wrapper.find('.msg-text').classes()).toContain('streaming-text')
 
     await new Promise(resolve => setTimeout(resolve, 20))
     await settleAsync()
     expect(wrapper.find('.msg-text').classes()).not.toContain('streaming-text')
     expect(wrapper.find('.msg-text').html()).toContain('<p>')
+    expect(wrapper.find('.msg-text').classes()).toContain('collapsed')
+
+    // 展开只是去掉裁切类，内容一直是同一份
+    await wrapper.find('.collapse-toggle').trigger('click')
+    await settleAsync()
+    expect(wrapper.find('.msg-text').classes()).not.toContain('collapsed')
   })
 })

@@ -84,7 +84,7 @@ function decline() {
       <button
         v-for="option in normalized"
         :key="option.label"
-        class="ask-option"
+        class="ask-option btn-lg"
         type="button"
         :disabled="expired"
         @click="choose(option)"
@@ -106,7 +106,7 @@ function decline() {
         @keydown.enter.prevent="submitDraft"
       >
       <button
-        class="ask-submit"
+        class="ask-submit btn-lg"
         type="button"
         :disabled="expired || !draft.trim()"
         @click="submitDraft"
@@ -129,23 +129,25 @@ function decline() {
 .ask-card {
   padding: 10px 14px;
   border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--accent);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   background: var(--bg-card);
 }
 .ask-card.expired { opacity: 0.66; }
 .ask-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.ask-tag { font-size: var(--fs-xs); color: var(--accent); background: var(--accent-bg); padding: 2px 8px; border-radius: 10px; }
+.ask-tag { font-size: var(--fs-xs); color: var(--accent); background: var(--accent-bg); padding: 2px 8px; border-radius: var(--sig-radius-card); }
 .ask-expired { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .ask-question { margin: 0 0 10px; font-size: 13px; line-height: 1.6; color: var(--text-primary); }
 .ask-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .ask-option {
-  border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-button);
+  /* 尺寸走 style.css §4 的 .btn-lg 阶梯；这里只留配色与发丝环 */
   background: var(--bg-surface); color: var(--text-primary);
-  font-size: 13px; line-height: 20px; padding: 5px 14px; cursor: pointer;
-  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
+  box-shadow: inset 0 0 0 var(--hairline-width) var(--border);
+  transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
-.ask-option:hover:not(:disabled) { border-color: var(--accent); color: var(--accent); }
+.ask-option:hover:not(:disabled) { box-shadow: inset 0 0 0 var(--hairline-width) var(--accent); color: var(--accent); }
 .ask-option:disabled { opacity: 0.5; cursor: not-allowed; }
+/* 按下塌陷（CDS 胶囊形变族），见 style.css §5 */
+.ask-option:active:not(:disabled) { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
 .ask-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ask-free { display: flex; gap: 8px; }
 .ask-input {
@@ -158,9 +160,9 @@ function decline() {
 .ask-input:disabled { opacity: 0.5; }
 .ask-submit {
   flex: none;
-  border: none; border-radius: var(--sig-radius-button);
+  /* 尺寸走 .btn-lg 阶梯；配色留在本组件 */
+  border: none;
   background: var(--accent); color: var(--on-solid);
-  font-size: 13px; line-height: 20px; padding: 5px 16px; cursor: pointer;
 }
 .ask-submit:disabled { opacity: 0.4; cursor: not-allowed; }
 .ask-submit:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); }

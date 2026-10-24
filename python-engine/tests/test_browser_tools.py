@@ -124,10 +124,12 @@ class RecordingHub:
     def __init__(self):
         self.commands: list[tuple[str, str, dict]] = []
 
-    async def connected_client_ids(self) -> list[str]:
+    async def connected_client_ids(self, user_id: str = "") -> list[str]:
         return ["ext-client-1"]
 
-    async def exec_command(self, client_id: str, method: str, params: dict) -> dict:
+    async def exec_command(
+        self, client_id: str, method: str, params: dict, user_id: str = ""
+    ) -> dict:
         self.commands.append((client_id, method, dict(params)))
         return {"status": "ok", "real": True}
 
@@ -153,10 +155,10 @@ async def test_no_connected_clients_fails_loud(monkeypatch):
     """Hub 无客户端连接必须抛错，不返回假结果。"""
 
     class EmptyHub:
-        async def connected_client_ids(self) -> list[str]:
+        async def connected_client_ids(self, user_id: str = "") -> list[str]:
             return []
 
-        async def exec_command(self, client_id, method, params):
+        async def exec_command(self, client_id, method, params, user_id: str = ""):
             raise AssertionError("should not be called")
 
     monkeypatch.setattr(browser, "_hub", EmptyHub())

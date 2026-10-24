@@ -215,7 +215,7 @@ defineExpose({
 .agent-collab-panel {
   background: var(--bg-card);
   border: var(--hairline-width) solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   overflow: hidden;
 }
 
@@ -278,7 +278,7 @@ defineExpose({
   gap: 12px;
   padding: 12px;
   border: var(--hairline-width) solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   background: var(--bg-card);
   cursor: pointer;
   transition: border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease, background var(--dur-normal) ease;
@@ -301,7 +301,7 @@ defineExpose({
   position: relative;
   width: 40px;
   height: 40px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -383,7 +383,7 @@ defineExpose({
   grid-column: 1 / -1;
   padding: 8px;
   background: var(--bg-secondary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   margin-top: 8px;
 }
 

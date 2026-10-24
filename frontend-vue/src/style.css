@@ -21,6 +21,15 @@
     --radius-2xl: 16px;
     --radius-3xl: 20px;
     --radius-full: 9999px;
+    /* 通用圆角尺度到此为止（2/4/6/8/12/16/20/full）。历史上组件里散落过 10px 与 14px，
+       它们**落不到这条尺度的任何一档上** —— 处置办法不是给尺度硬塞两档，而是按语义
+       归位：卡片/面板/图标磁贴 → --sig-radius-card，气泡 → --sig-radius-bubble，
+       芯片/标签/徽章/列表项 → --sig-radius-button。这三者本来就是**主题性格**，
+       归位后它们会随主题一起变（原先写死 10px 的卡片在 terminal 主题下是圆的，
+       与该主题"直角硬边"的性格自相矛盾）。
+       仍在用字面量的只剩：50%（正圆，形状原语而非尺度）、1px（发丝分隔点）、
+       inherit、0，以及两个角标简写（`3px 3px 0 0` 之类）—— 这些不是"没上 token"，
+       而是本来就不属于圆角尺度。 */
 
     /* 精细微边框宽度（desktop-agent-ui 铁律 #5）：线条 / 容器描边 / 卡片边框统一 0.5px，
        在高分屏下呈半像素 Hairline 质感，替代笨重的 1px。集中成一个 token 是为了
@@ -378,6 +387,13 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #0f172a;
     --shadow-xs: none;
     --shadow-sm: none;
     --shadow-md: none;
@@ -386,7 +402,7 @@ html.dark {
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(15, 23, 42, 0.10), 0 2px 6px rgba(15, 23, 42, 0.06);
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 10%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
 }
 
 [data-theme='notion-dark'] {
@@ -492,6 +508,13 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #000000;
     --shadow-xs: none;
     --shadow-sm: none;
     --shadow-md: none;
@@ -500,7 +523,7 @@ html.dark {
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.55), 0 2px 8px rgba(0, 0, 0, 0.40);
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 40%, transparent);
 }
 
 /* ============================================================ */
@@ -575,7 +598,7 @@ html.dark {
     --comp-card-radius: 8px;
     --comp-input-radius: 8px;
     --comp-button-radius: 6px;
-    --comp-button-primary-shadow: 0 1px 2px rgba(120, 60, 35, 0.18);
+    --comp-button-primary-shadow: 0 1px 2px color-mix(in srgb, var(--shadow-base) 18%, transparent);
     --chat-bubble-radius-lg: 10px;
     --chat-bubble-radius-sm: 8px;
     --bubble-user: #f2efea;
@@ -605,8 +628,8 @@ html.dark {
     --sig-blur-header: 8px;
     --sig-blur-panel: 0px;
     --sig-glass-opacity: 1;
-    --sig-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.04);
-    --sig-shadow-hover: 0 4px 12px rgba(0, 0, 0, 0.10);
+    --sig-shadow-card: 0 1px 2px color-mix(in srgb, var(--shadow-base) 4%, transparent);
+    --sig-shadow-hover: 0 4px 12px color-mix(in srgb, var(--shadow-base) 10%, transparent);
     --sig-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.04);
     --sig-input-ring: 3px;
     --sig-glow-color: transparent;
@@ -614,15 +637,22 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.05);
-    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.05), 0 2px 8px rgba(0, 0, 0, 0.08);
-    --shadow-md: 0 2px 4px rgba(0, 0, 0, 0.05), 0 6px 16px rgba(0, 0, 0, 0.08);
-    --shadow-lg: 0 4px 8px rgba(0, 0, 0, 0.06), 0 12px 28px -2px rgba(0, 0, 0, 0.08);
-    --shadow-xl: 0 8px 16px rgba(0, 0, 0, 0.06), 0 24px 48px -6px rgba(0, 0, 0, 0.10);
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #000000;
+    --shadow-xs: 0 1px 2px color-mix(in srgb, var(--shadow-base) 5%, transparent);
+    --shadow-sm: 0 1px 2px color-mix(in srgb, var(--shadow-base) 5%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 8%, transparent);
+    --shadow-md: 0 2px 4px color-mix(in srgb, var(--shadow-base) 5%, transparent), 0 6px 16px color-mix(in srgb, var(--shadow-base) 8%, transparent);
+    --shadow-lg: 0 4px 8px color-mix(in srgb, var(--shadow-base) 6%, transparent), 0 12px 28px -2px color-mix(in srgb, var(--shadow-base) 8%, transparent);
+    --shadow-xl: 0 8px 16px color-mix(in srgb, var(--shadow-base) 6%, transparent), 0 24px 48px -6px color-mix(in srgb, var(--shadow-base) 10%, transparent);
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(0, 0, 0, 0.12), 0 2px 6px rgba(0, 0, 0, 0.08);
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 12%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 8%, transparent);
 }
 
 [data-theme='paper-dark'] {
@@ -689,7 +719,7 @@ html.dark {
     --comp-card-radius: 8px;
     --comp-input-radius: 8px;
     --comp-button-radius: 6px;
-    --comp-button-primary-shadow: 0 1px 2px rgba(0, 0, 0, 0.35);
+    --comp-button-primary-shadow: 0 1px 2px color-mix(in srgb, var(--shadow-base) 35%, transparent);
     --chat-bubble-radius-lg: 10px;
     --chat-bubble-radius-sm: 8px;
     --bubble-user: #20201f;
@@ -719,8 +749,8 @@ html.dark {
     --sig-blur-header: 8px;
     --sig-blur-panel: 0px;
     --sig-glass-opacity: 1;
-    --sig-shadow-card: 0 1px 2px rgba(0, 0, 0, 0.45);
-    --sig-shadow-hover: 0 4px 14px rgba(0, 0, 0, 0.55);
+    --sig-shadow-card: 0 1px 2px color-mix(in srgb, var(--shadow-base) 45%, transparent);
+    --sig-shadow-hover: 0 4px 14px color-mix(in srgb, var(--shadow-base) 55%, transparent);
     --sig-input-shadow: 0 1px 2px rgba(0, 0, 0, 0.40);
     --sig-input-ring: 3px;
     --sig-glow-color: transparent;
@@ -728,15 +758,22 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 1px 3px rgba(0, 0, 0, 0.4), 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 4px 14px rgba(0, 0, 0, 0.45), 0 2px 4px rgba(0, 0, 0, 0.3);
-    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 12px 34px rgba(0, 0, 0, 0.5), 0 4px 8px rgba(0, 0, 0, 0.35);
-    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 22px 48px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.35);
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #000000;
+    --shadow-xs: 0 1px 2px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 1px 3px color-mix(in srgb, var(--shadow-base) 40%, transparent), 0 1px 2px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 4px 14px color-mix(in srgb, var(--shadow-base) 45%, transparent), 0 2px 4px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 12px 34px color-mix(in srgb, var(--shadow-base) 50%, transparent), 0 4px 8px color-mix(in srgb, var(--shadow-base) 35%, transparent);
+    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 22px 48px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 8px 16px color-mix(in srgb, var(--shadow-base) 35%, transparent);
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.12), 0 8px 28px rgba(0, 0, 0, 0.70), 0 2px 8px rgba(0, 0, 0, 0.50);
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.12), 0 8px 28px color-mix(in srgb, var(--shadow-base) 70%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 50%, transparent);
 }
 
 /* ============================================================ */
@@ -844,6 +881,13 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #06100d;
     --shadow-xs: none;
     --shadow-sm: none;
     --shadow-md: none;
@@ -852,7 +896,7 @@ html.dark {
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(6, 16, 13, 0.10), 0 2px 6px rgba(6, 16, 13, 0.06);
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 10%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
 }
 
 [data-theme='terminal-dark'] {
@@ -958,6 +1002,13 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: none;
 
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #000000;
     --shadow-xs: none;
     --shadow-sm: none;
     --shadow-md: none;
@@ -966,7 +1017,7 @@ html.dark {
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.60), 0 2px 8px rgba(0, 0, 0, 0.40);
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 60%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 40%, transparent);
 }
 
 /* ============================================================ */
@@ -1035,7 +1086,7 @@ html.dark {
     --comp-card-radius: 14px;
     --comp-input-radius: 14px;
     --comp-button-radius: 10px;
-    --comp-button-primary-shadow: 0 4px 14px rgba(99, 102, 241, 0.28);
+    --comp-button-primary-shadow: 0 4px 14px color-mix(in srgb, var(--shadow-base) 28%, transparent);
     --chat-bubble-radius-lg: 16px;
     --chat-bubble-radius-sm: 12px;
     --bubble-user: rgba(99, 102, 241, 0.12);
@@ -1065,8 +1116,8 @@ html.dark {
     --sig-blur-header: 16px;
     --sig-blur-panel: 20px;
     --sig-glass-opacity: 0.75;
-    --sig-shadow-card: 0 8px 24px rgba(76, 79, 150, 0.1);
-    --sig-shadow-hover: 0 12px 32px rgba(76, 79, 150, 0.16);
+    --sig-shadow-card: 0 8px 24px color-mix(in srgb, var(--shadow-base) 10%, transparent);
+    --sig-shadow-hover: 0 12px 32px color-mix(in srgb, var(--shadow-base) 16%, transparent);
     --sig-input-shadow: 0 4px 16px rgba(76, 79, 150, 0.08);
     --sig-input-ring: 4px;
     --sig-glow-color: rgba(99, 102, 241, 0.35);
@@ -1074,15 +1125,22 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: linear-gradient(135deg, var(--primary), var(--accent));
 
-    --shadow-xs: 0 1px 2px rgba(76, 79, 150, 0.06);
-    --shadow-sm: 0 2px 8px rgba(76, 79, 150, 0.08), 0 1px 2px rgba(76, 79, 150, 0.04);
-    --shadow-md: 0 8px 24px rgba(76, 79, 150, 0.12), 0 2px 6px rgba(76, 79, 150, 0.06);
-    --shadow-lg: 0 18px 44px rgba(76, 79, 150, 0.16), 0 6px 12px rgba(76, 79, 150, 0.08);
-    --shadow-xl: 0 28px 64px rgba(76, 79, 150, 0.2), 0 10px 20px rgba(76, 79, 150, 0.1);
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #4c4f96;
+    --shadow-xs: 0 1px 2px color-mix(in srgb, var(--shadow-base) 6%, transparent);
+    --shadow-sm: 0 2px 8px color-mix(in srgb, var(--shadow-base) 8%, transparent), 0 1px 2px color-mix(in srgb, var(--shadow-base) 4%, transparent);
+    --shadow-md: 0 8px 24px color-mix(in srgb, var(--shadow-base) 12%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
+    --shadow-lg: 0 18px 44px color-mix(in srgb, var(--shadow-base) 16%, transparent), 0 6px 12px color-mix(in srgb, var(--shadow-base) 8%, transparent);
+    --shadow-xl: 0 28px 64px color-mix(in srgb, var(--shadow-base) 20%, transparent), 0 10px 20px color-mix(in srgb, var(--shadow-base) 10%, transparent);
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px rgba(76, 79, 150, 0.16), 0 2px 6px rgba(76, 79, 150, 0.08);
+    --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 16%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 8%, transparent);
 }
 
 [data-theme='aurora-dark'] {
@@ -1149,7 +1207,7 @@ html.dark {
     --comp-card-radius: 14px;
     --comp-input-radius: 14px;
     --comp-button-radius: 10px;
-    --comp-button-primary-shadow: 0 4px 18px rgba(99, 102, 241, 0.35);
+    --comp-button-primary-shadow: 0 4px 18px color-mix(in srgb, var(--shadow-base) 35%, transparent);
     --chat-bubble-radius-lg: 16px;
     --chat-bubble-radius-sm: 12px;
     --bubble-user: rgba(99, 102, 241, 0.22);
@@ -1179,8 +1237,8 @@ html.dark {
     --sig-blur-header: 20px;
     --sig-blur-panel: 24px;
     --sig-glass-opacity: 0.7;
-    --sig-shadow-card: 0 8px 28px rgba(0, 0, 0, 0.4);
-    --sig-shadow-hover: 0 14px 38px rgba(0, 0, 0, 0.5);
+    --sig-shadow-card: 0 8px 28px color-mix(in srgb, var(--shadow-base) 40%, transparent);
+    --sig-shadow-hover: 0 14px 38px color-mix(in srgb, var(--shadow-base) 50%, transparent);
     --sig-input-shadow: 0 6px 20px rgba(0, 0, 0, 0.35);
     --sig-input-ring: 4px;
     --sig-glow-color: rgba(139, 92, 246, 0.45);
@@ -1188,15 +1246,22 @@ html.dark {
     --sig-bg-decor: none;
     --sig-accent-gradient: linear-gradient(135deg, var(--primary), var(--accent));
 
-    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.3);
-    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 2px 10px rgba(0, 0, 0, 0.35), 0 1px 2px rgba(0, 0, 0, 0.2);
-    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 10px 28px rgba(0, 0, 0, 0.45), 0 2px 8px rgba(0, 0, 0, 0.25);
-    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 20px 50px rgba(0, 0, 0, 0.55), 0 8px 16px rgba(0, 0, 0, 0.3);
-    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 30px 70px rgba(0, 0, 0, 0.6), 0 10px 20px rgba(0, 0, 0, 0.35);
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 5 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    /* 阴影基色（该主题的"暗部色相"）：各档投影由它按比例派生 ——
+       换暗部色相只改这一处，不必在 7 个 shadow token 里各改一遍。 */
+    --shadow-base: #000000;
+    --shadow-xs: 0 1px 2px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+    --shadow-sm: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 2px 10px color-mix(in srgb, var(--shadow-base) 35%, transparent), 0 1px 2px color-mix(in srgb, var(--shadow-base) 20%, transparent);
+    --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 10px 28px color-mix(in srgb, var(--shadow-base) 45%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 25%, transparent);
+    --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 20px 50px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 8px 16px color-mix(in srgb, var(--shadow-base) 30%, transparent);
+    --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 30px 70px color-mix(in srgb, var(--shadow-base) 60%, transparent), 0 10px 20px color-mix(in srgb, var(--shadow-base) 35%, transparent);
     /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
-    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px rgba(0, 0, 0, 0.65), 0 2px 8px rgba(0, 0, 0, 0.45);
+    --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 65%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 45%, transparent);
 }
 
 
@@ -1681,10 +1746,17 @@ body {
 .chat-state-dot[data-state='error'] { color: var(--error); }
 
 /* 统一脉冲：取代分散的 dotPulse / uehPulse / skeleton-pulse 三份实现 */
-@keyframes chatPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
-.chat-pulse { animation: chatPulse var(--dur-pulse) ease-in-out infinite; }
-.chat-pulse:nth-child(2) { animation-delay: 0.2s; }
-.chat-pulse:nth-child(3) { animation-delay: 0.4s; }
+/* 三点差分脉冲（CDS v1 §4.2.1 `cds-dot-pulse`）：周期 1.8s；
+   基准不透明度 **0.2857**（手册明确给出的 2/7 精确常数，不是四舍五入的 0.3）；
+   相位是 0-5% 落在基准 → 15-25% 满亮 → 65-100% 回落到基准。 */
+@keyframes chatPulse {
+  0%, 5% { opacity: 0.2857; animation-timing-function: cubic-bezier(0.165, 0.84, 0.44, 1); }
+  15%, 25% { opacity: 1; animation-timing-function: cubic-bezier(0.165, 0.84, 0.44, 1); }
+  65%, 100% { opacity: 0.2857; }
+}
+.chat-pulse { animation: chatPulse var(--dur-dot-pulse) cubic-bezier(0.165, 0.84, 0.44, 1) infinite; }
+.chat-pulse:nth-child(2) { animation-delay: 0.15s; }
+.chat-pulse:nth-child(3) { animation-delay: 0.3s; }
 
 /* 行级展开：≤200ms，统一缓动 */
 .chat-expand-enter-active,
@@ -1748,7 +1820,11 @@ body {
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     .scroll-fade,
-    .scroll-fade-top {
+    .scroll-fade-top,
+    /* ant-design-vue 的表格体（`scroll={{ y }}` 时）是**独立滚动容器**，
+       页面级遮罩够不到；它由组件生成、没有可挂类的入口，只能在这里并进来。
+       不滚动时 scroll(self) 进度为 0 → 两头遮罩都是 0px，无副作用。 */
+    .ant-table-body {
       mask-image: var(--scroll-fade-mask);
       -webkit-mask-image: var(--scroll-fade-mask);
       animation-name: cdsScrollFadeTop;
@@ -1759,7 +1835,8 @@ body {
       animation-range: 0 var(--scroll-fade-size);
     }
 
-    .scroll-fade {
+    .scroll-fade,
+    .ant-table-body {
       animation-name: cdsScrollFadeTop, cdsScrollFadeBottom;
       animation-timeline: scroll(self block), scroll(self block);
       animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
@@ -1829,6 +1906,27 @@ body {
   --composer-shadow-focus: 0 4px 24px var(--composer-ambient-focus), inset 0 0 0 var(--sig-input-ring) var(--ring-inner), 0 0 0 var(--sig-input-ring) var(--ring-outer);
 }
 
+/* ── 2c. 单闭合边框纪律（CDS §1.4.2）──────────────────────────
+   `.input-card` 自身已经有一圈闭合的环，它内部的工具栏按钮与模型选择器就不该
+   再各带一条边框 —— 否则同一条视线里会穿过两层边框，也就是 CDS 说的"套娃边框"。
+   降级为 ghost 时**保留 1px 边框宽度、只把颜色置空**：改宽度会让控件尺寸跳一下，
+   而且 1px 的透明描边还能托住 hover 填色的边缘。发送按钮除外（它是主操作，本就该有实底）。 */
+.input-card .input-actions .ant-btn:not(.send-btn) {
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+.input-card .input-actions .ant-btn:not(.send-btn):not(:disabled):hover {
+    background: var(--bg-hover) !important;
+    color: var(--text-primary) !important;
+}
+/* 模型选择器同理；但**聚焦态**保留（那是键盘可达性的可见证据，不是装饰边框）。 */
+.input-card .input-actions .ant-select:not(.ant-select-focused) .ant-select-selector {
+    border-color: transparent !important;
+    background: transparent !important;
+    box-shadow: none !important;
+}
+
 /* ── 3. 排印防御（CDS v1/01 §1.5）──────────────────────────────
    这四条是"生成式前端最常见、也最显廉价"的排版缺陷，逐条给机制而不是逐处手改。 */
 
@@ -1878,4 +1976,261 @@ body {
   input:not([type='checkbox']):not([type='radio']):not([type='file']) {
     font-size: max(16px, var(--fs-base)) !important;
   }
+}
+
+/* ── 4. 按钮尺寸阶梯（CDS v1/08 §8.4 的五级阶梯）─────────────────
+   几何取自 CDS 的 XS/SM/MD/LG/XL = 20/24/28/32/40px 高 · 6/8/10/12/16px 水平内边距 ·
+   4/6/8/8/10px 圆角。**字号刻意不照抄** CDS 的 11/12/13/14/16px，两条理由：
+     ① 本仓有一条 12px 最小字号门禁，CDS 的 XS=11px 会破这条线；
+     ② 字号只有 --ui-font-size 一个缩放入口，给按钮写死字号会让"整套等比缩放"失效。
+   于是档位映射为 XS/SM → --fs-xs(12px)、MD/LG → --fs-base(14px)、XL → --fs-lg(16px)；
+   高度与圆角按 style.md 的既定立场"不跟随字号缩放"，保持固定像素。
+   阶梯以 token 形式给出（与本仓 --space-* / --sig-radius-* 的做法一致），
+   .btn-* 类是给新代码的便捷入口。 */
+:root {
+  /* 字号档位映射见下方注释。这里显式守住本仓的 12px 最小字号门禁：
+     --fs-xs 在用户把 --ui-font-size 调到 13px 及以下时，亮色主题会算出 11px
+     （暗色主题有一条 -1px 的覆盖，所以暗色反而正常）—— 按钮文字比正文更碎，
+     不该踩到这条线，故加 max(12px, …)。 */
+  --btn-fs-xs: max(12px, var(--fs-xs));
+  --btn-fs-sm: max(12px, var(--fs-xs));
+  --btn-fs-md: var(--fs-base);
+  --btn-fs-lg: var(--fs-base);
+  --btn-fs-xl: var(--fs-lg);
+  --btn-h-xs: 20px; --btn-px-xs: 6px;
+  --btn-h-sm: 24px; --btn-px-sm: 8px;
+  --btn-h-md: 28px; --btn-px-md: 10px;
+  --btn-h-lg: 32px; --btn-px-lg: 12px;
+  --btn-h-xl: 40px; --btn-px-xl: 16px;
+}
+
+/* 只定几何（高度 / 水平内边距 / 字号），**不碰圆角与配色**：
+   ① 圆角在本仓是**主题性格**（--sig-radius-button：notion 3px → aurora 10px），
+      CDS 的 4/6/8/8/10 若写死就与 8 个主题块打架，这比"阶梯完整"更早、也更根本；
+   ② 配色逐处不同，而"单闭合边框原则"要求容器内的二级按钮不带边框 ——
+      这两件事都不该由尺寸类决定。 */
+.btn-xs, .btn-sm, .btn-md, .btn-lg, .btn-xl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  white-space: nowrap;
+  cursor: pointer;
+  border-radius: var(--sig-radius-button);
+}
+.btn-xs { height: var(--btn-h-xs); padding: 0 var(--btn-px-xs); font-size: var(--btn-fs-xs); }
+.btn-sm { height: var(--btn-h-sm); padding: 0 var(--btn-px-sm); font-size: var(--btn-fs-sm); }
+.btn-md { height: var(--btn-h-md); padding: 0 var(--btn-px-md); font-size: var(--btn-fs-md); }
+.btn-lg { height: var(--btn-h-lg); padding: 0 var(--btn-px-lg); font-size: var(--btn-fs-lg); }
+.btn-xl { height: var(--btn-h-xl); padding: 0 var(--btn-px-xl); font-size: var(--btn-fs-xl); }
+
+/* ── 密度档位（CDS v2 §3.3）──────────────────────────────────
+   只覆盖**控件几何**：按钮高度/内边距、行头高度、顶栏高度。
+   正文排版由 typography store 的四个旋钮管（字号/行距/间距/列宽），两套互不越界 ——
+   否则"想字大一点但控件别变大"就做不到。
+   `html[data-density]` 的特异性（0,1,1）高于 `:root`（0,1,0），所以放在文件后部也能生效。 */
+html[data-density='compact'] {
+  --btn-h-xs: 18px; --btn-px-xs: 5px;
+  --btn-h-sm: 22px; --btn-px-sm: 7px;
+  --btn-h-md: 26px; --btn-px-md: 9px;
+  --btn-h-lg: 28px; --btn-px-lg: 10px;
+  --btn-h-xl: 36px; --btn-px-xl: 14px;
+  --chat-row-height: 26px;
+  --comp-header-height: 48px;
+}
+html[data-density='comfortable'] {
+  --btn-h-xs: 22px; --btn-px-xs: 7px;
+  --btn-h-sm: 26px; --btn-px-sm: 9px;
+  --btn-h-md: 32px; --btn-px-md: 12px;
+  --btn-h-lg: 36px; --btn-px-lg: 14px;
+  --btn-h-xl: 44px; --btn-px-xl: 18px;
+  --chat-row-height: 32px;
+  --comp-header-height: 64px;
+}
+
+/* 表格行高也归密度管。ant-design-vue 的 Table 没有可覆盖的 CSS 变量 ——
+   行高由 `size` 与单元格 padding 共同决定 —— 所以只能按档位直接改 padding。
+   用 `:where()` 保持零特异性：某个视图若给某列写了自定义 padding，仍然赢。 */
+html[data-density='compact'] :where(.ant-table-tbody > tr > td, .ant-table-thead > tr > th) {
+  padding-block: 6px;
+}
+html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-thead > tr > th) {
+  padding-block: 16px;
+}
+
+/* ── 触控命中区补偿（CDS v2 §2.8）────────────────────────────
+   视觉行高不动，用伪元素把**不可见**热区撑高。
+   为什么不用负 margin：负 margin 只改变布局位置、不扩大命中盒；
+   伪元素是父元素的一部分，指针命中后照样冒泡到按钮。
+   为什么是 40 而不是手册的 44：Composer 工具栏按钮高 32px、间距 8px —— 32+8=40
+   正好与邻居相接，再往上就会盖住相邻按钮的点击区（那会变成"点 A 命中 B"）。
+   只在 `pointer: coarse`（触屏 / 手写笔）下生效，鼠标用户零影响。 */
+@media (pointer: coarse) {
+  .input-card .input-actions .ant-btn:not(.send-btn) { position: relative; }
+  .input-card .input-actions .ant-btn:not(.send-btn)::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: max(100%, 40px);
+    transform: translateY(-50%);
+  }
+}
+
+/* ── 5. 微动效族（CDS v2/04 §4.1 的三族关键帧）──────────────────
+   骨架屏呼吸+扫光 / 胶囊微观形变 / 交错入场。全部走既有动效 token，
+   减弱动效时由全局那个 `prefers-reduced-motion` 块统一压掉（不必逐族再写一遍）。 */
+:root {
+  /* 交错入场相邻项的步长。单列成 token 是因为它要跨组件复用 ——
+     写在各自的 animation-delay 里必然漂移。 */
+  --dur-stagger: 60ms;
+  /* 卡片悬停时从底部漫出的品牌色微光（CDS v2 §2.6 的"首页卡片微光浮空"）。
+     用 --primary 的低比例混色而不是写死白/黑：明暗主题下都得到该有的方向。 */
+  --card-hover-glow: color-mix(in srgb, var(--primary) 10%, transparent);
+}
+
+/* ① 骨架屏：两种模态（CDS v2 §3.5-2）。
+   · lockstep（**默认**，结构密集的列表）：整体明暗呼吸，2.0s 一周期压到 60% 再复原。
+     结构密集时逐块扫光会让整片区域持续闪烁，所以这类场景刻意**不**开扫光。
+   · wave（显式 data-motion="wave"，大块内容区载入）：逐块按 90ms 偏移，
+     配 105° 倾角的线性高光带横掠。
+   2.0s / 105° / 90ms 都是手册明确值，不是估计。 */
+@keyframes cdsSkeletonBreathe { 0%, 100% { opacity: 1; } 50% { opacity: 0.6; } }
+@keyframes cdsSkeletonSweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+:root {
+  /* 骨架屏：呼吸周期与波浪偏移。单列成 token 是因为它们要跨组件复用，
+     而 --dur-pulse 还被状态点等其它脉冲共用，不该被骨架的节奏绑架。 */
+  --dur-skel: 2000ms;
+  --dur-skel-stagger: 90ms;
+}
+
+.skeleton {
+  position: relative;
+  overflow: hidden;
+  background: var(--bg-surface-hover);
+  animation: cdsSkeletonBreathe var(--dur-skel) ease-in-out infinite;
+}
+/* 扫光只在 wave 模态出现；lockstep 只有呼吸。 */
+.skeleton[data-motion='wave']::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(105deg, transparent 35%, var(--bg-surface) 50%, transparent 65%);
+  transform: translateX(-100%);
+  animation: cdsSkeletonSweep var(--dur-skel) var(--ease-out) infinite;
+  /* 逐块偏移：调用方给每块写 --skel-i（0,1,2…），没有就按 0 处理 */
+  animation-delay: calc(var(--skel-i, 0) * var(--dur-skel-stagger));
+}
+
+/* ② 胶囊微观形变：按下塌陷（dip）与选中回弹（pop）。
+   两件事的物理不同，所以不共用曲线 —— 按下要"跟手且不回头"
+   （--ease-snap，严格 0% 超调），选中要"轻轻过冲再收"
+   （--ease-overshoot，约 +30%）。 */
+@keyframes cdsPillDip { 0% { transform: scale(1); } 40% { transform: scale(0.94); } 100% { transform: scale(1); } }
+@keyframes cdsPillPop { 0% { transform: scale(0.92); } 60% { transform: scale(1.05); } 100% { transform: scale(1); } }
+.pill-dip:active { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
+.pill-pop { animation: cdsPillPop var(--dur-normal) var(--ease-overshoot); }
+
+/* ③ 交错入场：容器加 .stagger-in，子项依次淡入上浮。
+   用 :nth-child 而不是 JS 下标 —— v-for 渲染的列表无需额外传 index。
+   fill-mode 用 **backwards 而不是 both**：both 会把末帧的 `transform: none`
+   一直钉住，从而压过子项自己的 hover 位移（动画优先级高于过渡）。 */
+@keyframes cdsRevealIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+.stagger-in > * { animation: cdsRevealIn var(--dur-page) var(--ease-out) backwards; }
+.stagger-in > *:nth-child(1) { animation-delay: 0ms; }
+.stagger-in > *:nth-child(2) { animation-delay: var(--dur-stagger); }
+.stagger-in > *:nth-child(3) { animation-delay: calc(var(--dur-stagger) * 2); }
+.stagger-in > *:nth-child(4) { animation-delay: calc(var(--dur-stagger) * 3); }
+.stagger-in > *:nth-child(5) { animation-delay: calc(var(--dur-stagger) * 4); }
+.stagger-in > *:nth-child(6) { animation-delay: calc(var(--dur-stagger) * 5); }
+.stagger-in > *:nth-child(n+7) { animation-delay: calc(var(--dur-stagger) * 6); }
+
+/* ── 6. 失活行规范（CDS v2 §2.2 的 `tr[data-dimmed]`）──────────────
+   "禁用"用**文字色降级**表达，而不是 opacity —— opacity 一旦加在父元素上，
+   子元素无法恢复，而"行内控件必须保持满亮度"恰恰是这条规范的核心：
+   否则用户会以为那个开关本身也被禁用了，就找不到"怎么把它重新启用"。
+   适用于 antd 表格行与自绘的 grid 行（加同一个 .row-dimmed 类即可）。 */
+.row-dimmed { color: var(--text-tertiary); }
+.ant-table-tbody > tr.row-dimmed > td { color: var(--text-tertiary) !important; }
+/* 行内交互控件恢复满亮度：它们是"为什么这行是灰的"的操作入口 */
+.row-dimmed :is(button, a, .ant-btn, .ant-switch, .ant-select, .ant-input, .ant-input-number, .ant-checkbox-wrapper) {
+  color: var(--text-primary);
+}
+.ant-table-tbody > tr.row-dimmed > td :is(button, a, .ant-btn, .ant-switch, .ant-select, .ant-input, .ant-input-number) {
+  color: var(--text-primary) !important;
+}
+
+/* ── 7. 氛围与微反馈（CDS v1 §4.2 / §3.2.1 / §4.1.1）────────────
+   三族：推理氛围光晕、思考三点波浪、复制成功勾。数值全部取自手册。 */
+:root {
+  /* 推理光晕的双频周期。刻意两个不同周期（1.8s / 2.2s）相位叠加 ——
+     同一周期会让人眼察觉到"机械节拍"。 */
+  --dur-glow-a: 1800ms;
+  --dur-glow-b: 2200ms;
+  /* 思考三点波浪的周期（手册 1.9s） */
+  --dur-quiet-dot: 1900ms;
+  /* 复制成功勾的驻留时长（手册 saved-check-decay 的 2.5s） */
+  --dur-check-decay: 2500ms;
+  /* 三点差分脉冲的周期（手册 `cds-dot-pulse` 的 1.8s）。
+     不复用 --dur-pulse（1200ms）：后者是通用呼吸灯，两者节奏本就不同。 */
+  --dur-dot-pulse: 1800ms;
+  /* Diff 视图的密度阶梯（CDS v1 §5.5.1 的 --diffs-gap-inline / --diffs-gap-block）。
+     数值沿用本仓既有取值（14px / 8px），**没有**照搬手册的 12px / 4px：
+     手册是给 17.5px 行高配的，而本仓行号 gutter 与代码行要逐行对齐（行高 20px），
+     换值会让 gutter 与代码错位。token 化的意义是"以后调 diff 密度只改这两处"。 */
+  --diff-gap-inline: 14px;
+  --diff-gap-block: 8px;
+}
+
+/* ① 推理氛围光晕（`wl-glow`）：硬质品牌色内环 + 环境投影 + 50% 处涨到 85% 的漫反射。
+   用 color-mix 而不是写死 rgba —— 换主题自动跟随主色。 */
+@keyframes cdsWlGlow {
+  0%, 100% {
+    box-shadow:
+      0 10px 15px -3px var(--shadow-edge),
+      0 4px 6px -4px var(--shadow-edge),
+      0 0 0 2px var(--primary),
+      0 0 14px 3px color-mix(in srgb, var(--primary) 60%, transparent);
+  }
+  50% {
+    box-shadow:
+      0 10px 15px -3px var(--shadow-edge),
+      0 4px 6px -4px var(--shadow-edge),
+      0 0 0 2px var(--primary),
+      0 0 16px 5px color-mix(in srgb, var(--primary) 85%, transparent);
+  }
+}
+
+/* ② 思考三点波浪（`timeline-quiet-dot`）：四阶位移 —— 下沉 2px 蓄力 →
+   冲到 -2.5px 且完全不透明 → 落回基线驻留 → 淡出等下一轮。 */
+@keyframes cdsQuietDot {
+  0%, 8% { opacity: 0; transform: translateY(2px); }
+  22% { opacity: 1; transform: translateY(-2.5px); }
+  36%, 70% { opacity: 1; transform: translateY(0); }
+  90%, 100% { opacity: 0; transform: translateY(0); }
+}
+.loading-dots { display: inline-flex; align-items: center; gap: 3.5px; }
+.loading-dots > span {
+  width: 3px; height: 3px; border-radius: 50%;
+  background: var(--primary);
+  animation: cdsQuietDot var(--dur-quiet-dot) cubic-bezier(0.4, 0, 0.2, 1) infinite;
+}
+.loading-dots > span:nth-child(2) { animation-delay: 0.15s; }
+.loading-dots > span:nth-child(3) { animation-delay: 0.3s; }
+
+/* ③ 复制成功勾：`check-draw` 画出来，再按 `saved-check-decay` 驻留 2.5s 后缩一点淡出。 */
+@keyframes cdsCheckDraw { 0% { clip-path: inset(0 100% 0 0); } 100% { clip-path: inset(0); } }
+@keyframes cdsCheckDecay {
+  0%, 75% { opacity: 1; transform: scale(1); }
+  100% { opacity: 0; transform: scale(0.92); }
+}
+
+/* 灯箱共享元素形变（CDS v1 §5.2.2）：缩略图 ↔ 全屏图之间由浏览器补间位置与尺寸，
+   节奏统一到全站的 --dur-normal / --ease-out。
+   这两条是**根级伪元素**（::view-transition-*），只能写在全局样式里 ——
+   组件里的 scoped 选择器够不到它们。 */
+::view-transition-old(cds-lightbox),
+::view-transition-new(cds-lightbox) {
+  animation-duration: var(--dur-normal);
+  animation-timing-function: var(--ease-out);
 }

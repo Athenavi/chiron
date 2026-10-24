@@ -423,7 +423,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   height: 36px;
   line-height: 36px;
   margin: 2px 0;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-size: 13px;
   color: var(--text-secondary);
 }
@@ -493,7 +493,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
   align-items: center;
   gap: 8px;
   padding: 4px 10px 4px 4px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   cursor: pointer;
   transition: background var(--dur-fast) ease;
 }

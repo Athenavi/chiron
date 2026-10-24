@@ -520,7 +520,7 @@ function scrollToTop() {
 .feature-icon-wrap {
   width: 42px; height: 42px;
   display: inline-flex; align-items: center; justify-content: center;
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   background: var(--primary-bg);
   color: var(--primary);
   margin-bottom: 14px;
@@ -548,7 +548,7 @@ function scrollToTop() {
   margin-top: 34px;
 }
 .window-card {
-  border-radius: 14px;
+  border-radius: var(--sig-radius-card);
   overflow: hidden;
   border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
@@ -578,7 +578,7 @@ function scrollToTop() {
 .pv-bubble {
   max-width: 82%;
   padding: 8px 12px;
-  border-radius: 14px;
+  border-radius: var(--sig-radius-bubble);
   border-bottom-left-radius: 4px;
   background: var(--bg-code);
   border: var(--hairline-width) solid var(--border-subtle);
@@ -587,7 +587,7 @@ function scrollToTop() {
   color: var(--text-primary);
 }
 .pv-msg.user .pv-bubble {
-  border-radius: 14px;
+  border-radius: var(--sig-radius-bubble);
   border-bottom-right-radius: 4px;
   background: var(--primary-bg);
   border-color: var(--primary-border);
@@ -598,7 +598,7 @@ function scrollToTop() {
   gap: 6px;
   margin-bottom: 6px;
   padding: 3px 10px;
-  border-radius: 999px;
+  border-radius: var(--radius-full);
   background: var(--bg-surface-hover);
   border: var(--hairline-width) solid var(--border-subtle);
   font-size: var(--fs-xs);
@@ -612,7 +612,7 @@ function scrollToTop() {
 .pv-input {
   margin-top: 2px;
   padding: 8px 12px;
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface-hover);
   font-size: 12px;
@@ -632,7 +632,7 @@ function scrollToTop() {
 .pv-panel-caret { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .pv-timeline {
   height: 34px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-surface-hover);
   border: var(--hairline-width) solid var(--border-subtle);
   position: relative;
@@ -642,7 +642,7 @@ function scrollToTop() {
   position: absolute;
   top: 0;
   height: 8px;
-  border-radius: 2px;
+  border-radius: var(--radius-xs);
   background: linear-gradient(90deg, var(--primary), var(--accent));
   opacity: 0.85;
 }
@@ -651,7 +651,7 @@ function scrollToTop() {
   align-items: center;
   gap: 8px;
   padding: 6px 8px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 12px;
   color: var(--text-secondary);
 }
@@ -662,7 +662,7 @@ function scrollToTop() {
 .quickstart { max-width: 760px; margin: 0 auto; padding: 24px 24px 64px; }
 .terminal-card {
   margin-top: 30px;
-  border-radius: 14px;
+  border-radius: var(--sig-radius-card);
   overflow: hidden;
   border: var(--hairline-width) solid var(--border-default);
   background: var(--bg-surface);
@@ -674,7 +674,7 @@ function scrollToTop() {
   margin-left: auto;
   min-height: 28px;
   border: var(--hairline-width) solid var(--border-default);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   color: var(--text-tertiary);
   font-size: var(--fs-xs);
@@ -702,7 +702,7 @@ function scrollToTop() {
 }
 .home-footer-brand { display: flex; align-items: center; gap: 8px; font-weight: var(--fw-semibold); color: var(--text-secondary); }
 .home-footer-logo {
-  width: 20px; height: 20px; border-radius: 6px;
+  width: 20px; height: 20px; border-radius: var(--radius-md);
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: var(--on-solid); font-size: var(--fs-xs); font-weight: var(--fw-bold);
   display: inline-flex; align-items: center; justify-content: center;

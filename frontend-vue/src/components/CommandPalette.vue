@@ -574,7 +574,7 @@ onUnmounted(() => {
   max-height: min(560px, calc(100vh - 160px));
   display: flex;
   flex-direction: column;
-  border-radius: 14px;
+  border-radius: var(--sig-radius-card);
   overflow: hidden;
   /* 原为 var(--menu-bg) —— 该变量**从未定义**且无 fallback，背景实际会失效。
      语义是「毛玻璃面板底」，改用 --bg-surface（多个主题下本身就是半透明，
@@ -645,7 +645,7 @@ onUnmounted(() => {
   align-items: center;
   gap: 10px;
   padding: 9px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: background var(--dur-fast) ease;
 }
@@ -734,7 +734,7 @@ onUnmounted(() => {
 }
 .palette-footer kbd {
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   border: var(--hairline-width) solid var(--border);
   background: var(--bg-card);
   color: var(--text-secondary);

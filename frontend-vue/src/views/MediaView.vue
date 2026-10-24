@@ -18,6 +18,7 @@ import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 
 import { useI18n } from 'vue-i18n'
+import { documentDir, nextRovingIndex, resolveRovingIntent, rovingTabIndex } from '../composables/useRovingFocus'
 const { t: tr } = useI18n()
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -201,6 +202,38 @@ function onCardClick(item: MediaItem) {
     detailItem.value = item
   }
 }
+
+// ── 文件网格的漫游焦点（CDS v1 §6.6）──
+// 此前每张卡都是 tabindex="0"：100 个文件就要按 100 次 Tab 才能穿过去。
+// 现在整组只占一个停靠点，方向键在卡片间移动，Home/End 跳首尾。
+const gridRef = ref<HTMLElement | null>(null)
+const cardActiveIndex = ref(0)
+
+function onCardKeydown(e: KeyboardEvent, i: number, item: MediaItem) {
+  // 激活键必须收口到这里：同一元素上同时写 `@keydown` 与 `@keydown.enter` 时，
+  // Vue 把两者合并成同一个 onKeydown prop —— 后声明的会覆盖先声明的，回车就失效了。
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()
+    onCardClick(item)
+    return
+  }
+  if (e.key === 'Tab') return                        // 必须能逃逸，否则是键盘陷阱（WCAG 2.1.2）
+  if (e.metaKey || e.ctrlKey || e.altKey) return
+  const intent = resolveRovingIntent(e.key, documentDir())
+  if (!intent) return
+  const cards = Array.from(gridRef.value?.querySelectorAll<HTMLElement>('.file-card') ?? [])
+  const next = nextRovingIndex(i, cards.length, intent, true)
+  if (next < 0) return
+  e.preventDefault()
+  cardActiveIndex.value = next
+  cards[next]?.focus({ preventScroll: true })
+}
+
+// 筛选 / 翻页 / 删除后数量可能变少：停靠点越界会让整组 tabindex 全为 -1，
+// 键盘用户会彻底进不来 —— 所以夹回最后一项。
+watch(() => items.value.length, (n) => {
+  if (cardActiveIndex.value >= n) cardActiveIndex.value = Math.max(0, n - 1)
+})
 
 // ── 详情侧栏操作 ──
 const showPreview = ref(false)
@@ -1080,18 +1113,19 @@ onUnmounted(() => {
     <template v-else>
       <div
         v-if="viewMode === 'grid'"
+        ref="gridRef"
         class="file-grid"
       >
         <div
-          v-for="item in items"
+          v-for="(item, i) in items"
           :key="item.id"
           class="file-card"
           :class="{ selected: selectedIds.has(item.id) }"
           role="button"
-          tabindex="0"
+          :tabindex="rovingTabIndex(i, cardActiveIndex)"
           @click="onCardClick(item)"
-          @keydown.enter.prevent="onCardClick(item)"
-          @keydown.space.prevent="onCardClick(item)"
+          @keydown="onCardKeydown($event, i, item)"
+          @focus="cardActiveIndex = i"
         >
           <Checkbox
             class="card-check"
@@ -1618,7 +1652,7 @@ onUnmounted(() => {
           />
         </div>
       </div>
-      <div style="margin-top: 12px; padding: 8px; background: var(--bg-secondary); border-radius: 4px; font-size: 12px; color: var(--text-tertiary);">
+      <div style="margin-top: 12px; padding: 8px; background: var(--bg-secondary); border-radius: var(--radius-sm); font-size: 12px; color: var(--text-tertiary);">
         <strong>{{ $t('common.example') }}</strong>{{ $t('media.original_report_pdf_prefix_2024_suffix_final_2024_report_final_pdf') }}
       </div>
     </Modal>
@@ -1656,15 +1690,17 @@ onUnmounted(() => {
 .crumb-sep { margin-left: 4px; color: var(--text-muted); }
 .toolbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 24px; }
-.file-card { border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
-.file-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: var(--shadow-md); }
+.file-card { box-shadow: inset 0 0 0 var(--hairline-width) var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
+.file-card:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary), var(--shadow-md); transform: translateY(-2px); }
 .file-card:focus-visible,
 .lb-btn:focus-visible,
 .lb-close:focus-visible {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
-.file-card.selected { border-color: var(--primary); background: var(--primary-bg); }
+/* 选中态用 2px 内环表达：环宽变化不再挤动盒模型（border 会），
+   这正是把状态边框换成 inset 环的收益所在。 */
+.file-card.selected { box-shadow: inset 0 0 0 2px var(--primary); background: var(--primary-bg); }
 .card-thumb { height: 84px; display: flex; align-items: center; justify-content: center; border-radius: var(--radius-md); background: var(--bg-secondary); overflow: hidden; }
 .card-thumb img { max-width: 100%; max-height: 100%; object-fit: cover; }
 .thumb-icon { font-size: 32px; color: var(--text-tertiary); }
@@ -1686,21 +1722,21 @@ onUnmounted(() => {
 .detail-actions { display: flex; flex-direction: column; gap: 8px; }
 .share-row { display: flex; gap: 8px; }
 .share-expires { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
-.preview-shell { height: 75vh; min-height: 400px; border-radius: 4px; overflow: hidden; }
+.preview-shell { height: 75vh; min-height: 400px; border-radius: var(--radius-sm); overflow: hidden; }
 /* 新功能样式：总数/标签/移动树/灯箱/新建文件夹 */
 .media-total { margin-left: auto; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .no-tags { font-size: 12px; color: var(--text-muted); }
 .tag-add { margin-top: 6px; }
-.move-tree { max-height: 320px; overflow-y: auto; border: var(--hairline-width) solid var(--border); border-radius: 8px; padding: 8px; }
+.move-tree { max-height: 320px; overflow-y: auto; border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); padding: 8px; }
 .folder-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 .lightbox { position: relative; display: flex; align-items: center; justify-content: center; min-height: 60vh; }
-.lb-img { max-width: 82%; max-height: 72vh; object-fit: contain; border-radius: 8px; box-shadow: var(--shadow-lg); }
+.lb-img { max-width: 82%; max-height: 72vh; object-fit: contain; border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
 .lb-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: var(--hairline-width) solid var(--border); border-radius: 50%; background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); }
 .lb-prev { left: 8px; }
 .lb-next { right: 8px; }
 .lb-btn:hover { color: var(--primary); border-color: var(--primary); }
-.lb-meta { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: 999px; background: var(--bg-overlay); color: var(--on-solid); font-size: 12px; }
+.lb-meta { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: var(--radius-full); background: var(--bg-overlay); color: var(--on-solid); font-size: 12px; }
 .lb-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-count { color: var(--on-viewer-strong); }
 .lb-close { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: none; border-radius: 50%; background: var(--bg-overlay); color: var(--on-solid); cursor: pointer; }
@@ -1758,7 +1794,7 @@ onUnmounted(() => {
   color: var(--error); 
   padding: 4px 8px; 
   background: var(--error-bg); 
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .upload-actions { 
   margin-top: 12px; 

@@ -16,6 +16,7 @@ export default {
   session_busy: '上一条回复仍在进行中。可以等它结束，或修复会话后重试',
   session_busy_repair: '修复会话',
   session_busy_auto_recover: '约 {n} 分钟后自动恢复',
+  session_busy_auto_recover_in: '约 {time} 后自动恢复',
   session_repaired: '会话已修复，可以重新发送',
   not_found: '请求的资源不存在，可能已被删除',
   // 限流与配额

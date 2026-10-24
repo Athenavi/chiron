@@ -132,10 +132,10 @@ onMounted(load)
 <style scoped>
 .usage-catalog-view { padding: 4px; }
 .page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.page-title { margin: 0; font-size: 18px; font-weight: var(--fw-semibold); }
+.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .page-desc { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
 .controls { display: flex; gap: 8px; align-items: center; }
-.totals { margin-bottom: 12px; padding: 10px 12px; border: var(--hairline-width) solid var(--border); border-radius: 8px; background: var(--bg-card); }
+.totals { margin-bottom: 12px; padding: 10px 12px; border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); }
 .totals-row { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 13px; }
 .totals-label { font-weight: var(--fw-semibold); }
 .totals-note { margin-top: 4px; font-size: 12px; color: var(--text-secondary); }

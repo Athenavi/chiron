@@ -789,7 +789,7 @@ async function handleLogin() {
   width: 52px;
   height: 52px;
   margin: 0 auto 16px;
-  border-radius: 14px;
+  border-radius: var(--sig-radius-card);
   background: linear-gradient(135deg, var(--primary), var(--accent));
   color: var(--on-solid);
   font-weight: var(--fw-bold);

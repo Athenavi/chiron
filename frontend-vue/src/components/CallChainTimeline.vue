@@ -277,7 +277,7 @@ function capitalize(str: string): string {
   padding: 1px 8px;
   font-size: var(--fs-xs);
   border: var(--hairline-width) solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
 }
@@ -296,7 +296,7 @@ function capitalize(str: string): string {
   text-transform: uppercase;
   letter-spacing: 0.04em;
   border: var(--hairline-width) solid var(--border);
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
   padding: 0 4px;
 }
 .graph-empty {
@@ -365,7 +365,7 @@ function capitalize(str: string): string {
   background: var(--bg-card);
   border: var(--hairline-width) solid var(--border);
   border-left: 3px solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
@@ -425,7 +425,7 @@ function capitalize(str: string): string {
 .metadata-json {
   background: var(--bg-secondary);
   padding: 8px 12px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   font-family: var(--font-mono);
   font-size: 12px;
   line-height: 1.5;
@@ -445,7 +445,7 @@ function capitalize(str: string): string {
   color: var(--primary);
   background: none;
   border: var(--hairline-width) solid var(--primary);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   cursor: pointer;
   transition: background var(--dur-fast) ease, color var(--dur-fast) ease;
   flex-shrink: 0;

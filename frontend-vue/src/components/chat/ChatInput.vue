@@ -12,6 +12,8 @@ import { privateKey } from '../../utils/privateStorage'
 import { notify } from '../../utils/notify'
 import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
 import { classifyEnter } from './ime'
+import { MIC_BAND_COUNT, useMicBars } from './useMicBars'
+import { playUiSound } from '../../utils/uiSounds'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -35,6 +37,9 @@ const props = defineProps<{
   /** 已带入本次对话的上下文（知识库 / Agent / 技能 / 工作流 / 插件 / 记忆分类）。
       对齐 reasonix 的 `composer-context`：绑定是"沉默生效"的，不显式呈现就是幽灵行为。 */
   contextChips?: ContextChip[]
+  /** 发送失败、已暂存在本地的消息条数。>0 时在操作行上方出现横幅
+      （对应 CDS 2.0 §2.3 的 ChatComposerQueuedMessages）。 */
+  failedQueueCount?: number
 }>()
 
 const emit = defineEmits<{
@@ -55,6 +60,10 @@ const emit = defineEmits<{
   (e: 'update:reasoningLanguage', lang: string): void
   /** 移除一个上下文 chip（点输入区上方 chip 行的 × ） */
   (e: 'remove-context-chip', chip: ContextChip): void
+  /** 重发暂存队列（横幅上的「立即重发」） */
+  (e: 'retry-outbox'): void
+  /** 丢弃暂存队列（横幅上的「全部丢弃」） */
+  (e: 'discard-outbox'): void
   /** 斜杠命令 */
   (e: 'command', cmd: string): void
   /** 上下文快捷按钮：展开侧栏（若为抽屉模式） */
@@ -447,6 +456,9 @@ async function loadMentionItems() {
   }
 }
 
+/** 尾随标点（含 CJK 全角）。它意味着"这次提及已经写完"，不该并进查询串。 */
+const TRAILING_PUNCT = /[.,;:!?'"、。，；：！？…]+$/
+
 /** 在 input 事件里判定是否处于 `@` 查询中（词中 @ 不触发，避免邮箱之类误开面板） */
 function syncMention() {
   const caret = textareaRef.value?.selectionStart ?? input.value.length
@@ -456,9 +468,17 @@ function syncMention() {
     mentionOpen.value = false
     return
   }
+  // 行内代码里的 `@` 不是提及（如 `` `user@host` ``）：反引号计数为奇数即视为在代码段内。
+  // 本仓不做完整词法分析（那需要逐个 token 重扫），这条启发式足以挡住绝大多数误触。
+  if ((before.match(/`/g) || []).length % 2 === 1) {
+    mentionOpen.value = false
+    return
+  }
   const prev = at > 0 ? before[at - 1] : ' '        // 行首可视作空白
   const query = before.slice(at + 1)
-  if (!/\s/.test(prev) || /\s/.test(query)) {
+  // 尾随标点（含 CJK 全角）= 这次提及已经写完。若把它并进查询串，
+  // `@知识库，` 会变成查询 "知识库，"，结果是 0 匹配、面板不关、还吃掉了 Enter 发送。
+  if (!/\s/.test(prev) || /\s/.test(query) || TRAILING_PUNCT.test(query)) {
     mentionOpen.value = false
     return
   }
@@ -739,6 +759,13 @@ const speechSupported = !!SpeechRec
 
 const recording = ref(false)
 const recordingTimer = ref(0)
+/** 6 频段电平柱：`--level` 由 rAF 直接写 DOM（不走响应式，60fps 不该触发 Composer 重渲染） */
+const barEls = ref<HTMLElement[]>([])
+const micBars = useMicBars(levels => {
+  for (let i = 0; i < barEls.value.length; i++) {
+    barEls.value[i]?.style.setProperty('--level', String(levels[i] ?? 0))
+  }
+})
 let recordingInterval: ReturnType<typeof setInterval> | null = null
 let recognizer: SpeechRecognizer | null = null
 /** 本次会话已定稿的文本（interim 结果每次重发整段，需与它拼接） */
@@ -787,12 +814,16 @@ function startRecording() {
     recording.value = true
     recordingTimer.value = 0
     recordingInterval = setInterval(() => { recordingTimer.value++ }, 1000)
+    // 波形是"锦上添花"：拿不到麦克风流就静默不画，识别照常
+    void micBars.start()
+    playUiSound('voice-enter')
   } catch {
     notify.error(tr('errors.unable_to_start_speech_transcription_please_check_microphone_permission'))
   }
 }
 
 function stopRecording() {
+  const wasRecording = recording.value
   if (recognizer) {
     // 先置空再 stop：onend 会回调进来，置空可避免递归
     const r = recognizer
@@ -800,6 +831,8 @@ function stopRecording() {
     try { r.stop() } catch { /* 已停止 */ }
   }
   recording.value = false
+  micBars.stop()
+  if (wasRecording) playUiSound('voice-exit')
   if (recordingInterval) {
     clearInterval(recordingInterval)
     recordingInterval = null
@@ -1061,6 +1094,33 @@ defineExpose({ insertText, setCommandDraft })
         style="display: none"
         @change="onFileChange"
       >
+      <!-- 未送达消息横幅（CDS 2.0 ChatComposerQueuedMessages）：只在有暂存时出现。
+           走 --warning 色系而不是 --error —— 它描述的是"待处理"，不是"已经出错了"。 -->
+      <div
+        v-if="failedQueueCount"
+        class="outbox-banner"
+        role="status"
+      >
+        <span
+          class="outbox-dot"
+          aria-hidden
+        />
+        <span class="outbox-text">{{ $t('chat.n_messages_not_delivered_staged_locally', { n: failedQueueCount }) }}</span>
+        <button
+          type="button"
+          class="outbox-action outbox-retry"
+          @click="emit('retry-outbox')"
+        >
+          {{ $t('chat.retry_now') }}
+        </button>
+        <button
+          type="button"
+          class="outbox-action"
+          @click="emit('discard-outbox')"
+        >
+          {{ $t('chat.discard_all') }}
+        </button>
+      </div>
       <div class="input-actions">
         <div class="input-left">
           <Button
@@ -1099,6 +1159,18 @@ defineExpose({ insertText, setCommandDraft })
             <template #icon>
               <AudioOutlined />
             </template>
+            <span
+              v-if="recording"
+              class="mic-bars"
+              aria-hidden
+            >
+              <span
+                v-for="i in MIC_BAND_COUNT"
+                :key="i"
+                ref="barEls"
+                class="mic-bar"
+              />
+            </span>
             <span
               v-if="recording"
               class="recording-timer"
@@ -1211,18 +1283,18 @@ defineExpose({ insertText, setCommandDraft })
             </template>
             <span class="context-label">{{ $t('chat.refine') }}</span>
           </Button>
-          <Button
-            type="text"
-            size="small"
-            class="context-btn"
-            :title="$t('chat.open_context_panel_session_trace_context')"
-            @click="emit('open-panel')"
-          >
-            <template #icon>
-              <BranchesOutlined />
-            </template>
-            <span class="context-label">{{ $t('common.context') }}</span>
-          </Button>
+<!--          <Button-->
+<!--            type="text"-->
+<!--            size="small"-->
+<!--            class="context-btn"-->
+<!--            :title="$t('chat.open_context_panel_session_trace_context')"-->
+<!--            @click="emit('open-panel')"-->
+<!--          >-->
+<!--            <template #icon>-->
+<!--              <BranchesOutlined />-->
+<!--            </template>-->
+<!--            <span class="context-label">{{ $t('common.context') }}</span>-->
+<!--          </Button>-->
         </div>
         <div class="input-left">
           <span
@@ -1305,6 +1377,25 @@ defineExpose({ insertText, setCommandDraft })
 .input-field :deep(textarea)::-webkit-scrollbar {
   display: none; /* Chromium / WebKit */
 }
+/* 未送达消息横幅（CDS 2.0 ChatComposerQueuedMessages）。
+   走 --warning 色系而不是 --error —— 它描述的是"待处理"，不是"已经出错了"。 */
+.outbox-banner {
+  display: flex; align-items: center; gap: 8px;
+  margin: 0 2px 8px; padding: 6px 10px;
+  border-radius: var(--sig-radius-card);
+  background: var(--warning-bg); color: var(--warning);
+  font-size: var(--fs-xs);
+}
+.outbox-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
+.outbox-text { flex: 1; min-width: 0; }
+.outbox-action {
+  flex: none; padding: 2px 6px; border: none; background: transparent;
+  color: inherit; font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+  border-radius: var(--sig-radius-button); cursor: pointer;
+}
+.outbox-action:hover { background: var(--bg-hover); }
+.outbox-retry { text-decoration: underline; }
+
 /* 操作区：与输入区之间一条分隔线（reasonix 的分区思路），不再与文字抢同一块空间 */
 .input-actions {
   display: flex; align-items: center; justify-content: space-between;
@@ -1389,7 +1480,7 @@ defineExpose({ insertText, setCommandDraft })
 .context-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 2px 0 8px; }
 .context-chip {
   display: inline-flex; align-items: center; gap: 4px; max-width: 220px;
-  padding: 2px 4px 2px 8px; border: var(--hairline-width) solid var(--border); border-radius: 999px;
+  padding: 2px 4px 2px 8px; border: var(--hairline-width) solid var(--border); border-radius: var(--radius-full);
   background: var(--bg-hover, rgba(127, 127, 127, 0.08));
   font-size: 12px; color: var(--text-secondary);
 }
@@ -1415,6 +1506,14 @@ defineExpose({ insertText, setCommandDraft })
 @keyframes pulse-rec {
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
+}
+/* 录音电平柱（CDS v1 §5.1.3）：6 频段、4–24px，高度由 --level(0..1) 驱动。
+   刻意**不加 transition**：rAF 每帧直接写值已经足够平滑，加过渡反而滞后于音量。 */
+.mic-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 24px; }
+.mic-bar {
+  width: 3px; height: calc(4px + 20px * var(--level, 0));
+  border-radius: var(--radius-full);
+  background: currentColor;
 }
 .recording-timer { font-size: 12px; font-variant-numeric: tabular-nums; min-width: 32px; }
 /* 拖拽态：边框主色 + 背景淡色 */

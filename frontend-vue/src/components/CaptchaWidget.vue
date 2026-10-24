@@ -290,7 +290,7 @@ defineExpose({ reset })
   min-height: 40px; /* 触控目标 ≥ 40px */
   padding: 10px 12px;
   border: var(--hairline-width) solid var(--border-card, #d9d9d9);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-card, var(--on-solid));
   color: var(--text-primary, rgba(0, 0, 0, 0.88));
   font-size: 14px;
@@ -310,7 +310,7 @@ defineExpose({ reset })
 .custom-hint {
   padding: 10px 12px;
   border: 1px dashed var(--border-card, #d9d9d9);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   font-size: 13px;
   color: var(--text-tertiary, var(--bg-overlay));
   line-height: 1.6;

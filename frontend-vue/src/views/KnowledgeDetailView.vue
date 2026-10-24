@@ -889,11 +889,11 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 
 .query-results { margin-top: 16px; padding-top: 16px; border-top: var(--hairline-width) solid var(--border-card); }
 .query-results h3 { margin: 0 0 12px; font-size: 16px; color: var(--text-primary); }
-.query-result-item { padding: 12px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: 8px; margin-bottom: 8px; }
+.query-result-item { padding: 12px; background: var(--bg-secondary, rgba(0,0,0,0.02)); border-radius: var(--radius-lg); margin-bottom: 8px; }
 .result-source { font-size: 12px; color: var(--text-tertiary); }
 .result-header { margin-bottom: 8px; }
 .result-content { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-primary); }
-.search-highlight { background: var(--highlight-bg); color: var(--highlight-fg); padding: 1px 2px; border-radius: 2px; }
+.search-highlight { background: var(--highlight-bg); color: var(--highlight-fg); padding: 1px 2px; border-radius: var(--radius-xs); }
 .doc-name-link { color: var(--primary-color, #1890ff); cursor: pointer; font-weight: var(--fw-medium); }
 .doc-name-link:hover { text-decoration: underline; }
 
@@ -901,7 +901,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .media-actions { display: flex; align-items: center; gap: 8px; white-space: nowrap; }
 .selected-count { font-size: 13px; color: var(--text-secondary); }
 .media-empty { padding: 40px 0; }
-.media-list { border: var(--hairline-width) solid var(--border-card); border-radius: 8px; overflow: hidden; max-height: 400px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
+.media-list { border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); overflow: hidden; max-height: 400px; overflow-y: auto; -webkit-overflow-scrolling: touch; }
 .media-item { display: flex; align-items: center; gap: 12px; padding: 12px 16px; border-bottom: var(--hairline-width) solid var(--border-card); cursor: pointer; transition: background var(--dur-normal); }
 .media-item:last-child { border-bottom: none; }
 .media-item:hover { background: var(--bg-hover, rgba(0,0,0,0.03)); }

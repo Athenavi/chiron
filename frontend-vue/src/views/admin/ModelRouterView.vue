@@ -278,8 +278,9 @@ onMounted(fetchRoutes)
 }
 .page-title {
   margin: 0;
-  font-size: 18px;
+  font-size: 20px;
   font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
 }
 :deep(.code-editor) {
   font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;

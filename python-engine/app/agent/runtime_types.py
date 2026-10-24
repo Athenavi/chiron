@@ -183,6 +183,8 @@ class ApprovalDecision:
     arguments: dict[str, Any] | None = None
     #: 用户备注 / 拒绝理由（随决策一起跨副本传递，供审计留痕）
     reason: str = ""
+    #: 决策归属的用户（跨副本通道的归属校验用；空 = 未携带，兼容旧写入方）。
+    user_id: str = ""
 
     @property
     def approved(self) -> bool:
@@ -195,6 +197,8 @@ class ApprovalDecision:
             payload["arguments"] = self.arguments
         if self.reason:
             payload["reason"] = self.reason
+        if self.user_id:
+            payload["user_id"] = self.user_id
         return json.dumps(payload, ensure_ascii=False)
 
     @classmethod
@@ -225,6 +229,7 @@ class ApprovalDecision:
                 decision=decision,
                 arguments=args if isinstance(args, dict) else None,
                 reason=str(data.get("reason", "") or ""),
+                user_id=str(data.get("user_id", "") or ""),
             )
         lowered = text.lower()
         if lowered in ("1", "true"):

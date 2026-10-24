@@ -18,6 +18,7 @@ import SessionStatsPanel from '../components/chat/SessionStatsPanel.vue'
 import SessionPreviewPane from '../components/chat/SessionPreviewPane.vue'
 import { useAuthStore } from '../stores/auth'
 import { privateKey } from '../utils/privateStorage'
+import { playUiSound } from '../utils/uiSounds'
 import { notify } from '../utils/notify'
 import { useThemeStore } from '../stores/theme'
 import { useRoute, useRouter } from 'vue-router'
@@ -27,6 +28,7 @@ import type { SubagentEvent } from '../api/subagent'
 import MessageList from '../components/chat/MessageList.vue'
 import MessageItem from '../components/chat/MessageItem.vue'
 import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
+import { addToOutbox, bumpRetryCount, clearOutbox, readOutbox, removeFromOutbox, type OutboxEntry } from '../components/chat/failedOutbox'
 import ChatInput from '../components/chat/ChatInput.vue'
 import ChatSetupTour from '../components/chat/ChatSetupTour.vue'
 import type { TourReason } from '../composables/useOnboardingTour'
@@ -367,6 +369,14 @@ listModels()
 // ── 会话状态 ──
 const sessions = ref<ChatSession[]>([])
 const activeSessionId = ref('')
+
+/** 发送失败、已暂存到本地的消息（见 components/chat/failedOutbox.ts）。
+ *  按会话隔离：切会话就重新读 —— 否则会把 A 会话的失败消息挂到 B 会话的重发按钮上。 */
+const outbox = ref<OutboxEntry[]>([])
+function refreshOutbox() {
+  outbox.value = activeSessionId.value ? readOutbox(activeSessionId.value, authStore.user?.id) : []
+}
+watch(activeSessionId, refreshOutbox, { immediate: true })
 const activeSession = computed(() => sessions.value.find(s => s.id === activeSessionId.value) || null)
 /**
  * ── 多会话运行：运行时状态**按会话**存 ──
@@ -426,6 +436,19 @@ function runOf(sid: string): SessionRunState {
 /** 当前视图所属会话的运行时（`activeSessionId` 为空时用占位键，保持既有"无会话"行为） */
 const currentRun = computed(() => runOf(activeSessionId.value || '__none__'))
 
+/** 本页面会话内"主回合仍在跑"的会话 id（`runtimes[sid].loading`）。
+ *  直接读 `runtimes`，不另建状态，避免两处漂移。
+ *  注意它只是侧栏心跳的**信号之一**：主回合已结束但后台子 Agent 还在跑的会话，
+ *  这里会漏 —— 那个场景由下方基于 `subagentLiveEvents` 的 `runningSessionIds` 覆盖，
+ *  两者在 `sidebarRunningIds` 里取并集。
+ *  **已知边界**：`ChatSession` 上没有服务端的 running 字段，所以跨刷新看不见
+ *  "刷新前就在后台跑的会话"；要做到需后端在会话列表里返回运行态（另开一项）。 */
+const liveRunSessionIds = computed(() => {
+  const set = new Set<string>()
+  for (const [sid, run] of runtimes) if (run.loading) set.add(sid)
+  return set
+})
+
 /**
  * 写入作用域：SSE 回调在**同步**执行期间，指向"这条事件所属的会话"。
  *
@@ -484,6 +507,11 @@ interface PendingApproval {
   expiresAt?: number
 }
 const pendingApprovals = ref<PendingApproval[]>([])
+// 审批卡片出现时给一声提示：它会阻塞整个执行链，而用户很可能已经切到别的窗口了。
+// 只在"新增"时响（长度变大），过期清理导致的减少不该出声。
+watch(() => pendingApprovals.value.length, (n, prev) => {
+  if (n > prev) playUiSound('tool-pending')
+})
 // 审批卡片倒计时：approval 事件到达时记录截止时间（后端 _await_approval 默认 300s，
 // 超时按"拒绝"处理），前端展示剩余时间并在过期后移除卡片。
 const approvalTick = ref(0)
@@ -1400,6 +1428,21 @@ const runningSessionIds = computed<string[]>(() => {
     else open.add(sid)
   }
   return [...open]
+})
+
+/**
+ * 侧栏会话行上心跳点用的**并集**：主回合在跑（`liveRunSessionIds`）或还有未终态的
+ * 子 Agent run（`runningSessionIds`）都算"这个会话还在动"。
+ *
+ * 为什么必须取并集：两个信号各有盲区 —— 只跑主回合时 `subagentLiveEvents` 是空的；
+ * 主回合结束但后台子 Agent 仍在跑时 `runtimes.loading` 已为 false。
+ * 为什么必须声明在这里：`runningSessionIds` 依赖 `subagentLiveEvents`，
+ * 放到文件前半段会触发 TDZ（同下方 watch 的注释）。
+ */
+const sidebarRunningIds = computed(() => {
+  const set = new Set<string>(runningSessionIds.value)
+  for (const sid of liveRunSessionIds.value) set.add(sid)
+  return set
 })
 
 /**
@@ -2506,25 +2549,29 @@ function onSSEMessage(raw: unknown) {
   }
 }
 
-async function sendMessage(text: string, attachments?: ChatAttachment[]) {
+/** 发送一条消息。**返回值 = 是否已送达服务端** —— 未送达的会被暂存到本地队列
+ *  （见 failedOutbox.ts），Composer 顶部横幅据此提供重发。
+ *  既有调用方全部忽略返回值，所以把返回类型改成 boolean 不会影响它们。 */
+async function sendMessage(text: string, attachments?: ChatAttachment[]): Promise<boolean> {
   // 互联互通：统一任务模式 → POST /v1/chat/submit（与 SSE 流式并列的新路径）
   if (unifiedMode.value && unifiedSessionId.value) {
     await sendUnified(text, attachments)
-    return
+    // 统一模式有自己的错误呈现；这里乐观视为已受理，不入本地队列（避免两套重试叠加）
+    return true
   }
   // ① 没有会话就**先建出来**（必须在 appendUserText 之前）：否则消息会落进"无会话"切片
   //    `__none__`，而 activeSessionId 直到提交成功才写回 ⇒ 一旦失败，这条消息与这个会话
   //    就都成了孤魂（侧栏里没有它、切走就再也回不来）。用户看到的现象正是"消息发出去就没了"。
   if (!activeSessionId.value) {
-    if (!ensureModel()) return
+    if (!ensureModel()) return false
     await createSession()
     if (!activeSessionId.value) {
       notify.error(t('chat.failed_to_create_the_conversation_please_retry'))
-      return
+      return false
     }
   } else if (!ensureModel()) {
     // ② 已有会话同样要确保有模型（空值 ⇒ 后端默认路由 ⇒ 401，见 ensureModel 的注释）
-    return
+    return false
   }
   loading.value = true
   startTurnTimer()
@@ -2546,6 +2593,8 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
         connectionLost.value = true
         activeSSE?.close(); activeSSE = null
         markMessageFailed(userItemId, t('common.connection_lost'))
+        // 真断线（自动重连已用尽）才响：抖动期间的重连不该打扰
+        playUiSound('disconnected')
       },
       {
         // 携带上一连接的最后事件 id：服务端按 last_event_id 从缓冲流补发断线缺口
@@ -2570,6 +2619,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
       body.attachments = resolvedAtts.map(a => ({ id: a.id, name: a.name, mime_type: a.mimeType, url: a.url, is_image: a.isImage }))
     }
     await api.post('/submit', body)
+    return true
   } catch (e) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     loading.value = false
@@ -2578,7 +2628,33 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]) {
     const reason = describeApiError(e)
     markMessageFailed(userItemId, reason)
     notify.error(t('errors.send_failed') + reason)
+    // 落盘暂存：这条消息**没有**被服务端接收（POST 失败），刷新后 transcript 里不会有它。
+    // 不回填输入框而是入队，是为了不打断"继续写草稿"的动作。
+    outbox.value = addToOutbox(sessionId, authStore.user?.id, { content: text, attachments })
+    return false
   }
+}
+
+/** 重发暂存队列：逐条走正常发送路径，成功一条就从本地删一条；
+ *  失败的只累加 retryCount（它本来就在队列里，不该再入队一次）。 */
+async function retryOutbox() {
+  const sid = activeSessionId.value
+  if (!sid) return
+  const uid = authStore.user?.id
+  for (const entry of readOutbox(sid, uid)) {
+    const ok = await sendMessage(entry.content, entry.attachments)
+    if (ok) removeFromOutbox(sid, uid, entry.id)
+    else bumpRetryCount(sid, uid, entry.id)
+  }
+  refreshOutbox()
+}
+
+/** 丢弃本会话全部暂存消息（用户明确放弃这几次发送）。 */
+function discardOutbox() {
+  const sid = activeSessionId.value
+  if (!sid) return
+  clearOutbox(sid, authStore.user?.id)
+  refreshOutbox()
 }
 
 // ── 失败消息标记 ──
@@ -2920,7 +2996,7 @@ function continueGeneration() {
           </span>
           <div class="chat-search-actions">
             <button
-              class="chat-search-btn"
+              class="chat-search-btn btn-xs"
               type="button"
               :title="$t('common.previous')"
               :disabled="!searchMatches.length"
@@ -2929,7 +3005,7 @@ function continueGeneration() {
               ↑
             </button>
             <button
-              class="chat-search-btn"
+              class="chat-search-btn btn-xs"
               type="button"
               :title="$t('common.next')"
               :disabled="!searchMatches.length"
@@ -2938,7 +3014,7 @@ function continueGeneration() {
               ↓
             </button>
             <button
-              class="chat-search-btn"
+              class="chat-search-btn btn-xs"
               type="button"
               :title="$t('common.close')"
               @click="closeSearch"
@@ -2974,7 +3050,7 @@ function continueGeneration() {
             <span class="ub-spacer" />
             <button
               type="button"
-              class="ub-btn"
+              class="ub-btn btn-xs"
               :disabled="!items.length"
               @click="clearUnifiedMessages"
             >
@@ -3206,6 +3282,9 @@ function continueGeneration() {
         @update:language="onLanguageChange"
         @update:reasoningLanguage="onReasoningLanguageChange"
         @remove-context-chip="(c: ContextChip) => removeContextChip(c.type, c.value)"
+        :failed-queue-count="outbox.length"
+        @retry-outbox="retryOutbox"
+        @discard-outbox="discardOutbox"
       />
 
       <ChatStatusBar
@@ -3317,6 +3396,7 @@ function continueGeneration() {
       :user-name="authStore.user?.name"
       :context-chips="contextChips"
       :live-events="subagentLiveEvents"
+      :running-session-ids="sidebarRunningIds"
       @update:view="(v: 'trajectory' | 'sessions' | 'agents' | 'stats') => (panelView = v)"
       @open-map="synapseMapOpen = true"
       @focus="onTrajectoryFocus"
@@ -3527,7 +3607,7 @@ function continueGeneration() {
 .chat-search-input::placeholder { color: var(--text-quaternary); }
 .chat-search-count { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chat-search-actions { flex: none; display: flex; gap: 2px; }
-.chat-search-btn { border: none; background: none; color: var(--text-secondary); font-size: 12px; line-height: 18px; padding: 2px 6px; border-radius: var(--radius-sm); cursor: pointer; }
+.chat-search-btn { border: none; background: none; color: var(--text-secondary); }
 .chat-search-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
 .chat-search-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 .chat-search-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
@@ -3552,13 +3632,13 @@ function continueGeneration() {
 .approval-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
 /* 结构化提问卡片区：与审批卡同样贴输入区上方 */
 .ask-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
-.approval-card { background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--primary); border-radius: 10px; padding: 10px 14px; }
+.approval-card { background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 10px 14px; }
 /* 工具授权模式栏（与「对话模式」并列但语义独立的第二个维度） */
 /* 工具授权已内联到输入区底栏（模型选择器右侧），样式见 ChatInput.vue 的
    `.tools-mode-select` —— 这里不再需要独立的 `.tools-mode-bar`。 */
 .approval-countdown { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.approval-tag { font-size: var(--fs-xs); color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: 10px; }
+.approval-tag { font-size: var(--fs-xs); color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: var(--sig-radius-card); }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
 .approval-args { font-family: var(--font-mono); font-size: 12px; color: var(--text-muted); word-break: break-all; margin-bottom: 8px; }
 .approval-edit { margin-bottom: 8px; }
@@ -3570,7 +3650,7 @@ function continueGeneration() {
   color: var(--text-primary);
   background: var(--bg-card);
   border: var(--hairline-width) solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   padding: 6px 8px;
   resize: vertical;
 }
@@ -3583,11 +3663,11 @@ function continueGeneration() {
   font-size: 13px;
   cursor: pointer;
   padding: 6px 4px;
-  border-radius: 6px;
+  border-radius: var(--radius-md);
 }
 .approval-link:hover { text-decoration: underline; }
 .approval-actions { display: flex; gap: 8px; }
-.approval-btn { border: none; border-radius: 8px; padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform var(--dur-fast) ease, opacity var(--dur-fast) ease, background var(--dur-fast) ease; }
+.approval-btn { border: none; border-radius: var(--radius-lg); padding: 6px 16px; font-size: 13px; cursor: pointer; transition: transform var(--dur-fast) ease, opacity var(--dur-fast) ease, background var(--dur-fast) ease; }
 .approval-btn:active { transform: scale(0.97); }
 .approval-btn.allow { background: var(--primary); color: var(--on-solid); }
 .approval-btn.allow:hover { opacity: 0.9; }
@@ -3609,11 +3689,11 @@ function continueGeneration() {
 .share-select-list { display: flex; flex-direction: column; gap: 2px; max-height: 260px; overflow-y: auto; width: 100%; }
 .share-select-item {
   display: flex; align-items: center; gap: 8px;
-  padding: 7px 8px; border-radius: 8px; cursor: pointer;
+  padding: 7px 8px; border-radius: var(--radius-lg); cursor: pointer;
   transition: background var(--dur-fast) ease;
 }
 .share-select-item:hover { background: var(--bg-hover); }
-.share-select-role { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semibold); padding: 1px 7px; border-radius: 10px; }
+.share-select-role { flex: none; font-size: var(--fs-xs); font-weight: var(--fw-semibold); padding: 1px 7px; border-radius: var(--sig-radius-button); }
 .share-select-role.user { color: var(--primary); background: var(--primary-bg); }
 .share-select-role.assistant { color: var(--text-secondary); background: var(--bg-secondary); }
 .share-select-preview { flex: 1; min-width: 0; font-size: 13px; color: var(--text-secondary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
@@ -3645,7 +3725,7 @@ function continueGeneration() {
   flex: none; display: flex; align-items: center; gap: 8px;
   margin: 8px 20px 0; padding: 8px 12px;
   background: var(--error-bg); border: var(--hairline-width) solid var(--error);
-  border-radius: 10px; color: var(--danger, var(--error)); font-size: 13px;
+  border-radius: var(--sig-radius-card); color: var(--danger, var(--error)); font-size: 13px;
 }
 .ueb-text { flex: 1; min-width: 0; line-height: 1.5; }
 .ueb-close { flex: none; cursor: pointer; opacity: 0.7; font-size: 12px; }
@@ -3654,12 +3734,12 @@ function continueGeneration() {
 .unified-bar {
   flex: none; display: flex; align-items: center; gap: 8px;
   margin: 8px 20px 0; padding: 6px 10px;
-  border: var(--hairline-width) solid var(--border); border-radius: 10px;
+  border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-card);
   background: var(--bg-card);
 }
 .ub-badge {
   flex: none; display: inline-flex; align-items: center; gap: 6px;
-  padding: 1px 10px; border-radius: 10px;
+  padding: 1px 10px; border-radius: var(--sig-radius-button);
   background: var(--primary); color: var(--on-solid);
   font-size: var(--fs-xs); font-weight: var(--fw-semibold); line-height: 18px;
   transition: background var(--dur-normal) ease;
@@ -3674,13 +3754,13 @@ function continueGeneration() {
 .ub-badge.done::before { animation: none; }
 .ub-mode {
   flex: none; font-size: var(--fs-xs); color: var(--text-secondary);
-  background: var(--bg-secondary); padding: 1px 8px; border-radius: 10px; line-height: 18px;
+  background: var(--bg-secondary); padding: 1px 8px; border-radius: var(--sig-radius-button); line-height: 18px;
 }
 .ub-spacer { flex: 1; }
 .ub-btn {
-  flex: none; border: var(--hairline-width) solid var(--border); border-radius: 8px;
+  flex: none;
   background: var(--bg-card); color: var(--text-secondary);
-  font-size: var(--fs-xs); line-height: 18px; padding: 1px 10px; cursor: pointer;
+  box-shadow: inset 0 0 0 var(--hairline-width) var(--border);
   transition: all var(--dur-fast) ease;
 }
 .ub-btn:focus-visible,
@@ -3689,9 +3769,9 @@ function continueGeneration() {
   outline: var(--focus-ring-width) solid var(--focus-ring-color);
   outline-offset: var(--focus-ring-offset);
 }
-.ueb-close:focus-visible { border-radius: 4px; }
-.ub-btn:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
-.ub-btn.exit:hover:not(:disabled) { border-color: var(--danger, var(--error)); color: var(--danger, var(--error)); }
+.ueb-close:focus-visible { border-radius: var(--radius-sm); }
+.ub-btn:hover:not(:disabled) { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
+.ub-btn.exit:hover:not(:disabled) { box-shadow: inset 0 0 0 var(--hairline-width) var(--danger, var(--error)); color: var(--danger, var(--error)); }
 .ub-btn:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .unified-exec-hint {
@@ -3718,7 +3798,7 @@ function continueGeneration() {
 .kb-hits-tag {
   display: flex; align-items: center;
   max-width: min(var(--chat-content-width), 92%); margin: 2px auto 6px;
-  padding: 2px 10px; border-radius: 10px;
+  padding: 2px 10px; border-radius: var(--sig-radius-button);
   background: var(--primary-bg); color: var(--primary);
   font-size: var(--fs-xs); line-height: 18px;
 }

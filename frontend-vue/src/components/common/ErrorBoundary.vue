@@ -106,7 +106,7 @@ function reload() {
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--bg-secondary, #f3f4f6);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
 }
 .error-actions {
   display: flex;

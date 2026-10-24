@@ -183,6 +183,7 @@ onMounted(load)
   margin: 0;
   font-size: 20px;
   font-weight: var(--fw-semibold);
+  letter-spacing: -0.01em;
 }
 .page-sub {
   margin: 4px 0 0;
@@ -204,7 +205,7 @@ onMounted(load)
   gap: 12px;
   padding: 16px;
   border: var(--hairline-width) solid var(--ant-color-border, #d9d9d9);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   cursor: pointer;
   transition: border-color var(--dur-normal), box-shadow var(--dur-normal);
 }

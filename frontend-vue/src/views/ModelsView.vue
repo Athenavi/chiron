@@ -529,6 +529,7 @@ onMounted(async () => {
                 v-for="m in s.models"
                 :key="m.id"
                 class="mv-row"
+                :class="{ 'row-dimmed': !m.enabled }"
               >
                 <Checkbox
                   :checked="selectedIds.has(m.id)"
@@ -630,7 +631,7 @@ onMounted(async () => {
 .mv-toolbar {
   display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
   padding: 8px 10px; margin-bottom: 8px;
-  border: var(--hairline-width) solid var(--border-subtle); border-radius: 8px;
+  border: var(--hairline-width) solid var(--border-subtle); border-radius: var(--radius-lg);
   font-size: 13px;
 }
 .mv-picked { font-size: 12px; color: var(--text-tertiary); }
@@ -649,9 +650,13 @@ onMounted(async () => {
 .mv-row-head { color: var(--text-tertiary); font-size: 12px; font-weight: var(--fw-medium); border-bottom: var(--hairline-width) solid var(--border-subtle); }
 .mv-name { font-family: var(--font-mono, monospace); overflow-wrap: anywhere; }
 .mv-display { color: var(--text-secondary); overflow-wrap: anywhere; }
+/* 失活行（CDS v2 §2.2）：文字降级，而行内的开关/输入框仍保持满亮度 ——
+   它们是"为什么这行是灰的"的操作入口。 */
+.mv-row.row-dimmed .mv-name,
+.mv-row.row-dimmed .mv-display { color: var(--text-tertiary); }
 .mv-op { display: flex; justify-content: flex-end; }
 
-.mv-group { border: var(--hairline-width) solid var(--border-subtle); border-radius: 8px; margin-bottom: 10px; overflow: hidden; }
+.mv-group { border: var(--hairline-width) solid var(--border-subtle); border-radius: var(--radius-lg); margin-bottom: 10px; overflow: hidden; }
 .mv-group-head {
   display: flex; align-items: center; gap: 8px;
   padding: 4px 10px; border-bottom: var(--hairline-width) solid var(--border-subtle);

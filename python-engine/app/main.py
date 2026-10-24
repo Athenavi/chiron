@@ -2079,7 +2079,7 @@ async def agent_approval(
             run_token,
         )
         return {"ok": False, "error": "stale run token"}
-    resolved = await runtime.submit_approval(tool_call_id, decision)
+    resolved = await runtime.submit_approval(tool_call_id, decision, owner_uid)
     return {"ok": resolved, "decision": decision.decision}
 
 

@@ -191,12 +191,12 @@ function submitEdit() {
 <style scoped>
 .approval-card {
   background: var(--bg-card); border: var(--hairline-width) solid var(--border);
-  border-left: 3px solid var(--primary); border-radius: 10px; padding: 8px 10px;
+  border-left: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 8px 10px;
 }
 .approval-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag {
   flex: none; font-size: var(--fs-xs); color: var(--primary);
-  background: var(--primary-bg); padding: 2px 8px; border-radius: 10px;
+  background: var(--primary-bg); padding: 2px 8px; border-radius: var(--sig-radius-button);
 }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
 .approval-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
@@ -204,10 +204,10 @@ function submitEdit() {
 .approval-args {
   font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
-  padding: 6px; border-radius: 6px; overflow: auto; max-height: 140px; margin: 0 0 8px;
+  padding: 6px; border-radius: var(--radius-md); overflow: auto; max-height: 140px; margin: 0 0 8px;
 }
 .approval-actions { display: flex; align-items: center; gap: 8px; }
-.approval-btn { border: none; border-radius: 8px; padding: 4px 14px; font-size: 13px; cursor: pointer; }
+.approval-btn { border: none; border-radius: var(--radius-lg); padding: 4px 14px; font-size: 13px; cursor: pointer; }
 .approval-btn:disabled { opacity: 0.5; cursor: default; }
 .approval-btn.allow { background: var(--primary); color: var(--on-solid); }
 .approval-btn.allow:hover:not(:disabled) { opacity: 0.9; }
@@ -219,13 +219,13 @@ function submitEdit() {
 .approval-edit-text {
   width: 100%; box-sizing: border-box; font-family: var(--font-mono); font-size: 12px;
   color: var(--text-primary); background: var(--bg-card);
-  border: var(--hairline-width) solid var(--border); border-radius: 8px; padding: 6px 8px; resize: vertical;
+  border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); padding: 6px 8px; resize: vertical;
 }
 .approval-edit-text:focus { outline: none; border-color: var(--primary); }
 .approval-edit-error { margin-top: 4px; font-size: 12px; color: var(--danger, var(--error)); }
 .approval-link {
   border: none; background: none; color: var(--primary); font-size: 13px;
-  cursor: pointer; padding: 4px 2px; border-radius: 6px;
+  cursor: pointer; padding: 4px 2px; border-radius: var(--radius-md);
 }
 .approval-link:disabled { opacity: 0.5; cursor: default; }
 .approval-link:hover:not(:disabled) { text-decoration: underline; }

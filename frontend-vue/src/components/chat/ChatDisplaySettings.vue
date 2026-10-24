@@ -2,11 +2,13 @@
 import { Modal, Button, Segmented } from 'ant-design-vue'
 import {
   CONTENT_WIDTH_OPTIONS,
+  DENSITY_OPTIONS,
   GAP_OPTIONS,
   LEADING_OPTIONS,
   TEXT_SIZE_OPTIONS,
   useTypographyStore,
 } from '../../stores/typography'
+import { setSoundsEnabled, soundsEnabled } from '../../utils/uiSounds'
 
 defineProps<{ open: boolean }>()
 const emit = defineEmits<{ (e: 'update:open', value: boolean): void }>()
@@ -22,6 +24,27 @@ const typography = useTypographyStore()
     width="420px"
     @cancel="emit('update:open', false)"
   >
+    <div class="display-row">
+      <span class="display-label">{{ $t('common.interface_density') }}</span>
+      <Segmented
+        :value="typography.state.density"
+        :options="DENSITY_OPTIONS"
+        @change="(v: any) => typography.setDensity(v)"
+      />
+    </div>
+    <!-- 交互音效默认关闭：突然出声是侵入性的，必须用户主动打开（也给读屏用户留了安静路径）。
+         放在这里而不是"设置页"，是因为它和密度、字号一样属于"本机个性化"，且改动即时生效。 -->
+    <div class="display-row">
+      <span class="display-label">{{ $t('common.sound_effects') }}</span>
+      <Segmented
+        :value="soundsEnabled ? 'on' : 'off'"
+        :options="[
+          { label: $t('common.off'), value: 'off' },
+          { label: $t('common.on'), value: 'on' },
+        ]"
+        @change="(v: any) => setSoundsEnabled(v === 'on')"
+      />
+    </div>
     <div class="display-row">
       <span class="display-label">{{ $t('common.body_font_size') }}</span>
       <Segmented

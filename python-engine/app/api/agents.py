@@ -220,7 +220,7 @@ async def submit_agent_approval(body: AgentApprovalRequest) -> dict[str, Any]:
     if isinstance(decision, str):
         return {"ok": False, "error": decision}
 
-    ok = await submit_approval_global(body.tool_call_id, decision)
+    ok = await submit_approval_global(body.tool_call_id, decision, body.user_id)
     return {
         "ok": ok,
         "tool_call_id": body.tool_call_id,

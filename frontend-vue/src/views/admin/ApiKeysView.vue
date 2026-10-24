@@ -636,7 +636,7 @@ onMounted(() => {
   text-align: left;
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
   border: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24));
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   cursor: pointer;
   transition: border-color var(--dur-fast) ease, background var(--dur-fast) ease;
 }

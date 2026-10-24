@@ -76,9 +76,12 @@ const props = withDefaults(defineProps<{
   contextChips?: ContextChip[]
   /** 本会话实时到达的 subagent.* 事件（由 ChatView 从 SSE 分流后传入） */
   liveEvents?: SubagentEvent[]
+  /** 正在流式运行的会话 id 集合：在侧栏会话行上显示呼吸心跳点 */
+  runningSessionIds?: Set<string>
 }>(), {
   contextChips: () => [],
   liveEvents: () => [],
+  runningSessionIds: () => new Set<string>(),
 })
 
 const emit = defineEmits<{
@@ -738,6 +741,14 @@ function pickSession(id: string) {
           >
             <div class="session-info">
               <div class="session-title-line">
+                <!-- 运行中心跳（CDS 2.0 侧栏的 isRunning 呼吸光晕环）：
+                     并发跑多个会话时，一眼看得出谁还在跑、谁已经停下。 -->
+                <span
+                  v-if="runningSessionIds.has(s.id)"
+                  class="session-run-dot"
+                  role="img"
+                  :aria-label="$t('common.running_2')"
+                />
                 <PushpinOutlined
                   v-if="s.pinned"
                   class="pin-icon"
@@ -1007,7 +1018,7 @@ function pickSession(id: string) {
 .session-picker:hover, .session-back:hover { background: var(--bg-hover); }
 .session-picker-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
 .session-picker-arrow { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
-.toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: 4px; transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
+.toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
 .toolbar-close:hover { color: var(--text-primary); background: var(--bg-hover); }
 
 /* ── 当前会话上下文 chips（与消息区/侧栏 tag-chip 同设计语言）── */
@@ -1017,11 +1028,11 @@ function pickSession(id: string) {
 .ctx-chip {
   display: inline-flex; align-items: center; gap: 6px;
   padding: 2px 8px; border-radius: var(--sig-radius-button);
-  border: var(--hairline-width) solid var(--border); background: var(--bg-card);
+  box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card);
   color: var(--text-secondary); font-size: 12px;
-  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease;
+  transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease;
 }
-.ctx-chip:hover { border-color: var(--primary); color: var(--primary); }
+.ctx-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 .ctx-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .ctx-chip-remove { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; }
 .ctx-chip-remove:hover { color: var(--danger, var(--error)); }
@@ -1101,9 +1112,11 @@ function pickSession(id: string) {
 
 /* P3-D: 标签筛选与展示 */
 .tag-filter { display: flex; gap: 6px; padding: 4px 12px 8px; flex-wrap: wrap; }
-.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: all var(--dur-fast) ease; }
-.tag-chip:hover { border-color: var(--primary); color: var(--primary); }
-.tag-chip.active { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
+.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: all var(--dur-fast) ease; }
+.tag-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
+/* 按下塌陷：跟手、不回头（--ease-snap，严格 0% 超调），见 style.css §5 */
+.tag-chip:active { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
+.tag-chip.active { background: var(--primary); color: var(--on-solid); box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); }
 .session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
 /* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
 .session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
@@ -1123,6 +1136,17 @@ function pickSession(id: string) {
 }
 .session-info { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .session-title-line { display: flex; align-items: center; gap: 4px; min-width: 0; }
+/* 运行中心跳：壳体 + 呼吸光晕环。用 box-shadow 扩散而不是多加一层 DOM ——
+   不吃布局、不吃事件；减弱动效时由全局的 prefers-reduced-motion 块统一压掉。 */
+.session-run-dot {
+  flex: none; width: 6px; height: 6px; border-radius: 50%;
+  background: var(--primary);
+  animation: sessionRunBreath var(--dur-pulse) ease-in-out infinite;
+}
+@keyframes sessionRunBreath {
+  0%, 100% { box-shadow: 0 0 0 0 var(--ring-outer); opacity: 1; }
+  50% { box-shadow: 0 0 0 3px var(--ring-outer); opacity: 0.65; }
+}
 .pin-icon { flex: none; font-size: var(--fs-xs); color: var(--primary); }
 .session-title { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; line-height: 18px; }
 .session-row.active .session-title { color: var(--primary); font-weight: var(--fw-semibold); }
@@ -1144,7 +1168,7 @@ function pickSession(id: string) {
 }
 .act-head { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px 4px; }
 .act-title { font-size: var(--fs-xs); color: var(--text-tertiary); }
-.act-refresh { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: 4px; transition: color var(--dur-fast) ease; }
+.act-refresh { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; padding: 2px; border-radius: var(--radius-sm); transition: color var(--dur-fast) ease; }
 .act-refresh:hover { color: var(--primary); }
 .act-list { overflow-y: auto; padding: 0 6px 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 .act-row {

@@ -553,7 +553,7 @@ function statusLabel(status: string): string {
 .kb-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .kb-card.public { border-left: 3px solid var(--warning); }
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
+.card-icon { flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
 .card-titles { flex: 1; min-width: 0; }
 .kb-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .kb-desc {

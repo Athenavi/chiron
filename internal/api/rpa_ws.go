@@ -120,7 +120,9 @@ type rpaCmdEnvelope struct {
 	From     string     `json:"from"` // 发起实例 ID
 	To       string     `json:"to"`   // 目标实例 ID（持有该 client WS 连接的实例）
 	ClientID string     `json:"client_id"`
-	Msg      RPAMessage `json:"msg"`
+	// UserID 是发起方声明的调用者身份；目标实例据此校验 client owner（防跨用户投递）。
+	UserID string     `json:"user_id,omitempty"`
+	Msg    RPAMessage `json:"msg"`
 }
 
 // rpaResEnvelope Redis "rpa:res" 通道负载：跨实例命令的结果回传。
@@ -216,6 +218,12 @@ func (h *RPAHub) handleRemoteCmd(env *rpaCmdEnvelope) {
 			"client_id", env.ClientID, "from", env.From)
 		return
 	}
+	// 归属校验：发起方声明的调用者必须与本地连接的 owner 一致（防跨用户投递）。
+	if env.UserID != "" && client.UserID != env.UserID {
+		slog.Warn("rpa remote cmd rejected: client owner mismatch",
+			"client_id", env.ClientID, "caller", env.UserID, "owner", client.UserID)
+		return
+	}
 	if err := client.SendMessage(env.Msg); err != nil {
 		slog.Warn("rpa remote cmd send failed", "client_id", env.ClientID, "error", err)
 	}
@@ -296,15 +304,23 @@ func (h *RPAHub) dropRegistry(clientID string) {
 	}
 }
 
-// Register 注册一个插件连接
-func (h *RPAHub) Register(client *RPAClient) {
+// Register 注册一个插件连接。返回 false 表示该 client_id 已被**其它用户**占用 ——
+// 拒绝顶替：否则他人用同一 id 连接即可顶掉原连接，并接管引擎发往该 id 的浏览器命令。
+func (h *RPAHub) Register(client *RPAClient) bool {
 	h.mu.Lock()
+	if existing, ok := h.clients[client.ID]; ok && existing.UserID != client.UserID {
+		h.mu.Unlock()
+		slog.Warn("rpa register rejected: client_id owned by another user",
+			"client_id", client.ID, "owner_user", existing.UserID)
+		return false
+	}
 	h.clients[client.ID] = client
 	h.mu.Unlock()
 	if !h.localOnly {
 		h.RefreshRegistry(client.ID, client.UserID)
 	}
 	slog.Info("rpa client registered", "client_id", client.ID, "user_id", client.UserID, "instance", h.instanceID[:8])
+	return true
 }
 
 // Unregister 注销一个插件连接
@@ -341,8 +357,13 @@ func (h *RPAHub) GetClientByUser(userID string) (*RPAClient, bool) {
 
 // SendCommand 发送命令并等待结果（带超时）。
 // 本地未命中时若 Redis 注册中心指示对端在其它网关副本，则跨实例投递并等待结果。
-func (h *RPAHub) SendCommand(ctx context.Context, clientID string, cmd *RPACommand) (*RPAResult, error) {
+func (h *RPAHub) SendCommand(ctx context.Context, clientID string, cmd *RPACommand, userID string) (*RPAResult, error) {
 	if client, ok := h.GetClient(clientID); ok {
+		// 归属校验：调用者（引擎按其当前用户传入）必须与连接 owner 一致，
+		// 否则会把命令投给另一个用户的浏览器。
+		if userID != "" && client.UserID != userID {
+			return nil, fmt.Errorf("rpa client not owned by caller: %s", clientID)
+		}
 		return h.sendLocal(ctx, client, cmd)
 	}
 	if h.localOnly {
@@ -354,7 +375,7 @@ func (h *RPAHub) SendCommand(ctx context.Context, clientID string, cmd *RPAComma
 		// 无记录 = 未连接；记录在本实例但本地已断 = 清理窗口，与未连接等价
 		return nil, fmt.Errorf("rpa client not connected: %s", clientID)
 	}
-	return h.sendRemote(ctx, clientID, owner, cmd)
+	return h.sendRemote(ctx, clientID, owner, cmd, userID)
 }
 
 // sendLocal 本实例持有连接：原同步请求-响应路径。
@@ -395,7 +416,7 @@ func (h *RPAHub) sendLocal(ctx context.Context, client *RPAClient, cmd *RPAComma
 }
 
 // sendRemote 跨实例投递：命令发到目标实例，结果经 rpa:res 回填本地 pending。
-func (h *RPAHub) sendRemote(ctx context.Context, clientID, owner string, cmd *RPACommand) (*RPAResult, error) {
+func (h *RPAHub) sendRemote(ctx context.Context, clientID, owner string, cmd *RPACommand, userID string) (*RPAResult, error) {
 	msgID := fmt.Sprintf("cmd_%s_%d", h.instanceID, time.Now().UnixNano())
 	msg := RPAMessage{
 		Type:   RPAMsgCommand,
@@ -416,7 +437,7 @@ func (h *RPAHub) sendRemote(ctx context.Context, clientID, owner string, cmd *RP
 		h.mu.Unlock()
 	}()
 
-	env := rpaCmdEnvelope{From: h.instanceID, To: owner, ClientID: clientID, Msg: msg}
+	env := rpaCmdEnvelope{From: h.instanceID, To: owner, ClientID: clientID, UserID: userID, Msg: msg}
 	data, err := json.Marshal(env)
 	if err != nil {
 		return nil, fmt.Errorf("marshal rpa cmd: %w", err)
@@ -535,6 +556,65 @@ func (h *RPAHub) AllClientIDs() []string {
 	return ids
 }
 
+// ClientIDsForUser 返回指定用户可见的已连接客户端（本实例 + Redis 注册中心）。
+// userID 为空时退化为全量（兼容未带身份的旧调用方）。
+func (h *RPAHub) ClientIDsForUser(userID string) []string {
+	if userID == "" {
+		return h.AllClientIDs()
+	}
+	set := make(map[string]struct{})
+	for _, c := range h.ConnectedClients() {
+		if c.UserID == userID {
+			set[c.ID] = struct{}{}
+		}
+	}
+	if !h.localOnly {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		var cursor uint64
+		for {
+			keys, next, err := h.rdb.Scan(ctx, cursor, h.registryKeyPrefix+"*", 100).Result()
+			if err != nil {
+				slog.Debug("rpa registry scan failed", "error", err)
+				break
+			}
+			for _, k := range keys {
+				id, ok := registryIDFromKey(k, h.registryKeyPrefix)
+				if !ok {
+					continue
+				}
+				if h.registryUser(ctx, k) == userID {
+					set[id] = struct{}{}
+				}
+			}
+			cursor = next
+			if cursor == 0 {
+				break
+			}
+		}
+	}
+	ids := make([]string, 0, len(set))
+	for id := range set {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+// registryUser 读注册记录里的 user_id（按用户过滤列举时用）。
+func (h *RPAHub) registryUser(ctx context.Context, key string) string {
+	data, err := h.rdb.Get(ctx, key).Bytes()
+	if err != nil {
+		return ""
+	}
+	var rec struct {
+		UserID string `json:"user_id"`
+	}
+	if err := json.Unmarshal(data, &rec); err != nil {
+		return ""
+	}
+	return rec.UserID
+}
+
 // registryIDFromKey 从注册 key（prefix+clientID）解析 clientID。
 func registryIDFromKey(key, prefix string) (string, bool) {
 	if len(key) <= len(prefix) || key[:len(prefix)] != prefix {
@@ -545,9 +625,9 @@ func registryIDFromKey(key, prefix string) (string, bool) {
 
 // ExecCommand sends a command to a connected browser extension and returns the result map.
 // This implements tools.RPABrowserHub interface, breaking the import cycle.
-func (h *RPAHub) ExecCommand(ctx context.Context, clientID string, method string, params map[string]interface{}) (map[string]interface{}, error) {
+func (h *RPAHub) ExecCommand(ctx context.Context, clientID string, method string, params map[string]interface{}, userID string) (map[string]interface{}, error) {
 	cmd := &RPACommand{Method: method, Params: params}
-	result, err := h.SendCommand(ctx, clientID, cmd)
+	result, err := h.SendCommand(ctx, clientID, cmd, userID)
 	if err != nil {
 		return nil, err
 	}
@@ -612,7 +692,12 @@ func RPAWebSocketHandler(hub *RPAHub, authenticator *auth.Authenticator) http.Ha
 			UserID:   userID,
 			LastSeen: time.Now(),
 		}
-		hub.Register(client)
+		if !hub.Register(client) {
+			// 同 client_id 已被他人占用：拒绝并断开，避免静默顶替（接管他人的浏览器命令）。
+			slog.Warn("rpa ws rejected: client_id already in use by another user", "client_id", clientID)
+			conn.Close()
+			return
+		}
 
 		// 发送连接确认
 		client.SendMessage(RPAMessage{
@@ -716,12 +801,14 @@ func RPAExecHandler(hub *RPAHub, internalToken string) http.HandlerFunc {
 			ClientID string                 `json:"client_id"`
 			Method   string                 `json:"method"`
 			Params   map[string]interface{} `json:"params"`
+			// UserID 由引擎按其当前工具上下文的用户注入；非空时网关校验 client owner。
+			UserID string `json:"user_id,omitempty"`
 		}
 		if err := DecodeJSON(w, r, &req); err != nil || req.Method == "" || req.ClientID == "" {
 			BadRequest(w, "client_id and method are required")
 			return
 		}
-		result, err := hub.ExecCommand(r.Context(), req.ClientID, req.Method, req.Params)
+		result, err := hub.ExecCommand(r.Context(), req.ClientID, req.Method, req.Params, req.UserID)
 		if err != nil {
 			JSON(w, http.StatusBadGateway, APIResponse{Success: false, Error: "rpa command execution failed"})
 			return
@@ -737,7 +824,8 @@ func RPAClientsHandler(hub *RPAHub, internalToken string) http.HandlerFunc {
 			Unauthorized(w, "invalid internal token")
 			return
 		}
-		OK(w, map[string]interface{}{"client_ids": hub.AllClientIDs()})
+		// 归属过滤：引擎按其当前用户查询 —— 未带 user_id 时退化为全量（兼容旧引擎）。
+	OK(w, map[string]interface{}{"client_ids": hub.ClientIDsForUser(r.URL.Query().Get("user_id"))})
 	}
 }
 

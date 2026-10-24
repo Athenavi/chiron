@@ -273,7 +273,7 @@ function raiseBudget(item: PendingInteraction) {
   margin: 0 0 8px;
   padding: 10px 12px;
   border: var(--hairline-width) solid var(--border);
-  border-radius: 12px;
+  border-radius: var(--radius-xl);
   background: var(--bg-surface);
 }
 .inbox-head {
@@ -288,7 +288,7 @@ function raiseBudget(item: PendingInteraction) {
   color: var(--accent);
   background: var(--accent-bg);
   padding: 2px 10px;
-  border-radius: 10px;
+  border-radius: var(--sig-radius-button);
 }
 .inbox-refresh {
   margin-left: auto;
@@ -310,7 +310,7 @@ function raiseBudget(item: PendingInteraction) {
   gap: 8px;
   padding: 8px 10px;
   border: 1px dashed var(--border);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-button);
   background: var(--bg-card);
   color: var(--text-secondary);
   font-size: 13px;
@@ -319,7 +319,7 @@ function raiseBudget(item: PendingInteraction) {
 .inbox-budget {
   padding: 10px 12px;
   border: var(--hairline-width) solid var(--border);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-button);
   background: var(--bg-card);
 }
 .inbox-budget-question {
@@ -345,7 +345,7 @@ function raiseBudget(item: PendingInteraction) {
   width: 160px;
   padding: 4px 8px;
   border: var(--hairline-width) solid var(--border);
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--bg-surface);
   color: var(--text-primary);
   font-size: 13px;

@@ -423,7 +423,7 @@ onUnmounted(() => {
   gap: 12px;
   padding: 14px 16px;
   border: var(--hairline-width) solid var(--border-card);
-  border-radius: 10px;
+  border-radius: var(--sig-radius-card);
   background: var(--bg-card);
   cursor: pointer;
   transition: border-color var(--dur-fast) ease, box-shadow var(--dur-fast) ease, transform var(--dur-fast) ease;
@@ -441,7 +441,7 @@ onUnmounted(() => {
   justify-content: center;
   width: 36px;
   height: 36px;
-  border-radius: 8px;
+  border-radius: var(--radius-lg);
   background: var(--primary-bg);
   color: var(--primary);
   font-size: 16px;
@@ -472,7 +472,7 @@ onUnmounted(() => {
   gap: 12px;
 }
 .stat-card {
-  border-radius: 10px !important;
+  border-radius: var(--sig-radius-card) !important;
   background: var(--bg-card) !important;
   box-shadow: var(--shadow-md);
   min-width: 0;
@@ -484,12 +484,12 @@ onUnmounted(() => {
   margin-bottom: 6px;
 }
 .stat-icon { font-size: 18px; color: var(--primary); margin-right: 4px; }
-.stat-trend { font-size: var(--fs-xs); padding: 0 6px; border-radius: 4px; margin-left: 4px; }
+.stat-trend { font-size: var(--fs-xs); padding: 0 6px; border-radius: var(--radius-sm); margin-left: 4px; }
 
 /* ── 图表卡片 ── */
 .charts-row { margin-bottom: 0 !important; }
 .chart-card {
-  border-radius: 10px !important;
+  border-radius: var(--sig-radius-card) !important;
   background: var(--bg-card) !important;
   box-shadow: var(--shadow-md);
 }
@@ -512,7 +512,7 @@ onUnmounted(() => {
 
 /* ── 告警卡片 ── */
 .alert-card {
-  border-radius: 10px !important;
+  border-radius: var(--sig-radius-card) !important;
   background: var(--bg-card) !important;
   box-shadow: var(--shadow-md);
 }

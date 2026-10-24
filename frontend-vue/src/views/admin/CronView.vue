@@ -244,6 +244,7 @@ onUnmounted(() => {
         :pagination="{ pageSize: 8, showSizeChanger: false, showTotal: (n: number) => t('common.total_n', { n }) }"
         size="small"
         row-key="id"
+        :row-class-name="(r) => (r.enabled ? '' : 'row-dimmed')"
       >
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'schedule'">
@@ -380,7 +381,7 @@ onUnmounted(() => {
 
 /* ── 定时任务卡片 ── */
 .cron-card {
-  border-radius: 10px !important;
+  border-radius: var(--sig-radius-card) !important;
   background: var(--bg-card) !important;
   box-shadow: var(--shadow-md);
 }
@@ -411,7 +412,7 @@ onUnmounted(() => {
   color: var(--text-secondary);
   background: var(--bg-secondary);
   padding: 1px 6px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 .cron-task {
   display: block;
@@ -437,6 +438,6 @@ onUnmounted(() => {
   font-size: var(--fs-xs);
   background: var(--bg-secondary);
   padding: 1px 5px;
-  border-radius: 4px;
+  border-radius: var(--radius-sm);
 }
 </style>

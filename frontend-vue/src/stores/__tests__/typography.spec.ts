@@ -11,6 +11,23 @@ beforeEach(() => {
 })
 
 describe('typography store（阅读排版偏好）', () => {
+  it('界面密度：默认档不写 data-density（等于既有几何）', () => {
+    const store = useTypographyStore()
+    store.setDensity('default')
+    expect(document.documentElement.dataset.density).toBeUndefined()
+  })
+
+  it('界面密度：切档写 data-density，非法值回默认档', () => {
+    const store = useTypographyStore()
+    store.setDensity('compact')
+    expect(document.documentElement.dataset.density).toBe('compact')
+    store.setDensity('comfortable')
+    expect(document.documentElement.dataset.density).toBe('comfortable')
+    // 存档被改坏 / 上层传了脏值时不能把非法档写进 DOM：CSS 里没有对应规则，会静默失效
+    store.setDensity('huge' as never)
+    expect(document.documentElement.dataset.density).toBeUndefined()
+  })
+
   it('默认值：正文排版与接入前一致，内容列宽按桌面端放宽到 960px', () => {
     const store = useTypographyStore()
     expect(store.state).toEqual(TYPOGRAPHY_DEFAULTS)

@@ -11,6 +11,7 @@ export default {
   session_busy: 'لا يزال الرد السابق قيد التنفيذ. انتظر انتهاءه أو أصلح الجلسة ثم أعد المحاولة.',
   session_busy_repair: 'إصلاح الجلسة',
   session_busy_auto_recover: 'يُستعاد تلقائيًا خلال ~{n} دقيقة',
+  session_busy_auto_recover_in: 'يُستعاد تلقائيًا بعد {time}',
   session_repaired: 'تم إصلاح الجلسة — يمكنك الإرسال مجددًا',
   not_found: 'المورد المطلوب غير موجود أو تم حذفه.',
   // حدود المعدل والحصة

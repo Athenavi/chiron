@@ -1118,7 +1118,7 @@ function toolCount(a: Agent): number {
 .agent-card.disabled { opacity: 0.6; }
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
 .card-avatar {
-  flex: none; width: 38px; height: 38px; border-radius: 10px;
+  flex: none; width: 38px; height: 38px; border-radius: var(--sig-radius-card);
   background: var(--primary-bg); color: var(--primary);
   display: inline-flex; align-items: center; justify-content: center; font-size: 18px;
 }
@@ -1132,8 +1132,8 @@ function toolCount(a: Agent): number {
 .card-more { color: var(--text-tertiary); }
 .card-meta { display: flex; flex-wrap: wrap; gap: 4px; }
 .card-actions { display: flex; justify-content: flex-end; }
-.card-menu { min-width: 140px; border-radius: 10px; padding: 4px; box-shadow: var(--shadow-lg); }
-.card-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: 6px; }
+.card-menu { min-width: 140px; border-radius: var(--sig-radius-card); padding: 4px; box-shadow: var(--shadow-lg); }
+.card-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: var(--radius-md); }
 .menu-icon { font-size: 14px; }
 
 /* ── 运行记录 ── */
@@ -1170,7 +1170,7 @@ function toolCount(a: Agent): number {
 /* ── 运行结果 ── */
 .run-actions { display: flex; justify-content: flex-end; margin-top: 12px; }
 .run-result { margin-top: 16px; display: flex; flex-direction: column; gap: 10px; }
-.result-block { border: var(--hairline-width) solid var(--border-card); border-radius: 10px; background: var(--bg-secondary); overflow: hidden; }
+.result-block { border: var(--hairline-width) solid var(--border-card); border-radius: var(--sig-radius-card); background: var(--bg-secondary); overflow: hidden; }
 .result-label { padding: 8px 12px; font-size: 12px; color: var(--text-tertiary); border-bottom: var(--hairline-width) solid var(--border-card); }
 .result-output { margin: 0; padding: 12px; font-family: var(--font-mono); font-size: 12.5px; line-height: 1.7; color: var(--text-primary); white-space: pre-wrap; word-break: break-word; max-height: 300px; overflow-y: auto; }
 .result-meta { display: flex; flex-wrap: wrap; gap: 4px; }

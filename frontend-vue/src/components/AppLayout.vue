@@ -336,10 +336,11 @@ async function runQuickCommand() {
       </div>
     </div>
 
-    <!-- 全宽内容区 -->
+    <!-- 全宽内容区。`scroll-fade`：所有工作台页面共用这一个滚动容器，
+         所以滚动渐隐在这里挂一次就覆盖全部（滚到顶/底时遮罩自动收为 0）。 -->
     <main
       :class="{ 'app-content--docked': showDock }"
-      class="app-content"
+      class="app-content scroll-fade"
     >
       <router-view v-slot="{ Component }">
         <!-- 内容区错误边界：某个页面组件抛错时只替换内容区，侧栏/顶栏保持可用 -->
@@ -347,6 +348,7 @@ async function runQuickCommand() {
           <Transition
             mode="out-in"
             name="fade"
+            appear
           >
             <component :is="Component" />
           </Transition>
@@ -905,6 +907,17 @@ async function runQuickCommand() {
 
 .fade-enter-from,
 .fade-leave-to {
+  opacity: 0;
+}
+
+/* 首次进入（appear）走单独的一档：路由切换要快（--dur-normal，否则 out-in
+   的淡出+淡入叠起来会让"点导航"显得迟钝），而直接打开某个页面时用 --dur-page
+   给一点"落定"的余地。Vue 在有 *-appear-* 类时优先用它，没有才回退到 enter。 */
+.fade-appear-active {
+  transition: opacity var(--dur-page) var(--ease-out);
+}
+
+.fade-appear-from {
   opacity: 0;
 }
 </style>

@@ -196,7 +196,7 @@ onMounted(fetchRoles)
 <style scoped>
 .roles-view { padding: 16px 24px; }
 .page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
-.page-title { margin: 0; font-size: 20px; }
+.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 
 /* 空状态统一 */
 .empty-block {

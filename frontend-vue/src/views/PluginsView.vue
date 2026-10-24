@@ -728,7 +728,7 @@ async function testPlugin(p: Plugin) {
 .plugin-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .plugin-card.inactive { opacity: 0.65; }
 .card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon { flex: none; width: 36px; height: 36px; border-radius: 10px; background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
+.card-icon { flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
 .card-titles { flex: 1; min-width: 0; }
 .plugin-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .plugin-desc { display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
@@ -737,13 +737,13 @@ async function testPlugin(p: Plugin) {
 .card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mini-icon { font-size: var(--fs-xs); }
 .action-right { margin-left: auto; display: flex; gap: 2px; }
-.test-result { font-size: 12px; padding: 6px 10px; border-radius: 8px; background: var(--error-bg); color: var(--error); }
+.test-result { font-size: 12px; padding: 6px 10px; border-radius: var(--radius-lg); background: var(--error-bg); color: var(--error); }
 .test-result.ok { background: var(--success-bg); color: var(--success); }
 .plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: var(--hairline-width) solid var(--border-card); padding-top: 10px; }
 .detail-row { display: flex; flex-direction: column; gap: 4px; }
 .detail-label { font-size: var(--fs-xs); color: var(--text-tertiary); font-weight: var(--fw-medium); }
 .detail-code { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); word-break: break-all; }
-.detail-code-block { background: var(--bg-secondary); border-radius: 8px; padding: 8px; }
+.detail-code-block { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 8px; }
 .detail-line { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); word-break: break-all; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
 .form-row { display: flex; flex-direction: column; gap: 6px; }

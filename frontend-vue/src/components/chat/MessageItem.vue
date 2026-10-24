@@ -9,14 +9,14 @@ import katex from 'katex'
 import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue'
 import { Input } from 'ant-design-vue'
 import { notify } from '../../utils/notify'
-import { CopyOutlined, EditOutlined, ReloadOutlined, FileOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, FileOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import { inkCharsFor, inkIndexFor } from './ink'
 import ToolCallCard from './ToolCallCard.vue'
 import ToolResultBlock from './ToolResultBlock.vue'
 import { renderMermaidBlocks } from './mermaidRenderer'
 import { highlightCodeBlocks } from './codeHighlighter'
-import { openImageViewer } from '../common/imageViewerState'
+import { openLightboxFrom, openLightboxFromList } from '../common/lightboxTransition'
 import type { ChatItem, ToolCallItem, ToolResultItem, TextItem, ChatAttachment } from './chat-types'
 import { formatSize } from './chat-types'
 import { resolveMediaUrl } from '../../api'
@@ -28,6 +28,9 @@ const props = defineProps<{
   item: ChatItem
   anchorKey?: number
   highlighted?: boolean
+  /** 是否播放一次入场动效。由父组件按「新到的 id」门控 ——
+   *  transcript 是窗口化的，滚出再滚回会重新挂载行，不门控就会反复重播。 */
+  entering?: boolean
 }>()
 
 /** 正文容器：mermaid 渲染需要拿到已挂载的 DOM */
@@ -64,11 +67,44 @@ function inkIndex(i: number): number {
  * 秒数来自后端的 `params.retry_after_seconds` —— 它是**算出来的**（stale 阈值 + 一次
  * 巡检间隔），不是猜的。只对 `session_busy` 显示：别的失败原因不存在"等一会儿就好"。
  */
-const repairWaitMinutes = computed(() => {
+const repairWaitSeconds = computed(() => {
   const it = props.item
   if (!('errorCode' in it) || it.errorCode !== 'session_busy') return 0
   const sec = 'errorRetryAfterSec' in it ? Number(it.errorRetryAfterSec || 0) : 0
-  return sec > 0 ? Math.max(1, Math.ceil(sec / 60)) : 0
+  return sec > 0 ? Math.ceil(sec) : 0
+})
+
+/**
+ * 等待倒计时（秒）。
+ *
+ * 为什么要有它：`session_busy` 的等待秒数是**后端算出来的**（stale 阈值 + 一次巡检间隔），
+ * 但只显示"约 N 分钟"时用户无法判断"现在点了会不会又是白点一下"。做成秒级倒计时后，
+ * 归零那一刻他立刻知道可以重试了 —— 这也是这条提示存在的全部意义。
+ * 手动重试按钮**始终可用**（我们不做静默自动重发）：倒计时只是解释，不是闸门。
+ */
+const waitLeft = ref(0)
+let waitTimer: ReturnType<typeof setInterval> | null = null
+function stopWaitTimer() {
+  if (waitTimer) { clearInterval(waitTimer); waitTimer = null }
+}
+watch(
+  repairWaitSeconds,
+  (sec) => {
+    stopWaitTimer()
+    waitLeft.value = sec
+    if (sec <= 0) return
+    waitTimer = setInterval(() => {
+      waitLeft.value = Math.max(0, waitLeft.value - 1)
+      if (waitLeft.value === 0) stopWaitTimer()
+    }, 1000)
+  },
+  { immediate: true },
+)
+/** 倒计时文案 m:ss；归零后返回空串（此时只留下"重试"按钮，不再啰嗦）。 */
+const waitLabel = computed(() => {
+  const s = waitLeft.value
+  if (s <= 0) return ''
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
 })
 
 const emit = defineEmits<{
@@ -171,6 +207,8 @@ const attachmentUnwatch = watch(() => props.item, () => { void resolveAttachment
 
 onBeforeUnmount(() => {
   attachmentUnwatch()
+  if (copiedTimer) clearTimeout(copiedTimer)
+  stopWaitTimer()
 })
 
 function onAttachmentImgError(att: ChatAttachment) {
@@ -188,11 +226,20 @@ const timeLabel = computed(() => {
   return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
 })
 
+/** 复制成功的**就地**反馈（CDS v1 §4.1.1 / §4.2.4）：图标画成对勾并驻留 2.5s，
+ *  再按 `saved-check-decay` 缩一点淡出。刻意不再弹 toast —— 光标就在按钮上，
+ *  弹窗反而是二次打扰（代码块里的「复制」有自己的文案反馈，不受影响）。 */
+const copied = ref(false)
+let copiedTimer: ReturnType<typeof setTimeout> | null = null
+
 async function copyMessage() {
   if (props.item.kind !== 'text') return
   try {
     await navigator.clipboard.writeText(props.item.content)
-    notify.success(t('common.copied_2'))
+    copied.value = true
+    if (copiedTimer) clearTimeout(copiedTimer)
+    // 2500ms = style.css 的 --dur-check-decay（TS 侧读不到 CSS 变量，故此处保持一致的值）
+    copiedTimer = setTimeout(() => { copied.value = false }, 2500)
   } catch {
     notify.error(t('errors.copy_failed'))
   }
@@ -239,20 +286,22 @@ function retryFailed() {
 
 // ── P3-B 长消息折叠 ──
 // 助手消息超过阈值时默认折叠，显示前 N 行 + "展开全部"按钮
-const COLLAPSE_THRESHOLD = 2000  // 字符数阈值
-const COLLAPSE_PREVIEW = 600     // 折叠时显示的字符数
+const COLLAPSE_THRESHOLD = 2000  // 字符数阈值：只用来决定"要不要显示折叠按钮"
+/**
+ * 折叠态改用**纯 CSS 裁切 + 底边羽化**（CDS v1 §3.1.1），不再 `slice()` 伪造截断。
+ *
+ * 旧做法把正文截到 600 字符、再在末尾追加一句"已折叠，点击展开"，有三个问题：
+ * ① 用户看到的不是正文（复制、页面搜索都对不上）；② Markdown 结构会断在半句上
+ * （代码块/表格直接坏掉）；③ 高度随内容浮动，对 transcript 的窗口化测量不友好。
+ * 现在整段照常渲染，折叠只由 `.msg-text.collapsed` 的 `max-height: 300px` + `mask-image`
+ * 承担 —— 折叠高度**恒定为 300px**，边缘是羽化而不是硬切。
+ */
 const collapsed = ref(true)
 const isLongMessage = computed(() => {
   if (props.item.kind !== 'text' || props.item.role !== 'assistant') return false
   return props.item.content.length > COLLAPSE_THRESHOLD
 })
-const displayContent = computed(() => {
-  if (props.item.kind !== 'text') return ''
-  if (isLongMessage.value && collapsed.value) {
-    return props.item.content.slice(0, COLLAPSE_PREVIEW) + '\n\n' + t('common.collapsed_click_to_expand')
-  }
-  return props.item.content
-})
+const displayContent = computed(() => (props.item.kind === 'text' ? props.item.content : ''))
 
 // ── P2-D 消息反馈（👍/👎） ──
 // 'up' | 'down' | null；切换反馈，再次点击同方向取消
@@ -271,6 +320,14 @@ md.use(texmath, { engine: katex, delimiters: 'dollars', katexOptions: { throwOnE
  * 正在流的回合）。站内相对链接保持原行为，交给应用自身处理。
  */
 // 签名沿用 markdown-it 的 RenderRule（去掉注解即可由 rules.<name> 推导），不再写 any[]
+/** 代码块复制按钮的两个图标。
+ *  代码块是 `md.renderer` 生成的字符串（v-html），挂不上 antd 图标组件，只能内联 SVG；
+ *  12px 与按钮字号一致，垂直对齐交给 flex（不走 baseline，避免与文字错位）。 */
+const ICON_COPY = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M6 2.75h5.25A1.75 1.75 0 0 1 13 4.5V10" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/><rect x="3" y="5.5" width="7.5" height="9" rx="1.75" fill="none" stroke="currentColor" stroke-width="1.5"/></svg>'
+const ICON_CHECK = '<svg viewBox="0 0 16 16" width="12" height="12" aria-hidden="true" focusable="false"><path d="M3.2 8.6 6.4 11.8 12.8 5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/></svg>'
+/** 每个复制按钮的恢复定时器：连点两次时旧定时器不能提前把新状态收回去。 */
+const copyTimers = new WeakMap<HTMLElement, ReturnType<typeof setTimeout>>()
+
 md.renderer.rules.link_open = (tokens, idx, options, _env, self) => {
   const token = tokens[idx]
   const href = (token?.attrGet?.('href') as string | null) || ''
@@ -294,7 +351,7 @@ md.renderer.rules.fence = (tokens, idx) => {
   const encoded = encodeURIComponent(code)
   const lineCount = code.replace(/\n$/, '').split('\n').length
   const collapsible = lineCount > CODE_COLLAPSE_LINES
-  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('common.n_lines', { n: lineCount })}</span><button class="code-copy-btn" data-code="${encoded}">${t('common.copy')}</button></div>`
+  const header = `<div class="code-block-header"><span class="code-lang">${safeLang}</span><span class="code-lines">${t('common.n_lines', { n: lineCount })}</span><button class="code-copy-btn" type="button" data-code="${encoded}">${ICON_COPY}<span class="code-copy-label">${t('common.copy')}</span></button></div>`
   const body = `<pre><code class="language-${safeLang}" data-lang="${safeLang}">${md.utils.escapeHtml(code)}</code></pre>`
   const toggle = collapsible
     ? `<button class="code-expand-btn" type="button" data-lines="${lineCount}">${t('common.expand_all_n_lines_total', { n: lineCount })}</button>`
@@ -422,14 +479,45 @@ function handleMsgClick(e: MouseEvent) {
     const code = decodeURIComponent(btn.dataset.code || '')
     if (!code) return
     navigator.clipboard.writeText(code).then(() => {
-      btn.textContent = t('common.copied_2')
-      setTimeout(() => { btn.textContent = t('common.copy') }, 2000)
+      // 与消息级复制同一套状态机（CDS v1 §5.5.4）：图标画成对勾、文案改"已复制"，
+      // 2.5s 后由 CSS 的 saved-check-decay 淡出，再恢复原状。
+      const prev = copyTimers.get(btn)
+      if (prev) clearTimeout(prev)
+      btn.classList.add('copied')
+      btn.innerHTML = `${ICON_CHECK}<span class="code-copy-label">${t('common.copied_2')}</span>`
+      copyTimers.set(btn, setTimeout(() => {
+        btn.classList.remove('copied')
+        btn.innerHTML = `${ICON_COPY}<span class="code-copy-label">${t('common.copy')}</span>`
+        copyTimers.delete(btn)
+      }, 2500))
     }).catch(() => { /* clipboard not available */ })
     return
   }
-  // 正文里的图片（markdown 图片由 v-html 生成，挂不上 Vue 事件）交查看器放大
+  // 正文里的图片（markdown 图片由 v-html 生成，挂不上 Vue 事件）交查看器放大。
+  // 把被点的 <img> 一起传进去：灯箱的共享元素形变要从它长出来（CDS v1 §5.2.2）。
   const img = target.closest('img') as HTMLImageElement | null
-  if (img?.src) openImageViewer({ src: img.src, alt: img.alt })
+  if (img?.src) {
+    // 同一条消息里的图片构成一个图集：正文有多张时可直接左右切换，
+    // 而不是"关掉再看下一张"。作用域收在正文块内，避免把相邻消息的图片也卷进来。
+    const scope = img.closest('.msg-text') ?? img.closest('.msg-row')
+    const all = scope ? Array.from(scope.querySelectorAll('img')).filter(i => !!i.src) : []
+    const at = all.indexOf(img)
+    void openLightboxFromList(
+      img,
+      all.length > 1 ? all.map(i => ({ src: i.src, alt: i.alt })) : [{ src: img.src, alt: img.alt }],
+      at > 0 ? at : 0,
+    )
+  }
+}
+
+/** 附件缩略图 → 灯箱：图片附件构成图集，音频/文件附件不参与切换。 */
+function openAttachment(att: ChatAttachment, e: MouseEvent) {
+  const el = e.currentTarget as HTMLElement
+  const all = (props.item.kind === 'text' ? props.item.attachments : undefined)?.filter(a => a.isImage) ?? []
+  const images = all.map(a => ({ src: attachmentUrl(a), alt: a.name }))
+  const at = all.findIndex(a => a.id === att.id)
+  if (images.length > 1) void openLightboxFromList(el, images, at > 0 ? at : 0)
+  else void openLightboxFrom(el, { src: attachmentUrl(att), alt: att.name })
 }
 
 /**
@@ -454,7 +542,7 @@ onUpdated(enhanceContent)
     v-if="item.kind === 'text'"
     v-bind="$attrs"
     class="msg-row"
-    :class="[item.role, { streaming: item.streaming, highlighted: highlighted, 'msg-error': (item as TextItem).error }]"
+    :class="[item.role, { streaming: item.streaming, highlighted: highlighted, 'msg-error': (item as TextItem).error, 'msg-enter': entering }]"
     :data-chat-anchor-key="anchorKey"
     data-time-hover-root
     data-click-delegate
@@ -516,6 +604,7 @@ onUpdated(enhanceContent)
         <div
           v-else-if="pendingLargeRender"
           class="msg-text streaming-text"
+          :class="{ collapsed: isLongMessage && collapsed }"
         >
           {{ displayContent }}
         </div>
@@ -523,12 +612,13 @@ onUpdated(enhanceContent)
           v-else
           ref="msgTextRef"
           class="msg-text"
+          :class="{ collapsed: isLongMessage && collapsed }"
           v-html="renderedHtml"
         />
         <!-- P3-B: 长消息展开/折叠按钮 -->
         <button
           v-if="isLongMessage"
-          class="collapse-toggle"
+          class="collapse-toggle btn-sm"
           type="button"
           @click.stop="collapsed = !collapsed"
         >
@@ -550,7 +640,7 @@ onUpdated(enhanceContent)
               class="msg-attachment-img"
               loading="lazy"
               @error="onAttachmentImgError(att)"
-              @click.stop="openImageViewer({ src: attachmentUrl(att), alt: att.name })"
+              @click.stop="openAttachment(att, $event)"
             >
             <div
               v-else-if="att.isAudio"
@@ -619,9 +709,9 @@ onUpdated(enhanceContent)
             {{ $t('errors.session_busy_repair') }}
           </button>
           <span
-            v-if="repairWaitMinutes"
+            v-if="waitLabel"
             class="repair-hint"
-          >{{ $t('errors.session_busy_auto_recover', { n: repairWaitMinutes }) }}</span>
+          >{{ $t('errors.session_busy_auto_recover_in', { time: waitLabel }) }}</span>
           <button
             class="retry-btn"
             type="button"
@@ -637,11 +727,13 @@ onUpdated(enhanceContent)
           <span class="msg-time tnum">{{ timeLabel }}</span>
           <button
             class="msg-action"
+            :class="{ copied }"
             type="button"
-            :title="$t('common.copy')"
+            :title="copied ? $t('common.copied_2') : $t('common.copy')"
             @click.stop="copyMessage"
           >
-            <CopyOutlined />
+            <CheckOutlined v-if="copied" />
+            <CopyOutlined v-else />
           </button>
           <!-- 引用整条消息：与「选中文本引用」走同一出口，省去手动划选长回复 -->
           <button
@@ -787,17 +879,42 @@ onUpdated(enhanceContent)
 }
 .notice-icon { flex: none; }
 .msg-row.user { display: flex; justify-content: flex-end; }
+/* 纵向律动（CDS v1 §3.1.2）：同一回合内的行距 = 用户选的「消息间距」；
+   用户消息开启新回合，所以它上方按 1.5 倍放大 —— 手册给的 turn gap / item gap
+   正是 0.75 : 0.50 的比值。这样既保留用户那个旋钮，又让"换人说话"真正分段。 */
+.msg-row.user { padding-top: calc(var(--chat-msg-gap, 6px) * 1.5); }
+/* 新消息入场（CDS v1 §4.1.1 的 `message-fade-up`）：只用 transform/opacity，
+   不碰布局，所以不影响行高测量（transcript 窗口化的前提）。 */
+.msg-row.msg-enter { animation: cdsMsgEnter var(--dur-slow) var(--ease-out); }
+/* 用户自己发的那条走单独的入场（CDS v1 §4.1.1 的 `code-user-bubble-enter`）：
+   从 0.92 倍 + 下移 6px 长回来，比通用的 fade-up 更像"发出去了"。 */
+.msg-row.user.msg-enter { animation-name: cdsUserBubbleEnter; }
+@keyframes cdsMsgEnter {
+  from { opacity: 0; transform: translateY(10px); }
+  to { opacity: 1; transform: none; }
+}
+@keyframes cdsUserBubbleEnter {
+  from { opacity: 0; transform: scale(0.92) translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
 /* 轨迹跳转高亮闪烁（deepseek data-current 聚焦反馈） */
 .msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash var(--dur-slow) ease-out; }
 @keyframes trajectoryFlash { 0% { background: var(--primary-bg); } 100% { background: transparent; } }
 .msg-content { min-width: 0; }
-.msg-text { font-size: var(--chat-text-size, 16px); line-height: var(--chat-text-leading, 1.75); color: var(--text-primary);
-  /* 行末单字保护：浏览器会在最后一行避免孤字（不支持时无副作用） */
+.msg-text { font-size: var(--chat-text-size, 16px); line-height: var(--chat-text-leading, 1.75); color: var(--text-primary);  /* 行末单字保护：浏览器会在最后一行避免孤字（不支持时无副作用） */
   text-wrap: pretty;
   /* 长 URL / 英文串不撑破容器；代码块有自己的横向滚动，不受影响 */
   overflow-wrap: anywhere;
 }
 .streaming-text { white-space: pre-wrap; word-break: break-word; }
+/* 折叠态（CDS v1 §3.1.1）：真实内容由 max-height 裁切，底边用 3rem 渐变蒙版羽化。
+   高度恒定为 300px —— 这对 transcript 的窗口化测量比"随内容浮动"友好得多。 */
+.msg-text.collapsed {
+  max-height: 300px;
+  overflow: hidden;
+  mask-image: linear-gradient(to bottom, black calc(100% - 3rem), transparent);
+  -webkit-mask-image: linear-gradient(to bottom, black calc(100% - 3rem), transparent);
+}
 /* 水墨晕染：极快高斯模糊 → 对焦；相邻字错开（步长走 token，见 style.css :root） */
 .ink {
   animation: inkIn var(--dur-ink) var(--ease-out) both;
@@ -814,7 +931,14 @@ onUpdated(enhanceContent)
   .action-pop { animation: none; }
 }
 /* 会话修复提示：显示自动恢复的最坏等待（后端算的 stale 阈值 + 一次巡检间隔） */
-.repair-hint { font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+/* 等待倒计时：从"灰字备注"升级为 warning 药丸 —— 它是当前唯一能解释
+   "为什么现在点了也没用 / 还要等多久"的信息，不该和普通说明文字同色同权。 */
+.repair-hint {
+  display: inline-flex; align-items: center; padding: 2px 8px;
+  border-radius: var(--radius-full);
+  background: var(--warning-bg); color: var(--warning);
+  font-size: var(--fs-xs); font-variant-numeric: tabular-nums;
+}
 /* UI/UX：流式生成光标（deepseek 打字效果） */
 .streaming-text::after {
   content: '▍';
@@ -872,8 +996,12 @@ onUpdated(enhanceContent)
 .msg-text :deep(.code-block-header) { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px 14px; background: var(--bg-secondary); }
 .msg-text :deep(.code-lang) { font-family: var(--font-mono); font-size: 12px; line-height: 18px; color: var(--text-primary); }
 .msg-text :deep(.code-lines) { flex: 1; min-width: 0; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
-.msg-text :deep(.code-copy-btn) { background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 0; }
+.msg-text :deep(.code-copy-btn) { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 0; }
 .msg-text :deep(.code-copy-btn:hover) { color: var(--primary); }
+/* 复制成功：对勾先画出来、文案改"已复制"，2.5s 后按 saved-check-decay 淡出恢复 ——
+   与消息级复制是同一套状态机（CDS v1 §5.5.4），不再只换一行文案。 */
+.msg-text :deep(.code-copy-btn.copied) { color: var(--success); animation: cdsCheckDecay var(--dur-check-decay) linear; }
+.msg-text :deep(.code-copy-btn svg) { flex: none; }
 /* 长代码默认折叠：给一段可读预览 + 底部渐隐提示，展开按钮写明总行数 */
 .msg-text :deep(.code-block-wrapper[data-collapsed='1'] pre) { max-height: 460px; overflow: hidden; }
 .msg-text :deep(.code-block-wrapper[data-collapsed='1']) { position: relative; }
@@ -923,6 +1051,9 @@ onUpdated(enhanceContent)
 .msg-action.active { color: var(--primary); opacity: 1; }
 .msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: var(--on-solid); font-size: 12px; gap: 4px; opacity: 1; }
 .msg-action.continue-btn:hover { opacity: 0.9; background: var(--primary); color: var(--on-solid); }
+/* 复制成功：对勾先"画"出来，再驻留 2.5s 衰减（CDS v1 §4.2.4 的 check-draw + saved-check-decay） */
+.msg-action.copied { color: var(--success); animation: cdsCheckDecay var(--dur-check-decay) linear; }
+.msg-action.copied :deep(svg) { animation: cdsCheckDraw var(--dur-normal) var(--ease-out); }
 
 /* P3-A: 用 CSS 变量覆盖 hljs token 颜色，暗色模式自动跟随 .dark class */
 .hljs { color: var(--hljs-fg); background: var(--hljs-bg); }
@@ -935,8 +1066,10 @@ onUpdated(enhanceContent)
 .hljs-meta, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--hljs-meta); }
 
 /* P3-B: 长消息折叠 */
-.collapse-toggle { margin-top: 8px; padding: 4px 12px; border: var(--hairline-width) solid var(--border); border-radius: var(--sig-radius-button); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
-.collapse-toggle:hover { border-color: var(--primary); color: var(--primary); }
+/* 发丝环改用 inset 阴影而不是 border：不参与盒模型，所以"未选中 ↔ 选中"切换
+   不会带来 1px 重排与尺寸抖动（CDS §1.4.1，与本文档「单闭合边框原则」同源）。 */
+.collapse-toggle { margin-top: 8px; background: var(--bg-card); color: var(--text-secondary); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
+.collapse-toggle:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 .collapse-toggle:active { transform: scale(0.97); }
 /* 点赞/点踩：按下走"过阻尼"（60ms 跟手），松开由上面的 --ease-spring 回弹一下 */
 .msg-action:active {
@@ -999,13 +1132,13 @@ onUpdated(enhanceContent)
 /* ── P1-2 附件展示 ── */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); object-fit: cover; }
-.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease; }
-.msg-attachment-file:hover { border-color: var(--primary); color: var(--primary); }
+.msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
+.msg-attachment-file:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 .msg-attachment-file .att-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .msg-attachment-file .att-size { color: var(--text-tertiary); font-size: 12px; }
 /* 音频播放器 */
 .msg-attachment-audio { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 300px; padding: 8px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); }
-.msg-audio-player { width: 100%; height: 40px; border-radius: 4px; }
+.msg-audio-player { width: 100%; height: 40px; border-radius: var(--radius-sm); }
 .msg-audio-player::-webkit-media-controls-panel { background: var(--bg-card); }
 .att-audio-name { font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
@@ -1020,18 +1153,18 @@ onUpdated(enhanceContent)
 }
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;
-  padding: 2px 10px; border-radius: 10px;
+  padding: 2px 10px; border-radius: var(--sig-radius-button);
   font-size: 12px; line-height: 18px; text-decoration: none; cursor: pointer;
   background: var(--bg-secondary); color: var(--text-secondary);
-  border: var(--hairline-width) solid var(--border);
-  transition: border-color var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
+  box-shadow: inset 0 0 0 var(--hairline-width) var(--border);
+  transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
-.source-chip:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
-.source-chip.kb { background: var(--primary-bg); color: var(--primary); border-color: transparent; }
-.source-chip.kb:hover { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
+.source-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); background: var(--primary-bg); }
+.source-chip.kb { background: var(--primary-bg); color: var(--primary); box-shadow: none; }
+.source-chip.kb:hover { background: var(--primary); color: var(--on-solid); box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); }
 .source-chip.agent { background: var(--bg-hover); color: var(--text-primary); }
-.source-chip.trace { background: var(--bg-card); color: var(--text-secondary); border-color: var(--border); font-family: var(--font-mono); font-size: var(--fs-xs); }
-.source-chip.trace:hover { border-color: var(--primary); color: var(--primary); background: var(--primary-bg); }
+.source-chip.trace { background: var(--bg-card); color: var(--text-secondary); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); font-family: var(--font-mono); font-size: var(--fs-xs); }
+.source-chip.trace:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); background: var(--primary-bg); }
 
 /* ── P1-3 错误状态 ── */
 .msg-row.msg-error .msg-text { opacity: 0.6; }
