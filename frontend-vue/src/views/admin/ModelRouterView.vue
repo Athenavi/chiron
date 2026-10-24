@@ -153,7 +153,7 @@ onMounted(fetchRoutes)
 <template>
   <div class="model-router-view">
     <div class="page-header">
-      <h2 class="page-title">
+      <h2 class="page-title page-title-sm">
         {{ $t('agent.model_routing_control') }}
       </h2>
       <a-button
@@ -269,18 +269,6 @@ onMounted(fetchRoutes)
 <style scoped>
 .model-router-view {
   padding: 0;
-}
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.page-title {
-  margin: 0;
-  font-size: 20px;
-  font-weight: var(--fw-semibold);
-  letter-spacing: -0.01em;
 }
 :deep(.code-editor) {
   font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;

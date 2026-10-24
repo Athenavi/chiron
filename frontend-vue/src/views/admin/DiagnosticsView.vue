@@ -2,7 +2,7 @@
   <div class="diagnostics-view">
     <div class="page-header">
       <div>
-        <h2 class="page-title">
+        <h2 class="page-title page-title-sm">
           {{ $t('admin.diagnostics') }}
         </h2>
         <p class="page-desc">
@@ -161,8 +161,6 @@ onMounted(load)
 
 <style scoped>
 .diagnostics-view { padding: 4px; }
-.page-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; margin-bottom: 12px; }
-.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .page-desc { margin: 4px 0 0; font-size: 12px; color: var(--text-secondary); }
 .summary { margin-bottom: 16px; }
 .group { margin-bottom: 18px; }

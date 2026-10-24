@@ -232,6 +232,8 @@ export default {
   failed_to_retire: "فشل الإحالة للتقاعد",
   network_error_2: "خطأ شبكة",
   network_connection_failed_please_check_your_network_and_retry: "فشل اتصال الشبكة، يرجى التحقق من شبكتك والمحاولة",
+  server_busy_retrying_automatically_in_n_seconds: "الخادم مشغول، ستتم إعادة المحاولة تلقائيًا خلال {n} ثانية",
+  server_busy_please_try_again_later: "الخادم مشغول، يرجى المحاولة لاحقًا",
   no_matching_user_message_found_cannot_regenerate: "لم يُعثر على رسالة المستخدم المطابقة، تعذّر التوليد مجددًا",
   no_matching_results_found: "لم يُعثر على نتائج مطابقة",
   no_relevant_content_found: "لم يُعثر على محتوى ذي صلة",

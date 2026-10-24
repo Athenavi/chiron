@@ -85,12 +85,12 @@ onMounted(load)
 
 <template>
   <div class="kb-settings-page">
-    <div class="page-head">
+    <div class="page-header">
       <Button type="text" class="back-btn" @click="router.push('/knowledge')">
         <ArrowLeftOutlined />
       </Button>
-      <div class="page-head-text">
-        <h1 class="page-title">{{ t('knowledge.knowledge_settings') }}</h1>
+      <div class="page-header-text">
+        <h1 class="page-title page-title-sm">{{ t('knowledge.knowledge_settings') }}</h1>
         <p class="page-sub">{{ t('knowledge.knowledge_settings_hint') }}</p>
       </div>
     </div>
@@ -172,18 +172,6 @@ onMounted(load)
   padding: 24px;
   max-width: 860px;
   margin: 0 auto;
-}
-.page-head {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
-  margin-bottom: 20px;
-}
-.page-title {
-  margin: 0;
-  font-size: 20px;
-  font-weight: var(--fw-semibold);
-  letter-spacing: -0.01em;
 }
 .page-sub {
   margin: 4px 0 0;

@@ -237,6 +237,8 @@ export default {
   failed_to_retire: "退役失败",
   network_error_2: "网络错误",
   network_connection_failed_please_check_your_network_and_retry: "网络连接失败，请检查网络后重试",
+  server_busy_retrying_automatically_in_n_seconds: "服务繁忙，{n} 秒后自动重试",
+  server_busy_please_try_again_later: "服务繁忙，请稍后再试",
   no_matching_user_message_found_cannot_regenerate: "未找到对应的用户消息，无法重新生成",
   no_matching_results_found: "未找到匹配结果",
   no_relevant_content_found: "未找到相关内容",

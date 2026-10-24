@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmptyState from '@/components/common/EmptyState.vue'
 import { ref, computed, onMounted } from 'vue'
 import { Card, Descriptions, DescriptionsItem, Button, Table, Spin, message } from 'ant-design-vue'
 import { use } from 'echarts/core'
@@ -202,9 +203,7 @@ onMounted(() => {
           :scroll="{ x: 720 }"
         >
           <template #emptyText>
-            <div class="empty-block">
-              <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
-            </div>
+            <EmptyState :description="$t('common.no_data_yet')" />
           </template>
         </Table>
       </Card>
@@ -223,16 +222,6 @@ onMounted(() => {
 }
 
 /* 空状态统一 */
-.empty-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 28px 0;
-  color: var(--text-tertiary);
-}
-.empty-icon { font-size: 26px; line-height: 1; opacity: 0.8; }
-.empty-text { font-size: 13px; }
 
 /* 移动端:图表压缩高度、卡片头换行、触控目标 */
 @media (max-width: 768px) {

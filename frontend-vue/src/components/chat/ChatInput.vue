@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { ref, onMounted, onUnmounted, watch, computed, nextTick, h } from 'vue'
 import { Input, Button, Select, Tooltip, Popover } from 'ant-design-vue'
-import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, FileOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
+import { SendOutlined, StopOutlined, PaperClipOutlined, CloseOutlined, BranchesOutlined, AudioOutlined, FolderOpenOutlined, SettingOutlined, ThunderboltOutlined } from '@ant-design/icons-vue'
 import api, { uploadFile, listModels } from '../../api'
 import type { LlmModel } from '../../api'
 import type { ChatAttachment } from './chat-types'
@@ -14,6 +14,7 @@ import { TOUR_ANCHORS } from '../../composables/useOnboardingTour'
 import { classifyEnter } from './ime'
 import { MIC_BAND_COUNT, useMicBars } from './useMicBars'
 import { playUiSound } from '../../utils/uiSounds'
+import { fileTypeBadge } from '../../utils/fileName'
 
 import { useI18n } from 'vue-i18n'
 const { t: tr } = useI18n()
@@ -507,7 +508,36 @@ function pickMention(item: { type: string; id: string; name: string }) {
 function onComposerInput() {
   syncMention()
   onSlashInput()
+  // 清空后解除手动高度 —— 否则用户会卡在一个空的高框里
+  if (!input.value.trim()) manualHeight.value = 0
 }
+
+/**
+ * 输入框的**手动高度**（0 = 未接管，交给 antd 的 autosize）。
+ *
+ * 为什么需要接管：antd 的 autosize 每次输入都按内容重写内联 `height`，
+ * 用户拖出来的高度会在下一次按键时被冲掉。所以拖拽一旦发生就把高度固化，
+ * 并用 `!important` 压过 antd 的写入（CSS 里只有它能赢内联样式）。
+ * 上限仍由 `.input-field` 的 max-height 兜住，不会拖出屏幕外。
+ */
+const manualHeight = ref(0)
+
+function composerTextarea(): HTMLTextAreaElement | null {
+  const direct = textareaRef.value as HTMLTextAreaElement | undefined
+  if (direct && typeof direct.scrollHeight === 'number') return direct
+  return document.querySelector<HTMLTextAreaElement>('textarea.input-field')
+}
+
+/** 拖拽结束的判据：实际高度 > 内容所需高度。autosize 会让两者相等，
+ *  所以"高出内容"只可能是人拖出来的。 */
+function captureManualHeight() {
+  const el = composerTextarea()
+  if (!el) return
+  if (el.offsetHeight > el.scrollHeight + 2) manualHeight.value = el.offsetHeight
+}
+
+onMounted(() => document.addEventListener('pointerup', captureManualHeight))
+onUnmounted(() => document.removeEventListener('pointerup', captureManualHeight))
 
 /** `compositionend` 时刻（`performance.now()`）：CJK 伴生 Enter 守卫的判据，见 `./ime.ts`。 */
 const lastCompositionEndAt = ref(0)
@@ -1059,7 +1089,8 @@ defineExpose({ insertText, setCommandDraft })
             v-else
             class="att-thumb-file"
           >
-            <FileOutlined />
+            <!-- 类型徽标取代通用文件图标（CDS v1/02 §2.5.4）：TS / PY / PDF 一眼可辨 -->
+            <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
             <span class="att-thumb-name">{{ att.name }}</span>
           </div>
           <button
@@ -1080,6 +1111,8 @@ defineExpose({ insertText, setCommandDraft })
         :auto-size="{ minRows: 3, maxRows: 8 }"
         :placeholder="inputPlaceholder"
         class="input-field"
+        :class="{ 'is-manual-height': manualHeight > 0 }"
+        :style="manualHeight ? { '--manual-h': `${manualHeight}px` } : undefined"
         :disabled="disabled"
         :aria-label="$t('chat.message_input_box')"
         @keydown="onKeydown"
@@ -1458,6 +1491,15 @@ defineExpose({ insertText, setCommandDraft })
   .mode-label { display: none; }              /* 极窄：标签去掉，只留下拉本体 */
   .model-select { width: 118px; }
 }
+/* 极窄容器的**防溢出安全网**（CDS v1/06 §6.6 的第 4 档 `<320px`）：
+   到这个宽度，固定 px 的宽度会把模型选择器顶出卡片边界。这里改用**容器宽度单位**
+   兜底而不是再写一个更小的 px —— 分栏、嵌入侧栏等"比 320px 还窄"的场景也能
+   继续按比例收缩，而不是在某个阈值以下突然溢出。 */
+@container (max-width: 320px) {
+  .model-select { width: min(92px, 28cqw); }
+  .input-actions { gap: 4px; }
+  .run-hint { display: none; }                /* "生成中 12s" 让位给必需控件 */
+}
 @media (max-width: 768px) {
   .input-area { padding: 0 12px calc(12px + env(safe-area-inset-bottom)); }
   .input-card { --input-card-r: 14px; --input-card-pad: 10px; border-radius: var(--input-card-r); padding: 10px 12px 8px; }
@@ -1491,12 +1533,33 @@ defineExpose({ insertText, setCommandDraft })
   color: var(--text-tertiary); font-size: var(--fs-xs); padding: 0 2px;
 }
 .context-chip__x:hover { color: var(--danger, var(--error)); }
-.att-thumb { position: relative; width: 64px; height: 64px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); overflow: hidden; }
+/* 7.5rem 正方形磁贴（CDS v1/02 §2.5.1）：120px 是官方基准值。本仓取整数 120px
+   而不是 `calc(7.5rem * rem-scale)` 的 112.9px —— 磁贴是图片的"预览框"，
+   尺寸稳定比跟随缩放因子更要紧。移动端在下面按视口收窄。 */
+.att-thumb { position: relative; width: 120px; height: 120px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); overflow: hidden; }
 .att-thumb-img { width: 100%; height: 100%; object-fit: cover; }
-.att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; padding: 4px; color: var(--text-tertiary); font-size: var(--fs-xs); }
-.att-thumb-name { max-width: 56px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.att-remove { position: absolute; top: 2px; right: 2px; width: 18px; height: 18px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: var(--fs-xs); }
+.att-thumb-file { width: 100%; height: 100%; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 6px; padding: 8px; color: var(--text-tertiary); font-size: var(--fs-xs); }
+.att-thumb-name { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.att-remove { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: var(--fs-xs); transition: background var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out); }
 .att-remove:hover { background: var(--error); }
+/* 按压回馈（CDS 的 `active:scale-90`）：磁贴右上角的小圆钮，不缩一下几乎感觉不到点中了 */
+.att-remove:active { transform: scale(0.9); }
+/* 移动端磁贴收窄：120px 在 375px 宽的屏上只放得下 2 个（还要留输入卡片的边距），
+   88px 能并排 3 个；≤576px 再降到 72px 留出余量。形态仍是磁贴，不是退回成 chip。 */
+@media (max-width: 768px) {
+  .att-thumb { width: 88px; height: 88px; }
+  .att-thumb-file { gap: 4px; padding: 4px; }
+  .att-thumb-name { max-width: 72px; }
+}
+@media (max-width: 576px) {
+  .att-thumb { width: 72px; height: 72px; }
+  .att-thumb-name { max-width: 58px; }
+}
+/* 输入框的手动高度：`resize: vertical` 让用户能拖，`.is-manual-height` 用 !important
+   压过 antd autosize 写的内联 height —— 不接管的话下一次按键就会把高度冲回内容高度。
+   上限交给输入框自己的 max-height（autosize 的 maxRows=8 之外再兜一层）。 */
+.input-field { resize: vertical; }
+.input-field.is-manual-height { height: var(--manual-h) !important; }
 .attach-btn { color: var(--text-tertiary); display: inline-flex; align-items: center; justify-content: center; }
 .attach-btn:hover { color: var(--primary); }
 /* 录音按钮 */

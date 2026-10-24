@@ -174,7 +174,19 @@ async function stickToBottom() {
    品牌色内环 + 呼吸漫反射（1.8s 正弦）。它只描在"思考体"而不是整行：
    行是 28px 满宽，光晕扩散到相邻行会显脏。 */
 .reasoning-row[data-state='running'] .think-body {
-  animation: cdsWlGlow var(--dur-glow-a) ease-in-out infinite;
+  /* 外框光晕（cdsWlGlow，管盒子）+ 字面扫光（cdsShimmerText，管文字）：
+     两者分工不同，可以共存 —— 光晕说"这里有东西在动"，扫光说"正在一句一句地想"。 */
+  background-image: linear-gradient(100deg,
+    var(--text-secondary) 40%,
+    var(--text-primary) 50%,
+    var(--text-secondary) 60%);
+  background-size: 200% 100%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  animation:
+    cdsWlGlow var(--dur-glow-a) ease-in-out infinite,
+    cdsShimmerText var(--dur-shimmer) cubic-bezier(0.714, 0.121, 0.211, 0.888) infinite;
 }
 .think-bottom {
   position: absolute; right: 10px; bottom: 10px;

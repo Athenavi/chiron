@@ -108,7 +108,12 @@ export const useTypographyStore = defineStore('typography', () => {
     const root = document.documentElement
     root.style.setProperty('--chat-text-size', `${state.value.textSize}px`)
     root.style.setProperty('--chat-text-leading', String(state.value.leading))
-    root.style.setProperty('--chat-msg-gap', `${state.value.gap}px`)
+    // 间距写成**相对公式**而不是固定 px（CDS v1/03 的 chat-body × chat-leading 基准）：
+    // 字号或行高调大时行距要跟着放大 —— 固定 px 会让"字变大之后行反而更挤"。
+    // 比例由「用户选的 px 值 ÷ 默认字号行距积」反推，所以**默认观感与改前逐像素相同**，
+    // 已有存档（gap: 6）也不需要迁移。
+    const gapRatio = state.value.gap / (TYPOGRAPHY_DEFAULTS.textSize * TYPOGRAPHY_DEFAULTS.leading)
+    root.style.setProperty('--chat-msg-gap', `calc(var(--chat-text-size) * var(--chat-text-leading) * ${gapRatio.toFixed(3)})`)
     root.style.setProperty('--chat-content-width', `${state.value.contentWidth}px`)
     // 密度走属性而不是变量：档位要覆盖一批 --btn-* / --chat-row-height，
     // 用 CSS 里的 html[data-density='…'] 规则比在 JS 里逐个 setProperty 更集中也更好审。

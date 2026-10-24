@@ -232,6 +232,8 @@ export default {
   failed_to_retire: "Failed to retire",
   network_error_2: "Network error",
   network_connection_failed_please_check_your_network_and_retry: "Network connection failed, please check your network and retry",
+  server_busy_retrying_automatically_in_n_seconds: "Server busy, retrying automatically in {n}s",
+  server_busy_please_try_again_later: "Server busy, please try again later",
   no_matching_user_message_found_cannot_regenerate: "No matching user message found, cannot regenerate",
   no_matching_results_found: "No matching results found",
   no_relevant_content_found: "No relevant content found",

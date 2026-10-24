@@ -33,7 +33,7 @@ describe('typography store（阅读排版偏好）', () => {
     expect(store.state).toEqual(TYPOGRAPHY_DEFAULTS)
     expect(varOf('--chat-text-size')).toBe('16px')
     expect(varOf('--chat-text-leading')).toBe('1.75')
-    expect(varOf('--chat-msg-gap')).toBe('6px')
+    expect(varOf('--chat-msg-gap')).toBe('calc(var(--chat-text-size) * var(--chat-text-leading) * 0.214)')
     expect(varOf('--chat-content-width')).toBe('960px')
   })
 
@@ -49,7 +49,7 @@ describe('typography store（阅读排版偏好）', () => {
     store.setLeading(2)
     store.setGap(14)
     expect(varOf('--chat-text-leading')).toBe('2')
-    expect(varOf('--chat-msg-gap')).toBe('14px')
+    expect(varOf('--chat-msg-gap')).toBe('calc(var(--chat-text-size) * var(--chat-text-leading) * 0.500)')
   })
 
   it('内容宽度可调并持久化', () => {

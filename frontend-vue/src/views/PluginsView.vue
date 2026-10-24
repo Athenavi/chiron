@@ -327,8 +327,8 @@ async function testPlugin(p: Plugin) {
 
 <template>
   <div class="plugins-page">
-    <div class="page-head">
-      <div class="page-head-text">
+    <div class="page-header">
+      <div class="page-header-text">
         <h1 class="page-title">
           {{ $t('common.plugin') }}
         </h1>
@@ -336,7 +336,7 @@ async function testPlugin(p: Plugin) {
           {{ $t('agent.manage_mcp_server_config_to_extend_agent_tool_capabilities') }}
         </p>
       </div>
-      <div class="page-head-actions">
+      <div class="page-header-actions">
         <label class="auth-label">
           <span>{{ $t('common.allow_plugin_commands') }}</span>
           <Switch
@@ -423,7 +423,7 @@ async function testPlugin(p: Plugin) {
 
         <div
           v-else
-          class="plugin-grid"
+          class="plugin-grid stagger-in"
         >
           <div
             v-for="p in filtered"
@@ -706,10 +706,8 @@ async function testPlugin(p: Plugin) {
 
 <style scoped>
 .plugins-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.page-head-actions { display: flex; align-items: center; gap: 16px; }
+.page-header-actions { display: flex; align-items: center; gap: 16px; }
 .auth-label { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-tertiary); }
-.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .plugins-tabs :deep(.ant-tabs-nav) { margin-bottom: 16px; }
 .list-toolbar { margin-bottom: 16px; }
@@ -757,8 +755,7 @@ async function testPlugin(p: Plugin) {
 
 @media (max-width: 640px) {
   .plugin-grid { grid-template-columns: 1fr; }
-  .page-head { flex-direction: column; align-items: flex-start; }
-  .page-head-actions { width: 100%; flex-direction: column; align-items: stretch; gap: 10px; }
-  .page-head-actions > .ant-btn { width: 100%; }
+  .page-header-actions { width: 100%; flex-direction: column; align-items: stretch; gap: 10px; }
+  .page-header-actions > .ant-btn { width: 100%; }
 }
 </style>

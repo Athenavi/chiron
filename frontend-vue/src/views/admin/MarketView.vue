@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmptyState from '@/components/common/EmptyState.vue'
 import { ref, reactive, onMounted } from 'vue'
 import { message, Modal } from 'ant-design-vue'
 import type { TableColumnsType } from 'ant-design-vue'
@@ -206,7 +207,7 @@ onMounted(fetchItems)
 <template>
   <div class="market-view">
     <div class="page-header">
-      <h2 class="page-title">
+      <h2 class="page-title page-title-sm">
         {{ $t('common.enterprise_capability_marketplace') }}
       </h2>
       <a-space class="filter-bar">
@@ -270,9 +271,7 @@ onMounted(fetchItems)
       size="small"
     >
       <template #emptyText>
-        <div class="empty-block">
-          <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
-        </div>
+        <EmptyState :description="$t('common.no_data_yet')" />
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'status'">
@@ -390,9 +389,7 @@ onMounted(fetchItems)
         style="margin-top: 16px"
       >
         <template #emptyText>
-          <div class="empty-block">
-            <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
-          </div>
+          <EmptyState :description="$t('common.no_data_yet')" />
         </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'action'">
@@ -413,22 +410,10 @@ onMounted(fetchItems)
 
 <style scoped>
 .market-view { padding: 16px 24px; }
-.page-header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; gap: 12px; }
-.page-title { margin: 0; font-size: 20px; font-weight: var(--fw-semibold); letter-spacing: -0.01em; }
 .grant-form { display: flex; gap: 8px; align-items: center; }
 .hint { color: var(--text-secondary); font-size: 12px; }
 
 /* 空状态统一 */
-.empty-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 28px 0;
-  color: var(--text-tertiary);
-}
-.empty-icon { font-size: 26px; line-height: 1; opacity: 0.8; }
-.empty-text { font-size: 13px; }
 
 /* JSON 编辑区:等宽字体、min-height 自适应、可纵向拉伸 */
 .market-view :deep(.code-editor) {

@@ -148,6 +148,9 @@ function decline() {
 .ask-option:disabled { opacity: 0.5; cursor: not-allowed; }
 /* 按下塌陷（CDS 胶囊形变族），见 style.css §5 */
 .ask-option:active:not(:disabled) { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
+/* 入场：复用 .pill-pop 的两段式过冲 —— 选项是被"递"到用户面前的，弹一下比直接出现
+   更贴合它"等你选"的语义。:active 时由上面的 dip 接管（同名属性后者赢）。 */
+.ask-option { animation: cdsPillPopUp calc(var(--dur-normal) * .4) var(--ease-out), cdsPillPopDown calc(var(--dur-normal) * .6) var(--ease-overshoot) calc(var(--dur-normal) * .4); }
 .ask-option:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 .ask-free { display: flex; gap: 8px; }
 .ask-input {

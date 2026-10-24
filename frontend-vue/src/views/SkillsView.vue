@@ -329,8 +329,8 @@ async function handleGenerate() {
 
 <template>
   <div class="skills-page">
-    <div class="page-head">
-      <div class="page-head-text">
+    <div class="page-header">
+      <div class="page-header-text">
         <h1 class="page-title">
           {{ $t('agent.skill') }}
         </h1>
@@ -407,7 +407,7 @@ async function handleGenerate() {
 
         <div
           v-else
-          class="skill-grid"
+          class="skill-grid stagger-in"
         >
           <div
             v-for="s in filteredSkills"
@@ -778,8 +778,6 @@ async function handleGenerate() {
 
 <style scoped>
 .skills-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 20px; }
-.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .skills-tabs :deep(.ant-tabs-nav) { margin-bottom: 20px; }
 
@@ -848,7 +846,5 @@ async function handleGenerate() {
 
 @media (max-width: 640px) {
   .skill-grid { grid-template-columns: 1fr; }
-  .page-head { flex-direction: column; align-items: flex-start; }
-  .page-head > .ant-btn { width: 100%; }
 }
 </style>

@@ -204,8 +204,8 @@ function statusLabel(status: string): string {
 
 <template>
   <div class="kb-page">
-    <div class="page-head">
-      <div class="page-head-text">
+    <div class="page-header">
+      <div class="page-header-text">
         <h1 class="page-title">
           {{ $t('knowledge.knowledge_base') }}
         </h1>
@@ -275,7 +275,7 @@ function statusLabel(status: string): string {
         <h2 class="section-title">
           {{ $t('knowledge.my_knowledge_base') }}
         </h2>
-        <div class="kb-grid">
+        <div class="kb-grid stagger-in">
           <div
             v-for="kb in privateKbs"
             :key="kb.id"
@@ -375,7 +375,7 @@ function statusLabel(status: string): string {
         <h2 class="section-title">
           {{ $t('knowledge.public_knowledge_base') }}
         </h2>
-        <div class="kb-grid">
+        <div class="kb-grid stagger-in">
           <div
             v-for="kb in publicKbs"
             :key="kb.id"
@@ -531,8 +531,6 @@ function statusLabel(status: string): string {
 
 <style scoped>
 .kb-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
-.page-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-bottom: 16px; }
-.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .list-toolbar { margin-bottom: 16px; }
 .search-input { max-width: 320px; }
@@ -578,7 +576,5 @@ function statusLabel(status: string): string {
 
 @media (max-width: 640px) {
   .kb-grid { grid-template-columns: 1fr; }
-  .page-head { flex-direction: column; align-items: flex-start; }
-  .page-head > .ant-btn { width: 100%; }
 }
 </style>

@@ -201,16 +201,6 @@ onMounted(() => {
 }
 
 /* 空状态统一 */
-.empty-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 28px 0;
-  color: var(--text-tertiary);
-}
-.empty-icon { font-size: 26px; line-height: 1; opacity: 0.8; }
-.empty-text { font-size: 13px; }
 
 /* 移动端:图表高度压缩 */
 @media (max-width: 768px) {

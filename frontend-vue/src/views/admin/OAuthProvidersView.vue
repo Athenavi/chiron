@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import EmptyState from '@/components/common/EmptyState.vue'
 /**
  * OAuthProvidersView - 管理端：三方登录 Provider 管理 + 人机验证配置 + 短信服务配置
  *
@@ -370,9 +371,7 @@ onMounted(() => {
         size="middle"
       >
         <template #emptyText>
-          <div class="empty-block">
-            <span class="empty-icon">📭</span><span class="empty-text">{{ $t('common.no_data_yet') }}</span>
-          </div>
+          <EmptyState :description="$t('common.no_data_yet')" />
         </template>
         <template #bodyCell="{ column, record }">
           <template v-if="column.key === 'enabled'">
@@ -700,16 +699,6 @@ onMounted(() => {
 }
 
 /* 空状态统一 */
-.empty-block {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 6px;
-  padding: 28px 0;
-  color: var(--text-tertiary);
-}
-.empty-icon { font-size: 26px; line-height: 1; opacity: 0.8; }
-.empty-text { font-size: 13px; }
 
 /* 窄屏：表单单列、开关竖排、操作列吸底、触控目标 ≥40px */
 @media (max-width: 768px) {

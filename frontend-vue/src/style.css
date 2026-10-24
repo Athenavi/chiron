@@ -132,6 +132,11 @@
     /* CDS 的物理过冲曲线（约 +30% 超调，用于胶囊滑块与小药丸形变）。
        它是 --ease-spring（+56%，弹窗弹出）的同族轻量级 —— 两级而非一条曲线打天下。 */
     --ease-overshoot: cubic-bezier(0.34, 1.3, 0.64, 1);
+    /* 15 阶线性弹簧（CDS v1/02 §2.1.3 的 `--cds-btn-spring`）：按压松开后的回弹。
+       写成 linear() 是因为它是**采样出来的真实位移**而不是拟合曲线 ——
+       40% 处冲到 +9.15%，随后 0.9914 → 1.0004 两次微回弹才收敛，
+       cubic-bezier 只能让曲线在一个方向上过头一次，做不出这种"过冲 → 回弹 → 收敛"。 */
+    --ease-spring-15: linear(0, 0.2459, 0.6526, 0.9468, 1.0764, 1.0915, 1.0585, 1.0219, 0.9993, 0.9914, 0.9921, 0.9957, 0.9988, 1.0004, 1);
 
     /* ── 四套弹簧预设（CDS v1/08 §8.3 的决策树）──
        按「交互类型 → 预设」选用，而不是每次手写"时长 + 曲线"：
@@ -1304,6 +1309,9 @@ body {
 .ant-table-cell,
 .ant-typography code {
     font-variant-numeric: tabular-nums;
+    /* 与 .tnum 同写两遍：font-variant-numeric 覆盖面更窄，部分引擎只认
+       font-feature-settings —— 表格列与统计数字跳动一格都很显眼。 */
+    font-feature-settings: 'tnum';
 }
 
 ::selection {
@@ -1797,20 +1805,28 @@ body {
    而不是退化成"永远淡着一层"。 */
 @property --scroll-fade-top { syntax: '<length>'; inherits: false; initial-value: 0px; }
 @property --scroll-fade-bottom { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --scroll-fade-left { syntax: '<length>'; inherits: false; initial-value: 0px; }
+@property --scroll-fade-right { syntax: '<length>'; inherits: false; initial-value: 0px; }
 
 :root {
   /* 物理宽度严格 28px（CDS 明确否掉了近似的 24px / 32px） */
   --scroll-fade-size: 28px;
   --scroll-fade-top: 0px;
   --scroll-fade-bottom: 0px;
+  --scroll-fade-left: 0px;
+  --scroll-fade-right: 0px;
   /* 7 档非线性采样：.05 / .15 / .3 / .5 / .7 / .85 / 1
      必须写成**一行** —— check-theme-token-contract 按行判定，色值只允许出现在
      `--name:` 定义行上，换行后余下的档位会被判为组件里的硬编码色值。 */
   --scroll-fade-mask: linear-gradient(to bottom, #0000, #0000000d calc(var(--scroll-fade-top) * .15), #00000026 calc(var(--scroll-fade-top) * .3), #0000004d calc(var(--scroll-fade-top) * .45), #00000080 calc(var(--scroll-fade-top) * .6), #000000b3 calc(var(--scroll-fade-top) * .75), #000000d9 calc(var(--scroll-fade-top) * .87), #000 var(--scroll-fade-top), #000 calc(100% - var(--scroll-fade-bottom)), #000000d9 calc(100% - var(--scroll-fade-bottom) * .87), #000000b3 calc(100% - var(--scroll-fade-bottom) * .75), #00000080 calc(100% - var(--scroll-fade-bottom) * .6), #0000004d calc(100% - var(--scroll-fade-bottom) * .45), #00000026 calc(100% - var(--scroll-fade-bottom) * .3), #0000000d calc(100% - var(--scroll-fade-bottom) * .15), #0000);
+  /* 横向同一套 7 档，只是方向换到 inline 轴（CDS v1/04 §4.3.1 的双轴复合遮罩） */
+  --scroll-fade-mask-x: linear-gradient(to right, #0000, #0000000d calc(var(--scroll-fade-left) * .15), #00000026 calc(var(--scroll-fade-left) * .3), #0000004d calc(var(--scroll-fade-left) * .45), #00000080 calc(var(--scroll-fade-left) * .6), #000000b3 calc(var(--scroll-fade-left) * .75), #000000d9 calc(var(--scroll-fade-left) * .87), #000 var(--scroll-fade-left), #000 calc(100% - var(--scroll-fade-right)), #000000d9 calc(100% - var(--scroll-fade-right) * .87), #000000b3 calc(100% - var(--scroll-fade-right) * .75), #00000080 calc(100% - var(--scroll-fade-right) * .6), #0000004d calc(100% - var(--scroll-fade-right) * .45), #00000026 calc(100% - var(--scroll-fade-right) * .3), #0000000d calc(100% - var(--scroll-fade-right) * .15), #0000);
 }
 
 @keyframes cdsScrollFadeTop { from { --scroll-fade-top: 0px; } to { --scroll-fade-top: var(--scroll-fade-size); } }
 @keyframes cdsScrollFadeBottom { from { --scroll-fade-bottom: 0px; } to { --scroll-fade-bottom: var(--scroll-fade-size); } }
+@keyframes cdsScrollFadeLeft { from { --scroll-fade-left: 0px; } to { --scroll-fade-left: var(--scroll-fade-size); } }
+@keyframes cdsScrollFadeRight { from { --scroll-fade-right: 0px; } to { --scroll-fade-right: var(--scroll-fade-size); } }
 
 /* 应用点：滚动容器自带 .scroll-fade（上下缘）或 .scroll-fade-top（**仅上缘**）。
    仅上缘这一档是给「底部有 sticky 子元素」的容器用的（如 .message-list 的
@@ -1820,11 +1836,7 @@ body {
 @supports (animation-timeline: scroll()) {
   @media (prefers-reduced-motion: no-preference) {
     .scroll-fade,
-    .scroll-fade-top,
-    /* ant-design-vue 的表格体（`scroll={{ y }}` 时）是**独立滚动容器**，
-       页面级遮罩够不到；它由组件生成、没有可挂类的入口，只能在这里并进来。
-       不滚动时 scroll(self) 进度为 0 → 两头遮罩都是 0px，无副作用。 */
-    .ant-table-body {
+    .scroll-fade-top {
       mask-image: var(--scroll-fade-mask);
       -webkit-mask-image: var(--scroll-fade-mask);
       animation-name: cdsScrollFadeTop;
@@ -1835,11 +1847,29 @@ body {
       animation-range: 0 var(--scroll-fade-size);
     }
 
-    .scroll-fade,
-    .ant-table-body {
+    .scroll-fade {
       animation-name: cdsScrollFadeTop, cdsScrollFadeBottom;
       animation-timeline: scroll(self block), scroll(self block);
       animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
+    }
+
+    /* 双轴（纵横都能滚）：ant-design-vue 的表格体在 `scroll={{ x, y }}` 时两个方向
+       都能滚，而它由组件生成、没有可挂类的入口，只能在这里并进来。
+       两个 mask 必须 **intersect** —— 默认的 add 会让"纵向本该淡出的位置被横向的
+       不透明救回来"，结果是两个方向的遮罩**同时失效**。
+       某一轴不可滚时它的时间轴进度恒为 0 → 该轴遮罩恒为 0px，所以只有 `scroll={{ y }}`
+       的表格不会凭空多出左右淡出。 */
+    .ant-table-body {
+      mask-image: var(--scroll-fade-mask), var(--scroll-fade-mask-x);
+      -webkit-mask-image: var(--scroll-fade-mask), var(--scroll-fade-mask-x);
+      mask-composite: intersect;
+      -webkit-mask-composite: source-in;
+      animation-name: cdsScrollFadeTop, cdsScrollFadeBottom, cdsScrollFadeLeft, cdsScrollFadeRight;
+      animation-duration: auto;
+      animation-timing-function: linear;
+      animation-fill-mode: both;
+      animation-timeline: scroll(self block), scroll(self block), scroll(self inline), scroll(self inline);
+      animation-range: 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%, 0 var(--scroll-fade-size), calc(100% - var(--scroll-fade-size)) 100%;
     }
   }
 }
@@ -2017,12 +2047,23 @@ body {
   white-space: nowrap;
   cursor: pointer;
   border-radius: var(--sig-radius-button);
+  /* 按压物理（CDS v1/02 §2.1.3）.cds-btn-squish）：按下 60ms 快缩（跟随手指），
+     松开用 450ms 的 15 阶弹簧回弹（让 +9.15% 的过冲看得见）。
+     两段刻意用不同曲线 —— 单段曲线两头都做不好：快了看不清过冲，慢了按下发黏。 */
+  transform-origin: 50%;
+  transition: transform var(--dur-slow) var(--ease-spring-15);
 }
-.btn-xs { height: var(--btn-h-xs); padding: 0 var(--btn-px-xs); font-size: var(--btn-fs-xs); }
-.btn-sm { height: var(--btn-h-sm); padding: 0 var(--btn-px-sm); font-size: var(--btn-fs-sm); }
-.btn-md { height: var(--btn-h-md); padding: 0 var(--btn-px-md); font-size: var(--btn-fs-md); }
-.btn-lg { height: var(--btn-h-lg); padding: 0 var(--btn-px-lg); font-size: var(--btn-fs-lg); }
-.btn-xl { height: var(--btn-h-xl); padding: 0 var(--btn-px-xl); font-size: var(--btn-fs-xl); }
+/* 动态阻尼 `Bl(h) = clamp(0.5, h/32, 1.5)` 的落地：矮按钮幅度要小（缩太多像"抖"），
+   高按钮幅度可以大（回弹更扎实）。数值 = 1 − 0.025 × Bl(h)，基准档 md(32px) 即 0.975。 */
+.btn-xs { height: var(--btn-h-xs); padding: 0 var(--btn-px-xs); font-size: var(--btn-fs-xs); --squish-scale: 0.984; }
+.btn-sm { height: var(--btn-h-sm); padding: 0 var(--btn-px-sm); font-size: var(--btn-fs-sm); --squish-scale: 0.981; }
+.btn-md { height: var(--btn-h-md); padding: 0 var(--btn-px-md); font-size: var(--btn-fs-md); --squish-scale: 0.978; }
+.btn-lg { height: var(--btn-h-lg); padding: 0 var(--btn-px-lg); font-size: var(--btn-fs-lg); --squish-scale: 0.975; }
+.btn-xl { height: var(--btn-h-xl); padding: 0 var(--btn-px-xl); font-size: var(--btn-fs-xl); --squish-scale: 0.969; }
+.btn-xs:active, .btn-sm:active, .btn-md:active, .btn-lg:active, .btn-xl:active {
+  transform: scale(var(--squish-scale, 0.975));
+  transition: transform var(--dur-fast) var(--ease-out);
+}
 
 /* ── 密度档位（CDS v2 §3.3）──────────────────────────────────
    只覆盖**控件几何**：按钮高度/内边距、行头高度、顶栏高度。
@@ -2074,6 +2115,18 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
     height: max(100%, 40px);
     transform: translateY(-50%);
   }
+  /* 消息操作按钮同理。这里扩到 36px 而不是 44px：它的下一个邻居是 6px 行距 +
+     下一条消息，28 + 6 = 34px 就是"不重叠"的上限，再大就会让点 A 命中 B
+     （命中区重叠比命中区偏小更糟——那是"点了没反应"和"点错"的区别）。
+     用 :where() 保持零特异性：组件自己的规则仍能覆盖。 */
+  :where(.msg-action) { position: relative; }
+  :where(.msg-action)::after {
+    content: '';
+    position: absolute;
+    left: 0; right: 0; top: 50%;
+    height: max(100%, 36px);
+    transform: translateY(-50%);
+  }
 }
 
 /* ── 5. 微动效族（CDS v2/04 §4.1 的三族关键帧）──────────────────
@@ -2121,15 +2174,27 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   /* 逐块偏移：调用方给每块写 --skel-i（0,1,2…），没有就按 0 处理 */
   animation-delay: calc(var(--skel-i, 0) * var(--dur-skel-stagger));
 }
+/* RTL 镜像（CDS v1/02 §2.3.3 的 255deg）：高光方向必须跟着阅读方向走 ——
+   在阿语界面里从左往右扫会和文字的反向阅读流打架。 */
+[dir='rtl'] .skeleton[data-motion='wave']::after {
+  background: linear-gradient(255deg, transparent 35%, var(--bg-surface) 50%, transparent 65%);
+}
 
 /* ② 胶囊微观形变：按下塌陷（dip）与选中回弹（pop）。
    两件事的物理不同，所以不共用曲线 —— 按下要"跟手且不回头"
    （--ease-snap，严格 0% 超调），选中要"轻轻过冲再收"
    （--ease-overshoot，约 +30%）。 */
 @keyframes cdsPillDip { 0% { transform: scale(1); } 40% { transform: scale(0.94); } 100% { transform: scale(1); } }
-@keyframes cdsPillPop { 0% { transform: scale(0.92); } 60% { transform: scale(1.05); } 100% { transform: scale(1); } }
+/* 两段式过冲（CDS v2/03 §3.5.1）：80ms 冲到 1.32 倍 → 再用 120ms 的 overshoot 曲线回落。
+   两段之和 = --dur-normal(200ms)，**总时长没变**，变的是"一条曲线走完"换成
+   "快冲 + 带过冲的回落"：单条曲线做不出这种"先过头、再收敛"的物理感。 */
+@keyframes cdsPillPopUp { from { transform: scale(0.92); } to { transform: scale(1.32); } }
+@keyframes cdsPillPopDown { from { transform: scale(1.32); } to { transform: scale(1); } }
 .pill-dip:active { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
-.pill-pop { animation: cdsPillPop var(--dur-normal) var(--ease-overshoot); }
+.pill-pop {
+  animation: cdsPillPopUp calc(var(--dur-normal) * .4) var(--ease-out),
+             cdsPillPopDown calc(var(--dur-normal) * .6) var(--ease-overshoot) calc(var(--dur-normal) * .4);
+}
 
 /* ③ 交错入场：容器加 .stagger-in，子项依次淡入上浮。
    用 :nth-child 而不是 JS 下标 —— v-for 渲染的列表无需额外传 index。
@@ -2137,13 +2202,21 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
    一直钉住，从而压过子项自己的 hover 位移（动画优先级高于过渡）。 */
 @keyframes cdsRevealIn { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 .stagger-in > * { animation: cdsRevealIn var(--dur-page) var(--ease-out) backwards; }
-.stagger-in > *:nth-child(1) { animation-delay: 0ms; }
-.stagger-in > *:nth-child(2) { animation-delay: var(--dur-stagger); }
-.stagger-in > *:nth-child(3) { animation-delay: calc(var(--dur-stagger) * 2); }
-.stagger-in > *:nth-child(4) { animation-delay: calc(var(--dur-stagger) * 3); }
-.stagger-in > *:nth-child(5) { animation-delay: calc(var(--dur-stagger) * 4); }
-.stagger-in > *:nth-child(6) { animation-delay: calc(var(--dur-stagger) * 5); }
-.stagger-in > *:nth-child(n+7) { animation-delay: calc(var(--dur-stagger) * 6); }
+/* 兜底：不支持 sibling-index() 的引擎走这组枚举（枚举到第 6 档，之后共用同一延迟 ——
+   第 7 个起会同时出现，交错在那里断掉）。用 :where() 把特异性压到与下面的基础规则
+   同级，好让 @supports 里的覆盖能凭源顺序胜出。 */
+.stagger-in > :where(*:nth-child(1)) { animation-delay: 0ms; }
+.stagger-in > :where(*:nth-child(2)) { animation-delay: var(--dur-stagger); }
+.stagger-in > :where(*:nth-child(3)) { animation-delay: calc(var(--dur-stagger) * 2); }
+.stagger-in > :where(*:nth-child(4)) { animation-delay: calc(var(--dur-stagger) * 3); }
+.stagger-in > :where(*:nth-child(5)) { animation-delay: calc(var(--dur-stagger) * 4); }
+.stagger-in > :where(*:nth-child(6)) { animation-delay: calc(var(--dur-stagger) * 5); }
+.stagger-in > :where(*:nth-child(n+7)) { animation-delay: calc(var(--dur-stagger) * 6); }
+/* 优先实现：sibling-index() 是 1-based 元素序号，乘步长即可 —— 对**任意数量**的子项
+   都成立，不必枚举上限。卡片网格动辄 8~12 张，枚举档位正好在那里断掉。 */
+@supports (animation-delay: calc(sibling-index() * 1ms)) {
+  .stagger-in > * { animation-delay: calc((sibling-index() - 1) * var(--dur-stagger)); }
+}
 
 /* ── 6. 失活行规范（CDS v2 §2.2 的 `tr[data-dimmed]`）──────────────
    "禁用"用**文字色降级**表达，而不是 opacity —— opacity 一旦加在父元素上，
@@ -2174,6 +2247,8 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   /* 三点差分脉冲的周期（手册 `cds-dot-pulse` 的 1.8s）。
      不复用 --dur-pulse（1200ms）：后者是通用呼吸灯，两者节奏本就不同。 */
   --dur-dot-pulse: 1800ms;
+  /* 推理时的文字扫光周期（CDS 的 `cds-shimmer-text-shine`：严格 3s 一轮） */
+  --dur-shimmer: 3000ms;
   /* Diff 视图的密度阶梯（CDS v1 §5.5.1 的 --diffs-gap-inline / --diffs-gap-block）。
      数值沿用本仓既有取值（14px / 8px），**没有**照搬手册的 12px / 4px：
      手册是给 17.5px 行高配的，而本仓行号 gutter 与代码行要逐行对齐（行高 20px），
@@ -2184,6 +2259,16 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
 
 /* ① 推理氛围光晕（`wl-glow`）：硬质品牌色内环 + 环境投影 + 50% 处涨到 85% 的漫反射。
    用 color-mix 而不是写死 rgba —— 换主题自动跟随主色。 */
+/* ② 推理时的文字扫光（CDS 的 `cds-shimmer-text-shine`）：3s 一轮、非对称缓动（快进慢出）。
+   用 background-clip: text 把渐变裁到字面 —— 文字颜色在"暗 → 亮 → 暗"之间过渡，
+   所以任何时刻文字都完整可见，只是扫过的那一段更亮。
+   缓动刻意非对称（.714/.121/.211/.888）：对称曲线会让"扫过去"读成进度条，
+   而不是"思绪在流动"。 */
+@keyframes cdsShimmerText {
+  0% { background-position: 150% 0; }
+  100% { background-position: -150% 0; }
+}
+
 @keyframes cdsWlGlow {
   0%, 100% {
     box-shadow:
@@ -2233,4 +2318,55 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
 ::view-transition-new(cds-lightbox) {
   animation-duration: var(--dur-normal);
   animation-timing-function: var(--ease-out);
+}
+
+/* ── 助手正文的右侧渐增留白（CDS v1/03 的 text-stop）────────────
+   容器 ≤384px 不留白，到 704px 时达到 56px 封顶 —— 行太长时眼睛回行容易串行。
+   只作用于**纯文字**消息：含代码块 / 表格 / 图表 / 图片的消息本来就需要整宽，
+   在**选择器**上排除掉，比"加了再归零"简单，也没有 CSS 变量在 `100%` 解析
+   上下文上的陷阱（变量是未解析的 token 序列、到使用处才求值，负边距里的 100%
+   基准就不是正文宽了）。
+
+   刻意写在全局样式而不是组件的 scoped 里：`:has()` 要匹配的 pre/table 由 v-html
+   渲染，**没有 data-v 属性**，scoped 转换会把选择器变成 `:has(pre[data-v-x])` ——
+   永远不匹配，结果就是所有消息（包括含代码块的）都被加上留白。
+
+   不支持 `:has()` 的引擎整条规则失效 → 退化为无留白，正是想要的降级方向。 */
+.msg-row.assistant .msg-text:not(:has(pre, table, .mermaid-diagram, img)) {
+  padding-right: clamp(0px, (100% - 384px) * 0.175, 56px);
+}
+
+/* ── 文件类型徽标（CDS v1/02 §2.5.4）────────────────────────────
+   后缀大写、四字符上限（TS / PY / PDF / CSV），认不出时给 `FILE` 而不是留空 ——
+   空白会让磁贴看起来像加载失败。
+   写在全局而不是各自的 scoped 里，是因为消息附件行与 composer 磁贴要用**同一套规格**。 */
+.file-type-badge {
+  flex: none; display: inline-flex; align-items: center; justify-content: center;
+  min-width: 30px; height: 20px; padding: 0 5px;
+  border-radius: var(--radius-sm);
+  background: var(--bg-secondary); color: var(--text-secondary);
+  font-family: var(--font-mono); font-size: var(--fs-xs); font-weight: var(--fw-semibold);
+  letter-spacing: 0.02em;
+}
+
+/* ── 页面标题与页面头部（统一机制）────────────────────────────────
+   此前**没有任何全局定义**：13 个视图各自 scoped 定义 .page-title、18 个各自定义
+   .page-header，于是同一件事被写了 31 遍，数值也漂了 —— .page-header 的 margin-bottom
+   有 16×32 / 12×4 / 20×1 / 24×4 四种值、align-items 两种。
+
+   .page-title（24px / bold）：卡片页的醒目标题（Agents / Knowledge / Plugins / Skills）。
+   .page-title-sm（20px / semibold）：admin 密集表格页的收敛标题。
+   **刻意保留两个规格而不是合成一个** —— 密集页要把标题压下去让数据上位，卡片页要靠标题
+   立住信息层级，这是两个场景的两套设计意图，合成会毁掉其中一边。 */
+.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
+.page-title-sm { font-size: 20px; font-weight: var(--fw-semibold); margin: 0; letter-spacing: -0.01em; }
+/* flex-wrap 是必需的：窄屏下标题与筛选栏要换行，而不是互相挤压。 */
+.page-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
+/* 窄屏：头部允许换行、行间留 12px，按钮撑到触控目标 40px。
+   此前 admin 侧 18 个视图与功能页 4 个各自写了 4 种变体（flex-direction: column /
+   flex-wrap / width: 100% / min-height: 40px），目的相同写法各异，这里定一套作为基线。
+   各视图里已有的 `.xxx-view .page-header` 变体特异性更高，会继续覆盖基线，所以这一步不改变现有观感。 */
+@media (max-width: 768px) {
+  .page-header { flex-wrap: wrap; row-gap: 12px; }
+  .page-header .ant-btn { min-height: 40px; }
 }

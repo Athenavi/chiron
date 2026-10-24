@@ -855,14 +855,6 @@ function pct(n: number): string {
   margin: 0 auto;
   padding: 28px 24px 60px;
 }
-.page-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 12px;
-  margin-bottom: 20px;
-}
 .title {
   display: flex;
   align-items: center;

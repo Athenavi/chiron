@@ -9,7 +9,8 @@ import katex from 'katex'
 import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue'
 import { Input } from 'ant-design-vue'
 import { notify } from '../../utils/notify'
-import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, FileOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
+import { fileTypeBadge, splitFileName, type SplitName } from '../../utils/fileName'
+import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import { inkCharsFor, inkIndexFor } from './ink'
 import ToolCallCard from './ToolCallCard.vue'
@@ -184,6 +185,21 @@ const sourceChips = computed<SourceChip[]>(() => {
 // 附件若为 /media/ 公开路径，渲染前异步解析为短时效签名 URL（12 分钟本地缓存）；
 // 非 /media/ 前缀（绝对/签名/data:）原样；解析失败或加载失败回退原 url。
 const attachmentResolved = ref<Record<string, string>>({})
+
+/**
+ * 附件名的双向中间截断（CDS v1/02 §2.5.3）：预先按 id 拆好，
+ * 免得模板里对同一个名字调两次纯函数。
+ */
+const attachmentNameParts = computed<Record<string, SplitName>>(() => {
+  const out: Record<string, SplitName> = {}
+  if (props.item.kind !== 'text') return out
+  for (const att of props.item.attachments ?? []) out[att.id] = splitFileName(att.name)
+  return out
+})
+
+function attName(id: string): SplitName {
+  return attachmentNameParts.value[id] ?? { head: '', tail: '' }
+}
 
 function attachmentUrl(att: ChatAttachment): string {
   return attachmentResolved.value[att.id] || att.url
@@ -660,10 +676,16 @@ onUpdated(enhanceContent)
               v-else
               :href="attachmentUrl(att)"
               :download="att.name"
+              :title="att.name"
               class="msg-attachment-file"
             >
-              <FileOutlined />
-              <span class="att-name">{{ att.name }}</span>
+              <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨（CDS v1/02 §2.5.4） -->
+              <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
+              <!-- 双向中间截断：让位只发生在中间，扩展名与尾部词干永远可见（§2.5.3）。
+                   两段紧挨着写在同一行，视觉上仍是一个连续的文件名。 -->
+              <span class="att-name">
+                <span class="att-name-head">{{ attName(att.id).head }}</span><span class="att-name-tail">{{ attName(att.id).tail }}</span>
+              </span>
               <span class="att-size">{{ formatSize(att.size) }}</span>
             </a>
           </template>
@@ -882,20 +904,30 @@ onUpdated(enhanceContent)
 /* 纵向律动（CDS v1 §3.1.2）：同一回合内的行距 = 用户选的「消息间距」；
    用户消息开启新回合，所以它上方按 1.5 倍放大 —— 手册给的 turn gap / item gap
    正是 0.75 : 0.50 的比值。这样既保留用户那个旋钮，又让"换人说话"真正分段。 */
-.msg-row.user { padding-top: calc(var(--chat-msg-gap, 6px) * 1.5); }
+/* 轮次之间的间距要比轮次内更松（CDS 的 turn-gap : item-gap = 0.75 : 0.5 = 1.5）。
+   本仓的 --chat-msg-gap 是**半间距**（上下 padding 各算一次），所以这里取 ×2：
+   实际轮次间距 = 本条 top(2g) + 上一条 bottom(g) = 3g，而轮次内是 2g → 比例正好 1.5。 */
+.msg-row.user { padding-top: calc(var(--chat-msg-gap, 6px) * 2); }
 /* 新消息入场（CDS v1 §4.1.1 的 `message-fade-up`）：只用 transform/opacity，
    不碰布局，所以不影响行高测量（transcript 窗口化的前提）。 */
 .msg-row.msg-enter { animation: cdsMsgEnter var(--dur-slow) var(--ease-out); }
 /* 用户自己发的那条走单独的入场（CDS v1 §4.1.1 的 `code-user-bubble-enter`）：
-   从 0.92 倍 + 下移 6px 长回来，比通用的 fade-up 更像"发出去了"。 */
-.msg-row.user.msg-enter { animation-name: cdsUserBubbleEnter; }
+   从 0.92 倍 + 下移 6px 长回来，比通用的 fade-up 更像"发出去了"。
+   再叠一层 4px blur 的"对焦"（CDS block entry = ease-enter 曲线 + 4px blur fade；
+   本仓 --ease-out 的数值与 CDS 的 ease-enter 逐位相同，所以曲线本来就对，只缺 blur）。
+   **只给用户气泡**：助手消息是流式的，整屏 blur 与 80~120 tokens/s 的 DOM 更新叠加
+   是真实的掉帧源；用户气泡短小、一次性、不与流式并发，代价可忽略。 */
+.msg-row.user.msg-enter {
+  animation-name: cdsUserBubbleEnter;
+  will-change: filter, transform, opacity;      /* .msg-enter 会在 420ms 后摘掉，不常驻图层 */
+}
 @keyframes cdsMsgEnter {
   from { opacity: 0; transform: translateY(10px); }
   to { opacity: 1; transform: none; }
 }
 @keyframes cdsUserBubbleEnter {
-  from { opacity: 0; transform: scale(0.92) translateY(6px); }
-  to { opacity: 1; transform: none; }
+  from { opacity: 0; transform: scale(0.92) translateY(6px); filter: blur(4px); }
+  to { opacity: 1; transform: none; filter: blur(0); }
 }
 /* 轨迹跳转高亮闪烁（deepseek data-current 聚焦反馈） */
 .msg-row.highlighted { background: var(--primary-bg); border-radius: var(--sig-radius-card); animation: trajectoryFlash var(--dur-slow) ease-out; }
@@ -1134,7 +1166,12 @@ onUpdated(enhanceContent)
 .msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); object-fit: cover; }
 .msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
 .msg-attachment-file:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
-.msg-attachment-file .att-name { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* 双向中间截断（CDS v1/02 §2.5.3）：head 允许被省略，tail（尾部词干 + 扩展名）
+   锁成不收缩。两段之间不留空隙，看起来仍是一个连续的文件名。 */
+.msg-attachment-file .att-name { display: flex; min-width: 0; max-width: 180px; }
+.msg-attachment-file .att-name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.msg-attachment-file .att-name-tail { flex: none; white-space: nowrap; }
+/* 类型徽标的规格已提到全局 `.file-type-badge`（消息附件行与 composer 磁贴共用同一套） */
 .msg-attachment-file .att-size { color: var(--text-tertiary); font-size: 12px; }
 /* 音频播放器 */
 .msg-attachment-audio { display: flex; flex-direction: column; gap: 4px; width: 100%; max-width: 300px; padding: 8px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); }
