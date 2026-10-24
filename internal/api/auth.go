@@ -201,7 +201,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 	defer tx.Rollback(ctx)
 
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", DefaultTenantID); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(DefaultTenantID)); err != nil {
 		slog.Error("set tenant context", "error", err)
 		InternalError(w, "login failed")
 		return
@@ -330,7 +330,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		tenantID = resolved
 	}
 
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantID); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(tenantID)); err != nil {
 		slog.Error("set tenant context", "error", err)
 		InternalError(w, "registration failed")
 		return
@@ -590,7 +590,7 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", DefaultTenantID); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(DefaultTenantID)); err != nil {
 		slog.Error("set tenant context", "error", err)
 		InternalError(w, "session lookup failed")
 		return

@@ -7,6 +7,14 @@
 
 ### 修复
 
+- **修注册 500：`set_config('app.current_tenant_id', $1, true)` 的 `int16` 参数**
+  `auth.go` 有三处调用（注册 1 处 + 登录/其它入口 2 处），其第二参是 `text`（OID 25），
+  而 `tenant_id` 改型后传的是 `int16`，pgx 报 `unable to encode 1 into text format for text (OID 25)`，
+  整个注册事务在第一步就失败 → `POST /v1/auth/register` 500。三处统一包 `tenantStr(...)`。
+  已验证全仓 `set_config` 仅这三处，且无 `current_setting('app.current_tenant_id')` 读取方与 RLS 策略，
+  故数字字符串 `"1"` 不改变任何既有语义。**这类 SQL 参数类型问题编译与单测都发现不了，
+  只有真实请求才暴露**；已在 8090 端口实跑 Gateway 验证注册返回 201 并正确落库。
+
 - **修 `tenant_id` 改 `smallint` 后的两处 `COALESCE` 空串遗留**：`run_usage_reconciler` 的
   `runUsageScanSQL` 与 `middleware` 的 API-Key 校验查询都写了 `COALESCE(tenant_id, '')`——
   列是 `varchar` 时合法，改 `smallint` 后 PG 会报 `invalid input syntax for type smallint: ""`
