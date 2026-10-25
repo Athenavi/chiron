@@ -24,7 +24,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: int = "") -> bool:
+async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: int = 0) -> bool:
     """向网关推送 Webhook 事件。
 
     Args:

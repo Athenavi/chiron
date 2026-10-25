@@ -216,7 +216,7 @@ class RedisContextBus:
         return message
 
     async def subscribe(
-        self, topic: str, callback: Callable[..., Any], tenant_id: int = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: int = 0
     ) -> None:
         """订阅主题 (Redis Pub/Sub + 本地回调)
 
@@ -339,7 +339,7 @@ class RedisContextBus:
                         pass
 
     async def unsubscribe(
-        self, topic: str, callback: Callable[..., Any], tenant_id: int = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: int = 0
     ) -> bool:
         """取消订阅"""
         removed = False
@@ -444,7 +444,7 @@ async def publish_state_change(
 
 
 async def subscribe_topic(
-    topic: str, callback: Callable[..., Any], tenant_id: int = ""
+    topic: str, callback: Callable[..., Any], tenant_id: int = 0
 ) -> Any:
     """便捷函数: 订阅主题"""
     bus = await get_context_bus()

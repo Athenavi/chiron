@@ -4342,7 +4342,7 @@ async def run_agent(
     tools: list[dict[Any, Any]] | None = None,
     llm_config: dict[Any, Any] | None = None,
     max_turns: int | None = None,
-    tenant_id: int = "",
+    tenant_id: int = 0,
     provider_hint: str = "",
 ) -> AsyncIterator[dict[Any, Any]]:
     """

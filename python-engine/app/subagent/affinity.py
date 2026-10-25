@@ -150,7 +150,7 @@ async def publish_owner(
     *,
     token: str,
     session_id: str = "",
-    tenant_id: int = "",
+    tenant_id: int = 0,
 ) -> bool:
     """写入（或续期）一次作业归属。返回是否成功。"""
     if redis is None or not run_id:
@@ -230,7 +230,7 @@ class OwnerLease:
         run_id: str,
         *,
         session_id: str = "",
-        tenant_id: int = "",
+        tenant_id: int = 0,
         redis: Any = None,
         ttl_seconds: int | None = None,
     ) -> None:

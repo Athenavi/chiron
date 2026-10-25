@@ -97,7 +97,7 @@ async def _write_cursor(redis: Any, session_id: str, value: str) -> None:
 async def consume_pending_reports(
     *,
     session_id: str,
-    tenant_id: int = "",
+    tenant_id: int = 0,
     user_id: str = "",
     pool: Any = None,
 ) -> list[dict[str, Any]]:

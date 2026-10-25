@@ -57,7 +57,7 @@ async def enqueue_followup(
     *,
     run_id: str,
     session_id: str,
-    tenant_id: int = "",
+    tenant_id: int = 0,
     user_id: str = "",
     status: str = "",
     summary: str = "",

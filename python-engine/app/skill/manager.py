@@ -88,7 +88,7 @@ class SkillMetadata:
     status: SkillStatus = SkillStatus.ACTIVE
     created_at: float = field(default_factory=time.time)
     updated_at: float = 0
-    tenant_id: int = ""  # SaaS 安全: 租户隔离
+    tenant_id: int = 0  # SaaS 安全: 租户隔离
 
 
 @dataclass
@@ -103,7 +103,7 @@ class SkillExecutionResult:
     duration_ms: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     trace_id: str = ""
-    tenant_id: int = ""
+    tenant_id: int = 0
 
 
 class MCPClient:
@@ -177,7 +177,7 @@ class MCPClient:
         tool_name: str,
         arguments: dict[str, Any],
         trace_id: str = "",
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> SkillExecutionResult:
         """调用 MCP 工具"""
         start_time = time.time()

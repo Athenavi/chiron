@@ -77,7 +77,7 @@ class SubAgent:
         self,
         task: str | list[dict[str, Any]],
         context: dict[str, Any] | None = None,
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> SubAgentResult:
         """
         执行完整的子代理推理循环。
@@ -329,7 +329,7 @@ class AgentDispatcher:
         name: str,
         task: str,
         context: dict[str, Any] | None = None,
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> SubAgentResult:
         """同步调度：向命名 agent 派发任务，等待完成"""
         agent = self._agents.get(name)
@@ -348,7 +348,7 @@ class AgentDispatcher:
         name: str,
         task: str,
         context: dict[str, Any] | None = None,
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> str:
         """
         异步调度：将任务派发到后台，立即返回 task_id。

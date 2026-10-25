@@ -71,7 +71,7 @@ def build_context(
     event: str,
     *,
     session_id: str = "",
-    tenant_id: int = "",
+    tenant_id: int = 0,
     user_id: str = "",
     tool_name: str = "",
     tool_arguments: Any = None,

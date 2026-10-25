@@ -193,7 +193,7 @@ class DynamicWorkflowEngine:
     async def discover_and_bind_skills(
         self,
         node_type: str = "skill",
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> list[Capability]:
         """自动发现并推荐可用 Skills"""
         caps = await self.registry.list_by_workstation(

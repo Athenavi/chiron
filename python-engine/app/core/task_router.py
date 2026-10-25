@@ -209,7 +209,7 @@ class TaskRouter:
         context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> dict[str, Any]:
         """理解用户意图
 
@@ -248,7 +248,7 @@ class TaskRouter:
         context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> dict[str, Any]:
         """使用 LLM 理解用户意图 (生产级实现)
 

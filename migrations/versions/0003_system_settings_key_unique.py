@@ -12,7 +12,7 @@ Revises: 0002_users_tenant_email_unique
 
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "0003_system_settings_key_unique"
 down_revision: Union[str, Sequence[str], None] = "0002_users_tenant_email_unique"
@@ -21,6 +21,13 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 离线模式（`alembic upgrade --sql`）只生成 DDL，不连接数据库。
+    # 此时 op.get_bind() 返回 MockConnection，没有 exec_driver_sql；
+    # 而且离线 SQL 本就不应依赖当前库里有没有重复行这种运行时状态。
+    # 所以校验跳过，只把建唯一约束的 DDL 写进离线 SQL。
+    if context.is_offline_mode():
+        return
+
     conn = op.get_bind()
     duplicates = conn.exec_driver_sql(
         """

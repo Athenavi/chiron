@@ -433,7 +433,7 @@ class SubAgentRunner:
         parent_session_id: str = "",
         parent_run_id: str = "",
         turn_id: str = "",
-        tenant_id: int = "",
+        tenant_id: int = 0,
         user_id: str = "",
         sink: Any = None,
         cache: Any = None,

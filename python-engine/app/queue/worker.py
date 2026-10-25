@@ -806,7 +806,7 @@ class QueueWorker:
         return promoted
 
     async def _dispatch(
-        self, task_type: str, payload: dict[Any, Any], tenant_id: int = ""
+        self, task_type: str, payload: dict[Any, Any], tenant_id: int = 0
     ) -> None:
         """分发任务到具体处理器"""
         if task_type == "memory_save":
@@ -924,7 +924,7 @@ class QueueWorker:
             job_id, res.get("status"), res.get("exit_code"),
         )
 
-    async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: int = "") -> None:
+    async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: int = 0) -> None:
         """处理记忆持久化任务
 
         payload: {key, value, source, user_id?, slot?, confidence?}

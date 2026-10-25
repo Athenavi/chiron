@@ -390,7 +390,7 @@ async def settle(
     decision: dict[str, Any],
     reason: str = "",
     decided_by: str = "",
-    tenant_id: int = "",
+    tenant_id: int = 0,
     user_id: str = "",
 ) -> bool:
     """**实时通道**给出了答复：把现场一并记上答复并直接关掉（`pending`/`answered` → `consumed`）。

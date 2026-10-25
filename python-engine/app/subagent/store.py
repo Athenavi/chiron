@@ -320,7 +320,7 @@ class SubagentRunStore:
         parent_run_id: str = "",
         rerun_of: str = "",
         depth: int = 1,
-        tenant_id: int = "",
+        tenant_id: int = 0,
         user_id: str = "",
         agent_id: str | None = None,
         profile_name: str = "",

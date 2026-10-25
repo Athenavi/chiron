@@ -31,7 +31,7 @@ class EditCommand:
     node_id: str
     command: str  # "update_config" / "skip_node" / "replay_node"
     config_updates: dict[str, Any] = field(default_factory=dict)  # {key: new_value}
-    tenant_id: int = ""  # SaaS 安全: 租户隔离
+    tenant_id: int = 0  # SaaS 安全: 租户隔离
 
 
 @dataclass
@@ -334,7 +334,7 @@ class TracingWorkflowEngine:
         trace_id: str,
         node_index: int,
         node_fns: dict[str, Any],
-        tenant_id: int = "",
+        tenant_id: int = 0,
     ) -> NodeResult:
         """执行单个节点 (带 trace)
 

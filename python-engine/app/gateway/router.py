@@ -140,7 +140,7 @@ class GatewayRouter:
         messages: list[Any],
         model: str,
         *,
-        tenant_id: int = "",
+        tenant_id: int = 0,
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -267,7 +267,7 @@ class GatewayRouter:
         messages: list[Any],
         model: str,
         *,
-        tenant_id: int = "",
+        tenant_id: int = 0,
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -493,7 +493,7 @@ class GatewayRouter:
     # ── 内部路由 ──
 
     async def _select(
-        self, model: str, hint: str = "", tenant_id: int = "", embed: bool = False
+        self, model: str, hint: str = "", tenant_id: int = 0, embed: bool = False
     ) -> LLMProvider | None:
         """选择 Provider — 支持租户路由覆盖。
 
