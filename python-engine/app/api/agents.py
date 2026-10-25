@@ -49,7 +49,7 @@ async def dispatch_agent(body: AgentDispatchRequest) -> dict[str, Any]:
         # 标记用户活跃（驱动 MCP 插件轮询范围）
         from app.main import touch_user
 
-        touch_user(body.tenant_id)
+        touch_user(str(body.tenant_id))
 
         # 延迟导入：避免 app.main ↔ app.api 循环依赖
         from app.agent.multi_agent import SubAgent

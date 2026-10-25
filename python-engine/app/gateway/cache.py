@@ -103,7 +103,7 @@ class SemanticCache:
             # 取前 N 维，量化为 int8
             prefix = embedding[: self._semantic_prefix_dims]
             quantized = bytes(max(0, min(255, int((v + 1) * 127.5))) for v in prefix)
-            h = hashlib.sha256(quantized + tenant_id.encode() + model.encode()).hexdigest()[:16]
+            h = hashlib.sha256(quantized + str(tenant_id).encode() + model.encode()).hexdigest()[:16]
             return h
         except Exception as e:
             logger.debug("Semantic key computation failed: %s", e)

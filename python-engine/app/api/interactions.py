@@ -26,6 +26,8 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Query
 
+from app.tools.context import to_tenant_int
+
 logger = logging.getLogger(__name__)
 
 router = APIRouter(tags=["agent-interactions"])

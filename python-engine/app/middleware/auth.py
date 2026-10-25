@@ -213,7 +213,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return False
         return hmac.compare_digest(provided, self._internal_token)
 
-    async def _validate_jwt(self, token: str) -> str | None:
+    async def _validate_jwt(self, token: str) -> int | None:
         """解析 JWT 获取 tenant_id，并校验弱密钥黑名单与 Redis 登出黑名单。
 
         与 Go 端 ValidateJWTSecret + jwt:blacklist:<jti> 保持一致。

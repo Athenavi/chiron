@@ -180,7 +180,7 @@ def resolve_skill_roots(
             write=Path(root), search=((Path(root), SCOPE_ROOT),), write_scope=SCOPE_ROOT
         )
     base = Path(os.getenv("SKILL_STORE_PATH", DEFAULT_SKILL_ROOT))
-    tid = _safe_segment(tenant_id, "tenant_id")
+    tid = _safe_segment(str(tenant_id), "tenant_id")
     uid = _safe_segment(user_id, "user_id")
     global_shared = base / SHARED_DIR
     # 全局旧目录迁移（无身份路径也会触发，与历史行为一致）

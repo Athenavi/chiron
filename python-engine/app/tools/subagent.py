@@ -26,6 +26,7 @@ from app.tools.context import (
     get_gateway,
     get_session_id,
     get_tenant_id,
+    get_tenant_id_int,
     get_tool_context,
     get_user_id,
     restore_context,
