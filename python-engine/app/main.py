@@ -363,6 +363,10 @@ def _bind_gateways() -> None:
     from app.tools.pm import bind_gateway as bind_pm_gateway
     from app.workflow.tools import bind_gateway as bind_workflow_gateway
 
+    # `_gateway` 在 lifespan 里初始化；这里断言收窄类型，让 mypy 知道它非 None。
+    # 如果走到这里还是 None，说明 lifespan 没被正常执行 —— 直接失败比静默把 None
+    # 绑进各个模块、等到第一次真正调用 LLM 时才炸要好。
+    assert _gateway is not None
     bind_graph_gateway(_gateway)
     bind_pm_gateway(_gateway)
     bind_workflow_gateway(_gateway)

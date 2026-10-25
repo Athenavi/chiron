@@ -29,7 +29,7 @@ class SubagentContext:
     """一次委派的上下文（由 `app/tools/subagent.py` 装配，Target 只读）。"""
 
     task: str = ""
-    tenant_id: str = ""
+    tenant_id: int = ""
     user_id: str = ""
     session_id: str = ""
     depth: int = 0

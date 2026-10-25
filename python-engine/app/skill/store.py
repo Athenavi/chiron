@@ -165,7 +165,7 @@ def _with_builtin_source(
 def resolve_skill_roots(
     root: PathLike | None = None,
     *,
-    tenant_id: str = "",
+    tenant_id: int = "",
     user_id: str = "",
     scope: str = "",
 ) -> SkillRoots:
@@ -221,7 +221,7 @@ def resolve_skill_roots(
 def resolve_skill_root(
     root: PathLike | None = None,
     *,
-    tenant_id: str = "",
+    tenant_id: int = "",
     user_id: str = "",
 ) -> Path:
     """兼容包装：返回解析结果中的写目录（历史签名，外部仍可按需调用）。"""
@@ -280,7 +280,7 @@ class SkillStore:
         self,
         root: PathLike | None = None,
         *,
-        tenant_id: str = "",
+        tenant_id: int = "",
         user_id: str = "",
         scope: str = "",
     ) -> None:

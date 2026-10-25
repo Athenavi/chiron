@@ -284,7 +284,7 @@ async def test_executor_emits_webhook_to_the_real_tenant(monkeypatch):
     monkeypatch.setattr("app.db.get_pool", lambda: pool)
     events: list[tuple[str, dict[str, Any], str]] = []
 
-    async def _fake_emit(event_type: str, payload: dict[str, Any], tenant_id: str = "") -> bool:
+    async def _fake_emit(event_type: str, payload: dict[str, Any], tenant_id: int = "") -> bool:
         events.append((event_type, payload, tenant_id))
         return True
 

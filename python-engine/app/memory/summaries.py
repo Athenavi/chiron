@@ -41,7 +41,7 @@ def new_summary_id() -> str:
     return f"sms_{uuid.uuid4().hex[:20]}"
 
 
-def compute_hash(tenant_id: str, user_id: str, content: str) -> str:
+def compute_hash(tenant_id: int, user_id: str, content: str) -> str:
     raw = f"{tenant_id}:{user_id}:{content}"
     return f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:40]}"
 
@@ -214,7 +214,7 @@ class SummaryStore:
             self._milvus_fail.failure(f"insert summary {entry.id}: {e}")
 
     async def get_by_id(
-        self, tenant_id: str, user_id: str, summary_id: str
+        self, tenant_id: int, user_id: str, summary_id: str
     ) -> SummaryEntry | None:
         row = await self._pool.fetchrow(
             f"SELECT {_COLUMNS} FROM memory_summaries WHERE id=$1 AND tenant_id=$2 AND user_id=$3",
@@ -225,7 +225,7 @@ class SummaryStore:
         return _row_to_entry(row) if row else None
 
     async def get_by_hash(
-        self, tenant_id: str, user_id: str, content_hash: str
+        self, tenant_id: int, user_id: str, content_hash: str
     ) -> SummaryEntry | None:
         row = await self._pool.fetchrow(
             f"SELECT {_COLUMNS} FROM memory_summaries WHERE content_hash=$1 AND tenant_id=$2 AND user_id=$3",
@@ -236,7 +236,7 @@ class SummaryStore:
         return _row_to_entry(row) if row else None
 
     async def list_active(
-        self, tenant_id: str, user_id: str, limit: int = 50, *, with_embedding: bool = False
+        self, tenant_id: int, user_id: str, limit: int = 50, *, with_embedding: bool = False
     ) -> list[SummaryEntry]:
         """列出活跃摘要。
 
@@ -271,7 +271,7 @@ class SummaryStore:
         )
         return "UPDATE 1" in (result or "")
 
-    async def archive_expired(self, tenant_id: str, user_id: str, days: int) -> int:
+    async def archive_expired(self, tenant_id: int, user_id: str, days: int) -> int:
         """归档超期未命中的摘要。"""
         result = await self._pool.execute(
             """UPDATE memory_summaries SET status='archived'
@@ -288,7 +288,7 @@ class SummaryStore:
             else 0
         )
 
-    async def count_by_topic(self, tenant_id: str, user_id: str, topic: str) -> int:
+    async def count_by_topic(self, tenant_id: int, user_id: str, topic: str) -> int:
         row = await self._pool.fetchrow(
             """SELECT COUNT(*) as cnt FROM memory_summaries
                WHERE tenant_id=$1 AND user_id=$2 AND status='active'
@@ -299,7 +299,7 @@ class SummaryStore:
         )
         return row["cnt"] if row else 0
 
-    async def delete_all(self, tenant_id: str, user_id: str) -> int:
+    async def delete_all(self, tenant_id: int, user_id: str) -> int:
         result = await self._pool.execute(
             "DELETE FROM memory_summaries WHERE tenant_id=$1 AND user_id=$2",
             tenant_id,

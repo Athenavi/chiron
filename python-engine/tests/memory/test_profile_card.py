@@ -29,7 +29,7 @@ class MockDatabasePool:
         self._items: dict[tuple, dict[str, Any]] = {}
         self._row_id_counter = 1
 
-    def _key(self, tenant_id: str, user_id: str, slot: str, item_key: str) -> tuple:
+    def _key(self, tenant_id: int, user_id: str, slot: str, item_key: str) -> tuple:
         return (tenant_id, user_id, slot, item_key)
 
     def _make_row(self, item: dict[str, Any]) -> dict[str, Any]:

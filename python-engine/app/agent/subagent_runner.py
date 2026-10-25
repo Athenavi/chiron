@@ -171,7 +171,7 @@ def _wrap_result(run_id: str, profile: str, status: str, output: str, truncated:
 
 
 async def _reserve_line(
-    root: str, tenant_id: str, *, member: str, tokens: int
+    root: str, tenant_id: int, *, member: str, tokens: int
 ) -> str:
     """M15b：为这一 run 在任务线上预留 ``tokens``，返回句柄（``""`` = 没预留）。
 
@@ -193,7 +193,7 @@ async def _reserve_line(
 
 async def _project_line(
     root: str,
-    tenant_id: str,
+    tenant_id: int,
     *,
     handle: str,
     member: str,
@@ -265,7 +265,7 @@ def _line_axis(errors: list[str]) -> str:
 async def _report_line_exhaustion(
     *,
     root: str,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     session_id: str,
     run_id: str,
@@ -433,7 +433,7 @@ class SubAgentRunner:
         parent_session_id: str = "",
         parent_run_id: str = "",
         turn_id: str = "",
-        tenant_id: str = "",
+        tenant_id: int = "",
         user_id: str = "",
         sink: Any = None,
         cache: Any = None,

@@ -85,7 +85,7 @@ async def summarise_messages(
     *,
     gateway: Any,
     model: str,
-    tenant_id: str = "",
+    tenant_id: int = "",
     max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> str:
@@ -137,7 +137,7 @@ def build_summariser(
     gateway: Any,
     *,
     model: str = "",
-    tenant_id: str = "",
+    tenant_id: int = "",
     max_input_chars: int = DEFAULT_MAX_INPUT_CHARS,
     max_tokens: int = DEFAULT_MAX_TOKENS,
 ) -> Summariser:

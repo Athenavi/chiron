@@ -63,7 +63,7 @@ def _pool() -> Any:
     return get_pool()
 
 
-async def claim(key: str, task_id: str, task_type: str, tenant_id: str) -> bool:
+async def claim(key: str, task_id: str, task_type: str, tenant_id: int) -> bool:
     """抢占执行权。True=应执行；False=该键已 completed，调用方应跳过并 ACK。"""
     try:
         pool = _pool()

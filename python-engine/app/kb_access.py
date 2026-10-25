@@ -35,7 +35,7 @@ def kb_storage_tenant(kb_row: Any) -> str:
     return kb_visibility_tenant(kb_row) or DEFAULT_TENANT_ID
 
 
-def kb_access_allowed(kb_row: Any, user_id: str, tenant_id: str = "") -> bool:
+def kb_access_allowed(kb_row: Any, user_id: str, tenant_id: int = "") -> bool:
     """自己的 / 公开的 / 同租户共享的 —— 三选一才放行。
 
     调用方租户缺省按默认租户比对（单租户部署网关不注入 tenant_id）。

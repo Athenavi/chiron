@@ -1159,7 +1159,7 @@ class AgentRuntime:
         *,
         model: str,
         provider_hint: str,
-        tenant_id: str,
+        tenant_id: int,
         max_tokens: int,
         temperature: float,
         tools: list[dict[str, Any]] | None,
@@ -4342,7 +4342,7 @@ async def run_agent(
     tools: list[dict[Any, Any]] | None = None,
     llm_config: dict[Any, Any] | None = None,
     max_turns: int | None = None,
-    tenant_id: str = "",
+    tenant_id: int = "",
     provider_hint: str = "",
 ) -> AsyncIterator[dict[Any, Any]]:
     """

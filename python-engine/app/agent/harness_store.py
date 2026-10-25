@@ -48,7 +48,7 @@ def _clamp(text: str) -> str:
     return text[:MAX_SUFFIX_CHARS]
 
 
-async def _query(tenant_id: str, user_id: str, model: str) -> str:
+async def _query(tenant_id: int, user_id: str, model: str) -> str:
     """取最匹配的一条：用户级优先于租户级；模型前缀更长的优先于更短的。"""
     try:
         from app.db import get_pool
@@ -81,7 +81,7 @@ async def _query(tenant_id: str, user_id: str, model: str) -> str:
     return _clamp(str(row["system_prompt_suffix"] or ""))
 
 
-async def resolve_suffix(tenant_id: str, user_id: str, model: str) -> str:
+async def resolve_suffix(tenant_id: int, user_id: str, model: str) -> str:
     """返回该租户/用户/模型适用的 harness suffix；没有则空串（= 不生效）。"""
     if not tenant_id:
         return ""

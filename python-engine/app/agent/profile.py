@@ -177,7 +177,7 @@ async def load_profile(
     pool: Any,
     *,
     ref: str,
-    tenant_id: str = "",
+    tenant_id: int = "",
     user_id: str = "",
 ) -> ProfileSpec | None:
     """按 id 或 name 加载 Profile（限 ``kind='subagent'`` 且同租户）。

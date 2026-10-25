@@ -43,7 +43,7 @@ async def execute_with_checkpoint(
     initial_state: dict[str, Any],
     user_id: str = "",
     gateway: Any = None,
-    tenant_id: str = "",
+    tenant_id: int = "",
 ) -> None:
     """执行（或续跑）一个 workflow instance 并写回终态。worker/fallback 均调用。"""
     from app.db import get_pool

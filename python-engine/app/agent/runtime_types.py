@@ -24,7 +24,7 @@ class AgentTask:
     """Agent 任务定义"""
 
     id: str
-    tenant_id: str
+    tenant_id: int
     user_id: str
     session_id: str
     content: str

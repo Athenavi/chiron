@@ -25,7 +25,7 @@ class _FakeProfileStore:
     def __init__(self) -> None:
         self.touched: list[list[str]] = []
 
-    async def list(self, tenant_id: str, user_id: str, *, slot: str = "", project: str = "") -> list[Any]:
+    async def list(self, tenant_id: int, user_id: str, *, slot: str = "", project: str = "") -> list[Any]:
         return []
 
     async def touch(self, ids: list[str]) -> None:

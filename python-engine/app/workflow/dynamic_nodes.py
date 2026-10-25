@@ -69,7 +69,7 @@ class WorkflowNodeWithSkill:
     async def execute_with_skill(
         self,
         state: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str = "",
     ) -> dict[str, Any]:
         """使用绑定的技能执行节点
@@ -193,7 +193,7 @@ class DynamicWorkflowEngine:
     async def discover_and_bind_skills(
         self,
         node_type: str = "skill",
-        tenant_id: str = "",
+        tenant_id: int = "",
     ) -> list[Capability]:
         """自动发现并推荐可用 Skills"""
         caps = await self.registry.list_by_workstation(

@@ -105,7 +105,7 @@ def _decode(raw: Any) -> dict[str, Any]:
 
 async def create(
     *,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     session_id: str,
     kind: str,
@@ -231,7 +231,7 @@ async def create(
 async def resolve(
     *,
     interaction_id: str,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     decision: dict[str, Any],
     reason: str = "",
@@ -285,7 +285,7 @@ async def resolve(
 
 
 async def peek(
-    *, interaction_id: str, tenant_id: str, user_id: str
+    *, interaction_id: str, tenant_id: int, user_id: str
 ) -> dict[str, Any] | None:
     """按 id 读一张**自己的**票（`{id, kind, status, session_id, tool_name, args_hash, request}`）。
 
@@ -326,7 +326,7 @@ async def peek(
 
 async def consume_grant(
     *,
-    tenant_id: str,
+    tenant_id: int,
     session_id: str,
     kind: str,
     tool_name: str,
@@ -390,7 +390,7 @@ async def settle(
     decision: dict[str, Any],
     reason: str = "",
     decided_by: str = "",
-    tenant_id: str = "",
+    tenant_id: int = "",
     user_id: str = "",
 ) -> bool:
     """**实时通道**给出了答复：把现场一并记上答复并直接关掉（`pending`/`answered` → `consumed`）。
@@ -445,7 +445,7 @@ async def settle(
 
 
 async def list_open(
-    *, tenant_id: str, user_id: str, session_id: str, limit: int = 20
+    *, tenant_id: int, user_id: str, session_id: str, limit: int = 20
 ) -> list[dict[str, Any]]:
     """列出该会话"还等着人"的介入（网关列表路由用）。
 
@@ -488,7 +488,7 @@ async def list_open(
 
 
 async def list_open_for_user(
-    *, tenant_id: str, user_id: str, limit: int = 20
+    *, tenant_id: int, user_id: str, limit: int = 20
 ) -> list[dict[str, Any]]:
     """**跨会话**列出这个人还等着的介入（M21 全局角标用）。
 
@@ -539,7 +539,7 @@ INTERACTION_EVENTS_CHANNEL = "interaction:events"
 async def _publish_pending_event(
     *,
     interaction_id: str,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     session_id: str,
     kind: str,

@@ -45,7 +45,7 @@ class SystemToolClient:
         self,
         tool_name: str,
         params: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
     ) -> dict[str, Any]:
         """

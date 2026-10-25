@@ -88,7 +88,7 @@ class SkillMetadata:
     status: SkillStatus = SkillStatus.ACTIVE
     created_at: float = field(default_factory=time.time)
     updated_at: float = 0
-    tenant_id: str = ""  # SaaS 安全: 租户隔离
+    tenant_id: int = ""  # SaaS 安全: 租户隔离
 
 
 @dataclass
@@ -103,7 +103,7 @@ class SkillExecutionResult:
     duration_ms: int = 0
     metadata: dict[str, Any] = field(default_factory=dict)
     trace_id: str = ""
-    tenant_id: str = ""
+    tenant_id: int = ""
 
 
 class MCPClient:
@@ -177,7 +177,7 @@ class MCPClient:
         tool_name: str,
         arguments: dict[str, Any],
         trace_id: str = "",
-        tenant_id: str = "",
+        tenant_id: int = "",
     ) -> SkillExecutionResult:
         """调用 MCP 工具"""
         start_time = time.time()
@@ -421,7 +421,7 @@ class SkillManager:
 
     async def register_skill(
         self,
-        tenant_id: str,
+        tenant_id: int,
         skill_id: str,
         name: str,
         description: str,
@@ -470,7 +470,7 @@ class SkillManager:
 
         return skill
 
-    async def unregister_skill(self, tenant_id: str, skill_id: str) -> bool:
+    async def unregister_skill(self, tenant_id: int, skill_id: str) -> bool:
         """卸载技能"""
         full_skill_id = f"{tenant_id}:{skill_id}"
         if full_skill_id in self._skills:
@@ -481,7 +481,7 @@ class SkillManager:
 
     async def list_skills(
         self,
-        tenant_id: str,
+        tenant_id: int,
         skill_type: SkillType | None = None,
         status: SkillStatus | None = None,
     ) -> list[SkillMetadata]:
@@ -500,7 +500,7 @@ class SkillManager:
 
     async def execute_skill(
         self,
-        tenant_id: str,
+        tenant_id: int,
         skill_id: str,
         params: dict[str, Any],
         trace_id: str = "",
@@ -605,7 +605,7 @@ class SkillManager:
         skill_meta: SkillMetadata,
         params: dict[str, Any],
         full_skill_id: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         start_time: float,
     ) -> SkillExecutionResult:
@@ -702,7 +702,7 @@ class SkillManager:
         skill_meta: SkillMetadata,
         params: dict[str, Any],
         full_skill_id: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         start_time: float,
     ) -> SkillExecutionResult:
@@ -778,7 +778,7 @@ class SkillManager:
         skill_meta: SkillMetadata,
         params: dict[str, Any],
         full_skill_id: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         start_time: float,
     ) -> SkillExecutionResult:

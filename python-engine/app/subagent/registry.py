@@ -61,7 +61,7 @@ class RunHandle:
 
     task: asyncio.Task[Any]
     session_id: str = ""
-    tenant_id: str = ""
+    tenant_id: int = ""
     profile: str = ""
     started_at: float = field(default_factory=time.time)
     last_event_at: float = field(default_factory=time.time)
@@ -91,7 +91,7 @@ def register(
     task: asyncio.Task[Any],
     *,
     session_id: str = "",
-    tenant_id: str = "",
+    tenant_id: int = "",
     profile: str = "",
 ) -> None:
     if not run_id:

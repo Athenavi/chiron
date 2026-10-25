@@ -223,7 +223,7 @@ def build_snapshot(
 
 async def save(
     *,
-    tenant_id: str,
+    tenant_id: int,
     session_id: str,
     checkpoint: RunCheckpoint,
     run_token: str = "",
@@ -291,7 +291,7 @@ async def save(
         return False
 
 
-async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
+async def load(*, tenant_id: int, session_id: str) -> RunCheckpoint | None:
     """读最近一次**活跃 run** 的 checkpoint。
 
     只认 `ACTIVE_STATUSES`（running/checkpointed/resuming）：终态行（completed/failed/
@@ -331,7 +331,7 @@ async def load(*, tenant_id: str, session_id: str) -> RunCheckpoint | None:
 
 async def mark(
     *,
-    tenant_id: str,
+    tenant_id: int,
     session_id: str,
     status: str,
     run_token: str = "",
@@ -373,7 +373,7 @@ async def mark(
 
 async def claim(
     *,
-    tenant_id: str,
+    tenant_id: int,
     session_id: str,
     expected_run_token: str,
     new_run_token: str,
@@ -416,7 +416,7 @@ async def claim(
 
 
 async def load_awaiting(
-    *, tenant_id: str, session_id: str
+    *, tenant_id: int, session_id: str
 ) -> dict[str, Any] | None:
     """M7：读那个"正在等人"的 run 的现场（`{checkpoint, run_token}`）；没有则 None。
 
@@ -454,7 +454,7 @@ async def load_awaiting(
 
 
 async def claim_awaiting(
-    *, tenant_id: str, session_id: str, new_run_token: str
+    *, tenant_id: int, session_id: str, new_run_token: str
 ) -> bool:
     """把挂起的 run **交还给即将续跑的这一轮**（`awaiting_input → resuming`）。
 
@@ -490,7 +490,7 @@ async def claim_awaiting(
 
 
 async def release_awaiting(
-    *, tenant_id: str, session_id: str, run_token: str = ""
+    *, tenant_id: int, session_id: str, run_token: str = ""
 ) -> bool:
     """M7：把挂起现场**作废**（`awaiting_input → abandoned`）—— 读完之后唯一的其他出路。
 

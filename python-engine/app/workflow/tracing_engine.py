@@ -31,7 +31,7 @@ class EditCommand:
     node_id: str
     command: str  # "update_config" / "skip_node" / "replay_node"
     config_updates: dict[str, Any] = field(default_factory=dict)  # {key: new_value}
-    tenant_id: str = ""  # SaaS 安全: 租户隔离
+    tenant_id: int = ""  # SaaS 安全: 租户隔离
 
 
 @dataclass
@@ -43,7 +43,7 @@ class WorkflowEditSession:
 
     session_id: str
     workflow_instance_id: str
-    tenant_id: str  # SaaS 安全: 租户隔离
+    tenant_id: int  # SaaS 安全: 租户隔离
     commands: list[EditCommand] = field(default_factory=list)
     created_at: float = field(default_factory=time.time)
     expires_at: float = 0  # 0 表示永不过期,默认 1 小时
@@ -72,7 +72,7 @@ def get_edit_session(session_id: str) -> WorkflowEditSession | None:
 
 def create_edit_session(
     workflow_instance_id: str,
-    tenant_id: str,
+    tenant_id: int,
     ttl: int = _EDIT_SESSION_TTL,
 ) -> str:
     """创建编辑会话,返回 session_id"""
@@ -105,7 +105,7 @@ class TracingWorkflowEngine:
         self,
         graph_json: dict[str, Any],
         initial_state: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         instance_id: str | None = None,
     ) -> AsyncIterator[AgentEvent]:
         """运行工作流 (带完整 trace)
@@ -334,7 +334,7 @@ class TracingWorkflowEngine:
         trace_id: str,
         node_index: int,
         node_fns: dict[str, Any],
-        tenant_id: str = "",
+        tenant_id: int = "",
     ) -> NodeResult:
         """执行单个节点 (带 trace)
 
@@ -392,7 +392,7 @@ class TracingWorkflowEngine:
     def _check_edit_commands(
         self,
         workflow_id: str,
-        tenant_id: str,
+        tenant_id: int,
     ) -> WorkflowEditSession | None:
         """检查是否有该工作流的编辑会话"""
         for _session_id, session in list(_edit_sessions.items()):
@@ -409,7 +409,7 @@ class TracingWorkflowEngine:
 async def run_workflow_traced(
     graph_json: dict[str, Any],
     initial_state: dict[str, Any],
-    tenant_id: str,
+    tenant_id: int,
     gateway: GatewayRouter,
 ) -> AsyncIterator[AgentEvent]:
     """便捷函数: 运行带 trace 的工作流"""

@@ -79,7 +79,7 @@ class Consolidator:
 
     async def consolidate(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         messages: list[dict[str, Any]],
@@ -190,7 +190,7 @@ class Consolidator:
 
     async def _find_near_duplicate(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         embedding: list[float],
         *,
@@ -311,7 +311,7 @@ def new_summary_id() -> str:
     return f"sms_{uuid.uuid4().hex[:20]}"
 
 
-def compute_hash(tenant_id: str, user_id: str, content: str) -> str:
+def compute_hash(tenant_id: int, user_id: str, content: str) -> str:
     """计算内容哈希。"""
     raw = f"{tenant_id}:{user_id}:{content}"
     return f"sha256:{hashlib.sha256(raw.encode()).hexdigest()[:40]}"

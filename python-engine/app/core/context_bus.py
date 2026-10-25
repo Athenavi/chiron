@@ -49,7 +49,7 @@ class ContextMessage:
     topic: str  # 主题: "agent.results", "workflow.state"
     message_type: MessageType
     data: dict[str, Any]
-    tenant_id: str  # SaaS 安全: 租户隔离
+    tenant_id: int  # SaaS 安全: 租户隔离
     message_id: str = ""  # UUID
     timestamp: float = field(default_factory=time.time)
     ttl: int = 3600  # TTL (秒), 默认 1 小时
@@ -72,7 +72,7 @@ class InMemoryContextBus:
         self,
         topic: str,
         data: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         message_type: MessageType = MessageType.RESULT_PUBLISH,
         ttl: int = 3600,
     ) -> ContextMessage:
@@ -126,7 +126,7 @@ class InMemoryContextBus:
         return False
 
     async def query(
-        self, topic: str, tenant_id: str, limit: int = 10
+        self, topic: str, tenant_id: int, limit: int = 10
     ) -> list[ContextMessage]:
         """查询主题的历史消息"""
         messages = self._message_log.get(topic, [])
@@ -134,7 +134,7 @@ class InMemoryContextBus:
         filtered = [m for m in messages if m.tenant_id == tenant_id]
         return filtered[-limit:]
 
-    async def get_latest(self, topic: str, tenant_id: str) -> ContextMessage | None:
+    async def get_latest(self, topic: str, tenant_id: int) -> ContextMessage | None:
         """获取主题的最近一条消息"""
         messages = await self.query(topic, tenant_id, limit=1)
         return messages[0] if messages else None
@@ -161,7 +161,7 @@ class RedisContextBus:
         self,
         topic: str,
         data: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         message_type: MessageType = MessageType.RESULT_PUBLISH,
         ttl: int = 3600,
     ) -> ContextMessage:
@@ -216,7 +216,7 @@ class RedisContextBus:
         return message
 
     async def subscribe(
-        self, topic: str, callback: Callable[..., Any], tenant_id: str = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: int = ""
     ) -> None:
         """订阅主题 (Redis Pub/Sub + 本地回调)
 
@@ -339,7 +339,7 @@ class RedisContextBus:
                         pass
 
     async def unsubscribe(
-        self, topic: str, callback: Callable[..., Any], tenant_id: str = ""
+        self, topic: str, callback: Callable[..., Any], tenant_id: int = ""
     ) -> bool:
         """取消订阅"""
         removed = False
@@ -361,7 +361,7 @@ class RedisContextBus:
         return removed
 
     async def query(
-        self, topic: str, tenant_id: str, limit: int = 10
+        self, topic: str, tenant_id: int, limit: int = 10
     ) -> list[ContextMessage]:
         """查询历史消息 (从 Redis Stream)"""
         stream_key = rkey(f"contextbus:{tenant_id}:{topic}")
@@ -384,7 +384,7 @@ class RedisContextBus:
 
         return messages
 
-    async def get_latest(self, topic: str, tenant_id: str) -> ContextMessage | None:
+    async def get_latest(self, topic: str, tenant_id: int) -> ContextMessage | None:
         """获取最新状态 (从 Snapshot)"""
         snapshot_key = rkey(f"contextbus:snapshot:{tenant_id}:{topic}")
 
@@ -428,7 +428,7 @@ async def get_context_bus(redis_client: Any = None) -> Any:
 
 # ── 便捷函数 ────────────────────────────────────────────────────────
 async def publish_result(
-    topic: str, data: dict[str, Any], tenant_id: str, trace_id: str = ""
+    topic: str, data: dict[str, Any], tenant_id: int, trace_id: str = ""
 ) -> Any:
     """便捷函数: 发布结果到总线"""
     bus = await get_context_bus()
@@ -436,7 +436,7 @@ async def publish_result(
 
 
 async def publish_state_change(
-    topic: str, data: dict[str, Any], tenant_id: str
+    topic: str, data: dict[str, Any], tenant_id: int
 ) -> Any:
     """便捷函数: 发布状态变更"""
     bus = await get_context_bus()
@@ -444,7 +444,7 @@ async def publish_state_change(
 
 
 async def subscribe_topic(
-    topic: str, callback: Callable[..., Any], tenant_id: str = ""
+    topic: str, callback: Callable[..., Any], tenant_id: int = ""
 ) -> Any:
     """便捷函数: 订阅主题"""
     bus = await get_context_bus()

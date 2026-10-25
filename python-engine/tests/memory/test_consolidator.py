@@ -40,7 +40,7 @@ class FakeSummaryStore:
 
     async def get_by_hash(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         content_hash: str,
     ) -> SummaryEntry | None:
@@ -71,7 +71,7 @@ class FakeSummaryStore:
 
     async def get_by_id(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         summary_id: str,
     ) -> SummaryEntry | None:
@@ -81,7 +81,7 @@ class FakeSummaryStore:
 
     async def list_active(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         limit: int = 50,
         *,
@@ -132,7 +132,7 @@ def mock_embedder():
 @pytest.fixture
 def mock_summariser():
     """创建模拟摘要函数。"""
-    async def summariser(messages: list[dict], tenant_id: str = "") -> str:
+    async def summariser(messages: list[dict], tenant_id: int = "") -> str:
         return "这是一段测试摘要，关于 Python 编程学习"
     return summariser
 
@@ -140,7 +140,7 @@ def mock_summariser():
 @pytest.fixture
 def mock_summariser_failing():
     """创建失败的模拟摘要函数。"""
-    async def summariser(messages: list[dict], tenant_id: str = "") -> str:
+    async def summariser(messages: list[dict], tenant_id: int = "") -> str:
         raise RuntimeError("LLM service unavailable")
     return summariser
 
@@ -1079,7 +1079,7 @@ class TestEmbedInputAndSpaceTags:
         口径是裸正文：同一句话会算出两颗不同的向量，判重与召回因此各说各话。
         """
         # 正文里重复出现的词会被 `_extract_topics` 提成主题，非空主题才检验得到"前置"那一半
-        async def summariser(messages: list[dict], tenant_id: str = "") -> str:
+        async def summariser(messages: list[dict], tenant_id: int = "") -> str:
             return "Python 编程 Python 编程"
 
         texts: list[str] = []

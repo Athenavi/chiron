@@ -33,7 +33,7 @@ class SessionMeta:
     """
 
     session_id: str
-    tenant_id: str
+    tenant_id: int
     user_id: str
     entry_channel: EntryChannel
     mode: str  # agent 模式
@@ -80,7 +80,7 @@ class Scope:
     不受 project 影响。
     """
 
-    tenant_id: str
+    tenant_id: int
     user_id: str
     session_id: str
     project: str = ""
@@ -169,7 +169,7 @@ class MemoryEntry:
     """L2 用户记忆条目（= user_memory_entries 行模型，profile.py 持久层使用）。"""
 
     id: str
-    tenant_id: str
+    tenant_id: int
     user_id: str
     slot: Any
     item_key: str
@@ -282,7 +282,7 @@ class SummaryEntry:
     """
 
     id: str
-    tenant_id: str
+    tenant_id: int
     user_id: str
     session_id: str
     content: str
@@ -383,7 +383,7 @@ class MemoryConflict:
     old_value: Any
     new_value: Any
     source: SourceType
-    tenant_id: str
+    tenant_id: int
     user_id: str
     created_at: float
     #: C3：冲突所属项目（空 = 未分组）。裁决时要定位回**同一个项目**的那条记忆 ——

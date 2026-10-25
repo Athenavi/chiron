@@ -64,7 +64,7 @@ async def call_tool(
     args: dict[str, Any] | None,
     *,
     server_name: str = "",
-    tenant_id: str = "",
+    tenant_id: int = "",
     session_id: str = "",
     tool_call_id: str = "",
     tools_mode: str = "auto",

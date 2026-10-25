@@ -32,7 +32,7 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class UserKnowledgeSettings:
     user_id: str
-    tenant_id: str
+    tenant_id: int
     provider: str
     cloud_api_key: str = ""          # 解密后的明文，仅存在于内存
     cloud_folder_id: str = ""        # PageIndex Cloud 的用户级 folder（非安全边界，见迁移 0024）
@@ -88,7 +88,7 @@ async def load(user_id: str) -> UserKnowledgeSettings | None:
 async def save(
     *,
     user_id: str,
-    tenant_id: str,
+    tenant_id: int,
     provider: str,
     cloud_api_key: str | None = None,
 ) -> UserKnowledgeSettings:

@@ -41,7 +41,7 @@ class SessionMetaStore:
     def create(
         self,
         session_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         entry_channel: EntryChannel = "web",
         mode: str = "agent",

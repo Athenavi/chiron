@@ -96,7 +96,7 @@ class SummaryStore:
     # ── 缓存键生成 ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _query_cache_key(tenant_id: str, user_id: str, query: str) -> str:
+    def _query_cache_key(tenant_id: int, user_id: str, query: str) -> str:
         """生成查询缓存键。"""
         raw = f"{tenant_id}:{user_id}:{query}"
         h = hashlib.sha256(raw.encode()).hexdigest()[:16]
@@ -270,7 +270,7 @@ class SummaryStore:
     async def _milvus_insert(
         self,
         summary_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         content: str,
@@ -385,7 +385,7 @@ class SummaryStore:
 
     async def _milvus_search(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         embedding: list[float],
         top_k: int,
@@ -448,7 +448,7 @@ class SummaryStore:
 
     async def _pg_vector_summaries(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         embedding: list[float],
         top_k: int,
@@ -503,7 +503,7 @@ class SummaryStore:
 
     async def _pg_recent_summaries(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         limit: int,
     ) -> list[RecalledItem]:
@@ -619,7 +619,7 @@ class SummaryStore:
     # ── 查询缓存 ──────────────────────────────────────────────────────
 
     async def _get_query_cache(
-        self, tenant_id: str, user_id: str, query: str
+        self, tenant_id: int, user_id: str, query: str
     ) -> list[RecalledItem] | None:
         """获取查询缓存。"""
         cache_key = self._query_cache_key(tenant_id, user_id, query)
@@ -634,7 +634,7 @@ class SummaryStore:
 
     async def _set_query_cache(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         query: str,
         items: list[RecalledItem],
@@ -649,7 +649,7 @@ class SummaryStore:
         except Exception as e:
             logger.warning("Set query cache failed: %s", e)
 
-    async def _invalidate_query_cache(self, tenant_id: str, user_id: str) -> None:
+    async def _invalidate_query_cache(self, tenant_id: int, user_id: str) -> None:
         """失效指定用户的所有查询缓存。"""
         try:
             pattern = rkey("memory:l3:query:*")
@@ -662,7 +662,7 @@ class SummaryStore:
 
     async def list_recent(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         limit: int = 50,
     ) -> list[dict[str, Any]]:
@@ -710,7 +710,7 @@ class SummaryStore:
 
     async def delete_summary(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         summary_id: str,
     ) -> bool:
@@ -734,7 +734,7 @@ class SummaryStore:
 
     async def get_by_hash(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         content_hash: str,
     ) -> SummaryEntry | None:
@@ -797,7 +797,7 @@ class SummaryStore:
 
     async def get_by_id(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         summary_id: str,
     ) -> SummaryEntry | None:
@@ -822,7 +822,7 @@ class SummaryStore:
 
     async def list_active(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         limit: int = 50,
         *,

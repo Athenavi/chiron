@@ -114,7 +114,7 @@ async def run_remote(
     *,
     engine: dict[str, str],
     task: str,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     session_id: str = "",
     mode: str = "normal",

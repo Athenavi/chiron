@@ -79,7 +79,7 @@ class ResumeState:
 
 
 async def load_resume_state(
-    *, tenant_id: str, session_id: str, run_token: str = ""
+    *, tenant_id: int, session_id: str, run_token: str = ""
 ) -> ResumeState | None:
     """读该会话的续跑现场；不可用时返回 None（调用方回落现状语义）。
 
@@ -319,7 +319,7 @@ async def _lock_is_held(session_id: str) -> bool:
 
 def rebuild_task(
     *,
-    tenant_id: str,
+    tenant_id: int,
     session_id: str,
     snapshot: dict[str, Any],
     run_token: str,

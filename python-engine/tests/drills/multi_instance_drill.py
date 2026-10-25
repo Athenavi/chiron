@@ -83,7 +83,7 @@ def free_port() -> int:
         return int(sock.getsockname()[1])
 
 
-def mint_token(secret: str, tenant_id: str = "t-drill") -> str:
+def mint_token(secret: str, tenant_id: int = "t-drill") -> str:
     now = int(time.time())
     claims = {
         "uid": "u-drill",

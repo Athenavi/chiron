@@ -42,7 +42,7 @@ class _StubStore:
         self.tokens = tokens
         self.seen: list[tuple[str, str]] = []
 
-    async def session_usage(self, session_id: str, tenant_id: str) -> tuple[int, int] | None:
+    async def session_usage(self, session_id: str, tenant_id: int) -> tuple[int, int] | None:
         self.seen.append((session_id, tenant_id))
         if self.tokens is None:
             return None
@@ -60,7 +60,7 @@ class _StubLedger(LineLedger):
     async def state(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         exclude_run_id: str = "",
         scope: str = "delegation",

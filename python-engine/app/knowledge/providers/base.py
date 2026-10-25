@@ -74,7 +74,7 @@ class ProviderContext:
     """
 
     kb_id: str
-    tenant_id: str
+    tenant_id: int
     user_id: str
     index_ref: str = ""
     config: dict[str, Any] = field(default_factory=dict)

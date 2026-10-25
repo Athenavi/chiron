@@ -140,7 +140,7 @@ class GatewayRouter:
         messages: list[Any],
         model: str,
         *,
-        tenant_id: str = "",
+        tenant_id: int = "",
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -267,7 +267,7 @@ class GatewayRouter:
         messages: list[Any],
         model: str,
         *,
-        tenant_id: str = "",
+        tenant_id: int = "",
         provider_hint: str = "",
         max_tokens: int = 4096,
         temperature: float = 0.7,
@@ -478,7 +478,7 @@ class GatewayRouter:
         logger.info("sync_routes loaded %d routes for %d tenants", len(routes), len(tenant_map))
         return len(routes)
 
-    def _get_tenant_provider(self, model: str, tenant_id: str) -> str | None:
+    def _get_tenant_provider(self, model: str, tenant_id: int) -> str | None:
         """按租户路由配置获取首选 provider 名称。
 
         返回 None 表示无匹配路由（回退默认加权选择）。
@@ -493,7 +493,7 @@ class GatewayRouter:
     # ── 内部路由 ──
 
     async def _select(
-        self, model: str, hint: str = "", tenant_id: str = "", embed: bool = False
+        self, model: str, hint: str = "", tenant_id: int = "", embed: bool = False
     ) -> LLMProvider | None:
         """选择 Provider — 支持租户路由覆盖。
 

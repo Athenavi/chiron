@@ -88,7 +88,7 @@ class TaskRouter:
     async def route_task(
         self,
         user_input: str,
-        tenant_id: str,
+        tenant_id: int,
         context: dict[str, Any] | None = None,
         priority: TaskPriority = TaskPriority.NORMAL,
         trace_id: str = "",
@@ -209,7 +209,7 @@ class TaskRouter:
         context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
-        tenant_id: str = "",
+        tenant_id: int = "",
     ) -> dict[str, Any]:
         """理解用户意图
 
@@ -248,7 +248,7 @@ class TaskRouter:
         context: dict[str, Any],
         model: str = "",
         provider_hint: str = "",
-        tenant_id: str = "",
+        tenant_id: int = "",
     ) -> dict[str, Any]:
         """使用 LLM 理解用户意图 (生产级实现)
 
@@ -318,7 +318,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _decompose_task(
         self,
         intent: dict[str, Any],
-        tenant_id: str,
+        tenant_id: int,
         user_input: str,
     ) -> list[SubTask]:
         """将意图拆解为子任务
@@ -366,7 +366,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _decompose_by_recommendation(
         self,
         recommended_workstations: list[Any],
-        tenant_id: str,
+        tenant_id: int,
         user_input: str,
         keywords: list[str],
     ) -> list[SubTask]:
@@ -504,7 +504,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _match_capabilities(
         self,
         subtasks: list[SubTask],
-        tenant_id: str,
+        tenant_id: int,
     ) -> list[SubTask]:
         """为每个子任务匹配能力"""
         matched = []
@@ -590,7 +590,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _execute_tasks(
         self,
         tasks: list[SubTask],
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str = "",
     ) -> list[ExecutedTask]:
         """执行所有子任务 (有依赖的按序执行,无依赖可并行)"""
@@ -688,7 +688,7 @@ Return ONLY valid JSON without markdown formatting."""
     async def _execute_single_task(
         self,
         task: SubTask,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         completed_tasks: dict[str, ExecutedTask],
     ) -> ExecutedTask:
@@ -1074,7 +1074,7 @@ Return ONLY valid JSON without markdown formatting."""
 # ── 便捷函数 ────────────────────────────────────────────────────────
 async def quick_execute(
     user_input: str,
-    tenant_id: str,
+    tenant_id: int,
     trace_id: str = "",
 ) -> dict[str, Any]:
     """快捷执行 API (Go 侧代理)"""

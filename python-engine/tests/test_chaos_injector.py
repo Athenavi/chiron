@@ -105,7 +105,7 @@ async def _run_middleware(faults, scope=None, monkeypatch=None, enabled=True):
     if monkeypatch is not None:
         monkeypatch.setattr(settings, "chaos_enabled", enabled)
 
-        async def fake_load(_tenant_id: str):
+        async def fake_load(_tenant_id: int):
             return faults
 
         monkeypatch.setattr(injector, "load_active_faults", fake_load)
@@ -191,7 +191,7 @@ async def test_loader_failure_never_breaks_requests(monkeypatch):
     """注入器自身出故障时，正常请求必须照常通过。"""
     monkeypatch.setattr(settings, "chaos_enabled", True)
 
-    async def boom(_tenant_id: str):
+    async def boom(_tenant_id: int):
         raise RuntimeError("redis down")
 
     monkeypatch.setattr(injector, "load_active_faults", boom)

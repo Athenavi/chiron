@@ -69,11 +69,11 @@ def unsupported_reason(fault_type: str, target: str) -> str | None:
     return None
 
 
-def _active_key(tenant_id: str) -> str:
+def _active_key(tenant_id: int) -> str:
     return rkey(f"chaos:active:{tenant_id}")
 
 
-async def load_active_faults(tenant_id: str) -> list[dict[str, Any]]:
+async def load_active_faults(tenant_id: int) -> list[dict[str, Any]]:
     """读取该租户的活跃故障：Redis 优先，未命中则查库并回填（TTL 很短）。
 
     任何一步失败都**退回空列表**（即不注入）—— 混沌工程自身故障时绝不能反过来
@@ -132,7 +132,7 @@ async def load_active_faults(tenant_id: str) -> list[dict[str, Any]]:
     return faults
 
 
-async def invalidate(tenant_id: str) -> None:
+async def invalidate(tenant_id: int) -> None:
     """写入侧主动失效缓存（Go / Python 任何一方改了实验状态都应调用）。"""
     if not tenant_id:
         return

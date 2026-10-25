@@ -26,7 +26,7 @@ async def authorize(
     tool_name: str,
     args: dict[str, Any] | None,
     *,
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     session_id: str,
     tool_call_id: str,

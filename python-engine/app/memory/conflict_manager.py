@@ -96,13 +96,13 @@ class ConflictManager:
         return rkey(f"memory:conflict:pending:{conflict_id}")
 
     @staticmethod
-    def _pending_list_key(tenant_id: str, user_id: str) -> str:
+    def _pending_list_key(tenant_id: int, user_id: str) -> str:
         """生成 pending_confirmation 列表键（用户维度）。"""
         return rkey(f"memory:conflict:pending_list:{tenant_id}:{user_id}")
 
     @staticmethod
     def _derived_count_key(
-        tenant_id: str, user_id: str, slot: str, item_key: str
+        tenant_id: int, user_id: str, slot: str, item_key: str
     ) -> str:
         """生成 derived 出现次数计数键。"""
         return rkey(
@@ -127,7 +127,7 @@ class ConflictManager:
 
     async def detect_and_handle_conflict(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -209,7 +209,7 @@ class ConflictManager:
 
     def _create_conflict_event(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -272,7 +272,7 @@ class ConflictManager:
 
     async def _increment_derived_count(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: str,
         item_key: str,
@@ -298,7 +298,7 @@ class ConflictManager:
 
     async def get_pending_conflicts(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
     ) -> list[MemoryConflict]:
         """获取用户的待裁决冲突列表。

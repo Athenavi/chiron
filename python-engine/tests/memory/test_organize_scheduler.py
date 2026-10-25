@@ -142,7 +142,7 @@ async def test_on_turn_complete_passes_project(monkeypatch):
     svc = _svc()
     seen: list[str] = []
 
-    async def fake_maybe(tenant_id: str, user_id: str, project: str = "") -> bool:
+    async def fake_maybe(tenant_id: int, user_id: str, project: str = "") -> bool:
         seen.append(project)
         return False
 

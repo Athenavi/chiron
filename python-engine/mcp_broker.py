@@ -63,7 +63,7 @@ class ToolCallRequest(BaseModel):
     tool_name: str
     arguments: dict[str, Any] = {}
     server_name: str = ""
-    tenant_id: str = ""
+    tenant_id: int = ""
     session_id: str = ""
     tool_call_id: str = ""
     tools_mode: str = "auto"

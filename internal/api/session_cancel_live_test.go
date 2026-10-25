@@ -66,8 +66,13 @@ func liveUser(t *testing.T, pool *pgxpool.Pool) string {
 		t.Fatalf("确保默认租户存在失败: %v", err)
 	}
 	id := uuid.NewString()
+	// tenant_id 是 NOT NULL（迁移 0002 之后 users.tenant_id 指向 tenants.id）。
+	// 上面已确保默认租户存在，这里必须显式带上 —— 漏掉 CI 会报
+	// `null value in column "tenant_id" of relation "users"`。
+	// 本机不设 CHIRON_TEST_POSTGRES_DSN，live 用例一直 skip，所以这个缺口从没暴露。
 	if _, err := pool.Exec(context.Background(),
-		`INSERT INTO users (id, name) VALUES ($1, $2)`, id, "pytest-cancel-live"); err != nil {
+		`INSERT INTO users (id, tenant_id, name) VALUES ($1, $2, $3)`,
+		id, db.DefaultTenantID, "pytest-cancel-live"); err != nil {
 		t.Fatalf("建用户失败: %v", err)
 	}
 	t.Cleanup(func() {

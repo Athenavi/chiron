@@ -243,7 +243,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return None
 
     async def _set_tenant_and_continue(
-        self, request: Request, call_next: RequestResponseEndpoint, tenant_id: str
+        self, request: Request, call_next: RequestResponseEndpoint, tenant_id: int
     ) -> Response:
         """设置 tenant_id 并继续"""
         token = tenant_id_var.set(tenant_id)

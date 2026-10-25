@@ -85,7 +85,7 @@ class _FakeStore:
         self.usage = usage
         self.calls: list[tuple[str, str]] = []
 
-    async def lineage_usage(self, root_run_id: str, tenant_id: str) -> tuple[int, int] | None:
+    async def lineage_usage(self, root_run_id: str, tenant_id: int) -> tuple[int, int] | None:
         self.calls.append((root_run_id, tenant_id))
         return self.usage
 
@@ -253,7 +253,7 @@ class _StubLedger:
         self.state_obj = state_obj
         self.calls: list[Any] = []
 
-    async def check(self, root: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0) -> str:
+    async def check(self, root: str, tenant_id: int, *, run_id: str = "", own_tokens: int = 0) -> str:
         self.calls.append(("check", root, tenant_id, run_id, own_tokens))
         if self.error:
             raise RuntimeError("boom")
@@ -262,14 +262,14 @@ class _StubLedger:
             return self.axes[idx] if idx < len(self.axes) else ""
         return self.axis
 
-    async def reserve(self, root: str, tenant_id: str, member: str, tokens: int) -> str:
+    async def reserve(self, root: str, tenant_id: int, member: str, tokens: int) -> str:
         self.calls.append(("reserve", root, member, tokens))
         return f"{member}{_TAB}{tokens}"
 
     async def project(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         member: str,
         handle: str,
@@ -287,12 +287,12 @@ class _StubLedger:
 
     # ── M15c 写侧 ──
 
-    async def pause_for_budget(self, root: str, tenant_id: str) -> bool:
+    async def pause_for_budget(self, root: str, tenant_id: int) -> bool:
         self.calls.append(("pause", root, tenant_id))
         return self.pause_ok
 
     async def raise_cap_and_resume(
-        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+        self, root: str, tenant_id: int, *, cap_tokens: int, updated_by: str
     ) -> bool:
         self.calls.append(("raise", root, tenant_id, cap_tokens, updated_by))
         return True
@@ -300,7 +300,7 @@ class _StubLedger:
     async def state(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         exclude_run_id: str = "",
         scope: str = "delegation",

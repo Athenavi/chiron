@@ -154,7 +154,7 @@ class MemoryService:
     async def on_session_start(
         self,
         session_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         entry_channel: EntryChannel = "web",
         mode: str = "agent",
@@ -322,7 +322,7 @@ class MemoryService:
 
     async def list_entries(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         include_archived: bool = False,
         slot: str | None = None,
@@ -352,7 +352,7 @@ class MemoryService:
 
     async def upsert(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: str,
         key: str,
@@ -454,7 +454,7 @@ class MemoryService:
 
     async def ingest_candidates(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         candidates: list[Any],
         project: str = "",
@@ -517,7 +517,7 @@ class MemoryService:
 
     async def update_entry(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         entry_id: str,
         key: str | None = None,
@@ -561,7 +561,7 @@ class MemoryService:
         )
 
     async def delete_entry(
-        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, entry_id: str, project: str = ""
     ) -> bool:
         """按 id 删除单条记忆（C3：project 参与过滤 —— 拿别的项目的 id 删不动）。"""
         removed: bool = await self._require_store().delete(
@@ -571,7 +571,7 @@ class MemoryService:
 
     async def forget_by_key(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         item_key: str,
         slot: str | None = None,
@@ -583,7 +583,7 @@ class MemoryService:
         )
         return removed
 
-    async def clear_all(self, tenant_id: str, user_id: str, project: str = "") -> int:
+    async def clear_all(self, tenant_id: int, user_id: str, project: str = "") -> int:
         """清空**某项目**的全部记忆（隐私出口；project 空 = 只清"未分组"）。"""
         removed: int = await self._require_store().delete_all(
             tenant_id, user_id, project=project
@@ -592,7 +592,7 @@ class MemoryService:
 
     async def search(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         query: str,
         top_k: int = 10,
@@ -690,7 +690,7 @@ class MemoryService:
 
     async def update_profile(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -713,7 +713,7 @@ class MemoryService:
 
     async def forget(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -732,7 +732,7 @@ class MemoryService:
 
     async def save_summary(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         messages: list[dict[str, Any]],
@@ -758,7 +758,7 @@ class MemoryService:
 
     async def list_summaries(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -773,7 +773,7 @@ class MemoryService:
 
     async def recall_summaries(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         query: str,
         top_k: int = 5,
@@ -890,7 +890,7 @@ class MemoryService:
 
     async def recall(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         query: str = "",
         top_k: int = 5,
@@ -986,7 +986,7 @@ class MemoryService:
 
     async def _register_conflict(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: str,
         key: str,
@@ -1052,7 +1052,7 @@ class MemoryService:
 
     async def list_conflicts_shared(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
     ) -> list[dict[str, Any]]:
         """待裁决冲突的**跨副本**视图：以 Redis 为准，并入本地未落盘的部分。
@@ -1121,7 +1121,7 @@ class MemoryService:
 
     def list_conflicts(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
     ) -> list[dict[str, Any]]:
         """列出待裁决的记忆冲突（按租户/用户隔离）。
@@ -1235,7 +1235,7 @@ class MemoryService:
     # ── 智能整理 ─────────────────────────────────────────────────────
 
     async def maybe_schedule_organize(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> bool:
         """C5：按阈值决定**是否现在**触发一次整理（三个条件任一满足）。
 
@@ -1287,7 +1287,7 @@ class MemoryService:
         return True
 
     async def organize_now(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> OrganizeResult:
         """同步执行一次整理：补向量 → 合并近重复 → 归档陈旧 → 淘汰超限。
 
@@ -1360,7 +1360,7 @@ class MemoryService:
 
     async def start_organize(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         project: str = "",
     ) -> dict[str, Any]:
@@ -1394,7 +1394,7 @@ class MemoryService:
         }
 
     async def _run_organize(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> None:
         key = (tenant_id, user_id, project)
         state = self._organize_state.setdefault(key, {})
@@ -1420,7 +1420,7 @@ class MemoryService:
             )
 
     def organize_status(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> dict[str, Any]:
         """整理任务状态（从未运行过时返回空态）。C3：按项目分别记账。"""
         state = self._organize_state.get((tenant_id, user_id, project), {})
@@ -1436,7 +1436,7 @@ class MemoryService:
 
     async def _find_near_duplicate(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         embedding: list[float],
         exclude_key: str | None = None,
@@ -1464,7 +1464,7 @@ class MemoryService:
         return None
 
     async def _evict_over_limit(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> int:
         """超过条目上限时淘汰：优先淘汰「派生 + 低置信 + 久未引用」的条目。
 
@@ -1577,7 +1577,7 @@ class MemoryService:
 
     async def _enqueue_consolidate(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         turn_count: int,
@@ -1602,7 +1602,7 @@ class MemoryService:
 
     async def _enqueue_rollup(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
     ) -> None:
@@ -1625,7 +1625,7 @@ class MemoryService:
 
 
 def _new_memory_entry(
-    tenant_id: str,
+    tenant_id: int,
     user_id: str,
     slot: str,
     key: str,

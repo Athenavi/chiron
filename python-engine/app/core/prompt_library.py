@@ -448,7 +448,7 @@ async def init_library() -> PromptLibrary:
 
 async def quick_execute_with_template(
     template_id: str,
-    tenant_id: str,
+    tenant_id: int,
     **kwargs: Any,
 ) -> tuple[str, str]:
     """使用模板快速执行

@@ -320,7 +320,7 @@ class SubagentRunStore:
         parent_run_id: str = "",
         rerun_of: str = "",
         depth: int = 1,
-        tenant_id: str = "",
+        tenant_id: int = "",
         user_id: str = "",
         agent_id: str | None = None,
         profile_name: str = "",
@@ -621,7 +621,7 @@ class SubagentRunStore:
             # 数字判断 —— 方向仍是"少算"，与线账整体的 fail-open 取向一致。
         return count
 
-    async def lineage_usage(self, root_run_id: str, tenant_id: str) -> tuple[int, int] | None:
+    async def lineage_usage(self, root_run_id: str, tenant_id: int) -> tuple[int, int] | None:
         """这条任务线（`root_run_id`）到今天为止累计花掉多少 token、跑过几条 run。
 
         返回 ``None`` = **问不出来**（表/列缺失、库不可用、或没有租户可比对）。
@@ -648,7 +648,7 @@ class SubagentRunStore:
             return (0, 0)
         return int(row["tokens"] or 0), int(row["runs"] or 0)
 
-    async def session_usage(self, session_id: str, tenant_id: str) -> tuple[int, int] | None:
+    async def session_usage(self, session_id: str, tenant_id: int) -> tuple[int, int] | None:
         """这个**会话**到今天为止累计花掉多少 token、跑过几回合（M26 会话线）。
 
         与 `lineage_usage` 的分工：那条按 `root_run_id` 数**子 Agent 委派树**；这条按

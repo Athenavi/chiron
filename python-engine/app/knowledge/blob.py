@@ -55,7 +55,7 @@ def validate_key(key: str) -> str:
     return key
 
 
-def build_key(tenant_id: str, kb_id: str, doc_id: str, filename: str) -> str:
+def build_key(tenant_id: int, kb_id: str, doc_id: str, filename: str) -> str:
     """按租户/库/文档分区；文件名只保留安全字符，避免覆盖同一文档的不同附件。"""
     safe_name = _UNSAFE_NAME_RE.sub("_", filename or "file").strip("._") or "file"
     return f"{tenant_id}/{kb_id}/{doc_id}/{safe_name[:180]}"

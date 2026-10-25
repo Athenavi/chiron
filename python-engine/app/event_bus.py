@@ -24,7 +24,7 @@ from app.config import settings
 logger = logging.getLogger(__name__)
 
 
-async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: str = "") -> bool:
+async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: int = "") -> bool:
     """向网关推送 Webhook 事件。
 
     Args:
@@ -74,7 +74,7 @@ async def emit_event(event_type: str, payload: dict[str, Any], tenant_id: str = 
 # ── 便捷事件函数 ──
 
 
-async def emit_agent_start(session_id: str, user_id: str, tenant_id: str, **extra: Any) -> bool:
+async def emit_agent_start(session_id: str, user_id: str, tenant_id: int, **extra: Any) -> bool:
     """Agent 开始推理事件"""
     payload = {
         "session_id": session_id,
@@ -86,7 +86,7 @@ async def emit_agent_start(session_id: str, user_id: str, tenant_id: str, **extr
 
 
 async def emit_agent_complete(
-    session_id: str, user_id: str, tenant_id: str,
+    session_id: str, user_id: str, tenant_id: int,
     tokens_used: int = 0, duration_ms: int = 0, **extra: Any,
 ) -> bool:
     """Agent 完成推理事件"""
@@ -102,7 +102,7 @@ async def emit_agent_complete(
 
 
 async def emit_agent_error(
-    session_id: str, user_id: str, tenant_id: str,
+    session_id: str, user_id: str, tenant_id: int,
     error: str, **extra: Any,
 ) -> bool:
     """Agent 推理出错事件"""
@@ -117,7 +117,7 @@ async def emit_agent_error(
 
 
 async def emit_knowledge_ingest(
-    kb_id: str, doc_id: str, doc_name: str, tenant_id: str, **extra: Any,
+    kb_id: str, doc_id: str, doc_name: str, tenant_id: int, **extra: Any,
 ) -> bool:
     """知识库文档处理完成事件"""
     payload = {
@@ -131,7 +131,7 @@ async def emit_knowledge_ingest(
 
 
 async def emit_knowledge_ingest_error(
-    kb_id: str, doc_id: str, doc_name: str, tenant_id: str, error: str, **extra: Any,
+    kb_id: str, doc_id: str, doc_name: str, tenant_id: int, error: str, **extra: Any,
 ) -> bool:
     """知识库文档处理失败事件"""
     payload = {

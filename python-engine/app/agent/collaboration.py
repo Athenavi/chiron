@@ -60,7 +60,7 @@ class CollaborativeTask:
 
     task_id: str
     original_query: str
-    tenant_id: str  # SaaS 安全: 租户隔离
+    tenant_id: int  # SaaS 安全: 租户隔离
     trace_id: str  # 链路追踪
     subtasks: list[dict[str, Any]]  # [{agent_role, description, dependencies}]
     shared_context: dict[str, Any] = field(default_factory=dict)  # 共享上下文
@@ -75,7 +75,7 @@ class AgentContextStore:
     - 内存 (单实例降级): dict[tenant_id][context_id] = data
     """
 
-    def __init__(self, tenant_id: str):
+    def __init__(self, tenant_id: int):
         self.tenant_id = tenant_id
         self._local_store: dict[str, dict[str, Any]] = {}
         self._redis_client = None  # Lazy load
@@ -391,7 +391,7 @@ class AgentHub:
         self,
         task: CollaborativeTask,
         trace_id: str,
-        tenant_id: str,
+        tenant_id: int,
     ) -> AsyncIterator[AgentEvent]:
         """基于 DAG 依赖关系调度子任务执行。
 
@@ -446,7 +446,7 @@ class AgentHub:
         subtask_idx: int,
         task: CollaborativeTask,
         trace_id: str,
-        tenant_id: str,
+        tenant_id: int,
         sem: asyncio.Semaphore,
         event_queue: asyncio.Queue[Any],
     ) -> None:
@@ -530,7 +530,7 @@ class AgentHub:
         spec: AgentSpec,
         task_id: str,
         content: str,
-        tenant_id: str,
+        tenant_id: int,
     ) -> AgentTask:
         """按 spec 构造完整的 AgentTask（含 mode/model/compaction 配置注入）。
 

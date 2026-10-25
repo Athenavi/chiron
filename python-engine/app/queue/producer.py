@@ -50,7 +50,7 @@ class QueueProducer:
     async def enqueue(
         self,
         task_type: str,
-        tenant_id: str,
+        tenant_id: int,
         payload: dict[str, Any],
         priority: int = 0,
         deadline_seconds: int | None = None,

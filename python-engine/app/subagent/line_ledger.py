@@ -379,7 +379,7 @@ class LineState:
     """一条任务线在被问到的那一刻的账目。"""
 
     root: str
-    tenant_id: str
+    tenant_id: int
     #: 生效上限（已解析过默认值）：``0`` = 该轴不限。
     cap: int
     settled: int
@@ -482,7 +482,7 @@ class LineLedger:
     async def state(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         exclude_run_id: str = "",
         scope: str = "delegation",
@@ -515,7 +515,7 @@ class LineLedger:
         )
 
     async def check(
-        self, root: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0
+        self, root: str, tenant_id: int, *, run_id: str = "", own_tokens: int = 0
     ) -> str:
         """闸门：返回越界轴名（``""`` = 放行，含"问不出来"）。"""
         state = await self.state(root, tenant_id, exclude_run_id=run_id)
@@ -528,7 +528,7 @@ class LineLedger:
         return axis
 
     async def check_session(
-        self, session_id: str, tenant_id: str, *, run_id: str = "", own_tokens: int = 0
+        self, session_id: str, tenant_id: int, *, run_id: str = "", own_tokens: int = 0
     ) -> str:
         """M26 会话线闸门：这条**会话**到今天该不该停（返回轴名，``""`` = 放行）。
 
@@ -560,7 +560,7 @@ class LineLedger:
         logger.warning("session line gate (%s, mode=%s): %s", axis, mode, state.describe())
         return axis if mode == "enforce" else ""
 
-    async def _ctrl_row(self, root: str, tenant_id: str) -> tuple[int, bool, str] | None:
+    async def _ctrl_row(self, root: str, tenant_id: int) -> tuple[int, bool, str] | None:
         """控制态**直接读 PG、不做镜像**。
 
         这是刻意的：cap/paused 是"人改了就应当生效"的东西。缓存 60s 换来的是
@@ -582,7 +582,7 @@ class LineLedger:
         return (int(row["cap_tokens"] or 0), bool(row["paused"]), str(row["pause_reason"] or ""))
 
     async def _settled(
-        self, root: str, tenant_id: str, *, scope: str = "delegation"
+        self, root: str, tenant_id: int, *, scope: str = "delegation"
     ) -> int | None:
         """**先读镜像，缺了才去 PG 求和** —— 这条快路径存在的全部理由。
 
@@ -753,7 +753,7 @@ class LineLedger:
 
     # ── 写 ──
 
-    async def reserve(self, root: str, tenant_id: str, member: str, tokens: int) -> str:
+    async def reserve(self, root: str, tenant_id: int, member: str, tokens: int) -> str:
         """为这一 run 预留 ``tokens``，返回**句柄**（``""`` = 没预留成）。
 
         悲观预留（按该 run 的 per-run token 上限）是有意的：它把"同一条线上并发多少个在途
@@ -798,7 +798,7 @@ class LineLedger:
     async def project(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         member: str,
         handle: str,
@@ -878,7 +878,7 @@ class LineLedger:
     async def set_control(
         self,
         root: str,
-        tenant_id: str,
+        tenant_id: int,
         *,
         cap_tokens: int | None = None,
         paused: bool | None = None,
@@ -920,7 +920,7 @@ class LineLedger:
             return False
         return _rowcount(result) > 0
 
-    async def pause_for_budget(self, root: str, tenant_id: str) -> bool:
+    async def pause_for_budget(self, root: str, tenant_id: int) -> bool:
         """闸门越界 ⇒ 暂停这条线（**不动 cap**：暂停是"停下来等人"，不是"额度变了"）。
 
         幂等：已经是 paused 的行再写一次没有副作用，所以每个失败段都可以放心调它。
@@ -928,7 +928,7 @@ class LineLedger:
         return await self.set_control(root, tenant_id, paused=True, reason=PAUSE_REASON_BUDGET)
 
     async def raise_cap_and_resume(
-        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+        self, root: str, tenant_id: int, *, cap_tokens: int, updated_by: str
     ) -> bool:
         """人工提额：写新上限**并**清暂停 —— 两者必须同时发生。
 

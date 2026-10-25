@@ -77,14 +77,14 @@ def _patch_checkpoint(
 ) -> list[tuple[str, str]]:
     recorded: list[tuple[str, str]] = marks if marks is not None else []
 
-    async def _load(*, tenant_id: str, session_id: str):  # noqa: ANN202
+    async def _load(*, tenant_id: int, session_id: str):  # noqa: ANN202
         return snapshot
 
     async def _pending(*, session_id: str, limit: int = 50):  # noqa: ANN202
         return list(pending or [])
 
     async def _mark(  # noqa: ANN202 — 与 checkpoint.mark 同步接受 run_token（A4 防踩踏）
-        *, tenant_id: str, session_id: str, status: str, run_token: str = ""
+        *, tenant_id: int, session_id: str, status: str, run_token: str = ""
     ) -> bool:
         recorded.append((session_id, status))
         return True
@@ -257,15 +257,15 @@ def _patch_awaiting(
     """挂起现场的读 / 接手 / 作废三条通道各记一份调用（真实实现是 CAS UPDATE）。"""
     calls: dict[str, list[str]] = {"read": [], "claim": [], "release": []}
 
-    async def _load_awaiting(*, tenant_id: str, session_id: str):  # noqa: ANN202
+    async def _load_awaiting(*, tenant_id: int, session_id: str):  # noqa: ANN202
         calls["read"].append(session_id)
         return found
 
-    async def _claim(*, tenant_id: str, session_id: str, new_run_token: str) -> bool:  # noqa: ANN202
+    async def _claim(*, tenant_id: int, session_id: str, new_run_token: str) -> bool:  # noqa: ANN202
         calls["claim"].append(new_run_token)
         return claim_ok
 
-    async def _release(*, tenant_id: str, session_id: str, run_token: str) -> bool:  # noqa: ANN202
+    async def _release(*, tenant_id: int, session_id: str, run_token: str) -> bool:  # noqa: ANN202
         calls["release"].append(run_token)
         return True
 
@@ -425,7 +425,7 @@ def _patch_reconciler(
         str(r["session_id"]): (str(r["status"]), str(r.get("run_token") or "")) for r in rows
     }
 
-    async def _mark(*, tenant_id: str, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
+    async def _mark(*, tenant_id: int, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
         marks.append((session_id, status))
         cur_status, cur_token = state.get(session_id, ("", ""))
         hit = cur_status in active and (not run_token or cur_token == run_token)
@@ -434,7 +434,7 @@ def _patch_reconciler(
         return hit
 
     async def _claim(  # noqa: ANN202
-        *, tenant_id: str, session_id: str, expected_run_token: str, new_run_token: str
+        *, tenant_id: int, session_id: str, expected_run_token: str, new_run_token: str
     ) -> bool:
         claims.append((session_id, expected_run_token, new_run_token))
         if not claim_ok:
@@ -613,11 +613,11 @@ async def test_sweep_release_is_scoped_to_the_taken_over_run(monkeypatch):
     new_tokens: list[str] = []
     mark_calls: list[tuple[str, str, str]] = []
 
-    async def _claim(*, tenant_id: str, session_id: str, expected_run_token: str, new_run_token: str) -> bool:  # noqa: ANN202
+    async def _claim(*, tenant_id: int, session_id: str, expected_run_token: str, new_run_token: str) -> bool:  # noqa: ANN202
         new_tokens.append(new_run_token)
         return True
 
-    async def _mark(*, tenant_id: str, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
+    async def _mark(*, tenant_id: int, session_id: str, status: str, run_token: str = "") -> bool:  # noqa: ANN202
         mark_calls.append((session_id, status, run_token))
         return True
 

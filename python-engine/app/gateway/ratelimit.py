@@ -34,7 +34,7 @@ class TenantRateLimiter:
         self.rpm = requests_per_minute
         self.rps = requests_per_second
 
-    async def allow(self, tenant_id: str) -> bool:
+    async def allow(self, tenant_id: int) -> bool:
         """检查是否允许请求通过"""
         if not tenant_id:
             return True
@@ -97,7 +97,7 @@ class TenantRateLimiter:
             return False
         return True
 
-    async def get_remaining(self, tenant_id: str) -> dict[str, Any]:
+    async def get_remaining(self, tenant_id: int) -> dict[str, Any]:
         """返回剩余额度"""
         now = time.time()
         s_key = rkey(f"ratelimit:{tenant_id}:s")
@@ -136,7 +136,7 @@ class LocalTenantRateLimiter:
         bucket[:] = [t for t in bucket if t > now - window]
         return len(bucket)
 
-    async def allow(self, tenant_id: str) -> bool:
+    async def allow(self, tenant_id: int) -> bool:
         """检查是否允许请求通过（进程内，单实例语义）"""
         if not tenant_id:
             return True
@@ -152,7 +152,7 @@ class LocalTenantRateLimiter:
             m.append(now)
             return True
 
-    async def get_remaining(self, tenant_id: str) -> dict[str, Any]:
+    async def get_remaining(self, tenant_id: int) -> dict[str, Any]:
         """返回剩余额度"""
         now = time.time()
         async with self._lock:

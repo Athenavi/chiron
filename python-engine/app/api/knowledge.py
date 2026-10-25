@@ -158,7 +158,7 @@ def _maybe_json(value: Any) -> Any:
 # ── Access helpers ──
 
 
-def _require_kb_access(kb_row: Any, user_id: str, tenant_id: str, *, action: str) -> None:
+def _require_kb_access(kb_row: Any, user_id: str, tenant_id: int, *, action: str) -> None:
     """KB 可见性 gate —— 规则本体在 ``app.kb_access``，与工具层共用一份。"""
     if not kb_access_allowed(kb_row, user_id, tenant_id):
         raise HTTPException(
@@ -231,7 +231,7 @@ async def list_knowledge_bases(user_id: str, tenant_id: int = 0) -> dict[str, An
 async def create_knowledge_base(
     *,
     user_id: str,
-    tenant_id: str,
+    tenant_id: int,
     name: str,
     description: str = "",
     provider: str = "",
@@ -610,7 +610,7 @@ async def delete_document(kb_id: str, user_id: str, doc_id: str) -> dict[str, An
 
 
 async def _enqueue_kb_index(
-    *, kb_id: str, user_id: str, tenant_id: str, force: bool = False
+    *, kb_id: str, user_id: str, tenant_id: int, force: bool = False
 ) -> str:
     """投递 ``kb_index`` 任务。
 
@@ -794,7 +794,7 @@ async def get_user_settings(user_id: str) -> dict[str, Any]:
 
 
 async def put_user_settings(
-    *, user_id: str, tenant_id: str, provider: str, cloud_api_key: str | None
+    *, user_id: str, tenant_id: int, provider: str, cloud_api_key: str | None
 ) -> dict[str, Any]:
     """保存 provider 选择（Cloud 时同时落密文）。"""
     if not is_known_provider(provider):

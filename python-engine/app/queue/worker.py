@@ -806,7 +806,7 @@ class QueueWorker:
         return promoted
 
     async def _dispatch(
-        self, task_type: str, payload: dict[Any, Any], tenant_id: str = ""
+        self, task_type: str, payload: dict[Any, Any], tenant_id: int = ""
     ) -> None:
         """分发任务到具体处理器"""
         if task_type == "memory_save":
@@ -924,7 +924,7 @@ class QueueWorker:
             job_id, res.get("status"), res.get("exit_code"),
         )
 
-    async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: str = "") -> None:
+    async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: int = "") -> None:
         """处理记忆持久化任务
 
         payload: {key, value, source, user_id?, slot?, confidence?}
@@ -953,7 +953,7 @@ class QueueWorker:
         )
         logger.info("memory_save 完成: key=%s tenant=%s", key, tenant_id)
 
-    async def _handle_memory_consolidate(self, payload: dict[Any, Any], tenant_id: str) -> None:
+    async def _handle_memory_consolidate(self, payload: dict[Any, Any], tenant_id: int) -> None:
         """处理记忆巩固任务：将对话消息巩固为 L3 摘要。
 
         payload: {session_id, user_id, turn_count, trigger}
@@ -1003,7 +1003,7 @@ class QueueWorker:
                 (outcome.get("summary") or {}).get("id"),
             )
 
-    async def _handle_memory_rollup(self, payload: dict[Any, Any], tenant_id: str) -> None:
+    async def _handle_memory_rollup(self, payload: dict[Any, Any], tenant_id: int) -> None:
         """处理记忆 rollup 任务：会话结束时的总结归档。
 
         payload: {session_id, user_id, trigger}
@@ -1043,7 +1043,7 @@ class QueueWorker:
         )
 
     async def _get_session_messages(
-        self, tenant_id: str, user_id: str, session_id: str
+        self, tenant_id: int, user_id: str, session_id: str
     ) -> list[dict[str, Any]]:
         """获取会话消息（从数据库）。"""
         from app.db import get_pool

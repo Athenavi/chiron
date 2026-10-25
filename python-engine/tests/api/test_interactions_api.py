@@ -67,7 +67,7 @@ class FakeLedger:
         self.calls: list[tuple[Any, ...]] = []
 
     async def raise_cap_and_resume(
-        self, root: str, tenant_id: str, *, cap_tokens: int, updated_by: str
+        self, root: str, tenant_id: int, *, cap_tokens: int, updated_by: str
     ) -> bool:
         self.calls.append((root, tenant_id, cap_tokens, updated_by))
         return self.ok
@@ -93,7 +93,7 @@ class FakeStore:
         self.settle_calls: list[dict[str, Any]] = []
         self.list_calls: list[dict[str, Any]] = []
 
-    async def peek(self, *, interaction_id: str, tenant_id: str, user_id: str) -> dict[str, Any] | None:
+    async def peek(self, *, interaction_id: str, tenant_id: int, user_id: str) -> dict[str, Any] | None:
         self.peek_calls.append({"id": interaction_id, "tenant": tenant_id, "user": user_id})
         return self.row
 

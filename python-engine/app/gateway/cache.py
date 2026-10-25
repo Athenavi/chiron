@@ -54,7 +54,7 @@ class SemanticCache:
 
     @staticmethod
     def _exact_key(
-        tenant_id: str,
+        tenant_id: int,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,
@@ -77,7 +77,7 @@ class SemanticCache:
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     async def _semantic_key(
-        self, tenant_id: str, messages: list[ChatMessage], model: str
+        self, tenant_id: int, messages: list[ChatMessage], model: str
     ) -> str | None:
         """语义缓存 key: embedding 前 64 维量化 → hash（含租户维度）
 
@@ -113,7 +113,7 @@ class SemanticCache:
 
     async def lookup(
         self,
-        tenant_id: str,
+        tenant_id: int,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,
@@ -159,7 +159,7 @@ class SemanticCache:
 
     async def store(
         self,
-        tenant_id: str,
+        tenant_id: int,
         model: str,
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,

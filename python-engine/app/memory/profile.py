@@ -114,7 +114,7 @@ class ProfileStore:
 
     async def list(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         include_archived: bool = False,
         slot: str | None = None,
@@ -139,7 +139,7 @@ class ProfileStore:
         return [_row_to_entry(r) for r in rows]
 
     async def list_evictable(
-        self, tenant_id: str, user_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, project: str = ""
     ) -> builtins.list[EvictionRow]:
         """列出**未分组/某项目**内参与容量淘汰的行的最小必要列。
 
@@ -169,7 +169,7 @@ class ProfileStore:
         ]
 
     async def get_by_id(
-        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, entry_id: str, project: str = ""
     ) -> MemoryEntry | None:
         sql = (
             f"SELECT {_COLUMNS} FROM user_memory_entries "
@@ -179,7 +179,7 @@ class ProfileStore:
         return _row_to_entry(row) if row else None
 
     async def get_by_key(
-        self, tenant_id: str, user_id: str, slot: str, item_key: str, project: str = ""
+        self, tenant_id: int, user_id: str, slot: str, item_key: str, project: str = ""
     ) -> MemoryEntry | None:
         """按 (tenant, user, project, slot, key) 取一条 —— 与唯一约束同一组键（C3）。"""
         sql = (
@@ -189,7 +189,7 @@ class ProfileStore:
         row = await self._pool.fetchrow(sql, tenant_id, user_id, slot, item_key, project)
         return _row_to_entry(row) if row else None
 
-    async def count(self, tenant_id: str, user_id: str, project: str = "") -> int:
+    async def count(self, tenant_id: int, user_id: str, project: str = "") -> int:
         return int(
             await self._pool.fetchval(
                 "SELECT COUNT(*) FROM user_memory_entries "
@@ -291,7 +291,7 @@ class ProfileStore:
 
     async def update(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         entry_id: str,
         *,
@@ -351,7 +351,7 @@ class ProfileStore:
         return row is not None
 
     async def delete(
-        self, tenant_id: str, user_id: str, entry_id: str, project: str = ""
+        self, tenant_id: int, user_id: str, entry_id: str, project: str = ""
     ) -> bool:
         row = await self._pool.fetchrow(
             "DELETE FROM user_memory_entries "
@@ -365,7 +365,7 @@ class ProfileStore:
 
     async def delete_by_key(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         item_key: str,
         slot: str | None = None,
@@ -394,7 +394,7 @@ class ProfileStore:
         )
         return len(rows)
 
-    async def delete_all(self, tenant_id: str, user_id: str, project: str = "") -> int:
+    async def delete_all(self, tenant_id: int, user_id: str, project: str = "") -> int:
         """清空某用户**某个项目**的条目（C3：project 空了只清"未分组"）。"""
         rows = await self._pool.fetch(
             "DELETE FROM user_memory_entries "

@@ -88,7 +88,7 @@ class Capability:
     status: str = "active"  # "active" / "inactive" / "deprecated"
 
     # 租户隔离
-    tenant_id: str = ""  # 空字符串表示全局能力
+    tenant_id: int = ""  # 空字符串表示全局能力
 
     # 性能指标
     avg_latency_ms: int = 0
@@ -217,7 +217,7 @@ class CapabilitiesRegistry:
         for word in desc_words:
             self._index_by_description.append((word, full_id))
 
-    async def unregister(self, capability_id: str, tenant_id: str = "") -> bool:
+    async def unregister(self, capability_id: str, tenant_id: int = "") -> bool:
         """注销能力"""
         full_id = f"{tenant_id}:{capability_id}" if tenant_id else capability_id
         if full_id in self._capabilities:
@@ -227,7 +227,7 @@ class CapabilitiesRegistry:
         return False
 
     async def get_by_id(
-        self, capability_id: str, tenant_id: str = ""
+        self, capability_id: str, tenant_id: int = ""
     ) -> Capability | None:
         """根据 ID 获取能力
 
@@ -243,7 +243,7 @@ class CapabilitiesRegistry:
     async def list_by_workstation(
         self,
         workstation_type: WorkstationType,
-        tenant_id: str = "",
+        tenant_id: int = "",
         status: str | None = None,
     ) -> list[Capability]:
         """列出某工作台的所有能力"""
@@ -262,7 +262,7 @@ class CapabilitiesRegistry:
     async def search(
         self,
         query: str,
-        tenant_id: str = "",
+        tenant_id: int = "",
         workstation_type: WorkstationType | None = None,
         capability_type: CapabilityType | None = None,
         limit: int = 10,
@@ -322,7 +322,7 @@ class CapabilitiesRegistry:
     async def find_best_match(
         self,
         intent: str,
-        tenant_id: str,
+        tenant_id: int,
         available_workstations: list[WorkstationType] | None = None,
     ) -> Capability | None:
         """找到最匹配意图的能力
@@ -351,7 +351,7 @@ class CapabilitiesRegistry:
         return best
 
     async def resolve_dependencies(
-        self, capability_id: str, tenant_id: str = ""
+        self, capability_id: str, tenant_id: int = ""
     ) -> list[Capability]:
         """解析组合能力的依赖链"""
         cap = await self.get_by_id(capability_id, tenant_id)

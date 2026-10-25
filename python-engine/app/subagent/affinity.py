@@ -117,7 +117,7 @@ def owner_ttl() -> int:
     return value if value > 0 else DEFAULT_OWNER_TTL
 
 
-def _payload(*, run_id: str, token: str, session_id: str, tenant_id: str) -> str:
+def _payload(*, run_id: str, token: str, session_id: str, tenant_id: int) -> str:
     from app.config import settings
 
     return json.dumps({
@@ -150,7 +150,7 @@ async def publish_owner(
     *,
     token: str,
     session_id: str = "",
-    tenant_id: str = "",
+    tenant_id: int = "",
 ) -> bool:
     """写入（或续期）一次作业归属。返回是否成功。"""
     if redis is None or not run_id:
@@ -230,7 +230,7 @@ class OwnerLease:
         run_id: str,
         *,
         session_id: str = "",
-        tenant_id: str = "",
+        tenant_id: int = "",
         redis: Any = None,
         ttl_seconds: int | None = None,
     ) -> None:

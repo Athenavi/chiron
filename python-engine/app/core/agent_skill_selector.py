@@ -73,7 +73,7 @@ class AgentContext:
 
     agent_id: str
     role: AgentRole
-    tenant_id: str
+    tenant_id: int
     task_description: str
 
     # 状态存储
@@ -124,7 +124,7 @@ class RoleSkillMatcher:
         self,
         role: AgentRole,
         task_description: str,
-        tenant_id: str,
+        tenant_id: int,
         top_k: int = 5,
     ) -> list[Capability]:
         """根据角色和任务描述匹配最优技能
@@ -179,7 +179,7 @@ class RoleSkillMatcher:
     async def recommend_skills_for_task(
         self,
         task_description: str,
-        tenant_id: str,
+        tenant_id: int,
         available_roles: list[AgentRole] | None = None,
         top_k: int = 10,
     ) -> dict[str, Any]:
@@ -472,7 +472,7 @@ async def init_matcher() -> RoleSkillMatcher:
 
 async def auto_select_skills(
     task_description: str,
-    tenant_id: str,
+    tenant_id: int,
 ) -> dict[str, Any]:
     """自动选择技能 (便捷函数)
 

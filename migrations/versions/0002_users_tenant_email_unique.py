@@ -25,7 +25,7 @@ Revises: 0001_authoritative_baseline
 
 from typing import Sequence, Union
 
-from alembic import op
+from alembic import context, op
 
 revision: str = "0002_users_tenant_email_unique"
 down_revision: Union[str, Sequence[str], None] = "0001_authoritative_baseline"
@@ -34,6 +34,14 @@ depends_on: Union[str, Sequence[str], None] = None
 
 
 def upgrade() -> None:
+    # 离线模式（`alembic upgrade --sql`）只生成 DDL，不连接数据库。
+    # 此时 op.get_bind() 返回的是 MockConnection，没有 exec_driver_sql。
+    # 而且离线 SQL 本就不应依赖「当前库里有没有重复行」这种运行时状态 ——
+    # 所以校验跳过，只把 CREATE UNIQUE INDEX 写进离线 SQL；
+    # 真正执行迁移（在线模式）时校验照常生效。
+    if context.is_offline_mode():
+        return
+
     conn = op.get_bind()
 
     duplicates = conn.exec_driver_sql(

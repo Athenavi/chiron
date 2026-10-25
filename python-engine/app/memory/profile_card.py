@@ -62,13 +62,13 @@ class ProfileCard:
     # ── 缓存键生成 ──────────────────────────────────────────────────────
 
     @staticmethod
-    def _cache_key(tenant_id: str, user_id: str) -> str:
+    def _cache_key(tenant_id: int, user_id: str) -> str:
         """生成档案卡缓存键。"""
         return rkey(f"memory:profile:{tenant_id}:{user_id}")
 
     # ── 1. get_profile ──────────────────────────────────────────────────
 
-    async def get_profile(self, tenant_id: str, user_id: str) -> list[ProfileItem]:
+    async def get_profile(self, tenant_id: int, user_id: str) -> list[ProfileItem]:
         """获取用户的完整档案卡（带 Redis 缓存）。
 
         优先从 Redis 缓存读取，缓存 miss 时查询 PostgreSQL 并回填。
@@ -114,7 +114,7 @@ class ProfileCard:
 
         return items
 
-    async def _fetch_from_db(self, tenant_id: str, user_id: str) -> list[ProfileItem]:
+    async def _fetch_from_db(self, tenant_id: int, user_id: str) -> list[ProfileItem]:
         """从 PostgreSQL 查询档案卡。"""
         query = """
             SELECT slot, item_key, item_value, confidence, source,
@@ -151,7 +151,7 @@ class ProfileCard:
 
     async def upsert_item(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -258,7 +258,7 @@ class ProfileCard:
 
     async def delete_item(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -320,7 +320,7 @@ class ProfileCard:
 
     # ── 5. evict_over_limit ──────────────────────────────────────────────
 
-    async def evict_over_limit(self, tenant_id: str | None = None) -> int:
+    async def evict_over_limit(self, tenant_id: int | None = None) -> int:
         """软限淘汰（200 条目上限）。
 
         对超出 200 条目的用户，按 confidence × recency 排序淘汰最低条目。
@@ -384,7 +384,7 @@ class ProfileCard:
 
     async def _get_item(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -423,7 +423,7 @@ class ProfileCard:
 
     async def _insert_item(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -464,7 +464,7 @@ class ProfileCard:
 
     async def _update_item(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         slot: SlotType,
         item_key: str,
@@ -510,7 +510,7 @@ class ProfileCard:
             now_ts,
         )
 
-    async def _invalidate_cache(self, tenant_id: str, user_id: str) -> None:
+    async def _invalidate_cache(self, tenant_id: int, user_id: str) -> None:
         """失效缓存。"""
         if self._redis is not None:
             cache_key = self._cache_key(tenant_id, user_id)

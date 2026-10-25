@@ -27,7 +27,7 @@ logger = logging.getLogger(__name__)
 TRACES_STREAM_TPL = rkey("chiron:traces:{}")  # {} 将被 tenant_id 替换
 
 
-def get_tenant_stream(tenant_id: str) -> str:
+def get_tenant_stream(tenant_id: int) -> str:
     """根据 tenant_id 生成隔离的 Redis Stream 键名."""
     if not tenant_id:
         return TRACES_STREAM_TPL.format("anonymous")  # 匿名租户默认 key
@@ -73,7 +73,7 @@ class TraceWriter:
         span_name: str,
         duration_ms: int,
         metadata: dict[str, Any] | None = None,
-        tenant_id: str | None = None,  # SaaS: 租户隔离
+        tenant_id: int | None = None,  # SaaS: 租户隔离
         span_id: str = "",
         parent_span_id: str = "",
         kind: str = "",
@@ -183,7 +183,7 @@ async def record_span(
     span_name: str,
     duration_ms: int,
     metadata: dict[str, Any] | None = None,
-    tenant_id: str | None = None,  # SaaS: 租户隔离
+    tenant_id: int | None = None,  # SaaS: 租户隔离
     redis_url: str | None = None,
     span_id: str = "",
     parent_span_id: str = "",

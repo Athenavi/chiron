@@ -34,7 +34,7 @@ class ChatSession:
     """对话会话"""
 
     session_id: str
-    tenant_id: str
+    tenant_id: int
     # 会话归属是用户级的：内存兜底路径也要能校验 user，否则 DB 不可用时会
     # 退化成"同租户内任意用户可读别人会话"。
     user_id: str = ""
@@ -115,7 +115,7 @@ class UnifiedChatHandler:
     async def _db_ensure_session(
         self,
         session_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         title: str,
         mode: str,
@@ -189,7 +189,7 @@ class UnifiedChatHandler:
     async def submit_task(
         self,
         user_input: str,
-        tenant_id: str,
+        tenant_id: int,
         session_id: str | None = None,
         mode: str = "auto",  # "auto" / "agent" / "workflow"
         trace_id: str = "",
@@ -499,7 +499,7 @@ class UnifiedChatHandler:
     async def _execute_via_agent(
         self,
         user_input: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         agent_config: dict[str, Any] | None = None,
         attachments: list[Any] | None = None,
@@ -596,7 +596,7 @@ class UnifiedChatHandler:
     async def _execute_via_workflow(
         self,
         user_input: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         workflow_ids: list[str] | None = None,
     ) -> dict[str, Any]:
@@ -720,7 +720,7 @@ class UnifiedChatHandler:
         self,
         kb_ids: list[str],
         query: str,
-        tenant_id: str,
+        tenant_id: int,
         trace_id: str,
         top_k: int = 5,
         limit: int = 12,
@@ -806,7 +806,7 @@ class UnifiedChatHandler:
     async def get_session_messages(
         self,
         session_id: str,
-        tenant_id: str | None = None,
+        tenant_id: int | None = None,
         user_id: str | None = None,
         limit: int = 50,
     ) -> dict[str, Any]:
@@ -1117,7 +1117,7 @@ def apply_agent_bindings(context: dict[str, Any], payload: dict[str, Any]) -> No
 
 
 async def load_agent_payload(
-    agent_id: str, tenant_id: str, user_id: str
+    agent_id: str, tenant_id: int, user_id: str
 ) -> dict[str, Any] | None:
     """按 id 取 Agent 配置；不存在/非本人/DB 不可用时返回 None（不阻断对话）。"""
     if not agent_id.strip():

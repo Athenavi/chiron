@@ -89,7 +89,7 @@ class MemoryManager:
 
     async def save_memory(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         content: str,
@@ -127,7 +127,7 @@ class MemoryManager:
     async def _save_short_term(
         self,
         memory_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         content: str,
@@ -162,7 +162,7 @@ class MemoryManager:
     async def _save_long_term(
         self,
         memory_id: str,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         session_id: str,
         content: str,
@@ -220,7 +220,7 @@ class MemoryManager:
 
     async def query_memory(
         self,
-        tenant_id: str,
+        tenant_id: int,
         user_id: str,
         query: str,
         top_k: int = 5,
@@ -242,7 +242,7 @@ class MemoryManager:
             return []
 
     async def _query_short_term(
-        self, tenant_id: str, user_id: str, top_k: int
+        self, tenant_id: int, user_id: str, top_k: int
     ) -> list[Any]:
         """查询短期记忆"""
         if self._cache_client:
@@ -299,7 +299,7 @@ class MemoryManager:
             return results
 
     async def _query_long_term(
-        self, tenant_id: str, user_id: str, query: str, top_k: int
+        self, tenant_id: int, user_id: str, query: str, top_k: int
     ) -> list[Any]:
         """查询长期记忆"""
         # 计算查询向量
