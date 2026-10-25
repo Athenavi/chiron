@@ -460,7 +460,7 @@ class TestRealPostgresSemantics:
         line = self._id("line")
         a = await self._seed(root=line, tokens=(100, 50))
         b = await self._seed(root=line, tokens=(20, 10))
-        other_tenant = await self._seed(root=line, tokens=(7, 7), tenant="t2")
+        other_tenant = await self._seed(root=line, tokens=(7, 7), tenant=2)
         no_tenant = await self._seed(root=line, tokens=(999, 999), tenant=None)
         other_line = await self._seed(tokens=(500, 500))
         store = SubagentRunStore(get_pool())

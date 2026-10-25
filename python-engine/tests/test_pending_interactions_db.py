@@ -349,7 +349,7 @@ async def _insert_run(pool: Any, session_id: str, *, status: str, run_token: str
         INSERT INTO agent_runs
             (id, tenant_id, session_id, turn_id, run_token, status,
              checkpoint, checkpoint_at, created_at, updated_at)
-        VALUES ($1, 't-a', $2, 'turn-1', $3, $4, $5::jsonb, now(), now(), now())
+        VALUES ($1, 1, $2, 'turn-1', $3, $4, $5::jsonb, now(), now(), now())
         """,
         row_id,
         session_id,

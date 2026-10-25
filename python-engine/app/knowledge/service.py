@@ -26,6 +26,7 @@ from app.knowledge.providers.base import (
     AnswerResult,
     ProviderContext,
 )
+from app.tools.context import to_tenant_int
 
 logger = logging.getLogger(__name__)
 
@@ -54,7 +55,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 def _context(kb: Any, doc_ids: tuple[str, ...] = ()) -> ProviderContext:
     return ProviderContext(
         kb_id=str(kb["id"]),
-        tenant_id=int(kb["tenant_id"] or 0),
+        tenant_id=to_tenant_int(kb["tenant_id"]),
         user_id=str(kb["user_id"] or ""),
         index_ref=str(kb["index_ref"] or ""),
         config=_as_dict(kb["config"]),

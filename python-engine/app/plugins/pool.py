@@ -26,6 +26,7 @@ from app.observability.metrics import (
 )
 from app.plugins.owner_lease import MCPBridge, MCPOwnerLease
 from app.plugins.store import ActiveTracker, PluginStore, RedisActiveTracker, ServerConfig
+from app.tools.context import to_tenant_int
 from app.tools.registry import SOURCE_MCP, registry
 
 logger = logging.getLogger(__name__)
@@ -432,7 +433,7 @@ def _make_broker_handler(uid: str, tool_name: str) -> Any:
                 uid,
                 tool_name,
                 kwargs,
-                tenant_id=int(get_tool_context("tenant_id", 0) or 0),
+                tenant_id=to_tenant_int(get_tool_context("tenant_id", 0)),
                 session_id=get_session_id() or "",
                 tool_call_id=str(get_tool_context("tool_call_id", "") or ""),
                 tools_mode=str(get_tool_context("tools_mode", "auto") or "auto"),

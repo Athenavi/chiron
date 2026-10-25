@@ -22,7 +22,6 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
-from app.tools.context import to_tenant_int
 from app.hooks import audit, events, inject
 from app.hooks.runner import (
     COMMAND_BLOCKED_PREFIX,
@@ -33,6 +32,7 @@ from app.hooks.runner import (
     run_webhook_hook,
     webhook_target_error,
 )
+from app.tools.context import to_tenant_int
 
 logger = logging.getLogger(__name__)
 

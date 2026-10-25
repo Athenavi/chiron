@@ -26,6 +26,8 @@ import uuid
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, cast
 
+from app.tools.context import to_tenant_int
+
 if TYPE_CHECKING:
     from app.agent.checkpoint import RunCheckpoint
 
@@ -434,7 +436,7 @@ async def sweep_once(
     for row in rows or []:
         stats["scanned"] += 1
         session_id = str(row["session_id"] or "")
-        tenant_id = int(row["tenant_id"] or 0)
+        tenant_id = to_tenant_int(row["tenant_id"])
         if not session_id:
             continue
         # `resuming` 是 claim() 的交接中间态：写它的进程要么在同一轮把它推成

@@ -23,6 +23,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.memory.layers import SummaryEntry
+from app.tools.context import to_tenant_int
 
 logger = logging.getLogger(__name__)
 
@@ -76,7 +77,7 @@ async def backfill_summary_vectors(
     for row in rows:
         entry = SummaryEntry(
             id=str(row["id"]),
-            tenant_id=int(row["tenant_id"] or 0),
+            tenant_id=to_tenant_int(row["tenant_id"]),
             user_id=str(row["user_id"]),
             session_id=str(row["session_id"] or ""),
             content=str(row["content"] or ""),
