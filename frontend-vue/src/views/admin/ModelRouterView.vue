@@ -6,6 +6,7 @@ import { api } from '../../api'
 
 import { useI18n } from 'vue-i18n'
 import { serverErrorMessage } from '../../utils/apiError'
+import EmptyState from '../../components/common/EmptyState.vue'
 const { t } = useI18n()
 interface ModelRoute {
   id: string
@@ -181,10 +182,10 @@ onMounted(fetchRoutes)
       size="small"
     >
       <template #emptyText>
-        <div class="empty-block">
-          <span class="empty-icon">📭</span>
-          <span class="empty-text">{{ $t('common.no_data_yet') }}</span>
-        </div>
+        <!-- 此前这里用 .empty-block / .empty-icon / .empty-text 三件套，但本视图从未定义过
+             这三个类 —— 空状态其实是**无样式**的纯文本（不居中、无间距、图标就是 emoji）。
+             改用共享组件，顺带拿到 role="status" + aria-live。 -->
+        <EmptyState :description="$t('common.no_data_yet')" />
       </template>
       <template #bodyCell="{ column, record }">
         <template v-if="column.key === 'action'">
@@ -271,7 +272,9 @@ onMounted(fetchRoutes)
   padding: 0;
 }
 :deep(.code-editor) {
-  font-family: 'SF Mono', 'Menlo', 'Monaco', 'Consolas', monospace;
-  font-size: 12px;
+  /* 用全局等宽字体栈：此前写死的 'SF Mono','Menlo','Monaco','Consolas' 与 --font-mono
+     基本同源，但少了 JetBrains Mono 与 Fira Code，且多一份要单独维护的字体列表。 */
+  font-family: var(--font-mono);
+  font-size: var(--fs-xs);
 }
 </style>

@@ -956,7 +956,9 @@ onBeforeUnmount(() => {
 .cost-hint-close {
   flex: none; border: none; background: none; cursor: pointer;
   color: var(--primary-color, #1677ff); font-size: 13px;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.cost-hint-close:hover { color: var(--text-primary); }
 
 .panel-head { display: flex; align-items: center; justify-content: space-between; }
 .panel-title { font-weight: var(--fw-semibold); }
@@ -967,13 +969,16 @@ onBeforeUnmount(() => {
 .tree-row {
   display: flex; align-items: center; gap: 6px;
   padding: 4px 8px; border-radius: var(--radius-md); cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .tree-row:hover { background: var(--surface-2, rgba(127, 127, 127, 0.08)); }
 .tree-row.active { background: var(--primary-light, var(--shadow-brand)); }
 .twisty {
   width: 14px; flex: none; border: none; background: none; cursor: pointer;
   color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); padding: 0;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.twisty:hover { color: var(--text-primary); }
 .twisty.placeholder { cursor: default; }
 .run-profile { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .run-usage, .run-redacted { font-size: 12px; color: var(--text-tertiary, #8c8c8c); }
@@ -983,6 +988,7 @@ onBeforeUnmount(() => {
   font-size: var(--fs-xs); color: var(--text-secondary, #595959);
   background: transparent; border: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24));
   border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .run-stop:hover:not(:disabled) { color: var(--error, var(--error)); border-color: var(--error, var(--error)); }
 .run-stop:disabled { opacity: 0.5; cursor: default; }
@@ -1000,7 +1006,9 @@ onBeforeUnmount(() => {
   flex: none; padding: 0 6px; line-height: 18px; cursor: pointer;
   font-size: var(--fs-xs); color: var(--warning, var(--warning));
   background: transparent; border: var(--hairline-width) solid var(--warning, var(--warning)); border-radius: var(--radius-sm);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.run-approval:hover { filter: brightness(0.92); }
 
 /* 子 Agent 审批卡片的视觉在 SubAgentApprovalCard.vue（与主对话区的确认卡片同一套） */
 .line.approval { width: 100%; }
@@ -1022,7 +1030,7 @@ onBeforeUnmount(() => {
 .line.notice { color: var(--warning, var(--warning)); }
 .line.status, .line.done { color: var(--text-secondary, #595959); font-size: 12px; }
 .line-tag {
-  display: inline-block; margin-right: 4px; padding: 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs);
+  display: inline-block; margin-inline-end: 4px; padding: 0 4px; border-radius: var(--radius-sm); font-size: var(--fs-xs);
   background: var(--surface-2, rgba(127, 127, 127, 0.12));
 }
 .stream-empty { color: var(--text-tertiary, #8c8c8c); font-size: 12px; }
@@ -1037,6 +1045,7 @@ onBeforeUnmount(() => {
   flex: 1; display: inline-flex; align-items: center; justify-content: center; gap: 4px;
   padding: 4px 8px; border: none; border-radius: var(--radius-md); cursor: pointer;
   background: transparent; color: var(--text-secondary, #595959); font-size: 12px;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .sa-tab:hover { color: var(--text-primary, #262626); }
 .sa-tab.active {
@@ -1059,7 +1068,7 @@ onBeforeUnmount(() => {
   font-size: 12px;
 }
 .usage-head { color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); }
-.usage-row .num { text-align: right; font-variant-numeric: tabular-nums; }
+.usage-row .num { text-align: end; font-variant-numeric: tabular-nums; }
 .u-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .usage-note { margin: 10px 0 0; color: var(--text-tertiary, #8c8c8c); font-size: var(--fs-xs); }
 
@@ -1079,7 +1088,8 @@ onBeforeUnmount(() => {
 .art-item {
   padding: 3px 6px; border: none; border-radius: var(--radius-sm); cursor: pointer;
   background: transparent; color: var(--text-secondary, #595959);
-  font-size: 12px; font-family: var(--font-mono); text-align: left;
+  font-size: 12px; font-family: var(--font-mono); text-align: start;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .art-item:hover { background: var(--surface-2, rgba(127, 127, 127, 0.08)); color: var(--text-primary, #262626); }
 .art-item.copied { color: var(--success, #16a34a); }

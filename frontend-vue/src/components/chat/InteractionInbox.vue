@@ -291,7 +291,7 @@ function raiseBudget(item: PendingInteraction) {
   border-radius: var(--sig-radius-button);
 }
 .inbox-refresh {
-  margin-left: auto;
+  margin-inline-start: auto;
   border: var(--hairline-width) solid var(--border);
   border-radius: var(--sig-radius-button);
   background: var(--bg-surface);
@@ -300,7 +300,9 @@ function raiseBudget(item: PendingInteraction) {
   line-height: 18px;
   padding: 2px 10px;
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.inbox-refresh:hover { border-color: var(--primary); color: var(--primary); }
 .inbox-refresh:disabled { opacity: 0.5; cursor: default; }
 .inbox-item { margin-bottom: 8px; }
 .inbox-item:last-child { margin-bottom: 0; }
@@ -359,7 +361,9 @@ function raiseBudget(item: PendingInteraction) {
   line-height: 18px;
   padding: 3px 12px;
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.inbox-budget-submit:hover { filter: brightness(0.94); }
 .inbox-budget-submit:disabled { opacity: 0.5; cursor: default; }
 .inbox-error {
   margin-top: 6px;

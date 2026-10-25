@@ -370,12 +370,6 @@ onMounted(load)
 
 .channel-form { max-width: 720px; }
 
-.config-note {
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
-}
 
 .actions {
   display: flex;

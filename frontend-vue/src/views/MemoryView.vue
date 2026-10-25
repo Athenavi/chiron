@@ -890,7 +890,7 @@ function pct(n: number): string {
   font-weight: var(--fw-semibold);
 }
 .entry-actions {
-  margin-left: auto;
+  margin-inline-start: auto;
 }
 .entry-value {
   margin: 6px 0;

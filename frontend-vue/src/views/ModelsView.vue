@@ -561,6 +561,7 @@ onMounted(async () => {
                       type="text"
                       danger
                       size="small"
+                      :aria-label="$t('common.delete')"
                     >
                       <template #icon>
                         <DeleteOutlined />
@@ -672,8 +673,10 @@ onMounted(async () => {
   display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0;
   padding: 4px 0; margin: 0;
   background: none; border: 0; cursor: pointer;
-  color: inherit; font: inherit; text-align: left;
+  color: inherit; font: inherit; text-align: start;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.mv-toggle:hover { color: var(--primary); }
 .mv-provider { margin: 0; }
 .mv-sub-label { font-family: var(--font-mono, monospace); font-size: 12px; }
 .mv-sum { font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }

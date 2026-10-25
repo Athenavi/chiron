@@ -383,7 +383,10 @@ function todoStatusLabel(status?: string): string {
 <style scoped>
 .tool-result { max-width: min(var(--chat-content-width), 92%); margin: 2px auto 8px; }
 .result-error-bar { display: flex; align-items: center; gap: 6px; margin-bottom: 6px; padding: 5px 10px; border-radius: var(--sig-radius-button); background: var(--error-bg); color: var(--error); font-size: 12px; }
-.result-head { display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 0; border: none; background: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; }
+.result-head {
+ display: flex; align-items: center; gap: 8px; width: 100%; padding: 4px 0; border: none; background: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .result-head:hover { color: var(--primary); }
 .result-lines { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
 .tool-result.error .result-label { color: var(--error); }
@@ -400,18 +403,21 @@ function todoStatusLabel(status?: string): string {
 /* diff 卡片：banner（文件 + 增删统计）+ 行级着色 */
 .diff-block { margin: var(--diff-gap-block) 0; background: var(--bg-code); border-radius: var(--sig-radius-code); overflow: hidden; }
 .diff-banner { display: flex; justify-content: space-between; align-items: center; gap: 12px; padding: 9px var(--diff-gap-inline); background: var(--bg-secondary); }
-.diff-files { font-family: var(--font-mono); font-size: 12px; color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.diff-stat { display: flex; gap: 8px; flex: none; font-family: var(--font-mono); font-size: 12px; font-variant-numeric: tabular-nums; }
+.diff-files { font-family: var(--font-mono); font-size: var(--diff-font-size); color: var(--text-primary); min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.diff-stat { display: flex; gap: 8px; flex: none; font-family: var(--font-mono); font-size: var(--diff-font-size); font-variant-numeric: tabular-nums; }
 .diff-add { color: var(--success); }
 .diff-del { color: var(--error); }
-.diff-body { max-height: 420px; overflow: auto; font-family: var(--font-mono); font-size: 12px; line-height: 20px; }
+.diff-body { max-height: 420px; overflow: auto; font-family: var(--font-mono); font-size: var(--diff-font-size); line-height: var(--diff-line-height); }
 .diff-line { padding: 0 var(--diff-gap-inline); white-space: pre; color: var(--text-primary); }
 .diff-line.add { background: color-mix(in srgb, var(--success) 14%, transparent); }
 .diff-line.del { background: color-mix(in srgb, var(--error) 14%, transparent); }
 .diff-line.hunk { color: var(--accent); background: var(--bg-secondary); }
 .diff-line.file { color: var(--text-tertiary); background: var(--bg-secondary); }
 .diff-line.context { color: var(--text-secondary); }
-.diff-more { width: 100%; padding: 6px; border: none; border-top: var(--hairline-width) solid var(--border-card); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.diff-more {
+ width: 100%; padding: 6px; border: none; border-top: var(--hairline-width) solid var(--border-card); background: var(--bg-secondary); color: var(--text-secondary); font-size: 12px; cursor: pointer; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .diff-more:hover { color: var(--primary); }
 .diff-more:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
@@ -422,8 +428,8 @@ function todoStatusLabel(status?: string): string {
 .read-count { font-size: 12px; color: var(--text-tertiary); flex-shrink: 0; }
 .read-body { max-height: 420px; overflow-y: auto; }
 .read-line { display: flex; line-height: 22px; font-family: var(--font-mono); font-size: 12px; }
-.line-no { flex: 0 0 48px; padding-right: 12px; text-align: right; color: var(--text-tertiary); user-select: none; }
-.line-text { flex: 1; padding-right: 14px; white-space: pre; overflow-x: auto; color: var(--text-primary); }
+.line-no { flex: 0 0 48px; padding-inline-end: 12px; text-align: end; color: var(--text-tertiary); user-select: none; }
+.line-text { flex: 1; padding-inline-end: 14px; white-space: pre; overflow-x: auto; color: var(--text-primary); }
 
 /* 终端卡片（deepseek TerminalBlock 语义） */
 .terminal-block { margin: 8px 0; background: var(--terminal-bg); border-radius: var(--sig-radius-code); overflow: hidden; }
@@ -454,7 +460,7 @@ function todoStatusLabel(status?: string): string {
 .search-summary { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; color: var(--text-secondary); }
 .search-body { padding: 8px 14px 12px 0; overflow-x: auto; font-family: var(--font-mono); font-size: 12px; }
 .search-file { padding: 6px 0 2px 14px; color: var(--primary); font-weight: var(--fw-semibold); white-space: pre; }
-.search-line { min-height: 22px; padding-left: 14px; white-space: pre; color: var(--text-primary); }
+.search-line { min-height: 22px; padding-inline-start: 14px; white-space: pre; color: var(--text-primary); }
 .search-line-no { display: inline-block; width: 40px; color: var(--text-tertiary); user-select: none; }
 .search-line-text { color: var(--text-primary); }
 /* ── 移动端：结果卡片内边距/字号压缩 ── */

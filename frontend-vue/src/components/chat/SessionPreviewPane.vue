@@ -324,7 +324,7 @@ defineExpose({ refresh })
 .preview-pane {
   position: relative; /* 分栏手柄的定位锚点 */
   display: flex; flex-direction: column; min-width: 0; height: 100%;
-  border-left: var(--hairline-width) solid var(--border-subtle);
+  border-inline-start: var(--hairline-width) solid var(--border-subtle);
   /* 参考栏自己滚动，避免把主会话的滚动位置带跑 */
   overflow: hidden;
 }
@@ -343,11 +343,16 @@ defineExpose({ refresh })
   color: var(--text-primary); background: transparent;
   border: none; outline: none; cursor: pointer;
   padding: 2px 0;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .pp-select:hover { color: var(--accent); }
+/* 焦点环落在 select 自己身上：它的父容器是整个 pp-head（加环会圈住整条头部），
+   而 .pp-select 自己 outline: none 后此前没有任何焦点指示。 */
+.pp-select:focus-visible { outline: var(--focus-ring-width) solid var(--focus-ring-color); outline-offset: var(--focus-ring-offset); border-radius: var(--radius-sm); }
 .pp-btn {
   flex: none; border: none; background: transparent; color: var(--text-tertiary);
   cursor: pointer; font-size: 13px; padding: 0 4px;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .pp-btn:hover { color: var(--text-primary); }
 /* MessageList 自带滚动与窗口化，这里只给高度与最小内边距 */

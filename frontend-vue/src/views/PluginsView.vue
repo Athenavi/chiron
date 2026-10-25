@@ -432,7 +432,7 @@ async function testPlugin(p: Plugin) {
             :class="{ inactive: p.status !== 'active' }"
           >
             <div class="card-top">
-              <span class="card-icon"><ThunderboltOutlined /></span>
+              <span class="card-icon-tile"><ThunderboltOutlined /></span>
               <div class="card-titles">
                 <span class="plugin-name">{{ p.name }}</span>
                 <span class="plugin-desc">{{ p.description || $t('common.no_description') }}</span>
@@ -636,7 +636,7 @@ async function testPlugin(p: Plugin) {
       :open="editorOpen"
       :title="editingName ? $t('common.edit_name', { name: editingName }) : $t('agent.new_mcp_plugin')"
       :confirm-loading="saving"
-      width="560px"
+      width="520px"
       :ok-text="$t('common.save')"
       :cancel-text="$t('common.cancel')"
       @ok="savePlugin"
@@ -711,7 +711,6 @@ async function testPlugin(p: Plugin) {
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .plugins-tabs :deep(.ant-tabs-nav) { margin-bottom: 16px; }
 .list-toolbar { margin-bottom: 16px; }
-.search-input { max-width: 320px; }
 .page-empty { padding: 60px 0; }
 .plugin-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(340px, 1fr)); gap: 14px; }
 .plugin-card {
@@ -725,16 +724,13 @@ async function testPlugin(p: Plugin) {
 }
 .plugin-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .plugin-card.inactive { opacity: 0.65; }
-.card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon { flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
-.card-titles { flex: 1; min-width: 0; }
 .plugin-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .plugin-desc { display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; }
 .card-meta { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .card-command { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .card-actions { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .mini-icon { font-size: var(--fs-xs); }
-.action-right { margin-left: auto; display: flex; gap: 2px; }
+.action-right { margin-inline-start: auto; display: flex; gap: 2px; }
 .test-result { font-size: 12px; padding: 6px 10px; border-radius: var(--radius-lg); background: var(--error-bg); color: var(--error); }
 .test-result.ok { background: var(--success-bg); color: var(--success); }
 .plugin-detail { display: flex; flex-direction: column; gap: 8px; border-top: var(--hairline-width) solid var(--border-card); padding-top: 10px; }
@@ -744,12 +740,9 @@ async function testPlugin(p: Plugin) {
 .detail-code-block { background: var(--bg-secondary); border-radius: var(--radius-lg); padding: 8px; }
 .detail-line { font-family: var(--font-mono); font-size: var(--fs-xs); color: var(--text-secondary); word-break: break-all; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
-.form-row { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
 .mono-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }
 @media (max-width: 768px) {
   .plugins-page { padding: 20px 16px 48px; }
-  .search-input { max-width: none; width: 100%; }
   .card-actions { flex-wrap: wrap; }
 }
 

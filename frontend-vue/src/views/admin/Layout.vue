@@ -346,7 +346,7 @@ const userInitial = computed(() => authStore.user?.name?.charAt(0)?.toUpperCase(
 
 .admin-sider {
   background: var(--bg-card) !important;
-  border-right: var(--hairline-width) solid var(--border);
+  border-inline-end: var(--hairline-width) solid var(--border);
   position: relative;
   z-index: var(--z-dropdown);
 }

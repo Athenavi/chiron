@@ -779,7 +779,7 @@ function toolCount(a: Agent): number {
       :open="editorOpen"
       :title="editingId ? $t('agent.edit_agent') : $t('agent.new_agent_2')"
       :confirm-loading="editorSaving"
-      width="640px"
+      width="720px"
       :ok-text="$t('common.save')"
       :cancel-text="$t('common.cancel')"
       @ok="saveEditor"
@@ -936,7 +936,7 @@ function toolCount(a: Agent): number {
       :title="$t('common.run_name', { name: runTarget?.name || '' })"
       :footer="null"
       :closable="true"
-      width="600px"
+      width="720px"
       @cancel="closeRun"
     >
       <Input.TextArea
@@ -1019,7 +1019,7 @@ function toolCount(a: Agent): number {
       :open="detailOpen"
       :title="$t('common.run_result_name', { name: detailSession?.agent_name || '' })"
       :footer="null"
-      width="640px"
+      width="720px"
       @cancel="detailOpen = false"
     >
       <div
@@ -1114,13 +1114,11 @@ function toolCount(a: Agent): number {
 }
 .agent-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .agent-card.disabled { opacity: 0.6; }
-.card-top { display: flex; align-items: flex-start; gap: 10px; }
 .card-avatar {
   flex: none; width: 38px; height: 38px; border-radius: var(--sig-radius-card);
   background: var(--primary-bg); color: var(--primary);
   display: inline-flex; align-items: center; justify-content: center; font-size: 18px;
 }
-.card-titles { flex: 1; min-width: 0; }
 .card-name { display: block; font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .card-desc {
   display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary);
@@ -1156,11 +1154,9 @@ function toolCount(a: Agent): number {
 .session-time { font-size: 12px; color: var(--text-tertiary); }
 
 /* ── 表单 ── */
-.editor-form { display: flex; flex-direction: column; gap: 14px; }
-.form-row { display: flex; flex-direction: column; gap: 6px; }
+.editor-form { display: flex; flex-direction: column; gap: 12px; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .form-field { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
 .w-full { width: 100%; }
 .binding-select { width: 100%; }
 .tools-input :deep(textarea) { font-family: var(--font-mono); font-size: 12px; }

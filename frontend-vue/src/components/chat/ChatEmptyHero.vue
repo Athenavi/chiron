@@ -96,7 +96,7 @@ const suggestions = [
    字号由 --fs-display 派生，仍受"界面字号只有一个入口"的约束。 */
 .hero-title { font-family: var(--font-serif); font-size: var(--fs-display); font-weight: var(--fw-light); line-height: 1.2; letter-spacing: -0.015em; color: var(--text-primary); margin-bottom: 28px; }
 .suggestion-grid { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
-.suggestion-card { width: 250px; padding: 14px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); background: var(--bg-card); cursor: pointer; transition: all var(--dur-normal); text-align: left; box-shadow: var(--sig-shadow-card); position: relative; overflow: hidden; }
+.suggestion-card { width: 250px; padding: 14px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-normal), transform var(--dur-normal), box-shadow var(--dur-normal); text-align: start; box-shadow: var(--sig-shadow-card); position: relative; overflow: hidden; }
 /* CDS 2.0 §2.6「微光浮空」：抬起时卡片做极轻微的三维透视（X 0.5% / Y 1.5%），
    同时底部漫出一抹品牌色微光。微光用伪元素而不是多加一层 DOM —— 它不吃事件、不参与布局。 */
 .suggestion-card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background-image: radial-gradient(at bottom, var(--card-hover-glow), transparent 70%); opacity: 0; transition: opacity var(--dur-normal) var(--ease-out); }

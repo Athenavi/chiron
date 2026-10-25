@@ -284,7 +284,7 @@ html.dark {
 .tnum-fixed {
     display: inline-block;
     min-width: 3ch;
-    text-align: right;
+    text-align: end;
     font-variant-numeric: tabular-nums;
     font-feature-settings: 'tnum';
 }
@@ -1725,8 +1725,9 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   font-size: 13px;
-  text-align: left;
+  text-align: start;
   border-radius: var(--sig-radius-button);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .chat-row-head:hover { background: var(--bg-hover); }
 /* 行头是 button：键盘用户必须能看到焦点落点 */
@@ -2249,12 +2250,19 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   --dur-dot-pulse: 1800ms;
   /* 推理时的文字扫光周期（CDS 的 `cds-shimmer-text-shine`：严格 3s 一轮） */
   --dur-shimmer: 3000ms;
+  /* 线性扫光周期（CDS 的 `epitaxy-linear-sweep`：严格 1.1s） */
+  --dur-sweep: 1100ms;
   /* Diff 视图的密度阶梯（CDS v1 §5.5.1 的 --diffs-gap-inline / --diffs-gap-block）。
      数值沿用本仓既有取值（14px / 8px），**没有**照搬手册的 12px / 4px：
      手册是给 17.5px 行高配的，而本仓行号 gutter 与代码行要逐行对齐（行高 20px），
      换值会让 gutter 与代码错位。token 化的意义是"以后调 diff 密度只改这两处"。 */
   --diff-gap-inline: 14px;
   --diff-gap-block: 8px;
+  /* diff 的字号与行高（CDS v1-05 的 --diffs-font-size / --diffs-line-height）。
+     此前 .diff-files / .diff-stat / .diff-body / .diff-more 里各写一遍 12px、
+     行高 20px 也是字面量 —— 收成两个 token 后只在这一处调整。 */
+  --diff-font-size: var(--fs-xs);
+  --diff-line-height: 20px;
 }
 
 /* ① 推理氛围光晕（`wl-glow`）：硬质品牌色内环 + 环境投影 + 50% 处涨到 85% 的漫反射。
@@ -2333,7 +2341,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
 
    不支持 `:has()` 的引擎整条规则失效 → 退化为无留白，正是想要的降级方向。 */
 .msg-row.assistant .msg-text:not(:has(pre, table, .mermaid-diagram, img)) {
-  padding-right: clamp(0px, (100% - 384px) * 0.175, 56px);
+  padding-inline-end: clamp(0px, (100% - 384px) * 0.175, 56px);
 }
 
 /* ── 文件类型徽标（CDS v1/02 §2.5.4）────────────────────────────
@@ -2358,7 +2366,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
    .page-title-sm（20px / semibold）：admin 密集表格页的收敛标题。
    **刻意保留两个规格而不是合成一个** —— 密集页要把标题压下去让数据上位，卡片页要靠标题
    立住信息层级，这是两个场景的两套设计意图，合成会毁掉其中一边。 */
-.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; }
+.page-title { font-size: 24px; font-weight: var(--fw-bold); margin: 0; letter-spacing: -0.01em; color: var(--text-primary); }
 .page-title-sm { font-size: 20px; font-weight: var(--fw-semibold); margin: 0; letter-spacing: -0.01em; }
 /* flex-wrap 是必需的：窄屏下标题与筛选栏要换行，而不是互相挤压。 */
 .page-header { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-bottom: 16px; flex-wrap: wrap; }
@@ -2369,4 +2377,33 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
 @media (max-width: 768px) {
   .page-header { flex-wrap: wrap; row-gap: 12px; }
   .page-header .ant-btn { min-height: 40px; }
+  /* 窄屏页面标题收敛到 20px / semibold：24px 的标题在 375px 宽的屏幕上占掉太大一截，
+     且小字号配轻字重更清晰（大字号配 bold、小字号配 semibold 是常规的字号-字重配对）。
+     这条规则此前只在 4 个管理页里各自写过一遍（各带一个 .xxx-management 前缀），
+     现在提升为所有页面标题的统一行为 —— 卡片页此前在窄屏下仍是 24px，现在一起收敛。 */
+  .page-header .page-title { font-size: 20px; font-weight: var(--fw-semibold); }
 }
+
+/* ── 设计系统原子（卡片头部 / 表单行 / 说明文字）──────────────────────
+   这些规格此前在 3~5 个视图或组件里**逐字重复**（脚本比对确认「零变体」—— 即同一份
+   规格被反复粘贴，不是场景差异）。集中到一处有两层意义：新增页面直接复用而不再抄一遍；
+   将来调整卡片头部间距或图标磁贴尺寸，只改这里。
+
+   刻意**没有**收录的邻居（它们的"重复"是假象，收录会把差异抹平）：
+   · `.card-name` —— 三个视图分别是 15px / 14px / 13px，是真实的内容层级差异；
+   · `.metric-grid` —— minmax 列宽各为 220 / 180 / 280px，跟着各自指标卡的内容走；
+   · `.list-toolbar` —— 一处需要 display:flex，另一处里面只放单个组件。
+
+   另：`.card-icon` 收录时**必须改名** —— ChatEmptyHero 里另有一个同名但语义完全不同的
+   `.card-icon`（普通行内图标，不是磁贴）。同义名混用会让全局层从"复用入口"变成"陷阱"。 */
+.card-top { display: flex; align-items: flex-start; gap: 10px; }
+.card-titles { flex: 1; min-width: 0; }
+.card-icon-tile {
+  flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card);
+  background: var(--primary-bg); color: var(--primary);
+  display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
+}
+.form-row { display: flex; flex-direction: column; gap: 6px; }
+.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
+.config-note { margin-top: 8px; color: var(--text-tertiary); font-size: 12px; line-height: 1.5; }
+.search-input { max-width: 320px; }

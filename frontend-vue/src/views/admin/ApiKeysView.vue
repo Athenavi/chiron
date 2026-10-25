@@ -413,7 +413,7 @@ onMounted(() => {
       v-model:visible="showAddModal"
       :title="$t('common.add_provider')"
       :footer="null"
-      width="760px"
+      width="720px"
       destroy-on-close
     >
       <div class="provider-mode">
@@ -633,7 +633,7 @@ onMounted(() => {
   flex-direction: column;
   gap: 2px;
   padding: 8px 10px;
-  text-align: left;
+  text-align: start;
   background: var(--surface-2, rgba(127, 127, 127, 0.06));
   border: var(--hairline-width) solid var(--border-color, rgba(127, 127, 127, 0.24));
   border-radius: var(--radius-lg);
@@ -690,7 +690,7 @@ onMounted(() => {
   margin-top: 16px;
 }
 .provider-actions-hint {
-  margin-right: auto;
+  margin-inline-end: auto;
   font-size: 12px;
   color: var(--text-tertiary, #8c8c8c);
 }

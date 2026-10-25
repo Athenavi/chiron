@@ -117,7 +117,7 @@ onMounted(fetchPrivacy)
 
 <style scoped>
 .privacy-view { padding: 16px 24px; }
-.hint { margin-left: 12px; color: var(--text-secondary); font-size: 12px; }
+.hint { margin-inline-start: 12px; color: var(--text-secondary); font-size: 12px; }
 
 /* JSON 编辑区:等宽字体、min-height 自适应、可纵向拉伸 */
 .privacy-view :deep(.code-editor) {
@@ -130,7 +130,7 @@ onMounted(fetchPrivacy)
 /* 窄屏:表单项全宽、提示换行、触控目标 ≥ 40px */
 @media (max-width: 768px) {
   .privacy-view :deep(.ant-input-number) { width: 100% !important; }
-  .privacy-view .hint { display: block; margin-left: 0; margin-top: 4px; }
+  .privacy-view .hint { display: block; margin-inline-start: 0; margin-top: 4px; }
   .privacy-view .ant-btn { min-height: 40px; }
 }
 </style>

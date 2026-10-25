@@ -575,12 +575,6 @@ onMounted(load)
 
 .switch-row { margin-bottom: 0; }
 
-.config-note {
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
-}
 
 .actions {
   display: flex;

@@ -2987,6 +2987,7 @@ function continueGeneration() {
             class="chat-search-input"
             type="text"
             :placeholder="$t('chat.search_body_and_reasoning_in_this_session_enter_for_next_esc_to_close')"
+            :aria-label="$t('chat.search_body_and_reasoning_in_this_session_enter_for_next_esc_to_close')"
             @keydown.enter.exact.prevent="gotoMatch(1)"
             @keydown.enter.shift.prevent="gotoMatch(-1)"
             @keydown.esc.prevent="closeSearch"
@@ -3449,7 +3450,7 @@ function continueGeneration() {
       :open="shareOpen"
       :title="$t('chat.share.title', { name: shareTarget?.title || $t('chat.share.newSession') })"
       :footer="null"
-      width="560px"
+      width="520px"
       @cancel="shareOpen = false"
     >
       <Alert
@@ -3585,7 +3586,10 @@ function continueGeneration() {
 }
 .toolbar-mode { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); background: var(--bg-secondary); padding: 2px 8px; border-radius: var(--radius-full); }
 /* 思考档位按钮：复用 .toolbar-mode 的胶囊外观，只重置 button 默认样式 */
-.toolbar-effort { border: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); }
+.toolbar-effort {
+ border: none; cursor: pointer; font: inherit; font-size: var(--fs-xs); 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .toolbar-effort:hover { color: var(--text-primary); }
 .toolbar-effort.active { color: var(--primary); }
 .toolbar-actions { justify-content: flex-end; gap: 2px; }
@@ -3604,6 +3608,8 @@ function continueGeneration() {
 }
 .chat-search-icon { flex: none; font-size: 13px; color: var(--text-tertiary); }
 .chat-search-input { flex: 1; min-width: 0; border: none; background: none; outline: none; color: var(--text-primary); font-size: 13px; }
+/* 输入框自己 outline: none，焦点提示交给整条检索栏（它的按钮已各自有 :focus-visible） */
+.chat-search:focus-within { box-shadow: 0 0 0 var(--focus-ring-width) var(--focus-ring-glow); }
 .chat-search-input::placeholder { color: var(--text-quaternary); }
 .chat-search-count { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); font-variant-numeric: tabular-nums; white-space: nowrap; }
 .chat-search-actions { flex: none; display: flex; gap: 2px; }
@@ -3632,11 +3638,11 @@ function continueGeneration() {
 .approval-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
 /* 结构化提问卡片区：与审批卡同样贴输入区上方 */
 .ask-zone { padding: 0 20px 8px; display: flex; flex-direction: column; gap: 8px; }
-.approval-card { background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 10px 14px; }
+.approval-card { background: var(--bg-card); border: var(--hairline-width) solid var(--border); border-inline-start: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 10px 14px; }
 /* 工具授权模式栏（与「对话模式」并列但语义独立的第二个维度） */
 /* 工具授权已内联到输入区底栏（模型选择器右侧），样式见 ChatInput.vue 的
    `.tools-mode-select` —— 这里不再需要独立的 `.tools-mode-bar`。 */
-.approval-countdown { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
+.approval-countdown { margin-inline-start: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
 .approval-info { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag { font-size: var(--fs-xs); color: var(--primary); background: var(--primary-bg); padding: 2px 8px; border-radius: var(--sig-radius-card); }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
@@ -3664,6 +3670,7 @@ function continueGeneration() {
   cursor: pointer;
   padding: 6px 4px;
   border-radius: var(--radius-md);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .approval-link:hover { text-decoration: underline; }
 .approval-actions { display: flex; gap: 8px; }
@@ -3728,7 +3735,10 @@ function continueGeneration() {
   border-radius: var(--sig-radius-card); color: var(--danger, var(--error)); font-size: 13px;
 }
 .ueb-text { flex: 1; min-width: 0; line-height: 1.5; }
-.ueb-close { flex: none; cursor: pointer; opacity: 0.7; font-size: 12px; }
+.ueb-close {
+ flex: none; cursor: pointer; opacity: 0.7; font-size: 12px; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .ueb-close:hover { opacity: 1; }
 
 .unified-bar {
@@ -3761,7 +3771,7 @@ function continueGeneration() {
   flex: none;
   background: var(--bg-card); color: var(--text-secondary);
   box-shadow: inset 0 0 0 var(--hairline-width) var(--border);
-  transition: all var(--dur-fast) ease;
+  transition: box-shadow var(--dur-fast), color var(--dur-fast);
 }
 .ub-btn:focus-visible,
 .ueb-close:focus-visible,
@@ -3804,7 +3814,7 @@ function continueGeneration() {
 }
 .kb-hits-text { flex: 1; min-width: 0; }
 .kb-hits-link {
-  flex: none; margin-left: auto; padding-left: 12px;
+  flex: none; margin-inline-start: auto; padding-inline-start: 12px;
   color: var(--primary); font-weight: var(--fw-semibold); white-space: nowrap;
   text-decoration: none;
 }

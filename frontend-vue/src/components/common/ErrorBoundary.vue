@@ -102,7 +102,7 @@ function reload() {
   font-size: 12px;
   line-height: 1.55;
   color: var(--text-secondary, #4b5563);
-  text-align: left;
+  text-align: start;
   white-space: pre-wrap;
   word-break: break-word;
   background: var(--bg-secondary, #f3f4f6);

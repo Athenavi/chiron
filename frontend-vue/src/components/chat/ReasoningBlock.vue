@@ -147,7 +147,7 @@ async function stickToBottom() {
 <style scoped>
 .think-icon { font-size: 12px; flex-shrink: 0; }
 .think-label { font-weight: var(--fw-semibold); color: var(--text-primary); font-size: 13px; }
-.think-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; text-align: left; }
+.think-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; text-align: start; }
 .reasoning-row[data-state='running'] .think-summary { color: var(--primary); }
 
 /* 网格撑开：0fr → 1fr。内层必须 min-height:0 + overflow:hidden，
@@ -194,6 +194,7 @@ async function stickToBottom() {
   border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-full);
   background: var(--bg-page); color: var(--text-secondary);
   font-size: var(--fs-xs); cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .think-bottom:hover { color: var(--text-primary); }
 </style>

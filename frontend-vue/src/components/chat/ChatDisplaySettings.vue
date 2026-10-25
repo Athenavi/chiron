@@ -21,7 +21,7 @@ const typography = useTypographyStore()
     :open="open"
     :title="$t('settings.display_settings')"
     :footer="null"
-    width="420px"
+    width="400px"
     @cancel="emit('update:open', false)"
   >
     <div class="display-row">

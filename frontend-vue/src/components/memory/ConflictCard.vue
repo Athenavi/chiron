@@ -76,6 +76,7 @@
         v-model="manualValue"
         type="text"
         :placeholder="$t('common.enter_new_value')"
+        :aria-label="$t('common.enter_new_value')"
         class="manual-input"
       >
       <div class="manual-actions">

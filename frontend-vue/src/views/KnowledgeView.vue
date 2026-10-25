@@ -287,7 +287,7 @@ function statusLabel(status: string): string {
             @keydown.space.prevent="openKnowledgeBase(kb)"
           >
             <div class="card-top">
-              <span class="card-icon"><BookOutlined /></span>
+              <span class="card-icon-tile"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
                 <span class="kb-desc">{{ kb.description || $t('common.no_description') }}</span>
@@ -387,7 +387,7 @@ function statusLabel(status: string): string {
             @keydown.space.prevent="openKnowledgeBase(kb)"
           >
             <div class="card-top">
-              <span class="card-icon"><BookOutlined /></span>
+              <span class="card-icon-tile"><BookOutlined /></span>
               <div class="card-titles">
                 <span class="kb-name">{{ kb.name }}</span>
                 <span class="kb-desc">{{ kb.description || $t('common.no_description') }}</span>
@@ -533,7 +533,6 @@ function statusLabel(status: string): string {
 .kb-page { max-width: 1080px; margin: 0 auto; padding: 28px 24px 60px; }
 .page-sub { margin: 4px 0 0; color: var(--text-tertiary); font-size: 13px; }
 .list-toolbar { margin-bottom: 16px; }
-.search-input { max-width: 320px; }
 .page-empty { padding: 60px 0; }
 .kb-sections { display: flex; flex-direction: column; gap: 24px; }
 .section-title { font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-secondary); margin: 0 0 10px; }
@@ -549,10 +548,7 @@ function statusLabel(status: string): string {
   transition: transform var(--dur-normal) ease, border-color var(--dur-normal) ease, box-shadow var(--dur-normal) ease;
 }
 .kb-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
-.kb-card.public { border-left: 3px solid var(--warning); }
-.card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon { flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
-.card-titles { flex: 1; min-width: 0; }
+.kb-card.public { border-inline-start: 3px solid var(--warning); }
 .kb-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .kb-desc {
   display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary);
@@ -567,11 +563,8 @@ function statusLabel(status: string): string {
 .kb-time { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .footer-actions { display: flex; gap: 2px; }
 .editor-form { display: flex; flex-direction: column; gap: 12px; }
-.form-row { display: flex; flex-direction: column; gap: 6px; }
-.form-label { font-size: 12px; color: var(--text-secondary); font-weight: var(--fw-medium); }
 @media (max-width: 768px) {
   .kb-page { padding: 20px 16px 48px; }
-  .search-input { max-width: none; width: 100%; }
 }
 
 @media (max-width: 640px) {

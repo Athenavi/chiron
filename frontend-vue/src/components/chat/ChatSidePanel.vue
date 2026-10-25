@@ -547,6 +547,7 @@ function pickSession(id: string) {
           v-model="trajectoryQuery"
           class="search-input"
           :placeholder="$t('common.search_question')"
+          :aria-label="$t('common.search_question')"
         >
         <CloseOutlined
           v-if="trajectoryQuery"
@@ -688,6 +689,7 @@ function pickSession(id: string) {
             v-model="sessionQuery"
             class="search-input"
             :placeholder="$t('chat.search_sessions')"
+            :aria-label="$t('chat.search_sessions')"
           >
           <CloseOutlined
             v-if="sessionQuery"
@@ -966,7 +968,7 @@ function pickSession(id: string) {
   z-index: var(--z-page-panel);
   display: flex; flex-direction: column;
   background: var(--bg-card);
-  border-left: var(--hairline-width) solid var(--border);
+  border-inline-start: var(--hairline-width) solid var(--border);
   box-shadow: var(--sig-shadow-hover);
   transform: translateX(100%);
   visibility: hidden;
@@ -1016,7 +1018,7 @@ function pickSession(id: string) {
   transition: background var(--dur-fast) ease;
 }
 .session-picker:hover, .session-back:hover { background: var(--bg-hover); }
-.session-picker-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; }
+.session-picker-name { flex: 1; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: start; }
 .session-picker-arrow { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
 .toolbar-close { flex: none; font-size: 13px; color: var(--text-tertiary); cursor: pointer; padding: 4px; border-radius: var(--radius-sm); transition: color var(--dur-fast) ease, background var(--dur-fast) ease; }
 .toolbar-close:hover { color: var(--text-primary); background: var(--bg-hover); }
@@ -1034,7 +1036,10 @@ function pickSession(id: string) {
 }
 .ctx-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 .ctx-chip-label { max-width: 160px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.ctx-chip-remove { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; }
+.ctx-chip-remove {
+ font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .ctx-chip-remove:hover { color: var(--danger, var(--error)); }
 
 /* ── 可用工具：让 MCP/插件注入的工具在对话页可见（默认收起）── */
@@ -1042,7 +1047,7 @@ function pickSession(id: string) {
 .tools-head {
   display: flex; align-items: center; gap: 6px; width: 100%;
   padding: 8px 12px; border: none; background: none;
-  color: var(--text-tertiary); font-size: var(--fs-xs); text-align: left; cursor: pointer;
+  color: var(--text-tertiary); font-size: var(--fs-xs); text-align: start; cursor: pointer;
   transition: color var(--dur-fast) ease;
 }
 .tools-head:hover { color: var(--primary); }
@@ -1065,7 +1070,14 @@ function pickSession(id: string) {
 .panel-search { flex: none; display: flex; align-items: center; gap: 4px; margin: 8px 12px 0; padding: 0 8px; height: 28px; background: var(--bg-secondary); border-radius: var(--sig-radius-button); }
 .search-icon { font-size: var(--fs-xs); color: var(--text-tertiary); }
 .search-input { flex: 1; border: none; outline: none; background: none; font-size: 12px; color: var(--text-primary); }
-.search-clear { font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; }
+/* 输入框自己 outline: none，焦点提示改由容器承担 —— 与 Composer 的 .input-card:focus-within 同一模式。
+   此前这两处搜索框是**完全没有焦点指示**的（WCAG 2.4.7）。 */
+.panel-search:focus-within { box-shadow: 0 0 0 var(--focus-ring-width) var(--focus-ring-glow); }
+.search-clear {
+ font-size: var(--fs-xs); color: var(--text-tertiary); cursor: pointer; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.search-clear:hover { color: var(--primary); }
 
 /* ── 主视图：时间线 ── */
 .timeline {
@@ -1075,7 +1087,7 @@ function pickSession(id: string) {
   background: var(--bg-secondary);
   user-select: none;
 }
-.timeline-labels { position: relative; border-right: var(--hairline-width) solid var(--border); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1; }
+.timeline-labels { position: relative; border-inline-end: var(--hairline-width) solid var(--border); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 1; }
 .timeline-labels span { position: absolute; right: 3px; height: 8px; display: flex; align-items: center; }
 .timeline-labels span:nth-child(1) { top: 7px; }
 .timeline-labels span:nth-child(2) { top: 21px; }
@@ -1112,14 +1124,14 @@ function pickSession(id: string) {
 
 /* P3-D: 标签筛选与展示 */
 .tag-filter { display: flex; gap: 6px; padding: 4px 12px 8px; flex-wrap: wrap; }
-.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: all var(--dur-fast) ease; }
+.tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: box-shadow var(--dur-fast), color var(--dur-fast); }
 .tag-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 /* 按下塌陷：跟手、不回头（--ease-snap，严格 0% 超调），见 style.css §5 */
 .tag-chip:active { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
 .tag-chip.active { background: var(--primary); color: var(--on-solid); box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); }
-.session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
+.session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 16px; margin-inline-start: 4px; flex-shrink: 0; }
 /* P0：分支标记（与 tag 同族但用主色区分——"来源"比"分类"更需要一眼看见） */
-.session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: var(--fs-xs); line-height: 16px; margin-left: 4px; flex-shrink: 0; }
+.session-branch { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); font-size: var(--fs-xs); line-height: 16px; margin-inline-start: 4px; flex-shrink: 0; }
 .session-group-label { font-size: var(--fs-xs); font-weight: var(--fw-semibold); color: var(--text-tertiary); padding: 12px 8px 4px; text-transform: uppercase; letter-spacing: 0.5px; }
 .session-row {
   display: flex; align-items: center; gap: 4px;
@@ -1175,7 +1187,7 @@ function pickSession(id: string) {
   display: flex; align-items: center; gap: 8px; width: 100%;
   padding: 6px 8px; border: none; border-radius: var(--sig-radius-button);
   background: transparent; color: var(--text-secondary);
-  font-size: 12px; text-align: left; cursor: pointer;
+  font-size: 12px; text-align: start; cursor: pointer;
   transition: background var(--dur-fast) ease;
 }
 .act-row:hover { background: var(--bg-hover); }
@@ -1194,12 +1206,13 @@ function pickSession(id: string) {
 }
 .foot-name { font-size: 13px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 /* 主题切换与用户菜单推到最右，与左侧头像/名字分开 */
-.foot-theme { margin-left: auto; flex: none; }
+.foot-theme { margin-inline-start: auto; flex: none; }
 .foot-user-btn {
   flex: none; display: inline-flex; align-items: center; justify-content: center;
   width: 22px; height: 22px; padding: 0;
   border: none; border-radius: var(--radius-sm, 4px);
   background: transparent; color: var(--text-tertiary); cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .foot-user-btn:hover { color: var(--text-primary); background: var(--bg-hover); }
 </style>

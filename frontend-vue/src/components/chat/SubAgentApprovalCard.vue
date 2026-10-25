@@ -191,7 +191,7 @@ function submitEdit() {
 <style scoped>
 .approval-card {
   background: var(--bg-card); border: var(--hairline-width) solid var(--border);
-  border-left: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 8px 10px;
+  border-inline-start: 3px solid var(--primary); border-radius: var(--sig-radius-card); padding: 8px 10px;
 }
 .approval-head { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
 .approval-tag {
@@ -199,7 +199,7 @@ function submitEdit() {
   background: var(--primary-bg); padding: 2px 8px; border-radius: var(--sig-radius-button);
 }
 .approval-name { font-weight: var(--fw-semibold); font-size: 13px; color: var(--text-primary); }
-.approval-hint { margin-left: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
+.approval-hint { margin-inline-start: auto; font-size: var(--fs-xs); color: var(--warning, var(--warning)); }
 .approval-desc { font-size: 12px; color: var(--text-secondary, #595959); margin-bottom: 6px; }
 .approval-args {
   font-family: var(--font-mono); font-size: 12px; color: var(--text-muted);
@@ -207,7 +207,10 @@ function submitEdit() {
   padding: 6px; border-radius: var(--radius-md); overflow: auto; max-height: 140px; margin: 0 0 8px;
 }
 .approval-actions { display: flex; align-items: center; gap: 8px; }
-.approval-btn { border: none; border-radius: var(--radius-lg); padding: 4px 14px; font-size: 13px; cursor: pointer; }
+.approval-btn {
+ border: none; border-radius: var(--radius-lg); padding: 4px 14px; font-size: 13px; cursor: pointer; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .approval-btn:disabled { opacity: 0.5; cursor: default; }
 .approval-btn.allow { background: var(--primary); color: var(--on-solid); }
 .approval-btn.allow:hover:not(:disabled) { opacity: 0.9; }
@@ -226,6 +229,7 @@ function submitEdit() {
 .approval-link {
   border: none; background: none; color: var(--primary); font-size: 13px;
   cursor: pointer; padding: 4px 2px; border-radius: var(--radius-md);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .approval-link:disabled { opacity: 0.5; cursor: default; }
 .approval-link:hover:not(:disabled) { text-decoration: underline; }

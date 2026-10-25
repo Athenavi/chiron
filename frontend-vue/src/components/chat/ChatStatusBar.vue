@@ -187,6 +187,7 @@ const cacheWarnText = computed(() => {
   border: none; border-radius: var(--radius-sm);
   background: transparent; color: inherit;
   font: inherit; cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .cs-trigger:hover { background: var(--bg-hover); color: var(--text-primary); }
 .cs-trigger:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }

@@ -791,6 +791,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
           <Button
             type="text"
             size="small"
+            :aria-label="$t('common.close')"
             @click="showPanel = false"
           >
             <template #icon>
@@ -1151,6 +1152,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
               type="text"
               danger
               size="small"
+              :aria-label="$t('common.delete')"
               @click.stop
             >
               <template #icon>
@@ -1167,7 +1169,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
       v-model:open="templateOpen"
       :title="$t('workflow.workflow_templates')"
       :footer="null"
-      width="640px"
+      width="720px"
     >
       <PageSkeleton v-if="templatesLoading" />
       <EmptyState
@@ -1245,7 +1247,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .toolbar { display: flex; align-items: center; justify-content: space-between; padding: 8px 16px; border-bottom: var(--hairline-width) solid var(--border); background: var(--bg-card); gap: 8px; flex-shrink: 0; }
 .toolbar-left, .toolbar-right { display: flex; align-items: center; gap: 8px; }
 .main-area { display: flex; flex: 1; overflow: hidden; position: relative; }
-.node-palette { width: 168px; padding: 12px; border-right: var(--hairline-width) solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
+.node-palette { width: 168px; padding: 12px; border-inline-end: var(--hairline-width) solid var(--border); background: var(--bg-secondary); flex-shrink: 0; }
 .palette-title { font-weight: var(--fw-semibold); font-size: 12px; color: var(--text-tertiary); margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
 .palette-item { display: flex; align-items: center; gap: 8px; padding: 8px 12px; margin-bottom: 6px; background: var(--bg-card); border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-lg); cursor: grab; font-size: 13px; transition: box-shadow var(--dur-fast), border-color var(--dur-fast); user-select: none; }
 .palette-item:hover { box-shadow: var(--shadow-md); border-color: var(--primary); }
@@ -1264,7 +1266,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .node-body { padding: 6px 10px; display: flex; align-items: center; gap: 6px; }
 .node-type-tag { background: var(--bg-secondary); padding: 1px 6px; border-radius: var(--radius-sm); font-size: var(--fs-xs); color: var(--text-tertiary); }
 .node-detail { font-size: var(--fs-xs); color: var(--text-tertiary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 100px; }
-.property-panel { width: 300px; border-left: var(--hairline-width) solid var(--border); background: var(--bg-card); flex-shrink: 0; overflow-y: auto; }
+.property-panel { width: 300px; border-inline-start: var(--hairline-width) solid var(--border); background: var(--bg-card); flex-shrink: 0; overflow-y: auto; }
 .panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: var(--hairline-width) solid var(--border); font-weight: var(--fw-semibold); font-size: 14px; color: var(--text-primary); }
 .panel-body { padding: 12px; }
 .section-divider { height: 1px; background: var(--border); margin: 12px 0; }
@@ -1279,7 +1281,7 @@ function statusClass(nodeProps: { data?: { execStatus?: unknown } }): string {
 .result-item { border: var(--hairline-width) solid var(--border); border-radius: var(--radius-lg); background: var(--bg-card); overflow: hidden; }
 .result-item-head { display: flex; align-items: center; gap: 8px; padding: 6px 10px; border-bottom: var(--hairline-width) solid var(--border); }
 .result-node { font-weight: var(--fw-semibold); color: var(--text-primary); }
-.result-status { margin-left: auto; }
+.result-status { margin-inline-start: auto; }
 .result-output { margin: 0; padding: 8px 10px; white-space: pre-wrap; word-break: break-word; color: var(--text-secondary); max-height: 140px; overflow-y: auto; }
 /* 列表 */
 .workflow-list { display: flex; flex-direction: column; gap: 8px; }

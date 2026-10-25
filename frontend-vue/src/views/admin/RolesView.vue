@@ -205,8 +205,6 @@ onMounted(fetchRoles)
 
 /* 窄屏:页头换行、表格小按钮扩大热区 */
 @media (max-width: 768px) {
-  .roles-view .page-header { flex-wrap: wrap; row-gap: 12px; }
-  .roles-view .page-header .ant-btn { min-height: 40px; }
   .roles-view :deep(.ant-btn-sm) { position: relative; }
   .roles-view :deep(.ant-btn-sm)::after {
     content: '';

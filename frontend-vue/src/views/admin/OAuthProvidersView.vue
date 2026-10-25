@@ -584,7 +584,7 @@ onMounted(() => {
       :confirm-loading="saving"
       :ok-text="$t('common.save')"
       :cancel-text="$t('common.cancel')"
-      width="640px"
+      width="720px"
       @ok="handleSave"
     >
       <Form layout="vertical">

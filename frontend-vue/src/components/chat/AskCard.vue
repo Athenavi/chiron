@@ -128,7 +128,7 @@ function decline() {
 <style scoped>
 .ask-card {
   padding: 10px 14px;
-  border: var(--hairline-width) solid var(--border); border-left: 3px solid var(--accent);
+  border: var(--hairline-width) solid var(--border); border-inline-start: 3px solid var(--accent);
   border-radius: var(--sig-radius-card);
   background: var(--bg-card);
 }

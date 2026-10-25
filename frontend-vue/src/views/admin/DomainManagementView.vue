@@ -183,7 +183,7 @@ onMounted(loadDomains)
 <template>
   <div class="domain-management">
     <div class="page-header">
-      <h1>{{ $t('admin.domain_management') }}</h1>
+      <h1 class="page-title">{{ $t('admin.domain_management') }}</h1>
       <Space>
         <Button @click="loadDomains">
           <template #icon>
@@ -306,7 +306,7 @@ onMounted(loadDomains)
       v-model:open="verifyVisible"
       :title="$t('auth.domain_verification_result')"
       :footer="null"
-      :width="560"
+      :width="520"
       @cancel="verifyResult = null"
     >
       <template v-if="verifyResult">
@@ -362,14 +362,9 @@ onMounted(loadDomains)
 
 <style scoped>
 .domain-management { padding: 24px; }
-.page-header h1 { margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 
 @media (max-width: 768px) {
   .domain-management { padding: 16px 12px; }
-  .domain-management .page-header { row-gap: 12px; }
-  .domain-management .page-header .ant-btn { min-height: 40px; }
 }
-@media (max-width: 480px) {
-  .domain-management .page-header h1 { font-size: 20px; }
-}
+
 </style>

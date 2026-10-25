@@ -95,14 +95,18 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 .tool-row-wrap[data-family='delegate'] .tool-name { color: var(--trajectory-tool-call, var(--primary, #2563eb)); }
 .tool-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; }
 
-/* running sweep 流光（deepseek ToolRow sweep） */
+/* running sweep 流光（deepseek ToolRow sweep）—— 借 CDS `epitaxy-linear-sweep` 两点：
+   ① 用 transform 而不是 left 驱动。left 每帧触发**布局重算**，transform 交给合成器；
+      工具行在流式期间会持续出现，长会话里这个差别是实打实的。
+   ② 时长与曲线对到官方值（严格 1.1s / cubic-bezier(.45, 0, .55, 1)）。 */
 .tool-row-wrap[data-state='running'] .tool-row { position: relative; }
 .tool-row-wrap[data-state='running'] .tool-row::after {
   content: ''; position: absolute; top: 0; bottom: 0; left: 0; width: 300px;
   background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--bg-page) 60%, transparent) 55%, transparent 100%);
-  animation: toolRowSweep var(--dur-pulse) ease-out infinite; pointer-events: none;
+  animation: toolRowSweep var(--dur-sweep) cubic-bezier(0.45, 0, 0.55, 1) infinite; pointer-events: none;
 }
-@keyframes toolRowSweep { 0% { left: -300px; } 90%, 100% { left: 100%; } }
+/* 行程 = 自身宽度的 4.5 倍（-100% → 350%）：300px 的条纹可覆盖最宽 1350px 的容器 */
+@keyframes toolRowSweep { 0% { transform: translateX(-100%); } 100% { transform: translateX(350%); } }
 @media (prefers-reduced-motion: reduce) {
   .tool-row-wrap[data-state='running'] .tool-row::after { display: none; }
 }

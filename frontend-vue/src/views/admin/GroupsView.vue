@@ -252,7 +252,7 @@ onMounted(() => {
         </div>
       </a-checkbox-group>
       <template #footer>
-        <div style="text-align: right">
+        <div style="text-align: end">
           <a-button
             style="margin-right: 8px"
             @click="rolesDrawerVisible = false"
@@ -285,15 +285,13 @@ onMounted(() => {
 }
 .role-item:hover { background: var(--bg-hover); }
 .role-name { font-weight: var(--fw-medium); }
-.role-desc { margin-left: 8px; color: var(--text-tertiary); font-size: 12px; }
+.role-desc { margin-inline-start: 8px; color: var(--text-tertiary); font-size: 12px; }
 
 /* 空状态统一 */
 
 /* 窄屏:页头换行、选项说明换行、表格小按钮扩大热区 */
 @media (max-width: 768px) {
-  .groups-view .page-header { flex-wrap: wrap; row-gap: 12px; }
-  .groups-view .page-header .ant-btn { min-height: 40px; }
-  .role-desc { display: block; margin-left: 0; margin-top: 2px; }
+  .role-desc { display: block; margin-inline-start: 0; margin-top: 2px; }
   .groups-view :deep(.ant-btn-sm) { position: relative; }
   .groups-view :deep(.ant-btn-sm)::after {
     content: '';

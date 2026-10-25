@@ -757,7 +757,10 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .window-spacer { width: 100%; flex: none; }
 .loading-indicator { display: flex; justify-content: center; gap: 6px; padding: 14px 0; }
 /* 三点波浪的形状/节奏由全局 .loading-dots 提供（CDS v1 §3.2.1，见 src/style.css） */
-.back-to-bottom { position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); }
+.back-to-bottom {
+ position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .back-to-bottom:hover { color: var(--primary); border-color: var(--primary); }
 .back-badge { position: absolute; top: -4px; right: -4px; min-width: 18px; height: 18px; padding: 0 4px; border-radius: 9px; background: var(--primary); color: var(--on-solid); font-size: var(--fs-xs); line-height: 18px; text-align: center; }
 .back-fade-enter-active, .back-fade-leave-active { transition: opacity var(--dur-normal), transform var(--dur-normal); }
@@ -769,7 +772,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
   pointer-events: auto;
   display: flex; flex-direction: column; align-items: center; gap: 7px;
   max-height: 46vh; overflow-y: auto;
-  margin-right: 8px; padding: 8px 7px;
+  margin-inline-end: 8px; padding: 8px 7px;
   border: var(--hairline-width) solid var(--border-card); border-radius: var(--radius-full);
   background: color-mix(in srgb, var(--bg-card) 88%, transparent);
   box-shadow: var(--sig-shadow-card);
@@ -801,6 +804,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
   border: none; background: none; color: var(--text-secondary);
   font-size: 12px; line-height: 18px; padding: 3px 8px;
   border-radius: var(--radius-sm); cursor: pointer; white-space: nowrap;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .sel-btn:hover { background: var(--bg-hover); color: var(--text-primary); }
 .sel-btn:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }

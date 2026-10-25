@@ -140,7 +140,7 @@ const speedRows = computed(() => {
 }
 .stats-grid dd {
   margin: 0;
-  text-align: right;
+  text-align: end;
   font-variant-numeric: tabular-nums;
 }
 .stats-sub {

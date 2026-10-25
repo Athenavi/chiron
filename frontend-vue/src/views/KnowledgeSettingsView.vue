@@ -86,7 +86,12 @@ onMounted(load)
 <template>
   <div class="kb-settings-page">
     <div class="page-header">
-      <Button type="text" class="back-btn" @click="router.push('/knowledge')">
+      <Button
+        type="text"
+        class="back-btn"
+        :aria-label="t('common.back')"
+        @click="router.push('/knowledge')"
+      >
         <ArrowLeftOutlined />
       </Button>
       <div class="page-header-text">
@@ -197,6 +202,7 @@ onMounted(load)
   cursor: pointer;
   transition: border-color var(--dur-normal), box-shadow var(--dur-normal);
 }
+.provider-card:hover { border-color: var(--primary); }
 .provider-card.is-active {
   border-color: var(--ant-color-primary, #1677ff);
   box-shadow: 0 0 0 2px color-mix(in srgb, var(--primary) 8%, transparent);

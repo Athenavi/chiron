@@ -125,7 +125,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   background: var(--bg-surface);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast);
   font-size: 16px;
 }
 .theme-switcher-btn:hover {
@@ -170,8 +170,8 @@ const isSystem = computed(() => themeStore.preference === 'system')
   background: var(--bg-surface);
   color: var(--text-primary);
   cursor: pointer;
-  text-align: left;
-  transition: all var(--dur-fast) ease;
+  text-align: start;
+  transition: border-color var(--dur-fast), background-color var(--dur-fast);
 }
 .ts-theme:hover {
   border-color: var(--primary);
@@ -253,7 +253,7 @@ const isSystem = computed(() => themeStore.preference === 'system')
   background: var(--bg-surface);
   color: var(--text-secondary);
   cursor: pointer;
-  transition: all var(--dur-fast) ease;
+  transition: color var(--dur-fast), border-color var(--dur-fast);
 }
 .ts-mode:hover {
   color: var(--primary);

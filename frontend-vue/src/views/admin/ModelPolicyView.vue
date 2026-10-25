@@ -223,8 +223,6 @@ onMounted(fetchPolicies)
 
 /* 窄屏:页头换行、表单项全宽、表格小按钮扩大热区 */
 @media (max-width: 768px) {
-  .policy-view .page-header { flex-wrap: wrap; row-gap: 12px; }
-  .policy-view .page-header .ant-btn { min-height: 40px; }
   .policy-view :deep(.ant-form-item) { margin-bottom: 16px; }
   .policy-view :deep(.ant-btn-sm) { position: relative; }
   .policy-view :deep(.ant-btn-sm)::after {

@@ -127,6 +127,7 @@ watch(
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .fp-close:hover {
   background: var(--bg-hover, var(--bg-page));

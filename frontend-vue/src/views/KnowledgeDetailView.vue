@@ -826,13 +826,22 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
             v-for="item in filteredMediaFiles"
             :key="item.id"
             :class="['media-item', { selected: selectedMediaIds.includes(item.id) }]"
-            role="button"
+            role="checkbox"
+            :aria-checked="selectedMediaIds.includes(item.id)"
             tabindex="0"
             @click="toggleMediaSelection(item.id)"
             @keydown.enter.prevent="toggleMediaSelection(item.id)"
             @keydown.space.prevent="toggleMediaSelection(item.id)"
           >
-            <Checkbox :checked="selectedMediaIds.includes(item.id)" />
+            <!-- 内层 Checkbox 只作视觉：语义与键盘操作已由外层的 role="checkbox" + aria-checked
+                 承担。若不排除它，这一行会出现两个可聚焦点表达同一件事（Tab 要经过两次、
+                 读屏要读两遍）；aria-hidden 配合 tabindex="-1" 才是合法组合
+                 （aria-hidden 的元素不允许仍可聚焦）。 -->
+            <Checkbox
+              :checked="selectedMediaIds.includes(item.id)"
+              :tabindex="-1"
+              aria-hidden="true"
+            />
             <div class="media-info">
               <span class="media-name">{{ item.name }}</span>
               <span class="media-meta">
@@ -894,7 +903,10 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
 .result-header { margin-bottom: 8px; }
 .result-content { margin: 0; font-size: 14px; line-height: 1.6; color: var(--text-primary); }
 .search-highlight { background: var(--highlight-bg); color: var(--highlight-fg); padding: 1px 2px; border-radius: var(--radius-xs); }
-.doc-name-link { color: var(--primary-color, #1890ff); cursor: pointer; font-weight: var(--fw-medium); }
+.doc-name-link {
+ color: var(--primary-color, #1890ff); cursor: pointer; font-weight: var(--fw-medium); 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .doc-name-link:hover { text-decoration: underline; }
 
 .media-search-bar { display: flex; gap: 12px; align-items: center; margin-bottom: 16px; }
@@ -923,7 +935,7 @@ function highlightSegments(text: string): Array<{ text: string; highlight: boole
   /* 卡片头部（标题 + 搜索/按钮）允许换行 */
   :deep(.ant-card-head) { flex-wrap: wrap; row-gap: 8px; }
   :deep(.ant-card-head-wrapper) { flex-wrap: wrap; row-gap: 8px; }
-  :deep(.ant-card-extra) { margin-left: 0; width: 100%; }
+  :deep(.ant-card-extra) { margin-inline-start: 0; width: 100%; }
   :deep(.ant-card-extra .ant-space) { flex-wrap: wrap; row-gap: 8px; }
   /* 文档表格窄屏横向滚动 */
   :deep(.ant-table-wrapper) { overflow-x: auto; -webkit-overflow-scrolling: touch; }

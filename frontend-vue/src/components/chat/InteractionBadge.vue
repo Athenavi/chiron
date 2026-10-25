@@ -80,5 +80,7 @@ onBeforeUnmount(() => {
   background: transparent;
   cursor: pointer;
   padding: 0 4px;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.interaction-badge:hover { background: var(--bg-hover); }
 </style>

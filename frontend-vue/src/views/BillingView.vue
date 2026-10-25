@@ -604,7 +604,7 @@ function amountText(amount: number): string {
       :footer="null"
       :closable="true"
       :mask-closable="false"
-      width="340px"
+      width="400px"
       :title="$t('billing.scan_to_pay')"
       @cancel="closeQR"
     >
@@ -708,7 +708,7 @@ function amountText(amount: number): string {
 .qr-tip { margin-top: 14px; color: var(--text-primary); font-size: 14px; }
 .qr-sub { color: var(--text-tertiary); font-size: 12px; }
 .qr-success { margin-top: 16px; color: var(--colorSuccess, #10b981); font-size: 16px; font-weight: var(--fw-semibold); }
-.qr-expired { margin-top: 16px; text-align: left; }
+.qr-expired { margin-top: 16px; text-align: start; }
 
 /* 窄屏（≤576px，与 .u-hide-sm 断点一致）：卡片贴边、表单全宽、iOS 防缩放 */
 @media (max-width: 576px) {

@@ -152,7 +152,11 @@ onMounted(load)
                 {{ $t('settings.harness_edit') }}
               </button>
               <Popconfirm :title="$t('settings.harness_confirm_delete')" @confirm="remove(row.model_prefix)">
-                <button type="button" class="link-btn">
+                <button
+                  type="button"
+                  class="link-btn"
+                  :aria-label="$t('common.delete')"
+                >
                   <DeleteOutlined />
                 </button>
               </Popconfirm>
@@ -187,11 +191,11 @@ onMounted(load)
 .harness-prefix { max-width: 320px; }
 .harness-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .harness-hint { color: var(--text-secondary); font-size: 12px; }
-.harness-count { margin-left: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
+.harness-count { margin-inline-start: auto; font-variant-numeric: tabular-nums; color: var(--text-secondary); }
 .harness-count.over { color: var(--error, #ff4d4f); font-weight: var(--fw-semibold); }
 .harness-item { padding: 10px 0; border-bottom: 1px dashed var(--border-color, #f0f0f0); }
 .harness-item-head { display: flex; align-items: center; gap: 8px; }
-.harness-item-actions { margin-left: auto; display: flex; gap: 12px; }
+.harness-item-actions { margin-inline-start: auto; display: flex; gap: 12px; }
 /* 语义化按钮而非 <a>：键盘可聚焦（check-a11y 的 clickable-nonsemantic 契约） */
 .link-btn {
   background: none;
@@ -200,6 +204,8 @@ onMounted(load)
   font: inherit;
   color: var(--primary);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.link-btn:hover { color: var(--primary); }
 .harness-item-body { margin-top: 6px; white-space: pre-wrap; font-size: 13px; color: var(--text-secondary); }
 </style>

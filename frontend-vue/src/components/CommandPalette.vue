@@ -456,6 +456,7 @@ onUnmounted(() => {
               type="text"
               class="palette-input"
               :placeholder="$t('chat.search_messages_media_or_enter_a_command')"
+              :aria-label="$t('chat.search_messages_media_or_enter_a_command')"
               autocomplete="off"
               spellcheck="false"
             >
@@ -611,6 +612,8 @@ onUnmounted(() => {
   font-family: inherit;
 }
 .palette-input::placeholder { color: var(--text-muted); }
+/* 输入框自己 outline: none；焦点环交给它所在的整行，视觉上更像"整条输入行被激活" */
+.palette-input-row:focus-within { box-shadow: 0 0 0 var(--focus-ring-width) var(--focus-ring-glow); border-radius: var(--radius-md); }
 .palette-kbd {
   flex: none;
   padding: 2px 7px;
@@ -742,7 +745,7 @@ onUnmounted(() => {
   font-size: var(--fs-xs);
 }
 .palette-footer-tip {
-  margin-left: auto;
+  margin-inline-start: auto;
   color: var(--text-muted);
 }
 

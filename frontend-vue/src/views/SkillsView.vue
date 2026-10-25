@@ -416,7 +416,7 @@ async function handleGenerate() {
             :class="{ disabled: s.enabled === false }"
           >
             <div class="card-top">
-              <span class="card-icon"><CodeOutlined /></span>
+              <span class="card-icon-tile"><CodeOutlined /></span>
               <div class="card-titles">
                 <div class="card-name-line">
                   <span class="card-name">{{ s.name }}</span>
@@ -676,7 +676,7 @@ async function handleGenerate() {
       :open="runOpen"
       :title="$t('common.run_name', { name: runTarget?.name || '' })"
       :footer="null"
-      width="560px"
+      width="520px"
       @cancel="runOpen = false"
     >
       <div class="run-desc">
@@ -782,7 +782,6 @@ async function handleGenerate() {
 .skills-tabs :deep(.ant-tabs-nav) { margin-bottom: 20px; }
 
 .list-toolbar { display: flex; gap: 10px; margin-bottom: 16px; }
-.search-input { max-width: 320px; }
 .type-filter { width: 140px; }
 
 .skill-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); gap: 14px; }
@@ -797,9 +796,6 @@ async function handleGenerate() {
 }
 .skill-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .skill-card.disabled { opacity: 0.65; }
-.card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon { flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card); background: var(--primary-bg); color: var(--primary); display: inline-flex; align-items: center; justify-content: center; font-size: 17px; }
-.card-titles { flex: 1; min-width: 0; }
 .card-name-line { display: flex; align-items: center; gap: 6px; min-width: 0; }
 .card-name { font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .exec-tag { flex: none; }
@@ -840,7 +836,6 @@ async function handleGenerate() {
 @media (max-width: 768px) {
   .skills-page { padding: 20px 16px 48px; }
   .list-toolbar { flex-direction: column; align-items: stretch; }
-  .search-input { max-width: none; }
   .type-filter { width: 100%; }
 }
 

@@ -251,7 +251,7 @@ defineExpose({
   color: var(--text-secondary);
   font-size: 12px;
   cursor: pointer;
-  transition: all var(--dur-normal) ease;
+  transition: border-color var(--dur-normal), color var(--dur-normal);
 }
 
 .btn-collapse:hover {
@@ -427,6 +427,7 @@ defineExpose({
   color: var(--text-secondary);
   font-size: var(--fs-xs);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .btn-clear:hover {

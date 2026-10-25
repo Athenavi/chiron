@@ -201,9 +201,9 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(h1) { font-size: 24px; line-height: 34px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
 .share-msg-text :deep(h2) { font-size: 22px; line-height: 32px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
 .share-msg-text :deep(h3) { font-size: 20px; line-height: 30px; font-weight: var(--fw-bold); margin: 32px 0 16px; }
-.share-msg-text :deep(ul), .share-msg-text :deep(ol) { padding-left: 24px; margin: 16px 0; }
+.share-msg-text :deep(ul), .share-msg-text :deep(ol) { padding-inline-start: 24px; margin: 16px 0; }
 .share-msg-text :deep(li) { margin: 4px 0; }
-.share-msg-text :deep(blockquote) { margin: 16px 0; padding: 6px 12px; border-left: 3px solid var(--primary); background: var(--bg-hover); border-radius: var(--radius-md); }
+.share-msg-text :deep(blockquote) { margin: 16px 0; padding: 6px 12px; border-inline-start: 3px solid var(--primary); background: var(--bg-hover); border-radius: var(--radius-md); }
 .share-msg-text :deep(a) { color: var(--primary); text-decoration: none; }
 .share-msg-text :deep(a:hover) { text-decoration: underline; }
 .share-msg-text :deep(code) { font-family: var(--font-mono); font-size: 0.9em; background: var(--bg-secondary); padding: 2px 6px; border-radius: var(--radius-md); }
@@ -216,7 +216,7 @@ function formatDate(iso: string): string {
 .share-msg-text :deep(pre) { margin: 0 !important; padding: 16px; overflow-x: auto; white-space: pre; word-break: normal; -webkit-overflow-scrolling: touch; }
 .share-msg-text :deep(pre code) { background: none; padding: 0; font-size: 0.9em; color: var(--text-code); }
 .share-msg-text :deep(table) { border-collapse: collapse; margin: 16px 0; width: 100%; }
-.share-msg-text :deep(th), .share-msg-text :deep(td) { border: var(--hairline-width) solid var(--border); padding: 8px 12px; text-align: left; }
+.share-msg-text :deep(th), .share-msg-text :deep(td) { border: var(--hairline-width) solid var(--border); padding: 8px 12px; text-align: start; }
 .share-msg-text :deep(th) { background: var(--bg-secondary); font-weight: var(--fw-semibold); }
 .share-footer { padding: 18px 24px; text-align: center; font-size: 12px; color: var(--text-muted); border-top: var(--hairline-width) solid var(--border); }
 

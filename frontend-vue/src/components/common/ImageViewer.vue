@@ -334,13 +334,14 @@ onBeforeUnmount(() => {
 }
 .viewer-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; }
 .viewer-count { font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.75; }
-.viewer-percent { min-width: 44px; text-align: right; font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.75; }
+.viewer-percent { min-width: 44px; text-align: end; font-size: 12px; font-variant-numeric: tabular-nums; opacity: 0.75; }
 .viewer-btn {
   display: inline-flex; align-items: center; justify-content: center;
   min-width: 28px; height: 28px; padding: 0 6px;
   border: none; border-radius: var(--radius-sm);
   background: none; color: inherit; font-size: 12px; cursor: pointer;
   text-decoration: none;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .viewer-btn:hover { background: var(--on-viewer-faint); }
 .viewer-btn:focus-visible { outline: 2px solid var(--on-solid); outline-offset: 1px; }

@@ -227,7 +227,7 @@ onMounted(() => {
 @media (max-width: 768px) {
   .queue-monitor { --chart-h: 220px; }
   .queue-monitor :deep(.ant-card-head-wrapper) { flex-wrap: wrap; row-gap: 8px; }
-  .queue-monitor :deep(.ant-card-extra) { margin-left: 0; }
+  .queue-monitor :deep(.ant-card-extra) { margin-inline-start: 0; }
   .queue-monitor :deep(.ant-btn) { min-height: 40px; }
 }
 </style>

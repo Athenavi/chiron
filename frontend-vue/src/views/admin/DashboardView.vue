@@ -483,8 +483,8 @@ onUnmounted(() => {
   color: var(--text-tertiary);
   margin-bottom: 6px;
 }
-.stat-icon { font-size: 18px; color: var(--primary); margin-right: 4px; }
-.stat-trend { font-size: var(--fs-xs); padding: 0 6px; border-radius: var(--radius-sm); margin-left: 4px; }
+.stat-icon { font-size: 18px; color: var(--primary); margin-inline-end: 4px; }
+.stat-trend { font-size: var(--fs-xs); padding: 0 6px; border-radius: var(--radius-sm); margin-inline-start: 4px; }
 
 /* ── 图表卡片 ── */
 .charts-row { margin-bottom: 0 !important; }

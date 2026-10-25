@@ -1060,6 +1060,7 @@ onMounted(async () => {
 .conv-row {
   display: flex; align-items: center; gap: 10px;
   padding: 8px 4px; cursor: pointer; border-radius: var(--radius-sm, 6px);
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .conv-row:hover { background: var(--bg-hover); }
 .conv-title { flex: 1; min-width: 0; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

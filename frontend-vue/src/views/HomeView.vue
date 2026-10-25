@@ -569,7 +569,7 @@ function scrollToTop() {
 .win-dot.red { background: var(--traffic-red); }
 .win-dot.yellow { background: var(--traffic-amber); }
 .win-dot.green { background: var(--traffic-green); }
-.win-title { flex: 1; text-align: center; font-size: var(--fs-xs); color: var(--text-tertiary); margin-right: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.win-title { flex: 1; text-align: center; font-size: var(--fs-xs); color: var(--text-tertiary); margin-inline-end: 30px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .window-body { padding: 16px; }
 
 .chat-preview { display: flex; flex-direction: column; gap: 10px; min-height: 200px; }
@@ -671,7 +671,7 @@ function scrollToTop() {
 .terminal-card .window-chrome { background: var(--bg-surface-hover); }
 .term-copy {
   flex: none;
-  margin-left: auto;
+  margin-inline-start: auto;
   min-height: 28px;
   border: var(--hairline-width) solid var(--border-default);
   border-radius: var(--radius-md);
@@ -685,7 +685,7 @@ function scrollToTop() {
 .term-copy:hover { color: var(--primary); border-color: var(--primary); }
 .terminal-body { padding: 16px 18px; font-family: var(--font-mono); font-size: 12.5px; line-height: 24px; background: var(--bg-code); }
 .term-line { color: var(--text-primary); white-space: pre-wrap; word-break: break-all; }
-.term-prompt { color: var(--primary); font-weight: var(--fw-semibold); margin-right: 8px; }
+.term-prompt { color: var(--primary); font-weight: var(--fw-semibold); margin-inline-end: 8px; }
 .term-out { color: var(--text-tertiary); margin-top: 6px; }
 
 /* ── 页脚 ── */
@@ -722,8 +722,8 @@ function scrollToTop() {
   .hero-title { font-size: clamp(30px, 6vw, 44px); }
 }
 @media (max-width: 640px) {
-  .features, .showcase { padding-left: 16px; padding-right: 16px; }
-  .quickstart { padding-left: 16px; padding-right: 16px; }
+  .features, .showcase { padding-inline-start: 16px; padding-inline-end: 16px; }
+  .quickstart { padding-inline-start: 16px; padding-inline-end: 16px; }
   .feature-grid { gap: 12px; }
   .hero-cta { width: 100%; max-width: 320px; }
 }

@@ -1425,6 +1425,7 @@ defineExpose({ insertText, setCommandDraft })
   flex: none; padding: 2px 6px; border: none; background: transparent;
   color: inherit; font-size: var(--fs-xs); font-weight: var(--fw-semibold);
   border-radius: var(--sig-radius-button); cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .outbox-action:hover { background: var(--bg-hover); }
 .outbox-retry { text-decoration: underline; }
@@ -1512,7 +1513,7 @@ defineExpose({ insertText, setCommandDraft })
   .context-label { display: none; }
   .input-actions .ant-btn:not(.send-btn) { height: 40px; min-width: 40px; border-radius: var(--input-card-inner-r, 10px); }
   .send-btn.ant-btn { width: 40px; height: 40px; min-width: 40px; }
-  .input-left:last-child { margin-left: auto; }   /* 发送组靠右，避免与左侧工具组抢行 */
+  .input-left:last-child { margin-inline-start: auto; }   /* 发送组靠右，避免与左侧工具组抢行 */
   .paste-btn { min-height: 36px; }
 }
 
@@ -1531,6 +1532,7 @@ defineExpose({ insertText, setCommandDraft })
   display: inline-flex; align-items: center; justify-content: center;
   border: none; background: transparent; cursor: pointer; line-height: 1;
   color: var(--text-tertiary); font-size: var(--fs-xs); padding: 0 2px;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .context-chip__x:hover { color: var(--danger, var(--error)); }
 /* 7.5rem 正方形磁贴（CDS v1/02 §2.5.1）：120px 是官方基准值。本仓取整数 120px
@@ -1599,6 +1601,7 @@ defineExpose({ insertText, setCommandDraft })
   border-bottom: var(--hairline-width) solid var(--border);
 }
 .slash-item { display: flex; justify-content: space-between; align-items: center; padding: 8px 12px; cursor: pointer; transition: background var(--dur-fast) ease; }
+.slash-item:hover { background: var(--bg-hover); }
 .slash-item.active { background: var(--bg-hover); }
 .slash-cmd { font-weight: var(--fw-semibold); color: var(--primary); font-size: 13px; }
 .slash-desc { color: var(--text-tertiary); font-size: 12px; }
@@ -1616,7 +1619,10 @@ defineExpose({ insertText, setCommandDraft })
 .paste-preview-text { font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-height: 80px; overflow: hidden; white-space: pre-wrap; word-break: break-all; }
 .paste-preview-meta { font-size: var(--fs-xs); color: var(--text-tertiary); margin: 4px 0; }
 .paste-preview-actions { display: flex; justify-content: flex-end; gap: 8px; }
-.paste-btn { padding: 2px 10px; border-radius: var(--paste-preview-inner-r, var(--sig-radius-button)); border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); font-size: 12px; cursor: pointer; }
+.paste-btn {
+ min-height: 36px; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .paste-btn.accept { background: var(--primary); color: var(--on-solid); border-color: var(--primary); }
 .paste-btn.accept:hover { opacity: 0.9; }
 .paste-btn.discard:hover { color: var(--error); border-color: var(--error); }

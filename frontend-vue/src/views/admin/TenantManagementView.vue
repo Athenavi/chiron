@@ -179,7 +179,7 @@ onMounted(loadTenants)
 <template>
   <div class="tenant-management">
     <div class="page-header">
-      <h1>{{ $t('admin.tenant_management') }}</h1>
+      <h1 class="page-title">{{ $t('admin.tenant_management') }}</h1>
       <Space>
         <Button @click="loadTenants">
           <template #icon>
@@ -360,16 +360,11 @@ onMounted(loadTenants)
 
 <style scoped>
 .tenant-management { padding: 24px; }
-.page-header h1 { margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .usage-empty { margin-top: 16px; }
 
 /* 窄屏:按钮全宽、触控目标 ≥ 40px */
 @media (max-width: 768px) {
   .tenant-management { padding: 16px 12px; }
-  .tenant-management .page-header { row-gap: 12px; }
-  .tenant-management .page-header .ant-btn { min-height: 40px; }
 }
-@media (max-width: 480px) {
-  .tenant-management .page-header h1 { font-size: 20px; }
-}
+
 </style>

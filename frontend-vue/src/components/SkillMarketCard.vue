@@ -33,7 +33,7 @@
         :class="{ installed: item.installed }"
       >
         <div class="card-top">
-          <span class="card-icon"><component :is="typeIcons[type]" /></span>
+          <span class="card-icon-tile"><component :is="typeIcons[type]" /></span>
           <div class="card-titles">
             <span class="card-name">{{ displayName(item) }}</span>
             <span class="card-desc">{{ displayDesc(item) }}</span>
@@ -238,13 +238,6 @@ const filteredItems = computed(() => {
 .market-card:hover { transform: translateY(-2px); border-color: var(--primary); box-shadow: var(--shadow-lg); }
 .market-card.installed { border-color: var(--success); }
 
-.card-top { display: flex; align-items: flex-start; gap: 10px; }
-.card-icon {
-  flex: none; width: 36px; height: 36px; border-radius: var(--sig-radius-card);
-  background: var(--primary-bg); color: var(--primary);
-  display: inline-flex; align-items: center; justify-content: center; font-size: 17px;
-}
-.card-titles { flex: 1; min-width: 0; }
 .card-name { display: block; font-size: 14px; font-weight: var(--fw-semibold); color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .card-desc {
   display: block; margin-top: 3px; font-size: 12px; color: var(--text-tertiary);

@@ -963,12 +963,6 @@ onMounted(async () => {
   margin-top: 16px;
 }
 
-.config-note {
-  margin-top: 8px;
-  color: var(--text-tertiary);
-  font-size: 12px;
-  line-height: 1.5;
-}
 
 .code-block {
   background: var(--bg-code);

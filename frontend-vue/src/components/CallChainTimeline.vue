@@ -273,14 +273,16 @@ function capitalize(str: string): string {
 <style scoped>
 /* 差距C：时间线 / 执行图 切换与执行图渲染 */
 .view-toggle {
-  margin-left: 8px;
+  margin-inline-start: 8px;
   padding: 1px 8px;
   font-size: var(--fs-xs);
   border: var(--hairline-width) solid var(--border);
   border-radius: var(--radius-md);
   background: transparent;
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
+.view-toggle:hover { color: var(--primary); }
 .graph-body {
   padding: 6px 0;
 }
@@ -364,7 +366,7 @@ function capitalize(str: string): string {
   padding: 8px 12px;
   background: var(--bg-card);
   border: var(--hairline-width) solid var(--border);
-  border-left: 3px solid var(--border);
+  border-inline-start: 3px solid var(--border);
   border-radius: var(--radius-lg);
   transition: background var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
@@ -374,15 +376,15 @@ function capitalize(str: string): string {
 }
 
 .node-line.type-llm {
-  border-left-color: var(--node-violet);
+  border-inline-start-color: var(--node-violet);
 }
 
 .node-line.type-tool {
-  border-left-color: var(--info);
+  border-inline-start-color: var(--info);
 }
 
 .node-line.type-workflow {
-  border-left-color: var(--node-pink);
+  border-inline-start-color: var(--node-pink);
 }
 
 .node-icon {

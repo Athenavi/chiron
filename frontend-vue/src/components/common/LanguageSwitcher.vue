@@ -94,6 +94,7 @@ function onMenuClick(e: { key: string | number }): void {
   background: transparent;
   color: var(--text-tertiary);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .lang-compact-btn:hover {
   color: var(--text-primary);

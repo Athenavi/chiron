@@ -19,6 +19,7 @@ import EmptyState from '../components/common/EmptyState.vue'
 
 import { useI18n } from 'vue-i18n'
 import { documentDir, nextRovingIndex, resolveRovingIntent, rovingTabIndex } from '../composables/useRovingFocus'
+import { splitFileName, type SplitName } from '../utils/fileName'
 const { t: tr } = useI18n()
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -76,6 +77,18 @@ function formatSize(bytes: number): string {
   const sizes = ['B', 'KB', 'MB', 'GB']
   const i = Math.floor(Math.log(bytes) / Math.log(k))
   return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i]
+}
+
+/** 卡片名的「中间截断」拆分，按 id 缓存（列表滚动时避免重复计算）。
+ *  规格见 utils/fileName.ts：尾部含扩展名且固定不缩，头部先缩。 */
+const namePartsCache = new Map<string, SplitName>()
+function nameParts(id: string, name: string): SplitName {
+  let p = namePartsCache.get(id)
+  if (!p) {
+    p = splitFileName(name)
+    namePartsCache.set(id, p)
+  }
+  return p
 }
 
 function isFolder(item: MediaItem) { return item.type === 'folder' }
@@ -928,19 +941,29 @@ onUnmounted(() => {
   <div class="media-page">
     <div class="media-toolbar">
       <div class="breadcrumb">
-        <span
+        <template
           v-for="(cr, i) in breadcrumbs"
           :key="cr.id || 'root'"
-          class="crumb"
-          :class="{ active: i === breadcrumbs.length - 1 }"
-          role="button"
-          tabindex="0"
-          @click="goBreadcrumb(i)"
-          @keydown.enter.prevent="goBreadcrumb(i)"
-        >{{ cr.name }}<span
-          v-if="i < breadcrumbs.length - 1"
-          class="crumb-sep"
-        >/</span></span>
+        >
+          <!-- 末项是「当前所在目录」：它不该是按钮（点它只是导航到原地，还会给键盘用户
+               多一个无意义的 Tab 停留点），改用 aria-current="page" 表达。 -->
+          <span
+            class="crumb"
+            :class="{ active: i === breadcrumbs.length - 1 }"
+            :role="i === breadcrumbs.length - 1 ? undefined : 'button'"
+            :tabindex="i === breadcrumbs.length - 1 ? undefined : 0"
+            :aria-current="i === breadcrumbs.length - 1 ? 'page' : undefined"
+            @click="i < breadcrumbs.length - 1 && goBreadcrumb(i)"
+            @keydown.enter.prevent="i < breadcrumbs.length - 1 && goBreadcrumb(i)"
+          >{{ cr.name }}</span>
+          <!-- 分隔符移出 crumb：此前它嵌在按钮内部，点分隔符也会触发导航；
+               aria-hidden 则让屏幕阅读器不会把「/」念出来。 -->
+          <span
+            v-if="i < breadcrumbs.length - 1"
+            class="crumb-sep"
+            aria-hidden="true"
+          >/</span>
+        </template>
       </div>
       <div class="toolbar-actions">
         <Input
@@ -1153,7 +1176,7 @@ onUnmounted(() => {
             class="card-name"
             :title="item.name"
           >
-            {{ item.name }}
+            <span class="card-name-head">{{ nameParts(item.id, item.name).head }}</span><span class="card-name-tail">{{ nameParts(item.id, item.name).tail }}</span>
           </div>
           <div
             v-if="!isFolder(item)"
@@ -1339,7 +1362,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="showRename"
       :title="$t('common.rename')"
-      :width="360"
+      :width="400"
       @ok="submitRename"
     >
       <Input
@@ -1369,7 +1392,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="newFolderOpen"
       :title="$t('media.new_folder')"
-      :width="360"
+      :width="400"
       :confirm-loading="folderCreating"
       @ok="createFolder"
     >
@@ -1437,7 +1460,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="showShare"
       :title="$t('common.share_link')"
-      :width="480"
+      :width="520"
       :footer="null"
     >
       <div class="share-row">
@@ -1480,7 +1503,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="showUpload"
       :title="$t('media.upload_file')"
-      :width="640"
+      :width="720"
       :footer="null"
       destroy-on-close
     >
@@ -1568,7 +1591,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="showKbModal"
       :title="$t('knowledge.add_to_knowledge_base')"
-      :width="420"
+      :width="400"
       :footer="null"
     >
       <p>{{ $t('common.selected') }} <strong>{{ selectedIds.size }}</strong> {{ $t('media.files') }}</p>
@@ -1617,7 +1640,7 @@ onUnmounted(() => {
     <Modal
       v-model:open="showBatchRename"
       :title="$t('common.batch_rename')"
-      :width="500"
+      :width="520"
       :confirm-loading="batchRenaming"
       @ok="submitBatchRename"
     >
@@ -1684,13 +1707,16 @@ onUnmounted(() => {
 .media-page { padding: 72px 24px 16px; display: flex; flex-direction: column; gap: 12px; height: 100%; overflow: hidden; }
 .media-toolbar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
 .breadcrumb { display: flex; align-items: center; gap: 4px; min-width: 0; }
-.crumb { font-size: 14px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; }
+.crumb {
+ font-size: 14px; color: var(--text-secondary); cursor: pointer; white-space: nowrap; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .crumb:hover { color: var(--primary); }
-.crumb.active { color: var(--text-primary); font-weight: var(--fw-semibold); }
-.crumb-sep { margin-left: 4px; color: var(--text-muted); }
-.toolbar-actions { margin-left: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.crumb.active { color: var(--text-primary); font-weight: var(--fw-semibold); cursor: default; }
+.crumb-sep { margin-inline-start: 4px; color: var(--text-muted); }
+.toolbar-actions { margin-inline-start: auto; display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(140px, 1fr)); gap: 12px; overflow-y: auto; padding-bottom: 24px; }
-.file-card { box-shadow: inset 0 0 0 var(--hairline-width) var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: all var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
+.file-card { box-shadow: inset 0 0 0 var(--hairline-width) var(--border-card); border-radius: var(--radius-lg); background: var(--bg-card); padding: 10px; cursor: pointer; transition: box-shadow var(--dur-fast), transform var(--dur-fast); display: flex; flex-direction: column; gap: 6px; }
 .file-card:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary), var(--shadow-md); transform: translateY(-2px); }
 .file-card:focus-visible,
 .lb-btn:focus-visible,
@@ -1705,7 +1731,12 @@ onUnmounted(() => {
 .card-thumb img { max-width: 100%; max-height: 100%; object-fit: cover; }
 .thumb-icon { font-size: 32px; color: var(--text-tertiary); }
 .thumb-icon.folder { color: var(--primary); }
-.card-name { font-size: 13px; color: var(--text-primary); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.card-name { font-size: 13px; color: var(--text-primary); display: flex; min-width: 0; }
+/* 中间截断：卡片只有 140px 宽，尾部截断会把扩展名整个吃掉（`report-2024-final.pdf`
+   → `report-202…`），一眼看不出是什么文件。让尾部（含扩展名）固定不缩、头部先缩，
+   于是显示成 `report-2…pdf`。头部的省略号由自己承担，不再用父级的 text-overflow。 */
+.card-name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.card-name-tail { flex: none; }
 .card-meta { font-size: var(--fs-xs); color: var(--text-muted); font-variant-numeric: tabular-nums; }
 .pagination-bar { display: flex; justify-content: flex-end; padding-top: 8px; border-top: var(--hairline-width) solid var(--border); }
 :deep(.row-selected) { background: var(--primary-bg) !important; }
@@ -1724,7 +1755,7 @@ onUnmounted(() => {
 .share-expires { margin-top: 8px; font-size: 12px; color: var(--text-muted); }
 .preview-shell { height: 75vh; min-height: 400px; border-radius: var(--radius-sm); overflow: hidden; }
 /* 新功能样式：总数/标签/移动树/灯箱/新建文件夹 */
-.media-total { margin-left: auto; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
+.media-total { margin-inline-start: auto; font-size: 12px; color: var(--text-tertiary); white-space: nowrap; }
 .tag-list { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 4px; }
 .no-tags { font-size: 12px; color: var(--text-muted); }
 .tag-add { margin-top: 6px; }
@@ -1732,20 +1763,26 @@ onUnmounted(() => {
 .folder-hint { margin-top: 8px; font-size: 12px; color: var(--text-tertiary); }
 .lightbox { position: relative; display: flex; align-items: center; justify-content: center; min-height: 60vh; }
 .lb-img { max-width: 82%; max-height: 72vh; object-fit: contain; border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); }
-.lb-btn { position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: var(--hairline-width) solid var(--border); border-radius: 50%; background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); }
+.lb-btn {
+ position: absolute; top: 50%; transform: translateY(-50%); width: 40px; height: 40px; border: var(--hairline-width) solid var(--border); border-radius: 50%; background: var(--bg-card); color: var(--text-primary); cursor: pointer; display: inline-flex; align-items: center; justify-content: center; box-shadow: var(--shadow-md); 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .lb-prev { left: 8px; }
 .lb-next { right: 8px; }
 .lb-btn:hover { color: var(--primary); border-color: var(--primary); }
 .lb-meta { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 10px; padding: 4px 12px; border-radius: var(--radius-full); background: var(--bg-overlay); color: var(--on-solid); font-size: 12px; }
 .lb-name { max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .lb-count { color: var(--on-viewer-strong); }
-.lb-close { position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: none; border-radius: 50%; background: var(--bg-overlay); color: var(--on-solid); cursor: pointer; }
+.lb-close {
+ position: absolute; top: 8px; right: 8px; width: 30px; height: 30px; border: none; border-radius: 50%; background: var(--bg-overlay); color: var(--on-solid); cursor: pointer; 
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
 .lb-close:hover { background: var(--bg-overlay); }
 @media (max-width: 768px) {
   .media-page { padding: 12px; height: auto; min-height: 100%; overflow: visible; }
   .file-grid { grid-template-columns: repeat(auto-fill, minmax(110px, 1fr)); gap: 8px; overflow: visible; padding-bottom: 16px; }
   :deep(.ant-drawer-content-wrapper) { width: 100vw !important; }
-  .toolbar-actions { margin-left: 0; width: 100%; }
+  .toolbar-actions { margin-inline-start: 0; width: 100%; }
   /* 筛选/搜索控件占满整行，便于触控 */
   .toolbar-actions :deep(.ant-input-affix-wrapper) { width: 100% !important; }
   .toolbar-actions :deep(.ant-select) { width: 100% !important; min-width: 0; }
@@ -1753,7 +1790,7 @@ onUnmounted(() => {
   .toolbar-actions :deep(.ant-segmented-group) { width: 100%; display: flex; }
   .toolbar-actions :deep(.ant-segmented-item) { flex: 1; text-align: center; }
   .batch-bar { position: fixed; left: 12px; right: 12px; bottom: 12px; top: auto; flex-wrap: wrap; }
-  .media-total { margin-left: 0; }
+  .media-total { margin-inline-start: 0; }
 }
 .modal-footer { display: flex; justify-content: flex-end; gap: 8px; margin-top: 16px; }
 

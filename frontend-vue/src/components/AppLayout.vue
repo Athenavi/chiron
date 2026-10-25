@@ -477,11 +477,13 @@ async function runQuickCommand() {
   border: var(--hairline-width) solid var(--border-default);
   box-shadow: var(--sig-shadow-card);
   cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .user-fab-avatar {
   cursor: pointer;
   display: block;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 
 .user-fab-avatar:hover {
@@ -805,7 +807,7 @@ async function runQuickCommand() {
 }
 
 .app-content--docked {
-  margin-left: calc(10px + var(--dock-w) + var(--dock-gap));
+  margin-inline-start: calc(10px + var(--dock-w) + var(--dock-gap));
 }
 
 @media (max-width: 768px) {
@@ -873,7 +875,7 @@ async function runQuickCommand() {
   }
 
   .app-content--docked {
-    margin-left: 0;
+    margin-inline-start: 0;
     padding-bottom: calc(10px + var(--dock-h) + var(--dock-gap) + env(safe-area-inset-bottom, 0px));
   }
 }

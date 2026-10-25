@@ -165,7 +165,7 @@ onMounted(() => {
 <template>
   <div class="redis-management">
     <div class="page-header">
-      <h1>{{ $t('admin.redis_management') }}</h1>
+      <h1 class="page-title">{{ $t('admin.redis_management') }}</h1>
       <Space>
         <Button @click="loadRedis">
           {{ $t('common.refresh_status') }}
@@ -307,16 +307,11 @@ onMounted(() => {
 
 <style scoped>
 .redis-management { padding: 24px; }
-.page-header h1 { margin: 0; font-size: 24px; font-weight: var(--fw-semibold); color: var(--text-primary); }
 .pool-stat { text-align: center; }
 .cell { word-break: break-all; }
 
 @media (max-width: 768px) {
   .redis-management { padding: 16px 12px; }
-  .redis-management .page-header { row-gap: 12px; }
-  .redis-management .page-header .ant-btn { min-height: 40px; }
 }
-@media (max-width: 480px) {
-  .redis-management .page-header h1 { font-size: 20px; }
-}
+
 </style>
