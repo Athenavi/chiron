@@ -251,7 +251,7 @@ async def resolve_interaction(
 
 
 async def _resolve_budget(
-    *, row: dict[str, Any], interaction_id: str, response: dict[str, Any], tenant: str, user: str
+    *, row: dict[str, Any], interaction_id: str, response: dict[str, Any], tenant: int, user: str
 ) -> dict[str, Any]:
     """提额票的答复 = **写一次线账控制态**（新上限 + 清暂停），然后把那张票关掉。
 

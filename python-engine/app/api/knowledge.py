@@ -625,7 +625,7 @@ async def _enqueue_kb_index(
         producer = QueueProducer(redis)
         return await producer.enqueue(
             "kb_index",
-            tenant_id=tenant_id or DEFAULT_TENANT_ID,
+            tenant_id=to_tenant_int(tenant_id or DEFAULT_TENANT_ID),
             payload={"kb_id": kb_id, "user_id": user_id, "force": bool(force)},
         )
     finally:

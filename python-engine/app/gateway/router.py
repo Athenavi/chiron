@@ -129,7 +129,7 @@ class GatewayRouter:
         # 路由权重: cost / latency / quality
         self._weights = weights or {"cost": 0.3, "latency": 0.3, "quality": 0.4}
         # 租户路由配置（从 Go 网关同步）
-        self._tenant_routes: dict[str, list[dict[str, Any]]] = {}  # tenant_id -> [route, ...]
+        self._tenant_routes: dict[int, list[dict[str, Any]]] = {}  # tenant_id(int) -> [route, ...]
         self._gateway_url = gateway_url
         self._internal_token = internal_token
 
@@ -181,7 +181,7 @@ class GatewayRouter:
                     finish_reason="error",
                     provider=provider.name,
                     model=model,
-                    message="token budget exceeded for tenant " + tenant_id,
+                    message=f"token budget exceeded for tenant {tenant_id}",
                 )
                 return
 
@@ -465,10 +465,12 @@ class GatewayRouter:
             logger.warning("sync_routes failed: %s", e)
             return 0
 
-        # 按 tenant_id 分组
-        tenant_map: dict[str, list[dict[str, Any]]] = {}
+        # 按 tenant_id 分组（键统一为 int：与 DB smallint 列 / 上游契约一致）
+        from app.tools.context import to_tenant_int  # 函数内导入，避免循环导入
+
+        tenant_map: dict[int, list[dict[str, Any]]] = {}
         for r in routes:
-            tid = r.get("tenant_id", "")
+            tid = to_tenant_int(r.get("tenant_id", ""))
             if not tid:
                 continue
             if tid not in tenant_map:
@@ -487,7 +489,8 @@ class GatewayRouter:
             return None
         for route in self._tenant_routes.get(tenant_id, []):
             if route.get("model_id") == model and route.get("enabled", True):
-                return route.get("primary_provider")
+                primary = route.get("primary_provider")
+                return str(primary) if primary else None
         return None
 
     # ── 内部路由 ──

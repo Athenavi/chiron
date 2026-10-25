@@ -113,7 +113,7 @@ class TaskRouter:
             }
         """
         start_time = time.time()
-        task_id = f"task_{int(time.time())}_{tenant_id[:8]}"
+        task_id = f"task_{int(time.time())}_{tenant_id}"
 
         logger.info(
             "Routing task (task_id=%s, tenant=%s, priority=%s, trace_id=%s)",

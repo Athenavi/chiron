@@ -260,7 +260,7 @@ class UnifiedChatHandler:
 
         # ── 创建/获取会话 (内存 L1 缓存 + PostgreSQL 写穿透持久化) ──
         if not session_id:
-            session_id = f"session_{int(time.time())}_{tenant_id[:8]}"
+            session_id = f"session_{int(time.time())}_{tenant_id}"
 
         session = self.sessions.get(session_id)
         if session is None:
@@ -282,7 +282,7 @@ class UnifiedChatHandler:
                     session_id=session_id,
                     tenant_id=tenant_id,
                     # 与写库时的兜底一致（见 _db_ensure_session 的 user_id or tenant_id）
-                    user_id=user_id or tenant_id,
+                    user_id=str(user_id or tenant_id),
                     title=user_input[:50],
                     mode=mode,
                     # 初始 shared_context = 请求注入的跨工作台上下文
@@ -298,7 +298,7 @@ class UnifiedChatHandler:
         db_ok = await self._db_ensure_session(
             session_id=session_id,
             tenant_id=tenant_id,
-            user_id=user_id or tenant_id,
+            user_id=str(user_id or tenant_id),
             title=session.title,
             mode=mode,
             shared_context=session.shared_context,
@@ -1190,9 +1190,12 @@ async def submit_chat(request: Request) -> dict[str, Any]:
     # （app/media/attachments.py）。
     attach_raw = body.get("attachments")
     attachments = attach_raw if isinstance(attach_raw, list) else []
+    # tenant_id 列已收窄为 smallint（int），在请求边界把字符串规约到整数域。
+    from app.tools.context import to_tenant_int
+
     return await handler.submit_task(
         user_input=user_input,
-        tenant_id=tenant_id,
+        tenant_id=to_tenant_int(tenant_id),
         session_id=body.get("session_id"),
         mode=str(body.get("mode", "auto")),
         context=context,
