@@ -276,13 +276,13 @@ def seeded_svc(svc):
 
     async def _seed():
         await svc.upsert(
-            tenant_id="t1", user_id="u1",
+            tenant_id=1, user_id="u1",
             slot=SlotType.FACT, key="pref_lang",
             value="Python", confidence=90,
             source=SourceType.USER_CONFIRMED,
         )
         await svc.upsert(
-            tenant_id="t1", user_id="u1",
+            tenant_id=1, user_id="u1",
             slot=SlotType.PREFERENCE, key="theme",
             value="dark", confidence=80,
             source=SourceType.DERIVED,
@@ -308,7 +308,7 @@ def seeded_app(seeded_svc, monkeypatch):
 class TestProfileAPI:
     async def test_list_profile_empty(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -316,7 +316,7 @@ class TestProfileAPI:
 
     async def test_list_profile_with_data(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -330,7 +330,7 @@ class TestProfileAPI:
 
     async def test_upsert_profile(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            r = await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "birthday", "value": "Jan 1",
                 "confidence": 95, "source": "user_confirmed",
             })
@@ -345,10 +345,10 @@ class TestProfileAPI:
 
     async def test_update_profile(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r_list = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/profile?user_id=u1&tenant_id=1")
             entry_id = r_list.json()["entries"][0]["id"]
 
-            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "id": entry_id, "value": "Rust",
             })
             assert r.status_code == 200
@@ -357,48 +357,48 @@ class TestProfileAPI:
 
     async def test_update_profile_missing_id(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=t1", json={})
+            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=1", json={})
             assert r.status_code == 400
             assert "id is required" in r.json()["error"]
 
     async def test_update_profile_not_found(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            r = await c.put("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "id": "nonexistent", "value": "test",
             })
             assert r.status_code == 404
 
     async def test_delete_profile(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r_list = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/profile?user_id=u1&tenant_id=1")
             entry_id = r_list.json()["entries"][0]["id"]
 
-            r = await c.delete(f"/v1/memory/profile/{entry_id}?user_id=u1&tenant_id=t1")
+            r = await c.delete(f"/v1/memory/profile/{entry_id}?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
 
     async def test_delete_profile_not_found(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.delete("/v1/memory/profile/nonexistent?user_id=u1&tenant_id=t1")
+            r = await c.delete("/v1/memory/profile/nonexistent?user_id=u1&tenant_id=1")
             assert r.status_code == 404
 
     async def test_clear_profile(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r = await c.post("/v1/memory/profile/clear?user_id=u1&tenant_id=t1", json={"confirm": True})
+            r = await c.post("/v1/memory/profile/clear?user_id=u1&tenant_id=1", json={"confirm": True})
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
 
     async def test_clear_profile_requires_confirm(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r = await c.post("/v1/memory/profile/clear?user_id=u1&tenant_id=t1", json={})
+            r = await c.post("/v1/memory/profile/clear?user_id=u1&tenant_id=1", json={})
             assert r.status_code == 400
             assert "confirm=true" in r.json()["error"]
 
     async def test_search_profile(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r = await c.post("/v1/memory/search?user_id=u1&tenant_id=t1", json={
+            r = await c.post("/v1/memory/search?user_id=u1&tenant_id=1", json={
                 "query": "Python", "top_k": 5,
             })
             assert r.status_code == 200
@@ -407,14 +407,14 @@ class TestProfileAPI:
 
     async def test_organize_profile(self, seeded_app):
         async with httpx.AsyncClient(transport=ASGITransport(app=seeded_app), base_url="http://t") as c:
-            r = await c.post("/v1/memory/organize?user_id=u1&tenant_id=t1")
+            r = await c.post("/v1/memory/organize?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
 
     async def test_organize_status(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/organize/status?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/organize/status?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -426,7 +426,7 @@ class TestProfileAPI:
 class TestSummaryAPI:
     async def test_list_summaries_empty(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/summaries?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/summaries?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -444,7 +444,7 @@ class TestSummaryAPI:
 class TestConflictAPI:
     async def test_list_conflicts_empty(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -453,16 +453,16 @@ class TestConflictAPI:
     async def test_list_conflicts_with_data(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             # First create a user_confirmed entry
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "city", "value": "上海",
                 "confidence": 95, "source": "user_confirmed",
             })
             # Then overwrite with derived to trigger conflict
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "city", "value": "北京",
                 "confidence": 50, "source": "derived",
             })
-            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["count"] == 1
@@ -476,21 +476,21 @@ class TestConflictAPI:
     async def test_resolve_conflict_use_new(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             # Create conflict scenario
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "lang", "value": "Python",
                 "confidence": 95, "source": "user_confirmed",
             })
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "lang", "value": "Go",
                 "confidence": 50, "source": "derived",
             })
             # Get conflict ID
-            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             conflict_id = r_list.json()["conflicts"][0]["conflict_id"]
 
             # Resolve with use_new
             r = await c.post(
-                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=t1",
+                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "use_new"},
             )
             assert r.status_code == 200
@@ -499,38 +499,38 @@ class TestConflictAPI:
 
     async def test_resolve_conflict_keep_old(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "color", "value": "red",
                 "confidence": 95, "source": "user_confirmed",
             })
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "color", "value": "blue",
                 "confidence": 50, "source": "derived",
             })
-            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             conflict_id = r_list.json()["conflicts"][0]["conflict_id"]
 
             r = await c.post(
-                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=t1",
+                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "keep_old"},
             )
             assert r.status_code == 200
 
     async def test_resolve_conflict_manual(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "os", "value": "Windows",
                 "confidence": 95, "source": "user_confirmed",
             })
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "os", "value": "Linux",
                 "confidence": 50, "source": "derived",
             })
-            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             conflict_id = r_list.json()["conflicts"][0]["conflict_id"]
 
             r = await c.post(
-                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=t1",
+                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "manual", "manual_value": "macOS"},
             )
             assert r.status_code == 200
@@ -540,7 +540,7 @@ class TestConflictAPI:
     async def test_resolve_conflict_invalid_resolution(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post(
-                "/v1/memory/conflicts/any/resolve?user_id=u1&tenant_id=t1",
+                "/v1/memory/conflicts/any/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "invalid"},
             )
             assert r.status_code == 400
@@ -548,7 +548,7 @@ class TestConflictAPI:
     async def test_resolve_conflict_not_found(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post(
-                "/v1/memory/conflicts/nonexistent/resolve?user_id=u1&tenant_id=t1",
+                "/v1/memory/conflicts/nonexistent/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "keep_old"},
             )
             assert r.status_code == 404
@@ -556,31 +556,31 @@ class TestConflictAPI:
     async def test_delete_conflict(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             # Create a conflict
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "vehicle", "value": "car",
                 "confidence": 95, "source": "user_confirmed",
             })
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "vehicle", "value": "bike",
                 "confidence": 50, "source": "derived",
             })
-            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r_list = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             conflict_id = r_list.json()["conflicts"][0]["conflict_id"]
 
             # Delete the conflict
-            r = await c.delete(f"/v1/memory/conflicts/{conflict_id}?user_id=u1&tenant_id=t1")
+            r = await c.delete(f"/v1/memory/conflicts/{conflict_id}?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
             assert body["deleted"] == conflict_id
 
             # Verify it's gone
-            r_after = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r_after = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             assert r_after.json()["count"] == 0
 
     async def test_delete_conflict_not_found(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.delete("/v1/memory/conflicts/nonexistent?user_id=u1&tenant_id=t1")
+            r = await c.delete("/v1/memory/conflicts/nonexistent?user_id=u1&tenant_id=1")
             assert r.status_code == 404
 
 
@@ -593,7 +593,7 @@ class TestErrorHandling:
         monkeypatch.setattr(mem_api, "get_service", lambda: None)
         app = _make_app(None)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=1")
             assert r.status_code == 503
 
     async def test_service_unavailable_conflicts(self, monkeypatch):
@@ -601,27 +601,27 @@ class TestErrorHandling:
         monkeypatch.setattr(mem_api, "get_service", lambda: None)
         app = _make_app(None)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             assert r.status_code == 503
 
     async def test_tenant_isolation(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             # User u1 in tenant t1 creates entries
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "k1", "value": "v_t1",
                 "confidence": 90, "source": "user_confirmed",
             })
             # Same user in different tenant t2 sees nothing
-            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=t2")
+            r = await c.get("/v1/memory/profile?user_id=u1&tenant_id=2")
             assert r.json()["total"] == 0
 
     async def test_user_isolation(self, app):
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             # User u1 creates entries
-            await c.post("/v1/memory/profile?user_id=u1&tenant_id=t1", json={
+            await c.post("/v1/memory/profile?user_id=u1&tenant_id=1", json={
                 "slot": "fact", "key": "k1", "value": "v_u1",
                 "confidence": 90, "source": "user_confirmed",
             })
             # User u2 in same tenant sees nothing
-            r = await c.get("/v1/memory/profile?user_id=u2&tenant_id=t1")
+            r = await c.get("/v1/memory/profile?user_id=u2&tenant_id=1")
             assert r.json()["total"] == 0

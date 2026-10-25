@@ -138,7 +138,7 @@ def ledger(monkeypatch):
 async def _resolve(iid: str = "i1", body: dict[str, Any] | None = None, **qs: Any) -> dict[str, Any]:
     # 缺省按**网关代理形态**给齐身份（网关总是用 claims 重写这两个 query）；
     # 只有专门测身份来源的用例才覆盖它们。
-    kw: dict[str, Any] = {"tenant_id": "t1", "user_id": "u1"}
+    kw: dict[str, Any] = {"tenant_id": 1, "user_id": "u1"}
     kw.update(qs)
     return await api_mod.resolve_interaction(iid, body or {}, **kw)
 
@@ -148,7 +148,7 @@ async def _resolve(iid: str = "i1", body: dict[str, Any] | None = None, **qs: An
 
 async def test_list_requires_identity(store):  # noqa: ARG001
     fake = store(FakeStore())
-    out = await api_mod.list_session_interactions("s1", tenant_id="t1", user_id="", limit=20)
+    out = await api_mod.list_session_interactions("s1", tenant_id=1, user_id="", limit=20)
     assert out["ok"] is False and out["error_code"] == "unauthorized"
     assert fake.list_calls == [], "身份缺失时不该读库"
 
@@ -173,7 +173,7 @@ async def test_list_returns_public_fields(store):
             ]
         )
     )
-    out = await api_mod.list_session_interactions("s1", tenant_id="t1", user_id="u1", limit=20)
+    out = await api_mod.list_session_interactions("s1", tenant_id=1, user_id="u1", limit=20)
 
     assert out["ok"] is True and out["count"] == 1
     item = out["items"][0]
@@ -190,7 +190,7 @@ async def test_approval_answer_is_stored_as_decision_json(store):
     fake = store(FakeStore(row=_approval_row(), resolved={"id": "i1", "kind": KIND_APPROVAL,
                                                          "session_id": "s1", "decision": {}}))
     out = await _resolve(body={"session_id": "s1", "response": {"decision": "approve"}},
-                         tenant_id="t1", user_id="u1")
+                         tenant_id=1, user_id="u1")
 
     assert out["ok"] is True
     assert fake.resolve_calls[0]["decision"] == {"decision": "approve"}
@@ -319,11 +319,11 @@ async def test_unknown_kind_reports_storage_error(store):  # noqa: ARG001
 async def test_identity_may_come_from_the_body(store):  # noqa: ARG001
     """内部直连形态：query 不带身份时读 body —— 但仍然必须有，否则拒绝。"""
     fake = store(FakeStore(row=_approval_row(), resolved={"id": "i1", "decision": {}}))
-    out = await _resolve(body={"session_id": "s1", "user_id": "u9", "tenant_id": "t9",
+    out = await _resolve(body={"session_id": "s1", "user_id": "u9", "tenant_id": 9,
                                "response": {"decision": "approve"}},
                          tenant_id="", user_id="")
     assert out["ok"] is True
-    assert fake.peek_calls[0] == {"id": "i1", "tenant": "t9", "user": "u9"}
+    assert fake.peek_calls[0] == {"id": "i1", "tenant": 9, "user": "u9"}
 
     missing = await _resolve(body={"session_id": "s1", "response": {"decision": "approve"}},
                              tenant_id="", user_id="")
@@ -338,11 +338,11 @@ async def test_budget_reply_raises_the_cap_and_closes_the_ticket(store, ledger):
     led = ledger(FakeLedger())
     out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
 
-    assert led.calls == [("rs_root", "t1", 5000, "u1")], "上限与清暂停必须一次写完成"
+    assert led.calls == [("rs_root", 1, 5000, "u1")], "上限与清暂停必须一次写完成"
     assert out["ok"] is True and out["data"]["status"] == interactions.STATUS_CONSUMED
     assert fake.settle_calls[0]["decision"] == {"cap_tokens": 5000, "root_run_id": "rs_root"}
     # 关掉票时带上身份：`settle` 本身可以按 id 关任何人的票，这条分支不行
-    assert fake.settle_calls[0]["tenant_id"] == "t1"
+    assert fake.settle_calls[0]["tenant_id"] == 1
     assert fake.settle_calls[0]["user_id"] == "u1"
     # **不走 `resolve`**：停在 `answered` 的票会永久占住 `ux_pending_interactions_open` 的名额，
     # 下次再耗尽时新票创建不出来 ⇒ "线停了却没有待办"。

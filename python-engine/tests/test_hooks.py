@@ -49,7 +49,7 @@ def _hooks_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _task(**overrides: Any) -> SimpleNamespace:
-    base = {"tenant_id": "t1", "user_id": "u1", "session_id": "s1"}
+    base = {"tenant_id": 1, "user_id": "u1", "session_id": "s1"}
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -98,7 +98,7 @@ async def test_pre_tool_use_blocks_and_is_audited(tmp_path: Path, monkeypatch: p
     assert last["blocked"] is True
     assert last["hook"] == "deny_rm"
     # 身份齐全：谁、哪个租户
-    assert last["tenant"] == "t1"
+    assert last["tenant"] == "1"
     assert last["user"] == "u1"
     assert last["session"] == "s1"
     # 耗时与退出码
@@ -262,7 +262,7 @@ async def test_user_prompt_submit_runs_and_is_audited(
     entries = _entries(tmp_path)
     assert entries and entries[-1]["event"] == events.USER_PROMPT_SUBMIT
     assert entries[-1]["hook"] == "observer"
-    assert entries[-1]["tenant"] == "t1"
+    assert entries[-1]["tenant"] == "1"
     assert entries[-1]["blocked"] is False
 
 

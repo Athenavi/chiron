@@ -53,7 +53,7 @@ def _full_svc(embedder=None, profile_store=None, summary_store=None, consolidato
 class TestSummaryEntry:
     def test_to_dict_has_fields(self):
         e = SummaryEntry(
-            id="sms_001", tenant_id="t1", user_id="u1", session_id="s1",
+            id="sms_001", tenant_id=1, user_id="u1", session_id="s1",
             content="讨论了 Go 微服务架构", topics=["Go", "微服务"],
         )
         d = e.to_dict()
@@ -65,7 +65,7 @@ class TestSummaryEntry:
 
     def test_embed_text_with_topics(self):
         e = SummaryEntry(
-            id="sms_002", tenant_id="t1", user_id="u1", session_id="s1",
+            id="sms_002", tenant_id=1, user_id="u1", session_id="s1",
             content="Python 异步编程", topics=["asyncio", "Python"],
         )
         assert "asyncio" in e.embed_text
@@ -73,7 +73,7 @@ class TestSummaryEntry:
 
     def test_embed_text_without_topics(self):
         e = SummaryEntry(
-            id="sms_003", tenant_id="t1", user_id="u1", session_id="s1",
+            id="sms_003", tenant_id=1, user_id="u1", session_id="s1",
             content="简洁摘要",
         )
         assert e.embed_text == "简洁摘要"
@@ -156,12 +156,12 @@ class TestConsolidatorPipeline:
             {"role": "user", "content": "帮我设计 Go 微服务架构"},
             {"role": "assistant", "content": "好的，建议使用 gRPC + Kubernetes"},
         ]
-        result = await con.consolidate("t1", "u1", "s1", msgs, turn_start=0, turn_end=2)
+        result = await con.consolidate(1, "u1", "s1", msgs, turn_start=0, turn_end=2)
         assert result.error == ""
         assert result.summary is not None
         assert result.deduplicated is False
         assert result.summary.content
-        assert result.summary.tenant_id == "t1"
+        assert result.summary.tenant_id == 1
         assert result.summary.user_id == "u1"
         assert result.summary.session_id == "s1"
         assert result.summary.turn_start == 0
@@ -171,8 +171,8 @@ class TestConsolidatorPipeline:
         ss = InMemorySummaryStore()
         con = Consolidator(store=ss)
         msgs = [{"role": "user", "content": "Same message"}, {"role": "assistant", "content": "Same reply"}]
-        r1 = await con.consolidate("t1", "u1", "s1", msgs, 0, 2)
-        r2 = await con.consolidate("t1", "u1", "s1", msgs, 0, 2)
+        r1 = await con.consolidate(1, "u1", "s1", msgs, 0, 2)
+        r2 = await con.consolidate(1, "u1", "s1", msgs, 0, 2)
         assert r1.deduplicated is False
         assert r2.deduplicated is True
         assert r2.summary.id == r1.summary.id
@@ -185,14 +185,14 @@ class TestConsolidatorPipeline:
         con = Consolidator(store=ss, embedder=emb)
         msgs1 = [{"role": "user", "content": "Python 异步编程讨论"}, {"role": "assistant", "content": "asyncio"}]
         msgs2 = [{"role": "user", "content": "Python asyncio 异步讨论"}, {"role": "assistant", "content": "asyncio"}]
-        await con.consolidate("t1", "u1", "s1", msgs1, 0, 2)
-        r2 = await con.consolidate("t1", "u1", "s1", msgs2, 0, 2)
+        await con.consolidate(1, "u1", "s1", msgs1, 0, 2)
+        r2 = await con.consolidate(1, "u1", "s1", msgs2, 0, 2)
         assert r2.near_duplicate_of is not None
 
     async def test_consolidate_empty_messages_fail_loud(self):
         ss = InMemorySummaryStore()
         con = Consolidator(store=ss)
-        result = await con.consolidate("t1", "u1", "s1", [], 0, 0)
+        result = await con.consolidate(1, "u1", "s1", [], 0, 0)
         assert result.error == "no messages to consolidate"
 
     async def test_consolidate_embedder_failure_still_saves(self):
@@ -204,7 +204,7 @@ class TestConsolidatorPipeline:
 
         con = Consolidator(store=ss, embedder=fail_embedder)
         msgs = [{"role": "user", "content": "Test content"}, {"role": "assistant", "content": "Reply"}]
-        result = await con.consolidate("t1", "u1", "s1", msgs, 0, 2)
+        result = await con.consolidate(1, "u1", "s1", msgs, 0, 2)
         assert result.error == ""
         assert result.summary is not None
         assert result.summary.embedding is None
@@ -212,12 +212,12 @@ class TestConsolidatorPipeline:
     async def test_consolidate_with_custom_summariser(self):
         ss = InMemorySummaryStore()
 
-        async def custom_summariser(messages, tenant_id=""):
+        async def custom_summariser(messages, tenant_id=0):
             return "topics: API, 设计\n用户讨论了 API 设计最佳实践"
 
         con = Consolidator(store=ss, summariser=custom_summariser)
         msgs = [{"role": "user", "content": "How to design APIs?"}, {"role": "assistant", "content": "Use REST"}]
-        result = await con.consolidate("t1", "u1", "s1", msgs, 0, 2)
+        result = await con.consolidate(1, "u1", "s1", msgs, 0, 2)
         assert result.summary is not None
         assert "API" in result.summary.topics
         assert "设计" in result.summary.topics
@@ -229,7 +229,7 @@ class TestServiceL3:
     async def test_save_summary_delegates_to_consolidator(self):
         svc = _full_svc()
         msgs = [{"role": "user", "content": "讨论 Go 架构"}, {"role": "assistant", "content": "建议用 gRPC"}]
-        result = await svc.save_summary("t1", "u1", "s1", msgs, 0, 2)
+        result = await svc.save_summary(1, "u1", "s1", msgs, 0, 2)
         assert result["error"] is None
         assert result["summary"] is not None
         assert result["deduplicated"] is False
@@ -237,11 +237,11 @@ class TestServiceL3:
     async def test_save_summary_without_consolidator_fail_loud(self):
         svc = _profile_svc()  # no summary_store / consolidator
         with pytest.raises(RuntimeError, match="consolidator not bound"):
-            await svc.save_summary("t1", "u1", "s1", [], 0, 0)
+            await svc.save_summary(1, "u1", "s1", [], 0, 0)
 
     async def test_recall_summaries_empty(self):
         svc = _full_svc()
-        result = await svc.recall_summaries("t1", "u1", "test query")
+        result = await svc.recall_summaries(1, "u1", "test query")
         assert result["count"] == 0
         assert result["mode"] == "empty"
 
@@ -249,35 +249,35 @@ class TestServiceL3:
         emb = FakeEmbedder()
         svc = _full_svc(embedder=emb)
         msgs = [{"role": "user", "content": "讨论 Go 微服务"}, {"role": "assistant", "content": "建议用 gRPC"}]
-        await svc.save_summary("t1", "u1", "s1", msgs, 0, 2)
+        await svc.save_summary(1, "u1", "s1", msgs, 0, 2)
         # 注入查询嵌入
         emb.set("Go 微服务", [1.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        result = await svc.recall_summaries("t1", "u1", "Go 微服务")
+        result = await svc.recall_summaries(1, "u1", "Go 微服务")
         assert result["count"] >= 0  # 可能因 threshold 过滤
 
     async def test_recall_combines_l2_and_l3(self):
         emb = FakeEmbedder()
         svc = _full_svc(embedder=emb)
         # L2 档案卡
-        await svc.upsert("t1", "u1", "fact", "language", "Go", confidence=90, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "language", "Go", confidence=90, source="user_confirmed")
         # L3 摘要
         msgs = [{"role": "user", "content": "Go 架构讨论"}, {"role": "assistant", "content": "gRPC"}]
-        await svc.save_summary("t1", "u1", "s1", msgs, 0, 2)
-        result = await svc.recall("t1", "u1", "Go")
+        await svc.save_summary(1, "u1", "s1", msgs, 0, 2)
+        result = await svc.recall(1, "u1", "Go")
         assert result.has_content
         assert "language" in result.profile_block
         assert isinstance(result.summary_items, list)
 
     async def test_recall_empty_user(self):
         svc = _full_svc()
-        result = await svc.recall("t1", "u1", "anything")
+        result = await svc.recall(1, "u1", "anything")
         assert result.has_content is False
 
     async def test_list_summaries(self):
         svc = _full_svc()
         msgs = [{"role": "user", "content": "讨论 A"}, {"role": "assistant", "content": "回复 A"}]
-        await svc.save_summary("t1", "u1", "s1", msgs, 0, 2)
-        data = await svc.list_summaries("t1", "u1")
+        await svc.save_summary(1, "u1", "s1", msgs, 0, 2)
+        data = await svc.list_summaries(1, "u1")
         assert data["count"] >= 1
         assert data["summaries"][0]["content"]
 
@@ -288,9 +288,9 @@ class TestConflictDetection:
     async def test_upsert_conflict_when_derived_blocked_by_user_confirmed(self):
         svc = _profile_svc()
         # 先用 user_confirmed 设一个值
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
         # 用 derived 尝试覆盖不同值 → 应创建冲突
-        result = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        result = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         assert result["created"] is False
         assert "conflict" in result
         assert result["conflict"]["old_value"] == "上海"
@@ -299,78 +299,78 @@ class TestConflictDetection:
         # **旧值没被改写**：裁决前派生值不得悄悄推翻用户确认过的东西
         # （此前这里是"先盖掉再登记"，`keep_old` 只是把已经丢了的东西捡回来）。
         assert result["entry"]["value"] == "上海"
-        stored = await svc._store.get_by_key("t1", "u1", "fact", "city")
+        stored = await svc._store.get_by_key(1, "u1", "fact", "city")
         assert stored.item_value == "上海"
 
     async def test_upsert_created_distinguishes_insert_from_update(self):
         svc = _profile_svc()
-        first = await svc.upsert("t1", "u1", "fact", "city", "上海", source="user_confirmed")
-        again = await svc.upsert("t1", "u1", "fact", "city", "北京", source="user_confirmed")
+        first = await svc.upsert(1, "u1", "fact", "city", "上海", source="user_confirmed")
+        again = await svc.upsert(1, "u1", "fact", "city", "北京", source="user_confirmed")
         assert first["created"] is True
         assert again["created"] is False
 
     async def test_upsert_no_conflict_when_both_user_confirmed(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        result = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=95, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        result = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=95, source="user_confirmed")
         assert "conflict" not in result
         assert result["entry"]["value"] == "北京"
 
     async def test_upsert_no_conflict_when_old_not_user_confirmed(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=50, source="derived")
-        result = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=50, source="derived")
+        result = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         assert "conflict" not in result
 
     async def test_list_conflicts(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
-        conflicts = svc.list_conflicts("t1", "u1")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
+        conflicts = svc.list_conflicts(1, "u1")
         assert len(conflicts) == 1
         assert conflicts[0]["key"] == "city"
 
     async def test_list_conflicts_tenant_isolation(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         # 不同租户不应看到冲突
-        conflicts = svc.list_conflicts("t2", "u1")
+        conflicts = svc.list_conflicts(2, "u1")
         assert len(conflicts) == 0
 
     async def test_resolve_conflict_keep_old(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        r = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        r = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         conflict_id = r["conflict"]["conflict_id"]
         result = await svc.resolve_conflict(conflict_id, "keep_old")
         assert result["status"] == "resolved"
         assert result["resolution"] == "keep_old"
         assert result["resolved_value"] == "上海"
         # 实际存储值未变
-        entry = await svc._store.get_by_key("t1", "u1", "fact", "city")
+        entry = await svc._store.get_by_key(1, "u1", "fact", "city")
         assert entry.item_value == "上海"
         assert entry.confidence == 100
         assert entry.source == "user_confirmed"
 
     async def test_resolve_conflict_adopt_new(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        r = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        r = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         conflict_id = r["conflict"]["conflict_id"]
         result = await svc.resolve_conflict(conflict_id, "adopt_new")
         assert result["resolved_value"] == "北京"
-        entry = await svc._store.get_by_key("t1", "u1", "fact", "city")
+        entry = await svc._store.get_by_key(1, "u1", "fact", "city")
         assert entry.item_value == "北京"
 
     async def test_resolve_conflict_manual(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        r = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        r = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         conflict_id = r["conflict"]["conflict_id"]
         result = await svc.resolve_conflict(conflict_id, "manual", manual_value="深圳")
         assert result["resolved_value"] == "深圳"
-        entry = await svc._store.get_by_key("t1", "u1", "fact", "city")
+        entry = await svc._store.get_by_key(1, "u1", "fact", "city")
         assert entry.item_value == "深圳"
 
     async def test_resolve_conflict_not_found(self):
@@ -380,8 +380,8 @@ class TestConflictDetection:
 
     async def test_resolve_conflict_invalid_resolution(self):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        r = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        r = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         conflict_id = r["conflict"]["conflict_id"]
         with pytest.raises(ValueError, match="invalid resolution"):
             await svc.resolve_conflict(conflict_id, "invalid_option")
@@ -402,12 +402,12 @@ class TestL3API:
     async def test_summaries_endpoint(self, monkeypatch):
         svc = _full_svc()
         msgs = [{"role": "user", "content": "讨论 A"}, {"role": "assistant", "content": "回复 A"}]
-        await svc.save_summary("t1", "u1", "s1", msgs, 0, 2)
+        await svc.save_summary(1, "u1", "s1", msgs, 0, 2)
         app = _api_app(svc)
         import app.api.memory as mem_api
         monkeypatch.setattr(mem_api, "get_service", lambda: svc)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/summaries?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/summaries?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["success"] is True
@@ -415,13 +415,13 @@ class TestL3API:
 
     async def test_conflicts_endpoint(self, monkeypatch):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         app = _api_app(svc)
         import app.api.memory as mem_api
         monkeypatch.setattr(mem_api, "get_service", lambda: svc)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
-            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=t1")
+            r = await c.get("/v1/memory/conflicts?user_id=u1&tenant_id=1")
             assert r.status_code == 200
             body = r.json()
             assert body["count"] == 1
@@ -429,15 +429,15 @@ class TestL3API:
 
     async def test_resolve_endpoint(self, monkeypatch):
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
-        r_upsert = await svc.upsert("t1", "u1", "fact", "city", "北京", confidence=50, source="derived")
+        await svc.upsert(1, "u1", "fact", "city", "上海", confidence=95, source="user_confirmed")
+        r_upsert = await svc.upsert(1, "u1", "fact", "city", "北京", confidence=50, source="derived")
         conflict_id = r_upsert["conflict"]["conflict_id"]
         app = _api_app(svc)
         import app.api.memory as mem_api
         monkeypatch.setattr(mem_api, "get_service", lambda: svc)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post(
-                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=t1",
+                f"/v1/memory/conflicts/{conflict_id}/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "adopt_new"},
             )
             assert r.status_code == 200
@@ -452,7 +452,7 @@ class TestL3API:
         monkeypatch.setattr(mem_api, "get_service", lambda: svc)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post(
-                "/v1/memory/conflicts/nonexistent/resolve?user_id=u1&tenant_id=t1",
+                "/v1/memory/conflicts/nonexistent/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "keep_old"},
             )
             assert r.status_code == 404
@@ -464,7 +464,7 @@ class TestL3API:
         monkeypatch.setattr(mem_api, "get_service", lambda: svc)
         async with httpx.AsyncClient(transport=ASGITransport(app=app), base_url="http://t") as c:
             r = await c.post(
-                "/v1/memory/conflicts/whatever/resolve?user_id=u1&tenant_id=t1",
+                "/v1/memory/conflicts/whatever/resolve?user_id=u1&tenant_id=1",
                 json={"resolution": "bad"},
             )
             assert r.status_code == 400
@@ -477,9 +477,9 @@ class TestMemoryCommand:
         from app.commands.builtins import _memory
         from app.commands.registry import CommandContext
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "language", "Go", confidence=90)
+        await svc.upsert(1, "u1", "fact", "language", "Go", confidence=90)
         monkeypatch.setattr("app.memory.service.get_service", lambda: svc)
-        ctx = CommandContext(metadata={"tenant_id": "t1", "user_id": "u1"})
+        ctx = CommandContext(metadata={"tenant_id": 1, "user_id": "u1"})
         result = await _memory("Go", ctx)
         assert "language" in result
         assert "Go" in result
@@ -488,10 +488,10 @@ class TestMemoryCommand:
         from app.commands.builtins import _memory
         from app.commands.registry import CommandContext
         svc = _profile_svc()
-        await svc.upsert("t1", "u1", "fact", "k1", "v1", confidence=80)
-        await svc.upsert("t1", "u1", "preference", "k2", "v2", confidence=80)
+        await svc.upsert(1, "u1", "fact", "k1", "v1", confidence=80)
+        await svc.upsert(1, "u1", "preference", "k2", "v2", confidence=80)
         monkeypatch.setattr("app.memory.service.get_service", lambda: svc)
-        ctx = CommandContext(metadata={"tenant_id": "t1", "user_id": "u1"})
+        ctx = CommandContext(metadata={"tenant_id": 1, "user_id": "u1"})
         result = await _memory("", ctx)
         assert "Stored memories" in result
         assert "k1" in result
@@ -517,7 +517,7 @@ class TestMemoryCommand:
         from app.commands.registry import CommandContext
         svc = _profile_svc()
         monkeypatch.setattr("app.memory.service.get_service", lambda: svc)
-        ctx = CommandContext(metadata={"tenant_id": "t1", "user_id": "u1"})
+        ctx = CommandContext(metadata={"tenant_id": 1, "user_id": "u1"})
         result = await _memory("nonexistent", ctx)
         assert "No memories found" in result
 

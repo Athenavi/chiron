@@ -42,31 +42,31 @@ def _values(data: dict[str, Any]) -> list[Any]:
 async def test_same_key_in_two_projects_are_independent():
     svc = _svc()
 
-    await svc.upsert("t", "u", slot="fact", key="lang", value="中文", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="lang", value="English", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="lang", value="中文", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="lang", value="English", project="proj-b")
 
-    assert _values(await svc.list_entries("t", "u", project="proj-a")) == ["中文"]
-    assert _values(await svc.list_entries("t", "u", project="proj-b")) == ["English"]
+    assert _values(await svc.list_entries(1, "u", project="proj-a")) == ["中文"]
+    assert _values(await svc.list_entries(1, "u", project="proj-b")) == ["English"]
 
 
 async def test_ungrouped_is_its_own_project():
     """不传 project = 未分组，与任何具名项目都互不可见（不是"能看见全部"）。"""
     svc = _svc()
 
-    await svc.upsert("t", "u", slot="fact", key="k", value="未分组")
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="k", value="未分组")
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
 
-    assert _values(await svc.list_entries("t", "u")) == ["未分组"]
-    assert _values(await svc.list_entries("t", "u", project="proj-a")) == ["A"]
+    assert _values(await svc.list_entries(1, "u")) == ["未分组"]
+    assert _values(await svc.list_entries(1, "u", project="proj-a")) == ["A"]
 
 
 async def test_search_does_not_leak_across_projects():
     svc = _svc()
 
-    await svc.upsert("t", "u", slot="fact", key="lang", value="中文", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="lang", value="English", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="lang", value="中文", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="lang", value="English", project="proj-b")
 
-    hit_a = await svc.search("t", "u", "lang", project="proj-a")
+    hit_a = await svc.search(1, "u", "lang", project="proj-a")
 
     assert _values(hit_a) == ["中文"]
 
@@ -74,11 +74,11 @@ async def test_search_does_not_leak_across_projects():
 async def test_recall_only_includes_current_project():
     svc = _svc()
 
-    await svc.upsert("t", "u", slot="preference", key="lang", value="中文", project="proj-a")
-    await svc.upsert("t", "u", slot="preference", key="lang", value="English", project="proj-b")
+    await svc.upsert(1, "u", slot="preference", key="lang", value="中文", project="proj-a")
+    await svc.upsert(1, "u", slot="preference", key="lang", value="English", project="proj-b")
 
-    recalled_a = await svc.recall("t", "u", "lang", project="proj-a")
-    recalled_b = await svc.recall("t", "u", "lang", project="proj-b")
+    recalled_a = await svc.recall(1, "u", "lang", project="proj-a")
+    recalled_b = await svc.recall(1, "u", "lang", project="proj-b")
 
     assert "中文" in recalled_a.profile_block
     assert "English" not in recalled_a.profile_block
@@ -93,10 +93,10 @@ async def test_cross_project_same_key_is_not_a_conflict():
     svc = _svc()
 
     await svc.upsert(
-        "t", "u", slot="preference", key="theme", value="dark", project="proj-a"
+        1, "u", slot="preference", key="theme", value="dark", project="proj-a"
     )
     result = await svc.upsert(
-        "t", "u", slot="preference", key="theme", value="light", project="proj-b"
+        1, "u", slot="preference", key="theme", value="light", project="proj-b"
     )
 
     assert "conflict" not in result
@@ -106,9 +106,9 @@ async def test_same_project_same_key_still_conflicts():
     """反向保护：**同项目内**的覆盖仍然要登记冲突（别把隔离做成"啥都不冲突"）。"""
     svc = _svc()
 
-    await svc.upsert("t", "u", slot="preference", key="theme", value="dark", project="proj-a")
+    await svc.upsert(1, "u", slot="preference", key="theme", value="dark", project="proj-a")
     result = await svc.upsert(
-        "t", "u", slot="preference", key="theme", value="light", source="derived",
+        1, "u", slot="preference", key="theme", value="light", source="derived",
         project="proj-a",
     )
 
@@ -120,31 +120,31 @@ async def test_same_project_same_key_still_conflicts():
 
 async def test_forget_by_key_is_scoped():
     svc = _svc()
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="k", value="B", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="k", value="B", project="proj-b")
 
-    assert await svc.forget_by_key("t", "u", "k", project="proj-a") == 1
-    assert _values(await svc.list_entries("t", "u", project="proj-b")) == ["B"]
-    assert await svc.forget_by_key("t", "u", "k", project="proj-b") == 1
+    assert await svc.forget_by_key(1, "u", "k", project="proj-a") == 1
+    assert _values(await svc.list_entries(1, "u", project="proj-b")) == ["B"]
+    assert await svc.forget_by_key(1, "u", "k", project="proj-b") == 1
 
 
 async def test_clear_all_is_scoped():
     svc = _svc()
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="k", value="B", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="k", value="B", project="proj-b")
 
-    assert await svc.clear_all("t", "u", project="proj-a") == 1
-    assert _values(await svc.list_entries("t", "u", project="proj-b")) == ["B"]
+    assert await svc.clear_all(1, "u", project="proj-a") == 1
+    assert _values(await svc.list_entries(1, "u", project="proj-b")) == ["B"]
 
 
 async def test_delete_entry_is_scoped_by_id():
     """拿 A 项目的 id、却声明 B 项目 —— 不该删得动（按 id 也要过 project 这道关）。"""
     svc = _svc()
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
-    entry = (await svc.list_entries("t", "u", project="proj-a"))["entries"][0]
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
+    entry = (await svc.list_entries(1, "u", project="proj-a"))["entries"][0]
 
-    assert await svc.delete_entry("t", "u", entry["id"], project="proj-b") is False
-    assert await svc.delete_entry("t", "u", entry["id"], project="proj-a") is True
+    assert await svc.delete_entry(1, "u", entry["id"], project="proj-b") is False
+    assert await svc.delete_entry(1, "u", entry["id"], project="proj-a") is True
 
 
 # ── 整理 ────────────────────────────────────────────────────────────────
@@ -152,12 +152,12 @@ async def test_delete_entry_is_scoped_by_id():
 
 async def test_organize_is_scoped_to_one_project():
     svc = _svc()
-    await svc.upsert("t", "u", slot="fact", key="k", value="A", project="proj-a")
-    await svc.upsert("t", "u", slot="fact", key="k", value="B", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="k", value="B", project="proj-b")
 
-    await svc.organize_now("t", "u", project="proj-a")
+    await svc.organize_now(1, "u", project="proj-a")
 
-    assert _values(await svc.list_entries("t", "u", project="proj-b")) == ["B"], (
+    assert _values(await svc.list_entries(1, "u", project="proj-b")) == ["B"], (
         "整理另一个项目不该动到这里"
     )
 
@@ -165,10 +165,10 @@ async def test_organize_is_scoped_to_one_project():
 def test_organize_single_flight_is_per_project():
     """单飞行按项目记账：A 在整理时，B 不该被判定成"已在运行"而永远排不上队。"""
     svc = _svc()
-    svc._organize_state[("t", "u", "proj-a")] = {"running": True}
+    svc._organize_state[(1, "u", "proj-a")] = {"running": True}
 
-    assert svc.organize_status("t", "u", "proj-a")["running"] is True
-    assert svc.organize_status("t", "u", "proj-b")["running"] is False
+    assert svc.organize_status(1, "u", "proj-a")["running"] is True
+    assert svc.organize_status(1, "u", "proj-b")["running"] is False
 
 
 # ── 工具层：project 来自 tool context ───────────────────────────────────
@@ -185,8 +185,8 @@ async def test_remember_uses_context_project(monkeypatch):
     assert out.get("success") is True
 
     tool_context.set_tool_context(user_id="u", tenant_id=1, project="proj-b")
-    assert (await svc.list_entries("1", "u", project="proj-b"))["total"] == 0
-    assert (await svc.list_entries("1", "u", project="proj-a"))["total"] == 1
+    assert (await svc.list_entries(1, "u", project="proj-b"))["total"] == 0
+    assert (await svc.list_entries(1, "u", project="proj-a"))["total"] == 1
 
 
 async def test_forget_uses_context_project(monkeypatch):
@@ -203,7 +203,7 @@ async def test_forget_uses_context_project(monkeypatch):
     out = await memory_tools.forget("lang")
 
     assert out.get("deleted") == 0
-    assert (await svc.list_entries("1", "u", project="proj-a"))["total"] == 1
+    assert (await svc.list_entries(1, "u", project="proj-a"))["total"] == 1
 
 
 # ── HTTP 层：project 从 query 读 ────────────────────────────────────────
@@ -239,8 +239,8 @@ async def test_http_clear_only_clears_that_project(monkeypatch):
     svc = _svc()
     _patch_api_service(monkeypatch, svc)
     params = {"user_id": "u", "tenant_id": 1}
-    await svc.upsert("1", "u", slot="fact", key="k", value="A", project="proj-a")
-    await svc.upsert("1", "u", slot="fact", key="k", value="B", project="proj-b")
+    await svc.upsert(1, "u", slot="fact", key="k", value="A", project="proj-a")
+    await svc.upsert(1, "u", slot="fact", key="k", value="B", project="proj-b")
 
     async with httpx.AsyncClient(
         transport=ASGITransport(app=create_app()), base_url="http://t"
@@ -252,4 +252,4 @@ async def test_http_clear_only_clears_that_project(monkeypatch):
         )
 
     assert resp.status_code == 200 and resp.json()["deleted"] == 1
-    assert (await svc.list_entries("1", "u", project="proj-b"))["total"] == 1
+    assert (await svc.list_entries(1, "u", project="proj-b"))["total"] == 1

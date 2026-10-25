@@ -65,7 +65,7 @@ def _hooks_env(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
 
 
 def _task(**overrides: Any) -> SimpleNamespace:
-    base = {"tenant_id": "t_hookcmd", "user_id": "u_hookcmd", "session_id": "s_hookcmd"}
+    base = {"tenant_id": 2, "user_id": "u_hookcmd", "session_id": "s_hookcmd"}
     base.update(overrides)
     return SimpleNamespace(**base)
 
@@ -211,7 +211,7 @@ def test_blocked_command_is_classified_as_blocked_in_exec_audit(
     from app.hooks.runner import HookOutcome
 
     _record_command_exec_audit(
-        {"tenant_id": "t1", "user_id": "u1", "session_id": "s1"},
+        {"tenant_id": 1, "user_id": "u1", "session_id": "s1"},
         Hook(event=events.PRE_TOOL_USE, name="ops", handler=HANDLER_COMMAND, command="notlisted"),
         HookOutcome(
             success=False,
@@ -255,7 +255,7 @@ async def test_exit_code_two_blocks_and_is_audited(tmp_path: Path, monkeypatch: 
     assert exec_last["outcome"] == "ok", "命令本身跑成功了（阻断是它的**判定**）"
     # 身份显式传入：这两个事件的时点可能早于 `set_tool_context`，contextvars 里是空的
     assert (exec_last["tenant"], exec_last["user"], exec_last["session"]) == (
-        "t_hookcmd",
+        "2",
         "u_hookcmd",
         "s_hookcmd",
     )
@@ -313,7 +313,7 @@ async def test_stdin_carries_the_event_context(tmp_path: Path, monkeypatch: pyte
     payload = json.loads(seen.read_text(encoding="utf-8"))
     assert payload["event"] == events.PRE_TOOL_USE
     assert payload["tool_name"] == "read_file"
-    assert payload["tenant_id"] == "t_hookcmd"
+    assert payload["tenant_id"] == 2
     assert payload["session_id"] == "s_hookcmd"
 
 
