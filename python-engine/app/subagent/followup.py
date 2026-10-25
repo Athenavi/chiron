@@ -139,11 +139,14 @@ async def enqueue_followup(
     }
     try:
         from app.queue.producer import QueueProducer
+        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
 
         producer = QueueProducer(redis)
+        # enqueue 第 2 参已是 int（tenant_id 列改为 smallint）：把入参经 to_tenant_int
+        # 收口后传入，不再退化成 "default" 字符串；缺省 0 表示默认租户。
         task_id = await producer.enqueue(
             FOLLOWUP_TASK_TYPE,
-            tenant_id or "default",
+            to_tenant_int(tenant_id),
             payload,
             priority=1,
             deadline_seconds=1800,

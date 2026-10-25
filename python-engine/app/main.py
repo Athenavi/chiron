@@ -1773,10 +1773,13 @@ async def agent_submit(
     # 注入失败绝不影响本轮（报告是增强，不是前提）；但必须可见（记 warning）。
     try:
         from app.subagent.reporting import consume_pending_reports, format_reports
+        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
 
         reports = await consume_pending_reports(
             session_id=getattr(task, "session_id", "") or "",
-            tenant_id=getattr(task, "tenant_id", "") or "",
+            # task.tenant_id 已是 int：getattr 默认值取 0 与属性类型一致，
+            # 再经 to_tenant_int 收口（缺失/不可解析 → 0），供 smallint 列使用。
+            tenant_id=to_tenant_int(getattr(task, "tenant_id", 0)),
             user_id=getattr(task, "user_id", "") or "",
         )
         if reports:

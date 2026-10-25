@@ -147,7 +147,7 @@ class MemoryService:
         # `turns` 累积自上次触发以来的回合数，`last_at` 是上次**触发**时间。
         # 进程内保存足够：它只用来决定"要不要现在整理"，多副本各自判断的代价是
         # 偶尔多整理一次，而 `organize_now` 是幂等的（补向量 / 合并重复 / 归档 / 淘汰都幂等）。
-        self._organize_meta: dict[tuple[str, str, str], dict[str, Any]] = {}
+        self._organize_meta: dict[tuple[int, str, str], dict[str, Any]] = {}
 
     # ── 生命周期钩子 ──────────────────────────────────────────────────
 

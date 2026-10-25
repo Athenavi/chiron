@@ -373,7 +373,7 @@ async def _persist_terminal_to_cache(
     cache: Any,
     *,
     run_id: str,
-    tenant: str,
+    tenant: int,
     root_session_id: str,
     status: str,
     summary: str,
@@ -714,7 +714,7 @@ class SubAgentRunner:
             except Exception as exc:  # noqa: BLE001
                 logger.debug("subagent runtime cache unavailable: %s", str(exc)[:160])
                 cache = None
-        cache_tenant = self._tenant_id or "default"
+        cache_tenant = self._tenant_id or 0
         cache_root = self._parent_session_id or run_id
         if cache is not None:
             await cache.start_run(run_id=run_id, tenant=cache_tenant, root_session_id=cache_root,

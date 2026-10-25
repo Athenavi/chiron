@@ -887,6 +887,7 @@ class QueueWorker:
 
         payload: {instance_id, user_id, graph_json, initial_state}
         """
+        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
         from app.workflow.executor import execute_with_checkpoint
 
         instance_id = payload.get("instance_id") or ""
@@ -899,7 +900,9 @@ class QueueWorker:
             payload.get("initial_state") or {},
             payload.get("user_id", ""),
             self._gateway,
-            tenant_id=payload.get("tenant_id", "") or "",
+            # payload 里的 tenant_id 已是整数域；再经 to_tenant_int 收口（缺失/不可解析 → 0），
+            # execute_with_checkpoint 的 tenant_id 形参为 int。
+            tenant_id=to_tenant_int(payload.get("tenant_id")),
         )
         logger.info("workflow_run done: instance=%s", instance_id)
 

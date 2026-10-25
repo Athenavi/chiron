@@ -163,7 +163,13 @@ class TraceWriter:
             pipeline = self._redis.pipeline(transaction=False)
             for span, entry in zip(spans, entries, strict=False):
                 # SaaS 安全: 按 tenant_id 分 stream（与 write_span 一致）
-                stream = get_tenant_stream(span.get("tenant_id") or "anonymous")
+                # span 的 tenant_id 已是整数域（write_span 形参 tenant_id: int | None）。
+                # 这里再经 to_tenant_int 收口：缺失/无法解析 → 0，get_tenant_stream(0)
+                # 本就落 "anonymous" stream，与原 `or "anonymous"` 语义一致。
+                # 函数内导入，避免 app.trace 与 app.tools 之间形成循环导入。
+                from app.tools.context import to_tenant_int
+
+                stream = get_tenant_stream(to_tenant_int(span.get("tenant_id")))
                 pipeline.xadd(stream, entry, maxlen=10000, approximate=True)
             await pipeline.execute()
 

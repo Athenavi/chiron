@@ -1538,7 +1538,7 @@ class AgentRuntime:
             from app.agent import harness_store
 
             _extra_suffix = await harness_store.resolve_suffix(
-                task.tenant_id or "",
+                to_tenant_int(task.tenant_id or ""),
                 task.user_id or "",
                 str((task.llm_config or {}).get("model", "") or ""),
             )

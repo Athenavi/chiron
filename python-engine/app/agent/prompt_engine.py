@@ -279,8 +279,10 @@ class PromptEngine:
             return ""
 
         try:
+            from app.tools.context import get_tenant_id_int
+
             memories = await self._memory_manager.query_memory(
-                tenant_id="default",
+                tenant_id=get_tenant_id_int(),
                 user_id=user_id,
                 query=query,
                 top_k=5,
@@ -341,7 +343,7 @@ class PromptEngine:
         # 用户在对话里可以多选知识库（前端 → Go 网关 → task.workbench_context）：
         # kb_ids 是多值形态，kb_id 保留为单值兼容。tenant_id 只是历史约定下的兜底，
         # 它并不等于某个知识库。
-        kb_ids = context_ids(task.workbench_context, "kb") or [task.tenant_id or "default"]
+        kb_ids = context_ids(task.workbench_context, "kb") or [str(task.tenant_id or "default")]
 
         # 逐库检索再按轮询配额合并：多选的意图是"这几个库都要用"，混排后截断会让
         # 高分库占满名额（而且不同库的 embedding/索引不同，分数本就不可比）。
