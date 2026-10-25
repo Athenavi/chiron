@@ -1,5 +1,8 @@
 # Chiron
 
+<p align="center"><img src="assets/chiron-logo-detail.svg" width="180" alt="Chiron"></p>
+
+
 [![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/Athenavi/chiorn/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)

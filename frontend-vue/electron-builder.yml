@@ -1,0 +1,56 @@
+# Chiron Desktop 打包配置（electron-builder）
+#
+# 形态：纯 Web 壳。只把 dist/ 与 electron/ 打进安装包，不打包 Go 后端或 Python。
+# 版本号采用 V0.1.261025.01 的语义：0.1 起步 → 261025 日期 → 01 当日序号。
+appId: com.chiron.agent
+productName: Chiron
+copyright: Copyright © 2026 Chiron
+
+directories:
+  output: release
+  buildResources: electron/resources
+
+# 只收运行期真正需要的东西
+files:
+  - electron/**/*
+  - dist/**/*
+  - package.json
+
+# 安装包产物体积不因此膨胀
+asar: true
+
+win:
+  target:
+    - target: nsis
+      arch: [x64, arm64]
+  artifactName: ${productName}-${version}-win-${arch}.${ext}
+
+nsis:
+  oneClick: false
+  perMachine: false
+  allowToChangeInstallationDirectory: true
+  createDesktopShortcut: true
+  createStartMenuShortcut: true
+
+mac:
+  target:
+    - target: dmg
+      arch: [x64, arm64]
+  category: public.app-category.developer-tools
+  artifactName: ${productName}-${version}-mac-${arch}.${ext}
+  # 未配置证书时 electron-builder 会自动跳过签名；正式分发需填入 Apple Developer 身份并走 notarytool 公证
+  hardenedRuntime: true
+
+linux:
+  target:
+    - target: AppImage
+      arch: [x64, arm64]
+    - target: deb
+      arch: [x64]
+  category: Development
+  artifactName: ${productName}-${version}-linux-${arch}.${ext}
+
+# 自动更新：先留位，接入时改为真实 feed
+# publish:
+#   provider: generic
+#   url: https://example.invalid/chiron-desktop/

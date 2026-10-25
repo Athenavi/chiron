@@ -5,7 +5,9 @@ import { canAutoRetry, isRateLimitStatus, resolveWaitMs } from '../utils/rateLim
 import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
-export const API_URL = import.meta.env.VITE_API_URL || ''
+/** 桌面壳（Electron）在 preload 里注入 chironDesktop.apiUrl；Web 端回落到构建期变量 */
+const desktopHost = (globalThis as { chironDesktop?: { apiUrl?: string } }).chironDesktop
+export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
 
 // 注意：不要在这里设置默认 Content-Type！
 // - 对 JSON 对象 axios 的 transformRequest 会自动设置 application/json

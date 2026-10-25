@@ -1,0 +1,95 @@
+# Chiron Desktop —— 三端打包
+#
+# 为什么必须是矩阵而不是单 job 交叉编译：
+#   electron-builder 不能跨平台出包（Linux 上打不出 macOS 的 .dmg / .app 签名链），
+#   所以 Windows / macOS / Linux 各跑一个原生 runner。
+#
+# 触发：
+#   打 tag（v*）→ 出三端产物并上传 artifact
+#   手动 workflow_dispatch → 同样出包，便于验收
+#
+# 注意：签名与公证不在本工作流内完成（需要 Apple Developer 证书与 Windows EV 证书）。
+# 未配置证书时 electron-builder 会产出未签名包 —— 可自用，不可公开分发。
+name: Desktop
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: build (${{ matrix.platform }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            platform: win
+          - os: macos-latest
+            platform: mac
+          - os: ubuntu-latest
+            platform: linux
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 10
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+          cache-dependency-path: frontend-vue/pnpm-lock.yaml
+
+      # Electron 二进制从 GitHub Releases 拉取；在 CI 里通常比本地网络稳定，
+      # 若 runner 所在区域受限，可解注下面的镜像变量。
+      - name: Install dependencies
+        working-directory: frontend-vue
+        run: pnpm install --frozen-lockfile
+        # env:
+        #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
+
+      # 先跑门禁再打包：九项 UI 契约 + 类型 + 单测，任何一项红了都不该出安装包
+      - name: Check UI contracts
+        working-directory: frontend-vue
+        run: pnpm check:ui
+
+      - name: Typecheck
+        working-directory: frontend-vue
+        run: pnpm exec vue-tsc -b
+
+      - name: Unit tests
+        working-directory: frontend-vue
+        run: pnpm test
+
+      - name: Build frontend
+        working-directory: frontend-vue
+        run: pnpm exec vite build
+
+      - name: Package desktop app
+        working-directory: frontend-vue
+        run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
+        env:
+          # 未提供证书时 electron-builder 会跳过签名，不报错
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: chiron-desktop-${{ matrix.platform }}
+          if-no-files-found: error
+          path: |
+            frontend-vue/release/*.exe
+            frontend-vue/release/*.dmg
+            frontend-vue/release/*.AppImage
+            frontend-vue/release/*.deb
+            frontend-vue/release/*.blockmap
+            frontend-vue/release/*.yml

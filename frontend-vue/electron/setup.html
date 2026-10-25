@@ -1,0 +1,170 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 独立配置页：不加载前端 dist/，也不依赖任何网络资源 —— 它存在的意义
+         正是"还没有可用的服务地址"。样式沿用主应用的纸色底与 clay 主色。 -->
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'" />
+    <title>Chiron — 连接服务</title>
+    <style>
+      :root {
+        --bg-page: #f9f9f7;
+        --bg-card: #ffffff;
+        --text-primary: #1f1f1c;
+        --text-secondary: #5c5c56;
+        --text-tertiary: #8a8a82;
+        --border: #e6e6e1;
+        --primary: #d97757;
+        --primary-hover: #cc5a36;
+        --error: #d14343;
+        --success: #2f855a;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg-page: #1a1a19;
+          --bg-card: #20201f;
+          --text-primary: #f0efe9;
+          --text-secondary: #a8a8a0;
+          --text-tertiary: #75756e;
+          --border: #333330;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-page);
+        color: var(--text-primary);
+        font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        width: min(440px, calc(100vw - 48px));
+        padding: 28px 28px 22px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+      h1 { margin: 0 0 6px; font-size: 20px; font-weight: 600; }
+      p.lead { margin: 0 0 20px; color: var(--text-secondary); font-size: 13px; }
+      label { display: block; margin-bottom: 6px; font-size: 12px; color: var(--text-secondary); font-weight: 500; }
+      input[type="url"] {
+        width: 100%;
+        padding: 9px 11px;
+        font: inherit;
+        color: var(--text-primary);
+        background: var(--bg-page);
+        border: 1px solid var(--border);
+        border-radius: var(--radius);
+        outline: none;
+        transition: border-color 120ms ease, box-shadow 120ms ease;
+      }
+      input[type="url"]:focus {
+        border-color: var(--primary);
+        box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent);
+      }
+      .hint { margin: 8px 0 0; font-size: 12px; color: var(--text-tertiary); }
+      .status { min-height: 20px; margin: 14px 0 0; font-size: 12.5px; }
+      .status.error { color: var(--error); }
+      .status.ok { color: var(--success); }
+      .status.busy { color: var(--text-secondary); }
+      .actions { display: flex; gap: 10px; margin-top: 18px; }
+      button {
+        flex: 1;
+        padding: 9px 14px;
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-secondary);
+        transition: border-color 120ms ease, color 120ms ease, background-color 120ms ease;
+      }
+      button:hover:not(:disabled) { border-color: var(--primary); color: var(--primary); }
+      button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+      button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>连接 Chiron 服务</h1>
+      <p class="lead">桌面客户端需要知道你的 Chiron 服务地址。填写后可以随时在设置里修改。</p>
+
+      <label for="url">服务地址</label>
+      <input id="url" type="url" placeholder="http://127.0.0.1:8080" autocomplete="off" spellcheck="false" />
+      <p class="hint">自托管通常填本机地址；也可填局域网或公网地址（需 https）。</p>
+
+      <div id="status" class="status"></div>
+
+      <div class="actions">
+        <button id="test" type="button">测试连接</button>
+        <button id="save" type="button" class="primary" disabled>保存并进入</button>
+      </div>
+    </main>
+
+    <script>
+      const urlInput = document.getElementById('url')
+      const statusEl = document.getElementById('status')
+      const testBtn = document.getElementById('test')
+      const saveBtn = document.getElementById('save')
+
+      let verified = '' // 最近一次测试通过的地址；只有它才允许「保存并进入」
+
+      function setStatus(text, kind) {
+        statusEl.textContent = text
+        statusEl.className = 'status' + (kind ? ' ' + kind : '')
+      }
+
+      function busy(on) {
+        testBtn.disabled = on
+        urlInput.disabled = on
+        saveBtn.disabled = on || !verified || verified !== urlInput.value.trim()
+      }
+
+      // 地址一改，之前的验证结果就作废 —— 不允许"测了 A 却保存 B"
+      urlInput.addEventListener('input', () => {
+        if (urlInput.value.trim() !== verified) {
+          verified = ''
+          setStatus('')
+        }
+        saveBtn.disabled = !verified || verified !== urlInput.value.trim()
+      })
+
+      testBtn.addEventListener('click', async () => {
+        const value = urlInput.value.trim()
+        if (!value) { setStatus('请先填写服务地址', 'error'); return }
+        busy(true)
+        setStatus('正在连接…', 'busy')
+        try {
+          await window.chironDesktop.testApiUrl(value)
+          verified = value
+          setStatus('连接成功', 'ok')
+        } catch (err) {
+          verified = ''
+          setStatus(String(err && err.message ? err.message : err), 'error')
+        } finally {
+          busy(false)
+        }
+      })
+
+      saveBtn.addEventListener('click', async () => {
+        if (!verified) return
+        busy(true)
+        try {
+          await window.chironDesktop.setApiUrl(verified)
+          setStatus('已保存，正在进入…', 'ok')
+        } catch (err) {
+          setStatus(String(err && err.message ? err.message : err), 'error')
+          busy(false)
+        }
+      })
+
+      urlInput.focus()
+    </script>
+  </body>
+</html>
