@@ -23,7 +23,7 @@ from app.core.capabilities import (
 from app.core.task_router import ExecutedTask, SubTask, TaskRouter
 from app.main import create_app
 
-TENANT = "1"
+TENANT = 1
 
 
 def _fake_gateway(intent: dict):
@@ -65,15 +65,15 @@ async def test_global_capability_visible_to_tenant():
     await preload_default_capabilities(reg)
 
     # get_by_id 带租户参数也能找到全局能力
-    cap = await reg.get_by_id("skill:read_file", tenant_id="tenant_999")
+    cap = await reg.get_by_id("skill:read_file", tenant_id=999)
     assert cap is not None
 
     # search 带租户参数也能搜到全局能力
-    results = await reg.search("python execute sandbox", tenant_id="tenant_999")
+    results = await reg.search("python execute sandbox", tenant_id=999)
     assert any(c.capability_id == "skill:execute_python" for c in results)
 
     # list_by_workstation 同样包含全局能力
-    caps = await reg.list_by_workstation(WorkstationType.AGENT, tenant_id="tenant_999")
+    caps = await reg.list_by_workstation(WorkstationType.AGENT, tenant_id=999)
     assert any(c.capability_id == "agent:general_chat" for c in caps)
 
 
@@ -90,13 +90,13 @@ async def test_tenant_specific_capability_isolated():
         description="tenant private tool",
         workstation_type=WorkstationType.SKILL,
         capability_type=CapabilityType.TOOL,
-        tenant_id="tenant_a",
+        tenant_id=1,
         _executor=_noop,
     ))
 
-    assert await reg.get_by_id("skill:private_tool", tenant_id="tenant_a") is not None
-    assert await reg.get_by_id("skill:private_tool", tenant_id="tenant_b") is None
-    hits = await reg.search("private tool", tenant_id="tenant_b")
+    assert await reg.get_by_id("skill:private_tool", tenant_id=1) is not None
+    assert await reg.get_by_id("skill:private_tool", tenant_id=2) is None
+    hits = await reg.search("private tool", tenant_id=2)
     assert hits == []
 
 
@@ -162,7 +162,7 @@ async def test_match_falls_back_to_general_chat():
 
     router = TaskRouter()
     subtasks = [SubTask(subtask_id="sub_0_default", description="随便聊聊", capability_id="")]
-    matched = await router._match_capabilities(subtasks, tenant_id="tenant_x")
+    matched = await router._match_capabilities(subtasks, tenant_id=3)
 
     assert len(matched) == 1
     assert matched[0].capability_id == "agent:general_chat"
@@ -187,7 +187,7 @@ async def test_recommended_workstations_pipeline(monkeypatch):
     monkeypatch.setattr(app.main, "get_gateway", _get_gateway)
 
     router = TaskRouter()
-    subtasks = await router._decompose_task(intent, "tenant_x", "分析一下数据")
+    subtasks = await router._decompose_task(intent, 3, "分析一下数据")
     assert len(subtasks) == 3
     assert subtasks[0].capability_id == "agent:general_chat"
     assert subtasks[1].capability_id == "knowledge:kb_list"
@@ -204,7 +204,7 @@ async def test_recommended_workstations_pipeline(monkeypatch):
 async def test_chat_submit_rejects_missing_message():
     app = create_app()
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.post("/v1/chat/submit?user_id=u1&tenant_id=t1", json={})
+        resp = await ac.post("/v1/chat/submit?user_id=u1&tenant_id=1", json={})
     assert resp.status_code == 200
     assert resp.json()["success"] is False
 

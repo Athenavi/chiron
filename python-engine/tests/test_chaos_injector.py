@@ -43,7 +43,7 @@ def _fault(**kw) -> dict:
     return base
 
 
-def _scope(path: str = "/v1/agents", query: bytes = b"tenant_id=t1") -> dict:
+def _scope(path: str = "/v1/agents", query: bytes = b"tenant_id=1") -> dict:
     return {
         "type": "http",
         "path": path,

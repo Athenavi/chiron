@@ -251,8 +251,9 @@ class CapabilitiesRegistry:
         for cap in self._capabilities.values():
             if cap.workstation_type != workstation_type:
                 continue
-            # 全局能力（tenant_id 为空）对所有租户可见
-            if tenant_id and cap.tenant_id not in ("", tenant_id):
+            # 全局能力（tenant_id 为 0）对所有租户可见。此前哨兵写的是 ""（字符串），
+            # tenant_id 统一为 int 后 0 不再匹配 ""，全局能力会被整体过滤掉。
+            if tenant_id and cap.tenant_id not in (0, tenant_id):
                 continue
             if status and cap.status != status:
                 continue
@@ -275,8 +276,9 @@ class CapabilitiesRegistry:
         scores: dict[str, float] = {}
 
         for cap_id, cap in self._capabilities.items():
-            # 租户隔离：租户专属能力仅本租户可见；全局能力（tenant_id 为空）对所有租户可见
-            if tenant_id and cap.tenant_id not in ("", tenant_id):
+            # 租户隔离：租户专属能力仅本租户可见；全局能力（tenant_id 为 0）对所有租户可见。
+            # 哨兵用 int 0（tenant_id 已统一为 int）——"" 会导致全局能力被误过滤。
+            if tenant_id and cap.tenant_id not in (0, tenant_id):
                 continue
 
             # 工作台类型过滤

@@ -156,7 +156,7 @@ class TestServiceInvocation:
             assert svc.last_query == "hello"
             assert svc.last_top_k == 5
             assert svc.last_user_id == "u1"
-            assert svc.last_tenant_id == "1"
+            assert svc.last_tenant_id == 1
         finally:
             tool_context.restore_context({})
 

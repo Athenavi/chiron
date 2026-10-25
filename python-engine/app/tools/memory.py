@@ -19,7 +19,7 @@ import logging
 from typing import Any
 
 from app.memory.layers import SlotType
-from app.tools.context import get_project, get_tenant_id, get_user_id
+from app.tools.context import get_project, get_tenant_id_int, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -70,7 +70,7 @@ async def remember(key: str, value: str, slot: str = "fact") -> dict[str, Any]:
     if not user_id:
         return {"error": "memory service requires user context (run via agent runtime)"}
 
-    tenant_id = get_tenant_id() or "default"
+    tenant_id = get_tenant_id_int()
     slot_type = _resolve_slot(slot)
 
     try:
@@ -141,7 +141,7 @@ async def recall(query: str = "", slot: str | None = None) -> dict[str, Any]:
     if not user_id:
         return {"error": "memory service requires user context (run via agent runtime)"}
 
-    tenant_id = get_tenant_id() or "default"
+    tenant_id = get_tenant_id_int()
 
     try:
         result = await svc.recall(tenant_id, user_id, query, project=get_project())
@@ -204,7 +204,7 @@ async def forget(key: str, slot: str | None = None) -> dict[str, Any]:
     if not user_id:
         return {"error": "memory service requires user context (run via agent runtime)"}
 
-    tenant_id = get_tenant_id() or "default"
+    tenant_id = get_tenant_id_int()
 
     try:
         deleted = await svc.forget_by_key(
@@ -268,7 +268,7 @@ async def memory_search(query: str, limit: int = 10) -> dict[str, Any]:
     if not user_id:
         return {"error": "memory service requires user context", "results": []}
 
-    tenant_id = get_tenant_id() or "default"
+    tenant_id = get_tenant_id_int()
 
     try:
         result = await svc.recall(

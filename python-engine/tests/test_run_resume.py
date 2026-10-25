@@ -101,7 +101,7 @@ def _patch_checkpoint(
 async def test_uses_snapshot_as_history(monkeypatch):
     _patch_checkpoint(monkeypatch, snapshot=_snapshot())
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert state.turn_index == 2
@@ -119,7 +119,7 @@ async def test_pending_excludes_already_done_tools(monkeypatch):
         ],
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert state.replay_pending == ("call_b",), "已完成的调用不该进待重放"
@@ -130,7 +130,7 @@ async def test_expired_window_marks_abandoned_and_falls_back(monkeypatch):
         monkeypatch, snapshot=_snapshot(seconds_ago=COLD_RESUME_WINDOW_SECONDS + 60)
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is None, "超窗 ⇒ 回落现状语义（用户可整轮重试）"
     assert marks and marks[-1][1] == "abandoned", "超窗必须**可见**，不能静默"
@@ -138,12 +138,12 @@ async def test_expired_window_marks_abandoned_and_falls_back(monkeypatch):
 
 async def test_empty_snapshot_falls_back(monkeypatch):
     _patch_checkpoint(monkeypatch, snapshot={"messages": [], "saved_at": _saved_at()})
-    assert await load_resume_state(tenant_id="t1", session_id="s1") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1") is None
 
 
 async def test_missing_snapshot_returns_none(monkeypatch):
     _patch_checkpoint(monkeypatch, snapshot=None)
-    assert await load_resume_state(tenant_id="t1", session_id="s1") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1") is None
 
 
 # ── M15e：token / wall 两轴的续跑起点 ───────────────────────────────────
@@ -168,7 +168,7 @@ async def test_resume_state_inherits_the_token_axes(monkeypatch):
         ),
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert (state.input_tokens, state.output_tokens) == (12_000, 3_400)
@@ -180,7 +180,7 @@ async def test_legacy_snapshot_without_usage_starts_at_zero(monkeypatch):
     """旧快照没有这些键 ⇒ 起点 0（**不能**因为读不到就抛，也不能猜一个数）。"""
     _patch_checkpoint(monkeypatch, snapshot=_snapshot())
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert (state.input_tokens, state.output_tokens, state.cached_tokens) == (0, 0, 0)
@@ -200,7 +200,7 @@ async def test_resume_state_inherits_turn_ids(monkeypatch):
         snapshot=_snapshot(turn_ids=["turn-a", "turn-b"], turn_ids_truncated=False),
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert state.turn_ids == ("turn-a", "turn-b")
@@ -211,7 +211,7 @@ async def test_legacy_snapshot_has_no_turn_ids(monkeypatch):
     """本字段引入前的快照：集合为空、不算截断（旧 run 不参与对账，也不报错）。"""
     _patch_checkpoint(monkeypatch, snapshot=_snapshot())
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert state.turn_ids == ()
@@ -225,7 +225,7 @@ async def test_truncated_turn_ids_stay_marked(monkeypatch):
         snapshot=_snapshot(turn_ids=["turn-b"], turn_ids_truncated=True),
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None
     assert state.turn_ids_truncated is True
@@ -242,7 +242,7 @@ async def test_dirty_usage_reads_as_zero_not_as_a_negative_allowance(monkeypatch
         ),
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1")
+    state = await load_resume_state(tenant_id=1, session_id="s1")
 
     assert state is not None, "脏计数不该废掉整份现场"
     assert (state.input_tokens, state.output_tokens, state.wall_seconds) == (0, 0, 0)
@@ -282,7 +282,7 @@ async def test_awaiting_snapshot_is_claimed_with_the_new_run_token(monkeypatch):
         monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"}
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new")
+    state = await load_resume_state(tenant_id=1, session_id="s1", run_token="rt-new")
 
     assert state is not None and state.window == "hot"
     assert calls["claim"] == ["rt-new"], "接手要以**新** token 为归属凭据"
@@ -304,7 +304,7 @@ async def test_awaiting_snapshot_also_carries_the_budget_seed(monkeypatch):
         },
     )
 
-    state = await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new")
+    state = await load_resume_state(tenant_id=1, session_id="s1", run_token="rt-new")
 
     assert state is not None
     assert (state.input_tokens, state.output_tokens) == (800, 120)
@@ -317,7 +317,7 @@ async def test_awaiting_not_claimed_falls_back_to_a_plain_turn(monkeypatch):
         monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"}, claim_ok=False
     )
 
-    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1", run_token="rt-new") is None
 
 
 async def test_over_window_awaiting_is_released_not_left_hanging(monkeypatch):
@@ -329,7 +329,7 @@ async def test_over_window_awaiting_is_released_not_left_hanging(monkeypatch):
         found={"checkpoint": _snapshot(seconds_ago=COLD_RESUME_WINDOW_SECONDS + 60), "run_token": "rt-old"},
     )
 
-    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1", run_token="rt-new") is None
     assert calls["release"] == ["rt-old"]
     assert marks == [], "挂起行不能被 `mark()` 迁（那是活跃集合的通道）"
 
@@ -340,7 +340,7 @@ async def test_broken_awaiting_snapshot_is_released(monkeypatch):
         monkeypatch, found={"checkpoint": {"messages": [], "saved_at": _saved_at()}, "run_token": "rt-old"}
     )
 
-    assert await load_resume_state(tenant_id="t1", session_id="s1", run_token="rt-new") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1", run_token="rt-new") is None
     assert calls["release"] == ["rt-old"]
     assert calls["claim"] == [], "没有可用消息 ⇒ 不该把它标成 resuming（那会占住会话）"
 
@@ -350,7 +350,7 @@ async def test_caller_without_run_token_never_touches_a_suspension(monkeypatch):
     _patch_checkpoint(monkeypatch, snapshot=None)
     calls = _patch_awaiting(monkeypatch, found={"checkpoint": _snapshot(), "run_token": "rt-old"})
 
-    assert await load_resume_state(tenant_id="t1", session_id="s1") is None
+    assert await load_resume_state(tenant_id=1, session_id="s1") is None
     assert calls["read"] == []
 
 
@@ -461,7 +461,7 @@ def _patch_reconciler(
 def _row(status: str, *, seconds_ago: float = 0.0, run_token: str = "tok_old") -> dict[str, Any]:
     return {
         "session_id": "s1",
-        "tenant_id": "t1",
+        "tenant_id": 1,
         "status": status,
         "checkpoint": _snapshot(seconds_ago=seconds_ago),
         "run_token": run_token,
@@ -551,7 +551,7 @@ async def test_sweep_auto_resumes_within_hot_window(monkeypatch):
     assert stats["released"] == 0, "runtime 已写终态 ⇒ 现场退回的条件更新必须 0 行命中"
     assert len(ran) == 1, "runner 必须被调用（否则就只是标记了一下）"
     task = ran[0]
-    assert task.session_id == "s1" and task.tenant_id == "t1"
+    assert task.session_id == "s1" and task.tenant_id == 1
     assert task.run_token, "续跑必须带新的 run_token（CAS 的结果，供后续归属判定）"
     assert task.llm_config == {"model": "m"}, "重建的 task 要带上原 llm_config"
     assert task.content == "", "用户消息已在快照历史里 ⇒ content 置空（不重复追加）"
@@ -702,10 +702,10 @@ async def test_auto_resume_lost_cas_does_not_run(monkeypatch):
 def test_rebuild_task_requires_task_meta():
     from app.agent.resume import rebuild_task
 
-    assert rebuild_task(tenant_id="t", session_id="s", snapshot={}, run_token="x") is None
+    assert rebuild_task(tenant_id=1, session_id="s", snapshot={}, run_token="x") is None
     assert (
         rebuild_task(
-            tenant_id="t",
+            tenant_id=1,
             session_id="s",
             snapshot={"task_meta": {"llm_config": "not-a-dict"}},
             run_token="x",
