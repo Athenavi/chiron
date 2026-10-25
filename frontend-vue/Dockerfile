@@ -27,6 +27,13 @@ RUN pnpm run build
 # ── Production Stage ──
 FROM nginx:alpine
 
+# 每次构建都升一次系统包。
+# nginx:alpine 这个标签的更新节奏跟 alpine 的安全补丁不同步，构建出来的镜像里
+# 会残留已知漏洞。本次是 brotli-libs 1.2.0-r1 的 CVE-2026-111497（Out-of-Bounds Write，
+# HIGH，修复版 1.2.1-r0）。不升的话 Trivy 以 HIGH 中断 release-images 流水线。
+# 用整包升级而不是只装 brotli：同类滞后不止一个包，逐个点名迟早会漏。
+RUN apk upgrade --no-cache
+
 # 复制构建产物
 COPY --from=builder /app/dist /usr/share/nginx/html
 
