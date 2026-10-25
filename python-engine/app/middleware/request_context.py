@@ -23,7 +23,13 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
         token_req = request_id_var.set(req_id)
 
         # tenant_id: 从 JWT 或 header 提取（auth middleware 后会设置）
-        tenant_id = request.headers.get("X-Tenant-ID", "")
+        # header 里是字符串，而 tenant_id 在库里是 smallint —— 在这里转成 int，
+        # 否则下游从 tenant_id_var 读出来的类型与实际不符。
+        raw_tenant = request.headers.get("X-Tenant-ID", "")
+        try:
+            tenant_id = int(raw_tenant) if raw_tenant else 0
+        except ValueError:
+            tenant_id = 0
         token_tenant = tenant_id_var.set(tenant_id)
 
         try:

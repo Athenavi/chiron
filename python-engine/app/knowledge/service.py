@@ -54,7 +54,7 @@ def _as_dict(value: Any) -> dict[str, Any]:
 def _context(kb: Any, doc_ids: tuple[str, ...] = ()) -> ProviderContext:
     return ProviderContext(
         kb_id=str(kb["id"]),
-        tenant_id=str(kb["tenant_id"] or ""),
+        tenant_id=int(kb["tenant_id"] or 0),
         user_id=str(kb["user_id"] or ""),
         index_ref=str(kb["index_ref"] or ""),
         config=_as_dict(kb["config"]),

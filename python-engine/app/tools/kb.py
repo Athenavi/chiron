@@ -25,7 +25,7 @@ from app.config import DEFAULT_TENANT_ID
 from app.kb_access import kb_access_allowed
 from app.knowledge.errors import KnowledgeError
 from app.knowledge.service import answer_question
-from app.tools.context import get_tenant_id, get_user_id
+from app.tools.context import get_tenant_id, get_tenant_id_int, get_user_id
 from app.tools.registry import registry
 
 logger = logging.getLogger(__name__)
@@ -108,7 +108,7 @@ async def kb_search(kb_id: str, query: str, top_k: int = 5) -> dict[str, Any]:
     )
     if kb_row is None:
         return {"error": f"knowledge base not found: {kb_id}"}
-    if not kb_access_allowed(kb_row, user_id, get_tenant_id()):
+    if not kb_access_allowed(kb_row, user_id, get_tenant_id_int()):
         return {"error": "not authorized to query this knowledge base"}
 
     owner_id = str(kb_row["user_id"] or "")

@@ -1211,9 +1211,11 @@ async def get_messages(
     S 安全修复:强制租户校验。tenant_id 优先取 Go 网关可信注入的
     ?tenant_id= 查询参数,缺省尝试 request.state.tenant_id(中间件设置时)。
     """
-    tenant_id = str(request.query_params.get("tenant_id") or "") or str(
-        getattr(request.state, "tenant_id", "") or ""
-    )
+    _raw_tid = request.query_params.get("tenant_id") or getattr(request.state, "tenant_id", "") or ""
+    try:
+        tenant_id = int(_raw_tid) if _raw_tid else 0
+    except (TypeError, ValueError):
+        tenant_id = 0
     # 会话归属是用户级的：网关注入的 ?user_id= 与 tenant 一样必须透传下来，
     # 否则同租户内可跨用户读取他人会话消息。
     user_id = str(request.query_params.get("user_id") or "") or str(

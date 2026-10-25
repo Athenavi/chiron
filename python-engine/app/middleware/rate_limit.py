@@ -28,7 +28,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
         if request.url.path in {"/healthz", "/readyz", "/metrics", "/info"}:
             return await call_next(request)
 
-        tenant_id = tenant_id_var.get("")
+        tenant_id = tenant_id_var.get(0)
         if not tenant_id:
             return await call_next(request)
 

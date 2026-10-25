@@ -493,7 +493,7 @@ class SubAgentRunner:
         self._parent_session_id = parent_session_id or ""
         self._parent_run_id = parent_run_id or ""
         self._turn_id = turn_id or ""
-        self._tenant_id = tenant_id or ""
+        self._tenant_id = tenant_id
         self._user_id = user_id or ""
         self._sink = sink
         self._cache = cache

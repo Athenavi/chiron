@@ -69,6 +69,13 @@ async def tx():
     conn = await asyncpg.connect(dsn)
     tr = conn.transaction()
     await tr.start()
+    # subagent_runs.tenant_id 是 NOT NULL 且外键指向 tenants —— 插入用例数据前先把
+    # 默认租户建出来，否则撞外键。CI 的库是空的（不像开发库有 seed 数据），
+    # 所以这一步必须显式做，不能指望库里已经有 id=1。
+    # 放在事务内：回滚时会一起撤销，不污染库。
+    await conn.execute(
+        "INSERT INTO tenants (id, name) VALUES (1, 'default') ON CONFLICT (id) DO NOTHING"
+    )
     try:
         yield _TxPool(conn), conn
     finally:
@@ -92,11 +99,11 @@ async def _insert_run(
         """
         INSERT INTO subagent_runs
             (id, root_session_id, task, status, started_at, finished_at,
-             input_tokens, output_tokens, steps, error)
+             input_tokens, output_tokens, steps, error, tenant_id)
         VALUES ($1, $2, 'reap 用例', $3,
                 (now() - make_interval(hours => $4::int))::timestamp,
                 CASE WHEN $5::boolean THEN now()::timestamp ELSE NULL END,
-                $6, $7, $8, $9)
+                $6, $7, $8, $9, 1)
         """,
         run_id,
         f"sess-{run_id}",

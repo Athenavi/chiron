@@ -154,7 +154,7 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if internal and query_tid and query_uid:
-            return await self._set_tenant_and_continue(request, call_next, query_tid)
+            return await self._set_tenant_and_continue(request, call_next, int(query_tid))
 
         if has_query_identity:
             if not internal:
@@ -223,7 +223,8 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return None
         try:
             payload = jwt.decode(token, self._jwt_secret, algorithms=["HS256"])
-            tid: str | None = payload.get("tenant_id")
+            tid_raw = payload.get("tenant_id")
+            tid = int(tid_raw) if tid_raw else 0
             if not tid:
                 logger.warning("JWT missing tenant_id claim, rejecting")
                 return None

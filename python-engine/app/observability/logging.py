@@ -12,8 +12,8 @@ import structlog
 request_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "request_id", default=""
 )
-tenant_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
-    "tenant_id", default=""
+tenant_id_var: contextvars.ContextVar[int] = contextvars.ContextVar(
+    "tenant_id", default=0
 )
 trace_id_var: contextvars.ContextVar[str] = contextvars.ContextVar(
     "trace_id", default=""

@@ -8,6 +8,7 @@ from __future__ import annotations
 from typing import Any
 
 from app.commands.registry import CommandContext, registry
+from app.tools.context import to_tenant_int
 
 # ── /help ───────────────────────────────────────────────────────
 
@@ -133,13 +134,13 @@ async def _memory(args: str, ctx: CommandContext | None) -> str:
     if svc is None:
         return "Memory service not available (database not connected)."
 
-    tenant_id = ""
     user_id = ""
+    raw_tenant: Any = 0
     if ctx is not None:
-        tenant_id = ctx.metadata.get("tenant_id", "")
+        raw_tenant = ctx.metadata.get("tenant_id", 0)
         user_id = ctx.metadata.get("user_id", "")
-    if not tenant_id:
-        tenant_id = "default"
+    # metadata 里的 tenant_id 可能是字符串（网关透传），也可能已经是 int
+    tenant_id = to_tenant_int(raw_tenant)
     if not user_id:
         return "User context missing — cannot access memory."
 

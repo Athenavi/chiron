@@ -128,8 +128,8 @@ class LocalTenantRateLimiter:
         self.rpm = requests_per_minute
         self.rps = requests_per_second
         self._lock = asyncio.Lock()
-        self._seconds: dict[str, list[float]] = {}
-        self._minutes: dict[str, list[float]] = {}
+        self._seconds: dict[int, list[float]] = {}
+        self._minutes: dict[int, list[float]] = {}
 
     @staticmethod
     def _prune(bucket: list[float], now: float, window: float) -> int:

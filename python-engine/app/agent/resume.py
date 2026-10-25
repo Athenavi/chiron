@@ -434,7 +434,7 @@ async def sweep_once(
     for row in rows or []:
         stats["scanned"] += 1
         session_id = str(row["session_id"] or "")
-        tenant_id = str(row["tenant_id"] or "")
+        tenant_id = int(row["tenant_id"] or 0)
         if not session_id:
             continue
         # `resuming` 是 claim() 的交接中间态：写它的进程要么在同一轮把它推成

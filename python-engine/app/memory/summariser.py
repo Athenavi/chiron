@@ -155,7 +155,7 @@ def build_summariser(
     # `default_model`，与 `guardian_model` 同口径）。写在调用方会让这条配置随装配点漂移。
     use_model = model or settings.memory_summariser_model or settings.default_model
 
-    async def _summarise(messages: list[dict[str, Any]], tid: str = "") -> str:
+    async def _summarise(messages: list[dict[str, Any]], tid: int = 0) -> str:
         if not settings.memory_summariser_enabled:
             return ""
         return await summarise_messages(

@@ -33,7 +33,7 @@ MAX_SUFFIX_CHARS = 2000
 CACHE_TTL_SECONDS = 60.0
 
 #: (tenant_id, user_id, model) -> (expire_at_monotonic, suffix)
-_cache: dict[tuple[str, str, str], tuple[float, str]] = {}
+_cache: dict[tuple[int, str, str], tuple[float, str]] = {}
 
 
 def _clamp(text: str) -> str:

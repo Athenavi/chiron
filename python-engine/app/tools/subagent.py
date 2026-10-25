@@ -211,7 +211,7 @@ async def subagent(
                 depth=depth,
                 parent_session_id=get_session_id(),
                 turn_id=str(get_tool_context("turn_id", "") or ""),
-                tenant_id=get_tenant_id(),
+                tenant_id=get_tenant_id_int(),
                 user_id=get_user_id(),
                 # 父回合无人值守 ⇒ 子 Agent 也是（审批/提问没人应答，见 AgentRuntime.unattended）
                 unattended=bool(get_tool_context("unattended", False)),
@@ -245,7 +245,7 @@ async def subagent(
             task,
             SubagentContext(
                 task=task,
-                tenant_id=get_tenant_id(),
+                tenant_id=get_tenant_id_int(),
                 user_id=get_user_id(),
                 session_id=get_session_id(),
                 depth=depth,
@@ -275,7 +275,7 @@ async def subagent(
         depth=depth,
         parent_session_id=get_session_id(),
         turn_id=str(get_tool_context("turn_id", "") or ""),
-        tenant_id=get_tenant_id(),
+        tenant_id=get_tenant_id_int(),
         user_id=get_user_id(),
         unattended=bool(get_tool_context("unattended", False)),
         sink=get_event_sink(),
@@ -341,7 +341,7 @@ async def subagent(
         subagent_registry.register(
             bg_run_id, bg_task,
             session_id=get_session_id(),
-            tenant_id=get_tenant_id(),
+            tenant_id=get_tenant_id_int(),
             profile=profile or "",
         )
         logger.info(
@@ -387,7 +387,7 @@ async def subagent(
     subagent_registry.register(
         sync_run_id, work,
         session_id=get_session_id(),
-        tenant_id=get_tenant_id(),
+        tenant_id=get_tenant_id_int(),
         profile=profile or "",
     )
     try:

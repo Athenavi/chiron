@@ -27,10 +27,19 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["memory"])
 
 
-def _scope(request: Request) -> tuple[str, str]:
-    """从网关注入的 query 参数解析 (tenant_id, user_id)。"""
+def _scope(request: Request) -> tuple[int, str]:
+    """从网关注入的 query 参数解析 (tenant_id, user_id)。
+
+    tenant_id 在库里是 smallint，网关透传过来是字符串 —— 在这里转成 int，
+    缺省用 0（"无租户"）而不是 "default" 这种字符串占位，否则下游拿到的是 str，
+    查询会走到错误的租户分支。
+    """
     user_id = (request.query_params.get("user_id") or "").strip()
-    tenant_id = (request.query_params.get("tenant_id") or "default").strip()
+    raw_tenant = (request.query_params.get("tenant_id") or "").strip()
+    try:
+        tenant_id = int(raw_tenant) if raw_tenant else 0
+    except ValueError:
+        tenant_id = 0
     return tenant_id, user_id
 
 

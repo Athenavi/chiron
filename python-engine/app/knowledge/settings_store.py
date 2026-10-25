@@ -76,7 +76,7 @@ async def load(user_id: str) -> UserKnowledgeSettings | None:
 
     return UserKnowledgeSettings(
         user_id=str(row["user_id"]),
-        tenant_id=str(row["tenant_id"] or ""),
+        tenant_id=int(row["tenant_id"] or 0),
         provider=str(row["provider"] or ""),
         cloud_api_key=api_key,
         cloud_folder_id=str(row["cloud_folder_id"] or ""),

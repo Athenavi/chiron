@@ -418,7 +418,7 @@ def _context_for(kb: Any) -> Any:
 
     return ProviderContext(
         kb_id=str(kb["id"]),
-        tenant_id=str(kb["tenant_id"] or ""),
+        tenant_id=int(kb["tenant_id"] or 0),
         user_id=str(kb["user_id"] or ""),
         index_ref=str(kb["index_ref"] or ""),
     )
@@ -469,7 +469,7 @@ async def upload_document(
         )
 
     doc_id = str(uuid.uuid4())
-    storage_key = blob.build_key(str(kb["tenant_id"] or ""), kb_id, doc_id, name.strip())
+    storage_key = blob.build_key(int(kb["tenant_id"] or 0), kb_id, doc_id, name.strip())
     store = blob.get_blob_store()
     import asyncio
 
@@ -487,7 +487,7 @@ async def upload_document(
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'pending', $9, $9)""",
         doc_id,
         kb_id,
-        str(kb["tenant_id"] or DEFAULT_TENANT_ID),
+        int(kb["tenant_id"] or DEFAULT_TENANT_ID),
         user_id,
         name.strip(),
         (file_type or name.rsplit(".", 1)[-1]).lower(),

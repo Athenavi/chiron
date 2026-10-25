@@ -79,7 +79,11 @@ async def search_capabilities(request: Request) -> dict[str, Any]:
     if not query.strip():
         return {"success": False, "error": "query is required"}
 
-    tenant_id = str(body.get("tenant_id") or request.query_params.get("user_id") or "")
+    _raw_tid = body.get("tenant_id") or request.query_params.get("user_id") or ""
+    try:
+        tenant_id = int(_raw_tid) if _raw_tid else 0
+    except (TypeError, ValueError):
+        tenant_id = 0
     reg = get_registry()
     caps = await reg.search(
         query=query,

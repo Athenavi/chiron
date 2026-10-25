@@ -155,19 +155,28 @@ def pick_fault(faults: list[dict[str, Any]], target: str) -> dict[str, Any] | No
     return None
 
 
-def _tenant_id_from_scope(scope: dict[str, Any]) -> str:
-    """从 ASGI scope 的 query string 取 tenant_id（引擎的身份约定，由网关注入）。"""
+def _tenant_id_from_scope(scope: dict[str, Any]) -> int:
+    """从 ASGI scope 的 query string 取 tenant_id（引擎的身份约定，由网关注入）。
+
+    query string 里是字符串，而 tenant_id 在库里是 smallint —— 在这里就规约到
+    int 域，免得下游每处再各自转换（见 app.tools.context.to_tenant_int 的约定）。
+    """
     from urllib.parse import parse_qs
 
     raw = scope.get("query_string", b"")
     if not raw:
-        return ""
+        return 0
     try:
         params = parse_qs(raw.decode("latin-1"))
     except Exception:  # noqa: BLE001
-        return ""
+        return 0
     values = params.get("tenant_id") or []
-    return values[0] if values else ""
+    if not values:
+        return 0
+    try:
+        return int(values[0])
+    except (TypeError, ValueError):
+        return 0
 
 
 class ChaosInjectionMiddleware:

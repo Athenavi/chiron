@@ -141,8 +141,8 @@ class MemoryService:
         # 冲突 —— 裁决入口本就由产生它的那次请求所属实例服务。
         self._conflicts: dict[str, dict[str, Any]] = {}
         # 整理任务的单飞行状态：同一 (tenant, user, **project**) 不允许并发整理（C3：按项目分组）
-        self._organize_state: dict[tuple[str, str, str], dict[str, Any]] = {}
-        self._organize_tasks: dict[tuple[str, str, str], asyncio.Task[Any]] = {}
+        self._organize_state: dict[tuple[int, str, str], dict[str, Any]] = {}
+        self._organize_tasks: dict[tuple[int, str, str], asyncio.Task[Any]] = {}
         # C5：自动整理的记账（每 (tenant, user, project) 一条）——
         # `turns` 累积自上次触发以来的回合数，`last_at` 是上次**触发**时间。
         # 进程内保存足够：它只用来决定"要不要现在整理"，多副本各自判断的代价是

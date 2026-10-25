@@ -237,7 +237,7 @@ def _build_node_fns(graph_json: dict[str, Any], gateway: GatewayRouter) -> dict[
         if not task:
             return {f"__out_{node_id}__": "error: task is required"}
         from app.agent.multi_agent import SubAgent
-        from app.tools.context import get_tenant_id
+        from app.tools.context import get_tenant_id_int
 
         try:
             agent = SubAgent(
@@ -250,7 +250,7 @@ def _build_node_fns(graph_json: dict[str, Any], gateway: GatewayRouter) -> dict[
                 max_turns=int(config.get("max_turns", 6) or 6),
             )
             result = await agent.run(
-                task=str(task), tenant_id=get_tenant_id() or "default"
+                task=str(task), tenant_id=get_tenant_id_int()
             )
         except Exception as e:  # noqa: BLE001
             return {f"__out_{node_id}__": f"agent error: {e}"}

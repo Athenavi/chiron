@@ -76,7 +76,7 @@ async def backfill_summary_vectors(
     for row in rows:
         entry = SummaryEntry(
             id=str(row["id"]),
-            tenant_id=str(row["tenant_id"]),
+            tenant_id=int(row["tenant_id"] or 0),
             user_id=str(row["user_id"]),
             session_id=str(row["session_id"] or ""),
             content=str(row["content"] or ""),

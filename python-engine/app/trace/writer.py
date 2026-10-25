@@ -105,7 +105,7 @@ class TraceWriter:
 
         try:
             # SaaS 安全: 按 tenant_id 分 stream
-            stream = get_tenant_stream(tenant_id or "anonymous")
+            stream = get_tenant_stream(tenant_id or 0)
             entry = {
                 "trace_id": trace_id,
                 "span_name": span_name,

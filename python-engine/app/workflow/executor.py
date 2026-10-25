@@ -138,6 +138,6 @@ async def execute_with_checkpoint(
         event_type = "workflow.complete" if final_status == "completed" else "workflow.error"
         # Webhook 按**租户**匹配订阅，这里曾是 `tenant_id=user_id`（同一个冒充口径的漏网处）：
         # 事件会被投给"user_id 恰好等于某个租户 ID"的那个租户，或落到 default。
-        await emit_event(event_type, wf_payload, tenant_id=tenant_id or "default")
+        await emit_event(event_type, wf_payload, tenant_id=tenant_id or 0)
     except Exception as exc:  # noqa: BLE001
         logger.warning("workflow webhook emit failed: %s", exc)

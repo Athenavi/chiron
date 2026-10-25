@@ -215,7 +215,7 @@ class AgentHub:
         self.gateway = gateway
         self._runtime_pool: dict[AgentRole, AgentRuntime] = {}
         self._max_concurrent_per_tenant = 3  # SaaS 配额
-        self._tenant_running_agents: dict[str, int] = {}  # tenant_id -> count
+        self._tenant_running_agents: dict[int, int] = {}  # tenant_id -> count
 
     async def run_collaborative_task(
         self,

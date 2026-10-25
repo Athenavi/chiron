@@ -35,15 +35,15 @@ MAX_LIST_LIMIT = 50
 
 
 def _identity(
-    query_tenant: str, query_user: str, body: dict[str, Any] | None = None
-) -> tuple[str, str]:
+    query_tenant: int, query_user: str, body: dict[str, Any] | None = None
+) -> tuple[int, str]:
     """取身份：query 优先（网关代理形态），其次 body（内部直连形态）。
 
     两者都不猜：拿不到 `user_id` 时返回空串，调用方据此拒绝 —— 介入票是**授权**，
     "身份不明"绝不能变成"看全部"或"替别人答"。
     """
     src = body if isinstance(body, dict) else {}
-    tenant = str(query_tenant or src.get("tenant_id") or "")
+    tenant = to_tenant_int(query_tenant or src.get("tenant_id") or 0)
     user = str(query_user or src.get("user_id") or "")
     return tenant, user
 

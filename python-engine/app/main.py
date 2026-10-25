@@ -1931,7 +1931,7 @@ async def agent_submit(
                     from app.event_bus import emit_agent_complete
 
                     await emit_agent_complete(
-                        session_id, task.user_id or "", task.tenant_id or "default",
+                        session_id, task.user_id or "", task.tenant_id or 0,
                         tokens_used=total_in + total_out,
                         duration_ms=int((time.monotonic() - started) * 1000),
                     )
@@ -1980,7 +1980,7 @@ async def agent_submit(
                     from app.event_bus import emit_agent_error
 
                     await emit_agent_error(
-                        session_id, task.user_id or "", task.tenant_id or "default",
+                        session_id, task.user_id or "", task.tenant_id or 0,
                         error=str(e),
                         tokens_used=total_in + total_out,
                         duration_ms=int((time.monotonic() - started) * 1000),

@@ -22,6 +22,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from app.config import settings
+from app.tools.context import to_tenant_int
 from app.hooks import audit, events, inject
 from app.hooks.runner import (
     COMMAND_BLOCKED_PREFIX,
@@ -455,7 +456,7 @@ class HookManager:
         return events.build_context(
             event,
             session_id=_attr(task, "session_id"),
-            tenant_id=_attr(task, "tenant_id"),
+            tenant_id=to_tenant_int(_attr(task, "tenant_id")),
             user_id=_attr(task, "user_id"),
             tool_name=str(tool_call.get("name", "")),
             tool_arguments=_parse_arguments(tool_call),
@@ -471,7 +472,7 @@ class HookManager:
             events.build_context(
                 events.SESSION_START,
                 session_id=_attr(task, "session_id"),
-                tenant_id=_attr(task, "tenant_id"),
+                tenant_id=to_tenant_int(_attr(task, "tenant_id")),
                 user_id=_attr(task, "user_id"),
             ),
             task=task,
@@ -492,7 +493,7 @@ class HookManager:
         context = events.build_context(
             events.USER_PROMPT_SUBMIT,
             session_id=_attr(task, "session_id"),
-            tenant_id=_attr(task, "tenant_id"),
+            tenant_id=to_tenant_int(_attr(task, "tenant_id")),
             user_id=_attr(task, "user_id"),
         )
         for hook, outcome in await self._trigger(events.USER_PROMPT_SUBMIT, context, task=task):
@@ -536,7 +537,7 @@ class HookManager:
             events.build_context(
                 events.STOP,
                 session_id=_attr(task, "session_id"),
-                tenant_id=_attr(task, "tenant_id"),
+                tenant_id=to_tenant_int(_attr(task, "tenant_id")),
                 user_id=_attr(task, "user_id"),
             ),
             task=task,

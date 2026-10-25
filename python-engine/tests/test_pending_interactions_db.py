@@ -102,7 +102,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
     session_id = f"itest-{uuid.uuid4().hex[:12]}"
     try:
         created = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -116,7 +116,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
 
         # ① 同一 tool_call_id 再问一次：**复用那一行**（否则唯一索引让第二次询问静默失败）
         again = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -135,7 +135,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
         # ② 用户答复
         resolved = await ix.resolve(
             interaction_id=created,
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             decision={"decision": "approve"},
             reason="可以",
@@ -148,7 +148,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
 
         # ③ 答复未取走时，重新提问**不得**擦掉它（DO UPDATE 的 status='pending' 守卫）
         wiped = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -167,7 +167,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
 
         # ④ 续跑回合取走：`answered` → `consumed`
         grant = await ix.consume_grant(
-            tenant_id="t-a",
+            tenant_id=1,
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
             tool_name="shell",
@@ -177,7 +177,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
         assert (await _row(db, session_id, created))["status"] == ix.STATUS_CONSUMED
         # 单次消费：批准不会生效第二次
         assert await ix.consume_grant(
-            tenant_id="t-a",
+            tenant_id=1,
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
             tool_name="shell",
@@ -185,7 +185,7 @@ async def test_create_resolve_consume_roundtrip(db: Any) -> None:
         ) is None
         # consumed 之后可以重新问了（旧行不再占用唯一索引名额）
         third = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -202,7 +202,7 @@ async def test_grant_is_bound_to_arguments_and_owner(db: Any) -> None:
     session_id = f"itest-{uuid.uuid4().hex[:12]}"
     try:
         approval_id = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -212,13 +212,13 @@ async def test_grant_is_bound_to_arguments_and_owner(db: Any) -> None:
         )
         await ix.resolve(
             interaction_id=approval_id,
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             decision={"decision": "approve"},
         )
         # 参数变了就是另一件事：**不认**（这是"批准的就是执行的"的跨进程版本）
         assert await ix.consume_grant(
-            tenant_id="t-a",
+            tenant_id=1,
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
             tool_name="write_file",
@@ -226,7 +226,7 @@ async def test_grant_is_bound_to_arguments_and_owner(db: Any) -> None:
         ) is None
         # 别的租户问不到（介入是授权，跨租户命中等于替别人的会话放行）
         assert await ix.consume_grant(
-            tenant_id="t-b",
+            tenant_id=2,
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
             tool_name="write_file",
@@ -234,16 +234,16 @@ async def test_grant_is_bound_to_arguments_and_owner(db: Any) -> None:
         ) is None
         # 别人的答复不算数
         assert await ix.resolve(
-            interaction_id=approval_id, tenant_id="t-a", user_id="u-b", decision={}
+            interaction_id=approval_id, tenant_id=1, user_id="u-b", decision={}
         ) is None
         assert await ix.resolve(
-            interaction_id=approval_id, tenant_id="t-b", user_id="u-a", decision={}
+            interaction_id=approval_id, tenant_id=2, user_id="u-a", decision={}
         ) is None
-        assert await ix.list_open(tenant_id="t-a", user_id="u-b", session_id=session_id) == []
-        assert len(await ix.list_open(tenant_id="t-a", user_id="u-a", session_id=session_id)) == 1
+        assert await ix.list_open(tenant_id=1, user_id="u-b", session_id=session_id) == []
+        assert len(await ix.list_open(tenant_id=1, user_id="u-a", session_id=session_id)) == 1
         # 上面那次失败的 resolve 没有把状态挪走 → 原样取走
         got = await ix.consume_grant(
-            tenant_id="t-a",
+            tenant_id=1,
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
             tool_name="write_file",
@@ -259,7 +259,7 @@ async def test_two_concurrent_resumes_one_grant_wins(db: Any) -> None:
     session_id = f"itest-{uuid.uuid4().hex[:12]}"
     try:
         approval_id = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_APPROVAL,
@@ -269,14 +269,14 @@ async def test_two_concurrent_resumes_one_grant_wins(db: Any) -> None:
         )
         await ix.resolve(
             interaction_id=approval_id,
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             decision={"decision": "approve"},
         )
         winners = await asyncio.gather(
             *(
                 ix.consume_grant(
-                    tenant_id="t-a",
+                    tenant_id=1,
                     session_id=session_id,
                     kind=ix.KIND_APPROVAL,
                     tool_name="shell",
@@ -295,7 +295,7 @@ async def test_expiry_frees_the_unique_slot(db: Any) -> None:
     session_id = f"itest-{uuid.uuid4().hex[:12]}"
     try:
         approval_id = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_QUESTION,
@@ -305,7 +305,7 @@ async def test_expiry_frees_the_unique_slot(db: Any) -> None:
         )
         await ix.resolve(
             interaction_id=approval_id,
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             decision={"answer": "选 A"},
         )
@@ -315,7 +315,7 @@ async def test_expiry_frees_the_unique_slot(db: Any) -> None:
             approval_id,
         )
         assert await ix.consume_grant(
-            tenant_id="t-a",
+            tenant_id=1,
             session_id=session_id,
             kind=ix.KIND_QUESTION,
             tool_name="ask_user",
@@ -323,10 +323,10 @@ async def test_expiry_frees_the_unique_slot(db: Any) -> None:
         ) is None
         assert await ix.expire_stale(limit=200) >= 1
         assert (await _row(db, session_id, approval_id))["status"] == ix.STATUS_EXPIRED
-        assert await ix.list_open(tenant_id="t-a", user_id="u-a", session_id=session_id) == []
+        assert await ix.list_open(tenant_id=1, user_id="u-a", session_id=session_id) == []
         # 名额已释放：同一件事可以重新问了
         fresh = await ix.create(
-            tenant_id="t-a",
+            tenant_id=1,
             user_id="u-a",
             session_id=session_id,
             kind=ix.KIND_QUESTION,
@@ -367,33 +367,33 @@ async def test_awaiting_input_releases_and_reclaims_the_session(db: Any) -> None
 
         # 挂起：迁出活跃集合 ⇒ 唯一索引的名额被释放
         assert await cp.mark(
-            tenant_id="t-a", session_id=session_id,
+            tenant_id=1, session_id=session_id,
             status=cp.STATUS_AWAITING_INPUT, run_token="rt-old",
         )
         # 会话于是可以再开一个 run（用户可以接着聊别的）
         await _insert_run(db, session_id, status=cp.STATUS_RUNNING, run_token="rt-other")
 
         # 读挂起现场仍在（`load()` 只认活跃行 ⇒ 看到的是那个新 run，不是挂起的那份）
-        loaded = await cp.load(tenant_id="t-a", session_id=session_id)
+        loaded = await cp.load(tenant_id=1, session_id=session_id)
         assert loaded is not None and int(loaded.get("turn_index") or 0) == 3
-        awaiting = await cp.load_awaiting(tenant_id="t-a", session_id=session_id)
+        awaiting = await cp.load_awaiting(tenant_id=1, session_id=session_id)
         assert awaiting is not None and awaiting["run_token"] == "rt-old"
 
         # 但**交还**会被唯一索引拒绝：会话上已有活跃行，不能让两个 run 共用一份挂起现场
         assert not await cp.claim_awaiting(
-            tenant_id="t-a", session_id=session_id, new_run_token="rt-new"
+            tenant_id=1, session_id=session_id, new_run_token="rt-new"
         )
-        assert (await cp.load_awaiting(tenant_id="t-a", session_id=session_id)) is not None
+        assert (await cp.load_awaiting(tenant_id=1, session_id=session_id)) is not None
 
         # 新 run 结束后，挂起现场可以被下一个回合接手
         await db.execute(
             "UPDATE agent_runs SET status = 'completed' WHERE run_token = 'rt-other'"
         )
         assert await cp.claim_awaiting(
-            tenant_id="t-a", session_id=session_id, new_run_token="rt-new"
+            tenant_id=1, session_id=session_id, new_run_token="rt-new"
         )
-        assert await cp.load_awaiting(tenant_id="t-a", session_id=session_id) is None
-        resumed = await cp.load(tenant_id="t-a", session_id=session_id)
+        assert await cp.load_awaiting(tenant_id=1, session_id=session_id) is None
+        resumed = await cp.load(tenant_id=1, session_id=session_id)
         assert resumed is not None and resumed.get("turn_index") == 3
         row = await db.fetchrow(
             "SELECT status, run_token FROM agent_runs WHERE session_id = $1 "
@@ -412,7 +412,7 @@ async def test_awaiting_input_is_invisible_to_the_takeover_paths(db: Any) -> Non
         await _insert_run(db, session_id, status=cp.STATUS_AWAITING_INPUT, run_token="rt-wait")
 
         assert not await cp.claim(
-            tenant_id="t-a", session_id=session_id,
+            tenant_id=1, session_id=session_id,
             expected_run_token="rt-wait", new_run_token="rt-steal",
         )
         swept = await db.fetch(
@@ -424,7 +424,7 @@ async def test_awaiting_input_is_invisible_to_the_takeover_paths(db: Any) -> Non
         )
         assert swept == []
         # 也读不到"普通活跃现场"：批 3 加的过滤不会让陈旧挂起快照复活后面的无关回合
-        assert await cp.load(tenant_id="t-a", session_id=session_id) is None
+        assert await cp.load(tenant_id=1, session_id=session_id) is None
         # 同一个会话因此可以再开一个 run 而不撞唯一索引
         await _insert_run(db, session_id, status=cp.STATUS_RUNNING, run_token="rt-next")
     finally:

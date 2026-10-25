@@ -315,7 +315,7 @@ class _StubLedger:
 class TestLineStateMath:
     def _state(self, **kw: Any) -> LineState:
         base: dict[str, Any] = dict(
-            root="rs_root", tenant_id="t1", cap=1000, settled=0, reserved=0,
+            root="rs_root", tenant_id=1, cap=1000, settled=0, reserved=0,
             paused=False, pause_reason="",
         )
         base.update(kw)
@@ -350,20 +350,20 @@ class TestCapResolution:
     async def test_no_row_means_follow_the_default(self) -> None:
         """没有控制态行 ≠ 问不出来：它就是"这条线没被单独设过"。"""
         led = _ledger(store=_FakeStore(usage=(123, 1)))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None
         assert (state.settled, state.cap, state.paused) == (123, default_cap(), False)
 
     async def test_row_cap_zero_falls_through_to_default(self, monkeypatch) -> None:
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "4321")
         led = _ledger(pool=_FakePool(row={"cap_tokens": 0, "paused": False, "pause_reason": None}))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.cap == 4321
 
     async def test_explicit_row_cap_wins_over_default(self, monkeypatch) -> None:
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "4321")
         led = _ledger(pool=_FakePool(row={"cap_tokens": 7000, "paused": False, "pause_reason": ""}))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.cap == 7000
 
     async def test_unlimited_marker_disables_the_axis(self) -> None:
@@ -372,7 +372,7 @@ class TestCapResolution:
         led = _ledger(
             pool=_FakePool(row={"cap_tokens": CAP_UNLIMITED, "paused": False, "pause_reason": None})
         )
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None
         assert state.cap == 0 and state.violation(10**9) == ""
 
@@ -389,7 +389,7 @@ class TestCapResolution:
 
 
 class TestUnaskableFailsOpen:
-    @pytest.mark.parametrize("root,tenant", [("", "t1"), ("rs_root", ""), ("", "")])
+    @pytest.mark.parametrize("root,tenant", [("", 1), ("rs_root", 0), ("", 0)])
     async def test_missing_keys_ask_nothing(self, root: str, tenant: str) -> None:
         pool = _FakePool()
         store = _FakeStore()
@@ -399,14 +399,14 @@ class TestUnaskableFailsOpen:
 
     async def test_pg_failure_is_fail_open(self) -> None:
         led = _ledger(pool=_FakePool(error=True))
-        assert await led.state("rs_root", "t1") is None
-        assert await led.check("rs_root", "t1") == ""
+        assert await led.state("rs_root", 1) is None
+        assert await led.check("rs_root", 1) == ""
 
     async def test_usage_aggregate_unavailable_is_fail_open(self) -> None:
         """求和问不出来（0021 的列还没迁移）⇒ 整条判定退回"没有这条线"，
         既不判超限也不炸。"""
         led = _ledger(store=_FakeStore(usage=None))
-        assert await led.state("rs_root", "t1") is None
+        assert await led.state("rs_root", 1) is None
 
     def test_root_must_be_a_key_safe_id(self) -> None:
         """run id 会进 Redis 键名与 Lua 参数：带 TAB / 空白 / 控制字符的 id 能把拼出来的
@@ -419,7 +419,7 @@ class TestUnaskableFailsOpen:
         pool = _FakePool()
         redis = _FakeRedis()
         led = _ledger(pool=pool, redis=redis)
-        assert await led.state("bad\troot", "t1") is None
+        assert await led.state("bad\troot", 1) is None
         assert pool.calls == [] and redis.calls == []
 
 
@@ -431,7 +431,7 @@ class TestRedisOrchestration:
         redis = _FakeRedis()  # got=None ⇒ 键不存在
         store = _FakeStore(usage=(777, 3))
         led = _ledger(redis=redis, store=store)
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.settled == 777
         assert redis.gets and redis.gets[0].endswith("subagent:line:rs_root:used")
         backfill = redis.args_for("'NX'")
@@ -444,7 +444,7 @@ class TestRedisOrchestration:
         redis = _FakeRedis(got="777")
         store = _FakeStore(usage=(9999, 9))
         led = _ledger(redis=redis, store=store)
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.settled == 777
         assert store.calls == []
         # 命中时**不问 PG、也不回填**；预留求和脚本照发（那是另一条键、另一笔账）
@@ -453,25 +453,25 @@ class TestRedisOrchestration:
     async def test_garbage_mirror_value_falls_back_to_pg(self) -> None:
         redis = _FakeRedis(got="not-a-number")
         led = _ledger(redis=redis, store=_FakeStore(usage=(420, 1)))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.settled == 420
 
     async def test_mirror_failure_keeps_the_pg_value(self) -> None:
         """Redis 抖了不该让闸门失明：读不到镜像就按 PG 的权威值继续。"""
         led = _ledger(redis=_FakeRedis(error=True), store=_FakeStore(usage=(900, 2)))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.settled == 900
 
     async def test_no_redis_at_all_still_reports_settled(self) -> None:
         led = _ledger(store=_FakeStore(usage=(900, 2)))
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and (state.settled, state.reserved) == (900, 0)
 
     async def test_reserve_sends_handle_and_expiry(self, monkeypatch) -> None:
         redis = _FakeRedis(result="200000")
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        handle = await led.reserve("rs_root", "t1", "sub_rs_1", 200_000)
+        handle = await led.reserve("rs_root", 1, "sub_rs_1", 200_000)
         # 三段：member / tokens / **持有者实例 id**（M17）—— 清扫与 drain 都按第三段收账
         assert handle == f"sub_rs_1{_TAB}200000{_TAB}engine-A"
         args = redis.args_for("ZREMRANGEBYSCORE")
@@ -487,7 +487,7 @@ class TestRedisOrchestration:
         redis = _FakeRedis()
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        assert await led.reserve("rs_root", "t1", f"sub{_TAB}9", 1000) == ""
+        assert await led.reserve("rs_root", 1, f"sub{_TAB}9", 1000) == ""
         assert redis.calls == []
 
     async def test_a_poisonous_instance_id_is_not_stamped(self, monkeypatch) -> None:
@@ -500,7 +500,7 @@ class TestRedisOrchestration:
         redis = _FakeRedis(result="0")
         _set_holder(monkeypatch, f"engine{_TAB}A")
         led = _ledger(redis=redis)
-        handle = await led.reserve("rs_root", "t1", "sub_a", 100)
+        handle = await led.reserve("rs_root", 1, "sub_a", 100)
         assert handle == f"sub_a{_TAB}100"
         assert ledger_mod._holder_of(handle) == "", "没署名的预留不该被任何一次核对认领"
 
@@ -509,12 +509,12 @@ class TestRedisOrchestration:
         而这一 run 自己本来就没有 token 轴可自控。"""
         redis = _FakeRedis()
         led = _ledger(redis=redis)
-        assert await led.reserve("rs_root", "t1", "sub_rs_1", 0) == ""
+        assert await led.reserve("rs_root", 1, "sub_rs_1", 0) == ""
         assert redis.calls == []
 
     async def test_reserve_failure_degrades_to_settled_only(self) -> None:
         led = _ledger(redis=_FakeRedis(error=True))
-        assert await led.reserve("rs_root", "t1", "sub_rs_1", 1000) == ""
+        assert await led.reserve("rs_root", 1, "sub_rs_1", 1000) == ""
 
     async def test_settle_releases_then_bumps(self) -> None:
         redis = _FakeRedis(result="0")
@@ -561,8 +561,8 @@ class TestRedisOrchestration:
             redis=_FakeRedis(results={"ZRANGE": "300"}),
             store=_FakeStore(usage=(600, 3)),
         )
-        assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=99) == ""
-        assert await led.check("rs_root", "t1", run_id="sub_x", own_tokens=100) == "line_tokens"
+        assert await led.check("rs_root", 1, run_id="sub_x", own_tokens=99) == ""
+        assert await led.check("rs_root", 1, run_id="sub_x", own_tokens=100) == "line_tokens"
 
 
 # ── M18：在途预留的覆盖式重述（投影）───────────────────────────────────
@@ -659,7 +659,7 @@ class TestReserveRestate:
         sum_before = _projection_observed_sum()
         seed = f"sub_a{_TAB}200000{_TAB}engine-A"
         out = await led.project(
-            "rs_root", "t1", member="sub_a", handle=seed,
+            "rs_root", 1, member="sub_a", handle=seed,
             spent=5_000, elapsed_seconds=20, per_run_cap=200_000,
         )
         assert out == seed, "shadow 不改判定也不改账：句柄原样还回"
@@ -684,7 +684,7 @@ class TestReserveRestate:
         sum_before = _projection_observed_sum()
         assert (
             await led.project(
-                "rs_root", "t1", member="sub_a", handle="h", spent=5_000, elapsed_seconds=20
+                "rs_root", 1, member="sub_a", handle="h", spent=5_000, elapsed_seconds=20
             )
             == "h"
         )
@@ -702,7 +702,7 @@ class TestReserveRestate:
         seed = f"sub_a{_TAB}200000"
         assert (
             await led.project(
-                "rs_root", "t1", member="sub_a", handle=seed,
+                "rs_root", 1, member="sub_a", handle=seed,
                 spent=0, elapsed_seconds=5, per_run_cap=200_000,
             )
             == seed
@@ -718,7 +718,7 @@ class TestReserveRestate:
         led = _ledger(redis=redis)
         seed = f"sub_a{_TAB}200000{_TAB}engine-A"
         out = await led.project(
-            "rs_root", "t1", member="sub_a", handle=seed,
+            "rs_root", 1, member="sub_a", handle=seed,
             spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
         )
         assert out == f"sub_a{_TAB}30000{_TAB}engine-A"
@@ -740,7 +740,7 @@ class TestReserveRestate:
         redis = _FakeRedis(result="0")
         led = _ledger(redis=redis)
         out = await led.project(
-            "rs_root", "t1", member="sub_a", handle="",
+            "rs_root", 1, member="sub_a", handle="",
             spent=4_000, elapsed_seconds=60, per_run_cap=0,
         )
         assert out == f"sub_a{_TAB}12000{_TAB}engine-A"
@@ -752,7 +752,7 @@ class TestReserveRestate:
         seed = f"sub_a{_TAB}200000"
         assert (
             await led.project(
-                "rs_root", "t1", member="sub_a", handle=seed,
+                "rs_root", 1, member="sub_a", handle=seed,
                 spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
             )
             == seed
@@ -760,7 +760,7 @@ class TestReserveRestate:
 
     @pytest.mark.parametrize(
         "root,member,tenant",
-        [("bad\troot", "sub_a", "t1"), ("rs_root", "sub\tA", "t1"), ("rs_root", "sub_a", "")],
+        [("bad\troot", "sub_a", 1), ("rs_root", "sub\tA", 1), ("rs_root", "sub_a", "")],
     )
     async def test_unusable_keys_never_reach_redis(
         self, monkeypatch, root: str, member: str, tenant: str
@@ -782,9 +782,9 @@ class TestReserveRestate:
         monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=_FakeRedis(result="200000"))
-        seed = await led.reserve("rs_root", "t1", "sub_a", 200_000)
+        seed = await led.reserve("rs_root", 1, "sub_a", 200_000)
         out = await led.project(
-            "rs_root", "t1", member="sub_a", handle=seed,
+            "rs_root", 1, member="sub_a", handle=seed,
             spent=6_000, elapsed_seconds=30, per_run_cap=200_000,
         )
         assert list(led._held) == [out]
@@ -809,7 +809,7 @@ class TestDeadHolderSweep:
         """
         redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}gone"])
         led = _ledger(redis=redis)
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.reserved == 300
         assert redis.zranges == [] and redis.args_for("ZCARD") == []
 
@@ -817,7 +817,7 @@ class TestDeadHolderSweep:
         """线上一条正数预留都没有 ⇒ 没有可收回的东西，不必再发两条命令。"""
         redis = _FakeRedis(result="0", members=[f"sub_a{_TAB}100{_TAB}gone"])
         led = _participating(monkeypatch, redis, alive=set())
-        assert await led.state("rs_root", "t1") is not None
+        assert await led.state("rs_root", 1) is not None
         assert redis.zranges == []
 
     async def test_dead_holder_is_dropped_and_the_sum_reread(self, monkeypatch) -> None:
@@ -827,7 +827,7 @@ class TestDeadHolderSweep:
             members=[f"sub_a{_TAB}100{_TAB}gone", f"sub_b{_TAB}200{_TAB}mine"],
         )
         led = _participating(monkeypatch, redis, alive={"mine"})
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None
         drops = redis.args_for("ZCARD")
         assert len(drops) == 1
@@ -841,8 +841,8 @@ class TestDeadHolderSweep:
         """全都在世 ⇒ 扫一次、什么都不删；冷却期内第二次问连扫都不扫。"""
         redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}mine"])
         led = _participating(monkeypatch, redis, alive={"mine"})
-        assert await led.state("rs_root", "t1") is not None
-        assert await led.state("rs_root", "t1") is not None
+        assert await led.state("rs_root", 1) is not None
+        assert await led.state("rs_root", 1) is not None
         assert len(redis.zranges) == 1, "按线节流：同一条线一个冷却周期只核对一次"
         assert redis.args_for("ZCARD") == []
 
@@ -850,8 +850,8 @@ class TestDeadHolderSweep:
         """节流按**线**而不是全局：一条新线第一次被问就该核对，不能被别的线的冷却挡住。"""
         redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100{_TAB}gone"])
         led = _participating(monkeypatch, redis, alive=set())
-        await led.state("rs_root_a", "t1")
-        await led.state("rs_root_b", "t1")
+        await led.state("rs_root_a", 1)
+        await led.state("rs_root_b", 1)
         assert len(redis.zranges) == 2
         assert redis.zranges[0] != redis.zranges[1], "两条线各扫各的，不能共用一份冷却"
 
@@ -859,7 +859,7 @@ class TestDeadHolderSweep:
         """滚动升级：老实例写的两段 member 没有持有者可依据 ⇒ 不动，仍由 score 收口。"""
         redis = _FakeRedis(result="300", members=[f"sub_a{_TAB}100", f"sub_b{_TAB}200"])
         led = _participating(monkeypatch, redis, alive=set())
-        assert await led.state("rs_root", "t1") is not None
+        assert await led.state("rs_root", 1) is not None
         assert redis.zranges and redis.args_for("ZCARD") == []
 
     async def test_an_emptied_probe_blocks_every_removal(self, monkeypatch) -> None:
@@ -873,7 +873,7 @@ class TestDeadHolderSweep:
             return {}
 
         monkeypatch.setattr(instance_liveness, "holders_alive", _unknown)
-        assert await led.state("rs_root", "t1") is not None
+        assert await led.state("rs_root", 1) is not None
         assert redis.args_for("ZCARD") == []
 
     async def test_scan_failure_leaves_the_verdict_alone(self, monkeypatch) -> None:
@@ -882,7 +882,7 @@ class TestDeadHolderSweep:
             result="300", scan_error=True, members=[f"sub_a{_TAB}100{_TAB}gone"]
         )
         led = _participating(monkeypatch, redis, alive=set())
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.reserved == 300
 
     async def test_drop_failure_keeps_the_stale_number_but_never_raises(self, monkeypatch) -> None:
@@ -891,7 +891,7 @@ class TestDeadHolderSweep:
             result="300", drop_error=True, members=[f"sub_a{_TAB}100{_TAB}gone"]
         )
         led = _participating(monkeypatch, redis, alive=set())
-        state = await led.state("rs_root", "t1")
+        state = await led.state("rs_root", 1)
         assert state is not None and state.reserved == 300
         assert len(redis.args_for("ZREMRANGEBYSCORE")) == 1
 
@@ -909,8 +909,8 @@ class TestDrainOnShutdown:
         redis = _FakeRedis(result="0", results={"ZCARD": "1"})
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        await led.reserve("rs_root1", "t1", "sub_a", 10)
-        await led.reserve("rs_root2", "t1", "sub_b", 10)
+        await led.reserve("rs_root1", 1, "sub_a", 10)
+        await led.reserve("rs_root2", 1, "sub_b", 10)
         assert await led.drain("engine-A") == 2
         assert sorted(a[0].split(":")[-2] for a in redis.args_for("ZCARD")) == [
             "rs_root1",
@@ -923,8 +923,8 @@ class TestDrainOnShutdown:
         redis = _FakeRedis(result="0", results={"ZCARD": "1"})
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        h1 = await led.reserve("rs_root1", "t1", "sub_a", 10)
-        await led.reserve("rs_root2", "t1", "sub_b", 10)
+        h1 = await led.reserve("rs_root1", 1, "sub_a", 10)
+        await led.reserve("rs_root2", 1, "sub_b", 10)
         await led.settle("rs_root1", h1, 5)
         assert await led.drain("engine-A") == 1
         assert [a[0].split(":")[-2] for a in redis.args_for("ZCARD")] == ["rs_root2"]
@@ -934,7 +934,7 @@ class TestDrainOnShutdown:
         redis = _FakeRedis(result="0", results={"ZCARD": "1"})
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        await led.reserve("rs_root", "t1", "sub_a", 10)
+        await led.reserve("rs_root", 1, "sub_a", 10)
         await led.drain("engine-A")
         first = len(redis.args_for("ZCARD"))
         assert await led.drain("engine-A") == 0
@@ -968,7 +968,7 @@ class TestDrainOnShutdown:
         redis = _FakeRedis(result="0", drop_error=True)
         _set_holder(monkeypatch, "engine-A")
         led = _ledger(redis=redis)
-        await led.reserve("rs_root", "t1", "sub_a", 10)
+        await led.reserve("rs_root", 1, "sub_a", 10)
         assert await led.drain("engine-A") == 0
 
     async def test_release_helper_uses_the_process_identity(self, monkeypatch) -> None:
@@ -977,7 +977,7 @@ class TestDrainOnShutdown:
         led = _ledger(redis=redis)
         monkeypatch.setattr(ledger_mod, "_ledger", led)
         _set_holder(monkeypatch, "engine-A")
-        await led.reserve("rs_root", "t1", "sub_a", 10)
+        await led.reserve("rs_root", 1, "sub_a", 10)
         assert await ledger_mod.release_instance_reservations() == 1
         assert [a[1] for a in redis.args_for("ZCARD")] == ["engine-A"]
 
@@ -990,11 +990,11 @@ class TestControlStateWrite:
 
     async def test_pause_stops_the_line_without_changing_the_cap(self) -> None:
         pool = _FakePool()
-        assert await _ledger(pool=pool).pause_for_budget("rs_root", "t1") is True
-        assert [c[1] for c in pool.ensures()] == [("rs_root", "t1")]
+        assert await _ledger(pool=pool).pause_for_budget("rs_root", 1) is True
+        assert [c[1] for c in pool.ensures()] == [("rs_root", 1)]
         assert len(pool.updates()) == 1
         root, tenant, cap, paused, reason, updated_by = pool.updates()[0][1]
-        assert (root, tenant) == ("rs_root", "t1")
+        assert (root, tenant) == ("rs_root", 1)
         assert cap is None, "暂停是停下来等人，不是额度变了 —— 动 cap 会让提额无从对账"
         assert paused is True
         assert reason == ledger_mod.PAUSE_REASON_BUDGET
@@ -1005,7 +1005,7 @@ class TestControlStateWrite:
         pool = _FakePool()
         led = _ledger(pool=pool)
         assert await led.raise_cap_and_resume(
-            "rs_root", "t1", cap_tokens=5000, updated_by="u1"
+            "rs_root", 1, cap_tokens=5000, updated_by="u1"
         ) is True
         root, tenant, cap, paused, reason, updated_by = pool.updates()[0][1]
         assert (cap, paused, updated_by) == (5000, False, "u1")
@@ -1014,7 +1014,7 @@ class TestControlStateWrite:
     async def test_ensure_row_runs_before_the_update(self) -> None:
         """没被设过的线在表里**没有行** ⇒ 先 `INSERT … DO NOTHING` 才能保证 UPDATE 命中 1 行。"""
         pool = _FakePool()
-        await _ledger(pool=pool).pause_for_budget("rs_root", "t1")
+        await _ledger(pool=pool).pause_for_budget("rs_root", 1)
         assert [c[0].split()[0] for c in pool.calls] == ["INSERT", "UPDATE"]
 
     async def test_wrong_tenant_reports_failure_and_writes_nothing_else(self) -> None:
@@ -1027,14 +1027,14 @@ class TestControlStateWrite:
     async def test_write_failure_returns_false_instead_of_raising(self) -> None:
         """不 fail-open、也不抛：抛会把"通知人"变成能打断收尾的东西，fail-open 则是说谎。"""
         pool = _FakePool(write_error=True)
-        assert await _ledger(pool=pool).pause_for_budget("rs_root", "t1") is False
+        assert await _ledger(pool=pool).pause_for_budget("rs_root", 1) is False
 
     async def test_noop_change_does_not_touch_the_database(self) -> None:
         pool = _FakePool()
-        assert await _ledger(pool=pool).set_control("rs_root", "t1") is True
+        assert await _ledger(pool=pool).set_control("rs_root", 1) is True
         assert pool.calls == [], "什么都没要改，不该假装写了一次"
 
-    @pytest.mark.parametrize("root,tenant", [("", "t1"), ("rs_root", ""), ("bad\troot", "t1")])
+    @pytest.mark.parametrize("root,tenant", [("", 1), ("rs_root", 0), ("bad\troot", 1)])
     async def test_unusable_keys_never_reach_the_database(self, root: str, tenant: str) -> None:
         pool = _FakePool()
         assert await _ledger(pool=pool).set_control(root, tenant, paused=True) is False
@@ -1237,7 +1237,7 @@ class TestRunnerWiring:
             gateway=object(),
             store=_Store(),  # type: ignore[arg-type]
             parent_session_id="s-main",
-            tenant_id="t1",
+            tenant_id=1,
             user_id="u1",
             budget=TaskBudget(tokens=budget_tokens),
         )
@@ -1315,7 +1315,7 @@ class TestRunnerWiring:
             gateway=object(),
             store=store_mod.SubagentRunStore(object()),  # type: ignore[arg-type]
             parent_session_id="s-main",
-            tenant_id="t1",
+            tenant_id=1,
             budget=TaskBudget(tokens=1000),
         )
         await asyncio.wait_for(
@@ -1344,7 +1344,7 @@ class TestRunnerWiring:
         assert kinds == ["reserve", "project", "settle"], "顺序也是口径：预留要一直活着到收尾"
         assert len(seen["flushes"]) == 1
         (proj,) = [c for c in seen["ledger_calls"] if c[0] == "project"]
-        assert proj[1:3] == ("rs_root", "t1")
+        assert proj[1:3] == ("rs_root", 1)
         assert proj[3] == seen["task_id"], "member 与 reserve 用同一个键（task.id）"
         assert proj[4] == f"{seen['task_id']}{_TAB}200000", "带进去的是派发时那份 seed"
         assert proj[5:7] == (15, 200_000), "spent = 这一段看到的用量，cap = per-run token 上限"
@@ -1374,7 +1374,7 @@ class TestRunnerWiring:
     def _state(self, *, cap: int = 1000, settled: int = 1000) -> LineState:
         return LineState(
             root="rs_root",
-            tenant_id="t1",
+            tenant_id=1,
             cap=cap,
             settled=settled,
             reserved=0,
@@ -1389,7 +1389,7 @@ class TestRunnerWiring:
         seen = await self._drive(
             monkeypatch, store_root="rs_root", ledger=stub, error="budget_exceeded:line_tokens"
         )
-        assert [c for c in seen["ledger_calls"] if c[0] == "pause"] == [("pause", "rs_root", "t1")]
+        assert [c for c in seen["ledger_calls"] if c[0] == "pause"] == [("pause", "rs_root", 1)]
         # 票上的"已花"要包含刚刚落库的这一段 ⇒ 暂停/挂票必须排在 settle 之后，
         # 否则用户按一个偏小的数字提额，下一段立刻又被拦下。
         kinds = [c[0] for c in seen["ledger_calls"]]
@@ -1400,7 +1400,7 @@ class TestRunnerWiring:
         assert ticket["kind"] == "budget"
         # 票落在**父会话**：合成会话 `sub:<父>:<run>` 没有待办列表 —— 用户看不见就等于线永远停着
         assert ticket["session_id"] == "s-main"
-        assert (ticket["tenant_id"], ticket["user_id"]) == ("t1", "u1")
+        assert (ticket["tenant_id"], ticket["user_id"]) == (1, "u1")
         # 合成 tool_call_id：一条线只有一张未决提额票（靠 ux_pending_interactions_open 去重）
         assert ticket["tool_call_id"] == "budget:rs_root"
         req = ticket["request"]
@@ -1616,13 +1616,13 @@ class TestRealRedisSemantics:
         root = _root_id("ex")
         led = self._ledger(redis_client)
         # 句柄三段：member、tokens、持有者实例 id（M17）—— 第三段是清扫与 drain 的匹配键
-        assert await led.reserve(root, "t1", "sub_a", 100) == f"sub_a{_TAB}100{_TAB}{self.HOLDER}"
-        assert await led.reserve(root, "t1", "sub_b", 250) == f"sub_b{_TAB}250{_TAB}{self.HOLDER}"
-        state = await led.state(root, "t1", exclude_run_id="sub_a")
+        assert await led.reserve(root, 1, "sub_a", 100) == f"sub_a{_TAB}100{_TAB}{self.HOLDER}"
+        assert await led.reserve(root, 1, "sub_b", 250) == f"sub_b{_TAB}250{_TAB}{self.HOLDER}"
+        state = await led.state(root, 1, exclude_run_id="sub_a")
         assert state is not None
         # 350 里减去自己那 100 ⇒ 250：自己的花销按**实际 token** 计，预留不能再算一遍
         assert state.reserved == 250
-        other = await led.state(root, "t1", exclude_run_id="sub_b")
+        other = await led.state(root, 1, exclude_run_id="sub_b")
         assert other is not None and other.reserved == 100
 
     async def test_expired_reservations_are_purged_and_the_key_gone(self, redis_client) -> None:
@@ -1630,7 +1630,7 @@ class TestRealRedisSemantics:
         key = _rkey(f"subagent:line:{root}:rsv")
         await redis_client.zadd(key, {f"sub_dead{_TAB}9999": int(time.time()) - 1})
         led = self._ledger(redis_client)
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.reserved == 0
         # 空了就把键删掉：留着"存在但为 0"的键会让排障时看不清这条线到底有没有在途
         assert await redis_client.exists(key) == 0
@@ -1638,17 +1638,17 @@ class TestRealRedisSemantics:
     async def test_live_reservation_survives_a_purge(self, redis_client) -> None:
         root = _root_id("live")
         led = self._ledger(redis_client)
-        assert await led.reserve(root, "t1", "sub_a", 77)
-        state = await led.state(root, "t1")
+        assert await led.reserve(root, 1, "sub_a", 77)
+        state = await led.state(root, 1)
         assert state is not None and state.reserved == 77
 
     async def test_settle_releases_the_handle(self, redis_client) -> None:
         root = _root_id("settle")
         led = self._ledger(redis_client)
-        a = await led.reserve(root, "t1", "sub_a", 60)
-        b = await led.reserve(root, "t1", "sub_b", 40)
+        a = await led.reserve(root, 1, "sub_a", 60)
+        b = await led.reserve(root, 1, "sub_b", 40)
         await led.settle(root, a, 0)
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.reserved == 40
         await led.settle(root, b, 0)
         assert await redis_client.exists(_rkey(f"subagent:line:{root}:rsv")) == 0
@@ -1661,13 +1661,13 @@ class TestRealRedisSemantics:
         store = _FakeStore(usage=(500, 2))
         pool = _FakePool()
         led = LineLedger(redis=redis_client, pool=pool, store=store)
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.settled == 500
         assert await redis_client.get(key) == "500"
         assert await redis_client.ttl(key) > 0
 
         store.usage = (9999, 9)  # 若再去问 PG，这里就会变
-        state2 = await led.state(root, "t1")
+        state2 = await led.state(root, 1)
         assert state2 is not None and state2.settled == 500
         assert len(store.calls) == 1
 
@@ -1678,7 +1678,7 @@ class TestRealRedisSemantics:
         key = _rkey(f"subagent:line:{root}:used")
         await redis_client.set(key, "888", ex=60)
         led = LineLedger(redis=redis_client, pool=_FakePool(), store=_FakeStore(usage=(10, 1)))
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.settled == 888
         assert await redis_client.get(key) == "888"
         await redis_client.delete(key)
@@ -1702,8 +1702,8 @@ class TestRealRedisSemantics:
     async def test_run_id_with_a_tab_cannot_poison_the_ledger(self, redis_client) -> None:
         root = f"bad{_TAB}root"
         led = self._ledger(redis_client, usage=(1, 1))
-        assert await led.state(root, "t1") is None
-        assert await led.reserve(root, "t1", f"x{_TAB}9", 5) == ""
+        assert await led.state(root, 1) is None
+        assert await led.reserve(root, 1, f"x{_TAB}9", 5) == ""
         await led.settle(root, f"x{_TAB}9", 5)  # 不抛
         assert await redis_client.exists(_rkey(f"subagent:line:{root}:rsv")) == 0
 
@@ -1724,7 +1724,7 @@ class TestRealRedisSemantics:
             {f"sub_new{_TAB}1000{_TAB}engine-Z": until, f"sub_old{_TAB}5": until},
         )
         try:
-            state = await self._ledger(redis_client).state(root, "t1")
+            state = await self._ledger(redis_client).state(root, 1)
             assert state is not None and state.reserved == 1005
         finally:
             await redis_client.delete(key)
@@ -1753,7 +1753,7 @@ class TestRealRedisSemantics:
         hb = il.InstanceLiveness(redis=redis_client, instance_id="engine-self")
         assert await hb.start() is True
         try:
-            state = await self._ledger(redis_client).state(root, "t1")
+            state = await self._ledger(redis_client).state(root, 1)
             assert state is not None and state.reserved == 400, "清扫后的重读口径不对"
             assert sorted(await redis_client.zrange(key, 0, -1)) == sorted(
                 [f"sub_live{_TAB}300{_TAB}engine-peer", f"sub_legacy{_TAB}100"]
@@ -1777,7 +1777,7 @@ class TestRealRedisSemantics:
         until = int(time.time()) + 600
         await redis_client.zadd(key, {f"sub_dead{_TAB}700{_TAB}engine-gone": until})
         try:
-            state = await self._ledger(redis_client).state(root, "t1")
+            state = await self._ledger(redis_client).state(root, 1)
             assert state is not None and state.reserved == 700
             assert await redis_client.zrange(key, 0, -1) == [f"sub_dead{_TAB}700{_TAB}engine-gone"]
         finally:
@@ -1794,10 +1794,10 @@ class TestRealRedisSemantics:
         root = _root_id("proj")
         key = _rkey(f"subagent:line:{root}:rsv")
         led = self._ledger(redis_client)
-        seed = await led.reserve(root, "t1", "sub_a", 200_000)
+        seed = await led.reserve(root, 1, "sub_a", 200_000)
         out = await led.project(
             root,
-            "t1",
+            1,
             member="sub_a",
             handle=seed,
             spent=6_000,
@@ -1806,9 +1806,9 @@ class TestRealRedisSemantics:
         )
         assert out == f"sub_a{_TAB}30000{_TAB}{self.HOLDER}"
         assert await redis_client.zrange(key, 0, -1) == [out]
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.reserved == 30_000, "别的 run 看得见的是投影值"
-        own = await led.state(root, "t1", exclude_run_id="sub_a")
+        own = await led.state(root, 1, exclude_run_id="sub_a")
         assert own is not None and own.reserved == 0, "自己那份仍按实际 token 计，不能再算预留"
         await led.settle(root, out, 0)
         assert await redis_client.exists(key) == 0, "摘干净就该把键收掉"
@@ -1827,7 +1827,7 @@ class TestRealRedisSemantics:
         led = self._ledger(redis_client)
         out = await led.project(
             root,
-            "t1",
+            1,
             member="sub_a",
             handle="",
             spent=1_000,
@@ -1844,20 +1844,20 @@ class TestRealRedisSemantics:
         monkeypatch.setenv("SUBAGENT_LINE_PROJECTION", "enforce")
         root = _root_id("projpeer")
         led = self._ledger(redis_client)
-        assert await led.reserve(root, "t1", "sub_a", 200_000)
-        peer = await led.reserve(root, "t1", "sub_b", 50_000)
+        assert await led.reserve(root, 1, "sub_a", 200_000)
+        peer = await led.reserve(root, 1, "sub_b", 50_000)
         out = await led.project(
             root,
-            "t1",
+            1,
             member="sub_a",
             handle=f"sub_a{_TAB}200000{_TAB}{self.HOLDER}",
             spent=6_000,
             elapsed_seconds=30,
             per_run_cap=200_000,
         )
-        state = await led.state(root, "t1", exclude_run_id="sub_b")
+        state = await led.state(root, 1, exclude_run_id="sub_b")
         assert state is not None and state.reserved == 30_000, "剔掉 sub_b 后只剩重述过的那条"
-        both = await led.state(root, "t1")
+        both = await led.state(root, 1)
         assert both is not None and both.reserved == 80_000
         await led.settle(root, out, 0)
         await led.settle(root, peer, 0)
@@ -1877,7 +1877,7 @@ class TestRealRedisSemantics:
         led = self._ledger(redis_client)
         out = await led.project(
             root,
-            "t1",
+            1,
             member="sub_a",
             handle=f"sub_a{_TAB}1000{_TAB}{self.HOLDER}",
             spent=8_000,
@@ -1894,8 +1894,8 @@ class TestRealRedisSemantics:
         key_a = _rkey(f"subagent:line:{root_a}:rsv")
         key_b = _rkey(f"subagent:line:{root_b}:rsv")
         led = self._ledger(redis_client)
-        assert await led.reserve(root_a, "t1", "sub_a", 60)
-        assert await led.reserve(root_b, "t1", "sub_b", 90)
+        assert await led.reserve(root_a, 1, "sub_a", 60)
+        assert await led.reserve(root_b, 1, "sub_b", 90)
         peer = f"sub_peer{_TAB}700{_TAB}engine-Z"
         await redis_client.zadd(key_a, {peer: int(time.time()) + 600})
 
@@ -1903,7 +1903,7 @@ class TestRealRedisSemantics:
         assert await redis_client.zrange(key_a, 0, -1) == [peer], "drain 不能越走别人的预留"
         # 摘空就把键收掉：root_b 上只剩本实例那一条
         assert await redis_client.exists(key_b) == 0
-        state = await led.state(root_a, "t1")
+        state = await led.state(root_a, 1)
         assert state is not None and state.reserved == 700
         # 登记簿当场清空：同一次关机里重复 drain 不该把"已经还掉的"再报一遍
         assert await led.drain(self.HOLDER) == 0
@@ -1936,7 +1936,7 @@ class TestRealPostgresLedger:
         return root
 
     async def _set_ledger(
-        self, root: str, *, tenant: str = "t1", cap: int = 0,
+        self, root: str, *, tenant: str = 1, cap: int = 0,
         paused: bool = False, reason: str | None = None,
     ) -> None:
         from app.db import get_pool
@@ -1955,7 +1955,7 @@ class TestRealPostgresLedger:
             root, tenant, cap, paused, reason,
         )
 
-    async def _seed_run(self, root: str, *, tenant: str = "t1", tokens: int = 100) -> None:
+    async def _seed_run(self, root: str, *, tenant: str = 1, tokens: int = 100) -> None:
         from app.db import get_pool
 
         await get_pool().execute(
@@ -1983,7 +1983,7 @@ class TestRealPostgresLedger:
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000000")
         root = self._root("default")
         await self._seed_run(root, tokens=50)
-        state = await (await self._ledger()).state(root, "t1")
+        state = await (await self._ledger()).state(root, 1)
         assert state is not None
         assert (state.settled, state.cap, state.paused) == (50, 1000000, False)
 
@@ -1993,8 +1993,8 @@ class TestRealPostgresLedger:
         await self._set_ledger(root, cap=120)
         await self._seed_run(root, tokens=100)
         led = await self._ledger()
-        assert await led.check(root, "t1", own_tokens=19) == ""
-        assert await led.check(root, "t1", own_tokens=20) == "line_tokens"
+        assert await led.check(root, 1, own_tokens=19) == ""
+        assert await led.check(root, 1, own_tokens=20) == "line_tokens"
 
     async def test_default_cap_applies_when_the_row_is_absent(self, monkeypatch) -> None:
         """没有行 ⇒ 用 env 默认（不是"不限"）—— 缺陷正文要拦的就是"没人给它设过上限"。"""
@@ -2005,8 +2005,8 @@ class TestRealPostgresLedger:
         # 140（已结算）+ 10（own）= 150，**正好触界**（判据是 `charged >= cap`）。
         # 原写的是 `own_tokens=9` ⇒ 149 < 150 并不越界，用例一直在断言一个算不出来的
         # 结果。它是 `integration` 标记，在真库出现之前从没跑过 ⇒ 一直没暴露。
-        assert await led.check(root, "t1", own_tokens=10) == "line_tokens"
-        assert await led.check(root, "t1", own_tokens=8) == ""
+        assert await led.check(root, 1, own_tokens=10) == "line_tokens"
+        assert await led.check(root, 1, own_tokens=8) == ""
 
     async def test_default_of_zero_disables_the_axis(self, monkeypatch) -> None:
         """默认也可以是"整条线闸门关掉"：``SUBAGENT_LINE_MAX_TOKENS=0``。"""
@@ -2014,16 +2014,16 @@ class TestRealPostgresLedger:
         root = self._root("nocap")
         await self._seed_run(root, tokens=10**6)
         led = await self._ledger()
-        assert await led.check(root, "t1", own_tokens=10**6) == ""
+        assert await led.check(root, 1, own_tokens=10**6) == ""
 
     async def test_a_row_for_another_tenant_is_not_readable(self, monkeypatch) -> None:
         """闸门拿到的只是一个 run id：不带租户过滤就能读到别租户抬过的上限。"""
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000")
         root = self._root("cross")
-        await self._set_ledger(root, tenant="t2", cap=CAP_UNLIMITED)  # t2 明确不限
-        await self._seed_run(root, tenant="t1", tokens=900)
-        await self._seed_run(root, tenant="t2", tokens=5000)
-        state = await (await self._ledger()).state(root, "t1")
+        await self._set_ledger(root, tenant=2, cap=CAP_UNLIMITED)  # t2 明确不限
+        await self._seed_run(root, tenant=1, tokens=900)
+        await self._seed_run(root, tenant=2, tokens=5000)
+        state = await (await self._ledger()).state(root, 1)
         assert state is not None
         assert state.cap == 1000, "用的是 t1 的默认，而不是 t2 的'不限'"
         assert state.settled == 900, "求和同样按租户收：t2 那 5000 不该算进 t1 的线"
@@ -2035,7 +2035,7 @@ class TestRealPostgresLedger:
         await self._set_ledger(root, cap=10**9, paused=True, reason="budget_exhausted")
         await self._seed_run(root, tokens=10)
         led = await self._ledger()
-        assert await led.check(root, "t1", own_tokens=0) == "line_paused"
+        assert await led.check(root, 1, own_tokens=0) == "line_paused"
 
     async def test_clearing_pause_lets_the_line_run_again(self, monkeypatch) -> None:
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000")
@@ -2043,9 +2043,9 @@ class TestRealPostgresLedger:
         await self._set_ledger(root, cap=500, paused=True)
         await self._seed_run(root, tokens=100)
         led = await self._ledger()
-        assert await led.check(root, "t1", own_tokens=0) == "line_paused"
+        assert await led.check(root, 1, own_tokens=0) == "line_paused"
         await self._set_ledger(root, cap=500, paused=False)
-        assert await led.check(root, "t1", own_tokens=0) == ""
+        assert await led.check(root, 1, own_tokens=0) == ""
 
     async def test_settled_follows_the_line_not_the_tree(self, monkeypatch) -> None:
         """求和按 ``root_run_id`` ⇒ 同线的多段（续跑 / 嵌套）并进同一个数 —— 这正是缺陷的落点。"""
@@ -2053,7 +2053,7 @@ class TestRealPostgresLedger:
         root = self._root("line")
         await self._seed_run(root, tokens=300)
         await self._seed_run(root, tokens=300)
-        state = await (await self._ledger()).state(root, "t1")
+        state = await (await self._ledger()).state(root, 1)
         assert state is not None and state.settled == 600
 
     async def test_gate_with_real_sum_and_real_mirror(self, monkeypatch, redis_client) -> None:
@@ -2062,13 +2062,13 @@ class TestRealPostgresLedger:
         root = self._root("e2e")
         await self._seed_run(root, tokens=600)
         led = await self._ledger(redis=redis_client)
-        assert await led.check(root, "t1", run_id="sub_me", own_tokens=400) == "line_tokens"
-        handle = await led.reserve(root, "t1", "sub_other", 200)
+        assert await led.check(root, 1, run_id="sub_me", own_tokens=400) == "line_tokens"
+        handle = await led.reserve(root, 1, "sub_other", 200)
         assert handle
-        state = await led.state(root, "t1", exclude_run_id="sub_me")
+        state = await led.state(root, 1, exclude_run_id="sub_me")
         assert state is not None and (state.settled, state.reserved) == (600, 200)
         await led.settle(root, handle, 0)
-        state2 = await led.state(root, "t1", exclude_run_id="sub_me")
+        state2 = await led.state(root, 1, exclude_run_id="sub_me")
         assert state2 is not None and state2.reserved == 0
 
     # ── M15c 写侧：真库里的 ensure + 增量 UPDATE ──
@@ -2081,23 +2081,23 @@ class TestRealPostgresLedger:
         monkeypatch.setenv("SUBAGENT_LINE_MAX_TOKENS", "1000")
         root = self._root("ensure")
         led = await self._ledger()
-        assert await led.pause_for_budget(root, "t1") is True
-        state = await led.state(root, "t1")
+        assert await led.pause_for_budget(root, 1) is True
+        state = await led.state(root, 1)
         assert state is not None
         assert (state.paused, state.pause_reason) == (True, ledger_mod.PAUSE_REASON_BUDGET)
-        assert await led.check(root, "t1", own_tokens=0) == "line_paused"
+        assert await led.check(root, 1, own_tokens=0) == "line_paused"
         row = await get_pool().fetchrow(
             "SELECT tenant_id FROM run_lineage_ledger WHERE root_run_id = $1", root
         )
-        assert row is not None and row["tenant_id"] == "t1"
+        assert row is not None and row["tenant_id"] == 1
 
     async def test_pause_is_idempotent(self) -> None:
         """每个失败段都会按一次暂停键 ⇒ 重复写必须没有副作用（这条线只该停一次）。"""
         root = self._root("idemp")
         led = await self._ledger()
-        assert await led.pause_for_budget(root, "t1") is True
-        assert await led.pause_for_budget(root, "t1") is True
-        assert await led.check(root, "t1") == "line_paused"
+        assert await led.pause_for_budget(root, 1) is True
+        assert await led.pause_for_budget(root, 1) is True
+        assert await led.check(root, 1) == "line_paused"
 
     async def test_raise_cap_and_resume_is_one_decision_with_two_halves(self, monkeypatch) -> None:
         """提额同时清上限、清暂停、清原因并记下是谁抬的 —— 少一半就是"用户答了却没反应"。"""
@@ -2107,16 +2107,16 @@ class TestRealPostgresLedger:
         root = self._root("raise")
         await self._seed_run(root, tokens=900)
         led = await self._ledger()
-        assert await led.pause_for_budget(root, "t1") is True
-        assert await led.check(root, "t1", own_tokens=100) == "line_paused"
+        assert await led.pause_for_budget(root, 1) is True
+        assert await led.check(root, 1, own_tokens=100) == "line_paused"
 
         assert await led.raise_cap_and_resume(
-            root, "t1", cap_tokens=5000, updated_by="u1"
+            root, 1, cap_tokens=5000, updated_by="u1"
         ) is True
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None
         assert (state.cap, state.paused, state.pause_reason) == (5000, False, "")
-        assert await led.check(root, "t1", own_tokens=100) == ""
+        assert await led.check(root, 1, own_tokens=100) == ""
         row = await get_pool().fetchrow(
             "SELECT updated_by FROM run_lineage_ledger WHERE root_run_id = $1", root
         )
@@ -2126,11 +2126,11 @@ class TestRealPostgresLedger:
         """主键只有 `root_run_id`，那条 UPDATE 的租户条件是这条写路径唯一的护栏；
         `ensure` 用 DO NOTHING，也不会替别人的线建一行。"""
         root = self._root("crossw")
-        await self._set_ledger(root, tenant="t1", cap=1000)
+        await self._set_ledger(root, tenant=1, cap=1000)
         led = await self._ledger()
         assert (
-            await led.raise_cap_and_resume(root, "t2", cap_tokens=9_999_999, updated_by="u2")
+            await led.raise_cap_and_resume(root, 2, cap_tokens=9_999_999, updated_by="u2")
             is False
         )
-        state = await led.state(root, "t1")
+        state = await led.state(root, 1)
         assert state is not None and state.cap == 1000, "别租户的线一个字都没被改"

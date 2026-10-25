@@ -452,7 +452,7 @@ class ContextManager:
                     from app.memory.layers import Scope
 
                     scope = Scope(
-                        tenant_id="default",
+                        tenant_id=0,
                         user_id="unknown",
                         session_id="",
                     )

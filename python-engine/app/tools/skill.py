@@ -39,10 +39,10 @@ def _get_store() -> SkillStore:
     有身份时构造带 tenant/user 的 store：读/执行沿 user → 租户 _shared →
     全局 _shared 查找（skill_run 依赖此找到团队共享技能），写默认 user 私有目录。
     """
-    from app.tools.context import get_tenant_id, get_user_id
+    from app.tools.context import get_tenant_id_int, get_user_id
 
     uid = get_user_id()
-    tid = get_tenant_id()
+    tid = get_tenant_id_int()
     if uid or tid:
         try:
             return SkillStore(tenant_id=tid, user_id=uid)

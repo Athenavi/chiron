@@ -187,7 +187,7 @@ class TestFailureIsolation:
 
         with caplog.at_level(logging.WARNING):
             for _ in range(5):
-                assert await store.lineage_usage("rs_root", "t1") is None
+                assert await store.lineage_usage("rs_root", 1) is None
 
         assert caplog.text.count("lineage_usage") == 1
 
@@ -197,14 +197,14 @@ class TestLineageUsageRead:
         pool = _LineagePool()
         pool.usage_rows.append((1200, 3))
         store = SubagentRunStore(pool)
-        assert await store.lineage_usage("rs_root", "t1") == (1200, 3)
+        assert await store.lineage_usage("rs_root", 1) == (1200, 3)
         head, args = pool.calls[-1]
         assert head == _norm(LINEAGE_USAGE_SQL)
-        assert args == ("rs_root", "t1")
+        assert args == ("rs_root", 1)
 
     @pytest.mark.parametrize(
         "root,tenant",
-        [("", "t1"), ("rs_root", ""), ("", "")],
+        [("", 1), ("rs_root", 0), ("", 0)],
         ids=["no-root", "no-tenant", "neither"],
     )
     async def test_missing_key_returns_none_not_zero(self, root: str, tenant: str) -> None:
@@ -220,7 +220,7 @@ class TestLineageUsageRead:
     async def test_unavailable_store_does_not_query(self) -> None:
         store = SubagentRunStore(None)
         assert store.available is False
-        assert await store.lineage_usage("rs_root", "t1") is None
+        assert await store.lineage_usage("rs_root", 1) is None
 
     async def test_row_level_failure_returns_none(self) -> None:
         """列缺失（未迁移）⇒ None，而不是把整个 store 降级。
@@ -230,7 +230,7 @@ class TestLineageUsageRead:
         pool = _LineagePool()
         pool.fail_on.append("FROM subagent_runs WHERE root_run_id = $1")
         store = SubagentRunStore(pool)
-        assert await store.lineage_usage("rs_root", "t1") is None
+        assert await store.lineage_usage("rs_root", 1) is None
         assert store.available is True
 
 
@@ -287,7 +287,7 @@ class TestRunnerWiring:
             store=_Store(),  # type: ignore[arg-type]
             parent_session_id="s-main",
             parent_run_id=explicit_parent,
-            tenant_id="t1",
+            tenant_id=1,
             user_id="u1",
             resumed_from=resumed_from,
             resume_at_step=resume_at_step,
@@ -364,7 +364,7 @@ class TestRealPostgresSemantics:
         root: str | None = "self",
         parent: str | None = None,
         resumed: str | None = None,
-        tenant: str | None = "t1",
+        tenant: str | None = 1,
         tokens: tuple[int, int] = (0, 0),
     ) -> str:
         from app.db import get_pool
@@ -402,7 +402,7 @@ class TestRealPostgresSemantics:
             run_id=kwargs.pop("run_id"),
             root_session_id="s-lineage",
             task="派一件活",
-            tenant_id=kwargs.pop("tenant_id", "t1"),
+            tenant_id=kwargs.pop("tenant_id", 1),
             **kwargs,
         )
 
@@ -465,13 +465,13 @@ class TestRealPostgresSemantics:
         other_line = await self._seed(tokens=(500, 500))
         store = SubagentRunStore(get_pool())
 
-        tokens, runs = await store.lineage_usage(line, "t1")
+        tokens, runs = await store.lineage_usage(line, 1)
         assert (tokens, runs) == (180, 2)
 
         # 缺租户 ⇒ None（问不出来），不是 (0, 0)
         assert await store.lineage_usage(line, "") is None
         # 别的线读不到这条线的行
-        assert await store.lineage_usage(other_line, "t1") == (1000, 1)
+        assert await store.lineage_usage(other_line, 1) == (1000, 1)
 
         for rid in (a, b, other_tenant, no_tenant, other_line):
             assert await self._root_of(rid) is not None

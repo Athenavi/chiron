@@ -97,6 +97,7 @@ from app.agent.runtime_types import (
 from app.config import settings
 from app.gateway.errors import is_context_overflow
 from app.gateway.router import GatewayRouter
+from app.tools.context import to_tenant_int
 from app.tools.registry import SOURCE_BUILTIN, SOURCE_MCP
 from app.tools.registry import registry as local_tool_registry
 
@@ -1095,7 +1096,7 @@ class AgentRuntime:
             from app.agent.resume import load_resume_state
 
             return await load_resume_state(
-                tenant_id=task.tenant_id or "",
+                tenant_id=task.tenant_id or 0,
                 session_id=task.session_id or "",
                 run_token=getattr(task, "run_token", "") or "",
             )
@@ -1382,14 +1383,14 @@ class AgentRuntime:
                     from app.memory.layers import Scope
 
                     memory_scope = Scope(
-                        tenant_id=task.tenant_id or "default",
+                        tenant_id=task.tenant_id or 0,
                         user_id=task.user_id,
                         session_id=task.session_id,
                         project=(task.workbench_context or {}).get("project") or "",
                     )
                     session_ctx = await self._memory.on_session_start(
                         session_id=task.session_id,
-                        tenant_id=task.tenant_id or "default",
+                        tenant_id=task.tenant_id or 0,
                         user_id=task.user_id,
                         entry_channel=(
                             task.llm_config.get("entry_channel", "web")
@@ -1420,7 +1421,7 @@ class AgentRuntime:
                     from app.memory.layers import Scope
 
                     scope = memory_scope or Scope(
-                        tenant_id=task.tenant_id or "default",
+                        tenant_id=task.tenant_id or 0,
                         user_id=task.user_id,
                         session_id=task.session_id or "",
                         project=(task.workbench_context or {}).get("project") or "",
@@ -2903,7 +2904,7 @@ class AgentRuntime:
                 decision = await broker.authorize(
                     tool_name,
                     targs or {},
-                    tenant_id=getattr(task, "tenant_id", ""),
+                    tenant_id=to_tenant_int(getattr(task, "tenant_id", 0)),
                     user_id=getattr(task, "user_id", ""),
                     session_id=getattr(task, "session_id", ""),
                     tool_call_id=tool_call.get("id") or tool_name,
@@ -3092,7 +3093,7 @@ class AgentRuntime:
         from app.agent import interactions
 
         return await interactions.consume_grant(
-            tenant_id=task.tenant_id or "",
+            tenant_id=task.tenant_id or 0,
             session_id=task.session_id or "",
             kind=kind,
             tool_name=tool_name,
@@ -3123,7 +3124,7 @@ class AgentRuntime:
         from app.agent import interactions
 
         interaction_id = await interactions.create(
-            tenant_id=getattr(task, "tenant_id", "") or "",
+            tenant_id=to_tenant_int(getattr(task, "tenant_id", 0)),
             user_id=getattr(task, "user_id", "") or "",
             session_id=getattr(task, "session_id", "") or "",
             kind=kind,
@@ -3702,7 +3703,7 @@ class AgentRuntime:
             task_meta=_resume_task_meta(task),
         )
         await checkpoint_mod.save(
-            tenant_id=task.tenant_id or "",
+            tenant_id=task.tenant_id or 0,
             session_id=task.session_id,
             checkpoint=snapshot,
             # run_token 必须落库：接管 CAS 靠它判定"要接管的正是我看到的那个 run"
@@ -3723,7 +3724,7 @@ class AgentRuntime:
             from app.agent import checkpoint as checkpoint_mod
 
             await checkpoint_mod.mark(
-                tenant_id=task.tenant_id or "",
+                tenant_id=task.tenant_id or 0,
                 session_id=task.session_id,
                 status=status,
                 run_token=getattr(task, "run_token", "") or "",
