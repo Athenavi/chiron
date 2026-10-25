@@ -154,7 +154,11 @@ class AuthMiddleware(BaseHTTPMiddleware):
             return await call_next(request)
 
         if internal and query_tid and query_uid:
-            return await self._set_tenant_and_continue(request, call_next, int(query_tid))
+            # tenant_id 列是 smallint：用宽容解析（to_tenant_int）而非 int() ——
+            # 后者遇到非数字 tenant（旧数据 / 测试夹具）会抛 ValueError 直接 500。
+            from app.tools.context import to_tenant_int
+
+            return await self._set_tenant_and_continue(request, call_next, to_tenant_int(query_tid))
 
         if has_query_identity:
             if not internal:
@@ -224,7 +228,9 @@ class AuthMiddleware(BaseHTTPMiddleware):
         try:
             payload = jwt.decode(token, self._jwt_secret, algorithms=["HS256"])
             tid_raw = payload.get("tenant_id")
-            tid = int(tid_raw) if tid_raw else 0
+            from app.tools.context import to_tenant_int
+
+            tid = to_tenant_int(tid_raw)
             if not tid:
                 logger.warning("JWT missing tenant_id claim, rejecting")
                 return None
