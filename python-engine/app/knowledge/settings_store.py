@@ -25,6 +25,7 @@ from app.knowledge.providers.base import (
     STATUS_ERROR,
     is_known_provider,
 )
+from app.tools.context import to_tenant_int
 
 logger = logging.getLogger(__name__)
 

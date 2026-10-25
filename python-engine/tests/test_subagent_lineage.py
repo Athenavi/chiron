@@ -461,7 +461,8 @@ class TestRealPostgresSemantics:
         a = await self._seed(root=line, tokens=(100, 50))
         b = await self._seed(root=line, tokens=(20, 10))
         other_tenant = await self._seed(root=line, tokens=(7, 7), tenant=2)
-        no_tenant = await self._seed(root=line, tokens=(999, 999), tenant=None)
+        # 不构造 tenant=NULL 的行：subagent_runs.tenant_id 是 NOT NULL（0001 baseline），
+        # 插 NULL 会直接违反约束。缺租户的语义由下面 lineage_usage(line, "") 覆盖。
         other_line = await self._seed(tokens=(500, 500))
         store = SubagentRunStore(get_pool())
 
@@ -473,5 +474,5 @@ class TestRealPostgresSemantics:
         # 别的线读不到这条线的行
         assert await store.lineage_usage(other_line, 1) == (1000, 1)
 
-        for rid in (a, b, other_tenant, no_tenant, other_line):
+        for rid in (a, b, other_tenant, other_line):
             assert await self._root_of(rid) is not None
