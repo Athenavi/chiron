@@ -1,15 +1,19 @@
-# Chiron Desktop —— 三端打包
+# Chiron Desktop —— 三端打包并发布
 #
 # 为什么必须是矩阵而不是单 job 交叉编译：
-#   electron-builder 不能跨平台出包（Linux 上打不出 macOS 的 .dmg / .app 签名链），
+#   electron-builder 不能跨平台出包（Linux 上打不出 macOS 的 .dmg / 签名链），
 #   所以 Windows / macOS / Linux 各跑一个原生 runner。
 #
 # 触发：
-#   打 tag（v*）→ 出三端产物并上传 artifact
-#   手动 workflow_dispatch → 同样出包，便于验收
+#   push tag（v*）        → 三端出包 + 建 GitHub Release + 挂上产物
+#   workflow_dispatch     → 三端出包，只传 artifact，不发 Release
 #
-# 注意：签名与公证不在本工作流内完成（需要 Apple Developer 证书与 Windows EV 证书）。
-# 未配置证书时 electron-builder 会产出未签名包 —— 可自用，不可公开分发。
+# 版本号是唯一真相在 tag 上：推 v0.1.261025.01 时，
+# 打包前会把 frontend-vue/package.json 的 version 改写成 0.1.261025.01，
+# 这样安装包文件名、app 内 version、Release 标题三者一致。
+#
+# 签名与公证不在本工作流内完成（需要 Apple Developer 证书与 Windows EV 证书）。
+# 未配置证书时 electron-builder 产出未签名包 —— 可自用，不可公开分发。
 name: Desktop
 
 on:
@@ -20,6 +24,9 @@ on:
 concurrency:
   group: desktop-${{ github.ref }}
   cancel-in-progress: true
+
+permissions:
+  contents: write # Release 需要
 
 jobs:
   build:
@@ -39,6 +46,17 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # 从 tag 推出版本号；手动触发时留空，保持 package.json 原值
+      - name: Derive version from tag
+        id: ver
+        shell: bash
+        run: |
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
+          else
+            echo "version=" >> "$GITHUB_OUTPUT"
+          fi
+
       - uses: pnpm/action-setup@v4
         with:
           version: 10
@@ -49,15 +67,14 @@ jobs:
           cache: pnpm
           cache-dependency-path: frontend-vue/pnpm-lock.yaml
 
-      # Electron 二进制从 GitHub Releases 拉取；在 CI 里通常比本地网络稳定，
-      # 若 runner 所在区域受限，可解注下面的镜像变量。
       - name: Install dependencies
         working-directory: frontend-vue
         run: pnpm install --frozen-lockfile
+        # 若 runner 所在区域拉不到 Electron，解注下面这行
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # 先跑门禁再打包：九项 UI 契约 + 类型 + 单测，任何一项红了都不该出安装包
+      # 先跑门禁再打包：任何一项红了都不该出安装包
       - name: Check UI contracts
         working-directory: frontend-vue
         run: pnpm check:ui
@@ -74,11 +91,41 @@ jobs:
         working-directory: frontend-vue
         run: pnpm exec vite build
 
+      # tag 是版本号的唯一真相：改写 package.json，让产物名 / app version / Release 标题一致
+      - name: Stamp version into package.json
+        if: steps.ver.outputs.version != ''
+        working-directory: frontend-vue
+        shell: bash
+        env:
+          VERSION: ${{ steps.ver.outputs.version }}
+        run: |
+          node -e "
+            const fs = require('fs');
+            const p = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const before = p.version;
+            p.version = process.env.VERSION;
+            fs.writeFileSync('package.json', JSON.stringify(p, null, 2) + '\n');
+            console.log('version: ' + before + ' -> ' + p.version);
+          "
+
+      # 图标缺失时 electron-builder 不报错，会静默用 Electron 默认图标。
+      # 这里提前断言，让缺资产在 CI 里直接红掉，而不是等用户装上发现是默认图标。
+      - name: Verify icon assets
+        shell: bash
+        run: |
+          for f in frontend-vue/electron/resources/icon.ico \
+                   frontend-vue/electron/resources/icon.png; do
+            if [[ ! -s "$f" ]]; then
+              echo "::error::missing or empty: $f"
+              exit 1
+            fi
+            echo "ok  $f  $(wc -c < "$f") bytes"
+          done
+
       - name: Package desktop app
         working-directory: frontend-vue
         run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
         env:
-          # 未提供证书时 electron-builder 会跳过签名，不报错
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Upload artifacts
@@ -93,3 +140,39 @@ jobs:
             frontend-vue/release/*.deb
             frontend-vue/release/*.blockmap
             frontend-vue/release/*.yml
+
+  release:
+    name: publish release
+    needs: build
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    steps:
+      # 必须 fetch-depth: 0 —— checkout 默认只拉 1 个 commit，
+      # 读不到 prevTag..curTag 之间的提交，变更说明就会是空的。
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+
+      - name: List collected files
+        run: ls -lh artifacts
+
+      # 从上个 tag 到本次 tag 的提交生成变更说明（Conventional Commits 分类）
+      - name: Generate changelog from git history
+        run: |
+          node .github/scripts/changelog.mjs "$GITHUB_REF_NAME" > changelog.md
+          echo '--- changelog preview ---'
+          cat changelog.md
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          name: Chiron ${{ github.ref_name }}
+          tag_name: ${{ github.ref_name }}
+          body_path: changelog.md
+          generate_release_notes: false # 用我们自己的说明，不要 GitHub 的 PR 摘要
+          draft: true # 先存为草稿，人工确认签名状况后再公开
+          files: artifacts/**/*
