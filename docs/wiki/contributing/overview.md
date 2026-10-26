@@ -1,6 +1,6 @@
 # 贡献与验收
 
-> **权威来源**：`docs/contributing.md`（贡献与验收流程）。本页只给「改完代码要过什么、怎么自查」。
+> **权威来源**：[CONTRIBUTING.md](../../../CONTRIBUTING.md)（贡献与验收流程）。本页只给「改完代码要过什么、怎么自查」。
 
 ## CI 的五个 job
 
@@ -10,12 +10,12 @@
 | `python` | `python-engine/` | `ruff check .` · `mypy app/ acp_adapter/`（strict）· `python -m pytest -q -m "not integration"` |
 | `frontend` | `frontend-vue/` | `pnpm run lint` · `pnpm run build`（`check:ui` 棘轮 → `vue-tsc -b` → `vite build`）· `pnpm run test` |
 | `schema` | 仓库根 | `alembic heads` **必须恰好 1 个 head** · 离线渲染 DDL · ORM 生成物与迁移 DDL 一致 |
-| `encoding` | 仓库根 | **八个根守卫**（见下） |
+| `encoding` | 仓库根 | **仓库根守卫**（见下） |
 
 **本机真实栈**：`integration` 标记的用例需要真 PostgreSQL + Redis，还要**把网关也起起来**
-（引擎侧统一客户端会走网关的 `/v1/internal/*`）—— 步骤见 `docs/contributing.md` §本机真实栈。
+（引擎侧统一客户端会走网关的 `/v1/internal/*`）—— 步骤见 [CONTRIBUTING.md](../../../CONTRIBUTING.md) §本机真实栈。
 
-## 八个根守卫（提交前自己先跑一遍）
+## 仓库根守卫（提交前自己先跑一遍）
 
 ```bash
 python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8 / UTF-8 BOM
@@ -49,4 +49,4 @@ python scripts/check_compose_env.py          # compose 必填变量必须在 .en
 ## 延伸阅读
 
 - [设计理念](../getting-started/philosophy.md) —— 为什么纪律要变成门禁
-- `docs/contributing.md` —— 完整流程（含 mypy strict 接线手册）
+- [CONTRIBUTING.md](../../../CONTRIBUTING.md) —— 完整流程（含 mypy strict 维护手册）

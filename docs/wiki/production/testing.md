@@ -1,6 +1,6 @@
 # 生产使用：测试与评测
 
-> **权威来源**：`docs/contributing.md`（CI 五个 job）· `python-engine/evals/README.md`（评测套件）·
+> **权威来源**：[CONTRIBUTING.md](../../../CONTRIBUTING.md)（CI 五个 job）· `python-engine/evals/README.md`（评测套件）·
 > [transcript 契约](../../transcript-contract.md)（这块怎么测）。
 
 ## 四层测试，各管一段

@@ -17,12 +17,12 @@ frontend-vue/src/
   router/         路由与进度条
   types/          共享类型
   style.css       全局样式与 .chat-* 原语（为什么这么写见 style.md）
-frontend-vue/scripts/   check:ui 的 8 道棘轮（check-*.mjs）
+frontend-vue/scripts/   check:ui 的 9 个契约守卫（check-*.mjs）
 ```
 
-## 门禁：`check:ui` 八道棘轮
+## 门禁：`check:ui` 契约守卫
 
-`pnpm run build` 会依次跑 **`check:ui`（8 道棘轮）→ `vue-tsc -b` → `vite build`**：
+`pnpm run build` 会依次跑 **`check:ui`（9 个契约守卫）→ `vue-tsc -b` → `vite build`**：
 
 | 棘轮 | 守什么 |
 |---|---|
@@ -32,6 +32,7 @@ frontend-vue/scripts/   check:ui 的 8 道棘轮（check-*.mjs）
 | `check-i18n` / `check-i18n-keys` | 文案不许硬编码；三语言键集一致 |
 | `check-a11y` | 机械 a11y 规则 |
 | `check-transcript-scroll` | **`scrollTop` 单写者**（源码级；见 [transcript](transcript.md)） |
+| `check-rtl-logical` | RTL 逻辑属性（禁止物理左右方向） |
 
 **基线全部为空、新增即失败** —— 遇到红先判断是"新增"还是"基线该缩小"，**不要调大基线**。
 

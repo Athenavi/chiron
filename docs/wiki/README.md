@@ -27,7 +27,7 @@
 | [架构](core/architecture.md) | 三层与请求链路、目录结构、**契约索引** |
 | [Go 网关](core/gateway.md) | 鉴权 / 路由 / SSE / 运行锁 / 计费；`internal/` 14 个子域 |
 | [Python 引擎](core/engine.md) | agent 循环 / 工具 / 子 Agent / RAG / 工作流 / 记忆 |
-| [Vue 前端](core/frontend.md) | 代码分布 + **`check:ui` 八道棘轮** |
+| [Vue 前端](core/frontend.md) | 代码分布 + **`check:ui` 契约守卫** |
 | [会话与运行时状态](core/sessions.md) | 历史 / 事件流 / 运行状态 / checkpoint 四样东西 |
 | [Transcript](core/transcript.md) | 消息列表契约、7 个纯几何模块、**单写者门禁** |
 | [工具与审批](core/tools.md) | 工具面、**两侧策略同构**、审批与 `toolsMode` |
@@ -68,7 +68,7 @@
 
 | 页 | 内容 |
 |---|---|
-| [贡献与验收](contributing/overview.md) | CI 五个 job、**八个根守卫**、自查清单 |
+| [贡献与验收](contributing/overview.md) | CI 五个 job、**仓库根守卫**、自查清单 |
 
 ## 同步到 GitHub Wiki
 

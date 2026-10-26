@@ -64,8 +64,7 @@
   从而跳过 `users` 上无索引的存在性查询（原先是一次全表扫描）。它**只做快速否定**，
   真相源是新增的 `users(tenant_id, email)` 唯一索引（迁移 `0002_users_tenant_email_unique`，
   对存量重复数据 fail-fast）；预热在后台异步完成，完成前与跨副本同步滞后时一律回落 DB 判重。
-  开关 `EMAIL_BLOOM_FILTER_ENABLED`（默认开）、`EMAIL_BLOOM_CAPACITY`、`EMAIL_BLOOM_FP_RATE`；
-  设计说明见 `docs/email-bloom-filter-design.md`。
+  开关 `EMAIL_BLOOM_FILTER_ENABLED`（默认开）、`EMAIL_BLOOM_CAPACITY`、`EMAIL_BLOOM_FP_RATE`。
 
 ### 变更
 
@@ -75,7 +74,7 @@
 - **`tenant_id` 统一为 `smallint`**：44 个 `tenant_id` 列（原混用 `varchar(36/50/64)`）与
   `tenants.id`（改为 `smallserial`）统一为 2 字节整数，并补 `NOT NULL`。Go 侧
   `DefaultTenantID`/JWT `Claims.TenantID`/各结构体字段改为 `int16`；Python 引擎的 SQL 参数与
-  Pydantic 字段、前端 TS 类型同步跟进。设计说明见 `docs/tenant-id-smallint-migration.md`。
+  Pydantic 字段、前端 TS 类型同步跟进。
 - **`system_settings` 补 `UNIQUE(category, key)`**（迁移 `0003_system_settings_key_unique`）：
   原先只有 `id` 主键、靠代码"先查后写"保证唯一，并发写可能插出重复键。迁移先检测存量重复、
   有则 **fail-fast 并列出冲突**，不静默删数据。全链已在真实 PostgreSQL 18.1 上实跑验证

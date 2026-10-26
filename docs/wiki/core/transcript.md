@@ -41,5 +41,5 @@
 
 ## 延伸阅读
 
-- [前端](frontend.md) —— 8 道棘轮
+- [前端](frontend.md) —— 契约守卫
 - [生产：测试](../production/testing.md) —— 这块怎么测（jsdom + 事件序列）

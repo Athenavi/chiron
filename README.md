@@ -143,7 +143,7 @@ make dev-up                               # 容器一键起（单副本）；mak
 > 显式排除该目录，手动执行 `go build` / `go test` / `go vet` 时同样需要 `-mod=mod`。
 
 > 以上命令是本地速查；**提交前验收请以 CI 为准**，逐条对应关系见
-> [贡献与验收流程](docs/contributing.md)。
+> [贡献与验收流程](CONTRIBUTING.md)。
 
 ## 目录结构
 
@@ -189,7 +189,7 @@ python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：�
 ## 贡献
 
 本地验收命令与 CI 五个 job 的逐条对应、提交信息约定见
-[贡献与验收流程](docs/contributing.md)；失败响应的 `code` 契约与三语言同步要求见
+[贡献与验收流程](CONTRIBUTING.md)；失败响应的 `code` 契约与三语言同步要求见
 [错误码契约](docs/error-codes.md)。
 
 ## 许可

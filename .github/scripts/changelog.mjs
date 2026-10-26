@@ -71,6 +71,17 @@ function readCommits(rangeArgs) {
 
 const CONVENTIONAL = /^(\w+)(?:\(([^)]+)\))?(!)?:\s*(.+)$/
 
+/**
+ * GitHub 会把 Release 正文里的裸 `@name` 渲染成用户提及，链到
+ * https://github.com/<name>。提交标题里出现「改用 @master」这类文字时，
+ * 发布说明就会多出一个指向不存在用户的“贡献者”链接。
+ * 用行内代码包住裸 mention：GitHub 不解析 code span 里的 @。
+ * 邮箱（user@example.com）的 @ 前是单词字符，不会命中。
+ */
+function escapeMentions(text) {
+  return text.replace(/(^|[^\w`])@([A-Za-z0-9](?:[A-Za-z0-9-]{0,37}[A-Za-z0-9])?)/g, '$1`@$2`')
+}
+
 function classify(commit) {
   const m = commit.subject.match(CONVENTIONAL)
   const isBreaking = /(^|\n)BREAKING[ -]CHANGE:/.test(commit.body) || Boolean(m?.[3])
@@ -113,7 +124,7 @@ function main() {
       const scope = it.scope ? `**${it.scope}**: ` : ''
       const typePrefix = withType && it.type ? `\`${it.type}\` ` : ''
       const short = it.hash.slice(0, 7)
-      out.push(`- ${typePrefix}${scope}${it.desc}（\`${short}\`）`)
+      out.push(`- ${typePrefix}${scope}${escapeMentions(it.desc)}（\`${short}\`）`)
     }
     out.push('')
   }
@@ -122,7 +133,7 @@ function main() {
     out.push('#### ⚠️ 破坏性变更', '')
     for (const it of breaking) {
       const scope = it.scope ? `**${it.scope}**: ` : ''
-      out.push(`- ${scope}${it.desc}（\`${it.hash.slice(0, 7)}\`）`)
+      out.push(`- ${scope}${escapeMentions(it.desc)}（\`${it.hash.slice(0, 7)}\`）`)
     }
     out.push('')
   }

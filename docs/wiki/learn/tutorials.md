@@ -17,7 +17,7 @@
 ### ③ 把整套测试跑起来（含真实栈）
 
 [贡献与验收](../contributing/overview.md) → [测试与评测](../production/testing.md)
-—— 五个 CI job + 八个根守卫；`integration` 用例需要真 PostgreSQL + Redis，**还要把网关起起来**。
+—— 五个 CI job + 仓库根守卫；`integration` 用例需要真 PostgreSQL + Redis，**还要把网关起起来**。
 
 ## 按主题找入口
 

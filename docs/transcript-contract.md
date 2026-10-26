@@ -142,7 +142,7 @@ MessageList.vue / MessageItem.vue（渲染）
 > 不是"**没有自动化**"。
 
 **§1.1 的单写者另有源码级门禁（2026-10-09）**：`frontend-vue/scripts/check-transcript-scroll.mjs`
-（已接进 `check:ui` ⇒ 7 道棘轮）枚举 `src/**` 下所有 `scrollTop` **赋值**（先剥注释）并逐条归类
+（已接进 `check:ui` ⇒ 契约守卫）枚举 `src/**` 下所有 `scrollTop` **赋值**（先剥注释）并逐条归类
 ——**单写者 / 写的是"别的"容器（必须写明是哪个）/ 测试豁免**，**未归类即失败**，清单过期也失败。
 刻意不用"某文件内不得出现 `scrollTop =`"那种写法：契约管的是**消息列表**，不是所有列表，
 否则会对统一任务模式的 `.unified-list` 假阳性。

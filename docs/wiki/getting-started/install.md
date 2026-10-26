@@ -1,6 +1,6 @@
 # 安装
 
-> **权威来源**：`README.md` §快速开始 / §关键配置 · `docs/contributing.md` §工具链版本。
+> **权威来源**：`README.md` §快速开始 / §关键配置 · [CONTRIBUTING.md](../../../CONTRIBUTING.md) §工具链版本。
 > 本页只给「先装什么、怎么起、卡在哪」，具体命令以那两处为准。
 
 ## 先决条件
@@ -10,7 +10,7 @@
 | **PostgreSQL + pgvector** | 业务库；迁移由 Alembic 管 |
 | **Redis** | 会话事件流 / 锁 / 心跳（多副本一致性的基础） |
 | **S3（云端）/ 自托管 RustFS** | 对象存储（知识库原文 / 媒体）；Milvus 仅记忆层的可选向量后端 |
-| Go / Python / Node + pnpm | 工具链版本见 `docs/contributing.md` §工具链版本 |
+| Go / Python / Node + pnpm | 工具链版本见 [CONTRIBUTING.md](../../../CONTRIBUTING.md) §工具链版本 |
 
 **容器形态里没有数据库**：PostgreSQL 由云厂商或 DBA 维护，**不在 compose 内** ⇒ 必须先把 `DATABASE_DSN`
 指向一个可达且已迁移的库。

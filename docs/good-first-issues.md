@@ -29,15 +29,7 @@
   要么同时存在、要么同时消失。
 - **预计**：1 小时（选删除）
 
-## 4. 理顺 `CONTRIBUTING.md` 与 `docs/contributing.md` 的分工
-
-- **现状**：根目录的 `CONTRIBUTING.md` 面向"怎么参与"，`docs/contributing.md` 是旧的
-  "本地命令 ↔ CI job 对照"，两边有重复的提交前清单。
-- **做什么**：确定分工（根目录=怎么参与；docs=CI 对照与验收口径），删重复段，两边互相链接。
-- **验收**：`python scripts/check_doc_links.py` 绿；两页不再各有一份"提交前命令"清单。
-- **预计**：1–2 小时
-
-## 5. 给 `docs/wiki/` 加一个英文 landing page
+## 4. 给 `docs/wiki/` 加一个英文 landing page
 
 - **现状**：wiki 全中文，README 只有一段英文摘要。
 - **做什么**：新增 `README.en.md`（放在 `docs/wiki/` 下；架构一段 + 5 分钟跑起来 + 链到中文各页），
@@ -45,14 +37,14 @@
 - **验收**：`python scripts/check_doc_links.py` 绿（相对链接会被真实校验）。
 - **预计**：2 小时 · 需要英文写作
 
-## 6. Windows 下的等价开发命令
+## 5. Windows 下的等价开发命令
 
 - **现状**：`Makefile` 依赖 `make` / `test -f` / `rm -rf`，而 Windows 默认没有 `make`。
 - **做什么**：提供 `scripts/dev.ps1`（至少 `check` 与 `dev-up` 两个子命令），在 CONTRIBUTING 里注明。
 - **验收**：Windows 上 `powershell -File scripts/dev.ps1 check` 能跑通 Go build/vet + 4 个文档守卫。
 - **预计**：2–3 小时 · 需要 Windows 环境
 
-## 7. 统一 `scripts/check_*.py` 的帮助与退出码说明
+## 6. 统一 `scripts/check_*.py` 的帮助与退出码说明
 
 - **现状**：几个守卫脚本的 `--list` / `--write-baseline` / 退出码语义不完全一致。
 - **做什么**：统一 `--help` 文案（它拦什么、基线在哪、什么时候才该用 `--write-baseline`），
