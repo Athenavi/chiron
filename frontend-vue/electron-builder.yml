@@ -73,7 +73,9 @@ linux:
   category: Development
   artifactName: ${productName}-${version}-linux-${arch}.${ext}
 
-# 自动更新：先留位，接入时改为真实 feed
-# publish:
-#   provider: generic
-#   url: https://example.invalid/chiron-desktop/
+# 自动更新：electron-updater 从 GitHub Releases 读取 latest*.yml。
+# CI 仍用 --publish never 构建，由 release job 统一上传资产。
+publish:
+  provider: github
+  owner: Athenavi
+  repo: chiron

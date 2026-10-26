@@ -6,7 +6,14 @@ import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
 /** 桌面壳（Electron）在 preload 里注入 chironDesktop.apiUrl；Web 端回落到构建期变量 */
-const desktopHost = (globalThis as { chironDesktop?: { apiUrl?: string; isDesktop?: boolean } }).chironDesktop
+type DesktopHost = {
+  apiUrl?: string
+  isDesktop?: boolean
+  token?: string
+  saveToken?: (token: string) => Promise<unknown>
+  clearToken?: () => Promise<unknown>
+}
+const desktopHost = (globalThis as { chironDesktop?: DesktopHost }).chironDesktop
 export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
 const isDesktop = Boolean(desktopHost?.isDesktop)
 
@@ -16,28 +23,38 @@ const isDesktop = Boolean(desktopHost?.isDesktop)
  * 登录响应体里本来就有 token，桌面端改用它走 Authorization: Bearer
  * （后端 AuthMiddleware 同时支持 cookie 与 Bearer）。
  *
- * token 只在桌面端持久化：Web 继续依赖 httpOnly cookie，不让 XSS 能偷走长期凭据。
+ * token 由主进程用 safeStorage（系统凭据库）加密保存，preload 启动时同步读取一次；
+ * Web 端完全不走这条路径。
  */
-const DESKTOP_TOKEN_KEY = 'chiron_desktop_token'
+const DESKTOP_TOKEN_KEY = 'chiron_desktop_token' // 仅用于迁移上一版明文 token
 let bearerToken = ''
 
-/** 设置当前请求使用的 Bearer token；桌面端同步写入 localStorage，刷新后可恢复 */
+/** 设置当前请求使用的 Bearer token；桌面端交给主进程加密持久化 */
 export function setAuthToken(token: string) {
   bearerToken = token || ''
   if (!isDesktop) return
   try {
-    if (bearerToken) localStorage.setItem(DESKTOP_TOKEN_KEY, bearerToken)
-    else localStorage.removeItem(DESKTOP_TOKEN_KEY)
+    if (bearerToken) void desktopHost?.saveToken?.(bearerToken)
+    else void desktopHost?.clearToken?.()
+    // 升级迁移：上一版把 token 明文放在 localStorage，现在一律清掉
+    localStorage.removeItem(DESKTOP_TOKEN_KEY)
   } catch {
-    /* localStorage 不可用时仅保留内存态，至少本次会话仍可用 */
+    /* 主进程存储不可用时仅保留内存态，至少本次会话仍可用 */
   }
 }
 
 /** 桌面端启动时恢复上次登录的 token；Web 端始终返回空串 */
 export function loadDesktopToken(): string {
   if (!isDesktop) return ''
+  if (desktopHost?.token) return desktopHost.token
+  // 从上一版 localStorage 迁移一次，随后交给主进程加密保存
   try {
-    return localStorage.getItem(DESKTOP_TOKEN_KEY) || ''
+    const legacy = localStorage.getItem(DESKTOP_TOKEN_KEY) || ''
+    if (legacy) {
+      void desktopHost?.saveToken?.(legacy)
+      localStorage.removeItem(DESKTOP_TOKEN_KEY)
+    }
+    return legacy
   } catch {
     return ''
   }

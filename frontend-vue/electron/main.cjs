@@ -22,6 +22,7 @@ const path = require('node:path')
 const { fileURLToPath } = require('node:url')
 const { resolveApiUrl, saveApiUrl, probe } = require('./config.cjs')
 const { API_URL_ARG_PREFIX, DEFAULT_DEV_URL } = require('./shared.cjs')
+const { readToken, writeToken, clearToken } = require('./token-store.cjs')
 
 /** 开发模式：`electron . --dev` 时连 Vite dev server，否则加载 dist/ */
 const isDev = process.argv.includes('--dev')
@@ -258,6 +259,47 @@ function relaunchIntoSetup() {
   forceSetup = false
 }
 
+/**
+ * 打包后才检查更新：开发环境没有 app-update.yml，也没有签名产物。
+ * 更新源在 electron-builder.yml 的 publish 段（GitHub Releases）。
+ */
+function setupAutoUpdater() {
+  if (!app.isPackaged) return
+  let autoUpdater
+  try {
+    ;({ autoUpdater } = require('electron-updater'))
+  } catch (err) {
+    logMain('warn', `electron-updater unavailable: ${err.message}`)
+    return
+  }
+  autoUpdater.autoDownload = true
+  autoUpdater.autoInstallOnAppQuit = true
+  autoUpdater.on('error', err => logMain('warn', `update error: ${err?.message || err}`))
+  autoUpdater.on('update-available', info => logMain('info', `update available: ${info?.version || ''}`))
+  autoUpdater.on('update-not-available', () => logMain('info', 'update not available'))
+  autoUpdater.on('update-downloaded', info => {
+    logMain('info', `update downloaded: ${info?.version || ''}`)
+    void dialog
+      .showMessageBox({
+        type: 'info',
+        title: '更新已下载',
+        message: `Chiron ${info?.version || '新版本'} 已准备好，重启后生效。`,
+        buttons: ['立即重启', '稍后'],
+        defaultId: 0,
+        cancelId: 1,
+      })
+      .then(({ response }) => {
+        if (response === 0) autoUpdater.quitAndInstall()
+      })
+  })
+  // 延迟到首屏之后再检查，避免和首页资源抢带宽
+  setTimeout(() => {
+    autoUpdater.checkForUpdatesAndNotify().catch(err => {
+      logMain('warn', `update check failed: ${err?.message || err}`)
+    })
+  }, 8000)
+}
+
 // 单实例：第二次启动时聚焦已有窗口，而不是再开一个进程
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {
@@ -390,7 +432,23 @@ if (!gotLock) {
       return true
     })
 
+    // token：preload 启动时同步取一次（避免首屏请求抢在异步读取之前），
+    // 保存/清除走 invoke；全部校验 sender。
+    ipcMain.on('desktop:get-token-sync', event => {
+      const frameUrl = event.senderFrame?.url || ''
+      event.returnValue = isTrustedUrl(frameUrl) ? readToken() : ''
+    })
+    ipcMain.handle('desktop:save-token', (event, token) => {
+      assertTrustedSender(event)
+      return writeToken(String(token || ''))
+    })
+    ipcMain.handle('desktop:clear-token', event => {
+      assertTrustedSender(event)
+      return clearToken()
+    })
+
     createWindow()
+    setupAutoUpdater()
 
     // macOS：点 Dock 图标且没有窗口时重开
     app.on('activate', () => {
