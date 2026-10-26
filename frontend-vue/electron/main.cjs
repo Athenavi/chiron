@@ -432,11 +432,10 @@ if (!gotLock) {
       return true
     })
 
-    // token：preload 启动时同步取一次（避免首屏请求抢在异步读取之前），
-    // 保存/清除走 invoke；全部校验 sender。
-    ipcMain.on('desktop:get-token-sync', event => {
-      const frameUrl = event.senderFrame?.url || ''
-      event.returnValue = isTrustedUrl(frameUrl) ? readToken() : ''
+    // token：异步读取（safeStorage 的 async API），保存/清除走 invoke；全部校验 sender。
+    ipcMain.handle('desktop:get-token', async event => {
+      assertTrustedSender(event)
+      return readToken()
     })
     ipcMain.handle('desktop:save-token', (event, token) => {
       assertTrustedSender(event)

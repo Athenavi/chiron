@@ -23,6 +23,9 @@ export async function authGuard(
 
   const auth = useAuthStore()
 
+  // 桌面端 token 解密是异步的；main.ts 通常已等待，这里兜底保证首屏请求带上 Bearer。
+  await auth.initToken?.()
+
   // admin 访问（或本地无会话态）时，以 httpOnly cookie 向后端拉取权威 profile。
   // fetchProfile 内部失败会登出；此处不抛错，继续按现有本地态降级判定。
   // meta.public 的页面不需要登录态，跳过 profile 拉取（如分享页）。

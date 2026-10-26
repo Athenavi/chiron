@@ -20,6 +20,7 @@ function makeStore(init: {
     user: init.role !== undefined ? { id: 'u1', email: 'a@b.c', name: 'A', role: init.role, tenant_id: 't1' } : null,
     isAuthenticated: init.isAuthenticated ?? !!init.role,
     fetchProfile: mocks.fetchProfileMock,
+    initToken: vi.fn().mockResolvedValue(undefined),
   }
   mocks.useAuthStoreMock.mockReturnValue(store)
   return store

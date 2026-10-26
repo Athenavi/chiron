@@ -45,13 +45,27 @@ export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(loadUserFromStorage())
   // S 安全：Web 端 token 不再持久化到 localStorage（XSS 偷不走），仅保留内存态；
   // 桌面端 file:// 跨站拿不到 SameSite=Lax cookie，必须持久化 token 走 Bearer。
-  const token = ref<string>(loadDesktopToken())
-  if (token.value) setAuthToken(token.value)
+  const token = ref<string>('')
+  let tokenInit: Promise<void> | null = null
 
   /** 统一写入内存 token 与请求层 Bearer（桌面端同时持久化，刷新后仍可用） */
   function applyToken(t: string) {
     token.value = t
     setAuthToken(t)
+  }
+
+  /**
+   * 桌面端 token 由 safeStorage 异步解密。main.ts 在挂载前 await，路由守卫再兜底；
+   * 幂等，多次调用只读一次加密文件。Web 端立即返回。
+   */
+  async function initToken(): Promise<void> {
+    if (!tokenInit) {
+      tokenInit = (async () => {
+        const stored = await loadDesktopToken()
+        if (stored) applyToken(stored)
+      })()
+    }
+    return tokenInit
   }
 
   const loading = ref(false)
@@ -176,6 +190,7 @@ export const useAuthStore = defineStore('auth', () => {
     loading,
     isAuthenticated,
     isAdmin,
+    initToken,
     login,
     register,
     fetchProfile,

@@ -9,7 +9,7 @@ import { t } from '../i18n'
 type DesktopHost = {
   apiUrl?: string
   isDesktop?: boolean
-  token?: string
+  getToken?: () => Promise<string>
   saveToken?: (token: string) => Promise<unknown>
   clearToken?: () => Promise<unknown>
 }
@@ -44,11 +44,12 @@ export function setAuthToken(token: string) {
 }
 
 /** 桌面端启动时恢复上次登录的 token；Web 端始终返回空串 */
-export function loadDesktopToken(): string {
+export async function loadDesktopToken(): Promise<string> {
   if (!isDesktop) return ''
-  if (desktopHost?.token) return desktopHost.token
-  // 从上一版 localStorage 迁移一次，随后交给主进程加密保存
   try {
+    const stored = (await desktopHost?.getToken?.()) || ''
+    if (stored) return stored
+    // 从上一版 localStorage 迁移一次，随后交给主进程加密保存
     const legacy = localStorage.getItem(DESKTOP_TOKEN_KEY) || ''
     if (legacy) {
       void desktopHost?.saveToken?.(legacy)

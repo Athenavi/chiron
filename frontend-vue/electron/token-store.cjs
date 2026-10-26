@@ -5,6 +5,10 @@
  * 这里用系统凭据库（Windows DPAPI / macOS Keychain / Linux libsecret）加密后
  * 落到 userData/token.bin。safeStorage 不可用时返回失败，token 只保留在当前
  * 进程内存中，绝不退化成明文持久化。
+ *
+ * Electron 45 起同步的 isEncryptionAvailable / encryptString / decryptString
+ * 已弃用，这里统一使用 async API；decryptStringAsync 在密钥轮换后会返回
+ * shouldReEncrypt，此时立刻用新密钥重写一次。
  */
 const { app, safeStorage } = require('electron')
 const fs = require('node:fs')
@@ -14,32 +18,36 @@ function tokenPath() {
   return path.join(app.getPath('userData'), 'token.bin')
 }
 
-function readToken() {
+async function readToken() {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return ''
-    return safeStorage.decryptString(fs.readFileSync(tokenPath())) || ''
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return ''
+    const encrypted = await fs.promises.readFile(tokenPath())
+    const { result, shouldReEncrypt } = await safeStorage.decryptStringAsync(encrypted)
+    if (shouldReEncrypt) await writeToken(result)
+    return result || ''
   } catch {
     return ''
   }
 }
 
-function writeToken(token) {
+async function writeToken(token) {
   try {
-    if (!safeStorage.isEncryptionAvailable()) return false
+    if (!(await safeStorage.isAsyncEncryptionAvailable())) return false
     const file = tokenPath()
     if (!token) {
-      fs.rmSync(file, { force: true })
+      await fs.promises.rm(file, { force: true })
       return true
     }
-    fs.mkdirSync(path.dirname(file), { recursive: true })
-    fs.writeFileSync(file, safeStorage.encryptString(token), { mode: 0o600 })
+    await fs.promises.mkdir(path.dirname(file), { recursive: true })
+    const encrypted = await safeStorage.encryptStringAsync(token)
+    await fs.promises.writeFile(file, encrypted, { mode: 0o600 })
     return true
   } catch {
     return false
   }
 }
 
-function clearToken() {
+async function clearToken() {
   return writeToken('')
 }
 

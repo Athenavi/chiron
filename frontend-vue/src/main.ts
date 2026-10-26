@@ -10,6 +10,7 @@ import './style.css'
 import { usePerformanceMonitor } from './composables/usePerformanceMonitor'
 import { setupRequestInterceptors } from './utils/requestOptimizer'
 import { api } from './api'
+import { useAuthStore } from './stores/auth'
 import { i18n, applyDocumentLocale } from './i18n'
 
 // 首屏语言与书写方向必须在 mount 前落到 <html lang/dir>：否则 RTL 语言会先按 LTR
@@ -43,16 +44,22 @@ app.use(router)
 // 错误类需要读完，调用点单独传 { duration: 4 }（见 docs/ui-refinement-design.md §8）。
 message.config({ duration: 2.5 })
 
-app.mount('#app')
+// 桌面端 token 由 safeStorage 异步解密；先拿到再挂载，避免首屏请求缺少 Bearer。
+// Web 端 initToken 立即返回，不影响启动。
+void useAuthStore(pinia)
+  .initToken()
+  .finally(() => {
+    app.mount('#app')
 
-// 标记首次渲染完成
-performance.mark('vue-first-render')
-performance.mark('app-init-end')
+    // 标记首次渲染完成
+    performance.mark('vue-first-render')
+    performance.mark('app-init-end')
 
-// Lighthouse 性能评分优化标记
-if (import.meta.env.PROD) {
-  performance.measure('app-init-duration', 'app-init-start', 'app-init-end')
-}
+    // Lighthouse 性能评分优化标记
+    if (import.meta.env.PROD) {
+      performance.measure('app-init-duration', 'app-init-start', 'app-init-end')
+    }
+  })
 
 // PWA：生产环境注册 Service Worker（离线壳；开发环境跳过）
 // file://（Electron 桌面壳）不是安全上下文，注册只会产生一条 404 失败请求。
