@@ -55,8 +55,10 @@ if (import.meta.env.PROD) {
 }
 
 // PWA：生产环境注册 Service Worker（离线壳；开发环境跳过）
-if (import.meta.env.PROD && 'serviceWorker' in navigator) {
+// file://（Electron 桌面壳）不是安全上下文，注册只会产生一条 404 失败请求。
+// 用 BASE_URL 拼路径：Web 子路径部署时不能再假设站点位于域名根。
+if (import.meta.env.PROD && 'serviceWorker' in navigator && location.protocol !== 'file:') {
   window.addEventListener('load', () => {
-    navigator.serviceWorker.register('/sw.js').catch(() => {})
+    navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {})
   })
 }

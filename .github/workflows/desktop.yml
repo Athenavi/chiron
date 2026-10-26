@@ -92,7 +92,10 @@ jobs:
 
       - name: Build frontend
         working-directory: frontend-vue
-        run: pnpm exec vite build
+        run: pnpm exec vite build --mode desktop
+        # 桌面壳用 loadFile() 从 file:// 打开 dist/index.html：vite.config.ts 在 desktop
+        # 模式下把 base 设为 './'（相对路径），否则 /assets/*.js 会被解析成
+        # file:///X:/assets/*.js（404 → 永久加载圈）。Web 部署仍用根绝对 base。
 
       # tag 是版本号的唯一真相：改写 package.json，让产物名 / app version / Release 标题一致
       - name: Stamp version into package.json
@@ -136,18 +139,23 @@ jobs:
         with:
           name: chiron-desktop-${{ matrix.platform }}
           if-no-files-found: error
+          # 只收 x64 安装包与更新清单：electron-builder 仍会在 release/ 下留 blockmap
+          # 与 builder-debug.yml，这里用精确文件名把它们挡在 artifact 之外，
+          # Release 也就不会出现一堆无关文件。
           path: |
-            frontend-vue/release/*.exe
-            frontend-vue/release/*.dmg
-            frontend-vue/release/*.AppImage
-            frontend-vue/release/*.deb
-            frontend-vue/release/*.blockmap
-            frontend-vue/release/*.yml
+            frontend-vue/release/*-win-x64.exe
+            frontend-vue/release/*-mac-x64.dmg
+            frontend-vue/release/*-linux-x86_64.AppImage
+            frontend-vue/release/*-linux-amd64.deb
+            frontend-vue/release/latest.yml
+            frontend-vue/release/latest-mac.yml
+            frontend-vue/release/latest-linux.yml
 
   release:
     name: publish release
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    # 两个大小写都要：build 的触发条件是 v*/V*，本仓历史 tag 用大写 V
+    if: startsWith(github.ref, 'refs/tags/v') || startsWith(github.ref, 'refs/tags/V')
     runs-on: ubuntu-latest
     steps:
       # 必须 fetch-depth: 0 —— checkout 默认只拉 1 个 commit，

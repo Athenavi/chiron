@@ -5,16 +5,16 @@
  * 页面通过 `window.chironDesktop` 读取。
  */
 const { contextBridge, ipcRenderer } = require('electron')
+const { API_URL_ARG_PREFIX } = require('./shared.cjs')
 
 /**
  * 服务地址从 `additionalArguments` 读取（主进程创建窗口时注入）。
  * 为什么不用 `process.env`：渲染进程的环境变量是**启动时**继承的，
  * 主进程在用户保存地址后才设置的值，preload 读不到。argv 是每次创建窗口时现传的。
  */
-const API_ARG_PREFIX = '--chiron-api-url='
-const apiFromArgv = process.argv.find(a => a.startsWith(API_ARG_PREFIX))
+const apiFromArgv = process.argv.find(a => a.startsWith(API_URL_ARG_PREFIX))
 const apiUrl = apiFromArgv
-  ? apiFromArgv.slice(API_ARG_PREFIX.length)
+  ? apiFromArgv.slice(API_URL_ARG_PREFIX.length)
   : process.env.CHIRON_API_URL || ''
 
 contextBridge.exposeInMainWorld('chironDesktop', {

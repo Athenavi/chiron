@@ -1,4 +1,4 @@
-import { createRouter, createWebHistory } from 'vue-router'
+import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
 import { authGuard } from './guard'
 import { setupRouteProgress } from './progress'
 
@@ -285,8 +285,13 @@ const routes = [
   },
 ]
 
+// Electron 桌面壳用 loadFile() 从 file:// 打开构建产物：history 模式既匹配不了
+// file 路径，pushState 也无法在 file URL 上工作，表现为路由落空/白屏。
+// 只在 file: 下切 hash 路由，Web 端保持 history（分享链接与 nginx fallback 依赖它）。
+const isFileProtocol = typeof window !== 'undefined' && window.location.protocol === 'file:'
+
 const router = createRouter({
-  history: createWebHistory(),
+  history: isFileProtocol ? createWebHashHistory() : createWebHistory(),
   routes,
   scrollBehavior(_to, _from, savedPosition) {
     if (savedPosition) return savedPosition

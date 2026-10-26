@@ -2,6 +2,11 @@
 #
 # 形态：纯 Web 壳。只把 dist/ 与 electron/ 打进安装包，不打包 Go 后端或 Python。
 # 版本号采用 V0.1.261025.01 的语义：0.1 起步 → 261025 日期 → 01 当日序号。
+#
+# 发行策略：每个平台只出 x64 安装包 + latest*.yml 更新清单。
+#   - 不再生成 arm64 产物：macOS ARM 用户由系统提示走 Rosetta 运行 x64 包；
+#   - 不生成双架构合并安装包（electron-builder 的 universal installer，体积≈两倍）；
+#   - 不生成 .blockmap（差分更新文件），自动更新仍可用，只是每次全量下载。
 appId: com.chiron.agent
 productName: Chiron
 copyright: Copyright © 2026 Chiron
@@ -22,7 +27,7 @@ asar: true
 win:
   target:
     - target: nsis
-      arch: [x64, arm64]
+      arch: [x64]
   artifactName: ${productName}-${version}-win-${arch}.${ext}
 
 nsis:
@@ -31,11 +36,15 @@ nsis:
   allowToChangeInstallationDirectory: true
   createDesktopShortcut: true
   createStartMenuShortcut: true
+  # 不生成 .blockmap：发行包只留安装包与 latest.yml
+  differentialPackage: false
+  # 即使将来重新加入多架构，也不生成体积翻倍的合并安装包（Chiron-*-win.exe）
+  buildUniversalInstaller: false
 
 mac:
   target:
     - target: dmg
-      arch: [x64, arm64]
+      arch: [x64]
   category: public.app-category.developer-tools
   artifactName: ${productName}-${version}-mac-${arch}.${ext}
   # 未配置证书时 electron-builder 会自动跳过签名；正式分发需填入 Apple Developer 身份并走 notarytool 公证
@@ -44,7 +53,7 @@ mac:
 linux:
   target:
     - target: AppImage
-      arch: [x64, arm64]
+      arch: [x64]
     - target: deb
       arch: [x64]
   category: Development

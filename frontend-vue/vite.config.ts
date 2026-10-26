@@ -11,8 +11,15 @@ import { fileURLToPath } from 'url'
 
 const __dirname = import.meta.dirname ?? path.dirname(fileURLToPath(import.meta.url))
 
+// 开发代理指向的后端：默认与 run.py 的 Gateway 端口一致，可用环境变量覆盖。
+const API_ORIGIN = process.env.CHIRON_DEV_API_ORIGIN || 'http://localhost:8080'
+const WS_ORIGIN = API_ORIGIN.replace(/^http/, 'ws')
+
 // https://vite.dev/config/
-export default defineConfig({
+export default defineConfig(({ mode }) => ({
+  // 桌面壳（--mode desktop）用 loadFile 从 file:// 打开 dist：资源必须是相对路径，
+  // 否则 /assets/* 会解析成 file:///X:/assets/*。Web 构建保持根绝对路径。
+  base: mode === 'desktop' ? './' : '/',
   plugins: [
     vue(),
     fileViewerRenderers({ copyAssets: true }),
@@ -60,32 +67,32 @@ export default defineConfig({
     // 代理后端 API：避免开发时 CORS 跨域问题（后端 CORS_ORIGINS 仅含 5173）
     proxy: {
       '/v1': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
       '/events': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
       '/ws': {
-        target: 'ws://localhost:8080',
+        target: WS_ORIGIN,
         ws: true,
       },
       '/metrics': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
       // S 修复：/submit /cancel /media 为网关非 /v1 前缀路由，dev 亦需代理
       '/submit': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
       '/cancel': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
       '/media': {
-        target: 'http://localhost:8080',
+        target: API_ORIGIN,
         changeOrigin: true,
       },
     },
@@ -119,4 +126,4 @@ export default defineConfig({
       },
     },
   },
-})
+}))

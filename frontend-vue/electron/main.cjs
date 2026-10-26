@@ -19,10 +19,11 @@
 const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron')
 const path = require('node:path')
 const { resolveApiUrl, saveApiUrl, probe } = require('./config.cjs')
+const { API_URL_ARG_PREFIX, DEFAULT_DEV_URL } = require('./shared.cjs')
 
 /** 开发模式：`electron . --dev` 时连 Vite dev server，否则加载 dist/ */
 const isDev = process.argv.includes('--dev')
-const DEV_URL = 'http://localhost:5173'
+const DEV_URL = process.env.CHIRON_DEV_URL || DEFAULT_DEV_URL
 
 /** 窗口底色取 --bg-page 的浅色值：主进程拿不到 CSS 变量，只能写字面值。 */
 const WINDOW_BACKGROUND = '#f9f9f7'
@@ -54,7 +55,7 @@ function createWindow() {
       sandbox: false,
       // 每次创建窗口现传地址：渲染进程的 process.env 是启动时继承的，
       // 用户保存新地址后旧 env 不会更新。
-      additionalArguments: apiUrl ? [`--chiron-api-url=${apiUrl}`] : [],
+      additionalArguments: apiUrl ? [`${API_URL_ARG_PREFIX}${apiUrl}`] : [],
     },
   })
 

@@ -83,6 +83,9 @@ sandbox/
 /plugins.json
 /frontend-vue/public/vendor/
 
+# @file-viewer 插件每次构建都会重写该清单（含本机绝对路径与时间戳），不入库
+/frontend-vue/public/flyfish-viewer-assets.json
+
 # 仓库根的 vendor/：放的是**本地参考**（第三方源码仓库 DeepSeek-Reasonix / ZCode / dsh-synapse，
 # 以及外部服务的 API 文档如「晴辰云邮」的 mail.md）。它们不参与构建、也不随仓库分发，
 # 因此整体忽略 —— 此前它们长期以未跟踪状态噪声化 `git status`，而 mail.md 又被单独特例暂存，

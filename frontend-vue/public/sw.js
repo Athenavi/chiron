@@ -42,7 +42,7 @@ self.addEventListener('fetch', (event) => {
   // 导航请求：网络优先，离线回退
   if (request.mode === 'navigate') {
     event.respondWith(
-      fetch(request).catch(() => caches.match('/index.html'))
+      fetch(request).catch(() => caches.match(new URL('index.html', self.registration.scope).href))
     )
     return
   }
