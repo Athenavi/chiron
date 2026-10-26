@@ -4,6 +4,16 @@
   "version": "0.1.261025-01",
   "type": "module",
   "main": "electron/main.cjs",
+  "description": "Chiron Desktop — AI agent workspace (Electron shell)",
+  "author": {
+    "name": "Athenavi",
+    "email": "athenavi@users.noreply.github.com"
+  },
+  "homepage": "https://github.com/Athenavi/chiron",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Athenavi/chiron.git"
+  },
   "scripts": {
     "dev": "vite",
     "build": "npm run check:ui && vue-tsc -b && vite build",
