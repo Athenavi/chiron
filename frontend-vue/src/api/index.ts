@@ -6,8 +6,42 @@ import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
 /** 桌面壳（Electron）在 preload 里注入 chironDesktop.apiUrl；Web 端回落到构建期变量 */
-const desktopHost = (globalThis as { chironDesktop?: { apiUrl?: string } }).chironDesktop
+const desktopHost = (globalThis as { chironDesktop?: { apiUrl?: string; isDesktop?: boolean } }).chironDesktop
 export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
+const isDesktop = Boolean(desktopHost?.isDesktop)
+
+/**
+ * 桌面壳鉴权：file:// 页面访问 http(s):// API 属于跨站请求，后端 SameSite=Lax
+ * 的 httpOnly cookie 不会被带上 ⇒ 登录后的每个请求都会 401。
+ * 登录响应体里本来就有 token，桌面端改用它走 Authorization: Bearer
+ * （后端 AuthMiddleware 同时支持 cookie 与 Bearer）。
+ *
+ * token 只在桌面端持久化：Web 继续依赖 httpOnly cookie，不让 XSS 能偷走长期凭据。
+ */
+const DESKTOP_TOKEN_KEY = 'chiron_desktop_token'
+let bearerToken = ''
+
+/** 设置当前请求使用的 Bearer token；桌面端同步写入 localStorage，刷新后可恢复 */
+export function setAuthToken(token: string) {
+  bearerToken = token || ''
+  if (!isDesktop) return
+  try {
+    if (bearerToken) localStorage.setItem(DESKTOP_TOKEN_KEY, bearerToken)
+    else localStorage.removeItem(DESKTOP_TOKEN_KEY)
+  } catch {
+    /* localStorage 不可用时仅保留内存态，至少本次会话仍可用 */
+  }
+}
+
+/** 桌面端启动时恢复上次登录的 token；Web 端始终返回空串 */
+export function loadDesktopToken(): string {
+  if (!isDesktop) return ''
+  try {
+    return localStorage.getItem(DESKTOP_TOKEN_KEY) || ''
+  } catch {
+    return ''
+  }
+}
 
 // 注意：不要在这里设置默认 Content-Type！
 // - 对 JSON 对象 axios 的 transformRequest 会自动设置 application/json
@@ -16,9 +50,14 @@ export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
 export const api = axios.create({
   baseURL: API_URL,
   timeout: 30000,
-  // S 安全：鉴权凭 httpOnly cookie（由后端 SetTokenCookie 下发），JS 不可读，
-  // 避免 XSS 偷取 localStorage 中的 token。所有请求自动携带同源 cookie。
-  withCredentials: true,
+  // Web 同源请求靠 httpOnly cookie；桌面端 file:// 是跨站，改为 Bearer，
+  // 关掉 credentials 也避免响应侧 ACAO 与 credentials 的组合限制。
+  withCredentials: !isDesktop,
+})
+
+api.interceptors.request.use((config) => {
+  if (bearerToken) config.headers.set('Authorization', `Bearer ${bearerToken}`)
+  return config
 })
 
 /**
@@ -251,13 +290,19 @@ api.interceptors.response.use(
     }
 
     if (status === 401) {
-      // Cookie 过期/失效：清本地 user 态，跳转登录（后端 cookie 由 /v1/auth/logout 清除）
+      // Cookie/token 过期：清本地登录态，跳转登录页
       localStorage.removeItem('user')
+      setAuthToken('')
       window.dispatchEvent(new CustomEvent('api:error', {
         detail: { message: t('auth.session_expired_please_sign_in_again') }
       }))
-      // 短延迟让 toast 显示后再跳转
-      setTimeout(() => { window.location.href = '/login' }, 500)
+      // 短延迟让 toast 显示后再跳转。
+      // 桌面壳是 file:// + hash 路由：写 '/login' 会变成 file:///X:/login，
+      // 整页导航直接 ERR_FILE_NOT_FOUND（表现为登录后白屏）。Hash 路由必须改 hash。
+      setTimeout(() => {
+        if (window.location.protocol === 'file:') window.location.hash = '#/login'
+        else window.location.href = '/login'
+      }, 500)
     } else if (error.response?.status >= 500) {
       // 触发全局错误事件，App.vue 中的监听器会显示提示。
       // 文案走统一翻译：把后端给出的具体原因一并带出 —— 只显示"服务器错误"会让用户

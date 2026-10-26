@@ -24,6 +24,20 @@ files:
 # 安装包产物体积不因此膨胀
 asar: true
 
+# Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；
+# asar 内路径在这些加载器下不稳定，显式解包（不影响 asar 主体）。
+asarUnpack:
+  - dist/assets/*.wasm
+  - dist/vendor/**
+
+# 关掉不需要的高风险开关。asar 完整性校验保持关闭：当前产物未签名，
+# 开启 enableEmbeddedAsarIntegrityValidation 会导致启动失败，签名接入后再开。
+electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: false
+  enableNodeCliInspectArguments: false
+  onlyLoadAppFromAsar: true
+
 win:
   target:
     - target: nsis

@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api } from '../api'
+import { api, loadDesktopToken, setAuthToken } from '../api'
 import { clearPrivateStorage } from '../utils/privateStorage'
 
 export interface User {
@@ -43,9 +43,17 @@ function persistUserToStorage(u: User | null) {
 
 export const useAuthStore = defineStore('auth', () => {
   const user = ref<User | null>(loadUserFromStorage())
-  // S 安全：token 不再持久化到 localStorage（XSS 偷不走）。
-  // 仅保留内存态用于登录后即时判断；刷新后凭 user 持久态判断登录（isAuthenticated）。
-  const token = ref<string>('')
+  // S 安全：Web 端 token 不再持久化到 localStorage（XSS 偷不走），仅保留内存态；
+  // 桌面端 file:// 跨站拿不到 SameSite=Lax cookie，必须持久化 token 走 Bearer。
+  const token = ref<string>(loadDesktopToken())
+  if (token.value) setAuthToken(token.value)
+
+  /** 统一写入内存 token 与请求层 Bearer（桌面端同时持久化，刷新后仍可用） */
+  function applyToken(t: string) {
+    token.value = t
+    setAuthToken(t)
+  }
+
   const loading = ref(false)
 
   const isAuthenticated = computed(() => !!user.value)
@@ -63,8 +71,9 @@ export const useAuthStore = defineStore('auth', () => {
       })
       const d = response.data?.data
       if (!d) throw new Error('invalid login response')
-      // S 安全：token 不进 localStorage，鉴权凭 httpOnly cookie（后端 SetTokenCookie 已下发）
-      token.value = d.token
+      // Web 走 httpOnly cookie；桌面端 file:// 跨站拿不到 cookie，applyToken 同时
+      // 把 token 交给请求层走 Bearer（仅桌面端持久化）。
+      applyToken(d.token)
       user.value = d.user
       persistUserToStorage(d.user)
       return d
@@ -93,7 +102,7 @@ export const useAuthStore = defineStore('auth', () => {
       })
       const d = response.data?.data
       if (!d) throw new Error('invalid register response')
-      token.value = d.token
+      applyToken(d.token)
       user.value = d.user
       persistUserToStorage(d.user)
       return d
@@ -128,8 +137,8 @@ export const useAuthStore = defineStore('auth', () => {
       const response = await api.get('/v1/auth/session', { withCredentials: true })
       const d = response.data?.data
       if (!d?.token) return false
-      // S 安全：token 不进 localStorage，鉴权持续凭 httpOnly cookie
-      token.value = d.token
+      // 桌面端同样走 Bearer：SSO 回跳的 cookie 在 file:// 下也不会被带上
+      applyToken(d.token)
       user.value = d.user
       persistUserToStorage(d.user)
       return true
@@ -141,7 +150,7 @@ export const useAuthStore = defineStore('auth', () => {
   /** 建立/覆盖本地会话（短信登录等直接拿到 {token, user} 的入口复用） */
   function applySession(t: string, u: User) {
     if (!t) throw new Error('invalid session: empty token')
-    token.value = t
+    applyToken(t)
     user.value = u
     persistUserToStorage(u)
   }
@@ -153,7 +162,7 @@ export const useAuthStore = defineStore('auth', () => {
     } catch {
       // 网络失败仍清理本地态
     }
-    token.value = ''
+    applyToken('')
     user.value = null
     persistUserToStorage(null)
     // 私有数据（输入历史、会话缓存…）必须随登出清掉：localStorage 是浏览器级的，

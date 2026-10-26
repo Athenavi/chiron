@@ -16,8 +16,10 @@
  * 安全基线：contextIsolation 开、nodeIntegration 关、preload 只暴露两个明确动作，
  * 外部链接一律交给系统浏览器。
  */
-const { app, BrowserWindow, shell, Menu, ipcMain } = require('electron')
+const { app, BrowserWindow, shell, Menu, ipcMain, session, dialog } = require('electron')
+const fs = require('node:fs')
 const path = require('node:path')
+const { fileURLToPath } = require('node:url')
 const { resolveApiUrl, saveApiUrl, probe } = require('./config.cjs')
 const { API_URL_ARG_PREFIX, DEFAULT_DEV_URL } = require('./shared.cjs')
 
@@ -30,11 +32,118 @@ const WINDOW_BACKGROUND = '#f9f9f7'
 
 let mainWindow = null
 
+/** 当前窗口使用的 API 地址；CORS 响应头只补给它，不碰其它站点 */
+let currentApiUrl = ''
+
 /** 「连接设置…」菜单强制进配置页（即使已有地址），见 relaunchIntoSetup */
 let forceSetup = false
 
+const APP_ID = 'com.chiron.agent'
+const APP_ROOT = path.resolve(__dirname, '..')
+const DEV_ORIGIN = (() => {
+  try {
+    return new URL(DEV_URL).origin
+  } catch {
+    return ''
+  }
+})()
+
+/** 本地诊断日志：不依赖网络，崩溃/加载失败时至少能给用户一个文件 */
+function logMain(level, message) {
+  const line = `${new Date().toISOString()} [${level}] ${message}\n`
+  try {
+    const file = path.join(app.getPath('userData'), 'logs', 'main.log')
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.appendFileSync(file, line)
+  } catch {
+    /* 日志失败不能影响主流程 */
+  }
+  if (level === 'error') console.error(message)
+}
+
+/**
+ * 允许的页面地址：本地 app 根目录下的 file://，或开发模式的 Vite origin。
+ * 导航限制与 IPC sender 校验共用这一份判断，避免两处规则漂移。
+ */
+function isTrustedUrl(rawUrl) {
+  try {
+    const url = new URL(rawUrl)
+    if (url.protocol === 'file:') {
+      const filePath = path.resolve(fileURLToPath(url))
+      return filePath === APP_ROOT || filePath.startsWith(APP_ROOT + path.sep)
+    }
+    return isDev && url.origin === DEV_ORIGIN
+  } catch {
+    return false
+  }
+}
+
+/**
+ * file:// 页面没有 CSP 时 Electron 会直接报安全警告；XSS 也能任意外连。
+ * 只放行本地资源与用户自己配置的 API/WS origin，其余 connect 一律拒绝。
+ */
+function buildCsp() {
+  const local = "'self' file:"
+  const connect = ["'self'", 'file:']
+  if (currentApiUrl) {
+    try {
+      const api = new URL(currentApiUrl)
+      connect.push(api.origin)
+      connect.push(`${api.protocol === 'https:' ? 'wss' : 'ws'}://${api.host}`)
+    } catch {
+      /* 地址已在 config.cjs 校验；这里失败就不额外放行 */
+    }
+  }
+  return [
+    `default-src ${local}`,
+    `script-src ${local} 'wasm-unsafe-eval'`,
+    `style-src ${local} 'unsafe-inline'`,
+    `img-src ${local} data: blob:`,
+    `media-src ${local} data: blob:`,
+    `font-src ${local} data:`,
+    `connect-src ${connect.join(' ')}`,
+    `worker-src ${local} blob:`,
+    `child-src ${local} blob:`,
+    `frame-src ${local}`,
+    "object-src 'none'",
+    "base-uri 'none'",
+    `form-action ${local}`,
+  ].join('; ')
+}
+
+/** 主文档加载失败时切到本地错误页，而不是留一个空白窗口 */
+function showLoadError(code, description, failedUrl) {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (code === -3) return // ERR_ABORTED：用户主动取消导航
+  if (failedUrl.includes('/error.html')) return
+  logMain('error', `load failed (${code}) ${description} ${failedUrl}`)
+  mainWindow
+    .loadFile(path.join(__dirname, 'error.html'), {
+      query: {
+        code: String(code),
+        desc: description || '',
+        url: failedUrl || '',
+        retry: failedUrl || '',
+      },
+    })
+    .catch(err => logMain('error', `error page load failed: ${err.message}`))
+}
+
+process.on('uncaughtException', err => logMain('error', `uncaughtException: ${err?.stack || err}`))
+process.on('unhandledRejection', reason => logMain('error', `unhandledRejection: ${reason}`))
+
+/** IPC 只接受来自应用自身页面（或开发服务器）的调用 */
+function assertTrustedSender(event) {
+  const frameUrl = event.senderFrame?.url || event.sender.getURL()
+  if (!isTrustedUrl(frameUrl)) {
+    logMain('warn', `blocked IPC from ${frameUrl}`)
+    throw new Error('forbidden')
+  }
+}
+
 function createWindow() {
   const apiUrl = resolveApiUrl()
+  currentApiUrl = apiUrl
   const target = !forceSetup && apiUrl ? 'app' : 'setup'
 
   mainWindow = new BrowserWindow({
@@ -65,6 +174,50 @@ function createWindow() {
   mainWindow.webContents.setWindowOpenHandler(({ url }) => {
     if (/^https?:/i.test(url)) shell.openExternal(url)
     return { action: 'deny' }
+  })
+
+  // 同窗口导航限制：只允许本地 app 根目录 / 开发服务器；外部 http(s) 交系统浏览器
+  mainWindow.webContents.on('will-navigate', (event, url) => {
+    if (isTrustedUrl(url)) return
+    event.preventDefault()
+    if (/^https?:/i.test(url)) shell.openExternal(url)
+    else logMain('warn', `blocked navigation: ${url}`)
+  })
+
+  // 主文档加载失败：切到本地错误页，而不是留一个空白窗口
+  mainWindow.webContents.on('did-fail-load', (_event, code, description, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return
+    showLoadError(code, description, validatedURL)
+  })
+
+  // 渲染进程崩溃：记录并给用户选择重载
+  mainWindow.webContents.on('render-process-gone', (_event, details) => {
+    logMain('error', `renderer gone: ${details.reason} exitCode=${details.exitCode}`)
+    if (details.reason === 'clean-exit' || !mainWindow || mainWindow.isDestroyed()) return
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'error',
+      title: '页面进程已退出',
+      message: `界面进程异常退出（${details.reason}）。`,
+      buttons: ['重新加载', '关闭'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (choice === 0) mainWindow.reload()
+  })
+
+  // 界面长时间无响应：记录并让用户决定是否重载
+  mainWindow.on('unresponsive', () => {
+    logMain('warn', 'window unresponsive')
+    if (!mainWindow || mainWindow.isDestroyed()) return
+    const choice = dialog.showMessageBoxSync(mainWindow, {
+      type: 'warning',
+      title: '界面无响应',
+      message: '界面暂时没有响应，是否重新加载？',
+      buttons: ['继续等待', '重新加载'],
+      defaultId: 0,
+      cancelId: 1,
+    })
+    if (choice === 1) mainWindow.reload()
   })
 
   if (target === 'setup') {
@@ -117,6 +270,66 @@ if (!gotLock) {
   })
 
   app.whenReady().then(() => {
+    // Windows 通知/任务栏需要显式的 AppUserModelId，且要与打包 appId 一致
+    if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
+
+    // 桌面壳从 file:// 访问 API：浏览器把 Origin 序列化成 null，后端 CORS 白名单
+    // 不会为 null 返回 Access-Control-Allow-Origin，带 Authorization 的预检会被
+    // 浏览器直接拒绝（表现为登录后所有请求失败）。这里只给用户配置的 API 前缀
+    // 补上精确匹配的 null（不是 *），其它站点响应不受影响。
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+      const responseHeaders = details.responseHeaders || {}
+      const isApiRequest =
+        currentApiUrl &&
+        (details.url === currentApiUrl || details.url.startsWith(`${currentApiUrl}/`))
+      if (isApiRequest) {
+        responseHeaders['Access-Control-Allow-Origin'] = ['null']
+      }
+      // file:// 主文档默认没有 CSP，Electron 会直接报安全警告；只放行本地资源
+      // 与用户配置的 API/WS origin，XSS 无法把数据外传到任意站点。
+      const isMainDocument =
+        details.resourceType === 'mainFrame' ||
+        details.url.split('#')[0].split('?')[0].endsWith('/index.html')
+      if (isMainDocument && details.url.startsWith('file:')) {
+        responseHeaders['Content-Security-Policy'] = [buildCsp()]
+      }
+      callback({ responseHeaders })
+    })
+
+    // 权限：只允许本地应用页面使用麦克风（语音输入）、剪贴板读取与全屏
+    const allowedPermissions = new Set(['media', 'clipboard-read', 'fullscreen'])
+    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+      const requestingUrl = details?.requestingUrl || wc.getURL()
+      if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) {
+        logMain('warn', `denied permission ${permission} from ${requestingUrl}`)
+        callback(false)
+        return
+      }
+      if (permission === 'media') {
+        const types = details?.mediaTypes || []
+        callback(types.length === 0 || types.every(type => type === 'audio'))
+        return
+      }
+      callback(true)
+    })
+    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+      const requestingUrl = details?.requestingUrl || wc.getURL() || requestingOrigin
+      if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) return false
+      if (permission === 'media' && details?.mediaType === 'video') return false
+      return true
+    })
+
+    // 下载走 Electron 默认保存流程，记录到本地日志便于排查
+    session.defaultSession.on('will-download', (_event, item) => {
+      logMain('info', `download start: ${item.getFilename()} ${item.getURL()}`)
+      item.once('done', (_e, state) => {
+        logMain(
+          state === 'completed' ? 'info' : 'warn',
+          `download ${state}: ${item.getFilename()} -> ${item.getSavePath()}`,
+        )
+      })
+    })
+
     // 精简菜单：保留复制/粘贴/全选/重载/开发者工具，去掉 Electron 默认的多余项
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
@@ -165,8 +378,13 @@ if (!gotLock) {
     )
 
     // 配置页的两个动作。地址校验与持久化都在 config.cjs 里，主进程只做转发。
-    ipcMain.handle('desktop:test-api-url', (_event, url) => probe(url))
-    ipcMain.handle('desktop:set-api-url', (_event, url) => {
+    // 同时校验 sender：只有应用自身页面（或开发服务器）能改服务地址。
+    ipcMain.handle('desktop:test-api-url', (event, url) => {
+      assertTrustedSender(event)
+      return probe(url)
+    })
+    ipcMain.handle('desktop:set-api-url', (event, url) => {
+      assertTrustedSender(event)
       saveApiUrl(url)
       relaunchIntoApp()
       return true

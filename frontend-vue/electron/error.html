@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!-- 本地错误页：不依赖网络与前端 dist，任何资源加载失败时都能独立显示 -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>Chiron — 页面加载失败</title>
+    <style>
+      :root {
+        --bg-page: #f9f9f7;
+        --bg-card: #ffffff;
+        --text-primary: #1f1f1c;
+        --text-secondary: #5c5c56;
+        --text-tertiary: #8a8a82;
+        --border: #e6e6e1;
+        --primary: #d97757;
+        --primary-hover: #cc5a36;
+        --error: #d14343;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg-page: #1a1a19;
+          --bg-card: #20201f;
+          --text-primary: #f0efe9;
+          --text-secondary: #a8a8a0;
+          --text-tertiary: #75756e;
+          --border: #333330;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-page);
+        color: var(--text-primary);
+        font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        width: min(460px, calc(100vw - 48px));
+        padding: 28px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+      h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+      p { margin: 0 0 12px; color: var(--text-secondary); }
+      code {
+        display: block;
+        padding: 8px 10px;
+        margin: 12px 0 18px;
+        font: 12px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+        color: var(--text-tertiary);
+        background: var(--bg-page);
+        border: 1px solid var(--border);
+        border-radius: 8px;
+        white-space: pre-wrap;
+        word-break: break-all;
+      }
+      .actions { display: flex; gap: 10px; }
+      button {
+        flex: 1;
+        padding: 9px 14px;
+        font: inherit;
+        font-weight: 500;
+        cursor: pointer;
+        border-radius: var(--radius);
+        border: 1px solid var(--border);
+        background: transparent;
+        color: var(--text-secondary);
+      }
+      button:hover { border-color: var(--primary); color: var(--primary); }
+      button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
+      button.primary:hover { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
+      button:disabled { opacity: 0.55; cursor: not-allowed; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>页面加载失败</h1>
+      <p>Chiron 无法打开本地界面。可以先重试；如果仍然失败，请检查服务地址或重新安装。</p>
+      <code id="detail"></code>
+      <div class="actions">
+        <button id="retry" class="primary" type="button">重试</button>
+        <button id="settings" type="button">连接设置</button>
+      </div>
+    </main>
+    <script>
+      const params = new URLSearchParams(location.search)
+      const code = params.get('code') || ''
+      const desc = params.get('desc') || ''
+      const url = params.get('url') || ''
+      const retry = params.get('retry') || ''
+
+      document.getElementById('detail').textContent = [
+        code && `错误码 ${code}`,
+        desc,
+        url,
+      ].filter(Boolean).join('\n')
+
+      const retryBtn = document.getElementById('retry')
+      if (retry) {
+        retryBtn.addEventListener('click', () => { location.href = retry })
+      } else {
+        retryBtn.disabled = true
+      }
+      document.getElementById('settings').addEventListener('click', () => {
+        location.href = './setup.html'
+      })
+    </script>
+  </body>
+</html>
