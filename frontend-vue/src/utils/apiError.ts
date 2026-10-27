@@ -30,7 +30,14 @@ import { t, hasMessage } from '../i18n'
 interface ApiErrorLike {
   response?: {
     status?: number
-    data?: { error?: string; message?: string; code?: string }
+    data?: {
+      error?: string
+      message?: string
+      code?: string
+      /** 服务端显式结论：缺失 = 调用方自判（不是 false），见 rateLimitBackoff.shouldRetryResponse */
+      retryable?: boolean
+      params?: Record<string, unknown>
+    }
   }
   code?: string
   message?: string

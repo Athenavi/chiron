@@ -25,6 +25,27 @@ export function isRateLimitStatus(status?: number | null): boolean {
 }
 
 /**
+ * 服务端显式说的"能不能再发一次"。只有**真布尔**才算结论 ——
+ * 字符串 `'true'`、数字 `1`、`null` 一律视为"没说"，转交给状态码回退逻辑去判，不猜。
+ */
+export function readRetryable(value: unknown): boolean | undefined {
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/**
+ * 重试决策：**服务端契约字段优先，状态码回退**（后向兼容）。
+ *
+ * 分层依据：`code` 负责"发生了什么"（i18n 与分支），`retryable` 负责"要不要再发一次"。
+ * 此前只有状态码可看，于是 409 `session_busy`（等上一轮跑完就能过，重试是**对的策略**）
+ * 被当成不可重试而直接甩给用户；反过来 500 里的 provider 暂时性故障又被当成不可重试。
+ * 现在服务端说了就听它的；它没说（字段缺失 = 调用方自判）才用旧的 429/503 判断。
+ */
+export function shouldRetryResponse(status?: number | null, retryable?: boolean): boolean {
+  if (retryable !== undefined) return retryable
+  return isRateLimitStatus(status)
+}
+
+/**
  * 第 `attempt` 次重试前该等多久（attempt 从 1 开始）。
  *
  * @param attempt 已重试次数（1 = 第一次重试）
@@ -78,5 +99,37 @@ export function resolveWaitMs(
 ): number {
   const fromServer = parseRetryAfter(retryAfterHeader, now)
   const wait = fromServer ?? backoffDelay(attempt, random)
+  return Math.min(Math.max(0, wait), BACKOFF_CAP_MS)
+}
+
+/**
+ * 从错误体里取服务端建议的等待时长（秒）：`params.retry_after_seconds`。
+ *
+ * 这是错误码 + 结构参数的既有用法（`session_busy` / `session_recover` 都已经在传），
+ * 与 `Retry-After` 头同义但走 body —— 有些代理会吃掉响应头，body 不会被改。
+ */
+export function parseRetryAfterParams(body: unknown): number | null {
+  const raw = (body as { params?: { retry_after_seconds?: unknown } } | undefined)?.params
+    ?.retry_after_seconds
+  const seconds = typeof raw === 'string' ? Number(raw) : raw
+  if (typeof seconds !== 'number' || !Number.isFinite(seconds)) return null
+  return seconds > 0 ? seconds * 1000 : null
+}
+
+/**
+ * 重试前实际等待：`Retry-After` 头 > body 的 `params.retry_after_seconds` > 本地退避，
+ * 都受 10 分钟封顶。两道服务端口径共存是因为历史路径只写其一（限流中间件写头，
+ * `session_busy` 写参数），客户端该两处都认。
+ */
+export function resolveResponseWaitMs(
+  attempt: number,
+  retryAfterHeader: unknown,
+  body: unknown,
+  random: () => number = Math.random,
+  now: number = Date.now(),
+): number {
+  const fromHeader = parseRetryAfter(retryAfterHeader, now)
+  const fromBody = fromHeader == null ? parseRetryAfterParams(body) : null
+  const wait = fromHeader ?? fromBody ?? backoffDelay(attempt, random)
   return Math.min(Math.max(0, wait), BACKOFF_CAP_MS)
 }

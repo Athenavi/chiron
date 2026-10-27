@@ -105,25 +105,27 @@ func (h *SubmitHandler) RecoverSession(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if held {
-		JSONWithCode(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
+		// retryable=true：等上一轮跑完（或 reconciler 收口）后同一个请求就能过 —— 这正是
+		// "重试有效"的定义。此前没有这个字段，客户端只能拿 409 当"请求有问题"处理。
+		JSONWithRetryable(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
 			"retry_after_seconds": int(reconcilerSweepInterval.Seconds()),
-		}, "session run still active")
+		}, "session run still active", true)
 		return
 	}
 
 	if wait := sessionRecoverStaleAfter - time.Since(touchedAt); wait > 0 {
-		JSONWithCode(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
+		JSONWithRetryable(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
 			"retry_after_seconds": int((wait + reconcilerSweepInterval).Seconds()),
-		}, "session run not stale yet")
+		}, "session run not stale yet", true)
 		return
 	}
 
 	// 双重检查：闸门 A 与这条 UPDATE 之间有微小窗口，新 run 可能刚抢到锁并改写这一行。
 	// 再查一次成本极低，而误杀一次新 run 的代价很高。
 	if held, lockErr = sessionRunLockHeld(ctx, sessionID); lockErr == nil && held {
-		JSONWithCode(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
+		JSONWithRetryable(w, http.StatusConflict, CodeSessionBusy, map[string]interface{}{
 			"retry_after_seconds": int(reconcilerSweepInterval.Seconds()),
-		}, "session run still active")
+		}, "session run still active", true)
 		return
 	}
 
