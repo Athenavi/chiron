@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import auth, events, health, models
+from app.api import agents, auth, chat, events, health, knowledge, media, memory, models
 from app.config import Settings
 from app.storage.pg import PostgresServer
 from app.storage.redis import RedisServer
@@ -83,6 +83,13 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(auth.router, tags=["auth"])
     app.include_router(models.router, tags=["models"])
     app.include_router(events.router, tags=["events"])
+    # 第二批：本地业务能力。知识库默认禁用（CHIRON_LOCAL_KNOWLEDGE_ENABLED），
+    # 端点会返回 403 knowledge_disabled，而不是静默空列表。
+    app.include_router(chat.router, tags=["chat"])
+    app.include_router(agents.router, tags=["agents"])
+    app.include_router(media.router, tags=["media"])
+    app.include_router(memory.router, tags=["memory"])
+    app.include_router(knowledge.router, tags=["knowledge"])
     return app
 
 

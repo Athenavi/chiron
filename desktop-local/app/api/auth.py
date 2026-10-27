@@ -30,7 +30,20 @@ LOCAL_USER: dict[str, Any] = {
 
 
 def load_or_create_token(path: Path) -> str:
-    """读设备 token，不存在就生成一个（内容不是密钥材料，只是本机标识）。"""
+    """读设备 token，不存在就生成一个（内容不是密钥材料，只是本机标识）。
+
+    优先级：``CHIRON_DEVICE_TOKEN``（Electron 主进程建窗时下发的 token）> 落盘文件 >
+    新生成。**必须优先用 env**：否则主进程注入的 token 与 core 自己生成的不一致，
+    一旦启用鉴权，所有本地请求都会 401。env 存在时同步写盘，重启后仍一致。
+    """
+    env_token = (os.environ.get("CHIRON_DEVICE_TOKEN") or "").strip()
+    if env_token:
+        with contextlib.suppress(OSError):
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(env_token + "\n", encoding="utf-8")
+            os.chmod(path, 0o600)
+        return env_token
+
     with contextlib.suppress(OSError):
         existing = path.read_text(encoding="utf-8").strip()
         if existing:
