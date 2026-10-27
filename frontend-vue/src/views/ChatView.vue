@@ -8,6 +8,7 @@ import {
   updateConversation,
   getChatSessionMessages, resolveMediaUrl, listModels,
   createAgent, createGraph,
+  API_URL, desktopDeviceToken,
 } from '../api'
 import type { LlmModel } from '../api'
 import { recoverSession } from '../api'
@@ -1468,6 +1469,26 @@ const sidebarRunningIds = computed(() => {
  */
 const synapseFrame = ref<HTMLIFrameElement | null>(null)
 const MAP_SOURCE = 'chiron-sessionmap'
+
+/**
+ * 地图 iframe 的地址。
+ *
+ * 打包后渲染进程跑在 `file://` 下（`main.cjs` 用 `loadFile`），此时**绝对路径**
+ * `/sessionmap/index.html` 会解析到盘根（真机实测：`file:///X:/sessionmap/index.html`），
+ * 于是 iframe 加载失败、地图整块白屏。必须用相对于当前文档的路径。
+ *
+ * 同时把 `api` 与 `token` 作为 query 下发：adapter.js 在 DOMContentLoaded 就发首批请求，
+ * 而 postMessage 是异步的，靠消息传配置会晚一步（首帧白屏）。query 可同步读到。
+ */
+const synapseFrameSrc = computed(() => {
+  const base = new URL('./sessionmap/index.html', window.location.href)
+  // Web 端（http/https）走同源相对路径即可，不需要也不应该把 token 放进 URL
+  if (window.location.protocol !== 'file:' && !API_URL) return base.pathname
+  if (API_URL) base.searchParams.set('api', API_URL)
+  const token = desktopDeviceToken()
+  if (token) base.searchParams.set('token', token)
+  return base.href
+})
 /**
  * 流式增量 → 会话地图（P0-1）。
  *
@@ -1508,14 +1529,25 @@ let lastRunningIds: string[] = []
 function postToMap(payload: Record<string, unknown>) {
   const target = synapseFrame.value?.contentWindow
   if (!target) return
-  target.postMessage({ source: MAP_SOURCE, ...payload }, window.location.origin)
+  // file:// 下 location.origin 是字符串 "null"，当 targetOrigin 传给 postMessage 会抛
+  // SyntaxError（真机实测：地图一条状态都收不到）。此时端口通配 '*' 才可用；
+  // 消息里已有 source 标识，接收端也校验它，不额外扩大攻击面。
+  const origin = window.location.origin === 'null' ? '*' : window.location.origin
+  target.postMessage({ source: MAP_SOURCE, ...payload }, origin)
 }
 
 /** 把宿主状态推给地图 */
 async function pushMapState() {
   // 画布列表：地图的"工作区"下拉（空 sessionIds 让它自己去拉画布内容）
   try {
-    const r = await fetch('/v1/session-map/workspaces', { credentials: 'include' })
+    const token = desktopDeviceToken()
+    const r = await fetch(`${API_URL}/v1/session-map/workspaces`, {
+      // 与 api/index.ts 的 withCredentials: !isDesktop 保持一致：桌面端跨源（file:// →
+      // http://127.0.0.1）带凭据会被 CORS 拒绝（本地 core 的 allow_credentials=False），
+      // 身份只靠 Bearer token。
+      credentials: API_URL ? 'omit' : 'include',
+      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+    })
     const body = (await r.json()) as { data?: { workspaces?: Array<{ id: string; name?: string }> } }
     postToMap({
       type: 'synapse:workspaces',
@@ -1630,7 +1662,11 @@ const mapRpcHost: MapRpcHost = {
 }
 
 window.addEventListener('message', (e: MessageEvent) => {
-  if (e.origin !== window.location.origin) return // 只认自己域（iframe 同源）
+  // 打包版主窗口跑在 file:// 下：此时 e.origin 是字符串 "null"，而
+  // window.location.origin 是 "file://"（真机实测），直接比较会把地图的每条消息都丢掉。
+  // file:// 下同源判定退化为"只认带 source 标识的消息"，事件处理器本身仍然校验 source。
+  const sameOrigin = e.origin === window.location.origin || e.origin === 'null'
+  if (!sameOrigin) return // 只认自己域（iframe 同源）
   const data = e.data as {
     source?: string
     type?: string
@@ -3422,7 +3458,7 @@ function continueGeneration() {
       <iframe
         ref="synapseFrame"
         class="synapse-map-frame"
-        src="/sessionmap/index.html"
+        :src="synapseFrameSrc"
         :title="$t('chat.session_map')"
       />
     </div>

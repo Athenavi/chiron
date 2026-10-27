@@ -70,6 +70,38 @@ CREATE TABLE IF NOT EXISTS local_agents (
 )
 """
 
+CREATE_SESSION_MAP_WORKSPACES = """
+CREATE TABLE IF NOT EXISTS local_session_map_workspaces (
+    id TEXT PRIMARY KEY,
+    tenant_id BIGINT NOT NULL DEFAULT 1,
+    user_id TEXT NOT NULL DEFAULT 'local',
+    name TEXT NOT NULL DEFAULT '',
+    viewport JSONB NOT NULL DEFAULT '{}'::jsonb,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
+CREATE_SESSION_MAP_NODES = """
+CREATE TABLE IF NOT EXISTS local_session_map_nodes (
+    id TEXT PRIMARY KEY,
+    workspace_id TEXT NOT NULL REFERENCES local_session_map_workspaces(id) ON DELETE CASCADE,
+    session_id TEXT,
+    parent_node_id TEXT,
+    edge_kind TEXT NOT NULL DEFAULT 'manual',
+    x INTEGER NOT NULL DEFAULT 0,
+    y INTEGER NOT NULL DEFAULT 0,
+    title TEXT NOT NULL DEFAULT '',
+    color TEXT NOT NULL DEFAULT '',
+    collapsed BOOLEAN NOT NULL DEFAULT FALSE,
+    hidden BOOLEAN NOT NULL DEFAULT FALSE,
+    pinned BOOLEAN NOT NULL DEFAULT FALSE,
+    branch_from_seq INTEGER,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+)
+"""
+
 CREATE_MESSAGES_INDEX = """
 CREATE INDEX IF NOT EXISTS local_messages_session_seq_idx ON local_messages (session_id, seq)
 """
@@ -82,18 +114,31 @@ CREATE_AGENTS_INDEX = """
 CREATE INDEX IF NOT EXISTS local_agents_owner_idx ON local_agents (tenant_id, user_id)
 """
 
+CREATE_SESSION_MAP_NODES_INDEX = """
+CREATE INDEX IF NOT EXISTS local_session_map_nodes_ws_idx ON local_session_map_nodes (workspace_id)
+"""
+
 #: 建表顺序有意义（``local_messages`` 引用 ``local_sessions``），不要重排。
 SCHEMA_STATEMENTS: tuple[str, ...] = (
     CREATE_SESSIONS,
     CREATE_MESSAGES,
     CREATE_AGENTS,
+    CREATE_SESSION_MAP_WORKSPACES,
+    CREATE_SESSION_MAP_NODES,
     CREATE_MESSAGES_INDEX,
     CREATE_SESSIONS_INDEX,
     CREATE_AGENTS_INDEX,
+    CREATE_SESSION_MAP_NODES_INDEX,
 )
 
 #: 本模块负责的表（测试与诊断用）。
-TABLES: tuple[str, ...] = ("local_sessions", "local_messages", "local_agents")
+TABLES: tuple[str, ...] = (
+    "local_sessions",
+    "local_messages",
+    "local_agents",
+    "local_session_map_workspaces",
+    "local_session_map_nodes",
+)
 
 #: 建表用的连接超时（秒）。本地 loopback，超过这个数就是真出问题了。
 SCHEMA_TIMEOUT_SECONDS = 10.0

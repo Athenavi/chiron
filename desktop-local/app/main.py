@@ -22,9 +22,24 @@ from contextlib import asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from app import __version__
-from app.api import agents, auth, chat, components, events, health, knowledge, media, memory, models, plugins
+from app.api import (
+    agents,
+    auth,
+    chat,
+    components,
+    conversations,
+    events,
+    health,
+    knowledge,
+    media,
+    memory,
+    models,
+    plugins,
+    session_map,
+)
 from app.config import Settings
 from app.middleware import DeviceTokenMiddleware
 from app.storage.pg import PostgresServer
@@ -116,6 +131,23 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 所以这里不传死一份，测试换配置也能生效。
     app.add_middleware(DeviceTokenMiddleware)
 
+    # 会话地图是 iframe：打包版主窗口跑在 `file://`，iframe 里的 adapter.js 要跨源请求
+    # `http://127.0.0.1:<port>`（Origin 头是字面量 "null"）。没有这层 CORS，
+    # 浏览器会拦掉全部响应，地图依旧白屏 —— 即使本地路由已经补齐。
+    #
+    # 只放行本机来源：`null`（桌面壳的 file:// 页面 —— 浏览器把 opaque origin 序列化成
+    # 字面量 "null"）与 `localhost/127.0.0.1` 的任意端口（开发态 vite dev server）。
+    # 不接受 `*`：本地 core 的威胁模型是"别让浏览器里的**其它**站点读到用户数据"。
+    # 代价说清楚：`null` 无法与"用户打开的本机恶意 HTML"区分，所以本地模式的隔离边界
+    # 最终落在 Bearer token（`CHIRON_LOCAL_AUTH_ENABLED=1`）上，而不是 CORS。
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origin_regex=r"^(null|file://.*|https?://(localhost|127\.0\.0\.1)(:\d+)?)$",
+        allow_credentials=False,
+        allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+        allow_headers=["Authorization", "Content-Type"],
+    )
+
     app.include_router(health.router, tags=["health"])
     app.include_router(auth.router, tags=["auth"])
     app.include_router(models.router, tags=["models"])
@@ -131,6 +163,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     # 插件：本地**没有**插件运行时，端点只回答"未实现"（空列表 + 501 + status.reason），
     # 但必须存在 —— 否则插件页会把 404 渲染成"加载失败"，把"没接入"说成"坏了"。
     app.include_router(plugins.router, tags=["plugins"])
+    # 会话地图：iframe（sessionmap/adapter.js）只认这两族端点，缺一个地图就白屏。
+    app.include_router(session_map.router, tags=["session-map"])
+    app.include_router(conversations.router, tags=["conversations"])
     return app
 
 

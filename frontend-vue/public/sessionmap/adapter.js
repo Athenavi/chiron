@@ -33,8 +33,21 @@
 (function () {
   'use strict'
 
+  // 端点前缀：桌面端打包后渲染进程跑在 file:// 下，绝对路径 `/v1/...` 会解析到
+  // 盘根（真机实测：`file:///X:/v1/session-map`），必须由宿主下发完整基址。
+  //
+  // 为什么走 URL query 而不是 postMessage：app.js 的初始化在 DOMContentLoaded 就发出
+  // 第一批请求，postMessage 是异步的，配置晚到一步就白屏一次。query 是本文件同步可读的。
   var API = '/v1/session-map'
   var CONV = '/v1/conversations'
+  var API_BASE = ''
+  var AUTH_TOKEN = ''
+
+  try {
+    var params = new URLSearchParams(window.location.search)
+    API_BASE = (params.get('api') || '').replace(/\/+$/, '')
+    AUTH_TOKEN = params.get('token') || ''
+  } catch (e) { /* 老浏览器/异常 URL：回落到同源相对路径 */ }
 
   /** Chiron 的 APIResponse 外壳 → 内层 data（失败时抛错，交给 app.js 的提示路径） */
   function unwrap(body) {
@@ -44,11 +57,18 @@
 
   function jsonFetch(url, options) {
     options = options || {}
-    return fetch(url, {
-      credentials: 'include',
-      headers: { 'content-type': 'application/json', ...(options.headers || {}) },
-      ...options,
-    }).then(function (r) { return r.json() })
+    var headers = Object.assign({ 'content-type': 'application/json' }, options.headers || {})
+    // 本地 core 开启设备 token 鉴权后（CHIRON_LOCAL_AUTH_ENABLED=1），
+    // iframe 里的请求也必须带上 —— 它拿不到 preload，所以 token 由宿主下发。
+    if (AUTH_TOKEN) headers.Authorization = 'Bearer ' + AUTH_TOKEN
+    // 跨源（file:// → http://127.0.0.1）时必须 omit：带凭据模式会要求
+    // Access-Control-Allow-Credentials，而本地 core 用的是 Bearer token，不用 cookie。
+    var init = Object.assign(
+      { credentials: API_BASE ? 'omit' : 'include' },
+      options,
+      { headers: headers }
+    )
+    return fetch(API_BASE + url, init).then(function (r) { return r.json() })
   }
 
   // ── 形状映射：Chiron node ↔ dsh-synapse thread ──
@@ -657,7 +677,9 @@
   // 让地图重拉一次当前画布（走本文件的 fetch 劫持，重新 hydrate，新消息就落到卡片上）。
   // app.js 的 openWorkspace 是脚本顶层的函数声明（因此挂在 window 上），可以直接调用。
   window.addEventListener('message', function (e) {
-    if (e.origin !== window.location.origin) return
+    // 宿主与地图都在 file:// 下：e.origin 是 "null"，location.origin 是 "file://"，
+    // 严格比较会让宿主推来的状态一条都收不到。source 标识才是这里的真实凭据。
+    if (e.origin !== window.location.origin && e.origin !== 'null') return
     var d = e.data
     if (!d || d.source !== 'chiron-sessionmap') return
     // 宿主切到某会话 → 交给 placeSession 摆进画布（它自带"已存在就跳过"与防抖保存）（P1-5）。
