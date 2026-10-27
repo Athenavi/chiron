@@ -1,11 +1,11 @@
 /**
  * Chiron Desktop — preload
  *
- * 只暴露只读信息与两个明确的动作，不暴露 require / 任意 ipc 通道。
- * 页面通过 `window.chironDesktop` 读取。
+ * 只暴露只读信息与明确的几个动作，不暴露 require / 任意 ipc 通道。
+ * 页面通过 `window.chironDesktop` 读取（契约见 docs/desktop-local/contracts.md §2）。
  */
 const { contextBridge, ipcRenderer } = require('electron')
-const { API_URL_ARG_PREFIX } = require('./shared.cjs')
+const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX } = require('./shared.cjs')
 
 /**
  * 服务地址从 `additionalArguments` 读取（主进程创建窗口时注入）。
@@ -16,6 +16,16 @@ const apiFromArgv = process.argv.find(a => a.startsWith(API_URL_ARG_PREFIX))
 const apiUrl = apiFromArgv
   ? apiFromArgv.slice(API_URL_ARG_PREFIX.length)
   : process.env.CHIRON_API_URL || ''
+
+/**
+ * 运行模式同样从 argv 读。argv 缺失时（手工 `electron .` 且没走主进程建窗）
+ * 回落到 cloud —— 那是老版本唯一的行为，误判成 local 会让页面去等一个不存在的本地后端。
+ */
+const modeFromArgv = process.argv.find(a => a.startsWith(MODE_ARG_PREFIX))
+const rawMode = (
+  modeFromArgv ? modeFromArgv.slice(MODE_ARG_PREFIX.length) : process.env.CHIRON_DESKTOP_MODE || ''
+).toLowerCase()
+const mode = rawMode === 'local' || rawMode === 'cloud' ? rawMode : 'cloud'
 
 // 主进程用 safeStorage 加密保存；读取是异步的（Electron 45 的 async API），
 // 由 store 在首屏挂载前 await，避免首屏请求缺少 Bearer token。
@@ -28,7 +38,19 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   },
   /** 当前生效的服务地址；空串表示尚未配置 */
   apiUrl,
+  /** 'local' | 'cloud'：当前运行模式（真相在主进程 config.json） */
+  mode,
   isDesktop: true,
+
+  /** 读取设备级设置（模式 / apiUrl / 本地数据目录 / UI / 迁移状态） */
+  getDeviceSettings: () => ipcRenderer.invoke('desktop:get-device-settings'),
+  /**
+   * 切换运行模式：主进程会清掉离开模式的会话数据、写盘并重启应用。
+   * deleteLocalData 默认 false —— 契约 §1 不允许默认删 userData/local。
+   */
+  setMode: (nextMode, opts) => ipcRenderer.invoke('desktop:set-mode', nextMode, opts || {}),
+  /** 重启应用（不改模式） */
+  restart: () => ipcRenderer.invoke('desktop:restart'),
 
   /** 测试连通性（打后端 /health）：成功 resolve，失败 reject 出可读 message */
   testApiUrl: url => ipcRenderer.invoke('desktop:test-api-url', url),

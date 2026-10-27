@@ -24,6 +24,21 @@ files:
 # 安装包产物体积不因此膨胀
 asar: true
 
+# 本地模式的可选组件（core / pageindex / langextract）放到 resources/components/，
+# 由主进程按需拉起（见 docs/desktop-local/contracts.md §3、§4）。
+#
+# 用 `from: .` + glob 过滤而不是 `from: components`：组件目录平时并不存在
+# （二进制由 W4 的 components.cjs 在应用内下载，不进仓库），直接指向不存在的目录
+# 会让 electron-builder 在拷贝阶段报错。glob 过滤匹配不到文件时只是「不带组件」，
+# 目录将来出现则自动落到 resources/components/，构建永远不需要因为缺目录而改配置。
+extraResources:
+  - from: .
+    to: .
+    filter:
+      - "components/**/*"
+      - "!components/**/.gitkeep"
+
+
 # Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；
 # asar 内路径在这些加载器下不稳定，显式解包（不影响 asar 主体）。
 asarUnpack:
