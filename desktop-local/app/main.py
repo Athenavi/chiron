@@ -25,6 +25,7 @@ from fastapi import FastAPI
 from app import __version__
 from app.api import agents, auth, chat, events, health, knowledge, media, memory, models
 from app.config import Settings
+from app.middleware import DeviceTokenMiddleware
 from app.storage.pg import PostgresServer
 from app.storage.redis import RedisServer
 
@@ -78,6 +79,12 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.state.storage_errors = []
     app.state.migration = None
     app.state.startup_ms = 0.0
+
+    # 设备 token 鉴权（契约 §4）：默认 auth_enabled=False，中间件直接放行；
+    # 桌面端置 CHIRON_LOCAL_AUTH_ENABLED=1 后，除 /healthz、/readyz、/v1/auth/session
+    # 外一律要求 `Authorization: Bearer <设备 token>`。配置从 app.state.settings 读，
+    # 所以这里不传死一份，测试换配置也能生效。
+    app.add_middleware(DeviceTokenMiddleware)
 
     app.include_router(health.router, tags=["health"])
     app.include_router(auth.router, tags=["auth"])
