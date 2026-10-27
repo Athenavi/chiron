@@ -1,16 +1,17 @@
 /**
  * 本地组件管理（core / pageindex / langextract）。
  *
- * 约定（见 docs/desktop-local/contracts.md §2 §3）：
- *   - 组件目录固定 `userData/components/<name>`，是否安装以该目录下的
- *     `manifest.json` 能否解析为准（不猜、不缓存）。
- *   - core 的启动/停止是本文件唯一真正实现的动作：优先用
+ * 职责划分（见 docs/desktop-local/contracts.md §2 §3 与 docs/desktop-local/components.md）：
+ *   - **core** 由本文件启动/停止（startCore / stopCore 行为不变）：优先用
  *     `userData/components/core/chiron-local[.exe]`，开发态回退
- *     `python desktop-local/app/main.py`。
- *   - pageindex / langextract 只做占位：未安装给明确错误，已安装也明确
- *     说明启动逻辑属于 P3。
- *   - install / remove 不实现真实下载与解压：只校验本地目录与 manifest，
- *     缺东西就返回“需 P3 组件源”，绝不静默成功。
+ *     `python -m app.main`。
+ *   - **pageindex / langextract** 的安装、启停全部委托给本地 core 的
+ *     `/v1/components*` 端点（`desktop-local/app/api/components.py`）：本文件不再自己
+ *     下载、解压或 spawn，只做 HTTP 调用 + 错误翻译 + 状态缓存。
+ *   - 目录 `userData/components/<name>` 仍然存在，但**只用于 core 的二进制与回退展示**；
+ *     pageindex / langextract 的真实安装目录以 core 的 data-dir 为准。
+ *   - core 没在运行时不给“假装已安装”的答案：列表回退到磁盘探测并标 `error`，
+ *     install/start/stop 直接抛“本地 core 未运行”，绝不静默成功。
  *   - spawn 一律 `stdio: 'pipe'`：stdout/stderr 只累计字节数；stderr 仅保留末尾
  *     一小段给**报错消息**（脱敏 + 截断），不落盘、不打印整段，避免把本地后端的
  *     请求体/密钥刷进日志。
@@ -36,6 +37,14 @@ const CORE_STOP_TIMEOUT_MS = 5000
 const CORE_KILL_TIMEOUT_MS = 2000
 /** 报错消息里最多带多少字节 stderr（脱敏后）：够定位 ImportError / 端口占用即可 */
 const CORE_STDERR_TAIL_BYTES = 2000
+/** core 的组件端点（desktop-local/app/api/components.py） */
+const CORE_COMPONENTS_PATH = '/v1/components'
+/** 列组件应该很快：卡住就别让 UI 转圈 */
+const CORE_LIST_TIMEOUT_MS = 5000
+/** 安装要复制/解压组件包，给宽一点 */
+const CORE_INSTALL_TIMEOUT_MS = 120000
+/** 启动可能要等健康检查（core 侧默认 20s），再留点余量 */
+const CORE_ACTION_TIMEOUT_MS = 60000
 
 /**
  * core 的启动环境变量（contracts.md §3.1 的**契约名**）。
@@ -70,7 +79,10 @@ const CORE_ENV_ALIASES = Object.freeze({
 const state = {
   /** 当前 core 进程记录；null 表示本进程没起过或已停 */
   core: null,
-  /** pageindex / langextract 的占位子进程（P3 前不会有内容） */
+  /**
+   * pageindex / langextract 的运行状态缓存，内容来自 core 的 `/v1/components`。
+   * 真进程由 core 管理，这里只用来在 core 短暂不可达时也能给出最后一次已知状态。
+   */
   children: new Map(),
 }
 
@@ -89,6 +101,12 @@ function _setDeps(deps) {
 
 function _resetDeps() {
   injected = null
+}
+
+/** 仅供 __tests__：清掉进程记录与组件状态缓存（不会去 kill 真进程） */
+function _resetState() {
+  state.core = null
+  state.children.clear()
 }
 
 function userDataDir() {
@@ -171,17 +189,163 @@ async function describeComponent(name) {
   }
 }
 
-/** contracts.md §2 的 ComponentInfo[]；不含内部路径，交给渲染进程只读展示 */
+// ------------------------------------------------------------------ core HTTP
+/** core 的 baseUrl；没在跑就抛可读错误（组件管理不能在没后端时假装成功） */
+function requireCoreBaseUrl() {
+  const record = state.core
+  if (!record || record.exited || !record.baseUrl) {
+    throw new Error('本地 core 未运行：组件管理需要本地后端在线，请先启动本地模式（或重启应用）')
+  }
+  return record.baseUrl
+}
+
+/**
+ * 调 core 的 JSON 接口。返回解析后的 body（`{data, ...}` 原样），非 2xx 抛已翻译的错误。
+ * 不带请求体：组件的输入参数（组件源、版本）由 core 自己从环境变量与 manifest 读。
+ */
+async function coreJson(method, pathname, options = {}) {
+  const baseUrl = requireCoreBaseUrl()
+  const timeoutMs = options.timeoutMs || CORE_ACTION_TIMEOUT_MS
+  const headers = { Accept: 'application/json' }
+  // 设备 token 只用于 loopback 调用；不进日志、不回渲染进程
+  if (state.core && state.core.token) headers.Authorization = `Bearer ${state.core.token}`
+  let response
+  try {
+    response = await httpFetch()(`${baseUrl}${pathname}`, {
+      method,
+      headers,
+      signal: AbortSignal.timeout(timeoutMs),
+    })
+  } catch (err) {
+    throw new Error(`无法访问本地 core（${baseUrl}${pathname}）：${err && err.message ? err.message : err}`)
+  }
+  const body = await response.json().catch(() => null)
+  if (!response.ok) throw new Error(describeCoreError(response.status, body))
+  return body && typeof body === 'object' ? body : {}
+}
+
+/** 取 `{data: ...}` 里的 data（core 的响应统一包装，契约 §4） */
+function unwrapData(body) {
+  if (body && typeof body === 'object' && 'data' in body) return body.data
+  return body
+}
+
+/**
+ * 把 core 的 `{error, message}` 翻成一句用户能看懂的话。
+ * 错误码清单见 docs/desktop-local/components.md 的「错误码」一节。
+ */
+function describeCoreError(status, body) {
+  const code = body && typeof body.error === 'string' ? body.error : ''
+  const detail = body && typeof body.message === 'string' ? body.message : ''
+  const hint = CORE_ERROR_HINTS[code] || ''
+  if (detail && hint) return `${hint}（${detail}）`
+  if (detail) return detail
+  if (hint) return hint
+  return `本地 core 返回 HTTP ${status}`
+}
+
+/** core 的错误码 → 人话。新增错误码时两处一起改（core: app/components/manager.py） */
+const CORE_ERROR_HINTS = Object.freeze({
+  component_source_unconfigured:
+    '未配置组件源：请把环境变量 CHIRON_COMPONENT_BASE_URL 指向本地目录或 HTTP 基址，然后重启本地后端',
+  component_source_unavailable: '组件源不可用（目录不存在或无法访问）',
+  component_not_in_source: '组件源里没有这个组件（缺 manifest.json 或文件）',
+  component_manifest_invalid: '组件清单不合法',
+  component_integrity_failed: '组件包校验失败（sha256 不匹配），已中止安装',
+  component_unsafe_path: '组件包含不安全路径（.. / 绝对路径 / 符号链接），已拒绝安装',
+  component_not_installed: '组件未安装，请先安装',
+  component_running: '组件正在运行，请先停止',
+  component_entry_unsupported: '组件入口类型不支持（只支持 python / node / 可执行文件）',
+  component_start_failed: '组件启动失败',
+  unknown_component: '未知组件',
+  invalid_component_name: '组件名不合法',
+})
+
+/** 记住 core 报回来的运行状态（core 暂时不可达时列表还能显示最后一次已知值） */
+function rememberComponent(name, data) {
+  const running = Boolean(data && (data.running === undefined ? data.pid : data.running))
+  if (running) {
+    state.children.set(name, {
+      pid: data.pid,
+      baseUrl: typeof data.baseUrl === 'string' ? data.baseUrl : '',
+      version: typeof data.version === 'string' ? data.version : '',
+    })
+    return
+  }
+  state.children.delete(name)
+}
+
+/** 从 core 拉组件列表；core 没在跑或请求失败都返回 `{error}` 而不是抛 */
+async function fetchCoreComponents() {
+  if (!isCoreRunning()) return { items: null, error: 'core-not-running', source: null }
+  try {
+    const body = await coreJson('GET', CORE_COMPONENTS_PATH, { timeoutMs: CORE_LIST_TIMEOUT_MS })
+    const items = Array.isArray(body.data) ? body.data : []
+    for (const item of items) {
+      if (item && typeof item.name === 'string' && item.name !== 'core') rememberComponent(item.name, item)
+    }
+    return { items, error: '', source: body.source || null }
+  } catch (err) {
+    return { items: null, error: err && err.message ? err.message : String(err), source: null }
+  }
+}
+
+/** core 不可达时的 running：用缓存里的最后一次已知状态（不猜） */
+function cachedRunning(name) {
+  return state.children.has(name)
+}
+
+/**
+ * contracts.md §2 的 ComponentInfo[]；不含内部路径，交给渲染进程只读展示。
+ *
+ * pageindex / langextract 的安装状态以本地 core 的 `/v1/components` 为准；core 没在跑时
+ * 回退到磁盘探测（`userData/components/<name>/manifest.json`），并在每项上标 `error`，
+ * 让 UI 能区分“确实没装”和“后端还没起来”。
+ */
 async function listComponents() {
+  const remote = await fetchCoreComponents()
   const items = []
   for (const name of COMPONENT_NAMES) {
-    const info = await describeComponent(name)
+    if (name === 'core') {
+      const local = await describeComponent(name)
+      const coreState = getCoreState()
+      items.push({
+        name,
+        version: local.version,
+        installed: local.installed || Boolean(coreState.running),
+        running: coreState.running,
+        sizeBytes: local.sizeBytes,
+        pid: coreState.pid,
+        baseUrl: coreState.baseUrl,
+        error: '',
+      })
+      continue
+    }
+
+    const local = await describeComponent(name)
+    const found = remote.items ? remote.items.find(item => item && item.name === name) : null
+    if (found) {
+      items.push({
+        name,
+        version: typeof found.version === 'string' ? found.version : '',
+        installed: Boolean(found.installed),
+        running: Boolean(found.running),
+        sizeBytes: Number(found.sizeBytes) || 0,
+        pid: found.pid === undefined ? undefined : found.pid,
+        baseUrl: typeof found.baseUrl === 'string' ? found.baseUrl : '',
+        error: '',
+      })
+      continue
+    }
     items.push({
-      name: info.name,
-      version: info.version,
-      installed: info.installed,
-      running: info.running,
-      sizeBytes: info.sizeBytes,
+      name,
+      version: local.version,
+      installed: local.installed,
+      running: cachedRunning(name),
+      sizeBytes: local.sizeBytes,
+      pid: undefined,
+      baseUrl: '',
+      error: remote.error,
     })
   }
   return items
@@ -195,6 +359,12 @@ function repoRoot() {
 /** desktop-local 目录：`-m app.main` 的 cwd，也是 `app` 包能被导入的前提 */
 function coreSourceDir(root = repoRoot()) {
   return path.join(root, 'desktop-local')
+}
+
+/** core 二进制在 userData 里的固定位置（装好的 core 优先用它） */
+function coreBinaryPath() {
+  const exeName = process.platform === 'win32' ? 'chiron-local.exe' : 'chiron-local'
+  return path.join(componentsRoot(), 'core', exeName)
 }
 
 /**
@@ -211,8 +381,7 @@ function coreSourceDir(root = repoRoot()) {
  *     必然 ImportError。`-m` 会把 cwd 放进 sys.path。
  */
 function resolveCoreLaunch(root = repoRoot()) {
-  const exeName = process.platform === 'win32' ? 'chiron-local.exe' : 'chiron-local'
-  const exe = path.join(componentsRoot(), 'core', exeName)
+  const exe = coreBinaryPath()
   if (fs.existsSync(exe)) return { command: exe, args: [], kind: 'binary', cwd: root }
   const script = path.join(root, 'desktop-local', 'app', 'main.py')
   if (fs.existsSync(script)) {
@@ -328,11 +497,17 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/** 统一的 fetch 入口：单测通过 `_setDeps({fetch})` 注入，运行期用全局 fetch */
+function httpFetch() {
+  const injected = runtime()
+  return injected.fetch || fetch
+}
+
 /** 单次健康探测：core 活着就 true。失败/超时一律当"还没起来"，不抛。 */
 async function probeHealth(baseUrl, timeoutMs = 1000) {
   if (!baseUrl) return false
   try {
-    const res = await fetch(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(timeoutMs) })
+    const res = await httpFetch()(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(timeoutMs) })
     if (!res.ok) return false
     const body = await res.json().catch(() => null)
     // 契约 §4：{"status":"ok"}。字段缺失时按"活着"算，避免把简化实现判死。
@@ -573,79 +748,105 @@ function isCoreRunning() {
   return isRunning('core')
 }
 
-const PLACEHOLDER_ERROR = target =>
-  new Error(`组件 ${target} 的启动/停止属于 P3（当前只做占位，未实现进程管理）`)
+/** core 随应用发布，不走组件源：给一句能直接照做的说明 */
+function coreNotInstallable() {
+  return new Error(
+    `本地 core 由桌面端自身提供，不能通过组件管理安装：请把 ${coreBinaryPath()} 放到位` +
+      '，或在仓库根保留 desktop-local/app/main.py 以开发态启动',
+  )
+}
 
-/** contracts.md §2 startComponent(name)；core 走 startCore，其余为占位 */
+/**
+ * contracts.md §2 startComponent(name)。
+ * core 走 startCore（行为不变）；pageindex / langextract 交给本地 core 的
+ * `POST /v1/components/{name}/start`，返回 `{pid, baseUrl}` 加版本/健康检查结果。
+ */
 async function startComponent(name, options = {}) {
   const target = assertComponentName(name)
   if (target === 'core') {
     const started = await startCore(options)
     return { name: 'core', running: true, ...started }
   }
-  const info = await describeComponent(target)
-  if (!info.installed) {
-    throw new Error(`组件 ${target} 未安装（缺少 ${path.join(info.dir, 'manifest.json')}），请先安装再启动`)
+  const body = await coreJson('POST', `${CORE_COMPONENTS_PATH}/${encodeURIComponent(target)}/start`)
+  const data = unwrapData(body) || {}
+  rememberComponent(target, data)
+  return {
+    name: target,
+    running: true,
+    pid: data.pid,
+    baseUrl: data.baseUrl || '',
+    port: data.port,
+    version: data.version || '',
+    health: data.health || null,
   }
-  throw PLACEHOLDER_ERROR(target)
 }
 
+/** 停止：core 做 terminate → kill；没在跑时 `stopped:false`（幂等，不报错） */
 async function stopComponent(name) {
   const target = assertComponentName(name)
   if (target === 'core') {
     const wasRunning = await stopCore()
     return { name: 'core', running: false, stopped: wasRunning }
   }
-  const info = await describeComponent(target)
-  if (!info.installed) {
-    throw new Error(`组件 ${target} 未安装，无需停止`)
-  }
-  throw PLACEHOLDER_ERROR(target)
+  const body = await coreJson('POST', `${CORE_COMPONENTS_PATH}/${encodeURIComponent(target)}/stop`)
+  const data = unwrapData(body) || {}
+  rememberComponent(target, { running: false })
+  return { name: target, running: false, stopped: Boolean(data.stopped), pid: data.pid }
 }
 
 /**
- * 安装：只校验本地目录 + manifest，不做下载/解压（P3 才有组件源）。
- * 已经装好的目录直接返回现状，避免前端误以为“点一下就能更新”。
+ * 安装：core 负责取组件源、校验 sha256、拒绝路径穿越、解压到
+ * `<data-dir>/components/<name>/<version>`。壳层只转达结果。
+ * 未配置组件源时 core 返回 409 `component_source_unconfigured`，这里翻成可读错误。
  */
 async function installComponent(name) {
   const target = assertComponentName(name)
-  const info = await describeComponent(target)
-  if (info.installed) {
-    return { name: target, version: info.version, installed: true, requiresSource: false }
+  if (target === 'core') throw coreNotInstallable()
+  const body = await coreJson('POST', `${CORE_COMPONENTS_PATH}/${encodeURIComponent(target)}/install`, {
+    timeoutMs: CORE_INSTALL_TIMEOUT_MS,
+  })
+  const data = unwrapData(body) || {}
+  rememberComponent(target, { running: false })
+  return {
+    name: target,
+    version: data.version || '',
+    installed: true,
+    requiresSource: false,
+    dir: data.dir || '',
+    entry: data.entry || '',
+    source: data.source || '',
   }
-  const reason = fs.existsSync(info.dir) ? '目录存在但缺少可解析的 manifest.json' : '目录不存在'
-  throw new Error(
-    `需要 P3 组件源：组件 ${target} 需要下载/解压（${reason}）；当前版本请手动放入 ${info.dir} 并附带 manifest.json`,
-  )
 }
 
-/** 卸载：同样只做校验，不删用户目录（删除是不可逆操作，留给 P3 的显式确认流程） */
+/** 卸载：core 删除整个 `<data-dir>/components/<name>`（正在运行时会拒绝） */
 async function removeComponent(name) {
   const target = assertComponentName(name)
-  const info = await describeComponent(target)
-  if (info.running) throw new Error(`组件 ${target} 正在运行，请先停止`)
-  if (!info.installed) {
-    if (fs.existsSync(info.dir)) {
-      throw new Error(`组件 ${target} 的目录 ${info.dir} 存在但缺少可解析的 manifest.json，请手动检查`)
-    }
-    throw new Error(`组件 ${target} 未安装`)
+  if (target === 'core') {
+    throw new Error(`本地 core 随桌面端发布，不支持通过组件管理卸载：${coreBinaryPath()}`)
   }
-  throw new Error(`需要 P3 组件源：当前版本不支持卸载 ${target}，请手动删除 ${info.dir}`)
+  const body = await coreJson('DELETE', `${CORE_COMPONENTS_PATH}/${encodeURIComponent(target)}`)
+  const data = unwrapData(body) || {}
+  rememberComponent(target, { running: false })
+  return { name: target, removed: Boolean(data.removed), dir: data.dir || '' }
 }
 
 module.exports = {
   COMPONENT_NAMES,
+  CORE_COMPONENTS_PATH,
+  CORE_ERROR_HINTS,
   CORE_HEALTH_TIMEOUT_MS,
   CORE_ENV,
   CORE_ENV_ALIASES,
   componentsRoot,
   componentDir,
+  coreBinaryPath,
   coreSourceDir,
   resolveCoreLaunch,
   buildCoreEnv,
   coreCliArgs,
   parseListeningLine,
   redactSecrets,
+  describeCoreError,
   listComponents,
   describeComponent,
   startCore,
@@ -658,4 +859,5 @@ module.exports = {
   removeComponent,
   _setDeps,
   _resetDeps,
+  _resetState,
 }
