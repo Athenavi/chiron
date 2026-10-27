@@ -14,6 +14,10 @@ dependencies = [
   "uvicorn>=0.30",
   "pydantic>=2.7",
   "pydantic-settings>=2.3",
+  # 出站 HTTP 客户端：`app/runtime/inference.py` 用它向主进程的推理代理发请求。
+  # **fastapi/uvicorn 不会带它进来** —— 早期漏声明过一次，结果安装包内 core 启动即
+  # `ModuleNotFoundError: No module named 'httpx'`，前端所有页面报服务繁忙。
+  "httpx>=0.27",
   # 存储：asyncpg 给应用层异步访问，embedded-postgres 负责本机实例。
   # embedded-postgres 的版本号 = 它自带的 PostgreSQL 版本（18.6.x = PG 18.6），**没有 2.x**
   # 那种版本线；>=18.6.3 是实测过（get_server / get_uri / cleanup 这套 API）的版本，

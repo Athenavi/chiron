@@ -412,12 +412,44 @@ function coreBinaryPath() {
  */
 const runtimeProbeCache = new Map()
 
-/** 打包态必须能 import 的模块：任一失败 core 都起不来（与 prepare_python_runtime.py 一致） */
-const REQUIRED_RUNTIME_MODULES = Object.freeze(['fastapi', 'uvicorn', 'asyncpg', 'embedded_postgres'])
+/**
+ * 打包态"能不能起 core"的唯一判据：**真实 import 一遍 `app` 包**。
+ *
+ * 为什么不再硬编码模块名（原来是 `['fastapi','uvicorn','asyncpg','embedded_postgres']`）：
+ * 手写清单只覆盖作者想到的东西。`app/runtime/inference.py` 需要 `httpx`，而清单里没有它，
+ * 于是探测判"可用"、core 一启动就 `ModuleNotFoundError: No module named 'httpx'`，
+ * 用户看到的是所有页面"服务繁忙"。现在依赖闭包由 Python 自己算，与
+ * `prepare_python_runtime.py` 用同一套逻辑，少装一个包这里必然红。
+ *
+ * `walk_packages` 默认静默吞掉子包 import 失败（onerror=None），必须显式收集，
+ * 否则失败的子包及其子孙不会出现在遍历结果里，探测会假通过。
+ */
+const RUNTIME_PROBE_CODE = [
+  'import importlib, pkgutil, sys',
+  'missing = []',
+  'try:',
+  '    import app',
+  'except Exception as e:',
+  '    print("MISS app: %s: %s" % (type(e).__name__, e))',
+  '    sys.exit(1)',
+  'def _onerror(name):',
+  '    print("MISS %s: %s" % (name, sys.exc_info()[1]))',
+  '    missing.append(name)',
+  'mods = list(pkgutil.walk_packages(app.__path__, "app.", onerror=_onerror))',
+  'for m in mods:',
+  '    try:',
+  '        importlib.import_module(m.name)',
+  '    except Exception as e:',
+  '        print("MISS %s: %s: %s" % (m.name, type(e).__name__, e))',
+  '        missing.append(m.name)',
+  'sys.exit(1 if missing else 0)',
+].join('\n')
 
-function probeBundledRuntime(pythonPath) {
+function probeBundledRuntime(pythonPath, cwd = '') {
   if (!pythonPath) return { ok: false, reason: 'missing', message: '未找到随包 Python 运行时' }
-  const cached = runtimeProbeCache.get(pythonPath)
+  // 缓存键要带 cwd：同一个解释器在不同工作目录下能 import 到的 `app` 包不一样
+  const cacheKey = `${pythonPath}\u0000${cwd}`
+  const cached = runtimeProbeCache.get(cacheKey)
   if (cached) return cached
 
   const probe = runtime().spawnSync
@@ -428,10 +460,13 @@ function probeBundledRuntime(pythonPath) {
 
   let result
   try {
-    result = probe(pythonPath, ['-c', `import ${REQUIRED_RUNTIME_MODULES.join(',')}`], {
-      timeout: 20000,
+    result = probe(pythonPath, ['-c', RUNTIME_PROBE_CODE], {
+      timeout: 30000,
       windowsHide: true,
       encoding: 'utf8',
+      // cwd 必须是 core 将来启动时的那个目录（desktop-local），否则 `import app`
+      // 找的不是随包那份源码，探测就等于没做。
+      ...(cwd ? { cwd } : {}),
       env: { ...process.env, PYTHONNOUSERSITE: '1' },
     })
   } catch (err) {
@@ -440,22 +475,22 @@ function probeBundledRuntime(pythonPath) {
 
   if (result && result.status === 0) {
     const ok = { ok: true, reason: 'ok', message: '' }
-    runtimeProbeCache.set(pythonPath, ok)
+    runtimeProbeCache.set(cacheKey, ok)
     return ok
   }
 
-  const stderr = String((result && (result.stderr || result.stdout)) || '')
-  const missing = REQUIRED_RUNTIME_MODULES.find(name =>
-    new RegExp(`No module named ['"]?${name}`).test(stderr),
-  )
+  const output = String((result && (result.stderr || '')) + (result && (result.stdout || '')) || '')
+  // `No module named 'x'` 是 pip 漏装的典型信号，单独归类好给出"重建运行时"的引导
+  const missingMatch = output.match(/No module named ['"]?([A-Za-z_][\w.]*)/)
+  const missing = missingMatch ? missingMatch[1] : ''
   return {
     ok: false,
     reason: missing ? 'missing-dependency' : 'probe-failed',
-    missingModule: missing || '',
+    missingModule: missing,
     // 文案里带路径：回退链上可能同时有多个候选，只说"随包运行时坏了"会误导
     message: missing
       ? `解释器 ${pythonPath} 缺少模块 ${missing}`
-      : `解释器 ${pythonPath} 无法导入依赖：${stderr.trim().split('\n').pop() || '未知原因'}`,
+      : `解释器 ${pythonPath} 无法导入本地核心：${output.trim().split('\n').pop() || '未知原因'}`,
   }
 }
 
@@ -523,13 +558,15 @@ function resolveCoreLaunch(root = repoRoot()) {
       const python = String(candidate || '').trim()
       if (!python) continue
       if (attempted.some(item => item.python === python)) continue
-      const probe = probeBundledRuntime(python)
+      // 传 packaged 作 cwd：探测必须和将来 `-m app.main` 在同一目录下做，
+      // 否则 `import app` 找的不是随包那份源码，探测等于没做。
+      const probe = probeBundledRuntime(python, packaged)
       attempted.push({ python, probe })
       if (!probe.ok) continue
       if (python !== bundled) {
         // 用了兜底解释器要留痕：否则排查时无法解释"为什么没用随包那份"
         process.stderr.write(
-          `[chiron] 随包运行时不可用，回退到 ${python}（已确认可导入 ${REQUIRED_RUNTIME_MODULES.join(',')}）\n`,
+          `[chiron] 随包运行时不可用，回退到 ${python}（已确认能 import 随包 desktop-local）\n`,
         )
       }
       return { command: python, args: ['-m', 'app.main'], kind: 'packaged', cwd: packaged }
@@ -1306,6 +1343,8 @@ module.exports = {
   describeCoreError,
   probeHealth,
   probeReady,
+  /** 打包态运行时探测：需要真实跑解释器，导出供端到端验证（单测里用假 spawnSync 替身） */
+  probeBundledRuntime,
   waitForReady,
   listComponents,
   describeComponent,

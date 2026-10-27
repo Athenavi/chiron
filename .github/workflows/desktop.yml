@@ -77,6 +77,35 @@ jobs:
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
+      # 打包要随带一个**自包含**的 Python 运行时（解释器 + desktop-local 全部依赖 +
+      # embedded-postgres 自带的 PG 二进制），所以 runner 上必须有一个干净的 Python。
+      #
+      # 为什么固定 3.12 而不是跟着本地开发机的 3.14：runner 要能一次装齐 12 个依赖的
+      # 预编译 wheel（asyncpg / psycopg2-binary 这类 C 扩展在最新版上常滞后）。
+      # 产物自带解释器，用户机完全不受这个版本影响。
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # redis 是本地模式的必要组件（KeyRing 仲裁走 Redis 单键 Lua EVAL），
+      # prepare_redis.py 只负责「把机器上已有的 redis-server 拷进 resources」，
+      # 它不会替你安装 —— 所以三个平台各自先装好。
+      - name: Install redis-server (Windows)
+        if: matrix.platform == 'win'
+        shell: pwsh
+        run: |
+          # windows-latest 预装 MSYS2；用它装的和本地开发机是同一份 MINGW 构建
+          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-redis
+          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+
+      - name: Install redis-server (macOS)
+        if: matrix.platform == 'mac'
+        run: brew install redis
+
+      - name: Install redis-server (Linux)
+        if: matrix.platform == 'linux'
+        run: sudo apt-get update && sudo apt-get install -y redis-server
+
       # 先跑门禁再打包：任何一项红了都不该出安装包
       - name: Check UI contracts
         working-directory: frontend-vue
@@ -128,11 +157,92 @@ jobs:
             echo "ok  $f  $(wc -c < "$f") bytes"
           done
 
+      # 就位随包的 Python 运行时（解释器 + 12 个依赖 + embedded-postgres 的 PG 二进制）
+      # 与 redis 二进制。**必须在 electron-builder 之前跑**：
+      #   1) 这两份产物都不进 git（体积 150MB+），CI checkout 上根本没有；
+      #   2) electron-builder 对缺失的 `extraResources.from` 只 warn 不报错
+      #      （app-builder-lib out/fileMatcher.js: `statOrNull(from)` 为 null 时
+      #      `log.warn(...)` 后直接 return），所以缺了也照样出包 —— 打出的是残包。
+      # 两个脚本自带"真实跑一次"的自检，失败即退出非零，把问题挡在出包之前。
+      - name: Prepare bundled python runtime
+        working-directory: desktop-local
+        run: python scripts/prepare_python_runtime.py
+
+      - name: Prepare bundled redis binary
+        working-directory: desktop-local
+        run: python scripts/prepare_redis.py
+
       - name: Package desktop app
         working-directory: frontend-vue
         run: pnpm exec electron-builder --${{ matrix.platform }} --publish never
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # 出包之后再断言一次：上面那两个 `from` 目录如果因为任何原因没生成，
+      # electron-builder 只会 warn，产物照样"成功"。这里按**安装包里的真实路径**检查，
+      # 缺任何一项就让 CI 红掉，而不是等用户装上发现本地模式起不来。
+      - name: Verify packaged runtime assets
+        shell: bash
+        run: |
+          # 每个平台 electron-builder 解开后的目录名不同，统一用 win-unpacked /
+          # mac / linux-unpacked 三种去找。
+          root=""
+          for d in frontend-vue/release/win-unpacked frontend-vue/release/mac \
+                   frontend-vue/release/linux-unpacked; do
+            if [[ -d "$d/resources" ]]; then root="$d/resources"; break; fi
+          done
+          if [[ -z "$root" ]]; then
+            echo "::error::找不到解包后的 resources 目录，打包可能没产出"
+            ls -la frontend-vue/release || true
+            exit 1
+          fi
+          echo "resources = $root"
+
+          fail=0
+          need=(
+            "desktop-local/app/main.py"
+            "migrations"
+            "alembic.ini"
+          )
+          # 解释器：Windows 在 resources/python/python.exe，POSIX 在 resources/python/bin/python3
+          for p in "${need[@]}"; do
+            if [[ ! -e "$root/$p" ]]; then
+              echo "::error::缺少 $root/$p"
+              fail=1
+            else
+              echo "ok  $p"
+            fi
+          done
+
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            py="$root/python/python.exe"
+            redis="$root/desktop-local/bin/redis/redis-server.exe"
+            pg="$root/python/Lib/site-packages/embedded_postgres/pginstall/bin/postgres.exe"
+          else
+            py="$root/python/bin/python3"
+            redis="$root/desktop-local/bin/redis/redis-server"
+            pg="$root/python/lib/python3.12/site-packages/embedded_postgres/pginstall/bin/postgres"
+          fi
+          for p in "$py" "$redis" "$pg"; do
+            if [[ ! -e "$p" ]]; then
+              echo "::error::缺少 $p —— 本地模式在用户机上必然起不来"
+              fail=1
+            else
+              echo "ok  ${p#"$root/"}"
+            fi
+          done
+
+          # 解释器必须能真的跑起来（不只是文件存在）：在干净环境里 import 一次 app。
+          # 这一步同时验证 libpython / DLL 是否齐、依赖是否装全。
+          if [[ -x "$py" || "${{ matrix.platform }}" == "win" ]]; then
+            ( cd "$root/desktop-local" && env -u PYTHONHOME -u PYTHONPATH PYTHONNOUSERSITE=1 \
+                "$py" -c "import app.main" ) || {
+              echo "::error::随包解释器无法 import app.main（依赖或动态库不全）"
+              fail=1
+            }
+          fi
+
+          exit "$fail"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4

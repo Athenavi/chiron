@@ -207,6 +207,19 @@ function loadOptionalModule(name) {
  * 启动抛错都要变成一条可读状态再显示本地错误页，而不是让主进程崩掉。
  */
 async function startLocalBackend() {
+  // 显式守卫：云端模式下**一律不启动**本地 core（以及它拉起的 PG / redis）。
+  // 调用点目前都在 `currentMode === 'local'` 分支里，但这条不变量不能只靠调用方自律 ——
+  // 以后新增一处调用就可能让云端用户白起一套数据库。放在这里，误用会立刻变成可读状态。
+  if (currentMode !== 'local') {
+    return {
+      ok: false,
+      baseUrl: '',
+      token: '',
+      dataDir: '',
+      reason: 'not-local',
+      message: `当前是${currentMode === 'cloud' ? '云端' : currentMode}模式，不启动本地后端`,
+    }
+  }
   const components = loadOptionalModule('./components.cjs')
   if (!components) {
     return {
