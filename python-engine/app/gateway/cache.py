@@ -59,30 +59,54 @@ class SemanticCache:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> str:
-        """精确缓存 key: hash(tenant + model + messages + tools + temperature)
+        """精确缓存 key: hash(tenant + model + messages + tools + temperature
+        [+ response_format])
 
         tenant 必须参与哈希。少了它，两个不同租户只要 prompt 相同就会互相命中 ——
         后提问的那个会拿到对方回复的**完整内容**（含对方上下文里的私有事实），
         并被写进自己的对话历史。L2/L3 走共享 Redis，多副本下影响等同全站。
+
+        ``response_format`` 也必须参与哈希，理由不是隐私而是**形状**：同一段 prompt
+        先以纯文本、后以 ``json_object`` 请求时，若 key 相同，后者会命中前者并拿到
+        根本不能 JSON.parse 的字符串（调用方按 JSON 解析 → 直接失败）。
+
+        只在**非空**时才注入 payload：``response_format is None`` 的既有调用方
+        （Agent / 工作流 / 对话）哈希结果与加这个参数之前**逐字节相同**，存量 L2/L3
+        条目继续命中，不需要任何迁移。这条「默认不改变」的约束有单测守着
+        （``tests/test_desktop_infer.py::test_cache_key_is_unchanged_without_response_format``）。
         """
-        payload = {
+        payload: dict[str, Any] = {
             "tenant": tenant_id,
             "model": model,
             "messages": [m.to_dict() for m in messages],
             "tools": tools,
             "temperature": temperature,
         }
+        if response_format is not None:
+            # 归一再哈希：dict 的插入顺序不该产生两个 key（否则缓存命中率白掉一截）。
+            payload["response_format"] = json.dumps(
+                response_format, sort_keys=True, ensure_ascii=False
+            )
         raw = json.dumps(payload, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(raw.encode()).hexdigest()[:32]
 
     async def _semantic_key(
-        self, tenant_id: int, messages: list[ChatMessage], model: str
+        self,
+        tenant_id: int,
+        messages: list[ChatMessage],
+        model: str,
+        response_format: dict[str, Any] | None = None,
     ) -> str | None:
-        """语义缓存 key: embedding 前 64 维量化 → hash（含租户维度）
+        """语义缓存 key: embedding 前 64 维量化 → hash（含租户维度与输出形状）
 
         语义缓存的跨租户命中概率**远高于**精确缓存 —— 它命中的是"意思相近"
         而非"完全相同"。所以租户维度必须进哈希，不能只在存储层做过滤。
+
+        ``response_format`` 同理：语义命中只保证"意思相近"，对输出的**形状**毫无
+        保证，所以形状必须进 key，而不能指望命中后再补救。同样只在非空时注入，
+        存量语义 key 不变。
         """
         try:
             # 取最后 3 轮对话作为语义摘要
@@ -103,7 +127,14 @@ class SemanticCache:
             # 取前 N 维，量化为 int8
             prefix = embedding[: self._semantic_prefix_dims]
             quantized = bytes(max(0, min(255, int((v + 1) * 127.5))) for v in prefix)
-            h = hashlib.sha256(quantized + str(tenant_id).encode() + model.encode()).hexdigest()[:16]
+            shape = (
+                json.dumps(response_format, sort_keys=True, ensure_ascii=False).encode()
+                if response_format is not None
+                else b""
+            )
+            h = hashlib.sha256(
+                quantized + str(tenant_id).encode() + model.encode() + shape
+            ).hexdigest()[:16]
             return h
         except Exception as e:
             logger.debug("Semantic key computation failed: %s", e)
@@ -118,13 +149,19 @@ class SemanticCache:
         messages: list[ChatMessage],
         tools: list[dict[str, Any]] | None,
         temperature: float,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse | None:
-        """按 L1 → L2 → L3 顺序查找缓存（tenant_id 必填，理由见 _exact_key）"""
+        """按 L1 → L2 → L3 顺序查找缓存（tenant_id 必填，理由见 _exact_key）
+
+        ``response_format`` 是**尾随可选**参数：既有调用方的位置调用与语义都不变。
+        """
         # 不缓存带工具调用的请求
         if tools:
             return None
 
-        exact = self._exact_key(tenant_id, model, messages, tools, temperature)
+        exact = self._exact_key(
+            tenant_id, model, messages, tools, temperature, response_format
+        )
 
         # L1
         if exact in self._l1:
@@ -142,7 +179,9 @@ class SemanticCache:
             return self._decode(data, model)
 
         # L3
-        sem_key = await self._semantic_key(tenant_id, messages, model)
+        sem_key = await self._semantic_key(
+            tenant_id, messages, model, response_format
+        )
         if sem_key:
             bucket_key = rkey(f"llm:semantic:{sem_key[:8]}")
             cached = await self._redis.hget(bucket_key, sem_key)
@@ -165,12 +204,19 @@ class SemanticCache:
         tools: list[dict[str, Any]] | None,
         temperature: float,
         response: ChatResponse,
+        response_format: dict[str, Any] | None = None,
     ) -> None:
-        """存储到 L1 + L2 + L3（tenant_id 必填，理由见 _exact_key）"""
+        """存储到 L1 + L2 + L3（tenant_id 必填，理由见 _exact_key）
+
+        ``response_format`` 放在 ``response`` **之后**：既有调用点按位置传 6 个参数，
+        把新参数插在中间会让它们把响应对象喂进 response_format。
+        """
         if tools:
             return
 
-        exact = self._exact_key(tenant_id, model, messages, tools, temperature)
+        exact = self._exact_key(
+            tenant_id, model, messages, tools, temperature, response_format
+        )
         data = self._encode(response)
 
         # L1
@@ -184,7 +230,9 @@ class SemanticCache:
         )
 
         # L3 (语义)
-        sem_key = await self._semantic_key(tenant_id, messages, model)
+        sem_key = await self._semantic_key(
+            tenant_id, messages, model, response_format
+        )
         if sem_key:
             bucket_key = rkey(f"llm:semantic:{sem_key[:8]}")
             await self._redis.hset(

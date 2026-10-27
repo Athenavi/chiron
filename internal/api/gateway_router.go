@@ -443,6 +443,8 @@ func NewGatewayRouter(
 	registerPluginRoutes(mux, pluginHandler, authMW, rlMW)
 	registerBillingRoutes(mux, billingHandler, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
+	// 桌面端云端片段推理（POST /v1/desktop/infer，用户 JWT + 限流，见 routes_desktop.go）
+	registerDesktopRoutes(mux, authMW, rlMW, pythonClient)
 
 	// Agents (auth + rate limited; DB 驱动 CRUD + 运行会话)
 	agentHandler := NewAgentHandler(authenticator, pythonClient, agentSem)
