@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import time
 from pathlib import Path
+from typing import Any
 
 from app.main import create_app
 from fastapi.testclient import TestClient
@@ -31,7 +33,12 @@ def test_readyz_shape_when_storage_disabled(client: TestClient) -> None:
 
 
 def test_readyz_reports_degraded_when_pg_unreachable(tmp_path: Path) -> None:
-    """给了外部 DSN 但连不上 → 进程照样起，/readyz 503 且带真实错误。"""
+    """给了外部 DSN 但连不上 → 进程照样起，/readyz 503 且带真实错误。
+
+    **存储初始化是后台 task**（见 app/main.py::lifespan）：TestClient 进入上下文时
+    startup 已返回、bootstrap 可能还在跑。这里轮询到 ``storage_ready`` 再断言，
+    否则会读到 ``status == "starting"`` 而不是最终的 ``degraded``。
+    """
     settings = make_settings(
         tmp_path,
         pg_enabled=True,
@@ -41,10 +48,18 @@ def test_readyz_reports_degraded_when_pg_unreachable(tmp_path: Path) -> None:
     )
 
     with TestClient(create_app(settings)) as client:
-        response = client.get("/readyz")
+        deadline = time.monotonic() + 10
+        payload: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            response = client.get("/readyz")
+            payload = response.json()
+            if payload.get("status") != "starting":
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError(f"存储初始化 10s 内没有结束：{payload}")
 
     assert response.status_code == 503
-    payload = response.json()
     assert payload["status"] == "degraded"
     assert payload["pg"] is False
     assert payload["errors"], "存储失败必须出现在 errors 里"

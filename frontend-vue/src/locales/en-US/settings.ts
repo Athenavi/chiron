@@ -72,6 +72,7 @@ export default {
   run_mode_switch_done: "Mode switched, restarting the app. If it does not restart automatically, quit and open it again.",
   run_mode_switch_failed: "Failed to switch the mode, please try again later.",
   run_mode_desktop_only: "The run mode can only be switched in the desktop app.",
+  run_mode_switch_to_local: "Switch back to local mode",
   // ── Local model (provider / endpoint / model / key): local mode only, the key goes straight into the OS keystore ──
   local_model: "Local model",
   local_model_unsupported: "This desktop client version cannot configure models yet — please update and try again.",

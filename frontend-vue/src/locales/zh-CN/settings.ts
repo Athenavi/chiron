@@ -72,6 +72,7 @@ export default {
   run_mode_switch_done: "模式已切换，正在重启应用；如未自动重启，请手动退出后重新打开。",
   run_mode_switch_failed: "切换模式失败，请稍后重试。",
   run_mode_desktop_only: "只有桌面客户端可以切换运行模式。",
+  run_mode_switch_to_local: "切回本地模式",
   // ── 本地模型（provider / 端点 / 模型名 / key）：仅本地模式，key 只进系统密钥库 ──
   local_model: "本地模型",
   local_model_unsupported: "当前桌面客户端版本还不支持在应用内配置模型，请升级后重试。",

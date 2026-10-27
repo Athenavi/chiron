@@ -47,8 +47,28 @@ const authStoreMock = vi.hoisted(() => ({
   token: '',
 }))
 
+/**
+ * device store 替身。
+ *
+ * LoginView 用 `useDeviceStore()` 判断"是否桌面端且当前是云端"（据此显示
+ * 「切回本地模式」入口）。加这个入口之前测试没 mock 它 —— 真实 `useDeviceStore()`
+ * 在没有 active pinia 时直接抛 "getActivePinia() was called but there was no active Pinia"，
+ * 于是整个文件 4 条用例一起红。
+ *
+ * 默认值刻意取 **Web 端语义**（`isDesktop: false`）：既能覆盖"入口不显示"，
+ * 又不需要为旧用例准备桌面环境。
+ */
+const deviceStoreMock = vi.hoisted(() => ({
+  isDesktop: false,
+  isLocal: () => false,
+  isCloud: () => true,
+  setMode: vi.fn((): Promise<void> => Promise.resolve()),
+  restart: vi.fn((): Promise<void> => Promise.resolve()),
+}))
+
 vi.mock('../../api/auth', () => authApi)
 vi.mock('../../stores/auth', () => ({ useAuthStore: () => authStoreMock }))
+vi.mock('../../stores/device', () => ({ useDeviceStore: () => deviceStoreMock }))
 
 import LoginView from '../LoginView.vue'
 

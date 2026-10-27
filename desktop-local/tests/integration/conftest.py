@@ -24,6 +24,7 @@ import json
 import shutil
 import socket
 import threading
+import time
 from collections.abc import Iterator
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -196,9 +197,30 @@ def api_settings(tmp_path: Path, pg_dsn: str, mock_inference: MockInferenceServe
 
 @pytest.fixture
 def app_client(api_settings: Settings) -> Iterator[TestClient]:
-    """完整 app（所有 router 都已注册）跑在真实 PG 上。"""
+    """完整 app（所有 router 都已注册）跑在真实 PG 上。
+
+    存储初始化是**后台 task**（``app/main.py::lifespan``）：进入 TestClient 上下文时
+    startup 已返回，bootstrap 可能仍在跑。这里等到 ``storage_ready`` 再交给用例，
+    让"每一条断言都发生在存储就绪之后"成为夹具的保证，而不是散落在各用例里。
+    """
     with TestClient(create_app(api_settings)) as client:
+        wait_for_storage(client)
         yield client
+
+
+def wait_for_storage(client: TestClient, timeout: float = 30.0) -> dict[str, Any]:
+    """轮询 ``/readyz`` 直到离开 ``starting``，返回最后一次 payload。
+
+    超时直接抛：静默放行会让后续断言在"存储还没起来"的状态下做出错误结论。
+    """
+    deadline = time.monotonic() + timeout
+    payload: dict[str, Any] = {}
+    while time.monotonic() < deadline:
+        payload = client.get("/readyz").json()
+        if payload.get("status") != "starting":
+            return payload
+        time.sleep(0.05)
+    raise AssertionError(f"存储初始化 {timeout}s 内没有结束：{payload}")
 
 
 @pytest.fixture
@@ -240,6 +262,9 @@ def down_client(tmp_path: Path, unreachable_dsn: str) -> Iterator[TestClient]:
     # raise_server_exceptions=False：让未捕获异常也变成真实 500 响应，
     # 这样"该 503 却 500"的路径能被断言出来（见报告里的 app bug #3）。
     with TestClient(app, raise_server_exceptions=False) as client:
+        # 存储初始化在后台 task 里；等它结束再看 storage_errors，
+        # 否则会读到"还没开始跑"的空列表。
+        wait_for_storage(client)
         assert app.state.storage_errors, "PG 连不上却没记录 storage_errors"
         yield client
 

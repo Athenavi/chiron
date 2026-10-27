@@ -1,9 +1,10 @@
 <script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, computed } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space, Tabs, TabPane, message } from 'ant-design-vue'
 import { MailOutlined, LockOutlined, MobileOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
+import { useDeviceStore } from '../stores/device'
 import { getCaptchaPublicConfig, getSmsStatus, sendSmsCode, smsLogin, isValidPhone, getEmailStatus, sendEmailCode, emailLogin, isValidEmail } from '../api/auth'
 import { useSmsCountdown } from '../composables/useSmsCountdown'
 import CaptchaWidget from '../components/CaptchaWidget.vue'
@@ -17,6 +18,42 @@ const { t } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
+const deviceStore = useDeviceStore()
+
+// ── 切回本地模式（登录页入口） ──
+//
+// 为什么放在登录页：设置页（SettingsPanel → RunModePanel）在登录后的 AppLayout 里，
+// 而"切到云端"之后就是这个页面。没有这个入口，未登录用户无法回到本地模式。
+const MODE_CONFIRM_WORD = 'SWITCH'
+const modeModalOpen = ref(false)
+const modeConfirmText = ref('')
+const modeSwitching = ref(false)
+const canSwitchToLocal = computed(() => deviceStore.isDesktop && !deviceStore.isLocal())
+const modeConfirmOk = computed(() => modeConfirmText.value.trim() === MODE_CONFIRM_WORD)
+
+function openModeSwitch() {
+  modeConfirmText.value = ''
+  modeModalOpen.value = true
+}
+
+async function submitModeSwitch() {
+  if (!modeConfirmOk.value || modeSwitching.value) return
+  modeSwitching.value = true
+  try {
+    await deviceStore.setMode('local')
+    modeModalOpen.value = false
+    message.success(t('settings.run_mode_switch_done'))
+    try {
+      await deviceStore.restart()
+    } catch {
+      /* 模式已写盘；提示里已说明可手动重开 */
+    }
+  } catch {
+    message.error(t('settings.run_mode_switch_failed'))
+  } finally {
+    modeSwitching.value = false
+  }
+}
 
 // ── 密码登录 ──
 
@@ -408,7 +445,17 @@ async function handleLogin() {
     <div class="login-card">
       <!-- 语言切换：登录前即可选择界面语言（RTL 语言由 <html dir> 自动生效）。
            此处用内联样式：仅一处布局，不值得为它新增 scoped 规则。 -->
-      <div style="display: flex; justify-content: flex-end; margin-block-end: 8px">
+      <div style="display: flex; justify-content: flex-end; gap: 8px; margin-block-end: 8px">
+        <!-- 桌面端：登录页也要能切回本地模式。
+             否则"切到云端 → 退出登录/未登录 → 想回本地"就无路可走（设置页在登录后）。 -->
+        <a-button
+          v-if="canSwitchToLocal"
+          size="small"
+          type="link"
+          @click="openModeSwitch"
+        >
+          {{ $t('settings.run_mode_switch_to_local') }}
+        </a-button>
         <LanguageSwitcher />
       </div>
       <div class="login-header">
@@ -726,6 +773,31 @@ async function handleLogin() {
         <SsoLoginButtons />
       </Card>
     </div>
+
+    <!-- 切回本地模式：登录页入口的确认弹窗（逻辑见 script 的 submitModeSwitch） -->
+    <a-modal
+      v-model:open="modeModalOpen"
+      :title="$t('settings.run_mode_switch_title', { mode: $t('settings.run_mode_local') })"
+      :ok-text="$t('settings.run_mode_switch_confirm')"
+      :cancel-text="$t('common.cancel')"
+      :confirm-loading="modeSwitching"
+      :ok-button-props="{ disabled: !modeConfirmOk }"
+      @ok="submitModeSwitch"
+    >
+      <p class="login-mode-line">
+        {{ $t('settings.run_mode_local_desc') }}
+      </p>
+      <p class="login-mode-line">
+        {{ $t('settings.run_mode_switch_will_clear') }}
+      </p>
+      <div class="login-mode-confirm-label">
+        {{ $t('settings.run_mode_confirm_hint', { word: MODE_CONFIRM_WORD }) }}
+      </div>
+      <a-input
+        v-model:value="modeConfirmText"
+        :placeholder="$t('settings.run_mode_confirm_placeholder', { word: MODE_CONFIRM_WORD })"
+      />
+    </a-modal>
   </div>
 </template>
 
@@ -764,6 +836,16 @@ async function handleLogin() {
   -webkit-mask-image: radial-gradient(ellipse 70% 70% at 50% 40%, black 15%, transparent 75%);
   pointer-events: none;
   opacity: 0.5;
+}
+
+.login-mode-line {
+  margin: 0 0 10px;
+  color: var(--text-primary);
+}
+.login-mode-confirm-label {
+  margin-bottom: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
 }
 
 .login-card {

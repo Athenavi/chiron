@@ -26,6 +26,28 @@ async def readyz(request: Request) -> JSONResponse:
     pg = request.app.state.pg
     redis = request.app.state.redis
 
+    # 存储初始化现在跑在后台 task 里（见 app/main.py::lifespan）：
+    # 还没跑完就如实报 "starting"，而不是让 health_async() 去连一个尚未启动的实例。
+    booting = not getattr(request.app.state, "storage_ready", True)
+    if booting:
+        payload: dict[str, Any] = {
+            "status": "starting",
+            "pg": False,
+            "redis": False,
+            "auth": settings.auth_mode(),
+            "pg_enabled": settings.pg_enabled,
+            "redis_enabled": settings.redis_enabled,
+            "pg_backend": "",
+            "pg_version": "",
+            "pg_error": "storage bootstrap in progress",
+            "redis_backend": "",
+            "redis_error": "storage bootstrap in progress",
+            "migration": None,
+            "startup_ms": getattr(request.app.state, "startup_ms", 0.0),
+            "errors": list(getattr(request.app.state, "storage_errors", [])),
+        }
+        return JSONResponse(payload, status_code=503)
+
     pg_health: dict[str, Any] = (
         await pg.health_async() if settings.pg_enabled else {"ok": False, "backend": "disabled", "error": "disabled"}
     )

@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import json
 import os
 import time
@@ -40,30 +41,59 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        started = time.perf_counter()
+        """**存储初始化不阻塞 uvicorn 启动**。
+
+        为什么必须这样：uvicorn 的 ``server.started`` 只有在 lifespan startup 阶段
+        返回后才置真，而 ``serve()`` 靠 ``server.started`` 才打印 listening 事件。
+        早期版本在 lifespan 里同步等 PG（``pg_start_timeout`` 默认 60s），于是：
+
+          冷启动慢 / 数据目录被残留 postmaster 占用 → PG 要等满 60s
+          → listening 事件永远不出现 → Electron 30s 超时 → 用户看到"本地后端启动失败"
+
+        现在 lifespan 立刻返回，存储放到后台 task：
+          * uvicorn 立即监听、立即打印 listening（Electron 握手成功）；
+          * ``/healthz`` 立刻 200；
+          * ``/readyz`` 在初始化期间返回 503 + ``status: "starting"``（如实上报，不装就绪）；
+          * 业务路由在 DSN 为空时给 503，而不是 500。
+        """
         app.state.storage_errors = []
+        app.state.storage_ready = False
+        app.state.startup_ms = 0.0
+        app.state.migration = None
 
-        if cfg.pg_enabled:
+        async def _bootstrap() -> None:
+            started = time.perf_counter()
             try:
-                # pg_ctl / embedded 包都是阻塞调用，扔到线程里免得卡住事件循环
-                await asyncio.to_thread(pg.start)
-                if cfg.run_migrations:
-                    app.state.migration = await asyncio.to_thread(pg.migrate)
-            except Exception as exc:  # noqa: BLE001 —— 逐条记录，交给 /readyz 上报
-                app.state.storage_errors.append(f"pg: {type(exc).__name__}: {exc}")
+                if cfg.pg_enabled:
+                    try:
+                        # pg_ctl / embedded 包都是阻塞调用，扔到线程里免得卡住事件循环
+                        await asyncio.to_thread(pg.start)
+                        if cfg.run_migrations:
+                            app.state.migration = await asyncio.to_thread(pg.migrate)
+                    except Exception as exc:  # noqa: BLE001 —— 逐条记录，交给 /readyz 上报
+                        app.state.storage_errors.append(f"pg: {type(exc).__name__}: {exc}")
 
-        if cfg.redis_enabled:
-            try:
-                await redis.start()
-                if redis.error:
-                    app.state.storage_errors.append(f"redis: {redis.error}")
-            except Exception as exc:  # noqa: BLE001
-                app.state.storage_errors.append(f"redis: {type(exc).__name__}: {exc}")
+                if cfg.redis_enabled:
+                    try:
+                        await redis.start()
+                        if redis.error:
+                            app.state.storage_errors.append(f"redis: {redis.error}")
+                    except Exception as exc:  # noqa: BLE001
+                        app.state.storage_errors.append(f"redis: {type(exc).__name__}: {exc}")
+            finally:
+                app.state.startup_ms = round((time.perf_counter() - started) * 1000, 1)
+                # "初始化结束"≠"健康"：是否可用仍以 /readyz 的逐项探测为准
+                app.state.storage_ready = True
 
-        app.state.startup_ms = round((time.perf_counter() - started) * 1000, 1)
+        task = asyncio.create_task(_bootstrap(), name="chiron-local-bootstrap")
+        app.state.bootstrap_task = task
         try:
             yield
         finally:
+            if not task.done():
+                task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await task
             await redis.stop()
             await asyncio.to_thread(pg.stop)
 
