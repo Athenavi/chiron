@@ -13,8 +13,6 @@ from __future__ import annotations
 
 import importlib.util
 
-import pytest
-
 from app.config import Settings
 from app.storage.redis import PROBE_OPS, RedisServer
 

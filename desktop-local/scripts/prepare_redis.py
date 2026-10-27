@@ -53,6 +53,32 @@ EXE_NAME = "redis-server.exe" if sys.platform == "win32" else "redis-server"
 EXTRA_GLOBS = ("*.dll", "*.conf")
 
 
+def _resolve_real_binary(exe: Path) -> Path:
+    """把 scoop/ShimGen 的 shim 解析成真身；普通二进制原样返回。
+
+    **为什么必须做**：scoop 在 ``shims/`` 下放的是一个 136KB 的转发器
+    ``redis-server.exe``，外加同名 ``redis-server.shim`` 文本记录真身路径。只把这个
+    exe 拷进 ``bin/redis/`` 后执行会报 ``Cannot open shim file for read.`` —— 它依赖
+    同目录的 .shim 元数据。实测自检因此掉到 ``backend=unavailable``，安装包里就带上了
+    一个**永远起不来的 redis**，用户侧表现为核心功能静默降级。
+    """
+    if sys.platform != "win32":
+        return exe
+    meta = exe.with_suffix(".shim")
+    if not meta.is_file():
+        return exe
+    for line in meta.read_text(encoding="utf-8", errors="ignore").splitlines():
+        key, sep, value = line.partition("=")
+        if not sep or key.strip().lower() != "path":
+            continue
+        target = Path(value.strip().strip('"'))
+        if target.is_file():
+            return target
+    raise SystemExit(
+        f"{exe} 是 shim 但无法从 {meta} 解析出真身：请用 --from 直接指定 redis 安装目录"
+    )
+
+
 def _source_dir(explicit: str) -> Path:
     """确定源目录：显式 ``--from`` 优先，否则用 PATH/内置目录里已找到的那份。"""
     if explicit:
@@ -63,12 +89,20 @@ def _source_dir(explicit: str) -> Path:
             raise SystemExit(f"{path} 里没有 {EXE_NAME}")
         return path
 
-    found = find_redis_binary(Settings(redis_enabled=True))
+    # 先看 PATH：内置目录里若已经躺着上一轮的坏 shim，不能拿它当来源（否则永远修不好）
+    found: Path | None = None
+    which = shutil.which(EXE_NAME)
+    if which:
+        found = Path(which)
+    if found is None:
+        candidate = find_redis_binary(Settings(redis_enabled=True))
+        if candidate is not None and candidate.parent.resolve() != BUNDLED_REDIS_DIR.resolve():
+            found = candidate
     if found is None:
         raise SystemExit(
-            f"找不到 {EXE_NAME}：请用 --from 指定目录，或先安装（brew/scoop/apt）"
+            f"找不到 {EXE_NAME}：请用 --from 指定 redis 发行版目录，或先安装（brew/scoop/apt）"
         )
-    return found.parent
+    return _resolve_real_binary(found).parent
 
 
 def install(src: Path, dest: Path) -> list[Path]:

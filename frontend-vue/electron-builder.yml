@@ -64,8 +64,23 @@ extraResources:
       - "!**/__pycache__/**"
   - from: ../alembic.ini
     to: alembic.ini
-  # 可选：把 python-build-standalone 解到 resources/python/，core 会优先用它
-  # （不存在时回退 CHIRON_PYTHON / PATH）。本轮不随包，避免把 200MB+ 塞进安装包。
+  # 随包的 Python 运行时（解释器 + desktop-local 全部依赖 + embedded-postgres 自带的
+  # PG 二进制）。由 `desktop-local/scripts/prepare_python_runtime.py` 生成：
+  #   resources/python/python.exe         ← bundledPython() 认这个路径
+  #   resources/python/Lib/site-packages/ ← fastapi / asyncpg / embedded_postgres …
+  #
+  # 没有它用户机必然起不来 core：`bundledPython()` 找不到资源，会回退到 PATH 上的
+  # `python`，而多数 Windows 机器只有 Microsoft Store 占位符；即便有解释器也没装
+  # fastapi/asyncpg，结果是 `ModuleNotFoundError`。这正是"本地模式全部页面报服务繁忙"
+  # 的底层原因之一。
+  #
+  # 该目录不进 git（约 150MB 构建产物），打包脚本会在 electron-builder 之前调用
+  # prepare_python_runtime.py 生成它，见 package.json 的 desktop:pack / desktop:dist。
+  - from: python-runtime
+    to: python
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
 
 
 # Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；

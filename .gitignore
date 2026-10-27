@@ -124,5 +124,12 @@ Thumbs.db
 # `desktop-local/scripts/build_component.py` 产出的真实组件包（bundle.zip 是
 # 带整棵依赖树的归档，几百 MB，不能入库）。产物是构建出来的，不是源码。
 /desktop-local/dist/
+# 随安装包发布的 Python 运行时（`desktop-local/scripts/prepare_python_runtime.py` 生成，
+# 约 140MB，含解释器与 desktop-local 的全部依赖）。产物，不入库；
+# `electron-builder.yml` 把它映射成 `resources/python/`。
+/frontend-vue/python-runtime/
+# 内置 redis 二进制（`desktop-local/scripts/prepare_redis.py` 就位；`*.exe` 已被上面
+# Go 段忽略，这里整目录忽略，避免 .conf/.dll 漏网）
+/desktop-local/bin/
 # 构建脚本的临时探针目录（本地排查用）
 /.probe/
