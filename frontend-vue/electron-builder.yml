@@ -37,6 +37,26 @@ extraResources:
     filter:
       - "components/**/*"
       - "!components/**/.gitkeep"
+  # 本地 core 源码（不放进 asar：Python 子进程需要真实文件路径）。
+  # `desktop-local/app/config.py` 的 REPO_ROOT = resources/，所以 migrations/
+  # 必须放在 resources/migrations，否则启动时找不到迁移目录。
+  - from: ../desktop-local
+    to: desktop-local
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/.pytest_cache/**"
+      - "!**/*.egg-info/**"
+      - "!**/.venv/**"
+  - from: ../migrations
+    to: migrations
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+  - from: ../alembic.ini
+    to: alembic.ini
+  # 可选：把 python-build-standalone 解到 resources/python/，core 会优先用它
+  # （不存在时回退 CHIRON_PYTHON / PATH）。本轮不随包，避免把 200MB+ 塞进安装包。
 
 
 # Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；

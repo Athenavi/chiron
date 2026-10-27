@@ -853,6 +853,118 @@ if (!gotLock) {
       return requireComponents().stopComponent(String(name || ''))
     })
 
+    // ── 本地模型配置（provider / 端点 / 模型名 / key）──
+    //
+    // 三个动作都不抛异常给渲染进程：IPC 抛错会被 Electron 包成
+    // "Error invoking remote method '...': Error: ..." 的一大串，界面只能整段回显。
+    // 统一返回 { ok, message } —— message 是给人看的一句话（含原因），界面直接显示。
+    //
+    // 明文 apiKey 只在这一层与 secrets.cjs 之间流动：读回的配置里只有 hasKey 布尔，
+    // 保存时也不回显、不写日志（契约 §8：不要把用户 provider key 写入日志/明文）。
+    const MODEL_CONFIG_PROVIDERS = new Set(['ollama', 'openai-compatible'])
+
+    function optionalSecrets() {
+      const mod = loadOptionalModule('./secrets.cjs')
+      if (!mod || typeof mod.readSecrets !== 'function' || typeof mod.writeSecrets !== 'function') {
+        return null
+      }
+      return mod
+    }
+
+    /**
+     * 合并单个 provider 条目：
+     *   · baseUrl / model 显式给出才覆盖（允许清成空串 —— 用户主动恢复默认）；
+     *   · apiKey 空白视为"保持不变"（界面上不回显 key，用户不重填就不该被清掉）；
+     *   · clearApiKey === true 时删除已存的 key（明确的删密钥动作）。
+     */
+    function mergeProviderEntry(previous, patch) {
+      const merged = { ...(previous && typeof previous === 'object' ? previous : {}) }
+      for (const field of ['baseUrl', 'model']) {
+        if (typeof patch[field] === 'string') merged[field] = patch[field].trim()
+      }
+      if (typeof patch.apiKey === 'string' && patch.apiKey.trim()) merged.apiKey = patch.apiKey.trim()
+      if (patch.clearApiKey === true) delete merged.apiKey
+      return merged
+    }
+
+    ipcMain.handle('desktop:get-model-config', async event => {
+      assertTrustedSender(event)
+      const mod = optionalSecrets()
+      if (!mod || typeof mod.readPublicSecrets !== 'function') {
+        return { ok: false, reason: 'secrets-unavailable', message: '当前版本不支持模型配置（secrets.cjs 未随包发布）' }
+      }
+      try {
+        return { ok: true, config: await mod.readPublicSecrets() }
+      } catch (err) {
+        return { ok: false, reason: 'read-failed', message: err?.message || String(err) }
+      }
+    })
+
+    ipcMain.handle('desktop:save-model-config', async (event, payload) => {
+      assertTrustedSender(event)
+      const mod = optionalSecrets()
+      if (!mod) {
+        return { ok: false, reason: 'secrets-unavailable', message: '当前版本不支持模型配置（secrets.cjs 未随包发布）' }
+      }
+      try {
+        const incoming = payload && typeof payload === 'object' ? payload : {}
+        const current = await mod.readSecrets()
+        const next = {
+          version: current && current.version ? current.version : undefined,
+          active: current && typeof current.active === 'string' ? current.active : '',
+          providers: { ...(current && current.providers ? current.providers : {}) },
+        }
+        if (typeof incoming.active === 'string') next.active = incoming.active.trim().toLowerCase()
+        const patches = incoming.providers && typeof incoming.providers === 'object' ? incoming.providers : {}
+        for (const [name, patch] of Object.entries(patches)) {
+          if (!MODEL_CONFIG_PROVIDERS.has(name)) {
+            return { ok: false, reason: 'unknown-provider', message: `未知的模型服务：${name}` }
+          }
+          next.providers[name] = mergeProviderEntry(next.providers[name], patch && typeof patch === 'object' ? patch : {})
+        }
+        const written = await mod.writeSecrets(next)
+        if (!written) {
+          // 最常见的原因：Linux 上没有可用的系统密钥环 / Windows DPAPI 被策略禁用
+          return {
+            ok: false,
+            reason: 'write-failed',
+            message: '无法写入密钥库：系统加密存储（safeStorage）不可用或写入失败，配置未保存',
+          }
+        }
+        logMain('info', `model config saved (active: ${next.active || 'default'})`)
+        const config = typeof mod.readPublicSecrets === 'function' ? await mod.readPublicSecrets() : null
+        return { ok: true, config }
+      } catch (err) {
+        return { ok: false, reason: 'save-failed', message: err?.message || String(err) }
+      }
+    })
+
+    /**
+     * 重启本地后端（改完模型配置后让核心重新握手；不需要重启整个应用）。
+     * 只允许本地模式调用 —— 云端模式下没有本地后端，静默成功会让用户以为生效了。
+     */
+    ipcMain.handle('desktop:restart-local-backend', async event => {
+      assertTrustedSender(event)
+      if (currentMode !== 'local') {
+        return { ok: false, reason: 'not-local', message: '当前不是本地模式，没有可重启的本地后端' }
+      }
+      try {
+        await stopLocalBackend()
+        // stopLocalBackend 里有"只停一次"的标志位，重启要把它复位，否则下次退出不会停
+        localBackendStopped = false
+        localBackend = await startLocalBackend()
+        recordLocalStart(localBackend)
+        return {
+          ok: Boolean(localBackend.ok),
+          reason: localBackend.reason,
+          message: localBackend.message,
+          baseUrl: localBackend.ok ? localBackend.baseUrl : '',
+        }
+      } catch (err) {
+        return { ok: false, reason: 'restart-failed', message: err?.message || String(err) }
+      }
+    })
+
     createWindow()
     setupAutoUpdater()
 
