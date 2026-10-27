@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import agents, auth, chat, components, events, health, knowledge, media, memory, models
+from app.api import agents, auth, chat, components, events, health, knowledge, media, memory, models, plugins
 from app.config import Settings
 from app.middleware import DeviceTokenMiddleware
 from app.storage.pg import PostgresServer
@@ -98,6 +98,9 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(memory.router, tags=["memory"])
     app.include_router(knowledge.router, tags=["knowledge"])
     app.include_router(components.router, tags=["components"])
+    # 插件：本地**没有**插件运行时，端点只回答"未实现"（空列表 + 501 + status.reason），
+    # 但必须存在 —— 否则插件页会把 404 渲染成"加载失败"，把"没接入"说成"坏了"。
+    app.include_router(plugins.router, tags=["plugins"])
     return app
 
 
