@@ -304,15 +304,67 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 
 ### 9.3 用量与计费
 
-- 成功的请求把用量累加进 Redis Hash `desktop:infer:usage:{tenant}:{date}`（UTC 日期，TTL 40 天），
-  字段：`requests` / `input_tokens` / `output_tokens` / `cached_tokens`。
-- **该键不含 credits**：credits 的商业口径（provider 定价 × 计费 token）与扣费都在 Go billing
-  模块（`internal/api/submit_handler.go` 的 biller 链路）。引擎再写一份 credits 会导致重复扣费。
-- 因此当前 `/v1/desktop/infer` **不在网关扣 credits**：网关不读响应体（读了就等于解析用户内容），
-  计价所需的 `provider` / `model` / `usage` 只在引擎侧可见。本批只落"用量账本"，
-  自动计费（按 `desktop:infer:usage:*` 对账扣费）是后续工作。
-- 计量口径的一个已知后果：命中**幂等重放**的请求不再计 token（这是正确的 —— 上游确实没被调用一次）；
-  命中**缓存**的请求仍会上报 provider 返回的 usage（其中 `cached_tokens` 表示提示词缓存命中的输入）。
+计费口径只有三条，先于实现写死（口径变更是产品决定，不是实现细节）：
+
+| 场景 | 扣 credits | 落账 |
+|---|---|---|
+| 本地模式（`desktop-local` 本地后端 + 本地 provider） | **否** | 什么都不写 |
+| 云端片段推理（本文档的 `POST /v1/desktop/infer`） | **否**（只记 usage） | 只写 Redis `desktop:infer:usage:{tenant}:{date}` |
+| `dtk_` 结算（按设备/令牌维度出账） | **未启用** | 仓库内不存在任何 `dtk_` 键的读写 |
+
+#### 9.3.1 云端片段推理：只记 usage，不扣 credits
+
+- 成功请求把用量累加进 Redis Hash `desktop:infer:usage:{tenant}:{date}`（UTC 日期，TTL 40 天），
+  字段**只有四个**：`requests` / `input_tokens` / `output_tokens` / `cached_tokens`。
+- 这条链路上**没有** `credit_transactions`（用户余额流水，`turn_id` 唯一索引是扣费幂等键）、
+  **没有** `billing_records`（企业成本中心明细）、**没有** `DeductTokens` / `RecordTokenUsage` /
+  `TrueUpTenantQuota`。网关的 `DesktopInferHandler` 只接受 `*engine.PythonClient`，结构上没有计费入口，
+  也不读响应体（读了就等于解析用户本地文档内容）；引擎侧只写上面那一个 Redis 键。
+- 不扣 credits 的三条理由：
+  1. 计价所需的 `provider` / `model` / `usage` 只在引擎侧可见，网关不解析响应体就看不见它们；
+  2. credits 的商业口径（provider 定价 × 计费 token）只存在于 Go billing 模块
+     （`internal/billing`，由 `internal/api/submit_handler.go` 的 biller 链路调用）。引擎再写一份 =
+     同一段用量双写 ⇒ 重复扣费；
+  3. 扣费是有余额后果、需要退款路径的动作。没有对账/退款闭环之前，宁可只落账本。
+- 本批只落"用量账本"；自动计费（按 `desktop:infer:usage:*` 对账扣费）是后续工作，且扣费键前缀
+  `dtk_` 尚未启用（见 9.3.3）。
+- 计量口径的两个已知后果：命中**幂等重放**的请求不再计用量（正确 —— 上游确实没被调用第二次）；
+  命中**缓存**的请求仍上报 provider 返回的 usage（`cached_tokens` 表示提示词缓存命中的输入）。
+
+#### 9.3.2 本地模式不计费
+
+- 本地模式的推理发生在用户自己的机器上（本地后端 + 用户自己的 provider key），云端**没有成本发生**，
+  因此不存在任何计费动作：不调 billing、不写 `credit_transactions` / `billing_records`，
+  也**不写** `desktop:infer:usage:*`。
+- 不写 usage 是刻意的：`desktop:infer:usage:*` 是**云端**对账账本，把本地用量混进去会让后续自动计费
+  把本地推理当云端消费来收钱（多收）。
+- 硬约束：`desktop-local/**` 内不出现 credits/billing 相关代码（当前 `grep -i "credit\|billing"` 无命中），
+  本地库也没有计费表。加计费表 / 计费调用必须先改本节。
+
+#### 9.3.3 `dtk_` 结算：未启用
+
+- 含义：将来"按设备/令牌维度结算片段推理"的扣费幂等键前缀，与 run 用量对账用的 `rsm_` 同型 ——
+  `dtk_` + 摘要（键里带用量总量），长度 36 字符，可落 `credit_transactions.turn_id` /
+  `billing_records.turn_id`（两列都是 `varchar(36)` 且各有唯一索引，同一段用量重复对账只会命中同一行）。
+- 现状：**未实现**。仓库里没有任何代码写入或读取 `dtk_` 前缀的键（`grep -rn "dtk_"` 全仓无命中），
+  谁也不能假设它存在。
+- 为什么延后到产品确认：
+  1. **计费主体是租户/用户，不是设备**：桌面设备 token 由本地后端自己生成
+     （`desktop-local/app/api/auth.py`，`CHIRON_DEVICE_TOKEN` 可被主进程覆盖），**从不经过网关**，
+     不能当作可信的计费身份；把它当扣费主体等于让客户端自证身份。
+  2. 是否要按设备出账（例如免费额度按设备发放、换机迁移时历史用量归属哪个账号、重装后设备是否重置额度）
+     是商业口径问题，不是实现细节。
+  3. 先扣后改口径要补退款流水，代价远大于晚一周上线。
+- 启用条件：本节先写清扣费主体、额度发放、迁移归属与退款路径，并补上对应用例；在那之前
+  `/v1/desktop/infer` 保持"只记 usage"。
+
+#### 9.3.4 谁在守着这些口径
+
+- Go：`internal/api/routes_desktop_test.go` —— 真实代理路径的响应**逐字节**透传（网关不解析 ⇒ 无从计费）；
+  并对 `desktop_infer.go` 做源码扫描，出现 `DeductTokens` / `RecordTokenUsage` / `TrueUpTenantQuota` /
+  `credit_transactions` / `billing_records` 即失败。
+- Python：`python-engine/tests/test_desktop_infer.py` —— 成功请求只写 `desktop:infer:idem:*` 与
+  `desktop:infer:usage:*` 两类键，usage Hash 的字段集合严格等于上表四个，模块不 import 任何 db/billing。
 
 ### 9.4 缓存 key
 

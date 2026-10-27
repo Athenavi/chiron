@@ -10,6 +10,10 @@
 3. **错误映射** —— provider 以 ``finish_reason="error"`` 收尾、gateway 抛异常、
    gateway 未初始化，三者对外都是 **502**，且**不回显上游细节**（异常原文可能带上游
    URL / key 片段 / 内部主机名）。
+4. **计费口径** —— 云端片段推理**只记 usage、不扣 credits**：唯一的副作用是
+   ``desktop:infer:usage:{tenant}:{date}`` 这个 Hash，不写 ``credit_transactions`` /
+   ``billing_records``、不 import db/billing；本地模式（``desktop-local``）不计费；
+   ``dtk_`` 结算未启用。口径见 ``docs/desktop-local/contracts.md`` §9.3。
 
 全部用 mock gateway + ASGITransport 发真实 HTTP 请求（与 ``test_tools_service_api.py``
 同型）：本文件不碰网络、不花钱、不需要真实 provider key。
@@ -17,13 +21,17 @@
 
 from __future__ import annotations
 
+import ast
 import logging
+import re
+from pathlib import Path
 from typing import Any
 from unittest.mock import patch
 
 import pytest
 from httpx import ASGITransport, AsyncClient
 
+import app.api.desktop_infer as desktop_infer_module
 from app.api.desktop_infer import (
     IDEMPOTENCY_TTL_SECONDS,
     USAGE_TTL_SECONDS,
@@ -373,10 +381,14 @@ class _FakeRedis:
         self.store: dict[str, str] = {}
         self.hashes: dict[str, dict[str, str]] = {}
         self.ttls: dict[str, int] = {}
+        #: 被**写**过的键（set/hset/hincrby/expire/delete 的并集）。计费口径用例靠它
+        #: 整体钉住"这次请求到底改了哪些账"——只读命令不进这里。
+        self.touched: set[str] = set()
 
     async def set(
         self, key: str, value: str, nx: bool = False, ex: int | None = None
     ) -> bool | None:
+        self.touched.add(key)
         if nx and key in self.store:
             return None
         self.store[key] = value
@@ -388,16 +400,19 @@ class _FakeRedis:
         return self.store.get(key)
 
     async def delete(self, key: str) -> int:
+        self.touched.add(key)
         existed = self.store.pop(key, None) is not None
         self.ttls.pop(key, None)
         return 1 if existed else 0
 
     async def hincrby(self, key: str, field: str, amount: int) -> int:
+        self.touched.add(key)
         bucket = self.hashes.setdefault(key, {})
         bucket[field] = str(int(bucket.get(field, "0")) + amount)
         return int(bucket[field])
 
     async def expire(self, key: str, ttl: int) -> bool:
+        self.touched.add(key)
         self.ttls[key] = ttl
         return True
 
@@ -405,6 +420,7 @@ class _FakeRedis:
         return self.hashes.get(key, {}).get(field)
 
     async def hset(self, key: str, field: str, value: str) -> int:
+        self.touched.add(key)
         self.hashes.setdefault(key, {})[field] = value
         return 1
 
@@ -501,14 +517,14 @@ async def test_usage_is_recorded_per_tenant_and_day(
     keys = [k for k in fake_redis.hashes if "desktop:infer:usage:1:" in k]
     assert len(keys) == 1, f"usage 没有写到 desktop:infer:usage:1:{{date}}（现有键：{list(fake_redis.hashes)}）"
     bucket = fake_redis.hashes[keys[0]]
+    # 字段集合**严格相等**：多一个 `credits` 字段就说明有人把计费搬进了引擎 —— 那会和
+    # 网关的 billing（internal/billing 的 credit_transactions）双写、重复扣费（§9.3）。
     assert bucket == {
         "requests": "1",
         "input_tokens": "11",
         "output_tokens": "7",
         "cached_tokens": "3",
     }
-    # credits 的商业口径在 Go 网关的 biller 里；引擎再写一份等于重复扣费
-    assert "credits" not in bucket
     assert fake_redis.ttls.get(keys[0]) == USAGE_TTL_SECONDS
 
 
@@ -531,6 +547,83 @@ async def test_inference_still_works_without_redis() -> None:
         resp = await _post(_payload(request_id="req-no-redis"))
     assert resp.status_code == 200, resp.text
     assert resp.json()["content"] == "压好的两行"
+
+
+# ── 计费口径：只记 usage，不扣 credits，不碰任何账本（contracts.md §9.3） ──
+
+
+def _desktop_infer_tail(key: str) -> str:
+    """取 ``desktop:infer:`` 之后的部分（``REDIS_KEY_PREFIX`` 非空时也能比对）。"""
+    marker = "desktop:infer:"
+    return key.split(marker, 1)[-1] if marker in key else ""
+
+
+async def test_only_usage_and_idempotency_keys_are_written(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """成功请求的**全部**副作用只有两类键：幂等键 + 用量键。
+
+    口径（§9.3）：云端片段推理只记 usage、不扣 credits；本地模式什么都不写。所以这里
+    整体钉住"写了哪些键" —— 将来有人顺手加 ``desktop:infer:credits:*``、往 credits
+    账本推一条，或者把计费搬进引擎，用例立刻变红。
+    """
+    await _post(_payload(request_id="req-touch"))
+
+    assert fake_redis.touched, "成功请求一个键都没写：用例前提不成立"
+    strays = [
+        key
+        for key in fake_redis.touched
+        if not _desktop_infer_tail(key).startswith(("idem:", "usage:"))
+    ]
+    assert strays == [], f"出现用量/幂等之外的写入（可能是计费旁路）：{strays}"
+    for key in fake_redis.touched:
+        lowered = key.lower()
+        assert "credit" not in lowered and "billing" not in lowered, (
+            f"引擎写了计费账本键：{key}"
+        )
+
+
+async def test_replayed_request_does_not_double_count_usage(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """幂等重放**不重复计 usage**：上游确实只被调用一次（否则对账会多收一倍）。"""
+    await _post(_payload(request_id="req-replay-usage"))
+    await _post(_payload(request_id="req-replay-usage"))
+
+    usage_keys = [k for k in fake_redis.hashes if "desktop:infer:usage:" in k]
+    assert len(usage_keys) == 1, f"重放写了多个用量桶：{usage_keys}"
+    bucket = fake_redis.hashes[usage_keys[0]]
+    assert bucket["requests"] == "1", "重放把 requests 又加了一次：对账会多算一次调用"
+    assert bucket["input_tokens"] == "11"
+    assert bucket["output_tokens"] == "7"
+    assert len(gateway.calls) == 1
+
+
+def test_module_has_no_billing_imports() -> None:
+    """结构上就没有写 credits 明细的能力：模块不 import 任何 db/billing 依赖。
+
+    credits 的计价口径（provider 定价 × 计费 token）在 Go billing 模块里。引擎一旦
+    import 了 db/billing，就说明扣费逻辑被搬到了引擎侧 —— 那会和网关的
+    ``credit_transactions`` / ``billing_records`` 双写、重复扣费（§9.3）。
+    """
+    source_path = getattr(desktop_infer_module, "__file__", None)
+    assert source_path, "拿不到 app/api/desktop_infer.py 的路径"
+    source = Path(source_path).read_text(encoding="utf-8")
+
+    imported: set[str] = set()
+    for node in ast.walk(ast.parse(source)):
+        if isinstance(node, ast.Import):
+            imported.update(alias.name for alias in node.names)
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            imported.add(node.module)
+
+    forbidden = sorted(
+        module
+        for module in imported
+        if re.search(r"(^|\.)(db|db_client|billing|credits?)(\.|$)", module)
+    )
+    assert forbidden == [], f"引擎侧出现了计费依赖（会与网关双写）：{forbidden}"
+
 
 
 # ── 缓存 key：response_format 必须参与（否则 JSON 请求会拿到纯文本条目） ──
