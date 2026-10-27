@@ -1,0 +1,17 @@
+# PageIndex 组件（pageindex 0.4.4）运行时依赖锁
+#
+# 用法：由 desktop-local/scripts/build_component.py 在隔离 venv 里
+#   pip install -r 本文件
+# 随后整棵依赖树（site-packages）被打进 bundle.zip 随组件发布。
+#
+# 这里**只放运行时依赖**：构建期工具（pytest / ruff / wheel）不要加，打进去纯增体积。
+#
+# 为什么显式压 openai 上界：pageindex 0.4.4 只声明 openai>=1.70.0（无上界），而
+# 它的调用面（chat.completions 的响应形状）依赖 1.x；openai 3.x 改了这块，litellm /
+# openai-agents 与 core 的推理代理转发也都还按 1.x 的形态走。锁到 <3 是当前的已知可用区间。
+#
+# 为什么压 litellm 大版本：pageindex 只要求 >=1.105.1，而 litellm 的次版本经常改
+# provider adapter；跨大版本升级会让"某天重新构建出来的包行为变了"。要换大版本请显式改这一行。
+openai>=1.70,<3
+litellm>=1.105.1,<2
+pageindex==0.4.4

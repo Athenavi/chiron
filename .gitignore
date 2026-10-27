@@ -119,3 +119,10 @@ userlist.txt
 Thumbs.db
 *.orig
 *.rej
+
+# ── 桌面端组件构建产物 ──
+# `desktop-local/scripts/build_component.py` 产出的真实组件包（bundle.zip 是
+# 带整棵依赖树的归档，几百 MB，不能入库）。产物是构建出来的，不是源码。
+/desktop-local/dist/
+# 构建脚本的临时探针目录（本地排查用）
+/.probe/
