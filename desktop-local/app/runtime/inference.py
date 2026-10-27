@@ -232,8 +232,8 @@ def _normalize_usage(
         except (TypeError, ValueError):
             return 0
 
-    prompt_tokens = _as_int("prompt_tokens")
-    completion_tokens = _as_int("completion_tokens")
+    prompt_tokens = _as_int("prompt_tokens") or _as_int("input_tokens")
+    completion_tokens = _as_int("completion_tokens") or _as_int("output_tokens")
     if prompt_tokens or completion_tokens:
         total = _as_int("total_tokens") or prompt_tokens + completion_tokens
         return {

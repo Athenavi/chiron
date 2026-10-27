@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import hmac
 from collections.abc import Iterable
+from urllib.parse import parse_qs
 
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
@@ -30,6 +31,23 @@ from app.config import Settings
 
 #: 无需 token 的路径（规范化后比较，见 :func:`_normalize_path`）
 EXEMPT_PATHS: frozenset[str] = frozenset({"/healthz", "/readyz", "/v1/auth/session"})
+
+
+def _query_token(scope: Scope) -> str:
+    """从 query string 取 ``token``。
+
+    EventSource（SSE ``/events``）**不能设置 Authorization 头**，所以本地模式
+    额外接受 `?token=<设备 token>`。只在 header 缺失时回退，且仍然走
+    ``hmac.compare_digest``；不接受表单体或 cookie，避免扩大凭据面。
+    """
+    raw = scope.get("query_string") or b""
+    if not raw:
+        return ""
+    try:
+        values = parse_qs(raw.decode("utf-8"), keep_blank_values=False).get("token") or []
+    except UnicodeDecodeError:
+        return ""
+    return values[0].strip() if values else ""
 
 #: ``WWW-Authenticate`` 的值：告诉 401 的客户端该用哪种 scheme
 AUTH_SCHEME = "Bearer"
@@ -141,6 +159,8 @@ class DeviceTokenMiddleware:
             return
 
         supplied = parse_bearer(_authorization_header(scope))
+        if not supplied:
+            supplied = _query_token(scope)
         if tokens_match(self._expected_token(settings), supplied):
             await self.app(scope, receive, send)
             return

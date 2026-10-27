@@ -42,6 +42,8 @@ _UNSAFE_NAME_CHARS = re.compile(r'[\\/:*?"<>|\x00-\x1f\x7f]')
 _NAME_SPLIT = re.compile(r"[\\/]")
 
 MEDIA_COLUMNS = "id, name, safe_name, mime_type, size_bytes, sha256, created_at"
+# INSERT 不能带 created_at：它由 DDL 的 DEFAULT now() 生成，显式列清单必须与 $n 个数一致
+MEDIA_INSERT_COLUMNS = "id, name, safe_name, mime_type, size_bytes, sha256"
 
 MEDIA_DDL = """
 CREATE TABLE IF NOT EXISTS local_media (
@@ -66,6 +68,12 @@ class MediaTooLargeError(MediaError):
     """解码后超过 :data:`MAX_MEDIA_BYTES`。"""
 
     status_code = 413
+
+
+class MediaStorageUnavailableError(MediaError):
+    """本地 PostgreSQL 连不上（路由层映射 503，而不是 500）。"""
+
+    status_code = 503
 
 
 # --------------------------------------------------------------------- 命名与 MIME
@@ -183,7 +191,12 @@ def delete_media_dir(settings: Settings, media_id: str) -> None:
 # --------------------------------------------------------------------- 数据库
 async def connect(dsn: str) -> asyncpg.Connection:
     """建一条 asyncpg 连接（本地单用户，本批不做连接池）。"""
-    return await asyncpg.connect(dsn=dsn)
+    try:
+        return await asyncpg.connect(dsn=dsn)
+    except (OSError, asyncpg.PostgresError) as exc:
+        raise MediaStorageUnavailableError(
+            f"本地 PostgreSQL 不可用（{type(exc).__name__}: {exc}）；检查 /readyz 的 pg 字段"
+        ) from exc
 
 
 async def ensure_media_schema(conn: asyncpg.Connection) -> None:
@@ -210,7 +223,7 @@ async def insert_media(
 ) -> dict[str, Any]:
     row = await conn.fetchrow(
         # 列名是本模块常量，不是用户输入；值全部走 $n 参数化
-        f"INSERT INTO local_media ({MEDIA_COLUMNS}) "
+        f"INSERT INTO local_media ({MEDIA_INSERT_COLUMNS}) "
         "VALUES ($1, $2, $3, $4, $5, $6) "
         f"RETURNING {MEDIA_COLUMNS}",
         media_id,

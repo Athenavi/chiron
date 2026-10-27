@@ -206,13 +206,6 @@ def test_media_rejects_oversized_and_invalid_payload(
     assert run_sql(pg_dsn, "SELECT count(*) FROM local_media WHERE name IN ('big.bin', 'x.png')")[0][0] == 0
 
 
-@pytest.mark.xfail(
-    reason=(
-        "app bug #4：app/storage/files.py::insert_media 用 MEDIA_COLUMNS（7 列，含 created_at）"
-        "配 6 个占位符 → 真实 PG 报 PostgresSyntaxError: INSERT 的指定字段数多于表达式"
-    ),
-    strict=False,
-)
 def test_media_upload_endpoint_should_persist(app_client: TestClient, api_settings, pg_dsn: str) -> None:
     """期望契约行为：``POST /v1/media/upload`` → 201 + 元数据，且列表里能看到。"""
     _ensure_schemas(app_client)
@@ -314,13 +307,6 @@ def test_memory_validation(app_client: TestClient) -> None:
     assert app_client.delete("/v1/memory/entries/does-not-exist").status_code == 404
 
 
-@pytest.mark.xfail(
-    reason=(
-        "app bug #4：app/storage/memory_store.py::insert_entry 用 MEMORY_COLUMNS（7 列，含 created_at）"
-        "配 6 个占位符 → 真实 PG 报 PostgresSyntaxError: INSERT 的指定字段数多于表达式"
-    ),
-    strict=False,
-)
 def test_memory_entry_endpoint_should_persist(app_client: TestClient, pg_dsn: str) -> None:
     """期望契约行为：``POST /v1/memory/entries`` → 201，且能立刻检索到。"""
     _ensure_schemas(app_client)
@@ -348,14 +334,6 @@ def test_chat_reports_503_when_pg_unreachable(down_client: TestClient) -> None:
     assert down_client.get("/v1/chat/sessions").status_code == 503
 
 
-@pytest.mark.xfail(
-    reason=(
-        "app bug #3：app/storage/files.py::connect 与 app/storage/memory_store.py::connect "
-        "直接 await asyncpg.connect(...)，没把连接失败翻成 503 —— "
-        "PG 掉线时 /v1/media、/v1/memory 返回 500，而 /v1/chat 同场景是 503"
-    ),
-    strict=False,
-)
 def test_media_and_memory_report_503_when_pg_unreachable(down_client: TestClient) -> None:
     """期望三个端点对"库没了"给同一个答案（503）。修好两个 ``connect`` 后本测试会 XPASS。"""
     media = down_client.get("/v1/media")
@@ -364,10 +342,6 @@ def test_media_and_memory_report_503_when_pg_unreachable(down_client: TestClient
     assert memory.status_code == 503, f"memory 实际 {memory.status_code}"
 
 
-@pytest.mark.xfail(
-    reason="app bug #3 的连带效应：PG 掉线时 /v1/media/{id} 与 /content 也是 500 而不是 503",
-    strict=False,
-)
 def test_media_detail_reports_503_when_pg_unreachable(down_client: TestClient) -> None:
     assert down_client.get(f"/v1/media/{'a' * 32}").status_code == 503
     assert down_client.get(f"/v1/media/{'a' * 32}/content").status_code == 503

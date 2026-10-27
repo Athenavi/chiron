@@ -412,6 +412,11 @@ function buildCoreEnv(options = {}) {
   set(CORE_ENV.port, options.port)
   set(CORE_ENV.deviceToken, options.token)
   set(CORE_ENV.inferenceProxy, options.inferenceProxyUrl)
+  // 桌面端默认开启设备 token 鉴权：前端本地模式会带 Authorization，SSE 走 ?token=。
+  // 显式传 authEnabled:false 可关闭（测试/调试）。
+  if (!env.CHIRON_LOCAL_AUTH_ENABLED) {
+    env.CHIRON_LOCAL_AUTH_ENABLED = options.authEnabled === false ? '0' : '1'
+  }
   return env
 }
 

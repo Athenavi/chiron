@@ -146,9 +146,10 @@ def test_chat_usage_is_lost_because_of_field_mismatch(
     response = app_client.post("/v1/chat/submit", json={"message": "计数一次", "model": "mock"})
     assert response.status_code == 200, response.text
     data = response.json()["data"]
-    assert data["usage_estimated"] is True, "usage 字段名被修好了？请更新本测试与报告"
-    assert data["usage"]["prompt_tokens"] >= 1
-    assert data["usage"]["total_tokens"] >= data["usage"]["prompt_tokens"]
+    assert data["usage_estimated"] is False, "usage 字段名未与契约 §9 对齐（input_tokens/output_tokens）"
+    assert data["usage"]["prompt_tokens"] == 1
+    assert data["usage"]["completion_tokens"] == 1
+    assert data["usage"]["total_tokens"] == 2
 
 
 def test_chat_stream_emits_start_text_done(app_client: TestClient) -> None:
@@ -270,14 +271,6 @@ def test_agents_crud_roundtrip(app_client: TestClient, pg_dsn: str) -> None:
     assert run_sql(pg_dsn, "SELECT count(*) FROM local_agents WHERE id = %s", (agent_id,))[0][0] == 0
 
 
-@pytest.mark.xfail(
-    reason=(
-        "app bug #2：app/runtime/store.py:382 把 assignments **列表**直接插进 SQL "
-        '（f"SET {assignments}" 缺 ", ".join(...)），任何带字段的 PATCH 都会得到 '
-        'asyncpg PostgresSyntaxError: 语法错误 在 "[" 或附近的'
-    ),
-    strict=False,
-)
 def test_agents_patch_should_update_fields(api_settings) -> None:
     """期望契约行为：``PATCH /v1/agents/{id}`` 局部更新并回读。
 
@@ -296,10 +289,6 @@ def test_agents_patch_should_update_fields(api_settings) -> None:
         client.delete(f"/v1/agents/{agent['id']}")
 
 
-@pytest.mark.xfail(
-    reason="app bug #2 的连带效应：PATCH 不存在的 id 也走同一条非法 SQL，得不到 404",
-    strict=False,
-)
 def test_agents_patch_missing_id_returns_404(api_settings) -> None:
     with TestClient(create_app(api_settings), raise_server_exceptions=False) as client:
         response = client.patch("/v1/agents/agt_00000000000000000000000000000000", json={"name": "x"})

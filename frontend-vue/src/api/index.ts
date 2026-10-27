@@ -494,6 +494,12 @@ export function createSSEConnection(
   if (initialLastEventId) {
     url += `&last_event_id=${encodeURIComponent(initialLastEventId)}`
   }
+  // EventSource 不能设置 Authorization：本地模式把设备 token 放进 query，
+  // core 的 DeviceTokenMiddleware 只在 header 缺失时读取它（见 middleware.py）。
+  const localToken = getDeviceMode() === 'local' ? desktopDeviceToken() : ''
+  if (localToken) {
+    url += `&token=${encodeURIComponent(localToken)}`
+  }
 
   // 本地模式注意：EventSource 不支持自定义头，所以这条通道**没有** Authorization。
   // core 的鉴权默认关闭（auth_enabled=False），此时 /events 照常可用；若桌面端显式

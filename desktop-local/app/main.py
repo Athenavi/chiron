@@ -23,7 +23,7 @@ from typing import Any
 from fastapi import FastAPI
 
 from app import __version__
-from app.api import agents, auth, chat, events, health, knowledge, media, memory, models
+from app.api import agents, auth, chat, components, events, health, knowledge, media, memory, models
 from app.config import Settings
 from app.middleware import DeviceTokenMiddleware
 from app.storage.pg import PostgresServer
@@ -97,6 +97,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     app.include_router(media.router, tags=["media"])
     app.include_router(memory.router, tags=["memory"])
     app.include_router(knowledge.router, tags=["knowledge"])
+    app.include_router(components.router, tags=["components"])
     return app
 
 
