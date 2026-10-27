@@ -12,10 +12,23 @@ package api
 //	   透传（ForwardRequest 是流式的，2M 字符的片段不会被整个读进内存，也不会被
 //	   panic 时的 body dump 带出来）。
 //
-// 计费目前**不在网关扣 credits**：本端点不读响应体（读了就等于解析用户内容），而
-// credits 的计价口径（provider 定价 × 计费 token）在 Go billing 模块里。当前由引擎把
-// 用量累加进 `desktop:infer:usage:{tenant}:{date}`（见 app/api/desktop_infer.py），
-// 供对账与后续自动计费使用；把 credits 扣费接到这条链路是后续工作，不是本文件的范围。
+// 计费口径（契约见 docs/desktop-local/contracts.md §9.3；三条先于实现写死）：
+//
+//	1. 本地模式不计费 —— 本地后端（desktop-local）与本地 provider 的推理不产生云端成本，
+//	   不写 credits，也不写 `desktop:infer:usage:*`（那是云端对账账本，混进本地用量会让
+//	   后续自动计费把本地推理当云端消费来收）。
+//	2. 云端片段推理只记 usage、不扣 credits —— 本 handler 只做字节透传：它不读响应体
+//	   （读了就等于解析用户本地文档内容），因此看不到计费所需的 provider/model/usage；
+//	   credits 的计价口径（provider 定价 × 计费 token）只存在于 internal/billing，引擎再
+//	   记一份就会重复扣费。唯一的副作用是引擎侧累加 `desktop:infer:usage:{tenant}:{date}`
+//	   （见 python-engine/app/api/desktop_infer.py::_record_usage）。
+//	3. `dtk_` 结算（按设备/令牌维度出账）未启用 —— 计费主体是租户/用户；设备 token 由
+//	   本地后端自己生成、从不经过网关，不能当可信的计费身份。是否按设备发放额度/归属历史
+//	   用量属商业口径，待产品确认后再接（详见 §9.3.3）。
+//
+// 因此本文件**不写** `credit_transactions` / `billing_records`，也不调用 `DeductTokens`
+// / `RecordTokenUsage` / `TrueUpTenantQuota`；这个"没有计费入口"的约束由
+// routes_desktop_test.go 的源码扫描用例守着。接线计费 = 先改 §9.3 + 补用例，再动代码。
 
 import (
 	"log/slog"
