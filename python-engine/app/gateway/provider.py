@@ -107,6 +107,13 @@ class LLMProvider(ABC):
 
     name: str = ""
 
+    #: 是否支持 OpenAI 风格的 ``response_format``（结构化输出）。
+    #: 默认 ``False``：只有**确实会把它发给上游**的实现才置真（OpenAI 兼容族）。
+    #: 网关按这个标记决定"要不要下发"——不支持的 provider 收到它只会 400
+    #: （Anthropic 协议用 thinking/tool 强制 JSON，Responses API 用 text.format），
+    #: 所以宁可让网关在边界处丢弃，也不要在各 provider 里各写一遍"假装支持"。
+    supports_response_format: bool = False
+
     @abstractmethod
     def chat_stream(
         self,
@@ -116,6 +123,7 @@ class LLMProvider(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatResponse]:
         """流式推理，逐 chunk yield
 
@@ -123,6 +131,10 @@ class LLMProvider(ABC):
         因此基类这里声明为普通 ``def`` —— 若写成 ``async def``，mypy 会把它当作
         协程（``Coroutine[..., AsyncIterator[...]]``），与实现方不兼容，
         调用处的 ``async for`` 也会被判定为"不可异步迭代"。
+
+        ``response_format`` 是 OpenAI 风格的结构化输出约束（``{"type":"json_object"}``
+        或 ``{"type":"json_schema", ...}``）。只有 ``supports_response_format`` 为真的
+        provider 会真的把它发给上游（网关负责过滤），其余实现接收但忽略。
         """
         ...
 
@@ -135,8 +147,9 @@ class LLMProvider(ABC):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
-        """非流式推理"""
+        """非流式推理（``response_format`` 语义同 :meth:`chat_stream`）"""
         ...
 
     @abstractmethod

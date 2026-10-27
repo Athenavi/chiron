@@ -170,7 +170,11 @@ class ResponsesProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatResponse]:
+        # Responses API 的结构化输出走 `text.format`，与 OpenAI 式 `response_format`
+        # 不是同一个字段；本类 `supports_response_format` 保持 False，网关不会下发。
+        # 这里保留同名参数只是为了接口形状与基类一致。
         from app.providers.session_context import get_llm_effort
 
         payload = self.build_payload(
@@ -277,6 +281,7 @@ class ResponsesProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
         from app.providers.session_context import get_llm_effort
 

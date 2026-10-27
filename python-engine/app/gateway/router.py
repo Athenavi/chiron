@@ -145,11 +145,17 @@ class GatewayRouter:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatResponse]:
         """流式推理 — 前置缓存检查 + 预算扣减"""
         messages = normalize_messages(messages)
         # ── 缓存查找（仅无工具时） ──
         if self._cache and not tools:
+            # TODO(desktop-infer)：缓存 key **暂不**包含 `response_format`（见
+            # app/gateway/cache.py::_exact_key）。后果：同一 prompt 先以文本模式、
+            # 后以 JSON 模式请求时，后到的会命中先到的条目，拿到错形状的结果。
+            # 补法是把 response_format 并入 exact key（L2/L3 的既有条目会因 key 变化
+            # 自然失效，无需迁移）。在那之前，调用方需自行接受这一点。
             cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
             if cached:
                 logger.info("Stream cache HIT for model=%s", model)
@@ -191,6 +197,8 @@ class GatewayRouter:
         finish_reason = ""
         total_input = 0
         total_output = 0
+        # 结构化输出：只在 provider 声明支持时下发，不支持就**置空**（见辅助方法）
+        extra_kwargs = self._provider_extra_kwargs(provider, response_format)
         try:
             async for chunk in provider.chat_stream(
                 messages,
@@ -198,6 +206,7 @@ class GatewayRouter:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 tools=tools,
+                **extra_kwargs,
             ):
                 chunk.provider = provider.name
                 chunk.model = model
@@ -272,11 +281,13 @@ class GatewayRouter:
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
         """非流式推理 — 自动缓存 + 预算扣减"""
         messages = normalize_messages(messages)
         # 缓存查找
         if self._cache and not tools:
+            # TODO(desktop-infer)：同 `chat_stream` —— `response_format` 暂不在缓存 key 内。
             cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
             if cached:
                 logger.info("Cache hit for model=%s", model)
@@ -305,6 +316,8 @@ class GatewayRouter:
                 )
 
         start = time.monotonic()
+        # 结构化输出：provider 不支持时置空（见辅助方法）
+        extra_kwargs = self._provider_extra_kwargs(provider, response_format)
         try:
             resp = await provider.chat(
                 messages,
@@ -312,6 +325,7 @@ class GatewayRouter:
                 max_tokens=max_tokens,
                 temperature=temperature,
                 tools=tools,
+                **extra_kwargs,
             )
             resp.provider = provider.name
             resp.model = model
@@ -348,6 +362,29 @@ class GatewayRouter:
             self._latencies[provider.name] = (
                 self._latencies[provider.name] * 0.8 + elapsed * 0.2
             )
+
+    def _provider_extra_kwargs(
+        self, provider: LLMProvider, response_format: dict[str, Any] | None
+    ) -> dict[str, Any]:
+        """把 ``response_format`` 转成“可以真的发给这个 provider”的额外参数。
+
+        不支持的 provider 一律**置空**（返回 ``{}`` 而非 `None`）——这样调用点不需要
+        分支，也不会把 provider 不认识的参数发过去（Anthropic SDK / Responses API
+        收到 ``response_format`` 会直接报参数错误，而不是退化成普通文本）。
+
+        这里用 info 而不是 warning：调用方（桌面端片段推理）本来就可能跨 provider
+        路由，降级成纯文本是**设计内**行为，不是故障。
+        """
+        if not response_format:
+            return {}
+        if not getattr(provider, "supports_response_format", False):
+            logger.info(
+                "Provider %s does not support response_format; dropping it "
+                "(the answer will be plain text)",
+                provider.name,
+            )
+            return {}
+        return {"response_format": response_format}
 
     async def embed(
         self, text: str, model: str, provider_hint: str = ""

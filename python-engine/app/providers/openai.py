@@ -23,6 +23,9 @@ logger = logging.getLogger(__name__)
 
 class OpenAIProvider(LLMProvider):
     name = "openai"
+    # OpenAI 兼容族原生支持 `response_format`（json_object / json_schema）。
+    # DeepSeek / 具名 OpenAI 兼容网关都继承本类，也走同一条下发路径。
+    supports_response_format = True
 
     def __init__(
         self, api_key: str, base_url: str = "", *, key_ring: Any = None
@@ -53,8 +56,11 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatResponse]:
-        kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
+        kwargs = self._build_kwargs(
+            messages, model, max_tokens, temperature, tools, response_format
+        )
         kwargs["stream"] = True
 
         # M23：**提交点 = 这次 create() 成功返回** —— 它之前失败时还没 yield 任何 chunk，
@@ -152,8 +158,11 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
-        kwargs = self._build_kwargs(messages, model, max_tokens, temperature, tools)
+        kwargs = self._build_kwargs(
+            messages, model, max_tokens, temperature, tools, response_format
+        )
         # M23：非流式调用的提交点 = 这次 create() 返回；失败时换一把 key 重试（见 key_retry）。
         async def _create(client: Any) -> Any:
             drop_unsupported_params(client.chat.completions.create, kwargs)
@@ -260,6 +269,7 @@ class OpenAIProvider(LLMProvider):
         max_tokens: int,
         temperature: float,
         tools: list[dict[str, Any]] | None,
+        response_format: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         kwargs: dict[str, Any] = {
             "model": model,
@@ -267,6 +277,11 @@ class OpenAIProvider(LLMProvider):
             "max_tokens": max_tokens,
             "temperature": temperature,
         }
+        # 结构化输出（桌面端云端片段推理用）：**非空才写**。
+        # 传 None/{} 给上游是两种不同的语义（None = 不约束、{} = 非法）—— 所以这里
+        # 直接在空值时不写这个 key，而不是写 None 让 SDK 去猜。
+        if response_format:
+            kwargs["response_format"] = response_format
         # OpenCode（Zen / Go）要求请求带 `x-opencode-session`，否则直接
         # 400 MissingSessionID: "Request is missing x-opencode-session and cannot be
         # routed efficiently"。该头只影响对方的路由与 prompt 缓存，所以用**同一会话的
