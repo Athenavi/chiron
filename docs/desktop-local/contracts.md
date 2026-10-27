@@ -176,7 +176,7 @@ desktop-local/
 | 方法 | 路径 | 返回 |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok"}` |
-| GET | `/readyz` | `{"status":"ok","pg":true,"redis":true}` |
+| GET | `/readyz` | `{"status":"ok"|"degraded","pg":true,"redis":true}`，详见下方语义说明 |
 | POST | `/v1/auth/session` | `{"data":{"token":"...","user":{"id":"local","name":"Local","role":"owner","tenant_id":1}}}` |
 | GET | `/v1/models` | `{"data":[]}`（占位） |
 | GET | `/events?session_id=` | `text/event-stream`（第一批只发心跳） |
@@ -185,6 +185,21 @@ desktop-local/
 
 鉴权：`Authorization: Bearer <device-token>` 或同源 httpOnly cookie；第一批允许无鉴权启动，
 但 `/readyz` 必须报告 `auth: "disabled"`。
+
+### `/readyz` 的判定语义
+
+`ready` 只看**业务依赖**（PG 与迁移），不把 redis 算进就绪条件：
+
+- PG 可用且迁移完成 → `ready: true`，HTTP 200；
+- redis 不可用以 **`status: "degraded"` + HTTP 200** 报告，原因写在 `redis_error`，
+  **不阻断**请求。
+
+依据：`desktop-local` 的业务路由（chat / conversations / components / media / memory）
+对 redis 零引用，全仓只有 `health.py` 读 `app.state.redis`。把 redis 算进就绪条件会让
+"redis 没装"直接变成"所有页面 503 服务繁忙"，而实际上业务完全可用。
+
+这与 `python-engine`（主引擎）不同：主引擎有 10+ 模块硬依赖 redis 的 Streams、限流、
+预算与缓存，那里 redis 不可用就是不健康。
 
 ## 5. P0 验证的硬指标
 

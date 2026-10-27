@@ -45,11 +45,23 @@ function setup(t) {
     child.emit('exit', 0)
     return true
   }
+  /**
+   * 喂一行 core 播报。**必须有**：`startCore` 只有在收到
+   * `{"event":"listening"}` 之后才会去探 `/healthz`（端口 0 时只有内核知道真实端口，
+   * 见 components.cjs::waitForHealth）。原先这个夹具不发播报，于是每次启动都一路等到
+   * 健康检查超时再重试 3 次 —— 这正是本文件 11 个用例失败/超时的根因。
+   * 与 port-resilience.test.cjs 的夹具保持同款。
+   */
+  child.emitLine = obj => child.stdout.emit('data', `${JSON.stringify(obj)}\n`)
 
   let handler = () => jsonResponse({})
   components._setDeps({
     app: { getPath: () => userData },
-    spawn: () => child,
+    spawn: () => {
+      // spawn 返回后（监听器已挂好）再喂播报：startCore 拿到真实端口才会去探 /healthz
+      setImmediate(() => child.emitLine({ event: 'listening', host: '127.0.0.1', port: 43299 }))
+      return child
+    },
     fetch: async (url, options = {}) => {
       requests.push({ url: String(url), method: options.method || 'GET' })
       return handler(String(url), options)

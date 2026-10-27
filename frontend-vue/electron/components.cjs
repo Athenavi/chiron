@@ -95,9 +95,9 @@ const state = {
 let injected = null
 
 function runtime() {
-  if (injected) return { spawn, ...injected }
+  if (injected) return { spawn, spawnSync: childProcess.spawnSync, ...injected }
   const electron = require('electron')
-  return { app: electron.app, spawn }
+  return { app: electron.app, spawn, spawnSync: childProcess.spawnSync }
 }
 
 /** 仅供 __tests__（纯 Node，无 electron）：注入 app.getPath */
@@ -113,6 +113,8 @@ function _resetDeps() {
 function _resetState() {
   state.core = null
   state.children.clear()
+  // 运行时探测缓存是模块级的：不清掉会让下一条用例看到上一条的解释器结论
+  runtimeProbeCache.clear()
 }
 
 function userDataDir() {
@@ -396,6 +398,87 @@ function coreBinaryPath() {
 }
 
 /**
+ * 打包态运行时自检：解释器在，且关键依赖能 import。
+ *
+ * **为什么必须有这一步**：原先找不到随包 Python 时会静默回退到 `'python'`。
+ * 用户机上这有三种坏结果，而且**都表现为"所有页面报服务繁忙"**：
+ *   1. 根本没有 `python` → spawn ENOENT，报错对用户毫无指导性；
+ *   2. 有 Microsoft Store 占位符 → spawn 成功但立刻退出；
+ *   3. 有真 python 但没装 fastapi/asyncpg → `ModuleNotFoundError`。
+ * 与其让用户猜，不如把"缺什么、怎么修"直接讲清楚。
+ *
+ * 成功结果按解释器路径缓存（一次启动只探测一次）；**失败不缓存**，
+ * 用户重装运行时候重试必须能成功。
+ */
+const runtimeProbeCache = new Map()
+
+/** 打包态必须能 import 的模块：任一失败 core 都起不来（与 prepare_python_runtime.py 一致） */
+const REQUIRED_RUNTIME_MODULES = Object.freeze(['fastapi', 'uvicorn', 'asyncpg', 'embedded_postgres'])
+
+function probeBundledRuntime(pythonPath) {
+  if (!pythonPath) return { ok: false, reason: 'missing', message: '未找到随包 Python 运行时' }
+  const cached = runtimeProbeCache.get(pythonPath)
+  if (cached) return cached
+
+  const probe = runtime().spawnSync
+  if (typeof probe !== 'function') {
+    // 拿不到 spawnSync 就不要假装通过：让后续真实启动去暴露问题
+    return { ok: true, reason: 'unverified', message: '' }
+  }
+
+  let result
+  try {
+    result = probe(pythonPath, ['-c', `import ${REQUIRED_RUNTIME_MODULES.join(',')}`], {
+      timeout: 20000,
+      windowsHide: true,
+      encoding: 'utf8',
+      env: { ...process.env, PYTHONNOUSERSITE: '1' },
+    })
+  } catch (err) {
+    return { ok: false, reason: 'probe-failed', message: err && err.message ? err.message : String(err) }
+  }
+
+  if (result && result.status === 0) {
+    const ok = { ok: true, reason: 'ok', message: '' }
+    runtimeProbeCache.set(pythonPath, ok)
+    return ok
+  }
+
+  const stderr = String((result && (result.stderr || result.stdout)) || '')
+  const missing = REQUIRED_RUNTIME_MODULES.find(name =>
+    new RegExp(`No module named ['"]?${name}`).test(stderr),
+  )
+  return {
+    ok: false,
+    reason: missing ? 'missing-dependency' : 'probe-failed',
+    missingModule: missing || '',
+    // 文案里带路径：回退链上可能同时有多个候选，只说"随包运行时坏了"会误导
+    message: missing
+      ? `解释器 ${pythonPath} 缺少模块 ${missing}`
+      : `解释器 ${pythonPath} 无法导入依赖：${stderr.trim().split('\n').pop() || '未知原因'}`,
+  }
+}
+
+/** 把运行时问题翻成用户能照做的引导（不说"服务繁忙"这种无从下手的废话） */
+function runtimeGuidance(probe) {
+  const lines = [probe.message || '本地运行时不可用']
+  if (probe.reason === 'missing') {
+    lines.push(
+      '这通常是安装包不完整（缺少 resources/python）。请重新安装；',
+      '开发者请用 `npm run desktop:pack` 重新打包（它会先执行 prepare_python_runtime.py）。',
+    )
+  } else if (probe.reason === 'missing-dependency') {
+    lines.push(
+      '安装包内的运行时被破坏或版本不匹配。请重新安装；',
+      '开发者请执行 `python desktop-local/scripts/prepare_python_runtime.py` 重建运行时。',
+    )
+  } else {
+    lines.push('请重新安装；开发者可用 `CHIRON_PYTHON` 指定一个已装好依赖的解释器。')
+  }
+  return lines.join('\n')
+}
+
+/**
  * core 可执行文件解析：装好的二进制 > 开发态源码。
  * 两者都没有就明确报错，不要 spawn 一个不存在的命令（会抛难懂的 ENOENT）。
  * root 可注入，单测用它模拟“仓库里还没有 desktop-local”。
@@ -415,12 +498,53 @@ function resolveCoreLaunch(root = repoRoot()) {
   // 打包态：desktop-local 在 resources/desktop-local，Python 在 resources/python（若随包）
   const packaged = packagedCoreDir()
   if (packaged) {
-    return {
-      command: bundledPython() || process.env[CORE_ENV.python] || 'python',
-      args: ['-m', 'app.main'],
-      kind: 'packaged',
-      cwd: packaged,
+    // 候选链（依次探测，**谁真的能 import 依赖就用谁**）：
+    //   1. resources/python —— 随安装包带来的运行时（正常情况）
+    //   2. CHIRON_PYTHON   —— 用户/开发者显式指定
+    //   3. PATH 上的 python —— 用户机已自备完整环境时自动兜底
+    //
+    // 这是"自动处理缺失依赖"的落点：缺了就往下找，而不是一上来就失败。
+    // 但**绝不盲用**：每个候选都要过 probeBundledRuntime（真 import 四个关键模块），
+    // 因为盲用 PATH 上的 python 只会把"装错了"变成"所有页面报服务繁忙"。
+    const attempted = []
+    const bundled = bundledPython()
+    if (!bundled) {
+      // 随包那份根本不存在：先记一条，保证最终引导指向"安装包不完整"而不是 PATH
+      attempted.push({
+        python: 'resources/python',
+        probe: {
+          ok: false,
+          reason: 'missing',
+          message: '安装包内缺少随包 Python 运行时（resources/python/python.exe）',
+        },
+      })
     }
+    for (const candidate of [bundled, process.env[CORE_ENV.python], 'python']) {
+      const python = String(candidate || '').trim()
+      if (!python) continue
+      if (attempted.some(item => item.python === python)) continue
+      const probe = probeBundledRuntime(python)
+      attempted.push({ python, probe })
+      if (!probe.ok) continue
+      if (python !== bundled) {
+        // 用了兜底解释器要留痕：否则排查时无法解释"为什么没用随包那份"
+        process.stderr.write(
+          `[chiron] 随包运行时不可用，回退到 ${python}（已确认可导入 ${REQUIRED_RUNTIME_MODULES.join(',')}）\n`,
+        )
+      }
+      return { command: python, args: ['-m', 'app.main'], kind: 'packaged', cwd: packaged }
+    }
+
+    const detail = attempted.map(item => `  - ${item.python}：${item.probe.message}`).join('\n')
+    // 引导以"随包那份"的问题为准：它才是安装包本该提供的东西
+    const guidance = runtimeGuidance((attempted[0] && attempted[0].probe) || {})
+    const error = new Error(
+      `本地运行时不可用（已尝试 ${attempted.length} 个解释器）：\n${detail}\n\n${guidance}`,
+    )
+    error.retryable = false
+    error.guidance = guidance
+    error.runtimeAttempts = attempted
+    throw error
   }
 
   const script = path.join(root, 'desktop-local', 'app', 'main.py')
