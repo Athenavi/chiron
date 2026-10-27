@@ -365,6 +365,24 @@ function coreSourceDir(root = repoRoot()) {
   return path.join(root, 'desktop-local')
 }
 
+/**
+ * 打包后 desktop-local 的位置：`extraResources` 把它放在 `resources/desktop-local`。
+ * `__dirname` 在 app.asar 内，不能再用 `path.resolve(__dirname, '..', '..')`。
+ */
+function packagedCoreDir() {
+  if (!process.resourcesPath) return ''
+  const candidate = path.join(process.resourcesPath, 'desktop-local')
+  return fs.existsSync(path.join(candidate, 'app', 'main.py')) ? candidate : ''
+}
+
+/** 打包时随包带的 Python（`resources/python/python.exe`）；没有就回退 CHIRON_PYTHON / PATH */
+function bundledPython() {
+  if (!process.resourcesPath) return ''
+  const exe = process.platform === 'win32' ? 'python.exe' : 'bin/python3'
+  const candidate = path.join(process.resourcesPath, 'python', exe)
+  return fs.existsSync(candidate) ? candidate : ''
+}
+
 /** core 二进制在 userData 里的固定位置（装好的 core 优先用它） */
 function coreBinaryPath() {
   const exeName = process.platform === 'win32' ? 'chiron-local.exe' : 'chiron-local'
@@ -387,6 +405,18 @@ function coreBinaryPath() {
 function resolveCoreLaunch(root = repoRoot()) {
   const exe = coreBinaryPath()
   if (fs.existsSync(exe)) return { command: exe, args: [], kind: 'binary', cwd: root }
+
+  // 打包态：desktop-local 在 resources/desktop-local，Python 在 resources/python（若随包）
+  const packaged = packagedCoreDir()
+  if (packaged) {
+    return {
+      command: bundledPython() || process.env[CORE_ENV.python] || 'python',
+      args: ['-m', 'app.main'],
+      kind: 'packaged',
+      cwd: packaged,
+    }
+  }
+
   const script = path.join(root, 'desktop-local', 'app', 'main.py')
   if (fs.existsSync(script)) {
     return {
