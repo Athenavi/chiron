@@ -98,6 +98,24 @@ func codeForMessage(msg string) string {
 
 // JSONWithCode 返回带显式错误码与结构化参数的失败响应（新代码推荐用法）。
 // params 供客户端插值（如 {"limit": 20}）；msg 仍是兼容用的原文文案。
+//
+// 不设 `retryable`：这是**有意的留空**（nil = 调用方自判），不是遗漏。只有确实掌握
+// “重试有用/无用”依据的调用点才该走 `JSONWithRetryable` 显式表态。
 func JSONWithCode(w http.ResponseWriter, status int, code string, params map[string]interface{}, msg string) {
 	JSON(w, status, APIResponse{Success: false, Error: msg, Code: code, Params: params})
+}
+
+// JSONWithRetryable 与 `JSONWithCode` 相同，但额外携带服务端对可重试性的显式结论。
+//
+// 用在“我们确实知道重试有没有用”的地方 —— 例如 409 `session_busy`：上一轮跑完
+// 这条会话就能再提交，重试是**对的策略**，客户端不该把它当成“请求内容有问题”而放弃。
+func JSONWithRetryable(w http.ResponseWriter, status int, code string,
+	params map[string]interface{}, msg string, retryable bool) {
+	JSON(w, status, APIResponse{
+		Success:   false,
+		Error:     msg,
+		Code:      code,
+		Params:    params,
+		Retryable: BoolPtr(retryable),
+	})
 }

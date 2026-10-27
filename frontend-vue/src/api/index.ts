@@ -1,7 +1,7 @@
 import axios from 'axios'
 import { describeApiError } from '../utils/apiError'
 import { toToolList, type ToolInfo } from '../utils/toolList'
-import { canAutoRetry, isRateLimitStatus, resolveWaitMs } from '../utils/rateLimitBackoff'
+import { canAutoRetry, readRetryable, resolveResponseWaitMs, shouldRetryResponse } from '../utils/rateLimitBackoff'
 import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
@@ -326,16 +326,24 @@ api.interceptors.response.use(
   (response) => response,
   async (error) => {
     const status: number | undefined = error.response?.status
+    // 服务端显式结论（`APIResponse.retryable`）：有就听它的，没有（undefined）才回退到状态码。
+    const retryable = readRetryable(error.response?.data?.retryable)
 
-    // 429 / 503 限流退避（CDS v1/06 §6.7）：
-    // 指数退避 × 全抖动，服务端给了 Retry-After 就优先听它的；连续 3 次之后交人工。
-    // 无限重试只会把账号打进更深的限流，所以上限是硬约束而不是建议。
-    if (isRateLimitStatus(status)) {
+    // 重试决策的分层（CDS v1/06 §6.7 的退避公式不变）：
+    //   `retryable === true`  → 服务端说重试有用（如 409 session_busy），就重试，不管状态码；
+    //   `retryable === false` → 服务端说重试无用（如参数非法），就**不**重试；
+    //   `retryable` 缺失       → 调用方自判，用旧的 429/503 判断（后向兼容）。
+    // 无限重试只会把账号打进更深的限流，所以 3 次上限仍是硬约束。
+    if (shouldRetryResponse(status, retryable)) {
       const config = error.config as (typeof error.config & { __rateLimitRetry?: number }) | undefined
       const attempt = (config?.__rateLimitRetry ?? 0) + 1
       if (config && canAutoRetry(attempt)) {
         config.__rateLimitRetry = attempt
-        const waitMs = resolveWaitMs(attempt, error.response?.headers?.['retry-after'])
+        const waitMs = resolveResponseWaitMs(
+          attempt,
+          error.response?.headers?.['retry-after'],
+          error.response?.data,
+        )
         // 只第一次提示：退避可能长达几十秒，静默会让用户以为界面卡死；
         // 每次重试都弹则是在刷屏。
         if (attempt === 1) {

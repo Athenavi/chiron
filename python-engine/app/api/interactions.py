@@ -26,6 +26,7 @@ from typing import Any
 
 from fastapi import APIRouter, Body, Query
 
+from app.subagent.outcome import RETRYABLE_CODES
 from app.tools.context import to_tenant_int
 
 logger = logging.getLogger(__name__)
@@ -34,6 +35,34 @@ router = APIRouter(tags=["agent-interactions"])
 
 #: 单次列表上限：待办本来就少（一个会话最多几条），但入参来自外部，必须有界。
 MAX_LIST_LIMIT = 50
+
+#: 本端点**自己**掌握的、超出 `outcome.py` 白名单的结论。
+#:
+#: 为什么不各写一份判定：`app/subagent/outcome.py` 已经是"能不能重试"的**单一出处**
+#: （白名单 `RETRYABLE_CODES` + "未知一律不重试"的安全默认）。这里只补它没覆盖的
+#: 逐个调用点的结论，其余一律 fallthrough 到那份白名单，避免两套判断漂移。
+#:
+#: 不用"按错误码统一覆盖"的做法：同一个 `storage_error` 既可能是**一次性的写失败**
+#: （重试就对），也可能是**schema 漂移**（重试一定拿到同一个错）。结论挂在**调用点**上，
+#: 不挂在错误码字面上。
+
+
+def _with_retryable(payload: dict[str, Any], *, retryable: bool | None = None) -> dict[str, Any]:
+    """给失败信封补上服务端对可重试性的结论（成功信封不经这里）。
+
+    **留空语义**：拿不到 `error_code` 时**不输出**该字段（= 调用方自判），绝不默认
+    填 False —— "服务端不知道"与"服务端确认重试无用"是两件事。
+
+    `retryable` 可由调用点显式给出（只有它知道"重发一次会不会成"）；不传时落到
+    `outcome.py` 的白名单上。`stale` / `invalid_decision` / `invalid_request` /
+    `not_found` 都在白名单外 ⇒ False：它们是**确定性拒绝**，同一份答复再发一次
+    只会得到同一个结果。
+    """
+    code = str(payload.get("error_code") or "").strip()
+    if not code:
+        return payload
+    decided = retryable if retryable is not None else code in RETRYABLE_CODES
+    return {**payload, "retryable": decided}
 
 
 def _identity(
@@ -61,7 +90,9 @@ async def list_session_interactions(
     from app.agent import interactions
 
     if not user_id:
-        return {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        return _with_retryable(
+            {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        )
     rows = await interactions.list_open(
         tenant_id=tenant_id, user_id=user_id, session_id=session_id, limit=limit
     )
@@ -98,7 +129,9 @@ async def list_user_interactions(
     from app.agent import interactions
 
     if not user_id:
-        return {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        return _with_retryable(
+            {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        )
     rows = await interactions.list_open_for_user(
         tenant_id=tenant_id, user_id=user_id, limit=limit
     )
@@ -148,36 +181,48 @@ async def resolve_interaction(
 
     tenant, user = _identity(tenant_id, user_id, body)
     if not user:
-        return {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        return _with_retryable(
+            {"ok": False, "error_code": "unauthorized", "error": "user_id is required"}
+        )
     session_id = str(body.get("session_id") or "")
     if not session_id:
-        return {
-            "ok": False,
-            "error_code": "invalid_request",
-            "error": "session_id is required (it identifies which run to resume)",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "invalid_request",
+                "error": "session_id is required (it identifies which run to resume)",
+            }
+        )
     response = body.get("response")
     if not isinstance(response, dict) or not response:
-        return {"ok": False, "error_code": "invalid_request", "error": "response is required"}
+        return _with_retryable(
+            {"ok": False, "error_code": "invalid_request", "error": "response is required"}
+        )
 
     row = await interactions.peek(
         interaction_id=interaction_id, tenant_id=tenant, user_id=user
     )
     if row is None:
         # 不存在 / 不是这个人的：不区分（区分本身会泄漏"别人的介入存在与否"）
-        return {"ok": False, "error_code": "not_found", "error": "interaction not found"}
+        return _with_retryable(
+            {"ok": False, "error_code": "not_found", "error": "interaction not found"}
+        )
     if str(row.get("session_id") or "") != session_id:
         # 票与声称的会话必须同源，否则网关会唤醒一个**没有挂起现场**的会话：答复落进了
         # 一张别的会话的票里，用户等的那一轮却永远不会继续。
-        return {"ok": False, "error_code": "invalid_request", "error": "session_id mismatch"}
+        return _with_retryable(
+            {"ok": False, "error_code": "invalid_request", "error": "session_id mismatch"}
+        )
     status = str(row.get("status") or "")
     if status != interactions.STATUS_PENDING:
-        return {
-            "ok": False,
-            "error_code": "stale",
-            "error": f"interaction is no longer pending (status={status})",
-            "status": status,
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "stale",
+                "error": f"interaction is no longer pending (status={status})",
+                "status": status,
+            }
+        )
 
     kind = str(row.get("kind") or "")
     if kind == interactions.KIND_BUDGET:
@@ -198,7 +243,9 @@ async def resolve_interaction(
             reason=response.get("reason"),
         )
         if isinstance(decision, str):
-            return {"ok": False, "error_code": "invalid_decision", "error": decision}
+            return _with_retryable(
+                {"ok": False, "error_code": "invalid_decision", "error": decision}
+            )
         payload: dict[str, Any] = json.loads(decision.to_json())
     elif kind == interactions.KIND_QUESTION:
         answer = response.get("answer")
@@ -210,16 +257,20 @@ async def resolve_interaction(
         elif response.get("declined") is True:
             payload = {"declined": True, "reason": str(response.get("reason") or "")}
         else:
-            return {
-                "ok": False,
-                "error_code": "invalid_decision",
-                "error": "answer is required (or set declined=true)",
-            }
+            return _with_retryable(
+                {
+                    "ok": False,
+                    "error_code": "invalid_decision",
+                    "error": "answer is required (or set declined=true)",
+                }
+            )
     else:
         # 库里的 kind 认不出来 = 写入方与本读取方对同一张表的理解已经漂移。
         # 这时**任何**答复都可能是错的，如实报故障比猜一个形状更负责。
         logger.error("pending interaction has unknown kind=%r (id=%s)", kind, interaction_id)
-        return {"ok": False, "error_code": "storage_error", "error": "unknown interaction kind"}
+        return _with_retryable(
+            {"ok": False, "error_code": "storage_error", "error": "unknown interaction kind"}
+        )
 
     resolved = await interactions.resolve(
         interaction_id=interaction_id,
@@ -232,11 +283,13 @@ async def resolve_interaction(
         # peek 与 resolve 之间那一行被关掉了（实时通道刚收到答复 / 过期巡检扫到），
         # 或者它的 24h 窗口已过 —— `resolve` 的谓词里就有 `expires_at > now()`。
         # 不重试：票只剩一次，重复答复的两种结局都该是同一个可见答案。
-        return {
-            "ok": False,
-            "error_code": "stale",
-            "error": "interaction is no longer answerable (answered, consumed or expired)",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "stale",
+                "error": "interaction is no longer answerable (answered, consumed or expired)",
+            }
+        )
     return {
         "ok": True,
         "data": {
@@ -272,35 +325,43 @@ async def _resolve_budget(
     if not tenant:
         # 线账按租户归属过滤（主键只有 root_run_id）：没有租户就没法安全地写这一行。
         # 网关路径总会带上它，缺了它的是内部直连 —— 宁可如实拒绝，也不要"按猜的租户写"。
-        return {
-            "ok": False,
-            "error_code": "invalid_request",
-            "error": "tenant_id is required to raise a line budget",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "invalid_request",
+                "error": "tenant_id is required to raise a line budget",
+            }
+        )
 
     request = row.get("request") or {}
     root = str(request.get("root_run_id") or "")
     if not root:
         logger.error("budget ticket %s has no root_run_id in request", interaction_id)
-        return {
-            "ok": False,
-            "error_code": "storage_error",
-            "error": "budget ticket is missing its lineage id",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "storage_error",
+                "error": "budget ticket is missing its lineage id",
+            }
+        )
 
     raw_cap = response.get("cap_tokens")
     if isinstance(raw_cap, bool) or not isinstance(raw_cap, int):
-        return {
-            "ok": False,
-            "error_code": "invalid_decision",
-            "error": "cap_tokens is required and must be an integer",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "invalid_decision",
+                "error": "cap_tokens is required and must be an integer",
+            }
+        )
     if not 1 <= raw_cap <= MAX_CAP_TOKENS:
-        return {
-            "ok": False,
-            "error_code": "invalid_decision",
-            "error": f"cap_tokens must be between 1 and {MAX_CAP_TOKENS}",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "invalid_decision",
+                "error": f"cap_tokens must be between 1 and {MAX_CAP_TOKENS}",
+            }
+        )
 
     raised = await get_line_ledger().raise_cap_and_resume(
         root, tenant, cap_tokens=raw_cap, updated_by=user
@@ -311,11 +372,17 @@ async def _resolve_budget(
             "line budget raise not written (root=%s tenant=%s cap=%s)：ticket stays open",
             root, tenant, raw_cap,
         )
-        return {
-            "ok": False,
-            "error_code": "storage_error",
-            "error": "could not update the line budget; the request is still open",
-        }
+        return _with_retryable(
+            {
+                "ok": False,
+                "error_code": "storage_error",
+                "error": "could not update the line budget; the request is still open",
+            },
+            # 票**保持 pending**（`cap` 只写进 PG 那一行才算数）⇒ 原样重发一次是
+            # **预期路径**，与白名单里 `timeout` 同性质。这里必须显式说：同一个
+            # `storage_error` 在"未知 kind"那个分支上是不可重试的。
+            retryable=True,
+        )
 
     decision = {"cap_tokens": raw_cap, "root_run_id": root}
     reason = str(response.get("reason") or "")

@@ -282,11 +282,25 @@ async def test_empty_response_is_rejected(store):  # noqa: ARG001
     assert out["error_code"] == "invalid_request"
 
 
+def test_with_retryable_leaves_the_field_out_when_there_is_no_code():
+    """留空语义：拿不到 `error_code` 时**不输出**该键（= 调用方自判），绝不默认 False。
+
+    这条锁的是"缺失 ≠ false"。一旦有人图省事把它写成 `payload.setdefault(...)`，
+    客户端会从"我不知道"读到"服务端确认重试无用"，从而放弃本来有效的重试。
+    """
+    out = api_mod._with_retryable({"ok": False, "error": "engine said something we can't classify"})
+
+    assert "retryable" not in out, "服务端没结论时必须留空，不能替调用方填 False"
+    assert out["error"] == "engine said something we can't classify", "原字段不该被改动"
+
+
 async def test_unknown_interaction_is_not_found(store):  # noqa: ARG001
     fake = store(FakeStore(row=None))
     out = await _resolve(body={"session_id": "s1", "response": {"decision": "approve"}}, user_id="u1")
 
     assert out["error_code"] == "not_found"
+    # not_found 不在 `RETRYABLE_CODES` 白名单里 ⇒ False（不靠状态码推断）。
+    assert out["retryable"] is False
     assert fake.resolve_calls == []
 
 
@@ -296,6 +310,8 @@ async def test_already_answered_is_stale(store):  # noqa: ARG001
 
     assert out["error_code"] == "stale"
     assert out["status"] == "answered"
+    # 确定性拒绝：同一份答复再发一次还是 stale ⇒ 服务端明确说“别重试”。
+    assert out["retryable"] is False
     assert fake.resolve_calls == [], "已答的票不该被第二次写"
 
 
@@ -305,6 +321,7 @@ async def test_row_closed_between_read_and_write_is_stale(store):  # noqa: ARG00
     out = await _resolve(body={"session_id": "s1", "response": {"decision": "approve"}}, user_id="u1")
 
     assert out["error_code"] == "stale"
+    assert out["retryable"] is False, "票只剩一次，重复答复不该被鼓励重试"
     assert len(fake.resolve_calls) == 1
 
 
@@ -314,6 +331,29 @@ async def test_unknown_kind_reports_storage_error(store):  # noqa: ARG001
 
     assert out["error_code"] == "storage_error"
     assert fake.resolve_calls == []
+
+
+async def test_unknown_kind_is_not_retryable(store):  # noqa: ARG001
+    """kind 认不出来 = 写入方与读取方已经漂移，重发同一条答复只会拿到同一个错。"""
+    fake = store(FakeStore(row=_approval_row(kind="mystery")))
+    out = await _resolve(
+        body={"session_id": "s1", "response": {"decision": "approve"}}, user_id="u1"
+    )
+
+    assert out["error_code"] == "storage_error"
+    assert out["retryable"] is False
+    assert fake.resolve_calls == []
+
+
+async def test_budget_tenant_missing_is_not_retryable(store):  # noqa: ARG001
+    """缺 tenant_id 是确定性拒绝（网关总会带），不能引导客户端重试。"""
+    store(FakeStore(row=_budget_row()))
+    out = await _resolve(
+        body={"session_id": "s1", "response": {"cap_tokens": 5000}}, user_id="u1", tenant_id=0
+    )
+
+    assert out["error_code"] == "invalid_request"
+    assert out["retryable"] is False
 
 
 async def test_identity_may_come_from_the_body(store):  # noqa: ARG001
@@ -377,6 +417,8 @@ async def test_budget_write_failure_keeps_the_ticket_open(store, ledger):  # noq
     out = await _resolve(body={"session_id": "s-main", "response": {"cap_tokens": 5000}})
 
     assert out["ok"] is False and out["error_code"] == "storage_error"
+    # 票保持 pending ⇒ 原样重发一次是预期路径，服务端必须显式说 retryable=True。
+    assert out["retryable"] is True
     assert len(led.calls) == 1 and fake.settle_calls == []
 
 

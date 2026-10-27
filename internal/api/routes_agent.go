@@ -21,6 +21,25 @@ import (
 // routes_agent.go —— Agent 提交/取消/事件的路由注册。
 // 由 gateway_router.go 按业务域拆分而来（纯移动：函数签名、函数体、调用点一字未改）。
 
+// rejectSessionBusy 拒绝"同会话已有一轮在跑"的提交。
+//
+// 这里显式带 `retryable=true`：会话忙是**暂时性**的（上一轮跑完/被停止后同一个请求就能过），
+// 而此前只有一个 400 + 文案，客户端只能把它当"请求内容有问题"而放弃重试 —— 与 409
+// `session_busy`（`session_recover.go` 的同一语义）给出的结论也自相矛盾。
+// 状态码保持 400 不变（既有集成方按它分支），只补上服务端结论。
+func rejectSessionBusy(w http.ResponseWriter, msg string) {
+	JSONWithRetryable(w, http.StatusBadRequest, CodeSessionBusy, nil, msg, true)
+}
+
+// rejectTenantQuota 是 429 里唯一手写的一条（要带租户配额的专用文案，其余 429 都走
+// `TooManyRequests`）。可重试性结论与 `TooManyRequests` **完全相同**：429 的意思就是
+// "速率窗口还没开"，窗口一开同一请求就能过 ⇒ 显式 `retryable=true`。
+// 抽成函数而不内联，是为了让"这条 429 也表了态"能被测试直接锁住。
+func rejectTenantQuota(w http.ResponseWriter) {
+	JSONWithRetryable(w, http.StatusTooManyRequests, CodeQuotaExceeded, nil,
+		"tenant token quota exceeded", true)
+}
+
 // ── Agent submit/cancel/events ──
 
 func registerAgentRoutes(
@@ -172,10 +191,7 @@ func registerAgentRoutes(
 			monitor.IncQuotaExceeded()
 			slog.Warn("tenant token quota exceeded, submit rejected",
 				"user_id", userID, "tenant_id", claims.TenantID)
-			JSON(w, http.StatusTooManyRequests, APIResponse{
-				Success: false,
-				Error:   "tenant token quota exceeded",
-			})
+			rejectTenantQuota(w)
 			return
 		}
 		// 后面还有三道闸门（run 锁 / 全局槽位 / 租户并发）会拒绝请求。被它们挡下时
@@ -217,13 +233,13 @@ func registerAgentRoutes(
 			if _, loaded := sessionCancels.LoadOrStore(body.SessionID, &sessionCancel{userID: userID, cancel: cancel}); loaded {
 				cancel()
 				refundQuota()
-				BadRequest(w, sessionBusyMsg)
+				rejectSessionBusy(w, sessionBusyMsg)
 				return
 			}
 		} else if !runLocked {
 			cancel() // cancel the new one since there's already an active task
 			refundQuota()
-			BadRequest(w, sessionBusyMsg)
+			rejectSessionBusy(w, sessionBusyMsg)
 			return
 		} else {
 			// 分布式锁持有成功：登记本地 registry（供取消）
@@ -306,6 +322,7 @@ func registerAgentRoutes(
 	}
 	// 限流：submit 会触发一次完整 agent run（昂贵链路），此前只有 authMW —— 缺少按用户/
 	// 租户的速率闸门，被劫持的 token 或异常客户端可高频触发昂贵链路。
+	// （`retryable` 由 TooManyRequests 统一给出，见 response.go。）
 	submitMW := authMW(rlMW(sanitizeMW(http.HandlerFunc(submitHandlerFunc))))
 	// Legacy 路由：向前兼容旧版前端
 	mux.Handle("POST /submit", submitMW)

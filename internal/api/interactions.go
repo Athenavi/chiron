@@ -82,8 +82,8 @@ func (h *InteractionHandler) List(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, "python engine error")
 		return
 	}
-	if msg, code, status := interactionEngineError(resp); code != "" {
-		JSONWithCode(w, status, code, nil, msg)
+	if _, code, _, _ := interactionEngineError(resp); code != "" {
+		respondInteractionError(w, resp)
 		return
 	}
 	items, _ := resp["items"].([]interface{})
@@ -125,8 +125,8 @@ func (h *InteractionHandler) ListForUser(w http.ResponseWriter, r *http.Request)
 		logAndRespond(w, err, http.StatusInternalServerError, "python engine error")
 		return
 	}
-	if msg, code, status := interactionEngineError(resp); code != "" {
-		JSONWithCode(w, status, code, nil, msg)
+	if _, code, _, _ := interactionEngineError(resp); code != "" {
+		respondInteractionError(w, resp)
 		return
 	}
 	items, _ := resp["items"].([]interface{})
@@ -194,10 +194,10 @@ func (h *InteractionHandler) Resolve(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, "python engine error")
 		return
 	}
-	if msg, code, status := interactionEngineError(resp); code != "" {
+	if _, code, _, _ := interactionEngineError(resp); code != "" {
 		slog.Info("interactions: resolve rejected by engine", "session", body.SessionID,
-			"interaction", interactionID, "error_code", code)
-		JSONWithCode(w, status, code, nil, msg)
+			"interaction", interactionID, "error_code", resp["error_code"])
+		respondInteractionError(w, resp)
 		return
 	}
 	OK(w, resp["data"])
@@ -266,12 +266,20 @@ func ensureSessionOwner(ctx context.Context, w http.ResponseWriter,
 
 // interactionEngineError 把引擎信封（200 + ok/error_code）映射成面向用户的状态码与稳定错误码。
 // 返回的 code 为空串表示"没有业务失败"（成功，或引擎返回了无法识别的形状 —— 交由调用方按成功透传）。
-func interactionEngineError(resp map[string]interface{}) (msg, code string, status int) {
+//
+// `retryable` 是**从引擎信封里读出来的**，不是网关按状态码猜的：信封里没写（nil）就原样
+// 留空，客户端回退到自己的状态码判断 —— 这就是"留空 = 调用方自判"的落点。引擎明确写了
+// true/false 时（如 `storage_error` = 暂时性写失败、`stale` = 票只剩一次），以它为准。
+func interactionEngineError(resp map[string]interface{}) (msg, code string, status int, retryable *bool) {
 	if resp == nil {
-		return "", "", 0
+		return "", "", 0, nil
 	}
 	if okv, _ := resp["ok"].(bool); okv {
-		return "", "", 0
+		return "", "", 0, nil
+	}
+	// 只有布尔才当结论；其它类型（字符串 "true" / 1）一律视为"没结论"，不猜。
+	if rv, isBool := resp["retryable"].(bool); isBool {
+		retryable = BoolPtr(rv)
 	}
 	msg, _ = resp["error"].(string)
 	if msg == "" {
@@ -280,20 +288,34 @@ func interactionEngineError(resp map[string]interface{}) (msg, code string, stat
 	codeRaw, _ := resp["error_code"].(string)
 	switch strings.TrimSpace(codeRaw) {
 	case "not_found":
-		return msg, CodeNotFound, http.StatusNotFound
+		return msg, CodeNotFound, http.StatusNotFound, retryable
 	case "stale":
 		// 已经答过 / 已被取走 / 已过期：冲突，不是"没找到"。用户要能看到"这条已经有了下文"。
-		return msg, CodeRequestFailed, http.StatusConflict
+		return msg, CodeRequestFailed, http.StatusConflict, retryable
 	case "invalid_decision":
-		return msg, CodeInvalidRequest, http.StatusBadRequest
+		return msg, CodeInvalidRequest, http.StatusBadRequest, retryable
 	case "invalid_request":
-		return msg, CodeInvalidRequest, http.StatusBadRequest
+		return msg, CodeInvalidRequest, http.StatusBadRequest, retryable
 	case "unauthorized":
 		// 只可能是网关自己漏了身份（claims 已在上面校验过）：如实报 401，不要伪装成参数问题
-		return msg, CodeAuthRequired, http.StatusUnauthorized
+		return msg, CodeAuthRequired, http.StatusUnauthorized, retryable
 	case "storage_error":
-		return msg, CodeInternal, http.StatusInternalServerError
+		return msg, CodeInternal, http.StatusInternalServerError, retryable
 	default:
-		return msg, CodeRequestFailed, http.StatusInternalServerError
+		return msg, CodeRequestFailed, http.StatusInternalServerError, retryable
 	}
+}
+
+// respondInteractionError 把引擎的业务失败写成网关响应，并透传引擎给出的可重试性结论。
+func respondInteractionError(w http.ResponseWriter, resp map[string]interface{}) {
+	msg, code, status, retryable := interactionEngineError(resp)
+	if code == "" {
+		return
+	}
+	if retryable != nil {
+		JSONWithRetryable(w, status, code, nil, msg, *retryable)
+		return
+	}
+	// 引擎没表态：留空（客户端按状态码自判），不要在这里替它补 false。
+	JSONWithCode(w, status, code, nil, msg)
 }

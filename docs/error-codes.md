@@ -73,7 +73,7 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 | `invalid_request` | `CodeInvalidRequest` | `ErrInvalidReq` = `invalid request body`；或文案含 `invalid` / `required` | 400（`response.go:63` 的 `BadRequest`） |
 | `not_found` | `CodeNotFound` | `ErrNotFound` = `resource not found`；或文案含 `not found` | 404（`response.go:67`） |
 | `rate_limited` | `CodeRateLimited` | `rate limit exceeded`（`response.go:100`）；或文案含 `rate limit` / `too many request` | 429（`response.go:99-101`） |
-| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`routes_agent.go:122`，2026-10-09 更正；原记 `gateway_router.go:660` —— 该文件**没有**这段逻辑） |
+| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`routes_agent.go:38` 的 `rejectTenantQuota`，2026-10-09 更正；原记 `routes_agent.go:122` 与更早的 `gateway_router.go:660` —— 后者**没有**这段逻辑） |
 | `insufficient_credits` | `CodeInsufficientCredits` | `insufficient credits — please recharge in Billing`；或文案含 `credit` | 402（`routes_agent.go:102`，2026-10-09 更正；原记 `gateway_router.go:640` —— 同上） |
 | `service_unavailable` | `CodeServiceUnavailable` | `ErrDBUnavailable` = `service temporarily unavailable`；或文案含 `unavailable` / `redis down` / `timeout` | **500 或 503**（见下节） |
 | `internal_error` | `CodeInternal` | 文案含 `internal` | 500（经 `InternalError`，`response.go:71-73`） |
@@ -93,17 +93,62 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 | `internal/api/ent_policy_handler.go:347`（`ServiceUnavailable(w, ErrDBUnavailable)`） | 503 | `service_unavailable` |
 
 两条路径的 `error` 文案相同、`code` 相同，状态却不同。**调用方不要假定 `code` 与状态一一对应**：
-判分支请用 `code`（语义稳定），决定重试策略再用状态码。
+判分支请用 `code`（语义稳定）；**要不要重试，看响应体的 `retryable`**（缺失时才回退到状态码）。
 
 同一状态也可能对应多个 `code`：任何 400 的 `error` 文案若含 `not found`，得到的 `code` 会是
 `not_found`。若需要精确语义，请用 `JSONWithCode` 显式指定。
 
+## 三条轴：`code` / HTTP 状态 / `retryable`
+
+错误体（`APIResponse`）现在有**三个互不替代**的字段，各管一件事：
+
+| 字段 | 回答的问题 | 谁维护 |
+|---|---|---|
+| `code` | 发生了**什么**事（前端据此取本地化文案、代码据此分支） | `codeForMessage` 从文案推断，或调用点显式指定 |
+| HTTP 状态 | **协议层**的分类（成功/未授权/冲突/限流…） | 调用点 |
+| `retryable` | 这个失败**值不值得原样再发一次** | **仅由确实掌握依据的服务端路径填写** |
+
+以前客户端只能靠状态码猜第三件事，于是两头都错：409 `session_busy` 其实是"等上一轮跑完
+就好"（重试是**正确策略**），却因不是 429/503 被判成不可重试；而 500 里由 provider 暂时性
+故障引起的失败，又因"5xx 不一定是暂时性的"而被统一当成不可重试。
+
+### 留空语义（重要）
+
+`retryable` 只有两个取值有意义，**第三个状态是缺失**：
+
+- `true` —— 服务端确认"换个时间/等内容跑完，同一个请求会成功"（如 429、409 `session_busy`、
+  `storage_error`）；
+- `false` —— 服务端确认"重试无用"（如参数非法、确定性拒绝的 `stale`）；
+- **缺失** —— 服务端**没有结论**，调用方自行判断。此时前端回退到既有的 429/503 逻辑。
+
+**缺失不等于 `false`。** 网关读不出来的上游错误（一个 502 究竟是对方重启还是我们发错了参数）
+就该留空，而不是替调用方填 `false` —— 那等于用"服务端不知道"去推翻客户端的"重试有用"。
+Go 侧字段是 `*bool` + `omitempty`，Python 侧是 `Optional[bool]` 且缺失即不输出，
+前端 `readRetryable` 也只认**真布尔**（字符串 `"true"`、`1` 一律视为没表态）。
+
+### 当前表态的调用点
+
+| 调用点 | 状态 / `code` | `retryable` | 依据 |
+|---|---|---|---|
+| `TooManyRequests`（`response.go`，所有 429 闸门共用） | 429 / `rate_limited` | `true` | 429 的唯一含义就是速率窗口还没开，窗口一开同一请求就能成 |
+| `routes_agent.go:38`（`rejectTenantQuota`，租户配额拒绝；手写 429 只为带专用文案） | 429 / `quota_exceeded` | `true` | 与上一行同语义；手写只因文案不同，可重试性结论一致，故显式补上以免成为"限流却不表态"的例外 |
+| `RecoverSession`（`session_recover.go`，两处 `CodeSessionBusy`） | 409 / `session_busy` | `true` | 上一轮收口后同会话即可恢复，`params.retry_after_seconds` 已给出等待时长 |
+| `rejectSessionBusy`（`routes_agent.go`，submit 的会话忙拒绝） | 400 / `session_busy` | `true` | 与上一条同语义；状态码保持 400 不变以免破坏既有集成方 |
+| `interactions.go`（引擎信封透传） | 随 `error_code` | **取引擎信封的 `retryable`** | 判定在 Python `outcome.py` 白名单 + `interactions.py` 的业务码覆盖，网关不重复判 |
+
+其余路径（`logAndRespond`、`internal_error`、`not_found`、`auth_required`…）**不填**该字段：
+网关对它们没有"重试有没有用"的依据。`JSONWithCode` 有意不设该字段；需要明示时用
+`JSONWithRetryable`。
+
+> 网关侧新增 `retryable` 时请先回答一句：**"我能说清重试为什么有用（或为什么没用）吗？"**
+> 说不清就留空 —— 客户端的状态码回退比一个瞎猜的布尔值更接近真相。
+
 ## 前端如何消费
 
-优先级实现在 `frontend-vue/src/utils/apiError.ts:139-165`（`describeApiError`）—— **2026-10-09 更正**：此前写的 `:59-85` 是**旧版行号**（该文件后来加了「取值口径（L3-2 定）」注释块，整体下移）：
+优先级实现在 `frontend-vue/src/utils/apiError.ts:146`（`describeApiError`）—— **2026-10-09 更正**：此前写的 `:59-85` 是**旧版行号**（该文件后来加了「取值口径（L3-2 定）」注释块，整体下移；本次又因 `ApiErrorLike` 补 `retryable`/`params` 再下移一行）：
 
 1. **后端 `code` 的本地化文案**（`errors.<code>`，见 `locales/<lang>/errors.ts`）；
-2. **已知状态码的文案**（`statusMessage` `apiError.ts:59-62`；映射表在 `statusMessageKey` `:40-56`）；
+2. **已知状态码的文案**（`statusMessage` `apiError.ts:66`；映射表在 `statusMessageKey` `:47`）；
 3. 后端 `error` / `message` 原文；
 4. 调用方兜底文案。
 
@@ -114,8 +159,12 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 - 因为「`error` 非空 ⇒ `code` 非空」，**第 2 步（状态码兜底）实际上只在响应不带 `error` 文案
   时才生效**；服务端已给出 `code` 时，状态码映射不会参与。映射表因此主要服务于
   「无 `code` 的老接口 / 网关前置组件（如 nginx）直接生成的响应」。
-- 状态码映射把 `500/502/503/504` 统一指向 `service_unavailable`（`apiError.ts:50-53`），
+- 状态码映射把 `500/502/503/504` 统一指向 `service_unavailable`（`apiError.ts:60-62`），
   比服务端更粗 —— 服务端有 `code` 时以 `code` 为准。
+
+> 注意这一层与「要不要重试」**无关**：`describeApiError` 只决定"怎么说给用户听"，
+> 重试决策在 `rateLimitBackoff.shouldRetryResponse`（`retryable` 优先，缺失才看状态码）。
+> 此前两件事都被塞在状态码上，才导致文案层与重试层被铰在一起。
 
 ## `errors.ts` 的键集合
 
@@ -123,7 +172,7 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 
 | 类别 | 键 | 产生方 |
 |---|---|---|
-| 后端稳定码 | `auth_required` `forbidden` `invalid_request` `not_found` `rate_limited` `quota_exceeded` `insufficient_credits` `service_unavailable` `internal_error` `request_failed` | `internal/api/error_codes.go:22-33` |
+| 后端稳定码 | `auth_required` `forbidden` `invalid_request` `session_busy` `not_found` `rate_limited` `quota_exceeded` `insufficient_credits` `service_unavailable` `internal_error` `request_failed` | `internal/api/error_codes.go:22-37` |
 | 前端专用（后端不产生） | `timeout` `network_error` `payload_too_large` `http_status` | 客户端网络层，`apiError.ts:47-48,159,162-163` |
 
 `http_status` 是**唯一带参数**的键，用命名插值：`t('errors.http_status', { status })`
@@ -131,7 +180,7 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 
 ## 新增 / 修改错误码的清单
 
-1. **Go 侧**：在 `internal/api/error_codes.go:22-33` 增加 `Code*` 常量；
+1. **Go 侧**：在 `internal/api/error_codes.go:22-37` 增加 `Code*` 常量；
    若该码应对既有高频文案自动生效，同时补进 `knownMessageCodes`（精确）或
    `messageCodeRules`（关键字，**注意插到合适的位置**，更具体的前置）；
 2. **三语言同步**（硬要求）：`frontend-vue/src/locales/{zh-CN,en-US,ar}/errors.ts` 各补一条，
@@ -151,12 +200,19 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 # Go 侧：错误码推断与自动补码
 go test -mod=mod ./internal/api/ -run "TestCodeForMessage|TestJSON_" -count=1
 
+# Go 侧：`retryable` 契约（缺失 = 调用方自判；显式值才输出）
+go test -mod=mod ./internal/api/ -run "Retryable" -count=1
+
 # 前端：消费优先级与状态码映射
 cd frontend-vue && pnpm exec vitest run src/utils/__tests__/apiError.spec.ts
+
+# 前端：重试决策（`retryable` 优先，缺失回退 429/503）
+cd frontend-vue && pnpm exec vitest run src/utils/__tests__/rateLimitBackoff.spec.ts
 ```
 
 > **键集一致性已机械化（2026-10-09）**：`scripts/check_error_code_keys.py`（已接进 CI 的
 > `Source encoding` job）断言三件事 —— ① 每个 `Code*` 的**值**在三语言 `errors.ts` 里都有同名键；
 > ② 上面 4 个**前端专用**键在三语言里都存在；③ **三语言键集完全相同**。
-> 当前实测：Go `Code*` **10** 个 + 前端专用 **4** 个，三语言各 **256** 键且键集一致。
+> 当前实测：Go `Code*` **11** 个（含 2026-10-09 新增的 `session_busy`，其键早已存在于三语言，
+> 故不改变键数）+ 前端专用 **4** 个，三语言各 **256** 键且键集一致。
 > 已做三个方向的变异验证（某语言契约键改名 / 某语言多一个独有键 / Go 侧 `Code*` 值改名 ⇒ 均判失败）。
