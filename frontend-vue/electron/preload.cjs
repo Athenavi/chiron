@@ -98,4 +98,17 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   removeComponent: name => ipcRenderer.invoke('desktop:remove-component', name),
   startComponent: name => ipcRenderer.invoke('desktop:start-component', name),
   stopComponent: name => ipcRenderer.invoke('desktop:stop-component', name),
+
+  /**
+   * 本地模型配置（provider / 端点 / 模型名 / key）。
+   *
+   * 读回来的**永远不含明文 key**：只有 `{ active, providers: { <name>: { baseUrl, model, hasKey } } }`。
+   * 明文 key 只往主进程方向流动（saveModelConfig），保存后就只剩 hasKey 一个布尔。
+   * 三个动作统一 resolve `{ ok, message? }` 形态，不抛错给页面整段回显。
+   */
+  getModelConfig: () => ipcRenderer.invoke('desktop:get-model-config'),
+  /** 保存（合并语义）：providers.<name>.apiKey 为空 = 保留已存的 key */
+  saveModelConfig: config => ipcRenderer.invoke('desktop:save-model-config', config || {}),
+  /** 重启本地后端，让新的 provider 配置生效（仅本地模式） */
+  restartLocalBackend: () => ipcRenderer.invoke('desktop:restart-local-backend'),
 })

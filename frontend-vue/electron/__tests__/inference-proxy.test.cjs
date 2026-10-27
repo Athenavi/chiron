@@ -218,3 +218,122 @@ test('stopProxy 之后地址与 token 失效', async t => {
 
   await assert.rejects(() => fetch(`${started.url}/infer`, { method: 'POST', body: '{}' }))
 })
+
+// ── provider 选择：请求里的 provider > secrets.active > 本地 ──
+// 本地 core 发请求时**不带** provider（desktop-local/app/runtime/inference.py），
+// 所以"用户在设置里换 provider 就能用"完全依赖下面这几条。
+
+function ollamaOk() {
+  return jsonResponse({ message: { content: '本地回答' }, prompt_eval_count: 1, eval_count: 1 })
+}
+
+function openaiOk(model = 'gpt-configured') {
+  return jsonResponse({
+    model,
+    choices: [{ message: { role: 'assistant', content: '按配置回答' } }],
+    usage: { prompt_tokens: 1, completion_tokens: 2, total_tokens: 3 },
+  })
+}
+
+test('secrets.active 决定 provider：请求不带 provider 时走用户配置的服务', async t => {
+  const fetchImpl = stubFetch(() => openaiOk())
+  const started = await start(t, {
+    fetchImpl,
+    readSecrets: async () => ({
+      active: 'openai-compatible',
+      providers: {
+        'openai-compatible': {
+          apiKey: 'sk-configured-0123456789',
+          baseUrl: 'https://configured.invalid/v1/',
+          model: 'gpt-configured',
+        },
+      },
+    }),
+  })
+
+  // 既没有 provider 也没有 model：两个都从 secrets 补
+  const res = await call(started, { body: { messages: [{ role: 'user', content: PROMPT }] } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.provider, 'openai-compatible')
+  assert.equal(res.body.model, 'gpt-configured')
+
+  assert.equal(fetchImpl.calls.length, 1)
+  assert.equal(fetchImpl.calls[0].url, 'https://configured.invalid/v1/chat/completions')
+  assert.equal(fetchImpl.calls[0].init.headers.Authorization, 'Bearer sk-configured-0123456789')
+  assert.equal(JSON.parse(fetchImpl.calls[0].init.body).model, 'gpt-configured')
+})
+
+test('secrets.active 是未知值时回退本地，而不是 4xx/5xx', async t => {
+  const fetchImpl = stubFetch(() => ollamaOk())
+  const started = await start(t, {
+    fetchImpl,
+    readSecrets: async () => ({ active: 'mars', providers: {} }),
+  })
+
+  const res = await call(started, { body: { model: 'm', messages: [{ role: 'user', content: 'x' }] } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.provider, 'local')
+  assert.equal(fetchImpl.calls[0].url, `${proxy.DEFAULT_OLLAMA_BASE}/api/chat`)
+})
+
+test('请求显式 provider 优先于 secrets.active（诊断/直连用）', async t => {
+  const fetchImpl = stubFetch(() => ollamaOk())
+  const started = await start(t, {
+    fetchImpl,
+    readSecrets: async () => ({
+      active: 'openai-compatible',
+      providers: { 'openai-compatible': { apiKey: 'sk-x-0123456789', baseUrl: 'https://configured.invalid/v1' } },
+    }),
+  })
+
+  const res = await call(started, { body: { provider: 'local', model: 'm', messages: [{ role: 'user', content: 'x' }] } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.provider, 'local')
+  assert.equal(fetchImpl.calls[0].url, `${proxy.DEFAULT_OLLAMA_BASE}/api/chat`)
+})
+
+test('Ollama 端点与模型名取自 secrets，缺省才用默认常量', async t => {
+  const fetchImpl = stubFetch(() => ollamaOk())
+  const started = await start(t, {
+    fetchImpl,
+    // 构造时的地址只是兜底：secrets 里有值时以 secrets 为准
+    ollamaBaseUrl: 'http://127.0.0.1:11434/',
+    readSecrets: async () => ({
+      active: 'ollama',
+      providers: { ollama: { baseUrl: 'http://127.0.0.1:11500/', model: 'qwen2.5-coder:7b' } },
+    }),
+  })
+
+  const res = await call(started, { body: { messages: [{ role: 'user', content: 'x' }] } })
+  assert.equal(res.status, 200)
+  assert.equal(fetchImpl.calls[0].url, 'http://127.0.0.1:11500/api/chat')
+  assert.equal(JSON.parse(fetchImpl.calls[0].init.body).model, 'qwen2.5-coder:7b')
+  assert.equal(res.body.model, 'qwen2.5-coder:7b')
+})
+
+test('Ollama 端点没配时用默认常量（业务逻辑里不写死 11434）', async t => {
+  const fetchImpl = stubFetch(() => ollamaOk())
+  const started = await start(t, {
+    fetchImpl,
+    readSecrets: async () => ({ active: 'ollama', providers: {} }),
+  })
+
+  await call(started, { body: { model: 'm', messages: [{ role: 'user', content: 'x' }] } })
+  assert.equal(fetchImpl.calls[0].url, `${proxy.DEFAULT_OLLAMA_BASE}/api/chat`)
+  assert.match(proxy.DEFAULT_OLLAMA_BASE, /^http:\/\/127\.0\.0\.1:\d+$/)
+})
+
+test('readSecrets 抛错（密钥环锁死）时按默认 provider 继续推理', async t => {
+  const fetchImpl = stubFetch(() => ollamaOk())
+  const started = await start(t, {
+    fetchImpl,
+    readSecrets: async () => {
+      throw new Error('keyring locked')
+    },
+  })
+
+  const res = await call(started, { body: { model: 'm', messages: [{ role: 'user', content: 'x' }] } })
+  assert.equal(res.status, 200)
+  assert.equal(res.body.provider, 'local')
+  assert.equal(fetchImpl.calls[0].url, `${proxy.DEFAULT_OLLAMA_BASE}/api/chat`)
+})
