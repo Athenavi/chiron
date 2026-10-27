@@ -1,6 +1,7 @@
 <script setup lang="ts">
 /**
- * 用户设置面板：通用 / 账户 / 数据 / 协议四个标签页。
+ * 用户设置面板：通用 / 账户 / 数据 / 协议四个标签页，外加仅在桌面壳出现的
+ * 「运行模式」与「本地模型」两个设备级页签。
  *
  * 页面（/profile）与头像弹窗共用本组件 —— 两套入口一套实现，避免各自漂移。
  * 组件本身不含容器（无 header、无尺寸），由调用方决定是页面还是弹窗。
@@ -12,6 +13,7 @@ import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOut
 import EmptyState from '../common/EmptyState.vue'
 import HarnessProfilePanel from './HarnessProfilePanel.vue'
 import RunModePanel from './RunModePanel.vue'
+import LocalModelPanel from './LocalModelPanel.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useThemeStore } from '../../stores/theme'
@@ -1021,6 +1023,16 @@ onMounted(async () => {
       :tab="$t('settings.run_mode')"
     >
       <RunModePanel />
+    </a-tab-pane>
+
+    <!-- ── 本地模型（provider / 端点 / 模型名 / key）──
+         仅本地模式展示：云端模式的模型与密钥由服务端托管，用户没有可填的端点。 ── -->
+    <a-tab-pane
+      v-if="deviceStore.isDesktop && deviceStore.isLocal()"
+      key="local-model"
+      :tab="$t('settings.local_model')"
+    >
+      <LocalModelPanel />
     </a-tab-pane>
   </a-tabs>
 </template>

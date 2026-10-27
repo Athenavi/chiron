@@ -26,25 +26,30 @@ const fs = require('node:fs')
 const net = require('node:net')
 const path = require('node:path')
 const crypto = require('node:crypto')
-const { spawn } = require('node:child_process')
+const childProcess = require('node:child_process')
+const { spawn } = childProcess
+const DEFAULTS = require('./defaults.cjs')
 
 /** 与 contracts.md 的 ComponentInfo.name 一致，顺序即 UI 展示顺序 */
-const COMPONENT_NAMES = Object.freeze(['core', 'pageindex', 'langextract'])
+const COMPONENT_NAMES = DEFAULTS.COMPONENT_NAMES
 
-const CORE_HEALTH_TIMEOUT_MS = 30000
-const CORE_HEALTH_INTERVAL_MS = 200
-const CORE_STOP_TIMEOUT_MS = 5000
-const CORE_KILL_TIMEOUT_MS = 2000
+/** 单一来源：默认值都在 defaults.cjs，这里只做别名，不在本文件写字面量 */
+const CORE_HEALTH_TIMEOUT_MS = DEFAULTS.CORE_HEALTH_TIMEOUT_MS
+const CORE_HEALTH_INTERVAL_MS = DEFAULTS.CORE_HEALTH_INTERVAL_MS
+const CORE_STOP_TIMEOUT_MS = DEFAULTS.CORE_STOP_TIMEOUT_MS
+const CORE_KILL_TIMEOUT_MS = DEFAULTS.CORE_KILL_TIMEOUT_MS
 /** 报错消息里最多带多少字节 stderr（脱敏后）：够定位 ImportError / 端口占用即可 */
-const CORE_STDERR_TAIL_BYTES = 2000
+const CORE_STDERR_TAIL_BYTES = DEFAULTS.CORE_STDERR_TAIL_BYTES
 /** core 的组件端点（desktop-local/app/api/components.py） */
-const CORE_COMPONENTS_PATH = '/v1/components'
+const CORE_COMPONENTS_PATH = DEFAULTS.CORE_COMPONENTS_PATH
 /** 列组件应该很快：卡住就别让 UI 转圈 */
-const CORE_LIST_TIMEOUT_MS = 5000
+const CORE_LIST_TIMEOUT_MS = DEFAULTS.CORE_LIST_TIMEOUT_MS
 /** 安装要复制/解压组件包，给宽一点 */
-const CORE_INSTALL_TIMEOUT_MS = 120000
+const CORE_INSTALL_TIMEOUT_MS = DEFAULTS.CORE_INSTALL_TIMEOUT_MS
 /** 启动可能要等健康检查（core 侧默认 20s），再留点余量 */
-const CORE_ACTION_TIMEOUT_MS = 60000
+const CORE_ACTION_TIMEOUT_MS = DEFAULTS.CORE_ACTION_TIMEOUT_MS
+/** 启动尝试次数（含首次）：端口冲突 / 提前退出 / 就绪超时都会换端口重试 */
+const CORE_PORT_ATTEMPTS = DEFAULTS.CORE_PORT_ATTEMPTS
 
 /**
  * core 的启动环境变量（contracts.md §3.1 的**契约名**）。
@@ -536,6 +541,58 @@ function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms))
 }
 
+/**
+ * 由 host + port 拼 core 的 baseUrl（地址只在这里拼，调用方不再自己拼）。
+ * 非 loopback 的 host 一律压回默认值：core 只绑 loopback（契约 §4）。
+ */
+function coreBaseUrl(host, port) {
+  const text = String(host || DEFAULTS.DEFAULT_HOST)
+  const safe = text === 'localhost' || text === DEFAULTS.DEFAULT_HOST ? text : DEFAULTS.DEFAULT_HOST
+  return `http://${safe}:${Number(port)}`
+}
+
+/**
+ * 解析调用方要求的端口。未给 = 默认 0（交给内核）；给了就必须是 0..65535 的整数。
+ * 绝不回退到“某个固定端口”这样的默认值。
+ */
+function resolveRequestedPort(value) {
+  if (value === undefined || value === null || value === '') return DEFAULTS.DEFAULT_CORE_PORT
+  const port = Number(value)
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    throw new Error(`本地 core 端口不合法：${value}（0..65535，0 = 随机）`)
+  }
+  return port
+}
+
+/**
+ * Windows 上按**进程树**终止（taskkill /T），避免 core 下面的 postgres/python 子进程
+ * 在父进程被杀后变成孤儿并占着端口。
+ *
+ * 两条安全闸：
+ *   1. 只在 win32 上做；其它平台靠 SIGTERM/SIGKILL 的进程组语义；
+ *   2. 只对真正由 child_process 返回的进程做（这类对象一定有 `spawnfile`）。
+ *      单测注入的假进程没有该属性 → 直接跳过，绝不拿假 pid 去 taskkill 真实进程。
+ * 可用 `_setDeps({ killTree })` 覆盖（测试用）。
+ */
+function killProcessTree(child, pid) {
+  const injectedKill = injected && typeof injected.killTree === 'function' ? injected.killTree : null
+  if (injectedKill) return injectedKill(child, pid) !== false
+  if (process.platform !== 'win32') return false
+  if (!child || typeof child.spawnfile !== 'string' || !child.spawnfile) return false
+  const target = Number.isInteger(pid) && pid > 0 ? pid : child.pid
+  if (!Number.isInteger(target) || target <= 0) return false
+  try {
+    const result = childProcess.spawnSync('taskkill', ['/PID', String(target), '/T', '/F'], {
+      windowsHide: true,
+      timeout: CORE_KILL_TIMEOUT_MS,
+    })
+    // 0 = 全部终止；128 = 进程已不存在；其它退出码不算成功（下面还会 SIGTERM/SIGKILL）
+    return Boolean(result) && result.status === 0
+  } catch {
+    return false
+  }
+}
+
 /** 统一的 fetch 入口：单测通过 `_setDeps({fetch})` 注入，运行期用全局 fetch */
 function httpFetch() {
   const injected = runtime()
@@ -543,10 +600,11 @@ function httpFetch() {
 }
 
 /** 单次健康探测：core 活着就 true。失败/超时一律当"还没起来"，不抛。 */
-async function probeHealth(baseUrl, timeoutMs = 1000) {
+async function probeHealth(baseUrl, timeoutMs = DEFAULTS.CORE_PROBE_TIMEOUT_MS) {
   if (!baseUrl) return false
+  const healthPath = DEFAULTS.DEFAULT_HEALTH_PATH
   try {
-    const res = await httpFetch()(`${baseUrl}/healthz`, { signal: AbortSignal.timeout(timeoutMs) })
+    const res = await httpFetch()(`${baseUrl}${healthPath}`, { signal: AbortSignal.timeout(timeoutMs) })
     if (!res.ok) return false
     const body = await res.json().catch(() => null)
     // 契约 §4：{"status":"ok"}。字段缺失时按"活着"算，避免把简化实现判死。
@@ -561,9 +619,26 @@ function coreExitError(record) {
   const detail = record.stderrTail
     ? `；stderr 末尾：${redactSecrets(record.stderrTail).trim()}`
     : ''
-  return new Error(
+  const error = new Error(
     `本地 core 启动失败（${reason}，stdout ${record.stdoutBytes}B / stderr ${record.stderrBytes}B${detail}）`,
   )
+  // spawn 的 'error' 事件（命令不存在 / 没权限）换端口也救不回来，不要白白重试
+  if (record.spawnError) error.retryable = !isFatalSpawnError({ message: record.spawnError })
+  return error
+}
+
+/**
+ * 不可恢复的 spawn 错误：命令不存在（ENOENT）、没权限（EACCES/EPERM）、路径不是目录。
+ * 这类错误换端口没用，直接失败；其余失败（含所有端口/地址占用）一律换端口重试。
+ */
+const FATAL_SPAWN_CODES = Object.freeze(['ENOENT', 'EACCES', 'EPERM', 'ENOTDIR'])
+
+function isFatalSpawnError(err) {
+  if (!err) return false
+  const code = typeof err.code === 'string' ? err.code : ''
+  if (FATAL_SPAWN_CODES.includes(code)) return true
+  const text = String(err.message || err)
+  return FATAL_SPAWN_CODES.some(item => text.includes(item))
 }
 
 /**
@@ -573,16 +648,30 @@ function coreExitError(record) {
  *   2. 端口已知（我们借来的空闲端口）时直接轮询 `/healthz`，兼容不打印播报的实现。
  * 进程提前退出立即失败，不要白等 30s。
  */
-async function waitForHealth(record) {
-  const deadline = Date.now() + CORE_HEALTH_TIMEOUT_MS
+async function waitForHealth(record, options = {}) {
+  const timeoutMs =
+    Number.isFinite(options.timeoutMs) && options.timeoutMs > 0
+      ? options.timeoutMs
+      : CORE_HEALTH_TIMEOUT_MS
+  const intervalMs =
+    Number.isFinite(options.intervalMs) && options.intervalMs > 0
+      ? options.intervalMs
+      : CORE_HEALTH_INTERVAL_MS
+  const healthPath = DEFAULTS.DEFAULT_HEALTH_PATH
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (record.exited) throw coreExitError(record)
-    if (await probeHealth(record.baseUrl)) return true
-    await sleep(CORE_HEALTH_INTERVAL_MS)
+    // **只有 core 自己播报 listening 才算就绪**。
+    // 端口写死时（调用方传了固定 port），`record.baseUrl` 在 spawn 前就拼好了；
+    // 若该端口上恰好有别的服务应答 /healthz，直接探测会把"core 起失败（端口被占）"
+    // 误判成"启动成功"，且不会触发换端口重试。listening 事件是唯一能证明
+    // "这个端口上跑的是我们的 core" 的信号（见 desktop-local/app/main.py::serve）。
+    if (record.listening && (await probeHealth(record.baseUrl))) return true
+    await sleep(intervalMs)
   }
-  const hint = record.baseUrl
-    ? `在 ${CORE_HEALTH_TIMEOUT_MS}ms 内没有响应 ${record.baseUrl}/healthz`
-    : `在 ${CORE_HEALTH_TIMEOUT_MS}ms 内没有收到 stdout 的 listening 事件（端口未知，无法探测 /healthz）`
+  const hint = record.listening
+    ? `已播报端口 ${record.port}，但 ${timeoutMs}ms 内没有响应 ${record.baseUrl}${healthPath}`
+    : `在 ${timeoutMs}ms 内没有收到 stdout 的 listening 事件（端口未知，无法确认 ${healthPath} 属于本 core）`
   throw new Error(
     `本地 core ${hint}（stdout ${record.stdoutBytes}B / stderr ${record.stderrBytes}B${
       record.stderrTail ? `；stderr 末尾：${redactSecrets(record.stderrTail).trim()}` : ''
@@ -602,14 +691,19 @@ async function waitForExit(record, timeoutMs) {
 function snapshot(record) {
   return {
     running: Boolean(record && !record.exited),
+    // 契约字段：调用方只需要这五个（地址不再由调用方拼）
     baseUrl: record ? record.baseUrl : '',
+    port: record ? record.port : 0,
     token: record ? record.token : '',
     pid: record && record.child ? record.child.pid : undefined,
-    port: record ? record.port : 0,
     dataDir: record ? record.dataDir : '',
+    /** 本次尝试请求的端口（0 = 交给内核），排查“为什么端口变了”用 */
+    requestedPort: record ? record.requestedPort : 0,
     /** core 自己播报的数据目录（证明 CHIRON_DATA_DIR 真的生效了） */
     announcedDataDir: record ? record.announcedDataDir : '',
     listening: Boolean(record && record.listening),
+    /** 当前记录是第几次启动尝试（>1 说明前面撞过端口/超时） */
+    attempt: record ? record.attempt || 1 : 0,
     startedAt: record ? record.startedAt : '',
     stdoutBytes: record ? record.stdoutBytes : 0,
     stderrBytes: record ? record.stderrBytes : 0,
@@ -642,8 +736,8 @@ function coreResult(record, child = record.child) {
  *     `CHIRON_INFERENCE_PROXY` / `CHIRON_PYTHON`；同一份值也写成 `CHIRON_LOCAL_*`，
  *     因为当前 config.py 的 pydantic 前缀是后者（见 CORE_ENV_ALIASES）。
  *   - 真实端口以 stdout 的 listening 事件为准，拿不到再轮询 `/healthz`。
- *   - `options.port === 0` 表示"交给内核随机"，此时在收到 listening 事件前不知道该
- *     探测哪个端口；不传 port 时先借一个空闲端口，能立刻轮询又不占坑。
+ *   - `options.port === 0` 表示"交给内核随机"，此时只有 listening 事件能告诉我们真实端口；
+ *     不传 port 时同样交给内核（0），重试时也换回 0（见 startCore 的循环）。
  */
 async function startCore(options = {}) {
   const existing = state.core
@@ -653,12 +747,8 @@ async function startCore(options = {}) {
   }
 
   const dataDir = options.dataDir ? String(options.dataDir) : path.join(userDataDir(), 'local')
-  let requestedPort
-  if (options.port === undefined || options.port === null) requestedPort = await pickFreePort()
-  else requestedPort = Number(options.port)
-  if (!Number.isInteger(requestedPort) || requestedPort < 0 || requestedPort > 65535) {
-    throw new Error(`本地 core 端口不合法：${options.port}（0..65535，0 = 随机）`)
-  }
+  /** 默认值为 0 = 交给内核随机分配；调用方要固定端口时才 > 0 */
+  const requestedPort = resolveRequestedPort(options.port)
 
   // token 可以外部指定（verify 脚本 / 重连场景），否则沿用环境变量，最后才自己生成。
   const token =
@@ -668,11 +758,70 @@ async function startCore(options = {}) {
 
   const root = options.repoRoot ? String(options.repoRoot) : repoRoot()
   const launch = resolveCoreLaunch(root)
+
+  const attempts =
+    Number.isInteger(options.portAttempts) && options.portAttempts > 0
+      ? options.portAttempts
+      : CORE_PORT_ATTEMPTS
+  const failures = []
+
+  for (let index = 0; index < attempts; index += 1) {
+    // 首次用调用方要求的端口；重试一律交回内核（0），避免再撞上同一个被占端口
+    const port = index === 0 ? requestedPort : DEFAULTS.DEFAULT_CORE_PORT
+    try {
+      return await spawnCoreOnce({ launch, root, dataDir, token, port, options, attempt: index + 1 })
+    } catch (err) {
+      const message = err && err.message ? err.message : String(err)
+      failures.push({
+        attempt: index + 1,
+        port,
+        message,
+        portConflict: err && err.portConflict === true,
+      })
+      // 每次失败都先清干净：进程 + state + listening 播报，再换端口重来
+      await stopCore()
+      // 不可恢复的 spawn 错误（ENOENT / EACCES）换端口也没用
+      if (err && err.retryable === false) break
+    }
+  }
+
+  throw coreStartupError(failures, attempts)
+}
+
+/**
+ * 把“每次尝试都失败”压成一条可读错误：带每次的真实原因、端口与总次数（不美化）。
+ * `error.attempts` 保留结构化明细，便于日志/UI 展开。
+ */
+function coreStartupError(failures, attempts) {
+  const detail = failures
+    .map(item => {
+      const reason = item.portConflict ? `端口冲突：${item.message}` : item.message
+      const port = item.port > 0 ? item.port : '内核分配'
+      return `  - 第 ${item.attempt} 次（端口 ${port}）：${reason}`
+    })
+    .join('\n')
+  const last = failures[failures.length - 1] || { message: '未知原因' }
+  const error = new Error(
+    `本地 core 启动失败（共尝试 ${failures.length}/${attempts} 次）。最后一次：${last.message}\n${detail}`,
+  )
+  error.attempts = failures
+  return error
+}
+
+/**
+ * 单次启动尝试：spawn → 等 listening 事件 / 健康检查就绪。
+ *
+ * 成功返回 coreResult；失败抛错，并在错误对象上标注：
+ *   - `retryable: false`：换端口也救不回来（ENOENT / EACCES / ENOTDIR）；
+ *   - `portConflict`：失败文本像“端口/地址被占用”（决定错误消息里的措辞）。
+ * 进程与状态清理由 startCore 的循环负责（stopCore），这里不重复收拾。
+ */
+async function spawnCoreOnce({ launch, root, dataDir, token, port, options, attempt }) {
   const { spawn: spawnImpl } = runtime()
 
   const launchOptions = {
     dataDir,
-    port: requestedPort,
+    port,
     token,
     inferenceProxyUrl: options.inferenceProxyUrl,
     env: options.env,
@@ -690,21 +839,25 @@ async function startCore(options = {}) {
       windowsHide: true,
     })
   } catch (err) {
-    throw new Error(`本地 core 启动失败：${err && err.message ? err.message : 'spawn 出错'}`)
+    const error = new Error(`本地 core 启动失败：${err && err.message ? err.message : 'spawn 出错'}`)
+    // ENOENT（命令不存在）/ EACCES（没权限）：换端口也救不回来
+    error.retryable = !isFatalSpawnError(err)
+    throw error
   }
 
   const record = {
     child,
     token,
-    /** 请求的端口（0 = 让内核挑） */
-    requestedPort,
-    /** 实际端口：requestedPort > 0 时先按它探测，listening 事件到达后以其为准 */
-    port: requestedPort,
-    baseUrl: requestedPort > 0 ? `http://127.0.0.1:${requestedPort}` : '',
+    /** 本次尝试请求的端口（0 = 让内核挑） */
+    requestedPort: port,
+    /** 实际端口：port > 0 时先按它探测，listening 事件到达后以其为准 */
+    port,
+    baseUrl: port > 0 ? coreBaseUrl(DEFAULTS.DEFAULT_HOST, port) : '',
     dataDir,
     announcedDataDir: '',
     listening: null,
     kind: launch.kind,
+    attempt,
     startedAt: new Date().toISOString(),
     stdoutBytes: 0,
     stderrBytes: 0,
@@ -722,9 +875,8 @@ async function startCore(options = {}) {
       if (!announce) return
       record.listening = announce
       record.port = announce.port
-      // 主机名只接受 loopback：core 只绑 127.0.0.1（契约 §4），别被 stdout 带去别处
-      const host = announce.host === 'localhost' || announce.host === '127.0.0.1' ? announce.host : '127.0.0.1'
-      record.baseUrl = `http://${host}:${announce.port}`
+      // 主机名只接受 loopback：core 只绑默认 host（契约 §4），别被 stdout 带去别处
+      record.baseUrl = coreBaseUrl(announce.host, announce.port)
       if (announce.dataDir) record.announcedDataDir = announce.dataDir
     })
     child.stdout.on('data', chunk => {
@@ -749,20 +901,40 @@ async function startCore(options = {}) {
   })
 
   try {
-    await waitForHealth(record)
+    await waitForHealth(record, {
+      timeoutMs: options.healthTimeoutMs,
+      intervalMs: options.healthIntervalMs,
+    })
   } catch (err) {
-    await stopCore()
+    const text = `${record.stderrTail}\n${err && err.message ? err.message : ''}`
+    if (err && typeof err === 'object') {
+      if (err.retryable === undefined) err.retryable = true
+      err.portConflict = DEFAULTS.isPortConflict(text)
+    }
+    // 清理交给 startCore 的循环：那里每一次失败都会 stopCore（进程 + 状态）
     throw err
   }
   return coreResult(record, child)
 }
 
-/** 停 core：SIGTERM → 等 → SIGKILL；返回是否本来就有进程要停 */
+/**
+ * 停 core：Windows 先按**进程树**终止（taskkill /T），再 SIGTERM → 等 → SIGKILL。
+ *
+ * Windows 上只杀父进程会把 postgres / python 子进程留成孤儿并占着端口（下次启动
+ * 又撞端口），所以进程树那一步是必需的。返回是否本来就有进程要停。
+ */
 async function stopCore() {
   const record = state.core
   if (!record) return false
   state.core = null
   if (!record.child || record.exited) return true
+  const pid = record.child.pid
+
+  // 1) Windows：整棵树一起收（含 core spawn 出来的 postgres / python 子进程）
+  const treeKilled = killProcessTree(record.child, pid)
+  if (treeKilled && (await waitForExit(record, CORE_KILL_TIMEOUT_MS))) return true
+
+  // 2) 其它平台（或 taskkill 没成功）：SIGTERM → 宽限期 → SIGKILL
   try {
     record.child.kill('SIGTERM')
   } catch {
@@ -774,6 +946,7 @@ async function stopCore() {
     } catch {
       // 同上
     }
+    if (!treeKilled) killProcessTree(record.child, pid)
     await waitForExit(record, CORE_KILL_TIMEOUT_MS)
   }
   return true
@@ -876,6 +1049,15 @@ module.exports = {
   CORE_HEALTH_TIMEOUT_MS,
   CORE_ENV,
   CORE_ENV_ALIASES,
+  /** 默认值来源（端口/host/重试次数/超时/组件名） */
+  DEFAULTS,
+  CORE_PORT_ATTEMPTS,
+  coreBaseUrl,
+  resolveRequestedPort,
+  isPortConflict: DEFAULTS.isPortConflict,
+  isFatalSpawnError,
+  killProcessTree,
+  pickFreePort,
   componentsRoot,
   componentDir,
   coreBinaryPath,

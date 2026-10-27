@@ -183,3 +183,104 @@ test('maskKey 不泄露完整 key', () => {
   assert.ok(masked.endsWith('mnop'))
   assert.ok(masked.includes('••••••'))
 })
+
+// ── active / provider.model ──
+// 用户在「设置 → 本地模型」里选的 provider 与模型名都落在 secrets 里，
+// 推理代理按 active 选路（见 inference-proxy.cjs）。这两个字段丢了，
+// 症状是"设置保存了却不生效"，所以形状收敛处必须有断言。
+
+test('normalizeSecrets：active 与 provider 的 model 保留，脏值被收敛', () => {
+  const parsed = secrets.normalizeSecrets({
+    active: '  OpenAI-Compatible  ',
+    providers: {
+      ollama: { baseUrl: ' http://127.0.0.1:11434 ', model: 'qwen2.5:7b' },
+      'openai-compatible': {
+        apiKey: ' sk-x ',
+        baseUrl: 'https://example.invalid/v1',
+        model: 'gpt-x',
+        evil: 'drop-me',
+      },
+      broken: 'not-an-object',
+    },
+    junk: 'drop-me',
+  })
+  assert.equal(parsed.active, 'openai-compatible')
+  assert.deepEqual(parsed.providers.ollama, {
+    baseUrl: 'http://127.0.0.1:11434',
+    model: 'qwen2.5:7b',
+  })
+  assert.deepEqual(parsed.providers['openai-compatible'], {
+    apiKey: 'sk-x',
+    baseUrl: 'https://example.invalid/v1',
+    model: 'gpt-x',
+  })
+  assert.equal(parsed.providers.broken, undefined)
+  assert.equal(parsed.junk, undefined)
+
+  // active 只接受字符串：对象/数组不能借道写进配置
+  assert.equal(secrets.normalizeSecrets({ active: { name: 'ollama' } }).active, '')
+  assert.equal(secrets.normalizeSecrets(null).active, '')
+})
+
+test('active 与 model 能加密往返（不落明文）', async t => {
+  const userData = makeUserData(t)
+  bind(t, { userData, safeStorage: syncStorage(true) })
+
+  assert.equal(await secrets.writeSecrets({
+    active: 'openai-compatible',
+    providers: { 'openai-compatible': { apiKey: LONG_KEY, baseUrl: 'https://example.invalid/v1', model: 'gpt-x' } },
+  }), true)
+
+  const raw = fs.readFileSync(path.join(userData, secrets.SECRETS_FILE), 'utf8')
+  assert.ok(!raw.includes(LONG_KEY), '密文里不能出现明文 key')
+
+  const back = await secrets.readSecrets()
+  assert.equal(back.active, 'openai-compatible')
+  assert.equal(back.providers['openai-compatible'].model, 'gpt-x')
+})
+
+// ── readPublicSecrets：渲染进程只能看到脱敏快照 ──
+
+test('readPublicSecrets：只给 baseUrl / model / hasKey，绝不含 apiKey', async t => {
+  const userData = makeUserData(t)
+  bind(t, { userData, safeStorage: syncStorage(true) })
+  assert.equal(await secrets.writeSecrets({
+    active: 'openai-compatible',
+    providers: {
+      'openai-compatible': { apiKey: LONG_KEY, baseUrl: 'https://example.invalid/v1', model: 'gpt-x' },
+      ollama: { baseUrl: 'http://127.0.0.1:11500', model: 'qwen2.5:7b' },
+    },
+  }), true)
+
+  const publicConfig = await secrets.readPublicSecrets()
+  assert.equal(publicConfig.active, 'openai-compatible')
+  assert.equal(publicConfig.safeStorageAvailable, true)
+  assert.deepEqual(publicConfig.providers['openai-compatible'], {
+    baseUrl: 'https://example.invalid/v1',
+    model: 'gpt-x',
+    hasKey: true,
+  })
+  // 没配 key 的 provider 也必须有完整形状，界面才好直接绑定
+  assert.deepEqual(publicConfig.providers.ollama, {
+    baseUrl: 'http://127.0.0.1:11500',
+    model: 'qwen2.5:7b',
+    hasKey: false,
+  })
+
+  const serialized = JSON.stringify(publicConfig)
+  assert.ok(!serialized.includes(LONG_KEY), '脱敏快照里不能出现明文 key')
+  assert.ok(!serialized.includes('apiKey'), '连字段名都不该出现（避免调用方以为能拿到）')
+  assert.ok(!serialized.includes('••'), '也不给掩码：掩码的每一位都是从真 key 派生的')
+})
+
+test('readPublicSecrets：safeStorage 不可用时返回空壳而不是抛错', async t => {
+  const userData = makeUserData(t)
+  bind(t, { userData, safeStorage: syncStorage(false) })
+
+  const publicConfig = await secrets.readPublicSecrets()
+  assert.equal(publicConfig.safeStorageAvailable, false)
+  assert.equal(publicConfig.active, '')
+  for (const name of secrets.PROVIDER_NAMES) {
+    assert.deepEqual(publicConfig.providers[name], { baseUrl: '', model: '', hasKey: false })
+  }
+})

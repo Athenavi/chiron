@@ -10,11 +10,26 @@
  *
  *   {
  *     "version": 1,
+ *     "active": "ollama",                      // 当前使用的 provider 名
  *     "providers": {
- *       "openai-compatible": { "apiKey": "sk-...", "baseUrl": "https://..." },
- *       "ollama": { "baseUrl": "http://127.0.0.1:11434" }
+ *       "openai-compatible": {
+ *         "apiKey": "sk-...",
+ *         "baseUrl": "https://...",
+ *         "model": "gpt-4o-mini"
+ *       },
+ *       "ollama": {
+ *         "baseUrl": "http://127.0.0.1:11434",
+ *         "model": "qwen2.5:7b"
+ *       }
  *     }
  *   }
+ *
+ * 端点默认值**不在这里**：本模块只负责"用户填了什么"，默认值集中在
+ * inference-proxy.cjs（Ollama）与面板的 placeholder 里，避免两处默认值漂移。
+ *
+ * `active` 只做 trim + 小写，**不做 provider 别名归一**（`openai` →
+ * `openai-compatible` 之类由 inference-proxy.cjs 负责）：否则同一个别名表要维护
+ * 两份，改一处漏一处就会表现为"设置保存了却不生效"。
  *
  * Electron 45 起同步的 isEncryptionAvailable / encryptString / decryptString
  * 已弃用（token-store.cjs 用的是 async API），这里两种都支持：优先 async，
@@ -25,6 +40,16 @@ const path = require('node:path')
 
 const SECRETS_FILE = 'secrets.bin'
 const SECRETS_VERSION = 1
+
+/**
+ * 已知 provider 名（写盘前不裁剪它们，只在 readPublicSecrets 里补空壳）。
+ * 这里是"界面上至少有这几行"的清单，不是白名单：secrets 里多出来的 provider
+ * 原样保留，别因为某个 worktree 加了新 provider 就读不出来。
+ */
+const PROVIDER_NAMES = Object.freeze(['ollama', 'openai-compatible'])
+
+/** provider 条目里会被保留的字符串字段（其余一律丢弃，防脏数据扩散） */
+const PROVIDER_FIELDS = Object.freeze(['apiKey', 'baseUrl', 'model'])
 
 /**
  * 依赖注入位：纯 Node 单测（node --test）里没有 electron 运行时，
@@ -96,16 +121,18 @@ async function decryptText(safeStorage, encrypted) {
 
 /** 只保留已知字段和字符串值：写盘前收敛形状，读取时同样过滤脏数据 */
 function normalizeSecrets(raw) {
-  const result = { version: SECRETS_VERSION, providers: {} }
+  const result = { version: SECRETS_VERSION, active: '', providers: {} }
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return result
+  // 用户在界面上粘贴的 provider / 端点经常带空格，统一 trim；provider 名按小写比较
+  if (typeof raw.active === 'string') result.active = raw.active.trim().toLowerCase()
   const providers = raw.providers
   if (!providers || typeof providers !== 'object' || Array.isArray(providers)) return result
   for (const [provider, entry] of Object.entries(providers)) {
     if (!entry || typeof entry !== 'object' || Array.isArray(entry)) continue
     const clean = {}
-    for (const field of ['apiKey', 'baseUrl', 'model']) {
+    for (const field of PROVIDER_FIELDS) {
       const value = entry[field]
-      if (typeof value === 'string' && value) clean[field] = value
+      if (typeof value === 'string' && value.trim()) clean[field] = value.trim()
     }
     if (Object.keys(clean).length) result.providers[String(provider)] = clean
   }
@@ -177,12 +204,56 @@ function maskKey(key) {
   return `${text.slice(0, 4)}••••••${text.slice(-4)}`
 }
 
+/**
+ * 渲染进程可见的配置快照：**只含 baseUrl / model / 有没有 key**。
+ *
+ * 明文 apiKey 绝不出主进程（连掩码也不给：掩码的每一位都是从真 key 派生的信息，
+ * 界面上"有没有配"用 hasKey 一个布尔就够了）。读取失败 / safeStorage 不可用时
+ * 返回空壳而不是抛错 —— 设置页在没装密钥库的 Linux 上也要能正常显示。
+ *
+ * @returns {Promise<{ active: string, providers: Record<string, { baseUrl: string, model: string, hasKey: boolean }>, safeStorageAvailable: boolean }>}
+ */
+async function readPublicSecrets() {
+  const config = await readSecrets()
+  const providers = {}
+  for (const name of PROVIDER_NAMES) {
+    providers[name] = { baseUrl: '', model: '', hasKey: false }
+  }
+  const stored = config && typeof config === 'object' && config.providers ? config.providers : {}
+  for (const [name, entry] of Object.entries(stored)) {
+    if (!entry || typeof entry !== 'object') continue
+    providers[name] = {
+      baseUrl: typeof entry.baseUrl === 'string' ? entry.baseUrl : '',
+      model: typeof entry.model === 'string' ? entry.model : '',
+      hasKey: typeof entry.apiKey === 'string' && entry.apiKey.length > 0,
+    }
+  }
+  return {
+    active: config && typeof config.active === 'string' ? config.active : '',
+    providers,
+    safeStorageAvailable: await safeStorageUsable(),
+  }
+}
+
+/** safeStorage 是否可用（不抛错；只用于界面上说明"为什么存不进去"） */
+async function safeStorageUsable() {
+  try {
+    if (!hasSafeStorage()) return false
+    const { safeStorage } = runtime()
+    return await encryptionAvailable(safeStorage)
+  } catch {
+    return false
+  }
+}
+
 module.exports = {
   SECRETS_FILE,
   SECRETS_VERSION,
+  PROVIDER_NAMES,
   secretsPath,
   normalizeSecrets,
   readSecrets,
+  readPublicSecrets,
   writeSecrets,
   clearSecrets,
   maskKey,

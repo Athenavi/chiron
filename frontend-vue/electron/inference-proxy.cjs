@@ -11,12 +11,28 @@
  *   - 只透传必要字段（model / messages / 少量采样参数），其它字段一律丢弃。
  *   - 不记录 messages / content：日志侧只留计数、状态码、耗时。
  *   - 云端片段推理第二批再做，现在明确回 501，不要假装成功。
+ *
+ * provider 选择（从高到低）：
+ *   1. 请求体里显式给的 `provider`（渲染进程 / 诊断脚本用，非法值一律 400）；
+ *   2. `secrets.active`（用户在「设置 → 本地模型」里选的那个，见 secrets.cjs）；
+ *   3. 兜底 `local`（Ollama）。
+ * 本地 core 从不带 `provider` 字段（desktop-local/app/runtime/inference.py），
+ * 所以实际生效的几乎总是第 2 条 —— 这正是"用户在应用内换 provider 就能用"的关键。
  */
 const http = require('node:http')
 const crypto = require('node:crypto')
 
-/** 本地 Ollama 的默认地址（用户可用 CHIRON_OLLAMA_URL 覆盖） */
+/**
+ * 本地 Ollama 的默认地址。
+ *
+ * 只在这里出现一次（外加 env 覆盖）：业务代码一律通过 resolveOllamaBase() 取，
+ * 不要把 11434 再写进任何分支 —— 默认值散落两处时，用户改了配置也总有一处用旧值。
+ */
 const DEFAULT_OLLAMA_BASE = 'http://127.0.0.1:11434'
+
+/** 覆盖 Ollama 地址的环境变量（开发 / 容器内指向别的机器时用） */
+const OLLAMA_URL_ENV = 'CHIRON_OLLAMA_URL'
+
 const MAX_BODY_BYTES = 1024 * 1024
 const UPSTREAM_TIMEOUT_MS = 120000
 
@@ -26,6 +42,13 @@ const ALLOWED_OPTIONS = Object.freeze(['temperature', 'max_tokens', 'top_p', 'st
 const PROVIDER_LOCAL = 'local'
 const PROVIDER_OPENAI_COMPATIBLE = 'openai-compatible'
 const PROVIDER_CLOUD = 'cloud'
+
+/** secrets.providers 里各 provider 的键名（与 secrets.cjs 的结构对应） */
+const SECRETS_KEY_OLLAMA = 'ollama'
+const SECRETS_KEY_OPENAI_COMPATIBLE = 'openai-compatible'
+
+/** 读不到 secrets 时的代用值（只读，避免调用方在空对象上分支） */
+const EMPTY_SECRETS = Object.freeze({ active: '', providers: Object.freeze({}) })
 
 let current = null
 
@@ -113,14 +136,27 @@ function isAuthorized(req, token) {
   return crypto.timingSafeEqual(a, b)
 }
 
-function normalizeProvider(raw) {
-  const value = String(raw || PROVIDER_LOCAL).toLowerCase()
+/**
+ * provider 别名 → 规范名。
+ *
+ * 空串 / 未知值返回 ''（**不**在这里兜底成 local）：兜底是 resolveProvider 的事，
+ * 否则"请求里写了个错名字"和"请求里没写"就无法区分（前者应该 400，后者应该用配置）。
+ */
+function parseProvider(raw) {
+  const value = String(raw == null ? '' : raw).trim().toLowerCase()
+  if (!value) return ''
   if (value === 'local' || value === 'ollama' || value === 'localhost') return PROVIDER_LOCAL
   if (value === 'openai' || value === 'openai-compatible' || value === 'custom' || value === 'user') {
     return PROVIDER_OPENAI_COMPATIBLE
   }
   if (value === 'cloud' || value === 'remote') return PROVIDER_CLOUD
   return ''
+}
+
+/** 请求体里的 provider：`provided` = 调用方确实写了一个非空值（可能是错名字） */
+function requestedProvider(raw) {
+  const text = typeof raw === 'string' ? raw.trim() : ''
+  return { provided: Boolean(text), provider: parseProvider(text) }
 }
 
 /** 只留 role + content 的纯文本消息；其余形状（工具调用、图片块）首批不支持 */
@@ -148,8 +184,11 @@ function pickOptions(input) {
   return picked
 }
 
-function buildRequest(input) {
-  const model = typeof input.model === 'string' ? input.model.trim() : ''
+function buildRequest(input, fallbackModel = '') {
+  const requested = typeof input.model === 'string' ? input.model.trim() : ''
+  // model 可以不写在请求里：用户已在「本地模型」里存了默认模型（secrets.providers.*.model），
+  // 让 core 少传一个字段也照样能推理。两处都没有才真的报 400。
+  const model = requested || String(fallbackModel || '').trim()
   if (!model) {
     const err = new Error('missing_model')
     err.status = 400
@@ -164,15 +203,46 @@ function buildRequest(input) {
   return { model, messages, options: pickOptions(input) }
 }
 
-async function readProviderSecrets(readSecrets) {
+async function readSecretsSafe(readSecrets) {
+  if (typeof readSecrets !== 'function') return EMPTY_SECRETS
   try {
     const secrets = await readSecrets()
-    const providers = secrets && typeof secrets === 'object' ? secrets.providers : null
-    if (!providers || typeof providers !== 'object') return {}
-    return providers[PROVIDER_OPENAI_COMPATIBLE] || providers.openai || {}
+    if (!secrets || typeof secrets !== 'object' || Array.isArray(secrets)) return EMPTY_SECRETS
+    return secrets
   } catch {
-    return {}
+    return EMPTY_SECRETS
   }
+}
+
+/**
+ * 取某个 provider 的配置条目（key / baseUrl / model）。
+ * OpenAI 兼容端历史上也可能存成 `openai` 键，一并相容。
+ */
+function providerEntry(secrets, provider) {
+  const providers = secrets && typeof secrets.providers === 'object' && secrets.providers
+    ? secrets.providers
+    : {}
+  const entry = provider === PROVIDER_OPENAI_COMPATIBLE
+    ? providers[SECRETS_KEY_OPENAI_COMPATIBLE] || providers.openai
+    : providers[SECRETS_KEY_OLLAMA] || providers.local
+  return entry && typeof entry === 'object' && !Array.isArray(entry) ? entry : {}
+}
+
+/** 条目里的字符串字段（trim 后空串当没有） */
+function entryText(entry, field) {
+  const value = entry && typeof entry === 'object' ? entry[field] : ''
+  return typeof value === 'string' ? value.trim() : ''
+}
+
+/**
+ * 决定本次请求用哪个 provider：请求显式指定 > secrets.active > local。
+ * 显式给了但不认识（如 'mars'）→ 400，不静默降级（静默降级会让用户以为配的生效了）。
+ */
+function resolveProvider(inputProvider, secrets) {
+  const requested = requestedProvider(inputProvider)
+  if (requested.provided && !requested.provider) throw httpError(400, 'unknown_provider')
+  const configured = parseProvider(secrets && secrets.active)
+  return requested.provider || configured || PROVIDER_LOCAL
 }
 
 function httpError(status, message) {
@@ -181,7 +251,19 @@ function httpError(status, message) {
   return err
 }
 
-async function callOllama(deps, request) {
+/**
+ * Ollama 地址：secrets.providers.ollama.baseUrl > 注入值 / CHIRON_OLLAMA_URL > 默认常量。
+ *
+ * 业务逻辑里不写死 11434：默认值只在 DEFAULT_OLLAMA_BASE 里出现一次，
+ * 这样用户改了端口就不会出现"设置页显示新地址、请求仍打旧端口"这种双份真相。
+ */
+function resolveOllamaBase(deps, entry) {
+  const fromSecrets = entryText(entry, 'baseUrl')
+  const injected = deps && typeof deps.ollamaBaseUrl === 'string' ? deps.ollamaBaseUrl.trim() : ''
+  return (fromSecrets || injected || DEFAULT_OLLAMA_BASE).replace(/\/+$/, '')
+}
+
+async function callOllama(deps, request, entry) {
   const body = { model: request.model, messages: request.messages, stream: false }
   const options = {}
   if (request.options.temperature !== undefined) options.temperature = request.options.temperature
@@ -190,7 +272,7 @@ async function callOllama(deps, request) {
   if (request.options.stop !== undefined) options.stop = request.options.stop
   if (Object.keys(options).length) body.options = options
 
-  const res = await deps.fetchImpl(`${deps.ollamaBaseUrl.replace(/\/+$/, '')}/api/chat`, {
+  const res = await deps.fetchImpl(`${resolveOllamaBase(deps, entry)}/api/chat`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
@@ -215,10 +297,9 @@ async function callOllama(deps, request) {
   }
 }
 
-async function callOpenAICompatible(deps, request) {
-  const settings = await readProviderSecrets(deps.readSecrets)
-  const apiKey = settings && typeof settings.apiKey === 'string' ? settings.apiKey : ''
-  const baseUrl = settings && typeof settings.baseUrl === 'string' ? settings.baseUrl : ''
+async function callOpenAICompatible(deps, request, entry) {
+  const apiKey = entryText(entry, 'apiKey')
+  const baseUrl = entryText(entry, 'baseUrl')
   if (!apiKey) throw httpError(400, 'missing_provider_key')
   if (!baseUrl) throw httpError(400, 'missing_provider_base_url')
 
@@ -264,14 +345,15 @@ async function handleInfer(req, res, deps) {
     return sendJson(res, err.status || 400, { error: err.message })
   }
   try {
-    const provider = normalizeProvider(input.provider)
-    if (!provider) throw httpError(400, 'unknown_provider')
+    const secrets = await readSecretsSafe(deps.readSecrets)
+    const provider = resolveProvider(input.provider, secrets)
     if (provider === PROVIDER_CLOUD) throw httpError(501, 'cloud_not_implemented')
 
-    const request = buildRequest(input)
+    const entry = providerEntry(secrets, provider)
+    const request = buildRequest(input, entryText(entry, 'model'))
     const result = provider === PROVIDER_LOCAL
-      ? await callOllama(deps, request)
-      : await callOpenAICompatible(deps, request)
+      ? await callOllama(deps, request, entry)
+      : await callOpenAICompatible(deps, request, entry)
 
     stats.lastStatus = 200
     stats.lastDurationMs = Date.now() - startedAt
@@ -325,6 +407,10 @@ function createHandler(token, deps) {
 
 /**
  * 起代理（幂等：已在跑就返回当前地址与 token）。
+ *
+ * `ollamaBaseUrl` 只是**兜底/默认值**：真正生效的地址以
+ * `secrets.providers.ollama.baseUrl` 为准（用户随时可在设置页改，不必重启代理）。
+ *
  * @param {{ port?: number, readSecrets?: Function, fetchImpl?: Function, ollamaBaseUrl?: string }} options
  * @returns {Promise<{ url: string, token: string, port: number }>}
  */
@@ -335,7 +421,7 @@ async function startProxy(options = {}) {
     // 需要时才 require，避免纯 Node 单测把 electron 拉进来
     readSecrets: options.readSecrets || (() => require('./secrets.cjs').readSecrets()),
     fetchImpl: options.fetchImpl || globalThis.fetch,
-    ollamaBaseUrl: options.ollamaBaseUrl || process.env.CHIRON_OLLAMA_URL || DEFAULT_OLLAMA_BASE,
+    ollamaBaseUrl: options.ollamaBaseUrl || process.env[OLLAMA_URL_ENV] || DEFAULT_OLLAMA_BASE,
   }
   const token = crypto.randomBytes(32).toString('hex')
   const server = http.createServer(createHandler(token, deps))
@@ -367,6 +453,7 @@ async function stopProxy() {
 
 module.exports = {
   DEFAULT_OLLAMA_BASE,
+  OLLAMA_URL_ENV,
   MAX_BODY_BYTES,
   startProxy,
   stopProxy,
