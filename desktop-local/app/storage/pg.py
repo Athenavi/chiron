@@ -35,7 +35,7 @@ import shutil
 import socket
 import subprocess
 import time
-from collections.abc import Iterator, Sequence
+from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -69,6 +69,35 @@ _TCP_DSN = re.compile(r"^postgres(?:ql)?://[^/?#]*@(?P<host>[^:/?#@]+):(?P<port>
 
 # 库名会用字面量插进 CREATE DATABASE，必须是可校验的标识符
 _IDENTIFIER = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+
+#: 端口冲突时最多尝试几次（含首次）。
+#: ``find_free_port`` 只是"借号"，close 到别人 bind 之间有竞态（Windows 上
+#: 127.0.0.1 还会撞 hyper-v 保留段 / TIME_WAIT），所以启动失败像端口冲突时必须换端口重试。
+PORT_ATTEMPTS = 3
+
+#: 端口/地址被占用的特征串（大小写不敏感）；与
+#: ``frontend-vue/electron/defaults.cjs`` 的 ``PORT_CONFLICT_PATTERNS`` 保持一致。
+PORT_CONFLICT_PATTERNS = (
+    "address already in use",
+    "address in use",
+    "eaddrinuse",
+    "only one usage of each socket address",
+    "port is already allocated",
+    "could not bind",
+    "failed to bind",
+    "cannot bind",
+    "bind failed",
+    "another server might be running",
+    "port already in use",
+)
+
+
+def is_port_conflict(text: object) -> bool:
+    """文本里是否像"端口/地址被占用"（空文本一律 False，不猜）。"""
+    value = str(text or "").lower()
+    if not value:
+        return False
+    return any(pattern in value for pattern in PORT_CONFLICT_PATTERNS)
 
 PG_SUGGESTIONS = (
     "给一个现成实例：set POSTGRES_DSN=postgresql://user:pwd@127.0.0.1:5432/chiron",
@@ -264,10 +293,24 @@ def database_of(dsn: str) -> str:
     return dsn.partition("?")[0].rpartition("/")[2]
 
 
-def find_free_port(host: str = "127.0.0.1") -> int:
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind((host, 0))
-        return int(sock.getsockname()[1])
+def find_free_port(host: str = "127.0.0.1", *, exclude: Collection[int] = ()) -> int:
+    """借一个空闲端口（只取号，不占坑）。
+
+    这里存在**无法消除的竞态**：本函数 close 之后到目标进程 bind 之前，别的进程
+    可能占掉这个端口（Windows 的 127.0.0.1 还有 hyper-v 保留段）。所以调用方必须
+    把"启动失败且像端口冲突"当作可重试事件（见 ``PORT_ATTEMPTS``），而不是
+    相信这个端口一定用得上。``exclude`` 用来避开刚失败过的端口。
+    """
+    blocked = {int(port) for port in exclude}
+    port = 0
+    for _ in range(20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind((host, 0))
+            port = int(sock.getsockname()[1])
+        if port not in blocked:
+            return port
+    # 极端情况：连续挑到的都是刚失败过的端口，把最后一个交回去（调用方还会重试）
+    return port
 
 
 def wait_for_port(host: str, port: int, timeout: float = 60.0) -> bool:
@@ -338,6 +381,11 @@ class PostgresServer:
         self.notes: list[str] = []
         # embedded_postgres 的真实探测结果（失败时随异常一起上报）
         self.embedded_probe: dict[str, Any] = {}
+        # 真正监听的 endpoint（从 DSN / get_uri() 读到，不是配置值）
+        self._actual_host = ""
+        self._actual_port = 0
+        # 已经被撞过、或者起步失败过的端口：换端口重试时避开它们
+        self._failed_ports: set[int] = set()
 
     # ------------------------------------------------------------------ 属性
     @property
@@ -352,6 +400,16 @@ class PostgresServer:
     def safe_dsn(self) -> str:
         return mask_dsn(self._dsn)
 
+    @property
+    def port(self) -> int:
+        """实际监听的 TCP 端口（unix socket 后端为 0）。
+
+        取值以句柄的 ``get_uri()`` / 真实 DSN 为准 —— ``pg_port`` 只是"建议值":
+        embedded-pack 自己挑端口，binaries 后端也会在端口冲突后换一个。上报、
+        重试与日志都应该看这个值。
+        """
+        return self._actual_port
+
     # ------------------------------------------------------------------ 启停
     def start(self) -> str:
         """启动（或连接）PG，返回可用的 DSN。"""
@@ -362,6 +420,8 @@ class PostgresServer:
             self._backend = "external"
             self._dsn = self.settings.postgres_dsn
             self._prepare(self._dsn, strict=False)
+            # 外部实例的地址就在 DSN 里：同样把真实 endpoint 记下来
+            self._record_endpoint(self._dsn)
             self._started = True
             return self._dsn
 
@@ -371,20 +431,49 @@ class PostgresServer:
             ("embedded-pack", self._start_embedded_pack),
             ("binaries", self._start_binaries),
         ):
-            try:
-                dsn = starter()
-            except Exception as exc:  # noqa: BLE001 —— 逐条记录真实错误，再试下一条
-                errors.append(f"{name}: {type(exc).__name__}: {_indent(str(exc), '      ').lstrip()}")
-                self._teardown()
+            dsn, backend_errors = self._start_with_port_retry(name, starter)
+            errors.extend(backend_errors)
+            if dsn is None:
                 continue
             self._backend = name
             self._dsn = dsn
             self._started = True
-            self.attempts = errors
+            # 成功时 **不保留** 中途的重试错误：``attempts`` 的语义是"为什么起不来"，
+            # 成功场景下把重试记录留在这里会让 /readyz 与日志看起来像"坏了但有 backend"。
+            # 重试过程仍然留在 ``notes`` 里，排查时能看到换过端口。
+            self.attempts = []
             return dsn
 
         self.attempts = errors
         raise PostgresUnavailable(errors, self.embedded_probe)
+
+    def _start_with_port_retry(self, name: str, starter: Any) -> tuple[str | None, list[str]]:
+        """起一个后端；**只在“像端口冲突”时换端口重试**，其它错误立即交给下一条路。
+
+        换端口靠 ``_pick_port()`` 避开 ``_failed_ports``（binaries 后端）；embedded-pack
+        的端口由包内部挑，重试就是重新构造一个服务器句柄。
+
+        返回 ``(dsn, 错误列表)``：成功时 dsn 非空；失败时 dsn 为 None 且错误逐条列出
+        （非端口冲突只 1 条，仍保持 ``<后端>: <类型>: <正文>`` 的格式）。
+        """
+        errors: list[str] = []
+        for attempt in range(1, PORT_ATTEMPTS + 1):
+            try:
+                return starter(), errors
+            except Exception as exc:  # noqa: BLE001 —— 逐条记录真实错误，再决定重不重试
+                # 先把上一次没收拾干净的进程/句柄收掉，避免它继续占着端口
+                self._teardown()
+                conflict = is_port_conflict(exc)
+                message = f"{name}: {type(exc).__name__}: {_indent(str(exc), '      ').lstrip()}"
+                if conflict:
+                    message = f"{message}（第 {attempt}/{PORT_ATTEMPTS} 次尝试）"
+                errors.append(message)
+                if not conflict:
+                    break
+                self.notes.append(
+                    f"{name} 第 {attempt} 次起步失败像端口冲突，已换端口重试（共 {PORT_ATTEMPTS} 次）"
+                )
+        return None, errors
 
     def stop(self) -> None:
         """停止 PG。``external`` 后端不动别人的进程。"""
@@ -459,7 +548,10 @@ class PostgresServer:
 
         self.notes.extend(self._embedded_notes(dsn))
         # 端口由包内部挑（POSIX 上干脆只有 unix socket），拿不到 endpoint 就只靠 SQL 轮询
-        self._prepare(dsn, strict=True, endpoint=_tcp_endpoint(dsn))
+        endpoint = _tcp_endpoint(dsn)
+        # get_uri() 回给我们的才是真实端口：记下来（配置的 pg_port 在该后端不生效）
+        self._record_endpoint(dsn)
+        self._prepare(dsn, strict=True, endpoint=endpoint)
         return dsn
 
     def _call_entry(self, entry: Any, entry_name: str) -> tuple[Any, str]:
@@ -643,13 +735,26 @@ class PostgresServer:
             "-W",
             "start",
         ]
-        self._run(cmd, timeout=30, what="pg_ctl start", capture=False)
-
-        dsn = build_dsn(
-            self.settings.pg_user, self.settings.pg_password, "127.0.0.1", port, self.settings.pg_database
-        )
-        self._stop_hook = lambda: self._stop_binaries(pg_ctl)
-        self._prepare(dsn, strict=True, endpoint=("127.0.0.1", port))
+        try:
+            self._run(cmd, timeout=30, what="pg_ctl start", capture=False)
+            # 端口用本进程下发的值拼 DSN；如果真不行（被占），下面会换端口重试
+            dsn = build_dsn(
+                self.settings.pg_user,
+                self.settings.pg_password,
+                "127.0.0.1",
+                port,
+                self.settings.pg_database,
+            )
+            self._stop_hook = lambda: self._stop_binaries(pg_ctl)
+            self._prepare(dsn, strict=True, endpoint=("127.0.0.1", port))
+        except Exception:
+            # pg_ctl 可能已经把 postmaster 拉起来了（只是不接受 SQL）：先收掉再抛，
+            # 否则它会继续占着这个端口，下一次换端口也白搭
+            self._stop_hook = None
+            self._stop_binaries(pg_ctl)
+            self._failed_ports.add(port)
+            raise
+        self._record_endpoint(dsn)
         return dsn
 
     def _stop_binaries(self, pg_ctl: str) -> None:
@@ -666,9 +771,28 @@ class PostgresServer:
 
     # ------------------------------------------------------------------ 工具
     def _pick_port(self) -> int:
-        if self.settings.pg_port:
-            return self.settings.pg_port
-        return find_free_port()
+        """选一个端口：优先用配置值，但它刚失败过就换成内核分配的空闲端口。
+
+        ``pg_port`` 只是建议值 —— 被占时继续硬用只会一直失败，所以必须换。
+        """
+        requested = int(self.settings.pg_port or 0)
+        if requested and requested not in self._failed_ports:
+            return requested
+        if requested:
+            self.notes.append(f"pg_port={requested} 已被占用或起步失败，改用内核分配的空闲端口（不写死端口）")
+        return find_free_port(exclude=self._failed_ports)
+
+    def _record_endpoint(self, dsn: str) -> None:
+        """把 DSN 里的真实 endpoint 记下来，作为 ``port`` 属性的唯一来源。
+
+        embedded-pack 自己挑端口、binaries 后端会在冲突后换端口，所以“配置值”与
+        “真实值”可能不一致；上报与排查必须看真实值。
+        """
+        endpoint = _tcp_endpoint(dsn)
+        if endpoint is None:
+            self._actual_host, self._actual_port = "", 0
+            return
+        self._actual_host, self._actual_port = endpoint
 
     def _run(
         self,

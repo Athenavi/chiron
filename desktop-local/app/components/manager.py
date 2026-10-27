@@ -42,7 +42,7 @@ import time
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Collection, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -79,6 +79,45 @@ DEFAULT_HEALTH_TIMEOUT = 20.0
 STOP_TIMEOUT = 5.0
 KILL_TIMEOUT = 3.0
 HEALTH_INTERVAL = 0.1
+
+#: 组件启动最多尝试几次（含首次）。组件自己 bind 端口，而 ``free_port()`` 只是借号
+#: （close 到子进程 bind 之间有竞态），所以“起步就退出 / 健康检查不过”时要换端口重试。
+PORT_ATTEMPTS = 2
+#: 读组件日志末尾多少字节（只为判断端口冲突与拼报错，不整份读）
+LOG_TAIL_BYTES = 4000
+
+#: 端口/地址被占用的特征串（大小写不敏感）；与
+#: ``frontend-vue/electron/defaults.cjs`` 的 ``PORT_CONFLICT_PATTERNS`` 保持一致。
+PORT_CONFLICT_PATTERNS = (
+    "address already in use",
+    "address in use",
+    "eaddrinuse",
+    "only one usage of each socket address",
+    "port is already allocated",
+    "could not bind",
+    "failed to bind",
+    "cannot bind",
+    "bind failed",
+    "another server might be running",
+    "port already in use",
+)
+
+
+def is_port_conflict(text: object) -> bool:
+    """文本里是否像"端口/地址被占用"（空文本一律 False，不猜）。"""
+    value = str(text or "").lower()
+    if not value:
+        return False
+    return any(pattern in value for pattern in PORT_CONFLICT_PATTERNS)
+
+
+#: 本地组件只绑 loopback（与 core 一致，契约 §4）
+LOOPBACK_HOST = "127.0.0.1"
+
+
+def component_base_url(port: int) -> str:
+    """组件的 baseUrl 只在这里拼（调用方不再自己拼地址与端口）。"""
+    return f"http://{LOOPBACK_HOST}:{int(port)}"
 
 
 # --------------------------------------------------------------------- 异常
@@ -146,6 +185,15 @@ class AlreadyRunningError(ComponentError):
 class StartFailedError(ComponentError):
     status = 500
     code = "component_start_failed"
+
+    def __init__(self, message: str, *, retryable: bool = False, **extra: Any) -> None:
+        """``retryable=True``：换一个端口重试有望成功（进程提前退出 / 健康检查不过 / 端口被占）。
+
+        非可重试的失败（entry 不存在、命令不存在）不该白白重试：那只会把同一个错误
+        写两遍，还会多一次无意义的 spawn。
+        """
+        super().__init__(message, **extra)
+        self.retryable = retryable
 
 
 class UnsupportedEntryError(ComponentError):
@@ -254,11 +302,20 @@ def is_archive(rel: str) -> bool:
     return any(lowered.endswith(suffix) for suffix in ARCHIVE_SUFFIXES)
 
 
-def free_port() -> int:
-    """借一个空闲 loopback 端口（只取号，不占坑）。"""
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
-        sock.bind(("127.0.0.1", 0))
-        return int(sock.getsockname()[1])
+def free_port(*, exclude: Collection[int] = ()) -> int:
+    """借一个空闲 loopback 端口（只取号，不占坑）。
+
+    ``exclude`` 用来避开刚失败过的端口 —— 否则重试很可能又拿到同一个被占的号。
+    """
+    blocked = {int(port) for port in exclude}
+    port = 0
+    for _ in range(20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.bind(("127.0.0.1", 0))
+            port = int(sock.getsockname()[1])
+        if port not in blocked:
+            return port
+    return port
 
 
 def dir_size(root: Path) -> int:
@@ -685,6 +742,8 @@ class ComponentManager:
         self._source = source
         self._records: dict[str, ProcessRecord] = {}
         self._lock = threading.Lock()
+        # 已经撞过/起步失败过的端口：换端口重试时避开它们
+        self._failed_ports: set[int] = set()
 
     # --- 路径 ---
     @property
@@ -958,6 +1017,15 @@ class ComponentManager:
 
     # --- 启动 ---
     def start(self, name: str, *, health_timeout: float | None = None) -> dict[str, Any]:
+        """启动组件。端口一律现借（不写死），撞端口/起不来时换端口重试。
+
+        会换端口重试的两种情况（最多 ``PORT_ATTEMPTS`` 次，含首次）：
+          1. 子进程起步就退出（日志像"端口/地址被占用"时错误里会说明）；
+          2. 健康检查在超时内没过（组件可能正卡在 bind 重试上）。
+        不可重试的失败（未安装、entry 不支持、命令不存在）立即抛出，不白白重试。
+
+        最终失败时错误里带**每次尝试的真实原因**，不是一句笼统的"启动失败"。
+        """
         spec = self._spec(name)
         existing = self.record(spec.name)
         if existing is not None:
@@ -976,17 +1044,54 @@ class ComponentManager:
         if not entry.is_file():
             raise NotInstalledError(f"组件 {spec.name} 的 entry 不存在：{entry}")
 
-        port = free_port()
+        failures: list[str] = []
+        last_error: ComponentError | None = None
+        for attempt in range(1, PORT_ATTEMPTS + 1):
+            port = free_port(exclude=self._failed_ports)
+            try:
+                return self._start_once(spec, installed, entry, port, health_timeout, attempt)
+            except ComponentError as exc:
+                last_error = exc
+                # 这个端口已经废了：记下来，下一次换一个
+                self._failed_ports.add(port)
+                failures.append(f"第 {attempt} 次（端口 {port}）：{exc}")
+                if not bool(getattr(exc, "retryable", False)) or attempt >= PORT_ATTEMPTS:
+                    break
+
+        if last_error is None:  # 循环至少跑一次，这里只是让类型收窄
+            raise StartFailedError(f"组件 {spec.name} 启动失败：没有可用的启动尝试")
+        if len(failures) <= 1:
+            raise last_error
+        raise StartFailedError(
+            f"组件 {spec.name} 启动失败：已换端口重试 {len(failures)} 次仍未就绪。"
+            f"最后一次：{last_error}\n" + "\n".join(f"  - {item}" for item in failures),
+            attempts=failures,
+        ) from last_error
+
+    def _start_once(
+        self,
+        spec: ComponentSpec,
+        installed: Mapping[str, Any],
+        entry: Path,
+        port: int,
+        health_timeout: float | None,
+        attempt: int,
+    ) -> dict[str, Any]:
+        """一次启动尝试：spawn → 记状态 → 健康检查。失败时先收拾进程再抛。"""
         argv = self._command(entry, installed.get("args") or [])
         child_env = self._child_env(spec, installed["version"], port)
         self.log_dir.mkdir(parents=True, exist_ok=True)
         log_path = self.log_dir / f"{spec.name}.log"
         handle = log_path.open("ab")
+        if attempt > 1:
+            # 日志是 append 的：标一次边界，排查时能看出"这是换端口后的第二次尝试"
+            handle.write(f"\n=== chiron: 第 {attempt}/{PORT_ATTEMPTS} 次启动（端口 {port}）===\n".encode())
+            handle.flush()
         creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0
         try:
             child = subprocess.Popen(  # noqa: S603 —— 命令来自已校验的 manifest，不是用户输入拼接
                 argv,
-                cwd=str(version_dir),
+                cwd=str(Path(installed["dir"])),
                 env=child_env,
                 stdin=subprocess.DEVNULL,
                 stdout=handle,
@@ -995,7 +1100,10 @@ class ComponentManager:
             )
         except OSError as exc:
             handle.close()
-            raise StartFailedError(f"组件 {spec.name} 启动失败（{argv[0]}）：{exc}") from exc
+            # 命令不存在 / 没权限：换端口救不回来
+            raise StartFailedError(
+                f"组件 {spec.name} 启动失败（{argv[0]}）：{exc}", retryable=False
+            ) from exc
 
         record = ProcessRecord(
             name=spec.name,
@@ -1003,7 +1111,7 @@ class ComponentManager:
             entry=installed["entry"],
             child=child,
             port=port,
-            base_url=f"http://127.0.0.1:{port}",
+            base_url=component_base_url(port),
             started_at=_utc_now(),
             log_path=log_path,
             log_handle=handle,
@@ -1017,6 +1125,7 @@ class ComponentManager:
             try:
                 _wait_health(record, str(health["path"]), timeout)
             except ComponentError:
+                # 先收进程（关日志句柄）再抛：换端口重试不能留下在跑的旧组件
                 record.terminate()
                 with self._lock:
                     self._records.pop(spec.name, None)
@@ -1025,6 +1134,7 @@ class ComponentManager:
             health["ok"] = True
 
         snapshot = record.snapshot()
+        snapshot["attempt"] = attempt
         snapshot["health"] = health
         return snapshot
 
@@ -1055,7 +1165,7 @@ class ComponentManager:
         env["CHIRON_COMPONENT_NAME"] = spec.name
         env["CHIRON_COMPONENT_VERSION"] = version
         env["CHIRON_COMPONENT_PORT"] = str(port)
-        env["CHIRON_COMPONENT_HOST"] = "127.0.0.1"
+        env["CHIRON_COMPONENT_HOST"] = LOOPBACK_HOST
         for key, value in spec.env:
             env.setdefault(key, value)
         return env
@@ -1117,21 +1227,47 @@ def _http_ok(url: str, timeout: float) -> bool:
 
 
 def _wait_health(record: ProcessRecord, path: str, timeout: float) -> None:
-    """轮询组件的健康端点；进程中途退出立即失败，不白等到超时。"""
+    """轮询组件的健康端点；进程中途退出立即失败，不白等到超时。
+
+    两种失败都标 ``retryable=True``：组件起步就退出、或健康检查超时，最常见的
+    原因就是它的端口被别人占了 —— 换一个端口往往就好了（见 ``ComponentManager.start``）。
+    """
     url = f"{record.base_url}{path}"
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if not record.alive():
+            tail = _read_log_tail(record.log_path)
+            conflict = is_port_conflict(tail)
+            hint = "，日志像端口/地址被占用" if conflict else ""
+            detail = f"（日志末尾：{tail}）" if tail else ""
             raise StartFailedError(
-                f"组件 {record.name} 启动后立即退出（退出码 {record.child.returncode}），"
-                f"日志：{record.log_path}"
+                f"组件 {record.name} 启动后立即退出（退出码 {record.child.returncode}）{hint}，"
+                f"日志：{record.log_path}{detail}",
+                retryable=True,
+                port_conflict=conflict,
             )
         if _http_ok(url, timeout=1.0):
             return
         time.sleep(HEALTH_INTERVAL)
+    tail = _read_log_tail(record.log_path)
+    detail = f"（日志末尾：{tail}）" if tail else ""
     raise StartFailedError(
-        f"组件 {record.name} 在 {timeout:.1f}s 内没有响应 {url}，日志：{record.log_path}"
+        f"组件 {record.name} 在 {timeout:.1f}s 内没有响应 {url}，日志：{record.log_path}{detail}",
+        retryable=True,
+        port_conflict=is_port_conflict(tail),
     )
+
+
+def _read_log_tail(path: Path, limit: int = LOG_TAIL_BYTES) -> str:
+    """读日志末尾一段（只为判断端口冲突与拼报错，不整份读、不抛）。"""
+    try:
+        with path.open("rb") as handle:
+            handle.seek(0, os.SEEK_END)
+            size = handle.tell()
+            handle.seek(max(0, size - limit))
+            return handle.read().decode("utf-8", "replace").strip()
+    except OSError:
+        return ""
 
 
 def _utc_now() -> str:
@@ -1171,8 +1307,12 @@ __all__ = [
     "dir_size",
     "ensure_within",
     "extract_archive",
+    "component_base_url",
     "free_port",
     "is_archive",
+    "is_port_conflict",
+    "PORT_ATTEMPTS",
+    "LOOPBACK_HOST",
     "parse_manifest",
     "resolve_source",
     "safe_component_name",
