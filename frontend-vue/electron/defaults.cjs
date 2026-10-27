@@ -18,6 +18,15 @@ const DEFAULT_HOST = '127.0.0.1'
 const DEFAULT_CORE_PORT = 0
 /** 就绪探测路径（core 的 GET /healthz） */
 const DEFAULT_HEALTH_PATH = '/healthz'
+/**
+ * 业务就绪探测路径（core 的 GET /readyz，见 desktop-local/app/api/health.py）。
+ *
+ * 为什么需要两个路径：`/healthz` 只证明"进程活着且端口上跑的是我们的 core"，
+ * 它在 uvicorn 一绑端口就 200；而 PG 的 initdb + 迁移跑在 lifespan 的后台 task 里，
+ * 实测本机 `/healthz` 1.6s 就 200、业务端点 4.18s 才可用。首次安装还要跑 initdb，
+ * 窗口更大。壳层若只看 `/healthz` 就宣布就绪，前端头几个请求必然 503。
+ */
+const DEFAULT_READY_PATH = '/readyz'
 
 /** 契约 §2 的组件名，顺序即 UI 展示顺序（core 由壳层自己起，其余委托 core） */
 const COMPONENT_NAMES = Object.freeze(['core', 'pageindex', 'langextract'])
@@ -26,6 +35,16 @@ const COMPONENT_NAMES = Object.freeze(['core', 'pageindex', 'langextract'])
 const CORE_PORT_ATTEMPTS = 3
 /** 单次尝试等 core 就绪的上限 */
 const CORE_HEALTH_TIMEOUT_MS = 30000
+/**
+ * `/healthz` 通过之后，再等**业务真正可用**（`/readyz` 200）的上限。
+ *
+ * 为什么单独一个预算而不是并进总超时：两者语义不同……
+ * 实测本机 PG 初始化 4.18s 就绪；首次安装要跑 initdb + 迁移，窗口更大。
+ * 给 20s 的宽限，超时后**不判启动失败**（见 components.cjs::waitForReady），
+ * 只把 ready 标成 false 显式上报，剩下的交给前端短重试兜底 —— 把"业务慢"
+ * 当成"启动失败"会让用户看到"应用起不来"，比真实故障更误导。
+ */
+const CORE_READY_TIMEOUT_MS = 20000
 /** 就绪轮询间隔 */
 const CORE_HEALTH_INTERVAL_MS = 200
 /** 单次健康探测的请求超时（要远小于上面的总超时） */
@@ -79,9 +98,11 @@ module.exports = {
   DEFAULT_HOST,
   DEFAULT_CORE_PORT,
   DEFAULT_HEALTH_PATH,
+  DEFAULT_READY_PATH,
   COMPONENT_NAMES,
   CORE_PORT_ATTEMPTS,
   CORE_HEALTH_TIMEOUT_MS,
+  CORE_READY_TIMEOUT_MS,
   CORE_HEALTH_INTERVAL_MS,
   CORE_PROBE_TIMEOUT_MS,
   CORE_STOP_TIMEOUT_MS,

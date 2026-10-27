@@ -66,6 +66,18 @@ describe('describeApiError（服务端错误要能定位）', () => {
     expect(describeApiError(withStatus(503))).toContain('服务暂时不可用')
   })
 
+  it('本地后端（FastAPI）把原因放在 detail 里，也必须带出', () => {
+    // desktop-local 是 FastAPI：503 的原因在 `detail`，不是 Go 网关的 `error`。
+    // 少读一个字段，本地模式下就只剩没有信息量的兜底文案。
+    expect(describeApiError(withStatus(503, { detail: '本地 PostgreSQL 未启动（见 /readyz 的 pg 字段）' })))
+      .toContain('本地 PostgreSQL 未启动')
+  })
+
+  it('取值链与 serverErrorDetail 一致：detail 优先于 error 与 message', () => {
+    expect(describeApiError(withStatus(500, { detail: '来自 detail', error: '来自 error', message: '来自 message' })))
+      .toContain('来自 detail')
+  })
+
   it('客户端错误（4xx）不把后端英文原文附在中文说明后，保持可读', () => {
     const text = describeApiError(withStatus(402, { error: 'insufficient credits — please recharge in Billing' }))
     expect(text).toContain('额度已用尽')

@@ -35,6 +35,7 @@ const COMPONENT_NAMES = DEFAULTS.COMPONENT_NAMES
 
 /** 单一来源：默认值都在 defaults.cjs，这里只做别名，不在本文件写字面量 */
 const CORE_HEALTH_TIMEOUT_MS = DEFAULTS.CORE_HEALTH_TIMEOUT_MS
+const CORE_READY_TIMEOUT_MS = DEFAULTS.CORE_READY_TIMEOUT_MS
 const CORE_HEALTH_INTERVAL_MS = DEFAULTS.CORE_HEALTH_INTERVAL_MS
 const CORE_STOP_TIMEOUT_MS = DEFAULTS.CORE_STOP_TIMEOUT_MS
 const CORE_KILL_TIMEOUT_MS = DEFAULTS.CORE_KILL_TIMEOUT_MS
@@ -614,6 +615,39 @@ async function probeHealth(baseUrl, timeoutMs = DEFAULTS.CORE_PROBE_TIMEOUT_MS) 
   }
 }
 
+/**
+ * 单次业务就绪探测：core 的**业务端点**已经可用就 true。
+ *
+ * 与 :func:`probeHealth` 的区别是判据不同，不是路径不同的重复实现：
+ *   - ``/healthz``：进程活着 + 端口上确实是我们的 core。uvicorn 一绑端口就 200，
+ *     此时 PG 的 initdb / 迁移可能还在后台 task 里跑，业务端点仍会 503。
+ *   - ``/readyz``：``status === "ok"`` 才算就绪（``"degraded"`` 不算）。
+ *
+ * 返回 ``{ ok, status, gone }``：
+ *   - ``ok``：业务可用；
+ *   - ``status``：core 自报的 status（``starting`` / ``ok`` / ``degraded``），诊断用；
+ *   - ``gone``：**端点不可用或不符合契约** —— 404/405（旧版本二进制没有该端点），
+ *     或 body 里连 ``status`` 字段都没有（不是 health.py 的实现）。调用方必须据此
+ *     立即放弃等待：换多少次请求结果都一样，空等满 20s 只是拖慢启动。
+ */
+async function probeReady(baseUrl, timeoutMs = DEFAULTS.CORE_PROBE_TIMEOUT_MS) {
+  if (!baseUrl) return { ok: false, status: '', gone: false }
+  const readyPath = DEFAULTS.DEFAULT_READY_PATH
+  try {
+    const res = await httpFetch()(`${baseUrl}${readyPath}`, { signal: AbortSignal.timeout(timeoutMs) })
+    // 端点不存在 = 旧 core，换个请求也不会变，交给调用方立刻收手
+    if (res.status === 404 || res.status === 405) return { ok: false, status: '', gone: true }
+    const body = await res.json().catch(() => null)
+    const status = body && typeof body.status === 'string' ? body.status : ''
+    // 没有 status 字段 = 这个 core 不实现契约 §4 的 /readyz，同样别等
+    if (!status) return { ok: false, status: '', gone: true }
+    // 503 时 FastAPI 也会带完整 body（status: "starting"/"degraded"），照读
+    return { ok: res.ok && status === 'ok', status, gone: false }
+  } catch {
+    return { ok: false, status: '', gone: false }
+  }
+}
+
 function coreExitError(record) {
   const reason = record.spawnError ? `spawn ${record.spawnError}` : `退出码 ${record.exitCode}`
   const detail = record.stderrTail
@@ -679,6 +713,67 @@ async function waitForHealth(record, options = {}) {
   )
 }
 
+/**
+ * 等**业务**就绪（``/readyz`` 200 且 ``status === "ok"``），返回一份显式报告。
+ *
+ * 关键取舍：**超时不算启动失败**。`/healthz` 已经证明进程活着、端口上确实是我们的
+ * core；此时 PG 还在 initdb 或跑迁移，只是"业务暂时不可用"。把它判成启动失败会
+ * 触发换端口重试，用户看到"应用起不来"—— 比"慢一点"更误导，而且换端口不会让
+ * PG 更快。所以这里只返回结果，让调用方如实上报。
+ *
+ * 三种提前收手的情形：
+ *   1. 进程退出 → 抛（这是真失败，与健康状况无关）；
+ *   2. 端点不存在 / 不符合契约（旧 core）→ 立刻返回 ``skipped``，别空等；
+ *   3. 超时 → 返回 ``timedOut``，带上最后一次看到的 status 供诊断。
+ *
+ * 返回 ``{ ok, status, skipped, timedOut, elapsedMs }``。
+ */
+async function waitForReady(record, options = {}) {
+  const timeoutMs =
+    Number.isFinite(options.readyTimeoutMs) && options.readyTimeoutMs > 0
+      ? options.readyTimeoutMs
+      : CORE_READY_TIMEOUT_MS
+  const intervalMs =
+    Number.isFinite(options.intervalMs) && options.intervalMs > 0
+      ? options.intervalMs
+      : CORE_HEALTH_INTERVAL_MS
+  const startedAt = Date.now()
+  const deadline = startedAt + timeoutMs
+  let lastStatus = ''
+  while (Date.now() < deadline) {
+    if (record.exited) throw coreExitError(record)
+    const probe = await probeReady(record.baseUrl)
+    lastStatus = probe.status || lastStatus
+    if (probe.ok) {
+      record.ready = true
+      record.readyStatus = 'ok'
+      return { ok: true, status: 'ok', skipped: false, timedOut: false, elapsedMs: Date.now() - startedAt }
+    }
+    if (probe.gone) {
+      // 旧 core 没有这个端点：不是错误，也不是就绪，如实标记后交给前端兜底
+      record.ready = false
+      record.readyStatus = 'unsupported'
+      return {
+        ok: false,
+        status: '',
+        skipped: true,
+        timedOut: false,
+        elapsedMs: Date.now() - startedAt,
+      }
+    }
+    await sleep(intervalMs)
+  }
+  record.ready = false
+  record.readyStatus = lastStatus || 'timeout'
+  return {
+    ok: false,
+    status: lastStatus,
+    skipped: false,
+    timedOut: true,
+    elapsedMs: Date.now() - startedAt,
+  }
+}
+
 async function waitForExit(record, timeoutMs) {
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
@@ -712,7 +807,7 @@ function snapshot(record) {
 }
 
 /** 统一的结果形状（契约 §3.1：壳层只关心这三个字段，其余是排查用的附加值） */
-function coreResult(record, child = record.child) {
+function coreResult(record, child = record.child, ready = null) {
   return {
     baseUrl: record.baseUrl,
     token: record.token,
@@ -720,6 +815,16 @@ function coreResult(record, child = record.child) {
     port: record.port,
     dataDir: record.announcedDataDir || record.dataDir,
     listening: Boolean(record.listening),
+    /**
+     * 业务是否真的可用（`/readyz` 200 且 status=ok）。
+     *
+     * 与 `listening` 分开报，因为二者时间差很大：本机实测 `/healthz` 1.6s 就
+     * 200、业务端点 4.18s 才可用。调用方据此决定"可以放行请求了没"，
+     * 而不是一听到 listening 就往前端灌请求。
+     */
+    ready: Boolean(ready && ready.ok),
+    /** 就绪探测的详细结果（status / skipped / timedOut / elapsedMs），诊断用 */
+    readiness: ready,
   }
 }
 
@@ -914,7 +1019,14 @@ async function spawnCoreOnce({ launch, root, dataDir, token, port, options, atte
     // 清理交给 startCore 的循环：那里每一次失败都会 stopCore（进程 + 状态）
     throw err
   }
-  return coreResult(record, child)
+
+  // `/healthz` 过了只说明进程活着；业务端点可能还在等 PG 的 initdb / 迁移。
+  // 再等一段（不判失败，理由见 waitForReady），把结果如实带进返回值。
+  const ready = await waitForReady(record, {
+    readyTimeoutMs: options.readyTimeoutMs,
+    intervalMs: options.healthIntervalMs,
+  })
+  return coreResult(record, child, ready)
 }
 
 /**
@@ -1068,6 +1180,9 @@ module.exports = {
   parseListeningLine,
   redactSecrets,
   describeCoreError,
+  probeHealth,
+  probeReady,
+  waitForReady,
   listComponents,
   describeComponent,
   startCore,

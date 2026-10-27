@@ -278,4 +278,8 @@ export default {
   ssl_renewal_failed: "SSL 续期失败",
   // 本地模式专用：本地后端（desktop-local）尚未实现的端点（501）
   local_mode_feature_unavailable: "本地模式暂不支持该功能（本地服务还没实现这个接口）",
+  // 本地模式专用：本地服务未就绪（503）。必须与云端限流的"服务繁忙"区分开 ——
+  // 后者是"请求太多"，前者是"本地组件还没起来"，成因与处置完全不同。
+  // 具体原因由 error.response.data.detail 带出（见 src/api/index.ts 拦截器）。
+  local_service_not_ready: "本地服务还没准备好，暂时无法完成这个操作。稍等片刻再试；若一直失败，请重启应用。",
 }

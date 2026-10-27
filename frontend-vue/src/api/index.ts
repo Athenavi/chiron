@@ -1,5 +1,5 @@
 import axios from 'axios'
-import { describeApiError } from '../utils/apiError'
+import { describeApiError, serverErrorDetail } from '../utils/apiError'
 import { toToolList, type ToolInfo } from '../utils/toolList'
 import { canAutoRetry, readRetryable, resolveResponseWaitMs, shouldRetryResponse } from '../utils/rateLimitBackoff'
 import type { WorkstationType } from '../types/workstation'
@@ -19,6 +19,32 @@ type DesktopHost = {
 const desktopHost = (globalThis as { chironDesktop?: DesktopHost }).chironDesktop
 export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
 const isDesktop = Boolean(desktopHost?.isDesktop)
+
+/**
+ * 本地模式 503（组件未就绪）的重试策略。
+ *
+ * 与云端限流的指数退避**故意分开**：本地后端的 503 主要是启动竞态 ——
+ * `desktop-local/app/main.py::lifespan` 把 PG/Redis 的 bootstrap 放进后台 task，
+ * 起来之前 `/readyz` 与依赖存储的路由都会如实回 503。这时短间隔等它一会儿是对的。
+ * 但组件真没起来时（例如 PG 崩溃循环），再等也没用 —— 次数用完就如实报原因，
+ * 而不是像云端那样退避到十几秒后还包装成"服务繁忙"。
+ */
+/**
+ * 本地模式 503（组件未就绪）的重试节奏：**递增间隔**，累计约 20s。
+ *
+ * 为什么是这个量级：本机实测 `/healthz` 1.6s 就 200，但业务端点 4.18s 才可用；
+ * 首次安装还要跑 initdb + 迁移，窗口更大（数秒到十几秒）。原先 3×1s = 3s
+ * 盖不住实测窗口，首屏必然撞上"未就绪"。
+ *
+ * 为什么与壳层 `CORE_READY_TIMEOUT_MS` 同为 20s：两者分工不同 —— 壳层负责
+ * 把 core 等到业务可用才放行（`electron/components.cjs::waitForReady`），
+ * 前端负责覆盖"壳层已放行、后端仍在收尾"的残余窗口。两者同一量级，
+ * 避免出现"壳层等了 20s 放弃、前端只肯再等 3s"的错配。
+ *
+ * 为什么递增而非等间隔：多数情况第 1-2 次就恢复，递增让常见路径快速返回，
+ * 只有真慢的情况才等到底；也避免高频重试给正在 initdb 的机器添压。
+ */
+const LOCAL_NOT_READY_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000, 5000, 5000] as const
 
 /**
  * 当前运行模式（`local` | `cloud`）。
@@ -328,6 +354,43 @@ api.interceptors.response.use(
     const status: number | undefined = error.response?.status
     // 服务端显式结论（`APIResponse.retryable`）：有就听它的，没有（undefined）才回退到状态码。
     const retryable = readRetryable(error.response?.data?.retryable)
+
+    // 本地模式的 503 不是"限流"。desktop-local 在存储/推理未就绪时按契约如实回 503
+    //（见 desktop-local/app/api/chat.py::_http_error、health.py::readyz）。
+    // 云端 429/503 的语义是"请求太多，退避重试有用"；本地这条是"组件还没起来"。
+    //
+    // **必须放在 `shouldRetryResponse` 之前**：`shouldRetryResponse(503, undefined)`
+    // 恒为 true（后向兼容的状态码回退），一旦让限流分支先接走，用户要白等 5+10+20 秒，
+    // 最后还被报成"服务繁忙"，后端 detail 里的真实原因（"本地 PostgreSQL 未启动"）
+    // 从未显示 —— 本地模式下每个依赖存储的页面都变成这样。
+    //
+    // 例外：服务端显式说 `retryable === true` 时仍交给下面的限流分支（服务端结论优先）。
+    if (status === 503 && getDeviceMode() === 'local' && retryable !== true) {
+      const localConfig = error.config as (typeof error.config & { __localReadyRetry?: number }) | undefined
+      const localAttempt = (localConfig?.__localReadyRetry ?? 0) + 1
+      // 本地后端的 503 多半是启动竞态（PG/Redis 的 bootstrap 在后台 task 里跑，
+      // 首次安装还要 initdb + 迁移）：用递增间隔把这段窗口盖过去，而不是像云端那样
+      // 从 5s 起指数退避到几十秒。次数用完仍不就绪，就如实报原因 ——
+      // 组件真没起来时，前端再怎么等也没用。
+      const delayMs = LOCAL_NOT_READY_RETRY_DELAYS_MS[localAttempt - 1]
+      if (localConfig && delayMs !== undefined) {
+        localConfig.__localReadyRetry = localAttempt
+        await new Promise(resolve => setTimeout(resolve, delayMs))
+        return api.request(localConfig)
+      }
+      const base = t('errors.local_service_not_ready')
+      // 后端原文是定位问题的唯一线索，必须带出（本地后端用 FastAPI 的 detail 字段）
+      const detail = serverErrorDetail(error, '')
+      const message = detail ? `${base}（${detail}）` : base
+      error.message = message
+      const payload = error.response?.data
+      if (payload && typeof payload === 'object') {
+        // 注入稳定 code：describeApiError 优先按 code 取本地化文案（与 501 分支同款）
+        payload.code = 'local_service_not_ready'
+      }
+      window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }))
+      return Promise.reject(error)
+    }
 
     // 重试决策的分层（CDS v1/06 §6.7 的退避公式不变）：
     //   `retryable === true`  → 服务端说重试有用（如 409 session_busy），就重试，不管状态码；

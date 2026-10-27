@@ -273,4 +273,8 @@ export default {
   ssl_renewal_failed: "SSL renewal failed",
   // Local mode only: endpoints the local backend (desktop-local) does not implement yet (501)
   local_mode_feature_unavailable: "This feature is not available in local mode yet (the local service does not implement this endpoint)",
+  // Local mode: local service not ready (503). Must stay distinct from the cloud
+  // rate-limit wording "Server busy" — "too many requests" vs "a local component
+  // hasn't come up". The concrete cause comes from error.response.data.detail.
+  local_service_not_ready: "The local service isn't ready yet, so this action can't be completed right now. Try again in a moment; if it keeps failing, restart the app.",
 }
