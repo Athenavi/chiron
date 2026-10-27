@@ -110,6 +110,10 @@ function _resetState() {
 }
 
 function userDataDir() {
+  // 与 config.cjs 同一优先级：显式覆盖 > Electron 的 userData。
+  // 真机 smoke / 多环境隔离都靠它把 config、本地数据、组件目录放进同一个临时根。
+  const override = String(process.env.CHIRON_DESKTOP_USER_DATA || '').trim()
+  if (override) return override
   const { app } = runtime()
   if (!app || typeof app.getPath !== 'function') {
     throw new Error('components.cjs 需要 Electron 的 app.getPath（纯 Node 环境请注入依赖）')
