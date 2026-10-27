@@ -41,7 +41,11 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> AsyncIterator[ChatResponse]:
+        # Anthropic 协议没有 OpenAI 式的 `response_format`（它是用 tool_choice 强制 JSON），
+        # 所以本类 `supports_response_format` 保持 False，网关不会把该参数发过来；
+        # 这里保留同名参数只是为了让接口形状与基类一致（子类不能改签名）。
         system_prompt, msgs = self._convert_messages(messages)
         kwargs: dict[str, Any] = {
             "model": model,
@@ -130,6 +134,7 @@ class AnthropicProvider(LLMProvider):
         max_tokens: int = 4096,
         temperature: float = 0.7,
         tools: list[dict[str, Any]] | None = None,
+        response_format: dict[str, Any] | None = None,
     ) -> ChatResponse:
         import json as _json
 
