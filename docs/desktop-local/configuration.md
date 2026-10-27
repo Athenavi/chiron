@@ -76,7 +76,10 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 | `CHIRON_LOCAL_REDIS_ENABLED` | `redis_enabled` | `True` | 是否启用 Redis 适配层 | 🟢 |
 | `CHIRON_LOCAL_RUN_MIGRATIONS` | `run_migrations` | `True` | 启动时是否 `alembic upgrade head` | 🟢 |
 | `POSTGRES_DSN` 或 `CHIRON_LOCAL_POSTGRES_DSN` | `postgres_dsn` | `None` | 给了就复用外部 PG（优先级最高，不自己起进程） | 🟢 |
-| `CHIRON_LOCAL_REDIS_URL` | `redis_url` | `""` | 有值走真实 Redis/Valkey，否则 `fakeredis` | 🟢 |
+| `CHIRON_LOCAL_REDIS_URL` | `redis_url` | `""` | 有值走真实 Redis/Valkey，否则走内置二进制 | 🟢 |
+| `CHIRON_LOCAL_REDIS_BIN_DIR` | `redis_bin_dir` | `""` | `redis-server` 所在目录（空 = 内置 `bin/redis/` → PATH） | 🟢 |
+| `CHIRON_LOCAL_REDIS_PORT` | `redis_port` | `0`（每次选空闲端口） | 内置 redis 端口；不写死 6379 以免撞用户已有实例 | 🟢 |
+| `CHIRON_LOCAL_REDIS_START_TIMEOUT` | `redis_start_timeout` | `30.0` | 内置 redis 启动等待上限 | 🟢 |
 | `CHIRON_LOCAL_PG_DATABASE` | `pg_database` | `chiron` | embedded PG 库名 | 🟡 |
 | `CHIRON_LOCAL_PG_USER` | `pg_user` | `chiron` | embedded PG 用户 | 🟡 |
 | `CHIRON_LOCAL_PG_PASSWORD` | `pg_password` | `chiron` | 仅本机 trust/loopback 场景，不落日志 | 🟡 |
@@ -205,7 +208,7 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 | 本地 core（FastAPI/uvicorn） | `0` → 内核随机；壳层先 `net.listen(0,'127.0.0.1')` 借一个（`components.cjs:522-533`） | `config.py:66` | 🟢 无字面量端口 |
 | loopback 推理代理 | `0` → 随机（`inference-proxy.cjs:346`） | 同左 | 🟢 |
 | embedded PostgreSQL | `0` → `find_free_port()`（`storage/pg.py:267,668-671`）；embedded-pack 后端自行挑 | `config.py:87` | 🟢 |
-| Redis | 空 → `fakeredis`；提示文案里的 `127.0.0.1:6379/0` 只是示例（`storage/redis.py:14-15,41-44`） | `config.py:81` | 🟢 |
+| Redis | 内置 `bin/redis/redis-server`（随机端口，不写死 6379；`scripts/prepare_redis.py` 负责就位 + 自检）；无二进制时才退到 `fakeredis` | `config.py:81-90` | 🟢 |
 | 组件子进程 | 借空闲端口后经 `CHIRON_COMPONENT_PORT` 告知（`manager.py:1057`） | `manager.py:1016-1018` | 🟢 |
 | Ollama | `11434` | `inference-proxy.cjs:19` | 🟡 |
 | Vite dev server | `5173` | `shared.cjs:13` | 🟡 |

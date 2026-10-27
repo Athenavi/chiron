@@ -1,8 +1,9 @@
 """``/healthz`` 与 ``/readyz``（契约 §4）。
 
 - ``/healthz``：进程活着就 200，不碰存储。Electron 用它判"后端起来了没"。
-- ``/readyz``：**如实**报告每个存储的实际状态（含后端名与错误），一项不健康就 503。
-  契约要求的 ``auth`` 字段照原样给出（第一批是 ``disabled``）。
+- ``/readyz``：**如实**报告每个存储的实际状态（含后端名与错误）。
+  就绪与否只看**业务真正依赖的存储**（当前是 PG）；redis 缺失只降级不判死，
+  理由见 :func:`readyz` 里的注释。契约要求的 ``auth`` 字段照原样给出。
 """
 
 from __future__ import annotations
@@ -59,10 +60,23 @@ async def readyz(request: Request) -> JSONResponse:
         bool(pg_health.get("ok")) if settings.pg_enabled else True,
         bool(redis_health.get("ok")) if settings.redis_enabled else True,
     ]
-    ready = all(checks)
+    pg_ok, redis_ok = checks
+
+    # 就绪判定只看**业务路由真正依赖的存储**，不按"所有组件都健康"来算。
+    #
+    # 为什么 redis 不能参与判定：desktop-local 的业务端点（chat / conversations /
+    # agents / media / memory / knowledge）对 redis 零引用，全仓只有本文件读
+    # ``app.state.redis``。redis 是给 python-engine（云端引擎）用的，本地这一层
+    # 只是按契约如实**报告**它的情况。若让 redis 判死整体，壳层探 /readyz 就永远
+    # 等不到就绪，用户看到的是"应用起不来"—— 比真实故障更误导。
+    #
+    # 但也不能假装没事：status 仍会降级成 ``degraded`` 并在 ``redis_error`` 里
+    # 写明原因，HTTP 维持 200（业务可用）。"能用"和"一切正常"是两件事。
+    ready = pg_ok
+    degraded = redis_ok is False
 
     payload: dict[str, Any] = {
-        "status": "ok" if ready else "degraded",
+        "status": "ok" if ready and not degraded else "degraded",
         "pg": bool(pg_health.get("ok")),
         "redis": bool(redis_health.get("ok")),
         "auth": settings.auth_mode(),

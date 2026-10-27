@@ -192,8 +192,13 @@ desktop-local/
 
 1. `embedded-postgres` 能启动、`alembic upgrade head` 能跑通（复用仓库 `migrations/`）。
 2. 数据目录可指定；停止后重启数据仍在。
-3. `fakeredis` 对 `XADD / XREADGROUP / XACK / XCLAIM / XAUTOCLAIM / PUBLISH / SUBSCRIBE`
-   的实际支持情况（逐项 PASS/FAIL，不许假设）。
+3. Redis 对 `XADD / XREADGROUP / XACK / XCLAIM / XAUTOCLAIM / PUBLISH / SUBSCRIBE` **以及
+   `EVAL`** 的实际支持情况（逐项 PASS/FAIL，不许假设）。
+
+   为什么必须带上 `EVAL`：前七条只能证明"命令存在"，`EVAL` 才能证明"语义正确"。
+   实测 `fakeredis` 前七条全 PASS，唯独 `EVAL` 报 `unknown command 'eval'`；而引擎的
+   KeyRing 仲裁（D19）、限流、预算预留、队列闸门共 15 处依赖 Redis 单键 Lua 的原子性。
+   只看七条会得出"fakeredis 够用"的相反结论。
 4. 冷启动耗时（毫秒）与数据目录体积。
 5. 失败时给出可执行的替代方案（Valkey 二进制 / 缩小 core 范围）。
 
