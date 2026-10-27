@@ -271,4 +271,6 @@ export default {
   notion_style_high_information_density_clear_layout: "نمط Notion، كثافة معلومات عالية، تخطيط واضح",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "زوج مفاتيح RSA2: المفتاح الخاص للتطبيق والمفتاح العام لـ Alipay كلاهما بتنسيق PEM؛ والترك فارغًا يرجع إلى متغيرات البيئة ALIPAY_*.",
   ssl_renewal_failed: "فشل تجديد SSL",
+  // الوضع المحلي فقط: واجهات لم تنفذها الخدمة المحلية (desktop-local) بعد (501)
+  local_mode_feature_unavailable: "هذه الميزة غير متاحة بعد في الوضع المحلي (الخدمة المحلية لا تنفذ هذه الواجهة)",
 }

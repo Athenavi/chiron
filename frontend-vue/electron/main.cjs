@@ -1,8 +1,11 @@
 /**
  * Chiron Desktop — Electron 主进程
  *
- * 形态：纯 Web 壳。客户端只承载已构建的前端（dist/），业务请求发往用户自己的
- * Chiron 服务；不打包 Go 后端、不依赖 Python（run.py 只是仓库内的编排脚本）。
+ * 形态：双模式桌面壳。渲染层始终是已构建的前端（dist/），后端按模式分流：
+ *   local —— 本机后端（embedded-postgres + 本地 API，由 components.cjs 负责拉起）
+ *   cloud —— 用户自己的 Chiron 服务（原来的纯 Web 壳行为）
+ * 契约见 docs/desktop-local/contracts.md：config.json 是模式真相，两个模式各用一个
+ * Electron session partition，切换模式时清掉离开模式的会话数据并重启。
  *
  * 为什么选 Electron 而不是 Tauri/Wails：本仓样式对现代 CSS 是硬依赖
  * （`color-mix` 86 处、`@container` 4 处、`backdrop-filter` 25 处），而
@@ -10,19 +13,31 @@
  * color-mix，主题阴影会静默失效。Electron 自带 Chromium，开发环境所见即用户所见。
  *
  * 启动分流：
- *   环境变量 CHIRON_API_URL 或已保存的配置 → 直接进主界面
- *   两者都没有 → 进 setup.html 让用户填服务地址（首次启动）
+ *   local 且本地后端拉起成功 → 主界面
+ *   local 且本地后端未安装/启动失败 → 给重试 / 切回云端 / 退出三个选择，仍打不开则落到 error.html
+ *   cloud 且有地址（env / config.json） → 主界面
+ *   cloud 且没有地址 → setup.html 让用户填服务地址
+ *   老配置（有 apiUrl 但没有 mode） → 先弹一次迁移提示，默认本地，apiUrl 保留
  *
- * 安全基线：contextIsolation 开、nodeIntegration 关、preload 只暴露两个明确动作，
+ * 安全基线：contextIsolation 开、nodeIntegration 关、preload 只暴露明确的几个动作，
  * 外部链接一律交给系统浏览器。
  */
 const { app, BrowserWindow, shell, Menu, ipcMain, session, dialog } = require('electron')
 const fs = require('node:fs')
 const path = require('node:path')
 const { fileURLToPath } = require('node:url')
-const { resolveApiUrl, saveApiUrl, probe } = require('./config.cjs')
-const { API_URL_ARG_PREFIX, DEFAULT_DEV_URL } = require('./shared.cjs')
+const {
+  resolveApiUrl,
+  resolveMode,
+  readDeviceSettings,
+  saveApiUrl,
+  saveDeviceSettings,
+  saveMode,
+  probe,
+} = require('./config.cjs')
+const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX, DEFAULT_DEV_URL, partitionFor } = require('./shared.cjs')
 const { readToken, writeToken, clearToken } = require('./token-store.cjs')
+const { switchMode } = require('./mode-switch.cjs')
 
 /** 开发模式：`electron . --dev` 时连 Vite dev server，否则加载 dist/ */
 const isDev = process.argv.includes('--dev')
@@ -38,6 +53,18 @@ let currentApiUrl = ''
 
 /** 「连接设置…」菜单强制进配置页（即使已有地址），见 relaunchIntoSetup */
 let forceSetup = false
+
+/** 本次运行的运行模式（whenReady 时定一次；切换模式一律走重启） */
+let currentMode = 'local'
+
+/** 本地后端状态：{ ok, baseUrl, reason, message }，由 startLocalBackend 填充 */
+let localBackend = { ok: false, baseUrl: '', reason: 'not-started', message: '' }
+
+/** 已经注册过 webRequest / 权限 / 下载监听的 session（重建窗口时不能重复注册） */
+const configuredSessions = new WeakSet()
+
+/** 本地后端只停一次：before-quit 与模式切换都会触发停止 */
+let localBackendStopped = false
 
 const APP_ID = 'com.chiron.agent'
 const APP_ROOT = path.resolve(__dirname, '..')
@@ -142,30 +169,341 @@ function assertTrustedSender(event) {
   }
 }
 
+/**
+ * 可选模块接线：components.cjs / secrets.cjs / inference-proxy.cjs 由另一个
+ * worktree 实现并按需发布。本文件只 require + try/catch 接线，绝不在这里写它们的实现，
+ * 模块不存在时安静降级（未安装本地组件是用户的正常状态）。
+ */
+const optionalModules = new Map()
+function loadOptionalModule(name) {
+  if (optionalModules.has(name)) return optionalModules.get(name)
+  let mod = null
+  try {
+    mod = require(name)
+  } catch (err) {
+    logMain('info', `optional module ${name} unavailable: ${err?.message || err}`)
+  }
+  optionalModules.set(name, mod)
+  return mod
+}
+
+/**
+ * 启动本地后端（mode=local）。
+ *
+ * 启动回调由 W4 的 components.cjs 提供；这里全部走可选探测 —— 模块缺失、接口缺失、
+ * 启动抛错都要变成一条可读状态再显示本地错误页，而不是让主进程崩掉。
+ */
+async function startLocalBackend() {
+  const components = loadOptionalModule('./components.cjs')
+  if (!components) {
+    return {
+      ok: false,
+      baseUrl: '',
+      reason: 'components-missing',
+      message: '本地组件未随此版本安装',
+    }
+  }
+  const start =
+    components.startLocalBackend || components.ensureLocalBackend || components.startCore
+  if (typeof start !== 'function') {
+    return {
+      ok: false,
+      baseUrl: '',
+      reason: 'api-missing',
+      message: '本地组件模块没有提供启动接口',
+    }
+  }
+  try {
+    const started = await start()
+    const baseUrl =
+      typeof started === 'string' ? started : started?.baseUrl || started?.apiUrl || ''
+    const dataDir = (started && typeof started === 'object' && started.dataDir) || ''
+    if (!baseUrl) {
+      return { ok: false, baseUrl: '', dataDir, reason: 'no-url', message: '本地后端未返回服务地址' }
+    }
+    logMain('info', `local backend ready at ${baseUrl}`)
+    return { ok: true, baseUrl, dataDir, reason: '', message: '' }
+  } catch (err) {
+    const message = err?.message || String(err)
+    logMain('error', `local backend start failed: ${message}`)
+    return { ok: false, baseUrl: '', reason: 'start-failed', message }
+  }
+}
+
+/** 停止本地后端：退出前与切换模式时都要调；没接线就当作已经停了 */
+async function stopLocalBackend() {
+  if (localBackendStopped) return false
+  localBackendStopped = true
+  const components = loadOptionalModule('./components.cjs')
+  const stop = components && (components.stopLocalBackend || components.stopCore)
+  if (typeof stop !== 'function') return false
+  try {
+    await stop()
+    logMain('info', 'local backend stopped')
+    return true
+  } catch (err) {
+    logMain('warn', `local backend stop failed: ${err?.message || err}`)
+    return false
+  }
+}
+
+/**
+ * 窗口 session 的通用配置：CORS/CSP 补头、权限、下载日志。
+ *
+ * 双模式各用一个 partition（persist:chiron-local / -cloud），所以这些监听必须挂在
+ * 窗口真正使用的 session 上，不能再写死 session.defaultSession —— 否则补头会落在
+ * 没人用的默认 session 上，本地与云端界面都会缺 CSP / CORS。
+ */
+function configureSession(partition) {
+  const winSession = session.fromPartition(partition)
+  if (configuredSessions.has(winSession)) return winSession
+  configuredSessions.add(winSession)
+
+  // 桌面壳从 file:// 访问 API：浏览器把 Origin 序列化成 null，后端 CORS 白名单
+  // 不会为 null 返回 Access-Control-Allow-Origin，带 Authorization 的预检会被
+  // 浏览器直接拒绝（表现为登录后所有请求失败）。这里只给用户配置的 API 前缀
+  // 补上精确匹配的 null（不是 *），其它站点响应不受影响。
+  winSession.webRequest.onHeadersReceived((details, callback) => {
+    const responseHeaders = details.responseHeaders || {}
+    const isApiRequest =
+      currentApiUrl &&
+      (details.url === currentApiUrl || details.url.startsWith(`${currentApiUrl}/`))
+    if (isApiRequest) {
+      responseHeaders['Access-Control-Allow-Origin'] = ['null']
+    }
+    // file:// 主文档默认没有 CSP，Electron 会直接报安全警告；只放行本地资源
+    // 与用户配置的 API/WS origin，XSS 无法把数据外传到任意站点。
+    const isMainDocument =
+      details.resourceType === 'mainFrame' ||
+      details.url.split('#')[0].split('?')[0].endsWith('/index.html')
+    if (isMainDocument && details.url.startsWith('file:')) {
+      responseHeaders['Content-Security-Policy'] = [buildCsp()]
+    }
+    callback({ responseHeaders })
+  })
+
+  // 权限：只允许本地应用页面使用麦克风（语音输入）、剪贴板读取与全屏
+  const allowedPermissions = new Set(['media', 'clipboard-read', 'fullscreen'])
+  winSession.setPermissionRequestHandler((wc, permission, callback, details) => {
+    const requestingUrl = details?.requestingUrl || wc.getURL()
+    if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) {
+      logMain('warn', `denied permission ${permission} from ${requestingUrl}`)
+      callback(false)
+      return
+    }
+    if (permission === 'media') {
+      const types = details?.mediaTypes || []
+      callback(types.length === 0 || types.every(type => type === 'audio'))
+      return
+    }
+    callback(true)
+  })
+  winSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
+    const requestingUrl = details?.requestingUrl || wc.getURL() || requestingOrigin
+    if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) return false
+    if (permission === 'media' && details?.mediaType === 'video') return false
+    return true
+  })
+
+  // 下载走 Electron 默认保存流程，记录到本地日志便于排查
+  winSession.on('will-download', (_event, item) => {
+    logMain('info', `download start: ${item.getFilename()} ${item.getURL()}`)
+    item.once('done', (_e, state) => {
+      logMain(
+        state === 'completed' ? 'info' : 'warn',
+        `download ${state}: ${item.getFilename()} -> ${item.getSavePath()}`,
+      )
+    })
+  })
+
+  return winSession
+}
+
+/**
+ * 老配置迁移（契约 §1）：磁盘上有 apiUrl 但没有 mode。
+ * 默认本地，选择只写 mode 与 migration —— apiUrl 原样保留，用户切回云端时不用重填。
+ */
+async function askLegacyMode(settings) {
+  if (!settings.needsMigration) return false
+  const detail = settings.migration.legacyCloudDetected
+    ? `检测到上一次使用的云端服务地址：${settings.apiUrl}\n选择云端模式会继续使用它；选择本地模式也不会删除这个地址。`
+    : '检测到上一版本的配置，但没有记录运行模式。请选择这台机器的运行方式。'
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'question',
+      title: '选择运行模式',
+      message: '这是第一次以双模式启动 Chiron',
+      detail,
+      buttons: ['使用本地模式', '继续使用云端模式'],
+      defaultId: 0,
+      cancelId: 0,
+      noLink: true,
+    })
+    const mode = response === 1 ? 'cloud' : 'local'
+    saveMode(mode)
+    logMain('info', `legacy config migrated to ${mode}`)
+    return true
+  } catch (err) {
+    // 弹不出来就别写盘：下次启动再问一次，也好过替用户瞎选
+    logMain('warn', `legacy migration dialog failed: ${err?.message || err}`)
+    return false
+  }
+}
+
+/** 菜单里的模式切换：默认保留本地数据（契约 §1 规定默认不删 userData/local） */
+async function confirmModeSwitch(nextMode) {
+  const label = nextMode === 'local' ? '本地模式' : '云端模式'
+  const detail =
+    nextMode === 'local'
+      ? '应用会重启并尝试启动本机后端；本地组件未安装时会显示提示页。本地数据目录不会被删除。'
+      : '应用会重启，并清空本地模式下的登录状态与缓存。本地数据目录不会被删除。'
+  const { response } = await dialog.showMessageBox({
+    type: 'question',
+    title: '切换运行模式',
+    message: `切换到${label}？`,
+    detail,
+    buttons: ['切换并重启', '取消'],
+    defaultId: 1,
+    cancelId: 1,
+    noLink: true,
+  })
+  if (response !== 0) return
+  try {
+    await applyModeSwitch(nextMode, {})
+  } catch (err) {
+    dialog.showErrorBox('切换运行模式失败', err?.message || String(err))
+  }
+}
+
+/** 记下最近一次本地后端的启动信息（契约 §1 的 local.lastStartedAt / local.dataDir） */
+function recordLocalStart(status) {
+  if (!status || !status.ok) return
+  try {
+    const patch = { local: { lastStartedAt: new Date().toISOString() } }
+    if (status.dataDir) patch.local.dataDir = String(status.dataDir)
+    saveDeviceSettings(patch)
+  } catch (err) {
+    logMain('warn', `record local start failed: ${err?.message || err}`)
+  }
+}
+
+/**
+ * 切换模式：清零离开模式的会话数据 → 写盘 → relaunch。
+ * 实际流程在 mode-switch.cjs（可单测），这里只负责注入 Electron 侧的回调：
+ * 停止本地后端是必须的，否则重启后两个后端会抢同一个数据目录。
+ */
+async function applyModeSwitch(mode, opts) {
+  const result = await switchMode({
+    nextMode: mode,
+    deleteLocalData: Boolean(opts && opts.deleteLocalData),
+    stopBackend: async () => {
+      if (currentMode === 'local') {
+        await stopLocalBackend()
+        localBackendStopped = true
+      }
+    },
+    electron: { app, session },
+    log: logMain,
+  })
+  return result
+}
+
+/** 重启应用（不改模式）：本地后端先停，避免 restart 后两个后端抢端口 */
+function restartNow() {
+  void (async () => {
+    try {
+      if (currentMode === 'local') {
+        await stopLocalBackend()
+        localBackendStopped = true
+      }
+    } catch (err) {
+      logMain('warn', `stop before restart failed: ${err?.message || err}`)
+    }
+    app.relaunch()
+    // 让 IPC 回复先发出，再杀进程，否则渲染进程只会看到 "frame was disposed"
+    setImmediate(() => app.exit(0))
+  })()
+}
+
+/**
+ * 本地模式启动失败时的恢复选项。
+ * 用原生对话框而不是自建页面：这时前端 dist 还没被信任能跑（后端可能压根没起），
+ * 而用户需要的是三个明确动作：重试 / 切回云端 / 退出，不要静默卡在白屏上。
+ */
+async function askLocalBackendRecovery(status) {
+  const actions = ['retry', 'cloud', 'quit']
+  try {
+    const { response } = await dialog.showMessageBox({
+      type: 'warning',
+      title: '本地模式未就绪',
+      message: '本机后端没能启动，Chiron 打不开主界面',
+      detail: `${status.message || '未知原因'}\n\n可以重试一次，或先切回云端模式（应用会重启）。`,
+      buttons: ['重试启动', '切换到云端模式', '退出'],
+      defaultId: 0,
+      cancelId: 2,
+      noLink: true,
+    })
+    return actions[response] || 'quit'
+  } catch (err) {
+    logMain('warn', `local recovery dialog failed: ${err?.message || err}`)
+    return 'quit'
+  }
+}
+
+/**
+ * 建窗口：模式决定加载目标与 session 分区。
+ *   local 且本地后端就绪 → 主界面（apiUrl = 本地 baseUrl）
+ *   local 且未就绪 → 先给恢复选项，仍失败则落到 error.html（提示原因，不崩溃）
+ *   cloud 且已有地址 → 主界面；没有地址 → setup.html 填写服务地址
+ */
 function createWindow() {
-  const apiUrl = resolveApiUrl()
+  const settings = readDeviceSettings()
+  currentMode = resolveMode(settings)
+  const partition = partitionFor(currentMode)
+
+  let apiUrl = ''
+  let target = 'app'
+  if (currentMode === 'cloud') {
+    apiUrl = resolveApiUrl()
+    target = !forceSetup && apiUrl ? 'app' : 'setup'
+  } else if (localBackend.ok && localBackend.baseUrl) {
+    apiUrl = localBackend.baseUrl
+  } else {
+    // 本地后端没就绪：落到通用错误页并写清楚原因，而不是留给用户一个空白窗口
+    target = 'error'
+  }
   currentApiUrl = apiUrl
-  const target = !forceSetup && apiUrl ? 'app' : 'setup'
+  // 会话监听必须在建窗之前挂好：窗口一创建就开始发首次请求
+  configureSession(partition)
+
+  // 配置页与本机错误页都是单栏布局，主界面才用大窗口
+  const isDialog = target !== 'app'
 
   mainWindow = new BrowserWindow({
-    width: target === 'setup' ? 520 : 1440,
-    height: target === 'setup' ? 620 : 900,
-    minWidth: target === 'setup' ? 420 : 960,
-    minHeight: target === 'setup' ? 480 : 640,
-    resizable: target !== 'setup',
+    width: isDialog ? 520 : 1440,
+    height: isDialog ? 620 : 900,
+    minWidth: isDialog ? 420 : 960,
+    minHeight: isDialog ? 480 : 640,
+    resizable: !isDialog,
     backgroundColor: WINDOW_BACKGROUND,
     show: false, // 等首帧就绪再显示，避免白屏闪一下
     autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.cjs'),
+      // 双模式各用一个持久分区：cookie / localStorage / IndexedDB 互不可见；
+      // 切换模式时 mode-switch.cjs 清的就是「离开模式」的那个分区。
+      partition,
       contextIsolation: true,
       nodeIntegration: false,
       // preload 要读 process.argv / versions，故不开 sandbox；
       // contextIsolation 已经隔离了页面与 preload 的执行上下文。
       sandbox: false,
-      // 每次创建窗口现传地址：渲染进程的 process.env 是启动时继承的，
+      // 每次创建窗口现传模式与地址：渲染进程的 process.env 是启动时继承的，
       // 用户保存新地址后旧 env 不会更新。
-      additionalArguments: apiUrl ? [`${API_URL_ARG_PREFIX}${apiUrl}`] : [],
+      additionalArguments: [
+        `${MODE_ARG_PREFIX}${currentMode}`,
+        ...(apiUrl ? [`${API_URL_ARG_PREFIX}${apiUrl}`] : []),
+      ],
     },
   })
 
@@ -221,11 +559,21 @@ function createWindow() {
     if (choice === 1) mainWindow.reload()
   })
 
-  if (target === 'setup') {
-    mainWindow.loadFile(path.join(__dirname, 'setup.html'))
-  } else if (isDev) {
+  if (isDev && target === 'app') {
     mainWindow.loadURL(DEV_URL)
     mainWindow.webContents.openDevTools({ mode: 'detach' })
+  } else if (target === 'setup') {
+    mainWindow.loadFile(path.join(__dirname, 'setup.html'))
+  } else if (target === 'error') {
+    // 本地模式但后端没起来：复用通用错误页，把原因写进详情
+    mainWindow.loadFile(path.join(__dirname, 'error.html'), {
+      query: {
+        code: localBackend.reason || '',
+        desc: localBackend.message || '本地后端未就绪',
+        url: '',
+        retry: '',
+      },
+    })
   } else {
     mainWindow.loadFile(path.join(__dirname, '..', 'dist', 'index.html'))
   }
@@ -311,68 +659,47 @@ if (!gotLock) {
     mainWindow.focus()
   })
 
-  app.whenReady().then(() => {
+  app.whenReady().then(async () => {
     // Windows 通知/任务栏需要显式的 AppUserModelId，且要与打包 appId 一致
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
-    // 桌面壳从 file:// 访问 API：浏览器把 Origin 序列化成 null，后端 CORS 白名单
-    // 不会为 null 返回 Access-Control-Allow-Origin，带 Authorization 的预检会被
-    // 浏览器直接拒绝（表现为登录后所有请求失败）。这里只给用户配置的 API 前缀
-    // 补上精确匹配的 null（不是 *），其它站点响应不受影响。
-    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-      const responseHeaders = details.responseHeaders || {}
-      const isApiRequest =
-        currentApiUrl &&
-        (details.url === currentApiUrl || details.url.startsWith(`${currentApiUrl}/`))
-      if (isApiRequest) {
-        responseHeaders['Access-Control-Allow-Origin'] = ['null']
-      }
-      // file:// 主文档默认没有 CSP，Electron 会直接报安全警告；只放行本地资源
-      // 与用户配置的 API/WS origin，XSS 无法把数据外传到任意站点。
-      const isMainDocument =
-        details.resourceType === 'mainFrame' ||
-        details.url.split('#')[0].split('?')[0].endsWith('/index.html')
-      if (isMainDocument && details.url.startsWith('file:')) {
-        responseHeaders['Content-Security-Policy'] = [buildCsp()]
-      }
-      callback({ responseHeaders })
-    })
+    // 1) 老配置迁移：必须在建窗之前完成 —— 它决定 session 分区、启动分流与注入的地址
+    try {
+      await askLegacyMode(readDeviceSettings())
+    } catch (err) {
+      logMain('warn', `legacy migration failed: ${err?.message || err}`)
+    }
 
-    // 权限：只允许本地应用页面使用麦克风（语音输入）、剪贴板读取与全屏
-    const allowedPermissions = new Set(['media', 'clipboard-read', 'fullscreen'])
-    session.defaultSession.setPermissionRequestHandler((wc, permission, callback, details) => {
-      const requestingUrl = details?.requestingUrl || wc.getURL()
-      if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) {
-        logMain('warn', `denied permission ${permission} from ${requestingUrl}`)
-        callback(false)
-        return
+    // 2) 按模式准备后端：本地模式先把本机后端拉起来（未安装则提示并给恢复选项）
+    currentMode = resolveMode(readDeviceSettings())
+    logMain('info', `starting in ${currentMode} mode`)
+    if (currentMode === 'local') {
+      localBackend = await startLocalBackend()
+      let attempts = 0
+      // 最多再重试两次；仍失败就继续建窗口，让错误页把原因写在界面上
+      while (!localBackend.ok && attempts < 2) {
+        attempts += 1
+        const action = await askLocalBackendRecovery(localBackend)
+        if (action === 'quit') {
+          app.quit()
+          return
+        }
+        if (action === 'cloud') {
+          // applyModeSwitch 内部会写盘并 relaunch + exit，这里不用再建窗口
+          try {
+            await applyModeSwitch('cloud', {})
+          } catch (err) {
+            dialog.showErrorBox('切换运行模式失败', err?.message || String(err))
+            app.quit()
+          }
+          return
+        }
+        localBackend = await startLocalBackend()
       }
-      if (permission === 'media') {
-        const types = details?.mediaTypes || []
-        callback(types.length === 0 || types.every(type => type === 'audio'))
-        return
-      }
-      callback(true)
-    })
-    session.defaultSession.setPermissionCheckHandler((wc, permission, requestingOrigin, details) => {
-      const requestingUrl = details?.requestingUrl || wc.getURL() || requestingOrigin
-      if (!isTrustedUrl(requestingUrl) || !allowedPermissions.has(permission)) return false
-      if (permission === 'media' && details?.mediaType === 'video') return false
-      return true
-    })
+      recordLocalStart(localBackend)
+    }
 
-    // 下载走 Electron 默认保存流程，记录到本地日志便于排查
-    session.defaultSession.on('will-download', (_event, item) => {
-      logMain('info', `download start: ${item.getFilename()} ${item.getURL()}`)
-      item.once('done', (_e, state) => {
-        logMain(
-          state === 'completed' ? 'info' : 'warn',
-          `download ${state}: ${item.getFilename()} -> ${item.getSavePath()}`,
-        )
-      })
-    })
-
-    // 精简菜单：保留复制/粘贴/全选/重载/开发者工具，去掉 Electron 默认的多余项
+    // 3) 精简菜单：保留复制/粘贴/全选/重载/开发者工具，去掉 Electron 默认的多余项
     Menu.setApplicationMenu(
       Menu.buildFromTemplate([
         {
@@ -412,8 +739,18 @@ if (!gotLock) {
             { type: 'separator' },
             { role: 'togglefullscreen' },
             { type: 'separator' },
-            // 应用内修改服务地址的唯一入口：填错地址后不必再去删 config.json
-            { label: '连接设置…', accelerator: 'CmdOrCtrl+,', click: () => relaunchIntoSetup() },
+            // 应用内修改服务地址的唯一入口（仅云端模式有意义）：填错地址后不必去删 config.json
+            {
+              label: '连接设置…',
+              accelerator: 'CmdOrCtrl+,',
+              enabled: currentMode === 'cloud',
+              click: () => relaunchIntoSetup(),
+            },
+            // 模式的图形入口：设置页接上模式切换之前，这里是唯一出口
+            {
+              label: currentMode === 'local' ? '切换到云端模式…' : '切换到本地模式…',
+              click: () => confirmModeSwitch(currentMode === 'local' ? 'cloud' : 'local'),
+            },
           ],
         },
       ]),
@@ -446,6 +783,50 @@ if (!gotLock) {
       return clearToken()
     })
 
+    // 设备设置与模式：真相在主进程的 config.json（契约 §1），渲染进程读到的只是它。
+    ipcMain.handle('desktop:get-device-settings', event => {
+      assertTrustedSender(event)
+      return readDeviceSettings()
+    })
+    ipcMain.handle('desktop:set-mode', (event, mode, opts) => {
+      assertTrustedSender(event)
+      return applyModeSwitch(mode, opts)
+    })
+    ipcMain.handle('desktop:restart', event => {
+      assertTrustedSender(event)
+      restartNow()
+      return true
+    })
+
+    // 组件管理（契约 §2）。components.cjs 可能不存在（旧包/未安装组件），
+    // 统一返回结构化错误，不让渲染进程拿到未处理的 reject。
+    function requireComponents() {
+      const mod = loadOptionalModule('./components.cjs')
+      if (!mod) throw new Error('本地组件管理不可用（components.cjs 未随包发布）')
+      return mod
+    }
+    ipcMain.handle('desktop:list-components', event => {
+      assertTrustedSender(event)
+      const mod = loadOptionalModule('./components.cjs')
+      return typeof mod?.listComponents === 'function' ? mod.listComponents() : []
+    })
+    ipcMain.handle('desktop:install-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().installComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:remove-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().removeComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:start-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().startComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:stop-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().stopComponent(String(name || ''))
+    })
+
     createWindow()
     setupAutoUpdater()
 
@@ -458,5 +839,16 @@ if (!gotLock) {
   // macOS 习惯：关掉窗口不退出应用
   app.on('window-all-closed', () => {
     if (process.platform !== 'darwin') app.quit()
+  })
+
+  // 退出前停掉本地后端：否则 embedded-postgres / 推理代理会留成孤儿进程。
+  // 停的过程是异步的，所以先 preventDefault，停完再真的 quit（标志位保证只停一次）。
+  app.on('before-quit', event => {
+    if (currentMode !== 'local' || localBackendStopped || !localBackend.ok) return
+    event.preventDefault()
+    void stopLocalBackend().finally(() => {
+      localBackendStopped = true
+      app.quit()
+    })
   })
 }

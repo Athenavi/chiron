@@ -10,26 +10,31 @@ const routes = [
     component: () => import('../views/HomeView.vue'),
   },
   {
+    // 登录 / 注册 / 找回密码：云模式专属入口；本地模式无账号体系（guard 会回首页）
     path: '/login',
     name: 'Login',
     component: () => import('../views/LoginView.vue'),
+    meta: { cloudOnly: true },
   },
   {
     path: '/register',
     name: 'Register',
     component: () => import('../views/RegisterView.vue'),
+    meta: { cloudOnly: true },
   },
   {
     // 忘记密码：申请邮件重置链接（邮件服务未启用时后端 403，入口在登录页按状态隐藏）
     path: '/forgot-password',
     name: 'ForgotPassword',
     component: () => import('../views/ForgotPasswordView.vue'),
+    meta: { cloudOnly: true },
   },
   {
     // 重置密码：令牌由邮件里的 /reset-password?token=... 链接带入
     path: '/reset-password',
     name: 'ResetPassword',
     component: () => import('../views/ResetPasswordView.vue'),
+    meta: { cloudOnly: true },
   },
   {
     path: '/chat',
@@ -43,7 +48,7 @@ const routes = [
     path: '/models',
     name: 'Models',
     component: () => import('../views/ModelsView.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, cloudOnly: true },
   },
   {
     path: '/share/:id',
@@ -64,10 +69,11 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    // 计费/充值：云端才有账座与支付渠道；本地模式自己是唯一"租户"，没东西可充
     path: '/billing',
     name: 'Billing',
     component: () => import('../views/BillingView.vue'),
-    meta: { requiresAuth: true },
+    meta: { requiresAuth: true, cloudOnly: true },
   },
   {
     path: '/profile',
@@ -117,11 +123,11 @@ const routes = [
     component: () => import('../views/KnowledgeDetailView.vue'),
     meta: { requiresAuth: true },
   },
-  // 管理后台路由
+  // 管理后台路由（租户/SSO/计费/域名/审计…全属云侧：本地模式整棵子树 cloudOnly）
   {
     path: '/admin',
     component: () => import('../views/admin/Layout.vue'),
-    meta: { requiresAuth: true, requiresAdmin: true },
+    meta: { requiresAuth: true, requiresAdmin: true, cloudOnly: true },
     children: [
       {
         path: '',

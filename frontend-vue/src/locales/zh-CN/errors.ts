@@ -276,4 +276,6 @@ export default {
   notion_style_high_information_density_clear_layout: "Notion 风格，高信息密度，清晰排版",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "RSA2 密钥对：应用私钥与支付宝公钥均为 PEM 格式；留空则回退到环境变量 ALIPAY_*。",
   ssl_renewal_failed: "SSL 续期失败",
+  // 本地模式专用：本地后端（desktop-local）尚未实现的端点（501）
+  local_mode_feature_unavailable: "本地模式暂不支持该功能（本地服务还没实现这个接口）",
 }

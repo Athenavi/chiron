@@ -3,6 +3,7 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch, type Compone
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
+import { useDeviceStore } from '../stores/device'
 
 // Ant Design Vue 组件
 import {
@@ -51,6 +52,8 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
+// 本地模式：计费/模型配置/管理后台都是云侧页面（路由上也会被 cloudOnly 拦住）
+const deviceStore = useDeviceStore()
 
 /**
  * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / 落在 --z-drawer 层）会盖住
@@ -89,6 +92,7 @@ interface MenuItem {
 }
 
 const menuItems = computed<MenuItem[]>(() => {
+  const localMode = deviceStore.isLocal()
   const items: MenuItem[] = [
     { key: '/', label: tr('common.home'), icon: () => h(HomeOutlined) },
     { key: WORKSTATION_ROUTES.dialogue, label: WORKSTATION_LABELS.dialogue, icon: () => h(MessageOutlined) },
@@ -99,8 +103,8 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: WORKSTATION_ROUTES.knowledge, label: WORKSTATION_LABELS.knowledge, icon: () => h(BookOutlined) },
     { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
-    { key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) },
-    ...(authStore.isAdmin
+    ...(localMode ? [] : [{ key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) }]),
+    ...(authStore.isAdmin && !localMode
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
           { key: '/models', label: tr('agent.model'), icon: () => h(ApiOutlined) },
@@ -134,7 +138,8 @@ interface UserMenuItem {
 const userMenuItems = computed<UserMenuItem[]>(() => [
   { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
   { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
-  { key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) },
+  // 本地模式没有账号可登出（本地用户由本地后端固定下发），不展示该入口
+  ...(deviceStore.isLocal() ? [] : [{ key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) }]),
 ])
 
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移

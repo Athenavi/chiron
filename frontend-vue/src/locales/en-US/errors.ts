@@ -271,4 +271,6 @@ export default {
   notion_style_high_information_density_clear_layout: "Notion style, high information density, clear layout",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "RSA2 key pair: app private key and Alipay public key are both PEM; blank falls back to the ALIPAY_* environment variables.",
   ssl_renewal_failed: "SSL renewal failed",
+  // Local mode only: endpoints the local backend (desktop-local) does not implement yet (501)
+  local_mode_feature_unavailable: "This feature is not available in local mode yet (the local service does not implement this endpoint)",
 }
