@@ -24,7 +24,13 @@ from unittest.mock import patch
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.gateway.provider import ChatResponse
+from app.api.desktop_infer import (
+    IDEMPOTENCY_TTL_SECONDS,
+    USAGE_TTL_SECONDS,
+    _idem_key,
+)
+from app.gateway.cache import SemanticCache
+from app.gateway.provider import ChatMessage, ChatResponse
 from app.main import create_app
 
 URL = "/v1/desktop/infer"
@@ -351,3 +357,256 @@ async def test_router_drops_response_format_for_unsupported_provider(
     assert "response_format" not in provider.kwargs
     # 降级是要留痕的（info 级：跨 provider 路由时属设计内行为）
     assert "does not support response_format" in caplog.text
+
+
+# ── 幂等：request_id + Redis SET NX（60s） ────────────────────────────
+
+
+class _FakeRedis:
+    """只实现本端点与 ``SemanticCache`` 实际用到的命令。
+
+    刻意不用 fakeredis：本批不允许新增依赖，而这个端点碰到的命令屈指可数。
+    没有实现的方法在被误用时是 ``AttributeError``（响亮地失败），不会静默放行。
+    """
+
+    def __init__(self) -> None:
+        self.store: dict[str, str] = {}
+        self.hashes: dict[str, dict[str, str]] = {}
+        self.ttls: dict[str, int] = {}
+
+    async def set(
+        self, key: str, value: str, nx: bool = False, ex: int | None = None
+    ) -> bool | None:
+        if nx and key in self.store:
+            return None
+        self.store[key] = value
+        if ex is not None:
+            self.ttls[key] = ex
+        return True
+
+    async def get(self, key: str) -> str | None:
+        return self.store.get(key)
+
+    async def delete(self, key: str) -> int:
+        existed = self.store.pop(key, None) is not None
+        self.ttls.pop(key, None)
+        return 1 if existed else 0
+
+    async def hincrby(self, key: str, field: str, amount: int) -> int:
+        bucket = self.hashes.setdefault(key, {})
+        bucket[field] = str(int(bucket.get(field, "0")) + amount)
+        return int(bucket[field])
+
+    async def expire(self, key: str, ttl: int) -> bool:
+        self.ttls[key] = ttl
+        return True
+
+    async def hget(self, key: str, field: str) -> str | None:
+        return self.hashes.get(key, {}).get(field)
+
+    async def hset(self, key: str, field: str, value: str) -> int:
+        self.hashes.setdefault(key, {})[field] = value
+        return 1
+
+
+@pytest.fixture()
+def fake_redis() -> Any:
+    """把引擎的模块级 redis 换成替身（端点内 ``await get_redis()`` 读的就是它）。"""
+    fake = _FakeRedis()
+    with patch("app.main._redis", fake):
+        yield fake
+
+
+async def test_same_request_id_replays_first_response(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """网络超时后的重试不该让用户为同一段片段推理付两次钱。"""
+    first = await _post(_payload(request_id="req-42"))
+    second = await _post(_payload(request_id="req-42"))
+
+    assert first.status_code == 200, first.text
+    assert second.status_code == 200, second.text
+    # 重放必须是**逐字段相同**的响应（客户端会把它当成同一次结果）
+    assert first.json() == second.json()
+    assert len(gateway.calls) == 1, "同一 request_id 的重复请求又打了一次上游"
+
+
+async def test_idempotency_key_lives_exactly_60s(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    await _post(_payload(request_id="req-ttl"))
+    key = _idem_key(1, "req-ttl")
+    assert key in fake_redis.store, "幂等键没有落地：SET NX 没生效"
+    assert fake_redis.ttls.get(key) == IDEMPOTENCY_TTL_SECONDS == 60
+
+
+async def test_in_flight_duplicate_returns_409(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """同名请求还在跑时不能返回空 content —— 那会被调用方当成真结果写进文档。"""
+    fake_redis.store[_idem_key(1, "req-busy")] = "pending"
+    resp = await _post(_payload(request_id="req-busy"))
+
+    assert resp.status_code == 409, resp.text
+    assert gateway.calls == [], "另一个同 id 请求还在跑时不该再打上游"
+
+
+async def test_blank_request_id_is_not_deduplicated(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """``request_id`` 缺省 = 调用方明确表示不需要去重（不能拿空串当共享键）。"""
+    await _post(_payload(request_id=""))
+    await _post(_payload(request_id=""))
+
+    assert len(gateway.calls) == 2
+    assert not [k for k in fake_redis.store if "desktop:infer:idem" in k]
+
+
+async def test_unreadable_idempotency_payload_falls_back_to_upstream(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    """脏值（旧格式/半截写入）不能把人挡在 409 上：当作未完成，本次照常打上游。"""
+    fake_redis.store[_idem_key(1, "req-dirty")] = "not-json"
+    resp = await _post(_payload(request_id="req-dirty"))
+
+    assert resp.status_code == 200, resp.text
+    assert len(gateway.calls) == 1
+
+
+async def test_failure_releases_idempotency_key(fake_redis: _FakeRedis) -> None:
+    """失败必须可重试：占位留着会让用户 60s 内连重试都拿 409。"""
+    broken = _FakeGateway(
+        response=ChatResponse(content="", finish_reason="error", provider="openai")
+    )
+    with patch("app.main._gateway", broken):
+        first = await _post(_payload(request_id="req-retry"))
+    assert first.status_code == 502, first.text
+    assert _idem_key(1, "req-retry") not in fake_redis.store, "502 之后占位没有释放"
+
+    ok = _FakeGateway()
+    with patch("app.main._gateway", ok):
+        second = await _post(_payload(request_id="req-retry"))
+    assert second.status_code == 200, second.text
+    assert len(ok.calls) == 1
+
+
+# ── 用量：desktop:infer:usage:{tenant}:{date}（不写 credits） ─────────
+
+
+async def test_usage_is_recorded_per_tenant_and_day(
+    fake_redis: _FakeRedis, gateway: _FakeGateway
+) -> None:
+    await _post(_payload(request_id="req-usage"))
+
+    keys = [k for k in fake_redis.hashes if "desktop:infer:usage:1:" in k]
+    assert len(keys) == 1, f"usage 没有写到 desktop:infer:usage:1:{{date}}（现有键：{list(fake_redis.hashes)}）"
+    bucket = fake_redis.hashes[keys[0]]
+    assert bucket == {
+        "requests": "1",
+        "input_tokens": "11",
+        "output_tokens": "7",
+        "cached_tokens": "3",
+    }
+    # credits 的商业口径在 Go 网关的 biller 里；引擎再写一份等于重复扣费
+    assert "credits" not in bucket
+    assert fake_redis.ttls.get(keys[0]) == USAGE_TTL_SECONDS
+
+
+async def test_usage_is_not_written_on_failure(
+    fake_redis: _FakeRedis,
+) -> None:
+    broken = _FakeGateway(exc=RuntimeError("boom"))
+    with patch("app.main._gateway", broken):
+        resp = await _post(_payload(request_id="req-usage-fail"))
+    assert resp.status_code == 502, resp.text
+    assert not [k for k in fake_redis.hashes if "desktop:infer:usage" in k], (
+        "失败的请求写进了用量账本：对账会多算钱"
+    )
+
+
+async def test_inference_still_works_without_redis() -> None:
+    """Redis 不可用时幂等/用量降级（fail-open），但推理本身照常。"""
+    fake = _FakeGateway()
+    with patch("app.main._gateway", fake), patch("app.main._redis", None):
+        resp = await _post(_payload(request_id="req-no-redis"))
+    assert resp.status_code == 200, resp.text
+    assert resp.json()["content"] == "压好的两行"
+
+
+# ── 缓存 key：response_format 必须参与（否则 JSON 请求会拿到纯文本条目） ──
+
+_CACHE_MSGS = [ChatMessage(role="user", content="把这段文本压成两行")]
+
+
+def _cache(redis: Any = None) -> SemanticCache:
+    async def _embed(text: str) -> list[float]:
+        return [0.5] * 8
+
+    return SemanticCache(redis=redis if redis is not None else _FakeRedis(), embed_fn=_embed)
+
+
+def test_exact_key_includes_response_format() -> None:
+    text_key = SemanticCache._exact_key(1, "m", _CACHE_MSGS, None, 0.0)
+    json_key = SemanticCache._exact_key(
+        1, "m", _CACHE_MSGS, None, 0.0, {"type": "json_object"}
+    )
+    assert text_key != json_key, "文本与 JSON 请求共用了精确缓存键：后到的会拿到错形状的结果"
+    # 同一形状仍然稳定命中（不能把 response_format 的 dict 顺序带进 key）
+    assert json_key == SemanticCache._exact_key(
+        1, "m", _CACHE_MSGS, None, 0.0, {"type": "json_object"}
+    )
+
+
+def test_exact_key_is_unchanged_without_response_format() -> None:
+    """默认行为不能变：既有调用方的存量 L2/L3 条目必须继续命中（无需迁移）。"""
+    explicit_none = SemanticCache._exact_key(1, "m", _CACHE_MSGS, None, 0.0, None)
+    legacy_five_args = SemanticCache._exact_key(1, "m", _CACHE_MSGS, None, 0.0)
+    assert explicit_none == legacy_five_args
+
+
+async def test_store_and_lookup_keep_positional_compatibility() -> None:
+    """``store`` 的 response_format 在 response **之后**：旧的 6 位置参数调用必须还能用。"""
+    cache = _cache()
+    await cache.store(
+        1, "m", _CACHE_MSGS, None, 0.0, ChatResponse(content="压缩结果", finish_reason="stop")
+    )
+    hit = await cache.lookup(1, "m", _CACHE_MSGS, None, 0.0)
+    assert hit is not None and hit.content == "压缩结果"
+
+
+class _CountingProvider:
+    """每次调用返回不同内容 —— 用例靠内容判断“到底走了上游还是缓存”。"""
+
+    name = "counting"
+    supports_response_format = True
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def chat(self, messages: list[Any], model: str, **kwargs: Any) -> ChatResponse:
+        self.calls += 1
+        return ChatResponse(content=f"call-{self.calls}", finish_reason="stop")
+
+    def chat_stream(self, messages: list[Any], model: str, **kwargs: Any) -> Any:
+        raise AssertionError("本用例只走非流式路径")
+
+
+async def test_router_does_not_serve_text_cache_to_json_request() -> None:
+    """端到端：同一 prompt 先文本、后 JSON，第二次必须真的打上游。"""
+    from app.gateway.router import GatewayRouter
+
+    provider = _CountingProvider()
+    router = GatewayRouter({"counting": provider}, cache=_cache())  # type: ignore[arg-type]
+
+    first = await router.chat([{"role": "user", "content": "把这段文本压成两行"}], "plain-model")
+    again = await router.chat([{"role": "user", "content": "把这段文本压成两行"}], "plain-model")
+    assert again.content == first.content
+    assert provider.calls == 1, "同一形状的第二次请求没有命中缓存（缓存白加了）"
+
+    as_json = await router.chat(
+        [{"role": "user", "content": "把这段文本压成两行"}],
+        "plain-model",
+        response_format={"type": "json_object"},
+    )
+    assert provider.calls == 2, "JSON 请求命中了纯文本缓存条目（形状会是错的）"
+    assert as_json.content != first.content
