@@ -16,10 +16,19 @@ directories:
   buildResources: electron/resources
 
 # 只收运行期真正需要的东西
+#
+# **排除 node_modules**：前端运行时依赖（vue / echarts / mermaid / three …）已经由
+# Vite 打进 dist/，package.json 的 dependencies 只是构建期输入。把它们再整包塞进
+# asar 会让产物膨胀到 800MB+（实测 863MB app.asar / 1.3GB win-unpacked）。
+#
+# 代价：`electron-updater` 也被排除，且**未签名构建本来就不能自动更新**。
+# main.cjs 的 setupAutoUpdater 已有 try/catch，require 失败只记一条 warn 并跳过，
+# 不影响启动。签名接入后再按 `docs/desktop-local/packaging.md` 的白名单加回。
 files:
   - electron/**/*
   - dist/**/*
   - package.json
+  - "!node_modules/**"
 
 # 安装包产物体积不因此膨胀
 asar: true
