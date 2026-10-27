@@ -23,6 +23,7 @@ from app.subagent import store as store_mod
 from app.subagent.outcome import (
     CODE_BUDGET_EXCEEDED,
     CODE_CANCELLED,
+    CODE_CONNECTION_RESET,
     CODE_CONTEXT_OVERFLOW,
     CODE_INVALID_INPUT,
     CODE_PROVIDER_RETRY,
@@ -89,8 +90,52 @@ def test_invalid_input_is_not_retryable():
     assert classify_error(ValueError("task is required")) == (CODE_INVALID_INPUT, False)
 
 
+@pytest.mark.parametrize(
+    "exc",
+    [
+        ConnectionResetError(104, "Connection reset by peer"),
+        BrokenPipeError(32, "Broken pipe"),
+    ],
+    ids=["connection_reset_error", "broken_pipe_error"],
+)
+def test_connection_reset_has_its_own_retryable_code(exc):
+    """连接被对端打断 ⇒ **自己的码** + 可重试。
+
+    关键在于它是 `connection_reset` 而不是 `unknown`：重试的依据是"对端掐断了已建立的连接"
+    这条具体解释，而不是"未知大概没关系"。落库后报表也能把"被掐断"与"莫名其妙挂了"分开。
+    """
+    assert classify_error(exc) == (CODE_CONNECTION_RESET, True)
+
+
+def test_connection_reset_code_is_declared_and_retryable():
+    """防漂移：码进了元组、也进了白名单（否则 classify 与 outcome_of 会给出两套结论）。"""
+    assert CODE_CONNECTION_RESET in ERROR_CODES
+    assert CODE_CONNECTION_RESET in RETRYABLE_CODES
+
+
+def test_connection_reset_does_not_swallow_oserror_siblings():
+    """优先级：更精确的判定不许被这条规则抢走。
+
+    `TimeoutError` / `ConnectionResetError` / `BrokenPipeError` 都是 `OSError` 的子类，
+    且 `connection_reset` 又摆在 `unknown` 之前倒数第二。这两点合起来意味着：若日后有人把规则
+    放宽成 `OSError`（"反正都是 IO 错"），`TimeoutError` 会先被它抢走、拿到错的码。这条钉住
+    现状：超时仍是 `timeout`，不是 `connection_reset`。
+    """
+    assert classify_error(TimeoutError("too slow"))[0] == CODE_TIMEOUT
+    assert classify_error(FileNotFoundError(2, "No such file")) == (CODE_UNKNOWN, False)
+
+
+def test_connection_refused_family_stays_unknown():
+    """只点名这两种。`ConnectionRefusedError` 可能是配置错误（端口打错了），盲重试不一定有意义。"""
+    assert classify_error(ConnectionRefusedError(111, "Connection refused")) == (CODE_UNKNOWN, False)
+
+
 def test_unknown_defaults_to_not_retryable():
-    """**安全默认**：拿不准就不重试（见模块文档）。"""
+    """**安全默认**：拿不准就不重试（见模块文档）。
+
+    与上面的连接重置成对存在：新增一个可重试码**不等于**放宽 unknown —— 真正无法解释的异常
+    仍然不可重试。这条防的正是"顺手把 unknown 也改成 True"那种改法。
+    """
     assert classify_error(RuntimeError("???是什么错")) == (CODE_UNKNOWN, False)
     assert classify_error(None) == (CODE_UNKNOWN, False)
 

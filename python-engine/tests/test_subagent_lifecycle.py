@@ -219,7 +219,8 @@ async def test_unknown_failure_is_not_retryable(monkeypatch):
     为什么改：`error="boom"` 这类**未知**错误的处置无法判断 —— 它可能是"工具参数非法"（重试一万次
     也一样），也可能是"上游偶发"（值得重来）。而重试要花 token 与钱、还可能重复副作用（写文件、
     发请求），所以拿不准必须落在"不重试"这一侧。**可**重试的是能识别出来的那几类
-    （`timeout` / `context_overflow` / `provider_retry`，见 tests/test_subagent_outcome.py）。
+    （`timeout` / `context_overflow` / `provider_retry` / `connection_reset`，见
+    tests/test_subagent_outcome.py）。
     """
     seen = _capture()
     try:

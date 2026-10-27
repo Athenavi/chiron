@@ -81,8 +81,8 @@ ALLOWED_FIELD_NAMES: frozenset[str] = frozenset({"output_bytes"})
 class SubagentLifecycle:
     """一次生命周期转移的**无内容**描述。
 
-    `error_code` 是**码**（如 ``budget_exceeded`` / ``timeout``），**不是**错误文本 ——
-    文本里常带路径与片段，那正是本模块要避开的东西。
+    `error_code` 是**码**（如 ``budget_exceeded`` / ``timeout`` / ``connection_reset``），**不是**
+    错误文本 —— 文本里常带路径与片段，那正是本模块要避开的东西。
     """
 
     phase: str
