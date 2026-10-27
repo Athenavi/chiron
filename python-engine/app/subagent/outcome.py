@@ -15,6 +15,27 @@
 **未知错误一律不可重试。** 重试要花 token 与钱，还可能重复副作用（写文件、发请求）。所以"拿不准"
 必须落在"不重试"这一侧 —— 让调用方**主动**决定要不要重来，而不是我们替它冒险。
 
+## 为什么"连接重置"是一个独立身份，而不是把 `unknown` 放宽
+
+`ConnectionResetError` / `BrokenPipeError` 此前落到 `unknown` ⇒ 不可重试。这类错误恰恰是**典型
+瞬时故障**（对端进程重启、空闲连接被中间设备掐断、子进程管道先关），重来一次通常就好。
+
+看起来最省事的修法是"让 `unknown` 也可重试"，但那会把**整条安全默认**一起拆掉：`unknown` 是
+"我们**不知道**发生了什么"的兜底桶，里面本来就有任意的、可能带副作用的未知异常。放宽它，等于
+对其中每一条（包括我们从未见过、从未分析过的）都断言"重来一次没有坏处" —— 而那条断言恰恰是
+我们没有依据做出的。
+
+所以这里的选择是：**认出**这一类，给它自己的码。`connection_reset` 的含义是"对端把已建立的连接
+打断了"，它的重试依据是这个**具体的因果解释**，而不是"unknown 大概没关系"。同时它也保留了信息：
+日报表能区分"连不上 / 被掐断"与"莫名其妙地挂了"，两者的处置完全不同（前者重试，后者要看日志）。
+
+代价是这张表会变长。这是**有意**的取舍 —— 码表增长是"我们认识了更多失败"，`unknown` 缩小才是
+好消息；反过来用一个大的 `unknown` 兜住一切只是把未知藏起来。
+
+**只收这两种，不推广到 `ConnectionError` 家族。** `ConnectionRefusedError` / `ConnectionAbortedError`
+等仍走 `unknown`：它们可能意味着配置错误（打错了端口），盲重试不一定有意义。宁可**逐个点名**，
+让每次放宽都是一次显式决定，与 `ALLOWED_FIELD_NAMES` 的取向一致。
+
 ## 与 A5 的关系
 
 A5 已经把 `retryable` 落进 `subagent_runs`（迁移 0006）。本模块是**它的判定来源**：runner 不再自己
@@ -35,6 +56,9 @@ CODE_BUDGET_EXCEEDED = "budget_exceeded"
 CODE_CONTEXT_OVERFLOW = "context_overflow"
 CODE_PROVIDER_RETRY = "provider_retry"
 CODE_TIMEOUT = "timeout"
+# 连接重置是**独立身份**而不是 `unknown` 的一种：它是我们有因果解释的瞬时故障（对端把已建立的
+# 连接打断了），重试的依据是那条解释，而不是"未知大概没关系"。详见模块文档同名小节。
+CODE_CONNECTION_RESET = "connection_reset"
 CODE_TOOL_FAILURE = "tool_failure"
 CODE_INVALID_INPUT = "invalid_input"
 CODE_NOT_FOUND = "not_found"
@@ -46,6 +70,7 @@ ERROR_CODES: tuple[str, ...] = (
     CODE_CONTEXT_OVERFLOW,
     CODE_PROVIDER_RETRY,
     CODE_TIMEOUT,
+    CODE_CONNECTION_RESET,
     CODE_TOOL_FAILURE,
     CODE_INVALID_INPUT,
     CODE_NOT_FOUND,
@@ -58,6 +83,7 @@ RETRYABLE_CODES: frozenset[str] = frozenset(
         CODE_CONTEXT_OVERFLOW,  # 压缩之后可重试
         CODE_PROVIDER_RETRY,  # provider 明确说了"稍后再来"
         CODE_TIMEOUT,  # 常是偶发（上游挂起 / 排队）
+        CODE_CONNECTION_RESET,  # 对端掐断了已建立的连接 —— 原样重发通常就过
     }
 )
 
@@ -81,9 +107,14 @@ def _is_tool_error(exc: BaseException) -> bool:
 def classify_error(exc: BaseException | None) -> tuple[str, bool]:
     """把异常映射成 `(error_code, retryable)`。`None` 视为未知（**不重试**）。
 
-    顺序有意义：先判**最具体**的（取消 > 预算 > 溢出 > provider > 工具），再落未知。
+    顺序有意义：先判**最具体**的（取消 > 预算 > 溢出 > provider > 工具 > 超时 > 连接重置），
+    再落未知。
     `context_overflow` 放在 provider 重试之前，因为溢出是 provider 重试的**特例**——
     它的处置不同（要先压缩，而不是原样重发）。
+
+    `connection_reset` 摆在**倒数第二**（unknown 之前）：上面每一条都比它更精确 —— 它若是被取消、
+    超预算、溢出、provider 明确要求稍后再来、工具报错或超时，那就该按那些处置，不该被这里的
+    "重发即可"盖掉。同时它又必须早于 `unknown`，否则这个码永远拿不到。
     """
     if exc is None:
         return CODE_UNKNOWN, False
@@ -119,6 +150,12 @@ def classify_error(exc: BaseException | None) -> tuple[str, bool]:
     if isinstance(exc, (ValueError, TypeError, KeyError)):
         # 任务本身有问题（空任务 / 参数不合法）——重试无意义
         return CODE_INVALID_INPUT, False
+
+    # 连接被对端打断（进程重启 / 空闲连接被中间设备掐断 / 子进程管道先关）：典型的瞬时故障。
+    # 收的**只有**这两种具体类型，`ConnectionError` 家族其余成员（如 `ConnectionRefusedError`）
+    # 仍落 unknown —— 它们可能意味着配置错误，盲重试不一定有意义。理由见模块文档同名小节。
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError)):
+        return CODE_CONNECTION_RESET, True
 
     return CODE_UNKNOWN, False
 
@@ -205,6 +242,7 @@ def format_outcome(outcome: SubagentOutcome) -> str:
 __all__ = [
     "CODE_BUDGET_EXCEEDED",
     "CODE_CANCELLED",
+    "CODE_CONNECTION_RESET",
     "CODE_CONTEXT_OVERFLOW",
     "CODE_INVALID_INPUT",
     "CODE_NOT_FOUND",
