@@ -125,6 +125,26 @@ frontend-vue/electron/
 - W4 不写 `main.cjs` / `preload.cjs` / `config.cjs` / `shared.cjs`。
 - 两边如需新增共享常量，先加到本文件 §3，再各自实现。
 
+### 3.1 已冻结的共享常量
+
+`frontend-vue/electron/shared.cjs`：
+
+- `API_URL_ARG_PREFIX = '--chiron-api-url='`
+- `MODE_ARG_PREFIX = '--chiron-mode='`
+- `PARTITION_PREFIX = 'persist:chiron-'`；`partitionFor(mode)` 返回
+  `persist:chiron-local` / `persist:chiron-cloud`
+
+`config.cjs::readDeviceSettings()` 额外返回两个**派生、不落盘**字段：
+`needsMigration`、`modeChosen`。
+
+本地后端环境变量（`components.cjs` → `desktop-local`）：
+
+- `CHIRON_DATA_DIR`：数据目录（默认 `userData/local`）
+- `CHIRON_PORT`：监听端口（0 = 随机）
+- `CHIRON_DEVICE_TOKEN`：本地设备 token
+- `CHIRON_INFERENCE_PROXY`：主进程推理代理地址
+- `CHIRON_PYTHON`：可选，指定 Python 解释器
+
 ## 4. 本地后端（desktop-local）
 
 第一批只建骨架与 P0 验证，不迁移业务代码。
