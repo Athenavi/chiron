@@ -1,0 +1,58 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chiron-desktop-local"
+version = "0.1.0"
+description = "Chiron 桌面端本地 core 后端（骨架 / P0 存储验证）"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+  # Web
+  "fastapi>=0.115",
+  "uvicorn>=0.30",
+  "pydantic>=2.7",
+  "pydantic-settings>=2.3",
+  # 存储：asyncpg 给应用层异步访问，embedded-postgres 负责本机实例
+  "asyncpg>=0.29",
+  "redis>=5.0",
+  "embedded-postgres>=2.0",
+  "fakeredis>=2.23",
+  # 迁移：复用仓库根 alembic.ini / migrations/。**env.py 自身**还 import SQLAlchemy 与
+  # python-dotenv，而 alembic 走 psycopg2 方言，故这三项是 P0 第 1 项的硬依赖。
+  "alembic>=1.13",
+  "SQLAlchemy>=2.0",
+  "psycopg2-binary>=2.9",
+  "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "ruff>=0.6",
+  "pytest>=8.0",
+  "pytest-asyncio>=0.23",
+  # fastapi.testclient 的传输层依赖（TestClient 需要 httpx）
+  "httpx>=0.27",
+]
+
+[project.scripts]
+chiron-local = "app.main:main"
+
+[tool.setuptools.packages.find]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+minversion = "8.0"
+testpaths = ["tests"]
+asyncio_mode = "auto"
+addopts = "-ra"
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+src = ["app", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B"]
+ignore = ["E501"]
