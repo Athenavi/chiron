@@ -35,7 +35,16 @@ const {
   saveMode,
   probe,
 } = require('./config.cjs')
-const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX, DEFAULT_DEV_URL, partitionFor } = require('./shared.cjs')
+const shared = require('./shared.cjs')
+const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX, DEFAULT_DEV_URL, partitionFor } = shared
+/**
+ * 本地设备 token 的注入前缀（`--chiron-device-token=<token>`）。
+ *
+ * 首选 shared.cjs 里的同名常量（契约 §3.1 要求共享常量集中在那里），本 worktree 没有
+ * 改 shared.cjs 的授权，所以缺失时用这里的兜底字面量 —— preload.cjs 用同一套写法，
+ * 两边只要有一处把常量搬到 shared.cjs 就会同时生效。
+ */
+const DEVICE_TOKEN_ARG_PREFIX = shared.DEVICE_TOKEN_ARG_PREFIX || '--chiron-device-token='
 const { readToken, writeToken, clearToken } = require('./token-store.cjs')
 const { switchMode } = require('./mode-switch.cjs')
 
@@ -57,8 +66,12 @@ let forceSetup = false
 /** 本次运行的运行模式（whenReady 时定一次；切换模式一律走重启） */
 let currentMode = 'local'
 
-/** 本地后端状态：{ ok, baseUrl, reason, message }，由 startLocalBackend 填充 */
-let localBackend = { ok: false, baseUrl: '', reason: 'not-started', message: '' }
+/**
+ * 本地后端状态：{ ok, baseUrl, token, dataDir, reason, message }，由 startLocalBackend 填充。
+ * token 是 core 的设备 token（components.startCore 的返回值），只注入给 preload，
+ * 不写日志 —— 日志会随用户反馈外传。
+ */
+let localBackend = { ok: false, baseUrl: '', token: '', dataDir: '', reason: 'not-started', message: '' }
 
 /** 已经注册过 webRequest / 权限 / 下载监听的 session（重建窗口时不能重复注册） */
 const configuredSessions = new WeakSet()
@@ -199,6 +212,8 @@ async function startLocalBackend() {
     return {
       ok: false,
       baseUrl: '',
+      token: '',
+      dataDir: '',
       reason: 'components-missing',
       message: '本地组件未随此版本安装',
     }
@@ -209,6 +224,8 @@ async function startLocalBackend() {
     return {
       ok: false,
       baseUrl: '',
+      token: '',
+      dataDir: '',
       reason: 'api-missing',
       message: '本地组件模块没有提供启动接口',
     }
@@ -218,15 +235,19 @@ async function startLocalBackend() {
     const baseUrl =
       typeof started === 'string' ? started : started?.baseUrl || started?.apiUrl || ''
     const dataDir = (started && typeof started === 'object' && started.dataDir) || ''
+    // core 的握手结果里有设备 token（契约 §3.1 的 CHIRON_DEVICE_TOKEN 一侧）；
+    // 拿不到就让 token 为空串，preload 会暴露空串，页面据此走 /v1/auth/session。
+    const token = (started && typeof started === 'object' && started.token) || ''
     if (!baseUrl) {
-      return { ok: false, baseUrl: '', dataDir, reason: 'no-url', message: '本地后端未返回服务地址' }
+      return { ok: false, baseUrl: '', token, dataDir, reason: 'no-url', message: '本地后端未返回服务地址' }
     }
-    logMain('info', `local backend ready at ${baseUrl}`)
-    return { ok: true, baseUrl, dataDir, reason: '', message: '' }
+    // 只记地址与"有没有 token"，token 本身绝不进日志
+    logMain('info', `local backend ready at ${baseUrl} (device token: ${token ? 'injected' : 'absent'})`)
+    return { ok: true, baseUrl, token, dataDir, reason: '', message: '' }
   } catch (err) {
     const message = err?.message || String(err)
     logMain('error', `local backend start failed: ${message}`)
-    return { ok: false, baseUrl: '', reason: 'start-failed', message }
+    return { ok: false, baseUrl: '', token: '', dataDir: '', reason: 'start-failed', message }
   }
 }
 
@@ -479,6 +500,16 @@ function createWindow() {
   // 配置页与本机错误页都是单栏布局，主界面才用大窗口
   const isDialog = target !== 'app'
 
+  // 每次创建窗口现传模式 / 地址 / token：渲染进程的 process.env 是启动时继承的，
+  // 用户保存新地址后旧 env 不会更新。
+  const additionalArguments = [`${MODE_ARG_PREFIX}${currentMode}`]
+  if (apiUrl) additionalArguments.push(`${API_URL_ARG_PREFIX}${apiUrl}`)
+  // 本地模式的设备 token 由 core 的握手结果提供（components.startCore 的 token）：
+  // 只有 local 且确实拿到 token 才注入，cloud 一律不注入，避免把本地凭据带进云端分区。
+  if (currentMode === 'local' && localBackend.token) {
+    additionalArguments.push(`${DEVICE_TOKEN_ARG_PREFIX}${localBackend.token}`)
+  }
+
   mainWindow = new BrowserWindow({
     width: isDialog ? 520 : 1440,
     height: isDialog ? 620 : 900,
@@ -498,12 +529,7 @@ function createWindow() {
       // preload 要读 process.argv / versions，故不开 sandbox；
       // contextIsolation 已经隔离了页面与 preload 的执行上下文。
       sandbox: false,
-      // 每次创建窗口现传模式与地址：渲染进程的 process.env 是启动时继承的，
-      // 用户保存新地址后旧 env 不会更新。
-      additionalArguments: [
-        `${MODE_ARG_PREFIX}${currentMode}`,
-        ...(apiUrl ? [`${API_URL_ARG_PREFIX}${apiUrl}`] : []),
-      ],
+      additionalArguments,
     },
   })
 
@@ -852,3 +878,9 @@ if (!gotLock) {
     })
   })
 }
+
+/**
+ * 仅供诊断脚本 / 单测引用注入前缀，避免第二处再抄一遍字面量。
+ * `electron .` 加载主进程入口时不看这个导出，写在这里无副作用。
+ */
+module.exports = { DEVICE_TOKEN_ARG_PREFIX }

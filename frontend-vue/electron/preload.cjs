@@ -5,7 +5,15 @@
  * 页面通过 `window.chironDesktop` 读取（契约见 docs/desktop-local/contracts.md §2）。
  */
 const { contextBridge, ipcRenderer } = require('electron')
-const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX } = require('./shared.cjs')
+const shared = require('./shared.cjs')
+const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX } = shared
+
+/**
+ * 设备 token 的注入前缀，必须与 main.cjs 的 DEVICE_TOKEN_ARG_PREFIX 完全一致。
+ * 两处都先读 shared.cjs（契约 §3.1 要求共享常量集中在那里），读不到才用同一个
+ * 兜底字面量 —— 这样把常量搬进 shared.cjs 时两边会同时生效，不会单边漂移。
+ */
+const DEVICE_TOKEN_ARG_PREFIX = shared.DEVICE_TOKEN_ARG_PREFIX || '--chiron-device-token='
 
 /**
  * 服务地址从 `additionalArguments` 读取（主进程创建窗口时注入）。
@@ -27,6 +35,22 @@ const rawMode = (
 ).toLowerCase()
 const mode = rawMode === 'local' || rawMode === 'cloud' ? rawMode : 'cloud'
 
+/**
+ * 本地设备 token：local 模式下由主进程注入（core 的握手结果），cloud 模式不注入。
+ *
+ * 为什么可以放在 argv 里：它不是云端的用户密码，只是本机 core 认的"这是本机主人"的
+ * 设备标识（desktop-local/app/api/auth.py）。云端 token 仍走 safeStorage + IPC
+ * （getToken/saveToken/clearToken），两条路径互不影响。
+ * argv 缺失时回落到 process.env（只对开发态 `CHIRON_DEVICE_TOKEN=... electron .` 有效）。
+ */
+const deviceTokenFromArgv = process.argv.find(a => a.startsWith(DEVICE_TOKEN_ARG_PREFIX))
+const deviceToken = deviceTokenFromArgv
+  ? deviceTokenFromArgv.slice(DEVICE_TOKEN_ARG_PREFIX.length)
+  : // env 只在 local 模式回退：cloud 模式恒为空串，别把本地凭据带进另一个分区
+    mode === 'local'
+    ? process.env.CHIRON_DEVICE_TOKEN || ''
+    : ''
+
 // 主进程用 safeStorage 加密保存；读取是异步的（Electron 45 的 async API），
 // 由 store 在首屏挂载前 await，避免首屏请求缺少 Bearer token。
 contextBridge.exposeInMainWorld('chironDesktop', {
@@ -40,6 +64,12 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   apiUrl,
   /** 'local' | 'cloud'：当前运行模式（真相在主进程 config.json） */
   mode,
+  /**
+   * 本地设备 token（只读）：local 模式由主进程注入，cloud 模式恒为空串。
+   * 页面在 local 模式下可以拿它做 `Authorization: Bearer`；也可以在空串时调
+   * POST /v1/auth/session 从 core 换一个（第一批 auth disabled，两者都能用）。
+   */
+  deviceToken,
   isDesktop: true,
 
   /** 读取设备级设置（模式 / apiUrl / 本地数据目录 / UI / 迁移状态） */
