@@ -10,9 +10,11 @@ Redis 不可用、deadline 进 DLQ。任一跳丢掉，跑完的子 Agent 就成
 from __future__ import annotations
 
 import datetime
+from types import SimpleNamespace
 
 import pytest
 
+from app.agent.runtime_types import AgentTask
 from app.subagent import reporting
 
 NOW = datetime.datetime(2026, 9, 23, 15, 30, 0)
@@ -163,3 +165,179 @@ def test_formatted_block_is_marked_untrusted():
 
 def test_empty_reports_produce_no_block():
     assert reporting.format_reports([]) == ""
+
+
+# ── 落点：独立 system 消息，**不**拼进 `system_prompt` ──────────────────────
+#
+# 回归背景：`app/main.py` 曾把汇报块直接写进 `task.system_prompt`
+# （`f"{task.system_prompt}\n\n{block}"`）—— 与 `runtime_types.AgentTask.memory_context`
+# 自己写下的缓存原则直接矛盾：`system_prompt` 是逐字稳定的前缀，各家 provider 的前缀缓存
+# 靠它命中，把每轮都可能变的汇报拼进去会让**整段前缀**的缓存一起失效。
+#
+# 两条判据缺一不可：
+#   ① `system_prompt` **不再**包含报告内容（前缀逐字稳定）；
+#   ② 报告**仍然可达** —— 作为一条独立的 system 消息插在稳定前缀之后。
+# 只测 ① 会退化成"删掉注入也能过"的假绿。
+
+REPORT_SUMMARY = "结论：改动没问题"
+
+
+def _fake_reports(monkeypatch, items):
+    """替换取回函数，让注入用例不碰 Redis / DB。"""
+
+    async def _fake(**kwargs):
+        return items
+
+    monkeypatch.setattr(reporting, "consume_pending_reports", _fake)
+
+
+def _task(system_prompt: str = "SYS PROMPT 逐字稳定") -> AgentTask:
+    return AgentTask(
+        id="t1",
+        tenant_id=1,
+        user_id="u1",
+        session_id="s1",
+        content="hi",
+        system_prompt=system_prompt,
+    )
+
+
+@pytest.mark.asyncio
+async def test_system_prompt_is_not_polluted_by_reports(monkeypatch):
+    """① `system_prompt` 必须逐字不变 —— 前缀缓存靠它命中。"""
+    from app.main import _inject_subagent_reports
+
+    _fake_reports(monkeypatch, [
+        {"run_id": "rs_1", "status": "completed", "profile": "reviewer",
+         "summary": REPORT_SUMMARY, "steps": 3},
+    ])
+    task = _task()
+
+    await _inject_subagent_reports(task)
+
+    assert task.system_prompt == "SYS PROMPT 逐字稳定", "报告**不许**混进稳定前缀"
+    assert REPORT_SUMMARY not in task.system_prompt
+    assert "<subagent-reports>" not in task.system_prompt
+    assert task.report_context, "报告应落进独立字段，而不是被丢掉"
+
+
+@pytest.mark.asyncio
+async def test_reports_are_still_reachable_as_own_system_message(monkeypatch):
+    """② 报告仍然送达 —— 由 `_apply_system_prefix` 定形成独立 system 消息。"""
+    from app.agent.runtime import _apply_system_prefix
+    from app.main import _inject_subagent_reports
+
+    _fake_reports(monkeypatch, [
+        {"run_id": "rs_1", "status": "completed", "profile": "reviewer",
+         "summary": REPORT_SUMMARY, "steps": 3},
+    ])
+    task = _task()
+
+    await _inject_subagent_reports(task)
+    messages = _apply_system_prefix([{"role": "user", "content": "hi"}], task)
+
+    assert messages[0]["role"] == "system"
+    assert messages[0]["content"] == "SYS PROMPT 逐字稳定", "稳定前缀逐字不变"
+    assert messages[0].get("cache_breakpoint") is True, "断点仍标在稳定前缀上"
+    bodies = [m["content"] for m in messages if m["role"] == "system"]
+    assert len(bodies) == 2, "前缀 + 报告，各自独立"
+    assert "<subagent-reports>" in bodies[1] and REPORT_SUMMARY in bodies[1]
+    assert messages[-1] == {"role": "user", "content": "hi"}
+
+
+@pytest.mark.asyncio
+async def test_prefix_stays_identical_across_changing_reports(monkeypatch):
+    """两轮不同的汇报 ⇒ 第一条 system 消息**逐字相同**（这才是缓存能命中的条件）。"""
+    from app.agent.runtime import _apply_system_prefix
+    from app.main import _inject_subagent_reports
+
+    _fake_reports(monkeypatch, [
+        {"run_id": "rs_1", "status": "completed", "summary": "第一轮结论", "steps": 1},
+    ])
+    first_task = _task()
+    await _inject_subagent_reports(first_task)
+    first = _apply_system_prefix([{"role": "user", "content": "hi"}], first_task)
+
+    _fake_reports(monkeypatch, [
+        {"run_id": "rs_2", "status": "failed", "summary": "第二轮完全不同的结论",
+         "steps": 2, "error": "provider 400"},
+    ])
+    second_task = _task()
+    await _inject_subagent_reports(second_task)
+    second = _apply_system_prefix([{"role": "user", "content": "hi"}], second_task)
+
+    assert first[0] == second[0], "前缀一变，整段提示词缓存就白攒了"
+
+
+@pytest.mark.asyncio
+async def test_no_reports_changes_nothing(monkeypatch):
+    """没有待汇报条目 ⇒ 零行为变化（不多出一条 system 消息）。"""
+    from app.agent.runtime import _apply_system_prefix
+    from app.main import _inject_subagent_reports
+
+    _fake_reports(monkeypatch, [])
+    task = _task()
+
+    await _inject_subagent_reports(task)
+    messages = _apply_system_prefix([{"role": "user", "content": "hi"}], task)
+
+    assert task.report_context == ""
+    assert [m["role"] for m in messages] == ["system", "user"]
+
+
+def test_report_context_is_not_frozen_into_checkpoint():
+    """`report_context` **不进** checkpoint 快照 —— 见 `AgentTask.report_context` 的说明。
+
+    为什么必须守住：汇报是"这一轮取回一次的增量"，游标取回后已经推进。若把它冻结进快照，
+    续跑时会把**同一批旧汇报**当成新事实再喂一遍（而游标早已越过它们）；同时它每轮都变，
+    冻进快照也让"续跑现场"不再是可复现的稳定前缀。
+    """
+    from app.agent.runtime import _resume_task_meta
+
+    task = _task()
+    task.report_context = "<subagent-reports>旧结论</subagent-reports>"
+    task.memory_context = "记忆块"
+    task.hook_contexts = ["hook 块"]
+
+    meta = _resume_task_meta(task)
+
+    assert "report_context" not in meta, "汇报是增量，续跑应重新取，不该冻结进快照"
+    assert "memory_context" not in meta and "hook_contexts" not in meta, "同款逐轮内容一律不入快照"
+    # 快照里该有的仍在（否则续跑会丢掉 persona）
+    assert meta["system_prompt"] == "SYS PROMPT 逐字稳定"
+
+
+@pytest.mark.asyncio
+async def test_injection_failure_is_visible_but_does_not_break_the_turn(monkeypatch, caplog):
+    """失败要**显式不静默**（`vendor/规划.md` §1.3）：不抛，但必须留下 warning。"""
+    from app.main import _inject_subagent_reports
+
+    async def _boom(**kwargs):
+        raise RuntimeError("db down")
+
+    monkeypatch.setattr(reporting, "consume_pending_reports", _boom)
+    task = _task()
+
+    with caplog.at_level("WARNING"):
+        await _inject_subagent_reports(task)  # 不抛
+
+    assert task.report_context == "" and task.system_prompt == "SYS PROMPT 逐字稳定"
+    assert any(
+        "subagent reports injection failed" in r.getMessage() for r in caplog.records
+    ), "降级必须可见，不能静默"
+
+
+@pytest.mark.asyncio
+async def test_non_agent_task_is_not_crashed(monkeypatch):
+    """不是 `AgentTask`（没有可挂字段）时按"静默不注入"处理，不猜也不抛。"""
+    from app.main import _inject_subagent_reports
+
+    _fake_reports(monkeypatch, [
+        {"run_id": "rs_1", "status": "completed", "summary": REPORT_SUMMARY, "steps": 1},
+    ])
+    other = SimpleNamespace(session_id="s1", tenant_id=1, user_id="u1")
+
+    await _inject_subagent_reports(other)
+
+    assert not hasattr(other, "report_context"), "不该凭空给别的对象加属性"
+    assert not hasattr(other, "system_prompt")

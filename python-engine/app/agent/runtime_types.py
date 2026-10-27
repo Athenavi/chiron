@@ -58,6 +58,19 @@ class AgentTask:
     #: 插在记忆之后（`_apply_system_prefix` 是 system 段的唯一定形点）。
     #: 默认空列表 ⇒ 不开 `hooks_allow_context_injection` 时它永远是空的（零行为变化）。
     hook_contexts: list[str] = field(default_factory=list)
+    #: 子 Agent 的**主动汇报**块（`app/subagent/reporting.py::format_reports` 的产物）。
+    #: 与 `memory_context` 同款处置：**不拼进 `system_prompt`**，而是作为**独立的 system
+    #: 消息**插在稳定前缀之后（`_apply_system_prefix` 是 system 段的唯一定形点）。
+    #:
+    #: 为什么必须如此：汇报内容是"自上次交互以来结束的子任务"，**每轮都会变**；
+    #: 而 `system_prompt`（系统提示 + 技能目录）是逐字稳定的前缀，各家 provider 的
+    #: 前缀缓存（OpenAI/DeepSeek 自动、Anthropic 显式）都靠它命中。把它拼进前缀，
+    #: 等于每轮换一次前缀 —— **整段缓存一起失效**（旧实现在 `app/main.py` 里正是这么做的，
+    #: 与本文件这条原则直接矛盾）。
+    #:
+    #: 默认空串 ⇒ 没有待汇报条目时零行为变化；它**不进** checkpoint 快照
+    #: （`_resume_task_meta` 不含它）—— 汇报是"这一轮取回一次的增量"，续跑应重新取。
+    report_context: str = ""
     #: 本轮用户消息附带的**媒体库附件**（`{id,name,mime_type,url,is_image}`，由 Go 网关
     #: 从请求体透传）。引擎侧把它们变成模型可见内容：图片→`image_url` 块（尺寸/格式走
     #: `app.media.image_fit`、能力判定走 `app.agent.model_capabilities`）；docx/pdf→文本

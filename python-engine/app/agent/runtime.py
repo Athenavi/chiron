@@ -333,6 +333,14 @@ def _apply_system_prefix(
     hook_context = render_hook_context(getattr(task, "hook_contexts", None))
     if hook_context:
         prefix.append(_normalize_msg(role="system", content=hook_context))
+    # 子 Agent 的主动汇报（`app/subagent/reporting.py`）。与记忆/hook 上下文同款处置 ——
+    # **独立成 system 消息**，不拼进 `system_prompt`：汇报是"自上次交互以来结束的子任务"，
+    # 每轮都可能不同，拼进稳定前缀会让整段前缀缓存失效（见 `AgentTask.memory_context`
+    # 那条原则；`_apply_system_prefix` 是 system 段的唯一定形点，所以只改这一处就够）。
+    # 空串 ⇒ 无待汇报条目 ⇒ 这里零行为变化。
+    report_context = getattr(task, "report_context", "") or ""
+    if report_context:
+        prefix.append(_normalize_msg(role="system", content=report_context))
     return prefix + rest
 
 

@@ -1619,6 +1619,70 @@ async def _workflow_context_stream(
         yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
 
 
+async def _inject_subagent_reports(task: Any) -> None:
+    """把"自上次交互以来结束的后台子 Agent"挂到本轮 task 上（**永不抛**）。
+
+    为什么不能只靠 followup：那条链是"队列 → 网关 → 新一轮"，每一跳都能静默丢
+    （速率上限 / 级联保护 / Redis 不可用 / deadline 进 DLQ）。这里改走**查询**：
+    终态在 DB（唯一权威），父会话下一轮开始时按游标增量取回 —— 即使 followup 全丢，
+    结论也不会消失。详见 `app/subagent/reporting.py`。
+
+    报告的**落点是 `task.report_context`，不是 `task.system_prompt`**。依据
+    `app/agent/runtime_types.py::AgentTask.memory_context` 那条原则：`system_prompt`
+    （系统提示 + 技能目录）是逐字稳定的前缀，各家 provider 的前缀缓存都靠它命中；
+    "自上次交互以来结束的子任务"**每轮都会变**，拼进前缀会让**整段前缀**的缓存一起失效。
+    旧实现正是直接 `task.system_prompt = f"{task.system_prompt}\n\n{block}"`，与本仓库
+    自己写下的缓存原则直接矛盾。
+
+    `report_context` 由 `runtime._apply_system_prefix`（system 段的**唯一定形点**）作为
+    一条**独立的 system 消息**插在稳定前缀之后 —— 与记忆、hook 上下文同款处置；因此
+    session cache 分支（生产路径）同样生效，那条分支不经过 `_build_messages`。
+
+    失败绝不影响本轮（报告是增强，不是前提），但必须**可见**（记 warning，不静默降级）。
+    """
+    try:
+        from app.agent.runtime_types import AgentTask
+        from app.subagent.reporting import consume_pending_reports, format_reports
+        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
+
+        if not isinstance(task, AgentTask):
+            # 不是 AgentTask ⇒ 没有可挂的字段。与 `app/hooks/inject.py::collect` 同款处置：
+            # **不猜、不抛**（凭空给别的对象加属性会让"注入"变成静默失败）。
+            logger.debug(
+                "subagent reports: task is %s, not AgentTask; skipped",
+                type(task).__name__,
+            )
+            return
+
+        reports = await consume_pending_reports(
+            session_id=getattr(task, "session_id", "") or "",
+            # task.tenant_id 已是 int：getattr 默认值取 0 与属性类型一致，
+            # 再经 to_tenant_int 收口（缺失/不可解析 → 0），供 smallint 列使用。
+            tenant_id=to_tenant_int(getattr(task, "tenant_id", 0)),
+            user_id=getattr(task, "user_id", "") or "",
+        )
+        if not reports:
+            return
+        block = format_reports(reports)
+        if not block:
+            # 有条目却渲染出空块 ⇒ 是上游形态变了，不是"没有要报的"。显式说出来。
+            logger.warning(
+                "subagent reports: %d item(s) rendered to an empty block; skipped",
+                len(reports),
+            )
+            return
+        # 用现有值做前缀拼接而非覆盖：将来若有多处产出汇报块，不该互相吞掉
+        # （当前只有这一处调用方）。
+        current = task.report_context
+        task.report_context = f"{current}\n\n{block}" if current else block
+        logger.info(
+            "subagent reports queued: session=%s count=%d",
+            task.session_id, len(reports),
+        )
+    except Exception as exc:  # noqa: BLE001 - 注入失败不阻断对话
+        logger.warning("subagent reports injection failed: %s", str(exc)[:160])
+
+
 async def agent_submit(
     request: Request,
     gateway: Any = Depends(get_gateway),
@@ -1771,28 +1835,7 @@ async def agent_submit(
     # 结论也不会消失。详见 app/subagent/reporting.py。
     #
     # 注入失败绝不影响本轮（报告是增强，不是前提）；但必须可见（记 warning）。
-    try:
-        from app.subagent.reporting import consume_pending_reports, format_reports
-        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
-
-        reports = await consume_pending_reports(
-            session_id=getattr(task, "session_id", "") or "",
-            # task.tenant_id 已是 int：getattr 默认值取 0 与属性类型一致，
-            # 再经 to_tenant_int 收口（缺失/不可解析 → 0），供 smallint 列使用。
-            tenant_id=to_tenant_int(getattr(task, "tenant_id", 0)),
-            user_id=getattr(task, "user_id", "") or "",
-        )
-        if reports:
-            block = format_reports(reports)
-            task.system_prompt = (
-                f"{task.system_prompt}\n\n{block}" if task.system_prompt else block
-            )
-            logger.info(
-                "subagent reports injected: session=%s count=%d",
-                getattr(task, "session_id", ""), len(reports),
-            )
-    except Exception as exc:  # noqa: BLE001 - 注入失败不阻断对话
-        logger.warning("subagent reports injection failed: %s", str(exc)[:160])
+    await _inject_subagent_reports(task)
 
     # ── 运行模式（常规/极简/PTC/创造）：前端下拉 → body.mode 或 llm_config.mode ──
     # runtime 内 get_mode_config 兜底未知值回退 NORMAL
