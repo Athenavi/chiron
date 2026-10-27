@@ -6,7 +6,7 @@
  * 页面（/profile）与头像弹窗共用本组件 —— 两套入口一套实现，避免各自漂移。
  * 组件本身不含容器（无 header、无尺寸），由调用方决定是页面还是弹窗。
  */
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted, computed } from 'vue'
 import { useRoute } from 'vue-router'
 import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider } from 'ant-design-vue'
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
@@ -37,6 +37,7 @@ import { useSmsCountdown } from '../../composables/useSmsCountdown'
 import { useSpeech } from '../../composables/useSpeech'
 import { ACCENT_PRESETS, DEFAULT_ACCENT } from '../../utils/accentPresets'
 import { errorStatus, serverErrorMessage } from '../../utils/apiError'
+import { tallyCache, scheduleTally } from '../../utils/tallyCache'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -75,22 +76,60 @@ const bindable = ref<SsoPublicProvider[]>([])
 const bindingsLoading = ref(false)
 const unbinding = ref('')
 
+/**
+ * 三方绑定的两个请求合成一份缓存值（它们只一起用于渲染同一个区块）。
+ *
+ * **不缓存**：本函数被解绑（`handleUnbind`）在数据变更后直接调用 —— 那条路径要的是
+ * "解绑完立刻看到新列表"，走缓存会显示刚解绑的那一行还在。缓存只接在 `onMounted` 上
+ * （见 `openBindings`），两者共用同一个 fetcher。
+ */
+async function fetchBindings(): Promise<{ ids: UserIdentity[]; providers: SsoPublicProvider[] }> {
+  const [ids, providers] = await Promise.all([
+    listIdentities(),
+    // 可绑定列表取不到不算失败：绑不绑第三方不该被"租户没配 SSO"挡住
+    listPublicSsoProviders().catch(() => [] as SsoPublicProvider[]),
+  ])
+  return { ids, providers }
+}
+
+/** 把一份绑定结果落到视图上（已绑定的 provider 不再出现在可绑定列表） */
+function applyBindings(ids: UserIdentity[], providers: SsoPublicProvider[]) {
+  identities.value = ids
+  const boundNames = new Set(ids.map(i => i.provider_name))
+  bindable.value = providers.filter(p => !boundNames.has(p.display_name) && !boundNames.has(p.name))
+}
+
+/** 数据变更后 / 失败重试用：**绕过缓存**重新取，并把新值写回缓存 */
 async function loadBindings() {
   bindingsLoading.value = true
   try {
-    const [ids, providers] = await Promise.all([
-      listIdentities(),
-      listPublicSsoProviders().catch(() => [] as SsoPublicProvider[]),
-    ])
-    identities.value = ids
-    // 已绑定的 provider 不再出现在可绑定列表
-    const boundNames = new Set(ids.map(i => i.provider_name))
-    bindable.value = providers.filter(p => !boundNames.has(p.display_name) && !boundNames.has(p.name))
+    const { ids, providers } = await tallyCache.load('identities', fetchBindings, { force: true })
+    applyBindings(ids, providers)
   } catch (e) {
     message.error(serverErrorMessage(e, t('errors.failed_to_load_binding_info')))
   } finally {
     bindingsLoading.value = false
   }
+}
+
+/** 面板打开时用：延后 + 命中缓存即渲染（成本来源见 `onMounted` 处说明） */
+function openBindings() {
+  return scheduleTally(
+    tallyCache,
+    'identities',
+    fetchBindings,
+    ({ ids, providers }) => {
+      applyBindings(ids, providers)
+      bindingsLoading.value = false
+    },
+    {
+      onStart: () => { bindingsLoading.value = true },
+      onError: (e) => {
+        bindingsLoading.value = false
+        message.error(serverErrorMessage(e, t('errors.failed_to_load_binding_info')))
+      },
+    },
+  )
 }
 
 function startBind(providerId: string) {
@@ -289,16 +328,41 @@ const shares = ref<ShareItem[]>([])
 const sharesLoading = ref(false)
 const revoking = ref('')
 
+async function fetchShares(): Promise<ShareItem[]> {
+  const { data } = await api.get('/v1/shares')
+  return data?.data?.items ?? []
+}
+
+/** 数据变更后 / 手动刷新：绕过缓存重取（force）并把新值写回缓存 */
 async function loadShares() {
   sharesLoading.value = true
   try {
-    const { data } = await api.get('/v1/shares')
-    shares.value = data?.data?.items ?? []
+    shares.value = await tallyCache.load('shares', fetchShares, { force: true })
   } catch (e) {
     message.error(serverErrorMessage(e, t('errors.failed_to_load_shares')))
   } finally {
     sharesLoading.value = false
   }
+}
+
+/** 面板打开时用：延后 + 命中缓存即渲染 */
+function openShares() {
+  return scheduleTally(
+    tallyCache,
+    'shares',
+    fetchShares,
+    (items) => {
+      shares.value = items
+      sharesLoading.value = false
+    },
+    {
+      onStart: () => { sharesLoading.value = true },
+      onError: (e) => {
+        sharesLoading.value = false
+        message.error(serverErrorMessage(e, t('errors.failed_to_load_shares')))
+      },
+    },
+  )
 }
 
 async function handleRevokeShare(item: ShareItem) {
@@ -343,17 +407,42 @@ const selectedConvIds = ref<string[]>([])
 const exporting = ref(false)
 const deleting = ref(false)
 
+async function fetchConversations(): Promise<ConversationItem[]> {
+  const { data } = await api.get('/v1/conversations')
+  // 兼容 {items:[...]} 与直接数组两种返回形态
+  return data?.data?.items ?? data?.data ?? []
+}
+
+/** 数据变更后 / 手动刷新：绕过缓存（删完会话还显示旧列表才是最坏的） */
 async function loadConversations() {
   convLoading.value = true
   try {
-    const { data } = await api.get('/v1/conversations')
-    // 兼容 {items:[...]} 与直接数组两种返回形态
-    conversations.value = data?.data?.items ?? data?.data ?? []
+    conversations.value = await tallyCache.load('conversations', fetchConversations, { force: true })
   } catch (e) {
     message.error(serverErrorMessage(e, t('errors.failed_to_load_session_list')))
   } finally {
     convLoading.value = false
   }
+}
+
+/** 面板打开时用：延后 + 命中缓存即渲染 */
+function openConversations() {
+  return scheduleTally(
+    tallyCache,
+    'conversations',
+    fetchConversations,
+    (items) => {
+      conversations.value = items
+      convLoading.value = false
+    },
+    {
+      onStart: () => { convLoading.value = true },
+      onError: (e) => {
+        convLoading.value = false
+        message.error(serverErrorMessage(e, t('errors.failed_to_load_session_list')))
+      },
+    },
+  )
 }
 
 /** 导出用的消息行（`/v1/conversations/{id}` 的 messages[]）；字段都可能缺，渲染时逐项兜底 */
@@ -457,6 +546,9 @@ const selectedCount = computed(() => selectedConvIds.value.length)
 
 // ── 生命周期 ──
 
+// 延后中的统计请求：卸载时逐个取消，否则一个已经被关掉的弹窗还会在 1.5 秒后开口
+let cancelTally: Array<() => void> = []
+
 onMounted(async () => {
   if (authStore.user) {
     form.value.name = authStore.user.name || ''
@@ -470,10 +562,42 @@ onMounted(async () => {
   // 本地模式没有租户/三方绑定/短信/会话分享与会话列表接口（本地后端第一批没实现），
   // 不做这几次必然 501 的请求：与其弹一堆"本地模式暂不支持"，不如让这些云侧页签留空。
   if (deviceStore.isLocal()) return
-  loadBindings()
+
+  // 打开面板即触发的这几次只读请求，逐个按**成本**决定是否接进延后 + TTL 缓存：
+  //
+  // · `GET /v1/conversations`（列表）——**昂贵**，走缓存。`List` 之后是
+  //   `session.Manager.ListSessions`：`SELECT … FROM sessions WHERE user_id = $1
+  //   ORDER BY pinned DESC, updated_at DESC LIMIT $2`，**没有 `(user_id, updated_at)`
+  //   索引**（基线 0001 只建了 `ix_sessions_parent_session_id` / `ix_sessions_tag`），
+  //   也就是每个用户每一次都得对全表按 user_id 过滤再排序；再叠一次父会话标题批量查询
+  //   （`parentTitlesFor` → `ParentTitles`）。会话数越多的用户越慢，且它与用户是否真去
+  //   看「数据管理」页签完全无关。
+  // · `GET /v1/shares`（分享管理）——**昂贵**，走缓存。`ShareHandler.List` 是
+  //   `SELECT … FROM conversation_shares WHERE user_id = $1 AND revoked_at IS NULL
+  //   AND expires_at > NOW() ORDER BY created_at DESC LIMIT 200`，同样**没有 user_id 索引**
+  //   （基线只有 `conversation_shares_pkey`），扫完还要 `array_length` 聚合每行的消息数。
+  // · `GET /v1/auth/sso/identities`（三方绑定）——**昂贵**，走缓存：它 JOIN
+  //   `ent_user_identities` 与 `ent_oidc_providers` 且 `ent_user_identities` 上
+  //   **只有主键索引**（基线 0001 的索引清单里没有 user_id 上的任何索引），按 user_id 过滤即扫表。
+  //   与它打包的 `GET /v1/auth/sso/providers`（可绑定列表）是 `ent_oidc_providers` 按
+  //   `tenant_id` 的小查询、数量个位数，本身很便宜 —— 但它只随上面的身份列表一起用，
+  //   跟着同一份缓存值走，不额外发就是最优，不值得为它单独做一套。
+  //
+  // **明确排除**：`GET /v1/auth/sms/bind`（`loadPhone`）。`SmsHandler.GetBind` 是
+  //   `SELECT phone FROM users WHERE id = $1` —— 主键单行，是这批里最便宜的一个，
+  //   缓存它只会带来"刚绑定完还显示未绑定"的风险（而它必须随账户页签即时反映）。
+  //   所以它保持原样：打开面板即发、不延后、不缓存。
+  cancelTally = [
+    openBindings(),
+    openShares(),
+    openConversations(),
+  ]
   loadPhone()
-  loadShares()
-  loadConversations()
+})
+
+onUnmounted(() => {
+  cancelTally.forEach(cancel => cancel())
+  cancelTally = []
 })
 </script>
 
