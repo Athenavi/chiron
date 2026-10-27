@@ -242,5 +242,36 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - 不要在渲染进程暴露任意 `fs` / `require` / `ipcRenderer`。
 - 不要把用户 provider key 写入日志、SQLite、localStorage 或备份。
 - 不要默认删除 `userData/local/**`。
-- 不要实现“云端片段推理”端点（第二批再做）。
+- 云端片段推理端点见 §9（第二批已实现）。
 - 不要改 `internal/**`（Go）与 `frontend-vue/src/**` 之外的共享文件而不在本文件登记。
+
+## 9. 桌面片段推理端点（第二批）
+
+`POST /v1/desktop/infer`（引擎；用户 JWT 或 Go 网关代理身份）：
+
+```json
+{
+  "model": "gpt-4o-mini",
+  "messages": [{"role": "user", "content": "..."}],
+  "max_tokens": 2048,
+  "temperature": 0,
+  "response_format": {"type": "json_object"},
+  "request_id": "uuid"
+}
+```
+
+响应：
+
+```json
+{
+  "content": "...",
+  "usage": {"input_tokens": 0, "output_tokens": 0, "cached_tokens": 0},
+  "provider": "openai",
+  "model": "gpt-4o-mini"
+}
+```
+
+约束：只允许 `user` 角色与纯文本；`max_tokens <= 4096`；messages 总字符 `<= 2_000_000`；
+服务端不记录 messages/content。
+
+已知 TODO：网关缓存 key 尚未纳入 `response_format`（同 prompt 先文本后 JSON 可能命中错形状缓存）。

@@ -8,6 +8,8 @@
 const API_URL_ARG_PREFIX = '--chiron-api-url='
 /** 主进程创建窗口时用它把当前运行模式告诉 preload（契约 §2 的 window.chironDesktop.mode） */
 const MODE_ARG_PREFIX = '--chiron-mode='
+/** 主进程建窗时把本地 core 的设备 token 注入 preload（契约 §2 的 deviceToken） */
+const DEVICE_TOKEN_ARG_PREFIX = '--chiron-device-token='
 const DEFAULT_DEV_URL = 'http://localhost:5173'
 
 /**
@@ -24,6 +26,7 @@ function partitionFor(mode) {
 module.exports = {
   API_URL_ARG_PREFIX,
   MODE_ARG_PREFIX,
+  DEVICE_TOKEN_ARG_PREFIX,
   DEFAULT_DEV_URL,
   PARTITION_PREFIX,
   partitionFor,
