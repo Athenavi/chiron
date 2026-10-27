@@ -86,7 +86,12 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 .connectors .draft-connector { stroke: #3478f6; stroke-dasharray: 5 4; }
 .cards-layer { position: absolute; inset: 0; }
 .thread-card { position: absolute; display: grid; width: 310px; height: 276px; grid-template-rows: auto auto minmax(0, 1fr) auto; border: 1px solid #d8e0e8; border-radius: 7px; background: #fff; box-shadow: 0 3px 11px rgba(33,48,67,.08); overflow: visible; }
-.thread-card:hover { border-color: #9ca3af; box-shadow: 0 8px 20px rgba(33,48,67,.13); }
+/* The graph buttons hang 12px outside the card (`right: -12px`), so a card that
+   comes later in DOM order used to paint its own body over that overhang and
+   steal the click — folding worked on some cards and silently did nothing on
+   others. The hovered/focused card is lifted above its siblings so the whole
+   button stays hit-testable. */
+.thread-card:hover, .thread-card:focus-within { z-index: 3; border-color: #9ca3af; box-shadow: 0 8px 20px rgba(33,48,67,.13); }
 .thread-card.selected { box-shadow: 0 0 0 2px rgba(17,24,39,.16), 0 8px 20px rgba(33,48,67,.13); }
 .node-handle { position: absolute; top: -8px; left: 50%; display: grid; width: 28px; height: 15px; min-height: 15px; place-items: center; transform: translateX(-50%); border: 1px solid #d8e0e8; border-radius: 4px; background: #fff; cursor: grab; padding: 0; }
 .node-handle::after { content: '...'; display: block; margin: -5px 0 0 2px; color: #94a3b8; font-size: 11px; letter-spacing: 1.5px; line-height: 1; }
@@ -142,7 +147,12 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 .card-inspector-meta span + span::before { content: '·'; margin-right: 7px; color: #bdc7d2; }
 .card-inspector-meta span:last-child { color: inherit; font-weight: inherit; }
 .card-inspector-meta .card-inspector-error-status { color: #b42318; font-weight: 650; }
-.card-inspector-head h2 { margin: 8px 0 0; overflow-wrap: anywhere; color: #172033; font-size: 15px; font-weight: 680; line-height: 1.5; }
+/* The card question is a user prompt and can be arbitrarily long (pasted
+   logs, injected skill catalogues). Clamp it so the fixed-height drawer keeps
+   its answer scroll area and action bar on screen instead of letting the
+   header grow past the panel; the full text stays reachable via `title` and
+   in the thread detail. */
+.card-inspector-head h2 { display: -webkit-box; margin: 8px 0 0; max-height: calc(1.5em * 3); overflow: hidden; color: #172033; font-size: 15px; font-weight: 680; line-height: 1.5; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .card-inspector-close { display: grid; width: 32px; height: 32px; min-height: 32px; place-items: center; border: 0; border-radius: 50%; background: transparent; padding: 0; color: #718096; }
 .card-inspector-close:hover { background: #eef2f6; color: #1f2937; }
 .card-inspector-close:active, .card-inspector-actions button:active { transform: scale(.97); }
@@ -207,7 +217,9 @@ button.primary:hover { border-color: #000; background: #000; color: #fff; }
 .detail-badge { display: inline-flex; align-items: center; gap: 5px; border-radius: 999px; background: #eaf0fa; padding: 3px 9px; color: #3b6fd4; font-size: 11px; font-weight: 750; letter-spacing: .05em; }
 .detail-badge::before { content: ''; width: 6px; height: 6px; border-radius: 50%; background: currentColor; }
 .detail-subtitle { overflow: hidden; color: #8a97a8; font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
-.detail-head h1 { margin: 10px 0 0; overflow-wrap: anywhere; color: #152033; font-size: 21px; font-weight: 650; line-height: 1.35; letter-spacing: 0; }
+/* Same overlong-question guard for the detail view: the header is `flex: none`,
+   so an unclamped title pushes the message list and composer out of the view. */
+.detail-head h1 { display: -webkit-box; margin: 10px 0 0; max-height: calc(1.35em * 3); overflow: hidden; color: #152033; font-size: 21px; font-weight: 650; line-height: 1.35; letter-spacing: 0; overflow-wrap: anywhere; -webkit-box-orient: vertical; -webkit-line-clamp: 3; }
 .detail-head-actions { flex: none; display: flex; gap: 8px; }
 .detail-head-actions button { min-height: 32px; border: 1px solid #d9e1ea; border-radius: 7px; background: #fff; padding: 0 12px; color: #3d4a5c; font-size: 12px; font-weight: 600; }
 .detail-head-actions button:hover { border-color: #b9c7d8; background: #f4f7fb; }
