@@ -62,7 +62,11 @@ def _dsn(request: Request) -> str:
 @asynccontextmanager
 async def _connection(request: Request) -> AsyncIterator[Any]:
     """一条连接 + 幂等建表，用完就关（本地单用户，本批不做连接池）。"""
-    conn = await files.connect(_dsn(request))
+    try:
+        conn = await files.connect(_dsn(request))
+    except files.MediaError as exc:
+        # 连不上本地 PG 是"暂不可用"（503），不是 500
+        raise HTTPException(status_code=exc.status_code, detail=str(exc)) from exc
     try:
         await files.ensure_media_schema(conn)
         yield conn

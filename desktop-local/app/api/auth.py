@@ -4,7 +4,19 @@
 ``POST /v1/auth/session`` 不需要口令，返回**设备 token** + 固定本地用户。
 
 token 落在 ``<data-dir>/auth/device-token``（重启后保持不变，Electron 侧可以只发一次请求
-拿到长期 token）。第一批 ``/readyz`` 仍报 ``auth: "disabled"``，即**不校验**这个 token。
+拿到长期 token）。
+
+鉴权：本地模式**没有账号体系**，所以这是设备身份而不是用户身份。
+
+- ``auth_enabled=False``（默认）：token 只是本机标识，``/readyz`` 报 ``auth: "disabled"``，
+  **不校验**，谁都能调所有端点；
+- ``auth_enabled=True``（``CHIRON_LOCAL_AUTH_ENABLED=1``）：``DeviceTokenMiddleware`` 校验
+  ``Authorization: Bearer <这个 token>``，而 ``POST /v1/auth/session`` 本身**保持公开**
+  （在 ``app.middleware.EXEMPT_PATHS`` 里）——否则“要 token 才能拿 token”就是死循环。
+
+  公开换 token 是否等于鉴权无效？在本机 loopback 威胁模型下是的：能调这个端点的进程
+  本就能读 ``<data-dir>/auth/device-token``。它挡的是**浏览器里其它源/其它页面的跨源
+  请求**（它们没有文件系统权限），不是同机进程。所以别把它当多用户隔离来用。
 """
 
 from __future__ import annotations
@@ -60,6 +72,7 @@ def load_or_create_token(path: Path) -> str:
 
 @router.post("/v1/auth/session")
 async def create_session(request: Request) -> dict[str, Any]:
+    """换取本地会话（**免鉴权**，见模块 docstring）。"""
     settings = request.app.state.settings
     token = await asyncio.to_thread(load_or_create_token, settings.device_token_path)
     return {"data": {"token": token, "user": dict(LOCAL_USER)}}

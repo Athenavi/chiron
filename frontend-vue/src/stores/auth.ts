@@ -1,6 +1,6 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, loadDesktopToken, setAuthToken } from '../api'
+import { api, desktopDeviceToken, loadDesktopToken, setAuthToken } from '../api'
 import { clearPrivateStorage } from '../utils/privateStorage'
 import { useDeviceStore } from './device'
 
@@ -76,6 +76,11 @@ export const useAuthStore = defineStore('auth', () => {
         // 一个挂住的请求能让窗口迟迟不出第一帧。本地后端第一批允许无鉴权调用，会话稍后
         // 到达即可（user / token 都是响应式的）。
         if (isLocalMode()) {
+          // 设备 token 先落地：它由 preload **同步**注入，不用等本地后端就绪。
+          // 请求层（src/api/index.ts 的 requestToken）本地模式正是靠它带 Bearer，
+          // 所以即使 /v1/auth/session 还没回来，开了本地鉴权的 core 也不会拒请求。
+          const deviceToken = desktopDeviceToken()
+          if (deviceToken) applyToken(deviceToken)
           void ensureLocalSession()
           return
         }
@@ -98,8 +103,13 @@ export const useAuthStore = defineStore('auth', () => {
     try {
       const response = await api.post('/v1/auth/session')
       const d = response.data?.data
-      if (!d?.token || !d?.user) return false
-      applyToken(d.token)
+      if (!d?.user) return false
+      // token 以**设备 token**（preload 注入）为准：core 校验的就是它
+      //（CHIRON_DEVICE_TOKEN 优先于落盘文件，见 desktop-local/app/api/auth.py）。
+      // 两者不一致（注入值被 core 落盘值盖住）时，用错那个在开了鉴权的 core 上全场 401。
+      const localToken = desktopDeviceToken() || d.token || ''
+      if (!localToken) return false
+      applyToken(localToken)
       user.value = d.user
       persistUserToStorage(d.user)
       return true

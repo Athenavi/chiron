@@ -151,12 +151,11 @@ class GatewayRouter:
         messages = normalize_messages(messages)
         # ── 缓存查找（仅无工具时） ──
         if self._cache and not tools:
-            # TODO(desktop-infer)：缓存 key **暂不**包含 `response_format`（见
-            # app/gateway/cache.py::_exact_key）。后果：同一 prompt 先以文本模式、
-            # 后以 JSON 模式请求时，后到的会命中先到的条目，拿到错形状的结果。
-            # 补法是把 response_format 并入 exact key（L2/L3 的既有条目会因 key 变化
-            # 自然失效，无需迁移）。在那之前，调用方需自行接受这一点。
-            cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
+            # `response_format` 现在是缓存 key 的一部分：同一 prompt 先文本、后 JSON 请求时，
+            # 后者不会命中前者拿到错形状的结果（见 cache.py::_exact_key）。
+            cached = await self._cache.lookup(
+                tenant_id, model, messages, tools, temperature, response_format
+            )
             if cached:
                 logger.info("Stream cache HIT for model=%s", model)
                 yield cached
@@ -235,7 +234,15 @@ class GatewayRouter:
                     input_tokens=total_input,
                     output_tokens=total_output,
                 )
-                await self._cache.store(tenant_id, model, messages, tools, temperature, resp)
+                await self._cache.store(
+                    tenant_id,
+                    model,
+                    messages,
+                    tools,
+                    temperature,
+                    resp,
+                    response_format,
+                )
 
             # 缓存正常路径仅存结果；预算扣减统一在 finally 处理（见下）
 
@@ -287,8 +294,10 @@ class GatewayRouter:
         messages = normalize_messages(messages)
         # 缓存查找
         if self._cache and not tools:
-            # TODO(desktop-infer)：同 `chat_stream` —— `response_format` 暂不在缓存 key 内。
-            cached = await self._cache.lookup(tenant_id, model, messages, tools, temperature)
+            # 同 `chat_stream`：`response_format` 是 key 的一部分，文本与 JSON 互不命中。
+            cached = await self._cache.lookup(
+                tenant_id, model, messages, tools, temperature, response_format
+            )
             if cached:
                 logger.info("Cache hit for model=%s", model)
                 return cached
@@ -334,7 +343,15 @@ class GatewayRouter:
 
             # 存缓存
             if self._cache and not tools and resp.finish_reason != "error":
-                await self._cache.store(tenant_id, model, messages, tools, temperature, resp)
+                await self._cache.store(
+                    tenant_id,
+                    model,
+                    messages,
+                    tools,
+                    temperature,
+                    resp,
+                    response_format,
+                )
 
             # 预算扣减
             if (

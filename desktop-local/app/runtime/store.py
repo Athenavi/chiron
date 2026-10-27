@@ -379,7 +379,7 @@ class LocalStore:
         conn = await self._connect()
         try:
             row = await conn.fetchrow(
-                f"UPDATE local_agents SET {assignments}, updated_at = now()"
+                f"UPDATE local_agents SET {', '.join(assignments)}, updated_at = now()"
                 f" WHERE id = $1 AND tenant_id = ${len(columns) + 2} AND user_id = ${len(columns) + 3}"
                 f" RETURNING {_AGENT_SELECT}",
                 agent_id,

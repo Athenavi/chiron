@@ -247,7 +247,13 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 
 ## 9. 桌面片段推理端点（第二批）
 
-`POST /v1/desktop/infer`（引擎；用户 JWT 或 Go 网关代理身份）：
+`POST /v1/desktop/infer`（云端网关 → Python 引擎）：
+
+```
+渲染进程 ──JWT──> Go 网关 POST /v1/desktop/infer  ──X-Internal-Token + ?user_id&tenant_id──> 引擎 /v1/desktop/infer
+```
+
+请求体：
 
 ```json
 {
@@ -260,7 +266,7 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 }
 ```
 
-响应：
+响应（引擎形状，网关原样透传，不包 `{"data": ...}`）：
 
 ```json
 {
@@ -274,4 +280,45 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 约束：只允许 `user` 角色与纯文本；`max_tokens <= 4096`；messages 总字符 `<= 2_000_000`；
 服务端不记录 messages/content。
 
-已知 TODO：网关缓存 key 尚未纳入 `response_format`（同 prompt 先文本后 JSON 可能命中错形状缓存）。
+### 9.1 Go 网关路由
+
+| 项 | 值 |
+|---|---|
+| 路由注册 | `internal/api/routes_desktop.go::registerDesktopRoutes`（由 `gateway_router.go` 调用） |
+| handler | `internal/api/desktop_infer.go::DesktopInferHandler` |
+| 中间件 | `authMW`（用户 JWT 必填）→ `rlMW`（限流）—— 与 `/v1/chat/submit` 同级 |
+| 上游 | `pythonClient.ForwardRequest`，路径 `/v1/desktop/infer?user_id=&tenant_id=` |
+| 身份 | 由网关从**已验证的 claims** 重建 query 与 `X-User-Id` / `X-Tenant-Id`；客户端伪造的同名 query/header 不作数 |
+| 请求体 | **不解析、不落日志、不落库**；流式透传，网关侧上限 16 MiB（业务上限仍在引擎侧） |
+| 错误 | 401（无 claims/租户）、413（body 超限）、500（引擎未接线）、引擎返回的 422/502 原样透传 |
+
+频控不作为独立配额：`rlMW` 的租户级 QPS 与 `/v1/chat` 共用同一套桶。
+
+### 9.2 幂等（`request_id`）
+
+- 引擎侧用 Redis `SET key <pending> NX EX 60` 抢占位：`key = desktop:infer:idem:{tenant}:{request_id}`。
+- 60s 内同 `request_id` 的第二次请求**重放第一次的完整响应**（逐字段相同），不再打上游、不再计 token。
+- 占位仍在（首个请求还在跑）时返回 **409 `duplicate request in progress`** —— 返回空 `content` 会被调用方当成真结果。
+- 失败（502/上游异常）会**删除占位**，所以失败后可以立即重试。
+- `request_id` 为空 = 不去重（不同用户/设备的空串不能被当成同一个键）。
+
+### 9.3 用量与计费
+
+- 成功的请求把用量累加进 Redis Hash `desktop:infer:usage:{tenant}:{date}`（UTC 日期，TTL 40 天），
+  字段：`requests` / `input_tokens` / `output_tokens` / `cached_tokens`。
+- **该键不含 credits**：credits 的商业口径（provider 定价 × 计费 token）与扣费都在 Go billing
+  模块（`internal/api/submit_handler.go` 的 biller 链路）。引擎再写一份 credits 会导致重复扣费。
+- 因此当前 `/v1/desktop/infer` **不在网关扣 credits**：网关不读响应体（读了就等于解析用户内容），
+  计价所需的 `provider` / `model` / `usage` 只在引擎侧可见。本批只落"用量账本"，
+  自动计费（按 `desktop:infer:usage:*` 对账扣费）是后续工作。
+- 计量口径的一个已知后果：命中**幂等重放**的请求不再计 token（这是正确的 —— 上游确实没被调用一次）；
+  命中**缓存**的请求仍会上报 provider 返回的 usage（其中 `cached_tokens` 表示提示词缓存命中的输入）。
+
+### 9.4 缓存 key
+
+网关 `SemanticCache` 的精确键与语义键都纳入 `response_format`（`python-engine/app/gateway/cache.py`）：
+
+- `response_format is None` 的请求哈希与改动前**逐字节相同**，存量 L2/L3 条目继续命中，无需迁移；
+- 非空时形状参与哈希：同一 prompt 先文本、后 `json_object` 请求**不会**命中前者的纯文本结果；
+- 该约束有单测守着：`python-engine/tests/test_desktop_infer.py`。
+

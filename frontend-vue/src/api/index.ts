@@ -10,6 +10,8 @@ import { currentDeviceMode, type ChironMode } from '../stores/device'
 type DesktopHost = {
   apiUrl?: string
   isDesktop?: boolean
+  /** local 模式由主进程注入的本地 core 设备 token；cloud 模式恒为空串 */
+  deviceToken?: string
   getToken?: () => Promise<string>
   saveToken?: (token: string) => Promise<unknown>
   clearToken?: () => Promise<unknown>
@@ -43,10 +45,37 @@ export type { ChironMode }
 const DESKTOP_TOKEN_KEY = 'chiron_desktop_token' // 仅用于迁移上一版明文 token
 let bearerToken = ''
 
+/**
+ * 本地 core 的**设备 token**（只读，preload 在 local 模式注入）。
+ *
+ * 它不是云端凭据，只是"这是本机主人"的标识（desktop-local/app/api/auth.py），所以：
+ * 不写 safeStorage、不写 localStorage —— 切回云端模式时不该被当成登录 token 用。
+ * 老外壳可能没暴露这个字段 ⇒ 空串，调用方据此退化为"不带 Authorization"。
+ */
+export function desktopDeviceToken(): string {
+  const raw = desktopHost?.deviceToken
+  return typeof raw === 'string' ? raw.trim() : ''
+}
+
+/**
+ * 本次请求该带哪个 Bearer token。
+ *
+ * - 本地模式：本地 core 开鉴权（`CHIRON_LOCAL_AUTH_ENABLED=1`）时只认设备 token；
+ *   云端 token 属于另一个后端，带过去两边都看不懂，所以这里**不**回退云端 token。
+ *   没有设备 token 就不设头 —— 默认（鉴权关闭）本就无需任何 token。
+ * - 云端模式：沿用登录/SSO 拿到的 token（桌面端持久化在 safeStorage）。
+ */
+function requestToken(): string {
+  if (getDeviceMode() === 'local') return desktopDeviceToken()
+  return bearerToken
+}
+
 /** 设置当前请求使用的 Bearer token；桌面端交给主进程加密持久化 */
 export function setAuthToken(token: string) {
   bearerToken = token || ''
-  if (!isDesktop) return
+  // 本地模式：设备 token 属于本机 core，不进 safeStorage（那里存的是云端凭据，
+  // 写进去会在切回 cloud 模式后被当成登录 token 发出去 —— 必然 401 且看不出原因）。
+  if (!isDesktop || getDeviceMode() === 'local') return
   try {
     if (bearerToken) void desktopHost?.saveToken?.(bearerToken)
     else void desktopHost?.clearToken?.()
@@ -88,7 +117,9 @@ export const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  if (bearerToken) config.headers.set('Authorization', `Bearer ${bearerToken}`)
+  // 本地模式带设备 token（preload 注入），云端模式带登录 token；都没有就不设头
+  const token = requestToken()
+  if (token) config.headers.set('Authorization', `Bearer ${token}`)
   return config
 })
 
@@ -463,7 +494,17 @@ export function createSSEConnection(
   if (initialLastEventId) {
     url += `&last_event_id=${encodeURIComponent(initialLastEventId)}`
   }
+  // EventSource 不能设置 Authorization：本地模式把设备 token 放进 query，
+  // core 的 DeviceTokenMiddleware 只在 header 缺失时读取它（见 middleware.py）。
+  const localToken = getDeviceMode() === 'local' ? desktopDeviceToken() : ''
+  if (localToken) {
+    url += `&token=${encodeURIComponent(localToken)}`
+  }
 
+  // 本地模式注意：EventSource 不支持自定义头，所以这条通道**没有** Authorization。
+  // core 的鉴权默认关闭（auth_enabled=False），此时 /events 照常可用；若桌面端显式
+  // 打开了 CHIRON_LOCAL_AUTH_ENABLED，本地 SSE 会 401 —— 需要后端支持 query token
+  // 或改走 WebSocket 才能解决，本批次不动。
   const eventSource = new EventSource(url, { withCredentials: true })
 
   // 连续失败计数：自动重连期间每次 onopen 归零

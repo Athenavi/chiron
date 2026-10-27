@@ -30,6 +30,8 @@ MAX_KEYWORD_CHARS = 200
 DEFAULT_KIND = "note"
 
 MEMORY_COLUMNS = "id, kind, title, content, tags, source, created_at"
+# INSERT 不能带 created_at：它由 DDL 的 DEFAULT now() 生成，显式列清单必须与 $n 个数一致
+MEMORY_INSERT_COLUMNS = "id, kind, title, content, tags, source"
 
 MEMORY_DDL = """
 CREATE TABLE IF NOT EXISTS local_memory (
@@ -48,6 +50,12 @@ class MemoryStoreError(ValueError):
     """记忆层输入不合法（空关键词等）。``status_code`` 由路由层直接使用。"""
 
     status_code = 400
+
+
+class MemoryStorageUnavailableError(MemoryStoreError):
+    """本地 PostgreSQL 连不上（路由层映射 503，而不是 500）。"""
+
+    status_code = 503
 
 
 # --------------------------------------------------------------------- 标签与关键词
@@ -91,7 +99,12 @@ def like_pattern(keyword: str) -> str:
 # --------------------------------------------------------------------- 数据库
 async def connect(dsn: str) -> asyncpg.Connection:
     """建一条 asyncpg 连接（本地单用户，本批不做连接池）。"""
-    return await asyncpg.connect(dsn=dsn)
+    try:
+        return await asyncpg.connect(dsn=dsn)
+    except (OSError, asyncpg.PostgresError) as exc:
+        raise MemoryStorageUnavailableError(
+            f"本地 PostgreSQL 不可用（{type(exc).__name__}: {exc}）；检查 /readyz 的 pg 字段"
+        ) from exc
 
 
 async def ensure_memory_schema(conn: asyncpg.Connection) -> None:
@@ -114,7 +127,7 @@ async def insert_entry(
     source: str,
 ) -> dict[str, Any]:
     row = await conn.fetchrow(
-        f"INSERT INTO local_memory ({MEMORY_COLUMNS}) "
+        f"INSERT INTO local_memory ({MEMORY_INSERT_COLUMNS}) "
         "VALUES ($1, $2, $3, $4, $5, $6) "
         f"RETURNING {MEMORY_COLUMNS}",
         entry_id,
