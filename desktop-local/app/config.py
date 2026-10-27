@@ -14,6 +14,7 @@
 ``CHIRON_LOCAL_REDIS_URL``       给了就走真实 Redis/Valkey，否则用 fakeredis
 ``POSTGRES_DSN``                 给了就复用外部 PG（不自己起进程），优先级最高
 ``CHIRON_LOCAL_RUN_MIGRATIONS``  启动时是否跑 ``alembic upgrade head``
+``CHIRON_LOCAL_AUTH_ENABLED``    是否校验设备 token（Bearer）；默认关闭
 ===============================  ============================================================
 """
 
@@ -92,7 +93,9 @@ class Settings(BaseSettings):
     sse_max_heartbeats: int = 0  # 0 = 不设上限（测试用 1~2 让它自然结束）
 
     # --- 鉴权 ---
-    auth_enabled: bool = False  # 第一批允许无鉴权启动（契约 §4）
+    # 默认关闭：能连上 loopback 就已经是本机主人，加口令只是多一个失败点（契约 §4）。
+    # 置 ``CHIRON_LOCAL_AUTH_ENABLED=1`` 后由 DeviceTokenMiddleware 校验 Bearer 设备 token。
+    auth_enabled: bool = False
 
     @field_validator("port", "pg_port")
     @classmethod
@@ -138,7 +141,8 @@ class Settings(BaseSettings):
             path.mkdir(parents=True, exist_ok=True)
 
     def auth_mode(self) -> str:
-        return "required" if self.auth_enabled else "disabled"
+        """``/readyz`` 的 ``auth`` 字段：开着报具体方式，关着报 ``disabled``。"""
+        return "device_token" if self.auth_enabled else "disabled"
 
     def describe(self) -> dict[str, object]:
         """给 ``/readyz`` 与日志用的、**不含密钥**的配置快照。"""
