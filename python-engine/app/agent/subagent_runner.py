@@ -247,6 +247,102 @@ async def _settle_line(root: str, handle: str, actual_tokens: int) -> None:
         logger.warning("subagent line settle failed (root=%s): %s", root, str(exc)[:160])
 
 
+# ── 差距C（执行图）：委派的 span ──────────────────────────────────────────────
+#
+# 背景：`app/trace/writer.py` 的 `record_span` 早就有 `span_id` / `parent_span_id` / `kind`
+# 三要素，runtime 也给 run / turn / llm / tool 打了点；但**委派**这一跳此前一处都没打 ——
+# 于是执行图里"子 Agent 这一支"根本不存在，"某次委派从哪来"无从查询（只能去翻 JSON 日志）。
+#
+# 为什么挂在**父** trace 下：子 Agent 跑在**另一个** `AgentRuntime` 实例上，那个 runtime 会
+# 自己生成一个新 `trace_id`（`AgentRuntime.run` 的 0.5 步）。若把委派 span 写进子 trace，
+# 父图里永远找不到它（反过来，跨 trace 聚合才能拼出来 —— 而 `BuildTraceGraph` 是按
+# 单个 trace_id 组装的）。所以这里用**父**的 trace_id + 父 turn 的节点 id 作父指针。
+
+SUBAGENT_SPAN_KIND = "subagent"
+#: 派发节点在 base span_id 后面的后缀（`{base}:spawn`）。终态那条用 base 本身 ——
+#: 两个 id 不同，图上不会互相覆盖；父指针都指向**父 turn**，所以两者都是"这一轮里发生的"。
+SPAWN_SPAN_SUFFIX = ":spawn"
+
+
+def _delegation_span_ids(parent_trace_id: str, run_id: str) -> tuple[str, str]:
+    """一次委派在父 trace 里的 `(终态节点 id, 派发节点 id)`（纯函数，便于单测）。
+
+    用 `run_id`（``rs_xxxx``，全局唯一且已落库）而不是随机 id：父指针与节点 id 都能从
+    现有标识算出来，补写 / 重放不会产生重影节点。
+    """
+    base = f"{parent_trace_id}:subagent:{run_id}"
+    return base, f"{base}{SPAWN_SPAN_SUFFIX}"
+
+
+def _parent_trace_context() -> tuple[str, str]:
+    """从工具上下文取 `(父 trace_id, 父节点 span_id)`；取不到时返回 `("", "")`。
+
+    这两个值由 `AgentRuntime.run` 写进 tool context（run 开始时放 run 根，**每轮**再覆写成
+    该轮的 turn 节点）。因此委派拿到的父指针 = "这次委派发生在哪一轮"，正是执行图要回答的
+    "某一步从哪来"。
+
+    **跨进程 / 跨实例取不到**（`app/api/internal_subagent.py` 那条 Boom 链路）⇒ 返回空串 ⇒
+    整条委派打点保持关闭。这是刻意的：不凭空造一个 trace（那只会产出一个在父图里看不见的
+    孤儿节点）。
+    """
+    try:
+        from app.tools.context import get_tool_context
+
+        return (
+            str(get_tool_context("trace_id", "") or ""),
+            str(get_tool_context("span_id", "") or ""),
+        )
+    except Exception:  # noqa: BLE001 - 取不到语境 ⇒ 不打点，绝不影响委派
+        return "", ""
+
+
+async def _record_delegation_span(
+    *,
+    tenant_id: Any,
+    trace_id: str,
+    span_id: str,
+    parent_span_id: str,
+    span_name: str,
+    duration_ms: int,
+    metadata: dict[str, Any],
+) -> None:
+    """记录一条委派 span —— **打点失败绝不影响子 Agent 执行**。
+
+    两层守卫：
+    1. `trace_id` 为空 ⇒ 直接返回。没有父 trace 就不写（凭空造一个 trace 只会产出孤儿节点，
+       在父图里看不见）；这同时让"未接入 trace 的调用方"（例如跨实例 `internal_subagent`）
+       保持**零开销、零行为变化** —— vendor/规划.md §1.3 的"新机制默认什么都不做"。
+    2. 一切异常降级为一条 warning 日志。`record_span` 内部本来就 fail-soft（Redis 不可用 /
+       `no_retention` 时跳过），这里再包一层是因为**委派不能因为观测面出问题而失败** ——
+       未来 trace 模块若改了失败语义（例如配置错误直接抛），今天的调用方也不该被拖下水。
+
+    总开关沿用 trace 既有那一道（`TraceWriter` 的 Redis 可用性 + 隐私 `no_retention`），
+    不新增开关：打点不改变输出/行为，本就不需要"默认关"的旋钮。
+    """
+    if not trace_id:
+        return
+    try:
+        from app.trace import record_span
+
+        await record_span(
+            trace_id=trace_id,
+            span_name=span_name,
+            duration_ms=max(0, int(duration_ms)),
+            metadata=metadata,
+            tenant_id=tenant_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            kind=SUBAGENT_SPAN_KIND,
+        )
+    except Exception as exc:  # noqa: BLE001 - 观测面失败不得影响委派
+        logger.warning(
+            "subagent span dropped (trace=%s span=%s): %s",
+            trace_id,
+            span_id,
+            str(exc)[:160],
+        )
+
+
 #: runtime 越界事件的形状：``budget_exceeded:<轴>``。线账的轴名自带 ``line_`` 前缀
 #: （``line_tokens`` / ``line_paused``，与 ``LineState.violation`` 的返回值逐字相同 ——
 #: 它是待办与指标里的同一个字符串，不能在这里被削成 ``tokens``，那是 per-run 轴的写法）。
@@ -530,6 +626,18 @@ class SubAgentRunner:
         # 它才能用 read_subagent_result(run_id) 查进度（见 app/tools/subagent.py）。
         run_id = run_id or new_run_id()
 
+        # ── 差距C（执行图）：这一跳的父指针 ──
+        # 父语境（trace_id + 当前 turn 的 span_id）由 `AgentRuntime.run` 放进工具上下文。
+        # 取不到（跨实例 `/v1/internal/subagent`、或调用方不在 run 里）⇒ 两者皆空 ⇒ 下面
+        # 两次 `_record_delegation_span` 全部 no-op，行为与改动前逐字相同。
+        parent_trace_id, parent_span_id = _parent_trace_context()
+        # `(终态节点 id, 派发节点 id)` —— 两个不同 id，父指针都是**父 turn**：
+        #   * 派发节点在开跑时写（duration=0），执行图上"这一轮派出了谁"立刻可见；
+        #   * 终态节点在收尾时写（带真实耗时与结局），节点 id 稳定 ⇒ 图上前者是后者的兄弟，
+        #     不会因为"写两次"而互相覆盖。
+        span_id, dispatch_span_id = _delegation_span_ids(parent_trace_id, run_id)
+        _span_started = time.time()
+
         # A5（方案 04 §3）：生命周期遥测的**起点**。`rerun_of` 非空 ⇒ 这次是"恢复/重跑"而不是
         # 新派发 —— 两者在诊断上必须能分开（参照 Reasonix 的 `child_resume`）。
         # 遥测是**旁路**：没有注册 sink 时零开销，sink 出错也不会影响这次委派。
@@ -545,6 +653,26 @@ class SubAgentRunner:
         )
         if not task:
             return SubagentRunResult(run_id=run_id, status="failed", output="", error="task is required")
+
+        # ── 差距C 打点①：委派**已发起** ──
+        # 先写这一条（而不是只在收尾写一次）：子 Agent 可能跑几分钟、也可能被取消 ——
+        # 若只在成功收尾时打点，图上就会缺掉"派了但没回来"的那些，而那正是排障最想看的。
+        # duration=0 是**有意的**：它是一个"发起"标记，真实耗时在收尾那条上。
+        await _record_delegation_span(
+            tenant_id=self._tenant_id,
+            trace_id=parent_trace_id,
+            span_id=dispatch_span_id,
+            parent_span_id=parent_span_id,
+            span_name="subagent_dispatch",
+            duration_ms=0,
+            metadata={
+                "run_id": run_id,
+                "profile": profile_ref,
+                "depth": self._depth + 1,
+                "rerun_of": rerun_of,
+                "mode": mode,
+            },
+        )
 
         # ── R1（vendor/规划.md §3.5）：宿主证据。执行**前后**各拍一次工作区快照，用于核验子
         # Agent 的产出，而不是只信它的自述。有界快照；可用 SUBAGENT_HOST_RECEIPTS=false 关掉。
@@ -1236,6 +1364,33 @@ class SubAgentRunner:
                 validator_outcome=_validator_outcome,
                 validator_attempt=1 if _has_schema else 0,
             )
+        )
+
+        # ── 差距C 打点②：委派**终态**（完成 / 部分完成 / 失败）──
+        # 放在 `emit_lifecycle` 之后、`return` 之前：`status` 与错误到这一步才定型。
+        # **取消路径写不到这一条**（它 `raise` 了，不走这里）：于是图上留下的是打点① 那条
+        # `subagent_dispatch`（无终态）。这是刻意的 —— "派了但没回来"正是排障最想看的形态，
+        # 硬在取消分支补一条终态 span 反而会让"取消"与"跑完"在图上难以区分。
+        await _record_delegation_span(
+            tenant_id=self._tenant_id,
+            trace_id=parent_trace_id,
+            span_id=span_id,
+            parent_span_id=parent_span_id,
+            span_name="subagent",
+            duration_ms=int((time.time() - _span_started) * 1000),
+            metadata={
+                "run_id": run_id,
+                "profile": profile_name or profile_ref,
+                "depth": child_depth,
+                "status": status,
+                "steps": steps,
+                "input_tokens": in_tokens,
+                "output_tokens": out_tokens,
+                "error": " | ".join(errors)[:500],
+                "error_code": _outcome.error_code,
+                "retryable": _outcome.retryable,
+                "rerun_of": rerun_of,
+            },
         )
 
         return SubagentRunResult(

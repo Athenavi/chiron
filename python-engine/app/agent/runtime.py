@@ -1361,6 +1361,12 @@ class AgentRuntime:
                 activated_tools=acts,
                 # C3：工作台选中的项目 → 工具侧（记住 / 召回 / 遗忘）按它隔离记忆
                 project=(task.workbench_context or {}).get("project") or "",
+                # 差距C（执行图）：把**本 run 的 trace 语境**带进工具上下文 —— 委派
+                # （`subagent` 工具 → `SubAgentRunner`）必须知道"我是从哪一步派出去的"，
+                # 才能把子 Agent 那一支挂到父执行图上（见 subagent_runner 的
+                # `_trace_context`）。`span_id` 每轮在下面按 turn 节点覆写，这里先放 run 根。
+                trace_id=trace_id,
+                span_id=run_span_id,
             )
 
             # ── 0.55 斜杠命令拦截（在进入 LLM 循环前）────────────────────────
@@ -1718,6 +1724,10 @@ class AgentRuntime:
             for turn in range(start_turn, task.max_turns):
                 # 差距C：本轮在**执行图**里的节点 id（llm / tool 调用都挂在它下面）。
                 turn_span_id = f"{trace_id}:turn:{turn + 1}"
+                # 差距C：把"当前正在跑的是哪一轮"同步进工具上下文 —— 委派（子 Agent）
+                # 以它为父指针，于是执行图能回答"这次委派发生在第几轮、从哪个节点来"。
+                # 每轮覆写一次（`set_tool_context` 是合并语义，其余键不动）。
+                set_tool_context(span_id=turn_span_id)
                 _turn_started = time.time()
                 # ── 预算检查（每轮开头）──
                 # turns / tokens / wall 在这里判，steps 在每次工具调用后判（见下）。
