@@ -110,12 +110,15 @@ python scripts/verify_p0.py          # 契约 §5 五项；有 FAIL 时退出码
 ```
 
 `verify_p0.py` 常用开关：`--data-dir <路径>`（复用/指定目录）、`--keep`（保留临时目录）、
-`--skip-pg` / `--skip-redis`、`--json`（末尾多打一行机器可读摘要）。
+`--skip-pg` / `--skip-redis`、`--json`（末尾多打一行机器可读摘要）、
+`--require-backend embedded-pack|binaries|external`（默认不强制；指定后实际 backend 不符就是 FAIL）。
 
 ### P0 五项怎么读
 
-1. **PG 启动 + 迁移**：打印 `backend`（`external` / `embedded-pack` / `binaries`）、进程启动耗时、
-   迁移耗时、`alembic_version`。迁移**复用仓库根 `migrations/`**，不复制、不改写。
+1. **PG 启动 + 迁移**：打印 **实测** `backend`（`external` / `embedded-pack` / `binaries`）、进程启动耗时、
+   迁移耗时、`alembic_version`，以及“回退原因”（有更优先的后端没起来时）和“后端差异”
+   （该后端下不生效的配置项）。迁移**复用仓库根 `migrations/`**，不复制、不改写。
+   具体到每个后端的适用面见 `docs/desktop-local/embedded-pg.md`。
 2. **重启后数据仍在**：写入 `<data-dir>` 内一个探针表 → `pg_ctl stop` → 再起 → 比对行数与
    `alembic_version`。这一项只有在数据目录固定时才成立（`--data-dir`）。
 3. **Redis 逐项**：`XADD / XREADGROUP / XACK / XCLAIM / XAUTOCLAIM / PUBLISH / SUBSCRIBE`
@@ -126,10 +129,14 @@ python scripts/verify_p0.py          # 契约 §5 五项；有 FAIL 时退出码
 
 ## 已知限制（不是待办清单，是当前事实）
 
-- **Windows 上 embedded PostgreSQL 可能起不来**。`initdb` 需要可写的普通目录、不能以管理员
-  身份运行；某些 `embedded_postgres` 包版本只提供 Linux/macOS 二进制。`pg.py` 因此按
+- **Windows 上的 embedded PostgreSQL 已经可用**（`embedded-postgres==18.6.3`，`py3-none-win_amd64`
+  wheel，自带 PG 18.6 二进制，不需要系统装 PostgreSQL）。`pg.py` 按
   `external → embedded-pack → binaries` 三条路依次尝试，**只有真能执行 SQL 的实例才算成功**，
-  三条都失败会把每一条的真实错误打出来。可行兜底：装 PostgreSQL 16 并设置
+  三条都失败会把每一条的真实错误打出来；回退时也会打印“更优先的后端为什么没起来”。
+  仍要注意两点：`initdb` 不能以管理员身份在有 ACL 限制的目录里跑（`tempfile.mkdtemp()` 尤其
+  容易踩），以及 embedded-pack 固定用 `postgres` 用户、端口自己挑（`CHIRON_LOCAL_PG_USER` /
+  `_PASSWORD` / `_PORT` 在该后端下不生效，`PostgresServer.notes` 会说明）。
+  细节见 `docs/desktop-local/embedded-pg.md`。兜底：装 PostgreSQL 16+ 并设置
   `CHIRON_LOCAL_PG_BIN_DIR`，或直接给 `POSTGRES_DSN`。
 - **fakeredis 的 Streams 能力是有缺口的**（历史版本上 `XAUTOCLAIM` / `XCLAIM` 的 pending
   语义、`XREADGROUP` 的阻塞读都不完整）。本仓库**不假设**它支持——`verify_p0.py` 逐项实测。
