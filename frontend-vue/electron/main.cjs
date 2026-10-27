@@ -798,6 +798,35 @@ if (!gotLock) {
       return true
     })
 
+    // 组件管理（契约 §2）。components.cjs 可能不存在（旧包/未安装组件），
+    // 统一返回结构化错误，不让渲染进程拿到未处理的 reject。
+    function requireComponents() {
+      const mod = loadOptionalModule('./components.cjs')
+      if (!mod) throw new Error('本地组件管理不可用（components.cjs 未随包发布）')
+      return mod
+    }
+    ipcMain.handle('desktop:list-components', event => {
+      assertTrustedSender(event)
+      const mod = loadOptionalModule('./components.cjs')
+      return typeof mod?.listComponents === 'function' ? mod.listComponents() : []
+    })
+    ipcMain.handle('desktop:install-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().installComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:remove-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().removeComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:start-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().startComponent(String(name || ''))
+    })
+    ipcMain.handle('desktop:stop-component', (event, name) => {
+      assertTrustedSender(event)
+      return requireComponents().stopComponent(String(name || ''))
+    })
+
     createWindow()
     setupAutoUpdater()
 

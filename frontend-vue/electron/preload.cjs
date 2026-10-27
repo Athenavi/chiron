@@ -61,4 +61,11 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   /** 加密持久化 / 清除 Bearer token */
   saveToken: token => ipcRenderer.invoke('desktop:save-token', token),
   clearToken: () => ipcRenderer.invoke('desktop:clear-token'),
+
+  /** 组件管理（契约 §2）：name ∈ 'core' | 'pageindex' | 'langextract' */
+  listComponents: () => ipcRenderer.invoke('desktop:list-components'),
+  installComponent: name => ipcRenderer.invoke('desktop:install-component', name),
+  removeComponent: name => ipcRenderer.invoke('desktop:remove-component', name),
+  startComponent: name => ipcRenderer.invoke('desktop:start-component', name),
+  stopComponent: name => ipcRenderer.invoke('desktop:stop-component', name),
 })
