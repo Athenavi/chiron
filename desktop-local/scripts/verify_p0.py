@@ -9,15 +9,19 @@
 4. 冷启动耗时（毫秒）与数据目录体积；
 5. 失败时打印可执行的替代方案。
 
+**backend 一律打真实值**（``embedded-pack`` / ``binaries`` / ``external`` / ``none``），
+不按“应该是哪个”来写；想要“必须走某个后端”就在命令行上强制（默认不强制）。
+
 用法::
 
     cd desktop-local
     python scripts/verify_p0.py                          # 临时数据目录，跑完即删
     python scripts/verify_p0.py --data-dir D:\\chiron-p0  # 指定目录（会复用已有实例）
     python scripts/verify_p0.py --keep                   # 保留临时目录以便排查
+    python scripts/verify_p0.py --require-backend embedded-pack   # 不是这个后端就算 FAIL
     python scripts/verify_p0.py --skip-pg --skip-redis   # 只跑骨架相关项
 
-退出码：0 = 全部 PASS 或跳过；1 = 有 FAIL。
+退出码：0 = 全部 PASS 或跳过；1 = 有 FAIL（含 ``--require-backend`` 不满足）。
 ``password`` 之类敏感值一律不打印（DSN 走 :func:`app.storage.pg.mask_dsn`）。
 """
 
@@ -80,6 +84,14 @@ def human_bytes(size: int) -> str:
     return f"{size} B"
 
 
+def _indent_attempt(text: str, prefix: str = "    ") -> str:
+    """把多行的“后端失败原因”重新缩进，让它在结论里读得下去。"""
+    lines = text.splitlines()
+    if not lines:
+        return ""
+    return lines[0] + "".join(f"\n{prefix}{line.strip()}" for line in lines[1:])
+
+
 def dir_size_bytes(path: Path) -> int:
     total = 0
     if not path.exists():
@@ -132,23 +144,31 @@ def _pg_stage(settings: Settings, skip: bool) -> tuple[Check, Check, PostgresSer
         detail = f"{type(exc).__name__}: {exc}"
         if attempts:
             detail += "\n逐条后端失败原因:\n" + "\n".join(f"  - {item}" for item in attempts)
+        if pg.backend not in {None, "", "none"}:
+            detail = f"backend={pg.backend}（已启动但迁移失败）\n" + detail
         return (
             Check("embedded PostgreSQL + alembic upgrade head", False, detail, suggestions),
             Check("停止后重启，数据仍在", None, "上一步失败，跳过"),
-            None,
+            pg,  # 失败也要把实例带回去：embedded_probe / backend 要能上报
             migration,
         )
 
-    first = Check(
-        "embedded PostgreSQL + alembic upgrade head",
-        True,
-        (
-            f"backend={pg.backend} dsn={pg.safe_dsn}\n"
-            f"进程启动 {start_ms:.0f} ms；迁移 {migration['elapsed_ms']} ms；"
-            f"alembic_version={migration['revision']}\n"
-            f"迁移脚本目录 {migration['migrations_dir']}"
-        ),
+    notes = list(getattr(pg, "notes", []))
+    detail = (
+        f"backend={pg.backend}（实测）dsn={pg.safe_dsn}\n"
+        f"进程启动 {start_ms:.0f} ms；迁移 {migration['elapsed_ms']} ms；"
+        f"alembic_version={migration['revision']}\n"
+        f"迁移脚本目录 {migration['migrations_dir']}"
     )
+    if notes:
+        detail += "\n后端差异（配置在该后端下不生效的部分）：\n" + "\n".join(f"  - {note}" for note in notes)
+    attempts = list(getattr(pg, "attempts", []))
+    if attempts:
+        # 有更优先的后端没起来才落到现在这个：原因必须跟着结论一起打出来
+        detail += "\n回退原因（更优先的后端为什么没用上）：\n" + "\n".join(
+            f"  - {_indent_attempt(item)}" for item in attempts
+        )
+    first = Check("embedded PostgreSQL + alembic upgrade head", True, detail)
 
     # --- 第 2 项 -------------------------------------------------------
     try:
@@ -232,6 +252,15 @@ def _json_summary(checks: list[Check], extras: dict) -> dict:
     }
 
 
+def _pg_backend_of(pg: PostgresServer | None, skipped: bool) -> str:
+    """真实 backend（跳过/失败都要说出来，不能默认成功）。"""
+    if skipped:
+        return "skipped"
+    if pg is None:
+        return "none"
+    return pg.backend
+
+
 def main(argv: list[str] | None = None) -> int:
     if os.environ.get("CHIRON_P0_STACKS", "") == "1":
         # 诊断用：卡住时每 30s 打印所有线程栈（默认关闭，不影响正常输出）
@@ -244,6 +273,13 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--skip-pg", action="store_true", help="跳过 PostgreSQL 两项")
     parser.add_argument("--skip-redis", action="store_true", help="跳过 Redis 逐项探测")
     parser.add_argument("--json", action="store_true", help="额外输出一行 JSON 摘要（给 CI 解析）")
+    parser.add_argument(
+        "--require-backend",
+        default=None,
+        choices=("embedded-pack", "binaries", "external"),
+        help=("要求 PostgreSQL 必须走指定后端，不满足就退出码 1。默认不强制：只如实报告实测 backend"
+              "（embedded-pack | binaries | external）"),
+    )
     args = parser.parse_args(argv)
 
     temporary = args.data_dir is None
@@ -258,6 +294,24 @@ def main(argv: list[str] | None = None) -> int:
     pg_first, pg_second, pg, migration = _pg_stage(settings, args.skip_pg)
     checks.append(pg_first)
     checks.append(pg_second)
+    pg_backend = _pg_backend_of(pg, args.skip_pg)
+
+    # --- 后端要求（默认不强制，只在命令行上指定时才判定）-------------------
+    if args.require_backend and not args.skip_pg:
+        ok = pg_backend == args.require_backend
+        checks.append(
+            Check(
+                f"后端要求（--require-backend {args.require_backend}）",
+                ok,
+                f"实测 backend={pg_backend}" + ("" if ok else f"，要求 {args.require_backend}"),
+                []
+                if ok
+                else [
+                    f"实测 backend={pg_backend}，拿不到 {args.require_backend}；"
+                    "真实原因见上面第 1 项的报错（embedded-postgres 的 API 探测结果也在里面）"
+                ],
+            )
+        )
 
     redis_check, redis_lines = _redis_check(settings, args.skip_redis)
     checks.append(redis_check)
@@ -289,6 +343,7 @@ def main(argv: list[str] | None = None) -> int:
     failures = [check for check in checks if check.ok is False]
     skipped = [check for check in checks if check.ok is None]
     print("-" * 78)
+    print(f"PostgreSQL backend（实测）: {pg_backend}")
     print(f"结论: {len(checks) - len(failures) - len(skipped)} 项通过 / {len(failures)} 项失败 / {len(skipped)} 项跳过")
     suggestions: list[str] = []
     for check in failures:
@@ -313,6 +368,9 @@ def main(argv: list[str] | None = None) -> int:
             "data_dir": str(data_dir),
             "cold_start_total_ms": round(total_ms, 1),
             "data_dir_bytes": size,
+            "pg_backend": pg_backend,
+            "pg_notes": list(getattr(pg, "notes", [])),
+            "embedded_probe": getattr(pg, "embedded_probe", {}),
             "migration": migration,
             "redis": redis_lines,
         }

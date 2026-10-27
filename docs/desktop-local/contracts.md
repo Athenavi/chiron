@@ -321,4 +321,3 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - `response_format is None` 的请求哈希与改动前**逐字节相同**，存量 L2/L3 条目继续命中，无需迁移；
 - 非空时形状参与哈希：同一 prompt 先文本、后 `json_object` 请求**不会**命中前者的纯文本结果；
 - 该约束有单测守着：`python-engine/tests/test_desktop_infer.py`。
-
