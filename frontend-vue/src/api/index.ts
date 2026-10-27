@@ -5,6 +5,7 @@ import { canAutoRetry, isRateLimitStatus, resolveWaitMs } from '../utils/rateLim
 import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
+import { currentDeviceMode, type ChironMode } from '../stores/device'
 /** 桌面壳（Electron）在 preload 里注入 chironDesktop.apiUrl；Web 端回落到构建期变量 */
 type DesktopHost = {
   apiUrl?: string
@@ -16,6 +17,19 @@ type DesktopHost = {
 const desktopHost = (globalThis as { chironDesktop?: DesktopHost }).chironDesktop
 export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
 const isDesktop = Boolean(desktopHost?.isDesktop)
+
+/**
+ * 当前运行模式（`local` | `cloud`）。
+ *
+ * 真相在 preload（主进程 `config.json`），此处是**同步快照**：只要 preload 已注入
+ * `mode`，任何调用点（含非组件上下文）都能立刻判断自己该不该走云端接口。
+ * 需要响应式时用 `useDeviceStore()`（`src/stores/device.ts`）。
+ */
+export function getDeviceMode(): ChironMode {
+  return currentDeviceMode()
+}
+
+export type { ChironMode }
 
 /**
  * 桌面壳鉴权：file:// 页面访问 http(s):// API 属于跨站请求，后端 SameSite=Lax
@@ -307,7 +321,30 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
+    // 本地模式：本地后端（desktop-local）第一批只实现 health / auth / models，
+    // 其余端点回 501。不给明确提示的话，界面只显示"请求失败"——用户无从知道
+    // 这个功能在本地模式下还没做，反而会怀疑是装坏了。
+    if (status === 501 && getDeviceMode() === 'local') {
+      const message = t('errors.local_mode_feature_unavailable')
+      error.message = message
+      const detail = error.response?.data
+      if (detail && typeof detail === 'object') {
+        // 注入稳定 code：describeApiError 优先按 code 取本地化文案（随界面语言切换）
+        detail.code = 'local_mode_feature_unavailable'
+      }
+      window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }))
+      return Promise.reject(error)
+    }
+
     if (status === 401) {
+      // 本地模式没有登录页：token 失效只提示，不清本地会话也不跳 /login
+      // （跳过去只会落到本地模式下被拦截的云专属路由）。
+      if (getDeviceMode() === 'local') {
+        window.dispatchEvent(new CustomEvent('api:error', {
+          detail: { message: t('errors.auth_required') },
+        }))
+        return Promise.reject(error)
+      }
       // Cookie/token 过期：清本地登录态，跳转登录页
       localStorage.removeItem('user')
       setAuthToken('')
