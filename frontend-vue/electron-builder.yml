@@ -64,20 +64,40 @@ extraResources:
       - "!**/__pycache__/**"
   - from: ../alembic.ini
     to: alembic.ini
-  # 随包的 Python 运行时（解释器 + desktop-local 全部依赖 + embedded-postgres 自带的
-  # PG 二进制）。由 `desktop-local/scripts/prepare_python_runtime.py` 生成：
-  #   resources/python/python.exe         ← bundledPython() 认这个路径
-  #   resources/python/Lib/site-packages/ ← fastapi / asyncpg / embedded_postgres …
+  # 随包的 uv 二进制。**不再随包携带 Python 运行时**：解释器与依赖由 uv 在首次启动
+  # 时装到 userData/local/runtime（见 electron/runtime-install.cjs），这样
+  #   - 安装包小得多（省掉约 140MB 的解释器 + site-packages）；
+  #   - 不会因为构建机 Python 版本与用户机不符而失效；
+  #   - 依赖清单只有 desktop-local/pyproject.toml 一份，升级依赖重建即可。
   #
-  # 没有它用户机必然起不来 core：`bundledPython()` 找不到资源，会回退到 PATH 上的
-  # `python`，而多数 Windows 机器只有 Microsoft Store 占位符；即便有解释器也没装
-  # fastapi/asyncpg，结果是 `ModuleNotFoundError`。这正是"本地模式全部页面报服务繁忙"
-  # 的底层原因之一。
+  # 目录布局必须与 `runtime-install.cjs::bundledUv()` 一致：
+  #   resources/uv/<platform>-<arch>/uv[.exe]
+  # 而 `desktop-local/scripts/prepare_uv.py` 产出的正是
+  #   frontend-vue/assets/uv/<platform>-<arch>/uv[.exe]
+  # 所以这里直接整目录映射，不做改名。
   #
-  # 该目录不进 git（约 150MB 构建产物），打包脚本会在 electron-builder 之前调用
-  # prepare_python_runtime.py 生成它，见 package.json 的 desktop:pack / desktop:dist。
-  - from: python-runtime
-    to: python
+  # 产物不进 git（见 .gitignore 的 /frontend-vue/assets/uv/），
+  # package.json 的 desktop:pack / desktop:dist 会在 electron-builder 之前调用
+  # prepare_uv.py 就位它；缺失时 electron-builder 只 warn 不报错（会打出残包），
+  # 故 CI 另有一步按安装包内真实路径复核。
+  - from: assets/uv
+    to: uv
+    filter:
+      - "**/*"
+  # 随包的**受管 CPython 解释器**（由 scripts/prepare_python.py 就位）。
+  #
+  # 只带 uv 是不够的：`uv venv --python 3.12 --python-preference only-managed` 在本地
+  # 没有受管 CPython 时会去 GitHub Releases 下载 python-build-standalone，而不少网络
+  # 下 github.com 根本不可达 ⇒ 首次启动永远卡在创建环境（页面全报服务繁忙）。
+  # 随包一份纯解释器后，运行时用它的绝对路径建 venv，uv 不再联网找解释器；
+  # 依赖仍按 desktop-local/pyproject.toml 首次现装。
+  #
+  # 布局必须与 `runtime-install.cjs::bundledPython()` 一致：
+  #   resources/python-runtime/<platform>-<arch>/<任意版本目录>/python[.exe]
+  # 产物不进 git（见 .gitignore 的 /frontend-vue/assets/python-runtime/），
+  # package.json 的 desktop:pack / desktop:dist 会在 electron-builder 之前就位它。
+  - from: assets/python-runtime
+    to: python-runtime
     filter:
       - "**/*"
       - "!**/__pycache__/**"

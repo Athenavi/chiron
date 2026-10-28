@@ -77,12 +77,11 @@ jobs:
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # 打包要随带一个**自包含**的 Python 运行时（解释器 + desktop-local 全部依赖 +
-      # embedded-postgres 自带的 PG 二进制），所以 runner 上必须有一个干净的 Python。
+      # runner 上的 Python **只用于跑构建脚本**（prepare_uv.py / prepare_redis.py 都只用
+      # 标准库），不再随包任何解释器：用户机的运行时由随包的 uv 在首次启动时创建。
       #
-      # 为什么固定 3.12 而不是跟着本地开发机的 3.14：runner 要能一次装齐 12 个依赖的
-      # 预编译 wheel（asyncpg / psycopg2-binary 这类 C 扩展在最新版上常滞后）。
-      # 产物自带解释器，用户机完全不受这个版本影响。
+      # 固定 3.12 是因为 desktop-local 的 pytest 套件与脚本都在这版验证过；
+      # 它与用户机最终跑什么 Python 无关（那个版本由 runtime-install.cjs 决定）。
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -157,16 +156,50 @@ jobs:
             echo "ok  $f  $(wc -c < "$f") bytes"
           done
 
-      # 就位随包的 Python 运行时（解释器 + 12 个依赖 + embedded-postgres 的 PG 二进制）
-      # 与 redis 二进制。**必须在 electron-builder 之前跑**：
-      #   1) 这两份产物都不进 git（体积 150MB+），CI checkout 上根本没有；
+      # 就位随包的 uv 二进制与 redis 二进制。**必须在 electron-builder 之前跑**：
+      #   1) 这两份产物都不进 git，CI checkout 上根本没有；
       #   2) electron-builder 对缺失的 `extraResources.from` 只 warn 不报错
       #      （app-builder-lib out/fileMatcher.js: `statOrNull(from)` 为 null 时
       #      `log.warn(...)` 后直接 return），所以缺了也照样出包 —— 打出的是残包。
       # 两个脚本自带"真实跑一次"的自检，失败即退出非零，把问题挡在出包之前。
-      - name: Prepare bundled python runtime
+      #
+      # **必须显式传 --platform**，不能让脚本按 runner 自己推断：
+      #   - `macos-latest` 现在是 arm64 runner，而 electron-builder.yml 的 mac
+      #     target 是 arch: [x64] —— 自动推断会装成 darwin-arm64，打进 x64 包里
+      #     就是一份跑不起来的二进制；
+      #   - win/linux runner 目前是 x64，同样按 target 走而不是按 runner 走。
+      - name: Prepare bundled uv binary
         working-directory: desktop-local
-        run: python scripts/prepare_python_runtime.py
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            win)   key=win32-x64 ;;
+            mac)   key=darwin-x64 ;;
+            linux) key=linux-x64 ;;
+            *) echo "::error::未知平台 ${{ matrix.platform }}"; exit 1 ;;
+          esac
+          echo "uv platform key = $key"
+          python scripts/prepare_uv.py --platform "$key"
+
+      # 解释器也要随包。只带 uv 不够：`uv venv --python <ver> --python-preference
+      # only-managed` 在本地没有受管 CPython 时会去 GitHub Releases 下载
+      # python-build-standalone，而不少网络下 github.com 不可达 ⇒ 首次启动永远卡在
+      # 创建环境。随包一份纯解释器后，运行时用它的绝对路径建 venv，不再联网找解释器；
+      # 依赖仍按 pyproject.toml 首次现装。
+      #
+      # 同样**必须显式传 --platform**，理由与上一步一致（runner 架构 ≠ target 架构）。
+      - name: Prepare bundled CPython interpreter
+        working-directory: desktop-local
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+            win)   key=win32-x64 ;;
+            mac)   key=darwin-x64 ;;
+            linux) key=linux-x64 ;;
+            *) echo "::error::未知平台 ${{ matrix.platform }}"; exit 1 ;;
+          esac
+          echo "python platform key = $key"
+          python scripts/prepare_python.py --platform "$key"
 
       - name: Prepare bundled redis binary
         working-directory: desktop-local
@@ -201,10 +234,12 @@ jobs:
           fail=0
           need=(
             "desktop-local/app/main.py"
+            "desktop-local/pyproject.toml"
             "migrations"
             "alembic.ini"
           )
-          # 解释器：Windows 在 resources/python/python.exe，POSIX 在 resources/python/bin/python3
+          # pyproject.toml 必须在包里：首次启动时 uv 就是靠它装依赖的，
+          # 缺了它能装出一个空环境，然后表现为"依赖装完了但导不进来"。
           for p in "${need[@]}"; do
             if [[ ! -e "$root/$p" ]]; then
               echo "::error::缺少 $root/$p"
@@ -214,32 +249,72 @@ jobs:
             fi
           done
 
+          # 随包的 uv 二进制（首次启动自装运行时的唯一入口）。
+          # 目录键必须与 runtime-install.cjs::bundledUv() 的
+          # `${process.platform}-${process.arch}` 逐字一致，写错等于没有 uv。
           if [[ "${{ matrix.platform }}" == "win" ]]; then
-            py="$root/python/python.exe"
+            uv="$root/uv/win32-x64/uv.exe"
             redis="$root/desktop-local/bin/redis/redis-server.exe"
-            pg="$root/python/Lib/site-packages/embedded_postgres/pginstall/bin/postgres.exe"
-          else
-            py="$root/python/bin/python3"
+          elif [[ "${{ matrix.platform }}" == "mac" ]]; then
+            uv="$root/uv/darwin-x64/uv"
             redis="$root/desktop-local/bin/redis/redis-server"
-            pg="$root/python/lib/python3.12/site-packages/embedded_postgres/pginstall/bin/postgres"
+          else
+            uv="$root/uv/linux-x64/uv"
+            redis="$root/desktop-local/bin/redis/redis-server"
           fi
-          for p in "$py" "$redis" "$pg"; do
+          for p in "$uv" "$redis"; do
             if [[ ! -e "$p" ]]; then
-              echo "::error::缺少 $p —— 本地模式在用户机上必然起不来"
+              echo "::error::缺少 $p —— 首次启动装不出运行时 / 本地模式起不来"
               fail=1
             else
               echo "ok  ${p#"$root/"}"
             fi
           done
 
-          # 解释器必须能真的跑起来（不只是文件存在）：在干净环境里 import 一次 app。
-          # 这一步同时验证 libpython / DLL 是否齐、依赖是否装全。
-          if [[ -x "$py" || "${{ matrix.platform }}" == "win" ]]; then
-            ( cd "$root/desktop-local" && env -u PYTHONHOME -u PYTHONPATH PYTHONNOUSERSITE=1 \
-                "$py" -c "import app.main" ) || {
-              echo "::error::随包解释器无法 import app.main（依赖或动态库不全）"
+          # uv 不只是"文件在"，还得真能执行：CI 的 runner 架构与目标架构不同
+          # （macos-latest 是 arm64，target 是 x64），拿错架构的二进制会在这里暴露。
+          if [[ -e "$uv" ]]; then
+            if "$uv" --version; then
+              echo "ok  uv 可执行"
+            else
+              echo "::error::$uv 无法执行（架构不匹配或缺少可执行位）"
               fail=1
-            }
+            fi
+          fi
+
+          # **随包的受管 CPython 解释器**：首次启动建 venv 要用它的绝对路径，
+          # 否则 uv 会去 GitHub 下载（github.com 不可达的网络下必然失败）。
+          # 布局必须与 runtime-install.cjs::bundledPython() 一致：
+          #   resources/python-runtime/<platform>-<arch>/<版本目录>/python[.exe]
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            pyroot="$root/python-runtime/win32-x64"
+          elif [[ "${{ matrix.platform }}" == "mac" ]]; then
+            pyroot="$root/python-runtime/darwin-x64"
+          else
+            pyroot="$root/python-runtime/linux-x64"
+          fi
+          pyexe="$(find "$pyroot" -maxdepth 3 -name 'python.exe' -o -maxdepth 3 -name 'python3' 2>/dev/null | head -1)"
+          if [[ -z "$pyexe" ]]; then
+            echo "::error::缺少随包解释器 $pyroot —— 首次启动将无法创建环境"
+            ls -la "$pyroot" 2>/dev/null || true
+            fail=1
+          else
+            echo "ok  ${pyexe#"$root/"}"
+            if "$pyexe" -c "import sys" 2>/dev/null; then
+              echo "ok  随包解释器可执行（$("$pyexe" -V 2>&1)）"
+            else
+              echo "::error::$pyexe 无法执行（架构不匹配或缺少依赖）"
+              fail=1
+            fi
+          fi
+
+          # **不复用旧的 resources/python**：那是"解释器 + 已装依赖"的整包，
+          # 会冻结构建机状态、漏一个包就整体失效。这里反向断言它没有被加回来。
+          if [[ -e "$root/python" ]]; then
+            echo "::error::安装包里仍然带着 resources/python —— 旧形态已废弃，应为 python-runtime"
+            fail=1
+          else
+            echo "ok  未随包旧的 resources/python（符合预期）"
           fi
 
           exit "$fail"

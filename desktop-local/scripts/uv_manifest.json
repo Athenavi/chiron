@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "uv 二进制的**唯一**版本与校验来源。构建期由 scripts/prepare_uv.py 按此清单下载并强校验。",
+    "",
+    "为什么从 PyPI 取而不是 GitHub Release：",
+    "  1. 校验值必须**可验证**。`vendor/规划.md` §8 要求「版本号 / SHA256 / 下载地址取不到",
+    "     就写未固化，不自动下载工具」。GitHub Release 的 sha256.sum 在受限网络下取不到，",
+    "     写一个没核对过的哈希等于假固化；而 PyPI 的 JSON API 给出的是发布者上传时的摘要，",
+    "     可以逐字节核对（`https://pypi.org/pypi/uv/<version>/json` 的 urls[].digests.sha256）。",
+    "  2. uv 官方在 PyPI 上发布了各平台 wheel，里面的二进制与 GitHub Release 同源。",
+    "",
+    "wheel 的二进制位置：`uv-<ver>.data/scripts/uv[.exe]`，prepare_uv.py 按文件名递归查找，",
+    "不依赖 ZIP 内的固定路径（目录名随版本变）。",
+    "",
+    "升级方式：改 version，把每个平台的 url 与 sha256 一起替换。**少一个平台就等于那个平台",
+    "打不出包**，prepare_uv.py 会在缺项时直接失败而不是静默跳过。",
+    "",
+    "平台键的格式是 `<process.platform>-<arch>`，与壳层 process.platform / process.arch 对齐。"
+  ],
+  "version": "0.13.6",
+  "base_url": "https://files.pythonhosted.org/packages",
+  "assets": {
+    "win32-x64": {
+      "file": "uv-0.13.6-py3-none-win_amd64.whl",
+      "url": "https://files.pythonhosted.org/packages/7c/9d/714523188aea3054644d8e69ae8089aac70325a3cee2d3d05509d4f23398/uv-0.13.6-py3-none-win_amd64.whl",
+      "sha256": "7c9bc35ccb65932d8dc10a0669f9c805eaa3c9827ce18ecbecb1bd67944b2cdf",
+      "binary": "uv.exe"
+    },
+    "win32-arm64": {
+      "file": "uv-0.13.6-py3-none-win_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/6a/7d/5ebb4cccbb11ae9e10f6cda704ce382722ab9dc68c9280a5b810378aee3e/uv-0.13.6-py3-none-win_arm64.whl",
+      "sha256": "722c7f96803f115e53918b8ee8858d1680ea6077c614b6db750747d709ab8d9a",
+      "binary": "uv.exe"
+    },
+    "darwin-arm64": {
+      "file": "uv-0.13.6-py3-none-macosx_11_0_arm64.whl",
+      "url": "https://files.pythonhosted.org/packages/f4/14/77230cc4f6a73a31578cb8070a5f67f58a76946ead643ae8a4155620d6da/uv-0.13.6-py3-none-macosx_11_0_arm64.whl",
+      "sha256": "51361029b7cf91185d0092c4b356d110b4ad629e9cb11593f1e006ac72a72ca9",
+      "binary": "uv"
+    },
+    "darwin-x64": {
+      "file": "uv-0.13.6-py3-none-macosx_10_12_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/33/55/ff10d3f756c39a239e492e57262bd22fcda412a9f85a268175447cf33b09/uv-0.13.6-py3-none-macosx_10_12_x86_64.whl",
+      "sha256": "95f042b95e67ef8c3d3569bb6e9d895e592002c5e871cf3f1afe407c9d77a294",
+      "binary": "uv"
+    },
+    "linux-x64": {
+      "file": "uv-0.13.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "url": "https://files.pythonhosted.org/packages/5c/43/0688ff5142934238f2812e348f4a24e09b57d48bfb38dd8f850325a0d9de/uv-0.13.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl",
+      "sha256": "22759b8895e1103578de6fb4cd27e94b4399d021023378d29f01333717751fba",
+      "binary": "uv"
+    },
+    "linux-arm64": {
+      "file": "uv-0.13.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+      "url": "https://files.pythonhosted.org/packages/05/3b/f78583af6504f1270da95fd0d0935e381f58330c007260f450e81a1e5e1b/uv-0.13.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl",
+      "sha256": "7ec5486476d67a4214c460b5492393ee2300d84e1de17b293100a019b413568b",
+      "binary": "uv"
+    }
+  }
+}

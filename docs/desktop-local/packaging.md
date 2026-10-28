@@ -15,7 +15,7 @@
 | 本地 core | `resources/desktop-local/` | Python 源码（`extraResources`） |
 | 迁移 | `resources/migrations/`、`resources/alembic.ini` | alembic 需要真实文件路径 |
 | 可选组件 | `resources/components/` | PageIndex / LangExtract，按需下载 |
-| Python 运行时 | `resources/python/` | **随包**：解释器 + `desktop-local` 全部依赖 + PG 二进制，约 150MB |
+| Python 运行时 | `<userData>/local/runtime/`（venv 与依赖） | **解释器随包**（`resources/python-runtime/`），venv 与依赖首次启动由随包 `uv` 现装 |
 | Redis 二进制 | `resources/desktop-local/bin/redis/` | **随包**：`redis-server` + MSYS2 运行时 DLL |
 
 **改造前实测**（2026-10-27）：`app.asar` 863MB、`win-unpacked` 1.3GB。
@@ -47,41 +47,70 @@ files:
    `process.resourcesPath` 解析；或
 2. 改用 electron-builder 的 `files` 白名单只保留 `electron-updater` 一棵依赖树。
 
-## 3. Python 运行时（随包）
+## 3. Python 运行时（解释器随包 + 依赖首装）
 
-安装包**自带**一份精简 Python 运行时，用户机上不需要预装 Python，也不需要 pip。
+安装包**带一份纯解释器**（`resources/python-runtime/<platform>-<arch>/<版本目录>/`）
+和 `uv` 二进制，但**不带 venv、不带已装依赖**。首次启动时由壳层调用 uv：
 
-`desktop-local/scripts/prepare_python_runtime.py` 负责生成 `frontend-vue/python-runtime/`，
-`electron-builder.yml` 再把它映射成 `resources/python/`：
+1. `uv venv --python <随包解释器的绝对路径> --python-preference only-managed` 在
+   `<userData>/local/runtime/venv` 建空环境。传绝对路径是为了让 uv **完全不联网找
+   解释器** —— 这一点很关键，见下面的「为什么解释器必须随包」；
+2. `uv pip install -r <resources>/desktop-local/pyproject.toml` 装依赖
+   （`embedded_postgres` 自带的整套 PG 二进制随依赖一起进来）；
+3. 真实 `import` 一次本地核心做验收，通过才写安装清单。
 
-- 解释器与标准库：剔除 `Lib/test`、`idlelib`、`ensurepip` 等，约 40MB；
-- `desktop-local` 的全部依赖装在 `Lib/site-packages/`（含 `embedded_postgres` 自带的
-  整套 PG 二进制，约 56MB），装完约 150MB；
-- 依赖由**宿主机**的 `pip install --target` 装入 —— 精简运行时没有 pip，在目标解释器里
-  执行 `-m pip` 必然失败。
+用户机上不需要预装 Python，也不需要 pip。这条路径的全部实现在
+`frontend-vue/electron/runtime-install.cjs`。
+
+**为什么解释器必须随包**：只带 uv 时，`uv venv --python 3.12 --python-preference
+only-managed` 在本地没有受管 CPython 时会去 **GitHub Releases 下载
+python-build-standalone**。在 `github.com` 不可达的网络下（企业内网、部分地区）这一步
+会以 `invalid peer certificate: UnknownIssuer` 失败，而且**发生在创建窗口之前**，表现
+出来就是"首次启动卡住、所有页面报服务繁忙"——它不是靠重试能自愈的。实测确认：随包
+解释器 + 绝对路径后，建 venv 全程离线且 1 秒内完成（`Using CPython 3.12.16
+interpreter at: <resources>/...`）。
+
+**为什么依赖仍然首装而不是随包**：随包一份装好依赖的运行时意味着安装包与构建机的
+Python 版本、架构强绑定，且升级任何一个依赖都要重新出包。依赖清单只留
+`desktop-local/pyproject.toml` 一份，装出来的环境天然与本机匹配。
+
+**代价**：首次启动需要联网装依赖（建 venv 已完全离线）。网络受限时可设
+`CHIRON_PIP_INDEX_URL` 指向可达的镜像源。
+
+`desktop-local/scripts/prepare_uv.py` 负责把 uv 就位到 `frontend-vue/assets/uv/<platform>/`，
+`electron-builder.yml` 再把它映射成 `resources/uv/`：
+
+- 版本号与各平台 SHA256 固化在 `desktop-local/scripts/uv_manifest.json`；
+- 下载后**强校验** SHA256，不符即非零退出（`--from` 可指定已下载的压缩包离线就位）；
+- `--check` 只做自检：真实执行 `uv --version` 并比对清单里的版本号。
 
 构建脚本会在 `electron-builder` 之前自动调用它：
 
 ```bash
-npm run prepare:runtime   # 生成 frontend-vue/python-runtime/
+npm run prepare:uv        # 就位 frontend-vue/assets/uv/<platform>-<arch>/
+npm run prepare:python    # 就位 frontend-vue/assets/python-runtime/<platform>-<arch>/
 npm run prepare:redis     # 就位 desktop-local/bin/redis/
 ```
 
-两者都带自检：`prepare_python_runtime.py --check` 会在干净环境下真实 import 关键模块，
-`prepare_redis.py` 会真起一个实例跑 8 条命令（含 `EVAL`）。任一步失败即非零退出。
+`prepare:python` 需要联网下载解释器。若 `github.com` 不可达（uv 默认从那里取
+python-build-standalone），用 `--mirror <地址>` 换源，或用 `--from <已就位目录>` 走离线。
+**这一步不能省**：只带 `uv` 而没带解释器时，首次启动会卡在创建环境（详见第 3 节）。
+
+`prepare_uv.py` 的下载步骤同样需要联网；离线构建请先用 `--from` 指定压缩包。
 
 ### 启动时的解析顺序
 
 `components.cjs::resolveCoreLaunch()` 在打包态按下列顺序**逐个真实探测**
 （`probeBundledRuntime` 会实际 `import fastapi, uvicorn, asyncpg, embedded_postgres`）：
 
-1. `resources/python/python.exe`（或 `resources/python/bin/python3`）
-2. `CHIRON_PYTHON` 环境变量
-3. `PATH` 上的 `python`
+1. `<userData>/local/runtime/venv` —— 首次启动自装的运行时（正常情况）
+2. `resources/python` —— 旧形态安装包里的随包运行时（只为兼容，新包不带）
+3. `CHIRON_PYTHON` 环境变量
+4. `PATH` 上的 `python`
 
-谁真的能导入依赖就用谁；**不会盲用**下一个候选。三者都不可用时抛出的错误会逐个列出
-候选与具体原因（例如"缺少模块 fastapi"），并给出修复路径（重装 / 重新打包），
-而不是静默回退、让用户只看到"服务繁忙"。
+谁真的能导入依赖就用谁；**不会盲用**下一个候选。全都不可用时抛出的错误会逐个列出
+候选与具体原因（例如"缺少模块 fastapi"），并给出修复路径，而不是静默回退、
+让用户只看到"服务繁忙"。
 
 之所以要逐个探测而不是简单回退：用户机上 `PATH` 里的 `python` 可能是 Microsoft Store
 的占位符（spawn 成功但立刻退出），也可能装了 Python 却没有 `fastapi`/`asyncpg`，
@@ -92,19 +121,19 @@ npm run prepare:redis     # 就位 desktop-local/bin/redis/
 ```bash
 cd frontend-vue
 
-# 一条命令就位运行时与 redis，再出解包目录（真机验证用，最快）
+# 一条命令就位 uv 与 redis，再出解包目录（真机验证用，最快）
 npm run desktop:pack
 ```
 
-`desktop:pack` / `desktop:dist` 已把 `prepare:runtime` 与 `prepare:redis` 串在前面，
-不需要手工解压 Python 或拷贝 redis。等价的手工步骤：
+`desktop:pack` / `desktop:dist` 已把 `prepare:uv` 与 `prepare:redis` 串在前面，
+不需要手工解压 uv 或拷贝 redis。等价的手工步骤：
 
 ```bash
-python desktop-local/scripts/prepare_python_runtime.py   # 生成 frontend-vue/python-runtime/
-python desktop-local/scripts/prepare_redis.py            # 就位 desktop-local/bin/redis/
+python desktop-local/scripts/prepare_uv.py    # 就位 frontend-vue/assets/uv/<platform>-<arch>/
+python desktop-local/scripts/prepare_redis.py # 就位 desktop-local/bin/redis/
 ```
 
-只跑 electron-builder（复用已生成的运行时）：
+只跑 electron-builder（复用已就位的 uv / redis）：
 
 ```bash
 NODE_TLS_REJECT_UNAUTHORIZED=0 \
@@ -133,20 +162,29 @@ pnpm exec electron-builder --win --dir --publish never
 ```bash
 ls -la release/win-unpacked/resources/app.asar           # 目标 < 100MB
 ls release/win-unpacked/resources/desktop-local/app     # core 源码在位
+ls release/win-unpacked/resources/desktop-local/pyproject.toml  # 依赖清单在位（uv 靠它装）
 ls release/win-unpacked/resources/migrations/versions   # 迁移在位
-ls release/win-unpacked/resources/python/python.exe     # 随包运行时在位
-ls release/win-unpacked/resources/python/Lib/site-packages/embedded_postgres/pginstall/bin/initdb.exe
+ls release/win-unpacked/resources/uv/win32-x64/uv.exe   # 随包 uv 在位（首次启动自装的入口）
 ls release/win-unpacked/resources/desktop-local/bin/redis/redis-server.exe
 release/win-unpacked/Chiron.exe --remote-debugging-port=9223
 ```
 
-**`resources/python` 必须存在**：缺了它用户机上 core 起不来，前端所有页面会报
-"服务繁忙"。壳层现在会在启动时探测并报出具体缺什么，但打包阶段就该拦住 ——
-`prepare_python_runtime.py --check` 会真实 import 关键模块，失败即非零退出。
+**`resources/uv` 必须存在**：缺了它首次启动装不出运行时，用户机上 core 起不来，
+前端所有页面会报"服务繁忙"。`prepare_uv.py --check` 会真实执行 `uv --version`
+并比对清单版本号，失败即非零退出。
+
+**`resources/python` 不应存在**：那是「解释器 + 已装依赖」的旧形态，已被
+`resources/python-runtime/`（纯解释器）+ 首次启动装依赖取代（见第 3 节）。
+CI 里有反向断言，防止它被悄悄加回来。
+
+**`resources/python-runtime/<platform>-<arch>/` 必须存在**：缺了它首次启动会去 GitHub
+下载解释器，在受限网络下必然失败。CI 会找到其中的 `python[.exe]` 并执行一次验证。
 
 真机启动后从 CDP 检查：
 
 - `window.chironDesktop.mode === 'local'`
+- 首次启动时先出现安装进度窗，装完自动关闭并进主界面
+- `<userData>/local/runtime/install.json` 存在，`dependencyFingerprint` 非空
 - `GET {apiUrl}/readyz` 返回 `pg=true`、`migration.ok=true`
 - 退出后 `netstat` 无 core / PG 残留监听
 
@@ -154,10 +192,11 @@ release/win-unpacked/Chiron.exe --remote-debugging-port=9223
 
 - 未签名产物在 macOS 上需要用户手动放行；Windows SmartScreen 会拦。
 - `asarUnpack` 只解包 wasm 与 `vendor/**`；新增二进制资源时记得补规则。
-- 随包 Python 目前从**构建机**的解释器精简而来（`prepare_python_runtime.py` 的
-  `--from` 默认取本机 Python），因此产物与构建机的 Python 版本绑定；
-  跨平台/跨版本发布时需在对应平台各构建一次。
-- 随包运行时约 150MB，安装包体积会显著增加。这是"用户机开箱即用"的代价：
-  不随包时用户机上大概率没有 `fastapi`/`asyncpg`，core 必然起不来。
+- **首次启动需要联网装依赖**：解释器已随包，建 venv 完全离线；但 `uv pip install`
+  要访问 index。网络受限时可设 `CHIRON_PIP_INDEX_URL` 指向可达镜像，或事后把环境
+  放到 `<userData>/local/runtime`。
+- 首次安装较重：`embedded-postgres` 自带整套 PG 二进制，首次要拉几十到上百 MB。
+- 构建期也需要联网下载 uv（约 15–20MB/平台）；离线构建用
+  `prepare_uv.py --from <压缩包>`。
 - redis 二进制来自构建机的发行版（含 MSYS2 运行时 DLL）；脚本会解析 scoop 的
   shim 取真身，但不会跨平台转换 —— Linux/macOS 包需在对应平台生成。

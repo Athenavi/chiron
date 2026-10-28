@@ -111,4 +111,17 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   saveModelConfig: config => ipcRenderer.invoke('desktop:save-model-config', config || {}),
   /** 重启本地后端，让新的 provider 配置生效（仅本地模式） */
   restartLocalBackend: () => ipcRenderer.invoke('desktop:restart-local-backend'),
+
+  /**
+   * 订阅首次启动的运行时安装进度（install.html 用）。
+   *
+   * 只在安装进度页需要：正常启动时运行时已就绪，一条消息都不会来。
+   * 返回取消订阅函数 —— 页面重载前不解绑会累积监听器。
+   */
+  onRuntimeInstallStage: callback => {
+    if (typeof callback !== 'function') return () => {}
+    const handler = (_event, info) => callback(info)
+    ipcRenderer.on('desktop:runtime-stage', handler)
+    return () => ipcRenderer.removeListener('desktop:runtime-stage', handler)
+  },
 })

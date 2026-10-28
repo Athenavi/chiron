@@ -124,10 +124,15 @@ Thumbs.db
 # `desktop-local/scripts/build_component.py` 产出的真实组件包（bundle.zip 是
 # 带整棵依赖树的归档，几百 MB，不能入库）。产物是构建出来的，不是源码。
 /desktop-local/dist/
-# 随安装包发布的 Python 运行时（`desktop-local/scripts/prepare_python_runtime.py` 生成，
-# 约 140MB，含解释器与 desktop-local 的全部依赖）。产物，不入库；
-# `electron-builder.yml` 把它映射成 `resources/python/`。
-/frontend-vue/python-runtime/
+# 随安装包发布的 uv 二进制（`desktop-local/scripts/prepare_uv.py` 就位，每个平台约 20MB）。
+# 产物，不入库；`electron-builder.yml` 把它映射成 `resources/uv/`。
+# 整目录忽略：Windows 产物是 uv.exe（已被上面 `*.exe` 覆盖），但 macOS/Linux 的
+# 裸二进制没有扩展名，只靠 `*.exe` 会漏。
+/frontend-vue/assets/uv/
+# 随安装包发布的受管 CPython 解释器（`desktop-local/scripts/prepare_python.py` 就位，
+# 每个平台约 65MB）。同样是构建产物，不入库；`electron-builder.yml` 映射成
+# `resources/python-runtime/`。整目录忽略 —— 里面是完整的标准库，几千个文件。
+/frontend-vue/assets/python-runtime/
 # 内置 redis 二进制（`desktop-local/scripts/prepare_redis.py` 就位；`*.exe` 已被上面
 # Go 段忽略，这里整目录忽略，避免 .conf/.dll 漏网）
 /desktop-local/bin/

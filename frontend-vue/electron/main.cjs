@@ -79,6 +79,15 @@ const configuredSessions = new WeakSet()
 /** 本地后端只停一次：before-quit 与模式切换都会触发停止 */
 let localBackendStopped = false
 
+/**
+ * 首次启动安装进度窗口。安装发生在 createWindow 之前，没有窗口就没有任何东西
+ * 能显示进度 —— 用户只会看到"点了图标没反应"。装完立刻关掉，主界面照旧走 createWindow。
+ */
+let installWindow = null
+
+/** 安装进度推送通道名，必须与 preload.cjs 的订阅名一致 */
+const RUNTIME_STAGE_CHANNEL = 'desktop:runtime-stage'
+
 const APP_ID = 'com.chiron.agent'
 const APP_ROOT = path.resolve(__dirname, '..')
 const DEV_ORIGIN = (() => {
@@ -206,7 +215,7 @@ function loadOptionalModule(name) {
  * 启动回调由 W4 的 components.cjs 提供；这里全部走可选探测 —— 模块缺失、接口缺失、
  * 启动抛错都要变成一条可读状态再显示本地错误页，而不是让主进程崩掉。
  */
-async function startLocalBackend() {
+async function startLocalBackend(options = {}) {
   // 显式守卫：云端模式下**一律不启动**本地 core（以及它拉起的 PG / redis）。
   // 调用点目前都在 `currentMode === 'local'` 分支里，但这条不变量不能只靠调用方自律 ——
   // 以后新增一处调用就可能让云端用户白起一套数据库。放在这里，误用会立刻变成可读状态。
@@ -244,7 +253,7 @@ async function startLocalBackend() {
     }
   }
   try {
-    const started = await start()
+    const started = await start(options)
     const baseUrl =
       typeof started === 'string' ? started : started?.baseUrl || started?.apiUrl || ''
     const dataDir = (started && typeof started === 'object' && started.dataDir) || ''
@@ -264,8 +273,86 @@ async function startLocalBackend() {
   }
 }
 
-/** 停止本地后端：退出前与切换模式时都要调；没接线就当作已经停了 */
-async function stopLocalBackend() {
+/**
+ * 建安装进度窗口。
+ *
+ * 为什么单独建一个 520×620 的窗口而不是复用主窗口：安装发生在 createWindow 之前，
+ * 那时主窗口还不存在；而安装一旦开始就是几分钟的网络下载，没有反馈会被当成卡死。
+ * 装完立刻销毁，主界面完全不感知它的存在。
+ */
+function openInstallWindow() {
+  if (installWindow && !installWindow.isDestroyed()) return installWindow
+  installWindow = new BrowserWindow({
+    width: 520,
+    height: 620,
+    resizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    backgroundColor: WINDOW_BACKGROUND,
+    show: false,
+    title: 'Chiron — 正在准备本地环境',
+    webPreferences: {
+      preload: path.join(__dirname, 'preload.cjs'),
+      partition: partitionFor('local'),
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: false,
+      // 进度页也用 preload 的订阅能力；模式按 local 注入，与它实际服务的东西一致
+      additionalArguments: [`${MODE_ARG_PREFIX}local`],
+    },
+  })
+  installWindow.once('ready-to-show', () => {
+    if (installWindow && !installWindow.isDestroyed()) installWindow.show()
+  })
+  installWindow.on('closed', () => {
+    installWindow = null
+  })
+  installWindow.loadFile(path.join(__dirname, 'install.html')).catch(err => {
+    logMain('warn', `install page load failed: ${err?.message || err}`)
+  })
+  return installWindow
+}
+
+/** 关掉进度窗口。安装结束（成功或失败）必须调，否则它会一直盖在屏幕上 */
+function closeInstallWindow() {
+  const win = installWindow
+  installWindow = null
+  if (win && !win.isDestroyed()) win.destroy()
+}
+
+/**
+ * 把安装阶段推给进度窗口。
+ * 窗口不在就丢弃：安装也可能由"重启本地后端"触发，那时用户已经在主界面里了。
+ */
+function broadcastRuntimeStage(info) {
+  const win = installWindow
+  if (!win || win.isDestroyed()) return
+  try {
+    win.webContents.send(RUNTIME_STAGE_CHANNEL, info)
+  } catch {
+    /* 窗口正在销毁：进度丢了不影响安装本身 */
+  }
+}
+
+/**
+ * 只读询问：本地运行时现在能不能直接用。
+ * 内部任何失败都当作"就绪"，让启动照原路走 —— 进度窗只是个提示，不该成为新的失败点。
+ */
+function inspectLocalRuntime() {
+  const components = loadOptionalModule('./components.cjs')
+  if (!components || typeof components.inspectLocalRuntime !== 'function') {
+    return { ready: true, reason: 'unknown', message: '' }
+  }
+  try {
+    const result = components.inspectLocalRuntime()
+    return result && typeof result === 'object' ? result : { ready: true, reason: 'unknown', message: '' }
+  } catch (err) {
+    logMain('warn', `runtime inspect failed: ${err?.message || err}`)
+    return { ready: true, reason: 'unknown', message: '' }
+  }
+}
+
+/** 停止本地后端：退出前与切换模式时都要调；没接线就当作已经停了 */async function stopLocalBackend() {
   if (localBackendStopped) return false
   localBackendStopped = true
   const components = loadOptionalModule('./components.cjs')
@@ -713,27 +800,50 @@ if (!gotLock) {
     currentMode = resolveMode(readDeviceSettings())
     logMain('info', `starting in ${currentMode} mode`)
     if (currentMode === 'local') {
-      localBackend = await startLocalBackend()
-      let attempts = 0
-      // 最多再重试两次；仍失败就继续建窗口，让错误页把原因写在界面上
-      while (!localBackend.ok && attempts < 2) {
-        attempts += 1
-        const action = await askLocalBackendRecovery(localBackend)
-        if (action === 'quit') {
-          app.quit()
-          return
-        }
-        if (action === 'cloud') {
-          // applyModeSwitch 内部会写盘并 relaunch + exit，这里不用再建窗口
-          try {
-            await applyModeSwitch('cloud', {})
-          } catch (err) {
-            dialog.showErrorBox('切换运行模式失败', err?.message || String(err))
-            app.quit()
+      // 首次启动（或运行时被破坏）时，安装要跑几分钟。此时主窗口还不存在，
+      // 所以先弹一个进度窗口 —— 否则用户看到的是"点了图标，什么都没有"。
+      // 已就绪就完全不建这个窗口，避免正常启动时闪一下。
+      const runtimeState = inspectLocalRuntime()
+      const needsInstall = !runtimeState.ready
+      if (needsInstall) {
+        logMain('info', `local runtime not ready (${runtimeState.reason}): ${runtimeState.message || ''}`)
+        openInstallWindow()
+      }
+
+      // 进度/输出行只推给安装窗口；它在装完后会被销毁，广播会自行丢弃
+      const runtimeHooks = needsInstall
+        ? {
+            onRuntimeStage: info => broadcastRuntimeStage(info),
+            onRuntimeLine: line => logMain('info', `[runtime] ${line}`),
           }
-          return
+        : {}
+
+      try {
+        localBackend = await startLocalBackend(runtimeHooks)
+        let attempts = 0
+        // 最多再重试两次；仍失败就继续建窗口，让错误页把原因写在界面上
+        while (!localBackend.ok && attempts < 2) {
+          attempts += 1
+          const action = await askLocalBackendRecovery(localBackend)
+          if (action === 'quit') {
+            app.quit()
+            return
+          }
+          if (action === 'cloud') {
+            // applyModeSwitch 内部会写盘并 relaunch + exit，这里不用再建窗口
+            try {
+              await applyModeSwitch('cloud', {})
+            } catch (err) {
+              dialog.showErrorBox('切换运行模式失败', err?.message || String(err))
+              app.quit()
+            }
+            return
+          }
+          localBackend = await startLocalBackend(runtimeHooks)
         }
-        localBackend = await startLocalBackend()
+      } finally {
+        // 无论成败都必须关掉：失败时留着它会盖住后面的错误页
+        closeInstallWindow()
       }
       recordLocalStart(localBackend)
     }

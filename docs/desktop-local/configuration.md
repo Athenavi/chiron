@@ -24,7 +24,7 @@
 | # | 问题 | 位置 | 判定 | 建议 |
 |---|---|---|---|---|
 | 1 | 契约名 `CHIRON_*` 与 core 真正读的 `CHIRON_LOCAL_*` **两套并存**，只写契约名会静默失效 | `frontend-vue/electron/components.cjs:70-77`（`CORE_ENV_ALIASES`）、`desktop-local/app/config.py:30` | 🔴 | 让 core 直接认契约名（`AliasChoices`），删掉桥接表；这是唯一"写错了不报错、只是行为变了"的配置面 |
-| 2 | `python` 解释器名在两处写死字面量，另有一处 `process.env.CHIRON_PYTHON \|\| 'python'` | `components.cjs:413`、`components.cjs:423` | 🟡 | 收敛成 `DEFAULT_PYTHON` 常量；打包态优先 `resources/python/**` 的行为保持不变 |
+| 2 | `python` 解释器名在两处写死字面量，另有一处 `process.env.CHIRON_PYTHON \|\| 'python'` | `components.cjs:413`、`components.cjs:423` | 🟡 | 收敛成 `DEFAULT_PYTHON` 常量；打包态优先「自建 venv（`<userData>/local/runtime/venv`）」的行为保持不变 |
 | 3 | 本地 Ollama 地址 `http://127.0.0.1:11434` 既是代码默认值，又是 `secrets.bin` 里的可配置项 | `inference-proxy.cjs:19`、`inference-proxy.cjs:338` | 🟡 | 单一来源：默认值只在 constants 里出现一次，运行期以 `providers.ollama.baseUrl` > `CHIRON_OLLAMA_URL` > 常量 的顺序解析 |
 | 4 | embedded PG 口令 `chiron` / 用户 `chiron` / 库名 `chiron` 是默认值，且 `--auth=trust` | `desktop-local/app/config.py:84-86`、`storage/pg.py:624` | 🟡 | 只绑 loopback + trust 可接受，但应在 `configuration.md`/启动日志明确"这不是安全边界"；若要会话级隔离，改成每次启动随机口令 |
 | 5 | 超时/容量上限全散在模块常量里（core 侧 20+ 个、Electron 侧 10+ 个），没有一处能整体调 | 见第 5 节 | 🟡 | 与业务相关的（安装、健康检查、推理）进 `Settings` 字段；纯实现细节（行缓冲上限、stderr 尾巴）保持常量 |
@@ -154,7 +154,10 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 | `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:43-50`） | `components.cjs:372-376`（`packagedCoreDir()`） | 🟡 目录名写死 |
 | `resources/migrations/` | `extraResources` ← `../migrations`（`:51-55`） | `config.py` 的 `REPO_ROOT/migrations`（打包后 `REPO_ROOT` = `resources/`） | 🟡 |
 | `resources/alembic.ini` | `extraResources` ← `../alembic.ini`（`:56-57`） | `config.py:134-136` | 🟡 |
-| `resources/python/python.exe` 或 `resources/python/bin/python3` | **本轮不随包**（`:58-59` 注释） | `components.cjs:379-384`（`bundledPython()`，优先于 `CHIRON_PYTHON`） | 🟡 |
+| `<userData>/local/runtime/venv/`（`Scripts/python.exe` 或 `bin/python3`） | **不随包**，首次启动由 `runtime-install.cjs` 用随包解释器创建 | `components.cjs`（`installedRuntimePython()`，候选链最前） | 🟡 |
+| `resources/uv/<platform>-<arch>/uv[.exe]` | `extraResources` ← `assets/uv` | `runtime-install.cjs::bundledUv()`（首次启动自装的入口） | 🟡 目录键须与 `process.platform-arch` 逐字一致 |
+| `resources/python-runtime/<platform>-<arch>/…/python[.exe]` | **随包**：纯解释器，首次启动用它建 venv（不联网找解释器） | `runtime-install.cjs`（`bundledPython()`） | 🟡 |
+| `resources/python/python.exe` 或 `resources/python/bin/python3` | **不再随包**（仅为兼容旧安装包保留的候选） | `components.cjs`（`bundledPython()`，排在自建 venv 之后） | 🟡 |
 | `resources/components/**` | `extraResources` glob 过滤（`:34-39`，目录平时不存在） | 契约 §3 的可选组件目录 | 🟡 |
 
 `REPO_ROOT = Path(__file__).resolve().parents[2]`（`config.py:33`）是唯一把"打包后 `resources/`"

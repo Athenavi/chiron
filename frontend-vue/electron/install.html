@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <!--
+      首次启动安装页：和 error.html 一样不依赖前端 dist 与网络，
+      因为它在应用「还没准备好」的时候就要能显示。
+    -->
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'"
+    />
+    <title>Chiron — 正在准备本地环境</title>
+    <style>
+      :root {
+        --bg-page: #f9f9f7;
+        --bg-card: #ffffff;
+        --text-primary: #1f1f1c;
+        --text-secondary: #5c5c56;
+        --text-tertiary: #8a8a82;
+        --border: #e6e6e1;
+        --primary: #d97757;
+        --radius: 10px;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg-page: #1a1a19;
+          --bg-card: #20201f;
+          --text-primary: #f0efe9;
+          --text-secondary: #a8a8a0;
+          --text-tertiary: #75756e;
+          --border: #333330;
+        }
+      }
+      * { box-sizing: border-box; }
+      html, body { height: 100%; margin: 0; }
+      body {
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        background: var(--bg-page);
+        color: var(--text-primary);
+        font: 14px/1.6 -apple-system, "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+        -webkit-font-smoothing: antialiased;
+      }
+      main {
+        width: min(460px, calc(100vw - 48px));
+        padding: 28px;
+        background: var(--bg-card);
+        border: 1px solid var(--border);
+        border-radius: 14px;
+      }
+      h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
+      p { margin: 0 0 16px; color: var(--text-secondary); }
+      /* 阶段列表：已完成打勾、进行中高亮，用户能看出走到哪一步而不是干等 */
+      ol { margin: 0 0 16px; padding: 0; list-style: none; }
+      li {
+        display: flex;
+        align-items: baseline;
+        gap: 8px;
+        padding: 5px 0;
+        color: var(--text-tertiary);
+        font-size: 13px;
+      }
+      li .mark { width: 14px; flex: none; text-align: center; }
+      li.active { color: var(--text-primary); font-weight: 600; }
+      li.done { color: var(--text-secondary); }
+      li.done .mark { color: var(--primary); }
+      .hint {
+        margin: 0;
+        padding-top: 12px;
+        border-top: 1px solid var(--border);
+        font-size: 12px;
+        color: var(--text-tertiary);
+      }
+      .bar {
+        height: 3px;
+        margin: 0 0 18px;
+        border-radius: 2px;
+        background: var(--border);
+        overflow: hidden;
+      }
+      .bar > i {
+        display: block;
+        height: 100%;
+        width: 8%;
+        border-radius: 2px;
+        background: var(--primary);
+        transition: width 0.4s ease;
+      }
+      code {
+        display: block;
+        margin: 10px 0 0;
+        font: 12px/1.5 ui-monospace, "Cascadia Code", Consolas, monospace;
+        color: var(--text-tertiary);
+        word-break: break-all;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>正在准备本地环境</h1>
+      <p>首次启动需要下载并安装 Python 运行时与依赖，可能需要几分钟。之后启动会直接进入界面。</p>
+      <div class="bar"><i id="progress"></i></div>
+      <ol id="stages">
+        <li data-stage="probing"><span class="mark">·</span><span>检查本地运行时</span></li>
+        <li data-stage="creating-venv"><span class="mark">·</span><span>创建 Python 环境</span></li>
+        <li data-stage="installing-deps"><span class="mark">·</span><span>安装依赖</span></li>
+        <li data-stage="syncing-deps"><span class="mark">·</span><span>同步依赖</span></li>
+        <li data-stage="verifying"><span class="mark">·</span><span>验证运行时</span></li>
+      </ol>
+      <p class="hint">请保持网络连接。关闭窗口会中止本次安装，下次启动会重新尝试。</p>
+      <code id="detail"></code>
+    </main>
+    <script>
+      const ORDER = ['probing', 'creating-venv', 'installing-deps', 'syncing-deps', 'verifying']
+      const stages = document.getElementById('stages')
+      const progress = document.getElementById('progress')
+      const detail = document.getElementById('detail')
+
+      let current = 'probing'
+
+      /** 把某阶段标记为进行中，之前的全部记为已完成 */
+      function render(stageId, message) {
+        if (stageId === 'ready') {
+          // 装完就该切主界面了；这里先把进度条填满，避免闪一下 90%
+          progress.style.width = '100%'
+          for (const li of stages.children) {
+            li.className = 'done'
+            li.querySelector('.mark').textContent = '✓'
+          }
+          return
+        }
+        if (!ORDER.includes(stageId)) return
+        current = stageId
+        const currentIndex = ORDER.indexOf(stageId)
+        for (const li of stages.children) {
+          const index = ORDER.indexOf(li.dataset.stage)
+          const mark = li.querySelector('.mark')
+          if (index < currentIndex) {
+            li.className = 'done'
+            mark.textContent = '✓'
+          } else if (index === currentIndex) {
+            li.className = 'active'
+            mark.textContent = '›'
+          } else {
+            li.className = ''
+            mark.textContent = '·'
+          }
+        }
+        progress.style.width = `${Math.max(8, (currentIndex / ORDER.length) * 100)}%`
+        detail.textContent = message || ''
+      }
+
+      render('probing', '正在检查…')
+
+      // 通过 preload 订阅：不直接碰 ipcRenderer（contextIsolation 下页面拿不到）
+      if (window.chironDesktop && window.chironDesktop.onRuntimeInstallStage) {
+        window.chironDesktop.onRuntimeInstallStage(info => {
+          if (!info) return
+          render(info.stage, info.message)
+        })
+      } else {
+        detail.textContent = '无法订阅安装进度（preload 未就绪），安装仍在后台进行。'
+      }
+    </script>
+  </body>
+</html>

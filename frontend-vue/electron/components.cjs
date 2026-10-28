@@ -29,6 +29,8 @@ const crypto = require('node:crypto')
 const childProcess = require('node:child_process')
 const { spawn } = childProcess
 const DEFAULTS = require('./defaults.cjs')
+// 探测代码只写一份：首次安装（runtime-install.cjs）与启动前挑选解释器共用
+const { probeRuntime } = require('./runtime-probe.cjs')
 
 /** 与 contracts.md 的 ComponentInfo.name 一致，顺序即 UI 展示顺序 */
 const COMPONENT_NAMES = DEFAULTS.COMPONENT_NAMES
@@ -383,12 +385,68 @@ function packagedCoreDir() {
   return fs.existsSync(path.join(candidate, 'app', 'main.py')) ? candidate : ''
 }
 
-/** 打包时随包带的 Python（`resources/python/python.exe`）；没有就回退 CHIRON_PYTHON / PATH */
+/**
+ * 只读查询：本地运行时现在能不能直接用。
+ *
+ * 主进程在建主窗口**之前**用它决定"要不要先弹一个安装进度窗口"——
+ * 正常启动（运行时已就绪）就不该闪一个进度窗出来。
+ */
+function inspectLocalRuntime() {
+  let userData
+  try {
+    userData = userDataDir()
+  } catch {
+    // 纯 Node 环境（单测）没有 app.getPath：当作"无从判断"，不要因此挡住启动
+    return { ready: false, reason: 'no-userdata', message: '无法确定本地数据目录' }
+  }
+  const sources = packagedCoreDir()
+  if (!sources) {
+    // 开发态：运行时由开发者本机负责，界面不需要提示安装
+    return { ready: true, reason: 'dev', message: '' }
+  }
+  const installer = require('./runtime-install.cjs')
+  return installer.inspectRuntime({
+    userDataPath: userData,
+    sources,
+    probe: probeBundledRuntime,
+  })
+}
+
+/**
+ * 旧形态安装包里随带的 Python（`resources/python/python.exe`）。
+ *
+ * **新包不再携带它**：解释器由首次启动时的 uv 装到 `<userData>/local/runtime/venv`。
+ * 保留这个候选只为兼容早先打出的安装包；没有就返回空串，交给后面的候选。
+ */
 function bundledPython() {
   if (!process.resourcesPath) return ''
   const exe = process.platform === 'win32' ? 'python.exe' : 'bin/python3'
   const candidate = path.join(process.resourcesPath, 'python', exe)
   return fs.existsSync(candidate) ? candidate : ''
+}
+
+/**
+ * 首次启动时自建的运行时解释器（`<userData>/local/runtime/venv`）。
+ *
+ * 候选链里它排在**最前**：新包不再随带任何解释器，这份是按当前 `pyproject.toml`
+ * 装出来的、能跟随后续依赖变更，理应优先（见 `runtime-install.cjs`）。保留的
+ * `resources/python` 只为兼容旧安装包，排在其后。不存在时返回空串（不猜）。
+ */
+function installedRuntimePython() {
+  let base
+  try {
+    base = userDataDir()
+  } catch {
+    // 纯 Node 环境没注入 app.getPath：当作没有自建运行时，交给后面的候选
+    return ''
+  }
+  if (!base) return ''
+  const venv = path.join(base, 'local', 'runtime', 'venv')
+  const exe =
+    process.platform === 'win32'
+      ? path.join(venv, 'Scripts', 'python.exe')
+      : path.join(venv, 'bin', 'python3')
+  return fs.existsSync(exe) ? exe : ''
 }
 
 /** core 二进制在 userData 里的固定位置（装好的 core 优先用它） */
@@ -415,36 +473,12 @@ const runtimeProbeCache = new Map()
 /**
  * 打包态"能不能起 core"的唯一判据：**真实 import 一遍 `app` 包**。
  *
- * 为什么不再硬编码模块名（原来是 `['fastapi','uvicorn','asyncpg','embedded_postgres']`）：
- * 手写清单只覆盖作者想到的东西。`app/runtime/inference.py` 需要 `httpx`，而清单里没有它，
- * 于是探测判"可用"、core 一启动就 `ModuleNotFoundError: No module named 'httpx'`，
- * 用户看到的是所有页面"服务繁忙"。现在依赖闭包由 Python 自己算，与
- * `prepare_python_runtime.py` 用同一套逻辑，少装一个包这里必然红。
+ * 探测代码本身在 `runtime-probe.cjs` —— 首次安装（runtime-install.cjs）验收时用的是
+ * 同一份实现。两处各写一份就会出现"装的时候判好了、启动时却 import 失败"的自相矛盾，
+ * 而上一轮 `httpx` 事故正是这个形态（自检用手维护清单、清单漏项 ⇒ 自检绿、运行时红）。
  *
- * `walk_packages` 默认静默吞掉子包 import 失败（onerror=None），必须显式收集，
- * 否则失败的子包及其子孙不会出现在遍历结果里，探测会假通过。
+ * 这里只加一层**按解释器缓存**：一次启动里同一个解释器不重复 import（约 1s/次）。
  */
-const RUNTIME_PROBE_CODE = [
-  'import importlib, pkgutil, sys',
-  'missing = []',
-  'try:',
-  '    import app',
-  'except Exception as e:',
-  '    print("MISS app: %s: %s" % (type(e).__name__, e))',
-  '    sys.exit(1)',
-  'def _onerror(name):',
-  '    print("MISS %s: %s" % (name, sys.exc_info()[1]))',
-  '    missing.append(name)',
-  'mods = list(pkgutil.walk_packages(app.__path__, "app.", onerror=_onerror))',
-  'for m in mods:',
-  '    try:',
-  '        importlib.import_module(m.name)',
-  '    except Exception as e:',
-  '        print("MISS %s: %s: %s" % (m.name, type(e).__name__, e))',
-  '        missing.append(m.name)',
-  'sys.exit(1 if missing else 0)',
-].join('\n')
-
 function probeBundledRuntime(pythonPath, cwd = '') {
   if (!pythonPath) return { ok: false, reason: 'missing', message: '未找到随包 Python 运行时' }
   // 缓存键要带 cwd：同一个解释器在不同工作目录下能 import 到的 `app` 包不一样
@@ -458,57 +492,49 @@ function probeBundledRuntime(pythonPath, cwd = '') {
     return { ok: true, reason: 'unverified', message: '' }
   }
 
-  let result
-  try {
-    result = probe(pythonPath, ['-c', RUNTIME_PROBE_CODE], {
-      timeout: 30000,
-      windowsHide: true,
-      encoding: 'utf8',
-      // cwd 必须是 core 将来启动时的那个目录（desktop-local），否则 `import app`
-      // 找的不是随包那份源码，探测就等于没做。
-      ...(cwd ? { cwd } : {}),
-      env: { ...process.env, PYTHONNOUSERSITE: '1' },
-    })
-  } catch (err) {
-    return { ok: false, reason: 'probe-failed', message: err && err.message ? err.message : String(err) }
+  const result = probeRuntime(probe, pythonPath, cwd)
+  if (result.ok) {
+    runtimeProbeCache.set(cacheKey, result)
+    return result
   }
 
-  if (result && result.status === 0) {
-    const ok = { ok: true, reason: 'ok', message: '' }
-    runtimeProbeCache.set(cacheKey, ok)
-    return ok
-  }
-
-  const output = String((result && (result.stderr || '')) + (result && (result.stdout || '')) || '')
-  // `No module named 'x'` 是 pip 漏装的典型信号，单独归类好给出"重建运行时"的引导
-  const missingMatch = output.match(/No module named ['"]?([A-Za-z_][\w.]*)/)
-  const missing = missingMatch ? missingMatch[1] : ''
   return {
-    ok: false,
-    reason: missing ? 'missing-dependency' : 'probe-failed',
-    missingModule: missing,
+    ...result,
     // 文案里带路径：回退链上可能同时有多个候选，只说"随包运行时坏了"会误导
-    message: missing
-      ? `解释器 ${pythonPath} 缺少模块 ${missing}`
-      : `解释器 ${pythonPath} 无法导入本地核心：${output.trim().split('\n').pop() || '未知原因'}`,
+    message: `解释器 ${pythonPath} 无法导入本地核心：${result.message || '未知原因'}`,
   }
 }
 
 /** 把运行时问题翻成用户能照做的引导（不说"服务繁忙"这种无从下手的废话） */
+/**
+ * 失败指引：每条都要能让用户（或开发者）真的做点什么。
+ *
+ * 措辞对齐 Phase 4 —— 运行时不再随包预装，而是首次启动由 uv 装到 userData 里，
+ * 所以"重新安装"不再是万能答案：多数情况重试或换镜像源就能好。
+ */
 function runtimeGuidance(probe) {
   const lines = [probe.message || '本地运行时不可用']
-  if (probe.reason === 'missing') {
+  if (probe.reason === 'sources-missing') {
     lines.push(
-      '这通常是安装包不完整（缺少 resources/python）。请重新安装；',
-      '开发者请用 `npm run desktop:pack` 重新打包（它会先执行 prepare_python_runtime.py）。',
+      '安装包内缺少本地核心源码（resources/desktop-local）。这是安装包不完整，请重新安装。',
+      '开发者请确认打包前 desktop-local/ 存在且 electron-builder.yml 的 extraResources 覆盖了它。',
+    )
+  } else if (probe.reason === 'missing' || probe.reason === 'venv-missing') {
+    lines.push(
+      '本地 Python 环境尚未建好。正常情况首次启动会自动安装；若应用没能自动安装，',
+      '多半是安装包不完整（缺少 uv）或网络不通 —— 请重新安装，或用 `npm run desktop:pack` 重新打包。',
+      '开发者请确认打包前执行过 `python desktop-local/scripts/prepare_uv.py`（产物在 assets/uv）。',
     )
   } else if (probe.reason === 'missing-dependency') {
     lines.push(
-      '安装包内的运行时被破坏或版本不匹配。请重新安装；',
-      '开发者请执行 `python desktop-local/scripts/prepare_python_runtime.py` 重建运行时。',
+      '本地环境里缺少依赖包。重启应用会自动补齐（依赖声明变过时会重建环境）；',
+      '网络不佳时可设置 `CHIRON_PIP_INDEX_URL` 指向可用镜像源后再重启。',
     )
   } else {
-    lines.push('请重新安装；开发者可用 `CHIRON_PYTHON` 指定一个已装好依赖的解释器。')
+    lines.push(
+      '可以在应用内点"重启本地后端"重试；仍失败请把日志（userData/logs/main.log）一起反馈。',
+      '开发者可用 `CHIRON_PYTHON` 指定一个已装好依赖的解释器，跳过自动安装。',
+    )
   }
   return lines.join('\n')
 }
@@ -530,31 +556,35 @@ function resolveCoreLaunch(root = repoRoot()) {
   const exe = coreBinaryPath()
   if (fs.existsSync(exe)) return { command: exe, args: [], kind: 'binary', cwd: root }
 
-  // 打包态：desktop-local 在 resources/desktop-local，Python 在 resources/python（若随包）
+  // 打包态：desktop-local 和 uv 都在 resources 下，Python 运行时建在 userData
   const packaged = packagedCoreDir()
   if (packaged) {
     // 候选链（依次探测，**谁真的能 import 依赖就用谁**）：
-    //   1. resources/python —— 随安装包带来的运行时（正常情况）
-    //   2. CHIRON_PYTHON   —— 用户/开发者显式指定
+    //   1. 自建 venv（userData/local/runtime）—— 正常情况，由首次启动的 uv 装出来
+    //   2. CHIRON_PYTHON —— 用户/开发者显式指定
     //   3. PATH 上的 python —— 用户机已自备完整环境时自动兜底
+    //   4. 旧形态的 resources/python —— 只为兼容早先打出的安装包，新包不再携带
     //
     // 这是"自动处理缺失依赖"的落点：缺了就往下找，而不是一上来就失败。
     // 但**绝不盲用**：每个候选都要过 probeBundledRuntime（真 import 四个关键模块），
     // 因为盲用 PATH 上的 python 只会把"装错了"变成"所有页面报服务繁忙"。
     const attempted = []
+    // 自建 venv 排在最前：它按当前 pyproject.toml 装出来，能跟随后续依赖变更
+    const installed = installedRuntimePython()
     const bundled = bundledPython()
-    if (!bundled) {
-      // 随包那份根本不存在：先记一条，保证最终引导指向"安装包不完整"而不是 PATH
+    if (!bundled && !installed) {
+      // 一个都没有：先记一条，保证最终引导指向"运行时还没装"，而不是
+      // 指向早已不再随包发布的 resources/python
       attempted.push({
-        python: 'resources/python',
+        python: 'userData/local/runtime/venv',
         probe: {
           ok: false,
-          reason: 'missing',
-          message: '安装包内缺少随包 Python 运行时（resources/python/python.exe）',
+          reason: 'venv-missing',
+          message: '本地运行时尚未创建（正常情况下首次启动会用随包的 uv 自动安装）',
         },
       })
     }
-    for (const candidate of [bundled, process.env[CORE_ENV.python], 'python']) {
+    for (const candidate of [installed, bundled, process.env[CORE_ENV.python], 'python']) {
       const python = String(candidate || '').trim()
       if (!python) continue
       if (attempted.some(item => item.python === python)) continue
@@ -563,10 +593,10 @@ function resolveCoreLaunch(root = repoRoot()) {
       const probe = probeBundledRuntime(python, packaged)
       attempted.push({ python, probe })
       if (!probe.ok) continue
-      if (python !== bundled) {
-        // 用了兜底解释器要留痕：否则排查时无法解释"为什么没用随包那份"
+      if (python !== installed && python !== bundled) {
+        // 用了兜底解释器要留痕：否则排查时无法解释"为什么没用自建那份"
         process.stderr.write(
-          `[chiron] 随包运行时不可用，回退到 ${python}（已确认能 import 随包 desktop-local）\n`,
+          `[chiron] 未用自建运行时，回退到 ${python}（已确认能 import 随包 desktop-local）\n`,
         )
       }
       return { command: python, args: ['-m', 'app.main'], kind: 'packaged', cwd: packaged }
@@ -596,6 +626,72 @@ function resolveCoreLaunch(root = repoRoot()) {
   throw new Error(
     `未找到本地 core：请安装 ${exe}，或先建好 desktop-local/app/main.py 以开发态启动`,
   )
+}
+
+/**
+ * 首次启动自动安装运行时。**只在打包态、且安装包确实带了 uv 时才动手。**
+ *
+ * 返回 `true` 表示"装完了，可以再试一次 resolveCoreLaunch"；返回 `false` 表示这条
+ * 路径不适用（开发态、或安装包缺 uv），调用方应把原始的运行时错误抛出去。
+ *
+ * 为什么失败时**抛安装错误而不是 return false**：两者对用户是不同的事故。
+ * 「没有 uv」= 安装包不完整（重新安装）；「有 uv 但装不上」= 网络/磁盘问题（重试或
+ * 换源）。用同一个错误盖住会让人无从下手。
+ */
+let installInFlight = null
+
+async function installRuntimeIfPossible(root, options = {}) {
+  // 开发态（没有 resources/desktop-local）不参与：那由开发者的本机环境负责
+  const sources = packagedCoreDir()
+  if (!sources) return false
+  // 没有 uv 就说明安装包没按新布局打包，走原来的错误路径并明确指向安装包问题
+  const installer = require('./runtime-install.cjs')
+  if (!installer.bundledUv()) return false
+
+  let userData
+  try {
+    userData = userDataDir()
+  } catch {
+    return false
+  }
+
+  // 并发去重：多次 startCore（切换模式、窗口重建）不该同时装两遍 venv，
+  // 两个 uv 同时写同一个目录会互相破坏
+  if (installInFlight) {
+    await installInFlight
+    return true
+  }
+
+  installInFlight = installer.ensureRuntime({
+    userDataPath: userData,
+    sources,
+    probe: probeBundledRuntime,
+    onStage: typeof options.onRuntimeStage === 'function' ? options.onRuntimeStage : undefined,
+    onLine: typeof options.onRuntimeLine === 'function' ? options.onRuntimeLine : undefined,
+    force: options.reinstallRuntime === true,
+  })
+
+  try {
+    await installInFlight
+  } catch (err) {
+    const error = new Error(
+      `本地运行时自动安装失败：${err && err.message ? err.message : err}\n\n` +
+        '这是首次启动必须完成的一步，没有它本地功能无法使用。\n' +
+        '常见原因：\n' +
+        '  - 网络不通或过慢：可设 CHIRON_PIP_INDEX_URL 指向可用的镜像源后重启；\n' +
+        '  - 磁盘空间不足（运行时约 400MB）：清理后重启应用会自动重试；\n' +
+        '  - 安全软件拦截了 uv：请放行后重启。',
+    )
+    error.retryable = false
+    error.installFailed = true
+    throw error
+  } finally {
+    installInFlight = null
+  }
+
+  // 装完必须清探测缓存：否则启动前那次"缺依赖"的结论还在缓存里，会立刻再失败一次
+  runtimeProbeCache.clear()
+  return true
 }
 
 /**
@@ -1023,7 +1119,19 @@ async function startCore(options = {}) {
     crypto.randomBytes(32).toString('hex')
 
   const root = options.repoRoot ? String(options.repoRoot) : repoRoot()
-  const launch = resolveCoreLaunch(root)
+  let launch
+  try {
+    launch = resolveCoreLaunch(root)
+  } catch (err) {
+    // 运行时不可用：这是**首次启动的正常状态**，不是故障。
+    // 安装包只带 uv（不带 Python），所以第一次必须先就地建 venv 装依赖。
+    //
+    // 只在**确实有 uv** 时才尝试安装：没有 uv 意味着安装包本身不完整，这时再做一次
+    // 注定失败的联网尝试只会让用户多等几十秒，且最终错误会被"缺少 uv"盖掉真正原因。
+    const installed = await installRuntimeIfPossible(root, options)
+    if (!installed) throw err
+    launch = resolveCoreLaunch(root)
+  }
 
   const attempts =
     Number.isInteger(options.portAttempts) && options.portAttempts > 0
@@ -1345,6 +1453,8 @@ module.exports = {
   probeReady,
   /** 打包态运行时探测：需要真实跑解释器，导出供端到端验证（单测里用假 spawnSync 替身） */
   probeBundledRuntime,
+  /** 只读查询运行时是否就绪：主进程据此决定要不要先弹安装进度窗 */
+  inspectLocalRuntime,
   waitForReady,
   listComponents,
   describeComponent,

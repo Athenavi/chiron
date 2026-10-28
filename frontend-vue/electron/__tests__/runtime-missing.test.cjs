@@ -2,14 +2,14 @@
 /**
  * 随包运行时缺失时的行为（回归防护）。
  *
- * 背景：`resolveCoreLaunch` 原先在找不到 `resources/python` 时会**静默**回退到 PATH 上的
+ * 背景：`resolveCoreLaunch` 原先在找不到解释器时会**静默**回退到 PATH 上的
  * `'python'`。用户机上这表现为"所有页面报服务繁忙"，而用户没有任何线索可循：
  *   - 没有 python → ENOENT；
  *   - 有 Store 占位符 → spawn 成功但立刻退出；
  *   - 有真 python 但没装 fastapi/asyncpg → ModuleNotFoundError。
  *
- * 现在的行为是**有意识地回退**：resources/python → CHIRON_PYTHON → PATH，
- * 每个候选都必须真的 import 四个关键模块才被采用；全都不行才报错并指明怎么修。
+ * 现在的行为是**有意识地回退**：自建 venv → 旧包 `resources/python` → CHIRON_PYTHON
+ * → PATH，每个候选都必须真的 import 四个关键模块才被采用；全都不行才报错并指明怎么修。
  *
  * 本文件锁定四条：
  *   1. 全部候选都不可用时：不 spawn，错误里逐个列出候选与原因，并给出修复指引；
@@ -118,7 +118,9 @@ test('全部候选都不可用：不 spawn，逐个列出原因并给出修复�
     () => components.startCore({ repoRoot: resources }),
     err => {
       assert.match(err.message, /本地运行时不可用/, '要明确说是运行时的问题')
-      assert.match(err.message, /resources\/python/, '要点出随包那份缺的是什么')
+      // 新布局不再随包 resources/python：要点出"本地运行时还没建"，而不是指向一个
+      // 早就不再发布的目录，否则用户照着找不到东西
+      assert.match(err.message, /本地运行时尚未创建|runtime/, '要点出缺的是本地运行时')
       assert.match(err.message, /fastapi/, '要指名缺的模块')
       assert.match(err.message, /重新安装|desktop:pack/, '要给可执行的修复路径')
       assert.equal(err.retryable, false, '换端口救不回来')
@@ -172,4 +174,30 @@ test('探测结论按解释器缓存：同一进程内第二次启动不重复 i
 
   await components.startCore({ repoRoot: resources })
   assert.equal(calls.spawnSync, 1, '第二次应命中缓存，不再探测')
+})
+
+/**
+ * `inspectLocalRuntime` 决定主进程「要不要在建主窗口前弹安装进度窗」。
+ * 它一旦误判成就绪，用户会落在"所有页面报服务繁忙"；误判成未就绪，
+ * 则每次正常启动都会闪一个不该出现的进度窗。两头都得钉住。
+ */
+test('inspectLocalRuntime：开发态没有随包源码时判为就绪，不闪进度窗', t => {
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-empty-'))
+  t.after(() => fs.rmSync(empty, { recursive: true, force: true }))
+  withResourcesPath(t, empty)
+  installDeps(t)
+
+  const result = components.inspectLocalRuntime()
+  assert.equal(result.ready, true, '开发态的运行时由开发者本机负责，界面不该提示安装')
+  assert.equal(result.reason, 'dev')
+})
+
+test('inspectLocalRuntime：打包态但 venv 还没建时判为未就绪', t => {
+  const resources = makeResources(t, { withPython: false })
+  withResourcesPath(t, resources)
+  installDeps(t)
+
+  const result = components.inspectLocalRuntime()
+  assert.equal(result.ready, false, '没建 venv 就必须走安装流程，不能谎报就绪')
+  assert.equal(result.reason, 'venv-missing')
 })
