@@ -200,3 +200,10 @@ CI 里有反向断言，防止它被悄悄加回来。
   `prepare_uv.py --from <压缩包>`。
 - redis 二进制来自构建机的发行版（含 MSYS2 运行时 DLL）；脚本会解析 scoop 的
   shim 取真身，但不会跨平台转换 —— Linux/macOS 包需在对应平台生成。
+- **Windows 的 redis 只能走预编译发行版**：MSYS2 仓库里只有客户端库
+  （`hiredis`、`python-redis`、`redis-plus-plus`），没有 redis 服务端，
+  `pacman -S mingw-w64-x86_64-redis` 必然 `target not found`。CI 改为按 tag
+  下载 `redis-windows` 的 `Redis-<ver>-Windows-x64-msys2.zip` 并校验 SHA256
+  （版本与哈希钉在 workflow 里，不用 `latest`）。该构建自带 `msys-*.dll`，
+  且实测接受 Windows 原生 `--dir` 路径，无需 cygdrive 形式。
+

@@ -89,13 +89,34 @@ jobs:
       # redis 是本地模式的必要组件（KeyRing 仲裁走 Redis 单键 Lua EVAL），
       # prepare_redis.py 只负责「把机器上已有的 redis-server 拷进 resources」，
       # 它不会替你安装 —— 所以三个平台各自先装好。
+      #
+      # **Windows 为什么不用 pacman**：MSYS2 仓库里只有客户端库（hiredis、
+      # python-redis、redis-plus-plus），**没有任何 redis 服务端包** ——
+      # packages.msys2.org/package/mingw-w64-x86_64-redis 返回 404，
+      # 所以 `pacman -S mingw-w64-x86_64-redis` 必然 target not found。
+      # 改用 redis-windows 自己 CI 产出的 msys2 构建：版本与 SHA256 都钉死在这里，
+      # 与 scoop 的 redis bucket 取的是同一份产物（本机实测该构建可独立启动，
+      # 且接受 Windows 原生 `--dir` 路径，无需 cygdrive 形式）。
       - name: Install redis-server (Windows)
         if: matrix.platform == 'win'
         shell: pwsh
         run: |
-          # windows-latest 预装 MSYS2；用它装的和本地开发机是同一份 MINGW 构建
-          C:\msys64\usr\bin\pacman.exe -S --noconfirm --needed mingw-w64-x86_64-redis
-          "C:\msys64\mingw64\bin" | Out-File -FilePath $env:GITHUB_PATH -Append
+          $version = '8.10.3'
+          $sha256 = 'AF16DF340525B431E9EC8DABFD625D5E7A233F82805B5418819904EA909C447F'
+          $name = "Redis-$version-Windows-x64-msys2"
+          $url = "https://github.com/redis-windows/redis-windows/releases/download/$version/$name.zip"
+          $zip = Join-Path $env:RUNNER_TEMP 'redis.zip'
+          Invoke-WebRequest -Uri $url -OutFile $zip
+          $actual = (Get-FileHash -Path $zip -Algorithm SHA256).Hash
+          if ($actual -ne $sha256) { throw "redis 包校验失败：期望 $sha256，实际 $actual" }
+          $dist = Join-Path $env:RUNNER_TEMP 'redis-dist'
+          Expand-Archive -Path $zip -DestinationPath $dist -Force
+          $bin = Join-Path $dist $name
+          if (-not (Test-Path (Join-Path $bin 'redis-server.exe'))) {
+            throw "解压后没有 redis-server.exe：$bin"
+          }
+          # zip 自带 msys-*.dll，prepare_redis.py 会把 exe 与同目录 DLL 一起拷走
+          $bin | Out-File -FilePath $env:GITHUB_PATH -Append
 
       - name: Install redis-server (macOS)
         if: matrix.platform == 'mac'
