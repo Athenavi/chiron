@@ -456,3 +456,42 @@ test('ensureRuntime：安装成功后写入清单，下次启动才敢走增量�
   assert.ok(manifest, '装完必须留下清单')
   assert.equal(manifest.dependencyFingerprint, installer.dependencyFingerprint(sources))
 })
+
+test('ensureRuntime：只给 resourcesPath 时，uv 与随包解释器都从它解析', async t => {
+  const userData = makeUserData(t)
+  const { resources, sources } = makeResources(t)
+  const key = `${process.platform}-${process.arch}`
+
+  // 造一份随包解释器：<resources>/python-runtime/<key>/<版本目录>/python[.exe]
+  const layout = path.join(resources, 'python-runtime', key, 'cpython-3.12.16-test')
+  const exe =
+    process.platform === 'win32'
+      ? path.join(layout, 'python.exe')
+      : path.join(layout, 'bin', 'python3')
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
+  fs.writeFileSync(exe, '')
+
+  const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
+
+  await installer.ensureRuntime({
+    userDataPath: userData,
+    resourcesPath: resources,
+    sources,
+    spawn,
+    probe: probeByProgress(progress),
+  })
+
+  const venv = calls.find(c => c.args[0] === 'venv')
+  assert.ok(venv, '应调用 uv venv')
+  // 传了 resourcesPath 就必须用它。否则打包态下这两个函数回退到
+  // process.resourcesPath，开发态/测试态永远找不到随包 uv 与解释器。
+  assert.equal(
+    venv.command,
+    path.join(resources, 'uv', key, process.platform === 'win32' ? 'uv.exe' : 'uv'),
+    'uv 应从传入的 resourcesPath 解析',
+  )
+  assert.ok(
+    venv.args.includes(exe),
+    `venv 应使用随包解释器的绝对路径（避免 uv 联网下载），实际：${venv.args.join(' ')}`,
+  )
+})

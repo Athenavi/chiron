@@ -204,7 +204,7 @@ function writeManifest(userDataPath, fields) {
  */
 function inspectRuntime(options = {}) {
   const userDataPath = String(options.userDataPath || '')
-  const sources = options.sources !== undefined ? options.sources : coreSources()
+  const sources = options.sources !== undefined ? options.sources : coreSources(options.resourcesPath)
   const python = userDataPath ? venvPython(userDataPath) : ''
 
   if (!python || !fs.existsSync(python)) {
@@ -409,7 +409,7 @@ async function ensureRuntime(options = {}) {
   const userDataPath = String(options.userDataPath || '')
   if (!userDataPath) throw new Error('ensureRuntime 需要 userDataPath')
 
-  const sources = options.sources !== undefined ? options.sources : coreSources()
+  const sources = options.sources !== undefined ? options.sources : coreSources(options.resourcesPath)
   if (!sources) {
     throw new Error(
       '安装包内缺少 desktop-local 源码（resources/desktop-local），无法准备运行时。请重新安装。',
@@ -451,7 +451,7 @@ async function ensureRuntime(options = {}) {
     if (!trySync) probeNote += '，依赖声明已变更或无安装记录，将重建'
   }
 
-  const uv = options.uvPath !== undefined ? options.uvPath : bundledUv()
+  const uv = options.uvPath !== undefined ? options.uvPath : bundledUv(options.resourcesPath)
   if (!uv) {
     throw new Error(
       '安装包内缺少 uv（resources/uv）。这是安装包不完整导致的问题，请重新安装。\n' +
@@ -502,7 +502,7 @@ async function ensureRuntime(options = {}) {
   // 解释器优先用随包的那份。传**绝对路径**时 uv 不会去联网找解释器；
   // 传版本号（如 "3.12"）则只能在本地没有受管 CPython 时才去 GitHub 下载，
   // 那条路在 github.com 不可达的网络下必然失败。详见 `bundledPython` 的说明。
-  const bundledPythonPath = options.pythonPath !== undefined ? options.pythonPath : bundledPython()
+  const bundledPythonPath = options.pythonPath !== undefined ? options.pythonPath : bundledPython(options.resourcesPath)
   const pythonArg = bundledPythonPath || RUNTIME_PYTHON_VERSION
 
   stage(INSTALL_STAGES.creatingVenv, `创建 Python ${RUNTIME_PYTHON_VERSION} 环境${probeNote}`)
