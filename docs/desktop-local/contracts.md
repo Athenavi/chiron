@@ -176,7 +176,7 @@ desktop-local/
 | 方法 | 路径 | 返回 |
 |---|---|---|
 | GET | `/healthz` | `{"status":"ok"}` |
-| GET | `/readyz` | `{"status":"ok"|"degraded","pg":true,"redis":true}`，详见下方语义说明 |
+| GET | `/readyz` | `{"status":"ok"\|"degraded","pg":true,"redis":true}`，详见下方语义说明 |
 | POST | `/v1/auth/session` | `{"data":{"token":"...","user":{"id":"local","name":"Local","role":"owner","tenant_id":1}}}` |
 | GET | `/v1/models` | `{"data":[]}`（占位） |
 | GET | `/events?session_id=` | `text/event-stream`（第一批只发心跳） |
