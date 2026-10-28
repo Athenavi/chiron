@@ -250,16 +250,41 @@ jobs:
       - name: Verify packaged runtime assets
         shell: bash
         run: |
-          # 每个平台 electron-builder 解开后的目录名不同，统一用 win-unpacked /
-          # mac / linux-unpacked 三种去找。
+          # 每个平台 electron-builder 解开后的目录名不同，且 macOS 还多一层 bundle：
+          #   Windows  release/win-unpacked/resources
+          #   Linux    release/linux-unpacked/resources
+          #   macOS    release/mac/<Product>.app/Contents/Resources
+          #
+          # macOS 的 resources **不在 appOutDir 顶层**。依据 app-builder-lib 源码
+          # （out/platformPackager.js）：
+          #   getMacOsResourcesDir(appOutDir) =
+          #     path.join(appOutDir, `${productFilename}.app`, "Contents", "Resources")
+          # 而 mac 的 appOutDir 就是 release/mac —— 同一个文件的 defaultDestination()
+          # 里对 MAC 特判去掉了 `-unpacked` 后缀。此前这里只判 `$d/resources`，
+          # 于是 mac 上 release/mac 明明存在却报"找不到解包后的 resources 目录"。
+          out="frontend-vue/release"
           root=""
-          for d in frontend-vue/release/win-unpacked frontend-vue/release/mac \
-                   frontend-vue/release/linux-unpacked; do
-            if [[ -d "$d/resources" ]]; then root="$d/resources"; break; fi
-          done
-          if [[ -z "$root" ]]; then
+          case "${{ matrix.platform }}" in
+            win)   root="$out/win-unpacked/resources" ;;
+            linux) root="$out/linux-unpacked/resources" ;;
+            mac)
+              # 不硬编码 productFilename：改产品名或版本时这里不用跟着改。
+              # `mac*` 兼带架构后缀的目录（如 release/mac-arm64）；
+              # `*-temp` 是 lipo 中间产物，跳过。
+              for app in "$out"/mac*/*.app; do
+                case "$app" in *-temp/*) continue ;; esac
+                if [[ -d "$app/Contents/Resources" ]]; then
+                  root="$app/Contents/Resources"
+                  break
+                fi
+              done
+              ;;
+          esac
+          if [[ -z "$root" || ! -d "$root" ]]; then
             echo "::error::找不到解包后的 resources 目录，打包可能没产出"
-            ls -la frontend-vue/release || true
+            ls -la "$out" || true
+            # mac 上多打一层：确认真实 bundle 名与 Contents 内容
+            ls -la "$out"/mac*/*.app/Contents 2>/dev/null || true
             exit 1
           fi
           echo "resources = $root"
@@ -326,7 +351,11 @@ jobs:
           else
             pyroot="$root/python-runtime/linux-x64"
           fi
-          pyexe="$(find "$pyroot" -maxdepth 3 -name 'python.exe' -o -maxdepth 3 -name 'python3' 2>/dev/null | head -1)"
+          # 用 `\( ... -o ... \)` 显式分组：macOS 自带的是 BSD find，
+          # 它把 -maxdepth 当**全局 primary**（见 find(1)："If any -maxdepth
+          # primary is specified, it applies to the entire expression"），
+          # 重复写两遍不但冗余，读起来也像只约束了分支之一。分组后语义明确。
+          pyexe="$(find "$pyroot" -maxdepth 3 \( -name 'python.exe' -o -name 'python3' \) 2>/dev/null | head -1)"
           if [[ -z "$pyexe" ]]; then
             echo "::error::缺少随包解释器 $pyroot —— 首次启动将无法创建环境"
             ls -la "$pyroot" 2>/dev/null || true
