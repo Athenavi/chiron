@@ -47,6 +47,7 @@
 from __future__ import annotations
 
 import argparse
+import os
 import platform
 import shutil
 import subprocess
@@ -117,13 +118,35 @@ def interpreter_in(directory: Path) -> Path | None:
     """在 uv 的安装目录里找解释器。
 
     布局分两种：Windows 是 ``python.exe``；POSIX 是 ``bin/python3``。
-    不硬编码版本号 —— 版本升上去时目录名变化，这里不该跟着改。
+
+    **POSIX 上 ``bin/python`` 与 ``bin/python3`` 只是相对符号链接**（实测
+    python-build-standalone 3.12.16 的 tar 清单：``lrwxrwxrwx python/bin/python3 -> python3.12``），
+    真正的实体是 ``bin/python3.12``。所以这里必须**同时认版本化的实体文件** ——
+    否则链接一旦在复制/打包环节丢掉，就会出现"uv 明明报装好了，构建脚本却说找不到解释器"。
     """
     for name in ("python.exe", "bin/python3", "bin/python"):
         candidate = directory / name
         if candidate.is_file():
             return candidate
+
+    # 兜底：bin/python3.12 这类版本化实体。按版本号倒序取最高的一份，
+    # 排除 python3.12-config 之类（suffix 不是纯数字）。
+    bin_dir = directory / "bin"
+    if bin_dir.is_dir():
+        versioned = [p for p in bin_dir.glob("python3.*") if p.is_file() and _is_version_suffix(p)]
+        if versioned:
+            return sorted(versioned, key=_version_key, reverse=True)[0]
     return None
+
+
+def _is_version_suffix(path: Path) -> bool:
+    """``python3.12`` → True；``python3.12-config`` → False。"""
+    parts = path.name.split(".")[1:]
+    return bool(parts) and all(part.isdigit() for part in parts)
+
+
+def _version_key(path: Path) -> tuple[int, ...]:
+    return tuple(int(part) for part in path.name.split(".")[1:] if part.isdigit())
 
 
 def find_installed_layout(root: Path) -> Path | None:
@@ -232,7 +255,21 @@ def copy_interpreter(source: Path, platform_key: str) -> Path:
     # 用 resolve() 解开 uv 放的 junction/符号链接，落到真实版本目录名
     # （否则会复制成 `cpython-3.12-windows-x86_64-none` 这种不带小数版本的名字）
     destination = directory / source.resolve().name
-    shutil.copytree(source, destination, symlinks=False, ignore_dangling_symlinks=True)
+    # POSIX 上必须保留符号链接：python-build-standalone 里
+    # `bin/python` / `bin/python3` 都是指向 `python3.12` 的**相对**链接。
+    # `symlinks=False` + `ignore_dangling_symlinks=True` 会因 shutil 用裸相对路径
+    # 判 dangling（shutil.py:526 `os.path.exists(linkto)`，相对 CWD）而**静默丢掉**
+    # 这两个链接 —— 结果就是"uv 报装好了，构建脚本却说找不到解释器"。
+    # 相对链接与目标同目录，原样保留即可移植。
+    # Windows 则相反：要解引用（uv 放的是 junction，且建符号链接要管理员权限）。
+    keep_symlinks = os.name != "nt"
+    shutil.copytree(
+        source,
+        destination,
+        symlinks=keep_symlinks,
+        # 只在解引用时需要它兜底；保留链接时该参数不生效，设为 False 以求失败可见
+        ignore_dangling_symlinks=not keep_symlinks,
+    )
 
     # .temp 是下载缓存、.lock 是锁文件、BUILD 是 uv 的记录：都不该进安装包
     for junk in (".temp", ".lock", ".gitignore", "BUILD"):

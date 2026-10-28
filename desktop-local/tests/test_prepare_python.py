@@ -109,3 +109,49 @@ def test_runtime_version_matches_shell_layer():
         Path(__file__).resolve().parents[2] / "frontend-vue" / "electron" / "runtime-install.cjs"
     ).read_text(encoding="utf-8")
     assert f"RUNTIME_PYTHON_VERSION = '{prepare_python.RUNTIME_PYTHON_VERSION}'" in shell
+
+
+def test_interpreter_in_finds_versioned_posix_binary(tmp_path):
+    """POSIX 上链接丢了，也必须靠 `bin/python3.12` 找到解释器。
+
+    实测 python-build-standalone 3.12.16 的 tar 清单：
+
+        lrwxrwxrwx python/bin/python  -> python3.12
+        lrwxrwxrwx python/bin/python3 -> python3.12
+        -rwxrwxr-x python/bin/python3.12
+
+    只有 `bin/python3.12` 是实体，另两个是**相对符号链接**。而
+    ``shutil.copytree(symlinks=False, ignore_dangling_symlinks=True)`` 判 dangling 时用的是
+    裸相对路径 ``os.path.exists("python3.12")``（相对 CWD，见 shutil.py:526），
+    必然为假 —— 于是两个链接被**静默丢弃**，只剩实体。
+
+    这正是 CI 在 darwin/linux 上"uv 报装好了、却没有解释器"的原因。这条用例
+    按**真实布局**造目录，只保留实体，钉住兜底逻辑。
+    """
+    version = tmp_path / "cpython-3.12.16-linux-x86_64-gnu"
+    bin_dir = version / "bin"
+    bin_dir.mkdir(parents=True)
+    real = bin_dir / "python3.12"
+    real.write_bytes(b"")
+    real.chmod(0o755)
+    # 故意不建 bin/python3 与 bin/python：模拟链接被 copytree 丢掉
+
+    found = prepare_python.interpreter_in(version)
+
+    assert found is not None, "链接缺失时必须回退到版本化实体"
+    assert found.name == "python3.12"
+    assert prepare_python.find_installed_layout(tmp_path) is not None
+
+
+def test_interpreter_in_ignores_non_executable_siblings(tmp_path):
+    """`python3.12-config` 带同样的前缀，但它是脚本不是解释器。"""
+    version = tmp_path / "cpython-3.12.16-linux-x86_64-gnu"
+    bin_dir = version / "bin"
+    bin_dir.mkdir(parents=True)
+    (bin_dir / "python3.12-config").write_bytes(b"")
+    (bin_dir / "python3.12").write_bytes(b"")
+
+    found = prepare_python.interpreter_in(version)
+
+    assert found is not None
+    assert found.name == "python3.12"
