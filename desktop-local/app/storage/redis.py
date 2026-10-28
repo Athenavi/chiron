@@ -41,7 +41,12 @@ from pathlib import Path
 from typing import Any
 
 from app.config import Settings
-from app.storage.pg import find_free_port, wait_for_port
+from app.storage.pg import (
+    PORT_ATTEMPTS,
+    find_free_port,
+    is_port_conflict,
+    wait_for_port,
+)
 
 # 内置 redis 二进制的默认落位（相对本文件：desktop-local/app/storage/ → desktop-local/bin/redis/）
 BUNDLED_REDIS_DIR = Path(__file__).resolve().parents[2] / "bin" / "redis"
@@ -157,36 +162,35 @@ class RedisServer:
                 self.warning = f"外部 Redis 不可用（{type(exc).__name__}: {exc}）；{VALKEY_HINT}"
                 self.client = None
 
-        # 内置二进制排在 fakeredis 之前：桩不支持 EVAL（见模块文档），
-        # 而引擎的原子计数/仲裁全靠 Lua；宁可起一个真进程，也不要一个语义不全的桩。
+        # 内置二进制是**唯一**路径（Redis 与 PG 同级，都是强依赖）。
+        # 不再兜底到 fakeredis：桩对契约 §5.3 的七条命令实测 6/7 通过，但 EVAL
+        # 一条都不支持（见模块文档），而引擎的 KeyRing 仲裁、限流、预算预留共 15 处
+        # 依赖 Lua 的原子性 —— 用桩顶替等于让这些逻辑在"看起来成功了"的前提下静默算错。
+        # 起不来就如实抛，由引导器非零退出、Electron 弹恢复对话框，而不是悄悄降级。
         try:
             await self._start_bundled()
-            return
         except Exception as exc:  # noqa: BLE001
             self.client = None
             self._proc = None
-            self.notes.append(f"内置 redis 未用上（{type(exc).__name__}: {exc}）")
-
-        try:
-            self.client = self._build_fakeredis()
-            await self.client.ping()
-            self.backend = "fakeredis"
-            self.error = ""
-        except Exception as exc:  # noqa: BLE001
-            self.client = None
             self.backend = "unavailable"
             detail = "；".join(self.notes)
             self.error = (
-                f"既没有可用的内置 redis-server，也没有 fakeredis（{type(exc).__name__}: {exc}）"
+                f"Redis 不可用（{type(exc).__name__}: {exc}）"
                 + (f"；{detail}" if detail else "")
                 + f"；{VALKEY_HINT}"
             )
+            raise RedisUnavailable(self.error) from exc
 
     async def _start_bundled(self) -> None:
-        """拉起一个**本进程专属**的 ``redis-server``（随机端口 + 自己的数据目录）。
+        """拉起本进程专属的 ``redis-server``；只在像端口冲突时换号重试。
 
-        为什么不用用户已有的 6379：那是别人的实例，往里写键会污染；而且
-        ``requirepass``/版本都不可控。这里只借用二进制文件，进程与端口都是新的。
+        PG 侧（``PostgresServer._start_with_port_retry``）早就这么做，Redis 这里一直
+        漏着：``find_free_port()`` 只是"借号"（listen 0 后立刻 close，到目标进程 bind
+        之间必然有竞态；Windows 上还有 Hyper-V 保留段与 TIME_WAIT）。借到的号被抢走时
+        旧实现直接落到 fakeredis，现在 Redis 是强依赖、没有降级可落，必须自己把冲突
+        消化掉，否则用户在"端口恰好被占"这一个偶然事件上就整个本地模式起不来。
+
+        只有端口冲突才换号：二进制缺失、配置错这类问题换多少个端口结果都一样。
         """
         binary = find_redis_binary(self.settings)
         if binary is None:
@@ -195,7 +199,56 @@ class RedisServer:
                 "或把它放进 desktop-local/bin/redis/）"
             )
 
-        port = int(self.settings.redis_port or 0) or find_free_port()
+        failed: set[int] = set()
+        last: Exception | None = None
+        for attempt in range(1, PORT_ATTEMPTS + 1):
+            # 首轮尊重显式配置的端口；重试时借号并避开已经撞过的
+            if attempt == 1 and self.settings.redis_port:
+                port = int(self.settings.redis_port)
+            else:
+                port = find_free_port(exclude=failed)
+            # 日志是追加写的：只认本次 spawn 之后新增的那段，否则三天前的一次端口
+            # 冲突会让今天一个"二进制损坏"被误判成冲突而白白重试。
+            log_from = self._log_size()
+            try:
+                await self._spawn_bundled_once(binary, port)
+                return
+            except Exception as exc:  # noqa: BLE001 —— 统一在下面判定是否值得重试
+                last = exc
+                await self._stop_proc()
+                failed.add(port)
+                conflict = is_port_conflict(self._log_since(log_from))
+                self.notes.append(
+                    f"内置 redis 第 {attempt} 次启动失败（端口 {port}，"
+                    f"{'端口冲突' if conflict else '非端口冲突'}）：{type(exc).__name__}: {exc}"
+                )
+                if not conflict:
+                    raise
+        raise RedisUnavailable(
+            f"内置 redis-server 连续 {PORT_ATTEMPTS} 次因端口冲突起不来"
+            f"（试过 {sorted(failed)}）：{last}；{VALKEY_HINT}"
+        ) from last
+
+    def _log_size(self) -> int:
+        try:
+            return self.settings.redis_log_file.stat().st_size
+        except OSError:
+            return 0
+
+    def _log_since(self, offset: int, limit: int = 4096) -> str:
+        """读日志中 ``offset`` 之后的内容（只看本次启动产生的那段）。"""
+        log = self.settings.redis_log_file
+        try:
+            size = log.stat().st_size
+            if size <= offset:
+                return ""
+            with open(log, "rb") as handle:
+                handle.seek(offset)
+                return handle.read(limit).decode("utf-8", errors="replace")
+        except OSError:
+            return ""
+
+    async def _spawn_bundled_once(self, binary: Path, port: int) -> None:
         data_dir = self.settings.redis_data_dir
         data_dir.mkdir(parents=True, exist_ok=True)
         self.settings.redis_log_file.parent.mkdir(parents=True, exist_ok=True)

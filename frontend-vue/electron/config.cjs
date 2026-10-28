@@ -114,9 +114,15 @@ function writeConfig(data) {
 /**
  * 把磁盘上的任意形状收敛成契约 §1 的 DeviceSettings。
  *
- * 额外返回两个**派生字段**（不落盘，供主进程判断流程用）：
- *   needsMigration  磁盘上还没有 mode（老配置），需要弹一次迁移提示
+ * 额外返回三个**派生字段**（不落盘，供主进程判断流程用）：
+ *   needsMigration  磁盘上还没有 mode 但**已有配置文件**（老配置），需要弹一次迁移提示
+ *   needsModeChoice 用户还没选过模式（**含全新安装**），启动时必须询问
  *   modeChosen      用户是否显式选过模式
+ *
+ * 为什么把 needsModeChoice 与 needsMigration 分开：全新安装时 `configExists=false`，
+ * 旧定义 `configExists && !modeChosen` 会得出 false —— 于是首启**一声不响**地按
+ * 默认值起步，用户从未做过选择。契约要求「首启让用户选本地或云服务、确认后再继续」，
+ * 因此"要不要问"只取决于 `modeChosen`；而"是不是老配置迁移"才需要 configExists。
  */
 function shapeDeviceSettings(raw, options = {}) {
   const configExists = options.configExists !== false
@@ -129,6 +135,8 @@ function shapeDeviceSettings(raw, options = {}) {
 
   const modeChosen = Boolean(declaredMode)
   const needsMigration = configExists && !modeChosen
+  // 全新安装也属于"用户还没选过"，所以只看 modeChosen，不看 configExists。
+  const needsModeChoice = !modeChosen
   // 契约 §1：「老用户已有 apiUrl 且无 mode」才提示迁移；这里把这个判断固化成一处理
   const legacyCloudDetected =
     Boolean(migration.legacyCloudDetected) || (needsMigration && Boolean(apiUrl))
@@ -150,6 +158,7 @@ function shapeDeviceSettings(raw, options = {}) {
       modeChosenAt: asString(migration.modeChosenAt),
     },
     needsMigration,
+    needsModeChoice,
     modeChosen,
   }
 }

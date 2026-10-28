@@ -277,18 +277,25 @@ async function tryStartGoStack(options = {}) {
       : path.join(app.getPath('userData'), 'local')
     const port = Number(options.gatewayPort) > 0 ? Number(options.gatewayPort) : await components.pickFreePort()
 
+    // 引擎的解释器按 `resolveEngineLaunch` 的优先级挑（引擎专属 venv → 引导器 venv →
+    // CHIRON_PYTHON → dev 兜底）。挑错了只会让引擎返回 ok:false，不阻断整栈。
+    const engineLaunch = resolveEngineLaunch(components, app.getPath('userData'))
+
     const started = await stack.startLocalStack({
       launcher: { command: launch.command, cwd: launch.cwd },
       dataDir,
       exe: gatewayExe,
       port,
       appSecret: ensureAppSecret(dataDir),
+      engine: engineLaunch || undefined,
     })
 
     logMain(
       'info',
       `本地网关就绪 ${started.baseUrl}（pg=${started.launcher?.pgBackend} redis=${started.launcher?.redisBackend}）`,
     )
+    // PG、Redis、引擎都是强依赖，能走到这里说明三者都起来了（缺一个 startLocalStack 就会抛）
+    logMain('info', `python-engine 就绪 ${started.engine.address}`)
     return {
       ok: true,
       baseUrl: started.baseUrl,
@@ -320,6 +327,57 @@ function resolveGatewayExe() {
     if (fs.existsSync(candidate)) return candidate
   }
   return ''
+}
+
+/**
+ * 找 python-engine 源码目录。
+ *
+ * 打包态在 `resources/python-engine`（见 electron-builder.yml），开发态在仓库根。
+ * 判据是 `app/main.py` 存在 —— 光有目录不算，那可能是个空壳。
+ */
+function resolveEngineDir() {
+  const candidates = []
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'python-engine'))
+  candidates.push(path.join(__dirname, '..', '..', 'python-engine'))
+  for (const candidate of candidates) {
+    if (fs.existsSync(path.join(candidate, 'app', 'main.py'))) return candidate
+  }
+  return ''
+}
+
+/**
+ * 解析 python-engine 的启动信息（没有就返回 null）。
+ *
+ * **引擎的依赖比引导器多得多**：引导器只要 fastapi/uvicorn/asyncpg/redis/embedded-postgres，
+ * 而引擎还要 pydantic-ai / anthropic / openai / pymilvus（见 python-engine/requirements.txt）。
+ * 所以解释器按这个顺序挑：
+ *   1. 引擎专属 venv（`<userData>/local/engine/venv`）——唯一保证依赖齐全的来源；
+ *   2. 引导器那份 venv —— 只有在其上额外装过引擎依赖才可用；
+ *   3. `CHIRON_PYTHON` —— 开发者显式指定；
+ *   4. 开发态兜底 `python`（仓库里没有 venv 时）。
+ *
+ * 挑错了解释器的后果是 `ModuleNotFoundError`，但那只让引擎返回 ok:false，
+ * 网关照常起来（177/215 条路由不依赖引擎），不会让整个本地模式崩掉。
+ */
+function resolveEngineLaunch(components, userDataPath) {
+  const engineDir = resolveEngineDir()
+  if (!engineDir) return null
+
+  const exeName = process.platform === 'win32' ? 'python.exe' : 'python3'
+  const candidates = []
+  if (userDataPath) {
+    candidates.push(path.join(userDataPath, 'local', 'engine', 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', exeName))
+    candidates.push(path.join(userDataPath, 'local', 'runtime', 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', exeName))
+  }
+  const explicit = String(process.env.CHIRON_PYTHON || '').trim()
+  if (explicit) candidates.push(explicit)
+  // 开发态兜底：仓库里的 python-engine 由开发者本机环境负责
+  candidates.push('python')
+
+  const command = candidates.find(c => (c === 'python' ? true : fs.existsSync(c)))
+  if (!command) return null
+
+  return { command, args: ['-m', 'app.main'], cwd: engineDir }
 }
 
 /**
@@ -373,13 +431,23 @@ async function startLocalBackend(options = {}) {
     }
   }
   // 优先走"引导器 → Go 网关"这条链：本地模式的业务端点（skills/graphs/kb/workflows…）
-  // 全在 Go 网关里，desktop-local core 只在网关不可用时作为回退。
-  // 返回 null 表示不适用（无网关二进制 / 运行时未装），此时继续走下面的旧路径。
+  // 全在 Go 网关里。返回 null 表示**不适用**（无网关二进制 / 运行时未装），此时才走下面的
+  // 旧路径；抛错表示**试过但失败**，那时绝不能回退——旧路径会再拉起一套 PG/Redis，
+  // 与"同一用户只允许一套"直接冲突，而且两套实例会抢同一个 data dir。
   try {
     const goStack = await tryStartGoStack(options)
     if (goStack && goStack.ok) return goStack
   } catch (err) {
-    logMain('warn', `本地网关链路不可用：${err?.message || err}`)
+    const message = err?.message || String(err)
+    logMain('error', `本地网关链路失败（不回退旧路径）：${message}`)
+    return {
+      ok: false,
+      baseUrl: '',
+      token: '',
+      dataDir: '',
+      reason: err?.reason || 'stack-failed',
+      message,
+    }
   }
 
   const start =
@@ -583,19 +651,48 @@ function configureSession(partition) {
 }
 
 /**
- * 老配置迁移（契约 §1）：磁盘上有 apiUrl 但没有 mode。
- * 默认本地，选择只写 mode 与 migration —— apiUrl 原样保留，用户切回云端时不用重填。
+ * 首启选择运行模式（契约 §1）。
+ *
+ * 两种情形共用这一处询问，但**判据不同**：
+ *   - 全新安装：磁盘上连配置文件都没有（`configExists=false`），用户从未选过 → 必须问；
+ *   - 老配置迁移：有配置文件但没有 `mode` → 也必须问，且要提示它原来用的云端地址。
+ *
+ * 为什么不沿用 `needsMigration` 一个字段：它含 `configExists` 条件，全新安装恒为 false，
+ * 结果就是"首启一声不响按默认值起步" —— 用户从未做过选择。这里改用 `needsModeChoice`
+ * （只取决于 `modeChosen`），迁移文案再按 `needsMigration` 细分。
+ *
+ * 默认按钮是「本地模式」：本地是默认选项，但必须由用户确认后才继续。
+ * 用户直接关掉对话框（取消）时按**本地**继续而不是退出应用 —— 点图标毫无反应
+ * 比"按默认值开始"更糟，且模式随时可在菜单里切换、不会丢数据。
  */
-async function askLegacyMode(settings) {
-  if (!settings.needsMigration) return false
-  const detail = settings.migration.legacyCloudDetected
-    ? `检测到上一次使用的云端服务地址：${settings.apiUrl}\n选择云端模式会继续使用它；选择本地模式也不会删除这个地址。`
-    : '检测到上一版本的配置，但没有记录运行模式。请选择这台机器的运行方式。'
+async function askInitialMode(settings) {
+  if (!settings.needsModeChoice) return false
+  // `CHIRON_DESKTOP_MODE` 是显式指定的运行模式（排障 / 自动化 / 无头场景）。
+  // 这种情况下用户的意图已经写明，再弹一个必须点击的模态框只会让脚本永远卡住。
+  // 仍把选择落盘：否则每次启动都要再判一次 override，配置文件也一直停在"未选择"。
+  const override = String(process.env.CHIRON_DESKTOP_MODE || '').trim().toLowerCase()
+  if (override === 'local' || override === 'cloud') {
+    saveMode(override)
+    logMain('info', `initial mode taken from CHIRON_DESKTOP_MODE: ${override}`)
+    return true
+  }
+  const isMigration = Boolean(settings.needsMigration)
+  const message = isMigration ? '这是第一次以双模式启动 Chiron' : '欢迎使用 Chiron'
+  let detail
+  if (isMigration) {
+    detail = settings.migration.legacyCloudDetected
+      ? `检测到上一次使用的云端服务地址：${settings.apiUrl}\n选择云端模式会继续使用它；选择本地模式也不会删除这个地址。`
+      : '检测到上一版本的配置，但没有记录运行模式。请选择这台机器的运行方式。'
+  } else {
+    detail =
+      '本地模式：在这台机器上直接运行全部功能，内置数据库与推理组件，首次启动会自动准备环境（无需联网下载）。\n' +
+      '云服务：连接你已有的服务端，需要填入服务地址。'
+  }
   try {
     const { response } = await dialog.showMessageBox({
       type: 'question',
       title: '选择运行模式',
-      message: '这是第一次以双模式启动 Chiron',
+      message,
       detail,
       buttons: ['使用本地模式', '继续使用云端模式'],
       defaultId: 0,
@@ -604,11 +701,11 @@ async function askLegacyMode(settings) {
     })
     const mode = response === 1 ? 'cloud' : 'local'
     saveMode(mode)
-    logMain('info', `legacy config migrated to ${mode}`)
+    logMain('info', `${isMigration ? 'legacy config migrated' : 'initial mode chosen'}: ${mode}`)
     return true
   } catch (err) {
     // 弹不出来就别写盘：下次启动再问一次，也好过替用户瞎选
-    logMain('warn', `legacy migration dialog failed: ${err?.message || err}`)
+    logMain('warn', `initial mode dialog failed: ${err?.message || err}`)
     return false
   }
 }
@@ -935,11 +1032,12 @@ if (!gotLock) {
     // Windows 通知/任务栏需要显式的 AppUserModelId，且要与打包 appId 一致
     if (process.platform === 'win32') app.setAppUserModelId(APP_ID)
 
-    // 1) 老配置迁移：必须在建窗之前完成 —— 它决定 session 分区、启动分流与注入的地址
+    // 1) 首启选择运行模式：必须在建窗之前完成 —— 它决定 session 分区、启动分流与注入的地址。
+    //    全新安装与老配置迁移都走这里（判据是 needsModeChoice，见 askInitialMode）。
     try {
-      await askLegacyMode(readDeviceSettings())
+      await askInitialMode(readDeviceSettings())
     } catch (err) {
-      logMain('warn', `legacy migration failed: ${err?.message || err}`)
+      logMain('warn', `initial mode selection failed: ${err?.message || err}`)
     }
 
     // 2) 按模式准备后端：本地模式先把本机后端拉起来（未安装则提示并给恢复选项）

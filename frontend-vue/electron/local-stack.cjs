@@ -19,6 +19,7 @@
 
 const childProcess = require('node:child_process')
 const components = require('./components.cjs')
+const runtimeState = require('./runtime-state.cjs')
 const DEFAULTS = components.DEFAULTS
 
 /** 引导器就绪事件（与 `desktop-local/app/launcher.py::READY_EVENT` 一致） */
@@ -45,12 +46,41 @@ const GATEWAY_READY_PATH = '/ready'
 /** APP_SECRET 的最短长度要求（`config/config.go` 强制 32+） */
 const APP_SECRET_MIN_LENGTH = 32
 
+/** 引擎活跃探针。**不是** `/readyz`：只要进程在监听就够，依赖问题由降级模式兜住。 */
+const ENGINE_HEALTH_PATH = '/healthz'
+
+/**
+ * 引擎启动超时。uvicorn 冷导入 pydantic-ai 等重依赖实测约 5-15s，
+ * 杀软扫描会更慢；给 120s，但不参与"整栈失败"判定（见 startLocalStack）。
+ */
+const ENGINE_TIMEOUT_MS = 120_000
+
+/**
+ * 端口冲突时最多尝试几次（含首次）。与 `components.cjs` 的 `CORE_PORT_ATTEMPTS` 一致。
+ *
+ * 为什么必须重试：`pickFreePort()` / `find_free_port()` 都只是**借号**——它们 listen 到
+ * 0 端口拿到号后立刻 close，到目标进程真正 bind 之间存在无法消除的竞态。Windows 上
+ * `127.0.0.1` 还会撞 Hyper-V 保留段与 TIME_WAIT，所以"挑到空闲端口"永远不等于
+ * "这个端口一定用得上"。只挑一次就 spawn，等于把一次毫秒级的竞态直接升级成
+ * "本地模式起不来"，而这恰恰是用户最不容易自查的那类失败。
+ */
+const PORT_ATTEMPTS = DEFAULTS.CORE_PORT_ATTEMPTS
+
 let injected = null
 const state = {
   /** 引导器进程记录（含它给出的连接信息） */
   launcher: null,
+  /** python-engine 进程记录 */
+  engine: null,
   /** Go 网关进程记录 */
   gateway: null,
+  /**
+   * 接管到的既有栈（不是本进程拉起的）。
+   *
+   * 有值意味着 `stopLocalStack` **不该**去停任何进程——那套 PG/Redis/网关属于
+   * 别的实例，停了会让对方崩掉。只有在接管方自己退出时才清状态文件。
+   */
+  attached: null,
 }
 
 function runtime() {
@@ -68,7 +98,11 @@ function _resetDeps() {
 
 function _resetState() {
   state.launcher = null
+  state.engine = null
+  state.engineFailure = null
   state.gateway = null
+  state.attached = null
+  state.ownedDataDir = ''
 }
 
 /** 按行切分流式输出（与 components.cjs 同一套做法，那个未导出故自备一份） */
@@ -335,16 +369,54 @@ function waitExit(child, timeoutMs) {
  *
  * 卫生说明：网关启动后 `POSTGRES_DSN` 里的密码会出现在**子进程环境**里。
  * 这是不可避免的（网关需要它），边界在于：不写日志、不经渲染进程、不落盘。
+ *
+ * 端口冲突会**换号重试**（见 `PORT_ATTEMPTS`）：调用方给的端口是 `pickFreePort()`
+ * 借来的，从它 close 到网关真正 bind 之间随时可能被别的进程抢走。只试一次就把一次
+ * 毫秒级竞态升级成"本地模式起不来"，代价与概率完全不成比例。
  */
 async function startGateway(info, options = {}) {
-  const { spawn: spawnImpl } = runtime()
   const exe = options.exe
   if (!exe) throw new Error('未找到 Go 网关可执行文件')
 
+  // 显式钉死端口时不做换号重试：那时换号等于让已经知道地址的一方连不上，
+  // 如实报冲突比"起来了但没人连得到"更有用。
+  const attempts = options.retryPortConflict === false ? 1 : PORT_ATTEMPTS
+  const tried = []
+
+  for (let index = 0; index < attempts; index += 1) {
+    const port = index === 0 ? Number(options.port) : await components.pickFreePort()
+    try {
+      return await spawnGatewayOnce(info, { ...options, port })
+    } catch (err) {
+      const text = `${(err && err.stderrTail) || ''}\n${(err && err.message) || ''}`
+      const portConflict = DEFAULTS.isPortConflict(text)
+      // 每次失败都先收干净：残留的网关进程会继续占着端口，下一轮更没机会
+      await stopGateway()
+      tried.push({
+        attempt: index + 1,
+        port,
+        portConflict,
+        message: (err && err.message) || String(err),
+      })
+      // 不可恢复的 spawn 错误（ENOENT/EACCES）与普通启动失败换号也没用
+      if (!portConflict) break
+    }
+  }
+
+  const last = tried[tried.length - 1]
+  const err = new Error(last ? last.message : '网关启动失败')
+  err.attempts = tried
+  err.portConflict = Boolean(last && last.portConflict)
+  throw err
+}
+
+/** 单次尝试：端口冲突的判定与换号重试由 `startGateway` 负责。 */
+async function spawnGatewayOnce(info, options = {}) {
+  const { spawn: spawnImpl } = runtime()
   const port = Number(options.port)
   const env = buildGatewayEnv(info, { ...options, port })
 
-  const child = spawnImpl(exe, [], {
+  const child = spawnImpl(options.exe, [], {
     stdio: ['ignore', 'pipe', 'pipe'],
     cwd: options.cwd || process.cwd(),
     windowsHide: true,
@@ -469,32 +541,297 @@ async function stopGateway() {
 }
 
 /**
- * 一次性起本地整条链：引导器 → 网关。
+ * 组装 python-engine 的环境变量。
  *
- * 失败时**回滚已启动的部分**：引导器起来了但网关失败，必须把引导器（连同它拉起的
- * PG/Redis）一起停掉，否则下次启动会撞上残留 postmaster。
+ * 与网关的差异（都是从两侧代码里读出来的，不是猜的）：
+ *   - Redis 用 `REDIS_URL`（`redis://host:port`），网关用 `REDIS_ADDR`（`host:port`）；
+ *   - 监听地址用 `HTTP_HOST` / `HTTP_PORT`（uvicorn），网关用 `PORT`；
+ *   - 需要 `DEGRADED_MODE=true` 才能在单机启动：`verify_sandbox_backend()` 在
+ *     没有 `SANDBOX_SERVICE_URL` 时会拒绝启动，降级模式是唯一放行路径（见阶段三实测）。
+ *
+ * 仍然校验 DSN 与 APP_SECRET：引擎同样拿它们连库、派生 INTERNAL_TOKEN，
+ * 缺了会在引擎自己的日志深处报错，不如在这里拦住。
+ */
+function buildEngineEnv(info, options = {}) {
+  if (!info || typeof info !== 'object') throw new Error('缺少引导器连接信息，无法启动引擎')
+
+  const pgDsn = String(info.pgDsn || '').trim()
+  if (!pgDsn) throw new Error('引导器未提供 PostgreSQL DSN，引擎无法启动')
+
+  const appSecret = String(options.appSecret || '').trim()
+  if (appSecret.length < APP_SECRET_MIN_LENGTH) {
+    throw new Error(
+      `APP_SECRET 至少需要 ${APP_SECRET_MIN_LENGTH} 个字符（引擎会拒绝启动），当前 ${appSecret.length} 个`,
+    )
+  }
+
+  const port = Number(options.port)
+  if (!Number.isInteger(port) || port <= 0 || port > 65535) {
+    throw new Error(`引擎端口非法：${options.port}`)
+  }
+
+  const env = { ...process.env, ...(options.env || {}) }
+  env.APP_SECRET = appSecret
+  env.POSTGRES_DSN = pgDsn
+  env.HTTP_HOST = '127.0.0.1'
+  env.HTTP_PORT = String(port)
+  // 单机模式：放行沙箱门禁，并让 Redis 从"必需"降为"可选"
+  env.DEGRADED_MODE = 'true'
+
+  const redisAddr = String(info.redisAddr || '').trim()
+  if (redisAddr) {
+    // 引导器给的是 host:port，引擎要的是 URI。已经带 scheme 时原样用，避免拼成
+    // `redis://redis://...`。
+    env.REDIS_URL = redisAddr.includes('://') ? redisAddr : `redis://${redisAddr}`
+  }
+
+  return env
+}
+
+/**
+ * 起 python-engine 并等它开始监听。
+ *
+ * 引擎是**强依赖**（与 PG、Redis 同级）：起不来就没有可用的本地模式。这里仍按
+ * `{ok:false, reason}` 返回而不是直接抛，是为了让 `startLocalStack` 能在回滚前
+ * 把失败原因（含 stderr 尾部）完整带进错误消息里，恢复对话框才有东西可显示。
+ *
+ * 端口冲突会**换号重试**（见 `PORT_ATTEMPTS`），理由与 `startGateway` 相同。
+ */
+async function startEngine(info, options = {}) {
+  const launch = options.engine
+  if (!launch || !launch.command) {
+    return { ok: false, reason: 'no-launch', message: '未找到 python-engine 启动信息' }
+  }
+
+  const attempts = options.retryPortConflict === false ? 1 : PORT_ATTEMPTS
+  const tried = []
+  let last = null
+
+  for (let index = 0; index < attempts; index += 1) {
+    const port = index === 0 ? Number(options.port) : await components.pickFreePort()
+    const result = await spawnEngineOnce(info, { ...options, port })
+    if (result.ok) return result
+
+    tried.push({ attempt: index + 1, port, reason: result.reason, message: result.message })
+    last = result
+    // 只有端口冲突值得换号；其它失败（缺依赖、配置错）换多少个端口都一样
+    if (!DEFAULTS.isPortConflict(`${result.stderrTail || ''}\n${result.message || ''}`)) break
+    await stopEngine()
+  }
+
+  return { ...last, attempts: tried }
+}
+
+/** 单次尝试：换号重试与最终判定由 `startEngine` 负责。 */
+async function spawnEngineOnce(info, options = {}) {
+  const { spawn: spawnImpl } = runtime()
+  const launch = options.engine
+  const port = Number(options.port)
+  const env = buildEngineEnv(info, { ...options, port })
+
+  let child
+  try {
+    child = spawnImpl(launch.command, launch.args || ['-m', 'app.main'], {
+      stdio: ['ignore', 'pipe', 'pipe'],
+      cwd: launch.cwd || process.cwd(),
+      windowsHide: true,
+      env,
+    })
+  } catch (err) {
+    return { ok: false, reason: 'spawn-failed', message: (err && err.message) || 'spawn 出错' }
+  }
+
+  const record = {
+    child,
+    port,
+    address: `127.0.0.1:${port}`,
+    baseUrl: `http://127.0.0.1:${port}`,
+    stderrTail: '',
+    stdoutTail: '',
+    exited: false,
+    exitCode: null,
+    startedAt: new Date().toISOString(),
+  }
+  state.engine = record
+
+  if (child.stdout) {
+    child.stdout.on('data', chunk => {
+      record.stdoutTail = tailOf(`${record.stdoutTail}${chunk.toString('utf8')}`, 8192)
+    })
+  }
+  if (child.stderr) {
+    child.stderr.on('data', chunk => {
+      record.stderrTail = tailOf(`${record.stderrTail}${chunk.toString('utf8')}`, 8192)
+    })
+  }
+  child.once('error', err => {
+    record.exited = true
+    record.spawnError = (err && err.message) || String(err)
+  })
+  child.once('exit', code => {
+    record.exited = true
+    record.exitCode = code
+  })
+
+  const deadline = Date.now() + (options.timeoutMs || ENGINE_TIMEOUT_MS)
+  while (Date.now() < deadline) {
+    if (record.exited) {
+      return {
+        ok: false,
+        reason: 'exited',
+        message: `引擎启动后立即退出（退出码 ${record.exitCode}）`,
+        stderrTail: record.stderrTail,
+      }
+    }
+    if (await probeHttp(record.baseUrl, ENGINE_HEALTH_PATH)) {
+      return { ok: true, address: record.address, port, baseUrl: record.baseUrl }
+    }
+    await sleep(options.intervalMs || 500)
+  }
+
+  return {
+    ok: false,
+    reason: 'timeout',
+    message: `引擎在 ${Math.round((options.timeoutMs || ENGINE_TIMEOUT_MS) / 1000)}s 内未开始监听`,
+    stderrTail: record.stderrTail,
+  }
+}
+
+/** 停引擎。引擎是单进程（uvicorn 不分叉），SIGTERM 足够；超时再收树。 */
+async function stopEngine() {
+  const record = state.engine
+  if (!record) return false
+  state.engine = null
+  if (!record.child || record.exited) return true
+  const child = record.child
+  try {
+    child.kill('SIGTERM')
+  } catch {
+    /* 已消失 */
+  }
+  if (await waitExit(child, 8000)) return true
+  try {
+    components.killProcessTree(child)
+  } catch {
+    try {
+      child.kill('SIGKILL')
+    } catch {
+      /* 已消失 */
+    }
+  }
+  await waitExit(child, 5000)
+  return true
+}
+
+/**
+ * 一次性起本地整条链：引导器 → 引擎 → 网关。
+ *
+ * 失败时**回滚已启动的部分**：引导器起来了但引擎/网关失败，必须把已启动的进程
+ * （连同 PG/Redis）一起停掉，否则下次启动会撞上残留 postmaster。
+ *
+ * 三者都是**强依赖**：PG、Redis、python-engine 缺任何一个都不算本地模式可用。
+ * 引擎的失败原因会被完整带进抛出的错误里，恢复对话框才有东西可显示。
  */
 async function startLocalStack(options = {}) {
+  const dataDir = String(options.dataDir || '')
+
+  // **接管已有实例**：同一用户、同一 dataDir 下若已有一套健康栈在跑，就直接复用它。
+  // 这条路径覆盖 Electron 单实例锁管不到的情况：手动起的 CLI 引导器、上次被强杀后
+  // 仍活着的网关。判活不只看状态文件——那个文件在进程被强杀时来不及删，所以还要
+  // 实际打一次 /ready，确认 PG 与 Redis 都 up 才算数（见 runtime-state.cjs）。
+  if (dataDir && options.reuseExisting !== false) {
+    const existing = runtimeState.readRuntimeState(dataDir)
+    const probe = await runtimeState.probeExistingStack(existing, { fetch: options.fetch })
+    if (probe.alive) {
+      // 记下来，但**不拥有**这些进程：stopLocalStack 不该去停别人拉起的栈
+      state.attached = { dataDir, baseUrl: probe.baseUrl, port: probe.port }
+      return {
+        baseUrl: probe.baseUrl,
+        port: probe.port,
+        ready: { postgres: 'up', redis: 'up' },
+        reused: true,
+        launcher: existing.launcher || null,
+        engine: existing.engine || { ok: true },
+      }
+    }
+  }
+
   const launcherResult = await startLauncher(options)
   try {
-    const gatewayResult = await startGateway(launcherResult.info, options)
+    // 引擎先于网关：网关启动时会读 PYTHON_ENGINE_ADDRESS 建客户端，地址得在它起来前就定好。
+    // 没有引擎启动信息时不必挑端口（挑端口会真的 listen 一次）。
+    const enginePort = options.engine ? options.enginePort || (await components.pickFreePort()) : 0
+    const engineResult = await startEngine(launcherResult.info, { ...options, port: enginePort })
+    if (!engineResult.ok) {
+      // 强依赖：没有引擎就没有可用的本地模式（聊天/知识库/记忆全在引擎侧）
+      const err = new Error(
+        `python-engine 未能启动（${engineResult.reason || 'unknown'}）：${engineResult.message || '原因未知'}`,
+      )
+      err.reason = engineResult.reason
+      err.engineFailure = engineResult
+      throw err
+    }
+
+    const gatewayResult = await startGateway(launcherResult.info, {
+      ...options,
+      pythonEngineAddress: engineResult.address,
+    })
+
+    // 记录本次运行占用的端口，供下一个实例接管（见 runtime-state.cjs）。
+    // 不写 DSN：里面有密码，接管方只要有端口就能重建。
+    if (dataDir) {
+      runtimeState.writeRuntimeState(dataDir, {
+        gatewayPort: gatewayResult.port,
+        enginePort: engineResult.port,
+        pgPort: launcherResult.info && launcherResult.info.pgPort,
+        redisPort: launcherResult.info && launcherResult.info.redisPort,
+        pgBackend: launcherResult.info && launcherResult.info.pgBackend,
+        redisBackend: launcherResult.info && launcherResult.info.redisBackend,
+        launcher: {
+          pgPort: launcherResult.info && launcherResult.info.pgPort,
+          redisPort: launcherResult.info && launcherResult.info.redisPort,
+          pgBackend: launcherResult.info && launcherResult.info.pgBackend,
+          redisBackend: launcherResult.info && launcherResult.info.redisBackend,
+        },
+        engine: { ok: true, address: engineResult.address, port: engineResult.port },
+      })
+    }
+    state.ownedDataDir = dataDir
+
     return {
       baseUrl: gatewayResult.baseUrl,
       port: gatewayResult.port,
       ready: gatewayResult.ready,
       launcher: launcherResult.info,
+      engine: { ok: true, address: engineResult.address, port: engineResult.port },
     }
   } catch (err) {
+    // 回滚顺序与启动相反：先引擎，再引导器（连同 PG/Redis）
+    await stopEngine()
     await stopLauncher()
     throw err
   }
 }
 
 async function stopLocalStack() {
-  // 与启动相反：先网关，再数据栈
+  // 接管来的栈不属于本进程：停掉会让那个正在用它实例崩掉。
+  // 这里只放松手，并把状态文件留着——还在跑的实例仍然需要它。
+  if (state.attached) {
+    state.attached = null
+    return { gatewayStopped: false, engineStopped: false, launcherStopped: false, detached: true }
+  }
+
+  // 与启动相反：先网关，再引擎，最后数据栈
   const gatewayStopped = await stopGateway()
+  const engineStopped = await stopEngine()
   const launcherStopped = await stopLauncher()
-  return { gatewayStopped, launcherStopped }
+  // 自己拉起的栈已经停了，状态文件必须删掉：留着会让下一个实例去连一堆死端口，
+  // 白白多等一轮探测超时。
+  if (state.ownedDataDir) {
+    runtimeState.clearRuntimeState(state.ownedDataDir)
+    state.ownedDataDir = ''
+  }
+  return { gatewayStopped, engineStopped, launcherStopped }
 }
 
 function getStackState() {
@@ -502,6 +839,14 @@ function getStackState() {
     launcher: state.launcher
       ? { pid: state.launcher.child && state.launcher.child.pid, info: state.launcher.info }
       : null,
+    engine: state.engine
+      ? {
+          pid: state.engine.child && state.engine.child.pid,
+          port: state.engine.port,
+          address: state.engine.address,
+        }
+      : null,
+    engineFailure: state.engineFailure || null,
     gateway: state.gateway
       ? { pid: state.gateway.child && state.gateway.child.pid, port: state.gateway.port, baseUrl: state.gateway.baseUrl }
       : null,
@@ -513,13 +858,18 @@ module.exports = {
   LAUNCHER_ERROR_EVENT,
   GATEWAY_HEALTH_PATH,
   GATEWAY_READY_PATH,
+  ENGINE_HEALTH_PATH,
   LAUNCHER_TIMEOUT_MS,
   GATEWAY_TIMEOUT_MS,
+  ENGINE_TIMEOUT_MS,
   APP_SECRET_MIN_LENGTH,
   parseLauncherLine,
   buildGatewayEnv,
+  buildEngineEnv,
   startLauncher,
   stopLauncher,
+  startEngine,
+  stopEngine,
   startGateway,
   stopGateway,
   startLocalStack,

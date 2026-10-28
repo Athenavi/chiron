@@ -1,6 +1,12 @@
 # Chiron Desktop 打包配置（electron-builder）
 #
-# 形态：纯 Web 壳。只把 dist/ 与 electron/ 打进安装包，不打包 Go 后端或 Python。
+# 形态：**自带本地服务栈**的桌面应用。安装包同时携带
+#   - `dist/` + `electron/`（前端与主进程，进 asar）；
+#   - `chiron.exe`（Go 网关，本地模式的唯一业务入口）；
+#   - `desktop-local/`（引导器 + `bin/` 下的 PG/Redis 二进制）；
+#   - `python-engine/`（聊天/知识库/记忆/图谱的实现方）；
+#   - `python-runtime/` + `uv/`（裸 CPython 与建 venv 的工具）。
+# 首启不下载任何东西，只在本机建 venv 装依赖，详见 docs/desktop-local/packaging.md。
 # 版本号采用 V0.1.261025.01 的语义：0.1 起步 → 261025 日期 → 01 当日序号。
 #
 # 发行策略：每个平台只出 x64 安装包 + latest*.yml 更新清单。
@@ -99,6 +105,30 @@ extraResources:
     filter:
       - "**/*"
       - "!**/__pycache__/**"
+  # python-engine：聊天、知识库、记忆、图谱、能力发现的**唯一实现方**。
+  #
+  # 网关那 215 条路由里有 38 条（17.7%）要转给它，其中 memory/graphs/chat/
+  # capabilities/workflows 是 100% 依赖 —— 不带它，用户点这些入口只会拿到
+  # `python engine not available`，这正是"本地模式几乎不可用"的成因
+  # （见 docs/desktop-local/endpoint-coverage.md）。
+  #
+  # 同样放 resources/ 而非 asar：它是 Python 源码目录，由子进程以
+  # `python -m app.main` 在真实路径下运行，asar 内的路径子进程读不到。
+  # 不带 tests/ evals/ examples/ docs：那些是开发期资产，进包只是白占体积。
+  - from: ../python-engine
+    to: python-engine
+    filter:
+      - "**/*"
+      - "!**/__pycache__/**"
+      - "!**/.pytest_cache/**"
+      - "!**/*.egg-info/**"
+      - "!**/.venv/**"
+      - "!tests/**"
+      - "!evals/**"
+      - "!examples/**"
+      - "!logs/**"
+      - "!out/**"
+      - "!data/**"
   - from: ../alembic.ini
     to: alembic.ini
   # **安装包携带一份 CPython 与 uv**（都不是运行时依赖的替代品，而是必需品）：

@@ -39,8 +39,19 @@ _NODE_COLUMNS = (
 
 
 def _dsn(request: Request) -> str:
-    settings = request.app.state.settings
-    dsn = getattr(settings, "postgres_dsn", "") or ""
+    """取 PG 连接串。
+
+    **来源必须是运行时的 ``app.state.pg``**，不能读 ``settings.postgres_dsn``：
+    桌面端用 embedded-pack 起库，监听端口由它自己挑（每次启动都可能不同），
+    而 ``settings.postgres_dsn`` 只服务"连外部 PostgreSQL"的场景，单机下恒为空。
+    早期这里读的是 settings，结果是本族端点**恒 503** —— 真机探针里会话地图
+    打开即白屏。``settings`` 仅作为兜底保留（外部 PG 部署时它才有值）。
+    """
+    pg = getattr(request.app.state, "pg", None)
+    dsn = getattr(pg, "dsn", "") or ""
+    if not dsn:
+        settings = getattr(request.app.state, "settings", None)
+        dsn = getattr(settings, "postgres_dsn", "") or ""
     if not dsn:
         raise HTTPException(status_code=503, detail="本地 PostgreSQL 未配置（/readyz 的 pg 为 false）")
     return dsn
