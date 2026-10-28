@@ -36,7 +36,13 @@ const {
   probe,
 } = require('./config.cjs')
 const shared = require('./shared.cjs')
-const { API_URL_ARG_PREFIX, MODE_ARG_PREFIX, DEFAULT_DEV_URL, partitionFor } = shared
+const {
+  API_URL_ARG_PREFIX,
+  MODE_ARG_PREFIX,
+  DEFAULT_DEV_URL,
+  partitionFor,
+  shouldQuitOnAllWindowsClosed,
+} = shared
 /**
  * 本地设备 token 的注入前缀（`--chiron-device-token=<token>`）。
  *
@@ -78,6 +84,35 @@ const configuredSessions = new WeakSet()
 
 /** 本地后端只停一次：before-quit 与模式切换都会触发停止 */
 let localBackendStopped = false
+
+/**
+ * 启动流程（whenReady 里那串 await）是否已经走到建主窗口这一步。
+ *
+ * 存在的唯一原因：首次启动时安装进度窗是**当时唯一的窗口**，而 `destroy()`
+ * 会**同步**派发 window-all-closed（electron 45 实测确认，不是"下个 tick 才发"）。
+ * 不在启动期间拦一下，closeInstallWindow() 会立刻把 app.quit() 排进队列，
+ * 紧接着建好的主窗口还没显示，进程就退了 —— 用户看到的就是
+ * "检查本地运行时就闪退"。
+ */
+let startupComplete = false
+
+/**
+ * 正在做的"先销毁旧窗口、再建新窗口"的同步重建次数。
+ *
+ * relaunchIntoApp / relaunchIntoSetup 都是 `destroy()` 紧接着 `createWindow()`，
+ * 和启动期同一个坑：destroy 同步触发 window-all-closed。计数 >0 期间不允许因此退出。
+ */
+let holdingWindows = 0
+
+/** 把"销毁 + 重建"包成原子操作：中间那一下空窗口不触发退出 */
+function holdingWindowQuota(fn) {
+  holdingWindows += 1
+  try {
+    return fn()
+  } finally {
+    holdingWindows -= 1
+  }
+}
 
 /**
  * 首次启动安装进度窗口。安装发生在 createWindow 之前，没有窗口就没有任何东西
@@ -713,8 +748,10 @@ function createWindow() {
 function relaunchIntoApp() {
   const old = mainWindow
   mainWindow = null
-  if (old) old.destroy()
-  createWindow()
+  holdingWindowQuota(() => {
+    if (old) old.destroy()
+    createWindow()
+  })
 }
 
 /**
@@ -725,12 +762,14 @@ function relaunchIntoApp() {
 function relaunchIntoSetup() {
   const old = mainWindow
   mainWindow = null
-  if (old) old.destroy()
-  // createWindow 会重新读配置：此时若已有地址，会直接进主界面 —— 所以这里
-  // 先把窗口配置成"强制 setup"模式，避免用户点了"连接设置"却又弹回主界面。
-  forceSetup = true
-  createWindow()
-  forceSetup = false
+  holdingWindowQuota(() => {
+    if (old) old.destroy()
+    // createWindow 会重新读配置：此时若已有地址，会直接进主界面 —— 所以这里
+    // 先把窗口配置成"强制 setup"模式，避免用户点了"连接设置"却又弹回主界面。
+    forceSetup = true
+    createWindow()
+    forceSetup = false
+  })
 }
 
 /**
@@ -1089,6 +1128,9 @@ if (!gotLock) {
     })
 
     createWindow()
+    // 主窗口已建出来，启动流程到此结束。此后 window-all-closed 才代表"用户真的关了窗口"；
+    // 之前没有窗口只是启动期的正常中间态（见 window-all-closed 里的说明）。
+    startupComplete = true
     setupAutoUpdater()
 
     // macOS：点 Dock 图标且没有窗口时重开
@@ -1099,7 +1141,21 @@ if (!gotLock) {
 
   // macOS 习惯：关掉窗口不退出应用
   app.on('window-all-closed', () => {
-    if (process.platform !== 'darwin') app.quit()
+    if (
+      !shouldQuitOnAllWindowsClosed({
+        platform: process.platform,
+        startupComplete,
+        holdingWindows,
+      })
+    ) {
+      // 不能静默：真·退出和"被启动流程误伤"在日志里必须能区分开
+      logMain(
+        'info',
+        `window-all-closed ignored (startupComplete=${startupComplete}, holdingWindows=${holdingWindows})`,
+      )
+      return
+    }
+    app.quit()
   })
 
   // 退出前停掉本地后端：否则 embedded-postgres / 推理代理会留成孤儿进程。
