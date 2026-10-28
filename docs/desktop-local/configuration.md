@@ -154,11 +154,16 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 | `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:43-50`） | `components.cjs:372-376`（`packagedCoreDir()`） | 🟡 目录名写死 |
 | `resources/migrations/` | `extraResources` ← `../migrations`（`:51-55`） | `config.py` 的 `REPO_ROOT/migrations`（打包后 `REPO_ROOT` = `resources/`） | 🟡 |
 | `resources/alembic.ini` | `extraResources` ← `../alembic.ini`（`:56-57`） | `config.py:134-136` | 🟡 |
-| `<userData>/local/runtime/venv/`（`Scripts/python.exe` 或 `bin/python3`） | **不随包**，首次启动由 `runtime-install.cjs` 用随包解释器创建 | `components.cjs`（`installedRuntimePython()`，候选链最前） | 🟡 |
-| `resources/uv/<platform>-<arch>/uv[.exe]` | `extraResources` ← `assets/uv` | `runtime-install.cjs::bundledUv()`（首次启动自装的入口） | 🟡 目录键须与 `process.platform-arch` 逐字一致 |
-| `resources/python-runtime/<platform>-<arch>/…/python[.exe]` | **随包**：纯解释器，首次启动用它建 venv（不联网找解释器） | `runtime-install.cjs`（`bundledPython()`） | 🟡 |
-| `resources/python/python.exe` 或 `resources/python/bin/python3` | **不再随包**（仅为兼容旧安装包保留的候选） | `components.cjs`（`bundledPython()`，排在自建 venv 之后） | 🟡 |
+| `<userData>/local/runtime/venv/`（`Scripts/python.exe` 或 `bin/python3`） | **不随包**，首次启动由 `runtime-install.cjs` 下载的 uv 创建 | `components.cjs`（`installedRuntimePython()`，候选链最前） | 🟡 |
+| `resources/uv/`、`resources/python-runtime/`、`resources/python/` | **都不随包**：`electron-builder.yml` 不映射它们，壳层也不查找 | — | 有反向断言，防止被加回来 |
 | `resources/components/**` | `extraResources` glob 过滤（`:34-39`，目录平时不存在） | 契约 §3 的可选组件目录 | 🟡 |
+
+Python 运行时**只有一个来源**：首次启动由 `runtime-install.cjs` 按需下载 `uv`
+（多源测速 + SHA256 强校验）到 `<userData>/local/runtime/bin/`，再由 uv 把受管
+CPython 取到同一目录下并建 venv、装依赖。安装包里没有 `resources/uv`、
+`resources/python-runtime`、`resources/python` —— CI 打包后会按真实路径反向断言
+这三者都不存在。相应地，`runtime-install.cjs` 里已没有 `bundledUv()` /
+`bundledPython()`，解析 uv 只走 `downloadedUv()`。
 
 `REPO_ROOT = Path(__file__).resolve().parents[2]`（`config.py:33`）是唯一把"打包后 `resources/`"
 与"开发态仓库根"统一起来的地方——它同时决定 `migrations/` 与 `alembic.ini` 的位置。

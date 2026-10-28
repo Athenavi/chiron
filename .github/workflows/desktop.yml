@@ -77,8 +77,8 @@ jobs:
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # runner 上的 Python **只用于跑构建脚本**，不再随包任何解释器：用户机的运行时
-      # 由随包的 uv 在首次启动时创建。
+      # runner 上的 Python **只用于跑构建脚本**，不随包任何解释器：用户机的运行时
+      # 由首次启动按需下载的 uv 创建（安装包既不携带 uv，也不携带 CPython）。
       #
       # 固定 3.12 是因为 desktop-local 的 pytest 套件与脚本都在这版验证过；
       # 它与用户机最终跑什么 Python 无关（那个版本由 runtime-install.cjs 决定）。
@@ -201,39 +201,6 @@ jobs:
       #     target 是 arch: [x64] —— 自动推断会装成 darwin-arm64，打进 x64 包里
       #     就是一份跑不起来的二进制；
       #   - win/linux runner 目前是 x64，同样按 target 走而不是按 runner 走。
-      - name: Prepare bundled uv binary
-        working-directory: desktop-local
-        shell: bash
-        run: |
-          case "${{ matrix.platform }}" in
-            win)   key=win32-x64 ;;
-            mac)   key=darwin-x64 ;;
-            linux) key=linux-x64 ;;
-            *) echo "::error::未知平台 ${{ matrix.platform }}"; exit 1 ;;
-          esac
-          echo "uv platform key = $key"
-          python scripts/prepare_uv.py --platform "$key"
-
-      # 解释器也要随包。只带 uv 不够：`uv venv --python <ver> --python-preference
-      # only-managed` 在本地没有受管 CPython 时会去 GitHub Releases 下载
-      # python-build-standalone，而不少网络下 github.com 不可达 ⇒ 首次启动永远卡在
-      # 创建环境。随包一份纯解释器后，运行时用它的绝对路径建 venv，不再联网找解释器；
-      # 依赖仍按 pyproject.toml 首次现装。
-      #
-      # 同样**必须显式传 --platform**，理由与上一步一致（runner 架构 ≠ target 架构）。
-      - name: Prepare bundled CPython interpreter
-        working-directory: desktop-local
-        shell: bash
-        run: |
-          case "${{ matrix.platform }}" in
-            win)   key=win32-x64 ;;
-            mac)   key=darwin-x64 ;;
-            linux) key=linux-x64 ;;
-            *) echo "::error::未知平台 ${{ matrix.platform }}"; exit 1 ;;
-          esac
-          echo "python platform key = $key"
-          python scripts/prepare_python.py --platform "$key"
-
       - name: Prepare bundled redis binary
         working-directory: desktop-local
         run: python scripts/prepare_redis.py
@@ -307,73 +274,40 @@ jobs:
             fi
           done
 
-          # 随包的 uv 二进制（首次启动自装运行时的唯一入口）。
-          # 目录键必须与 runtime-install.cjs::bundledUv() 的
-          # `${process.platform}-${process.arch}` 逐字一致，写错等于没有 uv。
+          # redis 仍然随包（本地模式内置 PG/Redis 的离线起点），必须存在。
           if [[ "${{ matrix.platform }}" == "win" ]]; then
-            uv="$root/uv/win32-x64/uv.exe"
             redis="$root/desktop-local/bin/redis/redis-server.exe"
-          elif [[ "${{ matrix.platform }}" == "mac" ]]; then
-            uv="$root/uv/darwin-x64/uv"
-            redis="$root/desktop-local/bin/redis/redis-server"
           else
-            uv="$root/uv/linux-x64/uv"
             redis="$root/desktop-local/bin/redis/redis-server"
           fi
-          for p in "$uv" "$redis"; do
-            if [[ ! -e "$p" ]]; then
-              echo "::error::缺少 $p —— 首次启动装不出运行时 / 本地模式起不来"
-              fail=1
-            else
-              echo "ok  ${p#"$root/"}"
-            fi
-          done
-
-          # uv 不只是"文件在"，还得真能执行：CI 的 runner 架构与目标架构不同
-          # （macos-latest 是 arm64，target 是 x64），拿错架构的二进制会在这里暴露。
-          if [[ -e "$uv" ]]; then
-            if "$uv" --version; then
-              echo "ok  uv 可执行"
-            else
-              echo "::error::$uv 无法执行（架构不匹配或缺少可执行位）"
-              fail=1
-            fi
-          fi
-
-          # **随包的受管 CPython 解释器**：首次启动建 venv 要用它的绝对路径，
-          # 否则 uv 会去 GitHub 下载（github.com 不可达的网络下必然失败）。
-          # 布局必须与 runtime-install.cjs::bundledPython() 一致：
-          #   resources/python-runtime/<platform>-<arch>/<版本目录>/python[.exe]
-          if [[ "${{ matrix.platform }}" == "win" ]]; then
-            pyroot="$root/python-runtime/win32-x64"
-          elif [[ "${{ matrix.platform }}" == "mac" ]]; then
-            pyroot="$root/python-runtime/darwin-x64"
-          else
-            pyroot="$root/python-runtime/linux-x64"
-          fi
-          # 用 `\( ... -o ... \)` 显式分组：macOS 自带的是 BSD find，
-          # 它把 -maxdepth 当**全局 primary**（见 find(1)："If any -maxdepth
-          # primary is specified, it applies to the entire expression"），
-          # 重复写两遍不但冗余，读起来也像只约束了分支之一。分组后语义明确。
-          pyexe="$(find "$pyroot" -maxdepth 3 \( -name 'python.exe' -o -name 'python3' \) 2>/dev/null | head -1)"
-          if [[ -z "$pyexe" ]]; then
-            echo "::error::缺少随包解释器 $pyroot —— 首次启动将无法创建环境"
-            ls -la "$pyroot" 2>/dev/null || true
+          if [[ ! -e "$redis" ]]; then
+            echo "::error::缺少 $redis —— 本地模式起不来"
             fail=1
           else
-            echo "ok  ${pyexe#"$root/"}"
-            if "$pyexe" -c "import sys" 2>/dev/null; then
-              echo "ok  随包解释器可执行（$("$pyexe" -V 2>&1)）"
-            else
-              echo "::error::$pyexe 无法执行（架构不匹配或缺少依赖）"
-              fail=1
-            fi
+            echo "ok  ${redis#"$root/"}"
+          fi
+
+          # **安装包不携带任何 Python 运行时**（uv 与 CPython 都不带）。
+          # 这是产品决策，也是这份复核要守的不变量：一旦谁把 assets/uv 或
+          # assets/python-runtime 加回 electron-builder.yml，安装包体积会立刻涨回
+          # 100MB+，而首次启动下载的逻辑也就白写了。所以这里**反向断言**。
+          if [[ -e "$root/uv" ]]; then
+            echo "::error::安装包里带着 resources/uv —— 运行时改为首次启动按需下载，不应随包"
+            fail=1
+          else
+            echo "ok  未随包 uv（首次启动按需下载，符合预期）"
+          fi
+          if [[ -e "$root/python-runtime" ]]; then
+            echo "::error::安装包里带着 resources/python-runtime —— 运行时改为首次启动按需下载，不应随包"
+            fail=1
+          else
+            echo "ok  未随包 python-runtime（首次启动由 uv 从镜像取受管解释器，符合预期）"
           fi
 
           # **不复用旧的 resources/python**：那是"解释器 + 已装依赖"的整包，
           # 会冻结构建机状态、漏一个包就整体失效。这里反向断言它没有被加回来。
           if [[ -e "$root/python" ]]; then
-            echo "::error::安装包里仍然带着 resources/python —— 旧形态已废弃，应为 python-runtime"
+            echo "::error::安装包里仍然带着 resources/python —— 旧形态已废弃，也不应随包"
             fail=1
           else
             echo "ok  未随包旧的 resources/python（符合预期）"

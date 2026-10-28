@@ -413,17 +413,11 @@ function inspectLocalRuntime() {
 }
 
 /**
- * 旧形态安装包里随带的 Python（`resources/python/python.exe`）。
+ * 本地运行时**只有一个来源**：首次启动按需下载并建在 `<userData>/local/runtime`。
  *
- * **新包不再携带它**：解释器由首次启动时的 uv 装到 `<userData>/local/runtime/venv`。
- * 保留这个候选只为兼容早先打出的安装包；没有就返回空串，交给后面的候选。
+ * 这里不再查找 `resources/python` 或 `resources/python-runtime`。安装包不携带任何
+ * 运行时，保留一条"看看包里有没有"的路径只会让自动安装逻辑在开发机上被悄悄绕过。
  */
-function bundledPython() {
-  if (!process.resourcesPath) return ''
-  const exe = process.platform === 'win32' ? 'python.exe' : 'bin/python3'
-  const candidate = path.join(process.resourcesPath, 'python', exe)
-  return fs.existsSync(candidate) ? candidate : ''
-}
 
 /**
  * 首次启动时自建的运行时解释器（`<userData>/local/runtime/venv`）。
@@ -521,9 +515,9 @@ function runtimeGuidance(probe) {
     )
   } else if (probe.reason === 'missing' || probe.reason === 'venv-missing') {
     lines.push(
-      '本地 Python 环境尚未建好。正常情况首次启动会自动安装；若应用没能自动安装，',
-      '多半是安装包不完整（缺少 uv）或网络不通 —— 请重新安装，或用 `npm run desktop:pack` 重新打包。',
-      '开发者请确认打包前执行过 `python desktop-local/scripts/prepare_uv.py`（产物在 assets/uv）。',
+      '本地 Python 环境尚未建好。首次启动会自动在线安装（先取 uv，再由 uv 取解释器并装依赖）；',
+      '若没能自动装起来，多半是网络不通 —— 设好 CHIRON_UV_MIRROR / CHIRON_PYTHON_MIRROR 后重启会重试。',
+      '开发者也可以设 CHIRON_PYTHON 指向一个已装好依赖的解释器，跳过自动安装。',
     )
   } else if (probe.reason === 'missing-dependency') {
     lines.push(
@@ -556,35 +550,34 @@ function resolveCoreLaunch(root = repoRoot()) {
   const exe = coreBinaryPath()
   if (fs.existsSync(exe)) return { command: exe, args: [], kind: 'binary', cwd: root }
 
-  // 打包态：desktop-local 和 uv 都在 resources 下，Python 运行时建在 userData
+  // 打包态：desktop-local 在 resources 下，Python 运行时建在 userData
   const packaged = packagedCoreDir()
   if (packaged) {
     // 候选链（依次探测，**谁真的能 import 依赖就用谁**）：
-    //   1. 自建 venv（userData/local/runtime）—— 正常情况，由首次启动的 uv 装出来
-    //   2. CHIRON_PYTHON —— 用户/开发者显式指定
-    //   3. PATH 上的 python —— 用户机已自备完整环境时自动兜底
-    //   4. 旧形态的 resources/python —— 只为兼容早先打出的安装包，新包不再携带
+    //   1. 自建 venv（userData/local/runtime）—— 唯一正常来源，首次启动按需下载 uv 后装出来
+    //   2. CHIRON_PYTHON —— 用户/开发者显式指定的解释器
     //
-    // 这是"自动处理缺失依赖"的落点：缺了就往下找，而不是一上来就失败。
-    // 但**绝不盲用**：每个候选都要过 probeBundledRuntime（真 import 四个关键模块），
-    // 因为盲用 PATH 上的 python 只会把"装错了"变成"所有页面报服务繁忙"。
+    // **刻意不再兜底到 PATH 上的 python**：那会让"运行时没装"被一个恰好在 PATH 上、
+    // 又碰巧装了依赖的解释器掩盖过去 —— 安装流程因此永不触发，用户看不到
+    // 创建环境/安装依赖的进度，换台机器就整体失效。缺失就必须走安装，不许蒙混。
+    // 想用自家 Python 请显式设 CHIRON_PYTHON，那样是用户的选择而不是静默回退。
+    //
+    // **也不再找 resources/python 与 resources/python-runtime**：安装包不携带任何运行时。
     const attempted = []
     // 自建 venv 排在最前：它按当前 pyproject.toml 装出来，能跟随后续依赖变更
     const installed = installedRuntimePython()
-    const bundled = bundledPython()
-    if (!bundled && !installed) {
-      // 一个都没有：先记一条，保证最终引导指向"运行时还没装"，而不是
-      // 指向早已不再随包发布的 resources/python
+    if (!installed) {
+      // 一个都没有：先记一条，保证最终引导指向"运行时还没装"
       attempted.push({
         python: 'userData/local/runtime/venv',
         probe: {
           ok: false,
           reason: 'venv-missing',
-          message: '本地运行时尚未创建（正常情况下首次启动会用随包的 uv 自动安装）',
+          message: '本地运行时尚未创建（正常情况下首次启动会按需下载组件并安装）',
         },
       })
     }
-    for (const candidate of [installed, bundled, process.env[CORE_ENV.python], 'python']) {
+    for (const candidate of [installed, process.env[CORE_ENV.python]]) {
       const python = String(candidate || '').trim()
       if (!python) continue
       if (attempted.some(item => item.python === python)) continue
@@ -593,10 +586,10 @@ function resolveCoreLaunch(root = repoRoot()) {
       const probe = probeBundledRuntime(python, packaged)
       attempted.push({ python, probe })
       if (!probe.ok) continue
-      if (python !== installed && python !== bundled) {
-        // 用了兜底解释器要留痕：否则排查时无法解释"为什么没用自建那份"
+      if (python !== installed) {
+        // 用了 CHIRON_PYTHON 要留痕：否则排查时无法解释"为什么没用自建那份"
         process.stderr.write(
-          `[chiron] 未用自建运行时，回退到 ${python}（已确认能 import 随包 desktop-local）\n`,
+          `[chiron] 未用自建运行时，改用 ${python}（已确认能 import 随包 desktop-local）\n`,
         )
       }
       return { command: python, args: ['-m', 'app.main'], kind: 'packaged', cwd: packaged }
@@ -646,7 +639,8 @@ async function installRuntimeIfPossible(root, options = {}) {
   if (!sources) return false
   // 没有 uv 就说明安装包没按新布局打包，走原来的错误路径并明确指向安装包问题
   const installer = require('./runtime-install.cjs')
-  if (!installer.bundledUv()) return false
+  // 安装包不再携带 uv：这里不再以"有没有随包 uv"作为闸门，
+  // 首次启动由 ensureRuntime 按需下载（多源测速 + SHA256 强校验）。
 
   let userData
   try {
@@ -669,6 +663,8 @@ async function installRuntimeIfPossible(root, options = {}) {
     onStage: typeof options.onRuntimeStage === 'function' ? options.onRuntimeStage : undefined,
     onLine: typeof options.onRuntimeLine === 'function' ? options.onRuntimeLine : undefined,
     force: options.reinstallRuntime === true,
+    // 下载入口必须跟着依赖注入走，否则单测会真的联网取 uv（几十秒 + 拉 15MB）
+    fetch: runtime().fetch,
   })
 
   try {

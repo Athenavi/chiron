@@ -1,6 +1,6 @@
 'use strict'
 /**
- * 随包运行时缺失时的行为（回归防护）。
+ * 本地运行时的解析与安装行为（回归防护）。
  *
  * 背景：`resolveCoreLaunch` 原先在找不到解释器时会**静默**回退到 PATH 上的
  * `'python'`。用户机上这表现为"所有页面报服务繁忙"，而用户没有任何线索可循：
@@ -8,13 +8,15 @@
  *   - 有 Store 占位符 → spawn 成功但立刻退出；
  *   - 有真 python 但没装 fastapi/asyncpg → ModuleNotFoundError。
  *
- * 现在的行为是**有意识地回退**：自建 venv → 旧包 `resources/python` → CHIRON_PYTHON
- * → PATH，每个候选都必须真的 import 四个关键模块才被采用；全都不行才报错并指明怎么修。
+ * 现在的行为：**安装包不携带任何运行时**。首次启动按需下载 uv（多源测速 + SHA256），
+ * 再由 uv 取受管 CPython 并按 `pyproject.toml` 装依赖。候选链只剩两条：
+ * 自建 venv（`<userData>/local/runtime/venv`）与显式设置的 CHIRON_PYTHON。
+ * 刻意不兜底到 PATH，也刻意不再找 `resources/python` / `resources/python-runtime`。
  *
  * 本文件锁定四条：
- *   1. 全部候选都不可用时：不 spawn，错误里逐个列出候选与原因，并给出修复指引；
- *   2. 随包那份缺依赖、PATH 上另有可用解释器时：自动回退并正常启动；
- *   3. 随包那份可用时：直接用随包，不多探候补；
+ *   1. 取不到 uv 时：不 spawn，错误里指名组件、版本与换源变量，并给出修复指引；
+ *   2. 缺运行时就走安装，绝不因 PATH 上恰好有个可用解释器而蒙混启动；
+ *   3. 自建 venv 可用时：直接用它，不多探候补；
  *   4. 探测结论按解释器缓存（同一解释器不重复 import）。
  */
 const test = require('node:test')
@@ -26,15 +28,17 @@ const { EventEmitter } = require('node:events')
 
 const components = require('../components.cjs')
 
-/** 造一个"打包态"资源目录：有 desktop-local，但没有/有 python 由调用方决定 */
-function makeResources(t, { withPython }) {
+/**
+ * 造一个"打包态"资源目录：只有 desktop-local 源码。
+ *
+ * **刻意不再构造 `resources/python`**：安装包不携带任何运行时，候选链里也没有这个
+ * 位置。以前这个 helper 能靠"包里放个解释器"让用例通过，等于把已被否决的形态
+ * 固化进测试。
+ */
+function makeResources(t) {
   const resources = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-res-'))
   fs.mkdirSync(path.join(resources, 'desktop-local', 'app'), { recursive: true })
   fs.writeFileSync(path.join(resources, 'desktop-local', 'app', 'main.py'), '# fake\n')
-  if (withPython) {
-    fs.mkdirSync(path.join(resources, 'python'), { recursive: true })
-    fs.writeFileSync(path.join(resources, 'python', 'python.exe'), '')
-  }
   t.after(() => fs.rmSync(resources, { recursive: true, force: true }))
   return resources
 }
@@ -62,6 +66,33 @@ function withoutExplicitPython(t) {
   })
 }
 
+/**
+ * 造一个"自建运行时已就绪"的 userData：`local/runtime/venv/` 里有解释器。
+ *
+ * 这是安装包**唯一**会走的那条路（安装包不携带任何运行时）。用环境变量
+ * `CHIRON_DESKTOP_USER_DATA` 固定 userData，避免 `app.getPath` 每次返回新目录
+ * 导致 `installedRuntimePython()` 和安装器看到两个不同的根。
+ */
+function withInstalledRuntime(t) {
+  const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-ud-'))
+  const venv = path.join(userData, 'local', 'runtime', 'venv')
+  const exe =
+    process.platform === 'win32'
+      ? path.join(venv, 'Scripts', 'python.exe')
+      : path.join(venv, 'bin', 'python3')
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
+  fs.writeFileSync(exe, '')
+
+  const saved = process.env.CHIRON_DESKTOP_USER_DATA
+  process.env.CHIRON_DESKTOP_USER_DATA = userData
+  t.after(() => {
+    if (saved === undefined) delete process.env.CHIRON_DESKTOP_USER_DATA
+    else process.env.CHIRON_DESKTOP_USER_DATA = saved
+    fs.rmSync(userData, { recursive: true, force: true })
+  })
+  return exe
+}
+
 const OK_PROBE = { status: 0, stdout: '', stderr: '' }
 const MISSING_DEPS = {
   status: 1,
@@ -73,7 +104,7 @@ const MISSING_DEPS = {
  * 装一个假的 spawn/spawnSync：记录是否真的尝试起进程。
  * `probeFor(cmd)` 可按候选解释器返回不同结果，用来模拟"随包坏了但 PATH 上有好的"。
  */
-function installDeps(t, { probeFor } = {}) {
+function installDeps(t, { probeFor, fetch: fetchImpl } = {}) {
   const calls = { spawn: 0, spawnSync: 0, probed: [] }
   const child = new EventEmitter()
   child.pid = 999
@@ -98,7 +129,7 @@ function installDeps(t, { probeFor } = {}) {
       calls.probed.push(cmd)
       return probeFor ? probeFor(cmd) : OK_PROBE
     },
-    fetch: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) }),
+    fetch: fetchImpl || (async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) })),
   })
   components._resetState()
   t.after(() => {
@@ -108,8 +139,8 @@ function installDeps(t, { probeFor } = {}) {
   return calls
 }
 
-test('全部候选都不可用：不 spawn，逐个列出原因并给出修复指引', async t => {
-  const resources = makeResources(t, { withPython: false })
+test('运行时缺失且取不到 uv：不 spawn，说明是取组件失败并给出换源路径', async t => {
+  const resources = makeResources(t)
   withResourcesPath(t, resources)
   withoutExplicitPython(t)
   const calls = installDeps(t, { probeFor: () => MISSING_DEPS })
@@ -117,55 +148,50 @@ test('全部候选都不可用：不 spawn，逐个列出原因并给出修复�
   await assert.rejects(
     () => components.startCore({ repoRoot: resources }),
     err => {
-      assert.match(err.message, /本地运行时不可用/, '要明确说是运行时的问题')
-      // 新布局不再随包 resources/python：要点出"本地运行时还没建"，而不是指向一个
-      // 早就不再发布的目录，否则用户照着找不到东西
-      assert.match(err.message, /本地运行时尚未创建|runtime/, '要点出缺的是本地运行时')
-      assert.match(err.message, /fastapi/, '要指名缺的模块')
-      assert.match(err.message, /重新安装|desktop:pack/, '要给可执行的修复路径')
+      // 运行时缺失 → 自动去装。装的第一步是取 uv（安装包不再携带），
+      // 取不到时必须说清"哪一步失败、怎么修"，而不是丢一句泛泛的错误。
+      assert.match(err.message, /本地运行时自动安装失败/, '要明确是安装环节的问题')
+      assert.match(err.message, /uv 0\.13\.6/, '要指名缺的组件与版本')
+      assert.match(err.message, /CHIRON_UV_MIRROR/, '要给可执行的换源路径')
       assert.equal(err.retryable, false, '换端口救不回来')
-      assert.ok(Array.isArray(err.runtimeAttempts) && err.runtimeAttempts.length >= 2, '要留下每个候选的证据')
       return true
     },
   )
   assert.equal(calls.spawn, 0, '不应该 spawn 任何进程')
 })
 
-test('随包缺依赖但 PATH 上有可用解释器：自动回退并启动', async t => {
-  const resources = makeResources(t, { withPython: true })
+test('不再回退到 PATH 上的 python：缺运行时就走安装，而不是蒙混启动', async t => {
+  const resources = makeResources(t)
   withResourcesPath(t, resources)
   withoutExplicitPython(t)
-  const bundled = path.join(resources, 'python', 'python.exe')
-  const calls = installDeps(t, {
-    // 只有随包那份坏；PATH 上的 'python' 判定可用
-    probeFor: cmd => (cmd === bundled ? MISSING_DEPS : OK_PROBE),
-  })
+  // PATH 上的 'python' 一律判"可用"——正好用来验证它不会入选
+  const calls = installDeps(t, { probeFor: () => OK_PROBE })
 
-  const started = await components.startCore({ repoRoot: resources })
-  assert.equal(started.pid, 999, 'core 应当真的起来了')
-  assert.equal(started.listening, true)
-  assert.equal(calls.spawn, 1)
-  assert.ok(calls.probed.includes(bundled), '必须先探随包那份')
-  assert.ok(calls.probed.includes('python'), '随包不可用后要探 PATH')
+  await assert.rejects(() => components.startCore({ repoRoot: resources }))
+  // 这条是关键回归防线：一旦 PATH 上的 python 重回候选链，
+  // "运行时没装"就会被一个碰巧装了依赖的解释器掩盖，安装流程永不触发。
+  assert.ok(!calls.probed.includes('python'), 'PATH 上的 python 不该进候选链')
+  assert.equal(calls.spawn, 0)
 })
 
-test('随包那份可用时：直接用随包，不探候补', async t => {
-  const resources = makeResources(t, { withPython: true })
+test('自建 venv 可用时：直接用它，不再探其它候选', async t => {
+  const resources = makeResources(t)
   withResourcesPath(t, resources)
   withoutExplicitPython(t)
-  const bundled = path.join(resources, 'python', 'python.exe')
+  const venvPython = withInstalledRuntime(t)
   const calls = installDeps(t, { probeFor: () => OK_PROBE })
 
   const started = await components.startCore({ repoRoot: resources })
   assert.equal(started.pid, 999)
-  assert.deepEqual(calls.probed, [bundled], '只应探测随包那一份')
+  assert.deepEqual(calls.probed, [venvPython], '只应探测自建 venv 那一份')
   assert.equal(calls.spawn, 1)
 })
 
 test('探测结论按解释器缓存：同一进程内第二次启动不重复 import', async t => {
-  const resources = makeResources(t, { withPython: true })
+  const resources = makeResources(t)
   withResourcesPath(t, resources)
   withoutExplicitPython(t)
+  withInstalledRuntime(t)
   const calls = installDeps(t, { probeFor: () => OK_PROBE })
 
   await components.startCore({ repoRoot: resources })
@@ -193,7 +219,7 @@ test('inspectLocalRuntime：开发态没有随包源码时判为就绪，不闪�
 })
 
 test('inspectLocalRuntime：打包态但 venv 还没建时判为未就绪', t => {
-  const resources = makeResources(t, { withPython: false })
+  const resources = makeResources(t)
   withResourcesPath(t, resources)
   installDeps(t)
 

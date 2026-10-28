@@ -142,6 +142,7 @@ test('ensureRuntime：已就绪时直接返回，不跑 uv、不重建', async t
   const { spawn, calls } = fakeSpawn(t)
 
   const result = await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     spawn,
@@ -153,24 +154,30 @@ test('ensureRuntime：已就绪时直接返回，不跑 uv、不重建', async t
   assert.equal(calls.length, 0, '已经就绪就不该再调 uv')
 })
 
-test('ensureRuntime：缺 uv 时明确说安装包不完整，并给出构建侧动作', async t => {
+test('ensureRuntime：无随包 uv 时按需下载；所有源都不可用才报错并给出换源动作', async t => {
   const userData = makeUserData(t)
   const { sources } = makeResources(t, { withUv: false })
   const { spawn } = fakeSpawn(t)
 
+  // 安装包不再携带 uv，缺了就联网取。本用例守的是"取不到时话说清楚"，
+  // 所以注入一个全部失败的假 fetch —— 单元测试不该真的下载 15MB。
+  const fetch = async () => ({ ok: false, status: 503, headers: { get: () => null }, body: null })
+
   await assert.rejects(
     () =>
       installer.ensureRuntime({
+        pythonMirror: '',
         userDataPath: userData,
         sources,
         spawn,
         uvPath: '',
+        fetch,
         probe: () => ({ ok: false, reason: 'venv-missing', message: '无' }),
       }),
     err => {
-      assert.match(err.message, /缺少 uv/)
-      assert.match(err.message, /重新安装/, '要给出用户能照做的动作')
-      assert.match(err.message, /prepare_uv\.py/, '要给出构建侧的动作')
+      assert.match(err.message, /uv 0\.13\.6/, '要说清缺的是哪个组件、哪个版本')
+      assert.match(err.message, /CHIRON_UV_MIRROR/, '要给出用户能照做的换源动作')
+      assert.doesNotMatch(err.message, /重新安装/, '这不是安装包残缺，不该让用户白重装一遍')
       return true
     },
   )
@@ -183,6 +190,7 @@ test('ensureRuntime：完整流程先建 venv 再装依赖，最后做导入验�
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
   const result = await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -232,6 +240,7 @@ test('ensureRuntime：重装前删掉旧 venv，不让 uv 复用坏状态', asyn
   })
 
   await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -250,6 +259,7 @@ test('ensureRuntime：依赖装完但导入仍失败时抛错，不谎报成功'
   await assert.rejects(
     () =>
       installer.ensureRuntime({
+    pythonMirror: '',
         userDataPath: userData,
         sources,
         uvPath: uv,
@@ -276,6 +286,7 @@ test('ensureRuntime：uv 命令失败时把输出带进错误，便于定位', a
   await assert.rejects(
     () =>
       installer.ensureRuntime({
+    pythonMirror: '',
         userDataPath: userData,
         sources,
         uvPath: uv,
@@ -296,6 +307,7 @@ test('ensureRuntime：镜像源通过环境变量显式覆盖，不写死任何�
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
   await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -318,13 +330,19 @@ test('venvPython：路径落在 userData/local/runtime 下，不进程序目录'
   assert.ok(python.startsWith(userData), '必须装在 userData 下：程序目录会被自动更新替换')
 })
 
-test('bundledUv：平台键与构建脚本一致（uv/<platform>-<arch>/uv[.exe]）', t => {
-  const { resources, uv } = makeResources(t)
-  assert.equal(installer.bundledUv(resources), uv)
-})
+test('resolveUv：只看 userData 里已下载的那份，绝不去 resources 里找随包 uv', t => {
+  const { resources } = makeResources(t) // 即便在 resources/uv 下造了一份
+  const userData = makeUserData(t)
+  assert.equal(installer.resolveUv(userData), '', '安装包不携带运行时，这里必须为空')
+  assert.equal(installer.resolveUv(''), '')
 
-test('bundledUv：resourcesPath 缺失时返回空串而不是抛错', () => {
-  assert.equal(installer.bundledUv(''), '')
+  // 只有落进 userData/local/runtime/bin 的那份才算数
+  const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
+  const bin = path.join(installer.runtimeRoot(userData), 'bin', exe)
+  fs.mkdirSync(path.dirname(bin), { recursive: true })
+  fs.writeFileSync(bin, '')
+  assert.equal(installer.resolveUv(userData), bin)
+  assert.ok(!installer.resolveUv(userData).startsWith(resources), '不能取自 resources')
 })
 
 test('dependencyFingerprint：pyproject 改动会改变指纹', t => {
@@ -372,6 +390,7 @@ test('ensureRuntime：依赖声明未变时不重建 venv，只增量同步依�
 
   const { spawn, calls, progress } = fakeSpawn(t)
   const result = await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -395,6 +414,7 @@ test('ensureRuntime：依赖声明变更时走全量重建，不做增量同步'
 
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
   const result = await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -423,6 +443,7 @@ test('ensureRuntime：增量同步失败时自动落到全量重建，不让首�
   })
   // 重建时的 uv venv 会重造解释器；这里让它保持"能探测通过"
   const result = await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -445,6 +466,7 @@ test('ensureRuntime：安装成功后写入清单，下次启动才敢走增量�
   const { spawn, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
   await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     sources,
     uvPath: uv,
@@ -457,23 +479,20 @@ test('ensureRuntime：安装成功后写入清单，下次启动才敢走增量�
   assert.equal(manifest.dependencyFingerprint, installer.dependencyFingerprint(sources))
 })
 
-test('ensureRuntime：只给 resourcesPath 时，uv 与随包解释器都从它解析', async t => {
+test('ensureRuntime：uv 只从 userData 解析，resources 里就算有也不用；解释器改传版本号', async t => {
   const userData = makeUserData(t)
+  // makeResources 会造一份 resources/uv/<platform>-<arch>/uv.exe —— 正好用来验证"不用它"
   const { resources, sources } = makeResources(t)
-  const key = `${process.platform}-${process.arch}`
 
-  // 造一份随包解释器：<resources>/python-runtime/<key>/<版本目录>/python[.exe]
-  const layout = path.join(resources, 'python-runtime', key, 'cpython-3.12.16-test')
-  const exe =
-    process.platform === 'win32'
-      ? path.join(layout, 'python.exe')
-      : path.join(layout, 'bin', 'python3')
-  fs.mkdirSync(path.dirname(exe), { recursive: true })
-  fs.writeFileSync(exe, '')
+  const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
+  const uv = path.join(installer.runtimeRoot(userData), 'bin', exe)
+  fs.mkdirSync(path.dirname(uv), { recursive: true })
+  fs.writeFileSync(uv, '')
 
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
   await installer.ensureRuntime({
+    pythonMirror: '',
     userDataPath: userData,
     resourcesPath: resources,
     sources,
@@ -483,15 +502,18 @@ test('ensureRuntime：只给 resourcesPath 时，uv 与随包解释器都从它�
 
   const venv = calls.find(c => c.args[0] === 'venv')
   assert.ok(venv, '应调用 uv venv')
-  // 传了 resourcesPath 就必须用它。否则打包态下这两个函数回退到
-  // process.resourcesPath，开发态/测试态永远找不到随包 uv 与解释器。
-  assert.equal(
-    venv.command,
-    path.join(resources, 'uv', key, process.platform === 'win32' ? 'uv.exe' : 'uv'),
-    'uv 应从传入的 resourcesPath 解析',
+  // 安装包不携带运行时：uv 只会是首次启动下载到 userData 的那份。
+  // 一旦这里又变回 resources/uv，说明"随包"路径被悄悄加了回来。
+  assert.equal(venv.command, uv, 'uv 只应取自 userData 里下载的那份')
+  assert.ok(!venv.command.startsWith(resources), '绝不使用 resources 里的 uv')
+  // 安装包不再携带 CPython：只传版本号，由 uv 从测速选出的镜像取受管解释器。
+  // 传绝对路径的老做法依赖 resources/python-runtime，那个目录已不再随包。
+  assert.ok(
+    venv.args.includes(installer.RUNTIME_PYTHON_VERSION),
+    `venv 应传版本号（由 uv 按需取解释器），实际：${venv.args.join(' ')}`,
   )
   assert.ok(
-    venv.args.includes(exe),
-    `venv 应使用随包解释器的绝对路径（避免 uv 联网下载），实际：${venv.args.join(' ')}`,
+    !venv.args.some(a => a.includes('python-runtime')),
+    '不该再指向随包的 python-runtime（已不随包）',
   )
 })

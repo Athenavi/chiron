@@ -64,43 +64,15 @@ extraResources:
       - "!**/__pycache__/**"
   - from: ../alembic.ini
     to: alembic.ini
-  # 随包的 uv 二进制。**不再随包携带 Python 运行时**：解释器与依赖由 uv 在首次启动
-  # 时装到 userData/local/runtime（见 electron/runtime-install.cjs），这样
-  #   - 安装包小得多（省掉约 140MB 的解释器 + site-packages）；
+  # **安装包不携带任何 Python 运行时**（既不带 uv，也不带 CPython）。
+  # 首次启动时由 electron/runtime-install.cjs 按需下载：
+  #   - uv：多源测速择优 + SHA256 强校验（runtime-fetch.cjs，清单见 uv_manifest.json）
+  #   - CPython：由 uv 从测速选出的 python-build-standalone 镜像取受管解释器
+  # 解释器与依赖都装在 userData/local/runtime，因此
+  #   - 安装包小得多（省掉约 100MB+ 的解释器和 uv）；
   #   - 不会因为构建机 Python 版本与用户机不符而失效；
   #   - 依赖清单只有 desktop-local/pyproject.toml 一份，升级依赖重建即可。
-  #
-  # 目录布局必须与 `runtime-install.cjs::bundledUv()` 一致：
-  #   resources/uv/<platform>-<arch>/uv[.exe]
-  # 而 `desktop-local/scripts/prepare_uv.py` 产出的正是
-  #   frontend-vue/assets/uv/<platform>-<arch>/uv[.exe]
-  # 所以这里直接整目录映射，不做改名。
-  #
-  # 产物不进 git（见 .gitignore 的 /frontend-vue/assets/uv/），
-  # package.json 的 desktop:pack / desktop:dist 会在 electron-builder 之前调用
-  # prepare_uv.py 就位它；缺失时 electron-builder 只 warn 不报错（会打出残包），
-  # 故 CI 另有一步按安装包内真实路径复核。
-  - from: assets/uv
-    to: uv
-    filter:
-      - "**/*"
-  # 随包的**受管 CPython 解释器**（由 scripts/prepare_python.py 就位）。
-  #
-  # 只带 uv 是不够的：`uv venv --python 3.12 --python-preference only-managed` 在本地
-  # 没有受管 CPython 时会去 GitHub Releases 下载 python-build-standalone，而不少网络
-  # 下 github.com 根本不可达 ⇒ 首次启动永远卡在创建环境（页面全报服务繁忙）。
-  # 随包一份纯解释器后，运行时用它的绝对路径建 venv，uv 不再联网找解释器；
-  # 依赖仍按 desktop-local/pyproject.toml 首次现装。
-  #
-  # 布局必须与 `runtime-install.cjs::bundledPython()` 一致：
-  #   resources/python-runtime/<platform>-<arch>/<任意版本目录>/python[.exe]
-  # 产物不进 git（见 .gitignore 的 /frontend-vue/assets/python-runtime/），
-  # package.json 的 desktop:pack / desktop:dist 会在 electron-builder 之前就位它。
-  - from: assets/python-runtime
-    to: python-runtime
-    filter:
-      - "**/*"
-      - "!**/__pycache__/**"
+  # CI 另有一步按安装包内真实路径复核"确实没有随包运行时"。
 
 
 # Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；
