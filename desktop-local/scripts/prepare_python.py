@@ -281,7 +281,23 @@ def copy_interpreter(source: Path, platform_key: str) -> Path:
     return destination
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdout/stderr 固定成 UTF-8，不依赖宿主 locale。
+
+    **为什么必须做**：windows-latest 跑的是 en-US 镜像，stdout 默认 cp1252，
+    而本脚本的输出含中文与 `·`。cp1252 编不出来就抛 UnicodeEncodeError，
+    构建会在打印进度时崩掉 —— 与构建逻辑无关，纯粹是显示层。
+
+    用 ``getattr`` 而不是直接调：pytest 的捕获对象没有 ``reconfigure``。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(description="就位受管 CPython 解释器（构建期）")
     parser.add_argument("--platform", help="目标平台键，如 win32-x64 / darwin-arm64")
     parser.add_argument("--from", dest="source", help="已就位的解释器目录（离线时用）")

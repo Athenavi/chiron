@@ -228,7 +228,24 @@ def self_check(platform_key: str, asset: dict, version: str, *, verbose: bool = 
     return 0
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdout/stderr 固定成 UTF-8，不依赖宿主 locale。
+
+    **为什么必须做**：windows-latest 跑的是 en-US 镜像，stdout 默认 cp1252，
+    而本脚本的输出含中文与 `·`。cp1252 编不出来就抛 UnicodeEncodeError，
+    整个构建在「下载 uv」那一行崩掉 —— 与构建逻辑无关，纯粹是显示层。
+    固定 UTF-8 后三个平台的日志也一致可比。
+
+    用 ``getattr`` 而不是直接调：pytest 的捕获对象没有 ``reconfigure``。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(description="就位 uv 二进制（构建期）")
     parser.add_argument("--platform", help="目标平台键，如 win32-x64 / darwin-arm64")
     parser.add_argument("--from", dest="archive", help="已下载的 uv 压缩包（离线时用）")

@@ -161,7 +161,23 @@ async def self_check(verbose: bool = True) -> int:
     return 0
 
 
+def _force_utf8_stdio() -> None:
+    """把 stdout/stderr 固定成 UTF-8，不依赖宿主 locale。
+
+    **为什么必须做**：windows-latest 跑的是 en-US 镜像，stdout 默认 cp1252，
+    而本脚本的输出含中文。cp1252 编不出来就抛 UnicodeEncodeError，
+    构建会在打印进度时崩掉 —— 与构建逻辑无关，纯粹是显示层。
+
+    用 ``getattr`` 而不是直接调：pytest 的捕获对象没有 ``reconfigure``。
+    """
+    for stream in (sys.stdout, sys.stderr):
+        reconfigure = getattr(stream, "reconfigure", None)
+        if reconfigure is not None:
+            reconfigure(encoding="utf-8", errors="replace")
+
+
 def main(argv: list[str] | None = None) -> int:
+    _force_utf8_stdio()
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--from", dest="source", default="", help="redis 发行版目录（含 redis-server）")
     parser.add_argument("--check", action="store_true", help="只自检，不拷贝")

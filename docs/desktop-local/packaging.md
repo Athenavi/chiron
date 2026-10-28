@@ -98,6 +98,18 @@ python-build-standalone），用 `--mirror <地址>` 换源，或用 `--from <�
 
 `prepare_uv.py` 的下载步骤同样需要联网；离线构建请先用 `--from` 指定压缩包。
 
+**构建机上的 Python 依赖**：`prepare_uv.py` / `prepare_python.py` 只用标准库，但
+`prepare_redis.py` 不是——它的自检要真起一次 redis 并跑契约命令，因此需要
+`pydantic`、`pydantic-settings`、`redis` 三个包（自检构造 `Settings(pg_enabled=False)`，
+不会走到 PG / alembic 分支，所以 `asyncpg`、`alembic`、`psycopg2` 可以不装）。
+CI 里由 `Install build-script dependencies` 那一步负责；
+`desktop-local/tests/test_prepare_redis_deps.py` 会把脚本的 import 与那条 pip 命令对齐，
+新增导入却忘了改 CI 时会先红掉。
+
+**三个构建脚本都会把 stdout/stderr 固定为 UTF-8**：`windows-latest` 是 en-US 镜像，
+stdout 默认 cp1252，而这些脚本的输出含中文，`print` 会抛 `UnicodeEncodeError`
+（表现是「下载 uv」那一行整个 job 崩掉，与构建逻辑无关）。
+
 ### 启动时的解析顺序
 
 `components.cjs::resolveCoreLaunch()` 在打包态按下列顺序**逐个真实探测**

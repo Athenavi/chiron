@@ -77,14 +77,26 @@ jobs:
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # runner 上的 Python **只用于跑构建脚本**（prepare_uv.py / prepare_redis.py 都只用
-      # 标准库），不再随包任何解释器：用户机的运行时由随包的 uv 在首次启动时创建。
+      # runner 上的 Python **只用于跑构建脚本**，不再随包任何解释器：用户机的运行时
+      # 由随包的 uv 在首次启动时创建。
       #
       # 固定 3.12 是因为 desktop-local 的 pytest 套件与脚本都在这版验证过；
       # 它与用户机最终跑什么 Python 无关（那个版本由 runtime-install.cjs 决定）。
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # prepare_uv.py / prepare_python.py 只用标准库，但 **prepare_redis.py 不是**：
+      # 它的自检要真起一次 redis 并跑契约命令，因此 `import app.config`（pydantic）
+      # 与 `redis.asyncio`。此前注释写成「都只用标准库」，CI 里就没装任何依赖，
+      # 于是 mac/linux 在 `from app.config import Settings` 处直接 ModuleNotFoundError。
+      #
+      # 这里只装**自检路径真正用到的最小集**，不 `pip install -e .`：
+      # 完整依赖含 embedded-postgres / asyncpg / fastapi 等上百 MB，而构建期用不到。
+      # 代价是耦合 —— 若 prepare_redis.py 的自检路径新增第三方导入，必须同步这里
+      # （desktop-local/tests/test_prepare_redis_deps.py 会钉住这一点）。
+      - name: Install build-script dependencies
+        run: python -m pip install --upgrade pip "pydantic>=2.7" "pydantic-settings>=2.3" "redis>=5.0"
 
       # redis 是本地模式的必要组件（KeyRing 仲裁走 Redis 单键 Lua EVAL），
       # prepare_redis.py 只负责「把机器上已有的 redis-server 拷进 resources」，
