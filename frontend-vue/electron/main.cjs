@@ -24,6 +24,7 @@
  */
 const { app, BrowserWindow, shell, Menu, ipcMain, session, dialog } = require('electron')
 const fs = require('node:fs')
+const crypto = require('node:crypto')
 const path = require('node:path')
 const { fileURLToPath } = require('node:url')
 const {
@@ -250,6 +251,102 @@ function loadOptionalModule(name) {
  * 启动回调由 W4 的 components.cjs 提供；这里全部走可选探测 —— 模块缺失、接口缺失、
  * 启动抛错都要变成一条可读状态再显示本地错误页，而不是让主进程崩掉。
  */
+async function tryStartGoStack(options = {}) {
+  const stack = loadOptionalModule('./local-stack.cjs')
+  const components = loadOptionalModule('./components.cjs')
+  if (!stack || !components) return null
+
+  const gatewayExe = resolveGatewayExe()
+  if (!gatewayExe) {
+    logMain('info', '本地网关不可用（未找到 chiron.exe），退回 desktop-local core')
+    return null
+  }
+
+  let launch
+  try {
+    launch = components.resolveCoreLaunch()
+  } catch (err) {
+    // 运行时没装：这是首启的正常状态，交给旧路径去触发安装流程
+    logMain('info', `引导器运行时不可用：${err?.message || err}`)
+    return null
+  }
+
+  try {
+    const dataDir = options.dataDir
+      ? String(options.dataDir)
+      : path.join(app.getPath('userData'), 'local')
+    const port = Number(options.gatewayPort) > 0 ? Number(options.gatewayPort) : await components.pickFreePort()
+
+    const started = await stack.startLocalStack({
+      launcher: { command: launch.command, cwd: launch.cwd },
+      dataDir,
+      exe: gatewayExe,
+      port,
+      appSecret: ensureAppSecret(dataDir),
+    })
+
+    logMain(
+      'info',
+      `本地网关就绪 ${started.baseUrl}（pg=${started.launcher?.pgBackend} redis=${started.launcher?.redisBackend}）`,
+    )
+    return {
+      ok: true,
+      baseUrl: started.baseUrl,
+      token: '',
+      dataDir,
+      reason: '',
+      message: '',
+    }
+  } catch (err) {
+    const message = err?.message || String(err)
+    logMain('error', `本地网关启动失败：${message}`)
+    // 返回 null 让旧路径再试一次；旧路径也会失败，但错误信息更贴近既有 UI
+    return null
+  }
+}
+
+/**
+ * 找 Go 网关可执行文件。
+ *
+ * 打包态在 `resources/chiron.exe`（见 electron-builder.yml 的 extraResources），
+ * 开发态在仓库根。找不到就返回空串，由调用方退回旧路径。
+ */
+function resolveGatewayExe() {
+  const exeName = process.platform === 'win32' ? 'chiron.exe' : 'chiron'
+  const candidates = []
+  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, exeName))
+  candidates.push(path.join(__dirname, '..', '..', exeName))
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return ''
+}
+
+/**
+ * 取（或首次生成）网关的 APP_SECRET。
+ *
+ * 必须**跨重启稳定**：JWT_SECRET 与 INTERNAL_TOKEN 都由它派生，每次启动换新密钥
+ * 会让所有已登录会话失效、用户被反复踢下线。
+ * 长度 32 是网关的硬要求（`config/config.go` 强制），生成的 hex 有 64 字符。
+ */
+function ensureAppSecret(dataDir) {
+  const file = path.join(dataDir, 'auth', 'app-secret')
+  try {
+    const existing = fs.readFileSync(file, 'utf8').trim()
+    if (existing.length >= 32) return existing
+  } catch {
+    /* 不存在则生成 */
+  }
+  const secret = crypto.randomBytes(32).toString('hex')
+  try {
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    fs.writeFileSync(file, secret, { mode: 0o600 })
+  } catch (err) {
+    logMain('warn', `无法持久化 APP_SECRET：${err?.message || err}`)
+  }
+  return secret
+}
+
 async function startLocalBackend(options = {}) {
   // 显式守卫：云端模式下**一律不启动**本地 core（以及它拉起的 PG / redis）。
   // 调用点目前都在 `currentMode === 'local'` 分支里，但这条不变量不能只靠调用方自律 ——
@@ -275,6 +372,16 @@ async function startLocalBackend(options = {}) {
       message: '本地组件未随此版本安装',
     }
   }
+  // 优先走"引导器 → Go 网关"这条链：本地模式的业务端点（skills/graphs/kb/workflows…）
+  // 全在 Go 网关里，desktop-local core 只在网关不可用时作为回退。
+  // 返回 null 表示不适用（无网关二进制 / 运行时未装），此时继续走下面的旧路径。
+  try {
+    const goStack = await tryStartGoStack(options)
+    if (goStack && goStack.ok) return goStack
+  } catch (err) {
+    logMain('warn', `本地网关链路不可用：${err?.message || err}`)
+  }
+
   const start =
     components.startLocalBackend || components.ensureLocalBackend || components.startCore
   if (typeof start !== 'function') {

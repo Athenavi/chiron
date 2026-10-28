@@ -45,6 +45,7 @@ dev = [
 
 [project.scripts]
 chiron-local = "app.main:main"
+chiron-launcher = "app.launcher:main"
 
 [tool.setuptools.packages.find]
 include = ["app*"]

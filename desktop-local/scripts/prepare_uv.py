@@ -280,6 +280,12 @@ def main(argv: list[str] | None = None) -> int:
     dest_dir = target_dir(platform_key)
     dest = binary_path(platform_key, asset)
 
+    # 已就位且真的能跑就不重复下载。打包命令每次都会跑本脚本，重复联网既慢，
+    # 又会因为网络波动把一个已经好的资产换成半截文件。
+    if not args.archive and self_check(platform_key, asset, version, verbose=False) == 0:
+        print(f"已就位，跳过下载：{dest}")
+        return 0
+
     if args.archive:
         # 离线路径：仍然强校验，只是来源换成本地文件
         source = Path(args.archive)

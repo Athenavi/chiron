@@ -19,7 +19,7 @@ const path = require('node:path')
 const installer = require('../runtime-install.cjs')
 
 /** 造一个临时 resources 目录：有 desktop-local 源码，uv 是否在由调用方决定 */
-function makeResources(t, { withUv = true } = {}) {
+function makeResources(t, { withUv = true, withPython = true } = {}) {
   const resources = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-inst-'))
   const sources = path.join(resources, 'desktop-local')
   fs.mkdirSync(path.join(sources, 'app'), { recursive: true })
@@ -33,8 +33,16 @@ function makeResources(t, { withUv = true } = {}) {
     fs.mkdirSync(path.dirname(uv), { recursive: true })
     fs.writeFileSync(uv, '')
   }
+
+  // 随包 CPython：目录名带版本，bundledPython() 靠遍历这一层找解释器
+  const pythonDir = path.join(resources, 'python-runtime', key, 'cpython-3.12.16-test')
+  const python = path.join(pythonDir, process.platform === 'win32' ? 'python.exe' : path.join('bin', 'python3'))
+  if (withPython) {
+    fs.mkdirSync(path.dirname(python), { recursive: true })
+    fs.writeFileSync(python, '')
+  }
   t.after(() => fs.rmSync(resources, { recursive: true, force: true }))
-  return { resources, sources, uv }
+  return { resources, sources, uv, python }
 }
 
 function makeUserData(t) {
@@ -154,15 +162,13 @@ test('ensureRuntime：已就绪时直接返回，不跑 uv、不重建', async t
   assert.equal(calls.length, 0, '已经就绪就不该再调 uv')
 })
 
-test('ensureRuntime：无随包 uv 时按需下载；所有源都不可用才报错并给出换源动作', async t => {
+test('ensureRuntime：缺 uv 时报安装包残缺，不再联网下载', async t => {
   const userData = makeUserData(t)
   const { sources } = makeResources(t, { withUv: false })
   const { spawn } = fakeSpawn(t)
 
-  // 安装包不再携带 uv，缺了就联网取。本用例守的是"取不到时话说清楚"，
-  // 所以注入一个全部失败的假 fetch —— 单元测试不该真的下载 15MB。
-  const fetch = async () => ({ ok: false, status: 503, headers: { get: () => null }, body: null })
-
+  // uv 随包分发，缺了只能是打包出错 —— 不该再走"下载 15MB 试试看"那条路，
+  // 也不该让用户去调 CHIRON_UV_MIRROR：换源解决不了安装包残缺。
   await assert.rejects(
     () =>
       installer.ensureRuntime({
@@ -171,13 +177,12 @@ test('ensureRuntime：无随包 uv 时按需下载；所有源都不可用才报
         sources,
         spawn,
         uvPath: '',
-        fetch,
         probe: () => ({ ok: false, reason: 'venv-missing', message: '无' }),
       }),
     err => {
-      assert.match(err.message, /uv 0\.13\.6/, '要说清缺的是哪个组件、哪个版本')
-      assert.match(err.message, /CHIRON_UV_MIRROR/, '要给出用户能照做的换源动作')
-      assert.doesNotMatch(err.message, /重新安装/, '这不是安装包残缺，不该让用户白重装一遍')
+      assert.match(err.message, /uv/, '要说清缺的是什么')
+      assert.match(err.message, /重新安装/, '安装包残缺的唯一出路就是重装')
+      assert.doesNotMatch(err.message, /CHIRON_UV_MIRROR/, '换镜像解决不了包内缺文件')
       return true
     },
   )
@@ -185,7 +190,7 @@ test('ensureRuntime：无随包 uv 时按需下载；所有源都不可用才报
 
 test('ensureRuntime：完整流程先建 venv 再装依赖，最后做导入验证', async t => {
   const userData = makeUserData(t)
-  const { sources, uv } = makeResources(t)
+  const { sources, uv, python } = makeResources(t)
   const stages = []
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
@@ -208,7 +213,7 @@ test('ensureRuntime：完整流程先建 venv 再装依赖，最后做导入验�
   assert.ok(calls[1].args.includes('install'))
   // venv 这条必须带 only-managed，否则会用用户机器上那个可能坏掉的 Python
   assert.ok(calls[0].args.includes('only-managed'))
-  assert.ok(calls[0].args.includes(installer.RUNTIME_PYTHON_VERSION))
+  assert.ok(calls[0].args.includes(python), '解释器应传随包 CPython 的绝对路径')
   // 依赖来源必须是源码目录里的 pyproject.toml（唯一来源，不与 requirements.txt 漂移）
   assert.ok(
     calls[1].args.some(a => a.endsWith('pyproject.toml')),
@@ -479,15 +484,17 @@ test('ensureRuntime：安装成功后写入清单，下次启动才敢走增量�
   assert.equal(manifest.dependencyFingerprint, installer.dependencyFingerprint(sources))
 })
 
-test('ensureRuntime：uv 只从 userData 解析，resources 里就算有也不用；解释器改传版本号', async t => {
+test('ensureRuntime：uv 与解释器都取自随包资源，不联网、不碰 userData 的下载版', async t => {
   const userData = makeUserData(t)
-  // makeResources 会造一份 resources/uv/<platform>-<arch>/uv.exe —— 正好用来验证"不用它"
-  const { resources, sources } = makeResources(t)
+  // makeResources 造出 resources/uv/<platform>/uv.exe 与
+  // resources/python-runtime/<platform>/cpython-*/python.exe
+  const { resources, sources, uv: bundledUv, python: bundledPython } = makeResources(t)
 
+  // 再放一份"旧版本下载到 userData 的 uv"：随包那份必须优先于它
   const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
-  const uv = path.join(installer.runtimeRoot(userData), 'bin', exe)
-  fs.mkdirSync(path.dirname(uv), { recursive: true })
-  fs.writeFileSync(uv, '')
+  const downloaded = path.join(installer.runtimeRoot(userData), 'bin', exe)
+  fs.mkdirSync(path.dirname(downloaded), { recursive: true })
+  fs.writeFileSync(downloaded, '')
 
   const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
 
@@ -502,18 +509,17 @@ test('ensureRuntime：uv 只从 userData 解析，resources 里就算有也不�
 
   const venv = calls.find(c => c.args[0] === 'venv')
   assert.ok(venv, '应调用 uv venv')
-  // 安装包不携带运行时：uv 只会是首次启动下载到 userData 的那份。
-  // 一旦这里又变回 resources/uv，说明"随包"路径被悄悄加了回来。
-  assert.equal(venv.command, uv, 'uv 只应取自 userData 里下载的那份')
-  assert.ok(!venv.command.startsWith(resources), '绝不使用 resources 里的 uv')
-  // 安装包不再携带 CPython：只传版本号，由 uv 从测速选出的镜像取受管解释器。
-  // 传绝对路径的老做法依赖 resources/python-runtime，那个目录已不再随包。
+
+  // 随包 uv 是确定的、离线可用的，必须优先于 userData 里的旧下载版
+  assert.equal(venv.command, bundledUv, 'uv 应取自随包资源')
+  assert.notEqual(venv.command, downloaded, '不该再优先用 userData 里的下载版')
+
+  // 解释器直接传随包 CPython 的绝对路径：uv 因此不会去 github 取
+  // python-build-standalone（那一步在不少网络下直接卡死）
+  const pythonArg = venv.args[venv.args.indexOf('--python') + 1]
+  assert.equal(pythonArg, bundledPython, '解释器应传随包 CPython 的绝对路径')
   assert.ok(
-    venv.args.includes(installer.RUNTIME_PYTHON_VERSION),
-    `venv 应传版本号（由 uv 按需取解释器），实际：${venv.args.join(' ')}`,
-  )
-  assert.ok(
-    !venv.args.some(a => a.includes('python-runtime')),
-    '不该再指向随包的 python-runtime（已不随包）',
+    pythonArg !== installer.RUNTIME_PYTHON_VERSION,
+    '不该再退化成只传版本号让 uv 联网取',
   )
 })

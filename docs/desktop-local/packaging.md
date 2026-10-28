@@ -15,7 +15,8 @@
 | 本地 core | `resources/desktop-local/` | Python 源码（`extraResources`） |
 | 迁移 | `resources/migrations/`、`resources/alembic.ini` | alembic 需要真实文件路径 |
 | 可选组件 | `resources/components/` | PageIndex / LangExtract，按需下载 |
-| Python 运行时 | `<userData>/local/runtime/`（解释器、venv 与依赖） | **都不随包**：首次启动按需下载 `uv`（多源测速 + SHA256 强校验），再由 uv 取受管 CPython |
+| Python 运行时 | 解释器 `resources/python-runtime/<platform>/cpython-*/`；依赖 `<userData>/local/runtime/venv/` | **解释器随包**（`prepare_python.py` 就位，约 66MB）；依赖仍在首启按 `pyproject.toml` 现装 |
+| uv 二进制 | `resources/uv/<platform>/uv[.exe]` | **随包**：只用来建 venv 并装依赖，不再下载解释器 |
 | Redis 二进制 | `resources/desktop-local/bin/redis/` | **随包**：`redis-server` + MSYS2 运行时 DLL |
 
 **改造前实测**（2026-10-27）：`app.asar` 863MB、`win-unpacked` 1.3GB。
@@ -47,58 +48,56 @@ files:
    `process.resourcesPath` 解析；或
 2. 改用 electron-builder 的 `files` 白名单只保留 `electron-updater` 一棵依赖树。
 
-## 3. Python 运行时（全部按需下载 + 依赖首装）
+## 3. Python 运行时（解释器随包 + 依赖首装）
 
-安装包**不携带任何 Python 运行时**：既没有 `resources/python-runtime/`，也没有
-`resources/uv/`。首次启动时由壳层现取现装：
+安装包**携带一份受管 CPython 与 uv**：
 
-1. 取 `uv`：`runtime-fetch.cjs` 对候选源**并发测速**，按快慢排序后逐个尝试下载
-   wheel 并解出二进制，落到 `<userData>/local/runtime/bin/uv[.exe]`。每个候选都做
-   **SHA256 强校验**（清单见 `desktop-local/scripts/uv_manifest.json`），不符即弃用该源；
-2. 建 venv：`uv venv --python 3.12 --python-preference only-managed` 在
-   `<userData>/local/runtime/venv` 建空环境。解释器**由 uv 自己下载**到
-   `UV_PYTHON_INSTALL_DIR`（同一份 userData 下），外壳不自写 pbs 下载器；
-3. `uv pip install -r <resources>/desktop-local/pyproject.toml` 装依赖
+- `resources/python-runtime/<platform>/cpython-*/` —— 裸解释器，由
+  `desktop-local/scripts/prepare_python.py` 在打包前就位（约 66MB/平台）；
+- `resources/uv/<platform>/uv[.exe]` —— 只用来建 venv 并装依赖。
+
+首次启动时由壳层做剩下的两步：
+
+1. 建 venv：`uv venv --python <随包解释器的绝对路径>` 在
+   `<userData>/local/runtime/venv` 建空环境。**传绝对路径而不是版本号**：
+   传版本号时 uv 会去 `github.com` 取 python-build-standalone；
+2. `uv pip install` 按 `<resources>/desktop-local/pyproject.toml` 装依赖
    （`embedded_postgres` 自带的整套 PG 二进制随依赖一起进来）；
-4. 真实 `import` 一次本地核心做验收，通过才写安装清单。
+3. 真实 `import` 一次本地核心做验收，通过才写安装清单。
 
 用户机上不需要预装 Python，也不需要 pip。这条路径的全部实现在
-`frontend-vue/electron/runtime-install.cjs`（下载层在 `runtime-fetch.cjs`）。
+`frontend-vue/electron/runtime-install.cjs`。
 
-**为什么解释器也不随包**：随包解释器会把安装包撑大 15–20MB/平台，且与构建机的
-架构强绑定；而"解释器已随包"还会掩盖另一件事——真正卡住用户的是 `github.com`
-不可达导致 uv 取不到 python-build-standalone。所以镜像必须可选可换，见下。
-
-**镜像为什么不能写死**：uv 默认从 GitHub Releases 取 python-build-standalone，在
-`github.com` 不可达的网络下会以 `invalid peer certificate: UnknownIssuer` 失败，
-且**发生在创建窗口之前**，表现为"首次启动卡住、所有页面报服务繁忙"。因此候选源是
-一个列表、运行时测速择优；也可显式覆盖：
-
-- `CHIRON_UV_MIRROR` —— uv 二进制的 PyPI 镜像前缀；
-- `CHIRON_PYTHON_MIRROR` / `UV_PYTHON_INSTALL_MIRROR` —— 受管 CPython 的来源。
+**为什么解释器要随包**：实测 `github.com` 在不少网络下连 TCP 都不通
+（`invalid peer certificate: UnknownIssuer`）。只随包 uv、让 uv 自己去下载解释器，
+结果就是"包里带了工具、原料取不到"，用户看到首次启动永远卡在创建环境、
+所有页面报服务繁忙。把解释器随包后，首启两步都不碰 CPython 下载，
+弱网下只剩装依赖这一步需要联网。这与已废弃的 `resources/python` 不同：
+那份是"解释器 + 已装依赖"的整包，会冻结构建机状态、漏一个包就整体失效。
 
 **为什么依赖仍然首装而不是随包**：随包一份装好依赖的运行时意味着安装包与构建机的
 Python 版本、架构强绑定，且升级任何一个依赖都要重新出包。依赖清单只留
 `desktop-local/pyproject.toml` 一份，装出来的环境天然与本机匹配。
 
-**代价**：首次启动需要联网（取 uv、取解释器、装依赖三者都要）。网络受限时按上面的
-环境变量换源；`CHIRON_PIP_INDEX_URL` 另管 `uv pip install` 的 index。
+**唯一的联网步骤**是 `uv pip install`；网络受限时用 `CHIRON_PIP_INDEX_URL`
+指向可用镜像。缺少随包解释器或 uv 时**不做联网补救**：那是安装包残缺，
+报"请重新安装"才是可执行的指引。
 
-`desktop-local/scripts/prepare_uv.py` 仍然保留，但**不再参与出包**：它是构建/开发期
-的离线取件工具，产物在以前的布局里会落到 `frontend-vue/assets/uv/<platform>/`。
-现在 `electron-builder.yml` 已不再映射这个目录，安装包里不会有它：
+`desktop-local/scripts/prepare_uv.py` / `prepare_python.py` 都是打包前的就位步骤，
+产物落到 `frontend-vue/assets/uv|python-runtime/<platform>/`，
+再经 `electron-builder.yml` 的 `extraResources` 映射进 `resources/`：
 
-- 版本号与各平台 SHA256 固化在 `desktop-local/scripts/uv_manifest.json`；
-- 下载后**强校验** SHA256，不符即非零退出（`--from` 可指定已下载的压缩包离线就位）；
-- `--check` 只做自检：真实执行 `uv --version` 并比对清单里的版本号。
+- uv 的版本号与各平台 SHA256 固化在 `desktop-local/scripts/uv_manifest.json`；
+- 下载后**强校验** SHA256，不符即非零退出（`--from` 可指定已下载的资产离线就位）；
+- `--check` 只做自检：真实执行 `uv --version` / `python -V` 并比对版本号。
 
 ```bash
-npm run prepare:redis     # 就位 desktop-local/bin/redis/（唯一仍随包的二进制）
-npm run prepare:uv        # 仅开发期离线取 uv，不进安装包
-npm run prepare:python    # 同上，仅离线取解释器供本地调试
+npm run prepare:redis     # 就位 desktop-local/bin/redis/
+npm run prepare:uv        # 就位 assets/uv/<platform>/
+npm run prepare:python    # 就位 assets/python-runtime/<platform>/（需先有 uv）
 ```
 
-`prepare_uv.py` / `prepare_python.py` 的下载步骤同样需要联网；要离线就位请先用 `--from` 指定压缩包。
+`prepare_uv.py` / `prepare_python.py` 的下载步骤需要联网；要离线就位请先用 `--from` 指定。
 
 **构建机上的 Python 依赖**：`prepare_uv.py` / `prepare_python.py` 只用标准库，但
 `prepare_redis.py` 不是——它的自检要真起一次 redis 并跑契约命令，因此需要
@@ -189,17 +188,22 @@ ls release/win-unpacked/resources/desktop-local/app     # core 源码在位
 ls release/win-unpacked/resources/desktop-local/pyproject.toml  # 依赖清单在位（uv 靠它装）
 ls release/win-unpacked/resources/migrations/versions   # 迁移在位
 ls release/win-unpacked/resources/desktop-local/bin/redis/redis-server.exe
+ls release/win-unpacked/resources/uv/win32-x64/uv.exe    # 随包 uv
+ls release/win-unpacked/resources/python-runtime/win32-x64/cpython-*/python.exe
 release/win-unpacked/Chiron.exe --remote-debugging-port=9223
 ```
 
-**`resources/uv`、`resources/python`、`resources/python-runtime` 都不应存在**：
-安装包不携带任何 Python 运行时（uv 与 CPython 都不带），首次启动按需下载。
-CI 里有三条反向断言，防止其中任何一个被悄悄加回来——加回来会让包体积涨回
-100MB+，同时让"按需下载"这条路径再没被真正执行过。
+**`resources/uv` 与 `resources/python-runtime` 必须存在**：解释器与 uv 都随包，
+缺任何一份都说明安装包没按布局打好（首启会直接失败并提示重新安装）。
+CI 里有对应的**正向断言**，按安装包内真实路径检查可执行文件本身，
+而不只是目录在不在。
+
+**`resources/python` 仍然不应存在**：那是"解释器 + 已装依赖"的旧整包，
+会冻结构建机状态、漏一个包就整体失效。CI 对它是反向断言。
 
 一旦首次启动装不起来，先看 `<userData>/local/runtime/install.json` 与
-`logs/main.log`：下载、建 venv、装依赖各有独立阶段，失败会指名是哪一步、
-缺的是哪个组件，以及用哪个环境变量换源。
+`logs/main.log`：建 venv、装依赖各有独立阶段，失败会指名是哪一步、
+缺的是哪个组件，以及用哪个环境变量换源（装依赖那步用 `CHIRON_PIP_INDEX_URL`）。
 
 真机启动后从 CDP 检查：
 
@@ -213,13 +217,12 @@ CI 里有三条反向断言，防止其中任何一个被悄悄加回来——�
 
 - 未签名产物在 macOS 上需要用户手动放行；Windows SmartScreen 会拦。
 - `asarUnpack` 只解包 wasm 与 `vendor/**`；新增二进制资源时记得补规则。
-- **首次启动必须联网**：安装包不带任何运行时，取 uv、取 `python-build-standalone`、
-  `uv pip install` 三步都要访问网络。网络受限时用 `CHIRON_UV_MIRROR` /
-  `CHIRON_PYTHON_MIRROR` / `CHIRON_PIP_INDEX_URL` 换源，换好源重启应用会自动重试；
-  也可以事后把整套环境放到 `<userData>/local/runtime`。
+- **首次启动仍需联网（只装依赖这一步）**：解释器与 uv 都随包，建 venv 不碰网络；
+  只有 `uv pip install` 要访问 PyPI。受限时用 `CHIRON_PIP_INDEX_URL` 换源，
+  换好源重启应用会自动重试；也可以事后把整套环境放到 `<userData>/local/runtime`。
 - 首次安装较重：`embedded-postgres` 自带整套 PG 二进制，首次要拉几十到上百 MB。
-- 构建期**不再**需要联网下载 uv（不再随包）；只有 `prepare:uv` / `prepare:python`
-  这两个开发期离线取件工具才会联网，可按需用 `--from <压缩包>` 走本地缓存。
+- 构建期**需要**先就位 uv 与解释器（`npm run prepare:runtime` 会串联 uv / python / redis
+  三步）；已就位时可重复执行，脚本自检通过就跳过下载。离线时用 `--from <压缩包|目录>`。
 - redis 二进制来自构建机的发行版（含 MSYS2 运行时 DLL）；脚本会解析 scoop 的
   shim 取真身，但不会跨平台转换 —— Linux/macOS 包需在对应平台生成。
 - **Windows 的 redis 只能走预编译发行版**：MSYS2 仓库里只有客户端库

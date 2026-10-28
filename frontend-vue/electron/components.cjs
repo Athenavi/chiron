@@ -413,10 +413,11 @@ function inspectLocalRuntime() {
 }
 
 /**
- * 本地运行时**只有一个来源**：首次启动按需下载并建在 `<userData>/local/runtime`。
+ * 本地运行时**只有一个来源**：首次启动由随包 CPython 建 venv 并装依赖到
+ * `<userData>/local/runtime`。
  *
- * 这里不再查找 `resources/python` 或 `resources/python-runtime`。安装包不携带任何
- * 运行时，保留一条"看看包里有没有"的路径只会让自动安装逻辑在开发机上被悄悄绕过。
+ * 这里不再查找 `resources/python` 或 `resources/python-runtime` 里的**现成环境**：
+ * 随包的是裸解释器，依赖必须按当前 `pyproject.toml` 现装，才不会把构建机状态冻进包里。
  */
 
 /**
@@ -515,8 +516,8 @@ function runtimeGuidance(probe) {
     )
   } else if (probe.reason === 'missing' || probe.reason === 'venv-missing') {
     lines.push(
-      '本地 Python 环境尚未建好。首次启动会自动在线安装（先取 uv，再由 uv 取解释器并装依赖）；',
-      '若没能自动装起来，多半是网络不通 —— 设好 CHIRON_UV_MIRROR / CHIRON_PYTHON_MIRROR 后重启会重试。',
+      '本地 Python 环境尚未建好。首次启动会用随包解释器建环境并按依赖清单安装；',
+      '若装不起来，多半是取依赖失败 —— 设好 CHIRON_PIP_INDEX_URL 指向可用镜像后重启会重试。',
       '开发者也可以设 CHIRON_PYTHON 指向一个已装好依赖的解释器，跳过自动安装。',
     )
   } else if (probe.reason === 'missing-dependency') {
@@ -554,7 +555,7 @@ function resolveCoreLaunch(root = repoRoot()) {
   const packaged = packagedCoreDir()
   if (packaged) {
     // 候选链（依次探测，**谁真的能 import 依赖就用谁**）：
-    //   1. 自建 venv（userData/local/runtime）—— 唯一正常来源，首次启动按需下载 uv 后装出来
+    //   1. 自建 venv（userData/local/runtime）—— 唯一正常来源，首次启动用随包解释器装出来
     //   2. CHIRON_PYTHON —— 用户/开发者显式指定的解释器
     //
     // **刻意不再兜底到 PATH 上的 python**：那会让"运行时没装"被一个恰好在 PATH 上、
@@ -562,7 +563,9 @@ function resolveCoreLaunch(root = repoRoot()) {
     // 创建环境/安装依赖的进度，换台机器就整体失效。缺失就必须走安装，不许蒙混。
     // 想用自家 Python 请显式设 CHIRON_PYTHON，那样是用户的选择而不是静默回退。
     //
-    // **也不再找 resources/python 与 resources/python-runtime**：安装包不携带任何运行时。
+    // 包里那份 `resources/python-runtime` 是**裸解释器**，不是现成环境：
+    // 它没有依赖，直接拿它启动必然 ModuleNotFoundError。它的用途只有一个 ——
+    // 交给 runtime-install.cjs 建 venv。所以候选链里不出现它。
     const attempted = []
     // 自建 venv 排在最前：它按当前 pyproject.toml 装出来，能跟随后续依赖变更
     const installed = installedRuntimePython()
@@ -637,10 +640,9 @@ async function installRuntimeIfPossible(root, options = {}) {
   // 开发态（没有 resources/desktop-local）不参与：那由开发者的本机环境负责
   const sources = packagedCoreDir()
   if (!sources) return false
-  // 没有 uv 就说明安装包没按新布局打包，走原来的错误路径并明确指向安装包问题
+  // uv 与 CPython 都随包：缺哪个都说明安装包没按布局打好，
+  // ensureRuntime 会明确指出"重新安装"，这里不做闸门判断。
   const installer = require('./runtime-install.cjs')
-  // 安装包不再携带 uv：这里不再以"有没有随包 uv"作为闸门，
-  // 首次启动由 ensureRuntime 按需下载（多源测速 + SHA256 强校验）。
 
   let userData
   try {

@@ -168,16 +168,24 @@ def find_installed_layout(root: Path) -> Path | None:
     return None
 
 
-def self_check(platform_key: str, version: str) -> int:
-    """跑一遍解释器并核对版本。"""
+def self_check(platform_key: str, version: str, *, verbose: bool = True) -> int:
+    """跑一遍解释器并核对版本。
+
+    ``verbose=False`` 用于"打包命令里的幂等检查"：只是想知道能不能跳过下载，
+    失败详情不必刷屏（真要下载时后面自然会报）。
+    """
+
+    def report(message: str) -> None:
+        if verbose:
+            print(message, file=sys.stderr)
+
     directory = target_dir(platform_key)
     layout = find_installed_layout(directory) if directory.is_dir() else None
     exe = interpreter_in(layout) if layout is not None else None
     if exe is None:
-        print(
+        report(
             f"[FAIL] {platform_key} 的解释器不存在：{directory}\n"
-            "       打包前必须就位，否则用户首次启动无法创建环境。",
-            file=sys.stderr,
+            "       打包前必须就位，否则用户首次启动无法创建环境。"
         )
         return 1
 
@@ -190,18 +198,18 @@ def self_check(platform_key: str, version: str) -> int:
             check=True,
         ).stdout.strip()
     except (subprocess.SubprocessError, OSError) as exc:
-        print(f"[FAIL] {exe} 无法运行：{exc}", file=sys.stderr)
+        report(f"[FAIL] {exe} 无法运行：{exc}")
         return 1
 
     if not out.startswith(f"{version}."):
-        print(
+        report(
             f"[FAIL] 解释器版本是 {out}，期望 {version}.x。"
-            "请改 RUNTIME_PYTHON_VERSION 或重新就位。",
-            file=sys.stderr,
+            "请改 RUNTIME_PYTHON_VERSION 或重新就位。"
         )
         return 1
 
-    print(f"[ OK ] {platform_key}: Python {out} @ {exe}")
+    if verbose:
+        print(f"[ OK ] {platform_key}: Python {out} @ {exe}")
     return 0
 
 
@@ -231,13 +239,13 @@ def install_with_uv(platform_key: str, uv: Path, mirror: str | None) -> Path | N
         raise SystemExit(
             f"下载解释器超时（{INSTALL_TIMEOUT}s）。"
             "github.com 不可达时请加 --mirror，或用 --from 指定已下载的解释器目录。"
-        )
+        ) from None
     except subprocess.CalledProcessError as exc:
         shutil.rmtree(tmp, ignore_errors=True)
         raise SystemExit(
             f"uv 安装解释器失败（退出码 {exc.returncode}）。\n"
             "常见原因：github.com 不可达 —— 此时加 --mirror，或用 --from 指定本地目录。"
-        )
+        ) from exc
     return tmp
 
 
@@ -319,6 +327,12 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.check:
         return self_check(platform_key, RUNTIME_PYTHON_VERSION)
+
+    # 已就位且真的能跑就不重复下载：打包命令每次都会跑本脚本，
+    # 重复联网既慢，又会因为网络波动把一份好的解释器换成半截。
+    if not args.source and self_check(platform_key, RUNTIME_PYTHON_VERSION, verbose=False) == 0:
+        print(f"已就位，跳过下载：{target}")
+        return 0
 
     if args.source:
         source = Path(args.source).resolve()

@@ -126,6 +126,17 @@ class RedisServer:
         self._proc: Any = None
         self._port = 0
 
+    # ------------------------------------------------------------------ 属性
+    @property
+    def port(self) -> int:
+        """实际监听的 TCP 端口（未启动 / 外部 URL 后端为 0）。
+
+        与 ``PostgresServer.port`` 对称：``redis_port`` 只是"建议值"，真正在监听哪一个
+        由启动时挑的空闲端口决定。引导器要把这个值交给 Go 网关（``REDIS_ADDR``），
+        所以必须暴露出来，而不是让调用方去读私有 ``_port``。
+        """
+        return self._port
+
     # ------------------------------------------------------------------ 启停
     async def start(self) -> None:
         if not self.settings.redis_enabled:

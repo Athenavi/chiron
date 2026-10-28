@@ -8,11 +8,13 @@
  *   "服务繁忙"。而且每次调依赖都要重新发版。改由**首次启动时就地创建 venv 并装依赖**，
  *   依赖清单只有 `pyproject.toml` 一份，缺什么装什么，坏了能就地重建。
  *
- * 做法沿用 ComfyUI Desktop 的思路：**把 Python 版本管理外包给 uv**。
- *   - 安装包只带 `uv` 二进制（约 20MB/平台，见 scripts/prepare_uv.py 与 uv_manifest.json）；
- *   - `uv venv --python <ver> --python-preference only-managed` 让 uv 自己取受管 CPython，
- *     不会去用用户机器上那个可能缺模块、可能是 Microsoft Store 占位符的 Python；
- *   - `uv pip install -r pyproject.toml` 装依赖。
+ * 做法沿用 ComfyUI Desktop 的思路：**把 Python 版本管理外包给 uv**，但解释器随包。
+ *   - 安装包**携带**受管 CPython（`resources/python-runtime/<platform>/cpython-*`，
+ *     由 `scripts/prepare_python.py` 就位）与 `uv` 二进制（`scripts/prepare_uv.py`）；
+ *   - `uv venv --python <随包解释器绝对路径>` 建出 venv，**不接受版本号**：传路径
+ *     uv 就不会去 github.com 取 python-build-standalone（实测多数网络下不可达）；
+ *   - `uv pip install` 按 `pyproject.toml` 装依赖（这一步仍走 PyPI，可用
+ *     `CHIRON_PIP_INDEX_URL` 换源）。
  *
  * 三个刻意的取舍：
  *   1. **装到 userData，不装到程序目录**。程序目录会在自动更新时被替换，装在那里等于
@@ -30,44 +32,9 @@ const path = require('node:path')
 const crypto = require('node:crypto')
 const childProcess = require('node:child_process')
 const { probeRuntime } = require('./runtime-probe.cjs')
-const fetchTools = require('./runtime-fetch.cjs')
 
 /** 受管 CPython 版本。desktop-local 的 `requires-python` 是 >=3.11，3.12 与 CI 一致。 */
 const RUNTIME_PYTHON_VERSION = '3.12'
-
-/**
- * uv 的版本 / 摘要 / 候选源。**安装包不再携带 uv**，首次启动来这里取。
- *
- * 与 `desktop-local/scripts/uv_manifest.json` 必须一致（那边是构建期校验用），
- * 由 `runtime-install.test.cjs` 断言两边版本与摘要相同，防止两份清单漂移。
- *
- * 每个平台给**多个候选源**：写死单一源等于把某家服务商的可用性变成产品前提
- * （实测 github.com 不通、官方 PyPI 只有 190KB/s、镜像能到 16MB/s）。
- * 运行期 `rankSources` 各取 64KB 计时，谁快用谁。
- */
-const RUNTIME_UV = Object.freeze({
-  version: '0.13.6',
-  assets: Object.freeze({
-    'win32-x64': { file: 'uv-0.13.6-py3-none-win_amd64.whl', sha256: '7c9bc35ccb65932d8dc10a0669f9c805eaa3c9827ce18ecbecb1bd67944b2cdf', path: 'packages/7c/9d/714523188aea3054644d8e69ae8089aac70325a3cee2d3d05509d4f23398/uv-0.13.6-py3-none-win_amd64.whl', binary: 'uv.exe' },
-    'win32-arm64': { file: 'uv-0.13.6-py3-none-win_arm64.whl', sha256: '722c7f96803f115e53918b8ee8858d1680ea6077c614b6db750747d709ab8d9a', path: 'packages/6a/7d/5ebb4cccbb11ae9e10f6cda704ce382722ab9dc68c9280a5b810378aee3e/uv-0.13.6-py3-none-win_arm64.whl', binary: 'uv.exe' },
-    'darwin-arm64': { file: 'uv-0.13.6-py3-none-macosx_11_0_arm64.whl', sha256: '51361029b7cf91185d0092c4b356d110b4ad629e9cb11593f1e006ac72a72ca9', path: 'packages/f4/14/77230cc4f6a73a31578cb8070a5f67f58a76946ead643ae8a4155620d6da/uv-0.13.6-py3-none-macosx_11_0_arm64.whl', binary: 'uv' },
-    'darwin-x64': { file: 'uv-0.13.6-py3-none-macosx_10_12_x86_64.whl', sha256: '95f042b95e67ef8c3d3569bb6e9d895e592002c5e871cf3f1afe407c9d77a294', path: 'packages/33/55/ff10d3f756c39a239e492e57262bd22fcda412a9f85a268175447cf33b09/uv-0.13.6-py3-none-macosx_10_12_x86_64.whl', binary: 'uv' },
-    'linux-x64': { file: 'uv-0.13.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl', sha256: '22759b8895e1103578de6fb4cd27e94b4399d021023378d29f01333717751fba', path: 'packages/5c/43/0688ff5142934238f2812e348f4a24e09b57d48bfb38dd8f850325a0d9de/uv-0.13.6-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl', binary: 'uv' },
-    'linux-arm64': { file: 'uv-0.13.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl', sha256: '7ec5486476d67a4214c460b5492393ee2300d84e1de17b293100a019b413568b', path: 'packages/05/3b/f78583af6504f1270da95fd0d0935e381f58330c007260f450e81a1e5e1b/uv-0.13.6-py3-none-manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64.whl', binary: 'uv' },
-  }),
-  /** PyPI 兼容镜像的 base（末尾不带 /）：文件路径对各家相同，只有前缀不同 */
-  mirrors: Object.freeze([
-    'https://mirrors.aliyun.com/pypi',
-    'https://files.pythonhosted.org',
-    'https://registry.npmmirror.com/-/binary/pypi',
-  ]),
-})
-
-/** 受管 CPython 的候选源（python-build-standalone 镜像），同样测速择优 */
-const PYTHON_MIRRORS = Object.freeze([
-  'https://registry.npmmirror.com/-/binary/python-build-standalone',
-  'https://github.com/astral-sh/python-build-standalone/releases/download',
-])
 
 /** 安装阶段（渲染层按 id 显示文案；顺序即真实顺序） */
 const INSTALL_STAGES = Object.freeze({
@@ -104,7 +71,7 @@ function venvPython(userDataPath) {
     : path.join(base, 'bin', 'python3')
 }
 
-/** 首次启动下载到 userData 的 uv（安装包不携带任何运行时）。与 venv 同根，自动更新不会清掉 */
+/** 老用户机器上那份按需下载的 uv。安装包现在随带 uv（见 resolveUv），这里只为兼容旧数据 */
 function downloadedUv(userDataPath) {
   if (!userDataPath) return ''
   const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
@@ -113,120 +80,65 @@ function downloadedUv(userDataPath) {
 }
 
 /**
- * 解析 uv 可执行文件：只有 userData 里已下载的那份，找不到就返回空串。
+ * 随包资产的根目录（`resources/python-runtime`、`resources/uv`）。
  *
- * **刻意不再看 `resources/uv`**：安装包不携带任何运行时。留着那条查找路径的
- * 后果是——有人把 uv 塞回包里，测试也照样通过，而"首次启动按需下载"这套逻辑
- * 就再没有真正被执行过。空串交给 `ensureUv` 现取。
+ * 与 `prepare_python.py` / `prepare_uv.py` 的平台键约定一致（如 `win32-x64`）。
  */
-function resolveUv(userDataPath) {
+function bundledAssetRoot(resourcesPath = process.resourcesPath) {
+  return resourcesPath || ''
+}
+
+function platformKey() {
+  return `${process.platform}-${process.arch}`
+}
+
+/**
+ * 随包解释器：`resources/python-runtime/<platform>/cpython-<ver>-<os>-<arch>/python.exe`。
+ *
+ * 目录名带版本（如 `cpython-3.12.16-windows-x86_64-none`），所以按 glob 找一层；
+ * 找不到返回空串。**这是运行时唯一的正常来源** —— 安装包自带，不联网。
+ */
+function bundledPython(resourcesPath = process.resourcesPath) {
+  const root = bundledAssetRoot(resourcesPath)
+  if (!root) return ''
+  const base = path.join(root, 'python-runtime', platformKey())
+  let entries
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true })
+  } catch {
+    return ''
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const exe =
+      process.platform === 'win32'
+        ? path.join(base, entry.name, 'python.exe')
+        : path.join(base, entry.name, 'bin', 'python3')
+    if (fs.existsSync(exe)) return exe
+  }
+  return ''
+}
+
+/** 随包 uv：`resources/uv/<platform>/uv.exe`（只用来建 venv + 装依赖，不下载解释器） */
+function bundledUv(resourcesPath = process.resourcesPath) {
+  const root = bundledAssetRoot(resourcesPath)
+  if (!root) return ''
+  const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
+  const candidate = path.join(root, 'uv', platformKey(), exe)
+  return fs.existsSync(candidate) ? candidate : ''
+}
+
+/**
+ * 解析 uv 可执行文件：随包那份 → userData 里曾下载的那份。
+ *
+ * 顺序的理由：随包的是**确定的、离线可用**的，而 userData 里的那份只可能来自
+ * 旧版本的下载流程，留作兼容（老用户升级后不重建环境也能用）。
+ */
+function resolveUv(userDataPath, resourcesPath = process.resourcesPath) {
+  const bundled = bundledUv(resourcesPath)
+  if (bundled) return bundled
   return downloadedUv(userDataPath)
 }
-
-/**
- * 按需下载 uv。**安装包不携带任何运行时**，这是首次启动的第一步。
- *
- * 多源测速择优：`RUNTIME_UV.mirrors` 各取 64KB 计时，最快的那个完整下载；
- * 下完先校验 SHA256（清单里固化），不符就删掉并报错 —— 绝不"先装上再说"。
- * 解析 wheel 用内置 zip 解析器，不依赖系统是否有 unzip/tar。
- */
-async function ensureUv(options = {}) {
-  const userDataPath = String(options.userDataPath || '')
-  if (!userDataPath) throw new Error('ensureUv 需要 userDataPath')
-  const existing = resolveUv(userDataPath)
-  if (existing) return existing
-
-  const key = `${process.platform}-${process.arch}`
-  const asset = RUNTIME_UV.assets[key]
-  if (!asset) {
-    // 平台不支持是**明确的事实**，不能假装"等会儿再试"
-    throw new Error(
-      `本地运行时暂不支持当前平台 ${key}。\n` +
-        `已支持的平台：${Object.keys(RUNTIME_UV.assets).join('、')}。`,
-    )
-  }
-
-  const preferred = String(options.uvMirror || process.env[UV_MIRROR_ENV] || '').trim()
-  const urls = RUNTIME_UV.mirrors.map(base => `${base.replace(/\/+$/, '')}/${asset.path}`)
-  const ranked = await fetchTools.rankSources(urls, {
-    fetch: options.fetch,
-    preferred,
-    timeout: options.probeTimeout,
-  })
-  if (!ranked.length) {
-    throw new Error(
-      `无法下载安装所需的组件（uv ${RUNTIME_UV.version}）：所有候选源都不可用。\n` +
-        `已尝试：\n${urls.map(u => `  - ${u}`).join('\n')}\n` +
-        '请检查网络/代理，或用 CHIRON_UV_MIRROR 指定可用的 PyPI 镜像后重启。',
-    )
-  }
-
-  const dest = path.join(runtimeRoot(userDataPath), 'bin', asset.binary)
-  const wheels = path.join(runtimeRoot(userDataPath), 'download')
-  fs.mkdirSync(wheels, { recursive: true })
-  const wheel = path.join(wheels, asset.file)
-
-  const errors = []
-  for (const source of ranked) {
-    try {
-      if (typeof options.onLine === 'function') options.onLine(`下载 uv ${RUNTIME_UV.version}：${source.url}`)
-      await fetchTools.downloadTo(source.url, wheel, {
-        fetch: options.fetch,
-        timeout: options.downloadTimeout,
-        onProgress: options.onProgress,
-      })
-      const digest = fetchTools.sha256File(wheel)
-      if (digest !== asset.sha256) {
-        // 多源下载后唯一的把关就是内容摘要：不符即失败，保留坏文件供排查
-        throw new Error(`校验不通过（期望 ${asset.sha256}，实际 ${digest}）`)
-      }
-      // wheel 内二进制位置形如 `uv-<ver>.data/scripts/uv[.exe]`，按文件名匹配不依赖版本目录
-      fetchTools.extractFromZip(wheel, name => name.endsWith(`/${asset.binary}`) || name === asset.binary, dest)
-      try {
-        fs.rmSync(wheel, { force: true })
-      } catch {
-        /* 清理失败不影响使用 */
-      }
-      if (!fs.existsSync(dest)) throw new Error(`解压后仍找不到 ${dest}`)
-      return dest
-    } catch (err) {
-      errors.push(`${source.url}：${err && err.message ? err.message : err}`)
-    }
-  }
-  throw new Error(
-    `下载 uv 失败（所有源都试过了）：\n${errors.map(e => `  - ${e}`).join('\n')}\n` +
-      '请检查网络/代理，或用 CHIRON_UV_MIRROR 指定可用的 PyPI 镜像后重启。',
-  )
-}
-
-/**
- * 选一个 CPython 下载镜像：各候选源探测一次，取最快的。
- *
- * uv 默认从 GitHub 取 python-build-standalone，而实测 github.com 在很多网络下
- * 连 TCP 都不通 ⇒ 会卡死在"创建 Python 环境"。所以默认就把可达的镜像交给 uv。
- * 用户显式设置 CHIRON_PYTHON_MIRROR / UV_PYTHON_INSTALL_MIRROR 时以用户为准。
- */
-async function pickPythonMirror(options = {}) {
-  // 显式传值（含空串）时以调用方为准：空串表示"不探测、不设镜像"，
-  // 测试与离线场景靠它避免真的联网。
-  if (options.pythonMirror !== undefined) return String(options.pythonMirror || '').trim()
-  const explicit = String(process.env[PYTHON_MIRROR_ENV] || process.env.UV_PYTHON_INSTALL_MIRROR || '').trim()
-  if (explicit) return explicit
-  const ranked = await fetchTools.rankSources(PYTHON_MIRRORS, {
-    fetch: options.fetch,
-    timeout: options.probeTimeout,
-  })
-  return ranked.length ? ranked[0].url : ''
-}
-
-/**
- * 解释器怎么来：**随包不带，也不在这里探测**。
- *
- * 只传版本号（见 `RUNTIME_PYTHON_VERSION`），由 uv 自己下到
- * `UV_PYTHON_INSTALL_DIR`，来源是 `pickPythonMirror()` 测速选出的镜像。
- * 以前这里还会去 `resources/python-runtime/` 找一个随包解释器——那条路已删除：
- * 安装包不携带任何运行时，留着它只会让"按需下载"在开发机上被悄悄绕过。
- */
 
 /** 本地 core 源码目录（打包态在 resources/desktop-local） */
 function coreSources(resourcesPath = process.resourcesPath) {
@@ -458,31 +370,10 @@ function pipInstallArgs(vpython, sources, indexUrl) {
   return args
 }
 
-/** 覆盖 uv 下载受管 CPython 的来源（不写死第三方地址，见 `uvEnv` 的说明） */
-const PYTHON_MIRROR_ENV = 'CHIRON_PYTHON_MIRROR'
-/** 覆盖 uv 自身的下载源（PyPI 镜像前缀）；报错信息里承诺过这个名字，必须真的读它 */
-const UV_MIRROR_ENV = 'CHIRON_UV_MIRROR'
-
-/**
- * uv 的运行环境：让受管 CPython 落在 userData，不污染全局 uv 缓存。
- *
- * 还要把「CPython 从哪下载」暴露出去。uv 默认从 GitHub Releases 取
- * python-build-standalone，而**很多网络环境下 github.com 根本不可达**
- * （实测连 TCP 都不通，uv 报 `invalid peer certificate: UnknownIssuer`）。
- * 这时包里带了 uv 也没用：工具在、原料取不到，照样装不出解释器 —— 这正是
- * "随包了却仍然起不来"的那类问题。
- *
- * 所以镜像要能从外部指定：
- *   - `CHIRON_PYTHON_MIRROR` —— 我们自己的约定，优先；
- *   - 用户已设好的 `UV_PYTHON_INSTALL_MIRROR` —— uv 的约定，原样传递。
- * **不写死任何第三方镜像地址**：镜像可达性因网络而异，写死等于把某一家服务商的
- * 可用性变成产品前提。
- */
-function uvEnv(userDataPath, mirror) {
-  const env = { UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot(userDataPath), 'python') }
-  const source = String(mirror || process.env[PYTHON_MIRROR_ENV] || '').trim()
-  if (source) env.UV_PYTHON_INSTALL_MIRROR = source
-  return env
+function uvEnv(userDataPath) {
+  // 解释器是随包 CPython 的绝对路径，uv 不需要下载任何东西；
+  // 保留 UV_PYTHON_INSTALL_DIR 只是让 uv 若真要用受管解释器时落在 userData 里。
+  return { UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot(userDataPath), 'python') }
 }
 
 /** 删掉旧 venv。半损坏的目录留着会让 uv 复用坏状态，重建等于没修 */
@@ -557,23 +448,36 @@ async function ensureRuntime(options = {}) {
     if (!trySync) probeNote += '，依赖声明已变更或无安装记录，将重建'
   }
 
-  const uv = options.uvPath !== undefined ? options.uvPath : resolveUv(userDataPath)
+  // 随包资产在 `sources` 的上一级（`resources/desktop-local` → `resources/`）。
+  // 这样调用方传不传 `resourcesPath` 都能定位，测试与打包态行为一致。
+  const assetRoot =
+    options.resourcesPath !== undefined && options.resourcesPath
+      ? String(options.resourcesPath)
+      : sources
+        ? path.dirname(sources)
+        : process.resourcesPath
+
+  const uv =
+    options.uvPath !== undefined && options.uvPath
+      ? String(options.uvPath)
+      : resolveUv(userDataPath, assetRoot)
   if (!uv) {
-    // 安装包不再携带 uv：首次启动在这里按需下载（多源测速 + SHA256 强校验）
-    stage(INSTALL_STAGES.probing, '下载安装组件')
-    if (typeof options.onLine === 'function') options.onLine('安装包不携带运行时，开始按需下载')
+    // 安装包自带 uv（resources/uv），所以"找不到"只可能是包不完整 ——
+    // 这属于重装能解决的事故，不是网络问题，不要再去联网补救。
+    throw new Error(
+      '安装包内缺少 uv（resources/uv），无法准备本地运行时。这是安装包不完整，请重新安装。',
+    )
   }
-  const uvPath = uv || (await ensureUv({ ...options, userDataPath }))
+  const uvPath = uv
   // CPython 的下载源同样测速择优：不指定时默认给 uv 一个可达镜像，
   // 否则它会去 github.com 取 python-build-standalone（实测不可达）而卡死在建环境。
-  const pythonMirror = await pickPythonMirror(options)
 
   const runUv = (args, timeout, label) =>
     runCommand(uvPath, args, {
       timeout,
       spawn: options.spawn,
       onLine: options.onLine,
-      env: uvEnv(userDataPath, pythonMirror),
+      env: uvEnv(userDataPath),
     }).catch(err => {
       err.message = `${label}失败：${err.message}`
       throw err
@@ -607,12 +511,23 @@ async function ensureRuntime(options = {}) {
   // —— 路径 3：全量重建 ——
   removeVenv(userDataPath)
 
-  // 解释器：安装包**不再携带**任何 CPython。默认只传版本号，由 uv 从上面选出的
-  // 镜像下载受管解释器（`--python-preference only-managed` 保证不去碰用户机上那个
-  // 可能缺模块、或是 Microsoft Store 占位符的 Python）。
-  // `options.pythonPath` 仅用于开发/测试注入一个本地解释器绝对路径。
+  // 解释器：**随包那份**（`resources/python-runtime/<platform>/cpython-*/`），
+  // 引导器与 python-engine 共用它。传绝对路径给 uv，uv 因此不会联网取解释器。
+  // `options.pythonPath` 仅用于开发/测试注入另一个本地解释器绝对路径。
+  const bundled = bundledPython(assetRoot)
   const pythonArg =
-    options.pythonPath !== undefined && options.pythonPath ? String(options.pythonPath) : RUNTIME_PYTHON_VERSION
+    options.pythonPath !== undefined && options.pythonPath
+      ? String(options.pythonPath)
+      : bundled || RUNTIME_PYTHON_VERSION
+
+  if (!options.pythonPath && !bundled) {
+    // 回落到版本号意味着 uv 会去下载解释器 —— 而内置化之后这条路本就该消失。
+    // 与其让它静默联网（可能卡在不可达的 github.com），不如把缺失讲清楚。
+    throw new Error(
+      `安装包内缺少 Python 运行时（resources/python-runtime/${platformKey()}）。` +
+        '这是安装包不完整，请重新安装。',
+    )
+  }
 
   stage(INSTALL_STAGES.creatingVenv, `创建 Python ${RUNTIME_PYTHON_VERSION} 环境${probeNote}`)
   await runUv(
@@ -663,10 +578,6 @@ module.exports = {
   writeManifest,
   downloadedUv,
   resolveUv,
-  ensureUv,
-  pickPythonMirror,
-  RUNTIME_UV,
-  PYTHON_MIRRORS,
   coreSources,
   inspectRuntime,
   ensureRuntime,

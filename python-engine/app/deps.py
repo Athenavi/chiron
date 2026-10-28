@@ -18,6 +18,26 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
+def _degraded_mode() -> bool:
+    """是否处于**显式**降级模式（单机开发）。
+
+    优先读环境变量：本模块其它校验都直接在 `os.getenv` 上做，保持同一口径；
+    环境变量为空时再回退到 `settings`，覆盖 `.env` 里写了 `DEGRADED_MODE` 的情形 ——
+    否则"配置文件里写了降级"与"门禁看到的值"会不一致，表现为设了也不生效。
+
+    任何异常都按**非降级**处理（fail-closed）：读不到配置时不能把隔离悄悄关掉。
+    """
+    raw = (os.getenv("DEGRADED_MODE") or "").strip().lower()
+    if raw:
+        return raw in ("1", "true", "yes", "on")
+    try:
+        from app.config import settings
+
+        return bool(getattr(settings, "degraded_mode", False))
+    except Exception:  # noqa: BLE001 — 诊断/门禁用途，读不到即视为生产口径
+        return False
+
+
 def verify_sandbox_root() -> None:
     """校验 agent 沙箱根（SANDBOX_ROOT）是否满足部署要求 —— 多副本安全的关键前置。
 
@@ -141,6 +161,17 @@ def verify_sandbox_backend() -> None:
 
     url = (os.getenv("SANDBOX_SERVICE_URL") or "").strip()
     if not url:
+        # 显式降级模式（单机开发）放行：`main.py` 的 `_apply_sandbox_service_branch`
+        # 在 `degraded_mode=True` 时本来就会回退进程内执行，但那段逻辑在门禁**之后**，
+        # 门禁先 raise 就永远走不到 —— 表现是"设了 DEGRADED_MODE 仍拒绝启动"。
+        # 生产不受影响：`DEGRADED_MODE` 默认 false，这里照样 fail-closed。
+        if _degraded_mode():
+            logger.warning(
+                "SANDBOX_BACKEND=service but SANDBOX_SERVICE_URL is not set — degraded "
+                "mode (DEGRADED_MODE=true) ⇒ command/code execution runs IN-PROCESS "
+                "(the in-process sandbox is not a security boundary; single-node dev only)"
+            )
+            return
         logger.error(
             "Refusing to start: SANDBOX_BACKEND=service but SANDBOX_SERVICE_URL is not set. "
             "Reason: without the URL the execution branch is skipped silently and every "

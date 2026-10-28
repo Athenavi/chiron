@@ -49,6 +49,13 @@ _EMBEDDED_MODULE = "embedded_postgres"
 # 与 ``Settings.pg_user`` 无关 —— 见 :meth:`PostgresServer._embedded_notes`。
 _EMBEDDED_SUPERUSER = "postgres"
 
+# 随包 PG 二进制的默认落位（相对本文件：desktop-local/app/storage/ → desktop-local/bin/pg/bin/）
+#
+# **必须指向 ``bin/`` 而不是 ``bin/pg/``**：``initdb`` / ``pg_ctl`` 是官方发行版构建，
+# 它们按相对路径（``../share``、``../lib``）找模板与动态库。把 ``bin``、``lib``、``share``
+# 保持同级拷过来就能独立运行；只拷 ``bin`` 会在 initdb 阶段报找不到 ``postgres.bki``。
+BUNDLED_PG_BIN_DIR = Path(__file__).resolve().parents[2] / "bin" / "pg" / "bin"
+
 # embedded_postgres 包在各版本里用过的公开入口名（只做特征探测，命中哪个用哪个；顺序 = 优先级）
 _EMBEDDED_ENTRYPOINTS = (
     "get_server",
@@ -762,11 +769,19 @@ class PostgresServer:
         self._run(cmd, timeout=60, what="pg_ctl stop", check=False, capture=False)
 
     def _find_binary(self, name: str) -> str | None:
+        """按 ``配置目录 → 随包目录 → PATH`` 找 PG 可执行文件。
+
+        顺序与 :func:`app.storage.redis.find_redis_binary` 一致：显式配置最高，
+        其次是安装包自带那份（可脱离用户机环境独立运行），PATH 最后兜底开发者自己装的 PG。
+        """
         suffix = ".exe" if os.name == "nt" else ""
         if self.settings.pg_bin_dir:
             candidate = Path(self.settings.pg_bin_dir) / f"{name}{suffix}"
             if candidate.exists():
                 return str(candidate)
+        bundled = BUNDLED_PG_BIN_DIR / f"{name}{suffix}"
+        if bundled.is_file():
+            return str(bundled)
         return shutil.which(name)
 
     # ------------------------------------------------------------------ 工具

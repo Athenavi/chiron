@@ -41,14 +41,49 @@ asar: true
 # 会让 electron-builder 在拷贝阶段报错。glob 过滤匹配不到文件时只是「不带组件」，
 # 目录将来出现则自动落到 resources/components/，构建永远不需要因为缺目录而改配置。
 extraResources:
+  # Go 网关：本地模式的**唯一业务入口**。
+  #
+  # 放 resources/ 而不是 asar：它是原生可执行文件，asar 里无法直接执行
+  # （asar 是归档格式，只有 Node 的 fs 能透明读取，OS 无法 exec 归档内的文件）。
+  # 主进程按 `path.join(process.resourcesPath, 'chiron.exe')` 定位（见 main.cjs
+  # 的 resolveGatewayExe），两侧路径必须一致。
+  #
+  # 仓库根的 chiron.exe 是构建产物（`*.exe` 不入库），所以这里用 glob 过滤：
+  # 匹配不到时只是"不带网关"，构建不会因为缺文件而失败 —— 与 components/ 同一套取舍。
+  - from: ..
+    to: .
+    filter:
+      - "chiron.exe"
+      - "chiron"
   - from: .
     to: .
     filter:
       - "components/**/*"
       - "!components/**/.gitkeep"
+  # 受管 CPython 解释器：引导器与 python-engine 共用这一份。
+  #
+  # 由 `desktop-local/scripts/prepare_python.py` 在打包前就位
+  # （`assets/python-runtime/<platform>/`，当前约 66MB）。
+  # 放 resources 而不是 asar：它是原生可执行文件，asar 内的文件无法被 OS 执行。
+  # 主进程按 `path.join(process.resourcesPath, 'python-runtime', '<plat>', ...)` 定位。
+  - from: assets/python-runtime
+    to: python-runtime
+    filter:
+      - "**/*"
+  # uv：仅用于**在该随包解释器之上建 venv 并装依赖**，不再用来下载解释器。
+  # 由 `desktop-local/scripts/prepare_uv.py` 就位（`assets/uv/<platform>/uv.exe`）。
+  - from: assets/uv
+    to: uv
+    filter:
+      - "**/*"
   # 本地 core 源码（不放进 asar：Python 子进程需要真实文件路径）。
   # `desktop-local/app/config.py` 的 REPO_ROOT = resources/，所以 migrations/
   # 必须放在 resources/migrations，否则启动时找不到迁移目录。
+  #
+  # **同时携带 `bin/` 下的 PG 与 Redis 二进制**：它们在 `desktop-local/bin/`，
+  # 是 `**/*` 的一部分，因此随这条规则一起进包。这两个目录由
+  # `scripts/prepare_pg.py` 与 `scripts/prepare_redis.py` 在打包前就位，
+  # 仓库里不存在（`.gitignore` 忽略 `desktop-local/bin/`），所以打包机上必须先跑它们。
   - from: ../desktop-local
     to: desktop-local
     filter:
@@ -57,6 +92,8 @@ extraResources:
       - "!**/.pytest_cache/**"
       - "!**/*.egg-info/**"
       - "!**/.venv/**"
+      # 不写 `!**/bin/**`：`bin/` 下的 PG 与 Redis 二进制是**刻意随包**的，
+      # 由 `**/*` 一并收进来。将来扩充排除规则时，别把它排掉。
   - from: ../migrations
     to: migrations
     filter:
@@ -64,15 +101,15 @@ extraResources:
       - "!**/__pycache__/**"
   - from: ../alembic.ini
     to: alembic.ini
-  # **安装包不携带任何 Python 运行时**（既不带 uv，也不带 CPython）。
-  # 首次启动时由 electron/runtime-install.cjs 按需下载：
-  #   - uv：多源测速择优 + SHA256 强校验（runtime-fetch.cjs，清单见 uv_manifest.json）
-  #   - CPython：由 uv 从测速选出的 python-build-standalone 镜像取受管解释器
-  # 解释器与依赖都装在 userData/local/runtime，因此
-  #   - 安装包小得多（省掉约 100MB+ 的解释器和 uv）；
-  #   - 不会因为构建机 Python 版本与用户机不符而失效；
-  #   - 依赖清单只有 desktop-local/pyproject.toml 一份，升级依赖重建即可。
-  # CI 另有一步按安装包内真实路径复核"确实没有随包运行时"。
+  # **安装包携带一份 CPython 与 uv**（都不是运行时依赖的替代品，而是必需品）：
+  #   - `resources/python-runtime/<platform>/cpython-*/`：受管解释器，由
+  #     `desktop-local/scripts/prepare_python.py` 在打包前就位（约 66MB）；
+  #   - `resources/uv/<platform>/uv.exe`：只用来在解释器之上建 venv 并装依赖
+  #     （`prepare_uv.py`），**不再**用来下载解释器。
+  # 首启只做"建 venv + 按 pyproject.toml 装依赖"，两步都不碰 CPython 下载，
+  # 因此即使 github.com 不可达也能装起来；依赖装到 userData/local/runtime/venv。
+  # 体积换的是确定性：不会因为构建机/用户机 Python 版本不符而失效。
+  # CI 另有一步按安装包内真实路径复核运行时资产确实在包里。
 
 
 # Chromium 通过 file:// / Worker 直接读取 wasm 与 viewer 资源；

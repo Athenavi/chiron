@@ -8,13 +8,13 @@
  *   - 有 Store 占位符 → spawn 成功但立刻退出；
  *   - 有真 python 但没装 fastapi/asyncpg → ModuleNotFoundError。
  *
- * 现在的行为：**安装包不携带任何运行时**。首次启动按需下载 uv（多源测速 + SHA256），
- * 再由 uv 取受管 CPython 并按 `pyproject.toml` 装依赖。候选链只剩两条：
+ * 现在的行为：**解释器与 uv 都随包**（`resources/python-runtime/`、`resources/uv/`），
+ * 首次启动只做"建 venv + 按 `pyproject.toml` 装依赖"。候选链只剩两条：
  * 自建 venv（`<userData>/local/runtime/venv`）与显式设置的 CHIRON_PYTHON。
- * 刻意不兜底到 PATH，也刻意不再找 `resources/python` / `resources/python-runtime`。
+ * 刻意不兜底到 PATH，也刻意不再找 `resources/python`（解释器 + 已装依赖的旧整包）。
  *
  * 本文件锁定四条：
- *   1. 取不到 uv 时：不 spawn，错误里指名组件、版本与换源变量，并给出修复指引；
+ *   1. 安装包缺 uv 时：不 spawn，直接判安装包残缺并让用户重装（不提供换源误导）；
  *   2. 缺运行时就走安装，绝不因 PATH 上恰好有个可用解释器而蒙混启动；
  *   3. 自建 venv 可用时：直接用它，不多探候补；
  *   4. 探测结论按解释器缓存（同一解释器不重复 import）。
@@ -31,8 +31,8 @@ const components = require('../components.cjs')
 /**
  * 造一个"打包态"资源目录：只有 desktop-local 源码。
  *
- * **刻意不再构造 `resources/python`**：安装包不携带任何运行时，候选链里也没有这个
- * 位置。以前这个 helper 能靠"包里放个解释器"让用例通过，等于把已被否决的形态
+ * **刻意不再构造 `resources/python`**：那是"解释器 + 已装依赖"的旧整包，候选链里也没有
+ * 这个位置。以前这个 helper 能靠"包里放个解释器"让用例通过，等于把已被否决的形态
  * 固化进测试。
  */
 function makeResources(t) {
@@ -69,7 +69,7 @@ function withoutExplicitPython(t) {
 /**
  * 造一个"自建运行时已就绪"的 userData：`local/runtime/venv/` 里有解释器。
  *
- * 这是安装包**唯一**会走的那条路（安装包不携带任何运行时）。用环境变量
+ * 这是安装包**唯一**会走的那条路（随包的是裸解释器，依赖必须现装进 venv）。用环境变量
  * `CHIRON_DESKTOP_USER_DATA` 固定 userData，避免 `app.getPath` 每次返回新目录
  * 导致 `installedRuntimePython()` 和安装器看到两个不同的根。
  */
@@ -139,7 +139,7 @@ function installDeps(t, { probeFor, fetch: fetchImpl } = {}) {
   return calls
 }
 
-test('运行时缺失且取不到 uv：不 spawn，说明是取组件失败并给出换源路径', async t => {
+test('运行时缺失且安装包没带 uv：不 spawn，直接判安装包残缺并让用户重装', async t => {
   const resources = makeResources(t)
   withResourcesPath(t, resources)
   withoutExplicitPython(t)
@@ -148,11 +148,12 @@ test('运行时缺失且取不到 uv：不 spawn，说明是取组件失败并�
   await assert.rejects(
     () => components.startCore({ repoRoot: resources }),
     err => {
-      // 运行时缺失 → 自动去装。装的第一步是取 uv（安装包不再携带），
-      // 取不到时必须说清"哪一步失败、怎么修"，而不是丢一句泛泛的错误。
+      // 运行时缺失 → 自动去装。uv 现在随包分发，缺了只能是打包出错：
+      // 说清"是安装包残缺、重装能修"，而不是让用户去调镜像变量白折腾。
       assert.match(err.message, /本地运行时自动安装失败/, '要明确是安装环节的问题')
-      assert.match(err.message, /uv 0\.13\.6/, '要指名缺的组件与版本')
-      assert.match(err.message, /CHIRON_UV_MIRROR/, '要给可执行的换源路径')
+      assert.match(err.message, /uv/, '要指名缺的组件')
+      assert.match(err.message, /重新安装/, '安装包残缺的唯一出路就是重装')
+      assert.doesNotMatch(err.message, /CHIRON_UV_MIRROR/, '换镜像解决不了包内缺文件')
       assert.equal(err.retryable, false, '换端口救不回来')
       return true
     },

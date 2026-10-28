@@ -38,10 +38,15 @@ jobs:
         include:
           - os: windows-latest
             platform: win
+            # 与 electron-builder.yml 的 target 架构一致，**不是** runner 架构：
+            # macos-latest 现在是 arm64，但 mac target 是 arch: [x64]。
+            runtime_platform: win32-x64
           - os: macos-latest
             platform: mac
+            runtime_platform: darwin-x64
           - os: ubuntu-latest
             platform: linux
+            runtime_platform: linux-x64
 
     steps:
       - uses: actions/checkout@v4
@@ -77,8 +82,9 @@ jobs:
         # env:
         #   ELECTRON_MIRROR: https://npmmirror.com/mirrors/electron/
 
-      # runner 上的 Python **只用于跑构建脚本**，不随包任何解释器：用户机的运行时
-      # 由首次启动按需下载的 uv 创建（安装包既不携带 uv，也不携带 CPython）。
+      # runner 上的 Python **只用于跑构建脚本**（prepare_*.py / pytest）。
+      # 用户机的那份是随包 CPython（`resources/python-runtime/`），由 prepare_python.py
+      # 就位，与 runner 版本无关。
       #
       # 固定 3.12 是因为 desktop-local 的 pytest 套件与脚本都在这版验证过；
       # 它与用户机最终跑什么 Python 无关（那个版本由 runtime-install.cjs 决定）。
@@ -189,18 +195,29 @@ jobs:
             echo "ok  $f  $(wc -c < "$f") bytes"
           done
 
-      # 就位随包的 uv 二进制与 redis 二进制。**必须在 electron-builder 之前跑**：
-      #   1) 这两份产物都不进 git，CI checkout 上根本没有；
+      # 就位随包的运行时资产（CPython、uv）与 redis 二进制。
+      # **必须在 electron-builder 之前跑**：
+      #   1) 这些产物都不进 git，CI checkout 上根本没有；
       #   2) electron-builder 对缺失的 `extraResources.from` 只 warn 不报错
       #      （app-builder-lib out/fileMatcher.js: `statOrNull(from)` 为 null 时
       #      `log.warn(...)` 后直接 return），所以缺了也照样出包 —— 打出的是残包。
-      # 两个脚本自带"真实跑一次"的自检，失败即退出非零，把问题挡在出包之前。
+      # 三个脚本各自带"真实跑一次"的自检，失败即退出非零，把问题挡在出包之前。
       #
       # **必须显式传 --platform**，不能让脚本按 runner 自己推断：
       #   - `macos-latest` 现在是 arm64 runner，而 electron-builder.yml 的 mac
       #     target 是 arch: [x64] —— 自动推断会装成 darwin-arm64，打进 x64 包里
       #     就是一份跑不起来的二进制；
       #   - win/linux runner 目前是 x64，同样按 target 走而不是按 runner 走。
+      - name: Prepare bundled uv binary
+        working-directory: desktop-local
+        run: python scripts/prepare_uv.py --platform ${{ matrix.runtime_platform }}
+
+      # 解释器用上一步的 uv 下载：uv 自带官方清单并逐文件校验 SHA256，
+      # 仓库里不再重复维护第二份哈希。**必须排在 prepare_uv 之后**。
+      - name: Prepare bundled CPython runtime
+        working-directory: desktop-local
+        run: python scripts/prepare_python.py --platform ${{ matrix.runtime_platform }}
+
       - name: Prepare bundled redis binary
         working-directory: desktop-local
         run: python scripts/prepare_redis.py
@@ -287,21 +304,30 @@ jobs:
             echo "ok  ${redis#"$root/"}"
           fi
 
-          # **安装包不携带任何 Python 运行时**（uv 与 CPython 都不带）。
-          # 这是产品决策，也是这份复核要守的不变量：一旦谁把 assets/uv 或
-          # assets/python-runtime 加回 electron-builder.yml，安装包体积会立刻涨回
-          # 100MB+，而首次启动下载的逻辑也就白写了。所以这里**反向断言**。
-          if [[ -e "$root/uv" ]]; then
-            echo "::error::安装包里带着 resources/uv —— 运行时改为首次启动按需下载，不应随包"
+          # **运行时随包**（uv 与 CPython 都随包）：这是 p2_2 的产品决策，
+          # 换掉"首次启动联网下载"——实测 github.com 在多数网络下不可达，
+          # 下载路径必然卡死在"创建 Python 环境"。这里**正向断言**两者都在包里，
+          # 且解释器真的是可执行文件（目录存在但里面是空的同样算残包）。
+          uv_bin="$root/uv/${{ matrix.runtime_platform }}/uv"
+          [[ -e "$uv_bin.exe" ]] && uv_bin="$uv_bin.exe"
+          if [[ ! -e "$uv_bin" ]]; then
+            echo "::error::缺少随包 uv（$uv_bin）—— 首启建环境会直接失败"
             fail=1
           else
-            echo "ok  未随包 uv（首次启动按需下载，符合预期）"
+            echo "ok  ${uv_bin#"$root/"}"
           fi
-          if [[ -e "$root/python-runtime" ]]; then
-            echo "::error::安装包里带着 resources/python-runtime —— 运行时改为首次启动按需下载，不应随包"
+
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            py_bin=$(ls "$root"/python-runtime/"${{ matrix.runtime_platform }}"/cpython-*/python.exe 2>/dev/null | head -1)
+          else
+            py_bin=$(ls "$root"/python-runtime/"${{ matrix.runtime_platform }}"/cpython-*/bin/python3 2>/dev/null | head -1)
+          fi
+          if [[ -z "$py_bin" || ! -e "$py_bin" ]]; then
+            echo "::error::缺少随包 CPython（$root/python-runtime/${{ matrix.runtime_platform }}/cpython-*/）—— 首启建环境会直接失败"
+            ls -la "$root/python-runtime" 2>/dev/null || true
             fail=1
           else
-            echo "ok  未随包 python-runtime（首次启动由 uv 从镜像取受管解释器，符合预期）"
+            echo "ok  ${py_bin#"$root/"}"
           fi
 
           # **不复用旧的 resources/python**：那是"解释器 + 已装依赖"的整包，
