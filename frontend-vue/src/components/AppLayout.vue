@@ -34,6 +34,7 @@ import {
   AppstoreOutlined,
   
   ApiOutlined,
+  KeyOutlined,
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
@@ -138,6 +139,11 @@ interface UserMenuItem {
 const userMenuItems = computed<UserMenuItem[]>(() => [
   { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
   { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
+  // 用户级 API Key 自助：放在账号菜单而不是主导航 —— 它是「账号凭证」，
+  // 不是日常每天都在切换的工作台。本地模式没有账号体系，故不展示。
+  ...(deviceStore.isLocal()
+    ? []
+    : [{ key: 'api-keys', label: tr('settings.user_api_key_title'), icon: () => h(KeyOutlined) }]),
   // 本地模式没有账号可登出（本地用户由本地后端固定下发），不展示该入口
   ...(deviceStore.isLocal() ? [] : [{ key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) }]),
 ])
@@ -153,6 +159,8 @@ async function handleUserMenuClick(info: { key: string | number }) {
     settingsOpen.value = true
   } else if (info.key === 'profile') {
     router.push('/profile')
+  } else if (info.key === 'api-keys') {
+    router.push('/api-keys')
   }
 }
 

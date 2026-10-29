@@ -356,6 +356,14 @@ func NewGatewayRouter(
 	// 避免与 /v1/billing/balance 出现两份不一致的缓存。
 	onboardingHandler := NewOnboardingHandler(billingMgr)
 
+	// 用户级 API Key 自助（P1-3 / roadmap §11.3）：api_keys 表早已在鉴权链路里，
+	// 但此前没有任何写路径 —— 用户只能手工插表才能拿到 key。
+	apiKeyHandler := NewAPIKeyHandler()
+
+	// 工单式发票申请（P1-2 / roadmap §11.4）：用户提交、管理员审核、线下开票。
+	// 一期只做全额开票 + 不可撤销（§11.4 已定口径）。
+	invoiceHandler := NewInvoiceHandler()
+
 	// 后台「支付配置」保存在 system_settings.payment 的凭据叠加到 env 之上，
 	// 使页面里配置的渠道在重启后依然生效（DB 值优先、env 兜底）。
 	var settingsStore *settings.Store
@@ -448,6 +456,10 @@ func NewGatewayRouter(
 	registerBillingRoutes(mux, billingHandler, authMW, rlMW)
 	// 新用户引导（P0-3）：用户级自助，身份取自 token。
 	onboardingHandler.RegisterRoutes(mux, authMW, rlMW)
+	// 用户级 API Key 自助（P1-3）：普通用户路由，越权靠 SQL 的 user_id 条件挡住。
+	apiKeyHandler.RegisterRoutes(mux, authMW, rlMW)
+	// 发票申请（P1-2）：用户侧 GET/POST /v1/billing/invoices。
+	invoiceHandler.RegisterRoutes(mux, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
 	// 桌面端云端片段推理（POST /v1/desktop/infer，用户 JWT + 限流，见 routes_desktop.go）
 	registerDesktopRoutes(mux, authMW, rlMW, pythonClient)
@@ -543,7 +555,7 @@ func NewGatewayRouter(
 	// 旧 /v1/permission/approve|reject 已移除：审批统一由 Python 侧处理
 	// （前端经 /v1/agent/approval 提交决定），避免 Go/Python 双实现漂移。
 
-	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient)
+	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient, invoiceHandler)
 
 	// Wrap main mux with public middleware.
 	//

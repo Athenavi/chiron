@@ -34,6 +34,23 @@ const (
 	// 客户端渲染成"请求内容不被接受，请检查后重试"—— 把用户引向完全错误的方向
 	// （该改的是"等一下或修好卡住的会话"，不是改请求内容）。
 	CodeSessionBusy = "session_busy"
+	// CodeExportTooManyRows 表示导出范围内记录数超过单次上限。
+	//
+	// 单独成码而不是复用 invalid_request：这是一个**用户可自行解决**的情况
+	// （缩小时间范围即可），文案必须带上实际条数与上限，否则用户只知道"失败了"。
+	CodeExportTooManyRows = "export_too_many_rows"
+	// CodeExportRangeTooWide 表示导出时间跨度超过上限，同样可由用户自行缩小范围解决。
+	CodeExportRangeTooWide = "export_range_too_wide"
+	// CodeInvoiceAlreadyRequested 表示同一笔支付已经提交过开票申请。
+	//
+	// 单独成码而不是复用 invalid_request：用户的下一步动作是明确的（去看已有
+	// 申请的状态），而不是"改请求内容再试"。文案要能指向那张已有的申请。
+	CodeInvoiceAlreadyRequested = "invoice_already_requested"
+	// CodeInvoiceAlreadyReviewed 表示该申请已被审核过。
+	//
+	// 与上面的区别在**谁该行动**：前者由申请人处理，后者由管理员处理 ——
+	// 通常是另一位管理员先审了，刷新列表即可。
+	CodeInvoiceAlreadyReviewed = "invoice_already_reviewed"
 )
 
 // knownMessageCodes 已知文案 → 错误码（键为小写原文）。
@@ -57,6 +74,10 @@ var messageCodeRules = []struct {
 	keyword string
 	code    string
 }{
+	// 导出相关放在最前面：它们与"记录太多"有关，而下面的宽泛规则里
+	// 有 "too many request"（限流）等，靠后的顺序会让文案被误判成别的语义。
+	{"too many transactions", CodeExportTooManyRows},
+	{"time range spans", CodeExportRangeTooWide},
 	{"token quota", CodeQuotaExceeded},
 	{"quota exceeded", CodeQuotaExceeded},
 	{"quota", CodeQuotaExceeded},

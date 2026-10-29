@@ -117,7 +117,7 @@ func TestAdminDatastoreRoutesAreExposed(t *testing.T) {
 	mux := http.NewServeMux()
 	auth := &middlewareProbe{}
 	rl := &middlewareProbe{}
-	registerAdminRoutes(mux, auth.reject(http.StatusUnauthorized), rl.passthrough, &AdminHandler{}, nil)
+	registerAdminRoutes(mux, auth.reject(http.StatusUnauthorized), rl.passthrough, &AdminHandler{}, nil, NewInvoiceHandler())
 
 	cases := []struct{ method, path string }{
 		// Redis tab

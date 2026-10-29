@@ -298,7 +298,8 @@ func (h *SmsHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if h.captcha != nil {
 		h.captcha.ClearFailures(ctx, r)
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, db.DefaultTenantID, auth.RolePermissions[user.Role])
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, db.DefaultTenantID,
+		resolveUserPermsDefault(ctx, user.ID, user.Role))
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -340,6 +341,13 @@ func (h *SmsHandler) provisionSmsUser(ctx context.Context, phone string) (UserRe
 	}
 	if err != nil {
 		return UserResponse{}, err
+	}
+	// 自动建号的用户同样要有成员记录：否则读取路径切到 tenant_members 之后
+	// （roadmap §12.4 灰度第 3 步），短信登录用户会对团队能力凭空消失。
+	// 这里与注册不同，不阻断登录 —— 用户已经在用这个账号，建成员失败不该把
+	// 人锁在门外；函数是幂等的，下次 provision 会再补一次。
+	if merr := addTenantMember(ctx, h.db, db.DefaultTenantID, user.ID, user.Role); merr != nil {
+		slog.Warn("add tenant member failed (sms provision)", "user_id", user.ID, "error", merr)
 	}
 	db.AuditLog(ctx, "", db.DefaultTenantID, "sms_provision", "/v1/auth/sms/login", "phone="+maskPhone(phone), "", nil)
 	return user, nil

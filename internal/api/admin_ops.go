@@ -211,17 +211,24 @@ func (h *AdminHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "name is required")
 		return
 	}
-	tenantID, err := id.UUID()
-	if err != nil {
-		InternalError(w, "generate id failed")
-		return
-	}
-	if _, err := db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO tenants (id, name, status) VALUES ($1, $2, 'active')`, tenantID, strings.TrimSpace(body.Name)); err != nil {
+	var tenantIDStr string
+	// tenants.id 是 smallserial（基线 0001:735），必须让数据库自增。
+	// 这里原先是 `id.UUID()` 生成的字符串，传给 smallint 会直接
+	// "invalid input syntax for type smallint" —— 也就是说该端点此前从未成功过。
+	// 改用 RETURNING id 取真实主键，后面的角色播种才有正确的 int16。
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`INSERT INTO tenants (name, status) VALUES ($1, 'active') RETURNING id::text`,
+		strings.TrimSpace(body.Name)).Scan(&tenantIDStr); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create tenant failed")
 		return
 	}
-	OK(w, map[string]interface{}{"id": tenantID, "name": body.Name, "status": "active"})
+	// 立刻播种 owner/admin/member：tenant_members.role_id 是外键，租户没有角色
+	// 时后续任何加成员的操作都无从谈起。失败只告警 —— 注册与自动建号路径里
+	// 也会幂等补一次（ensureTenantBuiltinRoles），不让建租户因此失败。
+	if err := ensureTenantBuiltinRoles(r.Context(), db.GlobalDBManager, parseTenantID(tenantIDStr)); err != nil {
+		slog.Warn("seed tenant builtin roles failed", "tenant", tenantIDStr, "error", err)
+	}
+	OK(w, map[string]interface{}{"id": tenantIDStr, "name": body.Name, "status": "active"})
 }
 
 func (h *AdminHandler) UpdateTenant(w http.ResponseWriter, r *http.Request) {

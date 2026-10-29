@@ -302,17 +302,11 @@ const usageBreakdownLimit = 100
 // 在**聚合后的全部行**上求和（窗口函数先于 LIMIT 执行）。若改用「把返回行相加」，
 // 截断后总量会小于真实花费，用户拿明细对不上账。total_buckets 同理来自
 // `COUNT(*) OVER ()`，因此 truncated 判定也不需要额外一次查询。
-func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Request, userID, groupBy string, days int) {
-	// 列表达式来自白名单，绝不能来自请求参数 —— 参数只能是标识符，不能拼进 SQL。
-	column, ok := usageGroupColumn(groupBy)
-	if !ok {
-		InternalError(w, "unsupported groupBy")
-		return
-	}
-
-	rows, err := db.GlobalDBManager.Query(r.Context(),
-		fmt.Sprintf(
-			`WITH agg AS (
+// usageBreakdownQuery 是按 model / session 聚合的语句模板（%s 来自白名单列表达式）。
+//
+// 提成包级常量是为了让真实 PostgreSQL 冒烟用例能直接引用**生产语句本身** ——
+// 若测试里另抄一份，两边一旦漂移，就会出现"测试全绿、上线才炸"。
+const usageBreakdownQuery = `WITH agg AS (
 			    SELECT %s AS bucket,
 			           COUNT(*) AS event_count,
 			           COALESCE(SUM(input_tokens), 0) AS input_tokens,
@@ -331,8 +325,18 @@ func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Reques
 			        COUNT(*) OVER () AS total_buckets
 			   FROM agg
 			  ORDER BY (input_tokens + output_tokens) DESC
-			  LIMIT $3`,
-			column), userID, days, usageBreakdownLimit)
+			  LIMIT $3`
+
+func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Request, userID, groupBy string, days int) {
+	// 列表达式来自白名单，绝不能来自请求参数 —— 参数只能是标识符，不能拼进 SQL。
+	column, ok := usageGroupColumn(groupBy)
+	if !ok {
+		InternalError(w, "unsupported groupBy")
+		return
+	}
+
+	rows, err := db.GlobalDBManager.Query(r.Context(),
+		fmt.Sprintf(usageBreakdownQuery, column), userID, days, usageBreakdownLimit)
 	if err != nil {
 		slog.Error("get usage breakdown failed", "user_id", userID, "group_by", groupBy, "error", err)
 		InternalError(w, "failed to get usage breakdown")

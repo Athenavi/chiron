@@ -222,7 +222,8 @@ func (h *MailHandler) Login(w http.ResponseWriter, r *http.Request) {
 	if h.captcha != nil {
 		h.captcha.ClearFailures(ctx, r)
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID, auth.RolePermissions[user.Role])
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID,
+		resolveUserPermsDefault(ctx, user.ID, user.Role))
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -269,6 +270,11 @@ func (h *MailHandler) provisionMailUser(ctx context.Context, email string) (User
 	}
 	if err != nil {
 		return UserResponse{}, err
+	}
+	// 自动建号同样补成员记录（理由同 sms_handler.provisionSmsUser）：漏掉会让
+	// 邮箱验证码登录的用户在读取路径切换后失去团队能力。不阻断登录，幂等可重试。
+	if merr := addTenantMember(ctx, h.db, db.DefaultTenantID, user.ID, user.Role); merr != nil {
+		slog.Warn("add tenant member failed (mail provision)", "user_id", user.ID, "error", merr)
 	}
 	db.AuditLog(ctx, "", db.DefaultTenantID, "mail_provision", "/v1/auth/email/login",
 		"email="+maskEmail(email), "", nil)

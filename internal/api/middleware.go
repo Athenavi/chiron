@@ -387,16 +387,12 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 			if tokenStr == "" {
 				if key := r.Header.Get("X-API-Key"); key != "" {
 					// Validate API key against PostgreSQL（含 tenant_id 与 revoked 状态校验，多租户隔离）
-					var userID, role, tenantID string
+					// 同时取回 ak.id：鉴权成功后要按节流回写 last_used_at（见 markAPIKeyUsed）
+					var keyID, userID, role, tenantID string
 					keyHash := sha256.Sum256([]byte(key))
 					err := db.GlobalDBManager.QueryRow(r.Context(),
-						`SELECT u.id, u.role, COALESCE(u.tenant_id::text, '') AS tenant_id
-					 FROM users u
-					 JOIN api_keys ak ON ak.user_id = u.id
-					 WHERE ak.key_hash = $1
-					   AND COALESCE(ak.revoked, false) = false
-					   AND (ak.expires_at IS NULL OR ak.expires_at > NOW())`,
-						hex.EncodeToString(keyHash[:])).Scan(&userID, &role, &tenantID)
+						apiKeyAuthQuery,
+						hex.EncodeToString(keyHash[:])).Scan(&keyID, &userID, &role, &tenantID)
 					if err == nil {
 						// P1-5: tenant_id 为空直接拒绝，不再回退 DefaultTenantID。
 						// 历史数据中 tenant_id=NULL 的 user 走 DefaultTenantID 会落到默认租户，
@@ -417,6 +413,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 							Perms:    auth.APIKeyPermissions(role),
 						}
 						ctx := auth.WithClaims(r.Context(), claims)
+						markAPIKeyUsed(keyID)
 						next.ServeHTTP(w, r.WithContext(ctx))
 						return
 					}

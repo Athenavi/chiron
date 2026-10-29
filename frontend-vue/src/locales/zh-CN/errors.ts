@@ -26,6 +26,15 @@ export default {
   insufficient_credits: '今日免费额度已用尽且余额不足，请到「计费」页充值',
   insufficient_credits_action: '去充值',
   quota_exceeded_action: '查看用量',
+  // 交易明细导出（P1-1）：两类失败都能由用户自己解决 —— 缩小时间范围
+  export_too_many_rows: '时间范围内的交易记录过多，请缩小时间范围后重试',
+  export_too_many_rows_in: '时间范围内有 {total} 条交易记录，超过单次导出上限 {limit} 条，请缩小时间范围后重试。',
+  export_range_too_wide: '导出的时间范围过大，请缩小范围后重试',
+  export_range_too_wide_in: '导出最多支持 {max_days} 天的时间范围，请缩小范围后重试。',
+  // 发票申请（P1-2）：两条 409 的**行动人不同** —— 前者由申请人处理（去看已有申请），
+  // 后者由管理员处理（多半是同事先审了）。文案必须能分开，否则用户会反复重试。
+  invoice_already_requested: '这笔订单已经提交过开票申请，可在下方列表中查看进度',
+  invoice_already_reviewed: '该申请已被其他管理员处理，请刷新列表查看最新状态',
   // 网络与客户端（后端未给 code 时的兜底）
   timeout: '请求超时，请重试',
   network_error: '网络连接失败，请检查网络后重试',

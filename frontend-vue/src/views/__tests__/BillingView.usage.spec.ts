@@ -204,3 +204,189 @@ describe('BillingView 用量分摊', () => {
     expect(wrapper.text()).not.toContain('仅显示花费最高的')
   })
 })
+
+/**
+ * 导出入口（P1-1 / roadmap §10.2）。
+ *
+ * 钉住三件事，都是"界面不会报错但行为错了"的类型：
+ *  - 请求必须带 `responseType: 'blob'`，否则 axios 会把 CSV 当 JSON 解析并抛错；
+ *  - 导出范围要跟当前用量视图选的天数一致，否则用户导出的不是他刚看到的区间；
+ *  - 导出中按钮要禁用，避免连点并发打同一个重查询。
+ */
+describe('BillingView 交易明细导出', () => {
+  let createObjectURL: ReturnType<typeof vi.fn>
+  let revokeObjectURL: ReturnType<typeof vi.fn>
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    stubApi()
+    apiMocks.listPaymentChannels.mockResolvedValue([{ id: 'alipay', currency: 'CNY' }])
+    createObjectURL = vi.fn(() => 'blob:mock-url')
+    revokeObjectURL = vi.fn()
+    Object.defineProperty(URL, 'createObjectURL', {
+      value: createObjectURL, writable: true, configurable: true,
+    })
+    Object.defineProperty(URL, 'revokeObjectURL', {
+      value: revokeObjectURL, writable: true, configurable: true,
+    })
+    vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {})
+  })
+
+  /** antd 的 Tabs 默认只渲染激活面板，导出按钮在「交易记录」页里，得先切过去 */
+  async function openHistoryTab(wrapper: ReturnType<typeof mount>) {
+    const tab = wrapper.findAll('.ant-tabs-tab').find(el => el.text().includes('交易记录'))
+    if (!tab) throw new Error(`找不到「交易记录」标签页，现有：${wrapper.findAll('.ant-tabs-tab').map(e => e.text()).join(' | ')}`)
+    await tab.trigger('click')
+    await flushPromises()
+  }
+
+  function exportCalls() {
+    return apiMocks.get.mock.calls.filter(c => String(c[0]).startsWith('/v1/billing/transactions.csv'))
+  }
+
+  it('点击导出以 blob 方式请求当前时间范围', async () => {
+    const wrapper = await mountView()
+    await openHistoryTab(wrapper)
+
+    const button = wrapper.find('[data-test="export-transactions"]')
+    expect(button.exists()).toBe(true)
+    await button.trigger('click')
+    await flushPromises()
+
+    const calls = exportCalls()
+    expect(calls).toHaveLength(1)
+    const [url, config] = calls[0]
+    // 默认区间是 30d（与用量视图一致）
+    expect(String(url)).toContain('from=')
+    expect(String(url)).toContain('to=')
+    expect(config?.responseType).toBe('blob')
+    // 真的触发了下载，而不是把内容留在内存里
+    expect(createObjectURL).toHaveBeenCalledTimes(1)
+    expect(revokeObjectURL).toHaveBeenCalledTimes(1)
+  })
+
+  it('先切到 90 天，导出请求的区间也随之变宽', async () => {
+    const wrapper = await mountView()
+    await chooseRadio(wrapper, '90d')
+    await openHistoryTab(wrapper)
+
+    await wrapper.find('[data-test="export-transactions"]').trigger('click')
+    await flushPromises()
+
+    const [url] = exportCalls()[0]
+    // 解析回两端时间，确认跨度确实是 90 天而不是固定 30 天
+    const parsed = new URL(String(url), 'http://localhost')
+    const from = Date.parse(parsed.searchParams.get('from')!)
+    const to = Date.parse(parsed.searchParams.get('to')!)
+    expect((to - from) / 86_400_000).toBe(90)
+  })
+})
+
+/**
+ * 计费页「发票申请」（P1-2）的前端接线。
+ *
+ * 为什么值得钉住：
+ *  - 用户要开票必须先选「哪一笔订单」，而这个列表在后端是**单独端点**
+ *    （`/v1/billing/invoiceable-orders`）—— 交易流水（credit_transactions）里没有 payment_id，
+ *    前端若误从流水里取订单，下拉永远是空的，且不会报错。
+ *  - `amount_cents` 是最小单位（分）。直接当元显示会把 ¥12.34 显示成 ¥1234，
+ *    差 100 倍，而界面上看不出任何异常。
+ *  - 驳回理由必须展示：没有它用户只会反复提交同一笔，每次都被 409 拦下。
+ */
+describe('BillingView 发票申请', () => {
+  const PAID_ORDER = {
+    id: 'pay_0123456789abcdef',
+    amount_cents: 1234,
+    currency: 'CNY',
+    credits: 1000,
+    paid_at: '2026-10-20T10:00:00Z',
+  }
+
+  const REJECTED_INVOICE = {
+    id: 'inv-1',
+    payment_id: 'pay_0123456789abcdef',
+    title: '某某科技有限公司',
+    tax_no: '91310000MA1K3XYZ12',
+    amount_cents: 1234,
+    currency: 'CNY',
+    status: 'rejected',
+    review_note: '抬头与税号不匹配',
+    created_at: '2026-10-21T09:00:00Z',
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks()
+    apiMocks.listPaymentChannels.mockResolvedValue([{ id: 'alipay', currency: 'CNY' }])
+  })
+
+  function stubInvoiceApi(orders: unknown[], invoices: unknown[]) {
+    apiMocks.get.mockImplementation((url: string) => {
+      if (url === '/v1/billing/balance') return Promise.resolve({ data: { data: BALANCE } })
+      if (url === '/v1/billing/usage') return Promise.resolve({ data: { data: DAY_USAGE } })
+      if (url === '/v1/billing/invoiceable-orders') return Promise.resolve({ data: { data: orders } })
+      if (url === '/v1/billing/invoices') return Promise.resolve({ data: { data: invoices } })
+      return Promise.resolve({ data: { data: {} } })
+    })
+  }
+
+  /** antd 的 Tabs 默认只渲染激活面板，发票 tab 得先切过去才会发请求 */
+  async function openInvoiceTab(wrapper: ReturnType<typeof mount>) {
+    const tab = wrapper.findAll('.ant-tabs-tab').find(el => el.text().includes('发票申请'))
+    if (!tab) throw new Error(`找不到「发票申请」标签页，现有：${wrapper.findAll('.ant-tabs-tab').map(e => e.text()).join(' | ')}`)
+    await tab.trigger('click')
+    await flushPromises()
+  }
+
+  function callsTo(path: string) {
+    return apiMocks.get.mock.calls.filter(c => c[0] === path)
+  }
+
+  it('切到发票页才加载，且订单与申请是两个独立请求', async () => {
+    stubInvoiceApi([PAID_ORDER], [])
+    const wrapper = await mountView()
+
+    // 懒加载：没进 tab 之前不该发这两个请求
+    expect(callsTo('/v1/billing/invoiceable-orders')).toHaveLength(0)
+    expect(callsTo('/v1/billing/invoices')).toHaveLength(0)
+
+    await openInvoiceTab(wrapper)
+
+    expect(callsTo('/v1/billing/invoiceable-orders')).toHaveLength(1)
+    expect(callsTo('/v1/billing/invoices')).toHaveLength(1)
+  })
+
+  it('金额按最小单位换算，1234 分显示为 ¥12.34 而不是 ¥1234', async () => {
+    stubInvoiceApi([], [REJECTED_INVOICE])
+    const wrapper = await mountView()
+    await openInvoiceTab(wrapper)
+
+    const text = wrapper.text()
+    expect(text).toContain('¥12.34')
+    expect(text).not.toContain('¥1234')
+  })
+
+  it('驳回的申请仍展示，并带出审核意见', async () => {
+    stubInvoiceApi([], [REJECTED_INVOICE])
+    const wrapper = await mountView()
+    await openInvoiceTab(wrapper)
+
+    const text = wrapper.text()
+    // 状态翻译成中文，不能原样显示 'rejected'
+    expect(text).toContain('已驳回')
+    expect(text).not.toContain('rejected')
+    // 没有驳回理由，用户只能反复提交同一笔
+    expect(text).toContain('抬头与税号不匹配')
+  })
+
+  it('没有可开票订单时给出空态说明，且提交按钮不可点', async () => {
+    stubInvoiceApi([], [])
+    const wrapper = await mountView()
+    await openInvoiceTab(wrapper)
+
+    expect(wrapper.text()).toContain('暂无可开票的已支付订单')
+    const submit = wrapper.find('[data-test="invoice-submit"]')
+    expect(submit.exists()).toBe(true)
+    // 表单空着就不该允许提交：避免一次必然 400 的往返
+    expect(submit.attributes('disabled')).toBeDefined()
+  })
+})

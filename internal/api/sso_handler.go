@@ -484,7 +484,8 @@ func (h *SSOHandler) Callback(w http.ResponseWriter, r *http.Request) {
 		InternalError(w, "sso provider missing tenant_id configuration")
 		return
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, parseTenantID(provider.TenantID), auth.RolePermissions[user.Role])
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, parseTenantID(provider.TenantID),
+		resolveUserPermsDefault(r.Context(), user.ID, user.Role))
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -1345,6 +1346,12 @@ func (h *SSOHandler) provisionAndBind(r *http.Request, provider *ssoProvider, id
 			return nil, err
 		}
 		user.Email, user.Name, user.Role = email, name, role
+		// 新建号的 SSO 用户同样要成员记录（理由同 provisionSmsUser）。
+		// 只在 INSERT 分支补：已存在的账号在它自己建号时就写过。
+		// provider.TenantID 是字符串，与本文件其他地方一致走 parseTenantID。
+		if merr := addTenantMember(ctx, h.db, parseTenantID(provider.TenantID), user.ID, role); merr != nil {
+			slog.Warn("add tenant member failed (sso provision)", "user_id", user.ID, "error", merr)
+		}
 	} else if err != nil {
 		return nil, err
 	}

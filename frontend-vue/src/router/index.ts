@@ -82,6 +82,14 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    // 用户级 API Key 自助（P1-3）：管的是「我自己的账号调网关的凭证」，
+    // 与 admin 的 LLM 供应商密钥池无关。本地模式没有账号体系，故同 billing 一样 cloudOnly。
+    path: '/api-keys',
+    name: 'UserApiKeys',
+    component: () => import('../views/UserApiKeysView.vue'),
+    meta: { requiresAuth: true, cloudOnly: true },
+  },
+  {
     path: '/media',
     name: 'Media',
     component: () => import('../views/MediaView.vue'),
@@ -194,6 +202,13 @@ const routes = [
         name: 'AdminPayment',
         component: () => import('../views/admin/PaymentView.vue'),
         meta: { title: t('billing.payment_config') },
+      },
+      // P1-2：发票审核 —— 与支付渠道同属「钱相关的运营动作」，故相邻。
+      {
+        path: 'invoices',
+        name: 'AdminInvoices',
+        component: () => import('../views/admin/InvoiceReviewView.vue'),
+        meta: { title: t('admin.invoice_review') },
       },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {

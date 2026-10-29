@@ -58,8 +58,13 @@ type Agent struct {
 	Skills    json.RawMessage `json:"skills,omitempty"`
 	Plugins   json.RawMessage `json:"plugins,omitempty"`
 	Workflows json.RawMessage `json:"workflows,omitempty"`
-	CreatedAt time.Time       `json:"created_at"`
-	UpdatedAt time.Time       `json:"updated_at"`
+	// UserID / Visibility 让前端区分「自己的」与「团队共享的」：
+	// 列表会同时返回本租户内别人共享（visibility='tenant'）的 Agent，但那些
+	// 只有所有者能改（update/delete 一律带 user_id 条件）。
+	UserID     string    `json:"user_id,omitempty"`
+	Visibility string    `json:"visibility,omitempty"`
+	CreatedAt  time.Time `json:"created_at"`
+	UpdatedAt  time.Time `json:"updated_at"`
 }
 
 // AgentSession 是一次 Agent 运行的持久化记录。
@@ -162,18 +167,19 @@ func (h *AgentHandler) seedPresetAgents() {
 
 // ── CRUD ──────────────────────────────────────────────────────
 
-// List 返回当前租户的全部 Agent（按创建时间倒序）。
+// List 返回当前租户内「我能用」的全部 Agent（按创建时间倒序）。
+//
+// 可见性口径（C1-5 / roadmap §12.4 第 5 步）：**公开的归团队、私有的归个人**。
+//   - 自己创建的：无论 visibility 是什么都可见；
+//   - 别人创建的：只有 visibility = 'tenant' 才可见。
+//
+// 这与此前 Detail/Get 的判定保持一致（`user_id = $3 OR visibility = 'tenant'`）。
+// 此前 List 只按 `user_id` 过滤，于是「团队共享」在详情里能打开、在列表里却
+// 找不到 —— 用户只能靠记忆中的 id 访问，共享等于半残。
 func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
-	rows, err := db.GlobalDBManager.Query(r.Context(),
-		// 列类型必须逐列对齐：tools / llm_config / skills / plugins / workflows **全部是
-		// json** 列（见 migrations/sql/init.sql 的 agents DDL），缺省值一律 '[]'::json /
-		// '{}'::json。json 与 jsonb 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
-		// "could not convert type jsonb to json"。编译期和单测都看不出来。
-		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json), created_at, updated_at
-		 FROM agents WHERE tenant_id = $1 AND user_id = $2
-		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile（kind='subagent'）不进入对话 Agent 列表
-		 ORDER BY created_at DESC`, claims.TenantID, claims.UserID)
+	rows, err := db.GlobalDBManager.Query(r.Context(), agentListQuery,
+		claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list agents failed")
 		return
@@ -184,7 +190,8 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var a Agent
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Tools, &a.LLMConfig,
-			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.Workflows, &a.CreatedAt, &a.UpdatedAt); err != nil {
+			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.Workflows,
+			&a.UserID, &a.Visibility, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			slog.Warn("scan agent", "error", err)
 			continue
 		}
@@ -192,6 +199,26 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, agents)
 }
+
+// agentListQuery 是 Agent 列表查询。抽成包级常量是因为其中有两条**必须对齐**
+// 的约束（json 列类型、可见性口径），单测需要能直接引用它做断言，而不是在
+// 测试里复制一份 —— 复制出来的语句会随生产漂移，绿得毫无意义。
+//
+// 列类型必须逐列对齐：tools / llm_config / skills / plugins / workflows **全部是
+// json** 列（见 migrations/sql/init.sql 的 agents DDL），缺省值一律 '[]'::json /
+// '{}'::json。json 与 jsonb 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
+// "could not convert type jsonb to json"。编译期和单测都看不出来。
+const agentListQuery = `
+SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''),
+       COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json),
+       max_turns, timeout_seconds, enabled, COALESCE(kb_id,''),
+       COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json),
+       user_id::text, COALESCE(visibility,'private'), created_at, updated_at
+  FROM agents
+ WHERE tenant_id = $1
+   AND (user_id = $2 OR visibility = 'tenant')
+   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile（kind='subagent'）不进入对话 Agent 列表
+ ORDER BY created_at DESC`
 
 // Create 新建一个 Agent（绑定当前租户）。
 func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {

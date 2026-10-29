@@ -50,29 +50,50 @@ func maskPhone(phone string) string {
 // DefaultTenantID is the default tenant ID for single-tenant mode.
 const DefaultTenantID = db.DefaultTenantID
 
+// inviteStore 是 consumeInvite 真正需要的最小能力。
+//
+// 不用 `pgx.Tx` 直接做形参，是为了让"单语句语义"可被单测钉住：仓库没有 pgx 的
+// 测试替身（无 pgxmock/sqlmock），单元测试也不允许连真实数据库。收窄成只有一个
+// 方法的接口后，测试就能用一个假 Tx 断言**只发了一条语句**、且拿到 ErrNoRows 时
+// 映射成哪条文案。`pgx.Tx` 天然满足这个接口，调用点不需要改。
+type inviteStore interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+// consumeInviteQuery 是消费邀请码的唯一语句。
+//
+// 提成常量是为了让测试能断言"校验条件与自增在同一条语句里"—— 一旦有人改回
+// 「先 SELECT 再 UPDATE」，这个常量里就会出现缺失的 `uses < max_uses`，测试立刻红。
+const consumeInviteQuery = `UPDATE tenant_invites SET uses = uses + 1
+	  WHERE code = $1
+	    AND (expires_at IS NULL OR expires_at > NOW())
+	    AND (max_uses = 0 OR uses < max_uses)
+	 RETURNING tenant_id`
+
 // consumeInvite 校验并消费一个租户邀请码，返回其对应的租户 ID（F2）。
 //
 // 校验与 `uses` 自增都在**注册事务内**完成：若注册后续步骤失败并回滚，计数一并
 // 回滚，不会出现"码被消费但用户没建成"。空码由调用方先行处理（走默认租户）。
-func consumeInvite(ctx context.Context, tx pgx.Tx, code string) (int16, error) {
+//
+// **必须是单条语句**。此前是「SELECT 校验 → UPDATE 自增」两步，中间没有行锁、
+// UPDATE 也不带 `uses < max_uses` 条件，于是 `max_uses = 1` 的码能被并发注册用两次：
+// 两个事务同时通过 SELECT（READ COMMITTED 下各自读快照），随后各自 +1。
+//
+// 合并成 `UPDATE ... WHERE ... RETURNING` 后，PostgreSQL 会对目标行加行锁，并在
+// 拿到锁后**重新评估 WHERE**：第二个事务发现 `uses < max_uses` 已不成立，影响 0 行，
+// 于是拿到 `pgx.ErrNoRows` —— 判重与自增成了同一个原子操作。
+func consumeInvite(ctx context.Context, tx inviteStore, code string) (int16, error) {
 	var tenantID int16
-	err := tx.QueryRow(ctx,
-		`SELECT tenant_id FROM tenant_invites
-		  WHERE code = $1
-		    AND (expires_at IS NULL OR expires_at > NOW())
-		    AND (max_uses = 0 OR uses < max_uses)`,
-		code).Scan(&tenantID)
+	// 条件与返回值都在这一句里：不存在 / 已过期 / 已达上限三种情况都表现为
+	// 影响 0 行（ErrNoRows），对外合并成同一条文案 —— 区分它们只会让攻击者
+	// 能枚举出"这个码存在且已用满"。
+	err := tx.QueryRow(ctx, consumeInviteQuery, code).Scan(&tenantID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return 0, errors.New("邀请码无效、已过期或已达使用上限")
 	}
 	if err != nil {
-		slog.Error("consume invite: query failed", "error", err)
+		slog.Error("consume invite: update failed", "error", err)
 		return 0, errors.New("邀请码校验失败")
-	}
-	if _, err := tx.Exec(ctx,
-		`UPDATE tenant_invites SET uses = uses + 1 WHERE code = $1`, code); err != nil {
-		slog.Error("consume invite: increment failed", "error", err)
-		return 0, errors.New("邀请码消费失败")
 	}
 	return tenantID, nil
 }
@@ -245,7 +266,9 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		Unauthorized(w, "user has no tenant binding; contact admin")
 		return
 	}
-	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID, auth.RolePermissions[user.Role])
+	// C1-4：权限优先取 tenant_members（角色真相），查不到回退 auth.RolePermissions。
+	token, err := h.auth.GenerateToken(user.ID, user.Email, user.Role, tenantID,
+		resolveUserPermsDefault(r.Context(), user.ID, user.Role))
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -434,6 +457,18 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 租户成员关系：与 users 的 INSERT 在同一事务内，避免出现「用户已存在但
+	// 没有 tenant_members 记录」的窗口 —— 读取路径一旦切到 tenant_members，
+	// 这类用户会对团队能力凭空消失（roadmap §12.4 灰度第 2 步）。
+	//
+	// 失败即整体回滚而不是只告警：账已建好却没有成员记录，是后续所有团队
+	// 功能的静默失效源，比注册失败更难排查。
+	if err := addTenantMember(ctx, tx, tenantID, userID, role); err != nil {
+		slog.Error("add tenant member failed", "user_id", userID, "tenant", tenantID, "error", err)
+		InternalError(w, "registration failed")
+		return
+	}
+
 	// 鎻愪氦浜嬪姟
 	if err := tx.Commit(ctx); err != nil {
 		slog.Error("commit tx", "error", err)
@@ -449,7 +484,8 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		broadcastUserEmailBloomAdd(tenantStr(tenantID), req.Email)
 	}
 
-	token, err := h.auth.GenerateToken(userID, req.Email, role, tenantID, auth.RolePermissions[role])
+	token, err := h.auth.GenerateToken(userID, req.Email, role, tenantID,
+		resolveUserPermsDefault(r.Context(), userID, role))
 	if err != nil {
 		InternalError(w, "authentication failed")
 		return
@@ -658,7 +694,8 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	// 权限按**当前角色**重新计算，而非沿用旧 token 的快照。
 	newToken, err := h.auth.GenerateToken(
-		oldClaims.UserID, dbEmail, dbRole, dbTenant, auth.RolePermissions[dbRole])
+		oldClaims.UserID, dbEmail, dbRole, dbTenant,
+		resolveUserPermsDefault(r.Context(), oldClaims.UserID, dbRole))
 	if err != nil {
 		Unauthorized(w, "session expired")
 		return

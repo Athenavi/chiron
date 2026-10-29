@@ -432,3 +432,44 @@ export async function getOnboardingFunnel(): Promise<OnboardingFunnel> {
   const { data } = await api.get('/v1/admin/onboarding/funnel')
   return data?.data ?? { entered: 0, finished: 0, finished_rate: 0, steps: [], steps_order: [] }
 }
+
+// ── 发票审核（P1-2 管理端） ──
+
+/** 与后端 invoice_requests.status 的三个取值一致（单向：pending → approved|rejected） */
+export type InvoiceStatus = 'pending' | 'approved' | 'rejected'
+
+export interface AdminInvoice {
+  id: string
+  payment_id: string
+  title: string
+  tax_no: string
+  amount_cents: number
+  currency: string
+  status: InvoiceStatus
+  note?: string
+  review_note?: string
+  reviewed_at?: string
+  created_at?: string
+}
+
+/**
+ * 列出开票申请。
+ *
+ * `status` 不传时后端默认只给待审 —— 审核队列的默认视图就该是"等待我处理的事"。
+ * 要看全量需显式传 `'all'`。
+ */
+export async function listInvoices(status?: InvoiceStatus | 'all'): Promise<AdminInvoice[]> {
+  const { data } = await api.get('/v1/admin/invoices', {
+    params: status ? { status } : undefined,
+  })
+  return data?.data?.invoices ?? []
+}
+
+/** 审核一张申请。status 只接受 approved / rejected；重复审核后端返回 409。 */
+export async function reviewInvoice(
+  id: string,
+  payload: { status: 'approved' | 'rejected'; review_note?: string },
+): Promise<{ id: string; status: InvoiceStatus }> {
+  const { data } = await api.post(`/v1/admin/invoices/${encodeURIComponent(id)}/review`, payload)
+  return data?.data ?? { id, status: payload.status }
+}

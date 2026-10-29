@@ -18,6 +18,7 @@ func registerAdminRoutes(
 	rlMW routeMiddleware,
 	adminHandler *AdminHandler,
 	pythonClient *engine.PythonClient,
+	invoiceHandler *InvoiceHandler,
 ) {
 	// Admin routes (auth + admin permission + rate limit)
 	// P1-3: 所有 admin 路由必须挂限流，防止被劫持的 admin token 无限调用
@@ -30,6 +31,9 @@ func registerAdminRoutes(
 	usersManageMW := RequirePermission(auth.PermUsersManage)
 	adminMux := http.NewServeMux()
 	adminHandler.RegisterRoutes(adminMux)
+	// 发票审核（P1-2 / roadmap §11.4）：注册在 adminMux 内部，才能拿到 {id} 路径参数
+	// （外层 mux 已按 /v1/admin 前缀统一套了 authMW + 权限），用法与 adminHandler 一致。
+	invoiceHandler.RegisterAdminRoutes(adminMux)
 	// Strip the /v1/admin prefix so adminMux patterns (e.g. "GET /metrics") match correctly
 	adminStrip := http.StripPrefix("/v1/admin", adminMux)
 	mux.Handle("GET /v1/admin/metrics", authMW(rlMW(adminReadMW(adminStrip))))
@@ -166,4 +170,21 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/invites", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/invites", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("DELETE /v1/admin/invites/{code}", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// 团队与成员（C1 / roadmap §12.4）。
+	// **不接收请求体里的 tenant_id**：租户一律取当前登录者的（GetTenantID）。
+	// 成员写操作收紧到 PermUsersManage（与 PUT/DELETE /users/{id} 同口径）——
+	// 改别人的角色、把成员踢出去，都属于"用户管理"而不是普通 admin 写操作。
+	adminMux.HandleFunc("GET /tenant/members", adminHandler.ListTenantMembers)
+	adminMux.HandleFunc("PUT /tenant/members/{user_id}", adminHandler.SetTenantMemberRole)
+	adminMux.HandleFunc("DELETE /tenant/members/{user_id}", adminHandler.RemoveTenantMember)
+	adminMux.HandleFunc("GET /tenant/members/invites", adminHandler.ListTenantInvites)
+	adminMux.HandleFunc("POST /tenant/members/invites", adminHandler.CreateTenantInvite)
+	adminMux.HandleFunc("DELETE /tenant/members/invites/{code}", adminHandler.DeleteTenantInvite)
+	mux.Handle("GET /v1/admin/tenant/members", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/tenant/members/{user_id}", authMW(rlMW(usersManageMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/tenant/members/{user_id}", authMW(rlMW(usersManageMW(adminStrip))))
+	mux.Handle("GET /v1/admin/tenant/members/invites", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/tenant/members/invites", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/tenant/members/invites/{code}", authMW(rlMW(adminWriteMW(adminStrip))))
 }

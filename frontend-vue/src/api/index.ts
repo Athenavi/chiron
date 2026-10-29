@@ -224,6 +224,14 @@ export interface Agent {
   plugins?: string[]
   /** 工作台绑定：工作流 id 数组（派发时按选择顺序执行，多选即流水线） */
   workflows?: string[]
+  /**
+   * 归属人。列表接口会同时返回本租户内别人共享（visibility='tenant'）的 Agent，
+   * 靠这个字段区分「我的」与「团队共享的」—— 只有所有者能改/删（后端 update、
+   * delete 都带 user_id 条件，非属主一律 403）。
+   */
+  user_id?: string
+  /** 可见性：'private' 仅自己 / 'tenant' 本租户共享 */
+  visibility?: 'private' | 'tenant'
   created_at: string
   updated_at: string
 }

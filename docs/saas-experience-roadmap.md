@@ -267,19 +267,20 @@ C1 既然要复用邀请，就得先修这条：改成一条 `UPDATE ... SET use
 **现状（已核实）**：`tenant_members` 不存在；`users.tenant_id smallint REFERENCES tenants`；`tenants(id smallserial, name, created_at, status)`；`ent_roles(id, tenant_id, name, display_name, is_builtin, permissions varchar(255))`；注册时会按邀请码决定 tenant，并把**全站第一个用户**设为 `owner`。
 
 **建议的最小切口**（与 §6 决策 2 一致）：
-1. 新表 `tenant_members(tenant_id smallint, user_id varchar(36), role varchar(16), joined_at, PRIMARY KEY (tenant_id, user_id))`，`role ∈ owner/admin/member`。
-2. 注册事务内**同时**写 `users.tenant_id` 与 `tenant_members`（两条 INSERT 在同一 tx），保证两者不会不一致；存量用户需要一条回填迁移（`INSERT ... SELECT tenant_id, id, CASE WHEN role='owner' THEN 'owner' ELSE 'member' END FROM users ON CONFLICT DO NOTHING`）。
+1. 新表 `tenant_members(tenant_id smallint REFERENCES tenants(id), user_id varchar(36) REFERENCES users(id), role_id varchar(36) REFERENCES ent_roles(id), joined_at timestamptz DEFAULT now(), PRIMARY KEY (tenant_id, user_id))`。`role_id` 指向 `ent_roles`（产品选定复用），**不再**存 `role varchar(16)`。另加 **`UNIQUE (user_id)`** 来落实「一人一租户」—— 靠数据库约束，而不是靠代码自觉。
+2. 注册事务内**同时**写 `users.tenant_id` 与 `tenant_members`（两条 INSERT 在同一 tx），保证两者不会不一致；存量用户需要一条回填迁移。因为角色改成了外键，回填要先把 `owner/admin/member` 三条内置角色建出来（每个 tenant 一份，`ON CONFLICT DO NOTHING`），再按 `users.role = 'owner'` 映射到 owner 角色、其余映射到 member。
 3. 先修 §10.1 ② 的邀请超发，再接"邀请 → 成员"。
 4. 权限判定：**优先读 `tenant_members`**，`users.tenant_id` 保留为兼容字段（不删、不改类型）。这样灰度期两套数据都在，出问题可回退。
 
-**要先回答的三个问题**（只有产品能定）：
-- 一个用户能否属于多个 tenant？（建议一期**不能**，否则 `users.tenant_id` 单值字段立刻失真）
-- 成员的角色与 `ent_roles` 是什么关系？（建议一期团队角色只用于**成员管理**，不接 `ent_roles`；后者是功能权限点，混在一起会让"谁是管理员"出现两个真相）
-- 移除成员时，他创建的会话/知识库归谁？（建议一期**保留归属、禁止访问**，不做资产转移 —— 转移是另一套状态机）
+**三个问题已由产品答复（2026-10-29）**，答案与派生约束见 §12.4：
+
+- 一个用户能否属于多个 tenant → **不能**，`tenant_members` 加 `UNIQUE (user_id)`；
+- 成员角色与 `ent_roles` 的关系 → **直接复用**，`tenant_members.role_id` 外键指向 `ent_roles(id)`；
+- 移除成员后资产归属 → **公开资产归团队、个人资产归个人**，所以不需要资产转移状态机，移除只切断访问。
 
 **验收**：同 tenant 下多用户可见共享资源；角色可分配；邀请可撤销且过期失效；移除成员后其 API key 与登录会话同时失效。
 
-**落地形态（按现有迁移规范）**：新建 `migrations/versions/0006_tenant_members.py`（`Revises: 0005_user_onboarding`），与 `0004_usage_events` / `0005_user_onboarding` 同级。灰度顺序是**先加表与回填、后切读路径**：① 建表 + 从 `users` 回填（幂等，`ON CONFLICT DO NOTHING`）；② 注册事务开始双写；③ 权限判定改读 `tenant_members`；④ 观察一轮后再考虑是否纳入更广的资源隔离。前三步任一步出问题都能靠"继续读 `users.tenant_id`"回退，不会出现两套数据都不完整的窗口。
+**落地形态（按现有迁移规范）**：新建 `migrations/versions/0008_tenant_members.py`（`Revises: 0007_invoice_requests`）。① 本节原先写的是 `0006_tenant_members.py` / `Revises: 0005_user_onboarding`，那是 T2/T3 尚未占用迁移号时的推算；截至 2026-10-29 迁移链已是 `0001 → 0007`（head = `0007_invoice_requests`），故以 §11.5 的编号为准。灰度顺序是**先加表与回填、后切读路径**：① 建表 + 从 `users` 回填（幂等，`ON CONFLICT DO NOTHING`）；② 注册事务开始双写；③ 权限判定改读 `tenant_members`；④ 观察一轮后再考虑是否纳入更广的资源隔离。前三步任一步出问题都能靠"继续读 `users.tenant_id`"回退，不会出现两套数据都不完整的窗口。
 
 ### 10.6 建议的执行顺序（修订）
 
@@ -291,3 +292,240 @@ C1 既然要复用邀请，就得先修这条：改成一条 `UPDATE ... SET use
 
 **不建议**把 C1 和 B 组混在一批做：C1 动的是多租户隔离地基，一旦设计错，共享资源全部要返工。
 
+## 11. B1 交付后的复核与后续开发任务（2026-10-29）
+
+B1 已实现并通过门禁（后端 build/vet/test、前端 vue-tsc + i18n + vitest、源码编码检查）。本节记录**实际交付与 §10.2 规划的偏差**，以及接下来四项任务的拆解。口径同 §0：没读到实现的标「待确认」。
+
+### 11.1 B1 实际交付 vs §10.2 规划（已核实）
+
+| 规划项 | 实际实现 | 差异与理由 |
+|---|---|---|
+| 异步生成 + 下载链接 | **同步流式**（`http.Flusher`，逐行写出） | 仓库没有可复用的导出队列（§9 B1 已核实）；5 万行上限下同步足够，超时再评估异步 |
+| 5 万行上限 | `exportMaxRows = 50000`，`>` 判定 | 恰好 5 万行可导，边界已单测钉住 |
+| 无跨度限制 | 新增 `exportMaxSpanDays = 366` | 防止"5 年范围但每月只有几条"绕过行数上限做长扫描 |
+| 无错误码 | 新增 `export_too_many_rows` / `export_range_too_wide` + `params` | 否则中文用户只能看到英文原文，且不知道"多宽算宽" |
+| 字段 5 个 | 一致：时间(UTC)/事由/金额/余额快照/关联轮次 | — |
+| 未提过滤口径 | 排除 `reason <> 'free_chat'` | 与 `GetHistory` 同口径，否则导出会多出用户界面上看不到的行 |
+| 未提公式注入 | `csvSafeText` 中和 `=`/`+`/`-`/`@` 前缀 | 成本近乎为零，先按 §10.2 的风险提示做了 |
+
+**仍在的三条局限**（不要当成闭环）：
+
+1. 两条导出 SQL 只做了字符串断言，**未在真实 PostgreSQL 上执行过** —— 与 A2 同一个缺口，上线前需一次真库冒烟，重点看 5 万行时 `count(*)` 的耗时。
+2. 前端导出范围**复用用量视图的 7/30/90 天**，用户无法自定义区间；后端其实接受任意 RFC3339。等有"按自然月对账"的真实诉求再放开，避免再做一套日期选择器（仓库无此依赖）。
+3. `credit_transactions.created_at` 仍是 `timestamp`（无时区），导出一律按 UTC 解释并写在表头。跨时区用户看到的时间会与自己本地时间差几小时 —— 根源是 D 组 L4-3，不是导出引入的。
+
+### 11.2 任务 T1：邀请码并发超发修复（最小、无依赖、存量 bug）
+
+**现状（已核实）**：`internal/api/auth.go:57` 的 `consumeInvite` 是「先 SELECT 校验 `max_uses`/`expires_at` → 再 `UPDATE ... SET uses = uses + 1`」。两句之间无行锁，UPDATE 也不带 `uses < max_uses` 条件：
+- 两个并发注册同时通过 SELECT，`max_uses=1` 的邀请码能被消费两次；
+- `READ COMMITTED` 下 SELECT 读的是快照，校验与自增不是原子操作。
+
+**做法**：合并成一条语句，用影响行数判成败：
+
+```sql
+UPDATE tenant_invites SET uses = uses + 1
+ WHERE code = $1
+   AND (expires_at IS NULL OR expires_at > NOW())
+   AND (max_uses = 0 OR uses < max_uses)
+ RETURNING tenant_id
+```
+
+`pgx.ErrNoRows` 分别落到"邀请码无效/已过期/已达上限"的既有文案（对外文案不变，避免前端文案跟着改）。
+
+**验收**：并发 N 个 goroutine 抢同一个 `max_uses=1` 的邀请码，**恰好一个**成功；`max_uses=0`（不限次）仍可无限次使用；过期码仍被拒。
+
+**为什么排第一**：它本身很小，且是 C1（团队邀请）的前置 —— 邀请一旦用于真正的团队扩容，"一个码被用两次"就是越权。
+
+### 11.3 任务 T2：B3 用户级 API Key 自助
+
+**现状（已核实，比 §10.4 更细）**：
+- `api_keys(id, user_id, name, key_hash, last_used_at, expires_at, created_at, revoked)` 已存在，且已在鉴权链路（`X-API-Key` → `sha256` → `JOIN users`，校验 `revoked`/`expires_at`/`tenant_id` 非空）。
+- 但全仓**没有任何写路径**：无 `INSERT INTO api_keys`，也没有任何地方更新 `last_used_at` —— 用户目前只能手工插表。
+- 表上**只有主键与外键，没有 `key_hash` 索引**：鉴权那条 `WHERE ak.key_hash = $1` 是全表扫描，key 数量一多就是每个请求一次全扫。
+
+**做法**：
+1. 迁移 `0006_api_keys_selfservice.py`：`CREATE UNIQUE INDEX ... ON api_keys (key_hash) WHERE revoked = false`（部分唯一索引 —— 轮换后旧行 `revoked=true`，不参与唯一性，也天然防止"两个有效 key 同 hash"）。
+2. 新增用户侧路由 `/v1/api-keys`（`authMW(rlMW(...))`，**不带** `adminReadMW`），CRUD：列表 / 创建 / 吊销。轮换 = 吊销旧的 + 创建新的（不做原地改 hash，避免并发下旧 key 短暂双活）。
+3. 生成：`sk-` + 32 字节随机，**明文只在创建响应里返回一次**，库里只存 `sha256`（与 middleware 完全一致，改算法会让存量 key 全部失效）。
+4. 列表只回 `id/name/created_at/expires_at/revoked`，**永不回 `key_hash`**。
+5. 所有查询带 `WHERE user_id = $currentUser`；他人 key 返回 **404 而非 403**（403 会泄漏 id 存在性）。
+6. 创建前先拦 `tenant_id IS NULL` 的用户：middleware 会直接拒绝这类 token，否则用户会拿到"key 有效但用不了"。
+
+**要决定的一处**：`last_used_at` 目前从不写入。一期建议**不在列表展示它**（展示永远是空值，比不展示更让人困惑）；若确实要，按"每 key 最多每分钟更新一次"节流，不能每个请求都 UPDATE。
+
+**验收**：用户可自助创建/吊销；新 key 能通过 `X-API-Key` 调通一个真实接口；访问他人 key 返回 404；`tenant_id` 为空的用户创建时得到明确提示而不是静默失败。
+
+### 11.4 任务 T3：B2 发票申请（工单式）
+
+**现状（已核实）**：`payments(id, user_id, channel, credits, amount_cents, currency, status, qr_code, provider_order_id, trade_no, created_at, paid_at, expired_at)` 已存在，`status ∈ pending/paid/failed`（`internal/billing/payments.go:22`），有 `idx_payments_user`；`invoice` 全仓零实现（仅 `internal/auth/mail_test.go` 的附件测试文件名叫 invoice.pdf，无关）。
+
+**做法**：
+1. 迁移 `0007_invoice_requests.py`：`invoice_requests(id, user_id, payment_id, title, tax_no, amount_cents, status, reviewed_by, reviewed_at, created_at, note)`，`status ∈ pending/approved/rejected`，`UNIQUE (payment_id)`。
+2. 重复拦截**靠唯一索引**判 `23505`，不先查后插（与注册邮箱冲突同款做法）。
+3. 只允许对 `payments.status = 'paid'` 且 `user_id` 匹配的支付开票 —— 用一条 `INSERT ... SELECT ... FROM payments WHERE ...` 保证"校验与写入"在同一语句里，不给并发留窗口。
+4. 管理端审核走 `adminWriteMW`，状态只允许 `pending → approved|rejected` 单向流转。
+
+**一期口径（按 §10.3 建议，需产品确认）**：只支持**全额开票 + 不可撤销**；退款后已开票的处理留到有真实诉求时再做。
+
+**验收**：对同一 `payment_id` 二次提交返回 409；未支付的订单不能开票；审核后用户能看到状态与金额。
+
+### 11.5 任务 T4：C1 团队与成员（前置 T1，先评审）
+
+**现状（已核实）**：`tenant_members` / `invoice_requests` 均不存在（全仓仅 roadmap 提及）；`tenant_invites` 已存在并有管理端 CRUD（`/v1/admin/invites`）；`ent_roles.permissions` 是 `varchar(255)` 而 `rbac.go` 注释写 `text[]`（§10.1 ③）。
+
+**前置**：T1 必须先完成。**开工前仍需产品回答 §10.5 的三个问题**（多 tenant / 角色与 `ent_roles` 的关系 / 移除成员后资产归属）。
+
+**灰度四步不变**（§10.5）：建表 + 回填 → 注册双写 → 切读路径 → 再评估资源隔离。迁移号 `0008_tenant_members.py`，`Revises: 0007_invoice_requests`（T3 未做则 `0006`）。
+
+### 11.6 建议顺序
+
+1. **T1**（存量 bug，半天内，C1 的前置）
+2. **T2**（无依赖，价值取决于是否有 API 用户；顺手补上 `key_hash` 索引，鉴权性能也跟着修）
+3. **T3**（需产品先定"部分开票/退款"口径，否则只做全额版）
+4. **T4**（单独立项评审，三个问题不定就不开工）
+
+**不建议**并行做：T2 与 T1 可以穿插，但 T4 必须单独一批 —— 它动多租户隔离地基。另：B1 的三条局限（真库冒烟、自定义区间、时区）建议在 T2 开工前先做一次真库冒烟，成本低且能顺带验证 A2 的窗口函数 SQL。
+
+## 12. T3 交付后的进度盘点与下一批任务（2026-10-29 核实）
+
+> 本节只记录**已核实的事实**与**可独立验收的任务**。所有改动仍在工作区未提交（`HEAD` = `74fa7fc`，T1/T2/T3 全部为未提交变更）。
+
+### 12.1 进度盘点（已核实）
+
+| 任务 | 后端 | 前端 | 迁移 | 状态 |
+|---|---|---|---|---|
+| T1 邀请码并发超发 | `consumeInviteQuery` 单条 `UPDATE ... RETURNING`（`auth.go:67`），窄接口 `inviteStore` | — | 无 | 代码完成；**并发未在真库验证**（`auth_invite_live_test.go` 需 `CHIRON_TEST_POSTGRES_DSN`，本机 docker 未运行 → skip） |
+| T2 用户级 API Key | `GET/POST/DELETE /v1/api-keys`（`api_keys_handler.go:104-106`），越权 404、明文只回一次、每用户上限 50 | 用户侧 `views/UserApiKeysView.vue` + `/api-keys` 路由 + 账号菜单入口（T6 新建，**不是**从 admin 挪来的，见 §12.3） | `0006_api_keys_key_hash_index`（`key_hash` 部分唯一索引） | 前后端完成，P1-3 验收已闭环；`last_used_at` 已按每 key 每分钟一次节流写入 |
+| T3 发票申请 | 用户 `GET/POST /v1/billing/invoices` + `GET /v1/billing/invoiceable-orders`；管理端 `GET /invoices`、`POST /invoices/{id}/review` | 用户侧 `BillingView` 发票 tab；管理端 `InvoiceReviewView` + `/admin/invoices` + 侧栏入口 | `0007_invoice_requests` | 前后端完成，9 条新用例全绿；**`INSERT ... SELECT` 原子性未在真库验证** |
+
+迁移链现状：`0001 → 0007`，head = `0007_invoice_requests`。**下一个可用号是 `0008`**。
+
+### 12.2 任务 T5：真库冒烟（最高优先，一次成本覆盖六处缺口）
+
+**为什么排第一**：目前累计 **6 处 SQL 只做过字符串断言，从未在真实 PostgreSQL 上执行**。每新增一个功能都在扩大这个池子，而它们都是"单测全绿、上线才炸"的类型：
+
+1. B1 两条导出 SQL（`exportCountQuery` / `exportRowsQuery`，含 5 万行时 `count(*)` 的耗时）
+2. A2 用量明细的窗口函数 + `COUNT(*) OVER ()` 求 `truncated`
+3. `invoice_requests` 建表 + `INSERT ... SELECT ... FROM payments WHERE status='paid'`
+4. `consumeInvite` 的并发（本地已有 live 用例，缺的是能跑的环境）
+5. **T6 新增**：`AuthMiddleware` 里补选 `ak.id` 的那条 JOIN（`SELECT ak.id, u.id, u.role, ...`）—— 单测只校验了字符串包含关系，列数/扫描顺序错了要真库才暴露
+6. **T6 新增**：`UPDATE api_keys SET last_used_at = now() WHERE id = $1`（节流后每 key 每分钟一次）
+
+**做法**：起一个临时 PostgreSQL（docker 或本机实例），设 `CHIRON_TEST_POSTGRES_DSN` 后跑 `go test ./internal/... -run 'Live'`，再补一条只跑 A2/B1 两条 SQL 的冒烟用例。
+
+**验收**：4 项全部从 skip 变为真实通过；5 万行导出的 `count(*)` 耗时有具体数字。
+
+**阻塞**：本机 docker daemon 未运行（`npipe:////./pipe/docker_engine` 找不到）。需要一台可达的 PG，或启动 Docker。
+
+#### 12.2.1 用例已预置（2026-10-29，**只差环境，不是已完成**）
+
+把"起库之后才有活干"的部分先做掉了：新建 `internal/api/sql_smoke_live_test.go`，覆盖上表 ①②③⑤⑥ 五处（④ 复用既有 `auth_invite_live_test.go`，不重复实现）。
+
+一条关键做法：这些 SQL 原先散在 handler 里是内联字符串，测试若照抄一份，两边漂移就回到"测试绿、线上炸"。因此先把 7 条提成包级常量再让用例直接跑**生产语句本身**：
+
+| 常量 | 所在文件 | 覆盖缺口 |
+|---|---|---|
+| `exportCountQuery` / `exportRowsQuery` | `billing_export.go`（原已提） | ① |
+| `usageBreakdownQuery` | `billing_handler.go` | ② |
+| `applyInvoiceQuery` | `invoice_handler.go`（原已提） | ③ |
+| `apiKeyAuthQuery` | `api_keys_handler.go` | ⑤ |
+| `apiKeyMarkUsedQuery` | `api_keys_handler.go` | ⑥ |
+| `apiKeysListQuery` / `apiKeyCountActiveQuery` / `apiKeyInsertQuery` / `apiKeyRevokeQuery` | `api_keys_handler.go` | T2 契约 |
+
+用例不止验"语法能跑"，还钉住了三个只有真库才暴露的行为：
+
+1. **A2 截断后总量仍准确**：造 150 个 model 桶（超过 `usageBreakdownLimit = 100`），断言 `grand_input` 是全部 150 桶之和 11325，而**不是**返回的 100 行之和 5050。若有人把 `SUM(...) OVER ()` 改成"把返回行相加"，用户对账就会少算 —— 这个错误在任何"数据量小于 100"的测试里都看不出来。
+2. **导出的 `reason <> 'free_chat'` 会静默排除 NULL 行**：`credit_transactions.reason` 可为 NULL，该条件对 NULL 求值为 UNKNOWN。用例插入 4 条流水（2 条 chat / 1 条 free_chat / 1 条 NULL）断言 count = 2。当前实现即如此；将来若认为这些流水也该进账单，需改成 `COALESCE(reason, '') <> 'free_chat'`，届时这条断言会提醒。
+3. **`last_used_at` 的时区隐式转换**：`init.sql` 里该列是 `timestamp`（无时区），回写却用 `now()`（timestamptz）。断言回写后与当前时间偏差不超过 1 小时，否则视为时区转换出错。
+
+**当前状态：本机跑全部 `skip`（无 DSN），但 CI 会真跑。** `.github/workflows/ci.yml` 的 `integration` job（:274-331）用 `pgvector/pgvector:pg16` service 起真库、`alembic upgrade head` 建 schema，再以 `go test ... -run 'Live|Diag'` 执行 —— 注入的正是 `CHIRON_TEST_POSTGRES_DSN`（:304），所以本文件这 4 条用例会在那里真正跑起来。
+
+因此**能保证的只有"编译通过 + 无 DSN 时正确 skip"**；断言逻辑本身仍未在本机验证过，要看 CI 的 `Real-stack integration` 结果才能确认缺口是否关闭。**推 CI 时优先看这个 job，而不是 `go` job** —— 后者没有 DSN，`TestLive*` 一律 skip，绿了也不说明这些 SQL 跑通了。
+
+**起库之后直接执行**：
+
+```bash
+docker run -d --name chiron-pg -e POSTGRES_PASSWORD=chiron -p 5433:5432 postgres:16
+export CHIRON_TEST_POSTGRES_DSN="postgres://postgres:chiron@localhost:5433/postgres?sslmode=disable"
+python -m alembic upgrade head   # 把 0001..0007 全部应用，缺表会让用例直接报 undefined_table
+GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
+```
+
+还要单独补一项本文件未覆盖的指标：**5 万行导出的 `count(*)` 耗时**（缺口 ① 的后半句）。它需要造数，写进单测会让 CI 变慢，建议起库后手工跑一次 `EXPLAIN ANALYZE` 并记下数字。
+
+### 12.3 任务 T6：T2 前端闭环 + `last_used_at` 写入（**已完成**）
+
+**先更正一条此前的错误判断**：§12.1 曾写「`ApiKeysView.vue` 仍在 `views/admin/`，需挪到用户侧」。**这个是错的**，实读后确认两件事是不同功能：
+
+| | `views/admin/ApiKeysView.vue` | `views/UserApiKeysView.vue`（T6 新建） |
+|---|---|---|
+| 接口 | `/v1/admin/api-keys` | `/v1/api-keys` |
+| 字段 | `provider` / `key` / `base_url` / `weight` / `remark` | `name` / `created_at` / `last_used_at` / `revoked` |
+| 语义 | 平台运营配置的 **LLM 供应商密钥池** | 用户自己账号调网关的**凭证** |
+| 权限 | 需 `admin:read`/`admin:write` | 任意登录用户，后端用 `user_id = $1` 隔离 |
+
+也就是说：**用户级 Key 的前端从未存在过**，T6 是从零新建，而不是"搬文件"。admin 页保持原样不动 —— 它是运营工具，不该挪。
+
+**实际交付**：
+1. `src/api/userApiKeys.ts` —— `listUserApiKeys` / `createUserApiKey` / `revokeUserApiKey`，返回 `data?.data`。
+2. `src/views/UserApiKeysView.vue` —— 列表 / 创建 / 吊销。两条约束决定了它长什么样：
+   - **明文只出现一次**：创建成功后弹窗不关、停在"请立刻复制"形态；没复制就点关闭要二次确认（关掉等于永久丢失，只能吊销重建）。
+   - **已吊销的 key 保留展示**：否则用户以为自己从没创建过，会重复创建。
+3. `router/index.ts` 挂 `/api-keys`（`requiresAuth` + `cloudOnly`，本地模式无账号体系）；`AppLayout.vue` 加入**账号下拉菜单**而非主导航 —— 它是账号凭证，不是每天切换的工作台。
+4. `settings` 域补 25 个 `user_api_key_*` 键，zh-CN → en-US → ar 三语齐备。
+5. **`last_used_at` 节流写入**：`internal/api/apikey_usage.go` 的 `apiKeyUsageTracker`，同一 key 每分钟最多写一次；`AuthMiddleware` 的鉴权 SQL 补选 `ak.id`，成功后调 `markAPIKeyUsed`。刻意选了**同步**而非 `go func()`：节流后每 key 每分钟一次，代价相对整个请求可忽略，而异步要额外处理"请求已返回、写入还在跑"的生命周期。写失败只告警 —— `last_used_at` 是运维信息，不能因此让合法请求失败。
+
+**验收**：✅ 普通用户不经过 admin 路由即可创建/吊销；✅ `last_used_at` 有值且不随每个请求刷新（7 条节流用例覆盖：间隔内只写一次、满间隔重新允许、多 key 隔离、空 id 拒绝、上限清理、50 并发同 key 只 1 次写库）；✅ 五项门禁全绿（`go test ./internal/api` 2.09s / vitest 767 passed / vue-tsc / check-i18n-keys / 编码检查）。
+
+**遗留**：`SELECT ak.id, ...` 与 `UPDATE api_keys SET last_used_at` 两处 SQL 仍只做过字符串级校验，**未在真实 PG 上执行** —— 归入 §12.2 的 T5。
+
+### 12.4 任务 T7：C1 团队与成员（**三个问题已答，可开工**）
+
+**产品答复（2026-10-29）**：
+
+| 问题 | 答复 | 派生约束 |
+|---|---|---|
+| 一个用户能否属于多个 tenant | **不能**，一期一人一 tenant | `tenant_members` 加 `UNIQUE (user_id)` —— 靠数据库约束而不是代码自觉；不建租户切换器；`users.tenant_id` 继续单值且不失真 |
+| 成员角色与 `ent_roles` 的关系 | **直接复用 `ent_roles`** | `tenant_members.role_id` 外键指向 `ent_roles(id)`，不存 `role varchar(16)`；必须补内置角色种子 —— 现状 `ent_roles` **没有任何种子**，只能靠管理端手工 POST 建（`ent_identity_handler.go:430`） |
+| 移除成员后资产归属 | **公开资产归团队，个人资产归个人** | 不需要资产转移状态机。资产已有 `visibility` 列（`knowledge_bases.visibility DEFAULT 'private' NOT NULL`、`agents.visibility`），移除成员 = 切断其访问；私有资产随人走、公开资产留在团队 |
+
+**复用 `ent_roles` 的强制成本**（本轮与 §10.5 原建议相反的一处，必须写清代价）：原建议是团队角色只用于成员管理、不接 `ent_roles`，理由是「谁是管理员」会出现两个真相。产品选择复用后，该风险只能靠规则消掉：
+
+1. `tenant_members.role_id` 是**唯一**的租户内角色真相；`users.role`（`owner`/`user`）只保留系统级语义（全站首用户），不再参与租户内判定。
+2. 内置 `owner/admin/member` 由迁移**按 tenant 播种**（`ON CONFLICT DO NOTHING`），权限点写进 `ent_roles.permissions`，使 `rbac.go` 的 `LoadEffectivePerms` 能自然聚合，而不是另起一套权限判断。
+
+**顺带更正一处长期悬置的事实**：本节原先写「`ent_roles.permissions` 在 `init.sql:450` 是 `varchar(255)`，而 `rbac.go` 按 `text[]` 用，需真库确认」。核实结果：`init.sql` 是历史遗留、已不被执行（README:174-181 明确「单一权威基线 + 增量迁移」，基线 DDL 取自 `pg_dump --schema-only`）；权威基线 `0001_authoritative_baseline.py:328` 就是 `permissions text[] DEFAULT ARRAY[]::text[]`，且**没有任何后续迁移改过它**（`rg permissions migrations/versions/*.py` 全仓仅此一处）。**所以 `rbac.go` 本来就对，这一项不需要真库即可结掉，也不必再挂到 T5。**
+
+**任务拆解**（`0008_tenant_members.py`，`Revises: 0007_invoice_requests`），灰度顺序仍是「先加表与回填、后切读路径」：
+
+1. **迁移**：建 `tenant_members`（PK `(tenant_id, user_id)`、`UNIQUE (user_id)`、`role_id` 外键、`joined_at timestamptz DEFAULT now()`）；播种内置角色；从 `users` 回填（`role='owner'` → owner 角色，其余 → member）。全部 `ON CONFLICT DO NOTHING`，保证可重复执行。
+2. **注册双写**：在 `auth.go` 已有事务内追加一条 `INSERT INTO tenant_members`，与 `users` 的 INSERT 同 tx，不留「用户已存在但无成员记录」的窗口。
+3. **成员管理 API**：成员列表 / 邀请 / 移除（邀请复用已有 SMTP 与 `consumeInvite`）；移除时同时吊销该用户的 API key 与登录会话。
+4. **切读路径**：权限判定优先读 `tenant_members`，`users.tenant_id` 保留为兼容字段（不删、不改类型）。任何一步出问题都能退回读 `users.tenant_id`。
+5. **资产可见性**：按 `visibility` 列落实「公开归团队 / 私有归个人」，不做转移。
+
+**排序说明**：三个问题已不再是阻塞项；C1 仍排在 T5 之后，理由从「语义未定」变成「每加一条 SQL 都在扩大待验池」，见 §12.6。
+
+### 12.5 D 组技术债（都要外部条件，排最后）
+
+| 项 | 缺什么 | 能否现在做 |
+|---|---|---|
+| L4-3 `timestamp` → `timestamptz` | **生产时区语义抽样确认** + 可达 PG；142 列、72 表，且同一列可能混两种语义 | 否 |
+| S5-(e) 沙箱部署形态 | 独立容器环境（无 docker socket、仅内网）+ 共享工作区卷 | 否 |
+| L3-4 巨型文件拆分 | 无功能收益，剩尾批 | 可以，但优先级最低 |
+
+### 12.6 建议顺序（修订，T6 交付后）
+
+1. ~~**T6 T2 前端闭环**~~ —— **已完成**（§12.3）。P1-3 验收已闭环。
+2. **T5 真库冒烟** —— **现在唯一能清风险池的动作**，缺口已增至 6 处（含 T6 新增两条 SQL）。T7 之前必须清掉。
+3. **T7 C1** —— **三个产品问题答完再开工**，否则必然返工
+4. **L3-4 尾批** —— 有空再说
+
+**当前实际状态（2026-10-29）**：T1/T2/T3/T6 全部代码完成，全工作区改动**均未提交**（`HEAD` 仍是 `74fa7fc`）。剩下的两条线状态已经不同：
+
+- **T5** 冒烟用例已预置（§12.2.1），本机因无 Docker/PG 只能 skip。**但不必等本机环境**：`.github/workflows/ci.yml` 的 `integration` job 会起真 PG 并以 `-run 'Live|Diag'` 执行，注入 `CHIRON_TEST_POSTGRES_DSN`。所以 T5 的剩余工作是**把改动推 CI 并看那个 job 的结果**，而不是在本机装数据库。5 万行导出的 `count(*)` 耗时仍需手工 `EXPLAIN ANALYZE` 补一次。
+- **T7** 三个产品问题**已全部答复**（§12.4），不再是阻塞项。它现在纯粹排在 T5 之后，理由从「语义未定」变成「每加一条 SQL 都在扩大待验池」。
+
+**因此「在 T5 之前不开新功能」这条约束依然成立**，但性质变了：不是「无法开工」，而是**主动排队**。一旦 CI 的 `Real-stack integration` 把 6 处缺口跑绿，C1 就可以按 §12.4 的五步直接开工。
+
+**不要做的事**：不要在 T5 之前再加新的 SQL 功能；C1 开工时不要把 `tenant_members` 做成「再加一个 role 字符串字段」—— 产品已定复用 `ent_roles`，绕过它会立刻出现两套角色真相（详见 §12.4 的「强制成本」）。

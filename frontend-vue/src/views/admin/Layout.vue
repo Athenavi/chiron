@@ -37,6 +37,7 @@ import {
   IdcardOutlined,
   WalletOutlined,
   PayCircleOutlined,
+  ReconciliationOutlined,
   ControlOutlined,
   
   FileTextOutlined,
@@ -128,6 +129,8 @@ const menuGroups = computed(() => [
       { key: '/admin/usage-catalog', label: t('admin.usage_catalog'), icon: () => h(BarChartOutlined) },
       // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
       { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
+      // P1-2：发票审核 —— 用户提交的开票申请在这里处理，与支付渠道相邻
+      { key: '/admin/invoices', label: t('admin.invoice_review'), icon: () => h(ReconciliationOutlined) },
       { key: '/admin/api-docs', label: t('knowledge.api_documentation'), icon: () => h(FileTextOutlined) },
     ],
   },
