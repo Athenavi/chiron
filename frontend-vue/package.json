@@ -36,7 +36,7 @@
   },
   "dependencies": {
     "@ant-design/icons-vue": "^7.0.1",
-    "@file-viewer/preset-all": "^2.2.9",
+    "@file-viewer/preset-all": "^3.2.2",
     "@file-viewer/vue3": "^2.2.9",
     "@fontsource-variable/geist": "^5.3.0",
     "@types/markdown-it": "^14.1.2",
