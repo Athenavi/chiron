@@ -473,3 +473,68 @@ export async function reviewInvoice(
   const { data } = await api.post(`/v1/admin/invoices/${encodeURIComponent(id)}/review`, payload)
   return data?.data ?? { id, status: payload.status }
 }
+
+// ── 套餐目录（P2-2c 管理端） ──
+
+/**
+ * 后台可见的套餐目录项。**含已下架**（enabled=false）——
+ * 与用户侧 `GET /v1/billing/packages` 的区别正在于此：用户只看得到在卖的。
+ */
+export interface AdminPackage {
+  id: string
+  code: string
+  name: string
+  credits: number
+  price_cents: number
+  currency: string
+  duration_days: number
+  /** 空数组 = 不限制模型 */
+  allowed_models: string[]
+  enabled: boolean
+  sort_order: number
+}
+
+/** 新建/更新套餐的请求体。`code` 只在新建时生效（后端拒绝改 code）。 */
+export interface AdminPackageInput {
+  code?: string
+  name: string
+  credits: number
+  price_cents: number
+  currency: string
+  duration_days: number
+  allowed_models: string[]
+  sort_order: number
+}
+
+export async function listAdminPackages(): Promise<AdminPackage[]> {
+  const { data } = await api.get('/v1/admin/billing/packages')
+  return data?.data ?? []
+}
+
+/** 新建套餐。code 重复时后端返回 409。 */
+export async function createAdminPackage(payload: AdminPackageInput): Promise<AdminPackage | null> {
+  const { data } = await api.post('/v1/admin/billing/packages', payload)
+  return data?.data ?? null
+}
+
+/** 更新套餐（code 不可改）。id 不存在时后端返回 404。 */
+export async function updateAdminPackage(
+  id: string,
+  payload: AdminPackageInput,
+): Promise<AdminPackage | null> {
+  const { data } = await api.put(`/v1/admin/billing/packages/${encodeURIComponent(id)}`, payload)
+  return data?.data ?? null
+}
+
+/**
+ * 下架套餐。后端做的是软下架（enabled=false），不是物理删除：
+ * 已售权益是快照不受影响，但历史订单要靠 code 反查套餐名。
+ */
+export async function disableAdminPackage(id: string): Promise<void> {
+  await api.delete(`/v1/admin/billing/packages/${encodeURIComponent(id)}`)
+}
+
+/** 重新上架套餐。 */
+export async function restoreAdminPackage(id: string): Promise<void> {
+  await api.post(`/v1/admin/billing/packages/${encodeURIComponent(id)}/restore`)
+}

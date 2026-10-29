@@ -210,6 +210,13 @@ const routes = [
         component: () => import('../views/admin/InvoiceReviewView.vue'),
         meta: { title: t('admin.invoice_review') },
       },
+      // P2-2c：套餐目录 —— 决定用户能买什么、平台收多少，同属商业化运营。
+      {
+        path: 'packages',
+        name: 'AdminPackages',
+        component: () => import('../views/admin/PackagesView.vue'),
+        meta: { title: t('admin.packages_admin_title') },
+      },
       // ── 数据存储（原「Redis 管理」+「数据库管理」合并）──
       {
         path: 'datastores',

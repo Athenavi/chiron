@@ -541,6 +541,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 | ③ 接入模型范围 | `internal/api/ent_entitlement_gate.go`：与租户策略**取更严者**（交集） | 12 条表驱动子用例 PASS |
 | ④ 过期与提示 | `GET /v1/billing/entitlements` 返回**含已过期**条目；三语 21 个 key；`BillingView.vue` 新增「套餐包」tab | `vue-tsc` 通过、`check-i18n-keys` 缺键 0、vitest 97 文件 / 767 用例全绿 |
 | ⑤ 权益真正生效（P2-2b） | `internal/api/ent_entitlement_gate.go`（`EffectiveModelSet` / `GuardChatModelAccess`）+ `/v1/models` 过滤 + `proxyOpt.guardBody` 钩子 + 前端三语与「去购买套餐」直达 | `go build/vet ./...` 通过、`internal/api` 3.0s / `internal/billing` 1.0s 全绿、vitest 97 文件 / 770 用例、`vue-tsc` 与 i18n 键集通过 |
+| ⑥ 套餐目录可运营（P2-2c） | `internal/api/billing_packages_handler.go`（管理端 CRUD）+ `auth.PermBillingManage` + `routes_admin.go` 五条路由 + `migrations/versions/0010_seed_billing_packages.py` + `frontend-vue/src/views/admin/PackagesView.vue` | 真库 `0010_seed_billing_packages (head)` 且三档套餐落库；`TestLiveAdminPackageCRUD` PASS（创建拿主键、重复 code→`ErrPackageCodeExists`、code 不可改、下架后用户侧不可见但后台仍可见）；`go build/vet ./...` 与 `internal/api`+`internal/billing` 单测全绿；`vue-tsc`、i18n 键集、`check_source_encoding` 通过 |
 
 设计口径（沿用 §6 决策）：有效期从确认时刻起算、不引入 `billing_cycle`、无周期任务、过期只由时间判定；权益挂 `user_id`（用户级）而非租户级，避免一个成员的套餐影响整租户；套餐目录与已售权益**分两张表**，套餐改价不影响已售出权益。
 
@@ -581,32 +582,43 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 
 **验收**：用受限账号调 `/v1/models` 只看到权益内模型；直接 POST 一个权益外模型返回 403 且文案指明原因与下一步。
 
-### 13.3 任务 P2-2c：套餐目录后台 CRUD
+### 13.3 任务 P2-2c：套餐目录后台 CRUD（**已完成**，2026-10-29）
 
-现状：`billing_packages` **只有表**——无 handler、无种子数据、无管理界面。目前必须手工 `INSERT` 才能卖套餐。
+交付前现状：`billing_packages` **只有表**——无 handler、无种子数据、无管理界面，必须手工 `INSERT` 才能卖套餐。
 
-1. 管理端 CRUD（建议权限 `billing:manage`），下架用 `enabled=false` 而不是物理删除。
-2. 至少一条 seed（`duration_days > 0`、`price_cents >= 0` 受 CHECK 约束，`credits` 可 0 表示纯权益包）。
-3. `code` 有 `ux_billing_packages_code` 唯一索引，重复创建返回 409 而不是 500。
+**已交付**：
 
-**验收**：后台可增/改/上下架；下架后用户侧 `GET /v1/billing/packages` 不再返回；重复 code 返回 409。
+| 项 | 落点 | 关键决定 |
+|---|---|---|
+| 权限点 | `internal/auth/jwt.go` 新增 `PermBillingManage = "billing:manage"` | **不复用** `PermAdminWrite`：定价与所含权益决定平台收多少钱、卖什么货，属定价权而非日常运维，独立后可只授予运营。owner/admin 有，`user` 无 |
+| 凭据边界 | `internal/auth/apikey.go` 的 `apiKeyDeniedPerms` 加入该权限 | 定价改一次就影响真实收款，不该由长期凭据代持 |
+| 管理端 handler | `internal/api/billing_packages_handler.go`：`buildPackage` 纯函数一次回全部校验错误（422）；code 冲突 409；id 不存在 404 | 校验模型名走 `llm_models` 而非 `admin_model_configs`（真库后者 0 行 → 会拒掉全部合法模型名，与 §13.2 同一个坑） |
+| 路由 | `routes_admin.go`：`GET/POST /v1/admin/billing/packages`、`PUT/DELETE /{id}`、`POST /{id}/restore` | 读接口也挂 `billingManageMW`：能看到定价草案的人应与能改它的是同一批 |
+| 下架语义 | `SetPackageEnabled` 软下架，`DELETE` 表达下架、`POST /{id}/restore` 重新上架 | 不物理删除：已售权益是快照不受影响，但历史订单要靠 code 反查套餐名 |
+| seed | `migrations/versions/0010_seed_billing_packages.py`（`down_revision=0009_billing_packages`） | 幂等 `INSERT ... SELECT ... WHERE NOT EXISTS`，播 starter/standard/pro 三档，`allowed_models` 空数组 = 不限 |
+| 前端 | `views/admin/PackagesView.vue` + `api/admin.ts` 6 个函数 + 路由 `/admin/packages` + 侧边栏菜单 + 三语各 42 键 | 表格含已下架项；编辑时 code 只读 |
+
+**验证**：真库 `current = 0010_seed_billing_packages (head)`；`TestLiveAdminPackageCRUD` PASS——创建后拿到主键、重复 code 返回 `ErrPackageCodeExists`、`UpdatePackage` 传别的 code 不改写它（刻意的：code 是 `payments.package_code` 的引用值）、下架后用户侧 `ListPackages` 不可见而后台 `AdminListPackages` 仍可见、不存在的 id 返回 `(false, nil)`；`go build/vet ./...` 与前端 `vue-tsc`、i18n 键集、全量 vitest 均通过。
+
+**一处测试自身的前提错误（已纠正，实现无需改）**：最初断言「`UpdatePackage` 改 code 会撞唯一索引」，但实现刻意不在 `UPDATE` 里包含 code，故该场景不可能发生；改为断言「传什么 code 都不会改变它」。
 
 ### 13.4 小修补（已核实的确定缺口）
 
-- `paymentResponse`（`billing_handler.go:798`）不回显 `package_code`，订单详情看不出买的是哪个套餐。一行修复。
-- `frontend-vue/src/components.d.ts` 有本会话 `vue-tsc -b` 自动生成的两行改动（`OnboardingGuide` 注册），属生成物，提交时应一并带上而不是丢弃。
+- `paymentResponse`（`billing_handler.go:798-812`）**仍未**回显 `package_code`——已核实字段白名单里没有它。用户买了套餐，订单详情看不出买的是哪个；一行修复。
+- ~~`frontend-vue/src/components.d.ts` 的 `OnboardingGuide` 两行~~ —— 已随前述提交进入历史，工作区不再有该改动，无需处理。
 
-### 13.5 建议顺序（P2-2b 交付后重排）
+### 13.5 建议顺序（P2-2c 交付后重排，2026-10-29）
 
 | 序 | 任务 | 为什么排在这 | 前置 |
 |---|---|---|---|
-| 1 | **P2-2c 套餐目录后台 CRUD + seed** | P2-2b 让权益真正生效了，但**线上此刻仍然一个套餐都卖不了**：`billing_packages` 只有表，无 handler、无 seed、无界面，必须手工 `INSERT`。功能链路已通而入口缺失，这是当前最刺眼的一段 | 无 |
-| 2 | 小修补：`paymentResponse` 回显 `package_code` | 用户买了套餐，订单详情却看不出买的是哪个；一行改动。与 1 同批做最省事 | 无 |
-| 3 | 收敛遗留的**双判定路径** | `EnforceEnterprisePolicy` / `ResolveAllowedModels` 与新的 `EffectiveModelSet` 并存且口径不同（见 §13.2 末）。留着就会有人接错 | 无 |
-| 4 | **T5 真库冒烟** | 新增了两条 SQL 路径（`billing_packages` / `user_entitlements`）与一条 403 路径，待验池扩大；按 §12.6 走 CI | 1 |
-| 5 | **P2-3 通知中心** | 支付成功/权益到期预警天然接这里。注意：到期**预警**需要定时扫描，与「一次性套餐无周期任务」不冲突——扫描只发通知、不改状态 | 1 |
+| ~~1~~ | ~~P2-2c 套餐目录后台 CRUD + seed~~ | **已完成**，见 §13.3 | — |
+| **1** | 小修补：`paymentResponse` 回显 `package_code` | 唯一还在的「已确认一行改动」。套餐已能上架售卖，订单却仍看不出买的是哪个套餐，交易凭证不完整 | 无 |
+| **2** | 收敛遗留的**双判定路径** | `EnforceEnterprisePolicy` / `ResolveAllowedModels` 仍无外部调用方，却与新 `EffectiveModelSet` 并存且口径不同（见 §13.2 末）。已核实：全仓命中只剩定义、包级转发与测试。留着就会有人接错 | 无 |
+| **3** | **T5 真库冒烟推 CI** | 本轮又新增了 `billing_packages` 的写路径（创建/更新/上下架）与权限点，待验池继续扩大；按 §12.6 走 CI | — |
+| **4** | **P2-3 通知中心** | 事件源现在是真实的：套餐可后台建、可售、权益会到期。到期**预警**需要定时扫描，但与「一次性套餐无周期任务」不冲突——扫描只发通知、不改状态 | 1 |
+| **5** | P2-1 团队与成员 | §4 列为结构性缺口，需单独设计评审；建议等通知中心落地、`tenant_id` 使用面稳定后再动 | 4 |
 
-补一条排序理由：为什么不先做 P2-3？通知中心会用到「某笔支付成功了」和「某个权益要到期了」两类事件，而这两类事件的**源头当前还只有手工插入的套餐**。先把 1 做完，事件源才是真实的，否则通知中心只能拿假数据测。
+排序理由：第 1 条是唯一零风险的确定缺口，顺手清掉；第 2 条不清会持续制造「两套口径」的接错风险，成本低但收益是防止未来事故；第 3 条把本轮扩大的真库面纳入 CI，避免回归靠人肉；P2-3 放到第 4，因为它依赖「真实事件源」，而这件事恰好在 P2-2c 之后才成立。
 
 ## 14. P2-3 通知中心的前置设计（未开工，先定形状）
 
