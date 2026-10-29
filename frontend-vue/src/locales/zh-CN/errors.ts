@@ -35,6 +35,14 @@ export default {
   // 后者由管理员处理（多半是同事先审了）。文案必须能分开，否则用户会反复重试。
   invoice_already_requested: '这笔订单已经提交过开票申请，可在下方列表中查看进度',
   invoice_already_reviewed: '该申请已被其他管理员处理，请刷新列表查看最新状态',
+  // 模型不在可用范围（P2-2b）：两个键是**同一件事的两种归因**，动作完全不同 ——
+  // 套餐不覆盖 → 买了就可用；租户策略不允许 → 买套餐也没用，得找管理员。
+  // `_in` 变体只插值模型名，绝不插值 `reason` 枚举（否则界面会冒出 "entitlement"）。
+  model_not_allowed: '当前模型不在你的可用范围内',
+  model_not_allowed_in: '模型 {model} 不在你的可用范围内',
+  model_not_allowed_entitlement: '这个模型需要套餐覆盖，可到「计费 → 套餐包」购买或续期后使用',
+  model_not_allowed_policy: '你的租户策略未开放这个模型，请联系租户管理员调整白名单',
+  model_not_allowed_buy_package: '去购买套餐',
   // 网络与客户端（后端未给 code 时的兜底）
   timeout: '请求超时，请重试',
   network_error: '网络连接失败，请检查网络后重试',

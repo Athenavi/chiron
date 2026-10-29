@@ -28,6 +28,12 @@ func registerProxyRoutes(
 		// mutateBody 在把请求体转发给引擎前改写它（P1-c：统一链路注入会话运行时解析结果，
 		// 见 docs/session-runtime-spec.md §5）。返回 false 表示已自行写出响应、代理应中止。
 		mutateBody func(r *http.Request, body map[string]interface{}) bool
+		// guardBody 在 mutateBody **之后**执行准入校验（P2-2b：模型可用范围）。
+		//
+		// 顺序不能反：mutateBody 会把会话运行时解析出的最终 model 写回 body，
+		// 若在此之前校验，看到的是前端随手传的字段而非真正生效的模型。
+		// 返回 false 表示已自行写出响应（如 403）、代理应中止。
+		guardBody func(w http.ResponseWriter, r *http.Request, body map[string]interface{}) bool
 	}
 	newProxy := func(prefix string, opt proxyOpt) func(func(*http.Request) string) http.HandlerFunc {
 		return func(buildPath func(*http.Request) string) http.HandlerFunc {
@@ -57,6 +63,9 @@ func registerProxyRoutes(
 					if opt.mutateBody != nil && !opt.mutateBody(r, body) {
 						return
 					}
+					if opt.guardBody != nil && !opt.guardBody(w, r, body) {
+						return
+					}
 					err = pythonClient.PostJSON(r.Context(), proxiedPath, body, &resp)
 				case "PUT":
 					var body map[string]interface{}
@@ -65,6 +74,9 @@ func registerProxyRoutes(
 						return
 					}
 					if opt.mutateBody != nil && !opt.mutateBody(r, body) {
+						return
+					}
+					if opt.guardBody != nil && !opt.guardBody(w, r, body) {
 						return
 					}
 					err = pythonClient.PutJSON(r.Context(), proxiedPath, body, &resp)
@@ -165,7 +177,13 @@ func registerProxyRoutes(
 	}))))
 
 	// Unified chat / quick-execute (六大工作台统一入口, proxies to Python TaskRouter)
-	chatP := newProxy("", proxyOpt{logTag: "chat", mutateBody: InjectSessionRuntime})
+	chatP := newProxy("", proxyOpt{
+		logTag:     "chat",
+		mutateBody: InjectSessionRuntime,
+		// 模型准入排在 mutateBody 之后：后者才把会话运行时解析出的最终 model
+		// 写回 body，先校验等于校验了错误的字段（P2-2b）。
+		guardBody: GuardChatModelAccess,
+	})
 	mux.Handle("POST /v1/chat/submit", authMW(rlMW(chatP(pathFn("/v1/chat/submit")))))
 	mux.Handle("GET /v1/chat/sessions/{id}/messages", authMW(rlMW(chatP(pathParamSuffix("/v1/chat/sessions", "/messages")))))
 	// quick-execute 为 chat/submit 的语义别名（前端快捷执行入口）

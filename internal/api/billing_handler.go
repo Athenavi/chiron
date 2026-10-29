@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math"
 	"net/http"
 	"strconv"
 	"strings"
@@ -204,6 +205,80 @@ func parseUsageParams(groupBy, rangeKey string) (string, int, string) {
 		return "", 0, "invalid range: must be one of 7d, 30d, 90d"
 	}
 	return groupBy, days, ""
+}
+
+// ── 套餐与权益（P2-2）─────────────────────────────────────────────────
+
+// GetPackages 列出已上架套餐，供充值页展示"可购买的套餐"。
+func (h *BillingHandler) GetPackages(w http.ResponseWriter, r *http.Request) {
+	pkgs, err := h.mgr.ListPackages(r.Context())
+	if err != nil {
+		slog.Error("list packages failed", "error", err)
+		InternalError(w, "failed to list packages")
+		return
+	}
+	OK(w, pkgs)
+}
+
+// entitlementView 是权益的用户可见视图。
+//
+// 带上 active / expires_at / days_remaining 三个字段而不是让前端自己算：
+// "是否过期"以服务端时间为准，避免客户端时区或时钟偏差造成"显示还有 1 天、
+// 实际已经用不了"这类最容易被投诉的错觉。
+type entitlementView struct {
+	ID            string   `json:"id"`
+	PackageCode   string   `json:"package_code"`
+	PackageName   string   `json:"package_name"`
+	AllowedModels []string `json:"allowed_models"`
+	StartsAt      string   `json:"starts_at"`
+	ExpiresAt     string   `json:"expires_at"`
+	Active        bool     `json:"active"`
+	// DaysRemaining 向上取整的剩余天数；已过期为 0。
+	DaysRemaining int `json:"days_remaining"`
+}
+
+// GetEntitlements 返回当前用户的权益列表（**含已过期**）。
+//
+// 为什么必须返回已过期的：只返回生效中的条目，到期后记录会从界面消失，用户无法
+// 区分"过期了"和"从没买过"，也就无从知道"为什么模型突然不能用了"——
+// 这正是验收要求里"不能出现用不了但没提示"的那一类。
+func (h *BillingHandler) GetEntitlements(w http.ResponseWriter, r *http.Request) {
+	userID := h.resolveUserID(r)
+	if userID == "" {
+		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+	ents, err := h.mgr.UserEntitlements(r.Context(), userID)
+	if err != nil {
+		slog.Error("list entitlements failed", "user_id", userID, "error", err)
+		InternalError(w, "failed to list entitlements")
+		return
+	}
+
+	now := time.Now()
+	views := make([]entitlementView, 0, len(ents))
+	for _, e := range ents {
+		active := !now.Before(e.StartsAt) && now.Before(e.ExpiresAt)
+		days := 0
+		if active {
+			// 向上取整：还剩 6 小时也应显示"1 天"，显示 0 天会让用户以为已经过期。
+			days = int(math.Ceil(e.ExpiresAt.Sub(now).Hours() / 24))
+			if days < 1 {
+				days = 1
+			}
+		}
+		views = append(views, entitlementView{
+			ID:            e.ID,
+			PackageCode:   e.PackageCode,
+			PackageName:   e.PackageName,
+			AllowedModels: e.AllowedModels,
+			StartsAt:      e.StartsAt.Format(time.RFC3339),
+			ExpiresAt:     e.ExpiresAt.Format(time.RFC3339),
+			Active:        active,
+			DaysRemaining: days,
+		})
+	}
+	OK(w, views)
 }
 
 func (h *BillingHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
@@ -440,13 +515,12 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Credits int    `json:"credits"`
 		Channel string `json:"channel"`
+		// PackageCode 非空表示购买套餐：此时 credits / 金额 / 币种一律取自套餐目录，
+		// **忽略** body.Credits —— 否则用户可以用 1 分钱买下任意数量的 credits。
+		PackageCode string `json:"package_code"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
-		return
-	}
-	if body.Credits <= 0 {
-		BadRequest(w, "credits > 0 required")
 		return
 	}
 	switch body.Channel {
@@ -461,14 +535,47 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	credits := body.Credits
 	// 1 credit = 1 分；支付宝/微信为人民币，PayPal 为美元
-	amountCents := int64(body.Credits)
+	amountCents := int64(credits)
 	currency := "CNY"
 	if body.Channel == billing.ChannelPayPal {
 		currency = "USD"
 	}
 
-	p := billing.NewPayment(userID, body.Channel, body.Credits, amountCents, currency)
+	// 套餐订单：价格与 credits 全部以目录为准，请求体只用来选套餐 code。
+	if code := strings.TrimSpace(body.PackageCode); code != "" {
+		pkg, err := h.mgr.PackageByCode(r.Context(), code)
+		if err != nil {
+			slog.Error("load package failed", "package", code, "error", err)
+			InternalError(w, "failed to load package")
+			return
+		}
+		if pkg == nil || !pkg.Enabled {
+			BadRequest(w, "套餐不存在或已下架")
+			return
+		}
+		credits = pkg.Credits
+		amountCents = pkg.PriceCents
+		// 套餐自带币种：支付宝/微信只能收人民币，PayPal 只收美元。
+		// 目录里配错币种时明确拒绝，而不是按 1:1 换算悄悄多收/少收钱。
+		wantCurrency := "CNY"
+		if body.Channel == billing.ChannelPayPal {
+			wantCurrency = "USD"
+		}
+		if pkg.Currency != wantCurrency {
+			BadRequest(w, fmt.Sprintf("套餐 %s 的币种为 %s，与渠道 %s 要求不一致",
+				pkg.Code, pkg.Currency, body.Channel))
+			return
+		}
+		currency = pkg.Currency
+	} else if credits <= 0 {
+		BadRequest(w, "credits > 0 required")
+		return
+	}
+
+	p := billing.NewPayment(userID, body.Channel, credits, amountCents, currency)
+	p.PackageCode = strings.TrimSpace(body.PackageCode)
 	if err := h.mgr.CreatePayment(r.Context(), p); err != nil {
 		slog.Error("create payment failed", "error", err)
 		InternalError(w, "failed to create payment order")

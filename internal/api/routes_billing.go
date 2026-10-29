@@ -25,4 +25,7 @@ func registerBillingRoutes(mux *http.ServeMux, billingHandler *BillingHandler, a
 	mux.Handle("GET /v1/billing/transactions.csv", authMW(rlMW(http.HandlerFunc(billingHandler.ExportTransactions))))
 	// 可用支付渠道：充值页据此只展示后台已配置启用的渠道，避免选中后下单才报 501
 	mux.Handle("GET /v1/billing/channels", authMW(rlMW(http.HandlerFunc(billingHandler.ListPaymentChannels))))
+	// 套餐目录与我的权益（P2-2）：权益含已过期条目，到期后界面仍能看到"已过期"
+	mux.Handle("GET /v1/billing/packages", authMW(rlMW(http.HandlerFunc(billingHandler.GetPackages))))
+	mux.Handle("GET /v1/billing/entitlements", authMW(rlMW(http.HandlerFunc(billingHandler.GetEntitlements))))
 }

@@ -333,6 +333,17 @@ function goBilling() {
   router.push('/billing')
 }
 
+/**
+ * 模型被拒且原因是"套餐不覆盖"→ 直达套餐页签。
+ *
+ * 为什么不复用 goBilling：余额不足要充值（balance 页签），模型越界要买套餐
+ * （packages 页签）。落到错误的页签等于让用户自己再找一遍 -- 这正是
+ * "用不了但没提示"的另一种形态。
+ */
+function goBillingPackages() {
+  router.push({ path: '/billing', query: { tab: 'packages' } })
+}
+
 // ── P3-B 长消息折叠 ──
 // 助手消息超过阈值时默认折叠，显示前 N 行 + "展开全部"按钮
 const COLLAPSE_THRESHOLD = 2000  // 字符数阈值：只用来决定"要不要显示折叠按钮"
@@ -787,6 +798,17 @@ onUpdated(enhanceContent)
             @click.stop="goBilling"
           >
             <BarChartOutlined /> {{ $t('errors.quota_exceeded_action') }}
+          </button>
+          <!-- 模型越界（P2-2b）：只有"套餐不覆盖"这一类买了就能解决，所以只在这一种
+               情况给直达套餐页签的按钮。租户策略不允许时买套餐也没用 —— 文案里已写明
+               要找管理员，这里不再放一个点了没去处的按钮。 -->
+          <button
+            v-if="(item as TextItem).errorCode === 'model_not_allowed' && (item as TextItem).errorReason === 'entitlement'"
+            class="retry-btn"
+            type="button"
+            @click.stop="goBillingPackages"
+          >
+            <WalletOutlined /> {{ $t('errors.model_not_allowed_buy_package') }}
           </button>
           <!-- 重试按钮：服务端若显式说 retryable=false，就不该给 —— 那会把用户
                推进一个必然失败的循环。undefined（无结论）时保持原有行为。 -->

@@ -51,6 +51,12 @@ const (
 	// 与上面的区别在**谁该行动**：前者由申请人处理，后者由管理员处理 ——
 	// 通常是另一位管理员先审了，刷新列表即可。
 	CodeInvoiceAlreadyReviewed = "invoice_already_reviewed"
+	// CodeModelNotAllowed 表示请求的模型不在可用范围内（403）。
+	//
+	// 单独成码而不是复用 forbidden：模型被拒时用户的下一步动作取决于**是谁拦的**
+	// （`params.reason`）—— 套餐权益不覆盖 → 去买/续套餐；租户策略不允许 →
+	// 买套餐也没用，得找管理员。合成一句"没有权限"会让用户白花钱买套餐。
+	CodeModelNotAllowed = "model_not_allowed"
 )
 
 // knownMessageCodes 已知文案 → 错误码（键为小写原文）。
@@ -78,6 +84,9 @@ var messageCodeRules = []struct {
 	// 有 "too many request"（限流）等，靠后的顺序会让文案被误判成别的语义。
 	{"too many transactions", CodeExportTooManyRows},
 	{"time range spans", CodeExportRangeTooWide},
+	// 模型准入必须排在 "not found"/"invalid" 之前：原文 "model not allowed by
+	// enterprise policy" 不含这些词，但引擎侧转发的措辞可能含 "not"。
+	{"model not allowed", CodeModelNotAllowed},
 	{"token quota", CodeQuotaExceeded},
 	{"quota exceeded", CodeQuotaExceeded},
 	{"quota", CodeQuotaExceeded},

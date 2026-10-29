@@ -529,3 +529,98 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 **因此「在 T5 之前不开新功能」这条约束依然成立**，但性质变了：不是「无法开工」，而是**主动排队**。一旦 CI 的 `Real-stack integration` 把 6 处缺口跑绿，C1 就可以按 §12.4 的五步直接开工。
 
 **不要做的事**：不要在 T5 之前再加新的 SQL 功能；C1 开工时不要把 `tenant_members` 做成「再加一个 role 字符串字段」—— 产品已定复用 `ent_roles`，绕过它会立刻出现两套角色真相（详见 §12.4 的「强制成本」）。
+
+## 13. P2-2 交付后的复核（2026-10-29 核实）
+
+### 13.1 已交付（代码完成，未提交）
+
+| 步骤 | 落点 | 验证 |
+|---|---|---|
+| ① 权益表 + 迁移 | `migrations/versions/0009_billing_packages.py`：`billing_packages`（目录）+ `user_entitlements`（已售权益快照）+ `payments.package_code` | 真库 `alembic upgrade head` 成功，`current` = `0009_billing_packages (head)`；表/索引/CHECK 逐项核对通过 |
+| ② 一次性发放 | `internal/billing/entitlements.go` + `payments.go` 在 `ConfirmPayment` 里 `AddCredits` 成功后发放权益 | 真库用例 PASS：credits 精确到位、权益快照正确、`payment_id` 重复确认不重复发放、窗口移到过去后查不到但行保留 |
+| ③ 接入模型范围 | `internal/api/ent_entitlement_gate.go`：与租户策略**取更严者**（交集） | 12 条表驱动子用例 PASS |
+| ④ 过期与提示 | `GET /v1/billing/entitlements` 返回**含已过期**条目；三语 21 个 key；`BillingView.vue` 新增「套餐包」tab | `vue-tsc` 通过、`check-i18n-keys` 缺键 0、vitest 97 文件 / 767 用例全绿 |
+| ⑤ 权益真正生效（P2-2b） | `internal/api/ent_entitlement_gate.go`（`EffectiveModelSet` / `GuardChatModelAccess`）+ `/v1/models` 过滤 + `proxyOpt.guardBody` 钩子 + 前端三语与「去购买套餐」直达 | `go build/vet ./...` 通过、`internal/api` 3.0s / `internal/billing` 1.0s 全绿、vitest 97 文件 / 770 用例、`vue-tsc` 与 i18n 键集通过 |
+
+设计口径（沿用 §6 决策）：有效期从确认时刻起算、不引入 `billing_cycle`、无周期任务、过期只由时间判定；权益挂 `user_id`（用户级）而非租户级，避免一个成员的套餐影响整租户；套餐目录与已售权益**分两张表**，套餐改价不影响已售出权益。
+
+### 13.2 已修：权益判定曾挂在没有调用方的函数上（P2-2b 补上）
+
+**本条记录的是修复前的状态**，保留原文以便追溯为什么新增了 `ent_entitlement_gate.go`。
+
+**修复结果（P2-2b，2026-10-29）**：不再复用 `EnforceEnterprisePolicy`，而是新增一条专供请求路径使用的判定链，原因是它的语义不适用于过滤：
+
+- `EffectiveModelSet(ctx, tenantID, userID) (map[string]struct{}, bool)` —— 第二个返回值 `restricted` 区分「不限制」与「限制为空」。**这个区分是必须的**：`ResolveAllowedModels` 在「不限制」时返回 `admin_model_configs.model_id` 全量清单，而真库实测该表 0 行、`llm_models` 40 行、两者交集 0 —— 直接拿它过滤 `/v1/models` 会得到**一个模型都不返回**的空下拉，用户却以为权限正常。
+- `GET /v1/models` 在 `ListModelsForUser` 末尾按 `restricted` 过滤；解析失败 fail-open + `slog.Warn`。
+- 对话入口：`proxyOpt` 新增 `guardBody` 钩子，`POST/PUT` 在 `mutateBody` **之后**调用 `GuardChatModelAccess`。顺序很关键——`InjectSessionRuntime` 才会把最终生效 model 写回 body，若排在它之前只看得到前端随手传的字段。
+- 越界返回 `403 + code=model_not_allowed + params{model, reason}`，`reason` 分 `entitlement` / `policy`；报文显式 `retryable=false`，避免给出「再点一次」的无效重试。
+- 前端三语补齐，`reason=entitlement` 时给「去购买套餐」按钮并直达 `/billing?tab=packages`；`reason=policy` 只给文字指引（用户侧没有可跳转的管理员入口，不做点了不动的按钮）。
+
+**遗留的一点口径重叠**：`EnforceEnterprisePolicy` / `ResolveAllowedModels` 现在仍无外部调用方（只有定义、包级转发与测试）。它们与新的 `EffectiveModelSet` 是两套并行判定，**建议后续二选一并删除另一套**，否则以后有人接到它们上会得到与线上不一致的行为。
+
+<details>
+<summary>修复前的核实记录</summary>
+
+**核到的事实**（`rg -n "EnforceEnterprisePolicy|ResolveAllowedModels"` 排除 `.worktrees/`、`vendor/`、测试文件，全仓仅 14 处命中，全部在 `ent_policy_handler.go` 自身，即定义 + 包级转发）：
+
+1. `EnforceEnterprisePolicy` / `ResolveAllowedModels` 在非测试代码里**没有任何外部调用方**。
+2. `GET /v1/models` 的实际实现是 `ListModelsForUser`（`internal/api/model_discovery.go:342`），直接 `SELECT provider, name, display_name, context_window FROM llm_models WHERE enabled = true`，**不读任何白名单**。
+3. 对话入口 `POST /v1/chat/submit` 走通用代理 `chatP(pathFn("/v1/chat/submit"))`（`routes_proxy.go:169`），Go 侧不做 model 准入。
+4. `NewEntPolicyHandler().RegisterRoutes(mux, authMW)`（`gateway_router.go:525`）只注册了策略**CRUD**，强制点没接上。
+
+**后果**：租户模型白名单与套餐权益**目前都不生效**。这缺口不是 P2-2 引入的（白名单本来就没接到请求路径上），但 P2-2 的验收「购买后权益生效」因此只做到了「权益能查到」，没做到「模型真的按权益放行/拒绝」。
+
+**这是本轮最重要的一条**：再做套餐目录、通知中心之前必须先补这个，否则所有权益类功能都是在往一个死点上接线。
+
+#### 任务 P2-2b：把白名单与权益真正接到请求路径
+
+1. `ListModelsForUser`：按 `auth.GetClaims` 取 tenant/user，调 `ResolveAllowedModels`，用结果过滤返回列表；查询失败 **fail-open**（与既有约定一致）+ `slog.Warn`。
+2. 对话提交入口：解析 `body.model`，调 `EnforceEnterprisePolicy`；不在清单返回 **403 + 机器可读 `code: "model_not_allowed"`**，并在错误里说明是「套餐权益」还是「租户策略」所致（两者文案可执行动作不同：前者「购买/续期套餐」，后者「联系租户管理员」）。
+3. 测试：白名单外模型被拒（403）；`/v1/models` 只返回交集；策略查询失败时放行。
+4. 三语补 `errors.model_not_allowed`（zh-CN → en-US → ar），前端把 403 落到「去购买套餐 / 找管理员」两个不同动作。
+
+**验收**：用受限账号调 `/v1/models` 只看到权益内模型；直接 POST 一个权益外模型返回 403 且文案指明原因与下一步。
+
+### 13.3 任务 P2-2c：套餐目录后台 CRUD
+
+现状：`billing_packages` **只有表**——无 handler、无种子数据、无管理界面。目前必须手工 `INSERT` 才能卖套餐。
+
+1. 管理端 CRUD（建议权限 `billing:manage`），下架用 `enabled=false` 而不是物理删除。
+2. 至少一条 seed（`duration_days > 0`、`price_cents >= 0` 受 CHECK 约束，`credits` 可 0 表示纯权益包）。
+3. `code` 有 `ux_billing_packages_code` 唯一索引，重复创建返回 409 而不是 500。
+
+**验收**：后台可增/改/上下架；下架后用户侧 `GET /v1/billing/packages` 不再返回；重复 code 返回 409。
+
+### 13.4 小修补（已核实的确定缺口）
+
+- `paymentResponse`（`billing_handler.go:798`）不回显 `package_code`，订单详情看不出买的是哪个套餐。一行修复。
+- `frontend-vue/src/components.d.ts` 有本会话 `vue-tsc -b` 自动生成的两行改动（`OnboardingGuide` 注册），属生成物，提交时应一并带上而不是丢弃。
+
+### 13.5 建议顺序（P2-2b 交付后重排）
+
+| 序 | 任务 | 为什么排在这 | 前置 |
+|---|---|---|---|
+| 1 | **P2-2c 套餐目录后台 CRUD + seed** | P2-2b 让权益真正生效了，但**线上此刻仍然一个套餐都卖不了**：`billing_packages` 只有表，无 handler、无 seed、无界面，必须手工 `INSERT`。功能链路已通而入口缺失，这是当前最刺眼的一段 | 无 |
+| 2 | 小修补：`paymentResponse` 回显 `package_code` | 用户买了套餐，订单详情却看不出买的是哪个；一行改动。与 1 同批做最省事 | 无 |
+| 3 | 收敛遗留的**双判定路径** | `EnforceEnterprisePolicy` / `ResolveAllowedModels` 与新的 `EffectiveModelSet` 并存且口径不同（见 §13.2 末）。留着就会有人接错 | 无 |
+| 4 | **T5 真库冒烟** | 新增了两条 SQL 路径（`billing_packages` / `user_entitlements`）与一条 403 路径，待验池扩大；按 §12.6 走 CI | 1 |
+| 5 | **P2-3 通知中心** | 支付成功/权益到期预警天然接这里。注意：到期**预警**需要定时扫描，与「一次性套餐无周期任务」不冲突——扫描只发通知、不改状态 | 1 |
+
+补一条排序理由：为什么不先做 P2-3？通知中心会用到「某笔支付成功了」和「某个权益要到期了」两类事件，而这两类事件的**源头当前还只有手工插入的套餐**。先把 1 做完，事件源才是真实的，否则通知中心只能拿假数据测。
+
+## 14. P2-3 通知中心的前置设计（未开工，先定形状）
+
+写在这里是为了避免 P2-3 开工时临时拍脑袋定表结构——`tenant_id` 类型、去重键、渠道开关三者一旦定错，改起来都要动数据。
+
+**已核实的地基**（本会话读过）：
+- 已有 SMTP 发信能力（`internal/auth/mail.go`），无需引入新依赖。
+- 已有站内消息的读模型先例（notice 行），但那是**对话内**的，不能直接当通知中心用。
+- 权益到期时间可从 `user_entitlements.expires_at` 直接取，不需要新表存"何时到期"。
+
+**待定（开工前必须拍板）**：
+1. **去重键的形状**：按事件类型 + 业务主键（如 `payment_succeeded:<payment_id>`、`entitlement_expiring:<entitlement_id>:<days_before>`）。用唯一索引保证幂等，撞键即跳过而不是先查后写（先查后写在并发下会重复推送）。
+2. **渠道开关的粒度**：用户级（每个用户自己关）还是租户级（管理员统一关）？两者语义不同，混在一起会让"我关了邮件但还在收"这类投诉无从排查。
+3. **到期预警的扫描频率与提前量**：建议每日一次、提前 3 天与 1 天各一次（两个去重键）。频率过高会变成骚扰。
+4. **`tenant_id` 类型**：`tenants.id` 是 `smallserial`（不是 `smallint` 别名之外的推论，基线 `0001:735` 已核实），通知表若带 `tenant_id` 必须用同类型，否则外键建不上。
+
+**验收草案**：同一支付回调重复到达只产生一条通知；用户可标记已读；关掉邮件后仍能在站内看到；到期前 3 天与 1 天各收到一次且不重复。

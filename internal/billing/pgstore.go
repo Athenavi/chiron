@@ -296,14 +296,16 @@ func FormatBalance(userID string, balance int) string {
 // ── PaymentStore ──────────────────────────────────────────────────────────
 
 const _paymentColumns = `id, user_id, channel, credits, amount_cents, currency, status,
-	COALESCE(qr_code, ''), provider_order_id, trade_no, created_at, paid_at, expired_at`
+	COALESCE(qr_code, ''), provider_order_id, trade_no, COALESCE(package_code, ''),
+	created_at, paid_at, expired_at`
 
 func scanPayment(row interface{ Scan(...any) error }) (*Payment, error) {
 	var p Payment
 	var qr string
 	var paidAt, expiredAt *time.Time
 	err := row.Scan(&p.ID, &p.UserID, &p.Channel, &p.Credits, &p.AmountCents, &p.Currency,
-		&p.Status, &qr, &p.ProviderOrderID, &p.TradeNo, &p.CreatedAt, &paidAt, &expiredAt)
+		&p.Status, &qr, &p.ProviderOrderID, &p.TradeNo, &p.PackageCode,
+		&p.CreatedAt, &paidAt, &expiredAt)
 	if err != nil {
 		return nil, err
 	}
@@ -347,11 +349,21 @@ func (s *PGStore) paymentUserIDIssue(ctx context.Context) string {
 func (s *PGStore) CreatePayment(ctx context.Context, p *Payment) error {
 	_, err := db.GlobalDBManager.Exec(ctx,
 		`INSERT INTO payments (id, user_id, channel, credits, amount_cents, currency, status,
-			qr_code, provider_order_id, trade_no, created_at, paid_at, expired_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)`,
+			qr_code, provider_order_id, trade_no, package_code, created_at, paid_at, expired_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		p.ID, p.UserID, p.Channel, p.Credits, p.AmountCents, p.Currency, p.Status,
-		p.QRCode, p.ProviderOrderID, p.TradeNo, p.CreatedAt, p.PaidAt, p.ExpiredAt)
+		p.QRCode, p.ProviderOrderID, p.TradeNo, nullIfEmpty(p.PackageCode), p.CreatedAt, p.PaidAt, p.ExpiredAt)
 	return err
+}
+
+// nullIfEmpty 把空字符串转成 NULL，供可空列写入。
+// 存量订单都是纯充值，`package_code` 必须是 NULL 而不是 ''：判定"是不是套餐订单"
+// 只写 `package_code <> ''` 一处的话，NULL 与 '' 两种缺失形态迟早漏判一个。
+func nullIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }
 
 func (s *PGStore) GetPayment(ctx context.Context, id string) (*Payment, error) {

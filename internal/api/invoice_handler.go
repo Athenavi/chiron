@@ -158,13 +158,19 @@ func normalizeInvoiceStatusFilter(raw string) (string, error) {
 //
 // `amount_cents IS NOT NULL AND > 0` 也在 WHERE 里：金额取自支付记录本身
 // （快照），NULL 或 0 的订单开出来的票没有意义，让它同样落到"影响 0 行"。
+//
+// 参数必须逐个显式 cast：`$2` 同时出现在 SELECT 列表和 `p.user_id = $2` 两处，
+// PostgreSQL 在 `INSERT ... SELECT` 里会为同一个未定型参数做**两次独立推断**，
+// 一旦两处上下文给出的类型不一致就报 `42P08 inconsistent types deduced for
+// parameter $2`（真库实测踩到，申请发票直接 500）。统一钉死类型后只剩一条推断路径。
 const applyInvoiceQuery = `INSERT INTO invoice_requests
     (id, user_id, payment_id, title, tax_no, amount_cents, currency, status, note, created_at)
-SELECT $1, $2, p.id, $4, $5, p.amount_cents, COALESCE(NULLIF(p.currency, ''), 'CNY'),
-       'pending', NULLIF($6, ''), now()
+SELECT $1::varchar, $2::varchar, p.id, $4::varchar, $5::varchar,
+       p.amount_cents, COALESCE(NULLIF(p.currency, ''), 'CNY'),
+       'pending', NULLIF($6::text, ''), now()
   FROM payments p
- WHERE p.id = $3
-   AND p.user_id = $2
+ WHERE p.id = $3::varchar
+   AND p.user_id = $2::varchar
    AND p.status = 'paid'
    AND p.amount_cents IS NOT NULL
    AND p.amount_cents > 0`

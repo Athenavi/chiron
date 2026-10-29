@@ -90,6 +90,9 @@ type Store interface {
 	AtomicAddBalance(ctx context.Context, userID string, amount int, reason string) (int, error)
 	RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, costCents int, turnID string) error
 	PaymentStore
+	// EntitlementStore 承载套餐目录与用户权益（P2-2 一次性套餐）。
+	// 单独成表而不是塞进 credit_transactions：权益发放可幂等重放，余额变更不能。
+	EntitlementStore
 }
 
 // NewManager creates a billing manager with the given store.
@@ -291,6 +294,26 @@ func (m *Manager) CreatePayment(ctx context.Context, p *Payment) error {
 // GetPayment 按内部订单号查询订单。
 func (m *Manager) GetPayment(ctx context.Context, id string) (*Payment, error) {
 	return m.store.GetPayment(ctx, id)
+}
+
+// PackageByCode 读套餐目录（delegate 到 EntitlementStore）。
+func (m *Manager) PackageByCode(ctx context.Context, code string) (*Package, error) {
+	return m.store.PackageByCode(ctx, code)
+}
+
+// ActiveEntitlements 返回用户在 now 时刻仍有效的权益（delegate 到 EntitlementStore）。
+func (m *Manager) ActiveEntitlements(ctx context.Context, userID string, now time.Time) ([]Entitlement, error) {
+	return m.store.ActiveEntitlements(ctx, userID, now)
+}
+
+// ListPackages 返回已上架套餐目录（delegate 到 EntitlementStore）。
+func (m *Manager) ListPackages(ctx context.Context) ([]Package, error) {
+	return m.store.ListPackages(ctx)
+}
+
+// UserEntitlements 返回用户全部权益（含已过期），供"我的套餐"展示到期状态。
+func (m *Manager) UserEntitlements(ctx context.Context, userID string) ([]Entitlement, error) {
+	return m.store.UserEntitlements(ctx, userID)
 }
 
 // UpdatePaymentProvider 预下单成功后回填二维码与渠道订单号。

@@ -37,9 +37,12 @@ type Payment struct {
 	QRCode          string     `json:"qr_code,omitempty"`           // 扫码支付二维码内容
 	ProviderOrderID string     `json:"provider_order_id,omitempty"` // 渠道侧订单号（out_trade_no / paypal order id）
 	TradeNo         string     `json:"trade_no,omitempty"`          // 渠道交易流水号（支付成功后回填）
-	CreatedAt       time.Time  `json:"created_at"`
-	PaidAt          *time.Time `json:"paid_at,omitempty"`
-	ExpiredAt       *time.Time `json:"expired_at,omitempty"`
+	// PackageCode 非空表示这是一笔套餐订单（购买后一次性发放 credits + 权益快照）。
+	// 空表示纯充值（存量订单都是这一类）。
+	PackageCode string     `json:"package_code,omitempty"`
+	CreatedAt   time.Time  `json:"created_at"`
+	PaidAt      *time.Time `json:"paid_at,omitempty"`
+	ExpiredAt   *time.Time `json:"expired_at,omitempty"`
 }
 
 // PaymentStore 是支付订单的持久化接口。
@@ -111,5 +114,11 @@ func (m *Manager) ConfirmPayment(ctx context.Context, id, tradeNo string) (*Paym
 		}
 		return p, false, fmt.Errorf("credit after payment: %w", err)
 	}
+	// credits 已到账，此后**只做不发错事**的补发：套餐订单发放权益快照。
+	//
+	// 刻意不把它的错误向上返回：此时 AddCredits 已成功，把订单退回 pending 会让下一次
+	// 回调再发一次 credits（付一次、加两次）。权益发放失败只告警，靠幂等重放补
+	// （GrantEntitlement 撞 23505 即视为已发）。
+	m.grantEntitlementForPayment(ctx, p)
 	return p, true, nil
 }

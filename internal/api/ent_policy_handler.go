@@ -57,11 +57,18 @@ type EntPolicyHandler struct {
 	// 返回 (allowed, hasPolicy, err)：hasPolicy=false 表示无任何策略（放行）。
 	// nil 时使用默认 PG 实现；测试可注入 fake。
 	resolveAllowed func(ctx context.Context, tenantID int16, userID string) ([]string, bool, error)
+	// resolveEntitled 解析用户当前生效套餐权益允许的模型。
+	// 返回 (models, hasEntitlement, err)：hasEntitlement=false 表示用户没有生效权益，
+	// 不构成限制。nil 时使用默认 PG 实现；测试可注入 fake。
+	resolveEntitled func(ctx context.Context, userID string) ([]string, bool, error)
 }
 
 // NewEntPolicyHandler 创建策略 handler（默认 PG 实现）。
 func NewEntPolicyHandler() *EntPolicyHandler {
-	return &EntPolicyHandler{resolveAllowed: defaultResolveAllowedModels}
+	return &EntPolicyHandler{
+		resolveAllowed:  defaultResolveAllowedModels,
+		resolveEntitled: defaultResolveEntitledModels,
+	}
 }
 
 // RegisterRoutes 挂载策略路由（authMW + RequireEntPerm("policy:manage")）。
@@ -110,10 +117,12 @@ func (h *EntPolicyHandler) EnforceEnterprisePolicy(r *http.Request, claims *auth
 			"user", claims.UserID, "tenant", claims.TenantID, "model", modelID, "error", err)
 		return nil
 	}
-	if !hasPolicy {
+	entModels, hasEnt := h.resolveEntitledModels(r.Context(), claims.UserID)
+	effective, restricted := effectiveAllowedModels(allowed, hasPolicy, entModels, hasEnt)
+	if !restricted {
 		return nil
 	}
-	for _, m := range allowed {
+	for _, m := range effective {
 		if m == modelID {
 			return nil
 		}
@@ -137,13 +146,16 @@ func (h *EntPolicyHandler) ResolveAllowedModels(ctx context.Context, tenantID in
 	if err != nil {
 		return nil, err
 	}
-	if hasPolicy {
-		if allowed == nil {
-			allowed = []string{}
-		}
-		return allowed, nil
+	entModels, hasEnt := h.resolveEntitledModels(ctx, userID)
+	effective, restricted := effectiveAllowedModels(allowed, hasPolicy, entModels, hasEnt)
+	if !restricted {
+		// 两侧都不限制 → 全量模型。
+		return h.allModelIDs(ctx)
 	}
-	return h.allModelIDs(ctx)
+	if effective == nil {
+		effective = []string{}
+	}
+	return effective, nil
 }
 
 // ResolveAllowedModels 包级入口。

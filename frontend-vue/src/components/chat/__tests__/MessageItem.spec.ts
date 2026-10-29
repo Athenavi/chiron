@@ -458,4 +458,51 @@ describe('失败消息的可执行动作', () => {
 
     expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('重试'))).toBe(true)
   })
+
+  // ── 模型越界（P2-2b）────────────────────────────────────────────────
+  //
+  // 同一个 403 有两种归因，动作**相反**：套餐不覆盖 → 买了就能用；
+  // 租户策略不允许 → 买套餐也没用。给错按钮的代价是让用户白花钱。
+  it('★ 套餐不覆盖 → 给「去购买套餐」，点击后落到套餐页签', async () => {
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mountFailed(
+      { errorCode: 'model_not_allowed', errorReason: 'entitlement' },
+      router,
+    )
+    await settleAsync()
+
+    const action = wrapper.findAll('.retry-btn').find(b => b.text().includes('去购买套餐'))
+    expect(action, '套餐不覆盖时必须给一个直达套餐页签的入口').toBeTruthy()
+
+    await action!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/billing')
+    // 落到套餐页签而不是充值页：买套餐和充值是两件事
+    expect(router.currentRoute.value.query.tab).toBe('packages')
+  })
+
+  it('租户策略不允许 → 不给「去购买套餐」（买了也没用）', async () => {
+    const wrapper = mountFailed(
+      { errorCode: 'model_not_allowed', errorReason: 'policy' },
+      makeRouter(),
+    )
+    await settleAsync()
+
+    expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('去购买套餐'))).toBe(false)
+    // 但错误横幅仍在：必须让用户看到"用不了"以及原因，不能静默
+    expect(wrapper.find('.msg-error-banner').exists()).toBe(true)
+  })
+
+  it('模型越界且 retryable=false → 不渲染「重试」', async () => {
+    const wrapper = mountFailed(
+      { errorCode: 'model_not_allowed', errorReason: 'entitlement', errorRetryable: false },
+      makeRouter(),
+    )
+    await settleAsync()
+
+    expect(wrapper.findAll('.retry-btn').some(b => b.text() === '重试')).toBe(false)
+  })
 })

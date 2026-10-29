@@ -55,6 +55,13 @@ export interface TextItem extends ChatItemBase {
    * `session_busy` 说明同会话有一轮还没收口，此时"修复会话"才是对的解法。
    */
   errorCode?: string
+  /**
+   * 模型被拒的原因（后端 `params.reason`，P2-2b）：`entitlement` / `policy`。
+   *
+   * 只用于**选动作**，不直接渲染 —— 两种原因给用户的建议完全相反：
+   * 套餐不覆盖可以买，租户策略不允许买了也没用。
+   */
+  errorReason?: string
   /** 自动恢复的最坏等待秒数（后端算的：stale 阈值 + 一次巡检间隔）。 */
   errorRetryAfterSec?: number
   /**

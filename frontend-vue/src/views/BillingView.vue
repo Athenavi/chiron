@@ -106,6 +106,34 @@ interface InvoiceRequest {
   created_at?: string
 }
 
+// ── 套餐与权益（P2-2）──
+
+/** 已上架套餐（GET /v1/billing/packages） */
+interface PackageItem {
+  id: string
+  code: string
+  name: string
+  credits: number
+  price_cents: number
+  currency: string
+  duration_days: number
+  allowed_models: string[] | null
+  sort_order: number
+}
+
+/** 我的权益（GET /v1/billing/entitlements），含已过期条目 */
+interface EntitlementItem {
+  id: string
+  package_code: string
+  package_name: string
+  allowed_models: string[] | null
+  starts_at: string
+  expires_at: string
+  /** 是否生效由服务端判定：客户端时钟偏差不该影响"还能不能用"的显示 */
+  active: boolean
+  days_remaining: number
+}
+
 // ── 状态 ──
 
 const route = useRoute()
@@ -176,7 +204,17 @@ const rangeLabel = computed(() => t('billing.usage_range_days', { n: rangeDays.v
 
 const loading = ref(true)
 const checkoutLoading = ref(false)
-const activeTab = ref('balance')
+/**
+ * 当前页签。支持用 `?tab=packages` 直达（P2-2b）：对话里「模型不在可用范围」
+ * 的错误块会把用户送到套餐页签，落到充值页等于让他自己再找一遍。
+ * 非法值静默忽略，保持默认页签 —— 这是导航参数，不值得为它报错。
+ */
+const BILLING_TABS = ['purchase', 'packages', 'history', 'invoice'] as const
+function initialTab(): string {
+  const q = route.query.tab
+  return typeof q === 'string' && (BILLING_TABS as readonly string[]).includes(q) ? q : 'balance'
+}
+const activeTab = ref(initialTab())
 
 const credits = ref(1000)
 const customCredits = ref('')
@@ -194,6 +232,16 @@ const qrCanvas = ref<HTMLCanvasElement | null>(null)
 const payStatus = ref<'pending' | 'paid' | 'expired' | 'failed'>('pending')
 let pollTimer: number | undefined
 const PAY_POLL_INTERVAL = 3000
+
+// ── 套餐与权益（P2-2）──
+
+const packages = ref<PackageItem[]>([])
+const packagesLoading = ref(false)
+const packagesLoaded = ref(false)
+/** 我的权益：含已过期条目，用户要能区分"过期了"和"从没买过" */
+const entitlements = ref<EntitlementItem[]>([])
+const entitlementsLoading = ref(false)
+const entitlementsLoaded = ref(false)
 
 // ── 常量 ──
 
@@ -335,6 +383,11 @@ watch(activeTab, async (tab) => {
   if (tab === 'invoice' && !invoiceOrdersLoading.value && !invoiceListLoading.value) {
     await loadInvoices()
   }
+  // 套餐与权益每次进入都重拉：刚买完或刚到期都必须立刻反映出来。
+  if (tab === 'packages') {
+    if (!packagesLoading.value) await loadPackages()
+    if (!entitlementsLoading.value) await loadEntitlements()
+  }
 })
 
 function readPayResultParam() {
@@ -428,6 +481,40 @@ async function loadHistory() {
  * 两个请求并行：它们互不依赖，串行只会让 tab 打开时多等一个往返。
  * 单个失败不blocked另一个 —— 订单列表为空时用户仍应能看到历史申请的状态。
  */
+async function loadPackages() {
+  if (packagesLoading.value) return
+  packagesLoading.value = true
+  try {
+    const res = await api.get('/v1/billing/packages')
+    packages.value = (res.data?.data as PackageItem[] | undefined) ?? []
+    packagesLoaded.value = true
+  } catch (e) {
+    message.error(errorMessageText(e, t('errors.failed_to_load')))
+  } finally {
+    packagesLoading.value = false
+  }
+}
+
+/**
+ * 拉取"我的权益"（含已过期）。
+ *
+ * 每次都重拉而不是缓存：套餐可能刚买完、也可能刚到期，缓存会让用户看到
+ * "生效中"却用不了模型，正好是我们要求避免的"用不了但没提示"。
+ */
+async function loadEntitlements() {
+  if (entitlementsLoading.value) return
+  entitlementsLoading.value = true
+  try {
+    const res = await api.get('/v1/billing/entitlements')
+    entitlements.value = (res.data?.data as EntitlementItem[] | undefined) ?? []
+    entitlementsLoaded.value = true
+  } catch (e) {
+    message.error(errorMessageText(e, t('errors.failed_to_load')))
+  } finally {
+    entitlementsLoading.value = false
+  }
+}
+
 async function loadInvoices() {
   invoiceOrdersLoading.value = true
   invoiceListLoading.value = true
@@ -577,6 +664,39 @@ function selectPreset(n: number) {
   customCredits.value = ''
 }
 
+/**
+ * 下单后的统一处理：PayPal 跳转授权页，支付宝/微信展示二维码并轮询。
+ *
+ * 抽出来是因为"充值"和"买套餐"两条下单路径的后续完全一样，只有请求体不同。
+ * 两处各写一份的话，改支付流程时必然会漏掉一处。
+ */
+async function settleOrder(data: any) {
+  if (provider.value === 'paypal') {
+    // PayPal：跳转授权页
+    if (data.checkout_url) {
+      // S 安全：校验协议为 http/https，防 javascript:/data: 等 XSS 向量
+      if (!/^https?:\/\//i.test(data.checkout_url)) {
+        throw new Error(t('billing.illegal_payment_link'))
+      }
+      window.location.href = data.checkout_url
+    } else {
+      throw new Error(t('billing.could_not_get_paypal_payment_link'))
+    }
+    return
+  }
+
+  // 支付宝/微信：展示二维码并轮询订单状态
+  if (!data.qr_code) throw new Error(t('billing.could_not_get_payment_qr_code'))
+  qrCode.value = data.qr_code
+  currentOrderId.value = data.id
+  qrChannel.value = provider.value as 'alipay' | 'wechat'
+  payStatus.value = 'pending'
+  qrVisible.value = true
+  await nextTick()
+  renderQRCode()
+  startPolling()
+}
+
 async function handlePurchase() {
   const amount = effectiveCredits.value
   if (amount <= 0) {
@@ -595,31 +715,33 @@ async function handlePurchase() {
     })
     const data = response.data?.data
     if (!data) throw new Error(t('errors.failed_to_create_order'))
+    await settleOrder(data)
+  } catch (error) {
+    message.error(describeApiError(error, t('errors.failed_to_create_payment_order')))
+  } finally {
+    checkoutLoading.value = false
+  }
+}
 
-    if (provider.value === 'paypal') {
-      // PayPal：跳转授权页
-      if (data.checkout_url) {
-        // S 安全：校验协议为 http/https，防 javascript:/data: 等 XSS 向量
-        if (!/^https?:\/\//i.test(data.checkout_url)) {
-          throw new Error(t('billing.illegal_payment_link'))
-        }
-        window.location.href = data.checkout_url
-      } else {
-        throw new Error(t('billing.could_not_get_paypal_payment_link'))
-      }
-      return
-    }
-
-    // 支付宝/微信：展示二维码并轮询订单状态
-    if (!data.qr_code) throw new Error(t('billing.could_not_get_payment_qr_code'))
-    qrCode.value = data.qr_code
-    currentOrderId.value = data.id
-    qrChannel.value = provider.value as 'alipay' | 'wechat'
-    payStatus.value = 'pending'
-    qrVisible.value = true
-    await nextTick()
-    renderQRCode()
-    startPolling()
+/**
+ * 购买套餐包：credits、金额、币种都由后端按 package_code 从目录取，
+ * 前端**不传** credits —— 传了也不会被采信（后端会忽略），但显式不传更能说明
+ * "价格与额度以下单时刻的目录为准"这个语义。
+ */
+async function purchasePackage(pkg: PackageItem) {
+  if (!provider.value) {
+    message.warning(t('billing.please_select_a_payment_method_first'))
+    return
+  }
+  checkoutLoading.value = true
+  try {
+    const response = await api.post('/v1/billing/pay', {
+      package_code: pkg.code,
+      channel: provider.value,
+    })
+    const data = response.data?.data
+    if (!data) throw new Error(t('errors.failed_to_create_order'))
+    await settleOrder(data)
   } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_create_payment_order')))
   } finally {
@@ -970,6 +1092,114 @@ function amountText(amount: number): string {
         </Card>
       </TabPane>
 
+      <!-- 套餐包与我的权益（P2-2）：一次性购买，到期只失效不续费 -->
+      <TabPane
+        key="packages"
+        :tab="$t('billing.packages_title')"
+      >
+        <Card>
+          <template #title>
+            <ShoppingOutlined /> {{ $t('billing.packages_title') }}
+          </template>
+          <Alert
+            type="info"
+            :message="$t('billing.packages_hint')"
+            show-icon
+            style="margin-bottom: 16px"
+          />
+          <Spin :spinning="packagesLoading">
+            <div
+              v-if="packages.length"
+              class="package-grid"
+            >
+              <div
+                v-for="pkg in packages"
+                :key="pkg.code"
+                class="package-card"
+                :data-test="`package-${pkg.code}`"
+              >
+                <div class="package-name">
+                  {{ pkg.name }}
+                </div>
+                <div class="package-credits">
+                  {{ $t('billing.package_credits', { n: pkg.credits }) }}
+                </div>
+                <div class="package-meta">
+                  ¥{{ (pkg.price_cents / 100).toFixed(2) }} · {{ $t('billing.package_validity_days', { n: pkg.duration_days }) }}
+                </div>
+                <div class="package-models">
+                  {{ pkg.allowed_models && pkg.allowed_models.length
+                    ? $t('billing.package_models', { models: pkg.allowed_models.join(', ') })
+                    : $t('billing.package_models_unlimited') }}
+                </div>
+                <Button
+                  type="primary"
+                  :loading="checkoutLoading"
+                  @click="purchasePackage(pkg)"
+                >
+                  {{ $t('billing.packages_buy') }}
+                </Button>
+              </div>
+            </div>
+            <EmptyState
+              v-else-if="packagesLoaded && !packagesLoading"
+              :description="$t('billing.packages_empty')"
+            />
+          </Spin>
+        </Card>
+
+        <Card style="margin-top: 16px">
+          <template #title>
+            <FileTextOutlined /> {{ $t('billing.my_entitlements_title') }}
+          </template>
+          <Spin :spinning="entitlementsLoading">
+            <div
+              v-if="entitlements.length"
+              data-test="entitlement-list"
+            >
+              <div
+                v-for="ent in entitlements"
+                :key="ent.id"
+                class="entitlement-row"
+              >
+                <div class="entitlement-main">
+                  <span class="entitlement-name">{{ ent.package_name }}</span>
+                  <Tag :color="ent.active ? 'green' : 'default'">
+                    {{ ent.active
+                      ? $t('billing.entitlement_active')
+                      : $t('billing.entitlement_expired') }}
+                  </Tag>
+                  <span
+                    v-if="ent.active"
+                    class="entitlement-days"
+                  >
+                    {{ $t('billing.entitlement_days_left', { n: ent.days_remaining }) }}
+                  </span>
+                </div>
+                <div class="entitlement-meta">
+                  {{ ent.allowed_models && ent.allowed_models.length
+                    ? $t('billing.package_models', { models: ent.allowed_models.join(', ') })
+                    : $t('billing.package_models_unlimited') }}
+                  · {{ $t('billing.entitlement_expires_at', { date: formatTime(ent.expires_at) }) }}
+                </div>
+                <!-- 过期必须给出明确原因与下一步：这正是"用不了但没提示"的反面 -->
+                <Alert
+                  v-if="!ent.active"
+                  type="warning"
+                  :message="$t('billing.entitlement_expired_hint', { date: formatTime(ent.expires_at) })"
+                  show-icon
+                  style="margin-top: 8px"
+                />
+              </div>
+            </div>
+            <EmptyState
+              v-else-if="entitlementsLoaded && !entitlementsLoading"
+              :description="$t('billing.my_entitlements_empty')"
+            />
+          </Spin>
+        </Card>
+      </TabPane>
+
       <!-- 交易历史 -->
       <TabPane
         key="history"
@@ -1287,6 +1517,28 @@ function amountText(amount: number): string {
 
 .amount-add { color: var(--colorSuccess, #10b981); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .amount-deduct { color: var(--colorError, var(--error)); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
+
+/* ── 套餐与权益（P2-2）── */
+.package-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
+.package-card {
+  display: flex; flex-direction: column; gap: 8px;
+  padding: 16px; border: var(--hairline-width) solid var(--border-card);
+  border-radius: var(--radius-lg);
+}
+.package-name { font-size: 15px; font-weight: var(--fw-semibold); color: var(--text-primary); }
+.package-credits { font-size: 20px; font-weight: var(--fw-semibold); color: var(--text-primary); font-variant-numeric: tabular-nums; }
+.package-meta { font-size: 13px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+/* 模型清单可能很长，限两行避免把卡片撑破版式 */
+.package-models {
+  font-size: 12px; color: var(--text-tertiary); line-height: 1.5;
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;
+}
+.entitlement-row { padding: 12px 0; border-bottom: var(--hairline-width) solid var(--border-card); }
+.entitlement-row:last-child { border-bottom: none; }
+.entitlement-main { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.entitlement-name { font-weight: var(--fw-semibold); color: var(--text-primary); }
+.entitlement-days { font-size: 13px; color: var(--text-tertiary); font-variant-numeric: tabular-nums; }
+.entitlement-meta { margin-top: 4px; font-size: 12px; color: var(--text-tertiary); }
 
 .qr-body { text-align: center; padding: 8px 0; }
 .qr-channel { margin-bottom: 14px; font-size: 15px; font-weight: var(--fw-semibold); display: flex; align-items: center; justify-content: center; gap: 8px; color: var(--text-primary); }

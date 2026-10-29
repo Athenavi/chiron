@@ -500,8 +500,22 @@ func TestLiveAPIKeyAuthAndMarkUsed(t *testing.T) {
 	if after == nil {
 		t.Fatal("回写后 last_used_at 仍为 NULL")
 	}
-	// 时间必须接近现在：无时区列 + timestamptz 的隐式转换若出错，偏差会是小时级。
-	if drift := time.Since(*after); drift < -time.Minute || drift > time.Hour {
-		t.Errorf("last_used_at 与当前时间偏差 %v，疑似时区转换问题", drift)
+	// 时间必须接近"数据库的现在"。
+	//
+	// 这里**不能**用 Go 侧的 `time.Since(*after)`：`api_keys.last_used_at` 是
+	// `timestamp without time zone`（naive），而 `now()` 是 timestamptz，隐式转换会
+	// 按**数据库会话时区**落成墙钟值（本机实测会话时区 Asia/Shanghai ⇒ 存进去的是
+	// +08 的本地时间）。拿它跟 Go 进程的 UTC 时刻相减，偏差恒为 8 小时 ——那是
+	// L4-3 已记录的存量语义，不是这段代码的缺陷。
+	//
+	// 因此把比较放到数据库侧，naive 减 naive，只验证"确实写入了当下"。
+	var driftSec float64
+	if err := pool.QueryRow(ctx,
+		`SELECT EXTRACT(EPOCH FROM (now()::timestamp - last_used_at))::float8
+		   FROM api_keys WHERE id = $1`, activeKeyID).Scan(&driftSec); err != nil {
+		t.Fatalf("计算 last_used_at 偏差失败: %v", err)
+	}
+	if driftSec < -60 || driftSec > 60 {
+		t.Errorf("last_used_at 与数据库会话当前时刻偏差 %.0f 秒，期望 1 分钟内（同一会话时区下的 naive 比较）", driftSec)
 	}
 }

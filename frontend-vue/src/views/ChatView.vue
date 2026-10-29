@@ -2736,7 +2736,7 @@ function discardOutbox() {
 function markMessageFailed(
   itemId: string | undefined,
   errorMsg: string,
-  meta?: { code?: string; retryAfterSec?: number; retryable?: boolean },
+  meta?: { code?: string; retryAfterSec?: number; retryable?: boolean; reason?: string },
 ) {
   if (!itemId) return
   const it = items.value.find(i => i.id === itemId)
@@ -2750,6 +2750,8 @@ function markMessageFailed(
     it.errorRetryAfterSec = meta?.retryAfterSec
     // 服务端说"重试没意义"时，UI 就不该给重试按钮（见 MessageItem 的渲染条件）。
     it.errorRetryable = meta?.retryable
+    // 模型被拒时区分"谁拦的"，据此决定给"买套餐"还是"找管理员"。
+    it.errorReason = meta?.reason
   }
 }
 
@@ -2759,22 +2761,33 @@ function markMessageFailed(
  * 秒数由后端算（stale 阈值 + 一次巡检间隔），前端只负责呈现 ——
  * 这样"还要等多久"与实际自动恢复时机不会各说各话。
  */
-function describeFailureMeta(e: unknown): { code?: string; retryAfterSec?: number; retryable?: boolean } {
+function describeFailureMeta(e: unknown): {
+  code?: string
+  retryAfterSec?: number
+  retryable?: boolean
+  reason?: string
+} {
   const data = (
     e as {
       response?: {
-        data?: { code?: string; retryable?: boolean; params?: { retry_after_seconds?: number } }
+        data?: {
+          code?: string
+          retryable?: boolean
+          params?: { retry_after_seconds?: number; reason?: string }
+        }
       }
     }
   )?.response?.data
   if (!data) return {}
   const sec = data.params?.retry_after_seconds
+  const reason = data.params?.reason
   return {
     code: typeof data.code === 'string' ? data.code : undefined,
     retryAfterSec: typeof sec === 'number' ? sec : undefined,
     // 只在服务端**显式**给出布尔时才传：缺省表示"无结论"，调用方应保持原行为
     // （见 rateLimitBackoff.shouldRetryResponse 的同一条口径）。
     retryable: typeof data.retryable === 'boolean' ? data.retryable : undefined,
+    reason: typeof reason === 'string' ? reason : undefined,
   }
 }
 

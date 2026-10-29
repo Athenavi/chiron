@@ -30,6 +30,15 @@ export default {
   // checks the existing request; the admin refreshes because a colleague reviewed it.
   invoice_already_requested: 'An invoice has already been requested for this order. Check the list below for its status.',
   invoice_already_reviewed: 'This request has already been reviewed. Refresh the list to see the latest status.',
+  // Model not in the usable range (P2-2b): two keys for the same rejection with
+  // different next steps — package doesn't cover it → buy/renew; tenant policy
+  // forbids it → buying won't help, ask the admin. The `_in` variant interpolates
+  // only the model name, never the `reason` enum.
+  model_not_allowed: 'This model is not in your usable range',
+  model_not_allowed_in: 'Model {model} is not in your usable range',
+  model_not_allowed_entitlement: 'This model requires a package that covers it. Buy or renew a package under Billing → Packages to use it.',
+  model_not_allowed_policy: 'Your tenant policy does not allow this model. Ask your tenant administrator to update the allow-list.',
+  model_not_allowed_buy_package: 'Buy a package',
   // Network & client-side (fallback when backend sends no code)
   timeout: 'Request timed out. Please try again.',
   network_error: 'Network connection failed. Please check your connection and try again.',

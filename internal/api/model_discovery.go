@@ -25,6 +25,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 )
 
@@ -394,7 +395,36 @@ func ListModelsForUser(w http.ResponseWriter, r *http.Request) {
 			out = append(out, m)
 		}
 	}
+	if set, restricted := effectiveModelSetForRequest(ctx, r); restricted {
+		// 只在**确实施加了限制**时过滤。restricted=false（两层都不限制 /
+		// 解析失败 fail-open）时原样返回，绝不用空集合把下拉清空。
+		kept := make([]model, 0, len(out))
+		for _, m := range out {
+			if _, ok := set[m.Name]; ok {
+				kept = append(kept, m)
+			}
+		}
+		out = kept
+	}
 	OK(w, map[string]interface{}{"models": out})
+}
+
+// effectiveModelSetForRequest 取当前请求的可用模型集合（P2-2b）。
+//
+// 为什么不直接用 ResolveAllowedModels：它在"不限制"时要返回一份全量清单，
+// 实现查的是 admin_model_configs.model_id —— 该表可以为空，而 /v1/models 的
+// 数据源是 llm_models。两者命名空间不同且真库实测零交集，拿前者过滤后者会
+// 把模型列表**全部清空**。这里的第二个返回值就是用来区分这两种情况的。
+func effectiveModelSetForRequest(ctx context.Context, r *http.Request) (map[string]struct{}, bool) {
+	claims := auth.GetClaims(ctx)
+	if claims == nil {
+		return nil, false
+	}
+	tenant := claims.TenantID
+	if tenant == 0 {
+		tenant = parseTenantID(claims.UserID)
+	}
+	return EffectiveModelSet(ctx, tenant, claims.UserID)
 }
 
 func modelsRecentlySynced(provider string) bool {
