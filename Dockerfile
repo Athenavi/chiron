@@ -15,7 +15,7 @@ RUN --mount=type=cache,target=/root/.cache/go-build \
 RUN --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 go build -mod=mod -o /build/chiron-cli ./cmd/chiron-cli/
 
-FROM alpine:3.23
+FROM alpine:3.24
 # Security: runtime dependencies + upgrade base image packages
 RUN apk upgrade --no-cache && apk add --no-cache ca-certificates tzdata wget
 # Security: run as non-root user
