@@ -140,11 +140,89 @@ func (h *BillingHandler) GetHistory(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"user_id": userID, "history": history})
 }
 
+// usageRangeDays 是 `range` 参数的白名单。用映射而不是直接解析整数：
+// 允许任意天数会让用户发起 `range=3650` 这类全表扫描，而这个端点是**同步**查询。
+var usageRangeDays = map[string]int{
+	"7d":  7,
+	"30d": 30,
+	"90d": 90,
+}
+
+// usageGroupByWhitelist 是 `groupBy` 的白名单。
+//
+// 只放 usage_events 里**真实有数据**的维度。`endpoint` 曾被考虑但不在此列：
+// 明细表根本没记这一列，加进去只会返回一列空值，比不提供更误导。
+var usageGroupByWhitelist = map[string]bool{
+	"day":     true,
+	"model":   true,
+	"session": true,
+}
+
+// usageGroupColumn 把分组维度映射成 SQL 列表达式。
+//
+// 只处理**非 day** 的两个维度：day 走 credit_transactions 的按日聚合，不经过这里。
+// 空值归入 'unknown' 而不是丢弃 —— 丢掉会让"各分组之和"小于总量，
+// 用户会以为统计漏了数据，而这恰恰是最该被看见的那部分（子 Agent 未回传模型）。
+func usageGroupColumn(groupBy string) (string, bool) {
+	switch groupBy {
+	case "model":
+		return "COALESCE(NULLIF(model, ''), 'unknown')", true
+	case "session":
+		return "COALESCE(NULLIF(session_id, ''), 'unknown')", true
+	default:
+		return "", false
+	}
+}
+
 // GetUsage returns aggregated usage stats for the user: daily token consumption and costs.
+//
+// 查询参数（都可省略，省略时行为与改造前完全一致）：
+//
+//	groupBy = day(默认) | model | session
+//	range   = 7d | 30d(默认) | 90d
+//
+// 为什么默认仍走 credit_transactions 的按日聚合：已有前端依赖 `daily` 数组的形状，
+// 换数据源会改变"记账流入/流出"的口径。`model` / `session` 两个维度来自
+// usage_events（0004 迁移），它记的是**真实 token 与模型**，不含充值与扣费流水。
+// parseUsageParams 解析并校验 GetUsage 的查询参数。
+//
+// 抽成纯函数是为了能**脱离数据库**测这三个行为：默认值、白名单、非法值报错。
+// 返回 errMsg 非空即应回 400 —— 刻意不返回 error：调用方只需要一句给用户看的
+// 文案，包一层 error 只会让错误信息被 fmt 破坏。
+func parseUsageParams(groupBy, rangeKey string) (string, int, string) {
+	if groupBy == "" {
+		groupBy = "day"
+	}
+	if !usageGroupByWhitelist[groupBy] {
+		return "", 0, "invalid groupBy: must be one of day, model, session"
+	}
+	if rangeKey == "" {
+		rangeKey = "30d"
+	}
+	days, ok := usageRangeDays[rangeKey]
+	if !ok {
+		return "", 0, "invalid range: must be one of 7d, 30d, 90d"
+	}
+	return groupBy, days, ""
+}
+
 func (h *BillingHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 	userID := h.resolveUserID(r)
 	if userID == "" {
 		Unauthorized(w, ErrAuthRequired)
+		return
+	}
+
+	q := r.URL.Query()
+	groupBy, days, errMsg := parseUsageParams(q.Get("groupBy"), q.Get("range"))
+	if errMsg != "" {
+		// 显式 400 而不是静默回落：静默回落会让调用方以为查询生效了。
+		BadRequest(w, errMsg)
+		return
+	}
+
+	if groupBy != "day" {
+		h.getBreakdownUsage(w, r, userID, groupBy, days)
 		return
 	}
 
@@ -154,9 +232,9 @@ func (h *BillingHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 			SUM(CASE WHEN amount < 0 THEN ABS(amount) ELSE 0 END) as credits_spent,
 			SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) as credits_added
 		 FROM credit_transactions
-		 WHERE user_id = $1 AND created_at::timestamp >= NOW() - INTERVAL '30 days'
+		 WHERE user_id = $1 AND created_at::timestamp >= NOW() - make_interval(days => $2)
 		 GROUP BY DATE(created_at::timestamp)
-		 ORDER BY day DESC`, userID)
+		 ORDER BY day DESC`, userID, days)
 	if err != nil {
 		slog.Error("get usage stats failed", "user_id", userID, "error", err, "db_available", db.GlobalDBManager.IsAvailable())
 		InternalError(w, fmt.Sprintf("failed to get usage stats: %v", err))
@@ -199,6 +277,113 @@ func (h *BillingHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 		"total_spent": totalSpent,
 		"total_added": totalAdded,
 		"period_days": 30,
+	})
+}
+
+// usageBreakdownLimit 是单次返回的 bucket 行数上限。
+//
+// 为什么要有它：前端分页只是**视觉上**分页，后端若把 90 天内的全部
+// model/session 聚合结果一次性返回，模型多的账号会拉回上千行 ——
+// 传输和渲染都白做了，用户在同一屏里也看不完。
+const usageBreakdownLimit = 100
+
+// getBreakdownUsage 按 model / session 聚合 usage_events。
+//
+// 与按日聚合的关键区别：这里统计的是**真实 token 消耗**，不含充值流水。
+// 因此返回体里没有 total_added —— 在"钱花在哪"的视角下它没有意义，返回一个恒为 0
+// 的字段只会让人以为数据坏了。
+//
+// 为兼容已经依赖 `daily` 的老前端，非 day 分组时仍返回一个空 `daily` 数组，
+// 而不是省略该键：省略会让 `usage.daily.map(...)` 直接抛错。
+//
+// ## 截断时总量为什么仍然准确
+//
+// 结果最多返回 usageBreakdownLimit 行，但 total_* 用窗口函数 `SUM(...) OVER ()`
+// 在**聚合后的全部行**上求和（窗口函数先于 LIMIT 执行）。若改用「把返回行相加」，
+// 截断后总量会小于真实花费，用户拿明细对不上账。total_buckets 同理来自
+// `COUNT(*) OVER ()`，因此 truncated 判定也不需要额外一次查询。
+func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Request, userID, groupBy string, days int) {
+	// 列表达式来自白名单，绝不能来自请求参数 —— 参数只能是标识符，不能拼进 SQL。
+	column, ok := usageGroupColumn(groupBy)
+	if !ok {
+		InternalError(w, "unsupported groupBy")
+		return
+	}
+
+	rows, err := db.GlobalDBManager.Query(r.Context(),
+		fmt.Sprintf(
+			`WITH agg AS (
+			    SELECT %s AS bucket,
+			           COUNT(*) AS event_count,
+			           COALESCE(SUM(input_tokens), 0) AS input_tokens,
+			           COALESCE(SUM(output_tokens), 0) AS output_tokens,
+			           COALESCE(SUM(cached_tokens), 0) AS cached_tokens,
+			           COALESCE(SUM(cost_cents), 0) AS cost_cents
+			      FROM usage_events
+			     WHERE user_id = $1 AND created_at >= NOW() - make_interval(days => $2)
+			     GROUP BY bucket
+			 )
+			 SELECT bucket, event_count, input_tokens, output_tokens, cached_tokens, cost_cents,
+			        COALESCE(SUM(input_tokens) OVER (), 0) AS grand_input,
+			        COALESCE(SUM(output_tokens) OVER (), 0) AS grand_output,
+			        COALESCE(SUM(cached_tokens) OVER (), 0) AS grand_cached,
+			        COALESCE(SUM(cost_cents) OVER (), 0) AS grand_cost,
+			        COUNT(*) OVER () AS total_buckets
+			   FROM agg
+			  ORDER BY (input_tokens + output_tokens) DESC
+			  LIMIT $3`,
+			column), userID, days, usageBreakdownLimit)
+	if err != nil {
+		slog.Error("get usage breakdown failed", "user_id", userID, "group_by", groupBy, "error", err)
+		InternalError(w, "failed to get usage breakdown")
+		return
+	}
+	defer rows.Close()
+
+	type bucketUsage struct {
+		Bucket       string `json:"bucket"`
+		EventCount   int    `json:"event_count"`
+		InputTokens  int64  `json:"input_tokens"`
+		OutputTokens int64  `json:"output_tokens"`
+		CachedTokens int64  `json:"cached_tokens"`
+		CostCents    int64  `json:"cost_cents"`
+	}
+
+	breakdown := []bucketUsage{}
+	// total_* 始终是全量合计（见函数头说明），不是 breakdown 各行之和。
+	var totalInput, totalOutput, totalCached, totalCost int64
+	var totalBuckets int
+	for rows.Next() {
+		var b bucketUsage
+		var grandInput, grandOutput, grandCached, grandCost int64
+		if err := rows.Scan(&b.Bucket, &b.EventCount, &b.InputTokens, &b.OutputTokens,
+			&b.CachedTokens, &b.CostCents,
+			&grandInput, &grandOutput, &grandCached, &grandCost, &totalBuckets); err != nil {
+			slog.Warn("scan usage breakdown row failed", "user_id", userID, "error", err)
+			continue
+		}
+		breakdown = append(breakdown, b)
+		// 窗口值每行相同，直接覆盖即可（空结果集时保持 0）。
+		totalInput, totalOutput, totalCached, totalCost = grandInput, grandOutput, grandCached, grandCost
+	}
+	if err := rows.Err(); err != nil {
+		InternalError(w, "failed to iterate usage breakdown")
+		return
+	}
+
+	OK(w, map[string]interface{}{
+		"group_by":     groupBy,
+		"period_days":  days,
+		"breakdown":    breakdown,
+		"total_input":  totalInput,
+		"total_output": totalOutput,
+		"total_cached": totalCached,
+		"total_cost":   totalCost,
+		// truncated 表示"还有没返回的 bucket"。前端据此提示"仅显示花费最高的 N 项"。
+		"truncated":     totalBuckets > len(breakdown),
+		"total_buckets": totalBuckets,
+		"limit":         usageBreakdownLimit,
+		"daily":         []struct{}{},
 	})
 }
 

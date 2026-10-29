@@ -764,6 +764,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 		// 无文本无工具：仅用户消息已由 SaveUserMessage 持久化
 	}
 
+	// chargedCredits 是这一轮**实际扣减**的 credits；免费额度内为 nil（未扣费）。
+	// 明细表要用它区分"花了钱"与"走了免费额度"，两者都消耗真实成本。
+	var chargedCredits *int
 	if usage.input > 0 || usage.output > 0 {
 		if h.biller != nil {
 			// 检查是否仍在免费额度内
@@ -775,9 +778,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				}
 			} else {
 				// 超出免费额度或查询失败：正常扣费
-				if _, err := h.biller.DeductTokens(userID, usage.input, usage.output, turnID); err != nil {
+				if charged, err := h.biller.DeductTokens(userID, usage.input, usage.output, turnID); err != nil {
 					slog.Error("billing: DeductTokens failed", "user", userID, "error", err)
 				} else {
+					chargedCredits = &charged
 					// 企业成本中心 token 明细（billing_records）；失败仅告警，不影响已扣费与流水
 					if recErr := h.biller.RecordTokenUsage(storeCtx, userID, sessionID, usage.input, usage.output, turnID); recErr != nil {
 						slog.Warn("billing: enterprise token usage record failed",
@@ -786,6 +790,26 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				}
 			}
 		}
+	}
+
+	// 用量明细（usage_events）：**只记录、不参与扣费**，供"钱花在哪个模型上"的统计。
+	//
+	// 放在扣费分支**之外**：免费额度内的回合同样消耗真实成本，统计口径必须包含它们，
+	// 否则"用量"会随免费额度策略变化而剧烈波动。写入失败只告警（见 RecordUsageEvent），
+	// 绝不能让已完成的扣费因统计失败而回滚。
+	if usage.input > 0 || usage.output > 0 {
+		RecordUsageEvent(storeCtx, UsageEvent{
+			TenantID:     tenantID,
+			UserID:       userID,
+			SessionID:    sessionID,
+			TurnID:       turnID,
+			Model:        turnModel,
+			Provider:     agentCfg.provider.Value,
+			InputTokens:  usage.input,
+			OutputTokens: usage.output,
+			CachedTokens: usage.cached,
+			CostCents:    chargedCredits,
+		})
 	}
 
 	// P0-3 配额校正：预检在池子里记的是**估算**，这里换成这一轮的**真实** token。

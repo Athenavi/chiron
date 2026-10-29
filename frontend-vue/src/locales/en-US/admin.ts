@@ -202,4 +202,13 @@ export default {
   usage_group_day: "Date",
   usage_group_model: "Model",
   usage_group_user: "User",
+  // ── New-user onboarding funnel (P0-3 acceptance: completion rate must be queryable) ──
+  onboarding_funnel_title: "New-user onboarding completion",
+  onboarding_funnel_entered: "Entered guide",
+  onboarding_funnel_finished: "Finished flow",
+  onboarding_funnel_finished_rate: "Overall completion",
+  onboarding_funnel_completed: "Done",
+  onboarding_funnel_skipped: "Skipped",
+  onboarding_funnel_pending: "Pending",
+  onboarding_funnel_empty: "No user has entered the guide yet — this only covers accounts registered after the feature shipped.",
 }

@@ -136,10 +136,23 @@ export function serverErrorDetail(error: unknown, fallback: string): string {
   return fallback
 }
 
-/** 后端错误码的本地化文案；无对应文案时返回 null（回退到 error 原文） */
-function localizedCodeMessage(code?: string): string | null {
+/**
+ * 后端错误码的本地化文案；无对应文案时返回 null（回退到 error 原文）。
+ *
+ * 带 `params` 时**优先**取 `<code>_in` 变体（如 `errors.rate_limited_in`）：
+ * 有些错误码的文案需要插值（"请 {retry_after_seconds} 秒后重试"），而 vue-i18n 在缺参时
+ * 会原样渲染 `{retry_after_seconds}` —— 宁可退回不带参数的通用文案，也不把占位符摆给用户。
+ * 这正是 `session_busy_auto_recover_in` 已经在用的命名约定。
+ */
+function localizedCodeMessage(
+  code?: string,
+  params?: Record<string, unknown>,
+): string | null {
   if (!code) return null
   const key = `errors.${code}`
+  if (params && Object.keys(params).length && hasMessage(`${key}_in`)) {
+    return t(`${key}_in`, params)
+  }
   return hasMessage(key) ? t(key) : null
 }
 
@@ -151,8 +164,9 @@ export function describeApiError(error: unknown, fallback?: string): string {
   // 少读一个字段，本地模式下就只剩"服务不可用"这种没有信息量的兜底文案。
   const serverMessage = serverErrorDetail(err, '') || undefined
   const code = err.response?.data?.code
+  const params = err.response?.data?.params
 
-  const byCode = localizedCodeMessage(code)
+  const byCode = localizedCodeMessage(code, params)
   const known = statusMessage(status)
 
   // 服务端错误把后端原文一并带出：那是定位问题的唯一线索

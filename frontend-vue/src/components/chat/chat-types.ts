@@ -57,6 +57,14 @@ export interface TextItem extends ChatItemBase {
   errorCode?: string
   /** 自动恢复的最坏等待秒数（后端算的：stale 阈值 + 一次巡检间隔）。 */
   errorRetryAfterSec?: number
+  /**
+   * 服务端对"重试是否有意义"的显式结论（后端 `retryable`）。
+   *
+   * `false` = 重试必然再失败（如配额按周期重置，等几秒也没用）—— 此时不该给
+   * 重试按钮，那只会把用户推进一个必然失败的循环。
+   * `undefined` = 服务端无结论（绝大多数错误）—— 保持原有行为，仍然允许重试。
+   */
+  errorRetryable?: boolean
   /** 附件列表（用户消息可携带图片/文件，发送时一并上传） */
   attachments?: ChatAttachment[]
   /** P2-F: 生成被用户手动停止，显示"继续生成"提示 */

@@ -32,12 +32,15 @@ func rejectSessionBusy(w http.ResponseWriter, msg string) {
 }
 
 // rejectTenantQuota 是 429 里唯一手写的一条（要带租户配额的专用文案，其余 429 都走
-// `TooManyRequests`）。可重试性结论与 `TooManyRequests` **完全相同**：429 的意思就是
-// "速率窗口还没开"，窗口一开同一请求就能过 ⇒ 显式 `retryable=true`。
-// 抽成函数而不内联，是为了让"这条 429 也表了态"能被测试直接锁住。
+// `TooManyRequestsAfterSeconds`）。
+//
+// 状态码保留 429（既有集成方按它退避），但 **retryable=false** —— 与速率限流的关键区别：
+// 配额池按周期（月/日）重置，等 60 秒原样重发必然再撞同一道闸门。此前这里给的
+// `retryable=true` 会让客户端自动重试若干次，白白烧掉请求，还拖慢用户看到
+// "该找管理员了"这类真正可执行的提示。区分两类 429 靠 `code`，不靠状态码。
 func rejectTenantQuota(w http.ResponseWriter) {
 	JSONWithRetryable(w, http.StatusTooManyRequests, CodeQuotaExceeded, nil,
-		"tenant token quota exceeded", true)
+		"tenant token quota exceeded", false)
 }
 
 // ── Agent submit/cancel/events ──
@@ -168,10 +171,12 @@ func registerAgentRoutes(
 			overFreeQuota := err != nil || count >= billing.DailyFreeLimit
 			if overFreeQuota {
 				if balance, balErr := billingMgr.GetBalance(userID); balErr == nil && balance <= 0 {
-					JSON(w, http.StatusPaymentRequired, APIResponse{
-						Success: false,
-						Error:   "insufficient credits — please recharge in Billing",
-					})
+					// 显式 code + retryable=false：这是三类失败里唯一"用户自己能解决"的一类
+					// （去充值），原样重发必然再被拒。此前只给 402 + 英文原文，
+					// 客户端只能按状态码猜，拿不到"去计费页"这个动作依据。
+					JSONWithRetryable(w, http.StatusPaymentRequired,
+						CodeInsufficientCredits, nil,
+						"insufficient credits — please recharge in Billing", false)
 					return
 				}
 			}

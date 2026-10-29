@@ -84,3 +84,39 @@ describe('describeApiError（服务端错误要能定位）', () => {
     expect(text).not.toContain('insufficient credits')
   })
 })
+
+// ── `params` 必须真正被插值（P0-2）────────────────────────────────────
+//
+// 后端把"还要等几秒"放在 `params.retry_after_seconds`（`TooManyRequestsAfterSeconds`、
+// `session_recover`），但 `localizedCodeMessage` 此前**从不传 params** —— 于是用户看到的
+// 是一条没有秒数的"请稍后重试"，P0-2 要求的"等 N 秒"根本落不了地。
+describe('describeApiError（params 插值）', () => {
+  it('★ rate_limited 带上 retry_after_seconds 时给出具体秒数', () => {
+    const text = describeApiError({
+      response: {
+        status: 429,
+        data: { code: 'rate_limited', params: { retry_after_seconds: 60 } },
+      },
+    })
+    expect(text).toContain('60')
+    expect(text).not.toContain('retry_after_seconds')  // 占位符绝不能漏给用户
+  })
+
+  it('没有 params 时退回不带秒数的通用文案（不留占位符）', () => {
+    const text = describeApiError({ response: { status: 429, data: { code: 'rate_limited' } } })
+    expect(text).toContain('请求过于频繁')
+    expect(text).not.toContain('{')
+  })
+
+  it('配额耗尽与限流是两条不同的话：一个找管理员，一个等一会', () => {
+    const quota = describeApiError({ response: { status: 429, data: { code: 'quota_exceeded' } } })
+    const rate = describeApiError({ response: { status: 429, data: { code: 'rate_limited' } } })
+    expect(quota).toContain('管理员')
+    expect(rate).not.toContain('管理员')
+  })
+
+  it('余额不足的文案指向充值（三类失败里唯一用户能自己解决的）', () => {
+    const text = describeApiError({ response: { status: 402, data: { code: 'insufficient_credits' } } })
+    expect(text).toContain('充值')
+  })
+})

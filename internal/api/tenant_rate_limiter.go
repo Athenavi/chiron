@@ -4,8 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"math"
 	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -120,8 +120,9 @@ func (rl *TenantRateLimiter) Middleware(next http.Handler) http.Handler {
 		if !allowed {
 			slog.Warn("tenant rate limit exceeded",
 				"resource", resource, "tenant", tenantID, "retry_after", retryAfter)
-			w.Header().Set("Retry-After", formatFloat(retryAfter))
-			TooManyRequests(w)
+			// `Allow` 返回的就是令牌桶补满所需的秒数 —— 有确定值就不该让客户端猜，
+			// 也不该只塞进响应头（代理常会吃掉它）。
+			TooManyRequestsAfterSeconds(w, int(math.Ceil(retryAfter)))
 			return
 		}
 		next.ServeHTTP(w, r)
@@ -145,11 +146,4 @@ func extractResource(path string) string {
 		return resource
 	}
 	return "unknown"
-}
-
-func formatFloat(f float64) string {
-	if f < 1 {
-		return "1"
-	}
-	return strconv.Itoa(int(f))
 }

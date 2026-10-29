@@ -170,18 +170,59 @@ func TestRejectSessionBusy_IsRetryable(t *testing.T) {
 	}
 }
 
-func TestRejectTenantQuota_IsRetryable(t *testing.T) {
+// 配额池耗尽与速率超限都回 429（兼容既有集成方），但**可重试性相反**：
+// 速率窗口几十秒就开，配额池按月/日重置 —— 原样重发必然再撞同一道闸门。
+// 区分两类 429 只能靠 `code`，所以这里必须把两个结论都钉住。
+func TestRejectTenantQuota_IsNotRetryable(t *testing.T) {
 	rec := httptest.NewRecorder()
 	rejectTenantQuota(rec)
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("状态码必须仍是 429（客户端按它退避）: got %d", rec.Code)
 	}
-	if got := decodeBody(t, rec)["retryable"]; got != true {
-		t.Fatalf("429 的意思是速率窗口没开，必须 retryable=true，得到 %v（body=%s）",
+	if got, present := decodeBody(t, rec)["retryable"]; !present || got != false {
+		t.Fatalf("配额池按周期重置，秒级重试无用，必须显式 retryable=false，得到 %v（body=%s）",
 			got, rec.Body.String())
 	}
 	if got := decodeBody(t, rec)["code"]; got != CodeQuotaExceeded {
-		t.Fatalf("code = %v, want %s", got, CodeQuotaExceeded)
+		t.Fatalf("code = %v, want %s（靠它把配额 429 与速率 429 区分开）",
+			got, CodeQuotaExceeded)
+	}
+}
+
+func TestTooManyRequestsAfterSeconds_CarriesWait(t *testing.T) {
+	rec := httptest.NewRecorder()
+	TooManyRequestsAfterSeconds(rec, 60)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("状态码 = %d, want 429", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
+	}
+	body := decodeBody(t, rec)
+	// 代理会吃掉响应头，body 是第二条通道（前端 rateLimitBackoff 两处都认）
+	params, _ := body["params"].(map[string]interface{})
+	if params == nil || params["retry_after_seconds"] != float64(60) {
+		t.Fatalf("body 必须同时带 params.retry_after_seconds=60，得到 %s", rec.Body.String())
+	}
+	if body["retryable"] != true {
+		t.Fatalf("速率闸门的 429 必须 retryable=true，得到 %s", rec.Body.String())
+	}
+	if body["code"] != CodeRateLimited {
+		t.Fatalf("code = %v, want %s（与配额 429 区分）", body["code"], CodeRateLimited)
+	}
+}
+
+func TestTooManyRequests_PassesSecondWait(t *testing.T) {
+	// seconds<=0 = 不知道窗口长度：不能编一个 Retry-After 出来
+	rec := httptest.NewRecorder()
+	TooManyRequestsAfterSeconds(rec, 0)
+
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("不知道等待时长时不该给 Retry-After，得到 %q", got)
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("状态码仍须是 429，得到 %d", rec.Code)
 	}
 }

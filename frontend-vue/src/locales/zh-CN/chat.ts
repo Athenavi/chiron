@@ -216,6 +216,23 @@ export default {
   tour_provider_auth_title: "模型服务商认证失败",
   tour_provider_auth_desc: "这个服务商的 API Key 无效或已过期 —— 请到「模型管理 / API 密钥」里更新它，然后重发这条消息。",
   tour_go_configure: "去配置",  // ── 差距B：输出控制（风格 / 语言偏好）+ 提示精炼 ──
+  // ── 新用户引导（P0-3）：注册后首次进入的三步。文案只描述"下一步做什么"，
+  //    不写"领取"——试用额度注册时已在账户里，再发一笔既重复又可被反复注册薅走。
+  onboarding_title: "三步就能开始",
+  onboarding_desc: "你的账号已经有试用额度了，走完这三步就能发出第一条消息。",
+  onboarding_step_trial_title: "看看你的试用额度",
+  onboarding_step_trial_desc: "每天有 {n} 次免费对话，用完之前不需要充值。",
+  onboarding_credits: "当前余额：{credits} 点",
+  onboarding_step_model_title: "选一个默认模型",
+  onboarding_step_model_desc: "决定下一轮对话由谁来回答，之后随时可以换。",
+  onboarding_step_message_title: "发出第一条消息",
+  onboarding_step_message_desc: "问什么都可以 —— 发送成功后这一步会自动完成。",
+  onboarding_done: "已完成",
+  onboarding_skipped: "已跳过",
+  onboarding_got_it: "知道了",
+  onboarding_go_pick_model: "去选模型",
+  onboarding_go_send: "去发消息",
+  onboarding_skip_all: "先跳过",
   output_style: "回复风格",
   language_preference: "回复语言",
   style_default: "平台默认",

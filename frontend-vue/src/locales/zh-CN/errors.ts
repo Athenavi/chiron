@@ -19,10 +19,13 @@ export default {
   session_busy_auto_recover_in: '约 {time} 后自动恢复',
   session_repaired: '会话已修复，可以重新发送',
   not_found: '请求的资源不存在，可能已被删除',
-  // 限流与配额
+  // 限流与配额（三类失败各有**可执行动作**：稍等重试 / 找租户管理员 / 去充值）
   rate_limited: '请求过于频繁，请稍后再试',
-  quota_exceeded: '已达配额上限，请联系管理员',
+  rate_limited_in: '请求过于频繁，请 {retry_after_seconds} 秒后重试',
+  quota_exceeded: '本周期额度已用完，请联系租户管理员调整配额或升级套餐',
   insufficient_credits: '今日免费额度已用尽且余额不足，请到「计费」页充值',
+  insufficient_credits_action: '去充值',
+  quota_exceeded_action: '查看用量',
   // 网络与客户端（后端未给 code 时的兜底）
   timeout: '请求超时，请重试',
   network_error: '网络连接失败，请检查网络后重试',

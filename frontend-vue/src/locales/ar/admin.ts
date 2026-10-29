@@ -202,4 +202,13 @@ export default {
   usage_group_day: "التاريخ",
   usage_group_model: "النموذج",
   usage_group_user: "المستخدم",
+  // ── قمع إرشاد المستخدم الجديد (P0-3) ──
+  onboarding_funnel_title: "نسبة إكمال إرشاد المستخدم الجديد",
+  onboarding_funnel_entered: "بدأوا الإرشاد",
+  onboarding_funnel_finished: "أكملوا المسار",
+  onboarding_funnel_finished_rate: "نسبة الإكمال الكلية",
+  onboarding_funnel_completed: "مكتملة",
+  onboarding_funnel_skipped: "تم التخطي",
+  onboarding_funnel_pending: "معلّقة",
+  onboarding_funnel_empty: "لم يبدأ أي مستخدم الإرشاد بعد — تغطي هذه الإحصاءات الحسابات المسجَّلة بعد إطلاق الميزة فقط.",
 }

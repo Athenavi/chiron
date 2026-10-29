@@ -10,7 +10,7 @@ import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue
 import { Input } from 'ant-design-vue'
 import { notify } from '../../utils/notify'
 import { fileTypeBadge, splitFileName, type SplitName } from '../../utils/fileName'
-import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined } from '@ant-design/icons-vue'
+import { CopyOutlined, CheckOutlined, EditOutlined, ReloadOutlined, LikeOutlined, DislikeOutlined, LikeFilled, DislikeFilled, CommentOutlined, WalletOutlined, BarChartOutlined } from '@ant-design/icons-vue'
 import ReasoningBlock from './ReasoningBlock.vue'
 import { inkCharsFor, inkIndexFor } from './ink'
 import ToolCallCard from './ToolCallCard.vue'
@@ -63,16 +63,38 @@ function inkIndex(i: number): number {
 }
 
 /**
- * "约 N 分钟后自动恢复"里的 N（分钟）。
+ * 还要等多久才可能成功（秒）。
  *
- * 秒数来自后端的 `params.retry_after_seconds` —— 它是**算出来的**（stale 阈值 + 一次
- * 巡检间隔），不是猜的。只对 `session_busy` 显示：别的失败原因不存在"等一会儿就好"。
+ * **只对 `session_busy` 显示倒计时**：这条闸门会在上一轮跑完（或 reconciler 收口）后
+ * 自动打开，用户需要的是"还有多久"。秒数来自后端 `params.retry_after_seconds` —— 是算
+ * 出来的（stale 阈值 + 一次巡检间隔），不是猜的。
+ *
+ * `rate_limited` 不在这里：它的等待时长已经由错误文案本身说清（`errors.rate_limited_in`
+ * 会插值 `retry_after_seconds`），再叠一个倒计时只是重复。余额不足 / 配额耗尽等
+ * 等多久都没用，显示倒计时只会诱导用户白白重试。
  */
-const repairWaitSeconds = computed(() => {
+const waitSeconds = computed(() => {
   const it = props.item
   if (!('errorCode' in it) || it.errorCode !== 'session_busy') return 0
   const sec = 'errorRetryAfterSec' in it ? Number(it.errorRetryAfterSec || 0) : 0
   return sec > 0 ? Math.ceil(sec) : 0
+})
+
+/**
+ * 是否应该给「重试」按钮。
+ *
+ * 依据是**后端给出的结论**（`retryable`）而不是前端按 code 猜：
+ *  - `false` → 重试必然再失败（配额按周期重置，等几秒不会改变结论），不给按钮；
+ *  - `undefined` → 服务端无结论，这是绝大多数错误（网络抖动、500），保持原有行为；
+ *  - `true` → 明确可重试。
+ *
+ * 为什么不能按 `code` 写死：同一批 code 的语义会变（`session_busy` 早期就被误判过），
+ * 而 `retryable` 是响应契约的一部分，改动会同步到所有消费方。
+ */
+const canRetry = computed(() => {
+  const it = props.item
+  if (!('errorRetryable' in it)) return true
+  return it.errorRetryable !== false
 })
 
 /**
@@ -89,7 +111,7 @@ function stopWaitTimer() {
   if (waitTimer) { clearInterval(waitTimer); waitTimer = null }
 }
 watch(
-  repairWaitSeconds,
+  waitSeconds,
   (sec) => {
     stopWaitTimer()
     waitLeft.value = sec
@@ -298,6 +320,17 @@ function regenerate() {
 function retryFailed() {
   if (props.item.kind !== 'text') return
   emit('retry-failed', props.item.id!)
+}
+
+/**
+ * 余额不足 → 去计费页充值。
+ *
+ * 三类失败里只有这一类**用户自己能解决**，所以它必须有一个直达入口：文案写"去计费页"
+ * 而旁边只有"重试"按钮，等于把用户推进必然失败的循环。
+ * 用 router 而非 <a href>：保持在 SPA 内，返回时对话上下文不丢。
+ */
+function goBilling() {
+  router.push('/billing')
 }
 
 // ── P3-B 长消息折叠 ──
@@ -721,7 +754,17 @@ onUpdated(enhanceContent)
           class="msg-error-banner"
         >
           <span class="error-text">{{ $t('errors.send_failed_msg', { msg: (item as TextItem).errorMsg || $t('errors.network_error_2') }) }}</span>
-          <!-- 会话忙：给“修复”而不只是“重试” —— 重试必然再撞同一道闸门 -->
+          <!-- 余额不足：三类失败里唯一**用户自己能解决**的一类 —— 给直达入口，
+               而不是让他在提示里读到"去计费页"却不知道怎么去 -->
+          <button
+            v-if="(item as TextItem).errorCode === 'insufficient_credits'"
+            class="retry-btn"
+            type="button"
+            @click.stop="goBilling"
+          >
+            <WalletOutlined /> {{ $t('errors.insufficient_credits_action') }}
+          </button>
+          <!-- 会话忙：给"修复"而不只是"重试" —— 重试必然再撞同一道闸门 -->
           <button
             v-if="(item as TextItem).errorCode === 'session_busy'"
             class="retry-btn"
@@ -734,7 +777,21 @@ onUpdated(enhanceContent)
             v-if="waitLabel"
             class="repair-hint"
           >{{ $t('errors.session_busy_auto_recover_in', { time: waitLabel }) }}</span>
+          <!-- 配额耗尽：额度按周期重置，重试必然再失败（后端 retryable=false），
+               所以给的是"看用量"而不是"重试"。用量页能回答"我用超了多少"，
+               用户据此去和租户管理员沟通 —— 这个按钮有真东西可看，不是安慰剂。 -->
           <button
+            v-if="(item as TextItem).errorCode === 'quota_exceeded'"
+            class="retry-btn"
+            type="button"
+            @click.stop="goBilling"
+          >
+            <BarChartOutlined /> {{ $t('errors.quota_exceeded_action') }}
+          </button>
+          <!-- 重试按钮：服务端若显式说 retryable=false，就不该给 —— 那会把用户
+               推进一个必然失败的循环。undefined（无结论）时保持原有行为。 -->
+          <button
+            v-if="canRetry"
             class="retry-btn"
             type="button"
             @click.stop="retryFailed"

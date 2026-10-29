@@ -212,6 +212,24 @@ export default {
   tour_provider_auth_title: "Model provider authentication failed",
   tour_provider_auth_desc: "This provider's API key is invalid or expired — update it under Model Management / API Keys, then send the message again.",
   tour_go_configure: "Go configure",
+  // ── New-user onboarding (P0-3): three steps after sign-up. Copy says what to
+  //    do next; it never says "claim" — the trial credits are already in the
+  //    account, and granting more would be both redundant and farmable.
+  onboarding_title: "Three steps to get started",
+  onboarding_desc: "Your account already has trial credits. Finish these three steps to send your first message.",
+  onboarding_step_trial_title: "Check your trial allowance",
+  onboarding_step_trial_desc: "You get {n} free conversations per day — no top-up needed until they run out.",
+  onboarding_credits: "Current balance: {credits} credits",
+  onboarding_step_model_title: "Pick a default model",
+  onboarding_step_model_desc: "This decides which model answers your next turn; you can change it anytime.",
+  onboarding_step_message_title: "Send your first message",
+  onboarding_step_message_desc: "Ask anything — this step completes automatically once the message goes out.",
+  onboarding_done: "Done",
+  onboarding_skipped: "Skipped",
+  onboarding_got_it: "Got it",
+  onboarding_go_pick_model: "Pick a model",
+  onboarding_go_send: "Send a message",
+  onboarding_skip_all: "Skip for now",
   // ── Gap B: output controls (style / language) + prompt refine ──
   output_style: "Reply style",
   language_preference: "Reply language",

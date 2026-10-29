@@ -406,3 +406,29 @@ export async function getUsageCatalog(params: {
     bucket_cnt: 0, note: '',
   }
 }
+
+// ── 新用户引导漏斗（P0-3 验收「完成率可查」） ──
+
+export interface OnboardingFunnelStep {
+  step: string
+  completed: number
+  skipped: number
+  pending: number
+  /** 0–1 的比例，分母是 entered（进入过引导的人数） */
+  completion_rate: number
+  skip_rate: number
+}
+
+export interface OnboardingFunnel {
+  /** 进入过引导的人数 —— 唯一正确的分母（不是全站用户数） */
+  entered: number
+  finished: number
+  finished_rate: number
+  steps: OnboardingFunnelStep[]
+  steps_order: string[]
+}
+
+export async function getOnboardingFunnel(): Promise<OnboardingFunnel> {
+  const { data } = await api.get('/v1/admin/onboarding/funnel')
+  return data?.data ?? { entered: 0, finished: 0, finished_rate: 0, steps: [], steps_order: [] }
+}

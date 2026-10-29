@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -526,8 +527,11 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 		}
 
 		if v.count >= rl.rpm {
+			// 这个桶的窗口长度是**已知的**（`resetAt`），所以能给出真实等待秒数，
+			// 而不是让客户端猜。原样重发在窗口重置前必然再被拒。
+			wait := int(math.Ceil(time.Until(v.resetAt).Seconds()))
 			rl.mu.Unlock()
-			TooManyRequests(w)
+			TooManyRequestsAfterSeconds(w, wait)
 			return
 		}
 

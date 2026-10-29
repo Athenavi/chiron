@@ -32,7 +32,9 @@ import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
 import { addToOutbox, bumpRetryCount, clearOutbox, readOutbox, removeFromOutbox, type OutboxEntry } from '../components/chat/failedOutbox'
 import ChatInput from '../components/chat/ChatInput.vue'
 import ChatSetupTour from '../components/chat/ChatSetupTour.vue'
-import type { TourReason } from '../composables/useOnboardingTour'
+import OnboardingGuide from '../components/chat/OnboardingGuide.vue'
+import { useNewUserOnboarding, markFirstMessageDone } from '../composables/useNewUserOnboarding'
+import { TOUR_ANCHORS, type TourReason } from '../composables/useOnboardingTour'
 import { useChatShare } from '../composables/useChatShare'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
@@ -942,6 +944,20 @@ function ensureModel(): boolean {
 const tourRef = ref<InstanceType<typeof ChatSetupTour> | null>(null)
 
 /**
+ * 新用户引导（P0-3）的三步清单。与上面那个 `Tour` **职责不同**：
+ * 那个是"被拦下时带路"，这个是"注册后首次进入"；触发条件不同，不合并。
+ *
+ * 解构成顶层 ref 才能在模板里自动解包（`onboarding.open` 这种嵌套引用不会）。
+ */
+const {
+  open: onboardingOpen,
+  status: onboardingStatus,
+  maybeOpen: maybeOpenOnboarding,
+  skipAll: skipOnboarding,
+  close: closeOnboarding,
+} = useNewUserOnboarding()
+
+/**
  * 弹引导；**弹不出来才退化成 toast** —— 保证"无论如何用户都至少得到一句提示"。
  *
  * 为什么要有兜底：引导依赖 DOM 锚点与已挂载的组件，toast 不依赖任何东西。
@@ -967,6 +983,21 @@ function offerSetupTour(reason: TourReason, fallback: string, tone: 'warning' | 
 /** 引导最后一步的"去配置"：只有管理员会收到（`/models` 是 `requiresAdmin`，见 router/index.ts:46） */
 function goConfigureModel(): void {
   router.push('/models')
+}
+
+/**
+ * 引导里点「去选模型 / 去发消息」后的落点（P0-3）。
+ *
+ * 不新开页面：这三步本来就该在当前会话里完成。用语义锚点（`data-tour`）找元素，
+ * 与 `TOUR_ANCHORS` 共用一套 —— 蹭样式重构不会把它找断。
+ */
+function focusOnboardingTarget(target: 'model' | 'input'): void {
+  const anchor = target === 'model' ? TOUR_ANCHORS.modelPicker : TOUR_ANCHORS.input
+  const el = document.querySelector<HTMLElement>(`[data-tour="${anchor}"]`)
+  if (!el) return
+  el.scrollIntoView({ block: 'center', behavior: 'smooth' })
+  // 输入框要能直接打字；下拉按钮聚焦也会给出可见的焦点环
+  el.focus?.()
 }
 
 /** provider 层认证失败的特征（与 `actionableStreamError` 共用一处判据，别写两遍） */
@@ -1838,6 +1869,9 @@ onMounted(async () => {
   window.addEventListener('offline', onOffline)
   // 全局键盘快捷键
   window.addEventListener('keydown', onGlobalKeydown)
+  // 新用户引导（P0-3）：首次进入会话页时按服务端进度决定要不要弹。
+  // 不 await：引导是可选的，不该拖慢会话加载；接口失败在 composable 里静默吞掉。
+  if (authStore.user?.id) void maybeOpenOnboarding()
 })
 
 onUnmounted(() => {
@@ -2655,6 +2689,9 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
       body.attachments = resolvedAtts.map(a => ({ id: a.id, name: a.name, mime_type: a.mimeType, url: a.url, is_image: a.isImage }))
     }
     await api.post('/submit', body)
+    // 新用户引导第三步：消息真的被服务端接收了才算完成（P0-3）。
+    // 放在这之后而不是之前：POST 失败会走 catch，那时"发出第一轮对话"并没有发生。
+    void markFirstMessageDone()
     return true
   } catch (e) {
     if (activeSSE) { activeSSE.close(); activeSSE = null }
@@ -2662,7 +2699,9 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
     stopTurnTimer()
     flushStreamingFlags()
     const reason = describeApiError(e)
-    markMessageFailed(userItemId, reason)
+    // meta 必须一起带上：少了 code/retry_after_seconds，错误块就退化成"只有一句重试"，
+    // 余额不足拿不到"去充值"、限流拿不到"等 N 秒"—— 正是 P0-2 要修的那条裂缝。
+    markMessageFailed(userItemId, reason, describeFailureMeta(e))
     notify.error(t('errors.send_failed') + reason)
     // 落盘暂存：这条消息**没有**被服务端接收（POST 失败），刷新后 transcript 里不会有它。
     // 不回填输入框而是入队，是为了不打断"继续写草稿"的动作。
@@ -2697,7 +2736,7 @@ function discardOutbox() {
 function markMessageFailed(
   itemId: string | undefined,
   errorMsg: string,
-  meta?: { code?: string; retryAfterSec?: number },
+  meta?: { code?: string; retryAfterSec?: number; retryable?: boolean },
 ) {
   if (!itemId) return
   const it = items.value.find(i => i.id === itemId)
@@ -2709,6 +2748,8 @@ function markMessageFailed(
     // （重试必然再撞同一道闸门）。
     it.errorCode = meta?.code
     it.errorRetryAfterSec = meta?.retryAfterSec
+    // 服务端说"重试没意义"时，UI 就不该给重试按钮（见 MessageItem 的渲染条件）。
+    it.errorRetryable = meta?.retryable
   }
 }
 
@@ -2718,15 +2759,22 @@ function markMessageFailed(
  * 秒数由后端算（stale 阈值 + 一次巡检间隔），前端只负责呈现 ——
  * 这样"还要等多久"与实际自动恢复时机不会各说各话。
  */
-function describeFailureMeta(e: unknown): { code?: string; retryAfterSec?: number } {
+function describeFailureMeta(e: unknown): { code?: string; retryAfterSec?: number; retryable?: boolean } {
   const data = (
-    e as { response?: { data?: { code?: string; params?: { retry_after_seconds?: number } } } }
+    e as {
+      response?: {
+        data?: { code?: string; retryable?: boolean; params?: { retry_after_seconds?: number } }
+      }
+    }
   )?.response?.data
   if (!data) return {}
   const sec = data.params?.retry_after_seconds
   return {
     code: typeof data.code === 'string' ? data.code : undefined,
     retryAfterSec: typeof sec === 'number' ? sec : undefined,
+    // 只在服务端**显式**给出布尔时才传：缺省表示"无结论"，调用方应保持原行为
+    // （见 rateLimitBackoff.shouldRetryResponse 的同一条口径）。
+    retryable: typeof data.retryable === 'boolean' ? data.retryable : undefined,
   }
 }
 
@@ -3377,6 +3425,13 @@ function continueGeneration() {
       <ChatSetupTour
         ref="tourRef"
         @go-configure="goConfigureModel"
+      />
+      <!-- 新用户引导（P0-3）：注册后首次进入的三步清单；存量账号后端返回 eligible=false，不会弹 -->
+      <OnboardingGuide
+        v-model:open="onboardingOpen"
+        :status="onboardingStatus"
+        @skip-all="skipOnboarding"
+        @focus="focusOnboardingTarget"
       />
       <SaveToMemoryDialog
         v-model:open="saveToMemoryOpen"

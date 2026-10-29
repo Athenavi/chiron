@@ -1,6 +1,7 @@
 import { afterAll, afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mount } from '@vue/test-utils'
+import { flushPromises, mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
+import { createRouter, createMemoryHistory, type Router } from 'vue-router'
 import DOMPurify from 'dompurify'
 import MessageItem from '../MessageItem.vue'
 import { setMermaidAdapter, type MermaidAdapter } from '../mermaidRenderer'
@@ -355,5 +356,106 @@ describe('MessageItem（长内容渲染让位）', () => {
     await wrapper.find('.collapse-toggle').trigger('click')
     await settleAsync()
     expect(wrapper.find('.msg-text').classes()).not.toContain('collapsed')
+  })
+})
+
+// ── 三类失败的针对性动作（P0-2）─────────────────────────────────────────
+//
+// 三类失败的正确动作**互不相同**：余额不足 → 去充值（用户自己能解决）；
+// 配额耗尽 → 找租户管理员（等多久都没用）；速率超限 → 等 N 秒（重试有效）。
+// 只给一个"重试"按钮等于把三类失败当成同一件事，用户会在必然失败的循环里打转。
+describe('失败消息的可执行动作', () => {
+  const makeRouter = () => createRouter({
+    history: createMemoryHistory(),
+    routes: [
+      { path: '/chat', component: { template: '<div />' } },
+      { path: '/billing', component: { template: '<div />' } },
+    ],
+  })
+
+  const mountFailed = (over: Partial<TextItem>, router: Router) => mount(MessageItem, {
+    props: {
+      item: { kind: 'text', role: 'assistant', content: '', id: 'e1', error: true, errorMsg: '失败', ...over } as ChatItem,
+    },
+    global: { plugins: [router] },
+  })
+
+  it('★ 余额不足给「去充值」入口，点击后落到 /billing', async () => {
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mountFailed({ errorCode: 'insufficient_credits' }, router)
+    await settleAsync()
+
+    const action = wrapper.findAll('.retry-btn').find(b => b.text().includes('去充值'))
+    expect(action, '余额不足必须有一个直达充值页的按钮').toBeTruthy()
+
+    await action!.trigger('click')
+    // 导航是异步的（router.push 返回 promise）：只 await nextTick 不够，
+    // 必须 flush 微任务队列才能看到 currentRoute 变化。
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/billing')
+  })
+
+  it('配额耗尽不给「去充值」：要的是找管理员，不是花钱', async () => {
+    const wrapper = mountFailed({ errorCode: 'quota_exceeded' }, makeRouter())
+    await settleAsync()
+
+    expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('去充值'))).toBe(false)
+    expect(wrapper.find('.msg-error-banner').exists()).toBe(true)
+  })
+
+  it('配额耗尽不显示倒计时：周期配额等下也不会开', async () => {
+    const wrapper = mountFailed({ errorCode: 'quota_exceeded', errorRetryAfterSec: 60 }, makeRouter())
+    await settleAsync()
+
+    expect(wrapper.find('.repair-hint').exists()).toBe(false)
+  })
+
+  it('session_busy 仍走「修复会话 + 倒计时」，未被新分支挤掉', async () => {
+    const wrapper = mountFailed({ errorCode: 'session_busy', errorRetryAfterSec: 120 }, makeRouter())
+    await settleAsync()
+
+    expect(wrapper.find('.repair-hint').exists()).toBe(true)
+    expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('去充值'))).toBe(false)
+  })
+
+  it('★ 配额耗尽给「查看用量」入口，点击后落到 /billing', async () => {
+    const router = makeRouter()
+    await router.push('/chat')
+    await router.isReady()
+
+    const wrapper = mountFailed({ errorCode: 'quota_exceeded' }, router)
+    await settleAsync()
+
+    const action = wrapper.findAll('.retry-btn').find(b => b.text().includes('查看用量'))
+    expect(action, '配额耗尽必须给一个能看到实际用量的入口').toBeTruthy()
+
+    await action!.trigger('click')
+    await flushPromises()
+    expect(router.currentRoute.value.path).toBe('/billing')
+  })
+
+  it('★ retryable=false 时不渲染「重试」按钮', async () => {
+    // 后端说"重试必然再失败"（配额按周期重置），此时给重试按钮就是把用户
+    // 推进一个必然失败的循环 —— 这比不报错更伤，因为他会以为是自己点得不对。
+    const wrapper = mountFailed(
+      { errorCode: 'quota_exceeded', errorRetryable: false },
+      makeRouter(),
+    )
+    await settleAsync()
+
+    expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('重试'))).toBe(false)
+    // 但错误横幅本身还在：不能因为不给重试就把失败悄无声息地咽下去
+    expect(wrapper.find('.msg-error-banner').exists()).toBe(true)
+  })
+
+  it('retryable 缺省（服务端无结论）时仍给「重试」', async () => {
+    // 这是绝大多数错误（网络抖动 / 500）的形状：不因新分支而失去重试能力。
+    const wrapper = mountFailed({ errorCode: 'internal_error' }, makeRouter())
+    await settleAsync()
+
+    expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('重试'))).toBe(true)
   })
 })

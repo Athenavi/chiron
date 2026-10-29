@@ -12,7 +12,7 @@ import { CanvasRenderer } from 'echarts/renderers'
 import { LineChart, PieChart } from 'echarts/charts'
 import { GridComponent, TooltipComponent, LegendComponent } from 'echarts/components'
 import VChart from 'vue-echarts'
-import { getMetrics, listApiKeys } from '@/api/admin'
+import { getMetrics, listApiKeys, getOnboardingFunnel, type OnboardingFunnel } from '@/api/admin'
 import { useThemeStore } from '@/stores/theme'
 import PageSkeleton from '@/components/common/PageSkeleton.vue'
 import EmptyState from '@/components/common/EmptyState.vue'
@@ -151,13 +151,37 @@ const alertColumns = [
 
 const alerts = ref<{ time: string; level: string; message: string }[]>([])
 
+/**
+ * 新用户引导漏斗（P0-3 验收「完成率可查」）。
+ *
+ * `null` 表示还没拿到数据（或接口失败）—— 此时整张卡片不渲染，
+ * 避免在管理首页放一个空的"完成率 0%"让人误以为引导完全无效。
+ */
+const onboardingFunnel = ref<OnboardingFunnel | null>(null)
+
+/** 步骤名 → 可读标题。名字来自后端白名单，这里必须覆盖全部三项。 */
+function funnelStepLabel(step: string): string {
+  switch (step) {
+    case 'trial_credit': return t('chat.onboarding_step_trial_title')
+    case 'default_model': return t('chat.onboarding_step_model_title')
+    case 'first_message': return t('chat.onboarding_step_message_title')
+    default: return step
+  }
+}
+
+/** 0–1 比例 → 百分比数字（保留一位小数），格式化放在显示层而不是后端 */
+function asPercent(rate: number): number {
+  return Math.round(rate * 1000) / 10
+}
+
 async function fetchDashboardData() {
   loading.value = true
   error.value = ''
   try {
-    const [metricsRes, keysRes] = await Promise.allSettled([
+    const [metricsRes, keysRes, funnelRes] = await Promise.allSettled([
       getMetrics(),
       listApiKeys(),
+      getOnboardingFunnel(),
     ])
 
     if (metricsRes.status === 'fulfilled') {
@@ -176,6 +200,11 @@ async function fetchDashboardData() {
         rate_limited: keys.filter((k) => k.status === 'rate_limited').length,
         circuit_open: keys.filter((k) => k.status === 'circuit_open').length,
       }
+    }
+
+    // 漏斗单独失败不影响其它指标：只在失败时保留上一次的值（或保持 null）。
+    if (funnelRes.status === 'fulfilled') {
+      onboardingFunnel.value = funnelRes.value
     }
   } catch {
     error.value = t('errors.data_load_failed')
@@ -380,6 +409,62 @@ onUnmounted(() => {
         </Col>
       </Row>
 
+      <!-- 新用户引导漏斗（P0-3 验收「完成率可查」）：只读统计，数据来自 user_onboarding -->
+      <Card
+        v-if="onboardingFunnel"
+        class="chart-card onboarding-funnel-card"
+        :bordered="false"
+      >
+        <template #title>
+          <span class="chart-title">
+            <ApartmentOutlined class="chart-title-icon" /> {{ $t('admin.onboarding_funnel_title') }}
+          </span>
+        </template>
+        <Row :gutter="16">
+          <Col :xs="12" :sm="6">
+            <Statistic
+              :title="$t('admin.onboarding_funnel_entered')"
+              :value="onboardingFunnel.entered"
+            />
+          </Col>
+          <Col :xs="12" :sm="6">
+            <Statistic
+              :title="$t('admin.onboarding_funnel_finished')"
+              :value="onboardingFunnel.finished"
+            />
+          </Col>
+          <Col :xs="12" :sm="6">
+            <Statistic
+              :title="$t('admin.onboarding_funnel_finished_rate')"
+              :value="asPercent(onboardingFunnel.finished_rate)"
+              suffix="%"
+            />
+          </Col>
+        </Row>
+        <!-- 逐步：完成/跳过/待办。跳过单独显示，否则「跳过」会被误读成「完成」 -->
+        <div class="funnel-steps">
+          <div
+            v-for="s in onboardingFunnel.steps"
+            :key="s.step"
+            class="funnel-step"
+          >
+            <span class="funnel-step-name">{{ funnelStepLabel(s.step) }}</span>
+            <span class="funnel-step-rate">{{ asPercent(s.completion_rate) }}%</span>
+            <span class="funnel-step-counts">
+              {{ $t('admin.onboarding_funnel_completed') }} {{ s.completed }}
+              · {{ $t('admin.onboarding_funnel_skipped') }} {{ s.skipped }}
+              · {{ $t('admin.onboarding_funnel_pending') }} {{ s.pending }}
+            </span>
+          </div>
+        </div>
+        <p
+          v-if="onboardingFunnel.entered === 0"
+          class="funnel-empty"
+        >
+          {{ $t('admin.onboarding_funnel_empty') }}
+        </p>
+      </Card>
+
       <!-- 告警列表 -->
       <Card
         class="alert-card"
@@ -509,6 +594,48 @@ onUnmounted(() => {
 }
 .chart-title-icon { color: var(--primary); font-size: 15px; }
 .chart-canvas { height: 280px; }
+
+/* ── 引导漏斗卡片 ── */
+.onboarding-funnel-card :deep(.ant-statistic-title) {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
+.funnel-steps {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.funnel-step {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding-bottom: 8px;
+  border-bottom: var(--hairline-width) solid var(--border-card);
+}
+.funnel-step:last-child { border-bottom: none; padding-bottom: 0; }
+.funnel-step-name {
+  flex: 1;
+  font-size: 13px;
+  color: var(--text-primary);
+}
+.funnel-step-rate {
+  font-size: 13px;
+  font-weight: var(--fw-semibold);
+  color: var(--primary);
+  font-variant-numeric: tabular-nums;
+}
+/* 计数用次要色：完成率才是主角，三个计数是佐证 */
+.funnel-step-counts {
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.funnel-empty {
+  margin: 12px 0 0;
+  font-size: var(--fs-xs);
+  color: var(--text-secondary);
+}
 
 /* ── 告警卡片 ── */
 .alert-card {

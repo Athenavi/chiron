@@ -1,6 +1,9 @@
 package api
 
 import (
+	"errors"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 )
@@ -68,5 +71,78 @@ func TestRateLimitKeysRespectEnvPrefix(t *testing.T) {
 	}
 	if hashTagOf(global) != rateLimitHashTag {
 		t.Fatalf("加前缀后 hash tag 被破坏：%q", global)
+	}
+}
+
+// ── 429 与 503 必须分开（P0-2）────────────────────────────────────────
+//
+// 此前 `Allow` 对两种情况都返回普通 error，中间件一律当成"限流服务不可用" ⇒ **503**，
+// 于是下面那个 429 分支永远不可达。后果不是文案难看，而是**动作给错了**：
+// 用户超额时被告知"服务坏了"、客户端按 503 判定为不可重试 —— 恰恰放弃了正确的做法
+// （等一会儿原样重发）。这两条断言把两类失败钉死在各自的出口上。
+
+func TestRateLimitDecision_ExceededIsDistinguishable(t *testing.T) {
+	for _, result := range []string{"global", "tenant", "user"} {
+		allowed, err := rateLimitDecision(result, "t1", "u1")
+		if allowed {
+			t.Fatalf("%s 桶命中时不该放行", result)
+		}
+		if !errors.Is(err, ErrRateLimitExceeded) {
+			t.Fatalf("%s 桶命中必须回 ErrRateLimitExceeded（否则中间件会当服务故障回 503），得到 %v",
+				result, err)
+		}
+	}
+}
+
+func TestRateLimitDecision_AllowsWhenNoBucketHit(t *testing.T) {
+	allowed, err := rateLimitDecision("ok", "t1", "u1")
+	if !allowed || err != nil {
+		t.Fatalf("未命中任何桶必须放行且无错，得到 allowed=%v err=%v", allowed, err)
+	}
+}
+
+func TestWriteRateLimitRejection_ExceededGives429WithWait(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handled := writeRateLimitRejection(rec,
+		errors.Join(ErrRateLimitExceeded, errors.New("租户 t1 请求频率超限")), "u1", "/submit")
+
+	if !handled {
+		t.Fatal("超额必须由本函数写出响应")
+	}
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("超额必须是 429，得到 %d（503 等于告诉用户「服务坏了」）", rec.Code)
+	}
+	if got := rec.Header().Get("Retry-After"); got != "60" {
+		t.Fatalf("Retry-After = %q, want 60", got)
+	}
+	if body := decodeBody(t, rec)["code"]; body != CodeRateLimited {
+		t.Fatalf("code = %v, want %s", body, CodeRateLimited)
+	}
+}
+
+func TestWriteRateLimitRejection_ServiceFailureGives503(t *testing.T) {
+	rec := httptest.NewRecorder()
+	handled := writeRateLimitRejection(rec,
+		errors.New("限流服务暂时不可用: dial tcp: connection refused"), "u1", "/submit")
+
+	if !handled {
+		t.Fatal("服务故障必须由本函数写出响应")
+	}
+	if rec.Code != http.StatusServiceUnavailable {
+		t.Fatalf("Redis 故障必须是 503，得到 %d", rec.Code)
+	}
+	// 不能给 Retry-After：我们并不知道什么时候能恢复，编一个秒数只会误导客户端的退避策略
+	if got := rec.Header().Get("Retry-After"); got != "" {
+		t.Fatalf("服务故障不该给 Retry-After，得到 %q", got)
+	}
+}
+
+func TestWriteRateLimitRejection_PassesThroughOnNoError(t *testing.T) {
+	rec := httptest.NewRecorder()
+	if writeRateLimitRejection(rec, nil, "u1", "/submit") {
+		t.Fatal("没有错误时不该写响应")
+	}
+	if rec.Body.Len() != 0 {
+		t.Fatalf("没有错误时不该写 body，得到 %q", rec.Body.String())
 	}
 }

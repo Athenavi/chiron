@@ -43,6 +43,8 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/diagnostics", authMW(rlMW(adminReadMW(adminStrip))))
 	// D3：用量目录（只读）—— 与其它 admin 读端点同一权限口径。
 	mux.Handle("GET /v1/admin/usage/catalog", authMW(rlMW(adminReadMW(adminStrip))))
+	// 新用户引导漏斗（P0-3 验收「完成率可查」）—— 只读统计，与其它 admin 读端点同口径。
+	mux.Handle("GET /v1/admin/onboarding/funnel", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/kb", authMW(rlMW(adminReadMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if pythonClient == nil || !pythonClient.IsConnected() {

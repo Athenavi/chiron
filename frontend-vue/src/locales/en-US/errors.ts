@@ -14,10 +14,13 @@ export default {
   session_busy_auto_recover_in: 'auto-recovers in {time}',
   session_repaired: 'Session repaired — you can send again',
   not_found: 'The requested resource does not exist or has been deleted.',
-  // Rate limit & quota
+  // Rate limit & quota (each carries an actionable next step: wait / ask admin / top up)
   rate_limited: 'Too many requests. Please try again shortly.',
-  quota_exceeded: 'Your quota has been reached. Please contact your administrator.',
+  rate_limited_in: 'Too many requests. Please try again in {retry_after_seconds} seconds.',
+  quota_exceeded: "This period's quota is used up. Ask your tenant administrator to raise the quota or upgrade the plan.",
   insufficient_credits: 'Free quota exhausted and balance is insufficient — please top up under Billing.',
+  insufficient_credits_action: 'Top up',
+  quota_exceeded_action: 'View usage',
   // Network & client-side (fallback when backend sends no code)
   timeout: 'Request timed out. Please try again.',
   network_error: 'Network connection failed. Please check your connection and try again.',

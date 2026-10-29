@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"strconv"
 )
 
 // Unified error message constants — single source of truth for all handlers.
@@ -121,13 +122,37 @@ func NotImplemented(w http.ResponseWriter, msg string) {
 
 // TooManyRequests 返回 429。
 //
-// `retryable=true` 有真实依据：429 的唯一含义就是"速率窗口还没开"，窗口一开同一个
-// 请求就能成 —— 这正是"原样重来有效"的定义。这里不逐个调用点写，是因为 429 的语义
-// 由状态码本身唯一确定（限流闸门全都走这个函数），不存在"某些 429 不该重试"的分支。
+// `retryable=true` 对**速率闸门**有真实依据：窗口一开同一个请求就能成 —— 这正是
+// "原样重来有效"的定义。
+//
+// 注意 429 并非只有一种语义：租户配额池耗尽也走 429（`rejectTenantQuota`，为兼容既有
+// 集成方保留状态码），但按周期（月/日）重置，秒级重试没有意义，因此那里显式给
+// `retryable=false`。区分靠 `code`，不靠状态码。
 func TooManyRequests(w http.ResponseWriter) {
 	JSON(w, http.StatusTooManyRequests, APIResponse{
 		Success:   false,
 		Error:     "rate limit exceeded",
+		Retryable: BoolPtr(true),
+	})
+}
+
+// TooManyRequestsAfterSeconds 同 `TooManyRequests`，但把"还要等多久"写进两个位置：
+// `Retry-After` 头（标准）与 body 的 `params.retry_after_seconds`（代理常会吃掉响应头，
+// body 不会被改；前端 `rateLimitBackoff` 两处都认）。
+//
+// 不给等待时长时仍用 `TooManyRequests`：`Retry-After: 60` 是**猜的**，只该由确实知道
+// 窗口长度的调用点给出（令牌桶按 rpm 补充，窗口上限就是 60s）。
+func TooManyRequestsAfterSeconds(w http.ResponseWriter, seconds int) {
+	if seconds <= 0 {
+		TooManyRequests(w)
+		return
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(seconds))
+	JSON(w, http.StatusTooManyRequests, APIResponse{
+		Success:   false,
+		Error:     "rate limit exceeded",
+		Code:      CodeRateLimited,
+		Params:    map[string]interface{}{"retry_after_seconds": seconds},
 		Retryable: BoolPtr(true),
 	})
 }

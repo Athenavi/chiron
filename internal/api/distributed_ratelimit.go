@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -131,6 +132,30 @@ func rpmRateArgs(rpm int64) (string, string) {
 		strconv.FormatFloat(float64(rpm), 'f', -1, 64)
 }
 
+// ErrRateLimitExceeded 表示"速率闸门确实拦下了这次请求"，与"限流服务不可用"是两回事。
+//
+// 必须分开：此前 `Allow` 两种情况都返回普通 error，中间件只能一律当成后者。
+var ErrRateLimitExceeded = errors.New("rate limit exceeded")
+
+// rateLimitDecision 把 Lua 的返回值翻译成 `Allow` 的两个出口。
+//
+// 抽成纯函数是为了能被测试直接锁住"桶拦下了"这条路径 —— 它曾经是**不可达**的：
+// 两类失败都是普通 error，中间件一律回 503 "rate limiter unavailable"。后果不只是
+// 文案难看，而是动作给错了：超额的用户被告知"服务坏了"，客户端按 503 判定不可重试，
+// 恰恰放弃了正确的做法（等一会儿原样重发）。
+func rateLimitDecision(result, tenantID, userID string) (bool, error) {
+	switch result {
+	case "global":
+		return false, fmt.Errorf("%w: 全局请求频率超限", ErrRateLimitExceeded)
+	case "tenant":
+		return false, fmt.Errorf("%w: 租户 %s 请求频率超限", ErrRateLimitExceeded, tenantID)
+	case "user":
+		return false, fmt.Errorf("%w: 用户 %s 请求频率超限", ErrRateLimitExceeded, userID)
+	default:
+		return true, nil
+	}
+}
+
 // Allow 检查并消费一个令牌 — 单次原子 eval 完成三级检查与扣减。
 // fail-close 策略：Redis 不可用或 Eval 错误时拒绝请求（生产安全优先）。
 func (l *DistributedRateLimiter) Allow(ctx context.Context, tenantID, userID string) (bool, error) {
@@ -161,16 +186,7 @@ func (l *DistributedRateLimiter) Allow(ctx context.Context, tenantID, userID str
 		return false, fmt.Errorf("限流服务暂时不可用: %w", err)
 	}
 
-	switch result {
-	case "global":
-		return false, fmt.Errorf("全局请求频率超限")
-	case "tenant":
-		return false, fmt.Errorf("租户 %s 请求频率超限", tenantID)
-	case "user":
-		return false, fmt.Errorf("用户 %s 请求频率超限", userID)
-	default:
-		return true, nil
-	}
+	return rateLimitDecision(result, tenantID, userID)
 }
 
 // DistributedRateLimitMiddleware 分布式限流中间件
@@ -186,24 +202,38 @@ func DistributedRateLimitMiddleware(limiter *DistributedRateLimiter) func(http.H
 			}
 
 			allowed, err := limiter.Allow(r.Context(), tenantID, userID)
-			if err != nil {
-				// 限流服务不可用（Redis 故障或 Eval 错误）→ 503 ServiceUnavailable
-				slog.Error("限流服务不可用（fail-close）",
-					"error", err,
-					"user", userID,
-					"path", r.URL.Path,
-				)
-				ServiceUnavailable(w, "rate limiter unavailable")
+			if writeRateLimitRejection(w, err, userID, r.URL.Path) {
 				return
 			}
-
 			if !allowed {
-				w.Header().Set("Retry-After", "60")
-				TooManyRequests(w)
+				// 兜底：正常路径下"拒绝"都带 error（见 rateLimitDecision），走不到这里。
+				TooManyRequestsAfterSeconds(w, 60)
 				return
 			}
 
 			next.ServeHTTP(w, r)
 		})
 	}
+}
+
+// writeRateLimitRejection 把 `Allow` 的失败翻译成 HTTP 响应，返回 true 表示已写出响应、调用方应直接返回。
+//
+// 两类失败必须分开，否则 429 分支永远不可达：
+//  1. 真正的"超额"（`ErrRateLimitExceeded`）→ 429 + Retry-After，客户端该等一会儿重试；
+//  2. 限流服务本身不可用（Redis 故障 / Eval 失败）→ 503，重试同样没用，但这是**我们**的
+//     故障，不该让用户以为自己发得太快（此前两者都是 503，用户看到的正是"服务坏了"）。
+//
+// 抽成独立函数是为了能被测试直接区分这两条路径 —— 否则只能起一个真实 Redis 才验证得了。
+func writeRateLimitRejection(w http.ResponseWriter, err error, userID, path string) bool {
+	if err == nil {
+		return false
+	}
+	if errors.Is(err, ErrRateLimitExceeded) {
+		// 令牌桶按 rpm 补充，窗口上限就是 60s —— 这是算得出来的，不是猜的。
+		TooManyRequestsAfterSeconds(w, 60)
+		return true
+	}
+	slog.Error("限流服务不可用（fail-close）", "error", err, "user", userID, "path", path)
+	ServiceUnavailable(w, "rate limiter unavailable")
+	return true
 }

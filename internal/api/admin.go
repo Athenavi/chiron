@@ -57,6 +57,8 @@ func (h *AdminHandler) RegisterRoutes(r *http.ServeMux) {
 	r.HandleFunc("GET /diagnostics", h.GetDiagnostics)
 	// D3：用量目录 —— 配额用量回答"还剩多少"，这里回答"**花在哪**"（按天/模型/用户）。
 	r.HandleFunc("GET /usage/catalog", h.GetUsageCatalog)
+	// 新用户引导漏斗：逐步完成/跳过/待办计数（供管理端看完成率与流失点）。
+	r.HandleFunc("GET /onboarding/funnel", h.GetOnboardingFunnel)
 	r.HandleFunc("POST /maintenance", h.TriggerMaintenance)
 	r.HandleFunc("GET /storage", h.GetStorage)
 	r.HandleFunc("PUT /storage", h.UpdateStorage)

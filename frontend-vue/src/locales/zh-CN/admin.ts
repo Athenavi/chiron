@@ -202,4 +202,13 @@ export default {
   usage_group_day: "日期",
   usage_group_model: "模型",
   usage_group_user: "用户",
+  // ── 新用户引导漏斗（P0-3 验收「完成率可查」） ──
+  onboarding_funnel_title: "新用户引导完成率",
+  onboarding_funnel_entered: "进入引导",
+  onboarding_funnel_finished: "走完流程",
+  onboarding_funnel_finished_rate: "整体完成率",
+  onboarding_funnel_completed: "完成",
+  onboarding_funnel_skipped: "跳过",
+  onboarding_funnel_pending: "待办",
+  onboarding_funnel_empty: "还没有用户进入引导 —— 该统计只覆盖本功能上线后注册的新账号。",
 }

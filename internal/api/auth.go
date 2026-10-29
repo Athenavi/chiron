@@ -455,6 +455,13 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// 新用户引导：为这个账号建好三步的 pending 行（P0-3）。
+	//
+	// 放在 commit **之后**：引导进度写不进去不能让一个已经合法的账号注册失败。
+	// 存量用户（没有这一步之前注册的）因此不会在该表里留下行 ⇒ 前端判定
+	// eligible=false，不弹引导，符合 roadmap「不打断已有用户」。
+	StartOnboarding(ctx, userID)
+
 	// 欢迎邮件：异步发送（不阻塞、不因发信失败而回滚已创建的账号）。
 	if h.mail != nil {
 		h.mail.SendWelcomeAsync(req.Email, req.Name)

@@ -352,6 +352,10 @@ func NewGatewayRouter(
 	// Billing handler (uses the same billingMgr as /submit to avoid split-brain cache)
 	billingHandler := NewBillingHandler(billingMgr, authenticator, cfg)
 
+	// 新用户引导（P0-3）：三步进度读写。余额取自同一个 billingMgr，
+	// 避免与 /v1/billing/balance 出现两份不一致的缓存。
+	onboardingHandler := NewOnboardingHandler(billingMgr)
+
 	// 后台「支付配置」保存在 system_settings.payment 的凭据叠加到 env 之上，
 	// 使页面里配置的渠道在重启后依然生效（DB 值优先、env 兜底）。
 	var settingsStore *settings.Store
@@ -442,6 +446,8 @@ func NewGatewayRouter(
 	registerMediaRoutes(mux, mediaHandler, authMW, rlMW, cfg.StorageRoot)
 	registerPluginRoutes(mux, pluginHandler, authMW, rlMW)
 	registerBillingRoutes(mux, billingHandler, authMW, rlMW)
+	// 新用户引导（P0-3）：用户级自助，身份取自 token。
+	onboardingHandler.RegisterRoutes(mux, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
 	// 桌面端云端片段推理（POST /v1/desktop/infer，用户 JWT + 限流，见 routes_desktop.go）
 	registerDesktopRoutes(mux, authMW, rlMW, pythonClient)
