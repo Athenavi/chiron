@@ -146,12 +146,18 @@ var (
 	PermPolicyManage = "policy:manage"
 	PermMarketManage = "market:manage"
 	PermSSOManage    = "sso:manage"
+	// PermBillingManage 套餐目录管理（P2-2c）。
+	//
+	// 单独一个权限点而不是复用 PermAdminWrite：套餐价格与所含权益直接决定
+	// 平台收多少钱、卖什么货，属"定价"而非"日常运维"。目前授予 owner/admin
+	// 与其它企业权限点同口径，但独立成点后可按需只给运营、不给技术运维。
+	PermBillingManage = "billing:manage"
 )
 
 // RolePermissions maps roles to permission sets
 var RolePermissions = map[string][]string{
-	"owner": {PermChatWrite, PermChatRead, PermAdminRead, PermAdminWrite, PermToolsExec, PermUsersManage, PermAuditRead, PermEntManage, PermPolicyManage, PermMarketManage, PermSSOManage},
-	"admin": {PermChatWrite, PermChatRead, PermAdminRead, PermAdminWrite, PermToolsExec, PermAuditRead, PermEntManage, PermPolicyManage, PermMarketManage, PermSSOManage},
+	"owner": {PermChatWrite, PermChatRead, PermAdminRead, PermAdminWrite, PermToolsExec, PermUsersManage, PermAuditRead, PermEntManage, PermPolicyManage, PermMarketManage, PermSSOManage, PermBillingManage},
+	"admin": {PermChatWrite, PermChatRead, PermAdminRead, PermAdminWrite, PermToolsExec, PermAuditRead, PermEntManage, PermPolicyManage, PermMarketManage, PermSSOManage, PermBillingManage},
 	"user":  {PermChatWrite, PermChatRead, PermToolsExec},
 }
 

@@ -555,7 +555,7 @@ func NewGatewayRouter(
 	// 旧 /v1/permission/approve|reject 已移除：审批统一由 Python 侧处理
 	// （前端经 /v1/agent/approval 提交决定），避免 Go/Python 双实现漂移。
 
-	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient, invoiceHandler)
+	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient, invoiceHandler, billingHandler)
 
 	// Wrap main mux with public middleware.
 	//

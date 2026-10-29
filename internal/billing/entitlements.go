@@ -58,6 +58,23 @@ type EntitlementStore interface {
 	// UserEntitlements 返回用户的全部权益（**含已过期**），供"我的套餐"页展示到期状态。
 	// 只返回生效中的会让"已过期"和"从未购买"在界面上无法区分。
 	UserEntitlements(ctx context.Context, userID string) ([]Entitlement, error)
+
+	// ── 管理端（P2-2c）──
+
+	// AdminListPackages 返回**全部**套餐（含已下架），供后台管理页使用。
+	// 与 ListPackages 刻意分开：后者是用户侧视图（enabled=true 才有意义），
+	// 后台必须看得到下架项，否则"下架后它还在列表里吗"无从确认。
+	AdminListPackages(ctx context.Context) ([]Package, error)
+	// CreatePackage 新建套餐。code 重复返回 ErrPackageCodeExists。
+	CreatePackage(ctx context.Context, p *Package) error
+	// UpdatePackage 按 id 更新可编辑字段；返回 false 表示该 id 不存在。
+	//
+	// **code 不在可编辑字段内**：它是 `payments.package_code` 的引用值，改了会让
+	// 未确认的订单在 `PackageByCode` 里查不到套餐 —— 于是钱付了、权益发不出来。
+	UpdatePackage(ctx context.Context, p *Package) (bool, error)
+	// SetPackageEnabled 上架/下架；返回 false 表示该 id 不存在。
+	// 下架而非删除：已售权益是快照不受影响，但历史订单要靠 code 反查套餐名。
+	SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error)
 }
 
 // isUniqueViolation 判定 SQLSTATE 23505。
@@ -267,4 +284,124 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) {
 	slog.Info("entitlement granted",
 		"order", p.ID, "user", p.UserID, "package", pkg.Code,
 		"expires_at", e.ExpiresAt)
+}
+
+// ── 套餐目录管理端（P2-2c）────────────────────────────────────────────────
+
+// ErrPackageCodeExists 表示套餐 code 已被占用（撞 `ux_billing_packages_code`）。
+//
+// 单独定义错误而不是让调用方判 23505：handler 需要把"code 冲突"与其它写失败
+// 分成 409 / 500 两种响应，靠 SQLSTATE 字符串在 api 层做分支既脆又难测。
+var ErrPackageCodeExists = errors.New("package code already exists")
+
+// 套餐目录的统一列清单，避免四个查询各写一份导致扫描错位。
+const packageColumns = `id, code, name, credits, price_cents, currency, duration_days,
+	        COALESCE(allowed_models, ARRAY[]::text[]), enabled, sort_order`
+
+func scanPackageRow(row interface{ Scan(...any) error }) (*Package, error) {
+	var p Package
+	if err := row.Scan(&p.ID, &p.Code, &p.Name, &p.Credits, &p.PriceCents, &p.Currency,
+		&p.DurationDays, &p.AllowedModels, &p.Enabled, &p.SortOrder); err != nil {
+		return nil, err
+	}
+	return &p, nil
+}
+
+// AdminListPackages 返回**全部**套餐（含已下架），供后台管理页。
+//
+// 排序把启用项排在前面：运营打开页面最常做的是"改还在卖的"，下架项通常只是
+// 留着看历史，压在列表底部更顺手。
+func (s *PGStore) AdminListPackages(ctx context.Context) ([]Package, error) {
+	rows, err := db.GlobalDBManager.Query(ctx,
+		`SELECT `+packageColumns+`
+		   FROM billing_packages
+		  ORDER BY enabled DESC, sort_order ASC, price_cents ASC, code ASC`)
+	if err != nil {
+		return nil, fmt.Errorf("admin list packages: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Package{}
+	for rows.Next() {
+		p, err := scanPackageRow(rows)
+		if err != nil {
+			return nil, fmt.Errorf("scan admin package: %w", err)
+		}
+		out = append(out, *p)
+	}
+	return out, rows.Err()
+}
+
+// CreatePackage 新建套餐；主键在 store 内生成，调用方不必关心。
+//
+// 主键用 id.UUID()：`billing_packages.id` 是 varchar(36)，与 user_entitlements
+// 保持一致（雪花 ID 加前缀会超长）。
+func (s *PGStore) CreatePackage(ctx context.Context, p *Package) error {
+	if p == nil {
+		return errors.New("nil package")
+	}
+	pkgID, err := id.UUID()
+	if err != nil {
+		return fmt.Errorf("generate package id: %w", err)
+	}
+	p.ID = pkgID
+
+	models := p.AllowedModels
+	if models == nil {
+		models = []string{}
+	}
+	_, err = db.GlobalDBManager.Exec(ctx,
+		`INSERT INTO billing_packages
+		     (id, code, name, credits, price_cents, currency, duration_days,
+		      allowed_models, enabled, sort_order, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, NOW(), NOW())`,
+		p.ID, p.Code, p.Name, p.Credits, p.PriceCents, p.Currency, p.DurationDays,
+		models, p.Enabled, p.SortOrder)
+	if err != nil {
+		if isUniqueViolation(err) {
+			return ErrPackageCodeExists
+		}
+		return fmt.Errorf("insert package: %w", err)
+	}
+	return nil
+}
+
+// UpdatePackage 按 id 更新可编辑字段；返回 false 表示该 id 不存在。
+//
+// **刻意不更新 code**：`payments.package_code` 存的就是它，改掉会让还没确认的
+// 订单在 `PackageByCode` 里查不到套餐 —— 钱付了、权益发不出来。code 只能新建。
+func (s *PGStore) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
+	if p == nil {
+		return false, errors.New("nil package")
+	}
+	models := p.AllowedModels
+	if models == nil {
+		models = []string{}
+	}
+	tag, err := db.GlobalDBManager.Exec(ctx,
+		`UPDATE billing_packages
+		    SET name = $2, credits = $3, price_cents = $4, currency = $5,
+		        duration_days = $6, allowed_models = $7, sort_order = $8,
+		        updated_at = NOW()
+		  WHERE id = $1`,
+		p.ID, p.Name, p.Credits, p.PriceCents, p.Currency, p.DurationDays,
+		models, p.SortOrder)
+	if err != nil {
+		return false, fmt.Errorf("update package: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
+}
+
+// SetPackageEnabled 上架/下架；返回 false 表示该 id 不存在。
+//
+// 下架而不是删除：已售权益是快照、不受影响，但历史订单要靠 code 反查套餐名，
+// 物理删除会让"我当初买的到底是什么"永久失联。
+func (s *PGStore) SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
+	tag, err := db.GlobalDBManager.Exec(ctx,
+		`UPDATE billing_packages SET enabled = $2, updated_at = NOW() WHERE id = $1`,
+		id, enabled)
+	if err != nil {
+		return false, fmt.Errorf("set package enabled: %w", err)
+	}
+	return tag.RowsAffected() > 0, nil
 }

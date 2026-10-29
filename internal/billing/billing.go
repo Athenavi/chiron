@@ -316,6 +316,26 @@ func (m *Manager) UserEntitlements(ctx context.Context, userID string) ([]Entitl
 	return m.store.UserEntitlements(ctx, userID)
 }
 
+// AdminListPackages 返回全部套餐（含已下架），供后台管理页（P2-2c）。
+func (m *Manager) AdminListPackages(ctx context.Context) ([]Package, error) {
+	return m.store.AdminListPackages(ctx)
+}
+
+// CreatePackage 新建套餐；主键由 store 生成，成功后可从 p.ID 取到。
+func (m *Manager) CreatePackage(ctx context.Context, p *Package) error {
+	return m.store.CreatePackage(ctx, p)
+}
+
+// UpdatePackage 按 id 更新套餐可编辑字段；返回 false 表示该 id 不存在。
+func (m *Manager) UpdatePackage(ctx context.Context, p *Package) (bool, error) {
+	return m.store.UpdatePackage(ctx, p)
+}
+
+// SetPackageEnabled 上架/下架套餐；返回 false 表示该 id 不存在。
+func (m *Manager) SetPackageEnabled(ctx context.Context, id string, enabled bool) (bool, error) {
+	return m.store.SetPackageEnabled(ctx, id, enabled)
+}
+
 // UpdatePaymentProvider 预下单成功后回填二维码与渠道订单号。
 func (m *Manager) UpdatePaymentProvider(ctx context.Context, id, qrCode, providerOrderID string) error {
 	return m.store.UpdatePaymentProvider(ctx, id, qrCode, providerOrderID)

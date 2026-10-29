@@ -19,6 +19,7 @@ func registerAdminRoutes(
 	adminHandler *AdminHandler,
 	pythonClient *engine.PythonClient,
 	invoiceHandler *InvoiceHandler,
+	billingHandler *BillingHandler,
 ) {
 	// Admin routes (auth + admin permission + rate limit)
 	// P1-3: 所有 admin 路由必须挂限流，防止被劫持的 admin token 无限调用
@@ -34,6 +35,9 @@ func registerAdminRoutes(
 	// 发票审核（P1-2 / roadmap §11.4）：注册在 adminMux 内部，才能拿到 {id} 路径参数
 	// （外层 mux 已按 /v1/admin 前缀统一套了 authMW + 权限），用法与 adminHandler 一致。
 	invoiceHandler.RegisterAdminRoutes(adminMux)
+	// 套餐目录 CRUD（P2-2c）：同样注册在 adminMux 内部才能拿到 {id}。
+	// 权限用 PermBillingManage（定价属经营决策），见下方 mux 挂载处。
+	billingHandler.RegisterAdminRoutes(adminMux)
 	// Strip the /v1/admin prefix so adminMux patterns (e.g. "GET /metrics") match correctly
 	adminStrip := http.StripPrefix("/v1/admin", adminMux)
 	mux.Handle("GET /v1/admin/metrics", authMW(rlMW(adminReadMW(adminStrip))))
@@ -131,6 +135,17 @@ func registerAdminRoutes(
 	// 支付渠道配置（后台「支付配置」页面）
 	mux.Handle("GET /v1/admin/payments", authMW(rlMW(adminReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(adminWriteMW(adminStrip))))
+
+	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
+	// 读也挂 PermBillingManage 而不是 adminReadMW：能看到定价与权益范围的人，
+	// 应当与能改它的是同一批 —— 否则运营的定价草案会对所有 admin 可见。
+	billingManageMW := RequirePermission(auth.PermBillingManage)
+	mux.Handle("GET /v1/admin/billing/packages", authMW(rlMW(billingManageMW(adminStrip))))
+	mux.Handle("POST /v1/admin/billing/packages", authMW(rlMW(billingManageMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/billing/packages/{id}", authMW(rlMW(billingManageMW(adminStrip))))
+	// DELETE = 软下架（enabled=false），POST restore = 重新上架。
+	mux.Handle("DELETE /v1/admin/billing/packages/{id}", authMW(rlMW(billingManageMW(adminStrip))))
+	mux.Handle("POST /v1/admin/billing/packages/{id}/restore", authMW(rlMW(billingManageMW(adminStrip))))
 
 	// 租户 / 域名 / 定时任务管理（后台「租户管理」「域名管理」「定时任务」三页）
 	// 与上面 redis/database/models/settings 是**同一个坑的第四次**：handler 早已

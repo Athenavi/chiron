@@ -61,6 +61,8 @@ var apiKeyDeniedPerms = map[string]bool{
 	PermEntManage:   true,
 	PermMarketManage: true,
 	PermAuditRead:   true,
+	// 套餐定价改一次就影响真实收款，同样不该由长期凭据代持。
+	PermBillingManage: true,
 }
 
 // APIKeyPermissions 返回 API Key 可用的权限集：角色权限里剔除管理类权限。
