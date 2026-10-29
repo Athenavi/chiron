@@ -2,7 +2,7 @@
 fastapi==0.143.0
 uvicorn==0.54.0
 # LLM Provider SDK
-anthropic==1.13.0
+anthropic==2.3.0
 openai==3.29.0
 # pymilvus 只服务记忆层的可选向量后端（MEMORY_VECTOR_BACKEND=milvus，默认 pg）。
 # 知识库已改用 PageIndex，不再需要向量库。
