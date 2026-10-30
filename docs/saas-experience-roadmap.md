@@ -734,7 +734,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 |---|---|
 | 功能线 | P0-1/2/3、P1-1/2/3、P2-1/2/3 **全部已交付**（§1 现状表逐行标注） |
 | 未提交改动 | **45 项**，跨 P2-2 / P2-3 / T1–T4 / L3-4 六个主题 |
-| L3-4 批次 A | 已拆 **10 个文件、2671 行逐字未变外移**（§4.1）；本轮增补 `plugin_handler.go` / `agents.go` / `rpa_ws.go` |
+| L3-4 批次 A | 已拆 **11 个文件、2997 行逐字未变外移**（§4.1）；本轮增补 `plugin_handler.go` / `agents.go` / `rpa_ws.go` / `sso_handler.go` |
 | 剩余巨型 Go 文件（实测 `wc -l`） | `admin_ops.go` 950 · `submit_handler.go` 935（**跳过**）· `sso_handler.go` 888 · `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 |
 | 剩余巨型前端文件 | `ChatView.vue` **3966** · `MediaView.vue` 1842 · `ChatInput.vue` 1628 · `BillingView.vue` 1566 · `WorkflowView.vue` 1364 · `MessageItem.vue` 1291 · `SettingsPanel.vue` 1236 · `ChatSidePanel.vue` 1228 · `AgentsView.vue` 1182 |
 | 已知测试盲区 | **已补齐**：`views/__tests__/NotificationsView.spec.ts` 10 用例（全量前端 101 文件 / 824 用例全绿） |
@@ -823,19 +823,19 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 
 | 维度 | 实测 |
 |---|---|
-| L3-4 批次 A 累计 | **10 个文件、2671 行逐字外移**（§4.1 表）；`submit_handler.go` 已按判据排除 |
-| 剩余 Go >650 行 | `admin_ops.go` 950 · `submit_handler.go` 935（跳过）· `sso_handler.go` 888 · `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 |
-| 剩余 Go 文件的顶层符号数 | `mail_handler` 32 · `sso_handler` 25 · `auth` 25 · `billing_handler` 23 · `sms_handler` 22 · `admin` 20 —— **都远高于 `submit_handler` 的 17**，即仍具备「按子域切」的余量 |
-| 巨型前端文件及其测试网 | `ChatView` 3966（2 spec）· `MediaView` **1842（0 spec）** · `ChatInput` 1628（1）· `BillingView` 1566（1，13 用例）· `WorkflowView` 1364（1）· `MessageItem` 1291（1）· `SettingsPanel` **1236（0 spec）** · `ChatSidePanel` 1228（1）· `AgentsView` 1182（1）· `SubAgentPanel` 1096（1） |
+| L3-4 批次 A 累计 | **11 个文件、2997 行逐字外移**（§4.1 表）；`submit_handler.go` 已按判据排除 |
+| 剩余 Go >650 行 | `admin_ops.go` 950 · `submit_handler.go` 935（跳过）· `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 · `sso_handler.go` 559（已降） |
+| 剩余 Go 文件的顶层符号数 | `mail_handler` 32 · `auth` 25 · `billing_handler` 23 · `sms_handler` 22 · `admin` 20 —— **都远高于 `submit_handler` 的 17**，即仍具备「按子域切」的余量 |
+| 巨型前端文件及其测试网 | `ChatView` 3966（2 spec）· `MediaView` **1842（0 spec → 新补 6 条冒烟网）** · `ChatInput` 1628（1）· `BillingView` 1566（1，13 用例）· `WorkflowView` 1364（1）· `MessageItem` 1291（1）· `SettingsPanel` **1236（0 spec）** · `ChatSidePanel` 1228（1）· `AgentsView` 1182（1）· `SubAgentPanel` 1096（1） |
 
-**本轮已验证可切、尚未动刀的边界**：`sso_handler.go` 的「身份绑定」子域 —— `ListIdentities` / `DeleteIdentity` / `SetPassword` / `handleBindCallback` / `provisionAndBind` / `findIdentityUser` / `resolveRole` 七个符号在 `internal/api/*.go` 的**跨文件引用数全为 0**。这是下一批最省事的一刀。
+**已完成的一刀（2026-10-30）**：`sso_handler.go` 的「身份绑定」子域 —— `handleBindCallback` / `ListIdentities` / `DeleteIdentity` / `setPasswordRequest` / `SetPassword` / `findIdentityUser` / `provisionAndBind` / `resolveRole` 八个符号 **326 行逐字外移到 `sso_identity.go`**，原文件 888 → 559。`l34_verify_any.py` 逐字校验 PASS，全仓 `build + vet + test` 绿。外移时原文件失效的 `crypto/rand` / `encoding/hex` / `golang.org/x/crypto/bcrypt` 三个 import 已按 `rg -c` 零引用核实后删除。
 
 ### 17.2 可立即做（按风险从低到高）
 
 | 序 | 任务 | 依据与做法 |
 |---|---|---|
-| **1** | **`sso_handler.go` 888 → 拆出身份绑定子域** | 边界已实测（上表）。`provisionAndBind` 与 `handleBindCallback` 是「外部身份 ↔ 本地用户」的完整闭环，`resolveRole` 是纯函数；与留在原文件的「登录 / 回调 / 公开 provider 列表」职责不同。做法沿用批次 A：按符号级切分脚本写 `sso_identity.go`，再用 `l34_verify_any.py` 逐字比对 |
-| **2** | **`MediaView.vue` 1842 先建测试网，再抽 composable** | **它是唯一「1800+ 行且零测试」的页面**（`SettingsPanel` 也零测试但 1236 行、交互更局部）。零测试下抽 composable 等于盲改：搬错一个 `ref` 的归属，界面会静默显示旧值而不报错。先补 3–5 条冒烟网（挂载 / 加载态 / 空态 / 一个主交互），再按「上传 / 预览 / 列表」切 |
+| **1** | ✅ **`sso_handler.go` 888 → 559，拆出身份绑定子域** | **已完成（2026-10-30）**：八个符号 326 行逐字外移到 `sso_identity.go`（`provisionAndBind` + `handleBindCallback` 构成「外部身份 ↔ 本地用户」闭环，`resolveRole` 为纯函数），`l34_verify_any.py` PASS，全仓 build/vet/test 绿 |
+| **2** | **`MediaView.vue` 1842 先建测试网，再抽 composable** | **测试网已就位（2026-10-30）**：`views/__tests__/MediaView.smoke.spec.ts` 6 用例——默认请求参数、三态互斥（骨架/空态/错误态）、点文件夹带 `parent_id` 重拉、点文件只开详情不重拉。**建网当场抓到一个既有缺陷**：模板 1553 行用 `<Progress>` 做上传进度条，但文件从未导入它，浏览器里上传进度条一直是未解析标签；已补 `Progress` 到 antd 导入。**下一步才是抽 composable**（按「上传 / 预览 / 列表」切） |
 | **3** | **`BillingView.vue` 1566 抽 composable** | 有现成 13 个用例（用量分摊 6 + 导出 2 + 发票 4 + 金额换算 1）护住，是前端这批里**性价比最高**的一个：改坏会立刻被抓住。顶层已约 100 个符号，先切「发票」与「支付二维码」两块（各自状态自洽、互不引用） |
 | **4** | **`mail_handler.go` 695 + `sms_handler.go` 739** | 顶层符号 32 / 22，属「配置 CRUD + 测试发送」两个天然子域。排在后面的理由：行数已不算刺眼，边际收益低于前端那两项 |
 

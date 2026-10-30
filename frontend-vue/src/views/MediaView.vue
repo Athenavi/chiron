@@ -2,7 +2,7 @@
 import { ref, computed, onMounted, watch, onUnmounted, markRaw } from 'vue'
 import {
   Button, Input, Select, Segmented, Pagination, Table, message,
-  Drawer, Modal, Popconfirm, Upload, Checkbox, Tree, Tag,
+  Drawer, Modal, Popconfirm, Upload, Checkbox, Tree, Tag, Progress,
 } from 'ant-design-vue'
 import {
   SearchOutlined, CloudUploadOutlined, FolderOutlined, FileOutlined,
