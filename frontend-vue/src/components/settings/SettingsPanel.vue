@@ -6,7 +6,7 @@
  * 页面（/profile）与头像弹窗共用本组件 —— 两套入口一套实现，避免各自漂移。
  * 组件本身不含容器（无 header、无尺寸），由调用方决定是页面还是弹窗。
  */
-import { ref, onMounted, onUnmounted, computed } from 'vue'
+import { ref, onMounted, onUnmounted } from 'vue'
 import { useRoute } from 'vue-router'
 import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider } from 'ant-design-vue'
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
@@ -20,24 +20,15 @@ import { useThemeStore } from '../../stores/theme'
 import { useDeviceStore } from '../../stores/device'
 import { api } from '../../api'
 import {
-  listIdentities,
-  deleteIdentity,
   setPassword,
-  listPublicSsoProviders,
-  ssoLoginURL,
-  getSmsBind,
-  bindPhone,
-  unbindPhone,
-  sendSmsCode,
-  isValidPhone,
-  type UserIdentity,
-  type SsoPublicProvider,
 } from '../../api/auth'
-import { useSmsCountdown } from '../../composables/useSmsCountdown'
+import { useSettingsBindings } from '../../composables/useSettingsBindings'
+import { useSettingsConversations } from '../../composables/useSettingsConversations'
+import { useSettingsPhone } from '../../composables/useSettingsPhone'
+import { useSettingsShares } from '../../composables/useSettingsShares'
 import { useSpeech } from '../../composables/useSpeech'
 import { ACCENT_PRESETS, DEFAULT_ACCENT } from '../../utils/accentPresets'
-import { errorStatus, serverErrorMessage } from '../../utils/apiError'
-import { tallyCache, scheduleTally } from '../../utils/tallyCache'
+import { serverErrorMessage } from '../../utils/apiError'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
@@ -69,175 +60,33 @@ async function handleUpdateProfile() {
   }
 }
 
-// ── 三方账号绑定 ──
+// ── 三方账号绑定：状态与逻辑见 `composables/useSettingsBindings.ts` ──
+const {
+  identities,
+  bindable,
+  bindingsLoading,
+  unbinding,
+  loadBindings,
+  openBindings,
+  startBind,
+  handleUnbind,
+} = useSettingsBindings()
 
-const identities = ref<UserIdentity[]>([])
-const bindable = ref<SsoPublicProvider[]>([])
-const bindingsLoading = ref(false)
-const unbinding = ref('')
-
-/**
- * 三方绑定的两个请求合成一份缓存值（它们只一起用于渲染同一个区块）。
- *
- * **不缓存**：本函数被解绑（`handleUnbind`）在数据变更后直接调用 —— 那条路径要的是
- * "解绑完立刻看到新列表"，走缓存会显示刚解绑的那一行还在。缓存只接在 `onMounted` 上
- * （见 `openBindings`），两者共用同一个 fetcher。
- */
-async function fetchBindings(): Promise<{ ids: UserIdentity[]; providers: SsoPublicProvider[] }> {
-  const [ids, providers] = await Promise.all([
-    listIdentities(),
-    // 可绑定列表取不到不算失败：绑不绑第三方不该被"租户没配 SSO"挡住
-    listPublicSsoProviders().catch(() => [] as SsoPublicProvider[]),
-  ])
-  return { ids, providers }
-}
-
-/** 把一份绑定结果落到视图上（已绑定的 provider 不再出现在可绑定列表） */
-function applyBindings(ids: UserIdentity[], providers: SsoPublicProvider[]) {
-  identities.value = ids
-  const boundNames = new Set(ids.map(i => i.provider_name))
-  bindable.value = providers.filter(p => !boundNames.has(p.display_name) && !boundNames.has(p.name))
-}
-
-/** 数据变更后 / 失败重试用：**绕过缓存**重新取，并把新值写回缓存 */
-async function loadBindings() {
-  bindingsLoading.value = true
-  try {
-    const { ids, providers } = await tallyCache.load('identities', fetchBindings, { force: true })
-    applyBindings(ids, providers)
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_load_binding_info')))
-  } finally {
-    bindingsLoading.value = false
-  }
-}
-
-/** 面板打开时用：延后 + 命中缓存即渲染（成本来源见 `onMounted` 处说明） */
-function openBindings() {
-  return scheduleTally(
-    tallyCache,
-    'identities',
-    fetchBindings,
-    ({ ids, providers }) => {
-      applyBindings(ids, providers)
-      bindingsLoading.value = false
-    },
-    {
-      onStart: () => { bindingsLoading.value = true },
-      onError: (e) => {
-        bindingsLoading.value = false
-        message.error(serverErrorMessage(e, t('errors.failed_to_load_binding_info')))
-      },
-    },
-  )
-}
-
-function startBind(providerId: string) {
-  // 整页跳转：网关域 cookie 随导航携带，bind state 由后端签发
-  window.location.href = ssoLoginURL(providerId, 'bind')
-}
-
-async function handleUnbind(id: string) {
-  unbinding.value = id
-  try {
-    await deleteIdentity(id)
-    message.success(t('common.unbound'))
-    await loadBindings()
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_unbind')))
-  } finally {
-    unbinding.value = ''
-  }
-}
-
-// ── 手机号绑定（短信验证码）──
-
-const phone = ref('')
-const phoneBound = ref(false)
-const phoneLoading = ref(false)
-const phoneForm = ref({ phone: '', code: '' })
-const phoneBinding = ref(false)
-const unbindingPhone = ref(false)
-const { remaining: phoneCountdown, start: startPhoneCountdown } = useSmsCountdown(60)
-const sendingCode = ref(false)
-
-async function loadPhone() {
-  phoneLoading.value = true
-  try {
-    const res = await getSmsBind()
-    phone.value = res.phone || ''
-    phoneBound.value = !!res.bound
-  } catch {
-    // 短信服务未配置/不可达时静默隐藏绑定表单
-    phoneBound.value = false
-  } finally {
-    phoneLoading.value = false
-  }
-}
-
-async function handleSendBindCode() {
-  const p = phoneForm.value.phone.trim()
-  if (!isValidPhone(p)) {
-    message.warning(t('common.please_enter_a_valid_phone_number'))
-    return
-  }
-  sendingCode.value = true
-  try {
-    const res = await sendSmsCode({ phone: p, purpose: 'bind' })
-    startPhoneCountdown(res.interval || 60)
-    message.success(t('auth.verificationCodeSent'))
-  } catch (e) {
-    const status = errorStatus(e)
-    const apiErr = serverErrorMessage(e, '')
-    if (status === 429) {
-      message.error(t('common.sending_too_frequently_please_try_again_later'))
-    } else if (status === 403) {
-      message.error(apiErr || t('common.sms_service_not_enabled'))
-    } else {
-      message.error(apiErr || t('auth.verificationCodeSendFailed'))
-    }
-  } finally {
-    sendingCode.value = false
-  }
-}
-
-async function handleBindPhone() {
-  const { phone: p, code } = phoneForm.value
-  if (!isValidPhone(p) || !code.trim()) {
-    message.warning(t('auth.please_enter_phone_number_and_verification_code'))
-    return
-  }
-  phoneBinding.value = true
-  try {
-    await bindPhone({ phone: p.trim(), code: code.trim() })
-    message.success(t('common.phone_number_bound_successfully'))
-    phoneForm.value = { phone: '', code: '' }
-    await loadPhone()
-  } catch (e) {
-    const status = errorStatus(e)
-    const apiErr = serverErrorMessage(e, '')
-    if (status === 409) {
-      message.error(t('auth.this_phone_number_is_bound_to_another_account'))
-    } else {
-      message.error(apiErr || t('errors.binding_failed'))
-    }
-  } finally {
-    phoneBinding.value = false
-  }
-}
-
-async function handleUnbindPhone() {
-  unbindingPhone.value = true
-  try {
-    await unbindPhone()
-    message.success(t('common.phone_number_unbound'))
-    await loadPhone()
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_unbind')))
-  } finally {
-    unbindingPhone.value = false
-  }
-}
+// ── 手机号绑定（短信验证码）：状态与逻辑见 `composables/useSettingsPhone.ts` ──
+const {
+  phone,
+  phoneBound,
+  phoneLoading,
+  phoneForm,
+  phoneBinding,
+  unbindingPhone,
+  sendingCode,
+  phoneCountdown,
+  loadPhone,
+  handleSendBindCode,
+  handleBindPhone,
+  handleUnbindPhone,
+} = useSettingsPhone()
 
 // ── 设置密码（SSO 建号用户首设免旧密码）──
 
@@ -314,235 +163,33 @@ function previewSpeech() {
   }
 }
 
-// ── 数据管理：分享 ──
+// ── 数据管理：分享：状态与逻辑见 `composables/useSettingsShares.ts` ──
+const {
+  shares,
+  sharesLoading,
+  revoking,
+  loadShares,
+  openShares,
+  handleRevokeShare,
+  copyShareURL,
+} = useSettingsShares()
 
-interface ShareItem {
-  share_id: string
-  session_id: string
-  title: string
-  message_count: number
-  created_at: string
-}
-
-const shares = ref<ShareItem[]>([])
-const sharesLoading = ref(false)
-const revoking = ref('')
-
-async function fetchShares(): Promise<ShareItem[]> {
-  const { data } = await api.get('/v1/shares')
-  return data?.data?.items ?? []
-}
-
-/** 数据变更后 / 手动刷新：绕过缓存重取（force）并把新值写回缓存 */
-async function loadShares() {
-  sharesLoading.value = true
-  try {
-    shares.value = await tallyCache.load('shares', fetchShares, { force: true })
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_load_shares')))
-  } finally {
-    sharesLoading.value = false
-  }
-}
-
-/** 面板打开时用：延后 + 命中缓存即渲染 */
-function openShares() {
-  return scheduleTally(
-    tallyCache,
-    'shares',
-    fetchShares,
-    (items) => {
-      shares.value = items
-      sharesLoading.value = false
-    },
-    {
-      onStart: () => { sharesLoading.value = true },
-      onError: (e) => {
-        sharesLoading.value = false
-        message.error(serverErrorMessage(e, t('errors.failed_to_load_shares')))
-      },
-    },
-  )
-}
-
-async function handleRevokeShare(item: ShareItem) {
-  revoking.value = item.share_id
-  try {
-    // 撤销是按会话维度的（后端会把该会话所有有效分享标记 revoked）
-    await api.delete(`/v1/conversations/${item.session_id}/share`)
-    message.success(t('common.sharing_canceled'))
-    await loadShares()
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_cancel_sharing')))
-  } finally {
-    revoking.value = ''
-  }
-}
-
-function shareURL(id: string) {
-  return `${window.location.origin}/share/${id}`
-}
-
-async function copyShareURL(id: string) {
-  try {
-    await navigator.clipboard.writeText(shareURL(id))
-    message.success(t('common.share_link_copied'))
-  } catch {
-    message.warning(t('errors.copy_failed_please_copy_manually'))
-  }
-}
-
-// ── 数据管理：会话导出与删除 ──
-
-interface ConversationItem {
-  id: string
-  title?: string
-  updated_at?: string
-  created_at?: string
-}
-
-const conversations = ref<ConversationItem[]>([])
-const convLoading = ref(false)
-const selectedConvIds = ref<string[]>([])
-const exporting = ref(false)
-const deleting = ref(false)
-
-async function fetchConversations(): Promise<ConversationItem[]> {
-  const { data } = await api.get('/v1/conversations')
-  // 兼容 {items:[...]} 与直接数组两种返回形态
-  return data?.data?.items ?? data?.data ?? []
-}
-
-/** 数据变更后 / 手动刷新：绕过缓存（删完会话还显示旧列表才是最坏的） */
-async function loadConversations() {
-  convLoading.value = true
-  try {
-    conversations.value = await tallyCache.load('conversations', fetchConversations, { force: true })
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.failed_to_load_session_list')))
-  } finally {
-    convLoading.value = false
-  }
-}
-
-/** 面板打开时用：延后 + 命中缓存即渲染 */
-function openConversations() {
-  return scheduleTally(
-    tallyCache,
-    'conversations',
-    fetchConversations,
-    (items) => {
-      conversations.value = items
-      convLoading.value = false
-    },
-    {
-      onStart: () => { convLoading.value = true },
-      onError: (e) => {
-        convLoading.value = false
-        message.error(serverErrorMessage(e, t('errors.failed_to_load_session_list')))
-      },
-    },
-  )
-}
-
-/** 导出用的消息行（`/v1/conversations/{id}` 的 messages[]）；字段都可能缺，渲染时逐项兜底 */
-interface ExportMessage {
-  role?: string
-  content?: unknown
-  reasoning?: unknown
-}
-
-/** 把一次会话渲染成 Markdown；reasoning 单独成节，避免与正文混淆 */
-function conversationToMarkdown(conv: ConversationItem, messages: ExportMessage[]): string {
-  const lines: string[] = [
-    t('common.title', { title: conv.title || t('chat.untitled_session') }),
-    '',
-    t('common.exported_at_time', { time: new Date().toLocaleString() }),
-    '',
-  ]
-  for (const m of messages) {
-    const role = m.role === 'user' ? t('admin.user_2') : m.role === 'assistant' ? t('common.assistant_2') : (m.role || t('common.unknown'))
-    lines.push(`## ${role}`, '')
-    if (m.reasoning) {
-      lines.push('<details><summary>' + t('chat.reasoning_process') + '</summary>', '', String(m.reasoning), '', '</details>', '')
-    }
-    lines.push(String(m.content ?? ''), '')
-  }
-  return lines.join('\n')
-}
-
-/** 逐会话拉详情再打包。导出是低频操作，串行可避免瞬时打满后端。 */
-async function exportSelected() {
-  const ids = selectedConvIds.value
-  if (!ids.length) {
-    message.warning(t('chat.please_select_the_session_to_export_first'))
-    return
-  }
-  exporting.value = true
-  try {
-    const parts: string[] = []
-    for (const id of ids) {
-      const conv = conversations.value.find(c => c.id === id) ?? { id }
-      const { data } = await api.get(`/v1/conversations/${id}`)
-      const payload = data?.data ?? {}
-      const messages = payload.messages ?? payload.items ?? []
-      parts.push(conversationToMarkdown(conv, messages), '\n---\n')
-    }
-    const blob = new Blob([parts.join('\n')], { type: 'text/markdown;charset=utf-8' })
-    const url = URL.createObjectURL(blob)
-    const a = document.createElement('a')
-    a.href = url
-    a.download = `chiron-conversations-${new Date().toISOString().slice(0, 10)}.md`
-    a.click()
-    URL.revokeObjectURL(url)
-    message.success(t('chat.exported_n_sessions', { n: ids.length }))
-  } catch (e) {
-    message.error(serverErrorMessage(e, t('errors.export_failed')))
-  } finally {
-    exporting.value = false
-  }
-}
-
-async function deleteSelected() {
-  const ids = selectedConvIds.value
-  if (!ids.length) {
-    message.warning(t('chat.please_select_the_session_to_delete_first'))
-    return
-  }
-  deleting.value = true
-  try {
-    // 后端无批量接口，逐个删除；部分失败时如实报告成功数，不谎报全部成功
-    let ok = 0
-    const failed: string[] = []
-    for (const id of ids) {
-      try {
-        await api.delete(`/v1/conversations/${id}`)
-        ok++
-      } catch {
-        failed.push(id)
-      }
-    }
-    if (failed.length) {
-      message.warning(t('errors.deleted_ok_failed_failed', { ok, failed: failed.length }))
-    } else {
-      message.success(t('chat.deleted_n_sessions', { n: ok }))
-    }
-    selectedConvIds.value = failed
-    await loadConversations()
-    await loadShares()
-  } finally {
-    deleting.value = false
-  }
-}
-
-const allSelected = computed(() =>
-  conversations.value.length > 0 && selectedConvIds.value.length === conversations.value.length)
-
-function toggleSelectAll() {
-  selectedConvIds.value = allSelected.value ? [] : conversations.value.map(c => c.id)
-}
-
-const selectedCount = computed(() => selectedConvIds.value.length)
+// ── 数据管理：会话导出与删除：状态与逻辑见 `composables/useSettingsConversations.ts` ──
+// 删除会话会让分享列表失效，故把 `loadShares` 注进去（两者互不 import）。
+const {
+  conversations,
+  convLoading,
+  selectedConvIds,
+  exporting,
+  deleting,
+  allSelected,
+  selectedCount,
+  loadConversations,
+  openConversations,
+  exportSelected,
+  deleteSelected,
+  toggleSelectAll,
+} = useSettingsConversations({ onSessionsDeleted: loadShares })
 
 // ── 生命周期 ──
 
