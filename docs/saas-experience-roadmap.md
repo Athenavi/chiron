@@ -824,7 +824,7 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 | 维度 | 实测 |
 |---|---|
 | L3-4 批次 A 累计 | **11 个文件、2997 行逐字外移**（§4.1 表）；`submit_handler.go` 已按判据排除 |
-| 剩余 Go >650 行 | `admin_ops.go` 950 · `submit_handler.go` 935（跳过）· `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 · `sso_handler.go` 559（已降） |
+| 剩余 Go >650 行 | `admin_ops.go` 950 · `submit_handler.go` 935（跳过）· `auth.go` 731 · `rpa_ws.go` 708 · `admin.go` 704 · `plugin_handler.go` 693 · `agents.go` 670 —— **仅剩 7 个**；`billing_handler.go` 632 · `mail_handler.go` 568 · `sso_handler.go` 559 · `sms_handler.go` 524 · `ent_costcenter_handler.go` 487 均已降破 650 |
 | 剩余 Go 文件的顶层符号数 | `mail_handler` 32 · `auth` 25 · `billing_handler` 23 · `sms_handler` 22 · `admin` 20 —— **都远高于 `submit_handler` 的 17**，即仍具备「按子域切」的余量 |
 | 巨型前端文件及其测试网 | `ChatView` 3966（2 spec）· `MediaView` **1842（0 spec → 新补 6 条冒烟网）** · `ChatInput` 1628（1）· `BillingView` 1566（1，13 用例）· `WorkflowView` 1364（1）· `MessageItem` 1291（1）· `SettingsPanel` **1236（0 spec）** · `ChatSidePanel` 1228（1）· `AgentsView` 1182（1）· `SubAgentPanel` 1096（1） |
 
@@ -837,7 +837,9 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 | **1** | ✅ **`sso_handler.go` 888 → 559，拆出身份绑定子域** | **已完成（2026-10-30）**：八个符号 326 行逐字外移到 `sso_identity.go`（`provisionAndBind` + `handleBindCallback` 构成「外部身份 ↔ 本地用户」闭环，`resolveRole` 为纯函数），`l34_verify_any.py` PASS，全仓 build/vet/test 绿 |
 | **2** | **`MediaView.vue` 1842 先建测试网，再抽 composable** | **测试网已就位（2026-10-30）**：`views/__tests__/MediaView.smoke.spec.ts` 6 用例——默认请求参数、三态互斥（骨架/空态/错误态）、点文件夹带 `parent_id` 重拉、点文件只开详情不重拉。**建网当场抓到一个既有缺陷**：模板 1553 行用 `<Progress>` 做上传进度条，但文件从未导入它，浏览器里上传进度条一直是未解析标签；已补 `Progress` 到 antd 导入。**下一步才是抽 composable**（按「上传 / 预览 / 列表」切） |
 | **3** | **`BillingView.vue` 1566 抽 composable** | 有现成 13 个用例（用量分摊 6 + 导出 2 + 发票 4 + 金额换算 1）护住，是前端这批里**性价比最高**的一个：改坏会立刻被抓住。顶层已约 100 个符号，先切「发票」与「支付二维码」两块（各自状态自洽、互不引用） |
-| **4** | **`mail_handler.go` 695 + `sms_handler.go` 739** | 顶层符号 32 / 22，属「配置 CRUD + 测试发送」两个天然子域。排在后面的理由：行数已不算刺眼，边际收益低于前端那两项 |
+| **4** | ✅ **`mail_handler.go` 695 → 568 + `sms_handler.go` 739 → 524** | **已完成（2026-10-30）**：`mail_config_rules.go` 126 行纯函数（配置行边界校验与补丁应用：`validateMailConfigBounds`/`applyMailConfigPatch`/`isHTTPURL`/`derefString`/`ttlMinutes`/`resetTTLSeconds`）、`sms_config.go` 214 行（短信通道配置读取/回显/更新）。`loadConfig` 被发码链路共用，按「谁依赖谁」判据留在原文件 |
+
+**Go 侧到此收尾（2026-10-30）**：本轮共完成 11 个文件的第二次及以后拆分，`>650 行` 的 Go 文件只剩 7 个，其中 `admin_ops.go`（950）、`auth.go`（731）、`admin.go`（704）都是「单个巨型函数撑起文件」，继续拆要动函数体内部时序，风险大于收益 —— 与 `submit_handler.go` 同理。**后续拆分投入应转向前端**。
 
 **明确跳过**：`submit_handler.go`（935 行 / 17 符号）—— 拆函数体会改 SSE 回合的执行时序，§2.2 已标注「暂不动」。
 
@@ -857,11 +859,16 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 
 ### 17.5 建议顺序
 
-`17.2-1` → `17.2-2` → `17.2-3` → `17.2-4`。
+**Go 侧已收尾（见 §17.2 末），前端成为唯一主线。**
 
-- **先 Go 后前端**：纯移动的验收有硬判据（逐字比对 + 全仓门禁），且 `sso_handler` 的边界本轮已实测过引用数为 0，几乎不可能返工。
-- **`MediaView` 排在前端第一**：它是唯一「大且零测试」的组合，风险最高；`BillingView` 虽更大但有 13 个用例兜底，反而可以先放。
-- **`AgentsView` 在 §17.3 定下来之前不动**：改它等于替用户决定「共享」的语义。
+1. **`BillingView.vue` 抽 composable** —— 改为前端第一。理由从「有 13 个用例兜底」升级为「它是唯一既有测试网、又足够大的文件」：改坏立刻被抓，且不需要先写测试。先切「发票」与「支付二维码」两块。
+2. **`MediaView.vue` 抽 composable** —— 冒烟网（6 用例）已就位，按「上传 / 预览 / 列表」切。上传块状态最独立，优先切它。
+3. **`SettingsPanel.vue` 补测试网**（1236 行 / 0 spec）—— 先建网，再谈拆分。它与 `MediaView` 是仅剩的两个零测试盲区。
+4. **`AgentsView` 在 §17.3 定下来之前不动**：改它等于替用户决定「共享」的语义。
+
+**为什么 `BillingView` 排在 `MediaView` 之前**：两者的拆分本身风险相当，差别在验证成本 —— `MediaView` 现有 6 条冒烟只覆盖列表与导航，抽「上传」时无网可依；`BillingView` 的 13 个用例正对着要切的那两块。先做有网的那个，能把「拆分手法」本身先在一个安全场子里验证一遍。
+
+**明确不动**：`ChatView.vue`（3966 行，2 个 spec 覆盖不足，风险远大于收益）；`submit_handler.go`、`admin_ops.go`、`auth.go`、`admin.go`（单巨型函数撑起文件）。
 
 ### 17.6 每项的必做验证（与批次 A 同口径）
 

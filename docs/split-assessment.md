@@ -130,6 +130,8 @@
 | `internal/api/sso_handler.go` | 888 → **559** | **326** | `sso_identity.go`（三方身份 ↔ 本地账号的绑定闭环 + 用户自助：`handleBindCallback`/`ListIdentities`/`DeleteIdentity`/`setPasswordRequest`/`SetPassword`/`findIdentityUser`/`provisionAndBind`/`resolveRole`） |
 | `internal/api/sms_handler.go` | 739 → **525** | **214** | `sms_config.go`（短信通道配置读取/回显/更新：`smsConfigRow`/`GetConfig`/`configResponse`/`updateSmsConfigRequest`/`UpdateConfig`；`loadConfig` 被发码链路共用，按依赖判据留在原文件） |
 | `internal/api/mail_handler.go` | 695 → **569** | **126** | `mail_config_rules.go`（邮件配置行的边界校验与补丁应用，纯函数：`validateMailConfigBounds`/`applyMailConfigPatch`/`isHTTPURL`/`derefString`/`ttlMinutes`/`resetTTLSeconds`） |
+| `internal/api/billing_handler.go`（第二个文件） | 815 → **632** | **182** | `billing_usage.go`（用量分摊查询：`usageGroupColumn`/`parseUsageParams`/`GetUsage`/`getBreakdownUsage` —— 含 P0-1 的分组维度与时间区间解析） |
+| `internal/api/ent_costcenter_handler.go`（第二个文件） | 725 → **487** | **238** | `ent_costcenter_quota_crud.go`（配额池的增删改查 HTTP 入口：`ListQuotas`/`CreateQuota`/`GetQuota`/`UpdateQuota`/`DeleteQuota`） |
 
 **一条可复用的拆分判据**（本轮验证有效）：优先按「**谁依赖谁**」而不是按「行数均分」切 —— 例如 `normalizeProviderInput`/`defaultStr` 只被管理端配置调用，就随配置走；而 `getProvider`/`exchangerFor` 被登录链路调用，必须留在原文件。按依赖切永远不会出现「拆完两边都缺一半」。
 
@@ -138,7 +140,7 @@
 2. **import 必须按实测计数双向修** —— 每一块都出现过：新文件预置 import 漏了某个包（`enterprise`、`slog`、`net/mail` 等），同时原文件因外移多出失效导入（`pgx`、`sort`、`strconv`、`context`/`json`/`io`…）。做法是先 `rg -c "<pkg>\." <file>` 统计两边，再改。
 3. **用脚本按符号边界切片，不要手工复制** —— 几百行手工搬运必然出错；脚本还能顺带做边界断言（节注释 + 大括号平衡）。
 
-**剩余候选**（§2.2 已列，未动）：`submit_handler.go`（935 行 / 仅 17 符号 ⇒ **建议跳过**，拆函数体会改时序）。本轮已完成八个：`python_client.go`（817 → 631）、`plugin_handler.go`（837 → 693）、`agents.go`（922 → 670）、`rpa_ws.go`（860 → 708）、`sso_handler.go`（888 → 559）、`sms_handler.go`（739 → 525）、`mail_handler.go`（695 → 569）。
+**剩余候选**（§2.2 已列，未动）：`submit_handler.go`（935 行 / 仅 17 符号 ⇒ **建议跳过**，拆函数体会改时序）。本轮已完成十个：`python_client.go`（817 → 631）、`plugin_handler.go`（837 → 693）、`agents.go`（922 → 670）、`rpa_ws.go`（860 → 708）、`sso_handler.go`（888 → 559）、`sms_handler.go`（739 → 524）、`mail_handler.go`（695 → 568）、`billing_handler.go`（815 → 632）、`ent_costcenter_handler.go`（725 → 487），后两个指其第二个文件。
 
 ## 5. 受外部条件阻塞（不列入批次）
 
