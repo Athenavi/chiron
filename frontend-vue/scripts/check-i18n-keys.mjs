@@ -39,6 +39,8 @@ const DOMAIN_PREFIXES = [
   'common.', 'chat.', 'errors.', 'auth.', 'admin.',
   // 2136 键全量迁移时新建的域（workflow/agent/knowledge/mail/memory/media/billing/settings）
   'workflow.', 'agent.', 'knowledge.', 'mail.', 'memory.', 'media.', 'billing.', 'settings.',
+  // 通知中心（P2-3）
+  'notifications.',
 ]
 
 const WRITE = process.argv.includes('--write-baseline')

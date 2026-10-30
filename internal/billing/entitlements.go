@@ -53,6 +53,9 @@ type EntitlementStore interface {
 	GrantEntitlement(ctx context.Context, e *Entitlement) (bool, error)
 	// ActiveEntitlements 返回用户在 now 时刻仍有效的权益（expires_at > now）。
 	ActiveEntitlements(ctx context.Context, userID string, now time.Time) ([]Entitlement, error)
+	// ExpiringEntitlements 返回在 (now, now+withinDays] 内到期、且当前仍有效的权益。
+	// 供到期预警扫描使用（P2-3）：**跨全部用户**，不做 user 过滤。
+	ExpiringEntitlements(ctx context.Context, now time.Time, withinDays int) ([]Entitlement, error)
 	// ListPackages 返回后台已上架的套餐目录（按 sort_order 排序）。
 	ListPackages(ctx context.Context) ([]Package, error)
 	// UserEntitlements 返回用户的全部权益（**含已过期**），供"我的套餐"页展示到期状态。
@@ -159,6 +162,48 @@ func (s *PGStore) ActiveEntitlements(ctx context.Context, userID string, now tim
 	return out, rows.Err()
 }
 
+// ExpiringEntitlements 返回在 (now, now+withinDays] 内到期、且当前仍有效的权益。
+//
+// 跨全部用户扫描，供到期预警（P2-3）使用。三条边界都要写清：
+//   - `expires_at > now`：已过期的不再预警。过期后权益已失效，再发"即将到期"
+//     是错误信息；过期提示由"我的套餐"页与模型准入的 403 承担。
+//   - `expires_at <= now + withinDays`：只取窗口内的。
+//   - `starts_at <= now`：尚未生效的权益（理论上不会有，start 恒为购买时刻）
+//     不发预警。
+//
+// 走 idx_user_entitlements_user_expiry 的 expires_at 部分；尽管该索引以 user_id
+// 打头，这里的过滤条件只用到 expires_at，全表扫描在小数据量下可接受，而扫描
+// 周期是小时级、不是请求路径。
+func (s *PGStore) ExpiringEntitlements(ctx context.Context, now time.Time, withinDays int) ([]Entitlement, error) {
+	if withinDays <= 0 {
+		withinDays = 1
+	}
+	rows, err := db.GlobalDBManager.Query(ctx,
+		`SELECT id, user_id, package_code, package_name,
+		        COALESCE(allowed_models, ARRAY[]::text[]), payment_id,
+		        starts_at, expires_at, created_at
+		   FROM user_entitlements
+		  WHERE starts_at <= $1
+		    AND expires_at > $1
+		    AND expires_at <= $1 + make_interval(days => $2)
+		  ORDER BY expires_at ASC`, now, withinDays)
+	if err != nil {
+		return nil, fmt.Errorf("query expiring entitlements: %w", err)
+	}
+	defer rows.Close()
+
+	out := []Entitlement{}
+	for rows.Next() {
+		var e Entitlement
+		if err := rows.Scan(&e.ID, &e.UserID, &e.PackageCode, &e.PackageName,
+			&e.AllowedModels, &e.PaymentID, &e.StartsAt, &e.ExpiresAt, &e.CreatedAt); err != nil {
+			return nil, fmt.Errorf("scan expiring entitlement: %w", err)
+		}
+		out = append(out, e)
+	}
+	return out, rows.Err()
+}
+
 // ListPackages 返回已上架套餐，按 sort_order 升序（sort_order 相同再按价格）。
 // 只返回 enabled = TRUE：下架套餐不应出现在用户可购买列表里。
 func (s *PGStore) ListPackages(ctx context.Context) ([]Package, error) {
@@ -224,20 +269,23 @@ func (s *PGStore) UserEntitlements(ctx context.Context, userID string) ([]Entitl
 //
 // 这也是为什么权益发放要单独成表而不是塞进 credit_transactions：它的失败可以重放，
 // 而余额变更不能。
-func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) {
+//
+// 返回成功发放的权益（未发放/幂等重放/失败都返回 nil）：调用方据此拼通知内容，
+// 免得为了拿套餐名与到期时间再查一次库。**错误仍然不上抛**，原因见上。
+func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) *Entitlement {
 	if p == nil || p.PackageCode == "" {
-		return
+		return nil
 	}
 	pkg, err := m.store.PackageByCode(ctx, p.PackageCode)
 	if err != nil {
 		slog.Error("load package for entitlement failed; credits credited but entitlement missing",
 			"order", p.ID, "user", p.UserID, "package", p.PackageCode, "error", err)
-		return
+		return nil
 	}
 	if pkg == nil {
 		slog.Error("package not found for paid order; credits credited but entitlement missing",
 			"order", p.ID, "user", p.UserID, "package", p.PackageCode)
-		return
+		return nil
 	}
 
 	// starts_at 用 time.Now()，**不用** p.PaidAt。
@@ -254,7 +302,7 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) {
 	if err != nil {
 		slog.Error("generate entitlement id failed; credits credited but entitlement missing",
 			"order", p.ID, "user", p.UserID, "package", pkg.Code, "error", err)
-		return
+		return nil
 	}
 	e := &Entitlement{
 		ID:            entID,
@@ -270,12 +318,12 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) {
 	if err != nil {
 		slog.Error("grant entitlement failed; credits credited but entitlement missing",
 			"order", p.ID, "user", p.UserID, "package", pkg.Code, "error", err)
-		return
+		return nil
 	}
 	if !granted {
 		slog.Info("entitlement already granted (idempotent replay)",
 			"order", p.ID, "user", p.UserID, "package", pkg.Code)
-		return
+		return nil
 	}
 	// 刻意**不** publish CreditEvent：那是"余额变更"通道，
 	// EnterpriseBillingObserver 会把每条事件写成 billing_records 的一行成本记录。
@@ -284,6 +332,7 @@ func (m *Manager) grantEntitlementForPayment(ctx context.Context, p *Payment) {
 	slog.Info("entitlement granted",
 		"order", p.ID, "user", p.UserID, "package", pkg.Code,
 		"expires_at", e.ExpiresAt)
+	return e
 }
 
 // ── 套餐目录管理端（P2-2c）────────────────────────────────────────────────

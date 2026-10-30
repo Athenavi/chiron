@@ -552,7 +552,13 @@ func (s *pgEntCostStore) ResolveTenantID(ctx context.Context, userID string) (in
 type EntCostCenterHandler struct {
 	store EntCostStore
 	redis db.RedisClient
+	// notifier 可选：注入后配额变更会通知该租户的 owner/admin（P2-3）。
+	// nil 表示不发通知（单测与未装配场景），所有通知点退化为 no-op。
+	notifier notificationWriter
 }
+
+// SetNotifier 装配通知中心。传 nil 即关闭通知。
+func (h *EntCostCenterHandler) SetNotifier(n notificationWriter) { h.notifier = n }
 
 // NewEntCostCenterHandler 创建 handler。store/redis 为 nil 时分别回退到
 // pgEntCostStore（全局 db.Pool）与全局 db.Redis。
@@ -792,6 +798,7 @@ func (h *EntCostCenterHandler) CreateQuota(w http.ResponseWriter, r *http.Reques
 		logAndRespond(w, err, http.StatusInternalServerError, "create quota failed")
 		return
 	}
+	h.notifyQuotaChanged(r.Context(), &pool, "created")
 	Created(w, pool)
 }
 
@@ -906,6 +913,7 @@ func (h *EntCostCenterHandler) UpdateQuota(w http.ResponseWriter, r *http.Reques
 		logAndRespond(w, err, http.StatusInternalServerError, "update quota failed")
 		return
 	}
+	h.notifyQuotaChanged(r.Context(), pool, "updated")
 	OK(w, pool)
 }
 

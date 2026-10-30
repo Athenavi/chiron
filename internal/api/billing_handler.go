@@ -805,6 +805,12 @@ func (h *BillingHandler) paymentResponse(p *billing.Payment) map[string]interfac
 		"status":       p.Status,
 		"created_at":   p.CreatedAt,
 	}
+	// 套餐订单要回显 package_code，否则订单详情看不出买的是哪个套餐 ——
+	// 用户拿到的只是一笔"金额恰好相等"的充值，无法与套餐目录对账。
+	// 纯充值订单该字段为空字符串，按既有口径省略，不改变存量响应形状。
+	if p.PackageCode != "" {
+		resp["package_code"] = p.PackageCode
+	}
 	if p.QRCode != "" {
 		resp["qr_code"] = p.QRCode
 	}

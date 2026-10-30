@@ -81,8 +81,12 @@ func TestEffectiveAllowedModels(t *testing.T) {
 }
 
 // 强制点必须真的把权益算进去：租户允许两个模型、用户套餐只含其中一个时，
-// 另一个必须被拒。这是"取更严者"在 HTTP 层的行为证据。
-func TestEnforceEnterprisePolicyAppliesEntitlement(t *testing.T) {
+// 另一个必须被拒。这是"取更严者"在判定层的行为证据。
+//
+// 2026-10-29 收敛后，请求路径唯一入口是 modelAccessReason（GuardChatModelAccess
+// 与 /v1/models 过滤都经它或 effectiveModelSet），旧 EnforceEnterprisePolicy
+// 已删除，故这里改为直接断言新入口。
+func TestModelAccessTakesStricterLayer(t *testing.T) {
 	newHandler := func(policy []string, hasPolicy bool, ent []string, hasEnt bool) *EntPolicyHandler {
 		return &EntPolicyHandler{
 			resolveAllowed: func(context.Context, int16, string) ([]string, bool, error) {
@@ -93,7 +97,6 @@ func TestEnforceEnterprisePolicyAppliesEntitlement(t *testing.T) {
 			},
 		}
 	}
-	claims := &auth.Claims{UserID: "u-1", TenantID: 1}
 
 	cases := []struct {
 		name    string
@@ -130,13 +133,12 @@ func TestEnforceEnterprisePolicyAppliesEntitlement(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			r := httptest.NewRequest(http.MethodPost, "/v1/chat/completions", nil)
-			err := tc.handler.EnforceEnterprisePolicy(r, claims, tc.model)
-			if tc.wantErr && err == nil {
+			_, denied := tc.handler.modelAccessReason(context.Background(), 1, "u-1", tc.model)
+			if tc.wantErr && !denied {
 				t.Fatalf("模型 %s 应被拒绝", tc.model)
 			}
-			if !tc.wantErr && err != nil {
-				t.Fatalf("模型 %s 应放行，实际 %v", tc.model, err)
+			if !tc.wantErr && denied {
+				t.Fatalf("模型 %s 应放行", tc.model)
 			}
 		})
 	}

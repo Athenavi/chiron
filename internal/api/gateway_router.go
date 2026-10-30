@@ -19,6 +19,7 @@ import (
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/monitor"
+	"github.com/athenavi/chiron/internal/notify"
 	"github.com/athenavi/chiron/internal/session"
 	"github.com/athenavi/chiron/internal/settings"
 	"github.com/athenavi/chiron/internal/storage"
@@ -269,6 +270,12 @@ func NewGatewayRouter(
 	// 注册流程复用邮件能力（邮箱验证码校验 + 欢迎邮件）
 	authHandler.SetMailHandler(mailHandler)
 
+	// 通知中心（P2-3）：站内信 + 可选邮件。邮件出口复用上面的 MailHandler，
+	// 于是 SMTP 配置仍只有 `ent_mail_config` 一处真相源。
+	// 未配置邮件时 NewNotifyMailer 返回 nil，notify.Manager 只发站内信。
+	notifyMgr := notify.NewManager(notify.NewPGStore(), NewNotifyMailer(mailHandler))
+	authHandler.SetNotifier(notifyMgr)
+
 	// 注册邮箱判重布隆过滤器（按租户分片）：默认开启，可用 EMAIL_BLOOM_FILTER_ENABLED=false 关闭。
 	// 它只做快速否定以跳过 DB 判重；预热在后台异步进行，完成前一律回落 DB，
 	// 真相源始终是 users(tenant_id, email) 唯一索引。
@@ -287,9 +294,18 @@ func NewGatewayRouter(
 		slog.Error("billing schema verification failed; run `alembic upgrade head`", "error", err)
 	}
 	billingMgr := billing.NewManager(billingStore)
+	// 支付成功等业务事件经统一出口写入通知中心（P2-3）。幂等由去重键保证：
+	// 同一订单的重复回调查到唯一索引冲突即跳过，不会重复推送。
+	billingMgr.SetNotifier(notifyMgr)
 	// M19：崩溃/自动接管那一段从不经过网关 ⇒ 网关按终态事件计费永远看不到它。
 	// 这里起一个按-run 权威账对账的后台循环；默认 shadow（只算、打指标、不动账）。
 	StartRunUsageReconciler(lifecycleCtx, billingMgr)
+	// 到期预警（P2-3）：周期性扫描即将到期的权益，提前 3 天与 1 天各提醒一次。
+	//
+	// 它**只发通知、不改状态** —— 权益是否生效完全由 starts_at/expires_at 与当前
+	// 时间比较决定，没有 status 列要维护，所以漏跑一轮不会让权益错乱，重启后
+	// 自行追上。幂等由去重键 entitlement_expiring:<id>:<days> 保证。
+	billingMgr.StartEntitlementExpiryScan(lifecycleCtx, time.Hour)
 	// P0-P1 修复：余额已由 Deduct/AddCredits 同步写库（PG 原子 UPDATE），
 	// 移除 BalanceSyncer 异步落库订阅，避免多副本 split-brain 与重复扣费。
 	// 2026-09 增强：扣减/入账与 credit_transactions 流水已同 PG 事务落库
@@ -460,6 +476,9 @@ func NewGatewayRouter(
 	apiKeyHandler.RegisterRoutes(mux, authMW, rlMW)
 	// 发票申请（P1-2）：用户侧 GET/POST /v1/billing/invoices。
 	invoiceHandler.RegisterRoutes(mux, authMW, rlMW)
+	// 通知中心（P2-3）：用户侧 GET /v1/notifications + 已读 + 邮件偏好。
+	// 全部只操作当前登录用户自己的通知（user_id 取自 claims，不接受外部传入）。
+	NewNotificationHandler(notifyMgr).RegisterRoutes(mux, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
 	// 桌面端云端片段推理（POST /v1/desktop/infer，用户 JWT + 限流，见 routes_desktop.go）
 	registerDesktopRoutes(mux, authMW, rlMW, pythonClient)
@@ -519,7 +538,9 @@ func NewGatewayRouter(
 	// Enterprise cost center（authMW；handler 内按 admin:read / admin:write 分级，
 	// 判定经 AllowedByEntOrLegacy —— 企业 RBAC 优先、无 ent 配置时回退 legacy 角色
 	// 权限，与其它 ent 模块的 RequireEntPerm 同语义）
-	NewEntCostCenterHandler(nil, nil).RegisterRoutes(mux, authMW)
+	costCenterHandler := NewEntCostCenterHandler(nil, nil)
+	costCenterHandler.SetNotifier(notifyMgr)
+	costCenterHandler.RegisterRoutes(mux, authMW)
 
 	// Enterprise policy（authMW + RequireEntPerm("policy:manage")）：隐私模式 + 模型策略
 	NewEntPolicyHandler().RegisterRoutes(mux, authMW)

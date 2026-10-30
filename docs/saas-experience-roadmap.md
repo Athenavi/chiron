@@ -6,18 +6,22 @@
 
 工程侧已经不再是瓶颈：`docs/development-roadmap.md` §2 的待办只剩三条技术债（L4-3 时间列类型、S5-(e) 沙箱部署形态、L3-4 巨型文件拆分），全量门禁长期全绿。也就是说，继续加功能之前，"用户能不能顺畅地用起来、看得懂花了多少钱"变成了更划算的投入方向。
 
-## 1. 现状盘点（已核实）
+## 1. 现状盘点（2026-10-29 复核，已按实现逐条核对）
 
-| 维度 | 现状 | 影响 |
+> 本节初稿写于规划阶段，其中多行已被后续交付改写（曾把已存在的 onboarding、CSV 导出、发票、团队标为「未找到」）。下表是复核后的真实状态；P2 组已全部交付。
+
+| 维度 | 现状（已核实） | 结论 |
 |---|---|---|
-| 计费模型 | 纯预付费 credits（`internal/billing/billing.go`：`Deduct`/`AddCredits`/`DeductTokens`），支付宝 + 微信 | 没有周期性套餐；用户每次都要手动充值 |
-| 用量视图 | `GET /v1/billing/usage` 仅返回近 30 天**按日聚合**的 `tx_count` / `credits_spent` / `credits_added` | 用户看不出"钱花在哪个模型/哪个功能上"，这是最直接的信任缺口 |
-| 账单导出 | 未找到 CSV/发票相关实现（`invoice`/`发票` 仅命中 `media_internal.go` 无关处） | 报销与对账无法自助 |
-| 组织形态 | `users.tenant_id` 是 `smallint`；无 invite / member / team 表 | 单人账号制，无团队协作；改主键类型是破坏性迁移 |
-| 身份能力 | 已有 OIDC（`internal/auth/oidc.go`）、SMTP（`internal/auth/mail.go`）、RBAC（`internal/enterprise/rbac.go`） | SSO 有地基，缺产品化 |
-| 错误文案 | `quota_exceeded: '已达配额上限，请联系管理员'` | 自建部署口吻，SaaS 用户看到会以为系统坏了 |
-| 新用户引导 | 未找到独立 onboarding 流程 | 首次登录到发出第一轮对话的路径靠用户自己摸索 |
-| 自助入口 | `ApiKeysView.vue` 位于 `views/admin/`；用户侧路由仅见 `/billing` | 用户侧自助能力偏弱（**待确认**：路由可能由后台菜单动态生成） |
+| 计费模型 | 预付费 credits + **一次性套餐包**（`billing_packages` 目录 / `user_entitlements` 权益快照，迁移 `0009`/`0010`） | 已完成（P2-2） |
+| 用量视图 | `GET /v1/billing/usage` 支持 `groupBy=day\|model\|session` + `range=7d\|30d\|90d`，breakdown 有 `usageBreakdownLimit=100` + `truncated` + 窗口函数求总量 | 已完成（P0-1、A2） |
+| 账单导出 | `internal/api/billing_export.go` 同步流式 CSV，5 万行上限、366 天跨度、UTF-8 BOM | 已完成（P1-1） |
+| 发票 | `invoice_requests`（`0007`）+ 用户申请 + 管理端审核 | 已完成（P1-2） |
+| 组织形态 | `tenant_members`（`0008`，复用 `ent_roles`、播种内置角色）+ 成员管理与邀请 | 已完成（P2-1） |
+| 身份能力 | OIDC、SMTP、RBAC 均已存在；用户级 API Key 自助（`0006` + `UserApiKeysView.vue`） | 已完成（P1-3） |
+| 错误文案 | 三类错误三语齐备，带可执行动作；`retryable=false` 时前端不渲染重试按钮 | 已完成（P0-2、A3） |
+| 新用户引导 | `onboarding_handler.go` 三步白名单（试用额度 / 默认模型 / 第一轮对话）+ `user_onboarding`（`0005`）+ 漏斗统计端点 | 已完成（P0-3、A1） |
+| 通知中心 | `notifications` + `user_notification_prefs`（`0011`）+ `internal/notify` 包；四类事件（支付成功 / 权益到期 / 配额变更 / 成员加入）+ 站内与邮件双出口 + 去重键幂等 + `NotificationsView.vue` 与顶栏角标 | 已完成（P2-3） |
+| 技术债 | L4-3 时间列、S5-(e) 沙箱部署形态、L3-4 巨型文件尾批 | 仍缺（见 §12.5） |
 
 ## 2. P0 —— 体验快赢（低风险、直接减少流失）
 
@@ -61,9 +65,11 @@
 
 ## 4. P2 —— 结构化新增（需单独立项评审）
 
-### P2-1 团队与成员
+### P2-1 团队与成员 ✅ 已完成
 
-这是当前最大的结构性缺口。**不改** `tenant_id` 的 `smallint` 类型——那会波及所有带 `tenant_id` 的表。做法是新增 `tenant_members(tenant_id, user_id, role)` + 邀请表（邮件邀请复用已有 SMTP），角色直接接 `internal/enterprise/rbac.go`。
+> 本节保留规划时的判断，供追溯。**实际已交付**：`migrations/versions/0008_tenant_members.py` + `internal/api/tenant_members_handler.go`，落地方式见 §12.4。
+
+~~这是当前最大的结构性缺口。~~ **不改** `tenant_id` 的 `smallint` 类型——那会波及所有带 `tenant_id` 的表。做法是新增 `tenant_members(tenant_id, user_id, role)` + 邀请表（邮件邀请复用已有 SMTP），角色直接接 `internal/enterprise/rbac.go`。
 
 **风险**：这是多租户数据隔离的地基，一旦设计错，后面所有共享资源（知识库、Agent、插件）都要返工。需单独设计评审。
 
@@ -82,6 +88,8 @@
 额度预警、支付成功、配额变更、团队邀请统一进一张通知表，站内 + 邮件两个出口，每类事件有去重键。
 
 **验收**：同一事件不重复推送；用户可标记已读；渠道可单独关闭。
+
+**已完成（2026-10-30）**：`migrations/versions/0011_notifications.py`（`notifications` + `user_notification_prefs`）、`internal/notify` 包（`Notify` 撞 23505 即跳过 / 偏好缺行默认开启 / 未读计数）、四个事件源接入（`ConfirmPayment`、到期预警扫描、`CreateQuota`/`UpdateQuota`、凭邀请码注册）、用户侧六个接口 + `NotificationsView.vue` + 顶栏角标 + 三语文案。「渠道可单独关闭」落为**用户级邮件开关**：站内信始终保留（关掉它会让「用户声称没收到」变成无法查证的口径之争）。
 
 ## 5. 明确不建议现在做
 
@@ -165,44 +173,36 @@ P0 三项已实现，但逐条对验收时发现**四个未闭环点**。以下�
 
 ## 9. 下一步任务（按依赖顺序）
 
-### A 组：补齐首批验收缺口（先做，都是已承诺的东西）
+### A 组：补齐首批验收缺口 —— **A1/A2/A3 已全部交付（2026-10-29 复核）**
 
-**A1 引导完成率可查**
-`GET /v1/admin/onboarding/funnel`：`SELECT step, count(*) FILTER (WHERE completed_at IS NOT NULL), count(*) FILTER (WHERE skipped_at IS NOT NULL AND completed_at IS NULL) FROM user_onboarding GROUP BY step`，分母取 `SELECT count(DISTINCT user_id)`（= 走过新注册流程的人数）。索引 `idx_user_onboarding_step` 已建，`GROUP BY step` 正是当初按行存的设计意图，不需要改表。管理端放一张漏斗卡片。
-**验收**：三个步骤的完成率/跳过率可读，且分母不是全站用户数。
+**A1 引导完成率可查** ✅
+`GET /v1/admin/onboarding/funnel` 已注册（`routes_admin.go:55`，挂 `adminReadMW`），handler 为 `onboarding_funnel_handler.go`，按 step 聚合完成/跳过，分母取走过引导的用户数。
 
-**A2 usage breakdown 后端限量**
-给 `getBreakdownUsage` 加 `LIMIT`（建议 100，按 cost 倒序已是现有排序）+ 响应加 `truncated` 布尔。理由：模型/会话数多时 90 天全量聚合会一次性返回上千行，前端分页只是视觉上分页。
-**验收**：构造 >100 个 bucket 时响应行数受限且 `truncated=true`，前端提示"仅显示花费最高的 N 项"。
+**A2 usage breakdown 后端限量** ✅
+`usageBreakdownLimit = 100`，响应返回 `truncated` / `limit` / `total_buckets`，总量用 `SUM(...) OVER ()` 在聚合后全量行上求和（窗口函数先于 LIMIT 执行），`COUNT(*) OVER ()` 供 truncated 判定，无需二次查询。
 
-**A3 `quota_exceeded` 的可点落点 + 重试按钮按 `retryable` 渲染**
-配额耗尽的动作是"找租户管理员"或"升级套餐"，前者当前无处可去。最小做法：文案旁给一个「联系管理员」的复制邮箱/说明入口；同时让「重试」按钮受 `retryable` 约束（`retryable=false` 时不渲染，或降级为"稍后再试"）。
-**验收**：`quota_exceeded` 不再出现"点了必然再失败"的重试按钮；三语同步。
+**A3 `quota_exceeded` 的可点落点 + 重试按钮按 `retryable` 渲染** ✅
+`MessageItem.vue` 按后端 `retryable` 决定是否渲染重试按钮（:813 注释写明「服务端若显式说 retryable=false，就不该给」），配额耗尽给「查看用量」动作。
 
-### B 组：P1 自助与账务
+### B 组：P1 自助与账务 —— **B1/B2/B3 已全部交付**
 
-**B1 交易明细 CSV 导出** —— 先同步 + 行数上限（如 5 万行）+ 流式写出，不引异步任务：仓库现有队列能力未核实到可复用（`asynq|Enqueue` 命中分散在 `admin_extras.go`/`broadcast/hub.go`，不是统一的账单导出队列）。若实测 10 万行会超时，再单独评估异步。
-**验收**：Excel 直接打开无乱码（UTF-8 BOM）；超上限时明确报错而不是静默截断。
+**B1 交易明细 CSV 导出** ✅ `internal/api/billing_export.go`：同步流式、`exportMaxRows=50000`、`exportMaxSpanDays=366`、UTF-8 BOM（Excel 直开不乱码）、超限明确报错。
+**B2 发票申请（工单式）** ✅ `0007_invoice_requests` + 用户申请 + 管理端审核（`invoice_handler.go`、`InvoiceReviewView`）。
+**B3 用户级 API Key 自助** ✅ `0006_api_keys_key_hash_index` + `/v1/api-keys` CRUD + `UserApiKeysView.vue`；与 `views/admin/ApiKeysView.vue`（LLM 供应商密钥池）是两个不同功能。
 
-**B2 发票申请（工单式）** —— 新表 `invoice_requests`，管理员审核。不接第三方开票平台。
-**验收**：同一笔交易重复申请被拦。
+### C 组：P2 结构化新增
 
-**B3 用户级 API Key 自助** —— 注意：与 `views/admin/ApiKeysView.vue` 无关，那是 LLM 提供商密钥（详见 §10.3）。真正要做的是给已存在且已用于鉴权的 `api_keys` 表补 CRUD。
-**验收**：普通用户可自助增删轮换；越权访问他人 key 返回 404。
-
-### C 组：P2 结构化新增（需单独立项评审）
-
-**C1 团队与成员** —— 新增 `tenant_members(tenant_id, user_id, role)`，角色接 `internal/enterprise/rbac.go`；邀请复用已有 `tenant_invites` 与 SMTP。**不改** `tenant_id` 的 `smallint`。
-**C2 一次性套餐包** —— 一次 `credit_transactions` 入账 + 带有效期的权益快照；不引入 `billing_cycle`。
-**C3 通知中心** —— 新表 + 去重键，站内/邮件两个出口。
+**C1 团队与成员** ✅ 已完成：`0008_tenant_members`（复用 `ent_roles`、播种内置角色、从 `users` 回填）。
+**C2 一次性套餐包** ✅ 已完成：`0009_billing_packages` + `0010_seed_billing_packages`，权益快照 + 有效期，无 `billing_cycle`。
+**C3 通知中心** ❌ **仍未开工**：全仓无通知表、无迁移、无 handler。这是本规划中唯一剩下的功能缺口，形状见 §14。
 
 ### D 组：既有技术债（`docs/development-roadmap.md`）
 
-L4-3 时间列 `timestamp` → `timestamptz`（`credit_transactions.created_at` 正在用 `timestamp`，见 §8）、S5-(e) 沙箱部署形态、L3-4 巨型文件拆分。无功能收益，放最后。
+L4-3 时间列 `timestamp` → `timestamptz`（142 列、72 表，需生产时区语义抽样 + 可达 PG）、S5-(e) 沙箱部署形态（需独立容器环境）、L3-4 巨型文件拆分尾批。无功能收益，放最后。
 
-### 顺序建议
+### 顺序建议（2026-10-29 复核后）
 
-A1 → A3 → A2（三个都是验收缺口，改动都在已有文件上，风险低）；然后 B1（用户可感知度最高）；C1 单独立项评审后再动。
+A/B/C1/C2/C3 已全部完成，功能线不再有待办；其余为 D 组技术债，受外部条件阻塞。
 
 ## 10. 后续任务的落地细节（2026-10-29 核实）
 
@@ -388,7 +388,7 @@ UPDATE tenant_invites SET uses = uses + 1
 
 ## 12. T3 交付后的进度盘点与下一批任务（2026-10-29 核实）
 
-> 本节只记录**已核实的事实**与**可独立验收的任务**。所有改动仍在工作区未提交（`HEAD` = `74fa7fc`，T1/T2/T3 全部为未提交变更）。
+> 本节只记录**已核实的事实**与**可独立验收的任务**。工作区曾长期处于未提交状态，现已分批进入历史（`HEAD` = `4300953`，套餐目录后台管理）；仍留在工作区的改动见 §13.5 末尾。
 
 ### 12.1 进度盘点（已核实）
 
@@ -398,7 +398,7 @@ UPDATE tenant_invites SET uses = uses + 1
 | T2 用户级 API Key | `GET/POST/DELETE /v1/api-keys`（`api_keys_handler.go:104-106`），越权 404、明文只回一次、每用户上限 50 | 用户侧 `views/UserApiKeysView.vue` + `/api-keys` 路由 + 账号菜单入口（T6 新建，**不是**从 admin 挪来的，见 §12.3） | `0006_api_keys_key_hash_index`（`key_hash` 部分唯一索引） | 前后端完成，P1-3 验收已闭环；`last_used_at` 已按每 key 每分钟一次节流写入 |
 | T3 发票申请 | 用户 `GET/POST /v1/billing/invoices` + `GET /v1/billing/invoiceable-orders`；管理端 `GET /invoices`、`POST /invoices/{id}/review` | 用户侧 `BillingView` 发票 tab；管理端 `InvoiceReviewView` + `/admin/invoices` + 侧栏入口 | `0007_invoice_requests` | 前后端完成，9 条新用例全绿；**`INSERT ... SELECT` 原子性未在真库验证** |
 
-迁移链现状：`0001 → 0007`，head = `0007_invoice_requests`。**下一个可用号是 `0008`**。
+迁移链现状（2026-10-30 复核）：`0001 → 0011`，head = `0011_notifications`。**下一个可用号是 `0012`**。CI 的 `schema` job 会强制单 head，`integration` job 会 `alembic upgrade head` 后跑活库用例。
 
 ### 12.2 任务 T5：真库冒烟（最高优先，一次成本覆盖六处缺口）
 
@@ -479,7 +479,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 
 **遗留**：`SELECT ak.id, ...` 与 `UPDATE api_keys SET last_used_at` 两处 SQL 仍只做过字符串级校验，**未在真实 PG 上执行** —— 归入 §12.2 的 T5。
 
-### 12.4 任务 T7：C1 团队与成员（**三个问题已答，可开工**）
+### 12.4 任务 T7：C1 团队与成员（**已完成**，`0008_tenant_members`）
 
 **产品答复（2026-10-29）**：
 
@@ -521,18 +521,18 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 3. **T7 C1** —— **三个产品问题答完再开工**，否则必然返工
 4. **L3-4 尾批** —— 有空再说
 
-**当前实际状态（2026-10-29）**：T1/T2/T3/T6 全部代码完成，全工作区改动**均未提交**（`HEAD` 仍是 `74fa7fc`）。剩下的两条线状态已经不同：
+**当前实际状态（2026-10-29 复核）**：T1/T2/T3/T6/T7 与 P2-2 全系列（P2-2 / P2-2b / P2-2c）**均已交付并进入历史**（`HEAD` = `4300953`）。§12.6 原先的两条线都已关闭：
 
-- **T5** 冒烟用例已预置（§12.2.1），本机因无 Docker/PG 只能 skip。**但不必等本机环境**：`.github/workflows/ci.yml` 的 `integration` job 会起真 PG 并以 `-run 'Live|Diag'` 执行，注入 `CHIRON_TEST_POSTGRES_DSN`。所以 T5 的剩余工作是**把改动推 CI 并看那个 job 的结果**，而不是在本机装数据库。5 万行导出的 `count(*)` 耗时仍需手工 `EXPLAIN ANALYZE` 补一次。
-- **T7** 三个产品问题**已全部答复**（§12.4），不再是阻塞项。它现在纯粹排在 T5 之后，理由从「语义未定」变成「每加一条 SQL 都在扩大待验池」。
+- **T5 真库冒烟** —— **已由 CI 覆盖，无需追加工作**：`.github/workflows/ci.yml` 的 `integration` job 起真 PG（`pgvector/pgvector:pg16`）、`alembic upgrade head`、注入 `CHIRON_TEST_POSTGRES_DSN`，以 `-run 'Live|Diag'` 执行 `./internal/api/... ./internal/billing/...`。本轮新增的 `TestLiveAdminPackageCRUD` 与权益用例同样落在该模式内。唯一仍缺的是**手工**指标：5 万行导出的 `count(*)` 耗时需 `EXPLAIN ANALYZE` 补一次（写进 CI 会让单次运行变慢，故不自动化）。
+- **T7 C1 团队与成员** —— **已完成**（`0008_tenant_members`，复用 `ent_roles`、播种内置角色）。
 
-**因此「在 T5 之前不开新功能」这条约束依然成立**，但性质变了：不是「无法开工」，而是**主动排队**。一旦 CI 的 `Real-stack integration` 把 6 处缺口跑绿，C1 就可以按 §12.4 的五步直接开工。
+**因此「在 T5 之前不开新功能」这条约束已解除**：风险池已由 CI 承接，C1 也已落地。C3（P2-3 通知中心）同样已交付（`0011_notifications`）。
 
-**不要做的事**：不要在 T5 之前再加新的 SQL 功能；C1 开工时不要把 `tenant_members` 做成「再加一个 role 字符串字段」—— 产品已定复用 `ent_roles`，绕过它会立刻出现两套角色真相（详见 §12.4 的「强制成本」）。
+**不要做的事**：C3 开工时不要把通知做成「每条事件一张表」或「先查后写」去重 —— 去重必须靠唯一索引撞键跳过，否则并发下会重复推送（§14 第 1 条）；也不要给一次性套餐引入周期性定时任务（§6 决策 1）。
 
 ## 13. P2-2 交付后的复核（2026-10-29 核实）
 
-### 13.1 已交付（代码完成，未提交）
+### 13.1 已交付（已进入历史）
 
 | 步骤 | 落点 | 验证 |
 |---|---|---|
@@ -557,7 +557,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 - 越界返回 `403 + code=model_not_allowed + params{model, reason}`，`reason` 分 `entitlement` / `policy`；报文显式 `retryable=false`，避免给出「再点一次」的无效重试。
 - 前端三语补齐，`reason=entitlement` 时给「去购买套餐」按钮并直达 `/billing?tab=packages`；`reason=policy` 只给文字指引（用户侧没有可跳转的管理员入口，不做点了不动的按钮）。
 
-**遗留的一点口径重叠**：`EnforceEnterprisePolicy` / `ResolveAllowedModels` 现在仍无外部调用方（只有定义、包级转发与测试）。它们与新的 `EffectiveModelSet` 是两套并行判定，**建议后续二选一并删除另一套**，否则以后有人接到它们上会得到与线上不一致的行为。
+**口径重叠已消除（2026-10-29）**：`EnforceEnterprisePolicy`、`ResolveAllowedModels` 及其专用的 `allModelIDs` 已**删除**，请求路径只剩一条判定链——`EffectiveModelSet`（`/v1/models` 过滤）与 `GuardChatModelAccess`（对话准入 + 403 归因），两者共用 `resolveAllowed` / `resolveEntitled` 注入点。删掉的理由是它们与真正的准入判定**语义相反**：`ResolveAllowedModels` 在「不限制」时必须返回 `admin_model_configs` 全量清单（该表真库 0 行），任何人拿它当过滤基准都会得到空下拉。原断言该旧函数的测试已改写为直接断言 `modelAccessReason`（`TestModelAccessTakesStricterLayer`），覆盖未丢。
 
 <details>
 <summary>修复前的核实记录</summary>
@@ -604,7 +604,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 
 ### 13.4 小修补（已核实的确定缺口）
 
-- `paymentResponse`（`billing_handler.go:798-812`）**仍未**回显 `package_code`——已核实字段白名单里没有它。用户买了套餐，订单详情看不出买的是哪个；一行修复。
+- ~~`paymentResponse`（`billing_handler.go:798-812`）**仍未**回显 `package_code`~~ —— **已修（2026-10-29）**。`paymentResponse` 现于 `created_at` 之后、`qr_code` 之前按非空条件回显 `package_code`，纯充值订单的存量响应形状不变；单测 `TestPaymentResponseEchoesPackageCode` 覆盖「套餐订单回显 / 纯充值不带 / 既有字段不变 / 无二维码省略 `qr_code`」四条。
 - ~~`frontend-vue/src/components.d.ts` 的 `OnboardingGuide` 两行~~ —— 已随前述提交进入历史，工作区不再有该改动，无需处理。
 
 ### 13.5 建议顺序（P2-2c 交付后重排，2026-10-29）
@@ -612,27 +612,95 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 | 序 | 任务 | 为什么排在这 | 前置 |
 |---|---|---|---|
 | ~~1~~ | ~~P2-2c 套餐目录后台 CRUD + seed~~ | **已完成**，见 §13.3 | — |
-| **1** | 小修补：`paymentResponse` 回显 `package_code` | 唯一还在的「已确认一行改动」。套餐已能上架售卖，订单却仍看不出买的是哪个套餐，交易凭证不完整 | 无 |
-| **2** | 收敛遗留的**双判定路径** | `EnforceEnterprisePolicy` / `ResolveAllowedModels` 仍无外部调用方，却与新 `EffectiveModelSet` 并存且口径不同（见 §13.2 末）。已核实：全仓命中只剩定义、包级转发与测试。留着就会有人接错 | 无 |
-| **3** | **T5 真库冒烟推 CI** | 本轮又新增了 `billing_packages` 的写路径（创建/更新/上下架）与权限点，待验池继续扩大；按 §12.6 走 CI | — |
-| **4** | **P2-3 通知中心** | 事件源现在是真实的：套餐可后台建、可售、权益会到期。到期**预警**需要定时扫描，但与「一次性套餐无周期任务」不冲突——扫描只发通知、不改状态 | 1 |
-| **5** | P2-1 团队与成员 | §4 列为结构性缺口，需单独设计评审；建议等通知中心落地、`tenant_id` 使用面稳定后再动 | 4 |
+| ~~2~~ | ~~小修补：`paymentResponse` 回显 `package_code`~~ | **已完成**（§13.4）。套餐已能上架售卖，订单凭证不再缺字段 | 无 |
+| ~~3~~ | ~~收敛遗留的**双判定路径**~~ | **已完成**（§13.2 末）。`EnforceEnterprisePolicy` / `ResolveAllowedModels` / `allModelIDs` 已删除，请求路径只剩 `EffectiveModelSet` + `GuardChatModelAccess`；原针对性测试改写为 `TestModelAccessTakesStricterLayer`，覆盖未丢 | 无 |
+| ~~4~~ | ~~**T5 真库冒烟推 CI**~~ | **无需新增工作**：CI 的 `integration` job 已跑 `go test ./internal/api/... ./internal/billing/... -run 'Live\|Diag'` 并先 `alembic upgrade head`，本轮新增的 `billing_packages` 写路径（`TestLiveAdminPackageCRUD`）与权益测试都被这个模式覆盖 | — |
+| ~~2~~ | ~~P2-1 团队与成员~~ | **已完成**：`migrations/versions/0008_tenant_members.py` 已交付（复用 `ent_roles`、播种内置角色、从 `users` 回填）。§4 曾列为结构性缺口，实际落地方式与 §12.4 的五步一致 | — |
+| ~~1~~ | ~~P2-3 通知中心~~ | **已完成**（2026-10-30，见 §14）。`0011_notifications` + `internal/notify` 包 + 四个事件源 + 用户侧接口与前端页；到期预警按小时扫描、只发通知不改状态，与「一次性套餐无周期任务」不冲突 | — |
+| **2** | D 组技术债（L4-3 / S5-(e) / L3-4 尾批） | 无功能收益，且 L4-3 与 S5-(e) 都缺外部条件（生产时区语义抽样 + 可达 PG、独立容器环境），只能排最后 | — |
 
-排序理由：第 1 条是唯一零风险的确定缺口，顺手清掉；第 2 条不清会持续制造「两套口径」的接错风险，成本低但收益是防止未来事故；第 3 条把本轮扩大的真库面纳入 CI，避免回归靠人肉；P2-3 放到第 4，因为它依赖「真实事件源」，而这件事恰好在 P2-2c 之后才成立。
+排序理由：原先的第 1–4 条（P2-2c、`paymentResponse` 回显、双判定路径收敛、T5 推 CI）已全部清掉；P2-1 与 P2-3 均已交付。因此现在**功能线上不再有待办**，剩下的都是受外部条件阻塞的技术债。
 
-## 14. P2-3 通知中心的前置设计（未开工，先定形状）
+## 14. P2-3 通知中心（**已交付**，2026-10-30：设计与实际取舍）
 
-写在这里是为了避免 P2-3 开工时临时拍脑袋定表结构——`tenant_id` 类型、去重键、渠道开关三者一旦定错，改起来都要动数据。
+本节原为「开工前先定形状」，现按实际交付更新；四项参数的最终取值与实现取舍记录在这里，因为它们一旦定错就要动数据。
 
-**已核实的地基**（本会话读过）：
+**已核实的地基**（开工前读过）：
 - 已有 SMTP 发信能力（`internal/auth/mail.go`），无需引入新依赖。
 - 已有站内消息的读模型先例（notice 行），但那是**对话内**的，不能直接当通知中心用。
 - 权益到期时间可从 `user_entitlements.expires_at` 直接取，不需要新表存"何时到期"。
 
-**待定（开工前必须拍板）**：
-1. **去重键的形状**：按事件类型 + 业务主键（如 `payment_succeeded:<payment_id>`、`entitlement_expiring:<entitlement_id>:<days_before>`）。用唯一索引保证幂等，撞键即跳过而不是先查后写（先查后写在并发下会重复推送）。
-2. **渠道开关的粒度**：用户级（每个用户自己关）还是租户级（管理员统一关）？两者语义不同，混在一起会让"我关了邮件但还在收"这类投诉无从排查。
-3. **到期预警的扫描频率与提前量**：建议每日一次、提前 3 天与 1 天各一次（两个去重键）。频率过高会变成骚扰。
-4. **`tenant_id` 类型**：`tenants.id` 是 `smallserial`（不是 `smallint` 别名之外的推论，基线 `0001:735` 已核实），通知表若带 `tenant_id` 必须用同类型，否则外键建不上。
+**四项参数的最终取值**（用户已拍板）：
 
-**验收草案**：同一支付回调重复到达只产生一条通知；用户可标记已读；关掉邮件后仍能在站内看到；到期前 3 天与 1 天各收到一次且不重复。
+1. **去重键的形状** —— `payment_succeeded:<payment_id>`、`entitlement_expiring:<entitlement_id>:<days_before>`、`quota_changed:<pool_id>:<updated_at_nanos>`、`member_invited:<user_id>`。唯一索引 `(user_id, dedupe_key)`，撞 23505 即跳过，**不做先查后写**（并发下两个请求都能查到"没有"，于是各插一条）。
+2. **渠道开关的粒度** —— **用户级**。落为 `user_notification_prefs(user_id, kind, email_enabled)`，**缺行即默认开启**（读路径 `COALESCE(..., TRUE)`），不给每个用户 × 每种事件预置行：后者会让新增事件类型时必须补数据迁移，且存量用户全部漏发。站内信**始终开启**，开关只管邮件——站内是事实留痕，关掉它会让「用户声称没收到」变成无法查证的口径之争。
+3. **到期预警的扫描频率与提前量** —— 每小时扫一次，提前 **3 天与 1 天**各一次（两个独立去重键）。档位用 `ceil(剩余小时/24)` 判定，即每档覆盖 `(N-1, N]`，因此文案写「N 天内到期」而非「N 天后」——剩余半天时说「1 天后」是错的。扫描**只发通知、不改状态**：权益是否生效完全由 `starts_at/expires_at` 与当前时间比较决定，没有 status 列要维护，所以漏跑一轮不会让权益错乱。
+4. **`tenant_id` 类型** —— `smallint`，与 `tenants.id` 一致，外键可建。列值**由 `users` 表派生**而非调用方传入：传错就把通知挂到别的租户下（跨租户可见），派生天然正确。
+
+**实现中修正了一处原设计**：`member_invited` 原打算在「邀请发出时」通知被邀请人，但 `tenant_invites`（基线 `0001:725`）只有 `code/tenant_id/created_by/max_uses/uses/expires_at`，**没有 email 列**，是通用邀请码而非指向具体人的邀请，创建时没有确定的收件人。因此该事件落在「成员凭邀请码注册成功」的那一刻，通知对象是新成员本人。
+
+**`quota_changed` 的收件人是租户 owner/admin 而非全租户**：配额是租户级资源，广播给全成员时一次调整就写入 N 行（N = 成员数），且绝大多数收件人对此无能为力；普通成员真正需要感知的是「自己额度用完了」，那由调用时的 `quota_exceeded` 提示承担。
+
+**验收结果**：同一支付回调重复到达只产生一条通知（真库验证 `ON CONFLICT` 命中唯一索引）；用户可标记已读（跨用户被 `user_id` 条件挡住）；关掉邮件后仍能在站内看到；到期前 3 天与 1 天各收到一次且重复扫描不重复推送。
+
+## 15. 下一批开发任务（2026-10-30，P2-3 交付后）
+
+功能线（P0/P1/P2）至此全部交付。以下三项是**本轮交付自身暴露出来的缺口**，都已逐处读到实现；第四项起是受外部条件阻塞的技术债，重排理由见 §12.5。
+
+### T1 通知内容本地化（最高优先，唯一违反项目三语约定的地方）
+
+**现状（已核实）**：通知的标题与正文在服务端**硬编码中文**——`internal/billing/entitlement_expiry.go:68-69`（「套餐将在 %d 天内到期」）、`internal/api/notify_support.go:114-115`（「已加入团队」）、`internal/billing/payments.go` 的 `notifyPaymentSucceeded`（「支付成功」/「套餐购买成功」）。前端只翻了分类标签（`NotificationsView.vue` 的 `kindLabel()`），正文仍是中文，所以 en-US / ar 用户看到的是「英文标签 + 中文正文」。
+
+这与仓库既有约定冲突：界面文案 zh-CN 为源语言、en-US 与 ar 必须对齐（`check-i18n-keys.mjs` 已把 `notifications.` 纳入严格对齐清单）。而**邮件出口没有兜底**——邮件正文就是库里那段中文。
+
+**做法（推荐 A，不做 B）**：
+
+- **A. 存事件与参数，渲染放到读取时**：`notifications` 已带 `payload jsonb`（`0011`），补一列 `render_key`（如 `payment_succeeded.package`），`title`/`body` 降级为**兜底文本**（渲染失败时才用）。前端按 `kind` + `payload` 从 `notifications.*` 域插值渲染；邮件侧由服务端按用户语言取同一份键表渲染。
+  - 迁移：`0012_notification_i18n`，只加列与回填，**不改已有 `title`/`body`** ⇒ 存量行立刻可用。
+  - 用户语言偏好：复用 `users.settings json`——`UpdateProfile` 已有局部合并写入（`internal/api/auth.go:614` `settings = COALESCE(settings::jsonb,'{}') || $n::jsonb`）。前端语言偏好目前**只存 `localStorage['chiron.locale']`**（`src/i18n/index.ts:24`），需在切换时同步 PUT；服务端读 `settings->>'locale'`，缺省回落 `zh-CN`。
+- **B. 服务端按当前请求语言渲染**（不推荐）：存量通知的语言被永久钉死，用户切语言后历史条目不会变，等于把这个 bug 从「全部」缩到「历史」，还得再修一次。
+
+**验收**：切到 en-US 后，**历史**通知正文也随之变英文（这是 A 相对 B 的关键差别）；ar 同理且 RTL 排版正常；`users.settings` 无 `locale` 时回落 zh-CN 且不报错；邮件正文语言与该用户偏好一致；`check-i18n-keys.mjs` 三语对齐仍为 0 缺键。
+
+**风险**：`notifications.body` 是普通 `text`，回填 `render_key` 只能覆盖四类已知事件；未知 `kind` 必须走兜底文本而不是显示空串（否则用户看到空白条目，比中文更难懂）。
+
+### T2 通知表保留期清理
+
+**现状（已核实）**：`0011_notifications.py` 只有两个读路径索引（`idx_notifications_user_created`、未读部分索引），**没有任何删除或保留期机制**；全仓 `DELETE FROM notifications` 只出现在测试清理里。四类事件里 `quota_changed` 会按租户 owner/admin 数量成倍写入，通知表是**只增不减**的。
+
+**做法**：`notify.Manager` 增加 `StartRetentionSweep(ctx, interval)`（照 `StartEntitlementExpiryScan` 的形状，随 `lifecycleCtx` 退出），**分批删除** `created_at < now() - retention`：
+
+- 单批 1000 行、循环到删空或上限，避免一次 `DELETE` 长事务锁表；
+- **按 `created_at` 过滤需要新索引** `idx_notifications_created`：现有两个索引都以 `user_id` 打头，按时间跨用户删除用不上它们；
+- 保留期默认 **90 天**，可用配置覆盖。
+
+**取舍**：**已读与未读一视同仁**。90 天没点开过的通知，保留下去既不会被看也不会被清理，等于永久垃圾；「怕丢重要通知」的诉求应由「重要事件同时发邮件」承担，而不是靠永不删除。
+
+**验收**：真库插入 91 天前的行后跑一轮即被删、89 天前的不动（边界用例）；单轮多次批量删除后行数归零且不超时；未装配通知中心时 sweep 为 no-op；`go test ./internal/notify/` 真库用例覆盖边界。
+
+### T3 通知偏好的入口可见性（小，但影响验收口径）
+
+**现状（已核实）**：顶栏角标（`AppLayout.vue` 的 `.topbar-notify`）与 `/notifications` 路由已可用，但**账号菜单（`userMenuItems`）里没有入口**，用户只能靠点铃铛进入；偏好设置藏在页面下半部分，没有独立锚点。
+
+**做法**：`userMenuItems` 增加一项（与 `api-keys` 同构，仅在非本地模式展示）；页面内偏好区加 `id` 与页内跳转。**不新增页面**。
+
+**验收**：账号菜单可见「通知中心」并能进入；本地模式不展示该入口（本地没有账号体系与通知表）；三语键齐备。
+
+### T4 起：受外部条件阻塞的技术债
+
+| 项 | 缺什么 | 能否现在做 |
+|---|---|---|
+| L4-3 `timestamp` → `timestamptz` | 生产时区语义抽样 + 可达 PG；142 列/72 表，且同一列可能混两种语义 | 否 |
+| S5-(e) 沙箱部署形态 | 独立容器（无 docker socket、仅内网）+ 共享工作区卷 | 否 |
+| L3-4 巨型文件拆分尾批 | 无功能收益 | 可以，但优先级最低 |
+
+### 建议顺序
+
+`T1` → `T2` → `T3` → `T4`。
+
+- **T1 排第一**：它是唯一一处**已经违反项目硬约定**的地方（三语对齐），且邮件出口因此对所有非中文用户不可用，属于「用不了但没提示」。
+- **T2 排第二**：不是正确性问题，但 `quota_changed` 的写入倍数让增长比其它事件快；越晚做，首次清理要处理的历史越多。
+- **T3 排第三**：纯入口便利，不做也不影响功能可达（铃铛已可用）。
+- **T4 只能等外部条件**，理由见 §12.5。
+
+> 三项都不需要新的外部依赖，也不改既有表语义；`0012` 是唯一新增迁移，**下一个可用号从 `0012` 起**。

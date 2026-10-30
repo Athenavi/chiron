@@ -107,6 +107,8 @@ type AuthHandler struct {
 	// emailBloom 可选：注入后注册流程先用布隆过滤器快速否定"该邮箱未注册"，
 	// 从而跳过昂贵的 DB 判重。nil 表示未启用（始终回落 DB 查证）。
 	emailBloom *userEmailBloom
+	// notifier 可选：注入后凭邀请码注册成功会给新成员本人发一条站内信（P2-3）。
+	notifier notificationWriter
 }
 
 func NewAuthHandler(cfg *config.Config) *AuthHandler {
@@ -131,6 +133,9 @@ func (h *AuthHandler) SetMailHandler(m *MailHandler) {
 func (h *AuthHandler) SetEmailBloomHandler(b *userEmailBloom) {
 	h.emailBloom = b
 }
+
+// SetNotifier 装配通知中心（P2-3）。传 nil 即关闭通知。
+func (h *AuthHandler) SetNotifier(n notificationWriter) { h.notifier = n }
 
 type LoginRequest struct {
 	Email          string `json:"email"`
@@ -344,6 +349,10 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 解析租户归属（F2）：携带邀请码则归入该租户，否则维持默认租户（存量行为）。
 	// 校验与计数都在本事务内完成 —— 后续步骤失败回滚时 uses 一并回滚。
 	tenantID := DefaultTenantID
+	// joinedViaInvite 标记本次注册是否通过邀请码加入了一个既有团队。
+	// 只有这种情况才发「已加入团队」通知：默认租户注册是单人开户，
+	// 给自己发一条"你加入了团队"没有信息量。
+	joinedViaInvite := false
 	if code := strings.TrimSpace(req.InviteCode); code != "" {
 		resolved, ierr := consumeInvite(ctx, tx, code)
 		if ierr != nil {
@@ -351,6 +360,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		tenantID = resolved
+		joinedViaInvite = true
 	}
 
 	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(tenantID)); err != nil {
@@ -497,6 +507,17 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	// 存量用户（没有这一步之前注册的）因此不会在该表里留下行 ⇒ 前端判定
 	// eligible=false，不弹引导，符合 roadmap「不打断已有用户」。
 	StartOnboarding(ctx, userID)
+
+	// 团队加入通知（P2-3 的 member_invited）：必须放在 commit 之后 ——
+	// 事务回滚时用户并不存在，通知会指向一个不存在的账号。
+	//
+	// 语义说明：`tenant_invites` 只有 code/tenant_id/created_by/... 而**没有
+	// email 列**（基线 0001:725），是通用邀请码而非指向具体人的邀请，创建时
+	// 没有确定的收件人。所以这个事件落在"成员真正加入"的这一刻，通知对象是
+	// 新成员本人，而不是"邀请发出时的被邀请人"。
+	if joinedViaInvite {
+		h.notifyMemberJoined(r.Context(), tenantID, userID, req.Name)
+	}
 
 	// 欢迎邮件：异步发送（不阻塞、不因发信失败而回滚已创建的账号）。
 	if h.mail != nil {

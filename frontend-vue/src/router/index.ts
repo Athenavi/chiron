@@ -90,6 +90,12 @@ const routes = [
     meta: { requiresAuth: true, cloudOnly: true },
   },
   {
+    path: '/notifications',
+    name: 'Notifications',
+    component: () => import('../views/NotificationsView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/media',
     name: 'Media',
     component: () => import('../views/MediaView.vue'),

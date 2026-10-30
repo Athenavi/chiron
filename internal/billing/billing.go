@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"sync"
 	"time"
+
+	"github.com/athenavi/chiron/internal/notify"
 )
 
 // ── Types ──
@@ -75,6 +77,19 @@ type Manager struct {
 	closeOnce sync.Once
 	wg        sync.WaitGroup // waits for dispatch goroutine to exit
 	balances  sync.Map       // userID → *balanceCacheEntry（读缓存，5s TTL）
+	// notifier 是通知中心入口（P2-3），可为 nil（未装配时静默跳过）。
+	// 用接口而不是 *notify.Manager：单测可注入替身，且 billing 不必绑定
+	// notify 包的具体形状；nil 时所有通知点退化为 no-op。
+	notifier Notifier
+}
+
+// Notifier 是通知中心的最小写入入口，由 notify.Manager 实现。
+//
+// 单独定义在 billing 侧而不是直接依赖 *notify.Manager：支付链路只需要
+// "写一条通知"，不需要读列表、不需要管偏好 —— 接口收窄到这里之后，
+// 单测注入替身不必构造整套存储。
+type Notifier interface {
+	Notify(ctx context.Context, n *notify.Notification) (bool, error)
 }
 
 // Store is the interface for persisting credit data.
@@ -114,6 +129,38 @@ func (m *Manager) Subscribe(obs BillingObserver) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	m.observers = append(m.observers, obs)
+}
+
+// SetNotifier 装配通知中心（P2-3）。传 nil 即关闭通知。
+//
+// 用 setter 而不是改 NewManager 签名：NewManager 已有多个调用点与测试，
+// 加参数会让所有既有调用点被迫改动，而这个依赖是可选的（未装配时通知退化为 no-op）。
+func (m *Manager) SetNotifier(n Notifier) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.notifier = n
+}
+
+// notifierOrNil 取通知入口（读锁保护，与 SetNotifier 并发安全）。
+func (m *Manager) notifierOrNil() Notifier {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.notifier
+}
+
+// emitNotification 是通知的统一出口：**任何失败都只记日志**。
+//
+// 通知是旁路，不能决定业务成败。支付已入账、权益已发放之后再因为"通知没写进去"
+// 把订单退回 pending，会导致下一次回调重复入账 —— 代价远大于少一条站内信。
+func (m *Manager) emitNotification(ctx context.Context, n *notify.Notification) {
+	nt := m.notifierOrNil()
+	if nt == nil {
+		return
+	}
+	if _, err := nt.Notify(ctx, n); err != nil {
+		slog.Warn("billing: emit notification failed (business result unaffected)",
+			"user", n.UserID, "kind", n.Kind, "dedupe_key", n.DedupeKey, "error", err)
+	}
 }
 
 // Close stops the background event dispatcher and drains remaining events.
@@ -314,6 +361,11 @@ func (m *Manager) ListPackages(ctx context.Context) ([]Package, error) {
 // UserEntitlements 返回用户全部权益（含已过期），供"我的套餐"展示到期状态。
 func (m *Manager) UserEntitlements(ctx context.Context, userID string) ([]Entitlement, error) {
 	return m.store.UserEntitlements(ctx, userID)
+}
+
+// ExpiringEntitlements 返回窗口内即将到期的权益（跨用户），供到期预警扫描。
+func (m *Manager) ExpiringEntitlements(ctx context.Context, now time.Time, withinDays int) ([]Entitlement, error) {
+	return m.store.ExpiringEntitlements(ctx, now, withinDays)
 }
 
 // AdminListPackages 返回全部套餐（含已下架），供后台管理页（P2-2c）。

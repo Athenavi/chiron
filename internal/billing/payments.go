@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/athenavi/chiron/internal/id"
+	"github.com/athenavi/chiron/internal/notify"
 )
 
 // 支付渠道
@@ -119,6 +120,51 @@ func (m *Manager) ConfirmPayment(ctx context.Context, id, tradeNo string) (*Paym
 	// 刻意不把它的错误向上返回：此时 AddCredits 已成功，把订单退回 pending 会让下一次
 	// 回调再发一次 credits（付一次、加两次）。权益发放失败只告警，靠幂等重放补
 	// （GrantEntitlement 撞 23505 即视为已发）。
-	m.grantEntitlementForPayment(ctx, p)
+	ent := m.grantEntitlementForPayment(ctx, p)
+	// 通知放在最后，且失败不影响返回值：此时钱已入账、权益已发放，
+	// 因为"通知没写进去"而报错会让调用方以为支付失败。
+	m.notifyPaymentSucceeded(ctx, p, ent)
 	return p, true, nil
+}
+
+// notifyPaymentSucceeded 发「支付成功」站内信。
+//
+// 去重键只用订单 ID：`MarkPaymentPaid` 的幂等分支已经保证同一订单只会走到这里
+// 一次，唯一索引在此是第二道保险（并发回调、事务重放）。
+func (m *Manager) notifyPaymentSucceeded(ctx context.Context, p *Payment, ent *Entitlement) {
+	if p == nil {
+		return
+	}
+	payload := map[string]any{
+		"payment_id":   p.ID,
+		"credits":      p.Credits,
+		"amount_cents": p.AmountCents,
+		"currency":     p.Currency,
+		"channel":      p.Channel,
+	}
+	title := "支付成功"
+	body := fmt.Sprintf("充值 %d credits 已到账。", p.Credits)
+	if p.PackageCode != "" {
+		name := p.PackageCode
+		if ent != nil && ent.PackageName != "" {
+			name = ent.PackageName
+		}
+		payload["package_code"] = p.PackageCode
+		title = "套餐购买成功"
+		body = fmt.Sprintf("套餐「%s」已生效，%d credits 已到账。", name, p.Credits)
+		if ent != nil {
+			body += fmt.Sprintf("权益有效期至 %s。", ent.ExpiresAt.Format("2006-01-02"))
+			payload["entitlement_id"] = ent.ID
+			payload["expires_at"] = ent.ExpiresAt.Format(time.RFC3339)
+		}
+	}
+	m.emitNotification(ctx, &notify.Notification{
+		UserID:    p.UserID,
+		Kind:      notify.KindPaymentSucceeded,
+		DedupeKey: notify.KindPaymentSucceeded + ":" + p.ID,
+		Title:     title,
+		Body:      body,
+		Link:      "/billing",
+		Payload:   payload,
+	})
 }

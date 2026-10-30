@@ -9,6 +9,7 @@ import { useDeviceStore } from '../stores/device'
 import {
   Avatar,
   
+  Badge,
   Dropdown,
   Menu,
   Modal,
@@ -16,6 +17,7 @@ import {
 } from 'ant-design-vue'
 // Ant Design 图标
 import {
+  BellOutlined,
   HomeOutlined,
   MessageOutlined,
   UserOutlined,
@@ -40,6 +42,7 @@ import CommandPalette from './CommandPalette.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
+import { getUnreadCount } from '../api/notifications'
 import { executeQuickCommand } from "@/components/WorkstationNav.vue"
 import {
   WORKSTATION_DESCRIPTIONS,
@@ -72,14 +75,39 @@ function handleApiError(e: Event) {
   message.error(detail.message || tr('errors.request_failed_2'))
 }
 
+// ── 通知未读角标（P2-3）──
+//
+// 轮询而不是 SSE：未读数是低频变化的小整数，5 分钟一次足够；为它单独维持一条
+// 长连接会让每个在线标签页都多占一个连接。聊天页同样隐藏入口（理由同上）。
+const unreadCount = ref(0)
+let unreadTimer: ReturnType<typeof setInterval> | null = null
+
+async function refreshUnread() {
+  if (!authStore.token || deviceStore.isLocal()) return
+  try {
+    unreadCount.value = await getUnreadCount()
+  } catch {
+    // 角标失败不该打扰用户：保留上一次的值，下个周期再试。
+  }
+}
+
 onMounted(() => {
   window.addEventListener('api:error', handleApiError)
   if (authStore.token) {
     authStore.fetchProfile()
   }
+  refreshUnread()
+  unreadTimer = setInterval(refreshUnread, 5 * 60 * 1000)
+  // 从通知页返回时立刻刷新一次，避免角标滞后一整个轮询周期。
+  window.addEventListener('notification:read', refreshUnread)
 })
 onUnmounted(() => {
   window.removeEventListener('api:error', handleApiError)
+  window.removeEventListener('notification:read', refreshUnread)
+  if (unreadTimer) {
+    clearInterval(unreadTimer)
+    unreadTimer = null
+  }
   document.removeEventListener('click', onQuickDocClick)
   window.removeEventListener('keydown', onQuickKeydown)
 })
@@ -319,6 +347,23 @@ async function runQuickCommand() {
       v-if="!isChatPage"
       class="topbar-actions"
     >
+      <!-- 通知中心入口（P2-3）：本地模式没有账号体系，通知表也是空的，故不展示 -->
+      <button
+        v-if="authStore.user && !deviceStore.isLocal()"
+        :aria-label="tr('notifications.title')"
+        :title="tr('notifications.title')"
+        class="topbar-notify"
+        type="button"
+        @click="router.push('/notifications')"
+      >
+        <Badge
+          :count="unreadCount"
+          :overflow-count="99"
+          size="small"
+        >
+          <BellOutlined class="topbar-notify-icon" />
+        </Badge>
+      </button>
       <LanguageSwitcher />
       <ThemeSwitcher />
       <div
@@ -491,6 +536,34 @@ async function runQuickCommand() {
   box-shadow: var(--sig-shadow-card);
   cursor: pointer;
   transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+/* 通知入口：与 user-fab 同构的圆角方形按钮，保证顶栏视觉重量一致 */
+.topbar-notify {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  border-radius: 50%;
+  border: var(--hairline-width) solid var(--border-default);
+  background: var(--comp-header-bg);
+  backdrop-filter: blur(var(--sig-blur-header));
+  -webkit-backdrop-filter: blur(var(--sig-blur-header));
+  box-shadow: var(--sig-shadow-card);
+  color: var(--text-secondary);
+  cursor: pointer;
+  transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+
+.topbar-notify:hover {
+  color: var(--text-primary);
+  border-color: var(--primary);
+}
+
+.topbar-notify-icon {
+  font-size: 16px;
 }
 
 .user-fab-avatar {

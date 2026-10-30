@@ -95,73 +95,28 @@ func entPolicyTenantID(claims *auth.Claims) string {
 	return tenantStr(DefaultTenantID)
 }
 
-// ── 强制点函数（导出给集成任务，独立可测） ────────────────────────────────
+// ── 强制点函数 ────────────────────────────────────────────────────────────
 
-// EnforceEnterprisePolicy 校验 modelID 是否在该用户适用的模型白名单内。
+// 说明（2026-10-29 收敛）：这里**不再提供** EnforceEnterprisePolicy /
+// ResolveAllowedModels 两个导出函数。它们曾并存于请求路径之外，且语义与真正的
+// 准入判定相反：
 //
-// 解析规则：role 精确策略优先（用户直接角色 ∪ 群组成员角色的任一命中），
-// 缺失则回退租户级策略（role_id IS NULL）；两者都无 → 放行。
-// 任何查询失败一律 fail-open（放行 + slog.Warn），保证策略基础设施故障
-// 不阻断业务链路。model 不在白名单返回 ErrModelNotAllowed（403 语义）。
-func (h *EntPolicyHandler) EnforceEnterprisePolicy(r *http.Request, claims *auth.Claims, modelID string) error {
-	if modelID == "" {
-		return nil
-	}
-	if claims == nil {
-		slog.Warn("ent policy: missing claims, fail-open", "model", modelID)
-		return nil
-	}
-	allowed, hasPolicy, err := h.resolveAllowed(r.Context(), claims.TenantID, claims.UserID)
-	if err != nil {
-		slog.Warn("ent policy: resolve allow-list failed, fail-open",
-			"user", claims.UserID, "tenant", claims.TenantID, "model", modelID, "error", err)
-		return nil
-	}
-	entModels, hasEnt := h.resolveEntitledModels(r.Context(), claims.UserID)
-	effective, restricted := effectiveAllowedModels(allowed, hasPolicy, entModels, hasEnt)
-	if !restricted {
-		return nil
-	}
-	for _, m := range effective {
-		if m == modelID {
-			return nil
-		}
-	}
-	return ErrModelNotAllowed
-}
+//   - ResolveAllowedModels 在"不限制"时必须返回一份全量清单，其实现是查
+//     admin_model_configs.model_id。该表在真库里可以为 0 行，而 /v1/models
+//     的清单来自 llm_models（实测 40 行），两者命名空间不同、交集为 0。
+//     任何人拿它当过滤基准，都会得到一个模型都不返回的空下拉。
+//   - EnforceEnterprisePolicy 只看单层白名单，不回答"是谁拦的"，无法给用户
+//     可执行动作（买套餐 vs 找管理员）。
+//
+// 请求路径统一走：
+//   - ent_entitlement_gate.go: EffectiveModelSet（/v1/models 过滤）
+//   - ent_entitlement_gate.go: GuardChatModelAccess（对话准入 + 403 归因）
+//
+// 两者都以 (allowed, hasPolicy) / (models, hasEntitlement) 双返回值表达
+// "不限制"与"限制为空"的区别，这正是旧函数缺的那一环。**
 
-// defaultPolicyHandler 供包级强制点函数使用的默认实例。
+// defaultPolicyHandler 供包级入口与请求路径共用（隐私模式、限速、准入判定）。
 var defaultPolicyHandler = NewEntPolicyHandler()
-
-// EnforceEnterprisePolicy 包级入口（签名同方法版本），集成任务直接调用。
-func EnforceEnterprisePolicy(r *http.Request, claims *auth.Claims, modelID string) error {
-	return defaultPolicyHandler.EnforceEnterprisePolicy(r, claims, modelID)
-}
-
-// ResolveAllowedModels 返回用户视角的可用模型清单：
-// 有生效策略时返回白名单；无任何策略时返回 admin_model_configs 全量模型。
-// 查询失败返回 error（供 GET /v1/models 改造后按 fail-open 处理）。
-func (h *EntPolicyHandler) ResolveAllowedModels(ctx context.Context, tenantID int16, userID string) ([]string, error) {
-	allowed, hasPolicy, err := h.resolveAllowed(ctx, tenantID, userID)
-	if err != nil {
-		return nil, err
-	}
-	entModels, hasEnt := h.resolveEntitledModels(ctx, userID)
-	effective, restricted := effectiveAllowedModels(allowed, hasPolicy, entModels, hasEnt)
-	if !restricted {
-		// 两侧都不限制 → 全量模型。
-		return h.allModelIDs(ctx)
-	}
-	if effective == nil {
-		effective = []string{}
-	}
-	return effective, nil
-}
-
-// ResolveAllowedModels 包级入口。
-func ResolveAllowedModels(ctx context.Context, tenantID int16, userID string) ([]string, error) {
-	return defaultPolicyHandler.ResolveAllowedModels(ctx, tenantID, userID)
-}
 
 // GetTenantPrivacyMode 返回租户是否开启隐私模式（无记录 → false）。
 // 集成任务据此在转发 Python 引擎请求时注入 X-Privacy-Mode: no_retention 头。
@@ -291,28 +246,6 @@ func defaultResolveAllowedModels(ctx context.Context, tenantID int16, userID str
 		return nil, false, fmt.Errorf("ent policy: query model policy: %w", err)
 	}
 	return allowed, true, nil
-}
-
-// allModelIDs 返回 admin_model_configs 全量 model_id（模型清单直接读该表）。
-func (h *EntPolicyHandler) allModelIDs(ctx context.Context) ([]string, error) {
-	pool := db.ReadPool()
-	if pool == nil {
-		return nil, errors.New("ent policy: postgres pool unavailable")
-	}
-	rows, err := pool.Query(ctx, `SELECT model_id FROM admin_model_configs ORDER BY priority DESC, model_id`)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	models := []string{}
-	for rows.Next() {
-		var m string
-		if err := rows.Scan(&m); err != nil {
-			return nil, err
-		}
-		models = append(models, m)
-	}
-	return models, rows.Err()
 }
 
 // policyModelRPM 读取租户级策略 per_model_limits[model]["rpm"]（无 → 0）。
