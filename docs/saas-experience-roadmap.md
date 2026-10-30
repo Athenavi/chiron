@@ -647,52 +647,73 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 
 功能线（P0/P1/P2）至此全部交付。以下三项是**本轮交付自身暴露出来的缺口**，都已逐处读到实现；第四项起是受外部条件阻塞的技术债，重排理由见 §12.5。
 
-### T1 通知内容本地化（最高优先，唯一违反项目三语约定的地方）
+### T1 通知内容本地化（**已交付**，2026-10-30）
 
-**现状（已核实）**：通知的标题与正文在服务端**硬编码中文**——`internal/billing/entitlement_expiry.go:68-69`（「套餐将在 %d 天内到期」）、`internal/api/notify_support.go:114-115`（「已加入团队」）、`internal/billing/payments.go` 的 `notifyPaymentSucceeded`（「支付成功」/「套餐购买成功」）。前端只翻了分类标签（`NotificationsView.vue` 的 `kindLabel()`），正文仍是中文，所以 en-US / ar 用户看到的是「英文标签 + 中文正文」。
+**原状（已核实）**：通知的标题与正文在服务端**硬编码中文**——`internal/billing/entitlement_expiry.go:68-69`（「套餐将在 %d 天内到期」）、`internal/api/notify_support.go:114-115`（「已加入团队」）、`internal/billing/payments.go` 的 `notifyPaymentSucceeded`（「支付成功」/「套餐购买成功」）。前端只翻了分类标签（`NotificationsView.vue` 的 `kindLabel()`），正文仍是中文，所以 en-US / ar 用户看到的是「英文标签 + 中文正文」。邮件出口更没有兜底——正文就是那段中文。
 
-这与仓库既有约定冲突：界面文案 zh-CN 为源语言、en-US 与 ar 必须对齐（`check-i18n-keys.mjs` 已把 `notifications.` 纳入严格对齐清单）。而**邮件出口没有兜底**——邮件正文就是库里那段中文。
+**实际做法（与下文原计划有一处偏离，见「为什么没加 render_key」）**：
 
-**做法（推荐 A，不做 B）**：
+- **站内信：`kind` + `payload` 在读取时渲染**。新增 `frontend-vue/src/utils/notificationRender.ts`（纯函数，可单测），`NotificationsView.vue` 不再直接显示 `item.title/body`，改调 `renderNotificationTitle` / `renderNotificationBody`；三语各补 `notifications.body.*` 与 `title_*` 模板。于是**历史通知也会跟随语言切换**。
+- **邮件：服务端按收件人语言渲染**。新增 `internal/notify/messages.go`（`RenderMail` / `RenderBody` / `RenderTitle` / `RenderPackagePayment` / `QuotaActionLabel`），`sendMail` 先取 `userLocale` 再渲染。四类事件的三语模板与前端逐条对应。
+- **用户语言来源**：`PGStore.UserLocale` 读 `users.settings::jsonb ->> 'locale'`（列是 `json`，必须显式转型；未设置返回空串）。前端新增 `utils/localeSync.ts`：`setLocale()` 经 hook 回写 `PUT /v1/auth/profile {settings:{locale}}`（失败静默），登录后仅在本机未显式选择过语言时采用服务端值。
+- **为什么 i18n 不直接调 api**：`api/index.ts` 已 import i18n 的 `t`（拦截器翻译错误），反向依赖会成环 —— 改为 i18n 暴露 `setLocaleSyncHook`，由 `main.ts` 注入。同理 `localeSync` 不 import auth store，登录态判定由参数注入。
 
-- **A. 存事件与参数，渲染放到读取时**：`notifications` 已带 `payload jsonb`（`0011`），补一列 `render_key`（如 `payment_succeeded.package`），`title`/`body` 降级为**兜底文本**（渲染失败时才用）。前端按 `kind` + `payload` 从 `notifications.*` 域插值渲染；邮件侧由服务端按用户语言取同一份键表渲染。
-  - 迁移：`0012_notification_i18n`，只加列与回填，**不改已有 `title`/`body`** ⇒ 存量行立刻可用。
-  - 用户语言偏好：复用 `users.settings json`——`UpdateProfile` 已有局部合并写入（`internal/api/auth.go:614` `settings = COALESCE(settings::jsonb,'{}') || $n::jsonb`）。前端语言偏好目前**只存 `localStorage['chiron.locale']`**（`src/i18n/index.ts:24`），需在切换时同步 PUT；服务端读 `settings->>'locale'`，缺省回落 `zh-CN`。
-- **B. 服务端按当前请求语言渲染**（不推荐）：存量通知的语言被永久钉死，用户切语言后历史条目不会变，等于把这个 bug 从「全部」缩到「历史」，还得再修一次。
+**为什么没加 `render_key`（偏离原计划）**：原计划写的是「`0012` 加 `render_key` 列并回填」。核实后发现 `payload` 已带齐重建四类正文的全部变量，而 `render_key` 可由 `kind`（+`package_code` 是否存在）完全导出、**反向推不出来**，等于给同一语义维护两份真相；且 `0011` 文件头取舍 6 本就写明「不存渲染后的 HTML，由前端按当前语言渲染」。因此**不新增迁移，head 仍是 `0011`**。
 
-**验收**：切到 en-US 后，**历史**通知正文也随之变英文（这是 A 相对 B 的关键差别）；ar 同理且 RTL 排版正常；`users.settings` 无 `locale` 时回落 zh-CN 且不报错；邮件正文语言与该用户偏好一致；`check-i18n-keys.mjs` 三语对齐仍为 0 缺键。
+**验收（均已通过）**：切到 en-US 后历史通知正文随之变英文（`notificationRender.spec.ts` 用真实 i18n 实例钉住）；ar 同理；`settings` 无 `locale` 时回落不影响渲染；邮件正文语言与该用户偏好一致（`messages_test.go`）；三语键集对齐 0 缺键。
 
-**风险**：`notifications.body` 是普通 `text`，回填 `render_key` 只能覆盖四类已知事件；未知 `kind` 必须走兜底文本而不是显示空串（否则用户看到空白条目，比中文更难懂）。
+**顺带修掉的缺陷**：`RenderBody` 原先只校验参数个数，挡不住「个数对、类型错」时 `fmt` 产出 `%!d(string=...)` 半成品 —— 改为渲染后检测 `%!` 即回落兜底文本。
 
-### T2 通知表保留期清理
+**已知边界**：`package_name` / `tenant_name` 是运营填的业务数据，英文界面原样展示、不翻译；未知 `kind` 走服务端兜底文案而非空串。
 
-**现状（已核实）**：`0011_notifications.py` 只有两个读路径索引（`idx_notifications_user_created`、未读部分索引），**没有任何删除或保留期机制**；全仓 `DELETE FROM notifications` 只出现在测试清理里。四类事件里 `quota_changed` 会按租户 owner/admin 数量成倍写入，通知表是**只增不减**的。
+### T2 通知表保留期清理（**已交付**，2026-10-30）
 
-**做法**：`notify.Manager` 增加 `StartRetentionSweep(ctx, interval)`（照 `StartEntitlementExpiryScan` 的形状，随 `lifecycleCtx` 退出），**分批删除** `created_at < now() - retention`：
+**原状（已核实）**：`0011_notifications.py` 只有三个读路径索引（`ux_notifications_user_dedupe`、`idx_notifications_user_created`、未读部分索引），**没有任何删除或保留期机制**；全仓 `DELETE FROM notifications` 只出现在测试清理里。四类事件里 `quota_changed` 会按租户 owner/admin 数量成倍写入，通知表是**只增不减**的。
 
-- 单批 1000 行、循环到删空或上限，避免一次 `DELETE` 长事务锁表；
-- **按 `created_at` 过滤需要新索引** `idx_notifications_created`：现有两个索引都以 `user_id` 打头，按时间跨用户删除用不上它们；
-- 保留期默认 **90 天**，可用配置覆盖。
+**实际做法**：
+
+- **迁移 `0012_notifications_retention`**：只加一个 `idx_notifications_created`（btree, `created_at`）单列索引。原计划的「两个索引都以 `user_id` 打头」核实后其实有三个，结论不变：跨用户按时间删除一个都用不上。刻意**不带 WHERE**（清理不区分已读未读，部分索引会让查询用不上它），也不建复合索引、不加 `expires_at` 列（保留期是纯派生规则，加列会多一份可能与 `created_at` 不一致的真相）。
+- **`Store.DeleteOlderThan(ctx, cutoff, batchSize)`**：PG 的 `DELETE` 不支持直接写 `LIMIT`，用「子查询按 `created_at` 排序 `LIMIT n` → 按 id 删」一条语句绕开；每批独立事务，不把整轮清理包在长事务里（否则行锁会把并发写入堵住）。`batchSize <= 0` 时防呆为 1000 —— 否则 `LIMIT 0` 会静默什么都不删，调用方误以为已删空。
+- **`Manager.SweepRetention` / `StartRetentionSweep`**：单批 1000、单轮最多 50 批（≈5 万行/轮，超出则本轮停、下轮继续，避免长时间占用连接池）；不足一批即提前结束；每批前检查 `ctx`。网关以 24h 周期启动，保留天数由 `NOTIFICATION_RETENTION_DAYS` 控制（默认 90；`<=0` 回落默认值而非「立即删光」）。
 
 **取舍**：**已读与未读一视同仁**。90 天没点开过的通知，保留下去既不会被看也不会被清理，等于永久垃圾；「怕丢重要通知」的诉求应由「重要事件同时发邮件」承担，而不是靠永不删除。
 
-**验收**：真库插入 91 天前的行后跑一轮即被删、89 天前的不动（边界用例）；单轮多次批量删除后行数归零且不超时；未装配通知中心时 sweep 为 no-op；`go test ./internal/notify/` 真库用例覆盖边界。
+**验收（均已通过）**：真库 120 天前的行被删、89 天前的留下（逐条确认哪一条还在，而非只看数量）；2500 行跨 3 批删空；`pg_indexes` 断言 `idx_notifications_created` 存在且 `EXPLAIN` 可执行；`go test ./...` 21 包全绿。
 
-### T3 通知偏好的入口可见性（小，但影响验收口径）
+**与计划的两处偏离**：① 边界用 **120/89 天**而不是 121/90 天 —— 90 天恰好是 cutoff 边界，执行耗时的秒级抖动会让它滑到任一侧，断言会随机变红；② 原写「未装配通知中心时 sweep 为 no-op」，但清理不依赖 notifier（与 `ScanEntitlementExpiry` 不同），「未装配」对它不适用，改为断言 **nil store 会 panic 而非静默返回 0** —— 静默返回 0 会让「清理从没跑过」看起来像「没有过期数据」，是最难排查的一类故障。
 
-**现状（已核实）**：顶栏角标（`AppLayout.vue` 的 `.topbar-notify`）与 `/notifications` 路由已可用，但**账号菜单（`userMenuItems`）里没有入口**，用户只能靠点铃铛进入；偏好设置藏在页面下半部分，没有独立锚点。
+### T3 通知入口与偏好可见性（**已交付**，2026-10-30）
 
-**做法**：`userMenuItems` 增加一项（与 `api-keys` 同构，仅在非本地模式展示）；页面内偏好区加 `id` 与页内跳转。**不新增页面**。
+**原状（已核实）**：顶栏角标（`AppLayout.vue` 的 `.topbar-notify`）与 `/notifications` 路由已可用，但**账号菜单里没有入口**，用户只能靠点铃铛进入；偏好设置藏在页面下半部分，没有独立锚点。
 
-**验收**：账号菜单可见「通知中心」并能进入；本地模式不展示该入口（本地没有账号体系与通知表）；三语键齐备。
+**核实中发现的计划外缺口**：账号菜单有**两份独立实现** —— `AppLayout.vue` 与 `chat/ChatSidePanel.vue` 各写一份，且已漂移（聊天页那份只有 settings/profile/logout）。而聊天页**隐藏了顶栏**（`isChatPage`），所以聊天过程中的用户点不到任何通知入口。只按原计划改 `AppLayout` 会留下这个洞，而通知最常见的场景正是「对话时收到支付成功 / 套餐到期提醒」。
+
+**实际做法**：
+
+- **抽出 `components/accountMenu.ts`**：`buildAccountMenuItems(tr, {isLocal, includeApiKeys})` 与 `accountMenuRoute(key)` 成为菜单项的唯一定义处；顶栏与聊天侧栏都改为引用它。`api-keys` 在聊天页不展示，但这个差异改为**显式参数** `includeApiKeys: false`，不再是两份实现各自漂移的产物。
+- **跳转逻辑收敛**：两个组件的 `handleUserMenuClick` 都改为「logout / settings 特判，其余查 `accountMenuRoute`」，新增菜单项时不会漏一个分支导致点了没反应。
+- **偏好区加锚点**：`section#notification-prefs` + 工具栏「邮件设置」按钮滚动过去；支持 `/notifications#notification-prefs` 外部直达（`nextTick` 后滚动，因为偏好区在列表之后可能尚未挂载）。刻意用 `scrollIntoView` 而非 `router.push('#...')` —— 后者会新增历史记录且 hash 残留，纯页内定位不该污染浏览历史。
+- 三语补 `notifications.prefs_jump`。
+
+**验收（均已通过）**：账号菜单可见「通知中心」并能进入，顶栏与聊天侧栏都有；本地模式不展示通知/api-keys/登出；`accountMenu.spec.ts` 12 项覆盖可见性规则与三语 label（用真实 i18n 实例，能抓住「加菜单项忘补译文」）；`vue-tsc` 零错误、三语键集对齐。
+
+**顺带修掉**：两份菜单的图标导入已按实际使用清理（`LogoutOutlined` / `UserSwitchOutlined` / `KeyOutlined` 移出 `AppLayout`，`h` / `VNode` 在 `ChatSidePanel` 不再需要）。
+
+**已知边界**：本步（T3）只覆盖菜单构造与路由映射两个纯逻辑点。通知页组件本身的页面级单测**已补齐**：`views/__tests__/NotificationsView.spec.ts` 10 个用例，钉住「列表按当前语言渲染 / 未知 kind 原样显示 / 切未读带 `unread_only` 重新拉取 / 点击标已读并按 link 跳转 / 标读失败不阻止跳转 / 无未读时只提示不刷新 / 加载失败可重试 / 邮件开关乐观更新与失败回滚 / 「邮件设置」按钮滚动且不污染历史 / `#notification-prefs` 直达」。
 
 ### T4 起：受外部条件阻塞的技术债
 
 | 项 | 缺什么 | 能否现在做 |
 |---|---|---|
-| L4-3 `timestamp` → `timestamptz` | 生产时区语义抽样 + 可达 PG；142 列/72 表，且同一列可能混两种语义 | 否 |
+| L4-3 `timestamp` → `timestamptz` | 生产时区语义抽样 + 可达 PG；`0001` 基线仍有 **98 处** naive 列，且同一列可能混两种语义 | 否 |
 | S5-(e) 沙箱部署形态 | 独立容器（无 docker socket、仅内网）+ 共享工作区卷 | 否 |
-| L3-4 巨型文件拆分尾批 | 无功能收益 | 可以，但优先级最低 |
+| L3-4 巨型文件拆分尾批 | **已改为「可做」，但优先级最低**：本轮补写了 `docs/split-assessment.md`（此前 7 处引用指向一个从未提交过的文件），边界与验收已就位 | 可以 |
+
+**本轮对 T4 的实际推进（2026-10-30）**：三项里两项确有硬阻塞（`docker info` 实测失败；L4-3 缺生产时区抽样，盲改会把一半行移错时刻），因此**不动代码**，改为补写缺失的 `docs/split-assessment.md`：
+
+- 用本会话实测数据重写（Go / Vue / Python 三侧行数与顶层符号数），并发现旧数字已明显过期 —— `runtime.py` 文档旧记 3370→3198，**实测 4498 行**；`ChatView.vue` 旧记 3047，**实测 3966 行**；
+- 坐实一件事：`beb7bbb` 的提交信息写着「新增 `docs/split-assessment.md`」，但该提交 `--stat` 只改了 roadmap 一个文件，`git log --all -- docs/split-assessment.md` 返回 **0 条** —— 那 7 处引用（含 `ChatView.spec.ts` 的 §2.5、`main.py` 与 `test_shutdown_lifespan.py` 的 §2.3）一直指向不存在的文件。现已按实测补写，节号有真实落点；
+- 文档自带 §6 复算命令与时效性警告，避免再次过期。
 
 ### 建议顺序
 
@@ -701,6 +722,157 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 - **T1 排第一**：它是唯一一处**已经违反项目硬约定**的地方（三语对齐），且邮件出口因此对所有非中文用户不可用，属于「用不了但没提示」。
 - **T2 排第二**：不是正确性问题，但 `quota_changed` 的写入倍数让增长比其它事件快；越晚做，首次清理要处理的历史越多。
 - **T3 排第三**：纯入口便利，不做也不影响功能可达（铃铛已可用）。
-- **T4 只能等外部条件**，理由见 §12.5。
+- **T4 部分推进**：L4-3 与 S5-(e) 确有硬阻塞（已实测），故本轮只补写了缺失的拆分评估文档；代码本身未动。
 
-> 三项都不需要新的外部依赖，也不改既有表语义；`0012` 是唯一新增迁移，**下一个可用号从 `0012` 起**。
+> T1–T3 都不需要新的外部依赖，也不改既有表语义；`0011`（通知中心）与 `0012`（保留期索引）已用掉，**下一个可用号从 `0013` 起**。
+
+## 16. 下一批开发任务（2026-10-30，L3-4 批次 A 之后）
+
+### 16.1 事实基线（已核实，不是推断）
+
+| 维度 | 实测 |
+|---|---|
+| 功能线 | P0-1/2/3、P1-1/2/3、P2-1/2/3 **全部已交付**（§1 现状表逐行标注） |
+| 未提交改动 | **45 项**，跨 P2-2 / P2-3 / T1–T4 / L3-4 六个主题 |
+| L3-4 批次 A | 已拆 **10 个文件、2671 行逐字未变外移**（§4.1）；本轮增补 `plugin_handler.go` / `agents.go` / `rpa_ws.go` |
+| 剩余巨型 Go 文件（实测 `wc -l`） | `admin_ops.go` 950 · `submit_handler.go` 935（**跳过**）· `sso_handler.go` 888 · `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 |
+| 剩余巨型前端文件 | `ChatView.vue` **3966** · `MediaView.vue` 1842 · `ChatInput.vue` 1628 · `BillingView.vue` 1566 · `WorkflowView.vue` 1364 · `MessageItem.vue` 1291 · `SettingsPanel.vue` 1236 · `ChatSidePanel.vue` 1228 · `AgentsView.vue` 1182 |
+| 已知测试盲区 | **已补齐**：`views/__tests__/NotificationsView.spec.ts` 10 用例（全量前端 101 文件 / 824 用例全绿） |
+
+### 16.2 可立即做（无需外部条件）
+
+| 序 | 任务 | 状态 / 为什么排这个位置 |
+|---|---|---|
+| **1** | **把这 45 项整理成 5 个提交**（P2-2 套餐 / P2-3 通知中心 / T1 本地化 / T2 保留期 / T3 入口 + L3-4 拆分） | **未执行 —— 用户已明确「不要提交」。** 方案见 §16.6，随时可落。风险仍是：45 个文件叠加在一个未提交 diff 上，跨界越多，「哪一行属于哪个主题」越不可考 |
+| **2** | **L3-4 批次 A 收尾：再拆 4 个文件** | ✅ **已完成（2026-10-30）**：`python_client.go` 817→631（183 行）· `plugin_handler.go` 837→693（143 行）· `agents.go` 922→670（250 行）· `rpa_ws.go` 860→708（152 行），四处均逐字校验 PASS + 全仓 build/vet/test 绿 |
+| **3** | **`NotificationsView.vue` 页面级单测** | ✅ **已完成（2026-10-30）**：`views/__tests__/NotificationsView.spec.ts` 10 用例，全量前端 101 文件 / 824 用例全绿，`vue-tsc -b` 零错误 |
+| **4** | **前端巨型文件**（`MediaView` 1842 / `ChatInput` 1628 / `BillingView` 1566） | 未开始。都可以照 `ChatView` 的路径走（抽 composable），但 `ChatView` 本身 3966 行且 §2.5 已标注**需测试网前置**。建议先做 `BillingView`（它有 `billing/*.spec.ts` 现成测试，改坏会被立刻抓住），后做 `ChatInput`（依赖 ConversationStore，需要先补桩） |
+
+**明确跳过**：`submit_handler.go`（935 行 / 仅 17 个顶层符号）。它不是「文件大」，而是少数超长函数承载一次 SSE 回合的主流程；拆函数体会改动执行时序，§2.2 已标注「暂不动」。行数不是唯一指标。
+
+### 16.3 需要你先拍板（产品语义问题，我不替你定）
+
+| 待定项 | 两种选择 | 影响面 |
+|---|---|---|
+| `AgentsView.vue` 是否隐藏他人共享 Agent 的编辑/删除按钮 | ① 共享即只读，隐藏按钮 ② 允许编辑（当前行为） | 涉及「共享」的语义定义。若选 ①，需同时决定后端是否也拒绝（前端隐藏但接口仍放行等于假安全） |
+| `internal/auth/local.go:81 CreateUser` | ① 保留并让注册流程走它 ② 从接口与实现一并删除 | **事实更正（本轮实测）**：它不是「未导出的死函数」——`internal/auth/interface.go:27` 把它声明为 `AuthService` 接口方法，实现也在。但全仓 `.CreateUser(` 调用点为 **0**：注册实际走的是别的路径。删除要从接口 + 实现 + 各自的测试替身三处一起动，不是删一个函数 |
+
+> 原第三项「`migrations/versions/*.pyc` 是否清理」**已无需决策**：实测该目录下 `*.pyc` 数量为 **0**。
+
+### 16.4 仍受外部条件阻塞（不改代码）
+
+| 项 | 缺什么 |
+|---|---|
+| L4-3 `timestamp` → `timestamptz` | 生产时区语义抽样 + 可达 PG。`0001` 基线仍有 **98 处** naive 列，同一列可能混两种语义，盲改会把一半行移错时刻 |
+| S5-(e) 沙箱部署形态 | 独立容器（无 docker socket、仅内网）+ 共享工作区卷。本机 `docker info` 实测失败 |
+
+### 16.5 建议顺序
+
+`1` → `2` → `3` → `4`，理由：
+
+- **第 1 项必须最先**：它不产生新代码，只把已验收的工作固化成节点。之后每一批拆分都能独立提交、独立回滚 —— 这也是继续拆 `python_client.go` 等文件的前提（否则拆分自身又会混进同一个巨型 diff）。
+- **第 2 项优先于前端**：同包纯移动的验收成本最低（逐字比对 + 全仓门禁），且边界判据已验证两轮，边际风险最小。
+- **第 3 项紧接着**：`NotificationsView` 是唯一「新写却无测试」的页面，趁上下文还热补完，比事后按现象回查便宜。
+- **第 4 项最后**：前端 composable 抽取需要先建测试网，是这批里唯一成本不确定的。
+- **§16.3 两项与上面并行不冲突**：都不阻塞第 1–4 项，但定得越早，`AgentsView` 的改动越不容易返工。
+
+### 16.6 第 1 项的具体方案：把 45 项拆成 5 个提交
+
+已实测确认：`HEAD` 是 `748a3e7`（P2-3 主体已入库），工作区剩 **23 个修改 + 22 个未跟踪**，其中 4 个文件跨主题、必须按 hunk 分块暂存。
+
+**提交顺序与内容**：
+
+| # | 提交信息 | 文件 |
+|---|---|---|
+| 1 | `feat(notify): 通知内容按用户语言渲染` | T1 全部：`internal/notify/messages.go`(新) · `messages_test.go`(新) · `locale_live_test.go`(新) · `frontend-vue/src/utils/notificationRender.ts`(新) + 其 spec · `utils/localeSync.ts`(新) + 其 spec · `i18n/index.ts` · `main.ts` · `stores/auth.ts` · `billing/payments.go` · `api/notify_mailer.go`（仅修一个乱码字符） |
+| 2 | `feat(notify): 通知表保留期分批清理` | T2 全部：`migrations/versions/0012_notifications_retention.py`(新) · `internal/notify/retention.go`(新) · `retention_test.go`(新) · `retention_live_test.go`(新) · `config/config.go` · `api/gateway_router.go` |
+| 3 | `feat(frontend): 统一账号菜单并补通知入口` | T3 全部：`components/accountMenu.ts`(新) + 其 spec · `components/AppLayout.vue` · `components/chat/ChatSidePanel.vue` |
+| 4 | `refactor(api,auth): 按职责外移六个巨型文件的子域` | L3-4 批次 A：6 个新文件 + 6 个原文件的删除块 · `docs/split-assessment.md`(新) |
+| 5 | `docs(roadmap): 记录 T1–T4 与 L3-4 交付并规划下一批` | `docs/saas-experience-roadmap.md` |
+
+**必须按 hunk 拆的四处**（否则会把两个主题混进一个提交）：
+
+| 文件 | 主题 A 的 hunk | 主题 B 的 hunk | 手法 |
+|---|---|---|---|
+| `internal/notify/notify.go` | `Store` 接口加 `DeleteOlderThan`（T2） | `sendMail` 改渲染 + `userLocale` + `LocaleResolver`（T1） | 三处位置不重叠，`git add -p` 可直接逐块选 |
+| `internal/notify/pgstore.go` | `import "time"` + `DeleteOlderThan` 实现（T2） | `UserLocale` 实现（T1） | ⚠ **`UserLocale` 与 `DeleteOlderThan` 落在同一个 50 行 hunk 内**，`-p` 里要按 `s` 拆再选，或 `e` 手工剪开 |
+| `frontend-vue/src/views/NotificationsView.vue` | `prefsSection`/`scrollToPrefs`/`route.hash`/工具栏按钮/`id`+`ref`（T3） | `renderTitle`/`renderBody`/`formatDateOnly` + 模板改渲染（T1） | 两处相邻但可分 |
+| `frontend-vue/src/locales/{zh-CN,en-US,ar}/notifications.ts` | `body.*` + `title_*`（T1） | `prefs_jump`（T3） | 两个独立 hunk，可分开 |
+
+`internal/notify/notify_test.go` 的改动**全部属 T2**（`fakeStore` 补 `DeleteOlderThan` 及其计数器），可整文件提交。
+
+**为什么这个顺序能编译**：T1 的 `messages_test.go` 里 `localeAwareStore` 嵌入 HEAD 已有的 `fakeStore`，在 T1 时 `Store` 接口还没有 `DeleteOlderThan`，可编译；到 T2 时该接口加方法、`fakeStore` 同步补上，嵌入者自动满足。反向顺序同样成立，因此 1↔2 可互换 —— 但 **T3 必须排在 T1 之后**，因为 `accountMenu.ts` 的三语 label 依赖 T1 补齐的键集。
+
+**每步的必做验证**（hunk 级拆分最容易留下编译不过的中间态）：
+
+```
+go build ./... && go vet ./... && go test ./... -count=1
+python scripts/check_source_encoding.py && python scripts/check_md_tables.py
+cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm test
+```
+
+提交 4（纯移动）另加逐字校验：`$TMPDIR/l34_verify_{move,cost,identity,sso,paypal,redis,mime}.py` 七个脚本均需 `PASS`。
+
+> 本方案未执行任何 `git add` / `commit` —— 按约定改动留工作区。上面「为什么这个顺序能编译」是基于 hunk 位置与接口依赖的推理，**尚未实际分块验证**；执行时若某步编译不过，先跑该步的验证再继续，不要连做五个提交。
+
+## 17. 下一批开发任务（2026-10-30，L3-4 尾批与前端补测之后）
+
+> 本轮（§16.2 的第 2、3 项）已交付：四个 Go 文件拆成七个（`python_client_addr.go` / `plugin_validation.go` / `agent_context.go` / `rpa_registry.go` 等），共 **728 行逐字未变外移**，全仓 `build + vet + test` 绿；`NotificationsView.vue` 补 10 个页面级用例，全量前端 101 文件 / 824 用例绿。以下为**下一批**的落点，全部基于本会话 `wc -l` 与 `rg` 实测，不含推断。
+
+### 17.1 事实基线（本轮实测）
+
+| 维度 | 实测 |
+|---|---|
+| L3-4 批次 A 累计 | **10 个文件、2671 行逐字外移**（§4.1 表）；`submit_handler.go` 已按判据排除 |
+| 剩余 Go >650 行 | `admin_ops.go` 950 · `submit_handler.go` 935（跳过）· `sso_handler.go` 888 · `billing_handler.go` 815 · `sms_handler.go` 739 · `auth.go` 731 · `ent_costcenter_handler.go` 725 · `rpa_ws.go` 708 · `admin.go` 704 · `mail_handler.go` 695 · `plugin_handler.go` 693 · `agents.go` 670 |
+| 剩余 Go 文件的顶层符号数 | `mail_handler` 32 · `sso_handler` 25 · `auth` 25 · `billing_handler` 23 · `sms_handler` 22 · `admin` 20 —— **都远高于 `submit_handler` 的 17**，即仍具备「按子域切」的余量 |
+| 巨型前端文件及其测试网 | `ChatView` 3966（2 spec）· `MediaView` **1842（0 spec）** · `ChatInput` 1628（1）· `BillingView` 1566（1，13 用例）· `WorkflowView` 1364（1）· `MessageItem` 1291（1）· `SettingsPanel` **1236（0 spec）** · `ChatSidePanel` 1228（1）· `AgentsView` 1182（1）· `SubAgentPanel` 1096（1） |
+
+**本轮已验证可切、尚未动刀的边界**：`sso_handler.go` 的「身份绑定」子域 —— `ListIdentities` / `DeleteIdentity` / `SetPassword` / `handleBindCallback` / `provisionAndBind` / `findIdentityUser` / `resolveRole` 七个符号在 `internal/api/*.go` 的**跨文件引用数全为 0**。这是下一批最省事的一刀。
+
+### 17.2 可立即做（按风险从低到高）
+
+| 序 | 任务 | 依据与做法 |
+|---|---|---|
+| **1** | **`sso_handler.go` 888 → 拆出身份绑定子域** | 边界已实测（上表）。`provisionAndBind` 与 `handleBindCallback` 是「外部身份 ↔ 本地用户」的完整闭环，`resolveRole` 是纯函数；与留在原文件的「登录 / 回调 / 公开 provider 列表」职责不同。做法沿用批次 A：按符号级切分脚本写 `sso_identity.go`，再用 `l34_verify_any.py` 逐字比对 |
+| **2** | **`MediaView.vue` 1842 先建测试网，再抽 composable** | **它是唯一「1800+ 行且零测试」的页面**（`SettingsPanel` 也零测试但 1236 行、交互更局部）。零测试下抽 composable 等于盲改：搬错一个 `ref` 的归属，界面会静默显示旧值而不报错。先补 3–5 条冒烟网（挂载 / 加载态 / 空态 / 一个主交互），再按「上传 / 预览 / 列表」切 |
+| **3** | **`BillingView.vue` 1566 抽 composable** | 有现成 13 个用例（用量分摊 6 + 导出 2 + 发票 4 + 金额换算 1）护住，是前端这批里**性价比最高**的一个：改坏会立刻被抓住。顶层已约 100 个符号，先切「发票」与「支付二维码」两块（各自状态自洽、互不引用） |
+| **4** | **`mail_handler.go` 695 + `sms_handler.go` 739** | 顶层符号 32 / 22，属「配置 CRUD + 测试发送」两个天然子域。排在后面的理由：行数已不算刺眼，边际收益低于前端那两项 |
+
+**明确跳过**：`submit_handler.go`（935 行 / 17 符号）—— 拆函数体会改 SSE 回合的执行时序，§2.2 已标注「暂不动」。
+
+### 17.3 需要你先拍板
+
+| 待定项 | 卡住什么 |
+|---|---|
+| `AgentsView.vue` 共享 Agent 是否隐藏他人编辑/删除按钮 | 决定前端要不要改、以及后端是否同步拒绝。**这是 §16.3 遗留项，未定之前第 3 项应避开 `AgentsView`** |
+| `CreateUser` 保留还是从接口删除 | 实测：是 `AuthService` 接口方法（`interface.go:27`），但 `.CreateUser(` 调用点 **0**。删除要动「接口 + 实现 + 测试替身」三处，需你确认注册流程是否还打算走它 |
+
+### 17.4 仍受外部条件阻塞（不改代码）
+
+| 项 | 缺什么 |
+|---|---|
+| L4-3 `timestamp` → `timestamptz` | 生产时区语义抽样 + 可达 PG（`0001` 基线 98 处 naive 列，同一列可能混两种语义） |
+| S5-(e) 沙箱部署形态 | 独立容器 + 共享工作区卷；本机 `docker info` 实测失败 |
+
+### 17.5 建议顺序
+
+`17.2-1` → `17.2-2` → `17.2-3` → `17.2-4`。
+
+- **先 Go 后前端**：纯移动的验收有硬判据（逐字比对 + 全仓门禁），且 `sso_handler` 的边界本轮已实测过引用数为 0，几乎不可能返工。
+- **`MediaView` 排在前端第一**：它是唯一「大且零测试」的组合，风险最高；`BillingView` 虽更大但有 13 个用例兜底，反而可以先放。
+- **`AgentsView` 在 §17.3 定下来之前不动**：改它等于替用户决定「共享」的语义。
+
+### 17.6 每项的必做验证（与批次 A 同口径）
+
+```
+# Go 纯移动
+go build ./... && go vet ./... && go test ./... -count=1
+python "$TMPDIR/l34_verify_any.py" <HEAD路径> <新文件路径> <符号逗号列表>   # 必须 PASS
+python scripts/check_source_encoding.py && python scripts/check_md_tables.py
+
+# 前端
+cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm test
+```
+
+> 逐字校验脚本只认**符号名**、不认行号 —— 行号在 HEAD 与工作区之间必然漂移，硬编码行号会直接 ABORT。

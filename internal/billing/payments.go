@@ -150,6 +150,10 @@ func (m *Manager) notifyPaymentSucceeded(ctx context.Context, p *Payment, ent *E
 			name = ent.PackageName
 		}
 		payload["package_code"] = p.PackageCode
+		// package_name 必须进 payload：站内信由前端按当前语言重渲染、邮件由
+		// notify.RenderMail 按收件人语言重渲染，两边都要从 payload 取套餐名。
+		// 只把它拼进中文 body，等于让非中文用户看到 code 或中文名。
+		payload["package_name"] = name
 		title = "套餐购买成功"
 		body = fmt.Sprintf("套餐「%s」已生效，%d credits 已到账。", name, p.Credits)
 		if ent != nil {

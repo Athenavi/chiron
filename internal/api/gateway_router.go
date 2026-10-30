@@ -275,6 +275,11 @@ func NewGatewayRouter(
 	// 未配置邮件时 NewNotifyMailer 返回 nil，notify.Manager 只发站内信。
 	notifyMgr := notify.NewManager(notify.NewPGStore(), NewNotifyMailer(mailHandler))
 	authHandler.SetNotifier(notifyMgr)
+	// 通知表保留期清理（T2）：通知只增不减（`quota_changed` 按租户 owner/admin
+	// 数量成倍写入），需要定期删掉过期行，否则这张表会无限膨胀。
+	// 保留天数由 NOTIFICATION_RETENTION_DAYS 控制（默认 90）；<=0 回落默认值。
+	// 已读与未读一视同仁 —— 90 天没点开的通知保留下去既不会被看也不会被清理。
+	notifyMgr.StartRetentionSweep(lifecycleCtx, 24*time.Hour, cfg.NotificationRetentionDays)
 
 	// 注册邮箱判重布隆过滤器（按租户分片）：默认开启，可用 EMAIL_BLOOM_FILTER_ENABLED=false 关闭。
 	// 它只做快速否定以跳过 DB 判重；预热在后台异步进行，完成前一律回落 DB，

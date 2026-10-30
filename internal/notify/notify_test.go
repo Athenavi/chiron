@@ -5,6 +5,7 @@ import (
 	"errors"
 	"sync"
 	"testing"
+	"time"
 )
 
 // fakeStore 是 Store 的内存替身。
@@ -23,6 +24,16 @@ type fakeStore struct {
 	prefErr error
 
 	insertCalls int
+
+	// ── 保留期清理（T2）──
+	// pending 模拟"过期行数"：每次 DeleteOlderThan 删掉不超 batchSize 行。
+	pending int
+	// deleteErr 非 nil 时 DeleteOlderThan 返回错误。
+	deleteErr error
+	// deleteCalls / lastCutoff / lastBatchSize 供断言参数是否被正确传入。
+	deleteCalls   int
+	lastCutoff    time.Time
+	lastBatchSize int
 }
 
 func newFakeStore() *fakeStore {
@@ -87,6 +98,30 @@ func (f *fakeStore) ListPrefs(_ context.Context, userID string) (map[string]bool
 		}
 	}
 	return out, nil
+}
+
+// DeleteOlderThan 模拟分批删除。
+//
+// 用 pending 计数器而不是真存行：这些用例要断言的是「分批循环是否收敛」与
+// 「cutoff/batchSize 是否被正确传入」，不是 SQL 本身（后者由真库用例覆盖）。
+func (f *fakeStore) DeleteOlderThan(_ context.Context, cutoff time.Time, batchSize int) (int, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.deleteCalls++
+	f.lastCutoff = cutoff
+	f.lastBatchSize = batchSize
+	if f.deleteErr != nil {
+		return 0, f.deleteErr
+	}
+	if f.pending <= 0 {
+		return 0, nil
+	}
+	n := batchSize
+	if n > f.pending {
+		n = f.pending
+	}
+	f.pending -= n
+	return n, nil
 }
 
 // fakeMailer 记录发信次数，可注入错误。

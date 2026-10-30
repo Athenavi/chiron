@@ -11,8 +11,8 @@
  * 3. **点击即已读 + 跳转**。通知带 `link` 时点进去要落到对应页面，不然用户还得
  *    自己找"套餐在哪"。
  */
-import { ref, computed, onMounted, watch } from 'vue'
-import { useRouter } from 'vue-router'
+import { ref, computed, onMounted, watch, nextTick } from 'vue'
+import { useRouter, useRoute } from 'vue-router'
 import { Button, Segmented, Switch, Tag, message, Spin, Alert } from 'ant-design-vue'
 import { BellOutlined, CheckOutlined, MailOutlined } from '@ant-design/icons-vue'
 import dayjs from 'dayjs'
@@ -27,9 +27,15 @@ import {
 } from '../api/notifications'
 import { useI18n } from 'vue-i18n'
 import { errorMessageText } from '../utils/apiError'
+import {
+  renderNotificationBody,
+  renderNotificationTitle,
+} from '../utils/notificationRender'
+import type { Translate } from '../utils/notificationRender'
 
 const { t } = useI18n()
 const router = useRouter()
+const route = useRoute()
 
 const items = ref<NotificationItem[]>([])
 const unreadCount = ref(0)
@@ -45,6 +51,19 @@ const emailEnabled = ref<Record<string, boolean>>({})
 const prefsLoading = ref(false)
 const prefsError = ref('')
 const savingKind = ref('')
+/** 偏好区根元素：供工具栏按钮与 hash 直达滚动过去。 */
+const prefsSection = ref<HTMLElement | null>(null)
+
+/**
+ * 滚到邮件偏好区。
+ *
+ * 用 `scrollIntoView` 而不是 `router.push('#...')`：后者会新增一条历史记录，
+ * 用户点完「返回」又回到列表顶部，但地址栏 hash 还在，再次进入会重复滚动 ——
+ * 一个纯页内定位不该污染浏览历史。
+ */
+function scrollToPrefs(): void {
+  prefsSection.value?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+}
 
 async function load() {
   loading.value = true
@@ -77,9 +96,16 @@ async function loadPrefs() {
   }
 }
 
-onMounted(() => {
+onMounted(async () => {
   load()
   loadPrefs()
+
+  // 外部链接 `/notifications#notification-prefs` 直达偏好区。
+  // 等一个 tick 让偏好区渲染出来（它在列表之后，首屏可能还没挂载）。
+  if (route.hash === '#notification-prefs') {
+    await nextTick()
+    scrollToPrefs()
+  }
 })
 
 // 切换过滤条件要重新拉列表：`unread_only` 是后端参数，不是前端过滤 ——
@@ -93,6 +119,28 @@ function kindLabel(kind: string): string {
   const key = `notifications.kind.${kind}`
   const label = t(key)
   return label === key ? kind : label
+}
+
+/**
+ * 按当前界面语言渲染通知标题。
+ *
+ * 实现见 `utils/notificationRender.ts`（纯函数，可单测四类事件 × 三语）。
+ * 服务端只存 kind + payload（0011 取舍 6），于是**历史通知也会跟随语言切换**；
+ * 任何一步拿不到参数就回落服务端给的 `item.title`。
+ */
+function renderTitle(item: NotificationItem): string {
+  return renderNotificationTitle(item, t as Translate)
+}
+
+/** 按当前界面语言渲染通知正文；实现同上，参数不全时回落 `item.body`。 */
+function renderBody(item: NotificationItem): string {
+  return renderNotificationBody(item, t as Translate, formatDateOnly)
+}
+
+/** 正文里的日期只要日期部分（YYYY-MM-DD）；解析失败原样返回，不显示空。 */
+function formatDateOnly(iso: string): string {
+  const d = dayjs(iso)
+  return d.isValid() ? d.format('YYYY-MM-DD') : ''
 }
 
 function formatTime(iso: string): string {
@@ -181,16 +229,29 @@ async function toggleEmail(kind: string, next: boolean) {
         ]"
         data-test="notifications-filter"
       />
-      <Button
-        :disabled="unreadCount === 0"
-        data-test="notifications-mark-all"
-        @click="markAll"
-      >
-        <template #icon>
-          <CheckOutlined />
-        </template>
-        {{ $t('notifications.mark_all_read') }}
-      </Button>
+      <div class="notifications-toolbar-actions">
+        <!-- 偏好区在长列表下方，没有这个跳转用户得滚很久才找得到；
+             而"关掉某类邮件"正是不堪其扰时的第一诉求。 -->
+        <Button
+          data-test="notifications-jump-prefs"
+          @click="scrollToPrefs"
+        >
+          <template #icon>
+            <MailOutlined />
+          </template>
+          {{ $t('notifications.prefs_jump') }}
+        </Button>
+        <Button
+          :disabled="unreadCount === 0"
+          data-test="notifications-mark-all"
+          @click="markAll"
+        >
+          <template #icon>
+            <CheckOutlined />
+          </template>
+          {{ $t('notifications.mark_all_read') }}
+        </Button>
+      </div>
     </div>
 
     <Alert
@@ -243,8 +304,8 @@ async function toggleEmail(kind: string, next: boolean) {
             </Tag>
             <span class="notification-time">{{ formatTime(item.created_at) }}</span>
           </div>
-          <div class="notification-title">{{ item.title }}</div>
-          <div class="notification-body">{{ item.body }}</div>
+          <div class="notification-title">{{ renderTitle(item) }}</div>
+          <div class="notification-body">{{ renderBody(item) }}</div>
         </div>
         <div
           v-if="item.link"
@@ -255,8 +316,14 @@ async function toggleEmail(kind: string, next: boolean) {
       </li>
     </ul>
 
-    <!-- 邮件偏好：站内通知不可关闭，这里只控制是否同时发邮件 -->
-    <section class="prefs-section">
+    <!-- 邮件偏好：站内通知不可关闭，这里只控制是否同时发邮件。
+         id 供两处使用：工具栏的「邮件设置」按钮跳转，以及外部链接
+         `/notifications#notification-prefs` 直达（通知本身也常常指向这里）。 -->
+    <section
+      id="notification-prefs"
+      ref="prefsSection"
+      class="prefs-section"
+    >
       <h2 class="prefs-title">
         <MailOutlined />
         {{ $t('notifications.prefs_title') }}
@@ -334,6 +401,14 @@ async function toggleEmail(kind: string, next: boolean) {
 
 .notifications-alert {
   margin-bottom: 16px;
+}
+
+/* 工具栏右侧的两个按钮：跳转偏好 + 全部标读。窄屏时随工具栏一起竖排。 */
+.notifications-toolbar-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .notifications-loading {

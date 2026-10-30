@@ -82,6 +82,16 @@ export function currentLocale(): string {
 }
 
 /**
+ * 用户是否在本机**显式选择过**语言。
+ *
+ * 用途：登录后按服务端偏好同步时，只有本机没选过才采用服务端值 —— 否则会把
+ * 用户刚在登录页做的选择立刻覆盖掉（选择看起来"没生效"）。
+ */
+export function hasExplicitLocale(): boolean {
+  return readStoredLocale() !== null
+}
+
+/**
  * 把语言、书写方向与**标签页标题**写到文档上，并同步 dayjs 语言。
  * antd 组件库的 locale 由 App.vue 的 <ConfigProvider :locale> 绑定（见 languages.ts）。
  *
@@ -99,12 +109,42 @@ export function applyDocumentLocale(meta: LanguageMeta = languageMeta(currentLoc
   dayjs.locale(meta.dayjs)
 }
 
-/** 切换语言（切换器 / 用户设置 / 登录后按服务端偏好同步时调用） */
-export function setLocale(code: string): void {
+/**
+ * 语言同步回调（可选）。
+ *
+ * 为什么不直接在这里 `import { api }`：`api/index.ts` 已经 import 了本模块的
+ * `t`（拦截器要用它翻译错误），反向依赖会形成循环 —— ESM 下会拿到未初始化的
+ * 绑定，表现为拦截器里 `t is not a function`。因此用注册回调，由 main.ts 注入。
+ */
+type LocaleSyncHook = (code: string) => void
+let syncHook: LocaleSyncHook | null = null
+
+/**
+ * 注册/清除语言同步回调（`null` 即清除）。
+ *
+ * 存在意义：邮件等**服务端渲染**的通知按 `users.settings.locale` 决定语言，
+ * 所以用户切语言时要把它写回服务端；只存 localStorage 时服务端永远不知道。
+ */
+export function setLocaleSyncHook(hook: LocaleSyncHook | null): void {
+  syncHook = hook
+}
+
+/**
+ * 切换语言（切换器 / 用户设置 / 登录后按服务端偏好同步时调用）。
+ *
+ * `persist: false` 表示**不要回写服务端** —— 用于「登录后按服务端偏好同步」这条
+ * 路径：语言本来就来自服务端，再 PUT 回去是一轮无意义的写入，而且会让
+ * 「本地切换 → 服务端」与「服务端 → 本地」两条方向互相触发。
+ */
+export function setLocale(code: string, options: { persist?: boolean } = {}): void {
   const meta = languageMeta(code)
   i18n.global.locale.value = meta.code
   writeStoredLocale(meta.code)
   applyDocumentLocale(meta)
+  if (options.persist !== false) {
+    // 回调内的失败不影响本地切换：语言在本次会话里已经生效。
+    syncHook?.(meta.code)
+  }
 }
 
 /**

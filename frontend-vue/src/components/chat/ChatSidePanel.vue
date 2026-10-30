@@ -1,12 +1,11 @@
 <script setup lang="ts">
-import { computed, h, ref, watch, onMounted, onUnmounted, type VNode } from 'vue'
+import { computed, ref, watch, onMounted, onUnmounted } from 'vue'
 import { Button, Avatar, Dropdown, Menu, MenuItem, MenuDivider, SubMenu, Modal, Input } from 'ant-design-vue'
 import {
   SearchOutlined, CloseOutlined, LeftOutlined, DownOutlined,
   PlusOutlined, EllipsisOutlined, EditOutlined, PushpinOutlined,
   ShareAltOutlined, DeleteOutlined, TagOutlined, ReloadOutlined,
   ApartmentOutlined, BarChartOutlined,
-  SettingOutlined, UserSwitchOutlined, LogoutOutlined,
 } from '@ant-design/icons-vue'
 import { useRouter } from 'vue-router'
 import { api, listTools } from '../../api'
@@ -21,6 +20,8 @@ import ThemeSwitcher from '../ThemeSwitcher.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import SettingsPanel from '../settings/SettingsPanel.vue'
 import { useAuthStore } from '../../stores/auth'
+import { useDeviceStore } from '../../stores/device'
+import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from '../accountMenu'
 import type { SubagentEvent } from '../../api/subagent'
 
 import { useI18n } from 'vue-i18n'
@@ -40,27 +41,36 @@ const { t: tr } = useI18n()
 const authStore = useAuthStore()
 const settingsOpen = ref(false)
 
-/** 用户菜单项：icon 是渲染函数（ant-design-vue 的 Menu item 契约），不是组件实例 */
-interface UserMenuItem {
-  key: string
-  label: string
-  icon: () => VNode
-}
-
-const userMenuItems = computed<UserMenuItem[]>(() => [
-  { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
-  { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
-  { key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) },
-])
+/** 用户菜单项：icon 是渲染函数（ant-design-vue 的 Menu item 契约），不是组件实例。
+ *
+ * 内容由 `components/accountMenu.ts` 统一构造 —— 此前本组件与 AppLayout 各写一份
+ * 并已漂移：这份只有 settings/profile/logout，而聊天页**隐藏了顶栏**
+ * （AppLayout 的 isChatPage），于是聊天过程中的用户点不到通知中心与用户级 API Key。
+ * 通知最常见的场景正是"对话时收到支付成功 / 套餐到期提醒"。
+ */
+const userMenuItems = computed<AccountMenuItem[]>(() =>
+  buildAccountMenuItems((k) => tr(k), {
+    isLocal: useDeviceStore().isLocal(),
+    // 聊天页不展示 API Key 管理：它是账号凭证，与对话工作区的心智距离最远。
+    // 这是**显式**的差异，而不是靠两份实现各自漂移出来的。
+    includeApiKeys: false,
+  }),
+)
 
 async function handleUserMenuClick(info: { key: string | number }) {
-  if (info.key === 'logout') {
+  const key = String(info.key)
+  if (key === 'logout') {
     await authStore.logout()
     void router.push('/login')
-  } else if (info.key === 'settings') {
+    return
+  }
+  if (key === 'settings') {
     settingsOpen.value = true
-  } else if (info.key === 'profile') {
-    void router.push('/profile')
+    return
+  }
+  const target = accountMenuRoute(key)
+  if (target) {
+    void router.push(target)
   }
 }
 const props = withDefaults(defineProps<{

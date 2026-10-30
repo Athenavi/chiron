@@ -102,6 +102,11 @@ type Store interface {
 	SetEmailEnabled(ctx context.Context, userID, kind string, enabled bool) error
 	// ListPrefs 返回该用户显式设置过的开关（未出现的 kind 由调用方补默认开启）。
 	ListPrefs(ctx context.Context, userID string) (map[string]bool, error)
+	// DeleteOlderThan 分批删除 created_at < cutoff 的通知，返回本批删除行数。
+	//
+	// **按批而非一次删完**：一次 DELETE 十万行会长时间持有行锁，把并发的写入
+	// （支付回调、配额变更）堵在后面。返回行数 = 0 表示已删空。
+	DeleteOlderThan(ctx context.Context, cutoff time.Time, batchSize int) (int, error)
 }
 
 // Mailer 是邮件的唯一出口，由 api 层实现（复用既有 MailHandler 与库里的 SMTP 配置）。
@@ -162,14 +167,44 @@ func (m *Manager) sendMail(ctx context.Context, n *Notification) {
 	if !enabled {
 		return
 	}
-	body := n.Body
+	// 邮件正文按**收件人的语言**重新渲染，而不是发通知里存的兜底文本。
+	//
+	// 站内信由前端按界面语言实时渲染（历史通知也会跟着切），但邮件在发送这一刻
+	// 就固化了 —— 用中文兜底文本发出去，en-US/ar 用户收到的就是一段看不懂的内容。
+	title, text := RenderMail(n, m.userLocale(ctx, n.UserID))
+	body := text
 	if n.Link != "" {
 		body = body + "\n\n" + n.Link
 	}
-	if err := m.mailer.SendNotification(ctx, n.UserID, n.Title, body); err != nil {
+	if err := m.mailer.SendNotification(ctx, n.UserID, title, body); err != nil {
 		slog.Warn("notify: send email failed (in-app notification is already stored)",
 			"user", n.UserID, "kind", n.Kind, "error", err)
 	}
+}
+
+// userLocale 取收件人的界面语言，失败时回落 zh-CN。
+//
+// 用可选接口（LocaleResolver）而不是给 Store 再加一个必选方法：这会让内存替身
+// 与所有既有实现都被迫补一个与其余逻辑无关的方法；不实现即回落默认语言，
+// 行为完全可接受。
+func (m *Manager) userLocale(ctx context.Context, userID string) string {
+	resolver, ok := m.store.(LocaleResolver)
+	if !ok {
+		return "zh-CN"
+	}
+	loc, err := resolver.UserLocale(ctx, userID)
+	if err != nil {
+		slog.Warn("notify: read user locale failed, falling back to zh-CN",
+			"user", userID, "error", err)
+		return "zh-CN"
+	}
+	return loc
+}
+
+// LocaleResolver 由能读到用户语言偏好的 Store 实现（PGStore 实现了它）。
+type LocaleResolver interface {
+	// UserLocale 返回该用户的界面语言（如 "en-US"）；未设置返回空串。
+	UserLocale(ctx context.Context, userID string) (string, error)
 }
 
 // List 透传存储层。

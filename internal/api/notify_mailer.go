@@ -12,7 +12,7 @@ import (
 //
 // 为什么放在 api 层而不是 notify 包：发信需要两样 notify 不该知道的东西——
 // 库里 `ent_mail_config` 的 SMTP 配置（含 AES-GCM 密文解密），以及 `users.email`。
-// 把它们塞进 notify 会让一���纯通知包反向依赖 api，形成循环引用。
+// 把它们塞进 notify 会让一个纯通知包反向依赖 api，形成循环引用。
 type notifyMailer struct {
 	mail *MailHandler
 }

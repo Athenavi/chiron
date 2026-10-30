@@ -28,21 +28,19 @@ import {
   ThunderboltOutlined,
   CreditCardOutlined,
   SettingOutlined,
-  LogoutOutlined,
-  UserSwitchOutlined,
   DownOutlined,
   HistoryOutlined,
   RobotOutlined,
   AppstoreOutlined,
   
   ApiOutlined,
-  KeyOutlined,
 } from '@ant-design/icons-vue'
 import CommandPalette from './CommandPalette.vue'
 import ThemeSwitcher from './ThemeSwitcher.vue'
 import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
 import { getUnreadCount } from '../api/notifications'
+import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from './accountMenu'
 import { executeQuickCommand } from "@/components/WorkstationNav.vue"
 import {
   WORKSTATION_DESCRIPTIONS,
@@ -158,37 +156,31 @@ function handleMenuClick(info: { key: string | number }) {
   router.push(String(info.key))
 }
 
-interface UserMenuItem {
-  key: string
-  label: string
-  icon: () => VNode
-}
-
-const userMenuItems = computed<UserMenuItem[]>(() => [
-  { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
-  { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
-  // 用户级 API Key 自助：放在账号菜单而不是主导航 —— 它是「账号凭证」，
-  // 不是日常每天都在切换的工作台。本地模式没有账号体系，故不展示。
-  ...(deviceStore.isLocal()
-    ? []
-    : [{ key: 'api-keys', label: tr('settings.user_api_key_title'), icon: () => h(KeyOutlined) }]),
-  // 本地模式没有账号可登出（本地用户由本地后端固定下发），不展示该入口
-  ...(deviceStore.isLocal() ? [] : [{ key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) }]),
-])
+// 账号菜单项统一由 components/accountMenu.ts 构造：此前 AppLayout 与
+// chat/ChatSidePanel 各写一份并已漂移（聊天页那份缺 api-keys 与通知入口）。
+const userMenuItems = computed<AccountMenuItem[]>(() =>
+  buildAccountMenuItems((k) => tr(k), { isLocal: deviceStore.isLocal() }),
+)
 
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移
 const settingsOpen = ref(false)
 
 async function handleUserMenuClick(info: { key: string | number }) {
-  if (info.key === 'logout') {
+  const key = String(info.key)
+  if (key === 'logout') {
     await authStore.logout()
     router.push('/login')
-  } else if (info.key === 'settings') {
+    return
+  }
+  if (key === 'settings') {
     settingsOpen.value = true
-  } else if (info.key === 'profile') {
-    router.push('/profile')
-  } else if (info.key === 'api-keys') {
-    router.push('/api-keys')
+    return
+  }
+  // 纯跳转项（profile / notifications / api-keys）统一从共享映射取，
+  // 避免新增菜单项时这里漏一个分支导致点了没反应。
+  const target = accountMenuRoute(key)
+  if (target) {
+    router.push(target)
   }
 }
 

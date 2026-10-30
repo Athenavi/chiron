@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgconn"
 
@@ -204,4 +205,54 @@ func (s *PGStore) ListPrefs(ctx context.Context, userID string) (map[string]bool
 		out[kind] = enabled
 	}
 	return out, rows.Err()
+}
+
+// UserLocale 返回该用户的界面语言（`users.settings->>'locale'`）。
+// 复用 `users.settings` 而不是新加一列：UpdateProfile 已有
+// `settings = COALESCE(settings::jsonb,'{}') || $n::jsonb` 的局部合并写入路径
+// （internal/api/auth.go），前端切语言时 PUT 一个键即可，不需要新表新列新接口。
+//
+// 列是 `json`（不是 jsonb），`->>` 需要先转型；用 `::jsonb` 显式转换，
+// 否则在某些 PG 版本上 json 与 jsonb 的操作符不通用。
+//
+// 未设置返回空串（不是 zh-CN）：把"没设置过"与"明确选了中文"区分开，
+// 调用方才有机会回落到浏览器语言。
+func (s *PGStore) UserLocale(ctx context.Context, userID string) (string, error) {
+	var loc string
+	err := db.GlobalDBManager.QueryRow(ctx,
+		`SELECT COALESCE(settings::jsonb ->> 'locale', '') FROM users WHERE id = $1`,
+		userID).Scan(&loc)
+	if err != nil {
+		return "", fmt.Errorf("notify: read user locale: %w", err)
+	}
+	return loc, nil
+}
+
+// DeleteOlderThan 分批删除 created_at < cutoff 的通知，返回本批删除行数。
+//
+// PG 的 DELETE 不支持直接写 LIMIT，所以用「子查询选出本批 id → 按 id 删」两步
+// 合在一条语句里。子查询按 created_at 排序并 LIMIT，能直接用上
+// `idx_notifications_created`（0012 迁移专门为它建的）。
+//
+// 每批是一个独立语句（各自独立的隐式事务），不是把整轮清理包在一个长事务里：
+// 后者会长时间持有大量行锁，把并发的支付回调 / 配额变更写入堵在后面。
+func (s *PGStore) DeleteOlderThan(ctx context.Context, cutoff time.Time, batchSize int) (int, error) {
+	if batchSize <= 0 {
+		// 防呆：batchSize = 0 会被 SQL 当成 LIMIT 0 而静默什么都不删，
+		// 调用方会误以为"已经删空"。给一个安全的小批量。
+		batchSize = 1000
+	}
+	tag, err := db.GlobalDBManager.Exec(ctx,
+		`DELETE FROM notifications
+		  WHERE id IN (
+		        SELECT id FROM notifications
+		         WHERE created_at < $1
+		         ORDER BY created_at
+		         LIMIT $2
+		  )`,
+		cutoff, batchSize)
+	if err != nil {
+		return 0, fmt.Errorf("notify: delete old notifications: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
 }

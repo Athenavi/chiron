@@ -64,6 +64,13 @@ type Config struct {
 	EmailBloomCapacity uint64  // 每个租户分片的默认预期容量
 	EmailBloomFPRate   float64 // 目标误报率
 
+	// NotificationRetentionDays 站内通知的保留天数（默认 90）。
+	//
+	// 通知表只增不减：四类事件里 `quota_changed` 会按租户 owner/admin 数量
+	// 成倍写入。90 天够覆盖"上季度那笔扣费怎么回事"这类对账追溯，又不会让表
+	// 无限膨胀。设为 <= 0 时回落默认值（**不会**变成"立即删光"）。
+	NotificationRetentionDays int
+
 	// Cookie
 	CookieSecure bool
 
@@ -214,6 +221,7 @@ func loadConfig() *Config {
 		DisableRegistration: isTruthy(getEnv("DISABLE_REGISTRATION", "")),
 		EmailBloomEnabled:   isTruthy(getEnv("EMAIL_BLOOM_FILTER_ENABLED", "true")),
 		EmailBloomCapacity:  uint64(getInt("EMAIL_BLOOM_CAPACITY", 100000)),
+		NotificationRetentionDays: getInt("NOTIFICATION_RETENTION_DAYS", 90),
 		EmailBloomFPRate:    getFloat("EMAIL_BLOOM_FP_RATE", 0.001),
 		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
 		CookieSecure: cookieSecure(),

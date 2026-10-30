@@ -3,6 +3,7 @@ import { ref, computed } from 'vue'
 import { api, desktopDeviceToken, loadDesktopToken, setAuthToken } from '../api'
 import { clearPrivateStorage } from '../utils/privateStorage'
 import { useDeviceStore } from './device'
+import { applyServerLocale } from '../utils/localeSync'
 
 export interface User {
   id: string
@@ -194,8 +195,13 @@ export const useAuthStore = defineStore('auth', () => {
         name: data.name || data.email,
         role: data.role,
         tenant_id: data.tenant_id || 0,
+        settings: data.settings,
       }
       persistUserToStorage(user.value)
+      // 按服务端语言偏好对齐界面（仅在本机未显式选择过语言时生效）。
+      // 服务端渲染的通知邮件只能读 users.settings.locale，这里同步是为了让
+      // 「不同设备上语言一致」，而非覆盖用户当下的选择。
+      applyServerLocale(data.settings)
     } catch {
       // Cookie 无效，清除本地态
       await logout()
