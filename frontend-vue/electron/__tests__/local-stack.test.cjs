@@ -20,6 +20,9 @@ const stack = require('../local-stack.cjs')
 
 const VALID_SECRET = 'x'.repeat(32)
 
+/** 让 PassThrough 的 'data' 事件（stderr 落地等）跑完一个宏任务 */
+const tick = () => new Promise(resolve => setImmediate(resolve))
+
 /** 假子进程：stdout/stderr 用 PassThrough，便于按行喂数据 */
 function fakeChild() {
   const child = new EventEmitter()
@@ -434,4 +437,123 @@ test('引擎起不来就是整栈失败：不悄悄降级成"没有引擎的本�
   assert.equal(state.launcher, null, '引导器应已被停掉')
   assert.equal(state.engine, null, '引擎应已被停掉')
 })
+
+test('引擎起不来时 stderr 尾部拼进错误：那是唯一能区分缺依赖与配置错的证据', async t => {
+  const launcherChild = fakeChild()
+  const engineChild = fakeChild()
+  launcherChild.stdin.on('finish', () => {
+    launcherChild.exitCode = 0
+    launcherChild.emit('exit', 0)
+  })
+  withSpawnQueue(t, [launcherChild, engineChild, fakeChild()])
+  mockFetch(t, async () => ({ ok: false }))
+
+  const promise = stack.startLocalStack({
+    launcher: { command: 'py', cwd: '/' },
+    exe: 'gateway.exe',
+    port: 9410,
+    appSecret: VALID_SECRET,
+    engine: { command: 'py-engine', cwd: '/' },
+    enginePort: 9411,
+    intervalMs: 1,
+    timeoutMs: 200,
+  })
+  launcherChild.stdout.write(
+    JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u@127.0.0.1:1/c', redis_addr: '127.0.0.1:2' }) + '\n',
+  )
+  // 等引擎真的被 spawn 出来再喂退出：早一步 emit 时监听器还没挂上，
+  // 那条 exit 会落到无人监听的子进程上，用例就变成"超时失败"而不是"退出失败"。
+  for (let i = 0; i < 20 && !stack.getStackState().engine; i += 1) await tick()
+  engineChild.stderr.write('ModuleNotFoundError: No module named "pymupdf"\n')
+  await tick()
+  engineChild.exitCode = 1
+  engineChild.emit('exit', 1)
+
+  await assert.rejects(promise, err => {
+    assert.match(err.message, /python-engine 未能启动/)
+    // "引擎未能启动"这种消息用户没法照着修；缺哪个模块必须直接出现在消息里
+    assert.match(err.message, /pymupdf/, '错误消息要带 stderr 尾部')
+    assert.equal(err.reason, 'exited')
+    return true
+  })
+  // 失败结论落在状态里（这个字段以前是死的）：组件管理页与日志才有的可展示
+  assert.equal(stack.getStackState().engineFailure.reason, 'exited')
+})
+
+// ------------------------------------------------------------------ 引擎运行中退出
+//
+// 网关对引擎是**按请求解析地址**、不探活也不熔断：引擎崩了之后网关还是照常应答，
+// 用户看到的只是"发消息就报服务暂时不可用"。真正的原因只有子进程的退出码知道，
+// 所以这条通知通道必须有；同时主动关停不能报故障，否则每次正常退出应用都会弹崩溃窗。
+
+/** 起一个"引导器 + 引擎 + 网关都就绪"的假栈，返回引擎子进程与退出通知记录 */
+async function startAndReady(t, { portBase = 9420 } = {}) {
+  const launcherChild = fakeChild()
+  const engineChild = fakeChild()
+  const gatewayChild = fakeChild()
+  // 真实引导器收到 stdin EOF 后自行退出；回滚时靠这条不等满超时
+  launcherChild.stdin.on('finish', () => {
+    launcherChild.exitCode = 0
+    launcherChild.emit('exit', 0)
+  })
+  withSpawnQueue(t, [launcherChild, engineChild, gatewayChild])
+  mockFetch(t, async url => gatewayFetch(url))
+
+  const notices = []
+  const promise = stack.startLocalStack({
+    launcher: { command: 'py', cwd: '/' },
+    exe: 'gateway.exe',
+    port: portBase,
+    appSecret: VALID_SECRET,
+    engine: { command: 'py-engine', args: ['-m', 'app.main'], cwd: '/' },
+    enginePort: portBase + 1,
+    intervalMs: 1,
+    onEngineExit: info => notices.push(info),
+  })
+  launcherChild.stdout.write(
+    JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u@127.0.0.1:1/c', redis_addr: '127.0.0.1:2' }) + '\n',
+  )
+  const result = await promise
+  return { engineChild, notices, result }
+}
+
+test('引擎就绪后自己退出 ⇒ 立刻通知，带退出码与 stderr 尾部', async t => {
+  const { engineChild, notices } = await startAndReady(t)
+
+  engineChild.stderr.write('RuntimeError: boom\n')
+  await tick()
+  engineChild.emit('exit', 3)
+
+  assert.equal(notices.length, 1, '引擎崩了必须有一次通知')
+  assert.equal(notices[0].code, 3)
+  assert.match(notices[0].stderrTail, /boom/)
+  assert.equal(notices[0].address, '127.0.0.1:9421')
+  assert.ok(notices[0].at, '要带时间戳，日志里才排得出顺序')
+
+  // 只通知一次：反复崩不该弹一串窗
+  engineChild.emit('exit', 4)
+  assert.equal(notices.length, 1, '退出通知只能有一条')
+})
+
+test('信号杀死引擎也要报：退出码为 null 时不能当成正常退出', async t => {
+  const { engineChild, notices } = await startAndReady(t, { portBase: 9430 })
+
+  engineChild.emit('exit', null, 'SIGKILL')
+
+  assert.equal(notices.length, 1)
+  assert.equal(notices[0].code, null)
+  assert.equal(notices[0].signal, 'SIGKILL', 'OOM 杀手只有信号可查，丢了就没法定因')
+})
+
+test('主动关停引擎不通知（正常退出应用不该弹"引擎已停止"）', async t => {
+  const { engineChild, notices } = await startAndReady(t, { portBase: 9440 })
+
+  await stack.stopEngine()
+  engineChild.stderr.write('shutting down\n')
+  await tick()
+
+  assert.equal(notices.length, 0, '我们让它退的，不算故障')
+})
+
+
 

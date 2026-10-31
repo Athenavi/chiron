@@ -140,12 +140,36 @@ stdout **只认 JSON 行**，且必须 `flush`（父进程按行阻塞读取）�
 **与启动相反**：先 Redis，再 PG。
 
 ```
-启动： PG ──> migrate ──> Redis ──> 网关
-停止： 网关 ──> Redis ──> PG ──> 引导器
+启动： PG ──> migrate ──> Redis ──> 引擎 ──> 网关
+停止： 网关 ──> 引擎 ──> Redis ──> PG ──> 引导器
 ```
 
 网关先停是因为它持有到 PG/Redis 的连接池；先停 PG 会让网关刷出一串连接错误，
 把真正的停机原因盖掉。
+
+引擎排在网关**之前**：网关起来时就要读 `PYTHON_ENGINE_ADDRESS` 建客户端，
+地址必须已经定好。引擎与 PG、Redis 一样是**强依赖** —— 本地模式的聊天、知识库、
+记忆、图谱全部实现在引擎侧，它起不来整条链就起不来，`startLocalStack()` 因此直接抛
+（带 `reason` 与 stderr 尾部），不再"少了引擎也照样把网关拉起来"。
+
+### 5.3 运行中引擎退出
+
+引擎退出后**网关不会主动宣告**：它对引擎地址走的是被动收敛 —— 引擎崩掉时注册表 key
+要等 TTL 60s 过期、网关每 15s 扫一次才把它从地址表里摘掉（`internal/engine/discovery.go`、
+`python-engine/app/engine_registry.py:23-24`），既没有主动探活也没有熔断。这段窗口里
+界面照常活着，只有聊天在 SSE 上回一句"服务暂时不可用"并把这一轮标成 failed ——
+用户看不出任何原因。
+
+所以壳侧另开一条通知通道：`local-stack.cjs::watchEngineExit()` 在引擎进程上挂
+一次性 `exit` 监听，把 `{ code, signal, address, stderrTail, at }` 交给
+`main.cjs::notifyEngineExit()`，后者写一条**带退出码**的 error 日志并弹一个
+原生对话框（按钮「重启应用」真的能按）。两条刻意的约束：
+
+- **正常退出应用时不提示**：`stopEngine()` 先立 `record.stopping = true` 再动手 kill，
+  监听器看到这个标志就哑掉。顺序反了会先收到 `exit` 事件，用户每次关应用都看到一条
+  "引擎崩溃"告警；
+- **每轮运行只提示一次**：崩了重启再崩才是真问题，但一串窗口只会让人忽略全部。
+  重新起栈成功时（`tryStartGoStack` 里）该标志复位。
 
 ## 6. 排查
 
@@ -166,6 +190,9 @@ python -m app.launcher --data-dir "$LOCALAPPDATA/Chiron/local" --print-and-exit
 | 网关报 `PostgreSQL is required but unavailable` | 引导器没就绪就起了网关，或 DSN 解析失败 |
 | 网关报 `APP_SECRET` 相关 | `APP_SECRET` 少于 32 字符（见 [`contracts.md`](./contracts.md) §3.1） |
 | 本地模式全场 401、进不了管理后台 | 网关没拿到 `LOCAL_BOOTSTRAP=1` ⇒ 会话引导路由没注册，`POST /v1/auth/session` 回 405；或请求不是从 loopback 进来 ⇒ 被处理链 403（§3.4） |
+| 抛 `python-engine 未能启动（…）` 并带一段 stderr | 引擎是强依赖，起不来整条栈就起不来（§5.2）。看 stderr 尾部分流：`ModuleNotFoundError` ⇒ 引擎那份 venv 残缺，按 [`packaging.md`](./packaging.md) §3 换源重装（`CHIRON_PIP_INDEX_URL`）；端口/配置类 ⇒ 改环境变量 |
+| 用着用着聊天全挂、日志有 `python-engine 运行中退出` | 引擎崩了（§5.3）。日志那行带退出码与最后 8 行 stderr，是对话框之外唯一的证据；`<userData>/local/engine` 删掉重装机能重建环境 |
+| 本地模式"能开、但几乎什么都用不了"，日志有「退回 desktop-local core」 | 包里缺网关（[`packaging.md`](./packaging.md) §4）。日志里另有「引导器运行时不可用：…」则是引导器那套 Python 环境没装好，走旧 core 路径去触发安装。两者都不再吞异常：**试过**起网关而**失败**现在是抛错 + 恢复对话框（重试 / 切云端 / 退出），不再静默回落 |
 
 ## 7. 相关文件
 
@@ -174,7 +201,9 @@ desktop-local/app/launcher.py              引导器入口（`chiron-launcher` �
 desktop-local/app/storage/pg.py            embedded PG：起停、迁移、DSN
 desktop-local/app/storage/redis.py         Redis：起停、端口
 desktop-local/tests/test_launcher.py       入口契约测试（不依赖真实 PG）
-frontend-vue/electron/local-stack.cjs      引导器 → 网关的交接与生命周期
+frontend-vue/electron/local-stack.cjs      引导器 → 引擎 → 网关的交接与生命周期
+frontend-vue/electron/runtime-install.cjs  两套 Python 环境（core / engine）的按需安装
+frontend-vue/electron/__tests__/local-stack.test.cjs 引擎强依赖与运行中退出的用例
 internal/api/auth_local_session.go        本地会话引导：铸 owner 与 loopback 闸门（§3.4）
 docs/desktop-local/handshake.md            启动与握手的实际链路
 docs/desktop-local/embedded-pg.md          PG 后端的实测数据

@@ -312,11 +312,15 @@ jobs:
           need=(
             "desktop-local/app/main.py"
             "desktop-local/pyproject.toml"
+            "python-engine/app/main.py"
+            "python-engine/requirements.txt"
             "migrations"
             "alembic.ini"
           )
           # pyproject.toml 必须在包里：首次启动时 uv 就是靠它装依赖的，
           # 缺了它能装出一个空环境，然后表现为"依赖装完了但导不进来"。
+          # 引擎那两份同理，而且更硬：`requirements.txt` 是引擎 venv 唯一的依赖来源，
+          # 缺了它起 Go 栈前那次按需安装必失败，本地模式的聊天/知识库/记忆全不可用。
           for p in "${need[@]}"; do
             if [[ ! -e "$root/$p" ]]; then
               echo "::error::缺少 $root/$p"

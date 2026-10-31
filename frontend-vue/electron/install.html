@@ -73,6 +73,13 @@
         font-size: 12px;
         color: var(--text-tertiary);
       }
+      /* 当前正在装哪一套环境：脚本按 stage 事件里的 target 换这一行的文字 */
+      .target {
+        margin: 0 0 10px;
+        font-size: 13px;
+        font-weight: 600;
+        color: var(--text-primary);
+      }
       .bar {
         height: 3px;
         margin: 0 0 18px;
@@ -101,6 +108,11 @@
     <main>
       <h1>正在准备本地环境</h1>
       <p>首次启动会创建 Python 环境并安装依赖，可能需要几分钟。之后启动会直接进入界面。</p>
+      <!--
+        本地模式要装**两套**环境（本地核心 / AI 引擎），彼此独立。没有这一行，
+        第二段进度看起来像是同一步"又失败了一次"。文案由脚本按 stage 事件的 target 填。
+      -->
+      <p class="target" id="target">正在准备：本地核心</p>
       <div class="bar"><i id="progress"></i></div>
       <ol id="stages">
         <li data-stage="probing"><span class="mark">·</span><span>检查本地运行时</span></li>
@@ -117,8 +129,25 @@
       const stages = document.getElementById('stages')
       const progress = document.getElementById('progress')
       const detail = document.getElementById('detail')
+      const targetLine = document.getElementById('target')
 
       let current = 'probing'
+      let currentTarget = 'core'
+
+      /**
+       * 切到另一套环境（本地核心 → AI 引擎）：只换标题。
+       *
+       * 阶段列表与进度条**不需要**在这里复位 —— `render()` 每次都按当前 stage 的下标
+       * 重算全部 `li` 和宽度，所以换 target 后第一条带 stage 的事件自然从第一步开始。
+       * 早先这里还写着一段"清空勾 + 回落到 8%"，实测是死代码：紧随其后的 render
+       * 会整表重写，删掉它用例仍然全绿。留着只会让人以为切换靠这段生效。
+       */
+      function applyTarget(info) {
+        const id = info.target || 'core'
+        if (id === currentTarget && targetLine.textContent) return
+        currentTarget = id
+        targetLine.textContent = `正在准备：${info.targetLabel || id}`
+      }
 
       /** 把某阶段标记为进行中，之前的全部记为已完成 */
       function render(stageId, message) {
@@ -158,6 +187,7 @@
       if (window.chironDesktop && window.chironDesktop.onRuntimeInstallStage) {
         window.chironDesktop.onRuntimeInstallStage(info => {
           if (!info) return
+          applyTarget(info)
           render(info.stage, info.message)
         })
       } else {

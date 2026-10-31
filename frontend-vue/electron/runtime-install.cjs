@@ -6,15 +6,17 @@
  *   那等于把"构建机当时装了什么"冻进安装包。漏一个依赖（历史上就是 `httpx`）时，
  *   自检脚本也是手维护的模块清单、跟着一起漏 ⇒ 打包绿、用户侧崩，表现为所有页面
  *   "服务繁忙"。而且每次调依赖都要重新发版。改由**首次启动时就地创建 venv 并装依赖**，
- *   依赖清单只有 `pyproject.toml` 一份，缺什么装什么，坏了能就地重建。
+ *   依赖清单就是仓库里那一份（core 用 `pyproject.toml`、引擎用 `requirements.txt`），
+ *   缺什么装什么，坏了能就地重建。
  *
  * 做法沿用 ComfyUI Desktop 的思路：**把 Python 版本管理外包给 uv**，但解释器随包。
  *   - 安装包**携带**受管 CPython（`resources/python-runtime/<platform>/cpython-*`，
  *     由 `scripts/prepare_python.py` 就位）与 `uv` 二进制（`scripts/prepare_uv.py`）；
  *   - `uv venv --python <随包解释器绝对路径>` 建出 venv，**不接受版本号**：传路径
  *     uv 就不会去 github.com 取 python-build-standalone（实测多数网络下不可达）；
- *   - `uv pip install` 按 `pyproject.toml` 装依赖（这一步仍走 PyPI，可用
- *     `CHIRON_PIP_INDEX_URL` 换源）。
+ *   - `uv pip install -r <该目标的依赖清单>` 装依赖（这一步仍走 PyPI，可用
+ *     `CHIRON_PIP_INDEX_URL` 换源）。清单只有一份：core 是 `pyproject.toml`，
+ *     引擎是 `requirements.txt` —— 各自沿用自己仓库里的那份，不复制品、不另抄一份。
  *
  * 三个刻意的取舍：
  *   1. **装到 userData，不装到程序目录**。程序目录会在自动更新时被替换，装在那里等于
@@ -26,6 +28,11 @@
  *      所以这里只用 import 探测；只有在需要重装时才联网。
  *
  * 失败一律显式抛出（带可照做的指引），不静默降级到"随便找个 Python 试试"。
+ *
+ * **两个目标、两份 venv**：同一套流程既装本地核心（`desktop-local` +
+ * `pyproject.toml` → `<userData>/local/runtime/venv`），也装 AI 引擎
+ * （`python-engine` + `requirements.txt` → `<userData>/local/engine/venv`）。
+ * 分开装的理由见 `RUNTIME_TARGETS` 的注释；`target` 缺省是 core，所以既有调用点行为不变。
  */
 const fs = require('node:fs')
 const path = require('node:path')
@@ -50,22 +57,69 @@ const INSTALL_STAGES = Object.freeze({
 const MANIFEST_FILE = 'install.json'
 const MANIFEST_VERSION = 1
 
+/**
+ * 安装目标：**同一套流程服务于两个互相独立的 venv**。
+ *
+ * 为什么引擎单独一份，而不是"在引导器那份上再装一遍依赖"：
+ *   - 依赖差一个数量级。引导器（desktop-local）只要 fastapi/uvicorn/asyncpg/redis/
+ *     embedded-postgres；引擎还要 pydantic-ai / anthropic / openai / pymupdf / grpcio。
+ *     全塞进一份 venv，等于让只用得上本地 core 的人先下载几百 MB 自己用不到的东西。
+ *   - 更关键的是**失败各归其位**：重建环境的第一步是 removeVenv()，共用一份 venv 时
+ *     装引擎失败会顺手毁掉本来就好的引导器环境 —— 本地模式从"聊天不可用"变成"全废"。
+ *   - 清单也各是各的：core 用 pyproject.toml，引擎用 requirements.txt（引擎侧唯一的
+ *     依赖声明，uv pip install -r 直接吃它）。两份混成一份必然漂移，而漂移的代价就是
+ *     上一轮 httpx 那类"清单漏项、自检绿、运行时红"的事故。
+ *
+ * rootName 是 `<userData>/local/<rootName>` 里的那一段，**不能改**：改一次就等于让老用户
+ * 已经装好的环境凭空消失（resolveCoreLaunch 与 resolveEngineLaunch 都按这个路径找解释器）。
+ */
+const RUNTIME_TARGETS = Object.freeze({
+  core: Object.freeze({
+    id: 'core',
+    rootName: 'runtime',
+    sourcesDir: 'desktop-local',
+    manifest: 'pyproject.toml',
+    label: '本地核心',
+  }),
+  engine: Object.freeze({
+    id: 'engine',
+    rootName: 'engine',
+    sourcesDir: 'python-engine',
+    manifest: 'requirements.txt',
+    label: 'AI 引擎',
+  }),
+})
+
+/**
+ * 解析安装目标。**未知 id 直接抛错**，不静默回落到 core：
+ * 传错 id 时回落 core 等于"照另一份清单去装另一个环境"，而且装完自检还是绿的
+ * （core 那份本来就能 import），引擎照样起不来 —— 那是最难查的一类坏状态。
+ */
+function resolveTarget(target) {
+  const id = String(target === undefined || target === null || target === '' ? 'core' : target)
+  const found = RUNTIME_TARGETS[id]
+  if (!found) {
+    throw new Error(`未知的安装目标：${id}（可选：${Object.keys(RUNTIME_TARGETS).join(' / ')}）`)
+  }
+  return found
+}
+
 /** 单步超时：建 venv 要下载 CPython（几十 MB），装依赖要下载整个依赖闭包 */
 const VENV_TIMEOUT_MS = 10 * 60 * 1000
 const INSTALL_TIMEOUT_MS = 30 * 60 * 1000
 const VERIFY_TIMEOUT_MS = 60000
 
-function runtimeRoot(userDataPath) {
-  return path.join(userDataPath, 'local', 'runtime')
+function runtimeRoot(userDataPath, target = 'core') {
+  return path.join(userDataPath, 'local', resolveTarget(target).rootName)
 }
 
-function venvDir(userDataPath) {
-  return path.join(runtimeRoot(userDataPath), 'venv')
+function venvDir(userDataPath, target = 'core') {
+  return path.join(runtimeRoot(userDataPath, target), 'venv')
 }
 
 /** venv 里的解释器路径（Windows 是 Scripts\python.exe，POSIX 是 bin/python3） */
-function venvPython(userDataPath) {
-  const base = venvDir(userDataPath)
+function venvPython(userDataPath, target = 'core') {
+  const base = venvDir(userDataPath, target)
   return process.platform === 'win32'
     ? path.join(base, 'Scripts', 'python.exe')
     : path.join(base, 'bin', 'python3')
@@ -140,30 +194,42 @@ function resolveUv(userDataPath, resourcesPath = process.resourcesPath) {
   return downloadedUv(userDataPath)
 }
 
-/** 本地 core 源码目录（打包态在 resources/desktop-local） */
-function coreSources(resourcesPath = process.resourcesPath) {
+/**
+ * 某目标的源码目录（打包态在 `resources/<sourcesDir>`）。
+ *
+ * 判据是 `app/main.py` 存在 —— 光有目录不算，那可能是个空壳；`python-engine` 与
+ * `desktop-local` 都以 `-m app.main` 启动，同一判据两边通用。
+ */
+function sourcesFor(target, resourcesPath = process.resourcesPath) {
   if (!resourcesPath) return ''
-  const candidate = path.join(resourcesPath, 'desktop-local')
+  const candidate = path.join(resourcesPath, resolveTarget(target).sourcesDir)
   return fs.existsSync(path.join(candidate, 'app', 'main.py')) ? candidate : ''
 }
 
-/** 安装清单路径（与 venv 平级，放在 runtimeRoot 下） */
-function manifestPath(userDataPath) {
-  return path.join(runtimeRoot(userDataPath), MANIFEST_FILE)
+/** 本地 core 源码目录（打包态在 resources/desktop-local） */
+function coreSources(resourcesPath = process.resourcesPath) {
+  return sourcesFor('core', resourcesPath)
+}
+
+/** 安装清单路径（与 venv 平级，放在各自 runtimeRoot 下） */
+function manifestPath(userDataPath, target = 'core') {
+  return path.join(runtimeRoot(userDataPath, target), MANIFEST_FILE)
 }
 
 /**
- * 依赖指纹：`pyproject.toml` 的内容摘要。
+ * 依赖指纹：**目标清单**的内容摘要（core 是 `pyproject.toml`，引擎是 `requirements.txt`）。
  *
  * **为什么用内容摘要而不是包版本**：判断"要不要重装依赖"只需要知道"依赖声明变没变"。
- * 拿 pyproject 的内容算摘要，零成本、纯本地、离线可用；而 `uv pip install --dry-run`
+ * 拿清单文件的内容算摘要，零成本、纯本地、离线可用；而 `uv pip install --dry-run`
  * 需要解析 index（离线必失败，还慢），不适合放在开机路径上。
  *
  * 摘要里带上 `RUNTIME_PYTHON_VERSION`：以后升到 3.13 时旧 venv 必须重建，
  * 否则会拿 3.12 的解释器去跑声明为 3.13 的依赖。
+ * 公式不含 target id —— 老用户已落盘的 core 指纹必须继续能对上，否则每次升级都要
+ * 白重建一次环境（而重建要联网，网络不通就从"能用"变成"不能用"）。
  */
-function dependencyFingerprint(sources) {
-  const spec = path.join(sources, 'pyproject.toml')
+function dependencyFingerprint(sources, target = 'core') {
+  const spec = path.join(sources, resolveTarget(target).manifest)
   let body = ''
   try {
     body = fs.readFileSync(spec, 'utf8')
@@ -178,9 +244,9 @@ function dependencyFingerprint(sources) {
 }
 
 /** 读安装清单；不存在或格式不对都返回 null（当作"没装过"，不猜） */
-function readManifest(userDataPath) {
+function readManifest(userDataPath, target = 'core') {
   try {
-    const raw = fs.readFileSync(manifestPath(userDataPath), 'utf8')
+    const raw = fs.readFileSync(manifestPath(userDataPath, target), 'utf8')
     const parsed = JSON.parse(raw)
     if (!parsed || parsed.version !== MANIFEST_VERSION) return null
     return parsed
@@ -193,8 +259,8 @@ function readManifest(userDataPath) {
  * 写安装清单。用"临时文件 + rename"落地：
  * 直接覆写时若进程被强杀，会留下半截 JSON，下次启动读不出来就当成没装过、白重装一遍。
  */
-function writeManifest(userDataPath, fields) {
-  const target = manifestPath(userDataPath)
+function writeManifest(userDataPath, fields, target = 'core') {
+  const file = manifestPath(userDataPath, target)
   const payload = {
     version: MANIFEST_VERSION,
     pythonVersion: RUNTIME_PYTHON_VERSION,
@@ -202,10 +268,10 @@ function writeManifest(userDataPath, fields) {
     ...fields,
   }
   try {
-    fs.mkdirSync(path.dirname(target), { recursive: true })
-    const staging = `${target}.tmp`
+    fs.mkdirSync(path.dirname(file), { recursive: true })
+    const staging = `${file}.tmp`
     fs.writeFileSync(staging, `${JSON.stringify(payload, null, 2)}\n`, 'utf8')
-    fs.renameSync(staging, target)
+    fs.renameSync(staging, file)
     return payload
   } catch {
     // 清单只是加速缓存，写不进去不该让整个安装失败
@@ -216,32 +282,40 @@ function writeManifest(userDataPath, fields) {
 /**
  * 运行时现状：只读判断，不做任何安装动作。
  *
- * 返回 `{ ready, venvPython, reason, message }`。`ready: true` 才允许直接起 core。
+ * 返回 `{ ready, venvPython, reason, target, targetLabel, message }`。
+ * `ready: true` 才允许直接起对应的 core / 引擎。
  */
 function inspectRuntime(options = {}) {
+  const target = resolveTarget(options.target)
   const userDataPath = String(options.userDataPath || '')
-  const sources = options.sources !== undefined ? options.sources : coreSources(options.resourcesPath)
-  const python = userDataPath ? venvPython(userDataPath) : ''
+  const sources =
+    options.sources !== undefined ? options.sources : sourcesFor(target.id, options.resourcesPath)
+  const python = userDataPath ? venvPython(userDataPath, target.id) : ''
 
   if (!python || !fs.existsSync(python)) {
     return {
       ready: false,
       venvPython: python,
+      target: target.id,
+      targetLabel: target.label,
       reason: 'venv-missing',
-      message: '尚未创建本地运行时（首次启动需要安装）',
+      message: `尚未创建${target.label}的 Python 环境（首次启动需要安装）`,
     }
   }
   if (!sources) {
     return {
       ready: false,
       venvPython: python,
+      target: target.id,
+      targetLabel: target.label,
       reason: 'sources-missing',
-      message: '安装包内缺少 desktop-local 源码，无法校验运行时',
+      message: `安装包内缺少 ${target.sourcesDir} 源码，无法校验${target.label}环境`,
     }
   }
 
   // 唯一可信判据：真实 import 整个 app 包（与启动前那道探测同一份实现）
   // `options.probe` 可注入带缓存的版本，避免"安装时探一次、启动前再探一次"重复付 1s
+  // 第三参是目标名：注入的探测器要把"导入失败"说成是 core 还是引擎的失败。
   const probeFn =
     typeof options.probe === 'function'
       ? options.probe
@@ -249,13 +323,22 @@ function inspectRuntime(options = {}) {
           probeRuntime(options.spawnSync || childProcess.spawnSync, python_, cwd_, {
             timeout: VERIFY_TIMEOUT_MS,
           })
-  const probe = probeFn(python, sources)
+  const probe = probeFn(python, sources, target.label)
   if (probe.ok) {
-    return { ready: true, venvPython: python, reason: 'ok', message: '' }
+    return {
+      ready: true,
+      venvPython: python,
+      target: target.id,
+      targetLabel: target.label,
+      reason: 'ok',
+      message: '',
+    }
   }
   return {
     ready: false,
     venvPython: python,
+    target: target.id,
+    targetLabel: target.label,
     reason: probe.reason,
     missingModule: probe.missingModule || '',
     message: probe.message,
@@ -348,44 +431,43 @@ function runCommand(command, args, options = {}) {
 }
 
 /**
- * 首次安装 / 就地修复。
+ * 组装 `uv pip install` 参数：每个目标只有**一份**依赖清单。
  *
- * `options.force` 为真时即使探测通过也重建 venv（用户点"修复"时用）。
- * 返回 `{ ok, venvPython, reinstalled, stages }`；失败抛错（带指引）。
+ * core 用 `pyproject.toml`（uv 直接解析 `[project].dependencies`），引擎用
+ * `requirements.txt`（引擎侧唯一的声明）。两边都不另存第二份清单 ——
+ * 两份清单必然漂移，而漂移的代价就是漏装 httpx 那类事故。
  */
-/** 组装 `uv pip install` 参数：依赖清单只有 pyproject.toml 一份 */
-function pipInstallArgs(vpython, sources, indexUrl) {
+function pipInstallArgs(vpython, sources, indexUrl, target = 'core') {
   const args = [
     'pip',
     'install',
     '--python',
     vpython,
-    // pyproject.toml 是依赖的唯一来源（uv 能直接解析它的 [project].dependencies），
-    // 不另存一份 requirements.txt —— 两份清单必然漂移，而漂移的代价就是漏装 httpx 那类事故
     '-r',
-    path.join(sources, 'pyproject.toml'),
+    path.join(sources, resolveTarget(target).manifest),
   ]
   // 镜像：国内网络下官方源常常超时。用环境变量显式覆盖，不写死任何第三方地址
   if (indexUrl) args.push('--index-url', indexUrl)
   return args
 }
 
-function uvEnv(userDataPath) {
+function uvEnv(userDataPath, target = 'core') {
   // 解释器是随包 CPython 的绝对路径，uv 不需要下载任何东西；
   // 保留 UV_PYTHON_INSTALL_DIR 只是让 uv 若真要用受管解释器时落在 userData 里。
-  return { UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot(userDataPath), 'python') }
+  return { UV_PYTHON_INSTALL_DIR: path.join(runtimeRoot(userDataPath, target), 'python') }
 }
 
 /** 删掉旧 venv。半损坏的目录留着会让 uv 复用坏状态，重建等于没修 */
-function removeVenv(userDataPath) {
-  const dir = venvDir(userDataPath)
+function removeVenv(userDataPath, target = 'core') {
+  const id = resolveTarget(target)
+  const dir = venvDir(userDataPath, id.id)
   if (!fs.existsSync(dir)) return
   try {
     fs.rmSync(dir, { recursive: true, force: true })
   } catch (err) {
     throw new Error(
-      `无法清理旧的本地运行时（${dir}）：${err && err.message ? err.message : err}\n` +
-        '通常是它有进程还在运行（例如上次没退干净的 core），请重启电脑后再试。',
+      `无法清理旧的${id.label}环境（${dir}）：${err && err.message ? err.message : err}\n` +
+        '通常是它有进程还在运行（例如上次没退干净的 core 或引擎），请重启电脑后再试。',
     )
   }
 }
@@ -403,38 +485,54 @@ function removeVenv(userDataPath) {
  * 返回 `{ ok, venvPython, reinstalled, repaired, stages }`；失败抛错（带指引）。
  */
 async function ensureRuntime(options = {}) {
+  const target = resolveTarget(options.target)
   const userDataPath = String(options.userDataPath || '')
   if (!userDataPath) throw new Error('ensureRuntime 需要 userDataPath')
 
-  const sources = options.sources !== undefined ? options.sources : coreSources(options.resourcesPath)
+  const sources =
+    options.sources !== undefined ? options.sources : sourcesFor(target.id, options.resourcesPath)
   if (!sources) {
     throw new Error(
-      '安装包内缺少 desktop-local 源码（resources/desktop-local），无法准备运行时。请重新安装。',
+      `安装包内缺少 ${target.sourcesDir} 源码（resources/${target.sourcesDir}），` +
+        `无法准备${target.label}环境。这是安装包不完整，请重新安装。`,
     )
   }
 
   const onStage = typeof options.onStage === 'function' ? options.onStage : () => {}
-  const vpython = venvPython(userDataPath)
+  const vpython = venvPython(userDataPath, target.id)
   const indexUrl = String(options.indexUrl || process.env.CHIRON_PIP_INDEX_URL || '').trim()
-  const fingerprint = dependencyFingerprint(sources)
+  const fingerprint = dependencyFingerprint(sources, target.id)
 
   const stages = []
+  // 每个阶段都带上 target：进度页要能说清"现在装的是哪一套环境"，
+  // 否则 core 装完接着装引擎时，界面看起来像是同一件事反复失败。
   const stage = (id, message) => {
     stages.push(id)
-    onStage({ stage: id, message })
+    onStage({ stage: id, message, target: target.id, targetLabel: target.label })
   }
 
-  onStage({ stage: INSTALL_STAGES.probing, message: '检查本地运行时' })
+  onStage({
+    stage: INSTALL_STAGES.probing,
+    message: `检查${target.label}环境`,
+    target: target.id,
+    targetLabel: target.label,
+  })
 
   let probeNote = ''
   let trySync = false
   if (!options.force && fs.existsSync(vpython)) {
-    const current = inspectRuntime({ ...options, userDataPath, sources })
+    const current = inspectRuntime({ ...options, target: target.id, userDataPath, sources })
     if (current.ready) {
-      onStage({ stage: INSTALL_STAGES.ready, message: '本地运行时就绪' })
+      onStage({
+        stage: INSTALL_STAGES.ready,
+        message: `${target.label}环境就绪`,
+        target: target.id,
+        targetLabel: target.label,
+      })
       return {
         ok: true,
         venvPython: vpython,
+        target: target.id,
         reinstalled: false,
         repaired: false,
         stages: [INSTALL_STAGES.ready],
@@ -443,7 +541,7 @@ async function ensureRuntime(options = {}) {
     probeNote = `（原状态：${current.message}）`
     // 只有"环境本身在、依赖声明也没变"时才值得先试增量同步：
     // 依赖变了说明 uv 需要重新解析整个依赖图，增量同步救不回来，直接重建更干脆。
-    const manifest = readManifest(userDataPath)
+    const manifest = readManifest(userDataPath, target.id)
     trySync = Boolean(manifest && fingerprint && manifest.dependencyFingerprint === fingerprint)
     if (!trySync) probeNote += '，依赖声明已变更或无安装记录，将重建'
   }
@@ -465,7 +563,7 @@ async function ensureRuntime(options = {}) {
     // 安装包自带 uv（resources/uv），所以"找不到"只可能是包不完整 ——
     // 这属于重装能解决的事故，不是网络问题，不要再去联网补救。
     throw new Error(
-      '安装包内缺少 uv（resources/uv），无法准备本地运行时。这是安装包不完整，请重新安装。',
+      `安装包内缺少 uv（resources/uv），无法准备${target.label}环境。这是安装包不完整，请重新安装。`,
     )
   }
   const uvPath = uv
@@ -477,7 +575,7 @@ async function ensureRuntime(options = {}) {
       timeout,
       spawn: options.spawn,
       onLine: options.onLine,
-      env: uvEnv(userDataPath),
+      env: uvEnv(userDataPath, target.id),
     }).catch(err => {
       err.message = `${label}失败：${err.message}`
       throw err
@@ -485,17 +583,22 @@ async function ensureRuntime(options = {}) {
 
   // —— 路径 2：增量同步。venv 在、依赖没变，只重装依赖 ——
   if (trySync) {
-    stage(INSTALL_STAGES.syncingDeps, `同步依赖${probeNote}`)
+    stage(INSTALL_STAGES.syncingDeps, `同步${target.label}依赖${probeNote}`)
     try {
-      await runUv(pipInstallArgs(vpython, sources, indexUrl), INSTALL_TIMEOUT_MS, '同步依赖')
-      stage(INSTALL_STAGES.verifying, '验证运行时')
-      const afterSync = inspectRuntime({ ...options, userDataPath, sources })
+      await runUv(
+        pipInstallArgs(vpython, sources, indexUrl, target.id),
+        INSTALL_TIMEOUT_MS,
+        '同步依赖',
+      )
+      stage(INSTALL_STAGES.verifying, `验证${target.label}环境`)
+      const afterSync = inspectRuntime({ ...options, target: target.id, userDataPath, sources })
       if (afterSync.ready) {
-        writeManifest(userDataPath, { dependencyFingerprint: fingerprint })
-        stage(INSTALL_STAGES.ready, '本地运行时就绪')
+        writeManifest(userDataPath, { dependencyFingerprint: fingerprint }, target.id)
+        stage(INSTALL_STAGES.ready, `${target.label}环境就绪`)
         return {
           ok: true,
           venvPython: vpython,
+          target: target.id,
           reinstalled: false,
           repaired: true,
           stages,
@@ -509,7 +612,7 @@ async function ensureRuntime(options = {}) {
   }
 
   // —— 路径 3：全量重建 ——
-  removeVenv(userDataPath)
+  removeVenv(userDataPath, target.id)
 
   // 解释器：**随包那份**（`resources/python-runtime/<platform>/cpython-*/`），
   // 引导器与 python-engine 共用它。传绝对路径给 uv，uv 因此不会联网取解释器。
@@ -529,7 +632,10 @@ async function ensureRuntime(options = {}) {
     )
   }
 
-  stage(INSTALL_STAGES.creatingVenv, `创建 Python ${RUNTIME_PYTHON_VERSION} 环境${probeNote}`)
+  stage(
+    INSTALL_STAGES.creatingVenv,
+    `为${target.label}创建 Python ${RUNTIME_PYTHON_VERSION} 环境${probeNote}`,
+  )
   await runUv(
     [
       'venv',
@@ -539,7 +645,7 @@ async function ensureRuntime(options = {}) {
       pythonArg,
       '--python-preference',
       'only-managed',
-      venvDir(userDataPath),
+      venvDir(userDataPath, target.id),
     ],
     VENV_TIMEOUT_MS,
     '创建 Python 环境',
@@ -549,26 +655,35 @@ async function ensureRuntime(options = {}) {
     throw new Error(`uv 报告建好了环境，但找不到解释器 ${vpython}。请重试；若反复出现请反馈此日志。`)
   }
 
-  stage(INSTALL_STAGES.installingDeps, '安装依赖')
-  await runUv(pipInstallArgs(vpython, sources, indexUrl), INSTALL_TIMEOUT_MS, '安装依赖')
+  stage(INSTALL_STAGES.installingDeps, `安装${target.label}依赖`)
+  await runUv(pipInstallArgs(vpython, sources, indexUrl, target.id), INSTALL_TIMEOUT_MS, '安装依赖')
 
-  stage(INSTALL_STAGES.verifying, '验证运行时')
-  const verified = inspectRuntime({ ...options, userDataPath, sources })
+  stage(INSTALL_STAGES.verifying, `验证${target.label}环境`)
+  const verified = inspectRuntime({ ...options, target: target.id, userDataPath, sources })
   if (!verified.ready) {
     throw new Error(
-      `依赖装完了，但本地核心仍无法导入：${verified.message}\n` +
-        '这通常意味着依赖清单里少了某个包。请把这段信息连同日志一起反馈。',
+      `依赖装完了，但${target.label}仍无法导入：${verified.message}\n` +
+        `这通常意味着 ${target.manifest} 里少了某个包。请把这段信息连同日志一起反馈。`,
     )
   }
 
-  writeManifest(userDataPath, { dependencyFingerprint: fingerprint })
-  stage(INSTALL_STAGES.ready, '本地运行时就绪')
-  return { ok: true, venvPython: vpython, reinstalled: true, repaired: false, stages }
+  writeManifest(userDataPath, { dependencyFingerprint: fingerprint }, target.id)
+  stage(INSTALL_STAGES.ready, `${target.label}环境就绪`)
+  return {
+    ok: true,
+    venvPython: vpython,
+    target: target.id,
+    reinstalled: true,
+    repaired: false,
+    stages,
+  }
 }
 
 module.exports = {
   RUNTIME_PYTHON_VERSION,
   INSTALL_STAGES,
+  RUNTIME_TARGETS,
+  resolveTarget,
   runtimeRoot,
   venvDir,
   venvPython,
@@ -578,8 +693,9 @@ module.exports = {
   writeManifest,
   downloadedUv,
   resolveUv,
+  sourcesFor,
   coreSources,
   inspectRuntime,
   ensureRuntime,
-  _internal: { runCommand },
+  _internal: { runCommand, pipInstallArgs },
 }

@@ -321,6 +321,12 @@ function tailOf(text, max) {
   return value.length <= max ? value : value.slice(-max)
 }
 
+/** 把子进程 stderr 尾部拼成错误消息的一段；没有输出就返回空串（不编造"（无输出）"） */
+function withStderr(stderrTail, title = '输出') {
+  const tail = String(stderrTail || '').trim()
+  return tail ? `\n\n${title}（尾部）：\n${tail}` : ''
+}
+
 function makeLauncherError(message, record) {
   const err = new Error(`${message}${describeRecord(record)}`)
   err.stderrTail = record ? record.stderrTail : ''
@@ -702,7 +708,10 @@ async function spawnEngineOnce(info, options = {}) {
       }
     }
     if (await probeHttp(record.baseUrl, ENGINE_HEALTH_PATH)) {
-      return { ok: true, address: record.address, port, baseUrl: record.baseUrl }
+      // 带上 record：就绪**之后**引擎自己挂掉是用户能直接感知的事故（聊天报服务不可用），
+      // 调用方要能在进程退出那一刻拿到退出码，而不是等下一次请求失败再猜。
+      // 带着 record 而不是 child 是为了让 `stopping` 标志可见 —— 主动关停不该报故障。
+      return { ok: true, record, child, address: record.address, port, baseUrl: record.baseUrl }
     }
     await sleep(options.intervalMs || 500)
   }
@@ -715,10 +724,39 @@ async function spawnEngineOnce(info, options = {}) {
   }
 }
 
+/**
+ * 挂上"引擎就绪之后自己退出"的通知。
+ *
+ * 为什么必须单独一条通道：网关对引擎是**按请求解析地址**、不探活也不熔断，所以引擎崩了
+ * 之后网关还是 200/500 混着返回，聊天会变成"SSE 报服务暂时不可用、这一轮被标成 failed"。
+ * 那些都是**症状**；原因只有子进程的退出码知道。没有这条通知，用户界面上永远不会出现
+ * "引擎挂了"四个字，日志里也只有一堆代理 500。
+ *
+ * 只挂一次（`once`）且主动关停不通知：见 `stopEngine` 里的 `record.stopping`。
+ */
+function watchEngineExit(engineRecord, onExit) {
+  const child = engineRecord && engineRecord.child
+  if (!child || typeof onExit !== 'function') return
+  child.once('exit', (code, signal) => {
+    if (engineRecord.stopping) return
+    onExit({
+      code: code === null || code === undefined ? null : code,
+      signal: signal || '',
+      address: engineRecord.address || '',
+      stderrTail: engineRecord.stderrTail || '',
+      at: new Date().toISOString(),
+    })
+  })
+}
+
 /** 停引擎。引擎是单进程（uvicorn 不分叉），SIGTERM 足够；超时再收树。 */
 async function stopEngine() {
   const record = state.engine
   if (!record) return false
+  // 必须先于 `child.kill` 立标志：`watchEngineExit` 靠它区分"我们让它退的"和"它自己崩的"。
+  // 晚一步（哪怕只晚到 kill 之后一行）就会先收到 exit 事件，用户在正常退出应用时
+  // 看到一条引擎崩溃告警。
+  record.stopping = true
   state.engine = null
   if (!record.child || record.exited) return true
   const child = record.child
@@ -782,13 +820,23 @@ async function startLocalStack(options = {}) {
     const engineResult = await startEngine(launcherResult.info, { ...options, port: enginePort })
     if (!engineResult.ok) {
       // 强依赖：没有引擎就没有可用的本地模式（聊天/知识库/记忆全在引擎侧）
+      //
+      // stderr 尾部必须拼进消息：引擎起不来时**唯一**能区分"缺依赖"（ModuleNotFoundError，
+      // 该重装引擎环境）与"配置错"（该改 env）的证据就在里面。丢掉它等于让用户和
+      // 反馈渠道一起面对一句"引擎未能启动"。
       const err = new Error(
-        `python-engine 未能启动（${engineResult.reason || 'unknown'}）：${engineResult.message || '原因未知'}`,
+        `python-engine 未能启动（${engineResult.reason || 'unknown'}）：${engineResult.message || '原因未知'}` +
+          withStderr(engineResult.stderrTail),
       )
-      err.reason = engineResult.reason
+      err.reason = engineResult.reason || 'engine-failed'
       err.engineFailure = engineResult
+      state.engineFailure = engineResult
       throw err
     }
+    state.engineFailure = null
+    // 就绪之后才挂这个监听：启动阶段的退出由上面的失败分支负责，两处都通知会把
+    // 一次故障说成两次。
+    watchEngineExit(engineResult.record, options.onEngineExit)
 
     const gatewayResult = await startGateway(launcherResult.info, {
       ...options,

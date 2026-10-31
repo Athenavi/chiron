@@ -23,8 +23,8 @@
 
 | # | 问题 | 位置 | 判定 | 建议 |
 |---|---|---|---|---|
-| 1 | 契约名 `CHIRON_*` 与 core 真正读的 `CHIRON_LOCAL_*` **两套并存**，只写契约名会静默失效 | `frontend-vue/electron/components.cjs:70-77`（`CORE_ENV_ALIASES`）、`desktop-local/app/config.py:30` | 🔴 | 让 core 直接认契约名（`AliasChoices`），删掉桥接表；这是唯一"写错了不报错、只是行为变了"的配置面 |
-| 2 | `python` 解释器名在两处写死字面量，另有一处 `process.env.CHIRON_PYTHON \|\| 'python'` | `components.cjs:413`、`components.cjs:423` | 🟡 | 收敛成 `DEFAULT_PYTHON` 常量；打包态优先「自建 venv（`<userData>/local/runtime/venv`）」的行为保持不变 |
+| 1 | 契约名 `CHIRON_*` 与 core 真正读的 `CHIRON_LOCAL_*` **两套并存**，只写契约名会静默失效 | `frontend-vue/electron/components.cjs:78-85`（`CORE_ENV_ALIASES`）、`desktop-local/app/config.py:30` | 🔴 | 让 core 直接认契约名（`AliasChoices`），删掉桥接表；这是唯一"写错了不报错、只是行为变了"的配置面 |
+| 2 | `python` 解释器名在两处写死字面量，各配一份 `process.env.CHIRON_PYTHON \|\| 'python'` | `components.cjs:666`（开发态 core）、`components.cjs:891`（开发态引擎） | 🟡 | 收敛成 `DEFAULT_PYTHON` 常量；打包态优先「自建 venv」（core 在 `<userData>/local/runtime/venv`、引擎在 `<userData>/local/engine/venv`）的行为保持不变 |
 | 3 | 本地 Ollama 地址 `http://127.0.0.1:11434` 既是代码默认值，又是 `secrets.bin` 里的可配置项 | `inference-proxy.cjs:19`、`inference-proxy.cjs:338` | 🟡 | 单一来源：默认值只在 constants 里出现一次，运行期以 `providers.ollama.baseUrl` > `CHIRON_OLLAMA_URL` > 常量 的顺序解析 |
 | 4 | embedded PG 口令 `chiron` / 用户 `chiron` / 库名 `chiron` 是默认值，且 `--auth=trust` | `desktop-local/app/config.py:84-86`、`storage/pg.py:624` | 🟡 | 只绑 loopback + trust 可接受，但应在 `configuration.md`/启动日志明确"这不是安全边界"；若要会话级隔离，改成每次启动随机口令 |
 | 5 | 超时/容量上限全散在模块常量里（core 侧 20+ 个、Electron 侧 10+ 个），没有一处能整体调 | 见第 5 节 | 🟡 | 与业务相关的（安装、健康检查、推理）进 `Settings` 字段；纯实现细节（行缓冲上限、stderr 尾巴）保持常量 |
@@ -45,14 +45,15 @@
 | `CHIRON_API_URL` | 空 → `config.json` 的 `apiUrl`（仅 cloud） | `config.cjs:294`、`preload.cjs:26` | 强制云端服务地址 | 🟢 |
 | `CHIRON_DEV_URL` | `http://localhost:5173`（`shared.cjs:13`） | `main.cjs:53` | 开发态（`--dev`）加载的 Vite dev server | 🟡 默认值写死 |
 | `CHIRON_OLLAMA_URL` | `http://127.0.0.1:11434`（`inference-proxy.cjs:19`） | `inference-proxy.cjs:338` | 本地 Ollama 基址 | 🟡 |
-| `CHIRON_PYTHON` | `python`（字面量） | `components.cjs:413,423` | 开发/打包态启动 core 的解释器 | 🟡 |
-| `CHIRON_DATA_DIR` + `CHIRON_LOCAL_DATA_DIR` | `<userData>/local`（`components.cjs:655`） | `components.cjs:445`、`config.py:68` | core 数据目录（两套名字一起下发） | 🟡 默认值写死 |
-| `CHIRON_PORT` + `CHIRON_LOCAL_PORT` | 不传 → 壳层先借一个空闲端口（`components.cjs:657`） | `components.cjs:446` | core 监听端口 | 🟢 |
-| `CHIRON_DEVICE_TOKEN` | 不传 → `crypto.randomBytes(32).hex`（`components.cjs:667`） | `components.cjs:447`、`api/auth.py:51` | 本地设备 token（**不是**云端凭据） | 🟢 |
-| `CHIRON_INFERENCE_PROXY` + `CHIRON_LOCAL_INFERENCE_PROXY` | 空（不传） | `components.cjs:448` | core 侧推理代理地址 | 🟢 |
-| `CHIRON_LOCAL_AUTH_ENABLED` | 壳层默认写 `1`（`components.cjs:451-453`） | `components.cjs:451` | 打开 core 的设备 token 校验 | 🟢 |
+| `CHIRON_PYTHON` | `python`（仅开发态字面量） | `components.cjs:66`（名字）、`:633,666`（core 候选链）、`:868`（引擎候选链） | **同时**是两套 Python 环境的显式覆盖：打包态给了它就不再自建 venv（core 仍要过 import 闭包探测），开发态用它起 core 与引擎；否则引擎在打包态拿不到 venv 时返回 `null`（不兜底 PATH `python`） | 🟡 |
+| `CHIRON_PIP_INDEX_URL` | 空 → uv 默认源 | `runtime-install.cjs:503` | 首启装依赖时换 PyPI 镜像；**两套环境共用**这一个变量（core 与 engine 同一条 `uv pip install`）。空=官方源 | 🟢 |
+| `CHIRON_DATA_DIR` + `CHIRON_LOCAL_DATA_DIR` | `<userData>/local`（`components.cjs:1308`） | `components.cjs:905`、`config.py:68` | core 数据目录（两套名字一起下发） | 🟡 默认值写死 |
+| `CHIRON_PORT` + `CHIRON_LOCAL_PORT` | 不传 → 壳层先借一个空闲端口（`components.cjs:1310`） | `components.cjs:906` | core 监听端口 | 🟢 |
+| `CHIRON_DEVICE_TOKEN` | 不传 → `crypto.randomBytes(32).hex`（`components.cjs:1316`） | `components.cjs:907`、`api/auth.py:51` | 本地设备 token（**不是**云端凭据） | 🟢 |
+| `CHIRON_INFERENCE_PROXY` + `CHIRON_LOCAL_INFERENCE_PROXY` | 空（不传） | `components.cjs:908` | core 侧推理代理地址 | 🟢 |
+| `CHIRON_LOCAL_AUTH_ENABLED` | 壳层默认写 `1`（`components.cjs:911-912`） | `components.cjs:911` | 打开 core 的设备 token 校验 | 🟢 |
 | `LOCAL_BOOTSTRAP`（发给**网关**，不是 core） | 壳层默认写 `1`，显式传值（含 `0`）保留调用方口径（`local-stack.cjs::LOCAL_BOOTSTRAP_ENV`） | `config/config.go` 的 `LocalBootstrap` | 打开网关的免口令会话引导（`POST /v1/auth/session`），仅 loopback 来源可用；见 [`launcher.md`](./launcher.md) §3.4 | 🟢 |
-| 无（仅错误文案提到） | — | `components.cjs:254` | 提示用户设置 `CHIRON_COMPONENT_BASE_URL`，但**壳层不读也不转发**它 | 🔴 文档化缺口 |
+| 无（仅错误文案提到） | — | `components.cjs:264` | 提示用户设置 `CHIRON_COMPONENT_BASE_URL`，但**壳层不读也不转发**它 | 🔴 文档化缺口 |
 
 进程内参数（不是环境变量，但同属配置面）：`--dev`（`main.cjs:52`）、`additionalArguments` 前缀
 `--chiron-mode=` / `--chiron-api-url=` / `--chiron-device-token=`（`shared.cjs:8-12`）、
@@ -109,7 +110,7 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 
 ### 2.3 契约名 ↔ 生效名桥接（唯一"静默失效"风险）
 
-`components.cjs:70-77` 的 `CORE_ENV_ALIASES` 把 `CHIRON_*` 同时写成 `CHIRON_LOCAL_*`：
+`components.cjs:78-85` 的 `CORE_ENV_ALIASES` 把 `CHIRON_*` 同时写成 `CHIRON_LOCAL_*`：
 
 | 契约名（`docs/desktop-local/contracts.md` §3.1） | core 真正读的名字 |
 |---|---|
@@ -141,19 +142,28 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 ├── token.bin                    token-store.cjs:18 云端 Bearer token（safeStorage 加密，mode 0o600）
 ├── secrets.bin                  secrets.cjs:26     provider 密钥（safeStorage 加密，version:1）
 ├── logs/main.log                main.cjs:96        主进程诊断日志
-├── local/                       components.cjs:655 本地 core 的 data-dir（默认值，可被 CHIRON_DATA_DIR 覆盖）
-└── components/                  components.cjs:124-138
-    ├── core/chiron-local[.exe]  components.cjs:388 已安装 core 二进制（优先于源码启动）
+├── local/                       components.cjs:1308 本地 core 的 data-dir（默认值，可被 CHIRON_DATA_DIR 覆盖）
+│   ├── runtime/                 runtime-install.cjs:112（target=core） 引导器环境根：venv/ + install.json + python/ + bin/
+│   └── engine/                  runtime-install.cjs:112（target=engine）AI 引擎环境根：venv/ + install.json（与 core 完全隔离）
+└── components/                  components.cjs:135
+    ├── core/chiron-local[.exe]  components.cjs:497 已安装 core 二进制（优先于源码启动）
     ├── pageindex/               仅作兜底展示（真实安装目录在 core 的 data-dir 下）
     └── langextract/
 ```
+
+**两套 venv 各自一个根，且根目录名不可改**：`runtime-install.cjs` 的 `RUNTIME_TARGETS`
+里 `rootName` 分别是 `runtime` 与 `engine`；`resolveCoreLaunch()` / `resolveEngineLaunch()`
+都按 `<userData>/local/<rootName>/venv` 找解释器，改一次等于让老用户已装好的环境凭空消失。
+两者必须分开（不能共用一份 venv）的理由见 [`packaging.md`](./packaging.md) §3「两套环境」——
+核心一条：重建环境第一步是 `removeVenv()`，共用时装引擎失败会顺手毁掉引导器环境。
 
 ### 3.2 安装包 resources（`electron-builder.yml`）
 
 | 包内路径 | 来源 | 消费者 | 判定 |
 |---|---|---|---|
 | `resources/chiron[.exe]` | **随包**：`extraResources` ← `assets/gateway`（`electron-builder.yml:66-70`），由 `frontend-vue/scripts/build-gateway.mjs` 就位 | `main.cjs`（`resolveGatewayExe()`） | 🟡 有正向断言；缺了壳静默退回 core |
-| `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:100-109`） | `components.cjs:372-376`（`packagedCoreDir()`） | 🟡 目录名写死 |
+| `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:100-109`） | `components.cjs:382-387`（`packagedCoreDir()`） | 🟡 目录名写死 |
+| `resources/python-engine/` | `extraResources` ← `../python-engine`（`electron-builder.yml:125-138`） | `components.cjs`（`packagedEngineDir()` 认 `app/main.py`）、`runtime-install.cjs`（target=engine 的源码根与 `requirements.txt`） | 🟡 目录名写死；缺 `requirements.txt` 则引擎环境永远装不起来 |
 | `resources/migrations/` | `extraResources` ← `../migrations`（`:110-114`） | `config.py` 的 `REPO_ROOT/migrations`（打包后 `REPO_ROOT` = `resources/`） | 🟡 |
 | `resources/alembic.ini` | `extraResources` ← `../alembic.ini`（`:139-140`） | `config.py:134-136` | 🟡 |
 | `resources/uv/`、`resources/python-runtime/` | **随包**：`extraResources` 映射 `assets/uv`、`assets/python-runtime` | `runtime-install.cjs`（`resolveUv()` / `bundledPython()`） | 🟡 有正向断言 |
@@ -161,10 +171,12 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 | `resources/components/**` | `extraResources` glob 过滤（`:71-75`，目录平时不存在） | 契约 §3 的可选组件目录 | 🟡 |
 
 Python 运行时由两部分组成：**随包的解释器**（`resources/python-runtime/<platform>/cpython-*/`，
-`prepare_python.py` 就位）与**首启现装的依赖**（`<userData>/local/runtime/venv/`）。
+`prepare_python.py` 就位）与**首启现装的依赖**（core 在 `<userData>/local/runtime/venv/`、
+引擎在 `<userData>/local/engine/venv/`，两份独立）。
 `runtime-install.cjs` 先解析随包 uv（`resolveUv()`：`resources/uv/` 优先，
 兼容老用户那份 `downloadedUv()`），再 `uv venv --python <随包解释器绝对路径>` 建环境、
-`uv pip install` 按 `pyproject.toml` 装依赖。安装包里没有 `resources/python` ——
+`uv pip install` 按各自清单（core=`pyproject.toml`、引擎=`requirements.txt`）装依赖。
+安装包里没有 `resources/python` ——
 CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 与解释器两份可执行文件在位。
 
 `REPO_ROOT = Path(__file__).resolve().parents[2]`（`config.py:33`）是唯一把"打包后 `resources/`"
@@ -200,8 +212,9 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 
 | 路径 | 位置 | 说明 |
 |---|---|---|
-| `desktop-local`（`-m app.main` 的 cwd） | `components.cjs:364-366,426` | 开发态 core 源码根 |
-| `desktop-local/app/main.py` | `components.cjs:420` | 存在即认为可走开发态 |
+| `desktop-local`（`-m app.main` 的 cwd） | `components.cjs:374-376`（`coreSourceDir()`） | 开发态 core 源码根 |
+| `desktop-local/app/main.py` | `components.cjs:385`（打包态判据）、`components.cjs:663`（开发态判据） | 存在才认这个目录，空壳不算 |
+| `python-engine`（引擎 `-m app.main` 的 cwd） | `components.cjs:428-431`（`packagedEngineDir()`）、`components.cjs:436-438`（`devEngineDir()`） | 同一套判据：`app/main.py` 存在才算带着源码；两者都没有＝开发态由本机负责 |
 | `dist/index.html` | `main.cjs:604` | 渲染层主界面 |
 | `electron/setup.html`、`electron/error.html` | `main.cjs:592,595,162` | 配置页 / 错误页（`loadFile`，`file://`） |
 | `electron/resources/` | `electron-builder.yml:16` | `buildResources`（图标等） |
@@ -307,10 +320,11 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 
 | 位置 | 写死的内容 | 判定 | 建议 |
 |---|---|---|---|
-| `components.cjs:70-77` | `CHIRON_*` → `CHIRON_LOCAL_*` 别名表 | 🔴 | core 侧改用 `AliasChoices("CHIRON_DATA_DIR", "CHIRON_LOCAL_DATA_DIR")`，删表 |
-| `components.cjs:413,423` | 解释器字面量 `'python'` | 🟡 | `DEFAULT_PYTHON` 常量 + `CHIRON_PYTHON` 覆盖（已有） |
-| `components.cjs:388` | core 二进制名 `chiron-local` / `chiron-local.exe` | 🟡 | `CORE_BINARY_NAME` 常量；文件名也算契约的一部分 |
-| `components.cjs:41` | `CORE_COMPONENTS_PATH = '/v1/components'` | 🟡 | 保持常量（核心路由，不该配） |
+| `components.cjs:78-85` | `CHIRON_*` → `CHIRON_LOCAL_*` 别名表 | 🔴 | core 侧改用 `AliasChoices("CHIRON_DATA_DIR", "CHIRON_LOCAL_DATA_DIR")`，删表 |
+| `components.cjs:666,891` | 解释器字面量 `'python'`（core / 引擎各一处，仅开发态生效） | 🟡 | `DEFAULT_PYTHON` 常量 + `CHIRON_PYTHON` 覆盖（已有） |
+| `components.cjs:498` | core 二进制名 `chiron-local` / `chiron-local.exe` | 🟡 | `CORE_BINARY_NAME` 常量；文件名也算契约的一部分 |
+| `runtime-install.cjs:76-91` | 两套环境的 `rootName`（`runtime` / `engine`）与清单文件名 | 🟡 | **不能改**：改了等于让老用户已装好的 venv 凭空消失（两处候选链按此路径找解释器） |
+| `components.cjs:47` | `CORE_COMPONENTS_PATH = '/v1/components'` | 🟡 | 保持常量（核心路由，不该配） |
 | `inference-proxy.cjs:19` | `http://127.0.0.1:11434` | 🟡 | 与 `secrets.providers.ollama.baseUrl` 合并成单一来源 |
 | `inference-proxy.cjs:24` | 透传参数白名单 `temperature/max_tokens/top_p/stop` | 🟡 | 有意收窄，保留 |
 | `inference-proxy.cjs:269` | cloud provider 恒 501 | 🟡 | 云端片段推理落地后删 |

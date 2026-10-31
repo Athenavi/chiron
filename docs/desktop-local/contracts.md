@@ -134,7 +134,11 @@ desktop:restart-local-backend
 ```
 
 单向事件（主进程 → 渲染进程，`webContents.send`，不走 `handle`）：
-`desktop:runtime-stage` —— 首次启动的运行时安装进度，仅 `install.html` 订阅。
+`desktop:runtime-stage` —— 运行时安装进度，仅 `install.html` 订阅。
+载荷是 `{ stage, message, target, targetLabel }`：本地模式有**两套**Python 环境
+（`core`＝引导器、`engine`＝AI 引擎，见 [`packaging.md`](./packaging.md) §3「两套环境」），
+同一条通道按先后两轮推送，渲染层靠 `target` 复位进度条、靠 `targetLabel` 换标题。
+`target` 缺省当作 `core`，所以只装一套环境的老载荷仍然可用。
 
 `desktop:pick-document` 的边界：`showOpenDialog` 只取第一个路径，**不读文件内容**
 （正文属于用户数据，由本地链路按需处理）；对话框以 `BrowserWindow.fromWebContents(event.sender)`

@@ -250,6 +250,13 @@ function loadOptionalModule(name) {
  *
  * 启动回调由 W4 的 components.cjs 提供；这里全部走可选探测 —— 模块缺失、接口缺失、
  * 启动抛错都要变成一条可读状态再显示本地错误页，而不是让主进程崩掉。
+ *
+ * **返回值的两条语义必须分清**（本轮改的就是这条）：
+ *   - `null`  = 这条链路**不适用**（壳里没有 local-stack / components，或这台机器
+ *     根本没有网关二进制，或引导器运行时还没装）→ 调用方才允许走 desktop-local core；
+ *   - **抛错** = 真的试过并且失败了 → 绝不回退。回退会拉起第二套 PG/Redis，
+ *     还会把"引擎没起来"这种必须让用户知道的细节全部丢掉。
+ * 过去这里把抛错也吞成 null，于是打包态每次引擎失败都变成"界面能开但半数是坏的"。
  */
 async function tryStartGoStack(options = {}) {
   const stack = loadOptionalModule('./local-stack.cjs')
@@ -264,22 +271,29 @@ async function tryStartGoStack(options = {}) {
 
   let launch
   try {
-    launch = components.resolveCoreLaunch()
+    // 用 prepareCoreLaunch 而不是裸 resolveCoreLaunch：全新安装时 venv 还不存在，
+    // 后者必然抛错，那时若直接回退到老路径，用户第一次启动拿到的是只有 desktop-local
+    // 的**半套**界面（网关那侧的 skills/graphs/kb/workflows 全缺），而且引擎依赖
+    // 也永远轮不到装。这里先按需装好 core，装完仍然拿不到启动信息才算这条链路不适用。
+    launch = await components.prepareCoreLaunch(options)
   } catch (err) {
-    // 运行时没装：这是首启的正常状态，交给旧路径去触发安装流程
+    // 运行时装不起来 / 安装包残缺：这是首启的正常状态，交给旧路径去触发安装流程
     logMain('info', `引导器运行时不可用：${err?.message || err}`)
     return null
   }
 
-  try {
-    const dataDir = options.dataDir
-      ? String(options.dataDir)
-      : path.join(app.getPath('userData'), 'local')
-    const port = Number(options.gatewayPort) > 0 ? Number(options.gatewayPort) : await components.pickFreePort()
+  const dataDir = options.dataDir
+    ? String(options.dataDir)
+    : path.join(app.getPath('userData'), 'local')
 
-    // 引擎的解释器按 `resolveEngineLaunch` 的优先级挑（引擎专属 venv → 引导器 venv →
-    // CHIRON_PYTHON → dev 兜底）。挑错了只会让引擎返回 ok:false，不阻断整栈。
-    const engineLaunch = resolveEngineLaunch(components, app.getPath('userData'))
+  // 引擎的依赖是**按需**装的（用到才装，见 components.ensureEngineRuntime），
+  // 进度沿用同一条推送通道：首启弹了安装窗的话，这一段就显示在同一个窗里。
+  // 装失败会抛 —— 由 startLocalBackend 转成可读状态，这里不吞。
+  const engineLaunch = await prepareEngine(components, options)
+
+  try {
+    const port =
+      Number(options.gatewayPort) > 0 ? Number(options.gatewayPort) : await components.pickFreePort()
 
     const started = await stack.startLocalStack({
       launcher: { command: launch.command, cwd: launch.cwd },
@@ -288,6 +302,7 @@ async function tryStartGoStack(options = {}) {
       port,
       appSecret: ensureAppSecret(dataDir),
       engine: engineLaunch || undefined,
+      onEngineExit: notifyEngineExit,
     })
 
     logMain(
@@ -295,7 +310,9 @@ async function tryStartGoStack(options = {}) {
       `本地网关就绪 ${started.baseUrl}（pg=${started.launcher?.pgBackend} redis=${started.launcher?.redisBackend}）`,
     )
     // PG、Redis、引擎都是强依赖，能走到这里说明三者都起来了（缺一个 startLocalStack 就会抛）
-    logMain('info', `python-engine 就绪 ${started.engine.address}`)
+    logMain('info', `python-engine 就绪 ${started.engine?.address || '（接管既有实例）'}`)
+    // 新一轮运行重新计一次提示额度：上一轮崩过不该让这一轮的崩溃从此无声
+    engineExitNotified = false
     return {
       ok: true,
       baseUrl: started.baseUrl,
@@ -307,8 +324,11 @@ async function tryStartGoStack(options = {}) {
   } catch (err) {
     const message = err?.message || String(err)
     logMain('error', `本地网关启动失败：${message}`)
-    // 返回 null 让旧路径再试一次；旧路径也会失败，但错误信息更贴近既有 UI
-    return null
+    // 带 reason 往上抛：startLocalBackend 会把它放进返回状态，恢复对话框与错误页
+    // 才有的可显示；只留一句"启动失败"等于让用户对着黑箱猜。
+    const error = err instanceof Error ? err : new Error(message)
+    error.reason = error.reason || 'gateway-stack-failed'
+    throw error
   }
 }
 
@@ -330,54 +350,19 @@ function resolveGatewayExe() {
 }
 
 /**
- * 找 python-engine 源码目录。
+ * 引擎就位：**用到才装**，然后给出启动信息。
  *
- * 打包态在 `resources/python-engine`（见 electron-builder.yml），开发态在仓库根。
- * 判据是 `app/main.py` 存在 —— 光有目录不算，那可能是个空壳。
+ * 解释器选择与依赖安装都在 `components.cjs`（`ensureEngineRuntime` /
+ * `resolveEngineLaunch`）：那里才有"随包 vs 开发态"的唯一判据，写在两处必然漂移。
+ * 壳这一层只做两件事 —— 起栈之前把依赖装上（进度照样推给进度窗），
+ * 以及把装不出来时的原因**如实上抛**（不吞掉、不回退）。
+ *
+ * 返回 null 只有一种含义：这台机器上没有可用的 python-engine（既没随包源码也没有
+ * 开发态源码）。网关随后会因"引擎未启动"整体失败，而不是悄悄少一块功能。
  */
-function resolveEngineDir() {
-  const candidates = []
-  if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'python-engine'))
-  candidates.push(path.join(__dirname, '..', '..', 'python-engine'))
-  for (const candidate of candidates) {
-    if (fs.existsSync(path.join(candidate, 'app', 'main.py'))) return candidate
-  }
-  return ''
-}
-
-/**
- * 解析 python-engine 的启动信息（没有就返回 null）。
- *
- * **引擎的依赖比引导器多得多**：引导器只要 fastapi/uvicorn/asyncpg/redis/embedded-postgres，
- * 而引擎还要 pydantic-ai / anthropic / openai / pymilvus（见 python-engine/requirements.txt）。
- * 所以解释器按这个顺序挑：
- *   1. 引擎专属 venv（`<userData>/local/engine/venv`）——唯一保证依赖齐全的来源；
- *   2. 引导器那份 venv —— 只有在其上额外装过引擎依赖才可用；
- *   3. `CHIRON_PYTHON` —— 开发者显式指定；
- *   4. 开发态兜底 `python`（仓库里没有 venv 时）。
- *
- * 挑错了解释器的后果是 `ModuleNotFoundError`，但那只让引擎返回 ok:false，
- * 网关照常起来（177/215 条路由不依赖引擎），不会让整个本地模式崩掉。
- */
-function resolveEngineLaunch(components, userDataPath) {
-  const engineDir = resolveEngineDir()
-  if (!engineDir) return null
-
-  const exeName = process.platform === 'win32' ? 'python.exe' : 'python3'
-  const candidates = []
-  if (userDataPath) {
-    candidates.push(path.join(userDataPath, 'local', 'engine', 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', exeName))
-    candidates.push(path.join(userDataPath, 'local', 'runtime', 'venv', process.platform === 'win32' ? 'Scripts' : 'bin', exeName))
-  }
-  const explicit = String(process.env.CHIRON_PYTHON || '').trim()
-  if (explicit) candidates.push(explicit)
-  // 开发态兜底：仓库里的 python-engine 由开发者本机环境负责
-  candidates.push('python')
-
-  const command = candidates.find(c => (c === 'python' ? true : fs.existsSync(c)))
-  if (!command) return null
-
-  return { command, args: ['-m', 'app.main'], cwd: engineDir }
+async function prepareEngine(components, options) {
+  await components.ensureEngineRuntime(options)
+  return components.resolveEngineLaunch({ userDataPath: app.getPath('userData') })
 }
 
 /**
@@ -807,6 +792,74 @@ async function askLocalBackendRecovery(status) {
   } catch (err) {
     logMain('warn', `local recovery dialog failed: ${err?.message || err}`)
     return 'quit'
+  }
+}
+
+/**
+ * 引擎在**运行中**退出。
+ *
+ * 这是本地模式里最难自己发现的一种故障：界面还活着，网关还活着，只有聊天会在
+ * SSE 上回一句"服务暂时不可用"、并把这一轮标成 failed —— 用户完全看不出原因。
+ * 网关侧对引擎是按请求解析地址、不探活也不熔断，所以它自己也不会主动宣告引擎掉了。
+ *
+ * 所以这里做三件事：写一条**带退出码**的错误日志；只提示一次（反复崩不该弹一串窗）；
+ * 给一个真的能按的按钮（重启应用），而不是只说"请重启"。
+ */
+let engineExitNotified = false
+
+function notifyEngineExit(info = {}) {
+  const how =
+    info.code === null || info.code === undefined
+      ? `信号 ${info.signal || '未知'}`
+      : `退出码 ${info.code}`
+  const tail = String(info.stderrTail || '').trim().split('\n').slice(-8).join('\n')
+  logMain('error', `python-engine 运行中退出（${how}）${tail ? `\n${tail}` : ''}`)
+  if (engineExitNotified) return
+  engineExitNotified = true
+
+  const win = mainWindow && !mainWindow.isDestroyed() ? mainWindow : null
+  if (!win) return
+  dialog
+    .showMessageBox(win, {
+      type: 'error',
+      title: '本地 AI 引擎已停止',
+      message: '聊天、知识库与记忆现在都不可用',
+      detail:
+        `python-engine 进程退出了（${how}）。界面与本地数据库还在，所以其它页面照常，` +
+        '但一发消息就会失败。\n\n' +
+        (tail ? `引擎输出（尾部）：\n${tail}\n\n` : '') +
+        '可以立刻重启应用；若反复出现，请连同这条信息一起反馈。',
+      buttons: ['重启应用', '稍后手动重启'],
+      defaultId: 0,
+      cancelId: 1,
+      noLink: true,
+    })
+    .then(({ response }) => {
+      if (response === 0) restartNow()
+    })
+    .catch(err => logMain('warn', `engine exit dialog failed: ${err?.message || err}`))
+}
+
+/**
+ * 需要装环境时把进度窗开起来，装完（成败都算）关掉。
+ *
+ * 首启那条路径自己管窗口（启动循环期间窗口一直开着，重试不闪窗），这里服务的是
+ * **已经进了主界面之后**再起本地后端的情况（菜单/前端的"重启本地后端"）。那时
+ * 安装一跑就是几分钟，没有窗口就等于让界面静默假死。
+ */
+async function startLocalBackendWithProgress(options = {}) {
+  const runtime = inspectLocalRuntime()
+  if (runtime.ready) return startLocalBackend(options)
+  logMain('info', `local runtime not ready (${runtime.reason}): ${runtime.message || ''}`)
+  openInstallWindow()
+  try {
+    return await startLocalBackend({
+      ...options,
+      onRuntimeStage: info => broadcastRuntimeStage(info),
+      onRuntimeLine: line => logMain('info', `[runtime] ${line}`),
+    })
+  } finally {
+    closeInstallWindow()
   }
 }
 
@@ -1337,7 +1390,9 @@ if (!gotLock) {
         await stopLocalBackend()
         // stopLocalBackend 里有"只停一次"的标志位，重启要把它复位，否则下次退出不会停
         localBackendStopped = false
-        localBackend = await startLocalBackend()
+        // 走带进度窗的那一条：引擎依赖是"用到才装"的，从主界面重启后端时
+        // 完全可能撞上从没装过的引擎环境，不弹窗就是静默假死几分钟。
+        localBackend = await startLocalBackendWithProgress()
         recordLocalStart(localBackend)
         return {
           ok: Boolean(localBackend.ok),

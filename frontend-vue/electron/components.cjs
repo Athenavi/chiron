@@ -386,10 +386,14 @@ function packagedCoreDir() {
 }
 
 /**
- * 只读查询：本地运行时现在能不能直接用。
+ * 只读查询：本地运行时现在能不能直接用（**core 与引擎两套环境都算**）。
  *
  * 主进程在建主窗口**之前**用它决定"要不要先弹一个安装进度窗口"——
  * 正常启动（运行时已就绪）就不该闪一个进度窗出来。
+ *
+ * 为什么必须两套一起判：装了网关之后本地链路是 `引导器 → python-engine → Go 网关`，
+ * 引擎起不来整条链就起不来。只看 core 会让进度窗在"core 装好了、引擎从没装过"时
+ * 根本不出现，于是安装无处显示、失败也无处显示 —— 正是本轮要消掉的静默降级。
  */
 function inspectLocalRuntime() {
   let userData
@@ -405,7 +409,52 @@ function inspectLocalRuntime() {
     return { ready: true, reason: 'dev', message: '' }
   }
   const installer = require('./runtime-install.cjs')
+  const core = installer.inspectRuntime({
+    target: 'core',
+    userDataPath: userData,
+    sources,
+    probe: probeBundledRuntime,
+  })
+  // 先报 core：缺 uv / 缺解释器这类问题两套环境是同一个原因，先把这一环修好，下一轮才轮到引擎
+  if (!core.ready) return core
+  return inspectEngineRuntime(userData)
+}
+
+/**
+ * python-engine 随包源码目录。**空串 = 开发态**（仓库里那份由开发者本机环境负责）。
+ *
+ * 判据是 `app/main.py` 存在：光有目录不算，那可能是个空壳。
+ */
+function packagedEngineDir() {
+  if (!process.resourcesPath) return ''
+  const candidate = path.join(process.resourcesPath, 'python-engine')
+  return fs.existsSync(path.join(candidate, 'app', 'main.py')) ? candidate : ''
+}
+
+/** 开发态的引擎目录（仓库根下的 python-engine） */
+function devEngineDir() {
+  const candidate = path.join(repoRoot(), 'python-engine')
+  return fs.existsSync(path.join(candidate, 'app', 'main.py')) ? candidate : ''
+}
+
+/**
+ * 只读查询：AI 引擎的环境能不能直接用。**开发态恒就绪** ——
+ * 那里没有"随包引擎源码"，装环境既无处可装，也不该去动用户自己的解释器。
+ */
+function inspectEngineRuntime(userDataPath) {
+  const sources = packagedEngineDir()
+  if (!sources) return { ready: true, reason: 'dev', message: '' }
+  let userData = String(userDataPath || '')
+  if (!userData) {
+    try {
+      userData = userDataDir()
+    } catch {
+      return { ready: false, reason: 'no-userdata', message: '无法确定本地数据目录' }
+    }
+  }
+  const installer = require('./runtime-install.cjs')
   return installer.inspectRuntime({
+    target: 'engine',
     userDataPath: userData,
     sources,
     probe: probeBundledRuntime,
@@ -474,7 +523,7 @@ const runtimeProbeCache = new Map()
  *
  * 这里只加一层**按解释器缓存**：一次启动里同一个解释器不重复 import（约 1s/次）。
  */
-function probeBundledRuntime(pythonPath, cwd = '') {
+function probeBundledRuntime(pythonPath, cwd = '', label = '本地核心') {
   if (!pythonPath) return { ok: false, reason: 'missing', message: '未找到随包 Python 运行时' }
   // 缓存键要带 cwd：同一个解释器在不同工作目录下能 import 到的 `app` 包不一样
   const cacheKey = `${pythonPath}\u0000${cwd}`
@@ -496,7 +545,8 @@ function probeBundledRuntime(pythonPath, cwd = '') {
   return {
     ...result,
     // 文案里带路径：回退链上可能同时有多个候选，只说"随包运行时坏了"会误导
-    message: `解释器 ${pythonPath} 无法导入本地核心：${result.message || '未知原因'}`,
+    // 也带目标名：core 与引擎共用同一份探测代码，不说清是哪一个在失败就没法照着修
+    message: `解释器 ${pythonPath} 无法导入${label}：${result.message || '未知原因'}`,
   }
 }
 
@@ -690,6 +740,155 @@ async function installRuntimeIfPossible(root, options = {}) {
   // 装完必须清探测缓存：否则启动前那次"缺依赖"的结论还在缓存里，会立刻再失败一次
   runtimeProbeCache.clear()
   return true
+}
+
+/**
+ * 拿到 core 的启动信息；**打包态运行时还没装时就地装一次**再拿。
+ *
+ * 为什么需要这一层：`tryStartGoStack` 原先只看 `resolveCoreLaunch()` 抛不抛，
+ * 一抛就返回 null 让老路径接手。全新安装恰好就是"还没装"，于是第一次启动永远
+ * 落在 desktop-local core 上 —— 少掉网关那一半业务端点，而且引擎依赖压根没机会装
+ * （`prepareEngine` 在那之后）。用户要等到第二次启动才拿到功能完整的界面。
+ *
+ * 装不了的情况保持原样把错误抛回调用方：开发态（没有随包源码）与安装包残缺
+ * 都不该由这里兜着。
+ */
+async function prepareCoreLaunch(options = {}) {
+  const root = options.repoRoot || repoRoot()
+  let firstError
+  try {
+    return resolveCoreLaunch(root)
+  } catch (err) {
+    firstError = err
+  }
+  if (!(await installRuntimeIfPossible(root, options))) throw firstError
+  return resolveCoreLaunch(root)
+}
+
+/**
+ * **按需**准备 python-engine 的依赖（"用到才装"）。
+ *
+ * 为什么不在首启无条件装：引擎的依赖闭包比 core 大一个数量级（pydantic-ai /
+ * anthropic / openai / pymupdf / grpcio…，实测几百 MB），而它只在**本地模式**用得上。
+ * 云端模式的用户为它付一次下载和几百 MB 磁盘，换来的东西一行代码都不会跑。
+ * 所以触发点是"本地模式真要起 Go 栈了"，即 `tryStartGoStack` 起引擎之前。
+ *
+ * 与 `installRuntimeIfPossible` 同一套契约：
+ *   - 已经就绪时一条命令都不跑（正常开机走这条）；
+ *   - 失败**抛错**并带可照做的指引 —— "安装包残缺"与"装不上"是两种事故；
+ *   - 并发去重，避免两个 uv 同时写同一个目录互相破坏；
+ *   - 装完清探测缓存，否则"缺依赖"那次结论还在缓存里，会立刻再失败一次。
+ */
+let engineInstallInFlight = null
+
+async function ensureEngineRuntime(options = {}) {
+  const sources = packagedEngineDir()
+  if (!sources) return { ok: true, reason: 'dev', venvPython: '', installed: false }
+
+  let userData = String(options.userDataPath || '')
+  if (!userData) {
+    try {
+      userData = userDataDir()
+    } catch {
+      // 没有 userData 就没有能放 venv 的地方：这不是"可以跳过"的情况，
+      // 因为下一步 resolveEngineLaunch 一定会拿不到解释器。
+      throw new Error('无法确定本地数据目录，python-engine 的依赖无处可装')
+    }
+  }
+
+  const installer = require('./runtime-install.cjs')
+  const inspect = () =>
+    installer.inspectRuntime({
+      target: 'engine',
+      userDataPath: userData,
+      sources,
+      probe: probeBundledRuntime,
+    })
+
+  const current = inspect()
+  if (current.ready) return { ok: true, reason: 'ok', venvPython: current.venvPython, installed: false }
+
+  if (engineInstallInFlight) {
+    await engineInstallInFlight
+    const after = inspect()
+    return {
+      ok: after.ready,
+      reason: after.ready ? 'reused-install' : 'reused-install-failed',
+      venvPython: after.venvPython,
+      installed: true,
+      message: after.message,
+    }
+  }
+
+  engineInstallInFlight = installer.ensureRuntime({
+    target: 'engine',
+    userDataPath: userData,
+    sources,
+    probe: probeBundledRuntime,
+    onStage: typeof options.onRuntimeStage === 'function' ? options.onRuntimeStage : undefined,
+    onLine: typeof options.onRuntimeLine === 'function' ? options.onRuntimeLine : undefined,
+    force: options.reinstallEngine === true,
+  })
+
+  try {
+    const result = await engineInstallInFlight
+    runtimeProbeCache.clear()
+    return { ok: true, reason: 'installed', venvPython: result.venvPython, installed: true }
+  } catch (err) {
+    const message = err && err.message ? err.message : String(err)
+    const error = new Error(
+      `AI 引擎的依赖没能装好：${message}\n\n` +
+        '本地模式的聊天、知识库、记忆与图谱都由 python-engine 实现，没有它这些功能都不可用。\n' +
+        '常见原因：\n' +
+        '  - 网络不通或过慢：可设 CHIRON_PIP_INDEX_URL 指向可用的镜像源后重启；\n' +
+        '  - 磁盘空间不足（引擎环境约需 1GB）：清理后重启应用会自动重试；\n' +
+        '  - 安全软件拦截了 uv：请放行后重启。',
+    )
+    error.reason = 'engine-deps-install-failed'
+    throw error
+  } finally {
+    engineInstallInFlight = null
+  }
+}
+
+/**
+ * 起 python-engine 该用哪个解释器 —— 以及它到底能不能起。
+ *
+ * **打包态只认引擎自己那份 venv**（外加显式的 `CHIRON_PYTHON`）。这里刻意不留回退链：
+ *   - 回退到引导器 venv：那份按 `desktop-local/pyproject.toml` 装，从来没有引擎依赖，
+ *     选中它的唯一结果是 `ModuleNotFoundError`；
+ *   - 回退到 PATH 上的 `python`：用户机上可能是 Store 占位符，也可能什么都没装。
+ * 这两条回退过去都在，而它们的失败最终被 `tryStartGoStack` 吞掉、静默回落到
+ * desktop-local core —— 用户拿到的是"只有部分页面能用"的残缺界面，且零提示。
+ * 现在失败带着原因往上抛，留着回退只会把那条原因丢掉。
+ *
+ * 开发态照旧用本机环境（`CHIRON_PYTHON` 优先，否则 `python`）：那里不该由壳去装环境。
+ */
+function resolveEngineLaunch(options = {}) {
+  const explicit = String(process.env.CHIRON_PYTHON || '').trim()
+
+  const packaged = packagedEngineDir()
+  if (packaged) {
+    let userData = String(options.userDataPath || '')
+    if (!userData) {
+      try {
+        userData = userDataDir()
+      } catch {
+        return null
+      }
+    }
+    const installer = require('./runtime-install.cjs')
+    const venv = installer.venvPython(userData, 'engine')
+    const command = explicit || (fs.existsSync(venv) ? venv : '')
+    // 没有可用解释器时返回 null（不猜）：调用方要么先跑 ensureEngineRuntime，
+    // 要么把"引擎未就位"如实报出去 —— 绝不能拿一个注定 import 失败的命令去 spawn。
+    if (!command) return null
+    return { command, args: ['-m', 'app.main'], cwd: packaged, kind: 'packaged' }
+  }
+
+  const dev = devEngineDir()
+  if (!dev) return null
+  return { command: explicit || 'python', args: ['-m', 'app.main'], cwd: dev, kind: 'dev' }
 }
 
 /**
@@ -1443,6 +1642,8 @@ module.exports = {
   coreBinaryPath,
   coreSourceDir,
   resolveCoreLaunch,
+  /** 打包态"先按需装好运行时、再给启动信息"：主进程起 Go 栈前用它，避免首启落到旧 core */
+  prepareCoreLaunch,
   buildCoreEnv,
   coreCliArgs,
   parseListeningLine,
@@ -1454,6 +1655,11 @@ module.exports = {
   probeBundledRuntime,
   /** 只读查询运行时是否就绪：主进程据此决定要不要先弹安装进度窗 */
   inspectLocalRuntime,
+  /** AI 引擎环境：只读查询 / 按需安装 / 解释器解析（见上面三段注释） */
+  inspectEngineRuntime,
+  ensureEngineRuntime,
+  resolveEngineLaunch,
+  packagedEngineDir,
   waitForReady,
   listComponents,
   describeComponent,

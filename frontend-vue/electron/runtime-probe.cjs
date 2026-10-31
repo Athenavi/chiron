@@ -20,7 +20,8 @@
  */
 
 /**
- * 在 core 的源码目录里真实导入整个 `app` 包。
+ * 在目标源码目录里真实导入整个 `app` 包（core 与 python-engine 的包名都是 `app`，
+ * 所以同一份探测代码两边通用 —— 区分靠 cwd）。
  *
  * 逐模块 import 而不是只 `import app`：`app/__init__.py` 是空的，仅导入它等于什么都没验。
  *
@@ -60,7 +61,7 @@ function extractMissingModule(output) {
  *
  * @param {Function} spawnSync 注入的 child_process.spawnSync（便于单测替身）
  * @param {string} pythonPath 解释器绝对路径
- * @param {string} cwd `app` 包所在目录（core 将来启动时的 cwd）
+ * @param {string} cwd `app` 包所在目录（该目标将来启动时的 cwd）
  * @param {object} [options] `{ timeout, env }`
  */
 function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
@@ -99,13 +100,16 @@ function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
   const output = String((result && (result.stderr || '')) + (result && (result.stdout || '')) || '')
   const missing = extractMissingModule(output)
   const lastLine = output.trim().split('\n').pop() || '未知原因'
+  // 措辞刻意不带"core/引擎"：这一份探测同时服务本地核心与 python-engine
+  //（见 runtime-install.cjs 的 RUNTIME_TARGETS），写死其中任一个都会在另一条
+  // 失败路径上把用户指向错误的目录。
   return {
     ok: false,
     reason: missing ? 'missing-dependency' : 'probe-failed',
     missingModule: missing,
     message: missing
       ? `解释器 ${pythonPath} 缺少模块 ${missing}`
-      : `解释器 ${pythonPath} 无法导入本地核心：${lastLine}`,
+      : `解释器 ${pythonPath} 无法导入随包的本地代码：${lastLine}`,
   }
 }
 

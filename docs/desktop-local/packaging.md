@@ -84,6 +84,34 @@ Python 版本、架构强绑定，且升级任何一个依赖都要重新出包�
 指向可用镜像。缺少随包解释器或 uv 时**不做联网补救**：那是安装包残缺，
 报"请重新安装"才是可执行的指引。
 
+### 两套环境：本地核心与 AI 引擎
+
+同一份安装代码（`runtime-install.cjs`）按 `RUNTIME_TARGETS` 装**两套互不重叠**的 venv：
+
+| target | 随包源码 | 依赖清单（唯一来源） | 落点 | 何时装 |
+| --- | --- | --- | --- | --- |
+| `core` | `resources/desktop-local` | `pyproject.toml` | `<userData>/local/runtime/venv` | 起 Go 栈前（`prepareCoreLaunch`） |
+| `engine` | `resources/python-engine` | `requirements.txt` | `<userData>/local/engine/venv` | 真要起 Go 栈时（按需，`ensureEngineRuntime`） |
+
+**为什么要两套**：引导器（desktop-local）只要 fastapi / uvicorn / asyncpg / redis /
+embedded-postgres，而引擎还要 pydantic-ai / anthropic / openai / pymupdf / grpcio，
+差一个数量级。合成一份等于让本地模式用户先下载几百 MB 引导器根本用不到的东西；
+更糟的是**失败不各归其位** —— 重建环境第一步是 `removeVenv()`，共用一份 venv 时
+装引擎失败会顺手毁掉本来就好的引导器环境，本地模式从"聊天不可用"变成"全废"。
+
+**为什么引擎按需装**：引擎只在本地模式用得上，云端模式的用户不该为它付一次下载。
+触发点因此是 `main.cjs::tryStartGoStack()` 起栈之前，进度沿用首启那条
+`desktop:runtime-stage` 通道 —— 安装窗按事件里的 `target` / `targetLabel`
+显示"正在准备：本地核心 / AI 引擎"，两套环境是先后两轮，进度条会复位一次。
+
+**为什么不按"装过没装过"判就绪**：判断只看"能否 `import` 整包"（见 §3 开头的验收），
+而且**两套各判各的**：core 装好了不代表引擎装好了。用标记位或共用结论的后果是
+引擎永不安装、进度窗永不出现。
+
+**依赖指纹的公式里刻意不含 target id**：老用户已落盘的 `install.json` 记的是
+`sha256(RUNTIME_PYTHON_VERSION + 清单正文)`，把 target 掺进去会让所有存量 core 环境
+在升级后判"依赖变了"，触发一次本可避免的联网重建。
+
 `desktop-local/scripts/prepare_uv.py` / `prepare_python.py` 都是打包前的就位步骤，
 产物落到 `frontend-vue/assets/uv|python-runtime/<platform>/`，
 再经 `electron-builder.yml` 的 `extraResources` 映射进 `resources/`：
@@ -114,11 +142,18 @@ stdout 默认 cp1252，而这些脚本的输出含中文，`print` 会抛 `Unico
 
 ### 启动时的解析顺序
 
-`components.cjs::resolveCoreLaunch()` 在打包态按下列顺序**逐个真实探测**
-（`probeBundledRuntime` 会实际 `import fastapi, uvicorn, asyncpg, embedded_postgres`）：
+`components.cjs::prepareCoreLaunch()`（打包态）先试 `resolveCoreLaunch()`，拿不到启动
+信息就**就地按需装一次**（`installRuntimeIfPossible`）再试一次。候选链只有两条，
+每条都**真实跑一遍探测**（`runtime-probe.cjs`：`pkgutil.walk_packages` + 逐模块
+`import`，让 Python 自己算依赖闭包，不再有手维护的模块清单）：
 
 1. `<userData>/local/runtime/venv` —— 首次启动按需装的运行时（**唯一正常来源**）
 2. `CHIRON_PYTHON` 环境变量 —— 用户/开发者显式指定
+
+**为什么要有"就地装一次"这一步**：全新安装包恰好是"venv 还不存在"，此时
+`resolveCoreLaunch()` 必然抛错。老写法把它当成"这条链路不适用"直接回落 desktop-local
+core —— 第一次启动因此拿到的是只有旧 core 的半套界面（网关那侧的 skills / graphs /
+kb / workflows 全缺），而且引擎依赖在那条路径上压根轮不到装，要等第二次启动。
 
 **刻意不再兜底到 `PATH` 上的 `python`**。这一条是踩出来的：兜底存在时，只要用户机上
 碰巧有个装了 `fastapi`/`asyncpg` 的 `python`，候选链就会用上它、`resolveCoreLaunch`
@@ -133,6 +168,17 @@ stdout 默认 cp1252，而这些脚本的输出含中文，`print` 会抛 `Unico
 之所以要逐个探测而不是简单回退：用户机上 `PATH` 里的 `python` 可能是 Microsoft Store
 的占位符（spawn 成功但立刻退出），也可能装了 Python 却没有 `fastapi`/`asyncpg`，
 这两种情况都会让 core 起不来，而错误信息对用户毫无指导性。
+
+引擎那一份的解析（`components.cjs::resolveEngineLaunch()`）更短，因为只有两条：
+
+1. `<userData>/local/engine/venv` —— 按需装出来的引擎环境（打包态**唯一**正常来源）
+2. `CHIRON_PYTHON` —— 显式指定
+
+两条都没有时返回 `null`（= 起不了引擎），**不再**回退到引导器 venv 或 `python`：
+引导器那份从来没有引擎依赖，选中它唯一的结局是 `ModuleNotFoundError`；PATH 上那份
+则是上一段说不许用的东西。开发态（没有随包 `python-engine`）由本机环境负责，
+壳不去装，也不弹进度窗。
+
 
 ## 4. 随包 Go 网关
 
@@ -234,7 +280,9 @@ pnpm exec electron-builder --win --dir --publish never
 ls -la release/win-unpacked/resources/app.asar           # 目标 < 100MB
 ls release/win-unpacked/resources/chiron.exe            # 随包网关（本地模式的业务入口）
 ls release/win-unpacked/resources/desktop-local/app     # core 源码在位
-ls release/win-unpacked/resources/desktop-local/pyproject.toml  # 依赖清单在位（uv 靠它装）
+ls release/win-unpacked/resources/desktop-local/pyproject.toml  # core 依赖清单在位（uv 靠它装）
+ls release/win-unpacked/resources/python-engine/app/main.py     # 引擎源码在位（有 main.py 才算真目录）
+ls release/win-unpacked/resources/python-engine/requirements.txt # 引擎依赖清单在位
 ls release/win-unpacked/resources/migrations/versions   # 迁移在位
 ls release/win-unpacked/resources/desktop-local/bin/redis/redis-server.exe
 ls release/win-unpacked/resources/uv/win32-x64/uv.exe    # 随包 uv
@@ -247,6 +295,12 @@ release/win-unpacked/Chiron.exe --remote-debugging-port=9223
 `main.log` 里出现「本地网关不可用（未找到 chiron.exe），退回 desktop-local core」
 就是这一条没做到。
 
+**`resources/python-engine/requirements.txt` 必须存在**：引擎那份 venv 唯一的依赖来源
+就是它（`uv pip install -r`）。缺了它，聊天 / 知识库 / 记忆 / 图谱整条链在首启时装不起来，
+表现是「本地模式未就绪」对话框与错误页写着 `AI 引擎的依赖没能装好：…` —— 不是网关的毛病，
+别去查网关。判目录是否算"带着源码来了"用的是 `app/main.py`，光有空目录不算。
+CI 的 `Verify packaged runtime assets` 对这两份都做**正向断言**。
+
 **`resources/uv` 与 `resources/python-runtime` 必须存在**：解释器与 uv 都随包，
 缺任何一份都说明安装包没按布局打好（首启会直接失败并提示重新安装）。
 CI 里有对应的**正向断言**，按安装包内真实路径检查可执行文件本身，
@@ -255,17 +309,24 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 **`resources/python` 仍然不应存在**：那是"解释器 + 已装依赖"的旧整包，
 会冻结构建机状态、漏一个包就整体失效。CI 对它是反向断言。
 
-一旦首次启动装不起来，先看 `<userData>/local/runtime/install.json` 与
-`logs/main.log`：建 venv、装依赖各有独立阶段，失败会指名是哪一步、
-缺的是哪个组件，以及用哪个环境变量换源（装依赖那步用 `CHIRON_PIP_INDEX_URL`）。
+一旦首次启动装不起来，先看两套环境各自的清单 —— core 在
+`<userData>/local/runtime/install.json`，引擎在 `<userData>/local/engine/install.json` ——
+再看 `logs/main.log`：建 venv、装依赖各有独立阶段，失败会指名是**哪一套环境**（进度窗
+的标题就是这一条）、哪一步、缺的是哪个组件，以及用哪个环境变量换源
+（装依赖那步用 `CHIRON_PIP_INDEX_URL`）。
+本地模式首启会把两份都装出来；只有 core 那份、没有 engine 那份说明 Go 栈那条链路
+压根没走到（最常见是包里缺网关，见 §4）。
 
 真机启动后从 CDP 检查：
 
 - `window.chironDesktop.mode === 'local'`
 - `logs/main.log` 里**没有**「本地网关不可用（未找到 chiron.exe），退回 desktop-local core」
   —— 出现这一条就是包里缺网关，症状是"能开、但处处空转"
-- 首次启动时先出现安装进度窗，装完自动关闭并进主界面
+- 首次启动时先出现安装进度窗，装完自动关闭并进主界面；窗里「正在准备：本地核心」那一行
+  会切成「正在准备：AI 引擎」，两套环境的进度不会混在同一行里
 - `<userData>/local/runtime/install.json` 存在，`dependencyFingerprint` 非空
+- `<userData>/local/engine/install.json` **同样存在**（本地模式起栈时两轮一起装完），
+  且它的 `dependencyFingerprint` 与 core 那份**不同**（两份清单内容不同）
 - `GET {apiUrl}/readyz` 返回 `pg=true`、`migration.ok=true`
 - 退出后 `netstat` 无 core / PG 残留监听
 
@@ -276,6 +337,15 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 - **首次启动仍需联网（只装依赖这一步）**：解释器与 uv 都随包，建 venv 不碰网络；
   只有 `uv pip install` 要访问 PyPI。受限时用 `CHIRON_PIP_INDEX_URL` 换源，
   换好源重启应用会自动重试；也可以事后把整套环境放到 `<userData>/local/runtime`。
+- **引擎环境只在本地模式装**：它的触发点是 `tryStartGoStack()` 起栈之前，
+  云端模式用户永远不会为它付这次下载。所以本地模式首启是**两轮**安装 ——
+  先 core、再引擎，同一个进度窗、标题跟着换。引擎的 `requirements.txt`
+  比 core 的 `pyproject.toml` 重一个数量级（pydantic-ai / anthropic / openai /
+  pymupdf / grpcio），首启因此明显更久；中途失败只影响引擎那一份，
+  core 已装好的环境不会被回滚。
+- **装成功之前，`resolveEngineLaunch()` 只返回 `null`**：壳不会拿 core 的 venv 去顶替引擎，
+  也不会拿 PATH 上的 `python`（见 §3 的解析顺序）。所以引擎环境没就绪时，症状是
+  "引擎功能全不可用"，而不是"引擎用了另一份依赖然后到处 ModuleNotFound"。
 - 首次安装较重：`embedded-postgres` 自带整套 PG 二进制，首次要拉几十到上百 MB。
 - 构建期**需要**先就位 uv 与解释器（`npm run prepare:runtime` 会串联 uv / python / redis
   三步）；已就位时可重复执行，脚本自检通过就跳过下载。离线时用 `--from <压缩包|目录>`。
