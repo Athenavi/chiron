@@ -754,7 +754,7 @@ GOFLAGS=-mod=mod go test ./internal/api/ -run 'Live' -count=1 -v
 
 | 待定项 | 两种选择 | 影响面 |
 |---|---|---|
-| `AgentsView.vue` 是否隐藏他人共享 Agent 的编辑/删除按钮 | ① 共享即只读，隐藏按钮 ② 允许编辑（当前行为） | 涉及「共享」的语义定义。若选 ①，需同时决定后端是否也拒绝（前端隐藏但接口仍放行等于假安全） |
+| `AgentsView.vue` 是否隐藏他人共享 Agent 的编辑/删除按钮 | ① 隐藏按钮 ② 允许编辑（原行为）—— **已决策：都不选**，改为「保留但置灰 + 提示仅创建者可编辑」 | 不选 ①：保留可发现性，让用户理解为什么不能点，而不是凭空少两个入口。不选 ②：后端本就不允许 —— `agents.go:367`（update）、`:387`（delete）、`:551`（visibility）三处 SQL 都带 `AND user_id = $N`。实现见 §17.5 第 4 项 |
 | `internal/auth/local.go:81 CreateUser` | ① 保留并让注册流程走它 ② 从接口与实现一并删除 | **事实更正（本轮实测）**：它不是「未导出的死函数」——`internal/auth/interface.go:27` 把它声明为 `AuthService` 接口方法，实现也在。但全仓 `.CreateUser(` 调用点为 **0**：注册实际走的是别的路径。删除要从接口 + 实现 + 各自的测试替身三处一起动，不是删一个函数 |
 
 > 原第三项「`migrations/versions/*.pyc` 是否清理」**已无需决策**：实测该目录下 `*.pyc` 数量为 **0**。
@@ -848,7 +848,7 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 | 待定项 | 卡住什么 |
 |---|---|
 | `AgentsView.vue` 共享 Agent 是否隐藏他人编辑/删除按钮 | 决定前端要不要改、以及后端是否同步拒绝。**这是 §16.3 遗留项，未定之前第 3 项应避开 `AgentsView`** |
-| `CreateUser` 保留还是从接口删除 | 实测：是 `AuthService` 接口方法（`interface.go:27`），但 `.CreateUser(` 调用点 **0**。删除要动「接口 + 实现 + 测试替身」三处，需你确认注册流程是否还打算走它 |
+| `CreateUser` 保留还是从接口删除 | **已决策（2026-10-30）：删除**。已从 `interface.go:26-27` 声明与 `local.go:81` 实现两处删净（全仓无测试替身实现它，故只动两处）。`go build ./...` + `go vet ./...` + `go test ./internal/auth/` 全通过 |
 
 ### 17.4 仍受外部条件阻塞（不改代码）
 
@@ -861,8 +861,8 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 
 **Go 侧已收尾（见 §17.2 末），前端成为唯一主线。**
 
-1. **`BillingView.vue` 抽 composable** —— 改为前端第一。理由从「有 13 个用例兜底」升级为「它是唯一既有测试网、又足够大的文件」：改坏立刻被抓，且不需要先写测试。先切「发票」与「支付二维码」两块。
-2. **`MediaView.vue` 抽 composable** —— 冒烟网（6 用例）已就位，按「上传 / 预览 / 列表」切。上传块状态最独立，优先切它。
+1. ✅ **`BillingView.vue` 抽 composable —— 已完成（2026-10-30）**，详见 §17.2 第 3 项：发票子域外移到 `composables/useBillingInvoices.ts`（151 行），1566 → 1464。**「支付二维码」未切** —— 它与 `CreatePayment` 主流程双向耦合（`CreatePayment` 直接写 `qrCode`/`orderId`/`qrVisible` 等 6 个状态），拆它要改写入方，不是纯移动。该项就此关闭，不再排期。
+2. ✅ **`MediaView.vue` 抽 composable —— 已完成（2026-10-30）**，详见 §17.2 第 2 项：批量上传子域外移到 `composables/useMediaUpload.ts`（182 行），1842 → 1703。**建网当场抓到一个既有缺陷**：模板用 `<Progress>` 做进度条但从未导入，浏览器里一直是未解析标签。「预览 / 列表」两块未独立成 composable —— 它们与 `resolveItemUrl`/`fetchItems` 的 URL 解析和目录上下文深度共享，强行切会造出一个参数比返回值还多的接口。
 3. ✅ **`SettingsPanel.vue` 测试网已建（1236 行 / 0 spec → 7 条）** —— `src/components/settings/__tests__/SettingsPanel.smoke.spec.ts`。覆盖前两个子域：「账户资料」4 条（初始值取自登录用户、邮箱只读、保存载荷与成功后刷新、失败不刷新）+「三方账号绑定」3 条（空态、已绑定 provider 从可绑定列表过滤、解绑后绕过缓存重拉）。
    **一条踩坑记录（值得复用）**：antd Tabs 在 vitest 里**未被 `unplugin-vue-components` 解析**（该插件只在 `vite.config.ts`，`vitest.config.ts` 没有），因此所有 `a-tab-pane` 的内容都同时挂在 DOM 上。第一版断言直接 `findAll('input')[0]` 与 `findComponent(EmptyState)`，命中的是「通用」页签里的强调色输入框与空态 —— **测试"通过"了但断言的是别处**。修法是按 `.setting-block` + 标题文案把作用域收窄到目标区块（`EmptyState` 全文 5 处、`Popconfirm` 4 处，全局取第一个必然出错）。
    **后续若要在测试里正确渲染 antd 组件**，可给 `vitest.config.ts` 加同一个 `Components({ resolvers: [AntDesignVueResolver()] })`；当前不改配置，用区块作用域已足够。
@@ -873,8 +873,13 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
    **第四步（2026-10-30）**：「数据管理：会话导出与删除」已抽出 → `composables/useSettingsConversations.ts`（193 行，13 个导出：5 状态 + `allSelected`/`selectedCount` 两个 computed + `loadConversations`/`openConversations`/`conversationToMarkdown`/`exportSelected`/`deleteSelected`/`toggleSelectAll`，`ConversationItem`/`ExportMessage` 一并搬走），`SettingsPanel.vue` **1018 → 883 行**。这是四块里唯一有**跨子域依赖**的：`deleteSelected` 末尾原本直接调 `loadShares()`（删掉会话，挂在它上面的分享自然不该再显示）。没有让两个 composable 互相 import，而是按 `useMediaUpload({ parentId, onUploaded })` 的既有做法改成注入回参 `useSettingsConversations({ onSessionsDeleted: loadShares })` —— 两个子域各自独立可测，谁也不需要知道对方内部怎么实现。
    抽时原样保留两个容易改错的口径：① **导出串行**逐会话拉详情（低频操作，串行避免瞬时打满后端）；② **删除部分失败要如实报告**（后端无批量接口，逐个删，`failed.length` 非空时走 `deleted_ok_failed_failed` 提示成功/失败分开计数，并把 `selectedConvIds` 置为失败项，不谎报全部成功）。同步清理 3 个失效 import（`tallyCache`/`scheduleTally`/`computed`），删前 `rg -n` 逐行核对确认只剩 import 行。7 条用例仍全绿，`vue-tsc -b` 零错误，前端全量 103 files / 837 tests 通过。
    **至此 `SettingsPanel.vue` 的四个大子域（三方绑定 / 手机号 / 分享 / 会话）全部抽出**，1236 → 883 行。剩余在视图内的只有「账户资料」（1 函数 2 状态）、「设置密码」（1 函数 2 状态）、「朗读音色」（3 函数 3 状态）与主题偏好 —— 这三块都太小，抽出去后 composable 比留在视图里更难读，**判断为不值得拆**。
-4. **`AgentsView.vue`** —— 待拍板（见 §17.3）。
-4. **`AgentsView` 在 §17.3 定下来之前不动**：改它等于替用户决定「共享」的语义。
+4. **`AgentsView.vue`** —— ✅ **已完成（2026-10-31）**。按 §17.3 的决策，编辑/删除按钮保留但置灰 + 提示「仅创建者可编辑」。
+   - 新增 `canManage(a: AgentRow)` 与 `currentUserId`（取自 `useAuthStore().user?.id`），编辑、删除两个 `MenuItem` 各加 `:disabled="!canManage(a)"` 与 `:title`。
+   - **两处刻意不误锁**：① `a.user_id` 缺失（老数据 / 后端未回填）→ 放行；② 当前用户 id 拿不到 → 放行。宁可多一次 403 提示，也不要让所有者因为拿不到自己的 id 被锁在门外。这个取舍来自「前端隐藏但接口仍放行等于假安全」的反面：前端置灰只是提示，**真正的权限边界仍在后端**（`agents.go:367`/`:387`/`:551` 三处 `AND user_id = $N`）。
+   - 三语新增键 `agent.only_creator_can_edit`（zh-CN/en-US/ar），`check-i18n-keys` 通过。
+   - 测试：`AgentsView.spec.ts` 3 → **6 条**。新增 3 条直测 `canManage` 而非去 DOM 里找置灰的 `MenuItem` —— antd 组件在 `vitest.config.ts` 下未配 `unplugin-vue-components`，`MenuItem` 不会解析成真实组件，`disabled` 无从断言。同时给 `mountView()` 补装 pinia（此前没装，引入 `useAuthStore` 后三条既有用例全挂）。
+   - `vue-tsc -b` 零错误，前端全量 103 files / **840 tests** 通过，后端 `go build ./...` + `go vet ./...` 通过。
+4. **`AgentsView` 在 §17.3 定下来之前不动**：改它等于替用户决定「共享」的语义 —— **已解除**，决策已落（见上）。
 
 **为什么 `BillingView` 排在 `MediaView` 之前**：两者的拆分本身风险相当，差别在验证成本 —— `MediaView` 现有 6 条冒烟只覆盖列表与导航，抽「上传」时无网可依；`BillingView` 的 13 个用例正对着要切的那两块。先做有网的那个，能把「拆分手法」本身先在一个安全场子里验证一遍。
 
@@ -893,3 +898,73 @@ cd frontend-vue && npx vue-tsc -b && node scripts/check-i18n-keys.mjs && npm tes
 ```
 
 > 逐字校验脚本只认**符号名**、不认行号 —— 行号在 HEAD 与工作区之间必然漂移，硬编码行号会直接 ABORT。
+
+## 18. 下一批开发任务（2026-10-31，§17 四项全部交付之后）
+
+> **§17 已全部落地**：1 `BillingView` 发票子域 ✅、2 `MediaView` 上传子域 ✅、3 `SettingsPanel` 四个大子域 ✅、4 `AgentsView` 属主判定 ✅。另修掉三处 CI 门禁漂移（见 §18.4）。以下为**下一批**，全部基于本会话 `wc -l` 与 `rg` 实测。
+
+### 18.1 事实基线（2026-10-31 实测）
+
+**判据先说清楚：行数不是排序依据。** 真正决定「好不好拆」的是**脚本段行数 × 既有用例数** —— 脚本段才是能外移的部分，模板段基本原样留在视图里；用例数决定动手时有没有网。
+
+| 文件 | 总行数 | script / template / style | spec 用例 | 判据 |
+|---|---|---|---|---|
+| `MessageItem.vue` | 1291 | **597** / 361 / 331 | **34** | **首选**：脚本段最大且网最厚 |
+| `ChatInput.vue` | 1628 | **941** / 420 / 264 | 6 | 脚本段最大，但网偏薄 |
+| `WorkflowView.vue` | 1364 | 388 / **846** / 127 | **2** | 846 行是模板 ⇒ 能外移的只有 388 行；用例仅覆盖模板市场 |
+| `ChatSidePanel.vue` | 1228 | 420 / 546 / 258 | 13 | 可选，脚本段中等 |
+| `MediaView.vue` | 1703 | — | 6 | 已切一刀（上传），见 §17.2 |
+| `BillingView.vue` | 1464 | — | 12 | 已切一刀（发票），见 §17.2 |
+| `ChatView.vue` | 3966 | — | 2 | **明确不动**（网太薄，见末段） |
+
+**这张表纠正了 §17.1 的一个误判**：§17.1 按总行数把 `WorkflowView`（1364）排在 `MessageItem`（1291）前面。实测 `WorkflowView` 的 846 行模板是不可外移的，真正可拆的脚本只有 388 行，且只有 2 个用例 —— 按总行数排会先啃最硬的那块。
+
+### 18.2 可立即做（按「网厚度」从厚到薄）
+
+| 序 | 任务 | 依据与做法 |
+|---|---|---|
+| **1** | **`MessageItem.vue` 597 行脚本抽三块** | 34 个用例兜底，是当前唯一「网够厚、脚本够大」的文件。三个簇按符号即可切开：① **打字机 ink**（`inkChars`/`inkBatchStart`/`inkIndex`）② **等待倒计时**（`waitSeconds`/`waitLeft`/`stopWaitTimer`/`waitLabel`/`canRetry`）③ **附件 URL 解析**（`attachmentResolved`/`attachmentNameParts`/`attName`/`attachmentUrl`/`resolveAttachmentUrls`/`onAttachmentImgError`）。倒计时簇带 timer，必须在 `onUnmounted` 里清 —— 抽出去后由 composable 自己管生命周期，不要留给视图 |
+| **2** | **`ChatInput.vue` 941 行脚本**，但须**先补网** | 脚本段是全部候选里最大的，6 个用例只够覆盖输入主路径。开工第一步是补用例（附件、快捷键、IME、发送失败），**补完再切**，否则等于无网作业 |
+| **3** | **`WorkflowView.vue` 节点配置簇** | `edit*` 那 20 个 `ref`（`editLabel`…`editMaxTurns`）+ `applyNodeConfig` + `onNodeClick` 构成「选中节点 → 编辑 → 回写」闭环，是最干净的边界。但现有 2 个用例如实只覆盖模板市场弹窗，**建网成本最高**，排最后 |
+
+### 18.3 建议顺序与理由
+
+1. **`MessageItem` 三块** —— 唯一「不用先写测试就能安全动」的文件（34 个用例），且三块边界由符号天然划开。先做它能把「抽 composable」的手法在厚网上再验证一遍。
+2. **`ChatInput` 补网 + 切** —— 补网这步本身有独立价值：941 行脚本只有 6 个用例是当前最大的覆盖缺口。
+3. **`WorkflowView`** —— 收益明确（846 行模板依赖的 20 个 `edit*` 状态会一起搬走），但必须先建网，成本最高。
+
+**为什么不再碰 Go 侧**：§17.2 末已收尾 —— `>650 行` 只剩 7 个，其中 `admin_ops.go`（950）、`auth.go`（731）、`admin.go`（704）、`submit_handler.go`（935）都是单巨型函数撑起文件，继续拆要动函数体内部时序。这个结论未变。
+
+### 18.4 门禁现状（本轮修掉的三处漂移）
+
+**关键事实：`check:ui` 是 CI 的硬门禁。** `package.json:19` 的 `build` = `check:ui && vue-tsc -b && vite build`，而 `.github/workflows/ci.yml:162` 的前端 job 跑的就是 `pnpm run build` —— 所以任何一处门禁违规都会让整个前端 job 红。
+
+本轮修掉三处（都是「新写代码没跟上契约」，不是存量债）：
+
+1. `components/chat/OnboardingGuide.vue` —— `color: #fff` 裸色值 → `var(--color-on-primary, #fff)`。同文件另外 13 处色值早已是 `var(--token, 回退值)` 形式，只有这行漏了。
+2. `views/NotificationsView.vue` —— `transition: background 0.15s ease` → `var(--dur-fast) var(--ease-out)`。`check-motion-tokens.mjs` 的 `BASELINE = {}` 已全清零，任何裸时长即失败；`0.15s` = 150ms 正落在 `--dur-fast`（≤150ms，颜色/边框 hover）区间。
+3. `views/NotificationsView.vue` —— 通知列表项 `<li @click>` 键盘不可达 → 补 `role="button"` + `tabindex="0"` + 单一 `@keydown`。**不能写成 `@keydown.enter` + `@keydown.space` 两个**：同名事件映射到同一个 `onKeydown` prop，后声明的覆盖前者（`ChatEmptyHero.vue` 里记过同一条坑）。
+
+**教训**：这三处都是「新写页面时只跑了 `npm test`，没跑 `check:ui`」。`npm test` 全绿不代表能过 CI —— 两者的检查项不重叠。
+
+### 18.5 明确不做
+
+- **`ChatView.vue`（3966 行 / 2 用例）** —— 网太薄，任何拆分都无法验证。要动它必须先把用例补到能覆盖会话主流程，那是独立一档工作量。
+- **`BillingView` 支付二维码簇** —— 与 `CreatePayment` 双向耦合（直接写 `qrCode`/`orderId`/`qrVisible` 等 6 个状态），拆它要改写入方，不是纯移动。
+- **`MediaView` 预览 / 列表两块** —— 与 `resolveItemUrl`/`fetchItems` 的 URL 解析和目录上下文深度共享，强行切会造出参数比返回值还多的接口。
+- **`SettingsPanel` 剩余三小块**（账户资料 / 设置密码 / 朗读音色）—— 抽出去后 composable 比留在视图里更难读。
+
+### 18.6 每项的必做验证
+
+```
+# 前端（与 §17.6 同口径）
+cd frontend-vue && pnpm check:ui && npx vue-tsc -b && npm test
+
+# 只跑单个 spec 时
+cd frontend-vue && npx vitest run src/views/__tests__/<name>.spec.ts && npx vue-tsc -b
+
+# 文档改动
+python scripts/check_md_tables.py && python scripts/check_source_encoding.py
+```
+
+> 前端改动后**必须跑一次完整 `pnpm check:ui`**（九个脚本），不能只跑 `npm test` —— 理由见 §18.4 的教训。

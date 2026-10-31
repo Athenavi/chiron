@@ -162,6 +162,7 @@ export default {
   use_this_skill_in_the_conversation: "استخدم هذه المهارة في المحادثة",
   only_tools_from_these_plugins_blank_no_filter: "أدوات هذه الإضافات فقط (فارغ = بلا تصفية)",
   can_only_operate_agents_you_created: "يمكنه فقط تشغيل الوكلاء الذين أنشأتهم",
+  only_creator_can_edit: "المُنشئ فقط يمكنه التعديل",
   only_enable_selected_skills_blank_all_installed: "فعّل المهارات المحددة فقط (فارغ = جميع المثبّتة)",
   only_enabled_models_appear_in_the_conversation_page_model_dropdown_total: "فقط النماذج المُفعّلة تظهر في القائمة المنسدلة للنماذج بصفحة المحادثة، الإجمالي",
   assemble_to_agent: "تجميع إلى الوكيل",

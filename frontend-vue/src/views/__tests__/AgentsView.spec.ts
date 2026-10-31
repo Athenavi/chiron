@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
+import { createPinia, setActivePinia } from 'pinia'
 
 /**
  * `AgentsView` 的冒烟网 + 两条**接线**（2026-10-09）。
@@ -51,6 +52,7 @@ const apiMocks = vi.hoisted(() => {
 vi.mock('../../api', () => apiMocks)
 
 import AgentsView from '../AgentsView.vue'
+import { useAuthStore } from '../../stores/auth'
 
 const router = createRouter({
   history: createMemoryHistory(),
@@ -60,8 +62,22 @@ const router = createRouter({
   ],
 })
 
-function mountView() {
-  return mount(AgentsView, { global: { plugins: [router] } })
+/**
+ * 挂载视图。
+ *
+ * `currentUserId` 传 `undefined` 表示「不注入登录用户」——用于既有三条用例，
+ * 保持它们原本的行为（此时 `canManage` 一律放行，见下方属主判定用例）。
+ */
+function mountView(currentUserId?: string) {
+  const pinia = createPinia()
+  setActivePinia(pinia)
+  if (currentUserId !== undefined) {
+    // 直接写 store 的 ref：不进 login 流程，避免多打一次接口
+    useAuthStore().user = {
+      id: currentUserId, email: '', name: 'me', role: 'user', tenant_id: 1,
+    }
+  }
+  return mount(AgentsView, { global: { plugins: [router, pinia] } })
 }
 
 describe('AgentsView（此前零测试）', () => {
@@ -112,5 +128,52 @@ describe('AgentsView（此前零测试）', () => {
     expect(apiMocks.listKnowledgeBases).toHaveBeenCalledTimes(1)
     expect(apiMocks.listWorkflows).toHaveBeenCalledTimes(1)
     wrapper.unmount()
+  })
+
+  /**
+   * 属主判定（2026-10-31）。
+   *
+   * 动因：列表接口会返回本租户内**别人共享**（`visibility='tenant'`）的 Agent，
+   * 而后端 `update` / `delete` / `setAgentVisibility` 三处 SQL 都带
+   * `AND user_id = $N`，非属主点下去必定 403。前端此前没有任何判定，等于让用户
+   * 点一次才知道不能改。
+   *
+   * 这里测 `canManage` 而不是去 DOM 里找置灰的 `MenuItem`：antd 组件在
+   * `vitest.config.ts` 下未配 `unplugin-vue-components`，`MenuItem` 不会解析成
+   * 真实组件，`disabled` 属性无从断言。测函数是这条接线的真实契约。
+   */
+  type CanManage = (a: { id: string; user_id?: string }) => boolean
+  const canManageOf = (w: ReturnType<typeof mountView>) =>
+    (w.vm as unknown as { canManage: CanManage }).canManage
+
+  it('★ 属主判定：本人的 Agent 可编辑', async () => {
+    apiMocks.listAgents.mockResolvedValue([])
+    const wrapper = mountView('u-me')
+    await flushPromises()
+
+    expect(canManageOf(wrapper)({ id: 'a-1', user_id: 'u-me' })).toBe(true)
+    wrapper.unmount()
+  })
+
+  it('★ 属主判定：他人共享的 Agent 不可编辑', async () => {
+    const wrapper = mountView('u-me')
+    await flushPromises()
+
+    expect(canManageOf(wrapper)({ id: 'a-2', user_id: 'u-other' })).toBe(false)
+    wrapper.unmount()
+  })
+
+  it('★ 属主判定：user_id 缺失或当前用户未知时放行（宁多一次 403，不误锁属主）', async () => {
+    // ① 列表项没带 user_id（老数据 / 后端未回填）
+    const withUser = mountView('u-me')
+    await flushPromises()
+    expect(canManageOf(withUser)({ id: 'a-3' })).toBe(true)
+    withUser.unmount()
+
+    // ② 拿不到当前用户 id —— 若这里判 false，属主会被锁在门外
+    const anonymous = mountView()
+    await flushPromises()
+    expect(canManageOf(anonymous)({ id: 'a-4', user_id: 'u-someone' })).toBe(true)
+    anonymous.unmount()
   })
 })

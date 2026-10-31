@@ -232,6 +232,6 @@ function onAction(target: 'model' | 'input'): void {
 .onboarding-ok {
   border: 1px solid var(--color-primary, #1677ff);
   background: var(--color-primary, #1677ff);
-  color: #fff;
+  color: var(--color-on-primary, #fff);
 }
 </style>

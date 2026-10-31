@@ -189,6 +189,21 @@ async function openItem(item: NotificationItem) {
   }
 }
 
+/**
+ * 列表项的键盘激活。
+ *
+ * `<li>` 是整行可点（不是行内某个按钮），所以按 a11y 契约给它 `role="button"` +
+ * `tabindex="0"`，键盘激活收口到**一个** `@keydown` —— 同一元素上再写
+ * `@keydown.enter` / `@keydown.space` 会被后声明的覆盖（同名事件 → 同一个
+ * onKeydown prop），这也是 `ChatEmptyHero.vue` 里记的同一条坑。
+ */
+function onItemKeydown(e: KeyboardEvent, item: NotificationItem) {
+  if (e.key === 'Enter' || e.key === ' ') {
+    e.preventDefault()   // 空格默认会滚动页面，必须拦掉
+    void openItem(item)
+  }
+}
+
 async function toggleEmail(kind: string, next: boolean) {
   savingKind.value = kind
   // 乐观更新：开关必须立刻响应，否则用户会以为没点上而再点一次。
@@ -295,7 +310,10 @@ async function toggleEmail(kind: string, next: boolean) {
         :class="{ unread: !item.read }"
         class="notification-item"
         :data-test="`notification-${item.id}`"
+        role="button"
+        tabindex="0"
         @click="openItem(item)"
+        @keydown="onItemKeydown($event, item)"
       >
         <div class="notification-main">
           <div class="notification-top">
@@ -433,7 +451,7 @@ async function toggleEmail(kind: string, next: boolean) {
   padding: 14px 16px;
   cursor: pointer;
   border-block-end: 1px solid var(--border-color, rgba(0, 0, 0, 0.06));
-  transition: background 0.15s ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 
 .notification-item:last-child {

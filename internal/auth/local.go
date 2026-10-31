@@ -78,21 +78,6 @@ func (s *LocalAuthService) ValidateToken(ctx context.Context, token string) (*Cl
 	}, nil
 }
 
-func (s *LocalAuthService) CreateUser(ctx context.Context, user *User) error {
-	if s.db == nil {
-		return fmt.Errorf("database not available")
-	}
-
-	_, err := s.db.Exec(ctx,
-		`INSERT INTO users (id, email, name, role, tenant_id, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, NOW(), NOW())`,
-		user.ID, user.Email, user.Name, user.Role, user.TenantID)
-	if err != nil {
-		return fmt.Errorf("create user: %w", err)
-	}
-	return nil
-}
-
 func (s *LocalAuthService) UpdateUser(ctx context.Context, user *User) error {
 	if s.db == nil {
 		return fmt.Errorf("database not available")

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted, markRaw } from 'vue'
+import { ref, onMounted, onUnmounted, markRaw, computed } from 'vue'
 import type { Component } from 'vue'
 import { useRoute, useRouter } from 'vue-router'
 import {
@@ -28,12 +28,36 @@ import { setChatPrefill } from '../components/chat/chatPrefill'
 import { agentResultToMarkdown, parseAgentResult } from '../utils/agentResultMarkdown'
 
 import { useI18n } from 'vue-i18n'
+import { useAuthStore } from '../stores/auth'
 import { errorDetail } from '../utils/apiError'
 import { serverErrorDetail, errorMessageText, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 // ── 数据 ──
 // 后端列表项可能带 visibility（'private'|'tenant'）；缺失视为 private
 type AgentRow = Agent & { visibility?: 'private' | 'tenant' }
+
+// ── 属主判定 ──
+// 列表接口会同时返回本租户内别人共享（visibility='tenant'）的 Agent，而后端
+// update / delete / setAgentVisibility 三处的 SQL 都带 `AND user_id = $N`，
+// 非属主点下去必定 403。所以这里前置判断，把必然失败的操作置灰，而不是让用户
+// 点完才吃一个报错。
+const authStore = useAuthStore()
+const currentUserId = computed(() => authStore.user?.id ?? '')
+
+/**
+ * 能否编辑/删除这个 Agent。
+ *
+ * 两个方向都刻意不误锁：
+ * ① `a.user_id` 缺失（老数据、或本地模式后端没回填）→ 放行，交给后端裁决；
+ * ② 当前用户 id 拿不到 → 同样放行。宁可多一次 403 提示，也不要让所有者
+ *    因为拿不到自己的 id 而被锁在门外。
+ */
+function canManage(a: AgentRow): boolean {
+  if (!a.user_id) return true
+  if (!currentUserId.value) return true
+  return a.user_id === currentUserId.value
+}
+
 const agents = ref<AgentRow[]>([])
 const loadingAgents = ref(true)
 const errorAgents = ref(false)
@@ -585,6 +609,8 @@ function toolCount(a: Agent): number {
                   <Menu class="card-menu">
                     <MenuItem
                       key="edit"
+                      :disabled="!canManage(a)"
+                      :title="canManage(a) ? '' : $t('agent.only_creator_can_edit')"
                       @click="openEdit(a)"
                     >
                       <EditOutlined class="menu-icon" />{{ $t('common.edit_2') }}
@@ -614,6 +640,8 @@ function toolCount(a: Agent): number {
                     <MenuItem
                       key="delete"
                       danger
+                      :disabled="!canManage(a)"
+                      :title="canManage(a) ? '' : $t('agent.only_creator_can_edit')"
                       @click="requestDelete(a)"
                     >
                       <DeleteOutlined class="menu-icon" />{{ $t('common.delete') }}

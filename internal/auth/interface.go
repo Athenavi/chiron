@@ -23,9 +23,6 @@ type AuthService interface {
 	// ValidateToken validates a JWT token and returns claims.
 	ValidateToken(ctx context.Context, token string) (*Claims, error)
 
-	// CreateUser creates a new user.
-	CreateUser(ctx context.Context, user *User) error
-
 	// UpdateUser updates an existing user.
 	UpdateUser(ctx context.Context, user *User) error
 

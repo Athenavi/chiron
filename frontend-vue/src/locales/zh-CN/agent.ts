@@ -162,6 +162,7 @@ export default {
   use_this_skill_in_the_conversation: "在对话中使用该技能",
   only_tools_from_these_plugins_blank_no_filter: "只放这些插件提供的工具（留空 = 不筛选）",
   can_only_operate_agents_you_created: "只能操作自己创建的 Agent",
+  only_creator_can_edit: "仅创建者可编辑",
   only_enable_selected_skills_blank_all_installed: "只启用选中的技能（留空 = 全部已安装）",
   only_enabled_models_appear_in_the_conversation_page_model_dropdown_total: "只有启用（enabled）的模型才会出现在对话页的模型下拉里，共",
   assemble_to_agent: "装配到 Agent",

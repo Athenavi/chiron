@@ -162,6 +162,7 @@ export default {
   use_this_skill_in_the_conversation: "Use this skill in the conversation",
   only_tools_from_these_plugins_blank_no_filter: "Only tools from these plugins (blank = no filter)",
   can_only_operate_agents_you_created: "Can only operate Agents you created",
+  only_creator_can_edit: "Only the creator can edit",
   only_enable_selected_skills_blank_all_installed: "Only enable selected skills (blank = all installed)",
   only_enabled_models_appear_in_the_conversation_page_model_dropdown_total: "Only enabled models appear in the conversation page model dropdown, total",
   assemble_to_agent: "Assemble to Agent",
