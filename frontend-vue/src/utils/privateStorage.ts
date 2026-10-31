@@ -18,6 +18,8 @@ export const PRIVATE_KEY_PREFIXES: readonly string[] = [
   'chiron:chat-setup-tour',  // "未配置引导看过了"标记（按账号隔离，登出时清）
   'chiron:outbox',           // 发送失败、暂存在本地的消息（见 components/chat/failedOutbox.ts）
   'chiron:ui-sounds',        // 交互音效开关（见 utils/uiSounds.ts）
+  // 快捷键键位：记录的是用户**改过哪些键**，属于行为数据而非 UI 偏好，因此同样按账号隔离
+  'chiron:shortcuts',
 ]
 
 /** 构造带账号命名空间的私有键；无账号时退化为 `:anonymous`（登出态本就不应写入）。 */

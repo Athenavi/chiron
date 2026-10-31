@@ -38,8 +38,11 @@ import { useApprovalEdit, type PendingApproval } from '../composables/useApprova
 import { useTranscriptSearch } from '../composables/useTranscriptSearch'
 import { useSessionMeta } from '../composables/useSessionMeta'
 import { useMessageFailure } from '../composables/useMessageFailure'
+import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
+import { SHORTCUT_CATALOG, type ShortcutId } from '../config/shortcutCatalog'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
+import ShortcutsHelpModal from '../components/chat/ShortcutsHelpModal.vue'
 import { CloudUploadOutlined } from '@ant-design/icons-vue'
 import { sessionToMarkdown } from '../utils/sessionMarkdown'
 import { sessionToGraph } from '../utils/sessionGraph'
@@ -1785,6 +1788,93 @@ const {
   confirmRename,
 } = useSessionMeta({ sessions, persistSessions })
 
+// ── 全局快捷键（定义见 config/shortcutCatalog.ts，实现见 composables/useKeyboardShortcuts.ts）──
+// 声明顺序即优先级：原 if 链里"先命中先 return"的语义，现在由数组顺序承载。
+// Esc 的实际顺序是 **地图 > 停止生成 > 浮窗 > 侧栏** —— 地图是 iframe 浮在最上层，
+// 所以最先关；"停止生成"排第二，因为那时用户的意图是停下，而不是关面板。
+// 这里只补 handler / when，键位与顺序一律以目录为准（设置页读的是同一份）。
+const shortcutsHelpOpen = ref(false)
+
+/**
+ * 从目录里取一条定义。
+ *
+ * 入参类型是 :type:`ShortcutId`（由 `as const` 推出的字面量联合），
+ * 所以把 id 写错是**编译错误**而不是"这条快捷键悄悄不生效"。
+ */
+function specOf(id: ShortcutId) {
+  const spec = SHORTCUT_CATALOG.find(s => s.id === id)
+  // find 的返回类型是可能 undefined；目录是常量，走到这里说明目录本身写错了。
+  // 开发者错误信息用英文：它是给维护者看的，不进 UI，也就不该占 i18n 的账
+  if (!spec) throw new Error(`shortcutCatalog is missing "${id}"`)
+  return spec
+}
+
+useKeyboardShortcuts({
+  userId: authStore.user?.id ?? null,
+  bindings: [
+    {
+      ...specOf('close-shortcuts-help'),
+      // 速查表自己是最上层浮层：Esc 必须先关它，不能穿透到下面的面板
+      when: () => shortcutsHelpOpen.value,
+      handler: () => { shortcutsHelpOpen.value = false },
+    },
+    {
+      ...specOf('open-session-list'),
+      handler: () => {
+        panelOpen.value = true
+        panelView.value = 'sessions'
+        nextTick(() => {
+          const searchInput = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
+          searchInput?.focus()
+        })
+      },
+    },
+    {
+      ...specOf('find-in-transcript'),
+      // 有意覆盖浏览器的页面查找：应用内查找才回答得出"我在这次会话里什么时候问过什么"，
+      // 而浏览器查找只会匹配**当前已挂载的行** —— 我们用的是窗口化列表，
+      // 未渲染的历史段落它根本扫不到（这正是"找不到明明存在的内容"的来源）。
+      handler: () => {
+        panelOpen.value = true
+        panelView.value = 'trajectory'
+        nextTick(() => {
+          const input = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
+          input?.focus()
+        })
+      },
+    },
+    {
+      ...specOf('show-shortcuts'),
+      // 速查表：只在没有打开任何浮层时响应，免得和 Esc 的逐层关闭抢注意力
+      when: () => !synapseMapOpen.value && !subagentsOpen.value && !statsOpen.value,
+      handler: () => { shortcutsHelpOpen.value = true },
+    },
+    {
+      ...specOf('close-session-map'),
+      when: () => synapseMapOpen.value,
+      handler: () => { synapseMapOpen.value = false },
+    },
+    {
+      ...specOf('stop-generation'),
+      when: () => loading.value,
+      handler: () => stopGeneration(),
+    },
+    {
+      ...specOf('close-overlays'),
+      when: () => subagentsOpen.value || statsOpen.value,
+      handler: () => { subagentsOpen.value = false; statsOpen.value = false },
+      // 原实现这两层都不拦默认行为：走到这里说明没有更需要抢占的语义了
+      preventDefault: false,
+    },
+    {
+      ...specOf('close-panel'),
+      when: () => panelOpen.value,
+      handler: () => { panelOpen.value = false },
+      preventDefault: false,
+    },
+  ],
+})
+
 // ── 会话 CRUD（保留原逻辑） ──
 onMounted(async () => {
   // 互联互通：解析 /chat query（task / error / kb / agent / skill / workflow）
@@ -1799,8 +1889,7 @@ onMounted(async () => {
   // 监听网络在线/离线状态
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
-  // 全局键盘快捷键
-  window.addEventListener('keydown', onGlobalKeydown)
+  // 全局键盘快捷键由 useKeyboardShortcuts 自行注册/注销（见文件上方）
   // 新用户引导（P0-3）：首次进入会话页时按服务端进度决定要不要弹。
   // 不 await：引导是可选的，不该拖慢会话加载；接口失败在 composable 里静默吞掉。
   if (authStore.user?.id) void maybeOpenOnboarding()
@@ -1816,7 +1905,6 @@ onUnmounted(() => {
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   window.removeEventListener('online', onOnline)
   window.removeEventListener('offline', onOffline)
-  window.removeEventListener('keydown', onGlobalKeydown)
 })
 
 // 离线监听 + 自动重连
@@ -1955,56 +2043,6 @@ function onSlashCommand(cmd: string) {
 }
 
 // 全局键盘快捷键
-function onGlobalKeydown(e: KeyboardEvent) {
-  // Ctrl/Cmd + K：打开侧边栏 + 切到会话历史视图
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
-    e.preventDefault()
-    panelOpen.value = true
-    panelView.value = 'sessions'
-    nextTick(() => {
-      const searchInput = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
-      searchInput?.focus()
-    })
-  }
-  // Ctrl/Cmd + F：**会话内查找**。
-  // 有意覆盖浏览器的页面查找：应用内查找才回答得出"我在这次会话里什么时候问过什么"，
-  // 而浏览器查找只会匹配**当前已挂载的行** —— 我们用的是窗口化列表，
-  // 未渲染的历史段落它根本扫不到（这正是"找不到明明存在的内容"的来源）。
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'f') {
-    e.preventDefault()
-    panelOpen.value = true
-    panelView.value = 'trajectory'
-    nextTick(() => {
-      const input = document.querySelector('.panel-search .search-input') as HTMLInputElement | null
-      input?.focus()
-    })
-    return
-  }
-  // Esc：新版地图（iframe）在最上层，先关它 —— 与其他浮层同一套"逐层关闭"语义
-  if (e.key === 'Escape' && synapseMapOpen.value) {
-    e.preventDefault()
-    synapseMapOpen.value = false
-    return
-  }
-  // Esc：**正在生成时优先停止生成** —— 此时用户的意图是停下，而不是关面板
-  if (e.key === 'Escape' && loading.value) {
-    e.preventDefault()
-    stopGeneration()
-    return
-  }
-  // Esc 关闭观测浮层 —— 全局优先级：**停止生成 > 关闭浮窗 > 关闭侧栏**。
-  // （"停止生成"在上一分支已 return，所以能走到这里说明不是在生成中。）
-  if (e.key === 'Escape' && (subagentsOpen.value || statsOpen.value)) {
-    subagentsOpen.value = false
-    statsOpen.value = false
-    return
-  }
-  // Esc 关闭侧边栏
-  if (e.key === 'Escape' && panelOpen.value) {
-    panelOpen.value = false
-  }
-}
-
 async function loadSessions() {
   try {
     const res = await api.get('/v1/conversations')
@@ -3307,6 +3345,12 @@ function continueGeneration() {
         :title="$t('chat.session_map')"
       />
     </div>
+
+    <!-- 快捷键速查表（? 打开） -->
+    <ShortcutsHelpModal
+      :open="shortcutsHelpOpen"
+      @update:open="shortcutsHelpOpen = $event"
+    />
 
     <!-- 重命名对话框 -->
     <Modal

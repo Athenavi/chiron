@@ -14,6 +14,7 @@ import EmptyState from '../common/EmptyState.vue'
 import HarnessProfilePanel from './HarnessProfilePanel.vue'
 import RunModePanel from './RunModePanel.vue'
 import LocalModelPanel from './LocalModelPanel.vue'
+import ShortcutSettingsPanel from './ShortcutSettingsPanel.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useThemeStore } from '../../stores/theme'
@@ -407,6 +408,14 @@ onUnmounted(() => {
         </div>
         <EmptyState :description="$t('common.the_multilingual_ui_is_in_development_currently_simplified_chinese_only')" />
       </div>
+    </a-tab-pane>
+
+    <!-- ── 快捷键 ── -->
+    <a-tab-pane
+      key="shortcuts"
+      :tab="$t('settings.shortcuts_title')"
+    >
+      <ShortcutSettingsPanel />
     </a-tab-pane>
 
     <!-- ── 账户设置 ── -->
