@@ -73,8 +73,8 @@ api.JSONWithCode(w, http.StatusTooManyRequests, api.CodeQuotaExceeded,
 | `invalid_request` | `CodeInvalidRequest` | `ErrInvalidReq` = `invalid request body`；或文案含 `invalid` / `required` | 400（`response.go:63` 的 `BadRequest`） |
 | `not_found` | `CodeNotFound` | `ErrNotFound` = `resource not found`；或文案含 `not found` | 404（`response.go:67`） |
 | `rate_limited` | `CodeRateLimited` | `rate limit exceeded`（`response.go:100`）；或文案含 `rate limit` / `too many request` | 429（`response.go:99-101`） |
-| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`routes_agent.go:38` 的 `rejectTenantQuota`，2026-10-09 更正；原记 `routes_agent.go:122` 与更早的 `gateway_router.go:660` —— 后者**没有**这段逻辑） |
-| `insufficient_credits` | `CodeInsufficientCredits` | `insufficient credits — please recharge in Billing`；或文案含 `credit` | 402（`routes_agent.go:102`，2026-10-09 更正；原记 `gateway_router.go:640` —— 同上） |
+| `quota_exceeded` | `CodeQuotaExceeded` | `tenant token quota exceeded`、`tenant concurrency quota exhausted`；或文案含 `quota` | 429（`routes_agent.go:38` 的 `rejectTenantQuota`） |
+| `insufficient_credits` | `CodeInsufficientCredits` | `insufficient credits — please recharge in Billing`；或文案含 `credit` | 402（`routes_agent.go:102`） |
 | `service_unavailable` | `CodeServiceUnavailable` | `ErrDBUnavailable` = `service temporarily unavailable`；或文案含 `unavailable` / `redis down` / `timeout` | **500 或 503**（见下节） |
 | `internal_error` | `CodeInternal` | 文案含 `internal` | 500（经 `InternalError`，`response.go:71-73`） |
 | `request_failed` | `CodeRequestFailed` | 兜底：非空但未命中任何规则的文案 | 任意（随调用点） |
@@ -145,7 +145,7 @@ Go 侧字段是 `*bool` + `omitempty`，Python 侧是 `Optional[bool]` 且缺失
 
 ## 前端如何消费
 
-优先级实现在 `frontend-vue/src/utils/apiError.ts:146`（`describeApiError`）—— **2026-10-09 更正**：此前写的 `:59-85` 是**旧版行号**（该文件后来加了「取值口径（L3-2 定）」注释块，整体下移；本次又因 `ApiErrorLike` 补 `retryable`/`params` 再下移一行）：
+优先级实现在 `frontend-vue/src/utils/apiError.ts:146`（`describeApiError`）：
 
 1. **后端 `code` 的本地化文案**（`errors.<code>`，见 `locales/<lang>/errors.ts`）；
 2. **已知状态码的文案**（`statusMessage` `apiError.ts:66`；映射表在 `statusMessageKey` `:47`）；
@@ -164,7 +164,7 @@ Go 侧字段是 `*bool` + `omitempty`，Python 侧是 `Optional[bool]` 且缺失
 
 > 注意这一层与「要不要重试」**无关**：`describeApiError` 只决定"怎么说给用户听"，
 > 重试决策在 `rateLimitBackoff.shouldRetryResponse`（`retryable` 优先，缺失才看状态码）。
-> 此前两件事都被塞在状态码上，才导致文案层与重试层被铰在一起。
+> 两条轴必须分开，否则文案层与重试层会铰在一起。
 
 ## `errors.ts` 的键集合
 
@@ -210,9 +210,8 @@ cd frontend-vue && pnpm exec vitest run src/utils/__tests__/apiError.spec.ts
 cd frontend-vue && pnpm exec vitest run src/utils/__tests__/rateLimitBackoff.spec.ts
 ```
 
-> **键集一致性已机械化（2026-10-09）**：`scripts/check_error_code_keys.py`（已接进 CI 的
+> **键集一致性已机械化**：`scripts/check_error_code_keys.py`（已接进 CI 的
 > `Source encoding` job）断言三件事 —— ① 每个 `Code*` 的**值**在三语言 `errors.ts` 里都有同名键；
 > ② 上面 4 个**前端专用**键在三语言里都存在；③ **三语言键集完全相同**。
-> 当前实测：Go `Code*` **11** 个（含 2026-10-09 新增的 `session_busy`，其键早已存在于三语言，
-> 故不改变键数）+ 前端专用 **4** 个，三语言各 **256** 键且键集一致。
-> 已做三个方向的变异验证（某语言契约键改名 / 某语言多一个独有键 / Go 侧 `Code*` 值改名 ⇒ 均判失败）。
+> 当前：Go `Code*` **16** 个 + 前端专用 **4** 个，三语言各 **279** 键且键集一致。
+> 三个方向的变异（某语言契约键改名 / 某语言多一个独有键 / Go 侧 `Code*` 值改名）都会判失败。

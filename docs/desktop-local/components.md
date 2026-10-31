@@ -1,6 +1,6 @@
 # 本地组件（pageindex / langextract）安装与启停
 
-> 本文件是**第三批**的组件层说明，属于 `contracts.md` §2 `ComponentInfo` / §4 本地 API 的扩展。
+> 本文件是组件层说明，属于 `contracts.md` §2 `ComponentInfo` / §4 本地 API 的扩展。
 > 新增端点不改 `contracts.md` 已冻结的字段，只在其后追加；实现见
 > `desktop-local/app/components/`、`desktop-local/app/api/components.py`、
 > `frontend-vue/electron/components.cjs`。
@@ -175,9 +175,9 @@ CHIRON_COMPONENT_PORT      借到的端口
 统一响应包装与 `contracts.md` §4 一致：业务数据在 `{"data": ...}`；错误是
 `{"error": "<code>", "message": "<人话>", ...}`。
 
-> 本批**只定义 `router`**，`app/main.py` / `app/api/__init__.py` 未改：这些端点在测试里通过
+> 本模块**只定义 `router`**，`app/main.py` / `app/api/__init__.py` 未改：这些端点在测试里通过
 > `app.include_router(components_api.router)` 挂载。要上线需在 `main.py` 里加一行
-> `app.include_router(components.router, tags=["components"])`（属于接线批次的工作）。
+> `app.include_router(components.router, tags=["components"])`（**尚未接线**）。
 
 | 方法 | 路径 | 成功 | 说明 |
 |---|---|---|---|
@@ -262,7 +262,7 @@ Windows 服务/权限提升场景、多实例并发安装同一组件（有锁�
 
 ## 9. 未实现 / 风险
 
-- **没有内置组件仓库**：所有真实组件包必须由用户/发布流程提供，本批不含任何二进制。
+- **没有内置组件仓库**：所有真实组件包必须由用户/发布流程提供，仓库不含任何二进制。
 - **不做签名校验**：只有 sha256 完整性校验。sha256 来自同一个组件源，源被篡改时校验无意义；
   要防这一层需要 manifest 签名（未实现）。
 - **不支持断点续传 / 镜像回退**：HTTP 源失败即失败，没有重试。

@@ -207,7 +207,7 @@ cross-instance session locks, SSE replay between replicas, run-affinity routing 
 idempotent billing, crash-takeover of queued work, and tool execution isolated in a separate
 sandbox container (fail-closed — the engine refuses to start if the sandbox is unreachable).
 
-- Docs: [docs/wiki/](docs/wiki/README.md) (Chinese, with English section here)
+- Docs: [docs/architecture.md](docs/architecture.md) (Chinese; English summary above)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)
 - Security reports: [SECURITY.md](SECURITY.md) — private channel only
 - License: MIT

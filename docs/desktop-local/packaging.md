@@ -19,9 +19,9 @@
 | uv 二进制 | `resources/uv/<platform>/uv[.exe]` | **随包**：只用来建 venv 并装依赖，不再下载解释器 |
 | Redis 二进制 | `resources/desktop-local/bin/redis/` | **随包**：`redis-server` + MSYS2 运行时 DLL |
 
-**改造前实测**（2026-10-27）：`app.asar` 863MB、`win-unpacked` 1.3GB。
-原因是 `package.json` 的 production dependencies 被 electron-builder 自动打进 asar，
-而 Vite 已经把同一批依赖 bundle 进 `dist/`。
+**不排除时的体积**：`app.asar` 863MB、`win-unpacked` 1.3GB —— `package.json` 的 production
+dependencies 会被 electron-builder 自动打进 asar，而 Vite 已经把同一批依赖 bundle 进 `dist/`，
+两者叠加即为重复打包。§2 的排除策略就是为消除这份重复。
 
 ## 2. 排除策略
 

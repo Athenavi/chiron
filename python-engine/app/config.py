@@ -176,7 +176,7 @@ class Settings(BaseSettings):
     #: `docs/hook-protocol-design.md` §4.2。改动需重启生效（不做热加载）。
     hooks_config_path: str = ""
     #: `command` 形态（运维声明的本地命令）的**独立开关**。**默认关** —— 它新增一个
-    #: **运维级**可执行面，是 §6「不扩大可执行面」的一处显式例外（`docs/hook-protocol-design.md` §4.3 (b)）。
+    #: **运维级**可执行面，是「不扩大可执行面」的一处显式例外（`docs/hook-protocol-design.md` §4.3 (b)）。
     hooks_allow_commands: bool = False
     #: `command` 形态允许使用的可执行文件 allowlist（逗号分隔；**裸名**或**绝对路径**）。
     #: **默认空 = 一条也不批准（fail-closed）**。它**不复制**面向模型的那张白名单 ——

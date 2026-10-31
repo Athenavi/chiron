@@ -30,7 +30,7 @@ import { privateKey } from '../utils/privateStorage'
  * 锚点注册表 —— 组件里写 `data-tour="<值>"`，这里按**语义名**取元素。
  *
  * 刻意不用 CSS 类/结构选择器：蹭一次样式重构就断，而且**断了没人知道**（无 e2e）。
- * 语义锚点还能被棘轮对账（见 `docs/development-roadmap.md` 的待办）。
+ * 语义锚点还能被棘轮对账（按语义名全量比对，新增/删除锚点都可见）。
  */
 export const TOUR_ANCHORS = {
   input: 'chat-input',

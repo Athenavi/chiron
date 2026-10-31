@@ -112,7 +112,7 @@ async function stickToBottom() {
       <span class="think-summary">{{ summary }}</span>
     </button>
     <!-- 展开用网格 0fr→1fr：浏览器自己算高度，不需要知道内容多高，
-         也不会有 max-height 写死后的"前 80% 时间空跑"。见 docs/ui-refinement-design.md §5 -->
+         也不会有 max-height 写死后的"前 80% 时间空跑"。 -->
     <div
       class="think-grid"
       :class="{ open: expanded }"
@@ -166,7 +166,7 @@ async function stickToBottom() {
   /* 自身滚动：长思考只在这一块内滚，不把整页撑长 */
   max-height: 40vh; overflow: auto;
   font-size: 13px; line-height: 1.7; color: var(--text-secondary);
-  /* 去描边：用背景色阶区分（见 docs/ui-refinement-design.md §1） */
+  /* 去描边：用背景色阶区分 */
   background: var(--elev-1); border: 0;
   border-radius: var(--sig-radius-button); white-space: pre-wrap;
 }

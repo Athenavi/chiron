@@ -1382,7 +1382,7 @@ defineExpose({ insertText, setCommandDraft })
   --input-card-pad: 12px;
   --input-card-inner-r: max(0px, calc(var(--input-card-r) - var(--input-card-pad)));
   padding: 12px 14px 10px;
-  /* 扔掉描边：层次由背景色阶承担（见 docs/ui-refinement-design.md §1）；
+  /* 扔掉描边：层次由背景色阶承担；
      三态投影（常态/悬停/聚焦）由 style.css 的 --composer-shadow* 提供，
      对齐 CDS §1.4.4 的 Composer Dual-Ring。 */
   border: 0; border-radius: var(--input-card-r);

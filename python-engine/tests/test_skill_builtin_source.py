@@ -8,7 +8,7 @@
 2. **缺失可见**：源不存在时 `builtin_skills_root()` 返回 `None`（不能抛，内置源缺失不该
    让技能列表报错），但**必须告警**。此前它是静默的，正好掩盖了部署缺陷：引擎镜像只
    `COPY app/`，`market/skills/` 进不了镜像 ⇒ 容器里恒无内置技能而无人察觉
-   （见 vendor/规划.md §1.3 与 docs/development-roadmap.md）。
+   （见 vendor/规划.md §1.3）。
 """
 from __future__ import annotations
 

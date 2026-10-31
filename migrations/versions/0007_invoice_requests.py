@@ -35,7 +35,7 @@ provider_order_id, trade_no, created_at, paid_at, expired_at)` 早已存在，
 
 字段说明
 --------
-按 `docs/saas-experience-roadmap.md` §11.4 的字段清单建表，只多一个
+按本文档的字段清单建表，只多一个
 `currency`（快照所需）与 `review_note`（审核意见，与用户可见状态一起展示）。
 没有加"收票邮箱/电话"：一期由管理员线下联系，加了字段也没人读。
 

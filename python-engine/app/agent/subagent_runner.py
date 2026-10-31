@@ -89,7 +89,7 @@ WRITE_TOOL_NAMES = frozenset({
 # 递归控制：默认从子 Agent 工具集中剥离的委派类工具。
 # `fleet` 是文档里与 `subagent` 并列的历史名（见本文件开头注释），保留作兜底；
 # `agent_dispatch`/`code_agent`/`agent_session_create` 已随 app/tools/agent.py 删除（40dfc99），
-# 不再登记 —— 名单漂移的教训见 docs/development-roadmap.md 的 L3-9。
+# 不再登记 —— 名单漂移的教训：委派类工具清单必须与 app/tools/agent.py 的实际工具逐条对齐。
 DELEGATE_TOOL_NAMES = frozenset({"subagent", "fleet"})
 
 # L2 包装（防注入：显式标注"数据而非指令"，并缩进正文）

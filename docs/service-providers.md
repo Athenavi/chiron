@@ -1,17 +1,14 @@
 # 模型服务提供商目录与路由（service providers）
 
-> **溯源（2026-10-08）**：本文件**原先缺失** —— 3 处引用它（`internal/api/llm_providers.go`、
-> `python-engine/app/providers/{anthropic,openai}.py`，其中 openai.py 明确要求"见 service-providers.md
-> 的 OpenCode 一节"）。现按**代码与注释**重建，**只写代码能证明的内容**；与代码冲突时以代码为准。
-> 门禁：`python scripts/check_doc_links.py` 拦住"引用了不存在的文档"这类断链。
+> 只写代码能证明的内容；与代码冲突时以代码为准。引用方：`internal/api/llm_providers.go`、
+> `python-engine/app/providers/{anthropic,openai}.py`（后者要求"见 service-providers.md 的 OpenCode 一节"）。
 
 ## 1. 目录是什么
 
 `internal/api/llm_providers.go` 的 `llmProviderCatalog` 是**内建目录**（当前 **27 条**；新增提供商 =
-在此追加一项 + **同步 Python 兜底目录**）。**这条同步已机械化（2026-10-09）**：
+在此追加一项 + **同步 Python 兜底目录**）。**这条同步已机械化**：
 `scripts/check_tool_policy_parity.py` 比对 Go `llmProviderCatalog` 的 `ID` 与引擎
-`app/providers/catalog.py` 的 `"id"`（当前两侧各 **27** 条且集合相同），只加一侧即门禁红
-（已做变异验证）。每项是一个 `llmProviderPreset`：
+`app/providers/catalog.py` 的 `"id"`（当前两侧各 **27** 条且集合相同），只加一侧即门禁红。每项是一个 `llmProviderPreset`：
 
 | 字段 | 含义 |
 |---|---|
@@ -118,12 +115,11 @@ key 从 <https://opencode.ai/auth> 获取。
 - 新增 provider 时**必须同步 Python 兜底目录**，否则网关认得、引擎不认（**已有门禁**：见 §1）；
 - `model_prefixes` 是**前缀**匹配，因此新增同前缀模型无需改路由，但**跨厂商同前缀**模型会互相争抢候选。
 
-## 11. SDK 采样参数已废弃（2026-10-12 修复）
+## 11. SDK 采样参数按签名裁剪
 
-`requirements.txt` 在 b9d9566（"python-engine 依赖升级至最新版"）把两个 provider SDK
-一起推到新大版本（`anthropic` 0.52.0 → 1.13.0、`openai` 1.93.0 → 3.29.0）。新 SDK 跟随
-上游 API 收紧了方法签名，**采样参数（`temperature` 等）在 Anthropic 侧已废弃**：继续透传
-拿到的不是上游 400，而是 Python 层的
+provider SDK 的新大版本（`anthropic` 1.x、`openai` 3.x）跟随上游 API 收紧了方法签名，
+**采样参数（`temperature` 等）在 Anthropic 侧已废弃**：继续透传拿到的不是上游 400，
+而是 Python 层的
 
 ```
 provider opencode-go-anthropic stream failed:

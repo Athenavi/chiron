@@ -37,7 +37,7 @@ const agentConfig = ref({
   max_tokens: 4096,
   // M20：`context_limit` 已摘掉 —— 引擎按模型窗口的 **token** 预算压缩，
   // 没有"消息条数上限"这个量；字段此前只写进一个零读取点的配置
-  // （`.env.example` / `docs/wiki/reference/config.md` 有迁移说明）。
+  // （`.env.example` 里有迁移说明）。
 })
 
 const llmConfig = ref({

@@ -1,10 +1,9 @@
 # 会话运行时状态与会话遥测（spec）
 
-> **溯源（2026-10-08）**：本文件**原先缺失** —— 仓库里 7 处引用它（`internal/api/session_runtime.go`
-> 文件头、`internal/api/routes_proxy.go` §5、`internal/api/gateway_router.go`、`frontend-vue/src/api/sessionRuntime.ts`、
-> `frontend-vue/src/components/chat/contextChips.ts`、`frontend-vue/src/views/ChatView.vue`、`python-engine/app/core/task_router.py`），
-> 但文件不在仓库中。现按**代码与注释**重建，**只写代码能证明的内容**；与代码冲突时以代码为准。
-> 门禁：`python scripts/check_doc_links.py` 拦住"引用了不存在的文档"这类断链。
+> 只写代码能证明的内容；与代码冲突时以代码为准。引用方：`internal/api/session_runtime.go`（文件头）、
+> `internal/api/routes_proxy.go` §5、`internal/api/gateway_router.go`、`frontend-vue/src/api/sessionRuntime.ts`、
+> `frontend-vue/src/components/chat/contextChips.ts`、`frontend-vue/src/views/ChatView.vue`、
+> `python-engine/app/core/task_router.py`。
 
 ## 1. 为什么需要它（单一事实源）
 
@@ -40,10 +39,9 @@ provider    : 请求显式 > runtime > 空（自动路由）
 
 注意 **`mode` / `tools_mode` 没有 runtime 这一层**（见 §2）。`validAgentModes` =
 `normal | minimal | ptc | creative`，与引擎 `app/agent/modes.py` 的 `_BASE_MODES` 对齐。
-**这条对齐已机械化（2026-10-09）**：`scripts/check_tool_policy_parity.py` 现在同时校验
+**这条对齐已机械化**：`scripts/check_tool_policy_parity.py` 同时校验
 **Go `validAgentModes` ↔ 引擎 `AgentMode` 枚举 ↔ `_BASE_MODES` 实际覆盖**（三方必须一致，
 并单独拦"枚举加了成员却忘写 base 配置"——那种漂移只在真正选中该模式时才以 `KeyError` 暴露）。
-已做两次变异验证（Go 侧塞入引擎不认的模式 / 注释掉一个 base 配置，守卫均变红）。
 
 每个解析结果都带**来源**（`resolvedValue{value, source}`），`source` 取值：
 `request`（本次请求显式）· `session`（会话 runtime）· `default`（用户/全局默认）·
@@ -62,7 +60,7 @@ provider    : 请求显式 > runtime > 空（自动路由）
 `runtime` 的字段：`model` · `provider` · `compaction` · `context` · `updated_at` · `updated_by`。
 
 **PATCH 里的 `mode` / `tools_mode` 会被忽略**（`applyRuntimePatch` 不处理它们）—— 它们不是 runtime
-字段。前端类型里仍留着这两个键，属**历史残留**，不要据此以为"写进去了"。
+字段；前端类型里的这两个键没有服务端含义，不要据此以为"写进去了"。
 `context` 必须是对象，否则 400。
 
 ## 5. 统一链路注入（proxy `mutateBody`）
@@ -72,7 +70,7 @@ provider    : 请求显式 > runtime > 空（自动路由）
 钩子返回 `false` 表示"已自行写出响应，代理应中止"（例如解析失败时直接回错误）。
 
 引擎侧对应读取点：`python-engine/app/core/task_router.py` 从**会话运行时状态**取
-`model` / `provider_hint` / `tenant_id`（P1-d）。
+`model` / `provider_hint` / `tenant_id`。
 
 ## 6. 遥测（**读取时聚合**，幂等）
 
@@ -90,7 +88,7 @@ provider    : 请求显式 > runtime > 空（自动路由）
 | 读写 + 解析 + 遥测 | `internal/api/session_runtime.go`（`GetRuntime` / `PutRuntime` / `GetMetrics` / `loadRuntime` / `saveRuntime` / `resolveAgentConfig`） |
 | 路由 | `internal/api/gateway_router.go`（三条 `authMW` 路由） |
 | 统一链路注入 | `internal/api/routes_proxy.go`（`mutateBody`，见 §5） |
-| 引擎侧取用 | `python-engine/app/core/task_router.py`（P1-d） |
+| 引擎侧取用 | `python-engine/app/core/task_router.py` |
 | 前端契约 | `frontend-vue/src/api/sessionRuntime.ts`（`ResolvedValue` / `SessionRuntime` / `SessionMetrics`） |
 | 上下文激活项 → 芯片 | `frontend-vue/src/components/chat/contextChips.ts`（`runtime.context` 是唯一来源） |
 

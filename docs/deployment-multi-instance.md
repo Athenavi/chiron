@@ -49,7 +49,7 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 | `MEDIA_STORE_BACKEND` | `s3` | 引擎侧的媒体后端。**必须与 `STORAGE_BACKEND` 同值** —— 引擎代码默认 `local`，不设就是各副本各写本地盘、重启即丢、副本间互相看不见 |
 | `WORKER_ID` | 派生 | snowflake 实例 ID（0-1023）。**多副本必须每副本不同** —— 留空时先按主机名末尾数字推导（StatefulSet 的 `chiron-0/1/2` 天然唯一），推导不出就在 data 目录随机生成并落盘，多副本各自随机会撞号 |
 | `SANDBOX_ROOT` / `PLUGIN_DATA_DIR` | — | 引擎沙箱与插件数据，**多副本必须共享同一卷** |
-| `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器（P0-1 根治）；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
+| `SANDBOX_BACKEND` / `SANDBOX_SERVICE_URL` / `SANDBOX_SERVICE_TENANTS` | `service` / `http://sandbox-service:8001` / 空 | 执行下沉到独立沙箱容器；**默认启用**，白名单空 = 全部租户。要整体退出隔离设 `SANDBOX_BACKEND=local` |
 | `SANDBOX_SERVICE_MAX_CONCURRENCY` | `0`（不限） | 引擎侧对沙箱层的并发闸门；多副本时建议设置（容量与实测见 `sandbox-service/README.md` 的「扩缩与容量」） |
 | `TRUSTED_PROXY_CIDRS` | 空 | 前置 LB 时填真实来源网段（否则 IP 限流可被伪造） |
 | `TURN_RETENTION_DAYS` / `TASK_IDEMPOTENCY_RETENTION_DAYS` | 30 | 保留策略天数 |
@@ -90,20 +90,18 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
 
 ## 7. 数据库迁移与 schema 校验
 
-- **应用不迁移**：网关启动只做只读校验（`internal/db/schema_version.go`），不执行 DDL、不需要 DDL 权限；
-  历史上 Go 侧还留有启动兜底建表（`EnsureTables` / `InitTable` / `episodes`），已全部改为**只读校验**（`VerifySchema` / `VerifyTable`），DDL 只存在于迁移里；
+- **应用不迁移**：网关启动只做只读校验（`internal/db/schema_version.go`），不执行 DDL、不需要 DDL 权限。
+  DDL 只存在于迁移里：Go 侧的 `EnsureTables` / `InitTable` 一律是只读 `VerifySchema` / `VerifyTable`；
 - **谁执行**：CI 流水线或 DBA，用 `requirements-migrate.txt` 的环境在受控窗口执行
   `python -m alembic -c alembic.ini upgrade head`（离线场景可 `--sql` 生成 DDL 审阅后执行）；
 - **迁移链**：`migrations/versions/` 只有**一个**权威基线 `0001_authoritative_baseline`。
   此后所有 schema 变更都必须在此基础上追加新的 revision；**单一 head** 是硬要求（分叉会直接报错），
   当前 head 以 `python -m alembic -c alembic.ini heads` 为准。
-  **2026-10-22 重建**：此前链上是 `0001`…`0029` 的逐次变更，其中 `0023` 会先
-  `DROP TABLE knowledge_*` 再重建（对已有库是删数据）。现已把"旧链跑到 head 后的终态 schema"
-  用 `pg_dump --schema-only` 导出、固化成这**一条**基线并删除 `0002`–`0029` ——
-  全新库一次 `upgrade head` 即达终态，"先建后删"的历史不再存在。等价性已对拍（1549 行结构元数据 diff 为空）。
+  基线本身是"旧链跑到 head 后的终态 schema"（`pg_dump --schema-only` 导出）固化的，
+  全新库一次 `upgrade head` 即达终态，不存在"先建后删"的中间态。
   已存在于旧 revision 的库：`alembic stamp head` 即可（只改版本号，不重放 DDL）。
   ⚠ **旧 revision 文件已删时，`stamp` 会先死在"解析当前版本"那一步**（报
-  `Can't locate revision identified by '0029_model_prices'`，`current` 同样失败）——
+  `Can't locate revision identified by '<旧 revision>'`，`current` 同样失败）——
   因为 alembic 在执行任何命令前都要把库里的 version_num 映射回 revision。
   此时直接改那一行即可（与 stamp 等价、可逆）：
   `UPDATE public.alembic_version SET version_num='0001_authoritative_baseline';`
@@ -212,12 +210,12 @@ python -m pytest python-engine/tests -q
 | 保证 | 取证（可复现） | 边界（**不**保证什么） |
 |---|---|---|
 | 同一会话**不会并发两个 runtime** | **HTTP 级**：`internal/api/submit_lock_live_test.go`（另一实例持锁 ⇒ `POST /v1/agent/submit` 返回 400「会话忙」；无锁 ⇒ 202，正对照）；锁原语级：`internal/api/session_coord_live_test.go`（互斥 / 续期归属 / 释放-CAS） | Redis 不可用时退化为**进程内**防重（多副本下仅近似）；锁被误丢时当前 run **不会被打断**，靠恢复期内的重复提交被拒兜底 |
-| 断线重连**不丢事件、不重复** | **HTTP 级跨实例**：`internal/api/sse_cross_instance_live_test.go`（两个 Hub = 两个实例，客户端连 A、事件由 B 发布，带 `Last-Event-ID` 重连到 A ⇒ 只补缺口、随后实时继续、共享流里恰好只剩实时那条）；Hub 级：`internal/broadcast/hub_live_test.go`（补发保序、`after` 排他、跨实例可见、缓冲上限、滑动 TTL）+ `streamid_test.go`（流 ID 按数值比较） | 每会话只保留**最近 200 条 + 1h**：超出窗口的断线无法补齐（需前端按 DB 状态自愈）；非法 `Last-Event-ID` 被忽略并转为实时（**宁可重复、不可丢弃**）。⚠ **已修复（2026-10-08，双进程演练发现）**：**子 Agent 事件**在多实例下曾**实时与重放都重复**（每条 N 份，N = 实例数）—— 中继对同一事件既追加共享重放流**又跨实例再广播**。修复：中继改走 `Hub.RelayEvent`（只追加本实例流 + 本地 fanout，**不再跨实例广播**），**写入端不做互斥**（否则 N-1 个实例的客户端拿不到 `id`、重连无法精确续传），改为 `ReplayAfter` **按逻辑身份去重**（`event_id`，退化用 payload 哈希）。取证与回归：`python-engine/tests/drills/multi_instance_drill.py`（双进程，4 条断言）· `internal/broadcast/hub_live_test.go::TestLiveReplayDedupesSameLogicalEventAcrossInstances` · `logical_id_test.go` |
+| 断线重连**不丢事件、不重复** | **HTTP 级跨实例**：`internal/api/sse_cross_instance_live_test.go`（两个 Hub = 两个实例，客户端连 A、事件由 B 发布，带 `Last-Event-ID` 重连到 A ⇒ 只补缺口、随后实时继续、共享流里恰好只剩实时那条）；Hub 级：`internal/broadcast/hub_live_test.go`（补发保序、`after` 排他、跨实例可见、缓冲上限、滑动 TTL）+ `streamid_test.go`（流 ID 按数值比较）；**跨实例去重**：`hub_live_test.go::TestLiveReplayDedupesSameLogicalEventAcrossInstances` + `logical_id_test.go` | 每会话只保留**最近 200 条 + 1h**：超出窗口的断线无法补齐（需前端按 DB 状态自愈）；非法 `Last-Event-ID` 被忽略并转为实时（**宁可重复、不可丢弃**）。**去重口径**：中继走 `Hub.RelayEvent`（只追加本实例流 + 本地 fanout，**不跨实例广播**），**写入端不做互斥**（否则 N-1 个实例的客户端拿不到 `id`、重连无法精确续传），改由 `ReplayAfter` **按逻辑身份去重**（`event_id`，退化用 payload 哈希）—— 否则子 Agent 事件会实时与重放各重复 N 份 |
 | 审批 / 取消**打到持有该 run 的实例** | `internal/engine/run_affinity_test.go`（归属记录契约、URL 优先、注册表回退、垃圾记录拒绝） | 映射缺失或 TTL 过期时**回退一致性哈希**（尽力而为）；实例故障该 run 仍中断，**不做现场迁移** |
-| 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份，不需要库）+ **`internal/api/session_cancel_live_test.go`**（真实 PG：非属主 ⇒ **403** · 属主 ⇒ 放行 · 会话不存在 ⇒ 不广播） | **已补（2026-10-09）**：此前点名的"归属校验分支需要真实 PG 的自动化用例**尚未补**"已落地，并做过变异验证（把 `handlers.go` 的归属校验去掉 ⇒ 非属主用例**红**，得到 200 而非 403）。`subagent:cancel` 载荷本身不带身份，防线仍在网关侧 |
+| 取消**只能取消自己的会话** | `internal/api/session_cancel_test.go`（属主 / 非属主 / 缺身份，不需要库）+ **`internal/api/session_cancel_live_test.go`**（真实 PG：非属主 ⇒ **403** · 属主 ⇒ 放行 · 会话不存在 ⇒ 不广播） | `subagent:cancel` 载荷本身不带身份，防线在网关侧的归属校验；该分支已做变异验证（去掉归属校验 ⇒ 非属主用例红，得到 200 而非 403） |
 | MCP 连接数**不随副本数放大** | `python-engine/tests/test_mcp_owner_lease.py`（互斥 / CAS / TTL / 工具清单往返 / 桥往返·报错·超时）+ `test_context_bus_listener.py` + `test_plugins.py`（活跃标记只在开租约时共享、Redis 故障退回进程内、读预算前先同步） | **默认关闭**：需显式 `MCP_POOL_ENABLED` / `MCP_OWNER_LEASE_ENABLED`；真实部署验证仍待做（见 §3.4） |
 
-**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID（`ChatView.vue` 的 `crypto.randomUUID()`），因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发。机制本身**已有用例**（2026-10-09 补）：`internal/api/submit_dedup_live_test.go` —— 去重命中 ⇒ **不触发引擎**（用假引擎数调用次数）· 首次提交 ⇒ 打到引擎且落下 **5 分钟**窗口的键 · 无 `client_msg_id` / 只给空白 ⇒ 不去重（老客户端行为不变）；并做过变异验证（让"命中即返回"失效 ⇒ 该用例红，报"实际调用 1 次"）；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
+**如实说明（还没有对外保证的）**：① **"同一条消息不会重复执行"**（`client_msg_id`）—— 前端每次提交都生成新 UUID（`ChatView.vue` 的 `crypto.randomUUID()`），因此它只覆盖**同一请求的传输层重试**，**不覆盖**用户手动重发。机制本身**已有用例**：`internal/api/submit_dedup_live_test.go` —— 去重命中 ⇒ **不触发引擎**（用假引擎数调用次数）· 首次提交 ⇒ 打到引擎且落下 **5 分钟**窗口的键 · 无 `client_msg_id` / 只给空白 ⇒ 不去重（老客户端行为不变）；该用例做过变异验证（让"命中即返回"失效 ⇒ 用例红，报"实际调用 1 次"）；② **两个 OS 进程的部署演练**：**两个网关进程**的跨实例演练**已自动化并接进 CI**（`python-engine/tests/drills/multi_instance_drill.py`：起两个真网关 + Redis，验扇出/实时不重复/断线补发不重复）—— 但它**不含引擎**（事件由 Redis 通道注入）；仍缺**含引擎**的部署形态演练（环境接线、服务发现、真实事件流）。
 
 ```bash
 # 复现上表前三行（需可达 Redis；CI 的 real-stack job 注入 REDIS_URL）
@@ -237,7 +235,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
   所以会话唯一活跃索引被释放（用户能正常发下一条），而 reconciler **不会**去接管一个"正在等人"而非"已崩溃"的 run。
   用户从会话空闲时的「待你处理」收件箱（`frontend-vue/src/components/chat/InteractionInbox.vue`，读 `GET /v1/agent/sessions/{id}/interactions`）
   直接答复 ⇒ 票写成 `answered` ⇒ **下一条提交**经 `claim_awaiting` 从暂停处接手并 `consume_grant` **单次消费**
-  （PG 的 EPQ：两个回合并列续跑时第二个拿到 None ⇒ 重新问，而非重复执行）。**答复不在网关侧唤醒**（见 run-checkpoint-design §10）。
+  （PG 的 EPQ：两个回合并列续跑时第二个拿到 None ⇒ 重新问，而非重复执行）。**答复不在网关侧唤醒**。
   取证：`python-engine/tests/api/test_interactions_api.py`（18）、`internal/api/interactions_test.go`（10）、`frontend-vue/.../InteractionInbox.spec.ts`（7）；
   **跨实例并发单次消费的 SQL 级取证在 CI**（本地无可用 PostgreSQL）。
   **仍 fail-closed（即时拒绝）的两类**：① **子 Agent** 的 run 跑在合成会话 `sub:<父>:<run>` 下，没有 run row / run_token ⇒
@@ -251,15 +249,21 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 |---|---|---|
 | SSE 事件 ID 与业务 sequence 分离 | **不需要** | `id` 已是 Redis Stream ID（跨实例单调、可比较、支持 `Last-Event-ID` 精确续传）；业务序号仅在需要「业务语义重放/缺号聚类」时才必要，属协议设计而非缺陷 |
 | text 事件合帧下沉到 hub | **不建议** | 网关已有 50ms 合帧；下沉会让 `tool_call`、`[thinking]` 等**必须即时**的事件进窗口，复杂度与首字延迟风险大于省下的几次 Redis 写入 |
-| 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务**（原判「待独立立项」基于**错误前提**） | 原文称「当前 VARCHAR（PG `NOW()` 文本）」——**与实际不符**：**2026-10-09 复核实测**该库 `timestamp without time zone` **142 列（72 表）**、`timestamp with time zone` **12 列（5 表）**；VARCHAR 侧**名字即时间的有 3 列** —— `schema_migrations.applied_at`（**该表本身已废弃**，见第 7 节）与两个**日期**列 `meeting_notes.date` / `admin_tenant_usage.stat_date`（本机这两张表为空，**无法从取值确认语义**；若确为"只有日期"的字段，属 `date` 类型的独立问题，不在本节的 `timestamp → timestamptz` 范围内）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
+| 全库时间列统一为 `TIMESTAMPTZ` | **可降级为常规任务** | 现状：`timestamp without time zone` **142 列（72 表）**、`timestamp with time zone` **12 列（5 表）**；"名字即时间"的 VARCHAR 只有 3 列 —— `schema_migrations.applied_at`（该表已废弃，见第 7 节）与两个**日期**列 `meeting_notes.date` / `admin_tenant_usage.stat_date`（若确为"只有日期"的字段，属 `date` 类型的独立问题，不在 `timestamp → timestamptz` 范围内）。因此**不涉及** VARCHAR→timestamp 的 `USING` 转换与存量数据风险；剩余工作只是把 `timestamp` 提升为 `timestamptz`（含 ORM 生成器与数十张表），影响面明确、可在有 PG 的环境一次推进 |
 
 ### 结构性后续
 
-- **run 现场 checkpoint 续跑**：批 4 已解决「路由到持有 run 的实例 + 陈旧审批被拒」；「实例故障后从 checkpoint 续跑而非重跑」**已实现**（**2026-10-09 更正**：原写「设计已产出，**待评审**」✗ —— 该设计文档自己的状态行写着**批 1–4 已实现**，代码里以 `C1 批 2/3/4` 标记：表 `agent_runs`（迁移 `0003`）· 写路径 `app/agent/runtime.py::_save_checkpoint`（回合末、只写不读、失败只降级恢复粒度）· 状态机 `app/agent/checkpoint.py` · 续跑/接管 `app/agent/resume.py` + `main.py` 启动 reconciler；单测 **38 条** + `tests/test_resume_kill_drill.py` 的「kill → 重启 → 断言不重放」真子进程演练）。剩余价值仅「**跨实例的现场内存迁移**」——该设计文档 §9 明确**不做**；
-- ~~**`chiron-cli db` 的迁移入口**~~ **已决策并落地**（L4-2，见 [数据库迁移入口决策](db-migration-entry.md)）：CLI **完全不接触迁移**，Alembic 是唯一入口 —— `chiron-cli db migrate`、`internal/db/migrate.go`（`RunMigrations`）与 `hasInternalMigrationFiles` 已删除；只保留只读的 `db status`（读 `alembic_version`），以及网关启动时的 `internal/db/schema_version.go` 校验（不写 schema）；
-- ~~`credit_transactions` / `payments` 两处 DDL 需同步~~ **已解决**：DDL 全部收敛到唯一权威迁移
-  `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables`（含 `ALTER TABLE users ADD COLUMN credits`）
-  已改为只读 `VerifySchema`，`ent_model_routes` 的 `InitTable` → `VerifyTable`。
+- **run 现场 checkpoint 续跑**：「路由到持有 run 的实例 + 陈旧审批被拒」已实现；「实例故障后从 checkpoint
+  续跑而非重跑」也已实现：表 `agent_runs`（迁移 `0003`）· 写路径 `app/agent/runtime.py::_save_checkpoint`
+  （回合末、只写不读、失败只降级恢复粒度）· 状态机 `app/agent/checkpoint.py` · 续跑/接管
+  `app/agent/resume.py` + `main.py` 启动 reconciler；单测 38 条 + `tests/test_resume_kill_drill.py`
+  的「kill → 重启 → 断言不重放」真子进程演练。**不做**的是「跨实例的现场内存迁移」；
+- **`chiron-cli db` 的迁移入口**：见 [数据库迁移入口决策](db-migration-entry.md) —— CLI **完全不接触迁移**，
+  Alembic 是唯一入口；只保留只读的 `db status`（读 `alembic_version`），以及网关启动时的
+  `internal/db/schema_version.go` 校验（不写 schema）；
+- **`credit_transactions` / `payments` 两处 DDL**：DDL 全部收敛到唯一权威迁移
+  `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables` 已改为只读 `VerifySchema`，
+  `ent_model_routes` 的 `InitTable` → `VerifyTable`。
 
 ## 11. 混沌工程（可选，默认关闭）
 
@@ -323,17 +327,10 @@ unset CHAOS_ENABLED
 `chaos:manage` 权限的调用方都能让网关与引擎按要求失败或变慢。失败安全已内建 —— 注入器
 自身故障（Redis/DB 不可用、缓存 payload 损坏）时一律放行，不会反过来打挂正常流量。
 
-### 历史
-
-该功能此前两端都是假实现：Go 侧六个端点长期返回 501（其注释自述「没有故障注入执行」且
-「连数据表都不存在」），Python 侧 `ChaosEngine` 的 `_inject_latency` 只是自己
-`asyncio.sleep`、`_inject_error` 只打日志后写 `{"injected": True}`。现已删除假实现，
-改为上述真实通道（表已建、注入已通、不支持的组合明确拒绝）。
-
 ## 12. 备份与恢复（云数据库）
 
-**应用不提供数据库备份**。此前网关内置的 `/v1/admin/backup`、`/v1/admin/restore` 与
-`/v1/admin/database/backups` 系列（**在应用容器内**调用 `pg_dump`/`psql`）**已整体移除**：
+**应用不提供数据库备份**。网关不提供 `/v1/admin/backup`、`/v1/admin/restore` 与
+`/v1/admin/database/backups` 这类端点（在应用容器内调 `pg_dump`/`psql`）：
 
 - 应用镜像刻意**不包含** `postgresql-client`，容器内也没有数据库的持久文件系统 —— 在容器里
   跑 `pg_dump` 既非最佳实践（要把库工具与数据库凭据塞进应用镜像），也无法覆盖云托管 PG 的

@@ -1,9 +1,7 @@
 # DR：LLM Provider 密钥管理（集中派）
 
-> **溯源（2026-10-08）**：本文件**原先缺失** —— 2 处引用它（`internal/api/llm_keys.go` 的文件头写
-> "集中派，DR：…"，`python-engine/app/gateway/key_ring.py` 写"同接口即可平滑切换（见 …）"）。
-> 现按**代码与注释**重建，**只写代码能证明的内容**；与代码冲突时以代码为准。
-> 门禁：`python scripts/check_doc_links.py` 拦住"引用了不存在的文档"这类断链。
+> 只写代码能证明的内容；与代码冲突时以代码为准。引用方：`internal/api/llm_keys.go`（文件头）、
+> `python-engine/app/gateway/key_ring.py`。
 
 ## 1. 决策
 
@@ -85,11 +83,11 @@
 `X-anthropic` 的字段 EVAL 返 `-1` 未命中 ⇒ 换 `X` 的 HASH 重试，这也顺带修掉了 V1 把失败
 记到并不持有该 key 的那份 HASH 上的错位）。
 
-## 6. V1 → V2（已完成，2026-10-18）
+## 6. V2 契约（Redis Lua 原子取 key）
 
-V1 是"本地环 + 轮询"；V2 已把本类换成 **Redis Lua 原子取 key**（原子 LRU 选择 + 时间窗自愈熔断 +
-跨实例共享冷却）。`active_keys` / `get_key` / `report_failure` **同接口**未变，对上层（providers）平滑。
-V2 相对 V1 的两个刻意行为变更见 §5（热路径 Redis 优先于 env；自动停用改为 `c` 时间窗而非翻 `s`）。
+本类用 **Redis Lua 原子取 key**（原子 LRU 选择 + 时间窗自愈熔断 + 跨实例共享冷却）。
+`active_keys` / `get_key` / `report_failure` 对上层（providers）的接口不变。
+两个刻意行为见 §5（热路径 Redis 优先于 env；自动停用改为 `c` 时间窗而非翻 `s`）。
 
 原子性、LRU 轮转、时间窗自愈、阈值升级、跨实例协同等**只能在真 Redis 上验**，故有
 `python-engine/tests/test_key_ring_live.py`（`-m live`：CI 的 real-stack job 带真 Redis 会跑，

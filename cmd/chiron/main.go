@@ -443,8 +443,8 @@ func verifySchemaVersion(ctx context.Context, cfg *config.Config) {
 //
 // 为什么值得一条启动诊断：库里 142 个 naive `timestamp` 列的语义**取决于写入路径**——
 // SQL 的 `NOW()` 跟**会话时区**，Go 的 `time.Now()` 跟**宿主时区**。两侧一致时语义单一；
-// 不一致时同一列会混着两种含义，届时 L4-3 的 `ALTER … USING` 无论选哪个时区都会移错一半的行
-// （见 docs/development-roadmap.md 的 L4-3 与 internal/db/tz_diagnostic.go）。
+// 不一致时同一列会混着两种含义，届时把 naive 列改成 timestamptz 的 `ALTER … USING` 无论选哪个
+// 时区都会移错一半的行（诊断见 internal/db/tz_diagnostic.go）。
 func warnOnTimezoneMismatch(ctx context.Context) {
 	dbOffset, hostOffset, aligned, err := db.CheckTimezoneAlignment(ctx, time.Now())
 	if err != nil {
@@ -458,7 +458,7 @@ func warnOnTimezoneMismatch(ctx context.Context) {
 		"naive timestamp columns will hold MIXED semantics "+
 		"(PG now() follows the session timezone, Go time.Now() follows the host), "+
 		"so migrating them to timestamptz cannot use a single AT TIME ZONE; "+
-		"align the two first (see docs/development-roadmap.md L4-3)",
+		"align the two first (see internal/db/tz_diagnostic.go)",
 		"db_offset_seconds", dbOffset, "host_offset_seconds", hostOffset)
 }
 

@@ -79,7 +79,7 @@
   原先只有 `id` 主键、靠代码"先查后写"保证唯一，并发写可能插出重复键。迁移先检测存量重复、
   有则 **fail-fast 并列出冲突**，不静默删数据。全链已在真实 PostgreSQL 18.1 上实跑验证
   （空库 `alembic upgrade head` 到 0003；两条 fail-fast 路径确认生效且不删数据）。
-- **界面精修（P0–P3，见 `docs/ui-refinement-design.md`）**：明度阶别名层（`:root` 的
+- **界面精修（P0–P3）**：明度阶别名层（`:root` 的
   `--elev-0..3` / `--hairline` / `--ring-inner/outer`，8 个主题块一行未改）；暗色模式用
   `html.dark` 一次性降字重（400/500/600/700 → 360/460/560/660）与字号（14 → 13px，`--fs-xs/sm`
   偏移同步收窄）；思考面板改为 `grid-template-rows: 0fr → 1fr` 撑开；数字统一
@@ -90,7 +90,7 @@
 - **新增 `utils/notify.ts`**：统一提示封装 —— 成功/提醒/信息 **2.5s**、错误 **4s**（错误要能读完）。
   `MessageItem` / `ChatView` / `ChatInput` 共 **50 处** `message.*` 改为 `notify.*`。
   验收：`npm run check:ui` 八项守卫全绿 · `vue-tsc -b` 通过 · `npm test` **83 files / 635 tests**。
-- **落地 desktop-agent-ui 界面规约（四项，见 `docs/ui-refinement-design.md` §14）**：
+- **落地 desktop-agent-ui 界面规约（四项）**：
   ① **12px 最小字号门禁** —— `--fs-xs` 在 `:root` 与 `html.dark` 都改为 12px，全仓 35 个文件
   共 **122 处** 9/10/11px 硬编码字号统一改用 `var(--fs-xs)`（此项**覆盖**了上一轮 UI 精修里
   「暗色小字号收窄到 11px」的决策）；② **移除中点「·」分隔符** —— 代码 14 处 + 三语言 i18n

@@ -1,6 +1,6 @@
 # 本地 / 云端端点覆盖率验收
 
-本文记录「本地模式几乎什么都用不了」这一问题的**实测归因**，作为阶段五的验收依据。
+本文记录「本地模式几乎什么都用不了」这一问题的**归因与验收判据**。
 
 ## 1. 结论先行
 
@@ -58,10 +58,10 @@ Go 网关 `/v1/**` 共 **215 条路由**，其中 **38 条（17.7%）** 依赖 p
    由 `startLocalStack` 在**网关之前**拉起，并把地址传给 `buildGatewayEnv`
    （`PYTHON_ENGINE_ADDRESS` 目前是全仓唯一写它的地方，值为空）。
 3. **停机顺序**：网关 → 引擎 → 引导器（引导器持有 PG/Redis）。
-4. **降级模式**：引擎必须带 `DEGRADED_MODE=true` 才能单机启动（见阶段三），
-   否则 `verify_sandbox_backend()` 会因缺少 `SANDBOX_SERVICE_URL` 拒绝启动。
+4. **降级模式**：引擎必须带 `DEGRADED_MODE=true` 才能单机启动（见 `deployment-multi-instance.md`
+   的沙箱一节），否则 `verify_sandbox_backend()` 会因缺少 `SANDBOX_SERVICE_URL` 拒绝启动。
 
-满足 1–4 后，上述 38 条路由才会真正可用；此前的验收只能算"网关侧就绪"。
+满足 1–4 后，上述 38 条路由才会真正可用；在此之前只是"网关侧就绪"。
 
 ## 5. 复测方法
 

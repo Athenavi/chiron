@@ -11,10 +11,9 @@
 | 想知道 | 看 |
 |---|---|
 | 这是什么、能做什么 | [README](README.md)（含 60 秒快速开始） |
-| 面向使用者的分主题文档 | [docs/wiki/](docs/wiki/) |
 | 系统由哪些组件构成、信任边界在哪 | [docs/architecture.md](docs/architecture.md) |
 | 多副本部署后会出什么问题、怎么扩 | [docs/deployment-multi-instance.md](docs/deployment-multi-instance.md) |
-| 当前路线与优先级 | [docs/development-roadmap.md](docs/development-roadmap.md) |
+| 错误码契约与三语言同步 | [docs/error-codes.md](docs/error-codes.md) |
 
 ## 2. 开发环境
 
@@ -271,7 +270,7 @@ POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
 
 ## 8. 第一次贡献？
 
-从 [入门任务清单](docs/good-first-issues.md) 挑一条 —— 它们都有**机械可判定的验收方式**，
+从标有 `good first issue` 的 issue 里挑一条 —— 它们都限定了范围，且有**机械可判定的验收方式**，
 不需要先理解整个架构。不确定就开 draft PR 问，不用憋到最后。
 
 ## 9. English summary

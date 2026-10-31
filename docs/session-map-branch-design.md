@@ -1,9 +1,8 @@
-# 会话地图与分支设计
+# 会话地图与分支
 
-> **溯源（2026-10-08）**：本文件**原先缺失** —— 仓库里 6 处引用它（`internal/session/manager_branch.go` ×3、
-> `internal/api/gateway_router.go`、`internal/session/branch_test.go`、`python-engine/app/context/branch_condense.py`），
-> 但文件不在仓库中。现按**代码与注释**重建，**只写代码能证明的内容**；与代码冲突时以代码为准。
-> 门禁：`python scripts/check_doc_links.py` 会拦住"引用了不存在的文档"这类断链。
+> 只写代码能证明的内容；与代码冲突时以代码为准。引用方：`internal/session/manager_branch.go`、
+> `internal/api/gateway_router.go`、`internal/session/branch_test.go`、
+> `python-engine/app/context/branch_condense.py`。
 
 ## 1. 为什么需要分支
 

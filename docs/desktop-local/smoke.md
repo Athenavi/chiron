@@ -93,7 +93,7 @@ HTTP 客户端：httpx 0.28.1
 全部 PASS
 ```
 
-**没装 `fakeredis` 的机器**（例如本次验证用的开发机）会把第 2 项降级成 SKIP，其余不变 ——
+**没装 `fakeredis` 的机器**（例如开发机）会把第 2 项降级成 SKIP，其余不变 ——
 这是实测输出，不是理想化样例：
 
 ```text
@@ -110,7 +110,7 @@ HTTP 客户端：httpx 0.28.1
 每一项的状态只有三种：
 - `PASS` —— 真验过了；
 - `FAIL` —— 真挂了，同时打印 `core stderr 尾部（40 行）`，脚本**从不把失败写成 PASS**；
-- `SKIP` —— 本次没判定，且 `detail` 里写清原因与补救命令。典型两种：
+- `SKIP` —— 未判定，且 `detail` 里写清原因与补救命令。典型两种：
   - `启动期无存储错误（PG 必须真通）`：PG 通了，但 Redis 适配层起不来（没装 `fakeredis`），
     这一项记 SKIP 而不是 FAIL —— 本 smoke 的硬要求是 **PG 真通**；
   - `Electron 启动器`：`node_modules` 没装 / `npx --no-install electron` 找不到包。
@@ -212,7 +212,7 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
 | `userData 日志 … FAIL` | 10s 内还没进 `whenReady`，或 `--user-data-dir` 被忽略且默认目录无权限 | 调大 `--electron-wait`；用 `--keep` 后按打印的路径手工看 |
 | `taskkill: 没有找到进程` | 壳已经自己退了，收尾命令扑空 | 正常现象（`check=False`），只看 `Electron 退出回收` 的结论 |
 
-## 8. 已知未覆盖（有意留白）
+## 8. 已知未覆盖
 
 1. **界面不验**：不截图、不点按钮、不检查 DOM。要验渲染层请走
    `frontend-vue` 的 `npm run build:desktop` + 手工窗口，或后续加 Playwright/wdio 层。

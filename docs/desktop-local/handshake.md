@@ -83,7 +83,7 @@ python -m app.main --data-dir <dir> --port <port> [--inference-proxy <url>]
 `-m` 会把 cwd 放进 `sys.path`，这也是 `verify_handshake.py` 的做法。
 
 装好的二进制（`userData/components/core/chiron-local[.exe]`）**只走 env**，不追加 CLI ——
-不知道那个包是哪个版本编出来的，别赌它认识本批次新增的参数。
+不知道那个包是哪个版本编出来的，不能假设它认识新参数。
 
 core 绑成功后才打一行 JSON（`main.py::serve`），Electron 按行解析，端口以它为准：
 
@@ -97,7 +97,7 @@ core 绑成功后才打一行 JSON（`main.py::serve`），Electron 按行解析
 
 ## 4. token 由谁产生
 
-三处来源，第一批**还没有合并成一个**：
+三处来源，**尚未合并成一个**：
 
 | 来源 | 值 | 谁用 |
 |---|---|---|
@@ -112,7 +112,7 @@ core 绑成功后才打一行 JSON（`main.py::serve`），Electron 按行解析
   所以两种 token 都能用，握手不会因此失败；
 - 想拿 core 自己那个（重启不变）就调 `POST /v1/auth/session`，把 `data.token` 存下来。
 
-第二批要做的是二选一：让 core 认 `CHIRON_DEVICE_TOKEN`，或让 Electron 把
+待收口的方向是二选一：让 core 认 `CHIRON_DEVICE_TOKEN`，或让 Electron 把
 `<data-dir>/auth/device-token` 读出来交给 preload。改之前别假设它们相等。
 
 ## 5. 验证
@@ -135,7 +135,7 @@ python scripts/verify_handshake.py --data-dir D:\chiron-local --python C:\Python
 `GET /healthz` → `POST /v1/auth/session` → 比对 `<data-dir>/auth/device-token`。
 退出码 `0` = 全 PASS（SKIP 不算失败），`1` = 有 FAIL，失败时打印 core 的 stderr 末尾。
 
-`SKIP` 的一项是"注入的 `CHIRON_DEVICE_TOKEN` 被 core 采用"：第一批不成立（见 §4），
+`SKIP` 的一项是"注入的 `CHIRON_DEVICE_TOKEN` 被 core 采用"：当前不成立（见 §4），
 记 SKIP 而不是 FAIL，等 §4 收口后它会自动变 PASS。
 
 ## 6. 失败排查
@@ -159,16 +159,16 @@ python scripts/verify_handshake.py --data-dir D:\chiron-local --python C:\Python
 日志：主进程日志在 `<userData>/logs/main.log`，只有地址与"有没有 token"，**不含 token 本身**。
 core 的 stdout/stderr 一律不落盘（只留字节数和末尾一小段用于报错）。
 
-## 7. 已知差异 / 第二批
+## 7. 已知差异
 
 1. **环境变量双写**：`CHIRON_*` 与 `CHIRON_LOCAL_*` 并存（`CORE_ENV_ALIASES`）。core 支持契约名后
    删掉别名表即可，Electron 侧不用动。
 2. **token 未统一**（§4）：注入值与 core 落盘值不是同一个。
 3. **`CHIRON_DEVICE_TOKEN` 未被校验**：`auth_enabled=False` 期间不影响使用。
-4. `startCore()` 不传存储开关：Electron 的默认行为是连 embedded PG / Redis 一起起（P0 已验）；
+4. `startCore()` 不传存储开关：Electron 的默认行为是连 embedded PG / Redis 一起起；
    `verify_handshake.py` 默认关掉它们，只为把 HTTP 握手的失败与存储失败分开看。
-5. `components.cjs` 里的 `--chiron-device-token=` 前缀暂时在 `main.cjs` / `preload.cjs` 各写一份
-   （都先读 `shared.cjs`，缺失才用同一字面量）。按契约 §3.1 应搬进 `shared.cjs`，那需要改
-   W1 独占的文件，本批次没有动。
-6. 渲染进程还没有消费 `deviceToken`（`frontend-vue/src/**` 不在本批次范围内），
+5. `components.cjs` 里的 `--chiron-device-token=` 前缀在 `main.cjs` / `preload.cjs` 各写一份
+   （都先读 `shared.cjs`，缺失才用同一字面量）。按契约 §3.1 应搬进 `shared.cjs`，
+   **尚未搬**。
+6. 渲染进程还没有消费 `deviceToken`（`frontend-vue/src/**` 不在本模块范围内），
    目前只是把值暴露出来。

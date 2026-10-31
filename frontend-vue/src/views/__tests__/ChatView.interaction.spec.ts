@@ -432,7 +432,7 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
    * 而用户在切换时**不会预期**这一点。这是**安全相关**的行为差异，不是外观问题。
    *
    * 本用例把**现状**钉住（免得它被无声改动），**不代表它是对的** —— 待决项见
-   * `docs/development-roadmap.md`（第 131 轮记录）。
+   * 尚未决策的 toolsMode 跨会话沿用问题。
    */
   it('⚠ 现状：toolsMode 跨会话沿用（yolo 会带进下一个会话）—— 待决，不是背书', async () => {
     const { vm } = await mountWithSession()

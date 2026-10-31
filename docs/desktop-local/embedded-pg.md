@@ -7,7 +7,7 @@
 > 不是估算。三端支持里只有 `win_amd64` 是这次真跑过的，其余来自 PyPI 元数据与上游 README，
 > 见 §4 的“已验证 / 未验证”标注。
 
-## 1. 实测结论（P0）
+## 1. 实测结论
 
 ```
 cd desktop-local
@@ -41,7 +41,7 @@ python scripts/verify_p0.py --require-backend embedded-pack   # 要求必须走�
 
 —— 也就是说“包不可用”时不会伪造 embedded-pack 成功，而是如实说走了 binaries 和原因。
 
-## 2. 真实 API（别再照着猜的签名写）
+## 2. 真实 API
 
 `embedded-postgres` 18.6.x 的公开面很小（`dir()` 实测）：
 
@@ -74,9 +74,8 @@ srv.cleanup()                # 停服务器；pgdata 保留（cleanup_mode="stop
 （`pgdata=` 关键字 → 位置参数 → 历史 kwargs 兜底）。失败时把真实异常与这份探测结果
 原样写进 `PostgresUnavailable.attempts` / `.probes`。
 
-**为什么以前一直 backend=binaries**：老代码按 `data_dir=/port=/user=...` 猜参数，
-而真实入口只吃 `pgdata`，五个变体全 `TypeError`，于是 embedded-pack 永远“不可用”、
-静默回退到系统 `initdb/pg_ctl`。这正是 P0 之前报 `backend=binaries` 的原因。
+**参数必须按 `pgdata` 传，不要按关键字猜**：按 `data_dir=/port=/user=...` 猜参数的变体
+在真实入口上全部 `TypeError`，会让 embedded-pack 永远"不可用"并静默回退到系统 `initdb/pg_ctl`。
 
 ## 3. 体积（实测，Windows）
 
@@ -98,7 +97,7 @@ srv.cleanup()                # 停服务器；pgdata 保留（cleanup_mode="stop
 
 | 平台 | wheel tag | 状态 |
 |---|---|---|
-| Windows x86_64 | `win_amd64` | **本次实测通过**（`18.6.3`） |
+| Windows x86_64 | `win_amd64` | **已验证通过**（`18.6.3`） |
 | macOS Apple Silicon | `macosx_11_0_arm64` | 上游 CI 报告通过；**本机未验证** |
 | macOS Intel | `macosx_11_0_x86_64` | 上游 CI 报告通过；**本机未验证** |
 | Linux x86_64 | `manylinux_2_28_x86_64` | 上游 CI 报告通过；**本机未验证** |
@@ -108,7 +107,7 @@ srv.cleanup()                # 停服务器；pgdata 保留（cleanup_mode="stop
 没有：Windows 32 位、musl（Alpine）、FreeBSD、Python < 3.9。
 Python ≥ 3.11（本仓库要求）没问题，包本身 `requires_python>=3.9`。
 
-**POSIX 上的行为差异（本次未实测，代码已适配）**：非 Windows 平台它用 **unix socket**
+**POSIX 上的行为差异（尚未实测，代码已适配）**：非 Windows 平台它用 **unix socket**
 （`pg_ctl -o '-h ""' -o '-k <socket_dir>'`），**不监听任何 TCP 端口**，`get_uri()` 返回
 `postgresql://postgres:@/db?host=<socket_dir>`。所以 `pg.py` 只在 DSN 里解析出
 `host:port` 时才等 TCP（`_tcp_endpoint()`），否则直接靠 SQL 轮询判断可用性；
@@ -150,7 +149,7 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
 就是 FAIL（退出码 1），不会把“回退到别的后端”当成功。注意：**这次没有通过 `external`
 量任何东西**，`external` 只是 `POSTGRES_DSN` 的直连路径。
 
-## 7. 风险与未做的事
+## 7. 已知限制
 
 1. **Windows + 管理员账户**：上游 README 明确写了，`initdb` / `pg_ctl` / `postgres` 会以
    受限令牌重启自身，看不到只靠 Administrators 组可达的目录；而 CPython ≥3.12.4 的
@@ -161,7 +160,7 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
    但只在 Windows 上跑过（见 §4）。
 3. **`CHIRON_LOCAL_PG_PORT` / `CHIRON_LOCAL_PG_USER` / `_PASSWORD` 在 embedded-pack 下不生效**，
    属于上游 API 限制（没有这些参数）。如果以后需要固定端口，只能在 `pg.py` 里自己写
-   `postgresql.conf`（`port = N` + `listen_addresses`），本次没做。
+   `postgresql.conf`（`port = N` + `listen_addresses`），目前未实现。
 4. **包是 alpha**（Development Status :: 3 - Alpha，2026-09 才开始发版）。入口名换了也不要紧
    —— 探测会把它写进报错；但如果新版本改成异步 API，`pg.py` 需要跟着改。
 5. **没有 SSL / ICU / readline**（上游 configure 参数），只适合本机回环，不要拿去当共享实例。
@@ -169,7 +168,7 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
 7. `verify_p0.py` 默认用 `tempfile.mkdtemp()` 建数据目录 —— 与风险 1 同一个坑，
    以管理员运行时请显式给 `--data-dir`。
 
-## 8. 给自己写代码时的三条规矩
+## 8. 实现约束
 
 1. 只把**真能执行 SQL** 的实例算启动成功（`_prepare()` 会连 `postgres` 库跑 `SELECT 1`
    再 `CREATE DATABASE`），起进程不算。

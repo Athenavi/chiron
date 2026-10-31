@@ -136,7 +136,7 @@ python_version = "3.11"
 # resource.setrlimit/RLIMIT_*）被正确解析 —— 否则在 Windows 上会误报 "Module has no attribute"。
 platform = "linux"
 # strict 已接线但**按域分批**：CI 的 `Mypy (strict)` step 目前只检查已清零的模块，
-# 完整清单与扩批进度见 docs/development-roadmap.md 的 L2-1。
+# 完整清单见 .github/workflows/ci.yml 里 `Mypy (strict)` step 的 files 列表。
 # app/ 存量错误清零后改为 `mypy app/`。
 strict = true
 warn_return_any = true

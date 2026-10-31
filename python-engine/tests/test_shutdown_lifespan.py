@@ -161,7 +161,7 @@ def test_lifespan_does_not_probe_locals_anymore() -> None:
     """机械护栏：`lifespan` 里**不许**再出现 `locals()` 探测。
 
     那种写法把"清理是否执行"绑在**词法作用域**上：任何把启动段抽成函数的重构都会让它
-    静默失效（见 docs/split-assessment.md §2.3）。句柄必须显式传递。
+    静默失效（共享句柄跨事件循环会失效）。句柄必须显式传递。
     """
     tree = ast.parse(MAIN_PY.read_text(encoding="utf-8"))
     lifespan = next(

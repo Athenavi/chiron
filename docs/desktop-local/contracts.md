@@ -1,4 +1,4 @@
-# 桌面端双模式 / 本地化开发契约（第一批）
+# 桌面端双模式 / 本地化开发契约
 
 > 本文件是并行开发的**唯一接口基线**。任何 worktree 需要改动这里的约定时，先改本文件并提交，
 > 再改实现；不要各自发明字段名。
@@ -40,8 +40,8 @@
 
 ## 2. preload 契约
 
-`window.chironDesktop` 必须暴露以下字段（`preload.cjs`）。第一批先实现前 6 项；组件相关项
-由 `components.cjs` 提供、`preload.cjs` 接线。
+`window.chironDesktop` 必须暴露以下字段（`preload.cjs`）。组件相关项由 `components.cjs` 提供、
+`preload.cjs` 接线。
 
 ```ts
 type ChironMode = 'local' | 'cloud'
@@ -85,7 +85,7 @@ interface ChironDesktop {
   startComponent(name: string): Promise<void>
   stopComponent(name: string): Promise<void>
 
-  // 本地抽取（P3 接线；第一批只需类型占位）
+  // 本地抽取（类型占位，尚未接线）
   pickDocument(): Promise<{ path: string; name: string } | null>
 }
 ```
@@ -110,20 +110,20 @@ desktop:pick-document
 
 ```
 frontend-vue/electron/
-  main.cjs               # 壳：窗口、生命周期、接线（W1 独占）
-  preload.cjs            # IPC 暴露（W1 独占）
-  config.cjs             # 设备设置读写（W1 独占）
-  shared.cjs             # 常量（W1 独占）
-  mode-switch.cjs        # 切换 + 清除（W1 新增）
-  components.cjs         # 组件管理（W4 新增，W1 接线）
-  inference-proxy.cjs    # loopback 推理代理（W4 新增，W1 接线）
-  secrets.cjs            # key 加密存储（W4 新增，W1 接线）
-  __tests__/             # 纯 Node 单测（W4 可写；W1 不写）
+  main.cjs               # 壳：窗口、生命周期、接线
+  preload.cjs            # IPC 暴露
+  config.cjs             # 设备设置读写
+  shared.cjs             # 常量
+  mode-switch.cjs        # 切换 + 清除
+  components.cjs         # 组件管理
+  inference-proxy.cjs    # loopback 推理代理
+  secrets.cjs            # key 加密存储
+  __tests__/             # 纯 Node 单测
 ```
 
-- W1 不写 `components.cjs` / `inference-proxy.cjs` / `secrets.cjs` 的实现；只 require + 接线。
-- W4 不写 `main.cjs` / `preload.cjs` / `config.cjs` / `shared.cjs`。
-- 两边如需新增共享常量，先加到本文件 §3，再各自实现。
+- `main.cjs` / `preload.cjs` / `config.cjs` / `shared.cjs` 不承载组件管理、推理代理、密钥存储的实现，
+  只 require + 接线；后三者的实现全在 `components.cjs` / `inference-proxy.cjs` / `secrets.cjs`。
+- 需要新增共享常量时，先加到本文件 §3.1，再各自实现。
 
 ### 3.1 已冻结的共享常量
 
@@ -147,7 +147,7 @@ frontend-vue/electron/
 
 ## 4. 本地后端（desktop-local）
 
-第一批只建骨架与 P0 验证，不迁移业务代码。
+只建进程骨架与存储验证，不迁移业务代码。
 
 ```
 desktop-local/
@@ -171,7 +171,7 @@ desktop-local/
   tests/
 ```
 
-本地 API 契约（第一批）：
+本地 API 契约：
 
 | 方法 | 路径 | 返回 |
 |---|---|---|
@@ -179,11 +179,11 @@ desktop-local/
 | GET | `/readyz` | `{"status":"ok"\|"degraded","pg":true,"redis":true}`，详见下方语义说明 |
 | POST | `/v1/auth/session` | `{"data":{"token":"...","user":{"id":"local","name":"Local","role":"owner","tenant_id":1}}}` |
 | GET | `/v1/models` | `{"data":[]}`（占位） |
-| GET | `/events?session_id=` | `text/event-stream`（第一批只发心跳） |
+| GET | `/events?session_id=` | `text/event-stream`（只发心跳） |
 
 统一响应包装：与 Go 网关一致，业务响应放 `{"data": ...}`。
 
-鉴权：`Authorization: Bearer <device-token>` 或同源 httpOnly cookie；第一批允许无鉴权启动，
+鉴权：`Authorization: Bearer <device-token>` 或同源 httpOnly cookie；允许无鉴权启动，
 但 `/readyz` 必须报告 `auth: "disabled"`。
 
 ### `/readyz` 的判定语义
@@ -201,7 +201,7 @@ desktop-local/
 这与 `python-engine`（主引擎）不同：主引擎有 10+ 模块硬依赖 redis 的 Streams、限流、
 预算与缓存，那里 redis 不可用就是不健康。
 
-## 5. P0 验证的硬指标
+## 5. 存储验证的硬指标
 
 `desktop-local/scripts/verify_p0.py` 必须输出：
 
@@ -219,10 +219,10 @@ desktop-local/
 
 ## 6. 验收命令
 
-各 worktree 在提交前至少运行：
+提交前至少运行：
 
 ```bash
-# W1 / W4（Electron 主进程）
+# Electron 主进程
 node --check frontend-vue/electron/main.cjs
 node --check frontend-vue/electron/preload.cjs
 node --check frontend-vue/electron/config.cjs
@@ -230,12 +230,12 @@ node --check frontend-vue/electron/components.cjs
 node --check frontend-vue/electron/inference-proxy.cjs
 node --check frontend-vue/electron/secrets.cjs
 
-# W2（前端）
+# 前端
 cd frontend-vue && pnpm exec vue-tsc -b
 cd frontend-vue && pnpm test
 cd frontend-vue && pnpm check:ui
 
-# W3（本地后端）
+# 本地后端
 cd desktop-local && python -m ruff check .
 cd desktop-local && python -m pytest -q
 python desktop-local/scripts/verify_p0.py
@@ -243,18 +243,12 @@ python desktop-local/scripts/verify_p0.py
 
 CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写“未验证 + 原因”，不要假装通过。
 
-## 7. 分支与合并
+## 7. 变更流程
 
-- 集成分支：`alpha`（从 `master` 切出）。
-- 开发分支：
-  - `feat/desktop-mode-shell`（W1）
-  - `feat/desktop-local-frontend`（W2）
-  - `feat/local-core`（W3）
-  - `feat/local-components`（W4）
-- 每个 worktree 独立目录：`X:/project/Chiron-worktrees/<name>`。
-- 只提交到自己的分支；**不要** push、不要合并、不要改 `alpha`/`master`。
-- 合并顺序：W3 → W4 → W1 → W2（先底层后接线）。
-- 合并后在 `alpha` 跑完整门禁；`alpha` 验证通过后再合并 `master`。
+- **先改本文件，再改实现**：字段名、端点形状、环境变量名一律以本文件为准，不要各自发明。
+- 共享文件（`internal/**`、`frontend-vue/src/**`、`desktop-local/**` 之外的交叉面）的改动
+  必须在本文件登记后再落地。
+- 提交前跑完 §6 的验收命令；CI/本机无法运行的项在提交说明里写"未验证 + 原因"，不要假装通过。
 
 ## 8. 禁止事项
 
@@ -262,10 +256,10 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - 不要在渲染进程暴露任意 `fs` / `require` / `ipcRenderer`。
 - 不要把用户 provider key 写入日志、SQLite、localStorage 或备份。
 - 不要默认删除 `userData/local/**`。
-- 云端片段推理端点见 §9（第二批已实现）。
+- 云端片段推理端点见 §9。
 - 不要改 `internal/**`（Go）与 `frontend-vue/src/**` 之外的共享文件而不在本文件登记。
 
-## 9. 桌面片段推理端点（第二批）
+## 9. 桌面片段推理端点
 
 `POST /v1/desktop/infer`（云端网关 → Python 引擎）：
 
@@ -346,7 +340,7 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
      （`internal/billing`，由 `internal/api/submit_handler.go` 的 biller 链路调用）。引擎再写一份 =
      同一段用量双写 ⇒ 重复扣费；
   3. 扣费是有余额后果、需要退款路径的动作。没有对账/退款闭环之前，宁可只落账本。
-- 本批只落"用量账本"；自动计费（按 `desktop:infer:usage:*` 对账扣费）是后续工作，且扣费键前缀
+- 只落"用量账本"；自动计费（按 `desktop:infer:usage:*` 对账扣费）未实现，且扣费键前缀
   `dtk_` 尚未启用（见 9.3.3）。
 - 计量口径的两个已知后果：命中**幂等重放**的请求不再计用量（正确 —— 上游确实没被调用第二次）；
   命中**缓存**的请求仍上报 provider 返回的 usage（`cached_tokens` 表示提示词缓存命中的输入）。

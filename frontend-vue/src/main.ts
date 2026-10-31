@@ -53,7 +53,7 @@ installLocaleSync(() => {
 })
 
 // 统一提示时长：成功/信息类 2.5s（"复制成功"看一眼就够）。
-// 错误类需要读完，调用点单独传 { duration: 4 }（见 docs/ui-refinement-design.md §8）。
+// 错误类需要读完，调用点单独传 { duration: 4 }。
 message.config({ duration: 2.5 })
 
 // 桌面端 token 由 safeStorage 异步解密；先拿到再挂载，避免首屏请求缺少 Bearer。

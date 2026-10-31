@@ -1,11 +1,11 @@
-# 桌面端配置面与硬编码审计
+# 桌面端配置面与硬编码清单
 
 本文件回答一个问题：**桌面端（Electron 壳 + `desktop-local` 本地 core）里哪些"配置"其实是写死在代码里的，改起来需要动哪里。**
 
-- 审计对象：`frontend-vue/electron/*.cjs`、`frontend-vue/electron-builder.yml`、`desktop-local/app/**`、`desktop-local/scripts/*`。
-- 审计方式：人工通读 + 机器基线扫描（[`desktop-local/tests/test_hardcode_audit.py`](../../desktop-local/tests/test_hardcode_audit.py)）。
+- 覆盖对象：`frontend-vue/electron/*.cjs`、`frontend-vue/electron-builder.yml`、`desktop-local/app/**`、`desktop-local/scripts/*`。
+- 基线扫描：[`desktop-local/tests/test_hardcode_audit.py`](../../desktop-local/tests/test_hardcode_audit.py)。
   扫描器只输出清单、**不因发现而失败**，用来把现状钉住而不是让 CI 常红。
-- 本文件是**只读结论**：不修改任何业务代码、不新增依赖。所有"建议"都落在第 7 节，供后续改动取舍。
+- 本文件是**只读结论**；所有"建议"都落在第 7 节，供后续改动取舍。
 
 图例（下文表格统一使用）：
 
@@ -310,7 +310,7 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 | `components.cjs:41` | `CORE_COMPONENTS_PATH = '/v1/components'` | 🟡 | 保持常量（核心路由，不该配） |
 | `inference-proxy.cjs:19` | `http://127.0.0.1:11434` | 🟡 | 与 `secrets.providers.ollama.baseUrl` 合并成单一来源 |
 | `inference-proxy.cjs:24` | 透传参数白名单 `temperature/max_tokens/top_p/stop` | 🟡 | 有意收窄，保留 |
-| `inference-proxy.cjs:269` | cloud provider 恒 501 | 🟡 | 第二批实现后删 |
+| `inference-proxy.cjs:269` | cloud provider 恒 501 | 🟡 | 云端片段推理落地后删 |
 | `shared.cjs:13` | `http://localhost:5173` | 🟡 | 仅开发态；`CHIRON_DEV_URL` 已可覆盖 |
 | `main.cjs:82` + `electron-builder.yml:10` | `com.chiron.agent`（两处） | 🟡 | 构建期注入一份，代码侧读 `app.getAppUserModelId()` 或 package.json |
 | `main.cjs:56` | 窗口底色 `#f9f9f7`（CSS 变量 `--bg-page` 的手抄值） | 🟡 | 与前端主题变量同步时容易漂移；建议前端导出 `theme.color.bgPage` |
@@ -332,7 +332,7 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 
 ---
 
-## 7. 建议的提取落点（供后续改动取舍，本次未实施）
+## 7. 建议的提取落点（供后续改动取舍）
 
 1. **一个常量模块**：`frontend-vue/electron/defaults.cjs`（或扩展 `shared.cjs`），收纳
    `LOOPBACK = '127.0.0.1'`、`DEFAULT_PYTHON = 'python'`、`CORE_BINARY_NAME = 'chiron-local'`、
@@ -354,12 +354,11 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 
 ---
 
-## 8. 本次审计的边界
+## 8. 适用范围与边界
 
-- **没有改任何业务代码**，也没有新增依赖：`docs/` 加一份说明，`desktop-local/tests/` 加一个基线扫描器。
-- `desktop-local/scripts/*`（`smoke_desktop.py` / `verify_*.py` / `build_component.py`）只做了人工通读，
-  **未纳入**自动扫描（它们是验证工具，不是运行期配置面）。
-- 前端 `frontend-vue/src/**` 不在范围内：那里的 `localStorage` 只是 `config.json` 的镜像
+- `desktop-local/scripts/*`（`smoke_desktop.py` / `verify_*.py` / `build_component.py`）是验证工具，
+  不是运行期配置面，**未纳入**自动扫描。
+- 前端 `frontend-vue/src/**` 不在本文件范围内：那里的 `localStorage` 只是 `config.json` 的镜像
   （契约 §1），不是配置真相。
 - Go 网关 / `python-engine` / `docker-compose.yml` 的配置面属于云端形态，不在本文件讨论范围。
 - 第 5 节的数值全部来自代码常量；未在真机上做时序验证（例如 30s 健康等待在慢机器上是否够）。

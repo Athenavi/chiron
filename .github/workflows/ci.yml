@@ -242,7 +242,7 @@ jobs:
         run: python scripts/check_doc_links.py
       # Markdown 表格结构：同一表格块内每行的列数必须一致。手写的表格**多一个 / 少一个 `|`
       # 不会让 Markdown 报错** —— 只是静默错位（看着"差不多"）。实测在
-      # docs/development-roadmap.md §3 抓到两处：一行多了一个分隔符、另一行少了行尾 `|`，
+      # 某个长表格的 §3 抓到两处：一行多了一个分隔符、另一行少了行尾 `|`，
       # 而当时四个守卫没有一个覆盖这个类别。存量基线（scripts/md_tables_baseline.txt，
       # **只应缩小**）当前为**空** ⇒ 新增不一致直接失败（已做变异验证）。
       - name: Markdown tables (consistent column counts)
