@@ -100,6 +100,14 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   stopComponent: name => ipcRenderer.invoke('desktop:stop-component', name),
 
   /**
+   * 选一个本地文档（契约 §2）。
+   *
+   * 只回 `{ path, name }`，**不读内容** —— 正文由本地链路按需处理。
+   * 用户取消时 resolve `null`（不是错误），调用方按"没选"处理即可。
+   */
+  pickDocument: () => ipcRenderer.invoke('desktop:pick-document'),
+
+  /**
    * 本地模型配置（provider / 端点 / 模型名 / key）。
    *
    * 读回来的**永远不含明文 key**：只有 `{ active, providers: { <name>: { baseUrl, model, hasKey } } }`。

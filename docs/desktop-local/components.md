@@ -175,9 +175,9 @@ CHIRON_COMPONENT_PORT      借到的端口
 统一响应包装与 `contracts.md` §4 一致：业务数据在 `{"data": ...}`；错误是
 `{"error": "<code>", "message": "<人话>", ...}`。
 
-> 本模块**只定义 `router`**，`app/main.py` / `app/api/__init__.py` 未改：这些端点在测试里通过
-> `app.include_router(components_api.router)` 挂载。要上线需在 `main.py` 里加一行
-> `app.include_router(components.router, tags=["components"])`（**尚未接线**）。
+> 路由已在 `app/main.py` 挂载：`from app.api import (... components ...)` +
+> `app.include_router(components.router, tags=["components"])`。测试里同样通过
+> `app.include_router(components_api.router)` 单独挂载，不依赖主应用。
 
 | 方法 | 路径 | 成功 | 说明 |
 |---|---|---|---|
@@ -266,10 +266,20 @@ Windows 服务/权限提升场景、多实例并发安装同一组件（有锁�
 - **不做签名校验**：只有 sha256 完整性校验。sha256 来自同一个组件源，源被篡改时校验无意义；
   要防这一层需要 manifest 签名（未实现）。
 - **不支持断点续传 / 镜像回退**：HTTP 源失败即失败，没有重试。
-- **单进程锁**：`ComponentManager` 用 `threading.Lock` 只保护本进程的进程表；两个 core 实例
-  （例如用户手动再起一个）可能同时改同一个 `<data-dir>/components`，没有跨进程锁。
-- **组件进程不受监督**：崩溃后不会自动拉起，`running` 只反映"我们 spawn 的进程还在不在"；
-  core 退出时也不会自动停组件（`stop_all()` 需要显式调用）。
+- **跨进程锁只覆盖目录写操作**：`install` 落位与 `remove` 共用 `<data-dir>/components/.lock`
+  （`app/components/lockfile.py`，Windows `msvcrt` / 其它 `fcntl`，非阻塞轮询 + 超时）。
+  启动 / 停止只动本进程的进程表，**不拿这把锁** —— 健康检查最长 20s，占着锁会让另一实例的安装
+  一直等到超时。两个 core 实例同时 `start` 同一组件仍会各起一个进程，互不知情。
+- **组件进程有监督，但有边界**：core 每秒检查一次（`SUPERVISE_INTERVAL`），崩溃后按
+  1s / 2s / 4s 退避自动拉起（`RESTART_BACKOFF`），连续崩溃超过 3 次（`MAX_CRASH_RESTARTS`）
+  就**放弃拉起**并把原因写进 `ComponentInfo.supervisionGaveUp`——继续拉只会变成崩溃循环把日志写满。
+  跑满 60s（`STABLE_UPTIME`）算稳定，崩溃计数清零，所以"偶发崩溃"不会被永久判死。
+  监督只盯本进程 spawn 的进程：`running` 仍只反映"我们起的那个进程还在不在"，
+  组件自己再 fork 出去的子进程不在视野内。
+  主动 `stop` 会注销"期望运行"并打 `stopping` 标记，监督不会把用户停掉的组件拉回来。
+  core 退出时 lifespan 的 finally 里**先停监督线程、再 `stop_all()`**（组件先于 PG/Redis 停）；
+  顺序反了会变成拉锯——`stop_all` 收掉进程后监督会当成崩溃又拉起来。
+  但 core 被强杀（`SIGKILL` / 任务管理器结束进程）时这一步不会执行，组件会残留。
 - **健康检查只支持 HTTP GET**：TCP 探测、自定义校验逻辑未实现；不声明 `health` 就完全不探测。
 - **旧版本清理**：安装成功后删除同组件的旧版本目录，但只在"该目录里有 `installed.json`"时才删，
   手工放进来的目录不会被动。

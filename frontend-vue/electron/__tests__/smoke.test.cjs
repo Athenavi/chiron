@@ -188,14 +188,24 @@ test('baseUrl 注入：非 loopback 的 host 一律压回 127.0.0.1', async t =>
   assert.equal(started.baseUrl, 'http://127.0.0.1:45124')
 })
 
-test('baseUrl 注入：没有 listening 事件时回退到「借来的端口 + /healthz 探测」', async t => {
+test('baseUrl 注入：没有 listening 事件时启动失败，不拿 /healthz 冒充本 core', async t => {
   const { repo, fetched } = setup(t)
 
-  const started = await components.startCore({ repoRoot: repo }) // 不传 port → 先借一个空闲端口
-
-  assert.match(started.baseUrl, /^http:\/\/127\.0\.0\.1:\d+$/)
-  assert.equal(started.listening, false)
-  assert.ok(fetched.some(url => url.endsWith('/healthz')), '没有探测过 /healthz')
+  // 端口固定且无人播报 listening：实现必须判失败，而不是探测 /healthz 后当作成功。
+  // 理由见 waitForHealth：固定端口上若恰好有别的服务应答 /healthz，探测会把
+  // 「core 起失败（端口被占）」误判成「启动成功」，还不会触发换端口重试。
+  await assert.rejects(
+    () =>
+      components.startCore({
+        repoRoot: repo,
+        port: 0,
+        portAttempts: 1,
+        healthTimeoutMs: 20,
+        healthIntervalMs: 5,
+      }),
+    /没有收到 stdout 的 listening 事件/,
+  )
+  assert.equal(fetched.length, 0, '不应在拿到 listening 之前探测 /healthz')
 })
 
 test('baseUrl 注入：组件管理从同一个 baseUrl 取数（local 模式下 preload 注入的就是它）', async t => {
@@ -288,7 +298,16 @@ test('退出回收：core 自己挂掉时 startCore 抛错并带上真实 stderr
   })
 
   await assert.rejects(
-    () => components.startCore({ repoRoot: repo, port: 0 }),
+    () =>
+      components.startCore({
+        repoRoot: repo,
+        port: 0,
+        // 只跑一次尝试 + 短超时：`exit` 只发一次，重试时监听器已摘除，
+        // 会白等满 30s 默认超时（3 次 ≈ 90s），与这条用例要验的东西无关。
+        portAttempts: 1,
+        healthTimeoutMs: 50,
+        healthIntervalMs: 5,
+      }),
     err => {
       assert.match(err.message, /本地 core 启动失败/)
       assert.match(err.message, /No module named app/)

@@ -5,6 +5,8 @@
  * 主进程换了前缀、preload 还按旧前缀找，页面会静默回落到同源请求。
  * 模式前缀与分区名同理，所以都放在这里。
  */
+const path = require('node:path')
+
 const API_URL_ARG_PREFIX = '--chiron-api-url='
 /** 主进程创建窗口时用它把当前运行模式告诉 preload（契约 §2 的 window.chironDesktop.mode） */
 const MODE_ARG_PREFIX = '--chiron-mode='
@@ -46,6 +48,24 @@ function shouldQuitOnAllWindowsClosed({ platform, startupComplete, holdingWindow
   return true
 }
 
+/**
+ * 把 `dialog.showOpenDialog` 的结果翻译成 `pickDocument` 的返回值（契约 §2）。
+ *
+ * 抽成纯函数放这里，同样是因为 main.cjs 一 require 就会起 Electron：
+ * 对话框的回调没法在单测里跑，但"取消 / 空选 / 多选"这几条分支必须被钉住。
+ *
+ * 三条约定：
+ *   - 用户取消 → `null`，不是错误（调用方按"没选"处理）；
+ *   - 多选也只取第一个 —— 契约的返回类型是单个 `{ path, name }`；
+ *   - 不做扩展名过滤：本地抽取接受任意文件，限死类型只会让用户选不到自己的文档。
+ */
+function pickDocumentResult(result) {
+  if (!result || result.canceled) return null
+  const filePath = Array.isArray(result.filePaths) ? result.filePaths[0] : ''
+  if (!filePath) return null
+  return { path: filePath, name: path.basename(filePath) }
+}
+
 module.exports = {
   API_URL_ARG_PREFIX,
   MODE_ARG_PREFIX,
@@ -54,4 +74,5 @@ module.exports = {
   PARTITION_PREFIX,
   partitionFor,
   shouldQuitOnAllWindowsClosed,
+  pickDocumentResult,
 }

@@ -163,6 +163,52 @@ jobs:
       - name: Unit tests
         run: pnpm run test
 
+  # ── 桌面端本地栈（desktop-local + Electron 壳）──────────────────────────
+  #
+  # 这条线此前**完全没有 CI**：`desktop-local/` 的 289 条单测与
+  # `frontend-vue/electron/__tests__/` 的 147 条纯 Node 单测都没人跑
+  # （vitest 的 include 只有 `src/**`，够不到 `.test.cjs`）。
+  # 后果是真实的：`smoke.test.cjs` 里有一条用例断言的是已被移除的
+  # 「/healthz 回退」行为，在实现改成「只认 listening 事件」之后长期失效，
+  # 却没有任何地方会红。
+  #
+  # 这里只跑**不需要外部服务**的部分：单测把 PG / Redis 全关
+  # （见 `tests/conftest.py`），真实存储由 `tests/integration/` 覆盖 ——
+  # 那一组起不来就 skip，不放进 PR 门禁。
+  desktop-local:
+    name: Desktop local
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: desktop-local
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: desktop-local/pyproject.toml
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+      - name: Ruff (lint)
+        run: ruff check .
+      - name: Pytest
+        # `tests/integration/` 要真 PG，起不来就 skip；PR 门禁只要确定性的单测。
+        run: python -m pytest -q --ignore=tests/integration
+      # Electron 壳的纯 Node 单测：所有 Electron / spawn / fetch 都由
+      # `components.cjs::_setDeps` 注入，因此不需要装 electron 本体。
+      - name: Electron syntax check
+        working-directory: frontend-vue/electron
+        run: for f in *.cjs; do node --check "$f"; done
+      - name: Electron unit tests
+        working-directory: frontend-vue/electron
+        run: node --test __tests__/*.test.cjs
+
   # ── 迁移链整体性 ─────────────────────────────────────────────────────────
   schema:
     name: Migration chain

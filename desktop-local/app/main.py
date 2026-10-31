@@ -109,6 +109,22 @@ def create_app(settings: Settings | None = None) -> FastAPI:
                 task.cancel()
                 with contextlib.suppress(asyncio.CancelledError):
                     await task
+            # 组件先停：它们的 CHIRON_INFERENCE_PROXY 指向本 core，且是独立子进程 ——
+            # core 先退会把它们留成孤儿（端口仍占着、下次启动撞端口）。
+            # 管理器是懒创建的：从没调过组件端点就说明没有组件在跑，不必新建一个。
+            manager = getattr(app.state, "component_manager", None)
+            if manager is not None:
+                # 顺序不能反：先停监督线程再 stop_all。反过来的话 stop_all 收掉进程后，
+                # 监督线程会把它当成"崩溃"又拉起来，退出过程变成拉锯。
+                # 两件事分开 try：停监督失败绝不能连累"停组件" —— 那才是留孤儿进程的那一步。
+                try:
+                    await asyncio.to_thread(manager.stop_supervisor)
+                except Exception as exc:  # noqa: BLE001
+                    app.state.storage_errors.append(f"components: {type(exc).__name__}: {exc}")
+                try:
+                    await asyncio.to_thread(manager.stop_all)
+                except Exception as exc:  # noqa: BLE001 —— 退出路径不能因组件失败而中断
+                    app.state.storage_errors.append(f"components: {type(exc).__name__}: {exc}")
             await redis.stop()
             await asyncio.to_thread(pg.stop)
 

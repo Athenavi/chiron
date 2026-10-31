@@ -48,6 +48,8 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
+from app.components.lockfile import ComponentDirLock
+
 # --------------------------------------------------------------------- 常量
 #: 组件源（契约名）；同义的 ``CHIRON_LOCAL_`` 前缀版本也认（config.py 的 env_prefix）
 ENV_BASE_URL = "CHIRON_COMPONENT_BASE_URL"
@@ -83,6 +85,16 @@ HEALTH_INTERVAL = 0.1
 #: 组件启动最多尝试几次（含首次）。组件自己 bind 端口，而 ``free_port()`` 只是借号
 #: （close 到子进程 bind 之间有竞态），所以“起步就退出 / 健康检查不过”时要换端口重试。
 PORT_ATTEMPTS = 2
+
+#: 进程监督：多久看一次"组件还活着吗"
+SUPERVISE_INTERVAL = 1.0
+#: 连续崩溃这么多次后放弃自动拉起（继续拉只会变成崩溃循环，把磁盘写满日志）
+MAX_CRASH_RESTARTS = 3
+#: 跑满这么久算"稳定"，崩溃计数清零 —— 否则一个每天崩一次的组件会被永久判死
+STABLE_UPTIME = 60.0
+#: 第 n 次重启前等多久（越崩越慢，给用户时间去停掉/卸载）
+RESTART_BACKOFF = (1.0, 2.0, 4.0)
+
 #: 读组件日志末尾多少字节（只为判断端口冲突与拼报错，不整份读）
 LOG_TAIL_BYTES = 4000
 
@@ -668,11 +680,15 @@ class ProcessRecord:
     started_at: str
     log_path: Path
     log_handle: Any
+    #: 主动停止中：监督线程看到这个标志就**不**拉起（用户点"停止"不该被自动重启打回去）
+    stopping: bool = False
+    #: 本次启动的单调时钟起点，用于判断"跑够久了"从而清零崩溃计数
+    started_mono: float = field(default_factory=time.monotonic)
 
     def alive(self) -> bool:
         return self.child.poll() is None
 
-    def snapshot(self) -> dict[str, Any]:
+    def snapshot(self, *, restarts: int = 0) -> dict[str, Any]:
         return {
             "name": self.name,
             "version": self.version,
@@ -684,6 +700,7 @@ class ProcessRecord:
             "startedAt": self.started_at,
             "log": str(self.log_path),
             "exitCode": self.child.returncode,
+            "restarts": restarts,
         }
 
     def terminate(self) -> None:
@@ -744,6 +761,18 @@ class ComponentManager:
         self._lock = threading.Lock()
         # 已经撞过/起步失败过的端口：换端口重试时避开它们
         self._failed_ports: set[int] = set()
+        # --- 进程监督 ---
+        #: 用户期望保持运行的组件名。与 ``_records``（实际在跑的）分开：
+        #: ``record()`` 会把已退出的进程从 ``_records`` 里 pop 掉，若监督只盯 ``_records``，
+        #: 一次 ``list()`` 就能让崩溃的组件从视野里消失，永远不会被拉起。
+        self._supervised: set[str] = set()
+        #: 每个组件连续崩溃次数（跑满 STABLE_UPTIME 清零）
+        self._crash_counts: dict[str, int] = {}
+        #: 已放弃自动拉起的组件 → 放弃原因（暴露给 list/status，不静默）
+        self._gave_up: dict[str, str] = {}
+        self._supervisor: threading.Thread | None = None
+        #: 监督线程的停止信号；set 后线程在下一轮退出
+        self._supervisor_stop = threading.Event()
 
     # --- 路径 ---
     @property
@@ -756,6 +785,14 @@ class ComponentManager:
     @property
     def log_dir(self) -> Path:
         return self.data_dir / "logs" / "components"
+
+    def dir_lock(self) -> ComponentDirLock:
+        """跨进程锁：包住会改动 ``<data-dir>/components`` 的操作（安装落位 / 卸载）。
+
+        只在**改目录**时拿它。启动 / 停止只动本进程的进程表，不需要也不该拿 ——
+        健康检查最长 20s，占着锁会让另一个实例的安装一直等到超时。
+        """
+        return ComponentDirLock(self.component_root / ".lock")
 
     def specs(self) -> tuple[ComponentSpec, ...]:
         return tuple(self._specs.values())
@@ -899,6 +936,9 @@ class ComponentManager:
                     "dir": str(self.component_dir(spec.name)),
                     "pid": record.child.pid if record else None,
                     "baseUrl": record.base_url if record else "",
+                    # 监督状态：重启过几次、是否已放弃自动拉起（放弃原因不静默吞掉）
+                    "restarts": self._crash_counts.get(spec.name, 0),
+                    "supervisionGaveUp": self._gave_up.get(spec.name, ""),
                 }
             )
         return items
@@ -963,30 +1003,33 @@ class ComponentManager:
                 )
 
             version_dir = self.component_dir(spec.name) / manifest.version
-            if version_dir.exists():
-                shutil.rmtree(version_dir)
-            version_dir.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(payload), str(version_dir))
+            # 落位到清理旧版本这一段必须跨进程互斥：另一个 core 实例同时安装同一组件时，
+            # 两边都删/写 <components>/<name>/<version>，会互相覆盖。
+            with self.dir_lock():
+                if version_dir.exists():
+                    shutil.rmtree(version_dir)
+                version_dir.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(payload), str(version_dir))
 
-            record = {
-                "name": spec.name,
-                "version": manifest.version,
-                "entry": manifest.entry,
-                "args": list(manifest.args),
-                "health": manifest.health_path,
-                "files": installed_files,
-                "source": source.location,
-                "sourceKind": source.kind,
-                "installedAt": _utc_now(),
-            }
-            (version_dir / INSTALLED_NAME).write_text(
-                json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            # 原样留一份 manifest：排查时不用回头翻组件源，手工探测也能认出“这是装过的”
-            (version_dir / MANIFEST_NAME).write_text(
-                json.dumps(dict(manifest.raw), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
-            )
-            self._prune_other_versions(spec.name, manifest.version)
+                record = {
+                    "name": spec.name,
+                    "version": manifest.version,
+                    "entry": manifest.entry,
+                    "args": list(manifest.args),
+                    "health": manifest.health_path,
+                    "files": installed_files,
+                    "source": source.location,
+                    "sourceKind": source.kind,
+                    "installedAt": _utc_now(),
+                }
+                (version_dir / INSTALLED_NAME).write_text(
+                    json.dumps(record, ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
+                # 原样留一份 manifest：排查时不用回头翻组件源，手工探测也能认出“这是装过的”
+                (version_dir / MANIFEST_NAME).write_text(
+                    json.dumps(dict(manifest.raw), ensure_ascii=False, indent=2) + "\n", encoding="utf-8"
+                )
+                self._prune_other_versions(spec.name, manifest.version)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
 
@@ -1029,7 +1072,10 @@ class ComponentManager:
         spec = self._spec(name)
         existing = self.record(spec.name)
         if existing is not None:
-            return existing.snapshot()
+            with self._lock:
+                self._supervised.add(spec.name)
+                self._gave_up.pop(spec.name, None)
+            return existing.snapshot(restarts=self._crash_counts.get(spec.name, 0))
 
         installed = self.installed(spec.name)
         if installed is None:
@@ -1049,7 +1095,7 @@ class ComponentManager:
         for attempt in range(1, PORT_ATTEMPTS + 1):
             port = free_port(exclude=self._failed_ports)
             try:
-                return self._start_once(spec, installed, entry, port, health_timeout, attempt)
+                snapshot = self._start_once(spec, installed, entry, port, health_timeout, attempt)
             except ComponentError as exc:
                 last_error = exc
                 # 这个端口已经废了：记下来，下一次换一个
@@ -1057,6 +1103,12 @@ class ComponentManager:
                 failures.append(f"第 {attempt} 次（端口 {port}）：{exc}")
                 if not bool(getattr(exc, "retryable", False)) or attempt >= PORT_ATTEMPTS:
                     break
+            else:
+                # 起来之后才登记"期望运行"：启动失败不该留下一个监督线程反复重试的死组件
+                with self._lock:
+                    self._supervised.add(spec.name)
+                    self._gave_up.pop(spec.name, None)
+                return snapshot
 
         if last_error is None:  # 循环至少跑一次，这里只是让类型收窄
             raise StartFailedError(f"组件 {spec.name} 启动失败：没有可用的启动尝试")
@@ -1172,9 +1224,17 @@ class ComponentManager:
 
     # --- 停止 ---
     def stop(self, name: str) -> dict[str, Any]:
-        """终止组件进程。没在跑时返回 ``stopped: False``（幂等，不报错）。"""
+        """终止组件进程。没在跑时返回 ``stopped: False``（幂等，不报错）。
+
+        主动停止会**同时**注销"期望运行"并给记录打上 ``stopping`` 标记：监督线程看到它
+        就不会把进程再拉起来 —— 否则用户点"停止"后一秒组件又活了，停止形同虚设。
+        """
         spec = self._spec(name)
         record = self.record(spec.name)
+        with self._lock:
+            self._supervised.discard(spec.name)
+            if record is not None:
+                record.stopping = True
         if record is None:
             return {"name": spec.name, "running": False, "stopped": False, "detail": "组件未在运行"}
         pid = record.child.pid
@@ -1194,6 +1254,8 @@ class ComponentManager:
         """停掉所有组件（core 退出时调用，避免留孤儿进程）。"""
         with self._lock:
             names = list(self._records)
+            # 一次性清空"期望运行"：退出途中不该有组件被监督线程重新拉起
+            self._supervised.clear()
         results = []
         for name in names:
             try:
@@ -1201,6 +1263,102 @@ class ComponentManager:
             except ComponentError as exc:  # pragma: no cover —— 已知组件才会进 records
                 results.append({"name": name, "running": False, "stopped": False, "detail": str(exc)})
         return results
+
+    # --- 进程监督 ---
+    def start_supervisor(self) -> None:
+        """启动监督线程（幂等）。core 起来时调用一次。"""
+        with self._lock:
+            if self._supervisor is not None and self._supervisor.is_alive():
+                return
+            self._supervisor_stop.clear()
+            thread = threading.Thread(
+                target=self._supervise_loop,
+                name="chiron-component-supervisor",
+                daemon=True,
+            )
+            self._supervisor = thread
+        thread.start()
+
+    def stop_supervisor(self, *, timeout: float | None = None) -> bool:
+        """停监督线程，返回是否已停下。
+
+        必须在 ``stop_all()`` **之前**调用：反过来的话，stop_all 收掉进程后监督线程
+        会认为"组件崩了"，又把它们拉起来 —— 退出过程变成拉锯。
+        """
+        with self._lock:
+            thread = self._supervisor
+            self._supervisor = None
+            self._supervisor_stop.set()
+        if thread is None:
+            return True
+        thread.join(timeout if timeout is not None else STOP_TIMEOUT)
+        return not thread.is_alive()
+
+    def _supervise_loop(self) -> None:
+        # wait 而不是 sleep：停止信号一到就退出，不用等满一个间隔
+        while not self._supervisor_stop.wait(SUPERVISE_INTERVAL):
+            try:
+                self.supervise_once()
+            except Exception:  # noqa: BLE001 —— 监督线程不能因为单次异常就死掉
+                continue
+
+    def supervise_once(self) -> list[str]:
+        """检查一轮，返回这一轮成功重启的组件名。
+
+        单独暴露成同步方法：测试直接调它就能验证策略，不必等后台线程的节拍。
+        """
+        with self._lock:
+            names = sorted(self._supervised)
+        restarted: list[str] = []
+        for name in names:
+            try:
+                if self._supervise_one(name):
+                    restarted.append(name)
+            except ComponentError:
+                continue  # 启动失败由计数兜底，下一轮再判是否已放弃
+        return restarted
+
+    def _supervise_one(self, name: str) -> bool:
+        """单个组件的一轮检查：活着就（够久则清零计数），死了就按退避策略重启。"""
+        with self._lock:
+            if name not in self._supervised:
+                return False
+            record = self._records.get(name)
+            if record is not None and not record.alive():
+                # 已退出的进程不留在表里，否则 snapshot 会报 running=True
+                self._records.pop(name, None)
+                record = None
+            if record is not None and record.stopping:
+                return False  # 正在主动停止：不拉起
+
+        if record is not None:
+            if time.monotonic() - record.started_mono >= STABLE_UPTIME:
+                with self._lock:
+                    self._crash_counts.pop(name, None)
+            return False
+
+        # 进程没了 —— 判断还能不能再拉
+        with self._lock:
+            if name not in self._supervised:  # 期间被 stop() 注销
+                return False
+            count = self._crash_counts.get(name, 0) + 1
+            self._crash_counts[name] = count
+            if count > MAX_CRASH_RESTARTS:
+                self._gave_up[name] = f"连续崩溃 {count} 次（上限 {MAX_CRASH_RESTARTS}），已停止自动拉起"
+                self._supervised.discard(name)
+                return False
+            delay = RESTART_BACKOFF[min(count - 1, len(RESTART_BACKOFF) - 1)]
+
+        if self._supervisor_stop.wait(delay):
+            return False
+        with self._lock:
+            if name not in self._supervised:  # 退避期间被停掉
+                return False
+        try:
+            self.start(name)
+        except ComponentError:
+            return False
+        return True
 
     # --- 卸载 ---
     def remove(self, name: str) -> dict[str, Any]:
@@ -1211,7 +1369,10 @@ class ComponentManager:
         if not base.is_dir():
             raise NotInstalledError(f"组件 {spec.name} 未安装（{base} 不存在）")
         try:
-            shutil.rmtree(base)
+            # 与 install 共用同一把跨进程锁：卸载撞上另一个实例的安装时，
+            # 不加锁会出现「装了一半被删掉」或「删的时候目录正被写入」。
+            with self.dir_lock():
+                shutil.rmtree(base)
         except OSError as exc:
             raise ComponentError(f"组件 {spec.name} 卸载失败：{exc}") from exc
         return {"name": spec.name, "removed": True, "dir": str(base)}

@@ -39,6 +39,9 @@ def manager_for(request: Request) -> ComponentManager:
     if injected is not None:
         return injected
     manager = ComponentManager(getattr(request.app.state, "settings", None))
+    # 监督线程随管理器一起起来：只有真正用到组件端点时才需要盯进程，
+    # 从没碰过组件的 core 不该凭空多一个后台线程。
+    manager.start_supervisor()
     request.app.state.component_manager = manager
     return manager
 

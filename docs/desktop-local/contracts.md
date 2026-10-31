@@ -60,13 +60,26 @@ interface ComponentInfo {
   installed: boolean
   running: boolean
   sizeBytes: number
+  // 进程监督：连续崩溃重启次数；非空串 = 已放弃自动拉起（原因在这里）
+  restarts: number
+  supervisionGaveUp: string
+}
+
+// 读回值**永不含明文 key**（`secrets.cjs::readPublicSecrets`）：只有 hasKey 布尔。
+interface LocalModelConfig {
+  active: string
+  providers: Record<string, { baseUrl: string; model: string; hasKey: boolean }>
+  safeStorageAvailable: boolean
 }
 
 interface ChironDesktop {
   isDesktop: true
   platform: 'win32' | 'darwin' | 'linux'
+  versions: { electron: string; chrome: string }
   apiUrl: string
   mode: ChironMode
+  /** 本地设备 token（只读）：local 模式由主进程注入，cloud 模式恒为空串 */
+  deviceToken: string
 
   getDeviceSettings(): Promise<DeviceSettings>
   setMode(mode: ChironMode, opts?: { deleteLocalData?: boolean }): Promise<void>
@@ -85,24 +98,47 @@ interface ChironDesktop {
   startComponent(name: string): Promise<void>
   stopComponent(name: string): Promise<void>
 
-  // 本地抽取（类型占位，尚未接线）
+  // 本地模型配置：读回值永不含明文 key，只有 hasKey 布尔
+  getModelConfig(): Promise<LocalModelConfig>
+  saveModelConfig(config: LocalModelConfig): Promise<{ ok: boolean; message?: string }>
+  restartLocalBackend(): Promise<{ ok: boolean; message?: string }>
+
+  // 首次启动的运行时安装进度；返回取消订阅函数
+  onRuntimeInstallStage(callback: (info: unknown) => void): () => void
+
+  // 本地文档选择：只回路径与文件名，不读内容；用户取消时 resolve null
   pickDocument(): Promise<{ path: string; name: string } | null>
 }
 ```
 
-IPC channel 命名统一 `desktop:<verb>`：
+IPC channel 命名统一 `desktop:<verb>`。`ipcMain.handle` 实际注册的 17 个：
 
 ```
 desktop:get-device-settings
 desktop:set-mode
 desktop:restart
+desktop:test-api-url
+desktop:set-api-url
+desktop:get-token
+desktop:save-token
+desktop:clear-token
 desktop:list-components
 desktop:install-component
 desktop:remove-component
 desktop:start-component
 desktop:stop-component
 desktop:pick-document
+desktop:get-model-config
+desktop:save-model-config
+desktop:restart-local-backend
 ```
+
+单向事件（主进程 → 渲染进程，`webContents.send`，不走 `handle`）：
+`desktop:runtime-stage` —— 首次启动的运行时安装进度，仅 `install.html` 订阅。
+
+`desktop:pick-document` 的边界：`showOpenDialog` 只取第一个路径，**不读文件内容**
+（正文属于用户数据，由本地链路按需处理）；对话框以 `BrowserWindow.fromWebContents(event.sender)`
+为模态父窗口，因此设置页开在独立窗口时不会挂到主窗口上；不加扩展名过滤器，本地抽取接受任意文件。
 
 所有 `ipcMain.handle` 必须先 `assertTrustedSender(event)`。
 

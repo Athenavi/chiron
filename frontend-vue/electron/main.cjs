@@ -1220,6 +1220,24 @@ if (!gotLock) {
       return requireComponents().stopComponent(String(name || ''))
     })
 
+    // ── 本地文档选择（契约 §2 的 `pickDocument`）──
+    //
+    // 只回 `{ path, name }`，**不读内容**：文档正文属于用户数据，读取与抽取由本地链路
+    // 按需处理，主进程不在这里把它带进内存。用户取消返回 `null`（不是错误）。
+    //
+    // 对话框归属发起请求的窗口：`BrowserWindow.fromWebContents(event.sender)` 而不是
+    // 模块级的 `mainWindow` —— 设置页开在独立窗口时，模态父窗口必须是它自己。
+    // 不加 `filters`：本地抽取接受任意文件，限死扩展名只会让用户选不到自己的文档。
+    ipcMain.handle('desktop:pick-document', async event => {
+      assertTrustedSender(event)
+      const owner = BrowserWindow.fromWebContents(event.sender)
+      const options = { title: '选择文档', properties: ['openFile'] }
+      const result = owner
+        ? await dialog.showOpenDialog(owner, options)
+        : await dialog.showOpenDialog(options)
+      return shared.pickDocumentResult(result)
+    })
+
     // ── 本地模型配置（provider / 端点 / 模型名 / key）──
     //
     // 三个动作都不抛异常给渲染进程：IPC 抛错会被 Electron 包成
