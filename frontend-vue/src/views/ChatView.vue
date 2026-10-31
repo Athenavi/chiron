@@ -10,7 +10,6 @@ import {
   API_URL, desktopDeviceToken,
 } from '../api'
 import type { LlmModel } from '../api'
-import { recoverSession } from '../api'
 import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
@@ -38,6 +37,7 @@ import { useChatShare } from '../composables/useChatShare'
 import { useApprovalEdit, type PendingApproval } from '../composables/useApprovalEdit'
 import { useTranscriptSearch } from '../composables/useTranscriptSearch'
 import { useSessionMeta } from '../composables/useSessionMeta'
+import { useMessageFailure } from '../composables/useMessageFailure'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
 import { CloudUploadOutlined } from '@ant-design/icons-vue'
@@ -491,6 +491,12 @@ let activeSSE: EventSource | null = null
 // 每个会话最后收到的 SSE 事件 id（服务端 id: 行 → event.lastEventId）。
 // 跨轮重建 SSE 时回传（last_event_id），服务端从缓冲流补发上一轮断线缺口（见 api/index.ts createSSEConnection）
 const sseLastIdBySession = new Map<string, string>()
+
+// ── 失败消息标记与手动修复（实现见 composables/useMessageFailure.ts）──
+const { markMessageFailed, describeFailureMeta, repairSession } = useMessageFailure({
+  items,
+  activeSessionId,
+})
 
 // ── Trace ID (当前会话的链路追踪标识) ──
 const currentTraceId = ref('')  // SSE done 事件回传的 trace_id
@@ -2589,96 +2595,10 @@ function discardOutbox() {
   refreshOutbox()
 }
 
-// ── 失败消息标记 ──
-function markMessageFailed(
-  itemId: string | undefined,
-  errorMsg: string,
-  meta?: { code?: string; retryAfterSec?: number; retryable?: boolean; reason?: string },
-) {
-  if (!itemId) return
-  const it = items.value.find(i => i.id === itemId)
-  if (it && it.kind === 'text') {
-    it.error = true
-    it.errorMsg = errorMsg
-    // 记下后端错误码与"最坏等待秒数"：错误块据此给出**针对性动作** ——
-    // session_busy 该显示的是"修复会话 + 约 N 分钟自动恢复"，而不是"重试"
-    // （重试必然再撞同一道闸门）。
-    it.errorCode = meta?.code
-    it.errorRetryAfterSec = meta?.retryAfterSec
-    // 服务端说"重试没意义"时，UI 就不该给重试按钮（见 MessageItem 的渲染条件）。
-    it.errorRetryable = meta?.retryable
-    // 模型被拒时区分"谁拦的"，据此决定给"买套餐"还是"找管理员"。
-    it.errorReason = meta?.reason
-  }
-}
+// ── 失败消息标记 / 手动修复 ──
+// 实现见 `composables/useMessageFailure.ts`（已在文件上方解构）。这三个函数只写那条
+// 消息自身的错误字段与收口卡住的会话，不碰流状态，因此可以独立成簇。
 
-/**
- * 从失败响应里取"结构性"信息：稳定错误码 + 自动恢复的最坏等待秒数。
- *
- * 秒数由后端算（stale 阈值 + 一次巡检间隔），前端只负责呈现 ——
- * 这样"还要等多久"与实际自动恢复时机不会各说各话。
- */
-function describeFailureMeta(e: unknown): {
-  code?: string
-  retryAfterSec?: number
-  retryable?: boolean
-  reason?: string
-} {
-  const data = (
-    e as {
-      response?: {
-        data?: {
-          code?: string
-          retryable?: boolean
-          params?: { retry_after_seconds?: number; reason?: string }
-        }
-      }
-    }
-  )?.response?.data
-  if (!data) return {}
-  const sec = data.params?.retry_after_seconds
-  const reason = data.params?.reason
-  return {
-    code: typeof data.code === 'string' ? data.code : undefined,
-    retryAfterSec: typeof sec === 'number' ? sec : undefined,
-    // 只在服务端**显式**给出布尔时才传：缺省表示"无结论"，调用方应保持原行为
-    // （见 rateLimitBackoff.shouldRetryResponse 的同一条口径）。
-    retryable: typeof data.retryable === 'boolean' ? data.retryable : undefined,
-    reason: typeof reason === 'string' ? reason : undefined,
-  }
-}
-
-/**
- * 手动修复卡住的会话：把同会话那条一直没收口的 run 收口。
- *
- * 网关是**严格模式**：仍在跑（Redis 运行锁在）或没到 stale 窗口时会回 409，
- * 并把"还要等多久"放在 params 里 —— 这里如实转告，而不是笼统报"失败"。
- */
-async function repairSession(itemId: string) {
-  const target = activeSessionId.value
-  if (!target) return
-  try {
-    await recoverSession(target)
-    const it = items.value.find(i => i.id === itemId)
-    if (it && it.kind === 'text') {
-      // 收口成功、或本来就没卡（已被自动收口）—— 两种都是"现在可以发了"
-      it.error = false
-      it.errorMsg = undefined
-      it.errorCode = undefined
-      it.errorRetryAfterSec = undefined
-    }
-    notify.success(t('errors.session_repaired'))
-  } catch (e) {
-    const meta = describeFailureMeta(e)
-    const min = meta.retryAfterSec ? Math.max(1, Math.ceil(meta.retryAfterSec / 60)) : 0
-    if (min) {
-      // 409：确实还在跑 / 还没到 stale 窗口 —— 告诉用户具体还要等多久
-      notify.warning(`${t('errors.session_busy')} ${t('errors.session_busy_auto_recover', { n: min })}`)
-    } else {
-      notify.error(describeApiError(e))
-    }
-  }
-}
 
 // ── 消息重试/重新生成 ──
 /** 删除指定 itemId 及其后所有消息，返回被删除的用户消息文本（如有） */
