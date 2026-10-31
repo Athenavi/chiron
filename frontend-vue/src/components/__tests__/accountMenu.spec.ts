@@ -11,7 +11,8 @@ import { buildAccountMenuItems, accountMenuRoute } from '../accountMenu'
  * 聊天中的用户完全点不到通知中心。所以这里钉三件事：
  *
  *  1. **云端模式必须有 notifications**（顶栏与聊天侧栏都得有）；
- *  2. **本地模式整组账号入口都不展示**（没有账号体系，通知表也无处落地）；
+ *  2. **本地模式只藏登出**（账户是本地网关为本机免口令铸的真实 owner，
+ *     通知与用户级 API Key 都存在同一个库里；而 logout 在本地会立刻重建同一个会话）；
  *  3. 每个 label 在三种语言下都**真的翻译过**（缺键时 vue-i18n 会原样返回键名，
  *     界面上直接显示 `notifications.title`）—— 用真实 i18n 实例而不是 stub t。
  */
@@ -49,11 +50,14 @@ describe('buildAccountMenuItems · 云端模式', () => {
 })
 
 describe('buildAccountMenuItems · 本地模式', () => {
-  it('不展示通知、api-keys 与登出（本地没有账号体系）', () => {
+  it('仍展示通知与 api-keys：本地后端就是同一个网关，账户是它为本机铸的真实 owner', () => {
     const keys = keysOf(true)
-    expect(keys).not.toContain('notifications')
-    expect(keys).not.toContain('api-keys')
-    expect(keys).not.toContain('logout')
+    expect(keys).toContain('notifications')
+    expect(keys).toContain('api-keys')
+  })
+
+  it('不展示登出：stores/auth.ts::logout 在本地会立刻重建同一个会话，按钮是空操作', () => {
+    expect(keysOf(true)).not.toContain('logout')
   })
 
   it('仍保留 settings / profile（本地也有界面偏好与个人信息）', () => {
@@ -62,9 +66,8 @@ describe('buildAccountMenuItems · 本地模式', () => {
     expect(keys).toContain('profile')
   })
 
-  it('即便显式传 includeApiKeys=true，本地模式也不展示', () => {
-    // 本地模式没有用户级 API Key 的落点，参数不该覆盖这条硬规则。
-    expect(keysOf(true, true)).not.toContain('api-keys')
+  it('includeApiKeys=false 时本地也不展示 api-keys（页面差异与模式无关）', () => {
+    expect(keysOf(true, false)).not.toContain('api-keys')
   })
 })
 

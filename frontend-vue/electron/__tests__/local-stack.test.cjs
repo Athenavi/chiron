@@ -147,6 +147,24 @@ test('buildGatewayEnv 无 Redis 地址时不写 REDIS_ADDR（交给网关自己�
   assert.notEqual(env.REDIS_ADDR, '')
 })
 
+test('buildGatewayEnv 打开本地会话引导：不打开就没有任何身份，本地模式只能停在未登录', () => {
+  const env = stack.buildGatewayEnv(
+    { pgDsn: 'postgresql://x', redisAddr: '' },
+    { appSecret: VALID_SECRET, port: 9100, env: {} },
+  )
+
+  assert.equal(env[stack.LOCAL_BOOTSTRAP_ENV], '1')
+})
+
+test('buildGatewayEnv 保留调用方显式给出的 LOCAL_BOOTSTRAP（含关闭）', () => {
+  const env = stack.buildGatewayEnv(
+    { pgDsn: 'postgresql://x', redisAddr: '' },
+    { appSecret: VALID_SECRET, port: 9100, env: { LOCAL_BOOTSTRAP: '0' } },
+  )
+
+  assert.equal(env[stack.LOCAL_BOOTSTRAP_ENV], '0')
+})
+
 // ------------------------------------------------------------------ 引导器握手
 
 test('startLauncher 用 -m app.launcher 起进程，并在 ready 行后返回连接信息', async t => {

@@ -60,7 +60,9 @@ export const useAuthStore = defineStore('auth', () => {
   /** 统一写入内存 token 与请求层 Bearer（桌面端同时持久化，刷新后仍可用） */
   function applyToken(t: string) {
     token.value = t
-    setAuthToken(t)
+    // 归属由模式决定：本地会话只进本地桶，云端登录态才进 safeStorage。
+    // 混用会让"云端 token 被发给本机后端"这种 401 变得无法解释（见 api/index.ts）。
+    setAuthToken(t, isLocalMode() ? 'local' : 'cloud')
   }
 
   /**
@@ -179,7 +181,9 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function fetchProfile() {
-    // 本地模式：权威身份就是本地会话（也没有 /v1/auth/profile）
+    // 本地模式：权威身份来自本地会话。`POST /v1/auth/session` 返回的 user.role 就是
+    // 后端行里的值（网关链路）或与设备 token 等价的本机身份（core 链路），
+    // 不再多打一次 GET /v1/auth/profile —— 那条端点只有网关有，core 没有。
     if (isLocalMode()) {
       await ensureLocalSession()
       return

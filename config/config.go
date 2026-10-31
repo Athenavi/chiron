@@ -48,6 +48,15 @@ type Config struct {
 	// 启动只做只读校验，不一致即拒绝启动，避免"代码已升级、迁移未跑"的静默漂移。
 	AllowSchemaDrift bool
 
+	// LocalBootstrap 打开本地模式的免口令会话引导（POST /v1/auth/session）。
+	// 默认 false：这个端点会**不校验任何口令就铸出一个 owner JWT**，只有在
+	// "数据只在这台机器上、进程由本机用户自己启动"的桌面本地部署里才成立。
+	// 桌面壳拉起网关时显式置 1（frontend-vue/electron/local-stack.cjs），
+	// 云端/多人部署保持关闭即完全不会注册这条路由。
+	// 处理链上还有第二道闸门：只认 loopback 来源，局域网请求一律 403
+	//（局域网设备只能用口令走 POST /v1/auth/login）。
+	LocalBootstrap bool
+
 	// Auth
 	JWTSecret     string
 	JWTExpiration time.Duration
@@ -134,7 +143,7 @@ type Config struct {
 	// AgentMaxOutputTokens 单次 LLM 调用的 max output tokens。它不是 run 预算：
 	// run 全程的 token 上限在**引擎**侧（`AGENT_RUN_MAX_TOKENS`，默认 400k）。
 	AgentMaxOutputTokens int
-	AgentMaxConcurrency   int // max concurrent agent runs (default 20)
+	AgentMaxConcurrency  int // max concurrent agent runs (default 20)
 	// AgentSubmitTimeout 单次提交（一条 SSE 回合）在网关侧的后台执行上限。
 	// 必须 >= api.DefaultAgentTimeout（300s）：曾经硬编码 180s，比它短，
 	// 长回合（多轮工具调用）必然被提前取消，表现为"思考/工具调用做一半就断"。
@@ -198,49 +207,50 @@ func loadConfig() *Config {
 	loadDotEnv()     // .env file overrides config file
 	loadConfigFile() // JSON config file (lowest priority)
 	cfg := &Config{
-		AppSecret:           getSecret("APP_SECRET", ""),
-		Port:                getEnv("PORT", "8080"),
-		ReadTimeout:         getDuration("READ_TIMEOUT", 10*time.Second),
-		WriteTimeout:        getDuration("WRITE_TIMEOUT", 60*time.Second),
-		IdleTimeout:         getDuration("IDLE_TIMEOUT", 120*time.Second),
-		PostgresDSN:         getEnv("POSTGRES_DSN", ""),
-		PostgresMaxConn:     getIntAliases(20, "POSTGRES_MAX_CONN", "POSTGRES_MAX_CONNS"),
-		PostgresMinConn:     getInt("POSTGRES_MIN_CONN", 2),
-		PostgresReadDSNs:    getStringSlice("POSTGRES_READ_DSNS", []string{}),
-		RedisMode:           getEnv("REDIS_MODE", "single"),
-		RedisAddr:           getEnv("REDIS_ADDR", "localhost:6379"),
-		RedisPassword:       getEnv("REDIS_PASSWORD", ""),
-		RedisDB:             getInt("REDIS_DB", 0),
-		RedisAddrs:          getStringSlice("REDIS_ADDRS", []string{}),
-		RedisMasterName:     getEnv("REDIS_MASTER_NAME", ""),
-		RedisSentinelAddrs:  getStringSlice("REDIS_SENTINEL_ADDRS", []string{}),
-		RedisPoolSize:       getInt("REDIS_POOL_SIZE", 100),
-		JWTSecret:           getSecret("JWT_SECRET", ""),
-		JWTExpiration:       getDuration("JWT_EXPIRATION", 24*time.Hour),
-		InternalToken:       getSecret("INTERNAL_TOKEN", ""),
-		DisableRegistration: isTruthy(getEnv("DISABLE_REGISTRATION", "")),
-		EmailBloomEnabled:   isTruthy(getEnv("EMAIL_BLOOM_FILTER_ENABLED", "true")),
-		EmailBloomCapacity:  uint64(getInt("EMAIL_BLOOM_CAPACITY", 100000)),
+		AppSecret:                 getSecret("APP_SECRET", ""),
+		Port:                      getEnv("PORT", "8080"),
+		ReadTimeout:               getDuration("READ_TIMEOUT", 10*time.Second),
+		WriteTimeout:              getDuration("WRITE_TIMEOUT", 60*time.Second),
+		IdleTimeout:               getDuration("IDLE_TIMEOUT", 120*time.Second),
+		PostgresDSN:               getEnv("POSTGRES_DSN", ""),
+		PostgresMaxConn:           getIntAliases(20, "POSTGRES_MAX_CONN", "POSTGRES_MAX_CONNS"),
+		PostgresMinConn:           getInt("POSTGRES_MIN_CONN", 2),
+		PostgresReadDSNs:          getStringSlice("POSTGRES_READ_DSNS", []string{}),
+		RedisMode:                 getEnv("REDIS_MODE", "single"),
+		RedisAddr:                 getEnv("REDIS_ADDR", "localhost:6379"),
+		RedisPassword:             getEnv("REDIS_PASSWORD", ""),
+		RedisDB:                   getInt("REDIS_DB", 0),
+		RedisAddrs:                getStringSlice("REDIS_ADDRS", []string{}),
+		RedisMasterName:           getEnv("REDIS_MASTER_NAME", ""),
+		RedisSentinelAddrs:        getStringSlice("REDIS_SENTINEL_ADDRS", []string{}),
+		RedisPoolSize:             getInt("REDIS_POOL_SIZE", 100),
+		JWTSecret:                 getSecret("JWT_SECRET", ""),
+		JWTExpiration:             getDuration("JWT_EXPIRATION", 24*time.Hour),
+		InternalToken:             getSecret("INTERNAL_TOKEN", ""),
+		DisableRegistration:       isTruthy(getEnv("DISABLE_REGISTRATION", "")),
+		EmailBloomEnabled:         isTruthy(getEnv("EMAIL_BLOOM_FILTER_ENABLED", "true")),
+		EmailBloomCapacity:        uint64(getInt("EMAIL_BLOOM_CAPACITY", 100000)),
 		NotificationRetentionDays: getInt("NOTIFICATION_RETENTION_DAYS", 90),
-		EmailBloomFPRate:    getFloat("EMAIL_BLOOM_FP_RATE", 0.001),
+		EmailBloomFPRate:          getFloat("EMAIL_BLOOM_FP_RATE", 0.001),
 		// Cookie Secure：显式配置优先；未配置时**按部署协议推导**（见 cookieSecure()）。
-		CookieSecure: cookieSecure(),
-		CORSOrigins:         getEnv("CORS_ORIGINS", ""),
-		StorageBackend:      getEnv("STORAGE_BACKEND", "local"),
-		StorageRoot:         getEnv("STORAGE_ROOT", filepath.Join(GetDefaultDataDir(), "workspace")),
-		S3Endpoint:          getEnv("S3_ENDPOINT", ""),
-		S3Bucket:            getEnv("S3_BUCKET", "chiron"),
-		S3AccessKey:         getSecret("S3_ACCESS_KEY", ""),
-		S3SecretKey:         getSecret("S3_SECRET_KEY", ""),
-		S3UseSSL:            isTruthy(getEnv("S3_USE_SSL", "")),
-		RateLimitRPM:        getInt("RATE_LIMIT_RPM", 100),
-		RateLimitFailClose:  isTruthy(getEnv("RATE_LIMIT_FAIL_CLOSE", "")),
-		RateLimitGlobal:     getInt("RATE_LIMIT_GLOBAL", 10000),
-		TrustedProxyCIDRs:   getStringSlice("TRUSTED_PROXY_CIDRS", []string{}),
-		MetricsToken:        getSecret("METRICS_TOKEN", ""),
-		DegradedMode:        isTruthy(getEnv("DEGRADED_MODE", "")),
-		AllowSchemaDrift:    isTruthy(getEnv("ALLOW_SCHEMA_DRIFT", "")),
-		LogLevel:            getEnv("LOG_LEVEL", "info"),
+		CookieSecure:       cookieSecure(),
+		CORSOrigins:        getEnv("CORS_ORIGINS", ""),
+		StorageBackend:     getEnv("STORAGE_BACKEND", "local"),
+		StorageRoot:        getEnv("STORAGE_ROOT", filepath.Join(GetDefaultDataDir(), "workspace")),
+		S3Endpoint:         getEnv("S3_ENDPOINT", ""),
+		S3Bucket:           getEnv("S3_BUCKET", "chiron"),
+		S3AccessKey:        getSecret("S3_ACCESS_KEY", ""),
+		S3SecretKey:        getSecret("S3_SECRET_KEY", ""),
+		S3UseSSL:           isTruthy(getEnv("S3_USE_SSL", "")),
+		RateLimitRPM:       getInt("RATE_LIMIT_RPM", 100),
+		RateLimitFailClose: isTruthy(getEnv("RATE_LIMIT_FAIL_CLOSE", "")),
+		RateLimitGlobal:    getInt("RATE_LIMIT_GLOBAL", 10000),
+		TrustedProxyCIDRs:  getStringSlice("TRUSTED_PROXY_CIDRS", []string{}),
+		MetricsToken:       getSecret("METRICS_TOKEN", ""),
+		DegradedMode:       isTruthy(getEnv("DEGRADED_MODE", "")),
+		AllowSchemaDrift:   isTruthy(getEnv("ALLOW_SCHEMA_DRIFT", "")),
+		LocalBootstrap:     isTruthy(getEnv("LOCAL_BOOTSTRAP", "")),
+		LogLevel:           getEnv("LOG_LEVEL", "info"),
 
 		// 支付（支付宝/微信）
 		PublicBaseURL:         getEnv("PUBLIC_BASE_URL", ""),

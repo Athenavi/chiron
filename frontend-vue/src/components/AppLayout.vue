@@ -131,9 +131,10 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
     ...(localMode ? [] : [{ key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) }]),
-    ...(authStore.isAdmin && !localMode
+    ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
+          // 本地模式同样要给入口：服务商密钥/端点只有这一页能写进本机网关的库。
           { key: '/models', label: tr('agent.model'), icon: () => h(ApiOutlined) },
           { key: '/admin', label: tr('common.manage'), icon: () => h(SettingOutlined) },
         ]

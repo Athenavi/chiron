@@ -70,6 +70,19 @@ export type { ChironMode }
  */
 const DESKTOP_TOKEN_KEY = 'chiron_desktop_token' // 仅用于迁移上一版明文 token
 let bearerToken = ''
+/**
+ * 本地会话 token（`POST /v1/auth/session` 换到的 JWT / 设备 token）。
+ *
+ * 与 `bearerToken` **分桶**，不是出于语义洁癖而是为了钉住一条不变量：
+ * **云端登录 token 永远不该被发给本机后端**（两边密钥不同 ⇒ 必然 401，
+ * 而且报错点离真因极远）。切换模式时 `getDeviceMode()` 立刻变新值、进程却要
+ * 稍后才重启，中间这个窗口里如果共用一个变量，云端 token 就会被当成"本地会话"
+ * 发出去。分桶之后这条路径不存在。
+ */
+let localBearerToken = ''
+
+/** Bearer token 的归属：云端登录态，还是本地会话。 */
+export type TokenScope = 'cloud' | 'local'
 
 /**
  * 本地 core 的**设备 token**（只读，preload 在 local 模式注入）。
@@ -86,21 +99,34 @@ export function desktopDeviceToken(): string {
 /**
  * 本次请求该带哪个 Bearer token。
  *
- * - 本地模式：本地 core 开鉴权（`CHIRON_LOCAL_AUTH_ENABLED=1`）时只认设备 token；
- *   云端 token 属于另一个后端，带过去两边都看不懂，所以这里**不**回退云端 token。
- *   没有设备 token 就不设头 —— 默认（鉴权关闭）本就无需任何 token。
+ * - 本地模式：**设备 token 优先，其次本地会话 token**。
+ *   · 桌面 core（desktop-local）链路：core 只认 preload 注入的设备 token；
+ *   · 本地网关链路（打包后跑 Go 网关）：没有设备 token 这回事，身份是
+ *     `POST /v1/auth/session` 换到的真实 JWT（见 internal/api/auth_local_session.go），
+ *     必须带出去，否则网关全场 401、`requiresAdmin` 也永远判不过。
+ *   两者都没有就不设头 —— core 默认关鉴权时本就无需任何 token。
+ *   **绝不**回退到云端登录 token：那份凭据属于另一个后端（见 localBearerToken）。
  * - 云端模式：沿用登录/SSO 拿到的 token（桌面端持久化在 safeStorage）。
  */
 function requestToken(): string {
-  if (getDeviceMode() === 'local') return desktopDeviceToken()
+  if (getDeviceMode() === 'local') return desktopDeviceToken() || localBearerToken
   return bearerToken
 }
 
-/** 设置当前请求使用的 Bearer token；桌面端交给主进程加密持久化 */
-export function setAuthToken(token: string) {
+/**
+ * 写入本次请求使用的 Bearer token；`scope` 标明这份凭据属于哪一侧。
+ *
+ * - `'cloud'`（默认）：登录/SSO 的云端凭据，桌面端交给主进程加密持久化；
+ *   **在本地模式下不写 safeStorage**（那里存的是云端凭据，切回 cloud 模式会被
+ *   当成登录 token 发出去 —— 必然 401 且看不出原因）。
+ * - `'local'`：本地会话 token，只进内存里的本地桶，一律不落 safeStorage。
+ */
+export function setAuthToken(token: string, scope: TokenScope = 'cloud') {
+  if (scope === 'local') {
+    localBearerToken = token || ''
+    return
+  }
   bearerToken = token || ''
-  // 本地模式：设备 token 属于本机 core，不进 safeStorage（那里存的是云端凭据，
-  // 写进去会在切回 cloud 模式后被当成登录 token 发出去 —— 必然 401 且看不出原因）。
   if (!isDesktop || getDeviceMode() === 'local') return
   try {
     if (bearerToken) void desktopHost?.saveToken?.(bearerToken)

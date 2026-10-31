@@ -51,6 +51,7 @@
 | `CHIRON_DEVICE_TOKEN` | 不传 → `crypto.randomBytes(32).hex`（`components.cjs:667`） | `components.cjs:447`、`api/auth.py:51` | 本地设备 token（**不是**云端凭据） | 🟢 |
 | `CHIRON_INFERENCE_PROXY` + `CHIRON_LOCAL_INFERENCE_PROXY` | 空（不传） | `components.cjs:448` | core 侧推理代理地址 | 🟢 |
 | `CHIRON_LOCAL_AUTH_ENABLED` | 壳层默认写 `1`（`components.cjs:451-453`） | `components.cjs:451` | 打开 core 的设备 token 校验 | 🟢 |
+| `LOCAL_BOOTSTRAP`（发给**网关**，不是 core） | 壳层默认写 `1`，显式传值（含 `0`）保留调用方口径（`local-stack.cjs::LOCAL_BOOTSTRAP_ENV`） | `config/config.go` 的 `LocalBootstrap` | 打开网关的免口令会话引导（`POST /v1/auth/session`），仅 loopback 来源可用；见 [`launcher.md`](./launcher.md) §3.4 | 🟢 |
 | 无（仅错误文案提到） | — | `components.cjs:254` | 提示用户设置 `CHIRON_COMPONENT_BASE_URL`，但**壳层不读也不转发**它 | 🔴 文档化缺口 |
 
 进程内参数（不是环境变量，但同属配置面）：`--dev`（`main.cjs:52`）、`additionalArguments` 前缀
@@ -234,6 +235,7 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 | `GET /readyz`（存储就绪，逐项如实报） | core | `api/health.py:23` |
 | `GET /events`（SSE 心跳 15s） | core | `api/events.py:42` |
 | `POST /v1/auth/session`（免鉴权换设备 token） | core | `api/auth.py:73` |
+| `POST /v1/auth/session`（网关形态：免口令铸/复用 owner，仅 loopback，非 loopback 403） | 网关（`LOCAL_BOOTSTRAP=1` 时才注册） | `internal/api/auth_local_session.go` |
 | `GET /v1/models`、`POST /v1/models/verify` | core | `api/models.py:45,58` |
 | `GET/POST/DELETE /v1/components*` | core ← Electron `components.cjs` | `api/components.py`、`components.cjs:41` |
 | `POST /infer`（推理代理唯一路由） | Electron proxy（`127.0.0.1:<随机>`，一次性 token） | `inference-proxy.cjs:311,331-355` |
@@ -361,4 +363,7 @@ CI 打包后按真实路径反向断言它不存在，同时**正向断言** uv 
 - 前端 `frontend-vue/src/**` 不在本文件范围内：那里的 `localStorage` 只是 `config.json` 的镜像
   （契约 §1），不是配置真相。
 - Go 网关 / `python-engine` / `docker-compose.yml` 的配置面属于云端形态，不在本文件讨论范围。
+  例外只有一个：网关在本地模式由壳层拉起，壳层必须往下塞 `LOCAL_BOOTSTRAP=1`
+  （`electron/local-stack.cjs::LOCAL_BOOTSTRAP_ENV`）—— 这是本地身份的唯一入口，
+  语义与安全边界见 [`launcher.md`](./launcher.md) §3.4。
 - 第 5 节的数值全部来自代码常量；未在真机上做时序验证（例如 30s 健康等待在慢机器上是否够）。

@@ -7,8 +7,10 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
  * preload 注入的 `window.chironDesktop.deviceToken`。这里钉住三件事：
  *
  * 1. 本地模式带的是**设备 token**；
- * 2. 没有设备 token 就**不设** Authorization（默认鉴权关闭，无 token 本就合法）；
- * 3. 本地 token **不进** safeStorage —— 否则切回云端模式会被当成登录 token 发出去。
+ * 2. 没有设备 token 时带**本地会话 token**（`scope='local'`，网关链路靠它认身份），
+ *    两者都没有才**不设** Authorization（core 默认关鉴权，无 token 本就合法）；
+ * 3. 云端登录 token **不发给本地后端**，本地 token 也**不进** safeStorage ——
+ *    两个方向都由 `setAuthToken` 的 scope 分桶保证，否则切模式时会串味。
  */
 
 type Host = {
@@ -87,6 +89,31 @@ describe('本地模式的 Authorization 头', () => {
     expect(authorizationOf(seen[0]!)).toBeUndefined()
   })
 
+  it('local 模式带本地会话 token：网关链路没有设备 token，全靠它认身份', async () => {
+    const mod = await loadApi({ isDesktop: true, mode: 'local', deviceToken: '' })
+    mod.setAuthToken('local-session-jwt', 'local')
+    const seen = captureHeaders(mod)
+    await mod.api.get('/v1/models')
+    expect(authorizationOf(seen[0]!)).toBe('Bearer local-session-jwt')
+  })
+
+  it('设备 token 与本地会话 token 同时存在时以设备 token 为准（core 只认它）', async () => {
+    const mod = await loadApi({ isDesktop: true, mode: 'local', deviceToken: 'dev-token-5' })
+    mod.setAuthToken('local-session-jwt', 'local')
+    const seen = captureHeaders(mod)
+    await mod.api.get('/v1/models')
+    expect(authorizationOf(seen[0]!)).toBe('Bearer dev-token-5')
+  })
+
+  it('本地会话 token 不出现在云端模式：换回 cloud 就该彻底沉默', async () => {
+    const mod = await loadApi({ isDesktop: true, mode: 'cloud', deviceToken: '' })
+    // 先按本地写入，再切云端模式（切换会重启，这里模拟"内存里还留着"的最坏情况）
+    mod.setAuthToken('local-session-jwt', 'local')
+    const seen = captureHeaders(mod)
+    await mod.api.get('/v1/models')
+    expect(authorizationOf(seen[0]!)).toBeUndefined()
+  })
+
   it('cloud 模式仍用登录 token（设备 token 不参与）', async () => {
     const mod = await loadApi({ isDesktop: true, mode: 'cloud', deviceToken: 'dev-token-3' })
     mod.setAuthToken('cloud-token')
@@ -108,6 +135,13 @@ describe('setAuthToken 的持久化边界', () => {
     const saveToken = vi.fn(async () => undefined)
     const mod = await loadApi({ isDesktop: true, mode: 'local', deviceToken: 'dev-token-4', saveToken })
     mod.setAuthToken('dev-token-4')
+    expect(saveToken).not.toHaveBeenCalled()
+  })
+
+  it('scope=local 的 token 在任何模式下都不进 safeStorage（用错 scope 也污染不了云端凭据）', async () => {
+    const saveToken = vi.fn(async () => undefined)
+    const mod = await loadApi({ isDesktop: true, mode: 'cloud', saveToken })
+    mod.setAuthToken('local-session-jwt', 'local')
     expect(saveToken).not.toHaveBeenCalled()
   })
 

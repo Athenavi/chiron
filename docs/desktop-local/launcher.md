@@ -43,7 +43,7 @@ FATAL redis is required but unavailable
 在 Go 里重写一遍等于两套 initdb 逻辑并存 —— 一旦某天两边对"数据目录布局"的理解
 分叉，用户看到的是"升级后本地数据打不开"。让引导器独占这块，是刻意的单点。
 
-## 3. 三个刻意的设计
+## 3. 几个刻意的设计
 
 ### 3.1 不继承 FastAPI：没有端口，就没有"实现了一半"的空间
 
@@ -72,6 +72,24 @@ PG 起来 + 迁移跑完 + Redis 起来，就打印 `launcher-ready`。
 网关能否起来是**下一步**的事。混在一起会让故障归因变难：用户看到"启动失败"时，
 无法区分是数据栈起不来，还是网关自己崩了。分开之后，Electron 侧的日志分别带
 `[launcher]` 与 `[gateway]` 前缀。
+
+### 3.4 身份由网关铸造，不在壳里伪造
+
+网关就绪后，前端第一件事是 `POST /v1/auth/session` 换一份**真 JWT**
+（`internal/api/auth_local_session.go`）：本地库里没有那个 owner 账号就顺手铸一个，
+已有就原样返回 —— 用户改了邮箱或降了角色，重启不会被覆盖回来。
+
+铸出来的 owner 带 `password_set = FALSE` 与一段随机 bcrypt，所以它**不能**用口令登录，
+只能从本机免口令换会话。局域网里的其它设备因此只能等本机用户先设过口令
+（`POST /v1/auth/password` 在 `password_set=FALSE` 时跳过"校验当前口令"，这正是无需新增 UI 的设口令入口），
+再用口令走 `POST /v1/auth/login`。
+
+开关是 `LOCAL_BOOTSTRAP`，由 `electron/local-stack.cjs::LOCAL_BOOTSTRAP_ENV` 显式置 `1`；
+网关侧默认关，云端部署压根不会注册这条路由（`internal/api/routes_auth.go`）。
+**安全边界不在环境变量，而在处理链上**：只有 loopback 来源能免口令拿到 owner，
+其它来源 403。这条分界就是"本机主人自动有个能进管理后台的账号"与
+"局域网里任何人都能拿到 owner"的区别，也是本地模式得以与云端共用同一套
+`requiresAdmin` / 网关 RBAC 判定的前提 —— 前端对本地模式没有任何身份特判。
 
 ## 4. 输出契约
 
@@ -147,6 +165,7 @@ python -m app.launcher --data-dir "$LOCALAPPDATA/Chiron/local" --print-and-exit
 | `launcher-error` 里含 `alembic` | 迁移失败，看 stderr 里的 alembic 输出 |
 | 网关报 `PostgreSQL is required but unavailable` | 引导器没就绪就起了网关，或 DSN 解析失败 |
 | 网关报 `APP_SECRET` 相关 | `APP_SECRET` 少于 32 字符（见 [`contracts.md`](./contracts.md) §3.1） |
+| 本地模式全场 401、进不了管理后台 | 网关没拿到 `LOCAL_BOOTSTRAP=1` ⇒ 会话引导路由没注册，`POST /v1/auth/session` 回 405；或请求不是从 loopback 进来 ⇒ 被处理链 403（§3.4） |
 
 ## 7. 相关文件
 
@@ -156,6 +175,7 @@ desktop-local/app/storage/pg.py            embedded PG：起停、迁移、DSN
 desktop-local/app/storage/redis.py         Redis：起停、端口
 desktop-local/tests/test_launcher.py       入口契约测试（不依赖真实 PG）
 frontend-vue/electron/local-stack.cjs      引导器 → 网关的交接与生命周期
+internal/api/auth_local_session.go        本地会话引导：铸 owner 与 loopback 闸门（§3.4）
 docs/desktop-local/handshake.md            启动与握手的实际链路
 docs/desktop-local/embedded-pg.md          PG 后端的实测数据
 ```

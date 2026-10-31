@@ -46,6 +46,12 @@ const GATEWAY_READY_PATH = '/ready'
 /** APP_SECRET 的最短长度要求（`config/config.go` 强制 32+） */
 const APP_SECRET_MIN_LENGTH = 32
 
+/**
+ * 本地模式免口令会话引导的开关（`config/config.go` 里的 `LOCAL_BOOTSTRAP`）。
+ * 名字只在这里出现一次，`buildGatewayEnv` 与回归用例都引用这个常量。
+ */
+const LOCAL_BOOTSTRAP_ENV = 'LOCAL_BOOTSTRAP'
+
 /** 引擎活跃探针。**不是** `/readyz`：只要进程在监听就够，依赖问题由降级模式兜住。 */
 const ENGINE_HEALTH_PATH = '/healthz'
 
@@ -201,6 +207,18 @@ function buildGatewayEnv(info, options = {}) {
 
   const engineAddr = String(options.pythonEngineAddress || '').trim()
   if (engineAddr) env.PYTHON_ENGINE_ADDRESS = engineAddr
+
+  // 本地模式身份：打开网关的免口令会话引导（`POST /v1/auth/session`）。
+  //
+  // 必须由这里显式打开：网关侧默认关（那是给云端多租户部署定的口径），而本地模式
+  // 没有注册/登录页 —— 那些是云专属路由。开关不打开，前端就拿不到任何身份，
+  // `requiresAuth` / `requiresAdmin` 与网关 RBAC 全部落空，本地模式退化成
+  // "只能看首页"。
+  //
+  // 安全边界不在这里，而在网关处理链上：只有 loopback 来源能免口令换到 owner，
+  // 局域网里的其它设备必须用口令走 `POST /v1/auth/login`
+  //（见 internal/api/auth_local_session.go）。显式传值（含 '0'）保留调用方的口径。
+  if (!env[LOCAL_BOOTSTRAP_ENV]) env[LOCAL_BOOTSTRAP_ENV] = '1'
 
   return env
 }
@@ -863,6 +881,7 @@ module.exports = {
   GATEWAY_TIMEOUT_MS,
   ENGINE_TIMEOUT_MS,
   APP_SECRET_MIN_LENGTH,
+  LOCAL_BOOTSTRAP_ENV,
   parseLauncherLine,
   buildGatewayEnv,
   buildEngineEnv,

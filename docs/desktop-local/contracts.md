@@ -222,6 +222,20 @@ desktop-local/
 鉴权：`Authorization: Bearer <device-token>` 或同源 httpOnly cookie；允许无鉴权启动，
 但 `/readyz` 必须报告 `auth: "disabled"`。
 
+### 本地模式的两个后端与身份来源
+
+本地模式的后端有两种形态，凭据不同，但**前端走同一条判定路径**
+（`src/router/guard.ts` 对本地模式没有身份特判，`requiresAdmin` 一律看后端会话）：
+
+| 后端 | 身份来源 | 请求带的 Bearer |
+|---|---|---|
+| Go 网关（引导器交接，见 [`launcher.md`](./launcher.md) §3.4） | `POST /v1/auth/session` 免口令换到的真 JWT：owner，仅 loopback | 本地会话 token |
+| `desktop-local` core（本节上面那套 API） | `POST /v1/auth/session` 返回固定 `LOCAL_USER` | preload 注入的设备 token |
+
+两条路都不串用云端凭据：`src/api/index.ts::setAuthToken(token, scope)` 按归属分桶 ——
+本地 token 不进 safeStorage，云端登录 token 不参与本地请求。模式切换时
+`getDeviceMode()` 立刻变新值、进程却稍后才重启，那个窗口期就是分桶存在的理由。
+
 ### `/readyz` 的判定语义
 
 `ready` 只看**业务依赖**（PG 与迁移），不把 redis 算进就绪条件：
