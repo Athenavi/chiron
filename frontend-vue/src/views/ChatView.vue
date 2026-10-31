@@ -5,7 +5,6 @@ import { Button, Input, Modal, Checkbox, Alert, Dropdown, Menu, MenuItem, MenuDi
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
   api, createSSEConnection, submitApproval, submitAnswer,
-  updateConversation,
   getChatSessionMessages, resolveMediaUrl, listModels,
   createAgent, createGraph,
   API_URL, desktopDeviceToken,
@@ -36,6 +35,9 @@ import OnboardingGuide from '../components/chat/OnboardingGuide.vue'
 import { useNewUserOnboarding, markFirstMessageDone } from '../composables/useNewUserOnboarding'
 import { TOUR_ANCHORS, type TourReason } from '../composables/useOnboardingTour'
 import { useChatShare } from '../composables/useChatShare'
+import { useApprovalEdit, type PendingApproval } from '../composables/useApprovalEdit'
+import { useTranscriptSearch } from '../composables/useTranscriptSearch'
+import { useSessionMeta } from '../composables/useSessionMeta'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
 import { CloudUploadOutlined } from '@ant-design/icons-vue'
@@ -51,8 +53,7 @@ import CallChainTimeline from '../components/CallChainTimeline.vue'
 import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter, mergeTurnStats } from '../components/chat/chat-types'
 import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
-import { findMatches } from '../components/chat/transcriptSearch'
-import { describeApiError, errorDetail } from '../utils/apiError'
+import { describeApiError } from '../utils/apiError'
 import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
 import { currentProject } from '../composables/useProject'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
@@ -239,31 +240,24 @@ function onQuoteText(text: string) {
 }
 
 // ── 会话内检索（正文与思考；工具输出不进结果）────────────────────────────
-const searchOpen = ref(false)
-const searchQuery = ref('')
-const searchCursor = ref(0)
-const searchInputRef = ref<HTMLInputElement | null>(null)
-const searchMatches = computed(() => findMatches(items.value, searchQuery.value))
-watch(searchQuery, () => { searchCursor.value = 0 })
-
-function openSearch() {
-  searchOpen.value = true
-  nextTick(() => searchInputRef.value?.focus())
-}
-
-function closeSearch() {
-  searchOpen.value = false
-  searchQuery.value = ''
-}
-
-/** 循环跳转：命中项用既有的 focusToken 链路（含高亮闪烁与滚动归因） */
-function gotoMatch(delta: number) {
-  const hits = searchMatches.value
-  if (!hits.length) return
-  searchCursor.value = (searchCursor.value + delta + hits.length) % hits.length
-  trajectoryFocus.value = hits[searchCursor.value]!
-  trajectoryToken.value++
-}
+// 实现见 `composables/useTranscriptSearch.ts`。`items` 与 `trajectoryFocus` 在本文件里
+// 都声明得更晚，所以两个依赖必须是**惰性**的（getter 与回调），不能传值。
+const {
+  searchOpen,
+  searchQuery,
+  searchCursor,
+  searchInputRef,
+  searchMatches,
+  openSearch,
+  closeSearch,
+  gotoMatch,
+} = useTranscriptSearch({
+  items: () => items.value,
+  focus: (index) => {
+    trajectoryFocus.value = index
+    trajectoryToken.value++
+  },
+})
 
 // 状态栏：最近一轮用量（turn_stats 由后端在回合结束时下发）
 const lastTurnStats = computed<TurnStatsItem | null>(() => {
@@ -501,14 +495,7 @@ const sseLastIdBySession = new Map<string, string>()
 // ── Trace ID (当前会话的链路追踪标识) ──
 const currentTraceId = ref('')  // SSE done 事件回传的 trace_id
 
-// 安全修复：待确认工具调用（三态栅栏"确认"态）
-interface PendingApproval {
-  id: string
-  toolName: string
-  arguments: string
-  /** 审批截止时间（ms）：与后端 300s 超时对齐，用于卡片倒计时与过期清理 */
-  expiresAt?: number
-}
+// 安全修复：待确认工具调用（三态栅栏"确认"态）；类型定义在 useApprovalEdit.ts
 const pendingApprovals = ref<PendingApproval[]>([])
 // 审批卡片出现时给一声提示：它会阻塞整个执行链，而用户很可能已经切到别的窗口了。
 // 只在"新增"时响（长度变大），过期清理导致的减少不该出声。
@@ -569,88 +556,15 @@ async function resolveApproval(
 }
 
 // ── C5：审批卡片的"编辑参数"折叠区 ────────────────────────────────────────
-// 形态是**内联编辑**（复用审批卡片本身，不新开弹窗）—— 避免焦点争夺与移动端布局问题
-// （方案 01 §3.5 采纳的形态）。非法 JSON **不允许提交**：否则"批准的就是执行的"
-// 这条不变量会被半个字符串破坏。
-interface ApprovalEditState {
-  open: boolean
-  text: string
-  error: string
-}
-const approvalEdits = ref<Record<string, ApprovalEditState>>({})
-
-function approvalEdit(a: PendingApproval): ApprovalEditState | undefined {
-  return approvalEdits.value[a.id]
-}
-
-/** 参数美化：解析失败就原样显示（与子 Agent 审批卡片同一取舍）。 */
-function prettyArguments(raw: string): string {
-  const text = (raw || '').trim()
-  if (!text) return ''
-  try {
-    return JSON.stringify(JSON.parse(text), null, 2)
-  } catch {
-    return text
-  }
-}
-
-/** 校验编辑框内容；返回错误文案（空串 = 合法）。**实时**反馈，非法时提交按钮禁用。 */
-function validateApprovalArgs(text: string): string {
-  let parsed: unknown
-  try {
-    parsed = JSON.parse(text.trim())
-  } catch {
-    return t('errors.approval_edit_invalid_json')
-  }
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-    return t('errors.approval_edit_must_be_json_object')
-  }
-  return ''
-}
-
-function toggleApprovalEdit(a: PendingApproval) {
-  const cur = approvalEdits.value[a.id]
-  if (cur?.open) {
-    approvalEdits.value = {
-      ...approvalEdits.value,
-      [a.id]: { open: false, text: cur.text, error: '' },
-    }
-    return
-  }
-  const text = cur?.text || prettyArguments(a.arguments)
-  approvalEdits.value = {
-    ...approvalEdits.value,
-    [a.id]: { open: true, text, error: validateApprovalArgs(text) },
-  }
-}
-
-function onApprovalEditInput(a: PendingApproval, text: string) {
-  approvalEdits.value = {
-    ...approvalEdits.value,
-    [a.id]: { open: true, text, error: validateApprovalArgs(text) },
-  }
-}
-
-function clearApprovalEdit(id: string) {
-  if (!approvalEdits.value[id]) return
-  const next = { ...approvalEdits.value }
-  delete next[id]
-  approvalEdits.value = next
-}
-
-/** 提交"编辑后批准"：非法 JSON / 非对象**一律不提交**（按钮也已禁用）。 */
-async function submitApprovalEdit(a: PendingApproval) {
-  const text = approvalEdits.value[a.id]?.text || ''
-  const error = validateApprovalArgs(text)
-  if (error) {
-    approvalEdits.value = {
-      ...approvalEdits.value,
-      [a.id]: { open: true, text, error },
-    }
-    return
-  }
-  await resolveApproval(a, true, JSON.stringify(JSON.parse(text.trim())))
-}
+// 实现见 `composables/useApprovalEdit.ts`。这里只把它接到既有审批通道上：
+// 编辑态由 composable 管，"编辑后批准"仍走 `resolveApproval`，不产生第二份放行判断。
+const {
+  approvalEdit,
+  toggleApprovalEdit,
+  onApprovalEditInput,
+  clearApprovalEdit,
+  submitApprovalEdit,
+} = useApprovalEdit({ resolveApproval })
 
 // ── 结构化提问（ask_user 工具）────────────────────────────────────────────
 // 与审批卡的分工：审批回传布尔（允许/拒绝），提问回传**答案文本**（选项值或自由输入），
@@ -1853,6 +1767,18 @@ function persistSessions() {
   try { localStorage.setItem(sessionsCacheKey.value, JSON.stringify(sessions.value)) } catch { /* 隐私模式 / 配额满：放弃持久化 */ }
 }
 
+// ── 会话元数据：重命名 / 置顶 / 标签 / 排序（实现见 composables/useSessionMeta.ts）──
+const {
+  sortSessions,
+  togglePin,
+  setSessionTag,
+  renameTarget,
+  renameDraft,
+  renaming,
+  openRename,
+  confirmRename,
+} = useSessionMeta({ sessions, persistSessions })
+
 // ── 会话 CRUD（保留原逻辑） ──
 onMounted(async () => {
   // 互联互通：解析 /chat query（task / error / kb / agent / skill / workflow）
@@ -2251,79 +2177,10 @@ function requestDelete(id: string) {
   })
 }
 
-// ── 重命名（deepseek session rename dialog：Modal + 行内输入框） ──
-const renameTarget = ref<ChatSession | null>(null)
-const renameDraft = ref('')
-const renaming = ref(false)
+// ── 重命名 / 置顶 / 标签 / 排序 ──
+// 实现见 `composables/useSessionMeta.ts`（已在文件上方解构）。这里不再保留副本：
+// 元数据操作只改 `sessions` 数组，与消息流无关，属于可独立成簇的边界。
 
-function openRename(id: string, currentTitle: string) {
-  const s = sessions.value.find(x => x.id === id)
-  if (!s) return
-  renameTarget.value = s
-  renameDraft.value = currentTitle
-}
-
-async function confirmRename() {
-  const target = renameTarget.value
-  const title = renameDraft.value.trim()
-  if (!title || !target) return
-  renaming.value = true
-  try {
-    await updateConversation(target.id, { title })
-    const s = sessions.value.find(x => x.id === target.id)
-    if (s) s.title = title
-    persistSessions()
-    notify.success(t('common.renamed'))
-    renameTarget.value = null
-  } catch (e) {
-    notify.error(t('errors.rename_failed') + errorDetail(e, t('errors.network_error_2')))
-  } finally {
-    renaming.value = false
-  }
-}
-
-// ── 置顶（列表排序：pinned DESC + updated_at DESC） ──
-function sortSessions() {
-  sessions.value = [...sessions.value].sort((a, b) => {
-    if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1
-    return new Date(b.updated_at || 0).getTime() - new Date(a.updated_at || 0).getTime()
-  })
-}
-
-async function togglePin(id: string, pinned: boolean) {
-  const s = sessions.value.find(x => x.id === id)
-  if (!s) return
-  const prev = s.pinned
-  s.pinned = pinned
-  sortSessions(); persistSessions()
-  try {
-    await updateConversation(id, { pinned })
-  } catch {
-    s.pinned = prev
-    sortSessions(); persistSessions()
-    notify.error(t('errors.pin_failed'))
-  }
-}
-
-// 设置会话标签（DB 持久化：写 sessions.tag；失败回滚本地状态）
-// 注意：旧实现只写 localStorage，而 loadSessions 每次都用 API 数据覆盖 sessions 数组，
-// 刷新后标签必然丢失 —— 故必须落库。
-async function setSessionTag(id: string, tag: string) {
-  const s = sessions.value.find(x => x.id === id)
-  if (!s) return
-  const prev = s.tag
-  s.tag = tag || undefined
-  sortSessions(); persistSessions()
-  try {
-    // 空串表示清除标签（后端 NULLIF 写 NULL）
-    await updateConversation(id, { tag: tag || '' })
-    notify.success(tag ? t('settings.tag_set_tag', { tag }) : t('common.tags_cleared'))
-  } catch {
-    s.tag = prev
-    sortSessions(); persistSessions()
-    notify.error(t('errors.failed_to_save_tag'))
-  }
-}
 
 // ── 分享（chat.deepseek.com/share/{id} 风格：选消息 → 生成链接 → 可取消） ──
 // 状态与操作已抽到 `useChatShare`（L3-4 拆簇）；模板引用的名字不变。

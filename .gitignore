@@ -70,6 +70,11 @@ worker.id
 reasonix.toml
 .cowork-temp/
 **/.cowork-temp/
+# `git worktree add .worktrees/<name>` 建的本地并行工作区（`git worktree list`
+# 可查）。各自有独立的 `.git` 文件与完整检出，内容由 git 自己管理，**不属于**
+# 主工作区的索引；但目录本身会出现在 grep/编辑器全局搜索里，噪声很大。
+# 忽略它不影响任何 worktree 的正常使用，只是防止 `git add -A` 把某份检出误加进来。
+.worktrees/
 
 # ── Test data ──
 test_register.json

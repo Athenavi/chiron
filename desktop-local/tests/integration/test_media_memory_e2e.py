@@ -1,21 +1,17 @@
 """本地媒体库 + 记忆层端到端，跑在**真实 PostgreSQL + 真实文件系统**上。
 
-覆盖契约 §4 的两块最小闭环的**读路径**与检索：
+覆盖契约 §4 的两块最小闭环：
 
-- ``/v1/media``：列表 / 详情 / 原始字节 / 删除，分页顺序来自真实 PG 的
+- ``/v1/media``：上传落库 / 列表 / 详情 / 原始字节 / 删除，分页顺序来自真实 PG 的
   ``ORDER BY created_at DESC, id DESC``；文件名穿越清洗与路径越界靠真实文件系统验证。
-- ``/v1/memory``：列表 / ILIKE 检索（含 ``%`` / ``_`` 元字符转义）/ 删除；标签归一化后
-  真的以逗号串形式落库。
+- ``/v1/memory``：写入落库 / 列表 / ILIKE 检索（含 ``%`` / ``_`` 元字符转义）/ 删除；
+  标签归一化后真的以逗号串形式落库。
 
-**两个写入端点现在会 500**（报告里的 app bug #4）：``app/storage/files.py::insert_media``
-与 ``app/storage/memory_store.py::insert_entry`` 都拿 "含 ``created_at`` 的列清单"
-（7 列）去配 6 个占位符，真实 PG 直接报
-``PostgresSyntaxError: INSERT 的指定字段数多于表达式``。因此这里用
-``python/psycopg2`` 直插行 + 真实模块函数落盘，再走 HTTP 验证读路径；两个写入端点各留一个
-``xfail`` 用例钉住现状（修好后自动 XPASS）。
+写路径直接打 HTTP 端点，读路径另有一组用 ``python/psycopg2`` 直插行再走 HTTP 验证，
+这样"端点写的"和"端点读的"都能覆盖到。
 
-``tests/test_media_memory.py`` 用 ``FakeConnection`` 按语句形状匹配，所以看不到这个 bug ——
-这也是这几份集成测试存在的理由。
+``tests/test_media_memory.py`` 用 ``FakeConnection`` 按语句形状匹配，看不到真实 SQL 的
+列数/占位符是否对得上、``::jsonb`` 是否生效 —— 这也是这几份集成测试存在的理由。
 """
 
 from __future__ import annotations

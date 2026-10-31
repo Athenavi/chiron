@@ -272,12 +272,7 @@ def test_agents_crud_roundtrip(app_client: TestClient, pg_dsn: str) -> None:
 
 
 def test_agents_patch_should_update_fields(api_settings) -> None:
-    """期望契约行为：``PATCH /v1/agents/{id}`` 局部更新并回读。
-
-    现状（真实 PG 实测）：带任何字段的 PATCH 返回 500，因为 SQL 文本里出现了
-    Python 列表的 repr（``['enabled = $2', 'tools = $3::jsonb']``）。修好 ``store.py:382``
-    之后本测试会自动 XPASS，届时请去掉 ``xfail`` 标记。
-    """
+    """``PATCH /v1/agents/{id}`` 局部更新并回读：只改传入的字段，其余保持原值。"""
     with TestClient(create_app(api_settings), raise_server_exceptions=False) as client:
         agent = client.post("/v1/agents", json={"name": "待改", "model": "mock"}).json()["data"]
         response = client.patch(f"/v1/agents/{agent['id']}", json={"name": "改过", "tools": ["only"]})

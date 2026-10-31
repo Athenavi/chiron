@@ -428,7 +428,7 @@ def check_agents(api: Api) -> str:
 
 
 def check_media_upload(api: Api) -> str:
-    """**已知缺陷**（app bug #4）：真实 PG 上 ``insert_media`` 的列数与占位符数不匹配。"""
+    """上传落库并能在列表里回读到（写路径走真实 PG 的 ``INSERT ... RETURNING``）。"""
     import base64
 
     payload = base64.b64encode(b"\x89PNG\r\n\x1a\n" + b"verify-local-e2e").decode("ascii")
@@ -455,7 +455,7 @@ def check_media_list(api: Api) -> str:
 
 
 def check_memory_create(api: Api) -> str:
-    """**已知缺陷**（app bug #4）：真实 PG 上 ``insert_entry`` 的列数与占位符数不匹配。"""
+    """写入记忆条目、标签归一化后落库，并能被检索命中。"""
     response = api.call(
         "POST",
         "/v1/memory/entries",
@@ -726,21 +726,9 @@ def main(argv: list[str] | None = None) -> int:
         run(checks, "GET /v1/conversations 列表/详情/501 兜底", check_conversations, api)
         run(checks, "session-map 建/存/回读/分叉/删画布", check_session_map, api)
         run(checks, "POST/GET/DELETE /v1/agents", check_agents, api)
-        run(
-            checks,
-            "POST /v1/media/upload + 列表",
-            check_media_upload,
-            api,
-            known_issue="app bug #4：files.insert_media 列数(7)与占位符(6)不匹配",
-        )
+        run(checks, "POST /v1/media/upload + 列表", check_media_upload, api)
         run(checks, "GET /v1/media", check_media_list, api)
-        run(
-            checks,
-            "POST /v1/memory/entries + 检索",
-            check_memory_create,
-            api,
-            known_issue="app bug #4：memory_store.insert_entry 列数(7)与占位符(6)不匹配",
-        )
+        run(checks, "POST /v1/memory/entries + 检索", check_memory_create, api)
         run(checks, "POST /v1/memory/search", check_memory_search, api)
         if args.no_knowledge:
             checks.append(Check("POST /v1/kb 全流程", None, "跳过（--no-knowledge）"))
