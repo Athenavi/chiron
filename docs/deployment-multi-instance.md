@@ -236,7 +236,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
   用户从会话空闲时的「待你处理」收件箱（`frontend-vue/src/components/chat/InteractionInbox.vue`，读 `GET /v1/agent/sessions/{id}/interactions`）
   直接答复 ⇒ 票写成 `answered` ⇒ **下一条提交**经 `claim_awaiting` 从暂停处接手并 `consume_grant` **单次消费**
   （PG 的 EPQ：两个回合并列续跑时第二个拿到 None ⇒ 重新问，而非重复执行）。**答复不在网关侧唤醒**。
-  取证：`python-engine/tests/api/test_interactions_api.py`（18）、`internal/api/interactions_test.go`（10）、`frontend-vue/.../InteractionInbox.spec.ts`（7）；
+  取证：`python-engine/tests/api/test_interactions_api.py`（18）、`internal/api/interactions_test.go`（10）、`frontend-vue/src/components/chat/__tests__/InteractionInbox.spec.ts`（7）；
   **跨实例并发单次消费的 SQL 级取证在 CI**（本地无可用 PostgreSQL）。
   **仍 fail-closed（即时拒绝）的两类**：① **子 Agent** 的 run 跑在合成会话 `sub:<父>:<run>` 下，没有 run row / run_token ⇒
   `_suspend_for_input` 返回 None；② PG 写不进（持久通道缺失）。两者都退回 M6 语义，理由写进审批审计与工具结果，

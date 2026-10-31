@@ -46,6 +46,48 @@ CHIRON_LOCAL_COMPONENT_BASE_URL  # config.py 的 env_prefix 形态
 未配置时：`POST /v1/components/{name}/install` → `409 component_source_unconfigured`。
 配置了但目录不存在 / HTTP 访问失败 → `502 component_source_unavailable`。
 
+### 2.1 构建真实组件包
+
+组件源里的包由 `desktop-local/scripts/build_component.py` 产出（只用标准库，不 `import app`，
+可在没有 core 依赖的机器或 CI 上单独跑）：
+
+```bash
+cd desktop-local
+python scripts/build_component.py --name pageindex  --out dist/components
+python scripts/build_component.py --name langextract --out dist/components
+
+# 只校验已产出的包，不构建、不联网
+python scripts/build_component.py --name pageindex --out dist/components --verify
+
+# 把 out 当组件源装进本地 core
+CHIRON_COMPONENT_BASE_URL=dist/components python -m app.main
+```
+
+产物是 `<out>/<name>/manifest.json` + `<out>/<name>/bundle.zip`，解压后即组件版本目录：
+
+```
+run.py                          # entry：启动器，起 /healthz + /info
+runtime/site-packages/**        # 隔离 venv 装出来的整棵依赖树
+runtime/requirements.lock.txt   # pip freeze 快照（复现用）
+runtime/build-info.json         # 解释器 / 平台 / 依赖 / 体积诊断
+```
+
+**为什么必须独立 venv**：两个组件的依赖与引擎/核心冲突，不能装进 core 的环境。
+
+| 组件 | 关键约束 |
+|---|---|
+| PageIndex `0.4.4` | → `litellm` → **`openai<3`**，与引擎的 `openai 3.x` 冲突 |
+| LangExtract `1.7.1` | → `pandas` / `numpy` / `google-genai`，体积大 |
+
+**为什么依赖走一个 zip 而不是逐文件列进 `files`**：manager 限制 `files` 最多 256 项，
+而真实依赖树有几千个文件；`files` 里出现 `.zip` 时 manager 会先按文件级 sha256 校验、
+再解压、最后删掉归档（见 §4），所以"一个归档 + 归档 sha256"是唯一可行形态。
+
+**为什么还要 `run.py` 这一层**：manager 用 `CHIRON_PYTHON` 或 core 自己的 `sys.executable`
+启动 `.py` entry，**不会**用 venv 里的解释器，也不会把 venv 的 site-packages 加进
+`sys.path`；而 `<venv>/Scripts/python.exe` 的 `pyvenv.cfg` 指向构建机的 base 解释器，
+搬台机器就废。所以只带纯 site-packages，由 `run.py` 在启动时 `sys.path.insert` 进去。
+
 ## 3. `manifest.json`
 
 放在组件源里的 `<源>/<name>/manifest.json`：
@@ -251,14 +293,19 @@ cd desktop-local && python -m pytest tests/test_components.py -q
 # Electron：假 spawn + 假 fetch，走真实 startCore/stopCore 代码路径
 cd frontend-vue && node --test electron/__tests__/components.test.cjs
 
+# 构建脚本：用假包覆盖打包与 sha256 校验路径（不联网、不建真实 venv）
+cd desktop-local && python -m pytest tests/test_component_build.py -q
+
 # 门禁
 cd desktop-local && python -m ruff check .
 cd desktop-local && python -m pytest -q
 node --check frontend-vue/electron/components.cjs
 ```
 
-测试**没有**覆盖的：真实 LargeExtract/PageIndex 包的下载与运行（没有真实组件包）、
-Windows 服务/权限提升场景、多实例并发安装同一组件（有锁但只在单进程内）。
+测试**没有**覆盖的：真实 LangExtract/PageIndex 包的下载与运行（没有真实组件包，
+`test_component_build.py` 用假包覆盖打包与校验路径，真实包尚未在本机完成过一次
+"构建 → 安装 → 启动 → 调用"）、Windows 服务/权限提升场景、多实例同时 `start`
+同一组件（各自起一个进程，互不知情）。
 
 ## 9. 未实现 / 风险
 

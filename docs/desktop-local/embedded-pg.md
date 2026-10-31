@@ -167,6 +167,11 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
 6. 上游 wheel 里**附带 pgvector 0.8.6**，如果之后要做向量检索，可以先看这里能不能直接用。
 7. `verify_p0.py` 默认用 `tempfile.mkdtemp()` 建数据目录 —— 与风险 1 同一个坑，
    以管理员运行时请显式给 `--data-dir`。
+8. **迁移期间会屏蔽仓库根 `.env` 的 `DATABASE_DSN`**：`migrations/env.py:38` 用
+   `load_dotenv(env_file, override=True)` 读根目录 `.env`，若那份 `.env` 里有开发库 DSN，
+   它会覆盖本地实例的 DSN，造成"迁移打到开发库"。`pg.py:338` 的 `_dotenv_noop()` 在调用
+   alembic 期间把 `dotenv.load_dotenv` 打成空操作，迁移后再用 `alembic_version` 复核；
+   复核不到就报错，不会假装成功。
 
 ## 8. 实现约束
 

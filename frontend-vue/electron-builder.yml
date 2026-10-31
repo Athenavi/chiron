@@ -107,7 +107,7 @@ extraResources:
       - "!**/__pycache__/**"
   # python-engine：聊天、知识库、记忆、图谱、能力发现的**唯一实现方**。
   #
-  # 网关那 215 条路由里有 38 条（17.7%）要转给它，其中 memory/graphs/chat/
+  # 网关那 230 条路由里有 38 条（16.5%）要转给它，其中 memory/graphs/chat/
   # capabilities/workflows 是 100% 依赖 —— 不带它，用户点这些入口只会拿到
   # `python engine not available`，这正是"本地模式几乎不可用"的成因
   # （见 docs/desktop-local/endpoint-coverage.md）。

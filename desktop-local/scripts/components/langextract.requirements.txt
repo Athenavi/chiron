@@ -7,7 +7,7 @@
 # 用 [openai] extra 而不是裸 langextract：组件通过 core 的推理代理（OpenAI 形态的
 # chat.completions）调用模型，Gemini 直连那条路径用不到；但注意 langextract 1.7.1
 # 把 google-genai / google-cloud-storage / pandas / numpy 声明为**必需**依赖，
-# pip 一定会装（体积见 docs/desktop-local/components-real.md §5），extra 只是额外加了 SDK。
+# pip 一定会装（体积见 docs/desktop-local/components.md §2.1），extra 只是额外加了 SDK。
 #
 # openai 与 pageindex 组件保持同一个上界，避免两个组件各自拉不同的大版本
 # （两个组件不共享解释器，但"同一个推理代理"要求两边对 chat.completions 的理解一致）。
