@@ -262,6 +262,33 @@ def wait_listening(stdout: LinePump, proc: subprocess.Popen, timeout: float) -> 
     return None
 
 
+def wait_storage(api: Api, timeout: float) -> tuple[bool, str]:
+    """等存储初始化完成（``/readyz`` 的 ``pg`` 变成 true）。
+
+    ``app/main.py`` 把 PG 启动与迁移放在**后台 task** 里（见 ``api/health.py`` 里
+    ``storage bootstrap in progress`` 那段），所以 ``listening`` 事件先到、存储后到。
+    不在这里等，后面所有业务接口都会拿到 503，把"还在初始化"误报成"端点坏了"。
+
+    Redis 不参与判定：它未就绪只让 ``/readyz`` 降级为 ``degraded``，业务端点对
+    redis 零引用（理由见 ``api/health.py`` 的注释）。
+    """
+    deadline = time.monotonic() + timeout
+    started = time.monotonic()
+    last = "还没打过 /readyz"
+    while time.monotonic() < deadline:
+        response = api.call("GET", "/readyz")
+        body = response.body if isinstance(response.body, dict) else {}
+        if body.get("pg") is True:
+            waited = time.monotonic() - started
+            return True, (
+                f"pg={body.get('pg_backend')} version={body.get('pg_version')} waited={waited:.1f}s"
+                f" startup_ms={body.get('startup_ms')}"
+            )
+        last = f"status={response.status} pg_error={body.get('pg_error')!r}"
+        time.sleep(0.5)
+    return False, f"{timeout:.0f}s 内存储没就绪：{last}"
+
+
 def stop_core(proc: subprocess.Popen | None) -> None:
     """先 ``terminate``（让 uvicorn 跑完 lifespan 关 PG），超时才 ``kill``。"""
     if proc is None or proc.poll() is not None:
@@ -494,6 +521,102 @@ def check_knowledge(api: Api) -> str:
         _expect(removed.status == 200, f"删库期望 200，实际 {removed.status}")
 
 
+def check_conversations(api: Api) -> str:
+    """会话地图数据面：``/v1/conversations`` 必须真的列出本地会话。
+
+    这组端点此前**只存在于 Go 网关**，本地模式下 404，地图因此拿不到任何卡片
+    （见 ``app/api/conversations.py`` 模块注释里记录的探针结果）。本检查把它钉在 e2e 里，
+    顺带确认"本地没有的能力"明确回 501，而不是假装成功。
+    """
+    listed = api.call("GET", "/v1/conversations")
+    _expect(listed.status == 200, f"列表期望 200，实际 {listed.status} {listed.raw[:300]!r}")
+    items = _body(listed)["data"]
+    _expect(items, "会话列表为空：前面 /v1/chat/submit 建的会话没落库？")
+
+    first = items[0]
+    # 地图的 adapter.js 依赖这些字段存在；云端才有的字段本地返回空值，但**必须在**
+    for key in ("id", "title", "model", "message_count", "tag", "alias", "parent_title", "branch_from_seq"):
+        _expect(key in first, f"会话缺少字段 {key}：{sorted(first)}")
+
+    detail = api.call("GET", f"/v1/conversations/{first['id']}")
+    _expect(detail.status == 200, f"详情期望 200，实际 {detail.status} {detail.raw[:300]!r}")
+    payload = _body(detail)["data"]
+    _expect(isinstance(payload.get("messages"), list), f"详情里的 messages 不是数组：{payload.get('messages')!r}")
+
+    missing = api.call("GET", "/v1/conversations/no-such-conversation")
+    _expect(missing.status == 404, f"不存在的会话期望 404，实际 {missing.status}")
+
+    # 删除 / 分叉在本地由宿主代理执行；端点必须明确拒绝，不能回 200 让前端以为成了
+    for method, path, body in (
+        ("DELETE", f"/v1/conversations/{first['id']}", None),
+        ("POST", f"/v1/conversations/{first['id']}/fork", {}),
+    ):
+        response = api.call(method, path, body)
+        _expect(response.status == 501, f"{method} {path} 期望 501，实际 {response.status}")
+
+    return f"{len(items)} 个会话；详情含 {len(payload['messages'])} 条消息；删除/分叉明确 501"
+
+
+def check_session_map(api: Api) -> str:
+    """会话地图布局面：建画布 → 存节点 → 回读 → 分叉节点 → 删画布。
+
+    ``PUT`` 是**整体替换**（地图拖动 800ms 防抖后一次性提交），所以这里重点验证
+    "写进去的节点数 / viewport 能原样读回来"，而不是逐个字段更新。
+    """
+    created = api.call("POST", "/v1/session-map/workspaces", {"name": "端到端画布"})
+    _expect(created.status == 200, f"建画布期望 200，实际 {created.status} {created.raw[:300]!r}")
+    workspace = _body(created)["data"]
+    workspace_id = workspace["id"]
+    _expect(workspace["name"] == "端到端画布", f"画布名不对：{workspace.get('name')!r}")
+    _expect(workspace["nodes"] == [], f"新画布不该有节点：{workspace['nodes']}")
+
+    try:
+        nodes = [
+            {"id": "n1", "title": "第一个", "x": 10, "y": 20},
+            {"id": "n2", "title": "第二个", "x": 30, "y": 40, "parent_node_id": "n1"},
+        ]
+        saved = api.call(
+            "PUT",
+            f"/v1/session-map/workspaces/{workspace_id}",
+            {"name": "改名后的画布", "viewport": {"x": 1, "y": 2, "zoom": 0.5}, "nodes": nodes},
+        )
+        _expect(saved.status == 200, f"保存期望 200，实际 {saved.status} {saved.raw[:300]!r}")
+        body = _body(saved)["data"]
+        _expect(body["name"] == "改名后的画布", f"改名没生效：{body['name']!r}")
+        _expect(body["viewport"] == {"x": 1, "y": 2, "zoom": 0.5}, f"viewport 没落库：{body['viewport']!r}")
+        _expect(len(body["nodes"]) == 2, f"节点数不对：{len(body['nodes'])}")
+
+        # 回读：地图刷新后要能恢复布局，所以必须真的从库里读
+        fetched = api.call("GET", f"/v1/session-map/workspaces/{workspace_id}")
+        _expect(fetched.status == 200, f"回读期望 200，实际 {fetched.status}")
+        again = _body(fetched)["data"]
+        _expect({n["id"] for n in again["nodes"]} == {"n1", "n2"}, f"回读节点不对：{again['nodes']}")
+
+        listed = api.call("GET", "/v1/session-map/workspaces")
+        _expect(listed.status == 200, f"列画布期望 200，实际 {listed.status}")
+        ids = [item["id"] for item in _body(listed)["data"]["workspaces"]]
+        _expect(workspace_id in ids, f"画布列表里没有刚建的：{ids[:5]}")
+
+        forked = api.call(
+            "POST",
+            f"/v1/session-map/workspaces/{workspace_id}/fork-node",
+            {"parent_node_id": "n1", "x": 50, "y": 60, "title": "分叉节点"},
+        )
+        _expect(forked.status == 200, f"分叉节点期望 200，实际 {forked.status} {forked.raw[:300]!r}")
+        node = _body(forked)["data"]
+        _expect(node["edge_kind"] == "branch", f"分叉节点的 edge_kind 不对：{node['edge_kind']!r}")
+        _expect(node["parent_node_id"] == "n1", f"分叉节点父指针不对：{node['parent_node_id']!r}")
+        detail = f"ws={workspace_id[:10]}… nodes={len(again['nodes'])}+1 viewport 已落库"
+    finally:
+        removed = api.call("DELETE", f"/v1/session-map/workspaces/{workspace_id}")
+        _expect(removed.status == 200, f"删画布期望 200，实际 {removed.status}")
+
+    # 删完再读必须 404：确认删除不是"只是不显示"
+    gone = api.call("GET", f"/v1/session-map/workspaces/{workspace_id}")
+    _expect(gone.status == 404, f"删除后回读期望 404，实际 {gone.status}")
+    return detail
+
+
 # --------------------------------------------------------------------- 主流程
 def run(checks: list[Check], name: str, func: Any, *args: Any, known_issue: str = "") -> Any:
     """跑一项检查：异常收敛成 FAIL（不中断后续检查），返回值透传给调用方。"""
@@ -581,12 +704,27 @@ def main(argv: list[str] | None = None) -> int:
         )
 
         api = Api(f"http://127.0.0.1:{announce['port']}")
+        # listening 只说明 HTTP 端口开了；PG 启动与迁移在后台 task 里跑，必须等它就绪，
+        # 否则下面所有业务接口都会拿到 503，把"还在初始化"误报成"端点坏了"。
+        storage_ok, storage_detail = wait_storage(api, args.timeout)
+        checks.append(Check("存储初始化完成（/readyz pg=true）", storage_ok, storage_detail))
+        if not storage_ok:
+            print("FAIL 存储没就绪，后续业务接口必然 503，先看 core stderr：")
+            for line in stderr.tail(STDERR_TAIL) if stderr else []:
+                print(f"  {line}")
+            for index, check in enumerate(checks, start=1):
+                _print_check(index, len(checks), check)
+            return 1
+
         run(checks, "GET /healthz", check_health, api)
         run(checks, "GET /readyz", check_readyz, api)
         run(checks, "POST /v1/auth/session", check_auth, api)
         run(checks, "GET /v1/models", check_models, api)
         run(checks, "POST /v1/models/verify（mock 推理）", check_models_verify, api)
         run(checks, "POST /v1/chat/submit + 会话/消息回读（mock 推理）", check_chat, api, mock)
+        # 会话地图的数据面与布局面：此前只存在于 Go 网关，本地 404 过，必须钉住
+        run(checks, "GET /v1/conversations 列表/详情/501 兜底", check_conversations, api)
+        run(checks, "session-map 建/存/回读/分叉/删画布", check_session_map, api)
         run(checks, "POST/GET/DELETE /v1/agents", check_agents, api)
         run(
             checks,
