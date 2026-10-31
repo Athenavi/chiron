@@ -3,8 +3,8 @@
 > 目标：`app.asar` 控制在 100MB 以内，安装包增量主要来自 `dist/` 与随包资源，
 > 而不是被重复打包的 `node_modules`。
 >
-> 相关文件：`frontend-vue/electron-builder.yml`、`frontend-vue/electron/components.cjs`、
-> `frontend-vue/electron-builder.yml` 的 `extraResources`。
+> 相关文件：`frontend-vue/electron-builder.yml`（`files` 与 `extraResources`）、
+> `frontend-vue/electron/components.cjs`、`frontend-vue/scripts/build-gateway.mjs`。
 
 ## 1. 体积构成
 
@@ -12,6 +12,7 @@
 |---|---|---|
 | Electron 运行时 | `release/win-unpacked/*.dll`、`Chrome.exe` | 由 electron-builder 下载，约 250MB |
 | 前端产物 | `resources/app.asar` 内的 `dist/` | Vite 构建，含 vendor chunk 与 wasm |
+| Go 网关 | `resources/chiron[.exe]` | **随包**：本地模式的唯一业务入口，由 `npm run build:gateway` 就位 |
 | 本地 core | `resources/desktop-local/` | Python 源码（`extraResources`） |
 | 迁移 | `resources/migrations/`、`resources/alembic.ini` | alembic 需要真实文件路径 |
 | 可选组件 | `resources/components/` | PageIndex / LangExtract，按需下载 |
@@ -133,30 +134,74 @@ stdout 默认 cp1252，而这些脚本的输出含中文，`print` 会抛 `Unico
 的占位符（spawn 成功但立刻退出），也可能装了 Python 却没有 `fastapi`/`asyncpg`，
 这两种情况都会让 core 起不来，而错误信息对用户毫无指导性。
 
-## 4. 构建命令
+## 4. 随包 Go 网关
+
+安装包必须带 `resources/chiron[.exe]`：它是本地模式的**唯一业务入口**。壳的
+`main.cjs::resolveGatewayExe()` 找不到它时**不报错**，只记一条
+「本地网关不可用，退回 desktop-local core」的 info 就继续启动 —— 而 core 只实现
+`/v1/**` 的一小部分（见 `docs/desktop-local/endpoint-coverage.md`），
+用户看到的就是"装好了，但几乎什么都用不了"。这条降级路径之所以能一路绿灯，是因为
+electron-builder **对缺失的打包输入只 warn 不报错**（`app-builder-lib` 的
+`out/fileMatcher.js::copyFiles()`：`statOrNull(matcher.from)` 为 null 就
+`log.warn({from}, "file source doesn't exist")` 后直接 `return`；目录在但 glob 匹配不到
+同样只是什么都不拷），于是"CI 全绿、残包照发"。
+
+就位方式与 uv / CPython 同一套约定 —— 构建产物落 `frontend-vue/assets/<name>/`，
+整目录不入库，由 `extraResources` 映射进 `resources/`：
+
+```bash
+npm run build:gateway   # → frontend-vue/assets/gateway/chiron[.exe]
+```
+
+`electron-builder.yml` 里对应 `- from: assets/gateway` + `to: .`（落 resources 根）。
+
+**为什么不再从仓库根 glob**（改之前的形态）：根下的 `chiron(.exe)` 是 `run.py`
+在源码比产物新时自动重建的**开发态**二进制，`resolveGatewayExe()` 的开发态候选也在那儿。
+把它同时当打包输入有两个坑：出包会覆盖（或因网关正在运行而写不进）开发者正在用的二进制；
+更糟的是**陈旧** —— 跳过构建步骤时上个提交建的产物照样被 glob 命中，
+于是安装包里是个"能跑但与前端不同源"的网关，静默失效只是换了个形态。
+
+三道拦截，从内到外：
+
+1. `scripts/build-gateway.mjs`：找不到 `go`、`go build` 非零退出、产物不存在/零字节/
+   不是普通文件 —— 全部**抛错并非零退出**，脚本存在的全部意义就是"不许跳过"；
+2. `electron/__tests__/build-gateway.test.cjs`：把"脚本写的目录"与
+   `electron-builder.yml` 的 `from:`、把"产物名"与 `resolveGatewayExe()` 的候选名锁成同源，
+   任一侧改名另一侧忘跟就红；
+3. `.github/workflows/desktop.yml`：`Build bundled Go gateway` 排在打包之前
+   （`GOOS`/`GOARCH` 取 matrix 的 **target** 架构而非 runner —— `macos-latest` 是 arm64
+   runner 而 mac target 是 x64），出包后 `Verify packaged runtime assets` 再按
+   **安装包内真实路径**正向断言 `$resources/chiron[.exe]` 非空。
+
+编译口径：`-mod=mod`（仓库里的 `vendor/` 是参考源码、不含 `modules.txt`，缺这个参数
+Go 直接报 inconsistent vendoring）、`-ldflags "-s -w"`、`CGO_ENABLED=0`（交叉编译带 CGO 会链接失败）。
+
+## 5. 构建命令
 
 ```bash
 cd frontend-vue
 
-# 一条命令就位 redis，再出解包目录（真机验证用，最快）
+# 一条命令建网关、就位 redis，再出解包目录（真机验证用，最快）
 npm run desktop:pack
 ```
 
-`desktop:pack` / `desktop:dist` 已把 `prepare:redis` 串在前面，
-不需要手工拷贝 redis。等价的手工步骤：
+`desktop:pack` / `desktop:dist` 已把 `build:gateway` 与 `prepare:runtime`（uv → python → redis）
+串在 electron-builder 前面，不需要手工拷贝。等价的手工步骤：
 
 ```bash
-python desktop-local/scripts/prepare_redis.py # 就位 desktop-local/bin/redis/（唯一随包的二进制）
+npm run build:gateway   # 建 assets/gateway/chiron[.exe]
+python desktop-local/scripts/prepare_redis.py  # 就位 desktop-local/bin/redis/
 ```
 
-`prepare:uv` / `prepare:python` 仍可用，但**只是开发期离线取件**，产物不进安装包：
+`prepare:uv` / `prepare:python` 的产物**同样进安装包**（§3），只是下载需要联网；
+离线时用 `--from <压缩包|目录>` 就位：
 
 ```bash
-npm run prepare:uv      # 落到 frontend-vue/assets/uv/，仅本地调试
-npm run prepare:python  # 落到 frontend-vue/assets/python-runtime/，仅本地调试
+npm run prepare:uv      # 落到 frontend-vue/assets/uv/<platform>/
+npm run prepare:python  # 落到 frontend-vue/assets/python-runtime/<platform>/
 ```
 
-只跑 electron-builder（复用已就位的 uv / redis）：
+只跑 electron-builder（复用已就位的网关 / uv / redis，本机快速迭代用）：
 
 ```bash
 NODE_TLS_REJECT_UNAUTHORIZED=0 \
@@ -166,6 +211,9 @@ pnpm exec electron-builder --win --dir --publish never
 ```
 
 正式安装包（NSIS）把 `--dir` 去掉即可。
+
+**这条捷径只适合本机验证**：它不会重建网关，用的就是 `assets/gateway/` 里躺着的那份。
+`desktop:pack` / `desktop:dist` 与 CI 都先把 `build:gateway` 串在前面，正式发布不走捷径。
 
 ### TLS / 镜像排障
 
@@ -178,12 +226,13 @@ pnpm exec electron-builder --win --dir --publish never
 **这些开关只用于本机构建，不要写进 CI**：CI 的 runner 证书链是正常的，
 关掉校验会让供应链风险变成默认值。
 
-## 5. 验证清单
+## 6. 验证清单
 
 构建后至少确认：
 
 ```bash
 ls -la release/win-unpacked/resources/app.asar           # 目标 < 100MB
+ls release/win-unpacked/resources/chiron.exe            # 随包网关（本地模式的业务入口）
 ls release/win-unpacked/resources/desktop-local/app     # core 源码在位
 ls release/win-unpacked/resources/desktop-local/pyproject.toml  # 依赖清单在位（uv 靠它装）
 ls release/win-unpacked/resources/migrations/versions   # 迁移在位
@@ -192,6 +241,11 @@ ls release/win-unpacked/resources/uv/win32-x64/uv.exe    # 随包 uv
 ls release/win-unpacked/resources/python-runtime/win32-x64/cpython-*/python.exe
 release/win-unpacked/Chiron.exe --remote-debugging-port=9223
 ```
+
+**`resources/chiron[.exe]` 必须存在且非空**：缺了它壳会静默退回 core（§4），
+装上之后不报错、只是处处不可用，所以 CI 对它做正向断言。
+`main.log` 里出现「本地网关不可用（未找到 chiron.exe），退回 desktop-local core」
+就是这一条没做到。
 
 **`resources/uv` 与 `resources/python-runtime` 必须存在**：解释器与 uv 都随包，
 缺任何一份都说明安装包没按布局打好（首启会直接失败并提示重新安装）。
@@ -208,12 +262,14 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 真机启动后从 CDP 检查：
 
 - `window.chironDesktop.mode === 'local'`
+- `logs/main.log` 里**没有**「本地网关不可用（未找到 chiron.exe），退回 desktop-local core」
+  —— 出现这一条就是包里缺网关，症状是"能开、但处处空转"
 - 首次启动时先出现安装进度窗，装完自动关闭并进主界面
 - `<userData>/local/runtime/install.json` 存在，`dependencyFingerprint` 非空
 - `GET {apiUrl}/readyz` 返回 `pg=true`、`migration.ok=true`
 - 退出后 `netstat` 无 core / PG 残留监听
 
-## 6. 已知限制
+## 7. 已知限制
 
 - 未签名产物在 macOS 上需要用户手动放行；Windows SmartScreen 会拦。
 - `asarUnpack` 只解包 wasm 与 `vendor/**`；新增二进制资源时记得补规则。
@@ -223,6 +279,9 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 - 首次安装较重：`embedded-postgres` 自带整套 PG 二进制，首次要拉几十到上百 MB。
 - 构建期**需要**先就位 uv 与解释器（`npm run prepare:runtime` 会串联 uv / python / redis
   三步）；已就位时可重复执行，脚本自检通过就跳过下载。离线时用 `--from <压缩包|目录>`。
+- 构建期**需要 Go 工具链**（`npm run build:gateway`）。`go` 不在 PATH 且没设 `GO_BIN`
+  时脚本直接非零退出，不给"跳过网关照样出包"留口子；CI 由 `actions/setup-go@v5` 按
+  `go.mod` 提供版本。
 - redis 二进制来自构建机的发行版（含 MSYS2 运行时 DLL）；脚本会解析 scoop 的
   shim 取真身，但不会跨平台转换 —— Linux/macOS 包需在对应平台生成。
 - **Windows 的 redis 只能走预编译发行版**：MSYS2 仓库里只有客户端库

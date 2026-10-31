@@ -43,20 +43,27 @@ asar: true
 # 由主进程按需拉起（见 docs/desktop-local/contracts.md §3、§4）。
 #
 # 用 `from: .` + glob 过滤而不是 `from: components`：组件目录平时并不存在
-# （二进制由 W4 的 components.cjs 在应用内下载，不进仓库），直接指向不存在的目录
-# 会让 electron-builder 在拷贝阶段报错。glob 过滤匹配不到文件时只是「不带组件」，
-# 目录将来出现则自动落到 resources/components/，构建永远不需要因为缺目录而改配置。
+# （二进制由 W4 的 components.cjs 在应用内下载，不进仓库）。两种写法今天都出得来
+# （app-builder-lib `out/fileMatcher.js::copyFiles()` 对 `from` 不存在只 warn 不抛），
+# 但 glob 过滤的语义更直白：匹配不到就是「不带组件」，将来目录出现则自动落到
+# resources/components/，构建配置永远不用因为缺目录而改。
+# **注意这条只对 components 成立** —— 缺了它功能只是少一块可选能力。
+# 网关那种"缺了就没业务入口"的资产不能用同样的取舍，见下面 extraResources 的第一条。
 extraResources:
   # Go 网关：本地模式的**唯一业务入口**。
   #
   # 放 resources/ 而不是 asar：它是原生可执行文件，asar 里无法直接执行
   # （asar 是归档格式，只有 Node 的 fs 能透明读取，OS 无法 exec 归档内的文件）。
   # 主进程按 `path.join(process.resourcesPath, 'chiron.exe')` 定位（见 main.cjs
-  # 的 resolveGatewayExe），两侧路径必须一致。
+  # 的 resolveGatewayExe），两侧路径必须一致：这条 `to: .` 就是把产物摆到 resources 根。
   #
-  # 仓库根的 chiron.exe 是构建产物（`*.exe` 不入库），所以这里用 glob 过滤：
-  # 匹配不到时只是"不带网关"，构建不会因为缺文件而失败 —— 与 components/ 同一套取舍。
-  - from: ..
+  # **产物目录 `assets/gateway/` 由 `scripts/build-gateway.mjs` 建**（`pnpm build:gateway`，
+  # 已串进 `desktop:pack` / `desktop:dist` 与 CI 的打包前置步骤）。
+  # 这里**不再**从仓库根 glob：根下那份 `chiron(.exe)` 是 `run.py` 的开发态产物，
+  # 拿它当打包输入有两个坑 —— 出包会覆盖正在用的开发二进制；更糟的是**陈旧**，
+  # 跳过构建时上个提交建的产物照样被 glob 命中，于是装包里的是"能跑但与前端不同源"的网关。
+  # glob 匹配不到只 warn 不报错（app-builder-lib `out/fileMatcher.js`），静默降级就是这么来的。
+  - from: assets/gateway
     to: .
     filter:
       - "chiron.exe"

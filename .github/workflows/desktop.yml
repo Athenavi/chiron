@@ -41,12 +41,20 @@ jobs:
             # 与 electron-builder.yml 的 target 架构一致，**不是** runner 架构：
             # macos-latest 现在是 arm64，但 mac target 是 arch: [x64]。
             runtime_platform: win32-x64
+            # 随包 Go 网关的编译目标，同样按 **target** 而不是 runner：
+            # 拿 runner 架构在 mac 上会产出 arm64 网关，打进 x64 包里照样起不来。
+            goos: windows
+            goarch: amd64
           - os: macos-latest
             platform: mac
             runtime_platform: darwin-x64
+            goos: darwin
+            goarch: amd64
           - os: ubuntu-latest
             platform: linux
             runtime_platform: linux-x64
+            goos: linux
+            goarch: amd64
 
     steps:
       - uses: actions/checkout@v4
@@ -74,6 +82,14 @@ jobs:
           node-version: 22
           cache: pnpm
           cache-dependency-path: frontend-vue/pnpm-lock.yaml
+
+      # Go **只用来建随包的网关**（`resources/chiron(.exe)`，本地模式的唯一业务入口）。
+      # 版本由 go.mod 决定，与 ci.yml 的 go job 同一口径；产物本身与 runner 无关，
+      # 因为下面显式传 GOOS/GOARCH（见 matrix 的 goos/goarch）。
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
 
       - name: Install dependencies
         working-directory: frontend-vue
@@ -195,6 +211,25 @@ jobs:
             echo "ok  $f  $(wc -c < "$f") bytes"
           done
 
+      # 随包 Go 网关 —— 本地模式的**唯一业务入口**，必须在 electron-builder 之前建。
+      #
+      # 这一步是本工作流原来**整条缺失**的因果：`electron-builder.yml` 用 glob 从
+      # `assets/gateway/` 取 `chiron(.exe)`，而 app-builder-lib 对匹配不到的 glob 只 warn
+      # 不报错，于是历史产物里根本没有网关；壳 `resolveGatewayExe()` 找不到就静默退回
+      # `desktop-local` core，而 core 只覆盖 `/v1/**` 的一小部分 —— 用户看到的是
+      # "Windows 桌面端几乎什么都用不了"，CI 却是全绿的。
+      # 现在：脚本本身找不到 go / 建不出来 / 产物零字节都以非零退出，下面还有一道
+      # 「按安装包内真实路径复核」的正向断言。
+      #
+      # GOOS/GOARCH 取 matrix 的 **target** 架构，不是 runner 架构（macos-latest 是 arm64
+      # runner，mac target 是 x64）；`build-gateway.mjs` 默认 CGO_ENABLED=0，交叉编译可行。
+      - name: Build bundled Go gateway
+        working-directory: frontend-vue
+        run: pnpm run build:gateway
+        env:
+          GOOS: ${{ matrix.goos }}
+          GOARCH: ${{ matrix.goarch }}
+
       # 就位随包的运行时资产（CPython、uv）与 redis 二进制。
       # **必须在 electron-builder 之前跑**：
       #   1) 这些产物都不进 git，CI checkout 上根本没有；
@@ -228,7 +263,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
-      # 出包之后再断言一次：上面那两个 `from` 目录如果因为任何原因没生成，
+      # 出包之后再断言一次：上面这些 `extraResources.from` 目录如果因为任何原因没生成，
       # electron-builder 只会 warn，产物照样"成功"。这里按**安装包里的真实路径**检查，
       # 缺任何一项就让 CI 红掉，而不是等用户装上发现本地模式起不来。
       - name: Verify packaged runtime assets
@@ -290,6 +325,21 @@ jobs:
               echo "ok  $p"
             fi
           done
+
+          # Go 网关在 resources/ **根**（extraResources 的 `to: .`）：这是本地模式的业务入口，
+          # 缺了壳会静默退回 desktop-local core，用户只觉得"哪都点不动"，CI 却全绿。
+          # 架构（x64）由上一步显式的 GOOS/GOARCH 保证，与 uv/CPython 同一口径。
+          if [[ "${{ matrix.platform }}" == "win" ]]; then
+            gateway="$root/chiron.exe"
+          else
+            gateway="$root/chiron"
+          fi
+          if [[ ! -s "$gateway" ]]; then
+            echo "::error::缺少 $gateway（或它是空文件）—— 安装包没有业务入口，本地模式只能退回 core"
+            fail=1
+          else
+            echo "ok  ${gateway#"$root/"}  $(wc -c < "$gateway") bytes"
+          fi
 
           # redis 仍然随包（本地模式内置 PG/Redis 的离线起点），必须存在。
           if [[ "${{ matrix.platform }}" == "win" ]]; then

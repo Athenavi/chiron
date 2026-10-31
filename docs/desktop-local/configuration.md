@@ -30,7 +30,7 @@
 | 5 | 超时/容量上限全散在模块常量里（core 侧 20+ 个、Electron 侧 10+ 个），没有一处能整体调 | 见第 5 节 | 🟡 | 与业务相关的（安装、健康检查、推理）进 `Settings` 字段；纯实现细节（行缓冲上限、stderr 尾巴）保持常量 |
 | 6 | 端口策略不统一：core/proxy 用随机空闲端口（好），但错误提示与文档里到处是 `8080`/`11434`/`6379` 字面量 | 见第 4.1 节 | 🟡 | 保持"随机端口 + 握手拿地址"，把示例端口收进文档而非代码 |
 | 7 | 无连接池/并发上限配置：每次请求新建 `httpx.AsyncClient`，每次 DB 访问 `asyncpg.connect` | `runtime/inference.py:185`、`runtime/store.py:111`、`knowledge/store.py:193` | 🔴 | 本地单用户场景可接受，但并发/长跑时会踩文件描述符；需要时按第 7 节加 `Settings` 字段 |
-| 8 | 打包清单里 `appId`、更新源、`extraResources` 路径都是单点写死 | `frontend-vue/electron-builder.yml:10,43-57,113-116`、`main.cjs:82` | 🟡 | `appId` 已在两处（`main.cjs:82`、`electron-builder.yml:10`）重复，收敛成构建期注入 |
+| 8 | 打包清单里 `appId`、更新源、`extraResources` 路径都是单点写死 | `frontend-vue/electron-builder.yml:16,52-140,203-206`、`main.cjs:127` | 🟡 | `appId` 已在两处（`main.cjs:127`、`electron-builder.yml:16`）重复，收敛成构建期注入 |
 
 ---
 
@@ -152,12 +152,13 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 
 | 包内路径 | 来源 | 消费者 | 判定 |
 |---|---|---|---|
-| `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:43-50`） | `components.cjs:372-376`（`packagedCoreDir()`） | 🟡 目录名写死 |
-| `resources/migrations/` | `extraResources` ← `../migrations`（`:51-55`） | `config.py` 的 `REPO_ROOT/migrations`（打包后 `REPO_ROOT` = `resources/`） | 🟡 |
-| `resources/alembic.ini` | `extraResources` ← `../alembic.ini`（`:56-57`） | `config.py:134-136` | 🟡 |
+| `resources/chiron[.exe]` | **随包**：`extraResources` ← `assets/gateway`（`electron-builder.yml:66-70`），由 `frontend-vue/scripts/build-gateway.mjs` 就位 | `main.cjs`（`resolveGatewayExe()`） | 🟡 有正向断言；缺了壳静默退回 core |
+| `resources/desktop-local/` | `extraResources` ← `../desktop-local`（`electron-builder.yml:100-109`） | `components.cjs:372-376`（`packagedCoreDir()`） | 🟡 目录名写死 |
+| `resources/migrations/` | `extraResources` ← `../migrations`（`:110-114`） | `config.py` 的 `REPO_ROOT/migrations`（打包后 `REPO_ROOT` = `resources/`） | 🟡 |
+| `resources/alembic.ini` | `extraResources` ← `../alembic.ini`（`:139-140`） | `config.py:134-136` | 🟡 |
 | `resources/uv/`、`resources/python-runtime/` | **随包**：`extraResources` 映射 `assets/uv`、`assets/python-runtime` | `runtime-install.cjs`（`resolveUv()` / `bundledPython()`） | 🟡 有正向断言 |
 | `resources/python/` | **不随包**（旧布局：解释器 + 已装依赖的整包） | — | 有反向断言，防止被加回来 |
-| `resources/components/**` | `extraResources` glob 过滤（`:34-39`，目录平时不存在） | 契约 §3 的可选组件目录 | 🟡 |
+| `resources/components/**` | `extraResources` glob 过滤（`:71-75`，目录平时不存在） | 契约 §3 的可选组件目录 | 🟡 |
 
 Python 运行时由两部分组成：**随包的解释器**（`resources/python-runtime/<platform>/cpython-*/`，
 `prepare_python.py` 就位）与**首启现装的依赖**（`<userData>/local/runtime/venv/`）。

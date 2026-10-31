@@ -141,5 +141,10 @@ Thumbs.db
 # 内置 redis 二进制（`desktop-local/scripts/prepare_redis.py` 就位；`*.exe` 已被上面
 # Go 段忽略，这里整目录忽略，避免 .conf/.dll 漏网）
 /desktop-local/bin/
+# 随安装包发布的 Go 网关（`frontend-vue/scripts/build-gateway.mjs` 就位，约 39MB）。
+# 整目录忽略 —— 与 uv / python-runtime 同一约定：只由打包步骤产出，不入库；
+# `electron-builder.yml` 把它映射成 `resources/chiron(.exe)`。仓库根另有开发态的
+# `chiron(.exe)`（`run.py` 自动重建），两侧刻意分开以免互相覆盖。
+/frontend-vue/assets/gateway/
 # 构建脚本的临时探针目录（本地排查用）
 /.probe/
