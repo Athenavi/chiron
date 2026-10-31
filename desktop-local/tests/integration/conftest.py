@@ -21,6 +21,7 @@ external / embedded 包 / 官方二进制），跑真实 ``alembic upgrade head`
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import socket
 import threading
@@ -144,7 +145,11 @@ def make_settings(data_dir: Path, **overrides: Any) -> Settings:
 # --------------------------------------------------------------------- fixtures
 @pytest.fixture(scope="session")
 def pg_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[PostgresServer]:
-    """起真实 PostgreSQL 并跑 ``alembic upgrade head``；起不来就 skip（附真实错误）。"""
+    """起真实 PostgreSQL 并跑 ``alembic upgrade head``；起不来就 skip（附真实错误）。
+
+    唯一的例外是 ``CHIRON_REQUIRE_REAL_PG=1``（CI 用）：那里 PG 由 service 容器提供，
+    起不来说明流水线自己坏了，skip 会让"服务没起来"伪装成"测试通过"——必须红。
+    """
     base = tmp_path_factory.mktemp("chiron-local-integration")
     settings = make_settings(base / "data", run_migrations=True)
     server = PostgresServer(settings)
@@ -153,7 +158,10 @@ def pg_server(tmp_path_factory: pytest.TempPathFactory) -> Iterator[PostgresServ
         migration = server.migrate(dsn)
     except Exception as exc:  # noqa: BLE001 —— 任何一条路失败都只说明"本机起不来"
         server.stop()
-        pytest.skip(f"真实 PostgreSQL 不可用，集成测试不伪造通过：{type(exc).__name__}: {str(exc)[:2000]}")
+        detail = f"{type(exc).__name__}: {str(exc)[:2000]}"
+        if os.environ.get("CHIRON_REQUIRE_REAL_PG") == "1":
+            pytest.fail(f"CI 要求真实 PostgreSQL，但它没起来：{detail}")
+        pytest.skip(f"真实 PostgreSQL 不可用，集成测试不伪造通过：{detail}")
     print(
         f"\n[integration] PG backend={server.backend} dsn={server.safe_dsn} "
         f"revision={migration.get('revision')} migrate={migration.get('elapsed_ms')}ms"
