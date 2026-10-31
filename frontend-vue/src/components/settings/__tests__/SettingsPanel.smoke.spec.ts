@@ -106,7 +106,6 @@ const tr = (key: string, args?: Record<string, unknown>): string =>
 const STUBS = {
   HarnessProfilePanel: true,
   RunModePanel: true,
-  LocalModelPanel: true,
   LanguageSwitcher: true,
 }
 
