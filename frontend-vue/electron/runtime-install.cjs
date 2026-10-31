@@ -523,6 +523,17 @@ async function ensureRuntime(options = {}) {
   if (!options.force && fs.existsSync(vpython)) {
     const current = inspectRuntime({ ...options, target: target.id, userDataPath, sources })
     if (current.ready) {
+      // 补一条安装记录，但**只在从来没有记录时**补：探测通过说明这套 venv 确实满足
+      // 当前的依赖声明，而"没有记录"会让下面的 `trySync` 永远为 false —— 一旦哪天探测
+      // 再失败，只能删掉整个 venv 全量重建（真机实测引擎那份 340MB、要重下两百个包）。
+      // 已有记录时不改写：指纹不符正是"依赖变了 → 重建一个干净环境"的触发器，
+      // 每次正常启动都改写它等于把这个触发器抹掉。
+      // 真机踩到的就是这个空档：环境先装好、探测随后失败（少 boto3 / 探测没带密钥），
+      // 于是路径 3 末尾那次 `writeManifest` 从未执行；修好探测后环境直接走这一条返回，
+      // 能用，但永远没有记录。
+      if (!readManifest(userDataPath, target.id)) {
+        writeManifest(userDataPath, { dependencyFingerprint: fingerprint }, target.id)
+      }
       onStage({
         stage: INSTALL_STAGES.ready,
         message: `${target.label}环境就绪`,

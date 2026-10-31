@@ -50,6 +50,25 @@ const RUNTIME_PROBE_CODE = [
   'sys.exit(1 if missing else 0)',
 ].join('\n')
 
+/**
+ * 探测专用的最小可导入环境。
+ *
+ * **为什么必须自带**：引擎里约 60 个模块在 **import 期**就构造 `Settings`
+ * （`app/config.py` 校验 `JWT_SECRET >= 32`，且 `APP_SECRET → JWT_SECRET` 的派生已标记
+ * deprecated、随时可能删），而探测默认只继承 `process.env` —— 安装器与启动前的那次探测
+ * 都没有密钥，于是**无论依赖装得多齐，引擎目标的探测都判失败**（真机实测 60 条
+ * `ValidationError`）。这一组占位值只为让模型能通过校验：import 不联网、不连库，
+ * 密钥拿不到任何真实作用域，因此与启动用的真实密钥无关（真实启动前
+ * `local-stack.cjs::buildEngineEnv` 自己会校验长度并拦住）。
+ *
+ * 只给这两个键是实测出来的：补上它们后整包 269 个模块全部可导入，不需要
+ * `DEGRADED_MODE` / `POSTGRES_DSN` / `REDIS_URL`。
+ */
+const PROBE_ENV = {
+  APP_SECRET: 'chiron-runtime-probe-placeholder-secret-0000000000',
+  JWT_SECRET: 'chiron-runtime-probe-placeholder-jwt-secret-00000000',
+}
+
 /** 从探测输出里认出"缺哪个模块"；认不出返回空串（不猜） */
 function extractMissingModule(output) {
   const match = String(output || '').match(/No module named ['"]?([A-Za-z_][\w.]*)/)
@@ -83,7 +102,9 @@ function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
       ...(cwd ? { cwd } : {}),
       // PYTHONNOUSERSITE：不让用户级 site-packages 混进来，否则"用户机恰好装过 fastapi"
       // 会让探测通过、而换台机器就崩 —— 必须只验本 venv 自带的依赖。
-      env: { ...process.env, PYTHONNOUSERSITE: '1', ...(options.env || {}) },
+      // PROBE_ENV 压在 process.env 之上：探测结果不该取决于本机配没配密钥；
+      // 但调用方显式传的 options.env 仍然优先。
+      env: { ...process.env, ...PROBE_ENV, PYTHONNOUSERSITE: '1', ...(options.env || {}) },
     })
   } catch (err) {
     return {
@@ -115,6 +136,7 @@ function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
 
 module.exports = {
   RUNTIME_PROBE_CODE,
+  PROBE_ENV,
   extractMissingModule,
   probeRuntime,
 }

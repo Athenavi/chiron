@@ -12,9 +12,6 @@ import threading
 import uuid
 from typing import Any
 
-import boto3
-from botocore.config import Config as BotoConfig
-
 from app.media.store import Asset, BaseStore
 
 logger = logging.getLogger(__name__)
@@ -31,6 +28,12 @@ class S3Store(BaseStore):
         access_key: str | None = None,
         secret_key: str | None = None,
     ) -> None:
+        # boto3 是 pyproject 里的可选 extra `[s3]`，不在必需依赖闭包内：放在模块顶层会让
+        # "整个 app 包能被 import"这个判据（桌面端的运行时导入探测、以及任何只装必需依赖的
+        # 部署）反过来要求 boto3。与 app/knowledge/blob.py 的 S3BlobStore 同一口径。
+        import boto3
+        from botocore.config import Config as BotoConfig
+
         self._bucket = bucket
         self._prefix = prefix.rstrip("/") + "/"
         # access_key/secret_key 为 None 时走 boto3 默认凭据链（env / IAM role）；

@@ -162,6 +162,59 @@ test('ensureRuntime：已就绪时直接返回，不跑 uv、不重建', async t
   assert.equal(calls.length, 0, '已经就绪就不该再调 uv')
 })
 
+test('ensureRuntime：已就绪但没有安装记录时补记指纹', async t => {
+  // 真机踩过的空档：依赖装完 → 探测因**别的原因**失败（当年是缺 boto3、以及探测没带
+  // 可导入所需的密钥）→ 全量重建那次 writeManifest 根本没执行。后来探测修好了，
+  // 环境直接走"已就绪"返回，能用却永远没有记录；而 `trySync` 判据是"指纹记过且相等"，
+  // 于是下一次探测再失败只能删掉整个 venv 重装（引擎那份实测 340MB / 两百个包）。
+  const userData = makeUserData(t)
+  const { sources } = makeResources(t)
+  createVenvPython(userData)
+  const { spawn } = fakeSpawn(t)
+
+  const result = await installer.ensureRuntime({
+    pythonMirror: '',
+    userDataPath: userData,
+    sources,
+    spawn,
+    probe: () => ({ ok: true, reason: 'ok', message: '' }),
+  })
+
+  assert.equal(result.ok, true)
+  const recorded = installer.readManifest(userData, 'core')
+  assert.ok(recorded, '探测通过却没留下任何记录')
+  assert.equal(
+    recorded.dependencyFingerprint,
+    installer.dependencyFingerprint(sources, 'core'),
+    '补记的必须是当前依赖声明的指纹，否则下次照样判"没装过"',
+  )
+})
+
+test('ensureRuntime：已有安装记录时不改写它', async t => {
+  // 指纹不符是"依赖变了 → 重建一个干净环境"的唯一触发器。
+  // 每次正常启动都把当前指纹写回去，等于把这个触发器抹掉：被删掉的依赖
+  // 永远留在环境里（探测只看能否 import，多装的东西不会让它失败）。
+  const userData = makeUserData(t)
+  const { sources } = makeResources(t)
+  createVenvPython(userData)
+  const { spawn } = fakeSpawn(t)
+  installer.writeManifest(userData, { dependencyFingerprint: 'stale-fingerprint' }, 'core')
+
+  await installer.ensureRuntime({
+    pythonMirror: '',
+    userDataPath: userData,
+    sources,
+    spawn,
+    probe: () => ({ ok: true, reason: 'ok', message: '' }),
+  })
+
+  assert.equal(
+    installer.readManifest(userData, 'core').dependencyFingerprint,
+    'stale-fingerprint',
+    '已就绪的返回路径不得覆盖既有记录',
+  )
+})
+
 test('ensureRuntime：缺 uv 时报安装包残缺，不再联网下载', async t => {
   const userData = makeUserData(t)
   const { sources } = makeResources(t, { withUv: false })

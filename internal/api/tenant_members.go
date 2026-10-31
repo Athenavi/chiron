@@ -44,6 +44,22 @@ var tenantBuiltinRoles = []tenantBuiltinRole{
 //
 // 幂等靠 NOT EXISTS：不能用 ON CONFLICT (tenant_id, name)，因为基线里
 // ent_roles 只有主键约束，写上去会报 "no unique or exclusion constraint"。
+//
+// $2 上那两个 `::varchar` 不是装饰，删掉就回到真机现场（桌面端首启 500）：
+// 同一个参数在 `INSERT … SELECT` 的目标列里被推成 **text**（PG 先独立分析
+// SELECT，未知类型输出列默认落 text，之后才按列类型做赋值转换——赋值转换不算
+// 类型推断），在 `name = $2` 里又按列类型推成 **varchar(64)**，两处推断不一致
+// 就在 Parse 阶段直接报
+//
+//	ERROR: inconsistent types deduced for parameter $2 (SQLSTATE 42P08)
+//
+// 这是**语句级**失败：与租户是否已有角色、表里有没有数据都无关，任何真实
+// PostgreSQL 上这条 SQL 都跑不起来（pgx 默认 CacheDescribe 会先 Describe 未命名
+// 语句，服务端必须自己推断）。写这篇注释时核对过的对照物是 settings.go:185 的
+// 同类 upsert —— 它的 NOT EXISTS 只查 CTE（`FROM updated`，列是整数），不碰目标
+// 表，所以侥幸不冲突；这里查的是 ent_roles 本身。显式 cast 把两处钉成同一类型。
+// $1（tenant_id）和 $4（permissions::text[]）不受影响：比较侧推的是 smallint /
+// text[]，与目标列赋值转换前后的类型一致（分隔离断言见 tenant_members_live_test.go）。
 func ensureTenantBuiltinRoles(ctx context.Context, ex tenantExecer, tenantID int16) error {
 	for _, r := range tenantBuiltinRoles {
 		perms := auth.RolePermissions[r.sysRole]
@@ -51,9 +67,9 @@ func ensureTenantBuiltinRoles(ctx context.Context, ex tenantExecer, tenantID int
 			`INSERT INTO ent_roles
 			     (id, tenant_id, name, display_name, is_builtin, permissions,
 			      created_at, updated_at)
-			 SELECT gen_random_uuid()::text, $1, $2, $3, TRUE, $4::text[], now(), now()
+			 SELECT gen_random_uuid()::text, $1, $2::varchar, $3, TRUE, $4::text[], now(), now()
 			 WHERE NOT EXISTS (
-			     SELECT 1 FROM ent_roles WHERE tenant_id = $1 AND name = $2
+			     SELECT 1 FROM ent_roles WHERE tenant_id = $1 AND name = $2::varchar
 			 )`,
 			tenantID, r.name, r.displayName, perms); err != nil {
 			return fmt.Errorf("ensure builtin role %q for tenant %d: %w", r.name, tenantID, err)
