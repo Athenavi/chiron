@@ -74,11 +74,10 @@ const apiMocks = vi.hoisted(() => {
     createSSEConnection: vi.fn((_sessionId: string, onMessage: (data: unknown) => void, onError: () => void) => {
       stream.onMessages.push(onMessage)
       stream.onError = onError
-      return {
-        close: vi.fn(() => { stream.closed += 1 }),
-        addEventListener: vi.fn(),
-        readyState: 1,
-      }
+      // 句柄刻意只给 `close`：`createSSEConnection` 现在的契约就是「你只能 close()」
+      // （fetch 流，见 api/index.ts）。ChatView 若又去摸 EventSource 特有的
+      // `readyState`/`addEventListener`，这里会以 TypeError 立刻现形。
+      return { close: vi.fn(() => { stream.closed += 1 }) }
     }),
     submitApproval: vi.fn(emptyList),
     submitAnswer: vi.fn(emptyList),

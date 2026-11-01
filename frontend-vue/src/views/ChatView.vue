@@ -9,7 +9,7 @@ import {
   createAgent, createGraph,
   API_URL, desktopDeviceToken,
 } from '../api'
-import type { LlmModel } from '../api'
+import type { LlmModel, SSEHandle } from '../api'
 import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
 import FloatingPanel from '../components/common/FloatingPanel.vue'
 import SubAgentPanel from '../components/chat/SubAgentPanel.vue'
@@ -490,7 +490,7 @@ const items = computed<ChatItem[]>({
     ;(writingRun.value ?? currentRun.value).items = v
   },
 })
-let activeSSE: EventSource | null = null
+let activeSSE: SSEHandle | null = null
 // 每个会话最后收到的 SSE 事件 id（服务端 id: 行 → event.lastEventId）。
 // 跨轮重建 SSE 时回传（last_event_id），服务端从缓冲流补发上一轮断线缺口（见 api/index.ts createSSEConnection）
 const sseLastIdBySession = new Map<string, string>()
@@ -1538,7 +1538,7 @@ async function pushMapState() {
 // 顶层函数声明覆盖，从未生效）。这里把它们接管过来，编排逻辑在 sessionmapBridge.ts。
 
 /** 地图发起的会话 → 它的事件订阅（地图可能在**非当前会话**上发消息） */
-const mapSessionStreams = new Map<string, EventSource>()
+const mapSessionStreams = new Map<string, SSEHandle>()
 
 /**
  * 为地图发起的会话保持一条事件订阅。
@@ -1703,7 +1703,7 @@ function pushSubagentEvent(raw: unknown) {
 //
 // 这里为当前会话保持一条常驻连接：会话切换时重建、组件卸载时关闭。本轮 SSE 仍在时**跳过处理**
 // （同一条事件会被两个连接各送一份，交给 `activeSSE` 处理即可，避免面板里出现重复项）。
-let subagentSSE: EventSource | null = null
+let subagentSSE: SSEHandle | null = null
 let subagentSSESession = ''
 
 function closeSubagentStream() {

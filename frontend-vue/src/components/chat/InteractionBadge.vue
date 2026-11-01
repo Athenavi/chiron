@@ -20,12 +20,13 @@ import {
   listMyPendingInteractions,
   type PendingInteraction,
 } from '../../api/interactions'
+import type { SSEHandle } from '../../api'
 
 const props = defineProps<{ pollMs?: number }>()
 const emit = defineEmits<{ (e: 'select', sessionId: string): void }>()
 
 const items = ref<PendingInteraction[]>([])
-const source = ref<EventSource | null>(null)
+const source = ref<SSEHandle | null>(null)
 let timer: ReturnType<typeof setInterval> | null = null
 
 async function refresh() {
@@ -47,7 +48,7 @@ onMounted(() => {
   try {
     source.value = createUserEventsConnection(() => void refresh())
   } catch {
-    // 环境不支持 EventSource（或构造失败）：轮询仍然兜住。
+    // 连接建不起来：轮询仍然兜住（角标是增强，不是页面能否使用的条件）。
     source.value = null
   }
 })

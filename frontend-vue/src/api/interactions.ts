@@ -9,7 +9,7 @@
  * 所以"答完没反应"不是 bug —— 会话下一次提交时会自动从暂停处接手；
  * 但如果那一行停在 `answered`，列表里就一直看得到它，用户知道还欠一次继续。
  */
-import { api, API_URL } from './index'
+import { api, API_URL, openEventStream, type SSEHandle } from './index'
 
 export type InteractionKind = 'approval' | 'question' | 'budget'
 export type InteractionStatus = 'pending' | 'answered'
@@ -62,21 +62,21 @@ export async function listMyPendingInteractions(limit = 20): Promise<PendingInte
  *
  * `client_id` 每个连接随机生成：服务端以 `user:client_id` 作订阅键，因此多标签页不会
  * 互相顶掉（同键订阅会让 hub 关掉旧连接，见 `internal/broadcast/hub.go`）。
- * 返回的 `EventSource` 交给调用方在卸载时 `close()`。
+ * 返回的是 `SSEHandle`（只有 `close()`）：这条通道也在网关 `authMW` 之后
+ * （`internal/api/routes_agent.go:106`），`EventSource` 带不出 Authorization ⇒ 在打包桌面态
+ * 必然静默 401（角标只会靠轮询兜）。与 `/events` 共用 `openEventStream`，身份、帧解析、
+ * 重连语义只有一份实现。
  */
-export function createUserEventsConnection(onEvent: (data: unknown) => void): EventSource {
+export function createUserEventsConnection(onEvent: (data: unknown) => void): SSEHandle {
   const clientId = `ui-${Math.random().toString(36).slice(2)}-${Date.now()}`
-  const url = `${API_URL}/v1/agent/interactions/stream?client_id=${encodeURIComponent(clientId)}`
-  const source = new EventSource(url, { withCredentials: true })
-  source.onmessage = (ev: MessageEvent) => {
-    if (!ev.data) return
-    try {
-      onEvent(JSON.parse(ev.data))
-    } catch {
-      // 非 JSON 帧（服务端只发 JSON）忽略即可，不打断连接
-    }
-  }
-  return source
+  return openEventStream(
+    `${API_URL}/v1/agent/interactions/stream?client_id=${encodeURIComponent(clientId)}`,
+    onEvent,
+    undefined,
+    // 角标要长期挂着：断线自己续上（带 Last-Event-ID）。旧行为靠 EventSource 的原生重连，
+    // 换成 fetch 流后这层得自己给；连续失败到上限才静默，反正还有轮询兜底。
+    { autoReconnect: true },
+  )
 }
 
 /**

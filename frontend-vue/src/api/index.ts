@@ -560,25 +560,27 @@ export async function uploadFile(file: File): Promise<{
 }
 
 // SSE 连接
-// 安全说明：session_id 必须出现在 URL 查询参数中，因为 EventSource API 不支持自定义 header。
-// 风险：
-//   - session_id 会出现在浏览器历史、服务器访问日志、Referer 头中
-//   - 后端有 session 所有权校验（events.go:115）防止越权订阅
-//   - 未来可考虑迁移到 WebSocket（ws.go）以消除 URL 暴露
-// 权衡：当前方案用 withCredentials 携带 httpOnly cookie 鉴权，比 JWT 在 URL 中更安全
+//
+// 为什么是 fetch + ReadableStream 而不是 EventSource：**EventSource 不能设置请求头**，
+// 于是这条通道永远带不出 Authorization。打包桌面态的身份是 `POST /v1/auth/session` 换到的
+// 本地 JWT（见 internal/api/auth_local_session.go），订阅 `/events` 不带它就是 401/403 ——
+// 而 EventSource 的 onerror 在浏览器自动重连之前不会告诉我们原因，前端于是停在「思考中」：
+// 既不报错，也不出字。现在 header 带 Bearer、非 2xx 立即失败（`loading` 一定能被清掉）、
+// 断线按 Last-Event-ID 续传（网关 header 优先于 query，见 internal/api/events.go:49）。
+//
+// 遗留：session_id 仍在 URL 查询参数里（服务端有所有权校验，见 events.go）；它会出现在浏览器
+// 历史与访问日志里，改 WebSocket 才能消除，本批次不动。
 //
 // last-event-id 续传（服务端见 internal/broadcast/hub.go + internal/api/events.go）：
-//   - 带 session_id 的会话事件会先写入 Redis 缓冲流（sse:events:{session}，MAXLEN 200 + 滑动 TTL），
-//     SSE 帧带 id: 行，浏览器解析为 event.lastEventId；
-//   - 断线补发有两条通道：
-//     a) autoReconnect=true：onerror 不立即关闭，交给浏览器原生自动重连——重连请求自动携带
-//        Last-Event-ID 头，服务端 XRANGE 补发缺口（覆盖单轮流式中断线抖动，前端无感续传）；
-//     b) 跨轮/手动重建：经 initialLastEventId 传入上一连接的最后事件 id（由 onLastEventId 采集），
-//        服务端同样按 last_event_id 补发。
+//   - 带 session_id 的会话事件先写入 Redis 缓冲流（sse:events:{session}，MAXLEN 200 + 滑动 TTL），
+//     SSE 帧带 id: 行；收到即记录，重连时放进 Last-Event-ID 头；
+//   - 缺口补发由服务端 XRANGE 完成（hub.ReplayAfter），前端只负责带回"我最后看到哪一条"；
+//   - 旧的"交给浏览器原生重连"没有了：fetch 流不会自动重连，retry 由下面自己实现，
+//     所以 autoReconnect 的语义不变（连续失败上限到了才 onError）。
 export interface SSEConnectionOptions {
   /** 重建连接时携带的最后事件 id（服务端补发该 id 之后缓冲的事件） */
   initialLastEventId?: string
-  /** 允许浏览器自动重连（重连自动带 Last-Event-ID）；默认 false = 断线立即报错关闭（兼容旧行为） */
+  /** 断线后自动重连（重连携带 Last-Event-ID）；默认 false = 断线立即报错关闭（兼容旧行为） */
   autoReconnect?: boolean
   /** 自动重连的最大连续失败次数，超过后回调 onError 并关闭；默认 3 */
   maxAutoReconnects?: number
@@ -586,64 +588,184 @@ export interface SSEConnectionOptions {
   onLastEventId?: (id: string) => void
 }
 
+/** `createSSEConnection` 的返回句柄：调用方只需要 `close()`，且可重复调用。 */
+export interface SSEHandle {
+  close(): void
+}
+
+/** 重连间隔：够短让流式看起来"没断"，够长不给正在重启的网关添压。 */
+const SSE_RECONNECT_DELAY_MS = 1000
+
+/** 解析一帧（`\n\n` 分隔的一段文本）；字段语义按 SSE 规范，与 EventSource 对齐。 */
+function parseSSEFrame(frame: string): { data: string; event: string; id: string } {
+  let event = ''
+  let id = ''
+  const dataLines: string[] = []
+  for (const line of frame.split('\n')) {
+    if (!line || line.startsWith(':')) continue // 空行与 `: comment` 心跳
+    const sep = line.indexOf(':')
+    const field = sep === -1 ? line : line.slice(0, sep)
+    let value = sep === -1 ? '' : line.slice(sep + 1)
+    if (value.startsWith(' ')) value = value.slice(1) // 冒号后的那一个空格属于协议
+    if (field === 'data') dataLines.push(value)
+    else if (field === 'event') event = value
+    else if (field === 'id') id = value
+    // retry: 与未知字段：忽略（EventSource 也不把它们交给业务）
+  }
+  return { data: dataLines.join('\n'), event, id }
+}
+
+/**
+ * 打开通用事件流（`fetch` + `ReadableStream`）。
+ *
+ * 为什么抽出来：`/events`（会话）与 `/v1/agent/interactions/stream`（跨会话待办）**都**在网关的
+ * `authMW` 之后（internal/api/routes_agent.go:106），同一条"带不出 Authorization 就静默 401"的
+ * 规则。两边共用一套身份/帧解析/重连/关闭语义，才不会一处修好、另一处继续烂。
+ */
+export function openEventStream(
+  url: string,
+  onMessage: (data: unknown) => void,
+  onError?: () => void,
+  opts: SSEConnectionOptions = {},
+): SSEHandle {
+  const { initialLastEventId = '', autoReconnect = false, maxAutoReconnects = 3 } = opts
+  const onLastEventId = opts.onLastEventId
+
+  let lastEventId = initialLastEventId
+  let closed = false
+  let controller: AbortController | null = null
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null
+  let failedReconnects = 0
+
+  const requestHeaders = (): Record<string, string> => {
+    const headers: Record<string, string> = { Accept: 'text/event-stream' }
+    const token = requestToken()
+    if (token) headers.Authorization = `Bearer ${token}`
+    if (lastEventId) headers['Last-Event-ID'] = lastEventId
+    return headers
+  }
+
+  const stop = () => {
+    closed = true
+    if (reconnectTimer !== null) {
+      clearTimeout(reconnectTimer)
+      reconnectTimer = null
+    }
+    controller?.abort()
+    controller = null
+  }
+
+  // 真失败只有这一条路径：先关掉（之后的回调一律静默），再通知调用方 ——
+  // 调用方的 onError 负责收掉 loading/计时器，所以它**必须**被调到一次。
+  const fail = () => {
+    if (closed) return
+    stop()
+    onError?.()
+  }
+
+  const retry = () => {
+    if (closed) return
+    if (autoReconnect && failedReconnects < maxAutoReconnects) {
+      failedReconnects++
+      controller = null
+      reconnectTimer = setTimeout(() => {
+        reconnectTimer = null
+        void connect()
+      }, SSE_RECONNECT_DELAY_MS)
+      return
+    }
+    fail()
+  }
+
+  const handleFrame = (frame: string) => {
+    const parsed = parseSSEFrame(frame)
+    if (parsed.id) {
+      lastEventId = parsed.id
+      onLastEventId?.(parsed.id)
+    }
+    // 空 data 不派发（规范如此）；**命名事件也不进 onMessage** —— 本地 core 兜底通道发的是
+    // `event: heartbeat`（desktop-local/app/api/events.py），旧 EventSource 的 onmessage 同样
+    // 收不到它。这里保持一致，否则心跳会变成对话里的幽灵消息。
+    if (!parsed.data || (parsed.event && parsed.event !== 'message')) return
+    try {
+      onMessage(JSON.parse(parsed.data))
+    } catch {
+      // 单帧解析失败不断流（旧实现也是这样吞掉的）
+    }
+  }
+
+  const connect = async () => {
+    if (closed) return
+    controller = new AbortController()
+    const active = controller
+    let response: Response
+    try {
+      response = await fetch(url, {
+        headers: requestHeaders(),
+        signal: active.signal,
+        // Web 同源靠 httpOnly cookie；桌面端 file:// 是跨站，cookie 带不过去，身份全在上面那个头
+        credentials: isDesktop ? 'same-origin' : 'include',
+      })
+    } catch {
+      if (closed || active.signal.aborted) return // 我们自己关的，不是故障
+      retry()
+      return
+    }
+    if (closed) return
+    // 非 2xx（401/403/404…）不会自己好：立即失败，别把它拖成「思考中」
+    if (!response.ok || !response.body) {
+      fail()
+      return
+    }
+
+    const reader = response.body.getReader()
+    const decoder = new TextDecoder()
+    let buffer = ''
+    try {
+      for (;;) {
+        const { done, value } = await reader.read()
+        if (done) break
+        // 连上**并且真的收到过字节**才算成功：只看响应头的话，一个"接受连接就立刻收尾、
+        // 什么都不发"的端点会把重连上限每次清零 ⇒ 无限重连，而 loading 一直挂着
+        // （2026-11-01 写用例时暴露；旧 EventSource 靠浏览器原生重连，同样没有上限）。
+        if (value && value.byteLength > 0) failedReconnects = 0
+        // 在**累计缓冲**上归一 CRLF：跨块的 `\r` + `\n` 也能拼回正确的帧边界
+        buffer = (buffer + decoder.decode(value, { stream: true })).replace(/\r\n/g, '\n')
+        for (;;) {
+          const idx = buffer.indexOf('\n\n')
+          if (idx === -1) break
+          handleFrame(buffer.slice(0, idx))
+          buffer = buffer.slice(idx + 2)
+          if (closed) return // 回调里可能已经 close()
+        }
+      }
+    } catch {
+      if (closed || active.signal.aborted) return
+      retry()
+      return
+    }
+    if (closed) return
+    retry() // 服务端收尾/流断开：与 EventSource 的 onerror 同语义（要么续上，要么报错）
+  }
+
+  void connect()
+
+  return { close: stop }
+}
+
+/** 会话事件流：`/events?session_id=…`（身份在 header，见上面那段注释）。 */
 export function createSSEConnection(
   sessionId: string,
   onMessage: (data: unknown) => void,
   onError?: () => void,
   opts: SSEConnectionOptions = {},
-) {
-  const { initialLastEventId = '', autoReconnect = false, maxAutoReconnects = 3 } = opts
-  const onLastEventId = opts.onLastEventId
-
-  let url = `${API_URL}/events?session_id=${encodeURIComponent(sessionId)}`
-  if (initialLastEventId) {
-    url += `&last_event_id=${encodeURIComponent(initialLastEventId)}`
-  }
-  // EventSource 不能设置 Authorization：本地模式把设备 token 放进 query，
-  // core 的 DeviceTokenMiddleware 只在 header 缺失时读取它（见 middleware.py）。
-  const localToken = getDeviceMode() === 'local' ? desktopDeviceToken() : ''
-  if (localToken) {
-    url += `&token=${encodeURIComponent(localToken)}`
-  }
-
-  // 本地模式注意：EventSource 不支持自定义头，所以这条通道**没有** Authorization。
-  // core 的鉴权默认关闭（auth_enabled=False），此时 /events 照常可用；若桌面端显式
-  // 打开了 CHIRON_LOCAL_AUTH_ENABLED，本地 SSE 会 401 —— 需要后端支持 query token
-  // 或改走 WebSocket 才能解决，本批次不动。
-  const eventSource = new EventSource(url, { withCredentials: true })
-
-  // 连续失败计数：自动重连期间每次 onopen 归零
-  let failedReconnects = 0
-
-  eventSource.onopen = () => {
-    failedReconnects = 0
-  }
-
-  eventSource.onmessage = (event) => {
-    try {
-      const data = JSON.parse(event.data)
-      onMessage(data)
-    } catch {
-      // SSE 解析错误不阻断连接
-    }
-    // 服务端输出的 id: 行 → 浏览器解析为 event.lastEventId；记录最新值供跨轮重建续传
-    if (event.lastEventId) {
-      onLastEventId?.(event.lastEventId)
-    }
-  }
-
-  eventSource.onerror = () => {
-    // 自动重连：单轮流式进行中网络抖动/网关实例切换时，留给浏览器原生重连
-    // （重连请求自动携带 Last-Event-ID，服务端从缓冲流补发缺口）；连续失败超限才判定真断线。
-    if (autoReconnect && failedReconnects < maxAutoReconnects) {
-      failedReconnects++
-      return
-    }
-    onError?.()
-    eventSource.close()
-  }
-
-  return eventSource
+): SSEHandle {
+  return openEventStream(
+    `${API_URL}/events?session_id=${encodeURIComponent(sessionId)}`,
+    onMessage,
+    onError,
+    opts,
+  )
 }
 
 export default api
