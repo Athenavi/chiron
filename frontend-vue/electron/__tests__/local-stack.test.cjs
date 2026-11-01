@@ -17,6 +17,7 @@ const { EventEmitter } = require('node:events')
 const { PassThrough } = require('node:stream')
 
 const stack = require('../local-stack.cjs')
+const components = require('../components.cjs')
 
 const VALID_SECRET = 'x'.repeat(32)
 
@@ -229,6 +230,43 @@ test('stopLauncher 通过关闭 stdin 请求正常退出', async t => {
   })
 
   assert.equal(await stack.stopLauncher(), true)
+})
+
+/**
+ * ★ 回归：树杀那条路**不能**报"已回收"。
+ *
+ * 真机现场：应用退出后日志写 `local backend stopped go-stack（gateway=true engine=true
+ * launcher=true）`，可 postgres 还在监听 64762。PG 是 `pg_ctl` 起的**非子进程**，
+ * `killProcessTree` 收不到它 —— 只有引导器自己走到 `run()` 的 `finally` 才会 `pg.stop()`。
+ * 所以"我们是靠树杀收的场"这件事必须原样上报，别让它伪装成一次正常停机。
+ */
+test('★ 回归：引导器不响应 stdin 时，树杀之后返回 false', async t => {
+  const child = fakeChild()
+  withFakeSpawn(t, child)
+
+  const promise = stack.startLauncher({ launcher: { command: 'python' } })
+  child.stdout.write(JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u', redis_addr: '' }) + '\n')
+  await promise
+
+  // 关 stdin 不退出（原 bug 的形状：Windows 上 EOF 侦测失效就是这个表现）
+  let treeKilled = 0
+  components._setDeps({
+    killTree: target => {
+      treeKilled += 1
+      assert.equal(target, child, '收的必须是引导器那一棵树')
+      child.emit('exit', null)
+      return true
+    },
+  })
+  t.after(() => components._resetDeps())
+
+  assert.equal(await stack.stopLauncher(30), false, '绕过引导器的 finally 却报已回收 = 谎报 PG 已停')
+  assert.equal(treeKilled, 1, '宽限期后仍要收树，Redis 那类子进程得带走')
+})
+
+test('宽限期要够引导器停 Redis + pg_ctl -m fast', () => {
+  // 给短了就会落到树杀那条路，而 PG 不在树里：等于每次退出都赌一次孤儿
+  assert.ok(stack.LAUNCHER_EXIT_GRACE_MS >= 15000, `宽限期只有 ${stack.LAUNCHER_EXIT_GRACE_MS}ms`)
 })
 
 // ------------------------------------------------------------------ 引擎环境

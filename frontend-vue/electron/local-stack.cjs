@@ -339,8 +339,22 @@ function describeRecord(record) {
   return tail ? `\n\n引导器输出（尾部）：\n${tail}` : ''
 }
 
-/** 停引导器。先礼后兵：正常退出优先，超时再按进程树收。 */
-async function stopLauncher() {
+/**
+ * 停引导器的宽限期：引导器自己收尾要停 Redis、再 `pg_ctl -m fast` 停 PG，
+ * 崩溃恢复时还会更久一点。给短了就会走到树杀那条路 —— 而 PG 不在进程树里，
+ * 树杀等于把 PG 留在原地。
+ */
+const LAUNCHER_EXIT_GRACE_MS = 20000
+
+/**
+ * 停引导器。先礼后兵：正常退出优先，超时再按进程树收。
+ *
+ * 返回值只在**引导器自己走完收尾**时才是 true。树杀那一条必须返回 false：
+ * PG 是 `pg_ctl` 拉起来的**非子进程**，`killProcessTree` 收不到它，只有引导器自己的
+ * `finally` 里那句 `pg.stop()` 才会放掉 data dir。过去这里无论怎么走都 `return true`，
+ * 于是退出日志写着「launcher=true」，postmaster 却还活着 —— 谎报的正是最需要知道的事。
+ */
+async function stopLauncher(graceMs = LAUNCHER_EXIT_GRACE_MS) {
   const record = state.launcher
   if (!record) return false
   state.launcher = null
@@ -354,11 +368,11 @@ async function stopLauncher() {
     /* stdin 可能已随进程关闭，忽略 */
   }
 
-  if (await waitExit(child, 8000)) return true
+  if (await waitExit(child, graceMs)) return true
 
   // 没能在宽限期内退出：整棵树一起收。
-  // **必须收树**：引导器下面挂着 postgres 与 redis-server，只杀父进程会留下孤儿占着
-  // 端口，下次启动 initdb / redis 就会撞端口，且日志里看不出是谁占的。
+  // **必须收树**：引导器下面挂着 redis-server（PG 不在树里，见上面），只杀父进程会
+  // 留下孤儿占着端口，下次启动 redis 就会撞端口，且日志里看不出是谁占的。
   try {
     components.killProcessTree(child)
   } catch {
@@ -369,7 +383,7 @@ async function stopLauncher() {
     }
   }
   await waitExit(child, 5000)
-  return true
+  return false
 }
 
 function waitExit(child, timeoutMs) {
@@ -926,6 +940,7 @@ module.exports = {
   GATEWAY_READY_PATH,
   ENGINE_HEALTH_PATH,
   LAUNCHER_TIMEOUT_MS,
+  LAUNCHER_EXIT_GRACE_MS,
   GATEWAY_TIMEOUT_MS,
   ENGINE_TIMEOUT_MS,
   APP_SECRET_MIN_LENGTH,
