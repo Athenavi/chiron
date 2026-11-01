@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"strings"
@@ -13,6 +14,8 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/settings"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // ── LLM Provider 密钥管理（集中派，DR：docs/llm-provider-key-management-dr.md）──
@@ -104,6 +107,91 @@ func syncProviderKeyset(ctx context.Context, cfg *config.Config, provider string
 	_, _ = db.Redis.Incr(ctx, llmKeysVerKey).Result()
 	_ = db.Redis.Publish(ctx, llmKeysChangedChannel, provider).Err()
 	return nil
+}
+
+// llmProviderKeysTableMissing 判定「这张表还不存在」（SQLSTATE 42P01 undefined_table）。
+//
+// 全新库、迁移还没跑的时候就是这个状态。回填器把它当成"没有 key 可镜像"而不是启动失败，
+// 但其余错误（权限、连接串、语法）必须原样报出去。
+func llmProviderKeysTableMissing(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "42P01"
+}
+
+// distinctLLMKeyProviders 列出权威层里出现过的 provider 名（含非 active 的）。
+//
+// 为什么非 active 也要列：keyset 的字段里带 `s`（状态），引擎 KeyRing 自己按状态过滤。
+// 只镜像 active 会让"禁用一把 key"在重启后失效 —— 那是把禁用做成"重启即复活"。
+func distinctLLMKeyProviders(ctx context.Context, pool *pgxpool.Pool) ([]string, error) {
+	rs, err := pool.Query(ctx, `SELECT DISTINCT provider FROM llm_provider_keys ORDER BY provider`)
+	if err != nil {
+		return nil, err
+	}
+	defer rs.Close()
+	var out []string
+	for rs.Next() {
+		var p string
+		if err := rs.Scan(&p); err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, rs.Err()
+}
+
+// HydrateProviderKeysets 按权威层（llm_provider_keys）把 Redis keyset 整体重建一遍。
+//
+// 为什么必须在启动时回填，而不是只靠管理端写库后那一次镜像：keyset 是**运行层镜像**，
+// 权威在 PG。云端看不出这个差别（Redis 是长驻实例、keyset 又没有 TTL，配一次就活过所有
+// 重启），但打包桌面态每次都用一份空 Redis 起来（`--appendonly no --save ""`），于是
+// 「本机早先配好的 provider key」在引擎眼里等于从没配过。引擎的 provider 注册表在
+// lifespan 里一次成型（python-engine/app/main.py），拿不到 keyset 就是空表 —— 表现是
+// 每一条回合立刻失败 `no LLM provider available … configured: `。
+//
+// 顺序前提：调用方必须已经接好 PG 与 Redis。Redis 不可用时**如实返回 nil**（引擎退化为
+// env 种子，与 syncProviderKeyset 同一口径），不谎报成功也不阻断启动。
+// 返回镜像成功的 provider 数，便于启动日志与用例断言。
+func HydrateProviderKeysets(ctx context.Context, cfg *config.Config) (int, error) {
+	if db.Redis == nil || cfg == nil {
+		return 0, nil
+	}
+	if db.Pool == nil {
+		return 0, errors.New("llm keyset hydration: no PostgreSQL pool")
+	}
+	providers, err := distinctLLMKeyProviders(ctx, db.Pool)
+	if err != nil {
+		if llmProviderKeysTableMissing(err) {
+			slog.Info("llm keyset hydration skipped: llm_provider_keys absent (not migrated yet)")
+			return 0, nil
+		}
+		return 0, err
+	}
+	hydrated := hydrateKeysetsForProviders(ctx, cfg, providers)
+	slog.Info("llm provider keysets hydrated from DB",
+		"providers", hydrated, "providers_in_db", len(providers))
+	return hydrated, nil
+}
+
+// hydrateKeysetsForProviders 对给定 provider 列表逐个重建 keyset。
+//
+// 拆出来是为了让"镜像哪些"与"怎么镜像"能被分别测到：真库用例若直接跑
+// HydrateProviderKeysets，会连开发者本机别的 provider 一起按测试 APP_SECRET 重解，
+// 解不开的那些就被**清空**（syncProviderKeyset 的 skip-undecryptable 语义）——
+// 用例不该有这种副作用。逐个失败只告警不中断：这层是镜像，权威还在库里；
+// 但一个都不成功时必须能从日志里看出来（providers < providers_in_db）。
+func hydrateKeysetsForProviders(ctx context.Context, cfg *config.Config, providers []string) int {
+	hydrated := 0
+	for _, p := range providers {
+		if err := syncProviderKeyset(ctx, cfg, p); err != nil {
+			// 单个 provider 失败不影响其余：这层是镜像，权威还在库里。
+			// 但必须留在日志里 —— 静默跳过的话，日志就只剩"网关起来了"，
+			// 用户看到的仍然是"没有 provider"。
+			slog.Warn("llm keyset hydration failed for provider", "provider", p, "error", err)
+			continue
+		}
+		hydrated++
+	}
+	return hydrated
 }
 
 // llmReplaceKeyset 用**一次原子 Lua 调用**把 `llm:keys:{provider}` 换成给定的 field/value 集合
