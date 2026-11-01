@@ -18,6 +18,7 @@
  */
 
 const childProcess = require('node:child_process')
+const crypto = require('node:crypto')
 const components = require('./components.cjs')
 const runtimeState = require('./runtime-state.cjs')
 const DEFAULTS = components.DEFAULTS
@@ -45,6 +46,48 @@ const GATEWAY_READY_PATH = '/ready'
 
 /** APP_SECRET 的最短长度要求（`config/config.go` 强制 32+） */
 const APP_SECRET_MIN_LENGTH = 32
+
+/**
+ * 子密钥的域标签。**必须与 Go / Python 两侧逐字一致**
+ * （`config/config.go::deriveSubsecret`、`python-engine/app/config.py::_validate_security_defaults`），
+ * 改了任何一处而没同步另两处，表现是本地模式全线 401。
+ * 跨语言口径由同一组黄金向量锁住，见 `__tests__/local-stack.test.cjs`。
+ */
+const SECRET_DOMAIN_JWT = 'chiron-jwt'
+const SECRET_DOMAIN_INTERNAL = 'chiron-internal'
+
+/** HMAC-SHA256(APP_SECRET, domain) → base64url 无 padding（Node 的 `base64url` 编码即无 padding） */
+function deriveSubsecret(appSecret, domain) {
+  return crypto.createHmac('sha256', String(appSecret)).update(String(domain), 'utf8').digest('base64url')
+}
+
+/** 端口是否可直接使用（这三条链路上的端口都必须是实数，NaN 传下去会在子进程里变成怪错误） */
+function isValidPort(value) {
+  const port = Number(value)
+  return Number.isInteger(port) && port > 0 && port <= 65535
+}
+
+/**
+ * 把本地模式的两个身份密钥**显式**写进子进程环境。
+ *
+ * 为什么不能只传 APP_SECRET、让两侧各自派生：三边读配置的口径不一样。
+ * 网关 `config/config.go::loadDotEnv` 用 `findFileUpward` 从 **cwd 一路往上找到文件系统根**，
+ * 命中任何一层 `.env` 就把 `JWT_SECRET` / `INTERNAL_TOKEN` 当成显式配置（env 优先级高于派生）；
+ * 引擎 `app/config.py::_find_env_file` 只从自己的包目录往上找 **3 层**，打包态必然找不到，
+ * 于是老实按 APP_SECRET 派生。装到开发机上（包目录就在仓库树里，往上第一层就是开发用
+ * `.env`）实测：
+ * 网关认 `.env` 里的开发 token、拒绝派生 token，引擎正相反 ——
+ * 网关→引擎的每一跳都被 401 顶回来，界面表现为"python engine error / 获取技能列表失败 / internal error"，
+ * 而引擎又会把网关铸的 JWT 判为无效。
+ *
+ * 显式下发把这条不对称消掉：两侧的值来自**同一个表达式**，环境文件、`config.json`、
+ * 乃至继承自 shell 的同名变量都无法让它们不一致（这里在 `{...process.env}` 展开**之后**赋值，
+ * 所以本地模式的口径只由持久化的 APP_SECRET 决定）。
+ */
+function applyLocalModeSecrets(env, appSecret) {
+  env.JWT_SECRET = deriveSubsecret(appSecret, SECRET_DOMAIN_JWT)
+  env.INTERNAL_TOKEN = deriveSubsecret(appSecret, SECRET_DOMAIN_INTERNAL)
+}
 
 /**
  * 本地模式免口令会话引导的开关（`config/config.go` 里的 `LOCAL_BOOTSTRAP`）。
@@ -171,8 +214,9 @@ function parseLauncherLine(line) {
  * `APP_SECRET` 是网关的部署级主密钥（`JWT_SECRET`、`INTERNAL_TOKEN` 都由它派生），
  * 缺失或不足 32 字符网关会**直接拒绝启动**——所以这里必须显式校验，而不是传下去等它报。
  *
- * 注意：本函数不生成密钥。密钥要跨重启保持稳定（否则每次重启 JWT 全失效、
- * 用户被踢下线），持久化是调用方的事，这里只做契约校验。
+ * 注意：本函数不生成密钥；密钥要跨重启保持稳定（否则每次重启 JWT 全失效、用户被踢下线），
+ * 持久化是调用方的事。但它会把由这个密钥派生出的 `JWT_SECRET` / `INTERNAL_TOKEN` 显式写进环境
+ * （见 `applyLocalModeSecrets`）—— 少写一侧就重现"网关与引擎各信各的 token"的事故。
  */
 function buildGatewayEnv(info, options = {}) {
   if (!info || typeof info !== 'object') throw new Error('缺少引导器连接信息，无法启动网关')
@@ -199,6 +243,7 @@ function buildGatewayEnv(info, options = {}) {
   env.POSTGRES_DSN = pgDsn
   env.PORT = String(port)
   env.APP_SECRET = appSecret
+  applyLocalModeSecrets(env, appSecret)
 
   // Redis 缺失时不写这一项：网关会用它自己的默认值，并且在 Redis 不可用时
   // 明确报 `Redis is required but unavailable`，比我们塞一个空串更可诊断。
@@ -587,7 +632,7 @@ async function stopGateway() {
  *   - 需要 `DEGRADED_MODE=true` 才能在单机启动：`verify_sandbox_backend()` 在
  *     没有 `SANDBOX_SERVICE_URL` 时会拒绝启动，降级模式是唯一放行路径（见阶段三实测）。
  *
- * 仍然校验 DSN 与 APP_SECRET：引擎同样拿它们连库、派生 INTERNAL_TOKEN，
+ * 仍然校验 DSN 与 APP_SECRET：引擎拿它们连库，两个身份密钥也由它派生后显式下发，
  * 缺了会在引擎自己的日志深处报错，不如在这里拦住。
  */
 function buildEngineEnv(info, options = {}) {
@@ -611,10 +656,21 @@ function buildEngineEnv(info, options = {}) {
   const env = { ...process.env, ...(options.env || {}) }
   env.APP_SECRET = appSecret
   env.POSTGRES_DSN = pgDsn
+  applyLocalModeSecrets(env, appSecret)
   env.HTTP_HOST = '127.0.0.1'
   env.HTTP_PORT = String(port)
   // 单机模式：放行沙箱门禁，并让 Redis 从"必需"降为"可选"
   env.DEGRADED_MODE = 'true'
+
+  // 引擎要回调网关（工具 broker、媒体资产、agent-followup、webhook-event、系统设置下发）。
+  // 引擎侧默认值是 `http://127.0.0.1:8080`：本地网关几乎不可能在这个端口，而这台机器上
+  // 8080 往往**另有其人**（开发网关就在那儿）——于是打包态的引擎会安静地去问一个
+  // 不属于它的服务，拿到就配、拿不到就 fail-open，界面表现为"设置里没有 provider"。
+  // 端口由 `startLocalStack` 预先定好（引擎先于网关起，URL 只能在 spawn 时给全）。
+  const gatewayPort = Number(options.gatewayPort)
+  if (isValidPort(gatewayPort)) {
+    env.GATEWAY_INTERNAL_URL = `http://${DEFAULTS.DEFAULT_HOST}:${gatewayPort}`
+  }
 
   const redisAddr = String(info.redisAddr || '').trim()
   if (redisAddr) {
@@ -831,7 +887,14 @@ async function startLocalStack(options = {}) {
     // 引擎先于网关：网关启动时会读 PYTHON_ENGINE_ADDRESS 建客户端，地址得在它起来前就定好。
     // 没有引擎启动信息时不必挑端口（挑端口会真的 listen 一次）。
     const enginePort = options.engine ? options.enginePort || (await components.pickFreePort()) : 0
-    const engineResult = await startEngine(launcherResult.info, { ...options, port: enginePort })
+    // 反方向同理，而且更硬：引擎回调网关用的 `GATEWAY_INTERNAL_URL` 只能在 spawn 时给全，
+    // 所以网关端口必须在这里就定下来，不能等 `startGateway` 自己去挑。
+    const gatewayPort = isValidPort(options.port) ? Number(options.port) : await components.pickFreePort()
+    const engineResult = await startEngine(launcherResult.info, {
+      ...options,
+      port: enginePort,
+      gatewayPort,
+    })
     if (!engineResult.ok) {
       // 强依赖：没有引擎就没有可用的本地模式（聊天/知识库/记忆全在引擎侧）
       //
@@ -854,8 +917,20 @@ async function startLocalStack(options = {}) {
 
     const gatewayResult = await startGateway(launcherResult.info, {
       ...options,
+      port: gatewayPort,
       pythonEngineAddress: engineResult.address,
     })
+
+    // 网关换了端口 ⇒ 引擎环境里那个 URL 就指向别处了，而引擎已经起来了、改不了。
+    // 这里不"将就用"：半残状态表现为工具/媒体/系统设置静默失灵，比一次明确的启动失败难查得多。
+    if (Number(gatewayResult.port) !== gatewayPort) {
+      const err = new Error(
+        `网关没能落在预定端口 ${gatewayPort}（实际 ${gatewayResult.port}）：` +
+          `引擎已按前者配置 GATEWAY_INTERNAL_URL，换号会让它回调到不存在的地址`,
+      )
+      err.reason = 'gateway-port-drift'
+      throw err
+    }
 
     // 记录本次运行占用的端口，供下一个实例接管（见 runtime-state.cjs）。
     // 不写 DSN：里面有密码，接管方只要有端口就能重建。
@@ -944,6 +1019,9 @@ module.exports = {
   GATEWAY_TIMEOUT_MS,
   ENGINE_TIMEOUT_MS,
   APP_SECRET_MIN_LENGTH,
+  SECRET_DOMAIN_JWT,
+  SECRET_DOMAIN_INTERNAL,
+  deriveSubsecret,
   LOCAL_BOOTSTRAP_ENV,
   parseLauncherLine,
   buildGatewayEnv,

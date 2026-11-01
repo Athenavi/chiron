@@ -314,6 +314,75 @@ test('buildEngineEnv 不把已带 scheme 的 Redis 地址拼成两遍', () => {
   assert.equal(env.REDIS_URL, 'redis://127.0.0.1:50404')
 })
 
+// ------------------------------------------------------------ 本地模式身份密钥
+
+/**
+ * 事故形状（真机）：打包态网关的 cwd 在仓库树里，`config/config.go::loadDotEnv` 的
+ * `findFileUpward` 会一路往上找到文件系统根，命中开发用 `.env` 里的
+ * `JWT_SECRET` / `INTERNAL_TOKEN`（显式配置优先于派生）；而引擎的
+ * `app/config.py::_find_env_file` 只从自己的包目录往上找 3 层，打包态找不到，
+ * 于是按 APP_SECRET 老实派生。两侧各信一个 token：网关→引擎全线 401。
+ *
+ * 口径钉在这里：值来自**同一个表达式**，且不因为继承来的环境而改变。
+ */
+
+function envOfGateway() {
+  return stack.buildGatewayEnv({ pgDsn: 'postgresql://x' }, { appSecret: VALID_SECRET, port: 9100, env: {} })
+}
+
+test('派生口径与 Go / Python 逐字一致（跨语言黄金向量）', () => {
+  // 由 python 侧真实实现算出：base64.urlsafe_b64encode(HMAC_SHA256('x'*32, domain)).rstrip('=')
+  // go 侧同口径见 config/derive_subsecret_test.go 的同一组向量
+  assert.equal(
+    stack.deriveSubsecret(VALID_SECRET, 'chiron-jwt'),
+    'SYvVXpKr8n5cZ_vf3u_0XzzekZyu1aXr-v225-TQbTg',
+  )
+  assert.equal(
+    stack.deriveSubsecret(VALID_SECRET, 'chiron-internal'),
+    'BzcOjSRtC43_-5jEb9X-OwD3Degb-CMKy8RwVEyQ9ok',
+  )
+  // base64url 且**无 padding**：Go 用 RawURLEncoding、Python 把 '=' 剥掉，多一个 '=' 就是 401
+  assert.match(stack.deriveSubsecret(VALID_SECRET, 'chiron-internal'), /^[A-Za-z0-9_-]{43}$/)
+})
+
+test('网关与引擎拿到同一个 INTERNAL_TOKEN / JWT_SECRET', () => {
+  const gatewayEnv = envOfGateway()
+  const engineEnv = stack.buildEngineEnv({ pgDsn: 'postgresql://x' }, { appSecret: VALID_SECRET, port: 9200, env: {} })
+
+  assert.equal(gatewayEnv.INTERNAL_TOKEN, engineEnv.INTERNAL_TOKEN)
+  assert.equal(gatewayEnv.JWT_SECRET, engineEnv.JWT_SECRET)
+  assert.equal(gatewayEnv.INTERNAL_TOKEN, 'BzcOjSRtC43_-5jEb9X-OwD3Degb-CMKy8RwVEyQ9ok')
+  assert.equal(engineEnv.JWT_SECRET, 'SYvVXpKr8n5cZ_vf3u_0XzzekZyu1aXr-v225-TQbTg')
+})
+
+test('继承来的同名变量不能把两侧推开：本地模式的密钥只由 APP_SECRET 决定', () => {
+  // 开发机上 shell / .env 加载器留下的旧值必须被覆盖，否则又是一次"各信各的"
+  const poisoned = { JWT_SECRET: 'stale-jwt-from-shell', INTERNAL_TOKEN: 'stale-internal-from-shell' }
+
+  const gatewayEnv = stack.buildGatewayEnv(
+    { pgDsn: 'postgresql://x' },
+    { appSecret: VALID_SECRET, port: 9100, env: { ...poisoned } },
+  )
+  const engineEnv = stack.buildEngineEnv(
+    { pgDsn: 'postgresql://x' },
+    { appSecret: VALID_SECRET, port: 9200, env: { ...poisoned } },
+  )
+
+  assert.notEqual(gatewayEnv.INTERNAL_TOKEN, poisoned.INTERNAL_TOKEN)
+  assert.equal(gatewayEnv.INTERNAL_TOKEN, engineEnv.INTERNAL_TOKEN)
+  assert.equal(gatewayEnv.JWT_SECRET, engineEnv.JWT_SECRET)
+})
+
+test('换一个 APP_SECRET，两个子进程的密钥一起变（不留旧值）', () => {
+  const other = 'y'.repeat(48)
+  const gatewayEnv = stack.buildGatewayEnv({ pgDsn: 'postgresql://x' }, { appSecret: other, port: 9100, env: {} })
+  const engineEnv = stack.buildEngineEnv({ pgDsn: 'postgresql://x' }, { appSecret: other, port: 9200, env: {} })
+
+  assert.equal(gatewayEnv.INTERNAL_TOKEN, stack.deriveSubsecret(other, 'chiron-internal'))
+  assert.equal(gatewayEnv.INTERNAL_TOKEN, engineEnv.INTERNAL_TOKEN)
+  assert.notEqual(engineEnv.JWT_SECRET, 'SYvVXpKr8n5cZ_vf3u_0XzzekZyu1aXr-v225-TQbTg')
+})
+
 // ------------------------------------------------------------------ 引擎进程
 
 /** 替换全局 fetch：本模块的探针都走 fetch，不打真实网络 */
@@ -516,6 +585,126 @@ test('引擎起不来时 stderr 尾部拼进错误：那是唯一能区分缺依
   })
   // 失败结论落在状态里（这个字段以前是死的）：组件管理页与日志才有的可展示
   assert.equal(stack.getStackState().engineFailure.reason, 'exited')
+})
+
+// ---------------------------------------------------- 引擎回调网关的地址（GATEWAY_INTERNAL_URL）
+
+test('buildEngineEnv 给定网关端口时写下真实回调地址，而不是让引擎用默认的 8080', () => {
+  const env = stack.buildEngineEnv(
+    { pgDsn: 'postgresql://x', redisAddr: '' },
+    { appSecret: VALID_SECRET, port: 9200, gatewayPort: 9100, env: {} },
+  )
+
+  assert.equal(env.GATEWAY_INTERNAL_URL, 'http://127.0.0.1:9100')
+})
+
+test('buildEngineEnv 不知道网关端口时不写这一项（写了就是替引擎编一个地址）', () => {
+  const env = stack.buildEngineEnv(
+    { pgDsn: 'postgresql://x', redisAddr: '' },
+    { appSecret: VALID_SECRET, port: 9200, env: {} },
+  )
+
+  assert.equal(env.GATEWAY_INTERNAL_URL, undefined)
+})
+
+test('startLocalStack 把网关端口预先告诉引擎：引擎先起，URL 只能 spawn 时给全', async t => {
+  const launcherChild = fakeChild()
+  launcherChild.stdin.on('finish', () => {
+    launcherChild.exitCode = 0
+    launcherChild.emit('exit', 0)
+  })
+  const calls = withSpawnQueue(t, [launcherChild, fakeChild(), fakeChild()])
+  mockFetch(t, async url => gatewayFetch(url))
+
+  const promise = stack.startLocalStack({
+    launcher: { command: 'py', cwd: '/' },
+    exe: 'gateway.exe',
+    port: 9460,
+    appSecret: VALID_SECRET,
+    engine: { command: 'py-engine', args: ['-m', 'app.main'], cwd: '/' },
+    enginePort: 9461,
+    intervalMs: 1,
+  })
+  launcherChild.stdout.write(
+    JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u@127.0.0.1:1/c', redis_addr: '127.0.0.1:2' }) + '\n',
+  )
+  await promise
+
+  // calls[1] = 引擎，calls[2] = 网关：两边必须落在同一个端口上
+  assert.equal(calls[1].options.env.GATEWAY_INTERNAL_URL, 'http://127.0.0.1:9460')
+  assert.equal(calls[2].options.env.PORT, '9460')
+})
+
+test('startLocalStack 在没给定端口时先挑一个，并同时告诉引擎和网关', async t => {
+  const launcherChild = fakeChild()
+  launcherChild.stdin.on('finish', () => {
+    launcherChild.exitCode = 0
+    launcherChild.emit('exit', 0)
+  })
+  const original = components.pickFreePort
+  components.pickFreePort = async () => 9777
+  t.after(() => {
+    components.pickFreePort = original
+  })
+  const calls = withSpawnQueue(t, [launcherChild, fakeChild(), fakeChild()])
+  mockFetch(t, async url => gatewayFetch(url))
+
+  const promise = stack.startLocalStack({
+    launcher: { command: 'py', cwd: '/' },
+    exe: 'gateway.exe',
+    appSecret: VALID_SECRET,
+    engine: { command: 'py-engine', args: ['-m', 'app.main'], cwd: '/' },
+    enginePort: 9778,
+    intervalMs: 1,
+  })
+  launcherChild.stdout.write(
+    JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u@127.0.0.1:1/c', redis_addr: '127.0.0.1:2' }) + '\n',
+  )
+  await promise
+
+  assert.equal(calls[1].options.env.GATEWAY_INTERNAL_URL, 'http://127.0.0.1:9777')
+  assert.equal(calls[2].options.env.PORT, '9777')
+})
+
+test('网关没能落在预定端口就失败：引擎已经按前者配置，将就是静默半残', async t => {
+  const launcherChild = fakeChild()
+  const gatewayFirst = fakeChild()
+  launcherChild.stdin.on('finish', () => {
+    launcherChild.exitCode = 0
+    launcherChild.emit('exit', 0)
+  })
+  const original = components.pickFreePort
+  components.pickFreePort = async () => 9555
+  t.after(() => {
+    components.pickFreePort = original
+  })
+  const calls = withSpawnQueue(t, [launcherChild, fakeChild(), gatewayFirst, fakeChild()])
+  // 预定的 9500 怎么都不就绪（像被别的进程占着），换到 9555 才通
+  mockFetch(t, async url => (String(url).includes('127.0.0.1:9500/') ? { ok: false } : gatewayFetch(url)))
+
+  const promise = stack.startLocalStack({
+    launcher: { command: 'py', cwd: '/' },
+    exe: 'gateway.exe',
+    port: 9500,
+    appSecret: VALID_SECRET,
+    engine: { command: 'py-engine', args: ['-m', 'app.main'], cwd: '/' },
+    enginePort: 9501,
+    intervalMs: 1,
+    timeoutMs: 40,
+  })
+  launcherChild.stdout.write(
+    JSON.stringify({ event: 'launcher-ready', pg_dsn: 'postgresql://u@127.0.0.1:1/c', redis_addr: '127.0.0.1:2' }) + '\n',
+  )
+
+  for (let i = 0; i < 200 && calls.length < 3; i += 1) await tick()
+  gatewayFirst.stderr.write('2026/11/01 listen tcp 127.0.0.1:9500: bind: address in use\n')
+
+  await assert.rejects(promise, err => {
+    assert.match(err.message, /没能落在预定端口 9500/)
+    assert.match(err.message, /9555/)
+    assert.equal(err.reason, 'gateway-port-drift')
+    return true
+  })
 })
 
 // ------------------------------------------------------------------ 引擎运行中退出
