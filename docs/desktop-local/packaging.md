@@ -112,6 +112,67 @@ embedded-postgres，而引擎还要 pydantic-ai / anthropic / openai / pymupdf /
 `sha256(RUNTIME_PYTHON_VERSION + 清单正文)`，把 target 掺进去会让所有存量 core 环境
 在升级后判"依赖变了"，触发一次本可避免的联网重建。
 
+### venv 的解释器绑定要跟着当前的包走
+
+`userData/local/{runtime,engine}/venv` 是跨版本、跨包共用的，但 venv 里的解释器**不是**
+一个独立的东西：Windows 的 `Scripts\python.exe` 只是跳转器，标准库与 DLL 由
+`pyvenv.cfg` 的 `home` 决定；POSIX 的 `bin/python3` 是指向 home 里解释器的符号链接。
+而 `home` 写的是**当初创建它那一次出包的绝对路径**。真机取到的两份：
+
+| venv | `home` 实际指向 |
+| --- | --- |
+| core | `D:\Program Files\Chiron\resources\python-runtime\win32-x64\cpython-3.12.16-…`（安装位置） |
+| engine | `X:\…\frontend-vue\release-m47\win-unpacked\resources\python-runtime\…`（某次临时验证出包） |
+
+那个目录被删（清理验证用的出包目录）或安装位置变了，解释器就再也起不来。实测把
+`home` 改指一个不存在的目录：
+
+```
+exit=103  stderr=No Python at '"X:\…\release-does-not-exist\…\python.exe"'  stdout=""
+```
+
+而 venv 的文件**一个都没少**，`fs.existsSync(Scripts\python.exe)` 仍然为真。旧代码只有
+两条出口：Windows 上报一句谁都看不懂的探测失败、POSIX 上（悬空链接）直接判
+`venv-missing` —— 两种都落到**全量重建**：实测引擎那份 340MB、两百多个包、必须联网，
+离线时本地模式从"能用"变成"不可用"，而日志里看不出真因只是"换了个包"。
+
+现在 `runtime-install.cjs::rebindVenvBinding()` 在 `inspectRuntime()` 的**开头**做一次性
+能修复，规则四条：
+
+- **判坏要看 home 里的解释器在不在**，不看目录在不在（目录还在、`python.exe` 被安全
+  软件单独隔离走，是同一个死法）；
+- **改绑排在任何"解释器在不在"的判定之前**（`inspectRuntime` 与 `ensureRuntime` 两处都
+  是），否则 POSIX 的悬空链接永远修不到；
+- **只替换 `home` 那一行**（临时文件 + rename），`uv` / `version_info` /
+  `include-system-site-packages` 这些 uv 自己写的键保持原样；替换用函数返回而不是模板
+  串，路径里出现 `$&` 时模板写法会被当成特殊序列；
+- **minor 版本相同才改绑**（`3.12.x`）。扩展按 minor 的 ABI 编译（`.cp312-*.pyd`），
+  补丁号不同改绑安全；跨 minor 就是换一种崩法，此时返回 `version-mismatch` 并带上
+  人话，`ensureRuntime` 直接跳到重建、**不再浪费一次注定失败的增量同步**（解释器本身
+  跑不起来，`uv pip install` 也用它）。
+
+返回值 `reason ∈ {rebound, binding-ok, no-binding-file, no-bundled-runtime,
+version-mismatch, write-failed, no-user-data}` 一路带到上层：`main.cjs` 在只读询问里记
+`runtime python binding rebound (<target>): <from> -> <to>`，`ensureRuntime` 通过
+`onLine` 落到 `[runtime]` 日志。改绑是"零成本修好但用户永远看不见"的那类自愈，
+不留这一行，下次就没法区分"环境从没装过"与"绑定还跟着上一个包跑"。
+
+真机自愈验证（拿本机两份**真实** venv，随包资源用 `release-m50/win-unpacked`）：
+破坏 `home` → 解释器 `exit=103` → `inspectRuntime` 返回 `rebound`、`ready=true`
+（探测器是真 `pkgutil.walk_packages` + 逐模块 import，不是替身）→ 解释器 `exit=0`，
+两条 uv 命令都没跑。POSIX 的悬空链接分支在 Windows 上跑不到，由
+`relinkPosixInterpreter` 的直接用例覆盖（只重指"确实是符号链接且目标已不存在"的那两个）。
+
+用例与门禁：`electron/__tests__/runtime-install.test.cjs` 本轮新增 19 条（该文件 42 条、
+electron 全套 257 条全绿）；变异验证 12 条全部被捕获（不再改绑 / 改绑排在存在性判定之后 /
+要求整串版本号相同 / 模板拼接替换 / 只看 home 目录 / 去掉版本闸门 / relink 不挑状态 /
+minor 不符仍试增量同步 / POSIX 的 home 少一层 bin / 随包根落在 sources / 半个包算可用 /
+`ensureRuntime` 那处同样排在存在性判定之后）。
+
+**这条修复只对未来出的包生效**：已经装到机器上的旧壳里没有 `rebindVenvBinding`，
+它照样会全量重建。所以清理验证用的出包目录前，先想清楚那台机器上的 venv 是不是
+旧壳建的（`pyvenv.cfg` 的 `home` 指哪儿）。
+
 `desktop-local/scripts/prepare_uv.py` / `prepare_python.py` 都是打包前的就位步骤，
 产物落到 `frontend-vue/assets/uv|python-runtime/<platform>/`，
 再经 `electron-builder.yml` 的 `extraResources` 映射进 `resources/`：
@@ -338,6 +399,21 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
   且它的 `dependencyFingerprint` 与 core 那份**不同**（两份清单内容不同）
 - `GET {apiUrl}/readyz` 返回 `pg=true`、`migration.ok=true`
 - 退出后 `netstat` 无 core / PG 残留监听
+
+**换过包之后再验一次解释器绑定**：`<userData>/local/{runtime,engine}/venv/pyvenv.cfg`
+的 `home` 应指向**当前这个包**的 `resources/python-runtime/<platform>/cpython-*`
+（POSIX 多一层 `bin`）。两个判据：
+
+```bash
+head -1 "$APPDATA/frontend-vue/local/runtime/venv/pyvenv.cfg"   # home 落在当前包内
+grep "binding rebound\|绑定已失效" "$APPDATA/frontend-vue/logs/main.log"
+```
+
+正常开机不该出现这两行（绑定本来就对）；出现一次且随后 `install.json` 没被改写、
+`logs` 里没有 `创建 Python 环境`，就是"换包后零成本自愈"生效了。
+**反过来**，如果日志里出现 `创建 Python 环境` 而 venv 又明明存在，八成是绑定修不上
+（版本对不上，或包里没有可用解释器）—— 按 §3 的 `version-mismatch` /
+`no-bundled-runtime` 分流去查，不要先怀疑依赖清单。
 
 ## 7. 已知限制
 
