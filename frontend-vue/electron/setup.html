@@ -88,22 +88,31 @@
       button.primary { background: var(--primary); border-color: var(--primary); color: #fff; }
       button.primary:hover:not(:disabled) { background: var(--primary-hover); border-color: var(--primary-hover); color: #fff; }
       button:disabled { opacity: 0.55; cursor: not-allowed; }
+      .actions.sub { margin-top: 10px; }
+      .actions.sub button { font-size: 12.5px; }
     </style>
   </head>
   <body>
     <main>
       <h1>连接 Chiron 服务</h1>
-      <p class="lead">桌面客户端需要知道你的 Chiron 服务地址。填写后可以随时在设置里修改。</p>
+      <p class="lead">桌面客户端需要知道你的 Chiron 服务地址。填写后随时可以在「设置 → 运行模式」里改回来。</p>
 
       <label for="url">服务地址</label>
       <input id="url" type="url" placeholder="http://127.0.0.1:8080" autocomplete="off" spellcheck="false" />
-      <p class="hint">自托管通常填本机地址；也可填局域网或公网地址（需 https）。</p>
+      <p class="hint">
+        自托管通常填本机地址；也可填局域网或公网地址。服务还没起来也没关系 ——
+        地址可以直接保存，起来之后重新测试即可。
+      </p>
 
       <div id="status" class="status"></div>
 
       <div class="actions">
         <button id="test" type="button">测试连接</button>
         <button id="save" type="button" class="primary" disabled>保存并进入</button>
+      </div>
+      <!-- 这个页面常常是当时唯一的窗口：没有出口，地址填错的人就被锁在这里 -->
+      <div class="actions sub">
+        <button id="local" type="button">改用本地模式</button>
       </div>
     </main>
 
@@ -112,59 +121,121 @@
       const statusEl = document.getElementById('status')
       const testBtn = document.getElementById('test')
       const saveBtn = document.getElementById('save')
+      const localBtn = document.getElementById('local')
+      const host = window.chironDesktop || {}
 
-      let verified = '' // 最近一次测试通过的地址；只有它才允许「保存并进入」
+      let pending = false // 有一个动作正跑着（测连接 / 保存 / 切模式）
+      let verified = '' // 最近一次测试通过的地址，只用于状态提示，不再挡保存
 
       function setStatus(text, kind) {
         statusEl.textContent = text
         statusEl.className = 'status' + (kind ? ' ' + kind : '')
       }
 
-      function busy(on) {
-        testBtn.disabled = on
-        urlInput.disabled = on
-        saveBtn.disabled = on || !verified || verified !== urlInput.value.trim()
+      /** 与服务端 normalizeApiUrl 同口径：只认 http(s)，主进程那份拒绝的这里也别想存 */
+      function isStorableUrl(raw) {
+        if (!raw) return false
+        try {
+          const parsed = new URL(raw)
+          return parsed.protocol === 'http:' || parsed.protocol === 'https:'
+        } catch {
+          return false
+        }
       }
 
-      // 地址一改，之前的验证结果就作废 —— 不允许"测了 A 却保存 B"
-      urlInput.addEventListener('input', () => {
-        if (urlInput.value.trim() !== verified) {
+      /**
+       * 按钮状态只有一个真相来源：地址格式合法 + 没有动作在跑。
+       *
+       * 旧判据是「必须先测通、且测的还是当前这个地址」。前半条太硬：服务还没起来、
+       * 端口写错、探测被防火墙挡住的时刻，恰恰就是最需要把地址存下来的时刻，
+       * 而硬闸门把用户钉在页面上 —— 存不了、也走不掉。后半条（测 A 存 B）仍然保留：
+       * 保存的永远是当前输入框里的值，改一个字就作废上次测试结果。
+       */
+      function sync() {
+        const value = urlInput.value.trim()
+        if (verified && value !== verified) {
           verified = ''
-          setStatus('')
+          if (!pending) setStatus('')
         }
-        saveBtn.disabled = !verified || verified !== urlInput.value.trim()
-      })
+        urlInput.disabled = pending
+        testBtn.disabled = pending
+        saveBtn.disabled = pending || !isStorableUrl(value)
+        localBtn.disabled = pending
+      }
+
+      urlInput.addEventListener('input', sync)
+
+      // 预填当前地址：看不见旧地址就谈不上"改"它 —— 从本地模式切过来时，
+      // config.json 里往往正留着一个上个时代留下的地址。
+      void (async () => {
+        try {
+          const settings = await host.getDeviceSettings()
+          if (settings && settings.apiUrl && !urlInput.value) {
+            urlInput.value = settings.apiUrl
+            setStatus('当前地址：' + settings.apiUrl, 'busy')
+          }
+        } catch {
+          /* 旧外壳没有这个接口：当作没配过 */
+        }
+        sync()
+        urlInput.focus()
+      })()
 
       testBtn.addEventListener('click', async () => {
         const value = urlInput.value.trim()
-        if (!value) { setStatus('请先填写服务地址', 'error'); return }
-        busy(true)
+        if (!value) {
+          setStatus('请先填写服务地址', 'error')
+          return
+        }
+        pending = true
+        sync()
         setStatus('正在连接…', 'busy')
         try {
-          await window.chironDesktop.testApiUrl(value)
+          await host.testApiUrl(value)
           verified = value
           setStatus('连接成功', 'ok')
         } catch (err) {
           verified = ''
-          setStatus(String(err && err.message ? err.message : err), 'error')
+          setStatus(
+            String(err && err.message ? err.message : err) + '（地址照样可以保存，服务起来后再测）',
+            'error',
+          )
         } finally {
-          busy(false)
+          pending = false
+          sync()
         }
       })
 
       saveBtn.addEventListener('click', async () => {
-        if (!verified) return
-        busy(true)
+        const value = urlInput.value.trim()
+        if (!isStorableUrl(value)) return
+        pending = true
+        sync()
+        setStatus('正在保存…', 'busy')
         try {
-          await window.chironDesktop.setApiUrl(verified)
+          await host.setApiUrl(value)
           setStatus('已保存，正在进入…', 'ok')
         } catch (err) {
           setStatus(String(err && err.message ? err.message : err), 'error')
-          busy(false)
+          pending = false
+          sync()
         }
       })
 
-      urlInput.focus()
+      // 回本地：模式切换由主进程执行（清云端分区 + 写盘 + 重启），这里只收集意图
+      localBtn.addEventListener('click', async () => {
+        pending = true
+        sync()
+        setStatus('正在切换到本地模式…', 'busy')
+        try {
+          await host.setMode('local', {})
+          await host.restart()
+        } catch (err) {
+          setStatus(String(err && err.message ? err.message : err), 'error')
+          pending = false
+          sync()
+        }
+      })
     </script>
   </body>
 </html>

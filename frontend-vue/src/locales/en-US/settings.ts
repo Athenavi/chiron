@@ -73,6 +73,12 @@ export default {
   run_mode_switch_failed: "Failed to switch the mode, please try again later.",
   run_mode_desktop_only: "The run mode can only be switched in the desktop app.",
   run_mode_switch_to_local: "Switch back to local mode",
+  run_mode_open_setup: "Configure service address",
+  run_mode_api_url: "Service address",
+  run_mode_api_url_unset: "Not configured",
+  run_mode_api_url_edit: "Change…",
+  run_mode_api_url_hint: "Changing it opens the connection setup page and reloads the current view.",
+  run_mode_api_url_unsupported: "This client version can't change the service address in-app: quit the app and edit the apiUrl field in the config file.",
   // ── User-level API keys (P1-3): credentials for calling the gateway with your
   //    own account — distinct from the admin console's model provider keys ──
   user_api_key_title: "API Keys",

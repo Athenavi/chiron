@@ -66,6 +66,33 @@ function pickDocumentResult(result) {
   return { path: filePath, name: path.basename(filePath) }
 }
 
+/**
+ * 建窗分流：这次启动该加载哪个页面，以及把哪个地址交给 preload。
+ *
+ * 抽成纯函数放这里还是那条老理由 —— main.cjs 一 require 就会起 Electron，单测没法直接
+ * 覆盖它；而这条判据恰好是「切到云模式后改不了服务地址」的全部因果：旧实现只看
+ * `apiUrl` 空不空，config.json 里一个陈旧地址（上个时代的自托管端口、写错的域名）
+ * 就足以把窗口送进主界面 —— 配置页永不出现，而主界面里当时没有任何改地址的入口：
+ * 设置页在登录之后才进得去，后端不可达就登不了录。
+ *
+ * `pendingApiUrl` 由 mode-switch.cjs 在「切到云端模式」时置位、建窗时消费，含义是
+ * 「这次进云端还没确认过服务地址」。切模式必然重启，所以标记要落盘才活得到新进程；
+ * 但只用一次 —— 云端模式下正常重开应用不该再被拦到配置页。
+ */
+function resolveStartupWindow(options = {}) {
+  const { mode, apiUrl, localBackend, pendingApiUrl, forceSetup } = options
+  if (mode === 'cloud') {
+    return {
+      target: forceSetup || pendingApiUrl || !apiUrl ? 'setup' : 'app',
+      apiUrl: apiUrl || '',
+    }
+  }
+  const backend = localBackend || {}
+  // 本地后端没就绪：落到通用错误页并写清楚原因，而不是留给用户一个空白窗口
+  if (backend.ok && backend.baseUrl) return { target: 'app', apiUrl: backend.baseUrl }
+  return { target: 'error', apiUrl: '' }
+}
+
 module.exports = {
   API_URL_ARG_PREFIX,
   MODE_ARG_PREFIX,
@@ -75,4 +102,5 @@ module.exports = {
   partitionFor,
   shouldQuitOnAllWindowsClosed,
   pickDocumentResult,
+  resolveStartupWindow,
 }

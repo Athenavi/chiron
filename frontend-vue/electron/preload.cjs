@@ -81,6 +81,8 @@ contextBridge.exposeInMainWorld('chironDesktop', {
   setMode: (nextMode, opts) => ipcRenderer.invoke('desktop:set-mode', nextMode, opts || {}),
   /** 重启应用（不改模式） */
   restart: () => ipcRenderer.invoke('desktop:restart'),
+  /** 打开连接配置页（改服务地址）：主进程会重建窗口，当前界面随之重载 */
+  openSetup: () => ipcRenderer.invoke('desktop:open-setup'),
 
   /** 测试连通性（打后端 /health）：成功 resolve，失败 reject 出可读 message */
   testApiUrl: url => ipcRenderer.invoke('desktop:test-api-url', url),

@@ -45,6 +45,14 @@ function openSwitch() {
   modalOpen.value = true
 }
 
+const apiUrl = computed(() => (device.settings && device.settings.apiUrl) || '')
+
+async function openConnectionSetup() {
+  // 主进程会重建窗口：不支持的外壳只能给出可执行的下一步，而不是一个没反应的按钮
+  const opened = await device.openConnectionSetup()
+  if (!opened) message.info(t('settings.run_mode_api_url_unsupported'))
+}
+
 async function submit() {
   if (!confirmOk.value || switching.value) return
   switching.value = true
@@ -93,6 +101,28 @@ onMounted(() => {
           {{ currentLabel }}
         </a-tag>
         <span class="mode-hint">{{ $t('settings.run_mode_hint') }}</span>
+      </div>
+      <!-- 服务地址只有云端模式有意义。地址填错的代价是"登不进去、也就进不了设置页"，
+           所以这一行连同登录页那个入口一起，是为了让改地址这条路永远走得通。 -->
+      <div
+        v-if="device.isDesktop && !device.isLocal()"
+        class="mode-row"
+      >
+        <span class="mode-label">{{ $t('settings.run_mode_api_url') }}</span>
+        <span class="mode-value">{{ apiUrl || $t('settings.run_mode_api_url_unset') }}</span>
+        <a-button
+          size="small"
+          :disabled="!device.canOpenSetup"
+          @click="openConnectionSetup"
+        >
+          {{ $t('settings.run_mode_api_url_edit') }}
+        </a-button>
+        <span
+          v-if="device.canOpenSetup"
+          class="mode-hint"
+        >
+          {{ $t('settings.run_mode_api_url_hint') }}
+        </span>
       </div>
       <div class="mode-row">
         <a-button
@@ -155,6 +185,12 @@ onMounted(() => {
 .mode-block-title { font-weight: var(--fw-semibold); color: var(--text-primary); margin-bottom: 12px; }
 .mode-row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 12px; }
 .mode-label { color: var(--text-primary); }
+.mode-value {
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 12.5px;
+  overflow-wrap: anywhere;
+}
 .mode-hint { color: var(--text-secondary); font-size: 12px; }
 .mode-modal-line { margin: 0 0 10px; color: var(--text-primary); }
 .mode-clear-list {

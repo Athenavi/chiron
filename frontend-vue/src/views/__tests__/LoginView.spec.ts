@@ -13,6 +13,8 @@ import { createRouter, createMemoryHistory } from 'vue-router'
  *    这是**安全相关**的：把普通用户送进管理后台、或把管理员留在对话页，都不是外观问题 ✓；
  * ② **短信倒计时**：`useSmsCountdown`（`:79`）没接上的话"获取验证码"按钮**一直可点** ⇒ 可被连续触发短信 ✓
  *    （同 `RegisterView` 那条，但登录页是**双通道**：短信 `:79` + 邮箱 `:203`）。
+ * ③ **桌面端的「配置服务地址」入口**（M51）：地址不可达时登录必然失败，设置页又在登录之后，
+ *    没有这个入口就只能手改 `config.json` —— 于是它必须渲染、必须把动作交给主进程 ✓。
  */
 
 if (!window.matchMedia) {
@@ -64,6 +66,7 @@ const deviceStoreMock = vi.hoisted(() => ({
   isCloud: () => true,
   setMode: vi.fn((): Promise<void> => Promise.resolve()),
   restart: vi.fn((): Promise<void> => Promise.resolve()),
+  openConnectionSetup: vi.fn((): Promise<boolean> => Promise.resolve(true)),
 }))
 
 vi.mock('../../api/auth', () => authApi)
@@ -88,6 +91,8 @@ function mountView() {
 describe('LoginView（此前零测试）', () => {
   beforeEach(() => {
     vi.clearAllMocks()
+    // 默认回到 Web 端语义：桌面专属的入口（切回本地 / 改服务地址）默认不渲染
+    deviceStoreMock.isDesktop = false
     authStoreMock.login.mockResolvedValue(undefined)
     authStoreMock.user = null
     authApi.getCaptchaPublicConfig.mockResolvedValue({ enabled: false })
@@ -163,6 +168,35 @@ describe('LoginView（此前零测试）', () => {
     expect(authApi.sendSmsCode).toHaveBeenCalled()
     const after = wrapper.findAll('button').find(b => /获取验证码|发送|重发|send|\d/i.test(b.text()))
     expect(after!.attributes('disabled')).toBeDefined()
+    wrapper.unmount()
+  })
+
+  it('★ 桌面 + 云端：登录页有「配置服务地址」入口，点了交给主进程的配置页', async () => {
+    // 云端地址不可达 ⇒ 登录必然失败 ⇒ 设置页（登录后才存在）里的改地址入口够不着。
+    // 这个入口一旦掉回"只有隐藏菜单里的 Ctrl+,"，用户就只能手改 config.json 再重开。
+    //
+    // ⚠ 选 `a-button` 而不是 `button`：本文件不注册 antd，`<a-button>` 会以未知元素
+    // 原样出现在 DOM 里（登录/注册那两个是模板里手写的 `<button>`），而 `@click`
+    // 仍挂在这些元素上，所以 trigger 照样能走通。
+    deviceStoreMock.isDesktop = true
+    const wrapper = mountView()
+    await flushPromises()
+
+    const btn = wrapper.findAll('a-button').find(b => /配置服务地址/.test(b.text()))
+    expect(btn).toBeTruthy()
+    await btn!.trigger('click')
+    await flushPromises()
+
+    expect(deviceStoreMock.openConnectionSetup).toHaveBeenCalledTimes(1)
+    wrapper.unmount()
+  })
+
+  it('Web 端不显示该入口：浏览器里没有主进程，配置页无从打开', async () => {
+    const wrapper = mountView()
+    await flushPromises()
+
+    expect(wrapper.findAll('a-button').some(b => /配置服务地址/.test(b.text()))).toBe(false)
+    expect(deviceStoreMock.openConnectionSetup).not.toHaveBeenCalled()
     wrapper.unmount()
   })
 })

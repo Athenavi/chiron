@@ -34,6 +34,8 @@ const {
   saveApiUrl,
   saveDeviceSettings,
   saveMode,
+  markApiUrlPending,
+  consumeApiUrlPending,
   probe,
 } = require('./config.cjs')
 const shared = require('./shared.cjs')
@@ -43,6 +45,7 @@ const {
   DEFAULT_DEV_URL,
   partitionFor,
   shouldQuitOnAllWindowsClosed,
+  resolveStartupWindow,
 } = shared
 /**
  * 本地设备 token 的注入前缀（`--chiron-device-token=<token>`）。
@@ -754,6 +757,8 @@ async function askInitialMode(settings) {
     })
     const mode = response === 1 ? 'cloud' : 'local'
     saveMode(mode)
+    // 首启就选云端同样要先确认地址：迁移过来的 apiUrl 未必还连得上
+    if (mode === 'cloud') markApiUrlPending()
     logMain('info', `${isMigration ? 'legacy config migrated' : 'initial mode chosen'}: ${mode}`)
     return true
   } catch (err) {
@@ -941,17 +946,19 @@ function createWindow() {
   currentMode = resolveMode(settings)
   const partition = partitionFor(currentMode)
 
-  let apiUrl = ''
-  let target = 'app'
-  if (currentMode === 'cloud') {
-    apiUrl = resolveApiUrl()
-    target = !forceSetup && apiUrl ? 'app' : 'setup'
-  } else if (localBackend.ok && localBackend.baseUrl) {
-    apiUrl = localBackend.baseUrl
-  } else {
-    // 本地后端没就绪：落到通用错误页并写清楚原因，而不是留给用户一个空白窗口
-    target = 'error'
-  }
+  // 切进云端的那一次先落到配置页（标记在这里消费，只用一次）：只看「地址非空」
+  // 会让上个时代留下的地址直接把人送进主界面，而那里当时没有改地址的地方。
+  const pendingApiUrl = currentMode === 'cloud' && consumeApiUrlPending()
+  const route = resolveStartupWindow({
+    mode: currentMode,
+    apiUrl: resolveApiUrl(),
+    localBackend,
+    pendingApiUrl,
+    forceSetup,
+  })
+  const apiUrl = route.apiUrl
+  const target = route.target
+  if (pendingApiUrl) logMain('info', 'cloud mode entered: confirm the service address first')
   currentApiUrl = apiUrl
   // 会话监听必须在建窗之前挂好：窗口一创建就开始发首次请求
   configureSession(partition)
@@ -1279,6 +1286,15 @@ if (!gotLock) {
       assertTrustedSender(event)
       saveApiUrl(url)
       relaunchIntoApp()
+      return true
+    })
+
+    // 「修改服务地址」的界面入口（设置页与登录页用）。
+    // 在此之前唯一的入口是菜单里那个「连接设置…」—— 快捷键 Ctrl+,，而菜单栏默认隐藏，
+    // 等于没有入口：地址填错时主界面连不上后端，设置页又在登录之后，用户只能手改 config.json。
+    ipcMain.handle('desktop:open-setup', event => {
+      assertTrustedSender(event)
+      relaunchIntoSetup()
       return true
     })
 

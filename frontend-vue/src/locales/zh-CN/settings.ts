@@ -73,6 +73,12 @@ export default {
   run_mode_switch_failed: "切换模式失败，请稍后重试。",
   run_mode_desktop_only: "只有桌面客户端可以切换运行模式。",
   run_mode_switch_to_local: "切回本地模式",
+  run_mode_open_setup: "配置服务地址",
+  run_mode_api_url: "服务地址",
+  run_mode_api_url_unset: "尚未配置",
+  run_mode_api_url_edit: "修改…",
+  run_mode_api_url_hint: "改地址会打开连接配置页，当前界面随之重新加载。",
+  run_mode_api_url_unsupported: "当前客户端版本不支持在应用内改服务地址：请退出后编辑配置文件里的 apiUrl。",
   // ── 用户级 API Key 自助（P1-3）：管的是「我的账号调网关的凭证」，
   //    与管理后台的模型服务商密钥不是一回事 ──
   user_api_key_title: "API Key",

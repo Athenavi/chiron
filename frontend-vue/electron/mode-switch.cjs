@@ -8,7 +8,7 @@
  *
  * 顺序是硬要求，不能换：
  *   停后端 → 清离开模式的 partition → 清云 token →（可选）删本地数据
- *          → 写 mode → relaunch + exit
+ *          → 写 mode →（切进云端）标记待确认服务地址 → relaunch + exit
  * 先清后写：写盘一旦成功，重启就是既成事实；反过来若清理失败还没写盘，
  * 用户仍停在原模式，不会出现「模式已切但旧 cookie 还在」的串味状态。
  *
@@ -18,6 +18,7 @@ const {
   MODE_LABELS,
   clearMode,
   configPath,
+  markApiUrlPending,
   normalizeMode,
   readDeviceSettings,
   saveMode,
@@ -190,6 +191,7 @@ async function switchMode(options = {}) {
     deletedLocalData: false,
     restarted: false,
     skipped: false,
+    needsApiUrl: false,
   }
 
   if (prevMode === nextMode) {
@@ -205,6 +207,13 @@ async function switchMode(options = {}) {
     await clearCloudToken(options, result, log)
     if (deleteLocalData) await removeLocalData(api, options, result, log)
     saveMode(nextMode)
+    // 切进云端 ⇒ 把「确认服务地址」排在这次启动的最前面；切回本地 ⇒ 顺手清掉，
+    // 免得盘上留一个"切云端时要确认"的陈旧标记，和下次真正的切换混成一回事。
+    // 判据不能是「地址为空」：保留旧 apiUrl 正是切模式的契约，而恰恰是这个保留下来的
+    // 陈旧地址会把用户锁死 —— 后端不可达 ⇒ 登不了录 ⇒ 进不了设置页，改不了地址。
+    const confirmApiUrl = nextMode === 'cloud'
+    markApiUrlPending(confirmApiUrl)
+    result.needsApiUrl = confirmApiUrl
   } catch (err) {
     const rolledBack = rollback({ mode: prevMode, modeChosen: settings.modeChosen })
     const detail = (err && err.message) || String(err)

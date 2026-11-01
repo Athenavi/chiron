@@ -36,6 +36,13 @@ function openModeSwitch() {
   modeModalOpen.value = true
 }
 
+// 改服务地址：与「切回本地模式」同一个位置。云端地址不可达时登录必然失败，
+// 而设置页在登录之后才存在 —— 没有这个入口，用户只能去手改 config.json。
+async function openConnectionSetup() {
+  const opened = await deviceStore.openConnectionSetup()
+  if (!opened) message.info(t('settings.run_mode_api_url_unsupported'))
+}
+
 async function submitModeSwitch() {
   if (!modeConfirmOk.value || modeSwitching.value) return
   modeSwitching.value = true
@@ -448,6 +455,14 @@ async function handleLogin() {
       <div style="display: flex; justify-content: flex-end; gap: 8px; margin-block-end: 8px">
         <!-- 桌面端：登录页也要能切回本地模式。
              否则"切到云端 → 退出登录/未登录 → 想回本地"就无路可走（设置页在登录后）。 -->
+        <a-button
+          v-if="canSwitchToLocal"
+          size="small"
+          type="link"
+          @click="openConnectionSetup"
+        >
+          {{ $t('settings.run_mode_open_setup') }}
+        </a-button>
         <a-button
           v-if="canSwitchToLocal"
           size="small"

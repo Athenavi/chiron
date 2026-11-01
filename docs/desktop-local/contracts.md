@@ -27,6 +27,9 @@
   "migration": {
     "legacyCloudDetected": false,
     "modeChosenAt": ""
+  },
+  "setup": {
+    "pendingApiUrl": false
   }
 }
 ```
@@ -37,6 +40,17 @@
   HTTP 缓存 / token；**默认不删** `userData/local/**` 用户数据。
 - 切换后必须重启应用（`app.relaunch()` + `app.exit(0)`），避免两个后端并存。
 - 老用户已有 `apiUrl` 且无 `mode` 时，首次启动弹迁移提示，默认 `local`，但保留 `apiUrl`。
+- `setup.pendingApiUrl` 是**跨重启、只用一次**的标记：切进云端（含首启选云端）时置位，
+  建窗时消费并清零。它存在的原因是上一条"`apiUrl` 保留"——保留下来的地址可能是上个时代
+  留下的、已经连不上的地址，而"地址非空"不等于"用户确认过"：后端不可达 ⇒ 登不了录 ⇒
+  进不了设置页 ⇒ 没有任何改地址的入口。切回本地时顺手清掉，盘上不留来路不明的待确认。
+- 启动分流集中在 `shared.cjs::resolveStartupWindow`（纯函数，判据只有模式 / 地址 /
+  本地后端就绪 / 待确认标记 / `forceSetup` 五个输入）：云端有待确认标记或没地址 →
+  `setup.html`；本地后端就绪 → 主界面（注入本机地址）；本地没就绪 → `error.html`。
+  **标记不得影响本地模式**，本地也永远不该被送去云端地址配置页。
+- `setup.html` 保存只卡地址格式（`http(s)`），**不卡"必须先测通"**：服务还没起来、端口写错、
+  探测被防火墙挡住的时刻恰恰最需要把地址存下来；但保存的永远是输入框当前值，测 A 存 B 仍不可能。
+  页面打开时预填旧地址，并提供「改用本地模式」出口（它常常是当时唯一的窗口）。
 
 ## 2. preload 契约
 
@@ -52,6 +66,8 @@ interface DeviceSettings {
   local: { dataDir: string; lastStartedAt: string }
   ui: { locale: string; theme: string }
   migration: { legacyCloudDetected: boolean; modeChosenAt: string }
+  // §1 的跨重启一次性标记：主进程建窗时消费，渲染进程读到也不该再动它
+  setup: { pendingApiUrl: boolean }
 }
 
 interface ComponentInfo {
@@ -87,6 +103,12 @@ interface ChironDesktop {
 
   testApiUrl(url: string): Promise<boolean>
   setApiUrl(url: string): Promise<boolean>
+  /**
+   * 打开主进程的连接配置页（`setup.html`），重建窗口。
+   * 改服务地址在应用内**只有这一个实现**：设置页与登录页都调它，界面里不内嵌第二个编辑器，
+   * 否则校验与探测就有两套口径。老外壳没有这个成员，调用方据此禁用入口。
+   */
+  openSetup(): Promise<boolean>
 
   getToken(): Promise<string>
   saveToken(token: string): Promise<boolean>
@@ -111,7 +133,7 @@ interface ChironDesktop {
 }
 ```
 
-IPC channel 命名统一 `desktop:<verb>`。`ipcMain.handle` 实际注册的 17 个：
+IPC channel 命名统一 `desktop:<verb>`。`ipcMain.handle` 实际注册的 18 个：
 
 ```
 desktop:get-device-settings
@@ -119,6 +141,7 @@ desktop:set-mode
 desktop:restart
 desktop:test-api-url
 desktop:set-api-url
+desktop:open-setup
 desktop:get-token
 desktop:save-token
 desktop:clear-token
@@ -320,6 +343,9 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - 不要默认删除 `userData/local/**`。
 - 云端片段推理端点见 §9。
 - 不要改 `internal/**`（Go）与 `frontend-vue/src/**` 之外的共享文件而不在本文件登记。
+- 不要用「`apiUrl` 非空」判定云端已经配好可进主界面（§1）：保留旧地址是切模式的契约，
+  而旧地址未必还连得上——不可达的后端会让设置页（登录后才存在）够不着，用户被锁在门外。
+  判据是 `setup.pendingApiUrl`，且只有 `resolveStartupWindow` 一处。
 
 ## 9. 桌面片段推理端点
 

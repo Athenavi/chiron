@@ -35,6 +35,8 @@ const DEFAULT_DEVICE_SETTINGS = {
   local: { dataDir: '', lastStartedAt: '' },
   ui: { locale: 'zh-CN', theme: 'system' },
   migration: { legacyCloudDetected: false, modeChosenAt: '' },
+  /** 跨重启、只用一次：切进云端模式后，进主界面之前必须先确认服务地址 */
+  setup: { pendingApiUrl: false },
 }
 
 /** 只认字符串：配置文件是用户可手改的，任何字段都可能是 null / 数字 / 对象 */
@@ -132,6 +134,7 @@ function shapeDeviceSettings(raw, options = {}) {
   const local = isPlainObject(src.local) ? src.local : {}
   const ui = isPlainObject(src.ui) ? src.ui : {}
   const migration = isPlainObject(src.migration) ? src.migration : {}
+  const setup = isPlainObject(src.setup) ? src.setup : {}
 
   const modeChosen = Boolean(declaredMode)
   const needsMigration = configExists && !modeChosen
@@ -157,6 +160,7 @@ function shapeDeviceSettings(raw, options = {}) {
       legacyCloudDetected,
       modeChosenAt: asString(migration.modeChosenAt),
     },
+    setup: { pendingApiUrl: Boolean(setup.pendingApiUrl) },
     needsMigration,
     needsModeChoice,
     modeChosen,
@@ -209,6 +213,11 @@ function sanitizePatch(patch) {
       out.migration.modeChosenAt = asString(migration.modeChosenAt)
     }
   }
+  if (src.setup !== undefined) {
+    const setup = isPlainObject(src.setup) ? src.setup : {}
+    out.setup = {}
+    if (setup.pendingApiUrl !== undefined) out.setup.pendingApiUrl = Boolean(setup.pendingApiUrl)
+  }
   return out
 }
 
@@ -217,6 +226,7 @@ function toDiskShape(settings) {
   const local = isPlainObject(settings.local) ? settings.local : {}
   const ui = isPlainObject(settings.ui) ? settings.ui : {}
   const migration = isPlainObject(settings.migration) ? settings.migration : {}
+  const setup = isPlainObject(settings.setup) ? settings.setup : {}
   return {
     mode: normalizeMode(settings.mode),
     apiUrl: asString(settings.apiUrl),
@@ -229,10 +239,20 @@ function toDiskShape(settings) {
       legacyCloudDetected: Boolean(migration.legacyCloudDetected),
       modeChosenAt: asString(migration.modeChosenAt),
     },
+    setup: { pendingApiUrl: Boolean(setup.pendingApiUrl) },
   }
 }
 
-const KNOWN_KEYS = ['mode', 'apiUrl', 'local', 'ui', 'migration', 'needsMigration', 'modeChosen']
+const KNOWN_KEYS = [
+  'mode',
+  'apiUrl',
+  'local',
+  'ui',
+  'migration',
+  'setup',
+  'needsMigration',
+  'modeChosen',
+]
 
 /**
  * 保存设备设置（局部更新）。
@@ -310,6 +330,32 @@ function saveApiUrl(raw) {
   return saveDeviceSettings({ apiUrl: normalizeApiUrl(raw) }).apiUrl
 }
 
+/**
+ * 标记「切进云端模式后还没确认过服务地址」。
+ *
+ * 传 false 是"这一局用不到它"（切回本地模式时顺手清掉），不是"用户已经确认过了"。
+ *
+ * 为什么要有这个标记，而不是继续用"地址非空就算已配置"：切模式的契约是保留 apiUrl
+ * （见 saveMode），于是上一个时代留下的地址 —— 已经关掉的自托管端口、写错的域名 ——
+ * 会被当成"已配置"直接进主界面，而配置页只在地址为空时出现。用户在主界面里既登不了
+ * 录（后端不可达）也没有改地址的入口（设置页在登录之后），等于把自己锁在门外。
+ */
+function markApiUrlPending(pending = true) {
+  return saveDeviceSettings({ setup: { pendingApiUrl: Boolean(pending) } }).setup.pendingApiUrl
+}
+
+/**
+ * 读取并立即清掉标记（建窗时消费，一次启动只用得上一次）。
+ *
+ * 只在真为 true 时写盘：否则每次正常启动都要重写一遍 config.json，
+ * 把"这台机器从没切过模式"的文件时间戳也搅浑了。
+ */
+function consumeApiUrlPending() {
+  if (!readDeviceSettings().setup.pendingApiUrl) return false
+  saveDeviceSettings({ setup: { pendingApiUrl: false } })
+  return true
+}
+
 /** 连通性探测：打后端的 /health（它只回存活，不查依赖，适合做客户端握手） */
 async function probe(apiUrl) {
   const base = normalizeApiUrl(apiUrl)
@@ -346,5 +392,7 @@ module.exports = {
   resolveMode,
   resolveApiUrl,
   saveApiUrl,
+  markApiUrlPending,
+  consumeApiUrlPending,
   probe,
 }

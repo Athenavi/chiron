@@ -45,6 +45,8 @@ export interface ChironDesktopHost {
   getDeviceSettings?: () => Promise<DeviceSettings>
   setMode?: (mode: ChironMode, opts?: { deleteLocalData?: boolean }) => Promise<void>
   restart?: () => Promise<void>
+  /** 打开主进程的连接配置页（改服务地址）；老外壳没有这个成员 */
+  openSetup?: () => Promise<unknown>
 }
 
 /** localStorage 镜像键（真相在主进程 config.json，这里只镜像） */
@@ -125,6 +127,9 @@ export const useDeviceStore = defineStore('device', () => {
   /** 是否运行在桌面外壳里（Web 端无法切换模式） */
   const isDesktop = computed(() => isDesktopHost())
 
+  /** 外壳是否支持「在应用内改服务地址」：Web 端与老 preload 都是 false */
+  const canOpenSetup = computed(() => typeof desktopHost()?.openSetup === 'function')
+
   /** 本地模式：不走登录、不连云端接口 */
   function isLocal(): boolean {
     return mode.value === 'local'
@@ -204,6 +209,23 @@ export const useDeviceStore = defineStore('device', () => {
   }
 
   /**
+   * 打开「连接配置页」改服务地址。
+   *
+   * 界面里不内嵌第二个编辑器：地址的校验、连通性探测与落盘都已经在主进程有一套
+   * （`config.cjs` + `setup.html`），复制一份就等于两套口径 —— 而这次要修的正是
+   * "改不了地址"：此前唯一的入口是隐藏菜单里的 Ctrl+,。
+   *
+   * 返回 false 表示外壳不支持（老 preload 没有 `openSetup`），由调用方提示用户。
+   * 成功时主进程会重建窗口，本页面随之卸载，不需要在这里收尾。
+   */
+  async function openConnectionSetup(): Promise<boolean> {
+    const host = desktopHost()
+    if (!host || !host.openSetup) return false
+    await host.openSetup()
+    return true
+  }
+
+  /**
    * 重启应用（契约：切换后必须重启，避免两个后端并存）。
    * 若主进程的 `setMode` 自己已经 `app.relaunch()`，这里多半来不及执行 —— 无副作用。
    */
@@ -222,11 +244,13 @@ export const useDeviceStore = defineStore('device', () => {
     loading,
     switching,
     isDesktop,
+    canOpenSetup,
     isLocal,
     isCloud,
     ensureReady,
     refresh,
     setMode,
     restart,
+    openConnectionSetup,
   }
 })

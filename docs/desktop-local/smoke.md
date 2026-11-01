@@ -218,5 +218,9 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
    `frontend-vue` 的 `npm run build:desktop` + 手工窗口，或后续加 Playwright/wdio 层。
 2. **不验 SSE / `/events`**：需要长期连接，放进 `verify_p0.py` 更合适。
 3. **不验模式切换 / 云端模式**：切换会 relaunch，脚本里起两次壳的收益低于噪音。
+   这条缺口是"切到云模式后改不了服务地址"能一路走到真机的原因之一：现在由壳层单测
+   `electron/__tests__/cloud-api-url-setup.test.cjs` 钉住**分流判据与配置页源码**
+   （`resolveStartupWindow` 的矩阵、`setup.pendingApiUrl` 的一次性消费、`setup.html` 的
+   闸门口径），但"点了按钮窗口真的换到配置页"仍然只有手工验证。
 4. **Windows 上不保证 core 一定被回收**：`taskkill /T` 依赖进程树未被中断；若手工 Ctrl-C 过
    一次，请用 `Get-Process python` 自查残留（这也是脚本把 `--keep` 打出来的原因）。

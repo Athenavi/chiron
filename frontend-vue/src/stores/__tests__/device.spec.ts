@@ -40,6 +40,29 @@ describe('device store', () => {
     expect(store.isDesktop).toBe(false)
   })
 
+  it('Web 端没有 openSetup：canOpenSetup 为 false，调用返回 false 而不是抛错', async () => {
+    const store = useDeviceStore()
+    expect(store.canOpenSetup).toBe(false)
+    // 改服务地址的入口在 Web 端不存在：返回 false 让界面去禁用/提示，静默成功是骗人
+    await expect(store.openConnectionSetup()).resolves.toBe(false)
+  })
+
+  it('桌面壳暴露 openSetup 时：调用它并返回 true（改地址的入口必须够得着）', async () => {
+    const openSetup = vi.fn(async () => true)
+    installHost({ isDesktop: true, mode: 'cloud', apiUrl: 'http://127.0.0.1:8080', openSetup })
+    const store = useDeviceStore()
+    expect(store.canOpenSetup).toBe(true)
+    await expect(store.openConnectionSetup()).resolves.toBe(true)
+    expect(openSetup).toHaveBeenCalledTimes(1)
+  })
+
+  it('老外壳（preload 里没有 openSetup）：入口判据为 false，界面据此禁用按钮', async () => {
+    installHost({ isDesktop: true, mode: 'cloud', apiUrl: 'http://127.0.0.1:8080' })
+    const store = useDeviceStore()
+    expect(store.canOpenSetup).toBe(false)
+    await expect(store.openConnectionSetup()).resolves.toBe(false)
+  })
+
   it('preload 的 mode 是真相，并写入 localStorage 镜像', async () => {
     installHost({ isDesktop: true, apiUrl: 'http://127.0.0.1:8080', mode: 'local' })
     const store = useDeviceStore()
