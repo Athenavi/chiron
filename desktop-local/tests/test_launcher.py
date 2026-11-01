@@ -15,7 +15,11 @@
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
+import os
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -24,6 +28,7 @@ from app.launcher import (
     ERROR_EVENT,
     READY_EVENT,
     _parse_args,
+    _watch_stdin_eof,
     _write_state_file,
     build_ready_payload,
     settings_from_args,
@@ -130,3 +135,68 @@ def test_state_file_is_opt_in_and_round_trips(tmp_path: Path) -> None:
     _write_state_file(str(target), payload)
 
     assert json.loads(target.read_text(encoding="utf-8")) == payload
+
+
+# ------------------------------------------------------------------ stdin EOF 看护
+#
+# 这是引导器唯一的"父进程没了就该收尾"通道，也是 PG 不被留成孤儿的**唯一**保障：
+# `embedded_postgres` 经 `pg_ctl` 起的 postmaster **不是**引导器的子进程，Electron 侧
+# 的 killProcessTree 收不到它，只有引导器自己走到 `run()` 的 `finally` 才会 `pg.stop()`。
+#
+# 原实现用 `loop.connect_read_pipe(sys.stdin)`，在 Windows 的 Proactor 事件循环上对
+# 匿名管道直接失败（实测 `OSError: [WinError 6] 句柄无效`，且异常发生在传输层的读回调
+# 里，`await` 那步的 try/except 抓不到），EOF 于是永远等不到 —— 真机表现是退出后
+# Redis 被树杀带走、postgres 仍在监听，下一次启动两套实例抢同一个 data dir。
+# 下面两条分别钉住"关写端要立刻返回"和"写端还开着绝不能返回"。
+
+
+class _PipeStdin:
+    """把 os.pipe 的读端伪装成 sys.stdin：只需要 `.buffer.read()`。"""
+
+    def __init__(self, fd: int) -> None:
+        self.buffer = os.fdopen(fd, "rb", closefd=True)
+
+    def isatty(self) -> bool:
+        return False
+
+
+def test_watch_stdin_eof_returns_once_parent_closes_write_end() -> None:
+    read_fd, write_fd = os.pipe()
+    stdin = _PipeStdin(read_fd)
+
+    async def scenario() -> None:
+        original = sys.stdin
+        sys.stdin = stdin  # type: ignore[assignment]
+        task: asyncio.Task[None] = asyncio.create_task(_watch_stdin_eof())
+        try:
+            # 父进程还活着：绝不能提前收尾，否则每次启动都会"秒退"。
+            await asyncio.sleep(0.2)
+            assert not task.done(), "写端还开着就返回 = 引导器一启动就以为自己该退出"
+            os.write(write_fd, b"ping")
+            os.close(write_fd)  # 父进程退出 ⇒ 管道关闭
+            await asyncio.wait_for(task, timeout=5)
+        finally:
+            sys.stdin = original
+            with contextlib.suppress(OSError):
+                os.close(write_fd)
+
+    asyncio.run(scenario())
+    # 看护线程是 `read()` 到 EOF，管道里的字节必然被它取空；这里读到空才算"真读过了"
+    assert stdin.buffer.read() == b""
+
+
+def test_watch_stdin_eof_survives_already_closed_stdin() -> None:
+    """stdin 被关掉/取不到时按 EOF 处理：宁可正常收尾，也不要卡住不退。"""
+
+    class _Dead:
+        buffer = None  # 访问即抛 AttributeError
+
+    async def scenario() -> None:
+        original = sys.stdin
+        sys.stdin = _Dead()  # type: ignore[assignment]
+        try:
+            await asyncio.wait_for(_watch_stdin_eof(), timeout=5)
+        finally:
+            sys.stdin = original
+
+    asyncio.run(scenario())

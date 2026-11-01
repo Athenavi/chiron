@@ -40,6 +40,7 @@ import json
 import os
 import signal
 import sys
+import threading
 import time
 from collections.abc import Sequence
 from pathlib import Path
@@ -203,14 +204,34 @@ async def _watch_stdin_eof() -> None:
 
     这样就不会留下"父进程没了但 PG/Redis 还在"的孤儿 —— 那会导致下次启动
     ``initdb`` 撞上残留 postmaster。
+
+    **为什么用线程做阻塞读，而不是 ``loop.connect_read_pipe(sys.stdin)``**：
+    Windows 的 Proactor 事件循环给匿名管道注册 IOCP 时直接失败（实测
+    ``OSError: [WinError 6] 句柄无效``，而且死在传输层的读回调里，``await`` 那一步
+    catch 不到），EOF 于是永远等不到。真机现象：Electron 正常退出后 postmaster 仍在
+    监听 —— ``embedded_postgres`` 经 ``pg_ctl`` 起的 PG **不是**引导器的子进程，壳侧
+    ``killProcessTree`` 收不到它，只有引导器自己走到 ``finally`` 才会 ``pg.stop()``；
+    Redis 是子进程、被树杀收走了，PG 却没有。症状正是"Redis 没了、PG 还在"。
+    线程里的 ``sys.stdin.buffer.read()`` 在父进程关掉写端后立刻返回（实测 1.4 s），
+    三个平台共用同一条代码路径。
     """
-    reader = asyncio.StreamReader()
-    protocol = asyncio.StreamReaderProtocol(reader)
-    with contextlib.suppress(Exception):
-        await asyncio.get_running_loop().connect_read_pipe(lambda: protocol, sys.stdin)
-    with contextlib.suppress(Exception):
-        while await reader.read(4096):
+    loop = asyncio.get_running_loop()
+    eof = asyncio.Event()
+
+    def pump() -> None:
+        try:
+            sys.stdin.buffer.read()
+        except Exception:  # noqa: BLE001 —— stdin 取不到/已关掉：同样按 EOF 处理
+            # 这里唯一不能发生的事是"卡住不退"：看护失效 ⇒ 父进程没了引导器还活着 ⇒
+            # 它没走到 finally ⇒ PG 留成孤儿。宁可立刻收尾，也不要把孤儿留在后面。
             pass
+        with contextlib.suppress(RuntimeError):  # 事件循环已经关了
+            loop.call_soon_threadsafe(eof.set)
+
+    # daemon：走信号路径（SIGINT/SIGTERM）先结束时，这个还阻塞在 read() 的线程不能
+    # 把解释器拖住不退 —— 非 daemon 线程会在退出时被 join，等于换个方向卡死。
+    threading.Thread(target=pump, name="stdin-eof", daemon=True).start()
+    await eof.wait()
 
 
 def main(argv: Sequence[str] | None = None) -> int:
