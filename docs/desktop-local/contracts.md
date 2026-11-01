@@ -240,6 +240,14 @@ desktop-local/
 本地 token 不进 safeStorage，云端登录 token 不参与本地请求。模式切换时
 `getDeviceMode()` 立刻变新值、进程却稍后才重启，那个窗口期就是分桶存在的理由。
 
+本地模式的身份密钥是**跨语言冻结常量**：`APP_SECRET`（落盘）→
+`JWT_SECRET = base64url_nopad(HMAC_SHA256(APP_SECRET, "chiron-jwt"))`、
+`INTERNAL_TOKEN = …("chiron-internal")`，Go（`config/config.go::deriveSubsecret`）、
+Python（`app/config.py::_validate_security_defaults`）、Node（`local-stack.cjs::deriveSubsecret`）
+各实现一份，域标签必须逐字一致。两个口径由黄金向量锁住（`config/derive_subsecret_test.go` 与
+`electron/__tests__/local-stack.test.cjs` 用同一组期望值）；打包态这两个值由壳**显式写进**网关与
+引擎的环境，不让任何一侧自行派生 —— 理由与事故形状见 [`launcher.md`](./launcher.md) §5.5。
+
 ### `/readyz` 的判定语义
 
 `ready` 只看**业务依赖**（PG 与迁移），不把 redis 算进就绪条件：

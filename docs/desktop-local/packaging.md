@@ -261,6 +261,15 @@ pnpm exec electron-builder --win --dir --publish never
 **这条捷径只适合本机验证**：它不会重建网关，用的就是 `assets/gateway/` 里躺着的那份。
 `desktop:pack` / `desktop:dist` 与 CI 都先把 `build:gateway` 串在前面，正式发布不走捷径。
 
+**更坑的是它也不重建渲染端**：`electron-builder` 只把 `dist/` 当前存在的文件打进包，
+`dist/` 陈旧时出包**一声不响**。真机上的形状是"改了源码、重出包、界面照旧"——
+一次因为 `dist/assets/index-*.js` 还是 10-28 那版（早于去掉 `/admin` 上 `cloudOnly`
+的改动），本地模式的 owner 账号进管理后台被弹回首页，且**没有任何网络请求**，
+看起来像权限坏了，实际包里没有那份 JS。排查口径：比对 `dist/assets/index-*.js` 的
+mtime 与目标提交的日期，别只看 `release/win-unpacked` 的时间戳（后者每次出包都会变新）。
+改了 `src/**` 要验证，就走 `npm run desktop:pack`（含 `build:desktop`）；
+只改 `electron/**` 才可以走上面的捷径。
+
 ### TLS / 镜像排障
 
 本机网络对 electron-builder 的下载源存在证书校验与连接复用问题，实测报错：
