@@ -2570,7 +2570,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
       {
         // 携带上一连接的最后事件 id：服务端按 last_event_id 从缓冲流补发断线缺口
         initialLastEventId: sseLastIdBySession.get(sessionId) || '',
-        // 单轮流式进行中断线时交由浏览器原生自动重连（重连自动带 Last-Event-ID 头，无感续传）
+        // 流断了交给 openEventStream 自己重连（带 Last-Event-ID，最多 3 次），用尽才回调 onError
         autoReconnect: true,
         onLastEventId: (id) => { sseLastIdBySession.set(sessionId, id) },
       },
