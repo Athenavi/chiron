@@ -193,7 +193,7 @@ EOF 于是永远等不到（真机现象正是"Electron 正常退出后 postmast
 | --- | --- | --- |
 | Go 网关、python-engine | Electron 主进程的直接子进程 | `local-stack.cjs::stopLocalStack()` |
 | PG、Redis、引导器本体 | **引导器 python 进程**（`embedded_postgres` / `pg_ctl` 起的） | 同左：stdin EOF → `_watch_stdin_eof`，兜底 `killProcessTree` |
-| desktop-local 老 core | `components.cjs` | `components.stopCore()` || desktop-local 老 core | `components.cjs` | `components.stopCore()` |
+| desktop-local 老 core | `components.cjs` | `components.stopCore()` |
 
 前两套**不能互相顶替**。真机上的事故形状是：
 
