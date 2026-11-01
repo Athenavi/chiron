@@ -7,6 +7,39 @@
  */
 const path = require('node:path')
 
+/**
+ * userData 根目录名。
+ *
+ * **不能再用 Electron 默认值**：默认值来自 `package.json` 的 `name`（`frontend-vue`），
+ * 于是本地模式的全部数据落在 `%APPDATA%\frontend-vue\` —— 一个看不出是谁家的目录，
+ * 用户清理 AppData 时既不敢删也找不到。这里钉死一个域名反写的可识别名字。
+ *
+ * 改名的代价是一次「看起来像丢了数据」：老目录不会被搬，本地模式从零开始
+ * （两套 venv 重装、PG 重新 initdb）。契约 §1 明确不删 `userData/local/**`，
+ * 所以老目录原样留在磁盘上，需要时可手工取回。
+ */
+const USER_DATA_DIR_NAME = 'gh_Athenavi_chiron'
+
+/**
+ * 本次进程该用的 userData 根。
+ *
+ * 优先级：`CHIRON_DESKTOP_USER_DATA`（真机 smoke / 多环境隔离 / 便携部署）> `appData` + 固定名。
+ *
+ * 抽成纯函数是因为 `main.cjs` 一 require 就会起 Electron，`app.setPath` 那一步没法在
+ * 单测里跑；而这个判据错一次的后果是**两个目录各存一半**（config.json 在新根、
+ * venv 在旧根），表现得像"运行时莫名其妙又要重装一遍"。
+ *
+ * @param {object} options `{ appData, override }`
+ * @returns {string} 绝对路径；两者都拿不到时返回空串（调用方保持 Electron 默认值）
+ */
+function resolveUserDataDir(options = {}) {
+  const override = typeof options.override === 'string' ? options.override.trim() : ''
+  if (override) return override
+  const appData = typeof options.appData === 'string' ? options.appData.trim() : ''
+  if (!appData) return ''
+  return path.join(appData, USER_DATA_DIR_NAME)
+}
+
 const API_URL_ARG_PREFIX = '--chiron-api-url='
 /** 主进程创建窗口时用它把当前运行模式告诉 preload（契约 §2 的 window.chironDesktop.mode） */
 const MODE_ARG_PREFIX = '--chiron-mode='
@@ -94,6 +127,8 @@ function resolveStartupWindow(options = {}) {
 }
 
 module.exports = {
+  USER_DATA_DIR_NAME,
+  resolveUserDataDir,
   API_URL_ARG_PREFIX,
   MODE_ARG_PREFIX,
   DEVICE_TOKEN_ARG_PREFIX,

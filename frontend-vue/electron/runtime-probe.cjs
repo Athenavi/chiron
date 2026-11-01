@@ -1,4 +1,6 @@
 'use strict'
+const os = require('node:os')
+const path = require('node:path')
 /**
  * "这个解释器能不能跑起本地 core" 的唯一判据。
  *
@@ -69,6 +71,31 @@ const PROBE_ENV = {
   JWT_SECRET: 'chiron-runtime-probe-placeholder-jwt-secret-00000000',
 }
 
+/**
+ * 探测专用的可写落盘路径（每次调用时算，跟着 `os.tmpdir()` 走）。
+ *
+ * **为什么探测也要给**：这几个模块的默认根是**相对 cwd** 的（`./data/skills` 等），而探测
+ * 的 cwd 正是"将来启动时的那个目录" —— 打包态下它在 `Program Files\Chiron\resources\
+ * python-engine`（只读）。于是探测会因为 `mkdir` 抛 `PermissionError: [WinError 5] 'data'`
+ * 判失败，界面说成"依赖装完了但引擎仍无法导入"，把用户往"requirements.txt 少包"上引
+ * （真机事故）。引擎侧已改成导入期不碰磁盘，这里再自带一份可写路径做第二道保险：
+ * 任何将来新加的、导入期就落盘的模块，都不该让整机判成"依赖没装好"。
+ *
+ * 用临时目录而不是真实 userData：探测的唯一问题是"能不能导入"，不该在用户数据目录里
+ * 留下半成品（也避免探测与真实运行互相污染）。
+ */
+function probeDataEnv(baseDir) {
+  const root = path.join(baseDir, 'chiron-runtime-probe')
+  return {
+    SKILL_STORE_PATH: path.join(root, 'skills'),
+    MEDIA_STORE_PATH: path.join(root, 'media'),
+    KNOWLEDGE_LOCAL_PATH: path.join(root, 'knowledge'),
+    PLUGIN_DATA_DIR: path.join(root, 'plugins'),
+    SANDBOX_ROOT: path.join(root, 'sandbox'),
+    LOG_DIR: path.join(root, 'logs'),
+  }
+}
+
 /** 从探测输出里认出"缺哪个模块"；认不出返回空串（不猜） */
 function extractMissingModule(output) {
   const match = String(output || '').match(/No module named ['"]?([A-Za-z_][\w.]*)/)
@@ -103,8 +130,15 @@ function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
       // PYTHONNOUSERSITE：不让用户级 site-packages 混进来，否则"用户机恰好装过 fastapi"
       // 会让探测通过、而换台机器就崩 —— 必须只验本 venv 自带的依赖。
       // PROBE_ENV 压在 process.env 之上：探测结果不该取决于本机配没配密钥；
+      // probeDataEnv 给一组可写的绝对落盘路径，让"cwd 只读"不再等于"依赖没装好"；
       // 但调用方显式传的 options.env 仍然优先。
-      env: { ...process.env, ...PROBE_ENV, PYTHONNOUSERSITE: '1', ...(options.env || {}) },
+      env: {
+        ...process.env,
+        ...PROBE_ENV,
+        ...probeDataEnv(os.tmpdir()),
+        PYTHONNOUSERSITE: '1',
+        ...(options.env || {}),
+      },
     })
   } catch (err) {
     return {
@@ -137,6 +171,7 @@ function probeRuntime(spawnSync, pythonPath, cwd, options = {}) {
 module.exports = {
   RUNTIME_PROBE_CODE,
   PROBE_ENV,
+  probeDataEnv,
   extractMissingModule,
   probeRuntime,
 }

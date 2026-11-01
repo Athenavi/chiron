@@ -229,7 +229,7 @@ return，对外却什么都没报。现在 `pg.py` 在停之前裁掉"已退出"
 
 验证口径（Windows）：退出应用后 `netstat -ano | findstr LISTENING` 里不该再有本轮的
 PG / Redis 端口，`tasklist` 里不该有 `postgres.exe` / `redis-server.exe` 残留。
-手工清残留用随包的 `pg_ctl stop -m fast -D %APPDATA%\frontend-vue\local\pg`；
+手工清残留用随包的 `pg_ctl stop -m fast -D %APPDATA%\gh_Athenavi_chiron\local\pg`；
 Redis 没有随包 `redis-cli`，用 core 那个 venv 的 `redis` 包发 `shutdown(save_now=False)`。
 
 ### 5.5 两个身份密钥由壳显式下发

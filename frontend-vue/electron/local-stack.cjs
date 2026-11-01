@@ -19,9 +19,57 @@
 
 const childProcess = require('node:child_process')
 const crypto = require('node:crypto')
+const path = require('node:path')
 const components = require('./components.cjs')
 const runtimeState = require('./runtime-state.cjs')
 const DEFAULTS = components.DEFAULTS
+
+/**
+ * 本地模式的数据路径表（相对 `<dataDir>` 的子目录名）。
+ *
+ * **为什么必须由壳层显式下发**：网关与引擎的这几项默认值都是**相对 cwd** 的
+ * （`./data/skills`、`./data/media`、`./data/plugins`、`data`、`logs/`…），而打包态的 cwd 是
+ * `D:\Program Files\Chiron\resources\python-engine` —— 只读目录。于是：
+ *   - 引擎导入期 `mkdir('data')` 直接抛 `PermissionError: [WinError 5]`，界面表现成
+ *     "依赖装完了但 AI 引擎仍无法导入"（真机事故，与缺包毫无关系）；
+ *   - 审计日志四处 mkdir 失败后被各自的 try/except 吞掉 ⇒ 审计**静默全丢**。
+ *
+ * 同一条思路在 `docker-compose.yml` 里已经写过一遍（`sandbox-service` 那段的注释就点着
+ * `app/tools/skill.py:33`、`app/skill/store.py:182,296`）：容器里靠 env 把相对路径顶成绝对路径。
+ * 桌面端此前**一个都没下发**，所以打包态必然踩这个坑。
+ *
+ * 键名是两侧真正读的名字，不能改：`SKILL_STORE_PATH` / `MEDIA_STORE_PATH` /
+ * `KNOWLEDGE_LOCAL_PATH` / `PLUGIN_DATA_DIR` / `SANDBOX_ROOT`（引擎），
+ * `CHIRON_DATA_DIR` / `STORAGE_ROOT`（网关）。
+ */
+const LOCAL_DATA_SUBDIRS = {
+  SKILL_STORE_PATH: 'skills',
+  MEDIA_STORE_PATH: 'media',
+  KNOWLEDGE_LOCAL_PATH: 'knowledge',
+  PLUGIN_DATA_DIR: 'plugins',
+  SANDBOX_ROOT: 'sandbox',
+  /** 审计日志根：四处 `*_audit.py` 读 `Settings.log_dir`（env 名 `LOG_DIR`） */
+  LOG_DIR: 'logs',
+}
+
+/**
+ * 把 `<dataDir>` 展开成一组**绝对**数据路径（引擎与网关共用）。
+ *
+ * `dataDir` 为空时返回空对象：调用方拿不到数据目录时宁可让子进程用自己的默认值并报
+ * 自己的错，也不要塞一堆相对路径假装配好了。
+ */
+function localDataPaths(dataDir) {
+  const root = String(dataDir || '').trim()
+  if (!root) return {}
+  const paths = {}
+  for (const [name, sub] of Object.entries(LOCAL_DATA_SUBDIRS)) {
+    paths[name] = path.join(root, sub)
+  }
+  return paths
+}
+
+/** 审计落盘目录：四处 `*_audit.py` 都读 `Settings.log_dir`（`LOG_DIR`） */
+const AUDIT_DIR_ENV = 'LOG_DIR'
 
 /** 引导器就绪事件（与 `desktop-local/app/launcher.py::READY_EVENT` 一致） */
 const LAUNCHER_READY_EVENT = 'launcher-ready'
@@ -244,6 +292,22 @@ function buildGatewayEnv(info, options = {}) {
   env.PORT = String(port)
   env.APP_SECRET = appSecret
   applyLocalModeSecrets(env, appSecret)
+
+  // 网关的数据根：`CHIRON_DATA_DIR` 是它自己认的名字（`config/config.go:282`），
+  // `STORAGE_ROOT`（媒体/文件落地）与 `PLUGIN_DATA_DIR` 也挂在同一个根下。
+  // **不能只靠 `--data-dir` 参数**：网关的 `cmd/chiron/main.go` 根本没解析这个 flag，
+  // 它之前的实际效果只有"引导器把 PG/Redis 放在哪"，网关侧的插件目录、worker.id、
+  // 存储根一直在按 `~/.chiron` 兜底 —— 于是本地模式的数据散在两个根上。
+  //
+  // 网关的 StorageRoot 是"本地存储根"，媒体落 `<StorageRoot>/media`（`gateway_router.go:354`），
+  // 所以这两项给的是数据根本身，而不是引擎那份 media 子目录。
+  const gatewayDataDir = String(options.dataDir || '').trim()
+  const dataPaths = localDataPaths(gatewayDataDir)
+  if (dataPaths.PLUGIN_DATA_DIR) {
+    env.CHIRON_DATA_DIR = gatewayDataDir
+    env.STORAGE_ROOT = gatewayDataDir
+    env.PLUGIN_DATA_DIR = dataPaths.PLUGIN_DATA_DIR
+  }
 
   // Redis 缺失时不写这一项：网关会用它自己的默认值，并且在 Redis 不可用时
   // 明确报 `Redis is required but unavailable`，比我们塞一个空串更可诊断。
@@ -661,6 +725,33 @@ function buildEngineEnv(info, options = {}) {
   env.HTTP_PORT = String(port)
   // 单机模式：放行沙箱门禁，并让 Redis 从"必需"降为"可选"
   env.DEGRADED_MODE = 'true'
+
+  // 引擎的全部落盘路径：**必须给绝对路径**，理由见 `LOCAL_DATA_SUBDIRS` 上方那段。
+  // 这几项之前一个都没下发，于是打包态下引擎的默认值全部相对 cwd（只读的
+  // `resources/python-engine`）：导入期 `SkillStore()` 的 mkdir 直接把 import 打挂，
+  // 审计日志则被 try/except 吞掉后静默全丢。
+  //
+  // `options.env` 已经显式给了同名的项时不覆盖：单测与 ops 会用它把路径钉到临时目录，
+  // 那些场景下"壳层说了算"反而是错的。
+  const dataPaths = localDataPaths(options.dataDir)
+  for (const name of [
+    'SKILL_STORE_PATH',
+    'MEDIA_STORE_PATH',
+    'KNOWLEDGE_LOCAL_PATH',
+    'PLUGIN_DATA_DIR',
+    'SANDBOX_ROOT',
+  ]) {
+    if (dataPaths[name] && (options.env || {})[name] === undefined) env[name] = dataPaths[name]
+  }
+  // 审计目录走 Settings 的 `log_dir` 字段（`LOG_DIR`）。显式给绝对路径，是因为
+  // `Settings` 里 `extra="ignore"`、四个 `*_audit.py` 又都写死 `getattr(settings,"log_dir","")
+  // or "logs"` —— 不改字段名就只能改四个模块，改字段名一处即可。
+  if (dataPaths[AUDIT_DIR_ENV] && (options.env || {})[AUDIT_DIR_ENV] === undefined) {
+    env[AUDIT_DIR_ENV] = dataPaths[AUDIT_DIR_ENV]
+  }
+  // 引擎侧内置技能源：打包态 `market/skills` **不在** resources 里（见 electron-builder.yml），
+  // 引擎会去找 `<resources>/market/skills` 并在缺失时告警"不含内置技能"。这是**告警**不是
+  // 启动失败，所以这里不替它编一个路径：静默指向不存在的目录比保留那条告警更难查。
 
   // 引擎要回调网关（工具 broker、媒体资产、agent-followup、webhook-event、系统设置下发）。
   // 引擎侧默认值是 `http://127.0.0.1:8080`：本地网关几乎不可能在这个端口，而这台机器上

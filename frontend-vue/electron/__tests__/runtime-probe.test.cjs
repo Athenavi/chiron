@@ -14,9 +14,10 @@
 const test = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
+const os = require('node:os')
 const path = require('node:path')
 
-const { RUNTIME_PROBE_CODE, PROBE_ENV, extractMissingModule, probeRuntime } = require('../runtime-probe.cjs')
+const { RUNTIME_PROBE_CODE, PROBE_ENV, probeDataEnv, extractMissingModule, probeRuntime } = require('../runtime-probe.cjs')
 
 /** 记录调用参数的假 spawnSync */
 function recordingSpawn(status = 0) {
@@ -60,6 +61,21 @@ test('探测结果不受本机残缺密钥影响', () => {
       if (value === undefined) delete process.env[key]
       else process.env[key] = value
     }
+  }
+})
+
+test('探测自带可写的落盘路径：cwd 只读不该被判成"依赖没装好"', () => {
+  // 真机事故形状：cwd 是 `Program Files\Chiron\resources\python-engine`（只读），
+  // 而引擎有若干模块按**相对 cwd** 的默认路径 mkdir（`app/skill/store.py:296`）。
+  // 于是 import 变成一次写盘，探测抛 PermissionError 被判"依赖没装好"，
+  // 用户被指向 requirements.txt —— 与事实无关。
+  const { spawnSync, calls } = recordingSpawn()
+  probeRuntime(spawnSync, 'C:/venv/Scripts/python.exe', 'C:/Program Files/Chiron/resources/python-engine')
+
+  const env = calls[0].opts.env
+  for (const [key, value] of Object.entries(probeDataEnv(os.tmpdir()))) {
+    assert.equal(env[key], value, `${key} 必须由探测自己给出，且是绝对路径`)
+    assert.ok(path.isAbsolute(value), `${key} 不是绝对路径：${value}`)
   }
 })
 

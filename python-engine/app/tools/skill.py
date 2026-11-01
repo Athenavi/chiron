@@ -29,8 +29,22 @@ from app.tools.registry import registry
 logger = logging.getLogger(__name__)
 
 _skill_root = os.getenv("SKILL_STORE_PATH", os.path.join(".", "data", "skills"))
-# 无显式 root → 按身份解析；模块加载时无上下文，即为共享目录（含旧目录迁移）
-_store = SkillStore()
+#: 无显式 root → 按身份解析；模块加载时无上下文，即为共享目录（含旧目录迁移）。
+#:
+#: **必须惰性构造**：`SkillStore.__init__` 会 `mkdir` 存储根，而这里的默认根是
+#: **相对 cwd** 的 `./data/skills`。打包态的引擎源码在 `Program Files\Chiron\resources\
+#: python-engine`（只读），模块级构造于是把"导入 app 包"这一步变成一次写盘 ——
+#: 结果是 `import app.tools` 直接抛 `PermissionError: [WinError 5] 'data'`，
+#: 表现为"依赖装完了但引擎仍然无法导入"（真机事故）。导入期不碰磁盘是硬约束。
+_store: SkillStore | None = None
+
+
+def _shared_store() -> SkillStore:
+    """共享（无身份）store：首次真正用到时才构造，构造时才会 mkdir 存储根。"""
+    global _store
+    if _store is None:
+        _store = SkillStore()
+    return _store
 
 
 def _get_store() -> SkillStore:
@@ -51,7 +65,7 @@ def _get_store() -> SkillStore:
             logger.warning(
                 "skill store: invalid identity from context, fallback to shared: %s", e
             )
-    return _store
+    return _shared_store()
 
 
 async def skill_list() -> dict[str, Any]:

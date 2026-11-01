@@ -1144,6 +1144,27 @@ function setupAutoUpdater() {
   }, 8000)
 }
 
+// userData 根必须在这里定下来，**早于单实例锁与 whenReady**：
+// 锁文件、config.json、日志、两套 venv、PG 数据目录全都在它下面。晚一步定，就会出现
+// 「锁在旧根、数据在新根」这种同一进程内两套目录并存的局面。
+//
+// 为什么不靠 package.json 的 name：那是 `frontend-vue`，安装后的数据目录叫
+// `%APPDATA%\frontend-vue`，用户既认不出也不敢删。`resolveUserDataDir` 把它换成
+// 可识别的固定名，同时保留 CHIRON_DESKTOP_USER_DATA 的显式覆盖。
+//
+// Electron 的 `appData` 在 ready 之前就能读（它只依赖 APPDATA 环境变量），
+// 因此这里不会因为过早调用而拿到空值；拿不到就保持默认，不拿空串去 setPath。
+try {
+  const resolvedUserData = shared.resolveUserDataDir({
+    appData: app.getPath('appData'),
+    override: process.env.CHIRON_DESKTOP_USER_DATA,
+  })
+  if (resolvedUserData) app.setPath('userData', resolvedUserData)
+} catch (err) {
+  // 定目录失败不能让应用起不来：保持 Electron 默认值，后续安装/启动各自会报自己的错
+  logMain('warn', `userData 目录改写失败，沿用默认值：${err?.message || err}`)
+}
+
 // 单实例：第二次启动时聚焦已有窗口，而不是再开一个进程
 const gotLock = app.requestSingleInstanceLock()
 if (!gotLock) {

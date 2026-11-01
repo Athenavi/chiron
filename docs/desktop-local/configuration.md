@@ -40,7 +40,7 @@
 
 | 变量 | 默认值 | 读取位置 | 作用 | 判定 |
 |---|---|---|---|---|
-| `CHIRON_DESKTOP_USER_DATA` | 空 → `app.getPath('userData')` | `config.cjs:75`、`components.cjs:115` | 覆盖整个 userData 根（config.json / 本地数据 / 组件 / 日志都跟着搬）。真机 smoke 与多环境隔离靠它 | 🟢 |
+| `CHIRON_DESKTOP_USER_DATA` | 空 → `%APPDATA%\gh_Athenavi_chiron`（`shared.cjs` 的 `USER_DATA_DIR_NAME`，经 `resolveUserDataDir()`） | `main.cjs`（`app.setPath('userData', …)`，早于单实例锁）、`config.cjs:75`、`components.cjs:115` | 覆盖整个 userData 根（config.json / 本地数据 / 组件 / 日志都跟着搬）。真机 smoke 与多环境隔离靠它 | 🟢 |
 | `CHIRON_DESKTOP_MODE` | 空 → `config.json` 的 `mode` | `config.cjs:283`、`preload.cjs:34` | 强制 `local` / `cloud`，不改配置直接换壳模式 | 🟢 |
 | `CHIRON_API_URL` | 空 → `config.json` 的 `apiUrl`（仅 cloud） | `config.cjs:294`、`preload.cjs:26` | 强制云端服务地址 | 🟢 |
 | `CHIRON_DEV_URL` | `http://localhost:5173`（`shared.cjs:13`） | `main.cjs:53` | 开发态（`--dev`）加载的 Vite dev server | 🟡 默认值写死 |
@@ -128,13 +128,61 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 `CHIRON_COMPONENT_PORT`、`CHIRON_COMPONENT_HOST`（写死 `127.0.0.1`）。
 反向：`scripts/build_component.py:498-503` 读 `CHIRON_COMPONENT_HOST`/`CHIRON_COMPONENT_PORT`。
 
+### 2.5 下发给 python-engine 与网关的落盘路径（`local-stack.cjs`）
+
+这两组变量的共同前提：**子进程的 cwd 是只读的安装目录**。python-engine 与网关源码分别从
+`resources/python-engine`、`resources/chiron[.exe]` 起，前者位于 `Program Files`，导入期写盘会直接
+`PermissionError`。所以壳层一律下发**绝对**路径，不留给子进程按 cwd 猜。
+
+`buildEngineEnv`（`local-stack.cjs`，取值为 `<userData>/local/<子目录>`）：
+
+| 变量 | 引擎侧读取点 | 子目录 | 不传时引擎的默认（在只读 cwd 下会失败） |
+|---|---|---|---|
+| `SKILL_STORE_PATH` | `app/tools/skill.py`（`_skill_root`） | `skills/` | `./data/skills` |
+| `MEDIA_STORE_PATH` | `app/media/store.py`（`LocalStore.__init__`） | `media/` | `./data/media` |
+| `KNOWLEDGE_LOCAL_PATH` | `app/knowledge/blob.py`（`create_blob_store()`） | `knowledge/` | `data/knowledge` |
+| `PLUGIN_DATA_DIR` | `app/plugins/store.py`（`plugin_data_dir()`） | `plugins/` | 相对 cwd 的插件目录 |
+| `SANDBOX_ROOT` | `app/tools/sandbox.py`（`sandbox_root()`） | `sandbox/` | 相对 cwd |
+| `LOG_DIR` → `Settings.log_dir` | 四份 `*_audit.py`（`exec_audit` / `approval_audit` / `hooks.audit` / `plugins.audit`） | `logs/` | `<cwd>/logs` |
+
+两点实现约束：
+
+- **只在调用方没给同名变量时才填**（`options.env[name] === undefined`）。单测与真机 smoke 会把
+  这些路径钉到临时目录，壳层不能盖掉它们。
+- `LOG_DIR` 走 `Settings` 字段而不是裸 `os.environ`：`Settings` 的 `extra="ignore"` 会**丢掉**没有
+  字段的环境变量，于是只加环境变量、不加字段等于没说。同理 `CHIRON_BUILTIN_SKILLS_PATH` 故意
+  **不**由壳层捏造 —— `market/skills` 本就没随包，指向一个不存在的目录比保留那句告警更糟。
+
+`buildGatewayEnv`（取值是 `<userData>/local` 本身，不是子目录）：
+
+| 变量 | 网关侧读取点 | 说明 |
+|---|---|---|
+| `CHIRON_DATA_DIR` | `config/config.go`（`DataDir`） | 网关的数据根；缺它就退回 `~/.chiron` |
+| `STORAGE_ROOT` | `config/config.go`（`StorageRoot`） | 媒体落 `<STORAGE_ROOT>/media`（`internal/api/gateway_router.go:354`），故给根 |
+| `PLUGIN_DATA_DIR` | `config/config.go`（`PluginDataDir`） | 插件数据落到 `local/plugins/`，与引擎同一个目录 |
+
+`runtime-probe.cjs` 有一份自己的等价集合（`probeDataEnv(os.tmpdir())`）：探测要做的是判断
+"这个解释器能不能导入引擎"，不该因为 cwd 只读就判成缺依赖 —— 那是两件不同的事，混在一起
+就把用户引向 `requirements.txt`。
+
 ---
 
 ## 3. 路径
 
 ### 3.1 userData 布局（Electron）
 
-根：`app.getPath('userData')`，可用 `CHIRON_DESKTOP_USER_DATA` 整体改写。
+根：`%APPDATA%\gh_Athenavi_chiron`（`shared.cjs` 的 `USER_DATA_DIR_NAME`），可用
+`CHIRON_DESKTOP_USER_DATA` 整体改写。
+
+> **为什么不直接用 Electron 的默认值**：默认根取自 `package.json` 的 `name`，本项目是
+> `frontend-vue`，于是会写成 `%APPDATA%\frontend-vue\` —— 用户既认不出这属于 Chiron，
+> 也不敢删。`main.cjs` 在 `requestSingleInstanceLock()` **之前**调
+> `app.setPath('userData', …)`：锁文件、config.json、日志、两套 venv、PG 数据目录全在这个根下，
+> 晚一步就会出现「锁在旧根、数据在新根」的两套目录。`app.getPath('appData')` 在 ready 之前
+> 可读，因此这里不会拿到空值；拿不到就保持 Electron 默认值（不拿空串去 setPath）。
+>
+> 改名**不迁移**旧目录：`%APPDATA%\frontend-vue` 原样留着（契约 §1 不允许删
+> `userData/local/**`），新根从零开始 —— 首启会重装两套 venv、embedded PG 也是空库。
 
 ```
 <userData>/
@@ -144,12 +192,32 @@ session 分区 `persist:chiron-local|cloud`（`shared.cjs:20`）。
 ├── logs/main.log                main.cjs:96        主进程诊断日志
 ├── local/                       components.cjs:1308 本地 core 的 data-dir（默认值，可被 CHIRON_DATA_DIR 覆盖）
 │   ├── runtime/                 runtime-install.cjs:112（target=core） 引导器环境根：venv/ + install.json + python/ + bin/
-│   └── engine/                  runtime-install.cjs:112（target=engine）AI 引擎环境根：venv/ + install.json（与 core 完全隔离）
+│   ├── engine/                  runtime-install.cjs:112（target=engine）AI 引擎环境根：venv/ + install.json（与 core 完全隔离）
+│   ├── skills/                  local-stack.cjs（SKILL_STORE_PATH）   引擎技能存储根
+│   ├── media/                   local-stack.cjs（MEDIA_STORE_PATH）   引擎本地媒体后端
+│   ├── knowledge/               local-stack.cjs（KNOWLEDGE_LOCAL_PATH）知识库 blob 根
+│   ├── plugins/                 local-stack.cjs（PLUGIN_DATA_DIR）    引擎插件数据
+│   ├── sandbox/                 local-stack.cjs（SANDBOX_ROOT）       进程内沙箱的暂存根
+│   └── logs/                    local-stack.cjs（LOG_DIR）            引擎四份 *_audit.py 的审计落盘
 └── components/                  components.cjs:135
     ├── core/chiron-local[.exe]  components.cjs:497 已安装 core 二进制（优先于源码启动）
     ├── pageindex/               仅作兜底展示（真实安装目录在 core 的 data-dir 下）
     └── langextract/
 ```
+
+**`local/` 下那六个子目录由壳层以绝对路径下发**（`local-stack.cjs` 的 `LOCAL_DATA_SUBDIRS`）。
+这是硬约束，不是整洁癖：python-engine 的若干模块在**导入期**就按**相对 cwd** 的默认值 `mkdir`
+（`app/skill/store.py:296`，root 默认 `./data/skills`），而打包态的 cwd 与源码都在
+`Program Files\Chiron\resources\python-engine`（只读）。只要有一个模块在导入期写盘，
+"导入 app 包"这一步就抛 `PermissionError: [WinError 5] 'data'`，`runtime-probe.cjs` 判
+「依赖装完了，但 AI 引擎仍无法导入」——**误导用户去查 requirements.txt**。真机事故即此。
+两层都做了收口：壳层下发绝对路径（本节），引擎侧 `SkillStore` 改惰性构造
+（`app/tools/skill.py`，导入期不碰磁盘）。
+
+网关侧同名概念不同：`buildGatewayEnv` 下发 `CHIRON_DATA_DIR` + `STORAGE_ROOT` = `<userData>/local`
+本身（媒体的实际落点是 `<STORAGE_ROOT>/media`，见 `internal/api/gateway_router.go:354`），
+外加 `PLUGIN_DATA_DIR`。**不能只靠 `--data-dir`**：`cmd/chiron/main.go` 并没有解析这个 flag，
+网关的插件目录与 `worker.id` 会一路退回 `~/.chiron`。
 
 **两套 venv 各自一个根，且根目录名不可改**：`runtime-install.cjs` 的 `RUNTIME_TARGETS`
 里 `rootName` 分别是 `runtime` 与 `engine`；`resolveCoreLaunch()` / `resolveEngineLaunch()`

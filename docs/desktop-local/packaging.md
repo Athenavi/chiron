@@ -428,9 +428,9 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 （POSIX 多一层 `bin`）。两个判据：
 
 ```bash
-head -1 "$APPDATA/frontend-vue/local/runtime/venv/pyvenv.cfg"   # home 落在当前包内
+head -1 "$APPDATA/gh_Athenavi_chiron/local/runtime/venv/pyvenv.cfg"   # home 落在当前包内
 # 两套环境各一行：只有 (engine) 没有 (core) 说明汇总口径又漂回单份 binding
-grep "binding rebound\|绑定已失效" "$APPDATA/frontend-vue/logs/main.log"
+grep "binding rebound\|绑定已失效" "$APPDATA/gh_Athenavi_chiron/logs/main.log"
 ```
 
 正常开机不该出现这些行（绑定本来就对）；换包后应当**core 与 engine 各一行**，

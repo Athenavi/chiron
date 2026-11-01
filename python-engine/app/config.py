@@ -442,6 +442,13 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     otel_endpoint: str = ""  # e.g. "http://otel-collector:4317"
 
+    # ── 审计落盘目录 ──
+    # exec / approval / hooks / plugin 四份审计日志（`*_audit.py` 的 `_audit_dir()`）都读它，
+    # 默认空 = 相对 cwd 的 `logs/`。**打包态必须显式给绝对路径**：引擎源码与 cwd 都在
+    # `Program Files\Chiron\resources\python-engine`（只读），相对目录会让 mkdir 失败、
+    # 审计静默全丢（四处都 try/except 只告警）。桌面壳在 `buildEngineEnv` 里下发。
+    log_dir: str = ""
+
     # ── 实例标识（K8s 注入）──
     pod_name: str = ""
     instance_id: str = ""
