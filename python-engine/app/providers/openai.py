@@ -8,6 +8,7 @@ from typing import Any
 from openai import AsyncOpenAI
 
 from app.gateway.key_retry import call_with_key_retry
+from app.gateway.key_ring import NoUsableKeyError
 from app.gateway.provider import (
     ChatMessage,
     ChatResponse,
@@ -227,23 +228,24 @@ class OpenAIProvider(LLMProvider):
     # ── helpers ──
 
     async def _resolve_client(self) -> tuple[Any, Any]:
-        """返回本次请求使用的 client 与其 key 指纹(可选)。
-        有 key_ring 时按 provider 取活跃 key(按 key 缓存 client);取不到(无 key/异常)
-        回退到 env 首 key 的 self._client(单 key/降级兼容)。"""
+        """返回本次请求使用的 client 与其 key 指纹。
+
+        有 key_ring 时按 provider 取活跃 key（按 key 缓存 client）。取不到就**抛**：
+        以前这里静默退回"用 placeholder 构造的 self._client"，于是拿假 key 打上游、
+        收到一句真的 401（掩码尾缀是 placeholder 的），前端把它当成"用户的 key 失效"，
+        而用户的 key 实测 200。宁可报"本机没有可用密钥"，也不要伪造上游的判决。
+        """
         if self._key_ring is None:
             return self._client, None
         item = await self._key_ring.get_key(self.name)
         if item is None:
-            # ⚠️ 显式警告（此前是静默回退）：这里会退回用 placeholder key 构造的 self._client，
-            # 于是拿**假 key** 打上游、得到 "401 Invalid API key" ——
-            # 而真正的 key 可能挂在同产品的另一个协议变体名下（如 opencode-go-anthropic ← opencode-go）。
-            # 静默回退曾让人误判为"key 无效"，而该 key 直连实测是 200。
+            diag = await self._key_ring.diagnose(self.name)
             logger.warning(
-                "KeyRing 无可用 key for %s：回退到 placeholder client，上游很可能返回 401。"
-                "请检查该 provider（或同产品基础 provider）的 keyset。",
+                "KeyRing 无可用 key for %s：%s（不回退到 placeholder，直接失败）",
                 self.name,
+                diag,
             )
-            return self._client, None
+            raise NoUsableKeyError(self.name, diag)
         key = item["key"]
         client = self._clients.get(key)
         if client is None:

@@ -52,6 +52,27 @@ COOLDOWN_SOFT = 30
 COOLDOWN_HARD = 60
 
 
+class NoUsableKeyError(RuntimeError):
+    """KeyRing 里一把可用 key 都没有 —— **在本机抛错，绝不拿占位 key 打上游**。
+
+    此前的静默回退会构造出一句真·上游 401（掩码尾缀是占位 key 的 `aged`），前端按
+    "上游说 key 无效"分类后引导用户去改一把**其实有效**的 key，而且每条失败消息都重弹一次。
+    消息体里带固定标记 `no_usable_key` 与计数，前端按标记分类，不再靠状态码猜。
+    """
+
+    def __init__(self, provider: str, diag: dict[str, Any]) -> None:
+        self.provider = provider
+        self.configured = int(diag.get("configured") or 0)
+        self.blocked = int(diag.get("blocked") or 0)
+        self.cooling = int(diag.get("cooling") or 0)
+        self.retry_after_seconds = float(diag.get("retry_after") or 0.0)
+        super().__init__(
+            f"no_usable_key provider={provider} configured={self.configured} "
+            f"blocked={self.blocked} cooling={self.cooling} "
+            f"retry_after_seconds={self.retry_after_seconds:.0f}"
+        )
+
+
 def _key_id(provider: str, key: str) -> str:
     import hashlib
 
@@ -218,6 +239,44 @@ class KeyRing:
                 if keys:
                     return keys
         return self._env_active(provider, now)
+
+    async def diagnose(self, provider: str) -> dict[str, Any]:
+        """取不到 key 的**原因**（只读、不记账）：一把都没配 ≠ 配了但都在冷却。
+
+        这两件事用户该做的动作完全相反（前者去配 key，后者等几十秒重发），
+        合成一句"key 无效"就是把人往错的方向推。
+        """
+        now = time.time()
+        out: dict[str, Any] = {"configured": 0, "blocked": 0, "cooling": 0, "retry_after": 0.0}
+        sources: list[dict[str, Any]] = []
+        if self._redis is not None:
+            for src in self._sources(provider):
+                try:
+                    raw = await self._redis.hgetall(f"{LLM_KEY_HASH_PREFIX}{src}")
+                except Exception as exc:  # noqa: BLE001 - 诊断读失败不该改写调用路径
+                    logger.warning("KeyRing diagnose read failed: %s", exc)
+                    continue
+                for payload in (raw or {}).values():
+                    try:
+                        obj = json.loads(payload.decode() if isinstance(payload, bytes) else payload)
+                    except (ValueError, TypeError):
+                        continue
+                    if isinstance(obj, dict):
+                        sources.append(obj)
+        sources.extend({"key": k} for k in self._env.get(provider, []))
+        for obj in sources:
+            out["configured"] += 1
+            if str(obj.get("s") or "active") != "active":
+                out["blocked"] += 1
+                continue
+            try:
+                cooldown = float(obj.get("c") or 0.0)
+            except (TypeError, ValueError):
+                cooldown = 0.0
+            if cooldown and now < cooldown:
+                out["cooling"] += 1
+                out["retry_after"] = max(out["retry_after"], cooldown - now)
+        return out
 
     def _env_active(self, provider: str, now: float) -> list[dict[str, Any]]:
         out: list[dict[str, Any]] = []

@@ -33,6 +33,8 @@ from typing import Any
 
 import httpx
 
+from app.gateway.key_retry import KEY_SCOPED_STATUS
+from app.gateway.key_ring import NoUsableKeyError
 from app.gateway.provider import ChatMessage, ChatResponse, LLMProvider, ToolCall
 
 logger = logging.getLogger(__name__)
@@ -56,8 +58,17 @@ class ResponsesProvider(LLMProvider):
 
     name = "openai-responses"
 
-    def __init__(self, api_key: str, base_url: str = "", *, timeout: float = 120.0) -> None:
+    def __init__(
+        self,
+        api_key: str,
+        base_url: str = "",
+        *,
+        timeout: float = 120.0,
+        key_ring: Any = None,
+    ) -> None:
         self._api_key = api_key
+        #: keyset 托管时构造期拿到的只是占位 key，真实 key 每次调用从 KeyRing 取（见 `_resolve_key`）。
+        self._key_ring = key_ring
         # Responses 挂在同一个 API 根下（/v1/responses）；调用方给的是 /v1 基址时去掉重复段。
         base = (base_url or "https://api.openai.com/v1").rstrip("/")
         if base.endswith("/responses"):
@@ -65,6 +76,26 @@ class ResponsesProvider(LLMProvider):
         self._base = base
         self._timeout = timeout
         self._client: httpx.AsyncClient | None = None
+
+    async def _resolve_key(self) -> tuple[str, Any]:
+        """本次调用使用的 key。取不到就**抛**：把构造期的占位 key 发出去，上游会回一句
+        "Your api key ****xxx is invalid"，前端据此判定用户的 key 失效 —— 而用户那把实测是好的。
+        """
+        if self._key_ring is None:
+            return self._api_key, None
+        item = await self._key_ring.get_key(self.name)
+        if item is None:
+            raise NoUsableKeyError(self.name, await self._key_ring.diagnose(self.name))
+        return str(item["key"]), item
+
+    async def _report_key_scoped(self, item: Any, status: int) -> None:
+        """只有 401/403/429 才算这把凭证自己的错（与 `key_retry.is_key_scoped_failure` 同口径）。"""
+        if self._key_ring is None or item is None or status not in KEY_SCOPED_STATUS:
+            return
+        try:
+            await self._key_ring.report_failure(self.name, str(item["key"]))
+        except Exception:  # noqa: BLE001 - 记账失败不打断调用方
+            logger.exception("key ring report_failure failed")
 
     async def _get_client(self) -> httpx.AsyncClient:
         if self._client is None:
@@ -182,8 +213,13 @@ class ResponsesProvider(LLMProvider):
             tools=tools, effort=get_llm_effort(), stream=True,
         )
         url = f"{self._base}/responses"
+        try:
+            api_key, item = await self._resolve_key()
+        except NoUsableKeyError as exc:
+            yield ChatResponse(finish_reason="error", message=str(exc))
+            return
         headers = {
-            "Authorization": f"Bearer {self._api_key}",
+            "Authorization": f"Bearer {api_key}",
             "Content-Type": "application/json",
             "Accept": "text/event-stream",
         }
@@ -193,6 +229,7 @@ class ResponsesProvider(LLMProvider):
                 if resp.status_code >= 300:
                     body = (await resp.aread()).decode("utf-8", "replace")[:400]
                     logger.warning("responses: HTTP %d: %s", resp.status_code, body)
+                    await self._report_key_scoped(item, resp.status_code)
                     yield ChatResponse(
                         finish_reason="error",
                         message=f"responses API error {resp.status_code}: {body}",
@@ -289,13 +326,18 @@ class ResponsesProvider(LLMProvider):
             messages, model, max_tokens=max_tokens, temperature=temperature,
             tools=tools, effort=get_llm_effort(), stream=False,
         )
-        headers = {"Authorization": f"Bearer {self._api_key}", "Content-Type": "application/json"}
+        try:
+            api_key, item = await self._resolve_key()
+        except NoUsableKeyError as exc:
+            return ChatResponse(finish_reason="error", message=str(exc))
+        headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
         client = await self._get_client()
         try:
             resp = await client.post(f"{self._base}/responses", json=payload, headers=headers)
         except httpx.HTTPError as exc:
             return ChatResponse(finish_reason="error", message=f"responses transport error: {exc}")
         if resp.status_code >= 300:
+            await self._report_key_scoped(item, resp.status_code)
             return ChatResponse(
                 finish_reason="error",
                 message=f"responses API error {resp.status_code}: {resp.text[:400]}",

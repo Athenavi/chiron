@@ -45,10 +45,10 @@ class NamedResponsesProvider(ResponsesProvider):
         key_ring: Any = None,
     ) -> None:
         self.name = name
-        # ResponsesProvider 不接受 key_ring（它自带最小 HTTP 客户端）；这里显式忽略，
-        # 保持与其它 Named* 相同的构造签名（装配处不必分叉）。
-        _ = key_ring
-        super().__init__(api_key=api_key, base_url=base_url)
+        # Responses 自带最小 HTTP 客户端，但**同样**要走 KeyRing：此前这里显式丢弃
+        # key_ring，于是 keyset 托管的 responses provider 每次都用构造期那枚占位 key 打
+        # 上游，稳定收到"你的 key 无效"——与 openai/anthropic 两条分支的口径必须一致。
+        super().__init__(api_key=api_key, base_url=base_url, key_ring=key_ring)
 
 
 class NamedAnthropicProvider(AnthropicProvider):

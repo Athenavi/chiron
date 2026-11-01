@@ -8,6 +8,7 @@ from typing import Any
 import anthropic
 
 from app.gateway.key_retry import call_with_key_retry
+from app.gateway.key_ring import NoUsableKeyError
 from app.gateway.provider import ChatMessage, ChatResponse, EmbeddingResponse, LLMProvider, ToolCall
 from app.providers.sdk_compat import drop_unsupported_params
 
@@ -221,15 +222,15 @@ class AnthropicProvider(LLMProvider):
             return self._client, None
         item = await self._key_ring.get_key(self.name)
         if item is None:
-            # ⚠️ 显式警告（此前是静默回退）：见 openai.py 同名处的说明 ——
-            # 退到 placeholder client 会拿假 key 打上游并得到 401，
-            # 而真正的 key 可能挂在同产品的另一个协议变体名下。
+            # 与 openai.py 同名处同一口径：取不到 key 就 fail loud，绝不拿 placeholder
+            # 打上游 —— 那会产出一句"看起来是上游说的"401，把有效 key 的用户推向改 key。
+            diag = await self._key_ring.diagnose(self.name)
             logger.warning(
-                "KeyRing 无可用 key for %s：回退到 placeholder client，上游很可能返回 401。"
-                "请检查该 provider（或同产品基础 provider）的 keyset。",
+                "KeyRing 无可用 key for %s：%s（不回退到 placeholder，直接失败）",
                 self.name,
+                diag,
             )
-            return self._client, None
+            raise NoUsableKeyError(self.name, diag)
         key = item["key"]
         client = self._clients.get(key)
         if client is None:

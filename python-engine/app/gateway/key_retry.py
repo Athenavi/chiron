@@ -21,6 +21,8 @@ import logging
 from collections.abc import Awaitable, Callable
 from typing import Any, TypeVar
 
+from app.gateway.key_ring import NoUsableKeyError
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
@@ -31,6 +33,12 @@ DEFAULT_KEY_RETRY_MAX = 1
 #: 值得**换 key** 的状态码：key 本身失效（401/403）、该 key 限流（429）、
 #: 请求超时/冲突（408/409，通常与这一把 key 的链路有关）；5xx 单独按区间判。
 RETRYABLE_STATUS = frozenset({401, 403, 408, 409, 429})
+
+#: 确实是**这把凭证自己**的错：只有这类才配让 key 进冷却、才值得换一把 key 再试。
+#: 5xx/超时/400 都不在内 —— 冷却是按 key 计的，而一把 key 通常挂在多个模型/部署下，
+#: 把上游抖动或请求参数错算到凭证头上，等于用一次链路故障让整个 keyset 停摆 30s
+#: （单 key 时就是必然自残：下一次取不到 key，只能报"没有可用密钥"）。
+KEY_SCOPED_STATUS = frozenset({401, 403, 429})
 
 #: 传输类异常（换一把 key 通常换了一条链路）。按**类名**判，不 import 各家 SDK：
 #: 引擎同时接 openai / anthropic / httpx 三套异常层次，逐个 import 只会把耦合写进这里。
@@ -74,6 +82,11 @@ def is_retryable_key_error(exc: BaseException) -> bool:
     return any(hint in name for hint in _TRANSPORT_HINTS)
 
 
+def is_key_scoped_failure(exc: BaseException) -> bool:
+    """这个异常是不是**这把凭证自己**的错（只有这类才冷却它）。"""
+    return _status_of(exc) in KEY_SCOPED_STATUS
+
+
 def _count(provider: str, outcome: str) -> None:
     """打点失败绝不影响调用路径（指标是观测，不是前置条件）。"""
     try:
@@ -91,30 +104,45 @@ async def call_with_key_retry(
     call: Callable[[Any], Awaitable[T]],
     report_failure: Callable[[Any], Awaitable[None]],
 ) -> T:
-    """取 key → 调用；可重试的错误且预算未用尽 ⇒ 换 key 再试一次。
+    """取 key → 调用；**凭证类**错误且预算未用尽 ⇒ 换 key 再试一次。
 
     `resolve()` 每次都会重新取 key（KeyRing 的 LRU + 刚上报的冷却会让它换到另一把）；
     `call(client)` 必须是**尚未向调用方产出任何东西**的那一次 await（见模块文档的"提交点"）。
 
-    失败路径：先把旧 key 上报冷却（**无论**是否重试都要报 —— 那是跨实例共享的事实），
-    再决定换不换。预算用尽或错误不可重试时原样抛出，调用方（provider → router）仍可按
-    既有语义降级。
+    冷却只跟着**凭证**走：401/403/429 才上报（并据此换下一把），5xx/超时/400 原样抛出、
+    不动这把 key —— 否则一次上游抖动就把唯一的 key 关进 30s 冷却，下一次连 key 都取不到。
+
+    取不到 key 时（`resolve` 抛 `NoUsableKeyError`）**优先抛首个真实错误**：刚才是这把 key
+    被上游拒绝，现在"没 key 了"是那次上报的后果，把它当新错误报给前端就是二次误诊。
     """
     attempts = key_retry_max() + 1
+    first_error: BaseException | None = None
     for attempt in range(attempts):
-        client, item = await resolve()
+        try:
+            client, item = await resolve()
+        except NoUsableKeyError as resolve_exc:
+            if first_error is not None:
+                raise first_error from resolve_exc
+            raise
         try:
             result = await call(client)
         except Exception as exc:
+            if first_error is None:
+                first_error = exc
+            if not is_key_scoped_failure(exc):
+                # 不是这把凭证的错：不冷却、不换 key，原样交给上层（provider 熔断/降级照旧）。
+                _count(provider, "non_key_error")
+                raise
             await report_failure(item)
-            can_retry = item is not None and attempt + 1 < attempts and is_retryable_key_error(exc)
+            can_retry = item is not None and attempt + 1 < attempts
             if not can_retry:
                 _count(provider, "skipped")
                 raise
             logger.warning(
-                "key retry: %s 的第 %d 把 key 失败（%s），换 key 再试一次",
+                "key retry: %s 的第 %d 把 key 失败（%s %s），换 key 再试一次",
                 provider,
                 attempt + 1,
+                _status_of(exc),
                 type(exc).__name__,
             )
             _count(provider, "retried")
