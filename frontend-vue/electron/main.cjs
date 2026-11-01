@@ -74,11 +74,20 @@ let forceSetup = false
 let currentMode = 'local'
 
 /**
- * 本地后端状态：{ ok, baseUrl, token, dataDir, reason, message }，由 startLocalBackend 填充。
+ * 本地后端状态：`{ ok, baseUrl, token, dataDir, via, reason, message }`，由 startLocalBackend 填充。
  * token 是 core 的设备 token（components.startCore 的返回值），只注入给 preload，
  * 不写日志 —— 日志会随用户反馈外传。
+ *
+ * `via` 是**进程归属**：`'go-stack'` = 网关/引擎/引导器（PG、Redis）都归 local-stack.cjs；
+ * `'core'` = 归 components.cjs 的老 desktop-local core。停止时必须按它找 owner，
+ * 停错那套等于一个进程都没回收（见 stopLocalBackend）。
  */
-let localBackend = { ok: false, baseUrl: '', token: '', dataDir: '', reason: 'not-started', message: '' }
+let localBackend = blankLocalBackend()
+
+/** 空态：停过之后不能把死 baseUrl 和废 token 留给后面重建的窗口 */
+function blankLocalBackend() {
+  return { ok: false, baseUrl: '', token: '', dataDir: '', via: '', reason: 'not-started', message: '' }
+}
 
 /** 已经注册过 webRequest / 权限 / 下载监听的 session（重建窗口时不能重复注册） */
 const configuredSessions = new WeakSet()
@@ -318,6 +327,9 @@ async function tryStartGoStack(options = {}) {
       baseUrl: started.baseUrl,
       token: '',
       dataDir,
+      // 进程归属标记：PG/Redis/引擎/网关由 local-stack.cjs 拉起，停止也必须走它
+      //（见 stopLocalBackend 的注释 —— 停错那套等于什么都没停）。
+      via: 'go-stack',
       reason: '',
       message: '',
     }
@@ -460,7 +472,7 @@ async function startLocalBackend(options = {}) {
     }
     // 只记地址与"有没有 token"，token 本身绝不进日志
     logMain('info', `local backend ready at ${baseUrl} (device token: ${token ? 'injected' : 'absent'})`)
-    return { ok: true, baseUrl, token, dataDir, reason: '', message: '' }
+    return { ok: true, baseUrl, token, dataDir, via: 'core', reason: '', message: '' }
   } catch (err) {
     const message = err?.message || String(err)
     logMain('error', `local backend start failed: ${message}`)
@@ -547,18 +559,66 @@ function inspectLocalRuntime() {
   }
 }
 
-/** 停止本地后端：退出前与切换模式时都要调；没接线就当作已经停了 */async function stopLocalBackend() {
-  if (localBackendStopped) return false
+/**
+ * 停止本地后端：退出前与切换模式时都要调；没接线就当作已经停了。
+ *
+ * **两条链路各有各的停止函数，停错那套等于什么都没停。** 真机现场（Windows 安装包）：
+ * 打包态走「引导器 → PG/Redis → 引擎 → Go 网关」，进程归 `local-stack.cjs` 所有，
+ * 而这里过去只调 `components.stopCore` —— 那条链没起 core，`state.core` 为空，
+ * stopCore 直接返回 false，日志照样打 `local backend stopped`。结果是退出之后
+ * postgres 与 redis-server 仍在监听、仍占着 data dir；下一次启动又拉起一套 PG，
+ * 两套实例抢同一个目录（本轮能连续启动成功只因为上一套是被我手动清掉的）。
+ *
+ * 现在按启动时记下的 `via` 分派，并把每一条的回收结果如实写进日志。
+ * 是否要停只看 `localBackend.ok`（成功启动过才谈得上停）—— 归属是 ok 之后才会写的
+ * 从属信息，拿它当入口闸门等于把不变量抄两份，改一处忘一处就回到"静默没停"。
+ * `via` 为空 = 从没成功起过本地后端，没什么要停，直接返回 false（不打"stopped"）。
+ */
+async function stopLocalBackend() {
+  if (localBackendStopped || !localBackend.ok) return false
+  const ownership = localBackend
+  localBackend = blankLocalBackend()
   localBackendStopped = true
-  const components = loadOptionalModule('./components.cjs')
-  const stop = components && (components.stopLocalBackend || components.stopCore)
-  if (typeof stop !== 'function') return false
+
+  const via = ownership.via
+  if (!via) {
+    logMain('info', 'local backend 未曾成功启动，无需停止')
+    return false
+  }
+
+  const stoppers = {
+    'go-stack': () => {
+      const stack = loadOptionalModule('./local-stack.cjs')
+      return stack && typeof stack.stopLocalStack === 'function' ? stack.stopLocalStack() : null
+    },
+    core: () => {
+      const components = loadOptionalModule('./components.cjs')
+      const stop = components && (components.stopLocalBackend || components.stopCore)
+      return typeof stop === 'function' ? stop() : null
+    },
+  }
+  const stopper = stoppers[via]
+  if (!stopper) {
+    // 未知链路必须响：静默返回 true 就是上面那个 bug 的翻版（换了 owner 却没换停止函数）。
+    logMain('warn', `本地后端链路未知（via=${via}），没有对应的停止函数：进程可能未被回收`)
+    return false
+  }
+
   try {
-    await stop()
-    logMain('info', 'local backend stopped')
+    const result = await stopper()
+    if (result === null) {
+      logMain('warn', `本地后端链路 ${via} 的停止函数不可用：进程可能未被回收`)
+      return false
+    }
+    // go-stack 返回三条回收结果；core 返回布尔。有明细就打明细，别看板报"stopped"了事。
+    const detail =
+      via === 'go-stack' && result && typeof result === 'object'
+        ? `（gateway=${Boolean(result.gatewayStopped)} engine=${Boolean(result.engineStopped)} launcher=${Boolean(result.launcherStopped)}）`
+        : `（core=${Boolean(result)}）`
+    logMain('info', `local backend stopped ${via}${detail}`)
     return true
   } catch (err) {
-    logMain('warn', `local backend stop failed: ${err?.message || err}`)
+    logMain('warn', `local backend stop failed (${via}): ${err?.message || err}`)
     return false
   }
 }
@@ -743,8 +803,8 @@ async function applyModeSwitch(mode, opts) {
     deleteLocalData: Boolean(opts && opts.deleteLocalData),
     stopBackend: async () => {
       if (currentMode === 'local') {
+        // 标记由 stopLocalBackend 自己置位；这里再置一次只会掩盖"到底停没停"
         await stopLocalBackend()
-        localBackendStopped = true
       }
     },
     electron: { app, session },
@@ -759,7 +819,6 @@ function restartNow() {
     try {
       if (currentMode === 'local') {
         await stopLocalBackend()
-        localBackendStopped = true
       }
     } catch (err) {
       logMain('warn', `stop before restart failed: ${err?.message || err}`)
@@ -1437,14 +1496,13 @@ if (!gotLock) {
   })
 
   // 退出前停掉本地后端：否则 embedded-postgres / 推理代理会留成孤儿进程。
-  // 停的过程是异步的，所以先 preventDefault，停完再真的 quit（标志位保证只停一次）。
+  // 停的过程是异步的，所以先 preventDefault，停完再真的 quit。
+  // "只停一次"的标记由 stopLocalBackend 自己维护：它一进门就清空 localBackend 的归属，
+  // 这里若再置一次，等于在壳里留第二个状态真值来源。
   app.on('before-quit', event => {
     if (currentMode !== 'local' || localBackendStopped || !localBackend.ok) return
     event.preventDefault()
-    void stopLocalBackend().finally(() => {
-      localBackendStopped = true
-      app.quit()
-    })
+    void stopLocalBackend().finally(() => app.quit())
   })
 }
 
