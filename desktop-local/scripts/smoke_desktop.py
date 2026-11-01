@@ -622,9 +622,14 @@ def _headless_reason(stderr_text: str) -> str:
 
 
 def _userdata_candidates(preferred: Path) -> list[Path]:
-    """``--user-data-dir`` 被忽略时的兜底位置（按 Electron 的默认规则猜，只为**找到**日志）。"""
+    """``--user-data-dir`` 被忽略时的兜底位置（按 Electron 的默认规则猜，只为**找到**日志）。
+
+    顺序按"现在最可能在哪"排：`gh_Athenavi_chiron` 是壳层钉死的 userData 根
+    （`frontend-vue/electron/shared.cjs::USER_DATA_DIR_NAME`）。`frontend-vue` 是改名前
+    的根（取自 `package.json` 的 `name`），老安装仍会落在那里，留着才能诊断存量机器。
+    """
     home = Path.home()
-    names = ["Chiron", "frontend-vue"]
+    names = ["gh_Athenavi_chiron", "Chiron", "frontend-vue"]
     candidates = [preferred]
     if sys.platform == "win32":
         base = Path(os.environ.get("APPDATA") or home / "AppData" / "Roaming")
