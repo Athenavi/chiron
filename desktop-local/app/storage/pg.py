@@ -29,11 +29,13 @@ from __future__ import annotations
 import contextlib
 import importlib
 import inspect
+import json
 import os
 import re
 import shutil
 import socket
 import subprocess
+import sys
 import time
 from collections.abc import Collection, Iterator, Sequence
 from pathlib import Path
@@ -334,6 +336,146 @@ def wait_for_port(host: str, port: int, timeout: float = 60.0) -> bool:
     return False
 
 
+def _port_open(host: str, port: int) -> bool:
+    """单次探测端口是否仍在监听 —— 用来验证"说停了的 PG 是不是真停了"。"""
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.settimeout(0.5)
+        try:
+            sock.connect((host, port))
+            return True
+        except OSError:
+            return False
+
+
+EMBEDDED_STOP_WAIT_S = 15.0
+
+
+def wait_for_stopped(host: str, port: int, timeout: float = EMBEDDED_STOP_WAIT_S) -> bool:
+    """等端口释放（fast shutdown 实测 1~2s 内完成，留足余量）。"""
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if not _port_open(host, port):
+            return True
+        time.sleep(0.25)
+    return not _port_open(host, port)
+
+
+# 句柄登记表里的 pid 该由谁来持有：引导器自己（打包态是随包 cpython 的 ``python.exe``）。
+# 只认前缀，不认全名 —— ``python.exe`` / ``python3.exe`` / ``pythonw.exe`` 都算。
+_HANDLE_HOLDER_PREFIX = "python"
+
+#: ``_handle_pid_state`` 的三态
+HANDLE_PID_LIVE = "live"
+HANDLE_PID_RECYCLED = "recycled"
+HANDLE_PID_DEAD = "dead"
+
+
+def _handle_pid_state(pid: int) -> tuple[str, str]:
+    """登记表里这个 pid 现在到底是谁 —— ``("live"|"recycled"|"dead", 进程名)``。
+
+    **为什么"进程还在"不够**：Windows 会复用 PID。真机上取到的 ``.handle_pids.json``
+    有 14 条，13 条已退出，剩下唯一"存活"的那条属于一个 ``msedgewebview2.exe`` ——
+    它只是捡起了上一个引导器的号。按"还活着"判，就是"还有别人在用这个库"，
+    于是 ``cleanup()`` 的判据永远不成立、postmaster 永远不停：M46 要修的泄漏原样复发。
+
+    所以第二道判据是"像不像引导器自己人"（见 ``_HANDLE_HOLDER_PREFIX``）。
+    任何判不出来的情况（缺 psutil、权限不足、僵尸进程）一律算 live：
+    宁可留着服务器不越权，也不要停掉别人正在连的库。
+    """
+    if pid <= 0:
+        return HANDLE_PID_DEAD, ""
+    try:
+        import psutil
+    except ImportError:
+        return HANDLE_PID_LIVE, ""
+    try:
+        raw = psutil.Process(pid).name() or ""
+    except psutil.NoSuchProcess:
+        return HANDLE_PID_DEAD, ""
+    except (psutil.AccessDenied, psutil.ZombieProcess, OSError, ValueError):
+        return HANDLE_PID_LIVE, ""
+    if not raw:
+        return HANDLE_PID_LIVE, ""
+    if raw.lower().startswith(_HANDLE_HOLDER_PREFIX):
+        return HANDLE_PID_LIVE, raw
+    return HANDLE_PID_RECYCLED, raw
+
+
+# ``embedded_postgres`` 的跨进程句柄登记表（写在 pgdata 里，见 ``utils.DiskList``）。
+EMBEDDED_HANDLE_PIDS_FILE = ".handle_pids.json"
+
+
+def _read_handle_pids(path: Path) -> list[int]:
+    """读登记表；文件不存在/格式不认识都当成"没人登记"（与上游 ``DiskList.get()`` 一致）。"""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError, TypeError):
+        return []
+    if not isinstance(raw, list):
+        return []
+    return [item for item in raw if isinstance(item, int)]
+
+
+def _write_handle_pids(path: Path, pids: Sequence[int]) -> None:
+    with contextlib.suppress(OSError):
+        path.write_text(json.dumps(list(pids)), encoding="utf-8")
+
+
+def _stop_report(notes: list[str], message: str) -> None:
+    """把收尾结论同时写进 ``notes`` 和 stderr。
+
+    收尾发生在父进程已经在退的当口：notes 随就绪事件上报，但那一刻未必还有人读；
+    stderr 会被壳侧转进 ``logs/main.log``。"PG 到底停没停"必须留下可见记录 ——
+    之前正是这里静默，残留的 postmaster 才被当成"已经停过了"。
+    """
+    notes.append(f"pg 收尾：{message}")
+    with contextlib.suppress(OSError):
+        print(f"[pg] {message}", file=sys.stderr, flush=True)
+
+
+def _embedded_binary_dir(module: Any) -> Path | None:
+    """``embedded_postgres`` wheel 自带的那套 PG 二进制目录（``pginstall/bin``）。"""
+    try:
+        root = Path(str(module.__file__)).parent
+    except (AttributeError, TypeError):
+        return None
+    candidate = root / "pginstall" / "bin"
+    return candidate if candidate.is_dir() else None
+
+
+def _is_pg_ctl_wait_timeout(exc: BaseException) -> bool:
+    """这条失败是不是"上游 pg_ctl 等服务器就绪超时"—— 崩溃恢复慢的典型表现。
+
+    ``_call_entry`` 会把原始异常包成 ``RuntimeError("TimeoutExpired: Command '[... pg_ctl ... -w ...]'
+    timed out after 10 seconds（调用形态 …）")``，所以只能按文本特征认。两个词都必须在：只认
+    ``TimeoutExpired`` 会把我们自己的 SQL 轮询超时也当成"慢"来重试；只认 ``pg_ctl`` 会把权限不足、
+    二进制损坏也拖进重试，等于盖住真因。
+    """
+    text = str(exc)
+    return "TimeoutExpired" in text and "pg_ctl" in text
+
+
+# ``postmaster.pid`` 最后一行的状态取值（PG 16+ 才写这一行）。
+_POSTMASTER_STATUS_VALUES = ("starting", "ready")
+
+
+def _read_postmaster_file(data_dir: Path) -> tuple[int, str]:
+    """读 ``postmaster.pid`` 里的 ``(端口, 状态)``；文件不在或读不懂都返回 ``(0, "")``。
+
+    PG 的固定格式：第 1 行 pid、第 2 行 pgdata、第 3 行启动时间戳、**第 4 行端口**、
+    之后是 socket 目录/监听地址，**最后一行是状态**（``starting`` → ``ready``）。
+    状态只认那两个值：拿不到就按"未就绪"处理，等不到就把真实读数一起上报，不猜。
+    """
+    try:
+        raw = (data_dir / "postmaster.pid").read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, ""
+    lines = [line.strip() for line in raw.splitlines()]
+    port = int(lines[3]) if len(lines) >= 4 and lines[3].isdigit() else 0
+    status = next((line for line in reversed(lines) if line in _POSTMASTER_STATUS_VALUES), "")
+    return port, status
+
+
 @contextlib.contextmanager
 def _dotenv_noop() -> Iterator[None]:
     """临时把 ``dotenv.load_dotenv`` 打成空操作。
@@ -495,8 +637,91 @@ class PostgresServer:
         self._stop_hook = None
         if hook is None:
             return
-        with contextlib.suppress(Exception):
+        try:
             hook()
+        except Exception as exc:  # noqa: BLE001 —— 收尾异常吞掉就等于谎报"停过了"
+            _stop_report(self.notes, f"停止入口抛了：{type(exc).__name__}: {exc}")
+
+    # ------------------------------------------- embedded-pack 收尾：修上游的停止判据
+    def _embedded_stop_hook(self, module: Any, stop_hook: Any) -> Any:
+        """把 ``handle.cleanup()`` 包一层：先裁死句柄，再验 postmaster 真停了。
+
+        **为什么不能直接信上游**：``PostgresServer._cleanup()`` 的判据是"登记表里只剩
+        我这一个 pid"，而那份 ``pgdata/.handle_pids.json``（``utils.DiskList``）**从不清理**
+        —— 父进程被杀掉的历次运行会把死 pid 一直留在里面（真机取到 14 条）。判据于是永远
+        不成立，``cleanup()`` 一进门就 return，PG 留在后台监听；而 ``pg_ctl`` 起的
+        postmaster **不是**引导器的子进程，壳侧的进程树回收碰不到它。真机现象正是
+        "引导器退出了、Redis 被收走了、端口 3786 上还挂着 postmaster"。
+
+        这里只裁"确认不再持有句柄"的 pid（已退出，或 PID 已被别的程序复用）：只要还有
+        像引导器自己人的活进程，就保留服务器（不越权），也不去 ``pg_ctl stop``；
+        判据恢复成立后仍没关掉，才退回官方工具兜底。
+        """
+
+        def stop() -> None:
+            registry = self.data_dir / EMBEDDED_HANDLE_PIDS_FILE
+            mine = os.getpid()
+            others = [pid for pid in _read_handle_pids(registry) if pid != mine]
+            states = {pid: _handle_pid_state(pid) for pid in others}
+            live = [pid for pid, (state, _) in states.items() if state == HANDLE_PID_LIVE]
+            dead = [pid for pid, (state, _) in states.items() if state == HANDLE_PID_DEAD]
+            hijacked = [
+                f"{pid}->{name}"
+                for pid, (state, name) in states.items()
+                if state == HANDLE_PID_RECYCLED
+            ]
+            stale = [pid for pid, (state, _) in states.items() if state != HANDLE_PID_LIVE]
+            if stale:
+                _write_handle_pids(registry, [mine, *live])
+                _stop_report(
+                    self.notes,
+                    f"句柄登记表已裁掉 {len(stale)} 条（已退出 {dead}，PID 被别的进程复用 {hijacked}）："
+                    f"留着会让 cleanup() 误判'还有别人在用'而不停服务器",
+                )
+            stop_hook()
+            if live:
+                _stop_report(self.notes, f"仍有存活句柄 {live}，保留服务器不越权")
+                return
+            self._confirm_embedded_stopped(module)
+
+        return stop
+
+    def _confirm_embedded_stopped(self, module: Any) -> None:
+        """cleanup() 之后必须**看到端口关掉**才算停；没看到就兜底，兜不住就上报。"""
+        if not self._actual_port:
+            _stop_report(self.notes, "该后端没有 TCP 端口（unix socket），无法验证服务器已停")
+            return
+        host = self._actual_host or "127.0.0.1"
+        if wait_for_stopped(host, self._actual_port, timeout=EMBEDDED_STOP_WAIT_S):
+            _stop_report(self.notes, f"postmaster 已停止（端口 {self._actual_port} 不再监听）")
+            return
+        _stop_report(self.notes, f"cleanup() 后端口 {self._actual_port} 仍在监听：走 pg_ctl 兜底")
+        self._stop_by_pg_ctl(module, host)
+
+    def _stop_by_pg_ctl(self, module: Any, host: str) -> bool:
+        pg_ctl: str | None = None
+        binary_dir = _embedded_binary_dir(module)
+        if binary_dir is not None:
+            candidate = binary_dir / ("pg_ctl.exe" if os.name == "nt" else "pg_ctl")
+            if candidate.is_file():
+                pg_ctl = str(candidate)
+        if pg_ctl is None:
+            pg_ctl = self._find_binary("pg_ctl")
+        if pg_ctl is None:
+            _stop_report(self.notes, f"找不到 pg_ctl：端口 {self._actual_port} 上的进程可能未被回收")
+            return False
+        cmd = [pg_ctl, "-D", str(self.data_dir), "-m", "fast", "-w", "-t", "30", "stop"]
+        try:
+            # capture=False：postmaster 会继承管道，收输出会一直等 EOF
+            self._run(cmd, timeout=60, what="pg_ctl stop（收尾兜底）", check=False, capture=False)
+        except Exception as exc:  # noqa: BLE001 —— 兜底失败也要留下结论，不是留个孤儿
+            _stop_report(self.notes, f"pg_ctl stop 失败：{type(exc).__name__}: {exc}")
+            return False
+        if _port_open(host, self._actual_port):
+            _stop_report(self.notes, f"pg_ctl 兜底后端口 {self._actual_port} 仍在监听：进程未被回收")
+            return False
+        _stop_report(self.notes, f"pg_ctl 兜底成功：端口 {self._actual_port} 已释放")
+        return True
 
     # ------------------------------------------------------- 后端 1：embedded 包
     def _start_embedded_pack(self) -> str:
@@ -531,7 +756,7 @@ class PostgresServer:
             self.data_dir.parent.mkdir(parents=True, exist_ok=True)
             self.data_dir.mkdir(parents=True, exist_ok=True)
 
-            handle, call_desc = self._call_entry(entry, entry_name)
+            handle, call_desc = self._call_entry_resilient(entry, entry_name, report)
             report["call"] = call_desc
             self._ensure_handle_running(handle)
             dsn = self._handle_dsn(handle, report)
@@ -551,7 +776,7 @@ class PostgresServer:
                 "embedded_postgres 返回的句柄没有任何停止入口（cleanup/stop/close/__exit__），"
                 f"无法管理其生命周期；dir(handle) = {_public_names(handle)}\n{format_probe(report)}"
             )
-        self._stop_hook = stop_hook
+        self._stop_hook = self._embedded_stop_hook(module, stop_hook)
 
         self.notes.extend(self._embedded_notes(dsn))
         # 端口由包内部挑（POSIX 上干脆只有 unix socket），拿不到 endpoint 就只靠 SQL 轮询
@@ -560,6 +785,47 @@ class PostgresServer:
         self._record_endpoint(dsn)
         self._prepare(dsn, strict=True, endpoint=endpoint)
         return dsn
+
+    def _call_entry_resilient(
+        self, entry: Any, entry_name: str, report: dict[str, Any]
+    ) -> tuple[Any, str]:
+        """:meth:`_call_entry` 外面罩一层"崩溃恢复慢"的补救。
+
+        上游 ``embedded_postgres`` 启动用的是 ``pg_ctl(['-w', ...], timeout=10)``，
+        那个 10s 是**写死的**，只够一次干净启动。上一次 PG 没正常关（掉电、被强杀、
+        或被我们的兜底砍掉）时，postmaster 要先做崩溃恢复 —— 真机实测 33s 才 ready
+        （08:39:37 启动 → 08:40:10 可连），10s 到点抛 ``TimeoutExpired``，embedded-pack
+        这条路整体判死，引导器报"每条路径都失败"、本地模式起不来。而 PG 其实**还在后台
+        继续起**：等它就绪再试一次，上游看到 postmaster 已运行就直接附着，不会再跑 pg_ctl。
+
+        只认这一种特征，别的故障原样上抛 —— 把"权限不够""二进制损坏"也当成"慢"来重试，
+        等于把真因盖住。
+        """
+        try:
+            return self._call_entry(entry, entry_name)
+        except RuntimeError as exc:
+            if not _is_pg_ctl_wait_timeout(exc):
+                raise
+            waited, detail = self._await_postmaster_ready(timeout=self.settings.pg_start_timeout)
+            report["recovery"] = f"pg_ctl 等待超时后仍在恢复：{detail}"
+            if not waited:
+                raise RuntimeError(
+                    f"{exc}\n（等它恢复完也没就绪：{detail}，上限 {self.settings.pg_start_timeout:.0f}s）"
+                ) from exc
+            self.notes.append(f"上游 pg_ctl 只等 10s，本次恢复更久（{detail}）：就绪后重试一次")
+            return self._call_entry(entry, entry_name)
+
+    def _await_postmaster_ready(self, timeout: float) -> tuple[bool, str]:
+        """等 postmaster 自己爬完崩溃恢复：pid 文件里状态是 ``ready`` 且端口能连。"""
+        deadline = time.monotonic() + timeout
+        port, status = 0, ""
+        while True:
+            port, status = _read_postmaster_file(self.data_dir)
+            if port and status == "ready" and _port_open("127.0.0.1", port):
+                return True, f"port={port} status={status}"
+            if time.monotonic() >= deadline:
+                return False, f"port={port or '未知'} status={status or '未知'}"
+            time.sleep(0.5)
 
     def _call_entry(self, entry: Any, entry_name: str) -> tuple[Any, str]:
         """按**真实签名**适配调用入口，返回 ``(句柄, 实际调用形态)``。

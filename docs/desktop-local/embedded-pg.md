@@ -172,6 +172,10 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
    它会覆盖本地实例的 DSN，造成"迁移打到开发库"。`pg.py:338` 的 `_dotenv_noop()` 在调用
    alembic 期间把 `dotenv.load_dotenv` 打成空操作，迁移后再用 `alembic_version` 复核；
    复核不到就报错，不会假装成功。
+9. **`<pgdata>/log` 会被抢句柄**（真机日志里可见，非致命）：上游把 `pg_ctl` 的输出重定向到
+   `<pgdata>/log`，而 postmaster 自己也以 `./log` 为 `logging_collector` 目标。启动瞬间两侧撞
+   `sharing violation`，上游重试约 30s 后成功 —— 表现为"启动慢了半分钟"，不是失败，也没法从
+   我们这侧修（在 wheel 里）。排查时先看 `<pgdata>/log` 的时间戳，别把它当成卡死。
 
 ## 8. 实现约束
 
@@ -179,3 +183,61 @@ python scripts/verify_p0.py --json | tail -1        # pg_backend / pg_notes / em
    再 `CREATE DATABASE`），起进程不算。
 2. 每个后端都要能被单独关掉/换掉：`POSTGRES_DSN`（external）> embedded-pack > binaries。
 3. 失败就报真实异常 + 探测结果，**不要把回退包装成成功**。
+
+## 9. 生命周期：上游两处"对外说没事、实际没做事"的坑
+
+两处都不是抛错，而是静默，所以都在 `app/storage/pg.py` 里包了一层，结论同时写进
+`PostgresServer.notes`（→ 就绪事件 / `verify_p0.py`）和 stderr（→ 壳侧 `logs/main.log`）。
+
+### 9.1 `cleanup()` 的"最后一个句柄"判据（退出后 PG 残留）
+
+上游 `_cleanup()` 一进门 `pids = get_and_remove(os.getpid())`，**只有 `pids == [自己]` 才继续停服务器**；
+而那份登记表（`<pgdata>/.handle_pids.json`，`utils.DiskList`）**从不清理死 pid** —— 引导器每被杀/崩一次
+就往里留一条。真机量到 **14 条陈旧记录**（13 条进程早没了，剩下那条的 pid 已被 `msedgewebview2.exe` 复用），
+判据永远不成立，`cleanup()` 原地 return，端口 3786 上的
+postmaster 一直挂着。为什么只有 PG 残留：`embedded_postgres` 经 `pg_ctl` 起 PG，**postmaster 不是引导器的
+子进程**，壳侧 `killProcessTree` 收不到它；Redis 是子进程，被树杀收走了。所以只有引导器自己走到
+`finally` 才能停 PG（见 [launcher.md §5.4](launcher.md)）。
+
+兜底三步（`_embedded_stop_hook` → `_confirm_embedded_stopped` → `_stop_by_pg_ctl`）：
+
+1. 调 `cleanup()` **前**先裁掉登记表里**不属于任何引导器**的 pid。**判活不等于判归属**：Windows
+   会复用 pid，真机那条残留 `999907` 后来被 `msedgewebview2.exe` 拿走 —— 按 `psutil.pid_exists`
+   它会永久算"还有别人在用"，`cleanup()` 于是永远早退，而这套兜底自己写的裁剪也永远轮不到。
+   现在的判据是 `_handle_pid_state()` 三态：进程没了 ⇒ `dead`；还在且可执行文件名以
+   `python` 开头（引导器只可能是 python 进程）⇒ `live`；还在但名字是别的程序 ⇒ `recycled`，
+   和 `dead` 一起裁掉。判不准的一律算 `live`（`AccessDenied`、名字读空、没装 `psutil`）——
+   宁可少裁一个死句柄，也不要去停别人正在连的库；
+2. 仍有**存活**的其他句柄就按上游语义不越权停服，并在 notes 里说明留下的原因；
+3. 否则以"端口真的不再监听"复核（fast shutdown 实测 1~2s，给 15s）；还在监听就
+   `pg_ctl -D <pgdata> -m fast -w -t 30 stop` 兜底，再复核一次；POSIX（只有 unix socket）
+   直说"无法验证"，不假装停过了。
+
+### 9.2 `pg_ctl` 写死的 10s 等待（首启必失败一次）
+
+`embedded_postgres/_commands.py` 的 `pg_ctl(..., timeout=10)` 是**硬编码**，只够一次干净启动。上一次
+PG 没正常关（强杀/掉电/被 9.1 的兜底砍掉）时 postmaster 要先跑崩溃恢复：真机 08:39:37 启动 →
+08:40:10 才可连（**33s**），10s 到点抛 `TimeoutExpired: Command '[... pg_ctl ... -w ...]' timed out after
+10 seconds`，embedded-pack 整条路判死、本地模式起不来。而 `pg_ctl` 超时**不妨碍** postmaster 继续在
+后台起完 —— 这正是"第一次点失败、第二次点就好了"的机制（第一次已经把恢复跑完了）。
+
+兜底（`_call_entry_resilient`）：
+
+- **只认这一种特征**：异常文本里同时有 `TimeoutExpired` 和 `pg_ctl`。别的失败原样上抛 —— 把
+  "权限不够""二进制损坏"也当成"慢"来重试，等于把真因盖住；
+- 然后轮 `<pgdata>/postmaster.pid`（第 4 行端口、最后一行状态 `starting`/`ready`），要 **状态 ready
+  且端口真能连上**才算就绪，上限 `CHIRON_LOCAL_PG_START_TIMEOUT`（默认 60s）；
+- 就绪后再调一次入口：上游 `ensure_postgres_running()` 看见活着的 postmaster 就直接附着，不再跑 `pg_ctl`
+  （读装的 wheel 核对过）；**只重试一次**，不打转；
+- 等不到就绪**不重试**，把原始异常和真实读数（`port=… status=…`）一起上报；过程进
+  `probes["recovery"]` 与 notes，便于事后判断"这次到底是不是恢复慢"。
+
+### 9.3 相关用例与验证
+
+`desktop-local/tests/test_pg_embedded.py` §6（收尾：说停了就得真停了，变异 8/8 被抓）与 §7
+（首启：扛不住崩溃恢复，变异 12/12 被抓）。§6 另覆盖句柄登记表的裁剪口径 —— 只认名字前缀是
+`python` 的活进程、`pid <= 0` 短路、`AccessDenied` 不能误判成"已退出"、没装 `psutil` 时退回保守、
+名字读空算活着、活着的那条绝不被子进程清掉、以及"仍有真句柄就不许停服"（这一轮 9 个变异 9/9 被抓）。
+Windows 上的验收口径同 launcher.md：退出应用后
+`netstat -ano | findstr LISTENING` 里不该再有本轮 PG / Redis 端口，`tasklist` 里不该有
+`postgres.exe` / `redis-server.exe` 残留。

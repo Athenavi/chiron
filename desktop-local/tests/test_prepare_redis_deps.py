@@ -44,6 +44,7 @@ LAZY_NOT_NEEDED = {
     "alembic",     # app/storage/pg.py 迁移路径
     "asyncpg",     # 应用层异步访问 PG
     "dotenv",      # pg.py 读 .env
+    "psutil",      # pg.py 收尾时判句柄存活；它本就随 embedded_postgres 装，自检走不到
     "psycopg2",    # alembic 走 psycopg2 方言
 }
 
