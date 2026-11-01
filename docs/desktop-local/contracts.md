@@ -585,3 +585,63 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 守这条契约的用例：`frontend-vue/src/api/__tests__/sseConnection.spec.ts`（11 例，含一条
 "不许退回 `new EventSource`" 的源码护栏），以及 `ChatView.interaction.spec.ts` 里把
 `createSSEConnection` 打桩成真实句柄形状（只有 `close()`）。
+
+## 12. 会话运行时状态 → 能力执行：模型必须走到 LLM 能力
+
+链路口径（release-m54 真机 2026-11-01：本地模式起壳 → `/v1/chat/submit` 带随机 nonce 的一次
+2735ms 真出字（`{"result": "<nonce>"}`），重复同一 prompt 的一次 11ms（网关缓存命中）；
+`GET /events` 带 Bearer 是 200 并立刻回一帧 `{"type":"connected",...}`）：
+`/chat` 页 = 统一任务模式 ⇒
+`POST /v1/chat/submit`（Go 纯代理 `internal/api/routes_proxy.go:187`，不做模型补全）→
+引擎 `unified_executor` → `ChatHandler.submit_task` → `TaskRouter.route_task`。
+**回合答案来自这个同步响应**（`frontend-vue/src/views/ChatView.vue:1296-1310` 把 `d.output`
+直接追加成 assistant 消息），`/events` 只喂交互待办与心跳。所以「一直思考中」只有两种因：
+事件流没身份（§11），或这条同步请求没回来 —— 别把两者混成一条。
+
+会话运行时状态（`llm_config.model` / `llm_config.provider`）在 `route_task` 里只有**两条出口**：
+
+1. 意图理解：`_understand_intent(..., model=, provider_hint=)`（P1-d）。
+2. 能力执行：`_execute_tasks(llm_model=, provider_hint=)` → `_execute_single_task` 在
+   `_resolve_params` 之后注入 `input_params`（`app/core/task_router.py:736-749`），
+   `_llm_executor` 再把它交给 `gateway.chat_stream(model=, provider_hint=)`
+   （`app/core/capabilities.py:434-438`）。
+
+**第二条是 M53 补上的，不是可选的**：`WorkstationType.AGENT` 的三个 LLM 能力
+（`agent:general_chat` / `agent:analyzer` / `agent:requirement_parser`）都由 `_llm_executor`
+构建，`input_schema` 里**只声明 `task`** —— 执行器签名是 `_execute(task, **kwargs)`，
+拿不到会话状态。少了注入这一步，`chat_stream` 就一路带 `model=""` 打上游。
+
+### 12.1 三条禁止
+
+- **不许在这里发明默认模型**。真·空模型（没配会话模型）保持空串，交给 `router._select`
+  的兜底口径；写死一个"看起来能用"的模型会把界面上的模型选择器变成装饰品（P1-d 之前的
+  `gpt-4o-mini` 就是这么把用户的选择吃掉的）。
+- **不许覆盖能力自己声明的 `model` 参数**。注入的前提是
+  `all(p.name != "model" for p in cap.input_schema)`：参数表管得到的归参数表，会话值不插队。
+- **不许往非 AGENT 工作台塞 `model` / `provider_hint`**。技能/知识库/工作流的执行器按
+  `**params` 收参数，多一个键就是一次签名意外（`test_non_agent_capability_not_polluted` 钉住）。
+
+### 12.2 这条断过的样子（别再照原样读第二遍）
+
+`model=""` 打上游时，DeepSeek 网关回
+`400 The supported API model names are deepseek-flash, deepseek-v4-pro, but you passed .`；
+`_llm_executor` 只在"一个 content chunk 都没攒到"时抛
+`LLM capability returned empty response`，于是**上游的点名错误被吞成一句空响应**。
+叠加打包态子进程 stdio 的取舍（`spawn` 一律 `stdio: 'pipe'`：stdout 只累计字节数，stderr
+只留末尾一小段脱敏后的片段用于报错消息，都不落盘、不整段打印 ——
+`frontend-vue/electron/components.cjs:15-16`、引擎侧同口径 `:1452`），用户侧只剩"思考中"
+三个字，排查现场也不存在。同一条链路上 `router._select` 还有
+"匹配不到候选 ⇒ 把所有 provider 都试一遍"（`app/gateway/router.py:660`）——
+它对空 model 尤其宽容，等于第二次把 bug 藏起来。
+**待办（未修）**：引擎/网关运行期错误落盘 + 空 model 不做全表试投。
+
+### 12.3 谁在守
+
+- `python-engine/tests/test_task_router_llm_model.py`（9 例）：AGENT 能力收到会话
+  `model`/`provider_hint`、空会话模型不注入、非 AGENT 不被污染、能力自声明 `model` 不被覆盖、
+  `route_task` 把 `context.llm_config` 透传到意图理解与执行两段、执行器 → `chat_stream`
+  的最后一棒两条。
+- 变异矩阵（逐条改回旧行为，每条只挂对应断言）：去掉 AGENT 判定 ⇒ `test_non_agent_capability_not_polluted`；
+  无条件写 `model` ⇒ `test_empty_session_model_is_not_invented`；去掉"自声明"守卫 ⇒
+  `test_capability_own_model_param_wins`；`route_task` 停止透传 ⇒ 两条透传用例；
+  执行器丢 `model` 或 `provider_hint` ⇒ 最后一棒两条。

@@ -128,11 +128,13 @@ class TaskRouter:
             # 会话运行时状态（P1-d）：统一链路的模型/provider 选择在此进入意图理解。
             # 此前这里没有传，于是意图理解恒用写死的 gpt-4o-mini。
             llm_config = (context or {}).get("llm_config") or {}
+            llm_model = str(llm_config.get("model") or "")
+            llm_hint = str(llm_config.get("provider") or "")
             intent = await self._understand_intent(
                 user_input,
                 context or {},
-                model=str(llm_config.get("model") or ""),
-                provider_hint=str(llm_config.get("provider") or ""),
+                model=llm_model,
+                provider_hint=llm_hint,
                 tenant_id=tenant_id,
             )
 
@@ -159,6 +161,8 @@ class TaskRouter:
                 execution_order,
                 tenant_id=tenant_id,
                 trace_id=trace_id,
+                llm_model=llm_model,
+                provider_hint=llm_hint,
             )
 
             # ── 阶段 6: 结果聚合 ─────────────────────────────────────
@@ -592,6 +596,8 @@ Return ONLY valid JSON without markdown formatting."""
         tasks: list[SubTask],
         tenant_id: int,
         trace_id: str = "",
+        llm_model: str = "",
+        provider_hint: str = "",
     ) -> list[ExecutedTask]:
         """执行所有子任务 (有依赖的按序执行,无依赖可并行)"""
         import asyncio
@@ -609,7 +615,14 @@ Return ONLY valid JSON without markdown formatting."""
 
             # 并行执行同一层级的任务
             coroutines = [
-                self._execute_single_task(task, tenant_id, trace_id, completed_tasks)
+                self._execute_single_task(
+                    task,
+                    tenant_id,
+                    trace_id,
+                    completed_tasks,
+                    llm_model=llm_model,
+                    provider_hint=provider_hint,
+                )
                 for task in layer
             ]
 
@@ -691,6 +704,8 @@ Return ONLY valid JSON without markdown formatting."""
         tenant_id: int,
         trace_id: str,
         completed_tasks: dict[str, ExecutedTask],
+        llm_model: str = "",
+        provider_hint: str = "",
     ) -> ExecutedTask:
         """执行单个子任务"""
         cap = await self.registry.get_by_id(task.capability_id, tenant_id)
@@ -717,6 +732,21 @@ Return ONLY valid JSON without markdown formatting."""
 
         # 注入依赖任务的输出（依赖输出模板 ${dep.field} 解析）
         input_params = self._resolve_params(task.parameters, completed_tasks)
+
+        # 会话选的模型必须走到能力执行：agent:* 这几个 LLM 能力的参数表里只有 task，
+        # 执行器拿不到会话运行时状态，于是 chat_stream 一路带着 model="" 打上游 ——
+        # DeepSeek 这类"只认名字不认前缀"的网关直接 400，用户看到的是一句
+        # "LLM capability returned empty response"。真·空模型（没配会话模型）保持
+        # 原样，交给路由的兜底口径，不在这里发明默认值。
+        if (
+            cap.workstation_type == WorkstationType.AGENT
+            and cap.input_schema
+            and all(p.name != "model" for p in cap.input_schema)
+        ):
+            if llm_model:
+                input_params["model"] = llm_model
+            if provider_hint:
+                input_params["provider_hint"] = provider_hint
 
         # 设置工具上下文：kb 等工具依赖 user_id 做归属校验（跨工作台调用必须携带）
         from app.tools.context import set_tool_context

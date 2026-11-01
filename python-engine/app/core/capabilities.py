@@ -432,7 +432,9 @@ def _llm_executor(system_prompt: str) -> Any:
             ChatMessage(role="user", content=task),
         ]
         async for chunk in gateway.chat_stream(
-            messages=messages, model=kwargs.get("model", "")
+            messages=messages,
+            model=kwargs.get("model", ""),
+            provider_hint=str(kwargs.get("provider_hint", "")),
         ):
             if getattr(chunk, "content", ""):
                 response_text += chunk.content

@@ -212,6 +212,7 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
 | `userData 日志 … FAIL` | 10s 内还没进 `whenReady`，或 `--user-data-dir` 被忽略且默认目录无权限 | 调大 `--electron-wait`；用 `--keep` 后按打印的路径手工看 |
 | `/chat` 发消息后一直「思考中」、控制台只有 `/events` 401 | 事件流没带出身份：要么改回了 `EventSource`（设不了头），要么本地 JWT 还没换到 | 见 contracts.md §11。非 2xx 现在**必须**立即 `onError`；还挂着不动就先确认请求头里有没有 `Authorization`，别去查模型 |
 | 每条回合立刻 `no LLM provider available for model=…`（注册表是空的） | 网关没回填 keyset，或引擎注册表在 keyset 就绪前就成型了 | 见 contracts.md §10：启动日志应有 `llm provider keysets hydrated from DB`；配完 key 不发 `llm:keys:changed` 就是回填/订阅断了一条 |
+| 发消息后报 `LLM capability returned empty response`（或依旧「思考中」但 `/events` 是 200） | 会话选的模型没走到能力执行，`chat_stream` 带空 model 打上游被网关拒掉 | 见 contracts.md §12：`/chat` 的答案来自 `/v1/chat/submit` 的同步响应，先确认 `route_task` 的两条出口都在（意图理解 + 执行注入），再谈 provider；打包态引擎 stdout 不落盘，别指望在界面上看到上游的 400 |
 | `taskkill: 没有找到进程` | 壳已经自己退了，收尾命令扑空 | 正常现象（`check=False`），只看 `Electron 退出回收` 的结论 |
 
 ## 8. 已知未覆盖
