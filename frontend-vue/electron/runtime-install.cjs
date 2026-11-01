@@ -151,26 +151,14 @@ function platformKey() {
  *
  * 目录名带版本（如 `cpython-3.12.16-windows-x86_64-none`），所以按 glob 找一层；
  * 找不到返回空串。**这是运行时唯一的正常来源** —— 安装包自带，不联网。
+ *
+ * 与改绑（`rebindVenvBinding`）共用 `bundledRuntime` 的判据：两处对"包里有没有可用的
+ * CPython"必须给同一个答案，否则会出现"能建环境、却判不出可改绑的目标"这种分裂状态。
  */
 function bundledPython(resourcesPath = process.resourcesPath) {
-  const root = bundledAssetRoot(resourcesPath)
-  if (!root) return ''
-  const base = path.join(root, 'python-runtime', platformKey())
-  let entries
-  try {
-    entries = fs.readdirSync(base, { withFileTypes: true })
-  } catch {
-    return ''
-  }
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue
-    const exe =
-      process.platform === 'win32'
-        ? path.join(base, entry.name, 'python.exe')
-        : path.join(base, entry.name, 'bin', 'python3')
-    if (fs.existsSync(exe)) return exe
-  }
-  return ''
+  const runtime = bundledRuntime(resourcesPath)
+  if (!runtime.dir) return ''
+  return interpreterUnderHome(homeForRuntime(runtime.dir))
 }
 
 /** 随包 uv：`resources/uv/<platform>/uv.exe`（只用来建 venv + 装依赖，不下载解释器） */
@@ -180,6 +168,203 @@ function bundledUv(resourcesPath = process.resourcesPath) {
   const exe = process.platform === 'win32' ? 'uv.exe' : 'uv'
   const candidate = path.join(root, 'uv', platformKey(), exe)
   return fs.existsSync(candidate) ? candidate : ''
+}
+
+/**
+ * venv 与解释器之间的**绑定**。
+ *
+ * `userData/local/{runtime,engine}/venv` 是跨版本、跨包共享的（重建一份引擎环境实测
+ * 340MB、两百个包、要联网），而它里面的 `Scripts\python.exe`（Windows）/
+ * `bin/python3`（POSIX 是符号链接）**只是跳转器**：标准库与 DLL 由 `pyvenv.cfg` 里的
+ * `home` 决定，而 `home` 写的是**当初创建它那份包的绝对路径**。真机取到两份：
+ * core 指向 `D:\Program Files\Chiron\resources\python-runtime\…`，引擎指向
+ * `X:\…\release-m47\win-unpacked\resources\python-runtime\…`（一次临时验证出包）。
+ * 那个目录被删、或者换了安装位置，解释器就再也起不来 —— 实测把 home 改指一个不存在的
+ * 目录，`Scripts\python.exe -c "import sys"` 直接
+ * `No Python at '"X:\…\python.exe'` 并以 **103** 退出。此时 venv 文件明明都在，
+ * 上层只会看到"探测失败"，于是走全量重建：慢、要网，离线时本地模式直接不可用，
+ * 而日志里看不出真因是"换了个包"。
+ *
+ * 所以这里做一次**就地改绑**：home 失效时把它指向当前包里那一份 CPython。
+ * 闸门是 **minor 版本相同**（`3.12.x`）：site-packages 里的 `pydantic_core` 这类扩展按
+ * minor 的 ABI 编译（`.cp312-*.pyd`），3.12.16 → 3.12.17 换掉安全，而绑到 3.13 只会
+ * 换一种崩法 —— 那种情况明确判"要重建"，由调用方走原来的重建路径。
+ * 拿 minor 而不是整串版本号，是因为随包补丁号会跟着发版变；要求逐字相同会让每次升级
+ * 都白重建一次 340MB 环境，而那正是本函数要避免的代价。
+ */
+const VENV_CFG_FILE = 'pyvenv.cfg'
+
+/** 按平台取 path 实现：用例要在 Windows 上也能验 POSIX 那条口径 */
+function pathFor(platform) {
+  return platform === 'win32' ? path.win32 : path.posix
+}
+
+/**
+ * `home` 与"随包包根"的对应关系**两个平台不一样**：
+ * Windows 上受管 CPython 的 `python.exe` 就在包根，POSIX 上在 `<包根>/bin`
+ * （uv 和 CPython 自己的 venv 都这么写 `pyvenv.cfg`）。
+ * 改绑时不换算就会把 POSIX 的 home 写成包根 —— 解释器照样找不到，等于白改。
+ */
+function homeForRuntime(runtimeDir, platform = process.platform) {
+  return platform === 'win32' ? runtimeDir : pathFor(platform).join(runtimeDir, 'bin')
+}
+
+/** `home` 那一层里的解释器文件名（两个平台不一样） */
+function interpreterUnderHome(homeDir, platform = process.platform) {
+  const pm = pathFor(platform)
+  return platform === 'win32' ? pm.join(homeDir, 'python.exe') : pm.join(homeDir, 'python3')
+}
+
+/** `3.12.16` → `3.12`；认不出返回空串（不猜） */
+function minorVersion(version) {
+  const m = /^(\d+)\.(\d+)/.exec(String(version || ''))
+  return m ? `${m[1]}.${m[2]}` : ''
+}
+
+/**
+ * 读 `pyvenv.cfg` 的 home 与版本。
+ *
+ * 返回 `{ home, versionInfo, file, text }`；文件不存在、读不动、没有 home 行一律 null ——
+ * 没有绑定可言时调用方按"从没装过"处理，不该在这里抛错。
+ * 版本键先取 `version_info`（uv 写的），再退回 `version`（CPython `venv` 写的），
+ * 两者都没有就是别的工具建的，改绑时拒绝。
+ */
+function readVenvCfg(venvPath) {
+  if (!venvPath) return null
+  const file = path.join(venvPath, VENV_CFG_FILE)
+  let text
+  try {
+    text = fs.readFileSync(file, 'utf8')
+  } catch {
+    return null
+  }
+  const pick = key => {
+    const m = text.match(new RegExp(`^${key}[ \\t]*=[ \\t]*(.*)$`, 'm'))
+    return m ? m[1].trim() : ''
+  }
+  const home = pick('home')
+  if (!home) return null
+  return { home, versionInfo: pick('version_info') || pick('version'), file, text }
+}
+
+/**
+ * 随包 CPython：`resources/python-runtime/<platform>/cpython-<ver>-<os>-<arch>`。
+ *
+ * 版本从目录名取（`3.12.16`，与 `pyvenv.cfg` 的 version_info 同形）。
+ * 判据是解释器文件真在，不看目录名像不像 —— 半个包（安装中断）不该被当成可用运行时。
+ */
+function bundledRuntime(resourcesPath = process.resourcesPath) {
+  const root = bundledAssetRoot(resourcesPath)
+  const none = { dir: '', version: '' }
+  if (!root) return none
+  const base = path.join(root, 'python-runtime', platformKey())
+  let entries
+  try {
+    entries = fs.readdirSync(base, { withFileTypes: true })
+  } catch {
+    return none
+  }
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue
+    const dir = path.join(base, entry.name)
+    if (!fs.existsSync(interpreterUnderHome(homeForRuntime(dir)))) continue
+    const m = /^cpython-(\d+\.\d+\.\d+)-/.exec(entry.name)
+    return { dir, version: m ? m[1] : '' }
+  }
+  return none
+}
+
+/**
+ * POSIX 的 venv 解释器是**指向 home 里解释器的符号链接**：home 没了它就是悬空链接，
+ * `fs.existsSync` 为假，只改 `pyvenv.cfg` 修不好，必须把链接重新指过去。
+ *
+ * 只动"确实是符号链接、且目标已经不存在"的 `bin/python3` / `bin/python`，其它一律不碰；
+ * 失败也不抛（调用方会按"没修好"继续走重建，在这里抛等于把兜底换成崩溃）。
+ */
+function relinkPosixInterpreter(venvPath, runtimeDir) {
+  const target = interpreterUnderHome(homeForRuntime(runtimeDir))
+  if (!fs.existsSync(target)) return []
+  const relinked = []
+  for (const name of ['python3', 'python']) {
+    const link = path.join(venvPath, 'bin', name)
+    let stat
+    try {
+      stat = fs.lstatSync(link)
+    } catch {
+      continue
+    }
+    // 已经是活链接就别动：那是 uv 建的、指向当前 home 的正常状态
+    if (!stat.isSymbolicLink() || fs.existsSync(link)) continue
+    try {
+      fs.unlinkSync(link)
+      fs.symlinkSync(target, link)
+      relinked.push(link)
+    } catch {
+      /* 保持原样 */
+    }
+  }
+  return relinked
+}
+
+/**
+ * 就地改绑失效的解释器绑定。返回 `{ rebound, reason, from, to, relinked }`，**永不抛错**。
+ *
+ * `reason` 是给上层与人看的分流依据：
+ * - `binding-ok`：绑定本来就是活的，一个字节都没动；
+ * - `no-binding-file`：没有 venv 或没有 cfg —— 首次安装，走原来的创建流程；
+ * - `no-bundled-runtime`：当前包里找不到解释器（包残缺，改绑帮不上）；
+ * - `version-mismatch`：minor 版本对不上或 cfg 没记版本，**不能**改绑，只能重建；
+ * - `write-failed`：cfg 写不进去（只读目录/占用），交给重建路径；
+ * - `rebound`：改绑成功。
+ */
+function rebindVenvBinding(options = {}) {
+  const target = resolveTarget(options.target)
+  const userDataPath = String(options.userDataPath || '')
+  if (!userDataPath) return { rebound: false, reason: 'no-user-data' }
+  const venv = options.venvPath || venvDir(userDataPath, target.id)
+
+  const cfg = readVenvCfg(venv)
+  if (!cfg) return { rebound: false, reason: 'no-binding-file', venv }
+  // 判"绑没绑坏"要看 home 里的**解释器**在不在，而不是目录在不在：
+  // 目录还在但解释器被删（安全软件隔离、手动清理）是同一个死法。
+  if (fs.existsSync(interpreterUnderHome(cfg.home))) {
+    return { rebound: false, reason: 'binding-ok', venv }
+  }
+
+  const runtime = bundledRuntime(options.resourcesPath)
+  if (!runtime.dir) return { rebound: false, reason: 'no-bundled-runtime', venv, from: cfg.home }
+  const venvMinor = minorVersion(cfg.versionInfo)
+  const runtimeMinor = minorVersion(runtime.version)
+  if (!venvMinor || !runtimeMinor || venvMinor !== runtimeMinor) {
+    return {
+      rebound: false,
+      reason: 'version-mismatch',
+      venv,
+      from: cfg.home,
+      message:
+        `这份 Python 环境是 ${cfg.versionInfo || '未记录版本'} 建的，当前安装包带的是 ` +
+        `${runtime.version || '未记录版本'}，不能改绑（扩展按 Python minor 的 ABI 编译），需要重建环境`,
+    }
+  }
+  const newHome = homeForRuntime(runtime.dir)
+
+  // 只替换 home 这一行：uv 还往里写 uv / version_info / include-system-site-packages，
+  // 重写整个文件等于把这些口径丢了。临时文件 + rename，不留半个 cfg。
+  // 替换值用函数返回，不走字符串模板：路径里出现 `$`（如 `C:\Users\$x`）时
+  // 模板写法会被当成 `$&` 这类特殊序列，把 home 写成另一个意思。
+  const next = cfg.text.replace(/^(home[ \t]*=[ \t]*).*$/m, (matched, prefix) => `${prefix}${newHome}`)
+  if (next === cfg.text) {
+    return { rebound: false, reason: 'write-failed', venv, from: cfg.home, detail: 'home 行没被替换' }
+  }
+  try {
+    const staging = `${cfg.file}.tmp`
+    fs.writeFileSync(staging, next, 'utf8')
+    fs.renameSync(staging, cfg.file)
+  } catch (err) {
+    return { rebound: false, reason: 'write-failed', venv, from: cfg.home, detail: err?.message || String(err) }
+  }
+  const relinked = process.platform === 'win32' ? [] : relinkPosixInterpreter(venv, runtime.dir)
+  return { rebound: true, reason: 'rebound', venv, from: cfg.home, to: newHome, relinked }
 }
 
 /**
@@ -280,34 +465,53 @@ function writeManifest(userDataPath, fields, target = 'core') {
 }
 
 /**
- * 运行时现状：只读判断，不做任何安装动作。
+ * 随包资产的根目录：显式传入的 `resourcesPath` → `sources` 的上一级 → Electron 的。
  *
- * 返回 `{ ready, venvPython, reason, target, targetLabel, message }`。
- * `ready: true` 才允许直接起对应的 core / 引擎。
+ * `inspectRuntime` 与 `ensureRuntime` 必须用同一口径（真机踩过一边找得到解释器、
+ * 另一边找不到的分裂状态），所以只在这里写一次。
+ */
+function assetRootFor(options, sources) {
+  if (options.resourcesPath) return String(options.resourcesPath)
+  if (sources) return path.dirname(sources)
+  return process.resourcesPath || ''
+}
+
+/**
+ * 运行时现状：判断能不能直接用，必要时**就地修好解释器绑定**（不装依赖、不建 venv）。
+ *
+ * 返回 `{ ready, venvPython, reason, target, targetLabel, message, binding }`。
+ * `ready: true` 才允许直接起对应的 core / 引擎；`binding` 是改绑的结果，供上层记日志。
  */
 function inspectRuntime(options = {}) {
   const target = resolveTarget(options.target)
   const userDataPath = String(options.userDataPath || '')
   const sources =
     options.sources !== undefined ? options.sources : sourcesFor(target.id, options.resourcesPath)
+
+  // 改绑要排在"环境在不在"之前：Windows 上 home 失效时 `Scripts\python.exe` 文件明明在、
+  // 却以 103 退出（探测只会吐一句 `No Python at …`），POSIX 上 `bin/python3` 直接成了悬空
+  // 链接 —— existsSync 为假就被判成"从没装过"，于是白重建一次 340MB、还要联网的环境。
+  const binding = rebindVenvBinding({
+    userDataPath,
+    target: target.id,
+    resourcesPath: assetRootFor(options, sources),
+  })
+
   const python = userDataPath ? venvPython(userDataPath, target.id) : ''
+  const base = { venvPython: python, target: target.id, targetLabel: target.label, binding }
 
   if (!python || !fs.existsSync(python)) {
     return {
+      ...base,
       ready: false,
-      venvPython: python,
-      target: target.id,
-      targetLabel: target.label,
       reason: 'venv-missing',
       message: `尚未创建${target.label}的 Python 环境（首次启动需要安装）`,
     }
   }
   if (!sources) {
     return {
+      ...base,
       ready: false,
-      venvPython: python,
-      target: target.id,
-      targetLabel: target.label,
       reason: 'sources-missing',
       message: `安装包内缺少 ${target.sourcesDir} 源码，无法校验${target.label}环境`,
     }
@@ -325,20 +529,11 @@ function inspectRuntime(options = {}) {
           })
   const probe = probeFn(python, sources, target.label)
   if (probe.ok) {
-    return {
-      ready: true,
-      venvPython: python,
-      target: target.id,
-      targetLabel: target.label,
-      reason: 'ok',
-      message: '',
-    }
+    return { ...base, ready: true, reason: 'ok', message: '' }
   }
   return {
+    ...base,
     ready: false,
-    venvPython: python,
-    target: target.id,
-    targetLabel: target.label,
     reason: probe.reason,
     missingModule: probe.missingModule || '',
     message: probe.message,
@@ -518,6 +713,25 @@ async function ensureRuntime(options = {}) {
     targetLabel: target.label,
   })
 
+  // 随包资产在 `sources` 的上一级（`resources/desktop-local` → `resources/`）。
+  // 这样调用方传不传 `resourcesPath` 都能定位，测试与打包态行为一致。
+  // 提到改绑之前算：两条路径要用同一个根。
+  const assetRoot = assetRootFor(options, sources)
+
+  // **解释器绑定要先修，再判"venv 在不在"**：POSIX 上 home 失效时 venv 里的解释器是
+  // 悬空链接，`fs.existsSync` 为假会直接跳到全量重建（340MB、要联网），把"换了个包"
+  // 这种本来零成本的事故放大成"离线就不能用"。这里修过一次之后，下面 inspectRuntime
+  // 再修就是 `binding-ok`（幂等），不会重复写文件、也不会重复记日志。
+  const binding = rebindVenvBinding({ userDataPath, target: target.id, resourcesPath: assetRoot })
+  const notice = typeof options.onLine === 'function' ? options.onLine : () => {}
+  if (binding.rebound) {
+    notice(
+      `${target.label}环境的 Python 绑定已失效（原指向 ${binding.from}），` +
+        `改绑到安装包自带的 ${binding.to}` +
+        (binding.relinked && binding.relinked.length ? `，重建解释器链接 ${binding.relinked.length} 个` : ''),
+    )
+  }
+
   let probeNote = ''
   let trySync = false
   if (!options.force && fs.existsSync(vpython)) {
@@ -554,17 +768,14 @@ async function ensureRuntime(options = {}) {
     // 依赖变了说明 uv 需要重新解析整个依赖图，增量同步救不回来，直接重建更干脆。
     const manifest = readManifest(userDataPath, target.id)
     trySync = Boolean(manifest && fingerprint && manifest.dependencyFingerprint === fingerprint)
-    if (!trySync) probeNote += '，依赖声明已变更或无安装记录，将重建'
+    // 绑定改不动（minor 版本对不上）时增量同步注定白费：那条路径要 uv 用这个解释器装包，
+    // 而解释器本身就跑不起来。直接把真因写进阶段消息，别让它伪装成"依赖问题"。
+    if (binding.reason === 'version-mismatch') {
+      probeNote = `（${binding.message}）`
+      trySync = false
+    }
+    if (!trySync && binding.reason !== 'version-mismatch') probeNote += '，依赖声明已变更或无安装记录，将重建'
   }
-
-  // 随包资产在 `sources` 的上一级（`resources/desktop-local` → `resources/`）。
-  // 这样调用方传不传 `resourcesPath` 都能定位，测试与打包态行为一致。
-  const assetRoot =
-    options.resourcesPath !== undefined && options.resourcesPath
-      ? String(options.resourcesPath)
-      : sources
-        ? path.dirname(sources)
-        : process.resourcesPath
 
   const uv =
     options.uvPath !== undefined && options.uvPath
@@ -704,9 +915,21 @@ module.exports = {
   writeManifest,
   downloadedUv,
   resolveUv,
+  bundledPython,
+  bundledRuntime,
+  readVenvCfg,
+  rebindVenvBinding,
   sourcesFor,
   coreSources,
   inspectRuntime,
   ensureRuntime,
-  _internal: { runCommand, pipInstallArgs },
+  _internal: {
+    runCommand,
+    pipInstallArgs,
+    homeForRuntime,
+    interpreterUnderHome,
+    minorVersion,
+    relinkPosixInterpreter,
+    assetRootFor,
+  },
 }

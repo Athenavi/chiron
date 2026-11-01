@@ -576,3 +576,448 @@ test('ensureRuntime：uv 与解释器都取自随包资源，不联网、不碰 
     '不该再退化成只传版本号让 uv 联网取',
   )
 })
+
+/* --------------------------------------------------------------------------
+ * M50：venv 与随包解释器之间的绑定（pyvenv.cfg 的 home）
+ *
+ * 守的是"换了安装包之后，已装好的环境还能不能用"。真机现场：userData 里那两套 venv
+ * 是跨包共享的（引擎那份实测 340MB、两百个包、重建要联网），而 `pyvenv.cfg` 的 home
+ * 写的是**创建它那次出包的绝对路径** —— core 指向 `D:\Program Files\Chiron\…`，
+ * 引擎指向某次临时验证出包的 `release-m47\…`。删掉那个目录或换安装位置，解释器就以
+ * 103 退出（`No Python at '…'`），而上层只看到"探测失败"，于是全量重建。
+ * ------------------------------------------------------------------------ */
+
+/** 随包运行时的目录与"该写进 home 的那一层"（两个平台不一样，用例里按同一个口径造） */
+function homeOf(bundledPythonPath) {
+  return path.dirname(bundledPythonPath)
+}
+
+/** 一份指向别处的 pyvenv.cfg 文本（照 uv 0.13.6 真实落盘的键与顺序） */
+function venvCfgText(home, versionInfo = '3.12.16') {
+  return (
+    `home = ${home}\n` +
+    'implementation = CPython\n' +
+    'uv = 0.13.6\n' +
+    `version_info = ${versionInfo}\n` +
+    'include-system-site-packages = false\n'
+  )
+}
+
+/**
+ * 造一份"看起来装着、其实跑不起来"的 venv。
+ *
+ * 解释器落的是**普通文件**（Windows 的 `Scripts\python.exe` 跳转器、POSIX `--copies`
+ * 建出来的那份都是这样）：home 失效时文件明明还在，`existsSync` 会骗人 —— 这正是
+ * 真机 103 退出的形态。POSIX 下"悬空符号链接"那种坏法由
+ * `relinkPosixInterpreter` 那条用例直接覆盖（它是平台分支，在 Windows 上跑不到同一段）。
+ */
+function makeVenvWithBinding(t, userData, { target = 'core', home, versionInfo = '3.12.16' } = {}) {
+  const venv = installer.venvDir(userData, target)
+  const python = installer.venvPython(userData, target)
+  fs.mkdirSync(path.dirname(python), { recursive: true })
+  fs.writeFileSync(python, '')
+  const cfg = path.join(venv, 'pyvenv.cfg')
+  fs.writeFileSync(cfg, venvCfgText(home, versionInfo), 'utf8')
+  return { venv, python, cfg }
+}
+
+test('home 的口径：Windows 是包根，POSIX 是 <包根>/bin', () => {
+  const { homeForRuntime, interpreterUnderHome } = installer._internal
+  assert.equal(homeForRuntime('C:\\r\\cpython-3.12.16-windows-x86_64-none', 'win32'),
+    'C:\\r\\cpython-3.12.16-windows-x86_64-none')
+  assert.equal(interpreterUnderHome(homeForRuntime('C:\\r\\cpython-3.12.16-w', 'win32'), 'win32'),
+    path.win32.join('C:\\r\\cpython-3.12.16-w', 'python.exe'))
+
+  // POSIX：受管解释器在包根的 bin 里，home 必须写这一层，解释器名是 python3
+  assert.equal(homeForRuntime('/app/resources/python-runtime/cpython-3.12.16-linux_x86_64', 'linux'),
+    '/app/resources/python-runtime/cpython-3.12.16-linux_x86_64/bin')
+  assert.equal(
+    interpreterUnderHome(homeForRuntime('/app/r/cpython-3.12.16', 'darwin'), 'darwin'),
+    '/app/r/cpython-3.12.16/bin/python3',
+  )
+})
+
+test('minorVersion：只取 minor，认不出返回空串', () => {
+  const { minorVersion } = installer._internal
+  assert.equal(minorVersion('3.12.16'), '3.12')
+  assert.equal(minorVersion('3.13.0'), '3.13')
+  assert.equal(minorVersion(''), '')
+  assert.equal(minorVersion(undefined), '')
+  assert.equal(minorVersion('unknown'), '')
+})
+
+test('rebindVenvBinding：home 失效时改绑到随包解释器，且只动 home 那一行', t => {
+  const userData = makeUserData(t)
+  const { resources, python } = makeResources(t)
+  const dead = path.join(resources, 'gone-package')
+  const made = makeVenvWithBinding(t, userData, { home: dead })
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, true)
+  assert.equal(result.reason, 'rebound')
+  assert.equal(result.from, dead)
+  assert.equal(result.to, homeOf(python), '改绑的目标就是随包解释器所在的那一层')
+  assert.ok(fs.existsSync(installer._internal.interpreterUnderHome(result.to)), '改绑后 home 里要有解释器')
+
+  const after = fs.readFileSync(made.cfg, 'utf8')
+  assert.ok(after.startsWith(`home = ${homeOf(python)}\n`), `home 行应换成随包路径：${after}`)
+  // uv 还往里写 implementation / uv / version_info / include-system-site-packages，
+  // 重写整个文件等于丢掉这些口径（下次 uv 复用这份 cfg 时会按错的来判断）
+  assert.ok(after.includes('uv = 0.13.6'), '其它键必须原样保留')
+  assert.ok(after.includes('version_info = 3.12.16'), '其它键必须原样保留')
+  assert.ok(after.includes('include-system-site-packages = false'), '其它键必须原样保留')
+  assert.ok(!fs.existsSync(`${made.cfg}.tmp`), '临时文件要 rename 掉，不留半个 cfg')
+})
+
+test('rebindVenvBinding：绑定本来就是活的时一个字节都不改', t => {
+  const userData = makeUserData(t)
+  const { resources, python } = makeResources(t)
+  const made = makeVenvWithBinding(t, userData, { home: homeOf(python) })
+  const before = fs.readFileSync(made.cfg, 'utf8')
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, false)
+  assert.equal(result.reason, 'binding-ok')
+  assert.equal(fs.readFileSync(made.cfg, 'utf8'), before, '健康状态不该被"顺手重写"')
+})
+
+test('rebindVenvBinding：minor 版本对不上时拒绝改绑，并说明只能重建', t => {
+  const userData = makeUserData(t)
+  const { resources } = makeResources(t)
+  const made = makeVenvWithBinding(t, userData, {
+    home: path.join(resources, 'gone-package'),
+    versionInfo: '3.13.1',
+  })
+  const before = fs.readFileSync(made.cfg, 'utf8')
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, false)
+  assert.equal(result.reason, 'version-mismatch')
+  assert.match(result.message, /3\.13\.1/, '要说清环境是哪一版建的')
+  assert.match(result.message, /3\.12\.16/, '要说清包里是哪一版')
+  assert.match(result.message, /重建/)
+  assert.equal(fs.readFileSync(made.cfg, 'utf8'), before, '改不了就不该碰文件')
+})
+
+test('rebindVenvBinding：cfg 没记版本（不是 uv 建的）时拒绝改绑', t => {
+  const userData = makeUserData(t)
+  const { resources } = makeResources(t)
+  const venv = installer.venvDir(userData)
+  fs.mkdirSync(path.dirname(installer.venvPython(userData)), { recursive: true })
+  fs.writeFileSync(installer.venvPython(userData), '')
+  const cfg = path.join(venv, 'pyvenv.cfg')
+  fs.writeFileSync(cfg, 'home = /does/not/exist/bin\nimplementation = CPython\n', 'utf8')
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, false)
+  assert.equal(result.reason, 'version-mismatch')
+})
+
+test('rebindVenvBinding：包里没有可用解释器时不改绑（残缺包由重装解决）', t => {
+  const userData = makeUserData(t)
+  const { resources } = makeResources(t, { withPython: false })
+  makeVenvWithBinding(t, userData, { home: path.join(resources, 'gone-package') })
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, false)
+  assert.equal(result.reason, 'no-bundled-runtime')
+})
+
+test('rebindVenvBinding：没有 venv 或没有 cfg 时按"从没装过"分流，不抛错', t => {
+  const userData = makeUserData(t)
+  const { resources } = makeResources(t)
+
+  const empty = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+  assert.equal(empty.rebound, false)
+  assert.equal(empty.reason, 'no-binding-file')
+
+  const noUserData = installer.rebindVenvBinding({ resourcesPath: resources })
+  assert.equal(noUserData.reason, 'no-user-data')
+
+  // 目录在、cfg 缺 home 行：仍然没有绑定可言
+  fs.mkdirSync(installer.venvDir(userData), { recursive: true })
+  fs.writeFileSync(path.join(installer.venvDir(userData), 'pyvenv.cfg'), 'uv = 0.13.6\n', 'utf8')
+  assert.equal(
+    installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources }).reason,
+    'no-binding-file',
+  )
+})
+
+test('rebindVenvBinding：路径里有 $& 时按字面写入 home', t => {
+  // String.replace 的**替换串**里 `$&`、`` $` ``、`$1` 都是特殊序列。用模板拼接
+  // 写法时，装到这类路径下会把 home 写成别的东西 —— 文件是"改好了"，解释器照样找不到。
+  const userData = makeUserData(t)
+  const resources = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-dollar-'))
+  t.after(() => fs.rmSync(resources, { recursive: true, force: true }))
+  const key = `${process.platform}-${process.arch}`
+  const runtimeDir = path.join(resources, 'python-runtime', key, 'cpython-3.12.16-$&x')
+  const exe = path.join(runtimeDir, process.platform === 'win32' ? 'python.exe' : path.join('bin', 'python3'))
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
+  fs.writeFileSync(exe, '')
+
+  makeVenvWithBinding(t, userData, { home: path.join(resources, 'gone') })
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, true)
+  assert.equal(
+    installer.readVenvCfg(installer.venvDir(userData)).home,
+    homeOf(exe),
+    'home 必须是字面路径，不能被 $& 之类的替换序列吃掉',
+  )
+})
+
+test('rebindVenvBinding：补丁号不同也照改（只有 minor 变了才拒绝）', t => {
+  // 随包 CPython 的补丁号会跟着发版动。要求整串版本号相同，等于每次升级都白重建
+  // 一次 340MB、还要联网的环境 —— 那正是本函数要消掉的代价；而 `.cp312-*.pyd`
+  // 这类扩展在 3.12 系列内是 ABI 兼容的，改绑安全。
+  const userData = makeUserData(t)
+  const { resources, python } = makeResources(t)
+  makeVenvWithBinding(t, userData, {
+    home: path.join(resources, 'gone-package'),
+    versionInfo: '3.12.9',
+  })
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, true, '3.12.9 → 3.12.16 应该改绑了事')
+  assert.equal(result.to, homeOf(python))
+})
+
+test('rebindVenvBinding：home 目录还在但解释器没了，同样算绑坏', t => {
+  // 判据只看目录 = 漏掉"安全软件把 python.exe 单独隔离走"这一种，而它的死法
+  // 与目录被删完全一样（解释器跑不起来、只能改绑）。
+  const userData = makeUserData(t)
+  const { resources, python } = makeResources(t)
+  // resources 这一层确实存在，但它根上没有 python.exe
+  assert.ok(fs.existsSync(resources))
+  makeVenvWithBinding(t, userData, { home: resources })
+
+  const result = installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources })
+
+  assert.equal(result.rebound, true)
+  assert.equal(result.from, resources)
+  assert.equal(result.to, homeOf(python))
+})
+
+/**
+ * POSIX 上 home 失效的形态是**悬空符号链接**：`existsSync` 为假，旧的判法把它当成
+ * "从没装过"，于是走全量重建。这里在 Windows 上用一条指向不存在目标的符号链接造出
+ * 同样的"文件项在、解析不到"的状态 —— 修链接本身只在 POSIX 跑（由上面那条用例覆盖），
+ * 这条用例锁的是**顺序**：改绑必须排在"解释器在不在"这道判定之前。
+ */
+function makeDanglingVenv(t, userData, home) {
+  const venv = installer.venvDir(userData)
+  const python = installer.venvPython(userData)
+  fs.mkdirSync(path.dirname(python), { recursive: true })
+  try {
+    fs.symlinkSync(path.join(home, 'python-missing-here'), python)
+  } catch (err) {
+    return { skipped: err && err.code }
+  }
+  const cfg = path.join(venv, 'pyvenv.cfg')
+  fs.writeFileSync(cfg, venvCfgText(home), 'utf8')
+  return { venv, python, cfg }
+}
+
+test('bundledRuntime：目录名对得上但解释器不在，不算可用运行时', t => {
+  // 半个包（安装中断 / 被隔离软件吃掉 python.exe）如果被当成可用，改绑就会把 home
+  // 指向一个跑不起来的目标 —— 那比不修更糟：环境从此再也回不到"能重建"的状态。
+  const resources = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-halfpkg-'))
+  t.after(() => fs.rmSync(resources, { recursive: true, force: true }))
+  const key = `${process.platform}-${process.arch}`
+  fs.mkdirSync(path.join(resources, 'python-runtime', key, 'cpython-3.12.16-windows-x86_64-none'), {
+    recursive: true,
+  })
+
+  assert.deepEqual(installer.bundledRuntime(resources), { dir: '', version: '' })
+  assert.equal(installer.bundledPython(resources), '')
+
+  const userData = makeUserData(t)
+  makeVenvWithBinding(t, userData, { home: path.join(resources, 'gone') })
+  assert.equal(
+    installer.rebindVenvBinding({ userDataPath: userData, resourcesPath: resources }).reason,
+    'no-bundled-runtime',
+  )
+})
+
+test('inspectRuntime：改绑排在「解释器在不在」之前，不把坏绑定当成没装过', t => {
+  const userData = makeUserData(t)
+  const { resources, sources } = makeResources(t)
+  const made = makeDanglingVenv(t, userData, path.join(resources, 'gone-package'))
+  if (made.skipped) {
+    t.skip(`这台机器建不了符号链接（${made.skipped}），顺序锁不住`)
+    return
+  }
+
+  const result = installer.inspectRuntime({
+    userDataPath: userData,
+    sources,
+    resourcesPath: resources,
+    probe: () => ({ ok: true, reason: 'ok', message: '' }),
+  })
+
+  assert.equal(result.binding.rebound, true, 'cfg 已经坏了，就必须在判"在不在"之前先改绑')
+  assert.equal(installer.readVenvCfg(made.venv).home, homeOf(installer.bundledPython(resources)))
+})
+
+test('ensureRuntime：坏绑定先修再判，POSIX 那种坏法不会被当成首次安装', async t => {
+  const userData = makeUserData(t)
+  const { sources, uv } = makeResources(t)
+  const made = makeDanglingVenv(t, userData, path.join(sources, '..', 'gone-package'))
+  if (made.skipped) {
+    t.skip(`这台机器建不了符号链接（${made.skipped}），顺序锁不住`)
+    return
+  }
+  const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
+  const lines = []
+
+  const result = await installer.ensureRuntime({
+    pythonMirror: '',
+    userDataPath: userData,
+    sources,
+    uvPath: uv,
+    spawn,
+    probe: () => (progress.pip ? { ok: true, reason: 'ok', message: '' } : { ok: false, reason: 'venv-missing', message: '尚未创建' }),
+    onLine: line => lines.push(line),
+  })
+
+  assert.ok(
+    lines.some(line => /绑定已失效/.test(line)),
+    `改绑要发生在判"venv 在不在"之前并留下日志：${JSON.stringify(lines)}`,
+  )
+  assert.equal(result.ok, true)
+  assert.deepEqual(calls.map(c => c.args[0]), ['venv', 'pip'], '链接修不好（本机模拟不了 POSIX 的 relink）时仍要落到重建')
+})
+
+test('relinkPosixInterpreter：只把悬空链接指回去，活链接与真文件不碰', t => {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-relink-'))
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  const runtimeDir = path.join(dir, 'cpython-3.12.16-test')
+  // 随包解释器：Windows 在包根、POSIX 在 bin（用当前平台的真实口径造）
+  const exe = installer._internal.interpreterUnderHome(
+    installer._internal.homeForRuntime(runtimeDir),
+  )
+  fs.mkdirSync(path.dirname(exe), { recursive: true })
+  fs.writeFileSync(exe, '')
+
+  const venv = path.join(dir, 'venv')
+  fs.mkdirSync(path.join(venv, 'bin'), { recursive: true })
+  const dangling = path.join(venv, 'bin', 'python3')
+  fs.symlinkSync(path.join(dir, 'gone', 'python3'), dangling)
+  const live = path.join(venv, 'bin', 'python')
+  fs.symlinkSync(exe, live)
+
+  const relinked = installer._internal.relinkPosixInterpreter(venv, runtimeDir)
+
+  assert.deepEqual(relinked, [dangling], '只有那个悬空的链接需要重指')
+  assert.equal(fs.existsSync(dangling), true, '重指后要能解析到随包解释器')
+  assert.equal(fs.realpathSync(dangling).toLowerCase(), fs.realpathSync(exe).toLowerCase())
+  assert.equal(fs.existsSync(live), true, '活链接保持原样')
+})
+
+test('inspectRuntime：先改绑再探测，探测器看到的 home 已经是修好的', t => {
+  const userData = makeUserData(t)
+  const { resources, sources, python } = makeResources(t)
+  const made = makeVenvWithBinding(t, userData, { home: path.join(resources, 'gone-package') })
+
+  const seen = []
+  const result = installer.inspectRuntime({
+    userDataPath: userData,
+    sources,
+    resourcesPath: resources,
+    probe: (py, cwd, label) => {
+      // 探测是在**改绑之后**跑的：此刻 cfg 的 home 必须已经是随包那一份。
+      // 顺序写反（先判 existsSync / 先探测，再改绑）时这里读到的还是失效路径。
+      seen.push({ label, home: installer.readVenvCfg(made.venv).home })
+      return { ok: true, reason: 'ok', message: '' }
+    },
+  })
+
+  assert.equal(seen.length, 1)
+  assert.equal(seen[0].home, homeOf(python), '探测前 home 必须已经修好')
+  assert.equal(result.ready, true)
+  assert.equal(result.binding.rebound, true)
+  assert.equal(result.binding.reason, 'rebound')
+})
+
+test('inspectRuntime：健康环境的绑定不被改动，返回值里带 binding-ok', t => {
+  const userData = makeUserData(t)
+  const { sources, python } = makeResources(t)
+  const made = makeVenvWithBinding(t, userData, { home: homeOf(python) })
+  const before = fs.readFileSync(made.cfg, 'utf8')
+
+  const result = installer.inspectRuntime({
+    userDataPath: userData,
+    sources,
+    probe: () => ({ ok: true, reason: 'ok', message: '' }),
+  })
+
+  assert.equal(result.ready, true)
+  assert.equal(result.binding.reason, 'binding-ok')
+  assert.equal(fs.readFileSync(made.cfg, 'utf8'), before)
+})
+
+test('ensureRuntime：换包导致 home 失效时改绑了事，一条 uv 命令都不跑', async t => {
+  const userData = makeUserData(t)
+  const { sources, uv, python } = makeResources(t)
+  makeVenvWithBinding(t, userData, { home: path.join(sources, '..', 'gone-package') })
+  const { spawn, calls } = fakeSpawn(t)
+  const lines = []
+
+  const result = await installer.ensureRuntime({
+    pythonMirror: '',
+    userDataPath: userData,
+    sources,
+    uvPath: uv,
+    spawn,
+    probe: () => ({ ok: true, reason: 'ok', message: '' }),
+    onLine: line => lines.push(line),
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.reinstalled, false, '不该为此重建 340MB 环境')
+  assert.equal(result.repaired, false)
+  assert.deepEqual(calls, [], '改绑就修好了，不该跑任何 uv 命令')
+  assert.equal(lines.length, 1, `应记一条改绑日志：${JSON.stringify(lines)}`)
+  assert.match(lines[0], /绑定已失效/)
+  assert.ok(lines[0].includes(homeOf(python)), `日志要写清改绑到了哪：${lines[0]}`)
+})
+
+test('ensureRuntime：minor 版本对不上时不做无用的增量同步，直接把真因写进阶段', async t => {
+  const userData = makeUserData(t)
+  const { sources, uv } = makeResources(t)
+  makeVenvWithBinding(t, userData, {
+    home: path.join(sources, '..', 'gone-package'),
+    versionInfo: '3.13.1',
+  })
+  // 先写一份"依赖声明没变"的清单：没有 M50 的分支时这条用例走的是增量同步
+  installer.writeManifest(userData, { dependencyFingerprint: installer.dependencyFingerprint(sources) })
+
+  const { spawn, calls, progress } = fakeSpawn(t, { onVenv: () => createVenvPython(userData) })
+  const stages = []
+
+  const result = await installer.ensureRuntime({
+    pythonMirror: '',
+    userDataPath: userData,
+    sources,
+    uvPath: uv,
+    spawn,
+    probe: () => (progress.pip ? { ok: true, reason: 'ok', message: '' } : { ok: false, reason: 'probe-failed', message: 'No Python at' }),
+    onStage: info => stages.push(info),
+  })
+
+  assert.equal(result.ok, true)
+  assert.equal(result.reinstalled, true, '版本对不上只能重建')
+  assert.ok(!stages.some(s => s.stage === installer.INSTALL_STAGES.syncingDeps),
+    '解释器本身跑不起来时同步依赖注定白费')
+  const create = stages.find(s => s.stage === installer.INSTALL_STAGES.creatingVenv)
+  assert.ok(create, '应进入重建阶段')
+  assert.match(create.message, /3\.13\.1/, '阶段消息要说清真因是版本，不是"缺依赖"')
+  assert.deepEqual(calls.map(c => c.args[0]), ['venv', 'pip'], '直接重建：先建 venv 再装依赖')
+})
+

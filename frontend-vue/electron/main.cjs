@@ -552,6 +552,14 @@ function inspectLocalRuntime() {
   }
   try {
     const result = components.inspectLocalRuntime()
+    // 就地改绑是"零成本修好、但用户永远看不见"的那类自愈：不在日志里留一行，
+    // 下次出问题就没法区分"环境从没装过"与"绑定还跟着上一个包跑"。
+    if (result && result.binding && result.binding.rebound) {
+      logMain(
+        'info',
+        `runtime python binding rebound (${result.target}): ${result.binding.from} -> ${result.binding.to}`,
+      )
+    }
     return result && typeof result === 'object' ? result : { ready: true, reason: 'unknown', message: '' }
   } catch (err) {
     logMain('warn', `runtime inspect failed: ${err?.message || err}`)
