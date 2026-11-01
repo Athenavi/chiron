@@ -20,6 +20,10 @@ def _make_mock_gateway(response_text: str = "Done!", input_tokens: int = 100, ou
     mock = MagicMock()
 
     async def fake_stream(*_a, **_kw):
+        # 让这一轮真的"花了一点时间"：Windows 上 CPython 的 time.monotonic() 会回落到
+        # GetTickCount64（分辨率 15.6ms），完全瞬间的 mock 测出来就是 0.0，
+        # 于是 test_run_simple_task 的 duration > 0 只在 Linux CI 上过得去。
+        await asyncio.sleep(0.02)
         yield ChatResponse(
             content=response_text,
             finish_reason="stop",
