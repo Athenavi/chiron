@@ -96,6 +96,33 @@ function createPython(userData, target) {
   fs.writeFileSync(python, '')
   return python
 }
+/** 随包 CPython：改绑总得有个去处（目录名带版本，minor 要与 pyvenv.cfg 对得上） */
+function withBundledRuntime(t, resources, version = '3.12.16') {
+  const dir = path.join(
+    resources,
+    'python-runtime',
+    `${process.platform}-${process.arch}`,
+    `cpython-${version}-test`,
+  )
+  const home = installer._internal.homeForRuntime(dir)
+  fs.mkdirSync(home, { recursive: true })
+  fs.writeFileSync(installer._internal.interpreterUnderHome(home), '')
+  t.after(() => fs.rmSync(dir, { recursive: true, force: true }))
+  return { dir, home }
+}
+
+/** "装过、但 home 还跟着上一个安装包跑"的 venv：解释器在位，home 指向别处 */
+function createVenvWithHome(userData, target, home) {
+  const python = createPython(userData, target)
+  fs.writeFileSync(
+    path.join(installer.venvDir(userData, target), 'pyvenv.cfg'),
+    `home = ${home}
+version_info = 3.12.16
+`,
+    'utf8',
+  )
+  return python
+}
 
 /** 记录壳跑过多少进程、探测过哪些解释器 */
 function installDeps(t) {
@@ -185,6 +212,31 @@ test('inspectLocalRuntime：core 就绪但引擎没装 ⇒ 整体未就绪', t =
   assert.equal(result.targetLabel, 'AI 引擎')
 })
 
+test('inspectLocalRuntime：core 改绑了但整栈仍未就绪时，记录不能随早退丢失', t => {
+  const resources = makeResources(t)
+  withResourcesPath(t, resources)
+  // 探测恒失败：core 改绑完照样判未就绪 ⇒ 走"先报 core"那条早退
+  installDeps(t)
+  components._setDeps({
+    app: { getPath: () => fs.mkdtempSync(path.join(os.tmpdir(), 'chiron-ud-')) },
+    spawnSync: () => ({ status: 1, stdout: '', stderr: 'ModuleNotFoundError: No module named "fastapi"' }),
+    fetch: async () => ({ ok: true, status: 200, json: async () => ({ status: 'ok' }) }),
+  })
+  const bundled = withBundledRuntime(t, resources)
+  const userData = withUserData(t)
+  createVenvWithHome(userData, 'core', path.join(resources, 'gone', 'cpython-3.12.16-test'))
+
+  const result = components.inspectLocalRuntime()
+  assert.equal(result.ready, false, '探测不过就不许谎报就绪')
+  assert.equal(result.target, 'core')
+  assert.deepEqual(
+    result.rebinds.map(b => b.target),
+    ['core'],
+    '早退那条分支也要带 rebinds：改绑发生过就得能查见',
+  )
+  assert.equal(result.rebinds[0].to, bundled.home)
+})
+
 test('inspectLocalRuntime：两套都就绪才算就绪', t => {
   withResourcesPath(t, makeResources(t))
   installDeps(t)
@@ -203,6 +255,48 @@ test('inspectLocalRuntime：core 没装时先报 core（一次只修一环）', 
   const result = components.inspectLocalRuntime()
   assert.equal(result.ready, false)
   assert.equal(result.target, 'core', '两套都缺时应先报 core：缺解释器/缺 uv 是共同原因')
+})
+/**
+ * 下面两条钉的是**自愈的可见性**。
+ *
+ * 就地改绑是"零成本修好、但用户永远看不见"的那类动作：日志里少一行，下次现场就没法
+ * 区分"环境从没装过"和"绑定还跟着上一个包跑"。真机验证时 core 那条就是这么丢的 ——
+ * core 修好后函数继续往下判引擎，返回值只带引擎那份 binding，主进程照着 `binding`
+ * 记日志就等于永远只记引擎。汇总口径因此落在 `rebinds` 上。
+ */
+test('inspectLocalRuntime：两套都需要改绑时，rebinds 两条都在', t => {
+  const resources = makeResources(t)
+  withResourcesPath(t, resources)
+  installDeps(t)
+  const bundled = withBundledRuntime(t, resources)
+  const deadHome = path.join(resources, 'gone', 'cpython-3.12.16-test')
+  const userData = withUserData(t)
+  createVenvWithHome(userData, 'core', deadHome)
+  createVenvWithHome(userData, 'engine', deadHome)
+
+  const result = components.inspectLocalRuntime()
+  assert.deepEqual(result.rebinds.map(b => b.target), ['core', 'engine'], JSON.stringify(result.rebinds))
+  assert.ok(result.rebinds.every(b => b.rebound && b.to === bundled.home), '改绑记录要能看出绑到了哪')
+  assert.equal(result.ready, true, `两套都该改绑了事：${JSON.stringify(result)}`)
+})
+
+test('inspectLocalRuntime：只有 core 改了绑也要报出来（返回值本身是引擎那套）', t => {
+  const resources = makeResources(t)
+  withResourcesPath(t, resources)
+  installDeps(t)
+  const bundled = withBundledRuntime(t, resources)
+  const userData = withUserData(t)
+  createVenvWithHome(userData, 'core', path.join(resources, 'gone', 'cpython-3.12.16-test'))
+  createVenvWithHome(userData, 'engine', bundled.home)
+
+  const result = components.inspectLocalRuntime()
+  assert.equal(result.target, 'engine')
+  assert.equal(result.binding.rebound, false, '引擎本来就好，binding 不该谎报改绑')
+  assert.deepEqual(
+    result.rebinds.map(b => b.target),
+    ['core'],
+    'core 那次不能因为"已经修好、继续判引擎"就从返回值里消失',
+  )
 })
 
 // ------------------------------------------------------------------ 解释器选择
@@ -486,4 +580,18 @@ test('壳里不再有第二份引擎解释器回退链', () => {
   assert.doesNotMatch(mainSource, /function resolveEngineDir\(/, '"随包 or 仓库"的判据不能两处漂移')
   const body = functionBody(componentsSource, 'function resolveEngineLaunch')
   assert.doesNotMatch(body, /['"]runtime['"]/, '不许把引导器 venv 当引擎解释器：那份没有引擎依赖')
+})
+
+/**
+ * 改绑日志的取值口径。
+ *
+ * `components.inspectLocalRuntime()` 修完 core 会继续判引擎，返回值里的 `binding` 是**引擎那份**；
+ * 只看它就等于 core 的自愈永远不进日志（真机验证时实测丢掉过一条）。
+ * main.cjs 一 require 就起 Electron，只能这样按源码钉。
+ */
+test('main.cjs：改绑日志遍历汇总的 rebinds，而不是只看返回值那一份 binding', () => {
+  const body = functionBody(mainSource, 'function inspectLocalRuntime')
+  assert.match(body, /result?.rebinds/, '要遍历 rebinds：只看 result.binding 会漏掉 core 那次自愈')
+  assert.doesNotMatch(body, /result.binding.rebound/, '旧的单份判据不能回来，它会随返回值指向哪套环境而漂移')
+  assert.match(body, /runtime python binding rebound/, '改绑必须在 main.log 留一行，否则现场分不清「从没装过」与「绑定过期」')
 })

@@ -152,22 +152,45 @@ exit=103  stderr=No Python at '"X:\…\release-does-not-exist\…\python.exe"'  
   跑不起来，`uv pip install` 也用它）。
 
 返回值 `reason ∈ {rebound, binding-ok, no-binding-file, no-bundled-runtime,
-version-mismatch, write-failed, no-user-data}` 一路带到上层：`main.cjs` 在只读询问里记
-`runtime python binding rebound (<target>): <from> -> <to>`，`ensureRuntime` 通过
-`onLine` 落到 `[runtime]` 日志。改绑是"零成本修好但用户永远看不见"的那类自愈，
-不留这一行，下次就没法区分"环境从没装过"与"绑定还跟着上一个包跑"。
+version-mismatch, write-failed, no-user-data}` 一路带到上层，日志分两条路落地：
+`ensureRuntime` 通过 `onLine` 落到 `[runtime]`；只读询问那条由
+`main.cjs` 记 `runtime python binding rebound (<target>): <from> -> <to>`。改绑是
+"零成本修好但用户永远看不见"的那类自愈，不留这一行，下次就没法区分"环境从没装过"
+与"绑定还跟着上一个包跑"。
 
-真机自愈验证（拿本机两份**真实** venv，随包资源用 `release-m50/win-unpacked`）：
-破坏 `home` → 解释器 `exit=103` → `inspectRuntime` 返回 `rebound`、`ready=true`
-（探测器是真 `pkgutil.walk_packages` + 逐模块 import，不是替身）→ 解释器 `exit=0`，
-两条 uv 命令都没跑。POSIX 的悬空链接分支在 Windows 上跑不到，由
-`relinkPosixInterpreter` 的直接用例覆盖（只重指"确实是符号链接且目标已不存在"的那两个）。
+**只读询问那条读的是 `rebinds`，不是 `binding`。** `components.inspectLocalRuntime()`
+先判 core、core 好了再判引擎，返回值是**最终那一套**的（引擎），它的 `binding` 里
+根本没有 core 那次改绑 —— 第一轮真机验证（`release-m51`）实测日志里只有
+`(engine)` 一行，core 修好了却查不到痕迹。现在两套的改绑在
+`components.inspectLocalRuntime()` 里汇成一个 `rebinds` 数组（每条带 `target`，
+所以 `rebindVenvBinding` 的返回里必须有 `target: target.id`），主进程逐条记日志。
 
-用例与门禁：`electron/__tests__/runtime-install.test.cjs` 本轮新增 19 条（该文件 42 条、
-electron 全套 257 条全绿）；变异验证 12 条全部被捕获（不再改绑 / 改绑排在存在性判定之后 /
-要求整串版本号相同 / 模板拼接替换 / 只看 home 目录 / 去掉版本闸门 / relink 不挑状态 /
-minor 不符仍试增量同步 / POSIX 的 home 少一层 bin / 随包根落在 sources / 半个包算可用 /
-`ensureRuntime` 那处同样排在存在性判定之后）。
+真机自愈验证分三层：
+
+1. **模块级**（拿本机两份**真实** venv，随包资源用 `release-m50/win-unpacked`）：破坏
+   `home` → 解释器 `exit=103` → `inspectRuntime` 返回 `rebound`、`ready=true`
+   （探测器是真 `pkgutil.walk_packages` + 逐模块 import，不是替身）→ 解释器 `exit=0`，
+   两条 uv 命令都没跑。POSIX 的悬空链接分支在 Windows 上跑不到，由
+   `relinkPosixInterpreter` 的直接用例覆盖（只重指"确实是符号链接且目标已不存在"的那两个）。
+2. **打包壳 · 第一轮**（`release-m51/win-unpacked/Chiron.exe`，本地模式真启动）：两份
+   cfg 的 `home` 先改指不存在的目录（`exit=103` 确认过），起壳后 `pyvenv.cfg` 落到
+   该包内的解释器，**两份 venv 的 `Lib/site-packages` 最新 mtime 与 `install.json`
+   一字未动**（零重建、零联网）—— 这两项才是"没重建"的判据，启动耗时不是：同一条
+   链路的冷启动本来就随 PG 恢复情况在几十秒到一分半之间飘。引擎侧链路：`GET /ready` 回
+   `postgres=up redis=up`，`/v1/skills`、`/v1/capabilities`、`/v1/graphs`（三条
+   100% 依赖 python-engine 的路由）带本地模式铸的 owner JWT 全 200。
+   **这一轮只记到 `(engine)` 一条** —— 汇总口径就是补这一处，见上。
+3. **打包壳 · 第二轮**（`release-m52`，带汇总口径）：同样破坏两份 `home` 再起壳，
+   日志出现 `binding rebound (core)` 与 `(engine)` 两行（间隔 1ms，都在建栈之前），
+   零重建、`/v1/skills` 等三条路由仍 200；退出后 `local backend stopped
+   go-stack（gateway=true engine=true launcher=true）`。
+
+用例与门禁：`electron/__tests__/runtime-install.test.cjs` 新增 19 条（该文件 42 条），
+可见性再补 4 条（`engine-runtime.test.cjs`：两套都改绑 / 只有 core 改绑 / core 改绑但
+整栈仍未就绪的早退分支 / 按源码钉 `main.cjs` 只遍历 `rebinds`），electron 全套
+**261 条全绿**。变异验证：绑定本体 12 条 + 可见性 6 条（`rebinds` 不收集 / 早退丢汇总 /
+引擎分支丢汇总 / 不看 `rebound` 就收 / 记录不带 `target` / 主进程回到只看单份
+`binding`）全部被捕获，且每条都由预期的用例变红、不误伤别的用例。
 
 **这条修复只对未来出的包生效**：已经装到机器上的旧壳里没有 `rebindVenvBinding`，
 它照样会全量重建。所以清理验证用的出包目录前，先想清楚那台机器上的 venv 是不是
@@ -406,11 +429,14 @@ CI 里有对应的**正向断言**，按安装包内真实路径检查可执行�
 
 ```bash
 head -1 "$APPDATA/frontend-vue/local/runtime/venv/pyvenv.cfg"   # home 落在当前包内
+# 两套环境各一行：只有 (engine) 没有 (core) 说明汇总口径又漂回单份 binding
 grep "binding rebound\|绑定已失效" "$APPDATA/frontend-vue/logs/main.log"
 ```
 
-正常开机不该出现这两行（绑定本来就对）；出现一次且随后 `install.json` 没被改写、
-`logs` 里没有 `创建 Python 环境`，就是"换包后零成本自愈"生效了。
+正常开机不该出现这些行（绑定本来就对）；换包后应当**core 与 engine 各一行**，
+且随后 `install.json` 没被改写、两份 venv 的 `Lib/site-packages` 最新 mtime 不变、
+`logs` 里没有 `创建 Python 环境` —— 三条一起看才是"零成本自愈"，只看日志会被
+"其实偷偷重建了一遍"骗过去。
 **反过来**，如果日志里出现 `创建 Python 环境` 而 venv 又明明存在，八成是绑定修不上
 （版本对不上，或包里没有可用解释器）—— 按 §3 的 `version-mismatch` /
 `no-bundled-runtime` 分流去查，不要先怀疑依赖清单。

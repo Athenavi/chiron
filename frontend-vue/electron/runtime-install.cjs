@@ -364,7 +364,8 @@ function rebindVenvBinding(options = {}) {
     return { rebound: false, reason: 'write-failed', venv, from: cfg.home, detail: err?.message || String(err) }
   }
   const relinked = process.platform === 'win32' ? [] : relinkPosixInterpreter(venv, runtime.dir)
-  return { rebound: true, reason: 'rebound', venv, from: cfg.home, to: newHome, relinked }
+  // target 跟着记录走：两套环境的改绑会汇成一个列表，没有这一字段就分不清哪条是 core、哪条是引擎
+  return { rebound: true, reason: 'rebound', target: target.id, venv, from: cfg.home, to: newHome, relinked }
 }
 
 /**

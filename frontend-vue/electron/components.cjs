@@ -409,15 +409,24 @@ function inspectLocalRuntime() {
     return { ready: true, reason: 'dev', message: '' }
   }
   const installer = require('./runtime-install.cjs')
-  const core = installer.inspectRuntime({
-    target: 'core',
-    userDataPath: userData,
-    sources,
-    probe: probeBundledRuntime,
-  })
+  // 两套环境的改绑都得报出去：core 修好之后就往下判引擎，返回值只带**引擎**的 binding，
+  // 于是 core 那次自愈在日志里一个字都不留（真机验证时就是这么丢的）。
+  const rebinds = []
+  const keep = (result) => {
+    if (result && result.binding && result.binding.rebound) rebinds.push(result.binding)
+    return result
+  }
+  const core = keep(
+    installer.inspectRuntime({
+      target: 'core',
+      userDataPath: userData,
+      sources,
+      probe: probeBundledRuntime,
+    }),
+  )
   // 先报 core：缺 uv / 缺解释器这类问题两套环境是同一个原因，先把这一环修好，下一轮才轮到引擎
-  if (!core.ready) return core
-  return inspectEngineRuntime(userData)
+  if (!core.ready) return { ...core, rebinds }
+  return { ...keep(inspectEngineRuntime(userData)), rebinds }
 }
 
 /**

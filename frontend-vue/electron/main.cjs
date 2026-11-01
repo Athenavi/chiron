@@ -554,11 +554,11 @@ function inspectLocalRuntime() {
     const result = components.inspectLocalRuntime()
     // 就地改绑是"零成本修好、但用户永远看不见"的那类自愈：不在日志里留一行，
     // 下次出问题就没法区分"环境从没装过"与"绑定还跟着上一个包跑"。
-    if (result && result.binding && result.binding.rebound) {
-      logMain(
-        'info',
-        `runtime python binding rebound (${result.target}): ${result.binding.from} -> ${result.binding.to}`,
-      )
+    // 记的是 `rebinds`（core + 引擎两套）而不是 `result.binding`（只有最终返回那套）：
+    // core 修好后函数会继续判引擎，返回值带的是引擎的绑定，core 那次就没人记了。
+    for (const b of Array.isArray(result?.rebinds) ? result.rebinds : []) {
+      if (!b || !b.rebound) continue
+      logMain('info', `runtime python binding rebound (${b.target}): ${b.from} -> ${b.to}`)
     }
     return result && typeof result === 'object' ? result : { ready: true, reason: 'unknown', message: '' }
   } catch (err) {
