@@ -1,11 +1,12 @@
 # Gateway 路由器 — 多 Provider 加权选择 + 熔断 + 降级
 from __future__ import annotations
 
+import asyncio
 import logging
 import random
 import sys
 import time
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Awaitable, Callable
 from typing import Any
 
 import aiohttp
@@ -106,6 +107,7 @@ class GatewayRouter:
         gateway_url: str = "",
         internal_token: str = "",
         provider_catalog: list[dict[str, Any]] | None = None,
+        provider_refresh: Callable[[], Awaitable[int]] | None = None,
     ):
         self._providers = providers
         # 服务提供商目录（app/providers/catalog.py，权威源在 Go 网关）：驱动
@@ -132,8 +134,64 @@ class GatewayRouter:
         self._tenant_routes: dict[int, list[dict[str, Any]]] = {}  # tenant_id(int) -> [route, ...]
         self._gateway_url = gateway_url
         self._internal_token = internal_token
+        # 运行期补注册 provider 的回调（由引擎在 lifespan 注入，见 register_provider）。
+        # 没有它，"先起引擎、后配 key"就永久注册不上：provider 名单在 lifespan 里一次成型，
+        # 打包桌面态还是**引擎先于网关**启动（local-stack.cjs），网关回填 keyset 时引擎已经在
+        # 用一份空表了。
+        self._provider_refresh = provider_refresh
+        self._refresh_lock = asyncio.Lock()
+        # 去抖：路由未命中会连续发生（每个请求一次），不去抖就等于每轮都扫一遍 Redis。
+        self._refresh_min_interval = 2.0
+        self._last_refresh_mono = 0.0
 
     # ── 公开 API ──
+
+    def register_provider(
+        self, name: str, provider: LLMProvider, preset: dict[str, Any] | None = None
+    ) -> None:
+        """运行期补注册一个 provider（keyset 迟到 / 管理端新增）。
+
+        为什么这件事必须由 router 来做、而不是让 lifespan 直接往 `providers` 字典里塞：
+        `_breakers` / `_embed_breakers` / `_latencies` 三张表都在构造时按**当时的** provider
+        名单生成，而 `_select`、成功/失败上报用的是 `breakers[p.name]` 直接下标 ——
+        只加字典不加表，第一次调用就 KeyError（表现是"配了 key 反而更糟"）。
+        `_catalog` 是构造时从目录**列表**拷成的 dict，运行期往那个列表里 append 也传不进来，
+        所以 preset 要显式带上，否则按 `provider/model` 前缀路由的自定义 provider 匹配不到。
+        """
+        self._providers[name] = provider
+        self._breakers.setdefault(name, CircuitBreaker())
+        self._embed_breakers.setdefault(name, CircuitBreaker())
+        self._latencies.setdefault(name, 500.0)
+        if preset is not None:
+            self._catalog.setdefault(name, preset)
+
+    async def refresh_providers(self, *, force: bool = False, reason: str = "") -> int:
+        """让 lifespan 的补注册逻辑跑一遍（去抖 + 单飞）。返回新增 provider 数。
+
+        `force=True` 给广播用：管理端刚保存 key、网关刚回填完 keyset，这次必须真刷，
+        不能因为"两秒前刚扫过"被去抖掉 —— 用户点完保存就立刻发消息，间隔常常不到 2s。
+        """
+        if self._provider_refresh is None:
+            return 0
+        async with self._refresh_lock:
+            now = time.monotonic()
+            if not force and now - self._last_refresh_mono < self._refresh_min_interval:
+                return 0
+            # 先占时间戳再 await：并发/递归都不会在这一次刷新里再触发刷新（路由未命中会重进 _select）。
+            self._last_refresh_mono = now
+            try:
+                added = await self._provider_refresh()
+            except Exception as exc:  # noqa: BLE001 - 补注册失败不该把这一轮请求变成异常
+                logger.warning("provider refresh failed (%s): %s", reason or "lazy", exc)
+                return 0
+            if added:
+                logger.info(
+                    "LLM providers registered at runtime: +%d (total=%d, reason=%s)",
+                    added,
+                    len(self._providers),
+                    reason or "lazy",
+                )
+            return added
 
     async def chat_stream(
         self,
@@ -168,11 +226,7 @@ class GatewayRouter:
                 finish_reason="error",
                 provider="none",
                 model=model,
-                message="no LLM provider available for model="
-                + model
-                + " (check API keys in .env; configured: "
-                + ",".join(self._providers.keys())
-                + ")",
+                message=self._no_provider_message(model),
             )
             return
 
@@ -307,7 +361,7 @@ class GatewayRouter:
             return ChatResponse(
                 content="",
                 finish_reason="error",
-                message="no available provider for model (none configured or all circuit-open)",
+                message=self._no_provider_message(model),
                 provider="none",
                 model=model,
             )
@@ -549,6 +603,28 @@ class GatewayRouter:
 
     # ── 内部路由 ──
 
+    def _no_provider_message(self, model: str) -> str:
+        """路由彻底失败时给用户的一句话。
+
+        旧文案是 `check API keys in .env` —— 在打包桌面态里根本没有用户可见的 `.env`
+        （密钥在管理后台，落 PG、镜像进 Redis），于是用户按提示去查环境变量，越查越偏。
+        这里按**两种真不同的故障**分开说：
+        表是空的 ⇒ 没有任何 provider 被注册（没配 key / 配的 key 还没同步进来）；
+        表非空却选不出来 ⇒ provider 都在，是端点/熔断/模型名匹配的问题。
+        """
+        configured = ",".join(sorted(self._providers.keys()))
+        if not configured:
+            return (
+                f"no LLM provider available for model={model}: 引擎当前没有注册任何提供商。"
+                "请在「管理后台 → API 密钥」为某个服务提供商添加密钥并保存（保存后自动生效，"
+                "无需重启）；用环境变量部署的则设置对应的 *_API_KEY 后重启服务。"
+            )
+        return (
+            f"no LLM provider available for model={model}: 已注册 "
+            f"provider={configured}，但没有一个可用 —— 请检查该 provider 的端点（BASE_URL）"
+            "与密钥是否有效，或稍后重试（熔断中）。"
+        )
+
     async def _select(
         self, model: str, hint: str = "", tenant_id: int = 0, embed: bool = False
     ) -> LLMProvider | None:
@@ -576,6 +652,10 @@ class GatewayRouter:
         # 找到所有支持该 model 的 provider
         candidates = self._find_candidates(model)
         if not candidates:
+            # 一个都匹配不到 ⇒ 很可能是"key 是引擎启动之后才配的"（打包桌面态必然如此：
+            # 桌面壳先起引擎、再起网关回填 keyset）。补注册一次再选，别直接判死。
+            if await self.refresh_providers(reason="route-miss"):
+                return await self._select(model, hint, tenant_id=tenant_id, embed=embed)
             # 全部尝试
             candidates = list(self._providers.values())
 
@@ -583,6 +663,10 @@ class GatewayRouter:
         available = [p for p in candidates if breakers[p.name].allow()]
 
         if not available:
+            # 全熔断也可能是"新配的 provider 还没进表"（老 provider 正好都坏了）：
+            # 补注册后再看一次，仍然坏才报错。
+            if await self.refresh_providers(reason="all-circuit-open"):
+                return await self._select(model, hint, tenant_id=tenant_id, embed=embed)
             logger.error(
                 "All providers circuit-open for %s model=%s",
                 "embed" if embed else "chat",

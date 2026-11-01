@@ -151,7 +151,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # ── 2.5. PostgreSQL ──
     await _start_postgres()
     # ── 3. LLM Gateway ──
-    await _start_gateway()
+    # 返回的是它的密钥变更订阅任务句柄：关闭段靠**显式传入**取消（不用模块全局，
+    # 见 `_shutdown_lifespan` 的 docstring 与 lifespan 的 locals() 护栏）。
+    _llm_keys_task = await _start_gateway()
 
     # ── 3.4. 工具/工作流 gateway 注入（六大互通：对话/agent 可调用工作流） ──
     _bind_gateways()
@@ -234,6 +236,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         price_sync_task=_price_sync_task,
         engine_registry=_engine_registry,
         liveness=_liveness,
+        llm_keys_task=_llm_keys_task,
     )
 
 
@@ -496,12 +499,13 @@ async def _start_memory_service() -> None:
         logger.warning("Memory service not available: %s", e)
 
 
-async def _start_gateway() -> None:
+async def _start_gateway() -> Any:
     """装配 LLM Gateway：注册 provider、语义缓存 / 预算、同步租户模型路由（从 `lifespan` 抽出）。
 
     结果写进**模块全局 `_gateway`**（`get_gateway()`、3.4 注入段与关闭段都从这里取），
     故声明 `global`。段内其余变量（providers / cache / budget / key_ring / catalog）都是
-    本段私有的，后续段只经 `_gateway` 访问，因此**不返回句柄**。
+    本段私有的，后续段只经 `_gateway` 访问。
+    **返回**密钥变更订阅任务句柄：它是本段唯一需要关闭段清理的长驻任务。
     """
     global _gateway
 
@@ -553,13 +557,63 @@ async def _start_gateway() -> None:
         NamedResponsesProvider,
     )
 
-    for _preset in _catalog:
+    # router 在 provider 注册**之前**就构造好（见下面的 GatewayRouter 段），于是
+    # "注册一个 provider" 只有一条路径：`router.register_provider`。
+    # 这个顺序是 M52 的关键：打包桌面态里桌面壳**先起引擎、再起网关**，网关把 PG 里的
+    # key 回填进 Redis keyset 时，引擎的 lifespan 早就跑完了 —— 注册必须能在运行期发生。
+    router: GatewayRouter | None = None
+
+    def _custom_preset(provider_id: str) -> dict[str, Any]:
+        """目录外 provider 的合成目录项（管理端给任意名字配了 key）。
+
+        模型名带 provider 前缀时（`provider/model`）可被路由命中；按 OpenAI 兼容协议接入，
+        端点取 DB/env 覆盖（缺 base_url 时调用方会跳过并说明去哪儿配）。
+        """
+        return {
+            "id": provider_id,
+            "label": provider_id,
+            "kind": "openai",
+            "base_url": "",
+            "api_key_env": "",
+            "model_prefixes": [f"{provider_id}/"],
+            "cost": 5.0,
+            "quality": 0.80,
+            "requires_key": True,
+            "model_discovery": True,
+        }
+
+    # 目录外的自定义 provider 也要能工作：管理端可为任意 provider 名（如 my-gateway）
+    # 添加 key，写入 keyset llm:keys:{provider}。这里扫描 keyset 补齐目录未收录的 provider。
+    async def _keyset_provider_ids() -> list[str]:
+        """扫描 Redis keyset 中已配置 key 的 provider 名。"""
+        if _redis is None:
+            return []
+        from app.redis_keys import rkey
+
+        prefix = rkey("llm:keys:")
+        ids: list[str] = []
+        try:
+            async for key in _redis.scan_iter(match=f"{prefix}*", count=100):
+                name = key.decode() if isinstance(key, bytes) else str(key)
+                provider = name[len(prefix) :] if name.startswith(prefix) else ""
+                if provider and provider != "ver" and provider not in ids:
+                    ids.append(provider)
+        except Exception as exc:  # noqa: BLE001 - 扫描失败不阻断启动
+            logger.warning("keyset provider scan failed: %s", exc)
+        return ids
+
+    async def _build_provider(_preset: dict[str, Any]) -> LLMProvider | None:
+        """目录项 → provider 实例；不满足注册条件返回 None。
+
+        **闸门只留这一份**：启动首跑与运行期补注册必须同判据。两份闸门一定会漂，
+        漂了就是"重启后能用、当场不能用"（或反过来）——而打包桌面态几乎总走运行期那条路。
+        """
         _pid = str(_preset.get("id") or "")
-        if not _pid or _pid in providers:
-            continue
+        if not _pid:
+            return None
         _seed = provider_api_key(_preset)
         if not _seed and provider_requires_key(_preset) and not await _keyset_has(_pid):
-            continue
+            return None
         _base_url = provider_base_url(_preset)
         # 免 key 的**本地自托管** provider（Ollama / vLLM / LM Studio）默认 **不注册**：
         # 它们带的是目录里的本地默认地址（vLLM 是 http://localhost:8000/v1），一旦无条件注册
@@ -577,7 +631,7 @@ async def _start_gateway() -> None:
                     _pid,
                     _default_base or "<none>",
                 )
-                continue
+                return None
         _kind = provider_kind(_preset)
         # 显式标注三类具名 provider 的并集：不标注时 mypy 只按**第一个分支**推断，
         # 于是 Responses / OpenAI 两条分支既没被检查构造签名，也没被检查能否塞进
@@ -594,77 +648,62 @@ async def _start_gateway() -> None:
             _provider_cls = NamedResponsesProvider
         else:
             _provider_cls = NamedOpenAIProvider
-        providers[_pid] = _provider_cls(
+        return _provider_cls(
             _pid,
             api_key=_seed or placeholder,
             base_url=_base_url,
             key_ring=_key_ring,
         )
+
+    def _register(_pid: str, _provider: LLMProvider, _preset: dict[str, Any]) -> None:
+        """把一个 provider 交给 router（补上熔断/延迟/目录这三张运行期表）。"""
+        if router is None:
+            # 正常不会走到：router 在首次注册前就已就位。留这一支是为了让"回调早于 router"
+            # 这种误用在**日志**里现形，而不是变成 KeyError 或静默不进路由。
+            logger.error("provider %s registered before GatewayRouter exists", _pid)
+            providers[_pid] = _provider
+            return
+        router.register_provider(_pid, _provider, _preset)
         logger.info(
             "LLM provider registered: %s (kind=%s, base_url=%s)",
             _pid,
             provider_kind(_preset),
-            _base_url or "<sdk-default>",
+            provider_base_url(_preset) or "<sdk-default>",
         )
 
-    if not providers:
-        logger.warning(
-            "No LLM providers configured! Set ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY "
-            "/ LLM_API_KEY, add a key in admin (服务提供商), or use a no-key provider (Ollama/vLLM)"
-        )
+    async def _register_missing_providers() -> int:
+        """目录 + keyset 各扫一遍，把"够格但还没注册"的 provider 补进路由表。"""
+        _added = 0
+        for _preset in list(_catalog):
+            _pid = str(_preset.get("id") or "")
+            if not _pid or _pid in providers:
+                continue
+            _provider = await _build_provider(_preset)
+            if _provider is None:
+                continue
+            _register(_pid, _provider, _preset)
+            _added += 1
 
-    # 目录外的自定义 provider 也要能工作：管理端可为任意 provider 名（如 my-gateway）
-    # 添加 key，写入 keyset llm:keys:{provider}。这里扫描 keyset 补齐目录未收录的 provider，
-    # 按 OpenAI 兼容协议接入（端点取 DB/env 覆盖）。
-    async def _keyset_provider_ids() -> list[str]:
-        """扫描 Redis keyset 中已配置 key 的 provider 名。"""
-        if _redis is None:
-            return []
-        from app.redis_keys import rkey
-
-        prefix = rkey("llm:keys:")
-        ids: list[str] = []
-        try:
-            async for key in _redis.scan_iter(match=f"{prefix}*", count=100):
-                name = key.decode() if isinstance(key, bytes) else str(key)
-                provider = name[len(prefix):] if name.startswith(prefix) else ""
-                if provider and provider != "ver" and provider not in ids:
-                    ids.append(provider)
-        except Exception as exc:  # noqa: BLE001 - 扫描失败不阻断启动
-            logger.warning("keyset provider scan failed: %s", exc)
-        return ids
-
-    _known_ids = {str(preset.get("id") or "") for preset in _catalog}
-    for _pid in await _keyset_provider_ids():
-        if not _pid or _pid in providers or _pid in _known_ids:
-            continue
-        # 合成目录项：模型名带 provider 前缀时（provider/model）可被路由命中
-        _custom_preset = {
-            "id": _pid,
-            "label": _pid,
-            "kind": "openai",
-            "base_url": "",
-            "api_key_env": "",
-            "model_prefixes": [f"{_pid}/"],
-            "cost": 5.0,
-            "quality": 0.80,
-            "requires_key": True,
-            "model_discovery": True,
-        }
-        _base_url = provider_base_url(_custom_preset)
-        if not _base_url:
-            logger.warning(
-                "custom provider %s skipped: no base_url (set it in 管理端「服务提供商」或 %s_BASE_URL)",
-                _pid,
-                _pid.upper().replace("-", "_"),
-            )
-            continue
-        _catalog.append(_custom_preset)
-        _known_ids.add(_pid)
-        providers[_pid] = NamedOpenAIProvider(
-            _pid, api_key=placeholder, base_url=_base_url, key_ring=_key_ring
-        )
-        logger.info("custom LLM provider registered: %s (base_url=%s)", _pid, _base_url)
+        for _pid in await _keyset_provider_ids():
+            if not _pid or _pid in providers:
+                continue
+            _preset = _custom_preset(_pid)
+            _base_url = provider_base_url(_preset)
+            if not _base_url:
+                logger.warning(
+                    "custom provider %s skipped: no base_url (set it in 管理端「服务提供商」或 %s_BASE_URL)",
+                    _pid,
+                    _pid.upper().replace("-", "_"),
+                )
+                continue
+            _catalog.append(_preset)
+            _provider = await _build_provider(_preset)
+            if _provider is None:
+                continue
+            _register(_pid, _provider, _preset)
+            logger.info("custom LLM provider registered: %s (base_url=%s)", _pid, _base_url)
+            _added += 1
+        return _added
 
     # 创建 embedding 函数（用于语义缓存）
     async def _embed_for_cache(text: str) -> list[float]:
@@ -687,14 +726,29 @@ async def _start_gateway() -> None:
         cache = None
         budget = None
 
-    _gateway = GatewayRouter(
+    # router **先于** provider 注册构造：往路由表里加 provider 的唯一入口是
+    # `router.register_provider`（它同时补熔断/延迟/目录三张表，见其注释）。
+    # 这样同一份 `_register_missing_providers()` 既是启动首跑，也是运行期的补注册回调 ——
+    # 闸门只有一份，不会"重启能用、当场不能用"。
+    router = GatewayRouter(
         providers=providers,
         cache=cache,
         budget=budget,
         gateway_url=settings.gateway_internal_url,
         internal_token=settings.internal_token,
         provider_catalog=_catalog,
+        provider_refresh=_register_missing_providers,
     )
+    _gateway = router
+
+    await _register_missing_providers()
+    if not providers:
+        logger.warning(
+            "No LLM providers configured: 目录里没有任何 provider 够格（既没有 env 密钥、keyset 里也没有 key，"
+            "且没有免 key 的本地端点被显式配置）。管理端「API 密钥」保存后会自动补注册（llm:keys:changed 广播），"
+            "不必重启；env 部署则设置 ANTHROPIC_API_KEY / OPENAI_API_KEY / DEEPSEEK_API_KEY / LLM_API_KEY 后重启"
+        )
+
     # 同步租户模型路由配置（不阻断启动）
     try:
         routes_count = await _gateway.sync_routes()
@@ -703,6 +757,9 @@ async def _start_gateway() -> None:
     except Exception as e:
         logger.warning("Model route sync failed (non-blocking): %s", e)
     logger.info("LLM Gateway: %s providers", ", ".join(providers.keys()) or "none")
+
+    # M52：订阅密钥变更广播 —— 网关回填/管理端保存 key 后即时补注册。
+    return _start_llm_keys_watch()
 
 
 def _start_deployment_extensions() -> None:
@@ -899,6 +956,72 @@ def _start_storage_watch() -> Any:
     from app.media.reload import listen_for_storage_changes as _listen_storage_changes
 
     return asyncio.create_task(_listen_storage_changes())
+
+
+#: 密钥变更订阅断线后的重连间隔（与 harness / storage watcher 同一范式）。
+_LLM_KEYS_RECONNECT_SECONDS = 5.0
+
+
+def _start_llm_keys_watch() -> Any:
+    """订阅 provider 密钥变更广播：网关回填 / 管理端保存 key 后立刻补注册 provider（M52）。
+
+    为什么必须有这条订阅（而不是"启动时扫一次"或"路由未命中时惰性刷"就够了）：
+    打包桌面态里桌面壳**先起引擎、再起网关**（`local-stack.cjs`），等网关把 PG 里的密钥
+    镜像进 Redis keyset，引擎的 provider 表早就成型了 —— 只有广播能让它当场补上，
+    否则用户配完 key 必须重启进程才能发出第一条消息。
+    路由未命中的惰性刷新是**兜底**（广播丢了也要能自己回来），但它要先失败一次、
+    还被去抖挡着，不能当主路径。
+    Redis 不可用时退避重试；取消即退出（与 reconciler / retention 同一生命周期范式）。
+
+    **返回句柄**：PubSub 循环必须被关闭段取消，否则退出时连接悬着、任务永不结束。
+    """
+    return asyncio.create_task(_listen_llm_keys_changes())
+
+
+async def _listen_llm_keys_changes() -> None:
+    """`llm:keys:changed` 订阅循环：每条消息都 force 刷新一次 provider 注册表。
+
+    `force=True` 是有意的：用户点完保存就立刻发消息，两次变更常常挤在 2 秒里去抖窗口里，
+    按去抖处理就成了"我明明配了 key，第一条还是失败"。刷新本身是单飞的（router 里的锁），
+    且没有新东西时只是一次目录遍历 + 一次 SCAN，代价可控。
+    """
+    from app.redis_client import aclose_pubsub, get_redis
+    from app.redis_keys import rkey
+
+    channel = rkey("llm:keys:changed")
+    while True:
+        pubsub = None
+        try:
+            redis = await get_redis()
+            if redis is None:
+                await asyncio.sleep(_LLM_KEYS_RECONNECT_SECONDS)
+                continue
+            pubsub = redis.pubsub()
+            await pubsub.subscribe(channel)
+            logger.info("llm keyset listener subscribed: %s", channel)
+            async for message in pubsub.listen():
+                if message.get("type") != "message":
+                    continue
+                if _gateway is None:
+                    continue
+                payload = message.get("data")
+                if isinstance(payload, bytes):
+                    payload = payload.decode("utf-8", errors="replace")
+                # 刷新本身已在 router 里记了「+%d (total=%d, reason=…)」，这里不再重复播报
+                await _gateway.refresh_providers(
+                    force=True, reason=f"keyset-changed:{payload}"
+                )
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # noqa: BLE001 - 订阅断了要能自己回来
+            logger.warning("llm keyset listener error, retrying: %s", exc)
+            await asyncio.sleep(_LLM_KEYS_RECONNECT_SECONDS)
+        finally:
+            if pubsub is not None:
+                try:
+                    await aclose_pubsub(pubsub)
+                except Exception:  # noqa: BLE001 - 关连接失败不该盖住上面的异常
+                    logger.debug("llm keyset pubsub close failed", exc_info=True)
 
 
 def _start_price_sync() -> Any:
@@ -1116,6 +1239,7 @@ async def _shutdown_lifespan(
     price_sync_task: Any = None,
     engine_registry: Any = None,
     liveness: Any = None,
+    llm_keys_task: Any = None,
 ) -> None:
     """关闭清理（从 `lifespan` 提出，句柄**显式传入**）。
 
@@ -1167,6 +1291,18 @@ async def _shutdown_lifespan(
             pass
         except Exception as e:  # noqa: BLE001
             logger.warning("storage settings listener shutdown failed: %s", e)
+
+    # M52：停 provider 密钥变更订阅（`_start_gateway` 起的后台任务）。
+    # 与 harness/storage 同一范式：取消后 await 一次，让 CancelledError 走完 finally 里的
+    # pubsub 关闭，别把连接留到事件循环销毁之后。
+    if llm_keys_task is not None:
+        llm_keys_task.cancel()
+        try:
+            await llm_keys_task
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:  # noqa: BLE001
+            logger.warning("llm keyset listener shutdown failed: %s", e)
 
     # N1：停 L1 的周期清理任务（它现在会回调记忆的会话级收尾 —— 停机时不该留悬着的 task）
     try:
