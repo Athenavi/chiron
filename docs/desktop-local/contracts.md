@@ -324,6 +324,13 @@ cd frontend-vue && pnpm check:ui
 cd desktop-local && python -m ruff check .
 cd desktop-local && python -m pytest -q
 python desktop-local/scripts/verify_p0.py
+
+# 引擎：Redis 必须真连得上（两个变量都要给）—— key-ring 的 live 用例看 CHIRON_TEST_REDIS_ADDR，
+# runtime_cache 只看 settings.redis_url（REDIS_URL）。漏掉后者时它仍连默认 6379，每个用例
+# 各等一次连接超时：本机实测全量 65.02 秒 → 1412.75 秒，并凭空多出 27 个失败，看着像大面积回归。
+# 并发跑两份 pytest 请各给 --basetemp：共用 pytest-of-athenavi 会在收尾时互相踩符号链接。
+cd python-engine && CHIRON_TEST_REDIS_ADDR=127.0.0.1:6399 \
+  REDIS_URL=redis://127.0.0.1:6399/0 python -m pytest -q tests/
 ```
 
 CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写“未验证 + 原因”，不要假装通过。
@@ -346,6 +353,16 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - 不要用「`apiUrl` 非空」判定云端已经配好可进主界面（§1）：保留旧地址是切模式的契约，
   而旧地址未必还连得上——不可达的后端会让设置页（登录后才存在）够不着，用户被锁在门外。
   判据是 `setup.pendingApiUrl`，且只有 `resolveStartupWindow` 一处。
+
+- 不要用 `EventSource` 承载需要 Authorization 的流（§11）：它**设不了请求头**，只能把凭据塞进
+  URL，而打包桌面态的身份（`POST /v1/auth/session` 换到的本地 JWT）恰恰只在头里被认。
+  结果是 401 被浏览器的自动重连藏起来 —— 界面停在「思考中」，既不报错也不出字。
+- 不要假设引擎 lifespan 结束时 Redis keyset 已经有 key（§10）：打包桌面态的 Redis 是空库起来
+  的，且引擎比网关**先**启动。要让"配完 key 不用重启"成立，靠的是回填 + 订阅失效这两条，
+  少一条就退化成「必须重启」或「永远空表」。
+- 不要在运行期只往 `GatewayRouter._providers` 里塞 provider（§10.2）：`_breakers` /
+  `_embed_breakers` / `_latencies` / `_catalog` 在构造时建成并按键直取，漏一张是 KeyError，
+  不是优雅降级。运行期注册只能走 `router.register_provider`。
 
 ## 9. 桌面片段推理端点
 
@@ -475,3 +492,96 @@ CI/本机无法运行的项（如 Electron 真机启动）在提交说明里写�
 - `response_format is None` 的请求哈希与改动前**逐字节相同**，存量 L2/L3 条目继续命中，无需迁移；
 - 非空时形状参与哈希：同一 prompt 先文本、后 `json_object` 请求**不会**命中前者的纯文本结果；
 - 该约束有单测守着：`python-engine/tests/test_desktop_infer.py`。
+
+## 10. LLM provider key：三层一致性与「配完不用重启」
+
+一个 key 同时活在三层，改任何一层都必须让另外两层知道：
+
+| 层 | 位置 | 形状 |
+|---|---|---|
+| 权威 | PG 表 `llm_provider_keys` | AES-256-GCM 密文，只有网关能解（`settings.Store`） |
+| 运行时镜像 | Redis HASH `llm:keys:{provider}` | field = `key_hash[:12]`，value = JSON `{"k": 明文, "s": 权威状态, "w": 权重}`；引擎在同一条记录里另记 LRU/冷却/失败计数（`u`/`c`/`f`/`ft`）。版本计数 `llm:keys:ver` |
+| 失效通知 | Redis PUBLISH `llm:keys:changed` | payload = provider 名 |
+
+引擎的 `KeyRing`（`python-engine/app/gateway/key_ring.py`）**不维护进程内缓存**：`get_key` /
+`report_failure` 各跑一段只碰这一个 HASH 的 Lua，读写在服务端原子完成；
+但**哪些 provider 进路由表**是引擎 lifespan 里一次成型的（`python-engine/app/main.py:502 _start_gateway`）。
+闸门三条，满足任一才注册：env 种子、keyset 里有该 provider 的 key、免-key 的本地端点被显式配置。
+
+### 10.1 为什么必须"回填 + 惰性注册"两条都做
+
+打包桌面态的启动顺序是 引擎(:893) → 网关(:918)，且 Redis 每次以空库起来
+（`--appendonly no --save ""`）。于是：
+
+- **只靠管理端写库后那一次镜像**：云端看不出问题（Redis 长驻、keyset 无 TTL，配一次活过所有重启），
+  但桌面态「本机早先配好的 key」在引擎眼里等于从没配过 ⇒ 每条回合立刻
+  `no LLM provider available for model=…: 引擎当前没有注册任何提供商`。解法是网关启动时按权威层整体重建：
+  `cmd/chiron/main.go:152` → `api.HydrateProviderKeysets`（`internal/api/llm_keys.go:154`），
+  逐 provider 调 `syncProviderKeyset`，用**一次原子 Lua** 先 DEL 再逐对 HSET
+  （`llmReplaceKeyset`，`internal/api/llm_keys.go:202`）—— 增量 HMSET 会让删掉的 key 复活。
+  Redis 不可用时如实返回 `(0, nil)`：引擎退化为 env 种子，不谎报成功也不阻断启动。
+- **只回填还不够**：回填发生在网关起来之后，**晚于**引擎的注册表成型。所以引擎必须能在运行期
+  把新 keyset 变成新 provider —— 订阅 `llm:keys:changed`
+  （`app/main.py:965 _start_llm_keys_watch` / `:981 _listen_llm_keys_changes`）并调
+  `router.refresh_providers(force=True)`。订阅断线按 5s 退避重连，不影响主流程。
+
+### 10.2 运行期注册的约束
+
+- 只能走 `GatewayRouter.register_provider`（`app/gateway/router.py:149`）：它同时补
+  `_providers` / `_breakers` / `_embed_breakers` / `_latencies` / `_catalog`。后四张表在构造时
+  按下标直取，少一张就是 KeyError；`_catalog` 是目录的**副本**，不补就路由不到 model 前缀。
+  已有的熔断状态**不覆盖**（新 key 不该让正在退避的 provider 立刻满血）。
+- `refresh_providers`（`app/gateway/router.py:168`）带 2s 去抖：时间戳在 `await` **之前**占位，
+  否则并发刷新会一起越过阈值；`force=True` 绕过去抖（广播路径就是要立刻生效）；
+  `_refresh_lock` 保证同进程内扫描不重叠。回调异常吞掉并返回 0 —— 刷新失败不能让路由表更糟。
+- 刷新触发点有三处：路由未命中（`reason="route-miss"`）、全部熔断（`reason="all-circuit-open"`）、
+  密钥变更广播（`reason="keyset-changed:{provider}"`）。
+
+### 10.3 失败可见性
+
+空表与非空表两条文案（`app/gateway/router.py:606 _no_provider_message`）：
+
+- 空表只指**管理后台 → API 密钥**，并明说「保存后无需重启」；**不出现 `.env` 字样** ——
+  打包桌面态用户够不着 `.env`，指过去等于给一条死路。
+- 非空表点名已注册的 provider，并把怀疑方向指向 BASE_URL 与熔断退避。
+
+### 10.4 谁在守
+
+- Go：`internal/api/llm_keys_hydrate_test.go`（回填的选取与跳过口径）、
+  `internal/api/llm_keys_hydrate_live_test.go`（真 Redis 上重建后**必须**有 `llm:keys:changed`）。
+- Python：`python-engine/tests/test_gateway_runtime_registration.py`（12 例：五张表补齐、运行期
+  provider 真能出字/被前缀路由/能服务 embed、保留熔断状态、route-miss 与全熔断两条补注册路径、
+  去抖与 force、并发不重叠、回调异常不致命、两条文案）、
+  `python-engine/tests/test_llm_keys_watch.py`（7 例：前缀化频道、bytes/str 两种 payload 都强制刷新、
+  网关未就绪只丢不炸、断线重连并关掉旧 pubsub、关闭段取消订阅任务、两条 AST 护栏）。
+
+## 11. 会话事件流 `/events`：身份、续传与静默
+
+链路：`GET /events` / `GET /v1/events` 在 `authMW(rlMW(sseHandler))` 之后
+（`internal/api/routes_agent.go:348`）⇒ **必须带 Authorization**。前端实现是
+`fetch` + `ReadableStream`（`frontend-vue/src/api/index.ts:625 openEventStream`，会话流是它的
+薄壳 `:757 createSSEConnection`），不是 `EventSource`（原因见 §8）。
+
+**同一条实现服务两条长连接**：`GET /v1/agent/interactions/stream`（跨会话待办角标，
+`frontend-vue/src/api/interactions.ts:70 createUserEventsConnection`，传 `autoReconnect: true`）
+也在 `authMW` 之后（`internal/api/routes_agent.go:106`）。它此前也是 `EventSource` —— 桌面态静默
+401，角标只剩 30s 轮询兜底（"实时提醒"退化成"半分钟提醒"）；两条连接分开实现就只会修好一条，
+所以身份/帧解析/重连/关闭只有一份。
+
+| 项 | 口径 |
+|---|---|
+| 身份 | `requestToken()`：本地模式 = 设备 token / 本地 JWT，云端 = 登录 token；**只进 header**，URL 里不再有 `token=` |
+| cookie | 桌面端 `credentials: 'same-origin'`（`file://` 是跨站，cookie 带不过去），Web 端 `'include'` |
+| 帧切分 | 空行分帧（连续两个换行）；CRLF 归一必须做在**累计缓冲**上 —— 跨块的「行尾 CR + 行首 LF」也要拼回边界；冒号后的第一个空格属于协议 |
+| 派发 | 空 `data` 与命名事件**不**进 `onMessage` —— 本地 core 兜底通道发的是 `event: heartbeat`（`desktop-local/app/api/events.py`），派发出去就是对话里的幽灵消息 |
+| 非 2xx | 立即 `onError` 且不重连：401/403 不会自己好，重试只会把失败拖成「思考中」不消失 |
+| 续传 | 收到带 `id:` 的帧就记录（并回调 `onLastEventId`），重连时放进 `Last-Event-ID` 头（网关 header 优先于 query，`internal/api/events.go:49`）；空值不发这个头 |
+| 重连 | 只在 `autoReconnect` 下发生（默认关 = 旧语义「断线立即报错」），连续失败上限默认 3；计数**只在真的收到过字节**时清零 —— 只看响应头会被「接受连接就收尾、什么都不发」的端点每次清零 ⇒ 无限重连 |
+| 关闭 | `close()` = `AbortController.abort()` + 幂等静默；自己关的不算故障，不回调 `onError`（否则切会话就弹「连接已断开」） |
+
+遗留：`session_id` 仍在 URL query（服务端有所有权校验），换 WebSocket 才能从日志/历史里去掉，本批次不动。
+子 Agent 那条 `GET /v1/subagent/runs/{run_id}/events` 走的是轮询读 Redis Stream，不是这条长连接。
+
+守这条契约的用例：`frontend-vue/src/api/__tests__/sseConnection.spec.ts`（11 例，含一条
+"不许退回 `new EventSource`" 的源码护栏），以及 `ChatView.interaction.spec.ts` 里把
+`createSSEConnection` 打桩成真实句柄形状（只有 `close()`）。

@@ -210,6 +210,8 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
 | `Electron 进程 … FAIL`，`exit=0` 且很快退出 | 另一个 Chiron 实例占着单实例锁 | 关掉正在运行的实例再跑 |
 | `Electron 进程 … SKIP`，`没有图形会话` | 无 GUI（CI / 远程无 X） | 本来就不该跑壳；`--no-electron` 就是给这种情况的 |
 | `userData 日志 … FAIL` | 10s 内还没进 `whenReady`，或 `--user-data-dir` 被忽略且默认目录无权限 | 调大 `--electron-wait`；用 `--keep` 后按打印的路径手工看 |
+| `/chat` 发消息后一直「思考中」、控制台只有 `/events` 401 | 事件流没带出身份：要么改回了 `EventSource`（设不了头），要么本地 JWT 还没换到 | 见 contracts.md §11。非 2xx 现在**必须**立即 `onError`；还挂着不动就先确认请求头里有没有 `Authorization`，别去查模型 |
+| 每条回合立刻 `no LLM provider available for model=…`（注册表是空的） | 网关没回填 keyset，或引擎注册表在 keyset 就绪前就成型了 | 见 contracts.md §10：启动日志应有 `llm provider keysets hydrated from DB`；配完 key 不发 `llm:keys:changed` 就是回填/订阅断了一条 |
 | `taskkill: 没有找到进程` | 壳已经自己退了，收尾命令扑空 | 正常现象（`check=False`），只看 `Electron 退出回收` 的结论 |
 
 ## 8. 已知未覆盖
@@ -217,6 +219,9 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
 1. **界面不验**：不截图、不点按钮、不检查 DOM。要验渲染层请走
    `frontend-vue` 的 `npm run build:desktop` + 手工窗口，或后续加 Playwright/wdio 层。
 2. **不验 SSE / `/events`**：需要长期连接，放进 `verify_p0.py` 更合适。
+   这条缺口的代价已经在真机付过一次（contracts.md §11：401 被静默重连藏起来 ⇒「一直思考中」）；
+   现在由 `sseConnection.spec.ts` 钉住**请求形状与生命周期**（身份在头、非 2xx 立即失败、
+   续传带头、close 静默），但"网关真的认这个头、真的补发缺口"仍只有手工验证。
 3. **不验模式切换 / 云端模式**：切换会 relaunch，脚本里起两次壳的收益低于噪音。
    这条缺口是"切到云模式后改不了服务地址"能一路走到真机的原因之一：现在由壳层单测
    `electron/__tests__/cloud-api-url-setup.test.cjs` 钉住**分流判据与配置页源码**
@@ -224,3 +229,9 @@ node --test frontend-vue/electron/__tests__/smoke.test.cjs
    闸门口径），但"点了按钮窗口真的换到配置页"仍然只有手工验证。
 4. **Windows 上不保证 core 一定被回收**：`taskkill /T` 依赖进程树未被中断；若手工 Ctrl-C 过
    一次，请用 `Get-Process python` 自查残留（这也是脚本把 `--keep` 打出来的原因）。
+5. **不验「配完 key 不重启就出字」那条时间差**：`test_gateway_runtime_registration.py` 与
+   `test_llm_keys_watch.py` 钉住的是机制（五张运行期表补齐、去抖与 `force`、广播触发补注册），
+   打包态的真实时序（引擎先起、网关后回填 keyset）只有手工验证：起壳 → 管理端保存一把 key →
+   **不重启**直接发消息，应当立刻出字；日志里应同时出现
+   `llm provider keysets hydrated from DB`（网关侧回填）与
+   `LLM providers registered at runtime: +N`（引擎侧补注册）。见 contracts.md §10。
