@@ -11,6 +11,8 @@ node_modules
 dist
 dist-ssr
 release
+# 验证期会另开带后缀的出包目录（release-m47/ …），别让它们污染 git status
+release-*
 *.local
 
 # Editor directories and files
