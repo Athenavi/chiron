@@ -189,6 +189,14 @@ const loadingFull = ref(false)
 const loadError = ref(false)
 /** 服务端已无更多片段 */
 const reachedEnd = ref(false)
+/**
+ * 下一段的起始字符偏移，由**服务端**在每次响应里给出。
+ *
+ * 首次请求前为 null：此时起点是「列表接口给的预览占了多少个字符」。那个数
+ * 必须按**码点**数（`[...s].length`），不能用 `s.length` —— 后者数 UTF-16
+ * 码元，含 emoji 时偏大一倍，会跳过若干字符。
+ */
+const nextOffset = ref<number | null>(null)
 
 /** 渲染用的内容：展开过就用完整原文，否则用列表接口给的预览 */
 const displayContent = computed(() => (fullText.value ? fullText.value : props.item.content))
@@ -200,21 +208,34 @@ const canLoadFull = computed(
 
 const hasMoreFull = computed(() => canLoadFull.value && !reachedEnd.value)
 
+/** 码点数：与服务端 `substring` 的口径一致（`string.length` 数的是 UTF-16 码元）。 */
+function codePointLength(s: string): number {
+  return [...s].length
+}
+
 async function loadFullChunk() {
   const sid = props.sessionId
   if (!sid || loadingFull.value) return
   loadingFull.value = true
   loadError.value = false
   try {
-    // 起点是当前已有内容的字符数：该接口的 offset 是字符偏移，不是字节偏移
-    const current = fullText.value || props.item.content
-    const chunk = await getToolCallOutput(sid, props.item.toolCallId, current.length, FETCH_CHUNK)
+    // 起点只认服务端给的 `next_offset`；首段用预览的码点数起步。
+    const from = nextOffset.value ?? codePointLength(props.item.content)
+    const chunk = await getToolCallOutput(sid, props.item.toolCallId, from, FETCH_CHUNK)
     if (chunk?.total_bytes) totalBytes.value = chunk.total_bytes
+
+    // 首段要把预览一起拼上（服务端从 from 开始返回，预览之前的部分已在前端）。
     const piece = chunk?.content ?? ''
-    fullText.value = current + piece
-    // 片段短于请求上限 = 已到末尾。不用字节数比较：offset 是字符、total 是字节，
-    // 多字节文本下两者不同口径，比较会得出错误结论。
-    if (piece.length < FETCH_CHUNK) reachedEnd.value = true
+    fullText.value = (fullText.value || props.item.content) + piece
+
+    nextOffset.value = chunk?.next_offset ?? from + codePointLength(piece)
+    // 结束判定用服务端给的字符总量：两者同口径，比「片段短于请求上限」更可靠
+    // ——后者在服务端夹取或末尾恰好整除时都会误判。
+    if (typeof chunk?.total_chars === 'number') {
+      reachedEnd.value = chunk.next_offset >= chunk.total_chars
+    } else {
+      reachedEnd.value = codePointLength(piece) < FETCH_CHUNK
+    }
   } catch {
     loadError.value = true
   } finally {

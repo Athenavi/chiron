@@ -342,9 +342,19 @@ export interface ToolOutputChunk {
   content: string
   /** 库中 output 的完整字节数，用于判断还剩多少未加载 */
   total_bytes: number
+  /** 完整**字符（码点）**数，与 offset / next_offset 同口径 */
+  total_chars: number
   offset: number
   /** 服务端实际采用的上限，可能小于请求值（服务端强制夹取） */
   limit: number
+  /**
+   * 下一段的起始偏移，**由服务端算好**。
+   *
+   * 不要自己用「已收内容的 `.length`」推进：服务端按 Unicode 码点切，
+   * 而 JS 的 `string.length` 数 UTF-16 码元 —— 含 emoji 时相差一倍，
+   * 据此计算会跳过若干字符。`next_offset >= total_chars` 即已读完。
+   */
+  next_offset: number
 }
 
 /**

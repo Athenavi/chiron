@@ -467,16 +467,58 @@ func ClampToolOutputLimit(limit int) int {
 	return limit
 }
 
+// ToolOutputSlice 是一段工具调用 output 原文及其定位信息。
+//
+// 用结构体而不是多返回值：这里每个字段都是调用方**必须**看的（内容、两个口径
+// 的总量、下一段起点），漏接任何一个都会让前端的分段读取悄悄错位。
+type ToolOutputSlice struct {
+	// Content 是本段原文。
+	Content string
+	// TotalBytes 是库中 output 的完整**字节**数（列表接口 output_bytes 的口径）。
+	TotalBytes int
+	// TotalChars 是完整**字符（码点）**数，与 substring 同口径。
+	TotalChars int
+	// NextOffset 是下一段的起始字符偏移，由服务端算好。
+	//
+	// 不让客户端自己算：`substring(... for n)` 按 Unicode 码点切，而 JavaScript
+	// 的 `string.length` 数的是 UTF-16 码元 —— 遇到 emoji 这类增补平面字符，
+	// 两者相差一倍，客户端以 `已收内容的 .length` 当 offset 会**跳过**若干字符。
+	// 只有服务端知道自己切到哪了，所以由这里给出。
+	NextOffset int
+	Found      bool
+}
+
+// NextToolOutputOffset 计算下一段的起始字符偏移。
+//
+// **按码点（rune）计数**，与服务端 `substring(... for n)` 同口径。直接写
+// `offset + len(chunk)` 会按字节数推进：一段纯中文会让 offset 涨三倍，
+// 下一段从越过末尾的位置开始，于是「展开全文」只拿到第一段。
+//
+// 两条边界：
+//   - 越过末尾时停在 totalChars —— 调用方据此判定「已读完」；
+//   - 不后退。客户端传了越界 offset 时 `offset + n` 可能小于 offset，
+//     若如实返回会让前端把 pointer 往回拨，配合重试就成了死循环。
+func NextToolOutputOffset(offset int, chunk string, totalChars int) int {
+	next := offset + len([]rune(chunk))
+	if next > totalChars {
+		next = totalChars
+	}
+	if next < offset {
+		next = offset
+	}
+	return next
+}
+
 // GetToolCallOutput 按需分段读取一条工具调用的完整 output。
 //
-// 返回 (片段, 原文总字节数, 是否找到, error)。offset 为 0 基字符偏移。
+// offset 为 0 基**字符**偏移，负数按 0 处理；limit 经 ClampToolOutputLimit 收敛。
 //
 // 必须同时按 id 与 session_id 过滤：tool_calls.id 是可枚举的，不是能力凭证。
 // 只按 id 查等于让任何知道 UUID 的人跨会话读别人的工具输出。
-// 「不属于本会话」与「不存在」返回同一个 found=false，避免探测存在性。
-func (m *Manager) GetToolCallOutput(ctx context.Context, sessionID, toolCallID string, offset, limit int) (string, int, bool, error) {
+// 「不属于本会话」与「不存在」返回同一个 Found=false，避免探测存在性。
+func (m *Manager) GetToolCallOutput(ctx context.Context, sessionID, toolCallID string, offset, limit int) (ToolOutputSlice, error) {
 	if m.pool == nil || sessionID == "" || toolCallID == "" {
-		return "", 0, false, nil
+		return ToolOutputSlice{}, nil
 	}
 	if offset < 0 {
 		offset = 0
@@ -484,21 +526,25 @@ func (m *Manager) GetToolCallOutput(ctx context.Context, sessionID, toolCallID s
 	limit = ClampToolOutputLimit(limit)
 
 	// substring 的起始位置是 1 基，所以 offset 要 +1。
-	// octet_length 给的是真实字节数（列表接口的 output_bytes 口径），
-	// 前端据此判断"还有多少没加载"。
-	var chunk string
-	var total int
+	// 三个长度字段一次查回：多查一次就多一次往返，而它们本来就是同一行的列。
+	var out ToolOutputSlice
 	err := m.pool.QueryRow(ctx,
-		`SELECT substring(output from $3 for $4), octet_length(output)
+		`SELECT substring(output from $3 for $4), octet_length(output), char_length(output)
 		 FROM tool_calls WHERE id = $1 AND session_id = $2`,
-		toolCallID, sessionID, offset+1, limit).Scan(&chunk, &total)
+		toolCallID, sessionID, offset+1, limit).
+		Scan(&out.Content, &out.TotalBytes, &out.TotalChars)
 	if errors.Is(err, pgx.ErrNoRows) {
-		return "", 0, false, nil
+		return ToolOutputSlice{}, nil
 	}
 	if err != nil {
-		return "", 0, false, err
+		return ToolOutputSlice{}, err
 	}
-	return chunk, total, true, nil
+
+	// 下一段起点：越过末尾就停在末尾。客户端据此判断「已读完」，
+	// 不必再拿片段长度去猜 —— 那个猜测正是口径错的来源。
+	out.NextOffset = NextToolOutputOffset(offset, out.Content, out.TotalChars)
+	out.Found = true
+	return out, nil
 }
 
 // SaveMessages saves user + assistant messages and updates the session title.
