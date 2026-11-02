@@ -496,7 +496,10 @@ async function stopLauncher(graceMs = LAUNCHER_EXIT_GRACE_MS) {
 }
 
 function waitExit(child, timeoutMs) {
-  if (!child || child.exitCode !== null) return Promise.resolve(true)
+  // `exitCode` 为 null 有两种情况：进程还在跑，或者**被信号杀掉**——后者 exitCode 仍是
+  // null，真正的痕迹在 signalCode 上。只看 exitCode 会把"已经死了"当成"还活着"，
+  // 于是等满整个超时。stopLauncher 用 taskkill /F 收尾时正是这个形状。
+  if (!child || child.exitCode !== null || child.signalCode) return Promise.resolve(true)
   return new Promise(resolve => {
     let done = false
     const finish = value => {

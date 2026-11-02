@@ -254,7 +254,10 @@ test('★ 回归：引导器不响应 stdin 时，树杀之后返回 false', asy
     killTree: target => {
       treeKilled += 1
       assert.equal(target, child, '收的必须是引导器那一棵树')
-      child.emit('exit', null)
+      // exit 必须**异步**到达：真实 taskkill 是同步调用的，但子进程的 exit 事件要等
+      // 下一个 tick。同步 emit 会让紧接着注册的 waitExit 监听器错过这次事件，只能
+      // 一路等到超时——而那个超时定时器是 unref 的，于是测试的 Promise 永远悬着。
+      setImmediate(() => child.emit('exit', null, 'SIGKILL'))
       return true
     },
   })
