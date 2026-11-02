@@ -231,11 +231,18 @@ async def persist_turn(session_id: str, tenant_id: str, messages: list[dict]) ->
   `digest_model` 如实标为 `"extractive"`。原因：`_prune_messages` 是同步纯函数，
   还被当作 `on_overflow` 同步回调传入，接不了 await。模型摘要需在 async 层另做，
   届时 `digest_model` 会变成真实模型名，读方据此判断可信度。
-- 步骤 3 **未实现**：`body_suffix` 已落库但无人读取，跨副本重建仍走
-  「session_cache > PG 全量 > Go 8 条」既有路径。折叠记录目前只服务于排查与
-  后续接摘要，尚未参与上下文组装。
-  **读回路径的设计方案见 `docs/context-projection-design.md`**（含 7 个开源框架的
-  对照调研、投影插入位置的取舍、以及两条必须补的正确性校验）。
+- 步骤 3 **已落地（读回路径）**：`runtime.py` 的 `_project_over_budget` 在全量历史
+  超预算时调 `history_writer.load_folds` 读回折叠记录，交给 `_apply_folds` 拼成
+  `[系统提示][活动摘要][原样尾部]`。`body_suffix` 在这里被真正读取 —— 它决定
+  尾部保留条数的下界（少于记录时说明数据比折叠时还少，投影不可信，回退全量）。
+  详见 `docs/context-projection-design.md` §5。
+- **投影只在超预算时替换全量**：投影是有损的，放得下时全量既更准，也让验收 #3
+  「清空 Redis 后投影字节不变」仍然成立。任何校验失败、读取异常、摘要为空，
+  统统回退全量（宁可超预算走实时裁剪，也不发一份漏段的投影）。
+- **摘要仍是提取式**：`digest_model="extractive"`，`_apply_folds` 只用它做拼装与
+  去重。换成 LLM 摘要需要 async 入口，可能改变投影内容，届时应把
+  `digest_model` 变成判定「该折叠能否用于投喂」的依据之一 —— 不同模型的摘要
+  不该混在同一个投影里。
 
 ### 2.5 `read_archive` 工具
 
