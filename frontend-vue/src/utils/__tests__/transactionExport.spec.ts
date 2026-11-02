@@ -126,10 +126,10 @@ describe('transactionExport', () => {
       })
       clicked = null
       // 拦截 a.click，避免 jsdom 报 "Not implemented: navigation"
-      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (
-        this: HTMLAnchorElement,
-      ) {
-        clicked = this
+      // 不用 `clicked = this`：@typescript-eslint/no-this-alias 会报错。而 downloadBlob
+      // 在 click 之前已把 <a> 挂进 body，直接从 DOM 取等价，且更贴近真实用户点击的对象。
+      vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {
+        clicked = document.querySelector<HTMLAnchorElement>('a[download]')
       })
     })
 

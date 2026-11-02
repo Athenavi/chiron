@@ -67,14 +67,17 @@ func StartCronScheduler(ctx context.Context, python *engine.PythonClient) {
 func (s *CronScheduler) syncLoop(ctx context.Context) {
 	ticker := time.NewTicker(60 * time.Second)
 	defer ticker.Stop()
-	s.sync()
+	// sync 会解析用户写入的 cron 表达式与 task JSON。panic 落到 goroutine 顶层会
+	// 终止整个进程（不是只停这个循环），而所有副本读的是同一份 cron_jobs ——
+	// 一条必然触发的坏数据就等于全平台 CrashLoop。这里把它降级为"本轮失败"。
+	runBackgroundCycle("cron-sync", s.sync)
 	for {
 		select {
 		case <-ctx.Done():
 			s.cron.Stop()
 			return
 		case <-ticker.C:
-			s.sync()
+			runBackgroundCycle("cron-sync", s.sync)
 		}
 	}
 }
@@ -116,9 +119,15 @@ func (s *CronScheduler) sync() {
 		}
 		j := j // 循环变量拷贝：闭包捕获稳定值（Go 1.22 前语义）
 		eid, err := s.cron.AddFunc(j.Schedule, func() {
-			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
-			defer cancel()
-			s.executeScheduled(ctx, j)
+			// robfig/cron 的默认链**不含** Recover（要显式 WithChain 才有），所以回调里的
+			// panic 会一路冒到 cron 自己的 goroutine 顶层 —— 在 Go 里那就是**整个进程退出**。
+			// 任务体跑的是用户配置的 agent prompt 与引擎返回，一次空指针就够让全部副本
+			// 同时重启；若触发条件稳定存在则直接 CrashLoop。包一层把它降级为"本次失败"。
+			runBackgroundCycle("cron-run:"+j.Name, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+				defer cancel()
+				s.executeScheduled(ctx, j)
+			})
 		})
 		if err != nil {
 			slog.Warn("cron register failed", "job", j.Name, "schedule", j.Schedule, "error", err)

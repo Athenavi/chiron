@@ -30,9 +30,10 @@ class _Server:
 
 def test_empty_declared_env_still_gets_cleaned_base():
     """核心回归：没有声明 env 时**不是** None，而是一份已清理的基底。"""
-    base = {"PATH": "/usr/bin", "APP_SECRET": "leak-me"}
     # 调用方传进来的 base 必须已经是 sandboxed_env() 的结果；这里验的是
     # "空声明 → 仍然返回 dict（而不是放行宿主环境）"这个语义。
+    # （此处不再构造一个"脏"的 base 变量：project_stdio_env 只做叠加，
+    #   清理发生在调用方；用真实入参断言比留一个未使用变量更贴近调用点。）
     env = project_stdio_env(_Server(), {"PATH": "/usr/bin"})
     assert isinstance(env, dict) and env.get("PATH") == "/usr/bin"
     assert "APP_SECRET" not in env

@@ -14,6 +14,12 @@ import (
 	"github.com/athenavi/chiron/internal/session"
 )
 
+// sseWriteTimeout 是单帧 SSE 写入的期限。
+//
+// 客户端不读（接收窗口长期为满）或连接已半开时，无期限的 Write 会永久阻塞；
+// 30s 足够覆盖正常慢链路，又不至于让一条死连接长期占着 goroutine 与 fd。
+const sseWriteTimeout = 30 * time.Second
+
 // handleSSE manages a Server-Sent Events connection for real-time streaming.
 // It subscribes to the event hub and writes events to the response writer.
 //
@@ -24,8 +30,7 @@ import (
 //
 // 两者都为空时不转发任何事件（调用方本不该构造这种连接）。
 func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID string, sessionID string, userID string) {
-	flusher, ok := w.(http.Flusher)
-	if !ok {
+	if _, ok := w.(http.Flusher); !ok {
 		InternalError(w, "streaming not supported")
 		return
 	}
@@ -35,10 +40,31 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("X-Accel-Buffering", "no")
 
+	rc := http.NewResponseController(w)
 	// P1 修复：SSE 长连接豁免服务器 WriteTimeout（默认 60s 会切断流）。
-	// 客户端断开仍由 r.Context().Done() 检测。
-	if rc := http.NewResponseController(w); rc != nil {
-		_ = rc.SetWriteDeadline(time.Time{})
+	// 豁免是**逐帧**完成的：writeFrame 每次写前重设 sseWriteTimeout ——
+	// 既不让全局 WriteTimeout 切断活跃的流，也不让死连接无限阻塞。
+	_ = rc.SetWriteDeadline(time.Time{})
+
+	// writeFrame 写一帧并 flush；返回 false 表示连接已不可用，读循环须立即收尾。
+	//
+	// 为什么必须看错误：客户端掉线但 TCP 未收到 FIN/RST（移动网络切换、NAT 超时、
+	// 进程被杀）时 `r.Context()` 不会 Done，Write 会一直阻塞在发送窗口上。
+	// 不检查错误、不设写期限，这条连接就永久占住 goroutine、订阅通道和 fd；
+	// 攒够 fd 之后同实例的**所有**新连接都建不起来 —— 一个用户掉线放大成整实例不可用。
+	writeFrame := func(frame string) bool {
+		_ = rc.SetWriteDeadline(time.Now().Add(sseWriteTimeout))
+		if _, err := w.Write([]byte(frame)); err != nil {
+			slog.Debug("sse write failed, closing stream",
+				"session", sessionID, "user", userID, "error", err)
+			return false
+		}
+		if err := rc.Flush(); err != nil {
+			slog.Debug("sse flush failed, closing stream",
+				"session", sessionID, "user", userID, "error", err)
+			return false
+		}
+		return true
 	}
 
 	ch := hub.Subscribe(subID)
@@ -68,17 +94,17 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 			slog.Warn("sse replay failed, falling back to live-only", "session", sessionID, "error", err)
 		}
 		for _, ev := range replayed {
-			w.Write([]byte(broadcast.FormatSSE(ev)))
+			if !writeFrame(broadcast.FormatSSE(ev)) {
+				return
+			}
 			lastSentID = ev.ID
-		}
-		if len(replayed) > 0 {
-			flusher.Flush()
 		}
 	}
 
 	// Send initial connected event
-	w.Write([]byte(broadcast.FormatSSE(broadcast.Event{Type: "connected", Data: map[string]string{"id": subID}})))
-	flusher.Flush()
+	if !writeFrame(broadcast.FormatSSE(broadcast.Event{Type: "connected", Data: map[string]string{"id": subID}})) {
+		return
+	}
 
 	pingTimer := time.NewTimer(15 * time.Second)
 	defer pingTimer.Stop()
@@ -96,8 +122,7 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 			return
 		case <-draining:
 			// 先告诉客户端这是服务端主动结束、可立即重连，再关闭响应。
-			w.Write([]byte("event: server_shutdown\ndata: {\"reason\":\"server restarting\"}\n\n"))
-			flusher.Flush()
+			writeFrame("event: server_shutdown\ndata: {\"reason\":\"server restarting\"}\n\n")
 			return
 		case event, ok := <-ch:
 			if !ok {
@@ -113,8 +138,9 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 			if event.ID != "" && !broadcast.IsNewerStreamID(event.ID, lastSentID) {
 				continue
 			}
-			w.Write([]byte(broadcast.FormatSSE(event)))
-			flusher.Flush()
+			if !writeFrame(broadcast.FormatSSE(event)) {
+				return
+			}
 			if event.ID != "" {
 				lastSentID = event.ID
 			}
@@ -127,9 +153,11 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 			}
 			pingTimer.Reset(15 * time.Second)
 		case <-pingTimer.C:
-			// Keep-alive ping
-			w.Write([]byte(": ping\n\n"))
-			flusher.Flush()
+			// Keep-alive ping：也是唯一能发现"半开连接"的探针 ——
+			// 客户端已消失但 TCP 未发 FIN 时，只有这次写会报错。
+			if !writeFrame(": ping\n\n") {
+				return
+			}
 			pingTimer.Reset(15 * time.Second)
 		}
 	}

@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"log/slog"
 	"net/http"
+	"runtime/debug"
 	"strconv"
 	"strings"
 	"time"
@@ -199,6 +200,25 @@ const (
 	auditClaimBatchSize = 100
 )
 
+// runAuditCycle 执行一轮审计消费/认领，把 panic 限制在**这一轮**内。
+//
+// 为什么必须有：Go 里 goroutine 中未捕获的 panic 会终止**整个进程**。审计消费者是
+// 进程级常驻任务，处理的是从 Redis 流里读回的任意消息（可能来自更早版本、可能被截断、
+// 可能被外部写入），而 handleMessage 里有 json.Unmarshal 与 handler 回调。一次越界或
+// nil 解引用就足以让网关整体退出；若该消息总在 PEL 里被重投（它不会被 ACK），
+// 重启后会立刻再炸 —— 变成 CrashLoop，且日志指向与用户操作无关的时刻。
+//
+// 必须放在 `db` 包内而不是复用 api 包的助手：api 依赖 db，反向引用会形成循环。
+func runAuditCycle(name string, fn func()) {
+	defer func() {
+		if r := recover(); r != nil {
+			slog.Error("audit consumer cycle panicked; continuing",
+				"cycle", name, "panic", r, "stack", string(debug.Stack()))
+		}
+	}()
+	fn()
+}
+
 // NewAuditConsumer 创建审计日志消费者
 func NewAuditConsumer(rdb RedisClient, handler func(ctx context.Context, entry AuditEntry) error) *AuditConsumer {
 	return &AuditConsumer{
@@ -246,51 +266,64 @@ func (c *AuditConsumer) claimLoop(ctx context.Context, consumerID string) {
 		case <-ticker.C:
 		}
 
-		pend, err := c.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
-			Stream: c.stream,
-			Group:  c.group,
-			Start:  "-",
-			End:    "+",
-			Count:  auditClaimBatchSize,
-			Idle:   auditClaimIdle,
-		}).Result()
-		if err != nil || len(pend) == 0 {
-			continue
-		}
+		// 每轮独立兜 panic：认领与重投要能一直转下去，不能因为一条坏消息
+		// 就停掉整个崩溃恢复链路（见 runAuditCycle 注释）。
+		runAuditCycle("audit-claim", func() { c.claimOnce(ctx, consumerID) })
+	}
+}
 
-		ids := make([]string, 0, len(pend))
-		for _, p := range pend {
-			if p.RetryCount >= auditMaxDeliveries {
-				// 止损：ACK 掉超限消息，否则它会一直占据 PEL 并被反复认领。
-				// 审计记录丢失必须可见 —— 这是唯一能发现"有审计没落库"的线索。
-				slog.Error("审计日志消息超过投递上限，放弃",
-					"msg_id", p.ID, "deliveries", p.RetryCount, "consumer", p.Consumer)
-				c.rdb.XAck(ctx, c.stream, c.group, p.ID)
-				continue
-			}
-			ids = append(ids, p.ID)
-		}
-		if len(ids) == 0 {
-			continue
-		}
+// claimOnce 执行一轮"扫描 PEL → 止损超限消息 → 认领 → 重投"。
+func (c *AuditConsumer) claimOnce(ctx context.Context, consumerID string) {
+	pend, err := c.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+		Stream: c.stream,
+		Group:  c.group,
+		Start:  "-",
+		End:    "+",
+		Count:  auditClaimBatchSize,
+		Idle:   auditClaimIdle,
+	}).Result()
+	if err != nil || len(pend) == 0 {
+		return
+	}
 
-		claimed, err := c.rdb.XClaim(ctx, &redis.XClaimArgs{
-			Stream:   c.stream,
-			Group:    c.group,
-			Consumer: consumerID,
-			MinIdle:  auditClaimIdle,
-			Messages: ids,
-		}).Result()
-		if err != nil {
+	ids := make([]string, 0, len(pend))
+	for _, p := range pend {
+		if p.RetryCount >= auditMaxDeliveries {
+			// 止损：ACK 掉超限消息，否则它会一直占据 PEL 并被反复认领。
+			// 审计记录丢失必须可见 —— 这是唯一能发现"有审计没落库"的线索。
+			slog.Error("审计日志消息超过投递上限，放弃",
+				"msg_id", p.ID, "deliveries", p.RetryCount, "consumer", p.Consumer)
+			c.rdb.XAck(ctx, c.stream, c.group, p.ID)
 			continue
 		}
-		for _, msg := range claimed {
-			// 与主循环一致：成功才 ACK。用 WithoutCancel 保证优雅关闭期间的认领
-			// 不会做到一半被取消（认领后不 ACK 只会让它更久地卡在 PEL 里）。
+		ids = append(ids, p.ID)
+	}
+	if len(ids) == 0 {
+		return
+	}
+
+	claimed, err := c.rdb.XClaim(ctx, &redis.XClaimArgs{
+		Stream:   c.stream,
+		Group:    c.group,
+		Consumer: consumerID,
+		MinIdle:  auditClaimIdle,
+		Messages: ids,
+	}).Result()
+	if err != nil {
+		return
+	}
+	for _, msg := range claimed {
+		// 与主循环一致：成功才 ACK。用 WithoutCancel 保证优雅关闭期间的认领
+		// 不会做到一半被取消（认领后不 ACK 只会让它更久地卡在 PEL 里）。
+		//
+		// panic 时不 ACK：这条消息退出本轮，留在 PEL 里由下一轮重投，
+		// 达到 auditMaxDeliveries 后由上面的止损分支 ACK —— 与"处理失败"同一路径。
+		msg := msg
+		runAuditCycle("audit-claim-msg", func() {
 			if c.handleMessage(context.WithoutCancel(ctx), msg) {
 				c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
 			}
-		}
+		})
 	}
 }
 
@@ -346,9 +379,14 @@ func (c *AuditConsumer) Start(ctx context.Context) error {
 		for _, result := range results {
 			for _, msg := range result.Messages {
 				// 失败的消息不 ACK，留给 claimLoop 重投（见 handleMessage 注释）。
-				if c.handleMessage(ctx, msg) {
-					c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
-				}
+				// panic 同样不 ACK：退出本轮、留 PEL 等重投，达到投递上限后由
+				// claimOnce 的止损分支 ACK —— 与"处理失败"同一路径。
+				msg := msg
+				runAuditCycle("audit-consume-msg", func() {
+					if c.handleMessage(ctx, msg) {
+						c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
+					}
+				})
 			}
 		}
 	}

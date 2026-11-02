@@ -102,11 +102,13 @@ jobs:
       # 用户机的那份是随包 CPython（`resources/python-runtime/`），由 prepare_python.py
       # 就位，与 runner 版本无关。
       #
-      # 固定 3.12 是因为 desktop-local 的 pytest 套件与脚本都在这版验证过；
-      # 它与用户机最终跑什么 Python 无关（那个版本由 runtime-install.cjs 决定）。
+      # 只验证 **3.14**（用户指定口径：不再跑更低版本）。
+      # runner 上的 Python 只用于跑构建脚本（prepare_*.py / pytest）；用户机那份是
+      # 随包 CPython（`resources/python-runtime/`），由 prepare_python.py 就位，
+      # 与 runner 版本无关（那个版本由 runtime-install.cjs 决定）。
       - uses: actions/setup-python@v5
         with:
-          python-version: '3.12'
+          python-version: '3.14'
 
       # prepare_uv.py / prepare_python.py 只用标准库，但 **prepare_redis.py 不是**：
       # 它的自检要真起一次 redis 并跑契约命令，因此 `import app.config`（pydantic）

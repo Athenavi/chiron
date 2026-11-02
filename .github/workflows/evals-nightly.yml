@@ -94,7 +94,7 @@ jobs:
       - uses: actions/setup-python@v5
         if: steps.secrets.outputs.ready == 'true'
         with:
-          python-version: '3.11'
+          python-version: '3.14'
           cache: pip
 
       - name: Apply schema (alembic upgrade head)

@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/redis/go-redis/v9"
 )
@@ -120,13 +121,17 @@ func callsInFunc(t *testing.T, path, funcName string) map[string]bool {
 			if !ok {
 				return true
 			}
-			sel, ok := call.Fun.(*ast.SelectorExpr)
-			if !ok {
-				return true
-			}
-			out[sel.Sel.Name] = true
-			if pkg, ok := sel.X.(*ast.Ident); ok {
-				out[pkg.Name+"."+sel.Sel.Name] = true
+			// 必须同时识别裸标识符调用（runAuditCycle(...)）与方法调用（c.rdb.XAck）。
+			// 只看 SelectorExpr 会漏掉包内函数调用 —— 那正是本组断言要钉的东西，
+			// 漏判会让"未兜 panic"的失败悄无声息地被当成通过。
+			switch f := call.Fun.(type) {
+			case *ast.SelectorExpr:
+				out[f.Sel.Name] = true
+				if pkg, ok := f.X.(*ast.Ident); ok {
+					out[pkg.Name+"."+f.Sel.Name] = true
+				}
+			case *ast.Ident:
+				out[f.Name] = true
 			}
 			return true
 		})
@@ -139,17 +144,50 @@ func callsInFunc(t *testing.T, path, funcName string) map[string]bool {
 }
 
 func TestAuditClaimLoopIsWired(t *testing.T) {
-	claim := callsInFunc(t, "audit.go", "claimLoop")
+	// 认领细节在 claimOnce（每轮一次），claimLoop 只负责周期性调用它。
+	claim := callsInFunc(t, "audit.go", "claimOnce")
 	for _, want := range []string{"XPendingExt", "XClaim", "XAck", "handleMessage"} {
 		if !claim[want] {
-			t.Errorf("claimLoop 缺少 %s：崩溃遗留的 pending 消息无法恢复", want)
+			t.Errorf("claimOnce 缺少 %s：崩溃遗留的 pending 消息无法恢复", want)
 		}
+	}
+
+	loop := callsInFunc(t, "audit.go", "claimLoop")
+	if !loop["claimOnce"] {
+		t.Fatal("claimLoop 没有调用 claimOnce —— 崩溃恢复形同虚设")
+	}
+	// panic 必须拦在每一轮内：落到 goroutine 顶层会终止整个进程（见 runAuditCycle）。
+	if !loop["runAuditCycle"] {
+		t.Error("claimLoop 未用 runAuditCycle 兜 panic：一轮 panic 会带走整个网关进程")
 	}
 
 	// 接上才算数：claimLoop 从未被启动的话，写得再对也从不运行。
 	start := callsInFunc(t, "audit.go", "Start")
 	if !start["claimLoop"] {
 		t.Fatal("Start 没有启动 claimLoop —— 崩溃恢复形同虚设")
+	}
+}
+
+func TestAuditMainLoopSurvivesPanic(t *testing.T) {
+	// 主消费循环直接处理 Redis 流里的任意消息；一条坏消息 panic 就重启整个网关，
+	// 而它不会被 ACK → 重启后立刻再炸 → CrashLoop。
+	start := callsInFunc(t, "audit.go", "Start")
+	if !start["runAuditCycle"] {
+		t.Fatal("Start 的消息处理未用 runAuditCycle 兜 panic：毒丸消息会打崩整个进程")
+	}
+}
+
+func TestRunAuditCycleRecoversPanic(t *testing.T) {
+	// 行为断言：panic 被吞掉并转成日志，函数正常返回。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runAuditCycle("test", func() { panic("boom") })
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runAuditCycle 没有从 panic 中恢复（goroutine 已死）")
 	}
 }
 

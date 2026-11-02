@@ -7,8 +7,21 @@
 # 镜像：kind load 之后本地已有镜像，用 imagePullPolicy: IfNotPresent 就能复用它们，
 # 同时**生产**（镜像来自 registry）也能正常拉取 —— 原先写死 `Never` 只在 kind 可用，
 # 换到真集群会因为"本地没有该镜像"而永远 ErrImageNeverPull。
-# ⚠ 生产请把下面的 `:dev` 换成不可变 tag 或 digest：`:dev` 是可被覆盖的浮动标签，
-#   配 IfNotPresent 会让"镜像已重建但 Pod 仍在跑旧的"这类问题极难察觉。
+#
+# ⚠ 生产必须把 `:dev` 换成 `image@sha256:<digest>`（或语义化且**不覆盖**的 tag）。
+#   `:dev` 是可被覆盖的浮动标签，配 IfNotPresent ⇒ 节点上命中的旧层永远不会刷新，
+#   "镜像已重建、Pod 仍在跑旧的"这类问题完全无声（kubectl 看到的 image 字符串也没变）。
+#   换成 digest 后 IfNotPresent 是**正确**的取值（内容不会变，无需每次重拉）。
+#
+#   本文件里一共 5 处 `:dev`，**漏一处就等于一半副本跑旧代码**：
+#     1. gateway            ← chiron/gateway:dev
+#     2. python-engine      ← chiron/python-engine:dev
+#     3. sandbox-service    ← chiron/python-engine:dev  ⚠ 与 2 是**同一个镜像**，
+#        必须替换成**同一个 digest**：两边跑同一份 app/tools/sandbox.py 白名单实现，
+#        digest 不一致时会"引擎放行、沙箱拒绝"或反之，表现为随机的 [blocked] 命令。
+#     4. frontend           ← chiron/frontend:dev
+#     5. migrate-job.yaml   ← chiron/migrations:dev（另一个文件，别忘）
+#   具体替换步骤见 README §2「生产：把 :dev 换成 digest」。
 ---
 apiVersion: v1
 kind: Namespace
@@ -73,52 +86,46 @@ data:
   STORAGE_BACKEND: "local"
   STORAGE_ROOT: "/srv/chiron/workspace"
 ---
-# 敏感项单独放 Secret。**不要提交真实值** —— 用下面的命令从 .env 注入：
+# ⚠ **这里刻意不再内联 Secret 资源。**
+#
+# 原清单用 `stringData` 写了 APP_SECRET/JWT_SECRET/...: "REPLACE_ME" 作为占位。而
+# README §3 的流程是**先** `kubectl create secret generic chiron-secrets ...`（从 .env
+# 注入真实值），**再** `kubectl apply -f chiron.yaml`。两者一起出现时，最后这次 apply
+# 会把这些键**覆盖回 "REPLACE_ME"**：
+#   - `config.Load()` 要求 APP_SECRET ≥32 字符（config/config.go），"REPLACE_ME" 只有 10
+#     个字符 ⇒ 网关、引擎**全部拒绝启动**，表现为整站 CrashLoop，而日志只报
+#     "APP_SECRET environment variable must be set ..."，看起来像"忘了配密钥"；
+#   - 更隐蔽的情况是占位值恰好够长：副本会用一把**与既有数据不同**的密钥起来，于是
+#     所有已签发的 JWT 失效、所有已加密的配置密文解不开 —— 数据没丢但全部不可读。
+#
+# 正确做法（README §3 有可直接复制的命令）：
 #   kubectl -n chiron create secret generic chiron-secrets \
-#     --from-literal=APP_SECRET="$(grep -E '^APP_SECRET=' .env | cut -d= -f2-)" \
-#     --from-literal=JWT_SECRET="$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)" \
-#     --from-literal=INTERNAL_TOKEN="$(grep -E '^INTERNAL_TOKEN=' .env | cut -d= -f2-)" \
-#     --from-literal=POSTGRES_DSN="$(grep -E '^POSTGRES_DSN=' .env | cut -d= -f2- | sed 's/@localhost/@host.docker.internal/')" \
-#     --from-literal=REDIS_PASSWORD="$(grep -E '^REDIS_PASSWORD=' .env | cut -d= -f2-)" \
-#     --from-literal=REDIS_URL="$(grep -E '^REDIS_URL=' .env | cut -d= -f2-)" \
-#     --from-literal=METRICS_TOKEN="$(grep -E '^METRICS_TOKEN=' .env | cut -d= -f2-)" \
+#     --from-literal=APP_SECRET=... --from-literal=JWT_SECRET=... \
+#     --from-literal=INTERNAL_TOKEN=... --from-literal=POSTGRES_DSN=... \
+#     --from-literal=REDIS_PASSWORD=... --from-literal=REDIS_URL=... \
+#     --from-literal=METRICS_TOKEN=... [--from-literal=PGBOUNCER_USERLIST=...] \
 #     --dry-run=client -o yaml | kubectl apply -f -
 #
 # ⚠ 三个密钥（APP_SECRET / JWT_SECRET / INTERNAL_TOKEN）必须**所有副本同值**：
 #   网关用 APP_SECRET 派生 JWT/内部令牌与配置加密密钥；一旦副本间不同值，
 #   同一份 JWT 在 A 副本有效、在 B 副本 401，配置密文也无法互相解密。
-apiVersion: v1
-kind: Secret
-metadata:
-  name: chiron-secrets
-  namespace: chiron
-type: Opaque
-stringData:
-  APP_SECRET: "REPLACE_ME"
-  JWT_SECRET: "REPLACE_ME"
-  INTERNAL_TOKEN: "REPLACE_ME"
-  # 经 PgBouncer 时把它指向 pgbouncer:6432（并保留 default_query_exec_mode=exec，见下）
-  # ⚠ 这里的库名必须与 pgbouncer 的 `[databases] chiron = ... dbname=<库名>` 一致
-  #   （见下方 pgbouncer-config）：不一致时连 PgBouncer 报 "database not found"，
-  #   或迁移打在 A 库、应用读写 B 库 ⇒ schema 闸门报不匹配。改的时候两处一起改。
-  POSTGRES_DSN: "postgresql://postgres@host.docker.internal:5432/chiron0915"
-  # Redis 密码。网关侧按 REDIS_ADDR + REDIS_PASSWORD 组装连接（config.go 的
-  # RedisPassword），compose 的 redis 用 `--requirepass` 强制认证，缺它直接 NOAUTH。
-  REDIS_PASSWORD: ""
-  # 引擎侧只认 REDIS_URL，这里给**整串**而不是靠 $(REDIS_PASSWORD) 拼接：
-  # 密码里含 `@` `:` `/` 时拼接出来的 URL 会被客户端按分隔符解析错，整串放在
-  # Secret 里则只需在这里做一次 URL 编码（与 compose 的 REDIS_URL 写法一致）。
-  # 未开认证时写成 redis://host.docker.internal:6379/0 即可。
-  REDIS_URL: "redis://host.docker.internal:6379/0"
-  METRICS_TOKEN: "REPLACE_ME"
-  # PgBouncer 的 userlist.txt 全文（会被挂成 /etc/pgbouncer/userlist.txt）。
-  # 生成方式：取 PG 里该角色**已有的 SCRAM secret**，不必写明文密码 ——
-  #   psql "$POSTGRES_DSN" -Atc \
-  #     "SELECT format('\"%s\" \"%s\"', rolname, rolpassword) FROM pg_authid WHERE rolname='<user>'"
-  # （pg_authid 需超级用户可读；也可用 pg_shadow，权限要求相同。取不到 secret 时退而写明文条目
-  #   `"<user>" "<password>"`，auth_type=scram-sha-256 同样接受。）
-  PGBOUNCER_USERLIST: "REPLACE_ME"
----
+#
+# ⚠ PGBOUNCER_USERLIST **不放在这个 Secret 里**，而是放独立 Secret `chiron-pgbouncer`。
+#   原因：下面 gateway / python-engine 用的是
+#   `envFrom: secretRef: chiron-secrets` —— 它会把该 Secret 的**每一个 key** 都注入成
+#   环境变量。把 pgbouncer 的 userlist（内容是 PG 角色的 SCRAM 密码）放在同一份里，
+#   等于给每个应用容器多发一份它们用不到的数据库凭据：任意一个 Python 工具/插件只要
+#   能读 os.environ 就能拿到它，而这条路径完全绕过审计。
+#   （sandbox-service 只按 secretKeyRef 取 INTERNAL_TOKEN 一个键，但它跑的就是同一个
+#   引擎镜像、能在沙箱里执行任意命令 —— 隔离原则一样适用。）
+#   缺失时 pgbouncer Pod 会卡在 ContainerCreating（不是 CrashLoop，更容易被忽略）；
+#   不启用 pgbouncer 就不必建这个 Secret。
+#
+# POSTGRES_DSN_DIRECT（迁移用的直连 DSN）**留在 chiron-secrets** 里：它与应用自己的
+#   POSTGRES_DSN 指向同一个库、同一套凭据，注入到应用容器不增加暴露面。
+#
+# 下面各资源的 envFrom/secretKeyRef 都引用 `chiron-secrets`（pgbouncer 的 userlist 卷
+# 除外，见上）—— 这个 Secret 必须由部署流程先行创建（`kubectl apply` 不会替你生成真实值）。
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -464,6 +471,8 @@ data:
     ;   库里恰好存在同名库 —— 迁移打在 A 库、应用读写 B 库，版本闸门报 schema 不匹配。
     ;   这里用 chiron 作为**别名**（客户端连的库名）也完全可以：那就要让 POSTGRES_DSN
     ;   写 .../chiron 而把 dbname 指到真实库。二选一，改的时候两处一起改。
+    ;   库名随实例（如按 .env.example 原来那个带日期的示例命名）时，**这一行必须改**。
+    ;   注意 host 也要跟着改：host.docker.internal 只对 kind（Pod 跑在 Docker 里）成立。
     chiron = host=host.docker.internal port=5432 dbname=chiron
 
     [pgbouncer]
@@ -535,14 +544,19 @@ spec:
             capabilities: { drop: ["ALL"] }
           # PgBouncer 没有 HTTP 端点，只能用 TCP 探针。它是 PG 的**唯一**入口，
           # 没有 liveness 的话进程卡死（连接池耗尽但端口仍 listen）不会被重启。
+          # startupProbe：镜像首次启动要先读 userlist、解析 [databases] 里的主机，
+          # 这期间端口还没 listen。缺它时 liveness 会在启动阶段就开始计数并重启
+          # 一个**尚未开始服务**的进程 —— 而 PG 恰恰是就绪最慢的依赖。
+          startupProbe:
+            tcpSocket: { port: 6432 }
+            periodSeconds: 2
+            failureThreshold: 30   # 最多等 60s
           readinessProbe:
             tcpSocket: { port: 6432 }
-            initialDelaySeconds: 3
             periodSeconds: 5
             failureThreshold: 3
           livenessProbe:
             tcpSocket: { port: 6432 }
-            initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           volumeMounts:
@@ -555,9 +569,25 @@ spec:
         - name: config
           configMap: { name: pgbouncer-config }
         - name: userlist
+          # 独立 Secret，**不要**改成 chiron-secrets：后者被网关/引擎 envFrom 整体注入，
+          # 放在一起等于把 PG 角色的 SCRAM 密码发给每个应用容器（见文件头的说明）。
           secret:
-            secretName: chiron-secrets
+            secretName: chiron-pgbouncer
             items: [{ key: PGBOUNCER_USERLIST, path: PGBOUNCER_USERLIST }]
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: pgbouncer
+  namespace: chiron
+spec:
+  # 只有 2 副本 ⇒ `kubectl drain` 会**同时**驱逐两个而无人阻止，DB 入口瞬断。
+  # minAvailable: 1 让驱逐串行化（第二个 Pod 要等第一个 Ready 回填补位）。
+  # 接入 pgbouncer（应用 DSN 指向 6432）后它是**唯一** DB 入口，这个 PDB 是硬要求；
+  # 未接入时它不影响任何流量，留着也不会有副作用。
+  minAvailable: 1
+  selector:
+    matchLabels: { app: pgbouncer }
 ---
 # ═══════════════════════════════════════════════════════════════════════════
 # 沙箱执行服务（S5-(e) 的 B 层）—— 引擎默认 SANDBOX_BACKEND=service 且 **fail-closed**
@@ -633,6 +663,18 @@ spec:
             - { name: sandbox-code, mountPath: /app/service.py, subPath: service.py, readOnly: true }
             - { name: sandbox, mountPath: /srv/chiron/sandbox, subPath: workspace }
             - { name: tmp, mountPath: /tmp }
+          # startupProbe 必须先于 liveness 生效：uvicorn 首次导入 app 要建目录、
+          # 读 ConfigMap 里的 service.py、连 Redis；期间端口尚未 listen。
+          # 没有它时 liveness 从 initialDelaySeconds 起算，20s 还没起来就被重启 ——
+          # 而重启只会让冷启动重来一遍，最终 CrashLoopBackOff。
+          startupProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,urllib.request;r=urllib.request.Request('http://localhost:8001/v1/internal/exec/health',headers={'X-Internal-Token':os.environ.get('INTERNAL_TOKEN','')});urllib.request.urlopen(r)"
+            periodSeconds: 2
+            failureThreshold: 30   # 最多等 60s
           readinessProbe:
             # 用 exec + 环境里的 INTERNAL_TOKEN：httpGet 的头**不支持** secretKeyRef。
             exec:
@@ -651,7 +693,6 @@ spec:
                 - python
                 - -c
                 - "import os,urllib.request;r=urllib.request.Request('http://localhost:8001/v1/internal/exec/health',headers={'X-Internal-Token':os.environ.get('INTERNAL_TOKEN','')});urllib.request.urlopen(r)"
-            initialDelaySeconds: 20
             periodSeconds: 10
             failureThreshold: 3
       volumes:
@@ -666,6 +707,18 @@ spec:
           persistentVolumeClaim: { claimName: chiron-shared }
         - name: tmp
           emptyDir: {}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sandbox-service
+  namespace: chiron
+spec:
+  # 2 副本 + fail-closed（引擎侧 SANDBOX_BACKEND=service 不会降级到本地执行）：
+  # 没有 PDB 时 drain 节点可以把两个副本一起端掉，`run_in_sandbox` 全部失败。
+  minAvailable: 1
+  selector:
+    matchLabels: { app: sandbox-service }
 ---
 apiVersion: v1
 kind: Service
@@ -706,6 +759,15 @@ spec:
                 labelSelector:
                   matchLabels: { app: sandbox-lb }
                 topologyKey: kubernetes.io/hostname
+      # nginx:alpine 的 master 进程默认以 root 起（要写 /var/cache/nginx 并切换 worker 用户），
+      # 所以这里**刻意不设** runAsNonRoot —— 设了会直接起不来。改为四件事：
+      #   1. 容器级丢弃全部能力、只留 NET_BIND_SERVICE（见下）；
+      #   2. 禁止提权；
+      #   3. seccomp 用 RuntimeDefault（此前完全没有 pod 级安全上下文）；
+      #   4. 只读根文件系统做不到 —— nginx 要写 pid / cache / tmp，故不设。
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: sandbox-lb
           image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3
@@ -715,14 +777,19 @@ spec:
             capabilities:
               drop: ["ALL"]
               add: ["NET_BIND_SERVICE"]   # 监听 8001 本身不需要，但保留以兼容改成 80/443 的场景
+          # startupProbe：镜像首次启动要解析上游 DNS，拿不到就一直在 zone 里空转。
+          # 没有它时 liveness 会在启动阶段就开始计数并重启一个**正在启动**的进程，
+          # 表现为 CrashLoopBackOff + 日志里只有 "nginx: started" 这类误导信息。
+          startupProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            periodSeconds: 2
+            failureThreshold: 30   # 最多等 60s
           readinessProbe:
             httpGet: { path: /healthz, port: 8001 }
-            initialDelaySeconds: 3
             periodSeconds: 5
           # 只有 readiness 时，nginx 进程卡死（端口仍在 listen）不会被重启。
           livenessProbe:
             httpGet: { path: /healthz, port: 8001 }
-            initialDelaySeconds: 10
             periodSeconds: 10
             failureThreshold: 3
           resources:
@@ -733,6 +800,18 @@ spec:
       volumes:
         - name: conf
           configMap: { name: chiron-sandbox-lb-conf }
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: sandbox-lb
+  namespace: chiron
+spec:
+  # 同 sandbox-service：它是引擎访问沙箱的**唯一**入口（SANDBOX_SERVICE_URL 只指向它，
+  # 没有第二条路径），2 副本被同时驱逐会让引擎侧探测失败 ⇒ 按 fail-closed 语义直接拒绝服务。
+  minAvailable: 1
+  selector:
+    matchLabels: { app: sandbox-lb }
 ---
 apiVersion: v1
 kind: Service
@@ -775,7 +854,11 @@ spec:
     spec:
       # 前端镜像基于 nginx:alpine，主进程需要以 root 起（要绑 80 并写 /var/cache/nginx）。
       # 因此这里**刻意不设** runAsNonRoot（设了会直接起不来），改为"能力最小化"：
-      # 只留绑定特权端口这一项，其余全丢，且禁止提权。
+      # 只留绑定特权端口这一项，其余全丢，且禁止提权。seccomp 显式钉成 RuntimeDefault，
+      # 与 sandbox-lb 一致 —— 不写这一条时是否启用取决于节点/运行时默认值，不可依赖。
+      securityContext:
+        seccompProfile:
+          type: RuntimeDefault
       containers:
         - name: frontend
           image: chiron/frontend:dev
@@ -786,13 +869,18 @@ spec:
             capabilities:
               drop: ["ALL"]
               add: ["NET_BIND_SERVICE"]   # 绑定 80 端口所需，其余能力不需要
+          # startupProbe：nginx 冷启动要读 ConfigMap 里的 default.conf、解析
+          # kube-dns 拿到 gateway 的 Service IP。缺它时 liveness 从 10s 起算，
+          # DNS 慢一点（或 kube-dns 刚重启）就会把**正在启动**的前端反复重启。
+          startupProbe:
+            httpGet: { path: /health, port: 80 }
+            periodSeconds: 2
+            failureThreshold: 30   # 最多等 60s
           readinessProbe:
             httpGet: { path: /health, port: 80 }
-            initialDelaySeconds: 3
             periodSeconds: 5
           livenessProbe:
             httpGet: { path: /health, port: 80 }
-            initialDelaySeconds: 10
             periodSeconds: 10
           resources:
             requests: { cpu: 50m, memory: 64Mi }
@@ -895,10 +983,25 @@ spec:
       ports: [{ port: 8080, protocol: TCP }]
     # kubelet 的 readiness/liveness 探针来源是**节点**而不是 Pod。多数 CNI 会放通
     # host→pod，但 Calico 的默认策略可能拦 —— 若 Pod 一直 NotReady 先查这里。
-    # 这里只列 RFC1918，够覆盖常规集群；节点网段不在这三个里的请按实际调整。
+    #
+    # ⚠ 不能写成"RFC1918 全段放通"：Pod 网段与 Service 网段本身就在 RFC1918 里
+    #   （kind / Flannel / Calico 默认 Pod 网段 10.244.0.0/16，Service 10.96.0.0/12，
+    #   部分云厂商用 192.168.0.0/16 做 Pod 网段）。全段放通等于**任意 Pod** 都能连
+    #   gateway:8080，可 /v1/internal/* 恰恰要靠这一层做纵深防御 —— 那样就只剩
+    #   X-Internal-Token 一道门，default-deny-ingress 名存实亡。
+    #   下面用 except 把常见 Pod / Service 网段挖掉。**部署前必须按集群实际网段核对**
+    #   （`kubectl cluster-info dump | grep -i cidr`，或看 CNI 的 podCIDR 配置）：
+    #   对不上时这条要么漏放探针（Pod 一直 NotReady），要么又敞开了 Pod 网段。
     - from:
-        - ipBlock: { cidr: 10.0.0.0/8 }
-        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock:
+            cidr: 10.0.0.0/8
+            except: [10.244.0.0/16, 10.96.0.0/12]
+        - ipBlock:
+            cidr: 172.16.0.0/12
+            except: [172.17.0.0/16]
+        # 192.168 段在这里**只能整段放通**：不同集群把它用作 Pod 网段的子网各不相同，
+        # 没有可通用的 except 值。若你的 Pod 网段在 192.168 内，请删掉这一条并改成
+        # 只保留节点网段（例如 192.168.1.0/24），否则这道门等于开着。
         - ipBlock: { cidr: 192.168.0.0/16 }
       ports: [{ port: 8080, protocol: TCP }]
 ---
@@ -913,6 +1016,10 @@ spec:
   policyTypes: [Ingress]
   ingress:
     # 只有网关会调用引擎（含 SSE 转发）；引擎本身不对外
+    # 注意这里**刻意不**为 kubelet 探针补 ipBlock：多数 CNI 放通 host→pod，而加一条
+    # RFC1918 或节点网段的放行等于让整个内网都能直连引擎的 8000（含 /v1/internal/*），
+    # 把"只有网关能到引擎"这条隔离直接抹掉。若你的 CNI 确实拦探针（Calico 配置了
+    # host endpoint 时），**按实际节点网段**单独加一条，别用大段。
     - from:
         - podSelector: { matchLabels: { app: gateway } }
       ports: [{ port: 8000, protocol: TCP }]
@@ -931,6 +1038,8 @@ spec:
         - podSelector: { matchLabels: { app: gateway } }
         - podSelector: { matchLabels: { app: python-engine } }
       ports: [{ port: 6432, protocol: TCP }]
+    # 同 python-engine：不为 tcpSocket 探针补大段 ipBlock —— 那会让整个内网都能连
+    # 数据库入口。CNI 拦探针时按实际节点网段单独加。
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -943,6 +1052,7 @@ spec:
   policyTypes: [Ingress]
   ingress:
     # 只有引擎向沙箱层发起执行请求；sandbox-lb → sandbox-service 由内部 nginx 转发
+    # 同 python-engine：不为 /healthz 探针补大段 ipBlock（会放开整个内网到沙箱入口）。
     - from:
         - podSelector: { matchLabels: { app: python-engine } }
       ports: [{ port: 8001, protocol: TCP }]
@@ -964,10 +1074,7 @@ spec:
     - from:
         - podSelector: { matchLabels: { app: sandbox-lb } }
       ports: [{ port: 8001, protocol: TCP }]
-    # 探针来源是节点（kubelet），与 gateway-ingress 同理；多数 CNI 放通 host→pod，
-    # Calico 默认策略可能拦 —— Pod 一直 NotReady 时先查这里。
-    - from:
-        - ipBlock: { cidr: 10.0.0.0/8 }
-        - ipBlock: { cidr: 172.16.0.0/12 }
-        - ipBlock: { cidr: 192.168.0.0/16 }
-      ports: [{ port: 8001, protocol: TCP }]
+    # ⚠ 这里**不要**像 gateway-ingress 那样为探针补 ipBlock：本 Deployment 的三个探针
+    # 都是 `exec`（kubelet 在容器内执行 python，不走网络），网络策略根本不参与。
+    # 补一条 ipBlock 只会让整个内网/所有 Pod 都能直连这个"执行任意命令"的端点，
+    # 并且绕过 sandbox-lb —— 那是比暴露 gateway 更严重的洞。

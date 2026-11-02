@@ -35,11 +35,59 @@ kind load docker-image chiron/gateway:dev chiron/python-engine:dev chiron/fronte
 > 不可变 tag 或 `image@sha256:<digest>`：浮动标签被覆盖后，`IfNotPresent` 会让
 > "镜像已重建、Pod 仍在跑旧的"这类问题完全无声。
 
+### 生产：把 `:dev` 换成 digest
+
+推完镜像后逐个取 digest（`-f '{{index .RepoDigests 0}}'` 给的是 `repo@sha256:…` 整串，
+直接粘进 `image:` 即可 —— **不要**保留 tag 写成 `repo:dev@sha256:…`，k8s 只认
+`@sha256` 那部分，但混写会让人误以为 tag 也参与固定）：
+
+```powershell
+$reg = 'registry.example.com/chiron'
+docker push "$reg/gateway:1.4.0"
+docker push "$reg/python-engine:1.4.0"
+docker push "$reg/frontend:1.4.0"
+docker push "$reg/migrations:1.4.0"
+# ⚠ python-engine 与 sandbox-service 用**同一个** digest，见下方说明
+docker inspect -f '{{index .RepoDigests 0}}' "$reg/gateway:1.4.0"
+docker inspect -f '{{index .RepoDigests 0}}' "$reg/python-engine:1.4.0"
+docker inspect -f '{{index .RepoDigests 0}}' "$reg/frontend:1.4.0"
+docker inspect -f '{{index .RepoDigests 0}}' "$reg/migrations:1.4.0"
+```
+
+然后替换 `chiron.yaml` 里全部 **4 处** `chiron/*:dev`（gateway、python-engine、
+sandbox-service、frontend）与 `migrate-job.yaml` 里 **1 处** `chiron/migrations:dev`。
+用下面的命令自证没有漏网的浮动标签，输出应为空：
+
+```powershell
+# 必须只匹配 `image:` 行：文件头部注释里也写着 chiron/gateway:dev 等字样，
+# 直接搜 'chiron/[a-z-]+:dev' 会把注释一起选中，替换完了也照样非空。
+Select-String -Path deploy/k8s/chiron.yaml,deploy/k8s/migrate-job.yaml -Pattern '^\s*image:\s*\S*:dev'
+```
+
+顺便确认 5 处都已变成 digest（应输出 5 行 `@sha256:`）：
+
+```powershell
+Select-String -Path deploy/k8s/chiron.yaml,deploy/k8s/migrate-job.yaml -Pattern '^\s*image:\s*.*@sha256:'
+```
+
+> **`sandbox-service` 必须与 `python-engine` 用同一个 digest。** 两者跑的是同一份
+> `app/tools/sandbox.py`（逃逸正则 + 可执行白名单 + rlimit）。pin 到不同版本时会出现
+> "引擎侧放行、沙箱子进程侧拒绝"（或反之）的随机 `[blocked]`，而且两边镜像字符串看起来
+> 都很正常，很难定位。清单里两者共用 `chiron/python-engine:dev` 就是为了让这条约束显式。
+
+> 换成 digest 之后 `imagePullPolicy: IfNotPresent` 是**正确**取值（内容不可变，无需重拉）。
+> 不要因为"想强制刷新"而改回 `Always`：那只会让每个 Pod 启动都多一次 registry 往返，
+> 并在 registry 抖动时把可用副本一起带走。
+
 ## 3. 注入密钥（从 `.env` 取，别写进 YAML）
 
 ```powershell
 function EnvVal($n) { ((Get-Content .env | Where-Object { $_ -match "^$n=" } | Select-Object -First 1) -split '=',2)[1].Trim().Trim('"') }
-$dsn = (EnvVal POSTGRES_DSN) -replace '@localhost', '@host.docker.internal'
+# 直连 PG 的 DSN —— 迁移 Job 用（DDL 必须走会话级语义，不能经 transaction 池）。
+$dsnDirect = (EnvVal POSTGRES_DSN) -replace '@localhost', '@host.docker.internal'
+# 应用侧 DSN。**默认直连**；接入 pgbouncer 后改成指向 pgbouncer:6432（见下方方框），
+# 且必须带 default_query_exec_mode=exec —— transaction 池下 pgx 的 prepared statement 会错配。
+$dsnApp = $dsnDirect
 # 引擎只认 REDIS_URL（整串），网关只认 REDIS_ADDR + REDIS_PASSWORD。
 # 有密码时 REDIS_URL 里的密码必须做一次 URL 编码，否则含 `@ : /` 会被解析错。
 $redisPwd = EnvVal REDIS_PASSWORD
@@ -48,18 +96,73 @@ kubectl -n chiron create secret generic chiron-secrets `
   --from-literal=APP_SECRET="$(EnvVal APP_SECRET)" `
   --from-literal=JWT_SECRET="$(EnvVal JWT_SECRET)" `
   --from-literal=INTERNAL_TOKEN="$(EnvVal INTERNAL_TOKEN)" `
-  --from-literal=POSTGRES_DSN="$dsn" `
+  --from-literal=POSTGRES_DSN="$dsnApp" `
+  --from-literal=POSTGRES_DSN_DIRECT="$dsnDirect" `
   --from-literal=REDIS_PASSWORD="$redisPwd" `
   --from-literal=REDIS_URL="$redisUrl" `
   --from-literal=METRICS_TOKEN="$(EnvVal METRICS_TOKEN)" `
   --dry-run=client -o yaml | kubectl apply -f - --namespace chiron
 ```
 
+> **`POSTGRES_DSN` 与 `POSTGRES_DSN_DIRECT` 是两个不同的 key，别合并**：应用（gateway /
+> python-engine）读前者；迁移 Job 读后者并在缺失时回退到前者。两者指向同一个库，
+> 只是 host:port 不同。合并成一个 key 的后果见下面「要不要接 pgbouncer」。
+
 > `REDIS_URL` 只放在 Secret 里、ConfigMap 里**刻意没有**同名键：两份同名键会靠
 > `envFrom` 的先后顺序隐式覆盖，顺序一调就是"NOAUTH"或"密码进日志"的隐性事故。
 >
 > `APP_SECRET` 必须 **≥32 字符**（`config.Load` 直接拒绝更短的值），且所有副本同值：
 > 网关用它派生 JWT / 内部令牌 / 配置加密密钥。换值等于让所有会话与密文失效。
+>
+> `REDIS_PASSWORD` 为空时 Redis 是不认证的 —— 本清单的 Redis 在宿主机上，**任何能打到
+> 6379 的进程**都能读写队列、会话映射与 `chiron:*` 键（等于绕过租户隔离）。本地 kind 可
+> 接受，生产必须给 Redis 设密码并让 `REDIS_PASSWORD` / `REDIS_URL` 同时带上。
+
+### 要不要接 pgbouncer
+
+`chiron.yaml` **默认就部署了 2 个 pgbouncer 副本**，但连接预算那行注释的前提是
+"应用经它连 PG"。两者的差距很实在：
+
+| | 应用直连 PG | 应用经 pgbouncer |
+|---|---|---|
+| HPA 扩到 6 副本时的 PG 连接 | 6×10（网关）+ 6×10（引擎）= **120** | 固定 `default_pool_size` 25 × 2 副本 = **50** |
+| PG 默认 `max_connections` = 100 | **超限** ⇒ 新连接被拒（报 `too many clients`） | 安全 |
+
+所以：**只要两个 HPA 允许扩到 5 副本以上（本清单是 6），就必须接**。切换只要把
+`POSTGRES_DSN` 改成经 pgbouncer 的形态并重建 Secret：
+
+```powershell
+# pgbouncer 的 [databases] 里别再写 host.docker.internal（那只对宿主机成立），
+# 改成 k8s 服务名 —— 见 chiron.yaml 的 pgbouncer-config。
+$dsnApp = 'postgresql://<user>:<pwd>@pgbouncer:6432/<db>?default_query_exec_mode=exec'
+kubectl -n chiron create secret generic chiron-secrets `
+  --from-literal=POSTGRES_DSN="$dsnApp" `
+  --from-literal=POSTGRES_DSN_DIRECT="$dsnDirect" `
+  # …其余 key 与上面一致（create secret 是整份替换，漏写就等于删掉）…
+  --dry-run=client -o yaml | kubectl apply -f - --namespace chiron
+kubectl -n chiron rollout restart deploy/gateway deploy/python-engine
+```
+
+> ⚠ **切换时必须单独创建 `chiron-pgbouncer` Secret**（内容是 `scram-sha-256` 的 userlist）。
+> 它**不在** `chiron-secrets` 里：后者被网关/引擎 `envFrom` 整体注入，混在一起等于把
+> PG 角色的 SCRAM 密码发给每个应用容器（任意能读环境变量的工具/插件都能取到）。
+> 缺这个 Secret 时 pgbouncer Pod 卡在 `ContainerCreating`，应用侧表现为"连不上 PG"：
+>
+> ```powershell
+> # userlist 形如："" "SCRAM-SHA-256$4096:<salt>$<storedkey>:<serverkey>"
+> # 生成方式见 deploy/pgbouncer/userlist.example.txt 的头注释（用 psql 取 SCRAM 串）。
+> kubectl -n chiron create secret generic chiron-pgbouncer `
+>   --from-file=PGBOUNCER_USERLIST=./userlist.txt `
+>   --dry-run=client -o yaml | kubectl apply -f - --namespace chiron
+> ```
+>
+> 另外 `pgbouncer-config` 里 `[databases]` 的 host 目前写的是 `host.docker.internal`
+> （只对 kind 成立：Pod 跑在 Docker 里，宿主机可达）。真集群要改成 PG 的**集群内地址**
+> （Service 名或托管实例的域名），否则 pgbouncer 连不上 PG，全部请求失败。
+>
+> ⚠ 如果只改了 `POSTGRES_DSN` 而没建 `POSTGRES_DSN_DIRECT`，迁移 Job 会跟着走
+> transaction 池 —— 它不会报错，只是**迁移可能半途失败**（advisory lock 失效）。
+> 这个顺序陷阱是 `migrate-job.yaml` 头注释里专门写明的。
 
 > 顺序：Secret 依赖 Namespace，因此**先** `kubectl create namespace chiron`（或先只 apply
 > 清单里的 Namespace 一段），再执行上面的 secret 注入。Namespace 之后的步骤按
@@ -174,7 +277,7 @@ kindnet 不支持 NetworkPolicy**，apply 不报错但策略不生效；要验�
 
 | # | 要验的属性 | 操作 | 判定 |
 |---|---|---|---|
-| 1 | **就绪 ≠ 存活** | 临时把 ConfigMap 的 `REDIS_URL` 改成错误值 → `kubectl rollout restart deploy/gateway` | Pod 变 **NotReady**（被摘出 Service），但 **RESTARTS 仍为 0**；改回后自动恢复 |
+| 1 | **就绪 ≠ 存活** | 临时把 Secret 的 `REDIS_URL` 改成错误值（ConfigMap 里**没有**这个键，见 §3 的说明）→ `kubectl rollout restart deploy/gateway` | Pod 变 **NotReady**（被摘出 Service），但 **RESTARTS 仍为 0**；改回后自动恢复 |
 | 2 | **滚动升级零中断** | 一边 `kubectl rollout restart deploy/gateway`，一边压接口 | `maxUnavailable: 0` 下请求失败数 **0** |
 | 3 | **PDB 生效** | `kubectl drain <node> --ignore-daemonsets --delete-emptydir-data` | 驱逐过程中 gateway 可用副本不降到 2 以下 |
 | 4 | **HPA 弹性** | 装 metrics-server（见 YAML 末尾注释）→ 压测 | 副本数随 CPU 上升，之后回落 |
@@ -194,6 +297,9 @@ kindnet 不支持 NetworkPolicy**，apply 不报错但策略不生效；要验�
 5. **持久 shell 不跨实例**（`app/tools/terminal.py:198,212`）：多副本轮转时 shell 的 cwd/env/后台进程会丢，工具描述承诺的"同 session 持久"只在单副本成立。
 6. **`/metrics` 走白名单**：引擎指标端点无需令牌，生产请用 NetworkPolicy 限制来源。
 7. **TLS**：本清单的 frontend 只提供 HTTP。生产请用 Ingress / 外部 LB 终结 TLS（配置示例见 `deploy/nginx/tls.conf.example`）。
+8. **`chiron-pgbouncer` 是独立 Secret，漏建会整站不可用**：`PGBOUNCER_USERLIST` 不在 `chiron-secrets` 里（那是给应用容器 `envFrom` 用的，不该拿到 PG 口令）。只在真的把 `POSTGRES_DSN` 指向 `pgbouncer:6432` 时才需要建它，建法见 §3。漏建的表现是 pgbouncer Pod `CreateContainerConfigError`，然后 gateway/engine 连不上 PG —— 两者都是 **fail-closed**（`DEGRADED_MODE` 默认 false），所以现象是"全站 502/5xx"，而不是"降级可用"。
+9. **`/v1/internal/*` 在 nginx 层被 404**（`frontend-nginx.conf` 与 `frontend-vue/nginx.conf` 都有一份）。这是刻意的：这些端点能执行任意 SQL、读写 Redis、写存储，只靠 `X-Internal-Token` 一道门。改动 nginx 配置时**不要**为了图方便把这条 `location` 删掉或改成 `proxy_pass`。若将来确实需要浏览器经 nginx 调内部端点，应当先在网关侧为那些端点加上用户级鉴权，而不是撤掉这一层。
+10. **PDB 只在 `kubectl drain` / 节点故障时起作用**，不保证滚动升级（那是 `maxUnavailable: 0` 管的）。`pgbouncer`、`sandbox-service`、`sandbox-lb` 的 `minAvailable: 1` 意味着一台节点上同时有这两个副本时，drain 会被 PDB **阻塞**直到副本迁走 —— 这是想要的（它们是 fail-closed 的单点入口），但意味着 `drain --timeout` 要给足，否则会半途放弃。
 
 ## 7. 清理
 

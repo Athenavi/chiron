@@ -138,12 +138,38 @@ func smClaimDirty(ctx context.Context, now time.Time) (string, bool) {
 	return id, true
 }
 
+// smReleaseLua 原子地归还认领：ZREM inflight，requeue 时同时放回 dirty。
+//
+// 为什么必须是一个脚本：`ZREM` 与 `SADD` 分两条命令时，进程在两者之间被杀
+// （滚动发布、OOM、panic）就会得到"inflight 已清、dirty 没加"——这张画布的
+// 布局从此既不在待落库队列里、也不在崩溃回收范围里，**永久丢失**，且没有任何
+// 日志能指出是哪一张。而这一对操作的语义本来就是"归还"这一件事，分开做没有意义。
+//
+// 注意即使退化成非原子，也应当先 SADD 再 ZREM（宁可"既在 dirty 又在 inflight"
+// 重复落库 —— smPersist 是事务内全量覆盖，幂等；也不要"两边都没有"丢数据）。
+const smReleaseLua = `
+if ARGV[2] == '1' then
+  redis.call('SADD', KEYS[1], ARGV[1])
+end
+redis.call('ZREM', KEYS[2], ARGV[1])
+return 1
+`
+
 // smReleaseClaim 归还认领：requeue=true 表示本次没落库成功，放回 dirty 下一轮重试。
+//
+// 失败一律吞掉：脚本没跑到时 inflight 项仍在，下一轮的 stale 回收（smClaimStaleSecs）
+// 会把它放回 dirty —— 归还失败的最坏结果是"晚 5 分钟重试"，而不是丢数据。
 func smReleaseClaim(ctx context.Context, workspaceID string, requeue bool) {
-	db.Redis.Do(ctx, "ZREM", smInflightKey(), workspaceID)
-	if requeue {
-		db.Redis.Do(ctx, "SADD", smDirtyKey(), workspaceID)
+	if db.Redis == nil || workspaceID == "" {
+		return
 	}
+	flag := "0"
+	if requeue {
+		flag = "1"
+	}
+	// 与 smClaimDirty 一样用 Eval：Do("EVAL", numkeys, …) 的 numkeys 与键参数错位
+	// 是静默失败（脚本照跑，只是 KEYS 变成 ARGV），Eval 由类型系统绑死键列表。
+	db.Redis.Eval(ctx, smReleaseLua, []string{smDirtyKey(), smInflightKey()}, workspaceID, flag)
 }
 
 func smTenant(claims *auth.Claims) string {
@@ -255,12 +281,17 @@ func StartSessionMapFlusher(ctx context.Context) {
 			select {
 			case <-ctx.Done():
 				// 关机前尽量把热层写回，避免"用户拖过的位置丢失"
-				if n := smFlushOnce(context.WithoutCancel(ctx)); n > 0 {
-					slog.Info("sessionmap flusher final pass", "workspaces", n)
-				}
+				runBackgroundCycle("sessionmap-flush-final", func() {
+					if n := smFlushOnce(context.WithoutCancel(ctx)); n > 0 {
+						slog.Info("sessionmap flusher final pass", "workspaces", n)
+					}
+				})
 				return
 			case <-ticker.C:
-				smFlushOnce(ctx)
+				// panic 必须拦在**这一轮**：落到 goroutine 顶层会终止整个进程，
+				// 而这里处理的是前端传来的任意画布布局，一条坏数据就足以让所有副本
+				// 同时退出（见 runBackgroundCycle 注释）。
+				runBackgroundCycle("sessionmap-flush", func() { smFlushOnce(ctx) })
 			}
 		}
 	}()
@@ -289,7 +320,7 @@ func StartSessionMapReconciler(ctx context.Context) {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				smReconcileOnce(ctx)
+				runBackgroundCycle("sessionmap-reconcile", func() { smReconcileOnce(ctx) })
 			}
 		}
 	}()
@@ -687,6 +718,10 @@ func (h *SessionMapHandler) DeleteWorkspace(w http.ResponseWriter, r *http.Reque
 	if db.Redis != nil {
 		db.Redis.Do(r.Context(), "DEL", smCacheKey(wsID))
 		db.Redis.Do(r.Context(), "SREM", smDirtyKey(), wsID)
+		// inflight 也必须清：与 invalidateSessionMapWorkspaces 同一理由 —— 残留项会在
+		// stale 阈值后被回收进 dirty，再被领出来、发现热层已无快照、又归还一次。
+		// 少这几条不会丢数据，但会凭空产生一轮无用读写，且日志里看不出是"已删除"。
+		db.Redis.Do(r.Context(), "ZREM", smInflightKey(), wsID)
 	}
 	OK(w, map[string]string{"status": "deleted", "id": wsID})
 }

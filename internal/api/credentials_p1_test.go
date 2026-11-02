@@ -1,8 +1,10 @@
 package api
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
+	"crypto/hmac"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/base64"
@@ -145,6 +147,91 @@ func TestDecryptWebhookSecretCompatReportsGarbage(t *testing.T) {
 }
 
 // ── 测试内小工具 ──
+
+// legacyKeysPreUpgrade 独立重算**升级前**的派生结果。
+//
+// 照抄当时的实现（而不是调用 legacyWebhookKeys）—— 用被测函数构造期望值等于自己
+// 证明自己：回退表里把常量写错一个字节，测试照样会绿，而线上旧密文全解不开。
+func legacyKeysPreUpgrade(secret string) [][]byte {
+	const length = 32
+	if secret == "" {
+		mac := hmac.New(sha256.New, []byte("chiron-webhook-encryption-fallback"))
+		mac.Write([]byte("chiron-webhook-key-derivation"))
+		return [][]byte{mac.Sum(nil)[:length]}
+	}
+	if len(secret) >= length {
+		return [][]byte{[]byte(secret)[:length]}
+	}
+	mac := hmac.New(sha256.New, []byte("chiron-webhook-encryption"))
+	mac.Write([]byte(secret))
+	return [][]byte{mac.Sum(nil)}
+}
+
+// TestLegacyWebhookKeysMatchPreUpgradeDerivation 钉住回退表与旧实现**逐字节**一致。
+//
+// 旧实现有三条分支：空 APP_SECRET（固定派生）、≥32 字符（截断）、短密钥（HMAC）。
+// 既存用例只覆盖了"截断"这一条；另外两条若写错，表现是"部分租户的 webhook 在升级后
+// 失去签名"—— 只在线上才看得见，日志里只有一个无法解密。
+func TestLegacyWebhookKeysMatchPreUpgradeDerivation(t *testing.T) {
+	for name, secret := range map[string]string{
+		"empty":                  "",
+		"exactly-32":             "0123456789abcdef0123456789abcdef",
+		"longer-than-32":         "0123456789abcdef0123456789abcdef-plus-more",
+		"shorter-than-32 (HMAC)": "short-secret",
+	} {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv("APP_SECRET", secret)
+			got := legacyWebhookKeys()
+
+			for _, want := range legacyKeysPreUpgrade(secret) {
+				found := false
+				for _, g := range got {
+					if bytes.Equal(g, want) {
+						found = true
+						break
+					}
+				}
+				if !found {
+					t.Fatalf("APP_SECRET=%q 时缺少历史候选 —— 用旧密钥加密的密文将解不开", secret)
+				}
+			}
+
+			// 端到端确认：旧密钥加密的密文，新代码必须解得开。
+			legacy := legacyKeysPreUpgrade(secret)[0]
+			sealed, err := encryptWebhookSecret("historical-value", string(legacy))
+			if err != nil {
+				t.Fatalf("旧格式加密失败: %v", err)
+			}
+			plain, err := decryptWebhookSecretCompat(sealed, deriveWebhookKey())
+			if err != nil {
+				t.Fatalf("历史密文解不开（升级会让既有订阅失去签名）: %v", err)
+			}
+			if plain != "historical-value" {
+				t.Fatalf("解出 %q，期望 historical-value", plain)
+			}
+		})
+	}
+}
+
+// TestWebhookSecretDecryptionFailureIsLoud 防止退回 `decrypted, _ :=` 的静默失败。
+//
+// 此前 dispatcher 丢弃错误：解不开时 decrypted == ""，于是签名头凭空消失，
+// 接收方以为这是条未签名消息，而日志里一个字都没有。现在必须能观测到失败。
+func TestWebhookSecretDecryptionFailureIsLoud(t *testing.T) {
+	t.Setenv("APP_SECRET", "0123456789abcdef0123456789abcdef")
+
+	other := make([]byte, 32)
+	if _, err := io.ReadFull(rand.Reader, other); err != nil {
+		t.Fatalf("生成无关密钥失败: %v", err)
+	}
+	sealed, err := encryptWebhookSecret("x", string(other))
+	if err != nil {
+		t.Fatalf("加密失败: %v", err)
+	}
+	if _, err := decryptWebhookSecretCompat(sealed, deriveWebhookKey()); err == nil {
+		t.Fatal("用无关密钥加密的密文不应解密成功 —— 失败被静默吞掉了")
+	}
+}
 
 func sha256Sum(s string) string {
 	sum := sha256.Sum256([]byte(s))

@@ -20,6 +20,16 @@
 # ⚠ 不要把这个 Job 的 DSN 指向 pgbouncer:6432：
 #   PgBouncer 是 transaction 池，而 DDL 需要会话级的 advisory lock / 事务语义，
 #   经连接池执行迁移会出现锁失效或半途断开。迁移一律直连 PG（5432）。
+#
+# 这个约束与"应用侧必须经 pgbouncer"是**冲突的**，而两者共用同一个 Secret key
+# （POSTGRES_DSN）时无法同时满足 —— 一旦按连接预算把应用 DSN 切到 pgbouncer:6432，
+# 本 Job 会静默地跟着走事务池，迁移就可能半途失败。因此这里支持一个可选的
+# 直连 DSN：**建了就用它，没建就退回 POSTGRES_DSN**（保持不启用 pgbouncer 时
+# 零改动）。Secret 里额外加一个 key 即可：
+#
+#   --from-literal=POSTGRES_DSN_DIRECT="postgresql://user:***@<pg-host>:5432/chiron"
+#
+# 值应与 POSTGRES_DSN 指向**同一个库**，只把 host:port 换回直连地址。
 apiVersion: batch/v1
 kind: Job
 metadata:
@@ -49,11 +59,25 @@ spec:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
             capabilities: { drop: ["ALL"] }
+          # 覆盖镜像默认 ENTRYPOINT：先选出**直连** DSN 再交给 alembic。
+          #   - 配了 POSTGRES_DSN_DIRECT（应用 DSN 已经指向 pgbouncer 时必配）→ 用它；
+          #   - 没配 → 退回 POSTGRES_DSN（不启用 pgbouncer 时的原有行为）。
+          # 用 `exec` 让 alembic 顶替 shell 成为 PID 1，SIGTERM 才能直达。
+          # 注意 `:-` 而不是 `:?`：空字符串时也应退回，避免"建了 key 但留空"造成的静默失败。
+          command:
+            - sh
+            - -c
+            - 'export DATABASE_DSN="${POSTGRES_DSN_DIRECT:-$POSTGRES_DSN}"; exec python -m alembic -c alembic.ini upgrade head'
           env:
-            # env.py 读的是 DATABASE_DSN（不是 POSTGRES_DSN），这里做一次改名映射。
-            - name: DATABASE_DSN
+            # 应用侧 DSN —— 目标库的权威来源（也是未启用 pgbouncer 时的迁移 DSN）。
+            - name: POSTGRES_DSN
               valueFrom:
                 secretKeyRef: { name: chiron-secrets, key: POSTGRES_DSN }
+            # 可选：直连 PG 的 DSN。缺这个 key 时 Pod 仍能正常起（optional），
+            # 由上面的 shell 回退到 POSTGRES_DSN。
+            - name: POSTGRES_DSN_DIRECT
+              valueFrom:
+                secretKeyRef: { name: chiron-secrets, key: POSTGRES_DSN_DIRECT, optional: true }
           resources:
             requests: { cpu: 100m, memory: 256Mi }
             limits: { cpu: 1000m, memory: 512Mi }

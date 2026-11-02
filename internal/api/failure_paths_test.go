@@ -7,6 +7,7 @@ import (
 	"go/token"
 	"strings"
 	"testing"
+	"time"
 )
 
 // exprName 把 `db.GlobalDBManager.Exec` 这样的调用目标还原成点分全名。
@@ -188,5 +189,82 @@ func TestSessionMapPersistIsTransactional(t *testing.T) {
 	}
 	if !calls["tx.Exec"] {
 		t.Fatal("smPersist 事务里没有用 tx.Exec 写节点")
+	}
+}
+
+func TestSessionMapReleaseIsAtomic(t *testing.T) {
+	// 归还 = "ZREM inflight" + "放回 dirty（需要重试时）"。这两步必须原子：
+	// 分两条命令时，进程在中间被杀就会两边都没有 —— 这张画布的布局永久丢失，
+	// 且不在崩溃回收范围里，事后无从查出是哪一张。
+	if !strings.Contains(smReleaseLua, "ZREM") {
+		t.Fatalf("smReleaseLua 没有清 inflight：认领会一直卡到 stale 阈值：\n%s", smReleaseLua)
+	}
+	if !strings.Contains(smReleaseLua, "SADD") {
+		t.Fatalf("smReleaseLua 无法放回 dirty：落库失败的画布不会重试：\n%s", smReleaseLua)
+	}
+
+	// 必须真的走脚本。裸 Do("ZREM"/"SADD") 就是本缺陷的原始形态。
+	// 也必须是 Eval：Do("EVAL", numkeys, …) 的 numkeys 与键参数错位是静默失败
+	// （脚本照跑，只是 KEYS 变成 ARGV），而 Eval 把键列表与参数分开了。
+	calls := funcCallsIn(t, "sessionmap.go", "smReleaseClaim")
+	if !calls["Eval"] {
+		t.Fatal("smReleaseClaim 没有用 Eval 执行 smReleaseLua：ZREM 与 SADD 会分成两条命令")
+	}
+	if calls["Do"] {
+		t.Fatal("smReleaseClaim 仍在用各自的 Do 发命令：归还必须是单个脚本")
+	}
+}
+
+// ── P1 常驻循环的 panic 隔离 ──
+//
+// 这一组盯的是"一次 panic 打崩整个进程"，而不是三处归还逻辑本身。
+//
+// Go 与多数运行时的直觉相反：goroutine 里**未捕获**的 panic 会终止整个进程，
+// 不会只终止那个 goroutine。网关的这几个循环全是进程级常驻任务，且处理的都是
+// 不可信输入（用户写的 cron 表达式/task JSON、前端传来的画布布局、引擎返回）：
+// 一次 nil 解引用就足以让**所有副本**同时退出，触发条件若稳定存在就是 CrashLoop。
+
+func TestRunBackgroundCycleRecoversPanic(t *testing.T) {
+	// 行为断言：panic 被拦在单轮内，函数正常返回；若没有 recover，
+	// 这个 goroutine 会带着整个测试进程一起死。
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		runBackgroundCycle("test-cycle", func() { panic("boom") })
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("runBackgroundCycle 没有从 panic 中恢复")
+	}
+
+	// 正常路径不能被改变：func 必须恰好执行一次。
+	n := 0
+	runBackgroundCycle("test-cycle", func() { n++ })
+	if n != 1 {
+		t.Fatalf("runBackgroundCycle 应恰好执行一次，实际 %d 次", n)
+	}
+}
+
+func TestSessionMapLoopsSurvivePanic(t *testing.T) {
+	// 两个循环都在"处理他人的数据"：flush 落库前端传来的布局，reconcile 扫全库。
+	for _, fn := range []string{"StartSessionMapFlusher", "StartSessionMapReconciler"} {
+		calls := funcCallsIn(t, "sessionmap.go", fn)
+		if !calls["runBackgroundCycle"] {
+			t.Errorf("%s 未用 runBackgroundCycle 兜 panic：一条坏画布数据会打崩整个网关进程", fn)
+		}
+	}
+}
+
+func TestCronLoopsSurvivePanic(t *testing.T) {
+	// sync 解析用户配置的 cron 表达式与 task JSON。
+	if !funcCallsIn(t, "cron_scheduler.go", "syncLoop")["runBackgroundCycle"] {
+		t.Error("cron syncLoop 未兜 panic：一条解析即崩的 cron_jobs 行会让所有副本 CrashLoop")
+	}
+
+	// 任务回调同理。robfig/cron 默认链**不含** Recover，未显式 WithChain 时
+	// 回调 panic 会冒到 cron 自己的 goroutine 顶层。
+	if !funcCallsIn(t, "cron_scheduler.go", "sync")["runBackgroundCycle"] {
+		t.Error("cron AddFunc 回调未兜 panic：任务体 panic 会终止整个进程（默认链无 Recover）")
 	}
 }
