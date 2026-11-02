@@ -447,10 +447,14 @@ spec:
 # 副本再扩也**不**线性放大连接数。
 #
 # ⚠ 三个必须知道的兼容点（都已在下面或应用侧处理）：
-#  1. transaction 池下**会话级 SET 不跨事务保留** —— Go 侧 AfterConnect 会执行
-#     `SET statement_timeout = 30000`（internal/db/postgres.go）。这里用
-#     `track_extra_parameters = statement_timeout` 让 PgBouncer 在连接复用时保住它，
-#     否则慢查询会占住 server 连接，直到池被耗尽。
+#  1. transaction 池下**会话级 SET 不跨事务保留** —— Go 侧因此改用 startup packet
+#     传三个会话超时（internal/db/postgres.go 的 sessionTimeoutParams → RuntimeParams）：
+#     statement_timeout / lock_timeout / idle_in_transaction_session_timeout。
+#     这三个参数 PG 都不向客户端上报，PgBouncer 只认 startup packet 里的值，且必须
+#     列在 track_extra_parameters 里才会被保存并在客户端活跃时重新应用 —— 所以下面
+#     三个都要写全。用 `SET` 设置它们在本模式下不生效（值不被跟踪，且
+#     server_reset_query = DISCARD ALL 会清掉），慢查询/锁等待就会占住 server 连接
+#     直到池被耗尽。
 #  2. pgx 默认使用 prepared statements，transaction 池下必须让客户端避开它：
 #     POSTGRES_DSN 里加 `default_query_exec_mode=exec`（无需改代码，pgx 认这个连接参数），
 #     或依赖 PgBouncer ≥1.21 的 `max_prepared_statements`（两者都留了）。
@@ -484,8 +488,8 @@ data:
     # 对 PG 的固定连接数：与副本数无关 —— 接入 PgBouncer 的全部意义就在这里
     default_pool_size = 25
     max_client_conn = 2000
-    # 兼容点 1：会话参数跨事务保留
-    track_extra_parameters = statement_timeout
+    # 兼容点 1：会话参数跨事务保留（三个超时都要列，否则经本池时静默失效）
+    track_extra_parameters = statement_timeout, lock_timeout, idle_in_transaction_session_timeout
     # 兼容点 2：≥1.21 的内置 prepared statement 支持
     max_prepared_statements = 200
     server_reset_query = DISCARD ALL

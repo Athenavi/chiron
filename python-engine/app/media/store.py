@@ -58,6 +58,21 @@ class BaseStore(ABC):
     @abstractmethod
     def list(self) -> list[Asset]: ...
 
+    @abstractmethod
+    def write_at(self, key: str, content: bytes) -> None:
+        """按**服务端指定**的相对 key 写一段字节，不进资产索引。
+
+        归档（`archives/`）与媒体资产的生命周期语义不同：媒体是用户可下载的产物，
+        可被"清理媒体"删除；归档是内部原文，必须活到会话结束。混在同一个
+        `metadata.json` 索引里，一次媒体清理就会连归档一起误删。
+
+        `key` 只由服务端生成（`archives/<ref>.txt`），**绝不接受客户端传入** ——
+        否则就是一个路径穿越的入口。"""
+
+    @abstractmethod
+    def read_at(self, key: str) -> bytes | None:
+        """按 key 读回字节；不存在返回 None。"""
+
 
 class LocalStore(BaseStore):
     """本地文件系统存储（原 MediaStore）。"""
@@ -143,6 +158,30 @@ class LocalStore(BaseStore):
 
     def list(self) -> list[Asset]:
         return list(self._assets.values())
+
+    def _resolve_key(self, key: str) -> Path:
+        """把相对 key 解析成绝对路径，并强制它留在存储根内。
+
+        归档的 key 只由服务端拼（`archives/<ref>.txt`），但"只由服务端拼"是**约定**，
+        不是保证 —— 只要有一个调用点把外部输入漏进来，就是任意文件读写。
+        这里用 realpath 做最后一道闸：解析后前缀不符就拒绝，而不是信任上游。
+        """
+        root = self._root.resolve()
+        target = (root / key).resolve()
+        if not target.is_relative_to(root):
+            raise ValueError(f"key escapes storage root: {key!r}")
+        return target
+
+    def write_at(self, key: str, content: bytes) -> None:
+        target = self._resolve_key(key)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(content)
+
+    def read_at(self, key: str) -> bytes | None:
+        target = self._resolve_key(key)
+        if not target.is_file():
+            return None
+        return target.read_bytes()
 
 
 # 向后兼容别名

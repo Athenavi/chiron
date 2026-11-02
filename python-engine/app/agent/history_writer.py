@@ -25,14 +25,29 @@
 
 from __future__ import annotations
 
+import hashlib
 import logging
+import uuid
 from typing import Any
 
 logger = logging.getLogger(__name__)
 
-#: 单条消息 content 入库上限。与 tool_calls 的 256KB 上限同一取向：
-#: 无上限会让一两轮对话就把表撑大，拖慢备份与 VACUUM。
+#: 单条消息 content 的**兜底**截断上限。只在归档不可用时使用。
+#:
+#: 第 10 步之前这里是唯一的上限，256k 以上的正文一律截断。加了归档之后语义变了：
+#: 设计（`docs/context-archive-implementation.md` §2.3）要求 64KB~4MB 的正文
+#: **原样**留在 `content`（PG TOAST 会自动压缩），只有 > 4MB 才外置。
+#: 若仍按 256k 截断，那 256k~4MB 区间的原文既没入 `content` 也没进对象存储，
+#: 等于永久丢失 —— 所以正常路径不再用它，只在归档失败时兜底。
 MESSAGE_CONTENT_MAX_CHARS = 256_000
+
+#: 归档阈值（字节）。超过它的正文写对象存储，`messages.content` 只留截断体。
+ARCHIVE_THRESHOLD_BYTES = 4 * 1024 * 1024
+
+#: 归档后 `messages.content` 保留的字符数。
+#: 留一段真原文而不是一句"已归档"，是因为上下文组装要拿它生成结构摘要 ——
+#: 只剩一句标记时摘要无从谈起。
+ARCHIVE_INLINE_CHARS = 64_000
 
 #: 一次读取返回的最大消息数。历史是用来重建上下文的，不是导出工具。
 DEFAULT_HISTORY_LIMIT = 500
@@ -42,6 +57,27 @@ def _truncate(text: str, limit: int = MESSAGE_CONTENT_MAX_CHARS) -> str:
     if len(text) <= limit:
         return text
     return text[:limit] + f"\n[... truncated at {limit} chars, original {len(text)}]"
+
+
+def _rowcount(status: Any) -> int:
+    """从 asyncpg 的 `INSERT 0 n` 状态串里取实际影响行数。
+
+    与 `app/agent/interactions.py` / `app/subagent/line_ledger.py` 的同名辅助一致：
+    `ON CONFLICT DO NOTHING` 命中时状态串是 `INSERT 0 0`，据此区分「真写入」与
+    「冲突被跳过」。不解析它就无法知道那一行到底进没进去。
+    """
+    parts = str(status or "").split()
+    if len(parts) >= 2 and parts[0] in ("UPDATE", "DELETE"):
+        try:
+            return int(parts[1])
+        except ValueError:
+            return 0
+    if len(parts) == 3 and parts[0] == "INSERT":
+        try:
+            return int(parts[2])
+        except ValueError:
+            return 0
+    return 0
 
 
 def _coerce_tenant(tenant_id: Any) -> int:
@@ -110,6 +146,28 @@ async def _drop_existing_tool_calls(pool: Any, session_id: str, payload: list[tu
     return [row for row in payload if not row[3] or row[3] not in seen]
 
 
+async def _archive_result(content: str) -> str:
+    """把超限正文写进对象存储，返回 `arc_<12hex>` 形式的 ref。
+
+    写的是**全文**（不是截断体）—— 归档的意义就是"原文可召回"。
+    key 由服务端生成（`archives/<ref>.txt`），绝不接受外部输入，
+    否则就是一个路径穿越入口（见 `BaseStore.write_at` 的约定）。
+
+    失败向上抛：调用方据此退回截断兜底。让"归档失败"变成"消息写不进去"
+    是本末倒置 —— 历史缺失比原文外置失败严重得多。
+    """
+    import asyncio
+
+    from app.media.store import get_store
+
+    ref = f"arc_{uuid.uuid4().hex[:12]}"
+    data = content.encode("utf-8")
+    # 对象存储的写是同步 IO（boto3 / 本地文件）：直接调用会阻塞整个事件循环，
+    # 一条 4MB+ 的工具结果足以让同期所有会话一起卡住。
+    await asyncio.to_thread(get_store().write_at, f"archives/{ref}.txt", data)
+    return ref
+
+
 async def persist_messages(
     session_id: str,
     tenant_id: Any,
@@ -129,6 +187,11 @@ async def persist_messages(
     `system` 消息不入库 —— 它是每轮重建的（技能目录 / 记忆 / harness suffix 都会变），
     存下来会让"历史"里混进一堆互相矛盾的 system 段。
 
+    **分级归档**（`docs/context-archive-implementation.md` §2.3）：
+    ≤ 4MB 的正文原样入库（64KB 以上的交给 PG TOAST 压缩）；
+    > 4MB 的全文写对象存储、`content` 只留前 64k 字符 + 标记、`blob_ref` 指向归档。
+    归档失败时退回 `_truncate` 兜底 —— 宁可丢原文，也不能丢整条历史。
+
     失败返回 0 且只告警：历史缺失比对话中断轻得多。
     """
     # 入口处收敛一次：`tenant_id` 在构造路径上可能是任意值，而这里位于对话收尾，
@@ -139,27 +202,23 @@ async def persist_messages(
 
     from app.db import get_pool
 
-    payload = [
-        (
-            m.get("role") or "user",
-            _truncate(str(m.get("content") or "")),
-            _tool_calls_json(m),
-            str(m.get("tool_call_id") or "") or None,
-            turn_id or None,
-        )
-        for m in messages
-        if (m.get("role") or "") != "system"
-        and (roles is None or (m.get("role") or "") in roles)
-    ]
-    if not payload:
-        return 0
-
     # 隐私模式：no_retention 一律不落库。这是合规要求，不是性能优化 ——
     # `session_store` 在同一判定下跳过 Redis，这里必须同样跳过 PG。
     from app.middleware.privacy_middleware import is_no_retention
 
     if is_no_retention():
         logger.debug("history_writer: skip persist under no_retention (session=%s)", session_id)
+        return 0
+
+    # 先做纯 CPU 的筛选与分级判定，把 IO 留到后面 —— 这样"没有被选中的消息"
+    # 不会白白触发一次对象存储往返。
+    selected = [
+        m
+        for m in messages
+        if (m.get("role") or "") != "system"
+        and (roles is None or (m.get("role") or "") in roles)
+    ]
+    if not selected:
         return 0
 
     try:
@@ -175,31 +234,243 @@ async def persist_messages(
         if pool is None:
             return 0
 
+        # 归档对象**先于**任何行写入：反过来（先写库再写对象）一旦对象写失败，
+        # 库里就留下指向不存在对象的 blob_ref，read_archive 永远取不回。
+        # 先写对象的代价只是失败时可能留下孤儿对象 —— 无害，可后台清理。
+        payload: list[tuple[str, str, str | None, str | None, str | None, str | None]] = []
+        archives: list[tuple[str, int, str, str]] = []
+        for m in selected:
+            raw = str(m.get("content") or "")
+            role = m.get("role") or "user"
+            encoded = len(raw.encode("utf-8"))
+            blob_ref: str | None = None
+            if encoded > ARCHIVE_THRESHOLD_BYTES:
+                try:
+                    blob_ref = await _archive_result(raw)
+                    content = raw[:ARCHIVE_INLINE_CHARS] + (
+                        f"\n[... archived in full, {encoded} bytes, ref={blob_ref}]"
+                    )
+                    archives.append(
+                        (
+                            blob_ref,
+                            encoded,
+                            f"archives/{blob_ref}.txt",
+                            hashlib.sha256(raw.encode("utf-8")).hexdigest(),
+                        )
+                    )
+                except Exception as exc:  # noqa: BLE001 — 归档失败退回截断
+                    logger.warning(
+                        "history_writer: archive failed, falling back to truncation "
+                        "(session=%s bytes=%d): %s",
+                        session_id,
+                        encoded,
+                        exc,
+                    )
+                    content = _truncate(raw)
+            else:
+                content = raw
+            payload.append(
+                (
+                    role,
+                    content,
+                    _tool_calls_json(m),
+                    str(m.get("tool_call_id") or "") or None,
+                    turn_id or None,
+                    blob_ref,
+                )
+            )
+
         # 幂等：tool 角色按 tool_call_id 去重。轮次在 overflow / 重试下可能重复走
         # 收尾路径，重复插入会让同一个工具结果在上下文里出现两次。
+        # 去重只按索引 3（tool_call_id），与新增的 blob_ref 位无关。
         if roles is not None and roles == {"tool"}:
             payload = await _drop_existing_tool_calls(pool, session_id, payload)
+
+        # 归档已写入对象存储，但对应的消息可能被上面的去重丢掉了 ——
+        # 那些归档行不该留在表里，否则会话删除后会留下永不可达的条目。
+        kept = {row[5] for row in payload if row[5]}
+        archives = [a for a in archives if a[0] in kept]
 
         inserted = 0
         async with pool.acquire() as conn:
             async with conn.transaction():
-                for role, content, tool_calls, tool_call_id, tid in payload:
+                for ref, byte_size, storage_key, digest in archives:
+                    await conn.execute(
+                        "INSERT INTO message_archives "
+                        "(ref, session_id, byte_size, storage_key, sha256) "
+                        "VALUES ($1, $2, $3, $4, $5) "
+                        "ON CONFLICT (ref) DO NOTHING",
+                        ref,
+                        session_id,
+                        byte_size,
+                        storage_key,
+                        digest,
+                    )
+                for role, content, tool_calls, tool_call_id, tid, blob_ref in payload:
                     await conn.execute(
                         "INSERT INTO messages "
-                        "(id, session_id, role, content, tool_calls, tool_call_id, turn_id, created_at) "
-                        "VALUES (gen_random_uuid()::text, $1, $2, $3, $4::jsonb, $5, $6, NOW())",
+                        "(id, session_id, role, content, tool_calls, tool_call_id, "
+                        "turn_id, blob_ref, created_at) "
+                        "VALUES (gen_random_uuid()::text, $1, $2, $3, $4::jsonb, $5, $6, $7, NOW())",
                         session_id,
                         role,
                         content,
                         tool_calls,
                         tool_call_id,
                         tid,
+                        blob_ref,
                     )
                     inserted += 1
         return inserted
     except Exception as exc:  # noqa: BLE001 — 写历史失败不阻断对话
         logger.warning("history_writer: persist failed (session=%s): %s", session_id, exc)
         return 0
+
+
+async def persist_folds(session_id: str, tenant_id: Any, folds: list[dict[str, Any]]) -> int:
+    """把折叠区间记进 `session_folds`，返回**实际写入**行数（冲突不计）。
+
+    `messages` 一字节不动 —— 压缩只影响本次请求的组装。但没有这行记录，库里
+    就无从判断"这段原文是被哪次摘要覆盖而离开上下文的"；跨副本重建投影
+    （`[冻结体][活动摘要][原样尾部]`）时也算不出该拼多少条原样尾部。
+
+    返回值按 asyncpg 的 `INSERT 0 n` 状态串解析：`ON CONFLICT DO NOTHING` 命中时
+    `n == 0`，此时记一条 `fold conflict` warning。无条件计数会把冲突谎报成写入，
+    让「后到者的摘要被丢弃」这件事彻底不可观察（见 `docs/context-projection-design.md` §3.3
+    规则二）。
+    """
+    if not folds or not session_id:
+        return 0
+
+    tid = _coerce_tenant(tenant_id)
+    if tid is None:
+        return 0
+
+    from app.db import get_pool
+
+    # 与 `persist_messages` 同一合规口径：no_retention 下一律不落库。
+    from app.middleware.privacy_middleware import is_no_retention
+
+    if is_no_retention():
+        return 0
+
+    try:
+        if not await _session_belongs_to_tenant(session_id, tid):
+            logger.warning(
+                "history_writer: refuse to persist folds, session not owned (session=%s tenant=%s)",
+                session_id,
+                tid,
+            )
+            return 0
+
+        pool = get_pool()
+        if pool is None:
+            return 0
+
+        written = 0
+        conflicts = 0
+        async with pool.acquire() as conn:
+            async with conn.transaction():
+                for fold in folds:
+                    ids = fold.get("covered_ids") or []
+                    # `ON CONFLICT DO NOTHING` 配合 0019 的 `ux_session_folds_range`：
+                    # 压缩不改 `messages`，同一段 seq 必然会被反复选中（缓存过期重读
+                    # PG、或另一副本处理同一会话）。幂等写入让这些重复变成 no-op，
+                    # 而不是在投影里把摘要拼接多遍。
+                    status = await conn.execute(
+                        "INSERT INTO session_folds "
+                        "(id, session_id, covered_from, covered_to, digest, "
+                        "digest_model, digest_prompt, body_suffix) "
+                        "VALUES ($1,$2,$3,$4,$5,$6,$7,$8) "
+                        "ON CONFLICT (session_id, covered_from, covered_to) DO NOTHING",
+                        str(uuid.uuid4()),
+                        session_id,
+                        int(fold["covered_from"]),
+                        int(fold["covered_to"]),
+                        str(fold.get("digest") or f"[{len(ids)} message(s) folded]"),
+                        str(fold.get("digest_model") or ""),
+                        str(fold.get("digest_prompt") or "prune"),
+                        int(fold.get("body_suffix") or 0),
+                    )
+                    # 必须按**实际影响行数**计数：`ON CONFLICT DO NOTHING` 命中时
+                    # 什么都没写，先前无条件 `written += 1` 会把冲突谎报成写入。
+                    if _rowcount(status) > 0:
+                        written += 1
+                    else:
+                        # 规则二（`docs/context-projection-design.md` §3.3）：
+                        # 同区间已被写过。跨副本用不同模型摘要同一区间时，先到者胜、
+                        # 后到者被静默丢弃 —— 不记一笔，事后就无从判断读过的是哪一份。
+                        conflicts += 1
+                        logger.warning(
+                            "history_writer: fold conflict, kept existing digest "
+                            "(session=%s range=[%s,%s) model=%s)",
+                            session_id,
+                            fold["covered_from"],
+                            fold["covered_to"],
+                            fold.get("digest_model") or "",
+                        )
+        logger.info(
+            "history_writer: folds persisted (session=%s written=%d conflicts=%d)",
+            session_id,
+            written,
+            conflicts,
+        )
+        return written
+    except Exception as exc:  # noqa: BLE001 — 索引写不进去不该让整轮对话失败
+        logger.warning("history_writer: persist folds failed (session=%s): %s", session_id, exc)
+        return 0
+
+
+async def load_folds(session_id: str, tenant_id: Any) -> list[dict[str, Any]]:
+    """取该会话全部折叠记录（按区间升序），供投影重建使用。
+
+    返回空列表表示「没折叠过」或「取不到」——两种情况调用方都回退全量。
+    这里**不抛异常**：投影是优化项，读失败不该让整轮对话失败。
+    """
+    tenant_id = _coerce_tenant(tenant_id)
+    if not session_id or tenant_id <= 0:
+        return []
+
+    from app.db import get_pool
+
+    try:
+        if not await _session_belongs_to_tenant(session_id, tenant_id):
+            logger.warning(
+                "history_writer: refuse to load folds, session not owned "
+                "(session=%s tenant=%s)",
+                session_id,
+                tenant_id,
+            )
+            return []
+
+        pool = get_pool()
+        if pool is None:
+            return []
+
+        # 按 covered_from 升序：投影要按时间顺序拼接，乱序会让摘要顺序错乱。
+        # 读 digest_model 是为了让调用方判断摘要可信度（提取式 vs 模型生成）。
+        rows = await pool.fetch(
+            "SELECT covered_from, covered_to, digest, digest_model, body_suffix "
+            "FROM session_folds WHERE session_id = $1 "
+            "ORDER BY covered_from ASC",
+            session_id,
+        )
+    except Exception as exc:  # noqa: BLE001 — 索引读失败按「无折叠」处理
+        logger.warning("history_writer: load folds failed (session=%s): %s", session_id, exc)
+        return []
+
+    out: list[dict[str, Any]] = []
+    for row in rows:
+        out.append(
+            {
+                "covered_from": int(row["covered_from"]),
+                "covered_to": int(row["covered_to"]),
+                "digest": row["digest"] or "",
+                "digest_model": row["digest_model"] or "",
+                "body_suffix": int(row["body_suffix"] or 0),
+            }
+        )
+    return out
 
 
 async def load_message_content(
@@ -237,8 +508,14 @@ async def load_message_content(
         if pool is None:
             return None
 
+        # LEFT JOIN 归档表：`blob_ref` 非空说明原文在对象存储，`content` 只是截断体。
+        # 读 `storage_key` 而不是现拼 `archives/{ref}.txt` —— 拼 key 的规则只该有一处
+        # （写侧），散落两处就会在改前缀时一边改一边漏。
         row = await pool.fetchrow(
-            "SELECT content FROM messages WHERE id = $1 AND session_id = $2",
+            "SELECT m.content, a.storage_key "
+            "FROM messages m "
+            "LEFT JOIN message_archives a ON a.ref = m.blob_ref "
+            "WHERE m.id = $1 AND m.session_id = $2",
             message_id,
             session_id,
         )
@@ -249,6 +526,28 @@ async def load_message_content(
     if row is None:
         return None
     content = row["content"] or ""
+    storage_key = row["storage_key"]
+    if storage_key:
+        # 归档路径：取回完整原文。对象存储读是同步 IO（boto3 / 本地文件），
+        # 直接调用会阻塞事件循环 —— 与写侧同一个理由。
+        import asyncio
+
+        from app.media.store import get_store
+
+        try:
+            data = await asyncio.to_thread(get_store().read_at, storage_key)
+        except Exception as exc:  # noqa: BLE001 — 归档读失败退回截断体
+            logger.warning(
+                "history_writer: archive read failed (id=%s key=%s): %s",
+                message_id,
+                storage_key,
+                exc,
+            )
+            data = None
+        if data is not None:
+            content = data.decode("utf-8", errors="replace")
+        # data is None：对象丢了。退回 content（前 64k + 标记）总比返回空白好，
+        # 调用方至少能看到开头与"原文已归档"的提示。
     total = len(content)
     if limit and limit > 0:
         return content[offset : offset + limit], total
@@ -287,7 +586,7 @@ async def load_messages(
 
         rows = await pool.fetch(
             "SELECT role, content, COALESCE(tool_calls::text, ''), "
-            "COALESCE(turn_id::text, ''), COALESCE(tool_call_id, '') "
+            "COALESCE(turn_id::text, ''), COALESCE(tool_call_id, ''), id, seq "
             "FROM messages WHERE session_id = $1 "
             "ORDER BY seq DESC LIMIT $2",
             session_id,
@@ -301,6 +600,15 @@ async def load_messages(
     out: list[dict[str, Any]] = []
     for row in reversed(rows):
         msg: dict[str, Any] = {"role": row["role"], "content": row["content"]}
+        # `id` 只用于**内部**定位原文：压缩时要把它写进裁剪通知，模型才能拿
+        # `read_archive(ref=...)` 取回。它不会进入 provider 请求 ——
+        # `message_codec.to_chat_messages` 只转发 role/content/tool_call_id/tool_calls。
+        if row["id"]:
+            msg["id"] = row["id"]
+        # `seq` 是 `session_folds` 的区间坐标（半开区间 [covered_from, covered_to)）。
+        # 用 id 无法回答"这条在折叠边界内吗"，只有单调的 seq 可以。
+        if row["seq"] is not None:
+            msg["seq"] = row["seq"]
         raw_calls = row[2]
         if raw_calls:
             import json

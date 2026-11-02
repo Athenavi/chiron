@@ -305,6 +305,27 @@ async def subagent(
         resumed_from=resumed_from,
         resume_at_step=resume_at_step,
     )
+    # ── 分布式配额（设计 §9.1）──
+    #
+    # 放在这里而不是函数开头：上面的 `target` 分支是"转发给远端执行器"，
+    # 那边的并发由接收方管，在本副本占一个槽位反而会重复计数。
+    # 这一段之后才是本进程真正 `create_task`。
+    #
+    # **超限拒绝而不排队**：排队消耗父 agent 的 wall budget，而父模型无法区分
+    # "慢" 与 "死了" —— 它只会觉得工具卡住然后重复调用。
+    from app.subagent import quota
+
+    quota_owner = quota.new_owner_id()
+    quota_tenant = get_tenant_id_int()
+    quota_session = get_session_id()
+    quota_hit = await quota.acquire(
+        owner=quota_owner, tenant_id=quota_tenant, session_id=quota_session
+    )
+    if quota_hit:
+        return quota.rejection_payload(
+            quota_hit, tenant_id=quota_tenant, session_id=quota_session
+        )
+
     # ── 后台委派：**不阻塞父 agent** ──
     #
     # 同步路径要 await 整轮子 Agent 循环（可能数分钟），父 turn 只能干等，
@@ -335,6 +356,11 @@ async def subagent(
                 # 重跑血缘（仅 rerun_subagent 会传）：写进 subagent_runs.rerun_of，
                 # 让"这次是从哪一次重跑来的"在 DB 里可查（Redis 会丢，血缘不能丢）。
                 rerun_of=rerun_of,
+                # 配额租约标识：后台 task 结束时在 finally 里回收槽位。
+                # 不传的话这个槽位只能等 TTL 过期 —— 会话连开几次就再也委派不动了。
+                quota_owner=quota_owner,
+                quota_tenant=quota_tenant,
+                quota_session=quota_session,
             ),
             name=f"subagent-bg-{bg_run_id}",
         )
@@ -417,6 +443,12 @@ async def subagent(
     finally:
         subagent_registry.unregister(sync_run_id)
         restore_context(parent_ctx)  # 子 agent 已改写 context，父任务必须还原
+        # 配额槽位同样要还。放在 restore 之后：即使还原 context 抛错，槽位也已回收。
+        # 取消路径下这次 await 可能立刻再抛 CancelledError（那时靠租约 TTL 兜底）——
+        # 这是刻意的取舍：宁可偶尔漏一次释放，也不在取消收尾里再阻塞父 turn。
+        await quota.release(
+            owner=quota_owner, tenant_id=quota_tenant, session_id=quota_session
+        )
 
     payload = result.to_tool_payload()
     if result.status == "failed" and not result.output:
@@ -427,6 +459,9 @@ async def subagent(
 
 async def _drive_background(runner: Any, run_id: str, task: str,
                             followup_ctx: dict[str, Any] | None = None,
+                            quota_owner: str = "",
+                            quota_tenant: int = 0,
+                            quota_session: str = "",
                             **kwargs: Any) -> None:
     """后台驱动一次子 Agent 运行。
 
@@ -466,6 +501,16 @@ async def _drive_background(runner: Any, run_id: str, task: str,
         logger.error("subagent 后台运行失败 run_id=%s: %s", run_id, exc, exc_info=True)
     finally:
         subagent_registry.unregister(run_id)
+        # 配额槽位必须在这里还回去。漏了只会让该会话在租约 TTL 内
+        # 白白少一个并发额度，而 TTL 兜底是小时级 —— 用户体验上等于"坏了"。
+        if quota_owner:
+            from app.subagent import quota
+
+            await quota.release(
+                owner=quota_owner,
+                tenant_id=quota_tenant,
+                session_id=quota_session,
+            )
 
 
 def _get_pool() -> Any:

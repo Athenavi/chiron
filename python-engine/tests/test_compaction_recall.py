@@ -135,3 +135,148 @@ def test_tool_messages_still_get_their_own_refs():
     for ref, text in dropped:
         if "y" * 100 in text and len(text) > 30_000:
             assert text.endswith("y"), f"{ref} 的截断丢了尾部"
+
+
+# ── 持久 ref（messages.id）：让 read_archive 真正可用 ──
+#
+# 背景：`sn_xxx` 存在 Redis `result_store`，TTL 2 小时。会话过夜再回来，
+# 裁剪通知里那个 ref 已经过期 —— 模型拿着一条永远取不回的线索。
+# `messages.id` 没有 TTL，才是真正的归档入口。
+
+
+def _conversation_with_ids(n_pairs: int) -> list[dict[str, Any]]:
+    """带 `messages.id` 的对话，模拟从 PG 读回来的真实形态。"""
+    out: list[dict[str, Any]] = [_msg("system", "你是助手")]
+    for i in range(n_pairs):
+        out.append(_msg("user", f"问题 {i}", id=f"msg-{i}-u"))
+        out.append(_msg("assistant", f"回答 {i}", id=f"msg-{i}-a"))
+    return out
+
+
+def test_prune_note_prefers_durable_message_ids():
+    """有 messages.id 时必须指向 `read_archive`，而不是会过期的 Redis ref。"""
+    messages = _conversation_with_ids(10)
+    dropped: list[tuple[str, str]] = []
+
+    kept = _prune_messages(messages, CompactionConfig(max_messages=6), dropped=dropped)
+
+    note = next(m for m in kept if m["role"] == "user" and "pruned" in m["content"])
+    assert "read_archive" in note["content"], "持久 id 可用时不该只给易过期的 Redis ref"
+    assert "msg-0-u" in note["content"], "提示里要列出真实 messages.id，否则取不回来"
+    assert "read_tool_result" not in note["content"], "两者不该同时出现在一条提示里"
+
+
+def test_recall_block_carries_ref_per_message():
+    """召回块逐条带 ref：模型才能按需精确取回某一条，而不是整段重读。"""
+    block = _serialize_for_recall(_msg("user", "绝不要动 vendor/", id="m-42"))
+
+    assert "ref=m-42" in block, "缺 ref 的话召回块只是一段无出处的文本"
+
+
+def test_recall_block_without_id_stays_unchanged():
+    """没有 id 的老会话不能凭空多出 ref= 字样。"""
+    block = _serialize_for_recall(_msg("user", "旧消息"))
+
+    assert "ref=" not in block
+
+
+def test_tool_message_rebuild_preserves_id():
+    """重建 tool 消息时只挑三个字段，`id` 必须一起带过去。
+
+    否则上层拿到的消息集里 tool 消息没有 id，裁剪通知就无法为它给出 ref ——
+    这正是「工具结果被裁掉后彻底不可召回」的那条路径。
+    """
+    messages = [
+        _msg("system", "sys"),
+        _msg("user", "跑命令"),
+        _msg("assistant", "", tool_calls=[{"id": "c1", "name": "shell_exec", "arguments": "{}"}]),
+        _msg("tool", "z" * 40_000, tool_call_id="c1", id="msg-tool-1"),
+        _msg("user", "继续"),
+        _msg("assistant", "好"),
+    ]
+    dropped: list[tuple[str, str]] = []
+
+    kept = _prune_messages(messages, CompactionConfig(max_messages=3), dropped=dropped)
+
+    note = next((m for m in kept if m["role"] == "user" and "pruned" in m["content"]), None)
+    assert note is not None, "应有裁剪提示"
+    assert "read_archive" in note["content"], "有 messages.id 时应指向持久归档"
+    assert "msg-tool-1" in note["content"], "被裁掉的 tool 消息 id 必须出现在提示里"
+
+
+# ── 折叠索引：session_folds 的写入契约 ──
+#
+# 这些记录是"哪段 seq 被折叠过"的唯一证据。区间错一位就会把没被裁的消息
+# 也标成已折叠，`read_archive` 的指引随之错乱；而 `digest` 写成占位串，
+# 等于字段填了却没有信息量，事后排查反而被误导。
+
+
+def _conversation_with_seq(n_pairs: int) -> list[dict[str, Any]]:
+    """带 `id` + `seq` 的对话，模拟从 PG 读回来的真实形态（seq 从 1 起）。"""
+    out: list[dict[str, Any]] = [_msg("system", "你是助手")]
+    seq = 1
+    for i in range(n_pairs):
+        out.append(_msg("user", f"问题 {i}", id=f"m{seq}", seq=seq))
+        seq += 1
+        out.append(_msg("assistant", f"回答 {i}", id=f"m{seq}", seq=seq))
+        seq += 1
+    return out
+
+
+def test_fold_records_the_pruned_range_and_kept_tail():
+    """区间必须精确覆盖被裁的那段，`body_suffix` 必须等于保留条数。"""
+    messages = _conversation_with_seq(5)  # 1 system + 10 条
+    folds: list[dict[str, Any]] = []
+
+    # max_messages=3 ⇒ budget = 3-1 = 2 ⇒ 保留最后 2 条（seq 9、10）
+    _prune_messages(messages, CompactionConfig(max_messages=3), folds=folds)
+
+    assert len(folds) == 1, "一次裁剪只应产生一条折叠记录"
+    fold = folds[0]
+    assert fold["covered_from"] == 1
+    assert fold["covered_to"] == 9, "半开区间：覆盖 seq 1..8，上界是 9 而不是 8"
+    assert fold["body_suffix"] == 2, "body_suffix 是投影时原样拼接的尾部条数"
+
+
+def test_fold_digest_is_real_content_not_placeholder():
+    """摘要必须是**原文线索**，不能是 `[N message(s) folded]` 这种占位串。
+
+    占位串的危害是隐性的：字段看起来填过了，排查时却毫无信息量 ——
+    让人以为折叠记录已经可用，从而放弃去查真正的原文。
+    """
+    messages = _conversation_with_seq(5)
+    folds: list[dict[str, Any]] = []
+
+    _prune_messages(messages, CompactionConfig(max_messages=3), folds=folds)
+
+    digest = folds[0]["digest"]
+    assert digest, "digest 不能为空（该列 NOT NULL，且是排查入口）"
+    assert "message(s) folded" not in digest, "占位串不算摘要"
+    # 被折叠区间里的原话必须能在摘要里找到
+    assert "问题 0" in digest
+    assert "回答 3" in digest
+
+
+def test_fold_digest_marks_its_own_provenance():
+    """摘要来源要如实标注：提取式 ≠ 模型生成，读方据此判断可信度。"""
+    messages = _conversation_with_seq(5)
+    folds: list[dict[str, Any]] = []
+
+    _prune_messages(messages, CompactionConfig(max_messages=3), folds=folds)
+
+    assert folds[0]["digest_model"] == "extractive"
+
+
+def test_no_fold_when_seq_is_missing():
+    """缺 seq 就不记区间 —— 宁可没有记录，也不能记一个会误覆盖的区间。
+
+    Go 直传的消息、或 0016 之前写入的老消息都没有 seq。此时
+    `covered_seqs` 不完整，若仍按 min/max 记录，区间会把中间那些
+    本该保留的消息一并标成"已折叠"。
+    """
+    messages = [_msg("system", "sys"), _msg("user", "a"), _msg("assistant", "b")]
+    folds: list[dict[str, Any]] = []
+
+    _prune_messages(messages, CompactionConfig(max_messages=2), folds=folds)
+
+    assert folds == []

@@ -28,15 +28,19 @@ class _Row(dict):
 
 
 class _FakeConn:
-    def __init__(self, sink: list[tuple]) -> None:
+    def __init__(self, sink: list[tuple], insert_rowcount: int = 1) -> None:
         self.sink = sink
+        # `ON CONFLICT DO NOTHING` 命中时 asyncpg 返回 `INSERT 0 0`；fake 必须
+        # 回一个状态串，否则被测代码解析不出影响行数、会把每条都当冲突。
+        self.insert_rowcount = insert_rowcount
 
     def transaction(self) -> _FakeTx:
         # 事务开在**连接**上（`async with conn.transaction()`），不是池上。
         return _FakeTx()
 
-    async def execute(self, sql: str, *args: Any) -> None:
+    async def execute(self, sql: str, *args: Any) -> str:
         self.sink.append(args)
+        return f"INSERT 0 {self.insert_rowcount}"
 
     async def __aenter__(self):
         return self
@@ -56,10 +60,16 @@ class _FakeTx:
 class _FakePool:
     """只够 persist_messages 用：fetchrow（归属）、fetch（去重）、acquire（写）。"""
 
-    def __init__(self, owned: bool = True, existing_ids: list[str] | None = None) -> None:
+    def __init__(
+        self,
+        owned: bool = True,
+        existing_ids: list[str] | None = None,
+        insert_rowcount: int = 1,
+    ) -> None:
         self.owned = owned
         self.existing_ids = existing_ids or []
         self.inserted: list[tuple] = []
+        self.insert_rowcount = insert_rowcount
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
         return {"ok": 1} if self.owned else None
@@ -68,7 +78,7 @@ class _FakePool:
         return [{"tool_call_id": i} for i in self.existing_ids]
 
     def acquire(self) -> _FakeConn:
-        return _FakeConn(self.inserted)
+        return _FakeConn(self.inserted, insert_rowcount=self.insert_rowcount)
 
     def transaction(self) -> _FakeTx:
         return _FakeTx()
@@ -233,8 +243,8 @@ class TestToolCallIdRoundTrip:
         self, monkeypatch: pytest.MonkeyPatch
     ):
         rows = [
-            _Row({"role": "tool", "content": "b", "tool_calls": "", "turn_id": "", "tool_call_id": "c2"}),
-            _Row({"role": "user", "content": "a", "tool_calls": "", "turn_id": "t1", "tool_call_id": ""}),
+            _Row({"role": "tool", "content": "b", "tool_calls": "", "turn_id": "", "tool_call_id": "c2", "id": "m2", "seq": 2}),
+            _Row({"role": "user", "content": "a", "tool_calls": "", "turn_id": "t1", "tool_call_id": "", "id": "m1", "seq": 1}),
         ]
 
         class _LoadPool(_FakePool):
@@ -305,6 +315,8 @@ class TestStoredToolCallsNormalization:
                     "tool_calls": '["call_1"]',
                     "turn_id": "",
                     "tool_call_id": "",
+                    "id": "m1",
+                    "seq": 1,
                 }
             )
         ]
@@ -340,3 +352,266 @@ class TestRecallByMessageId:
     async def test_bad_tenant_returns_none(self, monkeypatch):
         _patch_pool(monkeypatch, _FakePool())
         assert await history_writer.load_message_content("s1", "t", "m1") is None
+
+    @pytest.mark.asyncio
+    async def test_reads_archive_when_blob_ref_present(self, monkeypatch):
+        """`blob_ref` 非空时原文在对象存储，content 只是截断体 —— 必须读回全文。
+
+        不读归档的话，>4MB 的消息取回来只有前 64k + 一句标记，
+        "原文可召回"这个承诺就是空的。
+        """
+        full = "原文" * 100
+
+        class _Pool(_FakePool):
+            async def fetchrow(self, sql, *args):
+                # 同一个 fetchrow 既做归属校验又读消息，必须按 SQL 区分，
+                # 否则 fake 会把归属校验也当成消息查询。
+                if "FROM sessions" in sql:
+                    return _Row({"ok": 1})
+                assert "message_archives" in sql, "必须 JOIN 归档表拿 storage_key"
+                return _Row({"content": "截断体", "storage_key": "archives/arc_x.txt"})
+
+        class _Store:
+            def read_at(self, key: str) -> bytes | None:
+                assert key == "archives/arc_x.txt"
+                return full.encode("utf-8")
+
+        _patch_pool(monkeypatch, _Pool())
+        monkeypatch.setattr("app.media.store.get_store", lambda: _Store(), raising=False)
+
+        got = await history_writer.load_message_content("s1", 1, "m1")
+
+        assert got is not None
+        chunk, total = got
+        assert chunk == full, "应从对象存储读回全文，而不是返回截断体"
+        assert total == len(full)
+
+    @pytest.mark.asyncio
+    async def test_archive_read_failure_falls_back_to_stored_content(self, monkeypatch):
+        """对象丢了不能返回空：退回 content（前 64k + 标记）总比什么都取不回好。"""
+        class _Pool(_FakePool):
+            async def fetchrow(self, sql, *args):
+                return _Row({"content": "前64k[archived]", "storage_key": "archives/arc_x.txt"})
+
+        class _BrokenStore:
+            def read_at(self, key: str) -> bytes | None:
+                raise OSError("object gone")
+
+        _patch_pool(monkeypatch, _Pool())
+        monkeypatch.setattr("app.media.store.get_store", lambda: _BrokenStore(), raising=False)
+
+        got = await history_writer.load_message_content("s1", 1, "m1")
+
+        assert got is not None
+        assert got[0] == "前64k[archived]", "归档读失败应退回库里的截断体"
+
+    @pytest.mark.asyncio
+    async def test_no_blob_ref_does_not_touch_object_store(self, monkeypatch):
+        """普通消息不该白白触发一次对象存储往返。"""
+        class _Pool(_FakePool):
+            async def fetchrow(self, sql, *args):
+                return _Row({"content": "短正文", "storage_key": None})
+
+        class _Store:
+            def read_at(self, key: str) -> bytes | None:
+                raise AssertionError("没有 blob_ref 时不该读对象存储")
+
+        _patch_pool(monkeypatch, _Pool())
+        monkeypatch.setattr("app.media.store.get_store", lambda: _Store(), raising=False)
+
+        got = await history_writer.load_message_content("s1", 1, "m1")
+
+        assert got == ("短正文", 3)
+
+
+class TestTieredArchiving:
+    """分级归档（§2.3）：≤4MB 原样入库，>4MB 外置。
+
+    这一组守的是"原文不会永久丢失"：第 10 步之前 256k 字符以上一律截断，
+    而设计要求的 64KB~4MB 区间本该原样保留。
+    """
+
+    @pytest.mark.asyncio
+    async def test_content_below_threshold_is_stored_verbatim(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """256k 字符以上、4MB 以下的正文必须**原样**入库，不能被旧上限截断。"""
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+        big = "x" * 300_000  # 超出旧 MESSAGE_CONTENT_MAX_CHARS，但远小于 4MB
+
+        await history_writer.persist_messages("s1", 1, [{"role": "tool", "content": big}])
+
+        # 参数序：(session_id, role, content, tool_calls, tool_call_id, tid, blob_ref)
+        assert pool.inserted[0][2] == big, "300k 字符的正文被截断了，64KB~4MB 区间会永久丢失原文"
+        assert pool.inserted[0][6] is None, "未超阈值不该产生 blob_ref"
+
+    @pytest.mark.asyncio
+    async def test_content_above_threshold_is_archived(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """>4MB 正文写对象存储，content 只留前 64k + 标记，blob_ref 指向归档。"""
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+        written: dict[str, bytes] = {}
+
+        class _Store:
+            def write_at(self, key: str, content: bytes) -> None:
+                written[key] = content
+
+        monkeypatch.setattr("app.media.store.get_store", lambda: _Store(), raising=False)
+
+        big = "y" * (history_writer.ARCHIVE_THRESHOLD_BYTES + 1)
+
+        await history_writer.persist_messages("s1", 1, [{"role": "tool", "content": big}])
+
+        # 归档行（5 参）先于消息行（7 参）写入 —— 先落对象再写行，避免库里留下
+        # 指向不存在对象的 blob_ref。所以按参数个数挑出 messages 那条。
+        rows = [r for r in pool.inserted if len(r) == 7]
+        assert len(rows) == 1, f"应只写一条 messages，实际 {len(pool.inserted)} 条语句"
+        row = rows[0]
+        # 参数序：(session_id, role, content, tool_calls, tool_call_id, tid, blob_ref)
+        assert row[6], "超阈值必须写 blob_ref"
+        assert row[6].startswith("arc_")
+        assert row[2].startswith("y" * 100), "content 应保留一段真原文供摘要使用"
+        assert len(row[2]) < len(big), "content 不该再存全文"
+        assert "ref=" in row[2], "content 里要带归档提示，否则模型不知道原文在哪"
+        assert written[f"archives/{row[6]}.txt"] == big.encode("utf-8"), "归档必须是全文"
+        # 归档元数据行也要落，否则 blob_ref 指向的归档无法被清理与校验
+        assert any(len(r) == 5 and r[0] == row[6] for r in pool.inserted), "缺少 message_archives 记录"
+
+    @pytest.mark.asyncio
+    async def test_archive_failure_falls_back_to_truncation(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """归档挂了不能连累消息写入：退回截断，宁可丢原文也不能丢整条历史。"""
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+
+        class _BrokenStore:
+            def write_at(self, key: str, content: bytes) -> None:
+                raise OSError("disk full")
+
+        monkeypatch.setattr("app.media.store.get_store", lambda: _BrokenStore(), raising=False)
+
+        big = "z" * (history_writer.ARCHIVE_THRESHOLD_BYTES + 1)
+
+        n = await history_writer.persist_messages("s1", 1, [{"role": "tool", "content": big}])
+
+        assert n == 1, "归档失败不该导致整条消息丢失"
+        # 参数序：(session_id, role, content, tool_calls, tool_call_id, tid, blob_ref)
+        assert pool.inserted[0][6] is None, "归档失败时不能留下指向不存在对象的 blob_ref"
+        assert "truncated" in pool.inserted[0][2]
+
+
+class TestPersistFolds:
+    """`session_folds` 的写入契约。
+
+    没有这一层，`folds` 收集器白算：区间算出来却没人落库，库里永远看不出
+    "这段原文被哪次折叠覆盖过"，跨副本重建投影也无从拼接尾部。
+    """
+
+    @pytest.mark.asyncio
+    async def test_writes_one_row_per_fold(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+
+        n = await history_writer.persist_folds(
+            "s1",
+            1,
+            [
+                {
+                    "covered_from": 3,
+                    "covered_to": 17,
+                    "covered_ids": ["m1", "m2"],
+                    "body_suffix": 42,
+                }
+            ],
+        )
+
+        assert n == 1
+        row = pool.inserted[0]
+        # 参数序：(id, session_id, covered_from, covered_to, digest,
+        #          digest_model, digest_prompt, body_suffix)
+        assert len(row) == 8
+        assert row[1] == "s1"
+        assert row[2] == 3 and row[3] == 17, "区间必须原样落库，半开区间错一位就会误覆盖"
+        assert row[7] == 42, "body_suffix 丢了，投影拼接就会错位"
+        assert row[0], "id 必须生成（无主键行写不进去）"
+
+    @pytest.mark.asyncio
+    async def test_conflict_does_not_count_as_write(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """`ON CONFLICT DO NOTHING` 命中时不得计入写入数。
+
+        这是规则二（`docs/context-projection-design.md` §3.3）的落地点：跨副本用
+        不同模型摘要同一区间时，先到者胜、后到者被静默丢弃。若仍无条件 `written += 1`，
+        调用方会以为摘要更新了，实际读到的还是旧那份 —— 冲突变成不可观测。
+        """
+        pool = _FakePool(insert_rowcount=0)
+        _patch_pool(monkeypatch, pool)
+
+        n = await history_writer.persist_folds(
+            "s1",
+            1,
+            [{"covered_from": 3, "covered_to": 17, "body_suffix": 42}],
+        )
+
+        assert n == 0, "冲突未写入却计入写入数，会让冲突彻底不可观测"
+        assert len(pool.inserted) == 1, "语句本身仍然执行了（由唯一索引裁决）"
+
+    @pytest.mark.asyncio
+    async def test_refuses_when_session_not_owned(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """跨租户不能往别人的会话里塞折叠记录。"""
+        pool = _FakePool(owned=False)
+        _patch_pool(monkeypatch, pool)
+
+        n = await history_writer.persist_folds(
+            "s1", 1, [{"covered_from": 1, "covered_to": 2, "body_suffix": 0}]
+        )
+
+        assert n == 0
+        assert pool.inserted == []
+
+    @pytest.mark.asyncio
+    async def test_empty_folds_is_noop(self, monkeypatch: pytest.MonkeyPatch, no_privacy):
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+
+        assert await history_writer.persist_folds("s1", 1, []) == 0
+        assert pool.inserted == []
+
+    @pytest.mark.asyncio
+    async def test_no_retention_skips_write(self, monkeypatch: pytest.MonkeyPatch):
+        """合规优先：no_retention 下任何历史痕迹都不落库。"""
+        monkeypatch.setattr(
+            "app.middleware.privacy_middleware.is_no_retention", lambda: True, raising=False
+        )
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+
+        n = await history_writer.persist_folds(
+            "s1", 1, [{"covered_from": 1, "covered_to": 2, "body_suffix": 0}]
+        )
+
+        assert n == 0
+        assert pool.inserted == []
+
+    @pytest.mark.asyncio
+    async def test_digest_falls_back_without_covered_ids(
+        self, monkeypatch: pytest.MonkeyPatch, no_privacy
+    ):
+        """摘要缺失时不能写空串：`digest` 是 NOT NULL 且有排查价值。"""
+        pool = _FakePool()
+        _patch_pool(monkeypatch, pool)
+
+        await history_writer.persist_folds(
+            "s1", 1, [{"covered_from": 5, "covered_to": 9, "body_suffix": 1}]
+        )
+
+        assert pool.inserted[0][4], "digest 不能为空"

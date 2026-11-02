@@ -203,9 +203,14 @@ async def persist_turn(session_id: str, tenant_id: str, messages: list[dict]) ->
 2 小时（`result_store.py:18`）—— 隔天就取不回。这才是第 3 步要补的东西：
 `read_archive` 按 `messages.id` 读持久表，与 TTL 无关（见 §2.5）。
 
-**已知未完成**：`read_archive` 需要 `messages.id`，而当前没有任何通知把 message id
-交给模型（压缩通知里给的是 `result_store` 的 `result_ref`）。要让该工具真正可用，
-还需在裁剪/折叠通知中携带 message id —— 这属于第 11 步（`session_folds`）一并做。
+**已补上（第 11 步）**：裁剪通知现在携带 `messages.id` —— 有 id 时指向
+`read_archive(ref=...)`，无 id（0016 之前的老会话、Go 直传消息）才回落到
+`result_ref`。`_serialize_for_recall` 的每条消息头也带上 `(ref=<id>)`，
+召回块里每段都能按需精确取回。
+
+⚠ **仍有一处前置依赖**：`id` 必须从 `load_messages` 一路带到压缩阶段。
+`_durable_history_msgs` 曾用 `_normalize_msg` 重建消息时把 `id` / `seq`
+一并剥掉，那会让 `read_archive` 与折叠区间**双双变成死代码**；现已修。
 
 ### 2.4 压缩改为投影
 
@@ -216,6 +221,21 @@ async def persist_turn(session_id: str, tenant_id: str, messages: list[dict]) ->
 3. 投影 = `[冻结体][活动摘要][原样尾部]`
 
 `messages` 一个字节都不动。
+
+**实施现状（与设计的偏离）**：
+
+- 步骤 1、2 **已落地**：`_prune_messages` 收集 `folds`（区间 + `body_suffix` +
+  `digest`），`history_writer.persist_folds` 写入 `session_folds`，常规压缩与
+  溢出恢复两条路径都已接线。
+- 步骤 2 的摘要目前是**提取式**（`_extractive_digest`：每条取首行拼要点），
+  `digest_model` 如实标为 `"extractive"`。原因：`_prune_messages` 是同步纯函数，
+  还被当作 `on_overflow` 同步回调传入，接不了 await。模型摘要需在 async 层另做，
+  届时 `digest_model` 会变成真实模型名，读方据此判断可信度。
+- 步骤 3 **未实现**：`body_suffix` 已落库但无人读取，跨副本重建仍走
+  「session_cache > PG 全量 > Go 8 条」既有路径。折叠记录目前只服务于排查与
+  后续接摘要，尚未参与上下文组装。
+  **读回路径的设计方案见 `docs/context-projection-design.md`**（含 7 个开源框架的
+  对照调研、投影插入位置的取舍、以及两条必须补的正确性校验）。
 
 ### 2.5 `read_archive` 工具
 

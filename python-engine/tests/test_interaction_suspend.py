@@ -516,6 +516,14 @@ class _RecordingStore:
     def __init__(self) -> None:
         self.appended: list[list[dict[str, Any]]] = []
 
+    async def get(self, session_id: str) -> list[dict[str, Any]] | None:
+        # 真实 `SessionStore.get`（`app/session_store.py:110`）存在且被
+        # `runtime.run()` 用于"缓存优先"判定。fake 缺这个方法会让用例走进
+        # `AttributeError` → 被 `except Exception` 记成 run failed，
+        # 于是断言看到 `['failed']` 而真正的用例逻辑根本没跑到。
+        # 返回 None = 缓存未命中，让用例走"无缓存"路径。
+        return None
+
     async def get_or_init(self, session_id: str, msgs: list[dict[str, Any]]) -> list[dict]:
         return list(msgs)
 

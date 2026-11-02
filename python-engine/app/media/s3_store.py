@@ -150,3 +150,30 @@ class S3Store(BaseStore):
     def list(self) -> list[Asset]:
         with self._lock:
             return list(self._assets.values())
+
+    def write_at(self, key: str, content: bytes) -> None:
+        # 归档与媒体资产共用桶但走独立前缀；`key` 由服务端拼（`archives/<ref>.txt`），
+        # 不接受客户端输入。这里额外归一 `..` —— 即便上游漏了校验，也不会写到前缀之外。
+        safe = key.replace("\\", "/").lstrip("/")
+        if ".." in safe.split("/"):
+            raise ValueError(f"key escapes storage prefix: {key!r}")
+        self._s3.put_object(
+            Bucket=self._bucket,
+            Key=f"{self._prefix}{safe}",
+            Body=content,
+            ContentType="text/plain; charset=utf-8",
+        )
+
+    def read_at(self, key: str) -> bytes | None:
+        from botocore.exceptions import ClientError
+
+        safe = key.replace("\\", "/").lstrip("/")
+        if ".." in safe.split("/"):
+            raise ValueError(f"key escapes storage prefix: {key!r}")
+        try:
+            resp = self._s3.get_object(Bucket=self._bucket, Key=f"{self._prefix}{safe}")
+        except ClientError as exc:
+            # 不存在与"没权限"对调用方是同一件事：都取不回，都不该把异常抛进对话链路。
+            logger.warning("s3 archive read failed (key=%s): %s", safe, exc)
+            return None
+        return resp["Body"].read()

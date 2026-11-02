@@ -42,6 +42,9 @@ from app.agent.compaction import (
     CompactionConfig as CompactionConfig,
 )
 from app.agent.compaction import (
+    _apply_folds as _apply_folds,
+)
+from app.agent.compaction import (
     _compact_messages as _compact_messages,
 )
 from app.agent.compaction import (
@@ -774,6 +777,7 @@ class AgentRuntime:
         window: int = 0,
         model: str = "",
         dropped: list[tuple[str, str]] | None = None,
+        folds: list[dict[str, Any]] | None = None,
     ) -> tuple[list[dict[str, Any]], AgentEvent | None]:
         """压缩上下文；**真的压缩了**才返回一个 compaction 事件（否则 None）。
 
@@ -799,7 +803,7 @@ class AgentRuntime:
         # 用户无从判断还差多少才到压缩线。
         tokens_before = _estimate_tokens(messages, comp_cfg.model)
         count_before = len(messages)
-        compacted = _compact_messages(messages, comp_cfg, dropped=dropped)
+        compacted = _compact_messages(messages, comp_cfg, dropped=dropped, folds=folds)
         tokens_after = _estimate_tokens(compacted, comp_cfg.model)
         if tokens_after >= tokens_before:
             return compacted, None
@@ -826,6 +830,7 @@ class AgentRuntime:
         window: int = 0,
         model: str = "",
         dropped: list[tuple[str, str]] | None = None,
+        folds: list[dict[str, Any]] | None = None,
     ) -> list[dict[str, Any]]:
         """溢出恢复用的**强制**压缩（C2 段 b）。
 
@@ -847,13 +852,14 @@ class AgentRuntime:
             strategy="auto",
             model=model,
         )
-        compacted = _compact_messages(messages, forced, dropped=dropped)
+        compacted = _compact_messages(messages, forced, dropped=dropped, folds=folds)
         if len(compacted) >= len(messages):
             # prune 没让出空间（消息数没超上限、或只剩 system）→ 直接砍消息数上限
             compacted = _prune_messages(
                 messages,
                 replace(forced, max_messages=max(2, forced.max_messages // 2)),
                 dropped=dropped,
+                folds=folds,
             )
         return compacted
 
@@ -1115,6 +1121,71 @@ class AgentRuntime:
             await result_store.store(session_id, ref, text)
         logger.info("compaction dropped content persisted: count=%d", len(dropped))
 
+    async def _persist_folds(self, folds: list[dict[str, Any]], task: AgentTask) -> None:
+        """把折叠区间记进 `session_folds`：库里要留下"这段被折叠过"的痕迹。
+
+        与 `_persist_dropped` 同因放在 async 层：压缩链是同步纯函数。
+        失败不影响本轮 —— 索引缺失只影响后续重建与排查，不该让对话失败。
+        """
+        if not folds:
+            return
+        try:
+            from app.agent import history_writer
+
+            await history_writer.persist_folds(
+                getattr(task, "session_id", "") or "",
+                getattr(task, "tenant_id", 0) or 0,
+                folds,
+            )
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("compaction folds persist failed: %s", exc)
+
+    async def _project_over_budget(
+        self, messages: list[dict[str, Any]], task: AgentTask, model: str
+    ) -> list[dict[str, Any]]:
+        """全量历史超预算时用 `session_folds` 投影替代；不超预算则原样返回。
+
+        **为什么只在超预算时替换**：投影是有损的。不超预算时全量既更准，也让
+        「清空缓存后重建结果不变」这条验收成立 —— 投影只是预算不足时的降级路径，
+        不是新的事实来源。摘要质量再高，也不该在放得下的时候顶替原文。
+
+        **任何环节失败都返回原 `messages`**：读不到 fold、区间校验不过、摘要为空，
+        统统回退全量。宁可超预算走既有的实时裁剪，也不发一份漏段的投影。
+        """
+        try:
+            if _estimate_tokens(messages, model=model) <= MAX_CONTEXT_TOKENS:
+                return messages
+
+            from app.agent import history_writer
+
+            folds = await history_writer.load_folds(
+                getattr(task, "session_id", "") or "",
+                getattr(task, "tenant_id", 0) or 0,
+            )
+            if not folds:
+                return messages
+
+            projected = _apply_folds(messages, folds, model=model)
+            if projected is None:
+                logger.info(
+                    "context projection rejected by validation (session=%s folds=%d)",
+                    getattr(task, "session_id", ""),
+                    len(folds),
+                )
+                return messages
+
+            logger.info(
+                "context projection applied (session=%s folds=%d %d→%d messages)",
+                getattr(task, "session_id", ""),
+                len(folds),
+                len(messages),
+                len(projected),
+            )
+            return projected
+        except Exception as exc:  # noqa: BLE001 — 投影是优化项，失败就用全量
+            logger.warning("context projection skipped: %s", exc)
+            return messages
+
     async def _load_resume_state(self, task: AgentTask) -> Any | None:
         """C1 批 3：尝试取续跑现场 —— **任何失败都回落现状**（恢复是增强路径，不阻断对话）。
 
@@ -1326,6 +1397,11 @@ class AgentRuntime:
         # ── 记忆会话上下文（用于 finally 中的 on_session_end）────────────
         memory_started = False
         memory_scope = None
+        # `finally` 会读它决定"要不要补写兜底历史"。必须在 try **之外**初始化：
+        # 一旦 1356~1717 之间抛异常（模型解析、媒体搬运、压缩都可能），
+        # finally 里读未赋值的局部变量会抛 UnboundLocalError —— 那个新异常
+        # 会**顶替**真正的原始异常，日志里只剩"变量没赋值"，根因被彻底掩盖。
+        _cache_saved = False
 
         # 批 G：生命周期 hook 门面 —— 延迟导入以避开 `runtime ↔ app.tools` 的循环
         # （`app.hooks.runner` 依赖 `app.tools.sandbox`，而 `app.tools` 又会回到 `app.agent`）。
@@ -1563,6 +1639,15 @@ class AgentRuntime:
                 elif not is_no_retention():
                     durable = await self._durable_history_msgs(task)
                     messages = durable or self._build_history_msgs(task)
+                    if durable:
+                        # 全量超预算时才用折叠投影替代（见 _project_over_budget）：
+                        # 投影是有损的，不超预算时全量既更准，也让
+                        # 「清空缓存后重建结果不变」这条验收成立。
+                        messages = await self._project_over_budget(
+                            messages,
+                            task,
+                            str((task.llm_config or {}).get("model", "") or ""),
+                        )
                 else:
                     messages = self._build_history_msgs(task)
                 # ── 自动推断消息格式并统一中立（SaaS：OpenAI/Anthropic/Gemini 来源均可消费） ──
@@ -1671,6 +1756,7 @@ class AgentRuntime:
                 # 协同 Agent 可经 llm_config["compaction"] 做逐任务覆盖。
                 # 真压缩了会带回事件 → 立刻让前端"看得见"（问题 4）。
                 compaction_dropped: list[tuple[str, str]] = []
+                compaction_folds: list[dict[str, Any]] = []
                 messages, compaction_notice = self._compact_with_notice(
                     messages,
                     mode_cfg,
@@ -1678,8 +1764,10 @@ class AgentRuntime:
                     window=context_window,
                     model=model,
                     dropped=compaction_dropped,
+                    folds=compaction_folds,
                 )
                 await self._persist_dropped(compaction_dropped, task)
+                await self._persist_folds(compaction_folds, task)
                 if compaction_notice is not None:
                     yield compaction_notice
 
@@ -1690,7 +1778,7 @@ class AgentRuntime:
             _last_reasoning = ""  # 保存最后轮次的思考内容，用于兜底输出
             _answered = False  # 是否已产生最终回答
             _cache_saved = False  # S 修复：缓存是否已保存（finally 兜底）
-            from app.agent.interrupt import clear_interrupt, is_interrupted
+            from app.agent.interrupt import is_interrupted
 
             # A4（论文 §5.1 P1）：续跑必须**恢复计数起点**。快照的 turn_index 是上一段 run
             # 已消耗的回合数（回合末按 turn+1 落盘）；从 0 重新计等于"每次崩溃白送一轮预算"。
@@ -1933,6 +2021,7 @@ class AgentRuntime:
                 # 强制压缩掉的内容也走同一条取回路径。收集器**在这里**创建、循环结束后统一
                 # 落盘 —— 因为 `on_overflow` 是同步回调，它自己不能 await Redis 写入。
                 overflow_dropped: list[tuple[str, str]] = []
+                overflow_folds: list[dict[str, Any]] = []
 
                 async for chunk in self._chat_stream_with_retry(
                     messages,
@@ -1955,6 +2044,7 @@ class AgentRuntime:
                         window=context_window,
                         model=model,
                         dropped=overflow_dropped,
+                        folds=overflow_folds,
                     ),
                     overflow_flags=overflow_flags,
                 ):
@@ -2058,6 +2148,7 @@ class AgentRuntime:
                         span_name="compaction",
                     )
                 await self._persist_dropped(overflow_dropped, task)
+                await self._persist_folds(overflow_folds, task)
 
                 # C3：**本次调用**的用量（增量）走独立事件 —— 与 `done` 的**整轮累计**分开，
                 # 消费方按 `type` 取值即可，不必只能等终态。
@@ -2719,7 +2810,12 @@ class AgentRuntime:
             # ── 真取消信号必须清掉（否则会误伤**下一次**会话）──
             # 放在 finally 的最前面：正常结束、异常、被取消退出，三条路径都要清。
             try:
-                await clear_interrupt(task.session_id)
+                # 局部导入：`clear_interrupt` 原本只在 try 内导入，一旦 try 早段就抛
+                # 异常（模型解析、加载历史都可能），finally 这里会抛 UnboundLocalError
+                # 并**顶替**掉原始异常 —— 日志里只剩"变量没赋值"，根因无从查起。
+                from app.agent.interrupt import clear_interrupt as _clear_interrupt
+
+                await _clear_interrupt(task.session_id)
             except Exception as e:  # noqa: BLE001 — 清信号失败不该影响退出路径
                 logger.warning("clear interrupt failed (non-blocking): %s", e)
 
@@ -2838,12 +2934,20 @@ class AgentRuntime:
         if task.system_prompt:
             messages.append(_normalize_msg(role="system", content=task.system_prompt))
         for msg in durable:
+            # `id` / `seq` 必须一起带过去：前者是 `read_archive` 的 ref，后者是
+            # `session_folds` 的区间坐标。在这里剥掉的话，压缩阶段既给不出可查的
+            # 定位符，也算不出折叠区间 —— 归档与折叠两条链会一起静默失效。
+            # 它们只在内部流转：`to_chat_messages` 只转发 role/content/tool_call_id/tool_calls。
+            extra = {
+                k: msg[k] for k in ("id", "seq") if msg.get(k) is not None
+            }
             messages.append(
                 _normalize_msg(
                     role=msg.get("role", "user"),
                     content=msg.get("content", ""),
                     tool_call_id=msg.get("tool_call_id", ""),
                     tool_calls=msg.get("tool_calls"),
+                    **extra,
                 )
             )
         return messages

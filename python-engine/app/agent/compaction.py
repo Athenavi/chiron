@@ -119,9 +119,14 @@ def _serialize_for_recall(message: dict[str, Any]) -> str:
 
     **必须保留角色与工具身份**：只存 content 的话，读回来就分不清哪句是用户说的、
     哪句是模型说的、哪个是工具输出 —— 而召回的全部价值就在于"当初是谁说了什么"。
+
+    有 `id` 时带上 `ref=`：它是 `messages.id`，也是 `read_archive` 的入参。没有这一行，
+    召回块就是一段无出处的文本，模型只能整段重读，无法按需精确取回某一条。
     """
     role = str(message.get("role") or "unknown")
     header = f"## {role}"
+    if message.get("id"):
+        header += f" (ref={message['id']})"
     if message.get("tool_call_id"):
         header += f" (tool_call_id={message['tool_call_id']})"
     if message.get("tool_calls"):
@@ -219,11 +224,39 @@ def _snip_tool_results(
     return result
 
 
+def _extractive_digest(messages: list[dict[str, Any]], max_chars: int = 1200) -> str:
+    """折叠区间的**提取式**摘要：每条消息取首行，拼成要点清单。
+
+    与 `app.context.branch_condense.extractive_summary` 同一思路（那一个是分支压缩
+    的降级路径），但这里**不 import 它**：本模块是叶节点，顶层只依赖标准库，跨模块
+    引用会把"压缩"和"分支压缩"两条链路绑在一起 —— 后者改签名会连累前者。
+
+    为什么必须是提取式而不是写个占位串：`session_folds.digest` 的价值在于"事后能看出
+    这段上下文在谈什么"。写 `[5 message(s) folded]` 等于只记录条数，排查时毫无信息量，
+    却让字段看起来已经填过，反而掩盖了缺口。
+
+    真正的模型摘要需要在 async 层做（本函数是同步纯函数，还被当作 `on_overflow`
+    同步回调传入，接不了 await）。届时 `digest_model` 会从 `"extractive"` 变成真实
+    模型名，读方据此判断摘要质量 —— 这正是该字段存在的意义。
+    """
+    parts: list[str] = []
+    for m in messages or []:
+        content = m.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        first_line = content.strip().splitlines()[0][:200]
+        parts.append(f"- [{m.get('role', 'user')}] {first_line}")
+    if not parts:
+        return ""
+    return "\n".join(parts)[:max_chars]
+
+
 def _prune_messages(
     messages: list[dict[str, Any]],
     cfg: CompactionConfig | None = None,
     *,
     dropped: list[tuple[str, str]] | None = None,
+    folds: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Prune 阶段：不区分消息类型，保留系统提示 + 最近非系统消息
 
@@ -259,6 +292,12 @@ def _prune_messages(
                     "role": "tool",
                     "tool_call_id": m["tool_call_id"],
                     "content": content,
+                    # `id` 必须跟着走：它是 `read_archive` 的 ref。在这里丢掉的话，
+                    # 下面生成裁剪通知时就只有内容没有定位符，原文取不回来。
+                    **({"id": m["id"]} if m.get("id") else {}),
+                    # `seq` 同理：折叠区间是 `session_folds` 的坐标，丢了就算不出
+                    # `[covered_from, covered_to)`。
+                    **({"seq": m["seq"]} if m.get("seq") is not None else {}),
                 }
             )
         else:
@@ -335,19 +374,70 @@ def _prune_messages(
         else:
             recall_ref = ""
 
+    # 被裁掉区间的 `messages.id` 列表：这是 `read_archive` 真正能查的 ref。
+    # 只给 `sn_xxx`（Redis `result_store`，2 小时 TTL）是不够的 —— 会话过夜再回来，
+    # 那个 ref 已经过期，模型拿着一条永远取不回的线索。
+    covered_ids = [str(m["id"]) for m in processed[:start] if m.get("id")]
+    # 折叠区间用 `messages.seq`（半开区间）。`processed` 里若有消息缺 seq
+    # （例如 Go 直接注入、未从 PG 读回），区间就是不可信的 —— 宁可整条不记，
+    # 也不要写一个会误覆盖别的消息的区间。
+    covered_seqs = [m["seq"] for m in processed[:start] if m.get("seq") is not None]
+    seq_range_ok = bool(covered_seqs) and len(covered_seqs) == start
+
     if dropped_count > 0:
         # 给**模型**留痕：被淘汰的消息不能无声消失。此前只有 `compaction` 事件告诉**前端**
         # "压缩了"，模型侧完全看不到自己少了多少上文 —— 它只会觉得自己记错了。
         # 用 user 角色而不是 system：`_apply_system_prefix` 会把所有 system 消息摘掉重排，
         # 放在 system 段里会被它吞掉。连续 user 消息是既有形态（`merge_user_message` 就处理这个）。
         note = f"[{dropped_count} earlier message(s) were pruned to fit the context window]"
-        if recall_ref:
+        if covered_ids:
+            # 持久 ref 优先：它没有 TTL，是真正的归档入口。
+            # 只列前若干个 —— 一次裁掉几十条时全列会把通知本身撑成一大段上下文。
+            sample = ", ".join(f'"{i}"' for i in covered_ids[:10])
+            more = (
+                f" (and {len(covered_ids) - 10} more)"
+                if len(covered_ids) > 10
+                else ""
+            )
+            note = (
+                f"{dropped_count} earlier message(s) were pruned to fit the context window. "
+                f"`read_archive(ref=..., offset=0, limit=8000)` returns their full text — "
+                f"use it instead of assuming they never happened. refs: {sample}{more}"
+            )
+        elif recall_ref:
+            # 无持久 id 时的回落：老会话（0016 之前写入）或 Go 传进来的消息没有 id。
             note = (
                 f"{dropped_count} earlier message(s) were pruned to fit the context window. "
                 f"`read_tool_result(result_ref=\"{recall_ref}\", offset=0, limit=8000)` returns "
                 f"their full text — use it instead of assuming they never happened."
             )
         result.insert(len(system_msgs), {"role": "user", "content": note})
+
+    # ── 折叠索引：把「哪段 seq 被折叠了」记下来 ──
+    #
+    # `messages` 一字节不动（压缩只影响本次请求的组装），但没有这行记录，
+    # 库里就无从判断"这段原文是被哪次摘要覆盖而离开上下文的"。跨副本重建
+    # 上下文时也依赖它才知道该拼多少条原样尾部（body_suffix）。
+    if folds is not None and dropped_count > 0 and seq_range_ok:
+        folds.append(
+            {
+                # 半开区间 [min, max+1)：seq 单调，所以首尾就够定界。
+                "covered_from": int(min(covered_seqs)),
+                "covered_to": int(max(covered_seqs)) + 1,
+                "covered_ids": covered_ids,
+                # 折叠发生**之后**仍在上下文里的尾部条数。投影 =
+                # [冻结体][活动摘要][原样尾部]，缺了它拼接就会错位。
+                "body_suffix": len(kept),
+                # 摘要 + 来源标注。**这里不调模型**：`_prune_messages` 是同步纯函数，
+                # 还被当作 `on_overflow` 同步回调传入，接不了 await。写入的是一条
+                # 占位摘要会误导后续读者，所以复用 `branch_condense` 里那条提取式
+                # 实现（纯函数、只依赖标准库），并由 `digest_model` 如实标注来源。
+                "digest": _extractive_digest(processed[:start]),
+                "digest_model": "extractive",
+                "digest_prompt": "prune",
+            }
+        )
+
     logger.info(
         "Prune: %d → %d messages (dropped %d old)",
         len(messages),
@@ -357,11 +447,93 @@ def _prune_messages(
     return result
 
 
+def _apply_folds(
+    messages: list[dict[str, Any]],
+    folds: list[dict[str, Any]],
+    *,
+    model: str = "",
+) -> list[dict[str, Any]] | None:
+    """把已折叠区间换成摘要，返回投影 `[冻结体(系统提示)][活动摘要][原样尾部]`。
+
+    **返回 `None` 表示「投影不可用，调用方应回退全量」**——宁可超预算走实时裁剪，
+    也不发一份漏了某段上下文却看起来完整的投影。
+
+    为什么校验按**位置**而不按算术：`messages.seq` 是整表
+    `GENERATED ALWAYS AS IDENTITY`，多会话并发写入会让同一个 session 内的 seq
+    **不连续**（被别的会话的行隔开）。所以 `max_seq - body_suffix == covered_to`
+    这类等式不成立，必须按排序后的位置关系校验。
+
+    校验三条，任一不成立即返回 None：
+    1. 每条非 system 消息都有 `seq` —— 没有坐标就无法定位折叠边界；
+    2. 相邻 fold 首尾相接（`from[i] == to[i-1]`）—— 断档意味着有消息既没被摘要
+       也没留在尾部，会凭空消失；
+    3. 尾部条数不少于最后一次折叠记录的 `body_suffix` —— 该字段是当时留下的
+       原样条数，少于它说明数据比记录时还少，投影不可信。
+    """
+    system_msgs = [m for m in messages if m.get("role") == "system"]
+    rest = [m for m in messages if m.get("role") != "system"]
+    if not rest or not folds:
+        return None
+
+    # 校验 1：坐标完备
+    if any(m.get("seq") is None for m in rest):
+        return None
+
+    ordered = sorted(rest, key=lambda m: int(m["seq"]))
+    ordered_folds = sorted(folds, key=lambda f: int(f["covered_from"]))
+
+    # 校验 2：首尾相接
+    for prev, cur in zip(ordered_folds, ordered_folds[1:], strict=False):
+        if int(cur["covered_from"]) != int(prev["covered_to"]):
+            return None
+
+    last_to = int(ordered_folds[-1]["covered_to"])
+    tail = [m for m in ordered if int(m["seq"]) >= last_to]
+
+    # 校验 3：尾部不少于记录时的条数
+    if len(tail) < int(ordered_folds[-1].get("body_suffix") or 0):
+        return None
+
+    # 折叠边界之前的消息必须**全部**落在某个 fold 区间内。
+    # 否则那段消息既没进摘要、也没进尾部 —— 投影看起来完整实则丢内容。
+    # （先前这里写的是 `len(ordered) - len(tail)`，那是恒等式，等于没校验。）
+    def _covered_by_fold(seq: int) -> bool:
+        return any(int(f["covered_from"]) <= seq < int(f["covered_to"]) for f in ordered_folds)
+
+    if any(not _covered_by_fold(int(m["seq"])) for m in ordered if int(m["seq"]) < last_to):
+        return None
+
+    digests = [f["digest"] for f in ordered_folds if f.get("digest")]
+    if not digests:
+        return None
+
+    # 摘要用 user 角色：`_apply_system_prefix` 会把 system 段摘掉重排，
+    # 放在 system 里会被它吞掉（与裁剪通知同一个理由）。
+    summary: dict[str, Any] = {
+        "role": "user",
+        "content": (
+            "[以下是本会话更早上下文的摘要。需要原文时用 "
+            "read_archive(ref=..., offset=0, limit=8000) 按 id 取回]\n\n"
+            + "\n\n".join(digests)
+        ),
+    }
+
+    projected = system_msgs + [summary] + tail
+
+    # 投影必须真的更省，否则用全量（避免摘要质量差时反而变长）
+    if model and _estimate_tokens(projected, model=model) >= _estimate_tokens(
+        messages, model=model
+    ):
+        return None
+    return projected
+
+
 def _compact_messages(
     messages: list[dict[str, Any]],
     cfg: CompactionConfig | None = None,
     *,
     dropped: list[tuple[str, str]] | None = None,
+    folds: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """分级压缩：根据配置的策略、上下文压力和消息数量选择压缩方式
 
@@ -383,11 +555,11 @@ def _compact_messages(
     if cfg.strategy == "snipe":
         return _snip_tool_results(messages, cfg, dropped=dropped)
     if cfg.strategy == "prune":
-        return _prune_messages(messages, cfg, dropped=dropped)
+        return _prune_messages(messages, cfg, dropped=dropped, folds=folds)
 
     # auto：硬上限（无论 token 使用率多少，消息数不能超过 cfg.max_messages）
     if len(messages) > cfg.max_messages:
-        return _prune_messages(messages, cfg, dropped=dropped)
+        return _prune_messages(messages, cfg, dropped=dropped, folds=folds)
 
     # Token-based 压缩
     tokens = _estimate_tokens(messages, cfg.model)
@@ -400,7 +572,7 @@ def _compact_messages(
             tokens,
             cfg.max_context_tokens,
         )
-        return _prune_messages(messages, cfg, dropped=dropped)
+        return _prune_messages(messages, cfg, dropped=dropped, folds=folds)
     elif ratio >= cfg.snipe_ratio:
         logger.info(
             "Compact SNIP at %.0f%% (%d/%d tokens)",
