@@ -36,6 +36,8 @@ const props = defineProps<{
   focusToken?: number          // 递增触发跳转
   hasMore?: boolean            // P 性能：是否还有更早的消息
   loadingEarlier?: boolean     // P 性能：正在加载更早消息
+  /** 上一次拉取更早消息失败（可重试）。与"没有更多"是两回事，不能都静默。 */
+  earlierLoadFailed?: boolean
   /** P2-E: 首次加载会话历史时的骨架屏 */
   initialLoading?: boolean
   /** 行尺寸测量（默认 offsetHeight）。注入点让窗口化逻辑可在无布局环境下被测试。 */
@@ -456,7 +458,9 @@ function onScroll() {
   } else {
     showBackToBottom.value = true
   }
-  if (props.hasMore && !props.loadingEarlier && el.scrollTop <= TOP_LOAD_THRESHOLD) {
+  // 失败后不自动重试：hasMore 保持 true 是为了让"点击重试"可用，但触顶自动重发
+  // 会在网络持续不可用时空转（每次滚动都打一次请求）。重试必须由人明确触发。
+  if (props.hasMore && !props.loadingEarlier && !props.earlierLoadFailed && el.scrollTop <= TOP_LOAD_THRESHOLD) {
     emit('load-earlier')
   }
   syncActiveQuestion()
@@ -581,7 +585,8 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       class="list-empty-placeholder"
     />
 
-    <!-- P 性能：触顶加载更早（infinite scroll） -->
+    <!-- P 性能：触顶加载更早（infinite scroll）。
+         失败与"没有更多"必须可区分：前者给一个可点的重试，后者整块消失。 -->
     <div
       v-if="props.hasMore || props.loadingEarlier"
       class="earlier-loader"
@@ -589,6 +594,14 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
       <template v-if="props.loadingEarlier">
         <span class="loading-dots"><span /><span /><span /></span>
       </template>
+      <button
+        v-else-if="props.earlierLoadFailed"
+        type="button"
+        class="earlier-retry"
+        @click="emit('load-earlier')"
+      >
+        {{ $t('chat.load_earlier_failed_retry') }}
+      </button>
       <span v-else>{{ $t('chat.load_earlier_messages') }}</span>
     </div>
 
@@ -749,6 +762,8 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 }
 @media (max-width: 576px) { .skeleton-list { padding: 10px 12px; } }
 .earlier-loader { display: flex; align-items: center; justify-content: center; gap: 6px; height: 36px; font-size: 12px; color: var(--text-tertiary); }
+.earlier-retry { border: 0; background: none; padding: 0; font: inherit; color: var(--primary-color, inherit); cursor: pointer; }
+.earlier-retry:hover { text-decoration: underline; }
 /* 消息容器：正常文档流，不遮挡 */
 .message-container { width: 100%; }
 /* 行容器：仅承载锚点身份，不引入布局变化（无 margin/padding） */

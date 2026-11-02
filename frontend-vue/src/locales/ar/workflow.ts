@@ -2,7 +2,6 @@
 export default {
   task: "## مهمة",
   dag_orchestration: "تنسيق DAG",
-  ptc_multi_step_operations_written_as_one_script_run_at_once_run_code_fewer_round_trips_saves_tokens: "PTC: عمليات متعددة الخطوات تُكتب كبرنامج واحد يُنفَّذ دفعة واحدة (run_code) — رحلات أقل، توفير للرموز",
   quick_command_unified_task_natural_language_execute: "quick command مهمة موحدة لغة طبيعية تنفيذ",
   nodes_nodes_edges_edges: "{nodes} عقدة {edges} اتصال",
   n_workflows: "{n} سير عمل",

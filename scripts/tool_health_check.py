@@ -47,7 +47,6 @@ sys.path.insert(0, str(REPO_ROOT / "python-engine"))
 # 安全分级：明确哪些**不能**随便调
 READONLY = {
     "read_file",
-    "mode_list",
     "skill_list",
     "kb_list",
     "graph_templates",
@@ -76,7 +75,6 @@ DESTRUCTIVE = {
     "media_create",
     "skill_install",
     "skill_generate",
-    "mode_edit",
     "job_kill",
     "forget_all",
 }
@@ -272,8 +270,6 @@ def main() -> int:
     for label, const in [
         ("CORE", modes.CORE_TOOL_NAMES),
         ("MINIMAL", modes.MINIMAL_TOOL_NAMES),
-        ("PTC_EXTRA", modes.PTC_EXTRA_TOOLS),
-        ("CREATIVE_EXTRA", modes.CREATIVE_EXTRA_TOOLS),
     ]:
         miss = sorted(set(const) - reg)
         print(f"  {label:15} {len(const):3} 个  " + ("OK" if not miss else f"缺失 {miss}"))

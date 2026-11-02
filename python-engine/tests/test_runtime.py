@@ -272,7 +272,6 @@ class TestRuntimeModes:
     @staticmethod
     def _registered_names() -> set[str]:
         import app.tools.core  # noqa: F401 — 注册真实核心工具
-        import app.tools.mode_admin  # noqa: F401 — 注册创作工具（创造模式）
         import app.tools.run_code  # noqa: F401 — 注册 run_code
         from app.tools.registry import registry
         return set(registry.list_names())
@@ -315,17 +314,22 @@ class TestRuntimeModes:
         assert system_msgs[0].content == "You are a helpful software engineer assistant."
 
     @pytest.mark.asyncio
-    async def test_ptc_mode_exposes_run_code(self):
-        calls, events = await self._run_and_capture("ptc")
-        names = {t["function"]["name"] for t in calls[0]["tools"]}
-        assert "run_code" in names
-        assert "read_file" in names
+    async def test_legacy_ptc_and_creative_modes_fall_back_to_normal(self):
+        """PTC / creative 已移除：旧客户端传来的这两个值必须落回常规模式的面。
 
-    @pytest.mark.asyncio
-    async def test_creative_mode_exposes_authoring_tools(self):
-        calls, events = await self._run_and_capture("creative")
-        names = {t["function"]["name"] for t in calls[0]["tools"]}
-        assert "mode_list" in names and "mode_edit" in names
+        run_code 本身仍在注册表里（可由 tool_search 按需激活），只是不再有任何模式
+        默认附带它 —— 这里断言的是"模式默认面"，不是"工具不存在"。
+        """
+        normal_names = {
+            t["function"]["name"] for t in (await self._run_and_capture("normal"))[0][0]["tools"]
+        }
+        for legacy in ("ptc", "creative"):
+            calls, events = await self._run_and_capture(legacy)
+            names = {t["function"]["name"] for t in calls[0]["tools"]}
+            assert names == normal_names, f"{legacy} 未回退到常规模式的默认工具面"
+            assert "run_code" not in names
+            assert "mode_list" not in names and "mode_edit" not in names
+            assert events[-1].type == "done"
 
     @pytest.mark.asyncio
     async def test_unknown_mode_falls_back_to_normal(self):

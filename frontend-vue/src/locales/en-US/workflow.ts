@@ -2,7 +2,6 @@
 export default {
   task: "## Task",
   dag_orchestration: "DAG orchestration",
-  ptc_multi_step_operations_written_as_one_script_run_at_once_run_code_fewer_round_trips_saves_tokens: "PTC: multi-step operations written as one script run at once (run_code) — fewer round-trips, saves tokens",
   quick_command_unified_task_natural_language_execute: "quick command unified task natural language execute",
   nodes_nodes_edges_edges: "{nodes} nodes {edges} edges",
   n_workflows: "{n} workflows",

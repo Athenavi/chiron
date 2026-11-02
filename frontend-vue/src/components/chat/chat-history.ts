@@ -334,6 +334,10 @@ export function mergeHistory(
         id: `${tc.id}:res`,
         content: tc.output,
         isError: !!tc.is_error,
+        // 透传"这只是预览"的信号：列表接口只返回前段正文，不传下去界面
+        // 会把截短的 4096 字符当成工具的真实全部输出。
+        outputBytes: tc.output_bytes,
+        outputTruncated: tc.output_truncated,
         turnId,
       })
     }

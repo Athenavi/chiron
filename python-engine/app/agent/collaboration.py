@@ -50,7 +50,7 @@ class AgentSpec:
     system_prompt: str
     max_turns: int = 10
     model: str = "gpt-4o-mini"
-    mode: str = "normal"  # 运行模式（normal/minimal/ptc/creative），见 app.agent.modes
+    mode: str = "normal"  # 运行模式（normal/minimal），见 app.agent.modes
     compaction_config: CompactionConfig | None = None  # 逐 agent 截断策略覆盖
 
 

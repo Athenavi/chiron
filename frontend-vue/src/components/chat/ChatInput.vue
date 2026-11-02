@@ -114,7 +114,7 @@ function onModelChange(v: unknown) {
 
 // ── 工具授权（ask/auto/yolo） ──
 //
-// 与「对话模式」(normal/minimal/ptc/creative) 是两个维度：本项控制的是**工具执行是否需要
+// 与「对话模式」(normal/minimal) 是两个维度：本项控制的是**工具执行是否需要
 // 用户确认**。参照 reasonix 的 ComposerChoice —— 说明文字**随选项走**（option.description），
 // 而不是在控件旁外挂一行提示；所以这里把每一档的语义做成该选项的**悬浮 pop 词**。
 const TOOLS_MODE_META = [

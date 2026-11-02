@@ -282,7 +282,14 @@ func (c *AuditConsumer) claimOnce(ctx context.Context, consumerID string) {
 		Count:  auditClaimBatchSize,
 		Idle:   auditClaimIdle,
 	}).Result()
-	if err != nil || len(pend) == 0 {
+	if err != nil {
+		// 静默 return 会让"认领链路断了"完全不可观测：PEL 里堆积的待恢复消息
+		// 与"这一轮确实没有待认领消息"在外部看起来一模一样，而前者的后果是
+		// 审计记录永久停在 pending。退避由 claimLoop 的固定周期承担，这里只负责可见。
+		slog.Warn("审计认领：读取 PEL 失败，本轮跳过", "error", err, "consumer", consumerID)
+		return
+	}
+	if len(pend) == 0 {
 		return
 	}
 
@@ -310,6 +317,11 @@ func (c *AuditConsumer) claimOnce(ctx context.Context, consumerID string) {
 		Messages: ids,
 	}).Result()
 	if err != nil {
+		// 认领失败比读取失败更严重：这些消息**本该**被接手却仍留在原 consumer
+		// 的 PEL 里，重投不会发生。必须留痕，否则崩溃恢复形同虚设而无任何信号。
+		// 未 ACK 的消息下一轮会被再次扫到，因此这里不需要回滚。
+		slog.Warn("审计认领：XClaim 失败，消息仍留在 PEL 待下轮重试",
+			"error", err, "consumer", consumerID, "count", len(ids))
 		return
 	}
 	for _, msg := range claimed {

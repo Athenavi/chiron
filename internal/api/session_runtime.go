@@ -48,8 +48,12 @@ const (
 	fallbackModel     = "deepseek-chat"
 )
 
-// 与引擎 app/agent/modes.py 的 _BASE_MODES 对齐
-var validAgentModes = map[string]bool{"normal": true, "minimal": true, "ptc": true, "creative": true}
+// 与引擎 app/agent/modes.py 的 _BASE_MODES 对齐。
+//
+// PTC / creative 已移除。注意：解析链**不做白名单校验**（`pick` 直接采用 explicit
+// 值），旧客户端传来的这两个值会原样透传给引擎，由 `get_mode_config` 静默回退到
+// normal —— 这是刻意的：在 Go 侧拦下来只会把"降级"变成"请求失败"。
+var validAgentModes = map[string]bool{"normal": true, "minimal": true}
 
 // SessionRuntimeHandler 提供运行时状态的读写与会话遥测聚合。
 type SessionRuntimeHandler struct {

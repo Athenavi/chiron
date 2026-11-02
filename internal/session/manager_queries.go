@@ -33,25 +33,36 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	// 多取 1 条用于判断是否还有更早的数据
 	// source 用 jsonb 取键读取：该列由权威迁移建立（migrations/versions/0001_authoritative_baseline.py），
 	// 而"列不存在"会让整个历史查询失败 —— 一个展示用字段不值得拿对话历史去赌。
+	//
+	// seq（迁移 0016）**直接引用**，不走 jsonb：它是排序键，一旦包成表达式
+	// `(to_jsonb(messages)->>'seq')::bigint`，外层的 ORDER BY 就用不上
+	// ix_messages_session_seq，长会话分页会退化成全表排序 —— 比它要兼容的
+	// 问题（迁移没跑）更糟。迁移与代码同批发布且迁移先执行（见
+	// deploy/k8s/migrate-job.yaml），列一定先于本代码存在。
 	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
-		          COALESCE(to_jsonb(messages)->>'source', ''), created_at
+		          COALESCE(to_jsonb(messages)->>'source', ''), created_at, seq
 		   FROM messages
 		   WHERE session_id = $1`
 	args := []interface{}{sessionID}
 
 	if before != "" {
-		// 游标格式 created_at|id（复合游标，同 created_at 也稳定分页）
+		// 游标格式 seq|id：seq 单调且无时区歧义，同毫秒并发下依然稳定。
+		// 兼容旧游标（RFC3339Nano|id）：解析失败说明是升级前写入的游标，退回时间比较。
 		parts := strings.SplitN(before, "|", 2)
 		if len(parts) == 2 {
-			t, err := time.Parse(time.RFC3339Nano, parts[0])
-			if err == nil {
+			if seq, err := strconv.ParseInt(parts[0], 10, 64); err == nil {
+				query += ` AND seq < $2`
+				args = append(args, seq)
+			} else if t, err := time.Parse(time.RFC3339Nano, parts[0]); err == nil {
 				query += ` AND (created_at < $2 OR (created_at = $2 AND id < $3))`
 				args = append(args, t, parts[1])
 			}
 		}
 	}
 
-	query += ` ORDER BY created_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1)
+	// seq 做主序：与 (session_id, seq) 唯一索引同向，可保序扫描并提前终止。
+	// created_at/id 作为二级排序只为让升级前后结果都确定，正常路径不会用到。
+	query += ` ORDER BY seq DESC, created_at DESC, id DESC LIMIT $` + strconv.Itoa(len(args)+1)
 	args = append(args, limit+1)
 
 	rows, err := m.pool.Query(ctx, query, args...)
@@ -61,13 +72,16 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	defer rows.Close()
 
 	var msgs []model.Message
+	var seqs []int64
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt); err != nil {
+		var seq int64
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt, &seq); err != nil {
 			slog.Warn("scan message row", "error", err)
 			continue
 		}
 		msgs = append(msgs, msg)
+		seqs = append(seqs, seq)
 	}
 	if err := rows.Err(); err != nil {
 		return page, fmt.Errorf("iterate messages page: %w", err)
@@ -76,15 +90,16 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	if len(msgs) > limit {
 		page.HasMore = true
 		msgs = msgs[:limit]
+		seqs = seqs[:limit]
 	}
 	// 倒序翻转为正序（最早优先）
 	for i, j := 0, len(msgs)-1; i < j; i, j = i+1, j-1 {
 		msgs[i], msgs[j] = msgs[j], msgs[i]
+		seqs[i], seqs[j] = seqs[j], seqs[i]
 	}
 	page.Messages = msgs
 	if len(msgs) > 0 {
-		first := msgs[0]
-		page.Cursor = first.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + first.ID
+		page.Cursor = strconv.FormatInt(seqs[0], 10) + "|" + msgs[0].ID
 	}
 	return page, nil
 }

@@ -66,7 +66,7 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"kb_list", "kb_search", "knowledge",
 		"memory_search", "recall",
 		"skill_list", "skill_discover", "skill_run",
-		"mode_list", "graph_templates",
+		"graph_templates",
 		"read_subagent_result", "read_tool_result", "list_subagent_runs", "job_output", "stderr_drain",
 		"requirement_validate", "task_decompose", "tech_design", "prd_generate",
 		"vision_analyze", "speech_to_text", "video_analyze",
@@ -76,7 +76,7 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"write_file", "edit_file",
 		"git_commit", "git_branch",
 		"graph_create",
-		"remember", "mode_edit", "media_create",
+		"remember", "media_create",
 		"image_generate", "text_to_speech", "skill_generate",
 		// 委派类：内部会执行任意工具（子 Agent 有自己的栅栏），父层至少要确认一次
 		"subagent", "workflow_run", "graph_run",

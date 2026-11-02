@@ -74,6 +74,12 @@ type ToolCall struct {
 	IsError   bool      `json:"is_error"`
 	Duration  int64     `json:"duration_ms"`
 	CreatedAt time.Time `json:"created_at"`
+
+	// OutputBytes 是库中 output 的完整字节数；列表接口只返回前若干字符，
+	// 这个字段说明"原文到底多大"。0 表示未记录（旧行）。
+	OutputBytes int `json:"output_bytes,omitempty"`
+	// OutputTruncated 表示 Output 只是预览，完整内容需按需分段读取。
+	OutputTruncated bool `json:"output_truncated,omitempty"`
 }
 
 type Task struct {

@@ -27,12 +27,18 @@ logger = logging.getLogger(__name__)
 WINDOW_CACHE_TTL_SECONDS = 300
 #: 查不到窗口时的回落值（与 `runtime.MAX_CONTEXT_TOKENS` 同值，保持历史行为）
 DEFAULT_CONTEXT_WINDOW = 8192
+#: 查不到输出上限时的回落值（与 `settings.default_max_tokens` 同值，保持历史行为）
+DEFAULT_MAX_OUTPUT_TOKENS = 4096
+#: 输出上限的下限。管理端填 1 会让模型一个字都说不完；低于此值按未知处理。
+MIN_MAX_OUTPUT_TOKENS = 256
 #: 触发压缩的窗口占比（与 deepagents 的 `fraction` 档对齐，便于横向调参）
 COMPACT_TRIGGER_RATIO = 0.85
 #: 压缩后保留的窗口占比
 COMPACT_KEEP_RATIO = 0.10
 
 _cache: dict[str, tuple[int, float]] = {}
+#: 输出上限的独立缓存。**不与 `_cache` 合并**：两者是不同的量，同 key 会互相覆盖。
+_max_output_cache: dict[str, tuple[int | None, float]] = {}
 
 
 async def context_window(model: str) -> int:
@@ -68,9 +74,44 @@ def remember_window(model: str, window: int) -> None:
         _cache[model] = (window, time.time())
 
 
+async def max_output_tokens(model: str, *, fallback: int = DEFAULT_MAX_OUTPUT_TOKENS) -> int:
+    """取该模型的最大输出 token 数（进程内缓存，缺失回落 `fallback`）。
+
+    **不从 `context_window` 推导**：两者是不同的量，同一窗口下差异可达 8 倍
+    （deepseek-chat 8192 vs deepseek-reasoner 65536，窗口同为 131072）。
+    这也是 LiteLLM / models.dev 把 `max_output_tokens` 与 `max_input_tokens`
+    并列维护的原因。
+
+    `fallback` 由调用方给（runtime 传 `settings.default_max_tokens`），缓存里只存
+    **数据库里的原值**（含 `None`）—— 否则换一个 fallback 的调用方会读到别人缓存的
+    回落值。
+
+    返回值的语义是"这个模型单次最多能吐多少"，调用方应把它当作**上限**用
+    （与请求方显式给的值取较小者），而不是直接当默认值 —— 用户显式要求短回复时
+    不该被顶到模型的极限。
+    """
+    if not model:
+        return fallback
+    now = time.time()
+    hit = _max_output_cache.get(model)
+    if hit is not None and now - hit[1] < WINDOW_CACHE_TTL_SECONDS:
+        return hit[0] if hit[0] is not None else fallback
+
+    value = await _query_max_output(model)
+    _max_output_cache[model] = (value, now)
+    return value if value is not None else fallback
+
+
+def remember_max_output(model: str, value: int) -> None:
+    """写入输出上限缓存（供测试与"已知上限"的场景直接注入）。"""
+    if model and value > 0:
+        _max_output_cache[model] = (value, time.time())
+
+
 def clear_cache() -> None:
     """清空缓存（测试用）。"""
     _cache.clear()
+    _max_output_cache.clear()
 
 
 async def _query_window(model: str) -> int:
@@ -101,6 +142,41 @@ async def _query_window(model: str) -> int:
     except Exception as exc:  # noqa: BLE001 — 查不到就用回落值
         logger.debug("context window lookup failed (%s): %s", model, exc)
     return DEFAULT_CONTEXT_WINDOW
+
+
+async def _query_max_output(model: str) -> int:
+    """查 `llm_models.max_output_tokens`。
+
+    NULL / <=0 / 低于 `MIN_MAX_OUTPUT_TOKENS` 一律按"未知"处理并回落默认值：
+    管理端误填 1 会让模型每一轮都说不出完整句子，静默回落比照单执行更安全
+    （它是调参输入，不是安全边界）。
+
+    任何异常同样回落 —— 与窗口查询同一取向：查库失败不该阻断对话。
+    `max_output_tokens` 列在旧库上可能不存在（迁移未跑），此时 asyncpg 抛
+    UndefinedColumnError，正好走这条兜底路径，不需要额外探测 schema。
+    """
+    try:
+        from app.db import get_pool
+
+        pool = get_pool()
+        if pool is None:
+            return DEFAULT_MAX_OUTPUT_TOKENS
+        row = await pool.fetchrow(
+            """
+            SELECT max_output_tokens
+              FROM llm_models
+             WHERE name = $1 AND enabled IS NOT FALSE
+             ORDER BY updated_at DESC NULLS LAST
+             LIMIT 1
+            """,
+            model,
+        )
+        value = row["max_output_tokens"] if row is not None else None
+        if value and int(value) >= MIN_MAX_OUTPUT_TOKENS:
+            return int(value)
+    except Exception as exc:  # noqa: BLE001 — 查不到就用回落值
+        logger.debug("max_output_tokens lookup failed (%s): %s", model, exc)
+    return DEFAULT_MAX_OUTPUT_TOKENS
 
 
 class TokenEstimator:

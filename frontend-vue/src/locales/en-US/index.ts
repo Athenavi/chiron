@@ -63,6 +63,7 @@ export default {
     n_days_ago: "{n} days ago",
     n_h_ago: "{n} h ago",
     n_lines: "{n} lines",
+    result_preview_only: "Preview only ({size} original)",
     n_items: "{n} items",
     resend_in_n_s: "Resend in {n}s",
     year_month_day_hh_mm: "{year}-{month}-{day} {hh}:{mm}",

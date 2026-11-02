@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"net/http"
 	"time"
+	"unicode/utf8"
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
@@ -116,6 +117,37 @@ func (h *ToolHandler) ExecuteTool(w http.ResponseWriter, r *http.Request) {
 	OK(w, pyResult)
 }
 
+// toolOutputMaxBytes 是单条工具结果入库的上限。
+//
+// 此前完全没有上限：一次 `read_file` 返回 10MB 就往 `tool_calls.output` 写 10MB。
+// 列表查询即便只取预览，库里的膨胀仍会拖慢备份、VACUUM 与全表统计。
+// 256KB 足够容纳绝大多数命令输出与文件片段；超出的部分由前端按需重跑或从
+// 工具自身的落盘引用取回，而不是让它永久占着一行。
+const toolOutputMaxBytes = 256 * 1024
+
+// truncateToolOutput 把 output 截到上限内，返回截断后的文本与**原始**字节数。
+//
+// 截断点必须回退到 UTF-8 字符边界：直接按字节切会把一个多字节字符劈成两半，
+// 整段文本在 psql / 前端渲染时变成 U+FFFD，比截断本身更难排查。
+func truncateToolOutput(s string, limit int) (string, int) {
+	original := len(s)
+	// limit <= 0 时不截断：负数会让 s[:cut] panic，而 panic 在 HTTP handler 里
+	// 被 recover 后这条工具记录的写入就整个丢了 —— 宁可留着超限内容。
+	if limit <= 0 || original <= limit {
+		return s, original
+	}
+	cut := limit
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	marker := fmt.Sprintf(
+		"\n\n[... output truncated: %d bytes total, showing first %d bytes. "+
+			"Re-run the tool with a narrower scope if you need the rest.]",
+		original, cut,
+	)
+	return s[:cut] + marker, original
+}
+
 func recordToolCall(r *http.Request, toolName string, input map[string]interface{}, sessionID string, output map[string]interface{}, execErr error, elapsed time.Duration) string {
 	inputJSON, err := json.Marshal(input)
 	if err != nil {
@@ -139,15 +171,23 @@ func recordToolCall(r *http.Request, toolName string, input map[string]interface
 		outputStr = execErr.Error()
 	}
 
+	// 截断统一放在最后：三条来源（output 字段 / 序列化整包 / 错误文本）都可能超限，
+	// 在各自分支里各截一次会漏掉后两条。
+	outputStr, outputBytes := truncateToolOutput(outputStr, toolOutputMaxBytes)
+	if outputBytes > toolOutputMaxBytes {
+		slog.Warn("tool output truncated before persist",
+			"tool", toolName, "bytes", outputBytes, "limit", toolOutputMaxBytes)
+	}
+
 	durationMs := elapsed.Milliseconds()
 
 	// Generate a unique ID
 	id := fmt.Sprintf("tc_%d", time.Now().UnixNano())
 
 	_, err = db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO tool_calls (id, session_id, tool_name, input, output, is_error, duration_ms, created_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, NOW())`,
-		id, nullableStr(sessionID), toolName, string(inputJSON), outputStr, execErr != nil, durationMs)
+		`INSERT INTO tool_calls (id, session_id, tool_name, input, output, output_bytes, is_error, duration_ms, created_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NOW())`,
+		id, nullableStr(sessionID), toolName, string(inputJSON), outputStr, outputBytes, execErr != nil, durationMs)
 	if err != nil {
 		slog.Warn("record tool call failed", "error", err)
 		return ""

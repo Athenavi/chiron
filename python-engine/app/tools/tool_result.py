@@ -57,16 +57,21 @@ async def read_tool_result(
 registry.register(
     name="read_tool_result",
     description=(
-        "Read back the full text of a previous tool result that was replaced by a structural "
-        "summary (such a summary carries a result_ref). Use this instead of re-running the same "
-        "tool to obtain the same content. Supports offset/limit paging."
+        "Read back text that was removed from your context, addressed by a result_ref: "
+        "either the full body of an oversized tool result that was replaced by a structural "
+        "summary, or the whole block of earlier turns that were pruned to fit the window. "
+        "Use this instead of re-running a tool or assuming pruned history never happened. "
+        "Supports offset/limit paging."
     ),
     parameters={
         "type": "object",
         "properties": {
             "result_ref": {
                 "type": "string",
-                "description": "result_ref printed in the summary trailer of an oversized result",
+                "description": (
+                    "result_ref shown in the summary trailer of an oversized result, or in the "
+                    "'N earlier message(s) were pruned' notice"
+                ),
             },
             "offset": {"type": "integer", "default": 0, "description": "Character offset to start from"},
             "limit": {"type": "integer", "default": DEFAULT_LIMIT, "description": "Max characters to return"},

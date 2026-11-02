@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -43,6 +45,14 @@ type Conversation struct {
 	ToolCalls     []ToolCall `json:"tool_calls,omitempty"` // S 修复：工具调用过程落库，刷新后还原
 	Cursor        string     `json:"cursor,omitempty"`     // P 性能修复：分页游标（加载更早消息）
 	HasMore       bool       `json:"has_more"`             // P 性能修复：是否还有更早的消息
+	// ToolCursor 是**工具调用自己**的分页游标：两张表的 created_at 分布不同，
+	// 共用消息游标会漏取夹在两条消息之间的工具调用。
+	ToolCursor string `json:"tool_cursor,omitempty"`
+	// ToolHasMore 表示工具调用一侧还有更早的记录。
+	ToolHasMore bool `json:"tool_has_more"`
+	// ToolCallsPartial 表示本次工具调用查询失败，返回的列表不完整。
+	// 与"确实没有工具调用"必须可区分，否则失败会伪装成空。
+	ToolCallsPartial bool `json:"tool_calls_partial,omitempty"`
 }
 
 // Message is a single chat message returned to the frontend.
@@ -64,6 +74,11 @@ type ToolCall struct {
 	Output    string    `json:"output"`
 	IsError   bool      `json:"is_error"`
 	CreatedAt time.Time `json:"created_at"`
+	// OutputBytes 是库中 output 的完整字节数；Output 只是前若干字符的预览。
+	// 这两个字段必须随列表返回：少了它，前端无法区分"结果本就这么小"与
+	// "这里只是预览"，会把被截断的结果当成全部内容。
+	OutputBytes     int  `json:"output_bytes,omitempty"`
+	OutputTruncated bool `json:"output_truncated,omitempty"`
 }
 
 // List returns sessions for the current user.
@@ -157,6 +172,10 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	before := r.URL.Query().Get("before")
+	// tool_before 独立于 before：两张表的 created_at 分布不同，用消息游标去筛
+	// 工具调用会漏取本页该显示的工具调用（漏的正是夹在两条消息之间的那些）。
+	// 缺省为空 = 取最新一页，这对首次打开与旧客户端都安全。
+	toolBefore := r.URL.Query().Get("tool_before")
 
 	// P 性能：messages 与 tool_calls 两个查询并行（pgxpool 并发安全）
 	// 使用 select 确保 context 取消时不泄漏 goroutine
@@ -175,7 +194,15 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 		p, e := h.sessionMgr.GetMessagesPage(r.Context(), id, limit, before)
 		pageCh <- pageResult{p, e}
 	}()
-	toolCalls, _ := h.sessionMgr.GetToolCallsPage(r.Context(), id, limit, before)
+	tcPage, tcErr := h.sessionMgr.GetToolCallsPage(r.Context(), id, limit, toolBefore)
+	// 工具调用查询失败过去被 `_` 丢掉：界面上卡片凭空消失，日志里什么都没有，
+	// 用户报"我的工具记录没了"时无从排查。失败不阻断会话（消息才是主体），
+	// 但必须留痕并告诉前端"这部分不完整"。
+	toolCallsPartial := false
+	if tcErr != nil {
+		toolCallsPartial = true
+		slog.Warn("tool calls page failed", "session", id, "error", tcErr)
+	}
 
 	// Wait for messages or context cancellation
 	var pr pageResult
@@ -193,18 +220,21 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	conv := Conversation{
-		ID:              sess.ID,
-		Title:           sess.Title,
-		Pinned:          sess.Pinned,
-		Tag:             sess.Tag,
-		Alias:           sess.Alias,
-		ParentSessionID: sess.ParentSessionID,
-		BranchFromSeq:   sess.BranchFromSeq,
-		CreatedAt:       sess.CreatedAt,
-		UpdatedAt:       sess.UpdatedAt,
-		Messages:        make([]Message, 0),
-		Cursor:          page.Cursor,
-		HasMore:         page.HasMore,
+		ID:               sess.ID,
+		Title:            sess.Title,
+		Pinned:           sess.Pinned,
+		Tag:              sess.Tag,
+		Alias:            sess.Alias,
+		ParentSessionID:  sess.ParentSessionID,
+		BranchFromSeq:    sess.BranchFromSeq,
+		CreatedAt:        sess.CreatedAt,
+		UpdatedAt:        sess.UpdatedAt,
+		Messages:         make([]Message, 0),
+		Cursor:           page.Cursor,
+		HasMore:          page.HasMore,
+		ToolCursor:       tcPage.Cursor,
+		ToolHasMore:      tcPage.HasMore,
+		ToolCallsPartial: toolCallsPartial,
 	}
 	// 分支会话带上父会话展示名（单条查询；父会话已删则留空）
 	if conv.ParentSessionID != "" {
@@ -221,20 +251,68 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 	// S 修复：工具调用过程落库 — 随会话详情返回，前端刷新后还原工具卡片
-	for _, tc := range toolCalls {
+	for _, tc := range tcPage.ToolCalls {
 		conv.ToolCalls = append(conv.ToolCalls, ToolCall{
-			ID:        tc.ID,
-			ToolName:  tc.ToolName,
-			Input:     tc.Input,
-			Output:    tc.Output,
-			IsError:   tc.IsError,
-			CreatedAt: tc.CreatedAt,
+			ID:              tc.ID,
+			ToolName:        tc.ToolName,
+			Input:           tc.Input,
+			Output:          tc.Output,
+			IsError:         tc.IsError,
+			CreatedAt:       tc.CreatedAt,
+			OutputBytes:     tc.OutputBytes,
+			OutputTruncated: tc.OutputTruncated,
 		})
+	}
+	// ── 条件请求：本页内容未变时返回 304，省掉整段 JSON 的传输 ──
+	//
+	// 组成必须同时包含「请求参数」与「数据版本」：
+	//   - 少请求参数 → 翻到不同页却命中同一 ETag，把不同内容误报成 304（错误）
+	//   - 少数据版本 → 新消息到达后仍回 304，前端看到陈旧历史（错误）
+	// 用弱 ETag：语义等价即可，不承诺逐字节相同。
+	etag := conversationETag(id, before, toolBefore, limit, sess.UpdatedAt, len(conv.Messages), len(conv.ToolCalls))
+	w.Header().Set("ETag", etag)
+	// private：消息含用户内容，中间代理不得缓存。
+	// no-cache：可存但每次必须回源校验 —— 这正是我们想要的（校验走 304，省传输）。
+	w.Header().Set("Cache-Control", "private, no-cache")
+	if etagMatches(r.Header.Get("If-None-Match"), etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	OK(w, conv)
 }
 
-// Create creates a new session. If authenticated, links to user account.
+// conversationETag 生成一页会话详情的内容标识。
+//
+// 用的是**弱 ETag**（W/ 前缀，RFC 9110 §8.8.3）：语义等价，不承诺逐字节相同。
+// 这给了实现留出余量 —— 将来若把消息按不同顺序编码，缓存仍然正确。
+func conversationETag(sessionID, before, toolBefore string, limit int, updatedAt time.Time, msgCount, toolCount int) string {
+	h := sha256.New()
+	// 字段间用 \x00 分隔：避免 "ab"+"c" 与 "a"+"bc" 拼出同一个串。
+	fmt.Fprintf(h, "%s\x00%s\x00%s\x00%d\x00%d\x00%d\x00%d",
+		sessionID, before, toolBefore, limit, updatedAt.UnixNano(), msgCount, toolCount)
+	return `W/"` + hex.EncodeToString(h.Sum(nil)[:16]) + `"`
+}
+
+// etagMatches 判断客户端的 If-None-Match 是否命中。
+//
+// 按 RFC 9110 §13.1.2 处理：可以是 `*`、单值，或逗号分隔的列表；
+// 弱前缀 W/ 在弱比较下不参与比对（两侧都剥掉）。
+func etagMatches(ifNoneMatch, etag string) bool {
+	ifNoneMatch = strings.TrimSpace(ifNoneMatch)
+	if ifNoneMatch == "" {
+		return false
+	}
+	if ifNoneMatch == "*" {
+		return true
+	}
+	want := strings.TrimPrefix(etag, "W/")
+	for _, candidate := range strings.Split(ifNoneMatch, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(candidate), "W/") == want {
+			return true
+		}
+	}
+	return false
+}
 func (h *ConversationHandler) Create(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Title string `json:"title"`

@@ -2,7 +2,6 @@
 export default {
   task: "## 任务",
   dag_orchestration: "DAG 流程编排",
-  ptc_multi_step_operations_written_as_one_script_run_at_once_run_code_fewer_round_trips_saves_tokens: "PTC：多步操作写成一段程序一次执行（run_code），少往返、省 token",
   quick_command_unified_task_natural_language_execute: "quick command 快速命令 统一任务 自然语言 执行",
   nodes_nodes_edges_edges: "{nodes} 个节点 {edges} 条连线",
   n_workflows: "{n} 个工作流",

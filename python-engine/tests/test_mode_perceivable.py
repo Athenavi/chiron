@@ -1,17 +1,16 @@
-"""四种模式必须"可感知"。
+"""模式必须"可感知"。
 
-回归背景（2026-09 实测）：PTC 与 CREATIVE 的 ``include_tools`` 与 normal 完全相同，
-且 PTC 没有 persona —— 于是用户在界面上"切换模式"后感觉**没有任何变化**，
-这就是"模式切换无效"的真实根因（不是链路没传值，而是模式本身没有可感知差异）。
+回归背景（2026-09 实测）：某些模式的 ``include_tools`` 与 normal 完全相同且没有 persona
+—— 于是用户在界面上"切换模式"后感觉**没有任何变化**，这就是"模式切换无效"的真实根因
+（不是链路没传值，而是模式本身没有可感知差异）。
 
-本测试锁死：任一模式在 (工具集, persona) 上必须与其他模式可区分，
-并且每个模式的**定位**要体现在配置里（极简要真极简、PTC 要有程序化调用指引、
-创造要能改自身模式定义）。
+本测试锁死：现存模式在 (工具集, persona) 上必须可区分，并且每个模式的**定位**要体现在
+配置里（极简要真极简）。PTC / creative 已移除，旧值必须回退到 normal。
 """
 
 from app.agent.modes import get_mode_config
 
-MODES = ("normal", "minimal", "ptc", "creative")
+MODES = ("normal", "minimal")
 
 
 def _fingerprint(mode: str) -> dict:
@@ -48,19 +47,12 @@ def test_minimal_is_actually_minimal():
     assert cfg.enable_compaction is False
 
 
-def test_ptc_directs_program_aided_tool_calling():
-    """PTC 的差异在"用工具的方式"：必须体现为 persona 指引 + run_code 可用。"""
-    cfg = get_mode_config("ptc")
-    assert "run_code" in (cfg.include_tools | cfg.extra_tools)
-    assert cfg.persona, "PTC 缺少 persona → 与常规模式不可区分"
-    assert "run_code" in cfg.persona
-
-
-def test_creative_can_edit_own_modes():
-    """创造 = 可以读写平台自身的模式定义（自我改造）。"""
-    cfg = get_mode_config("creative")
-    assert {"mode_list", "mode_edit"} <= (cfg.include_tools | cfg.extra_tools)
-    assert cfg.persona
+def test_ptc_and_creative_fall_back_to_normal():
+    """PTC / creative 已移除：旧客户端或旧配置传入这些值时必须安静回退。"""
+    for legacy in ("ptc", "creative"):
+        assert _fingerprint(legacy) == _fingerprint("normal"), (
+            f"{legacy} 未回退到 normal → 旧客户端会拿到一个不存在的模式配置"
+        )
 
 
 def test_unknown_mode_falls_back_to_normal():

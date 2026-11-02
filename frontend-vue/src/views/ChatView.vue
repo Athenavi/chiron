@@ -56,7 +56,7 @@ import CallChainTimeline from '../components/CallChainTimeline.vue'
 import { HistoryOutlined, ExportOutlined, BulbOutlined, BulbFilled, MoreOutlined, FontSizeOutlined, SearchOutlined, PartitionOutlined, RobotOutlined, DatabaseOutlined, SwapOutlined } from '@ant-design/icons-vue'
 import { splitThinking, stripUserInputTag, formatClock, formatSize, countItemsAfter, mergeTurnStats } from '../components/chat/chat-types'
 import { mergeHistory, normalizeMeta } from '../components/chat/chat-history'
-import { describeApiError } from '../utils/apiError'
+import { describeApiError, errorStatus } from '../utils/apiError'
 import { buildWorkbenchContext, chipsFromWorkbenchContext, CONTEXT_QUERY_KEYS, parseContextQuery, type ContextChip } from '../components/chat/contextChips'
 import { currentProject } from '../composables/useProject'
 import { buildPrefillText, setChatPrefill, takeChatPrefill } from '../components/chat/chatPrefill'
@@ -701,7 +701,7 @@ async function wakeFromInbox() {
     void interactionInboxRef.value?.refresh()
   }
 }
-// 与下方「对话模式」(mode: normal/minimal/ptc/creative) 是两个不同维度：
+// 与下方「对话模式」(mode: normal/minimal) 是两个不同维度：
 // 本项控制**工具执行是否需要用户确认**。
 //
 // 它是**前端的实时状态**（全局单一，切换会话不改变它）：既不写 localStorage，也不存
@@ -750,8 +750,6 @@ function onReasoningLanguageChange(v: unknown) {
 const modeOptions = [
   { label: t('common.normal'), value: 'normal' },
   { label: t('common.minimal_2'), value: 'minimal' },
-  { label: 'PTC', value: 'ptc' },
-  { label: t('common.creative'), value: 'creative' },
 ]
 /** 默认模式：会话没记（或记了个不认识的值）时回落到它 —— **绝不能沿用上一个会话的模式** */
 const DEFAULT_MODE = 'normal'
@@ -760,14 +758,17 @@ const mode = ref(DEFAULT_MODE)
 // ── 模型路由：会话 llm_config.model（空 = 后端默认路由） ──
 const llmModel = ref('')
 
-// ── 对话模式预设：mode → temperature/max_tokens + 用户可见的**一句话定位** ──
-// desc 必须与后端 app/agent/modes.py 的四种模式定义表一一对应（工具集/上下文/压缩差异），
+// ── 对话模式预设：mode → temperature + 用户可见的**一句话定位** ──
+// desc 必须与后端 app/agent/modes.py 的模式定义表一一对应（工具集/上下文/压缩差异），
 // 否则又会回到"切了看不出区别"的老问题（2026-09 实测暴露）。
-const MODE_PRESETS = computed<Record<string, { temperature: number; max_tokens: number; note?: string; desc: string }>>(() => ({
-  normal: { temperature: 0.6, max_tokens: 4096, desc: t('agent.general_assistant_12_core_tools_injects_memory_skill_knowledge_base_context') },
-  minimal: { temperature: 0.2, max_tokens: 1024, note: t('chat.brief_reply'), desc: t('common.minimal_only_read_file_edit_file_shell_exec_no_context_injection_no_compression') },
-  ptc: { temperature: 0.4, max_tokens: 4096, note: t('workflow.step_by_step_reasoning'), desc: t('workflow.ptc_multi_step_operations_written_as_one_script_run_at_once_run_code_fewer_round_trips_saves_tokens') },
-  creative: { temperature: 1.0, max_tokens: 8192, desc: t('agent.creative_can_read_write_the_platform_s_own_mode_skill_definitions_mode_list_mode_edit') },
+//
+// **这里刻意不含 max_tokens**：输出上限是**按模型**的属性，由引擎查
+// `llm_models.max_output_tokens` 决定（见 app/agent/runtime.py 的 _resolve_max_tokens）。
+// 前端一旦下发这个值，引擎会按 min(请求值, 模型上限) 夹取，等于用对话框里的一个
+// 常量盖掉"换模型就换上限" —— 那正是本次要修的问题。
+const MODE_PRESETS = computed<Record<string, { temperature: number; note?: string; desc: string }>>(() => ({
+  normal: { temperature: 0.6, desc: t('agent.general_assistant_12_core_tools_injects_memory_skill_knowledge_base_context') },
+  minimal: { temperature: 0.2, note: t('chat.brief_reply'), desc: t('common.minimal_only_read_file_edit_file_shell_exec_no_context_injection_no_compression') },
 }))
 
 /** 构建 llm_config：mode + 对应预设 temperature/max_tokens + 模型路由 model（base 已显式携带的字段优先保留） */
@@ -822,11 +823,10 @@ function buildLlmConfig(base?: Record<string, unknown>): Record<string, unknown>
   if (language.value && language.value !== 'auto') cfg.language = language.value
   // D2：思考语言（同样默认态不携带 ⇒ 引擎不注入任何片段）。
   if (reasoningLanguage.value && reasoningLanguage.value !== 'auto') cfg.reasoning_language = reasoningLanguage.value
+  // temperature 仍按模式给（它是"说话风格"，与模型无关）。
+  // **max_tokens 不在这里设**：输出上限由引擎按模型查 `llm_models.max_output_tokens`。
   const preset = MODE_PRESETS.value[mode.value]
-  if (preset) {
-    if (cfg.temperature === undefined) cfg.temperature = preset.temperature
-    if (cfg.max_tokens === undefined) cfg.max_tokens = preset.max_tokens
-  }
+  if (preset && cfg.temperature === undefined) cfg.temperature = preset.temperature
   return cfg
 }
 
@@ -2106,7 +2106,10 @@ async function switchSession(id: string) {
   if (!currentRun.value.loading) activeSSE = null
   // 模式（对话模式 + 工具授权模式）不在此同步：它们是前端全局实时状态，
   // 切换会话既不改变它们，也不从会话状态读回（见 buildLlmConfig 的说明）。
-  hasMore.value = false; earliestCursor.value = ''; loadingEarlier.value = false
+  hasMore.value = false; earliestCursor.value = ''; earliestToolCursor.value = ''
+  loadingEarlier.value = false
+  earlierLoadFailed.value = false
+  toolCallsPartial.value = false
   initialLoading.value = true
   try {
     const res = await api.get(`/v1/conversations/${id}?limit=${HISTORY_PAGE_SIZE}`)
@@ -2121,6 +2124,8 @@ async function switchSession(id: string) {
       }
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
+      earliestToolCursor.value = data.tool_cursor || ''
+      toolCallsPartial.value = !!data.tool_calls_partial
     }
     // 会话级运行时状态（model / provider / 已激活上下文）：Redis 热 + unified_sessions.runtime
     // 持久，切回会话时回填。**模式不在其中** —— 对话模式与工具授权模式是前端全局实时状态，
@@ -2171,32 +2176,91 @@ async function switchSession(id: string) {
 const HISTORY_PAGE_SIZE = 50
 const hasMore = ref(false)
 const earliestCursor = ref('')
+// 工具调用**自己的**游标：与消息游标分开推进。两张表 created_at 分布不同，
+// 共用一个游标会漏取夹在两条消息之间的工具调用。
+const earliestToolCursor = ref('')
+const toolCallsPartial = ref(false)
 const loadingEarlier = ref(false)
+const earlierLoadFailed = ref(false)
 const initialLoading = ref(false)
 const switchSeq = ref(0)
 
+// 工具查询失败只提示一次：状态在每次翻页时都会重算，直接在赋值处 notify 会
+// 变成"每滚一屏弹一次"。这里只对 false→true 的翻转做提示。
+watch(toolCallsPartial, (now, before) => {
+  if (now && !before) notify.warning(t('chat.tool_calls_partial_warning'))
+})
+
+
+/** 可重试的错误：网络抖动、超时、服务端 5xx。它们不代表"历史到此为止"。 */
+function isRetriableLoadError(error: unknown): boolean {
+  const status = errorStatus(error)
+  if (status === undefined) return true // 网络错误 / 超时：没有状态码
+  return status >= 500 || status === 408 || status === 429
+}
 
 async function loadEarlier() {
-  if (loadingEarlier.value || !hasMore.value || !activeSessionId.value || !earliestCursor.value) return
+  if (loadingEarlier.value || !hasMore.value || !activeSessionId.value) return
+  // cursor 为空却 hasMore 为真 = 状态自相矛盾：再请求也拿不到"更早"的锚点。
+  // 早退会让人以为"到底了"而实际没有，所以显式结束并留痕，不留死锁。
+  if (!earliestCursor.value) {
+    console.warn('[chat] hasMore=true but cursor is empty; ending pagination', {
+      sessionId: activeSessionId.value,
+    })
+    hasMore.value = false
+    return
+  }
+
+  // 竞态守卫：慢响应期间用户可能已经切走。没有这一行，会话 A 的历史会被拼进
+  // 会话 B 的列表里 —— 刷新才消失，无从解释。
+  const mySeq = switchSeq.value
+  const mySession = activeSessionId.value
   loadingEarlier.value = true
+  earlierLoadFailed.value = false
   try {
-    const res = await api.get(
-      `/v1/conversations/${activeSessionId.value}?limit=${HISTORY_PAGE_SIZE}&before=${encodeURIComponent(earliestCursor.value)}`,
-    )
+    // 两个游标各自带上：消息与工具调用是两张表，游标必须独立推进。
+    // 只发一个会让另一张表要么重复取、要么漏取（夹在两条消息之间的工具调用最容易漏）。
+    let url = `/v1/conversations/${encodeURIComponent(mySession)}?limit=${HISTORY_PAGE_SIZE}&before=${encodeURIComponent(earliestCursor.value)}`
+    if (earliestToolCursor.value) {
+      url += `&tool_before=${encodeURIComponent(earliestToolCursor.value)}`
+    }
+    const res = await api.get(url)
+    if (mySeq !== switchSeq.value || mySession !== activeSessionId.value) return
     const data = res.data?.data || res.data
+    // 工具查询失败时服务端会带 tool_calls_partial：列表不完整，但消息仍可用。
+    // 标记它，让界面能提示"部分工具记录未加载"，而不是让人以为工具根本没执行过。
+    toolCallsPartial.value = !!data?.tool_calls_partial
     if (data?.messages?.length) {
       const earlier = mergeHistory(data.messages, data.tool_calls || [])
+      // 合并前按 id 去重：游标是 created_at|id 复合值，服务端与前端对时区/精度的
+      // 处理一旦有差异就会返回重叠页，同一条目会被渲染两次（像是执行了两次工具）。
+      const seen = new Set(items.value.map(i => i.id))
+      const fresh = earlier.filter(i => !seen.has(i.id))
       // 头部插入后由 MessageList 按锚点还原视口（单写者），此处不碰 DOM
-      items.value = [...earlier, ...items.value]
+      if (fresh.length) items.value = [...fresh, ...items.value]
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
+      earliestToolCursor.value = data.tool_cursor || ''
+      if (hasMore.value && !earliestCursor.value) {
+        console.warn('[chat] server says has_more but sent no cursor; stopping', { sessionId: mySession })
+        hasMore.value = false
+      }
     } else {
       hasMore.value = false
     }
-  } catch {
-    hasMore.value = false
+  } catch (error) {
+    if (mySeq !== switchSeq.value || mySession !== activeSessionId.value) return
+    // 区分"真的没有更多"与"这次没取到"：把 5xx/超时一律当成到底，会让一次网络抖动
+    // 永久关闭分页（hasMore=false 之后再也不会重试），用户看到的历史凭空少了一截。
+    if (isRetriableLoadError(error)) {
+      earlierLoadFailed.value = true
+      hasMore.value = true // 保留可重试资格
+      console.warn('[chat] load earlier failed (retriable)', { sessionId: mySession, error })
+    } else {
+      hasMore.value = false
+    }
   } finally {
-    loadingEarlier.value = false
+    if (mySeq === switchSeq.value) loadingEarlier.value = false
   }
 }
 
@@ -3051,6 +3115,7 @@ function continueGeneration() {
             :focus-token="trajectoryToken"
             :has-more="hasMore"
             :loading-earlier="loadingEarlier"
+            :earlier-load-failed="earlierLoadFailed"
             :session-key="activeSessionId"
             @load-earlier="loadEarlier"
             @quote-text="onQuoteText"

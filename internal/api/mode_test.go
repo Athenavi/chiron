@@ -29,13 +29,13 @@ func TestResolveAgentConfig_ToolsModeIsRequestScoped(t *testing.T) {
 
 	// 请求显式携带 → 采用请求值
 	cfg := h.resolveAgentConfig("u1", &runtimeView{}, map[string]string{}, map[string]string{
-		"mode": "ptc", "tools_mode": ModeYOLO,
+		"mode": "minimal", "tools_mode": ModeYOLO,
 	})
 	if cfg.toolsMode.Value != ModeYOLO || cfg.toolsMode.Source != "request" {
 		t.Errorf("tools_mode: got %+v, want yolo/request", cfg.toolsMode)
 	}
-	if cfg.mode.Value != "ptc" || cfg.mode.Source != "request" {
-		t.Errorf("mode: got %+v, want ptc/request", cfg.mode)
+	if cfg.mode.Value != "minimal" || cfg.mode.Source != "request" {
+		t.Errorf("mode: got %+v, want minimal/request", cfg.mode)
 	}
 
 	// 未携带 → 用户/全局默认

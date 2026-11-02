@@ -30,6 +30,7 @@ import os as _os
 if _os.environ.get("CHIRON_TOOLS_SKIP_REGISTRY") == "1":  # 见上方说明
     __all__: list[str] = []
 else:
+    import app.tools.archive  # noqa: F401 — read_archive（按 messages.id 长期召回原文）
     import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻辑在 runtime）
     import app.tools.best_of_n  # noqa: F401 — 差距D：多候选 + judge 选优
     import app.tools.browser  # noqa: F401
@@ -43,7 +44,6 @@ else:
     import app.tools.kb  # noqa: F401
     import app.tools.media  # noqa: F401
     import app.tools.memory  # noqa: F401
-    import app.tools.mode_admin  # noqa: F401
     import app.tools.pm  # noqa: F401
     import app.tools.run_code  # noqa: F401
     import app.tools.skill  # noqa: F401

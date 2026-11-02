@@ -75,6 +75,7 @@ export default {
     n_days_ago: "{n} 天前",
     n_h_ago: "{n} 小时前",
     n_lines: "{n} 行",
+    result_preview_only: "仅预览（原文 {size}）",
     n_items: "{n} 项",
     resend_in_n_s: "{n}s 后重发",
     year_month_day_hh_mm: "{year}年{month}月{day}日 {hh}:{mm}",

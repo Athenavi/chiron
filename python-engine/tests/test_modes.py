@@ -42,16 +42,15 @@ class TestGetModeConfig:
         assert cfg.include_tools == frozenset({"read_file", "edit_file", "shell_exec"})
         assert cfg.extra_tools == frozenset()
 
-    def test_ptc_mode_has_run_code(self):
+    def test_ptc_mode_is_gone(self):
+        # PTC 已移除：旧客户端仍可能传 "ptc"，必须安静回退到 normal 而不是报错。
         cfg = get_mode_config("ptc")
-        assert "run_code" in cfg.extra_tools
-        assert cfg.include_context is True
+        assert cfg.mode is AgentMode.NORMAL
 
-    def test_creative_mode_has_authoring_tools(self):
+    def test_creative_mode_is_gone(self):
         cfg = get_mode_config("creative")
-        assert "mode_list" in cfg.extra_tools
-        assert "mode_edit" in cfg.extra_tools
-        assert cfg.persona and "mode_edit" in cfg.persona
+        assert cfg.mode is AgentMode.NORMAL
+        assert cfg.extra_tools == frozenset()
 
     def test_overrides_are_applied(self, tmp_path, monkeypatch):
         overrides = {

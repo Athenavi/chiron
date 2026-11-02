@@ -107,6 +107,33 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
     return total
 
 
+# ── 召回序列化 ──
+
+#: 单次召回块的最大字符数。被裁掉的那一整段可能很长，无上限会往 Redis 塞几 MB，
+#: 而召回的目的是"找回关键约束与决定"，不是全文归档。
+RECALL_BLOCK_MAX_CHARS = 64_000
+
+
+def _serialize_for_recall(message: dict[str, Any]) -> str:
+    """把一条消息序列化成可召回文本。
+
+    **必须保留角色与工具身份**：只存 content 的话，读回来就分不清哪句是用户说的、
+    哪句是模型说的、哪个是工具输出 —— 而召回的全部价值就在于"当初是谁说了什么"。
+    """
+    role = str(message.get("role") or "unknown")
+    header = f"## {role}"
+    if message.get("tool_call_id"):
+        header += f" (tool_call_id={message['tool_call_id']})"
+    if message.get("tool_calls"):
+        try:
+            calls = json.dumps(message["tool_calls"], ensure_ascii=False, default=str)
+        except (TypeError, ValueError):
+            calls = str(message["tool_calls"])
+        header += f"\n[tool_calls] {calls}"
+    content = message.get("content") or ""
+    return f"{header}\n{content}" if content else header
+
+
 # ── 工具结果截断（head + tail + middle indicator） ──
 
 
@@ -275,20 +302,52 @@ def _prune_messages(
     kept = processed[start:]
     dropped_count = len(processed) - len(kept)
     result = system_msgs + kept
+
+    # ── 被淘汰的消息必须可召回 ──
+    #
+    # 此前只有 tool 消息进 `dropped`，user/assistant 被裁掉就永久消失，只留一句
+    # 计数提示。后果不是"上下文变小"，而是**正确性**问题：用户在会话开头说过的
+    # 硬约束（"这个仓库绝不要动 vendor/"）会在中途无声丢失，模型此后无从查证，
+    # 会重复犯同一个错。
+    #
+    # 现在把整段被淘汰的内容合并成**一个** ref 落盘：用户通常想恢复的是"那一段
+    # 上下文"，而不是逐条挑；一个 ref 也避免了索引里塞满几十个短 ref。
+    #
+    # 块大小必须封顶：被裁掉的可能是几 MB 的工具输出，无上限会把 Redis 当归档盘用，
+    # 而召回的目的是"找回关键约束与决定"，不是全文备份。超限时保留**靠后的**部分 ——
+    # 越靠近当前回合的上下文越可能仍然生效。
+    recall_ref = ""
+    if dropped_count > 0 and dropped is not None:
+        recall_ref = f"sn_{uuid.uuid4().hex[:12]}"
+        block = "\n\n".join(_serialize_for_recall(m) for m in processed[:start])
+        if len(block) > RECALL_BLOCK_MAX_CHARS:
+            trimmed = block[-RECALL_BLOCK_MAX_CHARS:]
+            # 从下一个消息边界开始，避免把某条消息切成半截。
+            cut = trimmed.find("\n## ", 1)
+            if cut > 0:
+                trimmed = trimmed[cut + 1:]
+            omitted = len(block) - len(trimmed)
+            block = (
+                f"[{omitted} chars of earlier context omitted from this recall block]\n\n{trimmed}"
+            )
+        if block:
+            dropped.append((recall_ref, block))
+        else:
+            recall_ref = ""
+
     if dropped_count > 0:
         # 给**模型**留痕：被淘汰的消息不能无声消失。此前只有 `compaction` 事件告诉**前端**
         # "压缩了"，模型侧完全看不到自己少了多少上文 —— 它只会觉得自己记错了。
         # 用 user 角色而不是 system：`_apply_system_prefix` 会把所有 system 消息摘掉重排，
         # 放在 system 段里会被它吞掉。连续 user 消息是既有形态（`merge_user_message` 就处理这个）。
-        result.insert(
-            len(system_msgs),
-            {
-                "role": "user",
-                "content": (
-                    f"[{dropped_count} earlier message(s) were pruned to fit the context window]"
-                ),
-            },
-        )
+        note = f"[{dropped_count} earlier message(s) were pruned to fit the context window]"
+        if recall_ref:
+            note = (
+                f"{dropped_count} earlier message(s) were pruned to fit the context window. "
+                f"`read_tool_result(result_ref=\"{recall_ref}\", offset=0, limit=8000)` returns "
+                f"their full text — use it instead of assuming they never happened."
+            )
+        result.insert(len(system_msgs), {"role": "user", "content": note})
     logger.info(
         "Prune: %d → %d messages (dropped %d old)",
         len(messages),

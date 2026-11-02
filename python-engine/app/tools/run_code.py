@@ -1,4 +1,4 @@
-"""run_code 工具 — PTC 模式核心（对应 deepseek-harness Code Mode SDK）
+"""run_code 工具 — 程序化工具调用（对应 deepseek-harness Code Mode SDK）
 
 模型编写一段 Python 异步程序，通过注入的 ``tools`` 命名空间组合调用多个
 工具（``await tools.read_file(...)``、``await tools.shell_exec(...)`` 等），

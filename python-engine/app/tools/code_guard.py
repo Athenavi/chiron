@@ -1,7 +1,7 @@
 """代码层静态/运行时安全守卫（叶子模块 — 不得 import 任何 app 内模块）。
 
 本模块被两处复用，是单一事实来源，勿在别处复制守卫逻辑：
-- app/tools/run_code.py（进程内 PTC 沙箱）
+- app/tools/run_code.py（进程内代码执行沙箱）
 - plugin_runner.py（插件 subprocess 沙箱，按文件路径加载本模块以避开
   app.tools.__init__ 的重量级 import 链）
 

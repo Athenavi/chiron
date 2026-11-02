@@ -104,6 +104,101 @@ def _query_with(pool: _FakeWindowPool):
     return _query
 
 
+# ── 输出上限（max_output_tokens）─────────────────────────────────────────
+
+
+class _FakeMaxOutputPool:
+    """替身池：只回答输出上限查询。`None` 模拟列值为 NULL（未知）。"""
+
+    def __init__(self, value: int | None) -> None:
+        self.value = value
+        self.queries = 0
+
+    async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
+        self.queries += 1
+        if self.value is None:
+            return None
+        return {"max_output_tokens": self.value}
+
+
+@pytest.mark.asyncio
+async def test_max_output_tokens_reads_table_and_caches(monkeypatch: pytest.MonkeyPatch):
+    pool = _FakeMaxOutputPool(65536)
+    _patch_pool(monkeypatch, pool)
+
+    assert await model_window.max_output_tokens("deepseek-reasoner") == 65536
+    assert await model_window.max_output_tokens("deepseek-reasoner") == 65536
+    assert pool.queries == 1, "第二次应命中进程内缓存"
+
+
+@pytest.mark.asyncio
+async def test_max_output_tokens_falls_back_when_absent(monkeypatch: pytest.MonkeyPatch):
+    """NULL = 未知（存量行都是这样），必须回落到调用方给的 fallback。"""
+    _patch_pool(monkeypatch, _FakeMaxOutputPool(None))
+
+    assert await model_window.max_output_tokens("unknown", fallback=4096) == 4096
+    assert await model_window.max_output_tokens("", fallback=2048) == 2048
+
+
+@pytest.mark.asyncio
+async def test_max_output_tokens_ignores_absurdly_small_values(monkeypatch: pytest.MonkeyPatch):
+    """管理端误填 1 会让模型每轮都说不出完整句子 —— 低于下限按未知处理。
+
+    这条必须走**真实**的 `_query_max_output`（只替换连接池）：下限过滤就在它里面，
+    如果把 `_query_max_output` 整个换掉，测的就是替身而不是被测逻辑。
+    """
+    _patch_pool(monkeypatch, _FakeMaxOutputPool(1))
+
+    assert await model_window.max_output_tokens("m", fallback=4096) == 4096
+
+
+@pytest.mark.asyncio
+async def test_max_output_tokens_does_not_reuse_context_window(monkeypatch: pytest.MonkeyPatch):
+    """两个量必须各自成查：同窗口下输出上限可以差 8 倍，不能互相顶替。"""
+    monkeypatch.setattr(model_window, "_query_window", _query_with(_FakeWindowPool(131072)))
+    _patch_pool(monkeypatch, _FakeMaxOutputPool(None))
+
+    # 输出上限未知 → 回落 fallback，**不是** 131072（那就是按窗口推导了）
+    assert await model_window.max_output_tokens("deepseek-chat", fallback=4096) == 4096
+    assert await model_window.context_window("deepseek-chat") == 131072
+
+
+def _patch_pool(monkeypatch: pytest.MonkeyPatch, pool: Any) -> None:
+    """让 `_query_max_output` 内部的 `from app.db import get_pool` 拿到替身池。
+
+    `_query_max_output` 在函数体内 import，因此 patch 模块属性即可生效 ——
+    这样下限过滤、`enabled IS NOT FALSE` 等真实逻辑都还在链路上。
+    """
+    import app.db
+
+    monkeypatch.setattr(app.db, "get_pool", lambda: pool, raising=False)
+
+
+def test_resolve_max_tokens_follows_model_when_unset():
+    """没给 max_tokens ⇒ 用模型上限（这就是"按模型自动调整"）。"""
+    from app.agent.runtime import _resolve_max_tokens
+
+    assert _resolve_max_tokens(None, 8192) == 8192
+    assert _resolve_max_tokens(None, 65536) == 65536
+
+
+def test_resolve_max_tokens_clamps_to_model_limit():
+    """显式值超过模型上限 ⇒ 夹取；低于上限 ⇒ 照办（用户要短回复就短）。"""
+    from app.agent.runtime import _resolve_max_tokens
+
+    assert _resolve_max_tokens(999999, 8192) == 8192
+    assert _resolve_max_tokens(1024, 8192) == 1024
+
+
+def test_resolve_max_tokens_treats_garbage_as_unset():
+    """非法/非正值不能变成"不许输出"，按未设置处理。"""
+    from app.agent.runtime import _resolve_max_tokens
+
+    assert _resolve_max_tokens("abc", 4096) == 4096
+    assert _resolve_max_tokens(0, 4096) == 4096
+    assert _resolve_max_tokens(-5, 4096) == 4096
+
+
 def test_estimator_calibrates_towards_observed_usage():
     est = model_window.TokenEstimator()
     messages = [{"role": "user", "content": "x" * 400}]  # 100 chars/token 的基线估算

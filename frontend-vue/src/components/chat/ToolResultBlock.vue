@@ -2,6 +2,7 @@
 import { ref, computed, watch } from 'vue'
 import { CaretRightOutlined, ExclamationCircleOutlined } from '@ant-design/icons-vue'
 import type { ToolResultItem } from './chat-types'
+import { formatSize } from './chat-types'
 import { looksLikeDiff, parseUnifiedDiff, type ParsedDiff } from './diffParse'
 import { useI18n } from 'vue-i18n'
 
@@ -159,6 +160,18 @@ const terminalText = computed(() => {
 })
 const terminalLines = computed(() => (terminalText.value ? terminalText.value.split('\n').length : 0))
 const textLines = computed(() => (parsed.value.text ? parsed.value.text.split('\n').length : 0))
+
+/**
+ * 服务端只返回了 output 的前段预览时，界面必须说明这一点。
+ *
+ * 列表接口按设计只带 4096 字符（见 internal/session 的 outputPreviewBytes）；
+ * 不提示的话，用户会把截短的预览当成工具的真实全部输出，从而做出错误判断。
+ */
+const previewOnlyLabel = computed(() =>
+  props.item.outputTruncated
+    ? t('common.result_preview_only', { size: formatSize(props.item.outputBytes || 0) })
+    : '',
+)
 
 // 大 diff 先给一段可读的预览，展开按钮写明总行数（滚动容器仍然兜底）
 const DIFF_PREVIEW_LINES = 60
@@ -359,6 +372,10 @@ function todoStatusLabel(status?: string): string {
           v-if="textLines > 1"
           class="result-lines"
         >{{ $t('common.n_lines', { n: textLines }) }}</span>
+        <span
+          v-if="previewOnlyLabel"
+          class="result-preview"
+        >{{ previewOnlyLabel }}</span>
       </button>
       <template v-if="expanded">
         <pre
@@ -389,6 +406,7 @@ function todoStatusLabel(status?: string): string {
 }
 .result-head:hover { color: var(--primary); }
 .result-lines { flex: none; font-size: var(--fs-xs); color: var(--text-tertiary); }
+.result-preview { flex: none; font-size: var(--fs-xs); color: var(--warning, var(--text-tertiary)); }
 .tool-result.error .result-label { color: var(--error); }
 .result-code { margin: 0; padding: 12px; background: var(--bg-code); border-radius: var(--sig-radius-code); font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-code); white-space: pre-wrap; word-break: break-all; }
 .result-text { padding: 10px 12px; background: var(--bg-secondary); border-radius: var(--sig-radius-button); font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }

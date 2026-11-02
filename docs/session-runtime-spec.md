@@ -23,7 +23,7 @@
 读路径（`loadRuntime`）：先取 DB 权威值，再用 Redis 热层覆盖它已有的字段 ⇒ **热层优先、权威层兜底**。
 写路径（`saveRuntime`）两处都写。新会话（尚未创建）**允许**读写热状态 —— 首次提交时才建会话。
 
-**工具授权模式（`ask`/`auto`/`yolo`）与对话模式（`normal`/`minimal`/`ptc`/`creative`）不在其中**：
+**工具授权模式（`ask`/`auto`/`yolo`）与对话模式（`normal`/`minimal`）不在其中**：
 它们是**请求级参数**（前端实时状态，每次提交随请求携带），服务端只校验与兜底。
 曾把它们写进 runtime 时，同一份状态散落三处，任一处不一致就表现为"切换了却不生效"。
 只有"用户选定后希望下次继续沿用"的项（**model / provider**）才落会话状态。
@@ -38,7 +38,7 @@ provider    : 请求显式 > runtime > 空（自动路由）
 ```
 
 注意 **`mode` / `tools_mode` 没有 runtime 这一层**（见 §2）。`validAgentModes` =
-`normal | minimal | ptc | creative`，与引擎 `app/agent/modes.py` 的 `_BASE_MODES` 对齐。
+`normal | minimal`，与引擎 `app/agent/modes.py` 的 `_BASE_MODES` 对齐。
 **这条对齐已机械化**：`scripts/check_tool_policy_parity.py` 同时校验
 **Go `validAgentModes` ↔ 引擎 `AgentMode` 枚举 ↔ `_BASE_MODES` 实际覆盖**（三方必须一致，
 并单独拦"枚举加了成员却忘写 base 配置"——那种漂移只在真正选中该模式时才以 `KeyError` 暴露）。

@@ -1973,7 +1973,7 @@ async def agent_submit(
     # 注入失败绝不影响本轮（报告是增强，不是前提）；但必须可见（记 warning）。
     await _inject_subagent_reports(task)
 
-    # ── 运行模式（常规/极简/PTC/创造）：前端下拉 → body.mode 或 llm_config.mode ──
+    # ── 运行模式（常规/极简）：前端下拉 → body.mode 或 llm_config.mode ──
     # runtime 内 get_mode_config 兜底未知值回退 NORMAL
     mode = body.get("mode") or llm_config.get("mode")
     if mode:

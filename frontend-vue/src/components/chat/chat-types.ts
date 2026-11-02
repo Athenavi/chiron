@@ -121,6 +121,14 @@ export interface ToolResultItem extends ChatItemBase {
   toolCallId: string
   content: string
   isError: boolean
+  /**
+   * 原文完整字节数。列表接口只返回前段预览，`content` 可能是截短的；
+   * 有值且大于 content 长度时，界面必须说明"这只是预览"，否则用户会把
+   * 被截断的结果当成工具的真实全部输出。
+   */
+  outputBytes?: number
+  /** 服务端判定 content 只是预览（与"结果本就这么小"区分） */
+  outputTruncated?: boolean
 }
 
 export interface TurnStatsItem extends ChatItemBase {
@@ -237,6 +245,10 @@ export interface HistoryToolCall {
   is_error?: boolean
   created_at?: string
   turn_id?: string
+  /** 库中 output 的完整字节数；`output` 只是前若干字符的预览 */
+  output_bytes?: number
+  /** `output` 是预览而非全文（服务端判定） */
+  output_truncated?: boolean
 }
 
 export const THINK_START = '[thinking]'

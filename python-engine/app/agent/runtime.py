@@ -378,6 +378,30 @@ def _last_assistant_text(messages: list[dict[str, Any]]) -> str:
     return ""
 
 
+# ── max_tokens：按模型上限夹取 ────────────────────────────────────────────
+
+def _resolve_max_tokens(requested: Any, model_limit: int) -> int:
+    """把请求方给的 max_tokens 夹进模型上限。
+
+    - **没给**（None / 非法值）→ 直接用模型上限。这正是"按模型自动调整"的落点：
+      同一个对话模式换个模型，输出预算跟着模型走，不再由前端按模式硬编码。
+    - **给了** → ``min(请求值, 模型上限)``。超过模型上限时 provider 会 400 或直接
+      截断，夹取比放任失败更好；反过来，用户显式要短回复时也照办，不顶到模型极限。
+
+    `model_limit` 已由 `model_window.max_output_tokens` 保证 > 0（查不到时回落
+    `settings.default_max_tokens`），这里不再重复校验。
+    """
+    if requested is None:
+        return model_limit
+    try:
+        value = int(requested)
+    except (TypeError, ValueError):
+        return model_limit
+    if value <= 0:
+        return model_limit
+    return min(value, model_limit)
+
+
 # ── C3：工具批的并发分组 ──────────────────────────────────────────────────
 
 def _parse_tool_args(call: dict[str, Any]) -> dict[str, Any]:
@@ -1330,7 +1354,7 @@ class AgentRuntime:
             # ── 0. 解析运行模式（persona/工具集/上下文/压缩策略） ──
             mode_cfg: ModeConfig = get_mode_config((task.llm_config or {}).get("mode"))
             if mode_cfg.persona:
-                # 固定完整 persona（minimal/creative）：覆盖外部传入的 system_prompt
+                # 固定完整 persona（minimal）：覆盖外部传入的 system_prompt
                 task.system_prompt = mode_cfg.persona
 
             # ── 0.5 设置工具执行上下文（持久终端/子 agent 等需要 session 与网关） ──
@@ -1518,11 +1542,29 @@ class AgentRuntime:
                     resume.turn_index,
                     len(resume.replay_pending),
                 )
-            elif self._session_store and task.session_id:
-                history_msgs = self._build_history_msgs(task)
-                messages = await self._session_store.get_or_init(
-                    task.session_id, history_msgs
+            elif task.session_id:
+                # 历史来源优先级：session_cache > PG（Durable） > Go 传来的 8 条。
+                #
+                # 缓存优先是**性能要求**：它是本轮之前的上下文，命中就不必每轮
+                # 去 PG 拉 500 条。缓存里是压缩版，这没有问题 —— 压缩掉的内容
+                # 原文在 PG / result_store 里，"可召回"不依赖缓存保存全量。
+                #
+                # PG 只在缓存未命中时读（TTL 过期、副本切换、新会话），
+                # 它含 tool 角色，比 Go 传的最近 8 条完整得多。
+                from app.middleware.privacy_middleware import is_no_retention
+
+                cached = (
+                    await self._session_store.get(task.session_id)
+                    if self._session_store
+                    else None
                 )
+                if cached:
+                    messages = cached
+                elif not is_no_retention():
+                    durable = await self._durable_history_msgs(task)
+                    messages = durable or self._build_history_msgs(task)
+                else:
+                    messages = self._build_history_msgs(task)
                 # ── 自动推断消息格式并统一中立（SaaS：OpenAI/Anthropic/Gemini 来源均可消费） ──
                 messages = _auto_normalize(messages)
                 # ── 修复消息序列中的工具消息配对问题 ──
@@ -1580,7 +1622,6 @@ class AgentRuntime:
             # 获取 LLM 配置
             llm_config = task.llm_config or {}
             model = llm_config.get("model", settings.default_model)
-            max_tokens = llm_config.get("max_tokens", settings.default_max_tokens)
             temperature = llm_config.get("temperature", settings.default_temperature)
 
             # ── C4：压缩预算来自**模型窗口表**（不再是硬编码常量）──
@@ -1589,6 +1630,14 @@ class AgentRuntime:
             from app.agent import model_window
 
             context_window = await model_window.context_window(model)
+
+            # ── max_tokens：按**模型**取上限，而不是按对话模式硬编码 ──
+            # 同一个模式换个模型，输出上限本来就该变（deepseek-chat 8192 与
+            # deepseek-reasoner 65536 共享同一个 131072 窗口，差 8 倍）。
+            model_max_output = await model_window.max_output_tokens(
+                model, fallback=settings.default_max_tokens
+            )
+            max_tokens = _resolve_max_tokens(llm_config.get("max_tokens"), model_max_output)
 
             # ── 附件 → 模型可见内容（本轮用户消息携带的媒体库文件）──
             # 放在窗口预算与压缩**之前**：附件会真的占上下文（图片块 + 提取出的文本），
@@ -2504,15 +2553,32 @@ class AgentRuntime:
                     msg_kwargs = {"role": "assistant", "content": _last_reasoning}
                     messages.append(_normalize_msg(**msg_kwargs))
 
-            # ── 保存累积消息到 session cache（含工具调用消息，保持前缀稳定）──
-            if self._session_store and task.session_id:
-                await self._session_store.append(task.session_id, messages)
-                _cache_saved = True
-                logger.info(
-                    "Session cache saved: %s (%d messages)",
+            # ── 追加本轮增量到 Durable 层（PG messages）──
+            #
+            # 只写 `tool` 角色：user / assistant 已由 Go 的 SaveUserMessage /
+            # UpsertAssistantMessage 落库（那条路径带"提交时立即落库"的保证，
+            # SSE 中断也不丢用户消息，不能替换）。
+            if task.session_id:
+                from app.agent import history_writer
+
+                written = await history_writer.persist_messages(
                     task.session_id,
-                    len(messages),
+                    task.tenant_id,
+                    messages,
+                    turn_id=str(getattr(task, "turn_id", "") or ""),
+                    roles={"tool"},
                 )
+                # 缓存仍然写：它已降级为**回落层**（PG 才是事实来源），
+                # 压缩版进缓存无害 —— 而删掉它会让 PG 不可用时彻底失去跨轮记忆。
+                if self._session_store:
+                    await self._session_store.append(task.session_id, messages)
+                _cache_saved = True
+                if written:
+                    logger.info(
+                        "Durable history appended: %s (%d tool messages)",
+                        task.session_id,
+                        written,
+                    )
 
             # ── C6：回合级 L2 提炼（默认关）──
             # 放在 on_turn_complete **之前**：提炼消耗的 token 要并进 total_input/output_tokens，
@@ -2687,24 +2753,38 @@ class AgentRuntime:
                 except Exception as e:
                     logger.warning("Memory on_session_end failed (non-blocking): %s", e)
 
-            # S 修复：上下文丢失 — 任何退出路径（异常/SSE 中断/GeneratorExit）都保存缓存，
-            # 保证"继续"时历史可续（用户消息不丢）
+            # S 修复：上下文丢失 — 任何退出路径（异常/SSE 中断/GeneratorExit）都补写
+            # Durable 层，保证"继续"时历史可续。
+            #
+            # 与正常路径同一口径：只写 `tool` 角色（user/assistant 由 Go 写），
+            # 并同时回写缓存作为回落层。
             if (
                 not _cache_saved
-                and self._session_store
                 and task.session_id
                 and "messages" in locals()
                 and messages
             ):
                 try:
-                    await self._session_store.append(task.session_id, messages)
-                    logger.info(
-                        "Session cache saved on exit: %s (%d messages)",
+                    from app.agent import history_writer
+
+                    written = await history_writer.persist_messages(
                         task.session_id,
-                        len(messages),
+                        task.tenant_id,
+                        messages,
+                        turn_id=str(getattr(task, "turn_id", "") or ""),
+                        roles={"tool"},
+                    )
+                    # 与正常路径同一口径：缓存仍写（它是 PG 不可用时的回落层）。
+                    # 中断退出同样要写 —— 否则"PG 不可用 + 中断"等于彻底丢历史。
+                    if self._session_store:
+                        await self._session_store.append(task.session_id, messages)
+                    logger.info(
+                        "Durable history appended on exit: %s (%d tool messages)",
+                        task.session_id,
+                        written,
                     )
                 except Exception:
-                    logger.exception("Session cache save on exit failed")
+                    logger.exception("Durable history append on exit failed")
 
     def _build_messages(self, task: AgentTask) -> list[dict[str, Any]]:
         """构建 LLM 消息列表（system + history + 当前用户消息）。
@@ -2730,6 +2810,42 @@ class AgentRuntime:
             )
         if task.content:
             messages.append(_normalize_msg(role="user", content=task.content))
+        return messages
+
+    async def _durable_history_msgs(self, task: AgentTask) -> list[dict[str, Any]]:
+        """从 PG 读完整历史（含 tool 角色）；读不到就返回空列表。
+
+        **不在这里做回落**：调用方持有完整的优先级链
+        （session_cache > PG > Go 传来的 8 条）。如果这里回落到
+        `_build_history_msgs`，返回的列表总含 system prompt ⇒ 非空 ⇒
+        调用方以为"PG 有数据"，于是永不尝试缓存，PG 不可用时跨轮记忆直接断掉。
+
+        调用方仅在缓存未命中时才走到这里（TTL 过期、副本切换、新会话）；
+        PG 含 tool 角色，比 Go 传的最近 8 条（`submit_handler.go` 的 maxHistory）完整。
+        """
+        from app.agent import history_writer
+
+        try:
+            durable = await history_writer.load_messages(task.session_id, task.tenant_id)
+        except Exception as exc:  # noqa: BLE001 — 读不到就让调用方回落，不阻断对话
+            logger.warning("durable history unavailable (%s): %s", task.session_id, exc)
+            return []
+
+        if not durable:
+            return []
+
+        messages: list[dict[str, Any]] = []
+        if task.system_prompt:
+            messages.append(_normalize_msg(role="system", content=task.system_prompt))
+        for msg in durable:
+            messages.append(
+                _normalize_msg(
+                    role=msg.get("role", "user"),
+                    content=msg.get("content", ""),
+                    tool_call_id=msg.get("tool_call_id", ""),
+                    tool_calls=msg.get("tool_calls"),
+                )
+            )
         return messages
 
     def _build_history_msgs(self, task: AgentTask) -> list[dict[str, Any]]:

@@ -696,18 +696,19 @@ func quoteIdent(s string) string {
 // ── 模型注册表 ──
 
 type modelRow struct {
-	ID            string    `json:"id"`
-	Provider      string    `json:"provider"`
-	Name          string    `json:"name"`
-	DisplayName   string    `json:"display_name"`
-	Enabled       bool      `json:"enabled"`
-	ContextWindow int       `json:"context_window"`
-	CreatedAt     time.Time `json:"created_at"`
+	ID              string    `json:"id"`
+	Provider        string    `json:"provider"`
+	Name            string    `json:"name"`
+	DisplayName     string    `json:"display_name"`
+	Enabled         bool      `json:"enabled"`
+	ContextWindow   int       `json:"context_window"`
+	MaxOutputTokens *int      `json:"max_output_tokens"` // NULL = 未知 → 引擎回落默认值
+	CreatedAt       time.Time `json:"created_at"`
 }
 
 func (h *AdminHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	rows, err := db.GlobalDBManager.Query(r.Context(),
-		`SELECT id::text, provider, name, display_name, enabled, context_window, created_at FROM llm_models ORDER BY provider, name`)
+		`SELECT id::text, provider, name, display_name, enabled, context_window, max_output_tokens, created_at FROM llm_models ORDER BY provider, name`)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list models failed")
 		return
@@ -716,7 +717,7 @@ func (h *AdminHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 	out := []modelRow{}
 	for rows.Next() {
 		var m modelRow
-		if rows.Scan(&m.ID, &m.Provider, &m.Name, &m.DisplayName, &m.Enabled, &m.ContextWindow, &m.CreatedAt) == nil {
+		if rows.Scan(&m.ID, &m.Provider, &m.Name, &m.DisplayName, &m.Enabled, &m.ContextWindow, &m.MaxOutputTokens, &m.CreatedAt) == nil {
 			out = append(out, m)
 		}
 	}
@@ -725,11 +726,12 @@ func (h *AdminHandler) ListModels(w http.ResponseWriter, r *http.Request) {
 
 func (h *AdminHandler) CreateModel(w http.ResponseWriter, r *http.Request) {
 	var body struct {
-		Provider      string `json:"provider"`
-		Name          string `json:"name"`
-		DisplayName   string `json:"display_name"`
-		Enabled       bool   `json:"enabled"`
-		ContextWindow int    `json:"context_window"`
+		Provider        string `json:"provider"`
+		Name            string `json:"name"`
+		DisplayName     string `json:"display_name"`
+		Enabled         bool   `json:"enabled"`
+		ContextWindow   int    `json:"context_window"`
+		MaxOutputTokens *int   `json:"max_output_tokens"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil || body.Provider == "" || body.Name == "" {
 		BadRequest(w, "provider and name are required")
@@ -738,12 +740,19 @@ func (h *AdminHandler) CreateModel(w http.ResponseWriter, r *http.Request) {
 	if body.ContextWindow <= 0 {
 		body.ContextWindow = 8192
 	}
+	if body.MaxOutputTokens != nil && *body.MaxOutputTokens <= 0 {
+		// 0 / 负数在这里落成 NULL（= 未知），而不是写进库让引擎把它当成上限。
+		body.MaxOutputTokens = nil
+	}
 	id, _ := id.UUID()
 	if _, err := db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO llm_models (id, provider, name, display_name, enabled, context_window)
-		 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT (provider, name) DO UPDATE
-		 SET display_name = EXCLUDED.display_name, enabled = EXCLUDED.enabled, context_window = EXCLUDED.context_window, updated_at = NOW()`,
-		id, body.Provider, body.Name, body.DisplayName, body.Enabled, body.ContextWindow); err != nil {
+		`INSERT INTO llm_models (id, provider, name, display_name, enabled, context_window, max_output_tokens)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT (provider, name) DO UPDATE
+		 SET display_name = EXCLUDED.display_name, enabled = EXCLUDED.enabled,
+		     context_window = EXCLUDED.context_window,
+		     max_output_tokens = COALESCE(EXCLUDED.max_output_tokens, llm_models.max_output_tokens),
+		     updated_at = NOW()`,
+		id, body.Provider, body.Name, body.DisplayName, body.Enabled, body.ContextWindow, body.MaxOutputTokens); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create model failed")
 		return
 	}
@@ -753,9 +762,10 @@ func (h *AdminHandler) CreateModel(w http.ResponseWriter, r *http.Request) {
 func (h *AdminHandler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
 	var body struct {
-		DisplayName   *string `json:"display_name"`
-		Enabled       *bool   `json:"enabled"`
-		ContextWindow *int    `json:"context_window"`
+		DisplayName     *string `json:"display_name"`
+		Enabled         *bool   `json:"enabled"`
+		ContextWindow   *int    `json:"context_window"`
+		MaxOutputTokens *int    `json:"max_output_tokens"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
@@ -763,9 +773,10 @@ func (h *AdminHandler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 	}
 	// S 安全修复：列名白名单，防止 SQL 注入
 	modelColumnMap := map[string]string{
-		"display_name":   "display_name",
-		"enabled":        "enabled",
-		"context_window": "context_window",
+		"display_name":      "display_name",
+		"enabled":           "enabled",
+		"context_window":    "context_window",
+		"max_output_tokens": "max_output_tokens",
 	}
 	sets, args := []string{}, []interface{}{}
 	idx := 1
@@ -787,6 +798,18 @@ func (h *AdminHandler) UpdateModel(w http.ResponseWriter, r *http.Request) {
 		if col, ok := modelColumnMap["context_window"]; ok {
 			sets = append(sets, fmt.Sprintf("%s = $%d", col, idx))
 			args = append(args, *body.ContextWindow)
+			idx++
+		}
+	}
+	if body.MaxOutputTokens != nil {
+		if col, ok := modelColumnMap["max_output_tokens"]; ok {
+			sets = append(sets, fmt.Sprintf("%s = $%d", col, idx))
+			// <=0 显式落成 NULL：管理端要能"改回未知"，否则填错一次就再也回不去。
+			if *body.MaxOutputTokens > 0 {
+				args = append(args, *body.MaxOutputTokens)
+			} else {
+				args = append(args, nil)
+			}
 			idx++
 		}
 	}

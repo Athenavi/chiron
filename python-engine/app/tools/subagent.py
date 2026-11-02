@@ -545,7 +545,7 @@ registry.register(
             },
             "mode": {
                 "type": "string",
-                "enum": ["normal", "minimal", "ptc", "creative"],
+                "enum": ["normal", "minimal"],
                 "default": "normal",
             },
             "max_turns": {

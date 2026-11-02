@@ -1,4 +1,4 @@
-"""Tests for run_code — PTC 模式的 Python SDK 组合工具调用。"""
+"""Tests for run_code — 程序化工具调用的 Python SDK 组合工具调用。"""
 from __future__ import annotations
 
 import pytest

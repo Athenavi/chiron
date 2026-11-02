@@ -72,9 +72,9 @@ func isMissingColumn(err error, column string) bool {
 // ensureSessionOwned 确保会话存在、且**属于 userID** —— fail-closed。
 //
 // 所有"按 session_id 写入"的路径都必须经此，三种结果：
-//   * 会话不存在 → 顺带创建（首条消息创建会话的正常路径）；
-//   * 已存在且属于该用户 → 只刷新 updated_at；
-//   * 已存在但归属不符 → `ON CONFLICT ... DO UPDATE ... WHERE` 既不更新也不返回行，
+//   - 会话不存在 → 顺带创建（首条消息创建会话的正常路径）；
+//   - 已存在且属于该用户 → 只刷新 updated_at；
+//   - 已存在但归属不符 → `ON CONFLICT ... DO UPDATE ... WHERE` 既不更新也不返回行，
 //     函数返回 ErrSessionForbidden，调用方**必须放弃写入**。
 //
 // 背景：此前 4 处写入（SaveUserMessage / SaveMessages / CreateTurn / CreateSession）各自
@@ -326,21 +326,54 @@ func (m *Manager) UpdateToolCall(ctx context.Context, toolCallID, output string,
 	}
 }
 
+// outputPreviewBytes 是工具调用列表里 output 的预览长度（字符）。
+//
+// 为什么不整段返回：output 是 text，写入侧上限截断后仍可达 256KB，而一页 50 条
+// 的全量正文足以让响应体上到十几 MB —— 加载性能的头号杀手。
+// 预览够渲染卡片首屏，完整内容由 /v1/chat/sessions/{id}/tool-calls/{tcID}/output 分段取。
+const outputPreviewBytes = 4096
+
+// ToolCallPage 是一页工具调用，外加它自己的游标。
+//
+// 与 MessagePage 分开而不是共用：两张表的 created_at 分布不同（工具调用发生在两条
+// 消息之间），用 messages 的游标去筛 tool_calls 会漏取本页该显示的工具调用。
+// 两个游标必须独立推进，任一表取不到不影响另一张。
+type ToolCallPage struct {
+	ToolCalls []model.ToolCall
+	HasMore   bool
+	// Cursor 指向本页最早一条（created_at|id），前端用它请求更早一页
+	Cursor string
+}
+
 // GetToolCallsPage retrieves a page of tool call records older than the cursor,
 // aligned with GetMessagesPage pagination (created_at|id cursor).
-func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit int, before string) ([]model.ToolCall, error) {
+//
+// output 只返回前 outputPreviewBytes 个字符，完整长度见 OutputBytes，
+// 是否被截见 OutputTruncated。判定由 SQL 算：left() 按字符截取，多字节文本下
+// 用 len() 比较字节数会误判。
+func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit int, before string) (ToolCallPage, error) {
+	page := ToolCallPage{}
 	if m.pool == nil || limit <= 0 {
-		return nil, nil
+		return page, nil
 	}
-	query := `SELECT id, session_id, tool_name, input, output, is_error, created_at
+	// total/truncated 都在库里算：output_bytes 已在迁移 0015 回填，
+	// 未回填的存量行由 COALESCE 兜底成真实字节数。
+	query := `SELECT id, session_id, tool_name, input,
+		          left(output, ` + strconv.Itoa(outputPreviewBytes) + `),
+		          COALESCE(output_bytes, octet_length(output)),
+		          (COALESCE(output_bytes, octet_length(output))
+		             > octet_length(left(output, ` + strconv.Itoa(outputPreviewBytes) + `))),
+		          is_error, created_at
 		 FROM tool_calls WHERE session_id = $1`
 	args := []interface{}{sessionID}
 	if before != "" {
 		parts := strings.SplitN(before, "|", 2)
 		if len(parts) == 2 {
-			t, err := time.Parse(time.RFC3339Nano, parts[0])
-			if err == nil {
-				query += ` AND (created_at < $2 OR (created_at = $2 AND id < $3))`
+			if t, err := time.Parse(time.RFC3339Nano, parts[0]); err == nil {
+				// 行值比较而不是 `a < x OR (a = x AND b < y)`：前者能让
+				// (session_id, created_at DESC, id DESC) 这条索引保序扫描并提前终止，
+				// 后者常被优化器拆成两次扫。
+				query += ` AND (created_at, id) < ($2, $3)`
 				args = append(args, t, parts[1])
 			}
 		}
@@ -350,7 +383,7 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 
 	rows, err := m.pool.Query(ctx, query, args...)
 	if err != nil {
-		return nil, err
+		return page, err
 	}
 	defer rows.Close()
 	var out []model.ToolCall
@@ -358,23 +391,31 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 		var tc model.ToolCall
 		var inputJSON []byte
 		var created time.Time
-		if err := rows.Scan(&tc.ID, &tc.SessionID, &tc.ToolName, &inputJSON, &tc.Output, &tc.IsError, &created); err != nil {
-			return nil, err
+		if err := rows.Scan(&tc.ID, &tc.SessionID, &tc.ToolName, &inputJSON, &tc.Output, &tc.OutputBytes, &tc.OutputTruncated, &tc.IsError, &created); err != nil {
+			return page, err
 		}
 		tc.Input = string(inputJSON)
 		tc.CreatedAt = created
 		out = append(out, tc)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, err
+		return page, err
 	}
+	// 多取一条用于判断是否还有更早的：多出来的那条不进结果，只用来置 HasMore。
 	if len(out) > limit {
+		page.HasMore = true
 		out = out[:limit]
 	}
 	for i, j := 0, len(out)-1; i < j; i, j = i+1, j-1 {
 		out[i], out[j] = out[j], out[i]
 	}
-	return out, nil
+	page.ToolCalls = out
+	// 游标取反转后的首条（即本页最早的那条），与 MessagePage 口径一致。
+	if len(out) > 0 {
+		first := out[0]
+		page.Cursor = first.CreatedAt.UTC().Format(time.RFC3339Nano) + "|" + first.ID
+	}
+	return page, nil
 }
 
 // GetToolCalls returns all tool call records for a session, oldest first.
