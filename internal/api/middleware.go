@@ -389,10 +389,11 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 					// Validate API key against PostgreSQL（含 tenant_id 与 revoked 状态校验，多租户隔离）
 					// 同时取回 ak.id：鉴权成功后要按节流回写 last_used_at（见 markAPIKeyUsed）
 					var keyID, userID, role, tenantID string
+					var keyIssuedAt int64
 					keyHash := sha256.Sum256([]byte(key))
 					err := db.GlobalDBManager.QueryRow(r.Context(),
 						apiKeyAuthQuery,
-						hex.EncodeToString(keyHash[:])).Scan(&keyID, &userID, &role, &tenantID)
+						hex.EncodeToString(keyHash[:])).Scan(&keyID, &userID, &role, &tenantID, &keyIssuedAt)
 					if err == nil {
 						// P1-5: tenant_id 为空直接拒绝，不再回退 DefaultTenantID。
 						// 历史数据中 tenant_id=NULL 的 user 走 DefaultTenantID 会落到默认租户，
@@ -401,6 +402,26 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 							slog.Warn("API key bound to user with null tenant_id, rejecting",
 								"user_id", userID)
 							Unauthorized(w, "user has no tenant binding; contact admin")
+							return
+						}
+						// ── 会话纪元检查（与 JWT 分支同一口径，fail-close）──
+						//
+						// 缺了这一条，`revokeUserSessions` 只对 JWT 有效：改密 / 密码重置 /
+						// 管理员踢人之后，此前签发的 **API key 依然能用** —— 而 API key 恰恰是
+						// 最长寿、最容易落在 CI / 第三方系统里的那类凭据，泄漏后"改密止血"
+						// 对它完全无效。三步撤销（改密 → 全部会话失效）必须把两条凭据通道都覆盖。
+						//
+						// 比对的是 key 的**签发时刻**而不是 JWT 的 iat：API key 没有 iat。
+						// `keyIssuedAt` 由 SQL 按会话时区还原成真实 Unix 秒（见 apiKeyAuthQuery）。
+						epoch, epochErr := sessionEpoch(r.Context(), userID)
+						if epochErr != nil {
+							slog.Warn("session epoch check failed for api key (fail-close)",
+								"user_id", userID, "error", epochErr)
+							Unauthorized(w, "authentication service unavailable")
+							return
+						}
+						if epoch > 0 && epoch > keyIssuedAt {
+							Unauthorized(w, "api key has been revoked")
 							return
 						}
 						// API Key 是长期凭据（不过期或长过期），泄漏面远大于短期 JWT：
@@ -414,7 +435,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 						}
 						ctx := auth.WithClaims(r.Context(), claims)
 						markAPIKeyUsed(keyID)
-						next.ServeHTTP(w, r.WithContext(ctx))
+						next.ServeHTTP(w, r.WithContext(withTenantCtx(ctx, claims)))
 						return
 					}
 					Unauthorized(w, "invalid API key")
@@ -464,7 +485,7 @@ func AuthMiddleware(a *auth.Authenticator) func(http.Handler) http.Handler {
 			}
 
 			ctx := auth.WithClaims(r.Context(), claims)
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, r.WithContext(withTenantCtx(ctx, claims)))
 		})
 	}
 }
@@ -480,6 +501,30 @@ func RequirePermission(perm string) func(http.Handler) http.Handler {
 			}
 			next.ServeHTTP(w, r)
 		})
+	}
+}
+
+// RequirePlatformOwner 是**平台级**端点的门禁：既要权限点，也要平台 owner 角色。
+//
+// 为什么不能只用 RequirePermission：`admin:write` 是**租户**内置 admin 角色就持有的
+// 权限（auth.RolePermissions["admin"]，见 internal/auth/jwt.go）。于是
+// `POST /v1/admin/database/query`、`DELETE /v1/admin/tenants/{id}` 这类本质上是
+// **平台级**的操作，只要租户 admin 一登录就能执行 —— 租户 2 的 admin 可以直接
+// `SELECT * FROM users`（拿到全平台 email/password_hash）或删掉租户 1。
+//
+// 判定口径与 admin.go「只有 owner 能授予 owner 角色」、ent_identity_handler.go:333、
+// sso_providers_admin.go:177 一致：平台级操作 = `claims.Role == "owner"`。
+// 租户内的管理操作（成员、邀请码、harness 配置）继续走租户权限点，不受影响。
+func RequirePlatformOwner(perm string) func(http.Handler) http.Handler {
+	permMW := RequirePermission(perm)
+	return func(next http.Handler) http.Handler {
+		return permMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if !isPlatformOwner(auth.GetClaims(r.Context())) {
+				Forbidden(w, "platform owner only")
+				return
+			}
+			next.ServeHTTP(w, r)
+		}))
 	}
 }
 

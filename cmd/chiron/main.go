@@ -310,6 +310,15 @@ func main() {
 	<-done
 	slog.Info("shutting down...")
 
+	// 先通知 SSE 长连接收尾，再 Shutdown。
+	// srv.Shutdown 会**等待所有活跃连接结束**，而 SSE 连接只有客户端断开才结束 ——
+	// 先 drain 才能让它们主动收尾；否则每个打开着页面的用户都会把 10s 宽限吃满，
+	// Shutdown 超时返回、进程被强杀，同实例上正在跑的普通请求一并被切断。
+	// eventHub 可能为 nil（极早期退出路径），故判空。
+	if eventHub != nil {
+		eventHub.BeginDrain()
+	}
+
 	// 注意：这里必须从 context.Background() 派生，**不能**用 lifecycleCtx。
 	// lifecycleCtx 由 signal.NotifyContext 创建，收到 SIGTERM 时它已经被 cancel，
 	// 以它为父会让 shutdownCtx 立即到期、srv.Shutdown 随即返回 —— 10s 宽限形同

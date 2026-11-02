@@ -29,6 +29,10 @@ func registerAdminRoutes(
 	// 该权限仅 owner 角色持有，普通 admin 不应能删/改用户。
 	adminReadMW := RequirePermission(auth.PermAdminRead)
 	adminWriteMW := RequirePermission(auth.PermAdminWrite)
+	// 平台级端点：`admin:write` 是租户 admin 就持有的权限，光靠它挡不住跨租户操作。
+	// 见 middleware.go 的 RequirePlatformOwner 注释（租户 admin 可读全库 / 删任意租户）。
+	platformReadMW := RequirePlatformOwner(auth.PermAdminRead)
+	platformWriteMW := RequirePlatformOwner(auth.PermAdminWrite)
 	usersManageMW := RequirePermission(auth.PermUsersManage)
 	adminMux := http.NewServeMux()
 	adminHandler.RegisterRoutes(adminMux)
@@ -53,7 +57,7 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/usage/catalog", authMW(rlMW(adminReadMW(adminStrip))))
 	// 新用户引导漏斗（P0-3 验收「完成率可查」）—— 只读统计，与其它 admin 读端点同口径。
 	mux.Handle("GET /v1/admin/onboarding/funnel", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/maintenance", authMW(rlMW(platformWriteMW(adminStrip))))
 	mux.Handle("GET /v1/admin/kb", authMW(rlMW(adminReadMW(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if pythonClient == nil || !pythonClient.IsConnected() {
 			InternalError(w, "python engine not available")
@@ -65,19 +69,19 @@ func registerAdminRoutes(
 	})))))
 
 	// Storage admin routes
-	mux.Handle("GET /v1/admin/storage", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/storage", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/storage/test", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/storage", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/storage", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/storage/test", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// Redis admin routes
-	mux.Handle("GET /v1/admin/redis", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/redis", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/redis/test", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/redis", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/redis", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/redis/test", authMW(rlMW(platformWriteMW(adminStrip))))
 	// 慢日志 / 清库：handler 早已注册在 adminMux（admin_ops.go:56-57），但**从未在此暴露到外部 mux**
 	// ⇒ 前端「刷新慢日志」「执行 FLUSHALL」恒 404（与下面 models / settings 是同一个坑）。
 	// FLUSHDB 是**破坏性写操作** ⇒ 必须走 adminWriteMW，不能给读取权限。
-	mux.Handle("GET /v1/admin/redis/slow-log", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/redis/flush-all", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/redis/slow-log", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/redis/flush-all", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// Database admin routes（/admin/datastores?tab=database 整页依赖它们）
 	// 同样的问题：handler 早在 adminMux 里注册（admin_ops.go:47-53），但从未暴露 ⇒
@@ -85,56 +89,56 @@ func registerAdminRoutes(
 	// 判据照本文件既定口径（见文件头 P1-3）：GET 用 adminReadMW；
 	// 任意 SELECT、VACUUM/ANALYZE 都是**写操作** ⇒ 一律 adminWriteMW。
 	// 备份 / 恢复端点已移除：企业部署用云数据库（快照/PITR），容器内 pg_dump/psql 不适用。
-	mux.Handle("GET /v1/admin/database/status", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("GET /v1/admin/database/configs", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/database/query", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/database/optimize/{action}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/database/status", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/database/configs", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/query", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/database/optimize/{action}", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// Queue admin routes
-	mux.Handle("GET /v1/admin/queue", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/queue/flush", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/queue/pause", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/queue", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/queue/flush", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/queue/pause", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// Cache admin routes
-	mux.Handle("GET /v1/admin/cache/stats", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/cache/stats", authMW(rlMW(platformReadMW(adminStrip))))
 
 	// Performance admin routes
-	mux.Handle("GET /v1/admin/performance", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/performance", authMW(rlMW(platformReadMW(adminStrip))))
 
 	// API Key admin routes (direct handlers, avoid adminMux path mismatch)
-	mux.Handle("GET /v1/admin/api-keys", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.ListLLMKeys)))))
-	mux.Handle("POST /v1/admin/api-keys", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.AddLLMKey)))))
-	mux.Handle("PUT /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyStatus)))))
+	mux.Handle("GET /v1/admin/api-keys", authMW(rlMW(platformReadMW(http.HandlerFunc(adminHandler.ListLLMKeys)))))
+	mux.Handle("POST /v1/admin/api-keys", authMW(rlMW(platformWriteMW(http.HandlerFunc(adminHandler.AddLLMKey)))))
+	mux.Handle("PUT /v1/admin/api-keys/{id}", authMW(rlMW(platformWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyStatus)))))
 	// M27：改分配权重（smooth WRR 的比例）。与 status 分开是有意的 —— `weight = 0` 的语义是
 	// "不参与选择但保留状态"，而 status 的语义是"这把 key 能不能用"。
-	mux.Handle("PUT /v1/admin/api-keys/{id}/weight", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyWeight)))))
-	mux.Handle("DELETE /v1/admin/api-keys/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.DeleteLLMKey)))))
+	mux.Handle("PUT /v1/admin/api-keys/{id}/weight", authMW(rlMW(platformWriteMW(http.HandlerFunc(adminHandler.UpdateLLMKeyWeight)))))
+	mux.Handle("DELETE /v1/admin/api-keys/{id}", authMW(rlMW(platformWriteMW(http.HandlerFunc(adminHandler.DeleteLLMKey)))))
 
 	// LLM provider catalog routes（服务提供商目录与端点覆盖）
-	mux.Handle("GET /v1/admin/llm-providers", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.ListLLMProviders)))))
-	mux.Handle("PUT /v1/admin/llm-providers/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SetLLMProviderConfig)))))
+	mux.Handle("GET /v1/admin/llm-providers", authMW(rlMW(platformReadMW(http.HandlerFunc(adminHandler.ListLLMProviders)))))
+	mux.Handle("PUT /v1/admin/llm-providers/{id}", authMW(rlMW(platformWriteMW(http.HandlerFunc(adminHandler.SetLLMProviderConfig)))))
 
 	// 模型配置：决定 /v1/models（进而决定 /chat 的模型下拉）里有哪些模型。
 	// adminMux 里**早已注册** GET/POST /models 与 PUT/DELETE /models/{id}（admin_ops.go:60-63），
 	// 但从未在此暴露到外部 mux → 前端无论怎么点都调不到，只能依赖模型发现自动写入；
 	// 一旦发现失败（provider 无 /models、UA 被拦、网络不可达），可用模型集永远是空的。
-	mux.Handle("GET /v1/admin/models", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/models", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/models", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/models", authMW(rlMW(platformWriteMW(adminStrip))))
 	// 批量开关（/models 页的组内全选 → 启用/禁用）。必须**在 {id} 之外单独注册**：
 	// 前者是写操作，鉴权口径与 PUT /models/{id} 一致。
-	mux.Handle("PUT /v1/admin/models/batch", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("DELETE /v1/admin/models/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/models/batch", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/models/{id}", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/models/{id}", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// Settings admin routes
 	// 读取分组配置此前只在 adminMux 内注册、从未暴露到外部 mux，前端 getSettings 恒 404
 	// （页面回填静默失效）。此处补齐 GET，与 PUT 同鉴权口径。
-	mux.Handle("GET /v1/admin/settings", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/settings", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/settings", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/settings", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// 支付渠道配置（后台「支付配置」页面）
-	mux.Handle("GET /v1/admin/payments", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(adminWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/payments", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(platformWriteMW(adminStrip))))
 
 	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
 	// 读也挂 PermBillingManage 而不是 adminReadMW：能看到定价与权益范围的人，
@@ -153,12 +157,12 @@ func registerAdminRoutes(
 	// mux ⇒ 前端 CronView / DomainManagementView / TenantManagementView 恒 404。
 	// 鉴权口径沿用文件头 P1-3：GET 用 adminReadMW；创建/修改/删除/触发（含发信、
 	// 签发 SSL、写 DB）一律 adminWriteMW。
-	mux.Handle("GET /v1/admin/tenants", authMW(rlMW(adminReadMW(adminStrip))))
-	mux.Handle("POST /v1/admin/tenants", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("PUT /v1/admin/tenants/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("DELETE /v1/admin/tenants/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("POST /v1/admin/tenants/{id}/suspend", authMW(rlMW(adminWriteMW(adminStrip))))
-	mux.Handle("GET /v1/admin/tenants/{id}/usage", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("GET /v1/admin/tenants", authMW(rlMW(platformReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/tenants", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("PUT /v1/admin/tenants/{id}", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("DELETE /v1/admin/tenants/{id}", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("POST /v1/admin/tenants/{id}/suspend", authMW(rlMW(platformWriteMW(adminStrip))))
+	mux.Handle("GET /v1/admin/tenants/{id}/usage", authMW(rlMW(platformReadMW(adminStrip))))
 
 	// 租户级 harness 配置（P1-④ 批 B）：读用 adminReadMW；**写用 PermPolicyManage**
 	// —— 它决定该租户所有会话的 system prompt，属"策略"而非"日常运维"。
@@ -180,6 +184,8 @@ func registerAdminRoutes(
 	mux.Handle("PUT /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("DELETE /v1/admin/cron-jobs/{id}", authMW(rlMW(adminWriteMW(adminStrip))))
 	mux.Handle("POST /v1/admin/cron-jobs/{id}/trigger", authMW(rlMW(adminWriteMW(adminStrip))))
+	// 重置 Webhook token：租户级（与其它 cron-jobs 写操作同口径，靠 SQL 的 tenant_id 隔离）。
+	mux.Handle("POST /v1/admin/cron-jobs/{id}/webhook-token", authMW(rlMW(adminWriteMW(adminStrip))))
 
 	// 租户邀请码（F2）：注册时据邀请码决定新用户归属哪个租户。
 	mux.Handle("GET /v1/admin/invites", authMW(rlMW(adminReadMW(adminStrip))))

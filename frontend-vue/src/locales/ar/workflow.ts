@@ -84,5 +84,6 @@ export default {
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "منصة وكلاء AI مستضافة ذاتيًا ومتعددة المستأجرين ويمكن التحكم بها بالكامل. المحادثة والوكيل وسير العمل والمهارة وقاعدة المعرفة والإضافة في منصة واحدة.",
   agent_agentic_collaboration_task: "agent وكيل تعاوني مهمة",
   webhook_trigger_url_copied_to_clipboard: "تم نسخ عنوان تشغيل Webhook إلى الحافظة",
+  copy_webhook_rotates_token: "لم تعد القائمة تحتفظ برمز Webhook بصيغة مقروءة. المتابعة تُصدر رمزًا جديدًا ويتوقف عنوان التشغيل القديم فورًا (ستحصل التكاملات التي تستخدمه على 403). هل تريد المتابعة؟",
   workflow_dag_orchestration: "workflow سير عمل dag تنسيق",
 }

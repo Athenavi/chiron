@@ -35,6 +35,7 @@ import (
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
+	"github.com/jackc/pgx/v5"
 )
 
 const (
@@ -87,6 +88,64 @@ func NewSessionMapHandler() *SessionMapHandler { return &SessionMapHandler{} }
 func smCacheKey(workspaceID string) string { return db.RedisKey("sessionmap:ws:" + workspaceID) }
 func smDirtyKey() string                   { return db.RedisKey("sessionmap:dirty") }
 
+// smInflightKey 记录"已被某个实例认领、尚未落库完成"的画布（ZSET，score = 认领时刻）。
+//
+// 为什么需要它：此前落库是 `SPOP` 之后直接干活 —— 认领即出队，一旦中途出事
+// （进程被 OOM/滚动发布杀掉、Redis 抖动导致快照读不到、panic），这条 ID 就从 dirty
+// 集合里消失了，而热层里的布局从未写进 PG。用户拖动过的位置就这样**永久丢失**，
+// 且没有任何日志能说明"哪张画布没落库"。
+//
+// 现在认领改为「SPOP + ZADD inflight（原子 Lua）」，落库结束才 ZREM。崩溃遗留的
+// inflight 项由下一轮的回收步骤放回 dirty —— 认领仍然是原子的（谁抢到谁写 PG），
+// 但不再是"一抢到就再也回不去"。
+func smInflightKey() string { return db.RedisKey("sessionmap:inflight") }
+
+// smClaimStaleSecs：inflight 项超过这个时间未归还，视为认领者已死，回收重试。
+// 取 5 分钟：正常落库是毫秒级（smFlushPeriod 才 3 秒），这个阈值只用来兜崩溃，
+// 又不能太短 —— 太短会让慢查询期间的画布被两个实例同时写。
+const smClaimStaleSecs = 300
+
+// smClaimLua 原子地回收过期认领 + 从 dirty 领取一张画布。
+//
+// 必须是一个脚本：分两条命令做"回收 + 领取"时，两个实例可能同时回收同一条并
+// 各自认领，导致同一画布被并发写（虽然有幂等兜底，但会浪费连接并放大写冲突）。
+const smClaimLua = `
+local stale = redis.call('ZRANGEBYSCORE', KEYS[2], 0, tonumber(ARGV[2]) - tonumber(ARGV[1]), 'LIMIT', 0, 50)
+for _, id in ipairs(stale) do
+  redis.call('SADD', KEYS[1], id)
+  redis.call('ZREM', KEYS[2], id)
+end
+local id = redis.call('SPOP', KEYS[1])
+if not id then
+  return false
+end
+redis.call('ZADD', KEYS[2], ARGV[2], id)
+return id
+`
+
+// smClaimDirty 领取一张待落库的画布；没有可领取项时返回 ("", false)。
+func smClaimDirty(ctx context.Context, now time.Time) (string, bool) {
+	res := db.Redis.Eval(ctx, smClaimLua,
+		[]string{smDirtyKey(), smInflightKey()},
+		smClaimStaleSecs, now.Unix())
+	if err := res.Err(); err != nil {
+		return "", false
+	}
+	id, err := res.Text()
+	if err != nil || id == "" {
+		return "", false
+	}
+	return id, true
+}
+
+// smReleaseClaim 归还认领：requeue=true 表示本次没落库成功，放回 dirty 下一轮重试。
+func smReleaseClaim(ctx context.Context, workspaceID string, requeue bool) {
+	db.Redis.Do(ctx, "ZREM", smInflightKey(), workspaceID)
+	if requeue {
+		db.Redis.Do(ctx, "SADD", smDirtyKey(), workspaceID)
+	}
+}
+
 func smTenant(claims *auth.Claims) string {
 	if claims == nil {
 		return ""
@@ -99,24 +158,33 @@ func smTenant(claims *auth.Claims) string {
 
 // ── 热层读写 ──
 
+// smCacheGet 读热层快照；"不存在"与"Redis 出错"都按未命中处理（读路径可接受）。
 func smCacheGet(ctx context.Context, workspaceID string) (*SessionMapWorkspace, bool) {
+	ws, ok, _ := smCacheGetChecked(ctx, workspaceID)
+	return ws, ok
+}
+
+// smCacheGetChecked 与 smCacheGet 相同，但区分"不存在"与"Redis 出错"。
+//
+// flush 路径必须区分这两者：key 不存在说明热层数据本身已丢失（没什么可落库），
+// 而 Redis 出错只是这一刻读不到 —— 把它当成"不存在"就把用户的操作永久丢掉了。
+func smCacheGetChecked(ctx context.Context, workspaceID string) (*SessionMapWorkspace, bool, error) {
 	if db.Redis == nil {
-		return nil, false
+		return nil, false, nil
 	}
-	key := smCacheKey(workspaceID)
-	res := db.Redis.Do(ctx, "GET", key)
-	if res.Err() != nil {
-		return nil, false
+	res := db.Redis.Do(ctx, "GET", smCacheKey(workspaceID))
+	if err := res.Err(); err != nil {
+		return nil, false, err
 	}
 	raw, _ := res.Text()
 	if raw == "" {
-		return nil, false
+		return nil, false, nil
 	}
 	var ws SessionMapWorkspace
 	if err := json.Unmarshal([]byte(raw), &ws); err != nil {
-		return nil, false
+		return nil, false, nil
 	}
-	return &ws, true
+	return &ws, true, nil
 }
 
 func smCachePut(ctx context.Context, ws *SessionMapWorkspace) {
@@ -136,27 +204,39 @@ func smCachePut(ctx context.Context, ws *SessionMapWorkspace) {
 }
 
 // smFlushOnce 把 dirty 集合里的画布落到 PG。返回处理条数。
+//
+// 认领语义见 smClaimDirty：领取即登记 inflight，落库结束才归还 —— 进程中途被杀
+// 也不会让这张画布从此再没人落库。
 func smFlushOnce(ctx context.Context) int {
 	if db.Redis == nil || db.GlobalDBManager == nil {
 		return 0
 	}
 	handled := 0
 	for i := 0; i < 20; i++ { // 每轮最多 20 张，避免长时间占用
-		res := db.Redis.Do(ctx, "SPOP", smDirtyKey())
-		raw, err := res.Text()
-		if err != nil || raw == "" {
+		raw, ok := smClaimDirty(ctx, time.Now())
+		if !ok {
 			break
 		}
-		ws, ok := smCacheGet(ctx, raw)
-		if !ok {
+		ws, found, err := smCacheGetChecked(ctx, raw)
+		if err != nil {
+			// 只是这一刻读不到：放回 dirty 重试，不能当成"画布不存在"而丢弃。
+			slog.Warn("sessionmap flush: cache read failed, will retry", "workspace", raw, "error", err)
+			smReleaseClaim(ctx, raw, true)
+			continue
+		}
+		if !found {
+			// 热层已过期（24h TTL）或已被删除：没有可落库的快照，归还而不重排，
+			// 否则这个 ID 会在 dirty/inflight 之间永久打转。
+			smReleaseClaim(ctx, raw, false)
 			continue
 		}
 		if err := smPersist(ctx, ws); err != nil {
 			slog.Warn("sessionmap flush failed, will retry", "workspace", raw, "error", err)
 			// 放回 dirty 集合，下一轮重试（不丢用户操作）
-			db.Redis.Do(ctx, "SADD", smDirtyKey(), raw)
+			smReleaseClaim(ctx, raw, true)
 			continue
 		}
+		smReleaseClaim(ctx, raw, false)
 		handled++
 	}
 	return handled
@@ -272,35 +352,42 @@ func smPersist(ctx context.Context, ws *SessionMapWorkspace) error {
 		return nil
 	}
 	viewport, _ := json.Marshal(ws.Viewport)
-	if _, err := db.GlobalDBManager.Exec(ctx,
-		`UPDATE session_map_workspaces SET name = $2, viewport = $3::jsonb, updated_at = NOW()
-		  WHERE id = $1`, ws.ID, ws.Name, string(viewport)); err != nil {
-		return err
-	}
-	// 节点全量替换：先删后插，天然处理"节点被移除"的情况。
-	// 节点量有上限（smMaxNodes），一次 DELETE + 批量 INSERT 比逐节点 diff 简单且不易出错。
-	if _, err := db.GlobalDBManager.Exec(ctx,
-		`DELETE FROM session_map_nodes WHERE workspace_id = $1`, ws.ID); err != nil {
-		return err
-	}
-	for _, n := range ws.Nodes {
-		if _, err := db.GlobalDBManager.Exec(ctx,
-			`INSERT INTO session_map_nodes
-			   (id, workspace_id, session_id, parent_node_id, edge_kind, x, y, title, color,
-			    collapsed, hidden, pinned, branch_from_seq, created_at, updated_at)
-			 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),COALESCE(NULLIF($5,''),'manual'),$6,$7,
-			         NULLIF($8,''),NULLIF($9,''),$10,$11,$12,NULLIF($13,0),NOW(),NOW())
-			 ON CONFLICT (id) DO UPDATE SET
-			   parent_node_id = EXCLUDED.parent_node_id, edge_kind = EXCLUDED.edge_kind,
-			   x = EXCLUDED.x, y = EXCLUDED.y, title = EXCLUDED.title, color = EXCLUDED.color,
-			   collapsed = EXCLUDED.collapsed, hidden = EXCLUDED.hidden, pinned = EXCLUDED.pinned,
-			   branch_from_seq = EXCLUDED.branch_from_seq, updated_at = NOW()`,
-			n.ID, ws.ID, n.SessionID, n.ParentNodeID, n.EdgeKind, n.X, n.Y, n.Title, n.Color,
-			n.Collapsed, n.Hidden, n.Pinned, n.BranchFromSeq); err != nil {
+	// 必须整体在**一个事务**里：先 DELETE 全部节点、再逐条 INSERT。
+	// 此前每条语句各自提交，于是"DELETE 成功、第 7 条 INSERT 失败"时，画布在 PG 里
+	// 只剩前 6 个节点 —— 回滚不了、重试也只会从同一个快照再做一次同样的部分删除。
+	// 用户看到的是"地图上的节点凭空少了一半"，而日志里只有一行 flush failed。
+	// 事务化之后失败即整体回滚，dirty 重试拿到的仍是完整快照。
+	return db.GlobalDBManager.WithTransaction(ctx, func(tx pgx.Tx) error {
+		if _, err := tx.Exec(ctx,
+			`UPDATE session_map_workspaces SET name = $2, viewport = $3::jsonb, updated_at = NOW()
+			  WHERE id = $1`, ws.ID, ws.Name, string(viewport)); err != nil {
 			return err
 		}
-	}
-	return nil
+		// 节点全量替换：先删后插，天然处理"节点被移除"的情况。
+		// 节点量有上限（smMaxNodes），一次 DELETE + 批量 INSERT 比逐节点 diff 简单且不易出错。
+		if _, err := tx.Exec(ctx,
+			`DELETE FROM session_map_nodes WHERE workspace_id = $1`, ws.ID); err != nil {
+			return err
+		}
+		for _, n := range ws.Nodes {
+			if _, err := tx.Exec(ctx,
+				`INSERT INTO session_map_nodes
+				   (id, workspace_id, session_id, parent_node_id, edge_kind, x, y, title, color,
+				    collapsed, hidden, pinned, branch_from_seq, created_at, updated_at)
+				 VALUES ($1,$2,NULLIF($3,''),NULLIF($4,''),COALESCE(NULLIF($5,''),'manual'),$6,$7,
+				         NULLIF($8,''),NULLIF($9,''),$10,$11,$12,NULLIF($13,0),NOW(),NOW())
+				 ON CONFLICT (id) DO UPDATE SET
+				   parent_node_id = EXCLUDED.parent_node_id, edge_kind = EXCLUDED.edge_kind,
+				   x = EXCLUDED.x, y = EXCLUDED.y, title = EXCLUDED.title, color = EXCLUDED.color,
+				   collapsed = EXCLUDED.collapsed, hidden = EXCLUDED.hidden, pinned = EXCLUDED.pinned,
+				   branch_from_seq = EXCLUDED.branch_from_seq, updated_at = NOW()`,
+				n.ID, ws.ID, n.SessionID, n.ParentNodeID, n.EdgeKind, n.X, n.Y, n.Title, n.Color,
+				n.Collapsed, n.Hidden, n.Pinned, n.BranchFromSeq); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
 }
 
 func smLoadFromPG(ctx context.Context, workspaceID, tenant, userID string) (*SessionMapWorkspace, error) {
@@ -376,6 +463,9 @@ func invalidateSessionMapWorkspaces(ctx context.Context, workspaceIDs []string) 
 	for _, id := range workspaceIDs {
 		db.Redis.Do(ctx, "DEL", smCacheKey(id))
 		db.Redis.Do(ctx, "SREM", smDirtyKey(), id)
+		// inflight 也要清：残留项会在下一轮被"回收"放回 dirty，而热层 key 已被删，
+		// 于是它每轮都被领取、发现不存在、再归还 —— 空转到 TTL 到期。
+		db.Redis.Do(ctx, "ZREM", smInflightKey(), id)
 	}
 	if len(workspaceIDs) > 0 {
 		slog.Info("sessionmap: invalidated workspaces after session delete", "count", len(workspaceIDs))

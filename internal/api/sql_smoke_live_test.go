@@ -412,9 +412,14 @@ func TestLiveApplyInvoiceInsertSelect(t *testing.T) {
 
 // TestLiveAPIKeyAuthAndMarkUsed 验鉴权 JOIN 与 `last_used_at` 回写（缺口 ⑤⑥）。
 //
-// ⑤ `apiKeyAuthQuery` 是**每个 API 请求**都会走的语句，它返回 4 列并扫进
-// 4 个 string。列数或顺序变了，单测（只断言字符串包含）发现不了，而线上表现是
-// 全部请求 401/500。这里用真库把 4 列的**语义**逐一钉住。
+// ⑤ `apiKeyAuthQuery` 是**每个 API 请求**都会走的语句，它返回 5 列并扫进
+// 4 个 string + 1 个 int64。列数或顺序变了，单测（只断言字符串包含）发现不了，
+// 而线上表现是全部请求 401/500。这里用真库把 5 列的**语义**逐一钉住。
+//
+// 第 5 列（签发时刻）还额外钉住了一件只有在真库上才可能发现的事：
+// `api_keys.created_at` 是 `timestamp without time zone`，写入用 `now()`。
+// 若直接用 `created_at` 比较纪元，在非 UTC 会话时区上会整体偏差一个时区偏移；
+// 这里断言它确实按会话时区还原成了真实时刻（与本进程的 `time.Now()` 同量级）。
 //
 // ⑥ `api_keys.last_used_at` 在 `init.sql` 里是 `timestamp`（**无时区**），
 // 而回写语句用 `now()`（timestamptz）。两者靠隐式转换对齐，是否会丢/偏时间
@@ -437,8 +442,9 @@ func TestLiveAPIKeyAuthAndMarkUsed(t *testing.T) {
 
 	// ⑤ 鉴权查询：读回 key 本身的 id，而不是只读 user —— 这是"补选 ak.id 的 JOIN"。
 	var gotKeyID, gotUserID, gotRole, gotTenantID string
+	var gotIssuedAt int64
 	if err := pool.QueryRow(ctx, apiKeyAuthQuery, keyHash).
-		Scan(&gotKeyID, &gotUserID, &gotRole, &gotTenantID); err != nil {
+		Scan(&gotKeyID, &gotUserID, &gotRole, &gotTenantID, &gotIssuedAt); err != nil {
 		t.Fatalf("apiKeyAuthQuery 执行失败（列数/顺序/类型不匹配？）: %v", err)
 	}
 	if gotKeyID != keyID {
@@ -453,13 +459,18 @@ func TestLiveAPIKeyAuthAndMarkUsed(t *testing.T) {
 	if gotTenantID != fmt.Sprintf("%d", tenantID) {
 		t.Errorf("第 4 列 tenantID = %q，期望 %d（COALESCE 转文本）", gotTenantID, tenantID)
 	}
+	// 第 5 列：刚插入的 key，签发时刻应当落在"现在"附近。容差 10 分钟足以覆盖
+	// 会话时区换算与插入/查询之间的耗时，同时能抓住"偏差一个时区"（≥ 整数小时）。
+	if delta := time.Since(time.Unix(gotIssuedAt, 0)); delta > 10*time.Minute || delta < -10*time.Minute {
+		t.Errorf("第 5 列 issuedAt 与当前时间相差 %v，期望在 10 分钟内（时区换算错位？）", delta)
+	}
 
 	// 已吊销的 key 必须查不到 —— 否则"吊销"只是列表里少一行。
 	if _, err := pool.Exec(ctx, apiKeyRevokeQuery, keyID, userID); err != nil {
 		t.Fatalf("吊销失败: %v", err)
 	}
 	if err := pool.QueryRow(ctx, apiKeyAuthQuery, keyHash).
-		Scan(&gotKeyID, &gotUserID, &gotRole, &gotTenantID); err == nil {
+		Scan(&gotKeyID, &gotUserID, &gotRole, &gotTenantID, &gotIssuedAt); err == nil {
 		t.Error("已吊销的 key 仍能通过鉴权查询")
 	}
 

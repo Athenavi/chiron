@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -178,6 +179,26 @@ func (s *CronScheduler) tryAcquireLease(ctx context.Context, j jobRow, staleSecs
 	return tag.RowsAffected() == 1, nil
 }
 
+// cronReleaseTimeout 归还租约/写回运行结果的时限。
+// 取 10 秒：这是"一条 UPDATE"，正常亚毫秒完成；给足网络抖动余量即可，
+// 不必也不该和执行时限同量级（否则归还本身可能拖住退出流程）。
+const cronReleaseTimeout = 10 * time.Second
+
+// cronReleaseContext 返回一个**不随触发上下文取消**的短超时上下文，供归还路径使用。
+//
+// 为什么不能用执行上下文：runJob 的执行上下文有 10 分钟上限，且 triggerManual 的
+// goroutine 还叠了外层 10 分钟。任务跑到超时的那一刻 ctx.Err() 已是 DeadlineExceeded，
+// 此时用同一个 ctx 发 `UPDATE cron_jobs SET run_lease_at = NULL …` 会**直接失败** ——
+// 租约就此挂在 run_lease_at 上，该 job 直到 stale 阈值（20 分钟）之前谁都抢不到，
+// 手动/Webhook 触发也一律 409。表现是"一个总是超时的任务从每分钟失败退化成每 20 分钟
+// 失败一次"，而且日志里全是租约冲突，根因（归还那一步被取消）却看不到。
+//
+// 归还与"记录运行结果"是对**已经发生的事实**记账，与触发方是否还在等无关，
+// 所以按语义就该脱离取消链 —— context.WithoutCancel 正是为此存在。
+func cronReleaseContext(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(ctx), cronReleaseTimeout)
+}
+
 // cronSlotTTL 调度槽位键的存活时间：只需覆盖"同一次调度被多副本重复触发"的时间窗
 // （秒级~分钟级），取 10 分钟既有充足余量，也不会让键长期堆积（每个 job 每分钟至多一个）。
 const cronSlotTTL = 10 * time.Minute
@@ -266,31 +287,54 @@ func (s *CronScheduler) runJob(ctx context.Context, j jobRow, token string) {
 	defer cancel()
 
 	start := time.Now()
-	status := "success"
-	errMsg := ""
+	// 默认值取"失败"：任务体 panic 时这里保持 failed，写回的状态才如实反映"没跑完"。
+	// 若默认为 success，"崩溃"在管理端会显示成一次成功运行。
+	status, errMsg := "failed", "execution aborted"
+	// 归还必须走 defer：panic 展开时它仍会执行。此前归还写在函数末尾，而
+	// parseAndExecute 会跑大量由不可信输入驱动的代码，一次 panic 就让租约永远
+	// 还不回去 —— 该 job 在 stale 阈值（20 分钟）之前谁抢不到，手动触发也一贯 409。
+	defer func() { s.releaseLease(ctx, j, token, status) }()
+
 	if s.python == nil {
-		status = "failed"
-		errMsg = "python engine unavailable"
+		status, errMsg = "failed", "python engine unavailable"
 	} else {
 		status, errMsg = s.parseAndExecute(execCtx, j)
 	}
-	// 释放租约并记录本次运行结果：仅当租约仍属于本次 token 时才清。否则本实例超时
-	// 被接管后完成时，会把新持有者的租约一并清掉 —— 那时任何实例都能立刻再抢，
-	// 同一次调度被执行两遍。
+	if status != "success" {
+		slog.Warn("cron job failed", "job", j.Name, "error", errMsg, "duration", time.Since(start))
+	}
+}
+
+// releaseLease 归还租约并写回本次运行结果（runJob 的 defer 调用）。
+//
+// 独立成方法而不是内联：它要能脱离调用方的取消链工作（见 cronReleaseContext），
+// 也方便单独确认"归还失败必须留痕"这条要求。
+func (s *CronScheduler) releaseLease(ctx context.Context, j jobRow, token, status string) {
+	if db.GlobalDBManager == nil {
+		return
+	}
+	relCtx, relCancel := cronReleaseContext(ctx)
+	defer relCancel()
+
+	// 仅当租约仍属于本次 token 时才清。否则本实例超时被接管后完成时，会把新持有者
+	// 的租约一并清掉 —— 那时任何实例都能立刻再抢，同一次调度被执行两遍。
 	// 运行结果（last_run_at / last_status）不参与 CAS：本次确实运行过，记录它是对的。
+	var err error
 	if token != "" {
-		_, _ = db.GlobalDBManager.Exec(execCtx,
+		_, err = db.GlobalDBManager.Exec(relCtx,
 			`UPDATE cron_jobs SET run_lease_at = NULL, run_lease_token = NULL,
 			        last_run_at = NOW(), last_status = $1
 			 WHERE id = $2 AND run_lease_token = $3`,
 			status, j.ID, token)
 	} else {
-		_, _ = db.GlobalDBManager.Exec(execCtx,
+		_, err = db.GlobalDBManager.Exec(relCtx,
 			`UPDATE cron_jobs SET last_run_at = NOW(), last_status = $1 WHERE id = $2`,
 			status, j.ID)
 	}
-	if status != "success" {
-		slog.Warn("cron job failed", "job", j.Name, "error", errMsg, "duration", time.Since(start))
+	if err != nil {
+		// 归还失败要能看见：这是"该 job 接下来会被锁住 N 分钟"的唯一线索。
+		slog.Error("cron lease release failed; job may stay locked until stale threshold",
+			"job", j.Name, "job_id", j.ID, "error", err)
 	}
 }
 
@@ -384,6 +428,15 @@ func (s *CronScheduler) runQuick(ctx context.Context, tenantID, userID, input, m
 
 // ── Webhook 触发：POST /v1/hooks/{jobID}?token=xxx ──
 
+// cronWebhookTokenEqual 常量时间比较 webhook token。
+//
+// 原实现是 `storedToken != token`：Go 的字符串比较逐字节提前返回，攻击者可以按
+// 响应时间差逐位还原 token。而 webhook token 是这条路由的**唯一**凭据
+// （该路由不经过 authMW），猜中即可触发任务。
+func cronWebhookTokenEqual(stored, provided string) bool {
+	return subtle.ConstantTimeCompare([]byte(stored), []byte(provided)) == 1
+}
+
 func HandleCronWebhook(w http.ResponseWriter, r *http.Request) {
 	jobID := r.PathValue("jobID")
 	token := r.URL.Query().Get("token")
@@ -398,7 +451,7 @@ func HandleCronWebhook(w http.ResponseWriter, r *http.Request) {
 		NotFound(w, "job not found")
 		return
 	}
-	if !enabled || storedToken == "" || storedToken != token {
+	if !enabled || storedToken == "" || !cronWebhookTokenEqual(storedToken, token) {
 		Forbidden(w, "invalid token or job disabled")
 		return
 	}
@@ -428,11 +481,17 @@ func HandleCronWebhook(w http.ResponseWriter, r *http.Request) {
 
 // HandleCronTrigger 管理端手动触发：POST /v1/admin/cron-jobs/{id}/trigger
 func (h *AdminHandler) HandleCronTrigger(w http.ResponseWriter, r *http.Request) {
-	id := r.PathValue("id")
+	jobID := r.PathValue("id")
+	tenantID := GetTenantID(r)
+	if tenantID == 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
 	var j jobRow
-	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT id::text, name, schedule, task, COALESCE(tenant_id::text,''), COALESCE(user_id::text,'')
-		 FROM cron_jobs WHERE id = $1`, id).Scan(&j.ID, &j.Name, &j.Schedule, &j.Task, &j.TenantID, &j.UserID); err != nil {
+	// 触发同样是租户级操作：只按 id 取会让任意租户 admin 触发别人的任务
+	// （而 job 的 tenant/user 直接决定 python 侧以什么身份执行）。
+	if err := db.GlobalDBManager.QueryRow(r.Context(), cronLoadQuery, jobID, tenantID).
+		Scan(&j.ID, &j.Name, &j.Schedule, &j.Task, &j.TenantID, &j.UserID); err != nil {
 		NotFound(w, "job not found")
 		return
 	}
@@ -444,7 +503,7 @@ func (h *AdminHandler) HandleCronTrigger(w http.ResponseWriter, r *http.Request)
 	case errors.Is(err, errCronBusy):
 		JSON(w, http.StatusConflict, APIResponse{Success: false, Error: "job is running"})
 	default:
-		slog.Warn("cron trigger failed", "job", id, "error", err)
+		slog.Warn("cron trigger failed", "job", jobID, "error", err)
 		InternalError(w, "trigger failed")
 	}
 }

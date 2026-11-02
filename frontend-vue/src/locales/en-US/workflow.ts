@@ -84,5 +84,6 @@ export default {
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "Self-hosted, multi-tenant, fully controllable AI Agent platform. Conversation, Agent, workflow, skill, knowledge base and plugin in one.",
   agent_agentic_collaboration_task: "agent agentic collaboration task",
   webhook_trigger_url_copied_to_clipboard: "Webhook trigger URL copied to clipboard",
+  copy_webhook_rotates_token: "The list no longer stores Webhook tokens in clear text. Continuing issues a new token and the old trigger URL stops working immediately (integrations already using it will get 403). Continue?",
   workflow_dag_orchestration: "workflow dag orchestration",
 }

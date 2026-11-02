@@ -5,7 +5,7 @@ import {
   ClockCircleOutlined, PlusOutlined, ReloadOutlined,
   PlayCircleOutlined, CopyOutlined, EditOutlined, DeleteOutlined,
 } from '@ant-design/icons-vue'
-import { api, triggerCronJob, cronWebhookUrl } from '@/api'
+import { api, triggerCronJob, cronWebhookUrl, resetCronWebhookToken } from '@/api'
 import EmptyState from '@/components/common/EmptyState.vue'
 
 import { useI18n } from 'vue-i18n'
@@ -27,7 +27,12 @@ interface CronJob {
   enabled: boolean
   last_run_at: string | null
   last_status: string
-  webhook_token?: string
+  /**
+   * 列表**不再下发明文 webhook token**（长期凭据，随列表下发等于公开）。
+   * 只有创建/轮换的响应里出现一次；这里拿到的只是"是否已配置 + 末 4 位提示"。
+   */
+  webhook_enabled?: boolean
+  webhook_token_hint?: string
   created_at: string
 }
 
@@ -86,12 +91,27 @@ async function copyText(text: string): Promise<boolean> {
   }
 }
 
-/** 复制 Webhook 触发地址（仅列表含 webhook_token 时展示） */
+/**
+ * 复制 Webhook 触发地址。
+ *
+ * 列表里只有"是否已配置"，没有明文 token，所以这里显式轮换一次：旧 token 立即失效，
+ * 新 token 只在本响应里出现。按钮放在 Popconfirm 里，避免误点导致正在跑的外部
+ * 集成突然 403。
+ */
 async function copyCronWebhook(job: CronJob) {
-  if (!job.webhook_token) return
-  const ok = await copyText(cronWebhookUrl(job.id, job.webhook_token))
-  if (ok) message.success(t('common.webhook_url_copied'))
-  else message.error(t('errors.copy_failed_please_copy_manually'))
+  try {
+    const token = await resetCronWebhookToken(job.id)
+    if (!token) {
+      message.error(t('errors.copy_failed_please_copy_manually'))
+      return
+    }
+    const ok = await copyText(cronWebhookUrl(job.id, token))
+    if (ok) message.success(t('common.webhook_url_copied'))
+    else message.error(t('errors.copy_failed_please_copy_manually'))
+    await fetchCronJobs(true)
+  } catch (e) {
+    message.error(errorDetail(e, t('errors.network_error_2')))
+  }
 }
 
 /** last_status → Tag 颜色：成功绿 / 失败红 / 其余灰（pending/未运行） */
@@ -286,15 +306,21 @@ onUnmounted(() => {
               >
                 {{ $t('workflow.manual_trigger') }}
               </Button>
-              <Button
-                v-if="record.webhook_token"
-                size="small"
-                type="link"
-                :icon="h(CopyOutlined)"
-                @click="copyCronWebhook(record as CronJob)"
+              <Popconfirm
+                :title="$t('workflow.copy_webhook_rotates_token')"
+                :ok-text="$t('common.confirm')"
+                :cancel-text="$t('common.cancel')"
+                @confirm="copyCronWebhook(record as CronJob)"
               >
-                {{ $t('common.copy_webhook') }}
-              </Button>
+                <Button
+                  v-if="record.webhook_enabled"
+                  size="small"
+                  type="link"
+                  :icon="h(CopyOutlined)"
+                >
+                  {{ $t('common.copy_webhook') }}
+                </Button>
+              </Popconfirm>
               <Button
                 size="small"
                 type="link"

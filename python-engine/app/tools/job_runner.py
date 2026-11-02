@@ -151,14 +151,22 @@ async def execute_tool_job(
         OUTCOME_OK,
         OUTCOME_TIMEOUT,
     )
-    from app.tools.sandbox import _has_escape, sandboxed_env, workspace_dir
+    from app.tools.sandbox import (
+        _rlimit_kwargs,
+        check_shell_command,
+        sandboxed_env,
+        workspace_dir,
+    )
 
     started = time.monotonic()
 
-    # 逃逸拦截：与 terminal/shell_exec 同一套规则（沙箱安全）
-    esc = _has_escape(command)
-    if esc:
-        msg = f"[blocked: {esc}] command not allowed in sandbox"
+    # 准入检查：与 shell_exec / persistent_shell 同一套口径 —— 逃逸拦截 + 可执行名
+    # 白名单 + python 代码静态检查。此前这里只有 `_has_escape`，于是
+    # `run_in_background("curl …")` 或 `run_in_background("python -c 'import os; …'")`
+    # 绕过了另外两个入口都会命中的防护，而它跑的是同一个沙箱、同一个 workspace。
+    blocked_reason = await check_shell_command(command)
+    if blocked_reason:
+        msg = f"[blocked: {blocked_reason}] command not allowed in sandbox"
         await _write_meta(redis, job_id, "completed")
         await _write_result(redis, job_id, "blocked", msg, -1)
         _audit_job(command, OUTCOME_BLOCKED, started=started, reason=msg)
@@ -172,6 +180,10 @@ async def execute_tool_job(
         stderr=asyncio.subprocess.STDOUT,
         cwd=str(workspace_dir()),
         env=sandboxed_env(),
+        # S5-2：与 shell_exec / persistent_shell 共用同一份 rlimit（此前后台命令
+        # 没有内存/CPU/文件大小上限，一条 `yes` 就能把副本拖死，且它跑得比前台久得多：
+        # JOB_TIMEOUT 是 1 小时）。
+        **_rlimit_kwargs(),
     )
     watcher: asyncio.Task[Any] | None = None
     if redis is not None:

@@ -87,13 +87,29 @@ const apiKeyRevokeQuery = `UPDATE api_keys SET revoked = true
 
 // apiKeyAuthQuery 是 `X-API-Key` 鉴权的唯一查询（`AuthMiddleware` 使用）。
 //
-// 一次 JOIN 完成四件事：key 存在、未吊销、未过期、所属用户绑定了租户。
+// 一次 JOIN 完成五件事：key 存在、未吊销、未过期、所属用户绑定了租户、
+// 以及取回 key 的**签发时间**（用于与会话纪元比对）。
 // `expires_at IS NULL` 表示永不过期 —— 漏掉这一支会让"永久 key"变成永久无效。
+//
+// 第 5 列是 key 的**签发时刻**（Unix 秒），供 `AuthMiddleware` 与会话纪元比对 ——
+// 没有它，改密/重置密码后此前签发的长期 API key 仍然有效（JWT 那条路已被纪元拦住，
+// 而 API key 是**更长期**的凭据，泄漏面更大）。
+//
+// 为什么不直接把 `created_at` 扫成 `time.Time`：`api_keys.created_at` 是
+// `timestamp without time zone`（基线建表如此，且写入语句用 `now()`），值是按
+// **会话时区**截断的本地时间，扫成 `time.Time` 会被当成 UTC —— 在 UTC+8 这类
+// 时区上会整体偏差 8 小时，于是"改密后 8 小时内的旧 key"仍能通过。这里用
+// `AT TIME ZONE current_setting('TimeZone')` 把它**还原成真实时刻**（写入时
+// 正是用同一会话时区做的反向转换），再取 epoch 秒。
+//
+// NULL（历史行没有 created_at）→ 0 = 1970 年：任何纪元都大于它，于是历史 key
+// 不会被一刀切全部失效（宁可漏拦一次，也不要一次性打挂所有既有集成）。
 //
 // 提成常量是为了让真实 PostgreSQL 冒烟用例能直接跑**生产语句本身**：这条 SQL
 // 决定了每个 API 请求的身份，列数或扫描顺序错了，单测（只断言字符串包含）
 // 完全发现不了。
-const apiKeyAuthQuery = `SELECT ak.id, u.id, u.role, COALESCE(u.tenant_id::text, '') AS tenant_id
+const apiKeyAuthQuery = `SELECT ak.id, u.id, u.role, COALESCE(u.tenant_id::text, '') AS tenant_id,
+					   COALESCE(EXTRACT(EPOCH FROM (ak.created_at AT TIME ZONE current_setting('TimeZone')))::bigint, 0) AS issued_at
 					 FROM users u
 					 JOIN api_keys ak ON ak.user_id = u.id
 					 WHERE ak.key_hash = $1

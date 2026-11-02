@@ -213,7 +213,15 @@ func (d *WebhookDispatcher) deliver(ctx context.Context, evt WebhookEvent) error
 			continue // SSRF 拒绝的订阅不投递、不阻塞其它订阅
 		}
 		secret, _ := wh["secret"].(string)
-		decrypted, _ := decryptWebhookSecret(secret, string(d.secretKey))
+		// 解密失败必须显式可见：此前是 `decrypted, _ :=` —— 失败时 decrypted == ""，
+		// 于是 postWebhook 静默跳过签名头，接收方以为这是条未签名消息，日志里却
+		// 没有任何痕迹（连"哪条订阅坏了"都查不到）。这里告警后继续**无签名**投递，
+		// 不阻塞其它订阅（一条坏数据不该让整个租户的 webhook 停摆）。
+		decrypted, derr := decryptWebhookSecretCompat(secret, d.secretKey)
+		if derr != nil {
+			slog.Error("webhook secret decryption failed; delivering without signature",
+				"webhook_id", whID, "error", derr)
+		}
 		if err := d.postWebhook(ctx, evt, targetURL, decrypted, whID); err != nil && firstErr == nil {
 			firstErr = err
 		}

@@ -302,13 +302,20 @@ class MCPClient:
                 f"MCP server command {server.command!r} not allowed: "
                 "set PLUGIN_COMMAND_ALLOWLIST (comma-separated basenames) to enable"
             )
-        env = None
-        if server.env:
-            # 安全修复：使用 sandboxed_env 清理宿主环境变量，
-            # 仅传递基础 PATH/HOME 和 server.env 白名单覆盖，
-            # 防止 MCP 子进程读取 JWT_SECRET/INTERNAL_TOKEN 等敏感密钥
-            from app.tools.sandbox import sandboxed_env
-            env = {**sandboxed_env(), **server.env}
+        # 无论 server 是否声明 env，子进程环境都必须以 sandboxed_env() 为基底。
+        #
+        # 此前这里是 `env = None` + `if server.env:` —— 于是**未声明 env 的 stdio server
+        # 会完整继承引擎进程环境**（JWT_SECRET / INTERNAL_TOKEN / APP_SECRET / 数据库
+        # 口令 / 各 provider 的 API key 全在其中）。而 agent 能通过 MCP server 读自己的
+        # 环境（`env` 命令、`/proc/self/environ`、任何库读 os.environ），等于把网关的
+        # 全部凭据交给一段由第三方代码驱动的子进程 —— 这也是 sandboxed_env() 存在的理由。
+        #
+        # 复用 credential_projection.project_stdio_env：它已经过单测（不改入参、只叠加
+        # server 自己声明的键），避免此处再写一份"清理 + 叠加"而两处漂移。
+        from app.mcp.credential_projection import project_stdio_env
+        from app.tools.sandbox import sandboxed_env
+
+        env = project_stdio_env(server, sandboxed_env())
 
         from app.plugins.audit import record_plugin
 

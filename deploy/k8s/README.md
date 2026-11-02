@@ -25,25 +25,45 @@ kubectl cluster-info --context kind-chiron
 ```powershell
 docker build -t chiron/gateway:dev .
 docker build -t chiron/python-engine:dev python-engine
-kind load docker-image chiron/gateway:dev chiron/python-engine:dev --name chiron
+docker build -t chiron/frontend:dev frontend-vue
+# 迁移镜像：只在发布时跑一次，见 §3e。上下文必须是仓库根目录。
+docker build -f deploy/migrations/Dockerfile -t chiron/migrations:dev .
+kind load docker-image chiron/gateway:dev chiron/python-engine:dev chiron/frontend:dev chiron/migrations:dev --name chiron
 ```
+
+> ⚠ 上面全是 `:dev` 浮动标签 + `IfNotPresent`，**只用于本地验证**。生产必须换成
+> 不可变 tag 或 `image@sha256:<digest>`：浮动标签被覆盖后，`IfNotPresent` 会让
+> "镜像已重建、Pod 仍在跑旧的"这类问题完全无声。
 
 ## 3. 注入密钥（从 `.env` 取，别写进 YAML）
 
 ```powershell
 function EnvVal($n) { ((Get-Content .env | Where-Object { $_ -match "^$n=" } | Select-Object -First 1) -split '=',2)[1].Trim().Trim('"') }
 $dsn = (EnvVal POSTGRES_DSN) -replace '@localhost', '@host.docker.internal'
+# 引擎只认 REDIS_URL（整串），网关只认 REDIS_ADDR + REDIS_PASSWORD。
+# 有密码时 REDIS_URL 里的密码必须做一次 URL 编码，否则含 `@ : /` 会被解析错。
+$redisPwd = EnvVal REDIS_PASSWORD
+$redisUrl = if ($redisPwd) { "redis://:$([uri]::EscapeDataString($redisPwd))@host.docker.internal:6379/0" } else { "redis://host.docker.internal:6379/0" }
 kubectl -n chiron create secret generic chiron-secrets `
   --from-literal=APP_SECRET="$(EnvVal APP_SECRET)" `
   --from-literal=JWT_SECRET="$(EnvVal JWT_SECRET)" `
   --from-literal=INTERNAL_TOKEN="$(EnvVal INTERNAL_TOKEN)" `
   --from-literal=POSTGRES_DSN="$dsn" `
+  --from-literal=REDIS_PASSWORD="$redisPwd" `
+  --from-literal=REDIS_URL="$redisUrl" `
   --from-literal=METRICS_TOKEN="$(EnvVal METRICS_TOKEN)" `
   --dry-run=client -o yaml | kubectl apply -f - --namespace chiron
 ```
 
-> 顺序：先 `kubectl apply -f deploy/k8s/chiron.yaml`（含 Namespace/ConfigMap/Deployment）
-> 之后再执行上面的 secret 注入，或先 `kubectl create namespace chiron`。
+> `REDIS_URL` 只放在 Secret 里、ConfigMap 里**刻意没有**同名键：两份同名键会靠
+> `envFrom` 的先后顺序隐式覆盖，顺序一调就是"NOAUTH"或"密码进日志"的隐性事故。
+>
+> `APP_SECRET` 必须 **≥32 字符**（`config.Load` 直接拒绝更短的值），且所有副本同值：
+> 网关用它派生 JWT / 内部令牌 / 配置加密密钥。换值等于让所有会话与密文失效。
+
+> 顺序：Secret 依赖 Namespace，因此**先** `kubectl create namespace chiron`（或先只 apply
+> 清单里的 Namespace 一段），再执行上面的 secret 注入。Namespace 之后的步骤按
+> §3b → §3c → §3d → §3e → §4 的顺序走。
 
 ## 3b. 创建沙箱服务的 ConfigMap（**必须在 apply 之前**）
 
@@ -78,12 +98,63 @@ kubectl -n chiron create configmap chiron-frontend-nginx `
 
 > 同理不内嵌进 YAML，避免与 `deploy/k8s/frontend-nginx.conf` 漂移。
 
+## 3d. 在共享卷上预建子目录（**必须在 apply 之前**）
+
+`chiron-shared` 这一条 PVC 被切成两个**互不可见**的子目录使用：
+
+| 子目录 | 内容 | 谁挂载 |
+|---|---|---|
+| `workspace/` | agent 文件区、编辑器、上传、媒体（含 `media/`） | gateway、python-engine、sandbox-service |
+| `plugins/` | `{user_id}/plugins.json`（含用户插件凭据） | gateway、python-engine |
+
+必须用 `subPath` 分开：不带 subPath 时两者是**同一个目录**，沙箱里任意命令都能改写
+插件凭据（横向提权）。
+
+`subPath` 指向的子目录**不会**被 kubelet 自动创建，必须先建一次（清单见
+`deploy/k8s/pvc-init.yaml`，一次性 Pod）：
+
+```powershell
+kubectl -n chiron delete pod pvc-init --ignore-not-found
+kubectl apply -f deploy/k8s/pvc-init.yaml
+kubectl -n chiron wait --for=jsonpath='{.status.phase}'=Succeeded pod/pvc-init --timeout=120s
+kubectl -n chiron logs pvc-init
+kubectl -n chiron delete pod pvc-init
+```
+
+> 漏掉这一步的典型现象：Pod 卡在 `ContainerCreating`，`kubectl describe` 里是
+> `failed to mount ... no such file or directory`（subPath 不存在时不会自动创建）。
+
+## 3e. 执行数据库迁移（**必须在滚动发布之前，且只跑一次**）
+
+应用**从不执行 DDL**：网关启动只做只读的 schema 版本校验，版本不一致直接
+`FATAL: refusing to start on mismatched schema`。所以迁移是发布流程的硬前置，
+且必须**先迁移、后滚动**：
+
+```powershell
+kubectl -n chiron delete job chiron-migrate --ignore-not-found
+kubectl apply -f deploy/k8s/migrate-job.yaml
+kubectl -n chiron wait --for=condition=complete job/chiron-migrate --timeout=10m
+kubectl -n chiron logs job/chiron-migrate    # 确认 alembic 输出到 "Running upgrade ... -> <head>"
+```
+
+要点：
+- 迁移镜像由 `deploy/migrations/Dockerfile` 构建（`alembic` 只在
+  `requirements-migrate.txt` 里，运行时不装）。
+- Job 直连 PG **5432**，不走 pgbouncer：DDL 需要会话级语义，transaction 池下会拿到
+  半途断开的连接。
+- 迁移必须**串行**：两个 Job 同时 `upgrade` 会在 `alembic_version` 行锁上互等到超时。
+- 只想出 SQL 给 DBA 审阅/在受控窗口执行：`docker run --rm chiron/migrations:dev upgrade head --sql`。
+
 ## 4. 部署并观察
 
 ```powershell
 kubectl apply -f deploy/k8s/chiron.yaml
-kubectl -n chiron get pods -w   # 期望：3 gateway + 3 python-engine + 2 frontend + 1 sandbox-service + 1 sandbox-lb 全 Ready
+kubectl -n chiron get pods -w   # 期望：3 gateway + 3 python-engine + 2 frontend + 2 sandbox-service + 2 sandbox-lb 全 Ready
 ```
+
+> 沙箱层从 1 副本改成 2：引擎侧 `SANDBOX_BACKEND=service` 是 **fail-closed**，单副本的
+> sandbox-service 或 sandbox-lb 一挂，`run_in_sandbox` 全部失败（不会降级到本地执行）。
+> 两个 Deployment 都配了 host 级反亲和，扩到 2 才是"无缝"的前提。
 
 前端入口：`http://localhost:18082`（kind-config 把节点 30082 映射到宿主 18082）。
 
@@ -116,7 +187,7 @@ kindnet 不支持 NetworkPolicy**，apply 不报错但策略不生效；要验�
 
 ## 6. 已知约束（测的时候一定会撞到）
 
-1. **sandbox/plugins 用同一条 RWX PVC（`chiron-shared`）**：副本之间必须共享，否则同一用户的任务落到不同副本时会"间歇性失忆"。**前提是集群有支持 ReadWriteMany 的 provisioner** —— kind 自带的 local-path 只支持 RWO，本地验证前要装 nfs-server-provisioner（或把那两处临时改回 `emptyDir`），否则挂它的 Pod 会一直 Pending。
+1. **`chiron-shared` 一条 RWX PVC，按 `subPath` 切成 `workspace/` 与 `plugins/` 两个子目录**：副本之间必须共享，否则同一用户的任务落到不同副本时会"间歇性失忆"。**前提是集群有支持 ReadWriteMany 的 provisioner** —— kind 自带的 local-path 只支持 RWO，本地验证前要装 nfs-server-provisioner（或把那两处临时改回 `emptyDir`，但此时必须去掉 `subPath`），否则挂它的 Pod 会一直 Pending。子目录要先按 §3d 预建，否则 Pod 卡在 `ContainerCreating`。
 2. **内置技能在 K8s 下默认为空**：`builtin-skills` 是 `emptyDir`，引擎启动会告警且技能列表不含内置技能。要内置技能就把该卷换成 hostPath / PVC 指向仓库的 `market/skills`。
 3. **前端 resolver 已解决**：K8s 版配置 `deploy/k8s/frontend-nginx.conf` 的 `resolver` 指向 kube-dns（默认 10.96.0.10），不再是 Docker 内嵌 DNS。
 4. **Redis/PG 仍是单点**（`docs/deployment-multi-instance.md` §10 自认）：本地验证不影响，评估"真企业化"时必须把它们高可用化——这比引入 MQ 的收益高得多。

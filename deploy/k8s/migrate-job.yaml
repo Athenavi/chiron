@@ -1,0 +1,65 @@
+# 数据库迁移 Job —— **必须在滚动发布之前单独执行完成**。
+#
+# 为什么单独一个文件、而不是塞进 chiron.yaml：
+# `kubectl apply -f` 是并发的，`Job` 与应用 `Deployment` 同时创建时，新副本会在
+# 迁移完成前就启动。而网关启动做的是**只读** schema 校验，版本一不一致就直接
+# `FATAL: refusing to start on mismatched schema`（ALLOW_SCHEMA_DRIFT 默认为 false），
+# 结果是滚动卡在 CrashLoop 里 —— 迁移本身没错，只是顺序错了。
+#
+# 正确顺序：
+#   1) docker build -f deploy/migrations/Dockerfile -t <registry>/chiron/migrations:<tag> .
+#   2) kubectl -n chiron delete job chiron-migrate --ignore-not-found
+#   3) kubectl -n chiron apply -f deploy/k8s/migrate-job.yaml
+#   4) kubectl -n chiron wait --for=condition=complete job/chiron-migrate --timeout=10m
+#   5) kubectl -n chiron apply -f deploy/k8s/chiron.yaml
+#
+# 迁移必须**串行**：两个 Job 同时 upgrade 会在 alembic_version 的行锁上互相等待，
+# 甚至报版本冲突。所以本 Job 用 `concurrencyPolicy` 等价手段（Job 本身天然单实例 +
+# backoffLimit 有限重试）来保证；重复 apply 前先 delete 旧 Job。
+#
+# ⚠ 不要把这个 Job 的 DSN 指向 pgbouncer:6432：
+#   PgBouncer 是 transaction 池，而 DDL 需要会话级的 advisory lock / 事务语义，
+#   经连接池执行迁移会出现锁失效或半途断开。迁移一律直连 PG（5432）。
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: chiron-migrate
+  namespace: chiron
+  labels: { app: chiron-migrate }
+spec:
+  # 迁移失败即停：重试只会把可能已部分应用的迁移再推一次，掩盖真实原因。
+  backoffLimit: 1
+  # 上一次失败的 Job 不要自动清理（要能 kubectl logs 看到失败原因）。
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels: { app: chiron-migrate }
+    spec:
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+      containers:
+        - name: migrate
+          # ⚠ 生产请换成不可变 tag 或 @sha256 digest（镜像由 deploy/migrations/Dockerfile 构建）。
+          image: chiron/migrations:dev
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities: { drop: ["ALL"] }
+          env:
+            # env.py 读的是 DATABASE_DSN（不是 POSTGRES_DSN），这里做一次改名映射。
+            - name: DATABASE_DSN
+              valueFrom:
+                secretKeyRef: { name: chiron-secrets, key: POSTGRES_DSN }
+          resources:
+            requests: { cpu: 100m, memory: 256Mi }
+            limits: { cpu: 1000m, memory: 512Mi }
+          volumeMounts:
+            # 只读根 + alembic 会写 __pycache__：给 /tmp 一个可写层，避免因只读失败。
+            - { name: tmp, mountPath: /tmp }
+      volumes:
+        - name: tmp
+          emptyDir: {}

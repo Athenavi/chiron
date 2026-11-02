@@ -74,6 +74,15 @@ type Hub struct {
 	localOnly  bool
 	instanceID string
 
+	// draining 在进程开始优雅关闭时关闭：SSE 连接的读循环据此主动收尾。
+	//
+	// 为什么必须有它：SSE 是长连接，`srv.Shutdown` 会**等所有活跃连接结束**，
+	// 而 SSE 连接只有客户端断开才结束。没有这个信号时，滚动发布里每一个带
+	// 打开标签页的用户都会把 10s 宽限吃满，Shutdown 超时返回错误、进程被强杀，
+	// 同实例上正在跑的普通请求一起被切断。
+	draining chan struct{}
+	drainOne sync.Once
+
 	// 异步发布（B2）
 	queues []chan Event
 	rr     uint64
@@ -106,6 +115,7 @@ func NewHub(rdb db.RedisClient) *Hub {
 		channel:    db.RedisKey("chiron:events"),
 		localOnly:  rdb == nil,
 		instanceID: uuid.New().String(),
+		draining:   make(chan struct{}),
 	}
 	h.queues = make([]chan Event, ssePublishShards)
 	for i := range h.queues {
@@ -142,6 +152,24 @@ func (h *Hub) Unsubscribe(id string) {
 		close(ch)
 		delete(h.subs, id)
 	}
+}
+
+// Draining 返回一个在进程开始优雅关闭时被关闭的通道。
+// SSE 读循环把它和 `r.Context().Done()` 一起 select，即可在停机时主动收尾。
+func (h *Hub) Draining() <-chan struct{} {
+	return h.draining
+}
+
+// BeginDrain 通知所有本实例的 SSE 连接收尾（幂等）。
+//
+// 调用方必须在 `http.Server.Shutdown` **之前**调用：Shutdown 会等待活跃连接结束，
+// 而 SSE 连接不会自己结束 —— 不先 drain 就只能在宽限期耗尽后被强制切断。
+func (h *Hub) BeginDrain() {
+	h.drainOne.Do(func() {
+		if h.draining != nil {
+			close(h.draining)
+		}
+	})
 }
 
 // Publish 把事件交给后台发布 worker（非阻塞）；队列满时回退为同步发布（不丢事件）。
@@ -418,6 +446,10 @@ func (h *Hub) redisListener() {
 // Close 停止发布 worker（先 drain 队列）并关闭订阅。
 // 顺序：标记 closed → 关闭队列（worker drain 完剩余事件后退出）→ 等待 worker → 关闭订阅与 pubsub。
 func (h *Hub) Close() {
+	// 先通知 SSE 连接收尾：Close 会在关闭订阅通道后让读循环退出，但读循环
+	// 若正卡在 select 上只有 draining 能立刻唤醒它（通道被关也能唤醒，这一步
+	// 主要是让"服务端主动结束"这个事件送达客户端，而不是静默断流）。
+	h.BeginDrain()
 	if h.pubsub != nil {
 		h.pubsub.Close()
 	}

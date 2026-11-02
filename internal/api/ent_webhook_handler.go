@@ -36,24 +36,65 @@ func NewEntWebhookHandler() *EntWebhookHandler {
 	return &EntWebhookHandler{secretKey: deriveWebhookKey()}
 }
 
-// deriveWebhookKey 从 APP_SECRET 派生 32-byte AES-256 key。
-// 若 APP_SECRET 未设置，使用 HMAC-SHA256 派生（保证密钥熵而非直接返回固定值）。
+// webhookKeyDerivationLabel 是 webhook 加密密钥的**域分隔标签**。
+//
+// 与 JWT 签名密钥、INTERNAL_TOKEN、媒体签名密钥、后台配置加密密钥共用同一个
+// `APP_SECRET` 作为根密钥时，各用途必须用不同标签派生 —— 否则一个用途的密钥
+// 泄露就等于泄露全部（同一串字节同时在多处当密钥用）。
+const webhookKeyDerivationLabel = "chiron-ent-webhook-secret-encryption:v1"
+
+// deriveWebhookKey 从 APP_SECRET 派生 32-byte AES-256 key（HMAC-SHA256 KDF）。
+//
+// 为什么不再"截取前 32 字节"：`APP_SECRET` 是**部署级根密钥**，直接截断意味着
+// 根密钥的前 32 字节本身就是磁盘上的 AES key —— 一旦数据库备份泄露（密文在里面），
+// 拿到这份截断值就能解密，而根密钥其余部分还继续用于派发 JWT。KDF 让"密文 +
+// 派生值"无法反推根密钥，也让 webhook 密钥与其它用途互相独立。
+//
+// 为什么不再有硬编码兜底密钥：此前 APP_SECRET 缺失时用固定常量派生，等于**所有人
+// 共用同一把可公开计算的密钥**，密文形同明文。启动时 `config.Load` 已强制要求
+// APP_SECRET（≥32），这里返回 nil 表示"不可用"，由调用方拒绝加解密（fail-close），
+// 而不是悄悄用一把人人皆知的密钥继续工作。
 func deriveWebhookKey() []byte {
 	secret := os.Getenv("APP_SECRET")
-	length := 32
-	if secret == "" {
-		// APP_SECRET 为空时使用 HMAC-SHA256 派生，确保密钥非空且有熵
-		slog.Warn("APP_SECRET not set, webhook encryption uses fallback key (not safe for production)")
-		mac := hmac.New(sha256.New, []byte("chiron-webhook-encryption-fallback"))
-		mac.Write([]byte("chiron-webhook-key-derivation"))
-		return mac.Sum(nil)[:length]
+	if len(secret) < 32 {
+		slog.Error("APP_SECRET missing or too weak; ent webhook secret encryption disabled (fail-closed)")
+		return nil
 	}
-	if len(secret) >= length {
-		return []byte(secret)[:length]
-	}
-	mac := hmac.New(sha256.New, []byte("chiron-webhook-encryption"))
-	mac.Write([]byte(secret))
+	mac := hmac.New(sha256.New, []byte(secret))
+	mac.Write([]byte(webhookKeyDerivationLabel))
 	return mac.Sum(nil)
+}
+
+// legacyWebhookKeys 返回**历史派生方式**得到的候选密钥，只用于**解密**回退。
+//
+// 为什么必须留这条回退：`ent_webhooks.secret` 是已落库的密文。切换派发方式的那一刻，
+// 线上所有既有 webhook 的 secret 都会解不开 —— 表现为签名头直接消失（接收方无法校验
+// 来源），而管理端的 PUT 只有用户重新填 secret 才会重写密文。一次无感的升级不该让
+// 所有企业订阅同时降级。
+//
+// 只解密、不加密：新写入一律走 KDF（见 deriveWebhookKey），因此回退面随时间自然收敛；
+// 用户下次更新 secret 时旧候选就彻底失效了。
+//
+// 三个候选与旧实现一一对应（保持原样，不要"顺手优化" —— 任何字节差异都会让旧密文解不开）：
+//  1. 空 APP_SECRET 时的固定派生（现已不再用于加密，但历史上可能已落库）；
+//  2. `APP_SECRET[:32]`（≥32 字符时）；
+//  3. 短 APP_SECRET 的 HMAC 派生。
+func legacyWebhookKeys() [][]byte {
+	out := make([][]byte, 0, 3)
+
+	fallback := hmac.New(sha256.New, []byte("chiron-webhook-encryption-fallback"))
+	fallback.Write([]byte("chiron-webhook-key-derivation"))
+	out = append(out, fallback.Sum(nil)[:32])
+
+	secret := os.Getenv("APP_SECRET")
+	if len(secret) >= 32 {
+		out = append(out, []byte(secret)[:32])
+	} else if secret != "" {
+		legacy := hmac.New(sha256.New, []byte("chiron-webhook-encryption"))
+		legacy.Write([]byte(secret))
+		out = append(out, legacy.Sum(nil))
+	}
+	return out
 }
 
 // RegisterRoutes 挂载 Webhook 管理路由（authMW + RequireEntPerm("webhook:manage")）。
@@ -153,6 +194,34 @@ func decryptWebhookSecret(cipherB64, key string) (string, error) {
 		return "", err
 	}
 	return string(plaintext), nil
+}
+
+// decryptWebhookSecretCompat 先按当前 KDF 解密，失败再试历史派生方式。
+//
+// 见 legacyWebhookKeys 的注释：这次换派生方式不能让线上既有密文失效。
+// 返回的 error 只在**所有**候选都解不开时产生 —— 调用方必须显式处理，
+// 而不是像此前那样 `decrypted, _ :=` 丢掉错误（丢掉的后果是签名头凭空消失，
+// 接收方以为消息未签名，而日志里一个字都没有）。
+func decryptWebhookSecretCompat(cipherB64 string, primaryKey []byte) (string, error) {
+	// 没有 secret 是**正常配置**（订阅方不校验签名），不是解密失败 ——
+	// 若让它继续走到下面并报错，每条事件都会打一条 Error 日志：
+	// 一个不带 secret 的租户就能把日志刷爆，而真正该被看见的解密失败会被淹掉。
+	if cipherB64 == "" {
+		return "", nil
+	}
+	if primaryKey != nil {
+		if plain, err := decryptWebhookSecret(cipherB64, string(primaryKey)); err == nil {
+			return plain, nil
+		}
+	}
+	for _, legacy := range legacyWebhookKeys() {
+		if plain, err := decryptWebhookSecret(cipherB64, string(legacy)); err == nil {
+			return plain, nil
+		}
+	}
+	// 主密钥不可用（APP_SECRET 缺失）时 decryptWebhookSecret("") 会把密文原样返回，
+	// 那不是"解密成功"而是"没解"——上面 primaryKey==nil 时已跳过，这里统一报错。
+	return "", fmt.Errorf("webhook secret decryption failed (no key matched)")
 }
 
 // 查询列

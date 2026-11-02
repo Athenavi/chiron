@@ -27,10 +27,31 @@ func TenantMiddleware(next http.Handler) http.Handler {
 			return
 		}
 
-		ctx := context.WithValue(r.Context(), CtxKeyTenantID, claims.TenantID)
-		ctx = context.WithValue(ctx, CtxKeyUserID, claims.UserID)
-		next.ServeHTTP(w, r.WithContext(ctx))
+		next.ServeHTTP(w, r.WithContext(withTenantCtx(r.Context(), claims)))
 	})
+}
+
+// withTenantCtx 把登录态里的租户/用户 ID 注入请求上下文。
+//
+// 必须由 authMW 在鉴权成功后调用：`CtxKeyTenantID` 只有这里写，而 GetTenantID
+// 是租户级 handler（成员管理 / 用户管理 / 域名 / 邀请码 / 知识库）取租户的**唯一**
+// 来源。TenantMiddleware 虽然提供了同样的注入，但全仓没有任何调用点 ——
+// 只靠它等于这些端点永远拿到 tenantID == 0 而恒返回 401。
+//
+// 与 TenantMiddleware 的差别：这里**不拒绝** TenantID == 0，只跳过注入。
+// 鉴权中间件服务于全部端点，其中相当一部分（登录后 profile、平台级运维）不需要
+// 租户；需要租户的 handler 自己会用 `GetTenantID(r) == 0 ⇒ 401` 表达这个要求。
+func withTenantCtx(ctx context.Context, claims *auth.Claims) context.Context {
+	if claims == nil {
+		return ctx
+	}
+	if claims.TenantID != 0 {
+		ctx = context.WithValue(ctx, CtxKeyTenantID, claims.TenantID)
+	}
+	if claims.UserID != "" {
+		ctx = context.WithValue(ctx, CtxKeyUserID, claims.UserID)
+	}
+	return ctx
 }
 
 func RequireRole(roles ...string) func(http.Handler) http.Handler {

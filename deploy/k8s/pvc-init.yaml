@@ -1,0 +1,48 @@
+# 一次性 Pod：在共享 PVC 上预建 subPath 子目录。
+#
+# 为什么必须单独跑：Deployment 里 workspace/plugins 两处挂载都带 `subPath`，
+# 而 kubelet **不会**自动创建 subPath 指向的目录 —— 缺了它 Pod 会卡在
+# ContainerCreating，describe 里报 `failed to mount ... no such file or directory`。
+#
+# 为什么需要 subPath 而不是直接挂 PVC 根：workspace 是 agent 的**可写**文件区
+# （引擎把它当沙箱根，里面跑任意命令），plugins 存的是 {user_id}/plugins.json
+# （含用户插件凭据）。两者共用一个目录就等于"沙箱里的命令能改写插件凭据" —— 横向提权。
+#
+# 用法（在 apply chiron.yaml **之前**执行一次）：
+#   kubectl -n chiron delete pod pvc-init --ignore-not-found
+#   kubectl apply -f deploy/k8s/pvc-init.yaml
+#   kubectl -n chiron wait --for=jsonpath='{.status.phase}'=Succeeded pod/pvc-init --timeout=120s
+#   kubectl -n chiron logs pvc-init
+#   kubectl -n chiron delete pod pvc-init
+apiVersion: v1
+kind: Pod
+metadata:
+  name: pvc-init
+  namespace: chiron
+  labels: { app: pvc-init }
+spec:
+  restartPolicy: Never
+  # 与应用 Pod 同 uid/gid，保证建出来的目录属主一致（否则应用写入会是 EACCES）。
+  securityContext:
+    runAsNonRoot: true
+    runAsUser: 1001
+    runAsGroup: 1001
+    fsGroup: 1001
+  containers:
+    - name: init
+      image: busybox:1.36
+      command:
+        - sh
+        - -c
+        # media/ 也要建：网关的媒体根固定为 STORAGE_ROOT/media，引擎侧同样写这里。
+        - mkdir -p /mnt/workspace/media /mnt/plugins && chown -R 1001:1001 /mnt/workspace /mnt/plugins && ls -l /mnt
+      securityContext:
+        allowPrivilegeEscalation: false
+        readOnlyRootFilesystem: true
+        capabilities: { drop: ["ALL"] }
+      volumeMounts:
+        - { name: shared, mountPath: /mnt }
+  volumes:
+    # 与 chiron.yaml 里的 chiron-shared 是**同一条** PVC。
+    - name: shared
+      persistentVolumeClaim: { claimName: chiron-shared }

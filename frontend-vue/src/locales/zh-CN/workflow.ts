@@ -84,5 +84,6 @@ export default {
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "自托管、多租户、全栈可控的 AI Agent 平台。对话、Agent、工作流、技能、知识库与插件一体化。",
   agent_agentic_collaboration_task: "agent 智能体 协同 任务",
   webhook_trigger_url_copied_to_clipboard: "Webhook 触发地址已复制到剪贴板",
+  copy_webhook_rotates_token: "列表不再保存 Webhook 明文 token。继续将重新生成一个新 token，旧触发地址立即失效（正在使用它的外部集成会收到 403）。确定继续？",
   workflow_dag_orchestration: "workflow 工作流 dag 流程 编排",
 }

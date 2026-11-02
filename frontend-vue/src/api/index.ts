@@ -869,6 +869,19 @@ export function cronWebhookUrl(id: string, token: string): string {
   return `${location.origin}/v1/hooks/${id}?token=${encodeURIComponent(token)}`
 }
 
+/**
+ * 轮换 cron job 的 Webhook token。
+ *
+ * 列表接口只回 `webhook_enabled` + 末 4 位提示，不回明文 token：那是长期有效的
+ * 触发凭据，随列表下发等于把它暴露给每一个能打开管理页的人（以及浏览器缓存、
+ * 日志、截图）。拿到 URL 的路径因此变成"显式重置一次"，旧 token 立即失效。
+ */
+export async function resetCronWebhookToken(id: string): Promise<string> {
+  const resp = await api.post(`/v1/admin/cron-jobs/${encodeURIComponent(id)}/webhook-token`)
+  const d = resp.data?.data ?? resp.data
+  return typeof d?.webhook_token === 'string' ? d.webhook_token : ''
+}
+
 
 // ── 模板市场 / 共享可见性（2026-08-23 批次2）──
 export interface TemplateItem {

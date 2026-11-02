@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -103,23 +104,40 @@ func AgentFollowupHandler(
 			http.Error(w, "session busy", http.StatusConflict)
 			return
 		}
-		defer releaseRun()
+		// 注意：这里**不能** defer releaseRun()。本 handler 在启动后台 goroutine 后
+		// 立刻返回，handler 上的 defer 会在 Accepted 一写出时就执行 —— 锁、信号量、
+		// 租户并发槽位全部在后台 turn 还在跑的时候被归还，同一会话随即能被第二个
+		// runtime 抢占（正是这把锁存在的理由）。释放统一收敛到 releaseAll，
+		// 由后台 goroutine 负责执行；下面的失败路径则显式调用它。
 
 		releaseSem, ok := agentSem.TryAcquire(r.Context())
 		if !ok {
+			// 拒绝路径同样要放锁：否则本会话被一把空锁挡到 TTL（5min）。
+			releaseRun()
 			TooManyRequests(w)
 			return
 		}
-		defer releaseSem()
 
 		releaseTenant, tenantOK := tenantResMgr.Acquire(body.TenantID)
 		if !tenantOK {
 			// 租户并发满了：重试也要等，交给队列退避
+			releaseSem()
+			releaseRun()
 			followupSkipped(w, "tenant concurrency")
 			return
 		}
-		if releaseTenant != nil {
-			defer releaseTenant()
+
+		// releaseAll 是该请求持有资源的唯一出口：sync.Once 保证幂等，
+		// 使"失败路径显式释放"与"后台 goroutine defer 释放"不会互相踩踏。
+		var releaseOnce sync.Once
+		releaseAll := func() {
+			releaseOnce.Do(func() {
+				if releaseTenant != nil {
+					releaseTenant()
+				}
+				releaseSem()
+				releaseRun()
+			})
 		}
 
 		// ③ 计费预检：余额与免费额度都不足以跑一轮时**不唤起**（自动轮不该把账单打穿）。
@@ -131,6 +149,9 @@ func AgentFollowupHandler(
 			}
 			if overFreeQuota {
 				if balance, balErr := billingMgr.GetBalance(body.UserID); balErr == nil && balance <= 0 {
+					// 跳过不等于"没占资源"：锁/信号量/租户槽位此时已持有，必须归还，
+					// 否则该会话被一把空锁挡到 TTL（5min），后续真实请求一律 409。
+					releaseAll()
 					followupSkipped(w, "insufficient credits")
 					return
 				}
@@ -148,6 +169,8 @@ func AgentFollowupHandler(
 			// 200 skipped：配额耗尽时重试也没用（队列正常 ACK，不无限重投）
 			slog.Warn("agent followup: tenant token quota exceeded",
 				"user_id", body.UserID, "tenant_id", body.TenantID, "run_id", body.RunID)
+			// 与上面余额跳过同因：资源已持有，跳过前必须归还。
+			releaseAll()
 			followupSkipped(w, "tenant token quota exceeded")
 			return
 		}
@@ -164,6 +187,9 @@ func AgentFollowupHandler(
 		stopHeartbeat := StartSessionRunLockHeartbeat(ctx, body.SessionID, runToken)
 
 		go func() {
+			// 资源释放必须发生在这里，而不是 handler 上：handler 在 Accepted 之后
+			// 立即返回，defer 会先于后台 turn 执行完就归还锁/信号量/租户槽位。
+			defer releaseAll()
 			defer cancel()
 			defer stopHeartbeat()
 			defer func() {

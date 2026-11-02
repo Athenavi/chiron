@@ -136,15 +136,20 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
-	// 取文件路径
+	// 取文件路径。
+	// 签名已经把 (assetID, tenant, user) 绑在一起，但**查询本身也必须带归属谓词**：
+	// 否则签名校验与数据读取之间是"信任一个不属于本次查询的租户参数"——
+	// 只要签名密钥或参数拼装出现任何一处偏差，就能拿 A 的签名读到 B 的文件。
 	var filePath string
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT COALESCE(file_path, '') FROM media_assets WHERE id = $1`, assetID).Scan(&filePath); err != nil || filePath == "" {
+		`SELECT COALESCE(file_path, '') FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
+		assetID, tenantID, userID).Scan(&filePath); err != nil || filePath == "" {
 
 		// Fallback: 如果 file_path 为空，从 file_url 动态推导
 		var fileURL string
 		if err2 := db.GlobalDBManager.QueryRow(r.Context(),
-			`SELECT COALESCE(file_url, '') FROM media_assets WHERE id = $1`, assetID).Scan(&fileURL); err2 != nil || fileURL == "" {
+			`SELECT COALESCE(file_url, '') FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
+			assetID, tenantID, userID).Scan(&fileURL); err2 != nil || fileURL == "" {
 			slog.Error("ServeSignedMedia: asset not found", "assetID", assetID)
 			http.Error(w, "media not found", http.StatusNotFound)
 			return

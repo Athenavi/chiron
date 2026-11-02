@@ -37,7 +37,9 @@ metadata:
 data:
   # ── 基础设施（指向宿主机上已在跑的那套）──
   REDIS_ADDR: "host.docker.internal:6379"
-  REDIS_URL: "redis://host.docker.internal:6379/0"
+  # 刻意**不在这里写 REDIS_URL**：引擎只认 REDIS_URL，而带密码的 URL 必须来自 Secret。
+  # 若这里也放一份，两份同名键会靠 envFrom 的先后顺序隐式覆盖 —— 顺序一调就是
+  # "连上但 NOAUTH"或"密码进了日志"的隐性事故。唯一来源见 Secret 的 REDIS_URL。
   # 三个副本必须同值：它决定键空间前缀，不一致会导致"同一个会话在两套键里"
   REDIS_KEY_PREFIX: "chiron:"
   # ── 引擎 ──
@@ -77,8 +79,14 @@ data:
 #     --from-literal=JWT_SECRET="$(grep -E '^JWT_SECRET=' .env | cut -d= -f2-)" \
 #     --from-literal=INTERNAL_TOKEN="$(grep -E '^INTERNAL_TOKEN=' .env | cut -d= -f2-)" \
 #     --from-literal=POSTGRES_DSN="$(grep -E '^POSTGRES_DSN=' .env | cut -d= -f2- | sed 's/@localhost/@host.docker.internal/')" \
+#     --from-literal=REDIS_PASSWORD="$(grep -E '^REDIS_PASSWORD=' .env | cut -d= -f2-)" \
+#     --from-literal=REDIS_URL="$(grep -E '^REDIS_URL=' .env | cut -d= -f2-)" \
 #     --from-literal=METRICS_TOKEN="$(grep -E '^METRICS_TOKEN=' .env | cut -d= -f2-)" \
 #     --dry-run=client -o yaml | kubectl apply -f -
+#
+# ⚠ 三个密钥（APP_SECRET / JWT_SECRET / INTERNAL_TOKEN）必须**所有副本同值**：
+#   网关用 APP_SECRET 派生 JWT/内部令牌与配置加密密钥；一旦副本间不同值，
+#   同一份 JWT 在 A 副本有效、在 B 副本 401，配置密文也无法互相解密。
 apiVersion: v1
 kind: Secret
 metadata:
@@ -90,7 +98,18 @@ stringData:
   JWT_SECRET: "REPLACE_ME"
   INTERNAL_TOKEN: "REPLACE_ME"
   # 经 PgBouncer 时把它指向 pgbouncer:6432（并保留 default_query_exec_mode=exec，见下）
+  # ⚠ 这里的库名必须与 pgbouncer 的 `[databases] chiron = ... dbname=<库名>` 一致
+  #   （见下方 pgbouncer-config）：不一致时连 PgBouncer 报 "database not found"，
+  #   或迁移打在 A 库、应用读写 B 库 ⇒ schema 闸门报不匹配。改的时候两处一起改。
   POSTGRES_DSN: "postgresql://postgres@host.docker.internal:5432/chiron0915"
+  # Redis 密码。网关侧按 REDIS_ADDR + REDIS_PASSWORD 组装连接（config.go 的
+  # RedisPassword），compose 的 redis 用 `--requirepass` 强制认证，缺它直接 NOAUTH。
+  REDIS_PASSWORD: ""
+  # 引擎侧只认 REDIS_URL，这里给**整串**而不是靠 $(REDIS_PASSWORD) 拼接：
+  # 密码里含 `@` `:` `/` 时拼接出来的 URL 会被客户端按分隔符解析错，整串放在
+  # Secret 里则只需在这里做一次 URL 编码（与 compose 的 REDIS_URL 写法一致）。
+  # 未开认证时写成 redis://host.docker.internal:6379/0 即可。
+  REDIS_URL: "redis://host.docker.internal:6379/0"
   METRICS_TOKEN: "REPLACE_ME"
   # PgBouncer 的 userlist.txt 全文（会被挂成 /etc/pgbouncer/userlist.txt）。
   # 生成方式：取 PG 里该角色**已有的 SCRAM secret**，不必写明文密码 ——
@@ -158,6 +177,13 @@ spec:
             - secretRef: { name: chiron-secrets }
           # 就绪看依赖（PG+Redis），存活只看进程 —— 这是两者语义的正确用法：
           # 依赖抖动应该"摘流量"，而不是"重启容器"。
+          # startupProbe 先于 liveness 生效（最多 60s）：启动要连 PG/Redis、校验 schema
+          # 版本、探测引擎，慢启动时若只靠 liveness 的 initialDelay 会被反复杀掉重启，
+          # 表现为 CrashLoopBackOff 且日志"看起来没有错"。
+          startupProbe:
+            httpGet: { path: /health, port: 8080 }
+            periodSeconds: 2
+            failureThreshold: 30
           readinessProbe:
             httpGet: { path: /ready, port: 8080 }
             initialDelaySeconds: 5
@@ -177,10 +203,17 @@ spec:
           # 不挂卷的后果是多副本各自写容器可写层：A 副本上传的媒体 B 副本 404、
           # A 副本装的插件 B 副本看不到，且 Pod 重建即全丢。
           volumeMounts:
-            - { name: workspace, mountPath: /srv/chiron/workspace }
-            - { name: plugins, mountPath: /srv/chiron/plugins }
+            - { name: workspace, mountPath: /srv/chiron/workspace, subPath: workspace }
+            - { name: plugins, mountPath: /srv/chiron/plugins, subPath: plugins }
       volumes:
         # 与 python-engine 引用同一条 **RWX** PVC（前提同 README：集群需支持 ReadWriteMany）。
+        #
+        # ⚠ 两条挂载都带 subPath：它们指向**同一条 PVC 的不同子目录**。
+        # 不带 subPath 时两者是同一个目录 —— workspace 是 agent 的**可写**文件区
+        # （引擎把它当沙箱根），plugins 里存的是 {user_id}/plugins.json（含用户凭据）。
+        # 合在一起就等于"沙箱里的任意命令都能改插件凭据"，属于横向提权。
+        # 子目录需在卷上预建一次（见 deploy/k8s/README.md §3d），否则 Pod 会因
+        # 无权在只挂载子目录时创建它而启动失败。
         - name: workspace
           persistentVolumeClaim: { claimName: chiron-shared }
         - name: plugins
@@ -275,6 +308,34 @@ spec:
               valueFrom: { fieldRef: { fieldPath: status.podIP } }
             - name: ENGINE_ADVERTISE_URL
               value: "http://$(POD_IP):8000"
+            # ⚠ REDIS_URL 来自 Secret（envFrom 已加载），这里**不要**再覆盖：
+            # 同名 env 会盖掉 Secret 里的值，而拼接出来的 URL 在密码含 `@:/` 时会被
+            # 客户端解析错（表现为 NOAUTH 或连到别的库）。
+            #
+            # ── 媒体与技能必须落在**跨副本共享**的卷上 ──
+            # 引擎的默认值分别是 ./data/media 与 ./data/skills（进程工作目录下的容器层）：
+            # 一是 Pod 重建即丢，二是同一用户的请求落到不同副本就看不到彼此生成的文件
+            # （表现为媒体 404 / 技能"时有时无"）。
+            #
+            # ⚠ 路径写法要按**本容器内**的挂载点：网关把同一条 PVC 挂在
+            # /srv/chiron/workspace，而引擎挂在 /srv/chiron/sandbox —— 两者是同一个
+            # PVC 根。网关的媒体根固定为 STORAGE_ROOT+"/media"（即 PVC 根/media，
+            # 见 internal/api/gateway_router.go 的 SetMediaRoot），所以引擎这里必须写
+            # /srv/chiron/sandbox/media；写成 /srv/chiron/workspace/media 会落到容器
+            # 可写层 —— 引擎写得"成功"，网关照样 404。
+            - name: MEDIA_STORE_BACKEND
+              value: "local"        # 与网关的 STORAGE_BACKEND 同值；改 s3 时两处一起改
+            - name: MEDIA_STORE_PATH
+              value: "/srv/chiron/sandbox/media"
+            - name: SKILL_STORE_PATH
+              value: "/srv/chiron/plugins/skills"
+          # startupProbe 必须先于 liveness 生效：引擎启动要连 PG/Redis、探测 sandbox
+          # 服务、恢复 PEL 里的 in-flight 任务，冷启动可能远超 liveness 的 initialDelay；
+          # 没有它时慢启动会被 liveness 反复杀掉，表现为"一直重启但日志没有报错"。
+          startupProbe:
+            httpGet: { path: /healthz, port: 8000 }
+            periodSeconds: 3
+            failureThreshold: 40
           readinessProbe:
             httpGet: { path: /readyz, port: 8000 }
             initialDelaySeconds: 10
@@ -284,8 +345,11 @@ spec:
             initialDelaySeconds: 20
             periodSeconds: 10
           volumeMounts:
-            - { name: sandbox, mountPath: /srv/chiron/sandbox }
-            - { name: plugins, mountPath: /srv/chiron/plugins }
+            # subPath 必须与 gateway 一致：网关把 PVC 的 `workspace/` 挂在
+            # /srv/chiron/workspace，引擎侧同一个子目录挂在 /srv/chiron/sandbox。
+            # 两边不一致时引擎写到容器可写层，网关读不到（媒体 404、编辑结果丢失）。
+            - { name: sandbox, mountPath: /srv/chiron/sandbox, subPath: workspace }
+            - { name: plugins, mountPath: /srv/chiron/plugins, subPath: plugins }
             - { name: builtin-skills, mountPath: /srv/chiron/builtin-skills, readOnly: true }
           resources:
             requests: { cpu: 200m, memory: 512Mi }
@@ -395,6 +459,11 @@ metadata:
 data:
   pgbouncer.ini: |
     [databases]
+    ; ⚠ dbname 必须与 Secret 里 POSTGRES_DSN 的库名**完全一致**（当前为 chiron）。
+    ;   两边不一致时应用连 PgBouncer 会报 "database not found"；更糟的情况是
+    ;   库里恰好存在同名库 —— 迁移打在 A 库、应用读写 B 库，版本闸门报 schema 不匹配。
+    ;   这里用 chiron 作为**别名**（客户端连的库名）也完全可以：那就要让 POSTGRES_DSN
+    ;   写 .../chiron 而把 dbname 指到真实库。二选一，改的时候两处一起改。
     chiron = host=host.docker.internal port=5432 dbname=chiron
 
     [pgbouncer]
@@ -449,12 +518,33 @@ spec:
                 labelSelector:
                   matchLabels: { app: pgbouncer }
                 topologyKey: kubernetes.io/hostname
+      # PgBouncer 镜像以非 root 用户运行（官方镜像的 uid 是 70）。显式钉住，
+      # 避免基础镜像换默认 USER 后悄悄变 root。
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 70
+        runAsGroup: 70
       containers:
         - name: pgbouncer
           image: pgbouncer/pgbouncer:1.24.1
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 6432 }]
           args: ["/etc/pgbouncer/pgbouncer.ini"]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities: { drop: ["ALL"] }
+          # PgBouncer 没有 HTTP 端点，只能用 TCP 探针。它是 PG 的**唯一**入口，
+          # 没有 liveness 的话进程卡死（连接池耗尽但端口仍 listen）不会被重启。
+          readinessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 3
+            periodSeconds: 5
+            failureThreshold: 3
+          livenessProbe:
+            tcpSocket: { port: 6432 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           volumeMounts:
             - { name: config, mountPath: /etc/pgbouncer/pgbouncer.ini, subPath: pgbouncer.ini, readOnly: true }
             - { name: userlist, mountPath: /etc/pgbouncer/userlist.txt, subPath: PGBOUNCER_USERLIST, readOnly: true }
@@ -487,15 +577,23 @@ metadata:
   name: sandbox-service
   namespace: chiron
 spec:
-  replicas: 1
+  # 单副本是**单点**：它一挂，引擎的 run_in_sandbox 全部失败（引擎侧 fail-closed，
+  # 不会降级到本地执行）。2 副本 + 上面的 least_conn 才是"扩副本无缝"的前提。
+  replicas: 2
   selector:
     matchLabels: { app: sandbox-service }
   template:
     metadata:
       labels: { app: sandbox-service }
     spec:
+      # 引擎镜像本身就是 appuser:1001（见 Dockerfile）。这里显式钉住 uid/gid：
+      # 只写 runAsNonRoot 时，挂载的 RWX 卷属主可能是 root，容器会因无写权限而
+      # "跑起来但所有文件操作失败"。fsGroup 让 kubelet 把卷组改成 1001。
       securityContext:
         runAsNonRoot: true
+        runAsUser: 1001
+        runAsGroup: 1001
+        fsGroup: 1001
       containers:
         - name: sandbox-service
           image: chiron/python-engine:dev
@@ -533,7 +631,7 @@ spec:
           volumeMounts:
             # 服务代码：只读挂入 ConfigMap（chiron-sandbox-code，见 README 的创建命令）。
             - { name: sandbox-code, mountPath: /app/service.py, subPath: service.py, readOnly: true }
-            - { name: sandbox, mountPath: /srv/chiron/sandbox }
+            - { name: sandbox, mountPath: /srv/chiron/sandbox, subPath: workspace }
             - { name: tmp, mountPath: /tmp }
           readinessProbe:
             # 用 exec + 环境里的 INTERNAL_TOKEN：httpGet 的头**不支持** secretKeyRef。
@@ -545,6 +643,17 @@ spec:
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 6
+          # 只有 readiness 时，uvicorn 进程卡死（端口仍 listen）不会被重启 ——
+          # 引擎侧的 sandbox 调用会一直挂到超时，而不是切到另一个副本。
+          livenessProbe:
+            exec:
+              command:
+                - python
+                - -c
+                - "import os,urllib.request;r=urllib.request.Request('http://localhost:8001/v1/internal/exec/health',headers={'X-Internal-Token':os.environ.get('INTERNAL_TOKEN','')});urllib.request.urlopen(r)"
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 3
       volumes:
         - name: sandbox-code
           configMap: { name: chiron-sandbox-code }
@@ -580,21 +689,42 @@ metadata:
   name: sandbox-lb
   namespace: chiron
 spec:
-  replicas: 1
+  # 单副本是**单点**：它一挂，引擎的 run_in_sandbox 全部失败（引擎侧 fail-closed）。
+  # 2 副本 + least_conn 才能让"扩副本无缝"成立；nginx 自身无状态，直接加副本即可。
+  replicas: 2
   selector:
     matchLabels: { app: sandbox-lb }
   template:
     metadata:
       labels: { app: sandbox-lb }
     spec:
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels: { app: sandbox-lb }
+                topologyKey: kubernetes.io/hostname
       containers:
         - name: sandbox-lb
           image: nginx:1.27-alpine   # upstream 的 `resolve` 参数需要 nginx ≥ 1.27.3
           ports: [{ containerPort: 8001 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]   # 监听 8001 本身不需要，但保留以兼容改成 80/443 的场景
           readinessProbe:
             httpGet: { path: /healthz, port: 8001 }
             initialDelaySeconds: 3
             periodSeconds: 5
+          # 只有 readiness 时，nginx 进程卡死（端口仍在 listen）不会被重启。
+          livenessProbe:
+            httpGet: { path: /healthz, port: 8001 }
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            failureThreshold: 3
           resources:
             requests: { cpu: 20m, memory: 32Mi }
             limits: { cpu: 200m, memory: 128Mi }
@@ -643,11 +773,19 @@ spec:
     metadata:
       labels: { app: frontend }
     spec:
+      # 前端镜像基于 nginx:alpine，主进程需要以 root 起（要绑 80 并写 /var/cache/nginx）。
+      # 因此这里**刻意不设** runAsNonRoot（设了会直接起不来），改为"能力最小化"：
+      # 只留绑定特权端口这一项，其余全丢，且禁止提权。
       containers:
         - name: frontend
           image: chiron/frontend:dev
           imagePullPolicy: IfNotPresent
           ports: [{ containerPort: 80 }]
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+              add: ["NET_BIND_SERVICE"]   # 绑定 80 端口所需，其余能力不需要
           readinessProbe:
             httpGet: { path: /health, port: 80 }
             initialDelaySeconds: 3
@@ -681,6 +819,19 @@ spec:
       port: 80
       targetPort: 80
       nodePort: 30082
+---
+# frontend 是**唯一对外入口**：没有 PDB 时，一次 `kubectl drain` 就可能把两个副本
+# 同时驱逐，表现是整站 502（网关本身还活着，但没人再转发）。minAvailable: 1 保证
+# 驱逐期间始终有一个在服务。
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: frontend
+  namespace: chiron
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels: { app: frontend }
 ---
 # ═══════════════════════════════════════════════════════════════════════════
 # 网络策略（B3）：内部特权端点的**第二道**防线
@@ -794,4 +945,29 @@ spec:
     # 只有引擎向沙箱层发起执行请求；sandbox-lb → sandbox-service 由内部 nginx 转发
     - from:
         - podSelector: { matchLabels: { app: python-engine } }
+      ports: [{ port: 8001, protocol: TCP }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sandbox-service-ingress
+  namespace: chiron
+spec:
+  podSelector:
+    matchLabels: { app: sandbox-service }
+  policyTypes: [Ingress]
+  ingress:
+    # 必须有这条：`default-deny-ingress` 对所有 Pod 生效，而 sandbox-lb 是**独立 Pod**，
+    # 不会被上面的 sandbox-ingress（它只选中 sandbox-lb 自己）放行到后端。
+    # 漏掉它的表现是引擎探测 /v1/internal/exec/health 超时 → SANDBOX_BACKEND=service
+    # 且 DEGRADED_MODE=false ⇒ 引擎**拒绝启动**，而两边 Pod 都显示 Running。
+    - from:
+        - podSelector: { matchLabels: { app: sandbox-lb } }
+      ports: [{ port: 8001, protocol: TCP }]
+    # 探针来源是节点（kubelet），与 gateway-ingress 同理；多数 CNI 放通 host→pod，
+    # Calico 默认策略可能拦 —— Pod 一直 NotReady 时先查这里。
+    - from:
+        - ipBlock: { cidr: 10.0.0.0/8 }
+        - ipBlock: { cidr: 172.16.0.0/12 }
+        - ipBlock: { cidr: 192.168.0.0/16 }
       ports: [{ port: 8001, protocol: TCP }]

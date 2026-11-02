@@ -181,6 +181,24 @@ type AuditConsumer struct {
 	handler func(ctx context.Context, entry AuditEntry) error
 }
 
+// 崩溃恢复参数。
+//
+// 为什么必须有这一组：主循环用 `XREADGROUP > ` 只读**新**消息，处理失败的消息留在
+// PEL（pending entries list）里。此前**没有任何认领逻辑** —— 于是
+//
+//   - 进程在"已读取、未 ACK"之间被杀（发布、OOM、节点回收），那条审计记录就永久
+//     滞留在 PEL 里，谁也再读不到。审计是合规产物，"少一条且无人知晓"比报错更糟；
+//   - 处理失败的消息同样永不重试，而 PEL 只增不减 —— 长期运行后 XPENDING 越滚越大，
+//     内存与 XPENDING/XAUTOCLAIM 的耗时都随之上涨。
+//
+// 与 webhook dispatcher 的 claimLoop 同一套语义，阈值取一致，便于运维只记一组数字。
+const (
+	auditClaimIdle      = 90 * time.Second // 认领阈值：超过它仍未 ACK 视为原消费者已死
+	auditClaimEvery     = 60 * time.Second // 扫描周期
+	auditMaxDeliveries  = 3                // 单条消息最大投递次数，超过则 ACK 止损
+	auditClaimBatchSize = 100
+)
+
 // NewAuditConsumer 创建审计日志消费者
 func NewAuditConsumer(rdb RedisClient, handler func(ctx context.Context, entry AuditEntry) error) *AuditConsumer {
 	return &AuditConsumer{
@@ -188,6 +206,91 @@ func NewAuditConsumer(rdb RedisClient, handler func(ctx context.Context, entry A
 		stream:  RedisKey("audit:events"),
 		group:   "audit-processor",
 		handler: handler,
+	}
+}
+
+// handleMessage 处理一条审计消息；返回 true 表示可以 ACK（已处理或被判定为不可处理）。
+//
+// 返回 false 时**故意不 ACK**：消息留在 PEL 里，由 claimLoop 在 idle 超阈值后重投，
+// 投递次数超过 auditMaxDeliveries 才止损。这样"瞬时故障"能自愈，"永久损坏的消息"
+// 也不会变成无限重投的毒丸。
+func (c *AuditConsumer) handleMessage(ctx context.Context, msg redis.XMessage) bool {
+	data, ok := msg.Values["data"].(string)
+	if !ok {
+		// 结构不对的消息重投多少次都一样：ACK 掉，否则它会在 PEL 里永远占位。
+		slog.Warn("审计日志消息缺少 data 字段，丢弃", "msg_id", msg.ID)
+		return true
+	}
+
+	var entry AuditEntry
+	if err := json.Unmarshal([]byte(data), &entry); err != nil {
+		slog.Error("审计日志反序列化失败，丢弃", "error", err, "msg_id", msg.ID)
+		return true
+	}
+
+	if err := c.handler(ctx, entry); err != nil {
+		slog.Error("审计日志处理失败，稍后重试", "error", err, "action", entry.Action, "msg_id", msg.ID)
+		return false
+	}
+	return true
+}
+
+// claimLoop 崩溃恢复：认领 idle 超阈值且仍 pending 的消息重新处理。
+func (c *AuditConsumer) claimLoop(ctx context.Context, consumerID string) {
+	ticker := time.NewTicker(auditClaimEvery)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+		}
+
+		pend, err := c.rdb.XPendingExt(ctx, &redis.XPendingExtArgs{
+			Stream: c.stream,
+			Group:  c.group,
+			Start:  "-",
+			End:    "+",
+			Count:  auditClaimBatchSize,
+			Idle:   auditClaimIdle,
+		}).Result()
+		if err != nil || len(pend) == 0 {
+			continue
+		}
+
+		ids := make([]string, 0, len(pend))
+		for _, p := range pend {
+			if p.RetryCount >= auditMaxDeliveries {
+				// 止损：ACK 掉超限消息，否则它会一直占据 PEL 并被反复认领。
+				// 审计记录丢失必须可见 —— 这是唯一能发现"有审计没落库"的线索。
+				slog.Error("审计日志消息超过投递上限，放弃",
+					"msg_id", p.ID, "deliveries", p.RetryCount, "consumer", p.Consumer)
+				c.rdb.XAck(ctx, c.stream, c.group, p.ID)
+				continue
+			}
+			ids = append(ids, p.ID)
+		}
+		if len(ids) == 0 {
+			continue
+		}
+
+		claimed, err := c.rdb.XClaim(ctx, &redis.XClaimArgs{
+			Stream:   c.stream,
+			Group:    c.group,
+			Consumer: consumerID,
+			MinIdle:  auditClaimIdle,
+			Messages: ids,
+		}).Result()
+		if err != nil {
+			continue
+		}
+		for _, msg := range claimed {
+			// 与主循环一致：成功才 ACK。用 WithoutCancel 保证优雅关闭期间的认领
+			// 不会做到一半被取消（认领后不 ACK 只会让它更久地卡在 PEL 里）。
+			if c.handleMessage(context.WithoutCancel(ctx), msg) {
+				c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
+			}
+		}
 	}
 }
 
@@ -210,6 +313,8 @@ func (c *AuditConsumer) Start(ctx context.Context) error {
 	_, _ = rand.Read(rb[:])
 	consumerID := "audit-worker-" + time.Now().Format("20060102150405") + "-" + hex.EncodeToString(rb[:])
 
+	go c.claimLoop(ctx, consumerID)
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -229,6 +334,10 @@ func (c *AuditConsumer) Start(ctx context.Context) error {
 			if err == redis.Nil {
 				continue
 			}
+			// 优雅关闭时 XReadGroup 会被取消，这不是错误，不该刷 Error 日志。
+			if ctx.Err() != nil {
+				return nil
+			}
 			slog.Error("审计日志消费失败", "error", err)
 			time.Sleep(time.Second)
 			continue
@@ -236,24 +345,10 @@ func (c *AuditConsumer) Start(ctx context.Context) error {
 
 		for _, result := range results {
 			for _, msg := range result.Messages {
-				data, ok := msg.Values["data"].(string)
-				if !ok {
-					continue
+				// 失败的消息不 ACK，留给 claimLoop 重投（见 handleMessage 注释）。
+				if c.handleMessage(ctx, msg) {
+					c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
 				}
-
-				var entry AuditEntry
-				if err := json.Unmarshal([]byte(data), &entry); err != nil {
-					slog.Error("审计日志反序列化失败", "error", err)
-					continue
-				}
-
-				if err := c.handler(ctx, entry); err != nil {
-					slog.Error("审计日志处理失败", "error", err, "action", entry.Action)
-					continue
-				}
-
-				// 确认消息
-				c.rdb.XAck(ctx, c.stream, c.group, msg.ID)
 			}
 		}
 	}

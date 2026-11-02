@@ -59,12 +59,21 @@ func (f *fakeQuotaRedis) Eval(_ context.Context, script string, keys []string, a
 		cmd.SetErr(errors.New("redis unavailable"))
 		return cmd
 	}
-	delta, err := strconv.ParseInt(fmt.Sprint(args[0]), 10, 64)
+	val, err := strconv.ParseInt(fmt.Sprint(args[0]), 10, 64)
 	if err != nil {
 		cmd.SetErr(err)
 		return cmd
 	}
-	v := f.values[keys[0]] + delta
+	// quotaSeedScript 是"仅当缺失才写入"的初始化脚本：它**不能**被当成增量累加，
+	// 否则替身会把回填值加到已有计数上，"回填是否会覆盖并发增量"就测不出来了。
+	if strings.Contains(script, "EXISTS") {
+		if !f.seeded[keys[0]] {
+			f.values[keys[0]], f.seeded[keys[0]] = val, true
+		}
+		cmd.SetVal(f.values[keys[0]])
+		return cmd
+	}
+	v := f.values[keys[0]] + val
 	// 负增量脚本带下界夹取（quotaDeltaScript），正增量脚本没有 —— 用脚本内容区分。
 	if v < 0 && strings.Contains(script, "if v < 0") {
 		v = 0
@@ -339,4 +348,41 @@ func quotaMonthlyKeyForTest(t *testing.T, tenantID int16) string {
 	now := time.Date(2026, 3, 5, 12, 0, 0, 0, time.UTC)
 	key, _, _ := quotaPeriodKey(tenantID, "token", "monthly", now)
 	return key
+}
+
+// ── 回填原子性（P2） ──────────────────────────────────────────────
+
+func TestBackfillSeedsWithoutClobberingConcurrentUsage(t *testing.T) {
+	// 场景：周期刚开始，计数键缺失。副本 A 回填 SQL 聚合值 100 并已累加本次 300；
+	// 此时副本 B 晚到的回填（同样算出 100）不能把 A 的 300 冲掉。
+	rdb := newFakeQuotaRedis()
+	key := quotaMonthlyKeyForTest(t, 1)
+
+	// A：回填 100 后累加到 400
+	if err := rdb.Eval(context.Background(), quotaSeedScript, []string{key}, int64(100), int64(0)).Err(); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+	if err := rdb.Eval(context.Background(), quotaIncrScript, []string{key}, int64(300), int64(0)).Err(); err != nil {
+		t.Fatalf("incr: %v", err)
+	}
+
+	// B：晚到的回填仍算出 100 —— 只能是无害空操作
+	if err := rdb.Eval(context.Background(), quotaSeedScript, []string{key}, int64(100), int64(0)).Err(); err != nil {
+		t.Fatalf("late seed: %v", err)
+	}
+
+	if got := rdb.values[key]; got != 400 {
+		t.Fatalf("counter = %d, want 400 —— 晚到的回填覆盖了已累加的真实用量（等价于凭空发放额度）", got)
+	}
+}
+
+func TestQuotaSeedScriptOnlyWritesWhenMissing(t *testing.T) {
+	// 脚本语义本身也要钉住：去掉 EXISTS 判断就等于无条件覆盖。
+	if !strings.Contains(quotaSeedScript, "EXISTS") {
+		t.Fatal("quotaSeedScript 缺少 EXISTS 判断：回填会无条件覆盖已有计数")
+	}
+	// 回填后必须带上过期时间，否则计数器永不过期，下个周期起点读到上期用量。
+	if !strings.Contains(quotaSeedScript, "EXAT") {
+		t.Fatal("quotaSeedScript 未设置过期时间：计数器会跨周期累积")
+	}
 }

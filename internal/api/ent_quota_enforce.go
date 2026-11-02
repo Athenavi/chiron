@@ -53,6 +53,19 @@ local v = redis.call('INCRBY', KEYS[1], ARGV[1])
 redis.call('EXPIREAT', KEYS[1], ARGV[2])
 return v`
 
+// quotaSeedScript 是**只回填、不覆盖**的初始化脚本：键不存在时才写入 SQL 聚合值。
+//
+// 为什么不能退回"EXISTS 为 0 就 SET"：判空与写入是两次往返，中间是真空窗口。
+// 两个副本同时开始一个周期的第一个请求时，都会看到"键缺失"、各自去 SQL 聚合，
+// 然后**后写的那个 SET 会覆盖先写者在此期间已经 INCRBY 掉的真实用量** ——
+// 计数值倒退，租户凭空多出一份额度，而且没有任何日志。
+// 把"判空 + 写入"收进一次 EVAL 后，并发的第二个回填最多是无害的空操作。
+const quotaSeedScript = `
+if redis.call('EXISTS', KEYS[1]) == 0 then
+  redis.call('SET', KEYS[1], ARGV[1], 'EXAT', ARGV[2])
+end
+return tonumber(redis.call('GET', KEYS[1]))`
+
 // quotaDeltaScript 用于**负增量**（回合末把预检预留扣回）。
 //
 // 扣回可能把计数压到 0 以下（回填值本来就偏低时），负数会让"用量 > 上限"永久不成立 ——
@@ -277,6 +290,10 @@ func (e *tenantQuotaEnforcer) consume(ctx context.Context, tenantID int16, pool 
 	// ⚠ **credits 池不走这里**：credits 无法在预检时预估（它 = tokens × 单价 / 1000，
 	// 而 token 预估值本身就是按字符数的粗估），所以 credits 池由 `enforce` 直接读 SQL
 	// 判定、不做预留计数（见那里的注释）。
+	//
+	// EXISTS 在这里**只是省一次 SQL** 的优化，不承担正确性：判空与写入是两次往返，
+	// 并发的两个副本都会看到"缺失"。真正的写入走 quotaSeedScript（"仅当仍缺失才写"），
+	// 所以晚到的回填不会覆盖先写者期间已累加的真实用量。
 	if n, err := e.redis.Exists(ctx, key).Result(); err != nil {
 		slog.Warn("quota enforce: redis exists failed, fail-open", "key", quotaKeyPrefix(key), "error", err)
 		return 0, false
@@ -287,7 +304,8 @@ func (e *tenantQuotaEnforcer) consume(ctx context.Context, tenantID int16, pool 
 				"tenant_id", tenantID, "error", err)
 			return 0, false
 		}
-		if err := e.redis.Set(ctx, key, used, time.Until(expireAt)).Err(); err != nil {
+		if err := e.redis.Eval(ctx, quotaSeedScript, []string{key},
+			used, expireAt.Unix()).Err(); err != nil {
 			slog.Warn("quota enforce: usage backfill set failed, fail-open",
 				"key", quotaKeyPrefix(key), "error", err)
 			return 0, false

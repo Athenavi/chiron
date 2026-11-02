@@ -647,6 +647,14 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
+	// 租户取 token 里的（Refresh 会按 users 表重取后重签，所以这里不会用到过期的归属）。
+	// 此前这里硬编码 DefaultTenantID：`WHERE id=$1 AND tenant_id=$2` 于是恒不匹配
+	// 非默认租户的用户 —— 他们每次刷新页面都 401，且 set_config 也把 RLS 上下文
+	// 指到了别的租户。
+	tenantID := claims.TenantID
+	if tenantID == 0 {
+		tenantID = DefaultTenantID
+	}
 	tx, err := db.GlobalDBManager.Begin(ctx)
 	if err != nil {
 		slog.Error("begin tx for tenant context", "error", err)
@@ -654,7 +662,7 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(DefaultTenantID)); err != nil {
+	if _, err := tx.Exec(ctx, "SELECT set_config('app.current_tenant_id', $1, true)", tenantStr(tenantID)); err != nil {
 		slog.Error("set tenant context", "error", err)
 		InternalError(w, "session lookup failed")
 		return
@@ -663,7 +671,7 @@ func (h *AuthHandler) Session(w http.ResponseWriter, r *http.Request) {
 	var user UserResponse
 	if err := tx.QueryRow(ctx,
 		`SELECT id, email, name, role FROM users WHERE id = $1 AND tenant_id = $2`,
-		claims.UserID, DefaultTenantID,
+		claims.UserID, tenantID,
 	).Scan(&user.ID, &user.Email, &user.Name, &user.Role); err != nil {
 		Unauthorized(w, ErrAuthRequired)
 		return

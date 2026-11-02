@@ -83,9 +83,21 @@ func handleSSE(w http.ResponseWriter, r *http.Request, hub *broadcast.Hub, subID
 	pingTimer := time.NewTimer(15 * time.Second)
 	defer pingTimer.Stop()
 
+	// 停机信号：进程开始优雅关闭时主动收尾，否则 srv.Shutdown 会一直等到客户端断开
+	// （SSE 不会自己结束），把宽限期吃满后强杀进程，连带切断同实例的正常请求。
+	var draining <-chan struct{}
+	if hub != nil {
+		draining = hub.Draining()
+	}
+
 	for {
 		select {
 		case <-r.Context().Done():
+			return
+		case <-draining:
+			// 先告诉客户端这是服务端主动结束、可立即重连，再关闭响应。
+			w.Write([]byte("event: server_shutdown\ndata: {\"reason\":\"server restarting\"}\n\n"))
+			flusher.Flush()
 			return
 		case event, ok := <-ch:
 			if !ok {
