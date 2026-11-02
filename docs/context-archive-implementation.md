@@ -487,7 +487,7 @@ items.value = [...fresh, ...items.value]
 
 ### 4.5 大 `output` 的按需展开
 
-配合 §3.6：列表接口不再返回 `output` 全文，只返回 `output_bytes` 与 `output_ref`。
+配合 §3.6：列表接口不再返回 `output` 全文，只返回 `output_bytes` 与 `output_truncated`。
 
 工具卡默认显示：
 
@@ -495,8 +495,19 @@ items.value = [...fresh, ...items.value]
 read_file  src/auth/token.go  128KB   [展开]
 ```
 
-点击后调 `/v1/chat/sessions/{id}/archives/{ref}` 取前 8KB 渲染，再点"继续加载"
-按 `offset` 递增。
+点击后调 `GET /v1/chat/sessions/{id}/tool-calls/{tcID}/output?offset=0&limit=8192`
+取一段渲染，再点"继续加载"按 `offset` 递增。
+
+> **落地修正（2026-11）**：端点最终定在 `tool-calls/{tcID}/output`，不是本节原先写的
+> `archives/{ref}`。原因是 `tool_calls.id` 本身就是稳定主键，再引入一层 `ref` 只是多一次
+> 间接寻址；而 `message_archives`（第 10 步）是另一套存储，两者不该共用同一个读面。
+>
+> 实现要点：
+> - 服务端 `limit` 硬上限 **64KB**（`session.toolOutputMaxChunk`），忽略客户端更大值
+> - 查询同时按 `id` **和** `session_id` 过滤 —— `tool_calls.id` 可枚举，不是能力凭证
+> - 跨租户/跨用户返回 **404 而非 403**，避免探测存在性
+> - 前端判断"是否到末尾"用 `片段长度 < 请求上限`，**不用** `offset >= total_bytes`：
+>   `offset` 是字符偏移而 `total_bytes` 是字节数，多字节文本下两者不同口径
 
 **不要预取**：一页 50 条工具调用预取全文，等于把刚省下的带宽又花回去。
 

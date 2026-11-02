@@ -446,6 +446,51 @@ func (m *Manager) GetToolCalls(ctx context.Context, sessionID string) ([]model.T
 	return out, rows.Err()
 }
 
+// toolOutputMaxChunk 是单次按需读取 output 的字符上限。
+//
+// 服务端强制夹取、忽略客户端传入的更大值：否则一次请求就能把 256KB 的
+// 单条输出整段拉走，"分段读取"退化成"全量读取"，分页省下的带宽又花回去。
+const toolOutputMaxChunk = 64 * 1024
+
+// GetToolCallOutput 按需分段读取一条工具调用的完整 output。
+//
+// 返回 (片段, 原文总字节数, 是否找到, error)。offset 为 0 基字符偏移。
+//
+// 必须同时按 id 与 session_id 过滤：tool_calls.id 是可枚举的，不是能力凭证。
+// 只按 id 查等于让任何知道 UUID 的人跨会话读别人的工具输出。
+// 「不属于本会话」与「不存在」返回同一个 found=false，避免探测存在性。
+func (m *Manager) GetToolCallOutput(ctx context.Context, sessionID, toolCallID string, offset, limit int) (string, int, bool, error) {
+	if m.pool == nil || sessionID == "" || toolCallID == "" {
+		return "", 0, false, nil
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	if limit <= 0 {
+		limit = outputPreviewBytes
+	}
+	if limit > toolOutputMaxChunk {
+		limit = toolOutputMaxChunk
+	}
+
+	// substring 的起始位置是 1 基，所以 offset 要 +1。
+	// octet_length 给的是真实字节数（列表接口的 output_bytes 口径），
+	// 前端据此判断"还有多少没加载"。
+	var chunk string
+	var total int
+	err := m.pool.QueryRow(ctx,
+		`SELECT substring(output from $3 for $4), octet_length(output)
+		 FROM tool_calls WHERE id = $1 AND session_id = $2`,
+		toolCallID, sessionID, offset+1, limit).Scan(&chunk, &total)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return "", 0, false, nil
+	}
+	if err != nil {
+		return "", 0, false, err
+	}
+	return chunk, total, true, nil
+}
+
 // SaveMessages saves user + assistant messages and updates the session title.
 func (m *Manager) SaveMessages(ctx context.Context, sessionID, userID, userContent, assistantContent string) {
 	if m.pool == nil {

@@ -22,6 +22,11 @@ func registerConversationRoutes(
 	mux.Handle("PUT /v1/conversations/{id}", authMW(rlMW(http.HandlerFunc(conversationHandler.Update))))
 	mux.Handle("DELETE /v1/conversations/{id}", authMW(rlMW(http.HandlerFunc(conversationHandler.Delete))))
 
+	// 工具调用 output 的按需分段读取。列表接口只给前 4096 字符预览，
+	// 全文由这里取（见 internal/api/tool_output.go 与 session.GetToolCallOutput）。
+	mux.Handle("GET /v1/chat/sessions/{id}/tool-calls/{tcID}/output",
+		authMW(rlMW(http.HandlerFunc(conversationHandler.ToolOutput))))
+
 	// Conversation shares (auth + rate limited; public GET in registerPublicEndpoints)
 	mux.Handle("POST /v1/conversations/{id}/share", authMW(rlMW(http.HandlerFunc(shareHandler.Create))))
 	mux.Handle("GET /v1/conversations/{id}/share", authMW(rlMW(http.HandlerFunc(shareHandler.GetActive))))

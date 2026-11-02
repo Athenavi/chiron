@@ -8,7 +8,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -77,12 +76,11 @@ func newPool(ctx context.Context, dsn string, cfg PoolConfig) (*pgxpool.Pool, er
 	poolCfg.MaxConnLifetime = cfg.MaxConnLifetime
 	poolCfg.MaxConnIdleTime = cfg.MaxConnIdleTime
 	poolCfg.HealthCheckPeriod = cfg.HealthCheckPeriod
-	// P 性能/稳定：statement_timeout 防慢查询长期占用连接耗尽池
-	// 长查询（迁移/批量）应走独立连接，不复用业务池
-	poolCfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		_, err := conn.Exec(ctx, "SET statement_timeout = 30000")
-		return err
-	}
+	// 客户端侧超时（建连 + 探测）：管「还没连上」。
+	applyClientTimeouts(poolCfg)
+	// PG 侧会话超时：管「连上之后跑太久」。写入 startup packet，
+	// 因为经 PgBouncer transaction 池时 `SET` 出来的会话状态不会被保留。
+	applySessionTimeouts(poolCfg)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

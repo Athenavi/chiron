@@ -337,6 +337,34 @@ export async function getChatSessionMessages(sessionId: string) {
   return data
 }
 
+/** 工具调用 output 的一段原文（列表接口只给预览，全文按 offset 分段取） */
+export interface ToolOutputChunk {
+  content: string
+  /** 库中 output 的完整字节数，用于判断还剩多少未加载 */
+  total_bytes: number
+  offset: number
+  /** 服务端实际采用的上限，可能小于请求值（服务端强制夹取） */
+  limit: number
+}
+
+/**
+ * 按需读取一条工具调用的完整 output。
+ *
+ * limit 不要传超过 64KB：服务端会静默夹取，传大了只是白填。
+ */
+export async function getToolCallOutput(
+  sessionId: string,
+  toolCallId: string,
+  offset = 0,
+  limit = 8192,
+): Promise<ToolOutputChunk> {
+  const { data } = await api.get(
+    `/v1/chat/sessions/${encodeURIComponent(sessionId)}/tool-calls/${encodeURIComponent(toolCallId)}/output`,
+    { params: { offset, limit } },
+  )
+  return data?.data
+}
+
 // ── 会话分享（chat.deepseek.com/share/{id} 风格）──
 export interface ShareInfo {
   share_id: string

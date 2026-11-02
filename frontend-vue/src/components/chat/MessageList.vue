@@ -635,6 +635,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
           <MessageItem
             v-else-if="(node as any).row.item.kind !== 'kb_hits'"
             :item="(node as any).row.item"
+            :session-id="props.sessionKey"
             :anchor-key="isUserAnchor((node as any).row.item) ? (node as any).row.index : undefined"
             :highlighted="highlightIndex === (node as any).row.index"
             :entering="enteringIds.has((node as any).row.item.id ?? '')"

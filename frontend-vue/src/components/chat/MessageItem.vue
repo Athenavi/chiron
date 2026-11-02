@@ -29,6 +29,8 @@ const props = defineProps<{
   item: ChatItem
   anchorKey?: number
   highlighted?: boolean
+  /** 当前会话 id：工具结果按需拉全文时要用（见 ToolResultBlock） */
+  sessionId?: string
   /** 是否播放一次入场动效。由父组件按「新到的 id」门控 ——
    *  transcript 是窗口化的，滚出再滚回会重新挂载行，不门控就会反复重播。 */
   entering?: boolean
@@ -922,6 +924,7 @@ onUpdated(enhanceContent)
   <ToolResultBlock
     v-else-if="item.kind === 'tool_result'"
     :item="item as ToolResultItem"
+    :session-id="props.sessionId"
   />
   <!-- UI/UX：日期分隔线（deepseek DateDivider） -->
   <div

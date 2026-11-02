@@ -7,7 +7,6 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/athenavi/chiron/internal/monitor"
@@ -19,6 +18,85 @@ var PoolMu sync.RWMutex
 // Pool is the global PostgreSQL connection pool.
 // Protected by PoolMu for concurrent read/write access.
 var Pool *pgxpool.Pool
+
+// PG 侧会话超时。
+//
+// 三条各对应一类「无限期挂住」：
+//   - **statement_timeout**：慢查询
+//   - **lock_timeout**：等行锁/表锁。锁等待虽计入 statement_timeout，但等满 30 秒
+//     才报错等于把连接占满 30 秒；5 秒放弃能让请求快速失败并释放连接。
+//   - **idle_in_transaction_session_timeout**：事务内空闲会一直持锁与 snapshot，
+//     阻塞 VACUUM。业务代码漏 commit/rollback 时这是唯一兜底。
+//
+// **必须走 RuntimeParams（startup packet），不能用 `SET`。**
+// 业务库经 PgBouncer 的 transaction 池（deploy/pgbouncer/pgbouncer.ini），
+// 而这三个参数都不是 PG 会向客户端上报（GUC_REPORT）的参数。PgBouncer 文档明确：
+// 对 PG 不上报的参数，它只认 start_up packet 里带的值，`SET` 之后的值不被跟踪；
+// 再加上 `server_reset_query = DISCARD ALL`，`SET` 出来的值在连接归还时就被清掉 ——
+// 也就是「看起来设了，实际不生效」，且连接的下一任使用者还可能看到残留值。
+// startup packet 的路径则会被 PgBouncer 在每次客户端活跃时重新应用。
+//
+// 直连 PG 时 RuntimeParams 同样生效（作为会话默认值），因此一份配置覆盖两种部署。
+//
+// 委托方显式设过的不覆盖：DSN 里的同名键会先落进 RuntimeParams，那是显式意图。
+var sessionTimeoutParams = map[string]string{
+	"statement_timeout":                   "30000",
+	"lock_timeout":                        "5000",
+	"idle_in_transaction_session_timeout": "60000",
+}
+
+// applySessionTimeouts 把 PG 侧会话超时写入 startup packet。
+//
+// 返回实际写入的键，便于启动日志核对「哪几条真的生效了」——
+// 少一条不会有编译错误，只会在生产上表现为某类挂死重新出现。
+func applySessionTimeouts(cfg *pgxpool.Config) []string {
+	if cfg.ConnConfig.RuntimeParams == nil {
+		cfg.ConnConfig.RuntimeParams = make(map[string]string)
+	}
+	var applied []string
+	for k, v := range sessionTimeoutParams {
+		if _, set := cfg.ConnConfig.RuntimeParams[k]; set {
+			continue
+		}
+		cfg.ConnConfig.RuntimeParams[k] = v
+		applied = append(applied, k)
+	}
+	return applied
+}
+
+// 客户端侧超时默认值。
+//
+// PG 侧的 statement_timeout / lock_timeout 只能管住「已经连上并开始执行」的语句，
+// 管不住建连本身与健康探测 —— 这两步在网络黑洞（丢包、半开连接、LB 后端已死但
+// VIP 仍在）下没有任何上限，会把调用方的 goroutine 一起挂死，且连接池里那个
+// 槽位一直不被归还。连接池被这样占满后，整个服务看起来是「DB 慢」，实际是
+// 「DB 根本没连上」。
+const (
+	defaultConnectTimeout = 10 * time.Second
+	defaultPingTimeout    = 5 * time.Second
+)
+
+// applyClientTimeouts 补齐客户端侧超时，与 applySessionTimeouts（PG 侧）互补。
+//
+// 关于 command_timeout：**pgx v5 不存在这个配置项**。v4 的
+// `pgconn.Config.CommandTimeout` 字段在 v5 已移除，pgconn 的 DSN 解析表
+// （notRuntimeParams）也不含该键 —— 写进 DSN 会被当成运行时 GUC 放进
+// RuntimeParams 发给 PG，建连时直接报 unrecognized configuration parameter。
+// 因此 v5 下客户端能设的只有建连超时，查询超时由 PG 的 statement_timeout 兜底。
+//
+// 两者都是零值即失效（pgconn.go 与 pgxpool/pool.go 的判断都是 `!= 0` / `> 0`），
+// 所以「不设置」等于「不限制」，必须显式给默认值。
+//
+// DSN 里显式写了 connect_timeout 时以 DSN 为准：那是部署方的显式意图，
+// 库不该在背后把它改小。
+func applyClientTimeouts(cfg *pgxpool.Config) {
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = defaultConnectTimeout
+	}
+	if cfg.PingTimeout == 0 {
+		cfg.PingTimeout = defaultPingTimeout
+	}
+}
 
 func ConnectPostgres(ctx context.Context, dsn string, maxConn, minConn int) error {
 	cfg, err := pgxpool.ParseConfig(dsn)
@@ -35,12 +113,13 @@ func ConnectPostgres(ctx context.Context, dsn string, maxConn, minConn int) erro
 	// 设置默认事务隔离级别为 READ COMMITTED（平衡一致性和性能）
 	cfg.ConnConfig.RuntimeParams["default_transaction_isolation"] = "read committed"
 
-	// P 性能/稳定：statement_timeout 防慢查询长期占用连接耗尽池
-	// 长查询（迁移/批量）应走独立连接，不复用业务池
-	cfg.AfterConnect = func(ctx context.Context, conn *pgx.Conn) error {
-		_, err := conn.Exec(ctx, "SET statement_timeout = 30000")
-		return err
-	}
+	// 客户端侧超时（建连 + 探测）：管「还没连上」。
+	applyClientTimeouts(cfg)
+
+	// PG 侧会话超时：管「连上之后跑太久」。写入 startup packet，
+	// 因为经 PgBouncer transaction 池时 `SET` 出来的会话状态不会被保留。
+	appliedTimeouts := applySessionTimeouts(cfg)
+	slog.Info("PG 会话超时已写入 startup packet", "params", appliedTimeouts)
 
 	pool, err := pgxpool.NewWithConfig(ctx, cfg)
 	if err != nil {

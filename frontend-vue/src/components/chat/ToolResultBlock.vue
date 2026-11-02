@@ -5,10 +5,11 @@ import type { ToolResultItem } from './chat-types'
 import { formatSize } from './chat-types'
 import { looksLikeDiff, parseUnifiedDiff, type ParsedDiff } from './diffParse'
 import { useI18n } from 'vue-i18n'
+import { getToolCallOutput } from '../../api'
 
 const { t } = useI18n()
 
-const props = defineProps<{ item: ToolResultItem }>()
+const props = defineProps<{ item: ToolResultItem; sessionId?: string }>()
 // 失败结果默认展开：错误信息藏在折叠后面等于没报错
 const expanded = ref(props.item.isError)
 watch(() => props.item.isError, isError => { if (isError) expanded.value = true })
@@ -80,9 +81,9 @@ const isImageData = computed(() => {
   return /^data:image\/(png|jpe?g|gif|webp);base64,/.test(c)
 })
 
-// 分型解析：改动 diff / read_file / 终端 / 搜索 / JSON / 文本
+/** 分型解析：改动 diff / read_file / 终端 / 搜索 / JSON / 文本 */
 const parsed = computed<ParsedResult>(() => {
-  const c = props.item.content
+  const c = displayContent.value
   if (isImageData.value) return { kind: 'text', text: '' }
   let obj: unknown = null
   try { obj = JSON.parse(c) } catch { /* not json */ }
@@ -172,6 +173,54 @@ const previewOnlyLabel = computed(() =>
     ? t('common.result_preview_only', { size: formatSize(props.item.outputBytes || 0) })
     : '',
 )
+
+// ── 大 output 按需展开 ──
+//
+// 列表接口只返回前 4096 字符预览（见 internal/session 的 outputPreviewBytes），
+// 全文由 /v1/chat/sessions/{id}/tool-calls/{tcID}/output 按 offset 分段取。
+// 不预取：一页 50 条工具调用预取全文，等于把分页刚省下的带宽又花回去。
+const FETCH_CHUNK = 8192
+
+/** 已累积的完整原文（空 = 还没展开过，继续用接口给的预览） */
+const fullText = ref('')
+/** 库中原文的完整字节数（用于「还剩多少」提示） */
+const totalBytes = ref(0)
+const loadingFull = ref(false)
+const loadError = ref(false)
+/** 服务端已无更多片段 */
+const reachedEnd = ref(false)
+
+/** 渲染用的内容：展开过就用完整原文，否则用列表接口给的预览 */
+const displayContent = computed(() => (fullText.value ? fullText.value : props.item.content))
+
+/** 只有在「服务端说这是预览」且拿到了会话身份时才允许展开 */
+const canLoadFull = computed(
+  () => !!props.item.outputTruncated && !!props.sessionId && !!props.item.toolCallId,
+)
+
+const hasMoreFull = computed(() => canLoadFull.value && !reachedEnd.value)
+
+async function loadFullChunk() {
+  const sid = props.sessionId
+  if (!sid || loadingFull.value) return
+  loadingFull.value = true
+  loadError.value = false
+  try {
+    // 起点是当前已有内容的字符数：该接口的 offset 是字符偏移，不是字节偏移
+    const current = fullText.value || props.item.content
+    const chunk = await getToolCallOutput(sid, props.item.toolCallId, current.length, FETCH_CHUNK)
+    if (chunk?.total_bytes) totalBytes.value = chunk.total_bytes
+    const piece = chunk?.content ?? ''
+    fullText.value = current + piece
+    // 片段短于请求上限 = 已到末尾。不用字节数比较：offset 是字符、total 是字节，
+    // 多字节文本下两者不同口径，比较会得出错误结论。
+    if (piece.length < FETCH_CHUNK) reachedEnd.value = true
+  } catch {
+    loadError.value = true
+  } finally {
+    loadingFull.value = false
+  }
+}
 
 // 大 diff 先给一段可读的预览，展开按钮写明总行数（滚动容器仍然兜底）
 const DIFF_PREVIEW_LINES = 60
@@ -392,6 +441,35 @@ function todoStatusLabel(status?: string): string {
         >
           {{ parsed.text }}
         </div>
+
+        <!-- 大 output 按需展开：列表接口只给预览，这里按 8KB 分段拉全文。
+             不预取 —— 一页 50 条工具调用预取全文，等于把分页省下的带宽又花回去。 -->
+        <div
+          v-if="canLoadFull"
+          class="result-load"
+        >
+          <button
+            v-if="hasMoreFull"
+            class="result-load-btn"
+            type="button"
+            :disabled="loadingFull"
+            @click="loadFullChunk"
+          >
+            {{
+              loadingFull
+                ? $t('common.result_loading')
+                : $t('common.result_load_full', { size: formatSize(totalBytes || item.outputBytes || 0) })
+            }}
+          </button>
+          <span
+            v-else
+            class="result-load-done"
+          >{{ $t('common.result_loaded_all') }}</span>
+          <span
+            v-if="loadError"
+            class="result-load-error"
+          >{{ $t('common.result_load_failed') }}</span>
+        </div>
       </template>
     </template>
   </div>
@@ -410,6 +488,18 @@ function todoStatusLabel(status?: string): string {
 .tool-result.error .result-label { color: var(--error); }
 .result-code { margin: 0; padding: 12px; background: var(--bg-code); border-radius: var(--sig-radius-code); font-family: var(--font-mono); font-size: 12px; line-height: 1.6; color: var(--text-code); white-space: pre-wrap; word-break: break-all; }
 .result-text { padding: 10px 12px; background: var(--bg-secondary); border-radius: var(--sig-radius-button); font-size: 13px; color: var(--text-secondary); white-space: pre-wrap; word-break: break-all; }
+/* 大 output 按需展开：分段加载按钮与状态提示 */
+.result-load { display: flex; align-items: center; gap: 8px; padding: 6px 2px 0; }
+.result-load-btn {
+  padding: 3px 10px; border: var(--hairline-width) solid var(--border-card);
+  border-radius: var(--sig-radius-button); background: none;
+  color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer;
+  transition: color var(--dur-fast) ease, border-color var(--dur-fast) ease;
+}
+.result-load-btn:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
+.result-load-btn:disabled { opacity: .6; cursor: default; }
+.result-load-done { font-size: var(--fs-xs); color: var(--text-tertiary); }
+.result-load-error { font-size: var(--fs-xs); color: var(--error); }
 .result-image { max-width: min(320px, 80vw); max-height: 240px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); display: block; margin-top: 4px; }
 
 /* 失败结果：卡片 banner 统一转错误色，扫一眼就能定位是哪一步断了 */
