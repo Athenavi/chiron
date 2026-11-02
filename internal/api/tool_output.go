@@ -6,6 +6,7 @@ import (
 	"strconv"
 
 	"github.com/athenavi/chiron/internal/auth"
+	"github.com/athenavi/chiron/internal/session"
 )
 
 // tool_output.go —— 工具调用 output 的按需分段读取。
@@ -72,6 +73,11 @@ func (h *ConversationHandler) ToolOutput(w http.ResponseWriter, r *http.Request)
 		NotFound(w, "tool call not found")
 		return
 	}
+
+	// 回填服务端**实际采用**的上限，而不是客户端请求值：客户端要 1MB 时真实
+	// 只读了 64KB，回 1MB 会让前端按"片段长度 < 请求上限"判定为未到末尾，
+	// 于是用错误的 offset 继续请求，陷入空转。夹取函数与查询共用同一个实现。
+	limit = session.ClampToolOutputLimit(limit)
 
 	// 审计：只记元数据，不记内容 —— 记内容等于把原文又抄一份到日志系统。
 	slog.Info("tool output read",

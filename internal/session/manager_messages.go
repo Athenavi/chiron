@@ -452,6 +452,21 @@ func (m *Manager) GetToolCalls(ctx context.Context, sessionID string) ([]model.T
 // 单条输出整段拉走，"分段读取"退化成"全量读取"，分页省下的带宽又花回去。
 const toolOutputMaxChunk = 64 * 1024
 
+// ClampToolOutputLimit 把请求的分段上限收敛成服务端实际采用的字符数。
+//
+// 导出是为了让 API 层回填 `limit` 字段时与真正下发的查询用**同一个**函数：
+// 两处各写一遍夹取逻辑，改了一边忘另一边，响应里报的上限就会与真实读取量不符，
+// 而前端正是靠 `片段长度 < 请求上限` 判断"是否到末尾"—— 报错就会提前停或空转。
+func ClampToolOutputLimit(limit int) int {
+	if limit <= 0 {
+		return outputPreviewBytes
+	}
+	if limit > toolOutputMaxChunk {
+		return toolOutputMaxChunk
+	}
+	return limit
+}
+
 // GetToolCallOutput 按需分段读取一条工具调用的完整 output。
 //
 // 返回 (片段, 原文总字节数, 是否找到, error)。offset 为 0 基字符偏移。
@@ -466,12 +481,7 @@ func (m *Manager) GetToolCallOutput(ctx context.Context, sessionID, toolCallID s
 	if offset < 0 {
 		offset = 0
 	}
-	if limit <= 0 {
-		limit = outputPreviewBytes
-	}
-	if limit > toolOutputMaxChunk {
-		limit = toolOutputMaxChunk
-	}
+	limit = ClampToolOutputLimit(limit)
 
 	// substring 的起始位置是 1 基，所以 offset 要 +1。
 	// octet_length 给的是真实字节数（列表接口的 output_bytes 口径），
