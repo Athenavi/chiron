@@ -8,8 +8,9 @@
 4. Redis 不可用时**放行** —— 配额是保护，不该退化成"所有委派一律失败"。
 
 ⚠ 这里的 fake 用 Python 复刻了 Lua 的 ZSET 语义，测的是 `quota.py` 的调用契约
-（键名、参数顺序、返回值判定、异常兜底）。**Lua 脚本本身在真实 Redis 上的行为
-未被验证** —— 本地无 Redis 集群时无法覆盖，需在预发环境补一次集成测试。
+（键名、参数顺序、返回值判定、异常兜底）。**Lua 脚本本身在真实 Redis 上的行为**
+由 `test_subagent_quota_live.py` 覆盖（能连上 Redis 时运行，否则自动 skip）：
+脚本可执行性、`PEXPIRE` 是否真设上 TTL、过期租约能否被回收。
 """
 
 from __future__ import annotations
