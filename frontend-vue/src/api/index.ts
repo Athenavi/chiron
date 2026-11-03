@@ -220,7 +220,7 @@ export async function submitAnswer(params: {
 }
 
 // ── 会话操作（重命名 / 置顶）──
-export async function updateConversation(id: string, patch: { title?: string; pinned?: boolean; tag?: string }) {
+export async function updateConversation(id: string, patch: { title?: string; pinned?: boolean; tag?: string; alias?: string }) {
   const { data } = await api.put(`/v1/conversations/${encodeURIComponent(id)}`, patch)
   return data?.data
 }

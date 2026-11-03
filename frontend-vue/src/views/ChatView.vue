@@ -1,13 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, watch, h } from 'vue'
-import { FOLLOWUP_TEMPLATE, handleMapRpc, type MapRpcHost } from '../components/chat/sessionmapBridge'
 import { Button, Input, Modal, Checkbox, Alert, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
   api, createSSEConnection, submitApproval, submitAnswer,
   getChatSessionMessages, resolveMediaUrl, listModels,
   createAgent, createGraph,
-  API_URL, desktopDeviceToken,
 } from '../api'
 import type { LlmModel, SSEHandle } from '../api'
 import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
@@ -29,6 +27,7 @@ import MessageItem from '../components/chat/MessageItem.vue'
 import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
 import { addToOutbox, bumpRetryCount, clearOutbox, readOutbox, removeFromOutbox, type OutboxEntry } from '../components/chat/failedOutbox'
 import ChatInput from '../components/chat/ChatInput.vue'
+import SessionMapView from './sessionmap/SessionMapView.vue'
 import ChatSetupTour from '../components/chat/ChatSetupTour.vue'
 import OnboardingGuide from '../components/chat/OnboardingGuide.vue'
 import { useNewUserOnboarding, markFirstMessageDone } from '../composables/useNewUserOnboarding'
@@ -1356,13 +1355,16 @@ const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajector
  */
 
 /**
- * 新版会话地图：直接嵌入照抄自 `vendor/dsh-synapse` 的前端（`public/sessionmap/`），
- * 数据面由 `adapter.js` 缝合到 `/v1/session-map`（布局，Redis 热层 + 异步落 PG）与
- * `/v1/conversations`（会话/消息/fork）。
+ * 会话地图浮层开关。
  *
- * 它取代了原先纯 localStorage 的自由摆放地图：新版多了
- * "按真实分支连线"（依赖 `sessions.parent_session_id`）与 SVG 连线层，
- * 旧版先留着作为可回退路径。
+ * 画布现在是 SPA 内的一个视图（`src/views/sessionmap/SessionMapView.vue`），
+ * 不再是 `public/sessionmap/` 里的 iframe。旧实现的三个结构性问题是这次重构的直接动因：
+ *
+ *   1. token 经 iframe query 下发（`?token=…`）—— 现在同源同 SPA，axios 自带鉴权头；
+ *   2. `adapter.js` 劫持 `window.fetch` 并把 Promise 转成 postMessage RPC —— 现在直接 await；
+ *   3. `app.innerHTML` 全量重渲染 —— 现在由 Vue 的响应式按卡片粒度更新。
+ *
+ * 旧 iframe 不留回退路径：两套渲染同时存在时，"哪一个才是真相"会长期没有答案。
  */
 const synapseMapOpen = ref(false)
 
@@ -1401,258 +1403,20 @@ const sidebarRunningIds = computed(() => {
 })
 
 /**
- * 新版地图（iframe）→ 宿主的回传通道。
+ * 会话地图的实时状态。
  *
- * 移植的前端点节点时会 `post("synapse:activate-session", {sessionId})` 到父窗口 ——
- * 原本是让 DSH 切会话，这里对应我们自己的 `switchSession`，并顺手关掉浮层
- * （与旧版地图 `select` → `switchSession` 的行为一致）。
- *
- * 监听放在模块级：ChatView 是主视图，生命周期与应用一致，无需在挂载/卸载之间来回摘挂。
+ * 旧实现靠 `postMessage` 把宿主的运行态与流式文本推给 iframe 里的画布。
+ * 现在画布与宿主同进程：`runningSessionIds` 直接作为 prop 传给 `SessionMapView`，
+ * 由投影层给卡片打上「运行中」标记 —— 不再有消息协议，也就没有"端口通配 '*'"、
+ * `origin === 'null'`、20 秒回执超时这一整类问题。
  */
-/**
- * 新版地图 iframe 的句柄 + 「宿主 → 地图」的单向状态推送。
- *
- * 协议来自上游 app.js 末尾的 window.addEventListener('message')，它认这些消息：
- *   synapse:workspaces      → 画布下拉（我们映射 /v1/session-map/workspaces）
- *   synapse:current-session → 高亮/居中到当前会话
- *   synapse:theme           → 亮/暗主题
- *   synapse:live-reply      → { sessionId, running, text } 卡片运行态与流式文本
- * 地图侧打开时会先发 `synapse:request-current` 握手，我们再回推上面这些。
- *
- * 注意 source 标识必须与 app.js 一致（chiron-sessionmap）。
- */
-const synapseFrame = ref<HTMLIFrameElement | null>(null)
-const MAP_SOURCE = 'chiron-sessionmap'
-
-/**
- * 地图 iframe 的地址。
- *
- * 打包后渲染进程跑在 `file://` 下（`main.cjs` 用 `loadFile`），此时**绝对路径**
- * `/sessionmap/index.html` 会解析到盘根（真机实测：`file:///X:/sessionmap/index.html`），
- * 于是 iframe 加载失败、地图整块白屏。必须用相对于当前文档的路径。
- *
- * 同时把 `api` 与 `token` 作为 query 下发：adapter.js 在 DOMContentLoaded 就发首批请求，
- * 而 postMessage 是异步的，靠消息传配置会晚一步（首帧白屏）。query 可同步读到。
- */
-const synapseFrameSrc = computed(() => {
-  const base = new URL('./sessionmap/index.html', window.location.href)
-  // Web 端（http/https）走同源相对路径即可，不需要也不应该把 token 放进 URL
-  if (window.location.protocol !== 'file:' && !API_URL) return base.pathname
-  if (API_URL) base.searchParams.set('api', API_URL)
-  const token = desktopDeviceToken()
-  if (token) base.searchParams.set('token', token)
-  return base.href
-})
-/**
- * 流式增量 → 会话地图（P0-1）。
- *
- * 后端 `submit_handler.go` 已把引擎增量按 50ms 合帧 publish 成
- * `Event{Type:"text", SessionID, Data:{Content}}`，经 `/v1/events` 直接送到这里。
- * 地图（iframe）认的协议是 `synapse:live-reply{sessionId, running, text}`（累积文本），
- * app.js 会写进 state.liveReplies 并**就地 patch 卡片**（app.js:728）——
- * 于是卡片逐字生长，而不是等回合结束才一次性出现。
- *
- * 累积器独立于 items（按 sessionId 存）：地图可能要展示**非当前**会话的进度，
- * 而 items 只反映当前视图。
- */
-const mapStreamText = new Map<string, string>()
-
-function forwardStreamToMap(fallbackSessionId: string, raw: unknown) {
-  const d = raw as { type?: string; session_id?: string; sessionId?: string; data?: { content?: string } } | null
-  if (!d || !d.type) return
-  const sid = d.session_id || d.sessionId || fallbackSessionId
-  if (!sid) return
-  if (d.type === 'text') {
-    const chunk = d.data?.content
-    if (typeof chunk !== 'string' || !chunk) return
-    const acc = (mapStreamText.get(sid) ?? '') + chunk
-    mapStreamText.set(sid, acc)
-    postToMap({ type: 'synapse:live-reply', sessionId: sid, running: true, text: acc })
-    return
-  }
-  if (d.type === 'turn_done' || d.type === 'error') {
-    mapStreamText.delete(sid)
-    postToMap({ type: 'synapse:live-reply', sessionId: sid, running: false })
-  }
-}
-
-
-/** 上一次推送过的运行中会话，用于算差集（声明必须早于使用它的 pushMapState） */
-let lastRunningIds: string[] = []
-
-function postToMap(payload: Record<string, unknown>) {
-  const target = synapseFrame.value?.contentWindow
-  if (!target) return
-  // file:// 下 location.origin 是字符串 "null"，当 targetOrigin 传给 postMessage 会抛
-  // SyntaxError（真机实测：地图一条状态都收不到）。此时端口通配 '*' 才可用；
-  // 消息里已有 source 标识，接收端也校验它，不额外扩大攻击面。
-  const origin = window.location.origin === 'null' ? '*' : window.location.origin
-  target.postMessage({ source: MAP_SOURCE, ...payload }, origin)
-}
-
-/** 把宿主状态推给地图 */
-async function pushMapState() {
-  // 画布列表：地图的"工作区"下拉（空 sessionIds 让它自己去拉画布内容）
-  try {
-    const token = desktopDeviceToken()
-    const r = await fetch(`${API_URL}/v1/session-map/workspaces`, {
-      // 与 api/index.ts 的 withCredentials: !isDesktop 保持一致：桌面端跨源（file:// →
-      // http://127.0.0.1）带凭据会被 CORS 拒绝（本地 core 的 allow_credentials=False），
-      // 身份只靠 Bearer token。
-      credentials: API_URL ? 'omit' : 'include',
-      headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-    })
-    const body = (await r.json()) as { data?: { workspaces?: Array<{ id: string; name?: string }> } }
-    postToMap({
-      type: 'synapse:workspaces',
-      workspaces: (body.data?.workspaces ?? []).map((w) => ({
-        id: w.id,
-        title: w.name || t('common.my_map'),
-        sessionIds: [] as string[],
-      })),
-    })
-  } catch {
-    // 拉不到就让它退回空下拉，不影响画布本身
-  }
-  postToMap({
-    type: 'synapse:current-session',
-    session: activeSessionId.value ? { id: activeSessionId.value } : null,
-  })
-  const root = document.documentElement
-  postToMap({
-    type: 'synapse:theme',
-    dark: root.classList.contains('dark') || root.dataset.theme === 'dark',
-  })
-  for (const id of runningSessionIds.value) {
-    postToMap({ type: 'synapse:live-reply', sessionId: id, running: true, text: '' })
-  }
-  lastRunningIds = [...runningSessionIds.value]
-}
-
-
-// ── 会话地图 RPC：宿主是会话的主人，地图只是它的另一个视图 ──
+// ── 会话地图（同 SPA 视图，不再是 iframe）──
 //
-// 地图（app.js）用 `dshRpc(...)` 发起会话操作，然后**等一条带 requestId 的回执**
-// （20 秒超时）。此前宿主只实现了"切会话"，这三条操作全部空等超时 —— 于是地图里
-// 新建会话、发送追问、分叉全都用不了（adapter.js 里那份直连 REST 的实现被 app.js 的
-// 顶层函数声明覆盖，从未生效）。这里把它们接管过来，编排逻辑在 sessionmapBridge.ts。
+// 旧实现把会话操作编成 postMessage RPC：地图侧 `dshRpc(...)` 发出后**等一条带
+// requestId 的回执**（20 秒超时），宿主侧需要一个 host 对象逐条实现，任何一条漏实现
+// 都会表现成"地图里点了没反应"。现在这些操作由 `useMapActions` 直接 await 宿主 REST
+// （`SessionMapView.vue` 里调用），没有回执、没有超时、错误用 try/catch 就地显示。
 
-/** 地图发起的会话 → 它的事件订阅（地图可能在**非当前会话**上发消息） */
-const mapSessionStreams = new Map<string, SSEHandle>()
-
-/**
- * 为地图发起的会话保持一条事件订阅。
- *
- * 为什么不能只靠 `activeSSE`：那条只服务当前会话；地图可以对画布上任意会话发消息，
- * 没有订阅它就只能等回合结束后重拉画布才看到内容（失去流式感）。
- * 回合结束即关闭并释放（下一次发消息会重新建）。
- */
-function ensureMapSessionStream(sessionId: string) {
-  if (!sessionId || mapSessionStreams.has(sessionId)) return
-  const es = createSSEConnection(
-    sessionId,
-    (raw) => {
-      forwardStreamToMap(sessionId, raw)
-      const t = (raw as { type?: string } | null)?.type
-      if (t === 'turn_done' || t === 'error') {
-        es.close()
-        mapSessionStreams.delete(sessionId)
-      }
-    },
-    () => {
-      es.close()
-      mapSessionStreams.delete(sessionId)
-    },
-    { autoReconnect: true },
-  )
-  mapSessionStreams.set(sessionId, es)
-}
-
-const mapRpcHost: MapRpcHost = {
-  post: (payload) => postToMap(payload),
-
-  async createSession(title) {
-    // 走宿主自己的 REST（会话的主人始终是宿主）：地图只是"另一种视图"，
-    // 它建的会话必须真的出现在会话列表里，否则用户在地图新建完回到对话页找不到。
-    const res = await api.post('/v1/conversations', { title })
-    const session = (res.data?.data ?? res.data) as { id?: string; title?: string } | null
-    if (!session?.id) throw new Error(t('errors.failed_to_create_session'))
-    await loadSessions()
-    // 让地图把新会话摆上画布：地图自己不会知道宿主刚建了一个会话 ——
-    // app.js 只在收到 `synapse:current-session` 时才调 placeSession（adapter 的监听）。
-    postToMap({ type: 'synapse:current-session', session: { id: session.id, title: session.title } })
-    return { id: session.id, title: session.title }
-  },
-
-  async sendMessage(sessionId, text, mode) {
-    ensureMapSessionStream(sessionId)
-    await api.post('/submit', {
-      content: mode === 'followup' ? FOLLOWUP_TEMPLATE(text) : text,
-      session_id: sessionId,
-      // 发送侧幂等：与对话页同一条约定（服务端 5 分钟去重窗口）
-      llm_config: { ...buildLlmConfig(), client_msg_id: crypto.randomUUID() },
-    })
-  },
-
-  async forkSession(sessionId, atSeq, title) {
-    const res = await api.post(`/v1/conversations/${encodeURIComponent(sessionId)}/fork`, {
-      from_index: atSeq,
-      title,
-    })
-    const data = (res.data?.data ?? res.data) as { session_id?: string; id?: string } | null
-    const id = data?.session_id || data?.id
-    if (!id) throw new Error(t('errors.fork_failed'))
-    await loadSessions()
-    // 地图需要 `{id, title}`：id 用来记住分叉锚点、title 显示在卡片上
-    return { id, title }
-  },
-
-  async updateSession(sessionId, patch) {
-    // 会话元数据（重命名 / 别名 / 标签）统一走既有接口：它同时更新宿主缓存与列表，
-    // 于是对话页、侧边栏、地图三处的显示立刻一致（地图侧的卡片标题/徽标由地图自己重拉）。
-    await api.put(`/v1/conversations/${encodeURIComponent(sessionId)}`, patch)
-    await loadSessions()
-  },
-}
-
-window.addEventListener('message', (e: MessageEvent) => {
-  // 打包版主窗口跑在 file:// 下：此时 e.origin 是字符串 "null"，而
-  // window.location.origin 是 "file://"（真机实测），直接比较会把地图的每条消息都丢掉。
-  // file:// 下同源判定退化为"只认带 source 标识的消息"，事件处理器本身仍然校验 source。
-  const sameOrigin = e.origin === window.location.origin || e.origin === 'null'
-  if (!sameOrigin) return // 只认自己域（iframe 同源）
-  const data = e.data as {
-    source?: string
-    type?: string
-    sessionId?: string
-    requestId?: string
-    text?: string
-    mode?: string
-    atSeq?: number
-    title?: string
-  } | null
-  if (!data || data.source !== MAP_SOURCE) return
-  // 地图发起的会话操作（新建 / 追问 / 分叉）：由宿主代理执行并回执。
-  // 不做这件事的后果是"地图里新建会话、发送追问、分叉全部失败"（地图空等 20 秒超时）——
-  // 详见 sessionmapBridge.ts 的说明。返回 true 表示这条消息已被接管。
-  if (handleMapRpc(data, mapRpcHost)) return
-  // 地图打开 / 请求当前状态：把宿主状态推过去
-  if (data.type === 'synapse:map-opened' || data.type === 'synapse:request-current') {
-    void pushMapState()
-    return
-  }
-  // 地图顶部的「对话」按钮 → 回到对话页（关掉浮层）。
-  // 上游那个按钮是给它的宿主用的（data-action="close"），adapter 把它转成这条消息。
-  if (data.type === 'synapse:close-map' || data.type === 'synapse:close') {
-    synapseMapOpen.value = false
-    return
-  }
-  // 点卡片 → 切会话并关掉浮层
-  if (data.type === 'synapse:activate-session' && data.sessionId) {
-    synapseMapOpen.value = false
-    void switchSession(data.sessionId)
-  }
-})
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
@@ -1669,18 +1433,6 @@ const subagentLiveEvents = computed<SubagentEvent[]>({
   },
 })
 
-// ⚠️ 必须放在 `subagentLiveEvents` 定义**之后**：watch 在 setup 期间就会同步求值一次 source，
-// 而 runningSessionIds 读的正是 subagentLiveEvents —— 放在前面会 TDZ（Cannot access before initialization）。
-/** 运行态变化 → 推给地图；结束时地图会自行重拉画布，把新消息带出来 */
-watch(() => runningSessionIds.value, (ids) => {
-  for (const id of ids) {
-    if (!lastRunningIds.includes(id)) postToMap({ type: 'synapse:live-reply', sessionId: id, running: true, text: '' })
-  }
-  for (const id of lastRunningIds) {
-    if (!ids.includes(id)) postToMap({ type: 'synapse:live-reply', sessionId: id, running: false })
-  }
-  lastRunningIds = [...ids]
-})
 const SUBAGENT_LIVE_MAX = 500
 
 /** 把一条子 Agent 事件并入当前会话的实时缓冲（两个来源共用，见 ensureSubagentStream）。 */
@@ -1899,8 +1651,6 @@ onUnmounted(() => {
   stopTurnTimer()
   if (activeSSE) { activeSSE.close(); activeSSE = null }
   closeSubagentStream()
-  for (const es of mapSessionStreams.values()) es.close()
-  mapSessionStreams.clear()
   if (unifiedDoneTimer) { clearTimeout(unifiedDoneTimer); unifiedDoneTimer = null }
   if (reconnectTimer) { clearTimeout(reconnectTimer); reconnectTimer = null }
   window.removeEventListener('online', onOnline)
@@ -2074,6 +1824,22 @@ async function createSession() {
   sessions.value.unshift(session); persistSessions()
   panelView.value = 'trajectory'
   try { await switchSession(session.id) } catch { /* ignore */ }
+}
+
+/**
+ * 会话地图请求切换到某个会话。
+ *
+ * 地图可能在宿主列表还没这个会话时就请求切换（它刚新建/分叉完）。此时先拉一次列表，
+ * 否则侧栏里找不到它 —— 旧 iframe 版靠一条 postMessage 回推当前会话、再做一次
+ * 隐式 placeSession，是同一件事的绕路写法。
+ *
+ * 切完就关浮层：地图是"换一个角度看会话"，选定之后回到对话页才是主线。
+ */
+async function onMapSwitchSession(sessionId: string) {
+  if (!sessionId) return
+  if (!sessions.value.some(s => s.id === sessionId)) await loadSessions()
+  synapseMapOpen.value = false
+  await switchSession(sessionId)
 }
 
 async function switchSession(id: string) {
@@ -2621,7 +2387,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     activeSSE = createSSEConnection(
       sessionId,
-      (raw) => withRun(runOf(sessionId), () => { forwardStreamToMap(sessionId, raw); onSSEMessage(raw) }),
+      (raw) => withRun(runOf(sessionId), () => onSSEMessage(raw)),
       () => {
         loading.value = false
         stopTurnTimer()
@@ -3397,17 +3163,20 @@ function continueGeneration() {
       @clear-context="clearContext"
     />
 
-    <!-- 新版会话地图：嵌入 public/sessionmap/（照抄自 vendor/dsh-synapse 的前端），
-         数据面由 adapter.js 缝合到 Chiron 的 /v1/session-map 与 /v1/conversations。 -->
+    <!-- 会话地图：同一 SPA 内的一个视图（不再是 public/sessionmap/ 的 iframe）。
+         会话的主人始终是这里 —— 地图通过 emit 请求切换/刷新，不自己维护第二份列表。 -->
     <div
       v-if="synapseMapOpen"
-      class="synapse-map-overlay"
+      class="session-map-overlay"
     >
-      <iframe
-        ref="synapseFrame"
-        class="synapse-map-frame"
-        :src="synapseFrameSrc"
-        :title="$t('chat.session_map')"
+      <SessionMapView
+        :sessions="sessions"
+        :active-session-id="activeSessionId"
+        :running-session-ids="runningSessionIds"
+        :build-llm-config="buildLlmConfig"
+        @close="synapseMapOpen = false"
+        @switch-session="onMapSwitchSession"
+        @refresh-sessions="loadSessions"
       />
     </div>
 
@@ -3835,19 +3604,13 @@ function continueGeneration() {
   }
 }
 
-/* 新版会话地图（嵌入 vendor/dsh-synapse 前端）：整屏 iframe + 一个关闭按钮。
-   它自带完整样式（public/sessionmap/styles.css），这里只负责承载与层级 ——
+/* 会话地图浮层：整屏承载 SPA 内的 SessionMapView。
+   画布自身的样式在 src/views/sessionmap/ 内，这里只负责铺满与层级 ——
    所以全部走 Chiron 的 token，不引入硬编码值。 */
-.synapse-map-overlay {
+.session-map-overlay {
   position: fixed;
   inset: 0;
   z-index: var(--z-viewer);
   background: var(--bg-page);
-}
-.synapse-map-frame {
-  display: block;
-  width: 100%;
-  height: 100%;
-  border: 0;
 }
 </style>
