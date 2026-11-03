@@ -60,6 +60,18 @@
 
 ### 新增
 
+- **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
+  此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
+  但"PG 真的这样算"、"拒绝时表里真的一行没多"、"A 真的停不了 B"只有跑一次才知道。四条用例：
+  ①`(ends_at - started_at) = interval '600 seconds'` 精确成立（用精确整秒区分来源：Go 侧
+  `time.Now().Add` 的微秒抖动会让它落在 599.9999~600.0001）；②跨用户会话被拒后接管表 0 行，
+  同租户另一用户同样被拒（判据是 `user_id` 不是 `tenant_id`）；③A 用 B 的接管 id 调 stop
+  得到 404 **且断言 B 仍为 `active`**（只查响应码的话，漏写 `AND user_id = $2` 但恰好 404
+  的实现也能蒙混过关）；④第 6 个接管、第 11 条定时任务被拒且总数不变。
+  沿用既有口径：`CHIRON_TEST_POSTGRES_DSN` 未设即 skip，`-run Live` 才执行。
+  **踩到的坑**：`GetUserID`/`GetTenantID` 读的是 `TenantMiddleware` 写入的两个 ctx key，
+  不是 `auth.Claims` —— 只挂 claims 会让四条全部 401，看起来像 handler 有问题。
+  已在 `alembic upgrade head` 到 `0020_superagent` 的临时库上跑通。
 - **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
   `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
   折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /
