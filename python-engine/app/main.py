@@ -1643,6 +1643,7 @@ def _setup_routes(app: FastAPI) -> None:
     app.post("/v1/agent/submit")(agent_submit)
     app.post("/v1/agent/approval")(agent_approval)
     app.post("/v1/agent/interrupt")(agent_interrupt)
+    app.post("/v1/agent/steer")(agent_steer)
     app.post("/v1/agent/answer")(agent_answer)
 
     # ── 网关管理（模型热切换、熔断器重置） ──
@@ -2267,6 +2268,82 @@ async def agent_approval(
         return {"ok": False, "error": "stale run token"}
     resolved = await runtime.submit_approval(tool_call_id, decision, owner_uid)
     return {"ok": resolved, "decision": decision.decision}
+
+
+async def _authorize_run_input(
+    session_id: str, caller: str, given_token: str
+) -> str:
+    """外部输入注入通道的准入校验（interrupt / steer 共用）。
+
+    返回空串表示放行，否则是回给调用方的拒绝原因。三条一起才成立：会话归属、
+    run token（防重放已结束的 run）、以及"本副本或 Redis 里确实有这个活跃 run"。
+
+    顺序是先查本副本：命中时信息最新，省一次 Redis 往返；未命中才查 `run_registry`
+    —— run 可能正跑在别的副本上，那里才是唯一知道它存在的地方。
+    """
+    entry = _ACTIVE_RUNTIMES.get(session_id)
+    if entry is not None:
+        _, owner_uid, run_token = entry
+        if owner_uid and caller and owner_uid != caller:
+            logger.warning(
+                "run input rejected: caller %s != owner %s (session=%s)",
+                caller,
+                owner_uid,
+                session_id,
+            )
+            return "not session owner"
+        if given_token and given_token != run_token:
+            return "stale run token"
+        return ""
+
+    from app.run_registry import owner_of
+
+    owner = await owner_of(_redis, session_id)
+    if owner is None:
+        return "no active agent for this session"
+    owner_uid = str(owner.get("owner_uid") or "")
+    if owner_uid and caller and owner_uid != caller:
+        return "not session owner"
+    expected = str(owner.get("run_token") or "")
+    if given_token and expected and given_token != expected:
+        return "stale run token"
+    return ""
+
+
+async def agent_steer(request: Request) -> Any:
+    """把用户的追加指令注入正在跑的 run（**不终止**）。
+
+    interrupt 让 run 停下来，steer 只让下一步多一条约束 —— 但准入校验完全相同，
+    都必须证明"你确实是这个会话的所有者，且这条是发给当前这一次 run 的"。少一层，
+    别人就能往你的 run 里塞指令，比打断更危险（那是内容注入，不只是成本攻击）。
+
+    没有活跃 run 时**报错而不是入队**：队列里的指令要等下一次 run 才会被消费，
+    用户会以为话已经带到了，实际到了另一个上下文里。宁可显式失败。
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"ok": False, "error": "session_id is required"}
+
+    caller = request.headers.get("x-user-id", "") or body.get("user_id", "")
+    given_token = body.get("run_token") or request.headers.get("x-run-token", "")
+
+    err = await _authorize_run_input(session_id, caller, given_token)
+    if err:
+        return {"ok": False, "error": err}
+
+    from app.agent.steer import push_steer
+
+    ok, reason = await push_steer(
+        session_id,
+        str(body.get("text") or ""),
+        source=str(body.get("source") or "user"),
+        redis=_redis,
+    )
+    if not ok:
+        return {"ok": False, "error": reason}
+    logger.info("Steer accepted (session=%s caller=%s)", session_id, caller)
+    return {"ok": True, "session_id": session_id}
 
 
 async def agent_interrupt(

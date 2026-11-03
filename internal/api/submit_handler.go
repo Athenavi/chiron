@@ -266,8 +266,75 @@ func (h *SubmitHandler) SubmitInterrupt(w http.ResponseWriter, r *http.Request) 
 	}
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
+// SubmitSteer 把用户的追加指令注入正在跑的 run（**不终止**）。
+//
+// 准入与 SubmitInterrupt 同源：会话归属 + 调用者身份 + run token。少任何一条，别人就能
+// 往你的 run 里塞指令 —— 那是**内容注入**，比打断更危险。差别只在引擎侧不停 run，
+// 而是把文本排队，由下一轮边界消费。
+//
+// 与 SubmitInterrupt 的一处刻意不同：引擎用 `200 + {"ok": false, "error": ...}` 表达拒绝
+// （它同时要给直连引擎的 ACP 客户端用），这里把 `ok:false` 翻成对应的 HTTP 状态码。
+// 照抄 200 会让"没送到"看起来像"送到了" —— steer 的全部价值就是让用户相信话带到了。
+func (h *SubmitHandler) SubmitSteer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+		UserID    string `json:"user_id,omitempty"`
+		RunToken  string `json:"run_token,omitempty"`
+		Text      string `json:"text"`
+	}
+	if err := DecodeJSON(w, r, &req); err != nil {
+		BadRequest(w, "invalid request")
+		return
+	}
+	if req.SessionID == "" {
+		BadRequest(w, "session_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		BadRequest(w, "text is required")
+		return
+	}
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		req.UserID = claims.UserID
+	}
+	routeCtx := engine.WithRunAffinity(r.Context(), req.SessionID)
+	if rec, ok := engine.RunOwner(routeCtx, req.SessionID); ok {
+		req.RunToken = rec.RunToken
+	}
+	var out map[string]any
+	if err := h.python.PostJSON(routeCtx, "/v1/agent/steer", req, &out); err != nil {
+		slog.Error("steer: python proxy failed", "session", req.SessionID, "error", err)
+		InternalError(w, "steer proxy failed")
+		return
+	}
+	if ok, _ := out["ok"].(bool); !ok {
+		reason, _ := out["error"].(string)
+		JSON(w, steerStatus(reason), APIResponse{Success: false, Error: reason})
+		return
+	}
+	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
+}
 
-// GoalEnforceKey 是 workbenchCtx 里的标记键：本次提交是**证据判定驱动的续跑轮**。
+// steerStatus 把引擎的拒绝原因映射成状态码，让调用方能区分"重试有用"与"没用"。
+//
+// 按 `docs/error-codes.md` 的口径：4xx 是调用方的问题（不该重试），429 是限流（可退避），
+// 409 是状态冲突（run 已结束/换了 run，重试通常无用但换 token 可能有用）。
+func steerStatus(reason string) int {
+	switch {
+	case strings.Contains(reason, "not session owner"):
+		return http.StatusForbidden
+	case strings.Contains(reason, "rate limited"):
+		return http.StatusTooManyRequests
+	case strings.Contains(reason, "no active agent"), strings.Contains(reason, "stale run token"):
+		return http.StatusConflict
+	case strings.Contains(reason, "too long"), strings.Contains(reason, "is required"):
+		return http.StatusBadRequest
+	default:
+		return http.StatusConflict
+	}
+}
+
+
 const GoalEnforceKey = "goal_enforce"
 
 // GoalEnforceSource 是续跑轮注入消息的来源标记。

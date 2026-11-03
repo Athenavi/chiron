@@ -2352,6 +2352,18 @@ function onSSEMessage(raw: unknown, sid: string) {
         genItemId,
       )
     }
+  } else if (type === 'steer') {
+    // 引擎在轮次边界消费了一条运行中指导（runtime.py 的 steer 分支）。
+    // 只落一行小字：指令正文已作为 user 消息进了会话历史，这里再贴一遍就是重复。
+    if (String(d.content ?? evt.content ?? '')) {
+      items.value.push({
+        kind: 'notice',
+        tone: 'info',
+        content: t('common.steer_applied'),
+        time: new Date().toLocaleTimeString(),
+        id: `steer:${Date.now()}`,
+      })
+    }
   } else if (type === 'compaction') {
     // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
     // 变成用户可见的状态栏提示（问题 4）。

@@ -158,6 +158,7 @@ export default {
     loaded_name: "تم التحميل: {name}",
     loaded_template_name_edit_and_save: "تم تحميل القالب «{name}»؛ عدّله ثم احفظه",
     compressed_before_after: "تم الضغط {before} → {after}",
+    steer_applied: "تم تطبيق توجيهك أثناء التشغيل",
     enabled_name: "{name} مُفعّل",
     copiedExcl: "تم النسخ!",
     generated_name: "تم التوليد: {name}",

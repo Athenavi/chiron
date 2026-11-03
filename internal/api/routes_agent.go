@@ -69,6 +69,10 @@ func registerAgentRoutes(
 	// 真取消（ACP `session/cancel` 的落点）：与 approval / answer 同一套校验 —— 三者都是
 	// "从外部作用于正在运行的 agent 循环"的通道，少了身份校验就成了骚扰与成本攻击的入口。
 	mux.Handle("POST /v1/agent/interrupt", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitInterrupt))))
+	// 运行中指导：与 interrupt 同一套准入（归属 + 身份 + run token），但**不终止** run，
+	// 只把文本排进队列、由引擎在下一轮边界注入。拒绝时引擎会给 `ok:false`，
+	// SubmitSteer 负责把它翻成 4xx/409/429，不让"没送到"看起来像"送到了"。
+	mux.Handle("POST /v1/agent/steer", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitSteer))))
 
 	// 手动修复卡住的会话：一次失败若没写成终态，同会话的唯一活跃位会被永久占住，
 	// 该会话再也提交不了新消息（用户只看到"请求失败"）。本端点让用户立即恢复，

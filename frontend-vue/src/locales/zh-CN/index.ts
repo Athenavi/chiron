@@ -168,6 +168,7 @@ export default {
     loaded_name: "已加载: {name}",
     loaded_template_name_edit_and_save: "已加载模板「{name}」，可编辑后保存",
     compressed_before_after: "已压缩 {before} → {after}",
+    steer_applied: "已应用运行中的补充指令",
     enabled_name: "已启用 {name}",
     copiedExcl: "已复制！",
     generated_name: "已生成：{name}",

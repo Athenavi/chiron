@@ -1952,6 +1952,34 @@ class AgentRuntime:
                     await self._mark_run_status(task, "cancelled")
                     return
 
+                # ── 运行中指导（steer）──
+                # 与 interrupt 同一个位置：工具执行到一半插消息会让 `tool_calls`
+                # 与 tool 结果错位，所以只在轮次边界消费。
+                if task.session_id:
+                    from app.agent.steer import drain_steer
+
+                    _steers = await drain_steer(task.session_id)
+                    for _text in _steers:
+                        messages.append(
+                            _normalize_msg(
+                                role="user",
+                                content=f"<user-steer>\n{_text}\n</user-steer>",
+                            )
+                        )
+                        yield AgentEvent(type="steer", content=_text, trace_id=trace_id)
+                    if _steers:
+                        # 引擎侧收到的指导 Go 侧没有写过，必须由这里落库，
+                        # 否则刷新页面后这段指令从会话历史里消失。
+                        from app.agent import history_writer
+
+                        await history_writer.persist_messages(
+                            task.session_id,
+                            task.tenant_id,
+                            messages[-len(_steers):],
+                            turn_id=str(getattr(task, "turn_id", "") or ""),
+                            roles={"user"},
+                        )
+
                 logger.info(
                     "Agent turn %d/%d (task=%s, msgs=%d)",
                     turn + 1,

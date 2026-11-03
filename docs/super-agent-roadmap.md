@@ -74,8 +74,9 @@
   `subagent/followup.py`（有完整的"结束 → 队列 → 新回合"通道），这是明显的非对称缺口。
 - **没有"打断"**：会话运行锁 `AcquireSessionRunLock`（`internal/api/session_coord.go`，
   TTL 5min、60s 续期）在锁被占时直接 400 拒绝，提示"stop it or wait"；用户没有
-  "边跑边补充/改方向"的通道。子 Agent 侧已有 `LPUSH chiron:subagent:steer:{run_id}`，
-  但只对子 Agent 生效，不在主会话循环上。
+  "边跑边补充/改方向"的通道。注意 steer **原先两侧都没有**：它只写在
+  `docs/context-and-delegation-design.md` §9.3，并且是那份文档「实施顺序」的第 8 步，
+  `python-engine/app` 下无任何实现 —— 所以主会话这条通道是**新建**，不是"接到子 Agent 已有能力上"。
 - **多信道不存在**：全仓无入站 IM（`feishu/lark/dingtalk/wecom/telegram/slack` 只在
   `internal/auth/oauth2_exchanger.go` 里作为 SSO 换 token 出现）；通知只有出向的
   `internal/notify/notify.go`（站内信不可关闭）+ 邮件。前端交互集中在
@@ -125,7 +126,7 @@
 | 投机执行 | 无 | **缺**（研究性） |
 | 异步工具 + 终止 | `run_in_background`/`job_output`/`job_kill` | **有** |
 | 后台结果回投会话 | 无（只写 Redis） | **缺**，且零件已就绪 |
-| 边跑边干扰（steer 主会话） | 锁占即 400 拒绝 | **缺** |
+| 边跑边干扰（steer 主会话） | 锁占即 400 拒绝；引擎侧已建通道 | **部分**（引擎已落地，网关端点未接） |
 | 入站 IM / GitHub 信道 | 无（只有 SSO 出向） | **缺** |
 | 无状态计算 + DB 存 Session | 已是架构基线 | **有** |
 | 隔离执行环境 | `sandbox-service`（受限容器） | **部分** |
@@ -169,11 +170,22 @@
 
 - 动机：文中 §4.1 的全双工不只是"能异步"，还包括"跑着的时候能改"。当前锁被占直接
   400 `this session already has a turn in progress`，用户只能等或停。
-- 做法：复用子 Agent 已有的 steer 语义（`chiron:subagent:steer:{run_id}`），给主会话
-  加一条"投递用户补充"的通道；Runtime 在下一轮 ReAct 边界读取并注入，**不打断正在执行的
-  工具调用**。
+- 做法：**新建**一条 steer 通道（不是接子 Agent 已有能力 —— 它只存在于
+  `docs/context-and-delegation-design.md` §9.3，代码里没有）。形状照 `agent/interrupt.py`：
+  本地快路径 + Redis 跨副本、会话归属 + 调用者 `x-user-id` + `run_token` 三重校验、
+  **只在轮次边界**消费（工具执行到一半插消息会让 `tool_calls` 与 tool 结果错位）、
+  收尾清队列以免误伤下一次会话。差别只在读到的是一条待注入文本而非停止信号。
+- 已落地（引擎侧）：`python-engine/app/agent/steer.py`（`push_steer`/`drain_steer`，
+  限流 6 条/分钟、单条 ≤2000 字符、TTL 300s，超限**报错而非静默丢弃**）、
+  `runtime.py` 轮次边界注入 `<user-steer>` 并落库、`POST /v1/agent/steer`
+  （与 interrupt 共用 `_authorize_run_input`）。
+- 已落地（网关侧）：`POST /v1/agent/steer`（`submit_handler.go::SubmitSteer`，照
+  `SubmitInterrupt` 的 run-affinity 路由）。与 interrupt 的一处刻意偏离：引擎用
+  `200 + ok:false` 表达拒绝，网关把它翻成 403/409/429/400 —— 照抄 200 会让"没送到"
+  看起来像"送到了"，而 steer 的全部价值就是让用户相信话带到了。
+- 待接：SSE `steer` 事件的前端呈现。
 - 验收：turn 进行中发送补充，能在下一轮工具循环前生效；补充内容进 `messages`，
-  可被 SSE 回放；未读到时按现有 400 行为兜底。
+  可被 SSE 回放；无活跃 run 时显式失败而不是入队。
 - 风险：注入点必须是有界检查点，否则会破坏 `history_writer.py`"每轮结束写一次"的约束。
 
 ### P1：补对象（需要 Alembic 迁移）

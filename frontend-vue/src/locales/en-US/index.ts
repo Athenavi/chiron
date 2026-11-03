@@ -156,6 +156,7 @@ export default {
     loaded_name: "Loaded: {name}",
     loaded_template_name_edit_and_save: "Loaded template \"{name}\"; edit and save",
     compressed_before_after: "Compressed {before} → {after}",
+    steer_applied: "Applied your mid-run instruction",
     enabled_name: "Enabled {name}",
     copiedExcl: "Copied!",
     generated_name: "Generated: {name}",
