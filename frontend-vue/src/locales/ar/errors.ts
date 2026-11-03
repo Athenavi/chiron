@@ -59,6 +59,7 @@ export default {
   n_files_failed_to_import: "{n} ملف فشل استيرادها",
   n_files_failed_to_add_tags: "{n} ملف فشلت إضافة وسوم إليها",
   n_files_failed_to_move: "{n} ملف فشل نقلها",
+  n_files_failed_to_copy: "{n} ملف فشل نسخها",
   n_files_failed_to_rename: "{n} ملف فشلت إعادة تسميتها",
   auto_reject_in_n_s: "رفض تلقائي خلال {n} ث",
   approval_edit_invalid_json: "المعطيات ليست JSON صالحًا — تعذّر الإرسال",

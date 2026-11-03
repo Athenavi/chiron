@@ -287,8 +287,8 @@ func (h *MediaHandler) CompleteUpload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	_, err := db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, mime_type, category, size, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, NOW(), NOW())`,
+		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, mime_type, category, size, parent_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, '', NOW(), NOW())`,
 		assetID, tenantID, claims.UserID, body.Type, body.Name, body.FileURL, truncateMIME(body.MimeType), nullableStr(body.Category), body.Size)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create asset failed")

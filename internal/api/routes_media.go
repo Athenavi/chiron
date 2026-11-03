@@ -24,6 +24,7 @@ func registerMediaRoutes(
 	mux.Handle("POST /v1/media/presign", authMW(rlMW(http.HandlerFunc(mediaHandler.PresignUpload))))
 	mux.Handle("POST /v1/media/complete", authMW(rlMW(http.HandlerFunc(mediaHandler.CompleteUpload))))
 	mux.Handle("POST /v1/media/batch-delete", authMW(rlMW(http.HandlerFunc(mediaHandler.BatchDelete))))
+	mux.Handle("POST /v1/media/copy", authMW(rlMW(http.HandlerFunc(mediaHandler.Copy))))
 	mux.Handle("PUT /v1/media/{id}", authMW(rlMW(http.HandlerFunc(mediaHandler.Update))))
 	mux.Handle("GET /v1/media/{id}/download", authMW(rlMW(http.HandlerFunc(mediaHandler.Download))))
 	mux.Handle("POST /v1/media/{id}/share", authMW(rlMW(http.HandlerFunc(mediaHandler.Share))))

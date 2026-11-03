@@ -64,6 +64,7 @@ export default {
   n_files_failed_to_import: "{n} 个文件导入失败",
   n_files_failed_to_add_tags: "{n} 个文件添加标签失败",
   n_files_failed_to_move: "{n} 个文件移动失败",
+  n_files_failed_to_copy: "{n} 个文件复制失败",
   n_files_failed_to_rename: "{n} 个文件重命名失败",
   auto_reject_in_n_s: "{n}s 后自动拒绝",
   approval_edit_invalid_json: "参数不是合法 JSON，无法提交",

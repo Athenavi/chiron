@@ -20,6 +20,33 @@ import EmptyState from '../components/common/EmptyState.vue'
 import { useI18n } from 'vue-i18n'
 import { documentDir, nextRovingIndex, resolveRovingIntent, rovingTabIndex } from '../composables/useRovingFocus'
 import { splitFileName, type SplitName } from '../utils/fileName'
+import { useAuthStore } from '../stores/auth'
+import { useMediaClipboard } from '../composables/useMediaClipboard'
+import MediaContextMenu from './media/MediaContextMenu.vue'
+import MediaDeleteConfirm from './media/MediaDeleteConfirm.vue'
+import MediaProperties from './media/MediaProperties.vue'
+import {
+  clickSelect,
+  clearSelection,
+  EMPTY_SELECTION,
+  invertSelection as invertSel,
+  modifierOf,
+  selectAll as selectAllOf,
+  selectedItems as selectedItemsOf,
+  type SelectionState,
+} from './media/selection'
+import {
+  buildMenuModel,
+  type MenuAction,
+} from './media/menuModel'
+import { pasteBlockedReason } from './media/clipboard'
+import type { DeleteScopeDetail } from './media/dialogs'
+import type { PropertySource } from './media/properties'
+import {
+  isEditableTarget,
+  resolveShortcut,
+  shouldPreventDefault,
+} from './media/shortcuts'
 const { t: tr } = useI18n()
 const API_URL = import.meta.env.VITE_API_URL || ''
 
@@ -46,6 +73,19 @@ const typeFilter = ref('')
 const viewMode = ref<'grid' | 'list'>(localStorage.getItem('media-view') === 'list' ? 'list' : 'grid')
 const breadcrumbs = ref<{ id: string; name: string }[]>([{ id: '', name: tr('media.all_files') }])
 const selectedIds = ref<Set<string>>(new Set())
+
+/**
+ * 选择状态机（anchor / Ctrl / Shift / 框选）。
+ *
+ * `selectedIds` 保留原名字与形态（`Set<string>`）是有意的：它已被模板与批量操作
+ * 引用了三十余处，全部改写既无收益又会引入风险。这里让两者**同源**：
+ * `selection` 是真相，`selectedIds` 只是它 `selected` 部分的视图。
+ *
+ * 唯一额外的东西是 `anchorId` —— 它无法塞进一个 Set 里，而 Shift 连选必须依赖它。
+ * 旧实现没有锚点概念，所以 Shift 连选根本不可能正确。
+ */
+const selection = ref<SelectionState>(EMPTY_SELECTION)
+
 
 // 详情侧栏 / 上传（T9/T10 填充 UI，此处声明状态）
 const detailItem = ref<MediaItem | null>(null)
@@ -178,7 +218,9 @@ async function fetchItems() {
     const data = res.data?.data || { items: [], total: 0 }
     items.value = data.items || []
     total.value = data.total || 0
-    selectedIds.value = new Set()
+    // 刷新/翻页后旧选择里的 id 可能已不存在：先清空再交给状态机，
+    // 避免"幽灵选中项"被批量删除带出去（后端会静默忽略，用户看到数目对不上）
+    applySelection(clearSelection())
     resolveAllUrls()
   } catch {
     if (mySeq !== fetchSeq.value) return
@@ -208,14 +250,6 @@ function toggleView(mode: 'grid' | 'list') {
   localStorage.setItem('media-view', mode)
 }
 
-function onCardClick(item: MediaItem) {
-  if (isFolder(item)) {
-    enterFolder(item.id, item.name)
-  } else {
-    detailItem.value = item
-  }
-}
-
 // ── 文件网格的漫游焦点（CDS v1 §6.6）──
 // 此前每张卡都是 tabindex="0"：100 个文件就要按 100 次 Tab 才能穿过去。
 // 现在整组只占一个停靠点，方向键在卡片间移动，Home/End 跳首尾。
@@ -227,7 +261,8 @@ function onCardKeydown(e: KeyboardEvent, i: number, item: MediaItem) {
   // Vue 把两者合并成同一个 onKeydown prop —— 后声明的会覆盖先声明的，回车就失效了。
   if (e.key === 'Enter' || e.key === ' ') {
     e.preventDefault()
-    onCardClick(item)
+    // 键盘激活不带修饰键语义（Ctrl/Alt 已在上面被拦掉），按普通单击处理
+    onCardClick(item, e)
     return
   }
   if (e.key === 'Tab') return                        // 必须能逃逸，否则是键盘陷阱（WCAG 2.1.2）
@@ -483,31 +518,62 @@ const {
   clearCompletedUploads,
 } = useMediaUpload({ parentId: currentParentId, onUploaded: fetchItems })
 
-// ── 批量选择 ──
+// ── 批量选择（状态机驱动） ──
+//
+// `selection` 是真相，`selectedIds` 是它 `selected` 部分的视图。每次状态变更都走
+// `applySelection` 同步两者 —— 只在一处写回，避免"状态机改了但界面没变"或反过来。
+function applySelection(next: SelectionState) {
+  selection.value = next
+  // 必须换一个新 Set：模板里读的是 `selectedIds.has(...)`，
+  // 复用同一实例时 Vue 不会把变化传下去。
+  selectedIds.value = new Set(next.selected)
+}
+
+/** 复选框点击 = 切换（Ctrl 语义），不影响锚点之外的连选状态。 */
 function toggleSelect(item: MediaItem, e: Event) {
   e.stopPropagation()
-  const next = new Set(selectedIds.value)
-  if (next.has(item.id)) next.delete(item.id)
-  else next.add(item.id)
-  selectedIds.value = next
+  applySelection(clickSelect(items.value, selection.value, item.id, 'ctrl'))
+}
+
+/**
+ * 卡片/行点击：**只做选择**（Windows 语义）。
+ *
+ * `modifier` 由调用方从事件里取（`modifierOf`）—— 这样 Ctrl 追加、Shift 连选、
+ * Shift+Ctrl 区间追加三种语义全都走同一个纯函数，而不是在模板里写 if-else。
+ *
+ * 与旧行为的差异：原先单击文件就打开详情、单击文件夹就进入。改成"单击选中、
+ * 双击打开"之后才能支持多选 —— 否则用户永远选不中第二个文件（点一下详情就开了）。
+ */
+function onCardClick(item: MediaItem, e?: Event) {
+  const modifier = e ? modifierOf(e as MouseEvent) : 'none'
+  applySelection(clickSelect(items.value, selection.value, item.id, modifier))
+}
+
+/**
+ * 双击 / 回车：打开。
+ *
+ * 文件夹进入下一层，文件打开详情。带修饰键时不打开 —— 用户正在多选，
+ * 此时弹出抽屉会打断选择。
+ */
+function onCardOpen(item: MediaItem, e?: Event) {
+  if (e && modifierOf(e as MouseEvent) !== 'none') return
+  if (isFolder(item)) {
+    enterFolder(item.id, item.name)
+  } else {
+    detailItem.value = item
+  }
 }
 
 function selectAll() {
-  selectedIds.value = new Set(items.value.map(i => i.id))
+  applySelection(selectAllOf(items.value, selection.value))
 }
 
 function deselectAll() {
-  selectedIds.value = new Set()
+  applySelection(clearSelection())
 }
 
 function invertSelection() {
-  const next = new Set<string>()
-  for (const item of items.value) {
-    if (!selectedIds.value.has(item.id)) {
-      next.add(item.id)
-    }
-  }
-  selectedIds.value = next
+  applySelection(invertSel(items.value, selection.value))
 }
 
 // ── 批量删除 ──
@@ -714,22 +780,283 @@ async function batchDownload() {
   }
 }
 
-// ── 键盘快捷键 ──
+// ── 剪贴板 ──
+const authStore = useAuthStore()
+const clipboard = useMediaClipboard()
+// 账号切换后重新绑定键：不同账号必须读到不同的剪贴板（否则会看到别人的资产 id）
+watch(
+  () => [String(authStore.user?.tenant_id ?? ''), authStore.user?.id ?? ''] as const,
+  ([tenantId, userId]) => clipboard.syncKey(tenantId, userId),
+  { immediate: true },
+)
+
+/**
+ * 复制 / 剪切。
+ *
+ * 只写剪贴板，**不动任何数据** —— 真正的动作发生在粘贴时。这与资源管理器一致：
+ * 剪切之后源文件仍在原位（图标变虚），直到粘贴成功才移走。
+ */
+function copySelection(mode: 'copy' | 'cut') {
+  const ids = Array.from(selectedIds.value)
+  if (ids.length === 0) return
+  clipboard.write({ mode, ids, fromParentId: currentParentId.value })
+}
+
+/**
+ * 粘贴。
+ *
+ * 落地动作分两种：
+ *  - `cut` → 逐个 `PUT /v1/media/{id}` 改 `parent_id`（移动），复用已有接口；
+ *  - `copy` → 需要后端复制接口，尚未实现（菜单里已按 `copySupported` 置灰）。
+ *
+ * 执行前先剔除已不存在的源项：剪贴板里的 id 可能在复制之后被删掉，
+ * 拿幽灵 id 去请求后端只会得到一个与当前操作无关的错误。
+ */
+const pasting = ref(false)
+
+async function pasteSelection() {
+  const blocked = pasteBlockedReason(clipboard.payload.value, currentParentId.value)
+  if (blocked === 'empty') { message.warning(tr('media.menu_clipboard_empty')); return }
+  if (blocked === 'same-directory') { message.info(tr('media.paste_same_directory')); return }
+
+  const payload = clipboard.payload.value
+  pasting.value = true
+  let ok = 0
+  let fail = 0
+
+  if (payload.mode === 'copy') {
+    // 复制走一次批量接口：文件夹整棵子树由后端在一个事务里建好，前端不必逐层递归。
+    // 同名冲突由后端按 Windows 规则改名（`a (2).pdf`），所以这里不会收到"冲突"错误。
+    try {
+      const res = await api.post('/v1/media/copy', {
+        ids: payload.ids,
+        parent_id: currentParentId.value,
+      })
+      ok = Number((res as { count?: number })?.count ?? payload.ids.length)
+    } catch {
+      fail = payload.ids.length
+    }
+  } else {
+    for (const id of payload.ids) {
+      try {
+        await api.put(`/v1/media/${id}`, { parent_id: currentParentId.value })
+        ok += 1
+      } catch {
+        fail += 1
+      }
+    }
+  }
+  pasting.value = false
+
+  // 剪切粘贴成功后剪贴板应清空（与资源管理器一致）：否则用户会重复粘贴同一个"剪切"，
+  // 第二次必然失败，还以为是 bug。
+  // 复制则**保留**剪贴板 —— 资源的语义是"可连续粘贴多份"，这与 Windows 一致。
+  if (payload.mode === 'cut' && ok > 0) clipboard.clear()
+  if (ok > 0) {
+    message.success(tr(payload.mode === 'copy' ? 'media.copied_n_files' : 'media.moved_n_files', { n: ok }))
+  }
+  if (fail > 0) {
+    message.error(
+      tr(payload.mode === 'copy' ? 'errors.n_files_failed_to_copy' : 'errors.n_files_failed_to_move', { n: fail }),
+    )
+  }
+  fetchItems()
+}
+
+// ── 右键菜单 ──
+/** 最近一次右键的落点（决定"粘贴到哪个目录"）。 */
+const menuTargetParent = ref('')
+
+/**
+ * 菜单模型。
+ *
+ * `copySupported` 与 `moveSupported` 分离，是因为它们落到**两个不同接口**：
+ *  - 复制 → `POST /v1/media/copy`（后端一个事务复制整棵子树并流式搬字节）；
+ *  - 剪切 → `PUT /v1/media/{id}` 改 `parent_id`（移动不搬字节，只改引用）。
+ *
+ * 合并成一个开关的后果是：任一接口缺失就把两个功能一起置灰 —— 那是把一个缺失
+ * 放大成两个。现在两者都已就绪，都传 true，但开关仍保持独立。
+ */
+const menuModel = computed(() =>
+  buildMenuModel({
+    selectedCount: selectedIds.value.size,
+    hasFolder: selectedItemsOf(items.value, selection.value).some((i) => isFolder(i)),
+    hasFile: selectedItemsOf(items.value, selection.value).some((i) => !isFolder(i)),
+    clipboard: {
+      count: clipboard.payload.value.ids.length,
+      mode: clipboard.payload.value.mode,
+    },
+    copySupported: true,
+    moveSupported: true,
+  }),
+)
+
+/** 右键时的选择修正：Windows 语义 —— 右键未选中项先选中它，右键已选中项保留整组。 */
+function onContextMenu(item?: MediaItem) {
+  if (item && !selectedIds.value.has(item.id)) {
+    applySelection(clickSelect(items.value, selection.value, item.id, 'none'))
+  }
+  menuTargetParent.value = currentParentId.value
+}
+
+/** 菜单动作派发。可用性已由模型判定，这里只执行。 */
+async function onMenuAction(action: MenuAction) {
+  switch (action) {
+    case 'open': {
+      const one = selectedItemsOf(items.value, selection.value)[0]
+      if (one) onCardOpen(one)
+      break
+    }
+    case 'copy':
+      copySelection('copy')
+      break
+    case 'cut':
+      copySelection('cut')
+      break
+    case 'paste':
+      await pasteSelection()
+      break
+    case 'rename': {
+      const one = selectedItemsOf(items.value, selection.value)[0]
+      if (one) { detailItem.value = one; openRename() }
+      break
+    }
+    case 'delete':
+      askDelete()
+      break
+    case 'refresh':
+      await fetchItems()
+      break
+    case 'properties': {
+      const one = selectedItemsOf(items.value, selection.value)[0]
+      if (one) {
+        propertyItem.value = one
+        showProperties.value = true
+      }
+      break
+    }
+    case 'new-folder':
+      newFolderOpen.value = true
+      break
+    case 'upload':
+      showUpload.value = true
+      break
+    case 'select-all':
+      selectAll()
+      break
+  }
+}
+
+// ── 删除确认 ──
+const showDeleteConfirm = ref(false)
+
+// ── 属性弹窗 ──
+const showProperties = ref(false)
+const propertyItem = ref<MediaItem | null>(null)
+
+/**
+ * 属性面板的输入。
+ *
+ * `parentPath` 从面包屑拼出（跳过第一项"全部文件"）：用户最常问的是
+ * "这个文件在哪"，而列表只显示当前层，路径必须显式给出。
+ */
+const propertySource = computed<PropertySource | null>(() => {
+  const item = propertyItem.value
+  if (!item) return null
+  return {
+    id: item.id,
+    name: item.name,
+    type: item.type,
+    size: item.size,
+    mime_type: item.mime_type,
+    file_url: item.file_url,
+    created_at: item.created_at,
+    tags: item.tags,
+    parentPath: breadcrumbs.value.slice(1).map((b) => b.name),
+  }
+})
+
+/** 属性面板里的动作（与其右键菜单共用同一份 menuModel）。 */
+function onPropertyAction(action: MenuAction) {
+  showProperties.value = false
+  void onMenuAction(action)
+}
+
+/** 当前选中项的删除范围（用于确认文案与危险分级）。 */
+const deleteScope = computed<DeleteScopeDetail>(() => {
+  const picked = selectedItemsOf(items.value, selection.value)
+  const folders = picked.filter((i) => isFolder(i)).length
+  return {
+    selectedCount: picked.length,
+    folderCount: folders,
+    fileCount: picked.length - folders,
+    // 递归子孙数需要后端查询；此处未知 ⇒ 文案走"含全部子项"，
+    // **不编造数字**（低报代价比不报更糟：用户以为删 2 项，实际删掉 47 个）
+    descendantCount: null,
+  }
+})
+
+/** 删除入口：先确认再执行（危险操作不能一步到位）。 */
+function askDelete() {
+  if (selectedIds.value.size === 0) return
+  showDeleteConfirm.value = true
+}
+
+async function confirmDelete() {
+  await batchDelete()
+  showDeleteConfirm.value = false
+}
+
+// ── 键盘快捷键（复用纯函数层） ──
+//
+// 旧实现用 if-else 直接判断按键，问题有三：没排除"焦点在输入框"（在重命名框里按
+// Delete 会删掉一整批文件）、没排除"模态框打开"（在确认框里按 Delete 会再触发一次）、
+// 且 F5 之类不拦截会让浏览器重载整页。这些都收口到 `media/shortcuts.ts` 并有单测。
 function handleKeyboardShortcut(e: KeyboardEvent) {
-  // Ctrl+A: 全选
-  if (e.ctrlKey && e.key === 'a') {
-    e.preventDefault()
-    selectAll()
-  }
-  // Delete: 删除选中项
-  if (e.key === 'Delete' && selectedIds.value.size > 0) {
-    e.preventDefault()
-    batchDelete()
-  }
-  // Escape: 取消选择
-  if (e.key === 'Escape' && selectedIds.value.size > 0) {
-    e.preventDefault()
-    deselectAll()
+  const result = resolveShortcut(
+    {
+      key: e.key,
+      ctrlKey: e.ctrlKey,
+      metaKey: e.metaKey,
+      shiftKey: e.shiftKey,
+      altKey: e.altKey,
+    },
+    {
+      // 焦点在输入框时不响应（否则重命名时按 Delete 会删掉选中的文件）
+      inEditable: isEditableTarget(document.activeElement as HTMLElement | null),
+      // 任一对话框打开时快捷键不接管（对话框自己的按键优先）
+      modalOpen:
+        showDeleteConfirm.value ||
+        showRename.value ||
+        showMove.value ||
+        showBatchMove.value ||
+        showBatchRename.value ||
+        showShare.value ||
+        showPreview.value ||
+        showKbModal.value ||
+        newFolderOpen.value ||
+        showUpload.value ||
+        lightboxOpen.value,
+      model: menuModel.value,
+      hasSelection: selectedIds.value.size > 0,
+    },
+  )
+
+  if (shouldPreventDefault(result)) e.preventDefault()
+
+  switch (result.kind) {
+    case 'escape':
+      deselectAll()
+      break
+    case 'action':
+      void onMenuAction(result.action)
+      break
+    case 'blocked':
+      // 命中但不可执行：已 preventDefault（否则 F5 会重载整页），给出可读原因
+      message.info(tr('media.shortcut_unavailable'))
+      break
+    case 'none':
+      break
   }
 }
 
@@ -994,71 +1321,107 @@ onUnmounted(() => {
     </EmptyState>
 
     <!-- 数据视图 -->
+    <!--
+      右键菜单包裹整个数据区：菜单的可见性/禁用全部来自 `menuModel`（纯函数），
+      这里只负责"在哪个位置弹"。卡片的 `@contextmenu` 负责先把被右键的项选中，
+      两者不冲突（`.prevent` 只挡默认菜单，不挡冒泡）。
+    -->
     <template v-else>
-      <div
-        v-if="viewMode === 'grid'"
-        ref="gridRef"
-        class="file-grid"
+      <MediaContextMenu
+        :model="menuModel"
+        @select="onMenuAction"
       >
         <div
-          v-for="(item, i) in items"
-          :key="item.id"
-          class="file-card"
-          :class="{ selected: selectedIds.has(item.id) }"
-          role="button"
-          :tabindex="rovingTabIndex(i, cardActiveIndex)"
-          @click="onCardClick(item)"
-          @keydown="onCardKeydown($event, i, item)"
-          @focus="cardActiveIndex = i"
+          v-if="viewMode === 'grid'"
+          ref="gridRef"
+          class="file-grid"
         >
-          <Checkbox
-            class="card-check"
-            :checked="selectedIds.has(item.id)"
-            @click="toggleSelect(item, $event)"
-          />
-          <div class="card-thumb">
-            <img
-              v-if="isImage(item) && !isFolder(item)"
-              :src="itemUrl(item)"
-              :alt="item.name"
-              loading="lazy"
-              @error="onImgError($event, item)"
+          <div
+            v-for="(item, i) in items"
+            :key="item.id"
+            class="file-card"
+            :class="{ selected: selectedIds.has(item.id) }"
+            role="button"
+            :tabindex="rovingTabIndex(i, cardActiveIndex)"
+            @click="onCardClick(item, $event)"
+            @dblclick="onCardOpen(item, $event)"
+            @contextmenu.prevent="onContextMenu(item)"
+            @keydown="onCardKeydown($event, i, item)"
+            @focus="cardActiveIndex = i"
+          >
+            <Checkbox
+              class="card-check"
+              :checked="selectedIds.has(item.id)"
+              @click="toggleSelect(item, $event)"
+            />
+            <div class="card-thumb">
+              <img
+                v-if="isImage(item) && !isFolder(item)"
+                :src="itemUrl(item)"
+                :alt="item.name"
+                loading="lazy"
+                @error="onImgError($event, item)"
+              >
+              <FolderOutlined
+                v-else-if="isFolder(item)"
+                class="thumb-icon folder"
+              />
+              <FileOutlined
+                v-else
+                class="thumb-icon"
+              />
+            </div>
+            <div
+              class="card-name"
+              :title="item.name"
             >
-            <FolderOutlined
-              v-else-if="isFolder(item)"
-              class="thumb-icon folder"
-            />
-            <FileOutlined
-              v-else
-              class="thumb-icon"
-            />
-          </div>
-          <div
-            class="card-name"
-            :title="item.name"
-          >
-            <span class="card-name-head">{{ nameParts(item.id, item.name).head }}</span><span class="card-name-tail">{{ nameParts(item.id, item.name).tail }}</span>
-          </div>
-          <div
-            v-if="!isFolder(item)"
-            class="card-meta"
-          >
-            {{ formatSize(item.size) }}
+              <span class="card-name-head">{{ nameParts(item.id, item.name).head }}</span><span class="card-name-tail">{{ nameParts(item.id, item.name).tail }}</span>
+            </div>
+            <div
+              v-if="!isFolder(item)"
+              class="card-meta"
+            >
+              {{ formatSize(item.size) }}
+            </div>
           </div>
         </div>
-      </div>
-      <Table
-        v-else
-        :columns="listColumns"
-        :data-source="items"
-        :row-key="'id'"
-        :pagination="false"
-        :scroll="{ x: 640 }"
-        size="small"
-        :row-class-name="(record: MediaItem) => (selectedIds.has(record.id) ? 'row-selected' : '')"
-        @row-click="(record: MediaItem) => onCardClick(record)"
-      />
+        <Table
+          v-else
+          :columns="listColumns"
+          :data-source="items"
+          :row-key="'id'"
+          :pagination="false"
+          :scroll="{ x: 640 }"
+          size="small"
+          :row-class-name="(record: MediaItem) => (selectedIds.has(record.id) ? 'row-selected' : '')"
+          @row-click="(record: MediaItem, e: Event) => onCardClick(record, e)"
+          @row-dblclick="(record: MediaItem, e: Event) => onCardOpen(record, e)"
+        />
+      </MediaContextMenu>
     </template>
+
+    <!-- 删除确认：中/危操作必须确认。文案与危险分级由 dialogs.buildDeleteConfirm 生成 -->
+    <MediaDeleteConfirm
+      v-model:open="showDeleteConfirm"
+      :scope="deleteScope"
+      :loading="batchDeleting"
+      @confirm="confirmDelete"
+    />
+
+    <!-- 属性弹窗（Alt+Enter / 右键"属性"）：与右键菜单共用同一份 menuModel 求值 -->
+    <Modal
+      v-model:open="showProperties"
+      :title="$t('media.menu_properties')"
+      :width="520"
+      :footer="null"
+    >
+      <MediaProperties
+        v-if="propertySource"
+        :source="propertySource"
+        :model="menuModel"
+        @action="onPropertyAction"
+      />
+    </Modal>
 
     <div
       v-if="total > pageSize"

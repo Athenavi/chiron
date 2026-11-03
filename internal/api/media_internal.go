@@ -99,6 +99,19 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 		BadRequest(w, "name is required")
 		return
 	}
+	// 长路径：`reports/2024/q3.md` 要落成真实的文件夹层级。
+	//
+	// 此前这里把 `parent_id` 硬编码成 `''`，配合 Python 侧对分隔符的直接拒绝和
+	// `sanitizeUploadName` 的 `filepath.Base`，同一份路径被压平三遍 —— 媒体库里
+	// 只剩孤零零的 `q3.md`。拆解与建链现在集中到 `media_path.go`（单一权威）。
+	folders, fileName, pathErr := splitAssetPath(body.Name)
+	if pathErr != nil {
+		BadRequest(w, pathErr.Error())
+		return
+	}
+	// 后续所有"名字"语义（MIME 拒绝名单、对象键、数据库列）都只看最后一段：
+	// 目录名不该参与文件类型判定，也不该出现在对象键里。
+	body.Name = fileName
 	if body.TenantID == "" || body.UserID == "" {
 		BadRequest(w, "tenant_id and user_id are required")
 		return
@@ -148,6 +161,10 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	// 与用户直传共用同一键布局：media/<tenantID>/<assetID>/<name>
+	//
+	// 对象键里只用最后一段文件名（`body.Name` 已在上面被改成 fileName）：
+	// 目录结构由 `parent_id` 表达，不该同时编进对象键 —— 两处各存一份层级，
+	// 改其中一处就会不一致，而对象键是不可变的历史数据。
 	objectKey := mediaObjectKey(parseTenantID(body.TenantID), assetID, sanitizeUploadName(body.Name))
 
 	if err := h.store.Write(r.Context(), objectKey, data); err != nil {
@@ -156,21 +173,53 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 	}
 	fileURL := h.objectURL(objectKey)
 
-	if _, err := db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, file_path, mime_type, category, tags, size, created_at, updated_at)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, NOW(), NOW())`,
-		assetID, body.TenantID, body.UserID, assetType, body.Name, fileURL, objectKey,
-		mimeType, nullableStr(body.Category), strings.Join(body.Tags, ","), len(data)); err != nil {
-		logAndRespond(w, err, http.StatusInternalServerError, "create asset failed")
+	// 文件夹链与资产行必须在**同一事务**里落库。
+	//
+	// 分开写的话，建链成功而资产写入失败会留下一整串空文件夹（下次生成再复用它，
+	// 用户看到"空目录越来越多"）；反过来建链失败则资产无处可挂。
+	tenantID := parseTenantID(body.TenantID)
+	tx, err := db.GlobalDBManager.Begin(r.Context())
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "begin transaction failed")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+
+	parentID, err := ensureFolderChain(r.Context(), tx, tenantID, body.UserID, "", folders)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "create folder chain failed")
 		return
 	}
 
-	slog.Info("internal media asset created", "asset_id", assetID, "tenant_id", body.TenantID, "type", assetType, "size", len(data))
+	// `parent_id` 显式写值（根目录是空串），**不能省略**。
+	//
+	// 省略即为 NULL，而列表用 `COALESCE(parent_id,'') = $3` 过滤 —— 虽然现在能读到，
+	// 但库里并存两种根目录表示（NULL / 空串）会让"按目录统计""文件夹配额"以及任何
+	// 新写的等值查询必须永远记得兜底，漏一处就是一次"记录消失"（2026-11-03 生产）。
+	if _, err := tx.Exec(r.Context(),
+		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, file_path, mime_type, category, tags, size, parent_id, created_at, updated_at)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, NOW(), NOW())`,
+		assetID, tenantID, body.UserID, assetType, body.Name, fileURL, objectKey,
+		mimeType, nullableStr(body.Category), strings.Join(body.Tags, ","), len(data), parentID); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "create asset failed")
+		return
+	}
+	if err := tx.Commit(r.Context()); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "commit failed")
+		return
+	}
+
+	slog.Info("internal media asset created", "asset_id", assetID, "tenant_id", body.TenantID,
+		"type", assetType, "size", len(data), "folders", len(folders))
 	OK(w, map[string]interface{}{
-		"id":       assetID,
-		"name":     body.Name,
-		"type":     assetType,
-		"file_url": fileURL,
-		"size":     len(data),
+		"id":        assetID,
+		"name":      body.Name,
+		"type":      assetType,
+		"file_url":  fileURL,
+		"size":      len(data),
+		"parent_id": parentID,
+		// 回显规范化后的完整路径：模型据此确认"我给的层级被正确理解"，
+		// 而不是只能猜 `a/b/c.md` 到底落成了什么样。
+		"path": strings.Join(append(append([]string{}, folders...), body.Name), "/"),
 	})
 }

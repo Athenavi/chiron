@@ -277,14 +277,23 @@ func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg, model 
 }
 
 // SaveToolCall persists a tool call record (S 修复：工具调用过程落库，刷新后显示一致).
+//
+// 显式写 `is_error = false` 而不是留给列默认值：`tool_calls.is_error` 在 0001 baseline
+// 里是**可空且无默认值**，省略它就写进 NULL。而列表查询要把这一列扫进 Go 的 `bool`，
+// pgx 遇 NULL 直接报错 ⇒ 一条 NULL 记录让**整页**工具调用查询失败 ⇒ 刷新后工具卡片
+// **全部消失**（2026-11-03 生产故障，症状酷似"没落库"，实际数据完好）。
+//
+// 这里写 false 是对的语义：本函数在工具**开始执行前**调用，此时还没有结果、
+// 自然也没有错误；真正的错误状态由 `UpdateToolCall` 回填。
 func (m *Manager) SaveToolCall(ctx context.Context, sessionID, toolCallID, toolName, inputJSON, turnID string) {
 	if m.pool == nil || toolCallID == "" {
 		return
 	}
 	_, err := m.pool.Exec(ctx,
-		`INSERT INTO tool_calls (id, session_id, tool_name, input, output, turn_id, created_at)
-		 VALUES ($1, $2, $3, $4::jsonb, '', NULLIF($5, ''), NOW())
+		`INSERT INTO tool_calls (id, session_id, tool_name, input, output, is_error, turn_id, created_at)
+		 VALUES ($1, $2, $3, $4::jsonb, '', false, NULLIF($5, ''), NOW())
 		 ON CONFLICT (id) DO UPDATE SET tool_name = EXCLUDED.tool_name, input = EXCLUDED.input,
+		   is_error = COALESCE(tool_calls.is_error, EXCLUDED.is_error),
 		   turn_id = COALESCE(EXCLUDED.turn_id, tool_calls.turn_id)`,
 		toolCallID, sessionID, toolName, normalizeToolInput(inputJSON), turnID)
 	if err != nil {
@@ -358,12 +367,29 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 	}
 	// total/truncated 都在库里算：output_bytes 已在迁移 0015 回填，
 	// 未回填的存量行由 COALESCE 兜底成真实字节数。
-	query := `SELECT id, session_id, tool_name, input,
+	//
+	// ⚠ 这里每一个**可空列**都必须 COALESCE 兜底，不能直接 Scan 到 Go 值类型。
+	// 真实故障（2026-11-03 生产）：`tool_calls.is_error` 在 0001 baseline 里是
+	// `is_error boolean`（可空且无默认值），而 `SaveToolCall` 的 INSERT 不写这一列 ⇒
+	// 凡是没有经过 `UpdateToolCall` 回填的记录，`is_error` 一律是 NULL；
+	// `compaction` / `goal_incomplete` / `guardrail` 这类**系统留痕记录永远不会有
+	// output 回填**，所以必然是 NULL。pgx 把 NULL 扫进 `bool` 会直接报错，
+	// 一条脏记录就让**整页**查询失败 ⇒ `tool_calls` 返回空数组 ⇒ 前端刷新后
+	// "我的工具调用结果全消失了"。症状与"数据没落库"完全一样，极易误判 ——
+	// 实际数据完好，坏的是读取。
+	//
+	// session_id / tool_name / created_at 同样是可空列，Scan 到 string/time.Time
+	// 有一模一样的炸法，因此一并兜底：宁可给一个中性值，也不让一条记录带走整页。
+	query := `SELECT id,
+		          COALESCE(session_id, ''),
+		          COALESCE(tool_name, ''),
+		          COALESCE(input, '{}'::json),
 		          left(output, ` + strconv.Itoa(outputPreviewBytes) + `),
 		          COALESCE(output_bytes, octet_length(output)),
 		          (COALESCE(output_bytes, octet_length(output))
 		             > octet_length(left(output, ` + strconv.Itoa(outputPreviewBytes) + `))),
-		          is_error, created_at
+		          COALESCE(is_error, false),
+		          COALESCE(created_at, TIMESTAMP 'epoch')
 		 FROM tool_calls WHERE session_id = $1`
 	args := []interface{}{sessionID}
 	if before != "" {
@@ -419,12 +445,19 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 }
 
 // GetToolCalls returns all tool call records for a session, oldest first.
+//
+// 可空列一律 COALESCE：`is_error` / `session_id` / `tool_name` / `created_at` 在
+// 0001 baseline 里都可空，而 `SaveToolCall` 曾经不写 `is_error`（写进 NULL）。
+// pgx 把 NULL 扫进 `bool`/`string`/`time.Time` 会直接报错，一条脏记录就让整个
+// 会话的工具调用读取失败 —— 与 GetToolCallsPage 是同一个根因，必须同修复。
 func (m *Manager) GetToolCalls(ctx context.Context, sessionID string) ([]model.ToolCall, error) {
 	if m.pool == nil {
 		return nil, nil
 	}
 	rows, err := m.pool.Query(ctx,
-		`SELECT id, session_id, tool_name, input, output, is_error, created_at
+		`SELECT id, COALESCE(session_id, ''), COALESCE(tool_name, ''),
+		        COALESCE(input, '{}'::json), output, COALESCE(is_error, false),
+		        COALESCE(created_at, TIMESTAMP 'epoch')
 		 FROM tool_calls WHERE session_id = $1 ORDER BY created_at ASC, id ASC`,
 		sessionID)
 	if err != nil {

@@ -22,7 +22,6 @@ import logging
 import os
 import re
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import Any, cast
 
 from app.http_client import shared_client
@@ -46,6 +45,9 @@ MAX_NAME_CHARS = 200
 MAX_TAGS_TOTAL_CHARS = 200
 MAX_TAG_CHARS = 48
 MAX_CATEGORY_CHARS = 48
+#: 长路径允许的最大文件夹层数（与 Go 侧 `media_path.go` 的 `maxAssetFolderDepth` 一致）。
+#: 两边不一致时，前置校验会放行一个网关必然拒绝的路径 —— 模型要多等一次往返才知道。
+MAX_PATH_DEPTH = 16
 
 #: 资产类型取值 —— 与前端媒体库的筛选 tab 一一对应
 #: （frontend-vue/src/views/MediaView.vue：image / document / video / audio / file / text）。
@@ -324,19 +326,78 @@ async def media_create(
     display_name = (name or "").strip()
     workspace_rel = (from_workspace or "").strip()
     if not display_name and workspace_rel:
-        # 兜底：名字可从工作区路径推断（schema 仍要求给 `name` —— 通常就是那个文件名）
-        display_name = Path(workspace_rel).name
+        # 兜底：名字从工作区路径推断。**必须保留目录层级** ——
+        # `Path(workspace_rel).name` 只取 basename，于是 `from_workspace="reports/q3.md"`
+        # 会落成根目录下的 `q3.md`，工作区里辛苦建好的目录结构在发布这一步被抹平。
+        # 统一成正斜杠（POSIX 形式），与 `splitAssetPath` 的分隔符约定对齐。
+        display_name = workspace_rel.replace("\\", "/").lstrip("/")
+        # 沙箱工作区的根目录前缀不该出现在媒体库路径里（`./` 同样是噪音）。
+        while display_name.startswith("./"):
+            display_name = display_name[2:]
     if not display_name:
         return {"error": "name is required (include an extension, e.g. 'report.docx')"}
-    if len(display_name) > MAX_NAME_CHARS:
+
+    # ── 长路径：允许 `reports/2024/q3.md`，并落成真实的文件夹层级 ──
+    #
+    # 这里**只做前置的友好校验**，权威解析在 Go 侧 `internal/api/media_path.go`
+    # 的 `splitAssetPath`。两处判据重叠是有意的：前置拦一次能让模型立刻拿到可操作的
+    # 错误，而不必等一次网关往返；但**判据以 Go 为准**，这里放行了网关仍会拒。
+    #
+    # 历史行为是直接拒绝任何分隔符（"name must be a plain file name"），
+    # 于是 agent 产出 `reports/2024/q3.md` 时媒体库里只剩孤零零的 `q3.md` ——
+    # 用户报"长路径没正确处理、没有文件夹嵌套"指的就是这一条（2026-11-03）。
+    if "\\" in display_name:
         return {
             "error": (
-                f"name is too long: {len(display_name)} chars (max {MAX_NAME_CHARS}; "
-                "the media library column holds 255)"
+                "name must use '/' as the only path separator (got a backslash in "
+                f"{display_name!r}); e.g. 'reports/2024/q3.md'"
             )
         }
-    if "/" in display_name or "\\" in display_name:
-        return {"error": "name must be a plain file name (no path separators)"}
+    if display_name.startswith("/"):
+        return {
+            "error": (
+                f"name must be relative to the media library root, got {display_name!r} "
+                "(drop the leading '/')"
+            )
+        }
+    if display_name.endswith("/"):
+        return {
+            "error": (
+                f"{display_name!r} ends with '/' — that is a folder, not a file. "
+                "Pass a full path like 'dir/name.ext'."
+            )
+        }
+
+    segments = display_name.split("/")
+    if any(seg == "" for seg in segments):
+        return {"error": f"name has an empty path segment: {display_name!r}"}
+    if any(seg in (".", "..") for seg in segments):
+        return {
+            "error": (
+                f"name must not contain '.' or '..' segments: {display_name!r}"
+            )
+        }
+    if any(any(ord(ch) < 0x20 or ord(ch) == 0x7F for ch in seg) for seg in segments):
+        return {"error": f"name must not contain control characters: {display_name!r}"}
+    if len(segments) - 1 > MAX_PATH_DEPTH:
+        return {
+            "error": (
+                f"name nests {len(segments) - 1} folders deep (max {MAX_PATH_DEPTH}); "
+                "flatten the output instead"
+            )
+        }
+    for seg in segments:
+        if len(seg) > MAX_NAME_CHARS:
+            return {
+                "error": (
+                    f"path segment {seg[:40]!r}… is too long: {len(seg)} chars "
+                    f"(max {MAX_NAME_CHARS}; the media library column holds 255)"
+                )
+            }
+
+    # MIME / 类型推断只看**最后一段**：目录名不参与文件类型判定
+    # （`reports.docx/q3` 这种名字不该因为目录带 .docx 就被判成文档）。
+    base_name = segments[-1]
 
     raw_content = content or ""
     raw_b64 = (content_base64 or "").strip()
@@ -382,7 +443,7 @@ async def media_create(
             )
         }
 
-    resolved_mime = (mime_type or "").strip() or _infer_mime(display_name, binary=binary)
+    resolved_mime = (mime_type or "").strip() or _infer_mime(base_name, binary=binary)
     requested_type = (type or "").strip().lower()
     if requested_type and requested_type not in ASSET_TYPES:
         return {
@@ -390,10 +451,13 @@ async def media_create(
         }
     # 留空 ⇒ 按扩展名/MIME 推断（旧行为把一切都标成 "text"，导致 .docx 在
     # 「文档」筛选里找不到）。显式传值仍然以调用方为准。
-    resolved_type = requested_type or _infer_asset_type(resolved_mime, display_name)
+    resolved_type = requested_type or _infer_asset_type(resolved_mime, base_name)
     resolved_category = (str(category or "generated").strip() or "generated")[:MAX_CATEGORY_CHARS]
     safe_tags = _normalize_tags(tags)
 
+    # 传**完整路径**（`reports/2024/q3.md`）而不是 basename：
+    # 网关的 `splitAssetPath` 据此建立文件夹链。这里若只发 `q3.md`，
+    # 层级就在 Python 侧被静默丢掉了 —— 那正是本次要修的行为。
     stored, reason = await persist_to_library(
         display_name,
         data,
@@ -404,13 +468,18 @@ async def media_create(
     )
     if stored is not None:
         size = int(stored.get("size") or len(data))
+        # 回显网关规范化后的路径（`stored["path"]`）：模型据此确认层级，
+        # 而不是只能假设自己给的路径被原样接受。
+        stored_path = str(stored.get("path") or display_name)
         return {
             "output": (
-                f"Created '{display_name}' in the media library "
+                f"Created '{stored_path}' in the media library "
                 f"({size} bytes, type={resolved_type}). The user can open it from 媒体库 (Media)."
             ),
             "id": stored.get("id", ""),
-            "name": stored.get("name", display_name),
+            "name": stored.get("name", base_name),
+            "path": stored_path,
+            "parent_id": stored.get("parent_id", ""),
             "type": stored.get("type", resolved_type),
             "category": resolved_category,
             "mime_type": resolved_mime,
@@ -874,7 +943,13 @@ registry.register(
         "properties": {
             "name": {
                 "type": "string",
-                "description": "File name WITH extension, e.g. 'report.docx', 'data.csv', 'summary.md'.",
+                "description": (
+                    "File name WITH extension, e.g. 'report.docx'. "
+                    "Use '/' to nest it in folders — 'reports/2024/q3.md' creates the "
+                    "reports/2024 folders and places the file inside them. "
+                    "Pick a path that reflects the artifact's role (e.g. 'src/app.py', "
+                    "'docs/design.md', 'data/export.csv') so the library stays navigable."
+                ),
             },
             "content": {
                 "type": "string",

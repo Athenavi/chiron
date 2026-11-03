@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
+import { createPinia, setActivePinia } from 'pinia'
 
 /**
  * 媒体库页的冒烟网（抽 composable 前置）。
@@ -79,6 +80,9 @@ const image = {
 }
 
 async function mountView() {
+  // `MediaView` 现在会读 auth store（剪贴板按账号隔离需要 tenant + user）。
+  // 冒烟网只关心列表加载与三态，因此这里挂一个干净的 pinia 就够，不必 stub store。
+  setActivePinia(createPinia())
   const wrapper = mount(MediaView)
   await flushPromises()
   return wrapper
@@ -127,13 +131,15 @@ describe('MediaView 加载与三态', () => {
 })
 
 describe('MediaView 目录导航', () => {
-  it('点击文件夹卡片进入该目录，并把 folder id 作为 parent_id 重新拉取', async () => {
+  // 语义已改为 Windows 式：单击**只选中**，双击才打开/进入。
+  // 这是多选的前提 —— 旧语义下点一下就把详情抽屉打开了，永远选不中第二个。
+  it('双击文件夹卡片进入该目录，并把 folder id 作为 parent_id 重新拉取', async () => {
     apiMocks.get.mockResolvedValueOnce(listResponse([folder, image]))
     const wrapper = await mountView()
     expect(apiMocks.get).toHaveBeenCalledTimes(1)
 
     apiMocks.get.mockResolvedValueOnce(listResponse([]))
-    await wrapper.findAll('.file-card')[0].trigger('click')
+    await wrapper.findAll('.file-card')[0].trigger('dblclick')
     await flushPromises()
 
     expect(apiMocks.get).toHaveBeenCalledTimes(2)
@@ -142,11 +148,24 @@ describe('MediaView 目录导航', () => {
     })
   })
 
-  it('点击文件卡片只打开详情，不重新拉列表', async () => {
+  it('单击文件夹卡片只选中，不进入目录', async () => {
     apiMocks.get.mockResolvedValueOnce(listResponse([folder, image]))
     const wrapper = await mountView()
 
-    await wrapper.findAll('.file-card')[1].trigger('click')
+    await wrapper.findAll('.file-card')[0].trigger('click')
+    await flushPromises()
+
+    // 仍是首次加载那一次，没有因为单击而重新拉列表
+    expect(apiMocks.get).toHaveBeenCalledTimes(1)
+    // 但该项被标记为选中
+    expect(wrapper.findAll('.file-card')[0].classes()).toContain('selected')
+  })
+
+  it('双击文件卡片打开详情，不重新拉列表', async () => {
+    apiMocks.get.mockResolvedValueOnce(listResponse([folder, image]))
+    const wrapper = await mountView()
+
+    await wrapper.findAll('.file-card')[1].trigger('dblclick')
     await flushPromises()
 
     expect(apiMocks.get).toHaveBeenCalledTimes(1)

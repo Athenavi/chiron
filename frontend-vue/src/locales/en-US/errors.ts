@@ -60,6 +60,7 @@ export default {
   n_files_failed_to_import: "{n} files failed to import",
   n_files_failed_to_add_tags: "{n} files failed to add tags",
   n_files_failed_to_move: "{n} files failed to move",
+  n_files_failed_to_copy: "{n} files failed to copy",
   n_files_failed_to_rename: "{n} files failed to rename",
   auto_reject_in_n_s: "Auto-reject in {n}s",
   approval_edit_invalid_json: "Arguments are not valid JSON — cannot submit",

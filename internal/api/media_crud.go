@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -60,7 +61,20 @@ func (h *MediaHandler) List(w http.ResponseWriter, r *http.Request) {
 	tagsParam := r.URL.Query().Get("tags")
 	page, pageSize := parsePagination(r.URL.Query())
 
-	where := " WHERE tenant_id = $1 AND user_id = $2 AND parent_id = $3"
+	// ⚠ `parent_id` 必须用 `COALESCE(parent_id, '')` 比较，不能直接等值。
+	//
+	// 根目录在库里有**两种表示**：空串（用户直传路径写明 `parent_id`）与 NULL
+	// （会话内创建的路径过去**整列不写**，见 `media_internal.go:InternalCreateAsset`）。
+	// 而 SQL 里 `NULL = ''` 求值为 NULL（不成立），于是 `parent_id = ''` 只命中前者 ——
+	// 会话创建的文件**明明在库里，却在媒体库根目录永远看不到**（2026-11-03 生产）。
+	//
+	// 症状具有迷惑性：用户报"文件没进媒体库"，实际记录齐全、对象存储也正常，
+	// 只是列表的 WHERE 把它们筛掉了。这正是"缺失数据库记录"这种描述会把人带偏的地方。
+	//
+	// 选 COALESCE 而不是 `(parent_id = $3 OR (parent_id IS NULL AND $3 = ''))`：
+	// 后者虽能复用索引，但 OR 分支常被优化器拆成两次扫描，而媒体库单用户资产量级
+	// 很小（索引前两列 tenant_id/user_id 仍然生效），正确性远比这点差异重要。
+	where := " WHERE tenant_id = $1 AND user_id = $2 AND COALESCE(parent_id, '') = $3"
 	args := []interface{}{claims.TenantID, claims.UserID, parentID}
 	argIdx := 4
 
@@ -189,8 +203,8 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		err := db.GlobalDBManager.QueryRow(r.Context(),
-			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, created_at, updated_at)
-			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, NOW(), NOW())
+			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, parent_id, created_at, updated_at)
+			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, '', NOW(), NOW())
 			 RETURNING id`,
 			claims.TenantID, claims.UserID, body.Type, body.Name, nullableStr(body.Category), tagsStr, string(metadataJSON), len(body.Content),
 		).Scan(&assetID)
@@ -221,8 +235,8 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 		}
 
 		err := db.GlobalDBManager.QueryRow(r.Context(),
-			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, created_at, updated_at)
-			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, NOW(), NOW())
+			`INSERT INTO media_assets (id, tenant_id, user_id, type, name, file_url, category, tags, metadata, size, parent_id, created_at, updated_at)
+			 VALUES (gen_random_uuid(), $1, $2, $3, $4, '', $5, $6, $7, $8, '', NOW(), NOW())
 			 RETURNING id`,
 			claims.TenantID, claims.UserID, body.Type, body.Name, nullableStr(body.Category), tagsStr, string(metadataJSON), 0,
 		).Scan(&assetID)
@@ -269,6 +283,12 @@ func (h *MediaHandler) ListFolders(w http.ResponseWriter, r *http.Request) {
 }
 
 // CreateFolder creates a folder asset.
+//
+// 支持长路径：`a/b/c` 会建出三层目录，而不是**一个**名字含斜杠的目录。
+//
+// 历史行为是把整串当成名字直接 INSERT —— 媒体库页面上于是出现一个点进去空空如也、
+// 名字还带 `a/b/c` 斜杠的怪条目，而用户以为自己建好了三层结构（2026-11-03 生产报告）。
+// 根因与文件侧的"长路径被压平"是同一个：路径在入口处没有被拆开。
 func (h *MediaHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 
@@ -280,17 +300,45 @@ func (h *MediaHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, ErrInvalidReq)
 		return
 	}
-	body.Name = strings.TrimSpace(body.Name)
-	if body.Name == "" {
-		BadRequest(w, "name is required")
+	segments, pathErr := splitFolderPath(body.Name)
+	if pathErr != nil {
+		BadRequest(w, pathErr.Error())
 		return
 	}
 
-	// 鍚岀骇閲嶅悕妫€鏌?
+	tenantID := claims.TenantID
+	tx, err := db.GlobalDBManager.Begin(r.Context())
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "begin transaction failed")
+		return
+	}
+	defer func() { _ = tx.Rollback(r.Context()) }()
+
+	// 前 N-1 段 get-or-create：路径里带的既有目录直接复用。
+	// 若这里也要求"必须不存在"，用户在高亮某目录后再输入完整路径就会莫名报错。
+	parentID, err := ensureFolderChain(
+		r.Context(), tx, tenantID, claims.UserID, body.ParentID, segments[:len(segments)-1])
+	if err != nil {
+		// 父目录不存在是**调用方的错**（400），不是我们的错（500）。
+		// 混成 500 会让前端只显示"服务器错误"，用户永远不知道该换个目录。
+		if errors.Is(err, errInvalidAssetPath) {
+			BadRequest(w, err.Error())
+			return
+		}
+		logAndRespond(w, err, http.StatusInternalServerError, "create folder chain failed")
+		return
+	}
+
+	// 末段必须**不存在**：这是"新建文件夹"的语义。
+	// 静默复用会让用户以为建了新目录，实际点到的是旧的那个（里面可能有别人的东西）。
+	leaf := segments[len(segments)-1]
+	// 同层重名检查同样要 COALESCE：根目录在库里可能是 NULL（会话创建路径的旧数据），
+	// 直接 `parent_id = $3` 会让"根目录下已存在同名文件夹"判断失效 ⇒ 允许创建重名，
+	// 而两者的 `parent_id` 一个 NULL 一个空串，之后任何按名查找都会命中两条。
 	var exists bool
-	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT EXISTS(SELECT 1 FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND parent_id=$3 AND name=$4)`,
-		claims.TenantID, claims.UserID, body.ParentID, body.Name).Scan(&exists); err != nil {
+	if err := tx.QueryRow(r.Context(),
+		`SELECT EXISTS(SELECT 1 FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND COALESCE(parent_id, '')=$3 AND name=$4)`,
+		tenantID, claims.UserID, parentID, leaf).Scan(&exists); err != nil {
 		InternalError(w, "check folder name")
 		return
 	}
@@ -299,15 +347,27 @@ func (h *MediaHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var id string
-	if err := db.GlobalDBManager.QueryRow(r.Context(),
+	var folderID string
+	if err := tx.QueryRow(r.Context(),
 		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, parent_id, created_at, updated_at)
 		 VALUES (gen_random_uuid(), $1, $2, 'folder', $3, $4, NOW(), NOW()) RETURNING id`,
-		claims.TenantID, claims.UserID, body.Name, body.ParentID).Scan(&id); err != nil {
+		tenantID, claims.UserID, leaf, parentID).Scan(&folderID); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create folder failed")
 		return
 	}
-	OK(w, map[string]string{"id": id, "name": body.Name, "type": "folder", "parent_id": body.ParentID})
+	if err := tx.Commit(r.Context()); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "commit failed")
+		return
+	}
+
+	OK(w, map[string]string{
+		"id":        folderID,
+		"name":      leaf,
+		"type":      "folder",
+		"parent_id": parentID,
+		// 回显规范化后的完整路径：调用方据此确认层级被正确理解。
+		"path": strings.Join(segments, "/"),
+	})
 }
 
 // 鈹€鈹€ Update (rename / move) 鈹€鈹€
@@ -352,6 +412,16 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 			BadRequest(w, "name cannot be empty")
 			return
 		}
+		// 重命名同样不许出现路径分隔符。
+		//
+		// `Update` 只改**这一项**的 name，不建层级；放行 `a/b` 会让库里多出一个
+		// 名字含斜杠的条目 —— 与"新建文件夹时整串被当名字"是同一个坑的另一半：
+		// 列表按 name 渲染，用户看到的东西与它点进去的层级对不上。
+		// 想调整层级请用 parent_id（移动），不要靠改名字。
+		if strings.ContainsAny(newName, "/\\") {
+			BadRequest(w, "name must not contain path separators; use parent_id to move the item")
+			return
+		}
 	}
 	newParent := curParent
 	if body.ParentID != nil {
@@ -384,7 +454,7 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 	if newName != curName || newParent != curParent {
 		var exists bool
 		if err := db.GlobalDBManager.QueryRow(r.Context(),
-			`SELECT EXISTS(SELECT 1 FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND parent_id=$3 AND name=$4 AND id<>$5)`,
+			`SELECT EXISTS(SELECT 1 FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND COALESCE(parent_id, '')=$3 AND name=$4 AND id<>$5)`,
 			claims.TenantID, claims.UserID, newParent, newName, id).Scan(&exists); err != nil {
 			InternalError(w, "check name conflict")
 			return
@@ -605,9 +675,14 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 // 鈹€鈹€ Shared helpers 鈹€鈹€
 
 // getChildren returns the child asset IDs for a given parent folder.
+//
+// `COALESCE(parent_id, '')` 与列表、重名检查、建链四处保持**同一个口径**。
+// 传具体 id 时 NULL 本来就不会误匹配，但"根目录下有哪些孩子"（parentID 为空）
+// 这种调用一旦出现，等值比较会静默返回空 —— 递归删除于是漏删整棵根级子树。
+// 一处口径不齐，就等一个不容易复现的现象。
 func (h *MediaHandler) getChildren(ctx context.Context, tenantID int16, userID, parentID string) ([]string, error) {
 	rows, err := db.GlobalDBManager.Query(ctx,
-		`SELECT id FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND parent_id=$3`,
+		`SELECT id FROM media_assets WHERE tenant_id=$1 AND user_id=$2 AND COALESCE(parent_id, '')=$3`,
 		tenantID, userID, parentID)
 	if err != nil {
 		return nil, err

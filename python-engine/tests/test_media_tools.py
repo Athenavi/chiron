@@ -24,6 +24,7 @@ from app.tools import media as media_mod
 from app.tools.media import (
     MAX_ASSET_BYTES,
     MAX_NAME_CHARS,
+    MAX_PATH_DEPTH,
     media_create,
 )
 
@@ -176,8 +177,64 @@ async def test_oversized_content_is_rejected_before_calling_the_library(monkeypa
 async def test_name_validation(library, store):
     assert "required" in (await media_create(name="  ", content="x"))["error"]
     assert "too long" in (await media_create(name="a" * (MAX_NAME_CHARS + 1), content="x"))["error"]
-    assert "path separators" in (await media_create(name="a/b.txt", content="x"))["error"]
+    # 反斜杠仍然是错的（同一条路径在 Windows/POSIX 会拆成两个目录）
+    assert "/" in (await media_create(name="a\\b.txt", content="x"))["error"]
+    # 绝对路径 / 尾随斜杠 / 穿越 / 空段 / 过深，各自给出可操作的错误
+    assert "relative" in (await media_create(name="/abs.txt", content="x"))["error"]
+    assert "folder" in (await media_create(name="dir/", content="x"))["error"]
+    assert "'..'" in (await media_create(name="../x.txt", content="x"))["error"]
+    assert "empty path segment" in (await media_create(name="a//b.txt", content="x"))["error"]
+    assert "nests" in (
+        await media_create(name="d/" * (MAX_PATH_DEPTH + 1) + "f.md", content="x")
+    )["error"]
     assert library == []
+
+
+@pytest.mark.asyncio
+async def test_long_path_creates_folder_hierarchy(library, store):
+    """`reports/2024/q3.md` 必须**带层级**落到媒体库，不能压平成 `q3.md`。
+
+    这是本次修复的核心回归：此前 `media_create` 直接拒绝带分隔符的名字
+    （"name must be a plain file name"），agent 产出的目录结构在工具层就被丢掉了。
+    """
+    result = await media_create(name="reports/2024/q3.md", content="# Q3")
+
+    assert result["stored_in"] == "library"
+    # 传给网关的是**完整路径** —— 层级信息必须一路带到落库那一步
+    assert library[0]["name"] == "reports/2024/q3.md"
+    # 类型仍按最后一段的扩展名推断，目录名不参与
+    assert library[0]["asset_type"] == "text"
+    assert library[0]["mime_type"] == "text/markdown"
+    assert store.list() == []
+
+
+@pytest.mark.asyncio
+async def test_directory_name_does_not_affect_type_inference(library, store):
+    """目录名里带 `.docx` 不该让一个 `.md` 被判定成文档。"""
+    result = await media_create(name="reports.docx/q3.md", content="# Q3")
+
+    assert result["type"] == "text"
+    assert library[0]["mime_type"] == "text/markdown"
+
+
+@pytest.mark.asyncio
+async def test_from_workspace_keeps_directory_hierarchy(library, store, tmp_path, monkeypatch):
+    """`from_workspace` 兜底推断名字时**必须保留目录层级**。
+
+    原先用 `Path(rel).name` 只取 basename：`from_workspace="reports/q3.md"` 会落成
+    根目录下的 `q3.md`，工作区里建好的结构在"发布"这一步被抹平。
+    """
+    from app.tools import sandbox
+
+    workspace = tmp_path / "ws"
+    (workspace / "reports").mkdir(parents=True)
+    (workspace / "reports" / "q3.md").write_text("# Q3", encoding="utf-8")
+    monkeypatch.setattr(sandbox, "workspace_dir", lambda: workspace)
+
+    result = await media_create(name="", from_workspace="reports/q3.md")
+
+    assert result["stored_in"] == "library"
+    assert library[0]["name"] == "reports/q3.md"
 
 
 @pytest.mark.asyncio
