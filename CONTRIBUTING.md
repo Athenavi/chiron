@@ -166,6 +166,7 @@ ruff check scripts/                          # 仓库根脚本（配置见仓库
 python scripts/check_doc_links.py            # **只扫 .md**：被引用的文档与相对 .md 链接都必须存在（存量走基线，新增即失败）
 python scripts/check_md_tables.py            # Markdown 表格列数必须一致（存量走基线，新增即失败）
 python scripts/check_error_code_keys.py      # Go `Code*` ↔ 三语言 `errors.ts` 契约键必须一致，且三语言键集相同
+python scripts/check_comment_hygiene.py --strict  # **只看本次改动的行**：分隔装饰线 / 无主 TODO 判失败，长注释告警（顶层文档注释豁免）
 python scripts/check_compose_env.py          # compose 里 `${VAR:?…}` 声明的**必填**变量必须在 `.env.example` 出现（注释形态也算）
 ```
 
@@ -226,6 +227,7 @@ POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
 | `check_source_encoding.py` | U+FFFD、非法 UTF-8、**UTF-8 BOM**（BOM 会让 Dockerfile/Makefile 首行失效） |
 | `check_error_code_keys.py` | Go `Code*` 与三语言 `errors.ts` 键集不一致（只有该语言的用户会看到未本地化原文） |
 | `check_compose_env.py` | compose 的必填变量没写进 `.env.example` |
+| `check_comment_hygiene.py` | **本次改动新增行**里的分隔装饰线与无主 TODO（长注释只告警，顶层文档注释豁免） |
 | `check-i18n.mjs` / `check-i18n-keys.mjs` | 前端新增硬编码中文、三语言键集不对齐 |
 | `check-a11y.mjs` | 非交互元素绑 `@click` 却不带 role（键盘不可达） |
 | `check-theme-token-*.mjs` / `check-motion-tokens.mjs` / `check-z-index-tokens.mjs` | 硬编码颜色、主题/动效/z-index token 漂移 |

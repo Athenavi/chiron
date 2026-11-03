@@ -22,6 +22,7 @@ import { listKnowledgeBases, listPlugins, listSkillResources, listWorkflows } fr
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import SkillMarketCard from '../components/SkillMarketCard.vue'
+import SuperAgentPanel from '../components/agent/SuperAgentPanel.vue'
 import ToolPicker from '../components/agent/ToolPicker.vue'
 import SaveToKnowledgeDialog from '../components/chat/SaveToKnowledgeDialog.vue'
 import { setChatPrefill } from '../components/chat/chatPrefill'
@@ -799,6 +800,14 @@ function toolCount(a: Agent): number {
             </Button>
           </div>
         </div>
+      </TabPane>
+
+      <!-- ── Tab 4：Super-agent 接管 ── -->
+      <TabPane
+        key="superagent"
+        :tab="$t('agent.superagent_title')"
+      >
+        <SuperAgentPanel />
       </TabPane>
     </Tabs>
 

@@ -436,6 +436,12 @@ func NewGatewayRouter(
 
 	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg, fileStore)
 	registerAgentRoutes(mux, authMW, rlMW, publicMW, sanitizeMW, submitHandler, billingMgr, agentSem, tenantResMgr, eventHub, sessionMgr, authenticator, rpaHub, cfg.InternalToken, cfg.AgentSubmitTimeout, pythonClient)
+	registerSuperAgentRoutes(mux, authMW, rlMW, NewSuperAgentHandler(sessionMgr, eventHub))
+
+	// 接管驱动：每个副本各跑一个循环，靠行级租约收敛到单执行者（见 superagent_driver.go）。
+	// 必须在 submitHandler 之后启动：驱动要复用它拉起回合，才能与用户提交走同一套
+	// 落库/推送/计费闸门。
+	StartSuperAgentDriver(lifecycleCtx, submitHandler, sessionMgr, agentSem, tenantResMgr, eventHub, cfg.AgentSubmitTimeout)
 
 	// 子 Agent 完成 → 父会话新一轮：由引擎队列（agent_followup 任务）调用，
 	// 复用 /submit 的全套闸门（幂等/会话锁/并发/计费预检，见 agent_followup.go）。

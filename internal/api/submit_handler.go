@@ -442,12 +442,19 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	if _, ok := workbenchCtx[GoalEnforceKey]; ok {
 		msgSource = GoalEnforceSource
 	}
+	// Super-agent 接管巡检轮：不带标记的话，用户回来看到一串"自己发的"指令，
+	// 会以为自己梦游发过这些消息 —— 而这正是要显著区分开的那类产出。
+	if _, ok := workbenchCtx[TakeoverKey]; ok {
+		msgSource = TakeoverSource
+	}
 	// S 修复：上下文丢失 — 提交时立即持久化用户消息（SSE 中断/停止也不丢历史）
 	{
 		sctx, cancelStore := storeCtxFor()
 		h.sessionMgr.SaveUserMessage(sctx, sessionID, userID, content, turnID, msgSource)
 		if turnID != "" {
-			h.sessionMgr.CreateTurn(sctx, turnID, sessionID, userID)
+			// origin 与 msgSource 同源：接管巡检轮的整个回合（含助手回复）都要能被
+			// 认出来，不能只在注入的那条 user 消息上打标记。
+			h.sessionMgr.CreateTurn(sctx, turnID, sessionID, userID, msgSource)
 		}
 		cancelStore()
 	}

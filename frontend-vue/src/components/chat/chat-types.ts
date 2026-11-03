@@ -82,6 +82,12 @@ export interface TextItem extends ChatItemBase {
    */
   source?: string
   /**
+   * 所属**回合**的发起来源（后端 turns.origin）：'superagent_takeover' = 接管巡检。
+   * 与 `source` 的区别：source 标的是某条被注入的消息，origin 标的是整轮 ——
+   * 助手回复同样属于这次接管，也要在会话里能被认出来。
+   */
+  origin?: string
+  /**
    * 引擎侧附加信息（知识库引用 / 工作流来源 / trace_id 等），驱动 `MessageItem` 的
    * 反向定位 chips。仅部分链路有：python-engine 的 unified_executor 会带
    * （app/api/unified_executor.py:416），Go 网关的 conversation.Message 没有该字段。
@@ -233,6 +239,8 @@ export interface HistoryMessage {
   error?: unknown
   /** 来源（'subagent_followup' = 子 Agent 自动轮注入），缺了它徽标不渲染 */
   source?: string
+  /** 所属回合的发起来源（turns.origin，'superagent_takeover' = 接管巡检） */
+  origin?: string
 }
 
 /**

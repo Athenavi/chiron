@@ -744,6 +744,21 @@ onUpdated(enhanceContent)
         >
           {{ $t('workflow.subtask_complete_main_agent_auto_summarizes') }}
         </div>
+        <!-- Super-agent 接管期间产生的回合，分两种位置标记，避免一轮里重复出现：
+             - 注入的巡检指令（messages.source）标在用户消息上
+             - 该轮的实际产出（turns.origin）标在助手回复上 —— 这才是用户要认出来的东西 -->
+        <div
+          v-if="item.kind === 'text' && item.role === 'user' && (item as TextItem).source === 'superagent_takeover'"
+          class="takeover-badge"
+        >
+          {{ $t('workflow.superagent_takeover_prompt') }}
+        </div>
+        <div
+          v-if="item.kind === 'text' && item.role === 'assistant' && (item as TextItem).origin === 'superagent_takeover'"
+          class="takeover-badge"
+        >
+          {{ $t('workflow.superagent_takeover_turn') }}
+        </div>
         <!-- 反向定位：来源工作台 chips（kb_id / workflow_id / agent_id，metadata 驱动） -->
         <div
           v-if="item.role === 'assistant' && sourceChips.length"
@@ -1269,6 +1284,14 @@ onUpdated(enhanceContent)
   margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
   color: var(--text-tertiary); background: var(--bg-code);
   border: var(--hairline-width) solid var(--border-subtle); border-radius: var(--sig-radius-button);
+}
+/* Super-agent 接管轮标记（后端 turns.origin）：比 followup 更显眼，
+   因为这类回合会持续产生费用，用户必须一眼看出产出不是自己发起的 */
+.takeover-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
+  color: var(--primary); background: var(--primary-bg);
+  border: var(--hairline-width) solid var(--primary); border-radius: var(--sig-radius-button);
 }
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;

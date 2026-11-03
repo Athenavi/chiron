@@ -54,6 +54,56 @@ func handleReadiness(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
+// errNotSessionOwner 表示请求者不是该会话的主人（取消/接管都要拦）。
+var errNotSessionOwner = errors.New("session does not belong to the current user")
+
+// cancelSessionRun 是"取消某会话正在跑的一轮"的唯一实现。
+//
+// /v1/agent/cancel 与 super-agent 打断共用它，避免两条路径的归属校验口径漂移 ——
+// 取消是"从外部作用于正在运行的 agent 循环"，归属判断错一次就是跨用户 DoS。
+// 返回值是给前端的状态词，HTTP 码由调用方决定。
+func cancelSessionRun(ctx context.Context, sessionMgr *session.Manager, sessionID, userID string) (string, error) {
+	if v, ok := sessionCancels.Load(sessionID); ok {
+		sc := v.(*sessionCancel)
+		if sc.userID != userID {
+			return "", errNotSessionOwner
+		}
+		// 原子认领：期间若条目已被替换/删除（run 已结束或被新 run 接管），就不取消。
+		if !sessionCancels.CompareAndDelete(sessionID, v) {
+			return "no_active_task", nil
+		}
+		// 用户**显式**停止：先告知子 Agent（父回合的取消不连带取消它们），再取消本地 ctx。
+		if err := BroadcastSubagentSessionCancel(ctx, sessionID, "parent"); err != nil {
+			slog.Warn("subagent session cancel broadcast failed",
+				"session_id", sessionID, "error", err)
+		}
+		sc.cancel()
+		slog.Info("session cancelled", "session_id", sessionID)
+		return "cancelled", nil
+	}
+
+	// 本实例没有该会话的活动任务：可能跑在别的副本上，需要广播。
+	// 广播载荷里只有 sessionID（给子 Agent 的那条更不带身份），接收端无从验证 ——
+	// 因此必须在这里先校验归属，否则任何登录用户拿到 sessionID 就能取消别人的运行。
+	if sessionMgr != nil {
+		sess, sessErr := sessionMgr.GetSession(ctx, sessionID)
+		if sessErr != nil {
+			if !errors.Is(sessErr, session.ErrSessionNotFound) {
+				return "", sessErr
+			}
+			// 会话不存在 ⇒ 没有可取消的任务，也不广播（否则所有副本都去找一个不存在的会话）
+			return "no_active_task", nil
+		}
+		if sess == nil || sess.UserID != userID {
+			return "", errNotSessionOwner
+		}
+	}
+	if err := CancelSessionBroadcast(ctx, sessionID, userID); err == nil {
+		return "cancel_requested", nil
+	}
+	return "no_active_task", nil
+}
+
 func handleCancel(w http.ResponseWriter, r *http.Request, sessionMgr *session.Manager) {
 	sessionID := r.URL.Query().Get("session_id")
 	if sessionID == "" {
@@ -65,55 +115,14 @@ func handleCancel(w http.ResponseWriter, r *http.Request, sessionMgr *session.Ma
 		Unauthorized(w, ErrAuthRequired)
 		return
 	}
-	if v, ok := sessionCancels.Load(sessionID); ok {
-		sc := v.(*sessionCancel)
-		if sc.userID != claims.UserID {
-			// 不动别人的条目（不要 LoadAndDelete + Store：那会有一段"条目不在"的窗口，
-			// 期间属主自己的取消会落到广播分支而**取消不到本地这个正在跑的任务**）
-			Forbidden(w, "not your session")
-			return
-		}
-		// 原子认领：期间若条目已被替换/删除（run 已结束或被新 run 接管），就不取消。
-		if !sessionCancels.CompareAndDelete(sessionID, v) {
-			OK(w, map[string]string{"status": "no_active_task", "session_id": sessionID})
-			return
-		}
-		// 用户**显式**停止：先告知子 Agent（父回合的取消本身不再连带取消它们，
-		// 见 BroadcastSubagentSessionCancel 的说明），再取消本地 ctx 结束事件流。
-		if err := BroadcastSubagentSessionCancel(r.Context(), sessionID, "parent"); err != nil {
-			slog.Warn("subagent session cancel broadcast failed",
-				"session_id", sessionID, "error", err)
-		}
-		sc.cancel()
-		slog.Info("session cancelled", "session_id", sessionID)
-		OK(w, map[string]string{"status": "cancelled", "session_id": sessionID})
-	} else {
-		// 本实例没有该 session 的活动任务：任务可能跑在别的副本上，需要广播。
-		//
-		// ⚠️ 广播前**必须**先校验归属：载荷里只有 sessionID（给子 Agent 的那条更是完全不带
-		// 身份），接收端无从验证 —— 不校验就等于任何登录用户拿着 sessionID 就能取消别人的
-		// 运行（跨租户 DoS）。口径与 /submit 的 IDOR 校验一致。
-		if sessionMgr != nil {
-			sess, sessErr := sessionMgr.GetSession(r.Context(), sessionID)
-			if sessErr != nil {
-				if !errors.Is(sessErr, session.ErrSessionNotFound) {
-					InternalError(w, "session check failed")
-					return
-				}
-				// 会话不存在 ⇒ 没有可取消的任务，也不广播（否则所有副本都去找一个不存在的会话）
-				OK(w, map[string]string{"status": "no_active_task", "session_id": sessionID})
-				return
-			}
-			if sess == nil || sess.UserID != claims.UserID {
-				Forbidden(w, "session does not belong to the current user")
-				return
-			}
-		}
-		// 本实例无该 session 任务：广播取消到其它网关实例（跨实例协调）
-		if err := CancelSessionBroadcast(r.Context(), sessionID, claims.UserID); err == nil {
-			OK(w, map[string]string{"status": "cancel_requested", "session_id": sessionID})
-			return
-		}
-		OK(w, map[string]string{"status": "no_active_task", "session_id": sessionID})
+	status, err := cancelSessionRun(r.Context(), sessionMgr, sessionID, claims.UserID)
+	switch {
+	case errors.Is(err, errNotSessionOwner):
+		Forbidden(w, "session does not belong to the current user")
+		return
+	case err != nil:
+		InternalError(w, "session check failed")
+		return
 	}
+	OK(w, map[string]string{"status": status, "session_id": sessionID})
 }

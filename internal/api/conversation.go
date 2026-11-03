@@ -65,7 +65,11 @@ type Message struct {
 	TurnID string `json:"turn_id,omitempty"`
 	// Source 消息来源：空 = 用户手动输入；"subagent_followup" = 子 Agent 自动轮注入。
 	// 前端据它在用户气泡下加来源徽标，避免被误认成用户自己发的提问。
-	Source    string    `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Origin 是所属**回合**的发起方（turns.origin）：空 = 用户手动；
+	// "superagent_takeover" = 接管巡检。一个回合只有一条注入消息，但该回合的助手回复
+	// 也属于这次接管 —— 标在回合上才能让整轮都被认出来。
+	Origin    string    `json:"origin,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 
@@ -300,6 +304,7 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 			ToolCalls: m.ToolCalls, // S 修复：assistant 消息的 tool_calls 随详情返回
 			TurnID:    m.TurnID,
 			Source:    m.Source,
+			Origin:    m.Origin,
 			CreatedAt: m.CreatedAt,
 		})
 	}

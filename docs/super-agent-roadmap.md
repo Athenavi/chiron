@@ -130,7 +130,7 @@
 | 无状态计算 + DB 存 Session | 已是架构基线 | **有** |
 | 隔离执行环境 | `sandbox-service`（受限容器） | **部分** |
 | 判定/执行分信任域 | `tool_broker` + `guardian` | **有** |
-| 端侧无权 daemon / BYOM | `local|cloud` 二选一一体栈 | **缺**（形态不同） |
+| 端侧无权 daemon / BYOM | `local` / `cloud` 二选一一体栈 | **缺**（形态不同） |
 | Watchdog（语义级进展判断） | 只有 `loop_guard`/`recovery`/reconciler | **部分** |
 
 ## 4. 开发方向
@@ -226,7 +226,12 @@
   {
     "enabled": false,
     "session_ids": ["<session_id>", "..."],
-    "window": { "kind": "countdown", "duration_seconds": 3600 },
+    "window": {
+      "kind": "countdown",
+      "duration_seconds": 3600,
+      "tick_seconds": 180,
+      "max_rounds": 0
+    },
     "budget": { "token_cap": 200000 }
   }
   ```
@@ -237,6 +242,16 @@
     `duration_seconds` 长的窗口。表达式语法仍用 `robfig/cron`（与
     `internal/api/cron_scheduler.go` 的 `cron.WithLocation(time.UTC)` 同一实现、同一时区口径），
     但**任务记录与 CRUD 入口独立**，不复用 `/v1/admin/cron-jobs`。
+
+  `window.tick_seconds` 是**节拍**：两拍之间隔多久。默认 `180`（3 分钟），
+  可配置，取值限制在 `60..3600`。定这个默认值的依据是接管的价值在"周期性推进"而非
+  "毫秒级响应"；比 3 分钟更密只会让账单涨得快，而不改变推进结果。
+
+  `window.max_rounds` 是**单窗口回合数硬上限**，默认 `0` 表示不设限（已拍板）。
+  它与 `budget.token_cap` 互补而非重复：token 预算防"单轮很贵"，轮数上限防
+  "每轮都很便宜但轮数很多"。默认不限的理由是费用已有 `token_cap` 兜底，
+  再叠一个默认生效的上限会让"窗口还没到点就停"变成用户难以解释的行为 ——
+  想收紧的人可以显式配置。
 
   **默认值 `enabled: false`**，且读侧必须把"字段缺失 / 解析失败 / Redis 与 DB 都读不到"
   一律当 `false` —— 这是 fail-closed，与仓库对 `read_only` MCP、SSRF 判定的一贯口径一致。

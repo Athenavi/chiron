@@ -36,7 +36,10 @@ type CronScheduler struct {
 	mu      sync.Mutex
 	cron    *cron.Cron
 	entries map[string]cronEntry
-	python  *engine.PythonClient
+	// saEntries 是用户级 Super-agent 定时任务（superagent_schedules）的注册表，
+	// 与 entries 分开存：两张表的 id 空间各自独立，混在一个 map 里会互相顶掉。
+	saEntries map[string]cronEntry
+	python    *engine.PythonClient
 }
 
 // cronSchedulerPython 供 Webhook/手动触发复用执行器（StartCronScheduler 时注入）。
@@ -54,9 +57,10 @@ type jobRow struct {
 // StartCronScheduler 启动调度器（goroutine 内运行）。
 func StartCronScheduler(ctx context.Context, python *engine.PythonClient) {
 	s := &CronScheduler{
-		cron:    cron.New(cron.WithLocation(time.UTC)), // 各网关实例调度基准统一 UTC（租约防重不变）
-		entries: map[string]cronEntry{},
-		python:  python,
+		cron:      cron.New(cron.WithLocation(time.UTC)), // 各网关实例调度基准统一 UTC（租约防重不变）
+		entries:   map[string]cronEntry{},
+		saEntries: map[string]cronEntry{},
+		python:    python,
 	}
 	cronSchedulerPython = python
 	s.cron.Start()
@@ -71,6 +75,7 @@ func (s *CronScheduler) syncLoop(ctx context.Context) {
 	// 终止整个进程（不是只停这个循环），而所有副本读的是同一份 cron_jobs ——
 	// 一条必然触发的坏数据就等于全平台 CrashLoop。这里把它降级为"本轮失败"。
 	runBackgroundCycle("cron-sync", s.sync)
+	runBackgroundCycle("superagent-schedule-sync", s.syncSchedules)
 	for {
 		select {
 		case <-ctx.Done():
@@ -78,6 +83,8 @@ func (s *CronScheduler) syncLoop(ctx context.Context) {
 			return
 		case <-ticker.C:
 			runBackgroundCycle("cron-sync", s.sync)
+			// 用户级定时任务与平台 cron 各自独立扫描：一张表坏掉不该拖停另一张。
+			runBackgroundCycle("superagent-schedule-sync", s.syncSchedules)
 		}
 	}
 }
@@ -135,6 +142,68 @@ func (s *CronScheduler) sync() {
 		}
 		s.entries[id] = cronEntry{eid: eid, schedule: j.Schedule}
 		slog.Info("cron job registered", "job", j.Name, "schedule", j.Schedule)
+	}
+}
+
+// syncSchedules 把启用的用户级定时任务同步进同一个 cron 实例。
+//
+// 与 sync 分成两个方法而不是合并查询：两张表用途不同（平台维护 vs 个人接管），
+// 一张表坏了不该让另一张的调度也跟着停摆。
+func (s *CronScheduler) syncSchedules() {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	rows, err := db.GlobalDBManager.Query(ctx, `
+		SELECT id, tenant_id, user_id, COALESCE(name, ''), schedule, window_seconds,
+		       session_ids::text, enabled
+		  FROM superagent_schedules WHERE enabled = true`)
+	if err != nil {
+		slog.Warn("super-agent schedule sync failed", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	jobs := map[string]scheduleRow{}
+	for rows.Next() {
+		var j scheduleRow
+		var idsJSON string
+		if rows.Scan(&j.ID, &j.TenantID, &j.UserID, &j.Name, &j.Schedule,
+			&j.WindowSeconds, &idsJSON, &j.Enabled) != nil {
+			continue
+		}
+		if json.Unmarshal([]byte(idsJSON), &j.SessionIDs) != nil || len(j.SessionIDs) == 0 {
+			// 用户把会话删了不该留下一个每次都空跑的任务；跳过并留痕。
+			slog.Warn("super-agent schedule skipped: no usable session_ids", "id", j.ID)
+			continue
+		}
+		jobs[j.ID] = j
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for id, e := range s.saEntries {
+		if j, ok := jobs[id]; !ok || j.Schedule != e.schedule {
+			s.cron.Remove(e.eid)
+			delete(s.saEntries, id)
+		}
+	}
+	for id, j := range jobs {
+		if e, ok := s.saEntries[id]; ok && e.schedule == j.Schedule {
+			continue
+		}
+		j := j
+		eid, err := s.cron.AddFunc(j.Schedule, func() {
+			runBackgroundCycle("super-agent-schedule:"+j.ID, func() {
+				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
+				defer cancel()
+				s.executeSchedule(ctx, j)
+			})
+		})
+		if err != nil {
+			slog.Warn("super-agent schedule register failed", "id", j.ID, "schedule", j.Schedule, "error", err)
+			continue
+		}
+		s.saEntries[id] = cronEntry{eid: eid, schedule: j.Schedule}
+		slog.Info("super-agent schedule registered", "id", j.ID, "schedule", j.Schedule)
 	}
 }
 

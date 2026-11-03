@@ -60,7 +60,10 @@ type Message struct {
 	TurnID string `json:"turn_id,omitempty"`
 	// Source 标记消息来源：空 = 用户正常输入；"subagent_followup" = 子 Agent 自动轮注入
 	// （见 internal/api/agent_followup.go）。前端据此渲染成系统卡片而非用户气泡。
-	Source    string    `json:"source,omitempty"`
+	Source string `json:"source,omitempty"`
+	// Origin 是所属**回合**的发起来源（turns.origin）：空 = 用户手动；
+	// "superagent_takeover" = 接管巡检。与 Source 的区别见 CreateTurn 的注释。
+	Origin    string    `json:"origin,omitempty"`
 	CreatedAt time.Time `json:"created_at"`
 }
 

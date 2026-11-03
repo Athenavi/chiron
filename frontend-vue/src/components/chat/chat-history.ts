@@ -164,6 +164,7 @@ export function mergeHistory(
           turnId,
           // 透传来源标记，否则刷新后自动注入的消息会被渲染成用户自己的提问
           ...(m.source ? { source: m.source } : {}),
+          ...(m.origin ? { origin: m.origin } : {}),
         })
       } else {
         const { reasoning, body } = splitThinking(content, { loose: true })
@@ -178,6 +179,9 @@ export function mergeHistory(
             time: clock,
             id: m.id,
             turnId,
+            // 接管巡检轮：助手回复同样属于这次接管，标出来避免与用户亲自发起的
+            // 回合混在一起（后端 turns.origin）
+            ...(m.origin ? { origin: m.origin } : {}),
             metadata: normalizeMeta(m.metadata),
           })
         }

@@ -219,7 +219,11 @@ func pgUUIDOrNil(v string) *string {
 // CreateTurn 记录一次回合的开始（000.md 第 14 条）：turns.created -> running。
 // turnID 由调用方生成并贯穿该回合的消息/工具调用/计费落库，便于幂等与故障排查。
 // 会话不存在时先补建（与 SaveUserMessage 相同的 upsert），避免 FK 失败。
-func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID string) {
+//
+// origin 记录这一轮由谁发起（"" = 用户手动；"superagent_takeover" = 接管巡检等）。
+// 标在回合而不是消息上：一个回合可能落多条消息，但"这一轮是谁发起的"只属于
+// 回合本身；messages.source 描述的是某条被注入的消息。
+func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID, origin string) {
 	if m.pool == nil || turnID == "" || sessionID == "" {
 		return
 	}
@@ -227,10 +231,19 @@ func (m *Manager) CreateTurn(ctx context.Context, turnID, sessionID, userID stri
 		slog.Error("ensure session for turn", "session", sessionID, "error", ensureErr)
 	}
 	_, err := m.pool.Exec(ctx,
-		`INSERT INTO turns (id, session_id, user_id, status, started_at, created_at)
-		 VALUES ($1, $2, $3, 'running', NOW(), NOW())
+		`INSERT INTO turns (id, session_id, user_id, status, started_at, created_at, origin)
+		 VALUES ($1, $2, $3, 'running', NOW(), NOW(), $4)
 		 ON CONFLICT (id) DO UPDATE SET status = 'running', started_at = NOW()`,
-		turnID, pgUUIDOrNil(sessionID), pgUUIDOrNil(userID))
+		turnID, pgUUIDOrNil(sessionID), pgUUIDOrNil(userID), origin)
+	if isMissingColumn(err, "origin") {
+		// 迁移尚未执行（turns.origin 不存在）时退化为旧写入：回合状态绝不能因为
+		// 一个标记字段而丢失 —— 丢了就等于这一轮在历史里没有起点。
+		_, err = m.pool.Exec(ctx,
+			`INSERT INTO turns (id, session_id, user_id, status, started_at, created_at)
+			 VALUES ($1, $2, $3, 'running', NOW(), NOW())
+			 ON CONFLICT (id) DO UPDATE SET status = 'running', started_at = NOW()`,
+			turnID, pgUUIDOrNil(sessionID), pgUUIDOrNil(userID))
+	}
 	if err != nil {
 		// 回合状态写失败不阻断对话（SSE 照常），但必须可见（不再静默）
 		slog.Error("create turn", "turn", turnID, "session", sessionID, "error", err)

@@ -319,7 +319,11 @@ jobs:
     name: Source encoding
     runs-on: ubuntu-latest
     steps:
+      # fetch-depth: 0 是注释卫生守卫的前提：它按"本次改动的行"判定，
+      # 浅克隆（默认只取 1 层）拿不到 base 提交，diff 会失败。
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.14'
@@ -353,6 +357,14 @@ jobs:
         run: |
           pip install --quiet 'ruff>=0.11.0'
           ruff check scripts/
+      # 注释卫生：**只查本次改动新增的行**，存量不碰 —— 否则一次清理就会变成
+      # "改动即红"，护栏随即被关掉。error 级（分隔装饰线、无主 TODO）直接失败；
+      # 长注释只 warn（顶层的模块/导出符号文档注释已豁免，那是 go doc 要读的）。
+      # base 取 PR 的 base.sha 或 push 的 before，脚本内对孤儿提交有回退。
+      - name: Comment hygiene (changed lines only)
+        env:
+          COMMENT_HYGIENE_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python scripts/check_comment_hygiene.py --strict
       # 文档断链：Markdown 里被引用的文档必须存在。曾一次扫出 19 份**从未提交过**的设计文档
       # （注释里写着"见某份设计文档"，读者去找只会扑空）。**只扫 git 跟踪的 `.md`**：
       # 代码里的 'docs/xxx.md' 多是工具参数示例，扫进来只会误报。存量走基线白名单

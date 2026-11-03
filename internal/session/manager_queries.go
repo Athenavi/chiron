@@ -102,7 +102,62 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	if len(msgs) > 0 {
 		page.Cursor = strconv.FormatInt(seqs[0], 10) + "|" + msgs[0].ID
 	}
+	m.attachTurnOrigins(ctx, msgs)
 	return page, nil
+}
+
+// attachTurnOrigins 回填每条消息所属回合的发起来源（turns.origin）。
+//
+// 用一次批量补查而不是在主查询里 JOIN turns：主查询的 ORDER BY 用的是不带表名的
+// seq/created_at，JOIN 后同名列会变成歧义引用，排序与索引选择都可能退化。
+// 这里沿用 ParentTitles 的做法 —— 一次覆盖整页，不碰主查询。
+//
+// 查不到就留空（= 用户手动发起）：标记字段缺失只是少一个徽标，
+// 不值得让整段对话历史失败。
+func (m *Manager) attachTurnOrigins(ctx context.Context, msgs []model.Message) {
+	turnIDs := make([]string, 0, len(msgs))
+	seen := make(map[string]bool, len(msgs))
+	for _, msg := range msgs {
+		if msg.TurnID == "" || seen[msg.TurnID] {
+			continue
+		}
+		seen[msg.TurnID] = true
+		turnIDs = append(turnIDs, msg.TurnID)
+	}
+	if len(turnIDs) == 0 {
+		return
+	}
+
+	rows, err := m.pool.Query(ctx,
+		`SELECT id::text, COALESCE(origin, '')
+		   FROM turns WHERE id::text = ANY($1::text[])`, turnIDs)
+	if isMissingColumn(err, "origin") {
+		// 迁移尚未执行（turns.origin 不存在）：没有标记可回填，历史照常返回。
+		return
+	}
+	if err != nil {
+		slog.Warn("query turn origins", "error", err)
+		return
+	}
+	defer rows.Close()
+
+	origins := make(map[string]string, len(turnIDs))
+	for rows.Next() {
+		var id, origin string
+		if err := rows.Scan(&id, &origin); err != nil {
+			slog.Warn("scan turn origin row", "error", err)
+			continue
+		}
+		if origin != "" {
+			origins[id] = origin
+		}
+	}
+	if len(origins) == 0 {
+		return
+	}
+	for i := range msgs {
+		msgs[i].Origin = origins[msgs[i].TurnID]
+	}
 }
 
 // ForkPoint 是「自定义分叉」选点用的一条消息。

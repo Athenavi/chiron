@@ -39,6 +39,8 @@ import { useTranscriptSearch } from '../composables/useTranscriptSearch'
 import { useTodoPanel } from '../composables/useTodoPanel'
 import { boardFromHistory } from '../components/chat/todoProjection'
 import TodoPanel from '../components/chat/TodoPanel.vue'
+import TakeoverOverlay from '../components/chat/TakeoverOverlay.vue'
+import { getSuperAgentSnapshot, stopTakeover, type Takeover } from '../api/superagent'
 import { useSessionMeta } from '../composables/useSessionMeta'
 import { useMessageFailure } from '../composables/useMessageFailure'
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
@@ -1261,7 +1263,7 @@ function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
   ;(list || []).forEach((raw, idx) => {
     const m = (raw ?? {}) as {
       role?: unknown; content?: unknown; timestamp?: unknown
-      created_at?: unknown; source?: unknown; metadata?: unknown
+      created_at?: unknown; source?: unknown; origin?: unknown; metadata?: unknown
     }
     if (m.role !== 'user' && m.role !== 'assistant') return
     const content = typeof m.content === 'string' ? m.content : ''
@@ -1274,6 +1276,8 @@ function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
         // 来源标记（'subagent_followup' = 子 Agent 自动轮）：带上它，刷新后仍渲染成
         // 系统提示而不是用户气泡（见 internal/api/agent_followup.go）
         ...(typeof m.source === 'string' && m.source ? { source: m.source } : {}),
+        // 回合来源（'superagent_takeover' = 接管巡检）：整轮都要能被认出来
+        ...(typeof m.origin === 'string' && m.origin ? { origin: m.origin } : {}),
       })
     } else {
       const { reasoning, body } = splitThinking(content, { loose: true })
@@ -1281,6 +1285,7 @@ function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
       if (body) {
         out.push({
           kind: 'text', role: 'assistant', content: body, time, id: `uni_a_${idx}`,
+          ...(typeof m.origin === 'string' && m.origin ? { origin: m.origin } : {}),
           metadata: normalizeMeta(m.metadata),
         })
         const meta = normalizeMeta(m.metadata) || {}
@@ -1522,6 +1527,55 @@ function ensureSubagentStream() {
 }
 
 watch(activeSessionId, () => { ensureSubagentStream() }, { immediate: true })
+
+// ── Super-agent 接管态 ──
+// 快照优先、SSE 只做增量：接管态不属于本轮的 token 流，刷新页面后只能靠快照对齐。
+// 遮罩的唯一数据源是这里的 `takeover`，SSE 只负责触发"重拉一次快照"。
+const takeover = ref<Takeover | null>(null)
+const takeoverActive = computed(() => !!takeover.value)
+
+async function refreshTakeover(sid: string) {
+  if (!sid) {
+    takeover.value = null
+    return
+  }
+  try {
+    const snap = await getSuperAgentSnapshot(sid)
+    takeover.value = snap.takeovers.find((t) => t.session_id === sid) ?? null
+  } catch {
+    // 快照失败不撤遮罩：把"取不到状态"当成"没有接管"会让用户以为可以输入了，
+    // 而此刻自动回合可能正在跑。宁可多挡一会儿，等下一次事件或轮询收口。
+  }
+}
+
+watch(activeSessionId, (sid) => { void refreshTakeover(sid) }, { immediate: true })
+
+// 没有长连接时（用户只是打开页面、没在发消息）收不到 SSE，遮罩会一直停在旧状态。
+// 低频轮询只读快照，60s 一次，成本可忽略；有 SSE 时它只是兜底。
+let takeoverPoll: number | undefined
+onMounted(() => {
+  takeoverPoll = window.setInterval(() => {
+    if (document.visibilityState === 'visible') void refreshTakeover(activeSessionId.value)
+  }, 60000)
+})
+onUnmounted(() => {
+  if (takeoverPoll) window.clearInterval(takeoverPoll)
+})
+
+async function onStopTakeover(id: string) {
+  if (!takeover.value) return
+  // 乐观置 stopping：请求往返期间按钮必须禁用，否则连点会重复打断同一回合。
+  const prev = takeover.value
+  takeover.value = { ...prev, status: 'stopping' }
+  try {
+    await stopTakeover(id)
+    // 不在这里清空遮罩：终态由驱动循环广播的 ended 事件收口。
+    // 提前撤掉会让用户以为回合已经停了，而它可能还在跑。
+  } catch {
+    takeover.value = prev
+    notify.error(t('errors.request_failed_2'))
+  }
+}
 
 function onTrajectoryFocus(index: number) {
   trajectoryFocus.value = index
@@ -2412,6 +2466,10 @@ function onSSEMessage(raw: unknown, sid: string) {
     } else {
       notify.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
     }
+  } else if (typeof type === 'string' && type.startsWith('superagent.')) {
+    // 接管态变化只触发一次快照重拉，事件本身不当数据用：
+    // 快照才是权威来源，事件只负责"该对齐了"这个信号。
+    void refreshTakeover(sid)
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
     // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
@@ -3085,6 +3143,7 @@ function continueGeneration() {
 
       <ChatInput
         ref="chatInputRef"
+        :disabled="takeoverActive"
         :loading="loading"
         :mode="mode"
         :mode-options="modeOptions"
@@ -3207,6 +3266,15 @@ function continueGeneration() {
           </p>
         </div>
       </Modal>
+
+      <!-- 接管遮罩：盖住整个内容区（含输入区），挡住一切手动输入。
+           为什么必须挡输入而不只是提示：手动提交与自动回合抢同一把会话锁，
+           两者并发会让"这条消息到底属于谁的一轮"变得不可解释。 -->
+      <TakeoverOverlay
+        v-if="takeover"
+        :takeover="takeover"
+        @stop="onStopTakeover"
+      />
     </div>
 
     <!-- 侧面板 -->
@@ -3385,7 +3453,7 @@ function continueGeneration() {
 
 <style scoped>
 .chat-layout { position: relative; display: flex; height: 100%; background: var(--bg-page); overflow: hidden; }
-.chat-main { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+.chat-main { position: relative; flex: 1; display: flex; flex-direction: column; min-width: 0; }
 /* 交换布局：侧边栏移到左侧、分屏移到右侧。
    用 flex `order` 而不是改 DOM —— 组件的挂载位置不动，只是视觉顺序变化，
    所以不影响任何依赖 DOM 顺序的逻辑（焦点流、SSR、既有测试）。
