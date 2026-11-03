@@ -509,7 +509,10 @@ function waitExit(child, timeoutMs) {
       resolve(value)
     }
     const timer = setTimeout(() => finish(false), timeoutMs)
-    if (typeof timer.unref === 'function') timer.unref()
+    // **不能 unref**：这里 waitExit 的调用方全是"退出前必须做完"的收尾（停引导器 →
+    // 树杀 → 放掉 PG 的 data dir）。unref 之后等待期间没有任何保活句柄，Node 会判定
+    // 事件循环已空而直接退出，收尾被截断；测试里同一个症状表现为 Promise 永远悬着
+    // （`cancelledByParent`）。超时本身有 ms 上限，不会无限挂着。
     child.once('exit', () => finish(true))
   })
 }
