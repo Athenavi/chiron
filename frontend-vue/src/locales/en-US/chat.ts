@@ -326,6 +326,12 @@ export default {
   refined: "Prompt refined — edit it further or send it as is",
   refine_failed: "Refine failed; your original text is kept",
   refine_prompt_tooltip: "Rewrite the current input into a clearer prompt (it is not sent automatically)",
+  // ── P0-3: steer a running turn ──
+  // Deliberately separate from "interrupt and send": steer does not end the turn,
+  // so a long task does not have to start over.
+  steer_tooltip: "Inject as a supplementary instruction into the running turn (no interruption; adopted after the current step)",
+  steer_sent: "Instruction delivered; the turn continues",
+  steer_failed: "Instruction not delivered: {error}",
   // ── Gap C: execution graph (timeline / graph toggle) ──
   trace_view_graph: "Graph",
   trace_view_timeline: "Timeline",

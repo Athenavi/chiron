@@ -106,3 +106,44 @@ describe('ChatInput（输入区交互）', () => {
     expect(valueOf(wrapper)).toBe('未发完的草稿')
   })
 })
+
+describe('ChatInput（运行中补充指令 steer）', () => {
+  it('只在"正在生成 + 手上有草稿"时出现', async () => {
+    const wrapper = mountInput()
+    // 空闲：没有草稿、也没在跑
+    expect(wrapper.find('.steer-btn').exists()).toBe(false)
+
+    await wrapper.setProps({ loading: true })
+    expect(wrapper.find('.steer-btn').exists()).toBe(false)      // 在跑但没内容可注入
+
+    await wrapper.find('textarea').setValue('先别删那个表')
+    expect(wrapper.find('.steer-btn').exists()).toBe(true)       // 两条都满足才出现
+
+    // 空闲但有草稿：此时普通发送就是正确动作，不该出现 steer
+    await wrapper.setProps({ loading: false })
+    expect(wrapper.find('.steer-btn').exists()).toBe(false)
+  })
+
+  it('发出 steer 且清空输入，但不打断、不写提问历史', async () => {
+    const wrapper = mountInput({ loading: true })
+    await wrapper.find('textarea').setValue('先别删那个表')
+    await wrapper.find('.steer-btn').trigger('click')
+
+    expect(wrapper.emitted('steer')?.[0]?.[0]).toBe('先别删那个表')
+    // 不打断：stop 一次都不该发（那是另一条语义）
+    expect(wrapper.emitted('stop')).toBeUndefined()
+    expect(wrapper.emitted('send')).toBeUndefined()
+    expect(valueOf(wrapper)).toBe('')
+    // 补充指令不是"我问过的问题"，不该进 ↑ 召回历史
+    expect(localStorage.getItem(HISTORY_KEY)).toBeNull()
+  })
+
+  it('setDraft 把失败的原文还回输入框（不发送、不写历史）', async () => {
+    const wrapper = mountInput()
+    ;(wrapper.vm as any).setDraft('没送到的那句话')
+    await new Promise(resolve => setTimeout(resolve, 0))   // 等 v-model 回写 DOM
+    expect(valueOf(wrapper)).toBe('没送到的那句话')
+    expect(wrapper.emitted('send')).toBeUndefined()
+    expect(localStorage.getItem(HISTORY_KEY)).toBeNull()
+  })
+})

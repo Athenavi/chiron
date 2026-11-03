@@ -897,6 +897,16 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	TrueUpTenantQuota(storeCtx, userID, tenantID, int64(usage.input+usage.output),
 		QuotaReserveFromContext(ctx))
 
+	// 接管回合的预算记账（P1-2 第 8 步 / 验收第 5 条）：把这一轮的**真实**用量交回驱动，
+	// 由它在整个回合（含目标续跑的各轮）结束后累加 `token_spent` 并判定硬闸门。
+	//
+	// 口径与上一句 `TrueUpTenantQuota` 完全一致（input + output，cached 不进池不计预算）：
+	// 用户在面板上看到的"已花 / 上限"必须与账单同源，否则超限时两边对不上就说不清。
+	// 只有 ctx 上挂了收集器的调用才生效 ⇒ 普通提交零影响。
+	if sink := takeoverUsageFromCtx(ctx); sink != nil {
+		sink.Add(usage.input + usage.output)
+	}
+
 	// 回合终态收敛：取消(断开/超时) -> cancelled；引擎报错 -> failed；否则 completed。
 	turnStatus := "completed"
 	switch {

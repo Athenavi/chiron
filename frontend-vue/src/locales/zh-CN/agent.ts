@@ -244,4 +244,5 @@ export default {
   superagent_overlay_budget: "剩余预算",
   superagent_overlay_input_locked: "接管期间无法手动输入，避免与自动回合争抢同一会话",
   superagent_overlay_unlimited: "不限",
+  superagent_budget_exhausted_notice: "接管已按预算上限自动停止（token_cap 已用尽）",
 }

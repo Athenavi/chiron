@@ -72,11 +72,15 @@
 - **断在"回投"**：`job_runner.py` 只把状态写进 Redis（`_write_meta` / `_write_result`），
   没有 notify/publish/XADD/emit，**后台任务完成后不会给会话发任何消息**。对照
   `subagent/followup.py`（有完整的"结束 → 队列 → 新回合"通道），这是明显的非对称缺口。
-- **没有"打断"**：会话运行锁 `AcquireSessionRunLock`（`internal/api/session_coord.go`，
-  TTL 5min、60s 续期）在锁被占时直接 400 拒绝，提示"stop it or wait"；用户没有
-  "边跑边补充/改方向"的通道。注意 steer **原先两侧都没有**：它只写在
-  `docs/context-and-delegation-design.md` §9.3，并且是那份文档「实施顺序」的第 8 步，
-  `python-engine/app` 下无任何实现 —— 所以主会话这条通道是**新建**，不是"接到子 Agent 已有能力上"。
+- **打断与改动分成了两条路**：会话运行锁 `AcquireSessionRunLock`（`internal/api/session_coord.go`，
+  TTL 5min、60s 续期）在锁被占时仍直接 400 拒绝新**提交**（提示"stop it or wait"）——
+  这条没有变，也不该变：同一个会话并发两个 runtime 是不变量。变的是"跑着的时候想改方向"
+  不再只有"停掉重开"：`POST /v1/agent/steer`（`submit_handler.go::SubmitSteer`）把文本注入
+  正在跑的 run，引擎在**轮次边界**消费（工具执行到一半插消息会让 `tool_calls` 与结果错位）。
+  这一条是**新建**的：它此前只写在 `docs/context-and-delegation-design.md` §9.3，且那份文档
+  写的是子 Agent 的 `chiron:subagent:steer:{run_id}`，`python-engine/app` 下无实现 ——
+  所以主会话这条通道不是"接上子 Agent 已有能力"，是照 `agent/interrupt.py` 的形状另做的一条。
+  前端入口见 P0-3。
 - **多信道不存在**：全仓无入站 IM（`feishu/lark/dingtalk/wecom/telegram/slack` 只在
   `internal/auth/oauth2_exchanger.go` 里作为 SSO 换 token 出现）；通知只有出向的
   `internal/notify/notify.go`（站内信不可关闭）+ 邮件。前端交互集中在
@@ -126,7 +130,7 @@
 | 投机执行 | 无 | **缺**（研究性） |
 | 异步工具 + 终止 | `run_in_background`/`job_output`/`job_kill` | **有** |
 | 后台结果回投会话 | 无（只写 Redis） | **缺**，且零件已就绪 |
-| 边跑边干扰（steer 主会话） | 锁占即 400 拒绝；引擎侧已建通道 | **部分**（引擎已落地，网关端点未接） |
+| 边跑边干扰（steer 主会话） | 锁占即 400 拒绝；steer 是并行的第二条通道 | **有**（引擎 / 网关 / 前端三侧已接通，见 P0-3） |
 | 入站 IM / GitHub 信道 | 无（只有 SSO 出向） | **缺** |
 | 无状态计算 + DB 存 Session | 已是架构基线 | **有** |
 | 隔离执行环境 | `sandbox-service`（受限容器） | **部分** |
@@ -201,7 +205,13 @@
   `SubmitInterrupt` 的 run-affinity 路由）。与 interrupt 的一处刻意偏离：引擎用
   `200 + ok:false` 表达拒绝，网关把它翻成 403/409/429/400 —— 照抄 200 会让"没送到"
   看起来像"送到了"，而 steer 的全部价值就是让用户相信话带到了。
-- 待接：SSE `steer` 事件的前端呈现。
+- 已落地（前端侧）：SSE `steer` 事件在 `ChatView.vue` 的 `onSSEMessage` 里落一行
+  `common.steer_applied` 小字（正文已作为 user 消息进历史，不再贴一遍）；发送入口是
+  `ChatInput.vue` 操作行的 steer 按钮（`BranchesOutlined`，**只在"正在生成 + 有草稿"
+  时出现**）→ `emit('steer')` → `ChatView.onSteer` → `api/index.ts::steerRun`。
+  不与 Enter 共用：生成中的 Enter 已经是"打断并发送"，两条相反语义挤一个键必然误触。
+  投递失败把原文退回输入框（`ChatInput.setDraft`）而不是静默清空 —— 这条通道的拒绝多
+  是临时的（429 限流 / 409 那一轮正在收尾），用户多半想重试一次。
 - 验收：turn 进行中发送补充，能在下一轮工具循环前生效；补充内容进 `messages`，
   可被 SSE 回放；无活跃 run 时显式失败而不是入队。
 - 风险：注入点必须是有界检查点，否则会破坏 `history_writer.py`"每轮结束写一次"的约束。
@@ -433,6 +443,22 @@
 - **软**：P1-2.6 的强提示 + 常驻提示。
 - **硬**：`budget.token_cap`。接管回合结束后累加 `token_spent`（`bigint`），
   超限即置 `budget_exhausted` 并停止接管，**不再询问用户**。
+- 落地形态（三处细节是刻意的，改之前先看代码里的注释）：
+  - **口径**：`usage.input + usage.output`，与同一句 `TrueUpTenantQuota` 完全一致；
+    `cached` 既不进池也不计预算 —— 否则面板上的读数会和账单对不上。
+  - **`budget_exhausted` 是独立终态**，没有复用 `stopped`：同样是"停了"，但一个是用户点停、
+    一个是钱花到了自己设的上限；用户据此判断"该调预算还是该收工"。
+    `stop_reason` 写 `token_cap`。
+  - **记账发生在归还租约之前**（`superagent_driver.go::recordTakeoverUsage`）：否则另一个
+    副本可能先抢到下一拍，用旧的 `token_spent` 再起一轮。
+  - **用量怎么回到驱动里**：不改 `HandleSubmit` 的签名（已有 7 参数、5 个调用点含 3 个
+    测试），改成 `ctx` 上挂一个原子 sink（`withTakeoverUsageSink` / `takeoverUsageFromCtx`），
+    与既有的 `WithQuotaReserve` 同手法。**不要**塞进 `workbenchCtx` —— 那张表会被原样
+    序列化进引擎请求体的 `context` 字段。普通提交没有 sink ⇒ 零影响。
+  - 判定用 `spent >= cap`（正好花到上限也算用尽）；`cap <= 0` 表示不限。
+  - 前端：SSE `superagent.takeover_ended` 且 `status == 'budget_exhausted'` 时插一行
+    warning notice（遮罩只会突然消失、不给说明）；配置页把已花展示成「已花 / 上限」，
+    用掉 80% 起标警示色。
 - **顺带获得的约束**：接管回合既然走 `HandleSubmit`，就天然受
   `EnforceTenantQuota`（`docs/architecture.md` 的闸门 3）与租户并发闸门约束。
   这一点必须写进文档，否则会被误以为接管开了一条"绕过计费"的后门。

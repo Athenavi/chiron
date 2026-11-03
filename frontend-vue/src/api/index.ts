@@ -219,6 +219,22 @@ export async function submitAnswer(params: {
   return !!(data?.data?.ok ?? data?.ok)
 }
 
+/**
+ * 运行中补充指令（P0-3 的 steer 通道）：把一段话送进**正在跑**的回合，不终止它。
+ *
+ * 与 `sendMessage` 的分工：那个是"打断当前回合（或新开一轮）并重新提问"，
+ * 这个是"让模型接着当前工作，但改一下方向"。差别对用户是实打实的 ——
+ * 长任务跑到一半发现要补充约束时，打断等于丢掉已经跑了十几分钟的那一轮。
+ *
+ * `session_id` 必填；`run_token` 由网关自己从 run 亲和路由里取（前端不该持有它）。
+ * 拒绝是**抛错**而不是返回 false：网关把引擎的 `ok:false` 翻成了 4xx/429 等状态码
+ * （`submit_handler.go` 的 `steerStatus`），调用方据此区分"重试有用"与"没用"。
+ */
+export async function steerRun(params: { session_id: string; text: string }): Promise<boolean> {
+  const { data } = await api.post('/v1/agent/steer', params)
+  return !!(data?.data?.ok ?? data?.ok ?? data?.success)
+}
+
 // ── 会话操作（重命名 / 置顶）──
 export async function updateConversation(id: string, patch: { title?: string; pinned?: boolean; tag?: string; alias?: string }) {
   const { data } = await api.put(`/v1/conversations/${encodeURIComponent(id)}`, patch)

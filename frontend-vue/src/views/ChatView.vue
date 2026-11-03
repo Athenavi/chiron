@@ -3,7 +3,7 @@ import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, 
 import { Button, Input, Modal, Checkbox, Alert, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
-  api, createSSEConnection, submitApproval, submitAnswer,
+  api, createSSEConnection, submitApproval, submitAnswer, steerRun,
   getChatSessionMessages, resolveMediaUrl, listModels,
   createAgent, createGraph,
 } from '../api'
@@ -2478,6 +2478,19 @@ function onSSEMessage(raw: unknown, sid: string) {
     } else {
       notify.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
     }
+  } else if (type === 'superagent.takeover_ended' && String(d.status ?? '') === 'budget_exhausted') {
+    // 预算耗尽自动停（P1-2.7 的硬闸门）：这是**系统**终止，不是用户点停。
+    // 遮罩只会突然消失，不给一行说明，用户看到的就是"接管莫名其妙没了"。
+    // 与中断留痕同一种 notice 条目，保证"被动结束"的观感一致；
+    // 之后仍走一次快照对齐，遮罩以快照为准撤下。
+    items.value.push({
+      kind: 'notice',
+      tone: 'warning',
+      content: t('agent.superagent_budget_exhausted_notice'),
+      time: new Date().toLocaleTimeString(),
+      id: `superagent-budget:${Date.now()}`,
+    })
+    void refreshTakeover(sid)
   } else if (typeof type === 'string' && type.startsWith('superagent.')) {
     // 接管态变化只触发一次快照重拉，事件本身不当数据用：
     // 快照才是权威来源，事件只负责"该对齐了"这个信号。
@@ -2685,6 +2698,33 @@ function retryFailedMessage(itemId: string) {
     truncateFrom(itemId)
     sendMessage(text, attachments)
   })
+}
+
+/**
+ * 运行中补充指令（P0-3）：把文本注入当前正在跑的回合，**不打断**。
+ *
+ * 三处刻意的选择：
+ * 1. **成功不插行**：引擎会在轮次边界发一条 SSE `steer` 事件，由 `onSSEMessage` 统一落
+ *    notice（正文已作为 user 消息进历史）。这里再插一条就是重复。
+ * 2. **失败把原文还回输入框**：这条通道的拒绝多是临时的 —— 429 限流、409 那一轮刚好在收尾
+ *    （`steerStatus` 把引擎的 `ok:false` 翻成了状态码）。用户多半想重试一次；
+ *    当成普通发送清空就等于让他重打一遍。
+ * 3. **失败用 notify 而不是消息流**：它说的是一次**投递**的结果，不属于对话内容。
+ */
+async function onSteer(text: string): Promise<void> {
+  const sid = activeSessionId.value
+  if (!sid || !text.trim()) return
+  try {
+    const ok = await steerRun({ session_id: sid, text: text.trim() })
+    if (!ok) {
+      chatInputRef.value?.setDraft?.(text)
+      notify.warning(t('chat.steer_failed', { error: t('errors.request_failed') }))
+    }
+  } catch (e) {
+    const reason = describeApiError(e)
+    chatInputRef.value?.setDraft?.(text)
+    notify.warning(t('chat.steer_failed', { error: reason }))
+  }
 }
 
 function stopGeneration() {
@@ -3168,6 +3208,7 @@ function continueGeneration() {
         :context-chips="contextChips"
         @send="sendMessage"
         @stop="stopGeneration"
+        @steer="onSteer"
         @update:mode="onModeChange"
         @model-change="onModelChange"
         @command="onSlashCommand"

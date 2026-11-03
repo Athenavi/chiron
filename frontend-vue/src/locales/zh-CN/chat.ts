@@ -330,6 +330,11 @@ export default {
   refined: "已精炼提示词，可继续编辑或直接发送",
   refine_failed: "精炼失败，已保留你的原文",
   refine_prompt_tooltip: "把当前输入改写成更明确的提示（不会自动发送）",
+  // ── P0-3：运行中补充指令（steer）──
+  // 与"打断并发送"刻意分开：steer 不终止回合，长任务不用从头再跑一遍。
+  steer_tooltip: "作为补充指令注入正在进行的回合（不打断，模型在当前步骤后采用）",
+  steer_sent: "补充指令已送达，回合继续",
+  steer_failed: "补充指令未送达：{error}",
   // ── 差距C：执行图（时间线 / 图 切换） ──
   trace_view_graph: "执行图",
   trace_view_timeline: "时间线",

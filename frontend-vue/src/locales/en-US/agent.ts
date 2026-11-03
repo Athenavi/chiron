@@ -244,4 +244,5 @@ export default {
   superagent_overlay_budget: "Budget left",
   superagent_overlay_input_locked: "Input is disabled during takeover so manual turns cannot race the automated ones",
   superagent_overlay_unlimited: "Unlimited",
+  superagent_budget_exhausted_notice: "Takeover stopped automatically: the token budget was used up",
 }

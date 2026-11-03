@@ -60,6 +60,25 @@
 
 ### 新增
 
+- **接管预算硬闸门（P1-2 第 8 步 / 验收第 5 条）**：接管回合的真实用量现在会记进
+  `superagent_takeovers.token_spent`，越过 `budget.token_cap` 即置终态
+  `budget_exhausted`（`stop_reason='token_cap'`）并广播 `superagent.takeover_ended`，
+  不再起下一拍。**口径与 `TrueUpTenantQuota` 一致**（`usage.input + usage.output`，
+  `cached` 不进池也不计预算），否则面板读数会和账单对不上。`budget_exhausted` 单列成
+  独立终态而不是复用 `stopped`：一个是用户点停、一个是花到上限，用户据此决定"调预算还是收工"。
+  用量经 `ctx` 上的原子 sink（`withTakeoverUsageSink` / `takeoverUsageFromCtx`）回传，
+  **不改 `HandleSubmit` 的签名**，也不塞进会被序列化进引擎请求体的 `workbenchCtx`；
+  记账发生在归还租约**之前**，避免另一副本用旧读数抢到下一拍。前端：事件到达时插一行
+  warning notice（遮罩只会突然消失、不给说明），配置页把已花展示成「已花 / 上限」，
+  用掉 80% 起标警示色。三语言同步。
+- **运行中补充指令的前端入口（P0-3 收口）**：`POST /v1/agent/steer` 此前只有引擎与网关
+  两侧，前端没有调用方。现补 `api/index.ts::steerRun`，入口在 `ChatInput` 操作行的
+  steer 按钮上（**只在"正在生成 + 有草稿"时出现**），**不与 Enter 共用** —— 生成中的
+  Enter 已经是"打断并发送"，两条相反语义挤一个键必然误触。投递失败把原文退回输入框
+  （`ChatInput.setDraft`）而不是静默清空：这条通道的拒绝多是临时的（429 限流 / 409 正在
+  收尾），用户多半想重试一次。成功不额外插行 —— 引擎的 SSE `steer` 事件已经落了一条小字。
+  验收：`vitest run ChatInput.spec.ts` 9 passed（新增 3 条：按钮出现条件 / 发出 steer 不打断
+  且不写 ↑ 召回历史 / `setDraft` 回填失败原文）· `vue-tsc -b` 通过。
 - **注册邮箱判重布隆过滤器**：注册时先用按租户分片的布隆过滤器快速否定"邮箱未注册"，
   从而跳过 `users` 上无索引的存在性查询（原先是一次全表扫描）。它**只做快速否定**，
   真相源是新增的 `users(tenant_id, email)` 唯一索引（迁移 `0002_users_tenant_email_unique`，

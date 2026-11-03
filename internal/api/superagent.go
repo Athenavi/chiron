@@ -27,6 +27,10 @@ const (
 	takeoverStatusActive   = "active"
 	takeoverStatusStopping = "stopping"
 	takeoverStatusStopped  = "stopped"
+	// takeoverStatusBudgetExhausted 是 `token_cap` 被越过时的终态。
+	// 它与 stopped 分开：同样是"停了"，但原因是钱花到了用户设的上限，
+	// 用户据此判断"该调预算还是该收工"，而不是以为是自己打断了它。
+	takeoverStatusBudgetExhausted = "budget_exhausted"
 
 	// maxActiveTakeovers 是每用户同时生效的接管上限（判据取 user_id，不是 tenant_id）。
 	maxActiveTakeovers = 5

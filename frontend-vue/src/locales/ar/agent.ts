@@ -244,4 +244,5 @@ export default {
   superagent_overlay_budget: "الميزانية المتبقية",
   superagent_overlay_input_locked: "الإدخال معطّل أثناء التولّي حتى لا تتنافس الجولات اليدوية مع الآلية",
   superagent_overlay_unlimited: "بلا حدّ",
+  superagent_budget_exhausted_notice: "توقّف التولّي تلقائيًا: استُهلك حدّ الرموز المخصّص",
 }

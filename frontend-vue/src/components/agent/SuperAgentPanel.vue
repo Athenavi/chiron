@@ -200,7 +200,26 @@ function statusColor(status?: string): string {
 function statusText(status?: string): string {
   if (!status) return '—'
   if (status === 'skipped_busy') return t('agent.superagent_status_skipped_busy')
+  // 预算耗尽是一条**终态原因**而不是状态值，但它同样需要一个可读的标签：
+  // 原样透出 `budget_exhausted` 对用户毫无信息量。
+  if (status === 'budget_exhausted') return t('agent.superagent_budget_exhausted_notice')
   return status
+}
+
+// ── 预算读数：`token_cap == 0` 表示不限，此时只报已花 ──
+
+/** 已花 / 上限的展示文本。上限为 0 只报已花，不编造一个分母。 */
+function spentLabel(item: Takeover): string {
+  const spent = item.token_spent.toLocaleString()
+  if (!item.token_cap || item.token_cap <= 0) return `${spent} tokens`
+  return `${spent} / ${item.token_cap.toLocaleString()} tokens`
+}
+
+/** 已用掉 80% 以上时标红提示：接管会**自动**停，用户该提前决定加预算还是收工。 */
+function budgetNearLimit(item: Takeover): boolean {
+  const cap = item.token_cap
+  if (!cap || cap <= 0) return false
+  return item.token_spent >= cap * 0.8
 }
 
 // ── 定时任务：新建 / 编辑 ──
@@ -414,7 +433,12 @@ async function runScheduleNow(row: SuperAgentSchedule) {
           <div class="sa-takeover-meta">
             <ClockCircleOutlined />
             {{ $t('agent.superagent_active_ends') }}: {{ fmtTime(item.ends_at) }}
-            <span class="sa-spent">· {{ item.token_spent }} tokens</span>
+            <!-- 已花 / 上限：只写 spent 时，用户看不出"离停还有多远"，
+                 而预算耗尽会**自动**停掉接管 —— 那是需要提前预判的事。 -->
+            <span
+              class="sa-spent"
+              :class="{ 'sa-spent--near': budgetNearLimit(item) }"
+            >· {{ spentLabel(item) }}</span>
           </div>
         </div>
         <Button
@@ -581,6 +605,7 @@ async function runScheduleNow(row: SuperAgentSchedule) {
 .sa-takeover-meta { color: var(--text-tertiary); font-size: 12px; display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
 .sa-tag { margin-inline-start: 4px; }
 .sa-spent { color: var(--text-tertiary); }
+.sa-spent--near { color: var(--warning, #d97706); font-weight: 600; }
 .sa-cron { font-family: var(--font-mono, monospace); font-size: 12px; }
 .sa-actions { display: flex; gap: 8px; flex-shrink: 0; }
 </style>

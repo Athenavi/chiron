@@ -69,6 +69,10 @@ const emit = defineEmits<{
   (e: 'command', cmd: string): void
   /** 上下文快捷按钮：展开侧栏（若为抽屉模式） */
   (e: 'open-panel'): void
+  /** 运行中补充指令（steer）：把文本送进**正在跑**的回合，不打断它。
+      与 `send` 的区别是语义级别的：`send` 会先 `stop` 再重开一轮，`steer` 让这一轮
+      接着跑、只是改方向。父组件负责真正的 HTTP 调用与错误呈现。 */
+  (e: 'steer', text: string): void
 }>()
 
 const input = ref('')
@@ -642,6 +646,25 @@ function submit() {
   emit('send', text, atts)
 }
 
+/**
+ * 运行中补充指令（steer）：把草稿送进正在跑的回合，**不打断**它。
+ *
+ * 为什么不做成 Enter 的另一个分支：Enter 在生成中已经是"打断并发送"，两条语义相反
+ * 的操作挤在同一个按键上必然误触。这里只给一个按钮（且只在生成中且有草稿时出现）。
+ *
+ * 发出后立即清空输入（与发送一致），但**不写历史** —— 补充指令是"这一轮的补充"，
+ * 不是"我问过的问题"，写进 ↑ 召回会污染用户的提问历史。
+ * 失败时由父组件通过 `setDraft` 把原文还回输入框（见 ChatView 的 onSteer）。
+ */
+function steerSubmit() {
+  const text = input.value.trim()
+  if (!text || !props.loading) return
+  input.value = ''
+  pendingAttachments.value = []
+  saveDraft()
+  emit('steer', text)
+}
+
 // 文件选择
 function triggerFilePick() {
   fileInputRef.value?.click()
@@ -937,7 +960,20 @@ function setCommandDraft(cmd: string) {
   nextTick(() => textareaRef.value?.focus?.())
 }
 
-defineExpose({ insertText, setCommandDraft })
+/** 原样写回草稿（不加任何前缀）。
+
+ * steer 失败时父组件用它把用户刚写的话还回去：这条通道的失败大多是**临时**的
+ * （429 限流、409 那一轮刚好收尾），用户多半想重试一次。把它当成普通发送清空不还，
+ * 就等于让用户重新打一遍。
+ */
+function setDraft(text: string) {
+  input.value = text
+  historyCursor.value = null
+  saveDraft()
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+defineExpose({ insertText, setCommandDraft, setDraft })
 </script>
 
 <template>
@@ -1338,6 +1374,20 @@ defineExpose({ insertText, setCommandDraft })
             {{ $t('common.generating') }}<span class="tnum-fixed">{{ elapsed }}s</span>
           </span>
           <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
+          <!-- 运行中补充指令（steer，P0-3）：只在"正在跑 + 手上有草稿"时出现。
+               此时 Enter 是"打断并发送"、停止按钮是"停"，两条路都会丢掉这一轮已跑的部分；
+               这里给第三条：话带到了，回合接着跑。 -->
+          <Button
+            v-if="loading && input.trim()"
+            class="steer-btn"
+            size="small"
+            :title="$t('chat.steer_tooltip')"
+            @click="steerSubmit"
+          >
+            <template #icon>
+              <BranchesOutlined />
+            </template>
+          </Button>
           <Button
             class="send-btn"
             :type="loading ? 'default' : 'primary'"
@@ -1445,6 +1495,10 @@ defineExpose({ insertText, setCommandDraft })
 }
 @container (max-width: 620px) { .input-divider { display: none; } }
 .input-hint { font-size: 12px; color: var(--text-tertiary); }
+/* 运行中补充指令（steer）：与"停止"并排，但**不是**危险动作 —— 它不终止回合。
+   因此用主色描边而不是红/灰：视觉上要让人敢点，同时与右侧圆角方形的停止按钮区分开。 */
+.steer-btn { color: var(--primary); border-color: var(--primary); }
+.steer-btn:hover { color: var(--primary) !important; border-color: var(--primary) !important; background: var(--primary-bg) !important; }
 /* 工具栏控件统一规格：32px 触控目标 + 8px 圆角（覆盖 antd 的 size=small 观感） */
 .input-actions .ant-btn:not(.send-btn) { height: 32px; min-width: 32px; border-radius: var(--input-card-inner-r, 8px); }
 .input-actions .ant-select-single .ant-select-selector { border-radius: var(--input-card-inner-r, 8px); }
