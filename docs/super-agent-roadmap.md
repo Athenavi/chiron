@@ -62,16 +62,20 @@
   （`python-engine/app/tools/archive.py`）落成 Inline & Spill + 可召回的形态；
   缺的是文中那种"以 Trigger/Thread/Worker 唯一 ID 组成的引用图"，现在是按会话维度组织。
 
-### 2.3 面向人的交互：异步工具齐了，但结果不回头
+### 2.3 面向人的交互：异步工具齐了，回投也接通了
 
 - **全双工的一半已经落地**：`python-engine/app/tools/jobs.py` 注册了
   `run_in_background`（立即返回 job id）、`job_output`、`job_kill`；
   `python-engine/app/tools/job_runner.py` 是子进程执行器，带 kill flag 轮询与超时；
   `python-engine/app/tools/taskboard.py` 提供跨 Agent 共享任务板。文章 §4.1 描述的
   "异步工具 + 终止工具"在工具面上是对得上的。
-- **断在"回投"**：`job_runner.py` 只把状态写进 Redis（`_write_meta` / `_write_result`），
-  没有 notify/publish/XADD/emit，**后台任务完成后不会给会话发任何消息**。对照
-  `subagent/followup.py`（有完整的"结束 → 队列 → 新回合"通道），这是明显的非对称缺口。
+- **"回投"原本断在中间，现已接通**：`job_runner.py` 只把状态写进 Redis
+  （`_write_meta` / `_write_result`），本身不发任何消息；缺口在网关侧补上 ——
+  `queue/worker.py::_handle_tool_job` 在终态后调 `_notify_job_finished`，投递
+  `kind="job"` 的回投信号，经 `internal/api/agent_followup.go` 的 `followupKinds`
+  注册表回到 `HandleSubmit`，与会话里正常的回合走同一条路。**默认关闭**
+  （`users.settings.followup_on_job_finished`）：这条通道会在用户没动手时自己烧 token。
+  取消**不**发 —— 那是用户自己停的，再唤起一轮只是噪音。
 - **打断与改动分成了两条路**：会话运行锁 `AcquireSessionRunLock`（`internal/api/session_coord.go`，
   TTL 5min、60s 续期）在锁被占时仍直接 400 拒绝新**提交**（提示"stop it or wait"）——
   这条没有变，也不该变：同一个会话并发两个 runtime 是不变量。变的是"跑着的时候想改方向"
@@ -129,14 +133,14 @@
 | 链式召回（ID 引用图） | 按会话维度召回 | **部分** |
 | 投机执行 | 无 | **缺**（研究性） |
 | 异步工具 + 终止 | `run_in_background`/`job_output`/`job_kill` | **有** |
-| 后台结果回投会话 | 无（只写 Redis） | **缺**，且零件已就绪 |
+| 后台结果回投会话 | `queue/worker.py::_notify_job_finished` → `agent_followup.go` → `HandleSubmit` | **有**（按用户开关，默认关闭；见 P0-1） |
 | 边跑边干扰（steer 主会话） | 锁占即 400 拒绝；steer 是并行的第二条通道 | **有**（引擎 / 网关 / 前端三侧已接通，见 P0-3） |
 | 入站 IM / GitHub 信道 | 无（只有 SSO 出向） | **缺** |
 | 无状态计算 + DB 存 Session | 已是架构基线 | **有** |
 | 隔离执行环境 | `sandbox-service`（受限容器） | **部分** |
 | 判定/执行分信任域 | `tool_broker` + `guardian` | **有** |
 | 端侧无权 daemon / BYOM | `local` / `cloud` 二选一一体栈 | **缺**（形态不同） |
-| Watchdog（语义级进展判断） | 只有 `loop_guard`/`recovery`/reconciler | **部分** |
+| Watchdog（语义级进展判断） | `loop_guard`/`recovery`/reconciler 之外，另有 `agent/watchdog.py`：结构级停滞判断（三档，默认只观察） | **部分**（结构判断已落地，模型层判断仍缺；见 P1-3） |
 
 ## 4. 开发方向
 
@@ -630,6 +634,25 @@ alter table turns add column origin varchar(24) not null default '';
 - 验收：对已知的"兜圈子"回放样本能给出与 `loop_guard` 一致或更早的信号；
   关掉它时零影响；它的每次干预都有审计。
 - 风险：这是"用一个 LLM 判断另一个 LLM"，会引入新的误判与成本；必须 fail-closed 到"不干预"。
+
+**现状（已落地一版骨架，但判断层不是模型层）**
+
+- 代码：`app/agent/watchdog.py`（判断器，纯函数）· `app/queue/watchdog_probe.py`（采集）·
+  `app/queue/watchdog_job.py`（一拍的采集→判断→处置→审计）· `queue/worker.py::_start_watchdog`。
+- 判断依据：把**当前回合**（`turns.status='running'`）的最近 20 条 `messages` 与 20 次
+  `tool_calls` 折成两个哈希 + 消息条数，看末尾连续多少拍（内容、工具、条数）三项都没变。
+  这是**确定性结构判断**，不是 LLM 判语义 —— 原文 §6 的"模型层判断"仍未做，
+  当前版本只做到"能证明的停滞"。它仍比 `loop_guard` 早：后者要**3 次同参调用**才命中，
+  本判断可配到**2 拍**（`superagent_watchdog_nudge_after`，默认 2）出信号。
+- 三档：`CONTINUE` / `NUDGE`（经 `agent/steer.py` 在轮次边界注入，与 P0-3 同一条通道）/
+  `SUGGEST_STOP`（**只写审计与日志，永不终止** —— 终止不可逆，留给人）。
+- 开关（`app/config.py`，默认全关）：`superagent_watchdog_enabled=false` 连采集都不跑；
+  `superagent_watchdog_act=false` 时判断结果只进 `audit_logs`，不注入、不终止。
+  `enabled=false` 时 `worker.start()` **不创建任务**，"关掉零影响"是真的零。
+- 审计：`superagent.watchdog.nudge` / `superagent.watchdog.suggest_stop`，`resource_type='agent_watchdog'`，
+  写失败只 warning（旁路，与 `conflict_audit.py` 同款契约）。
+- **未覆盖**：`subagent_runs` 不在采集范围内（只看主会话回合）；采样历史存进程内，
+  租约漂到另一副本时归零 → 该拍因样本不足判 `CONTINUE`（这就是 fail-closed 的方向）。
 
 ### P2：研究项（先做原型，不进主线）
 

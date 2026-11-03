@@ -60,6 +60,21 @@
 
 ### 新增
 
+- **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
+  `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
+  折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /
+  `SUGGEST_STOP`。数据面 `app/queue/watchdog_probe.py` 只读摘要（内容可能很长，判断
+  "有没有变化"不需要原文），调度面 `app/queue/watchdog_job.py` 用 Redis 租约互斥
+  （多副本同时判断会把同一条提示注入两次），挂载点是 `queue/worker.py::_start_watchdog`。
+  **`NUDGE` 复用 `agent/steer.py`** 在轮次边界注入（与 P0-3 同一条通道，不再造第二套
+  "什么时候生效"的语义）；**`SUGGEST_STOP` 永不终止**，只写审计与日志 —— 终止不可逆，留给人。
+  默认三层全关：`SUPERAGENT_WATCHDOG_ENABLED=false` 时 `worker.start()` **不创建任务**（关掉
+  是真零影响，连采集都不跑），`SUPERAGENT_WATCHDOG_ACT=false` 时判断结果只进 `audit_logs`
+  （`superagent.watchdog.nudge` / `.suggest_stop`，写失败只 warning）。fail-closed：样本不足、
+  回合已不在 `running`、摘要为空、Redis 抢不到租约 —— 一律不干预。
+  **明确未做**：判断层仍是确定性结构判断，不是原文 §6 的"模型层判断"；`subagent_runs` 未纳入采集。
+  验收：`pytest tests/test_watchdog.py` 21 passed（含与 `loop_guard` 的"更早报警"对照、
+  关闭时采集闭包未被调用、审计写入断言、`act=False` 不注入）。
 - **接管预算硬闸门（P1-2 第 8 步 / 验收第 5 条）**：接管回合的真实用量现在会记进
   `superagent_takeovers.token_spent`，越过 `budget.token_cap` 即置终态
   `budget_exhausted`（`stop_reason='token_cap'`）并广播 `superagent.takeover_ended`，

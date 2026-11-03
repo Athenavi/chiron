@@ -420,6 +420,23 @@ class Settings(BaseSettings):
     #: 会话内**可写**委派的上限（0 = 内置默认 3）。
     subagent_max_writers: int = 0
 
+    # ── Super-agent 看门狗（语义级进展判断，roadmap P1-3）──
+    #
+    # 与 `loop_guard`/`recovery` 的区别：它们看"这次调用是否与上次相同"、处理的是**失败**；
+    # 看门狗看的是"整轮是否还在向用户的目标靠近"——每一步都换工具、都成功，也可能原地绕圈。
+    #
+    # **三层默认全关**，与 §1.3「会改变行为的机制一律默认关」一致：
+    #   enabled=false     → 连采集都不跑，零影响（也不产生 DB 查询）
+    #   act=false         → 采集与判断都跑，结论**只进审计与日志**，不注入提示、不终止
+    # act 需要 enabled 才生效：两者是"观察"与"动作"两道独立的闸。
+    superagent_watchdog_enabled: bool = False
+    superagent_watchdog_act: bool = False
+    #: 采样间隔（秒，下限 60）。判断需要"连续多拍"，太小会让单拍无变化直接成为噪音。
+    superagent_watchdog_interval: int = 300
+    #: 连续多少拍"内容与工具都没变"才追加提示 / 才建议终止。
+    superagent_watchdog_nudge_after: int = 2
+    superagent_watchdog_stop_after: int = 4
+
     # ── 直连引擎的 Bearer JWT 旁路（安全开关）──
     # false（默认）：引擎拒绝 Bearer 直连，只接受带 X-Internal-Token 的网关代理请求。
     # true：允许持任意合法 JWT 的调用方绕过网关直连引擎并自报 tenant_id ——

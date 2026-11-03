@@ -170,6 +170,8 @@ class QueueWorker:
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
         self._reclaim_task: asyncio.Task[Any] | None = None
         self._delay_task: asyncio.Task[Any] | None = None
+        #: Super-agent 看门狗的定时循环（P1-3）。**默认不创建** —— 见 `start()`。
+        self._watchdog_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """启动消费者"""
@@ -202,6 +204,10 @@ class QueueWorker:
         # 延迟重试：把到期的"等一会儿再来"任务搬回主队列
         self._delay_task = asyncio.create_task(self._delay_loop())
         logger.info("Queue worker delayed-retry loop started (every %.0fs)", DELAY_LOOP_SECS)
+
+        # Super-agent 看门狗（P1-3）：**只有显式开启才创建**任务。
+        # 关掉时连一个空转的协程都没有 —— "关掉它时零影响"是硬要求，不是"影响很小"。
+        self._start_watchdog()
 
         while self._running:
             try:
@@ -249,6 +255,9 @@ class QueueWorker:
         if self._delay_task is not None:
             self._delay_task.cancel()
             self._delay_task = None
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
         logger.info(
             "Queue worker stopping, waiting for %d in-flight tasks...",
             len(self._in_flight),
@@ -473,6 +482,28 @@ class QueueWorker:
             await self._redis.eval(_GATE_RELEASE_LUA, 1, GATE_KEY)
         except Exception:
             pass  # 计数键由 TTL 兜底
+
+    def _start_watchdog(self) -> None:
+        """按配置拉起 Super-agent 看门狗（P1-3）。
+
+        两道闸都读配置：``enabled`` 决定"要不要跑"，``act`` 决定"判断出来是否动手"。
+        ``enabled=False`` 时**不创建任务** —— 关掉它必须是真的零影响，而不是"影响很小"。
+        """
+        try:
+            from app.config import settings
+
+            enabled = bool(getattr(settings, "superagent_watchdog_enabled", False))
+        except Exception as exc:  # noqa: BLE001 - 读不到配置 = 没开（fail-closed）
+            logger.debug("watchdog: config unavailable, staying off (%s)", exc)
+            return
+        if not enabled or not self._running:
+            return
+        from app.queue.watchdog_job import watchdog_loop
+
+        self._watchdog_task = asyncio.create_task(
+            watchdog_loop(self._redis, should_stop=lambda: not self._running)
+        )
+        logger.info("Super-agent watchdog started")
 
     def _task_done(self, task: asyncio.Task[Any]) -> None:
         self._in_flight.discard(task)
