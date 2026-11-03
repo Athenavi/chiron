@@ -175,6 +175,12 @@
   不做 Fast/Slow Path 过滤。
 - 验收：一个非 cron 的事件源接入不需要改路由；未知事件类型默认丢弃并记审计；
   幂等与 `task_idempotency`（`migrations/sql/init.sql`）口径一致。
+- **第一阶段范围（已定）**：只接通**内部可信事件源**（`kind` ∈ {`subagent`, `job`}，
+  走 `internalTokenMW` 保护的 `/v1/internal/agent-followup`）。**不开放**外部 webhook
+  自注册订阅 —— 那会新增信任边界，凭据轮换/重放防护/限流必须连同
+  `docs/error-codes.md` 契约一起设计，属于独立批次，不能与通道泛化混在一起做。
+  泛化的落点是把 `agent_followup.go` 里硬编码的 `kind` 分支改成事件类型注册表，
+  未知类型落审计后丢弃。
 - 风险：这是**新的对外攻击面**。凭据轮换、租户隔离、重放防护、限流必须与
   `docs/error-codes.md` 契约一起设计，不能先放通再补。
 
