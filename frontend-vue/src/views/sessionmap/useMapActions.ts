@@ -21,8 +21,8 @@
 import { api, updateConversation } from '../../api'
 import { t } from '../../i18n'
 
-import { forkConversation } from './api'
-import type { SessionMapNode } from './types'
+import { branchConversation } from './api'
+import type { BranchRequest, SessionMapNode } from './types'
 
 /**
  * 追问的文本前缀。
@@ -102,24 +102,92 @@ export async function sendMessage(
 }
 
 /**
- * 从源会话的第 `atSeq` 条消息处分叉。
+ * 分叉档次 —— 用户在对话框里选的那一档。
  *
- * `atSeq` 必须 > 0（`session_fork.go:44-47` 直接 400 拒绝），这里提前拦下：
+ * 三档**共用**后端同一个端点（`POST /v1/conversations/{id}/branch`），只差参数，
+ * 不是三套实现：`truncate` 逐字复制前 N 条，`condense` 只复制尾部 K 条原文
+ * 并把其余压成一条摘要（`mode` + `keep_tail` 的组合，见 `types.ts::BranchRequest`）。
+ */
+export type ForkTier = 'full' | 'condensed' | 'custom'
+
+/** 自定义档可选的方式；映射到后端 `mode`（`full` → `truncate`）。 */
+export type ForkMode = 'full' | 'condensed'
+
+/** 一次分叉请求：档次 + 落点 + （自定义档的）方式。 */
+export interface ForkOptions {
+  tier: ForkTier
+  /** 分叉点：保留到源会话的第几条消息（1 基，含该条） */
+  fromIndex: number
+  /**
+   * 自定义档的"方式"。`full` 档固定走 truncate、`condensed` 档固定走 condense，
+   * 只有自定义档需要用户另外选。
+   */
+  mode?: ForkMode
+}
+
+/** 分叉结果：新会话 + 后端实际做了什么。 */
+export interface ForkOutcome extends CreatedSession {
+  /** 后端归一化后的复制条数 */
+  copied: number
+  /** `true` 表示摘要还在后台生成（新会话已可用，摘要稍后出现） */
+  condensing: boolean
+  mode: 'truncate' | 'condense'
+}
+
+/**
+ * 把「档次 + 落点」翻译成后端的请求参数。
+ *
+ * 抽成纯函数是为了可测：三档的参数映射是这里最容易出错的地方，而它一旦错了
+ * 表现是"分叉出来了但内容不对"，界面上看不出任何异常。
+ *
+ * 关键约定：
+ *   - 全量档 = `truncate` + 落点，逐字复制，没有压缩状态；
+ *   - 压缩档 = `condense` + **显式 `keep_tail: 0`** —— 一条原文都不留，
+ *     新会话里只剩那条摘要。这里必须显式传 0：省略会落到后端默认值 4，
+ *     变成"摘要 + 4 条原文"，与用户选的档位不符；
+ *   - 自定义档 = 用户选的 `mode`；选压缩时同样不带 `keep_tail`
+ *     （用后端默认的 4 条原文，符合"保留最近进度"的常规预期）。
+ */
+export function buildForkRequest(options: ForkOptions): BranchRequest {
+  const { tier, fromIndex, mode } = options
+  if (!Number.isInteger(fromIndex) || fromIndex <= 0) {
+    throw new Error(t('chat.sessionmap.invalidForkPoint'))
+  }
+  if (tier === 'full') {
+    return { from_index: fromIndex, mode: 'truncate' }
+  }
+  if (tier === 'condensed') {
+    return { from_index: fromIndex, mode: 'condense', keep_tail: 0 }
+  }
+  const useCondense = mode !== 'full'
+  return useCondense
+    ? { from_index: fromIndex, mode: 'condense' }
+    : { from_index: fromIndex, mode: 'truncate' }
+}
+
+/**
+ * 按档次分叉。
+ *
+ * `atSeq` 必须 > 0（后端 `session_branch.go` 直接 400 拒绝），这里提前拦下：
  * 让错误在 UI 就近显示，而不是变成一个笼统的 400。
  */
 export async function forkSession(
   sessionId: string,
-  atSeq: number,
+  options: ForkOptions,
   title: string,
-): Promise<CreatedSession> {
-  if (!Number.isInteger(atSeq) || atSeq <= 0) {
-    throw new Error(t('chat.sessionmap.invalidForkPoint'))
-  }
-  const result = await forkConversation(sessionId, { from_index: atSeq, title })
+): Promise<ForkOutcome> {
+  const request = buildForkRequest(options)
+  const result = await branchConversation(sessionId, { ...request, title })
   if (!result?.session_id) {
     throw new Error(t('errors.fork_failed'))
   }
-  return { id: result.session_id, title }
+  return {
+    id: result.session_id,
+    title,
+    copied: typeof result.copied === 'number' ? result.copied : request.from_index,
+    condensing: !!result.condensed && result.branch_state === 'pending',
+    mode: request.mode,
+  }
 }
 
 /** 改会话元数据：标题 / 别名 / 标签。空串表示清除该字段。 */

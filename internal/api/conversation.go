@@ -143,6 +143,55 @@ func parentTitlesFor(ctx context.Context, mgr *session.Manager, convs []Conversa
 	return titles
 }
 
+// ForkPoints 列出「自定义分叉」可选的落点（`GET /v1/conversations/{id}/fork-points`）。
+//
+// 为什么不复用 `GET /v1/conversations/{id}` 的消息数组：那条路径按 `seq DESC`
+// 走（能用上 ix_messages_session_seq），而 0016 迁移自述存量行的 `seq` 与
+// `created_at` 顺序可能不一致；分叉的复制窗口却按 `ORDER BY created_at, id` 算。
+// 前端拿列表下标当 `from_index` 会在存量数据上静默错位 —— 用户以为从第 10 条分叉，
+// 实际复制的是另外 10 条。所以选点必须走与复制语句同口径的专用查询
+// （`session.Manager.ListForkPoints`）。
+func (h *ConversationHandler) ForkPoints(w http.ResponseWriter, r *http.Request) {
+	id := r.PathValue("id")
+	if id == "" {
+		BadRequest(w, "id is required")
+		return
+	}
+
+	claims := auth.GetClaims(r.Context())
+
+	sess, err := h.sessionMgr.GetSession(r.Context(), id)
+	if err != nil {
+		NotFound(w, "conversation not found")
+		return
+	}
+	// 与 Get 一致：不属于当前用户的会话一律 403（不泄露存在性细节）
+	if sess.UserID != claims.UserID {
+		Forbidden(w, "access denied")
+		return
+	}
+
+	points, err := h.sessionMgr.ListForkPoints(r.Context(), id)
+	if err != nil {
+		slog.Warn("list fork points failed", "session", id, "error", err)
+		JSON(w, http.StatusInternalServerError, APIResponse{
+			Success: false,
+			Error:   "cannot list fork points: " + err.Error(),
+		})
+		return
+	}
+
+	JSON(w, http.StatusOK, APIResponse{
+		Success: true,
+		Data: map[string]interface{}{
+			"points": points,
+			// total 显式给出：「全量分叉」与「压缩分叉」都要用"最后一条"当分叉点，
+			// 让前端不必自己从数组长度推断（数组可能为空，长度 0 不是合法 from_index）。
+			"total": len(points),
+		},
+	})
+}
+
 // Get returns a single session with its messages (with optional pagination).
 func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")

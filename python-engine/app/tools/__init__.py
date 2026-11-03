@@ -53,7 +53,7 @@ else:
     import app.tools.subagent_result  # noqa: F401 — read_subagent_result
     import app.tools.subagent_resume  # noqa: F401 — resume_subagent（R5(b)：带步骤继续 / 分叉）
     import app.tools.terminal  # noqa: F401
-    import app.tools.todo  # noqa: F401 — write_todos（S6a 计划状态）
+    import app.tools.todo  # noqa: F401 — todo_write（任务清单 / 共享看板）
     import app.tools.tool_result  # noqa: F401 — 取回被结构摘要替换的工具结果原文
     import app.tools.tool_search  # noqa: F401 — 按需激活入口（Token Economy）
     import app.tools.use_capability  # noqa: F401 — P7：外部能力代理（MCP / 插件只经它进入）

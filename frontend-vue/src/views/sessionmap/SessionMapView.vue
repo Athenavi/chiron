@@ -19,15 +19,24 @@
 import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 
-import { getChatSessionMessages } from '../../api'
+import { serverErrorMessage } from '../../utils/apiError'
 import type { ChatSession } from '../../components/chat/chat-types'
 import CardInspector from './components/CardInspector.vue'
 import DraftComposer from './components/DraftComposer.vue'
+import ForkDialog from './components/ForkDialog.vue'
 import ImportPicker from './components/ImportPicker.vue'
 import MapCanvas from './components/MapCanvas.vue'
 import ThreadDetail from './components/ThreadDetail.vue'
-import { requestForkNode } from './api'
-import { createSession, forkSession, sendMessage, type MapActionDeps } from './useMapActions'
+import { getForkPoints } from './api'
+import {
+  createSession,
+  forkSession,
+  sendMessage,
+  type ForkMode,
+  type ForkTier,
+  type MapActionDeps,
+} from './useMapActions'
+import type { ForkPoint } from './types'
 import { ancestorsToExpand, buildMapGraph, findCardBySession } from './useSessionMapGraph'
 import { layoutNodes } from './useMapLayout'
 import { useSessionMapWorkspace } from './useSessionMapWorkspace'
@@ -37,6 +46,13 @@ const props = defineProps<{
   sessions: readonly ChatSession[]
   activeSessionId?: string
   runningSessionIds?: readonly string[]
+  /**
+   * 会话 id → 正在流式输出的尾部文本（宿主 `runtimes` 的投影）。
+   *
+   * 旧 iframe 版靠 `postMessage` 逐 chunk 推送，改造时随 iframe 一起被删掉，
+   * 于是卡片只剩「运行中」脉冲点、看不到文字。这里改由宿主投影后单向传入。
+   */
+  streamPreviews?: Record<string, string>
   /** 宿主的请求级配置（模型/工具授权…），由这里注入而不是地图自己重建 */
   buildLlmConfig?: () => Record<string, unknown>
 }>()
@@ -70,6 +86,7 @@ const {
   dragNode,
   collapseNode,
   replaceNodes,
+  flush,
 } = useSessionMapWorkspace()
 
 const selectedCardId = ref('')
@@ -84,6 +101,19 @@ const importBusy = ref(false)
 const actionError = ref('')
 const deleteArmed = ref(false)
 let deleteTimer: ReturnType<typeof setTimeout> | null = null
+
+/**
+ * 三档分叉对话框的状态。
+ *
+ * `forkCardId` 非空即打开；同时把落点列表与总数缓存在这里，因为它们是**打开时才需要**
+ * 的数据 —— 每张卡片都预取一次会让打开地图就打出一串请求。
+ */
+const forkCardId = ref('')
+const forkBusy = ref(false)
+const forkError = ref('')
+const forkLoading = ref(false)
+const forkPoints = ref<ForkPoint[]>([])
+const forkTotal = ref(0)
 
 /** 会话 id → 元数据（投影层要的扁平表，避免每张卡线性查找）。 */
 const sessionIndex = computed(() => new Map(props.sessions.map(s => [s.id, s])))
@@ -145,44 +175,86 @@ async function submitFollowup() {
 }
 
 /**
- * 该会话当前有多少条消息 —— 分叉点的语义就是这个数。
+ * 打开分叉对话框。
  *
- * 后端 `session_fork.go:33-35` 把 `from_index` 定义为「保留前多少条消息（含第
- * `from_index` 条）」，`ForkSession` 走 `Mode: "truncate"`。所以"从这张卡片分叉"
- * = 复制到该会话的最后一条。用图上的子节点数或节点自身的 `branch_from_seq` 都不对：
- * 前者是画布层级，后者是**本节点当初从父会话分出来的位置**，两者与消息条数无关。
+ * 落点列表只在这里按需拉取：它要打一次 `GET /fork-points`，而地图上可能有几十张卡 ——
+ * 预取会让"打开地图"变成一串请求。
  */
-async function messageCount(sessionId: string): Promise<number> {
+async function openFork(cardId: string) {
+  const card = graph.value.cards.find(c => c.id === cardId)
+  if (!card?.sessionId) return
+  actionError.value = ''
+  forkError.value = ''
+  forkPoints.value = []
+  forkTotal.value = 0
+  forkCardId.value = cardId
+  forkLoading.value = true
   try {
-    const res = await getChatSessionMessages(sessionId)
-    // 该接口返回**未拆包**的 `data`，两种形状都见过（见 ThreadDetail 的同款兜底）
-    const payload = res && typeof res === 'object' && 'messages' in res ? res : (res as { data?: { messages?: unknown[] } })?.data
-    const list = (payload as { messages?: unknown[] } | undefined)?.messages
-    return Array.isArray(list) && list.length > 0 ? list.length : 1
-  } catch {
-    // 拿不到条数时不阻断分叉：1 是后端接受的最小合法值
-    return 1
+    const result = await getForkPoints(card.sessionId)
+    // 对话框可能在请求返回前就被关掉：此时不要再往里塞数据，
+    // 否则下次打开另一张卡会先闪一下上一张卡的落点。
+    if (forkCardId.value !== cardId) return
+    forkPoints.value = result.points
+    forkTotal.value = result.total
+  } catch (e) {
+    if (forkCardId.value === cardId) {
+      forkError.value = serverErrorMessage(e, t('chat.sessionmap.forkLoadFailed'))
+    }
+  } finally {
+    if (forkCardId.value === cardId) forkLoading.value = false
   }
 }
 
-/** 分叉：先算分叉点 → 问后端接回地图的格式 → 真复制 → 新节点挂到父节点下并落库。 */
-async function forkFrom(cardId: string) {
-  const card = graph.value.cards.find(c => c.id === cardId)
-  if (!card?.sessionId || !activeId.value) return
-  actionError.value = ''
+function closeFork() {
+  if (forkBusy.value) return
+  forkCardId.value = ''
+  forkError.value = ''
+  forkPoints.value = []
+  forkTotal.value = 0
+}
+
+/** 当前正在分叉的卡片（对话框打开期间不会变，除非被关掉）。 */
+const forkCard = computed(() => graph.value.cards.find(c => c.id === forkCardId.value) ?? null)
+
+/**
+ * 执行分叉：落库 → 调 `/branch` → 新节点挂到父节点下 → 切到新会话。
+ *
+ * 三档只差参数，参数映射在 `useMapActions.ts::buildForkRequest` 里（纯函数、可测）。
+ * 这里保留 `flush()` 是必须的：节点保存走 800ms 防抖，而 `addNode` 依赖
+ * 父节点已在内存里 —— 但更关键的是**新节点必须落库**，否则刷新页面后它消失。
+ */
+async function confirmFork(payload: { tier: ForkTier; fromIndex: number; mode?: ForkMode }) {
+  const card = forkCard.value
+  if (!card?.sessionId || forkBusy.value) return
+  forkBusy.value = true
+  forkError.value = ''
   try {
-    const fromIndex = await messageCount(card.sessionId)
-    const hint = await requestForkNode(activeId.value, { node_id: card.id, from_index: fromIndex })
-    const created = await forkSession(card.sessionId, hint?.from_index ?? fromIndex, card.title)
+    await flush()
+    const created = await forkSession(
+      card.sessionId,
+      { tier: payload.tier, fromIndex: payload.fromIndex, mode: payload.mode },
+      card.title,
+    )
     addNode({
       sessionId: created.id,
       title: created.title,
       parentNodeId: card.id,
-      branchFromSeq: hint?.from_index ?? fromIndex,
+      branchFromSeq: payload.fromIndex,
     })
+    forkBusy.value = false
+    closeFork()
+    // 压缩档的摘要由后端异步生成（`branch_state='pending'`）：这里只切过去，
+    // 不等待摘要 —— 新会话已经可用，摘要几秒后作为一条 system 消息出现。
     emit('switch-session', created.id)
-  } catch {
-    actionError.value = t('chat.sessionmap.serviceFailed')
+    // 压缩档要让宿主知道"这个会话还在生成摘要"，好在卡片上转圈；
+    // 新节点已经落库，列表刷新后能读到最新状态。
+    emit('refresh-sessions')
+  } catch (e) {
+    // 用 `serverErrorMessage` 而不是 `describeApiError`：分叉失败返回的是 400/404/409，
+    // 而 `describeApiError` 会把这些换成本地化通用文案（`400 → "请求无效"`），
+    // 把 `cannot fork this conversation: …` 这段唯一线索盖掉。
+    forkError.value = serverErrorMessage(e, t('chat.sessionmap.serviceFailed'))
+    forkBusy.value = false
   }
 }
 
@@ -359,11 +431,12 @@ async function armDelete() {
           :cards="graph.cards"
           :edges="graph.edges"
           :active-id="selectedCardId"
+          :stream-previews="streamPreviews"
           @move-card="moveCard"
           @select-card="selectedCardId = $event"
           @toggle-collapse="toggleCollapse"
           @open-detail="openDetail"
-          @fork="forkFrom"
+          @fork="openFork"
           @followup="startFollowup"
         />
         <p
@@ -390,6 +463,18 @@ async function armDelete() {
           :busy="importBusy"
           @import="confirmImport"
           @cancel="importOpen = false"
+        />
+
+        <ForkDialog
+          v-if="forkCard"
+          :source-title="forkCard.title"
+          :points="forkPoints"
+          :total="forkTotal"
+          :loading="forkLoading"
+          :busy="forkBusy"
+          :error="forkError"
+          @confirm="confirmFork"
+          @cancel="closeFork"
         />
 
         <form
@@ -439,7 +524,7 @@ async function armDelete() {
           editable
           @close="selectedCardId = ''"
           @followup="startFollowup(selectedCard.id)"
-          @fork="forkFrom(selectedCard.id)"
+          @fork="openFork(selectedCard.id)"
           @meta-updated="emit('refresh-sessions')"
         />
 

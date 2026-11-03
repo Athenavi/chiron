@@ -128,6 +128,11 @@ class AgentEvent:
     trace_id: str = ""  # 单次用户请求的唯一标识
     span_name: str = ""  # 当前 span 名称 (llm_call / tool_execution / workflow_node)
     duration_ms: int = 0  # span 耗时 (毫秒)
+    #: 任务清单的修订号（仅 type="todo_updated"）。写入方每改一次板子就 +1。
+    #: 前端**必须**据此丢弃乱序到达的旧事件：SSE 重连补发、多副本接力都会让事件
+    #: 不按产生顺序抵达，没有版本号时表现是面板"倒退一格"然后永远差一格 ——
+    #: 而且不报错，只在用户眼里像"卡住了"。
+    revision: int = 0
 
 
 @dataclass

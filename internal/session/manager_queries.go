@@ -2,6 +2,7 @@ package session
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -104,7 +105,84 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	return page, nil
 }
 
-// GetMessages retrieves messages for a session, oldest first, with optional limit.
+// ForkPoint 是「自定义分叉」选点用的一条消息。
+type ForkPoint struct {
+	// Index 是 1 基序号，与复制窗口的 ROW_NUMBER() 完全同口径
+	Index     int       `json:"index"`
+	Role      string    `json:"role"`
+	Preview   string    `json:"preview"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ListForkPoints 按**复制窗口同口径**列出可选的智能分叉点。
+//
+// 口径必须与 `BranchSession` 的复制语句一致：
+//
+//	ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+//	FROM messages WHERE session_id = $1 ORDER BY created_at, id
+//
+// 这里刻意**不用** `seq`：`GetMessagesPage` 按 `ORDER BY seq DESC` 走（那是分页的正确
+// 选择，能用上 ix_messages_session_seq），但 0016 迁移自述「存量行的 seq 按物理顺序回填，
+// 与 created_at 的相对顺序可能不一致」。若前端拿分页列表的下标当 `from_index`，
+// 在存量数据上会**静默错位** —— 用户以为从第 10 条分叉，实际复制的是另外 10 条。
+//
+// 所以选点必须走这条与复制语句同源的查询，page 也不复用。
+func (m *Manager) ListForkPoints(ctx context.Context, sessionID string) ([]ForkPoint, error) {
+	if m.pool == nil {
+		return nil, errors.New("database unavailable")
+	}
+	rows, err := m.pool.Query(ctx,
+		`SELECT rn, role, content, created_at
+		   FROM (SELECT role, content, created_at,
+		                ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+		           FROM messages
+		          WHERE session_id = $1) g
+		  ORDER BY rn`, sessionID)
+	if err != nil {
+		return nil, fmt.Errorf("query fork points: %w", err)
+	}
+	defer rows.Close()
+
+	points := make([]ForkPoint, 0, 32)
+	for rows.Next() {
+		var (
+			rn   int64
+			role string
+			body string
+			at   time.Time
+		)
+		if err := rows.Scan(&rn, &role, &body, &at); err != nil {
+			return nil, fmt.Errorf("scan fork point: %w", err)
+		}
+		points = append(points, ForkPoint{
+			Index:     int(rn),
+			Role:      role,
+			Preview:   previewOf(body),
+			CreatedAt: at,
+		})
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate fork points: %w", err)
+	}
+	return points, nil
+}
+
+// forkPointPreviewRunes 是预览长度的上限。
+//
+// 预览只用于在下拉里辨认"是哪一条"，不是给用户读全文的；太长会把下拉撑成一面墙。
+// 用 rune 而不是 byte 截断：中文与阿拉伯语按字节切会切出半个字符。
+const forkPointPreviewRunes = 120
+
+// previewOf 压平空白并截断，避免多行内容把下拉的排版撑破。
+func previewOf(s string) string {
+	flat := strings.Join(strings.Fields(s), " ")
+	runes := []rune(flat)
+	if len(runes) <= forkPointPreviewRunes {
+		return flat
+	}
+	return string(runes[:forkPointPreviewRunes]) + "…"
+}
+
 // If limit <= 0, returns all messages (legacy behavior).
 func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...int) ([]model.Message, error) {
 	if m.pool == nil {

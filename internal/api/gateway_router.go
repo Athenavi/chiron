@@ -448,6 +448,9 @@ func NewGatewayRouter(
 	// 会话分支（裁剪 + 压缩）：前端用它创建"带核心上下文的分支"（见 session_branch.go
 	// 与 docs/session-map-branch-design.md）。与 /fork 共用 BranchSession，只差 mode。
 	mux.Handle("POST /v1/conversations/{id}/branch", authMW(rlMW(BranchConversationHandler(sessionMgr, pythonClient))))
+	// 重试压缩：压缩是异步的，失败/网关重启会把 branch_state 停在 failed/pending，
+	// 没有这个入口那两个状态就是死胡同（见 session_branch.go::BranchRetryHandler）。
+	mux.Handle("POST /v1/conversations/{id}/branch/retry", authMW(rlMW(BranchRetryHandler(sessionMgr, pythonClient))))
 	registerAuthRoutes(mux, authHandler, authMW, rlMW)
 
 	// ── SSO 三方登录（公开流程 rlMW；用户自助 authMW；管理 authMW + sso:manage）──

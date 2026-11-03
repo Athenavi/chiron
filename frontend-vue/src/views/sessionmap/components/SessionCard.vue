@@ -21,6 +21,14 @@ const props = defineProps<{
   card: MapCard
   /** 画布是否允许编辑（只读模式下隐藏写操作入口） */
   editable?: boolean
+  /**
+   * 正在流式输出的尾部文本（宿主运行态，由 `SessionMapView` 透传）。
+   *
+   * 刻意**不放进 `MapCard`**：`MapCard` 是节点持久化数据的投影，而预览每几十毫秒
+   * 就变一次。混进去会让血缘/折叠这些基于图结构的计算带上高频抖动的字段，
+   * 也会让「布局已保存」的比较逻辑误判为脏数据。
+   */
+  preview?: string
 }>()
 
 const emit = defineEmits<{
@@ -102,6 +110,19 @@ const collapseLabel = computed(() =>
       class="map-card-detached"
     >
       {{ t('chat.sessionmap.detached') }}
+    </p>
+
+    <!--
+      实时流式预览：旧 iframe 版靠 postMessage 把每个 chunk 推进画布，改造时随
+      iframe 一起被删掉了，于是卡片只剩脉冲点、看不到文字。这里直接读宿主投影
+      出来的尾部文本（见 streamPreview.ts），不新建第二份缓冲区。
+    -->
+    <p
+      v-if="card.running && preview"
+      class="map-card-preview"
+      role="status"
+    >
+      {{ preview }}
     </p>
 
     <footer class="map-card-actions">
@@ -262,6 +283,25 @@ const collapseLabel = computed(() =>
 
 .map-card-branch {
   color: var(--text-link);
+}
+
+/*
+  流式预览：限制两行，避免输出变长时卡片高度不断跳动 —— 画布上高度抖动会让
+  连线端点跟着移动，看起来像整张图在抽搐。用 line-clamp 裁剪而不是截断字符串，
+  这样换语言/改变字号也不会溢出。
+*/
+.map-card-preview {
+  display: -webkit-box;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  overflow: hidden;
+  margin: 6px 0 0;
+  font-size: var(--fs-xs);
+  line-height: var(--lh-snug);
+  color: var(--text-secondary);
+  overflow-wrap: anywhere;
+  /* 旧实现这里会整页重渲染；用 CSS 过渡让文本变化不产生视觉跳变 */
+  transition: opacity var(--dur-fast);
 }
 
 .map-card-tag {

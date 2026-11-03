@@ -3,7 +3,7 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 const mocks = vi.hoisted(() => ({
   post: vi.fn(),
   updateConversation: vi.fn(),
-  forkConversation: vi.fn(),
+  branchConversation: vi.fn(),
 }))
 
 vi.mock('../../../api', () => ({
@@ -11,10 +11,12 @@ vi.mock('../../../api', () => ({
   updateConversation: mocks.updateConversation,
 }))
 
-vi.mock('../api', () => ({ forkConversation: mocks.forkConversation }))
+/** 分叉现在统一走 `/branch`（三档只差参数），`/fork` 已不再被前端调用。 */
+vi.mock('../api', () => ({ branchConversation: mocks.branchConversation }))
 
 import {
   appendNode,
+  buildForkRequest,
   createSession,
   followupContent,
   forkSession,
@@ -97,25 +99,116 @@ describe('sendMessage', () => {
   })
 })
 
+describe('buildForkRequest —— 三档参数映射（纯函数）', () => {
+  it('全量档：truncate + 落点，不带 keep_tail', () => {
+    expect(buildForkRequest({ tier: 'full', fromIndex: 12 })).toEqual({
+      from_index: 12,
+      mode: 'truncate',
+    })
+  })
+
+  it('压缩档：condense + 显式 keep_tail=0（一条原文都不留，只剩摘要）', () => {
+    // 这里必须显式是 0：省略会落到后端默认值 4，变成"摘要 + 4 条原文"，
+    // 与用户选的"压缩分叉"档位不符。
+    expect(buildForkRequest({ tier: 'condensed', fromIndex: 12 })).toEqual({
+      from_index: 12,
+      mode: 'condense',
+      keep_tail: 0,
+    })
+  })
+
+  it('自定义档选压缩：condense 且不带 keep_tail（用后端默认的 4 条原文）', () => {
+    expect(buildForkRequest({ tier: 'custom', fromIndex: 7, mode: 'condensed' })).toEqual({
+      from_index: 7,
+      mode: 'condense',
+    })
+  })
+
+  it('自定义档选全量：truncate', () => {
+    expect(buildForkRequest({ tier: 'custom', fromIndex: 7, mode: 'full' })).toEqual({
+      from_index: 7,
+      mode: 'truncate',
+    })
+  })
+
+  it('自定义档未指定方式时默认压缩（与后端默认 mode 一致）', () => {
+    expect(buildForkRequest({ tier: 'custom', fromIndex: 7 }).mode).toBe('condense')
+  })
+
+  it.each([0, -1, 1.5, Number.NaN])('落点 %s 非法时就地拒绝', (bad) => {
+    expect(() => buildForkRequest({ tier: 'full', fromIndex: bad })).toThrow('分叉点无效')
+  })
+})
+
 describe('forkSession', () => {
-  it('把分叉点作为 from_index 传下去', async () => {
-    mocks.forkConversation.mockResolvedValue({ session_id: 's2', parent_session_id: 's1', branch_from_seq: 7, copied: 7 })
+  it('全量档打 /branch 并回传复制条数', async () => {
+    mocks.branchConversation.mockResolvedValue({
+      session_id: 's2',
+      parent_session_id: 's1',
+      branch_from_seq: 7,
+      branch_mode: 'truncate',
+      branch_state: '',
+      copied: 7,
+      condensed: false,
+    })
 
-    const created = await forkSession('s1', 7, '分支')
+    const created = await forkSession('s1', { tier: 'full', fromIndex: 7 }, '分支')
 
-    expect(mocks.forkConversation).toHaveBeenCalledWith('s1', { from_index: 7, title: '分支' })
-    expect(created).toEqual({ id: 's2', title: '分支' })
+    expect(mocks.branchConversation).toHaveBeenCalledWith('s1', {
+      from_index: 7,
+      mode: 'truncate',
+      title: '分支',
+    })
+    expect(created).toEqual({ id: 's2', title: '分支', copied: 7, condensing: false, mode: 'truncate' })
+  })
+
+  it('压缩档把"摘要生成中"透出来（pending 不等于失败）', async () => {
+    mocks.branchConversation.mockResolvedValue({
+      session_id: 's3',
+      parent_session_id: 's1',
+      branch_from_seq: 20,
+      branch_mode: 'condense',
+      branch_state: 'pending',
+      copied: 0,
+      condensed: true,
+    })
+
+    const created = await forkSession('s1', { tier: 'condensed', fromIndex: 20 }, '摘要分支')
+
+    expect(mocks.branchConversation).toHaveBeenCalledWith('s1', {
+      from_index: 20,
+      mode: 'condense',
+      keep_tail: 0,
+      title: '摘要分支',
+    })
+    expect(created.condensing).toBe(true)
+  })
+
+  it('分支摘要已 ready 时不算"生成中"', async () => {
+    mocks.branchConversation.mockResolvedValue({
+      session_id: 's4',
+      parent_session_id: 's1',
+      branch_from_seq: 5,
+      branch_mode: 'condense',
+      branch_state: 'ready',
+      copied: 4,
+      condensed: true,
+    })
+
+    const created = await forkSession('s1', { tier: 'custom', fromIndex: 5, mode: 'condensed' }, 'x')
+
+    expect(created.condensing).toBe(false)
   })
 
   it('分叉点 <= 0 时就地拒绝（后端会 400，提前拦下让错误就近显示）', async () => {
-    await expect(forkSession('s1', 0, 'x')).rejects.toThrow('分叉点无效')
-    expect(mocks.forkConversation).not.toHaveBeenCalled()
+    await expect(forkSession('s1', { tier: 'full', fromIndex: 0 }, 'x')).rejects.toThrow('分叉点无效')
+    expect(mocks.branchConversation).not.toHaveBeenCalled()
   })
 
   it('响应缺少 session_id 时抛错', async () => {
-    mocks.forkConversation.mockResolvedValue({})
+    mocks.branchConversation.mockResolvedValue({})
 
-    await expect(forkSession('s1', 3, 'x')).rejects.toThrow('分叉失败')
+    await expect(forkSession('s1', { tier: 'full', fromIndex: 3 }, 'x')).rejects.toThrow('分叉失败')
   })
 })
 

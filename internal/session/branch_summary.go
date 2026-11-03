@@ -5,6 +5,8 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+
+	"github.com/jackc/pgx/v5"
 )
 
 // ── 分支压缩摘要的落库（P2）──
@@ -102,4 +104,44 @@ func (m *Manager) ResetBranchStateForRetry(ctx context.Context, sessionID string
 		return false, fmt.Errorf("reset branch state: %w", err)
 	}
 	return tag.RowsAffected() > 0, nil
+}
+
+// BranchInfo 是「重试压缩」所需的元数据：血缘 + 归一化后的保留条数。
+//
+// 为什么不复用 `GetSession`：`model.Session` 只暴露了 parent_session_id / branch_from_seq，
+// 而重试必须知道 `branch_mode`（只有 condense 能重试）、`branch_state`（决定能否重置）
+// 与 `branch_keep_tail`（引擎压缩要按当初那份归一化后的窗口重跑）。
+// 少任何一个，重试都会用错参数重算一份与原来不一致的摘要。
+type BranchInfo struct {
+	SessionID       string
+	ParentSessionID string
+	BranchFromSeq   int
+	BranchMode      string
+	BranchState     string
+	// KeepTail 是 `planBranch` 归一化后写进 `branch_keep_tail` 的值。
+	KeepTail int
+	UserID   string
+}
+
+// GetBranchInfo 读取分支会话的重试元数据（含归属校验所需的 user_id）。
+func (m *Manager) GetBranchInfo(ctx context.Context, sessionID string) (BranchInfo, error) {
+	if m.pool == nil {
+		return BranchInfo{}, errors.New("database unavailable")
+	}
+	var info BranchInfo
+	info.SessionID = sessionID
+	err := m.pool.QueryRow(ctx,
+		`SELECT COALESCE(parent_session_id::text, ''), COALESCE(branch_from_seq, 0),
+		        COALESCE(branch_mode, ''), COALESCE(branch_state, ''),
+		        COALESCE(branch_keep_tail, 0), COALESCE(user_id::text, '')
+		   FROM sessions WHERE id::text = $1`, sessionID).
+		Scan(&info.ParentSessionID, &info.BranchFromSeq, &info.BranchMode,
+			&info.BranchState, &info.KeepTail, &info.UserID)
+	if err == pgx.ErrNoRows {
+		return BranchInfo{}, fmt.Errorf("%w: %s", ErrSessionNotFound, sessionID)
+	}
+	if err != nil {
+		return BranchInfo{}, fmt.Errorf("query branch info: %w", err)
+	}
+	return info, nil
 }

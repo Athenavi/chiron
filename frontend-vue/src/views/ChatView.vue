@@ -28,6 +28,7 @@ import ChatEmptyHero from '../components/chat/ChatEmptyHero.vue'
 import { addToOutbox, bumpRetryCount, clearOutbox, readOutbox, removeFromOutbox, type OutboxEntry } from '../components/chat/failedOutbox'
 import ChatInput from '../components/chat/ChatInput.vue'
 import SessionMapView from './sessionmap/SessionMapView.vue'
+import { pickStreamPreview } from './sessionmap/streamPreview'
 import ChatSetupTour from '../components/chat/ChatSetupTour.vue'
 import OnboardingGuide from '../components/chat/OnboardingGuide.vue'
 import { useNewUserOnboarding, markFirstMessageDone } from '../composables/useNewUserOnboarding'
@@ -35,6 +36,9 @@ import { TOUR_ANCHORS, type TourReason } from '../composables/useOnboardingTour'
 import { useChatShare } from '../composables/useChatShare'
 import { useApprovalEdit, type PendingApproval } from '../composables/useApprovalEdit'
 import { useTranscriptSearch } from '../composables/useTranscriptSearch'
+import { useTodoPanel } from '../composables/useTodoPanel'
+import { boardFromHistory } from '../components/chat/todoProjection'
+import TodoPanel from '../components/chat/TodoPanel.vue'
 import { useSessionMeta } from '../composables/useSessionMeta'
 import { useMessageFailure } from '../composables/useMessageFailure'
 import { useKeyboardShortcuts } from '../composables/useKeyboardShortcuts'
@@ -368,6 +372,18 @@ listModels()
 // ── 会话状态 ──
 const sessions = ref<ChatSession[]>([])
 const activeSessionId = ref('')
+
+/**
+ * 任务清单面板（长任务防跑偏）。
+ *
+ * **刻意不放进 `items`**：`items` 是消息流投影，切会话/重放历史/`/clear` 都会整体
+ * 重建它；清单是跨轮次存活的全局状态，两者生命周期不同。混在一起的后果是任一侧的
+ * 重建都会破坏另一侧 —— 具体表现为"流式输出时面板被重建而闪断"，或"切回历史会话
+ * 看到上一轮任务残留的面板，而模型那边早已没有这份清单"。
+ * 所以清单按会话单独存（`useTodoPanel`），与消息流互不触碰。
+ */
+const todoPanel = useTodoPanel()
+const todoBoard = computed(() => todoPanel.boardOf(activeSessionId.value))
 
 /** 发送失败、已暂存到本地的消息（见 components/chat/failedOutbox.ts）。
  *  按会话隔离：切会话就重新读 —— 否则会把 A 会话的失败消息挂到 B 会话的重发按钮上。 */
@@ -1405,11 +1421,32 @@ const sidebarRunningIds = computed(() => {
 /**
  * 会话地图的实时状态。
  *
- * 旧实现靠 `postMessage` 把宿主的运行态与流式文本推给 iframe 里的画布。
- * 现在画布与宿主同进程：`runningSessionIds` 直接作为 prop 传给 `SessionMapView`，
- * 由投影层给卡片打上「运行中」标记 —— 不再有消息协议，也就没有"端口通配 '*'"、
- * `origin === 'null'`、20 秒回执超时这一整类问题。
+ * 旧实现靠 `postMessage` 把宿主的运行态与流式文本推给 iframe 里的画布，改造时
+ * 那条通道随 iframe 一起被删掉 —— 于是地图只剩「运行中」脉冲点，看不到正在生成的
+ * 文字。现在改为同进程单向 props：
+ *   - `mapRunningSessionIds` 给卡片打「运行中」标记
+ *   - `mapStreamPreviews` 给卡片提供正在输出的尾部文本
+ * 不再有消息协议，也就没有"端口通配 '*'"、`origin === 'null'`、20 秒回执超时这一整类问题。
  */
+const mapRunningSessionIds = computed<string[]>(() => [...sidebarRunningIds.value])
+
+/**
+ * 会话 id → 正在流式输出的尾部文本（卡片预览）。
+ *
+ * 只投影 `loading` 为真的会话：`streaming` 条目只在这期间存在，遍历全部会话纯属白算。
+ * 用 computed 而不是 watch + 手动维护一份 Map —— 内容本来就在 `runtimes` 里，
+ * 多一份缓存就多一处漂移，而漂移后的表现是「地图与对话页像两个模型在说话」。
+ */
+const mapStreamPreviews = computed<Record<string, string>>(() => {
+  const out: Record<string, string> = {}
+  for (const [sid, run] of runtimes) {
+    // `__none__` 是"未选中会话"的占位键，不是真实会话，不该出现在地图上
+    if (sid === '__none__' || !run.loading) continue
+    const text = pickStreamPreview(run.items)
+    if (text) out[sid] = text
+  }
+  return out
+})
 // ── 会话地图（同 SPA 视图，不再是 iframe）──
 //
 // 旧实现把会话操作编成 postMessage RPC：地图侧 `dshRpc(...)` 发出后**等一条带
@@ -1748,6 +1785,9 @@ function exportMarkdown() {
 function onSlashCommand(cmd: string) {
   switch (cmd) {
     case '/clear':
+      // 先清面板再清 activeSessionId：反过来的话取不到会话 id，
+      // 旧清单会留在 map 里，下次切回这个 id 时"复活"出一个已经清空的清单。
+      todoPanel.clear(activeSessionId.value)
       items.value = []
       activeSessionId.value = ''
       notify.info(t('chat.current_conversation_cleared'))
@@ -1756,6 +1796,7 @@ function onSlashCommand(cmd: string) {
       exportMarkdown()
       break
     case '/new':
+      todoPanel.clear(activeSessionId.value)
       items.value = []
       activeSessionId.value = ''
       panelOpen.value = false
@@ -1887,6 +1928,17 @@ async function switchSession(id: string) {
       const run = currentRun.value
       if (!run.loading && run.items.length === 0) {
         items.value = mergeHistory(data.messages, data.tool_calls || [])
+      }
+      // 刷新后恢复任务清单：`todo_updated` 是实时事件、不会重放，不从这里补一次，
+      // 用户一刷新就看不到自己在跑的长任务（而模型那边仍有清单，因为它读的是 tool 消息）。
+      //
+      // 只在**当前没有板子**时投影：已有板子说明实时事件已经更新过它，历史里那份更旧 ——
+      // 用旧数据覆盖新数据会让面板一刷新就倒退。
+      if (!todoPanel.hasTodos(id)) {
+        const restored = boardFromHistory(data.tool_calls || [])
+        // 用 setBoard 而不是 applyEvent：restored 已经投影过（rows），
+        // 再喂给 applyEvent 会按原始条目形状重新解析一遍，把 dependsOn/owner 丢掉。
+        todoPanel.setBoard(id, restored, 0)
       }
       earliestCursor.value = data.cursor || ''
       hasMore.value = !!data.has_more
@@ -2033,6 +2085,8 @@ async function loadEarlier() {
 async function deleteSession(id: string) {
   try { await api.delete(`/v1/conversations/${id}`) } catch { /* 保留本地删除 */ }
   sessions.value = sessions.value.filter(s => s.id !== id); persistSessions()
+  // 会话没了，它的清单也不该留着：否则重建同名 id（或回退到同 id 的历史）时面板会凭空出现。
+  todoPanel.clear(id)
   if (activeSessionId.value === id) {
     activeSessionId.value = ''; items.value = []
     if (sessions.value.length > 0) await switchSession(sessions.value[0].id)
@@ -2167,7 +2221,7 @@ function goalCompletionNotice(raw: string): string {
   }
 }
 
-function onSSEMessage(raw: unknown) {
+function onSSEMessage(raw: unknown, sid: string) {
   // SSE 载荷来自服务端 JSON（createSSEConnection 的 onMessage 契约即 unknown）：
   // 在边界一次性窄化成 Record，后续各事件分支只做字段级取值，不把 unknown 透出去。
   const evt = (raw ?? {}) as Record<string, unknown>
@@ -2197,6 +2251,22 @@ function onSSEMessage(raw: unknown) {
         content: typeof content === 'string' ? content : JSON.stringify(content),
         isError: !!d.error,
       })
+    }
+  } else if (type === 'todo_updated') {
+    // 任务清单更新（引擎在 todo_write 执行后单独发，见 runtime.py）。
+    //
+    // **从事件投影、不解析 tool_result 正文**：tool_result 的 content 在大输出时会被
+    // 截断（`output_truncated`），去里面正则抠 JSON 会在那一刻静默失效 —— 面板停在
+    // 上一版看起来像"卡住了"，而事件通道始终是完整结构化数据。
+    //
+    // 归属用显式传入的 `sid`，**不是** `activeSessionId`：SSE 在用户切走之后仍会继续
+    // 送达（多会话并行），用当前视图的会话会把 A 的清单写到 B 的面板上。
+    let todos: unknown = []
+    try {
+      todos = JSON.parse(String(d.content ?? evt.content ?? '[]'))
+    } catch { todos = [] }
+    if (Array.isArray(todos)) {
+      todoPanel.applyEvent(sid, todos, d.revision ?? evt.revision)
     }
   } else if (type === 'completion') {
     // P1：host 证据判定的**实时**结论。只在"未完成"时插一条通知行 —— 否则"这一轮没做完"
@@ -2387,7 +2457,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
     if (activeSSE) { activeSSE.close(); activeSSE = null }
     activeSSE = createSSEConnection(
       sessionId,
-      (raw) => withRun(runOf(sessionId), () => onSSEMessage(raw)),
+      (raw) => withRun(runOf(sessionId), () => onSSEMessage(raw, sessionId)),
       () => {
         loading.value = false
         stopTurnTimer()
@@ -3002,6 +3072,17 @@ function continueGeneration() {
         @wake="wakeFromInbox"
       />
 
+      <!-- 任务清单：长任务的锚点。挂在输入区正上方（不塞进消息流），
+           这样无论滚到哪里都看得见"还剩几项、卡在哪"。
+           数据来自 useTodoPanel（按会话独立持有），**不读 items**。 -->
+      <TodoPanel
+        v-if="todoBoard.rows.length"
+        class="chat-todo-panel"
+        :board="todoBoard"
+        :collapsed="todoPanel.collapsed.value"
+        @toggle="todoPanel.toggleCollapsed()"
+      />
+
       <ChatInput
         ref="chatInputRef"
         :loading="loading"
@@ -3172,7 +3253,8 @@ function continueGeneration() {
       <SessionMapView
         :sessions="sessions"
         :active-session-id="activeSessionId"
-        :running-session-ids="runningSessionIds"
+        :running-session-ids="mapRunningSessionIds"
+        :stream-previews="mapStreamPreviews"
         :build-llm-config="buildLlmConfig"
         @close="synapseMapOpen = false"
         @switch-session="onMapSwitchSession"
@@ -3317,6 +3399,8 @@ function continueGeneration() {
 .chat-layout.is-swapped :deep(.side-panel) { order: -1; }
 .chat-layout.is-swapped :deep(.preview-pane) { order: 1; }
 .chat-body { position: relative; flex: 1; display: flex; flex-direction: column; min-height: 0; }
+/* 任务清单挂在输入区正上方：与输入框留一点呼吸，但不占满整行宽度 */
+.chat-todo-panel { flex: none; margin: 0 16px 6px; }
 .chat-toolbar {
   flex: none;
   display: grid;

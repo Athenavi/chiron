@@ -44,18 +44,26 @@ type BranchPlan struct {
 //	源会话  m1 ... m(N-K) | m(N-K+1) ... mN | m(N+1) ...
 //	        └─ 压缩区 ──┘ └─ 原文保留 ──┘ └─ 被裁掉（丢弃）─┘
 //	新会话  [ 模型压缩摘要 ] + m(N-K+1) ... mN
-func planBranch(mode string, fromIndex, keepTail int) (BranchPlan, error) {
+//
+// keepTail 用指针而不是 int，是为了把「没传」与「显式传 0」区分开：
+//   - nil  → 用默认值 4（老调用方与省略字段的行为不变）；
+//   - &0   → **一条原文都不保留**，整段进压缩区。
+//
+// 这个区分是「压缩分叉」档位的基础：新会话里只剩一条压缩摘要。
+// 若沿用 `keep == 0 → 默认 4`，压缩档就会静默变成"摘要 + 4 条原文"，
+// 与用户在对话框里选的那一档不符，且无法从参数上表达"只要摘要"。
+func planBranch(mode string, fromIndex int, keepTail *int) (BranchPlan, error) {
 	if fromIndex <= 0 {
 		return BranchPlan{}, errors.New("from_index must be greater than 0")
 	}
 	switch mode {
 	case "", "condense":
-		if keepTail < 0 {
-			return BranchPlan{}, errors.New("keep_tail must not be negative")
-		}
-		keep := keepTail
-		if keep == 0 {
-			keep = defaultBranchKeepTail
+		keep := defaultBranchKeepTail
+		if keepTail != nil {
+			if *keepTail < 0 {
+				return BranchPlan{}, errors.New("keep_tail must not be negative")
+			}
+			keep = *keepTail
 		}
 		if keep > fromIndex {
 			keep = fromIndex
@@ -84,7 +92,8 @@ func planBranch(mode string, fromIndex, keepTail int) (BranchPlan, error) {
 type BranchOptions struct {
 	Title     string
 	FromIndex int
-	KeepTail  int
+	// KeepTail：nil = 用默认值（4）；&0 = 一条原文都不留；正数 = 保留该条数。
+	KeepTail *int
 	// Mode："condense"（默认）或 "truncate"
 	Mode string
 }
@@ -135,10 +144,16 @@ func (m *Manager) BranchSession(ctx context.Context, srcSessionID, userID string
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// 源会话：校验归属（同租户语义由 tenant 过滤保证），并继承 agent/tenant
+	//
+	// ⚠ `user_id` 在库里是 **varchar**（`sessions.user_id :: character varying`），
+	// 不是 uuid —— 这里曾经写成 `user_id = NULLIF($2, '')::uuid`，PostgreSQL 直接报
+	// `operator does not exist: character varying = uuid`，于是**每一次分叉都失败**，
+	// 前端只把它笼统显示成"会话服务调用失败"。全仓其它查询（manager_crud.go、
+	// agents.go…）也都是按字符串比，只有这一处多转了 uuid。
 	var srcTitle string
 	if err := tx.QueryRow(ctx,
 		`SELECT COALESCE(title, '') FROM sessions
-		  WHERE id = $1 AND (user_id = NULLIF($2, '')::uuid OR user_id IS NULL)`,
+		  WHERE id = $1 AND (user_id = NULLIF($2, '') OR user_id IS NULL)`,
 		srcSessionID, userID).Scan(&srcTitle); err != nil {
 		return BranchResult{}, fmt.Errorf("source session not found: %w", err)
 	}

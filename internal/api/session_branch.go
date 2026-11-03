@@ -48,8 +48,11 @@ func BranchConversationHandler(sessionMgr *session.Manager, pythonClient *engine
 		var body struct {
 			// FromIndex：分叉点 —— 保留到源会话的第几条消息（含第 FromIndex 条）
 			FromIndex int `json:"from_index"`
-			// KeepTail：压缩式裁剪下保留多少条**原文**（0 = 用默认值 4）
-			KeepTail int `json:"keep_tail"`
+			// KeepTail：压缩式裁剪下保留多少条**原文**。
+			// 用指针区分「没传」与「显式 0」：前者用默认值 4，后者表示
+			// 一条原文都不留 —— 整段进压缩区，新会话里只剩一条摘要。
+			// 地图的「压缩分叉」档位就是靠 `keep_tail: 0` 表达的。
+			KeepTail *int `json:"keep_tail"`
 			// Mode："condense"（默认）| "truncate"
 			Mode  string `json:"mode"`
 			Title string `json:"title"`
@@ -68,7 +71,7 @@ func BranchConversationHandler(sessionMgr *session.Manager, pythonClient *engine
 			BadRequest(w, "mode must be condense or truncate")
 			return
 		}
-		if body.KeepTail < 0 {
+		if body.KeepTail != nil && *body.KeepTail < 0 {
 			BadRequest(w, "keep_tail must not be negative")
 			return
 		}
@@ -109,6 +112,94 @@ func BranchConversationHandler(sessionMgr *session.Manager, pythonClient *engine
 				"copied":            res.Copied,
 				// condensed=false 时前端显示"无需压缩"（压缩区太短，没有花模型调用）
 				"condensed": res.Condensed,
+			},
+		})
+	}
+}
+
+// BranchRetryHandler 重新触发一次分支压缩（`POST /v1/conversations/{id}/branch/retry`）。
+//
+// 为什么需要它：压缩是异步的，失败会把 `branch_state` 停在 `failed`（网关重启则停在
+// `pending`）。没有重试入口时，这两个状态就是**死胡同** —— 前端只能一直显示"压缩失败"，
+// 用户唯一的出路是重新分叉一次（多一份冗余会话）。`ResetBranchStateForRetry` 早就写好了，
+// 但全仓没有任何调用方，这个端点把它接上。
+//
+// 语义：重置状态 → 复用创建分支时的同一份归一化参数（`branch_from_seq` /
+// `branch_keep_tail`）重跑压缩。**不重新裁剪、不重建会话** —— 分支的原文已经是最终形态，
+// 重试只补那份缺掉的摘要。
+func BranchRetryHandler(sessionMgr *session.Manager, pythonClient *engine.PythonClient) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims := auth.GetClaims(r.Context())
+		if claims == nil {
+			Unauthorized(w, ErrAuthRequired)
+			return
+		}
+		sessionID := strings.TrimSpace(r.PathValue("id"))
+		if sessionID == "" {
+			BadRequest(w, "session id is required")
+			return
+		}
+
+		info, err := sessionMgr.GetBranchInfo(r.Context(), sessionID)
+		if err != nil {
+			// 与其它分支接口一致：不区分"不存在"与"无权限"，避免探测存在性
+			NotFound(w, "branch not found")
+			return
+		}
+		// 归属校验：只能重试自己的分支。`user_id` 在库里是 varchar，按字符串比
+		// （与 manager_branch.go 的注释同源：转 uuid 会直接报 operator does not exist）。
+		if info.UserID != "" && claims.UserID != "" && info.UserID != claims.UserID {
+			NotFound(w, "branch not found")
+			return
+		}
+		if info.BranchMode != "condense" {
+			BadRequest(w, "only condensed branches can be retried")
+			return
+		}
+		if info.ParentSessionID == "" {
+			BadRequest(w, "branch has no parent session to re-condense")
+			return
+		}
+		if info.BranchState == "pending" {
+			// 已有一次压缩在跑：重复触发会写下两份摘要（AppendBranchSummary 的 CAS
+			// 只挡住"非 pending"，挡不住"两个 pending 同时抢"）。直接告诉前端现状，
+			// 让它继续轮询而不是再排队一次模型调用。
+			JSON(w, http.StatusConflict, APIResponse{
+				Success: false,
+				Error:   "condense already in progress",
+			})
+			return
+		}
+
+		// 先重置再触发：顺序不能反 —— 反了会先写出摘要、再被重置回 pending，
+		// AppendBranchSummary 的 CAS 就会把刚写好的摘要当成"已被别人写好"而跳过。
+		reset, err := sessionMgr.ResetBranchStateForRetry(r.Context(), sessionID)
+		if err != nil {
+			slog.Warn("branch retry reset failed", "session", sessionID, "error", err)
+			JSON(w, http.StatusInternalServerError, APIResponse{
+				Success: false,
+				Error:   "cannot reset branch state: " + err.Error(),
+			})
+			return
+		}
+		if !reset {
+			// 并发下别人刚重置成功：同样按"已在压缩中"处理，不重复触发
+			JSON(w, http.StatusConflict, APIResponse{
+				Success: false,
+				Error:   "condense already in progress",
+			})
+			return
+		}
+
+		condenseBranchAsync(pythonClient, sessionMgr, sessionID, info.ParentSessionID, info.BranchFromSeq, info.KeepTail)
+		slog.Info("branch condense retried", "session", sessionID, "source", info.ParentSessionID)
+		JSON(w, http.StatusAccepted, APIResponse{
+			Success: true,
+			Data: map[string]interface{}{
+				"session_id":  sessionID,
+				"branch_mode": info.BranchMode,
+				// 状态一定是 pending：异步任务刚投出，前端据此继续显示"压缩中"
+				"branch_state": "pending",
 			},
 		})
 	}

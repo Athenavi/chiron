@@ -10,7 +10,11 @@
 import { api } from '../../api'
 
 import type {
+  BranchRequest,
+  BranchResult,
   ForkNodeHint,
+  ForkPoint,
+  ForkPointsResult,
   ForkResult,
   SaveWorkspaceResult,
   SessionMapNode,
@@ -103,4 +107,52 @@ export async function forkConversation(
 ): Promise<ForkResult> {
   const { data } = await api.post(`/v1/conversations/${encodeURIComponent(sessionId)}/fork`, params)
   return data?.data as ForkResult
+}
+
+/**
+ * 列出可选的智能分叉点（`GET /v1/conversations/{id}/fork-points`）。
+ *
+ * 只用它做「自定义分叉」的选点，**不要**用会话详情里的消息数组下标 ——
+ * 两者排序口径不同（见 `types.ts::ForkPoint` 的说明）。
+ */
+export async function getForkPoints(sessionId: string): Promise<ForkPointsResult> {
+  const { data } = await api.get(`/v1/conversations/${encodeURIComponent(sessionId)}/fork-points`)
+  const raw = (data?.data ?? {}) as Partial<ForkPointsResult>
+  const points = Array.isArray(raw.points) ? (raw.points as ForkPoint[]) : []
+  return {
+    points: points.filter(p => Number.isInteger(p?.index) && p.index > 0),
+    total: typeof raw.total === 'number' ? raw.total : points.length,
+  }
+}
+
+/**
+ * 创建分支会话（`POST /v1/conversations/{id}/branch`）。
+ *
+ * 三档分叉都走这一个端点，只差参数：
+ *   - 全量：`mode='truncate'`，`from_index` = 总会话条数；
+ *   - 压缩：`mode='condense'`，`keep_tail: 0`（一条原文不留，只剩摘要）；
+ *   - 自定义：由用户选 `from_index` / `keep_tail`。
+ *
+ * 压缩档返回 `branch_state='pending'`：摘要由后端异步生成，`condensed=true` 时
+ * 前端应显示"压缩中"而不是当成失败。
+ */
+export async function branchConversation(
+  sessionId: string,
+  body: BranchRequest,
+): Promise<BranchResult> {
+  const { data } = await api.post(
+    `/v1/conversations/${encodeURIComponent(sessionId)}/branch`,
+    body,
+  )
+  return data?.data as BranchResult
+}
+
+/**
+ * 重试一次失败的分支压缩（`POST /v1/conversations/{id}/branch/retry`）。
+ *
+ * 只对 `branch_mode='condense'` 的分支有效；`branch_state='pending'` 时后端返回 409
+ * （已有一次压缩在跑，重复触发会写下两份摘要）。
+ */
+export async function retryBranchCondense(sessionId: string): Promise<void> {
+  await api.post(`/v1/conversations/${encodeURIComponent(sessionId)}/branch/retry`)
 }

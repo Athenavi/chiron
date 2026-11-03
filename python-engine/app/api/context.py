@@ -24,15 +24,36 @@ from app.db import get_pool
 logger = logging.getLogger(__name__)
 router = APIRouter(tags=["context"])
 
-# 源消息读取上限：与 Go 侧复制窗口的语义一致（够用即可，避免一次把超长会话拉进内存）
+# 源消息读取上限：一次压缩最多读多少条，避免把超长会话整体拉进内存。
 MAX_SOURCE_MESSAGES = 400
 
-SOURCE_SQL = """
+# 分叉点之前的最后 N 条（倒序取、应用层翻回升序）。
+#
+# 为什么不是"最早的 N 条"：压缩的目的是让新会话"记得"它继承了什么。超长会话里
+# 最早的 400 条往往全是开场寒暄，最近的进展反而被丢掉 —— 摘要会退化成
+# "聊了很多但没有结论"，而上下文继承恰恰要的是最近在做什么、卡在哪。
+# 因此窗口取**分叉点往回数**的最近 N 条，而不是从会话开头数。
+SOURCE_HEAD_SQL = """
 SELECT role, content
-  FROM messages
- WHERE session_id::text = $1
- ORDER BY created_at, id
- LIMIT $2
+  FROM (SELECT role, content,
+               ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+          FROM messages
+         WHERE session_id::text = $1) g
+ WHERE rn <= $2
+ ORDER BY rn DESC
+ LIMIT $3
+"""
+
+# 分叉点之后的前 N 条（只在 include_future 为真时读）。
+SOURCE_FUTURE_SQL = """
+SELECT role, content
+  FROM (SELECT role, content,
+               ROW_NUMBER() OVER (ORDER BY created_at, id) AS rn
+          FROM messages
+         WHERE session_id::text = $1) g
+ WHERE rn > $2
+ ORDER BY rn
+ LIMIT $3
 """
 
 
@@ -59,15 +80,31 @@ async def condense_context(body: CondenseRequest) -> dict[str, Any]:
         logger.error("condense unavailable, db not initialized: %s", exc)
         raise HTTPException(status_code=503, detail="database unavailable") from exc
 
+    # 分叉点之前的最近 N 条（倒序取再翻正），不是"会话最早的 N 条"。
+    # 超长会话里最早的几百条往往全是开场，最近的进展会被挤掉 —— 那样压出来的摘要
+    # 记不住"现在在做什么"，而上下文继承要的正是这一点。
     try:
-        rows = await pool.fetch(SOURCE_SQL, body.session_id, MAX_SOURCE_MESSAGES)
+        head_rows = await pool.fetch(
+            SOURCE_HEAD_SQL, body.session_id, body.from_index, MAX_SOURCE_MESSAGES
+        )
     except Exception as exc:  # noqa: BLE001 - 查询失败（含非法 id）都按 400 处理
         logger.warning("condense source query failed: session=%s error=%s", body.session_id, exc)
         raise HTTPException(status_code=400, detail="cannot read source session") from exc
 
-    # 只压到分叉点为止：分叉点之后的内容属于"被裁掉"（除非显式要求 include_future）
-    source = [dict(row) for row in rows][: body.from_index]
-    future = [dict(row) for row in rows][body.from_index :] if body.include_future else []
+    # 倒序取到了"最近 N 条"，翻回升序喂给压缩函数（它按时间先后组织摘要）
+    source = [dict(row) for row in reversed(head_rows)]
+
+    future: list[dict[str, Any]] = []
+    if body.include_future:
+        try:
+            future_rows = await pool.fetch(
+                SOURCE_FUTURE_SQL, body.session_id, body.from_index, MAX_SOURCE_MESSAGES
+            )
+            future = [dict(row) for row in future_rows]
+        except Exception as exc:  # noqa: BLE001 - 后段只是锦上添花，读不到就退回纯前段摘要
+            logger.warning(
+                "condense future query failed: session=%s error=%s", body.session_id, exc
+            )
 
     gateway = None
     try:

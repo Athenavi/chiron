@@ -80,12 +80,12 @@
       "id": "full-long-task-plan-tracking",
       "category": "long_task",
       "tiers": ["full"],
-      "prompt": "这是一个多步任务：先列出计划（用 write_todos），再按计划把 notes.md 的前三行补成带序号的列表。",
+      "prompt": "这是一个多步任务：先列出计划（用 todo_write），再按计划把 notes.md 的前三行补成带序号的列表。",
       "fixture_files": {
         "notes.md": "第一件事\n第二件事\n第三件事\n"
       },
       "assertions": [
-        { "kind": "tool_called", "tool": "write_todos" },
+        { "kind": "tool_called", "tool": "todo_write" },
         { "kind": "file_contains", "path": "notes.md", "value": "1." }
       ],
       "efficiency": { "max_steps": 14, "max_tool_calls": 12 }

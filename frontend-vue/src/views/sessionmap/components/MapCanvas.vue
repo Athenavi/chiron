@@ -36,6 +36,14 @@ const props = defineProps<{
   readonly?: boolean
   /** 当前高亮的卡片 id（详情面板选中的那张） */
   activeId?: string
+  /**
+   * 会话 id → 正在流式输出的尾部文本。
+   *
+   * 与 `cards` 分开传是刻意的：`cards` 由节点持久化数据投影而来（拖拽/折叠/血缘都
+   * 基于它），而这里是每几十毫秒变一次的运行态。混在一起会让画布把每次 chunk
+   * 都当成图结构变化，重新走一遍节点 diff。
+   */
+  streamPreviews?: Record<string, string>
 }>()
 
 const emit = defineEmits<{
@@ -129,6 +137,7 @@ function onNodeClick(payload: { node: Node }) {
         <SessionCard
           :card="nodeProps.data"
           :editable="!readonly"
+          :preview="streamPreviews?.[nodeProps.data.sessionId] ?? ''"
           @toggle-collapse="emit('toggle-collapse', nodeProps.id)"
           @open-detail="emit('open-detail', nodeProps.id)"
           @fork="emit('fork', nodeProps.id)"

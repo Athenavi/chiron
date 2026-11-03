@@ -19,6 +19,10 @@ func registerConversationRoutes(
 	mux.Handle("GET /v1/conversations", authMW(rlMW(http.HandlerFunc(conversationHandler.List))))
 	mux.Handle("POST /v1/conversations", authMW(rlMW(http.HandlerFunc(conversationHandler.Create))))
 	mux.Handle("GET /v1/conversations/{id}", authMW(rlMW(http.HandlerFunc(conversationHandler.Get))))
+	// 「自定义分叉」的选点列表。必须与复制窗口同口径（ORDER BY created_at, id），
+	// 不能拿 GET /v1/conversations/{id} 的消息下标当分叉点 —— 那条路径按 seq 排序，
+	// 存量数据上与复制口径可能不一致（见 conversation.go::ForkPoints）。
+	mux.Handle("GET /v1/conversations/{id}/fork-points", authMW(rlMW(http.HandlerFunc(conversationHandler.ForkPoints))))
 	mux.Handle("PUT /v1/conversations/{id}", authMW(rlMW(http.HandlerFunc(conversationHandler.Update))))
 	mux.Handle("DELETE /v1/conversations/{id}", authMW(rlMW(http.HandlerFunc(conversationHandler.Delete))))
 

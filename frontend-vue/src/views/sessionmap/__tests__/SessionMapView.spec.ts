@@ -27,7 +27,7 @@ const mocks = vi.hoisted(() => ({
   sendMessage: vi.fn(),
   createSession: vi.fn(),
   forkSession: vi.fn(),
-  requestForkNode: vi.fn(),
+  getForkPoints: vi.fn(),
   setNodes: null as unknown as (list: unknown[]) => void,
 }))
 
@@ -57,7 +57,7 @@ vi.mock('../useSessionMapWorkspace', async () => {
   }
 })
 
-vi.mock('../api', () => ({ requestForkNode: mocks.requestForkNode }))
+vi.mock('../api', () => ({ getForkPoints: mocks.getForkPoints }))
 vi.mock('../useMapActions', () => ({
   createSession: mocks.createSession,
   forkSession: mocks.forkSession,

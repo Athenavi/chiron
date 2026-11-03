@@ -344,6 +344,15 @@ type PythonEvent struct {
 	Model        string `json:"model,omitempty"`
 	Message      string `json:"message,omitempty"`
 
+	// Revision：任务清单的修订号（仅 `todo_updated` 事件带，见 runtime_types.AgentEvent）。
+	//
+	// **必须在网关侧声明**：submit_handler 转发时是 `Data: evt`（本结构体），
+	// 未声明的字段在重新序列化那一刻就消失了 —— 前端拿到的事件里没有 revision，
+	// 它的乱序防护（shouldApply）退化成"永远接受"，重连补发时面板会倒退一格。
+	// 这条链路是"引擎 → PythonEvent → broadcast.Event → SSE 帧"三段序列化，
+	// 任何一段漏字段都只在最后一段表现为"某个字段莫名其妙没了"。
+	Revision int `json:"revision,omitempty"`
+
 	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 docs/subagent-design.md §4.2）──
 	// 这些字段让前端能按 run_id 建树、并按 depth/parent_run_id 还原层级；
 	// 主对话事件不带这些字段（omitempty 保证不污染既有帧）。

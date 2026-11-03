@@ -101,3 +101,63 @@ export interface ForkResult {
   /** 实际复制了多少条 */
   copied: number
 }
+
+/**
+ * `GET /v1/conversations/{id}/fork-points` 的元素。
+ *
+ * `index` 是 **1 基**序号，与后端复制窗口的 `ROW_NUMBER() OVER (ORDER BY created_at, id)`
+ * 完全同口径（`manager_queries.go::ListForkPoints`）。**不能**拿
+ * `GET /v1/conversations/{id}` 的消息数组下标来推 —— 那条路径按 `seq` 排序，
+ * 而 0016 迁移自述存量行的 `seq` 与 `created_at` 顺序可能不一致，
+ * 混用会让"从第 10 条分叉"实际复制另外 10 条，且**没有任何报错**。
+ */
+export interface ForkPoint {
+  index: number
+  role: string
+  preview: string
+  created_at: string
+}
+
+/** `GET /v1/conversations/{id}/fork-points` 的响应。 */
+export interface ForkPointsResult {
+  points: ForkPoint[]
+  /** 总会话条数；0 表示空会话（此时任何 from_index 都不合法） */
+  total: number
+}
+
+/** 分叉方式：逐字复制前 N 条，或压成摘要。与后端 `mode` 字段一一对应。 */
+export type BranchMode = 'truncate' | 'condense'
+
+/** `POST /v1/conversations/{id}/branch` 的请求体。 */
+export interface BranchRequest {
+  /** 分叉点：保留到源会话的第几条消息（含该条），必须 > 0 */
+  from_index: number
+  /**
+   * 压缩式分叉下保留多少条**原文**。
+   *
+   * 省略 = 用后端默认值 4；显式 `0` = 一条原文都不留，整段进压缩区
+   * （新会话里只剩一条摘要）—— 「压缩分叉」档位就是靠 `0` 表达的。
+   * 后端为此把该字段改成指针语义（`manager_branch.go::planBranch`）。
+   */
+  keep_tail?: number
+  mode: BranchMode
+  title?: string
+}
+
+/**
+ * `POST /v1/conversations/{id}/branch` 的响应（`session_branch.go`）。
+ *
+ * `condensed=true` 且 `branch_state='pending'` 表示摘要还在后台生成：
+ * 新会话**已经可用**（它带着尾部原文），摘要几秒后作为一条 `role=system`、
+ * `source=branch_summary` 的消息出现。压缩失败则置 `failed`，
+ * 由 `POST /v1/conversations/{id}/branch/retry` 重试。
+ */
+export interface BranchResult {
+  session_id: string
+  parent_session_id: string
+  branch_from_seq: number
+  branch_mode: BranchMode
+  branch_state: 'pending' | 'ready' | 'failed' | ''
+  copied: number
+  condensed: boolean
+}

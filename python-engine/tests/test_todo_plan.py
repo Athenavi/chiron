@@ -18,7 +18,7 @@ import pytest
 from app.agent.runtime import AgentRuntime, AgentTask
 from app.gateway.provider import ChatResponse, ToolCall
 from app.tools.context import get_tool_context, set_tool_context
-from app.tools.todo import MAX_TODOS, WRITE_TODOS_TOOL, current_todos, write_todos
+from app.tools.todo import MAX_TODOS, WRITE_TODOS_TOOL, current_todos, todo_write
 
 
 @pytest.fixture(autouse=True)
@@ -34,42 +34,74 @@ def _clean_tool_context():
 
 
 @pytest.mark.asyncio
-async def test_write_todos_normalizes_and_stores():
+async def test_todo_write_normalizes_and_stores():
     set_tool_context(session_id="s-todo")
-    out = await write_todos(
+    out = await todo_write(
         [
             {"content": "读代码", "status": "completed"},
-            {"content": "改一处"},
+            {"content": "改一处", "status": "pending"},
         ]
     )
     assert out["count"] == 2
     assert out["summary"] == {"completed": 1, "in_progress": 0, "pending": 1}
-    # 缺省 status 归为 pending；id 自动补
-    assert out["todos"][1]["status"] == "pending"
+    # id 由 host 赋予
     assert out["todos"][1]["id"] == "t2"
     # 可读回（runtime 与前端都靠它）
     assert [t["content"] for t in current_todos()] == ["读代码", "改一处"]
 
 
 @pytest.mark.asyncio
-async def test_write_todos_rejects_bad_input():
-    set_tool_context(session_id="s-todo-bad")
+async def test_todo_write_requires_both_fields():
+    """`content` / `status` 都是**必填** —— 这是"及时更新状态"能发生的前提。
 
-    assert "error" in await write_todos([])
-    assert "error" in await write_todos([{"content": "   "}])
-    assert "error" in await write_todos([{"content": "x", "status": "done"}])
-    assert "error" in await write_todos("not-a-list")  # type: ignore[arg-type]
-    assert "error" in await write_todos(
-        [{"content": f"t{i}"} for i in range(MAX_TODOS + 1)]
-    )
+    历史版本允许省略 status（缺省补成 pending），结果模型写清单时一律省掉状态、
+    之后也从不回来更新：面板上所有条目永远停在"待处理"，而"及时推进状态"这个
+    唯一有价值的行为恰好从未发生。必填强制它对每一项表态。
+    """
+    set_tool_context(session_id="s-todo-required")
+
+    missing_status = await todo_write([{"content": "没有状态"}])
+    assert "error" in missing_status
+    assert "status" in missing_status["error"]
+
+    missing_content = await todo_write([{"content": "  ", "status": "pending"}])
+    assert "error" in missing_content
+    assert "content" in missing_content["error"]
 
 
 @pytest.mark.asyncio
-async def test_write_todos_renders_compact_text():
-    """tool_result 里要有可读文本 —— 模型靠它看到自己的计划（而不是每轮重喂一份）。"""
+async def test_todo_write_accepts_status_alias():
+    """模型在多语言上下文里常直接写"进行中"；归一化而不是拒绝，避免无谓重试。"""
+    set_tool_context(session_id="s-todo-alias")
+    out = await todo_write(
+        [{"content": "中文状态", "status": "进行中"}, {"content": "英文别名", "status": "done"}]
+    )
+    assert "error" not in out
+    assert [t["status"] for t in out["todos"]] == ["in_progress", "completed"]
+
+
+@pytest.mark.asyncio
+async def test_todo_write_rejects_bad_input():
+    set_tool_context(session_id="s-todo-bad")
+
+    assert "error" in await todo_write([])
+    assert "error" in await todo_write("not-a-list")  # type: ignore[arg-type]
+    assert "error" in await todo_write(
+        [{"content": f"t{i}", "status": "pending"} for i in range(MAX_TODOS + 1)]
+    )
+    # 非法状态值（不在别名表里）
+    assert "error" in await todo_write([{"content": "x", "status": "banana"}])
+
+
+@pytest.mark.asyncio
+async def test_todo_write_renders_compact_text():
+    """tool_result 里要有可读文本 —— 模型靠它看到自己的清单（而不是每轮重喂一份）。"""
     set_tool_context(session_id="s-todo-render")
-    out = await write_todos(
-        [{"content": "a", "status": "completed"}, {"content": "b", "status": "in_progress"}]
+    out = await todo_write(
+        [
+            {"content": "a", "status": "completed"},
+            {"content": "b", "status": "in_progress"},
+        ]
     )
     assert "[x] a" in out["output"]
     assert "[~] b" in out["output"]
@@ -135,12 +167,12 @@ async def test_duplicate_plan_writes_in_one_batch_execute_once():
             ToolCall(
                 id="c1",
                 name=WRITE_TODOS_TOOL,
-                arguments='{"todos": [{"content": "first plan"}]}',
+                arguments='{"todos": [{"content": "first plan", "status": "pending"}]}',
             ),
             ToolCall(
                 id="c2",
                 name=WRITE_TODOS_TOOL,
-                arguments='{"todos": [{"content": "second plan"}]}',
+                arguments='{"todos": [{"content": "second plan", "status": "pending"}]}',
             ),
         ]
     )
@@ -167,7 +199,7 @@ async def test_plan_state_is_not_in_message_history():
             ToolCall(
                 id="c1",
                 name=WRITE_TODOS_TOOL,
-                arguments='{"todos": [{"content": "unique-marker-xyz"}]}',
+                arguments='{"todos": [{"content": "unique-marker-xyz", "status": "pending"}]}',
             )
         ]
     )
@@ -189,4 +221,8 @@ async def test_plan_state_is_not_in_message_history():
     assert not any("unique-marker-xyz" in (t or "") for t in system_texts), (
         "计划不该被塞进 system prompt 正文"
     )
-    assert get_tool_context("todos", []), "但状态本身必须留在上下文里（供前端与协同使用）"
+    # taskboard 在 context 里同步维护一份副本（形态是 {todos, revision, owner}，
+    # 不再是裸列表）—— 同进程读与 Redis 瞬断都靠它。
+    cached = get_tool_context("todos", {})
+    assert cached, "但状态本身必须留在上下文里（供前端与协同使用）"
+    assert cached["todos"][0]["content"] == "unique-marker-xyz"

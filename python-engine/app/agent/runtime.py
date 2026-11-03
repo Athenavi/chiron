@@ -2291,7 +2291,7 @@ class AgentRuntime:
                     # "1 写 + N 读"，整批降级会因一个写惩罚 9 个读（评审 01 §1.6）。
                     parallel_calls, serial_calls = _split_tool_batch(tool_calls)
 
-                    # S6a：同一条消息内只允许一次 `write_todos` —— 并发写计划只会互相覆盖
+                    # 同一条消息内只允许一次 `todo_write` —— 并发写清单只会互相覆盖
                     # （对位 deepagents 的 `TodoListMiddleware` 约束）。只有这一层知道"批"的边界，
                     # 所以检查放这里而不是工具内部。重复的调用**不执行**，直接用错误回灌。
                     from app.tools.todo import WRITE_TODOS_TOOL
@@ -2390,7 +2390,7 @@ class AgentRuntime:
                             # 重复的计划写入**没有执行**，这里给它一个明确的错误结果
                             tool_result = {
                                 "error": (
-                                    "write_todos 同一条消息内只允许调用一次"
+                                    "todo_write 同一条消息内只允许调用一次"
                                     "（并发写计划会互相覆盖）"
                                 )
                             }
@@ -2439,15 +2439,18 @@ class AgentRuntime:
                             trace_id=trace_id,
                         )
 
-                        # S6a：计划更新单独发一个事件 —— 前端可直接渲染进度，
+                        # 计划更新单独发一个事件 —— 前端可直接渲染进度，
                         # 不必去解析 tool_result 的 JSON（那是给模型看的）
                         if str(call.get("name", "")) == WRITE_TODOS_TOOL and isinstance(
                             tool_result.get("todos"), list
                         ):
+                            # revision 一并带出：前端据此丢弃乱序到达的旧事件
+                            # （重连补发/多副本接力都会让事件不按产生顺序抵达）。
                             yield AgentEvent(
                                 type="todo_updated",
                                 content=json.dumps(tool_result["todos"], ensure_ascii=False),
                                 trace_id=trace_id,
+                                revision=int(tool_result.get("revision") or 0),
                             )
 
                         # 记录工具 span (带租户隔离)
@@ -4618,6 +4621,8 @@ async def run_agent(
             "cached_tokens": event.cached_tokens,
             "model": event.model,
             "message": event.error,
+            # 任务清单的修订号（仅 todo_updated 非 0）：前端靠它做乱序防护
+            "revision": event.revision,
         }
 
 

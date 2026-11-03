@@ -762,10 +762,31 @@ func (h *SessionMapHandler) ForkNode(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "node has no session to fork")
 		return
 	}
+	// 分叉点由后端权威给出：它必须和复制逻辑读同一张表 —— `manager_branch.go` 的
+	// 复制语句是 `INSERT INTO messages … SELECT … FROM messages`。
+	//
+	// 前端此前用 `/v1/chat/sessions/{id}/messages` 数条数，而那条路径在引擎侧读的是
+	// `unified_sessions` / `unified_messages`，**不是同一套表**。本地实测
+	// `messages=32` 而 `unified_messages=0` 时，接口返回 "Session not found"，
+	// 前端 `catch` 把分叉点兜底成 1 —— 分叉"成功"但新会话只剩一条消息，
+	// 用户看到的就是"点了分叉没反应"。
+	//
+	// 这里以 `messages` 的**实际行数**为准（同时覆盖 `body.FromIndex` 为 0 / 负数的情况）。
+	fromIndex := body.FromIndex
+	var total int
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`SELECT count(*) FROM messages WHERE session_id = $1`, srcSession).Scan(&total); err == nil && total > 0 {
+		fromIndex = total
+	}
+	if fromIndex <= 0 {
+		// 空会话（或 count 查询失败）仍允许分叉：`1` 是后端接受的最小合法值，
+		// 复制窗口内一条都没有时就是建一个空分支 —— 与改造前的行为一致。
+		fromIndex = 1
+	}
 	// 真正的复制交给既有端点，这里只负责接回地图（单一职责，避免两处各写一份复制逻辑）
 	OK(w, map[string]interface{}{
 		"fork_endpoint":  "/v1/conversations/" + srcSession + "/fork",
-		"from_index":     body.FromIndex,
+		"from_index":     fromIndex,
 		"parent_node_id": body.NodeID,
 		"hint":           "调用 fork 端点后，用 PUT 工作区把新节点接到 parent_node_id 上",
 	})
