@@ -121,7 +121,9 @@ async def _session_belongs_to_tenant(session_id: str, tenant_id: int) -> bool:
         return False
 
 
-async def _drop_existing_tool_calls(pool: Any, session_id: str, payload: list[tuple]) -> list[tuple]:
+async def _drop_existing_tool_calls(
+    pool: Any, session_id: str, payload: list[tuple[Any, ...]]
+) -> list[tuple[Any, ...]]:
     """剔除本会话里已经存在的 tool 消息（按 tool_call_id）。
 
     overflow 重试与收尾路径都可能重复调用 `persist_messages`，而 `messages` 是
