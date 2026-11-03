@@ -14,6 +14,7 @@
 | 系统由哪些组件构成、信任边界在哪 | [docs/architecture.md](docs/architecture.md) |
 | 多副本部署后会出什么问题、怎么扩 | [docs/deployment-multi-instance.md](docs/deployment-multi-instance.md) |
 | 错误码契约与三语言同步 | [docs/error-codes.md](docs/error-codes.md) |
+| 下一步往哪做、现状与目标的差距 | [docs/super-agent-roadmap.md](docs/super-agent-roadmap.md) |
 
 ## 2. 开发环境
 
@@ -162,7 +163,7 @@ python -m alembic -c alembic.ini upgrade head --sql > /dev/null   # 离线渲染
 python scripts/check_source_encoding.py      # U+FFFD / 非法 UTF-8 / **UTF-8 BOM**
 python scripts/check_tool_policy_parity.py   # Go ↔ Python（↔ 前端）必须同构：分级表 / 对话模式 / 提供商目录 / 故障注入 / 共享键前缀 / 共享常量 / **工具授权模式**（L3-9）/ **子 Agent 终态集合**
 ruff check scripts/                          # 仓库根脚本（配置见仓库根 ruff.toml）
-python scripts/check_doc_links.py            # 被引用的 docs/*.md **与相对 .md 链接**都必须存在（存量走基线，新增即失败）
+python scripts/check_doc_links.py            # **只扫 .md**：被引用的文档与相对 .md 链接都必须存在（存量走基线，新增即失败）
 python scripts/check_md_tables.py            # Markdown 表格列数必须一致（存量走基线，新增即失败）
 python scripts/check_error_code_keys.py      # Go `Code*` ↔ 三语言 `errors.ts` 契约键必须一致，且三语言键集相同
 python scripts/check_compose_env.py          # compose 里 `${VAR:?…}` 声明的**必填**变量必须在 `.env.example` 出现（注释形态也算）
@@ -219,7 +220,7 @@ POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
 
 | 守卫 | 拦的是 |
 |---|---|
-| `check_doc_links.py` | 文档里引用不存在的路径（**新增断链即失败**，存量走基线且只许缩小） |
+| `check_doc_links.py` | **.md 里**引用了不存在的文档（**新增断链即失败**，存量走基线且只许缩小） |
 | `check_doc_line_refs.py` | `文件:行号` 引用漂移（代码改动后行号会变） |
 | `check_md_tables.py` | Markdown 表格列数不一致（渲染不报错、只会静默错位） |
 | `check_source_encoding.py` | U+FFFD、非法 UTF-8、**UTF-8 BOM**（BOM 会让 Dockerfile/Makefile 首行失效） |
@@ -244,8 +245,14 @@ POSTGRES_DSN=<来自 .env> REDIS_URL=redis://127.0.0.1:6390/0 \
    新增后台循环/定时任务时，必须说明多副本下如何避免重复执行。
 5. **数据库变更只走 Alembic**：应用启动只做**只读** schema 校验，不执行 DDL。
    迁移必须向后兼容（滚动升级），破坏性变更用"扩展-迁移-收缩"两步发布。
-6. **注释写"为什么"**：本仓库的注释密度较高是有意的 —— 解释取舍与踩过的坑，
-   而不是复述代码。提交信息同理。
+6. **注释只写"为什么"，且要短**。注释的职责是**保存代码里读不出来的信息**，不是解释代码在做什么。
+   - **该写**：非显然的取舍（为什么选 A 不选 B）、踩过的坑（改了会怎样坏）、失效后的后果、
+     跨模块不变量（哪几处必须同时成立）。
+   - **不该写**：复述下一行代码；逐行翻译；`// S 修复` / `// P 性能修复` 这类**提交历史标记**
+     —— 历史在 git log 里，摊在代码里只会随时间腐烂；大段背景推导。
+   - **长度与问题复杂度匹配**：一行能说清的不写五行。注释超过 5 行，先问它该不该进 `docs/`
+     —— 设计文档放进代码注释，等于让读者在最难检索的地方找它。
+   - **过时注释比没有注释更糟**：与代码矛盾时以代码为准，并在**同一个 PR** 里改掉注释。
 
 ## 6. 提交与 PR
 

@@ -353,8 +353,9 @@ jobs:
         run: |
           pip install --quiet 'ruff>=0.11.0'
           ruff check scripts/
-      # 文档断链：被引用的 docs/*.md 必须存在。曾一次扫出 19 份**从未提交过**的设计文档
-      # （代码注释里写着"见某份设计文档"，读者去找只会扑空）。存量 19 条走基线白名单
+      # 文档断链：Markdown 里被引用的文档必须存在。曾一次扫出 19 份**从未提交过**的设计文档
+      # （注释里写着"见某份设计文档"，读者去找只会扑空）。**只扫 git 跟踪的 `.md`**：
+      # 代码里的 'docs/xxx.md' 多是工具参数示例，扫进来只会误报。存量走基线白名单
       # （scripts/doc_link_baseline.txt，**只应缩小**），新增断链直接失败 —— 已用变异验证。
       - name: Doc links (referenced docs must exist)
         run: python scripts/check_doc_links.py

@@ -162,6 +162,8 @@ export function mergeHistory(
           time: clock,
           id: m.id,
           turnId,
+          // 透传来源标记，否则刷新后自动注入的消息会被渲染成用户自己的提问
+          ...(m.source ? { source: m.source } : {}),
         })
       } else {
         const { reasoning, body } = splitThinking(content, { loose: true })

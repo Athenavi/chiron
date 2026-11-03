@@ -231,6 +231,8 @@ export interface HistoryMessage {
   created_at?: string
   metadata?: unknown
   error?: unknown
+  /** 来源（'subagent_followup' = 子 Agent 自动轮注入），缺了它徽标不渲染 */
+  source?: string
 }
 
 /**
