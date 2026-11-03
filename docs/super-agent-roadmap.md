@@ -150,6 +150,18 @@
   （`engine:tasks` → `internal/api/agent_followup.go` → `HandleSubmit`），而不是新造一套。
   必须继承该通道的既有约束：每小时上限（当前 `DEFAULT_MAX_PER_HOUR=3`）、
   `SET NX` 幂等、**禁级联**、Redis 不可用则不投递。
+- 已落地：
+  - 引擎侧 `queue/worker.py::_handle_tool_job` 在终态后调 `_notify_job_finished`，
+    投递 `kind="job"` 的回投信号（`run_id` 用 `job:{job_id}`，与子 Agent 的回投键不撞）。
+    **取消不发**：那是用户自己停的，再唤起一轮只是噪音。
+  - 网关侧 `agent_followup.go` 新增 `jobFollowupSwitch`（`users.settings.followup_on_job_finished`），
+    **默认关闭**，按用户显式开启；开关判定放在幂等与资源闸门**之前** —— 否则开关关着时
+    先占了幂等位，用户之后打开开关，这些作业也永远不会再被回投。
+  - 注入文案分 `job` / `subagent` 两种（`<job-result>` / `<subagent-result>`），
+    都包成"数据而非指令"：命令输出是外部世界写进来的内容。
+  - 限流键按 `kind` 分开（`agent_followup:rate:{kind}:{session_id}`）：否则没开 job 回投时，
+    每次命令结束都白耗一次子 Agent 的额度。
+  - 前端 `messages.source = 'job_followup'` 独立小字（"后台任务结束 主 Agent 自动续跑"）。
 - 验收：一次 `run_in_background` 在 turn 结束后完成，会话里出现一条由任务结果驱动的新回合；
   重复投递被幂等键挡住；关掉回投开关时行为与今天完全一致。
 - 风险：把"任务完成"变成"自动开新回合"会放大计费与 token 消耗，需要按租户/会话的开关与配额。

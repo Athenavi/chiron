@@ -736,13 +736,17 @@ onUpdated(enhanceContent)
             </a>
           </template>
         </div>
-        <!-- 子 Agent 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
-             （后端 messages.source === 'subagent_followup'） -->
+        <!-- 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
+             （后端 messages.source：'subagent_followup' / 'job_followup'）。
+             两种来源分开显示 —— "子 Agent 回来了"和"你那条后台命令跑完了"
+             是用户要区分开的两件事。 -->
         <div
-          v-if="item.role === 'user' && (item as TextItem).source === 'subagent_followup'"
+          v-if="item.role === 'user' && ((item as TextItem).source === 'subagent_followup' || (item as TextItem).source === 'job_followup')"
           class="followup-badge"
         >
-          {{ $t('workflow.subtask_complete_main_agent_auto_summarizes') }}
+          {{ (item as TextItem).source === 'job_followup'
+            ? $t('workflow.job_finished_main_agent_auto_continues')
+            : $t('workflow.subtask_complete_main_agent_auto_summarizes') }}
         </div>
         <!-- Super-agent 接管期间产生的回合，分两种位置标记，避免一轮里重复出现：
              - 注入的巡检指令（messages.source）标在用户消息上

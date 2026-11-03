@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/agentgoal"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
-	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/evidence"
@@ -266,6 +266,7 @@ func (h *SubmitHandler) SubmitInterrupt(w http.ResponseWriter, r *http.Request) 
 	}
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
+
 // SubmitSteer 把用户的追加指令注入正在跑的 run（**不终止**）。
 //
 // 准入与 SubmitInterrupt 同源：会话归属 + 调用者身份 + run token。少任何一条，别人就能
@@ -333,7 +334,6 @@ func steerStatus(reason string) int {
 		return http.StatusConflict
 	}
 }
-
 
 const GoalEnforceKey = "goal_enforce"
 
@@ -504,6 +504,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	msgSource := ""
 	if _, ok := workbenchCtx[FollowupKey]; ok {
 		msgSource = FollowupSource
+	}
+	// 后台命令结束的自动轮：与子 Agent 分开标记，前端据此给不同的小字。
+	if _, ok := workbenchCtx[JobFollowupKey]; ok {
+		msgSource = JobFollowupSource
 	}
 	// P1：证据判定驱动的续跑轮 —— 同样必须带来源标记，别让续跑指令伪装成用户提问。
 	if _, ok := workbenchCtx[GoalEnforceKey]; ok {

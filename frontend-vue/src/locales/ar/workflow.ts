@@ -80,6 +80,7 @@ export default {
   orchestrating_executing_subtasks: "جارٍ التنسيق/تنفيذ المهام الفرعية...",
   sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel: "تستهلك الوكلاء الفرعية الرموز (tokens) بشكل مستقل؛ وتتضاعف التكلفة عند تشغيل مهام فرعية متعددة بالتوازي.",
   subtask_complete_main_agent_auto_summarizes: "اكتملت المهمة الفرعية الوكيل الرئيسي يلخّص تلقائيًا",
+  job_finished_main_agent_auto_continues: "انتهت المهمة الخلفية الوكيل الرئيسي يواصل تلقائيًا",
   superagent_takeover_turn: "جولة تولّي Super-agent",
   superagent_takeover_prompt: "تعليمات تولّي Super-agent",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "منصة وكلاء AI مستضافة ذاتيًا ومتعددة المستأجرين ويمكن التحكم بها بالكامل. المحادثة والوكيل وسير العمل والمهارة وقاعدة المعرفة والإضافة في منصة واحدة.",

@@ -80,6 +80,7 @@ export default {
   orchestrating_executing_subtasks: "正在编排/执行子任务...",
   sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel: "子 Agent 会独立消耗 token，多个子任务并行时花销成倍增加。",
   subtask_complete_main_agent_auto_summarizes: "子任务完成 主 Agent 自动汇总",
+  job_finished_main_agent_auto_continues: "后台任务结束 主 Agent 自动续跑",
   superagent_takeover_turn: "Super-agent 接管轮",
   superagent_takeover_prompt: "Super-agent 接管指令",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "自托管、多租户、全栈可控的 AI Agent 平台。对话、Agent、工作流、技能、知识库与插件一体化。",

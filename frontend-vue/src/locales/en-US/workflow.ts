@@ -80,6 +80,7 @@ export default {
   orchestrating_executing_subtasks: "Orchestrating/executing subtasks...",
   sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel: "Sub-Agents consume tokens independently; cost multiplies when multiple subtasks run in parallel.",
   subtask_complete_main_agent_auto_summarizes: "Subtask complete main Agent auto-summarizes",
+  job_finished_main_agent_auto_continues: "Background job finished main Agent auto-continues",
   superagent_takeover_turn: "Super-agent takeover turn",
   superagent_takeover_prompt: "Super-agent takeover instruction",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "Self-hosted, multi-tenant, fully controllable AI Agent platform. Conversation, Agent, workflow, skill, knowledge base and plugin in one.",

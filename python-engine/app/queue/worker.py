@@ -926,6 +926,46 @@ class QueueWorker:
             "tool_job done: job=%s status=%s exit_code=%s",
             job_id, res.get("status"), res.get("exit_code"),
         )
+        await self._notify_job_finished(payload, res)
+
+    async def _notify_job_finished(
+        self, payload: dict[Any, Any], res: dict[str, Any]
+    ) -> None:
+        """后台命令结束 → 请网关在源会话上开新一轮（P0-1）。
+
+        复用 agent_followup 那条已验证的通道（幂等 + 限流 + 会话锁 + 计费预检全在网关），
+        不另造一套。**取消不发**：那是用户自己停的，再唤起一轮只是噪音。
+
+        开关不在这里判：`users.settings` 只有网关能读，引擎无从知道用户要不要。
+        """
+        status = str(res.get("status") or "")
+        if status not in ("completed", "failed"):
+            return
+        job_id = str(payload.get("job_id") or "")
+        session_id = str(payload.get("session_id") or "")
+        user_id = str(payload.get("user_id") or "")
+        if not job_id or not session_id or not user_id:
+            return
+
+        from app.subagent.followup import enqueue_followup
+        from app.tools.context import to_tenant_int
+
+        output = str(res.get("output") or "")
+        # 取尾部：错误与结论在那里，头部通常只是命令回显。
+        tail = output[-1800:] if len(output) > 1800 else output
+        try:
+            await enqueue_followup(
+                run_id=f"job:{job_id}",
+                session_id=session_id,
+                tenant_id=to_tenant_int(payload.get("tenant_id")),
+                user_id=user_id,
+                status=status,
+                summary=tail,
+                profile="tool_job",
+                kind="job",
+            )
+        except Exception as exc:  # noqa: BLE001 - 回投失败不能影响作业本身的终态
+            logger.warning("tool_job followup 投递失败: job=%s err=%s", job_id, str(exc)[:160])
 
     async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: int = 0) -> None:
         """处理记忆持久化任务
