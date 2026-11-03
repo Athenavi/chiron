@@ -156,7 +156,7 @@ function onResizeStart(e: PointerEvent) {
 }
 
 /**
- * 拖拽中途按 Escape：三步复位（对齐 desktop-agent-ui 的分栏取消闭环）
+ * 拖拽中途按 Escape：三步复位（分栏取消闭环）
  *   1. 摘掉全局监听、清 `resizing` 标记；
  *   2. 手柄保持挂载 —— 本组件的手柄始终在 `<aside>` 内、不随宽度卸载，天然满足；
  *   3. 宽度还回拖拽前的基准，`null` 也照还（即恢复「内容决定宽度」）。

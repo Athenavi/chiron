@@ -351,7 +351,7 @@ def _resume_task_meta(task: AgentTask) -> dict[str, Any]:
     """落进 checkpoint 的"重建 AgentTask 所需的最小元信息"（C1 批 3+）。
 
     只放**重建必需、且只存在于提交请求里**的字段：`llm_config`（模型/模式/压缩/rubric）、
-    `workbench_context`（kb / agent / skill / workflow 选择）、`system_prompt`、`user_id`、
+    `workbench_context`（kb / agent / skill 选择）、`system_prompt`、`user_id`、
     `max_turns`、`subagent_depth`。
 
     **工具面不放**：它由 `mode` 决定（`task.tools` 为空时走 mode 的 core tools），把整份
@@ -1951,6 +1951,38 @@ class AgentRuntime:
                     # 不再作为"可续跑现场"被下一次提交捡走。
                     await self._mark_run_status(task, "cancelled")
                     return
+
+                # ── 运行中指导（steer）──
+                # 与 interrupt 同一个位置：工具执行到一半插消息会让 `tool_calls`
+                # 与 tool 结果错位，所以只在轮次边界消费。
+                if task.session_id:
+                    from app.agent.steer import drain_steer
+
+                    _steers = await drain_steer(task.session_id)
+                    for _text, _source in _steers:
+                        messages.append(
+                            _normalize_msg(
+                                role="user",
+                                content=f"<user-steer>\n{_text}\n</user-steer>",
+                                # 来源要跟着消息走：落库时写进 `messages.source`，
+                                # 前端据此标"这条不是你问的"。只放在队列里、
+                                # 注入时丢掉的话，历史里就分辨不出来源了。
+                                source=_source,
+                            )
+                        )
+                        yield AgentEvent(type="steer", content=_text, trace_id=trace_id)
+                    if _steers:
+                        # 引擎侧收到的指导 Go 侧没有写过，必须由这里落库，
+                        # 否则刷新页面后这段指令从会话历史里消失。
+                        from app.agent import history_writer
+
+                        await history_writer.persist_messages(
+                            task.session_id,
+                            task.tenant_id,
+                            messages[-len(_steers):],
+                            turn_id=str(getattr(task, "turn_id", "") or ""),
+                            roles={"user"},
+                        )
 
                 logger.info(
                     "Agent turn %d/%d (task=%s, msgs=%d)",
@@ -3911,7 +3943,7 @@ class AgentRuntime:
           它要查 `tool_calls` 表的两段式写入，属恢复路径的一部分；
         * `last_event_id` 由**网关侧**在恢复时提供（事件由 Go 的 hub 广播，引擎不知道流 ID）。
 
-        失败只降级恢复粒度，**不改变对话行为**（与 workflow 的 `persist_checkpoint` 同一语义）。
+        失败只降级恢复粒度，**不改变对话行为**。
         """
         if not task.session_id:
             return

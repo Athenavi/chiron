@@ -121,14 +121,14 @@ export function isUserText(item: ChatItem | undefined): boolean {
 const EXPLORE_TOOLS = new Set(`read_file read_image grep_files search_files glob_files
 web_search web_fetch kb_list kb_search rag_query recall memory_search
 git_status git_diff git_log git_branch file_analyzer vision_analyze speech_to_text
-graph_templates workflow_status agent_list agent_session_list skill_list skill_discover
+agent_list agent_session_list skill_list skill_discover
 browser_read browser_get_state browser_tab_list`.split(/\s+/))
 
 const MODIFY_TOOLS = new Set(`write_file edit_file git_commit remember forget
 skill_install skill_generate`.split(/\s+/))
 
 const DELEGATE_TOOLS = new Set(`agent_dispatch code_agent agent_session_create subagent
-skill_run graph_create graph_run workflow_run
+skill_run
 prd_generate tech_design task_decompose requirement_validate
 image_generate media_create text_to_speech`.split(/\s+/))
 

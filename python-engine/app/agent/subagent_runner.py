@@ -1,6 +1,6 @@
 """子 Agent 执行器 —— 一次委派的完整生命周期（P0 核心）。
 
-职责（对应 docs/subagent-design.md 的 P0 与三级消息模型）：
+职责（对应 python-engine/app/subagent/ 的 P0 与三级消息模型）：
 
 1. 解析 Profile（``agents`` 表 ``kind='subagent'``，见 :mod:`app.agent.profile`）；
 2. 装配**独立** AgentRuntime：独立 session id / 消息历史、工具收窄（白名单 / 黑名单 /
@@ -84,7 +84,7 @@ RUN_ID_PREFIX = "rs_"
 WRITE_TOOL_NAMES = frozenset({
     "write_file", "edit_file", "run_code", "execute_python", "shell_exec", "persistent_shell",
     "git_commit", "git_branch", "skill_install", "skill_generate", "job_kill",
-    "media_create", "image_generate", "browser", "graph_create", "workflow_run", "kb_build",
+    "media_create", "image_generate", "browser", "kb_build",
 })
 # 递归控制：默认从子 Agent 工具集中剥离的委派类工具。
 # `fleet` 是文档里与 `subagent` 并列的历史名（见本文件开头注释），保留作兜底；
@@ -399,7 +399,7 @@ async def _report_line_exhaustion(
             pause_counter.labels(outcome="pause_failed").inc()
             logger.error(
                 "%s %s hit %s but could NOT be paused (tenant=%s)：这条线仍在花钱，"
-                "而闸门只对已暂停的线停手 —— 请检查迁移 0022 是否已执行",
+                "而闸门只对已暂停的线停手 —— 请检查 alembic upgrade head 是否已执行",
                 log_name, root, axis, tenant_id,
             )
 

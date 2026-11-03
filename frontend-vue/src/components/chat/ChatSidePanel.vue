@@ -20,7 +20,6 @@ import ThemeSwitcher from '../ThemeSwitcher.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import SettingsPanel from '../settings/SettingsPanel.vue'
 import { useAuthStore } from '../../stores/auth'
-import { useDeviceStore } from '../../stores/device'
 import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from '../accountMenu'
 import type { SubagentEvent } from '../../api/subagent'
 
@@ -50,7 +49,6 @@ const settingsOpen = ref(false)
  */
 const userMenuItems = computed<AccountMenuItem[]>(() =>
   buildAccountMenuItems((k) => tr(k), {
-    isLocal: useDeviceStore().isLocal(),
     // 聊天页不展示 API Key 管理：它是账号凭证，与对话工作区的心智距离最远。
     // 这是**显式**的差异，而不是靠两份实现各自漂移出来的。
     includeApiKeys: false,
@@ -77,7 +75,7 @@ const props = withDefaults(defineProps<{
   items: ChatItem[]
   selectedIndex: number | null
   open: boolean
-  /** 面板视图：trajectory（主）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计）/ map（会话地图，见 docs/session-map-branch-design.md） */
+  /** 面板视图：trajectory（主）/ sessions（从，会话历史列表）/ agents（子 Agent 层级）/ stats（会话统计）/ map（会话地图，见 internal/session/manager_branch.go） */
   view: 'trajectory' | 'sessions' | 'agents' | 'stats' | 'map'
   sessions: ChatSession[]
   activeSessionId: string
@@ -1176,7 +1174,7 @@ function pickSession(id: string) {
 .session-more-btn { opacity: 0; flex-shrink: 0; width: 22px; height: 22px; color: var(--text-muted); }
 .session-row:hover .session-more-btn, .session-row.menu-open .session-more-btn { opacity: 1; }
 .session-more-btn:hover { color: var(--text-primary); }
-/* 同心圆圆角（desktop-agent-ui §6）：外层用主题 token，内层用 calc 跟随主题 ——
+/* 同心圆圆角：外层用主题 token，内层用 calc 跟随主题 ——
    写死像素会让换了主题（--sig-radius-code 在 0~10px 之间）的同心关系断掉。 */
 .session-menu { --session-menu-r: var(--sig-radius-code); --session-menu-pad: 4px; --session-menu-inner-r: max(0px, calc(var(--session-menu-r) - var(--session-menu-pad))); min-width: 148px; border-radius: var(--session-menu-r); padding: var(--session-menu-pad); box-shadow: var(--shadow-lg); }
 .session-menu :deep(.ant-dropdown-menu-item) { display: flex; align-items: center; gap: 8px; font-size: 13px; border-radius: var(--session-menu-inner-r, var(--sig-radius-button)); }

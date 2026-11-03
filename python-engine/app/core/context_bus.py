@@ -46,7 +46,7 @@ class MessageType(StrEnum):
 class ContextMessage:
     """上下文消息"""
 
-    topic: str  # 主题: "agent.results", "workflow.state"
+    topic: str  # 主题: "agent.results", "skill.state"
     message_type: MessageType
     data: dict[str, Any]
     tenant_id: int  # SaaS 安全: 租户隔离
@@ -469,5 +469,5 @@ async def subscribe_topic(
    await subscribe_topic("agent.tasks.analysis", on_agent_result)
 
 3. 查询历史状态:
-   latest = await get_context_bus().get_latest("workflow.status", "tenant_001")
+   latest = await get_context_bus().get_latest("agent.status", "tenant_001")
 """

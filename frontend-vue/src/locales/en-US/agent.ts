@@ -13,6 +13,7 @@ export default {
   subject_will_be_appended_to_the_agent_s_existing_bindings_without_overwriting_others: "{subject} will be appended to the agent’s existing bindings without overwriting others.",
   install_skills_from_the_market_or_upload_a_local_skill_package: "Install skills from the market or upload a local skill package",
   multi_agent_collaboration: "Multi-agent collaboration",
+  multi_agent_collaboration_task_dispatch_and_result_tracking: "Multi-agent collaboration: task dispatch and result tracking",
   upload_this_conversation_s_body_n_characters_as_a_markdown_document_reasoning_and_tool_calls_are_not_included: "Upload this conversation’s body ({n} characters) as a Markdown document; reasoning and tool calls are not included.",
   show_tool_list: "Show tool list",
   tool_mcp: "Tool MCP",
@@ -244,4 +245,5 @@ export default {
   superagent_overlay_budget: "Budget left",
   superagent_overlay_input_locked: "Input is disabled during takeover so manual turns cannot race the automated ones",
   superagent_overlay_unlimited: "Unlimited",
+  superagent_budget_exhausted_notice: "Takeover stopped automatically: the token budget was used up",
 }

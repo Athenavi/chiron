@@ -26,7 +26,7 @@ from app.config import DEFAULT_TENANT_ID
 def kb_visibility_tenant(kb_row: Any) -> int:
     """KB 行声明的租户；未声明（NULL 或 SELECT 没带这列）返回 0。
 
-    tenant_id 列是 smallint（0001 基线），统一按 int 比较 —— 此前返回 str，与 int 的
+    tenant_id 列是 smallint（权威基线），统一按 int 比较 —— 此前返回 str，与 int 的
     tenant_id 比较永远不等，会把 `visibility='tenant'` 的库对同租户成员误判为无权。
     延迟 import 是为了避开 `app.tools` 包的初始化环（本模块被 tools/kb.py 反向引用）。
     """

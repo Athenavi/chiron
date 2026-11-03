@@ -75,7 +75,7 @@ export function agentResultToMarkdown(session: AgentResultSource, title?: string
 
   const heading = asText(title) || t('common.run_result_name', { name: asText(session.agent_name) || 'Agent' })
   const blocks: string[] = [`# ${heading}`]
-  if (task) blocks.push(t('workflow.task'), task)
+  if (task) blocks.push(t('task.task'), task)
   if (output) {
     // 只有错误、没有正常输出时单独标注：检索时「错误」比「输出」更有信息量
     const isErrorOnly = !!asText(parsed.error) && !asText(parsed.output)

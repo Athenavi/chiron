@@ -166,7 +166,7 @@ class TestLineageWriteOrdering:
 
 class TestFailureIsolation:
     async def test_lineage_failure_does_not_break_the_run(self, caplog) -> None:
-        """未执行迁移 0021 的库：只丢血缘，派发落库照常（与 0004/0006/0008 同一惯例）。"""
+        """未迁移的库：只丢血缘，派发落库照常。"""
         pool = _LineagePool()
         pool.fail_on.append("root_run_id = $2 WHERE id = $1")
         import logging
@@ -176,7 +176,7 @@ class TestFailureIsolation:
 
         assert _norm(RUN_INSERT_SQL) in _heads(pool)  # 起始行写成了
         assert store_module.SubagentRunStore(pool).available is True  # 没被标 broken
-        assert "0021_subagent_lineage_root" in caplog.text
+        assert "alembic upgrade head" in caplog.text
 
     async def test_warning_is_logged_once_per_store_not_per_dispatch(self, caplog) -> None:
         """闸门每回合都要读线账；读不通时不该把日志刷满。"""
@@ -461,7 +461,7 @@ class TestRealPostgresSemantics:
         a = await self._seed(root=line, tokens=(100, 50))
         b = await self._seed(root=line, tokens=(20, 10))
         other_tenant = await self._seed(root=line, tokens=(7, 7), tenant=2)
-        # 不构造 tenant=NULL 的行：subagent_runs.tenant_id 是 NOT NULL（0001 baseline），
+        # 不构造 tenant=NULL 的行：subagent_runs.tenant_id 是 NOT NULL（权威基线），
         # 插 NULL 会直接违反约束。缺租户的语义由下面 lineage_usage(line, "") 覆盖。
         other_line = await self._seed(tokens=(500, 500))
         store = SubagentRunStore(get_pool())

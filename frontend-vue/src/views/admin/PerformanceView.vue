@@ -192,7 +192,7 @@ onMounted(() => {
             <DescriptionsItem :label="$t('memory.memory_usage')">
               {{ pythonStatus.memoryUsage }}
             </DescriptionsItem>
-            <DescriptionsItem :label="$t('workflow.active_tasks')">
+            <DescriptionsItem :label="$t('task.active_tasks')">
               {{ pythonStatus.activeTasks }}
             </DescriptionsItem>
           </Descriptions>

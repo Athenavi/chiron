@@ -24,7 +24,7 @@ import (
 // 若比服务端松，以服务端为准 —— 这是"判定与执行分处两个信任域"的落点。
 //
 // 注意：本端点解决"判定权威"，不解决"引擎绕过"。真正的硬约束是"引擎侧没有直连危险工具的
-// 能力"（MCP 收窄 + 出口凭据不进引擎），见 docs/agent-safety-and-reliability.md §1.4。
+// 能力"（MCP 收窄 + 出口凭据不进引擎），见 internal/api/tool_broker.go。
 
 type toolAuthorizeRequest struct {
 	TenantID   string          `json:"tenant_id"`

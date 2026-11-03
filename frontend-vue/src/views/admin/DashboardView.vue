@@ -30,7 +30,7 @@ const error = ref('')
 const navItems = [
   { label: t('admin.runtime_monitoring'), path: '/admin/monitor', icon: markRaw(ThunderboltOutlined), desc: t('admin.performance_queue_cache') },
   { label: 'API Key', path: '/admin/api-keys', icon: markRaw(KeyOutlined), desc: t('common.keys_and_rate_limiting') },
-  { label: t('workflow.scheduled_tasks'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('common.automated_scheduling') },
+  { label: t('task.scheduled_tasks'), path: '/admin/cron', icon: markRaw(ClockCircleOutlined), desc: t('common.automated_scheduling') },
   { label: t('settings.system_settings'), path: '/admin/settings', icon: markRaw(SettingOutlined), desc: t('common.global_config') },
 ]
 

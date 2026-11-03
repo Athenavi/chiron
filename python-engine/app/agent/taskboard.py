@@ -124,11 +124,11 @@ def _merge(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> li
     by_id = {str(item.get("id", "")): dict(item) for item in existing}
     order = [str(item.get("id", "")) for item in existing]
 
-    for item in incoming:
-        sid = str(item.get("id", "") or "").strip()
+    for entry in incoming:
+        sid = str(entry.get("id", "") or "").strip()
         if sid and sid in by_id:
             merged = by_id[sid]
-            merged.update({k: v for k, v in item.items() if k != "id"})
+            merged.update({k: v for k, v in entry.items() if k != "id"})
             continue
         # 新条目：id 由调用方在 normalize 阶段赋过（t1/t2…），这里要与板上已有编号
         # 去重 —— 两条 t3 会让面板渲染出两个"第 3 项"。
@@ -137,7 +137,7 @@ def _merge(existing: list[dict[str, Any]], incoming: list[dict[str, Any]]) -> li
     result: list[dict[str, Any]] = []
     seen: set[str] = set()
     for sid in order:
-        item = by_id.get(sid)
+        item: dict[str, Any] | None = by_id.get(sid)
         if item is None:
             # 新条目：从 incoming 里找出来
             item = next(
@@ -234,7 +234,10 @@ async def write(todos: list[dict[str, Any]]) -> dict[str, Any]:
 
     owner, depth = _caller_identity()
     current = await load()
-    existing = current.get("todos") if isinstance(current.get("todos"), list) else []
+    _current_todos = current.get("todos")
+    existing: list[dict[str, Any]] = (
+        _current_todos if isinstance(_current_todos, list) else []
+    )
     revision = int(current.get("revision") or 0) + 1
 
     if depth > 0:

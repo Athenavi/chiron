@@ -125,11 +125,6 @@ models:
         db_type: jsonb
         description: MCP server 名数组（派发时只放这些插件提供的工具）
         default: '[]'
-      workflows:
-        type: object
-        db_type: jsonb
-        description: 工作流 ID 数组（派发时按顺序执行）
-        default: '[]'
 
   SubagentRun:
     table: subagent_runs
@@ -256,48 +251,48 @@ models:
 
       inherited_messages:
         type: integer
-        description: fork 时继承的历史消息条数（审计，迁移 0004）
+        description: fork 时继承的历史消息条数（审计）
         default: 0
       retryable:
         type: boolean
-        description: 这次失败是否值得重试（与 error 文本分开，迁移 0006）
+        description: 这次失败是否值得重试（与 error 文本分开）
         default: false
       output_bytes:
         type: integer
         db_type: bigint
-        description: 产出体量（字节数，迁移 0006）
+        description: 产出体量（字节数）
         default: 0
       validator_mode:
         type: string
         maxLength: 16
-        description: 收尾校验模式（迁移 0006）
+        description: 收尾校验模式
         nullable: true
       validator_outcome:
         type: string
         maxLength: 16
-        description: 收尾校验结论（迁移 0006）
+        description: 收尾校验结论
         nullable: true
       validator_attempt:
         type: integer
-        description: 收尾校验尝试次数（迁移 0006）
+        description: 收尾校验尝试次数
         default: 0
       error_code:
         type: string
         maxLength: 32
-        description: 机器可读的失败码（迁移 0007）
+        description: 机器可读的失败码
         nullable: true
       rerun_of:
         type: string
         maxLength: 64
-        description: 该 run 是对哪个 run 的重跑（迁移 0006）
+        description: 该 run 是对哪个 run 的重跑
       resumed_from:
         type: string
         maxLength: 64
-        description: 该 run 是从哪个 run 续跑 / 分叉而来（R5(b)，迁移 0008）
+        description: 该 run 是从哪个 run 续跑 / 分叉而来（R5(b)）
         nullable: true
       resume_at_step:
         type: integer
-        description: 分叉点（只继承 seq < 该值的步骤；NULL = 续到底）（R5(b)，迁移 0008）
+        description: 分叉点（只继承 seq < 该值的步骤；NULL = 续到底）（R5(b)）
         nullable: true
   SubagentRunStep:
     table: subagent_run_steps
@@ -1004,7 +999,7 @@ models:
       cloud_folder_id:
         type: string
         maxLength: 64
-        description: PageIndex Cloud 上的用户级 folder id（以 user_id 命名；非安全边界，见迁移 0024）
+        description: PageIndex Cloud 上的用户级 folder id（以 user_id 命名；非安全边界）
         nullable: true
       status:
         type: string
@@ -1238,7 +1233,7 @@ models:
         type: string
         maxLength: 32
         default: ''
-        description: 消息来源（varchar(32) NOT NULL DEFAULT 空串，迁移 0001 起就有）
+        description: 消息来源（varchar(32) NOT NULL DEFAULT 空串）
   Turn:
     table: turns
     orm: true
@@ -1377,44 +1372,6 @@ models:
         description: 更新时间
         default: now()
 
-  WorkflowGraph:
-    table: workflow_graphs
-    orm: true
-    description: 工作流图
-    properties:
-      id:
-        type: string
-        maxLength: 36
-        description: 工作流 ID
-        primary_key: true
-      name:
-        type: string
-        maxLength: 255
-        description: 名称
-      user_id:
-        type: string
-        format: uuid
-        maxLength: 36
-        description: 用户 ID
-        foreign_key: true
-        fk_table: users
-        fk_column: id
-        nullable: true
-      graph_json:
-        type: object
-        description: 图 JSON（JSONB）
-        default: '{}'
-      created_at:
-        type: string
-        format: date-time
-        description: 创建时间
-        default: now()
-      updated_at:
-        type: string
-        format: date-time
-        description: 更新时间
-        default: now()
-
   ConversationShare:
     table: conversation_shares
     orm: true
@@ -1453,55 +1410,6 @@ models:
         format: date-time
         description: 撤销时间
         nullable: true
-
-  WorkflowInstance:
-    table: workflow_instances
-    orm: true
-    description: 工作流实例
-    properties:
-      id:
-        type: string
-        maxLength: 64
-        description: 实例 ID
-        primary_key: true
-      user_id:
-        type: string
-        maxLength: 64
-        description: 用户 ID
-        default: ''
-      workflow_id:
-        type: string
-        maxLength: 64
-        description: 工作流 ID
-        default: ''
-      workflow_name:
-        type: string
-        maxLength: 255
-        description: 工作流名称
-        default: ''
-      status:
-        type: string
-        maxLength: 16
-        description: 状态
-        default: 'running'
-      results:
-        type: object
-        description: 结果（JSONB）
-        default: '{}'
-      error:
-        type: text
-        description: 错误信息
-        nullable: true
-      created_at:
-        type: string
-        format: date-time
-        description: 创建时间
-        default: now()
-      updated_at:
-        type: string
-        format: date-time
-        description: 更新时间
-        default: now()
 
   Upload:
     table: uploads

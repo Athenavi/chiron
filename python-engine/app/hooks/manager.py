@@ -52,7 +52,7 @@ HANDLERS: frozenset[str] = frozenset({HANDLER_PYTHON, HANDLER_COMMAND, HANDLER_W
 
 #: 判定档位（2026-10-09：`ask` 从"不支持"改为**支持**）。
 #: `DENY` = 拒绝；`ASK` = **要求用户确认** —— 引擎侧把它交给**既有的服务端审批通道**
-#: （不新增交互面，见 `docs/hook-protocol-design.md` §4.4）。
+#: （不新增交互面，见 `python-engine/app/hooks/`）。
 DECISION_DENY = "deny"
 DECISION_ASK = "ask"
 
@@ -486,7 +486,7 @@ class HookManager:
 
         与 `PreToolUse` 的分工：这里拦的是**用户自己的输入**，所以它做的只是"拒绝本轮"，
         不放宽任何策略；**输入护栏仍然先跑**（两者叠加，不是二选一），hook 只是又一道
-        可由运维声明的闸。见 `docs/hook-protocol-design.md` §4.1。
+        可由运维声明的闸。见 `python-engine/app/hooks/`。
         """
         if not settings.hooks_enabled:
             return None
@@ -552,7 +552,7 @@ class HookManager:
 
         * `deny` ⇒ 调用方**拒绝执行该工具**（原因回灌为工具错误）；
         * `ask` ⇒ 调用方**走既有的服务端审批通道**（2026-10-09 拍板；它**不是**拒绝 ——
-          用户批准后仍会执行，见 `docs/hook-protocol-design.md` §4.4）。
+          用户批准后仍会执行，见 `python-engine/app/hooks/`）。
 
         调用方（runtime）在工具策略 / 授权 / 审批判定**之后**调用它，因此 hook 只能进一步
         **收紧**：它没有"放行"语义，也不会成为绕过 `tool_policy` 分级的新通道。

@@ -148,7 +148,8 @@ async def todo_write(todos: list[dict[str, Any]]) -> dict[str, Any]:
 
     projection = to_todos(plan)
     payload = await taskboard.write(projection)
-    stored = payload.get("todos") if isinstance(payload.get("todos"), list) else projection
+    payload_todos = payload.get("todos")
+    stored: list[dict[str, Any]] = payload_todos if isinstance(payload_todos, list) else projection
 
     return {
         "output": render(plan),

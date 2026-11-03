@@ -539,7 +539,7 @@ func (h *MarketHandler) GrantItem(w http.ResponseWriter, r *http.Request) {
 		BadRequest(w, "valid item_id (uuid) required")
 		return
 	}
-	// 跨租户写防护：tenant_id 列是 smallint（ent_catalog_installs，见 0001 baseline），
+	// 跨租户写防护：tenant_id 列是 smallint（ent_catalog_installs，见权威基线），
 	// 此前按 uuid 校验 ⇒ 合法请求一律 400，且完全没有归属锚定。现按 smallint 语义校验，
 	// 并用 scopedTenantID 锚定 —— 非 owner 只能给自己租户授权。
 	body.TenantID = scopedTenantID(claims, body.TenantID)

@@ -1,6 +1,6 @@
 """批 G+ 批次 3：`webhook` 形态（出站 POST 到运维声明的 URL）回归。
 
-对应 `docs/hook-protocol-design.md` §7 的验收 ③/④/⑤/⑦ 与批次 3 独有的两条：
+对应 `python-engine/app/hooks/` 的验收 ③/④/⑤/⑦ 与批次 3 独有的两条：
 - **闸口 fail-closed**：独立开关默认关 + host allowlist 默认空 ⇒ 一个目标也不批；
 - **载荷内容无关**：不送 `tool_arguments` / `tool_result`，也不送租户身份（踩过 §6 的"数据出境"红线）。
 

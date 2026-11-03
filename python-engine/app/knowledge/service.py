@@ -4,7 +4,7 @@
 （那是 ``app/api/knowledge.py`` 的事）。队列任务（``kb_index``）与 API 共用这里的函数，
 所以两条路径对"文档状态怎么流转"必须只有一份实现。
 
-状态流转（文档级，见 0023）：
+状态流转（文档级）：
 
     pending ──(队列取件)──> indexing ──> ready
                                  └────> error（error_message 记录原因）

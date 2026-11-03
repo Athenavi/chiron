@@ -1443,7 +1443,7 @@ class TestRunnerWiring:
         assert seen["tickets"] == [] and seen["ledger_calls"] == []
 
     async def test_pause_failure_still_files_the_ticket(self, monkeypatch) -> None:
-        """暂停写不进去（多半是迁移 0022 没跑）时**仍然挂票**：宁可用户看见一张提额待办
+        """暂停写不进去（多半是 alembic upgrade head 没跑）时**仍然挂票**：宁可用户看见一张提额待办
         再去查为什么没生效，也不要一条既没停、也没人知道的线。"""
         seen = await self._drive(
             monkeypatch,

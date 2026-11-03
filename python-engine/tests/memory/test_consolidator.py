@@ -1174,7 +1174,7 @@ class TestEmbedInputAndSpaceTags:
     async def test_unlabelled_rows_keep_being_compared(
         self, fake_store, simple_messages, mock_summariser
     ):
-        """迁移 0020 之前的行没有标签：继续按原样参与，否则历史记忆会突然失忆。"""
+        """没有标签的行继续按原样参与，否则历史记忆会突然失忆。"""
         await fake_store.insert(self._entry(["测试"], "没有标签的老行"), [1.0, 0.0, 0.0])
 
         async def same_vector(text: str) -> list[float]:

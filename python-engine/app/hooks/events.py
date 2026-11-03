@@ -4,7 +4,7 @@
 （`PermissionRequest` / `Notification`）在 Chiron 无对应进程 —— 硬造会变成
 "事件发了但没人用"的死面，故不取。
 
-> 批 G+（`docs/hook-protocol-design.md` §4.1）：`UserPromptSubmit` **已加入**。早先
+> 批 G+（`python-engine/app/hooks/`）：`UserPromptSubmit` **已加入**。早先
 > "Chiron 无对应进程"的口径只对**客户端**成立；引擎侧 `AgentRuntime.run()` 在输入
 > 护栏之后、主循环之前就是它的真实落点。它**只观测**（不在 `BLOCKING_EVENTS`）——
 > 阻断**用户自己的**提示词是对用户的控制点，与 `PreToolUse` 收紧工具策略性质不同。
@@ -53,7 +53,7 @@ BLOCKING_EVENTS: frozenset[str] = frozenset({PRE_TOOL_USE, USER_PROMPT_SUBMIT})
 
 #: `matcher` 只对**工具类事件**有意义（判定主体是工具名）。其余事件带 `matcher`
 #: 一律**拒绝**：与其为它们发明一个"主体"（会话来源 / 常量 `agent_type`），
-#: 不如显式失败 —— 免得配了却不生效（`docs/hook-protocol-design.md` §4.2）。
+#: 不如显式失败 —— 免得配了却不生效（`python-engine/app/hooks/`）。
 MATCHER_EVENTS: frozenset[str] = frozenset(
     {PRE_TOOL_USE, POST_TOOL_USE, POST_TOOL_USE_FAILURE}
 )

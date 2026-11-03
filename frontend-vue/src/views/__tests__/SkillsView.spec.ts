@@ -7,12 +7,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
  *
  * 六视图补网第 4 个（`RegisterView` 487 → `KnowledgeView` 589 → `PluginsView` 702 → 本轮 854）。
  *
- * **比前两个多一半**：知识库/插件只有**一个**来源（Agent 的 `kb_id` / `plugins` 列），
- * 而技能有**两个**（`utils/skillUsage.ts:1-10`）：**Agent 的 `skills` 列** 与
- * **工作流图里 `node_type === 'skill'` 节点的 `config.skill_name`** ⇒ 接线**两条都要测** ✓，
- * 少测一条就会出现"技能明明被工作流在用，界面却说没人用" ✓。
- *
- * **为什么对用户重要**：`:452-456` 的"被哪些 Agent / 工作流使用"是**删技能前**要看的信息 ——
+ * **为什么对用户重要**：`:452-456` 的"被哪些 Agent 使用"是**删技能前**要看的信息 ——
  * 接线断了不会崩，只会**静默不显示** ⇒ 用户会在不知情的情况下删掉别人在用的技能 ✓。
  */
 
@@ -32,7 +27,6 @@ const apiMocks = vi.hoisted(() => ({
   listMarket: vi.fn((): Promise<unknown> => Promise.resolve([])),
   installMarket: vi.fn((): Promise<unknown> => Promise.resolve({})),
   // 形状按源码：`/v1/skills` → `response.data?.data?.skills`（`:65`）
-  //             `/v1/graphs` → `r.data?.data ?? []`（`:83`）
   get: vi.fn((url?: string): Promise<unknown> => {
     if (url === '/v1/skills') return Promise.resolve({ data: { data: { skills: [] } } })
     return Promise.resolve({ data: { data: [] } })
@@ -79,7 +73,6 @@ describe('SkillsView（此前零测试）', () => {
     await flushPromises()
 
     expect(apiMocks.get).toHaveBeenCalledWith('/v1/skills')
-    expect(apiMocks.get).toHaveBeenCalledWith('/v1/graphs')   // 反向引用要拉工作流图
     expect(apiMocks.listAgents).toHaveBeenCalled()
     expect(() => wrapper.unmount()).not.toThrow()
   })
@@ -95,30 +88,7 @@ describe('SkillsView（此前零测试）', () => {
     wrapper.unmount()
   })
 
-  it('★ 来源二：工作流图里的 skill 节点 ⇒ 悬浮提示里出现该工作流（这一半只有技能有）', async () => {
-    apiMocks.get.mockImplementation((url?: string): Promise<unknown> => {
-      if (url === '/v1/skills') return Promise.resolve({ data: { data: { skills: [SKILL] } } })
-      if (url === '/v1/graphs') {
-        return Promise.resolve({
-          data: {
-            data: [{
-              name: '日报流程',
-              graph_json: { nodes: [{ node_type: 'skill', config: { skill_name: 'summarize' } }] },
-            }],
-          },
-        })
-      }
-      return Promise.resolve({ data: { data: [] } })
-    })
-
-    const wrapper = mountView()
-    await flushPromises()
-
-    expect(titlesOf(wrapper).some(t => t.includes('日报流程'))).toBe(true)
-    wrapper.unmount()
-  })
-
-  it('★ 两个来源都没有时不显示使用方标记（避免噪音）', async () => {
+  it('★ 没有 Agent 引用时不显示使用方标记（避免噪音）', async () => {
     const wrapper = mountView()
     await flushPromises()
 

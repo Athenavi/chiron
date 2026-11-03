@@ -1,6 +1,6 @@
 """批 G+（钩子协议批次 1）：部署级声明面 `hooks.json` 回归。
 
-对应 `docs/hook-protocol-design.md` §7 的验收项：
+对应 `python-engine/app/hooks/` 的验收项：
 ① 默认零行为变化；② 声明面真的生效；③ 只能收紧（matcher 只做筛选，不放宽）；
 ⑥ 解析失败不静默且不注册。
 

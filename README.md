@@ -3,14 +3,14 @@
 <p align="center"><img src="assets/chiron-logo-detail.svg" width="180" alt="Chiron"></p>
 
 
-[![CI](https://github.com/OWNER/REPO/actions/workflows/ci.yml/badge.svg)](https://github.com/Athenavi/chiorn/actions/workflows/ci.yml)
+[![CI](https://github.com/Athenavi/chiron/actions/workflows/ci.yml/badge.svg)](https://github.com/Athenavi/chiron/actions/workflows/ci.yml)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Go](https://img.shields.io/badge/Go-1.26-00ADD8?logo=go&logoColor=white)
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)
 
 多租户 SaaS AI Agent 平台：**Go 网关 + Python AI 引擎 + Vue 3 前端** 三层架构。
-对话、Agent、工作流、技能、知识库、插件与多层级记忆一体化；轨迹可循、过程可见。
+对话、Agent、技能、知识库、插件与多层级记忆一体化；轨迹可循、过程可见。
 
 
 ### 为什么还有必要做一个？
@@ -24,7 +24,7 @@
   不偷偷回退到进程内执行。
 - **过程可见**：思考、工具调用、用量都是独立事件；断线后带 `Last-Event-ID` 重连可精确续传。
 
-> **它不是什么**：不是低代码工作流编辑器，也不是模型评测/微调平台。
+> **它不是什么**：不是低代码可视化搭建平台，也不是模型评测/微调平台。
 > 它假设你要的是"**多人、多租户、能自己部署**"的 Agent 底座。
 
 ## 架构
@@ -42,7 +42,7 @@
 | 组件 | 目录 | 端口 | 职责 |
 |---|---|---|---|
 | Go 网关 | `cmd/chiron`、`internal/*` | 8080（容器内，不发布宿主机端口） | 认证、路由、限流、计费、管理后台、SSE 转发 |
-| Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、工作流、知识库、技能、记忆、MCP |
+| Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、知识库、技能、记忆、MCP |
 | 前端 | `frontend-vue/` | 5173（dev）/ 80（容器） | Vue 3 + TypeScript + Vite；nginx 同源反代 `/v1`、`/events`、`/ws` |
 | 数据库 | `migrations/` | 5432 | PostgreSQL + pgvector（Alembic 迁移） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
@@ -148,9 +148,9 @@ make dev-up                               # 容器一键起（单副本）；mak
 ## 目录结构
 
 ```
-cmd/               网关与 CLI（chiron 网关；chiron-cli 管理本地启动的进程）
+cmd/               网关入口（chiron）
 internal/          Go 网关实现（api、auth、billing、broadcast、db、engine、session、storage…）
-python-engine/     引擎实现（app/agent、queue、api、tools、workflow、knowledge、memory…）
+python-engine/     引擎实现（app/agent、queue、api、tools、knowledge、memory…）
 frontend-vue/      Vue 3 前端（nginx 反代 /v1、/events、/ws、/submit、/cancel、/media 到网关）
 migrations/        Alembic 迁移（手写 SQL；schema 直接改数据库，无 ORM 生成链路）
 market/skills/     内置技能资产（`{name}/SKILL.md` 目录型技能）。运行时经 `SkillStore` 的
@@ -172,9 +172,8 @@ python -m alembic -c alembic.ini upgrade head --sql > upgrade.sql   # 离线：�
 ```
 
 - **单一权威基线 + 增量迁移**：`migrations/versions/` 只有一个**基线** `0001_authoritative_baseline`，其 DDL
-  取自稳定后的数据库（`pg_dump --schema-only`）；此后的 schema 变更一律以**增量迁移**追加到同一目录，
-  当前 head 以 `python -m alembic -c alembic.ini heads` 为准。此前迁移链只覆盖 12 张表、库里却有 80 张
-  （其余由 `init.sql`、Go 侧启动建表与一份已丢失的早期迁移共同建立），已整体收敛；
+  取自稳定后的数据库（`pg_dump --schema-only`），包含全部 79 张业务表与默认套餐种子数据；此后的 schema
+  变更一律以**增量迁移**追加到同一目录，当前 head 以 `python -m alembic -c alembic.ini heads` 为准；
 - **应用侧不写 DDL**：Go 的 `EnsureTables` / `InitTable` / `episodes` 建表与 Python 的建表逻辑全部改为
   **只读校验**（`VerifySchema` / `VerifyTable` / `ensure_tables`），缺失时明确报错并提示跑迁移；
 - **升级既有库**：表已齐全的环境执行 `alembic stamp head`（只改版本号、不重放 DDL）；
@@ -200,7 +199,7 @@ MIT（见 [LICENSE](LICENSE)）
 
 Chiron is a **multi-tenant AI agent platform** built for horizontal scale:
 a Go gateway (auth, rate limiting, billing, SSE), a Python engine (agent runtime,
-workflows, RAG, memory, MCP), and a Vue 3 frontend.
+RAG, memory, MCP), and a Vue 3 frontend.
 
 What makes it different from demo-grade agent frameworks is what happens with a **second replica**:
 cross-instance session locks, SSE replay between replicas, run-affinity routing for approvals,

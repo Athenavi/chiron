@@ -36,11 +36,6 @@ const authStoreMock = vi.hoisted(() => ({
   fetchProfile: vi.fn(async () => {}),
 }))
 
-const deviceStoreMock = vi.hoisted(() => ({
-  isLocal: () => false,
-  isDesktop: false,
-}))
-
 const themeStoreMock = vi.hoisted(() => ({
   preference: 'light',
   accent: '#000000',
@@ -66,7 +61,6 @@ vi.mock('../../../api', () => ({ api: apiMocks }))
 vi.mock('../../../api/auth', () => authApiMocks)
 vi.mock('../../../stores/auth', () => ({ useAuthStore: () => authStoreMock }))
 vi.mock('../../../stores/theme', () => ({ useThemeStore: () => themeStoreMock }))
-vi.mock('../../../stores/device', () => ({ useDeviceStore: () => deviceStoreMock }))
 vi.mock('vue-router', () => ({ useRoute: () => ({ query: {} }) }))
 
 /**
@@ -105,7 +99,6 @@ const tr = (key: string, args?: Record<string, unknown>): string =>
 
 const STUBS = {
   HarnessProfilePanel: true,
-  RunModePanel: true,
   LanguageSwitcher: true,
 }
 

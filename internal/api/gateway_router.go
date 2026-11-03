@@ -452,7 +452,7 @@ func NewGatewayRouter(
 	// 放这里而不是 registerAgentRoutes：那个函数的作用域里没有 sessionMgr。
 	mux.Handle("POST /v1/conversations/{id}/fork", authMW(rlMW(ForkConversationHandler(sessionMgr))))
 	// 会话分支（裁剪 + 压缩）：前端用它创建"带核心上下文的分支"（见 session_branch.go
-	// 与 docs/session-map-branch-design.md）。与 /fork 共用 BranchSession，只差 mode。
+	// 与 internal/session/manager_branch.go）。与 /fork 共用 BranchSession，只差 mode。
 	mux.Handle("POST /v1/conversations/{id}/branch", authMW(rlMW(BranchConversationHandler(sessionMgr, pythonClient))))
 	// 重试压缩：压缩是异步的，失败/网关重启会把 branch_state 停在 failed/pending，
 	// 没有这个入口那两个状态就是死胡同（见 session_branch.go::BranchRetryHandler）。
@@ -494,8 +494,6 @@ func NewGatewayRouter(
 	// 全部只操作当前登录用户自己的通知（user_id 取自 claims，不接受外部传入）。
 	NewNotificationHandler(notifyMgr).RegisterRoutes(mux, authMW, rlMW)
 	registerProxyRoutes(mux, authMW, rlMW, kbRateMW, pythonClient)
-	// 桌面端云端片段推理（POST /v1/desktop/infer，用户 JWT + 限流，见 routes_desktop.go）
-	registerDesktopRoutes(mux, authMW, rlMW, pythonClient)
 
 	// Agents (auth + rate limited; DB 驱动 CRUD + 运行会话)
 	agentHandler := NewAgentHandler(authenticator, pythonClient, agentSem)

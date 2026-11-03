@@ -1,8 +1,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
-import { api, desktopDeviceToken, loadDesktopToken, setAuthToken } from '../api'
+import { api, setAuthToken } from '../api'
 import { clearPrivateStorage } from '../utils/privateStorage'
-import { useDeviceStore } from './device'
 import { applyServerLocale } from '../utils/localeSync'
 
 export interface User {
@@ -44,88 +43,33 @@ function persistUserToStorage(u: User | null) {
 }
 
 export const useAuthStore = defineStore('auth', () => {
-  /**
-   * 运行模式：本地模式没有登录流程（本地后端的第一批只给一个固定的本地用户），
-   * 但它**仍然是**一个会话 —— 界面需要 `user` 来显示名字/角色、需要 token 走 Bearer。
-   */
-  const device = useDeviceStore()
-  const isLocalMode = () => device.mode === 'local'
-
   const user = ref<User | null>(loadUserFromStorage())
-  // S 安全：Web 端 token 不再持久化到 localStorage（XSS 偷不走），仅保留内存态；
-  // 桌面端 file:// 跨站拿不到 SameSite=Lax cookie，必须持久化 token 走 Bearer。
+  // S 安全：token 不再持久化到 localStorage（XSS 偷不走），仅保留内存态；
+  // 同源请求主要靠 httpOnly cookie，内存里的 Bearer 供 SSO 回跳等场景使用。
   const token = ref<string>('')
   let tokenInit: Promise<void> | null = null
 
-  /** 统一写入内存 token 与请求层 Bearer（桌面端同时持久化，刷新后仍可用） */
+  /** 统一写入内存 token 与请求层 Bearer */
   function applyToken(t: string) {
     token.value = t
-    // 归属由模式决定：本地会话只进本地桶，云端登录态才进 safeStorage。
-    // 混用会让"云端 token 被发给本机后端"这种 401 变得无法解释（见 api/index.ts）。
-    setAuthToken(t, isLocalMode() ? 'local' : 'cloud')
+    setAuthToken(t)
   }
 
   /**
-   * 桌面端 token 由 safeStorage 异步解密。main.ts 在挂载前 await，路由守卫再兜底；
-   * 幂等，多次调用只读一次加密文件。Web 端立即返回。
+   * 恢复上次会话的 token。
+   *
+   * 当前实现无持久化来源（token 只存在内存），保留这个入口是为了让启动序列
+   * （`main.ts`）与路由守卫有一个"认证态就绪"的 await 点。
    */
   async function initToken(): Promise<void> {
-    if (!tokenInit) {
-      tokenInit = (async () => {
-        // 本地模式：优先建立**本地会话**（不读云端 token —— 那份 token 属于另一个后端，
-        // 带过去只会 401/501）。
-        //
-        // 这里刻意**不 await**：main.ts 会等 initToken 再 mount，而本地后端可能还在启动，
-        // 一个挂住的请求能让窗口迟迟不出第一帧。本地后端第一批允许无鉴权调用，会话稍后
-        // 到达即可（user / token 都是响应式的）。
-        if (isLocalMode()) {
-          // 设备 token 先落地：它由 preload **同步**注入，不用等本地后端就绪。
-          // 请求层（src/api/index.ts 的 requestToken）本地模式正是靠它带 Bearer，
-          // 所以即使 /v1/auth/session 还没回来，开了本地鉴权的 core 也不会拒请求。
-          const deviceToken = desktopDeviceToken()
-          if (deviceToken) applyToken(deviceToken)
-          void ensureLocalSession()
-          return
-        }
-        const stored = await loadDesktopToken()
-        if (stored) applyToken(stored)
-      })()
-    }
+    if (!tokenInit) tokenInit = Promise.resolve()
     return tokenInit
-  }
-
-  /**
-   * 本地会话：`POST /v1/auth/session` 换本地用户 + 设备 token（contracts.md §4）。
-   *
-   * 幂等：已有 user + token 时直接返回 true。失败**不抛错** —— 本地后端可能还没
-   * 启动完（首启 / 重启窗口），把启动流程拖死在 token 初始化里不值得；
-   * 下一次 `initToken` / 设置页可见时会重试。
-   */
-  async function ensureLocalSession(force = false): Promise<boolean> {
-    if (!force && user.value && token.value) return true
-    try {
-      const response = await api.post('/v1/auth/session')
-      const d = response.data?.data
-      if (!d?.user) return false
-      // token 以**设备 token**（preload 注入）为准：core 校验的就是它
-      //（CHIRON_DEVICE_TOKEN 优先于落盘文件，见 desktop-local/app/api/auth.py）。
-      // 两者不一致（注入值被 core 落盘值盖住）时，用错那个在开了鉴权的 core 上全场 401。
-      const localToken = desktopDeviceToken() || d.token || ''
-      if (!localToken) return false
-      applyToken(localToken)
-      user.value = d.user
-      persistUserToStorage(d.user)
-      return true
-    } catch {
-      return false
-    }
   }
 
   const loading = ref(false)
 
-  // 本地模式：没有"登录"这回事，界面一律视为已登录（否则每个 requiresAuth 页都会弹回登录页，
-  // 而登录页本身在本地模式是被拦截的云专属路由）。
-  const isAuthenticated = computed(() => (isLocalMode() ? true : !!user.value))
+  // 有 user 才算已登录（权威身份来自 GET /v1/auth/profile）
+  const isAuthenticated = computed(() => !!user.value)
   // S 修复：owner 角色拥有全部 admin 权限，isAdmin 须同时识别 admin + owner
   const isAdmin = computed(() => user.value?.role === 'admin' || user.value?.role === 'owner')
 
@@ -181,13 +125,6 @@ export const useAuthStore = defineStore('auth', () => {
   }
 
   async function fetchProfile() {
-    // 本地模式：权威身份来自本地会话。`POST /v1/auth/session` 返回的 user.role 就是
-    // 后端行里的值（网关链路）或与设备 token 等价的本机身份（core 链路），
-    // 不再多打一次 GET /v1/auth/profile —— 那条端点只有网关有，core 没有。
-    if (isLocalMode()) {
-      await ensureLocalSession()
-      return
-    }
     if (!user.value) return
     try {
       const response = await api.get('/v1/auth/profile')
@@ -238,15 +175,6 @@ export const useAuthStore = defineStore('auth', () => {
 
   // S 安全：logout 调后端清 httpOnly cookie（否则登出后 cookie 仍有效，鉴权不失效）
   async function logout() {
-    // 本地模式没有账号可登出：清掉内存态后立刻重建同一个本地会话，
-    // 避免界面停在一个"名字为空、token 为空"的半登录态。
-    if (isLocalMode()) {
-      applyToken('')
-      user.value = null
-      persistUserToStorage(null)
-      await ensureLocalSession(true)
-      return
-    }
     try {
       await api.post('/v1/auth/logout')
     } catch {
@@ -267,7 +195,6 @@ export const useAuthStore = defineStore('auth', () => {
     isAuthenticated,
     isAdmin,
     initToken,
-    ensureLocalSession,
     login,
     register,
     fetchProfile,

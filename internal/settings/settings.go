@@ -169,7 +169,7 @@ func (s *Store) SaveConfig(ctx context.Context, category string, config map[stri
 		// upsert（先 UPDATE，未命中再 INSERT）——**不依赖任何唯一约束**。
 		//
 		// 这里曾用 `INSERT ... ON CONFLICT (category, key) DO UPDATE`。但 system_settings
-		// 的实际表结构（见 migrations/sql/init.sql 与生产库导出）只有 id 主键，
+		// 的实际表结构（见权威基线的 system_settings 建表）只有 id 主键，
 		// (category, key) 上并没有唯一约束，Postgres 于是直接报
 		//   42P10: there is no unique or exclusion constraint matching the ON CONFLICT specification
 		// 导致**所有**保存路径（后台「系统设置」、后台「支付配置」、LLM Key 等）全军覆没。

@@ -3,7 +3,6 @@ import { computed, h, nextTick, onMounted, onUnmounted, ref, watch, type Compone
 import { useRouter, useRoute } from 'vue-router'
 import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
-import { useDeviceStore } from '../stores/device'
 
 // Ant Design Vue 组件
 import {
@@ -54,8 +53,6 @@ const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
-// 本地模式：计费/模型配置/管理后台都是云侧页面（路由上也会被 cloudOnly 拦住）
-const deviceStore = useDeviceStore()
 
 /**
  * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / 落在 --z-drawer 层）会盖住
@@ -81,7 +78,7 @@ const unreadCount = ref(0)
 let unreadTimer: ReturnType<typeof setInterval> | null = null
 
 async function refreshUnread() {
-  if (!authStore.token || deviceStore.isLocal()) return
+  if (!authStore.token) return
   try {
     unreadCount.value = await getUnreadCount()
   } catch {
@@ -119,18 +116,16 @@ interface MenuItem {
 }
 
 const menuItems = computed<MenuItem[]>(() => {
-  const localMode = deviceStore.isLocal()
   const items: MenuItem[] = [
     { key: '/', label: tr('common.home'), icon: () => h(HomeOutlined) },
     { key: WORKSTATION_ROUTES.dialogue, label: WORKSTATION_LABELS.dialogue, icon: () => h(MessageOutlined) },
     { key: WORKSTATION_ROUTES.agent, label: WORKSTATION_LABELS.agent, icon: () => h(UserOutlined) },
-    { key: WORKSTATION_ROUTES.workflow, label: WORKSTATION_LABELS.workflow, icon: () => h(ApartmentOutlined) },
     { key: WORKSTATION_ROUTES.skill, label: WORKSTATION_LABELS.skill, icon: () => h(BlockOutlined) },
     { key: '/media', label: tr('common.media'), icon: () => h(PictureOutlined) },
     { key: WORKSTATION_ROUTES.knowledge, label: WORKSTATION_LABELS.knowledge, icon: () => h(BookOutlined) },
     { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
-    ...(localMode ? [] : [{ key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) }]),
+    { key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) },
     ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
@@ -160,7 +155,7 @@ function handleMenuClick(info: { key: string | number }) {
 // 账号菜单项统一由 components/accountMenu.ts 构造：此前 AppLayout 与
 // chat/ChatSidePanel 各写一份并已漂移（聊天页那份缺 api-keys 与通知入口）。
 const userMenuItems = computed<AccountMenuItem[]>(() =>
-  buildAccountMenuItems((k) => tr(k), { isLocal: deviceStore.isLocal() }),
+  buildAccountMenuItems((k) => tr(k)),
 )
 
 // 设置弹窗与 /profile 页面共用 SettingsPanel，避免两套实现各自漂移
@@ -197,7 +192,6 @@ interface DockItem {
 const dockItems: DockItem[] = [
   { key: WORKSTATION_ROUTES.dialogue, label: WORKSTATION_LABELS.dialogue, desc: WORKSTATION_DESCRIPTIONS.dialogue, icon: MessageOutlined },
   { key: WORKSTATION_ROUTES.agent, label: WORKSTATION_LABELS.agent, desc: WORKSTATION_DESCRIPTIONS.agent, icon: RobotOutlined },
-  { key: WORKSTATION_ROUTES.workflow, label: WORKSTATION_LABELS.workflow, desc: WORKSTATION_DESCRIPTIONS.workflow, icon: ApartmentOutlined },
   { key: WORKSTATION_ROUTES.skill, label: WORKSTATION_LABELS.skill, desc: WORKSTATION_DESCRIPTIONS.skill, icon: ThunderboltOutlined },
   { key: WORKSTATION_ROUTES.knowledge, label: WORKSTATION_LABELS.knowledge, desc: WORKSTATION_DESCRIPTIONS.knowledge, icon: BookOutlined },
   { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, desc: WORKSTATION_DESCRIPTIONS.plugin, icon: AppstoreOutlined },
@@ -263,7 +257,7 @@ async function runQuickCommand() {
   quickLoading.value = true
   try {
     await executeQuickCommand(command)
-    message.success(tr('workflow.task_submitted_results_shown_on_the_conversation_page'))
+    message.success(tr('task.task_submitted_results_shown_on_the_conversation_page'))
     closeQuickCommand()
   } catch {
     // 错误已由统一处理器处理
@@ -340,9 +334,9 @@ async function runQuickCommand() {
       v-if="!isChatPage"
       class="topbar-actions"
     >
-      <!-- 通知中心入口（P2-3）：本地模式没有账号体系，通知表也是空的，故不展示 -->
+      <!-- 通知中心入口（P2-3） -->
       <button
-        v-if="authStore.user && !deviceStore.isLocal()"
+        v-if="authStore.user"
         :aria-label="tr('notifications.title')"
         :title="tr('notifications.title')"
         class="topbar-notify"

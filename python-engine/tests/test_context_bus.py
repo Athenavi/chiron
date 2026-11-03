@@ -61,8 +61,8 @@ async def test_subscribe_registers_pubsub_channel():
     assert "contextbus:t1:agent.results" in bus._pubsub_channels
 
     # 不带 tenant_id → 通配符 channel
-    await bus.subscribe("workflow.state", _cb)
-    assert "contextbus:*:workflow.state" in bus._pubsub_channels
+    await bus.subscribe("skill.state", _cb)
+    assert "contextbus:*:skill.state" in bus._pubsub_channels
 
 
 async def test_unsubscribe_cleans_up_empty_channel():

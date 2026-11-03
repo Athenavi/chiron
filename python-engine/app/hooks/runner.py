@@ -10,7 +10,7 @@ payload 走 stdin、结果走 stdout，宿主 env 由 `sandboxed_env()` 清空�
 失败都以 `{"success": false, "error": ...}` JSON 输出。本模块把这一切**收束成
 永不抛异常**的 `HookOutcome`，让调用方（主流程）天然 fire-and-forget。
 
-批 G+ 批次 2b（`docs/hook-protocol-design.md` §4.3 选项 **(b)**）新增 **`command` 形态**：
+批 G+ 批次 2b（`python-engine/app/hooks/` 选项 **(b)**）新增 **`command` 形态**：
 运维在**部署级声明文件**里给出的本地命令。它与 `python` 形态的差别只有三处，其余原语
 （清环境 / RLIMIT / 截断 / 审计）**完全复用**：
 
@@ -253,7 +253,7 @@ def command_policy_error(command: str) -> str | None:
     三条闸口（任一不过即拒，**fail-closed**）：
 
     1. `hooks_allow_commands` —— 本形态的**独立开关**，默认关（它新增一个**运维级**
-       可执行面，见 `docs/hook-protocol-design.md` §4.3 选项 (b)）；
+       可执行面，见 `python-engine/app/hooks/` 选项 (b)）；
     2. allowlist **为空 ⇒ 一条也不批准**（与插件命令白名单"未配置即全部拒绝"同款默认）；
     3. 可执行文件的身份必须落在 allowlist 内。
 
@@ -449,7 +449,7 @@ def webhook_payload(context: dict[str, Any]) -> dict[str, Any]:
 
     刻意**不**送 `tool_arguments` / `tool_result`（可能是租户内容）与
     `tenant_id` / `user_id` / `session_id`（租户标识）：把载荷或身份送到**运维配置的外部
-    URL** 是一次**数据出境**决定，`docs/hook-protocol-design.md` §4.3 的拍板结论是
+    URL** 是一次**数据出境**决定，`python-engine/app/hooks/` 的拍板结论是
     **默认只送内容无关字段**。要送它们需要**再拍一次板**并单独加开关 —— 本批不做。
     """
     from app.audit_log import utc_timestamp

@@ -152,7 +152,7 @@ const router = useRouter()
 
 interface SourceChip {
   key: string
-  kind: 'kb' | 'workflow' | 'agent' | 'trace'
+  kind: 'kb' | 'agent' | 'trace'
   label: string
   title: string
   go: () => void
@@ -170,14 +170,6 @@ const sourceChips = computed<SourceChip[]>(() => {
       key: 'kb', kind: 'kb', label: t('knowledge.knowledge_base'),
       title: t('knowledge.source_knowledge_base_id_click_to_open', { id: kbId }),
       go: () => router.push(`/knowledge/${encodeURIComponent(kbId)}`),
-    })
-  }
-  const wfId = typeof meta.workflow_id === 'string' && meta.workflow_id ? meta.workflow_id : ''
-  if (wfId) {
-    chips.push({
-      key: 'workflow', kind: 'workflow', label: t('workflow.workflow'),
-      title: t('workflow.source_workflow_id_click_to_open', { id: wfId }),
-      go: () => router.push({ path: '/workflow', query: { id: wfId } }),
     })
   }
   const agentId = typeof meta.agent_id === 'string' && meta.agent_id ? meta.agent_id : ''
@@ -736,13 +728,17 @@ onUpdated(enhanceContent)
             </a>
           </template>
         </div>
-        <!-- 子 Agent 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
-             （后端 messages.source === 'subagent_followup'） -->
+        <!-- 自动轮注入的消息：标出来源，别让用户以为是自己发的提问
+             （后端 messages.source：'subagent_followup' / 'job_followup'）。
+             两种来源分开显示 —— "子 Agent 回来了"和"你那条后台命令跑完了"
+             是用户要区分开的两件事。 -->
         <div
-          v-if="item.role === 'user' && (item as TextItem).source === 'subagent_followup'"
+          v-if="item.role === 'user' && ((item as TextItem).source === 'subagent_followup' || (item as TextItem).source === 'job_followup')"
           class="followup-badge"
         >
-          {{ $t('workflow.subtask_complete_main_agent_auto_summarizes') }}
+          {{ (item as TextItem).source === 'job_followup'
+            ? $t('task.job_finished_main_agent_auto_continues')
+            : $t('task.subtask_complete_main_agent_auto_summarizes') }}
         </div>
         <!-- Super-agent 接管期间产生的回合，分两种位置标记，避免一轮里重复出现：
              - 注入的巡检指令（messages.source）标在用户消息上
@@ -751,15 +747,24 @@ onUpdated(enhanceContent)
           v-if="item.kind === 'text' && item.role === 'user' && (item as TextItem).source === 'superagent_takeover'"
           class="takeover-badge"
         >
-          {{ $t('workflow.superagent_takeover_prompt') }}
+          {{ $t('task.superagent_takeover_prompt') }}
         </div>
         <div
           v-if="item.kind === 'text' && item.role === 'assistant' && (item as TextItem).origin === 'superagent_takeover'"
           class="takeover-badge"
         >
-          {{ $t('workflow.superagent_takeover_turn') }}
+          {{ $t('task.superagent_takeover_turn') }}
         </div>
-        <!-- 反向定位：来源工作台 chips（kb_id / workflow_id / agent_id，metadata 驱动） -->
+        <!-- Watchdog 在轮次边界注入的提醒（messages.source = 'watchdog'）。
+             与上面两种分开：这条不是"有东西回来了"，而是系统判断这一轮在原地打转、
+             替你补了一句话 —— 用户有权知道这句话不是自己说的。 -->
+        <div
+          v-if="item.kind === 'text' && item.role === 'user' && (item as TextItem).source === 'watchdog'"
+          class="watchdog-badge"
+        >
+          {{ $t('task.watchdog_nudge_prompt') }}
+        </div>
+        <!-- 反向定位：来源工作台 chips（kb_id / agent_id，metadata 驱动） -->
         <div
           v-if="item.role === 'assistant' && sourceChips.length"
           class="source-chips"
@@ -1292,6 +1297,15 @@ onUpdated(enhanceContent)
   margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
   color: var(--primary); background: var(--primary-bg);
   border: var(--hairline-width) solid var(--primary); border-radius: var(--sig-radius-button);
+}
+/* Watchdog 注入的提醒（后端 messages.source = 'watchdog'）：用 warning 色而不复用
+   takeover 的 primary 色 —— takeover 是"接管正在跑"，watchdog 是"系统觉得你卡住了"，
+   两件事的后果不同，颜色不该一样。 */
+.watchdog-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
+  color: var(--warning); background: var(--warning-bg);
+  border: var(--hairline-width) solid var(--warning); border-radius: var(--sig-radius-button);
 }
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;

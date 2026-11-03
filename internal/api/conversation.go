@@ -153,7 +153,7 @@ func parentTitlesFor(ctx context.Context, mgr *session.Manager, convs []Conversa
 // ForkPoints 列出「自定义分叉」可选的落点（`GET /v1/conversations/{id}/fork-points`）。
 //
 // 为什么不复用 `GET /v1/conversations/{id}` 的消息数组：那条路径按 `seq DESC`
-// 走（能用上 ix_messages_session_seq），而 0016 迁移自述存量行的 `seq` 与
+// 走（能用上 ix_messages_session_seq），而权威基线自述存量行的 `seq` 与
 // `created_at` 顺序可能不一致；分叉的复制窗口却按 `ORDER BY created_at, id` 算。
 // 前端拿列表下标当 `from_index` 会在存量数据上静默错位 —— 用户以为从第 10 条分叉，
 // 实际复制的是另外 10 条。所以选点必须走与复制语句同口径的专用查询

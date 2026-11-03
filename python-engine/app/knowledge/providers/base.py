@@ -20,7 +20,7 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 # 取值刻意用宽字符串而不是 PG enum/常量类：新增检索引擎只需在这里加一个名字，
-# 不产生 ``ALTER TYPE`` 迁移（见 0023 迁移的取舍说明）。
+# 不产生 ``ALTER TYPE`` 迁移（见权威基线的取舍说明）。
 PROVIDER_SELFHOSTED = "selfhosted"
 PROVIDER_CLOUD = "cloud"
 KNOWN_PROVIDERS: tuple[str, ...] = (PROVIDER_SELFHOSTED, PROVIDER_CLOUD)

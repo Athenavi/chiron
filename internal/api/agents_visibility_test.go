@@ -52,7 +52,7 @@ func TestAgentListQuery_JSONCastsAreJSON(t *testing.T) {
 	if strings.Contains(agentListQuery, "::jsonb") {
 		t.Errorf("agents 的 json 列不能用 ::jsonb，运行时会报类型转换错误:\n%s", agentListQuery)
 	}
-	for _, col := range []string{"tools", "llm_config", "skills", "plugins", "workflows"} {
+	for _, col := range []string{"tools", "llm_config", "skills", "plugins"} {
 		want := "COALESCE(" + col + ",'"
 		if !strings.Contains(agentListQuery, want) {
 			t.Errorf("列 %s 缺少带类型的 COALESCE 缺省值:\n%s", col, agentListQuery)

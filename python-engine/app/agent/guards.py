@@ -125,9 +125,6 @@ WRITE_TOOLS: frozenset[str] = frozenset(
         # 网络访问
         "web_fetch",
         "web_search",
-        # 外部状态创建
-        "graph_create",
-        "agent_session_create",
     }
 )
 

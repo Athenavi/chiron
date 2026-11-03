@@ -849,7 +849,7 @@ class MemoryService:
             if qvec:
                 mode = "semantic"
                 # 同口径才可比：这条是 Redis 不可用时才走到的退化分支，跨模型/跨维度的
-                # 余弦会给出一个看着合理却没有意义的排名（迁移 0020 的理由）。
+                # 余弦会给出一个看着合理却没有意义的排名。
                 model_tag = active_embedding_model()
                 scorer = CosineScorer(qvec)
                 scored = []

@@ -72,7 +72,6 @@ export default {
   upload_failed_name_reason: "Upload failed: {name} — {reason}",
   upload_failed_name_init_failed: "Upload failed: {name} — init failed",
   save_failed_error: "Save failed: {error}",
-  failed_to_save_workflow_error: "Failed to save workflow: {error}",
   share_does_not_exist_or_has_expired: "Share does not exist or has expired",
   fork_failed: "Fork failed",
   failed_to_create_agent_error: "Failed to create agent: {error}",
@@ -168,7 +167,6 @@ export default {
   failed_to_fetch_backup_list: "Failed to fetch backup list",
   failed_to_fetch_plugin_list: "Failed to fetch plugin list",
   failed_to_fetch_queue_data: "Failed to fetch queue data",
-  failed_to_fetch_workflow_templates: "Failed to fetch workflow templates",
   failed_to_fetch_cache_data: "Failed to fetch cache data",
   failed_to_fetch_skill_list_please_check_your_network_connection: "Failed to fetch skill list, please check your network connection",
   failed_to_fetch_skill_marketplace: "Failed to fetch skill marketplace",
@@ -293,10 +291,4 @@ export default {
   notion_style_high_information_density_clear_layout: "Notion style, high information density, clear layout",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "RSA2 key pair: app private key and Alipay public key are both PEM; blank falls back to the ALIPAY_* environment variables.",
   ssl_renewal_failed: "SSL renewal failed",
-  // Local mode only: endpoints the local backend (desktop-local) does not implement yet (501)
-  local_mode_feature_unavailable: "This feature is not available in local mode yet (the local service does not implement this endpoint)",
-  // Local mode: local service not ready (503). Must stay distinct from the cloud
-  // rate-limit wording "Server busy" — "too many requests" vs "a local component
-  // hasn't come up". The concrete cause comes from error.response.data.detail.
-  local_service_not_ready: "The local service isn't ready yet, so this action can't be completed right now. Try again in a moment; if it keeps failing, restart the app.",
 }

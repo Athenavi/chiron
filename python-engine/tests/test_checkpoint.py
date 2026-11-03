@@ -179,7 +179,7 @@ async def test_save_inserts_when_no_active_row(monkeypatch: pytest.MonkeyPatch):
 
 @pytest.mark.asyncio
 async def test_save_failure_does_not_raise(fake_pool: _FakePool, monkeypatch: pytest.MonkeyPatch):
-    """落盘失败**只降级恢复粒度**，绝不影响对话本身（与 workflow 的同一语义）。"""
+    """落盘失败**只降级恢复粒度**，绝不影响对话本身。"""
     monkeypatch.setattr(cp, "_pool", lambda: _FakePool(raise_on="UPDATE"))
 
     ok = await cp.save(

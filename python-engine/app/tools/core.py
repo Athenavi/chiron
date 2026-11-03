@@ -1,7 +1,7 @@
 """核心本地工具集（Python 端）。
 
 首波迁移：filesystem / shell / search(grep) / web。
-后续可继续扩展 memory / pm / skill / workflow 等工具。
+后续可继续扩展 memory / pm / skill 等工具。
 """
 
 from __future__ import annotations

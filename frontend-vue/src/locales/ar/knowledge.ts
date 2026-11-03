@@ -106,4 +106,5 @@ export default {
   status_ready: "Ready",
   status_error: "Error",
   index_now: "Build index",
+  re_indexing_triggered_please_check_status_later: "تم تشغيل إعادة الفهرسة، يرجى مراجعة الحالة لاحقًا",
 }

@@ -160,8 +160,8 @@ export function describeApiError(error: unknown, fallback?: string): string {
   const err = (error ?? {}) as ApiErrorLike
   const status = err.response?.status
   // 与 `serverErrorDetail` 保持同一条取值链 `detail → error → message`：
-  // 本地后端（desktop-local）是 FastAPI，原因写在 `detail` 里；Go 网关用 `error`。
-  // 少读一个字段，本地模式下就只剩"服务不可用"这种没有信息量的兜底文案。
+  // Go 网关把原因写在 `error` 里，引擎（FastAPI）写在 `detail` 里，两者都要读，
+  // 少读一个字段就只剩"服务不可用"这种没有信息量的兜底文案。
   const serverMessage = serverErrorDetail(err, '') || undefined
   const code = err.response?.data?.code
   const params = err.response?.data?.params

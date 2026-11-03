@@ -102,7 +102,7 @@ class MockDatabasePool:
                 "last_accessed_at": None,
                 "status": "active",
                 "created_at": now,
-                # $11 = embedding（迁移 0019），$12/$13 = 口径标签（迁移 0020）；
+                # $11 = embedding，$12/$13 = 口径标签；
                 # 替身按位置取，位置变了就该失败。
                 "embedding": args[10] if len(args) > 10 else None,
                 "embedding_model": args[11] if len(args) > 11 else None,
@@ -724,7 +724,7 @@ class TestPgVectorBackend:
 
     @pytest.mark.asyncio
     async def test_legacy_rows_without_vector_report_recent(self, store, scope):
-        """迁移 0019 之前的行没有向量：退回按时间取，并且**照实**记成 recent。"""
+        """没有向量的老行：退回按时间取，并且**照实**记成 recent。"""
         store._embedding_fn = _query_embedder(_axis(0))
         await store.save_summary(scope=scope, content="旧行", embedding=[])
 
@@ -804,7 +804,7 @@ class TestPgVectorBackend:
 
     @pytest.mark.asyncio
     async def test_unlabelled_rows_keep_participating(self, store, scope):
-        """标签为 NULL 的行继续比：严格排除会让迁移 0020 之前的历史行突然失忆。"""
+        """标签为 NULL 的行继续比：严格排除会让老历史行突然失忆。"""
         await store.save_summary(scope=scope, content="未标", embedding=_axis(0))
 
         items = await store._pg_vector_summaries("t1", "u1", _axis(0), top_k=5)

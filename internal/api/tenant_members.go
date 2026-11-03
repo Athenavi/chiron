@@ -105,7 +105,7 @@ func tenantRoleIDFor(ctx context.Context, ex tenantExecer, tenantID int16, name 
 //
 // 早前这里写的是「owner → owner，其余一律 member」，会把全站 admin 静默降成
 // 普通成员 —— 而 C1-4 之后权限判定优先读 tenant_members，降权会真实生效：
-// 存量管理员丢掉 admin:* / audit:read，且没有任何提示。迁移 0008 的回填
+// 存量管理员丢掉 admin:* / audit:read，且没有任何提示。任何回填口径
 // 必须与此处口径完全一致。
 func tenantRoleNameFor(sysRole string) string {
 	switch sysRole {
@@ -121,8 +121,8 @@ func tenantRoleNameFor(sysRole string) string {
 // addTenantMember 在注册事务内建立 (tenantID, userID) 的成员关系。
 //
 // sysRole 是 users.role 的取值（owner / admin / user），经 tenantRoleNameFor
-// 映射成租户内角色。这与迁移 0008 的回填口径一致，保证「新注册的用户」和
-// 「迁移回填的老用户」拿到同样的角色。
+// 映射成租户内角色。这与历史回填口径一致，保证「新注册的用户」和
+// 「回填的老用户」拿到同样的角色。
 //
 // 与 users 的 INSERT 必须在同一事务：两者分开写会出现「用户已存在但没有成员
 // 记录」的窗口，而读取路径一旦切到 tenant_members，这些用户就会凭空消失。

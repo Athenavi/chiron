@@ -1,6 +1,5 @@
 import { api } from '../api'
 import { hasExplicitLocale, setLocale, setLocaleSyncHook } from '../i18n'
-import { currentDeviceMode } from '../stores/device'
 
 /**
  * 把界面语言同步到 `users.settings.locale`（P2-3 / T1）。
@@ -41,8 +40,6 @@ export function installLocaleSync(probe: AuthProbe): void {
  * 对用户当下没有任何可操作的动作，弹错只会造成噪音。
  */
 export async function persistLocale(code: string): Promise<void> {
-  // 本地模式没有账号体系（也没有 /v1/auth/profile），偏好无处可写。
-  if (currentDeviceMode() === 'local') return
   if (!authProbe()) return
 
   try {

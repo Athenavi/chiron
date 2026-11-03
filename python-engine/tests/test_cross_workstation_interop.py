@@ -42,8 +42,8 @@ def _fake_gateway(intent: dict):
 # ── 能力注册中心 ───────────────────────────────────────────────────
 
 
-async def test_preload_registers_all_five_workstations():
-    """预加载必须覆盖六大工作台中的五大能力型工作台（dialogue 为入口不单独注册）"""
+async def test_preload_registers_all_four_capability_workstations():
+    """预加载必须覆盖五大工作台中的四大能力型工作台（dialogue 为入口不单独注册）"""
     reg = CapabilitiesRegistry()
     await preload_default_capabilities(reg)
 
@@ -51,7 +51,6 @@ async def test_preload_registers_all_five_workstations():
     assert WorkstationType.SKILL in wst_types
     assert WorkstationType.KNOWLEDGE in wst_types
     assert WorkstationType.AGENT in wst_types
-    assert WorkstationType.WORKFLOW in wst_types
     assert WorkstationType.PLUGIN in wst_types
 
     # 全部能力必须挂真实执行器（fail loud：无执行器的能力不可执行）
@@ -280,9 +279,9 @@ async def test_capabilities_routes():
         assert resp.status_code == 200
         body = resp.json()
         assert body["success"] is True
-        assert body["count"] >= 9
+        assert body["count"] >= 8
         workstations = {c["workstation_type"] for c in body["capabilities"]}
-        assert {"skill", "knowledge", "agent", "workflow", "plugin"} <= workstations
+        assert {"skill", "knowledge", "agent", "plugin"} <= workstations
 
         resp2 = await ac.post(
             "/v1/capabilities/search",

@@ -506,3 +506,43 @@ describe('失败消息的可执行动作', () => {
     expect(wrapper.findAll('.retry-btn').some(b => b.text() === '重试')).toBe(false)
   })
 })
+
+// ── 系统注入消息的来源标记 ──────────────────────────────────────────────
+//
+// 这三类消息在历史里长得跟用户自己发的一模一样，靠 `messages.source` 区分。
+// 只验库里有值不够：徽标漏渲染，用户照样会把 watchdog 的提醒当成自己说过的话。
+describe('注入消息的来源徽标', () => {
+  // 组件内部会 `inject('router')`（重试按钮要跳转），缺了它每条用例都会刷 warning ——
+  // 警告本身不会让用例失败，但会让真实问题的信号淹没在噪声里。
+  const router = createRouter({
+    history: createMemoryHistory(),
+    routes: [{ path: '/chat', component: { template: '<div />' } }],
+  })
+
+  const mountUser = (source: string) => mount(MessageItem, {
+    props: {
+      item: { kind: 'text', role: 'user', content: '补一句', id: 'u1', source } as ChatItem,
+    },
+    global: { plugins: [router] },
+  })
+
+  it('watchdog 注入 → 渲染「系统提醒」徽标', async () => {
+    const wrapper = mountUser('watchdog')
+    await settleAsync()
+
+    const badge = wrapper.find('.watchdog-badge')
+    expect(badge.exists()).toBe(true)
+    expect(badge.text()).toContain('系统提醒')
+    // 不能连带出别的来源徽标：三种来源的语义不同，串色会让用户误判
+    expect(wrapper.find('.takeover-badge').exists()).toBe(false)
+    expect(wrapper.find('.followup-badge').exists()).toBe(false)
+  })
+
+  it('用户自己发的（source 为空）→ 不渲染任何来源徽标', async () => {
+    const wrapper = mountUser('')
+    await settleAsync()
+
+    expect(wrapper.find('.watchdog-badge').exists()).toBe(false)
+    expect(wrapper.find('.takeover-badge').exists()).toBe(false)
+  })
+})

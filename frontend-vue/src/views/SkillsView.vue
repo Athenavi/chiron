@@ -71,37 +71,25 @@ async function loadSkills() {
   }
 }
 
-// ── 反向引用：这些技能被哪些 Agent / 工作流在用 ──
-// 两个来源互不依赖（Agent 的 skills 列 / 工作流图里的 skill 节点），
-// 任一拉取失败只让那一半为空，不拖垮技能列表本身。
+// ── 反向引用：这些技能被哪些 Agent 在用 ──
+// 来源是 Agent 的 skills 列；拉取失败只让这一块为空，不拖垮技能列表本身。
 const skillUsage = ref<Map<string, SkillUsage>>(new Map())
 
 async function loadSkillUsage() {
-  const [agents, graphs] = await Promise.all([
-    listAgents().catch(() => []),
-    api.get('/v1/graphs')
-      .then(r => (r.data?.data ?? []) as { name: string; graph_json?: unknown }[])
-      .catch(() => [] as { name: string; graph_json?: unknown }[]),
-  ])
-  skillUsage.value = collectSkillUsage({ agents, graphs })
+  const agents = await listAgents().catch(() => [])
+  skillUsage.value = collectSkillUsage({ agents })
 }
 
 /** 卡片上的用量摘要；没有任何引用时返回空串（不显示空标记） */
 function usageLabel(name: string): string {
-  const { agents, workflows } = usageOf(skillUsage.value, name)
-  const parts: string[] = []
-  if (agents.length) parts.push(tr('agent.n_agents', { n: agents.length }))
-  if (workflows.length) parts.push(tr('workflow.n_workflows', { n: workflows.length }))
-  return parts.join(' · ')
+  const { agents } = usageOf(skillUsage.value, name)
+  return agents.length ? tr('agent.n_agents', { n: agents.length }) : ''
 }
 
 /** 悬浮提示：具体是谁在用 */
 function usageTitle(name: string): string {
-  const { agents, workflows } = usageOf(skillUsage.value, name)
-  const lines: string[] = []
-  if (agents.length) lines.push(`Agent：${agents.join('、')}`)
-  if (workflows.length) lines.push(tr('workflow.workflows_list', { list: workflows.join('、') }))
-  return lines.join('\n')
+  const { agents } = usageOf(skillUsage.value, name)
+  return agents.length ? `Agent：${agents.join('、')}` : ''
 }
 
 onMounted(() => {

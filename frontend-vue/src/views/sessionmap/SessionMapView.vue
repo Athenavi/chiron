@@ -696,7 +696,7 @@ async function armDelete() {
   pointer-events: none;
 }
 
-/* 窄屏：侧栏落到画布下方并限高，画布保底 440px（与 WorkflowView 一致） */
+/* 窄屏：侧栏落到画布下方并限高，画布保底 440px */
 @media (max-width: 768px) {
   .map-view-body {
     flex-direction: column;

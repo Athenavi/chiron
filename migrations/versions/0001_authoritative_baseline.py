@@ -1,12 +1,14 @@
-"""权威基线：一次性描述全部 schema。
+"""权威基线：一次性描述全部 schema（与 Alembic 合一的唯一入口）。
 
-由 `pg_dump --schema-only` 从「旧迁移链 0001..0029 全部跑完」的库导出后固化，
-因此**全新库 `alembic upgrade head` 即为终态**。此前的逐次变更历史（含 0023
-"先 DROP 知识库三张表再重建"那一步）已不再需要 —— 它对已有库是删数据，
-对全新库只是噪声。
+由 `pg_dump --schema-only` 从「旧迁移链全部跑完、并移除已下线功能残留」的库导出后
+固化，因此**全新库 `alembic upgrade head` 即为终态**。此前的逐次变更历史不再需要 ——
+它对已有库是删数据，对全新库只是噪声。
 
 **改 schema 的方式：不要修改本文件，追加新的 revision。**
-单一 head 是硬要求，分叉会被 `internal/db/schema_version.go` 直接判为错误。
+单一 head 是硬要求，分叉会被 `internal/db/schema_version.go` 判为错误。
+
+语句顺序即 pg_dump 的可重放顺序：建表 → 序列与 OWNED BY → 列默认值 → 约束 → 索引。
+不要重排：默认值依赖先建好的序列，主键/外键约束依赖先建好的表。
 """
 
 from typing import Sequence, Union
@@ -18,8 +20,6 @@ down_revision: Union[str, Sequence[str], None] = None
 branch_labels: Union[str, Sequence[str], None] = None
 depends_on: Union[str, Sequence[str], None] = None
 
-# 顺序即 pg_dump 的可重放顺序：建表 → 序列与 OWNED BY → 列默认值 → 约束 → 索引。
-# 不要重排：默认值依赖先建好的序列，主键约束依赖先建好的表。
 _DDL: tuple[str, ...] = (
     """CREATE TABLE public.admin_model_configs (
     id character varying(36) NOT NULL,
@@ -83,7 +83,6 @@ _DDL: tuple[str, ...] = (
     kb_id character varying(255),
     skills json,
     plugins json,
-    workflows json,
     kind character varying(16) DEFAULT 'chat'::character varying NOT NULL
 );""",
     """CREATE TABLE public.api_keys (
@@ -106,6 +105,23 @@ _DDL: tuple[str, ...] = (
     details json,
     ip_address character varying(45),
     created_at timestamp without time zone
+);""",
+    """CREATE TABLE public.billing_packages (
+    id character varying(36) NOT NULL,
+    code character varying(64) NOT NULL,
+    name character varying(128) NOT NULL,
+    credits integer NOT NULL,
+    price_cents bigint NOT NULL,
+    currency character varying(8) DEFAULT 'CNY'::character varying NOT NULL,
+    duration_days integer DEFAULT 30 NOT NULL,
+    allowed_models text[] DEFAULT ARRAY[]::text[] NOT NULL,
+    enabled boolean DEFAULT true NOT NULL,
+    sort_order integer DEFAULT 0 NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT billing_packages_credits_check CHECK ((credits >= 0)),
+    CONSTRAINT billing_packages_duration_check CHECK ((duration_days > 0)),
+    CONSTRAINT billing_packages_price_check CHECK ((price_cents >= 0))
 );""",
     """CREATE TABLE public.billing_records (
     id character varying(36) NOT NULL,
@@ -396,6 +412,22 @@ _DDL: tuple[str, ...] = (
     enabled boolean DEFAULT false NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
+    """CREATE TABLE public.invoice_requests (
+    id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    payment_id character varying(64) NOT NULL,
+    title character varying(255) NOT NULL,
+    tax_no character varying(64) NOT NULL,
+    amount_cents bigint NOT NULL,
+    currency character varying(8) DEFAULT 'CNY'::character varying NOT NULL,
+    status character varying(16) DEFAULT 'pending'::character varying NOT NULL,
+    note text,
+    review_note text,
+    reviewed_by character varying(36),
+    reviewed_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT invoice_requests_status_check CHECK (((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('approved'::character varying)::text, ('rejected'::character varying)::text])))
+);""",
     """CREATE TABLE public.knowledge_bases (
     id character varying(36) NOT NULL,
     tenant_id smallint NOT NULL,
@@ -440,7 +472,8 @@ _DDL: tuple[str, ...] = (
     enabled boolean,
     context_window integer,
     created_at timestamp without time zone,
-    updated_at timestamp without time zone
+    updated_at timestamp without time zone,
+    max_output_tokens integer
 );""",
     """CREATE TABLE public.llm_provider_keys (
     id character varying(36) NOT NULL,
@@ -490,6 +523,14 @@ _DDL: tuple[str, ...] = (
     embedding_model text,
     embedding_dim integer
 );""",
+    """CREATE TABLE public.message_archives (
+    ref character varying(64) NOT NULL,
+    session_id character varying(36) NOT NULL,
+    byte_size bigint NOT NULL,
+    storage_key text NOT NULL,
+    sha256 character(64) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
     """CREATE TABLE public.messages (
     id character varying(36) NOT NULL,
     session_id character varying(36),
@@ -498,7 +539,18 @@ _DDL: tuple[str, ...] = (
     tool_calls json,
     created_at timestamp without time zone,
     turn_id character varying(36),
-    source character varying(32) DEFAULT ''::character varying NOT NULL
+    source character varying(32) DEFAULT ''::character varying NOT NULL,
+    seq bigint NOT NULL,
+    tool_call_id character varying(128),
+    blob_ref character varying(64)
+);""",
+    """ALTER TABLE public.messages ALTER COLUMN seq ADD GENERATED ALWAYS AS IDENTITY (
+    SEQUENCE NAME public.messages_seq_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1
 );""",
     """CREATE TABLE public.model_prices (
     model character varying(128) NOT NULL,
@@ -510,6 +562,19 @@ _DDL: tuple[str, ...] = (
     source_count integer DEFAULT 0 NOT NULL,
     verified_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE TABLE public.notifications (
+    id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
+    user_id character varying(36) NOT NULL,
+    kind character varying(64) NOT NULL,
+    dedupe_key character varying(255) NOT NULL,
+    title character varying(255) NOT NULL,
+    body text DEFAULT ''::text NOT NULL,
+    link character varying(512) DEFAULT ''::character varying NOT NULL,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL,
+    read_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
     """CREATE TABLE public.payments (
     id character varying(64) NOT NULL,
@@ -524,7 +589,8 @@ _DDL: tuple[str, ...] = (
     trade_no character varying(64),
     created_at timestamp without time zone,
     paid_at timestamp without time zone,
-    expired_at timestamp without time zone
+    expired_at timestamp without time zone,
+    package_code character varying(64)
 );""",
     """CREATE TABLE public.pending_interactions (
     id character varying(36) NOT NULL,
@@ -570,6 +636,18 @@ _DDL: tuple[str, ...] = (
     last_error text,
     created_at timestamp with time zone DEFAULT now() NOT NULL,
     updated_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE TABLE public.session_folds (
+    id character varying(36) NOT NULL,
+    session_id character varying(36) NOT NULL,
+    covered_from bigint NOT NULL,
+    covered_to bigint NOT NULL,
+    digest text NOT NULL,
+    digest_model character varying(128) NOT NULL,
+    digest_prompt character varying(32) NOT NULL,
+    body_suffix bigint NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT session_folds_range_ordered CHECK ((covered_to > covered_from))
 );""",
     """CREATE TABLE public.session_map_nodes (
     id character varying(64) NOT NULL,
@@ -674,6 +752,42 @@ _DDL: tuple[str, ...] = (
     resume_at_step integer,
     root_run_id character varying(64)
 );""",
+    """CREATE TABLE public.superagent_schedules (
+    id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
+    user_id character varying(36) NOT NULL,
+    name character varying(128),
+    schedule character varying(64) NOT NULL,
+    window_seconds integer NOT NULL,
+    session_ids jsonb NOT NULL,
+    enabled boolean DEFAULT false NOT NULL,
+    last_run_at timestamp with time zone,
+    last_status character varying(16),
+    run_lease_at timestamp with time zone,
+    run_lease_token character varying(64),
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE TABLE public.superagent_takeovers (
+    id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
+    user_id character varying(36) NOT NULL,
+    session_id character varying(36) NOT NULL,
+    status character varying(16) NOT NULL,
+    started_at timestamp with time zone DEFAULT now() NOT NULL,
+    ends_at timestamp with time zone NOT NULL,
+    stop_reason character varying(64),
+    token_spent bigint DEFAULT 0 NOT NULL,
+    token_cap bigint DEFAULT 0 NOT NULL,
+    lease_token character varying(64),
+    lease_at timestamp with time zone,
+    tick_seconds integer DEFAULT 180 NOT NULL,
+    max_rounds integer DEFAULT 0 NOT NULL,
+    rounds integer DEFAULT 0 NOT NULL,
+    last_tick_at timestamp with time zone,
+    last_status character varying(16),
+    stopping_at timestamp with time zone
+);""",
     """CREATE TABLE public.system_settings (
     id integer NOT NULL,
     category character varying(32),
@@ -731,11 +845,49 @@ _DDL: tuple[str, ...] = (
     expires_at timestamp with time zone,
     created_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
+    """CREATE TABLE public.tenant_members (
+    tenant_id smallint NOT NULL,
+    user_id character varying(36) NOT NULL,
+    role_id character varying(36) NOT NULL,
+    joined_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
     """CREATE TABLE public.tenants (
-    id smallserial NOT NULL,
+    id smallint NOT NULL,
     name character varying(255),
     created_at timestamp without time zone,
     status character varying(16)
+);""",
+    """CREATE SEQUENCE public.tenants_id_seq
+    AS smallint
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;""",
+    """ALTER SEQUENCE public.tenants_id_seq OWNED BY public.tenants.id;""",
+    """CREATE TABLE public.thread_deliveries (
+    thread_id character varying(36) NOT NULL,
+    event_key character varying(128) NOT NULL,
+    session_id character varying(36) NOT NULL,
+    turn_id character varying(36) DEFAULT ''::character varying NOT NULL,
+    status character varying(16) NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    payload jsonb DEFAULT '{}'::jsonb NOT NULL
+);""",
+    """CREATE TABLE public.thread_subscriptions (
+    id character varying(36) NOT NULL,
+    thread_id character varying(36) NOT NULL,
+    session_id character varying(36) NOT NULL,
+    status character varying(16) DEFAULT 'active'::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE TABLE public.threads (
+    id character varying(36) NOT NULL,
+    tenant_id smallint NOT NULL,
+    user_id character varying(36) NOT NULL,
+    source_kind character varying(32) NOT NULL,
+    external_key character varying(128) DEFAULT ''::character varying NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
 );""",
     """CREATE TABLE public.tool_calls (
     id character varying(36) NOT NULL,
@@ -747,7 +899,8 @@ _DDL: tuple[str, ...] = (
     is_error boolean,
     duration_ms bigint,
     created_at timestamp without time zone,
-    turn_id character varying(36)
+    turn_id character varying(36),
+    output_bytes integer
 );""",
     """CREATE TABLE public.turns (
     id character varying(36) NOT NULL,
@@ -762,7 +915,8 @@ _DDL: tuple[str, ...] = (
     created_at timestamp without time zone,
     cached_tokens bigint DEFAULT 0 NOT NULL,
     cache_hit boolean DEFAULT false NOT NULL,
-    model character varying(128)
+    model character varying(128),
+    origin character varying(32) DEFAULT ''::character varying NOT NULL
 );""",
     """CREATE TABLE public.unified_messages (
     id integer NOT NULL,
@@ -809,6 +963,39 @@ _DDL: tuple[str, ...] = (
     updated_at timestamp without time zone,
     tenant_id smallint NOT NULL
 );""",
+    """CREATE TABLE public.usage_events (
+    id bigint NOT NULL,
+    tenant_id smallint NOT NULL,
+    user_id character varying(36),
+    session_id character varying(128),
+    turn_id character varying(36),
+    model character varying(128),
+    provider character varying(64),
+    input_tokens bigint DEFAULT 0 NOT NULL,
+    output_tokens bigint DEFAULT 0 NOT NULL,
+    cached_tokens bigint DEFAULT 0 NOT NULL,
+    cost_cents integer,
+    created_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE SEQUENCE public.usage_events_id_seq
+    START WITH 1
+    INCREMENT BY 1
+    NO MINVALUE
+    NO MAXVALUE
+    CACHE 1;""",
+    """ALTER SEQUENCE public.usage_events_id_seq OWNED BY public.usage_events.id;""",
+    """CREATE TABLE public.user_entitlements (
+    id character varying(36) NOT NULL,
+    user_id character varying(36) NOT NULL,
+    package_code character varying(64) NOT NULL,
+    package_name character varying(128) NOT NULL,
+    allowed_models text[] DEFAULT ARRAY[]::text[] NOT NULL,
+    payment_id character varying(64) NOT NULL,
+    starts_at timestamp with time zone DEFAULT now() NOT NULL,
+    expires_at timestamp with time zone NOT NULL,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    CONSTRAINT user_entitlements_window_check CHECK ((expires_at > starts_at))
+);""",
     """CREATE TABLE public.user_knowledge_settings (
     user_id character varying(36) NOT NULL,
     tenant_id smallint NOT NULL,
@@ -853,6 +1040,20 @@ _DDL: tuple[str, ...] = (
     created_at timestamp without time zone,
     updated_at timestamp without time zone
 );""",
+    """CREATE TABLE public.user_notification_prefs (
+    user_id character varying(36) NOT NULL,
+    kind character varying(64) NOT NULL,
+    email_enabled boolean DEFAULT true NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
+    """CREATE TABLE public.user_onboarding (
+    user_id character varying(36) NOT NULL,
+    step character varying(32) NOT NULL,
+    completed_at timestamp with time zone,
+    skipped_at timestamp with time zone,
+    created_at timestamp with time zone DEFAULT now() NOT NULL,
+    updated_at timestamp with time zone DEFAULT now() NOT NULL
+);""",
     """CREATE TABLE public.users (
     id character varying(36) NOT NULL,
     tenant_id smallint NOT NULL,
@@ -867,28 +1068,11 @@ _DDL: tuple[str, ...] = (
     password_set boolean,
     settings json
 );""",
-    """CREATE TABLE public.workflow_graphs (
-    id character varying(36) NOT NULL,
-    name character varying(255),
-    user_id character varying(36),
-    graph_json json,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
-    """CREATE TABLE public.workflow_instances (
-    id character varying(64) NOT NULL,
-    user_id character varying(64),
-    workflow_id character varying(64),
-    workflow_name character varying(255),
-    status character varying(16),
-    results json,
-    error text,
-    created_at timestamp without time zone,
-    updated_at timestamp without time zone
-);""",
     """ALTER TABLE ONLY public.subagent_run_steps ALTER COLUMN id SET DEFAULT nextval('public.subagent_run_steps_id_seq'::regclass);""",
     """ALTER TABLE ONLY public.system_settings ALTER COLUMN id SET DEFAULT nextval('public.system_settings_id_seq'::regclass);""",
+    """ALTER TABLE ONLY public.tenants ALTER COLUMN id SET DEFAULT nextval('public.tenants_id_seq'::regclass);""",
     """ALTER TABLE ONLY public.unified_messages ALTER COLUMN id SET DEFAULT nextval('public.unified_messages_id_seq'::regclass);""",
+    """ALTER TABLE ONLY public.usage_events ALTER COLUMN id SET DEFAULT nextval('public.usage_events_id_seq'::regclass);""",
     """ALTER TABLE ONLY public.admin_model_configs
     ADD CONSTRAINT admin_model_configs_model_id_key UNIQUE (model_id);""",
     """ALTER TABLE ONLY public.admin_model_configs
@@ -903,6 +1087,8 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT api_keys_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.audit_logs
     ADD CONSTRAINT audit_logs_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.billing_packages
+    ADD CONSTRAINT billing_packages_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.billing_records
     ADD CONSTRAINT billing_records_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.conversation_shares
@@ -961,6 +1147,8 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT ent_webhooks_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.harness_profiles
     ADD CONSTRAINT harness_profiles_pkey PRIMARY KEY (tenant_id, user_id, model_prefix);""",
+    """ALTER TABLE ONLY public.invoice_requests
+    ADD CONSTRAINT invoice_requests_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.knowledge_bases
     ADD CONSTRAINT knowledge_bases_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.knowledge_documents
@@ -975,10 +1163,14 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT media_assets_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.memory_summaries
     ADD CONSTRAINT memory_summaries_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.message_archives
+    ADD CONSTRAINT message_archives_pkey PRIMARY KEY (ref);""",
     """ALTER TABLE ONLY public.messages
     ADD CONSTRAINT messages_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.model_prices
     ADD CONSTRAINT model_prices_pkey PRIMARY KEY (model, provider);""",
+    """ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.payments
     ADD CONSTRAINT payments_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.pending_interactions
@@ -987,6 +1179,8 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT run_lineage_ledger_pkey PRIMARY KEY (root_run_id);""",
     """ALTER TABLE ONLY public.run_usage_settlements
     ADD CONSTRAINT run_usage_settlements_pkey PRIMARY KEY (run_id);""",
+    """ALTER TABLE ONLY public.session_folds
+    ADD CONSTRAINT session_folds_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.session_map_nodes
     ADD CONSTRAINT session_map_nodes_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.session_map_workspaces
@@ -997,6 +1191,10 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT subagent_run_steps_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.subagent_runs
     ADD CONSTRAINT subagent_runs_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.superagent_schedules
+    ADD CONSTRAINT superagent_schedules_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.superagent_takeovers
+    ADD CONSTRAINT superagent_takeovers_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.system_settings
     ADD CONSTRAINT system_settings_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.task_idempotency
@@ -1007,8 +1205,16 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT tenant_features_pkey PRIMARY KEY (tenant_id);""",
     """ALTER TABLE ONLY public.tenant_invites
     ADD CONSTRAINT tenant_invites_pkey PRIMARY KEY (code);""",
+    """ALTER TABLE ONLY public.tenant_members
+    ADD CONSTRAINT tenant_members_pkey PRIMARY KEY (tenant_id, user_id);""",
     """ALTER TABLE ONLY public.tenants
     ADD CONSTRAINT tenants_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.thread_deliveries
+    ADD CONSTRAINT thread_deliveries_pkey PRIMARY KEY (thread_id, event_key);""",
+    """ALTER TABLE ONLY public.thread_subscriptions
+    ADD CONSTRAINT thread_subscriptions_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.threads
+    ADD CONSTRAINT threads_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.tool_calls
     ADD CONSTRAINT tool_calls_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.turns
@@ -1019,6 +1225,10 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT unified_sessions_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.uploads
     ADD CONSTRAINT uploads_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.usage_events
+    ADD CONSTRAINT usage_events_pkey PRIMARY KEY (id);""",
+    """ALTER TABLE ONLY public.user_entitlements
+    ADD CONSTRAINT user_entitlements_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.user_knowledge_settings
     ADD CONSTRAINT user_knowledge_settings_pkey PRIMARY KEY (user_id);""",
     """ALTER TABLE ONLY public.user_memory_entries
@@ -1027,21 +1237,32 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT user_memory_entries_pkey PRIMARY KEY (id);""",
     """ALTER TABLE ONLY public.user_memory_profile
     ADD CONSTRAINT user_memory_profile_pkey PRIMARY KEY (tenant_id, user_id, slot, item_key);""",
+    """ALTER TABLE ONLY public.user_notification_prefs
+    ADD CONSTRAINT user_notification_prefs_pkey PRIMARY KEY (user_id, kind);""",
+    """ALTER TABLE ONLY public.user_onboarding
+    ADD CONSTRAINT user_onboarding_pkey PRIMARY KEY (user_id, step);""",
     """ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.workflow_graphs
-    ADD CONSTRAINT workflow_graphs_pkey PRIMARY KEY (id);""",
-    """ALTER TABLE ONLY public.workflow_instances
-    ADD CONSTRAINT workflow_instances_pkey PRIMARY KEY (id);""",
     """CREATE INDEX agents_kind_idx ON public.agents USING btree (kind);""",
     """CREATE INDEX idx_credit_tx_user ON public.credit_transactions USING btree (user_id, created_at DESC);""",
+    """CREATE INDEX idx_cron_jobs_tenant_created ON public.cron_jobs USING btree (tenant_id, created_at DESC);""",
+    """CREATE INDEX idx_invoice_requests_pending ON public.invoice_requests USING btree (created_at DESC) WHERE ((status)::text = 'pending'::text);""",
+    """CREATE INDEX idx_invoice_requests_user_time ON public.invoice_requests USING btree (user_id, created_at DESC);""",
+    """CREATE INDEX idx_notifications_created ON public.notifications USING btree (created_at);""",
+    """CREATE INDEX idx_notifications_user_created ON public.notifications USING btree (user_id, created_at DESC);""",
+    """CREATE INDEX idx_notifications_user_unread ON public.notifications USING btree (user_id) WHERE (read_at IS NULL);""",
     """CREATE INDEX idx_payments_provider ON public.payments USING btree (provider_order_id) WHERE ((provider_order_id)::text <> ''::text);""",
     """CREATE INDEX idx_payments_user ON public.payments USING btree (user_id, created_at DESC);""",
+    """CREATE INDEX idx_usage_events_session ON public.usage_events USING btree (session_id);""",
+    """CREATE INDEX idx_usage_events_user_model_time ON public.usage_events USING btree (user_id, model, created_at DESC);""",
+    """CREATE INDEX idx_usage_events_user_time ON public.usage_events USING btree (user_id, created_at DESC);""",
+    """CREATE INDEX idx_user_entitlements_user_expiry ON public.user_entitlements USING btree (user_id, expires_at DESC);""",
+    """CREATE INDEX idx_user_onboarding_step ON public.user_onboarding USING btree (step);""",
     """CREATE INDEX ix_agent_runs_session_updated ON public.agent_runs USING btree (session_id, updated_at DESC);""",
     """CREATE INDEX ix_agent_runs_status_cp ON public.agent_runs USING btree (status, checkpoint_at);""",
     """CREATE INDEX ix_agent_sessions_tenant_user_created ON public.agent_sessions USING btree (tenant_id, user_id, created_at DESC);""",
     """CREATE INDEX ix_audit_logs_tenant_created ON public.audit_logs USING btree (tenant_id, created_at DESC);""",
-    """CREATE INDEX ix_ent_chaos_experiments_active ON public.ent_chaos_experiments USING btree (status) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'running'::character varying])::text[]));""",
+    """CREATE INDEX ix_ent_chaos_experiments_active ON public.ent_chaos_experiments USING btree (status) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('running'::character varying)::text]));""",
     """CREATE INDEX ix_ent_chaos_experiments_tenant_status ON public.ent_chaos_experiments USING btree (tenant_id, status);""",
     """CREATE INDEX ix_ent_webhooks_tenant_enabled ON public.ent_webhooks USING btree (tenant_id, enabled);""",
     """CREATE INDEX ix_knowledge_bases_owner ON public.knowledge_bases USING btree (tenant_id, user_id);""",
@@ -1050,21 +1271,32 @@ _DDL: tuple[str, ...] = (
     """CREATE INDEX ix_knowledge_documents_tenant ON public.knowledge_documents USING btree (tenant_id);""",
     """CREATE INDEX ix_llm_provider_keys_provider ON public.llm_provider_keys USING btree (provider);""",
     """CREATE INDEX ix_media_assets_tenant_user_parent ON public.media_assets USING btree (tenant_id, user_id, parent_id);""",
+    """CREATE INDEX ix_message_archives_session ON public.message_archives USING btree (session_id);""",
     """CREATE INDEX ix_messages_session_created ON public.messages USING btree (session_id, created_at DESC, id DESC);""",
+    """CREATE UNIQUE INDEX ix_messages_session_seq ON public.messages USING btree (session_id, seq);""",
     """CREATE INDEX ix_messages_turn_id ON public.messages USING btree (turn_id);""",
     """CREATE INDEX ix_model_prices_verified_at ON public.model_prices USING btree (verified_at);""",
-    """CREATE INDEX ix_pending_interactions_expiry ON public.pending_interactions USING btree (status, expires_at) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'answered'::character varying])::text[]));""",
+    """CREATE INDEX ix_pending_interactions_expiry ON public.pending_interactions USING btree (status, expires_at) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('answered'::character varying)::text]));""",
     """CREATE INDEX ix_pending_interactions_grant ON public.pending_interactions USING btree (session_id, args_hash) WHERE ((status)::text = 'answered'::text);""",
-    """CREATE INDEX ix_pending_interactions_session_open ON public.pending_interactions USING btree (session_id, created_at) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'answered'::character varying])::text[]));""",
+    """CREATE INDEX ix_pending_interactions_session_open ON public.pending_interactions USING btree (session_id, created_at) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('answered'::character varying)::text]));""",
     """CREATE INDEX ix_run_lineage_ledger_paused ON public.run_lineage_ledger USING btree (tenant_id, updated_at) WHERE paused;""",
-    """CREATE INDEX ix_run_usage_settlements_retry ON public.run_usage_settlements USING btree (status, updated_at) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'failed'::character varying])::text[]));""",
+    """CREATE INDEX ix_run_usage_settlements_retry ON public.run_usage_settlements USING btree (status, updated_at) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('failed'::character varying)::text]));""",
+    """CREATE INDEX ix_session_folds_session ON public.session_folds USING btree (session_id, covered_to DESC);""",
     """CREATE INDEX ix_sessions_parent_session_id ON public.sessions USING btree (parent_session_id);""",
     """CREATE INDEX ix_sessions_tag ON public.sessions USING btree (tag);""",
     """CREATE INDEX ix_subagent_runs_root_run_id ON public.subagent_runs USING btree (root_run_id);""",
+    """CREATE INDEX ix_superagent_schedules_enabled ON public.superagent_schedules USING btree (enabled) WHERE enabled;""",
+    """CREATE INDEX ix_superagent_schedules_owner ON public.superagent_schedules USING btree (user_id, tenant_id);""",
+    """CREATE INDEX ix_superagent_takeovers_owner ON public.superagent_takeovers USING btree (user_id, tenant_id, status);""",
     """CREATE INDEX ix_task_idempotency_status ON public.task_idempotency USING btree (status);""",
     """CREATE INDEX ix_task_idempotency_status_updated ON public.task_idempotency USING btree (status, updated_at);""",
     """CREATE INDEX ix_task_idempotency_task_id ON public.task_idempotency USING btree (task_id);""",
     """CREATE INDEX ix_tenant_invites_tenant ON public.tenant_invites USING btree (tenant_id);""",
+    """CREATE INDEX ix_thread_deliveries_pending ON public.thread_deliveries USING btree (session_id, created_at) WHERE ((status)::text = 'queued'::text);""",
+    """CREATE INDEX ix_thread_subscriptions_by_session ON public.thread_subscriptions USING btree (session_id, status);""",
+    """CREATE INDEX ix_thread_subscriptions_by_thread ON public.thread_subscriptions USING btree (thread_id, status);""",
+    """CREATE INDEX ix_threads_owner ON public.threads USING btree (user_id, tenant_id);""",
+    """CREATE INDEX ix_tool_calls_session_created ON public.tool_calls USING btree (session_id, created_at DESC, id DESC);""",
     """CREATE INDEX ix_tool_calls_turn_id ON public.tool_calls USING btree (turn_id);""",
     """CREATE INDEX ix_turns_created_at ON public.turns USING btree (created_at);""",
     """CREATE INDEX ix_turns_session_id ON public.turns USING btree (session_id);""",
@@ -1082,13 +1314,25 @@ _DDL: tuple[str, ...] = (
     """CREATE INDEX subagent_runs_tenant_idx ON public.subagent_runs USING btree (tenant_id, created_at);""",
     """CREATE INDEX subagent_runs_tree_idx ON public.subagent_runs USING btree (root_session_id, created_at);""",
     """CREATE INDEX subagent_runs_turn_idx ON public.subagent_runs USING btree (turn_id);""",
+    """CREATE UNIQUE INDEX threads_idem ON public.threads USING btree (tenant_id, source_kind, external_key) WHERE ((external_key)::text <> ''::text);""",
     """CREATE INDEX turns_session_created_idx ON public.turns USING btree (session_id, created_at);""",
     """CREATE UNIQUE INDEX uniq_billing_records_turn ON public.billing_records USING btree (turn_id);""",
     """CREATE UNIQUE INDEX uniq_credit_tx_turn ON public.credit_transactions USING btree (turn_id);""",
-    """CREATE UNIQUE INDEX ux_agent_runs_session_active ON public.agent_runs USING btree (session_id) WHERE ((status)::text = ANY ((ARRAY['running'::character varying, 'checkpointed'::character varying, 'resuming'::character varying])::text[]));""",
+    """CREATE UNIQUE INDEX ux_agent_runs_session_active ON public.agent_runs USING btree (session_id) WHERE ((status)::text = ANY (ARRAY[('running'::character varying)::text, ('checkpointed'::character varying)::text, ('resuming'::character varying)::text]));""",
+    """CREATE UNIQUE INDEX ux_api_keys_key_hash_active ON public.api_keys USING btree (key_hash) WHERE (COALESCE(revoked, false) = false);""",
+    """CREATE UNIQUE INDEX ux_billing_packages_code ON public.billing_packages USING btree (code);""",
+    """CREATE UNIQUE INDEX ux_invoice_requests_payment ON public.invoice_requests USING btree (payment_id);""",
     """CREATE UNIQUE INDEX ux_knowledge_bases_index_ref ON public.knowledge_bases USING btree (provider, index_ref) WHERE (index_ref IS NOT NULL);""",
     """CREATE UNIQUE INDEX ux_knowledge_documents_pageindex ON public.knowledge_documents USING btree (knowledge_base_id, pageindex_doc_id) WHERE (pageindex_doc_id IS NOT NULL);""",
-    """CREATE UNIQUE INDEX ux_pending_interactions_open ON public.pending_interactions USING btree (session_id, tool_call_id) WHERE ((status)::text = ANY ((ARRAY['pending'::character varying, 'answered'::character varying])::text[]));""",
+    """CREATE UNIQUE INDEX ux_notifications_user_dedupe ON public.notifications USING btree (user_id, dedupe_key);""",
+    """CREATE UNIQUE INDEX ux_pending_interactions_open ON public.pending_interactions USING btree (session_id, tool_call_id) WHERE ((status)::text = ANY (ARRAY[('pending'::character varying)::text, ('answered'::character varying)::text]));""",
+    """CREATE UNIQUE INDEX ux_session_folds_range ON public.session_folds USING btree (session_id, covered_from, covered_to);""",
+    """CREATE UNIQUE INDEX ux_superagent_active ON public.superagent_takeovers USING btree (session_id) WHERE ((status)::text = ANY (ARRAY[('active'::character varying)::text, ('stopping'::character varying)::text]));""",
+    """CREATE UNIQUE INDEX ux_system_settings_category_key ON public.system_settings USING btree (category, key);""",
+    """CREATE UNIQUE INDEX ux_tenant_members_user ON public.tenant_members USING btree (user_id);""",
+    """CREATE UNIQUE INDEX ux_thread_subscriptions_active ON public.thread_subscriptions USING btree (thread_id, session_id) WHERE ((status)::text = 'active'::text);""",
+    """CREATE UNIQUE INDEX ux_user_entitlements_payment ON public.user_entitlements USING btree (payment_id);""",
+    """CREATE UNIQUE INDEX ux_users_tenant_email ON public.users USING btree (tenant_id, email);""",
     """ALTER TABLE ONLY public.agent_sessions
     ADD CONSTRAINT agent_sessions_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id);""",
     """ALTER TABLE ONLY public.agent_sessions
@@ -1151,8 +1395,16 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT knowledge_documents_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
     """ALTER TABLE ONLY public.media_assets
     ADD CONSTRAINT media_assets_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.message_archives
+    ADD CONSTRAINT message_archives_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.messages
     ADD CONSTRAINT messages_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id);""",
+    """ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.notifications
+    ADD CONSTRAINT notifications_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
+    """ALTER TABLE ONLY public.session_folds
+    ADD CONSTRAINT session_folds_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.session_map_nodes
     ADD CONSTRAINT session_map_nodes_parent_node_id_fkey FOREIGN KEY (parent_node_id) REFERENCES public.session_map_nodes(id) ON DELETE SET NULL;""",
     """ALTER TABLE ONLY public.session_map_nodes
@@ -1171,8 +1423,32 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT subagent_run_steps_run_id_fkey FOREIGN KEY (run_id) REFERENCES public.subagent_runs(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.subagent_runs
     ADD CONSTRAINT subagent_runs_agent_id_fkey FOREIGN KEY (agent_id) REFERENCES public.agents(id) ON DELETE SET NULL;""",
+    """ALTER TABLE ONLY public.superagent_schedules
+    ADD CONSTRAINT superagent_schedules_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.superagent_schedules
+    ADD CONSTRAINT superagent_schedules_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
+    """ALTER TABLE ONLY public.superagent_takeovers
+    ADD CONSTRAINT superagent_takeovers_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id);""",
+    """ALTER TABLE ONLY public.superagent_takeovers
+    ADD CONSTRAINT superagent_takeovers_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.superagent_takeovers
+    ADD CONSTRAINT superagent_takeovers_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
     """ALTER TABLE ONLY public.tasks
     ADD CONSTRAINT tasks_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
+    """ALTER TABLE ONLY public.tenant_members
+    ADD CONSTRAINT tenant_members_role_id_fkey FOREIGN KEY (role_id) REFERENCES public.ent_roles(id);""",
+    """ALTER TABLE ONLY public.tenant_members
+    ADD CONSTRAINT tenant_members_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.tenant_members
+    ADD CONSTRAINT tenant_members_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
+    """ALTER TABLE ONLY public.thread_deliveries
+    ADD CONSTRAINT thread_deliveries_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.threads(id) ON DELETE CASCADE;""",
+    """ALTER TABLE ONLY public.thread_subscriptions
+    ADD CONSTRAINT thread_subscriptions_thread_id_fkey FOREIGN KEY (thread_id) REFERENCES public.threads(id) ON DELETE CASCADE;""",
+    """ALTER TABLE ONLY public.threads
+    ADD CONSTRAINT threads_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
+    """ALTER TABLE ONLY public.threads
+    ADD CONSTRAINT threads_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
     """ALTER TABLE ONLY public.turns
     ADD CONSTRAINT turns_session_id_fkey FOREIGN KEY (session_id) REFERENCES public.sessions(id);""",
     """ALTER TABLE ONLY public.unified_messages
@@ -1183,12 +1459,15 @@ _DDL: tuple[str, ...] = (
     ADD CONSTRAINT user_knowledge_settings_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
     """ALTER TABLE ONLY public.user_knowledge_settings
     ADD CONSTRAINT user_knowledge_settings_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;""",
+    """ALTER TABLE ONLY public.user_notification_prefs
+    ADD CONSTRAINT user_notification_prefs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
+    """ALTER TABLE ONLY public.user_onboarding
+    ADD CONSTRAINT user_onboarding_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id) ON DELETE CASCADE;""",
     """ALTER TABLE ONLY public.users
     ADD CONSTRAINT users_tenant_id_fkey FOREIGN KEY (tenant_id) REFERENCES public.tenants(id);""",
-    """ALTER TABLE ONLY public.workflow_graphs
-    ADD CONSTRAINT workflow_graphs_user_id_fkey FOREIGN KEY (user_id) REFERENCES public.users(id);""",
 )
 
+# downgrade 的删表顺序（`reversed` 使用：先删有外键指向别人的后建表）。
 _TABLES: tuple[str, ...] = (
     "admin_model_configs",
     "agent_runs",
@@ -1196,6 +1475,7 @@ _TABLES: tuple[str, ...] = (
     "agents",
     "api_keys",
     "audit_logs",
+    "billing_packages",
     "billing_records",
     "conversation_shares",
     "credit_transactions",
@@ -1222,46 +1502,70 @@ _TABLES: tuple[str, ...] = (
     "ent_user_roles",
     "ent_webhooks",
     "harness_profiles",
+    "invoice_requests",
     "knowledge_bases",
     "knowledge_documents",
     "llm_models",
     "llm_provider_keys",
     "media_assets",
     "memory_summaries",
+    "message_archives",
     "messages",
     "model_prices",
+    "notifications",
     "payments",
     "pending_interactions",
     "run_lineage_ledger",
     "run_usage_settlements",
+    "session_folds",
     "session_map_nodes",
     "session_map_workspaces",
     "sessions",
     "subagent_run_steps",
     "subagent_runs",
+    "superagent_schedules",
+    "superagent_takeovers",
     "system_settings",
     "task_idempotency",
     "tasks",
     "tenant_features",
     "tenant_invites",
+    "tenant_members",
     "tenants",
+    "thread_deliveries",
+    "thread_subscriptions",
+    "threads",
     "tool_calls",
     "turns",
     "unified_messages",
     "unified_sessions",
     "uploads",
+    "usage_events",
+    "user_entitlements",
     "user_knowledge_settings",
     "user_memory_entries",
     "user_memory_profile",
+    "user_notification_prefs",
+    "user_onboarding",
     "users",
-    "workflow_graphs",
-    "workflow_instances",
 )
 
 _SEQUENCES: tuple[str, ...] = (
     "subagent_run_steps_id_seq",
     "system_settings_id_seq",
+    "tenants_id_seq",
     "unified_messages_id_seq",
+    "usage_events_id_seq",
+)
+
+# 默认套餐目录：让「部署完就能卖」成立。运营数据而非代码常量，可随后台 CRUD 编辑。
+# `billing_packages.code` 有唯一索引，`ON CONFLICT DO NOTHING` 保证重复执行安全，
+# 且不会把运营改过的价格改回默认值。
+#   体验包 1000 credits = ¥10 / 30 天；标准包 6000 = ¥60 / 30 天；专业包 20000 = ¥180 / 90 天
+_SEEDS: tuple[tuple[str, str, int, int, str, int, int], ...] = (
+    ("starter", "体验包", 1000, 1000, "CNY", 30, 10),
+    ("standard", "标准包", 6000, 6000, "CNY", 30, 20),
+    ("pro", "专业包", 20000, 18000, "CNY", 90, 30),
 )
 
 
@@ -1269,11 +1573,27 @@ def upgrade() -> None:
     for stmt in _DDL:
         op.execute(stmt)
 
+    for code, name, credits, price_cents, currency, duration_days, sort_order in _SEEDS:
+        op.execute(
+            f"""
+            INSERT INTO public.billing_packages
+                (id, code, name, credits, price_cents, currency,
+                 duration_days, allowed_models, enabled, sort_order,
+                 created_at, updated_at)
+            VALUES
+                (gen_random_uuid()::text, '{code}', '{name}', {credits},
+                 {price_cents}, '{currency}', {duration_days},
+                 ARRAY[]::text[], TRUE, {sort_order}, now(), now())
+            ON CONFLICT (code) DO NOTHING
+            """
+        )
+
 
 def downgrade() -> None:
     """基线没有"上一个版本"可回退，只能把 schema 清空。
 
     CASCADE 是必须的：表之间有外键；序列先随表走，末尾再兜一次。
+    种子行随 `billing_packages` 一并删除，无需单独 DELETE。
     """
     for name in reversed(_TABLES):
         op.execute(f"DROP TABLE IF EXISTS public.{name} CASCADE")

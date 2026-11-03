@@ -16,10 +16,9 @@ const API_ORIGIN = process.env.CHIRON_DEV_API_ORIGIN || 'http://localhost:8080'
 const WS_ORIGIN = API_ORIGIN.replace(/^http/, 'ws')
 
 // https://vite.dev/config/
-export default defineConfig(({ mode }) => ({
-  // 桌面壳（--mode desktop）用 loadFile 从 file:// 打开 dist：资源必须是相对路径，
-  // 否则 /assets/* 会解析成 file:///X:/assets/*。Web 构建保持根绝对路径。
-  base: mode === 'desktop' ? './' : '/',
+export default defineConfig({
+  // Web 构建保持根绝对路径。
+  base: '/',
   plugins: [
     vue(),
     fileViewerRenderers({ copyAssets: true }),
@@ -126,4 +125,4 @@ export default defineConfig(({ mode }) => ({
       },
     },
   },
-}))
+})

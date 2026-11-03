@@ -3,7 +3,6 @@ import errors from './errors'
 import legacy from './legacy'
 import auth from './auth'
 import admin from './admin'
-import workflow from './workflow'
 import agent from './agent'
 import knowledge from './knowledge'
 import mail from './mail'
@@ -12,6 +11,7 @@ import media from './media'
 import billing from './billing'
 import settings from './settings'
 import notifications from './notifications'
+import task from './task'
 
 /**
  * zh-CN —— **源语言（source of truth）**。
@@ -168,6 +168,7 @@ export default {
     loaded_name: "已加载: {name}",
     loaded_template_name_edit_and_save: "已加载模板「{name}」，可编辑后保存",
     compressed_before_after: "已压缩 {before} → {after}",
+    steer_applied: "已应用运行中的补充指令",
     enabled_name: "已启用 {name}",
     copiedExcl: "已复制！",
     generated_name: "已生成：{name}",
@@ -488,6 +489,10 @@ export default {
     admin_adjustment: "管理员调整",
     trace: "轨迹",
     traceable_visible_process_your_local_intelligent_workspace: "轨迹可循、过程可见，你的本地智能工作台。",
+    chat_agent_skill_knowledge_base_and_plugins_unified_full_stack_capabilities_combine_freely: "对话、Agent、技能、知识库与插件一体化，全栈能力自由组合；",
+    i_will_help_you_analyze_this_data_first_let_me_break_the_requirements_into_a_few_steps: "我来帮你分析这份数据，先把需求拆解成几步…",
+    this_service_provides_llm_based_conversation_and_knowledge_base_capabilities_service_may_be_interrupted_for_maintenance_upgrades_or_force_majeure: "本服务提供基于大语言模型的对话与知识库能力。服务可能因维护、升级或不可抗力中断。",
+    self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_skill_knowledge_base_and_plugin_in_one: "自托管、多租户、全栈可控的 AI Agent 平台。对话、Agent、技能、知识库与插件一体化。",
     scroll_page: "滚动页面",
     backend_type: "后端类型",
     suffix: "后缀",
@@ -1062,7 +1067,6 @@ export default {
   errors,
   auth,
   admin,
-  workflow,
   agent,
   knowledge,
   mail,
@@ -1071,6 +1075,7 @@ export default {
   billing,
   settings,
   notifications,
+  task,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

@@ -29,13 +29,6 @@ export interface AccountMenuItem {
 
 export interface AccountMenuOptions {
   /**
-   * 本地模式：只影响「登出」这一项。
-   *
-   * 账户级页面（通知、用户级 API Key）在本地模式照常展示 —— 本地后端就是同一个网关，
-   * 账户是它为本机免口令铸的真实 owner。登出则是空操作（见下面的注释）。
-   */
-  isLocal: boolean
-  /**
    * 是否展示「用户级 API Key」。
    *
    * 聊天页暂不展示：那里是对话工作区，凭证管理与它的心智距离最远。
@@ -52,18 +45,15 @@ export interface AccountMenuOptions {
  */
 export function buildAccountMenuItems(
   tr: (key: string) => string,
-  options: AccountMenuOptions,
+  options: AccountMenuOptions = {},
 ): AccountMenuItem[] {
-  const { isLocal, includeApiKeys = true } = options
+  const { includeApiKeys = true } = options
 
   const items: AccountMenuItem[] = [
     { key: 'settings', label: tr('settings.settings'), icon: () => h(SettingOutlined) },
     { key: 'profile', label: tr('settings.profile'), icon: () => h(UserSwitchOutlined) },
   ]
 
-  // 账号级入口：本地模式也有真账号（网关为本机铸的 owner 会话，
-  // 见 internal/api/auth_local_session.go），通知与用户级 API Key 都存在同一个库里，
-  // 所以这里不再按模式隐藏 —— 藏起来只会让本地用户以为自己"没有账户"。
   items.push({
     key: 'notifications',
     label: tr('notifications.title'),
@@ -77,11 +67,7 @@ export function buildAccountMenuItems(
     })
   }
 
-  // 本地模式没有"登出"这回事：stores/auth.ts::logout 在本地会立刻重建同一个本地会话，
-  // 点下去没有任何可见变化 —— 不放一个空按钮。
-  if (!isLocal) {
-    items.push({ key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) })
-  }
+  items.push({ key: 'logout', label: tr('auth.logout'), icon: () => h(LogoutOutlined) })
 
   return items
 }

@@ -42,7 +42,6 @@ export default {
   chip: {
     kb: 'قاعدة المعرفة #{id}',
     skill: 'مهارة {name}',
-    workflow: 'سير عمل {name}',
     plugin: 'ملحق {name}',
     memory: 'ذاكرة {name}',
   },
@@ -329,6 +328,11 @@ export default {
   refined: "تم تحسين الصياغة — يمكنك تعديلها أو إرسالها كما هي",
   refine_failed: "فشل التحسين؛ تم الاحتفاظ بنصّك الأصلي",
   refine_prompt_tooltip: "أعد صياغة المُدخل الحالي إلى طلب أوضح (لن يُرسَل تلقائيًا)",
+  // ── P0-3: تعليمة إضافية أثناء التشغيل (steer) ──
+  // منفصلة عمدًا عن «المقاطعة والإرسال»: لا تُنهي الجولة.
+  steer_tooltip: "حقن تعليمة إضافية في الجولة الجارية (دون مقاطعة؛ تُطبَّق بعد الخطوة الحالية)",
+  steer_sent: "تم تسليم التعليمة، والجولة مستمرّة",
+  steer_failed: "تعذّر تسليم التعليمة: {error}",
   // ── Gap C: execution graph (timeline / graph toggle) ──
   trace_view_graph: "مخطط التنفيذ",
   trace_view_timeline: "الخط الزمني",

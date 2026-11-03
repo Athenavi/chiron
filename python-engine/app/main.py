@@ -358,30 +358,26 @@ async def _start_file_backend() -> None:
 
 
 def _bind_gateways() -> None:
-    """把 gateway 注入工具 / 工作流 / LLM client（从 `lifespan` 抽出；六大互通基础）。
+    """把 gateway 注入工具 / LLM client（从 `lifespan` 抽出；六大互通基础）。
 
     只经各模块的 `bind_gateway(...)` 设置进程级单例，不返回句柄。
     """
-    from app.tools.graph import bind_gateway as bind_graph_gateway
     from app.tools.pm import bind_gateway as bind_pm_gateway
-    from app.workflow.tools import bind_gateway as bind_workflow_gateway
 
     # `_gateway` 在 lifespan 里初始化；这里断言收窄类型，让 mypy 知道它非 None。
     # 如果走到这里还是 None，说明 lifespan 没被正常执行 —— 直接失败比静默把 None
     # 绑进各个模块、等到第一次真正调用 LLM 时才炸要好。
     assert _gateway is not None
-    bind_graph_gateway(_gateway)
     bind_pm_gateway(_gateway)
-    bind_workflow_gateway(_gateway)
     # LLM client（RAG 检索嵌入）同样接入 gateway
     from app.llm.client import llm_client
 
     llm_client.bind_gateway(_gateway)
-    logger.info("Tool/Workflow gateways bound")
+    logger.info("Tool gateways bound")
 
 
 async def _start_queue_worker() -> None:
-    """启动 Queue Worker，并补投递上次入队失败的工作流（从 `lifespan` 抽出）。
+    """启动 Queue Worker（从 `lifespan` 抽出）。
 
     `_queue_worker` 是模块全局（关闭段按它取消任务），故声明 `global`；
     `_redis` / `_gateway` 只读，无需声明。
@@ -395,16 +391,6 @@ async def _start_queue_worker() -> None:
         )
     else:
         logger.info("Queue worker skipped (Redis not available)")
-
-    # 拉起上次入队失败的工作流（X3）：它们在 DB 里是 queued_pending，不拉起就永远不会跑。
-    # 放在队列 worker **之后** —— 先有消费者，再补投递。
-    try:
-        from app.api.workflows import requeue_pending_workflows
-
-        if await requeue_pending_workflows():
-            logger.info("workflow requeue at startup completed")
-    except Exception as exc:  # noqa: BLE001 - 拉起失败不该阻断启动
-        logger.warning("workflow requeue at startup failed: %s", exc)
 
 
 async def _start_memory_service() -> None:
@@ -966,7 +952,7 @@ def _start_llm_keys_watch() -> Any:
     """订阅 provider 密钥变更广播：网关回填 / 管理端保存 key 后立刻补注册 provider（M52）。
 
     为什么必须有这条订阅（而不是"启动时扫一次"或"路由未命中时惰性刷"就够了）：
-    打包桌面态里桌面壳**先起引擎、再起网关**（`local-stack.cjs`），等网关把 PG 里的密钥
+    引擎可能**先于网关**就绪，等网关把 PG 里的密钥
     镜像进 Redis keyset，引擎的 provider 表早就成型了 —— 只有广播能让它当场补上，
     否则用户配完 key 必须重启进程才能发出第一条消息。
     路由未命中的惰性刷新是**兜底**（广播丢了也要能自己回来），但它要先失败一次、
@@ -1643,6 +1629,7 @@ def _setup_routes(app: FastAPI) -> None:
     app.post("/v1/agent/submit")(agent_submit)
     app.post("/v1/agent/approval")(agent_approval)
     app.post("/v1/agent/interrupt")(agent_interrupt)
+    app.post("/v1/agent/steer")(agent_steer)
     app.post("/v1/agent/answer")(agent_answer)
 
     # ── 网关管理（模型热切换、熔断器重置） ──
@@ -1708,51 +1695,6 @@ def _setup_routes(app: FastAPI) -> None:
 
 
 # ── 模块级路由处理函数（FastAPI 需在模块作用域才能正确推断 body 类型） ──
-
-
-async def _workflow_context_stream(
-    graphs: list[tuple[str, dict[str, Any]]],
-    body: dict[str, Any],
-    gateway: Any,
-) -> AsyncIterator[str]:
-    """执行选中的工作流链，并以 SSE 事件下发结果。
-
-    事件形态与 AgentRuntime 保持一致：结果走 ``text``（Go 网关只对 ``text`` 事件
-    累加最终内容并落库，换成别的类型会表现为"对话里看得见、刷新就没了"），
-    末尾补 ``done`` 收尾。
-    """
-    import json
-    import uuid
-
-    from app.api.unified_executor import run_workflow_graphs
-
-    trace_id = uuid.uuid4().hex[:12]
-    try:
-        result = await run_workflow_graphs(
-            graphs, str(body.get("content", "")), trace_id, gateway
-        )
-        if result.get("status") == "error":
-            output = result.get("output")
-            message = (
-                output.get("error", "workflow execution failed")
-                if isinstance(output, dict)
-                else "workflow execution failed"
-            )
-            yield f"data: {json.dumps({'type': 'error', 'content': message}, ensure_ascii=False)}\n\n"
-            return
-
-        output = result.get("output")
-        text = output.get("result", "") if isinstance(output, dict) else ""
-        if text:
-            yield f"data: {json.dumps({'type': 'text', 'content': text}, ensure_ascii=False)}\n\n"
-        yield f"data: {json.dumps({'type': 'done'}, ensure_ascii=False)}\n\n"
-    except asyncio.CancelledError:
-        # 客户端断开/网关取消：与 AgentRuntime 同口径，不吞取消
-        logger.info("Workflow context stream cancelled (client disconnected)")
-        raise
-    except Exception as e:  # noqa: BLE001
-        logger.error("Workflow context stream error: %s", e)
-        yield f"data: {json.dumps({'type': 'error', 'content': str(e)}, ensure_ascii=False)}\n\n"
 
 
 async def _inject_subagent_reports(task: Any) -> None:
@@ -1828,35 +1770,11 @@ async def agent_submit(
 
     body = await request.json()
 
-    # ── 工作流关联目标（SSE 链路）──
-    # "在工作流页点『在对话中使用』"走的是这条链路（ChatView 的 query 无 task 时
-    # 即 unifiedMode=false）。此前这里没有任何 workflow 消费点，工作流被静默丢弃 ——
-    # 无报错、无日志，用户只看到"点了没反应"。目标解析与统一链路共用同一实现
-    # （app/agent/workbench_context.py 的 selected_workflow_ids）。
-    from app.agent.workbench_context import selected_workflow_ids
-
-    workflow_ids = selected_workflow_ids(body.get("context") or {})
-    if workflow_ids:
-        from app.api.unified_executor import load_selected_workflows
-
-        graphs = await load_selected_workflows(workflow_ids)
-        if graphs:
-            return StreamingResponse(
-                _workflow_context_stream(graphs, body, gateway),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-        # 全部载不到（已删 / 越权 / DB 不可用）：落回 AgentRuntime，不阻断对话
-        logger.warning(
-            "workflow context: none of %s loaded; falling back to agent runtime",
-            workflow_ids,
-        )
-
     # ── 六大工作台互联互通：注册各工作台工具，使 CHAT 的 LLM 可通过 function-calling 调用 ──
     #
     # 注册清单**只有一处**：`app/tools/__init__.py`。这里原先另有一份（且与 __init__ 的
     # 那份都不完整，两份并集才是全部）—— 结果是"哪些工具存在"取决于从哪个入口进来：
-    # web / subagent_list / subagent_rerun / workflow.tools 只在对话路径注册过。
+    # web / subagent_list / subagent_rerun 只在对话路径注册过。
     # 保留这一句只为确保对话路径一定触达该模块（import 幂等）。
     import app.tools  # noqa: F401
     from app.agent.runtime import AgentRuntime, AgentTask
@@ -2016,7 +1934,7 @@ async def agent_submit(
         total_out = 0
         started = time.monotonic()
 
-        # ── 子 Agent 事件旁路（docs/subagent-design.md §4.3）──
+        # ── 子 Agent 事件旁路（python-engine/app/subagent/）──
         # 子 Agent 在工具调用内部运行，其进度需"穿透"到这条父 SSE 流：经 contextvar
         # 暴露 EventSink，再把 runtime 事件与旁路事件合并输出。旁路有界+限流，绝不阻塞子 Agent。
         from app.agent.event_sink import EventSink
@@ -2267,6 +2185,82 @@ async def agent_approval(
         return {"ok": False, "error": "stale run token"}
     resolved = await runtime.submit_approval(tool_call_id, decision, owner_uid)
     return {"ok": resolved, "decision": decision.decision}
+
+
+async def _authorize_run_input(
+    session_id: str, caller: str, given_token: str
+) -> str:
+    """外部输入注入通道的准入校验（interrupt / steer 共用）。
+
+    返回空串表示放行，否则是回给调用方的拒绝原因。三条一起才成立：会话归属、
+    run token（防重放已结束的 run）、以及"本副本或 Redis 里确实有这个活跃 run"。
+
+    顺序是先查本副本：命中时信息最新，省一次 Redis 往返；未命中才查 `run_registry`
+    —— run 可能正跑在别的副本上，那里才是唯一知道它存在的地方。
+    """
+    entry = _ACTIVE_RUNTIMES.get(session_id)
+    if entry is not None:
+        _, owner_uid, run_token = entry
+        if owner_uid and caller and owner_uid != caller:
+            logger.warning(
+                "run input rejected: caller %s != owner %s (session=%s)",
+                caller,
+                owner_uid,
+                session_id,
+            )
+            return "not session owner"
+        if given_token and given_token != run_token:
+            return "stale run token"
+        return ""
+
+    from app.run_registry import owner_of
+
+    owner = await owner_of(_redis, session_id)
+    if owner is None:
+        return "no active agent for this session"
+    owner_uid = str(owner.get("owner_uid") or "")
+    if owner_uid and caller and owner_uid != caller:
+        return "not session owner"
+    expected = str(owner.get("run_token") or "")
+    if given_token and expected and given_token != expected:
+        return "stale run token"
+    return ""
+
+
+async def agent_steer(request: Request) -> Any:
+    """把用户的追加指令注入正在跑的 run（**不终止**）。
+
+    interrupt 让 run 停下来，steer 只让下一步多一条约束 —— 但准入校验完全相同，
+    都必须证明"你确实是这个会话的所有者，且这条是发给当前这一次 run 的"。少一层，
+    别人就能往你的 run 里塞指令，比打断更危险（那是内容注入，不只是成本攻击）。
+
+    没有活跃 run 时**报错而不是入队**：队列里的指令要等下一次 run 才会被消费，
+    用户会以为话已经带到了，实际到了另一个上下文里。宁可显式失败。
+    """
+    body = await request.json()
+    session_id = body.get("session_id", "")
+    if not session_id:
+        return {"ok": False, "error": "session_id is required"}
+
+    caller = request.headers.get("x-user-id", "") or body.get("user_id", "")
+    given_token = body.get("run_token") or request.headers.get("x-run-token", "")
+
+    err = await _authorize_run_input(session_id, caller, given_token)
+    if err:
+        return {"ok": False, "error": err}
+
+    from app.agent.steer import push_steer
+
+    ok, reason = await push_steer(
+        session_id,
+        str(body.get("text") or ""),
+        source=str(body.get("source") or "user"),
+        redis=_redis,
+    )
+    if not ok:
+        return {"ok": False, "error": reason}
+    logger.info("Steer accepted (session=%s caller=%s)", session_id, caller)
+    return {"ok": True, "session_id": session_id}
 
 
 async def agent_interrupt(

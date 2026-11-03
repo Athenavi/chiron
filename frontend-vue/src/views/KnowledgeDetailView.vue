@@ -206,7 +206,7 @@ async function batchReindexDocs() {
     // 如果只想重新索引选中的文档，需要后台支持部分重新索引
     // 当前实现：先触发构建（会重新索引知识库所有文档）
     await api.post(`/v1/kb/${kbId}/build`)
-    message.success(t('workflow.re_indexing_triggered_please_check_status_later'))
+    message.success(t('knowledge.re_indexing_triggered_please_check_status_later'))
   } catch (e) {
     message.error(kbErrorText(e, t('errors.re_index_failed')))
   } finally {

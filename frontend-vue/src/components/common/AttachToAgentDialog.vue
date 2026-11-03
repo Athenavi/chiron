@@ -14,13 +14,13 @@ import { listAgents, updateAgent } from '../../api'
 
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
-type AttachKind = 'kb' | 'skill' | 'plugin' | 'workflow'
+type AttachKind = 'kb' | 'skill' | 'plugin'
 
 const props = defineProps<{
   open: boolean
-  /** 被装配的资源类型：知识库（单值覆盖）/ 技能、插件、工作流（数组追加） */
+  /** 被装配的资源类型：知识库（单值覆盖）/ 技能、插件（数组追加） */
   kind: AttachKind
-  /** 资源标识：kb / workflow 用 id；skill / plugin 用名字（与 Agent 对应列的存储形态一致） */
+  /** 资源标识：kb 用 id；skill / plugin 用名字（与 Agent 对应列的存储形态一致） */
   value: string
   /** 展示名 */
   label: string
@@ -36,7 +36,6 @@ const SUBJECT_LABEL = computed<Record<AttachKind, string>>(() => ({
   kb: t('knowledge.knowledge_base'),
   skill: t('agent.skill'),
   plugin: t('common.plugin'),
-  workflow: t('workflow.workflow'),
 }))
 
 interface AgentOption {
@@ -45,7 +44,6 @@ interface AgentOption {
   kb_id?: string
   skills?: string[]
   plugins?: string[]
-  workflows?: string[]
 }
 
 const agents = ref<AgentOption[]>([])
@@ -59,7 +57,6 @@ const options = computed(() => agents.value.map(a => ({ value: a.id, label: a.na
 function boundList(target: AgentOption): string[] {
   if (props.kind === 'kb') return target.kb_id ? [target.kb_id] : []
   if (props.kind === 'skill') return target.skills || []
-  if (props.kind === 'workflow') return target.workflows || []
   return target.plugins || []
 }
 
@@ -96,13 +93,9 @@ async function attach() {
       // 知识库是单值：直接覆盖（Agent 只有一个"默认知识库"）
       await updateAgent(target.id, { kb_id: props.value })
     } else {
-      // 技能 / 插件 / 工作流是数组：追加并去重，不覆盖已绑定的其它项
+      // 技能 / 插件是数组：追加并去重，不覆盖已绑定的其它项
       const next = Array.from(new Set([...boundList(target), props.value]))
-      const field = props.kind === 'skill'
-        ? 'skills'
-        : props.kind === 'workflow'
-          ? 'workflows'
-          : 'plugins'
+      const field = props.kind === 'skill' ? 'skills' : 'plugins'
       await updateAgent(target.id, { [field]: next })
     }
     message.success(t('common.assembled_into_name', { name: target.name }))

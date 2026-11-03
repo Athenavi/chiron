@@ -1,7 +1,7 @@
 /**
  * 工作台上下文的解析与组装（纯逻辑，无 DOM）。
  *
- * 对话是六大工作台的枢纽：知识库 / Agent / 技能 / 工作流都可以"带进对话"。
+ * 对话是五大工作台的枢纽：知识库 / Agent / 技能 / 插件都可以"带进对话"。
  * 这里定两件事：
  * 1. **URL 约定**：同名参数可重复（`?kb=a&kb=b&skill=x`），同名即同一类，可多选；
  *    单值写法（`?kb=a`）保持兼容。
@@ -11,7 +11,7 @@
 
 import { t } from '../../i18n'
 
-export type ContextChipType = 'kb' | 'agent' | 'skill' | 'workflow' | 'plugin' | 'memory'
+export type ContextChipType = 'kb' | 'agent' | 'skill' | 'plugin' | 'memory'
 
 export interface ContextChip {
   type: ContextChipType
@@ -24,7 +24,6 @@ const PARAMS: { param: string; type: ContextChipType; label: (value: string) => 
   { param: 'kb', type: 'kb', label: value => t('chat.chip.kb', { id: value.slice(0, 8) }) },
   { param: 'agent', type: 'agent', label: value => `Agent #${value.slice(0, 8)}` },
   { param: 'skill', type: 'skill', label: value => t('chat.chip.skill', { name: value }) },
-  { param: 'workflow', type: 'workflow', label: value => t('chat.chip.workflow', { name: value }) },
   // 插件（MCP server）：带进对话后限定本次只放它提供的工具
   { param: 'plugin', type: 'plugin', label: value => t('chat.chip.plugin', { name: value }) },
   // 长期记忆分类：带进对话后按这些分类注入（服务端口径见
@@ -71,7 +70,7 @@ function valuesOf(chips: readonly ContextChip[], type: ContextChipType): string[
 /**
  * 组装发给引擎的 context。
  *
- * 单值字段（`kb_id`/`agent_id`/`workflow_id`）取首个：老后端只认这三个标量，
+ * 单值字段（`kb_id`/`agent_id`）取首个：老后端只认这两个标量，
  * 保留它们才不会因为前端升级而失效；对应的 `*_ids` 数组供读多值的后端使用
  * （多值语义见 python-engine/app/agent/workbench_context.py）。
  */
@@ -88,12 +87,6 @@ export function buildWorkbenchContext(chips: readonly ContextChip[]): Record<str
   if (agentIds.length) {
     ctx.agent_id = agentIds[0]
     ctx.agent_ids = agentIds
-  }
-
-  const workflowIds = valuesOf(chips, 'workflow')
-  if (workflowIds.length) {
-    ctx.workflow_id = workflowIds[0]
-    ctx.workflow_ids = workflowIds
   }
 
   // 技能与插件本来就是多选语义，各只有一个字段：
@@ -141,7 +134,6 @@ export function chipsFromWorkbenchContext(
     kb: value => t('chat.chip.kb', { id: value.slice(0, 8) }),
     agent: value => `Agent #${value.slice(0, 8)}`,
     skill: value => t('chat.chip.skill', { name: value }),
-    workflow: value => t('chat.chip.workflow', { name: value }),
     plugin: value => t('chat.chip.plugin', { name: value }),
     memory: value => t('chat.chip.memory', { name: value }),
   }
@@ -158,7 +150,6 @@ export function chipsFromWorkbenchContext(
   push('kb', ctx.kb_ids ?? (ctx.kb_id ? [ctx.kb_id] : []))
   push('agent', ctx.agent_ids ?? (ctx.agent_id ? [ctx.agent_id] : []))
   push('skill', ctx.skill_names)
-  push('workflow', ctx.workflow_ids ?? (ctx.workflow_id ? [ctx.workflow_id] : []))
   push('plugin', ctx.plugin_names)
   push('memory', ctx.memory_slots)
   return chips

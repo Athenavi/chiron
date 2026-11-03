@@ -36,7 +36,7 @@ func usageGroupColumn(groupBy string) (string, bool) {
 //
 // 为什么默认仍走 credit_transactions 的按日聚合：已有前端依赖 `daily` 数组的形状，
 // 换数据源会改变"记账流入/流出"的口径。`model` / `session` 两个维度来自
-// usage_events（0004 迁移），它记的是**真实 token 与模型**，不含充值与扣费流水。
+// usage_events，它记的是**真实 token 与模型**，不含充值与扣费流水。
 // parseUsageParams 解析并校验 GetUsage 的查询参数。
 //
 // 抽成纯函数是为了能**脱离数据库**测这三个行为：默认值、白名单、非法值报错。

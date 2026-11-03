@@ -13,6 +13,7 @@ export default {
   subject_will_be_appended_to_the_agent_s_existing_bindings_without_overwriting_others: "{subject} ستُضاف إلى ارتباطات الوكيل الحالية دون الكتابة فوق غيرها.",
   install_skills_from_the_market_or_upload_a_local_skill_package: "ثبّت المهارات من السوق أو ارفع حزمة مهارات محلية",
   multi_agent_collaboration: "تعاون متعدد الوكلاء",
+  multi_agent_collaboration_task_dispatch_and_result_tracking: "تعاون متعدد الوكلاء: إرسال المهام وتتبع النتائج",
   upload_this_conversation_s_body_n_characters_as_a_markdown_document_reasoning_and_tool_calls_are_not_included: "سيتم رفع نص هذه المحادثة ({n} حرف) كمستند Markdown؛ ولن تُكتب عملية التفكير واستدعاءات الأدوات.",
   show_tool_list: "عرض قائمة الأدوات",
   tool_mcp: "أداة MCP",
@@ -244,4 +245,5 @@ export default {
   superagent_overlay_budget: "الميزانية المتبقية",
   superagent_overlay_input_locked: "الإدخال معطّل أثناء التولّي حتى لا تتنافس الجولات اليدوية مع الآلية",
   superagent_overlay_unlimited: "بلا حدّ",
+  superagent_budget_exhausted_notice: "توقّف التولّي تلقائيًا: استُهلك حدّ الرموز المخصّص",
 }

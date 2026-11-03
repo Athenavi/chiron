@@ -2,8 +2,7 @@
  * 会话地图的类型定义。
  *
  * 字段严格对齐后端 `internal/api/sessionmap.go` 的 JSON tag，**不新增、不改名** ——
- * 这份数据面的读写两端各有一份实现（Go 网关 + desktop-local/app/api/session_map.py），
- * 前端擅自加字段只会在另一个后端上变成静默的 undefined。
+ * 前端擅自加字段只会在后端变成静默的 undefined。
  */
 
 /**
@@ -108,7 +107,7 @@ export interface ForkResult {
  * `index` 是 **1 基**序号，与后端复制窗口的 `ROW_NUMBER() OVER (ORDER BY created_at, id)`
  * 完全同口径（`manager_queries.go::ListForkPoints`）。**不能**拿
  * `GET /v1/conversations/{id}` 的消息数组下标来推 —— 那条路径按 `seq` 排序，
- * 而 0016 迁移自述存量行的 `seq` 与 `created_at` 顺序可能不一致，
+ * 而权威基线自述存量行的 `seq` 与 `created_at` 顺序可能不一致，
  * 混用会让"从第 10 条分叉"实际复制另外 10 条，且**没有任何报错**。
  */
 export interface ForkPoint {

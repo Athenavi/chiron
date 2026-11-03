@@ -1,8 +1,8 @@
 """可选后端（extra）的导入方式守卫。
 
-**为什么需要它**：桌面端判断"这套 Python 环境能不能用"的唯一判据是**真实 import 整个
-`app` 包**（`frontend-vue/electron/runtime-probe.cjs`：`pkgutil.walk_packages` + 逐模块
-import）。于是模块顶层的 `import boto3` 就把一个**可选 extra** 变成了硬要求 ——
+**为什么需要它**：判断"这套 Python 环境能不能用"的唯一可靠判据是**真实 import 整个
+`app` 包**（等价于 `pkgutil.walk_packages` + 逐模块 import）。于是模块顶层的
+`import boto3` 就把一个**可选 extra** 变成了硬要求 ——
 `requirements.txt`（打包态引擎 venv 唯一的依赖来源）刻意不含它，
 所以真机上引擎环境装完 340MB、探测仍判"缺少模块 boto3"，本地模式的聊天/知识库/记忆全起不来，
 而 CI 全绿（`requirements-dev.txt` 里装了 boto3，所以开发机永远看不见这个缺口）。

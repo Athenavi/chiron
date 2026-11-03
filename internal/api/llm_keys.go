@@ -18,7 +18,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-// ── LLM Provider 密钥管理（集中派，DR：docs/llm-provider-key-management-dr.md）──
+// ── LLM Provider 密钥管理（集中派，DR）──
 //
 // 权威层:llm_provider_keys 表(密文,internal/settings AES-256-GCM 加密)。
 // 运行时层:Redis keyset(llm:keys:{provider} hash: field=key_hash[:12] →

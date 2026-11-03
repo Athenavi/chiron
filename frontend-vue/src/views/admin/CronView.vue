@@ -62,7 +62,7 @@ async function fetchCronJobs(silent = false) {
 async function triggerCronJobById(job: CronJob) {
   try {
     await triggerCronJob(job.id)
-    message.success(t('workflow.triggered_name_task_runs_asynchronously', { name: job.name }))
+    message.success(t('task.triggered_name_task_runs_asynchronously', { name: job.name }))
     await fetchCronJobs(true)
   } catch (e) {
     message.error(t('errors.trigger_failed_error', { error: errorDetail(e, t('errors.network_error_2')) }))
@@ -168,15 +168,15 @@ async function saveCronJob() {
   try {
     if (cronEditing.value) {
       await api.put(`/v1/admin/cron-jobs/${cronEditing.value.id}`, f)
-      message.success(t('workflow.scheduled_task_updated'))
+      message.success(t('task.scheduled_task_updated'))
     } else {
       const res = await api.post('/v1/admin/cron-jobs', f)
       const d = res.data?.data || res.data
-      message.success(t('workflow.scheduled_task_created'))
+      message.success(t('task.scheduled_task_created'))
       // 创建响应含 webhook_token：顺手复制一次触发地址（列表刷新后行内仍可复制）
       if (d?.id && d?.webhook_token) {
         const ok = await copyText(cronWebhookUrl(d.id, d.webhook_token))
-        if (ok) message.success(t('workflow.webhook_trigger_url_copied_to_clipboard'))
+        if (ok) message.success(t('task.webhook_trigger_url_copied_to_clipboard'))
       }
     }
     cronModalOpen.value = false
@@ -191,7 +191,7 @@ async function saveCronJob() {
 async function deleteCronJob(job: CronJob) {
   try {
     await api.delete(`/v1/admin/cron-jobs/${job.id}`)
-    message.success(t('workflow.scheduled_task_deleted'))
+    message.success(t('task.scheduled_task_deleted'))
     await fetchCronJobs(true)
   } catch (e) {
     message.error(t('errors.delete_failed_error', { error: errorDetail(e, t('errors.network_error_2')) }))
@@ -201,7 +201,7 @@ async function deleteCronJob(job: CronJob) {
 const cronColumns = [
   { title: t('common.name'), dataIndex: 'name', key: 'name', width: 170, ellipsis: true },
   { title: t('billing.plan'), dataIndex: 'schedule', key: 'schedule', width: 120 },
-  { title: t('workflow.task_2'), dataIndex: 'task', key: 'task', ellipsis: true },
+  { title: t('task.task_2'), dataIndex: 'task', key: 'task', ellipsis: true },
   { title: t('common.enable'), dataIndex: 'enabled', key: 'enabled', width: 64 },
   { title: t('common.last_run'), dataIndex: 'last_run_at', key: 'last_run_at', width: 130 },
   { title: t('common.status'), dataIndex: 'last_status', key: 'last_status', width: 84 },
@@ -227,7 +227,7 @@ onUnmounted(() => {
     >
       <template #title>
         <span class="chart-title">
-          <ClockCircleOutlined class="chart-title-icon" /> {{ $t('workflow.scheduled_tasks') }}
+          <ClockCircleOutlined class="chart-title-icon" /> {{ $t('task.scheduled_tasks') }}
         </span>
       </template>
       <template #extra>
@@ -246,15 +246,15 @@ onUnmounted(() => {
             :icon="h(PlusOutlined)"
             @click="openCronCreate"
           >
-            {{ $t('workflow.new_task') }}
+            {{ $t('task.new_task') }}
           </Button>
         </Space>
       </template>
       <EmptyState
         v-if="!cronLoading && cronJobs.length === 0"
         size="list"
-        :description="$t('workflow.no_scheduled_tasks_yet')"
-        :hint="$t('workflow.click_new_task_to_create_a_scheduled_automation')"
+        :description="$t('task.no_scheduled_tasks_yet')"
+        :hint="$t('task.click_new_task_to_create_a_scheduled_automation')"
       />
       <Table
         v-else
@@ -304,10 +304,10 @@ onUnmounted(() => {
                 :icon="h(PlayCircleOutlined)"
                 @click="triggerCronJobById(record as CronJob)"
               >
-                {{ $t('workflow.manual_trigger') }}
+                {{ $t('task.manual_trigger') }}
               </Button>
               <Popconfirm
-                :title="$t('workflow.copy_webhook_rotates_token')"
+                :title="$t('task.copy_webhook_rotates_token')"
                 :ok-text="$t('common.confirm')"
                 :cancel-text="$t('common.cancel')"
                 @confirm="copyCronWebhook(record as CronJob)"
@@ -330,7 +330,7 @@ onUnmounted(() => {
                 {{ $t('common.edit_2') }}
               </Button>
               <Popconfirm
-                :title="$t('workflow.confirm_deleting_this_scheduled_task')"
+                :title="$t('task.confirm_deleting_this_scheduled_task')"
                 :ok-text="$t('common.delete')"
                 :cancel-text="$t('common.cancel')"
                 @confirm="deleteCronJob(record as CronJob)"
@@ -353,7 +353,7 @@ onUnmounted(() => {
     <!-- 新建 / 编辑定时任务对话框 -->
     <Modal
       :open="cronModalOpen"
-      :title="cronEditing ? $t('workflow.edit_scheduled_task') : $t('workflow.new_scheduled_task')"
+      :title="cronEditing ? $t('task.edit_scheduled_task') : $t('task.new_scheduled_task')"
       :confirm-loading="cronSaving"
       :ok-text="$t('common.save')"
       :cancel-text="$t('common.cancel')"
@@ -362,7 +362,7 @@ onUnmounted(() => {
     >
       <div class="cron-form">
         <div class="cron-field">
-          <label class="cron-label">{{ $t('workflow.task_name') }}</label>
+          <label class="cron-label">{{ $t('task.task_name') }}</label>
           <Input
             v-model:value="cronForm.name"
             :placeholder="$t('common.e_g_daily_morning_report_generation')"
@@ -380,7 +380,7 @@ onUnmounted(() => {
           </div>
         </div>
         <div class="cron-field">
-          <label class="cron-label">{{ $t('workflow.task_json') }}</label>
+          <label class="cron-label">{{ $t('task.task_json') }}</label>
           <Input.TextArea
             v-model:value="cronForm.task"
             :rows="4"
@@ -388,9 +388,9 @@ onUnmounted(() => {
             placeholder="{&quot;type&quot;:&quot;agent&quot;,&quot;agent_id&quot;:&quot;...&quot;,&quot;prompt&quot;:&quot;...&quot;}"
           />
           <div class="cron-hint">
-            {{ $t('workflow.task_type_examples') }}<br>
-            <code>{"type":"agent","agent_id":"...","prompt":"..."}</code>{{ $t('workflow.agent_task') }}<br>
-            <code>{"type":"quick","user_input":"...","mode":"auto"}</code>{{ $t('workflow.unified_task_2') }}
+            {{ $t('task.task_type_examples') }}<br>
+            <code>{"type":"agent","agent_id":"...","prompt":"..."}</code>{{ $t('task.agent_task') }}<br>
+            <code>{"type":"quick","user_input":"...","mode":"auto"}</code>{{ $t('task.unified_task_2') }}
           </div>
         </div>
         <div class="cron-field cron-field-row">

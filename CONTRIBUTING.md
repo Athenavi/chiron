@@ -14,7 +14,8 @@
 | 系统由哪些组件构成、信任边界在哪 | [docs/architecture.md](docs/architecture.md) |
 | 多副本部署后会出什么问题、怎么扩 | [docs/deployment-multi-instance.md](docs/deployment-multi-instance.md) |
 | 错误码契约与三语言同步 | [docs/error-codes.md](docs/error-codes.md) |
-| 下一步往哪做、现状与目标的差距 | [docs/super-agent-roadmap.md](docs/super-agent-roadmap.md) |
+| 会话运行时与转录契约 | [docs/session-runtime-spec.md](docs/session-runtime-spec.md)、[docs/transcript-contract.md](docs/transcript-contract.md) |
+| 数据库迁移怎么改、怎么回滚 | [docs/db-migration-entry.md](docs/db-migration-entry.md) |
 
 ## 2. 开发环境
 
@@ -95,7 +96,7 @@ PostgreSQL/Redis 服务、建 schema、构建并启动网关），本地按下�
 **两条始终生效的约束**
 
 1. **门禁曾带 `--follow-imports=silent`** —— 分批接线期间，未清零模块的依赖闭包不可控
-   （`app/core` 的传递依赖达 76 个文件，`app/tools` / `app/workflow` / `app/skill` 各 74–76，
+   （`app/core` 的传递依赖达 76 个文件，`app/tools` / `app/skill` 各 74–76，
    单文件亦可拉到 72 个），只能让 mypy 只报告命令行里列出的模块。存量清零后该开关已移除。
    **若将来要把某块从全量门禁里摘出去，就得把它加回来**，并接受"依赖由它们各自的门禁覆盖"这个前提。
 2. **第三方库缺口走 `pyproject.toml` 的 `[[tool.mypy.overrides]]`，不许用 `# type: ignore` 绕**：

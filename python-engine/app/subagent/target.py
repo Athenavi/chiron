@@ -54,7 +54,7 @@ class SubagentTarget(Protocol):
 
     @property
     def name(self) -> str:
-        """目标标识，形如 ``profile:reviewer`` / ``skill:foo`` / ``workflow:<id>``。"""
+        """目标标识，形如 ``profile:reviewer`` / ``skill:foo``。"""
         ...
 
     @property

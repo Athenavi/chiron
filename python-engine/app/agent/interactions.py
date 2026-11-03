@@ -5,7 +5,7 @@
 进程一死，用户既看不到"在等你"，也看不到"等的是哪一步"；M6 让无人值守回合不再空等，
 但看到的仍然只是一句拒绝，不是一个可以回答的问题。
 
-本模块是 `pending_interactions` 表（迁移 ``0018``）的唯一写入方，语义三条：
+本模块是 `pending_interactions` 表的唯一写入方，语义三条：
 
 1. **状态机单向**：`pending → answered → consumed`，旁路只有 `expired`。
    `answered → consumed` 是**一次原子 UPDATE**（``consume_grant``）：批准只能被一个回合取走，

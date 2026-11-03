@@ -255,7 +255,7 @@ class MCPClient:
 
         理由：连接凭据来自 ``ServerDef.env`` / ``url``（插件配置），而引擎进程正在处理
         不可信内容 —— 被 prompt injection 影响的 agent 可以直接拿这些凭据触达外部系统，
-        绕过网关的全部授权、审计与限流（docs/agent-safety-and-reliability.md §1.4）。
+        绕过网关的全部授权、审计与限流（internal/api/tool_broker.go）。
 
         未声明 ``read_only`` 的 server 一律**不连**（fail-closed）。要放行请在插件配置里显式
         写 ``"read_only": true``（表示它只提供读操作）；含写 / 删 / 外部操作的 server 应由服务端

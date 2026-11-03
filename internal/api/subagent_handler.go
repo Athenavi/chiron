@@ -1,6 +1,6 @@
 package api
 
-// ── 子 Agent 运行观测 API（docs/subagent-design.md §4.4）──
+// ── 子 Agent 运行观测 API（python-engine/app/subagent/）──
 //
 // 三个只读端点，供前端画"递归层级树 + 侧边栏看运行中子 Agent 输出"：
 //

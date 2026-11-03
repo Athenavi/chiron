@@ -16,7 +16,7 @@ run_in_background / job_output / job_kill / persistent_shell 都曾因此不存�
 ⚠️ **沙箱子进程的短路开关**（``CHIRON_TOOLS_SKIP_REGISTRY=1``）：上面那串注册 import 是
 **eager** 的，而 ``app/tools/_sandbox_worker.py`` 被 ``run_code`` 以 ``python -m
 app.tools._sandbox_worker`` 启动 ⇒ 解释器**先执行本文件** ⇒ 整条注册链（含
-``app.tools.graph`` → ``app.gateway.router`` → … → ``logfire``）会被拉进那个
+``app.tools.pm`` → ``app.gateway.router`` → … → ``logfire``）会被拉进那个
 **env 已被 :func:`app.tools.sandbox.sandboxed_env` 清空**的子进程；``logfire`` 在 import
 期就调 ``Path.home()``，没有可用的 HOME 直接 ``RuntimeError``（CI 上 15 条 run_code 用例
 就是这么红的：子进程"起不来"，症状却是"守卫没生效"）。
@@ -39,7 +39,6 @@ else:
     import app.tools.fs_tools  # noqa: F401 — ls（列目录）
     import app.tools.git_tools  # noqa: F401
     import app.tools.glob_tools  # noqa: F401
-    import app.tools.graph  # noqa: F401
     import app.tools.jobs  # noqa: F401
     import app.tools.kb  # noqa: F401
     import app.tools.media  # noqa: F401
@@ -60,9 +59,7 @@ else:
     import app.tools.video  # noqa: F401 — video_analyze（抽帧 + 多模态描述）
     import app.tools.web  # noqa: F401 — web_search / web_fetch
 
-    # ⚠️ app.workflow.tools 注册的 workflow_run 会**覆盖** app.tools.graph 的同名工具
-    # （后者已删除，见 graph.py 的说明）。新增工具前先在注册表里查重名。
-    import app.workflow.tools  # noqa: F401 — workflow_run / workflow_status
+    # ⚠️ 新增工具前先在注册表里查重名。
     from app.tools.client import SystemToolClient
     from app.tools.discovery import ToolDiscovery
     from app.tools.registry import ToolRegistry, registry

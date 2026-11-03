@@ -204,7 +204,7 @@ describe('工具语义分组（对应 python-engine 工具注册表）', () => {
   it('组头摘要按语义分档计数', () => {
     expect(toolGroupSummary('explore', ['read_file', 'grep_files', 'read_file'])).toBe('读取 2 搜索 1')
     expect(toolGroupSummary('modify', ['write_file', 'edit_file'])).toBe('写入 1 编辑 1')
-    expect(toolGroupSummary('delegate', ['subagent', 'graph_run'])).toBe('委派 2')
+    expect(toolGroupSummary('delegate', ['subagent', 'code_agent'])).toBe('委派 2')
     expect(toolGroupSummary('shell', ['shell_exec', 'run_in_background'])).toBe('命令 1 作业 1')
   })
 })

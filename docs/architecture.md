@@ -11,8 +11,8 @@
 | 前端 SPA | `frontend-vue/`（Vite 构建产物进 nginx 静态目录） | 对话 UI、SSE 订阅、`Last-Event-ID` 续传 | 同源 |
 | nginx | `frontend-vue/nginx.conf` | 同源反代 `/v1/`、`/events`、`/submit`、`/cancel`、`/media/`、`/ws/`；`/health` 本地返回 200 | `:80` |
 | Go 网关 | `cmd/chiron`，路由 `internal/api/gateway_router.go` | 认证、限流、计费/配额闸门、SSE 汇聚、引擎代理、管理面 | `PORT`，默认 `8080`（`config/config.go` 的 `getEnv("PORT", "8080")`） |
-| Python 引擎 | `python-engine/app/main.py` | Agent 执行、工具/记忆/知识库、工作流、队列 worker | `HTTP_PORT`，默认 `8000`（容器内 `python-engine:8000`，见 compose 的 `PYTHON_ENGINE_ADDRESS`） |
-| PostgreSQL | — | **唯一持久层**（对话、设置、计费、工作流实例…） | `POSTGRES_DSN` |
+| Python 引擎 | `python-engine/app/main.py` | Agent 执行、工具/记忆/知识库、队列 worker | `HTTP_PORT`，默认 `8000`（容器内 `python-engine:8000`，见 compose 的 `PYTHON_ENGINE_ADDRESS`） |
+| PostgreSQL | — | **唯一持久层**（对话、设置、计费…） | `POSTGRES_DSN` |
 | Redis | — | 会话运行锁、限流计数、**SSE 事件缓冲流**、任务队列（`engine:tasks`）、缓存、Pub/Sub | `REDIS_URL` |
 
 ```
@@ -94,11 +94,10 @@
 | 入口 | 路由 | 链路要点 |
 |---|---|---|
 | 统一任务模式 | `POST /v1/chat/submit` | 网关代理到引擎 unified executor；前端 `sendUnified`，结果一次性返回后追加为消息 |
-| 工作流执行 | `POST /v1/graphs/{id}/execute` → `GET /v1/workflows/{id}/status` | 引擎**异步提交**：先落库 `workflow_instances`（`status='running'`），再把任务 `XADD` 到 `engine:tasks`（`python-engine/app/api/workflows.py`），由队列 worker 消费；前端轮询 status |
 | Agent 派发 | `POST /v1/agents/{id}/run`、`POST /v1/agents/dispatch` | 与对话同构：闸门 + 异步执行 + 事件流 |
 | 审批 / 提问 | `POST /v1/agent/approval`、`POST /v1/agent/answer` | 工具需确认时前端回传布尔/文本，网关转引擎 |
 | RPA 插件桥 | `GET /ws/rpa` | **全站唯一的 WebSocket**（`internal/api/rpa_ws.go`，nginx `location /ws/`）；对话流**不用** WS |
-| 公开分享 | `GET /v1/share/{id}`、`GET /media/s/{assetID}` | 仅 `rlMW`，无登录；内容由分享记录限定，且 `expires_at` 必须未过期（缺失/过期 ⇒ 410，见迁移 `0017`）；媒体侧走 S3 预签名 URL |
+| 公开分享 | `GET /v1/share/{id}`、`GET /media/s/{assetID}` | 仅 `rlMW`，无登录；内容由分享记录限定，且 `expires_at` 必须未过期（缺失/过期 ⇒ 410）；媒体侧走 S3 预签名 URL |
 
 > 会话流统一为 SSE 是有意为之：`gateway_router.go` 在注册 `/events` 的注释里写明"批 B-3′：下线 /ws/{sessionId} 与 WebSocketHub（前端仅 EventSource）；RPA 插件通道 /ws/rpa 保留"。
 

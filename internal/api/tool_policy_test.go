@@ -93,8 +93,8 @@ func TestRollbackCapability(t *testing.T) {
 // 服务端若把它们判成 read，就等于两道关都放行。
 func TestServerNeverMorePermissiveThanEngine(t *testing.T) {
 	mustNotBeRead := []string{
-		"write_file", "edit_file", "git_commit", "graph_create", "remember",
-		"subagent", "agent_dispatch", "workflow_run",
+		"write_file", "edit_file", "git_commit", "remember",
+		"subagent", "agent_dispatch",
 		"web_fetch", "web_search", "browser_click", "skill_install",
 		"job_kill", "forget",
 	}

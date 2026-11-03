@@ -1,4 +1,4 @@
-"""批 G+ 批次 4：hook 的**上下文注入**（`docs/hook-protocol-design.md` §4.5）。
+"""批 G+ 批次 4：hook 的**上下文注入**（`python-engine/app/hooks/`）。
 
 这是本协议里**唯一**改变"什么能影响模型输入"的一环，因此它的形态是被约束死的：
 

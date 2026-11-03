@@ -53,5 +53,5 @@ opentelemetry-exporter-otlp-proto-grpc==1.44.0
 opentelemetry-instrumentation-fastapi==0.65b0
 opentelemetry-instrumentation-redis==0.65b0
 opentelemetry-instrumentation-httpx==0.65b0
-# Agent Tools & Workflow
+# Agent Tools
 pydantic-ai==2.53.0

@@ -38,7 +38,6 @@ const apiMocks = vi.hoisted(() => {
     listKnowledgeBases: vi.fn(arr),
     listSkillResources: vi.fn(arr),
     listPlugins: vi.fn(arr),
-    listWorkflows: vi.fn(arr),
     createAgent: vi.fn(arr),
     updateAgent: vi.fn(arr),
     deleteAgent: vi.fn(arr),
@@ -86,11 +85,10 @@ describe('AgentsView（此前零测试）', () => {
     apiMocks.listAgents.mockResolvedValue([])
     apiMocks.listAgentSessions.mockResolvedValue([])
     apiMocks.listMarket.mockResolvedValue([])
-    // 四类资源都返回**非空**，守卫才会认为"已加载过"
+    // 三类资源都返回**非空**，守卫才会认为"已加载过"
     apiMocks.listKnowledgeBases.mockResolvedValue([{ id: 'kb-1', name: '手册' }])
     apiMocks.listSkillResources.mockResolvedValue([{ id: 'sk-1', name: '摘要' }])
     apiMocks.listPlugins.mockResolvedValue([{ name: 'fs', command: 'mcp-fs', status: 'enabled' }])
-    apiMocks.listWorkflows.mockResolvedValue([{ id: 'wf-1', name: '日报' }])
   })
 
   it('能挂载、跑完初始加载、卸载不抛错', async () => {
@@ -112,7 +110,7 @@ describe('AgentsView（此前零测试）', () => {
     wrapper.unmount()
   })
 
-  it('★ 绑定资源四源拉齐，且已加载就不再拉（loadBindingOptions 的守卫）', async () => {
+  it('★ 绑定资源三源拉齐，且已加载就不再拉（loadBindingOptions 的守卫）', async () => {
     const wrapper = mountView()
     await flushPromises()
     const vm = wrapper.vm as unknown as { loadBindingOptions: () => Promise<void> }
@@ -121,12 +119,11 @@ describe('AgentsView（此前零测试）', () => {
     expect(apiMocks.listKnowledgeBases).toHaveBeenCalledTimes(1)
     expect(apiMocks.listSkillResources).toHaveBeenCalledTimes(1)
     expect(apiMocks.listPlugins).toHaveBeenCalledTimes(1)
-    expect(apiMocks.listWorkflows).toHaveBeenCalledTimes(1)
 
-    // 第二次：`:166-170` 的提前返回应拦住（四类都非空）
+    // 第二次：提前返回的守卫应拦住（三类都非空）
     await vm.loadBindingOptions()
     expect(apiMocks.listKnowledgeBases).toHaveBeenCalledTimes(1)
-    expect(apiMocks.listWorkflows).toHaveBeenCalledTimes(1)
+    expect(apiMocks.listPlugins).toHaveBeenCalledTimes(1)
     wrapper.unmount()
   })
 

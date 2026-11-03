@@ -3,6 +3,7 @@ package api
 import (
 	"context"
 	"log/slog"
+	"sync/atomic"
 	"time"
 
 	"github.com/athenavi/chiron/internal/auth"
@@ -33,6 +34,62 @@ const (
 const takeoverTickPrompt = "[Super-agent 接管] 这是系统定时触发的巡检回合，不是用户的新提问。\n" +
 	"请检查本会话的任务板与未完成的工作，挑其中一个推进到可验证的进展，然后给出简短结论。\n" +
 	"若确实没有可推进的事项，直接回答\"当前无待办\"并结束 —— 不要为此新开无关工作。"
+
+// takeoverUsageKey 是「本回合的真实 token 用量要记到哪条接管上」的上下文键。
+//
+// 为什么不改 `HandleSubmit` 的签名：它已有 7 个参数、5 个调用点（含 3 个测试），
+// 为一个只有接管用的输出再加参数，会逼所有调用点一起改。挂到 ctx 上则是
+// **零行为变化**，和 `WithQuotaReserve` 完全同一手法。
+//
+// 也刻意**不**塞进 workbenchCtx：那张表会被原样序列化进引擎请求体的 `context` 字段，
+// 放一个 Go 指针进去就是在协议里多出一个用户看不懂的垃圾键。
+type takeoverUsageKey struct{}
+
+// takeoverUsageSink 收集一次接管回合的真实用量。
+//
+// 用原子量：写发生在回合 goroutine（`submitOnce` 收尾），读发生在它返回之后 ——
+// 目前是同一个 goroutine，但 `HandleSubmit` 内部有续跑循环和多路事件消费，
+// 依赖"恰好同协程"是脆的，而一个 atomic 的代价可以忽略。
+type takeoverUsageSink struct{ total atomic.Int64 }
+
+// Add 计入一次回合的用量（input + output，与 `TrueUpTenantQuota` 同一口径）。
+func (s *takeoverUsageSink) Add(n int) {
+	if s != nil && n > 0 {
+		s.total.Add(int64(n))
+	}
+}
+
+// Total 返回本次 `HandleSubmit` 累计用量（跨续跑轮次累加）。
+func (s *takeoverUsageSink) Total() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.total.Load()
+}
+
+// withTakeoverUsageSink 把用量收集器挂到回合上下文上。
+func withTakeoverUsageSink(ctx context.Context, sink *takeoverUsageSink) context.Context {
+	if sink == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, takeoverUsageKey{}, sink)
+}
+
+// takeoverUsageFromCtx 取回用量收集器；不存在时返回 nil（非接管回合）。
+func takeoverUsageFromCtx(ctx context.Context) *takeoverUsageSink {
+	sink, _ := ctx.Value(takeoverUsageKey{}).(*takeoverUsageSink)
+	return sink
+}
+
+// budgetExhausted 判定新增用量之后是否已越过用户设的硬上限。
+//
+// 纯函数单列，是因为这是"费用闸门到底会不会关"的**唯一判据**：
+// `token_cap == 0` 表示用户不限量（此时永不按预算停），一旦把 0 当成
+// "上限 0" 就会让每一个开启默认配置的接管在第一拍后立刻停 —— 与"不改配置
+// 就等于今天的行为"直接冲突。`>=` 而非 `>`：正好花到上限也算用尽。
+func budgetExhausted(spent, cap int64) bool {
+	return cap > 0 && spent >= cap
+}
 
 // takeoverDriver 按节拍驱动到期的接管。
 //
@@ -170,9 +227,9 @@ func (d *takeoverDriver) driveOne(ctx context.Context, id, sessionID, userID str
 		releaseLease()
 		return
 	}
-	if tokenCap > 0 && tokenSpent >= tokenCap {
+	if budgetExhausted(tokenSpent, tokenCap) {
 		releaseRun()
-		d.finish(context.WithoutCancel(ctx), id, "budget_exhausted", "token_cap")
+		d.finish(context.WithoutCancel(ctx), id, takeoverStatusBudgetExhausted, "token_cap")
 		releaseLease()
 		return
 	}
@@ -227,6 +284,11 @@ func (d *takeoverDriver) driveOne(ctx context.Context, id, sessionID, userID str
 	stopHeartbeat := StartSessionRunLockHeartbeat(runCtx, sessionID, runToken)
 	stopLease := d.startLeaseHeartbeat(id, token)
 
+	// 用量收集器挂到回合上下文上：`submitOnce` 在收尾时把**真实**用量累加进来。
+	// 它是本拍唯一需要的"输出" —— 驱动据此累加 token_spent 并判定硬闸门。
+	sink := &takeoverUsageSink{}
+	runCtx = withTakeoverUsageSink(runCtx, sink)
+
 	go func() {
 		defer releaseTenant()
 		defer releaseSem()
@@ -242,6 +304,10 @@ func (d *takeoverDriver) driveOne(ctx context.Context, id, sessionID, userID str
 		}()
 		d.submit.HandleSubmit(runCtx, userID, sessionID, takeoverTickPrompt,
 			map[string]interface{}{}, map[string]interface{}{TakeoverKey: id}, nil)
+		// 回合（含目标续跑的各轮）已全部结束：把真实用量记账并按预算收口。
+		// 必须在归还租约**之前**做：否则另一副本可能先抢到下一拍，
+		// 在"这一拍花了多少"还没落库时就又起了一个回合。
+		d.recordTakeoverUsage(context.WithoutCancel(runCtx), id, sink.Total())
 	}()
 }
 
@@ -417,6 +483,52 @@ func (d *takeoverDriver) orphanStopping(ctx context.Context) {
 		}
 		publishTakeoverEvent(d.hub, eventTakeoverEnded, id, sessionID, userID, takeoverStatusStopped)
 	}
+}
+
+// recordTakeoverUsage 把一次接管回合（含其续跑轮）的**真实**用量累加进 token_spent，
+// 并在越过用户设的硬上限时把接管收口成 budget_exhausted。
+//
+// 为什么必须在这里记账：`budget.token_cap` 是产品对用户的承诺（"到达即停"），
+// 而它此前只有**读**没有**写** —— `token_spent` 永远为 0，闸门等于不存在。
+//
+// 累加与判定分两句是安全的：刚跑完的这一拍把 `last_tick_at` 写成了 now()，
+// 驱动候选查询要求 `last_tick_at + tick_seconds <= now()`，且 tick_seconds 已归一化
+// 到 ≥ 60s，因此另一副本不可能在这个窗口里插进一拍。判定交给 `budgetExhausted`
+// 这个纯函数（唯一判据），而不是在 SQL 里再写一份 CASE。
+//
+// 含 `stopping`：用户打断的那一拍确实花了钱，账要补上；终态由 stop / orphanStopping 收口，
+// 这里不改它的 stop_reason（把 user_stop 盖成 token_cap 会误导）。
+func (d *takeoverDriver) recordTakeoverUsage(ctx context.Context, id string, used int64) {
+	if used <= 0 {
+		return
+	}
+	upCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+
+	var sessionID, userID string
+	var spent, cap int64
+	err := db.GlobalDBManager.QueryRow(upCtx, `
+		UPDATE superagent_takeovers SET token_spent = token_spent + $2
+		 WHERE id = $1 AND status IN ('active', 'stopping')
+		RETURNING session_id, user_id, token_spent, token_cap`, id, used).
+		Scan(&sessionID, &userID, &spent, &cap)
+	if err != nil {
+		if !isNoRows(err) {
+			// 记账失败只告警：回合一已经跑完并计费，这里丢的只是"接管侧预算读数"。
+			// 但必须留下痕迹 —— 否则账单与接管面板的 spent 对不上时无从解释。
+			slog.Warn("superagent driver: record usage failed",
+				"takeover_id", id, "used", used, "error", err)
+		}
+		return
+	}
+	if !budgetExhausted(spent, cap) {
+		return
+	}
+	// finish 是幂等的（`WHERE status='active'`）且自己广播终态事件：
+	// 两台副本同时算出超限，也只会有一台真正改到行。
+	d.finish(context.WithoutCancel(ctx), id, takeoverStatusBudgetExhausted, "token_cap")
+	slog.Info("superagent takeover stopped: token budget exhausted",
+		"takeover_id", id, "session", sessionID, "user", userID, "spent", spent, "cap", cap)
 }
 
 // finish 终结一条接管（预算用尽、轮数用尽等），不经过用户请求。

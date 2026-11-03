@@ -1,4 +1,4 @@
-"""批 G+ 批次 4：hook 的**上下文注入**回归（`docs/hook-protocol-design.md` §4.5）。
+"""批 G+ 批次 4：hook 的**上下文注入**回归（`python-engine/app/hooks/`）。
 
 这一批是协议里**唯一**改变"什么能影响模型输入"的机制，所以用例围绕四件事钉：
 

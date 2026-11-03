@@ -38,7 +38,7 @@ class AgentTask:
     llm_config: dict[str, Any] = field(default_factory=dict)
     max_turns: int = 5
     subagent_depth: int = 0  # S3: 委派深度（subagent 递归限制，MAX_DEPTH=3）
-    #: M15b：本次 run 归属的**任务线根**（`subagent_runs.root_run_id`，见迁移 0021）。
+    #: M15b：本次 run 归属的**任务线根**（`subagent_runs.root_run_id`，见权威基线）。
     #: 只有子 Agent 有它 —— 线账统计的是委派树的 token（主 run 自己那一份不在 `subagent_runs`
     #: 里），runtime 据此在每轮开头判"这条线是不是已经花到上限"。空串 = 不做线账判定。
     subagent_line: str = ""
@@ -46,7 +46,7 @@ class AgentTask:
     #: C1 批 3+ 的**接管 CAS** 靠它判定"要接管的那一行是不是我看到的那个 run"。
     run_token: str = ""
     #: 工作台上下文（前端 ChatView.buildContext 组装并经 Go 透传）：
-    #: kb_id / agent / agent_id / skill_names[] / workflow_id。引擎侧按需消费。
+    #: kb_id / agent / agent_id / skill_names[]。引擎侧按需消费。
     workbench_context: dict[str, Any] = field(default_factory=dict)
     #: C2：本轮召回的**记忆块**。它**不拼进 `system_prompt`**，而是作为一条独立的 system
     #: 消息插在稳定前缀之后 —— `system_prompt`（系统提示 + 技能目录）是逐字稳定的前缀，
@@ -126,7 +126,7 @@ class AgentEvent:
     timestamp: float = field(default_factory=time.time)
     # ── Trace ID (新增: 支持分布式链路追踪) ──
     trace_id: str = ""  # 单次用户请求的唯一标识
-    span_name: str = ""  # 当前 span 名称 (llm_call / tool_execution / workflow_node)
+    span_name: str = ""  # 当前 span 名称 (llm_call / tool_execution)
     duration_ms: int = 0  # span 耗时 (毫秒)
     #: 任务清单的修订号（仅 type="todo_updated"）。写入方每改一次板子就 +1。
     #: 前端**必须**据此丢弃乱序到达的旧事件：SSE 重连补发、多副本接力都会让事件

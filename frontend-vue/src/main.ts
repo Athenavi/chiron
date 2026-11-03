@@ -56,8 +56,8 @@ installLocaleSync(() => {
 // 错误类需要读完，调用点单独传 { duration: 4 }。
 message.config({ duration: 2.5 })
 
-// 桌面端 token 由 safeStorage 异步解密；先拿到再挂载，避免首屏请求缺少 Bearer。
-// Web 端 initToken 立即返回，不影响启动。
+// 先完成会话初始化再挂载，避免首屏请求缺少 Bearer。
+// 现在 initToken 不再做异步解密，立即返回，不影响启动。
 void useAuthStore(pinia)
   .initToken()
   .finally(() => {
@@ -74,9 +74,8 @@ void useAuthStore(pinia)
   })
 
 // PWA：生产环境注册 Service Worker（离线壳；开发环境跳过）
-// file://（Electron 桌面壳）不是安全上下文，注册只会产生一条 404 失败请求。
 // 用 BASE_URL 拼路径：Web 子路径部署时不能再假设站点位于域名根。
-if (import.meta.env.PROD && 'serviceWorker' in navigator && location.protocol !== 'file:') {
+if (import.meta.env.PROD && 'serviceWorker' in navigator) {
   window.addEventListener('load', () => {
     navigator.serviceWorker.register(`${import.meta.env.BASE_URL}sw.js`).catch(() => {})
   })

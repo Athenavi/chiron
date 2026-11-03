@@ -318,7 +318,7 @@ func scanPayment(row interface{ Scan(...any) error }) (*Payment, error) {
 // paymentUserIDIssue 检测 payments.user_id 是否短于 36 字符的用户 UUID，
 // 返回可直接执行的修复语句作为诊断；无需修复时返回空串。
 //
-// 历史 schema（init.sql / models.yaml / 本文件的建表 DDL）曾把它定为 VARCHAR(32)，
+// 历史 schema（早期建表脚本 / models.yaml / 本文件的建表 DDL）曾把它定为 VARCHAR(32)，
 // 而用户 ID 是 36 字符 UUID，于是 PgStore.CreatePayment 一律报
 //
 //	value too long for type character varying(32)

@@ -1,4 +1,4 @@
-"""工具 / 工作流 / Agent 的 HTTP 契约测试。
+"""工具 / Agent 的 HTTP 契约测试。
 
 这些测试走 ASGITransport 发**真实 HTTP 请求**，因此必须按真实调用方式构造：
 引擎的 AuthMiddleware 要求"网关路径"同时具备 `?user_id=&tenant_id=` 与
@@ -9,24 +9,10 @@
 import pytest
 from httpx import ASGITransport, AsyncClient
 
-from app.main import create_app, get_gateway
+from app.main import create_app
 
 # 网关注入的身份（AuthMiddleware 要求 query 身份 + X-Internal-Token 同时存在）
 IDENTITY = {"user_id": "test-user", "tenant_id": "1"}
-
-
-def _mock_gateway():
-    from unittest.mock import MagicMock
-
-    from app.gateway.provider import ChatResponse
-
-    gw = MagicMock()
-
-    async def fake_stream(**_kwargs):
-        yield ChatResponse(content="", finish_reason="stop")
-
-    gw.chat_stream = fake_stream
-    return gw
 
 
 @pytest.mark.asyncio
@@ -74,84 +60,6 @@ async def test_execute_tool_returns_output_for_known_tool():
     body = resp.json()
     assert body.get("exit_code") == 0
     assert "ok" in body.get("stdout", "")
-
-
-@pytest.mark.asyncio
-async def test_execute_workflow_returns_instance():
-    app = create_app()
-    app.dependency_overrides[get_gateway] = _mock_gateway
-    payload = {
-        "name": "wf-test",
-        "nodes": [
-            {"id": "input_1", "label": "Input", "node_type": "input"},
-            {"id": "output_1", "label": "Output", "node_type": "output"},
-        ],
-        "edges": [{"source_id": "input_1", "target_id": "output_1"}],
-        "initial_state": {"input": "hello"},
-    }
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            resp = await ac.post("/v1/graphs/demo/execute", json=payload, params=IDENTITY)
-        assert resp.status_code == 200
-        body = resp.json()
-        # execute 为异步提交契约：立即返回 running + instance_id，前端轮询 status
-        assert body["status"] == "running"
-        assert "instance_id" in body
-    finally:
-        app.dependency_overrides.pop(get_gateway, None)
-
-
-@pytest.mark.integration  # 需要真实 PostgreSQL：status 查询只走 workflow_instances，无内存 fallback
-@pytest.mark.asyncio
-async def test_workflow_status_returns_instance():
-    app = create_app()
-    app.dependency_overrides[get_gateway] = _mock_gateway
-    payload = {
-        "name": "wf-status",
-        "nodes": [
-            {"id": "input_1", "label": "Input", "node_type": "input"},
-            {"id": "output_1", "label": "Output", "node_type": "output"},
-        ],
-        "edges": [{"source_id": "input_1", "target_id": "output_1"}],
-        "initial_state": {"input": "hello"},
-    }
-    instance_id = ""
-    try:
-        async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-            run_resp = await ac.post("/v1/graphs/demo/execute", json=payload, params=IDENTITY)
-            instance_id = run_resp.json()["instance_id"]
-            status_resp = await ac.get(
-                f"/v1/workflows/{instance_id}/status", params=IDENTITY
-            )
-        # 落库是这条契约的**前提**：实例先写进 workflow_instances，status 才查得到。
-        # 此前 INSERT 传 aware datetime 撞 naive 列，异常被静默吞掉 → 这里恒 404。
-        assert status_resp.status_code == 200
-        body = status_resp.json()
-        assert body["instance_id"] == instance_id
-        # execute 是**异步提交**契约（另一条用例断言了立即返回 running）：执行由队列
-        # worker 承担，本用例不启动 worker，故 running 就是合法结果 —— 这里只覆盖
-        # "status 能读到落库实例"这一段。
-        assert body["status"] in {"running", "completed", "error"}
-    finally:
-        app.dependency_overrides.pop(get_gateway, None)
-        if instance_id:
-            # 真实库不留测试数据；清理失败不该覆盖上面的断言结果
-            try:
-                from app.db import get_pool
-
-                await get_pool().execute(
-                    "DELETE FROM workflow_instances WHERE id = $1", instance_id
-                )
-            except Exception:  # noqa: BLE001
-                pass
-
-
-@pytest.mark.asyncio
-async def test_workflow_status_missing_returns_404():
-    app = create_app()
-    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as ac:
-        resp = await ac.get("/v1/workflows/not-exist/status", params=IDENTITY)
-    assert resp.status_code == 404
 
 
 @pytest.mark.asyncio

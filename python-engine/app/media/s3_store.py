@@ -10,7 +10,7 @@ import json
 import logging
 import threading
 import uuid
-from typing import Any
+from typing import Any, cast
 
 from app.media.store import Asset, BaseStore
 
@@ -176,4 +176,4 @@ class S3Store(BaseStore):
             # 不存在与"没权限"对调用方是同一件事：都取不回，都不该把异常抛进对话链路。
             logger.warning("s3 archive read failed (key=%s): %s", safe, exc)
             return None
-        return resp["Body"].read()
+        return cast(bytes, resp["Body"].read())

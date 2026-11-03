@@ -1,159 +1,29 @@
 import axios from 'axios'
-import { describeApiError, serverErrorDetail } from '../utils/apiError'
+import { describeApiError } from '../utils/apiError'
 import { toToolList, type ToolInfo } from '../utils/toolList'
 import { canAutoRetry, readRetryable, resolveResponseWaitMs, shouldRetryResponse } from '../utils/rateLimitBackoff'
 import type { WorkstationType } from '../types/workstation'
 
 import { t } from '../i18n'
-import { currentDeviceMode, type ChironMode } from '../stores/device'
-/** 桌面壳（Electron）在 preload 里注入 chironDesktop.apiUrl；Web 端回落到构建期变量 */
-type DesktopHost = {
-  apiUrl?: string
-  isDesktop?: boolean
-  /** local 模式由主进程注入的本地 core 设备 token；cloud 模式恒为空串 */
-  deviceToken?: string
-  getToken?: () => Promise<string>
-  saveToken?: (token: string) => Promise<unknown>
-  clearToken?: () => Promise<unknown>
-}
-const desktopHost = (globalThis as { chironDesktop?: DesktopHost }).chironDesktop
-export const API_URL = desktopHost?.apiUrl || import.meta.env.VITE_API_URL || ''
-const isDesktop = Boolean(desktopHost?.isDesktop)
+
+export const API_URL = import.meta.env.VITE_API_URL || ''
 
 /**
- * 本地模式 503（组件未就绪）的重试策略。
+ * 登录 / SSO 拿到的 Bearer token。
  *
- * 与云端限流的指数退避**故意分开**：本地后端的 503 主要是启动竞态 ——
- * `desktop-local/app/main.py::lifespan` 把 PG/Redis 的 bootstrap 放进后台 task，
- * 起来之前 `/readyz` 与依赖存储的路由都会如实回 503。这时短间隔等它一会儿是对的。
- * 但组件真没起来时（例如 PG 崩溃循环），再等也没用 —— 次数用完就如实报原因，
- * 而不是像云端那样退避到十几秒后还包装成"服务繁忙"。
+ * 同源请求本来靠 httpOnly cookie 认证；额外保留内存里的 Bearer 是为了 SSO 回跳
+ * 与网关直连等场景 —— 后端 AuthMiddleware 同时支持 cookie 与 Bearer。
+ * 刻意不落 localStorage：XSS 拿不到，登出后也不残留。
  */
-/**
- * 本地模式 503（组件未就绪）的重试节奏：**递增间隔**，累计约 20s。
- *
- * 为什么是这个量级：本机实测 `/healthz` 1.6s 就 200，但业务端点 4.18s 才可用；
- * 首次安装还要跑 initdb + 迁移，窗口更大（数秒到十几秒）。原先 3×1s = 3s
- * 盖不住实测窗口，首屏必然撞上"未就绪"。
- *
- * 为什么与壳层 `CORE_READY_TIMEOUT_MS` 同为 20s：两者分工不同 —— 壳层负责
- * 把 core 等到业务可用才放行（`electron/components.cjs::waitForReady`），
- * 前端负责覆盖"壳层已放行、后端仍在收尾"的残余窗口。两者同一量级，
- * 避免出现"壳层等了 20s 放弃、前端只肯再等 3s"的错配。
- *
- * 为什么递增而非等间隔：多数情况第 1-2 次就恢复，递增让常见路径快速返回，
- * 只有真慢的情况才等到底；也避免高频重试给正在 initdb 的机器添压。
- */
-const LOCAL_NOT_READY_RETRY_DELAYS_MS = [1000, 2000, 3000, 4000, 5000, 5000] as const
-
-/**
- * 当前运行模式（`local` | `cloud`）。
- *
- * 真相在 preload（主进程 `config.json`），此处是**同步快照**：只要 preload 已注入
- * `mode`，任何调用点（含非组件上下文）都能立刻判断自己该不该走云端接口。
- * 需要响应式时用 `useDeviceStore()`（`src/stores/device.ts`）。
- */
-export function getDeviceMode(): ChironMode {
-  return currentDeviceMode()
-}
-
-export type { ChironMode }
-
-/**
- * 桌面壳鉴权：file:// 页面访问 http(s):// API 属于跨站请求，后端 SameSite=Lax
- * 的 httpOnly cookie 不会被带上 ⇒ 登录后的每个请求都会 401。
- * 登录响应体里本来就有 token，桌面端改用它走 Authorization: Bearer
- * （后端 AuthMiddleware 同时支持 cookie 与 Bearer）。
- *
- * token 由主进程用 safeStorage（系统凭据库）加密保存，preload 启动时同步读取一次；
- * Web 端完全不走这条路径。
- */
-const DESKTOP_TOKEN_KEY = 'chiron_desktop_token' // 仅用于迁移上一版明文 token
 let bearerToken = ''
-/**
- * 本地会话 token（`POST /v1/auth/session` 换到的 JWT / 设备 token）。
- *
- * 与 `bearerToken` **分桶**，不是出于语义洁癖而是为了钉住一条不变量：
- * **云端登录 token 永远不该被发给本机后端**（两边密钥不同 ⇒ 必然 401，
- * 而且报错点离真因极远）。切换模式时 `getDeviceMode()` 立刻变新值、进程却要
- * 稍后才重启，中间这个窗口里如果共用一个变量，云端 token 就会被当成"本地会话"
- * 发出去。分桶之后这条路径不存在。
- */
-let localBearerToken = ''
 
-/** Bearer token 的归属：云端登录态，还是本地会话。 */
-export type TokenScope = 'cloud' | 'local'
-
-/**
- * 本地 core 的**设备 token**（只读，preload 在 local 模式注入）。
- *
- * 它不是云端凭据，只是"这是本机主人"的标识（desktop-local/app/api/auth.py），所以：
- * 不写 safeStorage、不写 localStorage —— 切回云端模式时不该被当成登录 token 用。
- * 老外壳可能没暴露这个字段 ⇒ 空串，调用方据此退化为"不带 Authorization"。
- */
-export function desktopDeviceToken(): string {
-  const raw = desktopHost?.deviceToken
-  return typeof raw === 'string' ? raw.trim() : ''
-}
-
-/**
- * 本次请求该带哪个 Bearer token。
- *
- * - 本地模式：**设备 token 优先，其次本地会话 token**。
- *   · 桌面 core（desktop-local）链路：core 只认 preload 注入的设备 token；
- *   · 本地网关链路（打包后跑 Go 网关）：没有设备 token 这回事，身份是
- *     `POST /v1/auth/session` 换到的真实 JWT（见 internal/api/auth_local_session.go），
- *     必须带出去，否则网关全场 401、`requiresAdmin` 也永远判不过。
- *   两者都没有就不设头 —— core 默认关鉴权时本就无需任何 token。
- *   **绝不**回退到云端登录 token：那份凭据属于另一个后端（见 localBearerToken）。
- * - 云端模式：沿用登录/SSO 拿到的 token（桌面端持久化在 safeStorage）。
- */
-function requestToken(): string {
-  if (getDeviceMode() === 'local') return desktopDeviceToken() || localBearerToken
-  return bearerToken
-}
-
-/**
- * 写入本次请求使用的 Bearer token；`scope` 标明这份凭据属于哪一侧。
- *
- * - `'cloud'`（默认）：登录/SSO 的云端凭据，桌面端交给主进程加密持久化；
- *   **在本地模式下不写 safeStorage**（那里存的是云端凭据，切回 cloud 模式会被
- *   当成登录 token 发出去 —— 必然 401 且看不出原因）。
- * - `'local'`：本地会话 token，只进内存里的本地桶，一律不落 safeStorage。
- */
-export function setAuthToken(token: string, scope: TokenScope = 'cloud') {
-  if (scope === 'local') {
-    localBearerToken = token || ''
-    return
-  }
+/** 写入本次请求使用的 Bearer token（空串表示清除）。 */
+export function setAuthToken(token: string) {
   bearerToken = token || ''
-  if (!isDesktop || getDeviceMode() === 'local') return
-  try {
-    if (bearerToken) void desktopHost?.saveToken?.(bearerToken)
-    else void desktopHost?.clearToken?.()
-    // 升级迁移：上一版把 token 明文放在 localStorage，现在一律清掉
-    localStorage.removeItem(DESKTOP_TOKEN_KEY)
-  } catch {
-    /* 主进程存储不可用时仅保留内存态，至少本次会话仍可用 */
-  }
 }
 
-/** 桌面端启动时恢复上次登录的 token；Web 端始终返回空串 */
-export async function loadDesktopToken(): Promise<string> {
-  if (!isDesktop) return ''
-  try {
-    const stored = (await desktopHost?.getToken?.()) || ''
-    if (stored) return stored
-    // 从上一版 localStorage 迁移一次，随后交给主进程加密保存
-    const legacy = localStorage.getItem(DESKTOP_TOKEN_KEY) || ''
-    if (legacy) {
-      void desktopHost?.saveToken?.(legacy)
-      localStorage.removeItem(DESKTOP_TOKEN_KEY)
-    }
-    return legacy
-  } catch {
-    return ''
-  }
+function requestToken(): string {
+  return bearerToken
 }
 
 // 注意：不要在这里设置默认 Content-Type！
@@ -163,9 +33,8 @@ export async function loadDesktopToken(): Promise<string> {
 export const api = axios.create({
   baseURL: API_URL,
   timeout: 30000,
-  // Web 同源请求靠 httpOnly cookie；桌面端 file:// 是跨站，改为 Bearer，
-  // 关掉 credentials 也避免响应侧 ACAO 与 credentials 的组合限制。
-  withCredentials: !isDesktop,
+  // 同源请求靠 httpOnly cookie 认证
+  withCredentials: true,
 })
 
 api.interceptors.request.use((config) => {
@@ -219,6 +88,22 @@ export async function submitAnswer(params: {
   return !!(data?.data?.ok ?? data?.ok)
 }
 
+/**
+ * 运行中补充指令（P0-3 的 steer 通道）：把一段话送进**正在跑**的回合，不终止它。
+ *
+ * 与 `sendMessage` 的分工：那个是"打断当前回合（或新开一轮）并重新提问"，
+ * 这个是"让模型接着当前工作，但改一下方向"。差别对用户是实打实的 ——
+ * 长任务跑到一半发现要补充约束时，打断等于丢掉已经跑了十几分钟的那一轮。
+ *
+ * `session_id` 必填；`run_token` 由网关自己从 run 亲和路由里取（前端不该持有它）。
+ * 拒绝是**抛错**而不是返回 false：网关把引擎的 `ok:false` 翻成了 4xx/429 等状态码
+ * （`submit_handler.go` 的 `steerStatus`），调用方据此区分"重试有用"与"没用"。
+ */
+export async function steerRun(params: { session_id: string; text: string }): Promise<boolean> {
+  const { data } = await api.post('/v1/agent/steer', params)
+  return !!(data?.data?.ok ?? data?.ok ?? data?.success)
+}
+
 // ── 会话操作（重命名 / 置顶）──
 export async function updateConversation(id: string, patch: { title?: string; pinned?: boolean; tag?: string; alias?: string }) {
   const { data } = await api.put(`/v1/conversations/${encodeURIComponent(id)}`, patch)
@@ -248,8 +133,6 @@ export interface Agent {
   skills?: string[]
   /** 工作台绑定：插件名（MCP server）数组（派发时只放这些插件提供的工具） */
   plugins?: string[]
-  /** 工作台绑定：工作流 id 数组（派发时按选择顺序执行，多选即流水线） */
-  workflows?: string[]
   /**
    * 归属人。列表接口会同时返回本租户内别人共享（visibility='tenant'）的 Agent，
    * 靠这个字段区分「我的」与「团队共享的」—— 只有所有者能改/删（后端 update、
@@ -325,7 +208,7 @@ export interface QuickExecuteResult {
 export async function quickExecute(body: {
   message: string
   session_id?: string
-  mode?: 'auto' | 'agent' | 'workflow'
+  mode?: 'auto' | 'agent'
 }): Promise<QuickExecuteResult> {
   const { data } = await api.post('/v1/quick-execute', body)
   return data
@@ -427,43 +310,6 @@ api.interceptors.response.use(
     // 服务端显式结论（`APIResponse.retryable`）：有就听它的，没有（undefined）才回退到状态码。
     const retryable = readRetryable(error.response?.data?.retryable)
 
-    // 本地模式的 503 不是"限流"。desktop-local 在存储/推理未就绪时按契约如实回 503
-    //（见 desktop-local/app/api/chat.py::_http_error、health.py::readyz）。
-    // 云端 429/503 的语义是"请求太多，退避重试有用"；本地这条是"组件还没起来"。
-    //
-    // **必须放在 `shouldRetryResponse` 之前**：`shouldRetryResponse(503, undefined)`
-    // 恒为 true（后向兼容的状态码回退），一旦让限流分支先接走，用户要白等 5+10+20 秒，
-    // 最后还被报成"服务繁忙"，后端 detail 里的真实原因（"本地 PostgreSQL 未启动"）
-    // 从未显示 —— 本地模式下每个依赖存储的页面都变成这样。
-    //
-    // 例外：服务端显式说 `retryable === true` 时仍交给下面的限流分支（服务端结论优先）。
-    if (status === 503 && getDeviceMode() === 'local' && retryable !== true) {
-      const localConfig = error.config as (typeof error.config & { __localReadyRetry?: number }) | undefined
-      const localAttempt = (localConfig?.__localReadyRetry ?? 0) + 1
-      // 本地后端的 503 多半是启动竞态（PG/Redis 的 bootstrap 在后台 task 里跑，
-      // 首次安装还要 initdb + 迁移）：用递增间隔把这段窗口盖过去，而不是像云端那样
-      // 从 5s 起指数退避到几十秒。次数用完仍不就绪，就如实报原因 ——
-      // 组件真没起来时，前端再怎么等也没用。
-      const delayMs = LOCAL_NOT_READY_RETRY_DELAYS_MS[localAttempt - 1]
-      if (localConfig && delayMs !== undefined) {
-        localConfig.__localReadyRetry = localAttempt
-        await new Promise(resolve => setTimeout(resolve, delayMs))
-        return api.request(localConfig)
-      }
-      const base = t('errors.local_service_not_ready')
-      // 后端原文是定位问题的唯一线索，必须带出（本地后端用 FastAPI 的 detail 字段）
-      const detail = serverErrorDetail(error, '')
-      const message = detail ? `${base}（${detail}）` : base
-      error.message = message
-      const payload = error.response?.data
-      if (payload && typeof payload === 'object') {
-        // 注入稳定 code：describeApiError 优先按 code 取本地化文案（与 501 分支同款）
-        payload.code = 'local_service_not_ready'
-      }
-      window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }))
-      return Promise.reject(error)
-    }
-
     // 重试决策的分层（CDS v1/06 §6.7 的退避公式不变）：
     //   `retryable === true`  → 服务端说重试有用（如 409 session_busy），就重试，不管状态码；
     //   `retryable === false` → 服务端说重试无用（如参数非法），就**不**重试；
@@ -495,30 +341,7 @@ api.interceptors.response.use(
       return Promise.reject(error)
     }
 
-    // 本地模式：本地后端（desktop-local）第一批只实现 health / auth / models，
-    // 其余端点回 501。不给明确提示的话，界面只显示"请求失败"——用户无从知道
-    // 这个功能在本地模式下还没做，反而会怀疑是装坏了。
-    if (status === 501 && getDeviceMode() === 'local') {
-      const message = t('errors.local_mode_feature_unavailable')
-      error.message = message
-      const detail = error.response?.data
-      if (detail && typeof detail === 'object') {
-        // 注入稳定 code：describeApiError 优先按 code 取本地化文案（随界面语言切换）
-        detail.code = 'local_mode_feature_unavailable'
-      }
-      window.dispatchEvent(new CustomEvent('api:error', { detail: { message } }))
-      return Promise.reject(error)
-    }
-
     if (status === 401) {
-      // 本地模式没有登录页：token 失效只提示，不清本地会话也不跳 /login
-      // （跳过去只会落到本地模式下被拦截的云专属路由）。
-      if (getDeviceMode() === 'local') {
-        window.dispatchEvent(new CustomEvent('api:error', {
-          detail: { message: t('errors.auth_required') },
-        }))
-        return Promise.reject(error)
-      }
       // Cookie/token 过期：清本地登录态，跳转登录页
       localStorage.removeItem('user')
       setAuthToken('')
@@ -526,11 +349,8 @@ api.interceptors.response.use(
         detail: { message: t('auth.session_expired_please_sign_in_again') }
       }))
       // 短延迟让 toast 显示后再跳转。
-      // 桌面壳是 file:// + hash 路由：写 '/login' 会变成 file:///X:/login，
-      // 整页导航直接 ERR_FILE_NOT_FOUND（表现为登录后白屏）。Hash 路由必须改 hash。
       setTimeout(() => {
-        if (window.location.protocol === 'file:') window.location.hash = '#/login'
-        else window.location.href = '/login'
+        window.location.href = '/login'
       }, 500)
     } else if (error.response?.status >= 500) {
       // 触发全局错误事件，App.vue 中的监听器会显示提示。
@@ -721,9 +541,9 @@ export function openEventStream(
       lastEventId = parsed.id
       onLastEventId?.(parsed.id)
     }
-    // 空 data 不派发（规范如此）；**命名事件也不进 onMessage** —— 本地 core 兜底通道发的是
-    // `event: heartbeat`（desktop-local/app/api/events.py），旧 EventSource 的 onmessage 同样
-    // 收不到它。这里保持一致，否则心跳会变成对话里的幽灵消息。
+    // 空 data 不派发（规范如此）；**命名事件也不进 onMessage** —— 网关的心跳发的是
+    // `event: heartbeat`，旧 EventSource 的 onmessage 同样收不到它。这里保持一致，
+    // 否则心跳会变成对话里的幽灵消息。
     if (!parsed.data || (parsed.event && parsed.event !== 'message')) return
     try {
       onMessage(JSON.parse(parsed.data))
@@ -741,8 +561,8 @@ export function openEventStream(
       response = await fetch(url, {
         headers: requestHeaders(),
         signal: active.signal,
-        // Web 同源靠 httpOnly cookie；桌面端 file:// 是跨站，cookie 带不过去，身份全在上面那个头
-        credentials: isDesktop ? 'same-origin' : 'include',
+        // 同源请求靠 httpOnly cookie 认证；身份也可由上面那个 Authorization 头带出
+        credentials: 'include',
       })
     } catch {
       if (closed || active.signal.aborted) return // 我们自己关的，不是故障
@@ -924,14 +744,14 @@ export async function resetCronWebhookToken(id: string): Promise<string> {
 // ── 模板市场 / 共享可见性（2026-08-23 批次2）──
 export interface TemplateItem {
   id: string
-  type: 'workflow' | 'agent' | 'skill'
+  type: 'agent' | 'skill'
   name: string
   description: string
-  /** 模板内容（workflow 模板为 `{nodes, edges}`）—— 具体形状由各工作台自行窄化 */
+  /** 模板内容 —— 具体形状由各工作台自行窄化 */
   payload: Record<string, unknown>
 }
 
-export async function listTemplates(type?: 'workflow' | 'agent' | 'skill'): Promise<TemplateItem[]> {
+export async function listTemplates(type?: 'agent' | 'skill'): Promise<TemplateItem[]> {
   const resp = await api.get('/v1/templates', { params: type ? { type } : {} })
   // 兼容 OK() 包装与裸形态（同上：取错层级 = 静默空列表）
   const d = resp.data?.data ?? resp.data
@@ -971,11 +791,6 @@ export async function listSkillResources(): Promise<WorkbenchResource[]> {
   return toWorkbenchResources(resp.data?.data?.skills)
 }
 
-export async function listWorkflows(): Promise<WorkbenchResource[]> {
-  const resp = await api.get('/v1/graphs')
-  return toWorkbenchResources(resp.data?.data)
-}
-
 /**
  * 插件（= MCP server）列表。用于"把插件带进对话"：选中后本次对话只放它提供的
  * 工具（见 python-engine/app/agent/runtime.py 的插件筛选）。
@@ -990,9 +805,9 @@ export interface Capability {
   capability_id: string
   name: string
   description: string
-  /** 所属工作台（六大标识的唯一定义见 src/types/workstation.ts） */
+  /** 所属工作台（五大标识的唯一定义见 src/types/workstation.ts） */
   workstation_type: WorkstationType
-  /** 能力类型：tool / service / agent / workflow 等 */
+  /** 能力类型：tool / service / agent 等 */
   capability_type: string
   tags?: string[]
   status?: string
@@ -1021,35 +836,8 @@ export async function searchCapabilities(query: string, limit = 20): Promise<Cap
 }
 
 /**
- * 保存工作流图定义。graph_json 由前端构造（节点用 `node_type` + `config`，
- * 连线用 `source_id`/`target_id`），后端原样序列化落库；同 id 覆盖。
+ * 引擎当前可用的工具（含插件 / MCP 注入的代理工具），带完整 parameters schema
  */
-export async function createGraph(body: {
-  name: string
-  graph_json: unknown
-}): Promise<{ id: string; name: string }> {
-  const resp = await api.post('/v1/graphs', body)
-  return resp.data?.data
-}
-
-/**
- * 模板「使用」接口的返回。
- *
- * 后端可能直接返回 `{payload,…}`，也可能包一层 `{data:{payload,…}}` —— 调用侧
- * （`WorkflowView.useWorkflowTemplate`）两种都兼容，这里把两种形状都声明出来。
- */
-export interface TemplateUseResult {
-  name?: string
-  payload?: { nodes?: unknown[]; edges?: unknown[] }
-  data?: TemplateUseResult
-}
-
-export async function useTemplate(id: string): Promise<TemplateUseResult> {
-  const resp = await api.post(`/v1/templates/${id}/use`)
-  return resp.data
-}
-
-/** 引擎当前可用的工具（含插件 / MCP 注入的代理工具），带完整 parameters schema */
 export async function listTools(): Promise<ToolInfo[]> {
   const resp = await api.get('/v1/tools')
   return toToolList(resp.data)

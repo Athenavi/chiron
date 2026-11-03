@@ -21,7 +21,7 @@ from typing import Any, Literal
 # ── L1: 会话元数据 ─────────────────────────────────────────────────────
 
 #: 会话入口渠道。L1 ``SessionMeta`` 与 L2 记忆写入共用同一取值集合。
-EntryChannel = Literal["web", "api", "quick_execute", "workflow"]
+EntryChannel = Literal["web", "api", "quick_execute"]
 
 
 @dataclass
@@ -76,7 +76,7 @@ class Scope:
     """记忆查询范围（tenant + user + session + project）。
 
     C3：`project` 是**可空字符串**（空 = 未分组）。同一用户的不同项目**互不可见** ——
-    它参与 L2 条目的检索过滤与去重键（见迁移 `0005_memory_project`）。L3 摘要仍按会话组织，
+    它参与 L2 条目的检索过滤与去重键。L3 摘要仍按会话组织，
     不受 project 影响。
     """
 
@@ -183,7 +183,7 @@ class MemoryEntry:
     created_at: Any = None
     updated_at: Any = None
     #: C3：项目维（用户显式命名；空串 = **未分组**）。同一用户的不同项目**互不可见** —— 它是
-    #: 检索与去重键的一部分（见迁移 `0005_memory_project` 的唯一约束）。
+    #: 检索与去重键的一部分（见唯一约束）。
     project: str = ""
 
     def to_dict(self) -> dict[str, Any]:
@@ -296,7 +296,7 @@ class SummaryEntry:
     status: str = "active"
     created_at: float = 0.0
     embedding: list[float] | None = None
-    #: 这一条向量属于哪个口径（迁移 0020）。语义比较只在同口径之间进行：跨模型的余弦
+    #: 这一条向量属于哪个口径。语义比较只在同口径之间进行：跨模型的余弦
     #: 照样落在 0~1，但那个数不对应任何语义，够到 0.95 就会把无关的两条标成近重复。
     #: None = 口径未知（本改造之前写的行），按原样继续参与比较。
     embedding_model: str | None = None

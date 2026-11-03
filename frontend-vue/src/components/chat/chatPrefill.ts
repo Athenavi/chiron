@@ -18,7 +18,7 @@ export interface ChatPrefill {
   title: string
   /** 结果正文 */
   text: string
-  /** 来源页面标识，仅用于提示语（chat / agent / workflow / capability） */
+  /** 来源页面标识，仅用于提示语（chat / agent / capability） */
   source?: string
   /**
    * 投递意图。缺省 ``result``：把上一轮产出的内容带回来继续讨论。

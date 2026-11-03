@@ -18,7 +18,7 @@ import {
   listMarket, installMarket, setAgentVisibility,
 } from '../api'
 import type { Agent, AgentSession, MarketItem, WorkbenchResource } from '../api'
-import { listKnowledgeBases, listPlugins, listSkillResources, listWorkflows } from '../api'
+import { listKnowledgeBases, listPlugins, listSkillResources } from '../api'
 import PageSkeleton from '../components/common/PageSkeleton.vue'
 import EmptyState from '../components/common/EmptyState.vue'
 import SkillMarketCard from '../components/SkillMarketCard.vue'
@@ -175,37 +175,33 @@ const form = ref<EditorState>({
   temperature: 0.6, max_turns: 5, timeout_seconds: 120, enabled: true,
 })
 
-// ── 工作台绑定：Agent 自带的知识库 / 技能 / 插件 / 工作流（派发时由引擎消费）──
+// ── 工作台绑定：Agent 自带的知识库 / 技能 / 插件（派发时由引擎消费）──
 // 单独用 ref 而不塞进 EditorState：它们只在编辑器里维护，不该影响既有字段与校验。
 const formKbId = ref<string | undefined>(undefined)
 const formSkills = ref<string[]>([])
 const formPlugins = ref<string[]>([])
-const formWorkflows = ref<string[]>([])
 const kbOptions = ref<WorkbenchResource[]>([])
 const skillOptions = ref<WorkbenchResource[]>([])
 const pluginOptions = ref<WorkbenchResource[]>([])
-const workflowOptions = ref<WorkbenchResource[]>([])
 const bindingLoading = ref(false)
 
 async function loadBindingOptions() {
   if (
     bindingLoading.value
     || (kbOptions.value.length && skillOptions.value.length
-      && pluginOptions.value.length && workflowOptions.value.length)
+      && pluginOptions.value.length)
   ) return
   bindingLoading.value = true
   try {
-    // 四个接口互不依赖：任一失败只让那一类为空，不拖垮编辑器
-    const [bases, skills, plugins, workflows] = await Promise.all([
+    // 三个接口互不依赖：任一失败只让那一类为空，不拖垮编辑器
+    const [bases, skills, plugins] = await Promise.all([
       listKnowledgeBases().catch(() => [] as WorkbenchResource[]),
       listSkillResources().catch(() => [] as WorkbenchResource[]),
       listPlugins().catch(() => [] as WorkbenchResource[]),
-      listWorkflows().catch(() => [] as WorkbenchResource[]),
     ])
     kbOptions.value = bases
     skillOptions.value = skills
     pluginOptions.value = plugins
-    workflowOptions.value = workflows
   } finally {
     bindingLoading.value = false
   }
@@ -215,7 +211,6 @@ function resetBinding() {
   formKbId.value = undefined
   formSkills.value = []
   formPlugins.value = []
-  formWorkflows.value = []
 }
 
 function openCreate() {
@@ -247,14 +242,9 @@ function openEdit(a: Agent) {
     enabled: a.enabled,
   }
   // 回填工作台绑定（后端未升级时字段为 undefined，视为未绑定）
-  //
-  // ⚠️ workflows 必须一起回填：saveEditor 提交的是全量绑定字段，漏回填就等于提交
-  // `workflows: []`，而 Go 侧 UPDATE 对空数组不判空（`len(body.Workflows) > 0` 在
-  // `[]` 上为真）—— 编辑一次 Agent 就会把它已装配的工作流清空。
   formKbId.value = a.kb_id || undefined
   formSkills.value = Array.isArray(a.skills) ? [...a.skills] : []
   formPlugins.value = Array.isArray(a.plugins) ? [...a.plugins] : []
-  formWorkflows.value = Array.isArray(a.workflows) ? [...a.workflows] : []
   void loadBindingOptions()
   editorOpen.value = true
 }
@@ -283,11 +273,10 @@ async function saveEditor() {
     max_turns: f.max_turns,
     timeout_seconds: f.timeout_seconds,
     enabled: f.enabled,
-    // 工作台绑定：Agent 自带的知识库 / 技能 / 插件 / 工作流
+    // 工作台绑定：Agent 自带的知识库 / 技能 / 插件
     kb_id: formKbId.value || '',
     skills: formSkills.value,
     plugins: formPlugins.value,
-    workflows: formWorkflows.value,
   }
   editorSaving.value = true
   try {
@@ -399,13 +388,13 @@ function openRun(a: Agent) {
 async function submitRun() {
   if (!runTarget.value) return
   const task = runTask.value.trim()
-  if (!task) { message.warning(t('workflow.please_enter_a_task')); return }
+  if (!task) { message.warning(t('task.please_enter_a_task')); return }
   runSubmitting.value = true
   try {
     const s = await runAgent(runTarget.value.id, task)
     runSession.value = s
     sessions.value.unshift(s)
-    message.success(t('workflow.task_dispatched_executing'))
+    message.success(t('task.task_dispatched_executing'))
     startPolling(s.id)
   } catch (e) {
     message.error(t('errors.dispatch_failed_error', { error: errorDetail(e, '') }))
@@ -563,7 +552,7 @@ function toolCount(a: Agent): number {
           size="page"
           :icon="markRaw(RobotOutlined)"
           :description="$t('agent.no_agents_yet')"
-          :hint="$t('workflow.click_new_agent_at_the_top_right_to_define_its_prompt_and_tools_then_start_dispatching_tasks')"
+          :hint="$t('task.click_new_agent_at_the_top_right_to_define_its_prompt_and_tools_then_start_dispatching_tasks')"
         >
           <Button
             type="primary"
@@ -756,7 +745,7 @@ function toolCount(a: Agent): number {
           size="page"
           :icon="markRaw(HistoryOutlined)"
           :description="$t('common.no_run_history_yet')"
-          :hint="$t('workflow.after_dispatching_a_task_from_my_agents_run_results_appear_here')"
+          :hint="$t('task.after_dispatching_a_task_from_my_agents_run_results_appear_here')"
         />
         <div
           v-else
@@ -949,21 +938,6 @@ function toolCount(a: Agent): number {
             class="binding-select"
           />
         </div>
-        <div class="form-row">
-          <label class="form-label">{{ $t('workflow.workflow') }}</label>
-          <!-- value 用 id 而非 name：agents.workflows 存的是工作流 id（引擎按 id 载图） -->
-          <Select
-            v-model:value="formWorkflows"
-            mode="multiple"
-            :options="workflowOptions.map(w => ({ value: w.id, label: w.name }))"
-            :loading="bindingLoading"
-            :placeholder="$t('billing.execute_in_order_when_dispatching_blank_no_binding')"
-            allow-clear
-            show-search
-            option-filter-prop="label"
-            class="binding-select"
-          />
-        </div>
       </div>
     </Modal>
 
@@ -979,7 +953,7 @@ function toolCount(a: Agent): number {
       <Input.TextArea
         v-model:value="runTask"
         :rows="3"
-        :placeholder="$t('workflow.describe_the_task_to_complete')"
+        :placeholder="$t('task.describe_the_task_to_complete')"
         :disabled="!!runSession && runSession.status === 'running'"
       />
       <div class="run-actions">
@@ -992,7 +966,7 @@ function toolCount(a: Agent): number {
           <template #icon>
             <PlayCircleOutlined />
           </template>
-          {{ $t('workflow.dispatch_task') }}
+          {{ $t('task.dispatch_task') }}
         </Button>
       </div>
 
@@ -1004,7 +978,7 @@ function toolCount(a: Agent): number {
           v-if="runSession.status === 'running' || runSession.status === 'pending'"
           type="info"
           show-icon
-          :message="runSession.status === 'pending' ? $t('workflow.task_queued') : $t('agent.agent_is_running_llm_reasoning_tool_calls')"
+          :message="runSession.status === 'pending' ? $t('task.task_queued') : $t('agent.agent_is_running_llm_reasoning_tool_calls')"
         />
         <Alert
           v-else-if="runSession.status === 'failed'"
@@ -1078,7 +1052,7 @@ function toolCount(a: Agent): number {
         />
         <div class="result-block">
           <div class="result-label">
-            {{ $t('workflow.task_2') }}
+            {{ $t('task.task_2') }}
           </div>
           <pre class="result-output">{{ detailSession.task }}</pre>
         </div>

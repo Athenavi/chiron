@@ -232,7 +232,7 @@ func (s *PGStore) UserLocale(ctx context.Context, userID string) (string, error)
 //
 // PG 的 DELETE 不支持直接写 LIMIT，所以用「子查询选出本批 id → 按 id 删」两步
 // 合在一条语句里。子查询按 created_at 排序并 LIMIT，能直接用上
-// `idx_notifications_created`（0012 迁移专门为它建的）。
+// `idx_notifications_created`（权威基线专门为它建的）。
 //
 // 每批是一个独立语句（各自独立的隐式事务），不是把整轮清理包在一个长事务里：
 // 后者会长时间持有大量行锁，把并发的支付回调 / 配额变更写入堵在后面。

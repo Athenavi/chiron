@@ -64,6 +64,7 @@ async def enqueue_followup(
     profile: str = "",
     depth: int = 0,
     cascade: bool = False,
+    kind: str = "subagent",
 ) -> bool:
     """投递一次「唤起父会话新一轮」的信号，返回是否真的投递了。
 
@@ -71,6 +72,8 @@ async def enqueue_followup(
         run_id: 子 Agent run（同时用作幂等键 —— 必须是稳定 id，不能用时间戳）。
         session_id: **父**会话 id：新一轮就开在这个会话上。
         cascade: 该 run 是否由 followup 唤起的那一轮派生（True 则不再触发，防递归）。
+        kind: 唤起的原因，决定网关侧的注入文案 —— `subagent` = 子 Agent 结束，
+            `job` = 后台命令结束。两者共用闸门与限流，只有"怎么解释这件事"不同。
     """
     if not run_id or not session_id:
         return False
@@ -103,8 +106,10 @@ async def enqueue_followup(
             logger.debug("subagent followup 已投递过: run=%s", run_id)
             return False
 
-        # ② 速率：每会话每小时上限（超限保留幂等位，避免同一 run 反复尝试）
-        rate_key = rkey(f"agent_followup:rate:{session_id}")
+        # ② 速率：每会话每小时上限（超限保留幂等位，避免同一 run 反复尝试）。
+        # kind 进键：后台命令回投与子 Agent 回投各算各的额度 —— 否则用户没开 job 回投时，
+        # 每次命令结束都白耗一次子 Agent 的额度，把正常的子 Agent 唤起挤掉。
+        rate_key = rkey(f"agent_followup:rate:{kind}:{session_id}")
         count = await redis.incr(rate_key)
         if count == 1:
             await redis.expire(rate_key, _RATE_WINDOW)
@@ -136,6 +141,7 @@ async def enqueue_followup(
         "profile": profile,
         "depth": int(depth or 0),
         "summary": (summary or "")[:2000],
+        "kind": kind,
     }
     try:
         from app.queue.producer import QueueProducer

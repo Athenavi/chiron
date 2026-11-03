@@ -879,7 +879,7 @@ func (h *AdminHandler) BatchUpdateModels(w http.ResponseWriter, r *http.Request)
 		BadRequest(w, err.Error())
 		return
 	}
-	// 参数写成 `$2::text[]`：`llm_models.id` 是 `character varying(36)`（见 0001 基线建表），
+	// 参数写成 `$2::text[]`：`llm_models.id` 是 `character varying(36)`（见权威基线），
 	// **不是** uuid 类型。真库用例 TestLiveBatchUpdateModels 在最初写成
 	// `unnest($2::text[])::uuid` 时直接报 `operator does not exist: character varying = uuid`。
 	// id 里存的就是 UUID 字符串，按文本数组比较即可，且 `= ANY(...)` 仍走主键索引。
@@ -919,8 +919,8 @@ const cronListQuery = `SELECT id::text, name, schedule, task, enabled, last_run_
 
 // cronInsertQuery 创建定时任务。
 //
-// `tenant_id` 是 NOT NULL（0001_authoritative_baseline.py:151），必须显式写入；
-// 此前漏了这一列，建任务接口在真实库上必然 500。
+// `tenant_id` 是 NOT NULL（见 `0001_authoritative_baseline` 的 cron_jobs 建表），
+// 必须显式写入；此前漏了这一列，建任务接口在真实库上必然 500。
 const cronInsertQuery = `INSERT INTO cron_jobs (id, name, schedule, task, enabled, webhook_token, tenant_id, user_id)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`
 
@@ -1020,7 +1020,7 @@ func (h *AdminHandler) CreateCronJob(w http.ResponseWriter, r *http.Request) {
 	jobID, _ := id.UUID()
 	token, _ := id.UUID()
 	// tenant_id 必须显式写入：DDL 是 `tenant_id smallint NOT NULL`
-	// （migrations/versions/0001_authoritative_baseline.py:151），此前 INSERT 漏了
+	// （见 `0001_authoritative_baseline` 的 cron_jobs 建表），此前 INSERT 漏了
 	// 这一列 ⇒ 建任务接口在真实库上必然 500；即便补了 DEFAULT 也会落到默认租户，
 	// 让 A 租户的 job 出现在 B 租户的列表里。
 	if _, err := db.GlobalDBManager.Exec(r.Context(), cronInsertQuery,

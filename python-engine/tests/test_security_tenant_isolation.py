@@ -113,7 +113,7 @@ class TestTenantIsolationTraceWriter:
 
         await record_span(
             trace_id="conv_test",
-            span_name="workflow_node",
+            span_name="llm_call",
             duration_ms=500,
             metadata={"node_id": "llm_1"},
             tenant_id="secure_tenant",

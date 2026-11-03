@@ -291,7 +291,7 @@ func (m *Manager) FinishTurn(ctx context.Context, turnID, status, errMsg, model 
 
 // SaveToolCall persists a tool call record (S 修复：工具调用过程落库，刷新后显示一致).
 //
-// 显式写 `is_error = false` 而不是留给列默认值：`tool_calls.is_error` 在 0001 baseline
+// 显式写 `is_error = false` 而不是留给列默认值：`tool_calls.is_error` 在权威基线
 // 里是**可空且无默认值**，省略它就写进 NULL。而列表查询要把这一列扫进 Go 的 `bool`，
 // pgx 遇 NULL 直接报错 ⇒ 一条 NULL 记录让**整页**工具调用查询失败 ⇒ 刷新后工具卡片
 // **全部消失**（2026-11-03 生产故障，症状酷似"没落库"，实际数据完好）。
@@ -378,11 +378,11 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 	if m.pool == nil || limit <= 0 {
 		return page, nil
 	}
-	// total/truncated 都在库里算：output_bytes 已在迁移 0015 回填，
+	// total/truncated 都在库里算：output_bytes 由权威基线定义，
 	// 未回填的存量行由 COALESCE 兜底成真实字节数。
 	//
 	// ⚠ 这里每一个**可空列**都必须 COALESCE 兜底，不能直接 Scan 到 Go 值类型。
-	// 真实故障（2026-11-03 生产）：`tool_calls.is_error` 在 0001 baseline 里是
+	// 真实故障（2026-11-03 生产）：`tool_calls.is_error` 在权威基线里是
 	// `is_error boolean`（可空且无默认值），而 `SaveToolCall` 的 INSERT 不写这一列 ⇒
 	// 凡是没有经过 `UpdateToolCall` 回填的记录，`is_error` 一律是 NULL；
 	// `compaction` / `goal_incomplete` / `guardrail` 这类**系统留痕记录永远不会有
@@ -460,7 +460,7 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 // GetToolCalls returns all tool call records for a session, oldest first.
 //
 // 可空列一律 COALESCE：`is_error` / `session_id` / `tool_name` / `created_at` 在
-// 0001 baseline 里都可空，而 `SaveToolCall` 曾经不写 `is_error`（写进 NULL）。
+// 权威基线里都可空，而 `SaveToolCall` 曾经不写 `is_error`（写进 NULL）。
 // pgx 把 NULL 扫进 `bool`/`string`/`time.Time` 会直接报错，一条脏记录就让整个
 // 会话的工具调用读取失败 —— 与 GetToolCallsPage 是同一个根因，必须同修复。
 func (m *Manager) GetToolCalls(ctx context.Context, sessionID string) ([]model.ToolCall, error) {

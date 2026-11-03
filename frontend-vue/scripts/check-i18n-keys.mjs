@@ -37,8 +37,8 @@ const TARGETS = ['en-US', 'ar']
 const DOMAIN_PREFIXES = [
   // L1-4 试点 + 全量迁移后建立的域文件
   'common.', 'chat.', 'errors.', 'auth.', 'admin.',
-  // 2136 键全量迁移时新建的域（workflow/agent/knowledge/mail/memory/media/billing/settings）
-  'workflow.', 'agent.', 'knowledge.', 'mail.', 'memory.', 'media.', 'billing.', 'settings.',
+  // 2136 键全量迁移时新建的域（agent/knowledge/mail/memory/media/billing/settings/task）
+  'agent.', 'knowledge.', 'mail.', 'memory.', 'media.', 'billing.', 'settings.', 'task.',
   // 通知中心（P2-3）
   'notifications.',
 ]

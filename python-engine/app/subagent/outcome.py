@@ -38,7 +38,7 @@
 
 ## 与 A5 的关系
 
-A5 已经把 `retryable` 落进 `subagent_runs`（迁移 0006）。本模块是**它的判定来源**：runner 不再自己
+A5 已经把 `retryable` 落进 `subagent_runs`。本模块是**它的判定来源**：runner 不再自己
 判，而是调 `classify_error()` —— 这样"落库的那个值"与"调用方看到的那个值"**同源**，不会出现两套判断。
 """
 

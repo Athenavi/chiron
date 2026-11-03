@@ -1,6 +1,6 @@
 """P0 回归测试：子 Agent 的脱敏、Profile 解析、落库缓冲与工具收窄。
 
-覆盖设计文档 docs/subagent-design.md 的 P0 验收点：
+覆盖设计文档 python-engine/app/subagent/ 的 P0 验收点：
 * 敏感信息入库前被脱敏（D6 决策）；
 * Profile 解析支持 llm_config.subagent 子对象与顶层写法，脏数据回落默认值；
 * L0 step 批量写 + 脱敏计数 + 缺表降级（不阻断子 Agent）；
@@ -63,7 +63,6 @@ def _row(**overrides):
         "timeout_seconds": 90,
         "skills": ["s1"],
         "plugins": [],
-        "workflows": [],
         "kb_id": "kb1",
     }
     row.update(overrides)
@@ -210,7 +209,7 @@ def test_resolve_tools_allow_write_keeps_write_tools():
 def test_resolve_tools_default_strips_delegation_tools():
     """默认策略（max_depth=1）：子 Agent 不能再委派 —— 无 Profile 时同样生效。
 
-    这是相对旧版（可递归 3 层）的**有意行为变更**，见 docs/subagent-design.md §6；
+    这是相对旧版（可递归 3 层）的**有意行为变更**，见 python-engine/app/subagent/；
     需要放开时在 Profile 的 llm_config.subagent.max_depth 显式调大。
     """
     import app.tools.core  # noqa: F401

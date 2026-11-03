@@ -11,7 +11,7 @@
 
     越界 ⇔ cap > 0 且 charged >= cap（轴名 ``line_tokens``）；或 ``paused``（轴名 ``line_paused``）
 
-**为什么 ``settled`` 不抄进表里**：那张表（迁移 0022）只存控制态（cap / paused）。累计一旦
+**为什么 ``settled`` 不抄进表里**：那张表（权威基线）只存控制态（cap / paused）。累计一旦
 有了第二份，它就一定会和明细对不上（写 run 行与加累计是两条语句，中间崩溃、补偿、人工修数据
 都能把它们岔开）—— 预算账上最坏的一类静默。Redis 里的那个键只是**镜像**：缺失就从 PG 求和
 回填，TTL 60s，权威永远是求和。
@@ -146,7 +146,7 @@ SWEEP_COOLDOWN_SECONDS = 30
 #: 这一条只挡"收尾路径被跳过"时的无界增长（长时间运行的进程，每条 50B 也迟早变成显性泄漏）。
 MAX_TRACKED_HANDLES = 4096
 
-#: 线账读过的控制态行（迁移 0022）。``tenant_id`` 是**必填**过滤：闸门的调用形状是
+#: 线账读过的控制态行（权威基线）。``tenant_id`` 是**必填**过滤：闸门的调用形状是
 #: "给我一个 run id 我就能问这条线的额度"，不按租户收就是跨租户读数。
 LEDGER_SELECT_SQL = (
     "SELECT cap_tokens, paused, pause_reason FROM run_lineage_ledger "
@@ -571,8 +571,8 @@ class LineLedger:
         except Exception as exc:  # noqa: BLE001
             self._warn(
                 "ctrl",
-                "subagent 线账读控制态失败（此后不再重复告警）：请执行迁移 "
-                "0022_run_lineage_ledger: %s",
+                "subagent 线账读控制态失败（此后不再重复告警）：请执行 "
+                "alembic upgrade head: %s",
                 str(exc)[:160],
             )
             return None
@@ -913,8 +913,8 @@ class LineLedger:
         except Exception as exc:  # noqa: BLE001 — 写失败如实返回 False，由调用方报错
             self._warn(
                 "ctrlw",
-                "subagent 线账写控制态失败（此后不再重复告警）：请执行迁移 "
-                "0022_run_lineage_ledger: %s",
+                "subagent 线账写控制态失败（此后不再重复告警）：请执行 "
+                "alembic upgrade head: %s",
                 str(exc)[:160],
             )
             return False

@@ -25,8 +25,7 @@ interface Feature {
 // 图标组件需 markRaw：避免被 Vue 响应式代理（图标是静态组件，代理会破坏渲染）
 const features: Feature[] = [
   { title: t('chat.chat'), en: 'CHAT', desc: t('agent.normal_minimal_ptc_creative_modes_tool_calls_are_fully_visualized'), path: '/chat', icon: markRaw(MessageOutlined) },
-  { title: 'Agent', en: 'AGENTS', desc: t('workflow.multi_agent_collaboration_task_dispatch_and_result_tracking'), path: '/agents', icon: markRaw(UserOutlined) },
-  { title: t('workflow.workflow'), en: 'WORKFLOW', desc: t('workflow.visually_orchestrate_multi_step_tasks_with_freely_connected_nodes'), path: '/workflow', icon: markRaw(ApartmentOutlined) },
+  { title: 'Agent', en: 'AGENTS', desc: t('agent.multi_agent_collaboration_task_dispatch_and_result_tracking'), path: '/agents', icon: markRaw(UserOutlined) },
   { title: t('agent.skill'), en: 'SKILLS', desc: t('agent.pluggable_skill_marketplace_load_and_unload_on_demand'), path: '/skills', icon: markRaw(BlockOutlined) },
   { title: t('knowledge.knowledge_base'), en: 'KNOWLEDGE', desc: t('agent.document_ingestion_and_vector_retrieval_give_agents_a_solid_basis'), path: '/knowledge', icon: markRaw(BookOutlined) },
   { title: t('common.plugin'), en: 'PLUGINS', desc: t('agent.mcp_service_config_extends_the_agent_s_capability_boundary'), path: '/plugins', icon: markRaw(ThunderboltOutlined) },
@@ -152,7 +151,7 @@ function scrollToTop() {
           <br>{{ $t('common.in_real_scenarios') }}
         </h1>
         <p class="hero-sub">
-          {{ $t('workflow.chat_agent_workflow_skill_knowledge_base_and_plugins_unified_full_stack_capabilities_combine_freely') }}
+          {{ $t('common.chat_agent_skill_knowledge_base_and_plugins_unified_full_stack_capabilities_combine_freely') }}
           <br class="hero-br">{{ $t('common.traceable_visible_process_your_local_intelligent_workspace') }}
         </p>
         <div class="hero-actions">
@@ -243,7 +242,7 @@ function scrollToTop() {
           <div class="window-body chat-preview">
             <div class="pv-msg assistant">
               <div class="pv-bubble">
-                {{ $t('workflow.i_will_help_you_analyze_this_data_first_let_me_break_the_requirements_into_a_few_steps') }}
+                {{ $t('common.i_will_help_you_analyze_this_data_first_let_me_break_the_requirements_into_a_few_steps') }}
               </div>
             </div>
             <div class="pv-msg user">

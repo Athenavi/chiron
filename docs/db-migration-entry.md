@@ -6,7 +6,6 @@
 
 | 入口 | 行为 | 结论 |
 |---|---|---|
-| `chiron-cli db status`（Go） | 只读，读 `alembic_version` | **保留** |
 | 网关启动校验 `internal/db/schema_version.go` | 只读校验（`ParseMigrationHead` / `CheckSchemaVersion`），不写 schema | **保留** |
 | `scripts/cli/commands/migrate.py` | 只读 `history`；失败非 0 退出 | **保留（只读）** |
 | `scripts/init.py` 第 6 步 | 部署向导代跑 `python -m alembic -c alembic.ini upgrade head` | **保留** |
@@ -39,4 +38,4 @@ alembic stamp head
 ```
 
 需要 `python` + `pip install -r requirements-migrate.txt`，并在仓库根目录执行（`alembic.ini` 在此）。
-查看当前 revision：`chiron-cli db status`（只读）。
+查看当前 revision：`alembic current`。

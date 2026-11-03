@@ -10,32 +10,30 @@ import { buildAccountMenuItems, accountMenuRoute } from '../accountMenu'
  * 各写一份，聊天页那份缺 `api-keys` 与**通知入口**，而聊天页隐藏了顶栏 ——
  * 聊天中的用户完全点不到通知中心。所以这里钉三件事：
  *
- *  1. **云端模式必须有 notifications**（顶栏与聊天侧栏都得有）；
- *  2. **本地模式只藏登出**（账户是本地网关为本机免口令铸的真实 owner，
- *     通知与用户级 API Key 都存在同一个库里；而 logout 在本地会立刻重建同一个会话）；
- *  3. 每个 label 在三种语言下都**真的翻译过**（缺键时 vue-i18n 会原样返回键名，
+ *  1. **必须有 notifications**（顶栏与聊天侧栏都得有）；
+ *  2. 每个 label 在三种语言下都**真的翻译过**（缺键时 vue-i18n 会原样返回键名，
  *     界面上直接显示 `notifications.title`）—— 用真实 i18n 实例而不是 stub t。
  */
 
 afterEach(() => setLocale(DEFAULT_LOCALE))
 
 const t = (key: string) => i18n.global.t(key) as string
-const keysOf = (isLocal: boolean, includeApiKeys?: boolean) =>
-  buildAccountMenuItems(t, { isLocal, includeApiKeys }).map((i) => i.key)
+const keysOf = (includeApiKeys?: boolean) =>
+  buildAccountMenuItems(t, { includeApiKeys }).map((i) => i.key)
 
-describe('buildAccountMenuItems · 云端模式', () => {
+describe('buildAccountMenuItems', () => {
   it('含通知中心（T3 的核心）', () => {
-    expect(keysOf(false)).toContain('notifications')
+    expect(keysOf()).toContain('notifications')
   })
 
   it('顶栏菜单含 api-keys，聊天页菜单不含（显式参数差异，非漂移）', () => {
-    expect(keysOf(false, true)).toContain('api-keys')
-    expect(keysOf(false, false)).not.toContain('api-keys')
+    expect(keysOf(true)).toContain('api-keys')
+    expect(keysOf(false)).not.toContain('api-keys')
   })
 
   it('两项都保留 settings / profile / logout', () => {
     for (const includeApiKeys of [true, false]) {
-      const keys = keysOf(false, includeApiKeys)
+      const keys = keysOf(includeApiKeys)
       expect(keys).toContain('settings')
       expect(keys).toContain('profile')
       expect(keys).toContain('logout')
@@ -43,31 +41,9 @@ describe('buildAccountMenuItems · 云端模式', () => {
   })
 
   it('图标是渲染函数（ant-design-vue Menu 的 item 契约）', () => {
-    for (const item of buildAccountMenuItems(t, { isLocal: false })) {
+    for (const item of buildAccountMenuItems(t, {})) {
       expect(typeof item.icon).toBe('function')
     }
-  })
-})
-
-describe('buildAccountMenuItems · 本地模式', () => {
-  it('仍展示通知与 api-keys：本地后端就是同一个网关，账户是它为本机铸的真实 owner', () => {
-    const keys = keysOf(true)
-    expect(keys).toContain('notifications')
-    expect(keys).toContain('api-keys')
-  })
-
-  it('不展示登出：stores/auth.ts::logout 在本地会立刻重建同一个会话，按钮是空操作', () => {
-    expect(keysOf(true)).not.toContain('logout')
-  })
-
-  it('仍保留 settings / profile（本地也有界面偏好与个人信息）', () => {
-    const keys = keysOf(true)
-    expect(keys).toContain('settings')
-    expect(keys).toContain('profile')
-  })
-
-  it('includeApiKeys=false 时本地也不展示 api-keys（页面差异与模式无关）', () => {
-    expect(keysOf(true, false)).not.toContain('api-keys')
   })
 })
 
@@ -77,7 +53,7 @@ describe('label 三语齐备（缺键会原样返回键名）', () => {
   it('账号菜单每一项在三种语言下都有译文', () => {
     for (const loc of locales) {
       setLocale(loc, { persist: false })
-      for (const item of buildAccountMenuItems(t, { isLocal: false, includeApiKeys: true })) {
+      for (const item of buildAccountMenuItems(t, { includeApiKeys: true })) {
         // 缺键时 vue-i18n 返回的就是 key 本身（形如 `notifications.title`）。
         expect(item.label, `${loc} 下 ${item.key} 的 label 未翻译`).not.toContain('.')
         expect(item.label.length).toBeGreaterThan(0)
@@ -88,7 +64,7 @@ describe('label 三语齐备（缺键会原样返回键名）', () => {
   it('通知中心的三语文案互不相同（说明真的切换了语言）', () => {
     const labels = locales.map((loc) => {
       setLocale(loc, { persist: false })
-      const item = buildAccountMenuItems(t, { isLocal: false }).find((i) => i.key === 'notifications')
+      const item = buildAccountMenuItems(t, {}).find((i) => i.key === 'notifications')
       return item?.label ?? ''
     })
     expect(new Set(labels).size).toBe(locales.length)

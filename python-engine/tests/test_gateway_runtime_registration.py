@@ -1,9 +1,9 @@
 """M52b：provider 注册表在**运行期**可增长 —— 配完 key 不必重启引擎。
 
-真机现象（打包桌面态）：/chat 发消息永远停在「思考中」。根因是注册表在 lifespan 里
-一次成型，而桌面壳**先起引擎、再起网关**（`local-stack.cjs`）：网关把 PG 里的密钥镜像进
+真机现象：/chat 发消息永远停在「思考中」。根因是注册表在 lifespan 里
+一次成型，而引擎可能**先于网关**就绪：网关把 PG 里的密钥镜像进
 Redis keyset 时，引擎的 `_providers` 已经冻结成空表，于是每条消息都走
-`no LLM provider available` —— 旧文案还让人去查 `.env`，而桌面态根本没有 `.env`。
+`no LLM provider available` —— 旧文案还让人去查 `.env`，而打包态根本没有 `.env`。
 
 这里钉四件事：
 ① `register_provider` 是三张运行期表（chat 熔断 / embed 熔断 / 延迟）+ 目录的**唯一**入口，

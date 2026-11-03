@@ -190,9 +190,9 @@ class _RowDict(dict[str, Any]):
 # 引擎启动时必须存在的表（只读校验用）。DDL 的唯一权威是 Alembic：
 # migrations/versions/0001_authoritative_baseline.py。
 #
-# 注意：本清单**不得**再列入已不存在的历史表名。曾经的 `conversations` / `workflows`
-# 早已被 `conversation_shares` / `workflow_graphs` / `workflow_instances` 取代，但清单
-# 没跟着改，导致下面这个校验恒为 False、每次启动都误报"缺少 N 张表"。
+# 注意：本清单**不得**再列入已不存在的历史表名。曾经的 `conversations`
+# 早已被 `conversation_shares` 取代，但清单没跟着改，导致下面这个校验恒为
+# False、每次启动都误报"缺少 N 张表"。
 REQUIRED_TABLES = [
     "users",
     "sessions",
@@ -202,7 +202,6 @@ REQUIRED_TABLES = [
     "knowledge_documents",
     "media_assets",
     "uploads",
-    "workflow_instances",
     "cron_jobs",
     "audit_logs",
     "billing_records",

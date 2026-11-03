@@ -76,7 +76,6 @@ export default {
   upload_failed_name_reason: "上传失败: {name} — {reason}",
   upload_failed_name_init_failed: "上传失败: {name} — 初始化失败",
   save_failed_error: "保存失败: {error}",
-  failed_to_save_workflow_error: "保存工作流失败: {error}",
   share_does_not_exist_or_has_expired: "分享不存在或已失效",
   fork_failed: "分叉失败",
   failed_to_create_agent_error: "创建 Agent 失败: {error}",
@@ -172,7 +171,6 @@ export default {
   failed_to_fetch_backup_list: "获取备份列表失败",
   failed_to_fetch_plugin_list: "获取插件列表失败",
   failed_to_fetch_queue_data: "获取队列数据失败",
-  failed_to_fetch_workflow_templates: "获取工作流模板失败",
   failed_to_fetch_cache_data: "获取缓存数据失败",
   failed_to_fetch_skill_list_please_check_your_network_connection: "获取技能列表失败，请检查网络连接",
   failed_to_fetch_skill_marketplace: "获取技能市场失败",
@@ -297,10 +295,4 @@ export default {
   notion_style_high_information_density_clear_layout: "Notion 风格，高信息密度，清晰排版",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "RSA2 密钥对：应用私钥与支付宝公钥均为 PEM 格式；留空则回退到环境变量 ALIPAY_*。",
   ssl_renewal_failed: "SSL 续期失败",
-  // 本地模式专用：本地后端（desktop-local）尚未实现的端点（501）
-  local_mode_feature_unavailable: "本地模式暂不支持该功能（本地服务还没实现这个接口）",
-  // 本地模式专用：本地服务未就绪（503）。必须与云端限流的"服务繁忙"区分开 ——
-  // 后者是"请求太多"，前者是"本地组件还没起来"，成因与处置完全不同。
-  // 具体原因由 error.response.data.detail 带出（见 src/api/index.ts 拦截器）。
-  local_service_not_ready: "本地服务还没准备好，暂时无法完成这个操作。稍等片刻再试；若一直失败，请重启应用。",
 }

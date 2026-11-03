@@ -4,7 +4,7 @@
  * 数据源分层：Redis（运行期，TTL 1h）优先 → PostgreSQL（权威）回落；
  * 响应里的 `source` 字段标明本次数据来自哪一层 —— 排查"看不到进度"时先看它。
  *
- * 后端契约见 docs/subagent-design.md §4.2 / §4.4。
+ * 后端契约见 `python-engine/app/subagent/`。
  */
 import { api } from './index'
 

@@ -5,7 +5,7 @@ import "testing"
 // TestPlanBranch 钉住"裁剪计划"的语义 —— 这是分支功能最容易错的地方：
 // 窗口起点（复制哪几条）与状态初值（要不要等压缩）。
 //
-// 语义（docs/session-map-branch-design.md 2.3）：
+// 语义（internal/session/manager_branch.go 2.3）：
 //
 //	源会话  m1 ... m(N-K) | m(N-K+1) ... mN | m(N+1) ...
 //	        └─ 压缩区 ──┘ └─ 原文保留 ──┘ └─ 被裁掉（丢弃）─┘

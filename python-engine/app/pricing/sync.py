@@ -2,7 +2,7 @@
 
 **要解决什么**：本仓的单价是**全局**的（`BillingConfig.LLMCostPerToken/Output`，1 / 2
 credits per 1000 tokens），对所有模型一视同仁 —— 而不同模型的价格差几个数量级。成本核算、
-`cost` 轴的单价、按成本选模型都需要**按模型**的价格，这张表（`model_prices`，迁移 `0029`）存它。
+`cost` 轴的单价、按成本选模型都需要**按模型**的价格，这张表（`model_prices`）存它。
 
 **数据从哪来**：公开的价格数据集（无需认证）。多源**交叉验证**：同一个模型至少两个源给出
 **相对差 ≤ 5%** 的价格才写入；不一致 ⇒ 记分歧、**不写入**、打点。宁可没有数据，也不要一个
@@ -285,7 +285,7 @@ async def _upsert(prices: list[ModelPrice], *, sources: list[str]) -> int:
                 written += 1
     except Exception as exc:  # noqa: BLE001 — 未迁移的库只该丢这张表，不该让任务崩
         MODEL_PRICE_SYNC.labels(outcome="write_failed", source="-").inc()
-        logger.warning("model price upsert failed（请执行迁移 0029_model_prices）: %s", str(exc)[:160])
+        logger.warning("model price upsert failed（请执行 alembic upgrade head）: %s", str(exc)[:160])
         return 0
     MODEL_PRICE_SYNC.labels(outcome="written", source="-").inc(written)
     return written

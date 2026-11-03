@@ -1,6 +1,6 @@
 """子 Agent 事件旁路（EventSink）—— 把子 Agent 的进度送到父会话的 SSE 流。
 
-背景（docs/subagent-design.md §4.3）：子 Agent 在工具调用**内部**运行（``subagent`` handler），
+背景（python-engine/app/subagent/）：子 Agent 在工具调用**内部**运行（``subagent`` handler），
 它产生的 ``AgentEvent`` 默认被丢弃，前端因此看不到子 Agent 在做什么。本模块提供一条
 **有界旁路**：子事件经限流/合并写入队列，由 ``main.py`` 的事件生成器合并进父 SSE 流。
 

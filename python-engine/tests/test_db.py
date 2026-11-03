@@ -39,7 +39,7 @@ async def test_ensure_tables_true_when_all_required_present():
 async def test_required_tables_excludes_retired_names():
     """历史表名不得留在校验清单里（否则该校验恒为 False、每次启动误报缺表）。"""
     assert "conversations" not in REQUIRED_TABLES
-    assert "workflows" not in REQUIRED_TABLES
+    assert "workflow_instances" not in REQUIRED_TABLES
     # 0023_knowledge_pageindex 有意 DROP 了 knowledge_chunks（改用 PageIndex 后
     # 没有切块/向量/FTS），清单没跟着改会让本校验恒为 False。
     assert "knowledge_chunks" not in REQUIRED_TABLES

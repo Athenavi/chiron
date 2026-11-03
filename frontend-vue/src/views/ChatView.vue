@@ -3,9 +3,9 @@ import { ref, computed, reactive, shallowRef, onMounted, onUnmounted, nextTick, 
 import { Button, Input, Modal, Checkbox, Alert, Dropdown, Menu, MenuItem, MenuDivider } from 'ant-design-vue'
 import { MenuOutlined, CopyOutlined, LinkOutlined, CloseOutlined } from '@ant-design/icons-vue'
 import {
-  api, createSSEConnection, submitApproval, submitAnswer,
+  api, createSSEConnection, submitApproval, submitAnswer, steerRun,
   getChatSessionMessages, resolveMediaUrl, listModels,
-  createAgent, createGraph,
+  createAgent,
 } from '../api'
 import type { LlmModel, SSEHandle } from '../api'
 import { getSessionMetrics, getSessionRuntime, putSessionRuntime, type SessionRuntime } from '../api/sessionRuntime'
@@ -50,7 +50,6 @@ import SaveToMemoryDialog from '../components/chat/SaveToMemoryDialog.vue'
 import ShortcutsHelpModal from '../components/chat/ShortcutsHelpModal.vue'
 import { CloudUploadOutlined } from '@ant-design/icons-vue'
 import { sessionToMarkdown } from '../utils/sessionMarkdown'
-import { sessionToGraph } from '../utils/sessionGraph'
 import { sessionToAgent, agentBindingsFromContext } from '../utils/sessionAgent'
 import ChatStatusBar from '../components/chat/ChatStatusBar.vue'
 import ChatDisplaySettings from '../components/chat/ChatDisplaySettings.vue'
@@ -80,7 +79,6 @@ const toolbarMenuItems = computed(() => [
   { key: 'export', label: t('common.export_as_markdown'), icon: () => h(ExportOutlined), disabled: !items.value.length },
   { key: 'save_kb', label: t('knowledge.save_to_knowledge_base'), icon: () => h(CloudUploadOutlined), disabled: !hasSessionContent.value },
   { key: 'save_memory', label: t('common.remember_this'), icon: () => h(DatabaseOutlined), disabled: !hasSessionContent.value },
-  { key: 'save_workflow', label: t('workflow.save_as_workflow'), icon: () => h(PartitionOutlined), disabled: !hasSessionContent.value || savingWorkflow.value },
   { key: 'save_agent', label: t('agent.save_as_agent'), icon: () => h(RobotOutlined), disabled: !hasSessionContent.value || savingAgent.value },
   { type: 'divider' as const },
   { key: 'display', label: t('settings.display_settings'), icon: () => h(FontSizeOutlined) },
@@ -117,30 +115,6 @@ const sessionMarkdownForDialog = computed(() =>
     ? sessionToMarkdown(items.value, activeSession.value?.title || '')
     : '',
 )
-/** 另存为工作流：把整段对话沉淀成一个可重复执行的工作流图（单 llm 节点） */
-const savingWorkflow = ref(false)
-
-async function saveAsWorkflow() {
-  // 带上本对话挂的知识库：生成 input → knowledge → llm 链，让沉淀出的工作流
-  // 在每次运行时都先检索该知识库（见 utils/sessionGraph.ts 的说明）。
-  const graph = sessionToGraph(items.value, activeSession.value?.title || '', {
-    kbId: agentBindingsFromContext(buildContext()).kb_id,
-  })
-  if (!graph) {
-    notify.warning(t('chat.this_session_has_no_text_worth_saving'))
-    return
-  }
-  savingWorkflow.value = true
-  try {
-    const saved = await createGraph({ name: graph.name, graph_json: graph.graph_json })
-    notify.success(t('workflow.saved_as_workflow_name_open_it_on_the_workflows_page_to_adjust', { name: saved?.name || graph.name }))
-  } catch (e) {
-    notify.error(t('errors.failed_to_save_workflow_error', { error: describeApiError(e) }))
-  } finally {
-    savingWorkflow.value = false
-  }
-}
-
 /**
  * 存为 Agent：把会话正文沉淀成 Agent 的人格（system_prompt）。
  *
@@ -233,7 +207,6 @@ function onToolbarMenu(info: { key: string | number }) {
   if (info.key === 'export') exportMarkdown()
   else if (info.key === 'save_kb') saveToKbOpen.value = true
   else if (info.key === 'save_memory') saveToMemoryOpen.value = true
-  else if (info.key === 'save_workflow') void saveAsWorkflow()
   else if (info.key === 'save_agent') openSaveAsAgent()
   else if (info.key === 'display') displaySettingsOpen.value = true
   else if (info.key === 'theme') themeStore.toggleTheme()
@@ -982,7 +955,7 @@ function persistRuntime(patch: Record<string, unknown>) {
  * —— 只改 chips 不写 runtime，刷新后引用就会从界面上消失（这正是我们修过的那类问题）。
  */
 const MENTION_CHIP_LABEL = computed<Record<string, string>>(() => ({
-  kb: t('knowledge.knowledge_base'), agent: 'Agent', skill: t('agent.skill'), workflow: t('workflow.workflow'), plugin: t('common.plugin'),
+  kb: t('knowledge.knowledge_base'), agent: 'Agent', skill: t('agent.skill'), plugin: t('common.plugin'),
 }))
 
 function onMentionAdd(p: { type: string; id: string; name: string }) {
@@ -1030,9 +1003,9 @@ function onModeChange(m: string) {
 // 路由 query 约定（由 WorkstationNav / 各工作台入口发起）：
 //   ?task=<sessionId>          统一会话（拉历史 + 继续追问）
 //   ?task=&error=xxx           仅错误提示
-//   ?kb=<id> / ?agent=<id> / ?skill=<name> / ?workflow=<id|name>   上下文附加
+//   ?kb=<id> / ?agent=<id> / ?skill=<name>   上下文附加
 //   同名参数可重复（?kb=a&kb=b）=> 同类可多选
-//   ?mode=<auto|agent|workflow> 创建时模式（WorkflowView 为 workflow）
+//   ?mode=<auto|agent> 创建时模式
 const contextChips = ref<ContextChip[]>([])
 const errorBanner = ref('')          // query.error 提示
 const unifiedSessionId = ref('')     // 统一任务会话 id（query.task）
@@ -1108,7 +1081,6 @@ async function initContextChips(q: Record<string, unknown>) {
   const kb = chips.find(c => c.type === 'kb')?.value || ''
   const agent = chips.find(c => c.type === 'agent')?.value || ''
   const skill = chips.find(c => c.type === 'skill')?.value || ''
-  const workflow = chips.find(c => c.type === 'workflow')?.value || ''
   contextChips.value = chips
   // ── 尽力补全展示用的名称（失败则保留 id 占位；Agent 配置本身由网关按 id 补全）──
   if (kb) {
@@ -1131,17 +1103,6 @@ async function initContextChips(q: Record<string, unknown>) {
         if (c) c.label = `Agent ${a.name}`
       }
     } catch { /* 列表取不到就保留 id 占位 */ }
-  }
-  if (workflow) {
-    try {
-      const res = await api.get('/v1/graphs')
-      const list = (Array.isArray(res.data?.data) ? res.data.data : []) as Array<{ id?: string; name?: string }>
-      const rec = list.find((x) => x.id === workflow)
-      if (rec?.name) {
-        const c = contextChips.value.find(x => x.type === 'workflow')
-        if (c) c.label = t('workflow.workflow_name', { name: rec.name })
-      }
-    } catch { /* 无列表时保留原文 */ }
   }
 }
 
@@ -1179,7 +1140,7 @@ function clearContext() {
 function clearUnifiedMessages() {
   items.value = []
   currentTraceId.value = ''
-  notify.info(t('workflow.unified_task_messages_cleared'))
+  notify.info(t('task.unified_task_messages_cleared'))
 }
 
 /** 统一任务模式：退出（移除 task/error query；路由 watcher 触发 applyRouteQuery 重置消息区） */
@@ -1372,7 +1333,7 @@ const panelView = ref<'trajectory' | 'sessions' | 'agents' | 'stats'>('trajector
 /**
  * 会话地图：**独立的整屏大窗格**（不是侧栏里的一个小视图 —— 侧栏太窄，
  * 放不下"空间化排布"这件事本身）。位置稳定性是它的立身之本，
- * 见 docs/session-map-branch-design.md。
+ * 见 internal/session/manager_branch.go。
  */
 
 /**
@@ -1462,7 +1423,7 @@ const mapStreamPreviews = computed<Record<string, string>>(() => {
 const trajectoryFocus = ref<number | null>(null)
 const trajectoryToken = ref(0)
 // 子 Agent 实时事件缓冲（有界）：SSE 里的 `subagent.*` 分流到这里，
-// 只供侧边栏观测面板消费，绝不混入主对话流（docs/subagent-design.md §4.2）。
+// 只供侧边栏观测面板消费，绝不混入主对话流（python-engine/app/subagent/）。
 //
 // ⚠️ 按**会话**存（与 items / loading 同一套）：真实存储落在 SessionRunState 上，
 // 对外仍是 `subagentLiveEvents` 这个名字 —— 用可写 computed 代理到"当前会话"的切片，
@@ -1720,7 +1681,7 @@ useKeyboardShortcuts({
 
 // ── 会话 CRUD（保留原逻辑） ──
 onMounted(async () => {
-  // 互联互通：解析 /chat query（task / error / kb / agent / skill / workflow）
+  // 互联互通：解析 /chat query（task / error / kb / agent / skill）
   await applyRouteQuery()
   await loadSessions()
   // 统一任务模式不自动切换普通会话；其余保持原有行为
@@ -1938,7 +1899,7 @@ async function onMapSwitchSession(sessionId: string) {
 }
 
 async function switchSession(id: string) {
-  // 互联互通：从统一任务模式切到普通会话时，移除 task/error（保留 kb/agent/skill/workflow 上下文）
+  // 互联互通：从统一任务模式切到普通会话时，移除 task/error（保留 kb/agent/skill 上下文）
   if (unifiedMode.value && unifiedSessionId.value) {
     const q = { ...route.query }
     delete q.task
@@ -2352,6 +2313,18 @@ function onSSEMessage(raw: unknown, sid: string) {
         genItemId,
       )
     }
+  } else if (type === 'steer') {
+    // 引擎在轮次边界消费了一条运行中指导（runtime.py 的 steer 分支）。
+    // 只落一行小字：指令正文已作为 user 消息进了会话历史，这里再贴一遍就是重复。
+    if (String(d.content ?? evt.content ?? '')) {
+      items.value.push({
+        kind: 'notice',
+        tone: 'info',
+        content: t('common.steer_applied'),
+        time: new Date().toLocaleTimeString(),
+        id: `steer:${Date.now()}`,
+      })
+    }
   } else if (type === 'compaction') {
     // 引擎的自动压缩事件（runtime.py 的 _compact_with_notice）：把"上下文悄悄变短"
     // 变成用户可见的状态栏提示（问题 4）。
@@ -2466,12 +2439,25 @@ function onSSEMessage(raw: unknown, sid: string) {
     } else {
       notify.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
     }
+  } else if (type === 'superagent.takeover_ended' && String(d.status ?? '') === 'budget_exhausted') {
+    // 预算耗尽自动停（P1-2.7 的硬闸门）：这是**系统**终止，不是用户点停。
+    // 遮罩只会突然消失，不给一行说明，用户看到的就是"接管莫名其妙没了"。
+    // 与中断留痕同一种 notice 条目，保证"被动结束"的观感一致；
+    // 之后仍走一次快照对齐，遮罩以快照为准撤下。
+    items.value.push({
+      kind: 'notice',
+      tone: 'warning',
+      content: t('agent.superagent_budget_exhausted_notice'),
+      time: new Date().toLocaleTimeString(),
+      id: `superagent-budget:${Date.now()}`,
+    })
+    void refreshTakeover(sid)
   } else if (typeof type === 'string' && type.startsWith('superagent.')) {
     // 接管态变化只触发一次快照重拉，事件本身不当数据用：
     // 快照才是权威来源，事件只负责"该对齐了"这个信号。
     void refreshTakeover(sid)
   } else if (typeof type === 'string' && type.startsWith('subagent.')) {
-    // 子 Agent 进度（docs/subagent-design.md §4.2）：只进侧边栏观测面板。
+    // 子 Agent 进度（python-engine/app/subagent/）：只进侧边栏观测面板。
     // 刻意不落主对话流 —— 子 Agent 的思考/正文是"数据"，不是会话内容。
     const event = (Object.keys(d).length ? { ...d, type } : { ...evt }) as unknown as SubagentEvent
     pushSubagentEvent(event)
@@ -2675,6 +2661,33 @@ function retryFailedMessage(itemId: string) {
   })
 }
 
+/**
+ * 运行中补充指令（P0-3）：把文本注入当前正在跑的回合，**不打断**。
+ *
+ * 三处刻意的选择：
+ * 1. **成功不插行**：引擎会在轮次边界发一条 SSE `steer` 事件，由 `onSSEMessage` 统一落
+ *    notice（正文已作为 user 消息进历史）。这里再插一条就是重复。
+ * 2. **失败把原文还回输入框**：这条通道的拒绝多是临时的 —— 429 限流、409 那一轮刚好在收尾
+ *    （`steerStatus` 把引擎的 `ok:false` 翻成了状态码）。用户多半想重试一次；
+ *    当成普通发送清空就等于让他重打一遍。
+ * 3. **失败用 notify 而不是消息流**：它说的是一次**投递**的结果，不属于对话内容。
+ */
+async function onSteer(text: string): Promise<void> {
+  const sid = activeSessionId.value
+  if (!sid || !text.trim()) return
+  try {
+    const ok = await steerRun({ session_id: sid, text: text.trim() })
+    if (!ok) {
+      chatInputRef.value?.setDraft?.(text)
+      notify.warning(t('chat.steer_failed', { error: t('errors.request_failed') }))
+    }
+  } catch (e) {
+    const reason = describeApiError(e)
+    chatInputRef.value?.setDraft?.(text)
+    notify.warning(t('chat.steer_failed', { error: reason }))
+  }
+}
+
 function stopGeneration() {
   stopTurnTimer()
   if (activeSSE) { activeSSE.close(); activeSSE = null }
@@ -2727,7 +2740,7 @@ function continueGeneration() {
             aria-hidden="true"
           />
           <div class="toolbar-center">
-            <span class="toolbar-title">{{ unifiedMode ? $t('workflow.unified_task') : (activeSession?.title || 'Chiron') }}</span>
+            <span class="toolbar-title">{{ unifiedMode ? $t('task.unified_task') : (activeSession?.title || 'Chiron') }}</span>
             <!-- 当前对话模式：前端实时状态（全局单一），随每条消息经 llm_config.mode 下发。
                  不再显示"来源"后缀 —— 模式没有服务端/会话一层可言，"是谁定的"答案永远是
                  "你当前的选择"。 -->
@@ -2915,7 +2928,7 @@ function continueGeneration() {
               class="ub-badge"
               :class="{ running: loading, done: unifiedJustFinished }"
             >
-              {{ loading ? $t('workflow.orchestrating') : unifiedJustFinished ? $t('common.done_3') : $t('workflow.unified_task') }}
+              {{ loading ? $t('task.orchestrating') : unifiedJustFinished ? $t('common.done_3') : $t('task.unified_task') }}
             </span>
             <span class="ub-mode">{{ unifiedSubmitMode || 'auto' }}</span>
             <span class="ub-spacer" />
@@ -2940,7 +2953,7 @@ function continueGeneration() {
             v-if="loading"
             class="unified-exec-hint"
           >
-            <span class="ueh-dot" />{{ $t('workflow.orchestrating_executing_subtasks') }}<template v-if="turnElapsed >= 2">
+            <span class="ueh-dot" />{{ $t('task.orchestrating_executing_subtasks') }}<template v-if="turnElapsed >= 2">
               &nbsp;·&nbsp;{{ turnElapsed }}s
             </template>
           </div>
@@ -2948,7 +2961,7 @@ function continueGeneration() {
             v-if="!items.length && !loading"
             class="unified-empty"
           >
-            {{ $t('workflow.the_unified_task_session_is_ready_just_send_a_message_to_continue_asking') }}
+            {{ $t('task.the_unified_task_session_is_ready_just_send_a_message_to_continue_asking') }}
           </div>
           <div class="unified-list">
             <template
@@ -3156,6 +3169,7 @@ function continueGeneration() {
         :context-chips="contextChips"
         @send="sendMessage"
         @stop="stopGeneration"
+        @steer="onSteer"
         @update:mode="onModeChange"
         @model-change="onModelChange"
         @command="onSlashCommand"

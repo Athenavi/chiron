@@ -62,7 +62,7 @@ def parse_vector(value: Any) -> list[float] | None:
 
     asyncpg 原生把数组解成 ``list``（二进制协议，不必解析文本），所以这里只做口径归一：
     空数组与 NULL 都是"这条没有向量"（读侧据此退回时间排序），替身给 str / tuple 也吃得下。
-    列类型选 ``float8[]`` 而不是 pgvector 的 ``vector(n)`` 的理由见迁移 0019 的头注释。
+    列类型选 ``float8[]`` 而不是 pgvector 的 ``vector(n)`` 的理由见权威基线。
     """
     if value is None:
         return None
@@ -152,7 +152,7 @@ def same_vector_space(
 def _space_key(recorded: tuple[Any, Any]) -> str:
     """把一行的口径写成 `model/dim`。
 
-    未打标签（迁移 0020 之前的行）要有能读的名字 —— 日志里出现 `None/4` 会让人以为
+    未打标签的老行要有能读的名字 —— 日志里出现 `None/4` 会让人以为
     是代码坏了，而不是"这一行没记口径"。
     """
     model, dim = recorded

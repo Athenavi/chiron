@@ -5,7 +5,7 @@
 * **真实注入通道**（:mod:`app.chaos.injector`）：ASGI 中间件从 Redis/PostgreSQL 读
   活跃实验，命中就对**引擎请求路径**施加 latency / error。这是实际生效的部分。
 * **实验的增删改查**：由 Go 网关的 ``internal/api/ent_chaos_handler.go`` 承担，
-  权威存储是 ``ent_chaos_experiments``（迁移 ``0002_ent_chaos_experiments``）。
+  权威存储是 ``ent_chaos_experiments``。
   本包只保留契约常量（:mod:`app.chaos.engine`）。
 
 支持的作用面：``engine``（本进程的请求路径）与 ``gateway``（Go 网关的请求路径）。

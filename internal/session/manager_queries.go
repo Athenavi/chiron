@@ -35,7 +35,7 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	// source 用 jsonb 取键读取：该列由权威迁移建立（migrations/versions/0001_authoritative_baseline.py），
 	// 而"列不存在"会让整个历史查询失败 —— 一个展示用字段不值得拿对话历史去赌。
 	//
-	// seq（迁移 0016）**直接引用**，不走 jsonb：它是排序键，一旦包成表达式
+	// seq（权威基线）**直接引用**，不走 jsonb：它是排序键，一旦包成表达式
 	// `(to_jsonb(messages)->>'seq')::bigint`，外层的 ORDER BY 就用不上
 	// ix_messages_session_seq，长会话分页会退化成全表排序 —— 比它要兼容的
 	// 问题（迁移没跑）更糟。迁移与代码同批发布且迁移先执行（见
@@ -177,7 +177,7 @@ type ForkPoint struct {
 //	FROM messages WHERE session_id = $1 ORDER BY created_at, id
 //
 // 这里刻意**不用** `seq`：`GetMessagesPage` 按 `ORDER BY seq DESC` 走（那是分页的正确
-// 选择，能用上 ix_messages_session_seq），但 0016 迁移自述「存量行的 seq 按物理顺序回填，
+// 选择，能用上 ix_messages_session_seq），但权威基线自述「存量行的 seq 按物理顺序回填，
 // 与 created_at 的相对顺序可能不一致」。若前端拿分页列表的下标当 `from_index`，
 // 在存量数据上会**静默错位** —— 用户以为从第 10 条分叉，实际复制的是另外 10 条。
 //

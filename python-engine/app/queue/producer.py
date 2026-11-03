@@ -33,7 +33,6 @@ DEFAULT_DEADLINE_SECONDS = {
     "kb_index": 6 * 3600,
     "memory_save": 900,
     "tool_job": 3600,
-    "workflow_run": 7200,
     # 子 Agent 完成后的「唤起父会话新一轮」信号：30 分钟内没送出去就没有意义了
     # （会话锁可能被上一个 turn 占着，靠重试退避）
     "agent_followup": 1800,
@@ -68,7 +67,7 @@ class QueueProducer:
             idempotency_key: 业务幂等键。**留空表示"只对同一条消息的重复投递幂等"**——
                 本方法每次生成新 task_id，回退键 `{task_type}:{task_id}` 因此每次不同，
                 覆盖的是重投/认领场景（消息字段原样重投）。只有"同一业务动作必须只执行
-                一次"时才传稳定键（如 tool_job 用 job_id、workflow_run 用 instance_id）。
+                一次"时才传稳定键（如 tool_job 用 job_id）。
                 注意 worker 的 claim 只拒绝 `completed`：传稳定键会让**用户再次主动发起
                 的同一操作**被跳过，因此不可用于可重复发起的动作（如"重建索引"——
                 该场景由 `_handle_kb_index` 的自身幂等负责）。

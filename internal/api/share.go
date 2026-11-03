@@ -139,13 +139,13 @@ func (h *ShareHandler) Create(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, "create share failed")
 		return
 	}
-	// user_id 列是 varchar(36)（见 0001 基线建表），直接传字符串与列类型一致。
+	// user_id 列是 varchar(36)（见权威基线），直接传字符串与列类型一致。
 	// 原写法 $3::uuid 会让 PG 走一次 I/O 转换而非类型化赋值 —— 在当前列类型下侥幸
 	// 能过，但列类型一旦变动就会静默变形。
 	// 真正致命的是 message_ids：[]string 被 pgx 编码成数组字面量写进 varchar(255)，
-	// 超过 255 字符即报 value too long（列已在迁移 0016 转为 text[]）。
+	// 超过 255 字符即报 value too long（列是 text[]）。
 	// 分享链接带 TTL（此前只有 revoked_at，链接一经生成即永久有效 —— 会话内容会一直
-	// 挂在一个 token 上）。默认 30 天，见 shareTTL；存量行的回填与列默认值见迁移 0017。
+	// 挂在一个 token 上）。默认 30 天，见 shareTTL；列默认值见权威基线。
 	_, err = db.GlobalDBManager.Exec(r.Context(),
 		`INSERT INTO conversation_shares (id, session_id, user_id, title, message_ids, created_at, expires_at)
 		 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
@@ -288,7 +288,7 @@ func (h *ShareHandler) PublicGet(w http.ResponseWriter, r *http.Request) {
 	var createdAt time.Time
 	var revokedAt *time.Time
 	// expires_at 允许为 NULL（回填前的极端历史行），但读侧一律按"已过期"处理：
-	// 免鉴权路径上的默认值必须是拒绝，见迁移 0017。
+	// 免鉴权路径上的默认值必须是拒绝，见权威基线。
 	var expiresAt *time.Time
 	err := db.GlobalDBManager.QueryRow(r.Context(),
 		`SELECT id, session_id, title, message_ids, created_at, revoked_at, expires_at
@@ -350,7 +350,7 @@ func (h *ShareHandler) PublicGet(w http.ResponseWriter, r *http.Request) {
 // activeShare returns the session's non-revoked, non-expired share, or nil.
 //
 // shareTTL 是新建分享链接的有效期。conversation_shares 早期只有 revoked_at，分享一经
-// 创建便永久有效；0013 加列、0017 回填并把列默认值也设成 30 天，读侧从此不再接受
+// 创建便永久有效；权威基线里 expires_at 默认就是 30 天，读侧从此不再接受
 // expires_at IS NULL —— 有效期缺失一律按不可用处理（fail-closed）。
 const shareTTL = 30 * 24 * time.Hour
 

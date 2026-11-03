@@ -334,7 +334,7 @@ class TestPGRowLevelFiltering:
 class TestVectorFiltering:
     """SummaryStore recall 通过 tenant_id/user_id 过滤。
 
-    两种后端都要证明：`MEMORY_VECTOR_BACKEND` 默认是 pg（迁移 0019 起向量就在
+    两种后端都要证明：`MEMORY_VECTOR_BACKEND` 默认是 pg（向量一直就在
     PG 行里），milvus 只在显式配它时才被查询 —— 隔离不能只在一个后端上测。
     """
 

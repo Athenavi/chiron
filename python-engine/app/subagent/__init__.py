@@ -5,5 +5,5 @@
 * :mod:`app.subagent.store` —— ``subagent_runs`` / ``subagent_run_steps`` 写入端
 * :mod:`app.subagent.redact` —— 入库前敏感信息扫描与脱敏
 
-设计见 ``docs/subagent-design.md``。Profile（定义层）在 ``app.agent.profile``。
+设计见 ``python-engine/app/subagent/``。Profile（定义层）在 ``app.agent.profile``。
 """

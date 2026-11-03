@@ -20,7 +20,6 @@ from typing import Any
 from app.agent.workbench_context import (
     context_ids,
     merge_by_quota,
-    selected_workflow_ids,
 )
 from app.core.context_bus import publish_result
 from app.core.task_router import TaskPriority, TaskRouter
@@ -191,7 +190,7 @@ class UnifiedChatHandler:
         user_input: str,
         tenant_id: int,
         session_id: str | None = None,
-        mode: str = "auto",  # "auto" / "agent" / "workflow"
+        mode: str = "auto",  # "auto" / "agent"
         trace_id: str = "",
         context: dict[str, Any] | None = None,
         user_id: str = "",
@@ -214,7 +213,6 @@ class UnifiedChatHandler:
                   (system_prompt / model / max_turns / name,缺省保持现有默认值)
                 - skill_names (list[str]): 透传给 TaskRouter.route_task 的 context,
                   供能力匹配阶段作提示 (不改变现有匹配逻辑)
-                - workflow_id (str): mode=workflow 时透传记录到结果 metadata
             user_id: 会话归属用户标识 (Go 网关经 ?user_id=<claims.UserID> 注入;
                 缺省以 tenant_id 兜底),持久化到 unified_sessions.user_id。
 
@@ -242,16 +240,13 @@ class UnifiedChatHandler:
                     ctx_agent = payload
                     context["agent"] = payload
                     # Agent 自带的 kb/skill/plugin 绑定提升到顶层（用户显式选择优先）。
-                    # 必须在下面解析 kb / workflow 之前做，否则绑定的知识库不生效。
+                    # 必须在下面解析 kb 之前做，否则绑定的知识库不生效。
                     apply_agent_bindings(context, payload)
 
         # 多值优先、单值回退（老客户端与手写 URL 只发单值）。读取口径见
         # app/agent/workbench_context.py —— 三条链路共用同一套，避免"在首页多选
         # 生效、在侧栏多选不生效"这类行为分歧。
         ctx_kb_ids = context_ids(context, "kb")
-        # 工作流目标走共享解析函数：SSE 链路（/v1/agent/submit）读的是同一个，
-        # 两条链路不会再各自解析出不同结果。
-        ctx_workflow_ids = selected_workflow_ids(context)
 
         # P1-d：会话运行时状态（模式/模型/provider）并入本链路 context ——
         # 前端组装的 context 不含这些字段；并入后 session.shared_context（持久化，
@@ -353,14 +348,6 @@ class UnifiedChatHandler:
                     agent_config=ctx_agent,
                     attachments=attachments,
                 )
-            elif mode == "workflow":
-                # 强制使用工作流工作台：按选择顺序执行用户自己的工作流（多选即流水线）
-                result = await self._execute_via_workflow(
-                    effective_input,
-                    tenant_id,
-                    trace_id,
-                    workflow_ids=ctx_workflow_ids,
-                )
             else:
                 # 自动模式 (默认)
                 if context:
@@ -394,22 +381,18 @@ class UnifiedChatHandler:
 
             final_output = self._extract_output(result)
 
-            # 结果元数据: 基础字段 + 上下文注入的可选字段 (kb_hits/kb_id/workflow_id/agent_name)
+            # 结果元数据: 基础字段 + 上下文注入的可选字段 (kb_hits/kb_id/agent_name)
             meta: dict[str, Any] = {
                 "task_id": result.get("task_id"),
                 "duration_ms": result.get("total_duration_ms"),
                 "subtasks": result.get("subtasks", []),
             }
-            # 多值用 kb_ids / workflow_ids 呈现；同时保留单值的首个，避免既有前端
+            # 多值用 kb_ids 呈现；同时保留单值的首个，避免既有前端
             # （metadata.kb_id 驱动的知识库引用标签）失效。
             if ctx_kb_ids:
                 meta["kb_hits"] = kb_hits
                 meta["kb_id"] = ctx_kb_ids[0]
                 meta["kb_ids"] = ctx_kb_ids
-            workflow_ids = result.get("workflow_ids") or ctx_workflow_ids
-            if workflow_ids:
-                meta["workflow_id"] = workflow_ids[0]
-                meta["workflow_ids"] = workflow_ids
             if mode == "agent":
                 meta["agent_name"] = (ctx_agent or {}).get(
                     "name"
@@ -591,129 +574,6 @@ class UnifiedChatHandler:
                 "tool_calls": agent_result.tool_calls,
             },
             "total_duration_ms": int(agent_result.duration * 1000),
-        }
-
-    async def _execute_via_workflow(
-        self,
-        user_input: str,
-        tenant_id: int,
-        trace_id: str,
-        workflow_ids: list[str] | None = None,
-    ) -> dict[str, Any]:
-        """通过工作流工作台执行
-
-        用户在对话里选中了工作流时（workbench_context 的 workflow_id / workflow_ids），
-        按选择顺序依次执行**用户自己的工作流**，前一个的输出经 initial_state 传给
-        后一个 —— 多选即流水线。
-
-        改动前这里把 workflow_id 只当记录用，实际跑的是一个与所选工作流无关的固定
-        单节点 LLM 图：用户"带着工作流进对话"，拿到的却是通用问答。没选工作流时仍走
-        那条固定图（即原有的默认行为）。
-        """
-        from app.main import get_gateway
-
-        try:
-            gateway = await get_gateway()
-        except RuntimeError:
-            return {
-                "status": "error",
-                "output": {"error": "LLM gateway not initialized"},
-            }
-
-        selected = [wid.strip() for wid in (workflow_ids or []) if wid and wid.strip()]
-        if selected:
-            graphs = await self._load_workflows(selected)
-            if graphs:
-                return await self._run_workflow_chain(
-                    graphs, user_input, trace_id, gateway
-                )
-            # 全部载不到（已删 / 越权 / DB 不可用）：降级为默认图，不阻断对话
-            logger.warning(
-                "workflow context: none of %s loaded; falling back to default graph",
-                selected,
-            )
-
-        return await self._run_default_llm_graph(
-            user_input,
-            trace_id,
-            gateway,
-            workflow_id=(selected[0] if selected else ""),
-        )
-
-    @staticmethod
-    def _final_output_of(instance: Any) -> str:
-        """取工作流的最终输出（实现见模块级 final_output_of，两条链路共用）。"""
-        return final_output_of(instance)
-
-    @staticmethod
-    async def _load_workflows(workflow_ids: list[str]) -> list[tuple[str, dict[str, Any]]]:
-        """按 id 载入工作流（实现见模块级 load_selected_workflows）。"""
-        return await load_selected_workflows(workflow_ids)
-
-    @staticmethod
-    async def _run_workflow_chain(
-        graphs: list[tuple[str, dict[str, Any]]],
-        user_input: str,
-        trace_id: str,
-        gateway: Any,
-    ) -> dict[str, Any]:
-        """顺序执行工作流链（实现见模块级 run_workflow_graphs）。"""
-        return await run_workflow_graphs(graphs, user_input, trace_id, gateway)
-
-    async def _run_default_llm_graph(
-        self,
-        user_input: str,
-        trace_id: str,
-        gateway: Any,
-        workflow_id: str = "",
-    ) -> dict[str, Any]:
-        """未选工作流时的默认路径：固定单节点 LLM 图（改动前的行为）。"""
-        from app.workflow.engine import run_workflow
-
-        # 构建简单工作流图: input → llm → output
-        graph_json = {
-            "name": f"unified_chat_{trace_id}",
-            "nodes": [
-                {"id": "input_1", "node_type": "input", "label": "用户输入"},
-                {
-                    "id": "llm_1",
-                    "node_type": "llm",
-                    "label": "LLM 处理",
-                    "config": {
-                        "system_prompt": "你是一个多功能 AI 助手,请根据用户输入给出清晰、准确的回答。",
-                        "user_message": user_input,
-                    },
-                },
-                {"id": "output_1", "node_type": "output", "label": "输出"},
-            ],
-            "edges": [
-                {"source_id": "input_1", "target_id": "llm_1"},
-                {"source_id": "llm_1", "target_id": "output_1"},
-            ],
-        }
-
-        instance = await run_workflow(
-            graph_json=graph_json,
-            gateway=gateway,
-            initial_state={"input": user_input},
-            instance_id=f"wf_{trace_id}",
-        )
-
-        if instance.status == "error":
-            raise RuntimeError(f"Workflow execution failed: {instance.error}")
-
-        return {
-            "status": "completed",
-            "output": {
-                "result": self._final_output_of(instance),
-                "workflow_instance_id": instance.instance_id,
-            },
-            "workflow_id": workflow_id,
-            "total_duration_ms": (
-                int((instance.finished_at - instance.started_at) * 1000)
-                if instance.finished_at
-                else 0
-            ),
         }
 
     async def _retrieve_kb_context(
@@ -913,113 +773,6 @@ from fastapi import APIRouter, Request  # noqa: E402
 router = APIRouter(tags=["chat"])
 
 
-# ── 工作流关联目标的载入与执行（模块级：SSE 链路与统一链路共用）─────────────
-#
-# 这几个函数原为 UnifiedChatHandler 的方法，只有统一链路调用；SSE 链路
-# （/v1/agent/submit → AgentRuntime）因此完全没有工作流消费点，"在工作流页点
-# 『在对话中使用』"于是变成无报错、无日志的空操作。抽到模块级是为了让两条链路走
-# 同一份实现，而不是各写一遍 —— 那正是 workflow_id 在两条链路上行为不一致的成因。
-
-
-def final_output_of(instance: Any) -> str:
-    """取工作流的最终输出。
-
-    引擎把每个节点的增量写进 state 的 ``__out_<node_id>__``，而 dict 保持插入序
-    = 节点完成顺序，所以倒序找第一个非空 ``__out_*`` 即拓扑末节点的输出
-    （对默认的单节点图同样是 output 节点的结果）。
-    """
-    state = getattr(instance, "state", {}) or {}
-    for key in reversed(list(state.keys())):
-        if key.startswith("__out_") and state[key]:
-            return str(state[key])
-    return ""
-
-
-async def load_selected_workflows(workflow_ids: list[str]) -> list[tuple[str, dict[str, Any]]]:
-    """按 id 载入用户选中的工作流（保持选择顺序；载不到的跳过并记日志）。"""
-    loaded: list[tuple[str, dict[str, Any]]] = []
-    try:
-        pool = get_pool()
-    except Exception as exc:  # noqa: BLE001 — DB 不可用降级为默认图
-        logger.warning("workflow context: db unavailable: %s", exc)
-        return loaded
-
-    for workflow_id in workflow_ids:
-        try:
-            row = await pool.fetchrow(
-                "SELECT id, graph_json FROM workflow_graphs WHERE id = $1",
-                workflow_id,
-            )
-        except Exception as exc:  # noqa: BLE001 — 单个工作流失败不拖垮其余
-            logger.warning(
-                "workflow context: load failed (id=%s): %s", workflow_id, exc
-            )
-            continue
-        if row is None:
-            logger.warning("workflow context: not found (id=%s)", workflow_id)
-            continue
-        graph = row["graph_json"]
-        if isinstance(graph, str):
-            try:
-                graph = json.loads(graph)
-            except json.JSONDecodeError:
-                logger.warning(
-                    "workflow context: bad graph_json (id=%s)", workflow_id
-                )
-                continue
-        if isinstance(graph, dict) and graph.get("nodes"):
-            loaded.append((str(row["id"]), graph))
-        else:
-            logger.warning("workflow context: empty graph (id=%s)", workflow_id)
-    return loaded
-
-
-async def run_workflow_graphs(
-    graphs: list[tuple[str, dict[str, Any]]],
-    user_input: str,
-    trace_id: str,
-    gateway: Any,
-) -> dict[str, Any]:
-    """顺序执行多个工作流：前一个的输出作为后一个的输入。
-
-    传递用 ``input`` 键 —— 引擎的 input 节点读 ``state["input"]``
-    （见 workflow/engine.py 的 _input_node），所以后者能接上前者的产出。
-    """
-    from app.workflow.engine import run_workflow
-
-    graph_ids = [graph_id for graph_id, _ in graphs]
-    combined = user_input
-    instance_ids: list[str] = []
-    started = time.time()
-
-    for index, (graph_id, graph_json) in enumerate(graphs):
-        instance = await run_workflow(
-            graph_json=graph_json,
-            gateway=gateway,
-            initial_state={"input": combined},
-            instance_id=f"wf_{trace_id}_{index}",
-        )
-        instance_ids.append(instance.instance_id)
-        if instance.status == "error":
-            # 中断即止：后续工作流的输入依赖前者产出，硬跑只会级联出错
-            return {
-                "status": "error",
-                "output": {
-                    "error": f"workflow {graph_id} failed: {instance.error}",
-                    "workflow_instance_ids": instance_ids,
-                },
-                "workflow_ids": graph_ids,
-            }
-        combined = final_output_of(instance) or combined
-
-    return {
-        "status": "completed",
-        "output": {"result": combined, "workflow_instance_ids": instance_ids},
-        "workflow_ids": graph_ids,
-        "total_duration_ms": int((time.time() - started) * 1000),
-    }
-
-
 # ── Agent 关联目标的补全（模块级：统一链路专用）─────────────────────────────
 #
 # SSE 链路（/v1/agent/submit）经 Go 网关的 resolveAgentContext 补全
@@ -1091,9 +844,6 @@ def agent_payload_from_row(row: Any) -> dict[str, Any]:
     plugins = _string_list(data.get("plugins"))
     if plugins:
         payload["plugins"] = plugins
-    workflows = _string_list(data.get("workflows"))
-    if workflows:
-        payload["workflows"] = workflows
 
     return payload
 
@@ -1102,7 +852,7 @@ def apply_agent_bindings(context: dict[str, Any], payload: dict[str, Any]) -> No
     """把 Agent 自带的绑定提升到 context 顶层；已有显式选择时不覆盖。
 
     与 Go 网关的 applyAgentBindings（internal/api/agents.go）同口径：用户显式带了
-    知识库/技能/插件/工作流就以用户的选择为准，Agent 的绑定只补空缺。
+    知识库/技能/插件就以用户的选择为准，Agent 的绑定只补空缺。
     """
     if not context_ids(context, "kb") and payload.get("kb_id"):
         context["kb_id"] = payload["kb_id"]
@@ -1110,10 +860,6 @@ def apply_agent_bindings(context: dict[str, Any], payload: dict[str, Any]) -> No
         context["skill_names"] = payload["skills"]
     if not context.get("plugin_names") and payload.get("plugins"):
         context["plugin_names"] = payload["plugins"]
-    # workflows 走与 kb 相同的读取口径（多值优先、单值回退）：引擎侧由
-    # selected_workflow_ids 消费，_execute_via_workflow 按顺序执行（多选即流水线）
-    if not context_ids(context, "workflow") and payload.get("workflows"):
-        context["workflow_ids"] = payload["workflows"]
 
 
 async def load_agent_payload(
@@ -1125,7 +871,7 @@ async def load_agent_payload(
     try:
         pool = get_pool()
         row = await pool.fetchrow(
-            "SELECT name, system_prompt, max_turns, llm_config, tools, kb_id, skills, plugins, workflows "
+            "SELECT name, system_prompt, max_turns, llm_config, tools, kb_id, skills, plugins "
             "FROM agents WHERE id::text = $1 AND tenant_id = $2 AND user_id = $3",
             agent_id,
             tenant_id,
@@ -1151,7 +897,6 @@ async def submit_chat(request: Request) -> dict[str, Any]:
         kb_id (str): 执行前 RAG 检索,片段以【知识库引用】拼接到输入前
         agent (dict): mode=agent 时覆盖 SubAgent 配置 (system_prompt/model/max_turns/name)
         skill_names (list[str]): 透传 TaskRouter 作能力匹配提示
-        workflow_id (str): mode=workflow 时记录到结果 metadata
     Go 网关代理时追加 ?user_id=<claims.UserID>，作为 tenant_id 兜底。
     """
     body = await request.json()

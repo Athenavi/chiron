@@ -1,9 +1,9 @@
 """子 Agent Profile（定义层）—— 复用 ``agents`` 表，``kind='subagent'``。
 
-设计见 ``docs/subagent-design.md`` §3.1。承载列的选择（重要）：
+设计见 ``python-engine/app/subagent/``。承载列的选择（重要）：
 
 * ``system_prompt`` / ``max_turns`` / ``timeout_seconds`` / ``skills`` / ``plugins`` /
-  ``workflows`` / ``kb_id`` / ``visibility`` —— 直接复用既有列；
+  ``kb_id`` / ``visibility`` —— 直接复用既有列；
 * ``model`` / ``effort`` 与 Profile 专属项（``allowed_tools`` / ``disallowed_tools`` /
   ``read_only`` / ``write_paths`` / ``max_depth`` / ``output_max_chars`` /
   ``summary_max_chars`` / ``isolation``）—— 放 ``llm_config`` JSON，形如::
@@ -39,7 +39,7 @@ PROFILE_KIND = "subagent"
 
 LOAD_PROFILE_SQL = """
 SELECT id, name, description, system_prompt, llm_config, max_turns, timeout_seconds,
-       skills, plugins, workflows, kb_id
+       skills, plugins, kb_id
   FROM agents
  WHERE kind = $1
    AND (id = $2 OR name = $2)
@@ -74,7 +74,6 @@ class ProfileSpec:
     isolation: str = "none"
     skills: tuple[str, ...] = ()
     plugins: tuple[str, ...] = ()
-    workflows: tuple[str, ...] = ()
     kb_id: str = ""
 
     def llm_config(self) -> dict[str, Any]:
@@ -168,7 +167,6 @@ def parse_profile_row(row: Mapping[str, Any]) -> ProfileSpec:
         isolation=str(pick("isolation") or "none"),
         skills=_as_tuple(row.get("skills")),
         plugins=_as_tuple(row.get("plugins")),
-        workflows=_as_tuple(row.get("workflows")),
         kb_id=str(row.get("kb_id") or ""),
     )
 

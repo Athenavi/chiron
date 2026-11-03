@@ -4,7 +4,7 @@
 概率远高于普通对话（``.env``、CI 配置、证书、``kubeconfig`` …）。这些内容一旦落库，
 会通过备份、管理端查询、审计导出扩散出去。
 
-策略（见 docs/subagent-design.md §7）：
+策略（见 python-engine/app/subagent/）：
 * 只匹配**明确的密钥形态**，避免误伤正文（宁可漏报，不做正则大扫除）；
 * 命中处替换为 ``[REDACTED:<kind>]``，并返回命中计数写入 ``subagent_runs.redacted_count``；
 * 强要求部署可另开 ``SUBAGENT_STEPS_ENCRYPT`` 对 ``content`` 列做列级加密（复用

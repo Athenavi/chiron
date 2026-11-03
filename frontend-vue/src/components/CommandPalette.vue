@@ -81,14 +81,12 @@ interface SearchMediaRow {
   kind?: string
 }
 
-// ── 静态动作：六大工作台 ──
+// ── 静态动作：五大工作台 ──
 // 图标 markRaw：避免被 Vue 响应式代理（图标是静态组件，代理会破坏渲染）
-// 文案与路由都取自唯一源（src/types/workstation.ts）：此前这里把 /workflow 写成
-// 「工作台」，与 AppLayout 的「工作流」同名不同写 —— 同一个入口两个名字。
+// 文案与路由都取自唯一源（src/types/workstation.ts）。
 const workstationActions: PaletteEntry[] = [
   { id: 'ws_chat', group: tr('common.workstation'), label: WORKSTATION_LABELS.dialogue, desc: WORKSTATION_DESCRIPTIONS.dialogue, keywords: tr('chat.chat_conversation_message_chat'), icon: markRaw(MessageOutlined), run: () => void router.push(WORKSTATION_ROUTES.dialogue) },
-  { id: 'ws_agents', group: tr('common.workstation'), label: WORKSTATION_LABELS.agent, desc: WORKSTATION_DESCRIPTIONS.agent, keywords: tr('workflow.agent_agentic_collaboration_task'), icon: markRaw(RobotOutlined), run: () => void router.push(WORKSTATION_ROUTES.agent) },
-  { id: 'ws_workflow', group: tr('common.workstation'), label: WORKSTATION_LABELS.workflow, desc: WORKSTATION_DESCRIPTIONS.workflow, keywords: tr('workflow.workflow_dag_orchestration'), icon: markRaw(ApartmentOutlined), run: () => void router.push(WORKSTATION_ROUTES.workflow) },
+  { id: 'ws_agents', group: tr('common.workstation'), label: WORKSTATION_LABELS.agent, desc: WORKSTATION_DESCRIPTIONS.agent, keywords: tr('task.agent_agentic_collaboration_task'), icon: markRaw(RobotOutlined), run: () => void router.push(WORKSTATION_ROUTES.agent) },
   { id: 'ws_skills', group: tr('common.workstation'), label: WORKSTATION_LABELS.skill, desc: WORKSTATION_DESCRIPTIONS.skill, keywords: tr('agent.skill_mcp_tool'), icon: markRaw(ThunderboltOutlined), run: () => void router.push(WORKSTATION_ROUTES.skill) },
   { id: 'ws_knowledge', group: tr('common.workstation'), label: WORKSTATION_LABELS.knowledge, desc: WORKSTATION_DESCRIPTIONS.knowledge, keywords: tr('knowledge.knowledge_rag_retrieval_document'), icon: markRaw(BookOutlined), run: () => void router.push(WORKSTATION_ROUTES.knowledge) },
   { id: 'ws_plugins', group: tr('common.workstation'), label: WORKSTATION_LABELS.plugin, desc: WORKSTATION_DESCRIPTIONS.plugin, keywords: tr('common.plugin_extension'), icon: markRaw(AppstoreOutlined), run: () => void router.push(WORKSTATION_ROUTES.plugin) },
@@ -117,8 +115,8 @@ const utilityActions = computed<PaletteEntry[]>(() => [
     id: 'act_quick',
     group: tr('common.action'),
     label: tr('common.open_quick_command'),
-    desc: tr('workflow.natural_language_tasks_auto_orchestrate_six_workstations'),
-    keywords: tr('workflow.quick_command_unified_task_natural_language_execute'),
+    desc: tr('task.natural_language_tasks_auto_orchestrate_five_workstations'),
+    keywords: tr('task.quick_command_unified_task_natural_language_execute'),
     icon: markRaw(ConsoleSqlOutlined),
     run: openQuickCommand,
   },

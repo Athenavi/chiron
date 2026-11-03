@@ -1,4 +1,4 @@
-import { createRouter, createWebHashHistory, createWebHistory } from 'vue-router'
+import { createRouter, createWebHistory } from 'vue-router'
 import { authGuard } from './guard'
 import { setupRouteProgress } from './progress'
 
@@ -106,12 +106,6 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    path: '/workflow',
-    name: 'Workflow',
-    component: () => import('../views/WorkflowView.vue'),
-    meta: { requiresAuth: true },
-  },
-  {
     path: '/plugins',
     name: 'Plugins',
     component: () => import('../views/PluginsView.vue'),
@@ -179,7 +173,7 @@ const routes = [
         path: 'cron',
         name: 'AdminCron',
         component: () => import('../views/admin/CronView.vue'),
-        meta: { title: t('workflow.scheduled_tasks') },
+        meta: { title: t('task.scheduled_tasks') },
       },
       // 旧入口保留重定向，避免书签 / 文档 / 告警链接失效
       {
@@ -327,13 +321,8 @@ const routes = [
   },
 ]
 
-// Electron 桌面壳用 loadFile() 从 file:// 打开构建产物：history 模式既匹配不了
-// file 路径，pushState 也无法在 file URL 上工作，表现为路由落空/白屏。
-// 只在 file: 下切 hash 路由，Web 端保持 history（分享链接与 nginx fallback 依赖它）。
-const isFileProtocol = typeof window !== 'undefined' && window.location.protocol === 'file:'
-
 const router = createRouter({
-  history: isFileProtocol ? createWebHashHistory() : createWebHistory(),
+  history: createWebHistory(),
   routes,
   scrollBehavior(_to, _from, savedPosition) {
     if (savedPosition) return savedPosition
@@ -353,7 +342,6 @@ if (import.meta.env.PROD && 'requestIdleCallback' in window) {
   const ROUTE_CHUNKS = [
     () => import('../views/ChatView.vue'),
     () => import('../views/AgentsView.vue'),
-    () => import('../views/WorkflowView.vue'),
     () => import('../views/ProfileView.vue'),
   ]
 

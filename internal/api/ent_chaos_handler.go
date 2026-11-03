@@ -17,7 +17,7 @@ import (
 // 与 Python 侧的分工：
 //
 //   - **本 handler** 负责实验的增删改查。权威存储是 ``ent_chaos_experiments``
-//     （迁移 ``0002_ent_chaos_experiments``）；
+//     ；
 //   - **施加故障**不在这里 —— 由两侧的注入中间件完成：网关请求路径见
 //     ``chaosMiddleware``（同包），引擎请求路径见
 //     ``python-engine/app/chaos/injector.py`` 的 ASGI 中间件；

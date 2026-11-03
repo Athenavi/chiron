@@ -12,11 +12,6 @@
       "description": "agent.multi_agent_collaboration"
     },
     {
-      "id": "workflow",
-      "label": "workflow.workflow",
-      "description": "workflow.dag_orchestration"
-    },
-    {
       "id": "skill",
       "label": "agent.skill",
       "description": "agent.tool_mcp"

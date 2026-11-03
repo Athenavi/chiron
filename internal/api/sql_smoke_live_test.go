@@ -421,7 +421,7 @@ func TestLiveApplyInvoiceInsertSelect(t *testing.T) {
 // 若直接用 `created_at` 比较纪元，在非 UTC 会话时区上会整体偏差一个时区偏移；
 // 这里断言它确实按会话时区还原成了真实时刻（与本进程的 `time.Now()` 同量级）。
 //
-// ⑥ `api_keys.last_used_at` 在 `init.sql` 里是 `timestamp`（**无时区**），
+// ⑥ `api_keys.last_used_at` 是 `timestamp`（**无时区**），
 // 而回写语句用 `now()`（timestamptz）。两者靠隐式转换对齐，是否会丢/偏时间
 // 只有真库能确认 —— 这里断言写入后确实落成非空时间。
 func TestLiveAPIKeyAuthAndMarkUsed(t *testing.T) {

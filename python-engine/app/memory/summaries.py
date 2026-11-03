@@ -1,6 +1,6 @@
 """L3 摘要持久层 — memory_summaries 表的 asyncpg CRUD + 嵌入向量。
 
-- PG 存正文/元数据/运维字段，**也存向量**（`embedding float8[]`，迁移 0019）：向量是判重与
+- PG 存正文/元数据/运维字段，**也存向量**（`embedding float8[]`）：向量是判重与
   语义召回的唯一数据来源，只活在外部库里就等于降级模式下没有这一层
 - Milvus 只是**可选镜像**：`MEMORY_VECTOR_BACKEND=milvus` 时才写（默认 pg 时不写，
   因为没人会去查它）
@@ -33,7 +33,7 @@ _COLUMNS = (
 )
 
 # 只有近重复扫描这一条路需要向量，所以它单独一个投影而不是给所有读路径都带上列。
-# 口径标签（迁移 0020）跟着向量走：不认得"这个向量属于哪个模型/几维"的读侧无法判断可比性。
+# 口径标签跟着向量走：不认得"这个向量属于哪个模型/几维"的读侧无法判断可比性。
 _COLUMNS_WITH_VECTOR = f"{_COLUMNS}, embedding, embedding_model, embedding_dim"
 
 
@@ -117,7 +117,7 @@ class SummaryStore:
     ) -> SummaryEntry:
         """插入摘要。content_hash 冲突时返回既有条目。
 
-        向量**总是**写进 PG（判重与语义召回的数据来源，迁移 0019）；Milvus 只在后端配成
+        向量**总是**写进 PG（判重与语义召回的数据来源）；Milvus 只在后端配成
         milvus 时镜像一份 —— 配成 pg 时没有人查它，写它纯属多一次外部调用。
         """
         pool = self._pool

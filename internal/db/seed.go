@@ -10,7 +10,7 @@ import (
 // 与 internal/api/auth.go、internal/session/manager.go 中定义的常量保持一致，
 // 注册与会话落库均硬编码引用该 ID。
 //
-// 类型为 int16 以匹配 tenants.id 的 smallint（见 0001 基线迁移）。
+// 类型为 int16 以匹配 tenants.id 的 smallint（见权威基线）。
 const DefaultTenantID int16 = 1
 
 // EnsureDefaultTenant 幂等确保默认租户存在。

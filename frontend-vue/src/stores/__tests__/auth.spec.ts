@@ -1,8 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { setActivePinia, createPinia } from 'pinia'
 
-// partial mock：保留 loadDesktopToken / setAuthToken 的真实实现（Web 端 isDesktop=false，
-// 不会写 localStorage），只替换网络客户端。
+// partial mock：保留 setAuthToken / API_URL 的真实实现，只替换网络客户端。
 vi.mock('../../api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('../../api')>()
   return {

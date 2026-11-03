@@ -5,7 +5,7 @@
 ``/undo`` 此前是空壳：``app/commands/builtins.py`` 的 ``_undo`` 只做
 ``ctx.metadata.pop("last_edit")`` 然后回显一个字符串 —— **文件没有任何变化**。
 用户以为撤销了，其实没有。这比"没有 /undo"更危险（详见
-``docs/agent-safety-and-reliability.md`` §4.2）。
+``internal/api/tool_broker.go``）。
 
 **做法**：在**写入前**保存原内容快照（会话级、有界、TTL），``/undo`` 据此真正恢复。
 两条原则：

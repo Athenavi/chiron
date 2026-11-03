@@ -7,7 +7,7 @@
 - `load_hooks_config`（批 G+ 批次 1：部署级声明文件 `hooks.json`，见 `app/hooks/config.py`）。
 
 设计依据与三条硬约束见 `app/hooks/manager.py` 顶部；沙箱复用与 `command` 形态（批次 2b）
-见 `app/hooks/runner.py`；声明面纪律见 `docs/hook-protocol-design.md` §4.2。
+见 `app/hooks/runner.py`；声明面纪律见 `python-engine/app/hooks/`。
 """
 
 from __future__ import annotations

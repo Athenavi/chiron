@@ -17,7 +17,7 @@ describe('parseContextQuery（URL 约定）', () => {
   })
 
   it('忽略空串、空白与非字符串（避免产出空 chip）', () => {
-    expect(parseContextQuery({ kb: '', agent: '   ', workflow: 42 })).toEqual([])
+    expect(parseContextQuery({ kb: '', agent: '   ', skill: 42 })).toEqual([])
     expect(parseContextQuery({ kb: ['', 'kb-1', '  '] }).map(c => c.value)).toEqual(['kb-1'])
   })
 
@@ -40,17 +40,15 @@ describe('buildWorkbenchContext（发给引擎的形态）', () => {
     expect(ctx).toEqual({ kb_id: 'kb-1', kb_ids: ['kb-1', 'kb-2'] })
   })
 
-  it('四类上下文各自成字段，技能本来就是数组', () => {
+  it('三类上下文各自成字段，技能本来就是数组', () => {
     const ctx = buildWorkbenchContext(chips(
-      ['kb', 'kb-1'], ['agent', 'ag-1'], ['workflow', 'wf-1'], ['skill', 'pdf'], ['skill', 'web'],
+      ['kb', 'kb-1'], ['agent', 'ag-1'], ['skill', 'pdf'], ['skill', 'web'],
     ))
     expect(ctx).toEqual({
       kb_id: 'kb-1',
       kb_ids: ['kb-1'],
       agent_id: 'ag-1',
       agent_ids: ['ag-1'],
-      workflow_id: 'wf-1',
-      workflow_ids: ['wf-1'],
       skill_names: ['pdf', 'web'],
     })
   })

@@ -106,4 +106,5 @@ export default {
   status_ready: "已就绪",
   status_error: "异常",
   index_now: "构建索引",
+  re_indexing_triggered_please_check_status_later: "已触发重新索引，请稍后查看状态",
 }

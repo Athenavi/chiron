@@ -1,6 +1,6 @@
 """子 Agent 运行期缓存（Redis）—— 让前端实时看到进度与层级。
 
-数据分层（docs/subagent-design.md §3.3）：
+数据分层（python-engine/app/subagent/）：
 
 * **Redis = 运行期**（TTL 1h，自动回收）：状态、摘要、事件流、子节点索引、整树骨架；
 * **PostgreSQL = 权威**（``subagent_runs`` / ``subagent_run_steps``）：终态与完整过程。

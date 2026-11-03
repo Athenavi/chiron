@@ -144,9 +144,9 @@ func main() {
 	// keyset 没有 TTL 且只由管理端写请求镜像；云端 Redis 长驻，看不出差，打包桌面态
 	// 每次换一份空 Redis，不回填就等于"本机配过的 key 从没配过"（引擎 provider 表为空，
 	// 每条回合立刻失败）。
-	// 这里紧跟 Redis 初始化、在起 HTTP 服务之前，是网关能做到的最早时机；但桌面壳
-	// 先启引擎后启网关（local-stack.cjs），所以回填**不保证**早于引擎 lifespan 里的
-	// 一次成型注册 —— 那段间隙由 syncProviderKeyset 的 llm:keys:changed 广播 +
+	// 这里紧跟 Redis 初始化、在起 HTTP 服务之前，是网关能做到的最早时机；但引擎
+	// 可能先于网关就绪，所以回填**不保证**早于引擎 lifespan 里的一次成型注册 ——
+	// 那段间隙由 syncProviderKeyset 的 llm:keys:changed 广播 +
 	// 引擎侧惰性注册（M52b）补齐。两侧都做，才不依赖进程启动顺序。
 	// 失败只降级为告警：运行层是镜像，权威还在库里，不该因为 Redis 抖动而拒绝启动。
 	if hydrated, err := api.HydrateProviderKeysets(lifecycleCtx, cfg); err != nil {

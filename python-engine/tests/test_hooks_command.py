@@ -1,6 +1,6 @@
 """批 G+ 批次 2b：`command` 形态（**运维声明的本地命令** hook）回归。
 
-对应 `docs/hook-protocol-design.md` §7 的验收项③（只能收紧）/④（退出码约定）/⑤（fail-open + 留痕）
+对应 `python-engine/app/hooks/` 的验收项③（只能收紧）/④（退出码约定）/⑤（fail-open + 留痕）
 /⑦（执行入口清单），外加 §4.3 选项 **(b)** 独有的三条：
 
 1. **默认关**：`hooks_allow_commands=false` 时条目**被拒**（不是"配了但不生效"）；

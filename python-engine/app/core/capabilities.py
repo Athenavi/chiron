@@ -29,7 +29,6 @@ class WorkstationType(StrEnum):
 
     DIALOGUE = "dialogue"  # 对话工作台 (入口)
     AGENT = "agent"  # Agent 工作台 (智能体)
-    WORKFLOW = "workflow"  # 工作流工作台 (DAG 编排)
     SKILL = "skill"  # 技能工作台 (工具执行)
     KNOWLEDGE = "knowledge"  # 知识库工作台 (RAG)
     PLUGIN = "plugin"  # 插件工作台 (扩展)
@@ -456,7 +455,6 @@ async def preload_default_capabilities(
     - Skill: read_file / execute_python (tools registry 沙箱工具)
     - Knowledge: kb_list / kb_search
     - Agent: general_chat / analyzer / requirement_parser (LLM via gateway)
-    - Workflow: run (workflow_run DAG 引擎)
     - Plugin: list_tools (tools registry 全量发现)
     - Dialogue: quick_execute (TaskRouter 统一编排，见 task_router.quick_execute)
     """
@@ -594,40 +592,7 @@ async def preload_default_capabilities(
         )
     )
 
-    # 4. Workflow 工作台 — DAG 工作流执行
-    async def _workflow_run(
-        graph_json: dict[str, Any],
-        initial_state: dict[str, Any] | None = None,
-        name: str = "",
-    ) -> Any:
-        from app.workflow.tools import workflow_run
-
-        return await workflow_run(graph_json, initial_state, name)
-
-    await reg.register(
-        Capability(
-            capability_id="workflow:run",
-            name="Run Workflow",
-            description="执行 DAG 工作流图 run workflow dag orchestration",
-            workstation_type=WorkstationType.WORKFLOW,
-            capability_type=CapabilityType.SERVICE,
-            input_schema=[
-                CapabilityParam(
-                    "graph_json", "object", "工作流图定义 (nodes/edges)", required=True
-                ),
-                CapabilityParam(
-                    "initial_state", "object", "初始状态", required=False, default=None
-                ),
-            ],
-            output_schema=CapabilityResult(
-                fields=["workflow", "instance_id", "status", "output"]
-            ),
-            tags=["workflow", "dag", "orchestration", "automation"],
-            _executor=_workflow_run,
-        )
-    )
-
-    # 5. Plugin 工作台 — 工具发现（注册表全量查询，含 MCP 插件工具）
+    # 4. Plugin 工作台 — 工具发现（注册表全量查询，含 MCP 插件工具）
     async def _list_tools(query: str = "") -> Any:
         from app.tools.context import get_user_id
         from app.tools.registry import registry as tool_registry

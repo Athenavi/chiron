@@ -12,12 +12,10 @@ import { Button, Input, Form, FormItem, message, Popconfirm, Tag, Spin, Slider }
 import { SafetyOutlined, MobileOutlined, ExportOutlined, DeleteOutlined, LinkOutlined } from '@ant-design/icons-vue'
 import EmptyState from '../common/EmptyState.vue'
 import HarnessProfilePanel from './HarnessProfilePanel.vue'
-import RunModePanel from './RunModePanel.vue'
 import ShortcutSettingsPanel from './ShortcutSettingsPanel.vue'
 import LanguageSwitcher from '../common/LanguageSwitcher.vue'
 import { useAuthStore } from '../../stores/auth'
 import { useThemeStore } from '../../stores/theme'
-import { useDeviceStore } from '../../stores/device'
 import { api } from '../../api'
 import {
   setPassword,
@@ -37,8 +35,6 @@ const props = withDefaults(defineProps<{ initialTab?: string }>(), { initialTab:
 const route = useRoute()
 const authStore = useAuthStore()
 const themeStore = useThemeStore()
-// 运行模式只在桌面壳里可切（Web 构建是纯云模式），据此决定是否展示该标签页
-const deviceStore = useDeviceStore()
 
 const activeTab = ref(props.initialTab)
 
@@ -206,9 +202,6 @@ onMounted(async () => {
     message.success(t('auth.third_party_account_bound_successfully'))
   }
   loadSpeechPrefs()
-  // 本地模式没有租户/三方绑定/短信/会话分享与会话列表接口（本地后端第一批没实现），
-  // 不做这几次必然 501 的请求：与其弹一堆"本地模式暂不支持"，不如让这些云侧页签留空。
-  if (deviceStore.isLocal()) return
 
   // 打开面板即触发的这几次只读请求，逐个按**成本**决定是否接进延后 + TTL 缓存：
   //
@@ -765,7 +758,7 @@ onUnmounted(() => {
         </div>
         <div class="legal-body">
           <p>{{ $t('common.welcome_to_chiron_before_using_this_service_please_read_and_agree_to_the_following_terms') }}</p>
-          <p><strong>{{ $t('common.1_service_scope') }}</strong>{{ $t('workflow.this_service_provides_llm_based_conversation_knowledge_base_and_workflow_orchestration_service_may_be_interrupted_for_maintenance_upgrades_or_force_majeure') }}</p>
+          <p><strong>{{ $t('common.1_service_scope') }}</strong>{{ $t('common.this_service_provides_llm_based_conversation_and_knowledge_base_capabilities_service_may_be_interrupted_for_maintenance_upgrades_or_force_majeure') }}</p>
           <p><strong>{{ $t('auth.2_account_responsibility') }}</strong>{{ $t('auth.you_must_safeguard_your_account_credentials_and_are_responsible_for_all_activity_under_your_account_unauthorized_use_must_be_reported_to_us_immediately') }}</p>
           <p><strong>{{ $t('common.3_usage_rules') }}</strong>{{ $t('admin.do_not_use_this_service_to_generate_or_spread_illegal_content_or_to_attack_scrape_or_reverse_engineer_in_ways_that_harm_the_service_or_other_users') }}</p>
           <p><strong>{{ $t('common.4_content_ownership') }}</strong>{{ $t('common.your_input_belongs_to_you_using_generated_content_must_comply_with_applicable_law_you_are_responsible_for_content_you_publish') }}</p>
@@ -793,15 +786,6 @@ onUnmounted(() => {
       :tab="$t('settings.harness_title')"
     >
       <HarnessProfilePanel scope="user" />
-    </a-tab-pane>
-
-    <!-- ── 运行模式（local / cloud）：仅桌面壳展示；切换代价与确认在面板内告知 ── -->
-    <a-tab-pane
-      v-if="deviceStore.isDesktop"
-      key="mode"
-      :tab="$t('settings.run_mode')"
-    >
-      <RunModePanel />
     </a-tab-pane>
   </a-tabs>
 </template>

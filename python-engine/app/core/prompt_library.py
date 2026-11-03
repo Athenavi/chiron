@@ -41,7 +41,6 @@ class TargetWorkstation(StrEnum):
 
     DIALOGUE = "dialogue"
     AGENT = "agent"
-    WORKFLOW = "workflow"
     SKILL = "skill"
     KNOWLEDGE = "knowledge"
 

@@ -210,7 +210,7 @@ func TestLiveRetentionSweepDrainsManyRows(t *testing.T) {
 	}
 }
 
-// 0012 迁移的索引必须真的被清理语句用上 —— 这是加迁移的全部理由。
+// 该索引必须真的被清理语句用上 —— 这是加它的全部理由。
 func TestLiveRetentionUsesCreatedAtIndex(t *testing.T) {
 	dsn := os.Getenv("CHIRON_TEST_POSTGRES_DSN")
 	if dsn == "" {
@@ -230,7 +230,7 @@ func TestLiveRetentionUsesCreatedAtIndex(t *testing.T) {
 		t.Fatalf("查索引: %v", err)
 	}
 	if idxCount != 1 {
-		t.Fatalf("idx_notifications_created 不存在 —— 0012 迁移未执行？")
+		t.Fatalf("idx_notifications_created 不存在 —— alembic upgrade head 未执行？")
 	}
 
 	// EXPLAIN 子查询部分（DELETE 本身无法 EXPLAIN 出计划细节用得上索引与否，

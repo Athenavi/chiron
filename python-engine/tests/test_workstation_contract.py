@@ -1,4 +1,4 @@
-"""六大工作台标识的跨端契约测试。
+"""五个工作台标识的跨端契约测试。
 
 唯一事实源是仓库根的 ``shared/workstations.json``。三端各自手写声明（运行时都不读
 那个 JSON），本测试读 JSON 与三端源码比对，锁住漂移：
@@ -67,11 +67,10 @@ def _ts_labels() -> dict[str, str]:
 class TestIdsMatchAcrossSources:
     """id 必须四端一致且顺序一致（顺序决定前端展示次序）。"""
 
-    def test_source_of_truth_has_six_workstations(self):
+    def test_source_of_truth_has_five_workstations(self):
         assert [w["id"] for w in _load_source_of_truth()] == [
             "dialogue",
             "agent",
-            "workflow",
             "skill",
             "knowledge",
             "plugin",

@@ -116,7 +116,7 @@ curl -s http://localhost:3000/health        # 前端入口（静态资源 + 同�
   （`internal/db/required_tables.go` 的 `RequiredTables`）；缺失 → `FATAL: refusing to start on missing tables`。
   引擎侧有对应的一份清单（`python-engine/app/db.py` 的 `REQUIRED_TABLES`，覆盖向量 / RAG / 记忆等引擎专属表）；
 - **遗留表**：数据库里可能还留有 `schema_migrations`（Go 侧旧迁移系统的空表，已废弃且不在权威迁移里）。
-  它的 ORM 模型已删除、`chiron-cli db status` 已改读 `alembic_version`；确认无人依赖后可手工执行
+  迁移状态已统一由 `alembic_version` 表示；确认无人依赖后可手工执行
   `DROP TABLE IF EXISTS public.schema_migrations;`（**不**放进迁移自动执行，避免误删他处数据）；
 - **滚动发布顺序**：先迁移（向后兼容的变更）→ 再滚动应用副本。破坏性变更（删列/改名）需用"扩展-迁移-收缩"两步发布。
 
@@ -231,7 +231,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 - SSE 跨实例实时通道为 Pub/Sub：断连窗口内的实时事件依赖客户端携带 `Last-Event-ID` 从 Stream 重放；
 - **人工介入（审批 / `ask_user`）已跨进程可见、可答复**（M7，✅ `32ebc58`）：这一轮只要**有可续跑的 run 现场**
   （`run_token` 非空、PG 可写 —— 用户提交、**也包括** reconciler 接管续跑起来的那一轮，它同样带新 `run_token`），
-  走到需要人的一步就**以 `awaiting_input` 收尾**，票落 `pending_interactions`（迁移 `0018`）；该状态**不在** `ACTIVE_STATUSES` 里，
+  走到需要人的一步就**以 `awaiting_input` 收尾**，票落 `pending_interactions`；该状态**不在** `ACTIVE_STATUSES` 里，
   所以会话唯一活跃索引被释放（用户能正常发下一条），而 reconciler **不会**去接管一个"正在等人"而非"已崩溃"的 run。
   用户从会话空闲时的「待你处理」收件箱（`frontend-vue/src/components/chat/InteractionInbox.vue`，读 `GET /v1/agent/sessions/{id}/interactions`）
   直接答复 ⇒ 票写成 `answered` ⇒ **下一条提交**经 `claim_awaiting` 从暂停处接手并 `consume_grant` **单次消费**
@@ -254,13 +254,12 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 ### 结构性后续
 
 - **run 现场 checkpoint 续跑**：「路由到持有 run 的实例 + 陈旧审批被拒」已实现；「实例故障后从 checkpoint
-  续跑而非重跑」也已实现：表 `agent_runs`（迁移 `0003`）· 写路径 `app/agent/runtime.py::_save_checkpoint`
+  续跑而非重跑」也已实现：表 `agent_runs`· 写路径 `app/agent/runtime.py::_save_checkpoint`
   （回合末、只写不读、失败只降级恢复粒度）· 状态机 `app/agent/checkpoint.py` · 续跑/接管
   `app/agent/resume.py` + `main.py` 启动 reconciler；单测 38 条 + `tests/test_resume_kill_drill.py`
   的「kill → 重启 → 断言不重放」真子进程演练。**不做**的是「跨实例的现场内存迁移」；
-- **`chiron-cli db` 的迁移入口**：见 [数据库迁移入口决策](db-migration-entry.md) —— CLI **完全不接触迁移**，
-  Alembic 是唯一入口；只保留只读的 `db status`（读 `alembic_version`），以及网关启动时的
-  `internal/db/schema_version.go` 校验（不写 schema）；
+- **迁移入口**：见 [数据库迁移入口决策](db-migration-entry.md) —— Alembic 是唯一入口；
+  网关启动时由 `internal/db/schema_version.go` 做只读校验（不写 schema）；
 - **`credit_transactions` / `payments` 两处 DDL**：DDL 全部收敛到唯一权威迁移
   `0001_authoritative_baseline`；`internal/billing/pgstore.go` 的 `EnsureTables` 已改为只读 `VerifySchema`，
   `ent_model_routes` 的 `InitTable` → `VerifyTable`。
@@ -282,7 +281,7 @@ cd python-engine && python -m pytest -q -m integration tests/test_mcp_owner_leas
 POST /v1/ent/chaos/experiments            （网关，需 chaos:manage 权限）
         │  写
         ▼
-ent_chaos_experiments  ─── 权威存储（迁移 0002_ent_chaos_experiments，审计轨迹）
+ent_chaos_experiments  ─── 权威存储（审计轨迹）
         │  回源
         ▼
 Redis  chaos:active:<tenant>              （TTL 5s；任何写操作后立即失效）
@@ -367,8 +366,8 @@ MinIO/Milvus/etcd 默认不启用（仅 `--profile selfhosted-s3`）。单实例
    或后台「Redis 配置」热切换，见 `internal/api/admin.go` 的 `UpdateRedis`）。
 3. **对象存储**：用云厂商 S3（或多 AZ 的自托管 RustFS / SeaweedFS 集群），不要用单实例 MinIO。
 4. **Milvus**：向量库中断只影响 RAG 检索（会话 / 写路径不依赖）；高可用可用 Milvus 集群模式 +
-   多副本 etcd + 外部 S3。记忆层 L3 的摘要向量自 M13 起**默认存 PG**（`memory_summaries.embedding`，
-   迁移 `0019`），`MEMORY_VECTOR_BACKEND` 默认 `pg` 时 Milvus 连不上也不影响语义召回；只有显式把它
+   多副本 etcd + 外部 S3。记忆层 L3 的摘要向量**默认存 PG**（`memory_summaries.embedding`），
+   `MEMORY_VECTOR_BACKEND` 默认 `pg` 时 Milvus 连不上也不影响语义召回；只有显式把它
    配成 `milvus` 时，Milvus 才同时成为 L3 的依赖（那时它是 ANN 那条腿，挂掉会退回 PG 的精确余弦扫描）。
 5. **etcd**：仅被 Milvus 使用；随 Milvus 一起高可用（3 / 5 节点）。
 

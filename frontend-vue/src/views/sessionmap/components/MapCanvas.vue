@@ -163,7 +163,6 @@ function onNodeClick(payload: { node: Node }) {
 
 <!--
   非 scoped 块：Vue Flow 的样式表必须全局引入（库内部元素不在本组件的 scope 里）。
-  与 WorkflowView.vue:1239-1242 保持同一写法 —— 两处画布共用一套库样式，避免版本内联两份。
 -->
 <style>
 @import '@vue-flow/core/dist/style.css';

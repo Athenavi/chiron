@@ -3,7 +3,7 @@ import type { NotificationItem } from '../api/notifications'
 /**
  * 通知标题/正文的本地化渲染（P2-3 / T1）。
  *
- * 为什么要抽成纯模块：服务端只存 `kind` + `payload`（见迁移 0011 取舍 6），
+ * 为什么要抽成纯模块：服务端只存 `kind` + `payload`，
  * 渲染推迟到读取时 —— 于是**历史通知也会跟随语言切换**。这段逻辑需要单测覆盖
  * 「四类事件 × 三语 + 参数缺失回落」，放在 .vue 的 setup 里测不到。
  *

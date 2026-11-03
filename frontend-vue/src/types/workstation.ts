@@ -1,7 +1,7 @@
 import { t } from '../i18n'
 
 /**
- * 六大工作台的标识与展示文案。
+ * 五大工作台的标识与展示文案。
  *
  * 唯一事实源是仓库根的 shared/workstations.json：TS（本文件）、
  * internal/model/workstation.go（Go）与 python-engine/app/core/capabilities.py
@@ -14,7 +14,6 @@ import { t } from '../i18n'
 export const WORKSTATIONS = [
   'dialogue',
   'agent',
-  'workflow',
   'skill',
   'knowledge',
   'plugin',
@@ -24,12 +23,11 @@ export type WorkstationType = (typeof WORKSTATIONS)[number]
 
 /**
  * 展示名。停靠坞（AppLayout）与命令面板（CommandPalette）共用这一份 ——
- * 此前两处各写一遍，`/workflow` 在 AppLayout 里同时叫「工作台」和「工作流」。
+ * 此前两处各写一遍，同一个入口会同时出现两种叫法。
  */
 export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
   dialogue: t('chat.chat'),
   agent: 'Agent',
-  workflow: t('workflow.workflow'),
   skill: t('agent.skill'),
   knowledge: t('knowledge.knowledge'),
   plugin: t('common.plugin'),
@@ -39,17 +37,15 @@ export const WORKSTATION_LABELS: Record<WorkstationType, string> = {
 export const WORKSTATION_DESCRIPTIONS: Record<WorkstationType, string> = {
   dialogue: t('chat.ai_chat_assistant'),
   agent: t('agent.multi_agent_collaboration'),
-  workflow: t('workflow.dag_orchestration'),
   skill: t('agent.tool_mcp'),
   knowledge: t('knowledge.rag_retrieval_augmentation'),
   plugin: t('common.extensions'),
 }
 
-/** 工作台 → 路由路径（六个入口的唯一定义） */
+/** 工作台 → 路由路径（五个入口的唯一定义） */
 export const WORKSTATION_ROUTES: Record<WorkstationType, string> = {
   dialogue: '/chat',
   agent: '/agents',
-  workflow: '/workflow',
   skill: '/skills',
   knowledge: '/knowledge',
   plugin: '/plugins',

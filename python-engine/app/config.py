@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # 单租户默认租户 ID（与 Go internal/db/seed.go 的 DefaultTenantID 保持一致）。
 # 放在 config 而不是某个 API 模块里：写入侧（api）与执行侧（queue worker）必须用**同一个**
 # 租户归一化规则，否则向量按 A 打标、检索按 B 过滤，结果是"构建成功但一条也查不到"。
-# 类型是 int：tenants.id 与各表 tenant_id 列都是 smallint（0001 基线），Go 侧
+# 类型是 int：tenants.id 与各表 tenant_id 列都是 smallint（权威基线），Go 侧
 # DefaultTenantID 亦为 int16=1。此前这里是 uuid 字符串，与列类型不符 ——
 # 既让 `tenant_id or DEFAULT_TENANT_ID` 在 asyncpg 侧直接报错，也让类型检查失败。
 DEFAULT_TENANT_ID = 1
@@ -112,12 +112,6 @@ class Settings(BaseSettings):
     # 执行 —— 凭据只存在于 broker 进程，引擎即使被注入也读不到（见 python-engine/mcp_broker.py）。
     mcp_broker_url: str = "http://127.0.0.1:8001"
 
-    # 工作流入队失败时是否退回本进程执行（默认**否**）。
-    # 本地执行不持久化：副本重启任务就没了，而接口已经返回 running —— 属于"看起来成功、
-    # 实际丢失"。默认标记 queued_pending 等拉起；只有确实需要这份可用性兜底时才打开，
-    # 且打开时会打点告警（降级必须可见）。
-    workflow_local_fallback: bool = False
-
     # ── 服务提供商目录（与 Go 网关 internal/api/llm_providers.go 对齐）──
     # 由网关 /v1/internal/engine-config 下发 llm_provider_catalog；为空则回落
     # app/providers/catalog.py 的兜底目录（网关不可达时的单机降级）。
@@ -173,17 +167,17 @@ class Settings(BaseSettings):
     hooks_event_budget_seconds: int = 10
     #: 部署级声明文件（`hooks.json`）路径。**默认空 = 不读文件、不注册、不执行 = 零行为变化**。
     #: 只接受**部署级**声明（文件里的条目一律视为部署级）；格式与纪律见
-    #: `docs/hook-protocol-design.md` §4.2。改动需重启生效（不做热加载）。
+    #: `python-engine/app/hooks/`。改动需重启生效（不做热加载）。
     hooks_config_path: str = ""
     #: `command` 形态（运维声明的本地命令）的**独立开关**。**默认关** —— 它新增一个
-    #: **运维级**可执行面，是「不扩大可执行面」的一处显式例外（`docs/hook-protocol-design.md` §4.3 (b)）。
+    #: **运维级**可执行面，是「不扩大可执行面」的一处显式例外（`python-engine/app/hooks/`）。
     hooks_allow_commands: bool = False
     #: `command` 形态允许使用的可执行文件 allowlist（逗号分隔；**裸名**或**绝对路径**）。
     #: **默认空 = 一条也不批准（fail-closed）**。它**不复制**面向模型的那张白名单 ——
     #: 两者信任级不同（前者约束"模型挑的命令"，后者是"**运维**声明的命令"）。
     hooks_command_allowlist: str = ""
     #: `webhook` 形态（出站 POST 到运维声明的 URL）的**独立开关**。**默认关** ——
-    #: 它是一次**数据出境**面（`docs/hook-protocol-design.md` §4.3 批次 3）。
+    #: 它是一次**数据出境**面（`python-engine/app/hooks/` 批次 3）。
     hooks_allow_webhooks: bool = False
     #: `webhook` 形态允许的目标 host 白名单（逗号分隔，**只比 host 名**、不分大小写；
     #: scheme / 端口 / IP 段由 `app/tools/ssrf.py` 的既有守卫管）。
@@ -255,7 +249,7 @@ class Settings(BaseSettings):
     memory_dedup_threshold: float = 0.95  # cosine 超过该阈值判定近重复 → 整理时合并
     memory_search_min_cosine: float = 0.30  # 语义检索召回下限
     # L3 摘要向量的后端：pg | milvus（pgvector/postgres 等写法归一到 pg）。
-    # 默认 **pg**：向量落 `memory_summaries.embedding`（迁移 0019），PG 是本项目唯一恒在的
+    # 默认 **pg**：向量落 `memory_summaries.embedding`（权威基线），PG 是本项目唯一恒在的
     # 持久存储 —— 把 Milvus 当默认等于"语义层默认是死的"（compose 里 Milvus 属
     # selfhosted-s3 profile，注释自陈"默认不启动"），这正是本轮修掉的缺陷。
     # 与 RAG 的 `vector_db_type` 是**两个口径**：那个决定知识库向量存哪，这个只管摘要向量
@@ -420,6 +414,23 @@ class Settings(BaseSettings):
     #: 会话内**可写**委派的上限（0 = 内置默认 3）。
     subagent_max_writers: int = 0
 
+    # ── Super-agent 看门狗（语义级进展判断，roadmap P1-3）──
+    #
+    # 与 `loop_guard`/`recovery` 的区别：它们看"这次调用是否与上次相同"、处理的是**失败**；
+    # 看门狗看的是"整轮是否还在向用户的目标靠近"——每一步都换工具、都成功，也可能原地绕圈。
+    #
+    # **三层默认全关**，与 §1.3「会改变行为的机制一律默认关」一致：
+    #   enabled=false     → 连采集都不跑，零影响（也不产生 DB 查询）
+    #   act=false         → 采集与判断都跑，结论**只进审计与日志**，不注入提示、不终止
+    # act 需要 enabled 才生效：两者是"观察"与"动作"两道独立的闸。
+    superagent_watchdog_enabled: bool = False
+    superagent_watchdog_act: bool = False
+    #: 采样间隔（秒，下限 60）。判断需要"连续多拍"，太小会让单拍无变化直接成为噪音。
+    superagent_watchdog_interval: int = 300
+    #: 连续多少拍"内容与工具都没变"才追加提示 / 才建议终止。
+    superagent_watchdog_nudge_after: int = 2
+    superagent_watchdog_stop_after: int = 4
+
     # ── 直连引擎的 Bearer JWT 旁路（安全开关）──
     # false（默认）：引擎拒绝 Bearer 直连，只接受带 X-Internal-Token 的网关代理请求。
     # true：允许持任意合法 JWT 的调用方绕过网关直连引擎并自报 tenant_id ——
@@ -546,8 +557,8 @@ class Settings(BaseSettings):
                 "use sslmode=require or verify-full"
             )
         # DR R6(过渡):由 APP_SECRET 派生 JWT_SECRET/INTERNAL_TOKEN 是兼容旧部署的
-        # 过渡路径;新部署应显式注入两者。完全移除派生前需先确认引擎启动链
-        # (chiron-cli/启动器注入),避免本地仅 .env(APP_SECRET)的实例无法启动。
+        # 过渡路径;新部署应显式注入两者。完全移除派生前需先确认引擎启动链,
+        # 避免本地仅 .env(APP_SECRET)的实例无法启动。
         import logging as _logging
         import os as _os
 

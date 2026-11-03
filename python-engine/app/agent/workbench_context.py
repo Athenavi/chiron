@@ -1,7 +1,7 @@
 """工作台上下文（workbench context）的读取与合并口径。
 
 前端 `WorkbenchQuickStart` / `ChatSidePanel` 允许多选（`?kb=a&kb=b&...`），组装成
-`kb_ids` / `agent_ids` / `workflow_ids` 数组。本模块把这套读取收敛成一处，
+`kb_ids` / `agent_ids` 数组。本模块把这套读取收敛成一处，
 避免三条链路（SSE submit / chat submit / quick-execute）各写一遍"先看复数、再回退
 单数"的逻辑而出现行为分歧 —— 那是"在首页多选生效、在侧栏多选不生效"这类
 最难查的 bug 的根源。
@@ -42,17 +42,6 @@ def context_ids(workbench_context: Any, name: str) -> list[str]:
     if ids:
         return ids
     return _as_str_list(ctx.get(f"{name}_id"))
-
-
-def selected_workflow_ids(workbench_context: Any) -> list[str]:
-    """本次对话要执行的工作流清单（``workflow_ids`` 优先，回退 ``workflow_id``）。
-
-    SSE 链路（``/v1/agent/submit`` → AgentRuntime）与统一链路
-    （``/v1/chat/submit`` → UnifiedExecutor）都读这一处。此前两条链路各写一遍解析，
-    结果同名同值的 ``workflow_id`` 在统一链路会被执行、在 SSE 链路被静默丢弃 ——
-    用户在工作流页点"在对话中使用"完全没反应，且无报错、无日志。
-    """
-    return context_ids(workbench_context, "workflow")
 
 
 def merge_by_quota(groups: list[list[T]], limit: int) -> list[T]:

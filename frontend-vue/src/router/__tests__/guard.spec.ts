@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { authGuard } from '../guard'
 import type { RouteLocationNormalized, NavigationGuardNext } from 'vue-router'
 
@@ -113,61 +113,6 @@ describe('authGuard', () => {
 
     it('非 admin 路由不受 user 角色影响', async () => {
       makeStore({ role: 'user', isAuthenticated: true })
-      const next = fakeNext()
-      await authGuard(fakeRoute({ requiresAuth: true }), {} as RouteLocationNormalized, next)
-      expect(next).toHaveBeenCalledWith()
-    })
-  })
-
-  // 本地模式：服务端就是跑在本机的同一个网关，身份由 `POST /v1/auth/session` 免口令
-  // 下发（internal/api/auth_local_session.go）。守卫因此**不再跳过判定**，
-  // 只有"云端独有"的页面继续被 meta.cloudOnly 拦掉。
-  describe('本地模式', () => {
-    beforeEach(() => {
-      ;(globalThis as Record<string, unknown>).chironDesktop = { isDesktop: true, mode: 'local' }
-    })
-    afterEach(() => {
-      delete (globalThis as Record<string, unknown>).chironDesktop
-    })
-
-    it('cloudOnly 页面（登录/注册/计费）回首页，不进 501', async () => {
-      makeStore({ role: 'owner', isAuthenticated: true })
-      const next = fakeNext()
-      await authGuard(fakeRoute({ cloudOnly: true }), {} as RouteLocationNormalized, next)
-      expect(next).toHaveBeenCalledWith('/')
-    })
-
-    it('管理后台可达：会话返回 owner 即放行', async () => {
-      const store = makeStore({ role: 'owner', isAuthenticated: true })
-      const next = fakeNext()
-      await authGuard(
-        fakeRoute({ requiresAuth: true, requiresAdmin: true }),
-        {} as RouteLocationNormalized,
-        next,
-      )
-      // 角色必须来自后端会话，不是 localStorage 里那一份
-      expect(mocks.fetchProfileMock).toHaveBeenCalled()
-      expect(next).toHaveBeenCalledWith()
-      expect(store.user?.role).toBe('owner')
-    })
-
-    it('本地也拒绝伪 admin：会话里是普通 user 时不进管理后台', async () => {
-      const store = makeStore({ role: 'owner', isAuthenticated: true }) // 本地存储被篡改
-      store.fetchProfile = mocks.fetchProfileMock.mockImplementation(() => {
-        store.user = { id: 'u1', email: 'a@b.c', name: 'A', role: 'user', tenant_id: 't1' }
-        return Promise.resolve(undefined)
-      })
-      const next = fakeNext()
-      await authGuard(
-        fakeRoute({ requiresAuth: true, requiresAdmin: true }),
-        {} as RouteLocationNormalized,
-        next,
-      )
-      expect(next).toHaveBeenCalledWith('/')
-    })
-
-    it('会话还没建立时不误拦：本地模式没有登录页可弹', async () => {
-      makeStore({ role: null, isAuthenticated: true })
       const next = fakeNext()
       await authGuard(fakeRoute({ requiresAuth: true }), {} as RouteLocationNormalized, next)
       expect(next).toHaveBeenCalledWith()

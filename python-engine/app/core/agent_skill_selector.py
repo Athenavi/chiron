@@ -309,7 +309,7 @@ class RoleSkillMatcher:
                 role_id=AgentRole.CODER.value,
                 name="编码者",
                 description="负责代码生成、脚本编写、功能实现",
-                allowed_workstations=[WorkstationType.SKILL, WorkstationType.WORKFLOW],
+                allowed_workstations=[WorkstationType.SKILL],
                 preferred_capabilities=["skill:execute_python", "skill:write_file"],
                 forbidden_capabilities=["knowledge:kb_search"],  # 不需要知识库检索
                 tags=["编码", "开发", "Python"],
@@ -345,8 +345,8 @@ class RoleSkillMatcher:
                 role_id=AgentRole.PLANNER.value,
                 name="规划师",
                 description="负责任务规划、拆解、编排",
-                allowed_workstations=[WorkstationType.WORKFLOW, WorkstationType.AGENT],
-                preferred_capabilities=["workflow:build_dag", "agent:orchestrator"],
+                allowed_workstations=[WorkstationType.AGENT],
+                preferred_capabilities=["agent:orchestrator"],
                 tags=["规划", "编排", "拆解"],
                 can_collaborate_with=[
                     AgentRole.RESEARCHER,
@@ -375,7 +375,6 @@ class RoleSkillMatcher:
                 allowed_workstations=[
                     WorkstationType.DIALOGUE,
                     WorkstationType.AGENT,
-                    WorkstationType.WORKFLOW,
                 ],
                 preferred_capabilities=[],  # 不偏好具体技能,统一调度其他角色
                 tags=["协调", "编排", "管理"],

@@ -9,10 +9,10 @@ import (
 	"github.com/athenavi/chiron/internal/engine"
 )
 
-// routes_proxy.go —— Python 引擎代理（图/工作流/知识库）的路由注册。
+// routes_proxy.go —— Python 引擎代理（知识库/对话/能力/记忆等）的路由注册。
 // 由 gateway_router.go 按业务域拆分而来（纯移动：函数签名、函数体、调用点一字未改）。
 
-// ── Python engine proxy routes (graphs / workflows / knowledge base) ──
+// ── Python engine proxy routes（knowledge base / chat / capabilities / memory）──
 
 func registerProxyRoutes(
 	mux *http.ServeMux,
@@ -111,18 +111,6 @@ func registerProxyRoutes(
 			return prefix + "/" + r.PathValue(param) + suffix
 		}
 	}
-
-	// Graphs (auth + rate limited, proxies to Python)
-	graphP := newProxy("", proxyOpt{logTag: "graph"})
-	mux.Handle("GET /v1/graphs", authMW(rlMW(graphP(pathFn("/v1/graphs")))))
-	mux.Handle("POST /v1/graphs", authMW(rlMW(graphP(pathFn("/v1/graphs")))))
-	mux.Handle("GET /v1/graphs/{id}", authMW(rlMW(graphP(pathParam("/v1/graphs")))))
-	mux.Handle("DELETE /v1/graphs/{id}", authMW(rlMW(graphP(pathParam("/v1/graphs")))))
-	mux.Handle("POST /v1/graphs/{id}/execute", authMW(rlMW(graphP(pathParamSuffix("/v1/graphs", "/execute")))))
-
-	// Workflow 执行状态与历史（代理 Python；status 支持内存实例 + DB 回退）
-	mux.Handle("GET /v1/workflows/instances", authMW(rlMW(graphP(pathFn("/v1/workflows/instances")))))
-	mux.Handle("GET /v1/workflows/{id}/status", authMW(rlMW(graphP(pathParamSuffix("/v1/workflows", "/status")))))
 
 	// Knowledge Base (auth + rate limited + tenant QPS limit, proxies to Python)
 	kbP := newProxy("/v1/kb", proxyOpt{logTag: "kb"})

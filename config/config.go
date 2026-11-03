@@ -48,15 +48,6 @@ type Config struct {
 	// 启动只做只读校验，不一致即拒绝启动，避免"代码已升级、迁移未跑"的静默漂移。
 	AllowSchemaDrift bool
 
-	// LocalBootstrap 打开本地模式的免口令会话引导（POST /v1/auth/session）。
-	// 默认 false：这个端点会**不校验任何口令就铸出一个 owner JWT**，只有在
-	// "数据只在这台机器上、进程由本机用户自己启动"的桌面本地部署里才成立。
-	// 桌面壳拉起网关时显式置 1（frontend-vue/electron/local-stack.cjs），
-	// 云端/多人部署保持关闭即完全不会注册这条路由。
-	// 处理链上还有第二道闸门：只认 loopback 来源，局域网请求一律 403
-	//（局域网设备只能用口令走 POST /v1/auth/login）。
-	LocalBootstrap bool
-
 	// Auth
 	JWTSecret     string
 	JWTExpiration time.Duration
@@ -249,7 +240,6 @@ func loadConfig() *Config {
 		MetricsToken:       getSecret("METRICS_TOKEN", ""),
 		DegradedMode:       isTruthy(getEnv("DEGRADED_MODE", "")),
 		AllowSchemaDrift:   isTruthy(getEnv("ALLOW_SCHEMA_DRIFT", "")),
-		LocalBootstrap:     isTruthy(getEnv("LOCAL_BOOTSTRAP", "")),
 		LogLevel:           getEnv("LOG_LEVEL", "info"),
 
 		// 支付（支付宝/微信）

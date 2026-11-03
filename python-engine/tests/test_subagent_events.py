@@ -1,6 +1,6 @@
 """P1 回归测试：子 Agent 事件旁路（EventSink）与 L2 输出契约。
 
-对应设计文档 docs/subagent-design.md §4.2/§4.3/§6 的验收点：
+对应设计文档 python-engine/app/subagent//§4.3/§6 的验收点：
 * 保留事件名与线上面（type/run_id/depth/parent_run_id/profile/status/usage）；
 * 同频道增量按 merge_window 合并；终态不参与丢弃；缓冲上限触发 truncated；
 * 每 run 每秒事件预算生效（预览可丢、终态必达）；

@@ -75,7 +75,7 @@ func defaultResolveEntitledModels(ctx context.Context, userID string) ([]string,
 		return nil, false, errors.New("entitlement: postgres pool unavailable")
 	}
 
-	// 生效与否只由时间决定（见 0009 迁移文件头）：无 status 列，过期即失配。
+	// 生效与否只由时间决定（见权威基线）：无 status 列，过期即失配。
 	rows, err := pool.Query(ctx,
 		`SELECT COALESCE(allowed_models, ARRAY[]::text[])
 		   FROM user_entitlements

@@ -3,7 +3,6 @@ import errors from './errors'
 import legacy from './legacy'
 import auth from './auth'
 import admin from './admin'
-import workflow from './workflow'
 import agent from './agent'
 import knowledge from './knowledge'
 import mail from './mail'
@@ -12,6 +11,7 @@ import media from './media'
 import billing from './billing'
 import settings from './settings'
 import notifications from './notifications'
+import task from './task'
 
 /**
  * ar（RTL）。键与 zh-CN 一一对应（zh-CN 为源语言）；缺失的键会自动回退到 zh-CN。
@@ -158,6 +158,7 @@ export default {
     loaded_name: "تم التحميل: {name}",
     loaded_template_name_edit_and_save: "تم تحميل القالب «{name}»؛ عدّله ثم احفظه",
     compressed_before_after: "تم الضغط {before} → {after}",
+    steer_applied: "تم تطبيق توجيهك أثناء التشغيل",
     enabled_name: "{name} مُفعّل",
     copiedExcl: "تم النسخ!",
     generated_name: "تم التوليد: {name}",
@@ -478,6 +479,10 @@ export default {
     admin_adjustment: "تعديل من المشرف",
     trace: "أثر",
     traceable_visible_process_your_local_intelligent_workspace: "أثر قابل للتتبع وعملية مرئية — مساحة عملك الذكية المحلية.",
+    chat_agent_skill_knowledge_base_and_plugins_unified_full_stack_capabilities_combine_freely: "محادثة ووكيل ومهارة وقاعدة معرفة وإضافات في منظومة واحدة؛ قدرات كاملة تُركّب بحرية؛",
+    i_will_help_you_analyze_this_data_first_let_me_break_the_requirements_into_a_few_steps: "سأساعدك في تحليل هذه البيانات، دعني أولًا أقسّم المتطلبات إلى خطوات…",
+    this_service_provides_llm_based_conversation_and_knowledge_base_capabilities_service_may_be_interrupted_for_maintenance_upgrades_or_force_majeure: "توفّر هذه الخدمة إمكانات المحادثة وقاعدة المعرفة المبنية على النماذج اللغوية الكبيرة. قد تنقطع الخدمة لأغراض الصيانة أو الترقية أو القوة القاهرة.",
+    self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_skill_knowledge_base_and_plugin_in_one: "منصة AI Agent ذاتية الاستضافة ومتعددة المستأجرين وقابلة للتحكم بالكامل. محادثة ووكيل ومهارة وقاعدة معرفة وإضافة في منظومة واحدة.",
     scroll_page: "تمرير الصفحة",
     backend_type: "نوع الواجهة الخلفية",
     suffix: "لاحقة",
@@ -1052,7 +1057,6 @@ export default {
   errors,
   auth,
   admin,
-  workflow,
   agent,
   knowledge,
   mail,
@@ -1061,6 +1065,7 @@ export default {
   billing,
   settings,
   notifications,
+  task,
   // legacy 域**展平**到顶层：它的键就是 zh-CN 原文（gettext 风格），
   // 迁移代码写的是 t('原文') 而不是 t('legacy.原文')。此前它被嵌套成 legacy 域，
   // 导致**裸键永远命不中** —— 无插值的文案会看起来正常（回退时用键当消息，而键即原文），

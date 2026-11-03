@@ -3,7 +3,7 @@
 父 agent 调用 ``subagent(task, profile="reviewer")``，在**独立 session** 上运行一个完整的
 AgentRuntime 循环（独立消息历史、工具集、轮次与深度预算）。
 
-分层（docs/subagent-design.md §3.4）：
+分层（python-engine/app/subagent/）：
 * **L0 完整过程** → ``subagent_run_steps``（脱敏后落库，供审计/回放，**永不进父上下文**）
 * **L1 有效消息** → ``subagent_runs.summary``（LLM 整理；父会话后续 turn 只注入这一条）
 * **L2 当轮回传** → 限长 + ``<subagent-result>`` 不可信包装（仅当轮）
@@ -163,11 +163,11 @@ async def subagent(
     `subagent_runs` 上记下血缘（`resumed_from`）与分叉点（`resume_at_step`）。
     与 `inherit_context` 走**同一条**通道、同一套"数据不是指令"纪律。
 
-    target: **compiled 目标**（S1，keyword-only）。形态 ``"<prefix>:<ref>"``，目前内置三个
+    target: **compiled 目标**（S1，keyword-only）。形态 ``"<prefix>:<ref>"``，目前内置两个
     前缀：``profile:<id>``（与 ``profile=`` **同一条路径**）、``skill:<name>``（复用
-    ``skill_run`` 的四类执行）、``workflow:<id>``（复用 ``run_workflow``）。注册表是**白名单**
+    ``skill_run`` 的四类执行）。注册表是**白名单**
     —— 只认仓库内置实现，不提供"用户上传可调用对象"的通道。注意 ``target=`` 走**同步**委派
-    （技能/工作流没有后台生命周期语义），需要后台请用 ``profile=`` 或默认子 Agent。
+    （技能没有后台生命周期语义），需要后台请用 ``profile=`` 或默认子 Agent。
     """
     if not task.strip():
         return {"error": "task is required"}
@@ -185,7 +185,7 @@ async def subagent(
     target_spec = (target or "").strip()
     if target_spec:
         if run_in_background:
-            # 同步是有意的：`skill`/`workflow` 没有"后台运行"的生命周期语义，而 profile
+            # 同步是有意的：`skill` 没有"后台运行"的生命周期语义，而 profile
             # target 的后台等价物就是既有的 `profile=` 路径。硬撑一个"后台 target"只会
             # 造出半个生命周期（注册表/看门狗/落库都对不上）。
             return {
@@ -559,8 +559,7 @@ registry.register(
                 "type": "string",
                 "default": "",
                 "description": (
-                    "Optional compiled target: 'profile:<id>' | 'skill:<name>' | "
-                    "'workflow:<id>'. Only built-in targets exist (no user-supplied "
+                    "Optional compiled target: 'profile:<id>' | 'skill:<name>'. "
                     "callables). Delegation via `target` is **synchronous**; for a "
                     "background run use `profile` instead. 'profile:<id>' is equivalent "
                     "to `profile=<id>`."

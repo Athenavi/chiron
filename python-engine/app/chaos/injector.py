@@ -2,7 +2,7 @@
 
 ## 分工
 
-* **权威状态**：PostgreSQL 的 ``ent_chaos_experiments``（迁移 ``0002_ent_chaos_experiments``）
+* **权威状态**：PostgreSQL 的 ``ent_chaos_experiments``
   —— 实验的创建/回滚/审计轨迹；
 * **热路径**：**不查库**。Redis 的 ``chaos:active:{tenant_id}`` 承载活跃实验，
   TTL 很短且写入侧主动失效，跨副本一致（见 :func:`invalidate`）；

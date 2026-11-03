@@ -3,7 +3,7 @@
 ## 为什么需要它
 
 每个模式默认只暴露少量"常用工具"（常规/创造 12 个、极简 3 个），
-其余 50+ 个（`browser_*` / `image_generate` / `workflow_run` / `graph_run` /
+其余 50+ 个（`browser_*` / `image_generate` /
 `speech_to_text` / `text_to_speech` / `vision_analyze` / `agent_session_*` …）
 **并不在工具列表里**。这是有意的取舍：工具 schema 很占 token，全塞给模型既贵、
 又会降低选择准确率（`modes.py` 顶部那句"只暴露这些给 LLM，其余按需激活"）。
@@ -52,9 +52,6 @@ _ALIASES: dict[str, str] = {
     "转写": "speech_to_text",
     "朗读": "text_to_speech",
     "配音": "text_to_speech",
-    "工作流": "workflow",
-    "编排": "workflow",
-    "流程图": "graph",
     "子agent": "subagent",
     "子代理": "subagent",
     "委派": "subagent",
@@ -162,9 +159,9 @@ registry.register(
     description=(
         "Discover and activate additional tools on demand. Only a small core set of "
         "tools is exposed by default; the rest (browser automation, image generation, "
-        "vision, speech, workflows, graphs, background jobs, knowledge base, …) must be "
+        "vision, speech, background jobs, knowledge base, …) must be "
         "found through this tool first. Pass a natural-language query or keywords "
-        "(Chinese is supported, e.g. '浏览器', '生成图片', '跑工作流'), or leave it empty "
+        "(Chinese is supported, e.g. '浏览器', '生成图片'), or leave it empty "
         "to list everything available. Matched tools become callable from the NEXT turn."
     ),
     parameters={

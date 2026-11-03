@@ -14,17 +14,7 @@ vi.mock('../../api', async (importOriginal) => {
   }
 })
 
-// 设备模式可控：本地模式没有账号体系，应当完全跳过回写。
-vi.mock('../../stores/device', async (importOriginal) => {
-  const actual = await importOriginal<typeof import('../../stores/device')>()
-  return {
-    ...actual,
-    currentDeviceMode: vi.fn(() => 'cloud' as const),
-  }
-})
-
 import { api } from '../../api'
-import { currentDeviceMode } from '../../stores/device'
 import { currentLocale, setLocale } from '../../i18n'
 import { applyServerLocale, installLocaleSync, persistLocale } from '../localeSync'
 
@@ -43,7 +33,6 @@ const LOCALE_STORAGE_KEY = 'chiron.locale'
 
 beforeEach(() => {
   vi.mocked(api.put).mockReset().mockResolvedValue({ data: { data: {} } })
-  vi.mocked(currentDeviceMode).mockReturnValue('cloud')
   localStorage.clear()
   // 清掉可能由上一个用例注册的 hook，避免相互污染。
   installLocaleSync(() => false)
@@ -67,14 +56,6 @@ describe('persistLocale（回写服务端）', () => {
   it('未登录：不发请求（匿名用户没有 users 行可写）', async () => {
     installLocaleSync(() => false)
     await persistLocale('ar')
-
-    expect(vi.mocked(api.put)).not.toHaveBeenCalled()
-  })
-
-  it('本地模式：不发请求（没有 /v1/auth/profile）', async () => {
-    vi.mocked(currentDeviceMode).mockReturnValue('local')
-    installLocaleSync(() => true)
-    await persistLocale('en-US')
 
     expect(vi.mocked(api.put)).not.toHaveBeenCalled()
   })

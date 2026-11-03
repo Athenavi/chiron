@@ -4,14 +4,13 @@
 ② 引擎包装 native reasoning（原 `runtime.py` 把 `chunk.reasoning_content` 包进 `text`）。
 两者共用同一形态，消费方只能猜"这次是谁包的" —— 评测要剥、ACP 要切、前端要切、子 agent 也要切。
 
-A1 把 native reasoning 拆成**独立事件**。本文件钉住它带来的四条后果：
+A1 把 native reasoning 拆成**独立事件**。本文件钉住它带来的三条后果：
 
 1. 引擎产出 `thinking`，不再产出包装后的 `text`；
-2. 评测的 `final_text` 不受思考污染（**不需要改代码**就该成立 —— 这条断言是防它退化）；
-3. ACP 把 `thinking` 直接映射为 thought 增量（不再从 text 里猜）；
-4. **协同的共享上下文不含思考** —— 此前它被包在 text 里混了进去（A1 顺带修好的真实污染）。
+2. ACP 把 `thinking` 直接映射为 thought 增量（不再从 text 里猜）；
+3. **协同的共享上下文不含思考** —— 此前它被包在 text 里混了进去（A1 顺带修好的真实污染）。
 
-模型**自产**标记的解析是另一条通道，仍在各自消费方（前端 `splitThinking`、评测 `_strip_thinking`、
+模型**自产**标记的解析是另一条通道，仍在各自消费方（前端 `splitThinking`、
 子 agent `_split_thinking`），这里不重复测。
 """
 
@@ -25,8 +24,6 @@ import pytest
 
 from app.agent.runtime import AgentRuntime, AgentTask
 from app.gateway.provider import ChatResponse
-from evals.assertions import Observation
-from evals.observe import observation_from_events
 from tests.source_scan import code_of
 
 ENGINE = Path(__file__).resolve().parents[1] / "app"
@@ -69,36 +66,7 @@ async def test_engine_emits_thinking_event_not_wrapped_text():
     assert not any("[thinking]" in t for t in texts), "思考不该再混进 text"
 
 
-# ── 2. 评测的 final_text 不被污染 ───────────────────────────────────────
-
-
-def test_evaluation_final_text_excludes_thinking():
-    """`final_text_contains` 靠这个口径 —— 思考混进去会让"想过但没说"被误判为通过。"""
-    obs = observation_from_events(
-        [
-            {"type": "thinking", "content": "我打算说 42"},
-            {"type": "text", "content": "答案是 7"},
-        ]
-    )
-
-    assert obs.final_text == "答案是 7"
-    assert "42" not in obs.final_text
-
-
-def test_evaluation_still_strips_model_authored_markers():
-    """A1 **不**取代对模型自产标记的解析 —— 那是另一条通道，必须保留。"""
-    obs = observation_from_events([{"type": "text", "content": "[thinking]想[/thinking]答案"}])
-
-    assert obs.final_text == "答案"
-
-
-def test_observation_ignores_unknown_event_types():
-    """thinking 事件对评测是"不认识就跳过"，不该因此报错。"""
-    assert Observation().final_text == ""
-    assert observation_from_events([{"type": "thinking", "content": "x"}]).steps == 0
-
-
-# ── 3. ACP 直接映射 ─────────────────────────────────────────────────────
+# ── 2. ACP 直接映射 ─────────────────────────────────────────────────────
 
 
 def test_acp_maps_thinking_event_to_thought_delta():

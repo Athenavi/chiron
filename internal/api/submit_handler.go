@@ -11,11 +11,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/agentgoal"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/broadcast"
-	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/engine"
 	"github.com/athenavi/chiron/internal/evidence"
@@ -267,7 +267,74 @@ func (h *SubmitHandler) SubmitInterrupt(w http.ResponseWriter, r *http.Request) 
 	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
 }
 
-// GoalEnforceKey 是 workbenchCtx 里的标记键：本次提交是**证据判定驱动的续跑轮**。
+// SubmitSteer 把用户的追加指令注入正在跑的 run（**不终止**）。
+//
+// 准入与 SubmitInterrupt 同源：会话归属 + 调用者身份 + run token。少任何一条，别人就能
+// 往你的 run 里塞指令 —— 那是**内容注入**，比打断更危险。差别只在引擎侧不停 run，
+// 而是把文本排队，由下一轮边界消费。
+//
+// 与 SubmitInterrupt 的一处刻意不同：引擎用 `200 + {"ok": false, "error": ...}` 表达拒绝
+// （它同时要给直连引擎的 ACP 客户端用），这里把 `ok:false` 翻成对应的 HTTP 状态码。
+// 照抄 200 会让"没送到"看起来像"送到了" —— steer 的全部价值就是让用户相信话带到了。
+func (h *SubmitHandler) SubmitSteer(w http.ResponseWriter, r *http.Request) {
+	var req struct {
+		SessionID string `json:"session_id"`
+		UserID    string `json:"user_id,omitempty"`
+		RunToken  string `json:"run_token,omitempty"`
+		Text      string `json:"text"`
+	}
+	if err := DecodeJSON(w, r, &req); err != nil {
+		BadRequest(w, "invalid request")
+		return
+	}
+	if req.SessionID == "" {
+		BadRequest(w, "session_id is required")
+		return
+	}
+	if strings.TrimSpace(req.Text) == "" {
+		BadRequest(w, "text is required")
+		return
+	}
+	if claims := auth.GetClaims(r.Context()); claims != nil {
+		req.UserID = claims.UserID
+	}
+	routeCtx := engine.WithRunAffinity(r.Context(), req.SessionID)
+	if rec, ok := engine.RunOwner(routeCtx, req.SessionID); ok {
+		req.RunToken = rec.RunToken
+	}
+	var out map[string]any
+	if err := h.python.PostJSON(routeCtx, "/v1/agent/steer", req, &out); err != nil {
+		slog.Error("steer: python proxy failed", "session", req.SessionID, "error", err)
+		InternalError(w, "steer proxy failed")
+		return
+	}
+	if ok, _ := out["ok"].(bool); !ok {
+		reason, _ := out["error"].(string)
+		JSON(w, steerStatus(reason), APIResponse{Success: false, Error: reason})
+		return
+	}
+	JSON(w, http.StatusOK, APIResponse{Success: true, Data: out})
+}
+
+// steerStatus 把引擎的拒绝原因映射成状态码，让调用方能区分"重试有用"与"没用"。
+//
+// 按 `docs/error-codes.md` 的口径：4xx 是调用方的问题（不该重试），429 是限流（可退避），
+// 409 是状态冲突（run 已结束/换了 run，重试通常无用但换 token 可能有用）。
+func steerStatus(reason string) int {
+	switch {
+	case strings.Contains(reason, "not session owner"):
+		return http.StatusForbidden
+	case strings.Contains(reason, "rate limited"):
+		return http.StatusTooManyRequests
+	case strings.Contains(reason, "no active agent"), strings.Contains(reason, "stale run token"):
+		return http.StatusConflict
+	case strings.Contains(reason, "too long"), strings.Contains(reason, "is required"):
+		return http.StatusBadRequest
+	default:
+		return http.StatusConflict
+	}
+}
+
 const GoalEnforceKey = "goal_enforce"
 
 // GoalEnforceSource 是续跑轮注入消息的来源标记。
@@ -363,7 +430,7 @@ func (h *SubmitHandler) saveGoal(ctx context.Context, g agentgoal.Goal) {
 // submitOnce 是**一轮**提交：把请求代理到 Python 引擎并流式转发 SSE，
 // 结束时用 host 证据判定本轮的完成情况，并返回该判定。
 //
-// workbenchCtx 是前端组装的工作台上下文（kb_id / agent / skill_names / workflow_id），
+// workbenchCtx 是前端组装的工作台上下文（kb_id / agent / skill_names），
 // 透传给引擎消费 —— 网关不再丢弃它。
 func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, content string, llmConfig, workbenchCtx map[string]interface{}, attachments []map[string]interface{}) *agentgoal.Report {
 	// P1 修复：与 Python 引擎 5min 客户端超时对齐，避免长任务被 180s 硬超时截断
@@ -437,6 +504,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	msgSource := ""
 	if _, ok := workbenchCtx[FollowupKey]; ok {
 		msgSource = FollowupSource
+	}
+	// 后台命令结束的自动轮：与子 Agent 分开标记，前端据此给不同的小字。
+	if _, ok := workbenchCtx[JobFollowupKey]; ok {
+		msgSource = JobFollowupSource
 	}
 	// P1：证据判定驱动的续跑轮 —— 同样必须带来源标记，别让续跑指令伪装成用户提问。
 	if _, ok := workbenchCtx[GoalEnforceKey]; ok {
@@ -532,6 +603,8 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			tenantID = parseTenantID(claims.UserID)
 		}
 	}
+	// roadmap §6 问题 4：事件驱动回合默认降级到 `ask`（见 restrictEventDrivenToolsMode）。
+	explicit = restrictEventDrivenToolsMode(ctx, userID, workbenchCtx, explicit)
 	// tenant_id 仍要透传：引擎侧按它隔离记忆/知识库/审计。
 	pythonReq["tenant_id"] = tenantID
 	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantStr(tenantID), userID, sessionID, explicit)
@@ -825,6 +898,16 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	// 放在扣费分支**之外**：免费额度内的回合同样消耗租户池，此前那部分根本不入账。
 	TrueUpTenantQuota(storeCtx, userID, tenantID, int64(usage.input+usage.output),
 		QuotaReserveFromContext(ctx))
+
+	// 接管回合的预算记账（P1-2 第 8 步 / 验收第 5 条）：把这一轮的**真实**用量交回驱动，
+	// 由它在整个回合（含目标续跑的各轮）结束后累加 `token_spent` 并判定硬闸门。
+	//
+	// 口径与上一句 `TrueUpTenantQuota` 完全一致（input + output，cached 不进池不计预算）：
+	// 用户在面板上看到的"已花 / 上限"必须与账单同源，否则超限时两边对不上就说不清。
+	// 只有 ctx 上挂了收集器的调用才生效 ⇒ 普通提交零影响。
+	if sink := takeoverUsageFromCtx(ctx); sink != nil {
+		sink.Add(usage.input + usage.output)
+	}
 
 	// 回合终态收敛：取消(断开/超时) -> cancelled；引擎报错 -> failed；否则 completed。
 	turnStatus := "completed"

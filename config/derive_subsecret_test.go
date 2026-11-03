@@ -2,14 +2,12 @@ package config
 
 import "testing"
 
-// deriveSubsecret 的口径同时被三处实现：Go（这里）、Python
-// （python-engine/app/config.py::_validate_security_defaults）与 Electron 主进程
-// （frontend-vue/electron/local-stack.cjs::deriveSubsecret）。
+// deriveSubsecret 的口径同时被两处实现：Go（这里）与 Python
+// （python-engine/app/config.py::_validate_security_defaults）。
 //
-// 三边任何一格改动（域标签、算法、base64 变体、是否保留 padding）都不会让改的那侧
-// 报错，而是让**另两侧**认不出 token：打包态本地模式表现为网关→引擎全线 401，
-// 引擎把网关铸的 JWT 判为无效。所以口径必须用同一组黄金向量钉死，
-// 另两侧的等价断言见 frontend-vue/electron/__tests__/local-stack.test.cjs。
+// 任何一侧改动（域标签、算法、base64 变体、是否保留 padding）都不会让改的那侧
+// 报错，而是让**另一侧**认不出 token：网关→引擎全线 401，
+// 引擎把网关铸的 JWT 判为无效。所以口径必须用同一组黄金向量钉死。
 //
 // 向量来源：HMAC-SHA256(secret, domain) → base64url 无 padding。
 func TestDeriveSubsecretGoldenVectors(t *testing.T) {

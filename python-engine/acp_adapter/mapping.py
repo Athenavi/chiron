@@ -91,8 +91,8 @@ Update = (
 def split_thinking(text: str) -> list[TextDelta | ThoughtDelta]:
     """把内联的思考标记切成"思考增量 + 正文增量"两类。
 
-    与评测侧（`evals/observe.py`）的做法不同：那里是**剥掉**思考（评测只关心最终回答），
-    这里要**保留**它 —— 编辑器里看到思考是有价值的。同样的输入，两种用途两种处理。
+    与"剥掉思考"的做法不同：编辑器里看到思考是有价值的，所以这里**保留**它。
+    同样的输入，两种用途两种处理。
     """
     if _THINKING_OPEN not in text:
         return [TextDelta(text)] if text else []

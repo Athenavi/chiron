@@ -50,12 +50,10 @@ type Agent struct {
 	Enabled        bool            `json:"enabled"`
 	// 工作台绑定（可空 = 不绑定，保持既有行为）：
 	// KbID 是默认知识库，派发时用于 RAG 检索；Skills 是技能名数组，派发时只启用这些技能；
-	// Plugins 是 MCP server 名数组，派发时只放这些插件提供的工具；
-	// Workflows 是工作流 id 数组，派发时按选择顺序执行（多选即流水线）。
-	KbID      string          `json:"kb_id,omitempty"`
-	Skills    json.RawMessage `json:"skills,omitempty"`
-	Plugins   json.RawMessage `json:"plugins,omitempty"`
-	Workflows json.RawMessage `json:"workflows,omitempty"`
+	// Plugins 是 MCP server 名数组，派发时只放这些插件提供的工具。
+	KbID    string          `json:"kb_id,omitempty"`
+	Skills  json.RawMessage `json:"skills,omitempty"`
+	Plugins json.RawMessage `json:"plugins,omitempty"`
 	// UserID / Visibility 让前端区分「自己的」与「团队共享的」：
 	// 列表会同时返回本租户内别人共享（visibility='tenant'）的 Agent，但那些
 	// 只有所有者能改（update/delete 一律带 user_id 条件）。
@@ -188,7 +186,7 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 	for rows.Next() {
 		var a Agent
 		if err := rows.Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Tools, &a.LLMConfig,
-			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.Workflows,
+			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins,
 			&a.UserID, &a.Visibility, &a.CreatedAt, &a.UpdatedAt); err != nil {
 			slog.Warn("scan agent", "error", err)
 			continue
@@ -202,15 +200,15 @@ func (h *AgentHandler) List(w http.ResponseWriter, r *http.Request) {
 // 的约束（json 列类型、可见性口径），单测需要能直接引用它做断言，而不是在
 // 测试里复制一份 —— 复制出来的语句会随生产漂移，绿得毫无意义。
 //
-// 列类型必须逐列对齐：tools / llm_config / skills / plugins / workflows **全部是
-// json** 列（见 migrations/sql/init.sql 的 agents DDL），缺省值一律 '[]'::json /
+// 列类型必须逐列对齐：tools / llm_config / skills / plugins **全部是 json**
+// 列（见权威基线的 agents 建表 DDL），缺省值一律 '[]'::json /
 // '{}'::json。json 与 jsonb 之间两个方向都没有隐式转换，COALESCE 统一类型时会直接报
 // "could not convert type jsonb to json"。编译期和单测都看不出来。
 const agentListQuery = `
 SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''),
        COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json),
        max_turns, timeout_seconds, enabled, COALESCE(kb_id,''),
-       COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json),
+       COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json),
        user_id::text, COALESCE(visibility,'private'), created_at, updated_at
   FROM agents
  WHERE tenant_id = $1
@@ -253,11 +251,11 @@ func (h *AgentHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	_, err = db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO agents (id, tenant_id, user_id, name, description, system_prompt, tools, llm_config, max_turns, timeout_seconds, enabled, kb_id, skills, plugins, workflows)
-		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)`,
+		`INSERT INTO agents (id, tenant_id, user_id, name, description, system_prompt, tools, llm_config, max_turns, timeout_seconds, enabled, kb_id, skills, plugins)
+		 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)`,
 		id, claims.TenantID, claims.UserID, body.Name, body.Description, body.SystemPrompt,
 		string(toolsJSON), string(llmJSON), body.MaxTurns, body.TimeoutSeconds, body.Enabled,
-		body.KbID, jsonOrEmptyArray(body.Skills), jsonOrEmptyArray(body.Plugins), jsonOrEmptyArray(body.Workflows))
+		body.KbID, jsonOrEmptyArray(body.Skills), jsonOrEmptyArray(body.Plugins))
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create agent failed")
 		return
@@ -306,7 +304,6 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 		KbID           *string         `json:"kb_id"`
 		Skills         json.RawMessage `json:"skills"`
 		Plugins        json.RawMessage `json:"plugins"`
-		Workflows      json.RawMessage `json:"workflows"`
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
@@ -352,9 +349,6 @@ func (h *AgentHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(body.Plugins) > 0 && string(body.Plugins) != "null" {
 		push("plugins = $"+itoa(len(args)+1), string(body.Plugins))
-	}
-	if len(body.Workflows) > 0 && string(body.Workflows) != "null" {
-		push("workflows = $"+itoa(len(args)+1), string(body.Workflows))
 	}
 	// WHERE tenant_id = $N+1 AND id = $N+2 —— 双重校验防跨租户
 	args = append(args, claims.TenantID, agentID)
@@ -620,15 +614,15 @@ func (h *AgentHandler) queryAgent(ctx context.Context, tenantID int16, userID, a
 func loadAgent(ctx context.Context, tenantID int16, userID, agentID string) (*Agent, error) {
 	var a Agent
 	err := db.GlobalDBManager.QueryRow(ctx,
-		// 列类型必须对齐：tools / llm_config / skills / plugins / workflows **全部是 json 列**，
+		// 列类型必须对齐：tools / llm_config / skills / plugins **全部是 json 列**，
 		// 缺省值要用 '[]'::json / '{}'::json；写成 ::jsonb 会在运行时报
 		// "could not convert type jsonb to json" ——
 		// 编译期、go vet 和单元测试都发现不了，只有真连库跑这条 SQL 才暴露。
-		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), COALESCE(workflows,'[]'::json), created_at, updated_at
+		`SELECT id::text, name, COALESCE(description,''), COALESCE(system_prompt,''), COALESCE(tools,'[]'::json), COALESCE(llm_config,'{}'::json), max_turns, timeout_seconds, enabled, COALESCE(kb_id,''), COALESCE(skills,'[]'::json), COALESCE(plugins,'[]'::json), created_at, updated_at
 		 FROM agents WHERE tenant_id = $1 AND id = $2 AND (user_id = $3 OR (visibility = 'tenant' AND tenant_id = $1))
 		   AND (kind IS NULL OR kind = 'chat')  -- 子 Agent Profile 不可作为对话 Agent 运行`, tenantID, agentID, userID).
 		Scan(&a.ID, &a.Name, &a.Description, &a.SystemPrompt, &a.Tools, &a.LLMConfig,
-			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.Workflows, &a.CreatedAt, &a.UpdatedAt)
+			&a.MaxTurns, &a.TimeoutSeconds, &a.Enabled, &a.KbID, &a.Skills, &a.Plugins, &a.CreatedAt, &a.UpdatedAt)
 	if err != nil {
 		return nil, err
 	}

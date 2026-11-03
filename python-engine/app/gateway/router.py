@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def normalize_messages(messages: list[Any]) -> list[ChatMessage]:
     """将裸 dict 消息统一规范化为 ChatMessage。
 
-    历史上多处调用方（task_router/skill 工具/workflow 引擎等）直接传
+    历史上多处调用方（task_router/skill 工具等）直接传
     ``[{"role": ..., "content": ...}]``，而缓存层 ``_exact_key`` 调用
     ``m.to_dict()``、语义层访问 ``m.role/m.content`` — dict 会在入口处
     抛 AttributeError。网关入口统一转换，调用方无需感知。
@@ -136,7 +136,7 @@ class GatewayRouter:
         self._internal_token = internal_token
         # 运行期补注册 provider 的回调（由引擎在 lifespan 注入，见 register_provider）。
         # 没有它，"先起引擎、后配 key"就永久注册不上：provider 名单在 lifespan 里一次成型，
-        # 打包桌面态还是**引擎先于网关**启动（local-stack.cjs），网关回填 keyset 时引擎已经在
+        # 引擎又可能先于网关就绪，网关回填 keyset 时引擎已经在
         # 用一份空表了。
         self._provider_refresh = provider_refresh
         self._refresh_lock = asyncio.Lock()

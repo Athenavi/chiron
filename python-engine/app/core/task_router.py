@@ -270,7 +270,7 @@ User input: "{user_input}"
 Context: {json.dumps(context, ensure_ascii=False) if context else "None"}
 
 Please provide:
-1. action: One of ["analyze", "generate_code", "search", "create_workflow", "manage_knowledge", "general"]
+1. action: One of ["analyze", "generate_code", "search", "manage_knowledge", "general"]
 2. keywords: List of important keywords/entities
 3. entities: Extracted entities (files, functions, data)
 4. complexity: ["simple", "moderate", "complex"] - How many steps needed
@@ -849,7 +849,7 @@ Return ONLY valid JSON without markdown formatting."""
         - search:  收集所有来源，去重，生成摘要 + 来源列表
         - analyze: 串联分析结论，按依赖顺序输出关键发现
         - generate_code: 合并代码产出，按子任务顺序拼接
-        - create_workflow / manage_knowledge: 结构化输出
+        - manage_knowledge: 结构化输出
         - general / default: 通用列表式聚合
         """
         completed = [r for r in results if r.status == TaskStatus.COMPLETED]

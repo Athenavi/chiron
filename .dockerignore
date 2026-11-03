@@ -16,7 +16,6 @@ data/plugins/
 # 构建产物
 chiron.exe
 chiron
-chiron-cli
 target.txt
 
 # 文档与测试

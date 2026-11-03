@@ -111,10 +111,58 @@ jobs:
       # —— 因为旧钉的 `0.28.0` 上游解析不到、且当时无法联网核实可用版本。现已联网确认
       # `v0.36.0` 存在并取其 commit SHA，消除 master 浮动带来的供应链风险。
       # 升级时同步更新下面两处 SHA 与本注释。
+      #
+      # ⚠ **自己装 Trivy，不用 action 内置的 setup-trivy**（2026-11-04 修）：
+      # `trivy-action@v0.36.0` 内部调用 `setup-trivy@v0.2.6`，后者跑 `aquasecurity/trivy`
+      # 的 `contrib/install.sh`；那个脚本把二进制下载地址**硬编码**成
+      # `https://get.trivy.dev/trivy?...`，而不是 GitHub Releases。
+      # 该域名在 runner 上解析不到 ⇒ `curl -sL` 返回 **6**（`CURLE_COULDNT_RESOLVE_HOST`），
+      # `set -e` 把安装脚本直接打断 ⇒ 日志表现为
+      # `found version: 0.70.0 for v0.70.0/Linux/64bit` 之后立刻
+      # `Error: Process completed with exit code 6`；两份 SARIF 因此从未产出，
+      # 紧接着 `upload-sarif` 报 `Path does not exist: trivy-*.sarif` —— **那只是次生报错**，
+      # 真正坏的是安装这一步（先看 `Install Trivy` 再看 `upload-sarif`，别被后者带偏）。
+      # `github.com` 在 runner 上是可达的（`actions/checkout`、setup-trivy 自己的 checkout
+      # 都成功了），所以改从 Releases 取包并校验 sha256，两个扫描步骤 `skip-setup-trivy: true`。
+      # 升级时改下面的 `TRIVY_VERSION` 与本注释；`trivy-action` 的 SHA 仍要单独跟。
+      - name: Install Trivy（GitHub Releases，绕开解析不到的 get.trivy.dev）
+        if: always()
+        env:
+          TRIVY_VERSION: 0.70.0
+        run: |
+          set -euo pipefail
+          bin="$RUNNER_TEMP/trivy-bin"
+          mkdir -p "$bin"
+          base="https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}"
+          tarball="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          for f in "$tarball" "trivy_${TRIVY_VERSION}_checksums.txt"; do
+            curl --fail --show-error --silent --location \
+                 --retry 3 --retry-delay 2 \
+                 --output "$RUNNER_TEMP/$f" "$base/$f"
+          done
+          # 校验和不匹配就直接失败：这里装的是扫描发布镜像的工具，
+          # 装错一个二进制等于整个扫描结论作废，而它不会自己报错。
+          want=$(awk -v f="$tarball" '$2 == f {print $1}' \
+                 "$RUNNER_TEMP/trivy_${TRIVY_VERSION}_checksums.txt")
+          if [ -z "$want" ]; then
+            echo "checksum for $tarball not found in checksums.txt" >&2
+            exit 1
+          fi
+          got=$(sha256sum "$RUNNER_TEMP/$tarball" | awk '{print $1}')
+          if [ "$want" != "$got" ]; then
+            echo "checksum mismatch for $tarball: want=$want got=$got" >&2
+            exit 1
+          fi
+          tar --no-same-owner -xzf "$RUNNER_TEMP/$tarball" -C "$bin" trivy
+          echo "$bin" >> "$GITHUB_PATH"
+          "$bin/trivy" --version
+
       - name: Trivy scan (table)
         if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
+          # 二进制已由上面一步装好；不让 action 再跑一遍会失败的 install.sh。
+          skip-setup-trivy: true
           # 优先扫本地刚构建的镜像；推送场景下按 tag 扫远端
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
           format: table
@@ -126,14 +174,18 @@ jobs:
         if: always()
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25  # v0.36.0
         with:
+          skip-setup-trivy: true
           image-ref: ${{ env.REGISTRY }}/${{ env.IMAGE_PREFIX }}/${{ matrix.name }}:${{ steps.meta.outputs.version }}
           format: sarif
           output: trivy-${{ matrix.name }}.sarif
           severity: 'HIGH,CRITICAL'
           ignore-unfixed: true
 
+      # 文件不存在时跳过而不是报错：`trivy` 二进制都装不上时，SARIF 必然没有，
+      # 此时 `Path does not exist` 只会盖掉真正的安装错误（历史故障现场）。
+      # 扫描本身有问题由上面 table 那步 `exit-code: '1'` 负责让 job 变红，不会漏。
       - name: Upload SARIF
-        if: always()
+        if: always() && hashFiles(format('trivy-{0}.sarif', matrix.name)) != ''
         uses: github/codeql-action/upload-sarif@v3
         with:
           sarif_file: trivy-${{ matrix.name }}.sarif

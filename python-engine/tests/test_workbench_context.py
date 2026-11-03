@@ -32,7 +32,7 @@ class TestContextIds:
         assert context_ids({"agent_ids": ["b", "a", "b"]}, "agent") == ["b", "a"]
 
     def test_trims_and_drops_blanks(self):
-        assert context_ids({"workflow_ids": ["  x  ", "", "   ", "y"]}, "workflow") == ["x", "y"]
+        assert context_ids({"skill_ids": ["  x  ", "", "   ", "y"]}, "skill") == ["x", "y"]
 
     def test_tolerates_non_string_entries(self):
         assert context_ids({"kb_ids": ["a", 42, None, {"x": 1}, "b"]}, "kb") == ["a", "b"]
@@ -50,10 +50,10 @@ class TestContextIds:
         assert context_ids([], "kb") == []
 
     def test_names_are_independent(self):
-        ctx = {"kb_ids": ["k1"], "agent_ids": ["a1"], "workflow_ids": ["w1"]}
+        ctx = {"kb_ids": ["k1"], "agent_ids": ["a1"], "skill_ids": ["w1"]}
         assert context_ids(ctx, "kb") == ["k1"]
         assert context_ids(ctx, "agent") == ["a1"]
-        assert context_ids(ctx, "workflow") == ["w1"]
+        assert context_ids(ctx, "skill") == ["w1"]
 
 
 class TestMergeByQuota:

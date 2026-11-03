@@ -71,7 +71,6 @@ export default {
   upload_failed_name_reason: "فشل الرفع: {name} — {reason}",
   upload_failed_name_init_failed: "فشل الرفع: {name} — فشل التهيئة",
   save_failed_error: "فشل الحفظ: {error}",
-  failed_to_save_workflow_error: "فشل حفظ سير العمل: {error}",
   share_does_not_exist_or_has_expired: "المشاركة غير موجودة أو انتهت صلاحيتها",
   fork_failed: "فشل التفرع",
   failed_to_create_agent_error: "فشل إنشاء الوكيل: {error}",
@@ -167,7 +166,6 @@ export default {
   failed_to_fetch_backup_list: "فشل جلب قائمة النسخ الاحتياطية",
   failed_to_fetch_plugin_list: "فشل جلب قائمة الإضافات",
   failed_to_fetch_queue_data: "فشل جلب بيانات الطابور",
-  failed_to_fetch_workflow_templates: "فشل جلب قوالب سير العمل",
   failed_to_fetch_cache_data: "فشل جلب بيانات الذاكرة المؤقتة",
   failed_to_fetch_skill_list_please_check_your_network_connection: "فشل جلب قائمة المهارات، يرجى التحقق من اتصال الشبكة",
   failed_to_fetch_skill_marketplace: "فشل جلب سوق المهارات",
@@ -292,9 +290,4 @@ export default {
   notion_style_high_information_density_clear_layout: "نمط Notion، كثافة معلومات عالية، تخطيط واضح",
   rsa2_key_pair_app_private_key_and_alipay_public_key_are_both_pem_blank_falls_back_to_the_alipay_environment_variables: "زوج مفاتيح RSA2: المفتاح الخاص للتطبيق والمفتاح العام لـ Alipay كلاهما بتنسيق PEM؛ والترك فارغًا يرجع إلى متغيرات البيئة ALIPAY_*.",
   ssl_renewal_failed: "فشل تجديد SSL",
-  // الوضع المحلي فقط: واجهات لم تنفذها الخدمة المحلية (desktop-local) بعد (501)
-  local_mode_feature_unavailable: "هذه الميزة غير متاحة بعد في الوضع المحلي (الخدمة المحلية لا تنفذ هذه الواجهة)",
-  // الوضع المحلي: الخدمة المحلية غير جاهزة (503)، ويجب تمييزها عن رسالة
-  // "الخادم مشغول" الخاصة بتحديد المعدل في السحابة.
-  local_service_not_ready: "الخدمة المحلية ليست جاهزة بعد، لذا لا يمكن إتمام هذا الإجراء الآن. أعد المحاولة بعد قليل؛ وإذا استمر الفشل فأعد تشغيل التطبيق.",
 }

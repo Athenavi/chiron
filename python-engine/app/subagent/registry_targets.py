@@ -1,12 +1,11 @@
 """S1：内置可委派目标 + **白名单**注册表（方案 01 §4.1）。
 
-三个内置目标：
+两个内置目标：
 
 | 目标 | 说明 |
 |---|---|
 | `ProfileTarget` | 现有 Profile 子会话 —— 走 Runner 的 `run_child`，**与 `profile=<ref>` 完全同一条路径**（行为不变） |
 | `SkillTarget` | 把已安装技能当子 agent：复用 `skill_run` 的四类执行路径（prompt/python/shell/http），**不新造执行通道** |
-| `WorkflowTarget` | 把已保存的工作流图当子 agent：复用 `run_workflow`（不新造调度） |
 
 **白名单是代码层面的约束，不是约定**：`register()` 只接受 `BUILTIN_TARGET_PREFIXES` 里的
 前缀、且要求显式 `builtin=True`（该参数只由**本模块**在导入时传入）。于是"注册任意可调用
@@ -15,7 +14,6 @@
 
 from __future__ import annotations
 
-import json
 import logging
 from collections.abc import Callable
 from typing import Any
@@ -25,7 +23,7 @@ from app.subagent.target import SubagentContext, SubagentTarget, parse_target_sp
 logger = logging.getLogger(__name__)
 
 #: 允许注册的目标前缀（白名单）。**新增前缀必须改这里** —— "只能内置"的落点。
-BUILTIN_TARGET_PREFIXES: frozenset[str] = frozenset({"profile", "skill", "workflow", "remote"})
+BUILTIN_TARGET_PREFIXES: frozenset[str] = frozenset({"profile", "skill", "remote"})
 
 #: 目标工厂：`ref -> SubagentTarget`。
 TargetFactory = Callable[[str], SubagentTarget]
@@ -110,69 +108,6 @@ class SkillTarget:
         )
 
 
-class WorkflowTarget:
-    """把已保存的工作流图当子 agent 跑（复用 `run_workflow`）。
-
-    **按 `user_id` 过滤取图**：`workflow_graphs` 表没有 `tenant_id` 列，而 `user_id` 是
-    全局唯一标识 —— 所以"只取自己的图"既是隔离也是最小权限。现状别的调用点（工作流
-    上下文注入）不过滤，那是既有面；这里**不复制**那个宽松做法。
-    """
-
-    prefix = "workflow"
-
-    def __init__(self, workflow_id: str) -> None:
-        self.workflow_id = workflow_id.strip()
-
-    @property
-    def name(self) -> str:
-        return f"{self.prefix}:{self.workflow_id}"
-
-    @property
-    def description(self) -> str:
-        return "Run a saved workflow graph as a sub-agent"
-
-    async def run(self, task: str, ctx: SubagentContext) -> Any:
-        from app.db import get_pool
-
-        pool = get_pool()
-        if pool is None:
-            return _failed("workflow target requires a database connection")
-        try:
-            row = await pool.fetchrow(
-                "SELECT graph_json FROM workflow_graphs WHERE id = $1 AND user_id = $2",
-                self.workflow_id,
-                ctx.user_id or None,
-            )
-        except Exception as e:  # noqa: BLE001
-            return _failed(f"workflow lookup failed: {e}")
-        if row is None:
-            return _failed(f"workflow {self.workflow_id!r} not found for this user")
-        graph = row["graph_json"]
-        if isinstance(graph, str):
-            try:
-                graph = json.loads(graph)
-            except json.JSONDecodeError:
-                return _failed(f"workflow {self.workflow_id!r} has malformed graph_json")
-        if not isinstance(graph, dict) or not graph:
-            return _failed(f"workflow {self.workflow_id!r} has no usable graph_json")
-
-        from app.workflow.tools import workflow_run
-
-        state = dict(ctx.args or {})
-        state.setdefault("task", task)
-        try:
-            result = await workflow_run(graph, state)
-        except Exception as e:  # noqa: BLE001
-            return _failed(f"workflow {self.workflow_id!r} raised: {e}")
-        if not isinstance(result, dict):
-            return _failed(f"workflow {self.workflow_id!r} returned an unexpected payload")
-        if result.get("error"):
-            return _failed(f"workflow {self.workflow_id!r}: {result['error']}")
-        output = result.get("output")
-        text = output if isinstance(output, str) else json.dumps(output, ensure_ascii=False, default=str)
-        return _result(status="completed", output=text, profile=self.name)
-
-
 class TargetRegistry:
     """目标注册表（**白名单**：只接受内置前缀与显式声明为内置的工厂）。"""
 
@@ -203,7 +138,7 @@ class TargetRegistry:
         return tuple(sorted(self._factories))
 
     def allowed_specs(self) -> str:
-        """错误提示里的可用形态清单（`profile:<id> | skill:<name> | workflow:<id>`）。"""
+        """错误提示里的可用形态清单（`profile:<id> | skill:<name>`）。"""
         return " | ".join(f"{p}:<ref>" for p in self.prefixes) or "(none)"
 
     def resolve(self, spec: str) -> SubagentTarget | str:
@@ -228,7 +163,6 @@ class TargetRegistry:
 target_registry = TargetRegistry()
 target_registry.register("profile", ProfileTarget, builtin=True)
 target_registry.register("skill", SkillTarget, builtin=True)
-target_registry.register("workflow", WorkflowTarget, builtin=True)
 
 # S3：跨实例委派（`remote:<instance_id|auto>`）。**注册 ≠ 开放** —— 它自己还要查
 # `remote_subagent_enabled`（默认关），所以这里注册只是为了"可被解析"。

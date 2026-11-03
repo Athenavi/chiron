@@ -69,6 +69,10 @@ func registerAgentRoutes(
 	// 真取消（ACP `session/cancel` 的落点）：与 approval / answer 同一套校验 —— 三者都是
 	// "从外部作用于正在运行的 agent 循环"的通道，少了身份校验就成了骚扰与成本攻击的入口。
 	mux.Handle("POST /v1/agent/interrupt", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitInterrupt))))
+	// 运行中指导：与 interrupt 同一套准入（归属 + 身份 + run token），但**不终止** run，
+	// 只把文本排进队列、由引擎在下一轮边界注入。拒绝时引擎会给 `ok:false`，
+	// SubmitSteer 负责把它翻成 4xx/409/429，不让"没送到"看起来像"送到了"。
+	mux.Handle("POST /v1/agent/steer", authMW(rlMW(http.HandlerFunc(submitHandler.SubmitSteer))))
 
 	// 手动修复卡住的会话：一次失败若没写成终态，同会话的唯一活跃位会被永久占住，
 	// 该会话再也提交不了新消息（用户只看到"请求失败"）。本端点让用户立即恢复，
@@ -113,7 +117,7 @@ func registerAgentRoutes(
 			Content   string                 `json:"content"`
 			SessionID string                 `json:"session_id"`
 			LLMConfig map[string]interface{} `json:"llm_config"`
-			// 工作台上下文（kb_id / agent / skill_names / workflow_id 等）：由前端
+			// 工作台上下文（kb_id / agent / skill_names 等）：由前端
 			// ChatView.buildContext 组装。此前该字段未被解析 → 前端的"带知识库/技能/
 			// Agent 进入对话"在网关就被丢弃，是六大工作台互通的根断点。
 			Context map[string]interface{} `json:"context"`
@@ -308,6 +312,20 @@ func registerAgentRoutes(
 
 		Accepted(w, map[string]string{"status": "accepted", "session_id": body.SessionID})
 		go func() {
+			// P1-1：用户回合也持有会话运行锁，所以它收尾时同样必须接着取队列 ——
+			// 否则"跑着的那一轮会接手"这句话在**用户**发起的那一轮上不成立，
+			// 事件会在队列里一直等到下一条事件或进程重启。
+			//
+			// 声明在最前面 ⇒ 执行在最后（defer 后进先出），即**归还运行锁之后**，
+			// 满足约束②。ctx 用 `context.WithoutCancel`：这里的 ctx 已随请求结束，
+			// 拿它去抢锁会立刻失败，续跑就变成了静默 no-op。
+			defer drainNextThreadDelivery(context.WithoutCancel(ctx), threadTurnDeps{
+				submit:        submitHandler,
+				billingMgr:    billingMgr,
+				agentSem:      agentSem,
+				tenantResMgr:  tenantResMgr,
+				submitTimeout: submitTimeout,
+			}, body.SessionID)
 			if releaseRun != nil {
 				defer releaseRun()
 			}

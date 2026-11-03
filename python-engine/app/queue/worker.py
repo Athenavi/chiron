@@ -41,7 +41,7 @@ GATE_RETRY_INTERVAL = 0.5
 
 # ── PEL 崩溃恢复（XCLAIM 认领）─────────────────────────────────────────────
 # worker 崩溃后其未 ACK 消息停留在消费组 PEL；本实例周期认领 idle 超阈值的
-# pending 消息重投（workflow_run 依 checkpoint 幂等续跑；tool_job 重执行）。
+# pending 消息重投（tool_job 重执行）。
 # 处理中的消息由 _heartbeat_lease 周期刷新 idle（lease），所以阈值不必再大于
 # 单任务处理上限——只有真正失联（崩溃/被杀/网络分区）的消息才会 idle 超时。
 # 原值 (3600+180)s 使崩溃任务最长滞留约 1 小时才被恢复；现默认 600s。
@@ -170,6 +170,8 @@ class QueueWorker:
         self._consumer_name = f"{CONSUMER_PREFIX}-{id(self):x}"
         self._reclaim_task: asyncio.Task[Any] | None = None
         self._delay_task: asyncio.Task[Any] | None = None
+        #: Super-agent 看门狗的定时循环（P1-3）。**默认不创建** —— 见 `start()`。
+        self._watchdog_task: asyncio.Task[Any] | None = None
 
     async def start(self) -> None:
         """启动消费者"""
@@ -202,6 +204,10 @@ class QueueWorker:
         # 延迟重试：把到期的"等一会儿再来"任务搬回主队列
         self._delay_task = asyncio.create_task(self._delay_loop())
         logger.info("Queue worker delayed-retry loop started (every %.0fs)", DELAY_LOOP_SECS)
+
+        # Super-agent 看门狗（P1-3）：**只有显式开启才创建**任务。
+        # 关掉时连一个空转的协程都没有 —— "关掉它时零影响"是硬要求，不是"影响很小"。
+        self._start_watchdog()
 
         while self._running:
             try:
@@ -249,6 +255,9 @@ class QueueWorker:
         if self._delay_task is not None:
             self._delay_task.cancel()
             self._delay_task = None
+        if self._watchdog_task is not None:
+            self._watchdog_task.cancel()
+            self._watchdog_task = None
         logger.info(
             "Queue worker stopping, waiting for %d in-flight tasks...",
             len(self._in_flight),
@@ -367,7 +376,7 @@ class QueueWorker:
         """认领本组内 idle 超过 CLAIM_MIN_IDLE_MS 的 pending 消息并重新处理。
 
         覆盖场景：worker 崩溃/被杀后其未 ACK 消息滞留 PEL；其它实例接管后
-        workflow_run 依 DB checkpoint 幂等续跑、tool_job 重新执行（retry_count 递增，
+        tool_job 重新执行（retry_count 递增，
         超过 MAX_RETRIES 进 DLQ）。正在其它实例执行的长任务（idle < 阈值）不会被抢。
         """
         try:
@@ -474,6 +483,28 @@ class QueueWorker:
         except Exception:
             pass  # 计数键由 TTL 兜底
 
+    def _start_watchdog(self) -> None:
+        """按配置拉起 Super-agent 看门狗（P1-3）。
+
+        两道闸都读配置：``enabled`` 决定"要不要跑"，``act`` 决定"判断出来是否动手"。
+        ``enabled=False`` 时**不创建任务** —— 关掉它必须是真的零影响，而不是"影响很小"。
+        """
+        try:
+            from app.config import settings
+
+            enabled = bool(getattr(settings, "superagent_watchdog_enabled", False))
+        except Exception as exc:  # noqa: BLE001 - 读不到配置 = 没开（fail-closed）
+            logger.debug("watchdog: config unavailable, staying off (%s)", exc)
+            return
+        if not enabled or not self._running:
+            return
+        from app.queue.watchdog_job import watchdog_loop
+
+        self._watchdog_task = asyncio.create_task(
+            watchdog_loop(self._redis, should_stop=lambda: not self._running)
+        )
+        logger.info("Super-agent watchdog started")
+
     def _task_done(self, task: asyncio.Task[Any]) -> None:
         self._in_flight.discard(task)
         self._semaphore.release()
@@ -556,7 +587,7 @@ class QueueWorker:
             idem_raw.decode() if isinstance(idem_raw, bytes) else (idem_raw or ""),
         )
 
-        # 过期任务直接 ACK 丢弃:deadline 由投递方写入(RFC3339 UTC,见 producer/jobs/workflows)。
+        # 过期任务直接 ACK 丢弃:deadline 由投递方写入(RFC3339 UTC,见 producer)。
         # 缺省/解析失败视为无期限,保持既有行为。
         deadline_raw = (
             fields.get(b"deadline", b"").decode()
@@ -600,7 +631,7 @@ class QueueWorker:
         try:
             payload = json.loads(payload_raw)
             # 幂等闸门：该键已 completed 说明是重复投递（执行后 ACK 前崩溃被 reclaim），
-            # 直接 ACK 丢弃，避免 workflow_run/tool_job 等副作用任务重复执行。
+            # 直接 ACK 丢弃，避免 tool_job 等副作用任务重复执行。
             if not await idempotency.claim(idem_key, task_id, task_type, tenant_id):
                 await self._redis.xack(self._q.stream, self._q.group, stream_id)
                 return
@@ -817,13 +848,11 @@ class QueueWorker:
             await self._handle_memory_rollup(payload, tenant_id)
         elif task_type == "tool_job":
             await self._handle_tool_job(payload)
-        elif task_type == "workflow_run":
-            await self._handle_workflow_run(payload)
         elif task_type == "agent_followup":
             await self._handle_agent_followup(payload)
         else:
             # 未知任务类型：显式失败（回队重投）而非 ACK 丢弃。
-            # 滚动升级期间旧版 worker 收到新版 task_type（tool_job/workflow_run 等）时，
+            # 滚动升级期间旧版 worker 收到新版 task_type（tool_job 等）时，
             # 抛错使消息 retry++ 回队尾，由新版 worker 重取；超 MAX_RETRIES 进 DLQ，
             # 避免新类型任务在升级窗口被静默确认丢弃。
             raise ValueError(f"unknown task type: {task_type}")
@@ -882,30 +911,6 @@ class QueueWorker:
             )
         logger.info("agent_followup accepted: run=%s session=%s", run_id, session_id)
 
-    async def _handle_workflow_run(self, payload: dict[Any, Any]) -> None:
-        """执行（或续跑）workflow：读 DB checkpoint 跳过已完成节点，终态写回。
-
-        payload: {instance_id, user_id, graph_json, initial_state}
-        """
-        from app.tools.context import to_tenant_int  # 函数内导入，避免与 app.tools 循环导入
-        from app.workflow.executor import execute_with_checkpoint
-
-        instance_id = payload.get("instance_id") or ""
-        if not instance_id:
-            logger.warning("workflow_run payload 缺失: %s", payload)
-            return
-        await execute_with_checkpoint(
-            instance_id,
-            payload.get("graph_json") or {},
-            payload.get("initial_state") or {},
-            payload.get("user_id", ""),
-            self._gateway,
-            # payload 里的 tenant_id 已是整数域；再经 to_tenant_int 收口（缺失/不可解析 → 0），
-            # execute_with_checkpoint 的 tenant_id 形参为 int。
-            tenant_id=to_tenant_int(payload.get("tenant_id")),
-        )
-        logger.info("workflow_run done: instance=%s", instance_id)
-
     async def _handle_tool_job(self, payload: dict[Any, Any]) -> None:
         """处理后台命令任务（run_in_background 队列化）：独立子进程执行 + 结果写 Redis。
 
@@ -926,6 +931,46 @@ class QueueWorker:
             "tool_job done: job=%s status=%s exit_code=%s",
             job_id, res.get("status"), res.get("exit_code"),
         )
+        await self._notify_job_finished(payload, res)
+
+    async def _notify_job_finished(
+        self, payload: dict[Any, Any], res: dict[str, Any]
+    ) -> None:
+        """后台命令结束 → 请网关在源会话上开新一轮（P0-1）。
+
+        复用 agent_followup 那条已验证的通道（幂等 + 限流 + 会话锁 + 计费预检全在网关），
+        不另造一套。**取消不发**：那是用户自己停的，再唤起一轮只是噪音。
+
+        开关不在这里判：`users.settings` 只有网关能读，引擎无从知道用户要不要。
+        """
+        status = str(res.get("status") or "")
+        if status not in ("completed", "failed"):
+            return
+        job_id = str(payload.get("job_id") or "")
+        session_id = str(payload.get("session_id") or "")
+        user_id = str(payload.get("user_id") or "")
+        if not job_id or not session_id or not user_id:
+            return
+
+        from app.subagent.followup import enqueue_followup
+        from app.tools.context import to_tenant_int
+
+        output = str(res.get("output") or "")
+        # 取尾部：错误与结论在那里，头部通常只是命令回显。
+        tail = output[-1800:] if len(output) > 1800 else output
+        try:
+            await enqueue_followup(
+                run_id=f"job:{job_id}",
+                session_id=session_id,
+                tenant_id=to_tenant_int(payload.get("tenant_id")),
+                user_id=user_id,
+                status=status,
+                summary=tail,
+                profile="tool_job",
+                kind="job",
+            )
+        except Exception as exc:  # noqa: BLE001 - 回投失败不能影响作业本身的终态
+            logger.warning("tool_job followup 投递失败: job=%s err=%s", job_id, str(exc)[:160])
 
     async def _handle_memory_save(self, payload: dict[Any, Any], tenant_id: int = 0) -> None:
         """处理记忆持久化任务

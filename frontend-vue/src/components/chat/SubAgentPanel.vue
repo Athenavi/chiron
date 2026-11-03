@@ -2,7 +2,7 @@
 /**
  * 子 Agent 观测面板：递归层级树 + 选中 run 的实时输出。
  *
- * 数据来源（三层，见 docs/subagent-design.md §3.4/§5.2）：
+ * 数据来源（三层，见 python-engine/app/subagent//§5.2）：
  *   1. 树骨架与状态：GET /v1/subagent/runs（Redis → DB），轮询刷新；
  *   2. 实时输出：父组件（ChatView）把 SSE 的 `subagent.*` 事件按到达顺序传进来（liveEvents）；
  *   3. 历史输出：选中 run 时 GET /v1/subagent/runs/{id}/events 拉一次，再与实时事件拼接。
@@ -584,7 +584,7 @@ onBeforeUnmount(() => {
       v-if="showCostHint"
       class="cost-hint"
     >
-      <span>{{ $t('workflow.sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel') }}</span>
+      <span>{{ $t('task.sub_agents_consume_tokens_independently_cost_multiplies_when_multiple_subtasks_run_in_parallel') }}</span>
       <button
         type="button"
         class="cost-hint-close"
@@ -745,7 +745,7 @@ onBeforeUnmount(() => {
           <span>{{ $t('common.status') }}</span>
           <span class="num">in</span>
           <span class="num">out</span>
-          <span class="num">{{ $t('workflow.steps') }}</span>
+          <span class="num">{{ $t('task.steps') }}</span>
         </div>
         <div
           v-for="run in runs"
@@ -849,7 +849,7 @@ onBeforeUnmount(() => {
       <div class="output-head">
         <span>{{ selectedRun.profile || selectedRun.run_id }}</span>
         <span class="output-meta">
-          {{ $t('workflow.steps') }} {{ selectedRun.usage?.steps || 0 }}
+          {{ $t('task.steps') }} {{ selectedRun.usage?.steps || 0 }}
         </span>
       </div>
       <div class="output-summary">

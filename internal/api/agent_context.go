@@ -71,20 +71,12 @@ func agentContextPayload(a *Agent) map[string]any {
 	if plugins := agentPluginNames(a.Plugins); len(plugins) > 0 {
 		payload["plugins"] = plugins
 	}
-	if workflows := agentWorkflowIDs(a.Workflows); len(workflows) > 0 {
-		payload["workflows"] = workflows
-	}
 	return payload
 }
 // agentPluginNames 解析 Agent 绑定的插件名（json 字符串数组）；未绑定或格式不对时
 // 返回 nil，等价于"不筛选插件"。与 agentSkillNames 同构 —— 两者都是字符串数组列。
 func agentPluginNames(plugins json.RawMessage) []string {
 	return agentSkillNames(plugins)
-}
-// agentWorkflowIDs 解析 Agent 绑定的工作流 id（json 字符串数组）；未绑定或格式不对时
-// 返回 nil，等价于"不绑定工作流"。与前两者同构 —— 都是字符串数组列。
-func agentWorkflowIDs(workflows json.RawMessage) []string {
-	return agentSkillNames(workflows)
 }
 // decodeJSONArray 解析 json 数组列；空值或格式不对时返回 nil（表示"不传该字段"）
 func decodeJSONArray(raw json.RawMessage) []any {
@@ -165,14 +157,6 @@ func applyAgentBindings(wbCtx map[string]any, agent *Agent) {
 	if _, hasPlugins := wbCtx["plugin_names"]; !hasPlugins {
 		if plugins := agentPluginNames(agent.Plugins); len(plugins) > 0 {
 			wbCtx["plugin_names"] = plugins
-		}
-	}
-	// workflow_ids 与前三个同族：引擎侧由 selected_workflow_ids 读取（多值优先、
-	// 单值回退），随后 _execute_via_workflow 按顺序执行 —— 多选即流水线。
-	// 用户本次显式选的工作流优先，Agent 上带的只是默认值。
-	if _, hasWorkflows := wbCtx["workflow_ids"]; !hasWorkflows {
-		if workflows := agentWorkflowIDs(agent.Workflows); len(workflows) > 0 {
-			wbCtx["workflow_ids"] = workflows
 		}
 	}
 }

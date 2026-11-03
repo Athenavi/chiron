@@ -111,7 +111,7 @@ const menuGroups = computed(() => [
     children: [
       { key: '/admin/settings', label: t('settings.system_settings'), icon: () => h(SettingOutlined) },
       // 定时任务：原在仪表盘内，属配置类操作 → 归入系统组
-      { key: '/admin/cron', label: t('workflow.scheduled_tasks'), icon: () => h(ClockCircleOutlined) },
+      { key: '/admin/cron', label: t('task.scheduled_tasks'), icon: () => h(ClockCircleOutlined) },
       // 原「Redis 管理 + 数据库管理」合并为数据存储（Tabs）
       { key: '/admin/datastores', label: t('common.data_storage'), icon: () => h(DatabaseOutlined) },
       // 原「租户管理 + 域名管理」合并为租户与域名（Tabs）

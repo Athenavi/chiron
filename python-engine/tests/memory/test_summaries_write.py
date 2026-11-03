@@ -2,7 +2,7 @@
 
 生产里 Consolidator 用的就是这个 store（`app/main.py` 的四层装配），所以"摘要向量有没有
 数据来源"这件事必须由这里来证明，而不是只测读取侧的 `save_summary`。守的是缺陷
-「L3 摘要向量没有数据来源」（剖析文档不在仓库里），落地见迁移 0019。
+「L3 摘要向量没有数据来源」，落地见权威基线。
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ _INSERT_FIELDS = (
     "embedding_dim",
 )
 
-#: 只有真取向量时才可见的三列（迁移 0019 + 0020）。
+#: 只有真取向量时才可见的三列。
 _VECTOR_COLUMNS = ("embedding", "embedding_model", "embedding_dim")
 
 
@@ -187,7 +187,7 @@ class TestVectorLandsInPg:
 
 
 class TestVectorSpaceTags:
-    """迁移 0020（C3）：每行要能说清自己那颗向量属于哪个空间。
+    """每行要能说清自己那颗向量属于哪个空间。
 
     维度不符时 `dot_product` 返回 0.0 —— 不会算错，而是**永不相似**；同维跨模型才会造出
     虚假的高分。两列都是为这两种退化准备的判据，所以必须跟着向量一起落库。

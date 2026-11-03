@@ -1,6 +1,6 @@
 """子 Agent 运行记录落库（``subagent_runs`` / ``subagent_run_steps``）。
 
-设计要点（docs/subagent-design.md §3.2）：
+设计要点（python-engine/app/subagent/）：
 * **两张表分离**：``subagent_runs`` 存 run 级元数据 + L1 精简摘要（要被父上下文读取），
   ``subagent_run_steps`` 存 L0 完整调用过程（审计/回放，永不进上下文）。
 * **批量写**：steps 先在内存缓冲，达到阈值或结束时一次性 ``executemany``，
@@ -66,7 +66,7 @@ RERUN_OF_SQL = "UPDATE subagent_runs SET rerun_of = $2 WHERE id = $1"
 
 #: S2：本次委派真正继承了父会话的多少条消息（审计计数，供前端显示
 #: "这个子 Agent 看到了父的多少上下文"）。与 `rerun_of` 同理**单独写** ——
-#: 未执行迁移（0004_subagent_inherited_messages）的库只会丢这个计数，
+#: 未迁移的库只会丢这个计数，
 #: 不会让普通派发的 INSERT 因未知列整条失败。
 INHERITED_MESSAGES_SQL = "UPDATE subagent_runs SET inherited_messages = $2 WHERE id = $1"
 
@@ -342,11 +342,11 @@ class SubagentRunStore:
         只会丢血缘，不会影响普通派发的落库。
 
         ``inherited_messages``（S2）是继承审计计数，**同样单独写一条 UPDATE**
-        （迁移 ``0004_subagent_inherited_messages``）。0 = 未开启继承 ⇒ 不写，
+        。0 = 未开启继承 ⇒ 不写，
         列保持 NULL —— 与"开启了但一条都没继承到"区分开。
 
         ``resumed_from`` / ``resume_at_step``（R5(b)）记录**续跑 / 分叉血缘**，
-        同样单独写（迁移 ``0008_subagent_resume_link``）：`resume_at_step` 为 `None`
+        同样单独写：`resume_at_step` 为 `None`
         表示"续到底"，有值表示"只继承了 `seq < N` 的步骤"。
         """
         if not self.available:
@@ -383,8 +383,8 @@ class SubagentRunStore:
                 await self._pool.execute(RERUN_OF_SQL, run_id, rerun_of)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "subagent rerun_of 写入失败（run=%s, rerun_of=%s）：请执行迁移 "
-                    "f3a91c2d5e08；本次运行的落库不受影响: %s",
+                    "subagent rerun_of 写入失败（run=%s, rerun_of=%s）：请执行 "
+                    "alembic upgrade head；本次运行的落库不受影响: %s",
                     run_id, rerun_of, str(exc)[:160],
                 )
         if inherited_messages:
@@ -395,8 +395,8 @@ class SubagentRunStore:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "subagent inherited_messages 写入失败（run=%s）：请执行迁移 "
-                    "0004_subagent_inherited_messages；本次运行的落库不受影响: %s",
+                    "subagent inherited_messages 写入失败（run=%s）：请执行 "
+                    "alembic upgrade head；本次运行的落库不受影响: %s",
                     run_id,
                     str(exc)[:160],
                 )
@@ -409,8 +409,8 @@ class SubagentRunStore:
                 )
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
-                    "subagent resumed_from 写入失败（run=%s, resumed_from=%s）：请执行迁移 "
-                    "0008_subagent_resume_link；本次运行的落库不受影响: %s",
+                    "subagent resumed_from 写入失败（run=%s, resumed_from=%s）：请执行 "
+                    "alembic upgrade head；本次运行的落库不受影响: %s",
                     run_id,
                     resumed_from,
                     str(exc)[:160],
@@ -431,7 +431,7 @@ class SubagentRunStore:
         except Exception as exc:  # noqa: BLE001
             logger.warning(
                 "subagent root_run_id 写入失败（run=%s, resumed_from=%s, parent=%s）："
-                "请执行迁移 0021_subagent_lineage_root；本次运行的落库不受影响: %s",
+                "请执行 alembic upgrade head；本次运行的落库不受影响: %s",
                 run_id,
                 resumed_from,
                 parent_run_id,
@@ -639,8 +639,8 @@ class SubagentRunStore:
             if not self._lineage_warned:
                 self._lineage_warned = True
                 logger.warning(
-                    "subagent lineage_usage 查询失败（此后不再重复告警）：请执行迁移 "
-                    "0021_subagent_lineage_root: %s",
+                    "subagent lineage_usage 查询失败（此后不再重复告警）：请执行 "
+                    "alembic upgrade head: %s",
                     str(exc)[:160],
                 )
             return None
@@ -698,7 +698,7 @@ class SubagentRunStore:
         if "does not exist" in message or "UndefinedTable" in message:
             if not self._broken:
                 logger.warning(
-                    "subagent 运行表不可用（%s）：请执行迁移 5e244b718fd1 —— 本次运行不落库",
+                    "subagent 运行表不可用（%s）：请执行 alembic upgrade head —— 本次运行不落库",
                     where,
                 )
             self._broken = True

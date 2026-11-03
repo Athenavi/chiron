@@ -163,7 +163,7 @@ async def condense_messages(
         gateway: LLM gateway；为 None 时直接走提取式降级。
         keep_tail: 最近多少条**留原文**（不进压缩区）。
         include_future: 是否把"被裁掉的后段"也压成一句后续走向（默认否 —— 否则
-            新会话会"记得未来"，语义混乱，见 docs/session-map-branch-design.md 2.3）。
+            新会话会"记得未来"，语义混乱，见 internal/session/manager_branch.go 2.3）。
         future_messages: ``include_future`` 为真时提供的后段消息。
 
     Returns:

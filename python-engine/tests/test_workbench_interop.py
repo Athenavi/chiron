@@ -1,17 +1,14 @@
-"""六大工作台互通：本会话新增逻辑的单元测试。
+"""工作台互通：本会话新增逻辑的单元测试。
 
-覆盖其中**不依赖外部服务**的部分 —— F3.2 的工具集筛选与专家人格、F3.3 的多工作流
-编排与状态传递、最终输出提取。这些此前只有语法检查，是这批改动里最大的空洞。
+覆盖其中**不依赖外部服务**的部分 —— F3.2 的工具集筛选与专家人格。
+这些此前只有语法检查，是这批改动里最大的空洞。
 """
 
 from __future__ import annotations
 
-from types import SimpleNamespace
-
 import pytest
 
 from app.agent.runtime import _plugin_names_of, _restrict_tools_to_plugins, _tool_name_of
-from app.api.unified_executor import UnifiedChatHandler
 from app.tools.context import set_tool_context
 from app.tools.registry import registry
 from app.tools.subagent import _expert_system_prompt
@@ -138,69 +135,3 @@ class TestExpertPersona:
     def test_no_experts_in_context(self):
         set_tool_context(experts=[])
         assert _expert_system_prompt("评审") == ""
-
-
-class TestWorkflowChain:
-    """F3.3：多工作流顺序流水线（前一个输出 → 后一个输入）"""
-
-    @staticmethod
-    def _handler() -> UnifiedChatHandler:
-        # 绕过 __init__：这些方法不依赖实例状态，避免为测试构造完整依赖
-        return UnifiedChatHandler.__new__(UnifiedChatHandler)
-
-    def test_final_output_takes_last_nonempty(self):
-        final_output = UnifiedChatHandler._final_output_of
-        assert final_output(SimpleNamespace(state={"__out_a__": "first", "__out_b__": "last"})) == "last"
-        # 末节点没产出时回退到前一个非空的（不该把已有结果丢掉）
-        assert final_output(SimpleNamespace(state={"__out_a__": "first", "__out_b__": ""})) == "first"
-        assert final_output(SimpleNamespace(state={})) == ""
-
-    @pytest.mark.asyncio
-    async def test_chains_output_into_next_input(self, monkeypatch):
-        seen: list[str] = []
-
-        async def fake_run_workflow(graph_json, gateway, initial_state, instance_id):
-            seen.append(initial_state["input"])
-            return SimpleNamespace(
-                status="completed",
-                state={f"__out_n{len(seen)}__": f"out-{len(seen)}"},
-                instance_id=instance_id,
-                error="",
-            )
-
-        # _run_workflow_chain 内部是函数级 import，所以 patch 模块属性即可生效
-        monkeypatch.setattr("app.workflow.engine.run_workflow", fake_run_workflow)
-
-        result = await self._handler()._run_workflow_chain(
-            [("g1", {}), ("g2", {})], "start", "t1", None
-        )
-
-        assert seen == ["start", "out-1"]  # 第二个吃的是第一个的输出
-        assert result["status"] == "completed"
-        assert result["output"]["result"] == "out-2"
-        assert result["workflow_ids"] == ["g1", "g2"]
-
-    @pytest.mark.asyncio
-    async def test_stops_after_failure(self, monkeypatch):
-        calls: list[str] = []
-
-        async def fake_run_workflow(graph_json, gateway, initial_state, instance_id):
-            calls.append(instance_id)
-            if len(calls) == 2:
-                return SimpleNamespace(
-                    status="error", error="boom", state={}, instance_id=instance_id
-                )
-            return SimpleNamespace(
-                status="completed", state={"__out_n__": "ok"}, instance_id=instance_id, error=""
-            )
-
-        monkeypatch.setattr("app.workflow.engine.run_workflow", fake_run_workflow)
-
-        result = await self._handler()._run_workflow_chain(
-            [("g1", {}), ("g2", {}), ("g3", {})], "s", "t", None
-        )
-
-        assert result["status"] == "error"
-        assert "boom" in result["output"]["error"]
-        # 第三个不再跑：它的输入依赖前者产出，硬跑只会级联出错
-        assert len(calls) == 2

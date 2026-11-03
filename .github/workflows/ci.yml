@@ -97,38 +97,6 @@ jobs:
         # 它们由需要时单独执行：`pytest -m integration`
         run: python -m pytest -q -m "not integration"
 
-  # ── 评测骨架（smoke 集）─────────────────────────────────────────────────
-  #
-  # PR 门禁：用**确定性替身 provider** 跑 smoke 集 —— 零密钥、零费用、可判定。
-  # 这一步是 deepagents 都没有的：它的真实模型 eval 只在 workflow_dispatch 下触发
-  # （libs/evals/.github/workflows/evals.yml:4）。
-  #
-  # 它验证的是「固件 → runner → 断言 → 报告」这条链路，因此**不需要任何第三方依赖**
-  # 就能跑（httpx 已在 evals/submit.py 里改为延迟导入，只有 --submit http 才需要）。
-  # **agent 能力必须用真实模型另跑**（`--submit http`，需网关 + 引擎；尚未接线）。
-  evals:
-    name: Evals (smoke)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: python-engine
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-      - name: Smoke suite (scripted provider)
-        # 退出码 0 = 全部通过 / 1 = 有任务失败，CI 直接可用
-        run: python -m evals.cli run --suite smoke --submit scripted --report evals-report.json
-      - name: Upload report
-        # 失败时也要拿到报告（否则只能看日志里的摘要）
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: evals-smoke-report
-          path: python-engine/evals-report.json
-          if-no-files-found: warn
-
   # ── 前端 ────────────────────────────────────────────────────────────────
   frontend:
     name: Frontend
@@ -160,127 +128,6 @@ jobs:
       - name: Unit tests
         run: pnpm run test
 
-  # ── 桌面端本地栈（desktop-local + Electron 壳）──────────────────────────
-  #
-  # 这条线此前**完全没有 CI**：`desktop-local/` 的 289 条单测与
-  # `frontend-vue/electron/__tests__/` 的 147 条纯 Node 单测都没人跑
-  # （vitest 的 include 只有 `src/**`，够不到 `.test.cjs`）。
-  # 后果是真实的：`smoke.test.cjs` 里有一条用例断言的是已被移除的
-  # 「/healthz 回退」行为，在实现改成「只认 listening 事件」之后长期失效，
-  # 却没有任何地方会红。
-  #
-  # 这里跑**不需要 PG** 的部分：单测把 PG 关掉（见 `tests/conftest.py`）。
-  # Redis 例外 —— 它由下面的 service 提供（见该 job 的注释）；真实 PG 由下面的
-  # `desktop-local-integration` 单独覆盖，那一组要一个真 PG 容器，起容器比跑测试
-  # 本身还慢，混在这里会让每次改一行 Electron 代码都要等一个 PG 起来。
-  desktop-local:
-    name: Desktop local
-    runs-on: ubuntu-latest
-    # tests/test_storage_redis.py 的两条契约用例要**真**起一次 Redis 并跑 PROBE_OPS。
-    # runner 上既没有内置 redis 二进制（desktop-local/bin/redis 不随仓提交），
-    # 也没有 CHIRON_LOCAL_REDIS_URL ⇒ 后端只能落到 fakeredis，而 fakeredis 不支持
-    # EVAL ⇒ test_eval_verdict_matches_backend 必红。这与 `python` job 起 redis 的
-    # 理由相同：不是"外部集成"，而是核心逻辑本身需要它。
-    services:
-      redis:
-        image: redis:7-alpine
-        ports:
-          - 6379:6379
-        options: >-
-          --health-cmd "redis-cli ping"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      # 显式指向 service：RedisServer 的 backend 顺序是 server → bundled → fakeredis，
-      # 只有给了 URL 才走第一档（真 Lua、真 Streams）。
-      CHIRON_LOCAL_REDIS_URL: redis://127.0.0.1:6379/0
-    defaults:
-      run:
-        working-directory: desktop-local
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-          cache: pip
-          cache-dependency-path: desktop-local/pyproject.toml
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Ruff (lint)
-        run: ruff check .
-      - name: Pytest
-        # 真实 PG 用例在 `desktop-local-integration` 里单独跑（见下）。
-        run: python -m pytest -q --ignore=tests/integration
-      # Electron 壳的纯 Node 单测：所有 Electron / spawn / fetch 都由
-      # `components.cjs::_setDeps` 注入，因此不需要装 electron 本体。
-      - name: Electron syntax check
-        working-directory: frontend-vue/electron
-        run: for f in *.cjs; do node --check "$f"; done
-      - name: Electron unit tests
-        working-directory: frontend-vue/electron
-        run: node --test __tests__/*.test.cjs
-
-  # ── 桌面端本地栈：真实 PostgreSQL 集成测试 ───────────────────────────────
-  #
-  # `desktop-local/tests/integration/` 的 34 条用例此前**没有任何地方跑**：
-  # 上面的 `desktop-local` job 用 `--ignore=tests/integration` 跳过它们，
-  # 理由写的是"起不来就 skip，不放进 PR 门禁"。问题是"起不来就 skip"意味着
-  # 这组用例**永远不会红**——哪怕 `create_app` 完全连不上 PG，它们也只是安静地
-  # 变成 skipped。这正是它们长期没被发现失效的原因。
-  #
-  # 这里给它们一个真 PG，并且用 `CHIRON_REQUIRE_REAL_PG=1` 把"起不来"从
-  # skip 改成 fail（见 `tests/integration/conftest.py::pg_server`）：
-  # service 容器由本 job 自己声明，它没起来就是流水线坏了，必须红。
-  desktop-local-integration:
-    name: Desktop local (real PG)
-    runs-on: ubuntu-latest
-    defaults:
-      run:
-        working-directory: desktop-local
-    services:
-      postgres:
-        # 与桌面端内置的 embedded-postgres（PG 18.6）同大版本，避免
-        # "本地过、CI 挂"这类版本漂移；不需要 pgvector —— 迁移里没有 vector 列。
-        image: postgres:18-alpine
-        env:
-          POSTGRES_USER: chiron
-          POSTGRES_PASSWORD: chiron
-          POSTGRES_DB: chiron
-        ports:
-          - 5432:5432
-        options: >-
-          --health-cmd "pg_isready -U chiron -d chiron"
-          --health-interval 5s
-          --health-timeout 5s
-          --health-retries 20
-    env:
-      # `Settings.postgres_dsn` 的 validation_alias 认 `POSTGRES_DSN`（无前缀），
-      # 走 `external` 后端：连这个容器，不再自己拉一个 PG。
-      POSTGRES_DSN: postgresql://chiron:chiron@127.0.0.1:5432/chiron
-      # 起不来必须红，不能 skip 成"通过"。
-      CHIRON_REQUIRE_REAL_PG: '1'
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
-        with:
-          python-version: '3.14'
-          cache: pip
-          cache-dependency-path: desktop-local/pyproject.toml
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-      - name: Pytest (real PostgreSQL)
-        # `-rs` 把 skip 原因打出来：将来若有人误删 CHIRON_REQUIRE_REAL_PG，
-        # 日志里能立刻看到"全部 skipped"而不是一片绿。
-        run: python -m pytest -q tests/integration -rs
-
   # ── 迁移链整体性 ─────────────────────────────────────────────────────────
   schema:
     name: Migration chain
@@ -308,7 +155,7 @@ jobs:
       # 是注释状态、`migrations/env.py` 取不到 URL 就返回 None ⇒ alembic 直接抛
       # "Connection, url, or dialect_name is required."。**2026-10-09 本机实测：这一步按原样
       # 在 CI 里必然红**（exit 1）。下面给一个**假 DSN**：只用于确定方言，不会去连库；
-      # 给了之后渲染出 81 个 CREATE TABLE / 164 个 ALTER TABLE、exit 0（同为本机实测）。
+      # 给了之后渲染出 80 个 CREATE TABLE / 157 个 ALTER TABLE、exit 0（同为本机实测）。
       - name: Migration renders offline
         env:
           DATABASE_DSN: postgresql://chiron:chiron@localhost:5432/chiron
@@ -336,7 +183,7 @@ jobs:
         run: python scripts/check_source_encoding.py
       # Go 侧（权威判定）与 Python 侧（保守镜像）的判定表**必须同构**。两者语言
       # 不同、无法共享代码，此前只有一行注释约定 —— 并且已经漂移过
-      # （read_tool_result / list_subagent_runs / rerun_subagent）。见路线图 L3-9。
+      # （read_tool_result / list_subagent_runs / rerun_subagent）。
       # 2026-10-09 起**同时覆盖另外四族**：对话模式（Go `validAgentModes` ↔ 引擎
       # `AgentMode` 枚举 ↔ `_BASE_MODES` 覆盖，见 docs/session-runtime-spec.md §3）·
       # 模型服务提供商目录（Go `llmProviderCatalog` ↔ 引擎 `providers/catalog.py`，
@@ -395,7 +242,7 @@ jobs:
 
   # ── 真实栈集成（L2-2）───────────────────────────────────────────────────────
   # 两侧的 live 测试此前都被永久跳过：Go 侧没有 CHIRON_TEST_POSTGRES_DSN，Python 侧
-  # 只跑 -m "not integration" —— 覆盖支付入账/回退、设置持久化、工作流落库、统一
+  # 只跑 -m "not integration" —— 覆盖支付入账/回退、设置持久化、技能落库、统一
   # DB/Redis 客户端这些高风险路径的断言因此从未真正执行过。本 job 把它们跑起来：
   #   * PostgreSQL / Redis 用 services 起（compose 里没有 PG，故自建）；
   #   * schema 用 alembic 建 —— 与发布流程同一个入口，顺带验证迁移在空库上能跑通；

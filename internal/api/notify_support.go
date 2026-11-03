@@ -129,7 +129,7 @@ func (h *AuthHandler) notifyMemberJoined(ctx context.Context, tenantID int16, us
 //   - 普通成员真正需要感知的是"自己额度用完了"，那由调用时的 quota_exceeded
 //     错误提示承担，不是这条广播。
 //
-// 角色名取 ent_roles.name（owner/admin 与系统级同名，见 0008 迁移文件头）。
+// 角色名取 ent_roles.name（owner/admin 与系统级同名）。
 const tenantAdminQuery = `SELECT tm.user_id
   FROM tenant_members tm
   JOIN ent_roles r ON r.id = tm.role_id

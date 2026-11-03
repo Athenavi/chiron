@@ -12,7 +12,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
  * 轻量的 ChatEmptyHero；`../../api` 用"永远返回空列表"的替身，避免任何真实网络。
  *
  * ⚠ `vi.mock` 的工厂会被提升到文件顶部，**不能**引用文件后面的顶层变量 ⇒ 替身一律放进
- * `vi.hoisted`（与 WorkflowView.spec.ts 同款写法）。
+ * `vi.hoisted`（工厂不能引用顶层变量，替身一律放这里）。
  */
 
 // jsdom 未实现 matchMedia，antd 的断点 hook 依赖它

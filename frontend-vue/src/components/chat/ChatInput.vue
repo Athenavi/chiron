@@ -69,6 +69,10 @@ const emit = defineEmits<{
   (e: 'command', cmd: string): void
   /** 上下文快捷按钮：展开侧栏（若为抽屉模式） */
   (e: 'open-panel'): void
+  /** 运行中补充指令（steer）：把文本送进**正在跑**的回合，不打断它。
+      与 `send` 的区别是语义级别的：`send` 会先 `stop` 再重开一轮，`steer` 让这一轮
+      接着跑、只是改方向。父组件负责真正的 HTTP 调用与错误呈现。 */
+  (e: 'steer', text: string): void
 }>()
 
 const input = ref('')
@@ -375,7 +379,7 @@ watch(input, value => {
   saveTimer = setTimeout(saveDraft, 300)
 })
 
-// ── `@` 提及：把工作台资源（知识库 / Agent / 技能 / 工作流 / 插件）直接带进对话 ──
+// ── `@` 提及：把工作台资源（知识库 / Agent / 技能 / 插件）直接带进对话 ──
 //
 // 与 `/` 命令共用同一套菜单交互（上下键 / Enter / Esc / hover）；选中的资源以
 // **引用 chip** 交给父组件，与 URL chips 走同一条链路（最终进 runtime.context）。
@@ -389,7 +393,7 @@ const mentionItems = ref<{ type: string; id: string; name: string }[]>([])
 /** `@` 提及的类型标签；写成函数以便每次渲染取当前语言（模块级 `tr` 不具响应式）。 */
 function mentionLabel(type: string): string {
   const map: Record<string, string> = {
-    kb: tr('knowledge.knowledge_base'), agent: 'Agent', skill: tr('agent.skill'), workflow: tr('workflow.workflow'), plugin: tr('common.plugin'),
+    kb: tr('knowledge.knowledge_base'), agent: 'Agent', skill: tr('agent.skill'), plugin: tr('common.plugin'),
   }
   return map[type] || type
 }
@@ -403,7 +407,7 @@ const filteredMentions = computed(() => {
 })
 
 /** 分类的固定展示顺序（不按数量抖动 —— 用户对"知识库在最上"有稳定预期） */
-const MENTION_TYPE_ORDER = ['kb', 'agent', 'skill', 'workflow', 'plugin']
+const MENTION_TYPE_ORDER = ['kb', 'agent', 'skill', 'plugin']
 
 /**
  * 按资源类型分组。
@@ -448,7 +452,6 @@ async function loadMentionItems() {
       toItems(api.listKnowledgeBases(), 'kb'),
       toItems(api.listAgents(), 'agent'),
       toItems(api.listSkillResources(), 'skill'),
-      toItems(api.listWorkflows(), 'workflow'),
       toItems(api.listPlugins(), 'plugin'),
     ])
     mentionItems.value = groups.flat()
@@ -640,6 +643,25 @@ function submit() {
   // 这与"停止"按钮的既有行为一致，这里不引入新的不一致。
   if (props.loading) emit('stop')
   emit('send', text, atts)
+}
+
+/**
+ * 运行中补充指令（steer）：把草稿送进正在跑的回合，**不打断**它。
+ *
+ * 为什么不做成 Enter 的另一个分支：Enter 在生成中已经是"打断并发送"，两条语义相反
+ * 的操作挤在同一个按键上必然误触。这里只给一个按钮（且只在生成中且有草稿时出现）。
+ *
+ * 发出后立即清空输入（与发送一致），但**不写历史** —— 补充指令是"这一轮的补充"，
+ * 不是"我问过的问题"，写进 ↑ 召回会污染用户的提问历史。
+ * 失败时由父组件通过 `setDraft` 把原文还回输入框（见 ChatView 的 onSteer）。
+ */
+function steerSubmit() {
+  const text = input.value.trim()
+  if (!text || !props.loading) return
+  input.value = ''
+  pendingAttachments.value = []
+  saveDraft()
+  emit('steer', text)
 }
 
 // 文件选择
@@ -937,7 +959,20 @@ function setCommandDraft(cmd: string) {
   nextTick(() => textareaRef.value?.focus?.())
 }
 
-defineExpose({ insertText, setCommandDraft })
+/** 原样写回草稿（不加任何前缀）。
+
+ * steer 失败时父组件用它把用户刚写的话还回去：这条通道的失败大多是**临时**的
+ * （429 限流、409 那一轮刚好收尾），用户多半想重试一次。把它当成普通发送清空不还，
+ * 就等于让用户重新打一遍。
+ */
+function setDraft(text: string) {
+  input.value = text
+  historyCursor.value = null
+  saveDraft()
+  nextTick(() => textareaRef.value?.focus?.())
+}
+
+defineExpose({ insertText, setCommandDraft, setDraft })
 </script>
 
 <template>
@@ -996,7 +1031,7 @@ defineExpose({ insertText, setCommandDraft })
           v-else-if="!filteredMentions.length"
           class="slash-item"
         >
-          {{ $t('workflow.no_matching_resources_knowledge_base_agent_skill_workflow_plugin') }}
+          {{ $t('task.no_matching_resources_knowledge_base_agent_skill_plugin') }}
         </div>
         <template v-else>
           <!-- 按资源类型分组：每类一个标题；条目仍用**扁平下标**驱动键盘与 hover，
@@ -1338,6 +1373,20 @@ defineExpose({ insertText, setCommandDraft })
             {{ $t('common.generating') }}<span class="tnum-fixed">{{ elapsed }}s</span>
           </span>
           <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
+          <!-- 运行中补充指令（steer，P0-3）：只在"正在跑 + 手上有草稿"时出现。
+               此时 Enter 是"打断并发送"、停止按钮是"停"，两条路都会丢掉这一轮已跑的部分；
+               这里给第三条：话带到了，回合接着跑。 -->
+          <Button
+            v-if="loading && input.trim()"
+            class="steer-btn"
+            size="small"
+            :title="$t('chat.steer_tooltip')"
+            @click="steerSubmit"
+          >
+            <template #icon>
+              <BranchesOutlined />
+            </template>
+          </Button>
           <Button
             class="send-btn"
             :type="loading ? 'default' : 'primary'"
@@ -1375,7 +1424,7 @@ defineExpose({ insertText, setCommandDraft })
   position: relative;
   display: flex; flex-direction: column; gap: 2px;
   width: 100%; max-width: var(--chat-content-width); margin: 0 auto;
-  /* 同心圆圆角（desktop-agent-ui §6）：内层 = max(0, 外层 − padding)。
+  /* 同心圆圆角：内层 = max(0, 外层 − padding)。
      不做这一步，内层四角的弧度会比外层更“紧”，肉眼可见地变形。
      变量在下面的媒体查询里随断点覆盖，内层元素统一消费 --input-card-inner-r。 */
   --input-card-r: 16px;
@@ -1401,7 +1450,7 @@ defineExpose({ insertText, setCommandDraft })
 }
 .input-field { background: transparent !important; }
 .input-field :deep(textarea) { color: var(--text-primary) !important; font-size: 16px !important; line-height: 24px !important; }
-/* Composer 内的原生滚动条收敛（desktop-agent-ui components-motion §1.3）：
+/* Composer 内的原生滚动条收敛：
    只隐藏**外观**，滚轮 / 触控板手势 / 文本选中 / 键盘导航全部保留 ——
    刻意限定在输入框内，**绝不全局隐藏**系统滚动条（那会伤害其它长列表的可发现性）。 */
 .input-field :deep(textarea) {
@@ -1445,6 +1494,10 @@ defineExpose({ insertText, setCommandDraft })
 }
 @container (max-width: 620px) { .input-divider { display: none; } }
 .input-hint { font-size: 12px; color: var(--text-tertiary); }
+/* 运行中补充指令（steer）：与"停止"并排，但**不是**危险动作 —— 它不终止回合。
+   因此用主色描边而不是红/灰：视觉上要让人敢点，同时与右侧圆角方形的停止按钮区分开。 */
+.steer-btn { color: var(--primary); border-color: var(--primary); }
+.steer-btn:hover { color: var(--primary) !important; border-color: var(--primary) !important; background: var(--primary-bg) !important; }
 /* 工具栏控件统一规格：32px 触控目标 + 8px 圆角（覆盖 antd 的 size=small 观感） */
 .input-actions .ant-btn:not(.send-btn) { height: 32px; min-width: 32px; border-radius: var(--input-card-inner-r, 8px); }
 .input-actions .ant-select-single .ant-select-selector { border-radius: var(--input-card-inner-r, 8px); }
@@ -1608,7 +1661,7 @@ defineExpose({ insertText, setCommandDraft })
 
 /* 大文本粘贴折叠预览 */
 .paste-preview {
-  /* 同心圆圆角（desktop-agent-ui §6）：内层 = max(0, 外层 − padding)。
+  /* 同心圆圆角：内层 = max(0, 外层 − padding)。
      外层用主题 token，所以内层用 calc 跟随主题，而非写死像素 ——
      否则换个主题（圆角 0~14px）同心关系就断了。 */
   --paste-preview-r: var(--sig-radius-card);

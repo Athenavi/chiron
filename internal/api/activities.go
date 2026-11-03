@@ -43,7 +43,7 @@ func activityStatusText(status string) string {
 // handleActivities 返回当前用户跨工作台的活动（按时间倒序，租户+用户隔离）。
 // 优化：通过 UNION ALL 合并查询为单次数据库往返。
 //
-// 覆盖范围：对话 / Agent / 知识库 / 工作流四类有持久化表可查。技能与插件**没有**
+// 覆盖范围：对话 / Agent / 知识库三类有持久化表可查。技能与插件**没有**
 // 对应的表（技能是 python-engine/data/skills 下的文件，插件在 Python 侧 store），
 // 因此不产生活动条目 —— 这是数据源缺失，不是漏写；要补得先让它们落库。
 func handleActivities(w http.ResponseWriter, r *http.Request) {
@@ -76,13 +76,13 @@ func handleActivities(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Single combined query: UNION ALL across all four tables
+	// Single combined query: UNION ALL across all three tables
 	// Each sub-query returns (workstation, route, title, status, ts)
 	//
 	// route 带上资源标识（?session=<id> 或 /knowledge/<kb_id>）：前端点"最近活动"
 	// 要能直达那条记录，而不是只落到列表页 —— 静态 '/agents' 让用户还得自己再找一遍。
 	//
-	// 工作台标识走 $4..$7 参数而非 SQL 字面量：字面量一旦与 model.WorkstationType
+	// 工作台标识走 $4..$6 参数而非 SQL 字面量：字面量一旦与 model.WorkstationType
 	// 漂移，SQL 照样执行、前端拿到未知标识后静默不渲染，是最难查的一类 bug。
 	// 参数化后编译器能盯着常量，改动只需动 internal/model/workstation.go。
 	const combinedSQL = `
@@ -100,11 +100,6 @@ func handleActivities(w http.ResponseWriter, r *http.Request) {
 			SELECT $6::text, '/knowledge/' || knowledge_base_id::text, COALESCE(name,''), status, created_at FROM knowledge_documents
 				WHERE tenant_id = $1 AND user_id = $2 ORDER BY created_at DESC LIMIT $3
 		) AS knowledge_sub
-		UNION ALL
-		SELECT workstation, route, title, status, ts FROM (
-			SELECT $7::text, '/workflow?id=' || id::text, COALESCE(workflow_name,''), status, created_at FROM workflow_instances
-				WHERE user_id = $2 ORDER BY created_at DESC LIMIT $3
-		) AS workflow_sub
 		ORDER BY 5 DESC
 		LIMIT $3
 	`
@@ -115,7 +110,6 @@ func handleActivities(w http.ResponseWriter, r *http.Request) {
 		string(model.WorkstationAgent),
 		string(model.WorkstationDialogue),
 		string(model.WorkstationKnowledge),
-		string(model.WorkstationWorkflow),
 	); err == nil {
 		for rows.Next() {
 			var ws, route, title, status string

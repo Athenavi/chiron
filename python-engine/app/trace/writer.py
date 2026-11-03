@@ -1,4 +1,4 @@
-"""Trace Writer — 将 Agent/Workflow 执行链路写入 Redis Stream (无状态扩展).
+"""Trace Writer — 将 Agent 执行链路写入 Redis Stream (无状态扩展).
 
 职责:
 1. 接收 AgentEvent(type="trace_span"),提取 trace_id/span/duration
@@ -82,14 +82,14 @@ class TraceWriter:
 
         Args:
             trace_id: 用户请求的唯一标识
-            span_name: span 名称 (llm_call / tool_execution / workflow_node)
+            span_name: span 名称 (llm_call / tool_execution)
             duration_ms: span 耗时 (毫秒)
             metadata: 额外上下文 (model, input_tokens, tool_name 等)
             tenant_id: 租户 ID (用于流隔离,可选)
             span_id: 该 span 的稳定标识（差距C：执行图靠它建立节点）
             parent_span_id: 父 span 标识 —— **这一条就是"某步从哪来"的答案**；
                 例如 `trace:turn:2` 的父是 `trace:run`，一次工具调用的父是它所在的 turn。
-            kind: span 类别（run / turn / llm / tool / workflow），供前端按类别着色与折叠。
+            kind: span 类别（run / turn / llm / tool），供前端按类别着色与折叠。
         """
         # 隐私模式: no_retention 时跳过 trace 写入 (不落盘)
         if is_no_retention():

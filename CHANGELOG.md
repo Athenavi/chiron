@@ -60,6 +60,109 @@
 
 ### 新增
 
+- **P1-1 数据模型与队列准入**：§6 问题 3 定为**串行排队**（Thread 只做事件来源分类，
+  执行侧仍是 `agent:run-lock:<session_id>` 一把锁，不引入子会话）。`migrations/versions/
+  0021_threads.py` 建 `threads` / `thread_subscriptions` / `thread_deliveries` 三张纯扩展表
+  （真库验证 upgrade + downgrade 双向干净）；`internal/api/thread_delivery.go` 的
+  `decideThreadDelivery` 是纯函数，钉死"上限 20 含第 20 条"与"负数不丢"两个边界 ——
+  写成 `>` 会变成能排 21 条，而这种差一错误在评审时看不出来，只表现成"偶尔多一条"。
+  队列的另一半是收尾认领：`claimNextThreadDelivery` 用 `FOR UPDATE SKIP LOCKED` 原子领走
+  最早一条并置 `running`，排序按 `(created_at, thread_id, event_key)` 全序（`now()` 同事务
+  同值，只按时间排会让"为什么这条先跑"没有答案）；`finishThreadDelivery` 的
+  `WHERE status = 'running'` 让它天然幂等，重复收尾不会把已 `done` 的行改写成 `dropped`。
+  真库验收 2 条：最早优先（乱序插入仍领对的）+ 收尾幂等。
+  队列的入队写入是 `enqueueThreadDelivery`：计数与插入在同一个 advisory lock 临界区内完成
+  （两个副本各自读到 19 再双双插入，上限就从 20 变成 21，而这类竞态靠测试很难复现，只能
+  从结构上消掉）；`threads_idem` 与投递表主键两层幂等让多副本重投只落一行，且 `DO NOTHING`
+  **不复活**已 `dropped` 的行；超限时落 `dropped` 行并写审计，而不是只写审计 —— 缺行就
+  分不清"没发生"和"发生了但被丢"。真库验收 3 条：重投幂等 / 超限丢弃不复活 / 未注册来源报错。
+  **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
+- **`thread_deliveries.payload`（P1-1 接线先决）**：`migrations/versions/0022_thread_delivery_payload.py`
+  给投递表加 `payload jsonb NOT NULL DEFAULT '{}'`。起因是核实接线前提时发现两表都存不下
+  正文要素：`buildSubagentFollowupContent` 要 `RunID/Status/Profile/Summary`、
+  `buildJobFollowupContent` 要 `RunID/Status/Summary`，而这些字段没有任何一处留底 ——
+  引擎回投是一次性 HTTP 请求，drain 侧无从还原。选单列 jsonb 而非三列：`profile` 只有
+  `subagent` 用得上，拆列会得到大部分格子为空的稀疏表。真库验证 upgrade + downgrade 双向干净。
+  紧接着投递行承载 payload 与收件人字段：`threadEnqueueParams.Payload` 随行写入
+  （`payloadArg` 把空值归一成 `{}`，因为列是 `jsonb NOT NULL` 而"无额外输入"是正常情形）；
+  `claimNextThreadDelivery` 改用 CTE——先 `UPDATE ... RETURNING` 再 JOIN `threads`
+  （多表 UPDATE 的 FROM 里"哪行被更新"与"返回哪行"不保证一一对应）。真库验收新增 1 条。
+- **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
+  此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
+  但"PG 真的这样算"、"拒绝时表里真的一行没多"、"A 真的停不了 B"只有跑一次才知道。四条用例：
+  ①`(ends_at - started_at) = interval '600 seconds'` 精确成立（用精确整秒区分来源：Go 侧
+  `time.Now().Add` 的微秒抖动会让它落在 599.9999~600.0001）；②跨用户会话被拒后接管表 0 行，
+  同租户另一用户同样被拒（判据是 `user_id` 不是 `tenant_id`）；③A 用 B 的接管 id 调 stop
+  得到 404 **且断言 B 仍为 `active`**（只查响应码的话，漏写 `AND user_id = $2` 但恰好 404
+  的实现也能蒙混过关）；④第 6 个接管、第 11 条定时任务被拒且总数不变。
+  沿用既有口径：`CHIRON_TEST_POSTGRES_DSN` 未设即 skip，`-run Live` 才执行。
+  **踩到的坑**：`GetUserID`/`GetTenantID` 读的是 `TenantMiddleware` 写入的两个 ctx key，
+  不是 `auth.Claims` —— 只挂 claims 会让四条全部 401，看起来像 handler 有问题。
+  已在 `alembic upgrade head` 到 `0020_superagent` 的临时库上跑通。
+- **同上，第二批（P1-2 验收 5/8）**：验收 5 直接调 `recordTakeoverUsage` —— 正是回合结束时
+  被调用的那个函数，验"未超限只累加 / 跨线即置 `budget_exhausted` / 停止原因写 `token_cap` /
+  终结后不再记账"四条纯 SQL 行为；另有一条 `token_cap = 0` 用例（0 表示不限，写反会让所有
+  不设上限的用户第一轮就被停掉）。验收 8 走真实的 `session.Manager.CreateTurn`，断言接管回合
+  `origin = 'superagent_takeover'`、手动回合**空串而非 NULL**（前端按 `=== ''` 判断不渲染标记，
+  NULL 会漏出小字标签），且同一 turnID 重放不会把标记洗掉。
+  口径说明：这两条**没有**跑真实引擎回合 —— "每轮用量真实回流到驱动"仍只有单测覆盖。
+  顺带修了清理顺序：`turns` 也引用 `sessions`，漏删会撞 `turns_session_id_fkey` 并留残留行。
+- **同上，第三批（P1-2 验收 1/10）**：验收 1 验"默认禁用真的什么都不碰"三件事 —— 开关读出
+  为关、该会话上没有接管行、快照里没有运行中的接管。只验"开关为 false"不够：
+  `loadTakeoverConfig` 的零值恰好是 `false`，那是有意为之还是巧合，得同时确认没有东西在跑。
+  验收 10 造的是真实成因（任务指向的会话已经有接管在跑，这一拍一个窗口都开不出来），
+  断言走 `ListSchedules` **响应体**而不是直接查表 —— 验收要的是"配置页可见"，
+  只验库里那列证明不了投影层有没有把它带出来。
+  至此 P1-2 十条验收里 8 条有真库证据；仍缺 2（同一拍用户赢）与 3（多副本打断只发生一次），
+  都需要真实引擎回合与多副本环境。
+- **steer 指令来源落库（P0-3 / P1-3 收口）**：`push_steer` 收 `source` 却从不落库，
+  于是 watchdog 自动注入的提示在历史里和用户自己说的长得一模一样。现在来源一路带到
+  `messages.source`：`steer._LOCAL` 由 `(ts, text)` 扩为 `(ts, text, source)`，Redis 条目由
+  裸文本改为 `{"text":…,"source":…}` JSON（`ensure_ascii=False`）；`runtime.py` 注入时把
+  `source` 挂到消息上，`history_writer.persist_messages` 的 payload 末位加 `source` 并写进
+  INSERT。**兼容在途旧条目**：解码失败一律回落 `(raw, "user")` —— 滚动升级期旧副本还在写
+  裸文本，读端不兼容会把用户指令整条丢掉，比标错来源严重得多。`source` 放在 payload
+  **末尾**是因为 `_drop_existing_tool_calls` 按索引 3 去重、归档清理按索引 5 取 `blob_ref`。
+  验收：`pytest tests/test_steer.py` 5 passed（编解码往返 / 旧裸文本兼容 / 跨副本读 Redis /
+  本地保序且逐条带来源 / 缺省为 `user`）；`tests/test_history_writer.py` 的归档用例由
+  "按参数个数认行"改为"按 SQL 内容认行"，避免每加一列就误伤。
+  前端同步认这个来源：`MessageItem.vue` 新增 `.watchdog-badge`（warning 色，与接管的 primary
+  色区分），三语言补 `workflow.watchdog_nudge_prompt`。只把来源写进库不够 —— 徽标漏渲染，
+  用户照样会把系统的推测当成自己说过的话。渲染级用例 2 条（`MessageItem.spec.ts`）。
+- **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
+  `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
+  折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /
+  `SUGGEST_STOP`。数据面 `app/queue/watchdog_probe.py` 只读摘要（内容可能很长，判断
+  "有没有变化"不需要原文），调度面 `app/queue/watchdog_job.py` 用 Redis 租约互斥
+  （多副本同时判断会把同一条提示注入两次），挂载点是 `queue/worker.py::_start_watchdog`。
+  **`NUDGE` 复用 `agent/steer.py`** 在轮次边界注入（与 P0-3 同一条通道，不再造第二套
+  "什么时候生效"的语义）；**`SUGGEST_STOP` 永不终止**，只写审计与日志 —— 终止不可逆，留给人。
+  默认三层全关：`SUPERAGENT_WATCHDOG_ENABLED=false` 时 `worker.start()` **不创建任务**（关掉
+  是真零影响，连采集都不跑），`SUPERAGENT_WATCHDOG_ACT=false` 时判断结果只进 `audit_logs`
+  （`superagent.watchdog.nudge` / `.suggest_stop`，写失败只 warning）。fail-closed：样本不足、
+  回合已不在 `running`、摘要为空、Redis 抢不到租约 —— 一律不干预。
+  **明确未做**：判断层仍是确定性结构判断，不是原文 §6 的"模型层判断"；`subagent_runs` 未纳入采集。
+  验收：`pytest tests/test_watchdog.py` 21 passed（含与 `loop_guard` 的"更早报警"对照、
+  关闭时采集闭包未被调用、审计写入断言、`act=False` 不注入）。
+- **接管预算硬闸门（P1-2 第 8 步 / 验收第 5 条）**：接管回合的真实用量现在会记进
+  `superagent_takeovers.token_spent`，越过 `budget.token_cap` 即置终态
+  `budget_exhausted`（`stop_reason='token_cap'`）并广播 `superagent.takeover_ended`，
+  不再起下一拍。**口径与 `TrueUpTenantQuota` 一致**（`usage.input + usage.output`，
+  `cached` 不进池也不计预算），否则面板读数会和账单对不上。`budget_exhausted` 单列成
+  独立终态而不是复用 `stopped`：一个是用户点停、一个是花到上限，用户据此决定"调预算还是收工"。
+  用量经 `ctx` 上的原子 sink（`withTakeoverUsageSink` / `takeoverUsageFromCtx`）回传，
+  **不改 `HandleSubmit` 的签名**，也不塞进会被序列化进引擎请求体的 `workbenchCtx`；
+  记账发生在归还租约**之前**，避免另一副本用旧读数抢到下一拍。前端：事件到达时插一行
+  warning notice（遮罩只会突然消失、不给说明），配置页把已花展示成「已花 / 上限」，
+  用掉 80% 起标警示色。三语言同步。
+- **运行中补充指令的前端入口（P0-3 收口）**：`POST /v1/agent/steer` 此前只有引擎与网关
+  两侧，前端没有调用方。现补 `api/index.ts::steerRun`，入口在 `ChatInput` 操作行的
+  steer 按钮上（**只在"正在生成 + 有草稿"时出现**），**不与 Enter 共用** —— 生成中的
+  Enter 已经是"打断并发送"，两条相反语义挤一个键必然误触。投递失败把原文退回输入框
+  （`ChatInput.setDraft`）而不是静默清空：这条通道的拒绝多是临时的（429 限流 / 409 正在
+  收尾），用户多半想重试一次。成功不额外插行 —— 引擎的 SSE `steer` 事件已经落了一条小字。
+  验收：`vitest run ChatInput.spec.ts` 9 passed（新增 3 条：按钮出现条件 / 发出 steer 不打断
+  且不写 ↑ 召回历史 / `setDraft` 回填失败原文）· `vue-tsc -b` 通过。
 - **注册邮箱判重布隆过滤器**：注册时先用按租户分片的布隆过滤器快速否定"邮箱未注册"，
   从而跳过 `users` 上无索引的存在性查询（原先是一次全表扫描）。它**只做快速否定**，
   真相源是新增的 `users(tenant_id, email)` 唯一索引（迁移 `0002_users_tenant_email_unique`，

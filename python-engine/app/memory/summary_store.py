@@ -52,7 +52,7 @@ FINAL_SCORE_WEIGHT_SIMILARITY = 0.3  # 相似度权重
 
 #: PG 语义扫描一次取多少条候选。不是"全表"：单租户/单用户的活跃摘要被保留期
 #: （`archive_expired`）与这里的上限双重夹住，M12 实测 200 条 1-vs-N 精确扫描约 16ms，
-#: 所以这一层不需要 ANN 索引（同迁移 0019 的判定）。
+#: 所以这一层不需要 ANN 索引。
 CANDIDATE_LIMIT = 200
 
 _RECALL_COLUMNS = (
@@ -353,7 +353,7 @@ class SummaryStore:
 
         # 取数分三级，从"最准"到"最保底"：
         #   ① Milvus ANN —— 只有把它配成后端时才查（默认是 pg，见 `MEMORY_VECTOR_BACKEND`）；
-        #   ② PG 精确余弦 —— 用 `memory_summaries.embedding`（迁移 0019 起这一列才有数据）；
+        #   ② PG 精确余弦 —— 用 `memory_summaries.embedding`（这一列有数据时）；
         #   ③ PG 按时间 —— 连查询向量都拿不到（没有嵌入函数 / 嵌入失败 / 空 query）时的保底。
         # ②③ 都在 PG 里，所以"Milvus 没起来"不再等于"这一轮根本没有语义召回"。
         items: list[RecalledItem] = []
@@ -474,7 +474,7 @@ class SummaryStore:
             return []
 
         # 只在同一向量空间里比：这一级挑的是"最像的 k 条"，而跨模型的余弦数虽然也在 0~1，
-        # 却不对应任何语义 —— 它会把无关的摘要排到前面去（迁移 0020 记的正是这件事）。
+        # 却不对应任何语义 —— 它会把无关的摘要排到前面去。
         model_tag = active_embedding_model()
         scorer = CosineScorer(embedding)
         threshold = settings.memory_summary_min_cosine
@@ -483,7 +483,7 @@ class SummaryStore:
         for row in rows:
             vec = parse_vector(row["embedding"])
             if not vec:
-                # 迁移 0019 之前的行没有向量（本轮不做批量回填）：它仍然有资格被 ③ 按时间给出。
+                # 没有向量的老行（本轮不做批量回填）：它仍然有资格被 ③ 按时间给出。
                 continue
             recorded = (row.get("embedding_model"), row.get("embedding_dim"))
             if not same_vector_space(*recorded, model=model_tag, dim=len(embedding)):

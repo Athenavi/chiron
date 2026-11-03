@@ -353,7 +353,7 @@ type PythonEvent struct {
 	// 任何一段漏字段都只在最后一段表现为"某个字段莫名其妙没了"。
 	Revision int `json:"revision,omitempty"`
 
-	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 docs/subagent-design.md §4.2）──
+	// ── 子 Agent 进度事件（type 前缀 "subagent."，见 python-engine/app/subagent/）──
 	// 这些字段让前端能按 run_id 建树、并按 depth/parent_run_id 还原层级；
 	// 主对话事件不带这些字段（omitempty 保证不污染既有帧）。
 	RunID       string         `json:"run_id,omitempty"`

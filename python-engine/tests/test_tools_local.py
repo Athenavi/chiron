@@ -6,7 +6,6 @@ import pytest
 # 与 `app/tools/__init__.py` 的清单必然漂移：40dfc99 删掉 agent.py 后本文件直接
 # collection error。新增工具只需改 `app/tools/__init__.py`，不要在这里加 import。
 import app.tools  # noqa: F401
-import app.workflow  # noqa: F401
 from app.tools.context import set_tool_context
 from app.tools.registry import registry
 from app.tools.sandbox import workspace_dir
@@ -27,9 +26,6 @@ def test_registry_lists_core_tools():
         "shell_exec", "execute_python", "run_code", "persistent_shell",
         # 网络
         "web_fetch", "web_search",
-        # 工作流 / 图
-        "workflow_run", "workflow_status",
-        "graph_create", "graph_run", "graph_templates",
         # 记忆
         "remember", "recall", "forget", "memory_search",
         # 需求 / 方案

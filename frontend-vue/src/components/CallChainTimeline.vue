@@ -227,7 +227,6 @@ const totalDurationMs = computed(() => displaySpans.value.reduce((sum, s) => sum
 function getNodeClass(span: TraceSpan): string {
   if (span.span_name === 'llm_call') return 'type-llm'
   if (span.span_name.startsWith('tool:')) return 'type-tool'
-  if (span.span_name.includes('workflow')) return 'type-workflow'
   return 'type-default'
 }
 
@@ -240,7 +239,6 @@ function getNodeIcon(span: TraceSpan): string {
       write_file: '✏️',
       shell_exec: '💻',
       grep_files: '🔍',
-      workflow_run: '⚙️',
     }
     return iconMap[toolName] || '🔧'
   }
@@ -381,10 +379,6 @@ function capitalize(str: string): string {
 
 .node-line.type-tool {
   border-inline-start-color: var(--info);
-}
-
-.node-line.type-workflow {
-  border-inline-start-color: var(--node-pink);
 }
 
 .node-icon {

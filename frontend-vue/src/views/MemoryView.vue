@@ -281,7 +281,7 @@ async function runOrganize() {
       message.info(t('common.smart_organization_started_runs_in_background'))
       pollOrganize()
     } else {
-      message.info(t('workflow.an_organization_task_is_already_running'))
+      message.info(t('task.an_organization_task_is_already_running'))
       pollOrganize()
     }
   } catch (e) {

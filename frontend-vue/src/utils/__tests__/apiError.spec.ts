@@ -66,9 +66,9 @@ describe('describeApiError（服务端错误要能定位）', () => {
     expect(describeApiError(withStatus(503))).toContain('服务暂时不可用')
   })
 
-  it('本地后端（FastAPI）把原因放在 detail 里，也必须带出', () => {
-    // desktop-local 是 FastAPI：503 的原因在 `detail`，不是 Go 网关的 `error`。
-    // 少读一个字段，本地模式下就只剩没有信息量的兜底文案。
+  it('后端把原因放在 detail 里，也必须带出', () => {
+    // 部分上游（如 Python 引擎）用 `detail` 承载原因，不是 Go 网关的 `error`。
+    // 少读一个字段，就只剩没有信息量的兜底文案。
     expect(describeApiError(withStatus(503, { detail: '本地 PostgreSQL 未启动（见 /readyz 的 pg 字段）' })))
       .toContain('本地 PostgreSQL 未启动')
   })

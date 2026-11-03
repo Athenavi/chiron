@@ -1,9 +1,6 @@
 /**
  * 「打开界面就触发的昂贵只读统计」的四条规则。
  *
- * 缘起：上游 `vendor/DeepSeek-Reasonix` 提交 `f41b9d413`
- * （`fix(desktop): opening settings no longer walks the disk for the storage total`，
- * 落地在 `desktop/frontend-next/src/ui/storageTally.ts` + `ui/Settings.tsx`）的结论 ——
  * 这类操作的毛病不是「算得慢，需要一个更快的算法」，而是
  * **用户只是路过设置页，却替一个他还没看的数字付了全表扫的钱**。
  * 所以在调用侧让同一份请求同时具备四件事：

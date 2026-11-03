@@ -1,7 +1,7 @@
-"""给迁移 `0019` 之前的老 `memory_summaries` 行补向量（M13 的存量回填，⑦）。
+"""给权威基线之前的老 `memory_summaries` 行补向量（存量回填，⑦）。
 
-**为什么需要它**：迁移 `0019` 给 `memory_summaries` 加了 `embedding double precision[]`
-（`0020` 又加了 `embedding_model` / `embedding_dim`），而**写入路径此后都带向量**
+**为什么需要它**：权威基线给 `memory_summaries` 定义了 `embedding double precision[]`
+（另有 `embedding_model` / `embedding_dim`），而**写入路径都带向量**
 （`SummaryStore.save_summary` 的 INSERT 就有这三列）⇒ 只有**加列之前**写下的老行是 NULL，
 语义判重与语义召回对它们没有输入。
 
