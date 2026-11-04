@@ -151,7 +151,7 @@ def run_up(port: int, build: bool, wait: bool, reuse_env: bool) -> int:
         fail(f"找不到 {COMPOSE_FILE}")
         return 1
 
-    values = ensure_env(port, reuse=reuse_env)
+    ensure_env(port, reuse=reuse_env)
     ok(f"已写入 {ENV_FILE.name}（随机密钥，权限 0600）")
 
     cmd = [*compose, "-f", str(COMPOSE_FILE), "--env-file", str(ENV_FILE), "up", "-d"]
