@@ -326,9 +326,12 @@ create table thread_deliveries (
   `RunID/Status/Profile/Summary`、`buildJobFollowupContent` 需要 `RunID/Status/Summary`。
   入队时"只存键不存正文"的前提是"投递时能按 kind 重新拼出正文"，但引擎回投是**一次性
   HTTP 请求**，payload 不在别处持久化 ⇒ drain 侧拿不到这三个字段，拼不出正文。
-  接线前必须先补：给 `thread_deliveries` 增一列承载 body（或 `status`/`profile`/`summary`
-  三列），并走扩展式迁移。**在此之前接线会导致"能入队但投递内容为空"** —— 这正是分两批
-  做的价值所在，设计缺口在还没接线时就被发现了。
+  **已补（`0022_thread_delivery_payload`）**：`thread_deliveries.payload jsonb NOT NULL
+  DEFAULT '{}'` 承载"事件到达那一刻的输入快照"。选单列 jsonb 而非
+  `status/profile/summary` 三列：`profile` 只有 `subagent` 用得上，拆列会得到一张大部分
+  格子为空的稀疏表；而这份快照本就该是不可变事实，不需要被 SQL 按字段查询。
+  真库验证 upgrade 与 downgrade 双向干净。入队侧写 payload、drain 侧读它拼正文，
+  随接线一起落地。
 
 #### P1-2 Router 接管（Super-agent 接管）
 

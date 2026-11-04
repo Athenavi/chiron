@@ -77,6 +77,12 @@
   **不复活**已 `dropped` 的行；超限时落 `dropped` 行并写审计，而不是只写审计 —— 缺行就
   分不清"没发生"和"发生了但被丢"。真库验收 3 条：重投幂等 / 超限丢弃不复活 / 未注册来源报错。
   **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
+- **`thread_deliveries.payload`（P1-1 接线先决）**：`migrations/versions/0022_thread_delivery_payload.py`
+  给投递表加 `payload jsonb NOT NULL DEFAULT '{}'`。起因是核实接线前提时发现两表都存不下
+  正文要素：`buildSubagentFollowupContent` 要 `RunID/Status/Profile/Summary`、
+  `buildJobFollowupContent` 要 `RunID/Status/Summary`，而这些字段没有任何一处留底 ——
+  引擎回投是一次性 HTTP 请求，drain 侧无从还原。选单列 jsonb 而非三列：`profile` 只有
+  `subagent` 用得上，拆列会得到大部分格子为空的稀疏表。真库验证 upgrade + downgrade 双向干净。
 - **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
   此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
   但"PG 真的这样算"、"拒绝时表里真的一行没多"、"A 真的停不了 B"只有跑一次才知道。四条用例：
