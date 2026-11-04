@@ -83,6 +83,7 @@ export default {
   job_finished_main_agent_auto_continues: "انتهت المهمة الخلفية الوكيل الرئيسي يواصل تلقائيًا",
   superagent_takeover_turn: "جولة تولّي Super-agent",
   superagent_takeover_prompt: "تعليمات تولّي Super-agent",
+  watchdog_nudge_prompt: "تذكير من النظام: يبدو أن هذه الجولة متعثرة",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "منصة وكلاء AI مستضافة ذاتيًا ومتعددة المستأجرين ويمكن التحكم بها بالكامل. المحادثة والوكيل وسير العمل والمهارة وقاعدة المعرفة والإضافة في منصة واحدة.",
   agent_agentic_collaboration_task: "agent وكيل تعاوني مهمة",
   webhook_trigger_url_copied_to_clipboard: "تم نسخ عنوان تشغيل Webhook إلى الحافظة",

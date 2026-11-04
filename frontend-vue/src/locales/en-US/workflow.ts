@@ -83,6 +83,7 @@ export default {
   job_finished_main_agent_auto_continues: "Background job finished main Agent auto-continues",
   superagent_takeover_turn: "Super-agent takeover turn",
   superagent_takeover_prompt: "Super-agent takeover instruction",
+  watchdog_nudge_prompt: "System reminder: this turn looks stuck",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "Self-hosted, multi-tenant, fully controllable AI Agent platform. Conversation, Agent, workflow, skill, knowledge base and plugin in one.",
   agent_agentic_collaboration_task: "agent agentic collaboration task",
   webhook_trigger_url_copied_to_clipboard: "Webhook trigger URL copied to clipboard",

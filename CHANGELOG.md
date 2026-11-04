@@ -99,6 +99,9 @@
   验收：`pytest tests/test_steer.py` 5 passed（编解码往返 / 旧裸文本兼容 / 跨副本读 Redis /
   本地保序且逐条带来源 / 缺省为 `user`）；`tests/test_history_writer.py` 的归档用例由
   "按参数个数认行"改为"按 SQL 内容认行"，避免每加一列就误伤。
+  前端同步认这个来源：`MessageItem.vue` 新增 `.watchdog-badge`（warning 色，与接管的 primary
+  色区分），三语言补 `workflow.watchdog_nudge_prompt`。只把来源写进库不够 —— 徽标漏渲染，
+  用户照样会把系统的推测当成自己说过的话。渲染级用例 2 条（`MessageItem.spec.ts`）。
 - **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
   `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
   折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /

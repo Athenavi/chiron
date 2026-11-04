@@ -763,6 +763,15 @@ onUpdated(enhanceContent)
         >
           {{ $t('workflow.superagent_takeover_turn') }}
         </div>
+        <!-- Watchdog 在轮次边界注入的提醒（messages.source = 'watchdog'）。
+             与上面两种分开：这条不是"有东西回来了"，而是系统判断这一轮在原地打转、
+             替你补了一句话 —— 用户有权知道这句话不是自己说的。 -->
+        <div
+          v-if="item.kind === 'text' && item.role === 'user' && (item as TextItem).source === 'watchdog'"
+          class="watchdog-badge"
+        >
+          {{ $t('workflow.watchdog_nudge_prompt') }}
+        </div>
         <!-- 反向定位：来源工作台 chips（kb_id / workflow_id / agent_id，metadata 驱动） -->
         <div
           v-if="item.role === 'assistant' && sourceChips.length"
@@ -1296,6 +1305,15 @@ onUpdated(enhanceContent)
   margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
   color: var(--primary); background: var(--primary-bg);
   border: var(--hairline-width) solid var(--primary); border-radius: var(--sig-radius-button);
+}
+/* Watchdog 注入的提醒（后端 messages.source = 'watchdog'）：用 warning 色而不复用
+   takeover 的 primary 色 —— takeover 是"接管正在跑"，watchdog 是"系统觉得你卡住了"，
+   两件事的后果不同，颜色不该一样。 */
+.watchdog-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  margin-top: 6px; padding: 2px 8px; font-size: var(--fs-xs);
+  color: var(--warning); background: var(--warning-bg);
+  border: var(--hairline-width) solid var(--warning); border-radius: var(--sig-radius-button);
 }
 .source-chip {
   display: inline-flex; align-items: center; gap: 4px;

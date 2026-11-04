@@ -685,6 +685,9 @@ alter table turns add column origin varchar(24) not null default '';
   本判断可配到**2 拍**（`superagent_watchdog_nudge_after`，默认 2）出信号。
 - 三档：`CONTINUE` / `NUDGE`（经 `agent/steer.py` 在轮次边界注入，与 P0-3 同一条通道）/
   `SUGGEST_STOP`（**只写审计与日志，永不终止** —— 终止不可逆，留给人）。
+- 注入的消息**来源可辨**：`source='watchdog'` 一路带到 `messages.source`，`MessageItem.vue`
+  渲染 `.watchdog-badge`（warning 色，与接管的 primary 色区分）。只记"谁发的"不够 ——
+  历史里长得跟用户自己说的一模一样时，用户会把系统的推测当成自己的判断。
 - 开关（`app/config.py`，默认全关）：`superagent_watchdog_enabled=false` 连采集都不跑；
   `superagent_watchdog_act=false` 时判断结果只进 `audit_logs`，不注入、不终止。
   `enabled=false` 时 `worker.start()` **不创建任务**，"关掉零影响"是真的零。

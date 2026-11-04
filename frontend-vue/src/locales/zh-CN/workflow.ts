@@ -83,6 +83,7 @@ export default {
   job_finished_main_agent_auto_continues: "后台任务结束 主 Agent 自动续跑",
   superagent_takeover_turn: "Super-agent 接管轮",
   superagent_takeover_prompt: "Super-agent 接管指令",
+  watchdog_nudge_prompt: "系统提醒：这一轮似乎卡住了",
   self_hosted_multi_tenant_fully_controllable_ai_agent_platform_conversation_agent_workflow_skill_knowledge_base_and_plugin_in_one: "自托管、多租户、全栈可控的 AI Agent 平台。对话、Agent、工作流、技能、知识库与插件一体化。",
   agent_agentic_collaboration_task: "agent 智能体 协同 任务",
   webhook_trigger_url_copied_to_clipboard: "Webhook 触发地址已复制到剪贴板",
