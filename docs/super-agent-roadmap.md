@@ -245,8 +245,8 @@
 -- 事件来源。一条 thread = 一个外部事件的上下文，不是执行单元。
 create table threads (
   id            varchar(36) primary key,
-  tenant_id     bigint       not null,
-  user_id       varchar(64)  not null,
+  tenant_id     smallint     not null references tenants,
+  user_id       varchar(36)  not null references users,
   source_kind   varchar(32)  not null,  -- 'webhook' | 'job' | 'subagent'（与 P0-2 的 kind 同集合）
   external_key  varchar(128) not null default '',  -- 外部系统的幂等键，去重靠它
   created_at    timestamptz  not null default now()
