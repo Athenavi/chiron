@@ -313,8 +313,9 @@ create table thread_deliveries (
 ##### P1-1.2 落地进度
 
 - **已落地**：三张表（`migrations/versions/0021_threads.py`，真库验证 upgrade 与
-  downgrade 双向干净）；队列准入判据 `decideThreadDelivery`
-  （`internal/api/thread_delivery.go`，纯函数 + 单测，钉死"上限 20 含第 20 条"）。
+  downgrade 双向干净）；队列两侧 —— 入站准入 `decideThreadDelivery`（纯函数 + 单测，
+  钉死"上限 20 含第 20 条"）与收尾认领 `claimNextThreadDelivery` / `finishThreadDelivery`
+  （`internal/api/thread_delivery.go`，真库验收 2 条：最早优先 + 收尾幂等）。
 - **未落地**：事件入口接线（把 `agent_followup.go` 的直投改成"先入队、由收尾方 drain"）、
   订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。投递层默认**不接线**，
   故当前无可观测行为变化。

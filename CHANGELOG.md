@@ -66,6 +66,11 @@
   （真库验证 upgrade + downgrade 双向干净）；`internal/api/thread_delivery.go` 的
   `decideThreadDelivery` 是纯函数，钉死"上限 20 含第 20 条"与"负数不丢"两个边界 ——
   写成 `>` 会变成能排 21 条，而这种差一错误在评审时看不出来，只表现成"偶尔多一条"。
+  队列的另一半是收尾认领：`claimNextThreadDelivery` 用 `FOR UPDATE SKIP LOCKED` 原子领走
+  最早一条并置 `running`，排序按 `(created_at, thread_id, event_key)` 全序（`now()` 同事务
+  同值，只按时间排会让"为什么这条先跑"没有答案）；`finishThreadDelivery` 的
+  `WHERE status = 'running'` 让它天然幂等，重复收尾不会把已 `done` 的行改写成 `dropped`。
+  真库验收 2 条：最早优先（乱序插入仍领对的）+ 收尾幂等。
   **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
 - **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
   此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
