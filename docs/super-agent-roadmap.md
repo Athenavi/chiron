@@ -317,7 +317,11 @@ create table thread_deliveries (
   钉死"上限 20 含第 20 条"）、入队写入 `enqueueThreadDelivery`（真库验收 3 条：重投幂等 /
   超限落 dropped 且不复活 / 未注册来源报错）、收尾认领 `claimNextThreadDelivery` 与
   `finishThreadDelivery`（真库验收 2 条：最早优先 + 收尾幂等）。
-- **未落地**：订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。
+- **未落地**：§6 要的那组"有订阅 / 无订阅"对照埋点。
+- **订阅 CRUD 已落地**（`thread_subscription.go`）：`GET/POST /v1/threads/{id}/subscriptions`
+  与 `DELETE /v1/threads/{id}/subscriptions/{sub_id}`，判据 `user_id`；归属校验写在同一条
+  SQL 里（`JOIN threads ... WHERE t.user_id = $1`），"不存在"与"不是你的"同为 404，
+  避免拿 thread/subscription id 枚举他人订阅。
 - **接线已落地**（`thread_turn.go` / `thread_turn_marker.go` + `agent_followup.go` 入口改造）：
   `AgentFollowupHandler` 现在**先入队再决定跑不跑**，入队后若会话空闲则**原地直跑**
   （约束Ⅰ，锁的所有权由 handler 转交给 `startThreadTurnWithLock`，不再"先还再抢"），

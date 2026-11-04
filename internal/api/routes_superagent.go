@@ -29,4 +29,13 @@ func registerSuperAgentRoutes(
 	// 试跑：与到点触发同一个执行体，只是不等 cron 到点，方便用户确认配置有效。
 	mux.Handle("POST /v1/superagent/schedules/{id}/trigger",
 		authMW(rlMW(http.HandlerFunc(handler.TriggerSchedule))))
+
+	// P1-1 订阅 CRUD：决定"这条事件投给哪个会话"。判据同样是 `user_id` ——
+	// 改别人的投递去向等于替别人决定他的会话里会出现什么。
+	mux.Handle("GET /v1/threads/{id}/subscriptions",
+		authMW(rlMW(http.HandlerFunc(ListThreadSubscriptions))))
+	mux.Handle("POST /v1/threads/{id}/subscriptions",
+		authMW(rlMW(http.HandlerFunc(CreateThreadSubscription))))
+	mux.Handle("DELETE /v1/threads/{id}/subscriptions/{sub_id}",
+		authMW(rlMW(http.HandlerFunc(DeleteThreadSubscription))))
 }
