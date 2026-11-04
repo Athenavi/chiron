@@ -66,7 +66,6 @@ var toolLevelTable = func() map[string]ToolLevel {
 		"kb_list", "kb_search", "knowledge",
 		"memory_search", "recall",
 		"skill_list", "skill_discover", "skill_run",
-		"graph_templates",
 		"read_subagent_result", "read_tool_result", "read_archive", "list_subagent_runs", "job_output", "stderr_drain",
 		"requirement_validate", "task_decompose", "tech_design", "prd_generate",
 		"vision_analyze", "speech_to_text", "video_analyze",

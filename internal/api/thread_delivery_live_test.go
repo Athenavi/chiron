@@ -228,13 +228,15 @@ func TestLiveEnqueueThreadDeliveryIsIdempotent(t *testing.T) {
 		t.Fatalf("空队列应 queued，实际 %q", decision)
 	}
 
-	// 同一条事件重投：状态与 thread 都必须不变。
+	// 同一条事件重投：必须判 duplicate 并复用同一 thread，且不新增行。
+	// 判 duplicate（而不是 queued）是**语义要求**：调用方据此知道不必再起一个回合，
+	// 否则同一事件会被再跑一遍，用户看到两条同样的结果还白花一份 token。
 	decision2, threadID2, _, err := enqueueThreadDelivery(ctx, p)
 	if err != nil {
 		t.Fatalf("重投应幂等成功，实际 %v", err)
 	}
-	if decision2 != threadDeliverQueued || threadID2 != threadID {
-		t.Fatalf("重投应复用同一 thread（%s），实际 (%q, %s)", threadID, decision2, threadID2)
+	if decision2 != threadDeliverDuplicate || threadID2 != threadID {
+		t.Fatalf("重投应判 duplicate 并复用同一 thread（%s），实际 (%q, %s)", threadID, decision2, threadID2)
 	}
 
 	var threads, deliveries int
@@ -302,13 +304,16 @@ func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
 		t.Fatalf("丢弃行状态应为 dropped，实际 %q", status)
 	}
 
-	// 重投同一条：仍是 dropped，不能被捞回队列 —— 否则队列满时事件会反复进出。
+	// 重投同一条：判 duplicate（该事件早已落过行），且**状态仍是 dropped** ——
+	// 关键在于不能被捞回队列，否则队列满时事件会反复进出。
+	// duplicate 与 dropped 在这里表达的是两件不同的事：前者是"这条来过了"，
+	// 后者是"这条被丢弃了"；调用方按前者 ACK、按 status 列判断投不投。
 	again, _, _, err := enqueueThreadDelivery(ctx, overflow)
 	if err != nil {
 		t.Fatalf("丢弃后重投不应报错: %v", err)
 	}
-	if again != threadDeliverDropped {
-		t.Fatalf("重投丢弃行不应复活，实际 %q", again)
+	if again != threadDeliverDuplicate {
+		t.Fatalf("重投丢弃行应判 duplicate，实际 %q", again)
 	}
 	if err := pool.QueryRow(ctx,
 		`SELECT status FROM thread_deliveries WHERE session_id = $1 AND event_key = $2`,
