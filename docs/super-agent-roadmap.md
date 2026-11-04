@@ -334,6 +334,17 @@ create table thread_deliveries (
   `user_id/tenant_id/session_id/source_kind/external_key` 与 payload（真库验收 1 条：
   载荷往返 + JOIN 字段 + 认领即置 running 不可重复领）。**剩下的只有入口接线**：
   把 `agent_followup.go` 的直投改成"先入队"，并在收尾点 drain。
+- **接线的三个硬约束（推导结论，避免下次重新踩）**：
+  ①**入口处已持锁**：`AgentFollowupHandler` 在 ② 已 `AcquireSessionRunLock` 成功才走到投递，
+  所以入队后第一条可以**原地直接跑**，不必先入队再 drain 一轮。
+  ②**drain 必须在 `releaseAll()` 之后**：回合收尾点在 `HandleSubmit` 内部
+  （`submit_handler.go` 的 `FinishTurn` 附近），此时调用方仍持有
+  `agent:run-lock:<session_id>` 与信号量/租户槽位；在那里 drain 等于同会话重入同一把锁
+  （或抢不到锁）。正确位置是后台 goroutine 里 `defer releaseAll()` 之后、`cancel()` 之前，
+  且**必须用未取消的父 ctx** —— 回合类 ctx 已被 `cancel`，用它 drain 会立刻失败。
+  ③**drain 只能续跑一条并自行递归**：跑完第 N 条后它的收尾又触发 drain 拿第 N+1 条，
+  这样队列自然清空；写成循环会把"回合什么时候结束"和"队列什么时候空"耦合在一起，
+  而回合是异步的，循环等不到它。
 
 #### P1-2 Router 接管（Super-agent 接管）
 
