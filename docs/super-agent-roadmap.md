@@ -885,10 +885,19 @@ alter table turns add column origin varchar(24) not null default '';
    `subagent` / `job` 两类，以及 P1-1 的 thread 投递）不是人当场授权的，事件正文里
    完全可以出现诱导性文字，因此危险操作一律要人确认。用户若要放宽，走显式开关，
    不靠"事件来源看起来可信"来推断。
-   **实现状态（据代码）**：该口径**尚未在代码里 enforce** ——
-   `agent_followup.go` 调用 `HandleSubmit` 时没有设置审批档位，注入内容目前只是包成
-   不可信数据块（`<subagent-result>` / `<job-result>`）。落地时要新增档位参数并补
-   渲染级证据，不能只改这句文档就当完成。
+   **实现状态（据代码，2026-11-04 已 enforce）**：`internal/api/event_driven_mode.go`
+   的 `restrictEventDrivenToolsMode` 在 `submitOnce` 解析会话配置**之前**把
+   `explicit["tools_mode"]` 收紧为 `ask`，判据是 `workbenchCtx` 的来源标记
+   （`FollowupKey` / `JobFollowupKey` / `TakeoverKey`）。放在 `submitOnce` 而不是各调用方：
+   事件源有三个（followup 直跑、drain 续跑、接管拍），漏一处就是后门。
+   放宽走显式开关 `users.settings.event_driven_tools_mode`（只接受 `ask/auto/yolo`），
+   缺省不存在即不放宽 —— 这正是"不靠事件来源看起来可信来推断"的落点。
+   两个刻意排除项：`goal_enforce` 单独出现时**不**算事件驱动（那是用户自己那条请求的延续，
+   收紧会让长任务在跑到一半时每步都要确认，实际效果是卡死）；由 followup 起始的续跑轮
+   仍带 `FollowupKey`（`withGoalEnforce` 复制而非替换），自动继承降级。
+   **证据级别**：`RequiresConfirmation(ToolLevelWrite, "ask")` 为真、`"yolo"` 为假，
+   即服务端权威裁决在降级后确实拦得住写操作；**未**跑真实引擎回合，
+   所以"引擎侧 `guards.ToolGuard` 也照此裁决"这一环仍属同源推断，不是端到端。
 
 ## 7. 复核方式
 
