@@ -247,11 +247,13 @@ create table threads (
   id            varchar(36) primary key,
   tenant_id     smallint     not null references tenants,
   user_id       varchar(36)  not null references users,
-  source_kind   varchar(32)  not null,  -- 'webhook' | 'job' | 'subagent'（与 P0-2 的 kind 同集合）
+  source_kind   varchar(32)  not null,  -- 'subagent' | 'job'（与 P0-2 的 followupKinds 同集合）
   external_key  varchar(128) not null default '',  -- 外部系统的幂等键，去重靠它
   created_at    timestamptz  not null default now()
 );
--- 同一外部事件重复入站只应产生一条 thread：多副本同时收同一条 webhook 是常态。
+-- 同一事件重复入站只应产生一条 thread：多副本 + 队列重投是常态。
+-- 取值集合刻意**不含 webhook**：P0-2 第一阶段只接内部可信源，外部自注册
+-- 会新增信任边界，属独立批次（见 P0-2 与 §5）。
 create unique index threads_idem on threads (tenant_id, source_kind, external_key)
   where external_key <> '';
 
