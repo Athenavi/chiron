@@ -32,10 +32,6 @@ const (
 	CaptchaCustom    = "custom"
 )
 
-// CaptchaKnownProviders 返回全部受支持的验证码服务商（配置校验用）。
-func CaptchaKnownProviders() []string {
-	return []string{CaptchaTurnstile, CaptchaRecaptcha, CaptchaHCaptcha, CaptchaTencent, CaptchaCustom}
-}
 
 // IsKnownCaptchaProvider 判断 provider 类型是否受支持。
 func IsKnownCaptchaProvider(p string) bool {

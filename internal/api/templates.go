@@ -80,7 +80,7 @@ func (h *TemplateHandler) Get(w http.ResponseWriter, r *http.Request) {
 	OK(w, t)
 }
 
-// Use POST /v1/templates/{id}/use 鈥斺€?涓€閿鍒跺埌鑷繁鐨勫伐浣滃彴
+// Use POST /v1/templates/{id}/use —— 一键复制到自己的工作台
 func (h *TemplateHandler) Use(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 	if claims == nil || claims.TenantID == 0 {

@@ -318,6 +318,10 @@ func ValidateJWTSecret(secret string) bool {
 		"test-secret",
 		"change-me",
 		"changeme",
+		// `.env.example` 历史上的示例值。它 ≥32 字符，因此**绕过**了长度门槛 ——
+		// `cp .env.example .env` 后不修改即可启动，等于用一把**仓库里公开**的密钥
+		// 加密所有敏感配置、签发 JWT。示例值现已留空，这一条兜住存量 .env。
+		"your-32-plus-char-random-secret-generate-with-secrets-token-urlsafe",
 	}
 	for _, ws := range weakSecrets {
 		if secret == ws {

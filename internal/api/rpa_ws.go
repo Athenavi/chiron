@@ -209,20 +209,6 @@ func (h *RPAHub) GetClient(clientID string) (*RPAClient, bool) {
 	return c, ok
 }
 
-// GetClientByUser 获取指定用户的最近活跃客户端
-func (h *RPAHub) GetClientByUser(userID string) (*RPAClient, bool) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	var latest *RPAClient
-	for _, c := range h.clients {
-		if c.UserID == userID {
-			if latest == nil || c.LastSeen.After(latest.LastSeen) {
-				latest = c
-			}
-		}
-	}
-	return latest, latest != nil
-}
 
 // SendCommand 发送命令并等待结果（带超时）。
 // 本地未命中时若 Redis 注册中心指示对端在其它网关副本，则跨实例投递并等待结果。
@@ -366,18 +352,6 @@ func (h *RPAHub) forwardResult(msg *RPAMessage) {
 	}
 }
 
-// BroadcastToUser 向指定用户的所有客户端广播事件
-func (h *RPAHub) BroadcastToUser(userID string, msg RPAMessage) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, c := range h.clients {
-		if c.UserID == userID {
-			if err := c.SendMessage(msg); err != nil {
-				slog.Warn("rpa broadcast failed", "client_id", c.ID, "error", err)
-			}
-		}
-	}
-}
 
 // ConnectedClients 返回已连接的客户端列表
 func (h *RPAHub) ConnectedClients() []*RPAClient {
@@ -485,16 +459,6 @@ func (h *RPAHub) ExecCommand(ctx context.Context, clientID string, method string
 	return result.Result, nil
 }
 
-// ConnectedClientIDs returns the IDs of all connected RPA clients.
-// This implements tools.RPABrowserHub interface.
-func (h *RPAHub) ConnectedClientIDs() []string {
-	clients := h.ConnectedClients()
-	ids := make([]string, len(clients))
-	for i, c := range clients {
-		ids[i] = c.ID
-	}
-	return ids
-}
 
 // ── RPA WebSocket Handler ──
 

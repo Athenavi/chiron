@@ -48,8 +48,6 @@ func New(pool *pgxpool.Pool, appSecret string) *Store {
 	}
 }
 
-// EncryptEnabled 报告当前主密钥是否可用（可加密敏感配置）。
-func (s *Store) EncryptEnabled() bool { return s.aead != nil }
 
 // nullableUser 将空 userID 转为 NULL，避免 uuid 列绑定空字符串报错。
 func nullableUser(userID string) interface{} {

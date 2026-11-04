@@ -157,8 +157,6 @@ func (f *Filter) Bits() uint64 { return f.m }
 // Hashes 返回每个元素使用的哈希个数。
 func (f *Filter) Hashes() uint64 { return f.k }
 
-// Capacity 返回构造时的预期容量。
-func (f *Filter) Capacity() uint64 { return f.capacity }
 
 // FPRate 返回构造时使用的目标误报率。
 func (f *Filter) FPRate() float64 { return f.fpRate }

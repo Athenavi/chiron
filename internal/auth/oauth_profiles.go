@@ -1,10 +1,5 @@
 package auth
 
-import (
-	"net/url"
-	"strings"
-)
-
 // ── OAuth2 / OIDC Provider 模板注册表 ─────────────────────
 //
 // 管理端选择 provider_type 后端点自动填充，仍可在数据库中覆盖
@@ -155,26 +150,4 @@ func wechatEffectiveAuthURL(authURL string, extra map[string]string) string {
 		return wechatMPAuthURL
 	}
 	return authURL
-}
-
-// buildAuthURL 按通用 OAuth2 参数构造授权 URL（client_id/redirect_uri/response_type/scope/state）。
-func buildAuthURL(base, clientID, redirectURL string, scopes []string, state string, extraParams url.Values) string {
-	q := url.Values{}
-	q.Set("client_id", clientID)
-	q.Set("redirect_uri", redirectURL)
-	q.Set("response_type", "code")
-	if len(scopes) > 0 {
-		q.Set("scope", strings.Join(scopes, " "))
-	}
-	q.Set("state", state)
-	for k, vs := range extraParams {
-		for _, v := range vs {
-			q.Set(k, v)
-		}
-	}
-	sep := "?"
-	if strings.Contains(base, "?") {
-		sep = "&"
-	}
-	return base + sep + q.Encode()
 }

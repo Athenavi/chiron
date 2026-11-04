@@ -33,13 +33,3 @@ func AllWorkstations() []WorkstationType {
 		WorkstationPlugin,
 	}
 }
-
-// IsValidWorkstation 报告 s 是否为已知工作台标识。
-func IsValidWorkstation(s WorkstationType) bool {
-	for _, w := range AllWorkstations() {
-		if w == s {
-			return true
-		}
-	}
-	return false
-}

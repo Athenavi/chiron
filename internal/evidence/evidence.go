@@ -17,7 +17,6 @@ package evidence
 import (
 	"encoding/json"
 	"regexp"
-	"sort"
 	"strings"
 )
 
@@ -318,12 +317,4 @@ func truncate(s string, n int) string {
 		return s
 	}
 	return s[:n] + "…"
-}
-
-// SortByTool 仅供测试与稳定输出使用：按工具名排序（不改动内部顺序）。
-func SortByTool(rs []Record) []Record {
-	out := make([]Record, len(rs))
-	copy(out, rs)
-	sort.SliceStable(out, func(i, j int) bool { return out[i].ToolName < out[j].ToolName })
-	return out
 }

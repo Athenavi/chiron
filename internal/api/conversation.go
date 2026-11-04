@@ -535,10 +535,3 @@ func (h *ConversationHandler) Update(w http.ResponseWriter, r *http.Request) {
 	}
 	OK(w, out)
 }
-
-func userIDFromClaims(claims *auth.Claims) string {
-	if claims == nil {
-		return ""
-	}
-	return claims.UserID
-}

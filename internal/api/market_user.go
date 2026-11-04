@@ -236,19 +236,6 @@ func mustJSON(v interface{}) string {
 	return string(b)
 }
 
-func intValAny(v interface{}, def int) int {
-	switch n := v.(type) {
-	case float64:
-		return int(n)
-	case int:
-		return n
-	case json.Number:
-		if i, err := n.Int64(); err == nil {
-			return int(i)
-		}
-	}
-	return def
-}
 
 func toStringSlice(v interface{}) []string {
 	arr, ok := v.([]interface{})

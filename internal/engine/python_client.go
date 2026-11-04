@@ -501,6 +501,15 @@ func (c *PythonClient) ForwardRequest(w http.ResponseWriter, r *http.Request, pa
 		if claims.TenantID != 0 {
 			req.Header.Set("X-Tenant-Id", fmt.Sprintf("%d", claims.TenantID))
 		}
+		// X-User-Role 必须在这里补：它在上面的 skipHeaders 里被**剥掉**了（客户端不可
+		// 自报角色），而引擎侧有端点是按它判管理员（`app/api/knowledge.py` 的
+		// `/admin/list` 与删除知识库的 `is_admin`）。漏掉这一步的后果是**静默的功能
+		// 失效**：调用方（如 routes_admin.go 的 GET /v1/admin/kb）以为自己设好了角色，
+		// 实际被转发层抹掉，引擎侧管理员永远判 false —— 面板里知识库列表与越权删除
+		// 都表现为「没权限」/「删不掉」，而不是报错。
+		if claims.Role != "" {
+			req.Header.Set("X-User-Role", claims.Role)
+		}
 	}
 	resp, err := c.do(req)
 	if err != nil {

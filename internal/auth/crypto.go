@@ -11,16 +11,42 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strconv"
 	"sync"
 	"unicode"
 )
 
 // BcryptCost 是 bcrypt 哈希的成本因子。默认 12 在安全性与性能之间取得平衡
-// （约 250ms/次，2025 年硬件基准）。可通过环境变量 BCRYPT_COST 覆盖。
-var BcryptCost = func() int {
-	const defaultCost = 12
-	return defaultCost
-}()
+// （约 250ms/次，2025 年硬件基准）。
+//
+// 可通过环境变量 BCRYPT_COST 覆盖，用于两类场景：低配机器（登录吞吐吃紧时下调）
+// 与安全加固（按基准测试上调）。越界值**不生效也不报错**，回落默认 12 ——
+// 成本因子配错会让登录要么慢到不可用、要么弱到可暴力破解，不能交给部署时手滑。
+//
+// 取值区间 10–15：低于 10 已低于 OWASP 对 bcrypt 的建议下限；
+// 高于 15 单次哈希会超过数秒，等于给登录接口送了一把 DoS 放大器。
+const (
+	defaultBcryptCost = 12
+	minBcryptCost     = 10
+	maxBcryptCost     = 15
+)
+
+var BcryptCost = resolveBcryptCost(os.Getenv("BCRYPT_COST"))
+
+// resolveBcryptCost 把 BCRYPT_COST 的原始字符串解析成成本因子。
+// 空串、非整数、越界都回落 defaultBcryptCost（并记一条 warn）—— 见 BcryptCost 的说明。
+func resolveBcryptCost(raw string) int {
+	if raw == "" {
+		return defaultBcryptCost
+	}
+	n, err := strconv.Atoi(raw)
+	if err != nil || n < minBcryptCost || n > maxBcryptCost {
+		slog.Warn("BCRYPT_COST out of range or not an integer; falling back to default",
+			"raw", raw, "default", defaultBcryptCost, "min", minBcryptCost, "max", maxBcryptCost)
+		return defaultBcryptCost
+	}
+	return n
+}
 
 // ValidatePasswordComplexity 校验密码复杂度。
 // 要求：长度 8-128 字符，至少包含大写字母、小写字母、数字、特殊字符各一个。

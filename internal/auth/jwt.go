@@ -124,13 +124,6 @@ func InitJWTAuth() error {
 	return nil
 }
 
-// ParseJWT is a convenience function that parses and validates a JWT token string.
-func ParseJWT(token string) (*Claims, error) {
-	if jwtAuth == nil {
-		return nil, fmt.Errorf("JWT authenticator not initialized, call InitJWTAuth() first")
-	}
-	return jwtAuth.ValidateToken(token)
-}
 
 // Built-in permissions
 var (

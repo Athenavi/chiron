@@ -495,6 +495,31 @@ class Settings(BaseSettings):
 
         is_prod = is_production()
 
+        # APP_SECRET 本身必须是**非公开**值。
+        #
+        # 为什么单列一条：下面的派生让「只配 APP_SECRET」的部署也能跑起来，于是
+        # 校验点只剩派生结果 —— 而派生结果是 43 字符的 base64url 串，**它永远不在
+        # 弱值黑名单里**。换句话说，只查 jwt_secret 等于从不校验 APP_SECRET：
+        # 照抄 `.env.example` 里的示例值就能启动，而那份值全仓公开。
+        #
+        # 口径与 Go 侧 config/config.go::ValidateJWTSecret 的 weakSecrets 保持一致
+        # （那里也把历史示例值列进了黑名单）。
+        _WEAK_APP_SECRETS = {  # noqa: N806 — 沿用模块级大写常量惯例
+            "dev-secret-change-in-production",
+            "dev-secret-change-in-production-12345678",
+            "changeme",
+            "change-me",
+            "secret",
+            "test-secret",
+            "your-32-plus-char-random-secret-generate-with-secrets-token-urlsafe",
+        }
+        if self.app_secret in _WEAK_APP_SECRETS:
+            raise ValueError(
+                "APP_SECRET must not be a well-known/example value "
+                "(it is public in the repository); generate one with "
+                "`python -c \"import secrets; print(secrets.token_urlsafe(32))\"`"
+            )
+
         # JWT_SECRET 未显式配置时，由 APP_SECRET 派生（与 Go 网关 deriveSubsecret 完全一致：
         # HMAC-SHA256(APP_SECRET, "chiron-jwt") → base64url 无 padding）。
         # 这样「仅配置 APP_SECRET」的部署模型下引擎也能启动，且与网关共享签名密钥。

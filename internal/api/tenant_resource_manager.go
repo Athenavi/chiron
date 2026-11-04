@@ -28,6 +28,20 @@ import (
 // Redis 抖动时不应让 /submit 长时间阻塞（正常一次 Lua 往返是亚毫秒级）。
 const tenantSemaphoreAcquireTimeout = 1 * time.Second
 
+// 配额聚合的两条 SQL 抽成常量，供真实 PostgreSQL 冒烟用例直接引用
+// （tests 里引用同一个字符串，SQL 一改就在真库上立刻暴露列名/表名错误）。
+//
+// ⚠ 表名与列名以权威基线为准：`media_assets.size`。历史实现写成 `media.file_size`
+// —— 表和列都不存在，查询必然报错，而调用方是 fail-open ⇒ 配额**从未生效过一次**，
+// 且只在日志里留一条 warn，配置了配额的管理员看不出任何异常。
+// 文件夹（type='folder'）没有真实占用，也占着一条记录，两个口径都排除它。
+const (
+	storageUsageQuery = `SELECT COALESCE(SUM(size), 0) FROM media_assets
+		  WHERE tenant_id = $1 AND type <> 'folder'`
+	storageFileCountQuery = `SELECT COUNT(*) FROM media_assets
+		  WHERE tenant_id = $1 AND type <> 'folder'`
+)
+
 // tenantResourceSyncDefault 配额同步默认周期（多副本一致性窗口的上界）。
 const tenantResourceSyncDefault = 5 * time.Minute
 
@@ -168,41 +182,8 @@ func (trm *TenantResourceManager) SyncFromDB(ctx context.Context) {
 	slog.Debug("tenant resource: quotas synced", "tenants", len(loaded))
 }
 
-// SetQuota 显式设置租户资源配置。
-// 多副本生产环境以 ent_quota_pools 为权威（由 SyncFromDB 覆盖），本方法供单测与
-// 本地覆盖使用。
-func (trm *TenantResourceManager) SetQuota(cfg TenantResourceConfig) {
-	trm.mu.Lock()
-	defer trm.mu.Unlock()
-	c := cfg
-	trm.quotas[c.TenantID] = &c
-	// 并发上限变更时重建信号量（Redis 共享计数）
-	if c.MaxConcurrency > 0 {
-		trm.semaphores[c.TenantID] = NewSharedSemaphore(trm.rdb, "tenant:"+c.TenantID, c.MaxConcurrency)
-	} else {
-		delete(trm.semaphores, c.TenantID)
-	}
-	slog.Info("tenant resource quota set",
-		"tenant", c.TenantID,
-		"max_concurrency", c.MaxConcurrency,
-		"max_storage_bytes", c.MaxStorageBytes,
-	)
-}
 
-// GetQuota 获取租户资源配置
-func (trm *TenantResourceManager) GetQuota(tenantID string) *TenantResourceConfig {
-	trm.mu.RLock()
-	defer trm.mu.RUnlock()
-	return trm.quotas[tenantID]
-}
 
-// RemoveQuota 移除租户资源配置
-func (trm *TenantResourceManager) RemoveQuota(tenantID string) {
-	trm.mu.Lock()
-	defer trm.mu.Unlock()
-	delete(trm.quotas, tenantID)
-	delete(trm.semaphores, tenantID)
-}
 
 // Acquire 尝试获取租户并发执行许可（非阻塞）。返回释放函数（必须调用）。
 //
@@ -231,10 +212,9 @@ func (trm *TenantResourceManager) CheckStorageQuota(ctx context.Context, tenantI
 		return true, 0, 0 // 未配置存储配额
 	}
 
-	// 查询当前存储用量
+	// 查询当前存储用量（口径见 storageUsageQuery 的注释）
 	var currentBytes int64
-	err := db.GlobalDBManager.QueryRow(ctx,
-		`SELECT COALESCE(SUM(file_size), 0) FROM media WHERE tenant_id = $1`, tenantID).Scan(&currentBytes)
+	err := db.GlobalDBManager.QueryRow(ctx, storageUsageQuery, tenantID).Scan(&currentBytes)
 	if err != nil {
 		slog.Warn("tenant resource: check storage quota failed", "tenant", tenantID, "error", err)
 		return true, 0, cfg.MaxStorageBytes // fail-open
@@ -256,9 +236,9 @@ func (trm *TenantResourceManager) CheckFileCountQuota(ctx context.Context, tenan
 		return true, 0, 0
 	}
 
+	// 查询当前文件数量（口径见 storageFileCountQuery 的注释）
 	var currentCount int
-	err := db.GlobalDBManager.QueryRow(ctx,
-		`SELECT COUNT(*) FROM media WHERE tenant_id = $1`, tenantID).Scan(&currentCount)
+	err := db.GlobalDBManager.QueryRow(ctx, storageFileCountQuery, tenantID).Scan(&currentCount)
 	if err != nil {
 		slog.Warn("tenant resource: check file count quota failed", "tenant", tenantID, "error", err)
 		return true, 0, cfg.MaxStorageFiles

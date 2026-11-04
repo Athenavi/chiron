@@ -23,11 +23,6 @@ type EnterpriseBillingObserver struct {
 
 var _ BillingObserver = (*EnterpriseBillingObserver)(nil)
 
-// NewEnterpriseBillingObserver 创建企业计费观察者。
-// pool 为 nil 时事件处理回退到全局 db.Pool（沿用项目 PGStore 模式）。
-func NewEnterpriseBillingObserver(pool *pgxpool.Pool) *EnterpriseBillingObserver {
-	return &EnterpriseBillingObserver{pool: pool}
-}
 
 // OnCreditChange 异步写一条 billing_records 归集记录。
 // 仅归集消费（扣减）事件；充值/退款等入账由 payments / credit_transactions 覆盖。

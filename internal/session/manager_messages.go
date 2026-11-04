@@ -17,37 +17,6 @@ import (
 
 // ── Message helpers ───────────────────────────────────────────────────────
 
-// SaveMessage inserts a single message into the session's message log.
-// The user_id is set to NULL; SaveUserMessage/SaveAssistantMessage should be
-// used for user-facing message persistence.
-func (m *Manager) SaveMessage(ctx context.Context, sessionID, role, content string) error {
-	if m.pool == nil {
-		return nil
-	}
-
-	_, err := m.pool.Exec(ctx,
-		`INSERT INTO sessions (id, tenant_id, user_id, title, created_at, updated_at)
-		 VALUES ($1, $2, NULL::uuid, '', NOW(), NOW())
-		 ON CONFLICT (id) DO UPDATE SET updated_at = NOW()`,
-		sessionID, DefaultTenantID)
-	if err != nil {
-		return fmt.Errorf("ensure session: %w", err)
-	}
-
-	msgID, err := genID()
-	if err != nil {
-		return fmt.Errorf("generate message id: %w", err)
-	}
-	_, err = m.pool.Exec(ctx,
-		`INSERT INTO messages (id, session_id, role, content, created_at) VALUES ($1, $2, $3, $4, NOW())`,
-		msgID, sessionID, role, content)
-	if err != nil {
-		return fmt.Errorf("save message: %w", err)
-	}
-
-	m.evictCache(ctx, sessionID)
-	return nil
-}
 
 // isMissingColumn 判断 err 是否为"列不存在"（PG 42703 / undefined_column）。
 // 用途：新增可选列时，迁移尚未执行的库仍能走旧路径写入 —— 核心消息不能因为一个
@@ -457,40 +426,6 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 	return page, nil
 }
 
-// GetToolCalls returns all tool call records for a session, oldest first.
-//
-// 可空列一律 COALESCE：`is_error` / `session_id` / `tool_name` / `created_at` 在
-// 权威基线里都可空，而 `SaveToolCall` 曾经不写 `is_error`（写进 NULL）。
-// pgx 把 NULL 扫进 `bool`/`string`/`time.Time` 会直接报错，一条脏记录就让整个
-// 会话的工具调用读取失败 —— 与 GetToolCallsPage 是同一个根因，必须同修复。
-func (m *Manager) GetToolCalls(ctx context.Context, sessionID string) ([]model.ToolCall, error) {
-	if m.pool == nil {
-		return nil, nil
-	}
-	rows, err := m.pool.Query(ctx,
-		`SELECT id, COALESCE(session_id, ''), COALESCE(tool_name, ''),
-		        COALESCE(input, '{}'::json), output, COALESCE(is_error, false),
-		        COALESCE(created_at, TIMESTAMP 'epoch')
-		 FROM tool_calls WHERE session_id = $1 ORDER BY created_at ASC, id ASC`,
-		sessionID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var out []model.ToolCall
-	for rows.Next() {
-		var tc model.ToolCall
-		var inputJSON []byte
-		var created time.Time
-		if err := rows.Scan(&tc.ID, &tc.SessionID, &tc.ToolName, &inputJSON, &tc.Output, &tc.IsError, &created); err != nil {
-			return nil, err
-		}
-		tc.Input = string(inputJSON)
-		tc.CreatedAt = created
-		out = append(out, tc)
-	}
-	return out, rows.Err()
-}
 
 // toolOutputMaxChunk 是单次按需读取 output 的字符上限。
 //

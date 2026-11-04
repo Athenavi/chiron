@@ -22,9 +22,6 @@ type SystemHandler struct {
 	pythonClient *engine.PythonClient
 }
 
-func NewSystemHandler() *SystemHandler {
-	return &SystemHandler{}
-}
 
 func NewSystemHandlerWithEngine(pyClient *engine.PythonClient) *SystemHandler {
 	return &SystemHandler{pythonClient: pyClient}
@@ -484,13 +481,6 @@ func (h *SystemHandler) DBExecute(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// nilIfEmpty returns nil for empty strings (for *string sql params).
-func nilIfEmpty(s string) *string {
-	if s == "" {
-		return nil
-	}
-	return &s
-}
 
 // DBBatchExecute 批量执行 SQL（供 Python 引擎调用）
 // 同样只允许只读语句，且**逐条**走 validateReadOnlySQL。

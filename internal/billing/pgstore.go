@@ -2,7 +2,6 @@ package billing
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -288,10 +287,6 @@ type BalanceResponse struct {
 	Balance int    `json:"balance"`
 }
 
-func FormatBalance(userID string, balance int) string {
-	data, _ := json.Marshal(BalanceResponse{UserID: userID, Balance: balance})
-	return string(data)
-}
 
 // ── PaymentStore ──────────────────────────────────────────────────────────
 

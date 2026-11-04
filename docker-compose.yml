@@ -653,6 +653,21 @@ services:
       retries: 5
       start_period: 10s
     restart: unless-stopped
+    # ── 容器加固：与 k8s 清单（deploy/k8s/chiron.yaml 的 frontend Deployment）同口径 ──
+    #
+    # nginx:alpine 的主进程以 root 起（要绑 80 并写 /var/cache/nginx），这是镜像本身
+    # 的既定形态，不是我们能靠 `user:` 改掉的。所以这里做**能力最小化**：
+    # 只留「绑定特权端口」这一项，其余全丢，且禁止 execve 提权 —— 逃逸后既不能提权，
+    # 也拿不到 raw socket / 挂载 / 改系统时间等能力。
+    #
+    # pids_limit 兜 fork 炸弹：128m 内存的静态资源容器本来就不需要多少进程。
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE      # 绑 80 端口所需，其余能力一概不需要
+    pids_limit: 128
 
 
   prometheus:

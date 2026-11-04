@@ -1,6 +1,18 @@
 module github.com/athenavi/chiron
 
-go 1.26.0
+go 1.26.10
+
+// 上面这个补丁号**必须跟着补丁走**，别写成 1.26.0 这种「小版本就够」的形态：
+//
+//   govulncheck 实测表明 go1.26.4 的标准库有 21 处**可达**漏洞（crypto/x509 中间证书
+//   校验、net/http 的 HTTP/2 HPACK 竞态与 Punycode 校验、tls 等），最高需 1.26.10 才修完。
+//   这些漏洞不在我们 import 的模块里，**换依赖版本修不掉** —— 只有换编译器/标准库。
+//
+//   而 go 指令正是工具链版本的单一真相源：CI 的 setup-go 走 `go-version-file: go.mod`，
+//   本地 GOTOOLCHAIN=auto 也按它自动取对应补丁版，Dockerfile 的 golang:1.26-alpine
+//   是滚动 tag。写低补丁号 ⇒ 上面那条通路全都会装回带漏洞的版本。
+//
+// 升级时同步跑 `govulncheck ./...` 确认清零。
 
 require (
 	github.com/coreos/go-oidc/v3 v3.20.0

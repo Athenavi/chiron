@@ -35,10 +35,6 @@ const (
 	SmsCustom  = "custom"
 )
 
-// SmsKnownProviders 返回全部受支持的短信服务商（配置校验用）。
-func SmsKnownProviders() []string {
-	return []string{SmsAliyun, SmsTencent, SmsCustom}
-}
 
 // IsKnownSmsProvider 判断 provider 类型是否受支持。
 func IsKnownSmsProvider(p string) bool {

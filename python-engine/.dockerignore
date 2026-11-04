@@ -1,0 +1,49 @@
+# 构建上下文排除清单。
+#
+# 为什么必须有：本目录没有这个文件时，`docker build python-engine/` 会把整个目录
+# 当上下文传（实测 **189MB**），其中绝大部分是本地缓存。更麻烦的是 `COPY app/ app/`
+# 会把 `app/**/__pycache__` 里的 **.pyc 一起打进镜像** —— 那些是**本机 Python 版本
+# 的字节码**，包含已被删除模块的陈旧残留（`app/api/workflows.pyc`、
+# `app/api/desktop_infer.pyc`、`app/tools/graph.pyc` 等）。
+#
+# 为什么陈旧的 .pyc 不只是"占空间"：Python 只要看到 `__pycache__/x.cpython-312.pyc`
+# 且同目录没有 `x.py`，常规 import 不会加载它；但**任何按文件名扫目录的代码**
+# （插件发现、技能枚举、健康检查）都会把这几个幽灵模块当成"存在"。镜像里带着
+# 已删功能的字节码，是排障时最难解释的一类假象。
+
+# 本地缓存（全部由容器内自己的解释器重建）
+__pycache__
+**/__pycache__
+*.py[cod]
+.mypy_cache
+.pytest_cache
+.ruff_cache
+*.egg-info
+
+# 运行期数据：容器里由卷挂载，绝不能来自构建上下文
+data
+logs
+out
+*.log
+*.db
+*.sqlite*
+
+# 本地环境与版本库状态
+.env
+.env.*
+.git
+.gitignore
+
+# 编辑器 / 系统垃圾
+.vscode
+.idea
+.DS_Store
+Thumbs.db
+
+# 开发期依赖清单（镜像只用 requirements.txt）
+requirements-dev.txt
+pyproject.toml
+
+# 测试与本地工具（不进生产镜像）
+tests
+acp_adapter

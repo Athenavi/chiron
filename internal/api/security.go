@@ -195,21 +195,6 @@ type OutputScanner struct {
 	apiKeyPatterns []*regexp.Regexp
 }
 
-// NewOutputScanner 创建输出扫描器
-func NewOutputScanner() *OutputScanner {
-	return &OutputScanner{
-		systemPromptKeywords: []string{
-			"system prompt",
-			"SYSTEM:",
-			"You are a helpful assistant",
-		},
-		apiKeyPatterns: []*regexp.Regexp{
-			regexp.MustCompile(`sk-[a-zA-Z0-9]{20,}`),
-			regexp.MustCompile(`(?i)api[_-]?key[=:]\s*["']?[a-zA-Z0-9]{16,}`),
-			regexp.MustCompile(`(?i)password[=:]\s*["']?[^\s"]{8,}`),
-		},
-	}
-}
 
 // Scan 扫描 LLM 输出
 func (s *OutputScanner) Scan(response string) (safe bool, reason string) {

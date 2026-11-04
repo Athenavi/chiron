@@ -65,10 +65,6 @@ func NewStateCodecWithClock(key []byte, ttl time.Duration, now func() time.Time)
 	return &StateCodec{key: key, ttl: ttl, now: now}
 }
 
-// Issue 签发 state 令牌（payload JSON → base64url，附 HMAC-SHA256 签名）。
-func (c *StateCodec) Issue(providerID, nonce string) (string, error) {
-	return c.IssueMode(providerID, nonce, StateModeLogin, "")
-}
 
 // IssueMode 签发指定模式的 state（bind 模式须携带 uid）。
 func (c *StateCodec) IssueMode(providerID, nonce, mode, uid string) (string, error) {

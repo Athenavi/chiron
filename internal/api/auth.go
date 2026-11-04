@@ -13,14 +13,13 @@ import (
 	"github.com/athenavi/chiron/config"
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
-	"github.com/athenavi/chiron/internal/id"
 	"github.com/jackc/pgx/v5"
 	"golang.org/x/crypto/bcrypt"
 )
 
 const tokenCookieName = "chiron_token"
 
-// P0-4: Email 鑴辨晱鍑芥暟锛屼繚鐣欏墠3瀛楃+@+鍩熷悕棣栧瓧绗︼紝鍏朵綑鐢?**
+// Email 脱敏：保留前 3 字符 + @ + 域名首字符，其余用 * 遮盖
 func maskEmail(email string) string {
 	at := strings.Index(email, "@")
 	if at < 1 {
@@ -205,7 +204,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 浜烘満楠岃瘉鏍呮爮锛氬惎鐢?澶辫触鍗囩骇鏃跺己鍒舵牎楠岋紱杈惧埌纭笂闄愮洿鎺?429
+	// 人机验证栅栏：启用后按风险升级强制校验；达到硬上限直接 429
 	if h.captcha != nil {
 		if err := h.captcha.Enforce(w, r, &auth.CaptchaToken{
 			Token:   req.CaptchaToken,
@@ -248,7 +247,7 @@ func (h *AuthHandler) Login(w http.ResponseWriter, r *http.Request) {
 		req.Email, DefaultTenantID,
 	).Scan(&user.ID, &user.Email, &user.Name, &user.Role, &tenantID, &passwordHash)
 	if err != nil {
-		slog.Warn("login failed", "email", req.Email, "error", err)
+		slog.Warn("login failed", "email", maskEmail(req.Email), "error", err)
 		h.logLoginFailure(r.Context(), r, req.Email, DefaultTenantID, r.RemoteAddr)
 		Unauthorized(w, "invalid email or password")
 		return
@@ -436,7 +435,7 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 	role := "user"
 	if userTotal == 0 {
 		role = "owner"
-		slog.Info("first registered user becomes owner", "email", req.Email)
+		slog.Info("first registered user becomes owner", "email", maskEmail(req.Email))
 	}
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(req.Password), auth.BcryptCost)
@@ -532,12 +531,12 @@ func (h *AuthHandler) Register(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AuthHandler) Logout(w http.ResponseWriter, r *http.Request) {
-	// 鈹€鈹€ JWT 榛戝悕鍗曪細灏嗚 token 鍔犲叆 Redis 榛戝悕鍗曪紝TTL 绛変簬鍓╀綑鏈夋晥鏈?鈹€鈹€
+	// ── JWT 黑名单：将该 token 加入 Redis 黑名单，TTL 等于剩余有效期 ──
 	if claims := auth.GetClaims(r.Context()); claims != nil && claims.ID != "" && db.Redis != nil {
 		remaining := time.Until(claims.ExpiresAt.Time)
 		if remaining > 0 {
 			db.Redis.Set(r.Context(), db.RedisKey("jwt:blacklist:")+claims.ID, "1", remaining)
-			// P0-1: 璺ㄥ疄渚嬪悓姝ラ粦鍚嶅崟
+			// 跨实例同步黑名单
 			broadcastBlacklistSync(claims.ID)
 		}
 	}
@@ -581,7 +580,7 @@ func (h *AuthHandler) UpdateProfile(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Email    string                 `json:"email"`
 		Name     string                 `json:"name"`
-		Settings map[string]interface{} `json:"settings"` // 鑷畾涔夋崲鑲ょ瓑鐢ㄦ埛璁剧疆锛堝眬閮ㄥ悎骞讹級
+		Settings map[string]interface{} `json:"settings"` // 自定义换肤等用户设置（局部合并）
 	}
 	if err := DecodeJSON(w, r, &body); err != nil {
 		BadRequest(w, ErrInvalidReq)
@@ -732,8 +731,4 @@ func (h *AuthHandler) Refresh(w http.ResponseWriter, r *http.Request) {
 
 	SetTokenCookie(w, newToken, int(h.cfg.JWTExpiration.Seconds()), h.cfg.CookieSecure)
 	OK(w, map[string]string{"message": "token refreshed"})
-}
-
-func generateID() string {
-	return id.NextID()
 }

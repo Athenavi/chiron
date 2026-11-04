@@ -116,25 +116,13 @@ func DecRequests() {
 	Global.RequestsActive.Add(-1)
 }
 
-func IncLLMCall() {
-	Global.LLMCallsTotal.Add(1)
-}
 
-func RecordLLMDuration(d time.Duration) {
-	LLMHistogram.Record(d)
-}
 
-func IncLLMError() {
-	Global.LLMErrorsTotal.Add(1)
-}
 
 func IncToolCall() {
 	Global.ToolCallsTotal.Add(1)
 }
 
-func RecordToolDuration(d time.Duration) {
-	ToolHistogram.Record(d)
-}
 
 func IncToolError() {
 	Global.ToolErrorsTotal.Add(1)
@@ -144,21 +132,12 @@ func IncRateLimitBlocked() {
 	Global.RateLimitBlocked.Add(1)
 }
 
-func IncRateLimitError() {
-	Global.RateLimitErrors.Add(1)
-}
 
 func IncQuotaExceeded() {
 	Global.QuotaExceeded.Add(1)
 }
 
-func IncAuditLogWrite() {
-	Global.AuditLogWrites.Add(1)
-}
 
-func IncAuditLogError() {
-	Global.AuditLogErrors.Add(1)
-}
 
 func IncWebSocketConn() {
 	Global.WebSocketConns.Add(1)
@@ -168,29 +147,11 @@ func DecWebSocketConn() {
 	Global.WebSocketConns.Add(-1)
 }
 
-func IncPaymentAttempt() {
-	Global.PaymentAttempts.Add(1)
-}
 
-func IncPaymentSuccess() {
-	Global.PaymentSuccesses.Add(1)
-}
 
-func IncPaymentFailure() {
-	Global.PaymentFailures.Add(1)
-}
 
-func IncSSOLoginAttempt() {
-	Global.SSOLoginAttempts.Add(1)
-}
 
-func IncSSOLoginSuccess() {
-	Global.SSOLoginSuccesses.Add(1)
-}
 
-func IncSSOLoginFailure() {
-	Global.SSOLoginFailures.Add(1)
-}
 
 // M19：按-run 用量对账。`tokens` 是被补偿的 input+output 总量（用于判断规模与方向）。
 func IncRunUsageReconciled(tokens int64) {
@@ -357,21 +318,6 @@ func AllSessionCosts() map[string]SessionCost {
 			continue
 		}
 		result[k] = v.SessionCost
-	}
-	return result
-}
-
-// SnapshotSessionCosts returns a JSON-safe summary of all session costs.
-func SnapshotSessionCosts() []map[string]interface{} {
-	all := AllSessionCosts()
-	result := make([]map[string]interface{}, 0, len(all))
-	for sid, cost := range all {
-		result = append(result, map[string]interface{}{
-			"session_id":    sid,
-			"input_tokens":  cost.InputTokens,
-			"output_tokens": cost.OutputTokens,
-			"total_calls":   cost.TotalCalls,
-		})
 	}
 	return result
 }

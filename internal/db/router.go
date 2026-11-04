@@ -184,24 +184,3 @@ func (r *DatabaseRouter) Stats() map[string]interface{} {
 
 	return stats
 }
-
-// IsHealthy checks if the database router is healthy.
-func (r *DatabaseRouter) IsHealthy() bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
-	defer cancel()
-
-	if err := r.writePool.Ping(ctx); err != nil {
-		return false
-	}
-
-	if len(r.readPools) > 0 {
-		for _, pool := range r.readPools {
-			if err := pool.Ping(ctx); err == nil {
-				return true
-			}
-		}
-		return false
-	}
-
-	return true
-}

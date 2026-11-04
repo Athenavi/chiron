@@ -82,6 +82,7 @@ func liveSmokeFixture(t *testing.T, pool *pgxpool.Pool) (tenantID int16, userID 
 		}{
 			{`DELETE FROM invoice_requests WHERE user_id = $1`, []interface{}{userID}},
 			{`DELETE FROM payments WHERE user_id = $1`, []interface{}{userID}},
+			{`DELETE FROM media_assets WHERE tenant_id = $1`, []interface{}{tenantID}},
 			{`DELETE FROM credit_transactions WHERE user_id = $1`, []interface{}{userID}},
 			{`DELETE FROM usage_events WHERE user_id = $1`, []interface{}{userID}},
 			{`DELETE FROM api_keys WHERE user_id = $1`, []interface{}{userID}},
@@ -528,5 +529,50 @@ func TestLiveAPIKeyAuthAndMarkUsed(t *testing.T) {
 	}
 	if driftSec < -60 || driftSec > 60 {
 		t.Errorf("last_used_at 与数据库会话当前时刻偏差 %.0f 秒，期望 1 分钟内（同一会话时区下的 naive 比较）", driftSec)
+	}
+}
+
+// TestLiveTenantStorageQuotaQueries 验租户存储配额的聚合 SQL（缺口 ⑦）。
+//
+// 回归背景：`CheckStorageQuota` / `CheckFileCountQuota` 曾写成
+// `FROM media` / `SUM(file_size)` —— **表和列都不存在**。因为调用方对查询错误
+// 一律 fail-open（记一条 warn 后放行），这条缺陷不会 5xx、不会报警，只表现为
+// "配了配额也从不生效"。而它单测全绿：SQL 是拼在字符串里的，没有真库根本发现不了。
+//
+// 这里直接引用生产代码里的那两个常量，因此**改 SQL 就会在这里立刻暴露**。
+func TestLiveTenantStorageQuotaQueries(t *testing.T) {
+	pool := liveSmokePool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	ctx := context.Background()
+
+	// 一个真实文件 + 一个文件夹。文件夹必须被两条 SQL 都排除：
+	// 它占一条记录（不该算文件数），但不占存储（size 恒 0）。
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, size, created_at, updated_at)
+		 VALUES ($1, $2, $3, 'image', 'a.png', 1024, now(), now())`,
+		uuid.NewString(), tenantID, userID); err != nil {
+		t.Fatalf("建 media_assets 失败: %v", err)
+	}
+	if _, err := pool.Exec(ctx,
+		`INSERT INTO media_assets (id, tenant_id, user_id, type, name, size, created_at, updated_at)
+		 VALUES ($1, $2, $3, 'folder', 'dir', 0, now(), now())`,
+		uuid.NewString(), tenantID, userID); err != nil {
+		t.Fatalf("建文件夹失败: %v", err)
+	}
+
+	var used int64
+	if err := pool.QueryRow(ctx, storageUsageQuery, tenantID).Scan(&used); err != nil {
+		t.Fatalf("storageUsageQuery 执行失败（表名/列名拼错？）: %v", err)
+	}
+	if used != 1024 {
+		t.Errorf("storageUsageQuery = %d，期望 1024（文件夹的 size=0 也应被排除在同一口径外）", used)
+	}
+
+	var count int
+	if err := pool.QueryRow(ctx, storageFileCountQuery, tenantID).Scan(&count); err != nil {
+		t.Fatalf("storageFileCountQuery 执行失败（表名/列名拼错？）: %v", err)
+	}
+	if count != 1 {
+		t.Errorf("storageFileCountQuery = %d，期望 1（文件夹不占文件额度）", count)
 	}
 }

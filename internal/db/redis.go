@@ -2,7 +2,6 @@ package db
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -68,26 +67,7 @@ func (m *RedisManager) Set(ctx context.Context, key string, value interface{}, e
 	return client.Set(ctx, key, value, expiration).Err()
 }
 
-// SetJSON 设置 JSON 对象
-func (m *RedisManager) SetJSON(ctx context.Context, key string, value interface{}, expiration time.Duration) error {
-	data, err := json.Marshal(value)
-	if err != nil {
-		return fmt.Errorf("marshal failed: %w", err)
-	}
-	return m.Set(ctx, key, string(data), expiration)
-}
 
-// GetJSON 获取并解析 JSON 对象
-func (m *RedisManager) GetJSON(ctx context.Context, key string, dest interface{}) error {
-	val, err := m.Get(ctx, key)
-	if err != nil {
-		return err
-	}
-	if val == "" {
-		return errors.New("key not found")
-	}
-	return json.Unmarshal([]byte(val), dest)
-}
 
 // Del 删除键
 func (m *RedisManager) Del(ctx context.Context, keys ...string) error {
@@ -107,14 +87,6 @@ func (m *RedisManager) Exists(ctx context.Context, keys ...string) (int64, error
 	return client.Exists(ctx, keys...).Val(), nil
 }
 
-// Expire 设置过期时间
-func (m *RedisManager) Expire(ctx context.Context, key string, expiration time.Duration) error {
-	client, err := m.GetClient()
-	if err != nil {
-		return fmt.Errorf("redis manager: %w", err)
-	}
-	return client.Expire(ctx, key, expiration).Err()
-}
 
 // Incr 自增
 func (m *RedisManager) Incr(ctx context.Context, key string) (int64, error) {
@@ -178,10 +150,6 @@ func (m *RedisManager) Scan(ctx context.Context, match string, count int64) ([]s
 	return keys, nil
 }
 
-// Keys 获取匹配的所有键（生产环境慎用）
-func (m *RedisManager) Keys(ctx context.Context, pattern string) ([]string, error) {
-	return m.Scan(ctx, pattern, 100)
-}
 
 // HealthCheck 健康检查
 func (m *RedisManager) HealthCheck(ctx context.Context) map[string]interface{} {

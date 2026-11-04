@@ -1,10 +1,6 @@
 package auth
 
 import (
-	"crypto/rand"
-	"encoding/hex"
-	"fmt"
-	"strings"
 	"time"
 )
 
@@ -26,27 +22,7 @@ type APIKeyStore interface {
 	UpdateLastUsed(id string) error
 }
 
-func GenerateAPIKey() (string, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", fmt.Errorf("crypto/rand.Read failed: %w", err)
-	}
-	return "mcc_" + hex.EncodeToString(b), nil
-}
 
-func ValidateAPIKeyFormat(key string) error {
-	if !strings.HasPrefix(key, "mcc_") {
-		return fmt.Errorf("api key must start with 'mcc_'")
-	}
-	hexPart := key[4:]
-	if len(hexPart) != 64 {
-		return fmt.Errorf("api key hex part must be 64 characters, got %d", len(hexPart))
-	}
-	if _, err := hex.DecodeString(hexPart); err != nil {
-		return fmt.Errorf("api key hex part is not valid hex: %w", err)
-	}
-	return nil
-}
 
 // apiKeyDeniedPerms 是**不通过 API Key 授予**的权限：管理类操作要求交互式登录。
 //

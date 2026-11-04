@@ -15,21 +15,6 @@ const (
 	CtxKeyUserID   contextKey = "user_id"
 )
 
-func TenantMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		claims := auth.GetClaims(r.Context())
-		if claims == nil {
-			Unauthorized(w, ErrAuthRequired)
-			return
-		}
-		if claims.TenantID == 0 {
-			Unauthorized(w, "missing tenant context")
-			return
-		}
-
-		next.ServeHTTP(w, r.WithContext(withTenantCtx(r.Context(), claims)))
-	})
-}
 
 // withTenantCtx 把登录态里的租户/用户 ID 注入请求上下文。
 //
@@ -54,32 +39,6 @@ func withTenantCtx(ctx context.Context, claims *auth.Claims) context.Context {
 	return ctx
 }
 
-func RequireRole(roles ...string) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			claims := auth.GetClaims(r.Context())
-			if claims == nil {
-				Unauthorized(w, ErrAuthRequired)
-				return
-			}
-
-			hasRole := false
-			for _, role := range roles {
-				if claims.Role == role {
-					hasRole = true
-					break
-				}
-			}
-
-			if !hasRole {
-				Forbidden(w, "insufficient role")
-				return
-			}
-
-			next.ServeHTTP(w, r)
-		})
-	}
-}
 
 func GetUserID(r *http.Request) string {
 	userID, _ := r.Context().Value(CtxKeyUserID).(string)

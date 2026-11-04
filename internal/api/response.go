@@ -114,11 +114,6 @@ func ServiceUnavailable(w http.ResponseWriter, msg string) {
 	JSON(w, http.StatusServiceUnavailable, APIResponse{Success: false, Error: msg})
 }
 
-// NotImplemented 返回 501：端点已暴露但功能尚未实现。
-// 用于避免调用方把"未实现"当作成功（如 chaos 故障注入此前会返回 created）。
-func NotImplemented(w http.ResponseWriter, msg string) {
-	JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: msg})
-}
 
 // TooManyRequests 返回 429。
 //

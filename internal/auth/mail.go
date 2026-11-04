@@ -68,10 +68,6 @@ const (
 // 生产值恒为 mailHTTPBaseBackoff。
 var mailHTTPBackoffBase = mailHTTPBaseBackoff
 
-// MailKnownProviders 返回全部受支持的邮件通道（配置校验用）。
-func MailKnownProviders() []string {
-	return []string{MailProviderSMTP, MailProviderQingchen}
-}
 
 // IsKnownMailProvider 判断通道类型是否受支持。
 func IsKnownMailProvider(p string) bool {

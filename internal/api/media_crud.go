@@ -16,7 +16,7 @@ import (
 )
 
 // MediaHandler manages media assets stored in object storage (S3/MinIO).
-// Database stores only metadata 鈥?the actual file content lives in S3.
+// Database stores only metadata — the actual file content lives in S3.
 type MediaHandler struct {
 	store         storage.FileStore
 	authenticator *auth.Authenticator
@@ -32,7 +32,7 @@ func (h *MediaHandler) SetMediaRoot(root string) {
 	h.root = root
 }
 
-// 鈹€鈹€ Types 鈹€鈹€
+// ── Types ──
 
 type MediaAsset struct {
 	ID        string                 `json:"id"`
@@ -49,7 +49,7 @@ type MediaAsset struct {
 	UpdatedAt time.Time              `json:"updated_at"`
 }
 
-// 鈹€鈹€ List 鈹€鈹€
+// ── List ──
 
 func (h *MediaHandler) List(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -161,7 +161,7 @@ func (h *MediaHandler) List(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"items": items, "total": total, "page": page, "page_size": pageSize})
 }
 
-// 鈹€鈹€ Create (text/code content) 鈹€鈹€
+// ── Create (text/code content) ──
 
 func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -249,10 +249,10 @@ func (h *MediaHandler) Create(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]string{"id": assetID, "name": body.Name, "type": body.Type, "file_url": fileURL})
 }
 
-// 鈹€鈹€ CreateFolder (virtual folder) 鈹€鈹€
+// ── CreateFolder (virtual folder) ──
 
 // CreateFolder creates a virtual folder (type='folder', no storage object).
-// ListFolders 杩斿洖鐢ㄦ埛鍏ㄩ儴鏂囦欢澶癸紙鍚?parent_id锛夛紝渚涚Щ鍔ㄥ眰绾ф爲鏋勫缓銆?
+// ListFolders 返回用户全部文件夹（含 parent_id），供移动层级树构建。
 func (h *MediaHandler) ListFolders(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
 
@@ -370,7 +370,7 @@ func (h *MediaHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// 鈹€鈹€ Update (rename / move) 鈹€鈹€
+// ── Update (rename / move) ──
 
 // Update renames or moves a media asset (folder or file).
 func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
@@ -450,7 +450,7 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	// 閲嶅悕妫€鏌ワ紙鎺掗櫎鑷韩锛?
+	// 重名检查（排除自身）
 	if newName != curName || newParent != curParent {
 		var exists bool
 		if err := db.GlobalDBManager.QueryRow(r.Context(),
@@ -471,7 +471,7 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 		logAndRespond(w, err, http.StatusInternalServerError, "update media asset failed")
 		return
 	}
-	// 鏍囩鐙珛鏇存柊锛堜笉褰卞搷鍚嶇О/鐖剁洰褰曟鏌ワ級
+	// 标签独立更新（不影响名称/父目录检查）
 	if body.Tags != nil {
 		if _, err := db.GlobalDBManager.Exec(r.Context(),
 			`UPDATE media_assets SET tags=$1, updated_at=NOW() WHERE id=$2 AND tenant_id=$3 AND user_id=$4`,
@@ -483,25 +483,6 @@ func (h *MediaHandler) Update(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]string{"id": id, "name": newName, "parent_id": newParent})
 }
 
-// assetObjectKey resolves the storage object key for an asset, preferring
-// the persisted file_path column; falls back to legacy name-based key.
-func (h *MediaHandler) assetObjectKey(r *http.Request, id string) (string, error) {
-	var fileName, filePath, userID string
-	err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT COALESCE(name,''), COALESCE(file_path,''), COALESCE(user_id,'') FROM media_assets WHERE id=$1`,
-		id).Scan(&fileName, &filePath, &userID)
-	if err != nil {
-		return "", err
-	}
-	if filePath != "" {
-		return filePath, nil
-	}
-	dir := "anonymous"
-	if userID != "" {
-		dir = "u_" + userID
-	}
-	return fmt.Sprintf("media/%s/%s_%s", dir, legacyShortAssetID(id), fileName), nil
-}
 
 // assetObjectKeys 批量解析资产对象存储 key（单次查询，修复逐资产 N+1）。
 func (h *MediaHandler) assetObjectKeys(ctx context.Context, ids []string, tenantID int16, userID string) (map[string]string, error) {
@@ -537,7 +518,7 @@ func (h *MediaHandler) assetObjectKeys(ctx context.Context, ids []string, tenant
 	return keys, rows.Err()
 }
 
-// 鈹€鈹€ Delete (recursive for folders) 鈹€鈹€
+// ── Delete (recursive for folders) ──
 
 func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	claims := auth.GetClaims(r.Context())
@@ -571,7 +552,7 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// 鍒犻櫎瀛樺偍瀵硅薄锛圖B 涓哄噯锛屽け璐ヤ粎璁版棩蹇楋級
+	// 删除存储对象（DB 为准，失败仅记日志）
 	keys, err := h.assetObjectKeys(ctx, ids, claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "resolve media keys failed")
@@ -595,7 +576,7 @@ func (h *MediaHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"status": "deleted", "deleted": len(ids)})
 }
 
-// 鈹€鈹€ BatchDelete 鈹€鈹€
+// ── BatchDelete ──
 
 // BatchDelete deletes multiple assets, folders recursively.
 func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
@@ -649,7 +630,7 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 		allIDs = append(allIDs, sub...)
 	}
 
-	// 鍒犻櫎瀛樺偍瀵硅薄锛圖B 涓哄噯锛屽け璐ヤ粎璁版棩蹇楋級
+	// 删除存储对象（DB 为准，失败仅记日志）
 	keys, err := h.assetObjectKeys(ctx, allIDs, claims.TenantID, claims.UserID)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "resolve media keys failed")
@@ -672,7 +653,7 @@ func (h *MediaHandler) BatchDelete(w http.ResponseWriter, r *http.Request) {
 	OK(w, map[string]interface{}{"deleted": len(allIDs)})
 }
 
-// 鈹€鈹€ Shared helpers 鈹€鈹€
+// ── Shared helpers ──
 
 // getChildren returns the child asset IDs for a given parent folder.
 //

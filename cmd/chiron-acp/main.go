@@ -156,27 +156,6 @@ func (c *conn) notifySessionUpdate(sessionID string, update map[string]any) {
 	})
 }
 
-// callClient 调用**客户端**的方法（如 session/request_permission），等待其结果。
-func (c *conn) callClient(ctx context.Context, method string, params any) (json.RawMessage, error) {
-	c.mu.Lock()
-	c.nextID++
-	id := c.nextID
-	ch := make(chan json.RawMessage, 1)
-	c.waiters[id] = ch
-	c.mu.Unlock()
-
-	c.write(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
-
-	select {
-	case res := <-ch:
-		return res, nil
-	case <-ctx.Done():
-		c.mu.Lock()
-		delete(c.waiters, id)
-		c.mu.Unlock()
-		return nil, ctx.Err()
-	}
-}
 
 // ── 网关调用 ────────────────────────────────────────────────────────────────
 

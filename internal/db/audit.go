@@ -35,13 +35,6 @@ type Auditor struct {
 	stream string
 }
 
-// NewAuditor 创建审计日志记录器
-func NewAuditor(rdb RedisClient) *Auditor {
-	return &Auditor{
-		rdb:    rdb,
-		stream: RedisKey("audit:events"),
-	}
-}
 
 // Log 记录审计事件到 Redis Streams
 func (a *Auditor) Log(ctx context.Context, entry AuditEntry) {
@@ -88,33 +81,6 @@ func (a *Auditor) Log(ctx context.Context, entry AuditEntry) {
 // 返回 (userID, tenantID)
 type UserExtractor func(r *http.Request) (string, string)
 
-// LogAuditMiddleware 审计日志中间件
-// extractUser: 从请求中提取用户信息的函数，可以为 nil
-func LogAuditMiddleware(auditor *Auditor, extractUser UserExtractor) func(http.Handler) http.Handler {
-	return func(next http.Handler) http.Handler {
-		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// 包装 ResponseWriter 以捕获状态码
-			ww := &auditResponseWriter{ResponseWriter: w, statusCode: 200}
-
-			next.ServeHTTP(ww, r)
-
-			// 记录审计日志
-			entry := AuditEntry{
-				Action:   r.Method + " " + r.URL.Path,
-				Resource: r.URL.String(),
-				IP:       r.RemoteAddr,
-				Success:  ww.statusCode < 400,
-			}
-
-			// 提取用户信息
-			if extractUser != nil {
-				entry.UserID, entry.TenantID = extractUser(r)
-			}
-
-			auditor.Log(r.Context(), entry)
-		})
-	}
-}
 
 // auditResponseWriter 包装 ResponseWriter 以捕获状态码
 type auditResponseWriter struct {

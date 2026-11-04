@@ -107,13 +107,19 @@ func sanitizeMap(data interface{}) {
 	switch v := data.(type) {
 	case map[string]interface{}:
 		for key, val := range v {
-			if isSensitiveField(key) {
-				if str, ok := val.(string); ok && str != "" {
+			// 只有"敏感字段名 + 字符串值"才就地打码；其余一律继续递归。
+			//
+			// 曾写成 `if 敏感 { 打码 } else { 递归 }` —— 于是敏感字段名下面挂着
+			// **对象或数组**时（`config: {payment: {secret_key: ...}}`、`keys: [...]`），
+			// 既不满足 `val.(string)` 又不进递归分支 ⇒ 整片子结构**原样透传**。
+			// 这是脱敏里最危险的一类 fail-open：看起来"命中了敏感词"，实际什么都没做。
+			if str, ok := val.(string); ok {
+				if isSensitiveField(key) && str != "" {
 					v[key] = "********"
 				}
-			} else {
-				sanitizeMap(val)
+				continue
 			}
+			sanitizeMap(val)
 		}
 	case []interface{}:
 		for _, item := range v {
