@@ -324,14 +324,14 @@ var errUnknownThreadSource = errors.New("thread: source_kind not registered in f
 // 幂等分两层：`threads_idem` 让同一 (租户, 来源, external_key) 只对应一条 thread；
 // `thread_deliveries` 的主键让同一 (thread, event_key) 只落一行。第二次入站走
 // `DO NOTHING` 且**不复活**已 dropped 的行 —— 丢弃是终态，重投不该把它捞回来。
-func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDeliveryDecision, string, error) {
+func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDeliveryDecision, string, string, error) {
 	if _, known := followupKinds[p.SourceKind]; !known {
-		return threadDeliverDropped, "", errUnknownThreadSource
+		return threadDeliverDropped, "", p.SessionID, errUnknownThreadSource
 	}
 
 	tx, err := db.GlobalDBManager.Begin(ctx)
 	if err != nil {
-		return threadDeliverDropped, "", err
+		return threadDeliverDropped, "", p.SessionID, err
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
@@ -353,7 +353,7 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 	if scanErr := tx.QueryRow(ctx, upsertThreadSQL,
 		uuid.NewString(), p.TenantID, p.UserID, p.SourceKind, p.ExternalKey,
 	).Scan(&threadID); scanErr != nil {
-		return threadDeliverDropped, "", scanErr
+		return threadDeliverDropped, "", p.SessionID, scanErr
 	}
 
 	// 订阅解析（roadmap 投递路径第 2 步，按 2026-11-04 的兼容取舍落在 A 方案）：
@@ -386,14 +386,14 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 	// 与 superagent.go 的 startTx 同一手法（那里按用户 ID 加锁）。
 	if _, lockErr := tx.Exec(ctx,
 		`SELECT pg_advisory_xact_lock(hashtext($1))`, "thread-enqueue:"+sessionID); lockErr != nil {
-		return threadDeliverDropped, "", lockErr
+		return threadDeliverDropped, "", p.SessionID, lockErr
 	}
 
 	var pending int
 	if countErr := tx.QueryRow(ctx,
 		`SELECT count(*) FROM thread_deliveries
 		  WHERE session_id = $1 AND status = 'queued'`, sessionID).Scan(&pending); countErr != nil {
-		return threadDeliverDropped, "", countErr
+		return threadDeliverDropped, "", p.SessionID, countErr
 	}
 
 	decision := decideThreadDelivery(pending)
@@ -418,11 +418,11 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 		// 调用方必须知道这一点 —— 否则它会为一条**早已跑过**的事件再起一个回合。
 		decision = threadDeliverDuplicate
 	case insertErr != nil:
-		return threadDeliverDropped, threadID, insertErr
+		return threadDeliverDropped, threadID, sessionID, insertErr
 	}
 
 	if commitErr := tx.Commit(ctx); commitErr != nil {
-		return threadDeliverDropped, threadID, commitErr
+		return threadDeliverDropped, threadID, sessionID, commitErr
 	}
 
 	if decision == threadDeliverDropped {
@@ -439,5 +439,5 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 				"limit":         maxPendingThreadEvents,
 			})
 	}
-	return decision, threadID, nil
+	return decision, threadID, sessionID, nil
 }

@@ -220,7 +220,7 @@ func TestLiveEnqueueThreadDeliveryIsIdempotent(t *testing.T) {
 		EventKey:    "evt-1",
 	}
 
-	decision, threadID, err := enqueueThreadDelivery(ctx, p)
+	decision, threadID, _, err := enqueueThreadDelivery(ctx, p)
 	if err != nil {
 		t.Fatalf("首次入队失败: %v", err)
 	}
@@ -229,7 +229,7 @@ func TestLiveEnqueueThreadDeliveryIsIdempotent(t *testing.T) {
 	}
 
 	// 同一条事件重投：状态与 thread 都必须不变。
-	decision2, threadID2, err := enqueueThreadDelivery(ctx, p)
+	decision2, threadID2, _, err := enqueueThreadDelivery(ctx, p)
 	if err != nil {
 		t.Fatalf("重投应幂等成功，实际 %v", err)
 	}
@@ -272,7 +272,7 @@ func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
 	for i := 0; i < maxPendingThreadEvents; i++ {
 		p := base
 		p.EventKey = "evt-" + strconv.Itoa(i)
-		decision, _, err := enqueueThreadDelivery(ctx, p)
+		decision, _, _, err := enqueueThreadDelivery(ctx, p)
 		if err != nil {
 			t.Fatalf("第 %d 条入队失败: %v", i, err)
 		}
@@ -284,7 +284,7 @@ func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
 	// 第 21 条落 dropped。
 	overflow := base
 	overflow.EventKey = "evt-overflow"
-	decision, _, err := enqueueThreadDelivery(ctx, overflow)
+	decision, _, _, err := enqueueThreadDelivery(ctx, overflow)
 	if err != nil {
 		t.Fatalf("超限入队失败: %v", err)
 	}
@@ -303,7 +303,7 @@ func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
 	}
 
 	// 重投同一条：仍是 dropped，不能被捞回队列 —— 否则队列满时事件会反复进出。
-	again, _, err := enqueueThreadDelivery(ctx, overflow)
+	again, _, _, err := enqueueThreadDelivery(ctx, overflow)
 	if err != nil {
 		t.Fatalf("丢弃后重投不应报错: %v", err)
 	}
@@ -329,7 +329,7 @@ func TestLiveEnqueueThreadDeliveryRejectsUnknownSource(t *testing.T) {
 	tenantID, userID := liveSmokeFixture(t, pool)
 	sessionID := p11EnqueueFixture(t, pool, tenantID, userID)
 
-	_, _, err := enqueueThreadDelivery(context.Background(), threadEnqueueParams{
+	_, _, _, err := enqueueThreadDelivery(context.Background(), threadEnqueueParams{
 		TenantID:   tenantID,
 		UserID:     userID,
 		SourceKind: "webhook",
@@ -356,7 +356,7 @@ func TestLiveClaimThreadDeliveryCarriesPayload(t *testing.T) {
 	// 快照刻意带 `profile`（只有 subagent 用得上）与中文摘要，覆盖 jsonb 编解码。
 	payload := json.RawMessage(`{"status":"completed","profile":"researcher","summary":"子任务已完成"}`)
 
-	decision, threadID, err := enqueueThreadDelivery(ctx, threadEnqueueParams{
+	decision, threadID, _, err := enqueueThreadDelivery(ctx, threadEnqueueParams{
 		TenantID:    tenantID,
 		UserID:      userID,
 		SourceKind:  "subagent",

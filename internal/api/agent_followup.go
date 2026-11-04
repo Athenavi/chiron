@@ -132,7 +132,10 @@ func AgentFollowupHandler(
 			EventKey:    body.RunID,
 			Payload:     snapshot,
 		}
-		decision, threadID, enqErr := enqueueThreadDelivery(r.Context(), params)
+		// targetSession 是**最终**投递目标：有 active 订阅时按订阅改投，否则就是入口给的会话。
+		// 后面抢锁、构造投递、开回合都必须用它 —— 用 body.SessionID 会在 A 会话抢锁、
+		// 在 A 会话开回合，而队列行落在 B 会话，两边从此对不上，drain 永远取不到它。
+		decision, threadID, targetSession, enqErr := enqueueThreadDelivery(r.Context(), params)
 		if enqErr != nil {
 			slog.Error("agent followup: enqueue failed", "run_id", body.RunID, "error", enqErr)
 			// 入队失败 = 什么都没发生，所以必须让引擎重试；而重试要能进得来，
@@ -160,18 +163,18 @@ func AgentFollowupHandler(
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
 		runToken := "followup-" + hex.EncodeToString(rnd[:])
-		releaseRun, runLocked, lockErr := AcquireSessionRunLock(r.Context(), body.SessionID, runToken)
+		releaseRun, runLocked, lockErr := AcquireSessionRunLock(r.Context(), targetSession, runToken)
 		if lockErr != nil {
 			// Redis 不可用：事件已经在队里了，等下一个收尾方或进程恢复再取。
 			// 这里判 failed 会把一件已经落库的事记成失败，那才是真正的丢事件。
 			slog.Warn("agent followup: run lock unavailable, event stays queued",
-				"session", body.SessionID, "error", lockErr)
+				"session", targetSession, "error", lockErr)
 			Accepted(w, map[string]string{"status": "queued", "run_id": body.RunID})
 			return
 		}
 		if !runLocked {
 			slog.Debug("agent followup: session busy, event queued",
-				"session", body.SessionID, "run_id", body.RunID)
+				"session", targetSession, "run_id", body.RunID)
 			Accepted(w, map[string]string{"status": "queued", "run_id": body.RunID})
 			return
 		}
@@ -185,7 +188,7 @@ func AgentFollowupHandler(
 			ThreadID:    threadID,
 			EventKey:    body.RunID,
 			Payload:     snapshot,
-			SessionID:   body.SessionID,
+			SessionID:   targetSession,
 			UserID:      body.UserID,
 			TenantID:    params.TenantID,
 			SourceKind:  sourceKind,
