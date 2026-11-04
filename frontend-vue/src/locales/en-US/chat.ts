@@ -291,7 +291,7 @@ export default {
   tour_provider_auth_title: "Model provider authentication failed",
   tour_provider_auth_desc: "This provider's API key is invalid or expired — update it under Model Management / API Keys, then send the message again.",
   tour_go_configure: "Go configure",
-  // ── New-user onboarding (P0-3): three steps after sign-up. Copy says what to
+  // ── New-user onboarding: three steps after sign-up. Copy says what to
   //    do next; it never says "claim" — the trial credits are already in the
   //    account, and granting more would be both redundant and farmable.
   onboarding_title: "Three steps to get started",
@@ -325,7 +325,7 @@ export default {
   refined: "Prompt refined — edit it further or send it as is",
   refine_failed: "Refine failed; your original text is kept",
   refine_prompt_tooltip: "Rewrite the current input into a clearer prompt (it is not sent automatically)",
-  // ── P0-3: steer a running turn ──
+  // ── steer a running turn ──
   // Deliberately separate from "interrupt and send": steer does not end the turn,
   // so a long task does not have to start over.
   steer_tooltip: "Inject as a supplementary instruction into the running turn (no interruption; adopted after the current step)",

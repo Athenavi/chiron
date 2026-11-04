@@ -1,7 +1,7 @@
 import api from './index'
 
 /**
- * 用户级 API Key 自助（P1-3 / T2）的接口封装。
+ * 用户级 API Key 自助的接口封装。
  *
  * 与 `admin.ts` 里的 `listApiKeys` / `addApiKey` **不是一回事**：那一组打的是
  * `/v1/admin/api-keys`，管的是 **LLM 供应商密钥池**（provider / base_url / weight），

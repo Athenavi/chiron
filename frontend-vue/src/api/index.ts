@@ -38,7 +38,7 @@ export const api = axios.create({
 })
 
 api.interceptors.request.use((config) => {
-  // 本地模式带设备 token（preload 注入），云端模式带登录 token；都没有就不设头
+  // Bearer token 由 setAuthToken 注入；没有就不设头
   const token = requestToken()
   if (token) config.headers.set('Authorization', `Bearer ${token}`)
   return config
@@ -89,7 +89,7 @@ export async function submitAnswer(params: {
 }
 
 /**
- * 运行中补充指令（P0-3 的 steer 通道）：把一段话送进**正在跑**的回合，不终止它。
+ * 运行中补充指令（steer 通道）：把一段话送进**正在跑**的回合，不终止它。
  *
  * 与 `sendMessage` 的分工：那个是"打断当前回合（或新开一轮）并重新提问"，
  * 这个是"让模型接着当前工作，但改一下方向"。差别对用户是实打实的 ——
@@ -310,7 +310,7 @@ api.interceptors.response.use(
     // 服务端显式结论（`APIResponse.retryable`）：有就听它的，没有（undefined）才回退到状态码。
     const retryable = readRetryable(error.response?.data?.retryable)
 
-    // 重试决策的分层（CDS v1/06 §6.7 的退避公式不变）：
+    // 重试决策的分层（退避公式）：
     //   `retryable === true`  → 服务端说重试有用（如 409 session_busy），就重试，不管状态码；
     //   `retryable === false` → 服务端说重试无用（如参数非法），就**不**重试；
     //   `retryable` 缺失       → 调用方自判，用旧的 429/503 判断（后向兼容）。
@@ -369,7 +369,7 @@ api.interceptors.response.use(
   }
 )
 
-// P1-2 文件上传：调用后端 POST /v1/media/upload（multipart）
+// 文件上传：调用后端 POST /v1/media/upload（multipart）
 // 后端返回 { id, name, type, file_url, size }，这里归一化为 ChatAttachment 所需结构
 //
 // 大文件分流：/v1/media/upload 是单请求流式上传，服务端上限 50MB

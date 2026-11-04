@@ -1,7 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 /**
- * 新用户引导（P0-3）的决策层测试。
+ * 新用户引导的决策层测试。
  *
  * 本仓没有浏览器 e2e ⇒ "该不该弹、哪一步待办、跳过是否算完成"必须在这里钉住。
  * 接口层用 mock：这里测的是**判定与状态机**，不是 HTTP。

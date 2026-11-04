@@ -13,7 +13,7 @@ vi.mock('ant-design-vue', () => ({ message }))
 
 import { NOTIFY_ERROR_DURATION, NOTIFY_OK_DURATION, notify } from '../notify'
 
-describe('notify 时长（§13 已定参数）', () => {
+describe('notify 时长（已定参数）', () => {
   it('成功 / 提醒 / 信息：2.5s', () => {
     notify.success('ok')
     notify.warning('warn')

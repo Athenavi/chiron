@@ -4,7 +4,7 @@ import { createRouter, createMemoryHistory } from 'vue-router'
 import { Segmented, Switch, message } from 'ant-design-vue'
 
 /**
- * `NotificationsView` 的页面级单测（P2-3 / T3 补网）。
+ * `NotificationsView` 的页面级单测（补网）。
  *
  * 纯函数（`notificationRender`）与偏好持久化已各有单测，这里只钉**接线**：
  * 页面拿到数据后有没有渲染出来、点了以后有没有真的调接口、失败时用户能不能

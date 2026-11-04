@@ -29,7 +29,7 @@ export interface InvoiceRequest {
 }
 
 /**
- * 发票申请（P1-2）：可开票订单、我的申请、提交表单。
+ * 发票申请：可开票订单、我的申请、提交表单。
  *
  * 从 `BillingView.vue` 抽出，逻辑逐字未改。`formatTime` 由调用方注入，
  * 避免此处重复一份时间格式化实现而出现两处口径漂移。

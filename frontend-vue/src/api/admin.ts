@@ -407,7 +407,7 @@ export async function getUsageCatalog(params: {
   }
 }
 
-// ── 新用户引导漏斗（P0-3 验收「完成率可查」） ──
+// ── 新用户引导漏斗（验收「完成率可查」） ──
 
 export interface OnboardingFunnelStep {
   step: string
@@ -433,7 +433,7 @@ export async function getOnboardingFunnel(): Promise<OnboardingFunnel> {
   return data?.data ?? { entered: 0, finished: 0, finished_rate: 0, steps: [], steps_order: [] }
 }
 
-// ── 发票审核（P1-2 管理端） ──
+// ── 发票审核（管理端） ──
 
 /** 与后端 invoice_requests.status 的三个取值一致（单向：pending → approved|rejected） */
 export type InvoiceStatus = 'pending' | 'approved' | 'rejected'
@@ -474,7 +474,7 @@ export async function reviewInvoice(
   return data?.data ?? { id, status: payload.status }
 }
 
-// ── 套餐目录（P2-2c 管理端） ──
+// ── 套餐目录（管理端） ──
 
 /**
  * 后台可见的套餐目录项。**含已下架**（enabled=false）——

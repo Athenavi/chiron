@@ -8,7 +8,7 @@
  *
  * ## 为什么用 antd `Tour` 而不是 driver.js（2026-10-09 定）
  *
- * 1. 本仓纪律是**不引新依赖**（`vendor/规划.md` §6）；`ant-design-vue@4.2.6` **自带 `Tour`**
+ * 1. 本仓纪律是**不引新依赖**；`ant-design-vue@4.2.6` **自带 `Tour`**
  *    （实测 `es/tour/` 存在）⇒ 同等能力零成本。
  * 2. 更硬的一条：`scripts/check-z-index-tokens.mjs` 只扫 `src/**` 的 `.vue/.css` ⇒
  *    driver.js 这类**运行时注入样式与层级**的库**完全绕过**本仓的 `--z-*` 纪律，

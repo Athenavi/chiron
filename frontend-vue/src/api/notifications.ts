@@ -1,7 +1,7 @@
 import api from './index'
 
 /**
- * 站内通知中心（P2-3）的接口封装。
+ * 站内通知中心的接口封装。
  *
  * 后端约定（`internal/api/notification_handler.go`）：
  *   - 所有接口只操作**当前登录用户自己的**通知，`user_id` 取自 JWT claims，

@@ -21,16 +21,16 @@ export default {
   insufficient_credits: 'Free quota exhausted and balance is insufficient — please top up under Billing.',
   insufficient_credits_action: 'Top up',
   quota_exceeded_action: 'View usage',
-  // Transaction export (P1-1): both failures are user-fixable — narrow the range
+  // Transaction export: both failures are user-fixable — narrow the range
   export_too_many_rows: 'Too many transactions in that range. Please narrow the date range and try again.',
   export_too_many_rows_in: 'That range has {total} transactions, over the {limit}-row export limit. Please narrow the date range and try again.',
   export_range_too_wide: 'The export range is too wide. Please narrow it and try again.',
   export_range_too_wide_in: 'Exports support up to {max_days} days. Please narrow the range and try again.',
-  // Invoice requests (P1-2): the two 409s have different actors — the applicant
+  // Invoice requests: the two 409s have different actors — the applicant
   // checks the existing request; the admin refreshes because a colleague reviewed it.
   invoice_already_requested: 'An invoice has already been requested for this order. Check the list below for its status.',
   invoice_already_reviewed: 'This request has already been reviewed. Refresh the list to see the latest status.',
-  // Model not in the usable range (P2-2b): two keys for the same rejection with
+  // Model not in the usable range: two keys for the same rejection with
   // different next steps — package doesn't cover it → buy/renew; tenant policy
   // forbids it → buying won't help, ask the admin. The `_in` variant interpolates
   // only the model name, never the `reason` enum.

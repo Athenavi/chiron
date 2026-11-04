@@ -14,11 +14,11 @@ const assistant = (content: string): ChatItem => ({ kind: 'text', role: 'assista
 const mountText = (content: string) => mount(MessageItem, { props: { item: assistant(content) } })
 
 /**
- * 流式期不做 markdown + sanitize（§4.3 的性能项，2026-10-09）。
+ * 流式期不做 markdown + sanitize（性能项，2026-10-09）。
  *
  * 模板在 `item.streaming` 时显示的是**纯文本**（`{{ displayContent }}`），`renderedHtml`
  * 只在回合结束、`streaming` 变 false 之后才被 `v-html` 用上 ⇒ 流式期每个 delta 都跑
- * `md.render` + `DOMPurify.sanitize` 是**纯浪费**。验收口径就是 §4.3 写的那句：
+ * `md.render` + `DOMPurify.sanitize` 是**纯浪费**。验收口径就是那句：
  * **N 次 delta 只渲染一次**。
  *
  * 这里盯 `DOMPurify.sanitize`（**模块级**）而不是组件里的 `renderMarkdown`（局部函数、spy 不到）；
@@ -57,7 +57,7 @@ describe('notice 行的渲染', () => {
   })
 })
 
-describe('流式期的渲染让位（§4.3）', () => {
+describe('流式期的渲染让位', () => {
   it('★ 流式期不跑 markdown/sanitize；回合结束才渲染一次（且真的走 v-html 分支）', async () => {
     const sanitize = vi.spyOn(DOMPurify, 'sanitize')
     // 用 `TextItem` 而不是 `ChatItem`：后者的联合类型在展开（`{ ...streaming, content }`）后
@@ -359,7 +359,7 @@ describe('MessageItem（长内容渲染让位）', () => {
   })
 })
 
-// ── 三类失败的针对性动作（P0-2）─────────────────────────────────────────
+// ── 三类失败的针对性动作 ─────────────────────────────────────────
 //
 // 三类失败的正确动作**互不相同**：余额不足 → 去充值（用户自己能解决）；
 // 配额耗尽 → 找租户管理员（等多久都没用）；速率超限 → 等 N 秒（重试有效）。
@@ -459,7 +459,7 @@ describe('失败消息的可执行动作', () => {
     expect(wrapper.findAll('.retry-btn').some(b => b.text().includes('重试'))).toBe(true)
   })
 
-  // ── 模型越界（P2-2b）────────────────────────────────────────────────
+  // ── 模型越界 ────────────────────────────────────────────────
   //
   // 同一个 403 有两种归因，动作**相反**：套餐不覆盖 → 买了就能用；
   // 租户策略不允许 → 买套餐也没用。给错按钮的代价是让用户白花钱。

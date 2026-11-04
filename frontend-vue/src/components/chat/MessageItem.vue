@@ -3,7 +3,7 @@ import MarkdownIt from 'markdown-it'
 import DOMPurify from 'dompurify'
 import 'katex/dist/katex.min.css'
 import 'highlight.js/styles/github.css'
-// P3-A: 暗色模式下的代码高亮配色覆盖（避免引入两个冲突的 hljs 主题）
+// 暗色模式下的代码高亮配色覆盖（避免引入两个冲突的 hljs 主题）
 import texmath from 'markdown-it-texmath'
 import katex from 'katex'
 import { computed, ref, watch, onMounted, onUpdated, onBeforeUnmount } from 'vue'
@@ -135,9 +135,9 @@ const waitLabel = computed(() => {
 const emit = defineEmits<{
   /** 用户消息编辑后重发：删除该消息及其后所有消息，用新文本重发 */
   (e: 'retry-from', itemId: string, text: string): void
-  /** P1-1 助手消息重新生成：删除该消息及其后所有消息，用上一条用户消息重发 */
+  /** 助手消息重新生成：删除该消息及其后所有消息，用上一条用户消息重发 */
   (e: 'regenerate', itemId: string): void
-  /** P2-F 停止后继续生成 */
+  /** 停止后继续生成 */
   (e: 'continue', itemId: string): void
   /** 失败消息重试：用原文本重发 */
   (e: 'retry-failed', itemId: string): void
@@ -203,7 +203,7 @@ const sourceChips = computed<SourceChip[]>(() => {
 const attachmentResolved = ref<Record<string, string>>({})
 
 /**
- * 附件名的双向中间截断（CDS v1/02 §2.5.3）：预先按 id 拆好，
+ * 附件名的双向中间截断：预先按 id 拆好，
  * 免得模板里对同一个名字调两次纯函数。
  */
 const attachmentNameParts = computed<Record<string, SplitName>>(() => {
@@ -258,7 +258,7 @@ const timeLabel = computed(() => {
   return `${now.getHours().toString().padStart(2, '0')}:${now.getMinutes().toString().padStart(2, '0')}`
 })
 
-/** 复制成功的**就地**反馈（CDS v1 §4.1.1 / §4.2.4）：图标画成对勾并驻留 2.5s，
+/** 复制成功的**就地**反馈：图标画成对勾并驻留 2.5s，
  *  再按 `saved-check-decay` 缩一点淡出。刻意不再弹 toast —— 光标就在按钮上，
  *  弹窗反而是二次打扰（代码块里的「复制」有自己的文案反馈，不受影响）。 */
 const copied = ref(false)
@@ -277,7 +277,7 @@ async function copyMessage() {
   }
 }
 
-// ── P1-1 消息重试/重新生成 ──
+// ── 消息重试/重新生成 ──
 // 用户消息：进入编辑模式，修改后"重发"会删除该消息及其后所有消息，用新文本重发
 const editing = ref(false)
 const editDraft = ref('')
@@ -338,11 +338,11 @@ function goBillingPackages() {
   router.push({ path: '/billing', query: { tab: 'packages' } })
 }
 
-// ── P3-B 长消息折叠 ──
+// ── 长消息折叠 ──
 // 助手消息超过阈值时默认折叠，显示前 N 行 + "展开全部"按钮
 const COLLAPSE_THRESHOLD = 2000  // 字符数阈值：只用来决定"要不要显示折叠按钮"
 /**
- * 折叠态改用**纯 CSS 裁切 + 底边羽化**（CDS v1 §3.1.1），不再 `slice()` 伪造截断。
+ * 折叠态改用**纯 CSS 裁切 + 底边羽化**，不再 `slice()` 伪造截断。
  *
  * 旧做法把正文截到 600 字符、再在末尾追加一句"已折叠，点击展开"，有三个问题：
  * ① 用户看到的不是正文（复制、页面搜索都对不上）；② Markdown 结构会断在半句上
@@ -357,7 +357,7 @@ const isLongMessage = computed(() => {
 })
 const displayContent = computed(() => (props.item.kind === 'text' ? props.item.content : ''))
 
-// ── P2-D 消息反馈（👍/👎） ──
+// ── 消息反馈（👍/👎） ──
 // 'up' | 'down' | null；切换反馈，再次点击同方向取消
 const feedback = ref<'up' | 'down' | null>(null)
 function setFeedback(dir: 'up' | 'down') {
@@ -533,7 +533,7 @@ function handleMsgClick(e: MouseEvent) {
     const code = decodeURIComponent(btn.dataset.code || '')
     if (!code) return
     navigator.clipboard.writeText(code).then(() => {
-      // 与消息级复制同一套状态机（CDS v1 §5.5.4）：图标画成对勾、文案改"已复制"，
+      // 与消息级复制同一套状态机：图标画成对勾、文案改"已复制"，
       // 2.5s 后由 CSS 的 saved-check-decay 淡出，再恢复原状。
       const prev = copyTimers.get(btn)
       if (prev) clearTimeout(prev)
@@ -548,7 +548,7 @@ function handleMsgClick(e: MouseEvent) {
     return
   }
   // 正文里的图片（markdown 图片由 v-html 生成，挂不上 Vue 事件）交查看器放大。
-  // 把被点的 <img> 一起传进去：灯箱的共享元素形变要从它长出来（CDS v1 §5.2.2）。
+  // 把被点的 <img> 一起传进去：灯箱的共享元素形变要从它长出来。
   const img = target.closest('img') as HTMLImageElement | null
   if (img?.src) {
     // 同一条消息里的图片构成一个图集：正文有多张时可直接左右切换，
@@ -669,7 +669,7 @@ onUpdated(enhanceContent)
           :class="{ collapsed: isLongMessage && collapsed }"
           v-html="renderedHtml"
         />
-        <!-- P3-B: 长消息展开/折叠按钮 -->
+        <!-- 长消息展开/折叠按钮 -->
         <button
           v-if="isLongMessage"
           class="collapse-toggle btn-sm"
@@ -717,9 +717,9 @@ onUpdated(enhanceContent)
               :title="att.name"
               class="msg-attachment-file"
             >
-              <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨（CDS v1/02 §2.5.4） -->
+              <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨 -->
               <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
-              <!-- 双向中间截断：让位只发生在中间，扩展名与尾部词干永远可见（§2.5.3）。
+              <!-- 双向中间截断：让位只发生在中间，扩展名与尾部词干永远可见。
                    两段紧挨着写在同一行，视觉上仍是一个连续的文件名。 -->
               <span class="att-name">
                 <span class="att-name-head">{{ attName(att.id).head }}</span><span class="att-name-tail">{{ attName(att.id).tail }}</span>
@@ -821,7 +821,7 @@ onUpdated(enhanceContent)
           >
             <BarChartOutlined /> {{ $t('errors.quota_exceeded_action') }}
           </button>
-          <!-- 模型越界（P2-2b）：只有"套餐不覆盖"这一类买了就能解决，所以只在这一种
+          <!-- 模型越界：只有"套餐不覆盖"这一类买了就能解决，所以只在这一种
                情况给直达套餐页签的按钮。租户策略不允许时买套餐也没用 —— 文案里已写明
                要找管理员，这里不再放一个点了没去处的按钮。 -->
           <button
@@ -888,7 +888,7 @@ onUpdated(enhanceContent)
           >
             <ReloadOutlined />
           </button>
-          <!-- P2-F: 停止后显示"继续生成"按钮 -->
+          <!-- 停止后显示"继续生成"按钮 -->
           <button
             v-if="item.role === 'assistant' && (item as TextItem).stopped"
             class="msg-action continue-btn"
@@ -898,7 +898,7 @@ onUpdated(enhanceContent)
           >
             <ReloadOutlined /> {{ $t('common.continue') }}
           </button>
-          <!-- P2-D: 助手消息反馈 👍/👎 -->
+          <!-- 助手消息反馈 👍/👎 -->
           <template v-if="item.role === 'assistant' && !item.streaming && !(item as TextItem).error">
             <button
               class="msg-action"
@@ -1003,20 +1003,20 @@ onUpdated(enhanceContent)
 }
 .notice-icon { flex: none; }
 .msg-row.user { display: flex; justify-content: flex-end; }
-/* 纵向律动（CDS v1 §3.1.2）：同一回合内的行距 = 用户选的「消息间距」；
+/* 纵向律动：同一回合内的行距 = 用户选的「消息间距」；
    用户消息开启新回合，所以它上方按 1.5 倍放大 —— 手册给的 turn gap / item gap
    正是 0.75 : 0.50 的比值。这样既保留用户那个旋钮，又让"换人说话"真正分段。 */
-/* 轮次之间的间距要比轮次内更松（CDS 的 turn-gap : item-gap = 0.75 : 0.5 = 1.5）。
+/* 轮次之间的间距要比轮次内更松（turn-gap : item-gap = 0.75 : 0.5 = 1.5）。
    本仓的 --chat-msg-gap 是**半间距**（上下 padding 各算一次），所以这里取 ×2：
    实际轮次间距 = 本条 top(2g) + 上一条 bottom(g) = 3g，而轮次内是 2g → 比例正好 1.5。 */
 .msg-row.user { padding-top: calc(var(--chat-msg-gap, 6px) * 2); }
-/* 新消息入场（CDS v1 §4.1.1 的 `message-fade-up`）：只用 transform/opacity，
+/* 新消息入场（`message-fade-up`）：只用 transform/opacity，
    不碰布局，所以不影响行高测量（transcript 窗口化的前提）。 */
 .msg-row.msg-enter { animation: cdsMsgEnter var(--dur-slow) var(--ease-out); }
-/* 用户自己发的那条走单独的入场（CDS v1 §4.1.1 的 `code-user-bubble-enter`）：
+/* 用户自己发的那条走单独的入场（`code-user-bubble-enter`）：
    从 0.92 倍 + 下移 6px 长回来，比通用的 fade-up 更像"发出去了"。
-   再叠一层 4px blur 的"对焦"（CDS block entry = ease-enter 曲线 + 4px blur fade；
-   本仓 --ease-out 的数值与 CDS 的 ease-enter 逐位相同，所以曲线本来就对，只缺 blur）。
+   再叠一层 4px blur 的"对焦"（block entry = ease-enter 曲线 + 4px blur fade；
+   本仓 --ease-out 的数值与 ease-enter 逐位相同，所以曲线本来就对，只缺 blur）。
    **只给用户气泡**：助手消息是流式的，整屏 blur 与 80~120 tokens/s 的 DOM 更新叠加
    是真实的掉帧源；用户气泡短小、一次性、不与流式并发，代价可忽略。 */
 .msg-row.user.msg-enter {
@@ -1041,7 +1041,7 @@ onUpdated(enhanceContent)
   overflow-wrap: anywhere;
 }
 .streaming-text { white-space: pre-wrap; word-break: break-word; }
-/* 折叠态（CDS v1 §3.1.1）：真实内容由 max-height 裁切，底边用 3rem 渐变蒙版羽化。
+/* 折叠态：真实内容由 max-height 裁切，底边用 3rem 渐变蒙版羽化。
    高度恒定为 300px —— 这对 transcript 的窗口化测量比"随内容浮动"友好得多。 */
 .msg-text.collapsed {
   max-height: 300px;
@@ -1133,7 +1133,7 @@ onUpdated(enhanceContent)
 .msg-text :deep(.code-copy-btn) { display: inline-flex; align-items: center; gap: 4px; background: none; border: none; color: var(--text-tertiary); cursor: pointer; font-size: 12px; padding: 0; }
 .msg-text :deep(.code-copy-btn:hover) { color: var(--primary); }
 /* 复制成功：对勾先画出来、文案改"已复制"，2.5s 后按 saved-check-decay 淡出恢复 ——
-   与消息级复制是同一套状态机（CDS v1 §5.5.4），不再只换一行文案。 */
+   与消息级复制是同一套状态机，不再只换一行文案。 */
 .msg-text :deep(.code-copy-btn.copied) { color: var(--success); animation: cdsCheckDecay var(--dur-check-decay) linear; }
 .msg-text :deep(.code-copy-btn svg) { flex: none; }
 /* 长代码默认折叠：给一段可读预览 + 底部渐隐提示，展开按钮写明总行数 */
@@ -1185,11 +1185,11 @@ onUpdated(enhanceContent)
 .msg-action.active { color: var(--primary); opacity: 1; }
 .msg-action.continue-btn { width: auto; padding: 0 10px; border-radius: var(--sig-radius-button); background: var(--primary); color: var(--on-solid); font-size: 12px; gap: 4px; opacity: 1; }
 .msg-action.continue-btn:hover { opacity: 0.9; background: var(--primary); color: var(--on-solid); }
-/* 复制成功：对勾先"画"出来，再驻留 2.5s 衰减（CDS v1 §4.2.4 的 check-draw + saved-check-decay） */
+/* 复制成功：对勾先"画"出来，再驻留 2.5s 衰减（check-draw + saved-check-decay） */
 .msg-action.copied { color: var(--success); animation: cdsCheckDecay var(--dur-check-decay) linear; }
 .msg-action.copied :deep(svg) { animation: cdsCheckDraw var(--dur-normal) var(--ease-out); }
 
-/* P3-A: 用 CSS 变量覆盖 hljs token 颜色，暗色模式自动跟随 .dark class */
+/* 用 CSS 变量覆盖 hljs token 颜色，暗色模式自动跟随 .dark class */
 .hljs { color: var(--hljs-fg); background: var(--hljs-bg); }
 .hljs-keyword, .hljs-selector-tag, .hljs-deletion { color: var(--hljs-keyword); }
 .hljs-string, .hljs-attr, .hljs-template-string, .hljs-addition { color: var(--hljs-string); }
@@ -1199,9 +1199,9 @@ onUpdated(enhanceContent)
 .hljs-built_in, .hljs-class .hljs-title, .hljs-name { color: var(--hljs-built-in); }
 .hljs-meta, .hljs-symbol, .hljs-bullet, .hljs-link { color: var(--hljs-meta); }
 
-/* P3-B: 长消息折叠 */
+/* 长消息折叠 */
 /* 发丝环改用 inset 阴影而不是 border：不参与盒模型，所以"未选中 ↔ 选中"切换
-   不会带来 1px 重排与尺寸抖动（CDS §1.4.1，与本文档「单闭合边框原则」同源）。 */
+   不会带来 1px 重排与尺寸抖动（与本文档「单闭合边框原则」同源）。 */
 .collapse-toggle { margin-top: 8px; background: var(--bg-card); color: var(--text-secondary); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
 .collapse-toggle:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
 .collapse-toggle:active { transform: scale(0.97); }
@@ -1253,7 +1253,7 @@ onUpdated(enhanceContent)
   .msg-error-banner { flex-wrap: wrap; }
 }
 
-/* ── P1-1 编辑重发 ── */
+/* ── 编辑重发 ── */
 .msg-edit { display: flex; flex-direction: column; gap: 8px; max-width: min(525px, 100%); margin-inline-start: auto; }
 .edit-textarea { border-radius: var(--sig-radius-card) !important; border-color: var(--primary) !important; }
 .edit-textarea :deep(textarea) { font-size: 16px !important; line-height: 24px !important; }
@@ -1263,12 +1263,12 @@ onUpdated(enhanceContent)
 .edit-btn.save:hover { opacity: 0.9; }
 .edit-btn.cancel:hover { color: var(--text-primary); background: var(--bg-hover); }
 
-/* ── P1-2 附件展示 ── */
+/* ── 附件展示 ── */
 .msg-attachments { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
 .msg-attachment-img { max-width: 200px; max-height: 200px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); object-fit: cover; }
 .msg-attachment-file { display: inline-flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-secondary); text-decoration: none; font-size: 13px; transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease; }
 .msg-attachment-file:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
-/* 双向中间截断（CDS v1/02 §2.5.3）：head 允许被省略，tail（尾部词干 + 扩展名）
+/* 双向中间截断：head 允许被省略，tail（尾部词干 + 扩展名）
    锁成不收缩。两段之间不留空隙，看起来仍是一个连续的文件名。 */
 .msg-attachment-file .att-name { display: flex; min-width: 0; max-width: 180px; }
 .msg-attachment-file .att-name-head { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
@@ -1322,7 +1322,7 @@ onUpdated(enhanceContent)
 .source-chip.trace { background: var(--bg-card); color: var(--text-secondary); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); font-family: var(--font-mono); font-size: var(--fs-xs); }
 .source-chip.trace:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); background: var(--primary-bg); }
 
-/* ── P1-3 错误状态 ── */
+/* ── 错误状态 ── */
 .msg-row.msg-error .msg-text { opacity: 0.6; }
 .msg-error-banner { display: flex; align-items: center; gap: 12px; margin-top: 8px; padding: 8px 12px; border-radius: var(--sig-radius-card); background: var(--error-bg); border: var(--hairline-width) solid var(--error); }
 .msg-error-banner .error-text { font-size: 13px; color: var(--error); flex: 1; }

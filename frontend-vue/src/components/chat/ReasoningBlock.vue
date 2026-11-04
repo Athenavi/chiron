@@ -170,7 +170,7 @@ async function stickToBottom() {
   background: var(--elev-1); border: 0;
   border-radius: var(--sig-radius-button); white-space: pre-wrap;
 }
-/* 推理氛围光晕（CDS v1 §4.2.2 的 `wl-glow`）：思考流式期间给这块容器套上
+/* 推理氛围光晕（`wl-glow`）：思考流式期间给这块容器套上
    品牌色内环 + 呼吸漫反射（1.8s 正弦）。它只描在"思考体"而不是整行：
    行是 28px 满宽，光晕扩散到相邻行会显脏。 */
 .reasoning-row[data-state='running'] .think-body {

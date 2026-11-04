@@ -48,7 +48,7 @@ export default {
   tab_business: "业务配置",
   tab_connections: "连接与密钥",
   tab_ops: "运维片段",
-  // ── 用户级 API Key 自助（P1-3）：管的是「我的账号调网关的凭证」，
+  // ── 用户级 API Key 自助：管的是「我的账号调网关的凭证」，
   //    与管理后台的模型服务商密钥不是一回事 ──
   user_api_key_title: "API Key",
   user_api_key_desc: "用于以你自己的账号调用网关接口（请求头 X-API-Key）。密钥只在创建时完整显示一次，之后只能看到名称与状态 —— 泄露时请立刻吊销并重建。",

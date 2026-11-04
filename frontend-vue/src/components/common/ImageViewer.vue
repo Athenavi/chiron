@@ -9,7 +9,7 @@ const { current, list, index, hasMultiple, position, nextImage, prevImage } = us
 const MIN_SCALE = 0.25
 const MAX_SCALE = 6
 const STEP = 0.25
-/** ≤ 此缩放自动吸附回 1.0（CDS v1 §5.2.1 的 `v = 1.05`）：放大与否只该有两种状态，
+/** ≤ 此缩放自动吸附回 1.0（`v = 1.05`）：放大与否只该有两种状态，
  *  停在 1.03 这种"看起来没放大、又拖不动"的中间态是最差的。 */
 const SNAP_BACK_AT = 1.05
 /** 指针死区（`oe = 4`）：轻点一下或手抖不该被当成拖拽。 */
@@ -52,7 +52,7 @@ function measureFit() {
   fitH.value = Math.round(img.naturalHeight * s)
 }
 
-/** 某缩放档下允许的最大平移（CDS v1 §5.2.3 的 maxTx 公式，含 1.05 处的淡出）。 */
+/** 某缩放档下允许的最大平移（maxTx 公式，含 1.05 处的淡出）。 */
 function boundsFor(s: number) {
   const stage = stageRef.value
   if (!stage) return { maxTx: 0, maxTy: 0 }
@@ -70,7 +70,7 @@ function resetZoom() {
 }
 
 /**
- * 以**光标为不动点**缩放（CDS v1 §5.2.3）。
+ * 以**光标为不动点**缩放。
  *
  * 这条公式解决的是"放大后想看的位置被推出屏幕"：目标缩放比 c 越大，
  * 旧平移量就越要按 c 反向补偿，这样光标下的那个像素在屏幕上原地不动。

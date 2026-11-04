@@ -5,7 +5,7 @@ import ReasoningBlock from '../ReasoningBlock.vue'
 /**
  * `ReasoningBlock` 的测试（2026-10-09）。
  *
- * 承第 139–142 轮的组件人口（27 个无 spec），本轮挑**思考块**：它承载 §12.1 那条
+ * 承第 139–142 轮的组件人口（27 个无 spec），本轮挑**思考块**：它承载那条
  * `thinking` 落库链路的**渲染端** ✓。
  *
  * **三条不变量**：

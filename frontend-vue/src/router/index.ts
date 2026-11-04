@@ -10,32 +10,27 @@ const routes = [
     component: () => import('../views/HomeView.vue'),
   },
   {
-    // 登录 / 注册 / 找回密码：只有云端需要 —— 本地模式的账户由网关免口令下发，
-    // 没有"登录"这一步（guard 会回首页）。
+    // 登录 / 注册 / 找回密码。
     path: '/login',
     name: 'Login',
     component: () => import('../views/LoginView.vue'),
-    meta: { cloudOnly: true },
   },
   {
     path: '/register',
     name: 'Register',
     component: () => import('../views/RegisterView.vue'),
-    meta: { cloudOnly: true },
   },
   {
     // 忘记密码：申请邮件重置链接（邮件服务未启用时后端 403，入口在登录页按状态隐藏）
     path: '/forgot-password',
     name: 'ForgotPassword',
     component: () => import('../views/ForgotPasswordView.vue'),
-    meta: { cloudOnly: true },
   },
   {
     // 重置密码：令牌由邮件里的 /reset-password?token=... 链接带入
     path: '/reset-password',
     name: 'ResetPassword',
     component: () => import('../views/ResetPasswordView.vue'),
-    meta: { cloudOnly: true },
   },
   {
     path: '/chat',
@@ -46,8 +41,6 @@ const routes = [
   {
     // 模型配置：决定 /chat 模型下拉里能选到什么（写 llm_models 全局表，
     // 与后端 /v1/admin/models 的权限口径一致）。
-    // 本地模式**同样需要**：服务商密钥与端点就是由这一页写进本机网关的库的，
-    // 「设置 → 本地模型」那个平行入口已删除（见 SettingsPanel 的页签列表）。
     path: '/models',
     name: 'Models',
     component: () => import('../views/ModelsView.vue'),
@@ -72,11 +65,11 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    // 计费/充值：云端才有账座与支付渠道；本地模式自己是唯一"租户"，没东西可充
+    // 计费 / 充值
     path: '/billing',
     name: 'Billing',
     component: () => import('../views/BillingView.vue'),
-    meta: { requiresAuth: true, cloudOnly: true },
+    meta: { requiresAuth: true },
   },
   {
     path: '/profile',
@@ -85,9 +78,8 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
-    // 用户级 API Key 自助（P1-3）：管的是「我自己的账号调网关的凭证」，
-    // 与 admin 的 LLM 供应商密钥池无关。本地模式也有真账号（网关为本机铸的 owner
-    // 会话），所以这一页本地可达 —— 本地网关就是"跑在本机的同一个服务端"。
+    // 用户级 API Key 自助：管的是「我自己的账号调网关的凭证」，
+    // 与 admin 的 LLM 供应商密钥池无关。
     path: '/api-keys',
     name: 'UserApiKeys',
     component: () => import('../views/UserApiKeysView.vue'),
@@ -135,11 +127,7 @@ const routes = [
     component: () => import('../views/KnowledgeDetailView.vue'),
     meta: { requiresAuth: true },
   },
-  // 管理后台路由：本地模式**也可达**。本地后端就是同一个 Go 网关，只是运行位置在
-  // 本机；账户是网关为本机铸的真实 owner，角色判定见 router/guard.ts。
-  // 「钱与多租户」类页面（支付/套餐/发票/租户域名）在单机上没有实际对象，
-  // 但网关照样应答（空列表），所以不在路由层整棵子树封掉 —— 封掉的代价是
-  // 模型服务商密钥、审计、监控这些本地真正有用的页面也一起进不去了。
+  // 管理后台路由：角色与权限判定见 router/guard.ts。
   {
     path: '/admin',
     component: () => import('../views/admin/Layout.vue'),
@@ -211,14 +199,14 @@ const routes = [
         component: () => import('../views/admin/PaymentView.vue'),
         meta: { title: t('billing.payment_config') },
       },
-      // P1-2：发票审核 —— 与支付渠道同属「钱相关的运营动作」，故相邻。
+      // 发票审核 —— 与支付渠道同属「钱相关的运营动作」，故相邻。
       {
         path: 'invoices',
         name: 'AdminInvoices',
         component: () => import('../views/admin/InvoiceReviewView.vue'),
         meta: { title: t('admin.invoice_review') },
       },
-      // P2-2c：套餐目录 —— 决定用户能买什么、平台收多少，同属商业化运营。
+      // 套餐目录 —— 决定用户能买什么、平台收多少，同属商业化运营。
       {
         path: 'packages',
         name: 'AdminPackages',

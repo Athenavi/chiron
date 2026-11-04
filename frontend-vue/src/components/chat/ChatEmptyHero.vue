@@ -7,7 +7,7 @@ import { documentDir, nextRovingIndex, resolveRovingIntent, rovingTabIndex } fro
 const { t } = useI18n()
 const emit = defineEmits<{ (e: 'suggest', text: string): void }>()
 
-/** 漫游焦点（CDS v1 §6.6）：整组只占一个 Tab 停靠点，方向键在卡片间移动。
+/** 漫游焦点：整组只占一个 Tab 停靠点，方向键在卡片间移动。
  *  Tab 一律放行 —— 拦截它就会变成键盘陷阱（WCAG 2.1.2）。 */
 const gridRef = ref<HTMLElement | null>(null)
 const activeIndex = ref(0)
@@ -92,12 +92,12 @@ const suggestions = [
 .hero-glow { position: absolute; inset: -40% -20% auto -20%; height: 70%; background: radial-gradient(ellipse 50% 50% at 50% 0%, var(--primary-bg), transparent 70%); pointer-events: none; }
 .hero-content { width: 560px; max-width: calc(100vw - 48px); text-align: center; position: relative; z-index: var(--z-content); }
 .hero-logo { width: 56px; height: 56px; margin: 0 auto 18px; border-radius: var(--sig-radius-card); background: linear-gradient(135deg, var(--primary), var(--accent)); color: var(--on-solid); font-weight: var(--fw-bold); font-size: 20px; display: flex; align-items: center; justify-content: center; box-shadow: var(--sig-shadow-hover); }
-/* 问候语走 CDS 的「衬线版面标题」（.font-display）：衬线 + 38px + 轻字重 + 微负字距。
+/* 问候语走「衬线版面标题」（.font-display）：衬线 + 38px + 轻字重 + 微负字距。
    字号由 --fs-display 派生，仍受"界面字号只有一个入口"的约束。 */
 .hero-title { font-family: var(--font-serif); font-size: var(--fs-display); font-weight: var(--fw-light); line-height: 1.2; letter-spacing: -0.015em; color: var(--text-primary); margin-bottom: 28px; }
 .suggestion-grid { display: flex; flex-wrap: wrap; gap: 12px; justify-content: center; }
 .suggestion-card { width: 250px; padding: 14px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border-card); background: var(--bg-card); cursor: pointer; transition: border-color var(--dur-normal), transform var(--dur-normal), box-shadow var(--dur-normal); text-align: start; box-shadow: var(--sig-shadow-card); position: relative; overflow: hidden; }
-/* CDS 2.0 §2.6「微光浮空」：抬起时卡片做极轻微的三维透视（X 0.5% / Y 1.5%），
+/* 「微光浮空」：抬起时卡片做极轻微的三维透视（X 0.5% / Y 1.5%），
    同时底部漫出一抹品牌色微光。微光用伪元素而不是多加一层 DOM —— 它不吃事件、不参与布局。 */
 .suggestion-card::after { content: ''; position: absolute; inset: 0; border-radius: inherit; pointer-events: none; background-image: radial-gradient(at bottom, var(--card-hover-glow), transparent 70%); opacity: 0; transition: opacity var(--dur-normal) var(--ease-out); }
 .suggestion-card:hover { border-color: var(--primary); transform: translateY(-2px) scale(1.005, 1.015); box-shadow: var(--sig-shadow-hover); }

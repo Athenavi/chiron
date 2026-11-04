@@ -1,7 +1,7 @@
 import api from './index'
 
 /**
- * 新用户引导（P0-3）的接口封装。
+ * 新用户引导的接口封装。
  *
  * 步骤名与后端 `internal/api/onboarding_handler.go` 的白名单**必须一致** ——
  * 后端对未知 step 返回 400，这里用联合类型把拼写错误挡在编译期。

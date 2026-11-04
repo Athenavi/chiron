@@ -83,7 +83,7 @@ interface BalanceData {
   within_free_quota: boolean
 }
 
-// ── 套餐与权益（P2-2）──
+// ── 套餐与权益 ──
 
 /** 已上架套餐（GET /v1/billing/packages） */
 interface PackageItem {
@@ -122,9 +122,9 @@ const usage = ref<UsageData | null>(null)
 const history = ref<CreditTx[]>([])
 const historyLoading = ref(false)
 
-// ── 发票申请（P1-2，工单式）──
+// ── 发票申请（工单式） ──
 
-// ── 发票申请（P1-2）：状态与逻辑见 `composables/useBillingInvoices.ts` ──
+// ── 发票申请：状态与逻辑见 `composables/useBillingInvoices.ts` ──
 const {
   invoiceableOrders,
   invoiceOrdersLoading,
@@ -181,7 +181,7 @@ const rangeLabel = computed(() => t('billing.usage_range_days', { n: rangeDays.v
 const loading = ref(true)
 const checkoutLoading = ref(false)
 /**
- * 当前页签。支持用 `?tab=packages` 直达（P2-2b）：对话里「模型不在可用范围」
+ * 当前页签。支持用 `?tab=packages` 直达：对话里「模型不在可用范围」
  * 的错误块会把用户送到套餐页签，落到充值页等于让他自己再找一遍。
  * 非法值静默忽略，保持默认页签 —— 这是导航参数，不值得为它报错。
  */
@@ -209,7 +209,7 @@ const payStatus = ref<'pending' | 'paid' | 'expired' | 'failed'>('pending')
 let pollTimer: number | undefined
 const PAY_POLL_INTERVAL = 3000
 
-// ── 套餐与权益（P2-2）──
+// ── 套餐与权益 ──
 
 const packages = ref<PackageItem[]>([])
 const packagesLoading = ref(false)
@@ -449,7 +449,7 @@ async function loadHistory() {
   }
 }
 
-// ── 发票申请（P1-2）──
+// ── 发票申请 ──
 
 /**
  * 加载可开票订单与我的申请。
@@ -491,7 +491,7 @@ async function loadEntitlements() {
   }
 }
 
-// ── 交易明细导出（P1-1）──
+// ── 交易明细导出 ──
 
 /** 导出中禁用按钮：同步流式接口，重复点击会并发拉同一个查询。 */
 const exporting = ref(false)
@@ -990,7 +990,7 @@ function amountText(amount: number): string {
         </Card>
       </TabPane>
 
-      <!-- 套餐包与我的权益（P2-2）：一次性购买，到期只失效不续费 -->
+      <!-- 套餐包与我的权益：一次性购买，到期只失效不续费 -->
       <TabPane
         key="packages"
         :tab="$t('billing.packages_title')"
@@ -1107,7 +1107,7 @@ function amountText(amount: number): string {
           <template #title>
             <BarChartOutlined /> {{ $t('common.transaction_history') }}
           </template>
-          <!-- 导出入口（P1-1）：范围跟随上方用量视图的天数选择，避免再造一个选择器 -->
+          <!-- 导出入口：范围跟随上方用量视图的天数选择，避免再造一个选择器 -->
           <template #extra>
             <Tooltip :title="$t('billing.export_hint', { range: rangeLabel })">
               <Button
@@ -1158,7 +1158,7 @@ function amountText(amount: number): string {
         </Card>
       </TabPane>
 
-      <!-- 发票申请（P1-2）：工单式，一期只支持全额开票 + 不可撤销 -->
+      <!-- 发票申请：工单式，一期只支持全额开票 + 不可撤销 -->
       <TabPane
         key="invoice"
         :tab="$t('billing.invoice_title')"
@@ -1416,7 +1416,7 @@ function amountText(amount: number): string {
 .amount-add { color: var(--colorSuccess, #10b981); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 .amount-deduct { color: var(--colorError, var(--error)); font-weight: var(--fw-semibold); font-variant-numeric: tabular-nums; }
 
-/* ── 套餐与权益（P2-2）── */
+/* ── 套餐与权益 ── */
 .package-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 16px; }
 .package-card {
   display: flex; flex-direction: column; gap: 8px;

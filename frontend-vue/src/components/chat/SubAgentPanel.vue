@@ -2,7 +2,7 @@
 /**
  * 子 Agent 观测面板：递归层级树 + 选中 run 的实时输出。
  *
- * 数据来源（三层，见 python-engine/app/subagent//§5.2）：
+ * 数据来源（三层）：
  *   1. 树骨架与状态：GET /v1/subagent/runs（Redis → DB），轮询刷新；
  *   2. 实时输出：父组件（ChatView）把 SSE 的 `subagent.*` 事件按到达顺序传进来（liveEvents）；
  *   3. 历史输出：选中 run 时 GET /v1/subagent/runs/{id}/events 拉一次，再与实时事件拼接。

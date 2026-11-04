@@ -21,7 +21,7 @@ import { applyServerLocale, installLocaleSync, persistLocale } from '../localeSy
 const LOCALE_STORAGE_KEY = 'chiron.locale'
 
 /**
- * `utils/localeSync.ts` 的测试（T1）。
+ * `utils/localeSync.ts` 的测试。
  *
  * 钉住三件事，它们都是本轮修掉的真实缺口：
  *  1. 切语言要**回写到服务端** `users.settings.locale` —— 否则服务端渲染的邮件
@@ -44,7 +44,7 @@ afterEach(() => {
 })
 
 describe('persistLocale（回写服务端）', () => {
-  it('已登录且云端模式：PUT users.settings.locale，且只传 locale 不覆盖其它设置', async () => {
+  it('已登录：PUT users.settings.locale，且只传 locale 不覆盖其它设置', async () => {
     installLocaleSync(() => true)
     await persistLocale('en-US')
 

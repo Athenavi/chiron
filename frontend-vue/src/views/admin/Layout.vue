@@ -129,9 +129,9 @@ const menuGroups = computed(() => [
       { key: '/admin/usage-catalog', label: t('admin.usage_catalog'), icon: () => h(BarChartOutlined) },
       // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
       { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
-      // P1-2：发票审核 —— 用户提交的开票申请在这里处理，与支付渠道相邻
+      // 发票审核 —— 用户提交的开票申请在这里处理，与支付渠道相邻
       { key: '/admin/invoices', label: t('admin.invoice_review'), icon: () => h(ReconciliationOutlined) },
-      // P2-2c：套餐目录 —— 卖什么、多少钱，与支付渠道/发票同属「钱相关」
+      // 套餐目录 —— 卖什么、多少钱，与支付渠道/发票同属「钱相关」
       { key: '/admin/packages', label: t('admin.packages_admin_title'), icon: () => h(IdcardOutlined) },
       { key: '/admin/api-docs', label: t('knowledge.api_documentation'), icon: () => h(FileTextOutlined) },
     ],

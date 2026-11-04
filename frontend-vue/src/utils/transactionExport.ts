@@ -1,5 +1,5 @@
 /**
- * 交易明细 CSV 导出的前端工具（P1-1 / roadmap §10.2）。
+ * 交易明细 CSV 导出的前端工具。
  *
  * 为什么单独抽一个文件：导出这条链路有三个容易做错、且都**不依赖网络**的环节——
  * 时间范围怎么算、文件名怎么生成、失败时怎么把 Blob 里的错误读出来。
@@ -16,7 +16,7 @@ export const CSV_MIME = 'text/csv;charset=utf-8'
  * 而用户对账时看到"最早的记录差一小时"只会以为数据错了。
  *
  * 两端的时区都归一成 UTC 再序列化：后端的 `credit_transactions.created_at`
- * 是无时区的 `timestamp`，按 UTC 解释（见 roadmap §10.2 与 D 组 L4-3）。
+ * 是无时区的 `timestamp`，按 UTC 解释。
  */
 export function exportRangeFor(days: number, now: Date = new Date()): { from: string; to: string } {
   const to = new Date(now.getTime())

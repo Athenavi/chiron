@@ -7,7 +7,7 @@ export interface ChatSession {
   title: string
   /** 置顶会话固定在列表顶部（登录用户存 DB，guest 随 localStorage 持久化） */
   pinned?: boolean
-  /** P3-D: 会话标签（前端 localStorage 存储，用于分类筛选） */
+  /** 会话标签（前端 localStorage 存储，用于分类筛选） */
   tag?: string
   // ── 分支血缘（后端 sessions 早已存在的列，P0 起对外暴露）──
   /** 非空表示这个会话是从另一个会话分支出来的（"分支自谁"） */
@@ -56,7 +56,7 @@ export interface TextItem extends ChatItemBase {
    */
   errorCode?: string
   /**
-   * 模型被拒的原因（后端 `params.reason`，P2-2b）：`entitlement` / `policy`。
+   * 模型被拒的原因（后端 `params.reason`）：`entitlement` / `policy`。
    *
    * 只用于**选动作**，不直接渲染 —— 两种原因给用户的建议完全相反：
    * 套餐不覆盖可以买，租户策略不允许买了也没用。
@@ -74,7 +74,7 @@ export interface TextItem extends ChatItemBase {
   errorRetryable?: boolean
   /** 附件列表（用户消息可携带图片/文件，发送时一并上传） */
   attachments?: ChatAttachment[]
-  /** P2-F: 生成被用户手动停止，显示"继续生成"提示 */
+  /** 生成被用户手动停止，显示"继续生成"提示 */
   stopped?: boolean
   /**
    * 消息来源（后端 messages.source）：'subagent_followup' = 子 Agent 自动轮注入的消息，

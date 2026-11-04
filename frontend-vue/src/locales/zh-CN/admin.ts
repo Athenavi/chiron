@@ -202,7 +202,7 @@ export default {
   usage_group_day: "日期",
   usage_group_model: "模型",
   usage_group_user: "用户",
-  // ── 发票审核（P1-2 管理端） ──
+  // ── 发票审核（管理端） ──
   invoice_review: "发票审核",
   invoice_review_desc: "用户提交的开票申请。默认只看待审，审核后不可撤销 —— 通过即视为已线下开票。",
   invoice_review_filter_pending: "待审核",
@@ -228,7 +228,7 @@ export default {
   invoice_status_pending: "待审核",
   invoice_status_approved: "已通过",
   invoice_status_rejected: "已驳回",
-  // ── 新用户引导漏斗（P0-3 验收「完成率可查」） ──
+  // ── 新用户引导漏斗（验收「完成率可查」） ──
   onboarding_funnel_title: "新用户引导完成率",
   onboarding_funnel_entered: "进入引导",
   onboarding_funnel_finished: "走完流程",
@@ -237,7 +237,7 @@ export default {
   onboarding_funnel_skipped: "跳过",
   onboarding_funnel_pending: "待办",
   onboarding_funnel_empty: "还没有用户进入引导 —— 该统计只覆盖本功能上线后注册的新账号。",
-  // ── 套餐目录管理（P2-2c） ──
+  // ── 套餐目录管理 ──
   packages_admin_title: "套餐目录",
   packages_admin_desc: "这里配置的套餐会直接出现在用户的「套餐包」页并影响真实收款。改价不影响已售出的权益 —— 购买时已做快照。",
   packages_admin_new: "新建套餐",

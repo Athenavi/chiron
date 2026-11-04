@@ -139,14 +139,14 @@ function decline() {
 .ask-question { margin: 0 0 10px; font-size: 13px; line-height: 1.6; color: var(--text-primary); }
 .ask-options { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; }
 .ask-option {
-  /* 尺寸走 style.css §4 的 .btn-lg 阶梯；这里只留配色与发丝环 */
+  /* 尺寸走 style.css 的 .btn-lg 阶梯；这里只留配色与发丝环 */
   background: var(--bg-surface); color: var(--text-primary);
   box-shadow: inset 0 0 0 var(--hairline-width) var(--border);
   transition: box-shadow var(--dur-fast) ease, color var(--dur-fast) ease, background var(--dur-fast) ease;
 }
 .ask-option:hover:not(:disabled) { box-shadow: inset 0 0 0 var(--hairline-width) var(--accent); color: var(--accent); }
 .ask-option:disabled { opacity: 0.5; cursor: not-allowed; }
-/* 按下塌陷（CDS 胶囊形变族），见 style.css §5 */
+/* 按下塌陷（胶囊形变族），见 style.css */
 .ask-option:active:not(:disabled) { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
 /* 入场：复用 .pill-pop 的两段式过冲 —— 选项是被"递"到用户面前的，弹一下比直接出现
    更贴合它"等你选"的语义。:active 时由上面的 dip 接管（同名属性后者赢）。 */

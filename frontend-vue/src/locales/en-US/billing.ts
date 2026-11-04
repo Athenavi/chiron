@@ -64,7 +64,7 @@ export default {
   export_csv: "Export CSV",
   export_started: "Export started — check your browser downloads",
   export_hint: "Exports the transaction details for the current range ({range}); opens directly in Excel.",
-  // Invoice requests (P1-2): ticket-style; only full-amount, non-reversible invoicing for now.
+  // Invoice requests: ticket-style; only full-amount, non-reversible invoicing for now.
   invoice_title: "Invoice request",
   invoice_hint: "An admin reviews each request and the invoice is issued offline after approval. Only full-amount invoicing for a single paid order is supported, and a submitted request cannot be withdrawn.",
   invoice_order: "Order",
@@ -91,7 +91,7 @@ export default {
   invoice_status_approved: "Approved",
   invoice_status_rejected: "Rejected",
 
-  // ── Packages & entitlements (P2-2) ──
+  // ── Packages & entitlements ──
   packages_title: "Packages",
   packages_hint: "Packages are bought once: Credits land immediately and model entitlements stay valid until they expire. Nothing renews or charges automatically.",
   packages_empty: "No packages have been published yet — you can keep topping up on demand.",

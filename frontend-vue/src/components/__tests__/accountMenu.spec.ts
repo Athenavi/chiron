@@ -4,7 +4,7 @@ import { DEFAULT_LOCALE } from '../../i18n/languages'
 import { buildAccountMenuItems, accountMenuRoute } from '../accountMenu'
 
 /**
- * `components/accountMenu.ts` 的测试（T3）。
+ * `components/accountMenu.ts` 的测试。
  *
  * 这个模块存在的理由就是"两份菜单已经漂移"：`AppLayout` 与 `chat/ChatSidePanel`
  * 各写一份，聊天页那份缺 `api-keys` 与**通知入口**，而聊天页隐藏了顶栏 ——
@@ -22,7 +22,7 @@ const keysOf = (includeApiKeys?: boolean) =>
   buildAccountMenuItems(t, { includeApiKeys }).map((i) => i.key)
 
 describe('buildAccountMenuItems', () => {
-  it('含通知中心（T3 的核心）', () => {
+  it('含通知中心（核心）', () => {
     expect(keysOf()).toContain('notifications')
   })
 

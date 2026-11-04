@@ -85,11 +85,11 @@ describe('describeApiError（服务端错误要能定位）', () => {
   })
 })
 
-// ── `params` 必须真正被插值（P0-2）────────────────────────────────────
+// ── `params` 必须真正被插值 ────────────────────────────────────
 //
 // 后端把"还要等几秒"放在 `params.retry_after_seconds`（`TooManyRequestsAfterSeconds`、
 // `session_recover`），但 `localizedCodeMessage` 此前**从不传 params** —— 于是用户看到的
-// 是一条没有秒数的"请稍后重试"，P0-2 要求的"等 N 秒"根本落不了地。
+// 是一条没有秒数的"请稍后重试"，要求的"等 N 秒"根本落不了地。
 describe('describeApiError（params 插值）', () => {
   it('★ rate_limited 带上 retry_after_seconds 时给出具体秒数', () => {
     const text = describeApiError({

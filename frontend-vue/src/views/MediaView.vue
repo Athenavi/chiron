@@ -87,7 +87,7 @@ const selectedIds = ref<Set<string>>(new Set())
 const selection = ref<SelectionState>(EMPTY_SELECTION)
 
 
-// 详情侧栏 / 上传（T9/T10 填充 UI，此处声明状态）
+// 详情侧栏 / 上传（填充 UI，此处声明状态）
 const detailItem = ref<MediaItem | null>(null)
 const showUpload = ref(false)
 
@@ -250,7 +250,7 @@ function toggleView(mode: 'grid' | 'list') {
   localStorage.setItem('media-view', mode)
 }
 
-// ── 文件网格的漫游焦点（CDS v1 §6.6）──
+// ── 文件网格的漫游焦点 ──
 // 此前每张卡都是 tabindex="0"：100 个文件就要按 100 次 Tab 才能穿过去。
 // 现在整组只占一个停靠点，方向键在卡片间移动，Home/End 跳首尾。
 const gridRef = ref<HTMLElement | null>(null)

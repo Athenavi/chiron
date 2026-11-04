@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 新用户引导（P0-3）的浮层。
+ * 新用户引导的浮层。
  *
  * ## 为什么是 Modal 而不是 antd `Tour`
  *

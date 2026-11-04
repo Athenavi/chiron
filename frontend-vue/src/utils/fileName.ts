@@ -1,5 +1,5 @@
 /**
- * 文件名的**双向中间截断**（CDS v1/02 §2.5.3）。
+ * 文件名的**双向中间截断**。
  *
  * 单向右截断（`text-overflow: ellipsis`）会把
  * `deep_reinforcement_learning_policy_gradient_v3.tsx` 变成
@@ -35,7 +35,7 @@ export function splitFileName(name: string): SplitName {
 }
 
 /**
- * 类型徽标（CDS v1/02 §2.5.4）：后缀大写、最多 4 字符 —— `TS` / `PY` / `PDF` / `CSV`。
+ * 类型徽标：后缀大写、最多 4 字符 —— `TS` / `PY` / `PDF` / `CSV`。
  * 认不出后缀时给 `FILE`，而不是留空白：空白会让磁贴看起来像加载失败。
  */
 export function fileTypeBadge(name: string): string {

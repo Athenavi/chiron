@@ -1,5 +1,5 @@
 /**
- * 界面音效（CDS v2/05 · Audio Feedback / Zero External Audio Assets）。
+ * 界面音效（Audio Feedback / Zero External Audio Assets）。
  *
  * 四个音全部用 Web Audio 振荡器**现场合成**：不引入任何音频文件，包体零增长，
  * 也不会因为资源 404 而静默失效。音高走向本身就是语义 —— 上行"进入"、下行"退出"、

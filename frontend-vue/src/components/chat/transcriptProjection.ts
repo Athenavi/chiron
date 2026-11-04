@@ -61,7 +61,7 @@ export interface ProjectionInput {
   /** 尾部常驻的回合数（含活跃回合） */
   residentTailTurns?: number
   /**
-   * 当前是否有回合**仍在运行**（2026-10-09，§4.7）。
+   * 当前是否有回合**仍在运行**（2026-10-09）。
    *
    * 活跃判据原先只看**位置**（`turn.to === items.length`）⇒ 只要后面没有更新的回合，
    * 最后一轮就**永远**算"活跃"（工具组 `status: 'running'` 且默认展开）。而终结该轮的
@@ -346,7 +346,7 @@ export function projectTranscript(input: ProjectionInput): ProjectionResult {
   const rows: ProjectedRow[] = []
 
   for (const turn of turns) {
-    // 活跃 = **仍在运行** 且是最后一段（§4.7：不能只看位置，否则不带 token 的 done 会让它永远 running）
+    // 活跃 = **仍在运行** 且是最后一段（不能只看位置，否则不带 token 的 done 会让它永远 running）
     const active = Boolean(input.running) && turn.to === items.length
     const foldable = hasFoldableSegment(items, turn.from, turn.to)
     // 可折叠的回合默认展开；不可折叠的回合不生成头行（折起来也看得见全部内容）

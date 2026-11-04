@@ -59,7 +59,7 @@
         'Microsoft YaHei UI', 'Microsoft YaHei', 'PingFang SC', 'Hiragino Sans GB',
         'Noto Sans CJK SC', monospace;
 
-    /* 展示级衬线（空状态问候语等版面标题）。CDS 的 .font-display 走 serif 轴，
+    /* 展示级衬线（空状态问候语等版面标题）。.font-display 走 serif 轴，
        但它的字体栈只有西文衬线 —— 中文字形不显式补衬线体会回退到 --font-sans，
        变成"西文衬线 + 中文黑体"的混排，所以这里补了一整条 CJK 衬线回退链。 */
     --font-serif: ui-serif, Georgia, 'Iowan Old Style', 'Times New Roman',
@@ -85,11 +85,11 @@
     --fs-8xl: calc(var(--ui-font-size) + 34px); /* 14 → 48px */
 
     /* 展示级字号（空状态问候语等"版面标题"）。
-       对齐 CDS 的 .font-display（38px / 行高 1.2 / 字重 330 / serif 轴）；
+       对齐 .font-display（38px / 行高 1.2 / 字重 330 / serif 轴）；
        与上面各档一样由 --ui-font-size 派生，所以仍受"唯一缩放入口"约束。 */
     --fs-display: calc(var(--ui-font-size) + 24px); /* 14 → 38px */
 
-    /* 展示级字重：CDS 的 .font-display 用 330。大字号下端笔画会显著变粗，
+    /* 展示级字重：.font-display 用 330。大字号下端笔画会显著变粗，
        semibold 会显得笨重，轻一档才有版面感。 */
     --fw-light: 300;
     --fw-regular: 400;
@@ -122,23 +122,23 @@
     --ease-snap: cubic-bezier(0.2, 0, 0, 1);
     --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
 
-    /* ── CDS 阶梯补齐（open-claude-ui v1/01 §1.6 · v2/04 §4.3）──
-       CDS 的响应时间阶梯是 60 / 120 / 200 / 300 / 450ms。本表原本有 60/100/120/200/350，
+    /* ── 动效阶梯补齐 ─────────────────────────────────────────────
+       响应时间阶梯是 60 / 120 / 200 / 300 / 450ms。本表原本有 60/100/120/200/350，
        缺的是 300ms（抽屉大面板滑出、视口图钉追踪）与 450ms（页面级大转场、模态升降）。
        补这两档而不是把既有的 350 改成 450：后者会改变现网观感，不属"补阶梯"。 */
     --dur-sheet: 300ms;
     --dur-page: 450ms;
 
-    /* CDS 的物理过冲曲线（约 +30% 超调，用于胶囊滑块与小药丸形变）。
+    /* 物理过冲曲线（约 +30% 超调，用于胶囊滑块与小药丸形变）。
        它是 --ease-spring（+56%，弹窗弹出）的同族轻量级 —— 两级而非一条曲线打天下。 */
     --ease-overshoot: cubic-bezier(0.34, 1.3, 0.64, 1);
-    /* 15 阶线性弹簧（CDS v1/02 §2.1.3 的 `--cds-btn-spring`）：按压松开后的回弹。
+    /* 15 阶线性弹簧：按压松开后的回弹。
        写成 linear() 是因为它是**采样出来的真实位移**而不是拟合曲线 ——
        40% 处冲到 +9.15%，随后 0.9914 → 1.0004 两次微回弹才收敛，
        cubic-bezier 只能让曲线在一个方向上过头一次，做不出这种"过冲 → 回弹 → 收敛"。 */
     --ease-spring-15: linear(0, 0.2459, 0.6526, 0.9468, 1.0764, 1.0915, 1.0585, 1.0219, 0.9993, 0.9914, 0.9921, 0.9957, 0.9988, 1.0004, 1);
 
-    /* ── 四套弹簧预设（CDS v1/08 §8.3 的决策树）──
+    /* ── 四套弹簧预设（按交互类型选用）────────────
        按「交互类型 → 预设」选用，而不是每次手写"时长 + 曲线"：
          按钮点击 / 胶囊切换 / Tab 移动     → --spring-snappy（+8.8% 超调）
          开关切换 / Badge 入场 / 成功微反馈 → --spring-bouncy（+19.4% 超调）
@@ -404,7 +404,7 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 10%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
@@ -525,18 +525,18 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 40%, transparent);
 }
 
 /* ============================================================ */
-/* 陶土暖纸（clay paper）：把原来的「暖纸 + 琥珀」调性改为 CDS 的陶土体系。
-   数值出处（open-claude-ui 手册）：表面明度阶 #f9f9f7 / #fcfcfb / #ffffff 与深色
-   #0b0b0b / #151515 / #1a1a19 / #20201f 取自 v1/01 §1.3；文本阶梯 #151515 /
-   #525252 / #8a8a8a 取自 §1.4.1；发丝边的 alpha（浅 12% / 暗 10%）取自 v1/08 §8.1；
-   四层环境光阴影公式取自 §1.2；品牌色取陶土（浅色用较深的 #c6613f 以便白字可读，
+/* 陶土暖纸（clay paper）：把原来的「暖纸 + 琥珀」调性改为陶土体系。
+   取值口径：表面明度阶 #f9f9f7 / #fcfcfb / #ffffff 与深色
+   #0b0b0b / #151515 / #1a1a19 / #20201f；文本阶梯 #151515 /
+   #525252 / #8a8a8a；发丝边的 alpha（浅 12% / 暗 10%）；
+   四层环境光阴影公式；品牌色取陶土（浅色用较深的 #c6613f 以便白字可读，
    深色用 #d97757，hover 沿 #cc5a36 方向加重）。
    **改这里必须同时改 stores/theme.ts 的 paper 两个 token 对象**（见该文件头注释）。 */
 [data-theme='paper-light'] {
@@ -654,7 +654,7 @@ html.dark {
     --shadow-md: 0 2px 4px color-mix(in srgb, var(--shadow-base) 5%, transparent), 0 6px 16px color-mix(in srgb, var(--shadow-base) 8%, transparent);
     --shadow-lg: 0 4px 8px color-mix(in srgb, var(--shadow-base) 6%, transparent), 0 12px 28px -2px color-mix(in srgb, var(--shadow-base) 8%, transparent);
     --shadow-xl: 0 8px 16px color-mix(in srgb, var(--shadow-base) 6%, transparent), 0 24px 48px -6px color-mix(in srgb, var(--shadow-base) 10%, transparent);
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 12%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 8%, transparent);
@@ -775,7 +775,7 @@ html.dark {
     --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 4px 14px color-mix(in srgb, var(--shadow-base) 45%, transparent), 0 2px 4px color-mix(in srgb, var(--shadow-base) 30%, transparent);
     --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 12px 34px color-mix(in srgb, var(--shadow-base) 50%, transparent), 0 4px 8px color-mix(in srgb, var(--shadow-base) 35%, transparent);
     --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 22px 48px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 8px 16px color-mix(in srgb, var(--shadow-base) 35%, transparent);
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.12), 0 8px 28px color-mix(in srgb, var(--shadow-base) 70%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 50%, transparent);
@@ -898,7 +898,7 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 10%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
@@ -1019,7 +1019,7 @@ html.dark {
     --shadow-md: none;
     --shadow-lg: none;
     --shadow-xl: none;
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 60%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 40%, transparent);
@@ -1142,7 +1142,7 @@ html.dark {
     --shadow-md: 0 8px 24px color-mix(in srgb, var(--shadow-base) 12%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 6%, transparent);
     --shadow-lg: 0 18px 44px color-mix(in srgb, var(--shadow-base) 16%, transparent), 0 6px 12px color-mix(in srgb, var(--shadow-base) 8%, transparent);
     --shadow-xl: 0 28px 64px color-mix(in srgb, var(--shadow-base) 20%, transparent), 0 10px 20px color-mix(in srgb, var(--shadow-base) 10%, transparent);
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: 0 0 0 var(--hairline-width) var(--border-default), 0 8px 24px color-mix(in srgb, var(--shadow-base) 16%, transparent), 0 2px 6px color-mix(in srgb, var(--shadow-base) 8%, transparent);
@@ -1263,7 +1263,7 @@ html.dark {
     --shadow-md: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 10px 28px color-mix(in srgb, var(--shadow-base) 45%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 25%, transparent);
     --shadow-lg: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 20px 50px color-mix(in srgb, var(--shadow-base) 55%, transparent), 0 8px 16px color-mix(in srgb, var(--shadow-base) 30%, transparent);
     --shadow-xl: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 30px 70px color-mix(in srgb, var(--shadow-base) 60%, transparent), 0 10px 20px color-mix(in srgb, var(--shadow-base) 35%, transparent);
-    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：CDS 的「双环浮层」——
+    /* 浮层表面（下拉 / 上下文菜单 / 快捷指令气泡）：「双环浮层」——
        浅色走 1 圈外包含线 + 弥散投影；深色**取消外圈白线**（黑底上白框刺眼），
        改为内侧倒角高光 inset 0 0 0 半像素白，模拟边缘捕捉到顶光的那道反光。 */
     --shadow-popover: inset 0 0 0 var(--hairline-width) rgba(255, 255, 255, 0.10), 0 8px 28px color-mix(in srgb, var(--shadow-base) 65%, transparent), 0 2px 8px color-mix(in srgb, var(--shadow-base) 45%, transparent);
@@ -1420,7 +1420,7 @@ body {
 .ant-dropdown-menu,
 .ant-menu { background: var(--bg-elevated) !important; }
 
-/* 浮层投影统一走 --shadow-popover（CDS §1.4 的双环浮层：浅色是外包含线 + 弥散投影，
+/* 浮层投影统一走 --shadow-popover（双环浮层：浅色是外包含线 + 弥散投影，
    深色是**内侧倒角高光**而非外圈白线）。此前这三类浮层用的是 antd 自带投影，
    既不随主题、也与自研组件不在同一套光线上。 */
 .ant-dropdown-menu,
@@ -1552,7 +1552,7 @@ html[data-theme="notion-light"] .suggestion-card {
 }
 
 /* 输入框**不**并入上面的"无投影"名单：它的底色与画布同值，一旦连内环都没有
-   就整个隐进背景里（原先正是如此）。CDS 也把 Composer 归为"必须有闭合外框"一类。 */
+   就整个隐进背景里（原先正是如此）。Composer 也归为"必须有闭合外框"一类。 */
 html[data-theme="notion-light"] .input-card {
     border-radius: 3px !important;
 }
@@ -1737,7 +1737,7 @@ body {
   flex: none;
   font-size: var(--fs-xs);
   color: var(--text-muted);
-  /* 箭头展开属「胶囊 / Tab 移动」一档 → CDS 的 SPRING_SNAPPY 预设 */
+  /* 箭头展开属「胶囊 / Tab 移动」一档 → SPRING_SNAPPY 预设 */
   transition: transform var(--spring-snappy);
 }
 .chat-chevron.open { transform: rotate(90deg); }
@@ -1755,7 +1755,7 @@ body {
 .chat-state-dot[data-state='error'] { color: var(--error); }
 
 /* 统一脉冲：取代分散的 dotPulse / uehPulse / skeleton-pulse 三份实现 */
-/* 三点差分脉冲（CDS v1 §4.2.1 `cds-dot-pulse`）：周期 1.8s；
+/* 三点差分脉冲（`cds-dot-pulse`）：周期 1.8s；
    基准不透明度 **0.2857**（手册明确给出的 2/7 精确常数，不是四舍五入的 0.3）；
    相位是 0-5% 落在基准 → 15-25% 满亮 → 65-100% 回落到基准。 */
 @keyframes chatPulse {
@@ -1791,15 +1791,13 @@ body {
 }
 
 /* ============================================================ */
-/* CDS 对齐层（open-claude-ui 分析手册）
-   出处：v1/01 §1.4 滚动驱动渐隐遮罩 · §1.6 动效令牌与物理曲线 ·
-        v1/02 原子控件阶梯 · v1/08 §8.2–8.5 Agent 前端规约 · v2/04 §4.3 响应时间矩阵。
-   本层只补"机制"，取值一律走 token —— check:ui 的四条棘轮仍是硬约束。 */
+/* 设计规范对齐层：只补"机制"，取值一律走 token ——
+   check:ui 的四条棘轮仍是硬约束。 */
 
 /* ── 1. 滚动渐隐（7 档非线性遮罩）──────────────────────────────
    两个理由说明为什么不用"盖一层渐变"：
      ① 遮罩不参与布局、不吃指针事件，且不会与可滚动内容互相干扰；
-     ② 单段线性渐变在边缘会被读成"硬切" —— CDS 用的是按感知伽马校准的 7 档采样点。
+     ② 单段线性渐变在边缘会被读成"硬切" —— 这里用按感知伽马校准的 7 档采样点。
    渐隐尺寸由**滚动时间轴**驱动（触顶归零、滚离渐开至 28px），全程只走合成器，
    不进主线程 —— 这是它比"scroll 事件里改 opacity"更该用的原因。
    不支持 animation-timeline 的引擎**完全不应用遮罩**（渐进增强），
@@ -1810,7 +1808,7 @@ body {
 @property --scroll-fade-right { syntax: '<length>'; inherits: false; initial-value: 0px; }
 
 :root {
-  /* 物理宽度严格 28px（CDS 明确否掉了近似的 24px / 32px） */
+  /* 物理宽度严格 28px（明确否掉了近似的 24px / 32px） */
   --scroll-fade-size: 28px;
   --scroll-fade-top: 0px;
   --scroll-fade-bottom: 0px;
@@ -1820,7 +1818,7 @@ body {
      必须写成**一行** —— check-theme-token-contract 按行判定，色值只允许出现在
      `--name:` 定义行上，换行后余下的档位会被判为组件里的硬编码色值。 */
   --scroll-fade-mask: linear-gradient(to bottom, #0000, #0000000d calc(var(--scroll-fade-top) * .15), #00000026 calc(var(--scroll-fade-top) * .3), #0000004d calc(var(--scroll-fade-top) * .45), #00000080 calc(var(--scroll-fade-top) * .6), #000000b3 calc(var(--scroll-fade-top) * .75), #000000d9 calc(var(--scroll-fade-top) * .87), #000 var(--scroll-fade-top), #000 calc(100% - var(--scroll-fade-bottom)), #000000d9 calc(100% - var(--scroll-fade-bottom) * .87), #000000b3 calc(100% - var(--scroll-fade-bottom) * .75), #00000080 calc(100% - var(--scroll-fade-bottom) * .6), #0000004d calc(100% - var(--scroll-fade-bottom) * .45), #00000026 calc(100% - var(--scroll-fade-bottom) * .3), #0000000d calc(100% - var(--scroll-fade-bottom) * .15), #0000);
-  /* 横向同一套 7 档，只是方向换到 inline 轴（CDS v1/04 §4.3.1 的双轴复合遮罩） */
+  /* 横向同一套 7 档，只是方向换到 inline 轴（双轴复合遮罩） */
   --scroll-fade-mask-x: linear-gradient(to right, #0000, #0000000d calc(var(--scroll-fade-left) * .15), #00000026 calc(var(--scroll-fade-left) * .3), #0000004d calc(var(--scroll-fade-left) * .45), #00000080 calc(var(--scroll-fade-left) * .6), #000000b3 calc(var(--scroll-fade-left) * .75), #000000d9 calc(var(--scroll-fade-left) * .87), #000 var(--scroll-fade-left), #000 calc(100% - var(--scroll-fade-right)), #000000d9 calc(100% - var(--scroll-fade-right) * .87), #000000b3 calc(100% - var(--scroll-fade-right) * .75), #00000080 calc(100% - var(--scroll-fade-right) * .6), #0000004d calc(100% - var(--scroll-fade-right) * .45), #00000026 calc(100% - var(--scroll-fade-right) * .3), #0000000d calc(100% - var(--scroll-fade-right) * .15), #0000);
 }
 
@@ -1876,7 +1874,7 @@ body {
 }
 
 /* ── 2. 焦点环契约 ───────────────────────────────────────────────
-   CDS 明确不用操作系统的默认蓝色外框，而是品牌色的三层环：
+   不用操作系统的默认蓝色外框，而是品牌色的三层环：
      ① 1px 隔离垫片（隔开控件与光晕）② 1.5px 主聚焦环 ③ 6px 弥散光晕。
    本实现的取舍（写清理由，避免后来者以为是漏做）：
      · 第①层"垫片"用 **outline-offset 的间隙**表达，而不是 `inset` 阴影 ——
@@ -1884,7 +1882,7 @@ body {
        露出错误的一圈；间隙让真实的父级背景透出来，天然正确。
      · 第③层"光晕"不进全局基线：它必须走 box-shadow，而 box-shadow 会把控件
        自己的投影**整个顶掉**（焦点一落在带阴影的卡片上，阴影就跳一下）。
-       需要完整三层环的控件自己组合 `--focus-ring-shadow`（见 P1-8 的输入框）。
+       需要完整三层环的控件自己组合 `--focus-ring-shadow`。
    `--focus-ring-color` 单列成 token：换主题只改这一处，陶土主题即为 clay。 */
 :root {
   --focus-ring-color: var(--primary);
@@ -1918,7 +1916,7 @@ body {
   outline-offset: 0;
 }
 
-/* ── 2b. 输入框双环三态（CDS §1.4.4 Composer Dual-Ring）─────────
+/* ── 2b. 输入框双环三态（Composer Dual-Ring）────────────────────
    输入框是这套界面里唯一"必须有闭合外框 + 弥散投影"的常驻容器，
    三态共用一条**环境光**分量。环境光以色源 --bg-overlay 做 color-mix 派生，
    所以一份定义就能在明暗主题下都得到"该暗的暗"的投影，
@@ -1937,9 +1935,9 @@ body {
   --composer-shadow-focus: 0 4px 24px var(--composer-ambient-focus), inset 0 0 0 var(--sig-input-ring) var(--ring-inner), 0 0 0 var(--sig-input-ring) var(--ring-outer);
 }
 
-/* ── 2c. 单闭合边框纪律（CDS §1.4.2）──────────────────────────
+/* ── 2c. 单闭合边框纪律 ──────────────────────────────────────
    `.input-card` 自身已经有一圈闭合的环，它内部的工具栏按钮与模型选择器就不该
-   再各带一条边框 —— 否则同一条视线里会穿过两层边框，也就是 CDS 说的"套娃边框"。
+   再各带一条边框 —— 否则同一条视线里会穿过两层边框，也就是"套娃边框"。
    降级为 ghost 时**保留 1px 边框宽度、只把颜色置空**：改宽度会让控件尺寸跳一下，
    而且 1px 的透明描边还能托住 hover 填色的边缘。发送按钮除外（它是主操作，本就该有实底）。 */
 .input-card .input-actions .ant-btn:not(.send-btn) {
@@ -1958,7 +1956,7 @@ body {
     box-shadow: none !important;
 }
 
-/* ── 3. 排印防御（CDS v1/01 §1.5）──────────────────────────────
+/* ── 3. 排印防御 ───────────────────────────────────────────────
    这四条是"生成式前端最常见、也最显廉价"的排版缺陷，逐条给机制而不是逐处手改。 */
 
 /* ① 标题行均衡 / 正文去孤字。
@@ -2009,10 +2007,10 @@ body {
   }
 }
 
-/* ── 4. 按钮尺寸阶梯（CDS v1/08 §8.4 的五级阶梯）─────────────────
-   几何取自 CDS 的 XS/SM/MD/LG/XL = 20/24/28/32/40px 高 · 6/8/10/12/16px 水平内边距 ·
-   4/6/8/8/10px 圆角。**字号刻意不照抄** CDS 的 11/12/13/14/16px，两条理由：
-     ① 本仓有一条 12px 最小字号门禁，CDS 的 XS=11px 会破这条线；
+/* ── 4. 按钮尺寸阶梯（五级阶梯）─────────────────────────────────
+   几何取自 XS/SM/MD/LG/XL = 20/24/28/32/40px 高 · 6/8/10/12/16px 水平内边距 ·
+   4/6/8/8/10px 圆角。**字号刻意不照抄** 11/12/13/14/16px，两条理由：
+     ① 本仓有一条 12px 最小字号门禁，XS=11px 会破这条线；
      ② 字号只有 --ui-font-size 一个缩放入口，给按钮写死字号会让"整套等比缩放"失效。
    于是档位映射为 XS/SM → --fs-xs(12px)、MD/LG → --fs-base(14px)、XL → --fs-lg(16px)；
    高度与圆角按 style.md 的既定立场"不跟随字号缩放"，保持固定像素。
@@ -2037,7 +2035,7 @@ body {
 
 /* 只定几何（高度 / 水平内边距 / 字号），**不碰圆角与配色**：
    ① 圆角在本仓是**主题性格**（--sig-radius-button：notion 3px → aurora 10px），
-      CDS 的 4/6/8/8/10 若写死就与 8 个主题块打架，这比"阶梯完整"更早、也更根本；
+      4/6/8/8/10 若写死就与 8 个主题块打架，这比"阶梯完整"更早、也更根本；
    ② 配色逐处不同，而"单闭合边框原则"要求容器内的二级按钮不带边框 ——
       这两件事都不该由尺寸类决定。 */
 .btn-xs, .btn-sm, .btn-md, .btn-lg, .btn-xl {
@@ -2048,7 +2046,7 @@ body {
   white-space: nowrap;
   cursor: pointer;
   border-radius: var(--sig-radius-button);
-  /* 按压物理（CDS v1/02 §2.1.3）.cds-btn-squish）：按下 60ms 快缩（跟随手指），
+  /* 按压物理：按下 60ms 快缩（跟随手指），
      松开用 450ms 的 15 阶弹簧回弹（让 +9.15% 的过冲看得见）。
      两段刻意用不同曲线 —— 单段曲线两头都做不好：快了看不清过冲，慢了按下发黏。 */
   transform-origin: 50%;
@@ -2066,7 +2064,7 @@ body {
   transition: transform var(--dur-fast) var(--ease-out);
 }
 
-/* ── 密度档位（CDS v2 §3.3）──────────────────────────────────
+/* ── 密度档位 ──────────────────────────────────────────────────
    只覆盖**控件几何**：按钮高度/内边距、行头高度、顶栏高度。
    正文排版由 typography store 的四个旋钮管（字号/行距/间距/列宽），两套互不越界 ——
    否则"想字大一点但控件别变大"就做不到。
@@ -2100,7 +2098,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   padding-block: 16px;
 }
 
-/* ── 触控命中区补偿（CDS v2 §2.8）────────────────────────────
+/* ── 触控命中区补偿 ───────────────────────────────────────────
    视觉行高不动，用伪元素把**不可见**热区撑高。
    为什么不用负 margin：负 margin 只改变布局位置、不扩大命中盒；
    伪元素是父元素的一部分，指针命中后照样冒泡到按钮。
@@ -2130,19 +2128,19 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   }
 }
 
-/* ── 5. 微动效族（CDS v2/04 §4.1 的三族关键帧）──────────────────
+/* ── 5. 微动效族（三族关键帧）───────────────────────────────────
    骨架屏呼吸+扫光 / 胶囊微观形变 / 交错入场。全部走既有动效 token，
    减弱动效时由全局那个 `prefers-reduced-motion` 块统一压掉（不必逐族再写一遍）。 */
 :root {
   /* 交错入场相邻项的步长。单列成 token 是因为它要跨组件复用 ——
      写在各自的 animation-delay 里必然漂移。 */
   --dur-stagger: 60ms;
-  /* 卡片悬停时从底部漫出的品牌色微光（CDS v2 §2.6 的"首页卡片微光浮空"）。
+  /* 卡片悬停时从底部漫出的品牌色微光（"首页卡片微光浮空"）。
      用 --primary 的低比例混色而不是写死白/黑：明暗主题下都得到该有的方向。 */
   --card-hover-glow: color-mix(in srgb, var(--primary) 10%, transparent);
 }
 
-/* ① 骨架屏：两种模态（CDS v2 §3.5-2）。
+/* ① 骨架屏：两种模态。
    · lockstep（**默认**，结构密集的列表）：整体明暗呼吸，2.0s 一周期压到 60% 再复原。
      结构密集时逐块扫光会让整片区域持续闪烁，所以这类场景刻意**不**开扫光。
    · wave（显式 data-motion="wave"，大块内容区载入）：逐块按 90ms 偏移，
@@ -2175,7 +2173,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   /* 逐块偏移：调用方给每块写 --skel-i（0,1,2…），没有就按 0 处理 */
   animation-delay: calc(var(--skel-i, 0) * var(--dur-skel-stagger));
 }
-/* RTL 镜像（CDS v1/02 §2.3.3 的 255deg）：高光方向必须跟着阅读方向走 ——
+/* RTL 镜像（255deg）：高光方向必须跟着阅读方向走 ——
    在阿语界面里从左往右扫会和文字的反向阅读流打架。 */
 [dir='rtl'] .skeleton[data-motion='wave']::after {
   background: linear-gradient(255deg, transparent 35%, var(--bg-surface) 50%, transparent 65%);
@@ -2186,7 +2184,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
    （--ease-snap，严格 0% 超调），选中要"轻轻过冲再收"
    （--ease-overshoot，约 +30%）。 */
 @keyframes cdsPillDip { 0% { transform: scale(1); } 40% { transform: scale(0.94); } 100% { transform: scale(1); } }
-/* 两段式过冲（CDS v2/03 §3.5.1）：80ms 冲到 1.32 倍 → 再用 120ms 的 overshoot 曲线回落。
+/* 两段式过冲：80ms 冲到 1.32 倍 → 再用 120ms 的 overshoot 曲线回落。
    两段之和 = --dur-normal(200ms)，**总时长没变**，变的是"一条曲线走完"换成
    "快冲 + 带过冲的回落"：单条曲线做不出这种"先过头、再收敛"的物理感。 */
 @keyframes cdsPillPopUp { from { transform: scale(0.92); } to { transform: scale(1.32); } }
@@ -2219,7 +2217,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   .stagger-in > * { animation-delay: calc((sibling-index() - 1) * var(--dur-stagger)); }
 }
 
-/* ── 6. 失活行规范（CDS v2 §2.2 的 `tr[data-dimmed]`）──────────────
+/* ── 6. 失活行规范（`tr[data-dimmed]`）──────────────────────────
    "禁用"用**文字色降级**表达，而不是 opacity —— opacity 一旦加在父元素上，
    子元素无法恢复，而"行内控件必须保持满亮度"恰恰是这条规范的核心：
    否则用户会以为那个开关本身也被禁用了，就找不到"怎么把它重新启用"。
@@ -2234,7 +2232,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   color: var(--text-primary) !important;
 }
 
-/* ── 7. 氛围与微反馈（CDS v1 §4.2 / §3.2.1 / §4.1.1）────────────
+/* ── 7. 氛围与微反馈 ────────────────────────────────────────────
    三族：推理氛围光晕、思考三点波浪、复制成功勾。数值全部取自手册。 */
 :root {
   /* 推理光晕的双频周期。刻意两个不同周期（1.8s / 2.2s）相位叠加 ——
@@ -2248,17 +2246,17 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   /* 三点差分脉冲的周期（手册 `cds-dot-pulse` 的 1.8s）。
      不复用 --dur-pulse（1200ms）：后者是通用呼吸灯，两者节奏本就不同。 */
   --dur-dot-pulse: 1800ms;
-  /* 推理时的文字扫光周期（CDS 的 `cds-shimmer-text-shine`：严格 3s 一轮） */
+  /* 推理时的文字扫光周期（`cds-shimmer-text-shine`：严格 3s 一轮） */
   --dur-shimmer: 3000ms;
-  /* 线性扫光周期（CDS 的 `epitaxy-linear-sweep`：严格 1.1s） */
+  /* 线性扫光周期（`epitaxy-linear-sweep`：严格 1.1s） */
   --dur-sweep: 1100ms;
-  /* Diff 视图的密度阶梯（CDS v1 §5.5.1 的 --diffs-gap-inline / --diffs-gap-block）。
+  /* Diff 视图的密度阶梯（--diffs-gap-inline / --diffs-gap-block）。
      数值沿用本仓既有取值（14px / 8px），**没有**照搬手册的 12px / 4px：
      手册是给 17.5px 行高配的，而本仓行号 gutter 与代码行要逐行对齐（行高 20px），
      换值会让 gutter 与代码错位。token 化的意义是"以后调 diff 密度只改这两处"。 */
   --diff-gap-inline: 14px;
   --diff-gap-block: 8px;
-  /* diff 的字号与行高（CDS v1-05 的 --diffs-font-size / --diffs-line-height）。
+  /* diff 的字号与行高（--diffs-font-size / --diffs-line-height）。
      此前 .diff-files / .diff-stat / .diff-body / .diff-more 里各写一遍 12px、
      行高 20px 也是字面量 —— 收成两个 token 后只在这一处调整。 */
   --diff-font-size: var(--fs-xs);
@@ -2267,7 +2265,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
 
 /* ① 推理氛围光晕（`wl-glow`）：硬质品牌色内环 + 环境投影 + 50% 处涨到 85% 的漫反射。
    用 color-mix 而不是写死 rgba —— 换主题自动跟随主色。 */
-/* ② 推理时的文字扫光（CDS 的 `cds-shimmer-text-shine`）：3s 一轮、非对称缓动（快进慢出）。
+/* ② 推理时的文字扫光（`cds-shimmer-text-shine`）：3s 一轮、非对称缓动（快进慢出）。
    用 background-clip: text 把渐变裁到字面 —— 文字颜色在"暗 → 亮 → 暗"之间过渡，
    所以任何时刻文字都完整可见，只是扫过的那一段更亮。
    缓动刻意非对称（.714/.121/.211/.888）：对称曲线会让"扫过去"读成进度条，
@@ -2318,7 +2316,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   100% { opacity: 0; transform: scale(0.92); }
 }
 
-/* 灯箱共享元素形变（CDS v1 §5.2.2）：缩略图 ↔ 全屏图之间由浏览器补间位置与尺寸，
+/* 灯箱共享元素形变：缩略图 ↔ 全屏图之间由浏览器补间位置与尺寸，
    节奏统一到全站的 --dur-normal / --ease-out。
    这两条是**根级伪元素**（::view-transition-*），只能写在全局样式里 ——
    组件里的 scoped 选择器够不到它们。 */
@@ -2328,7 +2326,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   animation-timing-function: var(--ease-out);
 }
 
-/* ── 助手正文的右侧渐增留白（CDS v1/03 的 text-stop）────────────
+/* ── 助手正文的右侧渐增留白（text-stop）────────────────────────
    容器 ≤384px 不留白，到 704px 时达到 56px 封顶 —— 行太长时眼睛回行容易串行。
    只作用于**纯文字**消息：含代码块 / 表格 / 图表 / 图片的消息本来就需要整宽，
    在**选择器**上排除掉，比"加了再归零"简单，也没有 CSS 变量在 `100%` 解析
@@ -2344,7 +2342,7 @@ html[data-density='comfortable'] :where(.ant-table-tbody > tr > td, .ant-table-t
   padding-inline-end: clamp(0px, (100% - 384px) * 0.175, 56px);
 }
 
-/* ── 文件类型徽标（CDS v1/02 §2.5.4）────────────────────────────
+/* ── 文件类型徽标 ───────────────────────────────────────────────
    后缀大写、四字符上限（TS / PY / PDF / CSV），认不出时给 `FILE` 而不是留空 ——
    空白会让磁贴看起来像加载失败。
    写在全局而不是各自的 scoped 里，是因为消息附件行与 composer 磁贴要用**同一套规格**。 */

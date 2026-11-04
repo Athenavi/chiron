@@ -95,7 +95,7 @@ const padLeft = computed(() => (props.depth || 0) * 22)
 .tool-row-wrap[data-family='delegate'] .tool-name { color: var(--trajectory-tool-call, var(--primary, #2563eb)); }
 .tool-summary { flex: 1; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--text-tertiary); font-size: 12px; }
 
-/* running sweep 流光（deepseek ToolRow sweep）—— 借 CDS `epitaxy-linear-sweep` 两点：
+/* running sweep 流光（deepseek ToolRow sweep）—— 借 `epitaxy-linear-sweep` 两点：
    ① 用 transform 而不是 left 驱动。left 每帧触发**布局重算**，transform 交给合成器；
       工具行在流式期间会持续出现，长会话里这个差别是实打实的。
    ② 时长与曲线对到官方值（严格 1.1s / cubic-bezier(.45, 0, .55, 1)）。 */

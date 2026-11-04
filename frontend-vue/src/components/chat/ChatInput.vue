@@ -39,7 +39,7 @@ const props = defineProps<{
       对齐 reasonix 的 `composer-context`：绑定是"沉默生效"的，不显式呈现就是幽灵行为。 */
   contextChips?: ContextChip[]
   /** 发送失败、已暂存在本地的消息条数。>0 时在操作行上方出现横幅
-      （对应 CDS 2.0 §2.3 的 ChatComposerQueuedMessages）。 */
+      （对应 ChatComposerQueuedMessages）。 */
   failedQueueCount?: number
 }>()
 
@@ -1124,7 +1124,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
             v-else
             class="att-thumb-file"
           >
-            <!-- 类型徽标取代通用文件图标（CDS v1/02 §2.5.4）：TS / PY / PDF 一眼可辨 -->
+            <!-- 类型徽标取代通用文件图标：TS / PY / PDF 一眼可辨 -->
             <span class="file-type-badge">{{ fileTypeBadge(att.name) }}</span>
             <span class="att-thumb-name">{{ att.name }}</span>
           </div>
@@ -1162,7 +1162,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
         style="display: none"
         @change="onFileChange"
       >
-      <!-- 未送达消息横幅（CDS 2.0 ChatComposerQueuedMessages）：只在有暂存时出现。
+      <!-- 未送达消息横幅（ChatComposerQueuedMessages）：只在有暂存时出现。
            走 --warning 色系而不是 --error —— 它描述的是"待处理"，不是"已经出错了"。 -->
       <div
         v-if="failedQueueCount"
@@ -1373,7 +1373,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
             {{ $t('common.generating') }}<span class="tnum-fixed">{{ elapsed }}s</span>
           </span>
           <span class="input-hint">{{ $t('common.enter_to_send_shift_enter_for_newline') }}</span>
-          <!-- 运行中补充指令（steer，P0-3）：只在"正在跑 + 手上有草稿"时出现。
+          <!-- 运行中补充指令（steer）：只在"正在跑 + 手上有草稿"时出现。
                此时 Enter 是"打断并发送"、停止按钮是"停"，两条路都会丢掉这一轮已跑的部分；
                这里给第三条：话带到了，回合接着跑。 -->
           <Button
@@ -1433,7 +1433,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
   padding: 12px 14px 10px;
   /* 扔掉描边：层次由背景色阶承担；
      三态投影（常态/悬停/聚焦）由 style.css 的 --composer-shadow* 提供，
-     对齐 CDS §1.4.4 的 Composer Dual-Ring。 */
+     对齐 Composer Dual-Ring。 */
   border: 0; border-radius: var(--input-card-r);
   background: var(--bg-input);
   box-shadow: var(--composer-shadow);
@@ -1459,7 +1459,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
 .input-field :deep(textarea)::-webkit-scrollbar {
   display: none; /* Chromium / WebKit */
 }
-/* 未送达消息横幅（CDS 2.0 ChatComposerQueuedMessages）。
+/* 未送达消息横幅（ChatComposerQueuedMessages）。
    走 --warning 色系而不是 --error —— 它描述的是"待处理"，不是"已经出错了"。 */
 .outbox-banner {
   display: flex; align-items: center; gap: 8px;
@@ -1545,7 +1545,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
   .mode-label { display: none; }              /* 极窄：标签去掉，只留下拉本体 */
   .model-select { width: 118px; }
 }
-/* 极窄容器的**防溢出安全网**（CDS v1/06 §6.6 的第 4 档 `<320px`）：
+/* 极窄容器的**防溢出安全网**（第 4 档 `<320px`）：
    到这个宽度，固定 px 的宽度会把模型选择器顶出卡片边界。这里改用**容器宽度单位**
    兜底而不是再写一个更小的 px —— 分栏、嵌入侧栏等"比 320px 还窄"的场景也能
    继续按比例收缩，而不是在某个阈值以下突然溢出。 */
@@ -1588,7 +1588,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
   transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;
 }
 .context-chip__x:hover { color: var(--danger, var(--error)); }
-/* 7.5rem 正方形磁贴（CDS v1/02 §2.5.1）：120px 是官方基准值。本仓取整数 120px
+/* 7.5rem 正方形磁贴：120px 是基准值。本仓取整数 120px
    而不是 `calc(7.5rem * rem-scale)` 的 112.9px —— 磁贴是图片的"预览框"，
    尺寸稳定比跟随缩放因子更要紧。移动端在下面按视口收窄。 */
 .att-thumb { position: relative; width: 120px; height: 120px; border-radius: var(--sig-radius-card); border: var(--hairline-width) solid var(--border); background: var(--bg-card); overflow: hidden; }
@@ -1597,7 +1597,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
 .att-thumb-name { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .att-remove { position: absolute; top: 4px; right: 4px; width: 20px; height: 20px; border-radius: 50%; border: none; background: var(--bg-overlay); color: var(--on-solid); display: flex; align-items: center; justify-content: center; cursor: pointer; font-size: var(--fs-xs); transition: background var(--dur-fast) ease, transform var(--dur-fast) var(--ease-out); }
 .att-remove:hover { background: var(--error); }
-/* 按压回馈（CDS 的 `active:scale-90`）：磁贴右上角的小圆钮，不缩一下几乎感觉不到点中了 */
+/* 按压回馈（`active:scale-90`）：磁贴右上角的小圆钮，不缩一下几乎感觉不到点中了 */
 .att-remove:active { transform: scale(0.9); }
 /* 移动端磁贴收窄：120px 在 375px 宽的屏上只放得下 2 个（还要留输入卡片的边距），
    88px 能并排 3 个；≤576px 再降到 72px 留出余量。形态仍是磁贴，不是退回成 chip。 */
@@ -1625,7 +1625,7 @@ defineExpose({ insertText, setCommandDraft, setDraft })
   0%, 100% { opacity: 1; }
   50% { opacity: 0.5; }
 }
-/* 录音电平柱（CDS v1 §5.1.3）：6 频段、4–24px，高度由 --level(0..1) 驱动。
+/* 录音电平柱：6 频段、4–24px，高度由 --level(0..1) 驱动。
    刻意**不加 transition**：rAF 每帧直接写值已经足够平滑，加过渡反而滞后于音量。 */
 .mic-bars { display: inline-flex; align-items: flex-end; gap: 2px; height: 24px; }
 .mic-bar {

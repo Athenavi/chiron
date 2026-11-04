@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 /**
- * `ChatView` 的**交互级**测试（§6 #5 想要的那一层，**零新依赖**）。
+ * `ChatView` 的**交互级**测试（**零新依赖**）。
  *
  * 与 `ChatView.spec.ts`（冒烟网：能挂载 / 初始加载 / 卸载不炸）的区别：这里**真的走一遍**
  * 「输入 → 提交 → 建 SSE → 收到帧 → 落成 transcript 条目」这条链 —— 冒烟网把重子组件全打桩，
@@ -225,7 +225,7 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
   })
 
   /**
-   * §4.7 的**接线级**验证（2026-10-09）。
+   * **接线级**验证（2026-10-09）。
    *
    * 第 120 轮把活跃判据从「位置」改成「生命周期」（`ProjectionInput.running` ← `MessageList` 的 `loading`），
    * 但那条修复只在**投影层**被测过。这里从交互层钉住**接线**：提交后 `loading` 真的为真、
@@ -294,7 +294,7 @@ describe('ChatView 交互级：提交 → SSE 帧 → transcript', () => {
     expect(stopped.length).toBeGreaterThanOrEqual(1)
   })
 
-  it('★ 提交后 loading 为真；不带 token 的 done 把它置回 false（§4.7 接线级）', async () => {
+  it('★ 提交后 loading 为真；不带 token 的 done 把它置回 false（接线级）', async () => {
     const { vm } = await mountWithSession()
     // 真值读法：`vm.loading`（不是 props —— 见上面那条注释的 ①）
     expect(vm.loading).toBe(true)

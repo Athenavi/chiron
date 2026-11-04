@@ -202,7 +202,7 @@ export default {
   usage_group_day: "Date",
   usage_group_model: "Model",
   usage_group_user: "User",
-  // ── Invoice review (P1-2, admin side) ──
+  // ── Invoice review (admin side) ──
   invoice_review: "Invoice review",
   invoice_review_desc: "Requests submitted by users. Only pending ones are shown by default; a decision cannot be undone — approving means the invoice has actually been issued offline.",
   invoice_review_filter_pending: "Pending",
@@ -228,7 +228,7 @@ export default {
   invoice_status_pending: "Pending",
   invoice_status_approved: "Approved",
   invoice_status_rejected: "Rejected",
-  // ── New-user onboarding funnel (P0-3 acceptance: completion rate must be queryable) ──
+  // ── New-user onboarding funnel (acceptance: completion rate must be queryable) ──
   onboarding_funnel_title: "New-user onboarding completion",
   onboarding_funnel_entered: "Entered guide",
   onboarding_funnel_finished: "Finished flow",
@@ -237,7 +237,7 @@ export default {
   onboarding_funnel_skipped: "Skipped",
   onboarding_funnel_pending: "Pending",
   onboarding_funnel_empty: "No user has entered the guide yet — this only covers accounts registered after the feature shipped.",
-  // ── Package catalog management (P2-2c) ──
+  // ── Package catalog management ──
   packages_admin_title: "Package catalog",
   packages_admin_desc: "Packages configured here appear on the user's Packages tab and affect real charges. Changing a price does not alter entitlements already sold — those were snapshotted at purchase.",
   packages_admin_new: "New package",

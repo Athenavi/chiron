@@ -38,7 +38,7 @@ const props = defineProps<{
   loadingEarlier?: boolean     // P 性能：正在加载更早消息
   /** 上一次拉取更早消息失败（可重试）。与"没有更多"是两回事，不能都静默。 */
   earlierLoadFailed?: boolean
-  /** P2-E: 首次加载会话历史时的骨架屏 */
+  /** 首次加载会话历史时的骨架屏 */
   initialLoading?: boolean
   /** 行尺寸测量（默认 offsetHeight）。注入点让窗口化逻辑可在无布局环境下被测试。 */
   measureRow?: (el: HTMLElement) => number
@@ -56,13 +56,13 @@ const props = defineProps<{
 
 const emit = defineEmits<{
   (e: 'load-earlier'): void
-  /** P1-1 用户消息编辑后重发 */
+  /** 用户消息编辑后重发 */
   (e: 'retry-from', itemId: string, text: string): void
-  /** P1-1 助手消息重新生成 */
+  /** 助手消息重新生成 */
   (e: 'regenerate', itemId: string): void
-  /** P2-F 停止后继续生成 */
+  /** 停止后继续生成 */
   (e: 'continue', itemId: string): void
-  /** P1-3 失败消息重试 */
+  /** 失败消息重试 */
   (e: 'retry-failed', itemId: string): void
   /** 选中文本：引用到输入框（由父组件转交给 ChatInput） */
   (e: 'quote-text', text: string): void
@@ -102,7 +102,7 @@ const windowRange = ref<WindowRange>({ start: 0, end: 0, tailStart: 0, tailEnd: 
 const fullRender = ref(true)
 let coverFailures = 0
 
-/* ── 新消息入场门控（CDS v1 §4.1.1）────────────────────────────
+/* ── 新消息入场门控 ────────────────────────────────────────────
    只有"真的新到"的行才播一次入场：已见过的 id 记在 seenIds 里，所以窗口化滚出/滚回
    导致的**重新挂载**不会重播动画。
    两条额外规则：① 一次性冒出很多 id（切会话 / 载入历史）不播 —— 那是换了页面而不是来了新消息；
@@ -161,7 +161,7 @@ const projection = computed(() => projectTranscript({
   mode: 'grouped',
   folds: folds.value,
   residentTailTurns: props.residentTailTurns ?? DEFAULT_RESIDENT_TAIL_TURNS,
-  // 生命周期信号（§4.7）：`loading` 为 false 时**没有**活跃回合 ——
+  // 生命周期信号：`loading` 为 false 时**没有**活跃回合 ——
   // 否则"不带 token 的 done"会让最后一轮永远显示 running。
   running: props.loading,
 }))
@@ -321,12 +321,12 @@ onMounted(() => {
 })
 
 /**
- * 更新后的「测量 + 窗口重算」**按帧合并**（2026-10-09，§4.3 的后半）。
+ * 更新后的「测量 + 窗口重算」**按帧合并**（2026-10-09）。
  *
  * 原先 `onUpdated` 每次都全量跑 `measureMountedRows()`（`querySelectorAll` + 逐行
  * `offsetHeight`）+ `recomputeWindow()` —— 而**流式期间每个 delta 都会触发一次 updated**
  * ⇒ 一秒内几十次全量测量。滚动路径早就有 `scheduleWindowRecompute()` 做 rAF 节流，
- * **更新路径没有**（这正是 §4.3 记的那条）。
+ * **更新路径没有**（这正是当初记下的那条）。
  *
  * 这里用仓库里现成的 `throttleRaf`（此前**零调用点**）：同一帧内多次 updated 只测量/重算一次。
  * **语义不变的部分**：测量仍发生在 DOM 更新**之后**（`onUpdated` 本身就是 post-flush，
@@ -523,7 +523,7 @@ function scrollToBottom() {
 
 // 对外只暴露"意图"，**不暴露元素**：父组件（会话加载完成后回底）必须走单写者，
 // 否则直接写 `.message-list` 的 scrollTop 会绕过输入租约与 writer provenance
-// （契约见 docs/transcript-contract.md §1.1）。
+// （契约见 docs/transcript-contract.md）。
 defineExpose({ scrollToBottom })
 
 // 跳转（轨迹面板 / 提问导航条 / 会话内检索）：滚动到目标行 + 高亮闪烁
@@ -550,7 +550,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
     @touchstart.passive="onUserInput"
     @mouseup="onSelectionUp"
   >
-    <!-- P2-E: 首次加载骨架屏 -->
+    <!-- 首次加载骨架屏 -->
     <div
       v-if="initialLoading"
       class="skeleton-list"
@@ -740,7 +740,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 .message-list { flex: 1; overflow-y: auto; position: relative; contain: layout style; }
 .list-empty-placeholder { height: 24px; }
 
-/* P2-E: 首屏骨架屏 */
+/* 首屏骨架屏 */
 .skeleton-list { padding: 16px 24px; }
 .skeleton-msg { display: flex; gap: 12px; margin-bottom: 24px; }
 .skeleton-msg.user { flex-direction: row-reverse; }
@@ -772,7 +772,7 @@ const badgeText = computed(() => (unseenCount.value > 99 ? '99+' : String(unseen
 /* 窗口占位：只提供高度，不参与锚点身份收集 */
 .window-spacer { width: 100%; flex: none; }
 .loading-indicator { display: flex; justify-content: center; gap: 6px; padding: 14px 0; }
-/* 三点波浪的形状/节奏由全局 .loading-dots 提供（CDS v1 §3.2.1，见 src/style.css） */
+/* 三点波浪的形状/节奏由全局 .loading-dots 提供（见 src/style.css） */
 .back-to-bottom {
  position: sticky; bottom: 16px; left: calc(50% - 22px); width: 44px; height: 44px; border-radius: 50%; border: var(--hairline-width) solid var(--border); background: var(--bg-card); color: var(--text-secondary); cursor: pointer; box-shadow: var(--sig-shadow-card); display: flex; align-items: center; justify-content: center; z-index: var(--z-sticky); 
   transition: color var(--dur-fast) ease, background-color var(--dur-fast) ease, border-color var(--dur-fast) ease;

@@ -1,6 +1,6 @@
 <script setup lang="ts">
 /**
- * 用户级 API Key 自助管理（P1-3 / T2）。
+ * 用户级 API Key 自助管理。
  *
  * 与 `views/admin/ApiKeysView.vue` **不是同一个东西**：那个页面管的是 LLM 供应商
  * 密钥池（`/v1/admin/api-keys`，带 provider / base_url / weight），属于平台运营配置，

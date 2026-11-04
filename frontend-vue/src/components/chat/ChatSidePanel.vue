@@ -104,7 +104,7 @@ const emit = defineEmits<{
   (e: 'rename', id: string, currentTitle: string): void
   (e: 'pin', id: string, pinned: boolean): void
   (e: 'share', id: string): void
-  /** P3-D: 设置会话标签 */
+  /** 设置会话标签 */
   (e: 'tag', id: string, tag: string): void
   /** 移除单个上下文芯片（父级同步改写路由 query；同类可能还有其它值） */
   (e: 'remove-context', type: ContextChip['type'], value: string): void
@@ -315,7 +315,7 @@ const filteredSessions = computed(() => {
   const q = sessionQuery.value.trim().toLowerCase()
   const all = props.sessions || []
   let list = all
-  // P3-D: 按标签筛选
+  // 按标签筛选
   if (activeTag.value) {
     list = list.filter(s => (s.tag || '') === activeTag.value)
   }
@@ -323,7 +323,7 @@ const filteredSessions = computed(() => {
   return list.filter(s => (s.title || '').toLowerCase().includes(q))
 })
 
-// P3-D: 会话标签筛选（候选 = 预设 + 已使用过的；用户可自定义，见 sessionTags.ts）
+// 会话标签筛选（候选 = 预设 + 已使用过的；用户可自定义，见 sessionTags.ts）
 const activeTag = ref('')
 // 从所有会话中提取已使用的标签
 const usedTags = computed(() => {
@@ -379,7 +379,7 @@ const BUCKET_LABELS = computed<Record<string, string>>(() => ({
   today: tr('common.today'), yesterday: tr('common.yesterday'), within7Days: tr('common.within_7_days'), earlier: tr('common.earlier'),
 }))
 
-// P2-B: 会话按时间分组（置顶单独一组，其余按 今日/昨天/7天/更早）
+// 会话按时间分组（置顶单独一组，其余按 今日/昨天/7天/更早）
 interface SessionGroup { label: string; sessions: ChatSession[] }
 const groupedSessions = computed<SessionGroup[]>(() => {
   const list = filteredSessions.value
@@ -705,7 +705,7 @@ function pickSession(id: string) {
             @click="sessionQuery = ''"
           />
         </div>
-        <!-- P3-D: 标签筛选 chips -->
+        <!-- 标签筛选 chips -->
         <div
           v-if="usedTags.length"
           class="tag-filter"
@@ -730,7 +730,7 @@ function pickSession(id: string) {
         >
           {{ $t('chat.no_conversations_yet') }}
         </div>
-        <!-- P2-B: 按时间分组渲染（置顶/今天/昨天/7天内/更早） -->
+        <!-- 按时间分组渲染（置顶/今天/昨天/7天内/更早） -->
         <template
           v-for="group in groupedSessions"
           :key="group.label"
@@ -751,7 +751,7 @@ function pickSession(id: string) {
           >
             <div class="session-info">
               <div class="session-title-line">
-                <!-- 运行中心跳（CDS 2.0 侧栏的 isRunning 呼吸光晕环）：
+                <!-- 运行中心跳（侧栏的 isRunning 呼吸光晕环）：
                      并发跑多个会话时，一眼看得出谁还在跑、谁已经停下。 -->
                 <span
                   v-if="runningSessionIds.has(s.id)"
@@ -807,7 +807,7 @@ function pickSession(id: string) {
                   >
                     <PushpinOutlined class="menu-icon" />{{ s.pinned ? $t('common.unpin') : $t('common.pin_to_top') }}
                   </MenuItem>
-                  <!-- P3-D: 标签设置（用 MenuDivider 分组，避免 SubMenu 在 Dropdown overlay 中丢失上下文） -->
+                  <!-- 标签设置（用 MenuDivider 分组，避免 SubMenu 在 Dropdown overlay 中丢失上下文） -->
                   <MenuDivider />
                   <MenuItem
                     v-for="t in tagOptions"
@@ -1130,11 +1130,11 @@ function pickSession(id: string) {
 .sessions-head { flex: none; display: flex; flex-direction: column; gap: 8px; padding: 10px 12px 0; }
 .session-list { flex: 1; overflow-y: auto; padding: 6px; scrollbar-width: thin; scrollbar-color: var(--text-disabled) transparent; }
 
-/* P3-D: 标签筛选与展示 */
+/* 标签筛选与展示 */
 .tag-filter { display: flex; gap: 6px; padding: 4px 12px 8px; flex-wrap: wrap; }
 .tag-chip { padding: 2px 10px; border-radius: var(--sig-radius-button); box-shadow: inset 0 0 0 var(--hairline-width) var(--border); background: var(--bg-card); color: var(--text-tertiary); font-size: var(--fs-xs); cursor: pointer; transition: box-shadow var(--dur-fast), color var(--dur-fast); }
 .tag-chip:hover { box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); color: var(--primary); }
-/* 按下塌陷：跟手、不回头（--ease-snap，严格 0% 超调），见 style.css §5 */
+/* 按下塌陷：跟手、不回头（--ease-snap，严格 0% 超调），见 style.css */
 .tag-chip:active { animation: cdsPillDip var(--dur-snap) var(--ease-snap); }
 .tag-chip.active { background: var(--primary); color: var(--on-solid); box-shadow: inset 0 0 0 var(--hairline-width) var(--primary); }
 .session-tag { display: inline-block; padding: 0 6px; border-radius: var(--sig-radius-card); background: var(--bg-hover); color: var(--text-tertiary); font-size: var(--fs-xs); line-height: 16px; margin-inline-start: 4px; flex-shrink: 0; }

@@ -2,7 +2,7 @@ import { api } from '../api'
 import { hasExplicitLocale, setLocale, setLocaleSyncHook } from '../i18n'
 
 /**
- * 把界面语言同步到 `users.settings.locale`（P2-3 / T1）。
+ * 把界面语言同步到 `users.settings.locale`。
  *
  * 为什么需要它：站内通知由前端按当前语言渲染，但**邮件是服务端拼的**，只能读
  * `users.settings.locale` 决定语言。此前语言只存 `localStorage['chiron.locale']`，

@@ -99,7 +99,7 @@ const WIDTH_KEY = 'chiron:split-width:v1'
 const MIN_WIDTH = 260
 /** 上限 = 容器宽度的这个比例：保证主区域永远留得下可用宽度 */
 const MAX_RATIO = 0.6
-/** 指针死区（CDS v1 §5.3.2 的 `qM = 4px`）：轻点手柄或手抖不该被当成拖拽 ——
+/** 指针死区（`qM = 4px`）：轻点手柄或手抖不该被当成拖拽 ——
  *  没有它时，单击一次分割条就会把「内容决定宽度」变成固定 px 宽度，还会写进本地记忆。 */
 const DEAD_ZONE_PX = 4
 

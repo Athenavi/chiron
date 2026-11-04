@@ -2,7 +2,7 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { mount, flushPromises } from '@vue/test-utils'
 
 /**
- * 管理端「发票审核」页（P1-2）的关键接线。
+ * 管理端「发票审核」页的关键接线。
  *
  * 为什么值得钉住：
  *  - **默认只看待审**。审核页第一屏必须是"等我处理的事"；如果默认拉全量，

@@ -11,7 +11,7 @@ import {
 import type { NotificationItem } from '../../api/notifications'
 
 /**
- * `utils/notificationRender.ts` 的测试（T1）。
+ * `utils/notificationRender.ts` 的测试。
  *
  * 为什么用**真实 i18n 实例**而不是 stub 的 `t`：这个模块的全部意义就是"按当前
  * 界面语言渲染"，用假 t 只能证明"调了 t"，证明不了三语模板真的存在且键没写错。
@@ -257,7 +257,7 @@ describe('未知 kind（后端新增事件而前端未跟上）', () => {
   })
 })
 
-describe('历史通知跟随语言切换（T1 的核心验收）', () => {
+describe('历史通知跟随语言切换（核心验收）', () => {
   it('同一条通知在三种语言下渲染出三种语言', () => {
     const item = note({ kind: 'member_invited', payload: { tenant_name: 'Acme' } })
 

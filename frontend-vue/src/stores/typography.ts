@@ -5,7 +5,7 @@
  * 行间距、内容列宽以及后续的行式组件读取，逐个透传会让每个新组件都得记得接一遍；
  * 变量只写一次，且切换主题时不需要重新应用（主题改的是另一批变量）。
  *
- * **密度与排版是两套旋钮，互不越界**（CDS v2 §3.3）：
+ * **密度与排版是两套旋钮，互不越界**：
  * 排版管"正文怎么读"（字号/行距/间距/列宽），密度管"控件多紧凑"（按钮高度/内边距/行高）。
  * 混成一个档位的话，想"字号大一点但控件别变大"就做不到。
  */
@@ -108,7 +108,7 @@ export const useTypographyStore = defineStore('typography', () => {
     const root = document.documentElement
     root.style.setProperty('--chat-text-size', `${state.value.textSize}px`)
     root.style.setProperty('--chat-text-leading', String(state.value.leading))
-    // 间距写成**相对公式**而不是固定 px（CDS v1/03 的 chat-body × chat-leading 基准）：
+    // 间距写成**相对公式**而不是固定 px（chat-body × chat-leading 基准）：
     // 字号或行高调大时行距要跟着放大 —— 固定 px 会让"字变大之后行反而更挤"。
     // 比例由「用户选的 px 值 ÷ 默认字号行距积」反推，所以**默认观感与改前逐像素相同**，
     // 已有存档（gap: 6）也不需要迁移。

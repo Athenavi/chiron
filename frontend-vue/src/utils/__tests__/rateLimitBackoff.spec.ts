@@ -18,7 +18,7 @@ const noJitter = () => 0.5
 const minJitter = () => 0
 const maxJitter = () => 1
 
-describe('限流退避（CDS v1/06 §6.7）', () => {
+describe('限流退避', () => {
   it('只把 429 / 503 当限流，其它状态码绝不走重试', () => {
     expect(isRateLimitStatus(429)).toBe(true)
     expect(isRateLimitStatus(503)).toBe(true)

@@ -202,7 +202,7 @@ export default {
   usage_group_day: "التاريخ",
   usage_group_model: "النموذج",
   usage_group_user: "المستخدم",
-  // ── مراجعة الفواتير (P1-2، جهة الإدارة) ──
+  // ── مراجعة الفواتير (جهة الإدارة) ──
   invoice_review: "مراجعة الفواتير",
   invoice_review_desc: "طلبات الفواتير التي قدّمها المستخدمون. تُعرض الطلبات المعلّقة فقط افتراضيًا، والقرار غير قابل للتغيير — الموافقة تعني أن الفاتورة أُصدرت فعليًا خارجيًا.",
   invoice_review_filter_pending: "قيد المراجعة",
@@ -228,7 +228,7 @@ export default {
   invoice_status_pending: "قيد المراجعة",
   invoice_status_approved: "موافَق عليه",
   invoice_status_rejected: "مرفوض",
-  // ── قمع إرشاد المستخدم الجديد (P0-3) ──
+  // ── قمع إرشاد المستخدم الجديد ──
   onboarding_funnel_title: "نسبة إكمال إرشاد المستخدم الجديد",
   onboarding_funnel_entered: "بدأوا الإرشاد",
   onboarding_funnel_finished: "أكملوا المسار",
@@ -237,7 +237,7 @@ export default {
   onboarding_funnel_skipped: "تم التخطي",
   onboarding_funnel_pending: "معلّقة",
   onboarding_funnel_empty: "لم يبدأ أي مستخدم الإرشاد بعد — تغطي هذه الإحصاءات الحسابات المسجَّلة بعد إطلاق الميزة فقط.",
-  // ── إدارة كتالوج الحزم (P2-2c) ──
+  // ── إدارة كتالوج الحزم ──
   packages_admin_title: "كتالوج الحزم",
   packages_admin_desc: "تظهر الحزم المُعدّة هنا في تبويب «الحزم» لدى المستخدم وتؤثر على المبالغ المحصّلة فعليًا. تغيير السعر لا يمسّ الاستحقاقات المُباعة سابقًا — فقد تم التقاط نسخة منها عند الشراء.",
   packages_admin_new: "حزمة جديدة",

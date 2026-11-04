@@ -152,7 +152,7 @@ const alertColumns = [
 const alerts = ref<{ time: string; level: string; message: string }[]>([])
 
 /**
- * 新用户引导漏斗（P0-3 验收「完成率可查」）。
+ * 新用户引导漏斗（验收「完成率可查」）。
  *
  * `null` 表示还没拿到数据（或接口失败）—— 此时整张卡片不渲染，
  * 避免在管理首页放一个空的"完成率 0%"让人误以为引导完全无效。
@@ -409,7 +409,7 @@ onUnmounted(() => {
         </Col>
       </Row>
 
-      <!-- 新用户引导漏斗（P0-3 验收「完成率可查」）：只读统计，数据来自 user_onboarding -->
+      <!-- 新用户引导漏斗（验收「完成率可查」）：只读统计，数据来自 user_onboarding -->
       <Card
         v-if="onboardingFunnel"
         class="chart-card onboarding-funnel-card"

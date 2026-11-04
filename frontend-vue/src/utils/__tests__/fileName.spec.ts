@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { fileTypeBadge, splitFileName } from '../fileName'
 
-describe('文件名双向中间截断（CDS v1/02 §2.5.3）', () => {
+describe('文件名双向中间截断', () => {
   it('短名字整段留在 tail，不做无意义的切分', () => {
     expect(splitFileName('a.ts')).toEqual({ head: '', tail: 'a.ts' })
     expect(splitFileName('readme.md')).toEqual({ head: '', tail: 'readme.md' })
@@ -52,7 +52,7 @@ describe('文件名双向中间截断（CDS v1/02 §2.5.3）', () => {
   })
 })
 
-describe('文件类型徽标（CDS v1/02 §2.5.4）', () => {
+describe('文件类型徽标', () => {
   it('后缀转大写', () => {
     expect(fileTypeBadge('main.ts')).toBe('TS')
     expect(fileTypeBadge('script.py')).toBe('PY')

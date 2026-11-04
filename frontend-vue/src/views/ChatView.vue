@@ -857,7 +857,7 @@ function ensureModel(): boolean {
 const tourRef = ref<InstanceType<typeof ChatSetupTour> | null>(null)
 
 /**
- * 新用户引导（P0-3）的三步清单。与上面那个 `Tour` **职责不同**：
+ * 新用户引导的三步清单。与上面那个 `Tour` **职责不同**：
  * 那个是"被拦下时带路"，这个是"注册后首次进入"；触发条件不同，不合并。
  *
  * 解构成顶层 ref 才能在模板里自动解包（`onboarding.open` 这种嵌套引用不会）。
@@ -899,7 +899,7 @@ function goConfigureModel(): void {
 }
 
 /**
- * 引导里点「去选模型 / 去发消息」后的落点（P0-3）。
+ * 引导里点「去选模型 / 去发消息」后的落点。
  *
  * 不新开页面：这三步本来就该在当前会话里完成。用语义锚点（`data-tour`）找元素，
  * 与 `TOUR_ANCHORS` 共用一套 —— 蹭样式重构不会把它找断。
@@ -1010,7 +1010,7 @@ const contextChips = ref<ContextChip[]>([])
 const errorBanner = ref('')          // query.error 提示
 const unifiedSessionId = ref('')     // 统一任务会话 id（query.task）
 const unifiedSubmitMode = ref('auto') // 会话创建时的 mode（shared_context.mode 优先）
-// P1-e：**统一任务模式（TaskRouter 自动编排）已并入常规对话链路**。
+// **统一任务模式（TaskRouter 自动编排）已并入常规对话链路**。
 // 常规链路（SSE /submit → AgentTask）才是模式/模型/工具集/上下文全部生效的那条；
 // 保留两条会让"切换模式/模型"看起来只对其中一条起作用（见 docs/session-runtime-spec.md）。
 // 恒为 false 即停用分流，unifiedSessionId 等相关代码保留以便回退。
@@ -1187,7 +1187,7 @@ async function resolveAttachmentUrls(attachments?: ChatAttachment[]): Promise<Ch
 /**
  * 消息列表组件句柄。**只用来提交"意图"**（回底），不碰 DOM —— 直接写 `.message-list` 的
  * `scrollTop` 会绕过 `transcriptViewport` 的输入租约与 writer provenance
- * （契约见 docs/transcript-contract.md §1.1："别处直接写 scrollTop 一律视为缺陷"）。
+ * （契约见 docs/transcript-contract.md："别处直接写 scrollTop 一律视为缺陷"）。
  */
 const messageListRef = ref<InstanceType<typeof MessageList> | null>(null)
 
@@ -1694,7 +1694,7 @@ onMounted(async () => {
   window.addEventListener('online', onOnline)
   window.addEventListener('offline', onOffline)
   // 全局键盘快捷键由 useKeyboardShortcuts 自行注册/注销（见文件上方）
-  // 新用户引导（P0-3）：首次进入会话页时按服务端进度决定要不要弹。
+  // 新用户引导：首次进入会话页时按服务端进度决定要不要弹。
   // 不 await：引导是可选的，不该拖慢会话加载；接口失败在 composable 里静默吞掉。
   if (authStore.user?.id) void maybeOpenOnboarding()
 })
@@ -1998,7 +1998,7 @@ async function switchSession(id: string) {
     if (mySeq === switchSeq.value) {
       loading.value = false
       initialLoading.value = false
-      // 会话加载完成后自动滚到底部：**走单写者**（契约 §1.1；此处原先直接写 DOM）
+      // 会话加载完成后自动滚到底部：**走单写者**（同一契约；此处原先直接写 DOM）
       await nextTick()
       messageListRef.value?.scrollToBottom()
     }
@@ -2440,7 +2440,7 @@ function onSSEMessage(raw: unknown, sid: string) {
       notify.error(raw ? actionableStreamError(raw) : t('errors.request_failed_2'))
     }
   } else if (type === 'superagent.takeover_ended' && String(d.status ?? '') === 'budget_exhausted') {
-    // 预算耗尽自动停（P1-2.7 的硬闸门）：这是**系统**终止，不是用户点停。
+    // 预算耗尽自动停（硬闸门）：这是**系统**终止，不是用户点停。
     // 遮罩只会突然消失，不给一行说明，用户看到的就是"接管莫名其妙没了"。
     // 与中断留痕同一种 notice 条目，保证"被动结束"的观感一致；
     // 之后仍走一次快照对齐，遮罩以快照为准撤下。
@@ -2534,7 +2534,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
       body.attachments = resolvedAtts.map(a => ({ id: a.id, name: a.name, mime_type: a.mimeType, url: a.url, is_image: a.isImage }))
     }
     await api.post('/submit', body)
-    // 新用户引导第三步：消息真的被服务端接收了才算完成（P0-3）。
+    // 新用户引导第三步：消息真的被服务端接收了才算完成。
     // 放在这之后而不是之前：POST 失败会走 catch，那时"发出第一轮对话"并没有发生。
     void markFirstMessageDone()
     return true
@@ -2545,7 +2545,7 @@ async function sendMessage(text: string, attachments?: ChatAttachment[]): Promis
     flushStreamingFlags()
     const reason = describeApiError(e)
     // meta 必须一起带上：少了 code/retry_after_seconds，错误块就退化成"只有一句重试"，
-    // 余额不足拿不到"去充值"、限流拿不到"等 N 秒"—— 正是 P0-2 要修的那条裂缝。
+    // 余额不足拿不到"去充值"、限流拿不到"等 N 秒"—— 正是要修的那条裂缝。
     markMessageFailed(userItemId, reason, describeFailureMeta(e))
     notify.error(t('errors.send_failed') + reason)
     // 落盘暂存：这条消息**没有**被服务端接收（POST 失败），刷新后 transcript 里不会有它。
@@ -2662,7 +2662,7 @@ function retryFailedMessage(itemId: string) {
 }
 
 /**
- * 运行中补充指令（P0-3）：把文本注入当前正在跑的回合，**不打断**。
+ * 运行中补充指令：把文本注入当前正在跑的回合，**不打断**。
  *
  * 三处刻意的选择：
  * 1. **成功不插行**：引擎会在轮次边界发一条 SSE `steer` 事件，由 `onSSEMessage` 统一落
@@ -3239,7 +3239,7 @@ function continueGeneration() {
         ref="tourRef"
         @go-configure="goConfigureModel"
       />
-      <!-- 新用户引导（P0-3）：注册后首次进入的三步清单；存量账号后端返回 eligible=false，不会弹 -->
+      <!-- 新用户引导：注册后首次进入的三步清单；存量账号后端返回 eligible=false，不会弹 -->
       <OnboardingGuide
         v-model:open="onboardingOpen"
         :status="onboardingStatus"

@@ -64,7 +64,7 @@ export default {
   export_csv: "导出 CSV",
   export_started: "导出已开始，请查看浏览器下载",
   export_hint: "导出当前时间范围（{range}）的交易明细，可用 Excel 直接打开。",
-  // 发票申请（P1-2）：工单式，一期只支持**全额开票 + 不可撤销**。
+  // 发票申请：工单式，一期只支持**全额开票 + 不可撤销**。
   invoice_title: "发票申请",
   invoice_hint: "提交后由管理员审核，通过后线下开票。当前仅支持对单笔已支付订单全额开票，提交后不可撤销。",
   invoice_order: "选择订单",
@@ -91,7 +91,7 @@ export default {
   invoice_status_approved: "已通过",
   invoice_status_rejected: "已驳回",
 
-  // ── 套餐与权益（P2-2）──
+  // ── 套餐与权益 ──
   packages_title: "套餐包",
   packages_hint: "套餐为一次性购买：Credits 立即到账，模型权益在有效期内生效，到期后只会失效，不自动续费、不扣款。",
   packages_empty: "管理员还没有上架任何套餐包，可以继续按需充值。",

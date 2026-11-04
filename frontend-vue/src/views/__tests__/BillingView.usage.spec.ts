@@ -3,7 +3,7 @@ import { mount, flushPromises } from '@vue/test-utils'
 import { createRouter, createMemoryHistory } from 'vue-router'
 
 /**
- * 计费页「用量分摊」（P0-1）的前端接线。
+ * 计费页「用量分摊」的前端接线。
  *
  * 为什么值得钉住：
  *  - 后端 `GetUsage` 有两个数据源：`groupBy=day` 走 credit_transactions（记账口径，含充值），
@@ -206,7 +206,7 @@ describe('BillingView 用量分摊', () => {
 })
 
 /**
- * 导出入口（P1-1 / roadmap §10.2）。
+ * 导出入口。
  *
  * 钉住三件事，都是"界面不会报错但行为错了"的类型：
  *  - 请求必须带 `responseType: 'blob'`，否则 axios 会把 CSV 当 JSON 解析并抛错；
@@ -283,7 +283,7 @@ describe('BillingView 交易明细导出', () => {
 })
 
 /**
- * 计费页「发票申请」（P1-2）的前端接线。
+ * 计费页「发票申请」的前端接线。
  *
  * 为什么值得钉住：
  *  - 用户要开票必须先选「哪一笔订单」，而这个列表在后端是**单独端点**

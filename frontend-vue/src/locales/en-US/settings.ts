@@ -48,7 +48,7 @@ export default {
   tab_business: "Business configuration",
   tab_connections: "Connections & secrets",
   tab_ops: "Ops snippets",
-  // ── User-level API keys (P1-3): credentials for calling the gateway with your
+  // ── User-level API keys: credentials for calling the gateway with your
   //    own account — distinct from the admin console's model provider keys ──
   user_api_key_title: "API Keys",
   user_api_key_desc: "Use these to call the gateway with your own account (X-API-Key header). The full key is shown only once, at creation; afterwards you can only see its name and status — revoke and recreate immediately if it leaks.",

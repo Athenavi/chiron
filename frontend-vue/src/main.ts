@@ -41,7 +41,7 @@ app.use(i18n)
 app.use(pinia)
 app.use(router)
 
-// 语言偏好回写服务端（T1）：邮件等**服务端渲染**的通知按 users.settings.locale
+// 语言偏好回写服务端：邮件等**服务端渲染**的通知按 users.settings.locale
 // 决定语言，只存 localStorage 时服务端永远不知道用户选了什么。
 // 必须在 app.use(pinia) 之后安装 —— 探测登录态要读 auth store。
 installLocaleSync(() => {

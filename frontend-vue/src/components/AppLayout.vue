@@ -70,7 +70,7 @@ function handleApiError(e: Event) {
   message.error(detail.message || tr('errors.request_failed_2'))
 }
 
-// ── 通知未读角标（P2-3）──
+// ── 通知未读角标 ──
 //
 // 轮询而不是 SSE：未读数是低频变化的小整数，5 分钟一次足够；为它单独维持一条
 // 长连接会让每个在线标签页都多占一个连接。聊天页同样隐藏入口（理由同上）。
@@ -129,7 +129,6 @@ const menuItems = computed<MenuItem[]>(() => {
     ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）
-          // 本地模式同样要给入口：服务商密钥/端点只有这一页能写进本机网关的库。
           { key: '/models', label: tr('agent.model'), icon: () => h(ApiOutlined) },
           { key: '/admin', label: tr('common.manage'), icon: () => h(SettingOutlined) },
         ]
@@ -334,7 +333,7 @@ async function runQuickCommand() {
       v-if="!isChatPage"
       class="topbar-actions"
     >
-      <!-- 通知中心入口（P2-3） -->
+      <!-- 通知中心入口 -->
       <button
         v-if="authStore.user"
         :aria-label="tr('notifications.title')"

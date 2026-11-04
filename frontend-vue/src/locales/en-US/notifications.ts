@@ -1,5 +1,5 @@
 /**
- * Notification center (P2-3).
+ * Notification center.
  *
  * In-app notifications cannot be turned off; these strings only describe the
  * "also send an email" switch. That is why they talk about *email* rather than

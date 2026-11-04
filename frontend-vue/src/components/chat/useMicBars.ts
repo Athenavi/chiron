@@ -1,5 +1,5 @@
 /**
- * 录音时的 6 频段电平（CDS v1 §5.1.3 的 LiveMicActivityBars）。
+ * 录音时的 6 频段电平（LiveMicActivityBars）。
  *
  * **一个必须说清的代价**：本仓的录音走 Web Speech API（`SpeechRecognition`），
  * 它**不暴露音频流**。要画波形只能自己再开一路 `getUserMedia` —— 等于为纯视觉效果

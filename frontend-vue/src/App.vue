@@ -82,7 +82,7 @@ body {
 /* 主题切换：全局平滑过渡 - 仅对特定属性生效，避免 * 选择器性能问题 */
 :root {
   transition-property: background-color, border-color, box-shadow, color;
-  /* 0.3s 正是 CDS 阶梯里的 --dur-sheet（抽屉/大面板一档），改为 token 以免与阶梯脱钩 */
+  /* 0.3s 正是动效阶梯里的 --dur-sheet（抽屉/大面板一档），改为 token 以免与阶梯脱钩 */
   transition-duration: var(--dur-sheet);
   transition-timing-function: var(--ease-out);
   transition-delay: 0s;
