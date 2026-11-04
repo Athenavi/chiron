@@ -603,6 +603,8 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			tenantID = parseTenantID(claims.UserID)
 		}
 	}
+	// roadmap §6 问题 4：事件驱动回合默认降级到 `ask`（见 restrictEventDrivenToolsMode）。
+	explicit = restrictEventDrivenToolsMode(ctx, userID, workbenchCtx, explicit)
 	// tenant_id 仍要透传：引擎侧按它隔离记忆/知识库/审计。
 	pythonReq["tenant_id"] = tenantID
 	agentCfg := ResolveSessionAgentConfig(ctx, db.Redis, tenantStr(tenantID), userID, sessionID, explicit)
