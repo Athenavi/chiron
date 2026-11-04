@@ -317,9 +317,16 @@ create table thread_deliveries (
   钉死"上限 20 含第 20 条"）、入队写入 `enqueueThreadDelivery`（真库验收 3 条：重投幂等 /
   超限落 dropped 且不复活 / 未注册来源报错）、收尾认领 `claimNextThreadDelivery` 与
   `finishThreadDelivery`（真库验收 2 条：最早优先 + 收尾幂等）。
-- **未落地**：事件入口接线（把 `agent_followup.go` 的直投改成"先入队、由收尾方 drain"）、
-  订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。投递层默认**不接线**，
-  故当前无可观测行为变化。
+- **未落地**：订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。
+- **接线已落地**（`thread_turn.go` / `thread_turn_marker.go` + `agent_followup.go` 入口改造）：
+  `AgentFollowupHandler` 现在**先入队再决定跑不跑**，入队后若会话空闲则**原地直跑**
+  （约束Ⅰ，锁的所有权由 handler 转交给 `startThreadTurnWithLock`，不再"先还再抢"），
+  否则事件留在 `queued` 等收尾方续跑。收尾方有三处，都走同一个 `drainNextThreadDelivery`：
+  投递回合自身（`launchThreadTurn` 的 defer 链，约束②③的落点）、用户 `/submit` 回合
+  （`routes_agent.go` 的后台 goroutine）、以及每次 drain 失败后的下一次收尾。
+- **行为变化（可观测）**：同会话第二个及后续事件此前必然 `409 session busy` 让引擎重投，
+  现在进队等待 ⇒ 引擎不再需要重投，用户看到的是"一件件按顺序来"。队列满时回落
+  `200 skipped` + `dropped` 行 + 审计 `superagent.thread.dropped_overflow`，不静默丢。
 - **接线的先决条件（已发现的模型缺口）**：现有两表都**存不下投递所需的正文要素** ——
   `threads` 只有 `tenant_id/user_id/source_kind/external_key`，`thread_deliveries` 只有
   `thread_id/event_key/session_id/turn_id/status`；而 `buildSubagentFollowupContent` 需要
@@ -332,8 +339,7 @@ create table thread_deliveries (
   格子为空的稀疏表；而这份快照本就该是不可变事实，不需要被 SQL 按字段查询。
   真库验证 upgrade 与 downgrade 双向干净。入队侧已写入 payload、认领侧已 JOIN 取回
   `user_id/tenant_id/session_id/source_kind/external_key` 与 payload（真库验收 1 条：
-  载荷往返 + JOIN 字段 + 认领即置 running 不可重复领）。**剩下的只有入口接线**：
-  把 `agent_followup.go` 的直投改成"先入队"，并在收尾点 drain。
+  载荷往返 + JOIN 字段 + 认领即置 running 不可重复领）。
 - **接线的三个硬约束（推导结论，避免下次重新踩）**：
   ①**入口处已持锁**：`AgentFollowupHandler` 在 ② 已 `AcquireSessionRunLock` 成功才走到投递，
   所以入队后第一条可以**原地直接跑**，不必先入队再 drain 一轮。
@@ -345,6 +351,14 @@ create table thread_deliveries (
   ③**drain 只能续跑一条并自行递归**：跑完第 N 条后它的收尾又触发 drain 拿第 N+1 条，
   这样队列自然清空；写成循环会把"回合什么时候结束"和"队列什么时候空"耦合在一起，
   而回合是异步的，循环等不到它。
+- **约束②在本实现里的落点**：`launchThreadTurn` 的 defer 链按后进先出排成
+  `finishThreadDelivery → releaseAll → stopHeartbeat → cancel → clearThreadTurn →
+  drainNextThreadDelivery`，即 drain 执行在锁已归还、ctx 仍有效之后。drain 内部所有
+  Redis/DB 操作都用 `context.WithoutCancel(parent)`，不碰已取消的 `runCtx`。
+- **"谁还在跑"为什么要单独记**（`thread_turn_marker.go`）：运行锁回答"现在能不能起回合"，
+  续跑要回答的是"这一轮**彻底**收尾了吗" —— 两者在收尾点附近会分叉（锁刚还掉，而
+  `FinishTurn` / 计费校正还在跑）。只看锁就会在那一刻领下一条，同会话两个 runtime 短兵相接。
+  故额外用 ZSET 记在跑集合（每成员各自截止时间，崩溃遗留的会自然过期，不会永久挡住队列）。
 
 #### P1-2 Router 接管（Super-agent 接管）
 

@@ -10,12 +10,10 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/redis/go-redis/v9"
 
-	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/billing"
 	"github.com/athenavi/chiron/internal/db"
 )
@@ -98,130 +96,115 @@ func AgentFollowupHandler(
 		// ① 幂等（网关侧第二次收敛）：同一 run 只能开一次新一轮。
 		// 引擎侧已用 SET NX 做过一次；多副本 + 队列重投由这里兜住 —— 重复开一轮意味着
 		// 用户看到两条同样的"子任务完成"，且白花一份 token。
+		//
+		// idemKey 单独留出来：它比入队**先落**，所以入队失败时必须把它撤掉（见 ② 的
+		// 失败分支）。否则响应 500 让引擎重试，而重试会被这把已存在的键判成 duplicate ——
+		// "让它重试"和"重试必然被吞"放在一起，就是事件静默丢失。
+		idemKey := ""
 		if db.Redis != nil {
-			key := db.RedisKey("agent:followup:run:" + body.RunID)
+			idemKey = db.RedisKey("agent:followup:run:" + body.RunID)
 			// 与 submit_handler 的既有用法一致：`SET … NX` 命中"键已存在"时返回 redis.Nil
-			if res := db.Redis.Do(r.Context(), "SET", key, "1", "NX", "EX", "86400"); res.Err() == redis.Nil {
+			if res := db.Redis.Do(r.Context(), "SET", idemKey, "1", "NX", "EX", "86400"); res.Err() == redis.Nil {
 				Accepted(w, map[string]string{"status": "duplicate", "run_id": body.RunID})
 				return
 			}
 		}
 
-		// ② 会话运行锁：正在跑别的 turn 就让队列重试 —— 同一会话绝不能并发两个 runtime
-		// （会争 _ACTIVE_RUNTIMES、approval future 与持久终端）。
+		// ② 入队（P1-1 接线）。语义变化：从"收到就立刻开跑"换成"先落事实、再决定跑不跑"。
+		// 并发护栏没变（还是下面那把会话运行锁），变的是**多个事件同时到达时的行为** ——
+		// 此前第二个必然撞 409 让引擎重投，现在它进队等着，用户看到的是"一件件按顺序来"。
+		//
+		// 幂等在这一层再收敛一次：同一 run 重投会撞投递表主键，返回 duplicate。
+		snapshot, snapErr := followupSnapshot(body)
+		if snapErr != nil {
+			// 理论上不可达（载荷全是字符串与整数），真发生了也不能静默 —— 那是编程错误。
+			slog.Error("agent followup: payload snapshot failed", "run_id", body.RunID, "error", snapErr)
+			InternalError(w, "payload snapshot failed")
+			return
+		}
+		sourceKind := normalizedFollowupKind(body.Kind)
+		params := threadEnqueueParams{
+			TenantID:    parseTenantID(body.TenantID),
+			UserID:      body.UserID,
+			SourceKind:  sourceKind,
+			ExternalKey: body.RunID,
+			SessionID:   body.SessionID,
+			EventKey:    body.RunID,
+			Payload:     snapshot,
+		}
+		decision, threadID, enqErr := enqueueThreadDelivery(r.Context(), params)
+		if enqErr != nil {
+			slog.Error("agent followup: enqueue failed", "run_id", body.RunID, "error", enqErr)
+			// 入队失败 = 什么都没发生，所以必须让引擎重试；而重试要能进得来，
+			// 就得把 ① 抢先落下的幂等键撤掉 —— 留着它会让每次重试都被判 duplicate，
+			// 引擎以为"网关已经有了"，事件从此消失。
+			releaseFollowupIdem(r.Context(), idemKey)
+			InternalError(w, "followup queue unavailable")
+			return
+		}
+		switch decision {
+		case threadDeliverDropped:
+			// 队列满：已落 dropped 并写了审计，重投只会再被丢一次 ⇒ 200 让队列 ACK。
+			slog.Warn("agent followup: queue full, event dropped",
+				"session", body.SessionID, "run_id", body.RunID, "thread", threadID)
+			followupSkipped(w, "queue full")
+			return
+		case threadDeliverDuplicate:
+			Accepted(w, map[string]string{"status": "duplicate", "run_id": body.RunID})
+			return
+		}
+
+		// ③ 会话运行锁：正在跑别的 turn 就把事件**留在队里**，而不是 409 让引擎重投 ——
+		// 同一会话绝不能并发两个 runtime（会争 _ACTIVE_RUNTIMES、approval future 与持久终端）。
+		// 排队是串行裁决的自然结果：跑着的那一轮收尾时会接着取这一条（roadmap P1-1.1 第 4 条）。
 		var rnd [12]byte
 		_, _ = rand.Read(rnd[:])
 		runToken := "followup-" + hex.EncodeToString(rnd[:])
 		releaseRun, runLocked, lockErr := AcquireSessionRunLock(r.Context(), body.SessionID, runToken)
 		if lockErr != nil {
-			// Redis 不可用：不敢并发跑，交给重试
-			slog.Warn("agent followup: run lock unavailable", "session", body.SessionID, "error", lockErr)
-			http.Error(w, "session lock unavailable", http.StatusConflict)
+			// Redis 不可用：事件已经在队里了，等下一个收尾方或进程恢复再取。
+			// 这里判 failed 会把一件已经落库的事记成失败，那才是真正的丢事件。
+			slog.Warn("agent followup: run lock unavailable, event stays queued",
+				"session", body.SessionID, "error", lockErr)
+			Accepted(w, map[string]string{"status": "queued", "run_id": body.RunID})
 			return
 		}
 		if !runLocked {
-			http.Error(w, "session busy", http.StatusConflict)
+			slog.Debug("agent followup: session busy, event queued",
+				"session", body.SessionID, "run_id", body.RunID)
+			Accepted(w, map[string]string{"status": "queued", "run_id": body.RunID})
 			return
 		}
-		// 注意：这里**不能** defer releaseRun()。本 handler 在启动后台 goroutine 后
-		// 立刻返回，handler 上的 defer 会在 Accepted 一写出时就执行 —— 锁、信号量、
-		// 租户并发槽位全部在后台 turn 还在跑的时候被归还，同一会话随即能被第二个
-		// runtime 抢占（正是这把锁存在的理由）。释放统一收敛到 releaseAll，
-		// 由后台 goroutine 负责执行；下面的失败路径则显式调用它。
-
-		releaseSem, ok := agentSem.TryAcquire(r.Context())
-		if !ok {
-			// 拒绝路径同样要放锁：否则本会话被一把空锁挡到 TTL（5min）。
-			releaseRun()
-			TooManyRequests(w)
+		// 约束Ⅰ：入口**已持有**运行锁，所以这一条不必"先入队再 drain 一轮"——
+		// 把锁的所有权转交给投递层，由它原地跑起来并在收尾时续下一条。
+		//
+		// 注意：这里**不能** defer releaseRun()，也不能再自己归还它。锁的所有权已经
+		// 交出去了；在 handler 上归还等于"后台 turn 还在跑就把锁放了"，
+		// 同一会话随即能被第二个 runtime 抢占（正是这把锁存在的理由）。
+		d := threadDelivery{
+			ThreadID:    threadID,
+			EventKey:    body.RunID,
+			Payload:     snapshot,
+			SessionID:   body.SessionID,
+			UserID:      body.UserID,
+			TenantID:    params.TenantID,
+			SourceKind:  sourceKind,
+			ExternalKey: body.RunID,
+		}
+		deps := threadTurnDeps{
+			submit:        submitHandler,
+			billingMgr:    billingMgr,
+			agentSem:      agentSem,
+			tenantResMgr:  tenantResMgr,
+			submitTimeout: submitTimeout,
+		}
+		if !startThreadTurnWithLock(r.Context(), deps, d, runToken, releaseRun) {
+			// 没跑起来（信号量满 / 租户并发满 / 余额不足 / 配额耗尽）：事件**还在队里**，
+			// 交给跑着的那一轮或下一次收尾接手。旧实现在这些情况下要么 429 让队列重投、
+			// 要么 200 skipped 直接放弃 —— 排队之后它们都变成"晚一点跑"。
+			Accepted(w, map[string]string{"status": "queued", "run_id": body.RunID})
 			return
 		}
-
-		releaseTenant, tenantOK := tenantResMgr.Acquire(body.TenantID)
-		if !tenantOK {
-			// 租户并发满了：重试也要等，交给队列退避
-			releaseSem()
-			releaseRun()
-			followupSkipped(w, "tenant concurrency")
-			return
-		}
-
-		// releaseAll 是该请求持有资源的唯一出口：sync.Once 保证幂等，
-		// 使"失败路径显式释放"与"后台 goroutine defer 释放"不会互相踩踏。
-		var releaseOnce sync.Once
-		releaseAll := func() {
-			releaseOnce.Do(func() {
-				if releaseTenant != nil {
-					releaseTenant()
-				}
-				releaseSem()
-				releaseRun()
-			})
-		}
-
-		// ③ 计费预检：余额与免费额度都不足以跑一轮时**不唤起**（自动轮不该把账单打穿）。
-		// 这是"保守风控"的一部分：宁可少一轮自动总结，也不要静默烧钱。
-		if billingMgr != nil {
-			overFreeQuota := false
-			if count, err := billingMgr.DailyFreeCount(r.Context(), body.UserID); err != nil || count >= billing.DailyFreeLimit {
-				overFreeQuota = true
-			}
-			if overFreeQuota {
-				if balance, balErr := billingMgr.GetBalance(body.UserID); balErr == nil && balance <= 0 {
-					// 跳过不等于"没占资源"：锁/信号量/租户槽位此时已持有，必须归还，
-					// 否则该会话被一把空锁挡到 TTL（5min），后续真实请求一律 409。
-					releaseAll()
-					followupSkipped(w, "insufficient credits")
-					return
-				}
-			}
-		}
-
-		// ③′ 租户 token 配额预检（P0-3）：自动轮此前只过"个人余额"闸门，**完全绕过租户池** ——
-		// 而子 Agent 的自动总结同样烧租户的钱，且由引擎队列发起，没有用户会去点"重试"。
-		// 与 /submit 同一套语义：按估算预留，回合末由 submit_handler 校正成真实用量。
-		content := kind.build(body)
-		reserved, quotaErr := EnforceTenantQuota(r.Context(),
-			&auth.Claims{UserID: body.UserID, TenantID: parseTenantID(body.TenantID)},
-			EstimateRequestTokens(content, nil))
-		if quotaErr != nil {
-			// 200 skipped：配额耗尽时重试也没用（队列正常 ACK，不无限重投）
-			slog.Warn("agent followup: tenant token quota exceeded",
-				"user_id", body.UserID, "tenant_id", body.TenantID, "run_id", body.RunID)
-			// 与上面余额跳过同因：资源已持有，跳过前必须归还。
-			releaseAll()
-			followupSkipped(w, "tenant token quota exceeded")
-			return
-		}
-
-		timeout := submitTimeout
-		if timeout < DefaultAgentTimeout {
-			timeout = DefaultAgentTimeout
-		}
-		// 与 /submit 同理：后台执行必须脱离请求生命周期（响应一返回客户端连接即关闭）
-		ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), timeout)
-		ctx = WithQuotaReserve(ctx, reserved)
-		// run 锁心跳：与 /submit 共用同一份实现。followup 的 timeout 可能长于锁 TTL(5min)，
-		// 不续期会让锁在运行中途过期 → 同一会话被再次抢占 → 两个 runtime 并发跑。
-		stopHeartbeat := StartSessionRunLockHeartbeat(ctx, body.SessionID, runToken)
-
-		go func() {
-			// 资源释放必须发生在这里，而不是 handler 上：handler 在 Accepted 之后
-			// 立即返回，defer 会先于后台 turn 执行完就归还锁/信号量/租户槽位。
-			defer releaseAll()
-			defer cancel()
-			defer stopHeartbeat()
-			defer func() {
-				if rec := recover(); rec != nil {
-					slog.Error("agent followup handler panic", "panic", rec, "run_id", body.RunID)
-				}
-			}()
-			// 自动轮不是用户发起的，没有附件 —— 显式传 nil。
-			// 标记键决定消息来源：前端据此渲染不同的小字，也让模型知道这条不是人在说话。
-			submitHandler.HandleSubmit(ctx, body.UserID, body.SessionID, content,
-				map[string]interface{}{}, map[string]interface{}{kind.ctxKey: body.RunID}, nil)
-		}()
-
 		Accepted(w, map[string]string{"status": "accepted", "run_id": body.RunID})
 	}
 }
@@ -267,12 +250,23 @@ var followupKinds = map[string]followupKind{
 // 空值按 subagent 处理：旧引擎发布时不带这个字段，不能因为缺省就把一条合法的
 // 回投丢掉 —— 滚动升级期间两种引擎会同时在线。
 func lookupFollowupKind(raw string) (followupKind, bool) {
-	k := strings.TrimSpace(raw)
-	if k == "" {
-		k = "subagent"
-	}
-	kind, ok := followupKinds[k]
+	kind, ok := followupKinds[normalizedFollowupKind(raw)]
 	return kind, ok
+}
+
+// normalizedFollowupKind 把载荷里缺失或空白的 kind 归一成 "subagent"。
+//
+// 空值按 subagent 处理：旧引擎发布时不带这个字段，不能因为缺省就把一条合法的
+// 回投丢掉 —— 滚动升级期间两种引擎会同时在线。
+//
+// 入队时也要用它：投递表里的 `source_kind` 必须是一个**已归一**的值，
+// 否则 drain 时 `lookupFollowupKind("")` 虽然也能兜住，但表里留下空串会让
+// "这条事件到底是什么来源"在事故排查时答不上来。
+func normalizedFollowupKind(raw string) string {
+	if k := strings.TrimSpace(raw); k != "" {
+		return k
+	}
+	return "subagent"
 }
 
 // JobFollowupSource 标记「后台命令结束自动轮」注入的那条消息的来源。
@@ -307,6 +301,23 @@ func jobFollowupEnabled(ctx context.Context, userID string) bool {
 	// 只认布尔 true：字符串 "true"、1 之类都不算，避免把别的开关取值误读成开启。
 	on, _ := settings[jobFollowupSwitch].(bool)
 	return on
+}
+
+// releaseFollowupIdem 撤掉 ① 抢先落下的幂等键，让引擎的重试能真正进得来。
+//
+// 只该在"什么都没发生"的失败路径上调用（入队失败）。成功或已判重时撤键会把幂等
+// 本身破坏掉 —— 重投会再开一轮，用户看到两条同样的"子任务完成"。
+//
+// fail-soft：撤不掉只记日志。撤键失败会让这一条事件在 24h 内被判 duplicate，
+// 但那是"少一轮自动总结"，比"绕过幂等再跑一轮、白花钱"要轻。
+func releaseFollowupIdem(ctx context.Context, key string) {
+	if db.Redis == nil || key == "" {
+		return
+	}
+	// 请求的 ctx 可能已随 500 响应结束，撤键不能因此失败。
+	if err := db.Redis.Del(context.WithoutCancel(ctx), key).Err(); err != nil {
+		slog.Warn("agent followup: idem key release failed", "key", key, "error", err)
+	}
 }
 
 // buildSubagentFollowupContent 组装「子 Agent 结束」注入给主 Agent 的那条消息。

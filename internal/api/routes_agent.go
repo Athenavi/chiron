@@ -312,6 +312,20 @@ func registerAgentRoutes(
 
 		Accepted(w, map[string]string{"status": "accepted", "session_id": body.SessionID})
 		go func() {
+			// P1-1：用户回合也持有会话运行锁，所以它收尾时同样必须接着取队列 ——
+			// 否则"跑着的那一轮会接手"这句话在**用户**发起的那一轮上不成立，
+			// 事件会在队列里一直等到下一条事件或进程重启。
+			//
+			// 声明在最前面 ⇒ 执行在最后（defer 后进先出），即**归还运行锁之后**，
+			// 满足约束②。ctx 用 `context.WithoutCancel`：这里的 ctx 已随请求结束，
+			// 拿它去抢锁会立刻失败，续跑就变成了静默 no-op。
+			defer drainNextThreadDelivery(context.WithoutCancel(ctx), threadTurnDeps{
+				submit:        submitHandler,
+				billingMgr:    billingMgr,
+				agentSem:      agentSem,
+				tenantResMgr:  tenantResMgr,
+				submitTimeout: submitTimeout,
+			}, body.SessionID)
 			if releaseRun != nil {
 				defer releaseRun()
 			}

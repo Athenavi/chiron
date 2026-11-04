@@ -44,6 +44,12 @@ type threadDeliveryDecision string
 const (
 	threadDeliverQueued  threadDeliveryDecision = "queued"
 	threadDeliverDropped threadDeliveryDecision = "dropped"
+	// threadDeliverDuplicate 表示这条事件**之前已经落过行**（多副本重投 / 引擎重试）。
+	//
+	// 与 queued 分开是必需的：入队方据此知道"不该再为它起一个回合"。
+	// 混在 queued 里的话，同一事件重投会让队列里那条已经跑过的事件被再跑一次 ——
+	// 用户看到两条同样的"子任务完成"，还白花一份 token。
+	threadDeliverDuplicate threadDeliveryDecision = "duplicate"
 )
 
 // decideThreadDelivery 判断新事件能不能进队。
@@ -180,6 +186,11 @@ func finishThreadDelivery(ctx context.Context, d threadDelivery, status string) 
 	if status != threadDeliveryDone && status != threadDeliveryDropped {
 		// 静默接受非法终态会让"跑完了"和"没跑"混成一列，宁可让调用方在测试里炸掉。
 		return errors.New("finishThreadDelivery: status must be done or dropped")
+	}
+	if db.GlobalDBManager == nil {
+		// 与 requeueThreadDelivery 同一处置：收尾链跑在没有数据库的环境里（单测、
+		// 只读网关）不该 panic。把一条已经跑完的投递标成 done 失败不改变任何结论。
+		return nil
 	}
 	_, err := db.GlobalDBManager.Exec(ctx,
 		`UPDATE thread_deliveries SET status = $1
@@ -330,6 +341,8 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 	switch {
 	case errors.Is(insertErr, pgx.ErrNoRows):
 		// 已投过：保持既有状态，不因为重投把它从 dropped 复活或从 done 退回 queued。
+		// 调用方必须知道这一点 —— 否则它会为一条**早已跑过**的事件再起一个回合。
+		decision = threadDeliverDuplicate
 	case insertErr != nil:
 		return threadDeliverDropped, threadID, insertErr
 	}
