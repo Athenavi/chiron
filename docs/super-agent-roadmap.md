@@ -320,6 +320,15 @@ create table thread_deliveries (
 - **未落地**：事件入口接线（把 `agent_followup.go` 的直投改成"先入队、由收尾方 drain"）、
   订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。投递层默认**不接线**，
   故当前无可观测行为变化。
+- **接线的先决条件（已发现的模型缺口）**：现有两表都**存不下投递所需的正文要素** ——
+  `threads` 只有 `tenant_id/user_id/source_kind/external_key`，`thread_deliveries` 只有
+  `thread_id/event_key/session_id/turn_id/status`；而 `buildSubagentFollowupContent` 需要
+  `RunID/Status/Profile/Summary`、`buildJobFollowupContent` 需要 `RunID/Status/Summary`。
+  入队时"只存键不存正文"的前提是"投递时能按 kind 重新拼出正文"，但引擎回投是**一次性
+  HTTP 请求**，payload 不在别处持久化 ⇒ drain 侧拿不到这三个字段，拼不出正文。
+  接线前必须先补：给 `thread_deliveries` 增一列承载 body（或 `status`/`profile`/`summary`
+  三列），并走扩展式迁移。**在此之前接线会导致"能入队但投递内容为空"** —— 这正是分两批
+  做的价值所在，设计缺口在还没接线时就被发现了。
 
 #### P1-2 Router 接管（Super-agent 接管）
 
