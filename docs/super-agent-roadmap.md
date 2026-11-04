@@ -310,6 +310,15 @@ create table thread_deliveries (
 （没有"打开某个 thread"的页面），它只是事件来源的归类。若将来真需要并行，那是一次独立的
 架构变更，要先解决上面四条，而不是在 P1-1 里悄悄开个口子。
 
+##### P1-1.2 落地进度
+
+- **已落地**：三张表（`migrations/versions/0021_threads.py`，真库验证 upgrade 与
+  downgrade 双向干净）；队列准入判据 `decideThreadDelivery`
+  （`internal/api/thread_delivery.go`，纯函数 + 单测，钉死"上限 20 含第 20 条"）。
+- **未落地**：事件入口接线（把 `agent_followup.go` 的直投改成"先入队、由收尾方 drain"）、
+  订阅 CRUD、以及 §6 要的那组"有订阅 / 无订阅"对照埋点。投递层默认**不接线**，
+  故当前无可观测行为变化。
+
 #### P1-2 Router 接管（Super-agent 接管）
 
 > **权威依据先说清楚**：文章是**需求来源**，不是权威。落地判据一律取自本仓已有契约 ——

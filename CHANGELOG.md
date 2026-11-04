@@ -60,6 +60,13 @@
 
 ### 新增
 
+- **P1-1 数据模型与队列准入**：§6 问题 3 定为**串行排队**（Thread 只做事件来源分类，
+  执行侧仍是 `agent:run-lock:<session_id>` 一把锁，不引入子会话）。`migrations/versions/
+  0021_threads.py` 建 `threads` / `thread_subscriptions` / `thread_deliveries` 三张纯扩展表
+  （真库验证 upgrade + downgrade 双向干净）；`internal/api/thread_delivery.go` 的
+  `decideThreadDelivery` 是纯函数，钉死"上限 20 含第 20 条"与"负数不丢"两个边界 ——
+  写成 `>` 会变成能排 21 条，而这种差一错误在评审时看不出来，只表现成"偶尔多一条"。
+  **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
 - **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
   此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
   但"PG 真的这样算"、"拒绝时表里真的一行没多"、"A 真的停不了 B"只有跑一次才知道。四条用例：
