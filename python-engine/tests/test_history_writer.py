@@ -28,8 +28,13 @@ class _Row(dict):
 
 
 class _FakeConn:
-    def __init__(self, sink: list[tuple], insert_rowcount: int = 1) -> None:
+    def __init__(
+        self, sink: list[tuple], insert_rowcount: int = 1, sqls: list[str] | None = None
+    ) -> None:
         self.sink = sink
+        # 同时记下语句本身：断言若靠"参数个数"区分 messages 与 archive 行，
+        # 每加一列就会让不相干的用例误报 —— 按 SQL 内容认行才稳。
+        self.sqls = sqls if sqls is not None else []
         # `ON CONFLICT DO NOTHING` 命中时 asyncpg 返回 `INSERT 0 0`；fake 必须
         # 回一个状态串，否则被测代码解析不出影响行数、会把每条都当冲突。
         self.insert_rowcount = insert_rowcount
@@ -40,6 +45,7 @@ class _FakeConn:
 
     async def execute(self, sql: str, *args: Any) -> str:
         self.sink.append(args)
+        self.sqls.append(sql)
         return f"INSERT 0 {self.insert_rowcount}"
 
     async def __aenter__(self):
@@ -69,6 +75,7 @@ class _FakePool:
         self.owned = owned
         self.existing_ids = existing_ids or []
         self.inserted: list[tuple] = []
+        self.sqls: list[str] = []
         self.insert_rowcount = insert_rowcount
 
     async def fetchrow(self, sql: str, *args: Any) -> dict[str, Any] | None:
@@ -78,7 +85,7 @@ class _FakePool:
         return [{"tool_call_id": i} for i in self.existing_ids]
 
     def acquire(self) -> _FakeConn:
-        return _FakeConn(self.inserted, insert_rowcount=self.insert_rowcount)
+        return _FakeConn(self.inserted, insert_rowcount=self.insert_rowcount, sqls=self.sqls)
 
     def transaction(self) -> _FakeTx:
         return _FakeTx()
@@ -465,12 +472,17 @@ class TestTieredArchiving:
 
         await history_writer.persist_messages("s1", 1, [{"role": "tool", "content": big}])
 
-        # 归档行（5 参）先于消息行（7 参）写入 —— 先落对象再写行，避免库里留下
-        # 指向不存在对象的 blob_ref。所以按参数个数挑出 messages 那条。
-        rows = [r for r in pool.inserted if len(r) == 7]
+        # 归档行先于消息行写入 —— 先落对象再写行，避免库里留下指向不存在对象的
+        # blob_ref。按语句内容挑出 messages 那条，而不是按参数个数：后者每加一列
+        # 都会误伤这条断言，且失败信息完全指错方向。
+        rows = [
+            args
+            for sql, args in zip(pool.sqls, pool.inserted, strict=True)
+            if "INSERT INTO messages" in sql
+        ]
         assert len(rows) == 1, f"应只写一条 messages，实际 {len(pool.inserted)} 条语句"
         row = rows[0]
-        # 参数序：(session_id, role, content, tool_calls, tool_call_id, tid, blob_ref)
+        # 参数序：(session_id, role, content, tool_calls, tool_call_id, tid, blob_ref, source)
         assert row[6], "超阈值必须写 blob_ref"
         assert row[6].startswith("arc_")
         assert row[2].startswith("y" * 100), "content 应保留一段真原文供摘要使用"
@@ -478,7 +490,10 @@ class TestTieredArchiving:
         assert "ref=" in row[2], "content 里要带归档提示，否则模型不知道原文在哪"
         assert written[f"archives/{row[6]}.txt"] == big.encode("utf-8"), "归档必须是全文"
         # 归档元数据行也要落，否则 blob_ref 指向的归档无法被清理与校验
-        assert any(len(r) == 5 and r[0] == row[6] for r in pool.inserted), "缺少 message_archives 记录"
+        assert any(
+            "INSERT INTO message_archives" in sql and args[0] == row[6]
+            for sql, args in zip(pool.sqls, pool.inserted, strict=True)
+        ), "缺少 message_archives 记录"
 
     @pytest.mark.asyncio
     async def test_archive_failure_falls_back_to_truncation(

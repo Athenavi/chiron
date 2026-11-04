@@ -1959,11 +1959,15 @@ class AgentRuntime:
                     from app.agent.steer import drain_steer
 
                     _steers = await drain_steer(task.session_id)
-                    for _text in _steers:
+                    for _text, _source in _steers:
                         messages.append(
                             _normalize_msg(
                                 role="user",
                                 content=f"<user-steer>\n{_text}\n</user-steer>",
+                                # 来源要跟着消息走：落库时写进 `messages.source`，
+                                # 前端据此标"这条不是你问的"。只放在队列里、
+                                # 注入时丢掉的话，历史里就分辨不出来源了。
+                                source=_source,
                             )
                         )
                         yield AgentEvent(type="steer", content=_text, trace_id=trace_id)

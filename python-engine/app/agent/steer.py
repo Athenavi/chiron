@@ -9,6 +9,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -23,8 +24,32 @@ MAX_CHARS = 2000
 #: 队列长度上限，防止一条失控的 run 把 Redis 撑爆。
 MAX_QUEUE = 20
 
-#: 进程内快路径：session_id → [(置入时刻, 文本)]，同副本时零网络往返。
-_LOCAL: dict[str, list[tuple[float, str]]] = {}
+#: 进程内快路径：session_id → [(置入时刻, 文本, 来源)]，同副本时零网络往返。
+_LOCAL: dict[str, list[tuple[float, str, str]]] = {}
+
+
+def _encode(text: str, source: str) -> str:
+    """Redis 里一条指导的编码：JSON（带来源），不再是裸文本。
+
+    裸文本会让来源在跨副本时丢掉 —— 本地队列能记住，Redis 那条记不住，
+    于是"同副本看得出来、跨副本看不出来"，是最难查的那种不一致。
+    """
+    return json.dumps({"text": text, "source": source}, ensure_ascii=False)
+
+
+def _decode(raw: str) -> tuple[str, str]:
+    """解出一条 (文本, 来源)。
+
+    裸文本按 `user` 处理而不是拒收：滚动升级期间旧副本还在写纯文本，
+    读端不兼容就会把这些指令整条丢掉 —— 丢指令比标错来源严重得多。
+    """
+    try:
+        obj = json.loads(raw)
+    except (TypeError, ValueError):
+        return raw, "user"
+    if isinstance(obj, dict) and isinstance(obj.get("text"), str):
+        return obj["text"], str(obj.get("source") or "user")
+    return raw, "user"
 
 
 def steer_key(session_id: str) -> str:
@@ -86,12 +111,12 @@ async def push_steer(session_id: str, text: str, *, source: str = "user",
         logger.warning("steer: redis unavailable, message queued locally only")
 
     # 本地快路径与 Redis 都要写：同副本读本地零往返，跨副本读 Redis。
-    _LOCAL.setdefault(session_id, []).append((_now(), text))
+    _LOCAL.setdefault(session_id, []).append((_now(), text, source))
     _LOCAL[session_id] = _LOCAL[session_id][-MAX_QUEUE:]
     if client is not None:
         try:
             key = steer_key(session_id)
-            await client.lpush(key, text)
+            await client.lpush(key, _encode(text, source))
             await client.ltrim(key, 0, MAX_QUEUE - 1)
             await client.expire(key, STEER_TTL_SECONDS)
         except Exception as exc:  # noqa: BLE001
@@ -99,8 +124,11 @@ async def push_steer(session_id: str, text: str, *, source: str = "user",
     return True, ""
 
 
-async def drain_steer(session_id: str, *, redis: Any = None) -> list[str]:
-    """取走该会话待注入的指导，按投递顺序返回。
+async def drain_steer(session_id: str, *, redis: Any = None) -> list[tuple[str, str]]:
+    """取走该会话待注入的指导，按投递顺序返回 `(文本, 来源)`。
+
+    返回来源而不是裸文本：注入的那条消息要落 `messages.source`，否则历史里
+    分不清"这句是人说的还是 watchdog 发的"—— 而两者的可信度不同，用户有权知道。
 
     先本地后 Redis：本地命中通常是同副本（用户在同一个连接上），往 Redis 再查一遍
     会把同一条文本取到两次 —— 所以**两者取并集去重**没有意义，改为"本地非空就只信本地"。
@@ -109,7 +137,7 @@ async def drain_steer(session_id: str, *, redis: Any = None) -> list[str]:
         return []
     local = _LOCAL.pop(session_id, [])
     if local:
-        return [text for _, text in local]
+        return [(text, source) for _, text, source in local]
 
     client = await _resolve_redis(redis)
     if client is None:
@@ -131,7 +159,7 @@ async def drain_steer(session_id: str, *, redis: Any = None) -> list[str]:
         out = []
         for item in raw:
             text = item.decode() if isinstance(item, bytes) else str(item)
-            out.append(text)
+            out.append(_decode(text))
         out.reverse()  # lpush 是头插，取出后反序才是投递顺序
         return out
     except Exception as exc:  # noqa: BLE001

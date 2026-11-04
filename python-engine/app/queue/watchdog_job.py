@@ -179,9 +179,9 @@ async def _apply(
             return False
         text = nudge_text(assessment)
         # 复用 steer 通道：它已经在轮次边界注入、落库、发 SSE —— 再造一条注入链路
-        # 只会多一套"什么时候生效"的语义。`source="watchdog"` 目前只作为调用意图的
-        # 标注（`push_steer` 还没有把它写进落库内容），历史里**分辨不出来源**；
-        # 要区分得看 `audit_logs` 的 `superagent.watchdog.nudge` 流水。
+        # 只会多一套"什么时候生效"的语义。`source="watchdog"` 会一路带到
+        # `messages.source`，历史里分得清"这条是系统发的、不是你问的"；
+        # 审计另记 `superagent.watchdog.nudge`。
         from app.agent.steer import push_steer
 
         ok, reason = await push_steer(turn.session_id, text, source="watchdog", redis=redis)

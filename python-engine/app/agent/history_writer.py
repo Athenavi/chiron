@@ -239,7 +239,7 @@ async def persist_messages(
         # 归档对象**先于**任何行写入：反过来（先写库再写对象）一旦对象写失败，
         # 库里就留下指向不存在对象的 blob_ref，read_archive 永远取不回。
         # 先写对象的代价只是失败时可能留下孤儿对象 —— 无害，可后台清理。
-        payload: list[tuple[str, str, str | None, str | None, str | None, str | None]] = []
+        payload: list[tuple[str, str, str | None, str | None, str | None, str | None, str]] = []
         archives: list[tuple[str, int, str, str]] = []
         for m in selected:
             raw = str(m.get("content") or "")
@@ -279,6 +279,9 @@ async def persist_messages(
                     str(m.get("tool_call_id") or "") or None,
                     turn_id or None,
                     blob_ref,
+                    # source 放在**末尾**：`_drop_existing_tool_calls` 按索引 3 去重、
+                    # 归档清理按索引 5 取 blob_ref，插在中间会把这两处悄悄改错。
+                    str(m.get("source") or ""),
                 )
             )
 
@@ -308,12 +311,12 @@ async def persist_messages(
                         storage_key,
                         digest,
                     )
-                for role, content, tool_calls, tool_call_id, tid, blob_ref in payload:
+                for role, content, tool_calls, tool_call_id, tid, blob_ref, src in payload:
                     await conn.execute(
                         "INSERT INTO messages "
                         "(id, session_id, role, content, tool_calls, tool_call_id, "
-                        "turn_id, blob_ref, created_at) "
-                        "VALUES (gen_random_uuid()::text, $1, $2, $3, $4::jsonb, $5, $6, $7, NOW())",
+                        "turn_id, blob_ref, source, created_at) "
+                        "VALUES (gen_random_uuid()::text, $1, $2, $3, $4::jsonb, $5, $6, $7, $8, NOW())",
                         session_id,
                         role,
                         content,
@@ -321,6 +324,7 @@ async def persist_messages(
                         tool_call_id,
                         tid,
                         blob_ref,
+                        src,
                     )
                     inserted += 1
         return inserted

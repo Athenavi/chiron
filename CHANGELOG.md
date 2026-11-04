@@ -88,6 +88,17 @@
   只验库里那列证明不了投影层有没有把它带出来。
   至此 P1-2 十条验收里 8 条有真库证据；仍缺 2（同一拍用户赢）与 3（多副本打断只发生一次），
   都需要真实引擎回合与多副本环境。
+- **steer 指令来源落库（P0-3 / P1-3 收口）**：`push_steer` 收 `source` 却从不落库，
+  于是 watchdog 自动注入的提示在历史里和用户自己说的长得一模一样。现在来源一路带到
+  `messages.source`：`steer._LOCAL` 由 `(ts, text)` 扩为 `(ts, text, source)`，Redis 条目由
+  裸文本改为 `{"text":…,"source":…}` JSON（`ensure_ascii=False`）；`runtime.py` 注入时把
+  `source` 挂到消息上，`history_writer.persist_messages` 的 payload 末位加 `source` 并写进
+  INSERT。**兼容在途旧条目**：解码失败一律回落 `(raw, "user")` —— 滚动升级期旧副本还在写
+  裸文本，读端不兼容会把用户指令整条丢掉，比标错来源严重得多。`source` 放在 payload
+  **末尾**是因为 `_drop_existing_tool_calls` 按索引 3 去重、归档清理按索引 5 取 `blob_ref`。
+  验收：`pytest tests/test_steer.py` 5 passed（编解码往返 / 旧裸文本兼容 / 跨副本读 Redis /
+  本地保序且逐条带来源 / 缺省为 `user`）；`tests/test_history_writer.py` 的归档用例由
+  "按参数个数认行"改为"按 SQL 内容认行"，避免每加一列就误伤。
 - **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
   `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
   折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /
