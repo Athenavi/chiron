@@ -317,7 +317,6 @@ create table thread_deliveries (
   钉死"上限 20 含第 20 条"）、入队写入 `enqueueThreadDelivery`（真库验收 3 条：重投幂等 /
   超限落 dropped 且不复活 / 未注册来源报错）、收尾认领 `claimNextThreadDelivery` 与
   `finishThreadDelivery`（真库验收 2 条：最早优先 + 收尾幂等）。
-- **未落地**：§6 要的那组"有订阅 / 无订阅"对照埋点。
 - **订阅路由与埋点已落地**（`thread_delivery.go` 的 `resolveThreadTarget`）：
   入站时按 `thread_subscriptions` 改写目标会话，并在**每一次**投递写审计
   `superagent.thread.routed`（带 `subscribed` / `entry_session` / `target_session`），
