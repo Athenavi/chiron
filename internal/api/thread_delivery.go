@@ -1,7 +1,9 @@
 package api
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 
 	"github.com/google/uuid"
@@ -83,6 +85,23 @@ const (
 type threadDelivery struct {
 	ThreadID string
 	EventKey string
+	// Payload 是事件到达那一刻的输入快照（`thread_deliveries.payload`）。
+	//
+	// 必须随行一起取回：引擎回投是一次性 HTTP 请求，`status` / `profile` / `summary`
+	// 不会在别处留底，光凭键拼不出投递正文 —— 那会变成"能入队但投递内容为空"。
+	Payload json.RawMessage
+
+	// 以下字段来自 `threads`（JOIN 出来），让认领方不必再查一次就能重建投递。
+	//
+	// 认领方要做的是"把这个事件当成一次 HandleSubmit"：它需要知道投给谁
+	// （user/tenant）、投到哪个会话、要不要用 `job` 那条通道（source_kind 决定
+	// 正文拼法与 workbenchCtx 标记键）、以及事件自身的标识（external_key 是
+	// 幂等键的一部分，也是 `read_subagent_result` / `job_output` 认的那个 id）。
+	UserID      string
+	TenantID    int16
+	SessionID   string
+	SourceKind  string
+	ExternalKey string
 }
 
 // errNoPendingDelivery 表示该会话队列已空。**不是**错误情况，调用方照常收尾即可。
@@ -101,19 +120,29 @@ var errNoPendingDelivery = errors.New("no pending thread delivery")
 // 调用前提：调用方**已持有** `agent:run-lock:<session_id>`。本函数不抢锁 —— 抢锁失败
 // 时要保留队列（留在 queued），那是入口侧的事，不在这里叠一层。
 func claimNextThreadDelivery(ctx context.Context, sessionID string) (threadDelivery, error) {
+	// 用 CTE 先把行改成 running，再 JOIN `threads` 取回重建投递所需的字段。
+	// 不能把 JOIN 塞进 UPDATE 的 FROM 里再 RETURNING：那样返回的是 JOIN 后的列，
+	// 但「哪一行被更新」与「返回哪一行」在多表 UPDATE 下不保证一一对应；
+	// 先 RETURNING 再 JOIN 是确定的一对一。
 	const claimSQL = `
-		UPDATE thread_deliveries d
-		   SET status = 'running'
-		 WHERE (d.thread_id, d.event_key) = (
-		        SELECT td.thread_id, td.event_key
-		          FROM thread_deliveries td
-		         WHERE td.session_id = $1
-		           AND td.status = 'queued'
-		         ORDER BY td.created_at, td.thread_id, td.event_key
-		         LIMIT 1
-		           FOR UPDATE SKIP LOCKED)
-		   AND d.status = 'queued'
-		RETURNING d.thread_id, d.event_key`
+		WITH claimed AS (
+		    UPDATE thread_deliveries d
+		       SET status = 'running'
+		     WHERE (d.thread_id, d.event_key) = (
+		            SELECT td.thread_id, td.event_key
+		              FROM thread_deliveries td
+		             WHERE td.session_id = $1
+		               AND td.status = 'queued'
+		             ORDER BY td.created_at, td.thread_id, td.event_key
+		             LIMIT 1
+		               FOR UPDATE SKIP LOCKED)
+		       AND d.status = 'queued'
+		    RETURNING d.thread_id, d.event_key, d.payload, d.session_id
+		)
+		SELECT c.thread_id, c.event_key, c.payload, c.session_id,
+		       t.user_id, t.tenant_id, t.source_kind, t.external_key
+		  FROM claimed c
+		  JOIN threads t ON t.id = c.thread_id`
 
 	// 必须走写池：`QueryRow` 用的是只读池，在读写分离部署下 UPDATE 会直接失败。
 	tx, err := db.GlobalDBManager.Begin(ctx)
@@ -124,7 +153,10 @@ func claimNextThreadDelivery(ctx context.Context, sessionID string) (threadDeliv
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	var d threadDelivery
-	if scanErr := tx.QueryRow(ctx, claimSQL, sessionID).Scan(&d.ThreadID, &d.EventKey); scanErr != nil {
+	if scanErr := tx.QueryRow(ctx, claimSQL, sessionID).Scan(
+		&d.ThreadID, &d.EventKey, &d.Payload, &d.SessionID,
+		&d.UserID, &d.TenantID, &d.SourceKind, &d.ExternalKey,
+	); scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return threadDelivery{}, errNoPendingDelivery
 		}
@@ -156,6 +188,17 @@ func finishThreadDelivery(ctx context.Context, d threadDelivery, status string) 
 	return err
 }
 
+// payloadArg 把可能为空的快照转成列可接受的参数。
+//
+// 列是 `jsonb NOT NULL`，直接传 nil 会撞约束 —— 但"调用方没给额外输入"是正常情形
+// （迁移里默认值就是 `{}`）。这里统一成空对象，让调用方不必为这一列单独判空。
+func payloadArg(p json.RawMessage) json.RawMessage {
+	if len(bytes.TrimSpace(p)) == 0 {
+		return json.RawMessage(`{}`)
+	}
+	return p
+}
+
 // threadEnqueueParams 是一次入站事件要落的全部信息。
 //
 // 只带键不带正文：正文由事件入口按 kind 组装（`followupKinds.build`），投递层存正文
@@ -167,6 +210,11 @@ type threadEnqueueParams struct {
 	ExternalKey string // 上游幂等键；空串表示内部触发，不参与去重
 	SessionID   string
 	EventKey    string // 同一 thread 下这条事件的幂等键
+	// Payload 是事件到达那一刻的输入快照，投递时用来拼正文。
+	//
+	// 存快照而不是"投递时再取"：引擎回投是一次性 HTTP 请求，调用方手里的
+	// `status` / `profile` / `summary` 不落库就永远丢了。
+	Payload json.RawMessage
 }
 
 // errUnknownThreadSource 表示 source_kind 没在 followupKinds 里注册。
@@ -238,11 +286,11 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 	// 主键冲突 = 这条事件已经投过（多副本重投），DO NOTHING 让它幂等返回。
 	var gotThreadID string
 	insertErr := tx.QueryRow(ctx,
-		`INSERT INTO thread_deliveries (thread_id, event_key, session_id, status)
-		 VALUES ($1, $2, $3, $4)
+		`INSERT INTO thread_deliveries (thread_id, event_key, session_id, status, payload)
+		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (thread_id, event_key) DO NOTHING
 		 RETURNING thread_id`,
-		threadID, p.EventKey, p.SessionID, status).Scan(&gotThreadID)
+		threadID, p.EventKey, p.SessionID, status, payloadArg(p.Payload)).Scan(&gotThreadID)
 	switch {
 	case errors.Is(insertErr, pgx.ErrNoRows):
 		// 已投过：保持既有状态，不因为重投把它从 dropped 复活或从 done 退回 queued。

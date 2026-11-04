@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strconv"
 	"testing"
@@ -337,5 +338,71 @@ func TestLiveEnqueueThreadDeliveryRejectsUnknownSource(t *testing.T) {
 	})
 	if !errors.Is(err, errUnknownThreadSource) {
 		t.Fatalf("未注册来源应返回 errUnknownThreadSource，实际 %v", err)
+	}
+}
+
+// TestLiveClaimThreadDeliveryCarriesPayload 验认领时能拿回投递所需的全部上下文。
+//
+// 这条钉住的是"接线先决"：引擎回投是一次性 HTTP 请求，`status`/`profile`/`summary`
+// 不在别处留底。若 payload 没随行返回、或 threads 的字段没 JOIN 回来，认领方就拼不出
+// 正文也找不到收件人 —— 那种缺陷在单测里看不出来（各函数单独都对），只有真正跑一次
+// 认领才暴露。
+func TestLiveClaimThreadDeliveryCarriesPayload(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	sessionID := p11EnqueueFixture(t, pool, tenantID, userID)
+	ctx := context.Background()
+
+	// 快照刻意带 `profile`（只有 subagent 用得上）与中文摘要，覆盖 jsonb 编解码。
+	payload := json.RawMessage(`{"status":"completed","profile":"researcher","summary":"子任务已完成"}`)
+
+	decision, threadID, err := enqueueThreadDelivery(ctx, threadEnqueueParams{
+		TenantID:    tenantID,
+		UserID:      userID,
+		SourceKind:  "subagent",
+		ExternalKey: "run-payload",
+		SessionID:   sessionID,
+		EventKey:    "evt-1",
+		Payload:     payload,
+	})
+	if err != nil {
+		t.Fatalf("入队失败: %v", err)
+	}
+	if decision != threadDeliverQueued {
+		t.Fatalf("应 queued，实际 %q", decision)
+	}
+
+	d, err := claimNextThreadDelivery(ctx, sessionID)
+	if err != nil {
+		t.Fatalf("认领失败: %v", err)
+	}
+
+	if d.ThreadID != threadID || d.EventKey != "evt-1" {
+		t.Fatalf("认领到错误的事件: (%s, %s)", d.ThreadID, d.EventKey)
+	}
+	// JOIN 出来的收件人信息：缺任何一项，认领方都无从发起 handleSubmit。
+	if d.SessionID != sessionID || d.UserID != userID || d.TenantID != tenantID {
+		t.Fatalf("收件人字段不对: session=%q user=%q tenant=%d", d.SessionID, d.UserID, d.TenantID)
+	}
+	if d.SourceKind != "subagent" || d.ExternalKey != "run-payload" {
+		t.Fatalf("来源字段不对: kind=%q external=%q", d.SourceKind, d.ExternalKey)
+	}
+
+	// payload 必须逐字还原：拼正文时用的是它，不是"再查一次"。
+	var got struct {
+		Status  string `json:"status"`
+		Profile string `json:"profile"`
+		Summary string `json:"summary"`
+	}
+	if err := json.Unmarshal(d.Payload, &got); err != nil {
+		t.Fatalf("payload 解不开: %v（原文 %s）", err, string(d.Payload))
+	}
+	if got.Status != "completed" || got.Profile != "researcher" || got.Summary != "子任务已完成" {
+		t.Fatalf("payload 往返失真: %+v", got)
+	}
+
+	// 认领即置 running：同一条不会被同副本再领一次（否则事件会被投两遍）。
+	if _, err := claimNextThreadDelivery(ctx, sessionID); !errors.Is(err, errNoPendingDelivery) {
+		t.Fatalf("已认领的行不该再被领到，实际 err=%v", err)
 	}
 }
