@@ -318,10 +318,16 @@ create table thread_deliveries (
   超限落 dropped 且不复活 / 未注册来源报错）、收尾认领 `claimNextThreadDelivery` 与
   `finishThreadDelivery`（真库验收 2 条：最早优先 + 收尾幂等）。
 - **未落地**：§6 要的那组"有订阅 / 无订阅"对照埋点。
-- **订阅 CRUD 已落地**（`thread_subscription.go`）：`GET/POST /v1/threads/{id}/subscriptions`
-  与 `DELETE /v1/threads/{id}/subscriptions/{sub_id}`，判据 `user_id`；归属校验写在同一条
-  SQL 里（`JOIN threads ... WHERE t.user_id = $1`），"不存在"与"不是你的"同为 404，
-  避免拿 thread/subscription id 枚举他人订阅。
+- **订阅路由与埋点已落地**（`thread_delivery.go` 的 `resolveThreadTarget`）：
+  入站时按 `thread_subscriptions` 改写目标会话，并在**每一次**投递写审计
+  `superagent.thread.routed`（带 `subscribed` / `entry_session` / `target_session`），
+  即 §6 要的那组"有订阅 / 无订阅"对照数据。
+  **仍有一处与文档口径不一致**：roadmap 投递路径第 2 步写的是"无订阅则该事件到此为止"，
+  代码实际是**无订阅维持入口给的会话**（2026-11-04 权衡：库里此刻一条订阅都没有，
+  照字面做会让现存子 Agent / job 回投全部静默停摆）。等订阅在真实使用中出现、
+  对照数据成型后，再单独一批收紧成"无订阅即止"。
+  多条 active 订阅时取最早创建的一条（执行侧串行，一条事件只能开一个回合）；
+  订阅查询失败按"无订阅"处理并记日志 —— 路由层自坏不该把本可投的事件变成投不出去。
 - **接线已落地**（`thread_turn.go` / `thread_turn_marker.go` + `agent_followup.go` 入口改造）：
   `AgentFollowupHandler` 现在**先入队再决定跑不跑**，入队后若会话空闲则**原地直跑**
   （约束Ⅰ，锁的所有权由 handler 转交给 `startThreadTurnWithLock`，不再"先还再抢"），

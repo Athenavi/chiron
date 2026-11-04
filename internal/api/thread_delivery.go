@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -112,6 +113,51 @@ type threadDelivery struct {
 
 // errNoPendingDelivery 表示该会话队列已空。**不是**错误情况，调用方照常收尾即可。
 var errNoPendingDelivery = errors.New("no pending thread delivery")
+
+// threadDeliveryRoutedAudit 是每次入站都会写的一条路由埋点（roadmap §6 的那组对照数据）。
+//
+// 记在**每一次**投递上而不是只在"被订阅改投"时记：要对比"有订阅 / 无订阅两种配置下的
+// 决定数"，缺了无订阅那一半就没有分母，只剩一个百分比而没有总量。
+const threadDeliveryRoutedAudit = "superagent.thread.routed"
+
+// resolveThreadTarget 按订阅决定这条事件投给哪个会话。
+//
+// 返回 `(最终会话, 是否由订阅决定)`。
+//
+// 语义按 2026-11-04 的兼容取舍：**有 active 订阅则改投订阅指向的会话；无订阅则维持
+// 入口给的会话**。roadmap 投递路径第 2 步写的是"无订阅则该事件到此为止"，但库里
+// 此刻一条订阅都没有，照字面做等于让现存的子 Agent / job 回投全部静默停摆 ——
+// 那不是安全的默认值，是停机。等订阅在真实使用中出现、对照埋点也拿到了数据，
+// 再单独一批收紧成"无订阅即止"。
+//
+// 多条 active 订阅时取最早创建的一条：同一 thread 对多个会话同时订阅意味着一条事件
+// 要开多个回合，而执行侧是**串行**的（`agent:run-lock:<session>` 唯一）。此刻挑一条
+// 确定性地投，比按 map 顺序随机选一条可解释得多。
+//
+// 查询失败按"无订阅"处理（fail-open 到今日行为）并记日志：订阅是**新增**的路由层，
+// 它自己坏掉不该把一条本来能投的事件变成投不出去。这里与"读不到配置当未开启"的
+// fail-closed 不冲突 —— 那条是权限开关，这条是路由；路由失败退回旧路径不放大权限。
+func resolveThreadTarget(ctx context.Context, tx pgx.Tx, threadID, entrySession string) (string, bool) {
+	var target string
+	err := tx.QueryRow(ctx, `
+		SELECT session_id FROM thread_subscriptions
+		 WHERE thread_id = $1 AND status = 'active'
+		 ORDER BY created_at ASC, id ASC
+		 LIMIT 1`, threadID).Scan(&target)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return entrySession, false
+	}
+	if err != nil {
+		slog.Warn("thread delivery: subscription lookup failed, falling back to entry session",
+			"thread", threadID, "session", entrySession, "error", err)
+		return entrySession, false
+	}
+	if target == "" {
+		// 空值只可能来自坏数据，仍按未订阅处理。
+		return entrySession, false
+	}
+	return target, true
+}
 
 // claimNextThreadDelivery 原子地领走该会话最早的一条待处理事件，并置为 running。
 //
@@ -289,26 +335,14 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
-	// 计数与插入必须在同一个临界区里。两个副本各自读到 pending=19 然后双双插入，
-	// 上限就从 20 变成 21 —— 而这种竞态只在高负载时出现，靠测试很难复现，只能从
-	// 结构上消掉。advisory lock 用 hashtext 压成 32 位，键里带会话 ID，
-	// 与 superagent.go 的 startTx 同一手法（那里按用户 ID 加锁）。
-	if _, lockErr := tx.Exec(ctx,
-		`SELECT pg_advisory_xact_lock(hashtext($1))`, "thread-enqueue:"+p.SessionID); lockErr != nil {
-		return threadDeliverDropped, "", lockErr
-	}
-
-	var pending int
-	if countErr := tx.QueryRow(ctx,
-		`SELECT count(*) FROM thread_deliveries
-		  WHERE session_id = $1 AND status = 'queued'`, p.SessionID).Scan(&pending); countErr != nil {
-		return threadDeliverDropped, "", countErr
-	}
-
-	// 取或建 thread。`DO UPDATE SET user_id = threads.user_id` 是刻意的空更新：
-	// 只有带了 DO UPDATE，冲突时 RETURNING 才会返回**已存在**的那行 id；
-	// 换成 DO NOTHING 时冲突不返回任何行，调用方还得再查一次。
-	// 谓词必须与 `threads_idem` 的定义逐字一致，否则 Postgres 推断不到那条部分索引。
+	// 取或建 thread 必须**先于**待处理计数：订阅是挂在 thread 上的，而"投给哪个会话"
+	// 决定了要数谁的队列。原来的顺序是先数再建 thread，一旦按订阅改投目标，
+	// 就会数错会话的 pending —— 上限按会话计，数错等于上限失效。
+	//
+	// `DO UPDATE SET user_id = threads.user_id` 是刻意的空更新：只有带了 DO UPDATE，
+	// 冲突时 RETURNING 才会返回**已存在**的那行 id；换成 DO NOTHING 时冲突不返回任何行，
+	// 调用方还得再查一次。谓词必须与 `threads_idem` 的定义逐字一致，
+	// 否则 Postgres 推断不到那条部分索引。
 	const upsertThreadSQL = `
 		INSERT INTO threads (id, tenant_id, user_id, source_kind, external_key)
 		VALUES ($1, $2, $3, $4, $5)
@@ -320,6 +354,46 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 		uuid.NewString(), p.TenantID, p.UserID, p.SourceKind, p.ExternalKey,
 	).Scan(&threadID); scanErr != nil {
 		return threadDeliverDropped, "", scanErr
+	}
+
+	// 订阅解析（roadmap 投递路径第 2 步，按 2026-11-04 的兼容取舍落在 A 方案）：
+	// 有 active 订阅则按订阅改投目标会话；无订阅**维持今日行为**（投给入口给的会话），
+	// 并打一条 no-subscription 埋点。严格照文档做"无订阅即止"会让现存的子 Agent /
+	// job 回投全部静默停摆 —— 库里此刻一条订阅都没有，那不是安全的默认值，是停机。
+	//
+	// 埋点必须先于"投不投"的结论产生：§6 要的对照数据是"有订阅 / 无订阅两种配置下的
+	// 决定数"，如果只在有订阅时记，无订阅的那一半永远没有分母。
+	sessionID, subscribed := resolveThreadTarget(ctx, tx, threadID, p.SessionID)
+	db.AuditLog(ctx, p.UserID, p.TenantID, threadDeliveryRoutedAudit,
+		"thread:"+threadID, "thread delivery routed", "",
+		map[string]interface{}{
+			"subscribed":     subscribed,
+			"event_key":      p.EventKey,
+			"source_kind":    p.SourceKind,
+			"entry_session":  p.SessionID,
+			"target_session": sessionID,
+		})
+	if sessionID != p.SessionID {
+		slog.Info("thread delivery: routed by subscription",
+			"thread", threadID, "from", p.SessionID, "to", sessionID)
+	}
+
+	// 计数与插入必须在同一个临界区里。两个副本各自读到 pending=19 然后双双插入，
+	// 上限就从 20 变成 21 —— 而这种竞态只在高负载时出现，靠测试很难复现，只能从
+	// 结构上消掉。advisory lock 用 hashtext 压成 32 位，键里带**最终**会话 ID
+	// （订阅改投之后的那一个），否则两个不同入口投到同一会话时会各拿一把锁，
+	// 计数照样能同时读到 19。
+	// 与 superagent.go 的 startTx 同一手法（那里按用户 ID 加锁）。
+	if _, lockErr := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1))`, "thread-enqueue:"+sessionID); lockErr != nil {
+		return threadDeliverDropped, "", lockErr
+	}
+
+	var pending int
+	if countErr := tx.QueryRow(ctx,
+		`SELECT count(*) FROM thread_deliveries
+		  WHERE session_id = $1 AND status = 'queued'`, sessionID).Scan(&pending); countErr != nil {
+		return threadDeliverDropped, "", countErr
 	}
 
 	decision := decideThreadDelivery(pending)
@@ -337,7 +411,7 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 		 VALUES ($1, $2, $3, $4, $5)
 		 ON CONFLICT (thread_id, event_key) DO NOTHING
 		 RETURNING thread_id`,
-		threadID, p.EventKey, p.SessionID, status, payloadArg(p.Payload)).Scan(&gotThreadID)
+		threadID, p.EventKey, sessionID, status, payloadArg(p.Payload)).Scan(&gotThreadID)
 	switch {
 	case errors.Is(insertErr, pgx.ErrNoRows):
 		// 已投过：保持既有状态，不因为重投把它从 dropped 复活或从 done 退回 queued。
@@ -357,10 +431,12 @@ func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDe
 		db.AuditLog(ctx, p.UserID, p.TenantID, threadDeliveryDroppedAudit,
 			"thread:"+threadID, "thread delivery dropped: queue full", "",
 			map[string]interface{}{
-				"event_key": p.EventKey,
-				"session":   p.SessionID,
-				"pending":   pending,
-				"limit":     maxPendingThreadEvents,
+				"event_key":     p.EventKey,
+				"session":       sessionID,
+				"entry_session": p.SessionID,
+				"subscribed":    subscribed,
+				"pending":       pending,
+				"limit":         maxPendingThreadEvents,
 			})
 	}
 	return decision, threadID, nil
