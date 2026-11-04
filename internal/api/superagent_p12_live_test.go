@@ -454,3 +454,165 @@ func TestLiveTurnOriginMarksTakeoverRounds(t *testing.T) {
 		t.Fatalf("重放后 origin 应保持 %q，得到 %q", TakeoverSource, got)
 	}
 }
+
+func p12Get(t *testing.T, h *SuperAgentHandler, target string,
+	tenantID int16, userID string,
+	fn func(*SuperAgentHandler, *httptest.ResponseRecorder, *http.Request)) *httptest.ResponseRecorder {
+	t.Helper()
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req = req.WithContext(auth.WithClaims(req.Context(), &auth.Claims{
+		TenantID: tenantID, UserID: userID,
+	}))
+	ctx := context.WithValue(req.Context(), CtxKeyUserID, userID)
+	ctx = context.WithValue(ctx, CtxKeyTenantID, tenantID)
+	req = req.WithContext(ctx)
+	rec := httptest.NewRecorder()
+	fn(h, rec, req)
+	return rec
+}
+
+// 验收 1：默认禁用 —— 不写配置时，行为与没有这个功能时逐字一致。
+//
+// "没写配置"要验三件事：开关读出来是关的、没有接管行、也没有任何回合被拉起。
+// 只验前两件不够 —— `loadTakeoverConfig` 的零值是 `Enabled=false`，那是个**巧合**
+// 还是有意为之，只有同时确认"没有接管在跑"才说得清。这条不依赖任何写入，
+// 因此它同时也是这张表"空着时不会自己长出东西"的证明。
+func TestLiveDefaultDisabledTouchesNothing(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	sid := p12Session(t, pool, tenantID, userID)
+	h := NewSuperAgentHandler(nil, nil)
+
+	rec := p12Get(t, h, "/v1/superagent", tenantID, userID,
+		func(h *SuperAgentHandler, w *httptest.ResponseRecorder, r *http.Request) {
+			h.Snapshot(w, r)
+		})
+	if rec.Code != http.StatusOK {
+		t.Fatalf("快照应成功: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	var snap struct {
+		Data struct {
+			Config struct {
+				Enabled    bool     `json:"enabled"`
+				SessionIDs []string `json:"session_ids"`
+			} `json:"config"`
+			Takeovers []struct {
+				ID string `json:"id"`
+			} `json:"takeovers"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &snap); err != nil {
+		t.Fatalf("解析快照失败: %v body=%s", err, rec.Body.String())
+	}
+	if snap.Data.Config.Enabled {
+		t.Fatal("未写配置时开关应为关")
+	}
+	if len(snap.Data.Config.SessionIDs) != 0 {
+		t.Fatalf("未写配置时不该有会话：%v", snap.Data.Config.SessionIDs)
+	}
+	if len(snap.Data.Takeovers) != 0 {
+		t.Fatalf("未写配置时不该有运行中的接管，得到 %d 条", len(snap.Data.Takeovers))
+	}
+
+	var rows int
+	if err := pool.QueryRow(context.Background(),
+		`SELECT count(*) FROM superagent_takeovers WHERE session_id = $1`, sid).Scan(&rows); err != nil {
+		t.Fatalf("计数失败: %v", err)
+	}
+	if rows != 0 {
+		t.Fatalf("未写配置时该会话不该有接管行，得到 %d 行", rows)
+	}
+}
+
+// 验收 10：`skipped_busy` 在配置页可见 —— 用户能分清"没跑"和"跑失败"。
+//
+// 造的是真实场景：任务指向的会话**已经**有接管在跑，于是这一拍一个窗口都开不出来。
+// 此时写 `failed` 是错的（什么都没坏），写 `success` 更是骗人；必须是 `skipped_busy`。
+// 断言走列表面板而不是直接查表：验收要求的是"配置页可见"，只验库里那列说明不了
+// 投影层有没有把它带出来。
+func TestLiveScheduleSkipIsVisibleAsSkippedBusy(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	sid := p12Session(t, pool, tenantID, userID)
+	h := NewSuperAgentHandler(nil, nil)
+
+	created := p12Post(t, h, "/v1/superagent/schedules", tenantID, userID,
+		scheduleRequest{
+			Name: "p12-skip", Schedule: "0 3 * * *", WindowSeconds: 600,
+			SessionIDs: []string{sid}, Enabled: false,
+		},
+		func(h *SuperAgentHandler, w *httptest.ResponseRecorder, r *http.Request) {
+			h.CreateSchedule(w, r)
+		})
+	if created.Code != http.StatusCreated {
+		t.Fatalf("建任务失败: status=%d body=%s", created.Code, created.Body.String())
+	}
+	var createdBody struct {
+		Data struct {
+			ID string `json:"id"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(created.Body.Bytes(), &createdBody); err != nil {
+		t.Fatalf("解析创建响应失败: %v", err)
+	}
+	scheduleID := createdBody.Data.ID
+	if scheduleID == "" {
+		t.Fatalf("创建响应里没有 id: %s", created.Body.String())
+	}
+
+	// 先占住这个会话：接管窗口已经在跑，所以下一拍没有窗口可开。
+	if rec := p12SaveConfig(t, h, tenantID, userID, []string{sid}, 600); rec.Code != http.StatusCreated {
+		t.Fatalf("先开一个接管失败: status=%d body=%s", rec.Code, rec.Body.String())
+	}
+
+	row, err := loadSchedule(context.Background(), scheduleID, userID)
+	if err != nil {
+		t.Fatalf("读回任务失败: %v", err)
+	}
+	opened, err := startScheduleTakeovers(context.Background(), row)
+	if err != nil {
+		t.Fatalf("触发任务失败: %v", err)
+	}
+	if opened != 0 {
+		t.Fatalf("会话已有接管在跑时不该再开窗口，opened=%d", opened)
+	}
+
+	list := p12Get(t, h, "/v1/superagent/schedules", tenantID, userID,
+		func(h *SuperAgentHandler, w *httptest.ResponseRecorder, r *http.Request) {
+			h.ListSchedules(w, r)
+		})
+	if list.Code != http.StatusOK {
+		t.Fatalf("列任务失败: status=%d body=%s", list.Code, list.Body.String())
+	}
+	var listBody struct {
+		Data struct {
+			Schedules []struct {
+				ID         string `json:"id"`
+				LastStatus string `json:"last_status"`
+			} `json:"schedules"`
+		} `json:"data"`
+	}
+	if err := json.Unmarshal(list.Body.Bytes(), &listBody); err != nil {
+		t.Fatalf("解析列表失败: %v body=%s", err, list.Body.String())
+	}
+
+	var got string
+	var found bool
+	for _, s := range listBody.Data.Schedules {
+		if s.ID == scheduleID {
+			got, found = s.LastStatus, true
+			break
+		}
+	}
+	if !found {
+		t.Fatalf("列表里没有刚建的任务 %s", scheduleID)
+	}
+	if got != "skipped_busy" {
+		t.Fatalf("配置页应显示 skipped_busy（区分\"没跑\"与\"跑失败\"），得到 %q", got)
+	}
+}
