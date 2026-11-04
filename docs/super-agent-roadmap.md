@@ -330,8 +330,10 @@ create table thread_deliveries (
   DEFAULT '{}'` 承载"事件到达那一刻的输入快照"。选单列 jsonb 而非
   `status/profile/summary` 三列：`profile` 只有 `subagent` 用得上，拆列会得到一张大部分
   格子为空的稀疏表；而这份快照本就该是不可变事实，不需要被 SQL 按字段查询。
-  真库验证 upgrade 与 downgrade 双向干净。入队侧写 payload、drain 侧读它拼正文，
-  随接线一起落地。
+  真库验证 upgrade 与 downgrade 双向干净。入队侧已写入 payload、认领侧已 JOIN 取回
+  `user_id/tenant_id/session_id/source_kind/external_key` 与 payload（真库验收 1 条：
+  载荷往返 + JOIN 字段 + 认领即置 running 不可重复领）。**剩下的只有入口接线**：
+  把 `agent_followup.go` 的直投改成"先入队"，并在收尾点 drain。
 
 #### P1-2 Router 接管（Super-agent 接管）
 

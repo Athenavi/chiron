@@ -83,6 +83,10 @@
   `buildJobFollowupContent` 要 `RunID/Status/Summary`，而这些字段没有任何一处留底 ——
   引擎回投是一次性 HTTP 请求，drain 侧无从还原。选单列 jsonb 而非三列：`profile` 只有
   `subagent` 用得上，拆列会得到大部分格子为空的稀疏表。真库验证 upgrade + downgrade 双向干净。
+  紧接着投递行承载 payload 与收件人字段：`threadEnqueueParams.Payload` 随行写入
+  （`payloadArg` 把空值归一成 `{}`，因为列是 `jsonb NOT NULL` 而"无额外输入"是正常情形）；
+  `claimNextThreadDelivery` 改用 CTE——先 `UPDATE ... RETURNING` 再 JOIN `threads`
+  （多表 UPDATE 的 FROM 里"哪行被更新"与"返回哪行"不保证一一对应）。真库验收新增 1 条。
 - **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
   此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
   但"PG 真的这样算"、"拒绝时表里真的一行没多"、"A 真的停不了 B"只有跑一次才知道。四条用例：
