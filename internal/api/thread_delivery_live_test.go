@@ -2,9 +2,12 @@ package api
 
 import (
 	"context"
+	"errors"
+	"strconv"
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // P1-1 投递层队列侧的验收（roadmap P1-1.1 投递路径第 3、4 步的下半段）。
@@ -169,5 +172,170 @@ func TestLiveFinishThreadDeliveryIsIdempotent(t *testing.T) {
 	// 非法终态直接报错，而不是悄悄写成 queued/running 这种会被人重投的值。
 	if err := finishThreadDelivery(ctx, d, threadDeliveryQueued); err == nil {
 		t.Fatal("finishThreadDelivery 应拒绝非终态")
+	}
+}
+
+// p11EnqueueFixture 建会话并注册按 FK 逆序的清理。
+//
+// 清理必须覆盖 sessions：漏掉它时 fixture 删 users 会撞 `sessions_user_id_fkey`，
+// 结果是残留行 + 一串"清理失败"告警（这种失败容易被当成噪音忽略掉）。
+func p11EnqueueFixture(t *testing.T, pool *pgxpool.Pool, tenantID int16, userID string) string {
+	t.Helper()
+	sessionID := p12Session(t, pool, tenantID, userID)
+	t.Cleanup(func() {
+		for _, c := range []struct {
+			sql string
+			arg string
+		}{
+			{`DELETE FROM thread_deliveries WHERE session_id = $1`, sessionID},
+			{`DELETE FROM threads WHERE user_id = $1`, userID},
+			{`DELETE FROM sessions WHERE id = $1`, sessionID},
+		} {
+			if _, err := pool.Exec(context.Background(), c.sql, c.arg); err != nil {
+				t.Logf("清理失败 %q: %v", c.sql, err)
+			}
+		}
+	})
+	return sessionID
+}
+
+// TestLiveEnqueueThreadDeliveryIsIdempotent 钉住"多副本重投只落一行"。
+//
+// 幂等靠两层唯一约束：`threads_idem`（同一 external_key 一条 thread）与投递表主键
+// （同一 (thread, event_key) 一行）。这两层必须**都**生效 —— 只靠第一层时，同一事件
+// 重投会落成同一条 thread 下的两行投递，用户就会看两遍同样的结果。
+func TestLiveEnqueueThreadDeliveryIsIdempotent(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	sessionID := p11EnqueueFixture(t, pool, tenantID, userID)
+	ctx := context.Background()
+
+	p := threadEnqueueParams{
+		TenantID:    tenantID,
+		UserID:      userID,
+		SourceKind:  "subagent",
+		ExternalKey: "run-abc",
+		SessionID:   sessionID,
+		EventKey:    "evt-1",
+	}
+
+	decision, threadID, err := enqueueThreadDelivery(ctx, p)
+	if err != nil {
+		t.Fatalf("首次入队失败: %v", err)
+	}
+	if decision != threadDeliverQueued {
+		t.Fatalf("空队列应 queued，实际 %q", decision)
+	}
+
+	// 同一条事件重投：状态与 thread 都必须不变。
+	decision2, threadID2, err := enqueueThreadDelivery(ctx, p)
+	if err != nil {
+		t.Fatalf("重投应幂等成功，实际 %v", err)
+	}
+	if decision2 != threadDeliverQueued || threadID2 != threadID {
+		t.Fatalf("重投应复用同一 thread（%s），实际 (%q, %s)", threadID, decision2, threadID2)
+	}
+
+	var threads, deliveries int
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM threads WHERE user_id = $1`, userID).Scan(&threads); err != nil {
+		t.Fatalf("统计 thread 失败: %v", err)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT count(*) FROM thread_deliveries WHERE session_id = $1`, sessionID).Scan(&deliveries); err != nil {
+		t.Fatalf("统计投递失败: %v", err)
+	}
+	if threads != 1 || deliveries != 1 {
+		t.Fatalf("重投后应各 1 行，实际 threads=%d deliveries=%d", threads, deliveries)
+	}
+}
+
+// TestLiveEnqueueThreadDeliveryDropsOnOverflow 验超限丢弃：**落 dropped 行 + 不复活**。
+//
+// 丢弃写成"只写审计、不落行"会让投递表分不清"没发生"和"发生了但被丢"；而重投把
+// dropped 捞回 queued 则是另一种错 —— 丢弃是终态，否则队列满时会来回抖动。
+func TestLiveEnqueueThreadDeliveryDropsOnOverflow(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	sessionID := p11EnqueueFixture(t, pool, tenantID, userID)
+	ctx := context.Background()
+
+	base := threadEnqueueParams{
+		TenantID:    tenantID,
+		UserID:      userID,
+		SourceKind:  "job",
+		ExternalKey: "job-42",
+		SessionID:   sessionID,
+	}
+	// 先精确填满上限，一条都不能被丢 —— 这一步也顺带验了"上限不含正在跑的"。
+	for i := 0; i < maxPendingThreadEvents; i++ {
+		p := base
+		p.EventKey = "evt-" + strconv.Itoa(i)
+		decision, _, err := enqueueThreadDelivery(ctx, p)
+		if err != nil {
+			t.Fatalf("第 %d 条入队失败: %v", i, err)
+		}
+		if decision != threadDeliverQueued {
+			t.Fatalf("第 %d 条不该被丢（上限 %d），实际 %q", i, maxPendingThreadEvents, decision)
+		}
+	}
+
+	// 第 21 条落 dropped。
+	overflow := base
+	overflow.EventKey = "evt-overflow"
+	decision, _, err := enqueueThreadDelivery(ctx, overflow)
+	if err != nil {
+		t.Fatalf("超限入队失败: %v", err)
+	}
+	if decision != threadDeliverDropped {
+		t.Fatalf("超限应 dropped，实际 %q", decision)
+	}
+
+	var status string
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM thread_deliveries WHERE session_id = $1 AND event_key = $2`,
+		sessionID, "evt-overflow").Scan(&status); err != nil {
+		t.Fatalf("丢弃也必须落行，读不到: %v", err)
+	}
+	if status != threadDeliveryDropped {
+		t.Fatalf("丢弃行状态应为 dropped，实际 %q", status)
+	}
+
+	// 重投同一条：仍是 dropped，不能被捞回队列 —— 否则队列满时事件会反复进出。
+	again, _, err := enqueueThreadDelivery(ctx, overflow)
+	if err != nil {
+		t.Fatalf("丢弃后重投不应报错: %v", err)
+	}
+	if again != threadDeliverDropped {
+		t.Fatalf("重投丢弃行不应复活，实际 %q", again)
+	}
+	if err := pool.QueryRow(ctx,
+		`SELECT status FROM thread_deliveries WHERE session_id = $1 AND event_key = $2`,
+		sessionID, "evt-overflow").Scan(&status); err != nil {
+		t.Fatalf("重投后读状态失败: %v", err)
+	}
+	if status != threadDeliveryDropped {
+		t.Fatalf("重投后状态应仍为 dropped，实际 %q", status)
+	}
+}
+
+// TestLiveEnqueueThreadDeliveryRejectsUnknownSource 验未注册来源直接报错。
+//
+// `webhook` 刻意不在 `followupKinds` 里（P0-2 只接内部可信源），所以它必须炸，
+// 而不是悄悄按某个默认分组入队 —— 那等于绕过信任边界。
+func TestLiveEnqueueThreadDeliveryRejectsUnknownSource(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	sessionID := p11EnqueueFixture(t, pool, tenantID, userID)
+
+	_, _, err := enqueueThreadDelivery(context.Background(), threadEnqueueParams{
+		TenantID:   tenantID,
+		UserID:     userID,
+		SourceKind: "webhook",
+		SessionID:  sessionID,
+		EventKey:   "evt-x",
+	})
+	if !errors.Is(err, errUnknownThreadSource) {
+		t.Fatalf("未注册来源应返回 errUnknownThreadSource，实际 %v", err)
 	}
 }

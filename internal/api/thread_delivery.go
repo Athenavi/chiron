@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/athenavi/chiron/internal/db"
@@ -153,4 +154,117 @@ func finishThreadDelivery(ctx context.Context, d threadDelivery, status string) 
 		  WHERE thread_id = $2 AND event_key = $3 AND status = 'running'`,
 		status, d.ThreadID, d.EventKey)
 	return err
+}
+
+// threadEnqueueParams 是一次入站事件要落的全部信息。
+//
+// 只带键不带正文：正文由事件入口按 kind 组装（`followupKinds.build`），投递层存正文
+// 就等于存一份会过期的副本 —— 真正被投递时正文还要按当时的上下文重新拼。
+type threadEnqueueParams struct {
+	TenantID    int16
+	UserID      string
+	SourceKind  string // 必须 ∈ followupKinds（subagent / job），刻意不含 webhook
+	ExternalKey string // 上游幂等键；空串表示内部触发，不参与去重
+	SessionID   string
+	EventKey    string // 同一 thread 下这条事件的幂等键
+}
+
+// errUnknownThreadSource 表示 source_kind 没在 followupKinds 里注册。
+//
+// 单独一个哨兵而不是复用"未知 kind 就 dropped"：调用方传错来源是**编程错误**，
+// 应当让它炸在测试里；而"未知来源但已上线"是运行时输入问题，那条走 dropped + 审计。
+var errUnknownThreadSource = errors.New("thread: source_kind not registered in followupKinds")
+
+// enqueueThreadDelivery 把一条事件写进队列，并按准入判据决定它的初始状态。
+//
+// 返回的 `threadID` 在丢弃时也要返回：审计要指明"是哪条 thread 的第几个事件被丢了"，
+// 只有动作名而定位不到具体事件的话，事后追问时答不上来。
+//
+// 幂等分两层：`threads_idem` 让同一 (租户, 来源, external_key) 只对应一条 thread；
+// `thread_deliveries` 的主键让同一 (thread, event_key) 只落一行。第二次入站走
+// `DO NOTHING` 且**不复活**已 dropped 的行 —— 丢弃是终态，重投不该把它捞回来。
+func enqueueThreadDelivery(ctx context.Context, p threadEnqueueParams) (threadDeliveryDecision, string, error) {
+	if _, known := followupKinds[p.SourceKind]; !known {
+		return threadDeliverDropped, "", errUnknownThreadSource
+	}
+
+	tx, err := db.GlobalDBManager.Begin(ctx)
+	if err != nil {
+		return threadDeliverDropped, "", err
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// 计数与插入必须在同一个临界区里。两个副本各自读到 pending=19 然后双双插入，
+	// 上限就从 20 变成 21 —— 而这种竞态只在高负载时出现，靠测试很难复现，只能从
+	// 结构上消掉。advisory lock 用 hashtext 压成 32 位，键里带会话 ID，
+	// 与 superagent.go 的 startTx 同一手法（那里按用户 ID 加锁）。
+	if _, lockErr := tx.Exec(ctx,
+		`SELECT pg_advisory_xact_lock(hashtext($1))`, "thread-enqueue:"+p.SessionID); lockErr != nil {
+		return threadDeliverDropped, "", lockErr
+	}
+
+	var pending int
+	if countErr := tx.QueryRow(ctx,
+		`SELECT count(*) FROM thread_deliveries
+		  WHERE session_id = $1 AND status = 'queued'`, p.SessionID).Scan(&pending); countErr != nil {
+		return threadDeliverDropped, "", countErr
+	}
+
+	// 取或建 thread。`DO UPDATE SET user_id = threads.user_id` 是刻意的空更新：
+	// 只有带了 DO UPDATE，冲突时 RETURNING 才会返回**已存在**的那行 id；
+	// 换成 DO NOTHING 时冲突不返回任何行，调用方还得再查一次。
+	// 谓词必须与 `threads_idem` 的定义逐字一致，否则 Postgres 推断不到那条部分索引。
+	const upsertThreadSQL = `
+		INSERT INTO threads (id, tenant_id, user_id, source_kind, external_key)
+		VALUES ($1, $2, $3, $4, $5)
+		ON CONFLICT (tenant_id, source_kind, external_key) WHERE external_key <> ''
+		DO UPDATE SET user_id = threads.user_id
+		RETURNING id`
+	var threadID string
+	if scanErr := tx.QueryRow(ctx, upsertThreadSQL,
+		uuid.NewString(), p.TenantID, p.UserID, p.SourceKind, p.ExternalKey,
+	).Scan(&threadID); scanErr != nil {
+		return threadDeliverDropped, "", scanErr
+	}
+
+	decision := decideThreadDelivery(pending)
+	status := threadDeliveryQueued
+	if decision == threadDeliverDropped {
+		// 丢弃也落一行，而不是只写审计：投递表是事实源，缺行就分不清
+		// "没发生"和"发生了但被丢"，而这两件事的处理方式完全不同。
+		status = threadDeliveryDropped
+	}
+
+	// 主键冲突 = 这条事件已经投过（多副本重投），DO NOTHING 让它幂等返回。
+	var gotThreadID string
+	insertErr := tx.QueryRow(ctx,
+		`INSERT INTO thread_deliveries (thread_id, event_key, session_id, status)
+		 VALUES ($1, $2, $3, $4)
+		 ON CONFLICT (thread_id, event_key) DO NOTHING
+		 RETURNING thread_id`,
+		threadID, p.EventKey, p.SessionID, status).Scan(&gotThreadID)
+	switch {
+	case errors.Is(insertErr, pgx.ErrNoRows):
+		// 已投过：保持既有状态，不因为重投把它从 dropped 复活或从 done 退回 queued。
+	case insertErr != nil:
+		return threadDeliverDropped, threadID, insertErr
+	}
+
+	if commitErr := tx.Commit(ctx); commitErr != nil {
+		return threadDeliverDropped, threadID, commitErr
+	}
+
+	if decision == threadDeliverDropped {
+		// 审计放在事务外：写审计失败不该回滚"这条被丢了"这个事实
+		// （AuditLog 本身也是 fail-soft），否则会变成"丢了但没记录"。
+		db.AuditLog(ctx, p.UserID, p.TenantID, threadDeliveryDroppedAudit,
+			"thread:"+threadID, "thread delivery dropped: queue full", "",
+			map[string]interface{}{
+				"event_key": p.EventKey,
+				"session":   p.SessionID,
+				"pending":   pending,
+				"limit":     maxPendingThreadEvents,
+			})
+	}
+	return decision, threadID, nil
 }

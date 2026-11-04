@@ -71,6 +71,11 @@
   同值，只按时间排会让"为什么这条先跑"没有答案）；`finishThreadDelivery` 的
   `WHERE status = 'running'` 让它天然幂等，重复收尾不会把已 `done` 的行改写成 `dropped`。
   真库验收 2 条：最早优先（乱序插入仍领对的）+ 收尾幂等。
+  队列的入队写入是 `enqueueThreadDelivery`：计数与插入在同一个 advisory lock 临界区内完成
+  （两个副本各自读到 19 再双双插入，上限就从 20 变成 21，而这类竞态靠测试很难复现，只能
+  从结构上消掉）；`threads_idem` 与投递表主键两层幂等让多副本重投只落一行，且 `DO NOTHING`
+  **不复活**已 `dropped` 的行；超限时落 `dropped` 行并写审计，而不是只写审计 —— 缺行就
+  分不清"没发生"和"发生了但被丢"。真库验收 3 条：重投幂等 / 超限丢弃不复活 / 未注册来源报错。
   **尚未接线**：事件入口仍走 `agent_followup.go` 直投，投递层默认不生效。
 - **Super-agent 接管的真库验收（P1-2 验收 4/6/7/9）**：`internal/api/superagent_p12_live_test.go`。
   此前这四条只有静态检查 —— 读 SQL 能看出 `ends_at` 写成 `now() + make_interval(...)`，
