@@ -2,7 +2,8 @@
 Alembic env configuration.
 Resolves the database URL from:
   1. DATABASE_DSN environment variable
-  2. alembic.ini fallback
+  2. POSTGRES_DSN environment variable（与 Go 网关 / Python 引擎 / compose 同名）
+  3. alembic.ini fallback
 """
 import os
 from logging.config import fileConfig
@@ -46,13 +47,23 @@ if not env_loaded:
         print(f"  - {p}")
 
 def get_database_url() -> str | None:
-    """Resolve database URL from DATABASE_DSN env → alembic.ini fallback."""
+    """Resolve database URL from env → alembic.ini fallback.
+
+    DATABASE_DSN 是迁移专用变量（CI / deploy/migrations 镜像用）；POSTGRES_DSN 是
+    应用侧（Go 网关、Python 引擎、docker-compose）通用的变量名。两者都认，本地只要
+    配好 .env 里的 POSTGRES_DSN 就能直接跑 `alembic upgrade head`。
+    """
     # 1) DATABASE_DSN environment variable (highest priority)
     db_dsn = os.getenv("DATABASE_DSN")
     if db_dsn:
         return db_dsn
 
-    # 2) alembic.ini fallback
+    # 2) POSTGRES_DSN：与应用共用同一个变量，避免两套配置漂移
+    db_dsn = os.getenv("POSTGRES_DSN")
+    if db_dsn:
+        return db_dsn
+
+    # 3) alembic.ini fallback
     fallback = config.get_main_option("sqlalchemy.url")
     if fallback:
         print(f"[Alembic] Using fallback URL from alembic.ini")
