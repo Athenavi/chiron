@@ -9,9 +9,52 @@
 ![Python](https://img.shields.io/badge/Python-3.12+-3776AB?logo=python&logoColor=white)
 ![Vue](https://img.shields.io/badge/Vue-3-4FC08D?logo=vue.js&logoColor=white)
 
-多租户 SaaS AI Agent 平台：**Go 网关 + Python AI 引擎 + Vue 3 前端** 三层架构。
-对话、Agent、技能、知识库、插件与多层级记忆一体化；轨迹可循、过程可见。
+**多租户 SaaS AI Agent 平台**：Go 网关 + Python AI 引擎 + Vue 3 前端 三层架构。
+对话、Agent、技能、知识库、插件与多层级记忆一体化；轨迹可循、过程可见 ——
+**而且真的能跑第二个副本。**
 
+<!-- 首屏截图：把文件放进 docs/images/ 后取消下面两行的注释（规格见 docs/images/README.md）。
+     现在用注释包住，是因为图片尚未入库 —— 直接引用会在 GitHub 上显示破图。
+![Chiron 对话界面：思考过程与工具调用逐步可见](docs/images/screenshot-chat.png)
+-->
+
+### 一条命令看到效果
+
+```bash
+python scripts/demo_up.py
+# 打开 http://localhost:3000 —— 注册的第一个账号自动成为系统管理员（owner）
+```
+
+自带 PostgreSQL / Redis 与自动迁移，密钥随机生成，**不需要先填任何配置**。
+想真的跑通对话，配一个模型 key 即可（也可以在登录后的「系统设置 → 服务提供商」里填）：
+
+```bash
+ANTHROPIC_API_KEY=sk-... python scripts/demo_up.py
+```
+
+> 这套体验栈刻意放弃生产属性（单副本、进程内沙箱、本地存储），只为让人尽快看到产品。
+> 生产部署见下方 [快速开始 → 容器（多副本编排）](#容器多副本编排)。
+
+<!-- 在线 Demo 占位：等服务器就绪后替换掉这段注释。
+     公开 Demo 必须做到三件事，否则会成为攻击面与成本黑洞（详见 docs/images/README.md 的录制纪律）：
+       1) 只读或沙箱租户：不给 owner 权限，避免被当成免费 API 刷；
+       2) 每日定时重置数据库：否则垃圾数据会永久累积；
+       3) 模型 key 走独立额度并在后台设日上限：公开可用的 key 必然被刷。
+
+> **在线试用**：<https://demo.example.com>（每天 UTC 00:00 重置数据，只读演示账号）
+
+-->
+
+### 能用它做什么
+
+| 场景 | 你得到什么 |
+|---|---|
+| **对内交付 Agent 能力** | 一套实例服务全公司：成员各自建 Agent、挂知识与技能，管理员统一管配额与审计 |
+| **对外做 Agent SaaS** | 租户隔离（连数据库层都有租户上下文）、计费幂等、邀请码与套餐、按租户限流 |
+| **私有化部署** | 数据不出内网；工具执行下沉到独立受限容器，沙箱不可用时**拒绝启动**而非偷偷降级 |
+
+> **它不是什么**：不是低代码可视化搭建平台，也不是模型评测/微调平台。
+> 它假设你要的是"**多人、多租户、能自己部署**"的 Agent 底座。
 
 ### 为什么还有必要做一个？
 
@@ -24,9 +67,6 @@
   不偷偷回退到进程内执行。
 - **过程可见**：思考、工具调用、用量都是独立事件；断线后带 `Last-Event-ID` 重连可精确续传。
 
-> **它不是什么**：不是低代码可视化搭建平台，也不是模型评测/微调平台。
-> 它假设你要的是"**多人、多租户、能自己部署**"的 Agent 底座。
-
 ## 架构
 
 ```
@@ -35,8 +75,7 @@
                                                     ▼
                                     Python 引擎(python-engine, :8000)
                                                     │
-              PostgreSQL(pgvector) · Redis ◄───────┴───────► S3（云端）/ 自托管 RustFS
-                                                    （Milvus 仅记忆层的可选后端）
+              PostgreSQL · Redis ◄──────────────————┴───────► S3（云端）/ 自托管 RustFS
 ```
 
 | 组件 | 目录 | 端口 | 职责 |
@@ -44,29 +83,17 @@
 | Go 网关 | `cmd/chiron`、`internal/*` | 8080（容器内，不发布宿主机端口） | 认证、路由、限流、计费、管理后台、SSE 转发 |
 | Python 引擎 | `python-engine/` | 8000（容器内） | 对话、Agent、知识库、技能、记忆、MCP |
 | 前端 | `frontend-vue/` | 5173（dev）/ 80（容器） | Vue 3 + TypeScript + Vite；nginx 同源反代 `/v1`、`/events`、`/ws` |
-| 数据库 | `migrations/` | 5432 | PostgreSQL + pgvector（Alembic 迁移） |
+| 数据库 | `migrations/` | 5432 | PostgreSQL（Alembic 迁移；摘要向量用 `float8[]`，**不需要** pgvector 扩展） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
 
 ## 能不能上生产？
 
-这个仓库的取舍是"先把第二个副本的问题解决掉"。下面每条都**可以自己在 CI 里跑**：
-
-| 保证 | 取证（测试文件） |
-|---|---|
-| 同一会话不会并发两个 runtime | `internal/api/submit_lock_live_test.go`、`session_coord_live_test.go` |
-| 断线重连不丢事件、不重复 | `internal/api/sse_cross_instance_live_test.go`、`internal/broadcast/hub_live_test.go` |
-| 审批 / 取消打到持有该 run 的实例 | `internal/engine/run_affinity_test.go` |
-| 同一回合只扣一次费 | `credit_transactions.turn_id` 唯一索引 + `ON CONFLICT DO NOTHING` |
-| 后台任务崩溃后由其它副本接管 | `engine:tasks` 消费组 + lease 心跳 + `XCLAIM` |
-| 执行隔离不可用时不降级 | 启动探测失败即拒绝启动（`SANDBOX_BACKEND=service` 默认） |
-
-完整清单、**每条明确不保证什么**、以及扩容时的连接预算与探针语义，见
 [多副本部署指南](docs/deployment-multi-instance.md)。
 
 ## 快速开始
 
-> **最短路径**：容器起单副本 ≈ 4 条命令（见下方「容器」一节，去掉 `--scale` 即可）。
-> 只想先看看效果，不必配多副本。
+> 只想先看看效果：回到上方[一条命令看到效果](#一条命令看到效果)，不需要读本节。
+> 本节是**真正部署**的路径 —— 数据库自备、沙箱隔离生效、可横向扩副本。
 
 ### 本地开发（非容器）
 
@@ -205,6 +232,20 @@ What makes it different from demo-grade agent frameworks is what happens with a 
 cross-instance session locks, SSE replay between replicas, run-affinity routing for approvals,
 idempotent billing, crash-takeover of queued work, and tool execution isolated in a separate
 sandbox container (fail-closed — the engine refuses to start if the sandbox is unreachable).
+
+### Try it in one command
+
+```bash
+python scripts/demo_up.py   # then open http://localhost:3000
+```
+
+Brings up PostgreSQL, Redis, runs migrations, and starts the gateway, engine and frontend
+with randomly generated secrets — no configuration needed. The first account you register
+becomes the system owner. To actually chat, pass a model key:
+`ANTHROPIC_API_KEY=sk-... python scripts/demo_up.py`.
+
+This stack is for evaluation only (single replica, in-process sandbox, local storage).
+For a real deployment see [docs/deployment-multi-instance.md](docs/deployment-multi-instance.md).
 
 - Docs: [docs/architecture.md](docs/architecture.md) (Chinese; English summary above)
 - Contributing: [CONTRIBUTING.md](CONTRIBUTING.md)

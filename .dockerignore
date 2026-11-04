@@ -32,3 +32,11 @@ frontend-vue/dist/
 
 # 参考源码目录（非 Go 依赖，但会被 Go 误判为 vendor 清单 → 构建失败）
 vendor/
+
+# 本地 git worktree（数百 MB，且只在开发机上存在）。不进上下文：
+# 否则 `docker compose build` 会把整个目录打包上传，传输阶段就能拖到超时。
+.worktrees/
+
+# Python 引擎与前端产物（各自有自己的构建上下文，根上下文用不到）
+python-engine/**/__pycache__/
+*.pyc

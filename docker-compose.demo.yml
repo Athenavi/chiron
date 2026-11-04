@@ -1,0 +1,243 @@
+# Chiron — 一键体验栈（demo）
+#
+# 目的：让第一次接触的人用**一条命令**看到完整产品，而不是先配 8 个必填变量：
+#   python scripts/demo_up.py
+#
+# 与 docker-compose.yml 的差别 —— 这里**故意**放弃生产属性，换取零配置：
+#   * 自带 PostgreSQL / Redis（生产用托管实例）
+#   * 单副本，不演示 --scale（多副本见 docker-compose.yml + docs/deployment-multi-instance.md）
+#   * 沙箱走进程内（SANDBOX_BACKEND=local），不带 sandbox-service 隔离容器
+#   * 存储走容器内 /tmp（local），不要求 S3 兼容对象存储
+#   * 迁移作为一次性服务自动执行（生产是"先迁移、后滚动"的硬前置，应用从不做 DDL）
+#
+# ⚠️ 这不是生产模板：密钥由 scripts/demo_up.py 随机生成到 `.env.demo`（已 gitignore），
+#    `docker compose -f docker-compose.demo.yml down -v` 之后数据全部丢弃。
+#
+# 关于"为什么密钥必须随机而不能写死默认值"：本栈会把 3000 端口发布到宿主机。若
+# APP_SECRET 是仓库里公开的常量，任何能访问该端口的人都能用它伪造任意租户的 JWT
+# —— 而人把 demo 跑在有公网 IP 的机器上是常态。所以下面几个密钥刻意用 `:?`
+# 声明为必填，缺失时 compose 直接报错并提示去跑脚本，而不是静默用弱值启动。
+
+x-logging: &default-logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+name: chiron-demo
+
+services:
+
+  # 演示用 PostgreSQL。生产不在 compose 里部署（见 docker-compose.yml 顶部说明）。
+  postgres:
+    image: postgres:16-alpine
+    logging: *default-logging
+    cpus: 1.0
+    mem_limit: 1g
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-chiron}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required — run python scripts/demo_up.py}
+      POSTGRES_DB: ${POSTGRES_DB:-chiron}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-chiron} -d ${POSTGRES_DB:-chiron}"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  # 一次性迁移任务：跑完即退出。gateway / python-engine 用
+  # `condition: service_completed_successfully` 等它 —— 应用启动只做只读的
+  # schema 版本校验，迁移没跑完它们会以 "refusing to start" 退出。
+  #
+  # 复用 deploy/migrations/Dockerfile：它的 ENTRYPOINT 就是 `alembic upgrade head`，
+  # 且刻意只装 requirements-migrate.txt（运行时镜像里没有 alembic）。
+  migrate:
+    build:
+      context: .
+      dockerfile: deploy/migrations/Dockerfile
+    image: chiron/migrations:demo
+    logging: *default-logging
+    environment:
+      # env.py 读的是 DATABASE_DSN（不是应用侧那个 POSTGRES_DSN）
+      DATABASE_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required — run python scripts/demo_up.py}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    # 刻意不重启：迁移失败应当停在失败状态让人看见，而不是无限重试掩盖问题
+    restart: "no"
+
+  redis:
+    image: redis:7-alpine
+    logging: *default-logging
+    cpus: 1.0
+    mem_limit: 512m
+    command: ["redis-server", "--requirepass", "${REDIS_PASSWORD:?REDIS_PASSWORD is required — run python scripts/demo_up.py}"]
+    environment:
+      # healthcheck 里的 redis-cli 需要密码才能通过认证
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required — run python scripts/demo_up.py}
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      # 必须是带密码的 CMD-SHELL：requirepass 下未认证的 `redis-cli ping` 返回 NOAUTH
+      # （退出码非 0），容器会永远 unhealthy。`$$` 是 compose 转义，落到容器里是 `$`。
+      test: ["CMD-SHELL", "redis-cli --no-auth-warning -a \"$${REDIS_PASSWORD}\" ping | grep -q PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  python-engine:
+    build:
+      context: python-engine
+      dockerfile: Dockerfile
+    image: chiron/python-engine:demo
+    logging: *default-logging
+    cpus: 2.0
+    mem_limit: 2g
+    expose:
+      - "8000"
+    environment:
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required — run python scripts/demo_up.py}
+      # 留空 = 由 APP_SECRET 派生（Go 与 Python 的派生算法一致）
+      JWT_SECRET: ${JWT_SECRET:-}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required — run python scripts/demo_up.py}
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD is required}@redis:6379/0
+      # 必须监听 0.0.0.0，否则网关容器连不上
+      HTTP_HOST: "0.0.0.0"
+      HTTP_PORT: "8000"
+      GATEWAY_INTERNAL_URL: http://gateway:8080
+      RPA_GATEWAY_URL: http://gateway:8080
+      # ── 单容器化：把三项从"独立服务"降级为"进程内/本地" ──
+      # 沙箱：demo 不起 sandbox-service（它需要独立只读根 + 内部网络）。local 是
+      # **显式**退出隔离，deps.verify_sandbox_backend 允许该值并会打一条 WARNING。
+      SANDBOX_BACKEND: local
+      # 引擎以非 root 的 appuser 运行、/app 属 root ⇒ 一切可写路径必须避开 /app。
+      # 用容器内 /tmp 而不是命名卷：命名卷由 root 创建，appuser 写不进去会直接 EACCES。
+      SANDBOX_ROOT: /tmp/chiron-sandbox
+      MEDIA_STORE_BACKEND: local
+      MEDIA_STORE_PATH: /tmp/chiron-media
+      SKILL_STORE_PATH: /tmp/chiron-skills
+      # ⚠ 与 gateway 的 PLUGIN_DATA_DIR **不是同一个卷**（两容器的 /tmp 互不可见）。
+      # 影响面：插件配置由网关写、引擎侧只做 MCP 池加载，而下面 MCP_POOL_ENABLED=false，
+      # 所以体验栈里引擎读不到插件配置不会阻断对话。生产用 docker-compose.yml 的
+      # plugindata 共享卷（两边同路径）解决。
+      PLUGIN_DATA_DIR: /tmp/chiron-plugins
+      # 网关地址在容器内解析到私网 IP，会被 SSRF 的私网检查拦下导致引擎启动即崩
+      SSRF_ALLOW_PRIVATE_HOSTS: gateway,python-engine
+      # 向量后端默认 pg（不依赖 Milvus）；知识库服务留空 = 页面显示"未启用"，不阻塞启动
+      MEMORY_VECTOR_BACKEND: pg
+      MCP_POOL_ENABLED: "false"
+      # 内置技能资产：镜像只 COPY app/，market/ 进不去 ⇒ 靠只读挂载提供
+      CHIRON_BUILTIN_SKILLS_PATH: /srv/chiron/builtin-skills
+      # 模型密钥：在 .env / 环境变量里配好即可透传
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-}
+      DEEPSEEK_API_KEY: ${DEEPSEEK_API_KEY:-}
+      LLM_API_KEY: ${LLM_API_KEY:-}
+    volumes:
+      - ./market/skills:/srv/chiron/builtin-skills:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    pids_limit: 1024
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/readyz')"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # 国内网络直连 proxy.golang.org 会 i/o timeout。可覆盖：
+        #   GOPROXY=https://goproxy.cn,direct python scripts/demo_up.py
+        GOPROXY: ${GOPROXY:-https://proxy.golang.org,direct}
+    image: chiron/gateway:demo
+    logging: *default-logging
+    cpus: 1.0
+    mem_limit: 512m
+    expose:
+      - "8080"
+    environment:
+      APP_SECRET: ${APP_SECRET:?APP_SECRET is required — run python scripts/demo_up.py}
+      JWT_SECRET: ${JWT_SECRET:-}
+      INTERNAL_TOKEN: ${INTERNAL_TOKEN:-}
+      POSTGRES_DSN: ${POSTGRES_DSN:?POSTGRES_DSN is required — run python scripts/demo_up.py}
+      REDIS_ADDR: redis:6379
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD is required}
+      REDIS_DB: "0"
+      PYTHON_ENGINE_ADDRESS: http://python-engine:8000
+      # 与引擎同值；local 表示媒体对象落本地目录，不要求 S3
+      STORAGE_BACKEND: local
+      STORAGE_ROOT: /tmp/chiron-workspace
+      PLUGIN_DATA_DIR: /tmp/chiron-plugins
+      # 单副本无需连接预算调整
+      POSTGRES_MAX_CONN: "20"
+      DEGRADED_MODE: "false"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+      python-engine:
+        condition: service_healthy
+    stop_grace_period: 30s
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/ready"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 20s
+
+  frontend:
+    build:
+      context: frontend-vue
+      dockerfile: Dockerfile
+    image: chiron/frontend:demo
+    logging: *default-logging
+    cpus: 0.5
+    mem_limit: 128m
+    ports:
+      # 唯一对外发布的端口。浏览器访问 http://localhost:3000
+      - "${DEMO_HTTP_PORT:-3000}:80"
+    depends_on:
+      gateway:
+        condition: service_healthy
+    restart: unless-stopped
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
+    cap_add:
+      # nginx:alpine 主进程以 root 绑 80；其余能力一概不需要
+      - NET_BIND_SERVICE
+    pids_limit: 128
+    healthcheck:
+      # 用 127.0.0.1 而非 localhost：容器内 localhost 可能解析到 ::1
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+volumes:
+  pgdata:
+  redisdata:
