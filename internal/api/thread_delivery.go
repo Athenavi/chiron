@@ -201,8 +201,10 @@ func payloadArg(p json.RawMessage) json.RawMessage {
 
 // threadEnqueueParams 是一次入站事件要落的全部信息。
 //
-// 只带键不带正文：正文由事件入口按 kind 组装（`followupKinds.build`），投递层存正文
-// 就等于存一份会过期的副本 —— 真正被投递时正文还要按当时的上下文重新拼。
+// 存的是**快照**而不是"投递时再按 kind 重拼"：引擎回投是一次性 HTTP 请求，
+// 调用方手里的 `status` / `profile` / `summary` 除了这条请求之外不在别处存在。
+// 早先那版设计假设正文可以在投递时重算，实际到 drain 时根本拼不出来，
+// 所以这里必须落输入快照。
 type threadEnqueueParams struct {
 	TenantID    int16
 	UserID      string
@@ -211,10 +213,44 @@ type threadEnqueueParams struct {
 	SessionID   string
 	EventKey    string // 同一 thread 下这条事件的幂等键
 	// Payload 是事件到达那一刻的输入快照，投递时用来拼正文。
-	//
-	// 存快照而不是"投递时再取"：引擎回投是一次性 HTTP 请求，调用方手里的
-	// `status` / `profile` / `summary` 不落库就永远丢了。
 	Payload json.RawMessage
+}
+
+// followupSnapshot 把一份事件载荷压成投递行里的快照。
+//
+// 快照类型直接复用 `agentFollowupPayload`，不另立一个等价类型：投递时拼正文的
+// `followupKinds.build` 要的就是它，多一层只会多一处要同步的字段。
+//
+// 编解码放在投递层而不是入口 handler 里，是为了让"存进去的"与"取出来的"挨着写 ——
+// 两边的字段一旦漂移，只有并排看这两个函数时才发现得了。
+func followupSnapshot(p agentFollowupPayload) (json.RawMessage, error) {
+	raw, err := json.Marshal(p)
+	if err != nil {
+		return nil, err
+	}
+	return raw, nil
+}
+
+// followupFromSnapshot 是 followupSnapshot 的逆运算，并用 thread 行的权威字段覆盖身份。
+//
+// 覆盖而不是"空则补"：`user_id` / `tenant_id` / `session_id` 是运行锁、配额与计费的键，
+// 必须以行为准 —— 快照是历史，行是现在的所有者。两者分歧时信行，否则一条老快照
+// 能把额度记到已经搬走的租户头上。
+//
+// `Kind` 同样以 `source_kind` 为准：入队时它已对过 `followupKinds`，而快照里的 Kind
+// 可能是空串（滚动升级期间旧引擎不带这个字段）。
+func followupFromSnapshot(d threadDelivery) (agentFollowupPayload, error) {
+	var p agentFollowupPayload
+	if raw := bytes.TrimSpace(d.Payload); len(raw) > 0 {
+		if err := json.Unmarshal(raw, &p); err != nil {
+			return agentFollowupPayload{}, err
+		}
+	}
+	p.SessionID = d.SessionID
+	p.UserID = d.UserID
+	p.TenantID = tenantStr(d.TenantID)
+	p.Kind = d.SourceKind
+	return p, nil
 }
 
 // errUnknownThreadSource 表示 source_kind 没在 followupKinds 里注册。
