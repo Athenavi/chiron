@@ -283,8 +283,12 @@ create table thread_deliveries (
 投递路径（全程复用既有语义，不新造并发模型）：
 
 1. 事件进站 → 按 `(tenant_id, source_kind, external_key)` 取或建 thread。
-2. 查 `thread_subscriptions` 得到目标会话；无订阅则该事件到此为止（**不是**回退给
-   Router 猜 —— 那会让"有没有订阅"变得不可观测，也就没法做 §6 要的那组对照埋点）。
+2. 查 `thread_subscriptions` 得到目标会话。设计口径是"无订阅则该事件到此为止"
+   （**不是**回退给 Router 猜 —— 那会让"有没有订阅"变得不可观测，也就没法做 §6 要的
+   那组对照埋点）；**但 2026-11-04 的落地取舍是兼容优先**：无订阅时维持入口给的会话，
+   同时写 `superagent.thread.routed`（`subscribed=false`）留下可比的分母。
+   等订阅在真实使用中出现、对照数据成型后，再单独一批收紧成"无订阅即止"
+   （见 P1-1.2 的进展说明）。
 3. 写 `thread_deliveries(status='queued')`；主键冲突 = 已投过，直接返回。
 4. 试抢 `agent:run-lock:<session_id>`：
    - 抢到 → 立刻开跑，`status='running'`。
