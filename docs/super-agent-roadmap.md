@@ -233,6 +233,81 @@
 - 风险：Chiron 是**多租户 SaaS**，thread 数量随租户线性增长；文章的场景是单团队 harness，
   成本模型不可直接照搬（见 §6）。
 
+##### P1-1.1 数据模型（2026-11-04 按 §6 问题 3 的裁决冻结）
+
+裁决是**串行排队**，因此 Thread 不承担执行职责，只承担"这条事件从哪来、要投给谁"。
+执行侧一行不改：`agent:run-lock:<session_id>` 仍是唯一的并发护栏。这条边界是整个模型的
+分界线 —— 凡是需要"并发跑两个"的需求都不进 P1-1。
+
+三张表，全部是**纯扩展**（不改既有表、不动 `messages`）：
+
+```sql
+-- 事件来源。一条 thread = 一个外部事件的上下文，不是执行单元。
+create table threads (
+  id            varchar(36) primary key,
+  tenant_id     bigint       not null,
+  user_id       varchar(64)  not null,
+  source_kind   varchar(32)  not null,  -- 'webhook' | 'job' | 'subagent'（与 P0-2 的 kind 同集合）
+  external_key  varchar(128) not null default '',  -- 外部系统的幂等键，去重靠它
+  created_at    timestamptz  not null default now()
+);
+-- 同一外部事件重复入站只应产生一条 thread：多副本同时收同一条 webhook 是常态。
+create unique index threads_idem on threads (tenant_id, source_kind, external_key)
+  where external_key <> '';
+
+-- 订阅：事件按它直接找到目标会话，绕开协调者。
+create table thread_subscriptions (
+  id         varchar(36) primary key,
+  thread_id  varchar(36) not null references threads(id) on delete cascade,
+  session_id varchar(36) not null,
+  status     varchar(16) not null default 'active',  -- 'active' | 'paused'
+  created_at timestamptz not null default now()
+);
+create index thread_subscriptions_by_session on thread_subscriptions (session_id, status);
+
+-- 投递事实：这是"订阅丢了能否重建"的答案 —— 订阅是**用户配置**（丢了要人重填），
+-- 而"哪些事件已经投过"是**事实**，必须能查、能续、能去重。
+create table thread_deliveries (
+  thread_id  varchar(36) not null references threads(id) on delete cascade,
+  event_key  varchar(128) not null,
+  session_id varchar(36) not null,
+  turn_id    varchar(36) not null default '',  -- 空 = 已入队未开跑
+  status     varchar(16) not null,             -- 'queued' | 'running' | 'done' | 'dropped'
+  created_at timestamptz not null default now(),
+  primary key (thread_id, event_key)           -- 同一事件的第二次投递直接冲突，天然幂等
+);
+```
+
+投递路径（全程复用既有语义，不新造并发模型）：
+
+1. 事件进站 → 按 `(tenant_id, source_kind, external_key)` 取或建 thread。
+2. 查 `thread_subscriptions` 得到目标会话；无订阅则该事件到此为止（**不是**回退给
+   Router 猜 —— 那会让"有没有订阅"变得不可观测，也就没法做 §6 要的那组对照埋点）。
+3. 写 `thread_deliveries(status='queued')`；主键冲突 = 已投过，直接返回。
+4. 试抢 `agent:run-lock:<session_id>`：
+   - 抢到 → 立刻开跑，`status='running'`。
+   - 抢不到 → **留在队里**（`status='queued'`），不重试、不轮询；由当前持有者在 run 收尾时
+     drain 该会话的队列，取最早一条接着跑。这与 P1-2 接管 `skipped_busy` 的区别是刻意的：
+     用户提交被拒要立刻告诉人，而后台事件本来就没人盯，排队才是对的。
+
+队列上限与丢弃（承认的代价，必须显式）：每会话待处理上限 `maxPendingThreadEvents = 20`。
+超限时新事件落 `status='dropped'` 并写审计 `superagent.thread.dropped_overflow` ——
+**不静默丢**。上限的理由是前面那 20 条正是一个 run 可能积压的量级，再多说明这个会话
+根本消化不完，继续攒只会把延迟推到没人能接受。
+
+不变量对照（这是选串行排队的全部理由）：
+
+| 不变量 | 位置 | 串行排队下 |
+| --- | --- | --- |
+| `messages.seq` 是 identity 列 | `migrations/versions/0016_messages_seq.py` | 不变 —— 全会话单写 |
+| `session_folds.covered_to` 单调 | roadmap §5 | 不变 —— 折叠仍按会话整段推进 |
+| `turns` 外键到 `session_id` | `0001_authoritative_baseline.py` | 不变 —— 无子会话 |
+| 前端按 `turnId` 分组渲染 | `chat-types.ts` | 不变 —— 一个回合仍是同一个身份域 |
+
+**明确不做**：不引入 `session.parent_id`；不做事件级并行；Thread 不成为新的可寻址资源
+（没有"打开某个 thread"的页面），它只是事件来源的归类。若将来真需要并行，那是一次独立的
+架构变更，要先解决上面四条，而不是在 P1-1 里悄悄开个口子。
+
 #### P1-2 Router 接管（Super-agent 接管）
 
 > **权威依据先说清楚**：文章是**需求来源**，不是权威。落地判据一律取自本仓已有契约 ——
@@ -735,6 +810,15 @@ alter table turns add column origin varchar(24) not null default '';
 3. **单会话串行假设**：`agentRunLock` 保证同会话只有一个回合在跑（TTL 5min）。
    Thread 直通会让"同一会话收到多个事件"，是沿用串行排队还是允许并行子会话？
    这一条决定 P1-1 的整个数据模型。
+   **已决（2026-11-04）：沿用串行排队。** Thread 只承担"事件来源"的分类职责，
+   运行锁仍是 `agent:run-lock:<session_id>` 一把、session 级，不引入子会话。同一会话
+   短时间收到多个事件时进**每会话待处理队列**，跑完一个接着下一个。
+   选它的依据是四条既有不变量都建立在"会话内单线程"之上：`messages.seq` 是 identity
+   列（[0016 迁移](../migrations/versions/0016_messages_seq.py)）、`session_folds.covered_to`
+   单调递增、`turns` 以 `session_id` 为外键、前端按 `turnId` 分组渲染。开子会话意味着
+   这四条只能在子会话内成立，历史/摘要/计费全部要跨父子聚合 —— 成本远大于直通收益，
+   而直通的收益（省掉路由判断）**并不来自并行**。
+   代价（承认）：事件密集时排队延迟随队列长度线性上升，需要队列上限与丢弃策略，见 P1-1。
 4. **事件入口的信任边界**：入站 Webhook 是外部可控输入。按
    `agent-safety-and-reliability.md` 的原则，它应该比用户输入更不可信——是否要求
    事件驱动出的回合默认降级到 `ask` 模式？
