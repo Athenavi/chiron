@@ -92,7 +92,7 @@ jobs:
 
       # 构建并（可选）推送。`-mod=mod` 与 GOPROXY 由各 Dockerfile 处理。
       - name: Build and push ${{ matrix.name }}
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: ${{ matrix.context }}
           file: ${{ matrix.dockerfile }}
