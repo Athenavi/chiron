@@ -816,6 +816,13 @@ alter table turns add column origin varchar(24) not null default '';
    [architecture.md](architecture.md)），而接管是连续多回合。是按"租户日额度"还是
    "每个接管一个独立预算池"记账，会影响账单可解释性 —— 用户看到的应该是一个
    "接管花了多少"的数字，而不是散落在几十条回合里的 token。
+   **已决（2026-11-04）：与手动回合共用租户日额度。** 接管回合走 `HandleSubmit`，
+   因此和其它回合走同一个 `EnforceTenantQuota`，不另设预算池、不新增记账表。
+   选它的依据是"同一次消耗不该有两套额度账本"：租户日额度是现有的成本护栏，
+   再接管开一份独立预算就等于同一笔钱被扣两次，账单对不上时无从判断该信谁。
+   可解释性的诉求由 `superagent_takeovers.token_spent` 单独满足 —— 那是"这次接管
+   累计烧了多少"的唯一数字，与 `budget.token_cap` 的硬上限同源（`recordTakeoverUsage`
+   累加、`budgetExhausted` 判定），不需要拆一份额度出来才能回答。
 2. **"主动"的边界**：`P0-1`/`P1-3` 都会让系统**未经用户触发**就产生新回合。
    今天 `internal/notify/notify.go` 的站内信"不可关闭"，主动 Agent 是否也要默认开？
    这是产品决策，不是技术决策。
@@ -834,6 +841,14 @@ alter table turns add column origin varchar(24) not null default '';
 4. **事件入口的信任边界**：入站 Webhook 是外部可控输入。按
    `agent-safety-and-reliability.md` 的原则，它应该比用户输入更不可信——是否要求
    事件驱动出的回合默认降级到 `ask` 模式？
+   **已决（2026-11-04）：默认降级到 `ask`。** 事件驱动回合（`agent_followup.go` 的
+   `subagent` / `job` 两类，以及 P1-1 的 thread 投递）不是人当场授权的，事件正文里
+   完全可以出现诱导性文字，因此危险操作一律要人确认。用户若要放宽，走显式开关，
+   不靠"事件来源看起来可信"来推断。
+   **实现状态（据代码）**：该口径**尚未在代码里 enforce** ——
+   `agent_followup.go` 调用 `HandleSubmit` 时没有设置审批档位，注入内容目前只是包成
+   不可信数据块（`<subagent-result>` / `<job-result>`）。落地时要新增档位参数并补
+   渲染级证据，不能只改这句文档就当完成。
 
 ## 7. 复核方式
 
