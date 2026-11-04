@@ -13,6 +13,7 @@ import (
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
+	"github.com/athenavi/chiron/internal/session"
 )
 
 // P1-2 的四条验收此前只有静态检查：读 SQL 能看到 `now() + make_interval(...)`、
@@ -37,13 +38,15 @@ func withP12Pool(t *testing.T) *pgxpool.Pool {
 	return pool
 }
 
-// p12Cleanup 按外键逆序清理：takeovers/schedules 引用 sessions，sessions 引用 users。
+// p12Cleanup 按外键逆序清理：turns 引用 sessions，takeovers/schedules 也引用 sessions，
+// sessions 引用 users。顺序写反会撞 FK（`turns_session_id_fkey`），并留下残留行。
 // 必须**在** liveSmokeFixture 之后注册 —— 否则它先于 fixture 的删除执行不到。
 func p12Cleanup(t *testing.T, pool *pgxpool.Pool, userID string) {
 	t.Helper()
 	t.Cleanup(func() {
 		ctx := context.Background()
 		for _, sql := range []string{
+			`DELETE FROM turns WHERE user_id = $1`,
 			`DELETE FROM superagent_takeovers WHERE user_id = $1`,
 			`DELETE FROM superagent_schedules WHERE user_id = $1`,
 			`DELETE FROM sessions WHERE user_id = $1`,
@@ -300,5 +303,154 @@ func TestLiveTakeoverAndScheduleQuotas(t *testing.T) {
 	}
 	if schedules != maxSuperAgentSchedules {
 		t.Fatalf("被拒后仍应恰好 %d 条任务，得到 %d", maxSuperAgentSchedules, schedules)
+	}
+}
+
+// p12Takeover 直接插一条接管行，绕开 handler：用例要验的是驱动侧行为，
+// 不是端点校验（后者已由上面的用例覆盖）。
+func p12Takeover(t *testing.T, pool *pgxpool.Pool, tenantID int16, userID, sessionID string,
+	tokenCap int64) string {
+	t.Helper()
+	id := uuid.NewString()
+	if _, err := pool.Exec(context.Background(), `
+		INSERT INTO superagent_takeovers
+		        (id, tenant_id, user_id, session_id, status, started_at, ends_at,
+		         token_spent, token_cap, tick_seconds)
+		VALUES ($1, $2, $3, $4, 'active', now(), now() + interval '10 minutes', 0, $5, 180)`,
+		id, tenantID, userID, sessionID, tokenCap); err != nil {
+		t.Fatalf("插入接管行失败: %v", err)
+	}
+	return id
+}
+
+// 验收 5：token 超限自动停，且停止原因可查。
+//
+// 这里直接调 `recordTakeoverUsage`，不走真实引擎回合 —— 它正是回合结束时被调用的
+// 那个函数，而"累加"与"跨线即终结"是两条纯 SQL 行为，真库能证的就到这一层。
+// 断言 `stop_reason = 'token_cap'` 而不只看 status：`budget_exhausted` 是个通用终态，
+// 不写原因的话，用户看到"预算用尽"却不知道是钱花完了还是轮数用完了。
+func TestLiveTakeoverBudgetStopsAtTokenCap(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	sid := p12Session(t, pool, tenantID, userID)
+	id := p12Takeover(t, pool, tenantID, userID, sid, 100)
+	d := &takeoverDriver{} // hub 为 nil：终态广播对 nil hub 是空操作
+
+	// 未跨线：累加不该改变状态。
+	d.recordTakeoverUsage(context.Background(), id, 60)
+	var status string
+	var spent int64
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status, token_spent FROM superagent_takeovers WHERE id = $1`, id).
+		Scan(&status, &spent); err != nil {
+		t.Fatalf("读回状态失败: %v", err)
+	}
+	if status != takeoverStatusActive || spent != 60 {
+		t.Fatalf("未超限时不应终结：status=%s spent=%d（期望 active/60）", status, spent)
+	}
+
+	// 跨线：110 >= 100。
+	d.recordTakeoverUsage(context.Background(), id, 50)
+	var reason string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status, token_spent, COALESCE(stop_reason, '') FROM superagent_takeovers WHERE id = $1`, id).
+		Scan(&status, &spent, &reason); err != nil {
+		t.Fatalf("读回状态失败: %v", err)
+	}
+	if status != takeoverStatusBudgetExhausted {
+		t.Fatalf("超限后应为 %s，得到 %s（spent=%d）", takeoverStatusBudgetExhausted, status, spent)
+	}
+	if spent != 110 {
+		t.Fatalf("超限那次的用量也必须计入：spent=%d（期望 110）", spent)
+	}
+	if reason != "token_cap" {
+		t.Fatalf("停止原因应为 token_cap，得到 %q", reason)
+	}
+
+	// 终态之后不再累加：`recordTakeoverUsage` 的 WHERE 只认 active/stopping。
+	d.recordTakeoverUsage(context.Background(), id, 999)
+	if err := pool.QueryRow(context.Background(),
+		`SELECT token_spent FROM superagent_takeovers WHERE id = $1`, id).Scan(&spent); err != nil {
+		t.Fatalf("读回失败: %v", err)
+	}
+	if spent != 110 {
+		t.Fatalf("已终结的接管不该再记账：spent=%d（期望仍为 110）", spent)
+	}
+}
+
+// token_cap = 0 表示不限：花多少都不终结。这条独立成例，是因为 0 在别处是
+// "未设置"的哨兵值，写反了会让所有不设上限的用户在第一轮就被停掉。
+func TestLiveTakeoverZeroTokenCapNeverStops(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	sid := p12Session(t, pool, tenantID, userID)
+	id := p12Takeover(t, pool, tenantID, userID, sid, 0)
+
+	var spent int64
+	d := &takeoverDriver{}
+	for i := 0; i < 3; i++ {
+		d.recordTakeoverUsage(context.Background(), id, 1<<20)
+	}
+	var status string
+	if err := pool.QueryRow(context.Background(),
+		`SELECT status, token_spent FROM superagent_takeovers WHERE id = $1`, id).
+		Scan(&status, &spent); err != nil {
+		t.Fatalf("读回失败: %v", err)
+	}
+	if status != takeoverStatusActive {
+		t.Fatalf("token_cap=0 表示不限，不该终结，得到 status=%s", status)
+	}
+	if spent != 3<<20 {
+		t.Fatalf("不限上限时仍要如实记账：spent=%d（期望 %d）", spent, 3<<20)
+	}
+}
+
+// 验收 8：接管产生的回合带 origin，用户手动回合为空串。
+//
+// 走的是真实的 `session.Manager.CreateTurn`，不是直接 INSERT —— 迁移里的
+// `DEFAULT ”` 只保证老行不为 NULL，证明不了新行会写对标记。
+func TestLiveTurnOriginMarksTakeoverRounds(t *testing.T) {
+	pool := withP12Pool(t)
+	tenantID, userID := liveSmokeFixture(t, pool)
+	p12Cleanup(t, pool, userID)
+
+	sid := p12Session(t, pool, tenantID, userID)
+	mgr := session.NewManager(pool, nil)
+	if mgr == nil {
+		t.Fatal("session.Manager 未构造成功")
+	}
+
+	takeoverTurn := uuid.NewString()
+	manualTurn := uuid.NewString()
+	mgr.CreateTurn(context.Background(), takeoverTurn, sid, userID, TakeoverSource)
+	mgr.CreateTurn(context.Background(), manualTurn, sid, userID, "")
+
+	readOrigin := func(turnID string) string {
+		var origin string
+		if err := pool.QueryRow(context.Background(),
+			`SELECT COALESCE(origin, '<null>') FROM turns WHERE id = $1`, turnID).
+			Scan(&origin); err != nil {
+			t.Fatalf("读回 origin 失败（turn=%s）: %v", turnID, err)
+		}
+		return origin
+	}
+
+	if got := readOrigin(takeoverTurn); got != TakeoverSource {
+		t.Fatalf("接管回合的 origin 应为 %q，得到 %q", TakeoverSource, got)
+	}
+	// 用户手动回合必须是**空串**而不是 NULL：前端按 `=== ''` 判断"不显示标记"，
+	// NULL 会让判断落到 else 分支并渲染出一个小字标签。
+	if got := readOrigin(manualTurn); got != "" {
+		t.Fatalf("手动回合的 origin 应为空串，得到 %q", got)
+	}
+
+	// 重放同一个 turnID 不能把标记洗掉（ON CONFLICT 更新的是 status，不是 origin）。
+	mgr.CreateTurn(context.Background(), takeoverTurn, sid, userID, TakeoverSource)
+	if got := readOrigin(takeoverTurn); got != TakeoverSource {
+		t.Fatalf("重放后 origin 应保持 %q，得到 %q", TakeoverSource, got)
 	}
 }

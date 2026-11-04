@@ -72,6 +72,14 @@
   **踩到的坑**：`GetUserID`/`GetTenantID` 读的是 `TenantMiddleware` 写入的两个 ctx key，
   不是 `auth.Claims` —— 只挂 claims 会让四条全部 401，看起来像 handler 有问题。
   已在 `alembic upgrade head` 到 `0020_superagent` 的临时库上跑通。
+- **同上，第二批（P1-2 验收 5/8）**：验收 5 直接调 `recordTakeoverUsage` —— 正是回合结束时
+  被调用的那个函数，验"未超限只累加 / 跨线即置 `budget_exhausted` / 停止原因写 `token_cap` /
+  终结后不再记账"四条纯 SQL 行为；另有一条 `token_cap = 0` 用例（0 表示不限，写反会让所有
+  不设上限的用户第一轮就被停掉）。验收 8 走真实的 `session.Manager.CreateTurn`，断言接管回合
+  `origin = 'superagent_takeover'`、手动回合**空串而非 NULL**（前端按 `=== ''` 判断不渲染标记，
+  NULL 会漏出小字标签），且同一 turnID 重放不会把标记洗掉。
+  口径说明：这两条**没有**跑真实引擎回合 —— "每轮用量真实回流到驱动"仍只有单测覆盖。
+  顺带修了清理顺序：`turns` 也引用 `sessions`，漏删会撞 `turns_session_id_fkey` 并留残留行。
 - **Super-agent Watchdog 骨架（P1-3）**：在主循环之外判断"这一轮是否还在推进"。判断器
   `app/agent/watchdog.py` 是**纯函数**：把当前回合最近 20 条 `messages` 与 20 次 `tool_calls`
   折成两个哈希加消息条数，看末尾连续多少拍三项都没变，输出三档 `CONTINUE` / `NUDGE` /
