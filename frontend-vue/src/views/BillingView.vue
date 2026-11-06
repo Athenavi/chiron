@@ -44,6 +44,8 @@ interface DailyUsage {
 /** 非按天分组时的一行（后端 usage_events 聚合结果） */
 interface BreakdownRow {
   bucket: string
+  /** 会话分组时后端回填的可读名称（会话别名/标题）；缺失时前端回落到 bucket */
+  label?: string
   event_count: number
   input_tokens: number
   output_tokens: number
@@ -294,9 +296,10 @@ const isDayGroup = computed(() => usageGroup.value === 'day')
 const breakdownRows = computed(() =>
   (usage.value?.breakdown ?? []).map(row => ({
     ...row,
-    label: row.bucket === 'unknown'
-      ? t('billing.usage_unknown_bucket')
-      : row.bucket,
+    // 会话分组时后端会回填 label（会话别名/标题）；拿不到才退回显示 id ——
+    // 直接把 UUID 摆进表格，用户无从判断这条花费是哪个会话的。
+    label: row.label
+      || (row.bucket === 'unknown' ? t('billing.usage_unknown_bucket') : row.bucket),
   })),
 )
 

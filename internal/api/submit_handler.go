@@ -521,7 +521,10 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 	// S 修复：上下文丢失 — 提交时立即持久化用户消息（SSE 中断/停止也不丢历史）
 	{
 		sctx, cancelStore := storeCtxFor()
-		h.sessionMgr.SaveUserMessage(sctx, sessionID, userID, content, turnID, msgSource)
+		// 附件只落**引用清单**（白名单字段、不含 url）：内容不进消息表，
+		// 需要时由引擎按 asset_id 取（见 python-engine 的 attachment_read）。
+		h.sessionMgr.SaveUserMessageWithAttachments(
+			sctx, sessionID, userID, content, turnID, msgSource, attachmentRefsForStorage(attachments))
 		if turnID != "" {
 			// origin 与 msgSource 同源：接管巡检轮的整个回合（含助手回复）都要能被
 			// 认出来，不能只在注入的那条 user 消息上打标记。

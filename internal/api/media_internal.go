@@ -1,13 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
+	"time"
 	"unicode"
 
 	"github.com/athenavi/chiron/internal/db"
@@ -222,4 +225,68 @@ func (h *MediaHandler) InternalCreateAsset(w http.ResponseWriter, r *http.Reques
 		// 而不是只能猜 `a/b/c.md` 到底落成了什么样。
 		"path": strings.Join(append(append([]string{}, folders...), body.Name), "/"),
 	})
+}
+
+// InternalReadAsset GET /v1/internal/media/{id}/content?tenant_id=&user_id=
+//
+// 用途：Python 引擎按 `asset_id` 取回附件**字节**。
+//
+// 为什么必须由网关转发，而不是让引擎去 GET 前端给的 URL：
+//  1. 引擎侧出站访问统一走 SSRF 防护（`app/tools/ssrf.py`），只允许 http/https 且拒绝
+//     内网地址 —— 而媒体签名 URL 是**相对路径**（`/media/s/...`），S3 直链又常指向内网
+//     端点。两条都会被拒，附件于是稳定退化成"本次未能取回"。
+//  2. 相对路径本身就说明"这个 URL 是给浏览器用的"：它的 host 取决于用户从哪个域名进来，
+//     引擎无从得知。
+//
+// 隔离：调用方必须显式给出 `tenant_id` 与 `user_id`，由**查询谓词**保证它们与资产归属
+// 一致；不一致一律 404（不区分"不存在"与"不是你的"，避免被用来枚举）。
+// 内部令牌（`internalTokenMW`）只证明"调用方是引擎"，不替代归属校验。
+func (h *MediaHandler) InternalReadAsset(w http.ResponseWriter, r *http.Request) {
+	assetID := strings.TrimSpace(r.PathValue("id"))
+	tenantRaw := strings.TrimSpace(r.URL.Query().Get("tenant_id"))
+	userID := strings.TrimSpace(r.URL.Query().Get("user_id"))
+	if assetID == "" || tenantRaw == "" || userID == "" {
+		BadRequest(w, "id, tenant_id and user_id are required")
+		return
+	}
+	tenantID64, err := strconv.ParseInt(tenantRaw, 10, 16)
+	if err != nil {
+		// 租户是**数值**：解析失败就拒绝，不能像写入路径那样回退 0 ——
+		// 回退会让一次拼装错误变成"读 0 号租户的文件"。
+		BadRequest(w, "tenant_id must be an integer")
+		return
+	}
+
+	obj, err := resolveMediaAssetObject(r.Context(), assetID, int16(tenantID64), userID)
+	if err != nil {
+		NotFound(w, "media asset not found")
+		return
+	}
+	if h.store == nil {
+		InternalError(w, "media storage unavailable")
+		return
+	}
+
+	// 一次性读入内存后交给 ServeContent：对象存储的流不支持 Seek，而 Range 是这
+	// 个端点的实际需求（引擎按分片读取长文档时只想要一半字节）。
+	// 上限取写入口径（32MB）—— 超过它的对象本来就不该作为附件进上下文。
+	data, err := h.store.Read(r.Context(), obj.ObjectKey)
+	if err != nil {
+		// 行存在但对象缺失：对调用方仍然是"没有"，但要留下日志，因为这是数据不一致。
+		slog.Warn("internal media read: object missing", "asset_id", assetID, "key", obj.ObjectKey, "error", err)
+		NotFound(w, "media content not found")
+		return
+	}
+	if int64(len(data)) > maxInternalAssetBytes {
+		BadRequest(w, fmt.Sprintf(
+			"asset too large: %d bytes (max %d MB)", len(data), maxInternalAssetBytes>>20))
+		return
+	}
+
+	// 响应头要能让引擎直接落类型，不必再猜：`mime_type` 是入库时按 magic-bytes 定的。
+	if obj.MimeType != "" {
+		w.Header().Set("Content-Type", obj.MimeType)
+	}
+	w.Header().Set("X-Media-Name", sanitizeUploadName(obj.Name))
+	http.ServeContent(w, r, sanitizeUploadName(obj.Name), time.Time{}, bytes.NewReader(data))
 }

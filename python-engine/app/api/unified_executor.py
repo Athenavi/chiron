@@ -347,6 +347,7 @@ class UnifiedChatHandler:
                     trace_id,
                     agent_config=ctx_agent,
                     attachments=attachments,
+                    user_id=str(user_id or ""),
                 )
             else:
                 # 自动模式 (默认)
@@ -486,11 +487,15 @@ class UnifiedChatHandler:
         trace_id: str,
         agent_config: dict[str, Any] | None = None,
         attachments: list[Any] | None = None,
+        user_id: str = "",
     ) -> dict[str, Any]:
         """通过 Agent 工作台执行
 
         agent_config (来自 context.agent) 可覆盖 SubAgent 的
         name / system_prompt / model / max_turns,缺省时保持现有默认值。
+
+        user_id 只用于附件取字节时的归属校验（网关内部端点按 (tenant, user) 定位资产），
+        不参与 Agent 本身的执行语义。
         """
         from app.agent.multi_agent import SubAgent
         from app.main import get_gateway
@@ -551,7 +556,9 @@ class UnifiedChatHandler:
         if attachments:
             from app.media.attachments import to_content_parts
 
-            parts = await to_content_parts(attachments, model=model)
+            parts = await to_content_parts(
+                attachments, model=model, tenant_id=tenant_id, user_id=user_id
+            )
             if parts:
                 content: list[dict[str, Any]] = []
                 if user_input.strip():

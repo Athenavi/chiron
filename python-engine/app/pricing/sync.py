@@ -44,10 +44,27 @@ DEFAULT_TOLERANCE = 0.05
 
 DEFAULT_INTERVAL_SECONDS = 1800  # 30min（用户拍板）
 
-#: 源的目录：(名字, URL)。URL 必须能经 `assert_safe_url`（公网 HTTPS）。
-SOURCES: tuple[tuple[str, str], ...] = (
-    ("portkey", "https://configs.portkey.ai/pricing/openai.json"),
-    ("llmrates", "https://www.llmrates.ai/api/dataset"),
+#: 源的目录：(名字, URL 列表)。同一源可以有多个文件，**先合并再参与交叉验证**。
+#:
+#: ⚠ 这里的"源"是**独立数据提供方**，不是"文件"。portkey 拆成按 provider 的多个 JSON，
+#: 若把每个文件当独立源，就等于拿 portkey 跟自己"互相验证" —— 那不是交叉验证，是复制。
+#: 所以同一 name 下的多份文件必须先合并，再与 llmrates 比对。
+#:
+#: 已实测可用（2026-11-06）：openai/anthropic/google/deepseek/groq/cohere/openrouter。
+#: mistral 与 xai 返回 403，故不列入 —— 列了只会每轮徒增一次失败与一条告警。
+SOURCES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    (
+        "portkey",
+        (
+            "https://configs.portkey.ai/pricing/openai.json",
+            "https://configs.portkey.ai/pricing/anthropic.json",
+            "https://configs.portkey.ai/pricing/google.json",
+            "https://configs.portkey.ai/pricing/deepseek.json",
+            "https://configs.portkey.ai/pricing/groq.json",
+            "https://configs.portkey.ai/pricing/cohere.json",
+        ),
+    ),
+    ("llmrates", ("https://www.llmrates.ai/api/dataset",)),
 )
 
 
@@ -222,6 +239,24 @@ async def _fetch_source(name: str, url: str, *, timeout: float = 20.0) -> dict[s
     return parsed
 
 
+async def _fetch_source_group(name: str, urls: tuple[str, ...]) -> dict[str, ModelPrice]:
+    """拉一个源的全部分文件并**合并**成一份 —— 合并后它才算"一个源"。
+
+    为什么必须合并：portkey 按 provider 拆成多个 JSON。若把每个文件当独立源喂给
+    :func:`cross_validate`，同一个提供方的两份文件会互相"印证"，任何模型都能拿到
+    `source_count=2` —— 交叉验证就退化成自证。合并后 portkey 只有一票。
+    """
+    merged: dict[str, ModelPrice] = {}
+    for url in urls:
+        prices = await _fetch_source(name, url)
+        if not prices:
+            continue
+        # 后到的覆盖先到的：同一 provider 文件之间不该有同名冲突，真冲突时取后者即可，
+        # 反正它们同属一个源，不存在"谁更可信"的判断空间。
+        merged.update(prices)
+    return merged
+
+
 async def sync_once() -> tuple[int, list[str]]:
     """拉全部源 → 交叉验证 → 写入。返回 ``(写入行数, 分歧描述)``。
 
@@ -229,8 +264,8 @@ async def sync_once() -> tuple[int, list[str]]:
     都判成 `single_source` ⇒ 一行都不写（这是**正确**的降级：宁可这轮不更新，也不写入未验证值）。
     """
     fetched: dict[str, dict[str, ModelPrice]] = {}
-    for name, url in SOURCES:
-        prices = await _fetch_source(name, url)
+    for name, urls in SOURCES:
+        prices = await _fetch_source_group(name, urls)
         if prices:
             fetched[name] = prices
     if not fetched:

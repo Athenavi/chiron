@@ -94,6 +94,8 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
         # 否则一屏图的窗口会被算得比实际小得多、压缩迟迟不触发。
         return estimator().estimate(messages, model=model) + image_tokens(messages)
 
+    from app.agent.model_window import strip_inline_media
+
     total = 0
     for m in messages:
         total += 4  # role overhead
@@ -101,7 +103,10 @@ def _estimate_tokens(messages: list[dict[str, Any]], model: str = "") -> int:
             if isinstance(v, str):
                 total += len(v) // 4
             elif isinstance(v, list):
-                total += len(json.dumps(v, ensure_ascii=False, default=str)) // 4
+                # 与 model 口径同源：内联媒体不计字符，由 image_tokens 单独计价
+                # （否则带一张图就是"超窗 5 倍"，见 model_window.strip_inline_media）。
+                folded = json.dumps(strip_inline_media(v), ensure_ascii=False, default=str)
+                total += len(folded) // 4
     # 消息间分隔符
     total += len(messages) * 2
     return total

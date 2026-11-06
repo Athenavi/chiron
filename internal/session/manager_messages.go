@@ -17,7 +17,6 @@ import (
 
 // ── Message helpers ───────────────────────────────────────────────────────
 
-
 // isMissingColumn 判断 err 是否为"列不存在"（PG 42703 / undefined_column）。
 // 用途：新增可选列时，迁移尚未执行的库仍能走旧路径写入 —— 核心消息不能因为一个
 // 展示用字段而写不进去。
@@ -31,6 +30,23 @@ func isMissingColumn(err error, column string) bool {
 	}
 	msg := strings.ToLower(err.Error())
 	return strings.Contains(msg, "column") && strings.Contains(msg, strings.ToLower(column))
+}
+
+// isMissingColumnNamed 判断 err 是否为"**指定列**不存在"。
+//
+// 与 `isMissingColumn` 的区别：PG 的 42703 只表达"某个列不存在"，不说是哪一列。
+// 新增了**多列**的表上（`messages` 既有 `source` 又有 `attachments`），只按 42703
+// 退化会让"缺 A 列"被误判成"缺 B 列"，于是退化成一条**同样失败**的旧写入。
+// 所以这里要求错误文本点名该列；拿不到文本时按"不是该列"处理，宁可让上层报错。
+func isMissingColumnNamed(err error, column string) bool {
+	if err == nil {
+		return false
+	}
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) && pgErr.Code != "42703" {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), strings.ToLower(column))
 }
 
 // SaveUserMessage persists the user message immediately at submit time
@@ -83,7 +99,28 @@ func (m *Manager) ensureSessionOwnedWithTitle(ctx context.Context, sessionID, us
 }
 
 func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userContent, turnID, source string) {
-	if m.pool == nil || userContent == "" {
+	m.SaveUserMessageWithAttachments(ctx, sessionID, userID, userContent, turnID, source, "")
+}
+
+// SaveUserMessageWithAttachments 同 SaveUserMessage，额外落这条消息的**附件引用清单**
+// （`attachmentsJSON`，形如 `[{"id":"…","name":"…","mime_type":"…"}]`）。
+//
+// 为什么单独一个函数而不是改签名：既有调用点（含测试）都不关心附件，改签名会让它们
+// 全部被迫传一个空串 —— 那是无意义的重编译面。这里保留旧入口、委托到新入口。
+//
+// **向后兼容**：`messages.attachments` 由 0002 迁移新增。列不存在时（迁移未跑）
+// 退化为旧写入，只丢附件清单；用户消息本身绝不能因为一个展示字段而丢失。
+// 判断要比 `isMissingColumn` 更严：42703 只说明"某个列不存在"，不说是哪一列，
+// 所以这里额外要求错误文本点名 attachments。
+func (m *Manager) SaveUserMessageWithAttachments(
+	ctx context.Context, sessionID, userID, userContent, turnID, source, attachmentsJSON string,
+) {
+	if m.pool == nil {
+		return
+	}
+	// 只带附件、不填文字是合法提交（前端允许），不能因为 content 为空就把整条消息丢掉 ——
+	// 否则历史里既没有文字也没有附件，用户看到的就是"我发的东西不见了"。
+	if userContent == "" && attachmentsJSON == "" {
 		return
 	}
 	// 归属校验内聚在 ensureSessionOwned（fail-closed）：归属不符时不写任何消息。
@@ -98,9 +135,17 @@ func (m *Manager) SaveUserMessage(ctx context.Context, sessionID, userID, userCo
 		return
 	}
 	_, err = m.pool.Exec(ctx,
-		`INSERT INTO messages (id, session_id, role, content, turn_id, source, created_at)
-		 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), $5, NOW())`,
-		msgID, sessionID, userContent, turnID, source)
+		`INSERT INTO messages (id, session_id, role, content, turn_id, source, attachments, created_at)
+		 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), $5,
+		         COALESCE(NULLIF($6, ''), '[]')::jsonb, NOW())`,
+		msgID, sessionID, userContent, turnID, source, attachmentsJSON)
+	if isMissingColumnNamed(err, "attachments") {
+		// 0002 迁移尚未执行：退回不含 attachments 的写入（只丢附件清单）。
+		_, err = m.pool.Exec(ctx,
+			`INSERT INTO messages (id, session_id, role, content, turn_id, source, created_at)
+			 VALUES ($1, $2, 'user', $3, NULLIF($4, ''), $5, NOW())`,
+			msgID, sessionID, userContent, turnID, source)
+	}
 	if isMissingColumn(err, "source") {
 		// 迁移尚未执行（messages.source 不存在）时退化为旧写入：用户消息绝不能因为
 		// 一个来源标记而丢失（丢一条就等于刷新后对话缺头）。
@@ -425,7 +470,6 @@ func (m *Manager) GetToolCallsPage(ctx context.Context, sessionID string, limit 
 	}
 	return page, nil
 }
-
 
 // toolOutputMaxChunk 是单次按需读取 output 的字符上限。
 //

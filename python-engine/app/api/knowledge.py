@@ -27,6 +27,7 @@ from app.config import DEFAULT_TENANT_ID
 from app.db import get_pool
 from app.kb_access import kb_access_allowed
 from app.knowledge import blob, settings_store
+from app.knowledge.attachment_index import ATTACHMENT_KB_NAME
 from app.knowledge.errors import KnowledgeError, ProviderUnavailableError
 from app.knowledge.providers import registry
 from app.knowledge.providers.base import (
@@ -218,12 +219,16 @@ async def list_knowledge_bases(user_id: str, tenant_id: int = 0) -> dict[str, An
                   document_count, total_size_bytes, credits_consumed, config, error_message,
                   created_at, updated_at
              FROM knowledge_bases
-            WHERE user_id = $1
+            WHERE (user_id = $1
                OR visibility = 'public'
-               OR (visibility = 'tenant' AND tenant_id = $2)
+               OR (visibility = 'tenant' AND tenant_id = $2))
+              -- 个人附件库是引擎自动维护的索引容器，不是用户的知识库：
+              -- 让它在列表里出现会把"发过的附件"混进"我的知识库"，也会误导用户去删它。
+              AND name <> $3
             ORDER BY created_at DESC""",
         user_id,
         tenant_id or DEFAULT_TENANT_ID,
+        ATTACHMENT_KB_NAME,
     )
     kbs = [_serialize_kb(row) for row in rows]
     return {"knowledge_bases": kbs, "count": len(kbs)}

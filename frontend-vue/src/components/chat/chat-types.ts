@@ -100,7 +100,11 @@ export interface ChatAttachment {
   name: string
   size: number
   mimeType: string
-  /** 上传后的资源 URL（如 /v1/media/{id}/download 或 data: URL 预览） */
+  /**
+   * 资源 URL。**历史回放时为 `''`**：消息表只存附件引用（id/name/mime/size），
+   * 签名 URL 会过期、内联 `data:` 更是"内容驻留"，所以两者都不落库。
+   * 空串表示"按 `id` 现签"—— 见 `MessageItem` 的 `resolveAttachmentUrls`。
+   */
   url: string
   /** 是否为图片（图片在消息气泡内内联展示） */
   isImage: boolean

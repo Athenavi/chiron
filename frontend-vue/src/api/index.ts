@@ -873,3 +873,44 @@ export async function listPaymentChannels(): Promise<PaymentChannel[]> {
   return Array.isArray(d?.channels) ? d.channels : []
 }
 
+
+// ── 参考价格目录（只读，多方交叉验证）──
+export interface ModelPrice {
+  model: string
+  provider: string
+  input_per_1k: number
+  output_per_1k: number
+  currency: string
+  sources: string[]
+  source_count: number
+  verified_at: string
+  mixed_per_1k: number
+}
+
+export interface ModelPriceCatalog {
+  models: ModelPrice[]
+  count: number
+  unit: string
+  note: string
+}
+
+/**
+ * 拉取参考价格目录。
+ *
+ * 数据由引擎侧的定价同步任务写入 `model_prices`：只有 **≥2 个公开价格源在 5% 容差内
+ * 一致**的价格才会入库（见 `python-engine/app/pricing/sync.py`）。所以表里的每一行
+ * 都自带"多源印证"，`sources` 就是参与印证的具体来源。
+ *
+ * ⚠ 这张表**不参与计费**：账单金额以 `BillingConfig` 为准。这里只回答"公开市场价大概多少"。
+ */
+export async function listModelPrices(params?: { q?: string; provider?: string; sort?: string }): Promise<ModelPriceCatalog> {
+  const resp = await api.get('/v1/pricing/models', { params })
+  // 兼容 OK() 包装与裸形态：层级取错会静默变成空列表（listModels 踩过同样的坑）。
+  const d = resp.data?.data ?? resp.data
+  return {
+    models: Array.isArray(d?.models) ? d.models : [],
+    count: Number(d?.count ?? 0),
+    unit: String(d?.unit ?? ''),
+    note: String(d?.note ?? ''),
+  }
+}

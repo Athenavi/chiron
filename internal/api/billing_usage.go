@@ -4,6 +4,7 @@ package api
 // 代码逐字未改：只搬位置，不改逻辑。
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -27,6 +28,7 @@ func usageGroupColumn(groupBy string) (string, bool) {
 		return "", false
 	}
 }
+
 // GetUsage returns aggregated usage stats for the user: daily token consumption and costs.
 //
 // 查询参数（都可省略，省略时行为与改造前完全一致）：
@@ -128,7 +130,9 @@ func (h *BillingHandler) GetUsage(w http.ResponseWriter, r *http.Request) {
 		"daily":       daily,
 		"total_spent": totalSpent,
 		"total_added": totalAdded,
-		"period_days": 30,
+		// 必须是本次查询实际用的窗口：写死 30 会让前端在 7d/90d 下把区间标签算错
+		// （前端优先读这个字段作为权威值），而 SQL 早已按 days 过滤 —— 数据与标签不一致。
+		"period_days": days,
 	})
 }
 func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Request, userID, groupBy string, days int) {
@@ -149,7 +153,10 @@ func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Reques
 	defer rows.Close()
 
 	type bucketUsage struct {
-		Bucket       string `json:"bucket"`
+		Bucket string `json:"bucket"`
+		// Label 是给人看的名字（仅会话分组回填）：bucket 本身是 session_id，
+		// 直接把 UUID 摆进表格，用户无从判断"这条花费是哪个会话的"。
+		Label        string `json:"label,omitempty"`
 		EventCount   int    `json:"event_count"`
 		InputTokens  int64  `json:"input_tokens"`
 		OutputTokens int64  `json:"output_tokens"`
@@ -179,6 +186,24 @@ func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	// 按会话分组时把 session_id 换成会话名：直接摆 UUID，用户无法判断
+	// "这条花费是哪个会话的"，这个维度等于没做。
+	if groupBy == "session" && len(breakdown) > 0 {
+		ids := make([]string, 0, len(breakdown))
+		for _, b := range breakdown {
+			if b.Bucket != "" && b.Bucket != "unknown" {
+				ids = append(ids, b.Bucket)
+			}
+		}
+		if names := sessionLabels(r.Context(), userID, ids); len(names) > 0 {
+			for i := range breakdown {
+				if name := names[breakdown[i].Bucket]; name != "" {
+					breakdown[i].Label = name
+				}
+			}
+		}
+	}
+
 	OK(w, map[string]interface{}{
 		"group_by":     groupBy,
 		"period_days":  days,
@@ -193,4 +218,36 @@ func (h *BillingHandler) getBreakdownUsage(w http.ResponseWriter, r *http.Reques
 		"limit":         usageBreakdownLimit,
 		"daily":         []struct{}{},
 	})
+}
+
+// sessionLabels 把 session_id 批量换成可读名称（会话别名优先，其次标题）。
+//
+// 找不到就返回空 —— 前端会退回到显示 id，而不是显示一个假名字。
+// 查询显式按 user_id 过滤（fail-closed）：这些 id 虽然来自本人的 usage_events，
+// 但仍限定归属，避免"拿别人的 id 换出别人的标题"。
+func sessionLabels(ctx context.Context, userID string, ids []string) map[string]string {
+	out := make(map[string]string, len(ids))
+	if len(ids) == 0 || db.GlobalDBManager == nil {
+		return out
+	}
+	rows, err := db.GlobalDBManager.Query(ctx, `
+		SELECT id, COALESCE(NULLIF(alias, ''), NULLIF(title, ''), '') AS name
+		  FROM sessions
+		 WHERE user_id = $1 AND id = ANY($2)`, userID, ids)
+	if err != nil {
+		// 名称只是展示增强：查不到不该让整张用量报表失败。
+		slog.Warn("session label lookup failed", "user_id", userID, "error", err)
+		return out
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id, name string
+		if err := rows.Scan(&id, &name); err != nil {
+			continue
+		}
+		if name != "" {
+			out[id] = name
+		}
+	}
+	return out
 }

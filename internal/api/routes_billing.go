@@ -28,4 +28,7 @@ func registerBillingRoutes(mux *http.ServeMux, billingHandler *BillingHandler, a
 	// 套餐目录与我的权益（P2-2）：权益含已过期条目，到期后界面仍能看到"已过期"
 	mux.Handle("GET /v1/billing/packages", authMW(rlMW(http.HandlerFunc(billingHandler.GetPackages))))
 	mux.Handle("GET /v1/billing/entitlements", authMW(rlMW(http.HandlerFunc(billingHandler.GetEntitlements))))
+	// 参考价格目录（只读）：数据由引擎侧定价同步任务写入，经多源交叉验证；
+	// 与计费无关，任何登录用户都可查看（选型参考）。
+	mux.Handle("GET /v1/pricing/models", authMW(rlMW(http.HandlerFunc(billingHandler.ListModelPrices))))
 }

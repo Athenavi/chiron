@@ -69,8 +69,12 @@ type Message struct {
 	// Origin 是所属**回合**的发起方（turns.origin）：空 = 用户手动；
 	// "superagent_takeover" = 接管巡检。一个回合只有一条注入消息，但该回合的助手回复
 	// 也属于这次接管 —— 标在回合上才能让整轮都被认出来。
-	Origin    string    `json:"origin,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Origin string `json:"origin,omitempty"`
+	// Attachments 是这条消息携带附件的引用清单（JSON 数组，见 model.Message.Attachments）。
+	// 只给 `{id,name,mime_type,size,is_image}`：url 一律不落库、不回放，
+	// 前端按 id 现签短时效 URL —— 签名会过期，存下来的那份必然会烂掉。
+	Attachments string    `json:"attachments,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 // ToolCall is a persisted tool invocation (input/output) for history rendering.
@@ -298,14 +302,15 @@ func (h *ConversationHandler) Get(w http.ResponseWriter, r *http.Request) {
 	}
 	for _, m := range page.Messages {
 		conv.Messages = append(conv.Messages, Message{
-			ID:        m.ID,
-			Role:      m.Role,
-			Content:   m.Content,
-			ToolCalls: m.ToolCalls, // S 修复：assistant 消息的 tool_calls 随详情返回
-			TurnID:    m.TurnID,
-			Source:    m.Source,
-			Origin:    m.Origin,
-			CreatedAt: m.CreatedAt,
+			ID:          m.ID,
+			Role:        m.Role,
+			Content:     m.Content,
+			ToolCalls:   m.ToolCalls, // S 修复：assistant 消息的 tool_calls 随详情返回
+			TurnID:      m.TurnID,
+			Source:      m.Source,
+			Origin:      m.Origin,
+			Attachments: m.Attachments,
+			CreatedAt:   m.CreatedAt,
 		})
 	}
 	// S 修复：工具调用过程落库 — 随会话详情返回，前端刷新后还原工具卡片

@@ -63,8 +63,13 @@ type Message struct {
 	Source string `json:"source,omitempty"`
 	// Origin 是所属**回合**的发起来源（turns.origin）：空 = 用户手动；
 	// "superagent_takeover" = 接管巡检。与 Source 的区别见 CreateTurn 的注释。
-	Origin    string    `json:"origin,omitempty"`
-	CreatedAt time.Time `json:"created_at"`
+	Origin string `json:"origin,omitempty"`
+	// Attachments 是这条用户消息携带附件的**引用清单**（JSON 数组），由
+	// `messages.attachments` 读回。刻意只存 `{id,name,mime_type,size,is_image}`：
+	// 不存 url —— 签名 URL 会过期，内联 `data:` 载荷更是"内容驻留"（见
+	// submit_handler.go 的 attachmentRefsForStorage）。前端按 `id` 重新签名取图。
+	Attachments string    `json:"attachments,omitempty"`
+	CreatedAt   time.Time `json:"created_at"`
 }
 
 type ToolCall struct {

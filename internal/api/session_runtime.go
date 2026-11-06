@@ -488,9 +488,8 @@ func (h *SessionRuntimeHandler) metricsFromRedis(ctx context.Context, tenant, se
 	if h.rdb == nil {
 		return nil, ""
 	}
-	if _, err := h.hashAll(ctx, sessionMetricsKey(tenant, sessionID)); err != nil {
-		return nil, ""
-	}
+	// 一次 HGETALL 就够：此前这里先查一遍只为了判错、把结果丢掉，再查一遍取数据 ——
+	// 同一个 key 的两次往返，纯浪费（且第二遍失败时第一遍的成功毫无意义）。
 	pairs, err := h.hashAll(ctx, sessionMetricsKey(tenant, sessionID))
 	if err != nil || len(pairs) == 0 {
 		return nil, ""
@@ -540,12 +539,26 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 		totals["cache_hit_rate"] = float64(intOf(row["cache_hits"])) / float64(turns)
 	}
 	// 最近若干轮的时序（供前端画趋势）
+	//
+	// 一并算出 duration_ms：`turns` 表没有 duration 列，但 started_at/finished_at 就在那儿。
+	// 此前只返回令牌与模型，导致 **DB 回落路径没有 throughput**（Redis 路径有）——
+	// 缓存过期或进程重启后，会话统计悬浮窗里的吞吐会整块消失，看起来像"这个功能坏了"。
+	durations := make([]float64, 0, 32)
+	tps := make([]float64, 0, 32)
 	if rows, err := db.GlobalDBManager.FetchAll(ctx, `
 		SELECT id, input_tokens, output_tokens, cached_tokens, cache_hit, status, created_at,
-		       COALESCE(model, '') AS model
+		       COALESCE(model, '') AS model,
+		       COALESCE(EXTRACT(EPOCH FROM (finished_at - started_at)) * 1000, 0) AS duration_ms
 		  FROM turns WHERE session_id = $1 ORDER BY created_at DESC LIMIT 50`, sessionID); err == nil {
 		list := make([]map[string]any, 0, len(rows))
 		for _, r := range rows {
+			ms := intOf(r["duration_ms"])
+			if ms > 0 {
+				durations = append(durations, float64(ms))
+				if tokens := intOf(r["output_tokens"]); tokens > 0 {
+					tps = append(tps, float64(tokens)/(float64(ms)/1000.0))
+				}
+			}
 			list = append(list, map[string]any{
 				"turn_id":       stringOf(r["id"]),
 				"input_tokens":  intOf(r["input_tokens"]),
@@ -553,12 +566,21 @@ func (h *SessionRuntimeHandler) metricsFromDB(ctx context.Context, sessionID str
 				"cached_tokens": intOf(r["cached_tokens"]),
 				"cache_hit":     r["cache_hit"] == true,
 				// 每轮实际使用的模型（引擎回传）：详情页按轮展示"这一轮用的哪个模型"
-				"model":      stringOf(r["model"]),
-				"status":     stringOf(r["status"]),
-				"created_at": stringOf(r["created_at"]),
+				"model":       stringOf(r["model"]),
+				"status":      stringOf(r["status"]),
+				"created_at":  stringOf(r["created_at"]),
+				"duration_ms": ms,
 			})
 		}
 		out["turns"] = list
+	}
+	if len(durations) > 0 {
+		out["throughput"] = map[string]any{
+			"ttft_ms_p50":    percentile(durations, 0.5),
+			"output_tps_p50": percentile(tps, 0.5),
+			"output_tps_p95": percentile(tps, 0.95),
+			"sample_turns":   len(tps),
+		}
 	}
 	out["totals"] = totals
 	return out

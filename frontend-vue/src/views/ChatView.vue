@@ -1218,6 +1218,49 @@ async function loadUnifiedSession(sessionId: string) {
   }
 }
 
+/**
+ * 后端 `messages.attachments` → `ChatAttachment[]`。
+ *
+ * 两种形态都要能吃：jsonb 取键出来是 **JSON 字符串**（`COALESCE(to_jsonb(messages)->>'attachments','[]')`），
+ * 而内存里的路径可能已经是数组。解析失败一律当"没有附件"，不让一条坏数据把整段历史渲染搞挂。
+ *
+ * 清单里**没有 url**：只存 id/name/mime/size —— 签名 URL 会过期、`data:` 内联载荷是内容驻留，
+ * 两者都不落库。这里把 `url` 留空串，由 `MessageItem` 按 id 现签（见其 `resolveAttachmentUrls`）。
+ */
+function attachmentRefsFromMessage(raw: unknown): ChatAttachment[] {
+  if (!raw) return []
+  let list: unknown[] = []
+  if (typeof raw === 'string') {
+    if (raw === '' || raw === '[]') return []
+    try {
+      const parsed: unknown = JSON.parse(raw)
+      if (Array.isArray(parsed)) list = parsed
+    } catch {
+      return []
+    }
+  } else if (Array.isArray(raw)) {
+    list = raw
+  }
+  const out: ChatAttachment[] = []
+  for (const it of list) {
+    const a = (it ?? {}) as Record<string, unknown>
+    const id = typeof a.id === 'string' ? a.id.trim() : ''
+    if (!id) continue
+    const mimeType = typeof a.mime_type === 'string' ? a.mime_type : ''
+    out.push({
+      id,
+      name: typeof a.name === 'string' && a.name ? a.name : id,
+      size: typeof a.size === 'number' && Number.isFinite(a.size) ? a.size : 0,
+      mimeType,
+      url: '',
+      // is_image 优先（上传时已知），缺失时按 mime 推断 —— 老数据里该字段可能不存在。
+      isImage: a.is_image === true || mimeType.startsWith('image/'),
+      isAudio: mimeType.startsWith('audio/'),
+    })
+  }
+  return out
+}
+
 /** 统一会话消息 → 现有 ChatItem（user/assistant 映射现有消息组件；metadata 含 kb 时插知识库引用标签） */
 function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
   const out: ChatItem[] = []
@@ -1225,15 +1268,20 @@ function buildUnifiedItems(list: readonly unknown[]): ChatItem[] {
     const m = (raw ?? {}) as {
       role?: unknown; content?: unknown; timestamp?: unknown
       created_at?: unknown; source?: unknown; origin?: unknown; metadata?: unknown
+      attachments?: unknown
     }
     if (m.role !== 'user' && m.role !== 'assistant') return
     const content = typeof m.content === 'string' ? m.content : ''
-    if (!content) return
+    const atts = attachmentRefsFromMessage(m.attachments)
+    // 只带附件、不填文字是合法提交：正文为空但附件非空时**必须**保留这条消息，
+    // 否则用户刷新后看到自己发的文件凭空消失（后端也按同一口径允许空正文）。
+    if (!content && atts.length === 0) return
     const stamp = m.timestamp ?? m.created_at
     const time = formatClock(typeof stamp === 'string' ? stamp : undefined)
     if (m.role === 'user') {
       out.push({
         kind: 'text', role: 'user', content: stripUserInputTag(content), time, id: `uni_u_${idx}`,
+        ...(atts.length ? { attachments: atts } : {}),
         // 来源标记（'subagent_followup' = 子 Agent 自动轮）：带上它，刷新后仍渲染成
         // 系统提示而不是用户气泡（见 internal/api/agent_followup.go）
         ...(typeof m.source === 'string' && m.source ? { source: m.source } : {}),

@@ -179,6 +179,41 @@ async def _query_max_output(model: str) -> int:
     return DEFAULT_MAX_OUTPUT_TOKENS
 
 
+#: 内联媒体被折算成的占位符（只保留"这里曾有媒体"的信息，丢掉载荷字节）。
+MEDIA_PLACEHOLDER = "<media>"
+#: 判为"内联载荷"的最短长度。Anthropic 形态的 `{"type":"image","source":{"data":…}}`
+#: 里 `data` 是裸 base64、不带 `data:` 前缀，只能按长度识别；256 足够避开正常短字段。
+_INLINE_PAYLOAD_MIN_CHARS = 256
+
+
+def strip_inline_media(value: Any) -> Any:
+    """递归把内联媒体载荷折成占位符 —— **仅用于 token 估算**，不改变真正上行的消息。
+
+    为什么必须折：图片的成本由 `image_tokens()` 按像素单独计，而 base64 的字符数既不是
+    文本、也不是可信的 token 代理。实测一张 800×800 的 PNG（1.9MB）在字符口径下是
+    64 万 token（应约 850），带一张图就足以让压缩判定认为"超窗 5 倍"——于是每次带图的
+    请求都在错误的前提下触发压缩（或被上游拒绝）。两条估算路径（本模块的校准口径、
+    `compaction._estimate_tokens` 的无 model 兜底）都必须走这里，否则两处口径又会分开。
+    """
+    if isinstance(value, str):
+        return MEDIA_PLACEHOLDER if value.startswith("data:") else value
+    if isinstance(value, list):
+        return [strip_inline_media(item) for item in value]
+    if isinstance(value, dict):
+        out: dict[str, Any] = {}
+        for key, item in value.items():
+            if (
+                key == "data"
+                and isinstance(item, str)
+                and len(item) >= _INLINE_PAYLOAD_MIN_CHARS
+            ):
+                out[key] = MEDIA_PLACEHOLDER
+                continue
+            out[key] = strip_inline_media(item)
+        return out
+    return value
+
+
 class TokenEstimator:
     """字符近似 + provider usage **校准**（C4）。
 
@@ -203,9 +238,11 @@ class TokenEstimator:
         total = 0
         for message in messages:
             try:
-                total += len(json.dumps(message, ensure_ascii=False))
+                # 先折掉内联媒体载荷：base64 的字符数不是 token 的代理（见 strip_inline_media）。
+                payload = json.dumps(strip_inline_media(message), ensure_ascii=False)
             except (TypeError, ValueError):
-                total += len(str(message))
+                payload = str(message)
+            total += len(payload)
         return total
 
     def estimate(self, messages: list[dict[str, Any]], *, model: str) -> int:

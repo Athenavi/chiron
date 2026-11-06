@@ -32,6 +32,7 @@ if _os.environ.get("CHIRON_TOOLS_SKIP_REGISTRY") == "1":  # 见上方说明
 else:
     import app.tools.archive  # noqa: F401 — read_archive（按 messages.id 长期召回原文）
     import app.tools.ask_user  # noqa: F401 — ask_user（占位 handler，真逻辑在 runtime）
+    import app.tools.attachment_read  # noqa: F401 — attachment_read（按 asset_id 分片取附件正文）
     import app.tools.best_of_n  # noqa: F401 — 差距D：多候选 + judge 选优
     import app.tools.browser  # noqa: F401
     import app.tools.core  # noqa: F401

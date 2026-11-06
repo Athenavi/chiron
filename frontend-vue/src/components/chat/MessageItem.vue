@@ -224,7 +224,11 @@ function attachmentUrl(att: ChatAttachment): string {
 async function resolveAttachmentUrls() {
   const item = props.item
   if (item.kind !== 'text' || !item.attachments?.length) return
-  const targets = item.attachments.filter(a => a.url?.startsWith('/media/') && !attachmentResolved.value[a.id])
+  // 历史回放拿到的附件**没有 url**（消息表只存引用，签名 URL 会过期），
+  // 所以空 url 与旧的 /media/ 公开路径一样都要按 id 现签；已有绝对/签名 url 的跳过。
+  const targets = item.attachments.filter(
+    a => (!a.url || a.url.startsWith('/media/')) && !attachmentResolved.value[a.id],
+  )
   if (!targets.length) return
   const results = await Promise.all(targets.map(async a => {
     const url = await resolveMediaUrl({ id: a.id, file_url: a.url })

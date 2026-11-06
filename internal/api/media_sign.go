@@ -136,41 +136,23 @@ func (h *MediaHandler) ServeSignedMedia(w http.ResponseWriter, r *http.Request) 
 		http.Error(w, "invalid signature", http.StatusForbidden)
 		return
 	}
-	// 取文件路径。
-	// 签名已经把 (assetID, tenant, user) 绑在一起，但**查询本身也必须带归属谓词**：
-	// 否则签名校验与数据读取之间是"信任一个不属于本次查询的租户参数"——
-	// 只要签名密钥或参数拼装出现任何一处偏差，就能拿 A 的签名读到 B 的文件。
-	var filePath string
-	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`SELECT COALESCE(file_path, '') FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-		assetID, tenantID, userID).Scan(&filePath); err != nil || filePath == "" {
-
-		// Fallback: 如果 file_path 为空，从 file_url 动态推导
-		var fileURL string
-		if err2 := db.GlobalDBManager.QueryRow(r.Context(),
-			`SELECT COALESCE(file_url, '') FROM media_assets WHERE id = $1 AND tenant_id = $2 AND user_id = $3`,
-			assetID, tenantID, userID).Scan(&fileURL); err2 != nil || fileURL == "" {
-			slog.Error("ServeSignedMedia: asset not found", "assetID", assetID)
-			http.Error(w, "media not found", http.StatusNotFound)
-			return
-		}
-
-		// 从 file_url 推导 file_path: /media/xxx -> xxx
-		if strings.HasPrefix(fileURL, "/media/") {
-			filePath = strings.TrimPrefix(fileURL, "/media/")
-			slog.Debug("ServeSignedMedia: derived file_path from file_url",
-				"assetID", assetID, "fileURL", fileURL, "filePath", filePath)
-		} else {
-			slog.Error("ServeSignedMedia: invalid file_url format", "assetID", assetID, "fileURL", fileURL)
-			http.Error(w, "media not found", http.StatusNotFound)
-			return
-		}
+	// 取文件路径：签名把 (assetID, tenant, user) 绑在一起，但查询本身也必须带归属谓词 ——
+	// 否则签名校验与数据读取之间隔着"信任一个不属于本次查询的租户参数"。
+	// 定位统一走 `resolveMediaAssetObject`（与 `InternalReadAsset` 同一份实现）：
+	// `file_path` 为空时从 `file_url` 推导的口径只允许一处，否则两个入口会一个 404 一个正常。
+	tenantParsed, terr := strconv.ParseInt(tenantID, 10, 16)
+	if terr != nil {
+		slog.Error("ServeSignedMedia: invalid tenant in signature", "assetID", assetID)
+		http.Error(w, "media not found", http.StatusNotFound)
+		return
 	}
-
-	// 归一化 file_path：历史数据里直传路径写入的是完整对象键（含 "media/" 前缀），
-	// 分片路径写入/推导的是相对媒体根的路径。统一为「相对媒体根」，否则与 mediaRoot
-	// 叠加会出现 StorageRoot/media/media/... 的错位路径。
-	filePath = strings.TrimPrefix(filepath.ToSlash(filePath), "media/")
+	obj, oerr := resolveMediaAssetObject(r.Context(), assetID, int16(tenantParsed), userID)
+	if oerr != nil {
+		slog.Error("ServeSignedMedia: asset not found", "assetID", assetID)
+		http.Error(w, "media not found", http.StatusNotFound)
+		return
+	}
+	filePath := obj.RelPath
 
 	// S3 后端：签名已校验通过，直接 302 到对象存储的预签名 URL
 	// （对象存储自行处理 Range/断点续传，网关不中转大文件）。

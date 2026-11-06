@@ -26,6 +26,7 @@ import {
   BookOutlined,
   ThunderboltOutlined,
   CreditCardOutlined,
+  DollarOutlined,
   SettingOutlined,
   DownOutlined,
   HistoryOutlined,
@@ -126,6 +127,8 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
     { key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) },
+    // 参考价格目录：公开市场价（多源交叉验证），与计费无关，所有登录用户可见。
+    { key: '/pricing', label: tr('pricing.title'), icon: () => h(DollarOutlined) },
     ...(authStore.isAdmin
       ? [
           // 模型配置：决定对话页模型下拉里能选到什么（后端 /v1/admin/models，需管理员）

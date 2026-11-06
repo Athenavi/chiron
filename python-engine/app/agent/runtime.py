@@ -497,7 +497,12 @@ async def _with_attachment_parts(
     from app.agent.message_codec import make_message
     from app.media.attachments import to_content_parts
 
-    parts = await to_content_parts(task.attachments, model=model)
+    parts = await to_content_parts(
+        task.attachments,
+        model=model,
+        tenant_id=task.tenant_id,
+        user_id=task.user_id,
+    )
     if not parts:
         return messages
 
@@ -510,11 +515,69 @@ async def _with_attachment_parts(
         msg = messages[index]
         if msg.get("role") == "user" and msg.get("content") == task.content:
             out = list(messages)
-            out[index] = {**msg, "content": content}
+            out[index] = {**msg, "content": content, ATTACHMENT_PARTS_KEY: len(parts)}
             return out
 
     # 没找到本轮用户消息（例如续跑快照已把它合并）：追加一条，确保附件不丢。
-    return [*messages, make_message(role="user", content=content)]  # type: ignore[arg-type]
+    appended = make_message(role="user", content=content)  # type: ignore[arg-type]
+    appended[ATTACHMENT_PARTS_KEY] = len(parts)
+    return [*messages, appended]
+
+
+#: 本轮附件 parts 的**条数**，记在消息的旁路字段上。
+#:
+#: 为什么用旁路字段而不是在 content 里放一个标记 part：标记块会作为正文被模型读到，
+#: 也白占上下文。而 `to_chat_messages`/`to_openai` 都只取白名单字段（role/content/
+#: tool_call_id/tool_calls），旁路字段天然不会外泄给 provider。
+ATTACHMENT_PARTS_KEY = "_attachment_parts"
+
+
+def fold_attachment_parts_for_persistence(
+    messages: list[dict[str, Any]], attachments: list[Any] | None
+) -> list[dict[str, Any]]:
+    """把本轮附件的 content parts 换成引用块，**只用于写历史**（会话缓存 / PG）。
+
+    为什么必须折：`SessionStore.append` 是整表覆盖写（见 `_redis_set`：一次
+    `json.dumps(整个 messages)` 再 `setex`），内联图片与提取正文会被每一轮读回、重发给
+    模型。实测单个 20MB 文件 10 轮累积约 280MB —— 撑爆上下文与缓存的是"内容驻留"，
+    不是压缩参数不够。历史只需要"这轮发过什么"，`asset_id` 足以在需要时重新取字节
+    （`attachment_read`），所以正文与图片一律不进历史。
+
+    只改写了带 `ATTACHMENT_PARTS_KEY` 的那条消息；其余消息原样复用同一个 dict。
+    """
+    if not attachments:
+        return messages
+    from app.media.attachments import attachment_reference_block
+
+    ref = attachment_reference_block(attachments)
+    if not ref:
+        # 附件没有 `id`（纯 data URL 的内联形态）：媒体库里没有它，写引用也取不回来，
+        # 但仍要摘掉标记，避免它被当成业务字段带到下游。
+        return [
+            {k: v for k, v in m.items() if k != ATTACHMENT_PARTS_KEY} if ATTACHMENT_PARTS_KEY in m else m
+            for m in messages
+        ]
+
+    out: list[dict[str, Any]] = []
+    for msg in messages:
+        count = msg.get(ATTACHMENT_PARTS_KEY)
+        if not isinstance(count, int) or count <= 0:
+            out.append(msg)
+            continue
+        clean = {k: v for k, v in msg.items() if k != ATTACHMENT_PARTS_KEY}
+        content = msg.get("content")
+        if not isinstance(content, list):
+            # 结构已被压缩等步骤改写（content 变成字符串）：保留它自己的形态，
+            # 只在末尾补一句引用，别把压缩结果再拆一遍。
+            clean["content"] = f"{content}\n\n{ref}" if content else ref
+            out.append(clean)
+            continue
+        keep = content[: max(0, len(content) - count)]
+        parts = [p for p in keep if isinstance(p, dict)]
+        parts.append({"type": "text", "text": ref})
+        clean["content"] = parts
+        out.append(clean)
+    return out
 
 
 #: 循环护栏回灌提示的前缀（前端/日志据此识别"这不是工具的真实输出"）
@@ -1724,12 +1787,7 @@ class AgentRuntime:
             )
             max_tokens = _resolve_max_tokens(llm_config.get("max_tokens"), model_max_output)
 
-            # ── 附件 → 模型可见内容（本轮用户消息携带的媒体库文件）──
-            # 放在窗口预算与压缩**之前**：附件会真的占上下文（图片块 + 提取出的文本），
-            # 必须在算预算时就算进去，而不是等压缩阶段才发现超了。
-            messages = await _with_attachment_parts(messages, task, str(model))
-
-            # ── 消息规范化 + 分级压缩：请求开始时立即执行，确保上下文在预算内 ──
+            # ── 消息规范化 ──
             messages = [
                 _normalize_msg(
                     role=m.get("role", "user"),
@@ -1740,14 +1798,25 @@ class AgentRuntime:
                 for m in messages
             ]
             if mode_cfg.enable_compaction:
-                # C2 段 c：先把内联 `data:` 媒体搬到媒体库（回合前一次即可）。放这里是因为
-                # 落库要走 HTTP（async），而 `_compact_messages` 是同步函数 —— 它接不进来。
+                # C2 段 c：先把**历史**里的内联 `data:` 媒体搬到媒体库（回合前一次即可）。
+                # 必须在注入本轮附件**之前**：`offload_inline_media` 不分消息新旧，只要
+                # 见到 >8KiB 的 data URL 就换掉 —— 放在注入之后，用户刚发的那张图会被
+                # 换成 `<media_ref>` 文本，模型根本看不到图（实测复现：parts 从
+                # ['image_url','text'] 变成 ['text','text','text']）。历史该瘦身，本轮不该。
                 from app.agent.media_offload import offload_inline_media
 
                 messages = await offload_inline_media(messages)
 
+            # ── 附件 → 模型可见内容（本轮用户消息携带的媒体库文件）──
+            # 位置是这两条约束的**交集**：必须在历史卸载之后（否则本轮图片被一起换掉，
+            # 见上），又必须在压缩之前（附件真的占上下文 —— 图片块 + 提取出的文本，
+            # 不算进预算就会在送上游时才炸）。不放在 `enable_compaction` 分支里：
+            # minimal 模式关压缩，但附件照样要给模型。
+            messages = await _with_attachment_parts(messages, task, str(model))
+
+            if mode_cfg.enable_compaction:
                 # 按**当前模型**的能力适配图片：读不了图的模型不塞图，否则 provider 会
-                # 整轮报错（见 `app/agent/model_capabilities.py`）。
+                # 整轮报错（见 `app/agent/model_capabilities.py`）。对本轮附件同样适用。
                 from app.agent.media_offload import adapt_images_for_model
 
                 messages = await adapt_images_for_model(messages, model=model)
@@ -2694,10 +2763,15 @@ class AgentRuntime:
                     turn_id=str(getattr(task, "turn_id", "") or ""),
                     roles={"tool"},
                 )
-                # 缓存仍然写：它已降级为**回落层**（PG 才是事实来源），
-                # 压缩版进缓存无害 —— 而删掉它会让 PG 不可用时彻底失去跨轮记忆。
+                # 缓存仍然写：它已降级为回落层（PG 才是事实来源），删掉会让 PG 不可用时失去跨轮记忆。
+                # 但附件内容不能进缓存 —— `append` 是整表覆盖写，内联图片与正文会被下一轮整段读回、
+                # 重发给模型（单个 20MB 文件 10 轮累积约 280MB）。折成引用块后 `asset_id` 仍在，
+                # 内容按需经 `attachment_read` 取。
                 if self._session_store:
-                    await self._session_store.append(task.session_id, messages)
+                    await self._session_store.append(
+                        task.session_id,
+                        fold_attachment_parts_for_persistence(messages, task.attachments),
+                    )
                 _cache_saved = True
                 if written:
                     logger.info(
@@ -2908,7 +2982,10 @@ class AgentRuntime:
                     # 与正常路径同一口径：缓存仍写（它是 PG 不可用时的回落层）。
                     # 中断退出同样要写 —— 否则"PG 不可用 + 中断"等于彻底丢历史。
                     if self._session_store:
-                        await self._session_store.append(task.session_id, messages)
+                        await self._session_store.append(
+                            task.session_id,
+                            fold_attachment_parts_for_persistence(messages, task.attachments),
+                        )
                     logger.info(
                         "Durable history appended on exit: %s (%d tool messages)",
                         task.session_id,

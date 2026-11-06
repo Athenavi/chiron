@@ -47,6 +47,14 @@ const routes = [
     meta: { requiresAuth: true, requiresAdmin: true },
   },
   {
+    // 参考价格目录：只读，数据经多源交叉验证后由引擎侧同步任务写入。
+    // 与 /models（配置哪些模型可选）分开放：一个是"我能用哪些"，一个是"市场上多少钱"。
+    path: '/pricing',
+    name: 'Pricing',
+    component: () => import('../views/PricingView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/share/:id',
     name: 'Share',
     component: () => import('../views/ShareView.vue'),

@@ -9,6 +9,7 @@ import mail from './mail'
 import memory from './memory'
 import media from './media'
 import billing from './billing'
+import pricing from './pricing'
 import settings from './settings'
 import notifications from './notifications'
 import task from './task'
@@ -1073,6 +1074,7 @@ export default {
   memory,
   media,
   billing,
+  pricing,
   settings,
   notifications,
   task,

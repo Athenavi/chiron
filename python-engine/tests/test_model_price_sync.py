@@ -168,3 +168,32 @@ async def test_sync_once_writes_nothing_when_no_source_answers(
     written, disagreements = await s.sync_once()
 
     assert written == 0 and disagreements == []
+
+
+# ── 同一源的多份文件必须先合并 ──
+
+
+async def test_same_source_files_are_merged_into_one_vote(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """portkey 按 provider 拆成多个 JSON：合并后只算**一票**。
+
+    若不合并，同一提供方的两份文件会互相"印证" ⇒ 任何模型都能拿到 source_count=2，
+    交叉验证就退化成自证（看起来有验证，实际只有一个数据提供方）。
+    """
+    calls: list[str] = []
+
+    async def _fake(name: str, url: str, **_kw: object) -> dict[str, s.ModelPrice] | None:
+        calls.append(url)
+        if "llmrates" in url:
+            return None  # 让 llmrates 这轮没数据：本用例只想验证 portkey 内部不互相印证
+        # 两个"文件"给出**同一个模型**，若被当成两个源就会被判一致并写入。
+        return {"gpt-4o": _price("gpt-4o", 0.0025, 0.01)}
+
+    monkeypatch.setattr(s, "_fetch_source", _fake)
+    written, disagreements = await s.sync_once()
+
+    # 两个文件都被拉过（说明确实遍历了 URL 列表）……
+    assert len(calls) >= 2
+    # ……但只构成一个源 ⇒ 单源 ⇒ 不写入、也不算分歧。
+    assert written == 0 and disagreements == []

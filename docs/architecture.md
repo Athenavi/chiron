@@ -78,6 +78,47 @@
 
 计费**预检**在第 6 步（只挡"完全付不起"），真实用量结算走计费链路（`internal/billing`，回合结束时按 usage 落账）。
 
+### 附件：引用化，不随会话驻留
+
+附件**内容**只在被需要时进入上下文，历史里只留可重新取回的引用。否则内联图片/提取正文会被每轮重发（会话缓存是整表覆盖写，见 `python-engine/app/session_store.py`），长会话等于把同一个文件反复喂给模型。
+
+| 环节 | 位置 | 约定 |
+|---|---|---|
+| 上传 | `frontend-vue/src/api/index.ts` `uploadFile` | ≤50MB 走 `POST /v1/media/upload`，超出走 `POST /v1/uploads` 分片 |
+| 提交 | `ChatView.sendMessage` | `attachments: [{id,name,mime_type,url,is_image}]`，**url 只用于本次请求** |
+| 落库 | `internal/api/attachment_refs.go` `attachmentRefsForStorage` | 字段白名单 `id/name/mime_type/size/is_image`；`url` 与 `data:` 载荷**永不进库**（签名会过期、内联即驻留） |
+| 列 | `migrations/versions/0002_messages_attachments.py` | `messages.attachments jsonb DEFAULT '[]'`；读侧一律 `COALESCE(to_jsonb(messages)->>'attachments','[]')`，缺列不打挂历史 |
+| 取字节 | `GET /v1/internal/media/{id}/content?tenant_id=&user_id=` | `X-Internal-Token` + 租户/用户归属校验（`internal/api/media_internal.go`）；引擎侧 `_fetch_asset_bytes` 优先走它，失败才回退前端 URL |
+
+前端传的签名 URL 是相对路径 `/media/s/...`、自托管 S3 直链常指内网，两者都会被 `assert_safe_url` 的 SSRF 校验挡掉 —— 所以**内部通道是主路径**，URL 回退只是兜底。
+
+**单轮预算**（`python-engine/app/media/attachments.py`，`/submit` 与 `/v1/chat/submit` 共用同一处判定）：
+
+- 数量 `MAX_ATTACHMENTS_PER_TURN = 8`，超出部分只给一条汇总提示；
+- 文本总量 `MAX_TURN_ATTACHMENT_CHARS = 20000` 按文本附件**均分**，单文件再压到 `MAX_ATTACHMENT_PREVIEW_CHARS = 2000` —— 本轮给的是**预览**，不是全文；
+- 图片 `MAX_IMAGES_PER_TURN = 4`；单文件下载上限 `MAX_ATTACHMENT_BYTES = 20MB`。
+
+**历史只留引用块**：写缓存/PG 前由 `runtime.fold_attachment_parts_for_persistence` 把本轮附件 parts 换成
+
+```
+[本轮附件引用]
+<attachment id="…" name="…" mime="…" bytes="…" />
+（附件内容未随历史保留；需要时调用 attachment_read(asset_id=..., offset=0) 读取。）
+```
+
+**续读**用 `attachment_read`（`python-engine/app/tools/attachment_read.py`）：按 `asset_id` + `offset`/`limit` 分片取正文，默认 8000、上限 32000 字符，与 `read_tool_result` 同口径。因此模型**首轮只看得到预览**，需要细节时得主动调它 —— 这是引用化的代价，也是"不驻留"的来源。
+
+**刷新回放**不走正文：前端 `buildUnifiedItems` 解析 `messages.attachments` 得到 `ChatAttachment`（`url` 为空串），`MessageItem.resolveAttachmentUrls` 对空 url 与旧 `/media/` 路径一律按 `id` 现签（12 分钟缓存）。
+
+**结构化索引（PDF/Office）**：可索引的附件会被登记进 PageIndex，跨会话复用同一份索引（`python-engine/app/knowledge/attachment_index.py`）。
+
+- 复用 `knowledge_bases` / `knowledge_documents` 两张表，**不新建映射表** —— `pageindex-worker` 的 `handle_kb_index` 只认这两张，另起一套会让索引状态分叉（一边 ready 一边 pending）；
+- 隔离边界：每个 `tenant/user` 一个库，`id = uuid5(…, "chiron:attachments:{tenant}:{user}")`，名为 `__attachments__`、`visibility='private'`，列表查询按名字排除（它不是用户的"知识库"）；
+- 去重：`doc_id = uuid5(…, "chiron:attachment:{tenant}:{asset_id}")`，同一附件永远同一行，`INSERT … ON CONFLICT DO NOTHING` + 已有行早退；
+- 登记是**后台任务**且不阻塞本轮：本地 unsupported（selfhosted 只吃 text-based PDF）或用户未配知识库时直接跳过，读取照走本地分片；
+- 读取：`attachment_read(asset_id=…, query=…)` 命中已 `ready` 的索引时转检索式问答（返回答案 + 页码引用），否则回落到 `offset`/`limit` 分片；
+- **删除即不可达**：检索前用 `Range: bytes=0-0` 校验资产仍在（`_asset_still_exists`），资产删掉后索引里的内容不能再被问出来。
+
 ## 2. 事件回传与断线重放
 
 汇聚点是 `internal/broadcast/hub.go` 的 `Hub`：

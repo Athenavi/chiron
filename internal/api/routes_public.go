@@ -85,6 +85,10 @@ func registerPublicEndpoints(
 	//（media_create / image_generate）据此把产物写入 media_assets + 对象存储，
 	// 与「媒体库」页面共享同一份数据。
 	mux.Handle("POST /v1/internal/media/assets", rlMW(internalTokenMW(cfg, http.HandlerFunc(mediaHandler.InternalCreateAsset))))
+	// 媒体资产**按 id 取字节**（X-Internal-Token 保护）：引擎读附件不再依赖前端给的 URL。
+	// 详见 InternalReadAsset 的注释：签名 URL 是相对路径、S3 直链常指向内网，
+	// 两者都会被引擎侧的 SSRF 防护拒绝 —— 于是附件稳定退化成"本次未能取回"。
+	mux.Handle("GET /v1/internal/media/{id}/content", rlMW(internalTokenMW(cfg, http.HandlerFunc(mediaHandler.InternalReadAsset))))
 
 	// Agent 文件存储（X-Internal-Token 保护）：引擎的文件工具据此把工作区文件落到
 	// 部署方配置的 FileStore（local 共享卷 / S3），解决多副本下"写 A 副本、读 B 副本"

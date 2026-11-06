@@ -31,17 +31,13 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	if m.pool == nil || limit <= 0 {
 		return page, nil
 	}
-	// 多取 1 条用于判断是否还有更早的数据
-	// source 用 jsonb 取键读取：该列由权威迁移建立（migrations/versions/0001_authoritative_baseline.py），
-	// 而"列不存在"会让整个历史查询失败 —— 一个展示用字段不值得拿对话历史去赌。
-	//
-	// seq（权威基线）**直接引用**，不走 jsonb：它是排序键，一旦包成表达式
-	// `(to_jsonb(messages)->>'seq')::bigint`，外层的 ORDER BY 就用不上
-	// ix_messages_session_seq，长会话分页会退化成全表排序 —— 比它要兼容的
-	// 问题（迁移没跑）更糟。迁移与代码同批发布且迁移先执行（见
-	// deploy/k8s/migrate-job.yaml），列一定先于本代码存在。
+	// 多取 1 条用于判断是否还有更早的数据。
+	// 展示用字段（source / attachments）一律走 jsonb 取键：列不存在会让整条历史查询失败，
+	// 不值得为一个展示字段拿历史去赌（attachments 由 0002 迁移新增，见 docs/architecture.md）。
+	// seq 例外 —— 它是排序键，包成 jsonb 表达式会失去 ix_messages_session_seq，长会话分页退化。
 	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
-		          COALESCE(to_jsonb(messages)->>'source', ''), created_at, seq
+		          COALESCE(to_jsonb(messages)->>'source', ''),
+		          COALESCE(to_jsonb(messages)->>'attachments', '[]'), created_at, seq
 		   FROM messages
 		   WHERE session_id = $1`
 	args := []interface{}{sessionID}
@@ -77,7 +73,7 @@ func (m *Manager) GetMessagesPage(ctx context.Context, sessionID string, limit i
 	for rows.Next() {
 		var msg model.Message
 		var seq int64
-		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt, &seq); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.Attachments, &msg.CreatedAt, &seq); err != nil {
 			slog.Warn("scan message row", "error", err)
 			continue
 		}
@@ -245,7 +241,8 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 	}
 
 	query := `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
-		          COALESCE(to_jsonb(messages)->>'source', ''), created_at
+		          COALESCE(to_jsonb(messages)->>'source', ''),
+		          COALESCE(to_jsonb(messages)->>'attachments', '[]'), created_at
 		   FROM messages
 		   WHERE session_id = $1
 		   ORDER BY created_at ASC`
@@ -254,9 +251,10 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 	if len(limit) > 0 && limit[0] > 0 {
 		// 子查询：先取最新的 N 条，再按正序排列，保持"最早优先"的返回契约
 		query = `SELECT id, session_id, role, content, COALESCE(tool_calls::text, ''), COALESCE(turn_id::text, ''),
-		          COALESCE(source, ''), created_at FROM (
+		          COALESCE(source, ''), COALESCE(attachments, '[]'), created_at FROM (
 			   SELECT id, session_id, role, content, tool_calls, turn_id, created_at,
-			          to_jsonb(messages)->>'source' AS source
+			          to_jsonb(messages)->>'source' AS source,
+			          to_jsonb(messages)->>'attachments' AS attachments
 			   FROM messages
 			   WHERE session_id = $1
 			   ORDER BY created_at DESC
@@ -274,7 +272,7 @@ func (m *Manager) GetMessages(ctx context.Context, sessionID string, limit ...in
 	var msgs []model.Message
 	for rows.Next() {
 		var msg model.Message
-		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.CreatedAt); err != nil {
+		if err := rows.Scan(&msg.ID, &msg.SessionID, &msg.Role, &msg.Content, &msg.ToolCalls, &msg.TurnID, &msg.Source, &msg.Attachments, &msg.CreatedAt); err != nil {
 			slog.Warn("scan message row", "error", err)
 			continue
 		}
