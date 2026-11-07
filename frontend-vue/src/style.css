@@ -1602,26 +1602,9 @@ html[data-theme="aurora-dark"] #app {
         var(--bg-page) !important;
 }
 
-/* 玻璃柔光 / 暖纸阅读：顶栏走毛玻璃（--sig-blur-header 已有消费点） */
-html[data-theme="aurora-light"] .topbar {
-    backdrop-filter: blur(var(--sig-blur-header)) !important;
-    -webkit-backdrop-filter: blur(var(--sig-blur-header)) !important;
-}
-
-html[data-theme="aurora-dark"] .topbar {
-    backdrop-filter: blur(var(--sig-blur-header)) !important;
-    -webkit-backdrop-filter: blur(var(--sig-blur-header)) !important;
-}
-
-html[data-theme="paper-light"] .topbar {
-    backdrop-filter: blur(var(--sig-blur-header)) !important;
-    -webkit-backdrop-filter: blur(var(--sig-blur-header)) !important;
-}
-
-html[data-theme="paper-dark"] .topbar {
-    backdrop-filter: blur(var(--sig-blur-header)) !important;
-    -webkit-backdrop-filter: blur(var(--sig-blur-header)) !important;
-}
+/* 顶栏已改为纯字标（无胶囊底 / 无毛玻璃），因此这里不再给 .topbar 挂
+   backdrop-filter —— 透明元素上的 backdrop-filter 仍会模糊其背后内容，
+   会留下一块看不见边框的模糊矩形。--sig-blur-header 的消费点在停靠坞等。 */
 
 /* ============================================
    CSS Performance Optimizations (P0)

@@ -28,7 +28,6 @@ import {
   CreditCardOutlined,
   DollarOutlined,
   SettingOutlined,
-  DownOutlined,
   HistoryOutlined,
   RobotOutlined,
   AppstoreOutlined,
@@ -271,7 +270,8 @@ async function runQuickCommand() {
 
 <template>
   <div class="app-shell">
-    <!-- 左上角浮动品牌胶囊 -->
+    <!-- 左上角品牌区：直接使用官网大标题处的 Chiron 字标（span.mark 同款遮罩填充），
+         不再有胶囊底、方块 logo 与文字 -->
     <header
       :title="currentLabel || $t('common.navigation_menu')"
       class="topbar"
@@ -285,9 +285,11 @@ async function runQuickCommand() {
           :title="$t('common.navigation_menu')"
           type="button"
         >
-          <span class="brand-logo">MC</span>
-          <span class="brand-name">Chiron</span>
-          <DownOutlined class="brand-caret" />
+          <span
+            class="brand-mark"
+            role="img"
+            aria-label="Chiron"
+          />
         </button>
         <template #overlay>
           <Menu
@@ -435,73 +437,43 @@ async function runQuickCommand() {
   --sidebar-bg: var(--bg-sidebar);
 }
 
-/* ── 左上角浮动品牌胶囊 ── */
+/* ── 左上角品牌区 ────────────────────────────────────────────────
+   与官网大标题处的 `span.mark` 是同一做法：把 chiron-mark.svg 当遮罩、
+   用 accent 色填充字标，主题切换时字标跟着变色。
+   这里只是定位容器，不再画胶囊底 / 边框 / 阴影 / 毛玻璃。 */
 .topbar {
   position: fixed;
   top: 12px;
   left: 12px;
   z-index: var(--z-drawer);
-  height: 40px;
   display: flex;
   align-items: center;
-  padding: 0 6px 0 4px;
-  border-radius: var(--sig-radius-input);
-  background: var(--comp-header-bg);
-  backdrop-filter: blur(var(--sig-blur-header));
-  -webkit-backdrop-filter: blur(var(--sig-blur-header));
-  border: var(--hairline-width) solid var(--border-default);
-  box-shadow: var(--sig-shadow-card);
 }
 
 .brand-btn {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 8px;
-  height: 32px;
-  padding: 0 8px 0 4px;
+  padding: 0;
   border: none;
-  border-radius: var(--sig-radius-button);
   background: transparent;
+  color: var(--accent);
   cursor: pointer;
-  transition: background var(--dur-fast) ease;
+  transition: opacity var(--dur-fast) ease;
 }
 
 .brand-btn:hover {
-  background: var(--hover-bg);
+  opacity: 0.82;
 }
 
-.brand-logo {
-  width: 24px;
-  height: 24px;
-  border-radius: var(--sig-radius-button);
-  background: linear-gradient(135deg, var(--primary), var(--accent));
-  color: var(--on-solid);
-  font-weight: var(--fw-bold);
-  font-size: var(--fs-xs);
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  box-shadow: var(--sig-shadow-card);
+/* 尺寸取官网 .mark 的比例（112×27），mask 让 SVG 的形保持原样 */
+.brand-mark {
+  display: block;
+  width: 112px;
+  height: 27px;
   flex-shrink: 0;
-}
-
-.brand-name {
-  font-size: 14px;
-  font-weight: var(--fw-semibold);
-  color: var(--text-primary);
-  letter-spacing: -0.01em;
-  white-space: nowrap;
-}
-
-.brand-caret {
-  font-size: var(--fs-xs);
-  color: var(--text-tertiary);
-}
-
-@media (max-width: 480px) {
-  .brand-name {
-    display: none;
-  }
+  background-color: currentColor;
+  -webkit-mask: url('../assets/chiron-mark.svg') no-repeat center / contain;
+  mask: url('../assets/chiron-mark.svg') no-repeat center / contain;
 }
 
 /* ── 顶栏右侧操作组 ── */

@@ -56,17 +56,6 @@ ANTHROPIC_API_KEY=sk-... python scripts/demo_up.py
 > **它不是什么**：不是低代码可视化搭建平台，也不是模型评测/微调平台。
 > 它假设你要的是"**多人、多租户、能自己部署**"的 Agent 底座。
 
-### 为什么还有必要做一个？
-
-因为**能跑 demo 的 Agent 框架很多，能跑第二个副本的很少**。Chiron 把这几件事当成一等公民：
-
-- **多副本真的能扩**：会话运行锁、SSE 跨实例广播与断线重放、run 归属路由、队列消费组与 PEL 接管。
-  每条都附可复现的取证（见下方「能不能上生产？」），而不是"实现了某个模块"。
-- **多租户不是加个字段**：租户/用户配额、租户级审计与可回放证据链、SSO、计费幂等。
-- **执行隔离是默认值**：工具执行下沉到独立受限容器；沙箱服务不可用时**拒绝启动**，
-  不偷偷回退到进程内执行。
-- **过程可见**：思考、工具调用、用量都是独立事件；断线后带 `Last-Event-ID` 重连可精确续传。
-
 ## 架构
 
 ```
@@ -85,10 +74,6 @@ ANTHROPIC_API_KEY=sk-... python scripts/demo_up.py
 | 前端 | `frontend-vue/` | 5173（dev）/ 80（容器） | Vue 3 + TypeScript + Vite；nginx 同源反代 `/v1`、`/events`、`/ws` |
 | 数据库 | `migrations/` | 5432 | PostgreSQL（Alembic 迁移；摘要向量用 `float8[]`，**不需要** pgvector 扩展） |
 | 缓存/队列/事件 | — | 6379 | Redis（会话、限流、后台任务、SSE 事件、run 归属） |
-
-## 能不能上生产？
-
-[多副本部署指南](docs/deployment-multi-instance.md)。
 
 ## 快速开始
 
@@ -127,7 +112,7 @@ docker compose up -d redis  # 对象存储走云端 S3（配好 .env）；自托
 docker compose up -d --scale gateway=2 --scale python-engine=2
 # 对外入口是 frontend 容器的 nginx：http://localhost:3000
 ```
-
+### 能不能上生产？
 多副本部署、依赖门禁、就绪探针与伸缩边界的完整说明见
 [多实例部署指南](docs/deployment-multi-instance.md)。
 

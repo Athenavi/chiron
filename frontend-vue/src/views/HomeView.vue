@@ -307,43 +307,6 @@ function scrollToTop() {
       </div>
     </section>
 
-    <!-- 快速开始：终端代码块 -->
-    <section class="quickstart">
-      <h2 class="section-title">
-        {{ $t('common.quick_start') }}
-      </h2>
-      <p class="section-sub">
-        {{ $t('common.one_command_to_start_dependencies_three_lines_to_enter_the_workspace') }}
-      </p>
-      <div class="terminal-card">
-        <div class="window-chrome">
-          <span class="win-dot red" /><span class="win-dot yellow" /><span class="win-dot green" />
-          <span class="win-title">zsh · chiron</span>
-          <button
-            type="button"
-            class="term-copy"
-            @click="copyQuickstart"
-          >
-            {{ copied ? $t('common.copied_2') : $t('common.copy') }}
-          </button>
-        </div>
-        <div class="terminal-body">
-          <div class="term-line">
-            <span class="term-prompt">$</span> docker compose up -d postgres redis
-          </div>
-          <div class="term-line">
-            <span class="term-prompt">$</span> cp .env.example .env
-          </div>
-          <div class="term-line">
-            <span class="term-prompt">$</span> python run.py start
-          </div>
-          <div class="term-line term-out">
-            {{ $t('common.chiron_started_http_localhost_5173') }}
-          </div>
-        </div>
-      </div>
-    </section>
-
     <footer class="home-footer">
       <span class="home-footer-brand">
         <span class="home-footer-logo">MC</span>chiron
