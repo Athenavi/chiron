@@ -582,6 +582,34 @@ export async function listPackageTemplates(): Promise<AdminPackage[]> {
   return data?.data ?? []
 }
 
+// ── 平台套餐模板管理（/v1/admin/package-templates，仅 owner）──
+
+export async function listAdminPackageTemplates(): Promise<AdminPackage[]> {
+  const { data } = await api.get('/v1/admin/package-templates')
+  return data?.data ?? []
+}
+
+export async function createAdminPackageTemplate(payload: AdminPackageInput): Promise<AdminPackage | null> {
+  const { data } = await api.post('/v1/admin/package-templates', payload)
+  return data?.data ?? null
+}
+
+export async function updateAdminPackageTemplate(
+  id: string,
+  payload: AdminPackageInput,
+): Promise<AdminPackage | null> {
+  const { data } = await api.put(`/v1/admin/package-templates/${encodeURIComponent(id)}`, payload)
+  return data?.data ?? null
+}
+
+export async function disableAdminPackageTemplate(id: string): Promise<void> {
+  await api.delete(`/v1/admin/package-templates/${encodeURIComponent(id)}`)
+}
+
+export async function restoreAdminPackageTemplate(id: string): Promise<void> {
+  await api.post(`/v1/admin/package-templates/${encodeURIComponent(id)}/restore`)
+}
+
 // ── 租户身份能力通知（/v1/tenant/identity-notice）──
 
 export interface IdentityNotice {

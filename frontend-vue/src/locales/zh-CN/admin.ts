@@ -297,4 +297,6 @@ export default {
   package_template: "从平台模板填充",
   package_template_hint: "选择后会把名称、价格、权益复制到下方，可自行调整",
   package_template_applied: "已填入模板内容",
+  package_templates_title: "套餐模板",
+  package_templates_desc: "维护平台内置套餐模板；租户在后台新建套餐时可一键预填（保存后成为租户自己的套餐）。",
 }

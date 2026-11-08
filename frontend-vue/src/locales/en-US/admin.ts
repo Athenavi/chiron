@@ -297,4 +297,6 @@ export default {
   package_template: "Fill from a platform template",
   package_template_hint: "Copies name, price and entitlements into the form; adjust as needed",
   package_template_applied: "Template applied",
+  package_templates_title: "Package templates",
+  package_templates_desc: "Maintain platform built-in package templates; tenants can prefill from them when creating packages (saving creates their own copy).",
 }

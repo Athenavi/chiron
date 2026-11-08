@@ -297,4 +297,6 @@ export default {
   package_template: "تعبئة من قالب المنصة",
   package_template_hint: "ينسخ الاسم والسعر والاستحقاقات إلى النموذج؛ عدّلها كما تريد",
   package_template_applied: "تم تطبيق القالب",
+  package_templates_title: "قوالب الحزم",
+  package_templates_desc: "إدارة قوالب الحزم المدمجة في المنصة؛ يمكن للمستأجرين تعبئتها عند إنشاء حزمة (الحفظ ينشئ نسختهم).",
 }

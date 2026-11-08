@@ -3,10 +3,10 @@
     <div class="page-header">
       <div>
         <h2 class="page-title page-title-sm">
-          {{ $t('admin.packages_admin_title') }}
+          {{ isTemplatePage ? $t('admin.package_templates_title') : $t('admin.packages_admin_title') }}
         </h2>
         <p class="page-desc">
-          {{ $t('admin.packages_admin_desc') }}
+          {{ isTemplatePage ? $t('admin.package_templates_desc') : $t('admin.packages_admin_desc') }}
         </p>
       </div>
       <div class="controls">
@@ -114,7 +114,7 @@
     >
       <div class="form">
         <div
-          v-if="!form.id"
+          v-if="!form.id && !isTemplatePage"
           class="field"
         >
           <label>{{ $t('admin.package_template') }}</label>
@@ -249,16 +249,22 @@
 
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref } from 'vue'
+import { useRoute } from 'vue-router'
 import { Button, Input, InputNumber, Modal, Select, Table, Tag, message } from 'ant-design-vue'
 import { ReloadOutlined } from '@ant-design/icons-vue'
 import { useI18n } from 'vue-i18n'
 import {
   createAdminPackage,
+  createAdminPackageTemplate,
   disableAdminPackage,
+  disableAdminPackageTemplate,
+  listAdminPackageTemplates,
   listAdminPackages,
   listPackageTemplates,
   restoreAdminPackage,
+  restoreAdminPackageTemplate,
   updateAdminPackage,
+  updateAdminPackageTemplate,
   type AdminPackage,
   type AdminPackageInput,
 } from '../../api/admin'
@@ -266,6 +272,9 @@ import { listModels } from '../../api/index'
 import { serverErrorMessage } from '../../utils/apiError'
 
 const { t } = useI18n()
+const route = useRoute()
+// /admin/package-templates 管理平台模板（tenant_id=0）；/tenant/packages 管理本租户套餐。
+const isTemplatePage = computed(() => route.path.startsWith('/admin/package-templates'))
 
 const loading = ref(false)
 const saving = ref(false)
@@ -320,7 +329,9 @@ const form = reactive<{
 async function load() {
   loading.value = true
   try {
-    rows.value = await listAdminPackages()
+    rows.value = isTemplatePage.value
+      ? await listAdminPackageTemplates()
+      : await listAdminPackages()
   } catch (e) {
     message.error(serverErrorMessage(e, t('common.load_failed')))
   } finally {
@@ -433,10 +444,18 @@ async function submit() {
   saving.value = true
   try {
     if (form.id) {
-      await updateAdminPackage(form.id, payload)
+      if (isTemplatePage.value) {
+        await updateAdminPackageTemplate(form.id, payload)
+      } else {
+        await updateAdminPackage(form.id, payload)
+      }
       message.success(t('admin.packages_admin_updated_msg'))
     } else {
-      await createAdminPackage(payload)
+      if (isTemplatePage.value) {
+        await createAdminPackageTemplate(payload)
+      } else {
+        await createAdminPackage(payload)
+      }
       message.success(t('admin.packages_admin_created_msg'))
     }
     closeForm()
@@ -458,7 +477,11 @@ async function confirmDisable() {
   if (!target) return
   saving.value = true
   try {
-    await disableAdminPackage(target.id)
+    if (isTemplatePage.value) {
+      await disableAdminPackageTemplate(target.id)
+    } else {
+      await disableAdminPackage(target.id)
+    }
     message.success(t('admin.packages_admin_disabled_msg'))
     disableTarget.value = null
     await load()
@@ -472,7 +495,11 @@ async function confirmDisable() {
 async function restore(record: Record<string, any>) {
   const pkg = record as AdminPackage
   try {
-    await restoreAdminPackage(pkg.id)
+    if (isTemplatePage.value) {
+      await restoreAdminPackageTemplate(pkg.id)
+    } else {
+      await restoreAdminPackage(pkg.id)
+    }
     message.success(t('admin.packages_admin_restored_msg'))
     await load()
   } catch (e) {

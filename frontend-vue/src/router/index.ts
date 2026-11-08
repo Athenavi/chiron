@@ -227,6 +227,13 @@ const routes = [
         meta: { title: t('admin.usage_insights') },
       },
       {
+        // 平台套餐模板：租户新建套餐时可从这里预填（平台后台维护模板本身）。
+        path: 'package-templates',
+        name: 'AdminPackageTemplates',
+        component: () => import('../views/admin/PackagesView.vue'),
+        meta: { title: t('admin.package_templates_title') },
+      },
+      {
         path: 'market',
         name: 'AdminMarket',
         component: () => import('../views/admin/MarketView.vue'),
