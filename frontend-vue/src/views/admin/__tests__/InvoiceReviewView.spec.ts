@@ -23,6 +23,12 @@ vi.mock('../../../api/admin', () => ({
   reviewInvoice: apiMocks.reviewInvoice,
 }))
 
+// 组件用 useRoute() 判定 /tenant 还是 /admin；单测没有安装 router，
+// 显式给一个管理端路径，否则 useRoute() 返回 undefined、load() 会被 catch 掉。
+vi.mock('vue-router', () => ({
+  useRoute: () => ({ path: '/admin/invoices' }),
+}))
+
 // antd 的 Table / Select 走 useBreakpoint → matchMedia，jsdom 没有实现
 if (!window.matchMedia) {
   window.matchMedia = ((query: string) => ({

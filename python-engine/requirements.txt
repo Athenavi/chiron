@@ -30,7 +30,10 @@ pymupdf==1.28.2
 python-docx==1.2.0
 # HTTP / HTML —— app/gateway/router.py 顶层 import aiohttp、app/tools/web.py 顶层 import bs4，
 # 两者都不曾被任何已声明依赖传递带入（此前 CI 只装本文件，Mypy 与 Pytest 首次运行都会红）。
-# httpx 不必显式声明：openai / anthropic / pydantic-ai 均依赖它。
+# httpx：本仓库多处直接 import（app/http_client.py、app/providers/responses.py 等）。
+# **必须显式声明**，不能依赖 openai / anthropic / pydantic-ai 的传递依赖 ——
+# CI 的干净环境里它曾缺席，导致 mypy 与 pytest 在收集期就 ModuleNotFoundError。
+httpx==0.28.1
 aiohttp==3.14.5
 beautifulsoup4==4.15.0
 # 图片元数据（EXIF）—— app/media/analyzer.py 的 extract_metadata 用

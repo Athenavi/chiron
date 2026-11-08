@@ -167,7 +167,7 @@ import { describeApiError } from '../../utils/apiError'
 const { t } = useI18n()
 const route = useRoute()
 // /tenant/invoices 只审本租户；/admin/invoices 是平台级（owner）。
-const isTenantArea = computed(() => route.path.startsWith('/tenant'))
+const isTenantArea = computed(() => route?.path?.startsWith('/tenant') ?? false)
 
 const loading = ref(false)
 const submitting = ref(false)
