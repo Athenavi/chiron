@@ -20,6 +20,11 @@ const themeStore = useThemeStore()
 // 实例化即应用持久化的排版偏好（store 内 immediate watch 写入 <html> 变量）
 useTypographyStore()
 const showLayout = computed(() => {
+  // 首帧路由尚未解析（route.name 为空）时不挂全局布局：否则登录页会先挂
+  // AppLayout，它的租户请求在未登录时 401 → 拦截器硬跳 /login → 重载 → 循环。
+  if (!route.name) return false
+  // public 页面（登录/注册/找回密码/分享）自带独立布局，不叠加全局胶囊。
+  if (route.meta.public) return false
   const name = route.name as string
   if (['Login', 'Register'].includes(name)) return false
   // 管理后台自带完整的侧栏 / 顶栏 / 内容区（views/admin/Layout.vue）。再套一层

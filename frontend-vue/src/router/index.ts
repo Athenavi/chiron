@@ -14,23 +14,28 @@ const routes = [
     path: '/login',
     name: 'Login',
     component: () => import('../views/LoginView.vue'),
+    // public：不挂全局布局、路由守卫不拉 profile（否则未登录 401 会触发硬跳循环）
+    meta: { public: true },
   },
   {
     path: '/register',
     name: 'Register',
     component: () => import('../views/RegisterView.vue'),
+    meta: { public: true },
   },
   {
     // 忘记密码：申请邮件重置链接（邮件服务未启用时后端 403，入口在登录页按状态隐藏）
     path: '/forgot-password',
     name: 'ForgotPassword',
     component: () => import('../views/ForgotPasswordView.vue'),
+    meta: { public: true },
   },
   {
     // 重置密码：令牌由邮件里的 /reset-password?token=... 链接带入
     path: '/reset-password',
     name: 'ResetPassword',
     component: () => import('../views/ResetPasswordView.vue'),
+    meta: { public: true },
   },
   {
     path: '/chat',
@@ -58,6 +63,8 @@ const routes = [
     path: '/share/:id',
     name: 'Share',
     component: () => import('../views/ShareView.vue'),
+    // public：共享会话可能公开访问；同时避免未登录时挂载全局布局发租户请求
+    meta: { public: true },
     // 注意：无 requiresAuth — 共享会话可能公开访问，后端应验证 share_id 的权限范围
   },
   {

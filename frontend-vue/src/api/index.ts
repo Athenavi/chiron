@@ -349,9 +349,13 @@ api.interceptors.response.use(
         detail: { message: t('auth.session_expired_please_sign_in_again') }
       }))
       // 短延迟让 toast 显示后再跳转。
-      setTimeout(() => {
-        window.location.href = '/login'
-      }, 500)
+      // 登录页自身的 401 不再硬跳：window.location 重载会形成刷新循环
+      // （登录页挂载时的公开配置请求若失败，会把页面无限刷成白屏）。
+      if (window.location.pathname !== '/login') {
+        setTimeout(() => {
+          window.location.href = '/login'
+        }, 500)
+      }
     } else if (error.response?.status >= 500) {
       // 触发全局错误事件，App.vue 中的监听器会显示提示。
       // 文案走统一翻译：把后端给出的具体原因一并带出 —— 只显示"服务器错误"会让用户

@@ -136,10 +136,14 @@ onMounted(() => {
   if (authStore.token) {
     authStore.fetchProfile()
   }
-  refreshUnread()
-  void maybeNotifyIdentity()
-  void applyTenantSite()
-  unreadTimer = setInterval(refreshUnread, 5 * 60 * 1000)
+  // 未登录时不发租户级请求：/v1/tenant/* 会 401，拦截器硬跳 /login，
+  // 若本组件恰好挂在公开页上就会形成刷新循环（登录页曾每秒被刷一次）。
+  if (authStore.isAuthenticated) {
+    refreshUnread()
+    void maybeNotifyIdentity()
+    void applyTenantSite()
+    unreadTimer = setInterval(refreshUnread, 5 * 60 * 1000)
+  }
   // 从通知页返回时立刻刷新一次，避免角标滞后一整个轮询周期。
   window.addEventListener('notification:read', refreshUnread)
 })
