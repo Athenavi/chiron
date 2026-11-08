@@ -1,7 +1,7 @@
 {
   "name": "frontend-vue",
   "private": true,
-  "version": "0.1.261025-01",
+  "version": "1.261108.03",
   "type": "module",
   "description": "Chiron — AI agent SaaS platform web client",
   "author": {

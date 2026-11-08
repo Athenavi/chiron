@@ -4,7 +4,12 @@ FROM python:3.11-slim AS base
 WORKDIR /app
 
 # 系统依赖（ffmpeg：video_analyze 抽帧需要；**不引 Python 依赖**，见 app/tools/video.py）
-RUN apt-get update && apt-get install -y --no-install-recommends \
+# 先在基础镜像上应用 Debian 安全更新：Trivy 按镜像里的**实际包版本**判红，
+# 而 python:3.11-slim 的层可能仍带旧 zlib1g（CVE-2026-76844 / CVE-2026-85091，
+# 修复版本 1:1.3.dfsg+really1.3.1-1+deb13u1）。`apt-get upgrade` 让重建镜像拿到它。
+RUN apt-get update \
+    && apt-get -y upgrade \
+    && apt-get install -y --no-install-recommends \
     libffi-dev \
     libmagic1 \
     file \
