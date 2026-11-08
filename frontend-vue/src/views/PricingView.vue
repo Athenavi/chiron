@@ -169,6 +169,6 @@ onMounted(load)
   margin-bottom: 12px;
 }
 .muted {
-  color: #999;
+  color: var(--text-tertiary);
 }
 </style>

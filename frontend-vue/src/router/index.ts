@@ -80,6 +80,14 @@ const routes = [
     meta: { requiresAuth: true },
   },
   {
+    // 个人用量：与账单同源（/v1/billing/usage），但独立成页 —— 用户查"我这个月
+    // 花在哪个模型/会话上"不该先翻到计费页的 tab 里。
+    path: '/usage',
+    name: 'Usage',
+    component: () => import('../views/UsageView.vue'),
+    meta: { requiresAuth: true },
+  },
+  {
     path: '/profile',
     name: 'Profile',
     component: () => import('../views/ProfileView.vue'),
@@ -271,18 +279,12 @@ const routes = [
         meta: { title: t('agent.model_control') },
       },
       // ── 平台 ──
+      // 团队 / 租户用量：替代已下线的「用量目录」——按天/成员/租户看 token 与成本构成。
       {
-        path: 'costcenter',
-        name: 'AdminCostCenter',
-        component: () => import('../views/admin/CostCenterView.vue'),
-        meta: { title: t('common.cost_center') },
-      },
-      // D3：用量目录（"花在哪"的构成）—— 与成本中心同域，故相邻。
-      {
-        path: 'usage-catalog',
-        name: 'AdminUsageCatalog',
-        component: () => import('../views/admin/UsageCatalogView.vue'),
-        meta: { title: t('admin.usage_catalog') },
+        path: 'usage',
+        name: 'AdminUsage',
+        component: () => import('../views/admin/UsageInsightsView.vue'),
+        meta: { title: t('admin.usage_insights') },
       },
       {
         path: 'market',

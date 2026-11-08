@@ -191,8 +191,8 @@ export default {
   diag_category_capability: "能力可用性",
   diag_category_other: "其它",
   // ── D3：用量目录 ──
-  usage_catalog: "用量目录",
-  usage_catalog_desc: "按天 / 模型 / 用户看 token 与成本的构成 —— 配额用量回答“还剩多少”，这里回答“花在哪”。",
+  usage_insights: "团队与租户用量",
+  usage_insights_desc: "按天看本租户趋势、按成员看谁花得多；平台 owner 可跨租户对比。数据来自真实扣费记录。",
   usage_total: "合计",
   usage_input_tokens: "输入 token",
   usage_output_tokens: "输出 token",
@@ -202,6 +202,7 @@ export default {
   usage_group_day: "日期",
   usage_group_model: "模型",
   usage_group_user: "用户",
+  usage_group_tenant: "租户",
   // ── 发票审核（管理端） ──
   invoice_review: "发票审核",
   invoice_review_desc: "用户提交的开票申请。默认只看待审，审核后不可撤销 —— 通过即视为已线下开票。",

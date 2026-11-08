@@ -32,6 +32,7 @@ from app.knowledge.errors import KnowledgeError, ProviderUnavailableError
 from app.knowledge.providers import registry
 from app.knowledge.providers.base import (
     KNOWN_PROVIDERS,
+    PROVIDER_SELFHOSTED,
     STATUS_DISABLED,
     STATUS_ERROR,
     is_known_provider,
@@ -169,14 +170,32 @@ def _require_kb_access(kb_row: Any, user_id: str, tenant_id: int, *, action: str
 
 
 async def _load_user_provider(user_id: str) -> str:
-    """取用户当前 provider；未选择时给出可操作的提示（400 而非 500）。"""
+    """取用户当前 provider；从未选择过时按**自托管**处理。
+
+    默认值必须有：创建知识库是用户进知识库页的第一个动作，先要求他去设置页选一个
+    provider 等于把这个动作变成两步 —— 实测表现就是「无法创建知识库：服务异常」。
+    自托管不需要任何外部凭据（Cloud 才要 API key），是唯一安全的默认值。
+    """
     user_settings = await settings_store.load(user_id)
     if user_settings is None or not user_settings.provider:
-        raise HTTPException(
-            status_code=400,
-            detail="请先在知识库设置中选择 provider（自托管 / PageIndex Cloud）",
-        )
+        return PROVIDER_SELFHOSTED
     return user_settings.provider
+
+
+async def _ensure_provider_persisted(*, user_id: str, tenant_id: int, provider: str) -> None:
+    """首次建库时把默认 provider 落库。
+
+    设置页要显示"当前选择"，后续「库 provider 与设置是否一致」的检查也需要一份
+    持久记录；靠每次请求推断默认值会让这两处永远停在"未选择"。
+    落库失败不影响建库（本次请求已按默认值继续），只记日志。
+    """
+    existing = await settings_store.load(user_id)
+    if existing is not None and existing.provider:
+        return
+    try:
+        await settings_store.save(user_id=user_id, tenant_id=tenant_id, provider=provider)
+    except KnowledgeError as exc:  # 含 ProviderUnavailableError
+        logger.warning("knowledge: persist default provider failed user=%s: %s", user_id, exc)
 
 
 async def _assert_provider_matches(*, user_id: str, kb_provider: str) -> None:
@@ -261,6 +280,10 @@ async def create_knowledge_base(
             detail=f"知识库 provider 必须与当前设置一致（当前为 {current_provider}）",
         )
     effective_provider = current_provider
+    # 首次建库把默认 provider 落库（设置页与后续一致性检查都依赖它）
+    await _ensure_provider_persisted(
+        user_id=user_id, tenant_id=tenant_id, provider=effective_provider
+    )
 
     pool = get_pool()
     kb_id = str(uuid.uuid4())

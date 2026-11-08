@@ -43,6 +43,8 @@ export default {
   payment_canceled_credits_unchanged: "支付已取消，Credits 未变动",
   custom_amount_credits: "自定义数量（credits）",
   credits_points: "credits（积分）",
+  my_usage: "个人用量",
+  my_usage_desc: "你在这个账号下的 token 与花费：按天看趋势，按模型/会话看花在哪。",
   usage_group_by: "统计维度",
   usage_group_day: "按天",
   usage_group_model: "按模型",

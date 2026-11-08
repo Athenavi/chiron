@@ -26,7 +26,10 @@ import (
 
 // usageBucket 是聚合结果的一行。
 type usageBucket struct {
-	Bucket       string `json:"bucket"`
+	Bucket string `json:"bucket"`
+	// Label 是给人看的名称（用户姓名 / 租户名）。Bucket 仍是稳定的 ID / 键：
+	// 同名用户、重命名租户都不该让两行合并或让前端猜哪一个是谁。
+	Label        string `json:"label,omitempty"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
 	CostCents    int64  `json:"cost_cents"`
@@ -52,8 +55,14 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 	groupBy := strings.ToLower(strings.TrimSpace(r.URL.Query().Get("group_by")))
 	switch groupBy {
 	case "day", "model", "user":
+	case "tenant":
+		// 跨租户视图只给平台 owner：租户 admin 看到别家的消费额就是越权读。
+		if claims.Role != "owner" {
+			Forbidden(w, "only platform owner can read cross-tenant usage")
+			return
+		}
 	default:
-		BadRequest(w, "group_by must be one of: day, model, user")
+		BadRequest(w, "group_by must be one of: day, model, user, tenant")
 		return
 	}
 
@@ -87,11 +96,15 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// db.Pool 无法参数化列名/表达式，所以这里用**白名单 switch 选语句**（不是拼字符串）——
-	// groupBy 已在上面收敛为三个字面量之一。
+	// groupBy 已在上面收敛为四个字面量之一。
+	//
+	// 每条查询都返回 (bucket, label, ...)：bucket 是稳定键（日期 / 模型名 / user_id /
+	// tenant_id），label 是给人看的名字（用户姓名 / 租户名），没有就留空由前端回退。
 	var query string
 	switch groupBy {
 	case "day":
 		query = `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS bucket,
+		                '' AS label,
 		                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
 		                COALESCE(SUM(cost_cents), 0), COUNT(*)
 		           FROM billing_records
@@ -101,6 +114,7 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 		// model 记在 turns 上；billing_records 通过 turn_id 指过去。
 		// 没有 turn_id（历史记录）的归入 "(unknown)"，而不是丢弃 —— 否则总量对不上账。
 		query = `SELECT COALESCE(t.model, '(unknown)') AS bucket,
+		                '' AS label,
 		                COALESCE(SUM(b.input_tokens), 0), COALESCE(SUM(b.output_tokens), 0),
 		                COALESCE(SUM(b.cost_cents), 0), COUNT(*)
 		           FROM billing_records b
@@ -108,17 +122,34 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 		          WHERE b.tenant_id = $1 AND b.created_at >= $2 AND b.created_at < $3
 		          GROUP BY bucket ORDER BY bucket`
 	case "user":
-		query = `SELECT COALESCE(user_id, '(unknown)') AS bucket,
-		                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		                COALESCE(SUM(cost_cents), 0), COUNT(*)
-		           FROM billing_records
-		          WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
-		          GROUP BY bucket ORDER BY bucket`
+		query = `SELECT COALESCE(b.user_id, '(unknown)') AS bucket,
+		                COALESCE(u.name, '') AS label,
+		                COALESCE(SUM(b.input_tokens), 0), COALESCE(SUM(b.output_tokens), 0),
+		                COALESCE(SUM(b.cost_cents), 0), COUNT(*)
+		           FROM billing_records b
+		           LEFT JOIN users u ON u.id = b.user_id
+		          WHERE b.tenant_id = $1 AND b.created_at >= $2 AND b.created_at < $3
+		          GROUP BY bucket, label ORDER BY bucket`
+	case "tenant":
+		// 跨租户：不带 tenant_id 谓词（权限已在上面收敛为 owner）。
+		query = `SELECT b.tenant_id::text AS bucket,
+		                COALESCE(tn.name, '') AS label,
+		                COALESCE(SUM(b.input_tokens), 0), COALESCE(SUM(b.output_tokens), 0),
+		                COALESCE(SUM(b.cost_cents), 0), COUNT(*)
+		           FROM billing_records b
+		           LEFT JOIN tenants tn ON tn.id = b.tenant_id
+		          WHERE b.created_at >= $1 AND b.created_at < $2
+		          GROUP BY bucket, label ORDER BY bucket`
+	}
+
+	args := []any{tenantID, from, to}
+	if groupBy == "tenant" {
+		args = []any{from, to}
 	}
 
 	ctx, cancel := context.WithTimeout(r.Context(), 10*time.Second)
 	defer cancel()
-	rows, err := db.Pool.Query(ctx, query, tenantID, from, to)
+	rows, err := db.Pool.Query(ctx, query, args...)
 	if err != nil {
 		InternalError(w, "usage query failed")
 		return
@@ -129,7 +160,7 @@ func (h *AdminHandler) GetUsageCatalog(w http.ResponseWriter, r *http.Request) {
 	var total usageBucket
 	for rows.Next() {
 		var b usageBucket
-		if err := rows.Scan(&b.Bucket, &b.InputTokens, &b.OutputTokens, &b.CostCents, &b.Records); err != nil {
+		if err := rows.Scan(&b.Bucket, &b.Label, &b.InputTokens, &b.OutputTokens, &b.CostCents, &b.Records); err != nil {
 			InternalError(w, "usage scan failed")
 			return
 		}

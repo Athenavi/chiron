@@ -547,13 +547,6 @@ func NewGatewayRouter(
 	// Enterprise identity (auth + RequireEntPerm("ent:manage"))：用户/角色/群组/租户
 	NewEntIdentityHandler().RegisterRoutes(mux, authMW)
 
-	// Enterprise cost center（authMW；handler 内按 admin:read / admin:write 分级，
-	// 判定经 AllowedByEntOrLegacy —— 企业 RBAC 优先、无 ent 配置时回退 legacy 角色
-	// 权限，与其它 ent 模块的 RequireEntPerm 同语义）
-	costCenterHandler := NewEntCostCenterHandler(nil, nil)
-	costCenterHandler.SetNotifier(notifyMgr)
-	costCenterHandler.RegisterRoutes(mux, authMW)
-
 	// Enterprise policy（authMW + RequireEntPerm("policy:manage")）：隐私模式 + 模型策略
 	NewEntPolicyHandler().RegisterRoutes(mux, authMW)
 

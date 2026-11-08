@@ -375,6 +375,8 @@ export async function getDiagnostics(): Promise<DiagnosticsReport> {
 
 export interface UsageBucket {
   bucket: string
+  /** 给人看的名称（用户姓名 / 租户名）；缺失时前端回退到 bucket */
+  label?: string
   input_tokens: number
   output_tokens: number
   cost_cents: number
@@ -391,9 +393,9 @@ export interface UsageCatalog {
   note: string
 }
 
-/** 按维度（day / model / user）读取用量构成。 */
+/** 按维度（day / model / user / tenant）读取用量构成。tenant 仅平台 owner 可用。 */
 export async function getUsageCatalog(params: {
-  groupBy: 'day' | 'model' | 'user'
+  groupBy: 'day' | 'model' | 'user' | 'tenant'
   from?: string
   to?: string
 }): Promise<UsageCatalog> {

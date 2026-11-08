@@ -43,6 +43,8 @@ export default {
   payment_canceled_credits_unchanged: "تم إلغاء الدفع، ولم يتغير الرصيد (Credits)",
   custom_amount_credits: "كمية مخصّصة (credits)",
   credits_points: "credits (نقاط)",
+  my_usage: "استخدامي",
+  my_usage_desc: "الرموز والتكلفة على هذا الحساب: الاتجاه اليومي، وأي النماذج والجلسات استهلكت التكلفة.",
   usage_group_by: "تصنيف الاستخدام حسب",
   usage_group_day: "اليوم",
   usage_group_model: "النموذج",

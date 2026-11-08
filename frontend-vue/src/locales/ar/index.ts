@@ -370,8 +370,6 @@ export default {
     ultra_wide: "عريض جدًا",
     undo: "تراجع",
     stale_connection_count: "عدد الاتصالات البالية",
-    cost_center: "مركز التكلفة",
-    cost_center_resource_pooling: "مركز التكلفة وتجميع الموارد",
     member_count: "عدد الأعضاء",
     continuous_work: "عمل مستمر",
     create: "إنشاء",

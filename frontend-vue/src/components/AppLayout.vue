@@ -1,7 +1,6 @@
 <script lang="ts" setup>
-import { computed, h, nextTick, onMounted, onUnmounted, ref, watch, type Component as VueComponent, type VNode } from 'vue'
+import { computed, h, onMounted, onUnmounted, ref, type Component as VueComponent, type VNode } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
-import { useThemeStore } from '../stores/theme'
 import { useAuthStore } from '../stores/auth'
 
 // Ant Design Vue 组件
@@ -20,13 +19,13 @@ import {
   HomeOutlined,
   MessageOutlined,
   UserOutlined,
-  ApartmentOutlined,
   BlockOutlined,
   PictureOutlined,
   BookOutlined,
   ThunderboltOutlined,
   CreditCardOutlined,
   DollarOutlined,
+  BarChartOutlined,
   SettingOutlined,
   HistoryOutlined,
   RobotOutlined,
@@ -40,7 +39,6 @@ import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
 import { getUnreadCount } from '../api/notifications'
 import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from './accountMenu'
-import { executeQuickCommand } from "@/components/WorkstationNav.vue"
 import {
   WORKSTATION_DESCRIPTIONS,
   WORKSTATION_LABELS,
@@ -52,7 +50,6 @@ const { t: tr } = useI18n()
 const router = useRouter()
 const route = useRoute()
 const authStore = useAuthStore()
-const themeStore = useThemeStore()
 
 /**
  * 聊天页：右上角这个**固定定位**胶囊（top:12 / right:12 / 落在 --z-drawer 层）会盖住
@@ -103,8 +100,6 @@ onUnmounted(() => {
     clearInterval(unreadTimer)
     unreadTimer = null
   }
-  document.removeEventListener('click', onQuickDocClick)
-  window.removeEventListener('keydown', onQuickKeydown)
 })
 
 // 导航菜单（品牌下拉）
@@ -126,6 +121,8 @@ const menuItems = computed<MenuItem[]>(() => {
     { key: '/memory', label: tr('memory.memory_2'), icon: () => h(HistoryOutlined) },
     { key: WORKSTATION_ROUTES.plugin, label: WORKSTATION_LABELS.plugin, icon: () => h(ThunderboltOutlined) },
     { key: '/billing', label: tr('billing.billing'), icon: () => h(CreditCardOutlined) },
+    // 个人用量：与计费相邻 —— 用户看"花了多少"时下一步通常就是这里
+    { key: '/usage', label: tr('billing.my_usage'), icon: () => h(BarChartOutlined) },
     // 参考价格目录：公开市场价（多源交叉验证），与计费无关，所有登录用户可见。
     { key: '/pricing', label: tr('pricing.title'), icon: () => h(DollarOutlined) },
     ...(authStore.isAdmin
@@ -206,65 +203,6 @@ function isDockActive(key: string) {
 
 function goDock(key: string) {
   if (route.path !== key) router.push(key)
-}
-
-// ── 停靠坞快速命令弹层 ──
-const quickOpen = ref(false)
-const quickInput = ref('')
-const quickLoading = ref(false)
-const quickPanelEl = ref<HTMLElement | null>(null)
-const quickBtnEl = ref<HTMLElement | null>(null)
-
-function onQuickDocClick(e: MouseEvent) {
-  const t = e.target as Node
-  if (quickPanelEl.value?.contains(t) || quickBtnEl.value?.contains(t)) return
-  quickOpen.value = false
-}
-
-function onQuickKeydown(e: KeyboardEvent) {
-  if (e.key === 'Escape') closeQuickCommand()
-}
-
-function toggleQuickCommand() {
-  quickOpen.value = !quickOpen.value
-}
-
-function closeQuickCommand() {
-  quickOpen.value = false
-  quickInput.value = ''
-}
-
-watch(quickOpen, (open) => {
-  if (open) {
-    document.addEventListener('click', onQuickDocClick)
-    window.addEventListener('keydown', onQuickKeydown)
-    nextTick(() => {
-      const input = quickPanelEl.value?.querySelector('input') as HTMLInputElement | null
-      input?.focus()
-    })
-  } else {
-    document.removeEventListener('click', onQuickDocClick)
-    window.removeEventListener('keydown', onQuickKeydown)
-  }
-})
-
-watch(() => route.path, () => {
-  if (quickOpen.value) quickOpen.value = false
-})
-
-async function runQuickCommand() {
-  const command = quickInput.value.trim()
-  if (!command || quickLoading.value) return
-  quickLoading.value = true
-  try {
-    await executeQuickCommand(command)
-    message.success(tr('task.task_submitted_results_shown_on_the_conversation_page'))
-    closeQuickCommand()
-  } catch {
-    // 错误已由统一处理器处理
-  } finally {
-    quickLoading.value = false
-  }
 }
 </script>
 

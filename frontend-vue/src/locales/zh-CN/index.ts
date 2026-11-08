@@ -380,8 +380,6 @@ export default {
     ultra_wide: "超宽",
     undo: "撤销",
     stale_connection_count: "陈旧连接数",
-    cost_center: "成本中心",
-    cost_center_resource_pooling: "成本中心与资源池化",
     member_count: "成员数",
     continuous_work: "持续工作",
     create: "创建",

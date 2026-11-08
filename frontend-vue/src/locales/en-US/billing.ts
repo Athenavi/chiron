@@ -43,6 +43,8 @@ export default {
   payment_canceled_credits_unchanged: "Payment canceled, Credits unchanged",
   custom_amount_credits: "Custom amount (credits)",
   credits_points: "credits (points)",
+  my_usage: "My usage",
+  my_usage_desc: "Tokens and spend on this account: daily trend, plus which models and sessions the cost went to.",
   usage_group_by: "Break down by",
   usage_group_day: "Day",
   usage_group_model: "Model",

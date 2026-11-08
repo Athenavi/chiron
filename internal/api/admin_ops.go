@@ -77,10 +77,12 @@ func (h *AdminHandler) registerOpsRoutes(r *http.ServeMux) {
 // ── 租户管理 ──
 
 type tenantRow struct {
-	ID        string    `json:"id"`
-	Name      string    `json:"name"`
-	Status    string    `json:"status"`
-	CreatedAt time.Time `json:"created_at"`
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	Status  string `json:"status"`
+	// created_at 在基线里没有默认值，存量行可能是 NULL；用指针接收，
+	// 让扫描不因 NULL 失败 —— 否则整行会被下面的循环静默跳过，列表恒为空。
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 // ── 租户邀请码（F2）──
@@ -188,8 +190,12 @@ func (h *AdminHandler) DeleteInvite(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AdminHandler) ListTenants(w http.ResponseWriter, r *http.Request) {
+	// COALESCE 兜住存量的 NULL：name/status 若为 NULL，Scan 到 string 会报错，
+	// 而下面的循环对扫描失败是"跳过这一行"——列表就会莫名其妙地缺行。
+	// created_at 用 DESC NULLS LAST：没有时间戳的行排在最后，而不是顶掉有时间的。
 	rows, err := db.GlobalDBManager.Query(r.Context(),
-		`SELECT id::text, name, status, created_at FROM tenants ORDER BY created_at DESC`)
+		`SELECT id::text, COALESCE(name, ''), COALESCE(status, 'active'), created_at
+		   FROM tenants ORDER BY created_at DESC NULLS LAST, id ASC`)
 	if err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "list tenants failed")
 		return
@@ -219,7 +225,7 @@ func (h *AdminHandler) CreateTenant(w http.ResponseWriter, r *http.Request) {
 	// "invalid input syntax for type smallint" —— 也就是说该端点此前从未成功过。
 	// 改用 RETURNING id 取真实主键，后面的角色播种才有正确的 int16。
 	if err := db.GlobalDBManager.QueryRow(r.Context(),
-		`INSERT INTO tenants (name, status) VALUES ($1, 'active') RETURNING id::text`,
+		`INSERT INTO tenants (name, status, created_at) VALUES ($1, 'active', NOW()) RETURNING id::text`,
 		strings.TrimSpace(body.Name)).Scan(&tenantIDStr); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create tenant failed")
 		return
@@ -356,11 +362,12 @@ func (h *AdminHandler) TenantUsage(w http.ResponseWriter, r *http.Request) {
 // ── 域名管理 ──
 
 type domainRow struct {
-	ID        string    `json:"id"`
-	Domain    string    `json:"domain"`
-	SSLStatus string    `json:"ssl_status"`
-	Verified  bool      `json:"verified"`
-	CreatedAt time.Time `json:"created_at"`
+	ID        string `json:"id"`
+	Domain    string `json:"domain"`
+	SSLStatus string `json:"ssl_status"`
+	Verified  bool   `json:"verified"`
+	// 同 tenantRow：SQL NULL 不能让整行被跳过。
+	CreatedAt *time.Time `json:"created_at"`
 }
 
 var validDomainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(\.[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?)+$`)
@@ -380,8 +387,8 @@ var validDomainRe = regexp.MustCompile(`^[a-zA-Z0-9]([a-zA-Z0-9-]*[a-zA-Z0-9])?(
 // 下面六条语句因此统一带 `tenant_id = $n`，并把语句提为常量供单测断言形状。
 const (
 	domainCountQuery = `SELECT COUNT(*) FROM domains WHERE tenant_id = $1`
-	domainListQuery  = `SELECT id::text, domain, ssl_status, verified, created_at
-		   FROM domains WHERE tenant_id = $1 ORDER BY created_at DESC LIMIT $2 OFFSET $3`
+	domainListQuery  = `SELECT id::text, COALESCE(domain, ''), COALESCE(ssl_status, 'none'), COALESCE(verified, false), created_at
+		   FROM domains WHERE tenant_id = $1 ORDER BY created_at DESC NULLS LAST, domain ASC LIMIT $2 OFFSET $3`
 	// 改域名会重置 verified/ssl_status，因此必须限定归属，否则等于替别人下线入口。
 	domainUpdateQuery = `UPDATE domains SET domain = $1, verified = false, ssl_status = 'none', updated_at = NOW()
 		  WHERE id = $2 AND tenant_id = $3`
@@ -456,9 +463,13 @@ func (h *AdminHandler) CreateDomain(w http.ResponseWriter, r *http.Request) {
 		Unauthorized(w, "missing tenant context")
 		return
 	}
+	// id / 时间戳显式写入：基线表的这两列没有默认值（迁移 0003 才补上），
+	// 漏写会直接撞 `null value in column "id"` 的非空约束。
 	if _, err := db.GlobalDBManager.Exec(r.Context(),
-		`INSERT INTO domains (tenant_id, domain) VALUES ($1, $2) ON CONFLICT (domain) DO NOTHING`,
-		tenantID, domain); err != nil {
+		`INSERT INTO domains (id, tenant_id, domain, ssl_status, verified, created_at, updated_at)
+		 VALUES ($1, $2, $3, 'none', false, NOW(), NOW())
+		 ON CONFLICT (domain) DO NOTHING`,
+		newUUID(), tenantID, domain); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, "create domain failed")
 		return
 	}

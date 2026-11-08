@@ -35,7 +35,6 @@ import {
   MedicineBoxOutlined,
   BarChartOutlined,
   IdcardOutlined,
-  WalletOutlined,
   PayCircleOutlined,
   ReconciliationOutlined,
   ControlOutlined,
@@ -124,11 +123,9 @@ const menuGroups = computed(() => [
   {
     key: 'g-platform', label: t('common.platform'),
     children: [
-      { key: '/admin/costcenter', label: t('common.cost_center'), icon: () => h(WalletOutlined) },
-      // D3：用量目录 —— 与成本中心同域（配额用量答"还剩多少"，它答"花在哪"）。
-      { key: '/admin/usage-catalog', label: t('admin.usage_catalog'), icon: () => h(BarChartOutlined) },
-      // 支付渠道凭据：与成本中心同属商业化运营 → 平台组
       { key: '/admin/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
+      // 团队 / 租户用量 —— 按天看趋势、按成员看谁花得多、owner 可跨租户对比
+      { key: '/admin/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
       // 发票审核 —— 用户提交的开票申请在这里处理，与支付渠道相邻
       { key: '/admin/invoices', label: t('admin.invoice_review'), icon: () => h(ReconciliationOutlined) },
       // 套餐目录 —— 卖什么、多少钱，与支付渠道/发票同属「钱相关」

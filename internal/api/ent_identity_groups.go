@@ -141,9 +141,11 @@ func (h *EntIdentityHandler) CreateGroup(w http.ResponseWriter, r *http.Request)
 	}
 
 	var id string
+	// id 由应用层生成：基线表的 id 列虽然是 varchar(36)，早期没有 DEFAULT
+	// （见迁移 0003 才补上）。显式传值可让本端点不依赖数据库是否已迁移。
 	err := h.db.QueryRow(r.Context(),
-		`INSERT INTO ent_groups (tenant_id, name, description) VALUES ($1, $2, $3) RETURNING id`,
-		tenantID, req.Name, req.Description).Scan(&id)
+		`INSERT INTO ent_groups (id, tenant_id, name, description, created_at) VALUES ($1, $2, $3, $4, NOW()) RETURNING id`,
+		newUUID(), tenantID, req.Name, req.Description).Scan(&id)
 	if err != nil {
 		if isUniqueViolation(err) {
 			logAndRespond(w, err, http.StatusConflict, "group name already exists")
@@ -285,7 +287,7 @@ func (h *EntIdentityHandler) SetGroupMembers(w http.ResponseWriter, r *http.Requ
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.UserIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM users WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.UserIDs, scope) {
+	if len(req.UserIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM users WHERE id = ANY($1::text[]) AND ($2 = '' OR tenant_id::text = $2)`, req.UserIDs, scope) {
 		BadRequest(w, "one or more user_ids do not exist")
 		return
 	}
@@ -293,14 +295,14 @@ func (h *EntIdentityHandler) SetGroupMembers(w http.ResponseWriter, r *http.Requ
 	oldMembers := h.groupMemberIDs(ctx, groupID)
 
 	if _, err := h.db.Exec(ctx,
-		`DELETE FROM ent_group_members WHERE group_id = $1 AND NOT (user_id = ANY($2::uuid[]))`,
+		`DELETE FROM ent_group_members WHERE group_id = $1 AND NOT (user_id = ANY($2::text[]))`,
 		groupID, req.UserIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
 	if _, err := h.db.Exec(ctx,
 		`INSERT INTO ent_group_members (group_id, user_id)
-		 SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+		 SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
 		groupID, req.UserIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -351,20 +353,20 @@ func (h *EntIdentityHandler) SetGroupRoles(w http.ResponseWriter, r *http.Reques
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
+	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::text[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
 		BadRequest(w, "one or more role_ids do not exist")
 		return
 	}
 
 	if _, err := h.db.Exec(ctx,
-		`DELETE FROM ent_group_roles WHERE group_id = $1 AND NOT (role_id = ANY($2::uuid[]))`,
+		`DELETE FROM ent_group_roles WHERE group_id = $1 AND NOT (role_id = ANY($2::text[]))`,
 		groupID, req.RoleIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
 	if _, err := h.db.Exec(ctx,
 		`INSERT INTO ent_group_roles (group_id, role_id)
-		 SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+		 SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
 		groupID, req.RoleIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return

@@ -215,21 +215,21 @@ func (h *EntIdentityHandler) SetUserRoles(w http.ResponseWriter, r *http.Request
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
+	if len(req.RoleIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_roles WHERE id = ANY($1::text[]) AND ($2 = '' OR tenant_id::text = $2)`, req.RoleIDs, scope) {
 		BadRequest(w, "one or more role_ids do not exist")
 		return
 	}
 
 	// 全量替换 = 删除不在新集合的绑定 + 幂等插入新绑定
 	if _, err := h.db.Exec(ctx,
-		`DELETE FROM ent_user_roles WHERE user_id = $1 AND NOT (role_id = ANY($2::uuid[]))`,
+		`DELETE FROM ent_user_roles WHERE user_id = $1 AND NOT (role_id = ANY($2::text[]))`,
 		userID, req.RoleIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
 	if _, err := h.db.Exec(ctx,
 		`INSERT INTO ent_user_roles (user_id, role_id)
-		 SELECT $1, unnest($2::uuid[]) ON CONFLICT DO NOTHING`,
+		 SELECT $1, unnest($2::text[]) ON CONFLICT DO NOTHING`,
 		userID, req.RoleIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
@@ -270,7 +270,7 @@ func (h *EntIdentityHandler) SetUserGroups(w http.ResponseWriter, r *http.Reques
 		NotFound(w, ErrNotFound)
 		return
 	}
-	if len(req.GroupIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_groups WHERE id = ANY($1::uuid[]) AND ($2 = '' OR tenant_id::text = $2)`, req.GroupIDs, scope) {
+	if len(req.GroupIDs) > 0 && !h.allExist(ctx, `SELECT COUNT(DISTINCT id)::int FROM ent_groups WHERE id = ANY($1::text[]) AND ($2 = '' OR tenant_id::text = $2)`, req.GroupIDs, scope) {
 		BadRequest(w, "one or more group_ids do not exist")
 		return
 	}
@@ -278,14 +278,14 @@ func (h *EntIdentityHandler) SetUserGroups(w http.ResponseWriter, r *http.Reques
 	oldGroups := h.userGroupIDs(ctx, userID)
 
 	if _, err := h.db.Exec(ctx,
-		`DELETE FROM ent_group_members WHERE user_id = $1 AND NOT (group_id = ANY($2::uuid[]))`,
+		`DELETE FROM ent_group_members WHERE user_id = $1 AND NOT (group_id = ANY($2::text[]))`,
 		userID, req.GroupIDs); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return
 	}
 	if _, err := h.db.Exec(ctx,
 		`INSERT INTO ent_group_members (group_id, user_id)
-		 SELECT unnest($1::uuid[]), $2 ON CONFLICT DO NOTHING`,
+		 SELECT unnest($1::text[]), $2 ON CONFLICT DO NOTHING`,
 		req.GroupIDs, userID); err != nil {
 		logAndRespond(w, err, http.StatusInternalServerError, ErrDBUnavailable)
 		return

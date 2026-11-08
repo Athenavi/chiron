@@ -368,8 +368,6 @@ export default {
     ultra_wide: "Ultra-wide",
     undo: "Undo",
     stale_connection_count: "Stale connection count",
-    cost_center: "Cost center",
-    cost_center_resource_pooling: "Cost center & resource pooling",
     member_count: "Member count",
     continuous_work: "Continuous work",
     create: "Create",

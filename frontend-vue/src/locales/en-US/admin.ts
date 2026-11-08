@@ -191,8 +191,8 @@ export default {
   diag_category_capability: "Capability availability",
   diag_category_other: "Other",
   // ── D3: usage catalog ──
-  usage_catalog: "Usage catalog",
-  usage_catalog_desc: "Token and cost breakdown by day / model / user — quota usage answers “how much is left”, this answers “where it went”.",
+  usage_insights: "Team & tenant usage",
+  usage_insights_desc: "Daily trend for this tenant, cost ranking per member, and cross-tenant comparison for the platform owner. Built from real billing records.",
   usage_total: "Total",
   usage_input_tokens: "Input tokens",
   usage_output_tokens: "Output tokens",
@@ -202,6 +202,7 @@ export default {
   usage_group_day: "Date",
   usage_group_model: "Model",
   usage_group_user: "User",
+  usage_group_tenant: "Tenant",
   // ── Invoice review (admin side) ──
   invoice_review: "Invoice review",
   invoice_review_desc: "Requests submitted by users. Only pending ones are shown by default; a decision cannot be undone — approving means the invoice has actually been issued offline.",

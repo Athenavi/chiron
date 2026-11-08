@@ -32,62 +32,6 @@ func emitNotification(ctx context.Context, w notificationWriter, n *notify.Notif
 	}
 }
 
-// notifyQuotaChanged 通知该租户的 owner/admin：配额池被创建或调整。
-//
-// action 只用于日志语义（created/updated），**不进去重键**：同一个池先建后改是
-// 两次真实事件，用户应各看到一条；用 action 参与去重反而会把"改成同样数值的
-// 第二次调整"和第一次合并。
-func (h *EntCostCenterHandler) notifyQuotaChanged(ctx context.Context, pool *EntQuotaPool, action string) {
-	if h == nil || h.notifier == nil || pool == nil || pool.ID == "" {
-		return
-	}
-	tenantID := parseTenantID(pool.TenantID)
-	if tenantID <= 0 {
-		return
-	}
-	admins, err := listTenantAdmins(ctx, tenantID)
-	if err != nil {
-		slog.Warn("api: list tenant admins for quota notification failed", "tenant", tenantID, "error", err)
-		return
-	}
-	if len(admins) == 0 {
-		// 存量租户尚未回填 tenant_members 时无人可通知，属正常情况。
-		return
-	}
-
-	// 去重键带 updated_at：每次真实写入都能拿到新的时间戳（UpdateQuotaPool 的
-	// `SET ... updated_at = NOW() ... RETURNING`），于是"每次实际变更一条通知"
-	// 与"同一次变更被重复调用只发一条"两个目标同时成立。
-	// 列可空，零值时退化为按池去重（至少不会静默丢失首条）。
-	dedupe := fmt.Sprintf("%s:%s:%d", notify.KindQuotaChanged, pool.ID, pool.UpdatedAt.UnixNano())
-	title := "配额已变更"
-	verb := "已创建"
-	if action == "updated" {
-		verb = "已调整"
-	}
-	body := fmt.Sprintf("租户配额%s：%s 为 %d（周期 %s）。",
-		verb, pool.ResourceType, pool.TotalAmount, pool.Period)
-
-	payload := map[string]any{
-		"pool_id":       pool.ID,
-		"resource_type": pool.ResourceType,
-		"total_amount":  pool.TotalAmount,
-		"period":        pool.Period,
-		"action":        action,
-	}
-	for _, uid := range admins {
-		emitNotification(ctx, h.notifier, &notify.Notification{
-			UserID:    uid,
-			Kind:      notify.KindQuotaChanged,
-			DedupeKey: dedupe,
-			Title:     title,
-			Body:      body,
-			Link:      "/admin/costcenter",
-			Payload:   payload,
-		})
-	}
-}
-
 // notifyMemberJoined 通知新加入的成员本人（P2-3 的 member_invited）。
 //
 // 为什么通知本人而不是"发出邀请的管理员"：新成员刚注册完，最需要确认的是

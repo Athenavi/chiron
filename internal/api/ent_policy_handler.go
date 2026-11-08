@@ -236,7 +236,7 @@ func defaultResolveAllowedModels(ctx context.Context, tenantID int16, userID str
 	var allowed []string
 	err := pool.QueryRow(ctx,
 		`SELECT allowed_models FROM ent_model_policies
-		 WHERE tenant_id = $1 AND (role_id IS NULL OR role_id = ANY($2::uuid[]))
+		 WHERE tenant_id = $1 AND (role_id IS NULL OR role_id = ANY($2::text[]))
 		 ORDER BY (role_id IS NULL) ASC
 		 LIMIT 1`, tenantID, roleIDs).Scan(&allowed)
 	if err != nil {

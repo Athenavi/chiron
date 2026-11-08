@@ -140,6 +140,12 @@ func registerAdminRoutes(
 	mux.Handle("GET /v1/admin/payments", authMW(rlMW(platformReadMW(adminStrip))))
 	mux.Handle("PUT /v1/admin/payments", authMW(rlMW(platformWriteMW(adminStrip))))
 
+	// 发票审核（P1-2 / roadmap §11.4）：handler 早已注册在 adminMux（invoice_handler.go
+	// 的 RegisterAdminRoutes），但外层 mux 从未暴露这两个 pattern ⇒ 前端 InvoiceReviewView
+	// 一打开就 404「请求的资源不存在」。读用 adminReadMW；审核是写操作 ⇒ adminWriteMW。
+	mux.Handle("GET /v1/admin/invoices", authMW(rlMW(adminReadMW(adminStrip))))
+	mux.Handle("POST /v1/admin/invoices/{id}/review", authMW(rlMW(adminWriteMW(adminStrip))))
+
 	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
 	// 读也挂 PermBillingManage 而不是 adminReadMW：能看到定价与权益范围的人，
 	// 应当与能改它的是同一批 —— 否则运营的定价草案会对所有 admin 可见。

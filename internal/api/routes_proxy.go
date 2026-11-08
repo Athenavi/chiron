@@ -1,6 +1,7 @@
 package api
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/url"
@@ -85,6 +86,14 @@ func registerProxyRoutes(
 				}
 				if err != nil {
 					slog.Error(opt.logTag+" proxy error", "path", proxiedPath, "error", err)
+					// 4xx 是**调用方**的问题（参数不对、未配置、冲突），把引擎的状态码
+					// 与 detail 透传出去。此前一律折叠成 500 "internal error"，
+					// 用户看到的是"服务异常，请稍后重试"，完全无从修正。
+					var httpErr *engine.HTTPError
+					if errors.As(err, &httpErr) && httpErr.StatusCode >= 400 && httpErr.StatusCode < 500 {
+						JSON(w, httpErr.StatusCode, APIResponse{Success: false, Error: httpErr.UserMessage()})
+						return
+					}
 					logAndRespond(w, err, http.StatusInternalServerError, "internal error")
 					return
 				}

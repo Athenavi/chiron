@@ -388,6 +388,62 @@ func (c *PythonClient) IsConnected() bool {
 	return resp.StatusCode == http.StatusOK
 }
 
+// HTTPError 表示 Python 引擎返回了非 2xx 响应。
+//
+// 为什么需要它：这四个 JSON 方法原先只把状态码与 body 拼进 fmt.Errorf 的字符串，
+// 网关代理层（internal/api/routes_proxy.go）拿不到状态码，只能一律回 500
+// "internal error"。于是引擎写得很清楚的 400/409（例如"请先在知识库设置中选择
+// provider"）到界面上就变成了"服务异常，请稍后重试"——用户既不知道原因，也无从修。
+// 保留状态码后，代理层可以把 4xx 原样透传（5xx 仍按服务端错误处理）。
+type HTTPError struct {
+	Method     string
+	Path       string
+	StatusCode int
+	Body       []byte
+}
+
+func (e *HTTPError) Error() string {
+	return fmt.Sprintf("python %s %s returned %d: %s", e.Method, e.Path, e.StatusCode, string(e.Body))
+}
+
+// UserMessage 取出可以直接展示给用户的文案。
+//
+// FastAPI 的错误体是 {"detail": "..."}；参数校验失败（422）时 detail 是一个数组，
+// 每项带 msg。两者都处理，取不到就回退到原始 body（截断，避免把整页内容塞进响应）。
+func (e *HTTPError) UserMessage() string {
+	var payload struct {
+		Detail any `json:"detail"`
+	}
+	if err := json.Unmarshal(e.Body, &payload); err == nil {
+		switch v := payload.Detail.(type) {
+		case string:
+			if s := strings.TrimSpace(v); s != "" {
+				return s
+			}
+		case []any:
+			msgs := make([]string, 0, len(v))
+			for _, item := range v {
+				if m, ok := item.(map[string]any); ok {
+					if s, ok := m["msg"].(string); ok && strings.TrimSpace(s) != "" {
+						msgs = append(msgs, strings.TrimSpace(s))
+					}
+				}
+			}
+			if len(msgs) > 0 {
+				return strings.Join(msgs, "；")
+			}
+		}
+	}
+	s := strings.TrimSpace(string(e.Body))
+	if r := []rune(s); len(r) > 300 {
+		s = string(r[:300]) + "…"
+	}
+	if s == "" {
+		return fmt.Sprintf("python engine returned %d", e.StatusCode)
+	}
+	return s
+}
+
 // GetJSON performs a GET request and decodes JSON into out.
 func (c *PythonClient) GetJSON(ctx context.Context, path string, out any) error {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.pickAddress()+path, nil)
@@ -402,7 +458,7 @@ func (c *PythonClient) GetJSON(ctx context.Context, path string, out any) error 
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("python GET %s returned %d: %s", path, resp.StatusCode, string(b))
+		return &HTTPError{Method: http.MethodGet, Path: path, StatusCode: resp.StatusCode, Body: b}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
@@ -426,7 +482,7 @@ func (c *PythonClient) PostJSON(ctx context.Context, path string, in any, out an
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("python POST %s returned %d: %s", path, resp.StatusCode, string(b))
+		return &HTTPError{Method: http.MethodPost, Path: path, StatusCode: resp.StatusCode, Body: b}
 	}
 	return json.NewDecoder(resp.Body).Decode(out)
 }
@@ -450,7 +506,7 @@ func (c *PythonClient) PutJSON(ctx context.Context, path string, in any, out any
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("python PUT %s returned %d: %s", path, resp.StatusCode, string(b))
+		return &HTTPError{Method: http.MethodPut, Path: path, StatusCode: resp.StatusCode, Body: b}
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
@@ -543,7 +599,7 @@ func (c *PythonClient) DeleteJSON(ctx context.Context, path string, out any) err
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		b, _ := io.ReadAll(resp.Body)
-		return fmt.Errorf("python DELETE %s returned %d: %s", path, resp.StatusCode, string(b))
+		return &HTTPError{Method: http.MethodDelete, Path: path, StatusCode: resp.StatusCode, Body: b}
 	}
 	if out != nil {
 		return json.NewDecoder(resp.Body).Decode(out)
