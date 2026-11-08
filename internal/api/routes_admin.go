@@ -20,6 +20,7 @@ func registerAdminRoutes(
 	pythonClient *engine.PythonClient,
 	invoiceHandler *InvoiceHandler,
 	billingHandler *BillingHandler,
+	quotaHandler *QuotaHandler,
 ) {
 	// Admin routes (auth + admin permission + rate limit)
 	// P1-3: 所有 admin 路由必须挂限流，防止被劫持的 admin token 无限调用
@@ -160,9 +161,13 @@ func registerAdminRoutes(
 	// 的 RegisterAdminRoutes），但外层 mux 从未暴露这两个 pattern ⇒ 前端 InvoiceReviewView
 	// 一打开就 404「请求的资源不存在」。读用 adminReadMW；审核是写操作 ⇒ adminWriteMW。
 	mux.Handle("GET /v1/admin/invoices", authMW(rlMW(adminReadMW(adminStrip))))
+	// 发票导出（P1-8）：与列表同口径（status 过滤 + 时间范围），复用 BOM 与
+	// 公式注入防护。平台导全量，租户只导本租户 —— tenant_id 取自 claims。
+	mux.Handle("GET /v1/admin/invoices.csv", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.ExportAdmin)))))
 	mux.Handle("POST /v1/admin/invoices/{id}/review", authMW(rlMW(adminWriteMW(adminStrip))))
 	// 租户级发票审核：只看/只审本租户用户的申请（admin 角色即可）。
 	mux.Handle("GET /v1/tenant/invoices", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.TenantList)))))
+	mux.Handle("GET /v1/tenant/invoices.csv", authMW(rlMW(adminReadMW(http.HandlerFunc(invoiceHandler.ExportTenant)))))
 	mux.Handle("POST /v1/tenant/invoices/{id}/review", authMW(rlMW(adminWriteMW(http.HandlerFunc(invoiceHandler.TenantReview)))))
 
 	// 套餐目录 CRUD（P2-2c / roadmap §13.5 第 1 项）。
@@ -182,6 +187,16 @@ func registerAdminRoutes(
 	// DELETE = 软下架（enabled=false），POST restore = 重新上架。
 	mux.Handle("DELETE /v1/tenant/packages/{id}", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminDisablePackage)))))
 	mux.Handle("POST /v1/tenant/packages/{id}/restore", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.AdminEnablePackage)))))
+
+	// 租户配额管理（查看 → 申请 → 平台审批）。
+	// 租户侧：admin 角色即可查看自己的配额与提交申请（tenant_id 只取自 claims）。
+	// 平台侧：审批会改配额上限，属平台运维 ⇒ 必须 RequirePlatformOwner，
+	// 否则任一租户管理员都能给自己提额度。
+	mux.Handle("GET /v1/tenant/quota", authMW(rlMW(adminReadMW(http.HandlerFunc(quotaHandler.List)))))
+	mux.Handle("GET /v1/tenant/quota/requests", authMW(rlMW(adminReadMW(http.HandlerFunc(quotaHandler.ListRequests)))))
+	mux.Handle("POST /v1/tenant/quota/requests", authMW(rlMW(adminWriteMW(http.HandlerFunc(quotaHandler.CreateRequest)))))
+	mux.Handle("GET /v1/admin/quota/requests", authMW(rlMW(platformReadMW(http.HandlerFunc(quotaHandler.AdminListRequests)))))
+	mux.Handle("POST /v1/admin/quota/requests/{id}/review", authMW(rlMW(platformWriteMW(http.HandlerFunc(quotaHandler.ReviewRequest)))))
 
 	// 租户 / 域名 / 定时任务管理（后台「租户管理」「域名管理」「定时任务」三页）
 	// 与上面 redis/database/models/settings 是**同一个坑的第四次**：handler 早已

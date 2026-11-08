@@ -384,6 +384,13 @@ func NewGatewayRouter(
 	// 工单式发票申请（P1-2 / roadmap §11.4）：用户提交、管理员审核、线下开票。
 	// 一期只做全额开票 + 不可撤销（§11.4 已定口径）。
 	invoiceHandler := NewInvoiceHandler()
+	// 审核结果通知申请人（P1-8）：审核发生在管理端，申请人只能靠这条通知知道结果。
+	// 装配失败不影响审核本身（notifyReviewResult 内部只告警）。
+	invoiceHandler.SetNotifier(notifyMgr)
+
+	// 租户配额管理：查看 → 申请 → 平台审批。
+	quotaHandler := NewQuotaHandler()
+	quotaHandler.SetNotifier(notifyMgr)
 
 	// 后台「支付配置」保存在 system_settings.payment 的凭据叠加到 env 之上，
 	// 使页面里配置的渠道在重启后依然生效（DB 值优先、env 兜底）。
@@ -586,7 +593,7 @@ func NewGatewayRouter(
 	// 旧 /v1/permission/approve|reject 已移除：审批统一由 Python 侧处理
 	// （前端经 /v1/agent/approval 提交决定），避免 Go/Python 双实现漂移。
 
-	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient, invoiceHandler, billingHandler)
+	registerAdminRoutes(mux, authMW, rlMW, adminHandler, pythonClient, invoiceHandler, billingHandler, quotaHandler)
 
 	// Wrap main mux with public middleware.
 	//

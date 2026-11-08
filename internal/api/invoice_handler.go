@@ -6,12 +6,14 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/athenavi/chiron/internal/auth"
 	"github.com/athenavi/chiron/internal/db"
 	"github.com/athenavi/chiron/internal/id"
+	"github.com/athenavi/chiron/internal/notify"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -79,10 +81,20 @@ type InvoiceRequest struct {
 
 type InvoiceHandler struct {
 	store invoiceStore
+	// notifier 可为 nil（未装配通知中心时只不发通知）。
+	notifier notificationWriter
 }
 
 func NewInvoiceHandler() *InvoiceHandler {
 	return &InvoiceHandler{store: db.GlobalDBManager}
+}
+
+// SetNotifier 装配通知中心：审核结果要通知申请人本人（P1-8）。
+//
+// 与 AuthHandler.SetNotifier 同款收窄接口：这里只需要"写一条通知"，
+// 不需要读列表或管邮件偏好。
+func (h *InvoiceHandler) SetNotifier(w notificationWriter) {
+	h.notifier = w
 }
 
 // RegisterRoutes 注册**用户侧**端点（挂在 /v1/billing 下，与充值/账单同一片）。
@@ -593,6 +605,7 @@ func (h *InvoiceHandler) TenantReview(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	slog.Info("tenant invoice reviewed", "reviewer_id", claims.UserID, "tenant_id", claims.TenantID, "invoice_id", invoiceID, "status", status)
+	h.notifyReviewResult(r.Context(), invoiceID, status, reviewNote)
 	OK(w, map[string]interface{}{"id": invoiceID, "status": status})
 }
 //
@@ -662,5 +675,233 @@ func (h *InvoiceHandler) Review(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slog.Info("invoice reviewed", "reviewer_id", claims.UserID, "invoice_id", invoiceID, "status", status)
+	h.notifyReviewResult(r.Context(), invoiceID, status, reviewNote)
 	OK(w, map[string]interface{}{"id": invoiceID, "status": status})
+}
+
+// notifyReviewResult 通知发票申请人审核结果（P1-8）。
+//
+// 为什么在这里重新查一次发票：审核 UPDATE 只带了 id/status，而通知正文需要
+// 金额与申请人 user_id。用一条 SELECT 补齐比给 UPDATE 加 RETURNING 更稳 ——
+// TenantReview 与 Review 两条路径的 WHERE 不同（前者多了租户过滤），
+// RETURNING 容易只在其中一条上改对。
+//
+// **失败只告警**：审核已经落库，通知写不进去不该让管理员以为审核失败。
+func (h *InvoiceHandler) notifyReviewResult(ctx context.Context, invoiceID, status, reviewNote string) {
+	if h.notifier == nil {
+		return
+	}
+	var (
+		userID      string
+		amountCents int64
+		currency    string
+	)
+	if err := h.store.QueryRow(ctx,
+		`SELECT user_id, amount_cents, COALESCE(currency, 'CNY')
+		   FROM invoice_requests WHERE id = $1`, invoiceID).
+		Scan(&userID, &amountCents, &currency); err != nil {
+		slog.Warn("invoice review notify: load request failed",
+			"invoice_id", invoiceID, "error", err)
+		return
+	}
+	amountYuan := centsToYuanString(amountCents)
+	// 标题/正文是兜底文本：前端按 kind + payload 用当前语言重渲染，
+	// 邮件由 notify.RenderMail 用同一份模板重渲染。
+	title := "发票申请已审核"
+	body := fmt.Sprintf("你的发票申请（¥%s）已审核：%s。", amountYuan, status)
+	emitNotification(ctx, h.notifier, &notify.Notification{
+		UserID: userID,
+		Kind:   notify.KindInvoiceReviewed,
+		// 同一张发票只通知一次：重复点击审核会被 UPDATE 的 `status = 'pending'`
+		// 挡成 409，但并发下仍可能两次都走到这里，靠去重键兜底。
+		DedupeKey: notify.KindInvoiceReviewed + ":" + invoiceID,
+		Title:     title,
+		Body:      body,
+		Link:      "/billing",
+		Payload: map[string]any{
+			"invoice_id":  invoiceID,
+			"status":      status,
+			"amount_yuan": amountYuan,
+			"currency":    currency,
+			"review_note": reviewNote,
+		},
+	})
+}
+
+// centsToYuanString 把最小货币单位（分）转成"元"的十进制字符串。
+//
+// 用整数运算而不是 float64：`float64(1234)/100` 在多币种换算里会引入
+// 0.01 级误差，而金额显示错一分钱是用户会来投诉的问题。
+func centsToYuanString(cents int64) string {
+	sign := ""
+	if cents < 0 {
+		sign = "-"
+		cents = -cents
+	}
+	return fmt.Sprintf("%s%d.%02d", sign, cents/100, cents%100)
+}
+
+// ── 导出（P1-8）──
+
+// invoiceExportHeader 是发票导出的表头。
+//
+// 同时给「金额(分)」与「金额」两列：分是**对账的真相**（不受浮点与区域设置
+// 影响），元是给人看的。只给元会让财务在 Excel 里求和时遇到 "1,234.00"
+// 这类带千分位的文本；只给分则每次都要在脑子里除以 100。
+var invoiceExportHeader = []string{
+	"申请时间(UTC)", "订单号", "抬头", "税号",
+	"金额(分)", "金额", "币种", "状态",
+	"申请备注", "审核备注", "审核时间(UTC)",
+}
+
+// formatInvoiceExportRow 把一条发票申请转成 CSV 行。
+//
+// 顺序必须与 invoiceExportHeader 一致。文本列全部走 csvSafeText：抬头、
+// 税号、备注都是**用户可控**的，以 `=`/`+`/`-`/`@` 开头时会被 Excel 当公式
+// 执行（抬头写 `=cmd|...` 是真实的攻击面）。金额两列是数值，不加前缀。
+func formatInvoiceExportRow(it InvoiceRequest) []string {
+	created := ""
+	if it.CreatedAt != nil {
+		created = it.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	reviewed := ""
+	if it.ReviewedAt != nil {
+		reviewed = it.ReviewedAt.UTC().Format(time.RFC3339)
+	}
+	return []string{
+		created,
+		csvSafeText(it.PaymentID),
+		csvSafeText(it.Title),
+		csvSafeText(it.TaxNo),
+		strconv.FormatInt(it.AmountCents, 10),
+		centsToYuanString(it.AmountCents),
+		it.Currency,
+		it.Status,
+		csvSafeText(it.Note),
+		csvSafeText(it.ReviewNote),
+		reviewed,
+	}
+}
+
+// invoiceExportDisposition 生成 Content-Disposition。
+//
+// 文件名只用 ASCII：部分浏览器会把中文文件名按错误编码落盘，用户下到的
+// 是一个乱码名字的文件。冒号在 Windows 上非法，所以时间用 `T` 分隔。
+func invoiceExportDisposition(tenantID int) string {
+	scope := "platform"
+	if tenantID > 0 {
+		scope = "tenant"
+	}
+	name := "invoices_" + scope + "_" + time.Now().UTC().Format("20060102T1504") + ".csv"
+	return `attachment; filename="` + name + `"`
+}
+
+// exportInvoices 是发票导出的共用实现。tenantID=0 表示平台全量。
+//
+// 与交易导出（ExportTransactions）同款取舍：
+//   - 时间范围复用 parseExportRange（默认近 30 天、上限 366 天）；
+//   - **先 count 再写**：一旦写出第一个字节状态码就固定 200，超限时无法再报 400；
+//   - 行数上限复用 exportMaxRows（5 万行），超限让用户缩小范围而不是静默截断。
+//
+// 租户隔离靠 `user_id IN (SELECT id FROM users WHERE tenant_id = $n)`，
+// 与 TenantList 同一条口径 —— invoice_requests 没有 tenant_id 列，
+// 第二份事实会随用户迁移租户而分叉。
+func (h *InvoiceHandler) exportInvoices(w http.ResponseWriter, r *http.Request, tenantID int) {
+	q := r.URL.Query()
+	statusFilter, err := normalizeInvoiceStatusFilter(q.Get("status"))
+	if err != nil {
+		BadRequest(w, err.Error())
+		return
+	}
+	from, to, err := parseExportRange(q.Get("from"), q.Get("to"), time.Now())
+	if err != nil {
+		if errors.Is(err, errExportRangeTooWide) {
+			JSONWithCode(w, http.StatusBadRequest, CodeExportRangeTooWide,
+				map[string]interface{}{"max_days": exportMaxSpanDays}, err.Error())
+			return
+		}
+		BadRequest(w, err.Error())
+		return
+	}
+
+	where := ` WHERE ir.created_at >= $1 AND ir.created_at <= $2`
+	args := []interface{}{from, to}
+	if tenantID > 0 {
+		where += fmt.Sprintf(` AND ir.user_id IN (SELECT id FROM users WHERE tenant_id = $%d)`, len(args)+1)
+		args = append(args, tenantID)
+	}
+	if statusFilter != "" {
+		where += fmt.Sprintf(` AND ir.status = $%d`, len(args)+1)
+		args = append(args, statusFilter)
+	}
+
+	var total int
+	if err := h.store.QueryRow(r.Context(),
+		`SELECT count(*) FROM invoice_requests ir`+where, args...).Scan(&total); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "count invoices for export failed")
+		return
+	}
+	if err := checkExportRowLimit(total); err != nil {
+		JSONWithCode(w, http.StatusBadRequest, CodeExportTooManyRows,
+			map[string]interface{}{"max_rows": exportMaxRows}, err.Error())
+		return
+	}
+
+	rows, err := h.store.Query(r.Context(),
+		`SELECT ir.id, ir.payment_id, ir.title, ir.tax_no, ir.amount_cents,
+		        COALESCE(NULLIF(ir.currency, ''), 'CNY'), ir.status,
+		        COALESCE(ir.note, ''), COALESCE(ir.review_note, ''),
+		        ir.reviewed_at, ir.created_at
+		   FROM invoice_requests ir`+where+`
+		  ORDER BY ir.created_at ASC, ir.id ASC`, args...)
+	if err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "load invoices for export failed")
+		return
+	}
+	defer rows.Close()
+
+	w.Header().Set("Content-Type", "text/csv; charset=utf-8")
+	w.Header().Set("Content-Disposition", invoiceExportDisposition(tenantID))
+	w.WriteHeader(http.StatusOK)
+
+	// 走到这里已经发出 200：后续任何扫描失败都只能中断下载并记日志，
+	// 无法再改状态码（与交易导出同一条约束）。
+	writeErr := writeCSVRows(w, invoiceExportHeader, func(yield func([]string) bool) {
+		for rows.Next() {
+			var it InvoiceRequest
+			if err := rows.Scan(&it.ID, &it.PaymentID, &it.Title, &it.TaxNo, &it.AmountCents,
+				&it.Currency, &it.Status, &it.Note, &it.ReviewNote,
+				&it.ReviewedAt, &it.CreatedAt); err != nil {
+				slog.Error("scan invoice for export failed", "tenant_id", tenantID, "error", err)
+				return
+			}
+			if !yield(formatInvoiceExportRow(it)) {
+				return
+			}
+		}
+		if err := rows.Err(); err != nil {
+			slog.Error("iterate invoices for export failed", "tenant_id", tenantID, "error", err)
+		}
+	})
+	if writeErr != nil {
+		slog.Warn("write invoice csv failed", "tenant_id", tenantID, "error", writeErr)
+	}
+}
+
+// ExportAdmin GET /v1/admin/invoices.csv —— 平台全量发票导出。
+func (h *InvoiceHandler) ExportAdmin(w http.ResponseWriter, r *http.Request) {
+	h.exportInvoices(w, r, 0)
+}
+
+// ExportTenant GET /v1/tenant/invoices.csv —— 本租户发票导出。
+//
+// tenant_id 只来自鉴权 claims，不接受查询参数覆盖：否则任何人都能导出
+// 其它租户的开票抬头与税号。
+func (h *InvoiceHandler) ExportTenant(w http.ResponseWriter, r *http.Request) {
+	claims := auth.GetClaims(r.Context())
+	if claims == nil || claims.TenantID <= 0 {
+		Unauthorized(w, "missing tenant context")
+		return
+	}
+	h.exportInvoices(w, r, int(claims.TenantID))
 }

@@ -514,6 +514,62 @@ export async function reviewTenantInvoice(
   return data?.data ?? { id, status: payload.status }
 }
 
+// ── 发票导出（CSV）──
+//
+// 用 `responseType: 'blob'`：响应体是 CSV 文件而不是 JSON。
+// 代价是错误响应体也变成 Blob，调用方必须用 `blobErrorPayload` 读回文本，
+// 否则拿不到"记录太多，请缩小范围"这类唯一有用的提示。
+//
+// 时间范围与状态过滤必须与列表页一致：用户点了"导出"，
+// 期望拿到的是**当前筛选条件下的全量**，而不是另一套口径。
+
+/** 导出当前租户的发票申请（`/tenant/invoices` 页）。 */
+export async function exportTenantInvoicesCsv(params: {
+  status?: InvoiceStatus | 'all'
+  from?: string
+  to?: string
+}): Promise<Blob> {
+  const resp = await api.get('/v1/tenant/invoices.csv', {
+    params: {
+      status: params.status && params.status !== 'all' ? params.status : undefined,
+      from: params.from,
+      to: params.to,
+    },
+    responseType: 'blob',
+  })
+  return resp.data as Blob
+}
+
+/** 导出平台全量发票申请（`/admin/invoices` 页，仅 owner）。 */
+export async function exportInvoicesCsv(params: {
+  status?: InvoiceStatus | 'all'
+  from?: string
+  to?: string
+}): Promise<Blob> {
+  const resp = await api.get('/v1/admin/invoices.csv', {
+    params: {
+      status: params.status && params.status !== 'all' ? params.status : undefined,
+      from: params.from,
+      to: params.to,
+    },
+    responseType: 'blob',
+  })
+  return resp.data as Blob
+}
+
+/**
+ * 发票导出的文件名。
+ *
+ * 纯 ASCII、不含冒号（Windows 非法字符）。不依赖后端 `Content-Disposition`：
+ * 跨域场景下浏览器默认读不到该响应头，前端自己生成更可靠 ——
+ * 与 `utils/transactionExport.ts` 的取舍相同。
+ */
+export function invoiceExportFileName(scope: 'tenant' | 'admin', now: Date = new Date()): string {
+  const pad = (n: number) => String(n).padStart(2, '0')
+  const stamp = `${now.getUTCFullYear()}${pad(now.getUTCMonth() + 1)}${pad(now.getUTCDate())}T${pad(now.getUTCHours())}${pad(now.getUTCMinutes())}`
+  return `invoices_${scope}_${stamp}.csv`
+}
+
 // ── 套餐目录（管理端） ──
 
 /**
@@ -753,4 +809,99 @@ export async function getIdentityNotice(): Promise<IdentityNotice | null> {
   } catch {
     return null
   }
+}
+
+// ── 租户配额管理（查看 → 申请 → 平台审批）──
+
+/** 与后端 ent_quota_pools.resource_type 的四个白名单值一致。 */
+export type QuotaResourceType = 'token' | 'credits' | 'concurrency' | 'storage_mb'
+export type QuotaPeriod = 'daily' | 'monthly'
+
+/**
+ * 配额池 + 当期用量。
+ *
+ * `used_amount` 与强制侧同源（token→usage_events、credits→credit_transactions、
+ * storage_mb→media_assets）。`usage_source` 为 `none` 表示**查询失败或没有用量概念**
+ * （如 concurrency），不要把它当 0 展示成"用了 0%"。
+ */
+export interface QuotaPool {
+  resource_type: QuotaResourceType
+  period: QuotaPeriod
+  total_amount: number
+  used_amount: number
+  usage_source: string
+  /** total_amount <= 0 表示不限额；前端不能直接按 0 算百分比（会得 NaN）。 */
+  unlimited: boolean
+}
+
+export type QuotaRequestStatus = 'pending' | 'approved' | 'rejected'
+
+export interface QuotaRequest {
+  id: string
+  tenant_id: number
+  resource_type: QuotaResourceType
+  period: QuotaPeriod
+  current_amount: number
+  requested_amount: number
+  reason?: string
+  status: QuotaRequestStatus
+  review_note?: string
+  reviewed_at?: string
+  created_at?: string
+}
+
+/** 读本租户的配额池与当期用量。 */
+export async function listTenantQuota(): Promise<QuotaPool[]> {
+  const { data } = await api.get('/v1/tenant/quota')
+  return data?.data?.pools ?? []
+}
+
+/** 读本租户的配额申请历史（不传 status 时后端默认只给待审）。 */
+export async function listTenantQuotaRequests(
+  status?: QuotaRequestStatus | 'all',
+): Promise<QuotaRequest[]> {
+  const { data } = await api.get('/v1/tenant/quota/requests', {
+    params: status ? { status } : undefined,
+  })
+  return data?.data?.requests ?? []
+}
+
+/**
+ * 提交一笔配额调整申请。
+ *
+ * `requested_amount = 0` 表示"取消限制"（后端与执行侧同语义）。
+ * 同一资源已有待审申请时后端返回 409（`quota_request_pending`）。
+ */
+export async function createQuotaRequest(payload: {
+  resource_type: QuotaResourceType
+  period: QuotaPeriod
+  requested_amount: number
+  reason?: string
+}): Promise<QuotaRequest> {
+  const { data } = await api.post('/v1/tenant/quota/requests', payload)
+  return data?.data
+}
+
+// ── 平台侧配额审批（/v1/admin/quota/requests，仅 owner）──
+
+/** 列出待审/已处理的配额申请（平台视图，跨租户）。 */
+export async function listAdminQuotaRequests(
+  status?: QuotaRequestStatus | 'all',
+): Promise<QuotaRequest[]> {
+  const { data } = await api.get('/v1/admin/quota/requests', {
+    params: status ? { status } : undefined,
+  })
+  return data?.data?.requests ?? []
+}
+
+/** 审批一笔配额申请。通过时后端会同步写入配额池并让闸门立即生效。 */
+export async function reviewQuotaRequest(
+  id: string,
+  payload: { status: 'approved' | 'rejected'; review_note?: string },
+): Promise<{ id: string; status: QuotaRequestStatus }> {
+  const { data } = await api.post(
+    `/v1/admin/quota/requests/${encodeURIComponent(id)}/review`,
+    payload,
+  )
+  return data?.data ?? { id, status: payload.status }
 }

@@ -174,6 +174,24 @@ func formatTransactionRecord(row exportRow) []string {
 // 数据库游标，两者走的是同一段代码。若写成两次循环，BOM/表头/转义任何一处
 // 改动都可能只改到一边。
 func writeCSV(w io.Writer, rows iter.Seq[exportRow]) error {
+	return writeCSVRows(w, exportCSVHeader, func(yield func([]string) bool) {
+		for row := range rows {
+			if !yield(formatTransactionRecord(row)) {
+				return
+			}
+		}
+	})
+}
+
+// writeCSVRows 是通用 CSV 写入：BOM + 任意表头 + 任意行序列。
+//
+// 抽出来是为了让发票导出复用同一段 BOM/CRLF/逐行 flush 的实现。这条路径上
+// 任何一处手写都会各自漂移（尤其 BOM 只有写在第一个字节才管用），
+// 而「导出的中文是乱码」是用户唯一会说出口的症状。
+//
+// 行内容由调用方负责转义（文本列走 csvSafeText，数值列不要走 —— 加了前缀
+// Excel 就再也算不了和）。
+func writeCSVRows(w io.Writer, header []string, rows iter.Seq[[]string]) error {
 	// BOM 必须先于任何其它字节写出，否则 Excel 认不出来（它只看文件开头）。
 	if _, err := w.Write(utf8BOM); err != nil {
 		return err
@@ -183,14 +201,14 @@ func writeCSV(w io.Writer, rows iter.Seq[exportRow]) error {
 	// RFC 4180 用 CRLF 作行结束符；Excel 与大多数表格软件都认它。
 	cw.UseCRLF = true
 
-	if err := cw.Write(exportCSVHeader); err != nil {
+	if err := cw.Write(header); err != nil {
 		return err
 	}
 
 	// 能 flush 就逐行 flush：用户看到的是"正在下载"，而不是转圈等到全量查完。
 	flusher, canFlush := w.(http.Flusher)
 	for row := range rows {
-		if err := cw.Write(formatTransactionRecord(row)); err != nil {
+		if err := cw.Write(row); err != nil {
 			return err
 		}
 		if canFlush {

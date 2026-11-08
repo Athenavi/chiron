@@ -16,11 +16,17 @@ import { mount, flushPromises } from '@vue/test-utils'
 const apiMocks = vi.hoisted(() => ({
   listInvoices: vi.fn(),
   reviewInvoice: vi.fn(),
+  exportInvoicesCsv: vi.fn(),
+  exportTenantInvoicesCsv: vi.fn(),
+  invoiceExportFileName: vi.fn(() => 'invoices_admin_20261108T0000.csv'),
 }))
 
 vi.mock('../../../api/admin', () => ({
   listInvoices: apiMocks.listInvoices,
   reviewInvoice: apiMocks.reviewInvoice,
+  exportInvoicesCsv: apiMocks.exportInvoicesCsv,
+  exportTenantInvoicesCsv: apiMocks.exportTenantInvoicesCsv,
+  invoiceExportFileName: apiMocks.invoiceExportFileName,
 }))
 
 // 组件用 useRoute() 判定 /tenant 还是 /admin；单测没有安装 router，

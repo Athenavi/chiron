@@ -57,6 +57,18 @@ const (
 	// （`params.reason`）—— 套餐权益不覆盖 → 去买/续套餐；租户策略不允许 →
 	// 买套餐也没用，得找管理员。合成一句"没有权限"会让用户白花钱买套餐。
 	CodeModelNotAllowed = "model_not_allowed"
+	// CodeQuotaRequestPending 表示该资源的配额申请已在待审队列里。
+	//
+	// 用户的下一步动作是明确的（等审批 / 查看已有申请），而不是"改请求内容再试"。
+	CodeQuotaRequestPending = "quota_request_pending"
+	// CodeQuotaRequestReviewed 表示该配额申请已被审核过（通常是另一位管理员先审了）。
+	CodeQuotaRequestReviewed = "quota_request_reviewed"
+	// CodePackageAlreadyClaimed 表示该免费套餐已被同一用户领取过。
+	//
+	// 免费包（0 元试用）不经过支付渠道，唯一性只能由业务逻辑保证；
+	// 单独成码是因为用户的下一步动作明确（去"我的套餐"看已有的那份），
+	// 而不是"改请求内容再试"。
+	CodePackageAlreadyClaimed = "package_already_claimed"
 )
 
 // knownMessageCodes 已知文案 → 错误码（键为小写原文）。

@@ -98,6 +98,7 @@ export default {
   packages_hint: "套餐为一次性购买：Credits 立即到账，模型权益在有效期内生效，到期后只会失效，不自动续费、不扣款。",
   packages_empty: "管理员还没有上架任何套餐包，可以继续按需充值。",
   packages_buy: "购买",
+  free_package_claimed: "试用包已发放，可在「我的套餐」查看",
   package_credits: "{n} Credits",
   package_validity_days: "有效期 {n} 天",
   package_models_unlimited: "不限模型",

@@ -43,6 +43,12 @@ const (
 	// 是通用邀请码而非指向具体人的邀请，创建时没有确定的收件人。
 	// 因此这个事件落在"成员真正加入"的那一刻。
 	KindMemberInvited = "member_invited"
+	// KindInvoiceReviewed 发票申请审核完成（通过或驳回）。
+	//
+	// 审核在管理端完成，申请人不会看到审核列表，所以这条通知是他唯一知道
+	// "要不要继续等"的途径。通过时的正文必须说明"这是线下开票"，否则用户
+	// 会等一份不会自动到达的电子发票。
+	KindInvoiceReviewed = "invoice_reviewed"
 )
 
 // AllKinds 是全部事件类型，供偏好接口做参数校验与前端渲染开关列表。
@@ -51,6 +57,7 @@ var AllKinds = []string{
 	KindEntitlementExpiring,
 	KindQuotaChanged,
 	KindMemberInvited,
+	KindInvoiceReviewed,
 }
 
 // IsValidKind 判断事件类型是否属于已知集合。

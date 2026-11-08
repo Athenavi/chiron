@@ -69,6 +69,8 @@ export function renderNotificationTitle(item: NotificationItem, t: Translate): s
       return t('notifications.title_quota_changed')
     case 'member_invited':
       return t('notifications.title_member_invited')
+    case 'invoice_reviewed':
+      return t('notifications.title_invoice_reviewed')
     default:
       // 未知 kind：后端新增了事件类型但前端还没跟上，用服务端文案。
       return item.title
@@ -126,6 +128,28 @@ export function renderNotificationBody(
       const name = strOf(p.tenant_name)
       if (!name) return item.body
       return t('notifications.body.member_invited', { name })
+    }
+    case 'invoice_reviewed': {
+      const amount = strOf(p.amount_yuan)
+      const status = strOf(p.status)
+      // 参数不全时回落服务端文案：金额或结果缺一个，拼出来的句子都是错的。
+      if (!amount || !status) return item.body
+      const statusKey =
+        status === 'approved'
+          ? 'notifications.body.invoice_status_approved'
+          : status === 'rejected'
+            ? 'notifications.body.invoice_status_rejected'
+            : ''
+      if (!statusKey) return item.body
+      let out = t('notifications.body.invoice_reviewed', {
+        amount,
+        status: t(statusKey),
+      })
+      const note = strOf(p.review_note).trim()
+      if (note) {
+        out += ' ' + t('notifications.body.invoice_reviewed_note', { note })
+      }
+      return out
     }
     default:
       return item.body

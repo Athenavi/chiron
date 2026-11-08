@@ -27,6 +27,7 @@ export default {
     entitlement_expiring: 'Package expiring soon',
     quota_changed: 'Quota changed',
     member_invited: 'Joined a team',
+    invoice_reviewed: 'Invoice request reviewed',
   },
 
   // ── Body templates ──
@@ -42,6 +43,10 @@ export default {
     quota_action_created: 'created',
     quota_action_updated: 'updated',
     member_invited: 'You joined the team "{name}" via an invitation. Your quota and available models are managed by that team.',
+    invoice_reviewed: 'Your invoice request (¥{amount}) {status}.',
+    invoice_reviewed_note: 'Review note: {note}',
+    invoice_status_approved: 'was approved; we will issue it offline and contact you for delivery',
+    invoice_status_rejected: 'was rejected',
   },
 
   // ── Title templates ──
@@ -50,6 +55,7 @@ export default {
   title_entitlement_expiring: 'Package expires within {n} day(s)',
   title_quota_changed: 'Quota changed',
   title_member_invited: 'Joined a team',
+  title_invoice_reviewed: 'Invoice request reviewed',
 
   // ── Email preferences ──
   prefs_title: 'Email notification settings',

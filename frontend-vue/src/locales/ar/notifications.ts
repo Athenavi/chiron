@@ -26,6 +26,7 @@ export default {
     entitlement_expiring: 'الباقة على وشك الانتهاء',
     quota_changed: 'تغيّر الحصة',
     member_invited: 'انضممت إلى فريق',
+    invoice_reviewed: 'تمت مراجعة طلب الفاتورة',
   },
 
   // ── قوالب النص ──
@@ -40,6 +41,10 @@ export default {
     quota_action_created: 'أُنشئت',
     quota_action_updated: 'حُدِّثت',
     member_invited: 'انضممت إلى الفريق «{name}» عبر دعوة. تُدار حصتك والنماذج المتاحة بواسطة ذلك الفريق.',
+    invoice_reviewed: 'طلب الفاتورة الخاص بك (¥{amount}) {status}.',
+    invoice_reviewed_note: 'ملاحظة المراجعة: {note}',
+    invoice_status_approved: 'تمت الموافقة؛ سنصدرها دون اتصال ونتواصل معك للتسليم',
+    invoice_status_rejected: 'تم رفضه',
   },
 
   // ── قوالب العناوين ──
@@ -48,6 +53,7 @@ export default {
   title_entitlement_expiring: 'تنتهي الباقة خلال {n} يوم/أيام',
   title_quota_changed: 'تغيّر الحصة',
   title_member_invited: 'انضممت إلى فريق',
+  title_invoice_reviewed: 'تمت مراجعة طلب الفاتورة',
 
   // ── تفضيلات البريد ──
   prefs_title: 'إعدادات إشعارات البريد',

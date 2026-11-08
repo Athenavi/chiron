@@ -36,6 +36,7 @@ import {
   MedicineBoxOutlined,
   BarChartOutlined,
   ShoppingOutlined,
+  ControlOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
 } from '@ant-design/icons-vue'
@@ -96,6 +97,8 @@ const menuGroups = computed(() => [
       { key: '/admin/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
       // 平台套餐模板：租户新建套餐时从这里预填
       { key: '/admin/package-templates', label: t('admin.package_templates_title'), icon: () => h(ShoppingOutlined) },
+      // 配额审批：租户提交的调整申请，通过后立即对限流闸门生效
+      { key: '/admin/quota-review', label: t('admin.quota_review_title'), icon: () => h(ControlOutlined) },
       { key: '/admin/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
       // D1：自诊断 —— 与设置/数据存储同属"系统"类：都是"让部署正确运转"的操作面。
       { key: '/admin/diagnostics', label: t('admin.diagnostics'), icon: () => h(MedicineBoxOutlined) },

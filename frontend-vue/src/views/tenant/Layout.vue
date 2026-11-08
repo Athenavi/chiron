@@ -32,6 +32,7 @@ import {
 } from 'ant-design-vue'
 import {
   BarChartOutlined,
+  ControlOutlined,
   DashboardOutlined,
   GlobalOutlined,
   HomeOutlined,
@@ -78,6 +79,7 @@ const menuGroups = computed(() => [
     key: 'g-tenant-business', label: t('common.platform'),
     children: [
       { key: '/tenant/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
+      { key: '/tenant/quota', label: t('admin.quota_title'), icon: () => h(ControlOutlined) },
       { key: '/tenant/packages', label: t('admin.packages_admin_title'), icon: () => h(ShoppingOutlined) },
       { key: '/tenant/refunds', label: t('admin.refunds'), icon: () => h(WalletOutlined) },
       { key: '/tenant/mail', label: t('mail.email_config'), icon: () => h(MailOutlined) },

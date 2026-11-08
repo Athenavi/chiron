@@ -98,6 +98,7 @@ export default {
   packages_hint: "Packages are bought once: Credits land immediately and model entitlements stay valid until they expire. Nothing renews or charges automatically.",
   packages_empty: "No packages have been published yet — you can keep topping up on demand.",
   packages_buy: "Buy",
+  free_package_claimed: "Trial package granted — see “My packages”",
   package_credits: "{n} Credits",
   package_validity_days: "Valid for {n} days",
   package_models_unlimited: "All models",

@@ -29,7 +29,12 @@ import (
 // ── PayPal ────────────────────────────────────────────────────────────────
 
 // createPayPalPayment 创建 PayPal 订单并落库 payments，返回 checkout_url。
-func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Request, userID string, credits int, p *billing.Payment) {
+//
+// **金额只从已落库的订单取**（p.AmountCents / p.Credits），不接受调用方传入：
+// 套餐订单的价格由 `CreatePayment` 从目录解析后写进 p，若这里再按 credits 换算，
+// 用户只要在请求体里带 `credits: 1` 就能用 $0.01 买下 20000 credits 的套餐
+// （payments 表记录的却是套餐原价与全额 credits，等于凭空发钱）。
+func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Request, userID string, p *billing.Payment) {
 	// 与支付宝/微信一致：按租户配置构造 PayPal 客户端（未配置回退全局）。
 	tenantID := 0
 	if claims := auth.GetClaims(r.Context()); claims != nil {
@@ -41,8 +46,9 @@ func (h *BillingHandler) createPayPalPayment(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	amount := fmt.Sprintf("%.2f", float64(credits)/100)
-	orderID, approvalURL, err := h.payPalCreateOrder(r.Context(), pcfg, credits, amount, userID)
+	// PayPal 的金额单位是「元」，订单里存的是「分」（USD cent），除 100 即可。
+	amount := fmt.Sprintf("%.2f", float64(p.AmountCents)/100)
+	orderID, approvalURL, err := h.payPalCreateOrder(r.Context(), pcfg, p.Credits, amount, userID)
 	if err != nil {
 		slog.Error("paypal order failed", "error", err)
 		if mErr := h.mgr.MarkPaymentFailed(r.Context(), p.ID); mErr != nil {

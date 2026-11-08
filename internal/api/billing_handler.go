@@ -455,7 +455,8 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	switch body.Channel {
-	case billing.ChannelAlipay, billing.ChannelWechat, billing.ChannelPayPal:
+	case billing.ChannelAlipay, billing.ChannelWechat, billing.ChannelPayPal, "":
+		// 空 channel 只对 0 元套餐合法 —— 查完套餐目录后再判定。
 	default:
 		BadRequest(w, "channel must be alipay / wechat / paypal")
 		return
@@ -464,13 +465,6 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	tenantID := 0
 	if claims != nil {
 		tenantID = int(claims.TenantID)
-	}
-	pcfg := h.paymentConfigForTenant(r.Context(), tenantID)
-
-	// 后台可将某个渠道停用（不改动其凭据），此时直接拒绝下单，避免落一笔永远付不掉的订单。
-	if !pcfg.ChannelEnabled(body.Channel) {
-		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "该支付渠道已停用"})
-		return
 	}
 
 	credits := body.Credits
@@ -482,21 +476,50 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 套餐订单：价格与 credits 全部以目录为准，请求体只用来选套餐 code。
+	var pkg *billing.Package
 	if code := strings.TrimSpace(body.PackageCode); code != "" {
-		pkg, err := h.mgr.PackageByCode(r.Context(), int(claims.TenantID), code)
+		loaded, err := h.mgr.PackageByCode(r.Context(), tenantID, code)
 		if err != nil {
 			slog.Error("load package failed", "package", code, "error", err)
 			InternalError(w, "failed to load package")
 			return
 		}
-		if pkg == nil || !pkg.Enabled {
+		if loaded == nil || !loaded.Enabled {
 			BadRequest(w, "套餐不存在或已下架")
 			return
 		}
+		pkg = loaded
 		credits = pkg.Credits
 		amountCents = pkg.PriceCents
-		// 套餐自带币种：支付宝/微信只能收人民币，PayPal 只收美元。
-		// 目录里配错币种时明确拒绝，而不是按 1:1 换算悄悄多收/少收钱。
+		currency = pkg.Currency
+	} else if credits <= 0 {
+		BadRequest(w, "credits > 0 required")
+		return
+	}
+
+	// 0 元套餐（试用包）不走任何支付渠道。
+	//
+	// 支付宝/微信/PayPal 都不受理 0 元交易：塞进正常流程只会落一笔永远付不掉的
+	// 订单（用户看到"待支付"却拿不到可扫的码）。所以这里直接落库并确认入账。
+	if pkg != nil && pkg.PriceCents == 0 {
+		h.claimFreePackage(w, r, claims, pkg)
+		return
+	}
+
+	if body.Channel == "" {
+		BadRequest(w, "channel required")
+		return
+	}
+	pcfg := h.paymentConfigForTenant(r.Context(), tenantID)
+
+	// 后台可将某个渠道停用（不改动其凭据），此时直接拒绝下单，避免落一笔永远付不掉的订单。
+	if !pcfg.ChannelEnabled(body.Channel) {
+		JSON(w, http.StatusNotImplemented, APIResponse{Success: false, Error: "该支付渠道已停用"})
+		return
+	}
+	// 套餐自带币种必须与渠道收单币种一致：目录里配错币种时明确拒绝，
+	// 而不是按 1:1 换算悄悄多收/少收钱。
+	if pkg != nil {
 		wantCurrency := "CNY"
 		if body.Channel == billing.ChannelPayPal {
 			wantCurrency = "USD"
@@ -506,10 +529,6 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 				pkg.Code, pkg.Currency, body.Channel))
 			return
 		}
-		currency = pkg.Currency
-	} else if credits <= 0 {
-		BadRequest(w, "credits > 0 required")
-		return
 	}
 
 	p := billing.NewPayment(userID, body.Channel, credits, amountCents, currency)
@@ -521,7 +540,13 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ctx := r.Context()
-	subject := fmt.Sprintf("chiron 充值 %d credits", body.Credits)
+	// 主题必须用**订单实际额度**（credits），不能用请求体的 body.Credits：
+	// 买套餐时 body.Credits 通常是 0 或任意值，用户会在收银台看到
+	// "充值 0 credits"这种与实付金额对不上的说明。
+	subject := fmt.Sprintf("chiron 充值 %d credits", credits)
+	if pkg != nil {
+		subject = fmt.Sprintf("chiron 套餐 %s（%d credits）", pkg.Name, credits)
+	}
 	switch body.Channel {
 	case billing.ChannelAlipay:
 		alipay, _, _ := buildPaymentClients(pcfg)
@@ -569,11 +594,77 @@ func (h *BillingHandler) CreatePayment(w http.ResponseWriter, r *http.Request) {
 		p.QRCode = codeURL
 
 	case billing.ChannelPayPal:
-		h.createPayPalPayment(w, r, userID, body.Credits, p)
+		h.createPayPalPayment(w, r, userID, p)
 		return
 	}
 
 	OK(w, h.paymentResponse(p))
+}
+
+// claimFreePackage 领取 0 元套餐（试用包）。
+//
+// 为什么不走支付渠道：支付宝/微信/PayPal 都不受理 0 元交易，塞进正常流程只会
+// 落一笔永远付不掉的订单。这里直接落库 + 确认入账，链路其余部分（入 credits、
+// 发权益快照、发站内信）与付费订单**完全一致** —— 复用 `ConfirmPayment`，
+// 而不是另写一份"免费发放"逻辑：两份实现迟早会在幂等/通知上分叉。
+//
+// 防重复领取：免费包不涉及金额，唯一性只能靠业务判断。这里查
+// `user_entitlements(user_id, package_code)`，同一用户同一免费套餐只能领一次
+// （无论是否已过期）—— 否则"过期就再领一次"会成为无成本的永久续期。
+func (h *BillingHandler) claimFreePackage(
+	w http.ResponseWriter, r *http.Request, claims *auth.Claims, pkg *billing.Package,
+) {
+	userID := claims.UserID
+
+	// 已领取过（含已过期）就拒绝：免费包的价值就在于"只给一次"。
+	var claimed bool
+	if err := db.GlobalDBManager.QueryRow(r.Context(),
+		`SELECT EXISTS(
+		    SELECT 1 FROM user_entitlements
+		     WHERE user_id = $1 AND package_code = $2)`,
+		userID, pkg.Code).Scan(&claimed); err != nil {
+		logAndRespond(w, err, http.StatusInternalServerError, "check free package claim failed")
+		return
+	}
+	if claimed {
+		JSONWithCode(w, http.StatusConflict, CodePackageAlreadyClaimed,
+			map[string]interface{}{"package_code": pkg.Code},
+			"this free package has already been claimed")
+		return
+	}
+
+	p := billing.NewPayment(userID, billing.ChannelFree, pkg.Credits, 0, pkg.Currency)
+	p.PackageCode = pkg.Code
+	if err := h.mgr.CreatePayment(r.Context(), p); err != nil {
+		// 并发下两次点击都可能通过上面的存在性检查，最终由部分唯一索引
+		// `ux_payments_free_package_per_user` 挡住后到的那一次。
+		// 这不是"服务出错"，而是"已经领过了"——必须回 409 而不是 500，
+		// 否则前端会把它当成系统故障让用户重试，而重试永远不会成功。
+		if isUniqueViolation(err) {
+			JSONWithCode(w, http.StatusConflict, CodePackageAlreadyClaimed,
+				map[string]interface{}{"package_code": pkg.Code},
+				"this free package has already been claimed")
+			return
+		}
+		slog.Error("create free package order failed",
+			"user", userID, "package", pkg.Code, "error", err)
+		InternalError(w, "failed to create package order")
+		return
+	}
+
+	confirmed, _, err := h.mgr.ConfirmPayment(r.Context(), p.ID, "free_"+p.ID)
+	if err != nil {
+		slog.Error("confirm free package order failed",
+			"order", p.ID, "user", userID, "package", pkg.Code, "error", err)
+		InternalError(w, "failed to activate package")
+		return
+	}
+	if confirmed == nil {
+		confirmed = p
+	}
+	slog.Info("free package claimed",
+		"order", p.ID, "user", userID, "package", pkg.Code, "credits", pkg.Credits)
+	OK(w, h.paymentResponse(confirmed))
 }
 
 // GetOrder 查询订单状态（前端轮询）。pending 时主动向渠道查询一次兜底，
@@ -751,6 +842,26 @@ func (h *BillingHandler) WechatCallback(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	ctx := r.Context()
+	// 二次校验：验签通过的客户端必须属于**订单所属租户**。
+	// 微信 V3 回调的订单号在解密后才可见，所以先解密、再按订单租户重放一次验签；
+	// 否则 A 租户的证书签出的回调（若能构造出 B 租户的 out_trade_no）会被当作有效。
+	// 订单租户未单独配置时 paymentConfigForTenant 会回退全局，这正是下单时用的配置。
+	orderTenantID := h.tenantIDForPayment(ctx, outTradeNo)
+	_, orderWC, _ := buildPaymentClients(h.paymentConfigForTenant(ctx, orderTenantID))
+	if orderWC == nil {
+		slog.Warn("wechat callback order tenant payment not configured",
+			"order", outTradeNo, "tenant", orderTenantID)
+		BadRequest(w, "payment not configured for order tenant")
+		return
+	}
+	verifyReq := r.Clone(ctx)
+	verifyReq.Body = io.NopCloser(bytes.NewReader(raw))
+	if _, _, _, _, err := orderWC.ParseCallback(verifyReq); err != nil {
+		slog.Warn("wechat callback signature does not match order tenant",
+			"order", outTradeNo, "tenant", orderTenantID)
+		BadRequest(w, "signature does not match order tenant")
+		return
+	}
 	p, err := h.mgr.GetPayment(ctx, outTradeNo)
 	if err != nil || p == nil {
 		slog.Warn("wechat callback unknown order", "out_trade_no", outTradeNo)

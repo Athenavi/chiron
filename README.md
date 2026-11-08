@@ -138,7 +138,9 @@ docker compose up -d --scale gateway=2 --scale python-engine=2
 ```bash
 go build -mod=mod ./...                   # Go 编译（-mod=mod：排除 vendor/ 参考源码目录）
 go test -mod=mod ./...                    # Go 测试
-python -m pytest python-engine/tests -q   # 引擎测试
+python -m pytest python-engine/tests -q   # 引擎测试（默认跳过 integration/live）
+# 集成与真实依赖用例：需要本地 PostgreSQL + Redis（CI 由 job services 提供）
+python -m pytest python-engine/tests -q -m "integration or live"
 python -m pip install -r requirements-migrate.txt   # 迁移依赖（仅迁移需要）
 python -m alembic upgrade head            # 迁移到最新（发布流程/DBA 执行）
 python -m alembic heads                   # 迁移链检查（应只有一个 head）

@@ -26,6 +26,15 @@
           </template>
           {{ $t('common.refresh') }}
         </Button>
+        <Button
+          :loading="exporting"
+          @click="exportCsv"
+        >
+          <template #icon>
+            <DownloadOutlined />
+          </template>
+          {{ $t('admin.invoice_export') }}
+        </Button>
       </div>
     </div>
 
@@ -152,9 +161,12 @@
 import { computed, onMounted, reactive, ref } from 'vue'
 import { useRoute } from 'vue-router'
 import { Button, Modal, Select, Table, Tag, Textarea, message } from 'ant-design-vue'
-import { ReloadOutlined } from '@ant-design/icons-vue'
+import { DownloadOutlined, ReloadOutlined } from '@ant-design/icons-vue'
 import { useI18n } from 'vue-i18n'
 import {
+  exportInvoicesCsv,
+  exportTenantInvoicesCsv,
+  invoiceExportFileName,
   listInvoices,
   listTenantInvoices,
   reviewInvoice,
@@ -163,6 +175,7 @@ import {
   type InvoiceStatus,
 } from '../../api/admin'
 import { describeApiError } from '../../utils/apiError'
+import { blobErrorPayload, downloadBlob } from '../../utils/transactionExport'
 
 const { t } = useI18n()
 const route = useRoute()
@@ -171,6 +184,7 @@ const isTenantArea = computed(() => route?.path?.startsWith('/tenant') ?? false)
 
 const loading = ref(false)
 const submitting = ref(false)
+const exporting = ref(false)
 const rows = ref<AdminInvoice[]>([])
 
 /**
@@ -213,6 +227,40 @@ async function load() {
     message.error(describeApiError(e))
   } finally {
     loading.value = false
+  }
+}
+
+/**
+ * 导出当前筛选条件下的发票申请（CSV）。
+ *
+ * 两个易错点：
+ *  1. **必须带当前的 status 过滤**：用户点了"导出"，期望拿到的是这一屏的全量，
+ *     而不是另一套口径。默认待审时导全量会让财务以为漏了东西。
+ *  2. `responseType: 'blob'` 下 4xx 的响应体也是 Blob，拿不到 `.error` 字段，
+ *     所以要读回文本再解析 —— 否则"记录太多请缩小范围"这句唯一的提示会丢失。
+ */
+async function exportCsv() {
+  if (exporting.value) return
+  exporting.value = true
+  try {
+    const params = { status: filter.value }
+    const blob = isTenantArea.value
+      ? await exportTenantInvoicesCsv(params)
+      : await exportInvoicesCsv(params)
+    downloadBlob(blob, invoiceExportFileName(isTenantArea.value ? 'tenant' : 'admin'))
+    message.success(t('admin.invoice_export_started'))
+  } catch (e) {
+    const data = (e as { response?: { data?: unknown } })?.response?.data
+    if (data instanceof Blob) {
+      const payload = await blobErrorPayload(data)
+      if (payload?.message) {
+        message.error(payload.message)
+        return
+      }
+    }
+    message.error(t('admin.invoice_export_failed'))
+  } finally {
+    exporting.value = false
   }
 }
 

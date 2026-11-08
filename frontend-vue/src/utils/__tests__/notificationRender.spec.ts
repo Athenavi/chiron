@@ -275,3 +275,68 @@ describe('历史通知跟随语言切换（核心验收）', () => {
     for (const body of [zh, en, ar]) expect(body).toContain('Acme')
   })
 })
+
+describe('invoice_reviewed（发票审核结果）', () => {
+  it('中文：正文含金额与「线下开票」说明，不显示键名', () => {
+    setLocale('zh-CN')
+    const item = note({
+      kind: 'invoice_reviewed',
+      payload: { amount_yuan: '12.34', status: 'approved', review_note: '' },
+    })
+    expect(renderNotificationTitle(item, t)).toBe('发票申请已审核')
+    const body = renderNotificationBody(item, t, formatDate)
+    expect(body).toContain('12.34')
+    expect(body).toContain('线下')
+    expect(body).not.toContain('notifications.')
+  })
+
+  it('备注非空时追加到正文，为空时不渲染残缺的「审核备注：」', () => {
+    setLocale('zh-CN')
+    const withNote = note({
+      kind: 'invoice_reviewed',
+      payload: { amount_yuan: '1.00', status: 'rejected', review_note: '抬头与税号不一致' },
+    })
+    expect(renderNotificationBody(withNote, t, formatDate)).toContain('抬头与税号不一致')
+
+    const noNote = note({
+      kind: 'invoice_reviewed',
+      payload: { amount_yuan: '1.00', status: 'rejected', review_note: '' },
+    })
+    const body = renderNotificationBody(noNote, t, formatDate)
+    expect(body).not.toContain('审核备注')
+    expect(body.trim().endsWith('。')).toBe(true)
+  })
+
+  it('英文与阿语都不残留中文，且各自含金额', () => {
+    const item = note({
+      kind: 'invoice_reviewed',
+      payload: { amount_yuan: '9.90', status: 'approved', review_note: '' },
+    })
+
+    setLocale('en-US')
+    const en = renderNotificationBody(item, t, formatDate)
+    expect(en).toContain('9.90')
+    expect(en).not.toMatch(/[\u4e00-\u9fa5]/)
+    expect(renderNotificationTitle(item, t)).toBe('Invoice request reviewed')
+
+    setLocale('ar')
+    const ar = renderNotificationBody(item, t, formatDate)
+    expect(ar).toContain('9.90')
+    expect(ar).not.toMatch(/[\u4e00-\u9fa5]/)
+  })
+
+  it('缺金额或未知状态时回落服务端文案，不拼出错误句子', () => {
+    setLocale('zh-CN')
+    const missingAmount = note({
+      kind: 'invoice_reviewed',
+      payload: { status: 'approved' },
+    })
+    expect(renderNotificationBody(missingAmount, t, formatDate)).toBe('服务端兜底正文')
+
+    const unknownStatus = note({
+      kind: 'invoice_reviewed',
+      payload: { amount_yuan: '1.00', status: 'weird' },
+    })
+    expect(renderNotificationBody(unknownStatus, t, formatDate)).toBe('服务端兜底正文')
+  })
+})

@@ -60,6 +60,11 @@ var titles = map[string]map[string]string{
 		"en-US": "Joined a team",
 		"ar":    "انضممت إلى فريق",
 	},
+	KindInvoiceReviewed: {
+		"zh-CN": "发票申请已审核",
+		"en-US": "Invoice request reviewed",
+		"ar":    "تمت مراجعة طلب الفاتورة",
+	},
 }
 
 // 正文模板。占位符用 %s/%d，按 kind 的固定参数顺序填充。
@@ -149,6 +154,84 @@ func RenderPackagePayment(locale, packageName string, credits int, expiresOn str
 		return title, fallbackBody
 	}
 	return title, fmt.Sprintf(tpl, packageName, credits, expiresOn)
+}
+
+// invoiceReviewedTitles / invoiceReviewedStatus / invoiceReviewedBodies
+//
+// 发票审核通知不能塞进 bodies 表：它的正文由「金额 + 结果 + 备注」三块拼成，
+// 而备注可以为空 —— 空备注时若仍套模板会渲染出「审核备注：」这种残缺句。
+// 因此拆成三张表，由 RenderInvoiceReviewed 决定拼接方式。
+var invoiceReviewedTitles = map[string]string{
+	"zh-CN": "发票申请已审核",
+	"en-US": "Invoice request reviewed",
+	"ar":    "تمت مراجعة طلب الفاتورة",
+}
+
+// invoiceReviewedStatus 是审核结果的三语措辞（含"线下开票"这一必要说明）。
+//
+// 通过时**必须**说清是线下开票：本期口径不接第三方开票平台，用户若以为
+// 会收到电子发票，会一直等一份永远不会到的票据。
+var invoiceReviewedStatus = map[string]map[string]string{
+	invoiceReviewApproved: {
+		"zh-CN": "已通过，我们将线下开具并联系你取票",
+		"en-US": "approved; we will issue it offline and contact you for delivery",
+		"ar":    "تمت الموافقة؛ سنصدرها دون اتصال ونتواصل معك للتسليم",
+	},
+	invoiceReviewRejected: {
+		"zh-CN": "未通过",
+		"en-US": "rejected",
+		"ar":    "تم رفضه",
+	},
+}
+
+var invoiceReviewedBodies = map[string]string{
+	"zh-CN": "你的发票申请（¥%s）%s。",
+	"en-US": "Your invoice request (¥%s) was %s.",
+	"ar":    "طلب الفاتورة الخاص بك (¥%s) %s.",
+}
+
+var invoiceReviewedNotePrefixes = map[string]string{
+	"zh-CN": "审核备注：%s",
+	"en-US": "Review note: %s",
+	"ar":    "ملاحظة المراجعة: %s",
+}
+
+// 审核结果取值（与 invoice_handler.go 的 invoiceStatus* 同值，但 notify 包
+// **不能 import api**，否则会形成循环依赖；两侧靠契约测试对齐）。
+const (
+	invoiceReviewApproved = "approved"
+	invoiceReviewRejected = "rejected"
+)
+
+// RenderInvoiceReviewed 渲染发票审核通知（标题, 正文）。
+//
+// amountYuan 是已换算成"元"的金额字符串（124 分 → "1.24"）：分转元必须由
+// 调用方用整数运算完成，在这里用浮点会引入 0.01 的舍入误差。
+func RenderInvoiceReviewed(locale, amountYuan, status, reviewNote, fallbackTitle, fallbackBody string) (string, string) {
+	loc := SupportedLocale(locale)
+	title, ok := invoiceReviewedTitles[loc]
+	if !ok {
+		title = fallbackTitle
+	}
+	tpl, ok := invoiceReviewedBodies[loc]
+	if !ok {
+		return title, fallbackBody
+	}
+	statusText := ""
+	if m, ok := invoiceReviewedStatus[status]; ok {
+		statusText = m[loc]
+	}
+	if statusText == "" {
+		// 未知结果：用兜底文本，不猜。
+		return title, fallbackBody
+	}
+	body := fmt.Sprintf(tpl, amountYuan, statusText)
+	if note := strings.TrimSpace(reviewNote); note != "" {
+		if prefix, ok := invoiceReviewedNotePrefixes[loc]; ok {
+			body += " " + fmt.Sprintf(prefix, note)
+		}
+	}
+	return title, body
 }
 
 // QuotaActionLabel 把配额动作翻译成用户可读动词。
@@ -242,6 +325,15 @@ func RenderMail(n *Notification, locale string) (string, string) {
 			return RenderTitle(n.Kind, loc, n.Title), n.Body
 		}
 		return RenderTitle(n.Kind, loc, n.Title), RenderBody(n.Kind, loc, n.Body, name)
+
+	case KindInvoiceReviewed:
+		amount, _ := n.Payload["amount_yuan"].(string)
+		status, _ := n.Payload["status"].(string)
+		note, _ := n.Payload["review_note"].(string)
+		if amount == "" || status == "" {
+			return n.Title, n.Body
+		}
+		return RenderInvoiceReviewed(loc, amount, status, note, n.Title, n.Body)
 	}
 
 	// 未知 kind：用兜底文本，不猜。

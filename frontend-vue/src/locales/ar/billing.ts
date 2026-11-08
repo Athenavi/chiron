@@ -98,6 +98,7 @@ export default {
   packages_hint: "الحزم تُشترى لمرة واحدة: تُضاف الأرصدة فورًا، وتبقى صلاحية النماذج سارية حتى انتهائها. لا يوجد تجديد أو خصم تلقائي.",
   packages_empty: "لم ينشر المسؤول أي حزمة بعد — يمكنك مواصلة الشحن حسب الحاجة.",
   packages_buy: "شراء",
+  free_package_claimed: "تم منح الباقة التجريبية — انظر «باقاتي»",
   package_credits: "{n} رصيدًا",
   package_validity_days: "صالحة لمدة {n} يومًا",
   package_models_unlimited: "جميع النماذج",

@@ -628,9 +628,14 @@ async function handlePurchase() {
  * 购买套餐包：credits、金额、币种都由后端按 package_code 从目录取，
  * 前端**不传** credits —— 传了也不会被采信（后端会忽略），但显式不传更能说明
  * "价格与额度以下单时刻的目录为准"这个语义。
+ *
+ * 0 元套餐（试用包）**不需要选支付渠道**：支付网关不受理 0 元交易，后端会直接
+ * 完成发放并返回 `channel: "free"`。所以这里不能沿用"必须选渠道"的前置校验，
+ * 否则试用包在界面上永远点不动。
  */
 async function purchasePackage(pkg: PackageItem) {
-  if (!provider.value) {
+  const isFree = Number(pkg.price_cents) === 0
+  if (!isFree && !provider.value) {
     message.warning(t('billing.please_select_a_payment_method_first'))
     return
   }
@@ -638,10 +643,20 @@ async function purchasePackage(pkg: PackageItem) {
   try {
     const response = await api.post('/v1/billing/pay', {
       package_code: pkg.code,
-      channel: provider.value,
+      // 免费包不传 channel：后端据目录价格判定，传 "" 更明确地表达"没有渠道"。
+      channel: isFree ? '' : provider.value,
     })
     const data = response.data?.data
     if (!data) throw new Error(t('errors.failed_to_create_order'))
+
+    if (isFree || data.channel === 'free') {
+      // 免费包已在服务端完成入账与发权益，没有二维码也没有跳转页。
+      // 必须刷新余额与权益：否则用户看到"购买成功"但页面数字没变。
+      message.success(t('billing.free_package_claimed'))
+      await Promise.all([loadBalanceAndUsage(), loadEntitlements()])
+      return
+    }
+
     await settleOrder(data)
   } catch (error) {
     message.error(describeApiError(error, t('errors.failed_to_create_payment_order')))

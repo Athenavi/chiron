@@ -15,6 +15,12 @@ const (
 	ChannelAlipay = "alipay" // 支付宝当面付（Native 扫码）
 	ChannelWechat = "wechat" // 微信 Native 扫码
 	ChannelPayPal = "paypal" // PayPal（保留）
+	// ChannelFree 表示**无需支付**的 0 元订单（试用包）。
+	//
+	// 它不是一个真实支付渠道：支付网关不接受 0 元交易，所以这类订单不经过
+	// 任何渠道预下单，落库后直接确认入账。留成独立的 channel 值而不是 NULL，
+	// 是为了让"这笔订单没花钱"在流水里一眼可见，也让它能被唯一性判断引用。
+	ChannelFree = "free"
 )
 
 // 订单状态
@@ -100,20 +106,28 @@ func (m *Manager) ConfirmPayment(ctx context.Context, id, tradeNo string) (*Paym
 	}
 
 	reason := p.Channel + "_topup"
-	if _, err := m.AddCredits(p.UserID, reason, p.Credits); err != nil {
-		// 入账失败必须把订单退回 pending。
-		//
-		// MarkPaymentPaid 与 AddCredits 不在同一事务里：若只让订单停在 paid，后续每次
-		// 查询/回调都会走 MarkPaymentPaid 的幂等分支（返回 nil → 直接返回），这笔支付
-		// 将**永远不入账且无法自愈**。线上表现就是"钱付了、订单显示已支付、余额不动"。
-		if rErr := m.store.RevertPaymentToPending(ctx, id); rErr != nil {
-			slog.Error("revert payment to pending failed; order is stuck as paid without credit",
-				"order", id, "user", p.UserID, "credits", p.Credits, "trade_no", tradeNo, "error", rErr)
-		} else {
-			slog.Warn("credit failed; payment reverted to pending for retry",
-				"order", id, "user", p.UserID, "credits", p.Credits, "error", err)
+	// credits <= 0 的订单（0 元且 0 额度的试用包）不需要入账，但**权益仍要发**。
+	// 直接调 AddCredits 会被它拒绝（amount <= 0），进而把订单退回 pending ——
+	// 结果是这个包永远发不出去、用户每次点都"支付失败"。
+	if p.Credits > 0 {
+		if _, err := m.AddCredits(p.UserID, reason, p.Credits); err != nil {
+			// 入账失败必须把订单退回 pending。
+			//
+			// MarkPaymentPaid 与 AddCredits 不在同一事务里：若只让订单停在 paid，后续每次
+			// 查询/回调都会走 MarkPaymentPaid 的幂等分支（返回 nil → 直接返回），这笔支付
+			// 将**永远不入账且无法自愈**。线上表现就是"钱付了、订单显示已支付、余额不动"。
+			if rErr := m.store.RevertPaymentToPending(ctx, id); rErr != nil {
+				slog.Error("revert payment to pending failed; order is stuck as paid without credit",
+					"order", id, "user", p.UserID, "credits", p.Credits, "trade_no", tradeNo, "error", rErr)
+			} else {
+				slog.Warn("credit failed; payment reverted to pending for retry",
+					"order", id, "user", p.UserID, "credits", p.Credits, "error", err)
+			}
+			return p, false, fmt.Errorf("credit after payment: %w", err)
 		}
-		return p, false, fmt.Errorf("credit after payment: %w", err)
+	} else {
+		slog.Info("payment confirmed with zero credits; only entitlement is granted",
+			"order", id, "user", p.UserID, "channel", p.Channel, "package", p.PackageCode)
 	}
 	// credits 已到账，此后**只做不发错事**的补发：套餐订单发放权益快照。
 	//

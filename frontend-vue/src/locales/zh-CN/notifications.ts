@@ -25,6 +25,7 @@ export default {
     entitlement_expiring: '套餐即将到期',
     quota_changed: '配额变更',
     member_invited: '已加入团队',
+    invoice_reviewed: '发票申请已审核',
   },
 
   // ── 正文模板 ──
@@ -41,6 +42,10 @@ export default {
     quota_action_created: '已创建',
     quota_action_updated: '已调整',
     member_invited: '你已通过邀请加入团队「{name}」。你的额度与可用模型由该团队统一管理。',
+    invoice_reviewed: '你的发票申请（¥{amount}）{status}。',
+    invoice_reviewed_note: '审核备注：{note}',
+    invoice_status_approved: '已通过，我们将线下开具并联系你取票',
+    invoice_status_rejected: '未通过',
   },
 
   // ── 标题模板 ──
@@ -49,6 +54,7 @@ export default {
   title_entitlement_expiring: '套餐将在 {n} 天内到期',
   title_quota_changed: '配额已变更',
   title_member_invited: '已加入团队',
+  title_invoice_reviewed: '发票申请已审核',
 
   // ── 邮件偏好 ──
   prefs_title: '邮件通知设置',

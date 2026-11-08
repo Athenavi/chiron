@@ -3,7 +3,7 @@ import { authGuard } from './guard'
 import { setupRouteProgress } from './progress'
 
 import { t } from '../i18n'
-const routes = [
+export const routes = [
   {
     path: '/',
     name: 'Home',
@@ -241,6 +241,13 @@ const routes = [
         meta: { title: t('admin.package_templates_title') },
       },
       {
+        // 配额审批：租户提交的调整申请，通过后立即对限流闸门生效。
+        path: 'quota-review',
+        name: 'AdminQuotaReview',
+        component: () => import('../views/admin/QuotaReviewView.vue'),
+        meta: { title: t('admin.quota_review_title') },
+      },
+      {
         path: 'market',
         name: 'AdminMarket',
         component: () => import('../views/admin/MarketView.vue'),
@@ -330,6 +337,12 @@ const routes = [
         name: 'TenantUsage',
         component: () => import('../views/admin/UsageInsightsView.vue'),
         meta: { title: t('admin.usage_insights') },
+      },
+      {
+        path: 'quota',
+        name: 'TenantQuota',
+        component: () => import('../views/tenant/QuotaView.vue'),
+        meta: { title: t('admin.quota_title') },
       },
       {
         path: 'packages',
