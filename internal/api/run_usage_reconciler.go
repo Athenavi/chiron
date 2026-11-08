@@ -331,7 +331,7 @@ func (r *runUsageReconciler) settleOnce(ctx context.Context, row runUsageRow) st
 
 	// 钱已经扣了：从这里开始**不能**让水位倒退，否则下一轮会再扣一次。
 	if err := r.biller.RecordTokenUsage(ctx, userID, row.SessionID,
-		int(deltaIn), int(deltaOut), key); err != nil {
+		int(deltaIn), int(deltaOut), 0, key); err != nil {
 		slog.Warn("run usage reconcile: billing record failed (credit already deducted)",
 			"run", row.RunID, "user", userID, "error", err)
 	}

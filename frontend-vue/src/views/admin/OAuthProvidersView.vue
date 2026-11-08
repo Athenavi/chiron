@@ -22,6 +22,10 @@ import {
 import { useI18n } from 'vue-i18n'
 import { serverErrorMessage } from '../../utils/apiError'
 const { t } = useI18n()
+// 拆 tab 用：同一组件承载三段配置，但每个 tab 只挂载对应区块、只加载对应数据。
+const props = withDefaults(defineProps<{ section?: 'provider' | 'captcha' | 'sms' }>(), {
+  section: 'provider',
+})
 // ── Provider 列表 ──
 
 const providers = ref<SsoProvider[]>([])
@@ -334,15 +338,20 @@ async function handleSaveSms() {
 }
 
 onMounted(() => {
-  loadProviders()
-  loadCaptcha()
-  loadSms()
+  if (props.section === 'provider') {
+    loadProviders()
+  } else if (props.section === 'captcha') {
+    loadCaptcha()
+  } else {
+    loadSms()
+  }
 })
 </script>
 
 <template>
   <div class="oauth-providers-view">
     <Card
+      v-if="section === 'provider'"
       :title="$t('auth.third_party_login_provider')"
       :loading="loading"
     >
@@ -416,8 +425,8 @@ onMounted(() => {
     </Card>
 
     <Card
+      v-if="section === 'captcha'"
       :title="$t('auth.human_verification_prevents_api_abuse')"
-      style="margin-top: 16px"
       :loading="captchaLoading"
     >
       <Alert
@@ -476,8 +485,8 @@ onMounted(() => {
     </Card>
 
     <Card
+      v-if="section === 'sms'"
       :title="$t('auth.sms_service_captcha_login')"
-      style="margin-top: 16px"
       :loading="smsLoading"
     >
       <Alert
@@ -579,6 +588,7 @@ onMounted(() => {
     </Card>
 
     <Modal
+      v-if="section === 'provider'"
       v-model:open="modalVisible"
       :title="editingId ? $t('common.edit_provider') : $t('common.new_provider')"
       :confirm-loading="saving"

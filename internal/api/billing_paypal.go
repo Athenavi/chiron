@@ -234,3 +234,80 @@ func (h *BillingHandler) payPalCaptureOrder(ctx context.Context, cfg PaymentConf
 	}
 	return r, nil
 }
+
+// payPalRefund 对已捕获的 PayPal 订单发起退款。
+//
+// PayPal 退款 API 需要 capture id，而 payments 表只存了 order id —— 先查订单的
+// purchase_units[].payments.captures[].id，再对 capture 发起退款。
+func (h *BillingHandler) payPalRefund(ctx context.Context, cfg PaymentConfig, orderID string, amountCents int64, currency string) (string, error) {
+	token, err := h.payPalAccessToken(ctx, cfg)
+	if err != nil {
+		return "", err
+	}
+	base := h.payPalBaseURL(cfg)
+
+	getReq, err := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v2/checkout/orders/"+orderID, nil)
+	if err != nil {
+		return "", fmt.Errorf("paypal get order request: %w", err)
+	}
+	getReq.Header.Set("Authorization", "Bearer "+token)
+	getResp, err := h.payPalClient.Do(getReq)
+	if err != nil {
+		return "", fmt.Errorf("paypal get order: %w", err)
+	}
+	defer getResp.Body.Close()
+	getBody, _ := io.ReadAll(io.LimitReader(getResp.Body, 1<<20))
+	if getResp.StatusCode >= 400 {
+		return "", fmt.Errorf("paypal get order: HTTP %d: %s", getResp.StatusCode, string(getBody))
+	}
+	var order struct {
+		PurchaseUnits []struct {
+			Payments struct {
+				Captures []struct {
+					ID string `json:"id"`
+				} `json:"captures"`
+			} `json:"payments"`
+		} `json:"purchase_units"`
+	}
+	if err := json.Unmarshal(getBody, &order); err != nil {
+		return "", fmt.Errorf("paypal get order decode: %w", err)
+	}
+	if len(order.PurchaseUnits) == 0 || len(order.PurchaseUnits[0].Payments.Captures) == 0 {
+		return "", fmt.Errorf("paypal order has no capture")
+	}
+	captureID := order.PurchaseUnits[0].Payments.Captures[0].ID
+
+	payload, _ := json.Marshal(map[string]any{
+		"amount": map[string]string{
+			"value":         fmt.Sprintf("%.2f", float64(amountCents)/100),
+			"currency_code": currency,
+		},
+	})
+	refReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
+		base+"/v2/payments/captures/"+captureID+"/refund", strings.NewReader(string(payload)))
+	if err != nil {
+		return "", fmt.Errorf("paypal refund request: %w", err)
+	}
+	refReq.Header.Set("Content-Type", "application/json")
+	refReq.Header.Set("Authorization", "Bearer "+token)
+	refResp, err := h.payPalClient.Do(refReq)
+	if err != nil {
+		return "", fmt.Errorf("paypal refund: %w", err)
+	}
+	defer refResp.Body.Close()
+	refBody, _ := io.ReadAll(io.LimitReader(refResp.Body, 1<<20))
+	if refResp.StatusCode >= 400 {
+		return "", fmt.Errorf("paypal refund: HTTP %d: %s", refResp.StatusCode, string(refBody))
+	}
+	var refund struct {
+		ID     string `json:"id"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(refBody, &refund); err != nil {
+		return "", fmt.Errorf("paypal refund decode: %w", err)
+	}
+	if refund.ID == "" {
+		return "", fmt.Errorf("paypal refund returned no id")
+	}
+	return refund.ID, nil
+}

@@ -111,12 +111,24 @@ async def test_list_without_pool_returns_empty() -> None:
 # ── 创建：provider 二选一 ──
 
 
-async def test_create_requires_provider_choice() -> None:
-    with patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=None)):
-        with pytest.raises(HTTPException) as exc:
-            await create_knowledge_base(user_id="u1", tenant_id="t1", name="KB")
-    assert exc.value.status_code == 400
-    assert "provider" in exc.value.detail
+async def test_create_defaults_to_selfhosted_when_unset() -> None:
+    """从未选择 provider 时按 selfhosted 处理并落库 —— 建库是知识库页的第一个动作，
+    先要求用户去设置页选 provider 会把「创建」变成两步（实测表现为「无法创建知识库」）。
+    """
+    pool = AsyncMock()
+    pool.execute = AsyncMock()
+    with (
+        patch("app.api.knowledge.settings_store.load", AsyncMock(return_value=None)),
+        patch("app.api.knowledge._ensure_provider_persisted", AsyncMock()) as persist,
+        patch("app.api.knowledge.get_pool", return_value=pool),
+        patch(
+            "app.api.knowledge.get_knowledge_base",
+            AsyncMock(return_value=_kb_row(provider="selfhosted")),
+        ),
+    ):
+        result = await create_knowledge_base(user_id="u1", tenant_id="t1", name="KB")
+    assert result["provider"] == "selfhosted"
+    persist.assert_awaited_once()
 
 
 async def test_create_rejects_unknown_provider() -> None:

@@ -258,7 +258,12 @@ const routes = [
     component: () => import('../views/tenant/Layout.vue'),
     meta: { requiresAuth: true, requiresAdmin: true },
     children: [
-      { path: '', redirect: '/tenant/identity' },
+      {
+        path: '',
+        name: 'TenantOverview',
+        component: () => import('../views/tenant/OverviewView.vue'),
+        meta: { title: t('admin.overview') },
+      },
       {
         path: 'identity',
         name: 'TenantIdentity',
@@ -288,6 +293,30 @@ const routes = [
         name: 'TenantAccess',
         component: () => import('../views/admin/AccessView.vue'),
         meta: { title: t('errors.permissions_and_organization') },
+      },
+      {
+        path: 'users',
+        name: 'TenantUsers',
+        component: () => import('../views/tenant/UsersView.vue'),
+        meta: { title: t('admin.user_management') },
+      },
+      {
+        path: 'audit',
+        name: 'TenantAudit',
+        component: () => import('../views/admin/AuditView.vue'),
+        meta: { title: t('admin.operation_audit') },
+      },
+      {
+        path: 'site',
+        name: 'TenantSite',
+        component: () => import('../views/tenant/SiteSettingsView.vue'),
+        meta: { title: t('admin.site_settings') },
+      },
+      {
+        path: 'refunds',
+        name: 'TenantRefunds',
+        component: () => import('../views/tenant/RefundsView.vue'),
+        meta: { title: t('admin.refunds') },
       },
       {
         path: 'usage',

@@ -97,8 +97,10 @@ class RemoteProvider:
         return {
             "mode": self._mode,
             "kb_id": ctx.kb_id,
-            "tenant_id": ctx.tenant_id,
-            "user_id": ctx.user_id,
+            # 服务侧 ContextBody 的 tenant_id/user_id 是 str —— 这里显式转字符串，
+            # 否则 pydantic v2 会对 int 报 422（检索变成 500「internal error」）。
+            "tenant_id": str(ctx.tenant_id or ""),
+            "user_id": str(ctx.user_id or ""),
             "doc_ids": list(ctx.doc_ids),
             "index_ref": ctx.index_ref or self._folder_id,
             "user_folder_id": self._user_folder_id,

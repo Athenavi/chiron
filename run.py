@@ -67,6 +67,27 @@ SERVICES = {
             "MCP_BROKER_PORT": "8001",
         },
     },
+    "pageindex-search": {
+        "name": "PageIndex 检索",
+        "port": 8100,
+        # 与 worker 同依赖：pageindex → litellm → openai<3，无法与引擎的 openai 3.x 共存。
+        "cmd": [
+            sys.executable, "-u", "-m", "uvicorn", "app.search_api:app",
+            "--host", "127.0.0.1", "--port", "8100",
+        ],
+        "cwd": str(BASE_DIR / "pageindex-service"),
+        "env": {
+            "PAGEINDEX_PORT": "8100",
+        },
+    },
+    "pageindex-worker": {
+        "name": "PageIndex 索引 Worker",
+        # 不监听端口：消费 Redis 的 engine:tasks:kb。port=0 让启动/状态逻辑走"仅进程检查"。
+        "port": 0,
+        "cmd": [sys.executable, "-u", "-m", "app.index_worker"],
+        "cwd": str(BASE_DIR / "pageindex-service"),
+        "env": {},
+    },
 }
 
 DEFAULT_ENV = {}
@@ -395,7 +416,7 @@ class ServiceManager:
             return True
 
         # 检查端口占用
-        if is_port_open(port):
+        if port and is_port_open(port):
             print(f"  {name}: {yellow(f'端口 {port} 已被占用')}")
             return False
 
@@ -437,6 +458,17 @@ class ServiceManager:
             )
 
         write_pid(key, proc.pid)
+
+        # 无监听端口的服务（pageindex-worker）只做进程存活检查。
+        if not port:
+            time.sleep(2)
+            if proc.poll() is None:
+                print(f"  {name}: {green('已启动')} (PID {proc.pid}, 无监听端口)")
+                return True
+            print(f"  {name}: {red('启动失败（进程已退出）')} (退出码 {proc.returncode})")
+            self._print_log_tail(key)
+            remove_pid(key)
+            return False
 
         # 等待端口就绪；子进程已退出（如依赖缺失/配置错误导致崩溃）时立即报错，避免空等
         for _ in range(20):
@@ -565,14 +597,14 @@ class ServiceManager:
             pid = read_pid(key)
 
             if pid and is_process_running(pid):
-                port_ok = is_port_open(port)
+                port_ok = is_port_open(port) if port else True
                 status_text = green("运行中")
                 pid_text = str(pid)
-                port_text = green("监听中") if port_ok else yellow("未就绪")
+                port_text = (green("监听中") if port_ok else yellow("未就绪")) if port else gray("无端口")
             else:
                 status_text = red("已停止")
                 pid_text = "-"
-                port_text = gray("未监听") if not is_port_open(port) else yellow("被占用")
+                port_text = gray("未监听") if not port or not is_port_open(port) else yellow("被占用")
 
             print(f"{name:<20} {status_text:<12} {pid_text:<10} {port:<8} {port_text}")
 

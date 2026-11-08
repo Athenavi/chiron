@@ -40,7 +40,7 @@ import ThemeSwitcher from './ThemeSwitcher.vue'
 import LanguageSwitcher from './common/LanguageSwitcher.vue'
 import SettingsPanel from './settings/SettingsPanel.vue'
 import { getUnreadCount } from '../api/notifications'
-import { getIdentityNotice } from '../api/admin'
+import { getIdentityNotice, getTenantSiteConfig } from '../api/admin'
 import { buildAccountMenuItems, accountMenuRoute, type AccountMenuItem } from './accountMenu'
 import {
   WORKSTATION_DESCRIPTIONS,
@@ -101,6 +101,36 @@ async function maybeNotifyIdentity() {
   })
 }
 
+// 租户品牌：标题/图标/描述，登录后应用到当前页面；未配置保持平台默认。
+async function applyTenantSite() {
+  try {
+    const res = await getTenantSiteConfig()
+    if (!res || res.using_default) return
+    const { title, icon_url, description } = res.config
+    if (title) document.title = title
+    if (description) {
+      let meta = document.querySelector('meta[name="description"]')
+      if (!meta) {
+        meta = document.createElement('meta')
+        meta.setAttribute('name', 'description')
+        document.head.appendChild(meta)
+      }
+      meta.setAttribute('content', description)
+    }
+    if (icon_url) {
+      let link = document.querySelector<HTMLLinkElement>('link[rel="icon"]')
+      if (!link) {
+        link = document.createElement('link')
+        link.setAttribute('rel', 'icon')
+        document.head.appendChild(link)
+      }
+      link.href = icon_url
+    }
+  } catch {
+    // 品牌是增强信息，失败不影响页面
+  }
+}
+
 onMounted(() => {
   window.addEventListener('api:error', handleApiError)
   if (authStore.token) {
@@ -108,6 +138,7 @@ onMounted(() => {
   }
   refreshUnread()
   void maybeNotifyIdentity()
+  void applyTenantSite()
   unreadTimer = setInterval(refreshUnread, 5 * 60 * 1000)
   // 从通知页返回时立刻刷新一次，避免角标滞后一整个轮询周期。
   window.addEventListener('notification:read', refreshUnread)

@@ -103,7 +103,7 @@ type Store interface {
 	MarkFreeUsage(ctx context.Context, userID, turnID string) error
 	AtomicDeductBalance(ctx context.Context, userID string, amount int, reason, turnID string) (int, error)
 	AtomicAddBalance(ctx context.Context, userID string, amount int, reason string) (int, error)
-	RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, costCents int, turnID string) error
+	RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, cachedTokens, costCents int, turnID string) error
 	PaymentStore
 	// EntitlementStore 承载套餐目录与用户权益（P2-2 一次性套餐）。
 	// 单独成表而不是塞进 credit_transactions：权益发放可幂等重放，余额变更不能。
@@ -428,11 +428,11 @@ func (m *Manager) DeductTokens(userID string, inputTokens, outputTokens int, tur
 // RecordTokenUsage 记录企业成本中心 token 明细（billing_records）。
 // 仅在 DeductTokens 实际扣费成功后调用；余额/流水已由 Deduct 同事务保障，
 // 此处失败仅影响成本中心明细（记录层错误由调用方告警，不影响计费主链路）。
-func (m *Manager) RecordTokenUsage(ctx context.Context, userID, sessionID string, inputTokens, outputTokens int, turnID string) error {
+func (m *Manager) RecordTokenUsage(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, cachedTokens int, turnID string) error {
 	cfg := m.Config()
 	cost := int((int64(inputTokens)*int64(cfg.LLMCostPerToken) + int64(outputTokens)*int64(cfg.LLMCostPerOutput)) / 1000)
 	if cost < 1 {
 		cost = 1
 	}
-	return m.store.RecordBillingRecord(ctx, userID, sessionID, inputTokens, outputTokens, cost, turnID)
+	return m.store.RecordBillingRecord(ctx, userID, sessionID, inputTokens, outputTokens, cachedTokens, cost, turnID)
 }

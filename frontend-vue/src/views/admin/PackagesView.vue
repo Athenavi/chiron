@@ -125,6 +125,9 @@
             allow-clear
             @change="applyTemplate"
           />
+          <p class="field-hint">
+            {{ $t('admin.package_template_hint') }}
+          </p>
         </div>
 
         <div class="field">
@@ -531,6 +534,7 @@ onMounted(() => {
 .row { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
 .field { display: flex; flex-direction: column; gap: 6px; }
 .field label { font-weight: var(--fw-medium); color: var(--text-primary); }
+.field-hint { margin: 0; font-size: 12px; color: var(--text-tertiary); }
 .hint { font-size: 12px; color: var(--text-tertiary); }
 .summary {
   margin: 12px 0;

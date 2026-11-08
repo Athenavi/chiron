@@ -393,6 +393,9 @@ export interface UsageBucket {
   label?: string
   input_tokens: number
   output_tokens: number
+  /** 用户余额扣减（credits）；免费额度内为 0 */
+  credits_charged: number
+  /** 企业成本（分）；引擎未提供时为 0 */
   cost_cents: number
   records: number
 }
@@ -421,7 +424,7 @@ export async function getUsageCatalog(params: {
   })
   return data?.data ?? {
     group_by: params.groupBy, from: '', to: '',
-    buckets: [], total: { bucket: '', input_tokens: 0, output_tokens: 0, cost_cents: 0, records: 0 },
+    buckets: [], total: { bucket: '', input_tokens: 0, output_tokens: 0, credits_charged: 0, cost_cents: 0, records: 0 },
     bucket_cnt: 0, note: '',
   }
 }
@@ -580,6 +583,128 @@ export async function restoreAdminPackage(id: string): Promise<void> {
 export async function listPackageTemplates(): Promise<AdminPackage[]> {
   const { data } = await api.get('/v1/tenant/package-templates')
   return data?.data ?? []
+}
+
+// ── 租户站点品牌（标题 / 图标 / 描述）──
+
+export interface TenantSiteConfig {
+  title: string
+  icon_url: string
+  description: string
+}
+
+export async function getTenantSiteConfig(): Promise<{ config: TenantSiteConfig; using_default: boolean }> {
+  const { data } = await api.get('/v1/tenant/site-config')
+  return data?.data ?? {
+    config: { title: '', icon_url: '', description: '' },
+    using_default: true,
+  }
+}
+
+export async function saveTenantSiteConfig(config: TenantSiteConfig): Promise<void> {
+  await api.put('/v1/tenant/site-config', config)
+}
+
+// ── 租户退款 ──
+
+export interface PaymentRefund {
+  id: string
+  payment_id: string
+  tenant_id: number
+  user_id: string
+  channel: string
+  amount_cents: number
+  currency: string
+  reason: string
+  status: string
+  operator_id?: string
+  channel_refund_id?: string
+  error_message?: string
+  created_at: string
+  updated_at: string
+}
+
+export async function listTenantRefunds(page = 1, pageSize = 20) {
+  const { data } = await api.get('/v1/tenant/refunds', {
+    params: { page, page_size: pageSize },
+  })
+  return (data?.data ?? { refunds: [], total: 0, page }) as {
+    refunds: PaymentRefund[]
+    total: number
+    page: number
+  }
+}
+
+export async function listPaymentRefunds(paymentId: string): Promise<PaymentRefund[]> {
+  const { data } = await api.get(`/v1/tenant/payments/${encodeURIComponent(paymentId)}/refunds`)
+  return (data?.data?.refunds ?? []) as PaymentRefund[]
+}
+
+export async function createRefund(
+  paymentId: string,
+  amountCents: number,
+  reason: string,
+): Promise<PaymentRefund> {
+  const { data } = await api.post(
+    `/v1/tenant/payments/${encodeURIComponent(paymentId)}/refunds`,
+    { amount_cents: amountCents, reason },
+  )
+  return data?.data as PaymentRefund
+}
+
+// ── 租户邀请 ──
+
+export interface TenantInvite {
+  code: string
+  tenant_id: string
+  max_uses: number
+  uses: number
+  expires_at: string | null
+  created_at: string
+}
+
+export async function listTenantInvites(): Promise<TenantInvite[]> {
+  const { data } = await api.get('/v1/admin/tenant/members/invites')
+  return (data?.data?.invites ?? []) as TenantInvite[]
+}
+
+export async function createTenantInvite(maxUses = 1, expiresInDays = 7): Promise<TenantInvite> {
+  const { data } = await api.post('/v1/admin/tenant/members/invites', {
+    max_uses: maxUses,
+    expires_in_days: expiresInDays,
+  })
+  return data?.data as TenantInvite
+}
+
+export async function revokeTenantInvite(code: string): Promise<void> {
+  await api.delete(`/v1/admin/tenant/members/invites/${encodeURIComponent(code)}`)
+}
+
+// ── 租户概览 ──
+
+export interface TenantOverview {
+  members: number
+  month_tokens: number
+  month_cost_cents: number
+  domains: number
+  verified_domains: number
+  pending_invoices: number
+  active_entitlements: number
+}
+
+export async function getTenantOverview(): Promise<TenantOverview> {
+  const { data } = await api.get('/v1/tenant/overview')
+  return data?.data as TenantOverview
+}
+
+// ── 站点图标上传 ──
+
+export async function uploadSiteIcon(file: File): Promise<string> {
+  const form = new FormData()
+  form.append('file', file)
+  // 不手动设置 Content-Type：让 axios 生成带 boundary 的 multipart 头。
+  const { data } = await api.post('/v1/tenant/site-icon', form)
+  return String(data?.data?.url || '')
 }
 
 // ── 平台套餐模板管理（/v1/admin/package-templates，仅 owner）──

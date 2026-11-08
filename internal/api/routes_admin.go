@@ -144,8 +144,17 @@ func registerAdminRoutes(
 	// 只会得到 404（StripPrefix 不匹配时返回 404）。
 	mux.Handle("GET /v1/tenant/payments", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantPaymentConfig)))))
 	mux.Handle("PUT /v1/tenant/payments", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SaveTenantPaymentConfig)))))
+	// 租户退款：订单按 user→tenant 归属；写入要求管理员。
+	mux.Handle("GET /v1/tenant/refunds", authMW(rlMW(adminReadMW(http.HandlerFunc(billingHandler.ListTenantRefunds)))))
+	mux.Handle("GET /v1/tenant/payments/{id}/refunds", authMW(rlMW(adminReadMW(http.HandlerFunc(billingHandler.ListPaymentRefunds)))))
+	mux.Handle("POST /v1/tenant/payments/{id}/refunds", authMW(rlMW(adminWriteMW(http.HandlerFunc(billingHandler.CreateRefund)))))
+	mux.Handle("GET /v1/tenant/overview", authMW(rlMW(adminReadMW(http.HandlerFunc(adminHandler.GetTenantOverview)))))
 	// 租户身份能力通知：租户普通用户进入前端时一次性提示（不限管理员）。
 	mux.Handle("GET /v1/tenant/identity-notice", authMW(rlMW(http.HandlerFunc(adminHandler.GetTenantIdentityNotice))))
+	// 租户站点品牌：读取不限管理员（品牌要对每个登录用户生效），写入要求管理员。
+	mux.Handle("GET /v1/tenant/site-config", authMW(rlMW(http.HandlerFunc(adminHandler.GetTenantSiteConfig))))
+	mux.Handle("PUT /v1/tenant/site-config", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.SaveTenantSiteConfig)))))
+	mux.Handle("POST /v1/tenant/site-icon", authMW(rlMW(adminWriteMW(http.HandlerFunc(adminHandler.UploadTenantSiteIcon)))))
 
 	// 发票审核（P1-2 / roadmap §11.4）：handler 早已注册在 adminMux（invoice_handler.go
 	// 的 RegisterAdminRoutes），但外层 mux 从未暴露这两个 pattern ⇒ 前端 InvoiceReviewView

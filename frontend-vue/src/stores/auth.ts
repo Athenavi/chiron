@@ -101,6 +101,7 @@ export const useAuthStore = defineStore('auth', () => {
     name: string,
     captcha?: { token: string; randstr?: string },
     emailCode?: string,
+    inviteCode?: string,
   ) {
     loading.value = true
     try {
@@ -110,6 +111,8 @@ export const useAuthStore = defineStore('auth', () => {
         name,
         // 后台开启「注册邮箱验证」时必填，未开启时后端忽略
         email_code: emailCode || '',
+        // 邀请码加入指定租户（后端在校验失败时拒绝注册）
+        invite_code: inviteCode || '',
         captcha_token: captcha?.token || '',
         captcha_randstr: captcha?.randstr || '',
       })

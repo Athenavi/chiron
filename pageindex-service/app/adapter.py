@@ -160,6 +160,11 @@ class Adapter:
         from pageindex import PageIndexLocalClient
 
         storage = self.storage_path(ctx)
+        # 引擎不传 llm（自托管的 LLM 连接属于索引/检索组件自己的部署配置），
+        # 因此这里必须回退到服务侧的 KNOWLEDGE_SELFHOSTED_LLM_* —— 否则 SDK 会去读
+        # 进程环境里的 OPENAI_API_KEY（本地通常没有），检索报
+        # “Authentication Fails (governor)”，而索引（worker 侧传了 llm）却是成功的。
+        backend = ctx.llm or self._cfg.llm_backend() or None
         # search 服务以 **只读** 挂载索引卷（worker 才是写方）：在 :ro 上 mkdir 会抛 EROFS。
         # 目录由 worker 建；这里只在不存在时尝试创建，失败时给出可定位的错误，
         # 而不是把异常埋进 SDK 内部。
@@ -173,9 +178,9 @@ class Adapter:
                 ) from exc
         return PageIndexLocalClient(
             index_model=self._cfg.selfhosted_index_model,
-            index_backend=ctx.llm or None,
+            index_backend=backend,
             chat_model=self._cfg.selfhosted_chat_model,
-            chat_backend=ctx.llm or None,
+            chat_backend=backend,
             storage_path=storage,
             # 显式传（0.4.4 起默认 "full" = 加一轮 LLM expand）：不显式传就会跟着默认值漂移，
             # 而默认值本身在版本间会变，索引成本与耗时也跟着变。

@@ -32,6 +32,7 @@ import {
 } from 'ant-design-vue'
 import {
   BarChartOutlined,
+  DashboardOutlined,
   GlobalOutlined,
   HomeOutlined,
   MailOutlined,
@@ -40,7 +41,10 @@ import {
   PayCircleOutlined,
   ReconciliationOutlined,
   SafetyOutlined,
+  FileSearchOutlined,
+  SettingOutlined,
   ShoppingOutlined,
+  WalletOutlined,
   TeamOutlined,
   UserOutlined,
   LogoutOutlined,
@@ -59,11 +63,15 @@ const menuGroups = computed(() => [
   {
     key: 'g-tenant-config', label: t('admin.tenant_config'),
     children: [
+      { key: '/tenant', label: t('admin.overview'), icon: () => h(DashboardOutlined) },
       { key: '/tenant/identity', label: t('common.authentication_and_protection'), icon: () => h(SafetyOutlined) },
       { key: '/tenant/payment', label: t('billing.payment_config'), icon: () => h(PayCircleOutlined) },
       { key: '/tenant/invoices', label: t('admin.invoice_review'), icon: () => h(ReconciliationOutlined) },
       { key: '/tenant/domains', label: t('admin.tenants_and_domains'), icon: () => h(GlobalOutlined) },
       { key: '/tenant/access', label: t('errors.permissions_and_organization'), icon: () => h(TeamOutlined) },
+      { key: '/tenant/users', label: t('admin.user_management'), icon: () => h(UserOutlined) },
+      { key: '/tenant/audit', label: t('admin.operation_audit'), icon: () => h(FileSearchOutlined) },
+      { key: '/tenant/site', label: t('admin.site_settings'), icon: () => h(SettingOutlined) },
     ],
   },
   {
@@ -71,6 +79,7 @@ const menuGroups = computed(() => [
     children: [
       { key: '/tenant/usage', label: t('admin.usage_insights'), icon: () => h(BarChartOutlined) },
       { key: '/tenant/packages', label: t('admin.packages_admin_title'), icon: () => h(ShoppingOutlined) },
+      { key: '/tenant/refunds', label: t('admin.refunds'), icon: () => h(WalletOutlined) },
       { key: '/tenant/mail', label: t('mail.email_config'), icon: () => h(MailOutlined) },
     ],
   },

@@ -873,7 +873,7 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 				} else {
 					chargedCredits = &charged
 					// 企业成本中心 token 明细（billing_records）；失败仅告警，不影响已扣费与流水
-					if recErr := h.biller.RecordTokenUsage(storeCtx, userID, sessionID, usage.input, usage.output, turnID); recErr != nil {
+					if recErr := h.biller.RecordTokenUsage(storeCtx, userID, sessionID, usage.input, usage.output, usage.cached, turnID); recErr != nil {
 						slog.Warn("billing: enterprise token usage record failed",
 							"user", userID, "session", sessionID, "error", recErr)
 					}
@@ -898,7 +898,9 @@ func (h *SubmitHandler) submitOnce(ctx context.Context, userID, sessionID, conte
 			InputTokens:  usage.input,
 			OutputTokens: usage.output,
 			CachedTokens: usage.cached,
-			CostCents:    chargedCredits,
+			// cost_cents 只放引擎侧真实成本（当前事件里没有，留空）；
+			// 用户余额扣减单独记 credits_charged，两者不可混用。
+			CreditsCharged: chargedCredits,
 		})
 	}
 

@@ -200,3 +200,69 @@ func TestLiveAdminPackageCRUD(t *testing.T) {
 		t.Errorf("不存在的 id 更新: found=%v err=%v（期望 false, nil）", found, err)
 	}
 }
+
+// TestLiveTemplateChangesDoNotAffectTenantPackage 钉住「模板只做副本、不继承」：
+// 模板（tenant_id=0）与租户套餐（tenant_id=N）是两行独立记录；改模板只更新 0 行，
+// 已从模板复制出的租户套餐必须保持原值。
+func TestLiveTemplateChangesDoNotAffectTenantPackage(t *testing.T) {
+	dsn := os.Getenv("CHIRON_TEST_POSTGRES_DSN")
+	if dsn == "" {
+		t.Skip("CHIRON_TEST_POSTGRES_DSN 未设置")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	pool := setupLivePool(t, ctx, dsn)
+	store := NewPGStore()
+	const tenantID = 1
+	suffix := id.NextID()
+	code := "test_tpl_copy_" + suffix
+	t.Cleanup(func() {
+		_, _ = pool.Exec(context.Background(),
+			`DELETE FROM billing_packages WHERE code = $1`, code)
+	})
+
+	tpl := &Package{
+		TenantID: 0, Code: code, Name: "模板版", Credits: 1000,
+		PriceCents: 1000, Currency: "CNY", DurationDays: 30, Enabled: true,
+	}
+	if err := store.CreatePackage(ctx, tpl); err != nil {
+		t.Fatalf("创建模板: %v", err)
+	}
+	tenantPkg := &Package{
+		TenantID: tenantID, Code: code, Name: "租户版", Credits: 1000,
+		PriceCents: 1000, Currency: "CNY", DurationDays: 30, Enabled: true,
+	}
+	if err := store.CreatePackage(ctx, tenantPkg); err != nil {
+		t.Fatalf("创建租户套餐: %v", err)
+	}
+
+	// 改模板（价格/名称/额度），只应影响 tenant_id=0 那一行。
+	tpl.Name = "模板改价"
+	tpl.PriceCents = 9999
+	tpl.Credits = 99999
+	found, err := store.UpdatePackage(ctx, 0, tpl)
+	if err != nil || !found {
+		t.Fatalf("更新模板: found=%v err=%v", found, err)
+	}
+
+	got, err := store.PackageByCode(ctx, tenantID, code)
+	if err != nil {
+		t.Fatalf("读取租户套餐: %v", err)
+	}
+	if got == nil {
+		t.Fatal("租户套餐不应消失")
+	}
+	if got.Name != "租户版" || got.PriceCents != 1000 || got.Credits != 1000 {
+		t.Fatalf("模板修改影响了租户套餐（应不继承）: %+v", got)
+	}
+
+	// 反向确认：模板本身确实已更新（否则测试可能因更新没生效而假通过）。
+	tplGot, err := store.PackageByCode(ctx, 0, code)
+	if err != nil || tplGot == nil {
+		t.Fatalf("读取模板: %v", err)
+	}
+	if tplGot.PriceCents != 9999 {
+		t.Fatalf("模板未更新: %+v", tplGot)
+	}
+}

@@ -166,7 +166,7 @@ func (s *PGStore) MarkFreeUsage(ctx context.Context, userID, turnID string) erro
 // RecordBillingRecord 写入一条企业成本中心记录（billing_records）。
 // tenant_id 取自 users；group_id 取用户主群组（ent_group_members 首条，无则 NULL）。
 // 单语句原子完成；用户不存在返回错误。调用方为扣费成功后的网关（submit 链路）。
-func (s *PGStore) RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, costCents int, turnID string) error {
+func (s *PGStore) RecordBillingRecord(ctx context.Context, userID, sessionID string, inputTokens, outputTokens, cachedTokens, costCents int, turnID string) error {
 	var sid *string
 	if sessionID != "" {
 		sid = &sessionID
@@ -176,14 +176,14 @@ func (s *PGStore) RecordBillingRecord(ctx context.Context, userID, sessionID str
 		tid = &turnID
 	}
 	tag, err := db.GlobalDBManager.Exec(ctx,
-		`INSERT INTO billing_records (tenant_id, user_id, session_id, input_tokens, output_tokens, cost_cents, group_id, turn_id)
-		 SELECT u.tenant_id, u.id, $2, $3, $4, $5,
+		`INSERT INTO billing_records (tenant_id, user_id, session_id, input_tokens, output_tokens, cached_tokens, cost_cents, group_id, turn_id)
+		 SELECT u.tenant_id, u.id, $2, $3, $4, $5, $6,
 		        (SELECT g.group_id FROM ent_group_members g
 		          WHERE g.user_id = u.id ORDER BY g.group_id LIMIT 1),
-		        $6
+		        $7
 		 FROM users u WHERE u.id = $1
 		 ON CONFLICT (turn_id) DO NOTHING`,
-		userID, sid, inputTokens, outputTokens, costCents, tid)
+		userID, sid, inputTokens, outputTokens, cachedTokens, costCents, tid)
 	if err != nil {
 		return fmt.Errorf("insert billing record: %w", err)
 	}

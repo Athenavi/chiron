@@ -1,15 +1,19 @@
 <script setup lang="ts">
 import AdminTabbedView from '@/components/admin/AdminTabbedView.vue'
-import OAuthProvidersView from './OAuthProvidersView.vue'
+import SsoProvidersSection from '../tenant/identity/SsoProvidersSection.vue'
+import CaptchaSection from '../tenant/identity/CaptchaSection.vue'
+import SmsSection from '../tenant/identity/SmsSection.vue'
 import PrivacyView from './PrivacyView.vue'
 
 import { useRoute } from 'vue-router'
 import { useI18n } from 'vue-i18n'
 const { t } = useI18n()
 const route = useRoute()
-// 认证与防护：三方登录与人机验证 + 隐私模式管控（同属"准入与合规"配置域）
+// 认证与防护拆成四个独立面板：三方登录、人机验证、短信、隐私策略。
 const tabs = [
-  { key: 'oauth', label: t('auth.third_party_login_and_human_verification'), comp: OAuthProvidersView },
+  { key: 'sso', label: t('auth.third_party_login'), comp: SsoProvidersSection },
+  { key: 'captcha', label: t('auth.human_verification'), comp: CaptchaSection },
+  { key: 'sms', label: t('auth.sms_service_captcha_login'), comp: SmsSection },
   { key: 'privacy', label: t('admin.privacy_mode_control'), comp: PrivacyView },
 ]
 </script>
@@ -17,7 +21,7 @@ const tabs = [
 <template>
   <AdminTabbedView
     :route-path="route.path"
-    default-tab="oauth"
+    default-tab="sso"
     :tabs="tabs"
   />
 </template>

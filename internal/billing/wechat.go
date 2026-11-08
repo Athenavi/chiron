@@ -13,6 +13,7 @@ import (
 	"github.com/wechatpay-apiv3/wechatpay-go/core/option"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments"
 	"github.com/wechatpay-apiv3/wechatpay-go/services/payments/native"
+	"github.com/wechatpay-apiv3/wechatpay-go/services/refunddomestic"
 	"github.com/wechatpay-apiv3/wechatpay-go/utils"
 )
 
@@ -83,6 +84,34 @@ func (c *WechatClient) Precreate(ctx context.Context, outTradeNo string, amountC
 		return "", fmt.Errorf("wechat precreate returned empty code_url")
 	}
 	return *resp.CodeUrl, nil
+}
+
+// Refund 发起微信支付退款。返回渠道退款单号。
+//
+// 微信退款是**受理制**：Create 返回 refund_id 只代表申请已受理，最终结果通过
+// 退款查询/回调确认；这里先按成功记录，后续可加对账任务。
+func (c *WechatClient) Refund(ctx context.Context, outTradeNo, outRefundNo string, refundCents, totalCents int64, reason string) (string, error) {
+	svc := refunddomestic.RefundsApiService{Client: c.client}
+	resp, result, err := svc.Create(ctx, refunddomestic.CreateRequest{
+		OutTradeNo:  core.String(outTradeNo),
+		OutRefundNo: core.String(outRefundNo),
+		Reason:      core.String(reason),
+		Amount: &refunddomestic.AmountReq{
+			Refund:   core.Int64(refundCents),
+			Total:    core.Int64(totalCents),
+			Currency: core.String("CNY"),
+		},
+	})
+	if err != nil {
+		return "", fmt.Errorf("wechat refund: %w", err)
+	}
+	if result != nil && result.Response.StatusCode >= 400 {
+		return "", fmt.Errorf("wechat refund http %d", result.Response.StatusCode)
+	}
+	if resp == nil || resp.RefundId == nil || *resp.RefundId == "" {
+		return "", fmt.Errorf("wechat refund returned no refund_id")
+	}
+	return *resp.RefundId, nil
 }
 
 // ParseCallback 解析并验签微信支付回调。

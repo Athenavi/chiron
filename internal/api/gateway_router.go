@@ -434,6 +434,9 @@ func NewGatewayRouter(
 	// 后台「支付配置」需要读取生效快照并触发热重载
 	adminHandler.billingHandler = billingHandler
 
+	// 站点图标：favicon 请求不带 Authorization，必须公开可读（租户 ID 不是秘密）。
+	mux.Handle("GET /v1/public/site-icon/{tenant_id}", rlMW(http.HandlerFunc(adminHandler.GetPublicTenantSiteIcon)))
+
 	// ── Route registration by functional domain ──
 
 	registerPublicEndpoints(mux, authMW, rlMW, publicMW, searchHandler, shareHandler, systemHandler, mediaHandler, cfg, fileStore)

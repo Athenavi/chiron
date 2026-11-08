@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { ref, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
+import { useRoute, useRouter } from 'vue-router'
 import { Card, Form, FormItem, Input, Button, Alert, Space } from 'ant-design-vue'
 import { MailOutlined, LockOutlined, UserOutlined, SafetyOutlined } from '@ant-design/icons-vue'
 import { useAuthStore } from '../stores/auth'
@@ -15,7 +15,10 @@ import { serverErrorMessage, errorStatus } from '../utils/apiError'
 const { t } = useI18n()
 
 const router = useRouter()
+const route = useRoute()
 const authStore = useAuthStore()
+// 邀请链接形如 /register?invite=CODE：注册时随请求提交，后端校验后自动加入租户。
+const inviteCode = ref(typeof route.query.invite === 'string' ? route.query.invite : '')
 
 const formRef = ref()
 const form = ref({
@@ -168,6 +171,7 @@ async function handleRegister() {
       form.value.name,
       { token: captchaToken.value, randstr: captchaRandstr.value },
       form.value.emailCode.trim(),
+      inviteCode.value.trim(),
     )
     router.push('/chat')
   } catch (e) {
@@ -217,6 +221,14 @@ async function handleRegister() {
           v-if="error"
           type="error"
           :message="error"
+          show-icon
+          style="margin-bottom: 16px"
+        />
+
+        <Alert
+          v-if="inviteCode"
+          type="info"
+          :message="$t('admin.invite_register_hint', { code: inviteCode })"
           show-icon
           style="margin-bottom: 16px"
         />

@@ -290,6 +290,86 @@ func (c *AlipayClient) Precreate(ctx context.Context, outTradeNo string, amountC
 	return r.Response.QRCode, nil
 }
 
+// TradeRefund 发起支付宝退款。返回商户退款请求号（out_request_no）作为渠道退款标识。
+//
+// 支付宝退款是同步的：code=10000 且 fund_change=Y 才表示资金已退回；fund_change=N
+// 通常表示重复请求或无需退款，这里按失败处理，避免把"没退钱"记成成功。
+func (c *AlipayClient) TradeRefund(ctx context.Context, outTradeNo, outRequestNo string, refundAmountCents int64, reason string) (string, error) {
+	biz := map[string]any{
+		"out_trade_no":   outTradeNo,
+		"out_request_no": outRequestNo,
+		"refund_amount":  fmt.Sprintf("%.2f", float64(refundAmountCents)/100),
+	}
+	if reason != "" {
+		biz["refund_reason"] = reason
+	}
+	bizJSON, err := json.Marshal(biz)
+	if err != nil {
+		return "", err
+	}
+	bizJSON = []byte(escapeNonASCII(string(bizJSON)))
+
+	params := map[string]string{
+		"app_id":      c.appID,
+		"method":      "alipay.trade.refund",
+		"format":      "JSON",
+		"charset":     alipayCharset,
+		"sign_type":   "RSA2",
+		"timestamp":   time.Now().Format("2006-01-02 15:04:05"),
+		"version":     "1.0",
+		"biz_content": string(bizJSON),
+	}
+	sign, err := c.sign(params)
+	if err != nil {
+		return "", fmt.Errorf("sign refund: %w", err)
+	}
+	params["sign"] = sign
+
+	form := url.Values{}
+	for k, v := range params {
+		form.Set(k, v)
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.gateway, strings.NewReader(form.Encode()))
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+
+	resp, err := c.httpClient.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("alipay refund request: %w", err)
+	}
+	defer resp.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
+	if err != nil {
+		return "", err
+	}
+	if resp.StatusCode >= 400 {
+		return "", fmt.Errorf("alipay refund: HTTP %d: %s", resp.StatusCode, responseSnippet(body))
+	}
+	var r struct {
+		Response struct {
+			Code       string `json:"code"`
+			Msg        string `json:"msg"`
+			SubMsg     string `json:"sub_msg"`
+			TradeNo    string `json:"trade_no"`
+			OutTradeNo string `json:"out_trade_no"`
+			FundChange string `json:"fund_change"`
+		} `json:"alipay_trade_refund_response"`
+	}
+	if err := json.Unmarshal([]byte(decodeBody(body)), &r); err != nil {
+		return "", fmt.Errorf("alipay refund: 非 JSON 响应（HTTP %d）：%s", resp.StatusCode, responseSnippet(body))
+	}
+	if r.Response.Code != "10000" {
+		return "", fmt.Errorf("alipay refund failed: code=%s msg=%s sub_msg=%s",
+			r.Response.Code, r.Response.Msg, r.Response.SubMsg)
+	}
+	if r.Response.FundChange != "Y" {
+		return "", fmt.Errorf("alipay refund not completed: fund_change=%s", r.Response.FundChange)
+	}
+	return outRequestNo, nil
+}
+
 // Query 查询订单支付状态。返回 (tradeNo, paid, err)。
 func (c *AlipayClient) Query(ctx context.Context, outTradeNo string) (string, bool, error) {
 	biz, _ := json.Marshal(map[string]any{"out_trade_no": outTradeNo})

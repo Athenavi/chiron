@@ -10,7 +10,7 @@ import { useI18n } from 'vue-i18n'
 /**
  * 团队 / 租户用量（管理员视角）。
  *
- * 与「个人用量」是同一份数据源（billing_records 的真实扣费记录），区别只在聚合维度：
+ * 与「个人用量」是同一份数据源（usage_events 的真实 token 与 credits 扣费），区别只在聚合维度：
  *   - 趋势：按天看本租户的 token 与花费走势；
  *   - 成员：按用户看谁花得多（label 取 users.name，bucket 仍是 user_id）；
  *   - 租户：跨租户对比（仅平台 owner，后端对非 owner 直接 403）。
@@ -59,6 +59,7 @@ const rows = computed(() =>
     name: b.label || b.bucket || t('billing.usage_unknown_bucket'),
     input_tokens: formatTokens(b.input_tokens),
     output_tokens: formatTokens(b.output_tokens),
+    credits_charged: formatCredits(b.credits_charged),
     cost_cents: formatCost(b.cost_cents),
     records: b.records,
   })),
@@ -76,6 +77,7 @@ const columns = computed(() => [
   },
   { title: t('admin.usage_input_tokens'), dataIndex: 'input_tokens', key: 'in', align: 'right' as const },
   { title: t('admin.usage_output_tokens'), dataIndex: 'output_tokens', key: 'out', align: 'right' as const },
+  { title: t('admin.usage_credits'), dataIndex: 'credits_charged', key: 'credits', align: 'right' as const },
   { title: t('admin.usage_cost'), dataIndex: 'cost_cents', key: 'cost', align: 'right' as const },
   { title: t('admin.usage_records'), dataIndex: 'records', key: 'records', align: 'right' as const },
 ])
@@ -86,6 +88,7 @@ const totals = computed(() => {
   return [
     { label: t('admin.usage_input_tokens'), value: formatTokens(total.input_tokens) },
     { label: t('admin.usage_output_tokens'), value: formatTokens(total.output_tokens) },
+    { label: t('admin.usage_credits'), value: formatCredits(total.credits_charged) },
     { label: t('admin.usage_cost'), value: formatCost(total.cost_cents) },
     { label: t('admin.usage_records'), value: String(total.records) },
   ]
@@ -101,6 +104,12 @@ function formatTokens(n: number): string {
 function formatCost(cents: number): string {
   if (!Number.isFinite(cents)) return '-'
   return `¥${(cents / 100).toFixed(2)}`
+}
+
+/** Credits 扣费是整数余额单位，不是金额，不能除以 100。 */
+function formatCredits(n: number): string {
+  if (!Number.isFinite(n)) return '-'
+  return n.toLocaleString()
 }
 
 async function load() {

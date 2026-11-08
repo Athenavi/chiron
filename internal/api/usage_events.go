@@ -9,9 +9,14 @@ import (
 
 // UsageEvent 是一次 LLM 调用的用量明细。
 //
-// 与 billing_records 的区别：那边一行一回合、靠 ON CONFLICT (turn_id) 幂等，是
-// 扣费与对账的依据；这里是**只读的观测数据**，一回合可能多行（主模型 / 子 Agent /
-// 摘要），供「钱花在哪个模型上」的统计使用。
+// 与 billing_records 的区别（P1-9 统一后的口径）：
+//   - usage_events：**观测 + 用户扣费**。一回合可能多行（主模型 / 子 Agent / 摘要），
+//     `credits_charged` 是这一轮实际扣减的用户 credits（免费额度内为 nil）；
+//     `cost_cents` 只承载**引擎侧真实成本**（可空），不再复用为 credits。
+//   - billing_records：**企业成本账**，一回合一行、`ON CONFLICT (turn_id)` 幂等，
+//     `cost_cents` 是配置计价算出的成本（分），用于成本归因与对账。
+//
+// 两表用 `turn_id` 关联；`cached_tokens` 两表都有，便于逐项对账。
 //
 // Model 取引擎事件里的实际模型（`evt.Model`），不是请求里的 llmConfig.model ——
 // 后者只是意图，子 Agent 与 fallback 会让两者不一致，用它统计等于在统计用户想用什么。
@@ -26,6 +31,8 @@ type UsageEvent struct {
 	OutputTokens int
 	CachedTokens int
 	CostCents    *int
+	// CreditsCharged 是这一轮实际扣减的用户 credits；免费额度内为 nil。
+	CreditsCharged *int
 }
 
 // RecordUsageEvent 写一条用量明细。
@@ -42,10 +49,10 @@ func RecordUsageEvent(ctx context.Context, ev UsageEvent) {
 	_, err := db.GlobalDBManager.Exec(ctx,
 		`INSERT INTO usage_events
 		   (tenant_id, user_id, session_id, turn_id, model, provider,
-		    input_tokens, output_tokens, cached_tokens, cost_cents)
-		 VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10)`,
+		    input_tokens, output_tokens, cached_tokens, cost_cents, credits_charged)
+		 VALUES ($1, $2, $3, $4, NULLIF($5, ''), NULLIF($6, ''), $7, $8, $9, $10, $11)`,
 		ev.TenantID, ev.UserID, ev.SessionID, ev.TurnID, ev.Model, ev.Provider,
-		ev.InputTokens, ev.OutputTokens, ev.CachedTokens, ev.CostCents)
+		ev.InputTokens, ev.OutputTokens, ev.CachedTokens, ev.CostCents, ev.CreditsCharged)
 	if err != nil {
 		slog.Warn("usage_events: record failed",
 			"user", ev.UserID, "session", ev.SessionID, "model", ev.Model, "error", err)

@@ -19,8 +19,12 @@ import (
 // 还剩多少额度"，本端点回答"**用量的构成**"—— 按天/模型/用户看 token 与成本各花了多少。
 // 前者用于限额，后者用于对账与成本归因（"这个月贵在哪"）。
 //
-// 数据来源是 `billing_records`（真实扣费发生时写入）。**不读引擎事件**：那些是运行期信号，
-// 不是账。按模型分组时 join `turns`（model 记在回合上）。
+// P1-9 统一后的口径：
+//   - 数据来源是 `usage_events`（引擎每轮回写的真实 token），**不是** billing_records；
+//     billing_records 只在企业计费观察者装配时写入，本地/演示环境为空表。
+//   - `credits_charged` = 这一轮实际扣减的用户余额（免费额度内为空，按 0 计）；
+//   - `cost_cents` = 企业成本（分），来自引擎侧计价；当前可能为空，按 0 计。
+//     两者**不可互相替代**：前者是用户扣费，后者是成本。
 //
 // 租户隔离沿用本项目一贯口径：**tenant 来自 JWT claims，绝不来自查询参数**。
 
@@ -32,8 +36,10 @@ type usageBucket struct {
 	Label        string `json:"label,omitempty"`
 	InputTokens  int64  `json:"input_tokens"`
 	OutputTokens int64  `json:"output_tokens"`
-	CostCents    int64  `json:"cost_cents"`
-	Records      int64  `json:"records"`
+	// CreditsCharged 是用户余额扣减；CostCents 是企业成本（分）。两者口径不同。
+	CreditsCharged int64 `json:"credits_charged"`
+	CostCents      int64 `json:"cost_cents"`
+	Records        int64 `json:"records"`
 }
 
 // GetUsageCatalog 返回按维度的用量构成。
@@ -135,7 +141,7 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 		query = `SELECT to_char(date_trunc('day', created_at), 'YYYY-MM-DD') AS bucket,
 		                '' AS label,
 		                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		                COALESCE(SUM(cost_cents), 0), COUNT(*)
+		                COALESCE(SUM(credits_charged), 0), COALESCE(SUM(cost_cents), 0), COUNT(*)
 		           FROM usage_events
 		          WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
 		          GROUP BY bucket ORDER BY bucket`
@@ -143,7 +149,7 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 		query = `SELECT COALESCE(NULLIF(model, ''), '(unknown)') AS bucket,
 		                '' AS label,
 		                COALESCE(SUM(input_tokens), 0), COALESCE(SUM(output_tokens), 0),
-		                COALESCE(SUM(cost_cents), 0), COUNT(*)
+		                COALESCE(SUM(credits_charged), 0), COALESCE(SUM(cost_cents), 0), COUNT(*)
 		           FROM usage_events
 		          WHERE tenant_id = $1 AND created_at >= $2 AND created_at < $3
 		          GROUP BY bucket ORDER BY bucket`
@@ -151,7 +157,7 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 		query = `SELECT COALESCE(NULLIF(e.user_id, ''), '(unknown)') AS bucket,
 		                COALESCE(u.name, '') AS label,
 		                COALESCE(SUM(e.input_tokens), 0), COALESCE(SUM(e.output_tokens), 0),
-		                COALESCE(SUM(e.cost_cents), 0), COUNT(*)
+		                COALESCE(SUM(e.credits_charged), 0), COALESCE(SUM(e.cost_cents), 0), COUNT(*)
 		           FROM usage_events e
 		           LEFT JOIN users u ON u.id = e.user_id
 		          WHERE e.tenant_id = $1 AND e.created_at >= $2 AND e.created_at < $3
@@ -161,7 +167,7 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 		query = `SELECT e.tenant_id::text AS bucket,
 		                COALESCE(tn.name, '') AS label,
 		                COALESCE(SUM(e.input_tokens), 0), COALESCE(SUM(e.output_tokens), 0),
-		                COALESCE(SUM(e.cost_cents), 0), COUNT(*)
+		                COALESCE(SUM(e.credits_charged), 0), COALESCE(SUM(e.cost_cents), 0), COUNT(*)
 		           FROM usage_events e
 		           LEFT JOIN tenants tn ON tn.id = e.tenant_id
 		          WHERE e.created_at >= $1 AND e.created_at < $2
@@ -186,13 +192,14 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 	var total usageBucket
 	for rows.Next() {
 		var b usageBucket
-		if err := rows.Scan(&b.Bucket, &b.Label, &b.InputTokens, &b.OutputTokens, &b.CostCents, &b.Records); err != nil {
+		if err := rows.Scan(&b.Bucket, &b.Label, &b.InputTokens, &b.OutputTokens, &b.CreditsCharged, &b.CostCents, &b.Records); err != nil {
 			InternalError(w, "usage scan failed")
 			return
 		}
 		buckets = append(buckets, b)
 		total.InputTokens += b.InputTokens
 		total.OutputTokens += b.OutputTokens
+		total.CreditsCharged += b.CreditsCharged
 		total.CostCents += b.CostCents
 		total.Records += b.Records
 	}
@@ -209,6 +216,6 @@ func (h *AdminHandler) serveUsageCatalog(w http.ResponseWriter, r *http.Request,
 		"total":      total,
 		"bucket_cnt": len(buckets),
 		"note": fmt.Sprintf(
-			"按 %s 聚合自 usage_events（引擎回写的真实 token 用量）；成本列为引擎侧计价，缺失按 0 计。", groupBy),
+			"按 %s 聚合自 usage_events（真实 token 用量）；credits_charged 为用户余额扣减，cost_cents 为企业成本（分，缺失按 0 计）。", groupBy),
 	})
 }
